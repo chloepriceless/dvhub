@@ -1018,6 +1018,9 @@ export function createApiRoutes(ctx) {
     '/api/forecast/inspector/ml-correction',
     '/api/forecast/inspector/eos',
     '/api/forecast/inspector/optimizer-cold',
+    // pvnode-Nowcast-Tracking (Christin 2026-07-08): read-only Diagnose,
+    // gleiche Appliance-Trust wie die Inspector-Reads (GET-only LAN-Bypass, extern Bearer).
+    '/api/forecast/nowcast-track',
     // T-CURTAIL: observed-GHI coverage diagnostic (read-only). Same forecast
     // appliance-trust model. The POST /api/forecast/ghi-backfill trigger stays
     // OUT (Bearer required).
@@ -1055,6 +1058,7 @@ export function createApiRoutes(ctx) {
     ['/api/forecast/inspector/pv-providers', 'forecast'], ['/api/forecast/inspector/load', 'forecast'],
     ['/api/forecast/inspector/ml-correction', 'forecast'], ['/api/forecast/inspector/eos', 'forecast'],
     ['/api/forecast/inspector/optimizer-cold', 'forecast'],
+    ['/api/forecast/nowcast-track', 'forecast'],
     ['/api/forecast/ghi-coverage', 'forecast'],
     // integrations — integration status, schedule read, meter scan, vpn status,
     // devices, messages, signals, epex, mqtt inspector, health
@@ -5419,6 +5423,45 @@ export function createApiRoutes(ctx) {
       } catch (e) {
         pushLog('inspector_pv_providers_error', { error: e.message });
         return json(res, 500, { ok: false, error: 'inspector_failed' });
+      }
+    }
+
+    // pvnode-Nowcast vs Day-Ahead vs Ist (Christin 2026-07-08). On-demand: rechnet die
+    // letzten N Tage frisch aus pv_forecasts (as-served Nowcast) + forecast_snapshots
+    // (Day-Ahead) + energy_slots_15m (Ist), Negativpreis-Slots ausgeschlossen. Liefert
+    // zusätzlich die nächtlich persistierte Historie. Reine Read-Analyse.
+    if (url.pathname === '/api/forecast/nowcast-track' && req.method === 'GET') {
+      const tracker = ctx.forecastService?.accuracyTracker;
+      const fstore = ctx.forecastService?.store;
+      if (!tracker?.evaluatePvnodeNowcast) return json(res, 503, { ok: false, error: 'forecast service not available' });
+      const days = Math.max(1, Math.min(30, parseInt(url.searchParams.get('days'), 10) || 7));
+      const avg = (arr) => { const f = arr.filter((x) => Number.isFinite(x)); return f.length ? f.reduce((s, v) => s + v, 0) / f.length : null; };
+      try {
+        // Frische Berechnung für die letzten `days` Tage (gestern rückwärts); heute wird
+        // ausgelassen (unvollständig). UTC-Datumsarithmetik.
+        const daily = [];
+        const baseDay = new Date();
+        baseDay.setUTCHours(0, 0, 0, 0);
+        for (let i = 1; i <= days; i++) {
+          const d = new Date(baseDay);
+          d.setUTCDate(d.getUTCDate() - i);
+          daily.push(await tracker.evaluatePvnodeNowcast(d.toISOString().slice(0, 10)));
+        }
+        const wd = daily.filter((r) => r.sampleCount > 0);
+        const aggregate = wd.length ? {
+          days: wd.length,
+          maeDayahead: avg(wd.map((r) => r.maeDayahead)),
+          maeNowcast: avg(wd.map((r) => r.maeNowcast)),
+          meanRevision: avg(wd.map((r) => r.meanRevision)),
+          absRevision: avg(wd.map((r) => r.absRevision)),
+          improvementPct: avg(wd.map((r) => r.improvementPct)),
+          meanHorizonMin: avg(wd.map((r) => r.meanHorizonMin))
+        } : null;
+        const persisted = fstore?.getNowcastAccuracyHistory ? await fstore.getNowcastAccuracyHistory(days) : [];
+        return json(res, 200, { ok: true, provider: 'pvnode', days, daily, aggregate, persisted });
+      } catch (e) {
+        pushLog('nowcast_track_endpoint_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'nowcast_track_failed' });
       }
     }
 

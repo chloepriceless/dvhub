@@ -47,6 +47,44 @@ export function computeRMSE(forecasted, actual) {
 }
 
 /**
+ * Nowcast-vs-Day-Ahead-vs-Ist-Vergleich (Christin 2026-07-08).
+ *
+ * Für aligned Slot-Tripel (Day-Ahead-Prognose, as-served Nowcast, gemessene PV) liefert:
+ *   - maeDayahead   = MAE(Day-Ahead vs Ist)  — wie gut die eingefrorene Tagesprognose war
+ *   - maeNowcast    = MAE(Nowcast   vs Ist)  — wie gut der untertägige Rerun war
+ *   - meanRevision  = Ø(Nowcast − Day-Ahead) — wie stark der Nowcast nach oben/unten korrigiert
+ *   - absRevision   = Ø|Nowcast − Day-Ahead| — Betrag der Korrektur
+ *   - improvementPct= (maeDayahead − maeNowcast)/maeDayahead·100 — Genauigkeits-Gewinn des Nowcasts
+ *
+ * @param {number[]} dayahead
+ * @param {number[]} nowcast
+ * @param {number[]} actual
+ */
+export function computeNowcastComparison(dayahead, nowcast, actual) {
+  const n = actual.length;
+  if (!n || dayahead.length !== n || nowcast.length !== n) {
+    return { sampleCount: 0, maeDayahead: null, maeNowcast: null, meanRevision: null, absRevision: null, improvementPct: null };
+  }
+  let sdA = 0, sdN = 0, sRev = 0, sAbsRev = 0;
+  for (let i = 0; i < n; i++) {
+    sdA += Math.abs(dayahead[i] - actual[i]);
+    sdN += Math.abs(nowcast[i] - actual[i]);
+    sRev += (nowcast[i] - dayahead[i]);
+    sAbsRev += Math.abs(nowcast[i] - dayahead[i]);
+  }
+  const maeDayahead = sdA / n;
+  const maeNowcast = sdN / n;
+  return {
+    sampleCount: n,
+    maeDayahead,
+    maeNowcast,
+    meanRevision: sRev / n,
+    absRevision: sAbsRev / n,
+    improvementPct: maeDayahead > 0 ? ((maeDayahead - maeNowcast) / maeDayahead) * 100 : null
+  };
+}
+
+/**
  * Derive confidence score from MAE relative to mean actual value.
  * Low MAE/mean ratio = high confidence. Clamps to [0.3, 1.0] per D-05.
  * @param {number} mae
@@ -474,6 +512,57 @@ export function createAccuracyTracker(ctx, { store }) {
    * Returns the raw daily MAE dict (for logging/testing).
    * @param {string} dateStr YYYY-MM-DD UTC
    */
+  /**
+   * pvnode-Nowcast-Tracking (Christin 2026-07-08): vergleicht für einen Tag die drei
+   * Reihen je Slot — Day-Ahead-Prognose (forecast_snapshots, layer='pvnode'), den
+   * as-served Nowcast (pv_forecasts, model='pvnode' — der 15-min-Rerun überschreibt je
+   * Slot, bleibt nach Slot-Ende als letzter Vor-Slot-Wert stehen; fetched_at = Ausgabezeit
+   * → echter Horizont) und die gemessene PV (energy_slots_15m, pv_total_w). Negativpreis-/
+   * Abregelungs-Slots werden — wie bei der Provider-MAE — ausgeschlossen. Reine
+   * Observability, kein Steuerungseingriff.
+   *
+   * @param {string} dateStr YYYY-MM-DD UTC
+   */
+  async function evaluatePvnodeNowcast(dateStr) {
+    const base = { date: dateStr, provider: 'pvnode', ...computeNowcastComparison([], [], []), meanHorizonMin: null };
+    if (!store?.query) return base;
+    const { start, end } = dayRange(dateStr);
+    try {
+      const [daR, nowR, actR] = await Promise.all([
+        store.query(`SELECT slot_utc AS ts_utc, power_w FROM forecast_snapshots WHERE target_date = $1 AND layer = 'pvnode'`, [dateStr]),
+        store.query(`SELECT ts_utc, power_w, fetched_at FROM pv_forecasts WHERE model = 'pvnode' AND ts_utc >= $1 AND ts_utc < $2`, [start, end]),
+        store.query(`
+          SELECT slot_start_utc AS ts_utc, ${ACTUAL_POWER_W_SQL} AS value_num
+          FROM energy_slots_15m
+          WHERE series_key = 'pv_total_w' AND source_kind IN ('local_live','vrm_import','live')
+            AND slot_start_utc >= $1 AND slot_start_utc < $2
+        `, [start, end])
+      ]);
+      const iso = (t) => new Date(t).toISOString();
+      const daMap = new Map((daR?.rows || []).map((r) => [iso(r.ts_utc), Number(r.power_w)]));
+      const nowMap = new Map((nowR?.rows || []).map((r) => [iso(r.ts_utc), { p: Number(r.power_w), fetched: r.fetched_at }]));
+      const negSet = await loadNegativePriceSlots(start, end);
+
+      const dayahead = [], nowcast = [], actual = [];
+      let horizonSum = 0, horizonN = 0;
+      for (const r of (actR?.rows || [])) {
+        const k = iso(r.ts_utc);
+        if (negSet.has(k)) continue;                                  // Abregelung raus (Konsistenz)
+        const da = daMap.get(k);
+        const nw = nowMap.get(k);
+        if (da == null || !Number.isFinite(da) || !nw || !Number.isFinite(nw.p)) continue;  // alle 3 nötig
+        dayahead.push(da); nowcast.push(nw.p); actual.push(Number(r.value_num));
+        const h = (new Date(r.ts_utc).getTime() - new Date(nw.fetched).getTime()) / 60000;
+        if (Number.isFinite(h) && h >= 0) { horizonSum += h; horizonN += 1; }
+      }
+      const cmp = computeNowcastComparison(dayahead, nowcast, actual);
+      return { date: dateStr, provider: 'pvnode', ...cmp, meanHorizonMin: horizonN ? horizonSum / horizonN : null };
+    } catch (err) {
+      pushLog('nowcast_track_error', { dateStr, error: err?.message ?? String(err) });
+      return base;
+    }
+  }
+
   async function evaluateAndWrite(dateStr) {
     const daily = await evaluatePerProvider(dateStr);
     if (!store?.query) return daily;
@@ -509,6 +598,18 @@ export function createAccuracyTracker(ctx, { store }) {
 
     // REVIEWS H9 final step: SQL-window rollup
     await computeRolling7dMae(dateStr);
+
+    // Christin 2026-07-08: pvnode-Nowcast-Tracking (Nowcast vs Day-Ahead vs Ist)
+    // mit-persistieren — reine Observability, baut Tages-Historie auf.
+    try {
+      const nc = await evaluatePvnodeNowcast(dateStr);
+      if (nc.sampleCount > 0 && typeof store.upsertNowcastAccuracy === 'function') {
+        await store.upsertNowcastAccuracy(nc);
+        pushLog('nowcast_track_written', { dateStr, sampleCount: nc.sampleCount, improvementPct: nc.improvementPct });
+      }
+    } catch (err) {
+      pushLog('nowcast_track_persist_error', { dateStr, error: err?.message ?? String(err) });
+    }
 
     pushLog('accuracy_evaluated_per_provider', { dateStr, daily });
     return daily;
@@ -583,6 +684,8 @@ export function createAccuracyTracker(ctx, { store }) {
     // Phase 07 Plan 07-04 (REVIEWS H1 + H9): per-provider + rolling-7d pipeline
     evaluatePerProvider,
     computeRolling7dMae,
-    evaluateAndWrite
+    evaluateAndWrite,
+    // Christin 2026-07-08: pvnode-Nowcast vs Day-Ahead vs Ist (Endpoint + nightly)
+    evaluatePvnodeNowcast
   };
 }

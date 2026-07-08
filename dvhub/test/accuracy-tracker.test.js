@@ -7,8 +7,33 @@ import {
   computeConfidenceFromMAE,
   matchForecastToActuals,
   filterNegativePriceSlots,
+  computeNowcastComparison,
   createAccuracyTracker
 } from '../services/forecast/accuracy-tracker.js';
+
+// --- computeNowcastComparison (Christin 2026-07-08) ---
+
+test('computeNowcastComparison: Nowcast näher am Ist als Day-Ahead → positiver Gewinn', () => {
+  const r = computeNowcastComparison([1300, 700], [1100, 900], [1000, 1000]);
+  assert.equal(r.sampleCount, 2);
+  assert.equal(r.maeDayahead, 300);
+  assert.equal(r.maeNowcast, 100);
+  assert.equal(r.meanRevision, 0);
+  assert.equal(r.absRevision, 200);
+  assert.ok(Math.abs(r.improvementPct - (200 / 300 * 100)) < 1e-9, `improvement ${r.improvementPct}`);
+});
+
+test('computeNowcastComparison: leere/mismatch Eingabe → sampleCount 0', () => {
+  assert.equal(computeNowcastComparison([], [], []).sampleCount, 0);
+  assert.equal(computeNowcastComparison([1], [2], []).sampleCount, 0);
+  assert.equal(computeNowcastComparison([1, 2], [1], [1, 2]).sampleCount, 0);
+});
+
+test('computeNowcastComparison: maeDayahead=0 → improvementPct null (kein Div/0)', () => {
+  const r = computeNowcastComparison([1000], [1100], [1000]);
+  assert.equal(r.maeDayahead, 0);
+  assert.equal(r.improvementPct, null);
+});
 
 // --- filterNegativePriceSlots (Christin 2026-07-08) ---
 

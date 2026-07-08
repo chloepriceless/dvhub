@@ -127,6 +127,23 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_forecast_date ON forecast_snapshots(forecast_date);
   CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_layer ON forecast_snapshots(layer);
 
+  -- pvnode-Nowcast-Tracking (Christin 2026-07-08): pro Tag der Vergleich der
+  -- as-served Nowcast-Reruns gegen den Day-Ahead-Snapshot UND gegen die gemessene
+  -- PV (Ist). Reine Observability. Ein Row je (provider, evaluation_date).
+  CREATE TABLE IF NOT EXISTS forecast_nowcast_accuracy (
+    provider TEXT NOT NULL DEFAULT 'pvnode',
+    evaluation_date DATE NOT NULL,
+    sample_count INTEGER,
+    mae_dayahead DOUBLE PRECISION,
+    mae_nowcast DOUBLE PRECISION,
+    mean_revision DOUBLE PRECISION,
+    abs_revision DOUBLE PRECISION,
+    improvement_pct DOUBLE PRECISION,
+    mean_horizon_min DOUBLE PRECISION,
+    computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (provider, evaluation_date)
+  );
+
   -- Phase 07 FORE-10 D-A5 (re-scoped): client-side quota counter per RESEARCH empirical probe 2026-04-16
   -- Note: billing-month reset semantics are UTC-estimated (first day of calendar month UTC).
   -- Real pvnode billing may use provider-account timezone; for HEMS solo-dev this approximation is acceptable.
@@ -464,6 +481,48 @@ export function createForecastStore(ctx) {
   }
 
   /**
+   * UPSERT eines pvnode-Nowcast-Tracking-Ergebnisses (Christin 2026-07-08).
+   * @param {{date:string, provider?:string, sampleCount:number, maeDayahead:number,
+   *   maeNowcast:number, meanRevision:number, absRevision:number, improvementPct:number,
+   *   meanHorizonMin:number}} nc
+   */
+  async function upsertNowcastAccuracy(nc) {
+    await pool.query(`
+      INSERT INTO forecast_nowcast_accuracy
+        (provider, evaluation_date, sample_count, mae_dayahead, mae_nowcast,
+         mean_revision, abs_revision, improvement_pct, mean_horizon_min, computed_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+      ON CONFLICT (provider, evaluation_date) DO UPDATE SET
+        sample_count = EXCLUDED.sample_count,
+        mae_dayahead = EXCLUDED.mae_dayahead,
+        mae_nowcast = EXCLUDED.mae_nowcast,
+        mean_revision = EXCLUDED.mean_revision,
+        abs_revision = EXCLUDED.abs_revision,
+        improvement_pct = EXCLUDED.improvement_pct,
+        mean_horizon_min = EXCLUDED.mean_horizon_min,
+        computed_at = NOW()
+    `, [
+      nc.provider || 'pvnode', nc.date, nc.sampleCount ?? null,
+      nc.maeDayahead ?? null, nc.maeNowcast ?? null,
+      nc.meanRevision ?? null, nc.absRevision ?? null,
+      nc.improvementPct ?? null, nc.meanHorizonMin ?? null
+    ]);
+  }
+
+  /**
+   * Persistierte pvnode-Nowcast-Tracking-Historie (neueste zuerst).
+   * @param {number} days
+   */
+  async function getNowcastAccuracyHistory(days = 30) {
+    const n = Math.max(1, Math.min(365, Number(days) || 30));
+    const r = await pool.query(
+      `SELECT * FROM forecast_nowcast_accuracy WHERE provider = 'pvnode'
+       ORDER BY evaluation_date DESC LIMIT $1`, [n]
+    );
+    return r.rows || [];
+  }
+
+  /**
    * UPSERT into forecast_snapshots with forecast_date + target_date (REVIEWS H1).
    * forecast_date defaults to today UTC if caller omits; target_date defaults to slot's date.
    * Backfill MUST pass forecast_date = today as "when generated" provenance.
@@ -678,6 +737,8 @@ export function createForecastStore(ctx) {
     query,
     getForecastAccuracyRow,
     getLatestAccuracyRow,
+    upsertNowcastAccuracy,      // Christin 2026-07-08 — pvnode-Nowcast-Tracking
+    getNowcastAccuracyHistory,
     insertSnapshot,
     insertSnapshotBatch,   // Plan 09-08 Task 1 — BLOCKER 4 ESM, factory-attached batch insert
     incrementPvnodeQuota,
