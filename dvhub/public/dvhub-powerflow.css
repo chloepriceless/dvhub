@@ -372,9 +372,10 @@ html[data-theme="light"] .dvhub-powerflow .pf-bat-anim .pf-bat-rotor{
 #leitstandPowerflow .pf-stars,
 #leitstandPowerflow .pf-sunbleed{ display:none; }
 /* Tag-Hintergrund (Christin 2026-07-08): app.js setzt .pf-daybg tagsüber
-   (serverseitig aus Location + Sonnenzeiten). Nachts greift die Regel oben. */
+   (serverseitig aus Location + Sonnenzeiten). Nachts greift die Regel oben.
+   Light-Variante (weniger farbintensiv, fügt sich ruhiger ein). */
 #leitstandPowerflow.dvhub-powerflow.pf-daybg{
   background:
     linear-gradient(rgba(3,6,16,.20), rgba(3,6,16,.42)),
-    url('/assets/dvhub-powerflow-bg-day.png') center / cover no-repeat;
+    url('/assets/dvhub-powerflow-bg-day-light.png') center / cover no-repeat;
 }
