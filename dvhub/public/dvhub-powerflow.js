@@ -65,6 +65,9 @@
 
     const cv  = root.querySelector('.pf-cv');
     const ctx = cv.getContext('2d');
+    // Christin 2026-07-08: nur die Leitstand-Instanz (data-photobg) faded die
+    // Partikel-Trails gegen Transparenz, damit der CSS-Foto-Hintergrund durchscheint.
+    const photoBg = root.hasAttribute('data-photobg');
     let W=0, H=0, raf=0, alive=true;
 
     function size(){
@@ -225,8 +228,18 @@
       // fades to the CSS --pf-bg (#f1f5fb) and uses normal compositing
       // (additive 'lighter' particles bleach to white on a light backdrop).
       const light = isLightTheme();
-      ctx.fillStyle = light ? 'rgba(241,245,251,.32)' : 'rgba(3,6,16,.32)';
-      ctx.fillRect(0, 0, W, H);
+      if (photoBg) {
+        // Trails gegen TRANSPARENZ erodieren (destination-out) statt gegen eine
+        // opake Farbe zu konvergieren → der Foto-Hintergrund (CSS) bleibt sichtbar.
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = 'rgba(0,0,0,.28)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = light ? 'rgba(241,245,251,.32)' : 'rgba(3,6,16,.32)';
+        ctx.fillRect(0, 0, W, H);
+      }
       ctx.globalCompositeOperation = light ? 'source-over' : 'lighter';
       dust.forEach(d => {
         const s = d.s;
