@@ -81,6 +81,22 @@ des HEMS-Ausbaus aus 0.8.0 und ergänzt ihn um fünf gezielte Go-Live-Härtungsw
   Tag-Auswahl
 - diese standalone `CHANGELOG.md` angelegt
 
+**Feinschliff zum Go-Live (2026-07):**
+
+- Historie: die Zeiträume **Woche/Monat/Jahr/Alle** hinter das Pro-Gate gelegt
+  (`history-multiperiod`) — die **Tagesansicht bleibt für alle frei**; serverseitig
+  (`/api/history/summary|viz/*|export` für `view≠day`) plus Dropdown-Lock mit Pro-Modal
+- Forecast: güte-basierte **Ensemble-Gewichtung reaktiviert** — der Merge fiel bei
+  fehlender Gestern-Accuracy still auf Gleichgewichtung zurück; jetzt Fallback auf den
+  zuletzt verfügbaren Accuracy-Stand statt uniform
+- Forecast: **Negativpreis-/Abregelungs-Slots aus der Accuracy ausgeschlossen** —
+  abgeregelte Ist-Erzeugung verzerrte sonst MAE und Provider-Gewichte
+- **pvnode-Nowcast-Tracking**: Nowcast vs Day-Ahead vs Ist je Tag
+  (`/api/forecast/nowcast-track` + nächtliche Historie) — misst, wie viel die
+  15-Minuten-Reruns gegenüber der Tagesprognose bringen
+- Onboarding: dokumentiert, dass nach der Erstinstallation automatisch
+  `onboarding.html` unter `/` erscheint (nicht `setup.html`)
+
 ## [0.8.0] - 2026-05-18 — HEMS-Ausbau
 
 Großer Funktionssprung von der reinen DV-Schnittstelle zum Home Energy Management
