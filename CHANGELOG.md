@@ -8,15 +8,13 @@ die Versionierung folgt [Semantic Versioning](https://semver.org/lang/de/).
 CHANGELOG.md ist die Single Source of Truth für die Versionshistorie; der README
 verweist hierher.
 
-## [1.0.0] „Sushi" - 2026-06-19
+## [1.0.0] „Sushi" - 2026-07-08
 
 > Codename **„Sushi"** — gewidmet dem jungen Kater, der die Entwicklung begleitet
 > hat: Tastaturen inspiziert, Logs überwacht und dafür gesorgt, dass kein
 > Entwickler zu produktiv wurde. _This release is dedicated to him._
 
-<!-- Hinweis: Das tatsächliche Veröffentlichungsdatum wird beim Setzen des
-     `v1.0.0`-Git-Tags festgelegt (operator-gated, nach allen Blocker-Wellen).
-     Das obige Datum ist ein Platzhalter (= Datum der Metadaten-Vorbereitung). -->
+<!-- Veröffentlichungsdatum = Datum des operator-gegateten `v1.0.0`-Git-Tags. -->
 
 Erstes öffentliches v1.0-Release. Konsolidiert den vollständigen Funktionsumfang
 des HEMS-Ausbaus aus 0.8.0 und ergänzt ihn um fünf gezielte Go-Live-Härtungswellen
