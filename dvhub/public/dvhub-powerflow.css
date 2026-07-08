@@ -360,3 +360,14 @@ html[data-theme="light"] .dvhub-powerflow .pf-bat-anim .pf-bat-rotor{
     drop-shadow(0 0 calc(4px + var(--glow)*12px) rgba(21,128,61, calc(.06 + var(--glow)*.25)))
     drop-shadow(0 3px 8px rgba(30,60,120,.25));
 }
+
+/* Leitstand-Powerflow: Foto-Hintergrund statt Weltraum-Schwarz (Christin 2026-07-08).
+   NUR der Leitstand — auf die ID gescopt; family.html (gleiche .dvhub-powerflow-Klasse)
+   bleibt unverändert. Leichter dunkler Scrim für die Lesbarkeit der Flow-Elemente. */
+#leitstandPowerflow.dvhub-powerflow{
+  background:
+    linear-gradient(rgba(3,6,16,.34), rgba(3,6,16,.56)),
+    url('/assets/dvhub-powerflow-bg.png') center / cover no-repeat;
+}
+#leitstandPowerflow .pf-stars,
+#leitstandPowerflow .pf-sunbleed{ display:none; }
