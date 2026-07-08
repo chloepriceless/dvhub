@@ -133,7 +133,7 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.s
 
 > Flags sind kombinierbar, z. B. `--channel dev --no-eos --no-support-user`.
 
-Wenn die Config-Datei noch fehlt oder ungültig ist, öffnet DVhub beim ersten Aufruf automatisch den Setup-Assistenten.
+Nach der Erstinstallation (bzw. wenn die Config fehlt/ungültig ist) öffnet DVhub beim ersten Aufruf unter `/` automatisch den Onboarding-Assistenten (`onboarding.html`) — ein manueller Aufruf einer Setup-Seite ist nicht nötig.
 
 ### Leistungsstufen (RAM-Tiers)
 
@@ -163,7 +163,7 @@ wählbar (Code-Default ohne Beispiel-Config: `8080`).
 - Explorer: `http://<host>/explorer.html`
 - Einstellungen: `http://<host>/settings.html`
 - API-Dokumentation: `http://<host>/api-docs.html`
-- Setup-Assistent: `http://<host>/setup.html` (wird bei fehlender Config automatisch unter `/` angezeigt)
+- Onboarding-Assistent: wird nach der Erstinstallation automatisch unter `http://<host>/` angezeigt (`onboarding.html`); die ausführliche Setup-Seite (`http://<host>/setup.html`) bleibt direkt erreichbar
 
 ---
 
@@ -260,15 +260,18 @@ Live-Dienste) und die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich:
 | `vpn-manager` | Einstellungen → VPN (`/api/vpn/*` — Status, Profil-Upload, Start/Stop/Restart) | `403 pro_required`; Tab zeigt Pro-Hinweis mit Lizenz-Link |
 | `forecast-inspector-ml` | Einstellungen → Forecast → ML-Korrektur-Inspector | `403` + Pro-Banner inline, CTA öffnet das Pro-Modal |
 | `forecast-inspector-eos` | Einstellungen → Forecast → EOS-Output-Inspector (Teil von EOS-Pro) | dito |
+| `history-multiperiod` | **Historie-Zeiträume** Woche/Monat/Jahr/Alle (`/api/history/summary\|viz/*\|export` mit `view≠day`) | `403 pro_required`; im Historie-Dropdown tragen die Zeiträume ein 🔒, Auswahl öffnet das Pro-Modal und springt zurück auf **Tag** — die **Tagesansicht bleibt frei** |
 
 > **Frei (Community, ECL-1.0):** die kleine Börsenautomatik **Stufe 1**
 > (Greedy/MILP-Abend-Slots) **und Stufe 2** (`forecastAware`, Über-Nacht-SOC-
-> Reserve/Hoarding), Leitstand, Historie, **Prognose-Anzeige** (PV + Last), der
-> Victron-**Client** und andere Anlagen-Integrationen, **Negativpreis-Schutz** und
-> alle **Sicherheits-Gates** (EEG/§14a, SOC-/Entlade-Boden, Not-Halt).
+> Reserve/Hoarding), Leitstand, **Historie-Tagesansicht**, **Prognose-Anzeige**
+> (PV + Last), der Victron-**Client** und andere Anlagen-Integrationen,
+> **Negativpreis-Schutz** und alle **Sicherheits-Gates** (EEG/§14a, SOC-/Entlade-
+> Boden, Not-Halt).
 >
-> **Pro** schaltet die **DV-Schnittstelle** (Direktvermarkter-Modbus-Server) und
-> die **EOS-Arbitrage** frei — beide sind ohne Lizenz serverseitig aus. „Stage 2++"
+> **Pro** schaltet die **DV-Schnittstelle** (Direktvermarkter-Modbus-Server), die
+> **EOS-Arbitrage** und die **Historie-Zeiträume Woche/Monat/Jahr/Alle** frei —
+> alle drei sind ohne Lizenz serverseitig aus (die Historie-Tagesansicht bleibt frei). „Stage 2++"
 > (`predictivePreEmpty` / „Forecast Aware++", das nie produktive Morgens-Entleeren)
 > wurde **entfernt** (in der UI ausgeblendet; EOS ist der Nachfolger) — der Code
 > bleibt mitinstalliert.
@@ -336,7 +339,7 @@ Startseite unter `/`:
 
 PostgreSQL-Telemetrie als eigene Analyseansicht (`/history.html`):
 
-- Tag-, Wochen-, Monats- und Jahresansicht
+- Tag-, Wochen-, Monats- und Jahresansicht — die **Tagesansicht ist frei**, die Zeiträume **Woche/Monat/Jahr/Alle sind DVhub Pro** (`history-multiperiod`)
 - Finanz-Karten: Energiekosten, Einnahmen, Cashflow, vermiedene Kosten, Gesamtbilanz
 - Preisvergleich zwischen historischem Marktpreis und eigenem Bezugspreis
 - Solar-Zusammenfassung mit Jahres-Marktwert
@@ -396,10 +399,13 @@ verfügbaren Zonen samt Abdeckung vom DVhub Price Feed (dvhub.online) lädt. Die
 
 ### Setup
 
-Der First-Run-Assistent (`/setup.html`) führt Schritt für Schritt durch
-Port/Token, Victron-Verbindung (Modbus oder MQTT mit automatischer
-Systemerkennung), Meter-/DV-Basiswerte und EPEX-Grunddaten — alle Felder sind mit
-sinnvollen Defaults vorbelegt.
+Nach der Erstinstallation erscheint automatisch der schlanke **Onboarding-Assistent**
+(`onboarding.html`, unter `/`): Anlage verbinden (Victron per Adresse oder
+Netzwerk-Discovery) und Zugang sichern (dieses Gerät wird automatisch als
+vertrauenswürdig hinterlegt). Der ausführliche **Setup-Assistent** (`/setup.html`,
+direkt erreichbar) führt Schritt für Schritt durch Port/Token, Victron-Verbindung
+(Modbus oder MQTT mit automatischer Systemerkennung), Meter-/DV-Basiswerte und
+EPEX-Grunddaten — alle Felder sind mit sinnvollen Defaults vorbelegt.
 
 ### API-Dokumentation
 

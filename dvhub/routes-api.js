@@ -278,6 +278,11 @@ export const MAX_TELEMETRY_SCAN_SLOTS = 1_500_000;
 // M-3 (Plan 16-03): /api/devices/:id history row cap. 288 = 24h of 5-min
 // readings (24 * 60 / 5). Named so the magic number is self-documenting.
 export const DEVICE_HISTORY_ROW_LIMIT = 288;
+// Pro-Gating (Christin 2026-07-07): die Historie-Zeiträume Woche/Monat/Jahr/Alle
+// sind ein Pro-Feature ('history-multiperiod'); nur die Tagesansicht (view=day
+// oder fehlend) ist frei. Gilt für /api/history/summary, /api/history/viz/* und
+// /api/history/export, sobald ?view= einen dieser Werte trägt.
+const HISTORY_PREMIUM_VIEWS = new Set(['week', 'month', 'year', 'all']);
 // ── Plan 09-01 (D-03 / D-04): token strength + audit fingerprint ────────
 // Locked decisions:
 //   D-03: minimum 32 chars AND Shannon entropy ≥ 3.5 bits/char (matches the
@@ -5676,6 +5681,14 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/history/summary' && req.method === 'GET') {
+      // Pro-Gating (Christin 2026-07-07): nur die Tagesansicht ist frei. Woche/
+      // Monat/Jahr/Alle sind Pro. Gate VOR dem 503/Null-Check, damit ein
+      // ungültiger Client ohne Lizenz sauber 403 pro_required bekommt (nicht 503).
+      // LAN-Bypass hat die Auth bereits akzeptiert; requirePro prüft NUR die
+      // Lizenz (netzwerkunabhängig) — Defense-in-depth zum Frontend-Lock.
+      if (HISTORY_PREMIUM_VIEWS.has(String(url.searchParams.get('view')))) {
+        if (!requirePro(req, res, 'history-multiperiod')) return;
+      }
       if (!ctx.historyApi || typeof ctx.historyApi.getSummary !== 'function') {
         return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
       }
@@ -5692,6 +5705,10 @@ export function createApiRoutes(ctx) {
     // (e.g. 'day-profile' → 'getDayProfile'). Unknown slugs → 404.
     // LAN-bypass active for the whole prefix (isLanSafeRequest above).
     if (url.pathname.startsWith('/api/history/viz/') && req.method === 'GET') {
+      // Pro-Gating (siehe /api/history/summary): Woche/Monat/Jahr/Alle nur mit Pro.
+      if (HISTORY_PREMIUM_VIEWS.has(String(url.searchParams.get('view')))) {
+        if (!requirePro(req, res, 'history-multiperiod')) return;
+      }
       if (!ctx.historyVizApi) {
         return json(res, 503, { ok: false, error: 'history-viz aggregator not initialized' });
       }
@@ -5713,6 +5730,11 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/history/export' && req.method === 'GET') {
+      // Pro-Gating (siehe /api/history/summary): CSV-Export der Woche/Monat/Jahr/
+      // Alle-Ansicht folgt derselben Schranke; der Tages-Export bleibt frei.
+      if (HISTORY_PREMIUM_VIEWS.has(String(url.searchParams.get('view')))) {
+        if (!requirePro(req, res, 'history-multiperiod')) return;
+      }
       if (!ctx.historyApi || typeof ctx.historyApi.getExportCsv !== 'function') {
         return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
       }

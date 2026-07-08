@@ -64,3 +64,10 @@ test('ALLOWED_FEATURES no longer contains forecast-inspector-stage2 (Stage 2++ r
   assert.ok(m);
   assert.doesNotMatch(m[1], /'forecast-inspector-stage2'/);
 });
+
+test('ALLOWED_FEATURES contains history-multiperiod (Christin 2026-07-07)', () => {
+  const src = fs.readFileSync(LICENSE_SRC, 'utf8');
+  const m = src.match(/const\s+ALLOWED_FEATURES\s*=\s*new\s+Set\(\[([\s\S]*?)\]\s*\)/);
+  assert.ok(m);
+  assert.match(m[1], /'history-multiperiod'/);
+});

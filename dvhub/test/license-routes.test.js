@@ -646,3 +646,99 @@ test('GET /api/vpn/status returns 200 when license === active', async () => {
   const body = JSON.parse(res._captured.body);
   assert.equal(body.status, 'down');
 });
+
+// ---------------------------------------------------------------------------
+// Historie-Zeiträume Pro-Gating (Christin 2026-07-07)
+// ---------------------------------------------------------------------------
+// Nur die Tagesansicht ist frei. /api/history/summary|viz/*|export mit
+// view=week|month|year|all verlangen eine aktive Pro-Lizenz ('history-
+// multiperiod'). view=day (oder fehlend) bleibt frei. Das Gate sitzt VOR dem
+// 503/Null-Check, daher liefert ein Premium-View ohne Lizenz sauber 403 —
+// selbst wenn ctx.historyApi (hier null) gar nicht initialisiert ist.
+
+test('GET /api/history/summary?view=week returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/history/summary?view=week'), res, urlFor('/api/history/summary?view=week'));
+  assert.equal(res._captured.status, 403, `expected 403, got ${res._captured.status} body=${res._captured.body}`);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.error, 'pro_required');
+  assert.equal(body.feature, 'history-multiperiod');
+});
+
+test('GET /api/history/summary?view=month returns 403 pro_required when license expired', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('expired');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/history/summary?view=month'), res, urlFor('/api/history/summary?view=month'));
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.feature, 'history-multiperiod');
+});
+
+test('GET /api/history/summary?view=day is NOT Pro-gated (free for everyone)', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  // historyApi stays null → passing the gate hits the 503 null-check, NOT 403.
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/history/summary?view=day'), res, urlFor('/api/history/summary?view=day'));
+  assert.notEqual(res._captured.status, 403, 'Tagesansicht darf ohne Lizenz NICHT 403 liefern');
+  assert.equal(res._captured.status, 503, `expected 503 (historyApi null), got ${res._captured.status}`);
+});
+
+test('GET /api/history/summary without view param is NOT Pro-gated (defaults to day)', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/history/summary'), res, urlFor('/api/history/summary'));
+  assert.notEqual(res._captured.status, 403);
+});
+
+test('GET /api/history/summary?view=week returns 200 when license === active', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('active');
+  ctx.historyApi = { getSummary: async () => ({ status: 200, body: { ok: true, view: 'week' } }) };
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/history/summary?view=week'), res, urlFor('/api/history/summary?view=week'));
+  assert.equal(res._captured.status, 200, `expected 200, got ${res._captured.status} body=${res._captured.body}`);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.view, 'week');
+});
+
+test('GET /api/history/viz/pheat?view=year returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/history/viz/pheat?view=year'), res, urlFor('/api/history/viz/pheat?view=year'));
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.feature, 'history-multiperiod');
+});
+
+test('GET /api/history/viz/day-profile?view=day is NOT Pro-gated', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  // historyVizApi null → day passes the gate and hits the 503 null-check.
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/history/viz/day-profile?view=day'), res, urlFor('/api/history/viz/day-profile?view=day'));
+  assert.notEqual(res._captured.status, 403);
+});
+
+test('GET /api/history/export?view=all returns 403 pro_required when license !== active', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('GET', '/api/history/export?view=all'), res, urlFor('/api/history/export?view=all'));
+  assert.equal(res._captured.status, 403);
+  const body = JSON.parse(res._captured.body);
+  assert.equal(body.feature, 'history-multiperiod');
+});

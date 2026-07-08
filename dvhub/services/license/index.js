@@ -99,6 +99,10 @@ const ALLOWED_FEATURES = new Set([
   // wurde 2026-07-02 komplett aus dem Code entfernt, der Inspektor dafür entfällt.
   'dv-interface',              // DV-Schnittstelle (modbus-server.js + /dv/control-value)
   'eos',                       // EOS / DV-EOS Optimizer-Dispatch (services/optimizer)
+  // Historie-Zeiträume (Christin 2026-07-07): nur die Tagesansicht ist frei; die
+  // Woche/Monat/Jahr/Alle-Ansichten der Historie (/api/history/summary,
+  // /api/history/viz/*, /api/history/export mit view!=day) sind Pro-gegated.
+  'history-multiperiod',       // Historie Woche/Monat/Jahr/Alle (history.js #historyView)
 ]);
 
 /**

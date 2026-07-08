@@ -51,6 +51,19 @@ const historyState = {
   statusInfoHtml: ''
 };
 
+// ─── Pro-Gating der Historie-Zeiträume (Christin 2026-07-07) ────────────────
+// Nur die Tagesansicht ist frei. Ohne aktive Pro-Lizenz werden Woche/Monat/Jahr/
+// Alle im #historyView-Dropdown mit 🔒 markiert; wählt man einen dieser Einträge,
+// öffnet sich das Pro-Modal und die Auswahl springt zurück auf „Tag". Der Server
+// (routes-api.js) lehnt view!=day ohne Lizenz mit 403 pro_required ab — dieser
+// Client-Lock ist die UX-Schicht davor, KEIN Sicherheitsersatz.
+const HISTORY_PREMIUM_VIEWS = ['week', 'month', 'year', 'all'];
+const HISTORY_PRO_FEATURE = 'history-multiperiod';
+const HISTORY_VIEW_LABELS = { day: 'Tag', week: 'Woche', month: 'Monat', year: 'Jahr', all: 'Alle' };
+// null = noch unbekannt (fail-open: Auswahl erlaubt, notfalls gated der Server);
+// true = Pro aktiv (keine Sperre); false = keine aktive Lizenz (Sperre + 🔒).
+let historyProActive = null;
+
 function currentDateValue() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -2324,6 +2337,24 @@ async function loadHistorySummary() {
     const response = await apiFetch(`/api/history/summary?view=${encodeURIComponent(view)}&date=${encodeURIComponent(date)}`);
     const payload = await response.json();
     if (!response.ok) {
+      if (response.status === 403 && payload && payload.error === 'pro_required') {
+        // Zeitraum-Ansicht ist Pro — Fallnetz, falls die Lizenz zwischenzeitlich
+        // abgelaufen ist oder der Client-Cache veraltet war. Sperre nachziehen,
+        // zurück auf die freie Tagesansicht und Pro-Modal zeigen.
+        historyProActive = false;
+        applyHistoryViewGating(true);
+        const sel = byId('historyView');
+        if (sel && sel.value !== 'day') {
+          sel.value = 'day';
+          // Change dispatchen, damit Summary + Viz auf die Tagesansicht
+          // zurückfallen (der Capture-Listener lässt „day" passieren).
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        if (typeof window.openProRequired === 'function') {
+          window.openProRequired(HISTORY_PRO_FEATURE);
+        }
+        return;
+      }
       setBanner(`Historie konnte nicht geladen werden: ${payload.error || response.status}`, 'error');
       return;
     }
@@ -2498,6 +2529,66 @@ async function handleDbRestoreFile(ev) {
   }
 }
 
+// Ermittelt, ob eine aktive Pro-Lizenz vorliegt. Nutzt den geteilten Cache
+// window._licenseStateCache (auch von pro-modal.js/settings.js gesetzt); sonst
+// ein einmaliger Fetch. Fehler/Unbekannt ⇒ fail-open (true): ein zahlender Kunde
+// wird bei Netzfehlern nicht fälschlich ausgesperrt — die harte Schranke sitzt
+// serverseitig, und das reaktive 403-Handling in loadHistorySummary fängt einen
+// echten Non-Pro-Zugriff ohnehin ab.
+function resolveHistoryProActive() {
+  const cached = window._licenseStateCache;
+  if (cached && typeof cached.status === 'string') {
+    return Promise.resolve(cached.status === 'active');
+  }
+  if (typeof apiFetch !== 'function') return Promise.resolve(true);
+  return apiFetch('/api/license/state')
+    .then((r) => (r && r.ok ? r.json() : { status: 'unknown' }))
+    .then((state) => {
+      if (state && state.status && state.status !== 'unknown') {
+        window._licenseStateCache = state;
+      }
+      return !!(state && state.status === 'active');
+    })
+    .catch(() => true);
+}
+
+// Markiert die Premium-Optionen im Dropdown mit 🔒 (locked) bzw. entfernt es
+// wieder (Pro aktiv). Rein visuell — die Auswahl-Sperre erledigt der
+// Capture-change-Listener. CSP-safe: nur textContent, kein innerHTML.
+function applyHistoryViewGating(locked) {
+  const sel = byId('historyView');
+  if (!sel) return;
+  Array.from(sel.options).forEach((opt) => {
+    const base = HISTORY_VIEW_LABELS[opt.value] || opt.value;
+    const isPremium = HISTORY_PREMIUM_VIEWS.includes(opt.value);
+    opt.textContent = (locked && isPremium) ? `${base} \u{1F512}` : base;
+  });
+}
+
+// Setzt die Auswahl-Sperre auf. Ein Capture-Listener fängt die Auswahl einer
+// Premium-Ansicht OHNE Lizenz ab: zurück auf „Tag", Pro-Modal öffnen und die
+// beiden Bubble-change-Listener (loadHistorySummary + history-viz applyView)
+// gar nicht erst laufen lassen (stopImmediatePropagation). Bei Pro/Unbekannt
+// läuft alles normal durch (fail-open).
+function initHistoryViewGating() {
+  const sel = byId('historyView');
+  if (!sel) return;
+  sel.addEventListener('change', (e) => {
+    if (historyProActive === false && HISTORY_PREMIUM_VIEWS.includes(sel.value)) {
+      sel.value = 'day';
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      if (typeof window.openProRequired === 'function') {
+        window.openProRequired(HISTORY_PRO_FEATURE);
+      }
+    }
+  }, true); // Capture-Phase — VOR den Bubble-Listenern
+  resolveHistoryProActive().then((active) => {
+    historyProActive = active;
+    applyHistoryViewGating(!active);
+  });
+}
+
 function bindHistoryControls() {
   const view = byId('historyView');
   const date = byId('historyDate');
@@ -2573,6 +2664,7 @@ function initHistoryPage() {
   if (date && !date.value) date.value = currentDateValue();
   renderBackfillButtonState();
   bindHistoryControls();
+  initHistoryViewGating();
   loadEegLifetimeExtension();
   // Marktwert toggle on Vermiedene Kosten card
   const marketToggle = byId('historyMarketToggle');
@@ -2675,6 +2767,7 @@ const historyHelpers = {
   renderBackfillButtonState,
   renderRows,
   renderSummary,
+  applyHistoryViewGating,   // Pro-Gating: 🔒-Markierung der Premium-Ansichten (testbar)
   historyState
 };
 

@@ -57,7 +57,10 @@
     // Pro-Gating #12 (2026-06-27): DV-Schnittstelle + EOS sind Pro (serverseitig
     // gegated). forecast-inspector-stage2 entfernt (Stage 2++ komplett aus dem Code, 2026-07-02).
     'dv-interface': true,
-    'eos': true
+    'eos': true,
+    // Historie-Zeiträume (Christin 2026-07-07): Woche/Monat/Jahr/Alle sind Pro;
+    // die Tagesansicht bleibt frei. Serverseitig gegated in routes-api.js.
+    'history-multiperiod': true
   };
 
   var FEATURE_BODY = {
@@ -72,7 +75,9 @@
     'dv-interface':
       'Die DV-Schnittstelle (Modbus-Server für den Direktvermarkter) ist ein DVhub-Pro-Feature und benötigt eine aktive Lizenz.',
     'eos':
-      'Die EOS-Arbitrage-Optimierung (Akkudoktor-EOS-Dispatch) ist ein DVhub-Pro-Feature. Ohne Lizenz läuft die freie kleine Börsenautomatik (Stufe 1/2).'
+      'Die EOS-Arbitrage-Optimierung (Akkudoktor-EOS-Dispatch) ist ein DVhub-Pro-Feature. Ohne Lizenz läuft die freie kleine Börsenautomatik (Stufe 1/2).',
+    'history-multiperiod':
+      'Die Historie-Zeiträume Woche, Monat, Jahr und Alle sind ein DVhub-Pro-Feature. Die Tagesansicht bleibt für alle frei verfügbar.'
   };
 
   var FALLBACK_BODY = 'Diese Funktion erfordert eine aktive DVhub-Pro-Lizenz.';
