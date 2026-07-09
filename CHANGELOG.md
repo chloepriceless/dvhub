@@ -8,6 +8,44 @@ die Versionierung folgt [Semantic Versioning](https://semver.org/lang/de/).
 CHANGELOG.md ist die Single Source of Truth für die Versionshistorie; der README
 verweist hierher.
 
+## [1.0.1] - 2026-07-09
+
+Bugfix-Release. Behebt gemeldete GitHub-Issues aus dem 1.0-Feedback.
+
+### Behoben
+
+- **#2 Min-SOC:** wird serverseitig auf 5%-Schritte gerundet. Venus OS akzeptiert
+  den SOC-Mindestwert nur in 5er-Schritten — krumme Werte (z. B. 23%) sprangen
+  zuvor auf ~20% zurück.
+- **#8 DV-Schnittstelle abschaltbar + Not-Halt:** Die aktive Anlagensteuerung
+  lässt sich jetzt in den Einstellungen deaktivieren — wichtig für Volleinspeiser
+  mit fester EEG-Vergütung, deren PV sonst ungewollt abgeregelt wurde. Zusätzlich
+  gibt der Not-Halt die dynamische PV-Abregelung jetzt korrekt wieder frei.
+- **#9 MQTT-Aktivierung:** Das Speichern der MQTT-Konfiguration zeigt nun den
+  erforderlichen Neustart-Hinweis (MQTT verbindet beim Boot) — vorher schien das
+  Aktivieren wirkungslos.
+- **#9 „Instabil"-Anzeige:** Die Verbindungs-Einstufung „Instabil" hing bis zu
+  24 Stunden nach — ein einmaliger Fehler-Burst beim Einrichten markierte die
+  Anlage stundenlang als instabil, obwohl längst alles lief. Jetzt zeigt sie nur
+  noch **aktuelles** Flappen (letzter Fehler < 15 min) und erholt sich selbst.
+- **#7 Kein API-Token mehr im LAN:** Der Standard ist jetzt „LAN offen" — im
+  lokalen Netz ist kein API-Token nötig (behebt „Speichern fehlgeschlagen:
+  unauthorized"). Härtung bleibt optional (Einstellungen → Sicherheit).
+- **#6 / #7 Hilfetexte:** Präzisere Anleitungen für VRM (Portal-ID vs. Site-ID,
+  Access-Token) und den Netzzähler (Modbus-RTU-Altzähler wie EM540/ET340 werden
+  über das Victron-System gelesen).
+
+### Neu
+
+- **#5 AC-PV-Position wählbar:** Bei AC-gekoppelter PV (eigener String-Wechsel-
+  richter am Victron-System, z. B. SMA oder Fronius) kann die Verdrahtungsposition
+  gewählt werden: **Am Verbraucher-Ausgang** (Standard), **Am Netz-Eingang** oder
+  **Am Generator-Eingang**. Hintergrund: Das Victron-GX führt die AC-PV-Leistung
+  je nach Anschlussstelle in getrennten Registern. Ein nachgerüsteter Wechsel-
+  richter am Netz-Eingang wurde dadurch bisher nicht als PV erkannt, sondern als
+  Netzbezug verbucht — die neue Einstellung ordnet die Erzeugung korrekt zu, ganz
+  ohne separaten Netzzähler.
+
 ## [1.0.0] „Sushi" - 2026-07-08
 
 > Codename **„Sushi"** — gewidmet dem jungen Kater, der die Entwicklung begleitet

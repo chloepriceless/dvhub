@@ -1,7 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-import { createDefaultConfig, getConfigDefinition, normalizeConfigInput } from '../config-model.js';
+import { createDefaultConfig, getConfigDefinition, normalizeConfigInput, detectRestartRequired, loadConfigFile } from '../config-model.js';
+
+// Issue #5: victron.acPvSource wählt den AC-PV-Registerblock des GX (unit-id 100)
+// nach Verdrahtungsposition: on-output 808, on-grid 811, on-genset 814. Löst den
+// Fall „AC-Wechselrichter am Netz-Eingang erscheint als Netzbezug".
+test('Issue #5: victron.acPvSource mappt AC-PV-Registeradressen (output/grid/genset)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-acpv-'));
+  const cfgPath = path.join(dir, 'config.json');
+  try {
+    for (const [src, base] of Object.entries({ output: 808, grid: 811, genset: 814 })) {
+      fs.writeFileSync(cfgPath, JSON.stringify({ pvCoupling: 'ac_dc', victron: { acPvSource: src } }));
+      const { effectiveConfig } = loadConfigFile(cfgPath);
+      assert.equal(effectiveConfig.points.acPvL1W.address, base, `${src} L1 -> ${base}`);
+      assert.equal(effectiveConfig.points.acPvL2W.address, base + 1, `${src} L2`);
+      assert.equal(effectiveConfig.points.acPvL3W.address, base + 2, `${src} L3`);
+    }
+    // Default (kein acPvSource) reproduziert 808 -> keine Verhaltensänderung.
+    fs.writeFileSync(cfgPath, JSON.stringify({ pvCoupling: 'ac_dc' }));
+    assert.equal(loadConfigFile(cfgPath).effectiveConfig.points.acPvL1W.address, 808, 'Default = 808 (output)');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Issue #9: MQTT (Hub + Victron-Transport) verbindet nur beim Boot; ein Aktivieren
+// muss daher als restart-sensitiv gelten, sonst meldet die UI "gespeichert" ohne
+// Neustart-Hinweis und der Broker bleibt getrennt.
+test('detectRestartRequired: MQTT-Aktivierungspfade verlangen Neustart, weather-MQTT nicht (Issue #9)', () => {
+  assert.equal(detectRestartRequired(['mqtt.enabled']).required, true);
+  assert.equal(detectRestartRequired(['mqtt.broker']).required, true);
+  assert.equal(detectRestartRequired(['victron.mqtt.broker']).required, true);
+  assert.equal(detectRestartRequired(['victron.transport']).required, true);
+  // Negativfall: die Wetter-MQTT-Quelle ist NICHT der Broker-Hub -> kein Neustart.
+  assert.equal(detectRestartRequired(['forecast.weather.mqtt.brokerUrl']).required, false);
+  assert.equal(detectRestartRequired(['schedule.rules']).required, false);
+});
 
 // Smoke guard so this file always runs at least one assertion that exercises
 // the module surface even if the schedule block above changes shape.
@@ -23,22 +61,13 @@ test('getConfigDefinition and createDefaultConfig remain importable', () => {
 test('Phase 24-02: createDefaultConfig liefert eine sichere LAN-Trust-Default-Posture', () => {
   const cfg = createDefaultConfig();
 
-  // Minimum-Security-Posture (unabhängig vom konkreten Operator-Wert): ein
-  // ausgelieferter Neuinstall darf NICHT den blanket-LAN-Bypass 'open' tragen.
-  // Gegen den ungepatchten config-model.js ist diese Assertion RED; sie wird
-  // erst durch Task 3 (Operator-freigegebener Default != 'open') GREEN.
-  assert.notEqual(
-    cfg.security.lanTrust,
-    'open',
-    'Neuinstall-Default lanTrust darf nicht "open" sein (kein blanket-LAN-Bypass out-of-box)'
-  );
-
-  // Operator-Checkpoint (Task 2) entschied 2026-06-16 (Christin): 'restricted'
-  // (RESEARCH-Empfehlung A1). Hardcodierte Assertion auf den entschiedenen Wert.
+  // Christin-Entscheid 2026-07-09: LAN-Appliance-Default = 'open' (kein Token im
+  // Heimnetz; die Token-Hürde verwirrte Endkunden, GH #7). Bewusste Umkehr des
+  // 'restricted'-Defaults aus Phase 24-02.
   assert.equal(
     cfg.security.lanTrust,
-    'restricted',
-    'Neuinstall-Default lanTrust ist der operator-freigegebene Wert "restricted"'
+    'open',
+    'Neuinstall-Default lanTrust ist "open" (LAN ohne Token, Christin 2026-07-09)'
   );
 
   // Feld-Coverage-Assertions: die übrigen Security-Default-Felder bleiben auf

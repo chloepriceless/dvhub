@@ -216,7 +216,15 @@ const restartSensitivePrefixes = [
   'schedule.evaluateMs',
   'manufacturer',
   'victron.host',
-  'pvCoupling'
+  'pvCoupling',
+  // Issue #9: MQTT (Hub + Victron-MQTT-Transport) wird nur beim Boot verbunden
+  // (mqttHub.start() / transport-factory). Ohne diese Eintraege meldete ein
+  // MQTT-Aktivieren "gespeichert" OHNE Neustart-Hinweis — der Broker blieb aber
+  // getrennt, weil applyLoadedConfig MQTT nicht hot-reloaded (gemeldet: FrodoVDR
+  // GH #9 "MQTT wird nicht aktiviert"). Jetzt zeigt die UI den Neustart-Button.
+  'mqtt',
+  'victron.transport',
+  'victron.mqtt'
 ];
 
 function addSetupWizardMetadata(fields) {
@@ -935,6 +943,21 @@ function buildFieldDefinitions() {
       section: 'victron',
       group: 'connection',
       groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und die Anlagenadresse.',
+      path: 'victron.acPvSource',
+      label: 'AC-PV-Anbindung (Position im Victron-System)',
+      type: 'select',
+      options: [
+        { value: 'output', label: 'Am Verbraucher-Ausgang (AC-Out)' },
+        { value: 'grid', label: 'Am Netz-Eingang (AC-In / grid)' },
+        { value: 'genset', label: 'Am Generator-Eingang (AC-In / genset)' }
+      ],
+      help: 'Nur relevant bei AC-gekoppelter PV (eigener AC-Wechselrichter am Victron-System, z. B. SMA/Fronius-String-WR). Das Victron-GX f\u00fchrt die AC-PV-Leistung je nach VERDRAHTUNG in getrennten Registern: \u201eAm Verbraucher-Ausgang\u201c (Standard, hinter dem Multiplus), \u201eAm Netz-Eingang\u201c (der WR speist auf der Netzseite ein \u2014 h\u00e4ufig bei nachger\u00fcsteten String-WR) oder \u201eAm Generator-Eingang\u201c. Wenn deine AC-Erzeugung f\u00e4lschlich als Netzbezug erscheint, steht der WR vermutlich am Netz-Eingang \u2192 auf \u201eAm Netz-Eingang\u201c umstellen. In VRM siehst du die Position unter dem PV-Inverter-Ger\u00e4t (AC-in vs. AC-out).'
+    },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
       groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
       path: 'victron.telemetryMaxAgeMs',
       label: 'Telemetrie-Frische max. Alter (ms)',
@@ -1128,6 +1151,17 @@ function buildFieldDefinitions() {
         { value: 3600, label: '1 Stunde' }
       ],
       help: 'Wie oft EOS einen frischen Optimierungslauf startet (ems.interval), ENTKOPPELT von der Slot-Aufl\u00f6sung. Der Lauf startet zur vollen Slot-Grenze (:00/:15/:30/:45 bei 15min, :00/:30 bei 30min), damit der frische Plan die Folge-Slots steuert. \u201eAutomatisch\u201c drosselt 15-min-Slots auf st\u00fcndlich. Ein Lauf dauert ~6 min; f\u00fcr schw\u00e4chere Hardware (z.B. Raspberry-Pi-EOS-Host) 30 Minuten w\u00e4hlen \u2014 dann l\u00e4uft EOS zur vollen halben Stunde. \u00dcberzieht ein Lauf die n\u00e4chste Grenze, verschiebt er sich automatisch auf den n\u00e4chsten freien Slot (Kadenz halbiert sich selbst).'
+    },
+    {
+      section: 'schedule',
+      group: 'feedinTariff',
+      groupLabel: 'Einspeisung & Tarif',
+      groupDescription: 'Wie der Optimizer den Einspeise-/Verkaufserl\u00f6s bewertet.',
+      groupOrder: 30,
+      path: 'dvControl.enabled',
+      label: 'Aktive Anlagensteuerung (DV-Schnittstelle)',
+      type: 'boolean',
+      help: 'Steuert, ob DVhub aktiv in die Wechselrichter/Anlage SCHREIBT (dynamische PV-Abregelung reg 2707/2708 + Einspeise-Freigabe). AKTIV lassen, wenn du an der Direktvermarktung mit dynamischen B\u00f6rsenpreisen teilnimmst (Einspeise-Modus = \u201eSpot\u201c). Bei FESTER EEG-Einspeiseverg\u00fctung (Einspeise-Modus = \u201eFest\u201c) und wenn du DVhub nur zum Beobachten nutzt: hier DEAKTIVIEREN \u2014 sonst regelt DVhub deine PV bei niedrigen/negativen B\u00f6rsenpreisen ab und du verlierst Einspeiseverg\u00fctung ohne Gegenwert. Der Not-Halt gibt die PV ebenfalls wieder frei.'
     },
     {
       section: 'schedule',
@@ -2477,6 +2511,14 @@ export function createDefaultConfig() {
       host: '',
       port: 502,
       unitId: 100,
+      // Issue #5: welche GX-System-Register liefern die AC-gekoppelte PV-Leistung.
+      // Der GX (unit-id 100) aggregiert AC-PV je nach VERDRAHTUNGS-POSITION in
+      // getrennte Registerbloecke: on-output 808-810, on-grid(input) 811-813,
+      // on-genset 814-816. DVhub las bisher fix nur on-output — ein String-WR am
+      // Netz-Eingang (haeufig bei SMA + Victron) erschien dadurch als Netzbezug
+      // statt PV (gemeldet: stefan-12). 'output' = bisheriges Verhalten (Default).
+      // applyVictronDefaults setzt daraus die acPvL1/2/3W-Adressen (effektive Config).
+      acPvSource: 'output',
       timeoutMs: 1000,
       // T-0075: max age (ms) of a successful SoC/battery poll before telemetry is
       // treated as stale and forced discharge is suppressed (chokepoint floor).
@@ -2757,14 +2799,15 @@ export function createDefaultConfig() {
     //   trustedClientIps:[] = any LAN ip is trusted. Non-empty = ONLY these exact
     //                    IPs get the LAN bypass (an explicit per-device allowlist).
     security: {
-      // Phase 24-02 (Operator-Freigabe 2026-06-16, Christin): sicherer
-      // Out-of-Box-Default für Neuinstalls — 'restricted' statt 'open'. Kiosk-/
-      // Tablet-GET (lanSafeGroups) bleibt token-frei, jeder schreibende/admin/
-      // control/VPN-Call braucht out-of-box einen Bearer-Token. Schließt die in
-      // 24-01-AUDIT belegte VPN-Apply-LAN-Lücke. Wirkt NUR auf createDefaultConfig
-      // (Neuinstalls); bestehende /etc/dvhub/config.json behält ihren Wert
-      // (Migration-Kompat: checkAuth liest absent → fail-safe 'open').
-      lanTrust: 'restricted',
+      // Out-of-Box-Default = 'open': im lokalen Netz braucht KEIN Gerät einen
+      // API-Token (Konfig/Steuerung/Anzeige tokenfrei), passend zu einer LAN-
+      // Heim-Appliance. Christin-Entscheid 2026-07-09: die Token-Hürde verwirrt
+      // Endkunden (Symptom u.a. „Speichern fehlgeschlagen: unauthorized", GH #7)
+      // ohne realen Mehrwert im Heimnetz — bewusste Umkehr des 'restricted'-
+      // Defaults aus Phase 24-02 (der die VPN-Apply-LAN-Lücke schloss). Wer
+      // Härtung will, stellt in Einstellungen → Sicherheit auf 'restricted'/
+      // 'strict' + setzt einen API-Token. Nur-Loopback bleibt immer erlaubt.
+      lanTrust: 'open',
       lanCidrs: [],
       lanSafeGroups: ['status', 'dashboard', 'history', 'forecast', 'integrations'],
       trustedClientIps: []
@@ -2822,6 +2865,19 @@ function applyVictronDefaults(config) {
   for (const [key, item] of Object.entries(next.dvControl || {})) {
     if (key !== 'enabled' && key !== 'negativePriceProtection') apply(item);
   }
+  // Issue #5: AC-PV-Register-Basisadresse nach Verdrahtungsposition (GX unit-id 100).
+  // on-output 808-810 (Default) / on-grid(input) 811-813 / on-genset 814-816.
+  // Deterministisch aus victron.acPvSource abgeleitet, damit ein Kunde den
+  // Registerblock ohne Rohadressen umstellen kann. 'output' reproduziert den
+  // bisherigen Default (808) → keine Verhaltensaenderung fuer Bestandssetups.
+  const AC_PV_BASE = { output: 808, grid: 811, genset: 814 };
+  const acPvBase = AC_PV_BASE[next.victron?.acPvSource] ?? AC_PV_BASE.output;
+  if (next.points) {
+    if (next.points.acPvL1W) next.points.acPvL1W.address = acPvBase;
+    if (next.points.acPvL2W) next.points.acPvL2W.address = acPvBase + 1;
+    if (next.points.acPvL3W) next.points.acPvL3W.address = acPvBase + 2;
+  }
+
   // Disable PV points based on pvCoupling selection
   const coupling = next.pvCoupling || 'ac_dc';
   if (coupling === 'dc' && next.points) {

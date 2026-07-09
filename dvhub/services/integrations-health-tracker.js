@@ -34,6 +34,11 @@ export function createIntegrationsHealthTracker(ctx) {
   const LATENCY_RING_CAP = 60;
   const HIST_RING_CAP = 7;
   const ERRORS_WINDOW_MS = 24 * 60 * 60 * 1000;
+  // GH #9: "Instabil" nur bei AKTUELLEM Flappen. Lag der letzte Fehler laenger
+  // als dieses Fenster zurueck, gilt die Verbindung als erholt (nicht mehr
+  // instabil), auch wenn im 24h-Fenster noch >10 Fehler stehen. Verhindert, dass
+  // ein Setup-Fehler-Burst die Anlage stundenlang faelschlich als instabil zeigt.
+  const RECENT_ERROR_WINDOW_MS = 15 * 60 * 1000;
   const SCHEMA_VERSION = 1;
 
   // Status threshold map (per Phase 09.2 D-19 revised for victron — 30s warn, 5min err).
@@ -46,8 +51,16 @@ export function createIntegrationsHealthTracker(ctx) {
   // 2026-06-13: MQTT card showed "Veraltet" while live topics kept flowing).
   function deriveStatus(s) {
     if (!s.lastSampleAt) return { status: 'err', reason: 'no_samples' };
-    // Recent error wave → 'warn' even if latest sample is fresh
-    if (s.errors24h.length > 10) return { status: 'warn', reason: 'errors' };
+    // Recent error WAVE → 'warn' ("Instabil") even if the latest sample is fresh.
+    // GH #9: only while the flapping is CURRENT — if the last error is older than
+    // RECENT_ERROR_WINDOW_MS the link has recovered, so fall through to the normal
+    // freshness check instead of hanging on "Instabil" for the full 24h window.
+    if (s.errors24h.length > 10) {
+      const lastErrorAt = s.errors24h[s.errors24h.length - 1];
+      if (Date.now() - lastErrorAt < RECENT_ERROR_WINDOW_MS) {
+        return { status: 'warn', reason: 'errors' };
+      }
+    }
     const ageMs = Date.now() - s.lastSampleAt;
     if (ageMs > 5 * 60 * 1000) return { status: 'err', reason: 'stale' };
     if (ageMs > 30 * 1000) return { status: 'warn', reason: 'stale' };

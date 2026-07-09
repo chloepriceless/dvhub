@@ -63,8 +63,12 @@ function dischargeFloorHold(target, value) {
 // forecast_optimizer rule:* sources, eos_optimization,
 // emhass_optimization, api_manual_write, manual_override*, default.
 // NOTE: applyDvVictronControl (§9 feed-in limit / PV curtailment, reg 2707/2709)
-// is a separate path that never goes through applyControlTarget — it is NOT
-// gated, by design. Reads (polling.js) are likewise untouched.
+// is a separate path that never goes through applyControlTarget. Issue #8: its
+// CALLERS now honor the emergency stop — while discretionaryWritesPaused is set,
+// the discretionary schedule path RELEASES the PV (feedIn=true, source
+// 'emergency_stop_release') instead of continuing to curtail; only the mandatory
+// §51 negative-price path (and DV forcedOff) keep curtailing. Reads (polling.js)
+// are untouched.
 const MANDATORY_CONTROL_SOURCES = new Set([
   'negative_price_protection',
   'manual_override_soc_floor',
@@ -910,6 +914,14 @@ export function createScheduleEvaluator(ctx) {
         dcSource = 'dv_forced_off';
       } else if (priceNegative) {
         dcSource = 'negative_price_protection';
+      } else if (state.ctrl.discretionaryWritesPaused) {
+        // Issue #8 / T-0099: der Not-Halt stoppte bisher NUR applyControlTarget
+        // (gridSetpoint etc.), nicht die diskretionäre PV-Abregelung — die lief
+        // weiter und regelte die PV ab (gemeldet von FrodoVDR, GH #8). Im Not-Halt
+        // die PV FREIGEBEN (feedIn=true), damit die Anlage wieder normal einspeist.
+        // forcedOff und §51-Negativpreis (oben) behalten Vorrang — die sind mandatory.
+        dcFeedIn = true;
+        dcSource = 'emergency_stop_release';
       } else {
         const eff = effectiveTargetValue('feedExcessDcPv');
         dcFeedIn = eff.value != null && Number(eff.value) === 1;

@@ -709,3 +709,38 @@ test('Pro-Gating: forecast_optimizer rule is skipped without a licence (Stage 1/
   assert.notEqual(Number(state.schedule.active.gridSetpointW?.value), -5000,
     'without a licence the forecast_optimizer setpoint must NOT actuate (EOS gated → Stage 1/2)');
 });
+
+// --- Issue #8: Not-Halt gibt die diskretionäre PV-Abregelung frei ------------
+// Regression: der Not-Halt (state.ctrl.discretionaryWritesPaused) stoppte bisher
+// nur applyControlTarget (gridSetpoint), NICHT die diskretionäre PV-Abregelung
+// über applyDvVictronControl. Gemeldet von FrodoVDR (GH #8): PV wurde trotz
+// Not-Halt weiter runtergeregelt. Jetzt gibt der Schedule-Pfad die PV frei.
+test('Issue #8: Not-Halt gibt die PV frei (emergency_stop_release), ohne Not-Halt bleibt Abregelung', async () => {
+  const build = (paused) => makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.schedule.rules = [];                          // nur der DV-Pfad ist relevant
+      state.ctrl.discretionaryWritesPaused = paused;
+      state.schedule.config.defaultFeedExcessDcPv = 0;    // normal: NICHT einspeisen -> abregeln
+      cfg.dvControl = {
+        enabled: true,
+        feedExcessDcPv: { enabled: true, address: 2707 },
+        dontFeedExcessAcPv: { enabled: true, address: 2708 },
+        negativePriceProtection: { enabled: true, gridSetpointW: -40 }
+      };
+    }
+  });
+
+  // Ohne Not-Halt: Default 0 -> PV wird abgeregelt (feedIn=false).
+  const off = build(false);
+  await createScheduleEvaluator(off.ctx).evaluateSchedule();
+  assert.equal(off.state.schedule.active.feedExcessDcPv.value, 0, 'ohne Not-Halt bleibt die Abregelung');
+  assert.ok(off.writes.some((w) => w.target === 'feedExcessDcPv' && w.value === 0), 'feedExcessDcPv=0 geschrieben');
+
+  // Mit Not-Halt: PV wird freigegeben (feedIn=true) trotz Default 0.
+  const on = build(true);
+  await createScheduleEvaluator(on.ctx).evaluateSchedule();
+  assert.equal(on.state.schedule.active.feedExcessDcPv.source, 'emergency_stop_release', 'Quelle = emergency_stop_release');
+  assert.equal(on.state.schedule.active.feedExcessDcPv.value, 1, 'Not-Halt gibt die PV frei');
+  assert.ok(on.writes.some((w) => w.target === 'feedExcessDcPv' && w.value === 1), 'feedExcessDcPv=1 (einspeisen)');
+  assert.ok(on.writes.some((w) => w.target === 'dontFeedExcessAcPv' && w.value === 0), 'dontFeedExcessAcPv=0 (nicht sperren)');
+});

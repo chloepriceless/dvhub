@@ -349,12 +349,12 @@
           <label class="dv-field">
             <span class="field-label">Portal-ID</span>
             <input type="text" class="input mono" id="vrm-portalid" placeholder="z.B. abc123def456" autocomplete="off" spellcheck="false">
-            <span class="field-hint">Aus deinem VRM-Account: Settings &rarr; Installations &rarr; Portal-ID kopieren.</span>
+            <span class="field-hint">VRM-Portal (vrm.victronenergy.com): <strong>Installationen &rarr; deine Anlage &rarr; Einstellungen &rarr; Allgemeines &rarr; &bdquo;VRM&nbsp;Portal-ID&ldquo;</strong>. Das ist ein Hex-String (z.&nbsp;B. <code>abc123def456</code>) &mdash; NICHT die kurze numerische Site-ID (z.&nbsp;B. 123456) aus der Adresszeile.</span>
           </label>
           <label class="dv-field">
             <span class="field-label">Access-Token</span>
-            <input type="password" class="input mono" id="vrm-token" placeholder="leer lassen = unver&auml;ndert" autocomplete="off" spellcheck="false">
-            <span class="field-hint">VRM Access-Token (Settings &rarr; Profile &rarr; Access Tokens).</span>
+            <input type="password" class="input mono" id="vrm-token" placeholder="Token hier einf&uuml;gen" autocomplete="off" spellcheck="false">
+            <span class="field-hint"><strong>Pflicht beim Ersteinrichten.</strong> VRM-Portal &rarr; <strong>Pr&auml;ferenzen &rarr; Integrationen &rarr; &bdquo;Access-Token&ldquo;</strong> &rarr; neues Token erstellen und hier einf&uuml;gen. (Ist bereits ein Token gespeichert, kann das Feld beim erneuten Speichern leer bleiben &mdash; dann bleibt es unver&auml;ndert.)</span>
           </label>
           <div class="dv-field-validation" id="vrm-banner" hidden></div>
           <div class="dv-drawer-actions">
@@ -421,16 +421,22 @@
         </header>
         <div class="dv-drawer-body" id="dv-drawer-mid-body">
           <p class="dv-drawer-intro">
-            Der <strong>Netzz&auml;hler</strong> liefert die Werte f&uuml;r DV-Schnittstelle und Anzeige.
-            W&auml;hle die <strong>Quelle</strong>: das Hersteller-Profil oder einen eigenen
-            Modbus-/MQTT-/HTTP-Endpunkt &mdash; Hybrid-Akkus bringen oft einen eigenen
-            Z&auml;hlerpunkt mit.
+            <strong>Optional.</strong> Bei Victron-Anlagen liest DVhub den Netzz&auml;hler am
+            Verkn&uuml;pfungspunkt bereits <strong>aus dem Victron-System</strong> &mdash; der
+            Cerbo/GX kennt auch einen per RS485/Modbus-<strong>RTU</strong> angeschlossenen
+            Carlo-Gavazzi-Z&auml;hler (EM540, ET340, EM24, EM340). Diesen Drawer brauchst du nur,
+            wenn ein <strong>separater, direkt erreichbarer</strong> Z&auml;hler die Werte liefern
+            soll &mdash; dann hat er Vorrang vor dem Victron-Wert. Direkt anbindbar sind hier nur
+            <strong>Modbus-TCP</strong>, MQTT oder HTTP; ein RS485/Modbus-RTU-Z&auml;hler wird
+            <strong>nicht</strong> direkt hier eingebunden, sondern &uuml;ber das Victron-System
+            (oder durch Umbau auf einen VM-3P75CT). W&auml;hle die <strong>Quelle</strong>:
+            Hersteller-Profil oder eigener Endpunkt.
           </p>
           <label class="dv-field">
             <span class="field-label">Quelle</span>
             <select class="input" id="mid-source-mode">
               <option value="profile">Hersteller-Profil</option>
-              <option value="modbus">Modbus (individuell)</option>
+              <option value="modbus">Modbus TCP (individuell)</option>
               <option value="mqtt">MQTT</option>
               <option value="http">HTTP</option>
             </select>

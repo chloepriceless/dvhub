@@ -156,9 +156,17 @@ export function controlWriteBoundsError(target, value) {
 export function clampMinSoc(value, floorPct) {
   const lo = Math.max(0, Number.isFinite(Number(floorPct)) ? Number(floorPct) : 0);
   const v = Number(value);
-  if (!Number.isFinite(v)) return { value: lo, clamped: true };
-  const clampedVal = Math.min(MAX_MINSOC_PCT, Math.max(lo, v));
-  return { value: clampedVal, clamped: clampedVal !== v };
+  // First clamp into [floor, 100] (fail-safe: non-finite → floor).
+  const clampedVal = Number.isFinite(v) ? Math.min(MAX_MINSOC_PCT, Math.max(lo, v)) : lo;
+  // Issue #2: Venus OS "SOC Mindestwert Entladung" (reg 2901) is only honored in
+  // 5% steps — a non-5 write is silently reverted by the GX (observed: springs
+  // back to ~20%), leaving DVhub and Venus inconsistent. Snap every write to the
+  // nearest 5% so ANY caller (operator slider, EOS, optimizer) produces a stable,
+  // device-honored value. Safety: never round BELOW the hard floor — if
+  // round-to-nearest would dip under `lo`, round the floor UP to the next 5%.
+  let snapped = Math.round(clampedVal / 5) * 5;
+  if (snapped < lo) snapped = Math.min(MAX_MINSOC_PCT, Math.ceil(lo / 5) * 5);
+  return { value: snapped, clamped: snapped !== v };
 }
 
 // T-0080 (P1 sweep): decide whether to raise a (throttled) telemetry-DOWN alarm.

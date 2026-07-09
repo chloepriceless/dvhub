@@ -6,7 +6,7 @@
 // snapshot/restore round-trip, schema-version gating, and Pitfall 6
 // (uptimeStartedAt resets on every process boot).
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import test, { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createIntegrationsHealthTracker } from '../services/integrations-health-tracker.js';
 
@@ -210,4 +210,30 @@ describe('createIntegrationsHealthTracker', () => {
     tracker.close(); // idempotent
     assert.ok(true, 'close did not throw');
   });
+});
+
+// GH #9: "Instabil" (reason 'errors') nur bei AKTUELLEM Flappen, nicht 24h nachhängend.
+test('GH #9: errors-Status verschwindet nach Ruhephase, bleibt bei frischem Flappen', () => {
+  const tracker = createIntegrationsHealthTracker(makeMockCtx());
+  const now = Date.now();
+  const mk = (errAgeMs) => ({
+    latencyMs: [7],
+    errors24h: Array.from({ length: 12 }, (_, i) => now - errAgeMs - i * 1000),
+    lastSampleAt: now,                 // aktueller Sample ist frisch/ok
+    uptimeStartedAt: now - 3600_000,
+    firmware: null,
+    sampleIntervalHistogramMs: []
+  });
+
+  // Fehler-Burst vor 30 min, seither Ruhe -> Verbindung erholt -> NICHT instabil.
+  tracker._state.set('victron', mk(30 * 60 * 1000));
+  let snap = tracker.snapshot();
+  assert.notEqual(snap.victron.statusReason, 'errors', 'alter Burst darf nicht mehr instabil zeigen');
+  assert.equal(snap.victron.status, 'ok', 'frischer Sample + erholte Verbindung = ok');
+
+  // Fehler bis gerade eben -> aktuelles Flappen -> instabil.
+  tracker._state.set('victron', mk(0));
+  snap = tracker.snapshot();
+  assert.equal(snap.victron.statusReason, 'errors', 'aktuelles Flappen bleibt instabil');
+  assert.equal(snap.victron.status, 'warn');
 });
