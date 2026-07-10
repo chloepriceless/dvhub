@@ -1,0 +1,152 @@
+{
+  "label": "Fronius GEN24 (SunSpec) — Beta",
+  "_doc": [
+    "Fronius-Herstellerprofil Stufe 1 (B-1112) — SunSpec Modbus TCP.",
+    "Zielgeräte: Primo/Symo GEN24 (Plus), Smart Meter (Unit-ID 200).",
+    "Voraussetzungen am Wechselrichter (WebUI, Techniker-Login):",
+    "  Kommunikation → Modbus → Slave/TCP aktivieren +",
+    "  'Wechselrichter-Steuerung über Modbus zulassen'.",
+    "",
+    "Adress-Prinzip: Punkte deklarieren sunspec:{model, offset} statt fester",
+    "Register — DVhub scannt beim Start die SunSpec-Modellkette des Geräts",
+    "(services/inverter/sunspec.js) und löst die Adressen auf. Das macht das",
+    "Profil layout-sicher (float- vs. int+SF-Modus verschiebt die Modell-Basen).",
+    "Die INNEREN Offsets folgen den SunSpec-Standardmodellen 113/123/124.",
+    "",
+    "Stufe-1-Funktionsumfang: Telemetrie (AC-Leistung, SoC, Netz-Meter) +",
+    "DV-Abregelung über Model 123 (WMaxLimPct=0% + WMaxLim_Ena=1; Freigabe",
+    "Ena=0) + Negativpreis-Schutz. KEINE aktive Batterie-Steuerung (kommt mit",
+    "dem Soft-ESS-Regler, B-1103). batteryPowerW/echte PV-Aufteilung brauchen",
+    "Model-160-Support (Stufe 2).",
+    "",
+    "STATUS BETA: Offsets/Skalen sind @sim-assumption bis zum Test am echten",
+    "GEN24 (RvrtTms-/Scale-Verifikation; siehe Backlog 12-VENDOR-FRONIUS.md).",
+    "Abregelung bleibt bei DVhub-Ausfall ggf. aktiv stehen (kein Auto-Revert) —",
+    "identisches Verhalten wie die persistenten Victron-Einspeise-Flags."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Fronius Smart Meter @ Unit-ID 200 (SunSpec Float-Meter): 8 Register = W_total, WphA, WphB, WphC als Float32. Adresse ist @sim-assumption (Community-Referenz) — bei abweichendem Layout am Gerät kalibrieren. Vorzeichen: Fronius meldet Einspeisung positiv → gridPositiveMeans 'feed_in' in den Einstellungen.",
+    "unitId": 200,
+    "fc": 3,
+    "address": 40090,
+    "quantity": 8,
+    "readType": "float32",
+    "timeoutMs": 2000
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "Model 124 ChaState (Offset +6), uint16 mit SF −2 (0–10000 = 0,00–100,00 %) → scale 0.01. @sim-assumption: SF am Gerät verifizieren.",
+      "enabled": true,
+      "fc": 3,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.01,
+      "offset": 0,
+      "sunspec": { "model": 124, "offset": 6 }
+    },
+    "minSocPct": {
+      "_comment": "Model 124 MinRsvPct (Offset +5) — nur Anzeige. Scale @sim-assumption (SF unklar); Schreiben bleibt bewusst deaktiviert (controlWrite.minSocPct).",
+      "enabled": true,
+      "fc": 3,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.01,
+      "offset": 0,
+      "sunspec": { "model": 124, "offset": 5 }
+    },
+    "pvPowerW": {
+      "_comment": "Model 113 W (Offset +20, Float32) = AC-Ausgangsleistung des WR. NÄHERUNG: bei Anlagen mit Batterie enthält sie den Akku-Anteil; exakte PV-Aufteilung kommt mit Model-160-Support (Stufe 2). Bei GEN24 ohne Batterie ist der Wert exakt.",
+      "enabled": true,
+      "fc": 3,
+      "quantity": 2,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "readType": "float32",
+      "sunspec": { "model": 113, "offset": 20 }
+    },
+    "batteryPowerW": {
+      "_comment": "Deaktiviert in Stufe 1: saubere Akku-Leistung braucht Model 160 (MPPT-Eingang 3 = Laden, 4 = Entladen). DCW aus Model 113 wäre bei Hybrid PV+Akku vermischt — lieber kein Wert als ein falscher.",
+      "enabled": false
+    },
+    "gridSetpointW": { "enabled": false },
+    "acPvL1W": { "enabled": false },
+    "acPvL2W": { "enabled": false },
+    "acPvL3W": { "enabled": false },
+    "selfConsumptionW": {
+      "_comment": "Kein direktes Hausverbrauchs-Register; loadW-Ableitung aus Meter+PV ist Stufe-2-Arbeit.",
+      "enabled": false
+    }
+  },
+
+  "controlWrite": {
+    "gridSetpointW": {
+      "_comment": "Fronius kennt keinen AC-Netzpunkt-Sollwert (setpoint-Dialekt ist Victron-exklusiv). Aktive Batterie-Steuerung kommt mit dem Soft-ESS-Regler (B-1103).",
+      "enabled": false
+    },
+    "chargeCurrentA": { "enabled": false },
+    "maxDischargeW": { "enabled": false },
+    "minSocPct": {
+      "_comment": "Model 124 MinRsvPct — Schreiben DEAKTIVIERT bis der Scale am Gerät verifiziert ist (falscher Faktor würde den SoC-Boden am Gerät faktisch entfernen; der DVhub-interne T-0075-Floor gilt unabhängig davon).",
+      "enabled": false,
+      "fc": 6,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 0.01,
+      "offset": 0,
+      "sunspec": { "model": 124, "offset": 5 }
+    },
+    "wMaxLimPct": {
+      "_comment": "Model 123 WMaxLimPct (Offset +3), uint16 mit SF −2 (100 % = 10000) → scale 0.01. Nur über die dvControl-Sequenz beschrieben, kein direktes API-Target.",
+      "enabled": true,
+      "fc": 6,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 0.01,
+      "offset": 0,
+      "sunspec": { "model": 123, "offset": 3 }
+    },
+    "wMaxLimEna": {
+      "_comment": "Model 123 WMaxLim_Ena (Offset +7): 1 = Begrenzung aktiv, 0 = aus.",
+      "enabled": true,
+      "fc": 6,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "sunspec": { "model": 123, "offset": 7 }
+    }
+  },
+
+  "dvControl": {
+    "_comment": "DV-Abregelung über SunSpec Model 123: Sperren = WMaxLimPct:=0 % DANN WMaxLim_Ena:=1; Freigeben = WMaxLim_Ena:=0. Die Sequenz wirkt auf den gesamten WR-Ausgang und deckt damit AC- wie DC-gekoppelte Erzeugung ab (feedExcessDcPv separat daher deaktiviert).",
+    "enabled": true,
+    "feedExcessDcPv": { "enabled": false },
+    "dontFeedExcessAcPv": {
+      "enabled": true,
+      "sequence": {
+        "1": [
+          { "point": "wMaxLimPct", "value": 0 },
+          { "point": "wMaxLimEna", "value": 1 }
+        ],
+        "0": [
+          { "point": "wMaxLimEna", "value": 0 }
+        ]
+      }
+    },
+    "negativePriceProtection": {
+      "_comment": "Der gridSetpointW-Anteil läuft bei Fronius ins Leere (Target deaktiviert, stiller No-op) — wirksam ist die Flag-Abregelung über die Sequenz oben.",
+      "enabled": true,
+      "gridSetpointW": -40
+    }
+  }
+}

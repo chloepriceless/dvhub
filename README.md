@@ -108,6 +108,10 @@ Der Installer:
 - installiert den vollen Prognose-/ML-Stack hash-gepinnt aus `requirements.lock` (auf jeder Box) und zusätzlich Akkudoktor-EOS ab ≥ 1 GB RAM (siehe **Leistungsstufen**)
 - **Stable-Channel** (Standard): checkt den neuesten Semver-Release-Tag aus
 - **Dev-Channel** (`--channel dev`): checkt `origin/main` HEAD aus
+- **Commit-Pin** (`--ref <commit|tag>`): checkt exakt diesen Stand aus — für
+  Beta-Tests („bitte Commit `abc1234` testen") und reproduzierbare
+  Installationen. Die Ref muss vom Release-Branch erreichbar sein; das nächste
+  Update über die Einstellungen löst den Pin wieder auf den Channel auf
 - der Update-Channel ist nachträglich über die Einstellungen umschaltbar
 - legt **standardmäßig** einen Fern-Support-Login-User `dvhub-support` (Gruppe `dvhub`, **kein sudo**) an und hinterlegt den öffentlichen Support-Schlüssel — als Bereitschaft für Fern-Diagnose. **Wichtig:** Das gibt dem Support **keinen** Zugriff. Erreichbar ist die Box nur, solange **du** in den Einstellungen aktiv einen zeitbegrenzten Support-Tunnel öffnest (jederzeit abbrechbar). Abschaltbar mit `--no-support-user`.
 
@@ -180,6 +184,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 - **DV-Signalerkennung** mit Lease-Logik (`offLeaseMs`) und automatischer, sicherer Rückkehr in Freigabe nach Ablauf
 - **Victron-Steuerung** für Grid Setpoint, Charge Current, Min SOC, Max Discharge sowie die DC-/AC-Einspeise-Flags (`feedExcessDcPv`, `dontFeedExcessAcPv`)
 - **Transport wahlweise Modbus TCP** (On-Demand-Client mit Connection-Pool und Connect-Timeout-Guard) **oder MQTT** (Venus OS, mit Keepalive und Cache-Frische-Prüfung)
+- **Universal-MQTT-Schnittstelle** — Herstellerprofil „Universal (MQTT-Bridge)" (`hersteller/bridge-mqtt.json`): jeder nicht nativ unterstützte Wechselrichter (Deye, Growatt, …) wird über eine kleine MQTT-Bridge angebunden, die das dokumentierte Venus-Topic-Schema spricht; Broker und Portal-ID sind direkt in den Einstellungen konfigurierbar — [Anleitung mit Node-RED-Referenz-Flow](docs/DEYE-NODERED-BRIDGE.md)
 - **Negativpreis-Schutz** — blockiert die Einspeisung automatisch, sobald der EPEX-Preis < 0 ct/kWh fällt
 - **Rechtliches Schreibgate (EEG/§14a)** — Netzladen bzw. erzwungene Netzentladung nur bei freigegebenen Flags (`allowGridCharge`/`allowGridDischarge`)
 - **Universeller Entlade-Boden** — kein entlade-aktivierender Write, wenn der SOC unbekannt, veraltet oder ≤ Hartboden (`hardFloorSocPct`) ist
@@ -615,7 +620,7 @@ cd /opt/dvhub/dvhub
 npm install --omit=dev
 sudo cp config.example.json /etc/dvhub/config.json
 sudo mkdir -p /etc/dvhub/hersteller
-sudo cp hersteller/victron.json /etc/dvhub/hersteller/victron.json
+sudo cp hersteller/*.json /etc/dvhub/hersteller/
 sudo nano /etc/dvhub/config.json
 ```
 
@@ -623,9 +628,10 @@ sudo nano /etc/dvhub/config.json
 > Config setzen — sonst startet der Service mit aktivierten Service-Actions nicht.
 > Der Installer erzeugt diesen Token automatisch.
 
-Technische Victron-Werte wie Register, Port, Unit-ID oder Timeout werden nicht in
+Technische Werte wie Register, Port, Unit-ID oder Timeout werden nicht in
 `/etc/dvhub/config.json` gepflegt, sondern im Herstellerprofil unter
-`/etc/dvhub/hersteller/victron.json`.
+`/etc/dvhub/hersteller/<hersteller>.json` (Victron nativ: `victron.json`;
+Universal-MQTT-Bridge: `bridge-mqtt.json`).
 
 Prognose-/ML-Funktionen benötigen zusätzlich eine Python-Umgebung
 (`dvhub/python/requirements.txt`, hash-gepinnt über `requirements.lock`); der
@@ -812,7 +818,7 @@ Schlüssel strikt ab — jedes neue Feld muss in `ALLOWED_CONFIG_ROOTS`.
 
 | Sektion | Beschreibung |
 |---------|--------------|
-| `manufacturer` / `updateChannel` | Aktives Herstellerprofil (`victron`) und Update-Channel (`stable`/`dev`) |
+| `manufacturer` / `updateChannel` | Aktives Herstellerprofil (`victron` oder `bridge-mqtt` = Universal-MQTT) und Update-Channel (`stable`/`dev`) |
 | `httpPort` / `httpsPort` / `tlsCertPath` / `tlsKeyPath` | Webserver-Ports und TLS (Installer: 80 / 443; Code-Default `httpPort` 8080) |
 | `modbusListenHost` / `modbusListenPort` / `modbusAllowedClients` | DV-Modbus-Server-Bind (Default `0.0.0.0:1502`) und Client-Allowlist |
 | `victron` | Anlagenadresse, Transport (Modbus/MQTT), Timeouts, `victron.alarms` |
@@ -843,14 +849,19 @@ Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 
 | Datei | Zweck |
 |-------|-------|
-| `/etc/dvhub/hersteller/victron.json` | Victron-spezifische Kommunikations- und Registerwerte |
+| `/etc/dvhub/hersteller/victron.json` | Victron-spezifische Kommunikations- und Registerwerte (nativer Modbus-Treiber) |
+| `/etc/dvhub/hersteller/bridge-mqtt.json` | Universal (MQTT-Bridge) — bindet jeden anderen Wechselrichter über das Venus-Topic-Schema an ([Anleitung](docs/DEYE-NODERED-BRIDGE.md)) |
+
+Das aktive Profil wählt `manufacturer` in der Config bzw. das Hersteller-Dropdown
+in den Einstellungen; die Auswahlliste entsteht dynamisch aus den `*.json`-Dateien
+dieses Ordners.
 
 ### Hinweise
 
 - Änderungen an Victron-Registern, Port, Unit-ID oder Timeout erfolgen nur in `/etc/dvhub/hersteller/victron.json`
 - `userEnergyPricing` erlaubt festen Endkundenpreis oder dynamische Preisbestandteile auf Basis von EPEX
 - `userEnergyPricing.periods` erlaubt mehrere, sich nicht überschneidende Tarifzeiträume (`fixed` oder `dynamic`); ein nicht abgedeckter Tag fällt auf den globalen Standard-Tarif zurück
-- im MQTT-Modus wird `victron.mqtt.portalId` benötigt; ohne eigenen Broker nutzt DVhub den GX-Host
+- im MQTT-Modus (Profil „Universal (MQTT-Bridge)") sind Broker-URL und Portal-ID direkt in den Einstellungen (`victron.mqtt.broker`/`victron.mqtt.portalId`) konfigurierbar; leere Felder nutzen die Profil-Defaults (Portal-ID `dvhub`, Broker `mqtt://<Anlagenadresse>:1883`)
 - EPEX-Preise werden primär von `dvhub.online` geholt (Fallback Energy Charts); im `public`-Modus direkt von Energy Charts
 - TimescaleDB ist optional (`telemetry.database.timescaledb`); aktiviert ersetzt es App-Rollups/Retention, bei fehlender Extension fällt DVhub darauf zurück
 - ein `POST /api/config` ersetzt die gesamte Config — immer das vollständige Objekt senden

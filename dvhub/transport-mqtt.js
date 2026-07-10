@@ -49,6 +49,47 @@ export function sumConsumptionEntries(entries, maxAgeMs, nowMs = Date.now()) {
   return any ? { value: sum, ts } : null;
 }
 
+// ── Topic-Mapping ────────────────────────────────────────────────────
+// Venus-Topic-Schema (N/ = published Werte, W/ = Schreibbefehle). Pure +
+// exportiert: das ist der VERTRAG der Universal-MQTT-Schnittstelle
+// (hersteller/bridge-mqtt.json, D-27) — der Contract-Test prüft, dass jeder im
+// Profil aktivierte Punkt hier ein Topic hat. Eine Bridge, die dieses Schema
+// spricht, ist vollständig kompatibel (docs/DEYE-NODERED-BRIDGE.md).
+export function buildVenusTopicMaps(portalId) {
+  // Read-Topics (N/ prefix — Venus OS published diese automatisch oder nach keepalive)
+  const READ_TOPICS = {
+    meter_l1:         `N/${portalId}/system/0/Ac/Grid/L1/Power`,
+    meter_l2:         `N/${portalId}/system/0/Ac/Grid/L2/Power`,
+    meter_l3:         `N/${portalId}/system/0/Ac/Grid/L3/Power`,
+    soc:              `N/${portalId}/system/0/Dc/Battery/Soc`,
+    batteryPowerW:    `N/${portalId}/system/0/Dc/Battery/Power`,
+    pvPowerW:         `N/${portalId}/system/0/Dc/Pv/Power`,
+    acPvL1W:          `N/${portalId}/system/0/Ac/PvOnGrid/L1/Power`,
+    acPvL2W:          `N/${portalId}/system/0/Ac/PvOnGrid/L2/Power`,
+    acPvL3W:          `N/${portalId}/system/0/Ac/PvOnGrid/L3/Power`,
+    selfConsumptionW_l1: `N/${portalId}/system/0/Ac/Consumption/L1/Power`,
+    selfConsumptionW_l2: `N/${portalId}/system/0/Ac/Consumption/L2/Power`,
+    selfConsumptionW_l3: `N/${portalId}/system/0/Ac/Consumption/L3/Power`,
+    gridSetpointW:    `N/${portalId}/settings/0/Settings/CGwacs/AcPowerSetPoint`,
+    minSocPct:        `N/${portalId}/settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit`,
+  };
+
+  // Write-Topics (W/ prefix)
+  const WRITE_TOPICS = {
+    gridSetpointW:      `W/${portalId}/settings/0/Settings/CGwacs/AcPowerSetPoint`,
+    chargeCurrentA:     `W/${portalId}/settings/0/Settings/SystemSetup/MaxChargeCurrent`,
+    minSocPct:          `W/${portalId}/settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit`,
+    // MaxDischargePower (AC-side discharge cap). 0 = no discharge ("hold"), -1 = unlimited,
+    // positive = watts. Hidden in the Cerbo console; same target evcc writes for its
+    // batteryDischargeControl "hold" mode.
+    maxDischargeW:      `W/${portalId}/settings/0/Settings/CGwacs/MaxDischargePower`,
+    feedExcessDcPv:     `W/${portalId}/settings/0/Settings/CGwacs/OvervoltageFeedIn`,
+    dontFeedExcessAcPv: `W/${portalId}/settings/0/Settings/CGwacs/PreventFeedback`,
+  };
+
+  return { READ_TOPICS, WRITE_TOPICS };
+}
+
 export function createMqttTransport(victronConfig) {
   const mqttCfg = victronConfig.mqtt || {};
   const broker = mqttCfg.broker || `mqtt://${victronConfig.host}:1883`;
@@ -70,41 +111,11 @@ export function createMqttTransport(victronConfig) {
     console.warn('[MQTT] Kein portalId konfiguriert — MQTT-Topics werden nicht korrekt aufgelöst.');
   }
 
-  // ── Topic-Mapping ──────────────────────────────────────────────────
-  // Read-Topics (N/ prefix — Venus OS published diese automatisch oder nach keepalive)
-  const READ_TOPICS = {
-    meter_l1:         `N/${portalId}/system/0/Ac/Grid/L1/Power`,
-    meter_l2:         `N/${portalId}/system/0/Ac/Grid/L2/Power`,
-    meter_l3:         `N/${portalId}/system/0/Ac/Grid/L3/Power`,
-    soc:              `N/${portalId}/system/0/Dc/Battery/Soc`,
-    batteryPowerW:    `N/${portalId}/system/0/Dc/Battery/Power`,
-    pvPowerW:         `N/${portalId}/system/0/Dc/Pv/Power`,
-    acPvL1W:          `N/${portalId}/system/0/Ac/PvOnGrid/L1/Power`,
-    acPvL2W:          `N/${portalId}/system/0/Ac/PvOnGrid/L2/Power`,
-    acPvL3W:          `N/${portalId}/system/0/Ac/PvOnGrid/L3/Power`,
-    selfConsumptionW_l1: `N/${portalId}/system/0/Ac/Consumption/L1/Power`,
-    selfConsumptionW_l2: `N/${portalId}/system/0/Ac/Consumption/L2/Power`,
-    selfConsumptionW_l3: `N/${portalId}/system/0/Ac/Consumption/L3/Power`,
-    gridSetpointW:    `N/${portalId}/settings/0/Settings/CGwacs/AcPowerSetPoint`,
-    minSocPct:        `N/${portalId}/settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit`,
-  };
+  const { READ_TOPICS, WRITE_TOPICS } = buildVenusTopicMaps(portalId);
 
   // T-MQTT-CONSUMPTION: die drei Phasen, aus denen der Summen-Punkt
   // 'selfConsumptionW' gebildet wird (siehe sumConsumptionEntries oben).
   const CONSUMPTION_KEYS = ['selfConsumptionW_l1', 'selfConsumptionW_l2', 'selfConsumptionW_l3'];
-
-  // Write-Topics (W/ prefix)
-  const WRITE_TOPICS = {
-    gridSetpointW:      `W/${portalId}/settings/0/Settings/CGwacs/AcPowerSetPoint`,
-    chargeCurrentA:     `W/${portalId}/settings/0/Settings/SystemSetup/MaxChargeCurrent`,
-    minSocPct:          `W/${portalId}/settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit`,
-    // MaxDischargePower (AC-side discharge cap). 0 = no discharge ("hold"), -1 = unlimited,
-    // positive = watts. Hidden in the Cerbo console; same target evcc writes for its
-    // batteryDischargeControl "hold" mode.
-    maxDischargeW:      `W/${portalId}/settings/0/Settings/CGwacs/MaxDischargePower`,
-    feedExcessDcPv:     `W/${portalId}/settings/0/Settings/CGwacs/OvervoltageFeedIn`,
-    dontFeedExcessAcPv: `W/${portalId}/settings/0/Settings/CGwacs/PreventFeedback`,
-  };
 
   // ── Helpers ────────────────────────────────────────────────────────
   function onMessage(topic, payload, packet) {

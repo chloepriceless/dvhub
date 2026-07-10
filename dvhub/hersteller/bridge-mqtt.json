@@ -1,0 +1,35 @@
+{
+  "label": "Universal (MQTT-Bridge)",
+  "victron": {
+    "transport": "mqtt",
+    "mqtt": {
+      "broker": "",
+      "portalId": "dvhub",
+      "keepaliveIntervalMs": 30000,
+      "qos": 0
+    }
+  },
+  "points": {
+    "soc": { "enabled": true },
+    "batteryPowerW": { "enabled": true },
+    "pvPowerW": { "enabled": true },
+    "acPvL1W": { "enabled": true },
+    "acPvL2W": { "enabled": true },
+    "acPvL3W": { "enabled": true },
+    "gridSetpointW": { "enabled": true },
+    "minSocPct": { "enabled": true },
+    "selfConsumptionW": { "enabled": true }
+  },
+  "controlWrite": {
+    "gridSetpointW": { "enabled": true },
+    "chargeCurrentA": { "enabled": true },
+    "minSocPct": { "enabled": true },
+    "maxDischargeW": { "enabled": true }
+  },
+  "dvControl": {
+    "enabled": true,
+    "feedExcessDcPv": { "enabled": true },
+    "dontFeedExcessAcPv": { "enabled": true },
+    "negativePriceProtection": { "enabled": true, "gridSetpointW": -40 }
+  }
+}

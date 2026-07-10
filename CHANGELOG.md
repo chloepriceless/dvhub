@@ -8,6 +8,24 @@ die Versionierung folgt [Semantic Versioning](https://semver.org/lang/de/).
 CHANGELOG.md ist die Single Source of Truth für die Versionshistorie; der README
 verweist hierher.
 
+## [Unreleased]
+
+### Neu
+
+- **Universal-MQTT-Herstellerprofil (`bridge-mqtt`):** Neues offizielles
+  Herstellerprofil „Universal (MQTT-Bridge)" — jeder nicht nativ unterstützte
+  Wechselrichter (Deye, Growatt, …) wird über eine kleine MQTT-Bridge nach dem
+  dokumentierten Venus-Topic-Schema angebunden (erster Baustein des
+  v1.1-Multi-Vendor-Plans, D-27). Broker-URL und Portal-ID sind jetzt direkt in
+  den Einstellungen konfigurierbar (`victron.mqtt.*` ist nicht mehr
+  profil-verwaltet; leere Felder nutzen die Profil-Defaults) — der bisherige
+  Datei-Edit an `victron.json` entfällt. Das Hersteller-Dropdown listet
+  Profile dynamisch aus dem `hersteller/`-Ordner (inkl. Anzeigename aus dem
+  neuen `label`-Feld), Installer und Updater legen neue mitgelieferte Profile
+  auf Bestandsboxen nach (ohne bestehende Dateien zu überschreiben), und der
+  Einrichtungs-Assistent setzt einen vorkonfigurierten Hersteller nicht mehr
+  auf Victron zurück.
+
 ## [1.0.1] - 2026-07-09
 
 Bugfix-Release. Behebt gemeldete GitHub-Issues aus dem 1.0-Feedback.

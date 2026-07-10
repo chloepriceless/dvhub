@@ -15,6 +15,7 @@ import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automati
 // inherit the helper. Auditable via grep "from './services/safe-async.js'".
 // eslint-disable-next-line no-unused-vars
 import { safeInterval } from './services/safe-async.js';
+import { encodeSunspecFloat32 } from './services/inverter/sunspec.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -138,6 +139,15 @@ export function createScheduleEvaluator(ctx) {
       return { raw: words[0], words, scaled, writeType, wordOrder };
     }
 
+    // SunSpec Float-Modus (B-1112): Engineering-Wert als IEEE-754-Float32 in
+    // zwei Registern. Kein Math.round — Float trägt die Nachkommastellen
+    // (z. B. WMaxLimPct in 0,01-%-Schritten); scale/offset gelten wie üblich.
+    if (writeType === 'float32') {
+      const scaledFloat = (engineeringValue - offset) / scale;
+      const words = encodeSunspecFloat32(scaledFloat, wordOrder);
+      return { raw: words[0], words, scaled: scaledFloat, writeType, wordOrder };
+    }
+
     throw new Error(`unsupported writeType: ${conf.writeType}`);
   }
 
@@ -235,6 +245,57 @@ export function createScheduleEvaluator(ctx) {
   // Public functions
   // ---------------------------------------------------------------------------
 
+  // B-1112 (Fronius u. a. mode-Dialekt-Geräte): ein dvControl-Flag kann statt
+  // eines einzelnen Registers eine SEQUENZ von controlWrite-Punkten schreiben
+  // (z. B. Einspeisesperre = WMaxLimPct:=0 DANN WMaxLim_Ena:=1; Freigabe =
+  // WMaxLim_Ena:=0). Die Schritte referenzieren Einträge in cfg.controlWrite —
+  // Adresse/Encoding kommen dort ggf. aus dem SunSpec-Scan (polling.js).
+  // Wirft bei nicht aufgelöstem/deaktiviertem Punkt → der Aufrufer behandelt
+  // das wie einen fehlgeschlagenen Register-Write (T-0076-Retry-Semantik).
+  // Step-Formen:
+  //   { point, value }                      — festen Wert schreiben
+  //   { point, value, saveBefore: true }    — vorher aktuellen Registerwert
+  //     lesen und (nur beim ERSTEN Block, nie doppelt) für restore sichern.
+  //     Deye-Fall: der Kunde fährt ggf. regulär Zero-Export — ein fixer
+  //     Release-Wert würde seine Betriebsart zerstören.
+  //   { point, restore: true, restoreDefault? } — den gesicherten Wert
+  //     zurückschreiben; ohne Sicherung (z. B. Neustart während der Sperre —
+  //     der Speicher ist in-memory) greift restoreDefault, sonst wird der
+  //     Schritt übersprungen.
+  async function runDvControlSequence(steps) {
+    const cfg = getCfg();
+    const saved = (state.ctrl._dvSeqSaved ??= {});
+    for (const step of steps) {
+      const pconf = cfg.controlWrite?.[step.point];
+      if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
+      if (pconf.address == null) throw new Error(`sequence point unresolved (sunspec scan pending): ${step.point}`);
+      let value = step.value;
+      if (step.restore === true) {
+        value = saved[step.point] ?? step.restoreDefault;
+        if (value == null) continue; // nie geblockt und kein Default → no-op
+      } else if (step.saveBefore === true && saved[step.point] === undefined) {
+        const regs = await transport.mbRequest({
+          fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
+          address: pconf.address, quantity: 1, timeoutMs: pconf.timeoutMs
+        });
+        // Rohwert rückwärts durch scale/offset in den Engineering-Wert, damit
+        // der restore-Write denselben toRawForWrite-Weg nehmen kann.
+        const scale = Number(pconf.scale ?? 1);
+        const offset = Number(pconf.offset ?? 0);
+        saved[step.point] = Number(regs[0]) * scale + offset;
+      }
+      const encoded = toRawForWrite(value, pconf);
+      const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
+      const fc = Number(pconf.fc || (words.length > 1 ? 16 : 6));
+      if (fc === 16 || words.length > 1) {
+        await transport.mbWriteMultiple({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, values: words, timeoutMs: pconf.timeoutMs });
+      } else {
+        await transport.mbWriteSingle({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs });
+      }
+      if (step.restore === true) delete saved[step.point];
+    }
+  }
+
   async function applyDvVictronControl(feedIn) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
@@ -257,7 +318,9 @@ export function createScheduleEvaluator(ctx) {
     if (dc.feedExcessDcPv?.enabled) {
       const val = feedIn ? 1 : 0;
       try {
-        if (transport.type === 'mqtt') {
+        if (Array.isArray(dc.feedExcessDcPv.sequence?.[String(val)])) {
+          await runDvControlSequence(dc.feedExcessDcPv.sequence[String(val)]);
+        } else if (transport.type === 'mqtt') {
           await transport.mqttWrite('feedExcessDcPv', val);
         } else {
           await transport.mbWriteSingle({
@@ -279,7 +342,9 @@ export function createScheduleEvaluator(ctx) {
     if (dc.dontFeedExcessAcPv?.enabled) {
       const val = feedIn ? 0 : 1;
       try {
-        if (transport.type === 'mqtt') {
+        if (Array.isArray(dc.dontFeedExcessAcPv.sequence?.[String(val)])) {
+          await runDvControlSequence(dc.dontFeedExcessAcPv.sequence[String(val)]);
+        } else if (transport.type === 'mqtt') {
           await transport.mqttWrite('dontFeedExcessAcPv', val);
         } else {
           await transport.mbWriteSingle({
@@ -306,6 +371,10 @@ export function createScheduleEvaluator(ctx) {
     const cfg = getCfg();
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
+    // SunSpec-deklarierte Punkte haben erst nach dem Geräte-Scan (polling.js)
+    // eine Adresse — vorher NIE schreiben (der address-0-Guard darunter würde
+    // Number(null)===0 zwar auch blocken, aber mit irreführender Meldung).
+    if (conf.sunspec && conf.address == null) return { ok: false, error: 'sunspec address not resolved yet (device scan pending)' };
     if (Number(conf.address) === 0 && conf.allowAddressZero !== true) return { ok: false, error: 'unsafe address 0 blocked (set allowAddressZero=true to override)' };
 
     // === T-0099 NOT-HALT selective gate =======================================

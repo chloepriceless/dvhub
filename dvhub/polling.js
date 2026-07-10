@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { safeInterval } from './services/safe-async.js';
+import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
 import { resolveImportPriceCtKwhForSlot } from './user-energy-pricing.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms } from './victron-alarms.js';
 // Plan 09-06 (D-08): wrapper around console.* for the polling heavy-hitter module.
@@ -111,6 +112,16 @@ export function createPoller(ctx) {
     if (!regs || !regs.length) return null;
     const scale = Number(conf.scale ?? 1);
     const offset = Number(conf.offset ?? 0);
+    // SunSpec Float-Modus (B-1112 Fronius/SolarEdge/Kostal): zwei Register =
+    // IEEE-754-Float32. Der Codec liefert null für das SunSpec-NaN-Sentinel
+    // ("not implemented") und ±Inf — null hält die T-0075-Unknown-Semantik
+    // aufrecht (pollPoint stempelt fieldUpdatedAt nur bei echtem Wert nicht,
+    // sondern der Punkt bleibt sichtbar unbelegt statt giftig NaN im State).
+    if (String(conf.readType || '').toLowerCase() === 'float32') {
+      const value = decodeSunspecFloat32(regs, conf.wordOrder);
+      if (value === null) return null;
+      return Number((value * scale + offset).toFixed(3));
+    }
     // T-0107: 32-bit value across two registers (Victron volatile setpoint
     // 2716/2717). wordOrder 'be' (default) = high word first (regs[0]); 'le' =
     // low word first. `* 0x10000` (not <<16) avoids JS 32-bit signed overflow.
@@ -139,6 +150,9 @@ export function createPoller(ctx) {
   // --- pollPoint: read a single Victron data point ---
   async function pollPoint(name, conf) {
     if (!conf?.enabled) return;
+    // SunSpec-deklarierte Punkte warten auf den Geräte-Scan (ensureSunspecResolved)
+    // — vor der Auflösung wäre die Adresse null (Lesen von Register-Müll).
+    if (conf.sunspec && conf.address == null) return;
     try {
       if (transport.type === 'mqtt') {
         const result = await transport.readPoint(name);
@@ -339,9 +353,50 @@ export function createPoller(ctx) {
     state.energy.revenueEur += (exportW / 1000) * dtH * (epexCtKwh / 100);
   }
 
+  // --- SunSpec-Scan (B-1112): löst sunspec-deklarierte Punkte lazy auf ---
+  // Vendor-Profile (z. B. hersteller/fronius.json) deklarieren Punkte als
+  // sunspec:{model, offset} statt fester Adressen (float- vs. int+SF-Layout
+  // verschiebt die Modell-Basen). Läuft im Poll-Loop statt als Boot-Hook:
+  // nach jedem Config-Apply ersetzt server.js das cfg-Objekt (die aufgelösten
+  // Adressen sind dann weg) — der needs-Check hier erkennt das und scannt neu.
+  // Erfolg mutiert die EFFEKTIVE Config in-place; Schreibpfad (schedule-eval)
+  // sieht dieselbe Referenz. Fehler → Backoff, Punkte bleiben schlafend
+  // (pollPoint/applyControlTarget überspringen unaufgelöste sunspec-Punkte).
+  let sunspecRetryAt = 0;
+  async function ensureSunspecResolved(cfg) {
+    const blocks = [cfg.points, cfg.controlWrite];
+    const needs = blocks.some((block) => Object.values(block || {})
+      .some((conf) => conf && typeof conf === 'object' && conf.sunspec && conf.address == null));
+    if (!needs) return;
+    const now = Date.now();
+    if (now < sunspecRetryAt) return;
+    sunspecRetryAt = now + 60000;
+    const v = cfg.victron || {};
+    try {
+      const scan = await scanSunspecModels((address, quantity) => transport.mbRequest({
+        fc: 3, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, address, quantity
+      }));
+      const allMissing = [];
+      for (const block of blocks) {
+        if (!block) continue;
+        const { resolved, missing } = resolveSunspecAddresses(block, scan);
+        for (const [name, conf] of Object.entries(resolved)) block[name] = conf;
+        allMissing.push(...missing);
+      }
+      pushLog('sunspec_scan_ok', {
+        base: scan.base,
+        models: scan.models.map((m) => m.id),
+        missing: allMissing
+      });
+    } catch (e) {
+      pushLog('sunspec_scan_error', { error: e.message }, 'warn');
+    }
+  }
+
   // --- pollMeter: main polling function (meter + all Victron points) ---
   async function pollMeter() {
     const cfg = getCfg();
+    await ensureSunspecResolved(cfg);
     // Plan 09-06 (D-06): wall-clock duration of the meter read — recorded into
     // dvhub_meter_poll_duration_seconds gauge on success, dvhub_meter_poll_errors_total
     // counter on catch. Tracked in seconds (Prometheus convention).
@@ -366,6 +421,34 @@ export function createPoller(ctx) {
           error: null,
           // Plan 09-08 Task 3: success path resets backoff (consecutiveErrors=0,
           // nextRetryAt=null). Mirrors the Modbus branch below.
+          consecutiveErrors: 0,
+          nextRetryAt: null
+        };
+      } else if (String(cfg.meter?.readType || '').toLowerCase() === 'float32') {
+        // SunSpec-Float-Meter (B-1112, z. B. Fronius Smart Meter Model 203 @
+        // Unit-ID 200): 8 Register = 4×Float32 in der Reihenfolge
+        // [W_total, WphA, WphB, WphC]. Ein NaN-Total (Meter meldet "not
+        // implemented"/Ausfall) ist ein Lesefehler — werfen, damit der normale
+        // Fehler-/Backoff-Pfad greift statt einer stillen 0 im Steuerpfad.
+        const regs = await transport.mbRequest({ ...cfg.meter, quantity: 8 });
+        const fTotal = decodeSunspecFloat32([regs[0], regs[1]], cfg.meter.wordOrder);
+        if (fTotal === null) throw new Error('sunspec float meter: total power not implemented/NaN');
+        const fL1 = decodeSunspecFloat32([regs[2], regs[3]], cfg.meter.wordOrder) ?? 0;
+        const fL2 = decodeSunspecFloat32([regs[4], regs[5]], cfg.meter.wordOrder) ?? 0;
+        const fL3 = decodeSunspecFloat32([regs[6], regs[7]], cfg.meter.wordOrder) ?? 0;
+
+        const posImport = cfg.gridPositiveMeans === 'grid_import';
+        const sign = posImport ? 1 : -1;
+        // Auf ganze Watt runden: state.dvRegs[0] = u16(total) unten erwartet
+        // Integer-Registersemantik; Sub-Watt-Auflösung trägt keine Information.
+        l1 = Math.round(fL1 * sign);
+        l2 = Math.round(fL2 * sign);
+        l3 = Math.round(fL3 * sign);
+        total = Math.round(fTotal * sign);
+        state.meter = {
+          ok: true, updatedAt: Date.now(), raw: [fTotal, fL1, fL2, fL3],
+          grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
+          error: null,
           consecutiveErrors: 0,
           nextRetryAt: null
         };

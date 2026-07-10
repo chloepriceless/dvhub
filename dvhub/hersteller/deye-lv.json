@@ -1,0 +1,137 @@
+{
+  "label": "Deye SUN-…SG04LP3 (LV, 3-phasig) — Beta",
+  "_doc": [
+    "Deye-Herstellerprofil Stufe 1 (B-1118) — NUR Niedervolt-Serie (LV),",
+    "3-phasig: SUN-5K…12K-SG04LP3 (baugleich Sunsynk/Sol-Ark-OEM).",
+    "HV-Geräte (SG01HP3) sind hier bewusst NICHT abgedeckt (deren Register",
+    "skalieren ×10 — Christin-Entscheid 2026-07-10: LV zuerst, HV später).",
+    "1-phasige LP1-Geräte haben eine andere Registerkarte → eigenes Profil.",
+    "",
+    "Transport: RS485-Ethernet-Gateway (z. B. Waveshare RS485-TO-ETH,",
+    "9600 8N1, Modbus-TCP-Modus, Slave-ID 1) — der evcc-erprobte Weg.",
+    "Die Anlagenadresse in DVhub = IP des Gateways. Roher Modbus-TCP direkt",
+    "auf dem WLAN-Logger-Stick ist NICHT verlässlich (Firmware-Lotterie);",
+    "Solarman-V5-Logger werden erst mit eigenem Framing-Modul unterstützt.",
+    "",
+    "Stufe-1-Funktionsumfang: Telemetrie (SoC, Batterie-/PV-Leistung,",
+    "Grid-CT-Meter, Hauslast) + DV-Abregelung über das Work-Mode-Register 142",
+    "(Sperren: Zero-Export-to-CT; Freigeben: vorher gesicherten Modus",
+    "zurückschreiben — Kunden, die regulär Zero-Export fahren, behalten ihre",
+    "Betriebsart). KEINE TOU-/Batterie-Steuerung in Stufe 1 (schedule-Dialekt",
+    "kommt mit dem Plan-Compiler, B-1103/M2). Register 142 ist EEPROM —",
+    "geschrieben wird nur bei Zustandswechsel (Change-Detection), das sind",
+    "wenige Writes pro Tag (Negativpreis-Phasen).",
+    "",
+    "STATUS BETA: Registerkarte nach Deye-Protokoll V1.18 / kellerza-sunsynk",
+    "(inoffiziell) — Skalen/Vorzeichen sind @sim-assumption bis zum Test am",
+    "echten Gerät. Insbesondere: batteryPowerW-Vorzeichen (DVhub-Konvention",
+    "positiv = Laden; falls invertiert → scale -1 setzen) und die",
+    "Grid-CT-Vorzeichenrichtung (gridPositiveMeans in den Einstellungen)."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz über die Grid-CT-Phasenregister 616–618 (S16, W je Phase) — der Standard-Summenpfad (3×s16) passt direkt. Vorzeichenrichtung am Gerät prüfen und gridPositiveMeans entsprechend stellen.",
+    "fc": 3,
+    "address": 616,
+    "quantity": 3,
+    "timeoutMs": 2000
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "Batterie-SoC, Register 588 (uint16, %).",
+      "enabled": true,
+      "fc": 3,
+      "address": 588,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "batteryPowerW": {
+      "_comment": "Batterie-Leistung, Register 590 (S16, W, LV = ×1). @sim-assumption Vorzeichen: DVhub erwartet positiv = Laden — falls das Gerät positiv = Entladen meldet, scale auf -1 stellen.",
+      "enabled": true,
+      "fc": 3,
+      "address": 590,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "offset": 0
+    },
+    "pvPowerW": {
+      "_comment": "PV-Leistung = PV1 + PV2 (Register 672–673, W, LV = ×1). LP3 hat zwei MPPT-Eingänge.",
+      "enabled": true,
+      "fc": 3,
+      "address": 672,
+      "quantity": 2,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "sumRegisters": true
+    },
+    "selfConsumptionW": {
+      "_comment": "Hauslast gesamt, Register 653 (uint16, W) → speist loadW/Lastprognose.",
+      "enabled": true,
+      "fc": 3,
+      "address": 653,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "gridSetpointW": { "enabled": false },
+    "minSocPct": { "enabled": false },
+    "acPvL1W": { "enabled": false },
+    "acPvL2W": { "enabled": false },
+    "acPvL3W": { "enabled": false }
+  },
+
+  "controlWrite": {
+    "gridSetpointW": {
+      "_comment": "Deye kennt keinen AC-Netzpunkt-Sollwert; Batterie-Steuerung läuft über TOU-Slots (Stufe 2, Plan-Compiler).",
+      "enabled": false
+    },
+    "chargeCurrentA": { "enabled": false },
+    "minSocPct": { "enabled": false },
+    "maxDischargeW": { "enabled": false },
+    "workMode": {
+      "_comment": "Register 142 (uint16, EEPROM!): 0 = Selling first, 1 = Zero-Export-to-Load, 2 = Zero-Export-to-CT. Nur über die dvControl-Sequenz beschrieben (Change-Detection begrenzt die Writes), kein direktes API-Target.",
+      "enabled": true,
+      "fc": 6,
+      "address": 142,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    }
+  },
+
+  "dvControl": {
+    "_comment": "DV-Abregelung: Sperren = Work-Mode auf Zero-Export-to-CT (2) — vorher wird der aktuelle Modus gelesen und gesichert (saveBefore). Freigeben = gesicherten Modus zurückschreiben (restore); Fallback nach Neustart während einer Sperre: Selling first (0).",
+    "enabled": true,
+    "feedExcessDcPv": { "enabled": false },
+    "dontFeedExcessAcPv": {
+      "enabled": true,
+      "sequence": {
+        "1": [
+          { "point": "workMode", "value": 2, "saveBefore": true }
+        ],
+        "0": [
+          { "point": "workMode", "restore": true, "restoreDefault": 0 }
+        ]
+      }
+    },
+    "negativePriceProtection": {
+      "_comment": "Der gridSetpointW-Anteil läuft bei Deye ins Leere (Target deaktiviert) — wirksam ist die Work-Mode-Abregelung über die Sequenz.",
+      "enabled": true,
+      "gridSetpointW": -40
+    }
+  }
+}

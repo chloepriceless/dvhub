@@ -212,6 +212,29 @@ describe('onboarding: POST /api/setup/complete', () => {
     assert.equal(ctx.needsSetup(), false);
   });
 
+  it('keeps a pre-seeded manufacturer (bridge-mqtt) instead of force-resetting to victron (D-27)', async () => {
+    const saveSpy = [];
+    const ctx = mockCtx({ saveSpy });
+    ctx.getCfg().manufacturer = 'bridge-mqtt';
+    const captured = await dispatch(ctx, makeReq('/api/setup/complete', {
+      method: 'POST', ip: LAN_IP, body: { victronHost: '192.168.1.77' },
+    }));
+    assert.equal(captured.status, 200, captured.body);
+    assert.equal(saveSpy[0].manufacturer, 'bridge-mqtt',
+      'an integrator-provisioned manufacturer must survive the wizard');
+  });
+
+  it('empty/absent manufacturer still defaults to victron on complete', async () => {
+    const saveSpy = [];
+    const ctx = mockCtx({ saveSpy });
+    delete ctx.getCfg().manufacturer;
+    const captured = await dispatch(ctx, makeReq('/api/setup/complete', {
+      method: 'POST', ip: LAN_IP, body: { victronHost: '192.168.1.77' },
+    }));
+    assert.equal(captured.status, 200, captured.body);
+    assert.equal(saveSpy[0].manufacturer, 'victron');
+  });
+
   it('LAN, host only (no location) → 200', async () => {
     const saveSpy = [];
     const captured = await dispatch(mockCtx({ saveSpy }), makeReq('/api/setup/complete', {

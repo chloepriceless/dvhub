@@ -3,6 +3,11 @@ set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/chloepriceless/dvhub.git}"
 REPO_BRANCH="${REPO_BRANCH:-}"
+# Optionaler Commit-/Tag-Pin (--ref bzw. env REPO_REF): installiert exakt diesen
+# Stand statt der Channel-Auswahl — für Beta-Tester ("bitte Commit xy testen")
+# und reproduzierbare Installationen. Muss von origin/$REPO_BRANCH erreichbar
+# sein (gleicher Anker wie die stable-Tag-Auswahl, T-UPDATE-ANCHOR).
+REPO_REF="${REPO_REF:-}"
 UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 INSTALLER_SOURCE_URL="${INSTALLER_SOURCE_URL:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
@@ -233,6 +238,10 @@ while [[ $# -gt 0 ]]; do
       UPDATE_CHANNEL="$2"
       shift 2
       ;;
+    --ref)
+      REPO_REF="$2"
+      shift 2
+      ;;
     --with-eos)
       # Backwards-compatible no-op: EOS is installed by default now.
       EOS_INSTALL=1
@@ -272,7 +281,7 @@ fi
 
 if [[ "${EUID}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
-    exec sudo --preserve-env=INSTALLER_SOURCE_URL,REPO_URL,REPO_BRANCH,UPDATE_CHANNEL,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR,SUPPORT_LOCAL_USER bash "$0" "$@"
+    exec sudo --preserve-env=INSTALLER_SOURCE_URL,REPO_URL,REPO_BRANCH,REPO_REF,UPDATE_CHANNEL,INSTALL_DIR,APP_DIR,SERVICE_USER,SERVICE_NAME,CONFIG_DIR,CONFIG_PATH,DATA_DIR,SUPPORT_LOCAL_USER bash "$0" "$@"
   fi
   echo "Dieses Skript muss als root ausgeführt werden." >&2
   exit 1
@@ -335,7 +344,23 @@ else
 fi
 
 # Channel-aware checkout
-if [[ "$UPDATE_CHANNEL" == "stable" ]]; then
+if [[ -n "$REPO_REF" ]]; then
+  # Commit-/Tag-Pin: exakt dieser Stand, unabhängig vom Channel. Detached HEAD
+  # ist beabsichtigt — der Self-Updater (update/apply) checkt später wieder
+  # einen Channel-Stand aus und löst den Pin damit auf. Der Erreichbarkeits-
+  # Anker (--merged origin/$REPO_BRANCH bzw. Vorfahren-Check) verhindert, dass
+  # verwaiste Alt-Historie oder fremde Refs installiert werden (T-UPDATE-ANCHOR).
+  if ! REF_SHA="$(git -C "$INSTALL_DIR" rev-parse --verify --quiet "${REPO_REF}^{commit}")"; then
+    echo "Angegebene --ref '$REPO_REF' existiert nicht im Repository." >&2
+    exit 1
+  fi
+  if ! git -C "$INSTALL_DIR" merge-base --is-ancestor "$REF_SHA" "origin/$REPO_BRANCH"; then
+    echo "Angegebene --ref '$REPO_REF' ist nicht von origin/$REPO_BRANCH erreichbar (falscher Branch? --branch mit angeben)." >&2
+    exit 1
+  fi
+  echo "   Ref-Pin: checkout $REPO_REF ($REF_SHA)"
+  git -C "$INSTALL_DIR" checkout --detach "$REF_SHA"
+elif [[ "$UPDATE_CHANNEL" == "stable" ]]; then
   # W5.1: semver-filter so a stray non-release tag (CI/build/bare-numeric) can never
   # win; kept in spirit with the JS SEMVER_TAG export in dvhub/routes-api.js. The
   # else-branch below already handles "nothing matched" (falls back to REPO_BRANCH).
@@ -474,9 +499,16 @@ if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
     } catch {}
   "
 fi
-if [[ ! -f "$CONFIG_DIR/hersteller/victron.json" ]]; then
-  cp "$APP_DIR/hersteller/victron.json" "$CONFIG_DIR/hersteller/victron.json"
-fi
+# Alle shipped Herstellerprofile nachlegen (victron.json, bridge-mqtt.json, …).
+# create-if-missing: ein bereits vorhandenes Profil wird NIE überschrieben —
+# Operator-Edits (z. B. angepasste Register) bleiben erhalten.
+for profile in "$APP_DIR/hersteller/"*.json; do
+  [[ -e "$profile" ]] || continue
+  profile_name="$(basename "$profile")"
+  if [[ ! -f "$CONFIG_DIR/hersteller/$profile_name" ]]; then
+    cp "$profile" "$CONFIG_DIR/hersteller/$profile_name"
+  fi
+done
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"

@@ -114,27 +114,22 @@ Start einmal die Ist-Werte:
 
 ## 4. DVhub konfigurieren
 
-**Schritt 1 — Herstellerprofil auf MQTT umstellen.** Auf der DVhub-Box die Datei
-`/etc/dvhub/hersteller/victron.json` editieren (das Profil besitzt die Transport-Einstellung;
-die Register-Blöcke `points`/`controlWrite` darunter bleiben unverändert stehen und werden im
-MQTT-Betrieb ignoriert):
+**Schritt 1 — Herstellerprofil „Universal (MQTT-Bridge)" wählen.** In den DVhub-Einstellungen
+unter *Anlage verbinden → Anlagenprofil* den Hersteller auf **„Universal (MQTT-Bridge)"**
+stellen (Profil `hersteller/bridge-mqtt.json` — die offizielle Universal-Schnittstelle für
+alle nicht nativ unterstützten Wechselrichter). In der Gruppe *MQTT-Bridge (Universal)*
+konfigurieren:
 
-```json
-{
-  "victron": {
-    "transport": "mqtt",
-    "mqtt": {
-      "broker": "mqtt://192.168.x.x:1883",
-      "portalId": "deye1",
-      "keepaliveIntervalMs": 30000,
-      "qos": 0
-    }
-  }
-}
-```
+- **Portal-ID (Topic-Namensraum):** `deye1` — muss exakt der Portal-ID entsprechen, unter der
+  deine Bridge publiziert. Leer gelassen gilt der Profil-Standard `dvhub`; dann müssen die
+  Topics deiner Bridge `N/dvhub/…` heißen.
+- **MQTT-Broker-URL:** z. B. `mqtt://192.168.x.x:1883`. Leer gelassen wird
+  `mqtt://<Anlagenadresse>:1883` verwendet — dann trägst du im Feld „Anlagenadresse" die
+  Broker-IP ein.
 
-(Die übrigen Blöcke der Datei — `meter`, `points`, `controlWrite`, `dvControl` — unverändert
-lassen.)
+Ein Datei-Edit ist nicht mehr nötig. (Bestands-Setups, die den früheren Weg — `victron.json`
+mit `"transport": "mqtt"` — nutzen, laufen unverändert weiter; für Neueinrichtungen ist das
+Universal-Profil der offizielle Weg.)
 
 **Schritt 2 — Vorzeichen-Konvention setzen.** In den DVhub-Einstellungen
 (*Grundsystem: „Bedeutung positiver Netzwerte"*) auf **„Positiv bedeutet Netzbezug"**
@@ -143,10 +138,6 @@ lassen.)
 **Schritt 3 — DVhub neu starten** (Einstellungen: Neustart, oder
 `systemctl restart dvhub`). Im Log erscheint `Transport initialisiert: mqtt` und
 `[MQTT] Verbunden mit mqtt://...`.
-
-> Hinweis: Das Feld „Victron Host" in den Einstellungen wird im MQTT-Betrieb nur noch als
-> Broker-Fallback (`mqtt://<host>:1883`) genutzt, wenn `broker` im Profil fehlt. Trage den
-> Broker explizit im Profil ein — dann ist das Host-Feld bedeutungslos.
 
 ---
 

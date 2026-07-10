@@ -600,18 +600,31 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
 // Meter/inverter manufacturer profiles (2026-06-13). The available manufacturers
 // are simply the *.json files in the hersteller/ folder next to config.json —
 // the filename (minus .json) is the manufacturer id (operator request: read the
-// folder, don't hardcode the list). Today only victron.json ships; new makers are
-// added by dropping a profile file. Returns [{ value, label }]; falls back to
-// Victron-only if the folder can't be read so the dropdown is never empty.
+// folder, don't hardcode the list). New makers are added by dropping a profile
+// file. D-27: a profile may carry a top-level "label" (display name, e.g.
+// "Universal (MQTT-Bridge)" in bridge-mqtt.json) — applyManufacturerProfile
+// copies only the known config blocks, so the label never leaks into the
+// effective config. Returns [{ value, label }]; falls back to Victron-only if
+// the folder can't be read so the dropdown is never empty.
 export function listManufacturerProfiles(ctx) {
   let list = [];
   try {
     const dir = path.join(path.dirname(ctx.getConfigPath?.() || ''), 'hersteller');
     list = fs.readdirSync(dir)
       .filter((f) => f.toLowerCase().endsWith('.json'))
-      .map((f) => f.replace(/\.json$/i, ''))
-      .filter(Boolean)
-      .map((id) => ({ value: id, label: id.charAt(0).toUpperCase() + id.slice(1) }));
+      .map((f) => {
+        const id = f.replace(/\.json$/i, '');
+        if (!id) return null;
+        let label = id.charAt(0).toUpperCase() + id.slice(1);
+        try {
+          const parsed = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+          if (typeof parsed?.label === 'string' && parsed.label.trim()) {
+            label = parsed.label.trim().slice(0, 64);
+          }
+        } catch { /* unlesbares Profil → Dateiname-Fallback als Label */ }
+        return { value: id, label };
+      })
+      .filter(Boolean);
   } catch { list = []; }
   if (!list.some((x) => x.value === 'victron')) list.unshift({ value: 'victron', label: 'Victron' });
   return list;
@@ -1837,6 +1850,23 @@ export function createApiRoutes(ctx) {
     };
   }
 
+  // D-27: the manufacturer <select> options come from the actual hersteller/
+  // folder (a newly dropped profile is selectable without a code change). The
+  // shared CONFIG_DEFINITION constant stays untouched — shallow-copy the field.
+  function definitionWithManufacturerOptions() {
+    const definition = ctx.getConfigDefinition();
+    const fields = Array.isArray(definition?.fields) ? definition.fields : null;
+    if (!fields) return definition;
+    return {
+      ...definition,
+      fields: fields.map((field) => (
+        field?.path === 'manufacturer'
+          ? { ...field, options: listManufacturerProfiles(ctx) }
+          : field
+      ))
+    };
+  }
+
   function configApiPayload() {
     const cfg = getCfg();
     return {
@@ -1844,7 +1874,7 @@ export function createApiRoutes(ctx) {
       meta: configMetaPayload(),
       config: redactConfig(ctx.getRawCfg()),
       effectiveConfig: redactConfig(cfg),
-      definition: ctx.getConfigDefinition()
+      definition: definitionWithManufacturerOptions()
     };
   }
 
@@ -1899,7 +1929,13 @@ export function createApiRoutes(ctx) {
       }
     }
     const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
-    next.manufacturer = 'victron';
+    // D-27: keep a pre-seeded manufacturer (integrator configured e.g.
+    // 'bridge-mqtt' before first boot) instead of force-resetting to victron —
+    // the wizard itself has no manufacturer step, so overwriting here would
+    // silently undo the pre-provisioning.
+    next.manufacturer = (typeof next.manufacturer === 'string' && next.manufacturer.trim())
+      ? next.manufacturer
+      : 'victron';
     next.victron = (next.victron && typeof next.victron === 'object') ? next.victron : {};
     next.victron.host = rawHost;
     if (latitude !== null) {
@@ -3909,6 +3945,7 @@ export function createApiRoutes(ctx) {
         port: v.port ?? 502,
         unitId: v.unitId ?? 100,
         mqttBroker: v.mqtt?.broker || '',
+        mqttPortalId: v.mqtt?.portalId || '',
         modelId: v.modelId || null,
         firmware: snap.firmware || null,
         meterOk: !!ctx.state?.meter?.ok,

@@ -17,8 +17,12 @@ const MANUFACTURER_MANAGED_PATHS = [
   'victron.transport',
   'victron.port',
   'victron.unitId',
-  'victron.timeoutMs',
-  'victron.mqtt'
+  'victron.timeoutMs'
+  // D-27 (Universal-MQTT-Pack): 'victron.mqtt' ist NICHT mehr managed. Broker
+  // und Portal-ID sind installationsspezifisch (Bridge wählt ihre Portal-ID,
+  // ein echter GX hat seine VRM-ID) und müssen ohne Datei-Edit aus der GUI
+  // setzbar sein. Das Profil liefert weiterhin die Defaults; leere persistierte
+  // Werte fallen in applyManufacturerProfile auf den Profil-Default zurück.
 ];
 const FORBIDDEN_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
 
@@ -157,7 +161,7 @@ const SETUP_WIZARD_FIELD_META = {
   manufacturer: {
     stepId: 'transport',
     order: 10,
-    help: 'Aktuell ist Victron vorbereitet. Weitere Hersteller koennen spaeter ergänzt werden.'
+    help: 'Victron wird nativ unterstützt. Andere Wechselrichter bindest du über das Profil „Universal (MQTT-Bridge)" an — umstellbar jederzeit in den Einstellungen.'
   },
   'victron.host': {
     stepId: 'transport',
@@ -345,6 +349,19 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   // through the profile merge too (deepMerge skips it cleanly only when present).
   const victronOverride = { host: persistedVictron.host ?? '' };
   if (isPlainObject(persistedVictron.alarms)) victronOverride.alarms = persistedVictron.alarms;
+  // D-27: victron.mqtt (Broker-URL, Portal-ID, …) ist installationsspezifisch und
+  // operator-editierbar. Nur NICHT-LEERE persistierte Werte überschreiben den
+  // Profil-Default — ein leeres GUI-Feld ('' aus createDefaultConfig bzw. einem
+  // leer gespeicherten Formular) bedeutet „Profil-Default gilt" und darf z.B. die
+  // portalId 'dvhub' aus hersteller/bridge-mqtt.json nicht auslöschen.
+  if (isPlainObject(persistedVictron.mqtt)) {
+    const mqttOverride = {};
+    for (const [key, value] of Object.entries(persistedVictron.mqtt)) {
+      if (value === '' || value == null) continue;
+      mqttOverride[key] = value;
+    }
+    if (Object.keys(mqttOverride).length) victronOverride.mqtt = mqttOverride;
+  }
   effectiveConfig.victron = deepMerge(profileVictron, victronOverride);
 
   if (isPlainObject(manufacturerProfile?.meter)) effectiveConfig.meter = clone(manufacturerProfile.meter);
@@ -905,10 +922,16 @@ function buildFieldDefinitions() {
       path: 'manufacturer',
       label: 'Hersteller',
       type: 'select',
+      // Statische Fallback-Liste — die API liefert die echten Optionen dynamisch
+      // aus dem hersteller/-Ordner (routes-api.js configMetaPayload), damit ein
+      // neu abgelegtes Profil ohne Code-Änderung auswählbar ist (D-27).
       options: [
-        { value: 'victron', label: 'Victron' }
+        { value: 'victron', label: 'Victron' },
+        { value: 'bridge-mqtt', label: 'Universal (MQTT-Bridge)' },
+        { value: 'fronius', label: 'Fronius GEN24 (SunSpec) — Beta' },
+        { value: 'deye-lv', label: 'Deye SUN-…SG04LP3 (LV, 3-phasig) — Beta' }
       ],
-      help: 'Aktuell ist nur Victron auswählbar. Die technischen Werte kommen aus der Herstellerdatei.'
+      help: 'Victron wird nativ (Modbus) unterstützt. „Universal (MQTT-Bridge)" bindet jeden anderen Wechselrichter über eine kleine MQTT-Bridge an (z. B. Node-RED, siehe Doku DEYE-NODERED-BRIDGE); Fronius GEN24 (SunSpec) und Deye LV-3ph (RS485-Gateway) sind native Beta-Profile mit Telemetrie + DV-Abregelung. Die technischen Werte kommen aus der Herstellerdatei.'
     },
     {
       section: 'victron',
@@ -953,6 +976,28 @@ function buildFieldDefinitions() {
         { value: 'genset', label: 'Am Generator-Eingang (AC-In / genset)' }
       ],
       help: 'Nur relevant bei AC-gekoppelter PV (eigener AC-Wechselrichter am Victron-System, z. B. SMA/Fronius-String-WR). Das Victron-GX f\u00fchrt die AC-PV-Leistung je nach VERDRAHTUNG in getrennten Registern: \u201eAm Verbraucher-Ausgang\u201c (Standard, hinter dem Multiplus), \u201eAm Netz-Eingang\u201c (der WR speist auf der Netzseite ein \u2014 h\u00e4ufig bei nachger\u00fcsteten String-WR) oder \u201eAm Generator-Eingang\u201c. Wenn deine AC-Erzeugung f\u00e4lschlich als Netzbezug erscheint, steht der WR vermutlich am Netz-Eingang \u2192 auf \u201eAm Netz-Eingang\u201c umstellen. In VRM siehst du die Position unter dem PV-Inverter-Ger\u00e4t (AC-in vs. AC-out).'
+    },
+    {
+      section: 'victron',
+      group: 'mqttBridge',
+      groupLabel: 'MQTT-Bridge (Universal)',
+      groupDescription: 'Nur relevant, wenn das Herstellerprofil über MQTT spricht (Profil „Universal (MQTT-Bridge)"). Die Bridge publiziert Werte im Venus-Topic-Schema N/<Portal-ID>/… und nimmt Steuerbefehle auf W/<Portal-ID>/… entgegen.',
+      path: 'victron.mqtt.portalId',
+      label: 'Portal-ID (Topic-Namensraum)',
+      type: 'text',
+      empty: 'blank',
+      help: 'Topic-Namensraum, unter dem die Bridge publiziert (N/<Portal-ID>/…). Leer = Standard aus dem Herstellerprofil (Universal-Profil: „dvhub"). Bei einem echten Victron-GX über MQTT die VRM-Portal-ID eintragen.'
+    },
+    {
+      section: 'victron',
+      group: 'mqttBridge',
+      groupLabel: 'MQTT-Bridge (Universal)',
+      groupDescription: 'Nur relevant, wenn das Herstellerprofil über MQTT spricht (Profil „Universal (MQTT-Bridge)").',
+      path: 'victron.mqtt.broker',
+      label: 'MQTT-Broker-URL',
+      type: 'text',
+      empty: 'blank',
+      help: 'Vollständige Broker-URL, z. B. mqtt://192.168.1.50:1883. Leer = mqtt://<Anlagenadresse>:1883 (die Anlagenadresse oben zeigt dann auf den Broker).'
     },
     {
       section: 'victron',
