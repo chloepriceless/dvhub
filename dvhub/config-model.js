@@ -931,7 +931,7 @@ function buildFieldDefinitions() {
         { value: 'fronius', label: 'Fronius GEN24 (SunSpec) — Beta' },
         { value: 'deye-lv', label: 'Deye SUN-…SG04LP3 (LV, 3-phasig) — Beta' }
       ],
-      help: 'Victron wird nativ (Modbus) unterstützt. „Universal (MQTT-Bridge)" bindet jeden anderen Wechselrichter über eine kleine MQTT-Bridge an (z. B. Node-RED, siehe Doku DEYE-NODERED-BRIDGE); Fronius GEN24 (SunSpec) und Deye LV-3ph (RS485-Gateway) sind native Beta-Profile mit Telemetrie + DV-Abregelung. Die technischen Werte kommen aus der Herstellerdatei.'
+      help: 'Victron wird nativ (Modbus) unterstützt. „Universal (MQTT-Bridge)" bindet jeden anderen Wechselrichter über eine kleine MQTT-Bridge an (z. B. Node-RED, siehe Doku DEYE-NODERED-BRIDGE). ⚠️ Fronius GEN24 (SunSpec) und Deye LV-3ph (RS485-Gateway) sind BETA-Profile, deren Test an echter Hardware noch aussteht — aktuell nur Telemetrie/Anzeige (Fronius derzeit OHNE aktive Abregelung). Wer testen möchte, bitte melden (info@bikinibottom.capital); in einer Produktivumgebung bitte noch nicht einsetzen. Die technischen Werte kommen aus der Herstellerdatei.'
     },
     {
       section: 'victron',
