@@ -10,9 +10,36 @@ verweist hierher.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-07-11
+
+Bugfix-/Stabilisierungs-Release. Führt das **Beta-Flag für Herstellerprofile**
+ein: ungetestete Treiber (Fronius, Deye, MQTT-Bridge) bleiben damit aus dem
+Stable-Kanal heraus und sind nur noch im Bleeding-Edge-Kanal sichtbar, bis ihr
+Test an echter Hardware bestanden ist. An der Victron-Steuerung ändert dieses
+Release nichts.
+
 ### Neu
 
-- **Universal-MQTT-Herstellerprofil (`bridge-mqtt`):** Neues offizielles
+- **Beta-Flag für Herstellerprofile:** Ein Herstellerprofil kann sich als
+  `"beta": true` markieren. Solche Profile erscheinen im Hersteller-Dropdown
+  nur, wenn der Update-Kanal auf „Bleeding Edge (Dev)" steht — im
+  Stable-Kanal sind sie unsichtbar, damit unfertige Treiber nicht versehentlich
+  in einer Produktivumgebung landen. Ein bereits aktiv gewähltes Beta-Profil
+  bleibt immer sichtbar. Markiert sind aktuell `fronius`, `deye-lv` und
+  `bridge-mqtt` (Test an echter Hardware ausstehend — Tester bitte melden:
+  info@bikinibottom.capital).
+- **Fronius GEN24 (Beta): Abregelung über Batteriesteuerung statt
+  Leistungskappung:** Die DV-Abregelung nutzt jetzt die
+  SunSpec-Model-124-Batteriesteuerung — derselbe Weg, den evcc fährt:
+  „keine Einspeisung" zwingt den PV-Überschuss in den Speicher
+  (`StorCtl_Mod=2` + `OutWRte=-100 %`), das Haus bleibt aus PV+Akku versorgt;
+  die Freigabe stellt den Normalbetrieb wieder her (`0` / `100 %`). Das in
+  1.0.2 deaktivierte `WMaxLimPct`-Verfahren (kappte die gesamte
+  Wechselrichter-Leistung) ist vollständig entfernt. Hinweis: Bei vollem
+  Speicher kann wieder eingespeist werden — eine garantierte Nulleinspeisung
+  braucht zusätzlich das geräteseitige Fronius-Export-Limit. Voraussetzung:
+  Energiekosten-Assistent (ECA) in Solar.web deaktiviert.
+- **Universal-MQTT-Herstellerprofil (`bridge-mqtt`, Beta):** Neues offizielles
   Herstellerprofil „Universal (MQTT-Bridge)" — jeder nicht nativ unterstützte
   Wechselrichter (Deye, Growatt, …) wird über eine kleine MQTT-Bridge nach dem
   dokumentierten Venus-Topic-Schema angebunden (erster Baustein des
@@ -25,6 +52,13 @@ verweist hierher.
   auf Bestandsboxen nach (ohne bestehende Dateien zu überschreiben), und der
   Einrichtungs-Assistent setzt einen vorkonfigurierten Hersteller nicht mehr
   auf Victron zurück.
+
+### Behoben
+
+- **Hersteller-Dropdown zeigte eine interne Datei:** Die Manifest-Datei
+  `.shipped-hashes.json` (Baseline der Profil-Updates aus 1.0.2) tauchte als
+  wählbarer „Hersteller" im Dropdown auf. Versteckte Dateien werden jetzt
+  übersprungen.
 
 ## [1.0.2] - 2026-07-11
 
