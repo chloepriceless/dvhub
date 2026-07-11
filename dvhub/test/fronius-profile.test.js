@@ -1,7 +1,12 @@
-// B-1112 Fronius-Pack Stufe 1: shipped hersteller/fronius.json + Scan-Auflösung
-// im Poller + WMaxLim-Abregelungs-Sequenz im DV-Steuerpfad. Die Tests fahren
-// das ECHTE Profil durch loadConfigFile, den ECHTEN Poller (requestPoll) gegen
-// ein synthetisches GEN24-Registerbild und den ECHTEN Evaluator-Sequenzpfad.
+// B-1112 Fronius-Pack: shipped hersteller/fronius.json + Scan-Auflösung im Poller
+// + Model-124-Abregelung (Akku-Force-Charge, wie evcc) im DV-Steuerpfad. Die Tests
+// fahren das ECHTE Profil durch loadConfigFile, den ECHTEN Poller (requestPoll)
+// gegen ein synthetisches GEN24-Registerbild und den ECHTEN Evaluator-Sequenzpfad.
+//
+// NACHHER-Ansatz (2026-07-11): Abregelung NICHT über WMaxLimPct=0 (kappt die ganze
+// WR-Wirkleistung, legt Hybrid-Anlagen lahm — der alte, falsche Weg), sondern über
+// SunSpec Model 124 wie evcc: 'keine Einspeisung' = StorCtl_Mod:=2 + OutWRte:=-100 %
+// (Force-Charge, Überschuss in den Akku), Freigabe = StorCtl_Mod:=0 + OutWRte:=100 %.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -31,8 +36,8 @@ function loadFroniusEffectiveConfig() {
 
 // ── Synthetisches GEN24-Registerbild (float-Modus) ───────────────────────
 // Kette @40000: SunS, [1,66], [113,60], [120,26], [123,24], [124,24], Ende.
-// → M113-Daten @40072 (W@+20=40092), M123-Daten @40162 (Pct@+3=40165,
-//   Ena@+7=40169), M124-Daten @40188 (MinRsvPct@+5=40193, ChaState@+6=40194).
+// → M113-Daten @40072 (W@+20=40092), M124-Daten @40188 (StorCtl_Mod@+3=40191,
+//   MinRsvPct@+5=40193, ChaState@+6=40194, OutWRte@+10=40198).
 function float32Regs(value) {
   const b = Buffer.alloc(4);
   b.writeFloatBE(value, 0);
@@ -79,9 +84,12 @@ function makeMockTransport(image) {
   };
 }
 
+// -100 % @ scale 0.01 → −10000, als int16-Zweierkomplement in ein uint16-Wort.
+const OUTWRTE_FORCE_CHARGE_RAW = 65536 - 10000; // 55536
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
-test('shipped fronius.json loads: modbus transport, scan-based points, WMaxLim sequence', () => {
+test('shipped fronius.json loads: modbus, scan-Punkte, Model-124-Abregelung statt WMaxLim', () => {
   const loaded = loadFroniusEffectiveConfig();
   assert.equal(loaded.manufacturerProfileError, null);
   const cfg = loaded.effectiveConfig;
@@ -91,20 +99,32 @@ test('shipped fronius.json loads: modbus transport, scan-based points, WMaxLim s
   assert.deepEqual(cfg.points.soc.sunspec, { model: 124, offset: 6 });
   assert.equal(cfg.points.soc.address, undefined);
   assert.equal(cfg.points.pvPowerW.readType, 'float32');
-  // Kein Setpoint-Dialekt, keine aktiven Batterie-Writes in Stufe 1.
+  // Kein Setpoint-Dialekt (Victron-exklusiv), keine minSoc-Writes in Beta.
   assert.equal(cfg.controlWrite.gridSetpointW.enabled, false);
   assert.equal(cfg.controlWrite.minSocPct.enabled, false);
-  // 2026-07-11 (Vinzent82-Feldtest): DV-Abregelung in Stufe 1 deaktiviert —
-  // WMaxLimPct=0 legt Hybrid-Anlagen lahm (Haus am Netz). Die Sequenz-DEFINITION
-  // bleibt als Referenz für den späteren korrekten Regler (B-1103) erhalten,
-  // ist aber inaktiv geschaltet. Auch die MinRsvPct-Anzeige ist aus (0xFFFF).
+  // Model-124-Steuerpunkte (wie evcc): StorCtl_Mod + OutWRte aktiv, ChaGriSet aus.
+  assert.equal(cfg.controlWrite.storCtlMod.enabled, true);
+  assert.deepEqual(cfg.controlWrite.storCtlMod.sunspec, { model: 124, offset: 3 });
+  assert.equal(cfg.controlWrite.outWRte.enabled, true);
+  assert.deepEqual(cfg.controlWrite.outWRte.sunspec, { model: 124, offset: 10 });
+  assert.equal(cfg.controlWrite.outWRte.signed, true);
+  assert.equal(cfg.controlWrite.outWRte.scale, 0.01);
+  assert.equal(cfg.controlWrite.chaGriSet.enabled, false);
+  // Der falsche WMaxLim-Weg ist GANZ entfernt (kein Register mehr, das die
+  // Gesamt-Wirkleistung kappen könnte).
+  assert.equal(cfg.controlWrite.wMaxLimPct, undefined);
+  assert.equal(cfg.controlWrite.wMaxLimEna, undefined);
+  // Abregelung ist JETZT aktiv (über feedExcessDcPv, DC-gekoppelt), AC-Pfad aus.
+  assert.equal(cfg.dvControl.enabled, true);
+  assert.equal(cfg.dvControl.feedExcessDcPv.enabled, true);
   assert.equal(cfg.dvControl.dontFeedExcessAcPv.enabled, false);
-  assert.equal(cfg.dvControl.negativePriceProtection.enabled, false);
-  assert.equal(cfg.points.minSocPct.enabled, false);
-  // Sequenz-Definition weiterhin vorhanden: sperren = Pct dann Ena, freigeben = nur Ena.
-  const seq = cfg.dvControl.dontFeedExcessAcPv.sequence;
-  assert.deepEqual(seq['1'].map((s) => s.point), ['wMaxLimPct', 'wMaxLimEna']);
-  assert.deepEqual(seq['0'].map((s) => s.point), ['wMaxLimEna']);
+  assert.equal(cfg.dvControl.negativePriceProtection.enabled, true);
+  // Sequenz: sperren (0) = StorCtl_Mod:=2 dann OutWRte:=-100; freigeben (1) = 0/100.
+  const seq = cfg.dvControl.feedExcessDcPv.sequence;
+  assert.deepEqual(seq['0'].map((s) => s.point), ['storCtlMod', 'outWRte']);
+  assert.deepEqual(seq['0'].map((s) => s.value), [2, -100]);
+  assert.deepEqual(seq['1'].map((s) => s.point), ['storCtlMod', 'outWRte']);
+  assert.deepEqual(seq['1'].map((s) => s.value), [0, 100]);
   // Meter: Float32-Block @ Unit 200, host fällt auf die Anlagenadresse zurück.
   assert.equal(cfg.meter.readType, 'float32');
   assert.equal(cfg.meter.unitId, 200);
@@ -143,8 +163,9 @@ test('poller resolves sunspec addresses via device scan and reads SoC + float me
   assert.ok(scanLog, `sunspec_scan_ok expected, got: ${logs.map((l) => l.event).join(',')}`);
   assert.equal(scanLog.payload.base, 40000);
   assert.equal(cfg.points.soc.address, 40194);
-  assert.equal(cfg.controlWrite.wMaxLimPct.address, 40165);
-  assert.equal(cfg.controlWrite.wMaxLimEna.address, 40169);
+  // Model-124-Steuerpunkte sind jetzt die aufgelösten Ziele.
+  assert.equal(cfg.controlWrite.storCtlMod.address, 40191);
+  assert.equal(cfg.controlWrite.outWRte.address, 40198);
   assert.deepEqual(scanLog.payload.missing, []);
 
   // Telemetrie: SoC über scale 0.01, AC-W als Float32, Meter-Block dekodiert.
@@ -159,15 +180,12 @@ test('poller resolves sunspec addresses via device scan and reads SoC + float me
   assert.equal(state.meter.grid_l1_w, 400);
 });
 
-test('WMaxLim sequence MECHANIK (falls via B-1103 reaktiviert): block = Pct:=0 then Ena:=1, release = Ena:=0', async () => {
+test('Model-124-Sequenz: sperren = StorCtl_Mod:=2 dann OutWRte:=-100, freigeben = 0/100', async () => {
   const loaded = loadFroniusEffectiveConfig();
-  const cfg = loaded.effectiveConfig;
-  // Das ausgelieferte Profil hat die Abregelung deaktiviert (Vinzent82-Fix);
-  // dieser Test prüft nur die Sequenz-MECHANIK, daher hier bewusst reaktiviert.
-  cfg.dvControl.dontFeedExcessAcPv.enabled = true;
+  const cfg = loaded.effectiveConfig; // AUSGELIEFERTES Profil (Abregelung aktiv)
   // Adressen wie nach erfolgtem Scan.
-  cfg.controlWrite.wMaxLimPct.address = 40165;
-  cfg.controlWrite.wMaxLimEna.address = 40169;
+  cfg.controlWrite.storCtlMod.address = 40191;
+  cfg.controlWrite.outWRte.address = 40198;
 
   const state = {
     victron: { soc: 50 },
@@ -187,27 +205,28 @@ test('WMaxLim sequence MECHANIK (falls via B-1103 reaktiviert): block = Pct:=0 t
     epexNowNext: () => null
   });
 
-  // Sperren (feedIn=false → dontFeedExcessAcPv val=1).
+  // Sperren (feedIn=false → feedExcessDcPv val=0): Force-Charge.
   await evaluator.applyDvVictronControl(false);
   assert.deepEqual(transport.writes, [
-    { fc: 6, address: 40165, value: 0 },
-    { fc: 6, address: 40169, value: 1 }
+    { fc: 6, address: 40191, value: 2 },                       // StorCtl_Mod = 2 (Entlade-Control an)
+    { fc: 6, address: 40198, value: OUTWRTE_FORCE_CHARGE_RAW } // OutWRte = -100 % (Laden)
   ]);
-  assert.equal(state.ctrl.dvControl.dontFeedExcessAcPv.ok, true);
+  assert.equal(state.ctrl.dvControl.feedExcessDcPv.ok, true);
   assert.equal(state.ctrl._lastDvFeedIn, false);
 
-  // Freigeben (feedIn=true → val=0): nur Ena:=0.
+  // Freigeben (feedIn=true → val=1): zurück auf Normalbetrieb.
   transport.writes.length = 0;
   await evaluator.applyDvVictronControl(true);
-  assert.deepEqual(transport.writes, [{ fc: 6, address: 40169, value: 0 }]);
+  assert.deepEqual(transport.writes, [
+    { fc: 6, address: 40191, value: 0 },     // StorCtl_Mod = 0 (alle Limits aus)
+    { fc: 6, address: 40198, value: 10000 }  // OutWRte = 100 % (Entladung erlaubt)
+  ]);
   assert.equal(state.ctrl._lastDvFeedIn, true);
 });
 
 test('sequence on UNRESOLVED sunspec point fails safely and is retried (no change-cache poisoning)', async () => {
   const loaded = loadFroniusEffectiveConfig();
   const cfg = loaded.effectiveConfig; // Adressen NICHT aufgelöst (kein Scan)
-  // Mechanik-Test → Abregelung im Test reaktivieren (im Profil deaktiviert, s.o.).
-  cfg.dvControl.dontFeedExcessAcPv.enabled = true;
 
   const state = {
     victron: { soc: 50 },
@@ -228,22 +247,25 @@ test('sequence on UNRESOLVED sunspec point fails safely and is retried (no chang
 
   await evaluator.applyDvVictronControl(false);
   assert.equal(transport.writes.length, 0, 'no hardware write with unresolved addresses');
-  assert.equal(state.ctrl.dvControl.dontFeedExcessAcPv.ok, false);
+  assert.equal(state.ctrl.dvControl.feedExcessDcPv.ok, false);
   // T-0076: Fehlschlag darf den Change-Cache nicht setzen — nächster Zyklus versucht erneut.
   assert.equal(state.ctrl._lastDvFeedIn, undefined);
 
   // applyControlTarget lehnt unaufgelöste sunspec-Targets mit klarem Grund ab.
-  const res = await evaluator.applyControlTarget('wMaxLimEna', 1, 'test');
+  const res = await evaluator.applyControlTarget('storCtlMod', 2, 'test');
   assert.equal(res.ok, false);
   assert.match(res.error, /sunspec address not resolved/);
 });
 
-test('shipped profile: DV curtailment is DISABLED → no WMaxLim write can lame the inverter (Vinzent82-Fix)', async () => {
+test('Vinzent82-Anti-Regression: Abregelung fährt den Akku (Force-Charge), NIE die WR-Gesamtleistung', async () => {
   const loaded = loadFroniusEffectiveConfig();
   const cfg = loaded.effectiveConfig; // AUSGELIEFERTES Profil, unverändert
-  // Adressen gesetzt, damit ein etwaiger Write NICHT bloß am fehlenden Scan scheitert.
-  cfg.controlWrite.wMaxLimPct.address = 40165;
-  cfg.controlWrite.wMaxLimEna.address = 40169;
+  cfg.controlWrite.storCtlMod.address = 40191;
+  cfg.controlWrite.outWRte.address = 40198;
+
+  // Es darf gar kein WMaxLim-Register mehr im Profil existieren.
+  assert.equal(cfg.controlWrite.wMaxLimPct, undefined);
+  assert.equal(cfg.controlWrite.wMaxLimEna, undefined);
 
   const state = {
     victron: { soc: 50 },
@@ -262,8 +284,10 @@ test('shipped profile: DV curtailment is DISABLED → no WMaxLim write can lame 
     epexNowNext: () => null
   });
 
-  // Sperr-Anforderung (feedIn=false): mit deaktivierter Abregelung darf NICHTS
-  // auf die Hardware gehen — sonst würde WMaxLimPct=0 die Anlage lahmlegen.
+  // Sperr-Anforderung: Überschuss wird in den Akku gezwungen (OutWRte NEGATIV),
+  // das Haus bleibt aus PV+Akku versorgt — NICHT die Gesamt-Wirkleistung gekappt.
   await evaluator.applyDvVictronControl(false);
-  assert.equal(transport.writes.length, 0, 'disabled DV curtailment must not write WMaxLim');
+  const outWrite = transport.writes.find((w) => w.address === 40198);
+  assert.ok(outWrite, 'OutWRte wird geschrieben');
+  assert.ok(outWrite.value > 32767, 'OutWRte-Wert ist ein negatives int16 (Force-Charge), kein Leistungslimit');
 });

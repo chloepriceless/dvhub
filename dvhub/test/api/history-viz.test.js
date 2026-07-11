@@ -115,6 +115,10 @@ function mockCtx({ optimizer = {} } = {}) {
     epexNowNext: () => null,
     expireLeaseIfNeeded: () => {},
     buildSystemDiscoveryPayload: async () => ({ ok: true }),
+    // Pro-Gating der Premium-Views (Woche/Monat/Jahr) ruft licenseService.requirePro
+    // → true = Pro aktiv, durchlassen (Test 4 will den Builder erreichen). Ohne diesen
+    // Mock crasht requirePro (routes-api.js) an einem undefined licenseService.
+    licenseService: { requirePro: () => true },
     db: null,
     telemetryStore: null,
   };

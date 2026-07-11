@@ -616,26 +616,47 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
 // effective config. Returns [{ value, label }]; falls back to Victron-only if
 // the folder can't be read so the dropdown is never empty.
 export function listManufacturerProfiles(ctx) {
+  // Beta-Gate (2026-07-11): Ein Profil mit "beta": true ist ein instabiler Treiber,
+  // dessen Test an echter Hardware noch aussteht (Fronius/Deye/bridge-mqtt). Solche
+  // Profile erscheinen im Hersteller-Dropdown NUR im Bleeding-Edge-Kanal
+  // (updateChannel='dev') — im Stable-Kanal bleiben sie unsichtbar, damit ein
+  // Produktivkunde sie nicht versehentlich auswählt. So bleiben unfertige
+  // Komponenten faktisch aus dem Release-Tag, ohne sie physisch aus dem Code/Tag zu
+  // entfernen (kein divergierender dev/stable-Code). Ausnahme: ein Beta-Profil, das
+  // bereits AKTIV ausgewählt ist, bleibt immer sichtbar — sonst zeigte das Dropdown
+  // den tatsächlich gefahrenen Hersteller nicht mehr an und ein Save würde ihn
+  // stillschweigend auf einen anderen Wert kippen.
+  const rawCfg = (typeof ctx?.getRawCfg === 'function') ? (ctx.getRawCfg() || {}) : {};
+  const channel = rawCfg.updateChannel || 'stable';
+  const current = (typeof rawCfg.manufacturer === 'string' && rawCfg.manufacturer.trim())
+    ? rawCfg.manufacturer.trim() : 'victron';
+  const showBeta = channel === 'dev';
+
   let list = [];
   try {
     const dir = path.join(path.dirname(ctx.getConfigPath?.() || ''), 'hersteller');
     list = fs.readdirSync(dir)
-      .filter((f) => f.toLowerCase().endsWith('.json'))
+      // Dotfiles überspringen (.shipped-hashes.json ist KEIN Herstellerprofil).
+      .filter((f) => !f.startsWith('.') && f.toLowerCase().endsWith('.json'))
       .map((f) => {
         const id = f.replace(/\.json$/i, '');
         if (!id) return null;
         let label = id.charAt(0).toUpperCase() + id.slice(1);
+        let beta = false;
         try {
           const parsed = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
           if (typeof parsed?.label === 'string' && parsed.label.trim()) {
             label = parsed.label.trim().slice(0, 64);
           }
+          beta = parsed?.beta === true;
         } catch { /* unlesbares Profil → Dateiname-Fallback als Label */ }
-        return { value: id, label };
+        return { value: id, label, beta };
       })
-      .filter(Boolean);
+      .filter(Boolean)
+      // Beta-Gate: im Stable-Kanal nur das evtl. bereits aktive Beta-Profil zeigen.
+      .filter((opt) => !opt.beta || showBeta || opt.value === current);
   } catch { list = []; }
-  if (!list.some((x) => x.value === 'victron')) list.unshift({ value: 'victron', label: 'Victron' });
+  if (!list.some((x) => x.value === 'victron')) list.unshift({ value: 'victron', label: 'Victron', beta: false });
   return list;
 }
 

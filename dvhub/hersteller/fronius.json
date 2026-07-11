@@ -1,11 +1,15 @@
 {
   "label": "Fronius GEN24 (SunSpec) — Beta · Test ausstehend",
+  "beta": true,
   "_doc": [
-    "Fronius-Herstellerprofil Stufe 1 (B-1112) — SunSpec Modbus TCP.",
-    "Zielgeräte: Primo/Symo GEN24 (Plus), Smart Meter (Unit-ID 200).",
+    "Fronius-Herstellerprofil (B-1112) — SunSpec Modbus TCP.",
+    "Zielgeräte: Primo/Symo GEN24 (Plus) mit Batterie, Smart Meter (Unit-ID 200).",
     "Voraussetzungen am Wechselrichter (WebUI, Techniker-Login):",
     "  Kommunikation → Modbus → Slave/TCP aktivieren +",
     "  'Wechselrichter-Steuerung über Modbus zulassen'.",
+    "  WICHTIG: Der Energiekosten-Assistent (ECA) in Solar.web muss AUS sein —",
+    "  sonst regelt der WR-interne Optimierer gegen unsere Modbus-Schreibbefehle",
+    "  (gleiche Anforderung wie bei evcc, capabilities battery-control).",
     "",
     "Adress-Prinzip: Punkte deklarieren sunspec:{model, offset} statt fester",
     "Register — DVhub scannt beim Start die SunSpec-Modellkette des Geräts",
@@ -13,25 +17,34 @@
     "Profil layout-sicher (float- vs. int+SF-Modus verschiebt die Modell-Basen).",
     "Die INNEREN Offsets folgen den SunSpec-Standardmodellen 113/123/124.",
     "",
-    "Stufe-1-Funktionsumfang: NUR Telemetrie (AC-Leistung, SoC, Netz-Meter).",
-    "KEINE aktive Batterie-Steuerung (kommt mit dem Soft-ESS-Regler, B-1103).",
-    "batteryPowerW/echte PV-Aufteilung brauchen Model-160-Support (Stufe 2).",
+    "── ABREGELUNG (vorher/nachher) ──────────────────────────────────────────",
+    "VORHER (bis 2026-07-11, Vinzent82-Feldtest GH-PR #3): Wir kamen von Victron",
+    "und übersetzten dessen 'Nulleinspeisung' 1:1 auf Model 123 WMaxLimPct:=0 +",
+    "WMaxLim_Ena:=1. Das war FALSCH: WMaxLimPct begrenzt die GESAMTE Wirkleistung",
+    "des Wechselrichters, nicht nur die Netzeinspeisung. Bei einer Hybrid-Anlage",
+    "(GEN24 + Akku) heißt 0 %: der WR liefert gar nichts mehr, das Haus zieht",
+    "Netzstrom, PV lädt nur noch den Speicher. Victrons PreventFeedback versorgt",
+    "das Haus dagegen weiter aus PV+Akku — die beiden sind NICHT äquivalent.",
     "",
-    "⚠️ DV-ABREGELUNG IN STUFE 1 DEAKTIVIERT (2026-07-11, Vinzent82-Feldtest,",
-    "GH-PR #3): Die frühere Sequenz mappte die Victron-'Nulleinspeisung' auf",
-    "Model 123 WMaxLimPct:=0 + WMaxLim_Ena:=1. WMaxLimPct begrenzt aber die",
-    "GESAMTE Wirkleistung des Wechselrichters, nicht nur die Netzeinspeisung —",
-    "bei einer Hybrid-Anlage (GEN24 + Akku) heißt 0 %: PV lädt nur noch den",
-    "Speicher, das Haus zieht Netzstrom. Victrons PreventFeedback dagegen",
-    "versorgt das Haus weiter aus PV+Akku. Die beiden sind NICHT äquivalent.",
-    "Korrekt wäre eine Export-Limitation (Zero-Feed-in über den Smart Meter),",
-    "die nur den Netzpunkt regelt — das ist Soft-ESS-Regler-Gebiet (B-1103).",
-    "Bis dahin: dontFeedExcessAcPv.enabled=false → DVhub schreibt KEIN",
-    "WMaxLim-Register mehr. Rücksetzen einer noch aktiven Sperre: siehe",
-    "docs/FRONIUS-ABREGELUNG-RUECKSETZEN.md.",
+    "NACHHER (dieses Profil, Model-124-Batteriesteuerung wie evcc): Statt die",
+    "Leistung zu kappen, steuern wir den AKKU. 'Keine Einspeisung' = der Akku",
+    "wird gezwungen, den PV-Überschuss aufzunehmen (Force-Charge) statt ihn ins",
+    "Netz zu schicken; das Haus bleibt voll aus PV+Akku versorgt. Genau so macht",
+    "es evcc (batterymode 'charge'): StorCtl_Mod:=2 (Entlade-Control aktiv) +",
+    "OutWRte:=-100 % (negativ = Laden, Fronius-Quirk). Freigabe = zurück auf",
+    "Normalbetrieb: StorCtl_Mod:=0 + OutWRte:=100 %.",
     "",
-    "STATUS BETA: Offsets/Skalen sind @sim-assumption bis zum Test am echten",
-    "GEN24 (RvrtTms-/Scale-Verifikation; siehe Backlog 12-VENDOR-FRONIUS.md)."
+    "GRENZE (ehrlich): Ist der Akku VOLL, kann er keinen Überschuss mehr aufnehmen",
+    "— dann speist der WR wieder ein. Eine GARANTIERTE Nulleinspeisung braucht",
+    "zusätzlich die geräteseitige 'Export Limitation' / dynamische Wirkleistungs-",
+    "begrenzung von Fronius (im WR-WebUI mit dem Smart Meter am Netzpunkt",
+    "konfiguriert). Model-124-Steuerung und Export-Limit ergänzen sich.",
+    "",
+    "STATUS BETA: Offsets/Skalen/Vorzeichen sind @sim-assumption bis zum Test am",
+    "echten GEN24. Ohne reale Hardware können wir nur bauen und auf Rückmeldung",
+    "warten. Tester bitte melden: info@bikinibottom.capital. Bis dahin: nicht",
+    "produktiv einsetzen (Profil ist Beta-gegatet, nur im Bleeding-Edge-Kanal",
+    "sichtbar). Model-160 (echte PV-/Akku-Leistungsaufteilung) folgt später."
   ],
 
   "victron": {
@@ -73,7 +86,7 @@
       "sunspec": { "model": 124, "offset": 5 }
     },
     "pvPowerW": {
-      "_comment": "Model 113 W (Offset +20, Float32) = AC-Ausgangsleistung des WR. NÄHERUNG: bei Anlagen mit Batterie enthält sie den Akku-Anteil; exakte PV-Aufteilung kommt mit Model-160-Support (Stufe 2). Bei GEN24 ohne Batterie ist der Wert exakt.",
+      "_comment": "Model 113 W (Offset +20, Float32) = AC-Ausgangsleistung des WR. NÄHERUNG: bei Anlagen mit Batterie enthält sie den Akku-Anteil; exakte PV-Aufteilung kommt mit Model-160-Support. Bei GEN24 ohne Batterie ist der Wert exakt.",
       "enabled": true,
       "fc": 3,
       "quantity": 2,
@@ -84,7 +97,7 @@
       "sunspec": { "model": 113, "offset": 20 }
     },
     "batteryPowerW": {
-      "_comment": "Deaktiviert in Stufe 1: saubere Akku-Leistung braucht Model 160 (MPPT-Eingang 3 = Laden, 4 = Entladen). DCW aus Model 113 wäre bei Hybrid PV+Akku vermischt — lieber kein Wert als ein falscher.",
+      "_comment": "Deaktiviert: saubere Akku-Leistung braucht Model 160 (MPPT-Eingang 3 = Laden, 4 = Entladen). DCW aus Model 113 wäre bei Hybrid PV+Akku vermischt — lieber kein Wert als ein falscher.",
       "enabled": false
     },
     "gridSetpointW": { "enabled": false },
@@ -92,14 +105,14 @@
     "acPvL2W": { "enabled": false },
     "acPvL3W": { "enabled": false },
     "selfConsumptionW": {
-      "_comment": "Kein direktes Hausverbrauchs-Register; loadW-Ableitung aus Meter+PV ist Stufe-2-Arbeit.",
+      "_comment": "Kein direktes Hausverbrauchs-Register; loadW-Ableitung aus Meter+PV ist spätere Arbeit.",
       "enabled": false
     }
   },
 
   "controlWrite": {
     "gridSetpointW": {
-      "_comment": "Fronius kennt keinen AC-Netzpunkt-Sollwert (setpoint-Dialekt ist Victron-exklusiv). Aktive Batterie-Steuerung kommt mit dem Soft-ESS-Regler (B-1103).",
+      "_comment": "Fronius kennt keinen AC-Netzpunkt-Sollwert (setpoint-Dialekt ist Victron-exklusiv). Abregelung läuft über die Model-124-Akkusteuerung (storCtlMod/outWRte), nicht über einen Setpoint.",
       "enabled": false
     },
     "chargeCurrentA": { "enabled": false },
@@ -114,47 +127,61 @@
       "offset": 0,
       "sunspec": { "model": 124, "offset": 5 }
     },
-    "wMaxLimPct": {
-      "_comment": "Model 123 WMaxLimPct (Offset +3), uint16 mit SF −2 (100 % = 10000) → scale 0.01. Nur über die dvControl-Sequenz beschrieben, kein direktes API-Target.",
-      "enabled": true,
-      "fc": 6,
-      "writeType": "uint16",
-      "signed": false,
-      "scale": 0.01,
-      "offset": 0,
-      "sunspec": { "model": 123, "offset": 3 }
-    },
-    "wMaxLimEna": {
-      "_comment": "Model 123 WMaxLim_Ena (Offset +7): 1 = Begrenzung aktiv, 0 = aus.",
+    "storCtlMod": {
+      "_comment": "Model 124 StorCtl_Mod (Offset +3): Bitfeld — Bit0 = Lade-Control aktiv (InWRte gilt), Bit1 = Entlade-Control aktiv (OutWRte gilt). 0 = alle Limits aus (Normalbetrieb), 2 = nur Entlade-Control an (Hold/Force-Charge über OutWRte). Genau wie evcc (fronius-gen24.yaml, batterymode).",
       "enabled": true,
       "fc": 6,
       "writeType": "uint16",
       "signed": false,
       "scale": 1,
       "offset": 0,
-      "sunspec": { "model": 123, "offset": 7 }
+      "sunspec": { "model": 124, "offset": 3 }
+    },
+    "outWRte": {
+      "_comment": "Model 124 OutWRte (Offset +10): Entlade-/Lade-Rate in % von WChaMax, int16 mit SF InOutWRte_SF (typ. −2) → scale 0.01. POSITIV = Entladung erlaubt (100 = voll), 0 = Hold (keine Entladung), NEGATIV = Laden (Fronius-Quirk, −100 = Vollladung aus PV). @sim-assumption: SF am Gerät verifizieren.",
+      "enabled": true,
+      "fc": 6,
+      "writeType": "int16",
+      "signed": true,
+      "scale": 0.01,
+      "offset": 0,
+      "sunspec": { "model": 124, "offset": 10 }
+    },
+    "chaGriSet": {
+      "_comment": "Model 124 ChaGriSet (Offset +15): 0 = PV (Netz-Laden verboten), 1 = GRID (Netz-Laden erlaubt). BEWUSST DEAKTIVIERT: ChaGriSet-Writes können laut evcc-PR #18386 die Laderegeln in der Fronius-WebUI stören; evcc ist selbst davon weggegangen. Wir fassen es nicht an — das Netz-Lade-Verhalten während der Abregelung folgt der Geräteeinstellung. Definition bleibt für späteres opt-in (mit sauberem save/restore) erhalten.",
+      "enabled": false,
+      "fc": 6,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "sunspec": { "model": 124, "offset": 15 }
     }
   },
 
   "dvControl": {
-    "_comment": "⚠️ DV-Abregelung in Stufe 1 DEAKTIVIERT (2026-07-11, Vinzent82-Feldtest). Die Sequenz unten setzte WMaxLimPct:=0 % + WMaxLim_Ena:=1 = GESAMT-Wirkleistung des WR auf 0. Bei Hybrid-Anlagen legt das die Hausversorgung lahm (PV lädt nur den Akku, Haus am Netz) — anders als Victrons PreventFeedback, das das Haus weiterversorgt. WMaxLimPct ist das falsche Register für eine reine Einspeise-Abregelung; die korrekte Export-Limitation (Zero-Feed-in via Smart Meter) kommt mit B-1103. Bis dahin schreibt DVhub KEIN WMaxLim-Register (dontFeedExcessAcPv.enabled=false). Die Sequenz-Definition bleibt als Referenz für den späteren korrekten Regler erhalten, ist aber inaktiv. Rücksetzen einer noch am Gerät stehenden Sperre: docs/FRONIUS-ABREGELUNG-RUECKSETZEN.md.",
+    "_comment": "Abregelung über Model-124-Akkusteuerung (wie evcc). DVhub steuert NICHT die Wirkleistung (WMaxLimPct = ganzer WR, legt Hybrid lahm — der alte, falsche Weg), sondern den Akku: 'keine Einspeisung' zwingt den Überschuss in den Speicher (Force-Charge), das Haus bleibt aus PV+Akku versorgt. Wirksam über feedExcessDcPv (DC-gekoppelte GEN24-PV). Der Signalpfad ist binär: feedIn=true → Normalbetrieb (sequence '1'), feedIn=false → abregeln (sequence '0'). Ausgelöst durch DV-forcedOff, §51-Negativpreis (negativePriceProtection) oder Schedule-Regel. GRENZE: bei vollem Akku speist der WR wieder ein — garantierte Nulleinspeisung braucht zusätzlich das geräteseitige Fronius Export-Limit.",
     "enabled": true,
-    "feedExcessDcPv": { "enabled": false },
-    "dontFeedExcessAcPv": {
-      "enabled": false,
+    "feedExcessDcPv": {
+      "enabled": true,
       "sequence": {
-        "1": [
-          { "point": "wMaxLimPct", "value": 0 },
-          { "point": "wMaxLimEna", "value": 1 }
-        ],
         "0": [
-          { "point": "wMaxLimEna", "value": 0 }
+          { "point": "storCtlMod", "value": 2 },
+          { "point": "outWRte", "value": -100 }
+        ],
+        "1": [
+          { "point": "storCtlMod", "value": 0 },
+          { "point": "outWRte", "value": 100 }
         ]
       }
     },
+    "dontFeedExcessAcPv": {
+      "_comment": "Nicht genutzt: die GEN24-PV ist DC-gekoppelt (Hybrid) → die Abregelung läuft über feedExcessDcPv (Model-124-Force-Charge). Ein separater AC-Pfad existiert bei Fronius nicht.",
+      "enabled": false
+    },
     "negativePriceProtection": {
-      "_comment": "Ebenfalls inaktiv in Stufe 1: der gridSetpointW-Anteil läuft bei Fronius ohnehin ins Leere (Target deaktiviert), und die wirksame Sequenz (dontFeedExcessAcPv) ist deaktiviert. WMaxLimPct=0 bei Negativpreis würde eine Hybrid-Anlage genauso lahmlegen. Kehrt mit der Export-Limitation (B-1103) zurück.",
-      "enabled": false,
+      "_comment": "Aktiv: bei EPEX-Negativpreis wird die Einspeisung gesperrt (feedIn=false → Force-Charge-Sequenz oben). Das Feld gridSetpointW ist ein Victron-Rest und wird bei Fronius IGNORIERT (kein Setpoint-Dialekt); die Wirkung kommt aus der Model-124-Sequenz.",
+      "enabled": true,
       "gridSetpointW": -40
     }
   }
