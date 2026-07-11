@@ -499,16 +499,12 @@ if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
     } catch {}
   "
 fi
-# Alle shipped Herstellerprofile nachlegen (victron.json, bridge-mqtt.json, …).
-# create-if-missing: ein bereits vorhandenes Profil wird NIE überschrieben —
-# Operator-Edits (z. B. angepasste Register) bleiben erhalten.
-for profile in "$APP_DIR/hersteller/"*.json; do
-  [[ -e "$profile" ]] || continue
-  profile_name="$(basename "$profile")"
-  if [[ ! -f "$CONFIG_DIR/hersteller/$profile_name" ]]; then
-    cp "$profile" "$CONFIG_DIR/hersteller/$profile_name"
-  fi
-done
+# Herstellerprofile abgleichen (T-MANAGED-VENDOR-PROFILES): fehlende anlegen,
+# unveränderte auf die neue ausgelieferte Version aktualisieren, Operator-Edits
+# stehen lassen (neue Version als <name>.dist). Node-Helper (unit-getestet),
+# non-fatal. Bei Erstinstallation legt er schlicht alle Profile an.
+node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs" "$CONFIG_DIR" "$APP_DIR" \
+  || echo "   (Herstellerprofil-Abgleich übersprungen)"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"

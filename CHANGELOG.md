@@ -26,6 +26,43 @@ verweist hierher.
   Einrichtungs-Assistent setzt einen vorkonfigurierten Hersteller nicht mehr
   auf Victron zurück.
 
+## [1.0.2] - 2026-07-11
+
+Bugfix-Release. Behebt gemeldete Multi-Vendor-/Steuerungs-Issues aus dem Feldtest.
+
+### Behoben
+
+- **#3 Fronius (Beta) legte Hybrid-Anlagen lahm:** Die DV-Abregelung mappte die
+  Victron-„Nulleinspeisung" auf SunSpec Model 123 `WMaxLimPct=0` — das kappt die
+  GESAMTE Wirkleistung des Wechselrichters, nicht nur die Netzeinspeisung. Bei
+  GEN24 + Batterie lud die PV nur noch den Speicher, das Haus zog Netzstrom. Die
+  aktive Abregelung ist in Stufe 1 jetzt deaktiviert (DVhub schreibt kein
+  `WMaxLim`-Register mehr); die korrekte Export-Limitierung folgt mit dem
+  Soft-ESS-Regler. Rücksetz-Anleitung: `docs/FRONIUS-ABREGELUNG-RUECKSETZEN.md`.
+  Die MinRsvPct-Anzeige (lieferte `0xFFFF`) ist ebenfalls deaktiviert.
+- **#10 Victron: Dynamische Regelung blieb nach dem Deaktivieren aktiv:** Die
+  Venus-Settings `OvervoltageFeedIn`/`PreventFeedback` (reg 2707/2708) sind
+  persistent; DVhub ließ seine zuletzt gesetzte Sperre stehen. Jetzt gibt DVhub
+  die Einspeisung beim Deaktivieren der Steuerung (und bei jedem Start mit
+  deaktivierter Steuerung) einmalig aktiv wieder frei — es setzt keine Sperre bei
+  deaktivierter Steuerung. Offenlegung + manuelle Rücksetz-Wege:
+  `docs/VICTRON-DYNAMISCHE-REGELUNG-ABSCHALTEN.md`.
+
+### Neu
+
+- **Herstellerprofil-Updates erreichen Bestandsboxen (T-MANAGED-VENDOR-PROFILES):**
+  Bisher wurde ein vorhandenes Herstellerprofil beim Update NIE überschrieben, sodass
+  Profil-Bugfixes (wie der Fronius-Fix) Bestandsanlagen nicht erreichten. Jetzt
+  aktualisiert der Installer/Updater ein UNVERÄNDERTES Profil auf die neue Version,
+  lässt aber vom Operator geänderte Profile (z. B. `victron.json` auf
+  `transport=mqtt`) unangetastet und legt die neue Version als `<name>.dist` daneben.
+- **Gezielter Commit-Pin im Self-Update:** Beta-Tester können im Bleeding-Edge-Kanal
+  einen bestimmten Commit installieren (Eingabefeld in den Einstellungen bzw.
+  `ref` an `/api/admin/update/apply`) — mit Erreichbarkeits-Anker gegen `origin/main`.
+- **Deye-Direktanbindung (Beta):** Herstellerprofil „Deye SUN-…SG04LP3 (LV, 3-phasig)"
+  für Telemetrie + DV-Abregelung über ein RS485-Ethernet-Gateway
+  (`docs/DEYE-ANBINDUNG.md`); Fronius-GEN24-SunSpec-Profil (Beta).
+
 ## [1.0.1] - 2026-07-09
 
 Bugfix-Release. Behebt gemeldete GitHub-Issues aus dem 1.0-Feedback.

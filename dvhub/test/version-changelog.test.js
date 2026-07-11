@@ -10,8 +10,18 @@ const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'dvhub', 'package.jso
 const changelog = fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
 const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
 
-test('package.json declares version 1.0.0 (read at boot by app-version.js)', () => {
-  assert.equal(pkg.version, '1.0.0', 'package.json version must be 1.0.0');
+// Generisch (nicht mehr auf 1.0.0 hartkodiert — war stale seit 1.0.1): die
+// package.json-Version, der neueste CHANGELOG-Heading und das README-Badge müssen
+// synchron sein. So bricht der Test bei jedem Bump, bei dem eins vergessen wurde.
+const escapedVersion = () => pkg.version.replace(/\./g, '\\.');
+
+test('package.json version is semver and has a matching CHANGELOG heading (read at boot by app-version.js)', () => {
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/, 'package.json needs a semver version');
+  assert.match(
+    changelog,
+    new RegExp(`^#+\\s*\\[?${escapedVersion()}`, 'm'),
+    `CHANGELOG.md must contain a ${pkg.version} heading`
+  );
 });
 
 test('package.json keeps the chloepriceless/dvhub release-repo URL (DO NOT TOUCH)', () => {
@@ -23,15 +33,7 @@ test('package.json keeps the chloepriceless/dvhub release-repo URL (DO NOT TOUCH
   );
 });
 
-test('CHANGELOG.md exists and carries a 1.0.0 heading', () => {
-  assert.match(changelog, /^#+\s*\[?1\.0\.0/m, 'CHANGELOG.md must contain a 1.0.0 heading');
-});
-
-test('README status badge reads Version 1.0.0 and drops the obsolete 0.8 note', () => {
-  assert.match(readme, /Version 1\.0\.0/, 'README must advertise Version 1.0.0');
-  assert.doesNotMatch(
-    readme,
-    /bewusst als 0\.8 geführt/,
-    'README must no longer claim the build is deliberately 0.8'
-  );
+test('README status badge advertises the package.json version and drops the obsolete 0.8 note', () => {
+  assert.match(readme, new RegExp(`Version ${escapedVersion()}`), `README must advertise Version ${pkg.version}`);
+  assert.doesNotMatch(readme, /bewusst als 0\.8 geführt/, 'README must no longer claim the build is deliberately 0.8');
 });

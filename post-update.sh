@@ -78,22 +78,17 @@ chmod 700 "$CONFIG_DIR/vpn" 2>/dev/null || true
 chmod 700 "$CONFIG_DIR/vpn/profiles" 2>/dev/null || true
 echo "  Verzeichnisse: OK"
 
-# ── 3b. Herstellerprofile ──
-# Neue shipped Profile (z. B. hersteller/bridge-mqtt.json, D-27 Universal-MQTT)
-# auf Bestandsboxen nachlegen — sonst erreicht ein per Update ausgeliefertes
-# Profil den /etc/dvhub/hersteller/-Ordner nie und fehlt im Hersteller-Dropdown.
-# create-if-missing: ein vorhandenes Profil wird NIE überschrieben (Operator-
-# Edits wie ein auf transport=mqtt umgestelltes victron.json sind heilig).
+# ── 3b. Herstellerprofile abgleichen (T-MANAGED-VENDOR-PROFILES) ──
+# Fehlende Profile anlegen UND ausgelieferte Bugfixes an Bestandsboxen bringen,
+# ohne Operator-Edits zu zerstören: ein UNVERÄNDERTES Profil (Hash in der
+# ausgelieferten Historie hersteller/.shipped-hashes.json) wird mit der neuen
+# Version überschrieben; ein GEÄNDERTES Profil (z. B. victron.json auf
+# transport=mqtt umgestellt) bleibt stehen — die neue Version landet als
+# <name>.dist daneben. Node-Helper (unit-getestet), non-fatal.
 if [[ -d "$APP_DIR/hersteller" ]]; then
-  for profile in "$APP_DIR/hersteller/"*.json; do
-    [[ -e "$profile" ]] || continue
-    profile_name="$(basename "$profile")"
-    if [[ ! -f "$CONFIG_DIR/hersteller/$profile_name" ]]; then
-      cp "$profile" "$CONFIG_DIR/hersteller/$profile_name"
-      chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/hersteller/$profile_name" 2>/dev/null || true
-      echo "  Herstellerprofil nachgelegt: $profile_name"
-    fi
-  done
+  node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs" "$CONFIG_DIR" "$APP_DIR" \
+    || echo "  (Herstellerprofil-Abgleich übersprungen — Node-Helper nicht ausführbar)"
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/hersteller" 2>/dev/null || true
 fi
 
 # ── 4. Self-Signed TLS Zertifikat ──
