@@ -13,16 +13,25 @@
     "Profil layout-sicher (float- vs. int+SF-Modus verschiebt die Modell-Basen).",
     "Die INNEREN Offsets folgen den SunSpec-Standardmodellen 113/123/124.",
     "",
-    "Stufe-1-Funktionsumfang: Telemetrie (AC-Leistung, SoC, Netz-Meter) +",
-    "DV-Abregelung über Model 123 (WMaxLimPct=0% + WMaxLim_Ena=1; Freigabe",
-    "Ena=0) + Negativpreis-Schutz. KEINE aktive Batterie-Steuerung (kommt mit",
-    "dem Soft-ESS-Regler, B-1103). batteryPowerW/echte PV-Aufteilung brauchen",
-    "Model-160-Support (Stufe 2).",
+    "Stufe-1-Funktionsumfang: NUR Telemetrie (AC-Leistung, SoC, Netz-Meter).",
+    "KEINE aktive Batterie-Steuerung (kommt mit dem Soft-ESS-Regler, B-1103).",
+    "batteryPowerW/echte PV-Aufteilung brauchen Model-160-Support (Stufe 2).",
+    "",
+    "⚠️ DV-ABREGELUNG IN STUFE 1 DEAKTIVIERT (2026-07-11, Vinzent82-Feldtest,",
+    "GH-PR #3): Die frühere Sequenz mappte die Victron-'Nulleinspeisung' auf",
+    "Model 123 WMaxLimPct:=0 + WMaxLim_Ena:=1. WMaxLimPct begrenzt aber die",
+    "GESAMTE Wirkleistung des Wechselrichters, nicht nur die Netzeinspeisung —",
+    "bei einer Hybrid-Anlage (GEN24 + Akku) heißt 0 %: PV lädt nur noch den",
+    "Speicher, das Haus zieht Netzstrom. Victrons PreventFeedback dagegen",
+    "versorgt das Haus weiter aus PV+Akku. Die beiden sind NICHT äquivalent.",
+    "Korrekt wäre eine Export-Limitation (Zero-Feed-in über den Smart Meter),",
+    "die nur den Netzpunkt regelt — das ist Soft-ESS-Regler-Gebiet (B-1103).",
+    "Bis dahin: dontFeedExcessAcPv.enabled=false → DVhub schreibt KEIN",
+    "WMaxLim-Register mehr. Rücksetzen einer noch aktiven Sperre: siehe",
+    "docs/FRONIUS-ABREGELUNG-RUECKSETZEN.md.",
     "",
     "STATUS BETA: Offsets/Skalen sind @sim-assumption bis zum Test am echten",
-    "GEN24 (RvrtTms-/Scale-Verifikation; siehe Backlog 12-VENDOR-FRONIUS.md).",
-    "Abregelung bleibt bei DVhub-Ausfall ggf. aktiv stehen (kein Auto-Revert) —",
-    "identisches Verhalten wie die persistenten Victron-Einspeise-Flags."
+    "GEN24 (RvrtTms-/Scale-Verifikation; siehe Backlog 12-VENDOR-FRONIUS.md)."
   ],
 
   "victron": {
@@ -54,8 +63,8 @@
       "sunspec": { "model": 124, "offset": 6 }
     },
     "minSocPct": {
-      "_comment": "Model 124 MinRsvPct (Offset +5) — nur Anzeige. Scale @sim-assumption (SF unklar); Schreiben bleibt bewusst deaktiviert (controlWrite.minSocPct).",
-      "enabled": true,
+      "_comment": "Model 124 MinRsvPct (Offset +5). DEAKTIVIERT (2026-07-11): Vinzent82s GEN24 lieferte 0xFFFF = SunSpec-'not implemented'-Sentinel → mit scale 0.01 als 655,35 % angezeigt. Offset/Verfügbarkeit am Gerät nicht bestätigt; Read bleibt aus bis Model-124-Layout verifiziert ist (Schreiben ist ohnehin deaktiviert, controlWrite.minSocPct).",
+      "enabled": false,
       "fc": 3,
       "quantity": 1,
       "signed": false,
@@ -128,11 +137,11 @@
   },
 
   "dvControl": {
-    "_comment": "DV-Abregelung über SunSpec Model 123: Sperren = WMaxLimPct:=0 % DANN WMaxLim_Ena:=1; Freigeben = WMaxLim_Ena:=0. Die Sequenz wirkt auf den gesamten WR-Ausgang und deckt damit AC- wie DC-gekoppelte Erzeugung ab (feedExcessDcPv separat daher deaktiviert).",
+    "_comment": "⚠️ DV-Abregelung in Stufe 1 DEAKTIVIERT (2026-07-11, Vinzent82-Feldtest). Die Sequenz unten setzte WMaxLimPct:=0 % + WMaxLim_Ena:=1 = GESAMT-Wirkleistung des WR auf 0. Bei Hybrid-Anlagen legt das die Hausversorgung lahm (PV lädt nur den Akku, Haus am Netz) — anders als Victrons PreventFeedback, das das Haus weiterversorgt. WMaxLimPct ist das falsche Register für eine reine Einspeise-Abregelung; die korrekte Export-Limitation (Zero-Feed-in via Smart Meter) kommt mit B-1103. Bis dahin schreibt DVhub KEIN WMaxLim-Register (dontFeedExcessAcPv.enabled=false). Die Sequenz-Definition bleibt als Referenz für den späteren korrekten Regler erhalten, ist aber inaktiv. Rücksetzen einer noch am Gerät stehenden Sperre: docs/FRONIUS-ABREGELUNG-RUECKSETZEN.md.",
     "enabled": true,
     "feedExcessDcPv": { "enabled": false },
     "dontFeedExcessAcPv": {
-      "enabled": true,
+      "enabled": false,
       "sequence": {
         "1": [
           { "point": "wMaxLimPct", "value": 0 },
@@ -144,8 +153,8 @@
       }
     },
     "negativePriceProtection": {
-      "_comment": "Der gridSetpointW-Anteil läuft bei Fronius ins Leere (Target deaktiviert, stiller No-op) — wirksam ist die Flag-Abregelung über die Sequenz oben.",
-      "enabled": true,
+      "_comment": "Ebenfalls inaktiv in Stufe 1: der gridSetpointW-Anteil läuft bei Fronius ohnehin ins Leere (Target deaktiviert), und die wirksame Sequenz (dontFeedExcessAcPv) ist deaktiviert. WMaxLimPct=0 bei Negativpreis würde eine Hybrid-Anlage genauso lahmlegen. Kehrt mit der Export-Limitation (B-1103) zurück.",
+      "enabled": false,
       "gridSetpointW": -40
     }
   }

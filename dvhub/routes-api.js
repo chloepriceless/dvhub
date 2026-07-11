@@ -509,6 +509,15 @@ export function assertNoDowngrade(targetVersion, currentVersion, { allowDowngrad
 // with optional pre-release / build metadata suffix (`-rc.1`, `+build.42`).
 export const SEMVER_TAG = /^v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$/;
 
+// T-COMMIT-PIN: /api/admin/update/apply body.ref allowlist — a gezielt-pinned
+// dev-channel commit for beta testers ("install exactly THIS bleeding-edge
+// commit"). Strict hex-SHA only (7–40 chars): blocks shell metachars AND git
+// arg-injection (a ref starting with `-` could be read as a flag like
+// `--upload-pack`). Reachability (`merge-base --is-ancestor … origin/main`) is
+// enforced separately at checkout time — same anchor as install.sh --ref — so a
+// foreign/orphaned commit can never be checked out even if it is a valid SHA.
+export const GIT_SHA_REF = /^[0-9a-f]{7,40}$/i;
+
 // W5.1 (Phase 28-01): shared, defensive self-update tag selector. Callers keep
 // fetching the tag list via `git tag --sort=-v:refname` (so the list is already
 // ranked highest-first); this pure helper just picks the FIRST line that is a real
@@ -6523,6 +6532,19 @@ export function createApiRoutes(ctx) {
           }
           targetVersion = versionStr;
         }
+        // T-COMMIT-PIN: optionaler `ref` (Commit-SHA) — installiert gezielt diesen
+        // Bleeding-Edge-Stand statt des Channel-HEAD. Strikte Hex-SHA-Validierung
+        // hier, Erreichbarkeits-Anker beim Checkout unten.
+        const rawRef = body?.ref;
+        let pinRef = null;
+        if (rawRef !== undefined && rawRef !== null && rawRef !== '') {
+          const refStr = String(rawRef).trim();
+          if (!GIT_SHA_REF.test(refStr)) {
+            pushLog('update_apply_rejected', { reason: 'invalid_ref', got: refStr.slice(0, 64) });
+            return json(res, 400, { ok: false, error: 'invalid_ref', got: refStr.slice(0, 64) });
+          }
+          pinRef = refStr;
+        }
         const repoRoot = ctx.getRepoRoot();
         const appDir = ctx.getAppDir();
         const channel = ctx.getRawCfg().updateChannel || 'stable';
@@ -6560,7 +6582,25 @@ export function createApiRoutes(ctx) {
               ? pull.stdout.trim()
               : `Updated ${rollbackRev.slice(0, 7)} → ${newRev.slice(0, 7)}`;
           };
-          if (channel === 'stable') {
+          if (pinRef) {
+            // T-COMMIT-PIN: gezielter Commit statt Channel-HEAD. Fetch, dann exakt
+            // die install.sh-Anker-Semantik: Ref muss existieren UND von origin/main
+            // erreichbar sein (kein verwaister/fremder Commit). Detached HEAD ist
+            // beabsichtigt — das nächste normale Channel-Update löst den Pin wieder
+            // auf. KEIN Downgrade-Guard (der Operator pinnt bewusst, wie --ref).
+            await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            let refSha = '';
+            try {
+              refSha = (await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `${pinRef}^{commit}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
+            } catch { refSha = ''; }
+            if (!refSha) { const e = new Error(`ref_not_found: ${pinRef}`); e.code = 'ref_not_found'; throw e; }
+            try {
+              await execFileAsync('git', ['merge-base', '--is-ancestor', refSha, 'origin/main'], { cwd: repoRoot, timeout: 5000 });
+            } catch { const e = new Error(`ref_not_reachable: ${pinRef} ist nicht von origin/main erreichbar`); e.code = 'ref_not_reachable'; throw e; }
+            await execFileAsync('git', ['checkout', '--detach', refSha], { cwd: repoRoot, timeout: 15000 });
+            pushLog('update_pinned_ref', { ref: pinRef, sha: refSha.slice(0, 7), from: rollbackRev.slice(0, 7) });
+            gitOutput = `Pinned ${rollbackRev.slice(0, 7)} → ${refSha.slice(0, 7)} (ref ${pinRef})`;
+          } else if (channel === 'stable') {
             await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
             // T-UPDATE-ANCHOR: only tags reachable from origin/main are release
             // anchors — an orphaned pre-cleanup tag (v0.4.2) must never be selected.

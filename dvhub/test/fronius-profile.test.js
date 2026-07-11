@@ -94,7 +94,14 @@ test('shipped fronius.json loads: modbus transport, scan-based points, WMaxLim s
   // Kein Setpoint-Dialekt, keine aktiven Batterie-Writes in Stufe 1.
   assert.equal(cfg.controlWrite.gridSetpointW.enabled, false);
   assert.equal(cfg.controlWrite.minSocPct.enabled, false);
-  // Abregelungs-Sequenz: sperren = Pct dann Ena, freigeben = nur Ena.
+  // 2026-07-11 (Vinzent82-Feldtest): DV-Abregelung in Stufe 1 deaktiviert —
+  // WMaxLimPct=0 legt Hybrid-Anlagen lahm (Haus am Netz). Die Sequenz-DEFINITION
+  // bleibt als Referenz für den späteren korrekten Regler (B-1103) erhalten,
+  // ist aber inaktiv geschaltet. Auch die MinRsvPct-Anzeige ist aus (0xFFFF).
+  assert.equal(cfg.dvControl.dontFeedExcessAcPv.enabled, false);
+  assert.equal(cfg.dvControl.negativePriceProtection.enabled, false);
+  assert.equal(cfg.points.minSocPct.enabled, false);
+  // Sequenz-Definition weiterhin vorhanden: sperren = Pct dann Ena, freigeben = nur Ena.
   const seq = cfg.dvControl.dontFeedExcessAcPv.sequence;
   assert.deepEqual(seq['1'].map((s) => s.point), ['wMaxLimPct', 'wMaxLimEna']);
   assert.deepEqual(seq['0'].map((s) => s.point), ['wMaxLimEna']);
@@ -142,7 +149,9 @@ test('poller resolves sunspec addresses via device scan and reads SoC + float me
 
   // Telemetrie: SoC über scale 0.01, AC-W als Float32, Meter-Block dekodiert.
   assert.equal(state.victron.soc, 57.3);
-  assert.equal(state.victron.minSocPct, 5);
+  // minSocPct-Anzeige ist deaktiviert (2026-07-11, reale GEN24 liefert 0xFFFF) →
+  // der Poller liest MinRsvPct nicht mehr, der Wert bleibt ungesetzt.
+  assert.equal(state.victron.minSocPct, undefined);
   assert.equal(state.victron.pvPowerW, 7500);
   // feed_in-Konvention: Meter meldet Einspeisung positiv → sign −1.
   assert.equal(state.meter.ok, true);
@@ -150,9 +159,12 @@ test('poller resolves sunspec addresses via device scan and reads SoC + float me
   assert.equal(state.meter.grid_l1_w, 400);
 });
 
-test('dv curtailment runs the WMaxLim sequence: block = Pct:=0 then Ena:=1, release = Ena:=0', async () => {
+test('WMaxLim sequence MECHANIK (falls via B-1103 reaktiviert): block = Pct:=0 then Ena:=1, release = Ena:=0', async () => {
   const loaded = loadFroniusEffectiveConfig();
   const cfg = loaded.effectiveConfig;
+  // Das ausgelieferte Profil hat die Abregelung deaktiviert (Vinzent82-Fix);
+  // dieser Test prüft nur die Sequenz-MECHANIK, daher hier bewusst reaktiviert.
+  cfg.dvControl.dontFeedExcessAcPv.enabled = true;
   // Adressen wie nach erfolgtem Scan.
   cfg.controlWrite.wMaxLimPct.address = 40165;
   cfg.controlWrite.wMaxLimEna.address = 40169;
@@ -194,6 +206,8 @@ test('dv curtailment runs the WMaxLim sequence: block = Pct:=0 then Ena:=1, rele
 test('sequence on UNRESOLVED sunspec point fails safely and is retried (no change-cache poisoning)', async () => {
   const loaded = loadFroniusEffectiveConfig();
   const cfg = loaded.effectiveConfig; // Adressen NICHT aufgelöst (kein Scan)
+  // Mechanik-Test → Abregelung im Test reaktivieren (im Profil deaktiviert, s.o.).
+  cfg.dvControl.dontFeedExcessAcPv.enabled = true;
 
   const state = {
     victron: { soc: 50 },
@@ -222,4 +236,34 @@ test('sequence on UNRESOLVED sunspec point fails safely and is retried (no chang
   const res = await evaluator.applyControlTarget('wMaxLimEna', 1, 'test');
   assert.equal(res.ok, false);
   assert.match(res.error, /sunspec address not resolved/);
+});
+
+test('shipped profile: DV curtailment is DISABLED → no WMaxLim write can lame the inverter (Vinzent82-Fix)', async () => {
+  const loaded = loadFroniusEffectiveConfig();
+  const cfg = loaded.effectiveConfig; // AUSGELIEFERTES Profil, unverändert
+  // Adressen gesetzt, damit ein etwaiger Write NICHT bloß am fehlenden Scan scheitert.
+  cfg.controlWrite.wMaxLimPct.address = 40165;
+  cfg.controlWrite.wMaxLimEna.address = 40169;
+
+  const state = {
+    victron: { soc: 50 },
+    schedule: { rules: [], active: {}, lastWrite: {}, manualOverride: {}, config: {}, lastEvalAt: 0 },
+    ctrl: {}
+  };
+  const transport = makeMockTransport(buildGen24Image());
+  const evaluator = createScheduleEvaluator({
+    state,
+    getCfg: () => cfg,
+    transport,
+    pushLog: () => {},
+    telemetrySafeWrite: () => {},
+    persistConfig: async () => {},
+    telemetryStore: null,
+    epexNowNext: () => null
+  });
+
+  // Sperr-Anforderung (feedIn=false): mit deaktivierter Abregelung darf NICHTS
+  // auf die Hardware gehen — sonst würde WMaxLimPct=0 die Anlage lahmlegen.
+  await evaluator.applyDvVictronControl(false);
+  assert.equal(transport.writes.length, 0, 'disabled DV curtailment must not write WMaxLim');
 });

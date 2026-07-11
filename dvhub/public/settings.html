@@ -179,6 +179,14 @@
                   <option value="dev">Bleeding Edge (Dev)</option>
                 </select>
               </div>
+              <div class="config-row" id="updatePinRefRow" hidden>
+                <span class="config-row-label">Gezielter Commit
+                  <span class="field-hint">optional &middot; nur Bleeding&nbsp;Edge</span>
+                </span>
+                <input id="updatePinRef" class="config-input mono" type="text" autocomplete="off" spellcheck="false"
+                       inputmode="latin" maxlength="40" pattern="[0-9a-fA-F]{7,40}"
+                       placeholder="z.&nbsp;B. 0ae0128 &mdash; leer = neuester Dev-Stand" />
+              </div>
               <div id="updateBanner" class="config-banner info svc-banner-margin-tl">Version wird gepr&uuml;ft...</div>
               <div id="updateChangelog" class="config-row-grid svc-changelog-block"></div>
               <div id="updateActions" class="svc-actions-block">

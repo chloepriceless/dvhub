@@ -627,6 +627,13 @@ function renderDvSignalLog() {
 }
 
 // --- Software Update ---
+// T-COMMIT-PIN: das Commit-Feld ist nur im Dev-Channel sinnvoll (Stable folgt
+// Release-Tags). Sichtbarkeit zentral an den aktiven Channel koppeln.
+function updatePinRefVisibility(channel) {
+  const row = document.getElementById('updatePinRefRow');
+  if (row) row.hidden = channel !== 'dev';
+}
+
 async function checkForUpdate() {
   setBanner('updateBanner', 'Prüfe auf Updates...', 'info');
   document.getElementById('updateChangelog').style.display = 'none';
@@ -642,6 +649,7 @@ async function checkForUpdate() {
     // Sync channel dropdown with server state
     const channelSelect = document.getElementById('updateChannel');
     if (channelSelect && data.channel) channelSelect.value = data.channel;
+    updatePinRefVisibility(data.channel);
 
     if (data.channel === 'stable') {
       const currentLabel = data.current.tag || data.current.revision;
@@ -688,11 +696,30 @@ async function checkForUpdate() {
 }
 
 async function applyUpdate() {
+  // T-COMMIT-PIN: optionaler gezielter Commit (nur Dev-Channel). Leer = Channel-HEAD.
+  const pinInput = document.getElementById('updatePinRef');
+  const pinRow = document.getElementById('updatePinRefRow');
+  const pinRef = (pinRow && !pinRow.hidden && pinInput) ? pinInput.value.trim() : '';
+  if (pinRef) {
+    if (!/^[0-9a-fA-F]{7,40}$/.test(pinRef)) {
+      setBanner('updateBanner', 'Ungültiger Commit: 7–40 Hex-Zeichen (z. B. 0ae0128).', 'error');
+      return;
+    }
+    if (!(await window.dvConfirm(
+      `Gezielten Commit installieren?\n\nDVhub wird exakt auf Commit ${pinRef} gesetzt (statt des neuesten Dev-Stands) und neu gestartet. Der Commit muss von origin/main erreichbar sein.`,
+      { title: 'Gezielten Commit installieren', okLabel: 'Installieren', variant: 'primary' }
+    ))) return;
+  }
+
   const btn = document.getElementById('applyUpdateBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Update läuft...'; }
-  setBanner('updateBanner', 'Update wird installiert — bitte warten...', 'info');
+  setBanner('updateBanner', pinRef ? `Commit ${pinRef} wird installiert — bitte warten...` : 'Update wird installiert — bitte warten...', 'info');
   try {
-    const res = await apiFetch('/api/admin/update/apply', { method: 'POST' });
+    const res = await apiFetch('/api/admin/update/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pinRef ? { ref: pinRef } : {})
+    });
     const data = await res.json();
     if (data.ok) {
       setBanner('updateBanner', 'Update installiert! Service startet neu — Seite lädt in 10 Sekunden automatisch neu.', 'success');
@@ -711,7 +738,9 @@ async function applyUpdate() {
 async function switchUpdateChannel(newChannel) {
   const channelSelect = document.getElementById('updateChannel');
   const previousChannel = newChannel === 'stable' ? 'dev' : 'stable';
-  const revertDropdown = () => { if (channelSelect) channelSelect.value = previousChannel; };
+  const revertDropdown = () => { if (channelSelect) channelSelect.value = previousChannel; updatePinRefVisibility(previousChannel); };
+  // Commit-Feld sofort auf den Zielchannel spiegeln (revert setzt es zurück).
+  updatePinRefVisibility(newChannel);
 
   const label = newChannel === 'stable' ? 'Stable (Releases)' : 'Bleeding Edge (Dev Commits)';
   // Plan 08-11 Task 1: replace native confirm() with branded dvConfirm modal.
@@ -997,6 +1026,7 @@ function initToolsPage() {
     const ch = data?.effectiveConfig?.updateChannel || 'stable';
     const sel = document.getElementById('updateChannel');
     if (sel) sel.value = ch;
+    updatePinRefVisibility(ch);
   }).catch(() => {});
   document.getElementById('loadDvLog')?.addEventListener('click', () => loadDvSignalLog());
   document.getElementById('refreshDvLog')?.addEventListener('click', () => loadDvSignalLog());
