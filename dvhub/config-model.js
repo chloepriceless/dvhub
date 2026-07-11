@@ -1206,7 +1206,7 @@ function buildFieldDefinitions() {
       path: 'dvControl.enabled',
       label: 'Aktive Anlagensteuerung (DV-Schnittstelle)',
       type: 'boolean',
-      help: 'Steuert, ob DVhub aktiv in die Wechselrichter/Anlage SCHREIBT (dynamische PV-Abregelung reg 2707/2708 + Einspeise-Freigabe). AKTIV lassen, wenn du an der Direktvermarktung mit dynamischen B\u00f6rsenpreisen teilnimmst (Einspeise-Modus = \u201eSpot\u201c). Bei FESTER EEG-Einspeiseverg\u00fctung (Einspeise-Modus = \u201eFest\u201c) und wenn du DVhub nur zum Beobachten nutzt: hier DEAKTIVIEREN \u2014 sonst regelt DVhub deine PV bei niedrigen/negativen B\u00f6rsenpreisen ab und du verlierst Einspeiseverg\u00fctung ohne Gegenwert. Der Not-Halt gibt die PV ebenfalls wieder frei.'
+      help: 'Steuert, ob DVhub aktiv in die Wechselrichter/Anlage SCHREIBT (dynamische PV-Abregelung reg 2707/2708 + Einspeise-Freigabe). AKTIV lassen, wenn du an der Direktvermarktung mit dynamischen B\u00f6rsenpreisen teilnimmst (Einspeise-Modus = \u201eSpot\u201c). Bei FESTER EEG-Einspeiseverg\u00fctung (Einspeise-Modus = \u201eFest\u201c) und wenn du DVhub nur zum Beobachten nutzt: hier DEAKTIVIEREN \u2014 sonst regelt DVhub deine PV bei niedrigen/negativen B\u00f6rsenpreisen ab und du verlierst Einspeiseverg\u00fctung ohne Gegenwert. Beim Deaktivieren gibt DVhub die Einspeisung EINMALIG aktiv wieder frei (OvervoltageFeedIn=1 / PreventFeedback=0), damit keine zuvor gesetzte Sperre am Ger\u00e4t stehen bleibt \u2014 danach schreibt es nichts mehr. Der Not-Halt gibt die PV ebenfalls wieder frei. (Bleibt DVhub ganz aus, die Venus-Settings ggf. manuell zur\u00fccksetzen \u2014 siehe docs/VICTRON-DYNAMISCHE-REGELUNG-ABSCHALTEN.md.)'
     },
     {
       section: 'schedule',

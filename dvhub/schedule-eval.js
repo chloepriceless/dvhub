@@ -299,7 +299,13 @@ export function createScheduleEvaluator(ctx) {
   async function applyDvVictronControl(feedIn) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
-    if (!dc?.enabled) return;
+    if (!dc) return;
+    // #10 (FrodoVDR): Ist die aktive Steuerung deaktiviert, darf DVhub NIE sperren —
+    // muss aber eine früher gesetzte EIGENE Sperre aufheben können. Steuer-Register
+    // sind persistent (Victron CGwacs reg 2707/2708 überleben DVhub-Aus), sonst
+    // bleibt die PV abgeregelt, obwohl DVhub „aus" ist. Deshalb bei enabled=false
+    // NUR die Freigabe (feedIn=true) zulassen, alles andere abweisen.
+    if (!dc.enabled && feedIn !== true) return;
 
     // Only write when feedIn state actually changes (first call: _lastDvFeedIn is undefined → always writes once)
     if (state.ctrl._lastDvFeedIn === feedIn) return;
@@ -998,6 +1004,16 @@ export function createScheduleEvaluator(ctx) {
       }
       await applyDvVictronControl(dcFeedIn);
       state.schedule.active.feedExcessDcPv = { value: dcFeedIn ? 1 : 0, source: dcSource, at: Date.now() };
+    } else if (cfg.dvControl) {
+      // #10 (FrodoVDR): Steuerung deaktiviert (Volleinspeiser / „nur beobachten") →
+      // DVhub darf keine eigene Abregelung am Gerät stehen lassen. Einmalig
+      // (change-detected) die Einspeisung freigeben — reg 2707/2708 bzw. die
+      // CGwacs-Settings auf „frei" — dann Ruhe (kein weiterer Write). Auch beim
+      // ersten Eval nach Neustart, damit eine persistente Sperre weggeräumt wird.
+      // Prinzip [[feedback_neutralize_on_disable]]: was DVhub setzt, setzt es beim
+      // Deaktivieren wieder zurück.
+      await applyDvVictronControl(true);
+      state.schedule.active.feedExcessDcPv = { value: 1, source: 'control_disabled_release', at: Date.now() };
     }
 
     // Auto-Deaktivierung: Regeln die aktiv waren aber deren Zeitfenster abgelaufen ist
