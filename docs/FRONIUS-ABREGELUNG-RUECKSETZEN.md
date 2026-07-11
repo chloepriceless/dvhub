@@ -92,5 +92,7 @@ sudo systemctl restart dvhub
 > (`cp … fronius.json fronius.json.bak`) und die Änderungen danach wieder einpflegen — der
 > `cp` oben ersetzt die Datei vollständig.
 
-*(Ein automatischer, nicht-überschreibender Profil-Update-Mechanismus ist geplant — bis dahin
-gilt dieser einmalige Handgriff.)*
+*Ab DVhub 1.0.2 ist der manuelle `cp` in der Regel nicht mehr nötig: Das Update aktualisiert
+ein **unverändertes** Profil automatisch auf die neue Version; ein von dir **geändertes**
+Profil bleibt stehen und die neue Version liegt als `fronius.json.dist` bereit — siehe
+[`docs/HERSTELLERPROFIL-MIGRIEREN.md`](HERSTELLERPROFIL-MIGRIEREN.md).*
