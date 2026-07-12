@@ -124,6 +124,20 @@ export const MAX_MINSOC_PCT = 100;
 export const MAX_BATTERY_DISCHARGE_W = 30_000;
 export const MAX_CHARGE_CURRENT_A = 1000;
 
+// Log-Level aus dem Event-Namen ableiten (2026-07-12, Operator-Report: der
+// Leitstand-Filter war wertlos, weil 240 von 245 *_error-pushLog-Aufrufern kein
+// Level übergeben → alles INFO, control_write_error trug ein INFO-Badge).
+// Zentrale Heuristik statt 240 Callsites anzufassen: ein EXPLIZIT übergebenes
+// Level (options.level/severity oder String-Shorthand) gewinnt immer; nur der
+// Default wird hier abgeleitet. Wortgrenzen per _-Segment, damit z. B.
+// „mirror" oder „warnlampe" nicht fehlklassifiziert werden.
+export function inferLogLevel(event) {
+  const e = String(event || '').toLowerCase();
+  if (/(^|_)(error|failed|failure|crash|fatal)(_|$)/.test(e)) return 'error';
+  if (/(^|_)(warn|warning|stale|rejected|skipped|rollback)(_|$)/.test(e)) return 'warn';
+  return 'info';
+}
+
 // Pure bounds check for the always-REJECT control targets. Returns null when in
 // range, else { error, max? } — the shape mirrors the historical
 // /api/control/write 400 responses verbatim. minSocPct is intentionally NOT

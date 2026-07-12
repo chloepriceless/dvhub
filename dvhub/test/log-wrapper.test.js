@@ -134,3 +134,41 @@ describe('Plan 09-06 D-09: /api/log payload + pushLog signature', () => {
     assert.match(src, /const row = \{ ts: nowIso\(\), event, level: level/);
   });
 });
+
+// 2026-07-12 (Operator-Report „Level-Filter wertlos"): 240 von 245 *_error-
+// pushLog-Aufrufern übergeben kein Level → alles landete als INFO im Ring und
+// der Leitstand-Filter zeigte unter ERROR nichts. inferLogLevel leitet den
+// DEFAULT aus dem Event-Namen ab; ein explizites Level gewinnt weiterhin
+// (pushLog: options.severity || options.level || inferLogLevel(event)).
+describe('inferLogLevel: Event-Name → Default-Level (server-utils.js)', async () => {
+  const { inferLogLevel } = await import('../server-utils.js');
+
+  it('…_error/_failed/_failure → error', () => {
+    assert.equal(inferLogLevel('control_write_error'), 'error');
+    assert.equal(inferLogLevel('dv_victron_write_error'), 'error');
+    assert.equal(inferLogLevel('update_failed'), 'error');
+    assert.equal(inferLogLevel('error_boot'), 'error');
+  });
+
+  it('…_rejected/_stale/_warn/_rollback → warn', () => {
+    assert.equal(inferLogLevel('evcc_battery_protect_rejected'), 'warn');
+    assert.equal(inferLogLevel('telemetry_stale'), 'warn');
+    assert.equal(inferLogLevel('update_rollback'), 'warn');
+  });
+
+  it('normale Events bleiben info; Segment-Grenzen greifen (kein Substring-Match)', () => {
+    assert.equal(inferLogLevel('dv_victron_write'), 'info');
+    assert.equal(inferLogLevel('schedule_stop_soc_reached'), 'info');
+    assert.equal(inferLogLevel('sunspec_scan_ok'), 'info');
+    // "errors"/"mirrors" sind KEIN _error-Segment:
+    assert.equal(inferLogLevel('mirrors_synced'), 'info');
+    assert.equal(inferLogLevel(''), 'info');
+    assert.equal(inferLogLevel(null), 'info');
+  });
+
+  it('pushLog nutzt die Inferenz als Default (Source-Vertrag)', async () => {
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+    assert.match(src, /options\.severity \|\| options\.level \|\| inferLogLevel\(event\)/);
+  });
+});

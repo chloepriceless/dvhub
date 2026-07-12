@@ -2264,36 +2264,47 @@ function ensureLogLevelFilterUi() {
   const logBox = document.getElementById('logBox');
   if (!logBox) return null;
   let select = document.getElementById('log-level-filter');
-  if (select) return select;
-  // Inject the dropdown right above the logBox. Container/styling stays
-  // minimal — the existing .bottom-card layout absorbs it inline.
-  select = document.createElement('select');
-  select.id = 'log-level-filter';
-  select.className = 'level-filter';
-  // CSP-safe: individual property setters (cssText blocked by style-src).
-  select.style.marginBottom = '6px';
-  select.style.padding = '2px 8px';
-  select.style.fontSize = '0.85em';
-  const levels = [
-    ['all', 'Alle Level'],
-    ['debug', 'DEBUG'],
-    ['info', 'INFO'],
-    ['warn', 'WARN'],
-    ['error', 'ERROR']
-  ];
-  for (const [value, label] of levels) {
-    const opt = document.createElement('option');
-    opt.value = value;
-    opt.textContent = label;
-    if (value === dashboardLogState.filter) opt.selected = true;
-    select.appendChild(opt);
+  if (!select) {
+    // Inject the dropdown right above the logBox. Container/styling stays
+    // minimal — the existing .bottom-card layout absorbs it inline.
+    select = document.createElement('select');
+    select.id = 'log-level-filter';
+    select.className = 'level-filter';
+    // CSP-safe: individual property setters (cssText blocked by style-src).
+    select.style.marginBottom = '6px';
+    select.style.padding = '2px 8px';
+    select.style.fontSize = '0.85em';
+    const levels = [
+      ['all', 'Alle Level'],
+      ['debug', 'DEBUG'],
+      ['info', 'INFO'],
+      ['warn', 'WARN'],
+      ['error', 'ERROR']
+    ];
+    for (const [value, label] of levels) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      if (value === dashboardLogState.filter) opt.selected = true;
+      select.appendChild(opt);
+    }
+    // Insert dropdown right before the <pre id="logBox">.
+    logBox.parentNode.insertBefore(select, logBox);
   }
-  select.addEventListener('change', () => {
-    dashboardLogState.filter = select.value;
-    rerenderDashboardLog();
-  });
-  // Insert dropdown right before the <pre id="logBox">.
-  logBox.parentNode.insertBefore(select, logBox);
+  // Change-Handler IMMER (einmalig) binden — auch am STATISCHEN Markup aus
+  // index.html. Der frühere Code hängte den Handler nur an sein selbst
+  // injiziertes Element; seit das Dropdown fest im Card-Head steht, bewirkte
+  // ein Wechsel darum nichts (Operator-Report 2026-07-12: „bleibt immer
+  // gleich"). dataset.bound verhindert Doppel-Registrierung über die 3-s-Polls.
+  if (!select.dataset.bound) {
+    select.dataset.bound = '1';
+    select.addEventListener('change', () => {
+      // Statisches Markup nutzt value="" für „Alle Level" → auf 'all'
+      // normalisieren, sonst filtert (r.level === '') alles weg.
+      dashboardLogState.filter = select.value || 'all';
+      rerenderDashboardLog();
+    });
+  }
   return select;
 }
 

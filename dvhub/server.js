@@ -58,7 +58,8 @@ import { discoverSystems as discoverConfiguredSystems } from './system-discovery
 import {
   nowIso,
   gridDirection,
-  shouldAlarmTelemetryDown
+  shouldAlarmTelemetryDown,
+  inferLogLevel
 } from './server-utils.js';
 // Item 25-03: atomarer Schreibpfad für die NOT-HALT-Persistenz (tmp+rename).
 // Eigenes server-freies Modul, damit der Helper unit-testbar bleibt, ohne den
@@ -851,7 +852,10 @@ function pushLog(event, details = {}, levelOrOptions = {}) {
   } else {
     options = levelOrOptions || {};
     // severity wins over level if both provided (Phase 09-01 callers pass severity).
-    level = options.severity || options.level || 'info';
+    // Ohne explizites Level: aus dem Event-Namen ableiten (…_error → error,
+    // …_rejected/_stale → warn) — sonst trägt jeder Schreibfehler ein
+    // INFO-Badge und der Leitstand-Level-Filter ist wertlos (2026-07-12).
+    level = options.severity || options.level || inferLogLevel(event);
   }
   if (!VALID_LOG_LEVELS.has(level)) level = 'info';
 
