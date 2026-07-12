@@ -107,13 +107,14 @@ const SECTIONS = [
     label: 'Vorhersage & PV',
     description: 'PV-Anlage, Standort, Solcast/pvnode API-Keys und Wetter-Provider.',
     destination: 'services'
-  },
-  {
-    id: 'ml',
-    label: 'ML & Forecast-Korrektur',
-    description: 'ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-    destination: 'services'
   }
+  // Sektion 'ml' ENTFERNT aus der GUI (Christin 2026-07-12): ML-Korrektur ist
+  // seit #999.17 global deaktiviert (lightgbm v1 squashte Tages-Peaks) — die
+  // Einstellungs-Karte „ML & Forecast-Korrektur" bot eine tote Funktion an.
+  // cfg.ml (createDefaultConfig) + Backend-Module bleiben erhalten, damit
+  // bestehende Configs mit ml-Block weiter laden/speichern; bei einer
+  // Re-Aktivierung die Felder (section 'ml') hier + in buildFieldDefinitions
+  // wieder einführen.
 ];
 
 const SETUP_WIZARD_STEPS = [
@@ -2386,95 +2387,12 @@ function buildFieldDefinitions() {
       help: 'DVhub Price API Endpunkt. Standard: https://dvhub.online'
     },
 
-    // --- ML & Forecast-Korrektur ---
-    {
-      section: 'ml',
-      group: 'mlCorrection',
-      groupLabel: 'ML & Forecast-Korrektur',
-      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-      path: 'ml.mlEnabled',
-      label: 'ML-Korrektur aktiviert',
-      type: 'boolean',
-      help: 'Aktiviert die ML-basierte PV-Forecast-Korrektur (Tier 2+).'
-    },
-    {
-      section: 'ml',
-      group: 'mlCorrection',
-      groupLabel: 'ML & Forecast-Korrektur',
-      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-      path: 'ml.mlModelDir',
-      label: 'Modell-Verzeichnis',
-      type: 'text',
-      help: 'Pfad fuer trainierte ML-Modelle.'
-    },
-    {
-      section: 'ml',
-      group: 'mlCorrection',
-      groupLabel: 'ML & Forecast-Korrektur',
-      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-      path: 'ml.mlTrainingHour',
-      label: 'Training-Stunde (UTC)',
-      type: 'number',
-      min: 0,
-      max: 23,
-      help: 'Stunde fuer taegliches Re-Training (UTC).'
-    },
-    {
-      section: 'ml',
-      group: 'mlCorrection',
-      groupLabel: 'ML & Forecast-Korrektur',
-      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-      path: 'ml.mlTrainingMinute',
-      label: 'Training-Minute',
-      type: 'number',
-      min: 0,
-      max: 59,
-      help: 'Minute fuer taegliches Re-Training.'
-    },
-    {
-      section: 'ml',
-      group: 'mlCorrection',
-      groupLabel: 'ML & Forecast-Korrektur',
-      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-      path: 'ml.mlMinDataDays',
-      label: 'Min. Datentage (Linear)',
-      type: 'number',
-      min: 7,
-      max: 365,
-      help: 'Mindestanzahl Tage fuer Linear-Regression-Training.'
-    },
-    {
-      section: 'ml',
-      group: 'mlCorrection',
-      groupLabel: 'ML & Forecast-Korrektur',
-      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-      path: 'ml.mlSlidingWindowMonths',
-      label: 'Datenfenster (Monate)',
-      type: 'number',
-      min: 3,
-      max: 24,
-      help: 'Sliding Window fuer Trainingsdaten.'
-    },
-    {
-      section: 'ml',
-      group: 'mlCorrection',
-      groupLabel: 'ML & Forecast-Korrektur',
-      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-      path: 'ml.sfEnabled',
-      label: 'StatsForecast aktiviert',
-      type: 'boolean',
-      help: 'StatsForecast Lastvorhersage statt SQL-Rollups (Tier 2+).'
-    },
-    {
-      section: 'ml',
-      group: 'mlCorrection',
-      groupLabel: 'ML & Forecast-Korrektur',
-      groupDescription: 'Konfiguration fuer ML-basierte PV-Forecast-Korrektur und StatsForecast Lastvorhersage.',
-      path: 'ml.sfUseMstl',
-      label: 'MSTL aktiviert',
-      type: 'boolean',
-      help: 'MSTL Multi-Saisonalitaet (Tier 3). Tier 2 nutzt einfaches AutoARIMA.'
-    },
+    // --- ML & Forecast-Korrektur: GUI-Felder ENTFERNT (Christin 2026-07-12) ---
+    // ML ist seit #999.17 global deaktiviert (lightgbm v1 squashte Tages-Peaks);
+    // die 8 Felder (ml.mlEnabled, mlModelDir, mlTrainingHour/-Minute,
+    // mlMinDataDays, mlSlidingWindowMonths, sfEnabled, sfUseMstl) boten eine
+    // tote Funktion an. cfg.ml in createDefaultConfig bleibt (Config-Root +
+    // Backward-Compat); bei Re-Aktivierung Felder + Sektion 'ml' wiederherstellen.
 
   ];
 
