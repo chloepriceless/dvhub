@@ -1999,16 +1999,21 @@ function buildFieldDefinitions() {
       groupLabel: 'PV-Anlage',
       groupDescription: 'PV-Konfiguration f\u00fcr die Ertragsprognose.',
       path: 'forecast.pv.model',
-      label: 'PV-Modell',
+      label: 'PV-Prognose-Quelle',
       type: 'select',
+      // Labels 2026-07-12 (Christin): Das Ensemble mischt laengst ALLE
+      // liefernden Dienste (Solcast, pvnode, pvlib, VRM, Forecast.Solar,
+      // Open-Meteo) inverse-MAE-gewichtet \u2014 das alte Label \u201eSolcast + pvlib"
+      // fuer 'both' war irrefuehrend. Values bleiben unveraendert
+      // (Backward-Compat: bestehende Configs tragen 'both'/'auto').
       options: [
-        { value: 'auto', label: 'Auto (bester verf\u00fcgbarer Dienst)' },
-        { value: 'pvlib', label: 'pvlib (lokal, Open-Meteo Wetter)' },
-        { value: 'solcast', label: 'Solcast (Cloud API)' },
-        { value: 'both', label: 'Solcast + pvlib (Ensemble)' },
-        { value: 'pvnode', label: 'pvnode (Cloud API)' }
+        { value: 'both', label: 'Ensemble \u2014 alle aktiven Dienste (empfohlen)' },
+        { value: 'auto', label: 'Automatisch \u2014 verf\u00fcgbare Cloud-/Wetterdienste (ohne lokales pvlib)' },
+        { value: 'solcast', label: 'Nur Solcast' },
+        { value: 'pvnode', label: 'Nur pvnode' },
+        { value: 'pvlib', label: 'Nur pvlib (lokale Berechnung)' }
       ],
-      help: 'Welcher Dienst die PV-Prognose berechnet. Auto w\u00e4hlt den besten verf\u00fcgbaren. \u201eSolcast + pvlib (Ensemble)\u201c mischt beide (plus die freien Wetterdienste) inverse-MAE-gewichtet.'
+      help: 'Woher die PV-Prognose kommt. Das Ensemble mischt alle Dienste, die Daten liefern (z. B. Solcast, pvnode, pvlib, VRM, Forecast.Solar, Open-Meteo) \u2014 je treffsicherer ein Dienst zuletzt war, desto mehr Gewicht bekommt er. Die \u201eNur \u2026\u201c-Auswahl ist f\u00fcr Diagnosezwecke gedacht.'
     },
     {
       section: 'forecast',
