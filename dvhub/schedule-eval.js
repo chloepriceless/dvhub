@@ -94,8 +94,20 @@ export function createScheduleEvaluator(ctx) {
     const scale = Number(conf.scale ?? 1);
     const offset = Number(conf.offset ?? 0);
     if (!Number.isFinite(scale) || scale === 0) throw new Error('invalid write scale');
-    const engineeringValue = Number(value);
+    let engineeringValue = Number(value);
     if (!Number.isFinite(engineeringValue)) throw new Error('invalid write value');
+
+    // rawSentinels (2026-07-12, reg-2704-Scale-Fix): Sentinel-Werte sind MODES,
+    // keine Messwerte — sie gehen UNskaliert aufs Register. Victron MaxDischarge-
+    // Power (2704): 0 = Entladung sperren, -1 = unbegrenzt; das Register selbst
+    // zählt in 10-W-Schritten (scale 10). Ohne Passthrough würde -1 mit
+    // scale 10 zu round(-0.1) = 0 — aus „unbegrenzt" würde „gesperrt".
+    const rawSentinels = Array.isArray(conf.rawSentinels) ? conf.rawSentinels.map(Number) : [];
+    if (rawSentinels.includes(engineeringValue)) {
+      // Sentinel 1:1 kodieren: scale/offset überspringen, Typ-Encoding unten
+      // (int16-Zweierkomplement für -1 → 0xFFFF) läuft normal weiter.
+      return toRawForWrite(engineeringValue, { ...conf, scale: 1, offset: 0, rawSentinels: [] });
+    }
 
     const writeTypeRaw = String(conf.writeType || (conf.signed ? 'int16' : 'uint16')).toLowerCase();
     const writeType = writeTypeRaw === 'signed' || writeTypeRaw === 's16'

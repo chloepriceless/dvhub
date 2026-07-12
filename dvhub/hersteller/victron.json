@@ -39,7 +39,7 @@
     "gridSetpointW": { "enabled": true, "fc": 16, "address": 2716, "writeType": "int32", "signed": true, "scale": 1, "offset": 0, "wordOrder": "be" },
     "chargeCurrentA": { "enabled": true, "fc": 6, "address": 2705, "writeType": "int16", "signed": true, "scale": 1, "offset": 0, "wordOrder": "be" },
     "minSocPct": { "enabled": true, "fc": 6, "address": 2901, "writeType": "uint16", "signed": false, "scale": 0.1, "offset": 0, "wordOrder": "be" },
-    "maxDischargeW": { "enabled": true, "fc": 6, "address": 2704, "writeType": "int16", "signed": true, "scale": 1, "offset": 0, "wordOrder": "be" }
+    "maxDischargeW": { "_comment": "Venus /Settings/CGwacs/MaxDischargePower: Register zählt in 10-W-Schritten (Victron-Scalefactor 0.1) → scale 10 (raw 2400 = 24 000 W). Sentinels gehen UNskaliert: -1 = unbegrenzt, 0 = Entladung sperren (rawSentinels, sonst würde -1 zu 0 gerundet = Sperre).", "enabled": true, "fc": 6, "address": 2704, "writeType": "int16", "signed": true, "scale": 10, "offset": 0, "wordOrder": "be", "rawSentinels": [-1, 0] }
   },
   "dvControl": {
     "enabled": true,

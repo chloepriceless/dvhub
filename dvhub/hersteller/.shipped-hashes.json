@@ -2,25 +2,26 @@
   "_doc": "sha256 aller je ausgelieferten Versionen jedes Herstellerprofils. Genutzt von scripts/reconcile-vendor-profiles.mjs: aktives Profil mit bekanntem Hash = unverändert → beim Update überschrieben; unbekannter Hash = Operator-Edit → neue Version als .dist. Regenerieren mit scripts/gen-vendor-profile-hashes.mjs.",
   "profiles": {
     "bridge-mqtt.json": [
-      "dc80c244db39b4e3a172712998cfedd15c95536c95029da1ab4a286ecf68b8bd",
-      "eadaa1e82276447c69fba651d2d8adc2fc5542891db105c2cbfa07fd13040dfb"
+      "eadaa1e82276447c69fba651d2d8adc2fc5542891db105c2cbfa07fd13040dfb",
+      "dc80c244db39b4e3a172712998cfedd15c95536c95029da1ab4a286ecf68b8bd"
     ],
     "deye-lv.json": [
-      "f890da9c8ceced5e0cf06d0cf80a23a2868289e884b2f87654fe25fb5f770b24",
-      "10f1123b8c2dc67e39736616437263676111863cdb423743e35b59320f08da03"
+      "10f1123b8c2dc67e39736616437263676111863cdb423743e35b59320f08da03",
+      "f890da9c8ceced5e0cf06d0cf80a23a2868289e884b2f87654fe25fb5f770b24"
     ],
     "fronius.json": [
+      "f6a2b6a4be777ffac20f637c06ee77a1580fbceb8429638295c5154b2e4d1d1e",
       "5a83d3c250562af2c1a5ab70711b83f4fe849b0f87e5b7543ec3c0a811375518",
       "2e3d777202c22a233b0fe6ca8a68652948b0bdb887fccdb05f6f1c81c78cdb27",
-      "1471d1801c4b6a57554caee55945779d56ed07045abaa3a33ff04264ccc3da92",
-      "f6a2b6a4be777ffac20f637c06ee77a1580fbceb8429638295c5154b2e4d1d1e"
+      "1471d1801c4b6a57554caee55945779d56ed07045abaa3a33ff04264ccc3da92"
     ],
     "victron.json": [
       "fb88ba09348c807e4a318cf75ca261e28f1ba578bd17706073ef8c14afc53c20",
       "8625ff52b2e50ddc6d7e655c5b5d0c2e8b114a0ff5fae7ae46d404a0d39df2d8",
       "534cd7aab66502547eb5990b4a6d8ed502ad9be2621d0fc1a22c7515e80fac4f",
       "9c6e3890104fb959e1d5384e5ff23868f4f258fd244d6850e736b00081b3168f",
-      "a3fbefea3fe9207c655d24ff3546f9c9181df4cba1e211c06cc0728cebc0668b"
+      "a3fbefea3fe9207c655d24ff3546f9c9181df4cba1e211c06cc0728cebc0668b",
+      "f208e557d44ff16f27480492abf1c5b729e21fea56dba3d7ab1c261f972408b1"
     ]
   }
 }

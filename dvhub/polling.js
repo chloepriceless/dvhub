@@ -143,6 +143,11 @@ export function createPoller(ctx) {
     }
     let v = regs[0];
     if (conf.signed) v = s16(v);
+    // rawSentinels (2026-07-12, reg-2704-Scale-Fix): Sentinel-Rohwerte sind
+    // MODES (Victron 2704: -1 = unbegrenzt, 0 = gesperrt) und werden NICHT
+    // skaliert — sonst würde -1 mit scale 10 als „-10 W" angezeigt.
+    const rawSentinels = Array.isArray(conf.rawSentinels) ? conf.rawSentinels.map(Number) : [];
+    if (rawSentinels.includes(Number(v))) return Number(v);
     v = Number(v) * scale + offset;
     return Number(v.toFixed(3));
   }
