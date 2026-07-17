@@ -2323,9 +2323,10 @@
     if (t && t.id === 'mid-source-mode') { midApplyMode(t.value); }
   });
 
-  // === DV-EOS Drawer Wiring (2026-06-13) ===
-  // Read-only status of the DV-EOS fork optimizer + a live reachability ping
-  // (/api/integrations/dveos). EOS engine config itself lives in EOSdash.
+  // === DV-EOS Drawer Wiring (2026-06-13, URL editierbar 2026-07-17) ===
+  // Status of the EOS optimizer + a live reachability ping
+  // (/api/integrations/dveos). The endpoint URL is editable so DVhub can be
+  // pointed at any EOS instance; engine config itself lives in EOSdash.
   async function loadDveosDrawer() {
     var el = function (id) { return document.getElementById(id); };
     try {
@@ -2338,7 +2339,9 @@
       if (el('dveos-enabled')) el('dveos-enabled').textContent = d.enabled ? 'Ja' : 'Nein';
       if (el('dveos-source')) el('dveos-source').textContent = srcLabel;
       if (el('dveos-active')) el('dveos-active').textContent = d.active ? 'EOS führt die Steuerung' : 'EOS nicht führend';
-      if (el('dveos-url')) el('dveos-url').textContent = d.url || '—';
+      var urlInput = el('dveos-url-input');
+      // Don't clobber an edit in progress when the drawer reloads after save.
+      if (urlInput && document.activeElement !== urlInput) urlInput.value = d.url || '';
       if (el('dveos-reachable')) el('dveos-reachable').textContent = d.reachable ? '✓ erreichbar' : '✗ nicht erreichbar';
       var st = el('dveos-status');
       if (st) {
@@ -2357,6 +2360,40 @@
       showDrawerToast('dveos', 'err', '✗ DV-EOS-Status laden fehlgeschlagen: ' + e.message);
     }
   }
+  async function saveDveosUrl(buttonEl) {
+    var input = document.getElementById('dveos-url-input');
+    var url = input ? input.value.trim() : '';
+    if (!url) {
+      showDrawerToast('dveos', 'err', '✗ Bitte eine EOS-URL angeben (z.B. http://127.0.0.1:8503).');
+      return;
+    }
+    var orig = buttonEl ? buttonEl.textContent : '';
+    if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = 'Speichere…'; }
+    try {
+      var res = await apiFetch('/api/integrations/dveos', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (res.ok && data.ok) {
+        showDrawerToast('dveos', 'ok', '✓ EOS-Endpunkt gespeichert.');
+        setTimeout(loadDveosDrawer, 0);
+      } else if (data.error === 'invalid_eos_proxy_url') {
+        showDrawerToast('dveos', 'err', '✗ Ungültige URL: http:// nur zu privaten Adressen (LAN/localhost), https:// beliebig.');
+      } else {
+        showDrawerToast('dveos', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+      }
+    } catch (e) {
+      showDrawerToast('dveos', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = orig; }
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var saveBtn = e.target.closest('#dveos-save');
+    if (saveBtn) { saveDveosUrl(saveBtn); return; }
+  });
 
   // === Integration-specific Logs Drawer (2026-06-13) ===
   // The card "Logs" link filters the live /api/log ring to entries whose `event`

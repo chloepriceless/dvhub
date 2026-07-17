@@ -542,8 +542,9 @@
         <div class="dv-drawer-toast" id="dv-drawer-mid-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
 
-      <!-- DV-EOS optimizer status drawer (2026-06-13). Read-only status of the
-           DV-EOS fork + live reachability; engine config lives in EOSdash. -->
+      <!-- DV-EOS optimizer drawer (2026-06-13, URL editierbar 2026-07-17).
+           Status + live reachability; the endpoint URL points DVhub at any
+           EOS instance (fork or vanilla). Engine config lives in EOSdash. -->
       <div class="dv-drawer-backdrop" id="dv-drawer-dveos-backdrop" hidden></div>
       <aside class="dv-drawer" id="dv-drawer-dveos" role="dialog" aria-modal="true"
              aria-labelledby="dv-drawer-dveos-title" hidden>
@@ -556,8 +557,9 @@
         </header>
         <div class="dv-drawer-body" id="dv-drawer-dveos-body">
           <p class="dv-drawer-intro">
-            Dein <strong>DV-EOS-Fork</strong> (nicht das Standard-EOS) als
-            Arbitrage-Optimizer. Die EOS-Engine selbst wird &uuml;ber EOSdash konfiguriert.
+            <strong>EOS</strong> als Arbitrage-Optimizer &mdash; standardm&auml;&szlig;ig der
+            lokal installierte <strong>DV-EOS-Fork</strong>, per URL auch jede andere
+            EOS-Installation. Die EOS-Engine selbst wird &uuml;ber EOSdash konfiguriert.
           </p>
           <div class="dv-field-validation" id="dveos-status" hidden>&mdash;</div>
           <div class="dv-info-box">
@@ -574,16 +576,22 @@
               <span class="dv-info-value mono" id="dveos-active">&mdash;</span>
             </div>
             <div class="dv-info-row">
-              <span class="dv-info-label">EOS-Proxy</span>
-              <span class="dv-info-value mono" id="dveos-url">&mdash;</span>
-            </div>
-            <div class="dv-info-row">
               <span class="dv-info-label">Erreichbar</span>
               <span class="dv-info-value mono" id="dveos-reachable">&mdash;</span>
             </div>
           </div>
+          <label class="dv-field">
+            <span class="field-label">EOS-Endpunkt (URL)</span>
+            <input type="text" class="input mono" id="dveos-url-input"
+                   placeholder="http://127.0.0.1:8503" autocomplete="off" spellcheck="false" maxlength="512">
+            <span class="field-hint">Beliebige EOS-Installation anbindbar (DV-EOS-Fork oder vanilla),
+              z.B. <code>http://192.168.1.50:8503</code>. <code>http://</code> nur zu privaten
+              Adressen (LAN), <code>https://</code> beliebig. Vanilla-EOS ohne DV-Patches:
+              15-min-Slots und Batterie&rarr;Netz-Arbitrage entfallen.</span>
+          </label>
           <div class="dv-drawer-actions">
-            <a class="btn sm primary" href="/eosdash/" target="_blank" rel="noopener">EOSdash &ouml;ffnen</a>
+            <button type="button" class="btn sm primary" id="dveos-save">Speichern</button>
+            <a class="btn sm" href="/eosdash/" target="_blank" rel="noopener">EOSdash &ouml;ffnen</a>
           </div>
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-dveos-toast" role="status" aria-live="polite" hidden>&mdash;</div>

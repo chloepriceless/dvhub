@@ -3887,6 +3887,43 @@ export function createApiRoutes(ctx) {
       });
     }
 
+    // Editable EOS endpoint (2026-07-17): the drawer may point DVhub at ANY
+    // EOS instance (fork or vanilla) instead of the locally provisioned one.
+    // Same SSRF rule as the /api/config save-guard (B2): http only to
+    // RFC1918/loopback, https to any host — the adapter fetches this URL
+    // server-side and relays responses.
+    if (url.pathname === '/api/integrations/dveos' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object' || typeof body.url !== 'string') {
+        return json(res, 400, { ok: false, error: 'url required' });
+      }
+      const candidate = body.url.trim().replace(/\/+$/, '').slice(0, 512);
+      let eu;
+      try { eu = new URL(candidate); } catch { /* eu stays undefined → reject below */ }
+      const eosUrlOk = eu && (
+        eu.protocol === 'https:'
+        || (eu.protocol === 'http:' && (isRfc1918OrLoopback(eu.hostname) || eu.hostname === 'localhost'))
+      );
+      if (!eosUrlOk) {
+        return json(res, 400, { ok: false, error: 'invalid_eos_proxy_url' });
+      }
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      if (!next.optimizer || typeof next.optimizer !== 'object') next.optimizer = {};
+      if (!next.optimizer.eosProxy || typeof next.optimizer.eosProxy !== 'object') next.optimizer.eosProxy = {};
+      next.optimizer.eosProxy.url = candidate;
+      try {
+        ctx.saveAndApplyConfig(next);
+      } catch (e) {
+        pushLog('dveos_url_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('dveos_url_saved', { url: candidate }, actorContext(req));
+      return json(res, 200, { ok: true, url: candidate });
+    }
+
     if (url.pathname === '/api/integrations/mid' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
       let body;
