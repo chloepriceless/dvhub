@@ -1305,6 +1305,61 @@ function buildFieldDefinitions() {
     },
     {
       section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Beta: Der EV-Plan wird berechnet und angezeigt; die automatische Umsetzung ans Fahrzeug (evcc) und die Live-SoC-Kopplung folgen in einem sp\u00e4teren Update.',
+      groupOrder: 21,
+      path: 'optimizer.eosOptimizeEv',
+      label: 'E-Auto mitoptimieren',
+      type: 'boolean',
+      default: false,
+      help: 'AN: DVhub meldet das Fahrzeug an EOS (max_electric_vehicles=1) und EOS plant dessen Ladung im Horizont mit. AUS (Standard): EOS optimiert nur den Hausakku.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Beta: Der EV-Plan wird berechnet und angezeigt; die automatische Umsetzung ans Fahrzeug (evcc) und die Live-SoC-Kopplung folgen in einem sp\u00e4teren Update.',
+      groupOrder: 21,
+      path: 'optimizer.evCapacityWh',
+      label: 'Akku-Kapazit\u00e4t Fahrzeug (Wh)',
+      type: 'number',
+      default: 50000,
+      min: 1000,
+      step: 1000,
+      help: 'Netto-Kapazit\u00e4t der Fahrzeugbatterie in Wattstunden (z.B. 50000 = 50 kWh).'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Beta: Der EV-Plan wird berechnet und angezeigt; die automatische Umsetzung ans Fahrzeug (evcc) und die Live-SoC-Kopplung folgen in einem sp\u00e4teren Update.',
+      groupOrder: 21,
+      path: 'optimizer.evMaxChargeW',
+      label: 'Max. Ladeleistung (W)',
+      type: 'number',
+      default: 5000,
+      min: 1000,
+      step: 100,
+      help: 'Maximale AC-Ladeleistung der Wallbox/des Fahrzeugs in Watt (z.B. 11000 f\u00fcr 3-phasig 16 A).'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Beta: Der EV-Plan wird berechnet und angezeigt; die automatische Umsetzung ans Fahrzeug (evcc) und die Live-SoC-Kopplung folgen in einem sp\u00e4teren Update.',
+      groupOrder: 21,
+      path: 'optimizer.evMinSocPct',
+      label: 'Ziel-/Mindest-SoC (%)',
+      type: 'number',
+      default: 70,
+      min: 0,
+      max: 100,
+      step: 5,
+      help: 'SoC, den EOS im Planungshorizont f\u00fcr das Fahrzeug anstrebt \u2014 so g\u00fcnstig wie m\u00f6glich (PV-Mittag/Billig-Nacht). Keine harte Uhrzeit-Deadline; f\u00fcr \u201emuss um 7 Uhr voll" zus\u00e4tzlich den evcc-Ladeplan nutzen.'
+    },
+    {
+      section: 'schedule',
       group: 'smallMarketAutomation',
       groupLabel: 'Kleine B\u00f6rsenautomatik',
       groupDescription: 'Automatische Entladeplanung basierend auf B\u00f6rsenpreisen.',
@@ -2695,6 +2750,13 @@ export function createDefaultConfig() {
     },
     optimizer: {
       eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 },
+      // EOS → E-Auto (Beta): opt-in EV co-optimization. Defaults MATCH the
+      // long-standing fallbacks in eos-config-sync.js buildEosElectricVehicles
+      // (50 kWh / 5 kW / 70 %) so legalizing the fields changes no behavior.
+      eosOptimizeEv: false,
+      evCapacityWh: 50000,
+      evMaxChargeW: 5000,
+      evMinSocPct: 70,
       // T-0075: absolute SoC floor (%) below which the chokepoint discharge floor
       // (applyControlTarget) suppresses ANY forced discharge, regardless of source.
       hardFloorSocPct: 5,
