@@ -845,17 +845,13 @@
               <input type="number" class="input mono" id="fc-pvnode-forecastdays" min="1" max="7" step="1" placeholder="2">
               <span class="field-hint">Free-Lizenz: max. 2 Tage (48 h); h&ouml;here Pl&auml;ne bis 7. Mehr anfragen als der Plan erlaubt &rarr; die API liefert nur das Plan-Maximum. Leer = 2.</span>
             </label>
-            <label class="dv-field-row">
-              <input type="checkbox" class="dv-field-check" id="fc-pvnode-nowcast">
-              <span>Nowcast aktivieren <span class="field-hint">(nur V1-API)</span></span>
-            </label>
+            <div class="dv-field-row">
+              <span>Nowcast/Echtzeit-Korrektur: <b id="fc-pvnode-nowcast-state">&mdash;</b></span>
+            </div>
             <span class="field-hint">
-              Nowcast = h&ouml;here Aufl&ouml;sung (15 min statt 60 min) f&uuml;r die n&auml;chsten ~1&ndash;2 h.
-              Einziger Knopf &mdash; keine weiteren Felder konfigurierbar.
-              Kosten: pro Refresh-Aufruf wird ein zus&auml;tzlicher Request aus dem pvnode-Budget verbraucht
-              (Free-Tarif: 40/Monat &rarr; bei 15-min-Refresh in &lt; 1 Tag aufgebraucht).
-              W&auml;hrend l&auml;ngerer Backfill-L&auml;ufe wird Nowcast automatisch pausiert
-              (siehe <code>services/forecast/pvnode-backfill.js</code>) &mdash; danach wieder aktiv.
+              pvnode v2: Die Nowcast-/Echtzeit-Korrektur ist in den bezahlten Pl&auml;nen
+              (Plus, Enterprise) serverseitig enthalten und mit dem 15-min-Abruf automatisch
+              aktiv &mdash; kein eigener Schalter mehr n&ouml;tig.
             </span>
             <div class="dv-field-validation" id="fc-pvnode-banner" hidden></div>
             <div class="dv-sample-block" id="fc-pvnode-sample" hidden>
@@ -1087,6 +1083,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=20260701-safejson"></script>
+  <script src="/integrations.js?v=20260718-pvnode-v2"></script>
 </body>
 </html>

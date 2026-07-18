@@ -23,6 +23,7 @@ import { encryptSecrets, decryptSecrets, applySecrets } from './services/config-
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig } from './config-model.js';
 import { streamPgDump, runDbRestore } from './services/db-backup.js';
+import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
 import { readTimescaleStatus, runTimescaleExtUpgrade } from './services/timescale-maintenance.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
@@ -3307,7 +3308,10 @@ export function createApiRoutes(ctx) {
             enabled: !!(getCfg().forecast?.pvnode?.apiKey),
             apiKeySet: !!(getCfg().forecast?.pvnode?.apiKey),
             siteIdSet: !!(getCfg().forecast?.pvnode?.siteId),
-            nowcastEnabled: !!(getCfg().forecast?.pvnode?.nowcastEnabled)
+            // pvnode v2: Nowcast ist keine eigene Option mehr, sondern in den
+            // bezahlten Plänen enthalten → aus dem Plan abgeleitet, nicht aus
+            // dem (toten) Legacy-Flag forecast.pvnode.nowcastEnabled.
+            nowcastEnabled: !!(PVNODE_PLANS[getCfg().forecast?.pvnode?.plan] || PVNODE_PLANS[DEFAULT_PVNODE_PLAN]).nowcast
           }
         },
         // EVCC wallbox (#23, 2026-06-13). Card consumes this via
@@ -4297,7 +4301,9 @@ export function createApiRoutes(ctx) {
         plan: p.plan || 'free',             // V2 subscription tier (drives fetch window/quota/horizon)
         siteId: p.siteId || '',             // V2 saved-site id (empty = inline mode)
         forecastDays: (p.forecastDays != null ? p.forecastDays : ''), // V2 horizon (1..7; '' = default 2)
-        nowcastEnabled: !!p.nowcastEnabled
+        // pvnode v2: Nowcast ist im bezahlten Plan enthalten (kein Schalter mehr,
+        // Christin 2026-07-18) → plan-abgeleitet; das alte config-Flag ist tot.
+        nowcastEnabled: !!(PVNODE_PLANS[p.plan] || PVNODE_PLANS[DEFAULT_PVNODE_PLAN]).nowcast
       });
     }
 
@@ -4330,7 +4336,10 @@ export function createApiRoutes(ctx) {
         const n = Math.floor(Number(body.forecastDays));
         if (Number.isFinite(n)) forecastDays = Math.max(1, Math.min(7, n));
       }
-      next.forecast.pvnode.nowcastEnabled = !!body.nowcastEnabled;
+      // pvnode v2: Nowcast hängt am Plan, kein eigener Schalter mehr — das
+      // Legacy-Flag wird beim Speichern aus der Config entfernt (Aufräum-Pfad
+      // für Bestandsboxen, z. B. prod mit nowcastEnabled:false aus v1-Zeiten).
+      delete next.forecast.pvnode.nowcastEnabled;
       next.forecast.pvnode.plan = plan;
       if (apiKey) {
         next.forecast.pvnode.apiKey = apiKey;
@@ -4358,7 +4367,7 @@ export function createApiRoutes(ctx) {
         siteIdSet: !!siteId,
         plan,
         forecastDays: forecastDays ?? 'default',
-        nowcastEnabled: next.forecast.pvnode.nowcastEnabled
+        nowcastIncluded: !!(PVNODE_PLANS[plan] || PVNODE_PLANS[DEFAULT_PVNODE_PLAN]).nowcast
       }, actorContext(req));
       return json(res, 200, { ok: true });
     }

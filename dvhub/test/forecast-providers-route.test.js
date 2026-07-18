@@ -147,12 +147,14 @@ describe('Plan 20-06: /api/forecast/providers/pvnode GET/POST', () => {
     assert.match(src, /url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/pvnode['"][\s\S]{0,200}checkAuth\(req,\s*res\)/);
   });
 
-  it('GET response redacts apiKey to "***" and emits nowcastEnabled', () => {
+  it('GET response redacts apiKey to "***" and derives nowcastEnabled from the plan (pvnode v2)', () => {
     const src = readRoutes();
     const m = src.match(/url\.pathname\s*===\s*['"]\/api\/forecast\/providers\/pvnode['"][\s\S]{0,60}req\.method\s*===\s*['"]GET['"][\s\S]*?\}\s*\)\s*;/);
     assert.ok(m);
     assert.match(m[0], /apiKey:\s*p\.apiKey\s*\?\s*['"]\*\*\*['"]\s*:\s*['"]{2}/);
-    assert.match(m[0], /nowcastEnabled:\s*!!p\.nowcastEnabled/);
+    // v2: Nowcast ist im bezahlten Plan enthalten — plan-abgeleitet, nie aus dem Legacy-Flag.
+    assert.match(m[0], /nowcastEnabled:\s*!!\(PVNODE_PLANS\[p\.plan\]/);
+    assert.ok(!/nowcastEnabled:\s*!!p\.nowcastEnabled/.test(m[0]), 'Legacy-Flag darf die Antwort nicht mehr speisen');
   });
 
   it('POST handler does server-side merge into cfg.forecast.pvnode.*', () => {
@@ -163,7 +165,9 @@ describe('Plan 20-06: /api/forecast/providers/pvnode GET/POST', () => {
     assert.match(m[0], /prev\.apiKey\s*\|\|\s*['"]{2}/);
     assert.match(m[0], /delete\s+next\.forecast\.pvnode\.apiKey/);
     assert.match(m[0], /clip\(\s*body\.apiKey\s*,\s*256\s*\)/);
-    assert.match(m[0], /next\.forecast\.pvnode\.nowcastEnabled\s*=/);
+    // v2: Legacy-Flag wird beim Save aus der Config entfernt, nie mehr gesetzt.
+    assert.match(m[0], /delete\s+next\.forecast\.pvnode\.nowcastEnabled/);
+    assert.ok(!/next\.forecast\.pvnode\.nowcastEnabled\s*=/.test(m[0]), 'nowcastEnabled darf nicht mehr persistiert werden');
     assert.match(m[0], /pvnode_saved[\s\S]{0,250}actorContext\(req\)/);
   });
 

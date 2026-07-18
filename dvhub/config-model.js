@@ -2158,16 +2158,12 @@ function buildFieldDefinitions() {
       max: 7,
       help: 'Wie viele Tage Prognose abgefragt werden (V2). Free-Lizenz liefert max. 2 Tage (48 h); h\u00f6here Pl\u00e4ne bis 7. Mehr anfragen als der Plan erlaubt \u2192 die API liefert nur das Plan-Maximum. Leer = 2.'
     },
-    {
-      section: 'forecast',
-      group: 'pvnode',
-      groupLabel: 'pvnode',
-      groupDescription: 'pvnode.de Cloud-API f\u00fcr PV-Prognosen.',
-      path: 'forecast.pvnode.nowcastEnabled',
-      label: 'Nowcast aktiv (kostenpflichtig)',
-      type: 'boolean',
-      help: 'Aktiviert pvnode Nowcast f\u00fcr kurzfristige Echtzeit-PV-Prognosen (15min-Horizont). Erfordert kostenpflichtigen pvnode-Plan. Testmodus verf\u00fcgbar.'
-    },
+    // pvnode v2 (2026-07-18): Der fr\u00fchere Schalter forecast.pvnode.nowcastEnabled
+    // ist ersatzlos entfernt \u2014 die Nowcast-/Echtzeit-Korrektur ist in den
+    // bezahlten Pl\u00e4nen (Plus/Enterprise) serverseitig enthalten und mit dem
+    // plan-getriebenen 15-min-Abruf automatisch aktiv (pvnode-plans.js
+    // `nowcast`-Capability). Legacy-Keys in Bestandsconfigs werden beim
+    // n\u00e4chsten Provider-Save aufger\u00e4umt (routes-api POST /api/forecast/providers/pvnode).
     {
       section: 'forecast',
       group: 'weather',
