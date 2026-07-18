@@ -553,6 +553,22 @@ export function createPoller(ctx) {
     state.victron.batteryChargeW = Math.max(0, batP);
     state.victron.batteryDischargeW = Math.max(0, -batP);
 
+    // Hauslast-Ableitung (Profil-opt-in via points.selfConsumptionW.derive =
+    // 'pv_plus_grid'): Last = WR-AC-Ausgang + Netzbezug − Einspeisung. Gilt,
+    // wenn pvPowerW den AC-Ausgang HINTER dem Meter misst (Fronius GEN24:
+    // M113 W enthält den Akku-Anteil und ist netto nach Akku-Ladung — die
+    // Bilanz stimmt dadurch auch bei Laden/Entladen/Netz-Ladung). Kein eigener
+    // Register-Punkt nötig; verifiziert am GEN24 Symo 2026-07-18 gegen die
+    // Solar API (P_Load 1332,9 W vs. abgeleitet 1332 W).
+    if (cfg.points?.selfConsumptionW?.derive === 'pv_plus_grid'
+      && state.meter.ok && state.victron.pvPowerW != null) {
+      const inverterAcW = Number(state.victron.pvTotalW || 0);
+      const derived = inverterAcW
+        + Number(state.victron.gridImportW || 0)
+        - Number(state.victron.gridExportW || 0);
+      state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
+    }
+
     const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
     const pvTotalW = Math.max(0, Number(state.victron.pvTotalW || 0));
     const gridImportW = Math.max(0, Number(state.victron.gridImportW || 0));

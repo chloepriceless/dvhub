@@ -40,11 +40,15 @@
     "begrenzung von Fronius (im WR-WebUI mit dem Smart Meter am Netzpunkt",
     "konfiguriert). Model-124-Steuerung und Export-Limit ergänzen sich.",
     "",
-    "STATUS BETA: Offsets/Skalen/Vorzeichen sind @sim-assumption bis zum Test am",
-    "echten GEN24. Ohne reale Hardware können wir nur bauen und auf Rückmeldung",
-    "warten. Tester bitte melden: info@bikinibottom.capital. Bis dahin: nicht",
-    "produktiv einsetzen (Profil ist Beta-gegatet, nur im Bleeding-Edge-Kanal",
-    "sichtbar). Model-160 (echte PV-/Akku-Leistungsaufteilung) folgt später."
+    "STATUS: Kernannahmen am 2026-07-18 an einer Kunden-Anlage (GEN24 Symo +",
+    "BYD, Smart Meter, Float-Modus) VERIFIZIERT — Modellkette 1/113/120/121/122/",
+    "123/160/124, ChaState_SF −2, InOutWRte_SF −2, Meter M213 W@40097 (Bezug",
+    "positiv → gridPositiveMeans 'grid_import'), Block-Sequenz live am Gerät",
+    "bestätigt (inkl. Design-Grenze: voller Akku → WR speist trotz Force-Charge",
+    "ein). Hauslast kommt als Ableitung (points.selfConsumptionW.derive).",
+    "NOCH OFFEN: Freigabe-Sequenz durch DVhub selbst (T3-Zyklus), MinRsvPct-",
+    "Verhalten (gerätespezifisch: 0 vs. 0xFFFF), Model-160-Modulparsing für",
+    "batteryPowerW. Beta-Gate bleibt bis T3 bestanden ist."
   ],
 
   "victron": {
@@ -55,10 +59,10 @@
   },
 
   "meter": {
-    "_comment": "Fronius Smart Meter @ Unit-ID 200 (SunSpec Float-Meter): 8 Register = W_total, WphA, WphB, WphC als Float32. Adresse ist @sim-assumption (Community-Referenz) — bei abweichendem Layout am Gerät kalibrieren. Vorzeichen: Fronius meldet Einspeisung positiv → gridPositiveMeans 'feed_in' in den Einstellungen.",
+    "_comment": "Fronius Smart Meter @ Unit-ID 200 (SunSpec Float-Meter Model 213 @ 40071): 8 Register ab W_total = abs 40097 → [W, WphA, WphB, WphC] als Float32. Verifiziert am GEN24 Symo 2026-07-18 (Kundenanlage, gegen Solar API P_Grid auf ±1 W). Vorzeichen: Fronius meldet BEZUG positiv / Einspeisung NEGATIV (Lastsicht) → gridPositiveMeans MUSS 'grid_import' sein (Einstellungen → Meter; die alte Annahme 'feed_in' war falsch).",
     "unitId": 200,
     "fc": 3,
-    "address": 40090,
+    "address": 40097,
     "quantity": 8,
     "readType": "float32",
     "timeoutMs": 2000
@@ -66,7 +70,7 @@
 
   "points": {
     "soc": {
-      "_comment": "Model 124 ChaState (Offset +6), uint16 mit SF −2 (0–10000 = 0,00–100,00 %) → scale 0.01. @sim-assumption: SF am Gerät verifizieren.",
+      "_comment": "Model 124 ChaState (Offset +6), uint16 mit SF −2 (0–10000 = 0,00–100,00 %) → scale 0.01. VERIFIZIERT am GEN24 Symo 2026-07-18: ChaState_SF (+20) = −2, Wert deckungsgleich mit Solar API SOC.",
       "enabled": true,
       "fc": 3,
       "quantity": 1,
@@ -105,8 +109,9 @@
     "acPvL2W": { "enabled": false },
     "acPvL3W": { "enabled": false },
     "selfConsumptionW": {
-      "_comment": "Kein direktes Hausverbrauchs-Register; loadW-Ableitung aus Meter+PV ist spätere Arbeit.",
-      "enabled": false
+      "_comment": "Kein direktes Hausverbrauchs-Register am GEN24 — stattdessen ABLEITUNG (derive 'pv_plus_grid' in polling.js): Last = M113-W (AC-Ausgang, netto nach Akku) + Netzbezug − Einspeisung. Verifiziert am GEN24 Symo 2026-07-18: abgeleitet 1332 W vs. Solar API P_Load 1332,9 W. enabled bleibt false (kein Modbus-Read-Punkt).",
+      "enabled": false,
+      "derive": "pv_plus_grid"
     }
   },
 
@@ -138,7 +143,7 @@
       "sunspec": { "model": 124, "offset": 3 }
     },
     "outWRte": {
-      "_comment": "Model 124 OutWRte (Offset +10): Entlade-/Lade-Rate in % von WChaMax, int16 mit SF InOutWRte_SF (typ. −2) → scale 0.01. POSITIV = Entladung erlaubt (100 = voll), 0 = Hold (keine Entladung), NEGATIV = Laden (Fronius-Quirk, −100 = Vollladung aus PV). @sim-assumption: SF am Gerät verifizieren.",
+      "_comment": "Model 124 OutWRte (Offset +10): Entlade-/Lade-Rate in % von WChaMax, int16 mit SF InOutWRte_SF (typ. −2) → scale 0.01. POSITIV = Entladung erlaubt (100 = voll), 0 = Hold (keine Entladung), NEGATIV = Laden (Fronius-Quirk, −100 = Vollladung aus PV). VERIFIZIERT am GEN24 Symo 2026-07-18: InOutWRte_SF (+23) = −2; Block-Sequenz (StorCtl_Mod=2, OutWRte=−10000) stand am Gerät, Solar API zeigte Battery_Mode 'charge boost'; WChaMax = 10240 W.",
       "enabled": true,
       "fc": 6,
       "writeType": "int16",

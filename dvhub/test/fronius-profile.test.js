@@ -129,6 +129,12 @@ test('shipped fronius.json loads: modbus, scan-Punkte, Model-124-Abregelung stat
   assert.equal(cfg.meter.readType, 'float32');
   assert.equal(cfg.meter.unitId, 200);
   assert.equal(cfg.meter.host, '192.168.1.60');
+  // Kalibriert am GEN24 Symo 2026-07-18: M213 W_total @ abs 40097 (nicht 40090 —
+  // die alte @sim-assumption landete mitten in den Spannungsregistern).
+  assert.equal(cfg.meter.address, 40097);
+  // Hauslast kommt als Ableitung (kein Register-Read): derive-Flag am Punkt.
+  assert.equal(cfg.points.selfConsumptionW.enabled, false);
+  assert.equal(cfg.points.selfConsumptionW.derive, 'pv_plus_grid');
 });
 
 test('poller resolves sunspec addresses via device scan and reads SoC + float meter', async () => {
@@ -178,6 +184,12 @@ test('poller resolves sunspec addresses via device scan and reads SoC + float me
   assert.equal(state.meter.ok, true);
   assert.equal(state.meter.grid_total_w, 1235); // round(-(-1234.5)) = 1235
   assert.equal(state.meter.grid_l1_w, 400);
+  // Hauslast-Ableitung (derive 'pv_plus_grid'): Last = WR-AC + Bezug − Einspeisung
+  // = 7500 + 0 − 1235 = 6265 W. Verifiziert am GEN24 Symo 2026-07-18 gegen die
+  // Solar API (P_Load 1332,9 W vs. abgeleitet 1332 W an der Kundenanlage).
+  assert.equal(state.victron.selfConsumptionW, 6265);
+  assert.equal(state.victron.solarDirectUseW, 6265);
+  assert.equal(state.victron.solarToGridW, 1235);
 });
 
 test('Model-124-Sequenz: sperren = StorCtl_Mod:=2 dann OutWRte:=-100, freigeben = 0/100', async () => {
