@@ -438,6 +438,53 @@ export function createScheduleEvaluator(ctx) {
     }
     // === end T-0080 write-layer bounds =======================================
 
+    // === B-1112 Sequenz-Dialekt: feedExcessDcPv ohne Direkt-Register ==========
+    // Mode-Dialekt-Profile (Fronius M124-Force-Charge, Deye Work-Mode) aktuieren
+    // das Feed-in-Flag über eine SEQUENZ von controlWrite-Punkten —
+    // dvControl.feedExcessDcPv hat dort KEINE eigene Register-Adresse. Der
+    // generische Einzelregister-Pfad unten schrieb dann auf address=undefined →
+    // das Gerät antwortete "modbus exception 2" (illegal data address), obwohl
+    // der Eval-Pfad (applyDvVictronControl) die Sequenz ~15 s später korrekt
+    // schrieb — die API-Antwort log (Feldtest 554bbdfd, 2026-07-18). Deshalb hier
+    // an den kanonischen Aktuator delegieren, damit Antwort == Geräteaktion.
+    // Victron (Direkt-Register 2707, keine sequence) läuft unverändert durch den
+    // generischen Pfad. Sitzt NACH dem NOT-HALT-Gate: manuelle Flag-Writes
+    // bleiben im Not-Halt geblockt.
+    if (target === 'feedExcessDcPv') {
+      const feedIn = Number(value) === 1;
+      const seq = cfg.dvControl?.feedExcessDcPv?.sequence;
+      if (Array.isArray(seq?.[feedIn ? '1' : '0'])) {
+        if (cfg.dvControl?.enabled !== true && !feedIn) {
+          // #10 (FrodoVDR): deaktivierte Steuerung darf NIE sperren, nur freigeben.
+          pushLog('control_write_rejected', { target, value, source, reason: 'dv_control_disabled' });
+          return { ok: false, error: 'dv_control_disabled' };
+        }
+        if (state.ctrl._lastDvFeedIn === feedIn) {
+          state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
+          return { ok: true, skipped: true, reason: 'unchanged' };
+        }
+        await applyDvVictronControl(feedIn);
+        const seqResult = state.ctrl.dvControl?.feedExcessDcPv;
+        if (!seqResult?.ok) {
+          pushLog('control_write_error', { target, value, source, error: seqResult?.error || 'dv_sequence_failed' });
+          return { ok: false, error: seqResult?.error || 'dv_sequence_failed' };
+        }
+        state.schedule.lastWrite[target] = { value, source, writeType: 'sequence', at: Date.now() };
+        state.schedule.active[target] = { value, source, at: Date.now() };
+        pushLog('control_write', { target, value, source, writeType: 'sequence' });
+        telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+          eventType: 'control_write',
+          target,
+          valueNum: Number(value),
+          reason: source,
+          source: 'runtime',
+          meta: { writeType: 'sequence' }
+        }));
+        return { ok: true, writeType: 'sequence' };
+      }
+    }
+    // === end B-1112 Sequenz-Dialekt ==========================================
+
     // === EEG/§14a legal gate — applies to ALL callers (schedule rules, manual control,
     // dc-export, eos/emhass optimizer, negative-price triggers). Source of truth:
     // cfg.optimizer.allowGridCharge / allowGridDischarge.
