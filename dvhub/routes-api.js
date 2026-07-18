@@ -7208,6 +7208,15 @@ export function createApiRoutes(ctx) {
       } catch (e) {
         neutralize = { ok: false, error: e.message };
       }
+      // Kein Setpoint-Stellpfad im Profil/Settings aktiviert (z. B. Fronius:
+      // Abregelung läuft als M124-Sequenz, controlWrite.gridSetpointW ist
+      // enabled:false) → es gibt nichts zu neutralisieren. Das ist kein Fehler
+      // und darf nicht bei jedem Not-Halt als emergency_stop_neutralize_failed
+      // im Ring landen (Operator-Report Feldtest 2026-07-18). String = exakte
+      // not-enabled-Antwort des applyControlTarget-Chokepoints (schedule-eval.js).
+      if (!neutralize?.ok && neutralize?.error === 'write target not enabled in config') {
+        neutralize = { ok: true, skipped: true, reason: 'target_not_enabled' };
+      }
       if (!neutralize?.ok && !neutralize?.skipped) {
         // Writes are paused either way; the operator must know the plant may
         // still hold the last setpoint until Venus reverts it.

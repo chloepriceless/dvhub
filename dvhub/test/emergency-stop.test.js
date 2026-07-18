@@ -325,6 +325,23 @@ describe('POST /api/control/stop + /resume (T-0099 NOT-HALT)', () => {
     assert.ok(ctx.logged.some((l) => l.event === 'emergency_stop_neutralize_failed'));
   });
 
+  it('no failure log when NO gridSetpointW write path is enabled (Fronius sequence dialect)', async () => {
+    // Fronius/Deye: Abregelung = M124-/Work-Mode-Sequenz, controlWrite.gridSetpointW
+    // ist enabled:false → der Chokepoint meldet not-enabled. Das ist ein No-op,
+    // kein Fehler — der Ring darf nicht bei jedem Not-Halt fluten.
+    const ctx = mockRouteCtx();
+    ctx.applyControlTarget = async () => ({ ok: false, error: 'write target not enabled in config' });
+    const out = await call(ctx, 'POST', '/api/control/stop');
+
+    assert.equal(out.status, 200);
+    assert.equal(out.body.ok, true);
+    assert.equal(ctx.state.ctrl.discretionaryWritesPaused, true, 'pause active regardless');
+    assert.equal(out.body.neutralize.skipped, true);
+    assert.equal(out.body.neutralize.reason, 'target_not_enabled');
+    assert.ok(!ctx.logged.some((l) => l.event === 'emergency_stop_neutralize_failed'),
+      'benign no-write-path case must not log a failure');
+  });
+
   it('resume clears flag + throttle map and persists; idempotent when not paused', async () => {
     const ctx = mockRouteCtx();
     await call(ctx, 'POST', '/api/control/stop');
