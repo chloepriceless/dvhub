@@ -368,6 +368,8 @@ export function createPoller(ctx) {
   // sieht dieselbe Referenz. Fehler → Backoff, Punkte bleiben schlafend
   // (pollPoint/applyControlTarget überspringen unaufgelöste sunspec-Punkte).
   let sunspecRetryAt = 0;
+  // Drossel für m160_battery-Derive-Diagnose (1×/5 min statt jeden Zyklus).
+  let m160DeriveLogAt = 0;
   async function ensureSunspecResolved(cfg) {
     const blocks = [cfg.points, cfg.controlWrite];
     const needs = blocks.some((block) => Object.values(block || {})
@@ -388,6 +390,10 @@ export function createPoller(ctx) {
         for (const [name, conf] of Object.entries(resolved)) block[name] = conf;
         allMissing.push(...missing);
       }
+      // M160-Modellbasis für den m160_battery-Derive merken: der liest den
+      // Block zur LAUFZEIT inkl. DCW_SF — eine statisch aufgelöste Punkt-
+      // Adresse allein reicht dafür nicht.
+      (state.ctrl ??= {})._sunspecM160 = scan.byId.get(160)?.[0] || null;
       pushLog('sunspec_scan_ok', {
         base: scan.base,
         models: scan.models.map((m) => m.id),
@@ -548,6 +554,52 @@ export function createPoller(ctx) {
     const posImport = cfg.gridPositiveMeans === 'grid_import';
     state.victron.gridImportW = Math.max(0, posImport ? gridW : -gridW);
     state.victron.gridExportW = Math.max(0, posImport ? -gridW : gridW);
+
+    // Echte DC-Akku-Leistung via SunSpec Model 160 (Profil-opt-in:
+    // points.batteryPowerW.derive = 'm160_battery'; GEN24: MPPT-Eingang 3 =
+    // Akku-Laden, 4 = Entladen — evcc-bestätigt, Zuordnung per Profil
+    // konfigurierbar). Vorzeichen wie Victron: POSITIV = Laden (die
+    // batteryCharge/DischargeW-Ableitung direkt darunter erwartet das).
+    // Ein Block-Read pro Zyklus; SunSpec not-implemented (int16 0x8000) →
+    // Punkt bleibt unangetastet statt einen falschen Wert zu stempeln.
+    const bpConf = cfg.points?.batteryPowerW;
+    if (bpConf?.derive === 'm160_battery' && state.ctrl?._sunspecM160 && transport.type !== 'mqtt') {
+      try {
+        const m160 = state.ctrl._sunspecM160;
+        const chargeModule = Number(bpConf.chargeModule ?? 3);
+        const dischargeModule = Number(bpConf.dischargeModule ?? 4);
+        const needQty = 8 + Math.max(chargeModule, dischargeModule) * 20;
+        const v = cfg.victron || {};
+        const regs = await transport.mbRequest({
+          fc: 3, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs,
+          address: m160.address, quantity: Math.min(needQty, m160.length)
+        });
+        const int16 = (w) => (Number(w) > 0x7fff ? Number(w) - 0x10000 : Number(w));
+        const NOT_IMPL = -32768; // SunSpec int16 not-implemented (0x8000)
+        const sfRaw = int16(regs[2]);   // DCW_SF @ Datenbereich +2
+        const nModules = Number(regs[6]); // N @ +6
+        if (nModules >= Math.max(chargeModule, dischargeModule) && sfRaw !== NOT_IMPL) {
+          const dcwAt = (k) => int16(regs[8 + (k - 1) * 20 + 3]); // DCW @ Modul +3
+          const chargeRaw = dcwAt(chargeModule);
+          const dischargeRaw = dcwAt(dischargeModule);
+          if (chargeRaw !== NOT_IMPL && dischargeRaw !== NOT_IMPL) {
+            const sf = 10 ** sfRaw;
+            state.victron.batteryPowerW = Number(((chargeRaw - dischargeRaw) * sf).toFixed(3));
+            // T-0075-Frische: der Discharge-Floor keyt auf batteryPowerW —
+            // ohne Stempel gälte der abgeleitete Wert sofort als stale.
+            (state.victron.fieldUpdatedAt ??= {}).batteryPowerW = Date.now();
+          }
+        } else if (Date.now() - m160DeriveLogAt > 300000) {
+          m160DeriveLogAt = Date.now();
+          pushLog('m160_battery_unavailable', { nModules, sfRaw, chargeModule, dischargeModule });
+        }
+      } catch (e) {
+        if (Date.now() - m160DeriveLogAt > 300000) {
+          m160DeriveLogAt = Date.now();
+          pushLog('m160_battery_read_error', { error: e?.message || String(e) });
+        }
+      }
+    }
 
     const batP = Number(state.victron.batteryPowerW || 0);
     state.victron.batteryChargeW = Math.max(0, batP);

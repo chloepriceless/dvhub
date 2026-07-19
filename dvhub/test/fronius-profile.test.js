@@ -309,3 +309,79 @@ test('Vinzent82-Anti-Regression: Abregelung fährt den Akku (Force-Charge), NIE 
   assert.ok(outWrite, 'OutWRte wird geschrieben');
   assert.ok(outWrite.value > 32767, 'OutWRte-Wert ist ein negatives int16 (Force-Charge), kein Leistungslimit');
 });
+
+// --- batteryPowerW via Model 160 (Queue 3/4, Christin-GO 2026-07-19) ---
+// Echte DC-Akku-Leistung aus den MPPT-Modulen 3 (Laden) / 4 (Entladen);
+// Vorzeichen wie Victron: positiv = Laden. DCW_SF kommt zur Laufzeit aus dem
+// Block-Read. Freshness-Stempel Pflicht (T-0075-Floor keyt auf batteryPowerW).
+
+function buildGen24ImageWithM160({ chargeDcw = 0, dischargeDcw = 0, sf = 0, n = 4 } = {}) {
+  const image = new Map();
+  const put = (addr, words) => words.forEach((w, i) => image.set(addr + i, w & 0xffff));
+  put(40000, [0x5375, 0x6e53]);
+  let cursor = 40002;
+  for (const [id, len] of [[1, 66], [113, 60], [120, 26], [123, 24], [124, 24], [160, 88]]) {
+    put(cursor, [id, len]);
+    put(cursor + 2, new Array(len).fill(0));
+    if (id === 160) {
+      const d = cursor + 2; // Datenbereich
+      put(d + 2, [sf & 0xffff]);            // DCW_SF
+      put(d + 6, [n]);                      // Anzahl Module
+      put(d + 8 + 2 * 20 + 3, [chargeDcw & 0xffff]);    // Modul 3 DCW (Laden)
+      put(d + 8 + 3 * 20 + 3, [dischargeDcw & 0xffff]); // Modul 4 DCW (Entladen)
+    }
+    cursor += 2 + len;
+  }
+  put(cursor, [0xffff, 0]);
+  put(40092, float32Regs(7500));
+  put(40194, [5730]);
+  put(40193, [500]);
+  return image;
+}
+
+async function pollWithM160(imageOpts) {
+  const loaded = loadFroniusEffectiveConfig();
+  const cfg = loaded.effectiveConfig;
+  cfg.pollMs = 500;
+  cfg.epex = { timezone: 'UTC' };
+  cfg.userEnergyPricing = {};
+  const state = {
+    meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0, error: null },
+    victron: { errors: {}, updatedAt: 0, fieldUpdatedAt: {} },
+    ctrl: {},
+    dvRegs: new Array(8).fill(0),
+    energy: { day: '2026-07-19', importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0, lastTs: 0 }
+  };
+  const transport = makeMockTransport(buildGen24ImageWithM160(imageOpts));
+  const poller = createPoller({
+    state,
+    getCfg: () => cfg,
+    transport,
+    pushLog: () => {},
+    energyPath: path.join(os.tmpdir(), `fronius-m160-test-${Math.random().toString(36).slice(2)}.json`),
+    onPollComplete: () => {},
+    epexNowNext: () => ({ current: { ct_kwh: 0 } })
+  });
+  await poller.requestPoll();
+  return state;
+}
+
+test('M160-Derive: Laden 1234 W → batteryPowerW +1234 (positiv = Laden) + Frische-Stempel', async () => {
+  const state = await pollWithM160({ chargeDcw: 1234, dischargeDcw: 0 });
+  assert.equal(state.victron.batteryPowerW, 1234);
+  assert.equal(state.victron.batteryChargeW, 1234);
+  assert.equal(state.victron.batteryDischargeW, 0);
+  assert.ok(state.victron.fieldUpdatedAt.batteryPowerW > 0, 'Frische gestempelt (T-0075-Floor)');
+});
+
+test('M160-Derive: Entladen 500 W → batteryPowerW −500; DCW_SF wird angewendet', async () => {
+  const state = await pollWithM160({ chargeDcw: 0, dischargeDcw: 500, sf: 1 }); // SF 10^1
+  assert.equal(state.victron.batteryPowerW, -5000);
+  assert.equal(state.victron.batteryDischargeW, 5000);
+});
+
+test('M160-Derive: zu wenige Module (n=2) → Wert bleibt unangetastet', async () => {
+  const state = await pollWithM160({ chargeDcw: 1234, dischargeDcw: 0, n: 2 });
+  assert.equal(state.victron.batteryPowerW, undefined, 'kein falscher Wert bei fehlenden Akku-Modulen');
+  assert.equal(state.victron.fieldUpdatedAt.batteryPowerW, undefined, 'keine Frische ohne Wert');
+});

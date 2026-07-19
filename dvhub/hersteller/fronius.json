@@ -101,8 +101,11 @@
       "sunspec": { "model": 113, "offset": 20 }
     },
     "batteryPowerW": {
-      "_comment": "Deaktiviert: saubere Akku-Leistung braucht Model 160 (MPPT-Eingang 3 = Laden, 4 = Entladen). DCW aus Model 113 wäre bei Hybrid PV+Akku vermischt — lieber kein Wert als ein falscher.",
-      "enabled": false
+      "_comment": "Echte DC-Akku-Leistung via Model 160 (derive 'm160_battery' in polling.js, ein Block-Read/Zyklus, DCW_SF wird zur Laufzeit gelesen): MPPT-Eingang 3 = Laden, 4 = Entladen (evcc-bestätigt; Zuordnung hier konfigurierbar, am Gerät gegenprüfen). Vorzeichen wie Victron: positiv = Laden. enabled bleibt false (kein direkter Register-Punkt); fehlt Model 160 oder DCW not-implemented, bleibt der Wert leer — lieber keiner als ein falscher.",
+      "enabled": false,
+      "derive": "m160_battery",
+      "chargeModule": 3,
+      "dischargeModule": 4
     },
     "gridSetpointW": { "enabled": false },
     "acPvL1W": { "enabled": false },
