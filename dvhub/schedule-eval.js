@@ -3,6 +3,9 @@
 // Controls hardware via injected transport: applyDvVictronControl, applyControlTarget.
 // Evaluates schedule rules every ~15 seconds, writes control signals to Victron inverter.
 
+import fs from 'node:fs';
+
+import { atomicWriteControlState } from './control-state-io.js';
 import { localMinutesOfDay, victronFieldAgeMs, victronFieldStale, controlWriteBoundsError, clampMinSoc } from './server-utils.js';
 import {
   autoDisableStopSocScheduleRules,
@@ -274,6 +277,29 @@ export function createScheduleEvaluator(ctx) {
   //     zurückschreiben; ohne Sicherung (z. B. Neustart während der Sperre —
   //     der Speicher ist in-memory) greift restoreDefault, sonst wird der
   //     Schritt übersprungen.
+  // B-1112 restore-Speicher restart-fest (Christin 2026-07-19): Der saveBefore/
+  // restore-Store lebte nur in-memory — ein Neustart WÄHREND einer aktiven
+  // Sperre verlor die gesicherten Kundenwerte (Fronius-Feldtest: StorCtl_Mod=1
+  // + InWRte aus Solar.web), die Freigabe schrieb dann nur die pauschalen
+  // restoreDefaults. Jetzt: Laden beim Init, atomares Persistieren bei jeder
+  // Mutation (tmp+rename wie control_state.json). Ohne ctx.dvSeqSavedPath
+  // (alte Aufrufer/Tests) bleibt das Verhalten rein in-memory.
+  if (ctx.dvSeqSavedPath && state.ctrl._dvSeqSaved === undefined) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(ctx.dvSeqSavedPath, 'utf8'));
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) state.ctrl._dvSeqSaved = raw;
+    } catch { /* keine/korrupte Datei → leerer Store (Erstlauf) */ }
+  }
+
+  function persistDvSeqSaved() {
+    if (!ctx.dvSeqSavedPath) return;
+    try {
+      atomicWriteControlState(ctx.dvSeqSavedPath, state.ctrl._dvSeqSaved ?? {});
+    } catch (e) {
+      pushLog('dv_seq_saved_persist_error', { error: e?.message || String(e) });
+    }
+  }
+
   async function runDvControlSequence(steps) {
     const cfg = getCfg();
     const saved = (state.ctrl._dvSeqSaved ??= {});
@@ -295,6 +321,7 @@ export function createScheduleEvaluator(ctx) {
         const scale = Number(pconf.scale ?? 1);
         const offset = Number(pconf.offset ?? 0);
         saved[step.point] = Number(regs[0]) * scale + offset;
+        persistDvSeqSaved();
       }
       const encoded = toRawForWrite(value, pconf);
       const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
@@ -304,7 +331,10 @@ export function createScheduleEvaluator(ctx) {
       } else {
         await transport.mbWriteSingle({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs });
       }
-      if (step.restore === true) delete saved[step.point];
+      if (step.restore === true && saved[step.point] !== undefined) {
+        delete saved[step.point];
+        persistDvSeqSaved();
+      }
     }
   }
 

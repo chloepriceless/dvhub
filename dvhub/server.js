@@ -799,6 +799,10 @@ const ENERGY_PATH = path.join(DATA_DIR || __dirname, 'energy_state.json');
 // stop is runtime STATE, not configuration, and must never ride along a
 // config save/restore).
 const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json');
+// B-1112 save/restore: gesicherte Kunden-Registerwerte (z. B. Fronius M124
+// StorCtl_Mod/OutWRte) müssen einen Neustart WÄHREND einer aktiven Sperre
+// überleben, sonst schreibt die Freigabe nur die pauschalen restoreDefaults.
+const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
 
 function persistControlState() {
   try {
@@ -955,6 +959,7 @@ function controlValue() {
 // getCfg() is a GETTER -- never pass cfg directly (prevents stale closure on hot-reload).
 // After each createXxx(ctx), extend ctx with the new module's public methods.
 const ctx = {
+  dvSeqSavedPath: DV_SEQ_SAVED_PATH,
   state,
   getCfg: () => cfg,
   transport,

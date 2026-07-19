@@ -119,12 +119,16 @@ test('shipped fronius.json loads: modbus, scan-Punkte, Model-124-Abregelung stat
   assert.equal(cfg.dvControl.feedExcessDcPv.enabled, true);
   assert.equal(cfg.dvControl.dontFeedExcessAcPv.enabled, false);
   assert.equal(cfg.dvControl.negativePriceProtection.enabled, true);
-  // Sequenz: sperren (0) = StorCtl_Mod:=2 dann OutWRte:=-100; freigeben (1) = 0/100.
+  // Sequenz: sperren (0) = StorCtl_Mod:=2 dann OutWRte:=-100, jeweils mit
+  // saveBefore (Kundenwerte sichern); freigeben (1) = restore der gesicherten
+  // Kundenwerte, Fallback restoreDefault 0/+100 (save/restore, Feldtest 554bbdfd).
   const seq = cfg.dvControl.feedExcessDcPv.sequence;
   assert.deepEqual(seq['0'].map((s) => s.point), ['storCtlMod', 'outWRte']);
   assert.deepEqual(seq['0'].map((s) => s.value), [2, -100]);
+  assert.deepEqual(seq['0'].map((s) => s.saveBefore), [true, true]);
   assert.deepEqual(seq['1'].map((s) => s.point), ['storCtlMod', 'outWRte']);
-  assert.deepEqual(seq['1'].map((s) => s.value), [0, 100]);
+  assert.deepEqual(seq['1'].map((s) => s.restore), [true, true]);
+  assert.deepEqual(seq['1'].map((s) => s.restoreDefault), [0, 100]);
   // Meter: Float32-Block @ Unit 200, host fällt auf die Anlagenadresse zurück.
   assert.equal(cfg.meter.readType, 'float32');
   assert.equal(cfg.meter.unitId, 200);
@@ -192,7 +196,7 @@ test('poller resolves sunspec addresses via device scan and reads SoC + float me
   assert.equal(state.victron.solarToGridW, 1235);
 });
 
-test('Model-124-Sequenz: sperren = StorCtl_Mod:=2 dann OutWRte:=-100, freigeben = 0/100', async () => {
+test('Model-124-Sequenz: sperren = StorCtl_Mod:=2 dann OutWRte:=-100, freigeben = restore der Kundenwerte', async () => {
   const loaded = loadFroniusEffectiveConfig();
   const cfg = loaded.effectiveConfig; // AUSGELIEFERTES Profil (Abregelung aktiv)
   // Adressen wie nach erfolgtem Scan.
@@ -226,12 +230,14 @@ test('Model-124-Sequenz: sperren = StorCtl_Mod:=2 dann OutWRte:=-100, freigeben 
   assert.equal(state.ctrl.dvControl.feedExcessDcPv.ok, true);
   assert.equal(state.ctrl._lastDvFeedIn, false);
 
-  // Freigeben (feedIn=true → val=1): zurück auf Normalbetrieb.
+  // Freigeben (feedIn=true → val=1): stellt die beim Sperren via saveBefore
+  // gesicherten KUNDENWERTE wieder her (Mock-Image: beide Register = 0) —
+  // NICHT die pauschalen restoreDefaults 0/+100 (save/restore, 554bbdfd).
   transport.writes.length = 0;
   await evaluator.applyDvVictronControl(true);
   assert.deepEqual(transport.writes, [
-    { fc: 6, address: 40191, value: 0 },     // StorCtl_Mod = 0 (alle Limits aus)
-    { fc: 6, address: 40198, value: 10000 }  // OutWRte = 100 % (Entladung erlaubt)
+    { fc: 6, address: 40191, value: 0 },  // StorCtl_Mod: Kundenwert 0 restauriert
+    { fc: 6, address: 40198, value: 0 }   // OutWRte: Kundenwert 0 % restauriert (raw 0)
   ]);
   assert.equal(state.ctrl._lastDvFeedIn, true);
 });
