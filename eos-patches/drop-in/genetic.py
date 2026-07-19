@@ -112,6 +112,19 @@ try:
     )
 except (TypeError, ValueError):
     _RESERVE_MIN_SAFETY_CAP_WH = 6000.0
+# WATERFALL release mode (DVhub fork 2026-07-19, operator spec test, Christin):
+# when enabled AND the battery context is supplied, the reserve is NOT released
+# in every above-threshold slot. Instead the expected sellable SURPLUS above the
+# reserve (self-consumption-only trajectory from the pack's start SoC) is assumed
+# to fill the most expensive slots first — the GA sells the surplus price-best-
+# first anyway — and the reserve may only be sold in above-threshold slots LEFT
+# OVER after the surplus allocation. Default OFF -> per-slot release (prod).
+_RESERVE_WATERFALL_ENABLED = os.environ.get("EOS_RESERVE_WATERFALL", "0") not in (
+    "0",
+    "false",
+    "False",
+    "no",
+)
 
 
 def _compute_overnight_reserve(
@@ -122,6 +135,12 @@ def _compute_overnight_reserve(
     margin: float,
     price_array: Optional[np.ndarray] = None,
     revenue_array: Optional[np.ndarray] = None,
+    start_soc_wh: Optional[float] = None,
+    min_soc_wh: Optional[float] = None,
+    max_soc_wh: Optional[float] = None,
+    charge_eff: Optional[float] = None,
+    disch_eff: Optional[float] = None,
+    slot_cap_raw_wh: Optional[float] = None,
 ) -> np.ndarray:
     """Per-slot delivered-AC energy the battery must keep for self-consumption.
 
@@ -161,6 +180,21 @@ def _compute_overnight_reserve(
         and price_array is not None
         and revenue_array is not None
     )
+    # Waterfall needs the battery context to size the surplus pool; without it
+    # (or with the gate off) the per-slot release below stays authoritative.
+    waterfall = (
+        price_aware
+        and _RESERVE_WATERFALL_ENABLED
+        and start_soc_wh is not None
+        and min_soc_wh is not None
+        and max_soc_wh is not None
+        and charge_eff is not None
+        and disch_eff is not None
+        and slot_cap_raw_wh is not None
+        and slot_cap_raw_wh > 0
+    )
+    # (slot, export price, night-window id, full reserve, safety floor)
+    release_candidates: list[tuple[int, float, int, float, float]] = []
     running = 0.0
     # Exclusive upper bound of the night window the current reserve belongs to.
     # The reserve at slot h is self-consumed over [h+1 .. night_window_end) before
@@ -203,9 +237,55 @@ def _compute_overnight_reserve(
                 max(full_reserve * _RESERVE_SAFETY_FRACTION, _RESERVE_MIN_SAFETY_FLOOR_WH),
                 _RESERVE_MIN_SAFETY_CAP_WH,
             )
-            reserve[h] = min(full_reserve, safety)
+            if waterfall:
+                # Defer the decision to the waterfall pass below; keep the full
+                # reserve provisionally so a non-selected candidate stays held.
+                release_candidates.append(
+                    (h, this_export, night_window_end, full_reserve, safety)
+                )
+                reserve[h] = full_reserve
+            else:
+                reserve[h] = min(full_reserve, safety)
         else:
             reserve[h] = full_reserve
+    if waterfall and release_candidates:
+        # Expected pack trajectory under self-consumption only (identical
+        # semantics to the educated seed): PV surplus charges, deficit
+        # self-consumes down to min_soc. Pure function of the forecast arrays
+        # plus the pack's start SoC -> identical for every GA individual.
+        ch_eff = max(float(charge_eff), 1e-6)  # type: ignore[arg-type]
+        di_eff = max(float(disch_eff), 1e-6)  # type: ignore[arg-type]
+        cap_raw = float(slot_cap_raw_wh)  # type: ignore[arg-type]
+        min_wh = float(min_soc_wh)  # type: ignore[arg-type]
+        max_wh = float(max_soc_wh)  # type: ignore[arg-type]
+        soc_traj = np.empty(max(end_hour - start_hour, 0), dtype=float)
+        soc = float(start_soc_wh)  # type: ignore[arg-type]
+        for h in range(start_hour, end_hour):
+            soc_traj[h - start_hour] = soc
+            net = float(pv_array[h]) - float(load_array[h])
+            if net >= 0.0:
+                soc += min(net * ch_eff, max(max_wh - soc, 0.0), cap_raw * ch_eff)
+            else:
+                deliverable = min((soc - min_wh) * di_eff, cap_raw * di_eff)
+                soc -= min(-net, max(deliverable, 0.0)) / di_eff
+        sell_cap_ac = cap_raw * di_eff
+        # Per night window: the surplus above the reserve fills the most
+        # expensive above-threshold slots first (operator waterfall spec).
+        # ceil -> a partly-filled slot still counts as taken, conservative
+        # toward night autonomy. Only the LEFT-OVER candidates release.
+        windows: dict[int, list[tuple[int, float, float, float]]] = {}
+        for h, exp_price, win, full, safety in release_candidates:
+            windows.setdefault(win, []).append((h, exp_price, full, safety))
+        for cands in windows.values():
+            h0 = min(c[0] for c in cands)
+            full_ref = next(c[2] for c in cands if c[0] == h0)
+            surplus_ac = max(
+                (soc_traj[h0 - start_hour] - min_wh) * di_eff - full_ref, 0.0
+            )
+            taken = int(np.ceil(surplus_ac / sell_cap_ac)) if surplus_ac > 0.0 else 0
+            cands.sort(key=lambda c: (-c[1], c[0]))
+            for h, _exp, full, safety in cands[taken:]:
+                reserve[h] = min(full, safety)
     return reserve
 
 
@@ -505,6 +585,19 @@ class GeneticSimulation(PydanticBaseModel):
             _OVERNIGHT_RESERVE_MARGIN,
             elect_price_hourly_fast,
             elect_revenue_per_hour_arr_fast,
+            # Battery context for the WATERFALL release mode. battery_fast is in
+            # its reset() state here (start SoC), so the trajectory is identical
+            # for every GA individual — determinism preserved.
+            start_soc_wh=float(battery_fast.soc_wh) if battery_fast else None,
+            min_soc_wh=float(battery_fast.min_soc_wh) if battery_fast else None,
+            max_soc_wh=float(battery_fast.max_soc_wh) if battery_fast else None,
+            charge_eff=float(battery_fast.charging_efficiency) if battery_fast else None,
+            disch_eff=float(battery_fast.discharging_efficiency) if battery_fast else None,
+            slot_cap_raw_wh=(
+                float(battery_fast.max_charge_power_w) * float(battery_fast.slot_duration_h)
+                if battery_fast
+                else None
+            ),
         )
 
         for hour in range(start_hour, end_hour):
@@ -912,7 +1005,15 @@ class GeneticOptimization(OptimizationBase):
             # each slot — reuse the same helper the simulator's reserve gate
             # uses, so seed and constraint agree on what "spare" means.
             reserve = _compute_overnight_reserve(
-                load, pv, start_slot, n, _OVERNIGHT_RESERVE_MARGIN, price, revenue
+                load, pv, start_slot, n, _OVERNIGHT_RESERVE_MARGIN, price, revenue,
+                # Same battery context as the simulator's reserve gate, so seed
+                # and constraint agree on what "spare" means under WATERFALL too.
+                start_soc_wh=soc_wh,
+                min_soc_wh=min_soc_wh,
+                max_soc_wh=max_soc_wh,
+                charge_eff=charge_eff,
+                disch_eff=disch_eff,
+                slot_cap_raw_wh=raw_cap_wh,
             )
 
             # Forward self-consumption-only SoC trajectory + charge-episode flags.
