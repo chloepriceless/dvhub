@@ -34,11 +34,20 @@
     "OutWRte:=-100 % (negativ = Laden, Fronius-Quirk). Freigabe = zurück auf",
     "Normalbetrieb: StorCtl_Mod:=0 + OutWRte:=100 %.",
     "",
-    "GRENZE (ehrlich): Ist der Akku VOLL, kann er keinen Überschuss mehr aufnehmen",
-    "— dann speist der WR wieder ein. Eine GARANTIERTE Nulleinspeisung braucht",
-    "zusätzlich die geräteseitige 'Export Limitation' / dynamische Wirkleistungs-",
-    "begrenzung von Fronius (im WR-WebUI mit dem Smart Meter am Netzpunkt",
-    "konfiguriert). Model-124-Steuerung und Export-Limit ergänzen sich.",
+    "STUFE 2 (2026-07-19, Christin): Ist der Akku VOLL (Schwelle einstellbar,",
+    "config.zeroFeedIn.socThresholdPct, Default 95 %), kann er keinen Überschuss",
+    "mehr aufnehmen — dann speiste der WR bisher wieder ein. Jetzt übernimmt der",
+    "Zero-Feed-in-Deckel (schedule-eval zeroFeedInTick, 5-s-Regelkreis):",
+    "Model 123 WMaxLimPct wird lastfolgend auf die HAUSLAST geführt (nie 0 —",
+    "WMaxLimPct=0 legt den ganzen WR lahm, das Haus zöge Netzstrom), der WR",
+    "drosselt die MPPTs selbst. Gleichzeitig wird OutWRte auf +100 % freigegeben,",
+    "damit der Akku bei PV-Defizit das Haus stützt (Export verhindert der Deckel",
+    "physikalisch). Die native Fronius-Exportbegrenzung ist NICHT fernschaltbar",
+    "(nur WebUI-Konfiguration) — deshalb der eigene Regelkreis. Failsafe:",
+    "WMaxLimPct_RvrtTms — stirbt DVhub, verfällt das Limit am Gerät von selbst.",
+    "VORAUSSETZUNG am WR: Steuerprioritäten so, dass Modbus über der dynamischen",
+    "Leistungsreduzierung steht — sonst werden die Kommandos still ignoriert",
+    "(der Loop erkennt das am Readback und loggt zero_feedin_readback_mismatch).",
     "",
     "STATUS: Kernannahmen am 2026-07-18 an einer Kunden-Anlage (GEN24 Symo +",
     "BYD, Smart Meter, Float-Modus) VERIFIZIERT — Modellkette 1/113/120/121/122/",
@@ -164,6 +173,36 @@
       "scale": 1,
       "offset": 0,
       "sunspec": { "model": 124, "offset": 15 }
+    },
+    "wMaxLimPct": {
+      "_comment": "Model 123 WMaxLimPct (Offset +3): Wirkleistungs-Limit des WR in % von WMax, uint16 mit WMaxLimPct_SF (typ. −2 → 0–10000 = 0,00–100,00 %; Community-bestätigt via HA 'Automate Fronius Soft Limit', SF am Gerät gegenprüfen). NUR vom Zero-Feed-in-Deckel benutzt (lastfolgend = Hauslast) — NIE statisch 0 schreiben (legt den ganzen Hybrid lahm, siehe _doc ABREGELUNG VORHER). Model 123 ist wie 124 immer int+SF; die float/int-Umschaltung verschiebt nur die Modell-Basis (Scan löst auf).",
+      "enabled": true,
+      "fc": 6,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 0.01,
+      "offset": 0,
+      "sunspec": { "model": 123, "offset": 3 }
+    },
+    "wMaxLimPctRvrtTms": {
+      "_comment": "Model 123 WMaxLimPct_RvrtTms (Offset +5): Verfallszeit des Limits in Sekunden (0–28800), uint16. Failsafe des Zero-Feed-in-Deckels: DVhub refresht das Fenster mit jedem WMaxLimPct-Write (5-s-Takt); stirbt DVhub, hebt der WR das Limit nach Ablauf selbst auf. Honorierung am GEN24 beim Feldtest messen (Limit setzen, nicht erneuern, Verfall beobachten).",
+      "enabled": true,
+      "fc": 6,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "sunspec": { "model": 123, "offset": 5 }
+    },
+    "wMaxLimEna": {
+      "_comment": "Model 123 WMaxLim_Ena (Offset +7): 1 = Wirkleistungs-Limit aktiv, 0 = aus. Wird vom Zero-Feed-in-Deckel jeden Tick re-asserted (Geräte-Neustart/Revert fällt sonst still auf Normalbetrieb zurück) und bei Freigabe/SoC-Erholung auf 0 geschrieben.",
+      "enabled": true,
+      "fc": 6,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "sunspec": { "model": 123, "offset": 7 }
     }
   },
 
@@ -187,6 +226,10 @@
     "dontFeedExcessAcPv": {
       "_comment": "Nicht genutzt: die GEN24-PV ist DC-gekoppelt (Hybrid) → die Abregelung läuft über feedExcessDcPv (Model-124-Force-Charge). Ein separater AC-Pfad existiert bei Fronius nicht.",
       "enabled": false
+    },
+    "zeroFeedIn": {
+      "_comment": "Stufe 2 der Abregelung (siehe _doc): schaltet den 5-s-Zero-Feed-in-Regelkreis frei (schedule-eval zeroFeedInTick). Greift NUR während einer aktiven Sperre (feedIn=false) und erst ab der SoC-Schwelle bzw. bei gemessenem Export trotz Force-Charge. Die einstellbaren Zahlen (SoC-Schwelle, Hysterese, Ziel-Netzbezug) liegen als config.zeroFeedIn beim Betreiber — dvControl ist manufacturer-managed und dafür bewusst NICHT der Ort.",
+      "enabled": true
     },
     "negativePriceProtection": {
       "_comment": "Aktiv: bei EPEX-Negativpreis wird die Einspeisung gesperrt (feedIn=false → Force-Charge-Sequenz oben). Das Feld gridSetpointW ist ein Victron-Rest und wird bei Fronius IGNORIERT (kein Setpoint-Dialekt); die Wirkung kommt aus der Model-124-Sequenz.",

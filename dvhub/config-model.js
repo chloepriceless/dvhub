@@ -632,6 +632,47 @@ function buildFieldDefinitions() {
       help: 'Wie viele Stunden vor der Lade-Deadline der DC-Export abgeschaltet wird, falls der Ziel-SOC noch nicht erreicht wurde. Standard: 2 Stunden.'
     },
 
+    // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
+    // Wirkt nur auf Profilen, die dvControl.zeroFeedIn deklarieren (Fronius);
+    // die Zahlen sind Betreiber-einstellbar und liegen deshalb HIER (dvControl
+    // ist manufacturer-managed und wird aus config.json gestrippt).
+    {
+      section: 'system',
+      group: 'zeroFeedIn',
+      groupLabel: 'Nulleinspeisung bei Abregelung',
+      groupDescription: 'Bei Negativpreis- oder Direktvermarkter-Abregelung läuft die Anlage in Nulleinspeisung weiter: der Eigenverbrauch bleibt gedeckt, nur der Export wird unterbunden. Ist der Akku voll, drosselt DVhub den Wechselrichter lastfolgend auf die Hauslast (nie auf 0); reicht die PV nicht, hilft der Akku mit. Gilt für Herstellerprofile mit Zero-Feed-in-Unterstützung (Fronius GEN24).',
+      path: 'zeroFeedIn.socThresholdPct',
+      label: 'Akku-voll-Schwelle (% SoC)',
+      type: 'number',
+      min: 50,
+      max: 100,
+      help: 'Ab diesem Ladestand gilt der Akku als voll und die Wechselrichter-Drosselung übernimmt die Nulleinspeisung. Standard: 95 %.'
+    },
+    {
+      section: 'system',
+      group: 'zeroFeedIn',
+      groupLabel: 'Nulleinspeisung bei Abregelung',
+      groupDescription: 'Bei Negativpreis- oder Direktvermarkter-Abregelung läuft die Anlage in Nulleinspeisung weiter.',
+      path: 'zeroFeedIn.socHysteresisPct',
+      label: 'Rückschalt-Hysterese (%-Punkte)',
+      type: 'number',
+      min: 1,
+      max: 30,
+      help: 'Fällt der Ladestand um diese Punkte unter die Akku-voll-Schwelle, endet die Drosselung und der Überschuss lädt wieder den Akku. Standard: 5.'
+    },
+    {
+      section: 'system',
+      group: 'zeroFeedIn',
+      groupLabel: 'Nulleinspeisung bei Abregelung',
+      groupDescription: 'Bei Negativpreis- oder Direktvermarkter-Abregelung läuft die Anlage in Nulleinspeisung weiter.',
+      path: 'zeroFeedIn.targetGridImportW',
+      label: 'Ziel-Netzbezug während Drosselung (W)',
+      type: 'number',
+      min: 0,
+      max: 500,
+      help: 'Kleiner Sicherheitsabstand zum Netz: der Regler zielt auf diesen leichten Bezug, damit Mess- und Regelfehler nicht als Einspeisung enden. Standard: 50 W.'
+    },
+
     // T-0113 Tier 3 — Fern-Support. Nur diese zwei Felder sind nutzer-editierbar;
     // die Relay-Ports (peer-zugeteilt) liegen bewusst NICHT in config.json,
     // sondern in /var/lib/dvhub/support/relay.json (config-replace-sicher).
@@ -2521,6 +2562,18 @@ export function createDefaultConfig() {
       targetSocPct: 90,
       chargeDeadlineHour: 17,
       chargeGuardHours: 2
+    },
+    // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
+    // Betreiber-einstellbare Zahlen des Zero-Feed-in-Regelkreises; der
+    // Mechanismus selbst wird vom Herstellerprofil freigeschaltet
+    // (dvControl.zeroFeedIn.enabled, aktuell Fronius GEN24). Lives in
+    // createDefaultConfig → automatisch ALLOWED_CONFIG_ROOTS + Save-Roundtrip.
+    zeroFeedIn: {
+      socThresholdPct: 95,
+      socHysteresisPct: 5,
+      targetGridImportW: 50,
+      deadbandW: 50,
+      revertTimeoutS: 300
     },
     victron: {
       transport: 'modbus',

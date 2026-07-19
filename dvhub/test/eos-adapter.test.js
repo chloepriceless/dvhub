@@ -383,6 +383,61 @@ test('getOptimizationSolution parses solution.data into rows + KPIs', async () =
   }
 });
 
+// --- Test 9b: Zeitplan-Vorschau AC-Cap folgt der Leistungs-Kette, nie 16000 ---
+// Regression (2026-07-19): the preview battery-export clamp used a hardcoded
+// 16 kW default when optimizer.akkuAcLimitW was unset. After a power upgrade
+// (e.g. 22 kW charge, discharge field left blank) the "Akku einspeisen" row
+// showed a stale 16000 and misled the customer. The cap now resolves along the
+// SAME chain EOS uses: akkuAcLimitW || maxDischargeW || maxChargeW || inverter
+// ceiling — so it always tracks the configured/physical limit.
+test('preview AC cap follows maxChargeW when akkuAcLimitW/maxDischargeW unset (not 16000)', async () => {
+  const solution = {
+    generated_at: '2026-05-29T20:00:00+02:00',
+    valid_from: '2026-05-29T20:00:00+02:00',
+    valid_until: '2026-05-29T20:15:00+02:00',
+    total_costs_amt: 0, total_revenues_amt: 0, total_losses_energy_wh: 0,
+    solution: {
+      data: {
+        // Evening battery-export slot: no PV, feed-in 5000 Wh/15min = 20 kW of
+        // pure battery discharge to grid, discharge allowed, no DC charge.
+        '2026-05-29T20:00:00+02:00': {
+          battery1_soc_factor: 0.9,
+          grid_consumption_energy_wh: 0,
+          grid_feedin_energy_wh: 5000,
+          pvforecast_ac_energy_wh: 0,
+          loadforecast_energy_wh: 0,
+          genetic_discharge_allowed_factor: 1,
+          genetic_dc_charge_factor: 0,
+          costs_amt: 0, revenue_amt: 0.5,
+        },
+      },
+    },
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(solution));
+  });
+  try {
+    // maxChargeW set (22 kW), maxDischargeW + akkuAcLimitW deliberately unset.
+    const ctx = {
+      getCfg: () => ({
+        optimizer: { eosProxy: { url: `http://127.0.0.1:${mock.port}` }, maxChargeW: 22000 },
+      }),
+      pushLog: () => {},
+    };
+    const adapter = createEosAdapter(ctx);
+    const out = await adapter.getOptimizationSolution();
+    assert.ok(out, 'should return parsed solution');
+    const row = out.rows[0];
+    assert.equal(row.zeitplanAction, 'battery_export', 'evening no-PV discharge → battery_export');
+    // batteryShare = 20 kW; capped by akkuAcLimitW which now resolves to
+    // maxChargeW (22 kW), so the full 20 kW passes through — NOT clamped to 16 kW.
+    assert.equal(row.zeitplanBatteryExportW, 20000, 'cap follows maxChargeW (22000), not hardcoded 16000');
+  } finally {
+    await mock.close();
+  }
+});
+
 // --- Test 10: getOptimizationSolution returns null on 404 (no solution yet) ---
 test('getOptimizationSolution returns null when EOS has no solution (404)', async () => {
   const mock = await createMockEos((req, res) => {

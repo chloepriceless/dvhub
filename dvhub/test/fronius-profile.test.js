@@ -110,10 +110,17 @@ test('shipped fronius.json loads: modbus, scan-Punkte, Model-124-Abregelung stat
   assert.equal(cfg.controlWrite.outWRte.signed, true);
   assert.equal(cfg.controlWrite.outWRte.scale, 0.01);
   assert.equal(cfg.controlWrite.chaGriSet.enabled, false);
-  // Der falsche WMaxLim-Weg ist GANZ entfernt (kein Register mehr, das die
-  // Gesamt-Wirkleistung kappen könnte).
-  assert.equal(cfg.controlWrite.wMaxLimPct, undefined);
-  assert.equal(cfg.controlWrite.wMaxLimEna, undefined);
+  // WMaxLim ist NICHT mehr der Abregelungs-Weg (Vinzent82: statisches 0 legte
+  // den Hybrid lahm) — die Punkte existieren aber wieder für den LASTFOLGENDEN
+  // Zero-Feed-in-Deckel (B-1112 Stufe 2, Limit = Hauslast, nie 0). Die
+  // Anti-Regression „keine WMaxLim-Punkte in der Abregelungs-Sequenz" prüft
+  // der Vinzent82-Test unten.
+  assert.equal(cfg.controlWrite.wMaxLimPct.enabled, true);
+  assert.deepEqual(cfg.controlWrite.wMaxLimPct.sunspec, { model: 123, offset: 3 });
+  assert.equal(cfg.controlWrite.wMaxLimPct.scale, 0.01);
+  assert.deepEqual(cfg.controlWrite.wMaxLimPctRvrtTms.sunspec, { model: 123, offset: 5 });
+  assert.deepEqual(cfg.controlWrite.wMaxLimEna.sunspec, { model: 123, offset: 7 });
+  assert.equal(cfg.dvControl.zeroFeedIn.enabled, true);
   // Abregelung ist JETZT aktiv (über feedExcessDcPv, DC-gekoppelt), AC-Pfad aus.
   assert.equal(cfg.dvControl.enabled, true);
   assert.equal(cfg.dvControl.feedExcessDcPv.enabled, true);
@@ -281,9 +288,14 @@ test('Vinzent82-Anti-Regression: Abregelung fährt den Akku (Force-Charge), NIE 
   cfg.controlWrite.storCtlMod.address = 40191;
   cfg.controlWrite.outWRte.address = 40198;
 
-  // Es darf gar kein WMaxLim-Register mehr im Profil existieren.
-  assert.equal(cfg.controlWrite.wMaxLimPct, undefined);
-  assert.equal(cfg.controlWrite.wMaxLimEna, undefined);
+  // Die Abregelungs-SEQUENZ darf NIE einen WMaxLim-Punkt enthalten — das
+  // statische Kappen der Gesamt-Wirkleistung war der Vinzent82-Bug. (Die
+  // wMaxLim*-Punkte existieren nur für den lastfolgenden Zero-Feed-in-Deckel,
+  // der das Limit auf die Hauslast führt, nie auf 0.)
+  for (const key of ['0', '1']) {
+    const points = cfg.dvControl.feedExcessDcPv.sequence[key].map((s) => s.point);
+    assert.ok(!points.some((p) => /wMaxLim/i.test(p)), `Sequenz '${key}' fasst kein WMaxLim-Register an`);
+  }
 
   const state = {
     victron: { soc: 50 },

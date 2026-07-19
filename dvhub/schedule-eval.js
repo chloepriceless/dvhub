@@ -13,12 +13,12 @@ import {
   scheduleMatch
 } from './schedule-runtime.js';
 import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automation-builder.js';
-// Plan 09-07: safeInterval reserved import — schedule-eval uses a setTimeout
-// chain (evalTimeout) not setInterval. Import kept so future periodic checks
-// inherit the helper. Auditable via grep "from './services/safe-async.js'".
-// eslint-disable-next-line no-unused-vars
+// Plan 09-07: safeInterval — der Eval selbst läuft als setTimeout-Kette
+// (evalTimeout); safeInterval trägt den 5-s-Zero-Feed-in-Regelkreis (B-1112
+// Stufe 2), damit ein Throw im Tick den Takt nicht stillschweigend beendet.
 import { safeInterval } from './services/safe-async.js';
 import { encodeSunspecFloat32 } from './services/inverter/sunspec.js';
+import { getPowerLimits } from './services/power-limits.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -1134,6 +1134,214 @@ export function createScheduleEvaluator(ctx) {
     ctx.onEvalComplete?.();
   }
 
+  // ===========================================================================
+  // B-1112 Stufe 2 — Nulleinspeisungs-Deckel (Zero-Feed-in-Loop, Christin
+  // 2026-07-19). Die M124-Force-Charge-Sperre (feedExcessDcPv sequence '0')
+  // deckt die Abregelung nur, solange der Akku den PV-Überschuss aufnimmt —
+  // bei vollem Akku speist der GEN24 wieder ein (am Gerät verifiziert, siehe
+  // fronius.json _doc). Die native Fronius-Exportbegrenzung ist NICHT
+  // fernschaltbar (WebUI-Konfiguration, kein Modbus-/API-Schalter) — deshalb
+  // regelt DVhub hier selbst: SunSpec Model 123 WMaxLimPct wird lastfolgend
+  // auf die Hauslast geführt (5-s-Takt, integrierender Regler auf die
+  // Smart-Meter-Messung), der WR drosselt dann die MPPTs. NIE auf 0 drosseln:
+  // WMaxLimPct=0 legt den ganzen WR lahm und das Haus zieht Netzstrom.
+  //
+  // Zustandsmaschine (nur während aktiver Sperre, state.ctrl._lastDvFeedIn===false):
+  //   Force-Charge (Default)  — Akku schluckt Überschuss, kein Deckel.
+  //   Deckel (capActive)      — Enter bei SoC >= zeroFeedIn.socThresholdPct
+  //     ODER wenn trotz Sperre Export gemessen wird (BMS-Derating o. ä.).
+  //     Beim Enter wird OutWRte auf +100 % freigegeben, damit der Akku bei
+  //     PV-Defizit das Haus stützen kann („der Akku muss mithelfen") — Export
+  //     aus dem Akku verhindert der WMaxLimPct-Deckel physikalisch (AC-Ausgang
+  //     <= Hauslast). Exit bei SoC <= Schwelle − Hysterese: OutWRte zurück auf
+  //     −100 % (Force-Charge), Deckel aus.
+  // Failsafe: WMaxLimPct_RvrtTms (Geräte-Timeout) — stirbt DVhub, verfällt das
+  // Limit von selbst; deshalb wird WMaxLimPct jeden Tick neu geschrieben
+  // (refresht das Fenster). Beim DVhub-Stop wird bewusst NICHT geschrieben —
+  // der RvrtTms räumt auf (kein Modbus-I/O im Shutdown-Pfad).
+  // Direkt-Writes am applyControlTarget-Gate vorbei: der Loop gehört zur
+  // mandatory-Abregelungsklasse (§51/DV-forcedOff) wie applyDvVictronControl
+  // selbst — er folgt via _lastDvFeedIn exakt dessen Not-Halt-Semantik
+  // (emergency_stop_release setzt feedIn=true → der Loop räumt den Deckel ab).
+  // Kein saveBefore/restore für OutWRte: die Kundenwerte hat die Sperr-Sequenz
+  // bereits gesichert; die Freigabe-Sequenz restauriert sie unabhängig vom Loop.
+
+  const ZFI_TICK_MS = 5000;
+  const ZFI_GAIN = 0.7;               // Dämpfung des integrierenden Reglers
+  const ZFI_EXPORT_ENTER_STREAK = 3;  // Export-Ticks in Folge bis Deckel-Enter
+  const ZFI_READBACK_MS = 60000;      // Steuerprioritäten-Drift-Check (throttled)
+  const ZFI_ERRLOG_MS = 60000;
+  let zfiInterval = null;
+  let zfiBusy = false;
+
+  function zfiState() {
+    return (state.ctrl._zfi ??= {
+      capActive: false, limitPct: null, exportStreak: 0, blockedStreak: 0,
+      lastReadbackAt: 0, lastErrLogAt: 0
+    });
+  }
+
+  async function zfiWrite(pconf, value) {
+    const encoded = toRawForWrite(value, pconf);
+    await transport.mbWriteSingle({
+      host: pconf.host, port: pconf.port, unitId: pconf.unitId,
+      address: pconf.address, value: encoded.raw, timeoutMs: pconf.timeoutMs
+    });
+  }
+
+  async function zeroFeedInTick() {
+    if (zfiBusy || stopping) return;
+    zfiBusy = true;
+    try {
+      const cfg = getCfg();
+      const zc = cfg.dvControl?.zeroFeedIn;
+      const pctConf = cfg.controlWrite?.wMaxLimPct;
+      const enaConf = cfg.controlWrite?.wMaxLimEna;
+      const rvrtConf = cfg.controlWrite?.wMaxLimPctRvrtTms;
+      const outConf = cfg.controlWrite?.outWRte;
+      const zfi = zfiState();
+      // Profil ohne Feature / Punkte (noch) nicht per SunSpec-Scan aufgelöst →
+      // still bleiben. Ein am Gerät stehender Deckel verfällt über RvrtTms.
+      if (!zc?.enabled || transport.type !== 'modbus') return;
+      if (!pctConf?.enabled || pctConf.address == null) return;
+      if (!enaConf?.enabled || enaConf.address == null) return;
+
+      const blocked = state.ctrl._lastDvFeedIn === false;
+      if (!blocked) {
+        zfi.exportStreak = 0;
+        zfi.blockedStreak = 0;
+        if (zfi.capActive) {
+          // Freigabe (Preis positiv / Not-Halt-Release / DV-Ende): nur den
+          // Deckel abräumen — OutWRte hat die restore-Sequenz schon gesetzt.
+          await zfiWrite(enaConf, 0);
+          zfi.capActive = false;
+          zfi.limitPct = null;
+          pushLog('zero_feedin_cap_off', { reason: 'feedin_restored' });
+          telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+            eventType: 'zero_feedin_cap_off', target: 'wMaxLimPct',
+            valueNum: null, reason: 'feedin_restored', source: 'runtime', meta: {}
+          }));
+        }
+        return;
+      }
+      zfi.blockedStreak += 1;
+
+      const uc = cfg.zeroFeedIn || {};
+      const thresholdPct = Number(uc.socThresholdPct ?? 95);
+      const hysteresisPct = Number(uc.socHysteresisPct ?? 5);
+      const targetImportW = Number(uc.targetGridImportW ?? 50);
+      const deadbandW = Number(uc.deadbandW ?? 50);
+      const revertTimeoutS = Number(uc.revertTimeoutS ?? 300);
+      // %-Referenz: nur Regler-Gain/Startwert — der integrierende Regler
+      // konvergiert auch bei ungenauer Nennleistung gegen Export ≈ 0.
+      // Kanonische Quelle = Leistungs-Kette (T-0126, systemPower → legacy).
+      const refW = Number(getPowerLimits(cfg).inverterMaxPowerW) || 10000;
+
+      const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs) || 90000;
+      // victronFieldAgeMs, nicht victronFieldStale: ein NIE gepollter SoC
+      // (fieldUpdatedAt fehlt) ist "unbekannt", nicht "frisch" (T-0075-Gotcha).
+      const socAge = victronFieldAgeMs(state, 'soc');
+      const socFresh = socAge !== null && socAge <= maxAgeMs;
+      const soc = Number(state.victron?.soc);
+      const meterFresh = state.meter?.ok === true
+        && (Date.now() - Number(state.meter.updatedAt || 0)) < 15000;
+      const importW = Math.max(0, Number(state.victron?.gridImportW || 0));
+      const exportW = Math.max(0, Number(state.victron?.gridExportW || 0));
+      const loadW = Math.max(0, Number(state.victron?.selfConsumptionW || 0));
+
+      if (!zfi.capActive) {
+        const socEnter = socFresh && Number.isFinite(soc) && soc >= thresholdPct;
+        // Export trotz Force-Charge = Akku nimmt nichts mehr (voll/Derating) —
+        // auch unterhalb der SoC-Schwelle greift dann der Deckel.
+        zfi.exportStreak = (meterFresh && exportW > deadbandW) ? zfi.exportStreak + 1 : 0;
+        const exportEnter = zfi.exportStreak >= ZFI_EXPORT_ENTER_STREAK;
+        // blockedStreak >= 2: nie im selben Tick einschalten, in dem die Sperre
+        // gerade erst geschrieben wurde/wird (Race gegen die Freigabe-Sequenz).
+        if ((socEnter || exportEnter) && zfi.blockedStreak >= 2 && meterFresh) {
+          zfi.limitPct = Math.min(100, Math.max(0, (100 * Math.max(0, loadW - targetImportW)) / refW));
+          if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, 100);
+          if (rvrtConf?.enabled && rvrtConf.address != null) await zfiWrite(rvrtConf, revertTimeoutS);
+          await zfiWrite(pctConf, zfi.limitPct);
+          await zfiWrite(enaConf, 1);
+          zfi.capActive = true;
+          zfi.exportStreak = 0;
+          pushLog('zero_feedin_cap_on', {
+            trigger: socEnter ? 'soc' : 'export', soc: Number.isFinite(soc) ? soc : null,
+            limitPct: Number(zfi.limitPct.toFixed(2)), loadW, exportW
+          });
+          telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+            eventType: 'zero_feedin_cap_on', target: 'wMaxLimPct',
+            valueNum: Number(zfi.limitPct.toFixed(2)),
+            reason: socEnter ? 'soc' : 'export', source: 'runtime',
+            meta: { soc: Number.isFinite(soc) ? soc : null, loadW, exportW }
+          }));
+        }
+        return;
+      }
+
+      // --- Deckel aktiv: Exit prüfen, sonst regeln + Failsafe-Fenster refreshen.
+      if (socFresh && Number.isFinite(soc) && soc <= thresholdPct - hysteresisPct) {
+        // Reihenfolge: erst Force-Charge wieder scharf, dann Deckel aus — so
+        // gibt es kein Fenster, in dem weder Akku-Zwang noch Deckel steht.
+        if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, -100);
+        await zfiWrite(enaConf, 0);
+        zfi.capActive = false;
+        zfi.limitPct = null;
+        pushLog('zero_feedin_cap_off', { reason: 'soc_recovered', soc });
+        telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+          eventType: 'zero_feedin_cap_off', target: 'wMaxLimPct',
+          valueNum: null, reason: 'soc_recovered', source: 'runtime', meta: { soc }
+        }));
+        return;
+      }
+
+      if (meterFresh) {
+        // Integrierender Regler: Ziel = leichter Netzbezug (targetImportW),
+        // damit die Quantisierungs-/Latenzfehler in Richtung Bezug statt
+        // Einspeisung fallen. err > 0 → zu wenig Bezug/Export → Limit senken.
+        const signedGridW = importW - exportW;
+        const err = targetImportW - signedGridW;
+        if (Math.abs(err) > deadbandW) {
+          zfi.limitPct = Math.min(100, Math.max(0, zfi.limitPct - (100 * ZFI_GAIN * err) / refW));
+        }
+      }
+      // Meter stale → Limit einfrieren, aber weiter schreiben: der Write
+      // refresht das RvrtTms-Fenster (sonst verfiele der Deckel mitten in der
+      // Abregelung); Ena wird re-asserted (Gerät könnte nach eigenem Revert
+      // oder Neustart auf Normalbetrieb zurückgefallen sein).
+      await zfiWrite(pctConf, zfi.limitPct);
+      await zfiWrite(enaConf, 1);
+
+      // Readback-Drift-Check (throttled): Steuerprioritäten am WR (IO-Steuerung >
+      // dyn. Leistungsreduzierung > Modbus) können Writes still ignorieren.
+      const now = Date.now();
+      if (now - zfi.lastReadbackAt >= ZFI_READBACK_MS) {
+        zfi.lastReadbackAt = now;
+        try {
+          const regs = await transport.mbRequest({
+            fc: 3, host: pctConf.host, port: pctConf.port, unitId: pctConf.unitId,
+            address: pctConf.address, quantity: 1, timeoutMs: pctConf.timeoutMs
+          });
+          const readPct = Number(regs?.[0]) * Number(pctConf.scale ?? 1);
+          if (Number.isFinite(readPct) && Math.abs(readPct - zfi.limitPct) > 1) {
+            pushLog('zero_feedin_readback_mismatch', {
+              wrotePct: Number(zfi.limitPct.toFixed(2)), readPct: Number(readPct.toFixed(2))
+            }, 'warn');
+          }
+        } catch { /* Readback ist Diagnose — nie den Regel-Tick brechen */ }
+      }
+    } catch (e) {
+      const zfi = zfiState();
+      const now = Date.now();
+      if (now - zfi.lastErrLogAt >= ZFI_ERRLOG_MS) {
+        zfi.lastErrLogAt = now;
+        pushLog('zero_feedin_write_error', { error: e?.message || String(e) }, 'warn');
+      }
+    } finally {
+      zfiBusy = false;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Timer lifecycle (modeled on polling.js)
   // ---------------------------------------------------------------------------
@@ -1151,12 +1359,21 @@ export function createScheduleEvaluator(ctx) {
     stopping = false;
     evaluateSchedule().catch(e => pushLog('schedule_eval_error', { error: e.message }));
     scheduleEvaluateLoop();
+    // Zero-Feed-in-Deckel: fester 5-s-Takt (Regelkreis-Kadenz wie der Victron-
+    // Setpoint-Pfad). Der Tick guarded sich selbst heraus, wenn das Profil das
+    // Feature nicht deklariert — auf Victron-Anlagen bleibt er ein No-op.
+    zfiInterval = safeInterval('schedule-eval.zero-feedin',
+      () => { zeroFeedInTick().catch(() => { /* zfi loggt selbst (throttled) */ }); },
+      ZFI_TICK_MS);
   }
 
   function stop() {
     stopping = true;
     if (evalTimeout) { clearTimeout(evalTimeout); evalTimeout = null; }
+    if (zfiInterval) { clearInterval(zfiInterval); zfiInterval = null; }
+    // Bewusst KEIN Modbus-Write im Stop-Pfad (Shutdown-Hänger-Historie) — ein
+    // aktiver Deckel am Gerät verfällt über WMaxLimPct_RvrtTms von selbst.
   }
 
-  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, start, stop };
+  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, zeroFeedInTick, start, stop };
 }

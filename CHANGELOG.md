@@ -10,6 +10,20 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **Fronius GEN24: Nulleinspeisung bei Abregelung auch mit vollem Akku.** Die
+  Negativpreis-/Direktvermarkter-Abregelung hält den Eigenverbrauch jetzt in
+  jedem Fall aufrecht: Solange der Akku Platz hat, zwingt Force-Charge den
+  PV-Überschuss in den Speicher (wie bisher); ist der Akku voll (Schwelle
+  einstellbar, Standard 95 % SoC), drosselt ein 5-s-Regelkreis den
+  Wechselrichter lastfolgend auf die Hauslast (SunSpec Model 123 `WMaxLimPct`,
+  nie auf 0) und gibt die Akku-Entladung frei, damit der Akku bei PV-Defizit
+  das Haus stützt — Export aus dem Akku verhindert der Leistungsdeckel
+  physikalisch. Failsafe über `WMaxLimPct_RvrtTms`: Fällt DVhub aus, hebt der
+  Wechselrichter das Limit selbst wieder auf. Neue Einstellungen unter
+  „Nulleinspeisung bei Abregelung" (`zeroFeedIn.*`).
+
 ## [1.0.3] - 2026-07-11
 
 Bugfix-/Stabilisierungs-Release. Führt das **Beta-Flag für Herstellerprofile**

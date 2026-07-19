@@ -401,12 +401,16 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     const cfg = (typeof getCfg === 'function' ? getCfg() : null) || {};
     const bufferW = Number(cfg?.dcExportMode?.bufferW) || 100;
     const connectionLimitW = Number(cfg?.optimizer?.inverterMaxPowerW) || 29000;
-    // Fall back to the operator's AC discharge limit (maxDischargeW) so a
-    // battery/power upgrade is reflected in the preview without also having to
-    // set the optional akkuAcLimitW override (2026-07-19: 22 kW upgrade showed
-    // a stale "Akku 16000" from this hardcoded default).
+    // Resolve the preview AC cap along the SAME chain EOS uses for its battery
+    // power (maxDischargeW || maxChargeW), then fall back to the physical
+    // inverter ceiling (connectionLimitW) instead of a hardcoded 16 kW. A
+    // hardcoded default would show a stale "Akku 16000" after a power upgrade
+    // (2026-07-19) and mislead customers whose limit differs — the number must
+    // always track the operator's configured/physical limit, never a magic W.
     const akkuAcLimitW = Number(cfg?.optimizer?.akkuAcLimitW)
-      || Number(cfg?.optimizer?.maxDischargeW) || 16000;
+      || Number(cfg?.optimizer?.maxDischargeW)
+      || Number(cfg?.optimizer?.maxChargeW)
+      || connectionLimitW;
     for (const row of allRows) {
       const imp = row.gridConsumptionWh;
       const exp = row.gridFeedinWh;
