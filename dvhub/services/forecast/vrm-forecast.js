@@ -37,12 +37,23 @@ export function createVrmForecast(ctx, { store } = {}) {
   const { state, pushLog } = ctx;
   const getDb = () => ctx.db; // lazy — ctx.db set after telemetry store init
 
+  // vrm_forecast_read_empty is a diagnostic for "VRM configured but table
+  // empty" (feed outage). Unthrottled it fires on every forecast pass (~3s on
+  // some setups) and rotates real diagnostics out of the 1000-entry log ring
+  // (Fronius field test 554bbdfd, 2026-07-18).
+  const EMPTY_LOG_THROTTLE_MS = 15 * 60 * 1000;
+  let lastEmptyLogAt = 0;
+
   /**
    * Read PV forecast from VRM data already in vrm_forecasts table.
    * Returns array of { ts_utc, power_w } for solar_yield forecast.
    */
   async function readPvForecast() {
     if (!getDb()) return null;
+    // Without a VRM token vrm_forecasts is never populated (epex-fetch needs
+    // the same token) — on non-Victron setups "empty" is the permanent normal
+    // state, not a signal: stay silent instead of flooding the log ring.
+    if (!isAvailable()) return null;
 
     try {
       const now = new Date().toISOString();
@@ -57,7 +68,11 @@ export function createVrmForecast(ctx, { store } = {}) {
       `, [now]);
 
       if (!result.rows.length) {
-        pushLog('vrm_forecast_read_empty', { reason: 'no_solar_yield_data' });
+        const nowMs = Date.now();
+        if (nowMs - lastEmptyLogAt >= EMPTY_LOG_THROTTLE_MS) {
+          lastEmptyLogAt = nowMs;
+          pushLog('vrm_forecast_read_empty', { reason: 'no_solar_yield_data', throttleMs: EMPTY_LOG_THROTTLE_MS });
+        }
         return null;
       }
 
@@ -103,6 +118,7 @@ export function createVrmForecast(ctx, { store } = {}) {
    */
   async function readLoadForecast() {
     if (!getDb()) return null;
+    if (!isAvailable()) return null; // same rationale as readPvForecast
 
     try {
       const now = new Date().toISOString();

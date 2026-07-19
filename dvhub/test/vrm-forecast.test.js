@@ -16,7 +16,10 @@ import { createVrmForecast } from '../services/forecast/vrm-forecast.js';
 // providers uniformly. The mirror is fire-and-forget — a store failure must
 // NOT break the read path.
 
-function makeCtx({ dbRows = [], cfg = {} } = {}) {
+// Default cfg carries a VRM token: rows in vrm_forecasts presuppose a
+// configured VRM (epex-fetch needs the same token to populate the table).
+// Tests for the NOT-configured path pass cfg: {} explicitly.
+function makeCtx({ dbRows = [], cfg = { telemetry: { historyImport: { vrmToken: 'tok' } } } } = {}) {
   const logs = [];
   return {
     state: { forecast: { pv: {} } },
@@ -98,4 +101,42 @@ test('18-01j: readPvForecast handles empty result without calling writePvForecas
   // want to assert on log content, inspect ctx.logs — but this test
   // intentionally does NOT, because the null return + zero-call invariants
   // are the documented contract; log presence on empty is impl-detail.
+});
+
+// --- vrm_forecast_read_empty spam gate (Fronius field test 554bbdfd, 2026-07-19) ---
+// Without a VRM token the table is never populated — "empty" is the permanent
+// normal state on non-Victron setups, so the readers must stay silent (and not
+// even query). With a token, a genuinely empty table IS a diagnostic — but
+// throttled, so it cannot rotate real events out of the 1000-entry log ring.
+
+test('spam-gate: readPvForecast without vrmToken is silent — no query, no log', async () => {
+  let queries = 0;
+  const ctx = makeCtx({ cfg: {} });
+  ctx.db = { query: async () => { queries += 1; return { rows: [] }; } };
+  const vrm = createVrmForecast(ctx, { store: makeStoreSpy() });
+  const result = await vrm.readPvForecast();
+  assert.equal(result, null, 'returns null when VRM is not configured');
+  assert.equal(queries, 0, 'no DB query without token');
+  assert.equal(ctx.logs.length, 0, 'no log events without token');
+});
+
+test('spam-gate: readLoadForecast without vrmToken is silent — no query', async () => {
+  let queries = 0;
+  const ctx = makeCtx({ cfg: {} });
+  ctx.db = { query: async () => { queries += 1; return { rows: [] }; } };
+  const vrm = createVrmForecast(ctx, { store: makeStoreSpy() });
+  const result = await vrm.readLoadForecast();
+  assert.equal(result, null, 'returns null when VRM is not configured');
+  assert.equal(queries, 0, 'no DB query without token');
+});
+
+test('spam-gate: configured VRM with empty table logs vrm_forecast_read_empty ONCE per throttle window', async () => {
+  const ctx = makeCtx({ dbRows: [] }); // default cfg carries the token
+  const vrm = createVrmForecast(ctx, { store: makeStoreSpy() });
+  assert.equal(await vrm.readPvForecast(), null);
+  assert.equal(await vrm.readPvForecast(), null);
+  assert.equal(await vrm.readPvForecast(), null);
+  const emptyLogs = ctx.logs.filter(l => l.event === 'vrm_forecast_read_empty');
+  assert.equal(emptyLogs.length, 1, 'back-to-back empty reads log exactly once (throttled)');
+  assert.ok(emptyLogs[0].payload.throttleMs > 0, 'payload documents the throttle');
 });
