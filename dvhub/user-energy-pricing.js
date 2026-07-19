@@ -41,6 +41,21 @@ function computeDynamicGrossImportCtKwh(marketCtKwh, components = {}) {
   return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)));
 }
 
+// §14a Modul 3 (issue #11): the window price is the DSO's time-variable
+// Netzentgelt-Arbeitspreis (gross, incl. VAT) — it SUBSTITUTES the standard
+// grid-charges component, it is not the final end-customer price. With a
+// dynamic tariff the spot component varies per slot, so an absolute window
+// price cannot exist; compute the dynamic gross WITHOUT the standard
+// Netzentgelt (net, pre-VAT) and add the gross window price on top —
+// mathematically identical to de-VATing the window price into the net sum.
+function computeDynamicGrossImportWithModule3CtKwh(marketCtKwh, components = {}, windowGrossCtKwh = 0) {
+  const base =
+    Number(marketCtKwh || 0)
+    + Number(components.energyMarkupCtKwh || 0)
+    + Number(components.leviesAndFeesCtKwh || 0);
+  return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)) + Number(windowGrossCtKwh || 0));
+}
+
 // --- Public exports ---
 
 export function effectiveBatteryCostCtKwh(costs = {}) {
@@ -66,15 +81,23 @@ export function mixedCostCtKwh(costs = {}) {
 export function resolveImportPriceCtKwhForSlot(row, pricing = {}, timezone = 'Europe/Berlin') {
   if (!row) return null;
   const minuteOfDay = localMinutesOfDay(new Date(row.ts), timezone);
-  for (const window of configuredModule3Windows(pricing)) {
-    if (slotMinuteMatchesWindow(minuteOfDay, window)) return window.priceCtKwh;
-  }
+  const activeWindow = configuredModule3Windows(pricing)
+    .find((window) => slotMinuteMatchesWindow(minuteOfDay, window)) || null;
 
   if (pricing?.mode === 'fixed') {
+    // Fixed tariff: the window price IS the final gross price in that window
+    // (a fixed tariff has no per-slot components to substitute into).
+    if (activeWindow) return activeWindow.priceCtKwh;
     const fixed = Number(pricing?.fixedGrossImportCtKwh);
     return Number.isFinite(fixed) ? roundCtKwh(fixed) : null;
   }
 
+  // Dynamic tariff: the window price substitutes the Netzentgelt component
+  // (issue #11 — it was wrongly returned as the absolute slot price before).
+  if (activeWindow) {
+    return computeDynamicGrossImportWithModule3CtKwh(
+      Number(row.ct_kwh || 0), pricing?.dynamicComponents || {}, activeWindow.priceCtKwh);
+  }
   return computeDynamicGrossImportCtKwh(Number(row.ct_kwh || 0), pricing?.dynamicComponents || {});
 }
 

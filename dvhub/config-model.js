@@ -1846,11 +1846,11 @@ function buildFieldDefinitions() {
       groupLabel: 'Paragraph 14a Modul 3',
       groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
       path: 'userEnergyPricing.module3Windows.window1.priceCtKwh',
-      label: 'Fenster 1 Bruttopreis (ct/kWh)',
+      label: 'Fenster 1 Brutto-Netzentgelt (ct/kWh)',
       type: 'number',
       step: 0.01,
       visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
-      help: 'Finaler Endkundenpreis in diesem Fenster, inklusive MwSt und aller kWh-basierten Bestandteile.'
+      help: 'Zeitvariables Brutto-Netzentgelt (Arbeitspreis) des Netzbetreibers in diesem Fenster. Ersetzt beim dynamischen Tarif das Standard-Netzentgelt; beim Festpreis-Tarif gilt der Wert als finaler Brutto-Bezugspreis im Fenster.'
     },
     {
       section: 'pricing',
@@ -1902,11 +1902,11 @@ function buildFieldDefinitions() {
       groupLabel: 'Paragraph 14a Modul 3',
       groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
       path: 'userEnergyPricing.module3Windows.window2.priceCtKwh',
-      label: 'Fenster 2 Bruttopreis (ct/kWh)',
+      label: 'Fenster 2 Brutto-Netzentgelt (ct/kWh)',
       type: 'number',
       step: 0.01,
       visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
-      help: 'Finaler Endkundenpreis in diesem Fenster, inklusive MwSt und aller kWh-basierten Bestandteile.'
+      help: 'Zeitvariables Brutto-Netzentgelt (Arbeitspreis) des Netzbetreibers in diesem Fenster. Ersetzt beim dynamischen Tarif das Standard-Netzentgelt; beim Festpreis-Tarif gilt der Wert als finaler Brutto-Bezugspreis im Fenster.'
     },
     {
       section: 'pricing',
@@ -1958,11 +1958,11 @@ function buildFieldDefinitions() {
       groupLabel: 'Paragraph 14a Modul 3',
       groupDescription: 'Optional: definierte Zeitfenster mit abweichendem Bruttopreis für reduzierte Netzentgelte.',
       path: 'userEnergyPricing.module3Windows.window3.priceCtKwh',
-      label: 'Fenster 3 Bruttopreis (ct/kWh)',
+      label: 'Fenster 3 Brutto-Netzentgelt (ct/kWh)',
       type: 'number',
       step: 0.01,
       visibleWhenPath: { path: 'userEnergyPricing.usesParagraph14aModule3', equals: true },
-      help: 'Finaler Endkundenpreis in diesem Fenster, inklusive MwSt und aller kWh-basierten Bestandteile.'
+      help: 'Zeitvariables Brutto-Netzentgelt (Arbeitspreis) des Netzbetreibers in diesem Fenster. Ersetzt beim dynamischen Tarif das Standard-Netzentgelt; beim Festpreis-Tarif gilt der Wert als finaler Brutto-Bezugspreis im Fenster.'
     },
     {
       section: 'pricing',
@@ -3617,6 +3617,17 @@ function computeDynamicGrossImportCtKwh(marketCtKwh, components = {}) {
   return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)));
 }
 
+// §14a Modul 3 (issue #11): time-variable gross Netzentgelt substitutes the
+// standard grid-charges component — see user-energy-pricing.js for the twin
+// (non-period-aware) resolver; keep both in sync.
+function computeDynamicGrossImportWithModule3CtKwh(marketCtKwh, components = {}, windowGrossCtKwh = 0) {
+  const base =
+    Number(marketCtKwh || 0)
+    + Number(components.energyMarkupCtKwh || 0)
+    + Number(components.leviesAndFeesCtKwh || 0);
+  return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)) + Number(windowGrossCtKwh || 0));
+}
+
 export function resolveActiveUserEnergyPricingForTimestamp(ts, pricing = {}, options = {}) {
   const timeZone = options.timeZone || BERLIN_TIME_ZONE;
   const localDate = formatLocalDate(ts, timeZone);
@@ -3633,16 +3644,22 @@ export function resolveUserImportPriceCtKwhForSlot(row, pricing = {}, options = 
   const minuteOfDay = localMinutesOfDay(row.ts, timeZone);
   const effectivePricing = resolveActiveUserEnergyPricingForTimestamp(row.ts, pricing, options) || buildEffectiveUserEnergyPricing(pricing);
 
-  for (const window of configuredModule3Windows(effectivePricing)) {
-    if (slotMinuteMatchesWindow(minuteOfDay, window)) return window.priceCtKwh;
-  }
+  const activeWindow = configuredModule3Windows(effectivePricing)
+    .find((window) => slotMinuteMatchesWindow(minuteOfDay, window)) || null;
 
   if (effectivePricing.mode === 'fixed') {
+    // Fixed tariff: the window price IS the final gross price in that window.
+    if (activeWindow) return activeWindow.priceCtKwh;
     if (effectivePricing.fixedGrossImportCtKwh == null || effectivePricing.fixedGrossImportCtKwh === '') return null;
     const fixed = Number(effectivePricing.fixedGrossImportCtKwh);
     return Number.isFinite(fixed) ? roundCtKwh(fixed) : null;
   }
 
+  // Dynamic tariff: substitute the Netzentgelt component (issue #11).
+  if (activeWindow) {
+    return computeDynamicGrossImportWithModule3CtKwh(
+      Number(row.ct_kwh || 0), effectivePricing.dynamicComponents || {}, activeWindow.priceCtKwh);
+  }
   return computeDynamicGrossImportCtKwh(Number(row.ct_kwh || 0), effectivePricing.dynamicComponents || {});
 }
 

@@ -1778,7 +1778,7 @@ function renderPricingPeriodsEditor() {
         </div>
         <div class="config-row-grid">
           <div class="config-row">
-            <span class="config-row-label">Bruttopreis (ct/kWh)</span>
+            <span class="config-row-label">Brutto-Netzentgelt (ct/kWh)</span>
             <input class="config-input sa-w-num" type="number" step="0.01" data-std-path="module3Windows.window${n}.priceCtKwh" value="${escapeHtml(w.priceCtKwh ?? '')}" />
           </div>
         </div>
@@ -1787,7 +1787,7 @@ function renderPricingPeriodsEditor() {
   const m3Html = `
     <div class="sa-divider-top"></div>
     <div class="config-group-kicker" data-accent="yellow">§14a Modul 3 — zeitabhängige Netzentgelte (optional)</div>
-    <div class="svc-meta">Reduzierte Brutto-Bezugspreise in definierten Tageszeitfenstern — eine Komponente des Strompreises.</div>
+    <div class="svc-meta">Zeitvariable Brutto-Netzentgelte des Netzbetreibers je Tageszeitfenster — ersetzen beim dynamischen Tarif das Standard-Netzentgelt (beim Festpreis-Tarif: finaler Bezugspreis im Fenster).</div>
     <div class="config-row">
       <span class="config-row-label">§14a Modul 3 aktiv</span>
       <input class="config-checkbox" type="checkbox" data-std-path="usesParagraph14aModule3" data-std-rerender="1"${m3Active ? ' checked' : ''} />

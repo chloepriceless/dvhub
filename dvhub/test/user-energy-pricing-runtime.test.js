@@ -147,3 +147,78 @@ test('legacy single-price config stays as fallback when no dated period matches'
     29.9
   );
 });
+
+// --- §14a Modul 3 (issue #11): window price substitutes the Netzentgelt -----
+// component in dynamic mode; in fixed mode it stays the final gross price.
+// Both twin resolvers (config-model period-aware + user-energy-pricing pure)
+// must agree. Numbers mirror the issue report: Netzentgelt 5,89 / Umlagen
+// 9,066 / MwSt 19 %, Niedriglast 0,59 / Hochlast 10,08 (all gross ct/kWh).
+
+const MODULE3_DYNAMIC_PRICING = {
+  mode: 'dynamic',
+  dynamicComponents: {
+    energyMarkupCtKwh: 0,
+    gridChargesCtKwh: 5.89,
+    leviesAndFeesCtKwh: 9.066,
+    vatPct: 19
+  },
+  usesParagraph14aModule3: true,
+  module3Windows: {
+    window1: { enabled: true, label: 'Niedriglast', start: '00:15', end: '06:30', priceCtKwh: 0.59 },
+    window2: { enabled: true, label: 'Hochlast', start: '11:00', end: '15:00', priceCtKwh: 10.08 }
+  }
+};
+
+test('module3 window substitutes the Netzentgelt component in dynamic mode (not an absolute price)', () => {
+  // 01:15Z = 03:15 Berlin (CEST) — inside Niedriglast. Expected:
+  // (13.56 + 0 + 9.066) × 1.19 + 0.59 = 27.51 — NOT the raw 0.59 the bug returned.
+  assert.equal(
+    resolveUserImportPriceCtKwhForSlot({ ts: '2026-07-18T01:15:00.000Z', ct_kwh: 13.56 }, MODULE3_DYNAMIC_PRICING),
+    27.51
+  );
+  // 10:00Z = 12:00 Berlin — inside Hochlast: (13.56 + 9.066) × 1.19 + 10.08 = 37.
+  assert.equal(
+    resolveUserImportPriceCtKwhForSlot({ ts: '2026-07-18T10:00:00.000Z', ct_kwh: 13.56 }, MODULE3_DYNAMIC_PRICING),
+    37
+  );
+  // 06:00Z = 08:00 Berlin — outside all windows: standard Netzentgelt applies.
+  assert.equal(
+    resolveUserImportPriceCtKwhForSlot({ ts: '2026-07-18T06:00:00.000Z', ct_kwh: 13.56 }, MODULE3_DYNAMIC_PRICING),
+    33.93
+  );
+});
+
+test('module3 window stays the final gross price in fixed mode', () => {
+  const pricing = {
+    mode: 'fixed',
+    fixedGrossImportCtKwh: 29.9,
+    usesParagraph14aModule3: true,
+    module3Windows: {
+      window1: { enabled: true, label: 'Niedriglast', start: '00:15', end: '06:30', priceCtKwh: 24.6 }
+    }
+  };
+  assert.equal(
+    resolveUserImportPriceCtKwhForSlot({ ts: '2026-07-18T01:15:00.000Z', ct_kwh: 13.56 }, pricing),
+    24.6
+  );
+  assert.equal(
+    resolveUserImportPriceCtKwhForSlot({ ts: '2026-07-18T06:00:00.000Z', ct_kwh: 13.56 }, pricing),
+    29.9
+  );
+});
+
+test('pure user-energy-pricing resolver agrees with the period-aware twin on module3 semantics', async () => {
+  const { resolveImportPriceCtKwhForSlot } = await import('../user-energy-pricing.js');
+  assert.equal(
+    resolveImportPriceCtKwhForSlot({ ts: '2026-07-18T01:15:00.000Z', ct_kwh: 13.56 }, MODULE3_DYNAMIC_PRICING),
+    27.51
+  );
+  assert.equal(
+    resolveImportPriceCtKwhForSlot({ ts: '2026-07-18T10:00:00.000Z', ct_kwh: 13.56 }, MODULE3_DYNAMIC_PRICING),
+    37
+  );
+  assert.equal(
+    resolveImportPriceCtKwhForSlot({ ts: '2026-07-18T06:00:00.000Z', ct_kwh: 13.56 }, MODULE3_DYNAMIC_PRICING),
+    33.93
+  );
+});
