@@ -143,6 +143,19 @@ function createConfigInput(field, value, inherited) {
       } else {
         input.placeholder = String(inherited);
       }
+    } else if (input.value === '') {
+      // T-DEFAULT-PLACEHOLDER (Christin 2026-07-20): leeres Feld ohne Vererbung
+      // → den WIRKSAMEN Default als Platzhalter zeigen („Standard: X"), damit
+      // aktive Defaults nicht unsichtbar sind (16000-Muster). Quelle:
+      // field.default (Feld-Definition), sonst definition.defaults (kanonisches
+      // Default-Objekt aus config-model). Reine Anzeige — der D-05
+      // empty:'blank'-Contract (leer bleibt gültig/gespeichert) ist unberührt.
+      const def = field.default !== undefined
+        ? field.default
+        : getPath(definition && definition.defaults, field.path);
+      if (def !== undefined && def !== null && def !== '') {
+        input.placeholder = `Standard: ${def}`;
+      }
     }
     // Width is governed by CSS (.settings-aurora .config-input) — keeps the look uniform.
   }
@@ -3519,6 +3532,38 @@ function renderLoadInspector(payload) {
 // per 19-UI-SPEC §Empty States ("EOS-Service deaktiviert"). All untrusted
 // payload values pass through escHtmlForecastInspector before innerHTML
 // (T-19-22 XSS mitigation per 19-05 §threat_model).
+// T-RESERVE-VISIBILITY (Christin 2026-07-20): Die Übernacht-Reserve-Gates des
+// EOS-Forks (price-aware Release, Wasserfall) sind systemd-Env der eos.service
+// — sie waren in der GUI komplett unsichtbar, obwohl aktiv. Diese Karte zeigt
+// den WIRKSAMEN Zustand read-only; konfiguriert wird weiterhin über
+// /etc/systemd/system/eos.service.d/ (bewusst: Deploy-Kopplung an EOS-Restart).
+// available:false (EOS remote / Verzeichnis nicht lesbar) → ehrlich "?" zeigen.
+function renderEosReserveCard(reserve) {
+  var val, delta;
+  if (!reserve || !reserve.available) {
+    val = '?';
+    delta = 'nicht ermittelbar (EOS remote?)';
+  } else {
+    var g = reserve.gates || {};
+    if (!g.priceAware && !g.waterfall && g.overnightReserve !== true) {
+      val = 'aus';
+      delta = 'keine Reserve-Gates gesetzt';
+    } else {
+      val = 'aktiv' + (g.waterfall ? ' · Wasserfall' : '');
+      var parts = [];
+      if (typeof g.releaseMargin === 'number') parts.push('Marge ' + Math.round(g.releaseMargin * 100) + ' %');
+      if (typeof g.safetyFloorWh === 'number') parts.push('Puffer ' + (g.safetyFloorWh / 1000).toFixed(1).replace('.', ',') + ' kWh');
+      parts.push('via eos.service (systemd)');
+      delta = parts.join(' · ');
+    }
+  }
+  return '<div class="stat-card">' +
+    '<div class="stat-label">Nacht-Reserve</div>' +
+    '<div class="stat-val">' + escHtmlForecastInspector(val) + '</div>' +
+    '<div class="stat-delta">' + escHtmlForecastInspector(delta) + '</div>' +
+  '</div>';
+}
+
 function renderEosInspector(payload) {
   if (!payload) return;
 
@@ -3596,7 +3641,8 @@ function renderEosInspector(payload) {
         '<div class="stat-label">Pull-Slots</div>' +
         '<div class="stat-val">' + slots.length + '</div>' +
         (pullDelta ? ('<div class="stat-delta">' + escHtmlForecastInspector(pullDelta) + '</div>') : '') +
-      '</div>';
+      '</div>' +
+      renderEosReserveCard(payload.reserve);
   }
 
   if (meta) meta.textContent = slots.length + ' Slots · 24 h';
@@ -4246,7 +4292,10 @@ function renderMaeSparkline(data) {
 
   if (activateBtn && input) {
     activateBtn.addEventListener('click', async () => {
-      const key = (input.value || '').trim();
+      // T-LICENSE-KEYPASTE: Mail-Clients brechen lange Keys um — ALLE
+      // Whitespaces (auch mitten im Key) entfernen, Keys enthalten selbst nie
+      // welche. Backend normalisiert identisch (defense in depth).
+      const key = (input.value || '').replace(/\s+/g, '');
       if (!key) {
         setBanner('Bitte Lizenzschlüssel eingeben', 'error');
         return;
@@ -4263,7 +4312,17 @@ function renderMaeSparkline(data) {
         let result = {};
         try { result = await r.json(); } catch { /* keep default */ }
         if (r.ok && result.ok) {
-          showSettingsToast('Lizenz erfolgreich aktiviert.');
+          // T-LICENSE-AUTOBIND: die Aktivierung kaskadiert backend-seitig in
+          // die Box-Bindung — das Ergebnis reist als result.nodeLock mit.
+          if (result.nodeLock && result.nodeLock.ok) {
+            showSettingsToast('Lizenz aktiviert und an diese Box gebunden.');
+          } else if (result.nodeLock && !result.nodeLock.ok) {
+            showSettingsToast('Lizenz aktiviert. Automatische Box-Bindung fehlgeschlagen ('
+              + (result.nodeLock.reason || result.nodeLock.error || 'unbekannt')
+              + ') — bitte unten "An diese Box binden" nutzen.');
+          } else {
+            showSettingsToast('Lizenz erfolgreich aktiviert.');
+          }
           input.value = '';
         } else {
           showSettingsToast(mapErrorToToast(result, r.status));

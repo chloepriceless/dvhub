@@ -72,6 +72,14 @@ export function buildVenusTopicMaps(portalId) {
     selfConsumptionW_l3: `N/${portalId}/system/0/Ac/Consumption/L3/Power`,
     gridSetpointW:    `N/${portalId}/settings/0/Settings/CGwacs/AcPowerSetPoint`,
     minSocPct:        `N/${portalId}/settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit`,
+    // T-VERIFY (2026-07-20): Read-Seite für JEDES Write-Target, damit die
+    // Write-Verifikation (schedule-eval scheduleWriteVerify) den Ist-Zustand
+    // rücklesen kann. Venus published Settings-Topics auf N/ nach Änderung und
+    // nach jedem Keepalive — dieselben Pfade wie die W/-Topics unten.
+    chargeCurrentA:     `N/${portalId}/settings/0/Settings/SystemSetup/MaxChargeCurrent`,
+    maxDischargeW:      `N/${portalId}/settings/0/Settings/CGwacs/MaxDischargePower`,
+    feedExcessDcPv:     `N/${portalId}/settings/0/Settings/CGwacs/OvervoltageFeedIn`,
+    dontFeedExcessAcPv: `N/${portalId}/settings/0/Settings/CGwacs/PreventFeedback`,
   };
 
   // Write-Topics (W/ prefix)
@@ -276,6 +284,32 @@ export function createMqttTransport(victronConfig) {
         return { mqttValue: cache[topic].value, ts: cache[topic].ts };
       }
       throw new Error(`MQTT-Wert nicht verfügbar oder veraltet für: ${name}`);
+    },
+
+    /**
+     * T-VERIFY: Liest einen Punkt und akzeptiert NUR Werte, die NACH sinceTs
+     * beobachtet wurden — für Read-after-Write-Verifikation. Ein frischer
+     * Cache-Eintrag von VOR dem Write würde sonst fälschlich als Bestätigung
+     * durchgehen (staleMaxAgeMs ist dafür viel zu grob, default 90 s). Fehlt ein
+     * Nach-Write-Wert, wird er per R/-Topic aktiv nachgefordert (Venus published
+     * dann auf N/) und einmal nachgefasst. Wirft, wenn bis dahin nichts kommt —
+     * der Aufrufer unterscheidet "kein Beweis" von "falscher Wert".
+     * Gibt { mqttValue, ts } zurück.
+     */
+    async readPointSince(name, sinceTs) {
+      const topic = READ_TOPICS[name];
+      if (!topic) throw new Error(`Kein MQTT-Topic-Mapping für: ${name}`);
+      const freshEnough = () => {
+        const e = cache[topic];
+        return e && e.value != null && Number(e.ts || 0) >= Number(sinceTs || 0);
+      };
+      if (freshEnough()) return { mqttValue: cache[topic].value, ts: cache[topic].ts };
+      if (client?.connected) {
+        client.publish(topic.replace(/^N\//, 'R/'), '');
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+      if (freshEnough()) return { mqttValue: cache[topic].value, ts: cache[topic].ts };
+      throw new Error(`Kein Nach-Write-Wert empfangen für: ${name}`);
     },
 
     /**

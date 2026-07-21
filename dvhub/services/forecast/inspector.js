@@ -22,6 +22,12 @@
 // — combined (ensemble) is preferred; falls through to single-provider models.
 const ML_SHADOW_INPUT_MODEL_RANK = ['combined', 'solcast', 'forecast_solar', 'pvnode', 'open_meteo_solar', 'vrm'];
 
+// T-RESERVE-VISIBILITY (2026-07-20): die Übernacht-Reserve-Gates des EOS-Forks
+// (systemd-Env der eos.service) read-only im Inspector-Envelope mitliefern,
+// damit die Einstellungen zeigen, WAS aktiv ist (price-aware, Marge, Puffer,
+// Wasserfall). Statischer Import ok — reines fs-Lesen, keine DI nötig.
+import { readEosReserveStatus } from '../optimizer/eos-reserve-status.js';
+
 export function createInspector(ctx, deps = {}) {
   const pushLog = ctx && typeof ctx.pushLog === 'function' ? ctx.pushLog : () => {};
   const state = ctx && ctx.state ? ctx.state : null;
@@ -674,6 +680,14 @@ export function createInspector(ctx, deps = {}) {
       // 15-min slot) + KPI totals. null when EOS hasn't produced a solution yet.
       output: solutionResult || null,
       operator: { allowGridCharge },
+      // T-RESERVE-VISIBILITY: wirksame Übernacht-Reserve-Gates der lokalen
+      // eos.service (read-only aus systemd-Drop-ins). available:false = nicht
+      // ermittelbar (EOS remote / Verzeichnis fehlt) — die UI zeigt dann "?"
+      // statt falscher Sicherheit.
+      reserve: (() => {
+        try { return readEosReserveStatus(); }
+        catch (e) { return { available: false, reason: e?.message || 'read_failed' }; }
+      })(),
       meta: { timeoutMs: 5000, previewLimit: PAYLOAD_PREVIEW_LIMIT },
     };
   }

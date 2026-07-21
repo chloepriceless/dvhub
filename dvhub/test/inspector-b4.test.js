@@ -136,3 +136,22 @@ test('B4 — server.js wires a second EOS adapter with timeoutMs:5000 (static-so
   assert.match(src, /createEosAdapter[A-Za-z_0-9]*\([^)]*\{\s*timeoutMs:\s*5000\s*\}/,
     'server.js must instantiate a second EOS adapter with timeoutMs:5000 for the Inspector read path');
 });
+
+// --- T-RESERVE-VISIBILITY: reserve-Feld im getEos-Envelope -------------------
+// Die Übernacht-Reserve-Gates (systemd-Env der eos.service) reisen read-only im
+// Inspector-Envelope mit. Auf Hosts ohne Drop-in-Verzeichnis (CI, dev) muss das
+// Feld existieren und ehrlich available:false melden — nie fehlen/raten.
+test('T-RESERVE: getEos-Envelope trägt reserve (available:false ohne Drop-in-Verzeichnis ok)', async () => {
+  const eosAdapter = makeEosStub({ available: true, pullData: [] });
+  const forecastService = makeForecastService({ pv: { slots: [] }, load: { slots: [] }, price: { slots: [] } });
+  const inspector = createInspector(makeCtx(), { eosAdapter, forecastService });
+  const out = await inspector.getEos({ from: 'a', to: 'b' });
+  assert.ok(out.reserve, 'reserve-Feld muss im Envelope sein');
+  assert.equal(typeof out.reserve.available, 'boolean');
+  if (out.reserve.available) {
+    assert.ok(out.reserve.gates, 'available:true → gates vorhanden');
+    assert.equal(typeof out.reserve.gates.waterfall, 'boolean');
+  } else {
+    assert.ok(out.reserve.reason, 'available:false → reason vorhanden');
+  }
+});

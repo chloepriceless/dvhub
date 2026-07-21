@@ -30,7 +30,7 @@
 
 | | |
 |---|---|
-| **Status** | Version 1.0.3 „Sushi" — feature-complete, Bugfix-Release |
+| **Status** | Version 1.0.4 „Sushi" — feature-complete, Bugfix-Release |
 | **Getestet mit** | LUOX Energy · Victron Ekrano-GX / Cerbo-GX · Fronius AC-PV |
 | **Plattform** | Debian/Ubuntu (x86_64) · Node.js 22 · PostgreSQL |
 | **Lizenz** | Energy Community License (ECL-1.0) — siehe [Lizenz](#lizenz) |
@@ -886,7 +886,7 @@ Härtungswellen:
 - **Forecast-Qualität** — VRM/forecast_solar/open_meteo im gewichteten Ensemble, Slot-Renorm, Zeitzonen-Guard
 - **Test-Fundament &amp; CI** — reparierte Test-Suite, GitHub-Actions-CI (Fast-Lane + ephemeres Postgres + e2e)
 
-> Hinweis zur Versionierung: `package.json`/`app-version.js` führen `1.0.3`
+> Hinweis zur Versionierung: `package.json`/`app-version.js` führen `1.0.4`
 > (Bugfix-Release). Ältere Einträge (1.0.2, 1.0.1, 1.0.0, 0.8.0, 0.4.x, 0.3.x)
 > stehen vollständig in [`CHANGELOG.md`](CHANGELOG.md).
 

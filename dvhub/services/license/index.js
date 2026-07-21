@@ -217,6 +217,9 @@ export function createLicenseService(ctx) {
   let pollerInterval = null;
   let pollerInitialTimeout = null;
   let revalidateInFlight = false;
+  // T-LICENSE-AUTOBIND: der Revalidate-Backfill (aktive, ungebundene Lizenz →
+  // Bindung nachholen) versucht es bei Fehlschlag höchstens 1× pro Prozesslauf.
+  let autobindTriedThisRun = false;
 
   // Pro-Gating (Task #9): live status-transition fan-out. Live services (the
   // DV-Schnittstelle / Modbus server and the EOS/optimizer dispatch layer)
@@ -576,8 +579,19 @@ export function createLicenseService(ctx) {
    * activateLicense: trim key, validate non-empty, resolve account-slug,
    * POST validate-key, map response. Permissive on transport failure (D-16).
    */
+  /**
+   * T-LICENSE-KEYPASTE (Kundenfall 2026-07-20, lil-dav*): Keys kommen per
+   * Copy-Paste aus der Lizenz-Mail — Mail-Clients brechen lange Keys um und
+   * fügen Leerzeichen/Umbrüche MITTEN im Key ein. Ein Keygen-Key (key/…base64url
+   * mit . und Signatur) enthält selbst NIE Whitespace → alle Whitespaces
+   * entfernen ist verlustfrei und macht die Eingabe robust (vorher nur trim()).
+   */
+  function normalizeKey(raw) {
+    return String(raw || '').replace(/\s+/g, '');
+  }
+
   async function activateLicense(rawKey) {
-    const key = String(rawKey || '').trim();
+    const key = normalizeKey(rawKey);
     if (!key) return { ok: false, error: 'empty_key' };
 
     const cfg = getCfg();
@@ -613,7 +627,33 @@ export function createLicenseService(ctx) {
       pushLog('license_activate_http_error', { status: res.status, error: err.message });
       return { ok: false, error: 'server_error' };
     }
-    return applyValidateResponse(json, key);
+    const result = applyValidateResponse(json, key);
+
+    // T-LICENSE-AUTOBIND (Kundenfall 2026-07-20): "Aktivieren" und "An diese
+    // Box binden" waren ZWEI getrennte Schritte — Kunden blieben nach der
+    // Aktivierung unbebunden (Keygen: mehrere Lizenzen mit machines=0), der
+    // Binden-Button wurde nie gedrückt/gefunden. Deshalb kaskadiert eine
+    // ERFOLGREICHE Aktivierung jetzt direkt in die node-lock-Bindung —
+    // best-effort: ein Bindungs-Fehler macht die Aktivierung NICHT kaputt
+    // (permissiv wie D-16), das Ergebnis reist als result.nodeLock zur GUI,
+    // der manuelle Binden-Button bleibt als Fallback. Übersprungen, wenn
+    // bereits eine Maschine gebunden ist (max_machines=1 — ein Re-Bind würde
+    // am Limit scheitern und Lärm machen).
+    if (result.ok && result.status === 'active' && !state.license.machine_id) {
+      try {
+        const nl = await activateNodeLock(key);
+        result.nodeLock = nl.ok
+          ? { ok: true, machineId: nl.machineId || null }
+          : { ok: false, error: nl.error || 'unknown', reason: nl.reason || null };
+        if (!nl.ok) {
+          pushLog('license_autobind_failed', { error: nl.error || 'unknown', reason: nl.reason || null });
+        }
+      } catch (err) {
+        result.nodeLock = { ok: false, error: 'server_error' };
+        pushLog('license_autobind_failed', { error: err.message });
+      }
+    }
+    return result;
   }
 
   /**
@@ -635,7 +675,7 @@ export function createLicenseService(ctx) {
    *   fingerprint?:string, expiry?:string|null, machineId?:string|null, boundFingerprint?:string}>}
    */
   async function activateNodeLock(rawKey) {
-    const key = String(rawKey ?? state.license.license_key ?? '').trim();
+    const key = normalizeKey(rawKey ?? state.license.license_key ?? '');
     if (!key) return { ok: false, error: 'empty_key' };
 
     const applianceId = readApplianceId(baseDir);
@@ -773,6 +813,28 @@ export function createLicenseService(ctx) {
         status: result.status, code: result.code,
         license_id: state.license.license_id
       });
+    }
+
+    // T-LICENSE-AUTOBIND (Bestandskunden, Christin 2026-07-21): Lizenzen, die
+    // VOR der Aktivierungs-Kaskade aktiviert wurden, sind nie gebunden worden
+    // (Keygen: mehrere Lizenzen mit machines=0 — der separate Binden-Button
+    // wurde aus Unwissenheit nie gedrückt). Der periodische Revalidate holt
+    // die Bindung selbstheilend nach: aktiv + ungebunden → EIN Versuch pro
+    // Prozesslauf (kein Poll-Spam, wenn die Bindung dauerhaft scheitert, z. B.
+    // Lizenz auf einer anderen Box am max_machines-Limit; Neustart = neuer
+    // Versuch). Best-effort — der Revalidate-Ausgang bleibt unberührt.
+    if (result.ok && result.status === 'active' && !state.license.machine_id && !autobindTriedThisRun) {
+      autobindTriedThisRun = true;
+      try {
+        const nl = await activateNodeLock(key);
+        if (nl.ok) {
+          pushLog('license_autobind_backfilled', { machine_id: nl.machineId || null });
+        } else {
+          pushLog('license_autobind_failed', { phase: 'revalidate', error: nl.error || 'unknown', reason: nl.reason || null });
+        }
+      } catch (err) {
+        pushLog('license_autobind_failed', { phase: 'revalidate', error: err.message });
+      }
     }
     return result;
   }

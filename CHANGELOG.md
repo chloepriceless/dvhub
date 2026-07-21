@@ -10,6 +10,13 @@ verweist hierher.
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-07-21
+
+Bugfix-/Komfort-Release. Schwerpunkte: korrekte §14a-Modul-3-Preisrechnung,
+robuste Lizenz-Aktivierung in einem Schritt, Sichtbarkeit der
+EOS-Übernacht-Reserve in den Einstellungen und die Fronius-Nulleinspeisung
+bei vollem Akku.
+
 ### Neu
 
 - **Fronius GEN24: Nulleinspeisung bei Abregelung auch mit vollem Akku.** Die
@@ -23,6 +30,60 @@ verweist hierher.
   physikalisch. Failsafe über `WMaxLimPct_RvrtTms`: Fällt DVhub aus, hebt der
   Wechselrichter das Limit selbst wieder auf. Neue Einstellungen unter
   „Nulleinspeisung bei Abregelung" (`zeroFeedIn.*`).
+- **Lizenz-Aktivierung in einem Schritt.** „Aktivieren" bindet die Lizenz
+  jetzt automatisch an die Box — der bisher nötige zweite Klick auf „An diese
+  Box binden" entfällt (der Button bleibt als Fallback). Bereits aktivierte,
+  aber nie gebundene Bestands-Lizenzen werden bei der nächsten periodischen
+  Prüfung automatisch nachgebunden. Zusätzlich ist die Schlüssel-Eingabe
+  robust gegen Zeilenumbrüche/Leerzeichen aus kopierten Lizenz-Mails.
+- **Nacht-Reserve-Status sichtbar.** Der EOS-Inspector zeigt eine neue Karte
+  „Nacht-Reserve" mit dem wirksamen Zustand der EOS-Übernacht-Reserve
+  (aktiv/aus, Verkaufs-Marge, Blackout-Puffer, Wasserfall-Modus) — bisher war
+  diese serverseitige Konfiguration in der Oberfläche unsichtbar. Der
+  Hilfetext der (unverwandten) „Forecast-aware Reserve" der Kleinen
+  Börsenautomatik grenzt die beiden Features jetzt klar ab.
+- **Standard-Werte sichtbar.** Leere Einstellungs-Felder zeigen ihren wirksam
+  greifenden Standard als Platzhalter („Standard: X") — aktive Default-Werte
+  sind damit nicht mehr unsichtbar.
+- **Steuerbefehl-Verifikation (Opt-in, experimentell).** Neuer
+  Read-after-Write-Regelkreis: Nach jedem Steuerbefehl liest DVhub den
+  Ist-Zustand vom Gerät zurück und schreibt bei Abweichung automatisch neu
+  (`schedule.controlWriteVerify.enabled`, Standard aus). Feldtest auf einer
+  Victron/Modbus-Anlage bestanden.
+- **Echte DC-Akku-Leistung am Fronius GEN24** via SunSpec Model 160
+  (`batteryPowerW`) — Grundlage für genauere Akku-Telemetrie und -Historie.
+- **Fronius M124: Kunden-Registerwerte werden vor dem ersten Sperren
+  restart-fest gesichert** und bei der Freigabe wiederhergestellt.
+- **EOS → E-Auto-Mitoptimierung** als Beta-Karte in den Einstellungen
+  zuschaltbar; die **DV-EOS-Endpunkt-URL** ist im Integrations-Drawer
+  editierbar (beliebige EOS-Installation anbindbar).
+- **PV-Nowcast** ist im bezahlten Plan jetzt automatisch aktiv (kein
+  separater Schalter mehr).
+- **EOS-Fork (Beta, standardmäßig aus):** Wasserfall-Reserve-Release
+  (`EOS_RESERVE_WATERFALL`) und lastabhängige
+  Wechselrichter-Wirkungsgradkurve (`EOS_INVERTER_EFF_CURVE`) liegen dem
+  EOS-Drop-in bei — Aktivierung bewusst nur serverseitig, Replay-validiert.
+
+### Behoben
+
+- **§14a Modul 3: Fensterpreis ersetzt das Netzentgelt, nicht den ganzen
+  Bezugspreis** (Issue #11). Bei dynamischem Tarif wurde der
+  Hoch-/Tiefphasen-Bruttopreis fälschlich als absoluter Bezugspreis
+  angesetzt — betroffen waren Slot-Preise, History-Chart und die
+  EOS-Optimierung. Festpreis-Tarife behalten die bisherige Semantik.
+- **Zeitplan-Vorschau zeigte nach einem Leistungs-Upgrade weiter „Akku
+  16000".** Der Vorschau-Cap folgt jetzt der Leistungs-Kette
+  (`akkuAcLimitW → maxDischargeW → maxChargeW → inverterMaxPowerW`) statt
+  einem hartcodierten 16-kW-Wert.
+- **Fronius: Meter-Kalibrierung + Hauslast-Ableitung** am Kunden-GEN24
+  verifiziert; **Not-Halt** erzeugt kein irreführendes
+  `neutralize_failed`-Fehlerlog mehr, wenn kein gridSetpointW-Stellpfad
+  aktiv ist; **`feedExcessDcPv`-API** antwortet auf Sequenz-Profilen ehrlich
+  (Modbus-exception-2-Bug).
+- **VRM-Forecast ohne Token** erzeugt keinen Log-Spam mehr
+  (`vrm_forecast_read_empty` still bzw. auf 1×/15 min gedrosselt).
+- **Einstellungen:** PV-Prognose-Quelle zeigt ehrliche Ensemble-Labels;
+  tote „ML & Forecast-Korrektur"-Karte entfernt.
 
 ## [1.0.3] - 2026-07-11
 

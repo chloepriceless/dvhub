@@ -1320,3 +1320,143 @@ test('under-report: capacityOk gate (declared > tier) is independent of the meas
   const svc = activeProSvc([80], 50);
   assert.equal(svc.isProActive(), false, 'declared-exceeds gates immediately (pre-existing capacityOk)');
 });
+
+// --- T-LICENSE-KEYPASTE + T-LICENSE-AUTOBIND (Kundenfall 2026-07-20) --------
+// (1) Keys aus Mail-Copy-Paste tragen Umbrüche/Spaces MITTEN im Key — die
+//     Normalisierung entfernt alle Whitespaces (Keys enthalten selbst nie welche).
+// (2) Eine erfolgreiche Aktivierung kaskadiert automatisch in die node-lock-
+//     Bindung (vorher: separater Button → Kunden blieben unbebunden).
+
+function validKeygenResponse() {
+  return {
+    ok: true, status: 200,
+    json: async () => ({
+      meta: { valid: true, code: 'VALID', ts: new Date().toISOString() },
+      data: { id: 'lic-autobind', type: 'licenses', attributes: { metadata: {} } }
+    })
+  };
+}
+
+test('KEYPASTE: activateLicense entfernt Umbrüche/Spaces mitten im Key', async () => {
+  const ctx = mockCtx();
+  const svc = createLicenseService(ctx);
+  await withMockFetch(
+    () => validKeygenResponse(),
+    async (calls) => {
+      await svc.activateLicense('  key/abc\nDEF gh\tij  \r\n');
+      const sent = JSON.parse(calls[0].init.body);
+      assert.equal(sent.meta.key, 'key/abcDEFghij', 'alle Whitespaces raus, auch mittendrin');
+    }
+  );
+});
+
+test('AUTOBIND: erfolgreiche Aktivierung kaskadiert in die Bindung (Proxy-Call)', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const applianceId = 'box-autobind';
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
+  const svc = createLicenseService(ctx);
+  const machineFile = mintMachineFile(privateKey, applianceId, null, 'lic-autobind');
+
+  await withMockFetch(
+    (url) => url.includes('proxy.test')
+      ? { ok: true, status: 200, json: async () => ({ ok: true, machineFile, machineId: 'mach-auto' }) }
+      : validKeygenResponse(),
+    async (calls) => {
+      const r = await svc.activateLicense('key/customer-key');
+      assert.equal(r.ok, true);
+      assert.equal(r.status, 'active');
+      assert.equal(calls.length, 2, 'validate + Proxy-Bindung in EINEM Zug');
+      assert.equal(calls[1].url, 'https://proxy.test/activate');
+      assert.deepEqual(r.nodeLock, { ok: true, machineId: 'mach-auto' });
+      assert.equal(ctx.state.license.machine_id, 'mach-auto', 'Maschine persistiert');
+    }
+  );
+});
+
+test('AUTOBIND: Bindungs-Fehler bricht die Aktivierung NICHT (permissiv)', async () => {
+  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+  // KEIN appliance-id-File → activateNodeLock bricht kontrolliert ab.
+  const svc = createLicenseService(ctx);
+  await withMockFetch(
+    () => validKeygenResponse(),
+    async (calls) => {
+      const r = await svc.activateLicense('key/customer-key');
+      assert.equal(r.ok, true, 'Aktivierung bleibt erfolgreich');
+      assert.equal(r.status, 'active');
+      assert.equal(r.nodeLock.ok, false);
+      assert.equal(r.nodeLock.error, 'no_appliance_id');
+      assert.equal(calls.length, 1, 'kein Proxy-Call ohne appliance-id');
+      assert.ok(ctx._logs.some((l) => l.type === 'license_autobind_failed'), 'Fehlschlag geloggt');
+    }
+  );
+});
+
+test('AUTOBIND: übersprungen, wenn bereits eine Maschine gebunden ist', async () => {
+  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+  const svc = createLicenseService(ctx);
+  await withMockFetch(
+    () => validKeygenResponse(),
+    async (calls) => {
+      ctx.state.license.machine_id = 'mach-existing';
+      ctx.state.license.license_id = 'lic-autobind';  // gleiche Lizenz → machine_id überlebt
+      const r = await svc.activateLicense('key/customer-key');
+      assert.equal(r.ok, true);
+      assert.equal(r.nodeLock, undefined, 'keine Kaskade — Maschine existiert');
+      assert.equal(calls.length, 1, 'nur validate, kein Proxy-Call');
+    }
+  );
+});
+
+test('AUTOBIND-Backfill: Revalidate bindet aktive, ungebundene Bestands-Lizenz nach', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  const applianceId = 'box-backfill';
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
+  const svc = createLicenseService(ctx);
+  const machineFile = mintMachineFile(privateKey, applianceId, null, 'lic-autobind');
+
+  await withMockFetch(
+    (url) => url.includes('proxy.test')
+      ? { ok: true, status: 200, json: async () => ({ ok: true, machineFile, machineId: 'mach-backfill' }) }
+      : validKeygenResponse(),
+    async (calls) => {
+      // Bestandszustand: aktiv mit persistiertem Key, aber NIE gebunden.
+      ctx.state.license.status = 'active';
+      ctx.state.license.license_key = 'key/legacy-customer';
+      ctx.state.license.license_id = 'lic-autobind';
+      const r = await svc.revalidateLicense();
+      assert.equal(r.ok, true);
+      assert.equal(calls.length, 2, 'revalidate + Backfill-Bindung');
+      assert.equal(calls[1].url, 'https://proxy.test/activate');
+      assert.equal(ctx.state.license.machine_id, 'mach-backfill');
+      assert.ok(ctx._logs.some((l) => l.type === 'license_autobind_backfilled'), 'Backfill geloggt');
+
+      // Zweiter Revalidate: Maschine existiert → KEIN weiterer Proxy-Call.
+      await svc.revalidateLicense();
+      assert.equal(calls.length, 3, 'nur der validate-Call kam dazu');
+    }
+  );
+});
+
+test('AUTOBIND-Backfill: bei Fehlschlag nur EIN Versuch pro Prozesslauf', async () => {
+  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+  // Kein appliance-id-File → Bindung schlägt kontrolliert fehl (kein Netz-Call).
+  const svc = createLicenseService(ctx);
+  await withMockFetch(
+    () => validKeygenResponse(),
+    async (calls) => {
+      ctx.state.license.status = 'active';
+      ctx.state.license.license_key = 'key/legacy-customer';
+      ctx.state.license.license_id = 'lic-autobind';
+      await svc.revalidateLicense();
+      await svc.revalidateLicense();
+      await svc.revalidateLicense();
+      const fails = ctx._logs.filter((l) => l.type === 'license_autobind_failed');
+      assert.equal(fails.length, 1, 'genau ein Backfill-Versuch pro Prozesslauf');
+      assert.equal(calls.length, 3, 'drei validates, keine Proxy-Calls');
+    }
+  );
+});

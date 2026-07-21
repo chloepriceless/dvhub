@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mqttCacheEntryFresh } from '../transport-mqtt.js';
+import { mqttCacheEntryFresh, buildVenusTopicMaps } from '../transport-mqtt.js';
 
 // T-0080 (P1 sweep): MQTT cache freshness. A frozen/stale cache value must NOT be
 // served as fresh, or it defeats the T-0075 telemetry-freshness floor downstream.
@@ -80,4 +80,20 @@ test('consumption sum: 0-W-Phasen sind gültige Werte', () => {
     { value: 0, ts: NOW }, { value: 0, ts: NOW }, { value: 0, ts: NOW },
   ], MAX, NOW);
   assert.deepEqual(r, { value: 0, ts: NOW });
+});
+
+// --- T-VERIFY Contract: jedes Write-Target hat ein Read-Topic ----------------
+// Die Write-Verifikation (schedule-eval) liest jedes geschriebene Setting per
+// readPointSince zurück — das geht nur, wenn READ_TOPICS jeden WRITE_TOPICS-Key
+// abdeckt. Vorher fehlten chargeCurrentA/maxDischargeW/feedExcessDcPv/
+// dontFeedExcessAcPv auf der Lese-Seite.
+test('T-VERIFY: READ_TOPICS deckt jeden WRITE_TOPICS-Key ab (readback-fähig)', () => {
+  const { READ_TOPICS, WRITE_TOPICS } = buildVenusTopicMaps('portal-x');
+  for (const key of Object.keys(WRITE_TOPICS)) {
+    assert.ok(READ_TOPICS[key], `Write-Target '${key}' braucht ein N/-Read-Topic für die Verifikation`);
+    assert.equal(
+      READ_TOPICS[key].replace(/^N\//, 'W/'), WRITE_TOPICS[key],
+      `'${key}': Read- und Write-Topic müssen denselben Settings-Pfad adressieren`
+    );
+  }
 });

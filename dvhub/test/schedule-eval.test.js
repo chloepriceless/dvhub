@@ -744,3 +744,96 @@ test('Issue #8: Not-Halt gibt die PV frei (emergency_stop_release), ohne Not-Hal
   assert.ok(on.writes.some((w) => w.target === 'feedExcessDcPv' && w.value === 1), 'feedExcessDcPv=1 (einspeisen)');
   assert.ok(on.writes.some((w) => w.target === 'dontFeedExcessAcPv' && w.value === 0), 'dontFeedExcessAcPv=0 (nicht sperren)');
 });
+
+// --- T-VERIFY: Read-after-Write-Verifikation (Christin 2026-07-20) -----------
+// Der Regelkreis: echter Write → readPointSince → Soll-Ist-Vergleich.
+// Match → still (lastOkAt). Mismatch → control_write_unconfirmed + lastWrite
+// verworfen (nächster Assert schreibt neu). 3× in Folge → verify_failed.
+// Lese-Fehler → verify_error, lastWrite bleibt (Lese-Schwäche ≠ Schreib-Fehler).
+
+function makeVerifyCtx({ readBack } = {}) {
+  const readCalls = [];
+  return makeCtx({
+    mutate: ({ state, cfg, ctx }) => {
+      state.victron.fieldUpdatedAt = { soc: Date.now() }; // T-0075-Floor: SoC frisch
+      cfg.schedule.controlWriteVerify = { enabled: true, delayMs: 20, minIntervalMs: 25, toleranceAbs: 0 };
+      ctx.transport = {
+        type: 'mqtt',
+        mqttWrite: async () => {},
+        readPointSince: async (name, sinceTs) => {
+          readCalls.push({ name, sinceTs });
+          return readBack(name, sinceTs);
+        }
+      };
+      ctx._readCalls = readCalls;
+    }
+  });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('T-VERIFY: match → kein Event, lastWrite bleibt, lastOkAt gesetzt', async () => {
+  const { ctx, state, logs } = makeVerifyCtx({
+    readBack: async () => ({ mqttValue: -3000, ts: Date.now() })
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  const res = await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  assert.equal(res.ok, true);
+  await sleep(80);
+  assert.equal(ctx._readCalls.length, 1, 'genau ein Verify-Read');
+  assert.equal(findLog(logs, 'control_write_unconfirmed').length, 0);
+  assert.ok(state.schedule.lastWrite.gridSetpointW, 'lastWrite bleibt bestehen');
+  assert.ok(state.schedule._verify.gridSetpointW.lastOkAt > 0, 'Erfolg verbucht');
+});
+
+test('T-VERIFY: mismatch → unconfirmed + lastWrite verworfen (Re-Write-Pfad frei)', async () => {
+  const { ctx, state, logs } = makeVerifyCtx({
+    readBack: async () => ({ mqttValue: 0, ts: Date.now() }) // Gerät hat NICHT übernommen
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  await sleep(80);
+  const ev = findLog(logs, 'control_write_unconfirmed');
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].payload.expected, -3000);
+  assert.equal(ev[0].payload.actual, 0);
+  assert.equal(state.schedule.lastWrite.gridSetpointW, undefined,
+    'lastWrite verworfen → Unchanged-Short-Circuit greift nicht mehr, nächster Assert schreibt neu');
+  assert.equal(state.schedule._verify.gridSetpointW.mismatches, 1);
+});
+
+test('T-VERIFY: 3 Mismatches in Folge eskalieren zu verify_failed', async () => {
+  const { ctx, logs } = makeVerifyCtx({
+    readBack: async () => ({ mqttValue: 0, ts: Date.now() })
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  for (let i = 0; i < 3; i++) {
+    await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+    await sleep(90); // > delayMs + minIntervalMs
+  }
+  assert.equal(findLog(logs, 'control_write_unconfirmed').length, 3);
+  assert.equal(findLog(logs, 'control_write_verify_failed').length, 1, 'Eskalation beim 3.');
+});
+
+test('T-VERIFY: Lese-Fehler → verify_error, lastWrite bleibt (kein Verwerfen)', async () => {
+  const { ctx, state, logs } = makeVerifyCtx({
+    readBack: async () => { throw new Error('Kein Nach-Write-Wert empfangen für: gridSetpointW'); }
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  await sleep(80);
+  assert.equal(findLog(logs, 'control_write_verify_error').length, 1);
+  assert.equal(findLog(logs, 'control_write_unconfirmed').length, 0);
+  assert.ok(state.schedule.lastWrite.gridSetpointW, 'lastWrite bleibt — Gerät nicht für Lese-Schwäche strafen');
+});
+
+test('T-VERIFY: Flag OFF (default) → kein Verify-Read', async () => {
+  const { ctx } = makeVerifyCtx({
+    readBack: async () => ({ mqttValue: -3000, ts: Date.now() })
+  });
+  ctx.getCfg().schedule.controlWriteVerify.enabled = false;
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  await sleep(80);
+  assert.equal(ctx._readCalls.length, 0, 'default OFF: Verhalten unverändert');
+});

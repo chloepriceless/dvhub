@@ -1433,7 +1433,7 @@ function buildFieldDefinitions() {
       path: 'schedule.smallMarketAutomation.forecastAware',
       label: 'Forecast-aware Reserve (Beta)',
       type: 'boolean',
-      help: 'Wenn aktiv: Reserve und Hoarding-Gate werden aus PV-/Last-Forecast der nächsten 24 h gerechnet. Sonniger Tag erwartet → mehr Slots; PV-Mangel → weniger oder keine Slots. Statisches Minimum-SOC bleibt Obergrenze. Aus = altes Verhalten (statische Reserve).'
+      help: 'Wenn aktiv: Reserve und Hoarding-Gate werden aus PV-/Last-Forecast der nächsten 24 h gerechnet. Sonniger Tag erwartet → mehr Slots; PV-Mangel → weniger oder keine Slots. Statisches Minimum-SOC bleibt Obergrenze. Aus = altes Verhalten (statische Reserve). ACHTUNG: Betrifft NUR die Kleine Börsenautomatik — die EOS-Übernacht-Reserve (lastadaptiv, price-aware, Wasserfall) ist ein EIGENES Feature und läuft unabhängig; ihren Live-Status zeigt die Karte „Nacht-Reserve" im EOS-Inspector.'
     },
     {
       section: 'schedule',
@@ -2680,6 +2680,16 @@ export function createDefaultConfig() {
       // 3.7x. 5 s gives >2x margin; 2716 is RAM so frequent writes are free.
       // Must be in (0,60000]. Per-target override via controlWrite.<target>.keepaliveMs.
       controlKeepaliveMs: 5000,
+      // T-VERIFY (2026-07-20): Read-after-Write-Verifikation der Steuerbefehle.
+      // enabled=true → nach jedem echten Write (kein Keepalive) wird der
+      // Ist-Zustand nach delayMs rückgelesen (MQTT: N/-Topic nach Write-Zeit,
+      // Modbus: Register fc verifyFc||3) und mit dem Soll verglichen. Mismatch
+      // → control_write_unconfirmed + lastWrite verwerfen (nächster Assert
+      // schreibt neu durch alle Gates); 3× in Folge → control_write_verify_failed.
+      // minIntervalMs drosselt auf max. einen Read pro Target pro Intervall
+      // (der 5-s-Recompute würde sonst pro Tick einen R/-Request erzeugen).
+      // Default OFF — Opt-in pro Anlage, bis der Feldtest (prod .66) bestanden ist.
+      controlWriteVerify: { enabled: false, delayMs: 4000, minIntervalMs: 30000, toleranceAbs: 0 },
       // T-0002 safety: SoC floor (%) for a PERSISTENT discharge override
       // (gridSetpointW < 0). At/below this SoC the override is suppressed (hold)
       // so it can never run the battery down to the bare hardware min-SoC.
@@ -3827,7 +3837,13 @@ export function getConfigDefinition() {
     setupWizard: {
       steps: clone(SETUP_WIZARD_STEPS)
     },
-    restartSensitivePrefixes: clone(restartSensitivePrefixes)
+    restartSensitivePrefixes: clone(restartSensitivePrefixes),
+    // T-DEFAULT-PLACEHOLDER (Christin 2026-07-20): das kanonische Default-
+    // Objekt reist zur GUI mit, damit leere Felder ihren WIRKSAMEN Default als
+    // Platzhalter „Standard: X" zeigen können. Vorher waren aktive Defaults
+    // unsichtbar (16000-Muster: Feld leer, Verhalten trotzdem da). Defaults
+    // enthalten keine Secrets (frische Factory-Werte, keine Kundendaten).
+    defaults: createDefaultConfig()
   };
 }
 

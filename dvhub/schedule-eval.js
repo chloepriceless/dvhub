@@ -415,6 +415,142 @@ export function createScheduleEvaluator(ctx) {
     if (allOk) state.ctrl._lastDvFeedIn = feedIn;
   }
 
+  // === T-VERIFY write-verification (Read-after-Write-Regelkreis) ============
+  // Christin 2026-07-20: "Gibt es einen Regelungsloop, der prüft, ob wir eine
+  // Rückmeldung bekommen, wenn wir einen Befehl abschicken?" — bislang nein:
+  // MQTT war fire-and-forget (QoS 0), Modbus nur Frame-Ack. Dieser Loop liest
+  // nach jedem ECHTEN Write (kein Keepalive) den Ist-Zustand zurück und
+  // vergleicht mit dem Soll:
+  //   Match     → still (nur state-Statistik; Recovery nach Mismatch wird geloggt)
+  //   Mismatch  → warn `control_write_unconfirmed` + lastWrite[target] VERWERFEN,
+  //               damit das T-0002-Unchanged-Short-Circuit den Wert nicht ewig
+  //               skippt — der nächste Eval-Tick/Recompute schreibt neu durch
+  //               die VOLLE Gate-Pipeline (kein Transport-Direktpfad, keine
+  //               Gate-Umgehung). Nach VERIFY_FAIL_ESCALATE Mismatches in Folge
+  //               → error `control_write_verify_failed` (Telemetrie-Event).
+  //   Kein Wert → warn `control_write_verify_error` (Lese-Problem ≠ Schreib-Problem,
+  //               KEIN Verwerfen — das Gerät nicht für unsere Lese-Schwäche strafen).
+  // MQTT: transport.readPointSince (nur Nach-Write-Werte zählen als Beweis).
+  // Modbus: Register-Rücklesen (fc verifyFc||3), Vergleich auf RAW-Wort-Ebene
+  // (identisch zu den geschriebenen Words — kein Dekodier-Drift möglich).
+  // Flag default OFF (schedule.controlWriteVerify.enabled) — Opt-in pro Anlage.
+  // Sequenz-Dialekte (B-1112) sind v1 außen vor (eigener Aktuator, eigenes Log).
+  const VERIFY_DEFAULT_DELAY_MS = 4000;
+  const VERIFY_DEFAULT_MIN_INTERVAL_MS = 30000;
+  const VERIFY_FAIL_ESCALATE = 3;
+
+  function maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive }) {
+    const vc = cfg.schedule?.controlWriteVerify;
+    if (vc?.enabled !== true || isKeepalive) return;
+    if (typeof transport?.readPointSince !== 'function' && transport?.type === 'mqtt') return;
+    const all = (state.schedule._verify || (state.schedule._verify = {}));
+    const v = (all[target] || (all[target] = { timer: null, lastRunAt: 0, mismatches: 0, lastOkAt: null }));
+    // Ein Verify pro Target in flight: es prüft beim Feuern den NEUESTEN
+    // lastWrite — schnell aufeinanderfolgende Writes (5-s-Recompute) erzeugen
+    // so höchstens einen Read pro minIntervalMs statt einen pro Write.
+    if (v.timer) return;
+    const delayMs = Number(vc.delayMs) > 0 ? Number(vc.delayMs) : VERIFY_DEFAULT_DELAY_MS;
+    const minIntervalMs = Number(vc.minIntervalMs) > 0 ? Number(vc.minIntervalMs) : VERIFY_DEFAULT_MIN_INTERVAL_MS;
+    const wait = Math.max(delayMs, (v.lastRunAt + minIntervalMs) - Date.now());
+    v.timer = setTimeout(() => {
+      v.timer = null;
+      v.lastRunAt = Date.now();
+      runWriteVerify(target, conf).catch((e) => {
+        pushLog('control_write_verify_error', { target, error: e?.message || String(e) }, 'warn');
+      });
+    }, wait);
+    if (typeof v.timer.unref === 'function') v.timer.unref();
+  }
+
+  async function runWriteVerify(target, confAtWrite) {
+    const cfg = getCfg();
+    const vc = cfg.schedule?.controlWriteVerify || {};
+    const lw = state.schedule.lastWrite[target];
+    const v = state.schedule._verify?.[target];
+    if (!lw || !v) return;
+    const expected = Number(lw.value);
+    const toleranceAbs = Number(vc.toleranceAbs) || 0;
+
+    let match;
+    let actual;
+    try {
+      if (transport.type === 'mqtt') {
+        const res = await transport.readPointSince(target, lw.at);
+        actual = Number(res.mqttValue);
+        match = Number.isFinite(actual) && Math.abs(actual - expected) <= toleranceAbs;
+      } else {
+        const conf = cfg.controlWrite?.[target] || cfg.dvControl?.[target] || confAtWrite;
+        const words = Array.isArray(lw.words) && lw.words.length ? lw.words : [lw.raw];
+        const regs = await transport.mbRequest({
+          host: conf.host, port: conf.port, unitId: conf.unitId,
+          fc: Number(conf.verifyFc) || 3, address: conf.address,
+          quantity: words.length, timeoutMs: conf.timeoutMs
+        });
+        actual = Array.isArray(regs) ? regs.slice(0, words.length) : regs;
+        match = Array.isArray(regs)
+          && words.every((w, i) => (Number(regs[i]) & 0xFFFF) === (Number(w) & 0xFFFF));
+      }
+    } catch (e) {
+      // Kein Nach-Write-Wert / Lese-Fehler: NICHT als Schreib-Fehlschlag werten.
+      pushLog('control_write_verify_error', { target, expected, error: e?.message || String(e) }, 'warn');
+      return;
+    }
+
+    // Superseded-Guard: landete WÄHREND unseres Reads ein neuer Write, kann der
+    // Rücklesewert bereits den NEUEN Soll spiegeln — Vergleich gegen den alten
+    // Soll wäre ein falscher Mismatch. Der Write hat sein eigenes Verify geplant.
+    const lwNow = state.schedule.lastWrite[target];
+    if (!lwNow || lwNow.at !== lw.at) return;
+
+    if (match) {
+      const recovered = v.mismatches > 0;
+      v.mismatches = 0;
+      v.lastOkAt = Date.now();
+      if (recovered) {
+        pushLog('control_write_verify_recovered', { target, value: expected });
+      } else if (!v.okLogged) {
+        // Feldtest-Beweis: der ERSTE bestätigte Write pro Target wird einmalig
+        // geloggt (danach still — Erfolg ist der Normalfall, kein Log-Futter).
+        v.okLogged = true;
+        pushLog('control_write_verified', { target, value: expected, transport: transport.type });
+      }
+      return;
+    }
+
+    v.mismatches += 1;
+    pushLog('control_write_unconfirmed', {
+      target, expected, actual, source: lw.source,
+      mismatches: v.mismatches, retryVia: 'next_assert'
+    }, 'warn');
+    telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+      eventType: 'control_write_unconfirmed',
+      target,
+      valueNum: Number.isFinite(expected) ? expected : null,
+      reason: lw.source,
+      source: 'runtime',
+      meta: { actual, mismatches: v.mismatches }
+    }));
+    // Korrektur über den NATÜRLICHEN Pfad: lastWrite verwerfen → das
+    // Unchanged-Short-Circuit greift nicht mehr, der nächste Assert schreibt
+    // den Soll erneut (voll durch Not-Halt-/EEG-/Floor-Gates) und wird
+    // wieder verifiziert.
+    delete state.schedule.lastWrite[target];
+    if (v.mismatches >= VERIFY_FAIL_ESCALATE) {
+      pushLog('control_write_verify_failed', {
+        target, expected, actual, mismatches: v.mismatches
+      }, 'error');
+      telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+        eventType: 'control_write_verify_failed',
+        target,
+        valueNum: Number.isFinite(expected) ? expected : null,
+        reason: lw.source,
+        source: 'runtime',
+        meta: { actual, mismatches: v.mismatches }
+      }));
+    }
+  }
+  // === end T-VERIFY =========================================================
+
   async function applyControlTarget(target, value, source) {
     const cfg = getCfg();
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
@@ -693,6 +829,9 @@ export function createScheduleEvaluator(ctx) {
         keepalive: isKeepalive
       };
       state.schedule.active[target] = { value, source, at: Date.now(), keepalive: isKeepalive };
+      // T-VERIFY: Read-after-Write-Verifikation planen (non-blocking, Flag-gated,
+      // keine Keepalives — die re-asserten ohnehin denselben Wert zyklisch).
+      maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive });
       // Real writes (value changed) are always surfaced. Keepalive re-writes
       // (identical value re-asserted every controlKeepaliveMs — ~5 s for the
       // volatile reg-2716 setpoint) used to flood the /api/log ring with one

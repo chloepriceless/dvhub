@@ -42,6 +42,75 @@ _SELF_CONSUMPTION_PRIORITY = os.environ.get("EOS_SELF_CONSUMPTION_PRIORITY", "1"
 )
 
 
+# DVhub fork (2026-07-20, Christin): load-dependent inverter efficiency curve.
+# The stock model uses ONE constant dc_to_ac_efficiency for every conversion —
+# a 200 W trickle discharge is modelled as efficient as a 4 kW block, although
+# a real MultiPlus is markedly worse at low partial load (fixed losses). The
+# curve is given NORMALISED over slot-AC utilisation (P/Pnenn via
+# ac_wh / max_power_wh), so the SAME curve scales across device sizes: a
+# MultiPlus 10000 behaves ≈ 2× MultiPlus 5000 in parallel, and paralleling
+# preserves η(P/Pnenn) exactly (each unit runs at the same relative load).
+#
+# Format: EOS_INVERTER_EFF_CURVE="frac:eta,frac:eta,..."  e.g. MultiPlus-II-ish
+#   "0.02:0.75,0.05:0.86,0.10:0.92,0.20:0.945,0.35:0.95,0.60:0.945,1.0:0.93"
+# Unset/empty/invalid → OFF (byte-identical legacy behaviour, constant eff).
+# When ON, the curve REPLACES parameters.dc_to_ac_efficiency for the actual
+# DC→AC conversions in process_energy(); it does NOT multiply on top (DVhub
+# ships dc_to_ac_efficiency=1.0 — round-trip losses live in the battery
+# efficiencies today, see dvhub eos-config-sync.js buildEosInverters. If the
+# curve goes live for real, lower optimizer.roundTripEfficiency to the
+# battery-only value or losses are double-counted).
+# Scope v1 (documented, deliberate):
+#   - Only DC→AC conversions are load-dependent. AC→DC (grid charge) keeps the
+#     constant — the path is hard-disabled for §14a operators anyway.
+#   - Capacity PRE-estimates (ac_unreserved, reserve→SoC translations) keep the
+#     constant reference efficiency: they are planning bounds, not energy flows,
+#     and must stay monotonic for the GA. Only real flows use the curve.
+#   - genetic.py's seed/fast-path heuristics read the constant attribute
+#     directly and are untouched (heuristics, not the billed simulation).
+def _parse_eff_curve(raw: str):
+    """'frac:eta,...' → sorted [(frac, eta), ...] with ≥2 points, else None."""
+    if not raw:
+        return None
+    points = []
+    try:
+        for token in raw.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            frac_s, eta_s = token.split(":")
+            frac, eta = float(frac_s), float(eta_s)
+            if not (0.0 <= frac <= 1.0) or not (0.0 < eta <= 1.0):
+                logger.warning(f"EOS_INVERTER_EFF_CURVE: point out of range, curve OFF: {token}")
+                return None
+            points.append((frac, eta))
+    except ValueError:
+        logger.warning(f"EOS_INVERTER_EFF_CURVE: unparsable, curve OFF: {raw!r}")
+        return None
+    points.sort()
+    if len(points) < 2:
+        logger.warning("EOS_INVERTER_EFF_CURVE: needs >=2 points, curve OFF")
+        return None
+    return points
+
+
+_EFF_CURVE = _parse_eff_curve(os.environ.get("EOS_INVERTER_EFF_CURVE", ""))
+
+# v2 (Christin 2026-07-21): "überall mit dem Kurven-η rechnen". The reserve→SoC
+# translations and the ac_unreserved capacity estimates have NO single
+# conversion size to evaluate η at (they aggregate MANY future night slots), so
+# they use η at a defined NIGHT OPERATING POINT: NIGHT_FRAC × Pnenn (default
+# 6 % ≈ 1.4 kW on a 24 kW unit — typical overnight house load). v1 kept the
+# constant there, which under-sized the reserve when the curve was on (replay
+# 16.07.: night import 0.04 → 0.88 kWh). With η_night < 1 the same AC reserve
+# maps to MORE SoC-Wh held back — the night is covered again.
+_EFF_CURVE_NIGHT_FRAC = 0.06
+try:
+    _EFF_CURVE_NIGHT_FRAC = float(os.environ.get("EOS_INVERTER_EFF_CURVE_NIGHT_FRAC", "0.06"))
+except ValueError:
+    logger.warning("EOS_INVERTER_EFF_CURVE_NIGHT_FRAC unparsable, using 0.06")
+
+
 class Inverter:
     def __init__(
         self,
@@ -76,6 +145,46 @@ class Inverter:
         # ratio is dimensionless and slot-agnostic.
         self.max_ac_charge_power_w = self.parameters.max_ac_charge_power_w
 
+    def _dc_ac_eff(self, ac_wh: float) -> float:
+        """DC→AC efficiency for ONE conversion delivering ac_wh this slot.
+
+        With EOS_INVERTER_EFF_CURVE set: linear interpolation of η over the
+        slot-AC utilisation frac = ac_wh / max_power_wh (∈[0,1], i.e. P/Pnenn —
+        max_power_wh is already slot-scaled so the ratio is dimensionless).
+        Clamped to the outermost curve points. Without a curve: the constant
+        parameters.dc_to_ac_efficiency (legacy, byte-identical).
+        """
+        if not _EFF_CURVE:
+            return self.dc_to_ac_efficiency
+        cap = self.max_power_wh
+        frac = 0.0 if cap <= 0 else min(max(ac_wh / cap, 0.0), 1.0)
+        points = _EFF_CURVE
+        if frac <= points[0][0]:
+            return points[0][1]
+        if frac >= points[-1][0]:
+            return points[-1][1]
+        for i in range(1, len(points)):
+            f1, e1 = points[i]
+            if frac <= f1:
+                f0, e0 = points[i - 1]
+                t = (frac - f0) / (f1 - f0) if f1 > f0 else 0.0
+                return e0 + t * (e1 - e0)
+        return points[-1][1]
+
+    def _ref_eff(self) -> float:
+        """Referenz-η für Reserve-/Kapazitäts-Übersetzungen (v2).
+
+        Diese Übersetzungen aggregieren VIELE künftige Nacht-Slots — es gibt
+        keine einzelne Konversionsgröße für η. Statt der Konstante (v1) wird η
+        am definierten Nacht-Arbeitspunkt bewertet (NIGHT_FRAC × Pnenn), damit
+        die AC-Reserve mit realistischem Teillast-η in SoC-Wh übersetzt wird
+        (η_night < 1 ⇒ mehr Wh zurückhalten ⇒ Nacht bleibt gedeckt).
+        Ohne Kurve: die Konstante (byte-identisches Legacy-Verhalten).
+        """
+        if not _EFF_CURVE:
+            return self.dc_to_ac_efficiency
+        return self._dc_ac_eff(_EFF_CURVE_NIGHT_FRAC * self.max_power_wh)
+
     def process_energy(
         self,
         generation: float,
@@ -96,8 +205,10 @@ class Inverter:
         grid_import = 0.0
         self_consumption = 0.0
 
-        # Cache inverter DC→AC efficiency for discharge path
-        dc_to_ac_eff = self.dc_to_ac_efficiency
+        # Cache inverter DC→AC efficiency for discharge path.
+        # v2: reserve/capacity translations use the night-operating-point η
+        # (curve on) instead of the constant — see _ref_eff docstring.
+        dc_to_ac_eff = self._ref_eff()
 
         if generation >= consumption:
             if consumption > self.max_power_wh:
@@ -120,13 +231,15 @@ class Inverter:
                 if remaining_load_evq > 0:
                     # Akku muss den Restverbrauch decken
                     if self.battery:
-                        # Request more DC from battery to account for DC→AC conversion loss
-                        dc_request = remaining_load_evq / dc_to_ac_eff
+                        # Request more DC from battery to account for DC→AC conversion loss.
+                        # Eff-curve: η at THIS conversion's AC size (load-dependent).
+                        load_eff = self._dc_ac_eff(remaining_load_evq)
+                        dc_request = remaining_load_evq / load_eff
                         from_battery_dc, discharge_losses = self.battery.discharge_energy(
                             dc_request, hour
                         )
                         # Convert DC output to AC
-                        from_battery_ac = from_battery_dc * dc_to_ac_eff
+                        from_battery_ac = from_battery_dc * load_eff
                         inverter_discharge_losses = from_battery_dc - from_battery_ac
                         remaining_load_evq -= from_battery_ac
                         losses += discharge_losses + inverter_discharge_losses
@@ -199,9 +312,14 @@ class Inverter:
                     ac_unreserved = raw_unreserved_wh * disch_eff * dc_to_ac_eff
                     export_ac = min(ac_unreserved, headroom_ac)
                     if export_ac > 0:
-                        dc_request = export_ac / dc_to_ac_eff
+                        # Eff-curve: the co-export rides ON TOP of PV export, so
+                        # the marginal utilisation is the TOTAL AC the inverter
+                        # moves (consumption + PV export + this export) — η at
+                        # that operating point, not at the (small) export alone.
+                        exp_eff = self._dc_ac_eff(consumption + grid_export + export_ac)
+                        dc_request = export_ac / exp_eff
                         exp_dc, exp_losses = self.battery.discharge_energy(dc_request, hour)
-                        exp_ac = exp_dc * dc_to_ac_eff
+                        exp_ac = exp_dc * exp_eff
                         losses += exp_losses + (exp_dc - exp_ac)
                         grid_export += exp_ac
 
@@ -261,12 +379,15 @@ class Inverter:
                 # Request more DC from battery to account for DC→AC conversion loss.
                 # ignore_gate lets self-consumption bypass the discharge gene; when
                 # only export is allowed the gene already permits discharge anyway.
-                dc_request = target_ac / dc_to_ac_eff
+                # Eff-curve: the battery discharge shares the inverter with the
+                # PV passthrough — utilisation = generation + target_ac.
+                dis_eff = self._dc_ac_eff(generation + target_ac)
+                dc_request = target_ac / dis_eff
                 total_discharge_dc, discharge_losses = self.battery.discharge_energy(
                     dc_request, hour, ignore_gate=cover_load
                 )
                 # Convert DC output to AC
-                total_discharge_ac = total_discharge_dc * dc_to_ac_eff
+                total_discharge_ac = total_discharge_dc * dis_eff
                 inverter_discharge_losses = total_discharge_dc - total_discharge_ac
                 losses += discharge_losses + inverter_discharge_losses
 

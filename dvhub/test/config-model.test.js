@@ -195,3 +195,18 @@ test('26-04 Test D: kein RangeError downstream nach Reset einer ungültigen TZ',
     new Intl.DateTimeFormat('en-CA', { timeZone: tz });
   }, 'die zurückgesetzte Zeitzone darf in Intl.DateTimeFormat keinen RangeError werfen');
 });
+
+// --- T-DEFAULT-PLACEHOLDER: defaults reisen in der Definition mit ------------
+// Leere GUI-Felder zeigen ihren wirksamen Default als Platzhalter „Standard: X".
+// Quelle ist getConfigDefinition().defaults (= createDefaultConfig()).
+test('getConfigDefinition liefert defaults (kanonisches Default-Objekt) mit', () => {
+  const def = getConfigDefinition();
+  assert.ok(def.defaults, 'defaults-Property vorhanden');
+  assert.equal(def.defaults.httpPort, createDefaultConfig().httpPort);
+  assert.equal(def.defaults.schedule.controlKeepaliveMs, 5000);
+  assert.equal(def.defaults.schedule.controlWriteVerify.enabled, false,
+    'T-VERIFY default OFF reist mit (Opt-in bleibt sichtbar)');
+  // Frische Kopie, kein geteilter Zustand:
+  def.defaults.httpPort = 99999;
+  assert.notEqual(getConfigDefinition().defaults.httpPort, 99999);
+});
