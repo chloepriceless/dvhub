@@ -150,7 +150,7 @@ test('maxSeverity: picks the highest', () => {
 });
 
 // ── poller integration ───────────────────────────────────────────────────────
-function makePoller(alarmsCfg) {
+function makePoller(alarmsCfg, logs = []) {
   const state = {
     meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0, error: null, consecutiveErrors: 0 },
     victron: { errors: {}, updatedAt: 0, fieldUpdatedAt: {} },
@@ -187,11 +187,12 @@ function makePoller(alarmsCfg) {
     victron: { host: '127.0.0.1', port: 502, alarms: alarmsCfg }
   };
   const poller = createPoller({
-    state, getCfg: () => cfg, transport, pushLog: () => {},
+    state, getCfg: () => cfg, transport,
+    pushLog: (event, payload) => { logs.push({ event, payload }); },
     energyPath: '/tmp/victron-alarms-test.json', onPollComplete: () => {},
     epexNowNext: () => ({ current: { ct_kwh: 0 } })
   });
-  return { state, poller, transport };
+  return { state, poller, transport, logs };
 }
 
 test('poller: configured + active alarm → state.victron.alarms populated', async () => {
@@ -240,6 +241,40 @@ test('poller: MQTT transport → alarm poll guarded out (no block reads attempte
   transport.readPoint = async () => ({ mqttValue: 50 });
   await poller.requestPoll();
   assert.equal(state.victron.alarms, undefined, 'MQTT transport: pollVictronAlarms returns before touching state');
+});
+
+// ── T-ALARM-POLL-V2 (2026-07-22): adaptive Kadenz ────────────────────────────
+// Die VE.Bus/BMS-Blockreads laufen über das single-threaded dbus-modbustcp des
+// GX — auf einem beschäftigten Venus können sie den CONTROL-Pfad aushungern
+// (Root Cause der Modbus-Burst-Regression ab 12.07. auf der Operator-Box).
+// Alarm-Banner sind Minuten-Information und müssen IMMER nachgeben.
+test('T-ALARM-POLL-V2 Health-Gate: laufende Control-Fehler → Alarm-Reads komplett ausgesetzt', async () => {
+  const { state, poller, transport } = makePoller({ enabled: true, pollIntervalMs: 30000, timeoutMs: 1500, vebusUnitId: 229, batteryUnitId: 225 });
+  transport.failMeter = true; // Control-Telemetrie scheitert → consecutiveErrors > 0
+  transport.vebus = vebusBlock({ 35: 2 }); // Alarm läge an — darf aber nicht gelesen werden
+  await poller.requestPoll();
+  assert.ok(state.meter.consecutiveErrors > 0, 'Vorbedingung: Control-Poll ist am Fehlern');
+  assert.equal(state.victron.alarms, undefined,
+    'Health-Gate: kein Alarm-Read solange der Control-Pfad leidet');
+  // Das Gate zählt das Fenster als bedient: auch nach Erholung ist der nächste
+  // Versuch ein volles Intervall entfernt (kein Sofort-Nachholen als Burst).
+  transport.failMeter = false;
+  await poller.requestPoll();
+  assert.equal(state.victron.alarms, undefined,
+    'nach Erholung kein Sofort-Read — volles Intervall Abstand');
+});
+
+test('T-ALARM-POLL-V2 Failure-Backoff: fehlgeschlagener Zyklus eskaliert das Intervall + loggt EINMAL', async () => {
+  const { state, poller, transport, logs } = makePoller({ enabled: true, pollIntervalMs: 30000, timeoutMs: 1500, vebusUnitId: 229, batteryUnitId: 225 });
+  transport.failAlarms = true;
+  await poller.requestPoll();
+  const backoff = logs.filter((l) => l.event === 'victron_alarm_poll_backoff');
+  assert.equal(backoff.length, 1, 'genau eine Backoff-Logzeile pro Eskalationsstufe');
+  // Basis = max(60 s, konfigurierte 30 s) = 60 s; erste Stufe = +5 min Floor.
+  assert.equal(backoff[0].payload.nextIntervalMs, 60000 + 300000,
+    'erste Stufe: Basis 60 s + Floor 5 min');
+  assert.equal(state.victron.alarms.configured, true, 'Fehlzyklus markiert configured, stampt aber kein updatedAt');
+  assert.ok(!state.victron.alarms.updatedAt, 'kein stale "all clear"');
 });
 
 // ── full config-load path (manufacturer profile merge) ───────────────────────

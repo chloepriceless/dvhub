@@ -639,6 +639,56 @@ test('buildScheduleRules: dcExportMode slot carries chargeReserveW onto the rule
   assert.ok(!('chargeReserveW' in rules[1]), 'pure-surplus rule carries no reserve field');
 });
 
+// --- T-LIVESOC-RESERVE (Variante B): dcExportMode-Slots tragen das Plan-SoC-Ziel
+// am SLOT-ENDE (= Start-SoC der Folgezeile; akku_soc_pro_stunde ist der Slot-START-
+// SoC). Die letzte Zeile fällt auf den eigenen SoC zurück. schedule-eval leitet
+// daraus mit Flag AN die Ladereserve live-selbstkorrigierend her.
+test('pullGridSetpoints: dcExportMode-Slot trägt targetSocPct (Folgezeilen-SoC; letzte Zeile eigener SoC)', async () => {
+  const solution = {
+    generated_at: '2026-06-20T08:00:00Z',
+    valid_from: '2026-06-20T08:00:00Z',
+    valid_until: '2026-06-20T08:30:00Z',
+    solution: {
+      data: {
+        '2026-06-20T08:00:00Z': { battery1_soc_factor: 0.50, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 2000 },
+        '2026-06-20T08:15:00Z': { battery1_soc_factor: 0.55, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 1000 },
+      },
+    },
+    prediction: {
+      data: {
+        '2026-06-20T08:00:00Z': { feed_in_tariff_amt_kwh: 0.12, pvforecast_ac_energy_wh: 5000, loadforecast_energy_wh: 500 },
+        '2026-06-20T08:15:00Z': { feed_in_tariff_amt_kwh: 0.12, pvforecast_ac_energy_wh: 1250, loadforecast_energy_wh: 250 },
+      },
+    },
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(solution));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const slots = await adapter.pullGridSetpoints();
+
+    const charge = slots.find((s) => s.ts === new Date('2026-06-20T08:00:00Z').getTime());
+    assert.equal(charge.targetSocPct, 55, 'Ziel-SoC = Start-SoC der Folgezeile (0.55 → 55)');
+
+    const last = slots.find((s) => s.ts === new Date('2026-06-20T08:15:00Z').getTime());
+    assert.equal(last.targetSocPct, 55, 'letzte Zeile: Fallback auf eigenen Start-SoC');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('buildScheduleRules: dcExportMode-Regel trägt targetSocPct (nur wenn endlich)', () => {
+  const slots = [
+    { ts: 1717704000000, endTs: 1717704900000, lever: 'dcExportMode', planAction: 'eos_pv_export', confidence: 0.7, chargeReserveW: 10000, targetSocPct: 87 },
+    { ts: 1717704900000, endTs: 1717705800000, lever: 'dcExportMode', planAction: 'eos_pv_export', confidence: 0.7 },
+  ];
+  const rules = buildScheduleRules({ slots, source: 'forecast_optimizer', optimizer: 'eos', getCfg: () => ({ schedule: { timezone: 'Europe/Berlin' } }) });
+  assert.equal(rules[0].targetSocPct, 87, 'SoC-Ziel auf die Regel durchgereicht');
+  assert.ok(!('targetSocPct' in rules[1]), 'ohne Slot-Ziel kein Feld auf der Regel');
+});
+
 // --- T-0121: pullGridSetpoints caps actuated rules to the horizon ---
 test('pullGridSetpoints caps rules to ruleHorizonHours (no churning far-future rules)', async () => {
   const now = Date.now();

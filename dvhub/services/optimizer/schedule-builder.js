@@ -59,7 +59,10 @@ export function buildScheduleRules({ slots, source = 'forecast_optimizer', optim
       // exports only the surplus ABOVE the charge (live PV − Haus − Reserve − Puffer).
       return {
         ...base, target: 'dcExportMode', value: 1,
-        ...(Number(slot.chargeReserveW) > 0 ? { chargeReserveW: Math.round(slot.chargeReserveW) } : {})
+        ...(Number(slot.chargeReserveW) > 0 ? { chargeReserveW: Math.round(slot.chargeReserveW) } : {}),
+        // T-LIVESOC-RESERVE: plan SoC target at slot end — enables the live-SoC
+        // self-correcting charge reserve in schedule-eval (Variante B).
+        ...(Number.isFinite(slot.targetSocPct) ? { targetSocPct: slot.targetSocPct } : {})
       };
     }
     return {

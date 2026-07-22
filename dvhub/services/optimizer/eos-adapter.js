@@ -508,7 +508,8 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     const horizonH = Number(acfg.optimizer?.ruleHorizonHours) > 0 ? Number(acfg.optimizer.ruleHorizonHours) : 12;
     const horizonCutoff = Date.now() + horizonH * 3600 * 1000;
     const out = [];
-    for (const r of sol.rows) {
+    for (let ri = 0; ri < sol.rows.length; ri++) {
+      const r = sol.rows[ri];
       const ts = new Date(r.ts_utc).getTime();
       if (!Number.isFinite(ts)) continue;
       if (ts > horizonCutoff) continue; // beyond the actuation horizon — recomputed next run
@@ -550,6 +551,15 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         // Below the band it is plan-split noise → 0 (behaviour unchanged).
         const plannedChargeW = pvSurplusW + gridW; // gridW<0 ⇒ = pvSurplus − netExport
         const chargeReserveW = plannedChargeW > bandW ? Math.round(plannedChargeW) : 0;
+        // T-LIVESOC-RESERVE (Variante B): carry the plan's SoC target for the END
+        // of this slot (= next row's start SoC; akku_soc_pro_stunde is the slot-
+        // START SoC). schedule-eval can then re-derive the charge reserve from the
+        // LIVE SoC each cycle instead of trusting the plan trajectory — the plan
+        // model drifts (2026-06-30, 2026-07-21: export started while the real
+        // battery lagged the modelled SoC, full charge 25-45 min late).
+        const nextSoc = sol.rows[ri + 1]?.socPct;
+        const targetSocPct = Number.isFinite(nextSoc) ? nextSoc
+          : (Number.isFinite(r.socPct) ? r.socPct : null);
         out.push({
           ts,
           endTs: ts + slotMs,
@@ -557,6 +567,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
           planAction: 'eos_pv_export',
           confidence: EOS_DEFAULT_CONFIDENCE,
           ...(chargeReserveW > 0 ? { chargeReserveW } : {}),
+          ...(targetSocPct != null ? { targetSocPct } : {}),
         });
         continue;
       }

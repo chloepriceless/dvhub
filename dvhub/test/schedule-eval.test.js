@@ -520,16 +520,20 @@ test('A1: EOS autoManaged dcExportMode rule bypasses the SoC guard and exports',
 // from live PV BEFORE exporting, so "100 % Einspeisung" feeds in only the surplus
 // ABOVE the charge (live PV − Haus − Reserve − Puffer) instead of dumping the power
 // EOS wanted to store. Without the reserve the slot exports all surplus (unchanged).
-function makeChargeReserveCtx({ chargeReserveW, selfConsumptionW = 0, pvTotalW = 5000, batteryEfficiencyPct } = {}) {
+function makeChargeReserveCtx({
+  chargeReserveW, selfConsumptionW = 0, pvTotalW = 5000, batteryEfficiencyPct,
+  targetSocPct, liveSocPct = 50, liveSocCfg, batteryCapacityWh, maxChargeW
+} = {}) {
   return makeCtx({
     mutate: ({ state, cfg }) => {
       state.schedule.rules = [{
         id: 'opt-dc-charge-1', enabled: true, target: 'dcExportMode', value: 1,
         start: '00:00', end: '23:59', source: 'forecast_optimizer',
         autoManaged: true, optimizer: 'eos',
-        ...(chargeReserveW != null ? { chargeReserveW } : {})
+        ...(chargeReserveW != null ? { chargeReserveW } : {}),
+        ...(targetSocPct != null ? { targetSocPct } : {})
       }];
-      state.victron.soc = 50;
+      state.victron.soc = liveSocPct;
       state.victron.pvTotalW = pvTotalW;             // live PV
       state.victron.selfConsumptionW = selfConsumptionW;  // live house load → liveLoadW
       // Guard window forced always-on so the assertion is wall-clock independent;
@@ -539,6 +543,9 @@ function makeChargeReserveCtx({ chargeReserveW, selfConsumptionW = 0, pvTotalW =
         ...(batteryEfficiencyPct != null ? { batteryEfficiencyPct } : {})
       };
       cfg.optimizer.enabled = true;
+      if (liveSocCfg != null) cfg.optimizer.liveSocChargeReserve = liveSocCfg;
+      if (batteryCapacityWh != null) cfg.optimizer.batteryCapacityWh = batteryCapacityWh;
+      if (maxChargeW != null) cfg.optimizer.maxChargeW = maxChargeW;
     }
   });
 }
@@ -611,6 +618,93 @@ test('Batterie-Effizienz-Aufschlag: 100% Wirkungsgrad → kein Aufschlag', async
   await evaluator.evaluateSchedule();
   assert.equal(findLog(logs, 'dc_export_mode_active')[0].payload.battEffSurchargeW, 0,
     '100% efficiency disables the surcharge');
+});
+
+// --- T-LIVESOC-RESERVE (Variante B, Christin 2026-07-22): mit Flag AN und einem
+// Plan-SoC-Ziel auf der Regel wird die Ladereserve pro Zyklus aus dem LIVE-SoC
+// neu hergeleitet (reserveW = (targetSoc − liveSoc) × capWh / slotH) statt der
+// Plan-Trajektorie zu trauen — selbstkorrigierend in beide Richtungen. Ohne
+// Flag/Ziel/SoC/Kapazität gilt exakt der Plan-Wert (Variante-A-Verhalten).
+test('T-LIVESOC-RESERVE: Akku hinter Plan → Live-Reserve ersetzt Plan-Reserve (0) und drosselt den Export', async () => {
+  const { ctx, logs, writes } = makeChargeReserveCtx({
+    chargeReserveW: null, pvTotalW: 10000, targetSocPct: 100, liveSocPct: 98,
+    liveSocCfg: { enabled: true, logDeltaW: 1000 }, batteryCapacityWh: 60000
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  // liveReserve = (100−98)/100 × 60000 / 0.25h = 4800 W (Regel ohne slotTs → 15-min-Default)
+  // export = −(10000 − 4800 − Puffer 100) = −5100 statt −9900 (Plan-Reserve war 0)
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -5100),
+    `expected -5100 (Live-Reserve 4800), got ${JSON.stringify(writes)}`);
+  const lr = findLog(logs, 'live_soc_charge_reserve');
+  assert.equal(lr.length, 1, 'Abweichung ≥ logDeltaW → genau ein Log pro Slot');
+  assert.equal(lr[0].payload.liveReserveW, 4800);
+  assert.equal(lr[0].payload.planChargeReserveW, 0);
+  assert.equal(lr[0].payload.targetSocPct, 100);
+  assert.equal(lr[0].payload.liveSocPct, 98);
+  assert.equal(findLog(logs, 'dc_export_mode_active')[0].payload.chargeReserveW, 4800,
+    'dc_export_mode_active trägt die LIVE-Reserve');
+});
+
+test('T-LIVESOC-RESERVE: Akku vor Plan → Live-Reserve 0 überstimmt Plan-Reserve, Export startet früher', async () => {
+  const { ctx, writes } = makeChargeReserveCtx({
+    chargeReserveW: 3000, pvTotalW: 10000, targetSocPct: 90, liveSocPct: 95,
+    liveSocCfg: { enabled: true }, batteryCapacityWh: 60000
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  // (90−95) < 0 → Live-Reserve 0 → voller Überschuss −(10000 − 100) = −9900,
+  // obwohl der Plan noch 3000 W zurückhalten wollte.
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -9900),
+    `expected -9900 (Akku ist schon voll genug), got ${JSON.stringify(writes)}`);
+});
+
+test('T-LIVESOC-RESERVE: Live-Reserve wird auf optimizer.maxChargeW geklemmt', async () => {
+  const { ctx, writes } = makeChargeReserveCtx({
+    chargeReserveW: null, pvTotalW: 10000, targetSocPct: 100, liveSocPct: 50,
+    liveSocCfg: { enabled: true }, batteryCapacityWh: 60000, maxChargeW: 6000
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  // roh (100−50)/100 × 60000 / 0.25 = 120000 W → Klemme 6000 → export −(10000−6000−100) = −3900
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -3900),
+    `expected -3900 (Klemme maxChargeW 6000), got ${JSON.stringify(writes)}`);
+});
+
+test('T-LIVESOC-RESERVE: Flag AUS → Plan-Reserve gilt unverändert (Variante A)', async () => {
+  const { ctx, logs, writes } = makeChargeReserveCtx({
+    chargeReserveW: 2000, targetSocPct: 100, liveSocPct: 50,
+    liveSocCfg: { enabled: false }, batteryCapacityWh: 60000
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  // wie der bestehende T-CURTAIL-CHARGE-Fall: −(5000 − 2000 − 100) = −2900
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -2900),
+    `expected -2900 (Plan-Reserve, Flag aus), got ${JSON.stringify(writes)}`);
+  assert.equal(findLog(logs, 'live_soc_charge_reserve').length, 0, 'kein Live-Log ohne Flag');
+});
+
+test('T-LIVESOC-RESERVE: Flag AN aber Regel ohne targetSocPct → Fallback auf Plan-Reserve', async () => {
+  const { ctx, writes } = makeChargeReserveCtx({
+    chargeReserveW: 2000, liveSocPct: 50,
+    liveSocCfg: { enabled: true }, batteryCapacityWh: 60000
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -2900),
+    `expected -2900 (kein SoC-Ziel auf der Regel), got ${JSON.stringify(writes)}`);
+});
+
+test('T-LIVESOC-RESERVE: Log dedupliziert pro Slot (zweiter Zyklus loggt nicht erneut)', async () => {
+  const { ctx, logs } = makeChargeReserveCtx({
+    chargeReserveW: null, pvTotalW: 10000, targetSocPct: 100, liveSocPct: 98,
+    liveSocCfg: { enabled: true, logDeltaW: 1000 }, batteryCapacityWh: 60000
+  });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.evaluateSchedule();
+  await evaluator.evaluateSchedule();
+  assert.equal(findLog(logs, 'live_soc_charge_reserve').length, 1,
+    'gleicher Slot → nur ein live_soc_charge_reserve-Eintrag');
 });
 
 // --- 25-01/25-02: EEG/§14a-Gate-Verfeinerung (Self-Consumption + dc_export) ----

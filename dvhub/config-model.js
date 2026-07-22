@@ -2809,6 +2809,10 @@ export function createDefaultConfig() {
     },
     optimizer: {
       eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 },
+      // T-LIVESOC-RESERVE (Variante B): re-derive the EOS charge reserve from the
+      // LIVE battery SoC instead of the plan trajectory (self-correcting). OFF by
+      // default — field-tested on the operator install first (2026-07-22).
+      liveSocChargeReserve: { enabled: false, logDeltaW: 1000 },
       // EOS → E-Auto (Beta): opt-in EV co-optimization. Defaults MATCH the
       // long-standing fallbacks in eos-config-sync.js buildEosElectricVehicles
       // (50 kWh / 5 kW / 70 %) so legalizing the fields changes no behavior.

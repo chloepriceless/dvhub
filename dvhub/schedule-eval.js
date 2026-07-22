@@ -1013,7 +1013,47 @@ export function createScheduleEvaluator(ctx) {
         // to CHARGE in this surplus slot (carried on the dcExportMode rule). Reserve
         // that charge BEFORE exporting, so "100 % Einspeisung" feeds in only the real
         // surplus above the charge instead of exporting the power EOS wanted to store.
-        const chargeReserveW = Math.max(0, Number(dcScheduleRule?.chargeReserveW) || 0);
+        const planChargeReserveW = Math.max(0, Number(dcScheduleRule?.chargeReserveW) || 0);
+        // T-LIVESOC-RESERVE (Variante B, Christin 2026-07-22): the plan-derived
+        // reserve trusts the EOS SoC trajectory — which drifts (30.06. + 21.07.:
+        // export started while the real battery lagged the model, full charge
+        // 25-45 min late). With the flag ON and a plan SoC target on the rule,
+        // re-derive the reserve from the LIVE SoC every cycle:
+        //   reserveW = (targetSoc − liveSoc) × capacityWh / slotHours
+        // Self-correcting both ways: battery behind plan ⇒ reserve rises, export
+        // is curtailed until it catches up; battery ahead ⇒ reserve drops to 0
+        // and the export starts earlier. Clamped to [0, maxChargeW]. Any missing
+        // input (flag off, no target on rule, no live SoC, no capacity) falls
+        // back to the plan value — worst case is exactly today's behaviour.
+        let chargeReserveW = planChargeReserveW;
+        {
+          const lsCfg = cfg.optimizer?.liveSocChargeReserve;
+          const targetSocPct = Number(dcScheduleRule?.targetSocPct);
+          const liveSocPct = Number(state.victron.soc);
+          const capWh = Number(cfg.optimizer?.batteryCapacityWh) || 0;
+          if (lsCfg?.enabled === true && Number.isFinite(targetSocPct)
+              && Number.isFinite(liveSocPct) && liveSocPct >= 0 && capWh > 0) {
+            const slotMs = (Number(dcScheduleRule.slotEndTs) || 0) - (Number(dcScheduleRule.slotTs) || 0);
+            const slotH = slotMs > 0 ? Math.max(0.25 / 3, slotMs / 3600000) : 0.25;
+            let liveReserveW = Math.round(((targetSocPct - liveSocPct) / 100) * capWh / slotH);
+            if (liveReserveW < 0) liveReserveW = 0;
+            const maxChargeW = Number(cfg.optimizer?.maxChargeW) || 0;
+            if (maxChargeW > 0 && liveReserveW > maxChargeW) liveReserveW = maxChargeW;
+            chargeReserveW = liveReserveW;
+            // Log once per slot when the live correction deviates notably from
+            // the plan — the field-test evidence trail.
+            const logDeltaW = Number(lsCfg.logDeltaW) > 0 ? Number(lsCfg.logDeltaW) : 1000;
+            const slotKey = String(dcScheduleRule.slotTs || dcScheduleRule.id || '');
+            if (Math.abs(liveReserveW - planChargeReserveW) >= logDeltaW
+                && state.ctrl._liveSocReserveSlotLogged !== slotKey) {
+              pushLog('live_soc_charge_reserve', {
+                targetSocPct, liveSocPct, planChargeReserveW, liveReserveW,
+                slotH: Math.round(slotH * 100) / 100, capWh,
+              });
+              state.ctrl._liveSocReserveSlotLogged = slotKey;
+            }
+          }
+        }
         // Batterie-Effizienz-Aufschlag (Christin 2026-06-26): bei VOLLeinspeisung
         // deckt der Eigenverbrauch-Abzug (liveLoadW) zwar die AC-Last, aber der
         // Akku-Beitrag zum Eigenverbrauch geht über die DC-AC-Wandlung — diese

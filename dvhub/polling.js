@@ -237,6 +237,16 @@ export function createPoller(ctx) {
   // socket concurrency: the transport's send-queue pulls control + alarm reads
   // one at a time, tid-matched (see transport-modbus.js send()/_next).
   let lastAlarmPollMs = 0;
+  // T-ALARM-POLL-V2 (2026-07-22): adaptive cadence. The VE.Bus/BMS unit reads
+  // go through the GX's single-threaded dbus-modbustcp — on a busy Venus they
+  // can stall it and starve the CONTROL path (root cause of the 12.07.+ Modbus
+  // burst regression on the operator install). Alarm banners are minute-scale
+  // information, so they must always yield:
+  //   • latency guard  — a slow cycle doubles the effective interval (cap 15 min)
+  //   • failure backoff — a failed cycle backs off exponentially (cap 60 min)
+  //   • health gate    — no alarm reads at all while the control poll is erroring
+  //   • recovery decay — healthy fast cycles shrink the interval back to base
+  let alarmDynMs = 0; // dynamic add-on over the configured base interval
 
   // null/''/undefined/out-of-range → null (Number(null)===0 is finite, so an
   // explicit null/empty guard is required before the finite check).
@@ -278,24 +288,46 @@ export function createPoller(ctx) {
         state.victron.alarms = { configured: false, active: [], updatedAt: prev?.updatedAt || null };
         return;
       }
-      const intervalMs = Number(aCfg.pollIntervalMs) || 30000;
+      // T-ALARM-POLL-V2: base interval min 60 s (alarms are banners, not control),
+      // effective interval = base + adaptive add-on from past slowness/failures.
+      const baseMs = Math.max(60000, Number(aCfg.pollIntervalMs) || 120000);
+      const intervalMs = baseMs + alarmDynMs;
       const now = Date.now();
       if (now - lastAlarmPollMs < intervalMs) return; // throttle (decouple from 1 Hz)
+      // Health gate: while the control-telemetry poll is failing, the GX Modbus
+      // service is already struggling — adding unit-block reads makes it worse.
+      // Count the window as served so the next attempt is a full interval away.
+      if (Number(state.meter?.consecutiveErrors) > 0) { lastAlarmPollMs = now; return; }
       lastAlarmPollMs = now;
 
-      const reads = await Promise.all([
-        vebusUnitId == null ? Promise.resolve('skip') : readAlarmBlock(cfg.victron, vebusUnitId, VEBUS_BLOCK),
-        batteryUnitId == null ? Promise.resolve('skip') : readAlarmBlock(cfg.victron, batteryUnitId, BATTERY_BLOCK)
-      ]);
-      const vebus = reads[0] === 'skip' ? null : reads[0];
-      const battery = reads[1] === 'skip' ? null : reads[1];
+      // Sequential (not Promise.all): one unit-block in flight at a time keeps
+      // the burst on the GX as small as possible.
+      const cycleT0 = Date.now();
+      const vebus = vebusUnitId == null ? null : await readAlarmBlock(cfg.victron, vebusUnitId, VEBUS_BLOCK);
+      const battery = batteryUnitId == null ? null : await readAlarmBlock(cfg.victron, batteryUnitId, BATTERY_BLOCK);
+      const cycleMs = Date.now() - cycleT0;
       // a CONFIGURED unit returning null = read failure this cycle. Keep the
       // last-known active list but do NOT bump updatedAt → the read-side flags it
       // stale and degrades the banner (no stale "all clear" masquerade).
       const failed = (vebusUnitId != null && vebus == null) || (batteryUnitId != null && battery == null);
       if (failed) {
+        // T-ALARM-POLL-V2 failure backoff: exponential, floor 5 min over base,
+        // cap 60 min. One log line per escalation step (no 30-s spam).
+        const nextDyn = Math.min(3600000, Math.max(300000, alarmDynMs * 2 || 300000));
+        if (nextDyn !== alarmDynMs) {
+          try { pushLog('victron_alarm_poll_backoff', { cycleMs, nextIntervalMs: baseMs + nextDyn }); } catch { /* never throw */ }
+        }
+        alarmDynMs = nextDyn;
         state.victron.alarms = { ...(state.victron.alarms || { active: [] }), configured: true };
         return;
+      }
+      // T-ALARM-POLL-V2 latency guard + recovery decay: a slow-but-successful
+      // cycle (>1.5 s for both blocks) doubles the add-on (cap 15 min); a fast
+      // healthy cycle decays it by 25 % back toward the base interval.
+      if (cycleMs > 1500) {
+        alarmDynMs = Math.min(900000, Math.max(60000, alarmDynMs * 2 || 60000));
+      } else {
+        alarmDynMs = alarmDynMs > 1000 ? Math.round(alarmDynMs * 0.75) : 0;
       }
       const prevActive = state.victron.alarms?.active || [];
       const active = buildActiveAlarms({ vebus, battery }, prevActive, now);
