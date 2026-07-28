@@ -45,15 +45,27 @@ const KEEPALIVE_LOG_THROTTLE_MS = 60000;
 //   maxDischargeW (2704, int16): 0 = no discharge, positive = cap in W, -1 =
 //     unlimited; ANY non-zero value ENABLES discharge                    → hold 0
 // Verified against config-model.js controlWrite defaults (see T-0075-DESIGN E1).
-// Issue #12: Mindesteinspeisung → Setpoint-Boden auf der negativen Achse.
-// Konfiguriert wird eine POSITIVE Wattzahl ("wie viel soll mindestens ins Netz
-// gehen"), intern ist das ein negativer gridSetpointW. 0/leer/ungültig = aus,
-// damit Bestandsanlagen sich exakt wie bisher verhalten.
-export function minExportFloorW(cfg) {
-  const w = Number(cfg?.schedule?.minExportW);
-  if (!Number.isFinite(w) || w <= 0) return null;
-  return -Math.round(w);
+// Einspeise-Puffer (GitHub #12 + Christin 29.07.) — EIN Wert, kein eigener
+// Regler: der bereits vorhandene `schedule.defaultGridSetpointW`.
+//
+// Beide Melder beschreiben denselben Wert. Johann (#12): „…als mindest Export,
+// wenn der Börsenpreis nicht <0 ist. Sozusagen auf den ‚Default Grid' Wert."
+// Christin: sein eingestelltes -100 wurde während der Abregelung vom
+// eingebauten -40 überschrieben. Deshalb wirkt der Default-Sollwert jetzt
+// überall als Untergrenze, statt nur zu greifen, wenn gar keine Regel läuft.
+//
+// null = kein Puffer (Wert ist 0, leer oder positiv) → unverändertes Verhalten.
+export function exportBufferFloorW(cfg) {
+  const v = Number(cfg?.schedule?.defaultGridSetpointW);
+  if (!Number.isFinite(v) || v >= 0) return null;
+  return Math.round(v);
 }
+
+// Obergrenze für den Puffer WÄHREND der Abregelung. Darüber hinaus wäre es kein
+// Ausregeln von Lastsprüngen mehr, sondern ein echter Verkauf bei negativem
+// Preis — dieselbe Schwelle, mit der das EEG/§14a-Gate eine erzwungene
+// Netzentladung erkennt. Im Normalbetrieb gilt sie nicht.
+const CURTAILMENT_BUFFER_LIMIT_W = FORCED_EXPORT_THRESHOLD_W;
 
 function dischargeFloorHold(target, value) {
   const v = Number(value);
@@ -675,13 +687,12 @@ export function createScheduleEvaluator(ctx) {
     }
     // === end B-1112 Sequenz-Dialekt ==========================================
 
-    // === Issue #12 Mindesteinspeisung (min export floor) =====================
-    // GitHub #12 (VdwBM, 2026-07-21): steht der gridSetpointW auf 0, regelt die
-    // Anlage auf "null am Zähler" — ein Lastsprung (Herd, Wärmepumpe, Wallbox)
-    // erzeugt dann bis zu 1 kW Netzbezug, weil die ESS-Regelung dem Sprung
-    // hinterherläuft. Ein kleiner dauerhafter Export als Puffer fängt das ab.
-    // Der Wert muss frei wählbar sein: die nötige Reserve skaliert mit der
-    // größten Einzellast, die -40 W des Idle-Defaults reichen dafür nicht.
+    // === Einspeise-Puffer als Untergrenze (GitHub #12) ========================
+    // Steht der gridSetpointW auf 0, regelt die Anlage auf "null am Zähler" —
+    // ein Lastsprung (Herd, Wärmepumpe, Wallbox) erzeugt dann bis zu 1 kW
+    // Netzbezug, weil die ESS-Regelung dem Sprung hinterherläuft. Der
+    // Default-Sollwert wirkt deshalb als Untergrenze für JEDEN Sollwert, nicht
+    // mehr nur als Fallback, wenn gar keine Regel läuft.
     //
     // Der Boden VERSTÄRKT nur (Math.min auf der negativen Achse) — er schwächt
     // keinen stärkeren Export ab und schreibt nie in Richtung Netzbezug.
@@ -690,18 +701,19 @@ export function createScheduleEvaluator(ctx) {
     //   - Preis muss bekannt UND >= 0 sein. Unbekannt => KEIN erzwungener Export:
     //     bei negativem Preis kostet Einspeisen Geld, und ein ausgefallener
     //     EPEX-Feed darf das nicht verdecken (fail-safe statt fail-open).
-    //   - negativePriceActive => aus; die §51-Abregelung hat Vorrang.
+    //   - negativePriceActive => aus; dort setzt der Abregelungspfad den Wert
+    //     selbst (mit derselben Zahl, nur zusätzlich gedeckelt).
     //   - Pflicht-Quellen (§51, SoC-Floor, Not-Halt) bleiben unangetastet —
     //     deren Werte sind Schutzmaßnahmen, kein Regelpunkt.
-    //   - sell_price_floor => aus (hält bewusst auf dem Default-Setpoint).
+    //   - sell_price_floor => aus (hält bereits auf genau diesem Wert).
     //   - Ein POSITIVER Sollwert ist ein gewolltes Netzladen (Optimierer lädt den
     //     Akku aus dem Netz). Den dreht der Boden nicht in einen Export um — sonst
-    //     sabotierte die Mindesteinspeisung einen bezahlten Ladeslot.
+    //     sabotierte der Puffer einen bezahlten Ladeslot.
     // Der T-0075-Entlade-Boden weiter unten bleibt wirksam: bei unbekanntem,
     // veraltetem oder eingefrorenem SoC bzw. SoC <= hardFloor wird der negative
     // Wert auf 0 gehalten — der Boden kann den Akku also nicht leerfahren.
     if (target === 'gridSetpointW') {
-      const floorW = minExportFloorW(cfg);
+      const floorW = exportBufferFloorW(cfg);
       const eligible = floorW !== null
         && !isMandatoryControlSource(source)
         && source !== 'sell_price_floor'
@@ -712,16 +724,16 @@ export function createScheduleEvaluator(ctx) {
         if (priceCt !== null && priceCt >= 0 && Number.isFinite(requested)
             && requested <= 0 && requested > floorW) {
           const key = `${source}|${floorW}`;
-          if (state.ctrl._minExportKey !== key) {
-            state.ctrl._minExportKey = key;
-            pushLog('min_export_floor', { requested, floorW, source, priceCt });
+          if (state.ctrl._exportBufferKey !== key) {
+            state.ctrl._exportBufferKey = key;
+            pushLog('export_buffer_floor', { requested, floorW, source, priceCt });
           }
           value = floorW;
-        } else if (state.ctrl._minExportKey != null && !(priceCt !== null && priceCt >= 0)) {
-          state.ctrl._minExportKey = null;
+        } else if (state.ctrl._exportBufferKey != null && !(priceCt !== null && priceCt >= 0)) {
+          state.ctrl._exportBufferKey = null;
         }
-      } else if (state.ctrl._minExportKey != null) {
-        state.ctrl._minExportKey = null;
+      } else if (state.ctrl._exportBufferKey != null) {
+        state.ctrl._exportBufferKey = null;
       }
     }
     // === end Issue #12 Mindesteinspeisung ====================================
@@ -1268,7 +1280,18 @@ export function createScheduleEvaluator(ctx) {
 
       // Bei negativen Preisen: DC/AC Einspeisung blockieren + Grid Setpoint begrenzen
       if (target === 'gridSetpointW' && priceNegative) {
-        const limit = Number(npp.gridSetpointW ?? -40);
+        // 2026-07-29 (Christin): der Puffer während der Abregelung ist DERSELBE
+        // Wert wie im Normalbetrieb — der Default-Sollwert. Vorher stand hier ein
+        // fest eingebautes -40, das einen eingestellten -100 für die Dauer der
+        // Abregelung überschrieb. `npp.gridSetpointW` bleibt als ausdrücklicher
+        // Sonderfall erhalten (wer ihn je gesetzt hat, behält sein Verhalten),
+        // steht aber nicht mehr in den Einstellungen und ist kein Vorgabewert.
+        // Gedeckelt, weil ein großer Default-Sollwert bei negativem Preis sonst
+        // aus dem Ausregeln einen echten Verkauf machen würde.
+        const bufferW = Number(npp.gridSetpointW ?? cfg.schedule?.defaultGridSetpointW ?? -40);
+        const limit = Number.isFinite(bufferW)
+          ? Math.min(0, Math.max(bufferW, CURTAILMENT_BUFFER_LIMIT_W))
+          : -40;
         const prev = state.ctrl.negativePriceActive;
         if (!prev) {
           pushLog('negative_price_protection_on', { price: priceNow.ct_kwh, limit });

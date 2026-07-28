@@ -1207,34 +1207,19 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'baseState',
       groupLabel: 'Grundzustand (Fallback)',
-      groupDescription: 'Was die Anlage am Netzpunkt tut, wenn gerade keine Regel/Optimierung greift. Im EOS-Betrieb selten aktiv, aber der Sicherheits-Grundzustand.',
+      groupDescription: 'Was die Anlage am Netzpunkt tut, wenn gerade keine Regel/Optimierung greift — und zugleich die Untergrenze, die auch unter einer Regel nicht unterschritten wird.',
       groupOrder: 60,
       path: 'schedule.defaultGridSetpointW',
       label: 'Default Grid Setpoint (W)',
       type: 'number',
       empty: 'null',
-      help: 'Leer lassen, wenn kein Default geschrieben werden soll.'
-    },
-    {
-      section: 'schedule',
-      group: 'minExport',
-      groupLabel: 'Mindesteinspeisung',
-      groupDescription: 'Hält am Netzpunkt dauerhaft eine kleine Einspeisung, damit plötzliche Verbraucher nicht sofort Strom aus dem Netz ziehen. Wirkt auf JEDEN Sollwert (Regel, Optimierer, EOS) — nie auf Schutzabschaltungen.',
-      groupOrder: 61,
-      path: 'schedule.minExportW',
-      label: 'Mindesteinspeisung (W)',
-      type: 'number',
-      default: 0,
-      min: 0,
-      max: 5000,
-      step: 10,
-      help: 'Regelt die Anlage auf 0 W am Zähler, verursacht jeder Lastsprung (Herd, Wärmepumpe, Wallbox) kurz Netzbezug, weil die Regelung hinterherläuft. Ein kleiner Dauer-Export als Puffer fängt das ab — Richtwert: etwa so viel, wie deine größte einzelne Last zieht (typisch 200–500 W, bei großen Verbrauchern mehr). 0 = aus. Wird nur angewendet, wenn der Börsenpreis bekannt und nicht negativ ist; bei negativen Preisen und während einer Abregelung bleibt sie aus. Der Entlade-Schutz (Mindest-SoC) hat immer Vorrang.'
+      help: 'Der Netz-Sollwert, auf den die Anlage zurückfällt — negativ = kleine Einspeisung. Er ist zugleich die UNTERGRENZE für jeden anderen Sollwert: will eine Regel oder der Optimierer 0 („null am Zähler“), wird stattdessen dieser Wert gehalten. Sonst erzeugt jeder zuschaltende Verbraucher (Herd, Wärmepumpe, Wallbox) kurz Netzbezug, weil die Regelung dem Lastsprung hinterherläuft. Der kleine Dauer-Export ist reiner Regel-Puffer; nennenswert eingespeist wird dabei nichts. Richtwert: etwa so viel, wie deine größte einzelne Last zieht — typisch −100 bis −500 W. Derselbe Wert gilt auch während einer Abregelung bei negativen Preisen (dort auf 1000 W gedeckelt, damit aus dem Ausregeln kein echter Verkauf wird). Ein stärkerer Export einer Regel wird nie abgeschwächt, ein gewolltes Netzladen nie umgedreht, und der Entlade-Schutz (Mindest-SoC) hat immer Vorrang. Leer lassen, wenn gar kein Default geschrieben werden soll.'
     },
     {
       section: 'schedule',
       group: 'baseState',
       groupLabel: 'Grundzustand (Fallback)',
-      groupDescription: 'Was die Anlage am Netzpunkt tut, wenn gerade keine Regel/Optimierung greift. Im EOS-Betrieb selten aktiv, aber der Sicherheits-Grundzustand.',
+      groupDescription: 'Was die Anlage am Netzpunkt tut, wenn gerade keine Regel/Optimierung greift — und zugleich die Untergrenze, die auch unter einer Regel nicht unterschritten wird.',
       groupOrder: 60,
       path: 'schedule.defaultChargeCurrentA',
       label: 'Default Charge Current (A)',
@@ -1246,7 +1231,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'baseState',
       groupLabel: 'Grundzustand (Fallback)',
-      groupDescription: 'Was die Anlage am Netzpunkt tut, wenn gerade keine Regel/Optimierung greift. Im EOS-Betrieb selten aktiv, aber der Sicherheits-Grundzustand.',
+      groupDescription: 'Was die Anlage am Netzpunkt tut, wenn gerade keine Regel/Optimierung greift — und zugleich die Untergrenze, die auch unter einer Regel nicht unterschritten wird.',
       groupOrder: 60,
       path: 'schedule.defaultFeedExcessDcPv',
       label: 'Default DC-Einspeisung (0/1)',
@@ -1330,21 +1315,6 @@ function buildFieldDefinitions() {
       label: 'Aktive Anlagensteuerung (DV-Schnittstelle)',
       type: 'boolean',
       help: 'Steuert, ob DVhub aktiv in die Wechselrichter/Anlage SCHREIBT (dynamische PV-Abregelung reg 2707/2708 + Einspeise-Freigabe). AKTIV lassen, wenn du an der Direktvermarktung mit dynamischen B\u00f6rsenpreisen teilnimmst (Einspeise-Modus = \u201eSpot\u201c). Bei FESTER EEG-Einspeiseverg\u00fctung (Einspeise-Modus = \u201eFest\u201c) und wenn du DVhub nur zum Beobachten nutzt: hier DEAKTIVIEREN \u2014 sonst regelt DVhub deine PV bei niedrigen/negativen B\u00f6rsenpreisen ab und du verlierst Einspeiseverg\u00fctung ohne Gegenwert. Beim Deaktivieren gibt DVhub die Einspeisung EINMALIG aktiv wieder frei (OvervoltageFeedIn=1 / PreventFeedback=0), damit keine zuvor gesetzte Sperre am Ger\u00e4t stehen bleibt \u2014 danach schreibt es nichts mehr. Der Not-Halt gibt die PV ebenfalls wieder frei. (Bleibt DVhub ganz aus, die Venus-Settings ggf. manuell zur\u00fccksetzen \u2014 siehe docs/VICTRON-DYNAMISCHE-REGELUNG-ABSCHALTEN.md.)'
-    },
-    {
-      section: 'schedule',
-      group: 'feedinTariff',
-      groupLabel: 'Einspeisung & Tarif',
-      groupDescription: 'Wie der Optimizer den Einspeise-/Verkaufserl\u00f6s bewertet.',
-      groupOrder: 30,
-      path: 'dvControl.negativePriceProtection.gridSetpointW',
-      label: 'Netz-Sollwert w\u00e4hrend der Abregelung (W)',
-      type: 'number',
-      default: -40,
-      min: -2000,
-      max: 0,
-      step: 10,
-      help: 'Worauf der Netz-Sollwert gehalten wird, solange bei negativen B\u00f6rsenpreisen abgeregelt wird. Negativ = kleine Einspeisung. Klingt widersinnig, ist aber genau dann wichtig: bei 0 regelt die Anlage auf \u201enull am Z\u00e4hler\u201c, und jeder zuschaltende Verbraucher erzeugt sofort Netzbezug, weil die Regelung dem Lastsprung hinterherl\u00e4uft \u2014 und Bezug kostet dich gerade in der Abregelung Geld. Der kleine Dauer-Export ist reiner Regel-Puffer; nennenswert eingespeist wird dabei nichts. Standard \u221240 W; bei gro\u00dfen Verbrauchern (W\u00e4rmepumpe, Wallbox, Herd) sind \u2212100 bis \u2212200 W realistischer. Getrennt von der \u201eMindesteinspeisung\u201c einstellbar, weil Einspeisen bei negativen Preisen Geld kostet \u2014 hier darf der Puffer bewusst kleiner sein als im Normalbetrieb.'
     },
     {
       section: 'schedule',
@@ -2804,7 +2774,13 @@ export function createDefaultConfig() {
       enabled: true,
       feedExcessDcPv: { enabled: true, fc: 6, address: 2707, writeType: 'uint16', signed: false, scale: 1, offset: 0, wordOrder: 'be' },
       dontFeedExcessAcPv: { enabled: true, fc: 6, address: 2708, writeType: 'uint16', signed: false, scale: 1, offset: 0, wordOrder: 'be' },
-      negativePriceProtection: { enabled: true, gridSetpointW: -40 }
+      // gridSetpointW steht hier BEWUSST nicht mehr drin (2026-07-29): der feste
+      // Vorgabewert -40 überschrieb während der Abregelung einen eingestellten
+      // Default-Sollwert (Christins -100). Ohne Eintrag folgt die Abregelung dem
+      // schedule.defaultGridSetpointW — ein Wert für beide Situationen. Wer den
+      // Schlüssel ausdrücklich in seiner Konfiguration stehen hat, behält sein
+      // bisheriges Verhalten.
+      negativePriceProtection: { enabled: true }
     },
     schedule: {
       timezone: 'Europe/Berlin',
@@ -2833,11 +2809,6 @@ export function createDefaultConfig() {
       // so it can never run the battery down to the bare hardware min-SoC.
       manualOverrideMinSocPct: 10,
       defaultGridSetpointW: -40,
-      // Issue #12: Mindesteinspeisung als Boden für JEDEN gridSetpointW-Sollwert
-      // (positive Wattzahl, intern negativ). 0 = aus → Bestandsanlagen verhalten
-      // sich unverändert; der Wert ist bewusst frei wählbar, weil die nötige
-      // Reserve mit der größten Einzellast skaliert.
-      minExportW: 0,
       defaultChargeCurrentA: null,
       defaultFeedExcessDcPv: 1,
       rules: [],

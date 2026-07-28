@@ -21,29 +21,22 @@ sowohl im Normalbetrieb als auch während der Abregelung.
 
 ### Neu
 
-- **Mindesteinspeisung frei einstellbar.** Steht der Netz-Sollwert auf 0, regelt
-  die Anlage auf „null am Zähler" — schaltet dann ein großer Verbraucher zu
-  (Herd, Wärmepumpe, Wallbox), entsteht kurzzeitig bis zu 1 kW Netzbezug, weil
-  die Regelung dem Lastsprung hinterherläuft. Unter „Zeitplan → Mindest­einspeisung"
-  lässt sich jetzt ein dauerhafter kleiner Export als Puffer vorgeben (0 = aus,
-  bis 5000 W). Richtwert: etwa so viel, wie die größte einzelne Last zieht.
-  Bisher gab es dafür nur den Idle-Vorgabewert von 40 W, der bei großen
-  Verbrauchern nicht reicht. Der Wert wirkt als **Untergrenze auf jeden**
-  Sollwert (Regel, Optimierer, EOS), verstärkt also nur und schwächt einen
-  stärkeren Export nie ab. Er dreht auch kein gewolltes Netzladen um. Aus bleibt
-  er, wenn der Börsenpreis negativ **oder unbekannt** ist (ein ausgefallener
+- **„Default Grid Setpoint" ist jetzt der Einspeise-Puffer — überall.** Steht der
+  Netz-Sollwert auf 0, regelt die Anlage auf „null am Zähler"; schaltet dann ein
+  großer Verbraucher zu (Herd, Wärmepumpe, Wallbox), entsteht kurzzeitig bis zu
+  1 kW Netzbezug, weil die Regelung dem Lastsprung hinterherläuft. Der bereits
+  vorhandene Wert unter „Zeitplan → Grundzustand" wirkt deshalb nicht mehr nur
+  als Rückfallwert, wenn gar keine Regel läuft, sondern als **Untergrenze für
+  jeden** Sollwert — auch gegenüber Regel, Optimierer und EOS. Richtwert: etwa
+  so viel, wie die größte einzelne Last zieht, typisch −100 bis −500 W. Der
+  kleine Dauer-Export ist reiner Regel-Puffer; nennenswert eingespeist wird
+  dabei nichts. **Es gibt dafür bewusst keine zweite Einstellung**, auch nicht
+  für die Abregelung — ein Wert, der überall gilt. Ein stärkerer Export wird nie
+  abgeschwächt und ein gewolltes Netzladen nie umgedreht. Aus bleibt der Puffer,
+  wenn der Börsenpreis negativ **oder unbekannt** ist (ein ausgefallener
   Preis-Feed darf keinen Export erzwingen), im Not-Halt und unterhalb des
-  Entlade-Bodens — der Akkuschutz behält immer Vorrang. Während einer Abregelung
-  gilt der eigene Puffer aus der nächsten Zeile.
+  Entlade-Bodens — der Akkuschutz behält immer Vorrang.
   Danke an **Johann (@VdwBM)** für den Hinweis (GitHub #12).
-
-- **Der Puffer während der Abregelung ist einstellbar.** „Netz-Sollwert während
-  der Abregelung" unter „Einspeisung & Tarif" (−2000 bis 0 W, Standard −40 W).
-  Der Wert existierte intern schon, ließ sich aber nur durch Editieren der
-  Konfigurationsdatei ändern. Bei großen Verbrauchern (Wärmepumpe, Wallbox,
-  Herd) sind −100 bis −200 W realistischer als die bisherigen −40 W. Bewusst
-  getrennt von der Mindesteinspeisung einstellbar, weil Einspeisen bei negativen
-  Preisen Geld kostet — dort darf der Puffer kleiner sein als im Normalbetrieb.
 
 - **Einfrier-Wächter für die Live-Daten.** DVhub erkennt jetzt den Fall, dass die
   Anlage zwar sauber antwortet, aber immer denselben Messwert liefert — eine
@@ -89,14 +82,19 @@ sowohl im Normalbetrieb als auch während der Abregelung.
 
 ### Behoben
 
-- **Netzbezug während der Abregelung.** Solange bei negativen Börsenpreisen
-  abgeregelt wurde, konnte der Netz-Sollwert auf 0 stehen bleiben — die Anlage
-  regelte dann auf „null am Zähler", und jeder zuschaltende Verbraucher erzeugte
-  sofort Netzbezug, weil die Regelung dem Lastsprung hinterherläuft. Gerade in
-  der Abregelung ist dieser Bezug teuer. Der Sollwert wird jetzt für die Dauer
-  der Abregelung auf dem konfigurierten Puffer **gehalten** statt nur nach oben
-  begrenzt. Ein bewusstes Netzladen (positiver Sollwert) bleibt unangetastet —
-  das ist bei negativen Preisen wirtschaftlich richtig und keine Einspeisung.
+- **Netzbezug während der Abregelung.** Zwei Fehler wirkten hier zusammen.
+  Erstens überschrieb die Abregelung bei negativen Börsenpreisen einen
+  eingestellten Netz-Sollwert (z. B. −100 W) für ihre gesamte Dauer mit fest
+  eingebauten −40 W — der eingestellte Wert kam einfach nicht durch. Zweitens
+  griff der Schutz nur, wenn eine Regel *mehr* Export wollte als dieser Wert:
+  wollte sie 0, fiel das durch und es wurde tatsächlich 0 geschrieben, also
+  „null am Zähler" mitten in der Abregelung — mit genau den Bezugsspitzen, die
+  dort besonders teuer sind. Jetzt gilt auch während der Abregelung dein
+  eingestellter Sollwert, und er wird **gehalten** statt nur nach oben begrenzt.
+  Zur Sicherheit ist er dabei auf 1000 W gedeckelt, damit aus dem Ausregeln kein
+  echter Verkauf bei negativem Preis wird. Ein bewusstes Netzladen (positiver
+  Sollwert) bleibt unangetastet — das ist bei negativen Preisen wirtschaftlich
+  richtig und keine Einspeisung.
 
 - **Einstellungen der Gruppe „Verbindung" wirkten nicht.** „Telemetrie-Frische
   max. Alter" und „Modbus Connect-Timeout" wurden beim Anwenden des

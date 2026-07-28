@@ -280,6 +280,53 @@ function nppCtx(ruleValue, limit = -40) {
   });
 }
 
+// Ohne ausdrücklichen npp-Wert folgt die Abregelung dem Default-Sollwert —
+// EIN Wert für beide Situationen (Christin, 29.07.).
+function nppCtxFromDefault(ruleValue, defaultSetpointW) {
+  return makeCtx({
+    mutate: ({ cfg, ctx, state }) => {
+      cfg.dvControl = { enabled: false, negativePriceProtection: { enabled: true } };
+      cfg.schedule.defaultGridSetpointW = defaultSetpointW;
+      ctx.epexNowNext = () => ({ current: { ct_kwh: -2, eur_mwh: -20 }, next: null });
+      state.schedule.rules = [holdRule(ruleValue)];
+    }
+  });
+}
+
+test('Abregelung folgt dem Default-Sollwert (-100 wird NICHT mehr von -40 überschrieben)', async () => {
+  const { ctx, state } = nppCtxFromDefault(0, -100);
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const w = state.schedule.active.gridSetpointW;
+  assert.equal(Number(w.value), -100);
+  assert.equal(w.source, 'negative_price_protection');
+});
+
+test('Abregelung: großer Default-Sollwert wird gedeckelt (kein Verkauf bei Negativpreis)', async () => {
+  const { ctx, state } = nppCtxFromDefault(0, -8000);
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -1000,
+    'aus dem Ausregeln darf kein echter Verkauf werden');
+});
+
+test('Abregelung: Default-Sollwert 0 = kein Puffer, bleibt 0', async () => {
+  const { ctx, state } = nppCtxFromDefault(0, 0);
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 0);
+});
+
+test('Abregelung: ein ausdrücklich gesetzter npp-Wert gewinnt weiterhin (Bestandsanlagen)', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ cfg, ctx: c, state: s }) => {
+      cfg.dvControl = { enabled: false, negativePriceProtection: { enabled: true, gridSetpointW: -60 } };
+      cfg.schedule.defaultGridSetpointW = -400;
+      c.epexNowNext = () => ({ current: { ct_kwh: -2, eur_mwh: -20 }, next: null });
+      s.schedule.rules = [holdRule(0)];
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -60);
+});
+
 test('Abregelung: Sollwert 0 wird auf den Puffer gepinnt (kein "null am Zähler")', async () => {
   const { ctx, state } = nppCtx(0);
   await createScheduleEvaluator(ctx).evaluateSchedule();

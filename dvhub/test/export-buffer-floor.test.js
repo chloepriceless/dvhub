@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createScheduleEvaluator, minExportFloorW } from '../schedule-eval.js';
+import { createScheduleEvaluator, exportBufferFloorW } from '../schedule-eval.js';
 
-// Issue #12 (VdwBM, 2026-07-21) — Mindesteinspeisung.
+// Issue #12 (VdwBM, 2026-07-21) + Christin (2026-07-29) — Einspeise-Puffer.
 //
-// Kontrakt: ein konfigurierbarer Boden hält den gridSetpointW dauerhaft auf
-// einer kleinen Einspeisung, damit Lastsprünge nicht sofort Netzbezug erzeugen.
+// Kontrakt: der vorhandene Default-Sollwert (schedule.defaultGridSetpointW)
+// hält den gridSetpointW dauerhaft auf einer kleinen Einspeisung, damit
+// Lastsprünge nicht sofort Netzbezug erzeugen. EIN Wert, kein eigener Regler.
 // Der Boden VERSTÄRKT nur; er darf niemals
 //   - einen stärkeren Export abschwächen,
 //   - ein gewolltes Netzladen (positiver Sollwert) umdrehen,
@@ -52,7 +53,7 @@ function makeCtx(overrides = {}) {
       timezone: 'Europe/Berlin',
       manualOverrideTtlMs: 300000,
       controlKeepaliveMs: 0,
-      minExportW: 300,
+      defaultGridSetpointW: -300,
       smallMarketAutomation: { enabled: false }
     }
   };
@@ -87,36 +88,37 @@ const lastGrid = (writes) => gridWrites(writes).at(-1)?.value;
 
 // --- reine Helper-Funktion ----------------------------------------------------
 
-test('minExportFloorW: positive Watt werden zum negativen Setpoint-Boden', () => {
-  assert.equal(minExportFloorW({ schedule: { minExportW: 300 } }), -300);
-  assert.equal(minExportFloorW({ schedule: { minExportW: 1250.4 } }), -1250);
+test('exportBufferFloorW: der Default-Sollwert IST der Puffer', () => {
+  assert.equal(exportBufferFloorW({ schedule: { defaultGridSetpointW: -300 } }), -300);
+  assert.equal(exportBufferFloorW({ schedule: { defaultGridSetpointW: -1250.4 } }), -1250);
 });
 
-test('minExportFloorW: 0/leer/ungültig = aus (null)', () => {
-  assert.equal(minExportFloorW({ schedule: { minExportW: 0 } }), null);
-  assert.equal(minExportFloorW({ schedule: {} }), null);
-  assert.equal(minExportFloorW({}), null);
-  assert.equal(minExportFloorW(undefined), null);
-  assert.equal(minExportFloorW({ schedule: { minExportW: 'abc' } }), null);
-  // Negative Eingabe wäre eine Vorzeichen-Verwechslung des Bedieners und würde,
-  // naiv negiert, Netzbezug erzwingen → wird als "aus" behandelt, nicht gedreht.
-  assert.equal(minExportFloorW({ schedule: { minExportW: -300 } }), null);
+test('exportBufferFloorW: 0/leer/positiv/ungültig = kein Puffer (null)', () => {
+  assert.equal(exportBufferFloorW({ schedule: { defaultGridSetpointW: 0 } }), null);
+  assert.equal(exportBufferFloorW({ schedule: { defaultGridSetpointW: null } }), null);
+  assert.equal(exportBufferFloorW({ schedule: {} }), null);
+  assert.equal(exportBufferFloorW({}), null);
+  assert.equal(exportBufferFloorW(undefined), null);
+  assert.equal(exportBufferFloorW({ schedule: { defaultGridSetpointW: 'abc' } }), null);
+  // Ein POSITIVER Default ist Netzbezug, kein Puffer — daraus darf nie ein
+  // erzwungener Export werden.
+  assert.equal(exportBufferFloorW({ schedule: { defaultGridSetpointW: 300 } }), null);
 });
 
 // --- Grundverhalten -----------------------------------------------------------
 
-test('Default (0) = aus: Sollwert 0 bleibt 0', async () => {
-  const { evaluator, writes } = makeCtx({ mutate: ({ cfg }) => { cfg.schedule.minExportW = 0; } });
+test('kein Puffer (0) = aus: Sollwert 0 bleibt 0', async () => {
+  const { evaluator, writes } = makeCtx({ mutate: ({ cfg }) => { cfg.schedule.defaultGridSetpointW = 0; } });
   await evaluator.applyControlTarget('gridSetpointW', 0, 'rule:test');
   assert.equal(lastGrid(writes), 0);
 });
 
-test('Sollwert 0 wird auf die Mindesteinspeisung angehoben', async () => {
+test('Sollwert 0 wird auf den Puffer angehoben', async () => {
   const { evaluator, writes, logs } = makeCtx();
   await evaluator.applyControlTarget('gridSetpointW', 0, 'rule:test');
   assert.equal(lastGrid(writes), -300);
-  const log = logs.find((l) => l.event === 'min_export_floor');
-  assert.ok(log, 'min_export_floor wird protokolliert');
+  const log = logs.find((l) => l.event === 'export_buffer_floor');
+  assert.ok(log, 'export_buffer_floor wird protokolliert');
   assert.equal(log.payload.requested, 0);
   assert.equal(log.payload.floorW, -300);
 });
@@ -244,15 +246,15 @@ test('Log ist gedrosselt: gleiche Quelle + gleicher Boden meldet sich nur einmal
   await evaluator.applyControlTarget('gridSetpointW', 0, 'rule:test');
   await evaluator.applyControlTarget('gridSetpointW', -50, 'rule:test');
   await evaluator.applyControlTarget('gridSetpointW', -120, 'rule:test');
-  assert.equal(logs.filter((l) => l.event === 'min_export_floor').length, 1);
+  assert.equal(logs.filter((l) => l.event === 'export_buffer_floor').length, 1);
 });
 
 test('geänderter Boden meldet sich erneut', async () => {
   const { evaluator, cfg, logs } = makeCtx();
   await evaluator.applyControlTarget('gridSetpointW', 0, 'rule:test');
-  cfg.schedule.minExportW = 500;
+  cfg.schedule.defaultGridSetpointW = -500;
   await evaluator.applyControlTarget('gridSetpointW', 0, 'rule:test');
-  const entries = logs.filter((l) => l.event === 'min_export_floor');
+  const entries = logs.filter((l) => l.event === 'export_buffer_floor');
   assert.equal(entries.length, 2);
   assert.equal(entries.at(-1).payload.floorW, -500);
 });

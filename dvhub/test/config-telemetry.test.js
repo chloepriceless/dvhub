@@ -90,7 +90,13 @@ test('normalizeConfigInput restores legacy placeholder write registers while ign
   assert.equal(normalized.persistedConfig.dvControl.enabled, true);
   assert.equal(normalized.persistedConfig.dvControl.feedExcessDcPv.address, 2707);
   assert.equal(normalized.persistedConfig.dvControl.dontFeedExcessAcPv.address, 2708);
-  assert.equal(normalized.persistedConfig.dvControl.negativePriceProtection.gridSetpointW, -40);
+  // 2026-07-29: der Legacy-Platzhalter (0) wird weiterhin entfernt — aber es
+  // rückt KEIN fester Vorgabewert mehr nach. Ohne Eintrag folgt die Abregelung
+  // dem schedule.defaultGridSetpointW, statt einen eingestellten Wert mit -40 zu
+  // überschreiben. Der Schlüssel muss danach also schlicht weg sein.
+  assert.equal(normalized.persistedConfig.dvControl.negativePriceProtection.gridSetpointW, undefined);
+  assert.equal(normalized.persistedConfig.dvControl.negativePriceProtection.enabled, true,
+    'die Abregelung selbst bleibt aktiv');
   assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.host, 'venus-gx.local');
   assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.port, 502);
   assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.unitId, 100);
