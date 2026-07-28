@@ -15,8 +15,9 @@ verweist hierher.
 Zuverlässigkeits-Release. Schwerpunkt: DVhub merkt jetzt selbst, wenn die Anlage
 zwar antwortet, aber keine echten Messwerte mehr liefert — der Fall, der am
 24.07. zweieinhalb Stunden lang unbemerkt blieb. Dazu ein zweiter, unabhängiger
-Lesepfad zur Gegenprobe, der vollständige MQTT-Anschluss und die frei
-einstellbare Mindesteinspeisung aus dem Anwender-Feedback.
+Lesepfad zur Gegenprobe, der vollständige MQTT-Anschluss und — aus dem
+Anwender-Feedback — ein einstellbarer Einspeise-Puffer gegen Bezugsspitzen,
+sowohl im Normalbetrieb als auch während der Abregelung.
 
 ### Neu
 
@@ -31,9 +32,18 @@ einstellbare Mindesteinspeisung aus dem Anwender-Feedback.
   Sollwert (Regel, Optimierer, EOS), verstärkt also nur und schwächt einen
   stärkeren Export nie ab. Er dreht auch kein gewolltes Netzladen um. Aus bleibt
   er, wenn der Börsenpreis negativ **oder unbekannt** ist (ein ausgefallener
-  Preis-Feed darf keinen Export erzwingen), während einer Abregelung, im Not-Halt
-  und unterhalb des Entlade-Bodens — der Akkuschutz behält immer Vorrang.
+  Preis-Feed darf keinen Export erzwingen), im Not-Halt und unterhalb des
+  Entlade-Bodens — der Akkuschutz behält immer Vorrang. Während einer Abregelung
+  gilt der eigene Puffer aus der nächsten Zeile.
   Danke an **Johann (@VdwBM)** für den Hinweis (GitHub #12).
+
+- **Der Puffer während der Abregelung ist einstellbar.** „Netz-Sollwert während
+  der Abregelung" unter „Einspeisung & Tarif" (−2000 bis 0 W, Standard −40 W).
+  Der Wert existierte intern schon, ließ sich aber nur durch Editieren der
+  Konfigurationsdatei ändern. Bei großen Verbrauchern (Wärmepumpe, Wallbox,
+  Herd) sind −100 bis −200 W realistischer als die bisherigen −40 W. Bewusst
+  getrennt von der Mindesteinspeisung einstellbar, weil Einspeisen bei negativen
+  Preisen Geld kostet — dort darf der Puffer kleiner sein als im Normalbetrieb.
 
 - **Einfrier-Wächter für die Live-Daten.** DVhub erkennt jetzt den Fall, dass die
   Anlage zwar sauber antwortet, aber immer denselben Messwert liefert — eine
@@ -78,6 +88,15 @@ einstellbare Mindesteinspeisung aus dem Anwender-Feedback.
   Einstellung war schon aktiv, ließ sich am Gerät aber nirgends ablesen.
 
 ### Behoben
+
+- **Netzbezug während der Abregelung.** Solange bei negativen Börsenpreisen
+  abgeregelt wurde, konnte der Netz-Sollwert auf 0 stehen bleiben — die Anlage
+  regelte dann auf „null am Zähler", und jeder zuschaltende Verbraucher erzeugte
+  sofort Netzbezug, weil die Regelung dem Lastsprung hinterherläuft. Gerade in
+  der Abregelung ist dieser Bezug teuer. Der Sollwert wird jetzt für die Dauer
+  der Abregelung auf dem konfigurierten Puffer **gehalten** statt nur nach oben
+  begrenzt. Ein bewusstes Netzladen (positiver Sollwert) bleibt unangetastet —
+  das ist bei negativen Preisen wirtschaftlich richtig und keine Einspeisung.
 
 - **Einstellungen der Gruppe „Verbindung" wirkten nicht.** „Telemetrie-Frische
   max. Alter" und „Modbus Connect-Timeout" wurden beim Anwenden des

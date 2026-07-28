@@ -257,6 +257,86 @@ test('T-0118: an EOS-sourced export is STILL blocked at a negative spot price (n
     'negative_price_protection_on must fire regardless of source');
 });
 
+// --- Abregelungs-Puffer (Christin, 2026-07-29) --------------------------------
+// Während der Negativpreis-Abregelung wird der Netz-Sollwert auf den
+// konfigurierten Puffer GEPINNT, nicht nur nach unten gedeckelt. Vorher fiel ein
+// Sollwert von 0 durch ("null am Zähler") — dann erzeugt jeder Lastsprung sofort
+// Netzbezug, und Bezug ist genau in der Abregelung teuer.
+
+function holdRule(value) {
+  return {
+    id: 'hold-1', enabled: true, target: 'gridSetpointW',
+    start: '00:00', end: '23:59', value, source: 'small_market_automation', autoManaged: true
+  };
+}
+
+function nppCtx(ruleValue, limit = -40) {
+  return makeCtx({
+    mutate: ({ cfg, ctx, state }) => {
+      cfg.dvControl = { enabled: false, negativePriceProtection: { enabled: true, gridSetpointW: limit } };
+      ctx.epexNowNext = () => ({ current: { ct_kwh: -2, eur_mwh: -20 }, next: null });
+      state.schedule.rules = [holdRule(ruleValue)];
+    }
+  });
+}
+
+test('Abregelung: Sollwert 0 wird auf den Puffer gepinnt (kein "null am Zähler")', async () => {
+  const { ctx, state } = nppCtx(0);
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const written = state.schedule.active.gridSetpointW;
+  assert.ok(written, 'ein gridSetpointW-Write muss stattfinden');
+  assert.equal(Number(written.value), -40);
+  assert.equal(written.source, 'negative_price_protection');
+});
+
+test('Abregelung: der Puffer ist konfigurierbar (-200 statt -40)', async () => {
+  const { ctx, state } = nppCtx(0, -200);
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -200);
+});
+
+test('Abregelung: ein zu schwacher Export (-20) wird auf den Puffer angehoben', async () => {
+  const { ctx, state } = nppCtx(-20, -200);
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -200);
+});
+
+test('Abregelung: ein starker Export wird weiterhin auf den Puffer gedeckelt', async () => {
+  const { ctx, state } = nppCtx(-16000, -200);
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -200,
+    'nach wie vor kein Verkauf bei negativem Preis');
+});
+
+test('Abregelung: POSITIVER Sollwert (Netzladen) wird NICHT auf Export gedreht', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ cfg, ctx, state }) => {
+      cfg.dvControl = { enabled: false, negativePriceProtection: { enabled: true, gridSetpointW: -200 } };
+      // Netzladen bei negativem Preis ist wirtschaftlich richtig und keine
+      // Einspeisung — darüber entscheidet allowGridCharge, nicht die Abregelung.
+      cfg.optimizer.allowGridCharge = true;
+      ctx.epexNowNext = () => ({ current: { ct_kwh: -2, eur_mwh: -20 }, next: null });
+      state.schedule.rules = [holdRule(3000)];
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 3000);
+});
+
+test('ohne negativen Preis bleibt der Abregelungs-Puffer außen vor', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ cfg, ctx, state }) => {
+      cfg.dvControl = { enabled: false, negativePriceProtection: { enabled: true, gridSetpointW: -200 } };
+      ctx.epexNowNext = () => ({ current: { ct_kwh: 12, eur_mwh: 120 }, next: null });
+      state.schedule.rules = [holdRule(0)];
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const w = state.schedule.active.gridSetpointW;
+  assert.equal(Number(w.value), 0);
+  assert.notEqual(w.source, 'negative_price_protection');
+});
+
 // --- T-0107: volatile reg-2716 Passthru guard ---
 // Reg 2716 (volatile RAM ESS setpoint) reverts the Multi to Passthru if not
 // re-asserted within 60 s. Writing it without a valid keepalive must be refused,

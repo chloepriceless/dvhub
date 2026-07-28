@@ -1289,7 +1289,20 @@ export function createScheduleEvaluator(ctx) {
           // the awaited result; line ~870 already awaits the same call).
           await applyDvVictronControl(false);
         }
-        if (eff.value < limit) {
+        // 2026-07-29 (Christin): der Sollwert wird während der Abregelung auf
+        // genau `limit` GEPINNT, nicht nur nach unten gedeckelt. Vorher galt
+        // `eff.value < limit` — wollte eine Regel 0 (Eigenverbrauch), fiel das
+        // durch und es wurde 0 geschrieben. „Null am Zähler" heißt aber, dass
+        // jeder Lastsprung sofort Netzbezug erzeugt, weil die Regelung
+        // hinterherläuft — und Bezug ist genau in der Abregelung teuer. `limit`
+        // ist der kleine Regel-Puffer (Standard 40 W, jetzt einstellbar): es
+        // wird dabei nichts nennenswert eingespeist, er fängt nur das Schwanken
+        // der Ausregelung ab.
+        //
+        // POSITIVE Sollwerte laufen bewusst durch: bei negativen Preisen ist
+        // Netzladen wirtschaftlich richtig und keine Einspeisung — das eigene
+        // Gate (allowGridCharge) entscheidet darüber, nicht der Abregelungspfad.
+        if (eff.value <= 0) {
           await applyControlTarget(target, limit, 'negative_price_protection');
           continue;
         }
