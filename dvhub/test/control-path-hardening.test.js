@@ -321,6 +321,32 @@ test('T-0075: STALE finite SoC (old success timestamp) -> clamped (fail-safe)', 
   assert.equal(logs.filter((l) => l.event === 'control_discharge_floor' && l.payload.reason === 'soc_stale').length, 1);
 });
 
+// T-FREEZE (2026-07-24): der Einfrier-Wächter meldet einen Einfrierer über
+// state.victron.freeze.active. Die Werte sehen dabei FRISCH aus (der Read war ja
+// erfolgreich) — genau das war die Lücke im GX-Zwischenfall. Der Boden muss trotz
+// taufrischem Stempel halten.
+test('T-FREEZE: erkannter Einfrierer klemmt die Entladung trotz frischem Stempel', async () => {
+  const { evaluator, state, writes, logs } = makeCtx();
+  state.victron.soc = 50;
+  state.victron.fieldUpdatedAt = { soc: Date.now() };
+  state.victron.freeze = { active: true, reason: 'identical_values', stalledForMs: 200000 };
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  assert.equal(gridWrites(writes).pop().value, 0, 'eingefrorene Telemetrie -> Hold');
+  assert.equal(
+    logs.filter((l) => l.event === 'control_discharge_floor' && l.payload.reason === 'telemetry_frozen').length,
+    1
+  );
+});
+
+test('T-FREEZE: aufgelöster Einfrierer gibt die Entladung wieder frei', async () => {
+  const { evaluator, state, writes } = makeCtx();
+  state.victron.soc = 50;
+  state.victron.fieldUpdatedAt = { soc: Date.now() };
+  state.victron.freeze = null;
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  assert.equal(gridWrites(writes).pop().value, -3000, 'kein Einfrierer -> normale Entladung');
+});
+
 test('T-0075: unknown SoC (null) -> clamped (fail-safe)', async () => {
   const { evaluator, state, writes } = makeCtx();
   state.victron.soc = null;

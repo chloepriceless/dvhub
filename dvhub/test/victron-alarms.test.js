@@ -234,13 +234,36 @@ test('poller: not configured (null unit ids) → alarms.configured=false (no ban
   assert.deepEqual(state.victron.alarms.active, []);
 });
 
-test('poller: MQTT transport → alarm poll guarded out (no block reads attempted)', async () => {
+// T-MQTT-ALARMS (2026-07-25): der MQTT-Weg macht KEINE Blockreads — die
+// Alarm-dbus-Pfade kommen gepusht. Bis dahin war das Banner auf MQTT dauerhaft
+// leer (ein stilles „alles in Ordnung", das keines war). Vertrag jetzt:
+// Werte da → Banner aus den dbus-Pfaden; keine Werte → configured:true OHNE
+// Zeitstempel, damit die Leseseite auf „veraltet" degradiert.
+test('poller: MQTT-Transport → Alarme aus dbus-Pfaden, ohne Blockreads', async () => {
   const { state, poller, transport } = makePoller({ enabled: true, pollIntervalMs: 30000, timeoutMs: 1500, vebusUnitId: 229, batteryUnitId: 225 });
   transport.type = 'mqtt';
   transport.getCached = () => 0;
   transport.readPoint = async () => ({ mqttValue: 50 });
+  let blockReads = 0;
+  const origRequest = transport.mbRequest;
+  transport.mbRequest = async (...args) => { blockReads += 1; return origRequest.apply(transport, args); };
+  transport.getAlarmValues = () => ({ vebus: { 'Alarms/Overload': 2 }, battery: { 'Alarms/LowVoltage': 0 } });
   await poller.requestPoll();
-  assert.equal(state.victron.alarms, undefined, 'MQTT transport: pollVictronAlarms returns before touching state');
+  assert.equal(state.victron.alarms.configured, true);
+  assert.deepEqual(state.victron.alarms.active.map((a) => a.key), ['vebus.overload']);
+  assert.ok(state.victron.alarms.updatedAt, 'frische Werte → Zeitstempel');
+  assert.equal(blockReads, 0, 'kein einziger Modbus-Blockread auf dem MQTT-Weg');
+});
+
+test('poller: MQTT-Transport ohne frische Alarmwerte → kein falsches „alles in Ordnung"', async () => {
+  const { state, poller, transport } = makePoller({ enabled: true, pollIntervalMs: 30000, timeoutMs: 1500, vebusUnitId: 229, batteryUnitId: 225 });
+  transport.type = 'mqtt';
+  transport.getCached = () => 0;
+  transport.readPoint = async () => ({ mqttValue: 50 });
+  transport.getAlarmValues = () => null;
+  await poller.requestPoll();
+  assert.equal(state.victron.alarms.configured, true);
+  assert.ok(!state.victron.alarms.updatedAt, 'ohne frische Werte kein Zeitstempel → Leseseite flaggt stale');
 });
 
 // ── T-ALARM-POLL-V2 (2026-07-22): adaptive Kadenz ────────────────────────────

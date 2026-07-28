@@ -74,6 +74,49 @@ export const BATTERY_CATALOG = [
   { addr: 329, key: 'batt.highCurrent', label: 'Batterie: Strom zu hoch', kind: 'ova' }
 ];
 
+// ── MQTT/dbus-Variante desselben Katalogs (T-MQTT-ALARMS, 2026-07-25) ────────
+// Für den Weg über den MQTT-Dienst der Anlage gibt es keine Registerblöcke,
+// sondern dbus-Pfade. Die Pfadliste ist NICHT geraten: sie stammt aus einem
+// Live-Dump des Ekrano GX (Venus 3.73) am 2026-07-25 — subscribe auf
+// N/<portal>/vebus/+/Alarms/# bzw. .../battery/+/Alarms/# nach einem Keepalive.
+// Schlüssel und Beschriftungen sind identisch zum Register-Katalog, damit das
+// Banner unabhängig vom Transport gleich aussieht; die verifizierten Extras
+// (Ripple, DC-Spannung/-Strom, Lade-/Entladesperre) haben eigene Schlüssel.
+export const VEBUS_DBUS_CATALOG = [
+  { path: 'VebusError', key: 'vebus.error', label: 'VE.Bus-Fehler', kind: 'vebusError' },
+  { path: 'Alarms/HighTemperature', key: 'vebus.highTemp', label: 'Wechselrichter: Übertemperatur', kind: 'ova' },
+  { path: 'Alarms/LowBattery', key: 'vebus.lowBattery', label: 'Wechselrichter: Batterie schwach', kind: 'ova' },
+  { path: 'Alarms/Overload', key: 'vebus.overload', label: 'Wechselrichter: Überlast', kind: 'ova' },
+  { path: 'Alarms/TemperatureSensor', key: 'vebus.tempSensor', label: 'Temperatursensor-Fehler', kind: 'ova' },
+  { path: 'Alarms/VoltageSensor', key: 'vebus.voltSensor', label: 'Spannungssensor-Fehler', kind: 'ova' },
+  { path: 'Alarms/GridLost', key: 'vebus.gridLost', label: 'Netz verloren (GridLost)', kind: 'na' },
+  { path: 'Alarms/BmsPreAlarm', key: 'vebus.bmsPreAlarm', label: 'BMS Vor-Alarm', kind: 'pre' },
+  { path: 'Alarms/BmsConnectionLost', key: 'vebus.bmsConnectionLost', label: 'VE.Bus: BMS-Verbindung verloren', kind: 'na' },
+  { path: 'Alarms/Ripple', key: 'vebus.ripple', label: 'Wechselrichter: DC-Welligkeit', kind: 'ova' },
+  { path: 'Alarms/HighDcVoltage', key: 'vebus.highDcVoltage', label: 'Wechselrichter: DC-Überspannung', kind: 'ova' },
+  { path: 'Alarms/HighDcCurrent', key: 'vebus.highDcCurrent', label: 'Wechselrichter: DC-Strom zu hoch', kind: 'ova' },
+  { path: 'Alarms/PhaseRotation', key: 'vebus.phaseRotation', label: 'Wechselrichter: Phasenfolge', kind: 'ova' }
+];
+
+export const BATTERY_DBUS_CATALOG = [
+  { path: 'Alarms/Alarm', key: 'batt.alarm', label: 'Batterie: allgemeiner Alarm', kind: 'na' },
+  { path: 'Alarms/LowVoltage', key: 'batt.lowVoltage', label: 'Batterie: Unterspannung', kind: 'na' },
+  { path: 'Alarms/HighVoltage', key: 'batt.highVoltage', label: 'Batterie: Überspannung', kind: 'na' },
+  { path: 'Alarms/LowSoc', key: 'batt.lowSoc', label: 'Batterie: Ladezustand niedrig', kind: 'na' },
+  { path: 'Alarms/LowTemperature', key: 'batt.lowTemp', label: 'Batterie: Untertemperatur', kind: 'na' },
+  { path: 'Alarms/HighTemperature', key: 'batt.highTemp', label: 'Batterie: Übertemperatur', kind: 'na' },
+  { path: 'Alarms/HighChargeCurrent', key: 'batt.highChargeCurrent', label: 'Batterie: Ladestrom zu hoch', kind: 'na' },
+  { path: 'Alarms/HighDischargeCurrent', key: 'batt.highDischargeCurrent', label: 'Batterie: Entladestrom zu hoch', kind: 'na' },
+  { path: 'Alarms/CellImbalance', key: 'batt.cellImbalance', label: 'Batterie: Zell-Ungleichgewicht', kind: 'na' },
+  { path: 'Alarms/InternalFailure', key: 'batt.internalFailure', label: 'Batterie: interner Fehler', kind: 'na' },
+  { path: 'Alarms/HighChargeTemperature', key: 'batt.highChargeTemp', label: 'Batterie: Ladetemperatur zu hoch', kind: 'na' },
+  { path: 'Alarms/LowChargeTemperature', key: 'batt.lowChargeTemp', label: 'Batterie: Ladetemperatur zu niedrig', kind: 'na' },
+  { path: 'Alarms/LowCellVoltage', key: 'batt.lowCellVoltage', label: 'Batterie: Zellspannung niedrig', kind: 'pre' },
+  { path: 'Alarms/HighCellVoltage', key: 'batt.highCellVoltage', label: 'Batterie: Zellspannung hoch', kind: 'na' },
+  { path: 'Alarms/ChargeBlocked', key: 'batt.chargeBlocked', label: 'Batterie: Laden gesperrt', kind: 'na' },
+  { path: 'Alarms/DischargeBlocked', key: 'batt.dischargeBlocked', label: 'Batterie: Entladen gesperrt', kind: 'na' }
+];
+
 // decodeAlarmValue: raw register value → { severity:0|1|2, active, text }
 export function decodeAlarmValue(entry, raw) {
   const v = Number.isFinite(Number(raw)) ? Number(raw) : 0;
@@ -129,6 +172,38 @@ export function buildActiveAlarms(unitsRaw, prevActive, now) {
   const out = [];
   scanBlock(unitsRaw && unitsRaw.vebus, VEBUS_BLOCK.start, VEBUS_CATALOG, 'vebus', prevByKey, nowIso, out);
   scanBlock(unitsRaw && unitsRaw.battery, BATTERY_BLOCK.start, BATTERY_CATALOG, 'battery', prevByKey, nowIso, out);
+  out.sort((a, b) => (b.severity - a.severity) || a.key.localeCompare(b.key));
+  return out;
+}
+
+// buildActiveAlarmsFromDbus: dieselbe Ausgabe wie buildActiveAlarms, nur aus
+// dbus-Pfaden statt Registerblöcken (MQTT-Transport, T-MQTT-ALARMS 2026-07-25).
+//   values = { vebus: {<pfad>: raw}, battery: {<pfad>: raw} } — ein FEHLENDER Pfad
+//   trägt nichts bei (Gerät kennt ihn nicht), und ein Pfad mit null trägt ebenfalls
+//   nichts bei: Venus publiziert für nicht unterstützte Alarme `null`, und das als
+//   0 („alles gut") zu lesen wäre ein stiller Fehlalarm-in-die-andere-Richtung.
+export function buildActiveAlarmsFromDbus(values, prevActive, now) {
+  const nowIso = new Date(now).toISOString();
+  const prevByKey = {};
+  for (const a of (prevActive || [])) { if (a && a.key) prevByKey[a.key] = a; }
+  const out = [];
+  const scan = (map, catalog, unitLabel) => {
+    if (!map || typeof map !== 'object') return;
+    for (const e of catalog) {
+      if (!(e.path in map)) continue;
+      const raw = map[e.path];
+      if (raw == null) continue;
+      const dec = decodeAlarmValue(e, raw);
+      if (!dec.active) continue;
+      out.push({
+        key: e.key, label: e.label, severity: dec.severity, text: dec.text || null,
+        unit: unitLabel, raw: Number(raw) || 0,
+        since: (prevByKey[e.key] && prevByKey[e.key].since) || nowIso
+      });
+    }
+  };
+  scan(values && values.vebus, VEBUS_DBUS_CATALOG, 'vebus');
+  scan(values && values.battery, BATTERY_DBUS_CATALOG, 'battery');
   out.sort((a, b) => (b.severity - a.severity) || a.key.localeCompare(b.key));
   return out;
 }

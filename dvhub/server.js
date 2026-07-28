@@ -68,6 +68,9 @@ import { atomicWriteControlState } from './control-state-io.js';
 import { createModbusServer } from './modbus-server.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
+// T-CROSSCHECK (2026-07-25): Zweitquellen-Kreuzprobe gegen den MQTT-Dienst der
+// Anlage — die einzige Quelle außerhalb von dbus-modbustcp.
+import { createMqttCrossCheck } from './services/mqtt-crosscheck.js';
 // Phase 09.2 D-01..D-05 — per-system health tracker (factory wired in
 // telemetry IIFE below; persistSnapshot hook lives in gracefulShutdown).
 import { createIntegrationsHealthTracker } from './services/integrations-health-tracker.js';
@@ -1071,6 +1074,10 @@ ctx.notificationService = notificationService;
 // /api/support/tunnel/* endpoints + the transparency UI status. The tunnel
 // process itself only spawns when the customer hits "open" — OFF by default.
 const supportTunnel = createSupportTunnel(ctx);
+// T-CROSSCHECK: unbedingt konstruiert (routes-api liest getStatus), gestartet nur
+// im Runtime-Prozess und nur wenn konfiguriert (siehe IS_RUNTIME_PROCESS-Block).
+const mqttCrossCheck = createMqttCrossCheck(ctx);
+ctx.mqttCrossCheck = mqttCrossCheck;
 ctx.supportTunnel = supportTunnel;
 
 // Phase 17 Plan 03 — license-service. Constructed unconditionally so
@@ -1665,6 +1672,9 @@ if (IS_RUNTIME_PROCESS) {
   }).catch(err => console.error('MQTT Hub start error:', err.message));
   deviceService.start().catch(err => console.error('Device service start error:', err.message));
   notificationService.start().catch(err => console.error('Notification service start error:', err.message));
+  // NACH notificationService.start(): ein Widerspruchs-Alarm soll die konfigurierten
+  // Kanäle sofort erreichen können.
+  mqttCrossCheck.start().catch(err => pushLog('mqtt_crosscheck_start_error', { error: err?.message ?? String(err) }, 'warn'));
   // Phase 17 Plan 03 — license-poller. Schedules a 30s-after-boot first
   // validate + a recurring 24h setInterval (services/license/index.js#start).
   // Chained AFTER notificationService.start() so an on-revoke notification
@@ -2006,6 +2016,7 @@ async function gracefulShutdown(signal) {
     safeAsync('familyService.close', () => familyService.close()),
     safeAsync('mlService.close', () => mlService.close()),
     safeAsync('notificationService.close', () => notificationService.close()),
+    safeAsync('mqttCrossCheck.stop', () => mqttCrossCheck.stop()),
     safeAsync('deviceService.close', () => deviceService.close()),
     safeAsync('teslamateService.close', () => teslamateService.close()),
     safeAsync('familyMqttTiles.close', () => familyMqttTiles.close()),

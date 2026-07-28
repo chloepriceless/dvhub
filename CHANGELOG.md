@@ -10,6 +10,81 @@ verweist hierher.
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-07-28
+
+Zuverlässigkeits-Release. Schwerpunkt: DVhub merkt jetzt selbst, wenn die Anlage
+zwar antwortet, aber keine echten Messwerte mehr liefert — der Fall, der am
+24.07. zweieinhalb Stunden lang unbemerkt blieb. Dazu ein zweiter, unabhängiger
+Lesepfad zur Gegenprobe, der vollständige MQTT-Anschluss und die frei
+einstellbare Mindesteinspeisung aus dem Anwender-Feedback.
+
+### Neu
+
+- **Mindesteinspeisung frei einstellbar.** Steht der Netz-Sollwert auf 0, regelt
+  die Anlage auf „null am Zähler" — schaltet dann ein großer Verbraucher zu
+  (Herd, Wärmepumpe, Wallbox), entsteht kurzzeitig bis zu 1 kW Netzbezug, weil
+  die Regelung dem Lastsprung hinterherläuft. Unter „Zeitplan → Mindest­einspeisung"
+  lässt sich jetzt ein dauerhafter kleiner Export als Puffer vorgeben (0 = aus,
+  bis 5000 W). Richtwert: etwa so viel, wie die größte einzelne Last zieht.
+  Bisher gab es dafür nur den Idle-Vorgabewert von 40 W, der bei großen
+  Verbrauchern nicht reicht. Der Wert wirkt als **Untergrenze auf jeden**
+  Sollwert (Regel, Optimierer, EOS), verstärkt also nur und schwächt einen
+  stärkeren Export nie ab. Er dreht auch kein gewolltes Netzladen um. Aus bleibt
+  er, wenn der Börsenpreis negativ **oder unbekannt** ist (ein ausgefallener
+  Preis-Feed darf keinen Export erzwingen), während einer Abregelung, im Not-Halt
+  und unterhalb des Entlade-Bodens — der Akkuschutz behält immer Vorrang.
+  Danke an **Johann (@VdwBM)** für den Hinweis (GitHub #12).
+
+- **Einfrier-Wächter für die Live-Daten.** DVhub erkennt jetzt den Fall, dass die
+  Anlage zwar sauber antwortet, aber immer denselben Messwert liefert — eine
+  halb-tote Modbus-Sitzung am GX/Wechselrichter (beobachtet am 24.07.2026: der
+  Ladestand hing 2,5 Stunden bei 7 %, während die Anlage real weiterlief; kein
+  einziger Lesefehler, keine Warnung). Zwei Erkennungen: (1) alle Live-Werte
+  stehen gleichzeitig unverändert still, obwohl Leistung fließt; (2) der
+  Ladestand bewegt sich nicht, obwohl fortlaufend Akku-Leistung gemeldet wird.
+  Bei Verdacht datiert DVhub die Frische der Messwerte auf den letzten echten
+  Wertwechsel zurück (womit der bestehende Entlade-Boden-Schutz jede erzwungene
+  Entladung anhält), verwirft die Modbus-Verbindung und baut sie neu auf und
+  schlägt laut Alarm: Banner im Leitstand, Push-Benachrichtigung, Log-Eintrag
+  „critical", Monitoring-Signal (`dvhub_telemetry_freeze_active`). Neue
+  Einstellungen unter „Verbindung" (`victron.freezeWatchdog.*`), Standard AN.
+  Die Schwellen sind gegen fünf Tage echte Anlagendaten kalibriert: die
+  Ladestand-Erkennung arbeitet nur im linearen Bereich (10–95 %), weil der
+  Ladestand in der Absorptionsphase eines vollen Akkus stundenlang legitim
+  stillsteht. Der Verbindungs-Neuaufbau ist auf drei Versuche je Vorfall
+  begrenzt — ein Abriss-/Neuaufbau-Karussell belastet die Anlagensteuerung
+  nachweislich bis zum Neustart; hilft der Neuaufbau nicht, bleibt der Alarm.
+
+- **Zweitquellen-Kreuzprobe (MQTT).** DVhub kann die Messwerte der Anlage jetzt
+  über einen zweiten, unabhängigen Weg gegenlesen: den MQTT-Dienst der Anlage.
+  Der läuft als eigener Dienst neben der Modbus-Schnittstelle und zeigt dasselbe
+  wie das Display am Gerät. Widersprechen sich beide Wege dauerhaft (Standard:
+  3 Minuten), meldet DVhub das laut — Banner, Push-Nachricht, Log-Eintrag
+  „critical", Monitoring-Signal — und setzt keine neuen Entladebefehle mehr ab.
+  Hintergrund: Am 24.07.2026 lieferte die Modbus-Schnittstelle 2,5 Stunden lang
+  veraltete, aber in sich stimmige Werte; kein einziger Test *innerhalb* der
+  Modbus-Daten konnte das erkennen (auch eine zweite Modbus-Verbindung nicht).
+  Neue Einstellungen unter „Verbindung" (`victron.mqttCrossCheck.*`), Standard
+  AUS — sie braucht die Zugangsdaten des MQTT-Dienstes.
+- **MQTT-Weg vervollständigt.** Wer die Anlage über MQTT statt Modbus anbindet,
+  bekommt jetzt auch Geräte-Alarme (Banner), die Rücklesung der Steuerpunkte und
+  die Entladegrenze — bisher gab es das nur über Modbus. Außerdem unterstützt
+  der MQTT-Zugang endlich Benutzername/Passwort und verschlüsselte Verbindungen;
+  ohne das ließ sich ein aktuelles Victron-GX gar nicht anbinden.
+
+- **Wirkungsgrad-Anpassung der Reserve-Freigabe wird angezeigt.** Die
+  Einstellungen zeigen jetzt auch, ob die Übernacht-Reserve ihre Freigabe-Schwelle
+  mit dem gemessenen Wirkungsgrad rechnet oder mit einem angenommenen. Die
+  Einstellung war schon aktiv, ließ sich am Gerät aber nirgends ablesen.
+
+### Behoben
+
+- **Einstellungen der Gruppe „Verbindung" wirkten nicht.** „Telemetrie-Frische
+  max. Alter" und „Modbus Connect-Timeout" wurden beim Anwenden des
+  Herstellerprofils überschrieben und fielen still auf ihre Standardwerte
+  zurück. Beide Werte (und die neuen Wächter-Einstellungen) überleben die
+  Profil-Anwendung jetzt.
+
 ## [1.0.4] - 2026-07-21
 
 Bugfix-/Komfort-Release. Schwerpunkte: korrekte §14a-Modul-3-Preisrechnung,

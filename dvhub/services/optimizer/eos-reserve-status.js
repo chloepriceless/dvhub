@@ -30,6 +30,11 @@ export const RESERVE_ENV_KEYS = [
   'EOS_RESERVE_WATERFALL',
   'EOS_OVERNIGHT_RESERVE',
   'EOS_OVERNIGHT_RESERVE_MARGIN',
+  // 2026-07-28: η-angepasste Freigabe-Schwelle. Lief seit dem 23.07. auf prod,
+  // war aber im Status nicht sichtbar — man konnte am Gerät nicht ablesen, ob
+  // die Schwelle wirkungsgradbereinigt rechnet. Rein lesend; den Vorgabewert
+  // setzt das EOS-Drop-in, nicht DVhub.
+  'EOS_RESERVE_EFF_ADJUST',
 ];
 
 /**
@@ -121,6 +126,10 @@ export function readEosReserveStatus({ dir = EOS_SERVICE_DROPIN_DIR } = {}) {
       // Reserve verkauft nur in übrige (Christin-Spec, Replay 16.07. validiert).
       waterfall: toBool(env.EOS_RESERVE_WATERFALL),
       overnightReserve: env.EOS_OVERNIGHT_RESERVE !== undefined ? toBool(env.EOS_OVERNIGHT_RESERVE) : null,
+      // Rechnet die Freigabe-Schwelle mit dem gemessenen Wirkungsgrad statt mit
+      // η=1. Setzt eine kalibrierte Wechselrichter-Kurve voraus — ohne sie ist
+      // das Verhältnis 1.0 und die Einstellung wirkungslos.
+      effAdjust: toBool(env.EOS_RESERVE_EFF_ADJUST),
     }
   };
 }

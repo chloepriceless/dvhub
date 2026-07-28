@@ -8,12 +8,16 @@ import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-perfo
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
 import { resolveImportPriceCtKwhForSlot } from './user-energy-pricing.js';
-import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms } from './victron-alarms.js';
+import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms, buildActiveAlarmsFromDbus } from './victron-alarms.js';
+// T-FREEZE (2026-07-24): Einfrier-Wächter. Erkennt eingefrorene Live-Werte trotz
+// ERFOLGREICHER Reads (halb-tote GX-Modbus-Session) — die eine Lücke, die weder die
+// T-0075-Frische noch die T-VERIFY-Rücklesung schließt.
+import { createFreezeWatchdog } from './services/telemetry-freeze-watchdog.js';
 // Plan 09-06 (D-08): wrapper around console.* for the polling heavy-hitter module.
 import { info as logInfo, error as logError } from './services/log.js';
 // Plan 09-06 (D-06): meter-poll instruments. Wired in pollMeter success/error
 // branches (gauge.set on success duration, counter.inc on catch).
-import { meterPollDurationSeconds, meterPollErrorsTotal } from './routes-api.js';
+import { meterPollDurationSeconds, meterPollErrorsTotal, telemetryFreezeActive } from './routes-api.js';
 
 /**
  * Load persisted energy state from disk into state.energy (if today's data).
@@ -65,6 +69,11 @@ export function createPoller(ctx) {
   let stopping = false;
   let pollTimeout = null;
   let persistInterval = null;
+
+  // T-FREEZE: läuft am Ende jedes Poll-Zyklus (nach den abgeleiteten Größen, vor
+  // onPollComplete) und datiert bei erkanntem Einfrierer die Frische-Stempel zurück
+  // → der bestehende T-0075-Entlade-Boden-Schutz greift. Auf MQTT ein No-op.
+  const freezeWatchdog = createFreezeWatchdog(ctx);
 
   // --- effectivePollIntervalMs ---
   const effectivePollIntervalMs = () => normalizePollIntervalMs(getCfg().meterPollMs, MIN_POLL_INTERVAL_MS);
@@ -209,10 +218,21 @@ export function createPoller(ctx) {
 
   // --- pollDvControlReadback ---
   async function pollDvControlReadback(name, conf) {
-    if (transport.type !== 'modbus' || !conf?.enabled) return;
+    if (!conf?.enabled) return;
+    if (transport.type !== 'modbus' && transport.type !== 'mqtt') return;
     try {
-      const regs = await transport.mbRequest(conf);
-      state.victron[name] = pointFromRegs(regs, conf);
+      if (transport.type === 'mqtt') {
+        // T-MQTT-READBACK (2026-07-25): die Read-Topics für feedExcessDcPv /
+        // dontFeedExcessAcPv existieren im Venus-Mapping längst (T-VERIFY) — nur
+        // dieser Pfad war noch hart auf Modbus verriegelt, sodass auf MQTT die
+        // Rücklesung der DV-Steuerpunkte fehlte (Voraussetzung für einen
+        // vollständigen Umzug auf MQTT).
+        const result = await transport.readPoint(name);
+        state.victron[name] = result.mqttValue;
+      } else {
+        const regs = await transport.mbRequest(conf);
+        state.victron[name] = pointFromRegs(regs, conf);
+      }
       delete state.victron.errors[name];
       const _now = Date.now();
       state.victron.updatedAt = _now;
@@ -276,9 +296,26 @@ export function createPoller(ctx) {
 
   async function pollVictronAlarms(cfg) {
     try {
-      if (transport.type !== 'modbus') return; // MQTT transport has no block reads
       const aCfg = cfg?.victron?.alarms;
       if (!aCfg || aCfg.enabled === false) return;
+      if (transport.type === 'mqtt') {
+        // T-MQTT-ALARMS (2026-07-25): über MQTT gibt es keine Blockreads, aber die
+        // Alarm-dbus-Pfade kommen ohnehin gepusht (Transport abonniert sie). Kein
+        // Throttle nötig — es entsteht keine zusätzliche Geräte-Last. Kein
+        // Rückfall auf „alles in Ordnung": ohne frische Werte bleibt das Banner
+        // ohne Zeitstempel und die Leseseite degradiert es zu „veraltet".
+        const values = transport.getAlarmValues?.();
+        const prevActive = state.victron.alarms?.active || [];
+        if (!values) {
+          state.victron.alarms = { ...(state.victron.alarms || { active: [] }), configured: true };
+          return;
+        }
+        const nowMs = Date.now();
+        const active = buildActiveAlarmsFromDbus(values, prevActive, nowMs);
+        state.victron.alarms = { configured: true, active, updatedAt: new Date(nowMs).toISOString() };
+        return;
+      }
+      if (transport.type !== 'modbus') return;
       const vebusUnitId = alarmUnitIdOrNull(aCfg.vebusUnitId);
       const batteryUnitId = alarmUnitIdOrNull(aCfg.batteryUnitId);
       if (vebusUnitId == null && batteryUnitId == null) {
@@ -675,6 +712,16 @@ export function createPoller(ctx) {
     state.victron.gridToBatteryW = gridToBatteryW;
     state.victron.batteryDirectUseW = batteryDirectUseW;
     state.victron.batteryToGridW = batteryToGridW;
+
+    // T-FREEZE Einfrier-Wächter: NACH allen Reads/Ableitungen, VOR dem Snapshot —
+    // so trägt der Powerflow-Snapshot bereits den erkannten Einfrierer und die
+    // zurückdatierten Frische-Stempel. Der Wächter wirft nie (eigenes try/catch
+    // hier als letzte Bastion: er darf den Poll-Zyklus unter keinen Umständen
+    // abbrechen, sonst nähme der Schutz die Steuerung mit).
+    try {
+      freezeWatchdog.tick();
+      telemetryFreezeActive.set(state.victron?.freeze?.active ? 1 : 0);
+    } catch (e) { pushLog('telemetry_freeze_watchdog_error', { error: e?.message || String(e) }, 'warn'); }
 
     ctx.onPollComplete?.({
       ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),

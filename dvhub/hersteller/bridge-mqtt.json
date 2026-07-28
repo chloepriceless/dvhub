@@ -11,26 +11,63 @@
     }
   },
   "points": {
-    "soc": { "enabled": true },
-    "batteryPowerW": { "enabled": true },
-    "pvPowerW": { "enabled": true },
-    "acPvL1W": { "enabled": true },
-    "acPvL2W": { "enabled": true },
-    "acPvL3W": { "enabled": true },
-    "gridSetpointW": { "enabled": true },
-    "minSocPct": { "enabled": true },
-    "selfConsumptionW": { "enabled": true }
+    "soc": {
+      "enabled": true
+    },
+    "batteryPowerW": {
+      "enabled": true
+    },
+    "pvPowerW": {
+      "enabled": true
+    },
+    "acPvL1W": {
+      "enabled": true
+    },
+    "acPvL2W": {
+      "enabled": true
+    },
+    "acPvL3W": {
+      "enabled": true
+    },
+    "gridSetpointW": {
+      "enabled": true
+    },
+    "minSocPct": {
+      "enabled": true
+    },
+    "selfConsumptionW": {
+      "enabled": true
+    },
+    "maxDischargeW": {
+      "enabled": true,
+      "_doc": "T-MQTT-READBACK 2026-07-25: Ruecklesung der AC-Entladegrenze (Settings/CGwacs/MaxDischargePower). Fehlte im MQTT-Profil, obwohl das Read-Topic existiert — ohne diesen Punkt kann der T-0075-Boden die Entladegrenze auf MQTT nicht verifizieren."
+    }
   },
   "controlWrite": {
-    "gridSetpointW": { "enabled": true },
-    "chargeCurrentA": { "enabled": true },
-    "minSocPct": { "enabled": true },
-    "maxDischargeW": { "enabled": true }
+    "gridSetpointW": {
+      "enabled": true
+    },
+    "chargeCurrentA": {
+      "enabled": true
+    },
+    "minSocPct": {
+      "enabled": true
+    },
+    "maxDischargeW": {
+      "enabled": true
+    }
   },
   "dvControl": {
     "enabled": true,
-    "feedExcessDcPv": { "enabled": true },
-    "dontFeedExcessAcPv": { "enabled": true },
-    "negativePriceProtection": { "enabled": true, "gridSetpointW": -40 }
+    "feedExcessDcPv": {
+      "enabled": true
+    },
+    "dontFeedExcessAcPv": {
+      "enabled": true
+    },
+    "negativePriceProtection": {
+      "enabled": true,
+      "gridSetpointW": -40
+    }
   }
 }

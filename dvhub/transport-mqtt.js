@@ -143,8 +143,31 @@ export function createMqttTransport(victronConfig) {
       const msg = JSON.parse(payload.toString());
       if (msg.value !== undefined) {
         cache[topic] = { value: msg.value, ts: Date.now() };
+        rememberAlarmTopic(topic, msg.value);
       }
     } catch { /* parse-Fehler ignorieren */ }
+  }
+
+  // T-MQTT-ALARMS: Alarmwerte je Dienst nach dbus-Pfad ablegen
+  // (N/<portal>/<dienst>/<instanz>/<pfad…>). `null` wird bewusst MIT gespeichert:
+  // Venus meldet so „Alarm vom Gerät nicht unterstützt", und der Decoder
+  // überspringt null — als 0 gelesen wäre es ein falsches „alles in Ordnung".
+  const alarmCache = { vebus: {}, battery: {}, ts: 0 };
+  function rememberAlarmTopic(topic, value) {
+    const parts = String(topic).split('/');
+    const service = parts[2];
+    if (service !== 'vebus' && service !== 'battery') return;
+    const path = parts.slice(4).join('/');
+    if (!path) return;
+    alarmCache[service][path] = value;
+    alarmCache.ts = Date.now();
+  }
+
+  /** Rohwerte für buildActiveAlarmsFromDbus; null wenn nie etwas ankam/zu alt. */
+  function getAlarmValues(maxAgeMs = staleMaxAgeMs) {
+    if (!alarmCache.ts) return null;
+    if (maxAgeMs > 0 && (Date.now() - alarmCache.ts) > maxAgeMs) return null;
+    return { vebus: { ...alarmCache.vebus }, battery: { ...alarmCache.battery }, ts: alarmCache.ts };
   }
 
   function sendKeepalive() {
@@ -156,6 +179,7 @@ export function createMqttTransport(victronConfig) {
   // ── Transport-Interface ────────────────────────────────────────────
   return {
     type: 'mqtt',
+    getAlarmValues,
 
     async init() {
       const mqtt = await import('mqtt');
@@ -167,7 +191,20 @@ export function createMqttTransport(victronConfig) {
       return new Promise((resolve, reject) => {
         let settled = false;
         
-        client = connectFn(broker, { clean: true, connectTimeout: 5000 });
+        // T-MQTT-AUTH (2026-07-25): Venus >= 3.x verlangt auf dem lokalen Broker
+        // (FlashMQ) Zugangsdaten — geprüft am Ekrano GX: ohne Passwort kommt
+        // „Connection refused: Not authorized", mit dem Remote-Console-Passwort
+        // verbindet er (Benutzername beliebig). Ohne diese Optionen konnte der
+        // MQTT-Transport an einem aktuellen GX gar nicht arbeiten. Zusätzlich
+        // TLS-Option: das Gerät liefert ein selbstsigniertes Zertifikat
+        // (CN=venus.local), eine CA-Prüfung schlägt zwangsläufig fehl.
+        const connectOpts = { clean: true, connectTimeout: 5000 };
+        if (mqttCfg.username) connectOpts.username = mqttCfg.username;
+        if (mqttCfg.password) connectOpts.password = mqttCfg.password;
+        if (String(broker).startsWith('mqtts://')) {
+          connectOpts.rejectUnauthorized = mqttCfg.rejectUnauthorized === true;
+        }
+        client = connectFn(broker, connectOpts);
 
         const timeoutHandle = setTimeout(() => {
           if (settled) return;
@@ -180,7 +217,15 @@ export function createMqttTransport(victronConfig) {
         client.on('connect', () => {
           if (settled) return;
           console.log(`[MQTT] Verbunden mit ${broker}`);
-          const topics = Object.values(READ_TOPICS);
+          // T-MQTT-ALARMS (2026-07-25): Geräte-Alarme kamen bisher NUR über
+          // Modbus-Blockreads — auf MQTT blieb das Banner dauerhaft leer.
+          // Wildcards, weil die Instanz-Nummern anlagenspezifisch sind
+          // (Live-Dump Ekrano: vebus/276, battery/512).
+          const topics = Object.values(READ_TOPICS).concat(portalId ? [
+            `N/${portalId}/vebus/+/Alarms/#`,
+            `N/${portalId}/vebus/+/VebusError`,
+            `N/${portalId}/battery/+/Alarms/#`
+          ] : []);
           client.subscribe(topics, { qos }, (err) => {
             if (settled) return;
             settled = true;

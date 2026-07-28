@@ -350,6 +350,16 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   // through the profile merge too (deepMerge skips it cleanly only when present).
   const victronOverride = { host: persistedVictron.host ?? '' };
   if (isPlainObject(persistedVictron.alarms)) victronOverride.alarms = persistedVictron.alarms;
+  // T-FREEZE (2026-07-24): dieselbe Klasse wie `alarms` — Schutz-/Timing-Parameter,
+  // KEIN Register-Map-Bestandteil. Ohne diese Durchreichung fällt jede GUI-Einstellung
+  // dieser Gruppe still auf den Hardcode-Default zurück, sobald ein Herstellerprofil
+  // aktiv ist (also immer): kein Profil deklariert sie, und das Profil besitzt
+  // victron.* komplett. Am Einfrier-Wächter aufgefallen, gilt genauso für die
+  // beiden Timing-Felder — die Settings-Felder dafür waren bisher wirkungslos.
+  if (isPlainObject(persistedVictron.freezeWatchdog)) victronOverride.freezeWatchdog = persistedVictron.freezeWatchdog;
+  if (isPlainObject(persistedVictron.mqttCrossCheck)) victronOverride.mqttCrossCheck = persistedVictron.mqttCrossCheck;
+  if (persistedVictron.telemetryMaxAgeMs != null) victronOverride.telemetryMaxAgeMs = persistedVictron.telemetryMaxAgeMs;
+  if (persistedVictron.modbusConnectTimeoutMs != null) victronOverride.modbusConnectTimeoutMs = persistedVictron.modbusConnectTimeoutMs;
   // D-27: victron.mqtt (Broker-URL, Portal-ID, …) ist installationsspezifisch und
   // operator-editierbar. Nur NICHT-LEERE persistierte Werte überschreiben den
   // Profil-Default — ein leeres GUI-Feld ('' aus createDefaultConfig bzw. einem
@@ -1069,6 +1079,62 @@ function buildFieldDefinitions() {
       step: 500,
       help: 'Maximale Wartezeit f\u00fcr den Modbus-TCP-Verbindungsaufbau; danach gilt der Host als nicht erreichbar und der Poll-Zyklus blockiert nicht. Sch\u00fctzt vor einem toten/firewalled Ger\u00e4t, das den SYN ohne Antwort schluckt (sonst h\u00e4lt das OS die Verbindung bis zum Default-Timeout ~75-130 s offen). Greift nur in der Connect-Phase, nicht als Idle-Timeout an laufenden Polls.'
     },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
+      path: 'victron.freezeWatchdog.enabled',
+      label: 'Einfrier-W\u00e4chter',
+      type: 'boolean',
+      help: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zur\u00fcckkommen (halb-tote Modbus-Sitzung an der Anlage: die Werte stehen still, die Anlage l\u00e4uft aber weiter). Bei Verdacht h\u00e4lt DVhub jede erzwungene Entladung an, verwirft die Verbindung und baut sie neu auf und schl\u00e4gt Alarm. Nur f\u00fcr Modbus-Anlagen; ausschalten nur zur Fehlersuche.'
+    },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
+      path: 'victron.mqttCrossCheck.enabled',
+      label: 'Zweitquellen-Kreuzprobe (MQTT)',
+      type: 'boolean',
+      help: 'Vergleicht die Messwerte der Anlage laufend über einen ZWEITEN, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Widersprechen sich beide Wege dauerhaft, sind die Modbus-Daten veraltet — dann schlägt DVhub Alarm und setzt keine neuen Entladebefehle mehr ab. Braucht Zugangsdaten unten (bei Victron: das Remote-Console-Passwort des GX).'
+    },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
+      path: 'victron.mqttCrossCheck.portalId',
+      label: 'Kreuzprobe: Portal-/Geräte-ID',
+      type: 'text',
+      empty: 'blank',
+      help: 'Die VRM-Portal-ID der Anlage (bei Victron in den Geräteeinstellungen bzw. im VRM sichtbar). Sie steht in jedem MQTT-Thema der Anlage. Leer = Kreuzprobe bleibt aus.'
+    },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
+      path: 'victron.mqttCrossCheck.password',
+      label: 'Kreuzprobe: Passwort',
+      type: 'text',
+      empty: 'blank',
+      help: 'Passwort für den MQTT-Dienst der Anlage. Bei Victron ist das das Remote-Console-Passwort des GX (der Benutzername ist beliebig). Wird verschlüsselt gespeichert und aus Exporten entfernt.'
+    },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
+      path: 'victron.freezeWatchdog.freezeMs',
+      label: 'Einfrier-W\u00e4chter: Stillstand bis Alarm (ms)',
+      type: 'number',
+      default: 180000,
+      min: 30000,
+      max: 3600000,
+      step: 10000,
+      help: 'So lange m\u00fcssen ALLE Live-Messwerte gleichzeitig unver\u00e4ndert stehen (bei laufender Leistung), bevor der W\u00e4chter anschl\u00e4gt. Standard 3 Minuten. K\u00fcrzer = schnellere Reaktion, aber mehr Fehlalarm-Risiko bei sehr gleichm\u00e4\u00dfigen Anlagen.'
+    },
 
     {
       section: 'schedule',
@@ -1148,6 +1214,21 @@ function buildFieldDefinitions() {
       type: 'number',
       empty: 'null',
       help: 'Leer lassen, wenn kein Default geschrieben werden soll.'
+    },
+    {
+      section: 'schedule',
+      group: 'minExport',
+      groupLabel: 'Mindesteinspeisung',
+      groupDescription: 'Hält am Netzpunkt dauerhaft eine kleine Einspeisung, damit plötzliche Verbraucher nicht sofort Strom aus dem Netz ziehen. Wirkt auf JEDEN Sollwert (Regel, Optimierer, EOS) — nie auf Schutzabschaltungen.',
+      groupOrder: 61,
+      path: 'schedule.minExportW',
+      label: 'Mindesteinspeisung (W)',
+      type: 'number',
+      default: 0,
+      min: 0,
+      max: 5000,
+      step: 10,
+      help: 'Regelt die Anlage auf 0 W am Zähler, verursacht jeder Lastsprung (Herd, Wärmepumpe, Wallbox) kurz Netzbezug, weil die Regelung hinterherläuft. Ein kleiner Dauer-Export als Puffer fängt das ab — Richtwert: etwa so viel, wie deine größte einzelne Last zieht (typisch 200–500 W, bei großen Verbrauchern mehr). 0 = aus. Wird nur angewendet, wenn der Börsenpreis bekannt und nicht negativ ist; bei negativen Preisen und während einer Abregelung bleibt sie aus. Der Entlade-Schutz (Mindest-SoC) hat immer Vorrang.'
     },
     {
       section: 'schedule',
@@ -2599,6 +2680,48 @@ export function createDefaultConfig() {
       // aufbau. Default 5000 (config-getrieben). Verhindert, dass ein toter/firewalled
       // Host den Poll-Zyklus bis zum OS-Default-TCP-Timeout (~75-130 s) blockiert.
       modbusConnectTimeoutMs: 5000,
+      // T-FREEZE (2026-07-24, GX-Modbus-Zwischenfall): Einfrier-Wächter. Erkennt
+      // EINGEFRORENE Werte trotz erfolgreicher Reads (halb-tote Modbus-Session am
+      // GX) und datiert die Frische-Stempel auf den letzten echten Wertwechsel
+      // zurück → der T-0075-Entlade-Boden-Schutz hält. Default AN: der reale
+      // Zwischenfall lief 2,5 h still, jeder bestehende Schutz sah „frisch".
+      // Details/Detektoren: services/telemetry-freeze-watchdog.js.
+      freezeWatchdog: {
+        enabled: true,
+        freezeMs: 180000,
+        minSamples: 20,
+        minPowerW: 25,
+        minJitterFields: 2,
+        // socStepPct/socBand*: gegen 5 Tage echte Anlagendaten kalibriert
+        // (2026-07-24, 60-kWh-LFP) — ohne Band hätte der SoC-Detektor in der
+        // Absorptionsphase (95-100 %) reihenweise falsch Alarm geschlagen.
+        socStepPct: 3,
+        socBandLowPct: 10,
+        socBandHighPct: 95,
+        reconnectMs: 60000,
+        // Deckel gegen ein Verbindungs-Karussell: eine Modbus-Abriss-Schleife
+        // treibt die dbus-Kette des GX dokumentiert bis zum Watchdog-Reboot,
+        // und tote Sessions räumt er nicht ab.
+        maxReconnects: 3
+      },
+      // T-CROSSCHECK (2026-07-25): Zweitquellen-Kreuzprobe über den MQTT-Dienst des
+      // GX. `dbus-mqtt`/flashmq ist ein ANDERER Prozess als `dbus-modbustcp` und
+      // spiegelt denselben dbus wie das Gerätedisplay — die einzige Quelle, die den
+      // Zwischenfall vom 24.07.2026 gesehen hätte (alle Modbus-internen Prüfungen
+      // waren blind, Belege in services/mqtt-crosscheck.js). Default AUS: braucht
+      // Zugangsdaten (FlashMQ prüft gegen das Remote-Console-Passwort des GX).
+      mqttCrossCheck: {
+        enabled: false,
+        broker: '',
+        portalId: '',
+        username: '',
+        password: '',
+        rejectUnauthorized: false,
+        compareMs: 15000,
+        sustainMs: 180000,
+        maxAgeMs: 60000,
+        keepaliveMs: 25000
+      },
       mqtt: {
         // T-0080 P1: was a fleet-specific LAN IP baked into the shipped default
         // (same class as victron.host above — prod reads /etc/dvhub/config.json
@@ -2695,6 +2818,11 @@ export function createDefaultConfig() {
       // so it can never run the battery down to the bare hardware min-SoC.
       manualOverrideMinSocPct: 10,
       defaultGridSetpointW: -40,
+      // Issue #12: Mindesteinspeisung als Boden für JEDEN gridSetpointW-Sollwert
+      // (positive Wattzahl, intern negativ). 0 = aus → Bestandsanlagen verhalten
+      // sich unverändert; der Wert ist bewusst frei wählbar, weil die nötige
+      // Reserve mit der größten Einzellast skaliert.
+      minExportW: 0,
       defaultChargeCurrentA: null,
       defaultFeedExcessDcPv: 1,
       rules: [],

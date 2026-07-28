@@ -13,6 +13,13 @@ export const REDACTED_PATHS = Object.freeze([
   'forecast.pvnode.apiKey',
   'mqtt.username',
   'mqtt.password',
+  // T-CROSSCHECK (2026-07-25): Zugangsdaten der GX-Zweitquelle. FlashMQ auf dem
+  // GX prüft gegen das Remote-Console-Passwort — dasselbe Geheimnis wie der
+  // Gerätezugang, gehört also nie in einen Config-Export.
+  'victron.mqtt.username',
+  'victron.mqtt.password',
+  'victron.mqttCrossCheck.username',
+  'victron.mqttCrossCheck.password',
   // T-0131 MQTT weather provider (Review 2026-06-10 B4): the dedicated weather
   // broker can carry its own credentials — redact like the top-level mqtt block.
   'forecast.weather.mqtt.username',

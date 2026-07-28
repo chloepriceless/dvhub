@@ -1899,6 +1899,64 @@ function renderVictronAlarms(va) {
   if (span) span.textContent = text;
 }
 
+// T-FREEZE Einfrier-Wächter-Banner (2026-07-24, GX-Modbus-Zwischenfall). Quelle:
+// /api/status.telemetryFreeze. Der Zwischenfall lief 2,5 h STILL — die Werte sahen
+// frisch aus, waren aber eingefroren. Das Banner ist die sichtbare Hälfte des
+// Alarms (die andere: Push-Notification + Log-Eintrag „critical"). Nutzt die
+// bestehende Alarm-Banner-Klasse, kein eigenes CSS.
+function renderTelemetryFreeze(tf) {
+  const id = 'telemetryFreezeBanner';
+  const existing = document.getElementById(id);
+  if (!tf || tf.active !== true) {
+    if (existing) existing.remove();
+    return;
+  }
+  const mins = Math.round(Number(tf.stalledForMs || 0) / 60000);
+  const text = tf.reason === 'soc_no_step'
+    ? `\u{1F534} Ladestand eingefroren — der Ladestand steht seit ${mins} min still, obwohl Akku-Leistung gemeldet wird. Erzwungene Entladungen sind angehalten. Bitte die Anlage (GX/Wechselrichter) prüfen.`
+    : `\u{1F534} Live-Daten eingefroren — die Messwerte stehen seit ${mins} min unverändert still. DVhub hat die Verbindung neu aufgebaut und erzwungene Entladungen angehalten. Bitte die Anlage (GX/Wechselrichter) prüfen.`;
+  let banner = existing;
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = id;
+    const span = document.createElement('span');
+    span.id = 'telemetryFreezeBannerText';
+    banner.append(span);
+    document.body.prepend(banner);
+  }
+  banner.className = 'victron-alarm-banner alarm';
+  const span = document.getElementById('telemetryFreezeBannerText');
+  if (span) span.textContent = text;
+}
+
+// T-CROSSCHECK Widerspruchs-Banner (2026-07-25). Quelle: /api/status.telemetrySourceMismatch.
+// Der Zwischenfall vom 24.07. war über den Modbus-Weg allein unsichtbar — dieses
+// Banner ist die sichtbare Hälfte der Zweitquellen-Kreuzprobe.
+function renderSourceMismatch(sm) {
+  const id = 'sourceMismatchBanner';
+  const existing = document.getElementById(id);
+  if (!sm || sm.active !== true) {
+    if (existing) existing.remove();
+    return;
+  }
+  const parts = (sm.mismatches || []).map((m) => `${m.label}: ${m.mqtt}${m.unit} vs. ${m.modbus}${m.unit}`);
+  const text = '\u{1F534} Anlagendaten widersprüchlich — die Anlage meldet über zwei getrennte Wege '
+    + `unterschiedliche Werte (${parts.join(' · ')}). Die Modbus-Werte sind vermutlich veraltet; `
+    + 'DVhub setzt keine neuen Entladebefehle mehr ab. Bitte am Gerät prüfen.';
+  let banner = existing;
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = id;
+    const span = document.createElement('span');
+    span.id = 'sourceMismatchBannerText';
+    banner.append(span);
+    document.body.prepend(banner);
+  }
+  banner.className = 'victron-alarm-banner alarm';
+  const span = document.getElementById('sourceMismatchBannerText');
+  if (span) span.textContent = text;
+}
+
 async function handleEmergencyStop() {
   const go = typeof window !== 'undefined' && typeof window.confirm === 'function'
     ? window.confirm('NOT-HALT aktivieren?\n\nGrid-Setpoint wird einmalig auf 0 gesetzt (Eigenverbrauchsregelung), danach werden alle Markt-/Optimizer-/Hand-Steuerbefehle gestoppt, bis du fortsetzt.\n\nPflicht-Abregelung (§51/§9) und Live-Anzeige laufen weiter.')
@@ -1958,6 +2016,14 @@ function renderDashboardStatus(status) {
 
   safeRender('dashboard.victron-alarms', () => {
     renderVictronAlarms(status.victronAlarms);
+  });
+
+  safeRender('dashboard.telemetry-freeze', () => {
+    renderTelemetryFreeze(status.telemetryFreeze);
+  });
+
+  safeRender('dashboard.source-mismatch', () => {
+    renderSourceMismatch(status.telemetrySourceMismatch);
   });
 
   safeRender('dashboard.dv-status', () => {

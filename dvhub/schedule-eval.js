@@ -45,6 +45,16 @@ const KEEPALIVE_LOG_THROTTLE_MS = 60000;
 //   maxDischargeW (2704, int16): 0 = no discharge, positive = cap in W, -1 =
 //     unlimited; ANY non-zero value ENABLES discharge                    → hold 0
 // Verified against config-model.js controlWrite defaults (see T-0075-DESIGN E1).
+// Issue #12: Mindesteinspeisung → Setpoint-Boden auf der negativen Achse.
+// Konfiguriert wird eine POSITIVE Wattzahl ("wie viel soll mindestens ins Netz
+// gehen"), intern ist das ein negativer gridSetpointW. 0/leer/ungültig = aus,
+// damit Bestandsanlagen sich exakt wie bisher verhalten.
+export function minExportFloorW(cfg) {
+  const w = Number(cfg?.schedule?.minExportW);
+  if (!Number.isFinite(w) || w <= 0) return null;
+  return -Math.round(w);
+}
+
 function dischargeFloorHold(target, value) {
   const v = Number(value);
   if (!Number.isFinite(v)) return null;
@@ -92,6 +102,20 @@ export function createScheduleEvaluator(ctx) {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  // Aktueller Spotpreis in ct/kWh, oder null wenn nicht ermittelbar. null heißt
+  // ausdrücklich „unbekannt", NICHT „nicht negativ" — Aufrufer, die eine
+  // Preisentscheidung treffen, müssen den unbekannten Fall fail-safe behandeln.
+  // (Der Preis hängt unter epexNowNext().current, nicht top-level.)
+  function currentPriceCtKwh() {
+    try {
+      const p = typeof ctx.epexNowNext === 'function' ? ctx.epexNowNext()?.current : null;
+      const ct = p ? Number(p.ct_kwh) : NaN;
+      return Number.isFinite(ct) ? ct : null;
+    } catch {
+      return null;
+    }
+  }
 
   function toRawForWrite(value, conf) {
     const scale = Number(conf.scale ?? 1);
@@ -651,6 +675,57 @@ export function createScheduleEvaluator(ctx) {
     }
     // === end B-1112 Sequenz-Dialekt ==========================================
 
+    // === Issue #12 Mindesteinspeisung (min export floor) =====================
+    // GitHub #12 (VdwBM, 2026-07-21): steht der gridSetpointW auf 0, regelt die
+    // Anlage auf "null am Zähler" — ein Lastsprung (Herd, Wärmepumpe, Wallbox)
+    // erzeugt dann bis zu 1 kW Netzbezug, weil die ESS-Regelung dem Sprung
+    // hinterherläuft. Ein kleiner dauerhafter Export als Puffer fängt das ab.
+    // Der Wert muss frei wählbar sein: die nötige Reserve skaliert mit der
+    // größten Einzellast, die -40 W des Idle-Defaults reichen dafür nicht.
+    //
+    // Der Boden VERSTÄRKT nur (Math.min auf der negativen Achse) — er schwächt
+    // keinen stärkeren Export ab und schreibt nie in Richtung Netzbezug.
+    //
+    // Fail-safe-Gates, ALLE müssen halten, sonst greift der Boden nicht:
+    //   - Preis muss bekannt UND >= 0 sein. Unbekannt => KEIN erzwungener Export:
+    //     bei negativem Preis kostet Einspeisen Geld, und ein ausgefallener
+    //     EPEX-Feed darf das nicht verdecken (fail-safe statt fail-open).
+    //   - negativePriceActive => aus; die §51-Abregelung hat Vorrang.
+    //   - Pflicht-Quellen (§51, SoC-Floor, Not-Halt) bleiben unangetastet —
+    //     deren Werte sind Schutzmaßnahmen, kein Regelpunkt.
+    //   - sell_price_floor => aus (hält bewusst auf dem Default-Setpoint).
+    //   - Ein POSITIVER Sollwert ist ein gewolltes Netzladen (Optimierer lädt den
+    //     Akku aus dem Netz). Den dreht der Boden nicht in einen Export um — sonst
+    //     sabotierte die Mindesteinspeisung einen bezahlten Ladeslot.
+    // Der T-0075-Entlade-Boden weiter unten bleibt wirksam: bei unbekanntem,
+    // veraltetem oder eingefrorenem SoC bzw. SoC <= hardFloor wird der negative
+    // Wert auf 0 gehalten — der Boden kann den Akku also nicht leerfahren.
+    if (target === 'gridSetpointW') {
+      const floorW = minExportFloorW(cfg);
+      const eligible = floorW !== null
+        && !isMandatoryControlSource(source)
+        && source !== 'sell_price_floor'
+        && state.ctrl.negativePriceActive !== true;
+      if (eligible) {
+        const priceCt = currentPriceCtKwh();
+        const requested = Number(value);
+        if (priceCt !== null && priceCt >= 0 && Number.isFinite(requested)
+            && requested <= 0 && requested > floorW) {
+          const key = `${source}|${floorW}`;
+          if (state.ctrl._minExportKey !== key) {
+            state.ctrl._minExportKey = key;
+            pushLog('min_export_floor', { requested, floorW, source, priceCt });
+          }
+          value = floorW;
+        } else if (state.ctrl._minExportKey != null && !(priceCt !== null && priceCt >= 0)) {
+          state.ctrl._minExportKey = null;
+        }
+      } else if (state.ctrl._minExportKey != null) {
+        state.ctrl._minExportKey = null;
+      }
+    }
+    // === end Issue #12 Mindesteinspeisung ====================================
+
     // === EEG/§14a legal gate — applies to ALL callers (schedule rules, manual control,
     // dc-export, eos/emhass optimizer, negative-price triggers). Source of truth:
     // cfg.optimizer.allowGridCharge / allowGridDischarge.
@@ -713,8 +788,25 @@ export function createScheduleEvaluator(ctx) {
       const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
       const unknown = socRaw == null || !Number.isFinite(soc);
       const stale = victronFieldStale(state, 'soc', maxAgeMs);
-      if (unknown || stale || soc <= floorPct) {
-        const reason = unknown ? 'soc_unknown' : stale ? 'soc_stale' : 'below_hard_floor';
+      // T-FREEZE (2026-07-24): erkannter Einfrierer hält SOFORT, ohne erst
+      // telemetryMaxAgeMs abzuwarten. Der Wächter datiert die Stempel zwar
+      // zurück (dann griffe `stale` ohnehin), aber bei kurzem maxAgeMs-Fenster
+      // vs. langem Poll-Backoff ist die explizite Flagge das ehrlichere Signal —
+      // und der Log-Grund benennt die Ursache statt nur „veraltet".
+      const frozen = state.victron?.freeze?.active === true;
+      // T-CROSSCHECK (2026-07-25): die zweite Quelle (MQTT) widerspricht dem
+      // Modbus-Bild dauerhaft → die Zahlen, auf denen eine Entladeentscheidung
+      // beruhen würde, sind nachweislich falsch. Ehrliche Einordnung: hilft der
+      // Steuerung nicht, wenn die Befehle ohnehin nicht ankommen (Christin,
+      // 25.07.) — es verhindert nur, dass DVhub auf Basis falscher Werte NEUE
+      // Entladebefehle absetzt bzw. dass ein solcher später wirksam wird.
+      // Das eigentliche Signal ist der Alarm.
+      const mismatched = state.victron?.sourceMismatch?.active === true;
+      if (unknown || frozen || mismatched || stale || soc <= floorPct) {
+        const reason = unknown ? 'soc_unknown'
+          : frozen ? 'telemetry_frozen'
+            : mismatched ? 'source_mismatch'
+              : stale ? 'soc_stale' : 'below_hard_floor';
         pushLog('control_discharge_floor', {
           target, requested: Number(value), soc: unknown ? null : soc,
           ageMs: victronFieldAgeMs(state, 'soc'), floorPct, reason

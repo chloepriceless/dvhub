@@ -275,6 +275,19 @@ export function createModbusTransport(opts = {}) {
     mbRequest,
     mbWriteSingle,
     mbWriteMultiple,
+    // T-FREEZE (2026-07-24): alle gepoolten Sessions verwerfen. Der Pool baut beim
+    // nächsten Request von selbst neu auf (connect on-demand) — der Aufrufer muss
+    // nichts weiter tun. Anlass: der GX (dbus-modbustcp v1.0.93) räumt tote
+    // Modbus-Sessions nicht ab; eine halb-tote Session liefert weiter ERFOLGREICHE
+    // Reads mit eingefrorenen Werten. Ein sauberer FIN + Neuaufbau ist die einzige
+    // Handhabe, die DVhub auf seiner Seite hat. Gibt die Zahl der verworfenen
+    // Verbindungen zurück (Log/Diagnose).
+    dropConnections() {
+      const n = mbPool.size;
+      for (const c of [...mbPool.values()]) c.destroy();
+      mbPool.clear();
+      return n;
+    },
     async destroy() {
       for (const c of mbPool.values()) c.destroy();
       mbPool.clear();

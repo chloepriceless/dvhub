@@ -146,6 +146,16 @@ export const meterPollErrorsTotal = new promClient.Counter({
   registers: [metricsRegistry]
 });
 
+// T-FREEZE (2026-07-24): 1 solange der Einfrier-Wächter eingefrorene Live-Werte
+// sieht (erfolgreiche Reads, aber keine Wertänderung — halb-tote GX-Modbus-Session),
+// sonst 0. Der Poll-Fehler-Zähler bleibt bei genau diesem Ausfallbild flach, deshalb
+// eine EIGENE Serie für Monitoring/Alerting.
+export const telemetryFreezeActive = new promClient.Gauge({
+  name: 'dvhub_telemetry_freeze_active',
+  help: 'Frozen live telemetry detected by the freeze watchdog (1 = frozen)',
+  registers: [metricsRegistry]
+});
+
 export const optimizerRunsTotal = new promClient.Counter({
   name: 'dvhub_optimizer_runs_total',
   help: 'Total optimizer runs by result',
@@ -2029,6 +2039,14 @@ export function createApiRoutes(ctx) {
       now,
       getCfg().victron?.alarms?.pollIntervalMs
     );
+    // T-FREEZE Einfrier-Wächter (2026-07-24): eingefrorene Live-Werte trotz
+    // erfolgreicher Reads. Quelle ist wie bei den Alarmen der POLLER-Snapshot
+    // (payload.victron.freeze), nicht das Web-Prozess-`state` — sonst bliebe das
+    // Banner im Split-Prozess-Betrieb dauerhaft leer.
+    payload.telemetryFreeze = payload.victron?.freeze || null;
+    // T-CROSSCHECK (2026-07-25): Widerspruch der beiden Datenwege — gleiche
+    // Snapshot-Quelle wie oben (Poller-Prozess), nicht das Web-state.
+    payload.telemetrySourceMismatch = payload.victron?.sourceMismatch || null;
     // Lizenz-kWp-Cap (T-LICENSE-KWP-GATING): angezeigte Live-PV auf die lizenzierte
     // kWp kappen. payload.victron ist ein FRISCHER Snapshot (buildVictronSnapshot/
     // IPC), nie die Quelle state.victron — der Steuerungspfad bleibt unberührt.

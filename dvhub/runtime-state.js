@@ -50,7 +50,15 @@ const VICTRON_FIELDS = [
   // writes state.victron.alarms; it MUST be whitelisted here or the IPC snapshot
   // drops it and the web process serves payload.victron.alarms = undefined
   // (banner permanently empty in split-process mode).
-  'alarms'
+  'alarms',
+  // T-FREEZE (2026-07-24): Einfrier-Wächter-Zustand ({active, reason, since,
+  // stalledForMs, fields} oder null). Muss wie `alarms` whitelisted sein, sonst
+  // verliert der IPC-Snapshot ihn und die Web-Seite sieht im Split-Prozess-Betrieb
+  // nie einen erkannten Einfrierer.
+  'freeze',
+  // T-CROSSCHECK (2026-07-25): Widerspruch zwischen Modbus und der MQTT-Zweitquelle
+  // ({active, since, fields, mismatches} oder null) — gleiche Begründung wie oben.
+  'sourceMismatch'
 ];
 
 const SCHEDULE_FIELDS = [

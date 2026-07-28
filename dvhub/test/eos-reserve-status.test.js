@@ -40,6 +40,22 @@ test('readEosReserveStatus: liest *.conf (nicht .bak), typisiert die Gates', () 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('readEosReserveStatus: η-Anpassung (EOS_RESERVE_EFF_ADJUST) ist sichtbar', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eos-dropin-eff-'));
+  fs.writeFileSync(path.join(dir, 'reserve-eff-adjust.conf'), 'Environment=EOS_RESERVE_EFF_ADJUST=1\n');
+  const on = readEosReserveStatus({ dir });
+  assert.equal(on.gates.effAdjust, true);
+  assert.equal(on.env.EOS_RESERVE_EFF_ADJUST, '1');
+
+  // Ohne Drop-in darf NICHT "an" behauptet werden.
+  fs.rmSync(path.join(dir, 'reserve-eff-adjust.conf'));
+  fs.writeFileSync(path.join(dir, 'reserve.conf'), 'Environment=EOS_RESERVE_PRICE_AWARE=1\n');
+  const off = readEosReserveStatus({ dir });
+  assert.notEqual(off.gates.effAdjust, true);
+  assert.equal(off.env.EOS_RESERVE_EFF_ADJUST, undefined);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('readEosReserveStatus: fehlendes Verzeichnis → available:false (kein Raten)', () => {
   const st = readEosReserveStatus({ dir: '/nonexistent/eos.service.d' });
   assert.equal(st.available, false);

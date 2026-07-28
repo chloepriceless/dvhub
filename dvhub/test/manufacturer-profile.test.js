@@ -93,3 +93,37 @@ test('loadConfigFile builds effective Victron runtime values from hersteller/vic
   assert.equal(loaded.effectiveConfig.dvControl.dontFeedExcessAcPv.address, 4708);
   assert.equal(loaded.effectiveConfig.dvControl.negativePriceProtection.gridSetpointW, -55);
 });
+
+// T-FREEZE (2026-07-24): das Herstellerprofil BESITZT victron.* (Register-Map).
+// Operator-/Schutz-Parameter derselben Sektion müssen die Profil-Anwendung
+// überleben — sonst fällt eine GUI-Einstellung still auf den Hardcode-Default
+// zurück, sobald ein Profil aktiv ist (also immer). Genau so war der
+// Einfrier-Wächter im ersten Feldtest wirkungslos konfiguriert.
+test('Herstellerprofil überschreibt Schutz-/Timing-Parameter der victron-Sektion NICHT', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-profile-carry-'));
+  const configPath = path.join(rootDir, 'config.json');
+  const manufacturerDir = path.join(rootDir, 'hersteller');
+  fs.mkdirSync(manufacturerDir, { recursive: true });
+
+  // Ein Profil, das (wie alle ausgelieferten) KEINEN dieser Werte deklariert.
+  fs.writeFileSync(path.join(manufacturerDir, 'victron.json'), JSON.stringify({
+    victron: { transport: 'modbus', port: 502, unitId: 100, timeoutMs: 1000 }
+  }));
+  fs.writeFileSync(configPath, JSON.stringify({
+    manufacturer: 'victron',
+    victron: {
+      host: '10.0.0.5',
+      telemetryMaxAgeMs: 45000,
+      modbusConnectTimeoutMs: 3000,
+      freezeWatchdog: { enabled: true, freezeMs: 60000, minSamples: 15 }
+    }
+  }));
+
+  const v = loadConfigFile(configPath).effectiveConfig.victron;
+  assert.equal(v.port, 502, 'Register-/Transport-Teil kommt weiterhin vom Profil');
+  assert.equal(v.telemetryMaxAgeMs, 45000);
+  assert.equal(v.modbusConnectTimeoutMs, 3000);
+  assert.equal(v.freezeWatchdog.freezeMs, 60000);
+  assert.equal(v.freezeWatchdog.minSamples, 15);
+  assert.equal(v.freezeWatchdog.minPowerW, 25, 'nicht gesetzte Unterfelder kommen aus den Defaults');
+});
