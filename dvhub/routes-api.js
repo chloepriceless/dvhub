@@ -12,6 +12,7 @@ import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, cont
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
+import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots } from './eeg-extension.js';
@@ -3269,7 +3270,7 @@ export function createApiRoutes(ctx) {
           // dedicated /api/integrations/dveos GET does the reachability check).
           const opt = getCfg().optimizer || {};
           const primarySource = opt.primarySource || 'internal';
-          const enabled = !!(opt.eosProxy && opt.eosProxy.enabled);
+          const enabled = resolveEosProxy(getCfg()).enabled;
           return {
             enabled,
             primarySource,
@@ -3892,7 +3893,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       const opt = getCfg().optimizer || {};
       const primarySource = opt.primarySource || 'internal';
-      const enabled = !!(opt.eosProxy && opt.eosProxy.enabled);
+      const enabled = resolveEosProxy(getCfg()).enabled;
       let reachable = false;
       if (enabled) {
         try { reachable = !!(await ctx.eosAdapter?.isAvailable?.()); }

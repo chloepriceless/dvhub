@@ -1220,6 +1220,26 @@ body:has(.settings-aurora) .location-picker-footer {
 }
 .settings-aurora .sa-map-row { padding: 4px 14px 12px; }
 
+/* Handlungen einer Gruppe (z. B. Datenbank-Backup) — abgesetzt unter den
+   Feldern, zu denen sie gehören. Die zerstörerische Handlung steht bewusst
+   ganz rechts und in Rot, nicht neben harmlosen Ansichts-Schaltflächen. */
+.settings-aurora .sa-group-actions {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--sa-border, rgba(255,255,255,.08));
+  margin-top: 6px;
+}
+.settings-aurora .sa-group-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.settings-aurora .sa-group-actions-msg {
+  margin-top: 8px;
+  font-size: .86rem;
+  line-height: 1.4;
+}
+
 /* Width tokens for inputs */
 .settings-aurora .sa-w-num      { width: 80px; }
 .settings-aurora .sa-w-label    { width: 120px; }

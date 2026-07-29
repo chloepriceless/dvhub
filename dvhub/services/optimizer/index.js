@@ -10,7 +10,7 @@ import { normalizeForecast, averageSlotConfidence, aggregateTo1h } from './forec
 import { buildHeuristicSchedule } from './heuristic-optimizer.js';
 import { buildMilpSchedule } from './milp-battery-optimizer.js';
 import { buildScheduleRules, insertOptimizerRules, optimizerSlotsToGridSetpoints } from './schedule-builder.js';
-import { createEosAdapter } from './eos-adapter.js';
+import { createEosAdapter, resolveEosProxy } from './eos-adapter.js';
 import { enrichPriceSlotsWithCosts } from './cost-model.js';
 import { createMispelTracker } from './mispel-tracker.js';
 import { assessMultiDayHold } from './multi-day.js';
@@ -366,7 +366,7 @@ export function createOptimizerService(ctx) {
       // 7b. EOS adapter (when enabled on Tier 2+)
       let eosSchedule = null;
       let eosGridSetpoints = null;
-      if (cfg.optimizer.eosProxy?.enabled && tier >= 2) {
+      if (resolveEosProxy(cfg).enabled && tier >= 2) {
         try {
           // Send enriched forecast with fully-loaded prices to EOS
           const forecastResp = await ctx.forecastService.buildForecastResponse();

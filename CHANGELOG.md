@@ -48,12 +48,13 @@ verweist hierher.
 
 ## [1.0.5] - 2026-07-28
 
-Zuverlässigkeits-Release. Schwerpunkt: DVhub merkt jetzt selbst, wenn die Anlage
-zwar antwortet, aber keine echten Messwerte mehr liefert — der Fall, der am
-24.07. zweieinhalb Stunden lang unbemerkt blieb. Dazu ein zweiter, unabhängiger
-Lesepfad zur Gegenprobe, der vollständige MQTT-Anschluss und — aus dem
-Anwender-Feedback — ein einstellbarer Einspeise-Puffer gegen Bezugsspitzen,
-sowohl im Normalbetrieb als auch während der Abregelung.
+Wartungs-Release. Es behebt den Netzbezug während der Abregelung und macht den
+Einspeise-Puffer aus dem Anwender-Feedback überall wirksam. Dazu der
+vollständige MQTT-Anschluss.
+
+Zwei Diagnose-Funktionen (Einfrier-Wächter, Zweitquellen-Kreuzprobe) reisen im
+Code mit, sind **standardmäßig ausgeschaltet** und stehen unter „Enthalten, aber
+noch nicht freigegeben". Freigabe, sobald sie genügend getestet sind.
 
 ### Neu
 
@@ -73,6 +74,23 @@ sowohl im Normalbetrieb als auch während der Abregelung.
   Preis-Feed darf keinen Export erzwingen), im Not-Halt und unterhalb des
   Entlade-Bodens — der Akkuschutz behält immer Vorrang.
   Danke an **Johann (@VdwBM)** für den Hinweis (GitHub #12).
+
+- **MQTT-Weg vervollständigt.** Wer die Anlage über MQTT statt Modbus anbindet,
+  bekommt jetzt auch Geräte-Alarme (Banner), die Rücklesung der Steuerpunkte und
+  die Entladegrenze — bisher gab es das nur über Modbus. Außerdem unterstützt
+  der MQTT-Zugang endlich Benutzername/Passwort und verschlüsselte Verbindungen;
+  ohne das ließ sich ein aktuelles Victron-GX gar nicht anbinden.
+
+- **Wirkungsgrad-Anpassung der Reserve-Freigabe wird angezeigt.** Die
+  Einstellungen zeigen jetzt auch, ob die Übernacht-Reserve ihre Freigabe-Schwelle
+  mit dem gemessenen Wirkungsgrad rechnet oder mit einem angenommenen. Die
+  Einstellung war schon aktiv, ließ sich am Gerät aber nirgends ablesen.
+
+### Enthalten, aber noch nicht freigegeben
+
+Standardmäßig ausgeschaltet und noch im Feldtest — bitte noch nicht
+einschalten. Beide greifen in den Regelpfad ein bzw. halten Entladebefehle an.
+Freigabe, sobald sie genügend getestet sind.
 
 - **Einfrier-Wächter für die Live-Daten.** DVhub erkennt jetzt den Fall, dass die
   Anlage zwar sauber antwortet, aber immer denselben Messwert liefert — eine
@@ -108,16 +126,6 @@ sowohl im Normalbetrieb als auch während der Abregelung.
   Modbus-Daten konnte das erkennen (auch eine zweite Modbus-Verbindung nicht).
   Neue Einstellungen unter „Verbindung" (`victron.mqttCrossCheck.*`), Standard
   AUS — sie braucht die Zugangsdaten des MQTT-Dienstes.
-- **MQTT-Weg vervollständigt.** Wer die Anlage über MQTT statt Modbus anbindet,
-  bekommt jetzt auch Geräte-Alarme (Banner), die Rücklesung der Steuerpunkte und
-  die Entladegrenze — bisher gab es das nur über Modbus. Außerdem unterstützt
-  der MQTT-Zugang endlich Benutzername/Passwort und verschlüsselte Verbindungen;
-  ohne das ließ sich ein aktuelles Victron-GX gar nicht anbinden.
-
-- **Wirkungsgrad-Anpassung der Reserve-Freigabe wird angezeigt.** Die
-  Einstellungen zeigen jetzt auch, ob die Übernacht-Reserve ihre Freigabe-Schwelle
-  mit dem gemessenen Wirkungsgrad rechnet oder mit einem angenommenen. Die
-  Einstellung war schon aktiv, ließ sich am Gerät aber nirgends ablesen.
 
 ### Behoben
 

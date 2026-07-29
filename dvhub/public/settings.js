@@ -136,7 +136,14 @@ function createConfigInput(field, value, inherited) {
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
     if (field.step !== undefined) input.step = field.step;
-    input.value = value === null || value === undefined ? '' : String(value);
+    // stringList: eine Liste von Adressen/Namen wird als kommagetrennter Text
+    // bedient. Der generische Renderer kennt sonst nur Skalare, und `array`
+    // ist bewusst ausgenommen (die zwei vorhandenen Array-Felder haben eigene
+    // Editoren). Ohne diesen Zweig stünde in einem Listenfeld "1.2.3.4,5.6.7.8"
+    // als JavaScript-Array-Text — oder gar nichts.
+    input.value = field.type === 'stringList'
+      ? (Array.isArray(value) ? value.join(', ') : (value == null ? '' : String(value)))
+      : (value === null || value === undefined ? '' : String(value));
     if ((input.value === '') && inherited !== null && inherited !== undefined && inherited !== '') {
       if (field.empty === 'delete') {
         input.placeholder = `Vererbt: ${inherited}`;
@@ -1409,12 +1416,164 @@ const HIDDEN_FIELD_PATHS = [
 // group (collapse via grp.openByDefault) plus the section-level extras
 // (discovery rows, PV-plant/pricing editors, forecast tier + string editor,
 // history-import panel). Used for ALL config destinations.
+// ── Aktionen einer Einstellungs-Gruppe ───────────────────────────────────────
+// Christin, 29.07.2026: die vier Datenbank-Schaltflächen lagen in der Kopfzeile
+// der HISTORIE, direkt neben „CSV-Export" — darunter „DB wiederherstellen", das
+// die Datenbank überschreibt und nicht umkehrbar ist. Auf einer Seite, die man
+// täglich zum Anschauen öffnet. Ihre EINSTELLUNGEN standen längst hier unter
+// „Geplantes Datenbank-Backup"; die zugehörigen Handlungen gehören daneben.
+//
+// Registrierung nach Gruppen-Id; renderGroupedCardsOb hängt sie unter die Felder.
+const GROUP_ACTIONS = {
+  dbBackup: [
+    {
+      id: 'dbBackupFull',
+      label: 'Backup herunterladen',
+      title: 'Komplette Datenbank als pg_dump-Backup (.dump, per pg_restore wiederherstellbar) herunterladen',
+      run: ({ setMessage }) => {
+        downloadDbBackup('full');
+        setMessage('Voll-Backup wird erstellt und heruntergeladen — das kann bei großer Historie etwas dauern.', 'ok');
+      }
+    },
+    {
+      id: 'dbBackup15m',
+      label: 'Nur 15-Minuten-Werte',
+      title: 'Nur die 15-min-Energiewerte (energy_slots_15m) als .dump herunterladen',
+      run: ({ setMessage }) => {
+        downloadDbBackup('energy15m');
+        setMessage('Backup der 15-Minuten-Werte wird erstellt und heruntergeladen.', 'ok');
+      }
+    },
+    {
+      id: 'dbBackupRun',
+      label: 'Geplantes Backup jetzt',
+      title: 'Das oben eingestellte Backup sofort ins Ziel schreiben — zum Prüfen des Netzwerk-Ziels',
+      busyLabel: 'Sichern …',
+      run: async ({ setMessage }) => {
+        const r = await apiFetch('/api/db/backup/run', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+        });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.ok) {
+          const pruned = Array.isArray(j.pruned) && j.pruned.length ? ` (${j.pruned.length} alte gelöscht)` : '';
+          setMessage(`Backup ins Ziel geschrieben: ${j.file || ''}${pruned}`, 'ok');
+        } else {
+          setMessage(`Geplantes Backup fehlgeschlagen: ${j.error || ('HTTP ' + r.status)}`, 'err');
+        }
+      }
+    },
+    {
+      id: 'dbRestore',
+      label: 'Datenbank wiederherstellen',
+      title: 'Datenbank aus einer .dump-Backupdatei einspielen — überschreibt vorhandene Daten, nicht umkehrbar',
+      danger: true,
+      busyLabel: 'Wiederherstellen …',
+      run: ({ setMessage, pickFile }) => pickFile(async (file) => {
+        const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+        const ok = typeof window.dvConfirm === 'function'
+          ? await window.dvConfirm(
+              `Aus „${file.name}" (${sizeMb} MB) wiederherstellen? Vorhandene Daten werden überschrieben. `
+              + 'Dieser Schritt ist NICHT umkehrbar; danach ist ein Neustart nötig.',
+              { title: 'Datenbank wiederherstellen?', okLabel: 'Wiederherstellen', danger: true })
+          : window.confirm(`Datenbank wirklich aus „${file.name}" (${sizeMb} MB) wiederherstellen? Nicht umkehrbar.`);
+        if (!ok) return;
+        setMessage(`Datenbank wird aus „${file.name}" wiederhergestellt — bitte warten und die Seite nicht schließen …`, 'warn');
+        const r = await apiFetch('/api/db/restore', {
+          method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: file
+        });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.ok) {
+          const warn = j.ignoredErrors ? ` (${j.ignoredErrors} nicht-fatale Warnungen ignoriert)` : '';
+          setMessage(`Datenbank wiederhergestellt${warn}. Bitte DVhub neu starten, damit alle Verbindungen frisch aufsetzen.`,
+            j.ignoredErrors ? 'warn' : 'ok');
+        } else {
+          setMessage(`Wiederherstellung fehlgeschlagen: ${j.error || ('HTTP ' + r.status)}`
+            + (j.detail ? ' — ' + String(j.detail).slice(0, 200) : ''), 'err');
+        }
+      })
+    }
+  ]
+};
+
+// Der Endpunkt liefert den Dump als Anhang; ein gewöhnlicher Link-Klick zieht
+// ihn direkt auf die Platte, ohne ihn im Browser-Speicher zu puffern.
+function downloadDbBackup(scope) {
+  const a = document.createElement('a');
+  a.href = `/api/db/backup?scope=${encodeURIComponent(scope)}`;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function renderGroupActions(groupId) {
+  const actions = GROUP_ACTIONS[groupId];
+  if (!actions || !actions.length) return null;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'sa-group-actions';
+
+  const message = document.createElement('div');
+  message.className = 'sa-group-actions-msg';
+  message.hidden = true;
+
+  const setMessage = (text, kind) => {
+    message.hidden = false;
+    const cls = kind === 'err' ? 'sa-text-err' : (kind === 'warn' ? 'sa-text-warn' : 'sa-text-ok');
+    message.innerHTML = `<span class="${cls}"></span>`;
+    message.firstChild.textContent = text;
+  };
+
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.dump,application/octet-stream';
+  fileInput.hidden = true;
+  let pendingFileHandler = null;
+  fileInput.addEventListener('change', (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = '';           // erlaubt erneute Auswahl derselben Datei
+    const handler = pendingFileHandler;
+    pendingFileHandler = null;
+    if (file && handler) handler(file);
+  });
+  const pickFile = (handler) => { pendingFileHandler = handler; fileInput.click(); };
+
+  const row = document.createElement('div');
+  row.className = 'sa-group-actions-row';
+  for (const action of actions) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = action.danger ? 'btn btn-small btn-danger' : 'btn btn-ghost btn-small';
+    btn.textContent = action.label;
+    if (action.title) btn.title = action.title;
+    btn.addEventListener('click', async () => {
+      const original = btn.textContent;
+      if (action.busyLabel) { btn.disabled = true; btn.textContent = action.busyLabel; }
+      try {
+        await action.run({ setMessage, pickFile, button: btn });
+      } catch (error) {
+        setMessage(`Fehlgeschlagen: ${error && error.message ? error.message : String(error)}`, 'err');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+    row.appendChild(btn);
+  }
+
+  wrap.appendChild(row);
+  wrap.appendChild(message);
+  wrap.appendChild(fileInput);
+  return wrap;
+}
+
 function renderGroupedCardsOb(mount, destination, destinationId) {
   for (const section of destination.sections) {
     for (const grp of section.groups || []) {
       const fields = (grp.fields || []).filter((f) =>
         f.type !== 'array' && isFieldVisible(f) && !HIDDEN_FIELD_PATHS.includes(f.path));
-      if (!fields.length) continue;
+      const groupActions = renderGroupActions(grp.id);
+      if (!fields.length && !groupActions) continue;
 
       const card = document.createElement('details');
       card.className = 'sa-cfg-card';
@@ -1475,6 +1634,10 @@ function renderGroupedCardsOb(mount, destination, destinationId) {
           body.appendChild(discoveryRow);
         }
       }
+
+      // Handlungen der Gruppe (z. B. Backup herunterladen / wiederherstellen)
+      // ans Ende der Karte, unter die Einstellungen, zu denen sie gehören.
+      if (groupActions) body.appendChild(groupActions);
 
       // Map picker if this group carries location fields (e.g. SMA-Standort).
       const locationField = fields.find((f) => f.path && f.path.endsWith('.location.latitude'));
@@ -2050,9 +2213,17 @@ function parseFieldInput(field) {
   if (!rawValue) {
     if (field.empty === 'delete') return { action: 'delete' };
     if (field.empty === 'null') return null;
+    // Ein leergeräumtes Listenfeld ist die LEERE LISTE, nicht der leere Text.
+    // Sonst stünde nach dem Speichern ein "" dort, wo der Code ein Array
+    // erwartet — und jede Prüfung „Liste leer? dann alles erlauben" liefe
+    // plötzlich in den falschen Zweig.
+    if (field.type === 'stringList') return [];
     return '';
   }
 
+  if (field.type === 'stringList') {
+    return rawValue.split(/[,;\s]+/).map((v) => v.trim()).filter(Boolean);
+  }
   if (field.type === 'number') return Number(rawValue);
   if (field.type === 'select') {
     const allNumeric = (field.options || []).every((option) => typeof option.value === 'number');

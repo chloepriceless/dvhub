@@ -10,13 +10,7 @@
       "keepaliveIntervalMs": 30000,
       "qos": 0
     },
-    "alarms": {
-      "enabled": true,
-      "pollIntervalMs": 30000,
-      "timeoutMs": 1500,
-      "vebusUnitId": null,
-      "batteryUnitId": null
-    }
+    "_comment_alarms": "Der alarms-Block stand hier bis 29.07.2026 mit enabled:true, war aber WIRKUNGSLOS: applyManufacturerProfile ersetzt victron.alarms komplett durch den persistierten Wert, und der wird immer aus createDefaultConfig befuellt. Die Vorgabe steht deshalb dort (jetzt: AUS)."
   },
   "meter": {
     "fc": 4,
@@ -25,26 +19,160 @@
     "timeoutMs": 1200
   },
   "points": {
-    "soc": { "enabled": true, "fc": 4, "address": 843, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
-    "batteryPowerW": { "enabled": true, "fc": 4, "address": 842, "quantity": 1, "signed": true, "scale": 1, "offset": 0 },
-    "pvPowerW": { "enabled": true, "fc": 4, "address": 850, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
-    "acPvL1W": { "enabled": true, "fc": 4, "address": 808, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
-    "acPvL2W": { "enabled": true, "fc": 4, "address": 809, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
-    "acPvL3W": { "enabled": true, "fc": 4, "address": 810, "quantity": 1, "signed": false, "scale": 1, "offset": 0 },
-    "gridSetpointW": { "enabled": true, "fc": 3, "address": 2716, "quantity": 2, "signed": true, "scale": 1, "offset": 0, "readType": "int32", "wordOrder": "be" },
-    "minSocPct": { "enabled": true, "fc": 4, "address": 2901, "quantity": 1, "signed": false, "scale": 0.1, "offset": 0 },
-    "selfConsumptionW": { "enabled": true, "fc": 4, "address": 817, "quantity": 3, "signed": false, "scale": 1, "offset": 0, "sumRegisters": true }
+    "soc": {
+      "enabled": true,
+      "fc": 4,
+      "address": 843,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "batteryPowerW": {
+      "enabled": true,
+      "fc": 4,
+      "address": 842,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "offset": 0
+    },
+    "pvPowerW": {
+      "enabled": true,
+      "fc": 4,
+      "address": 850,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "acPvL1W": {
+      "enabled": true,
+      "fc": 4,
+      "address": 808,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "acPvL2W": {
+      "enabled": true,
+      "fc": 4,
+      "address": 809,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "acPvL3W": {
+      "enabled": true,
+      "fc": 4,
+      "address": 810,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "gridSetpointW": {
+      "enabled": true,
+      "fc": 3,
+      "address": 2716,
+      "quantity": 2,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "readType": "int32",
+      "wordOrder": "be"
+    },
+    "minSocPct": {
+      "enabled": true,
+      "fc": 4,
+      "address": 2901,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.1,
+      "offset": 0
+    },
+    "selfConsumptionW": {
+      "enabled": true,
+      "fc": 4,
+      "address": 817,
+      "quantity": 3,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "sumRegisters": true
+    }
   },
   "controlWrite": {
-    "gridSetpointW": { "enabled": true, "fc": 16, "address": 2716, "writeType": "int32", "signed": true, "scale": 1, "offset": 0, "wordOrder": "be" },
-    "chargeCurrentA": { "enabled": true, "fc": 6, "address": 2705, "writeType": "int16", "signed": true, "scale": 1, "offset": 0, "wordOrder": "be" },
-    "minSocPct": { "enabled": true, "fc": 6, "address": 2901, "writeType": "uint16", "signed": false, "scale": 0.1, "offset": 0, "wordOrder": "be" },
-    "maxDischargeW": { "_comment": "Venus /Settings/CGwacs/MaxDischargePower: Register zählt in 10-W-Schritten (Victron-Scalefactor 0.1) → scale 10 (raw 2400 = 24 000 W). Sentinels gehen UNskaliert: -1 = unbegrenzt, 0 = Entladung sperren (rawSentinels, sonst würde -1 zu 0 gerundet = Sperre).", "enabled": true, "fc": 6, "address": 2704, "writeType": "int16", "signed": true, "scale": 10, "offset": 0, "wordOrder": "be", "rawSentinels": [-1, 0] }
+    "gridSetpointW": {
+      "enabled": true,
+      "fc": 16,
+      "address": 2716,
+      "writeType": "int32",
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "wordOrder": "be"
+    },
+    "chargeCurrentA": {
+      "enabled": true,
+      "fc": 6,
+      "address": 2705,
+      "writeType": "int16",
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "wordOrder": "be"
+    },
+    "minSocPct": {
+      "enabled": true,
+      "fc": 6,
+      "address": 2901,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 0.1,
+      "offset": 0,
+      "wordOrder": "be"
+    },
+    "maxDischargeW": {
+      "_comment": "Venus /Settings/CGwacs/MaxDischargePower: Register zählt in 10-W-Schritten (Victron-Scalefactor 0.1) → scale 10 (raw 2400 = 24 000 W). Sentinels gehen UNskaliert: -1 = unbegrenzt, 0 = Entladung sperren (rawSentinels, sonst würde -1 zu 0 gerundet = Sperre).",
+      "enabled": true,
+      "fc": 6,
+      "address": 2704,
+      "writeType": "int16",
+      "signed": true,
+      "scale": 10,
+      "offset": 0,
+      "wordOrder": "be",
+      "rawSentinels": [
+        -1,
+        0
+      ]
+    }
   },
   "dvControl": {
     "enabled": true,
-    "feedExcessDcPv": { "enabled": true, "fc": 6, "address": 2707, "writeType": "uint16", "signed": false, "scale": 1, "offset": 0, "wordOrder": "be" },
-    "dontFeedExcessAcPv": { "enabled": true, "fc": 6, "address": 2708, "writeType": "uint16", "signed": false, "scale": 1, "offset": 0, "wordOrder": "be" },
+    "feedExcessDcPv": {
+      "enabled": true,
+      "fc": 6,
+      "address": 2707,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "wordOrder": "be"
+    },
+    "dontFeedExcessAcPv": {
+      "enabled": true,
+      "fc": 6,
+      "address": 2708,
+      "writeType": "uint16",
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "wordOrder": "be"
+    },
     "negativePriceProtection": {
       "_comment": "gridSetpointW steht hier bewusst NICHT mehr (2026-07-29): der feste -40 überschrieb während der Abregelung den eingestellten Default Grid Setpoint. Ohne Eintrag folgt die Abregelung schedule.defaultGridSetpointW — ein Wert für beide Situationen.",
       "enabled": true

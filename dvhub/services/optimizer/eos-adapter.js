@@ -10,6 +10,37 @@ const EOS_DEFAULT_CONFIDENCE = 0.7;
 const QUARTER_HOUR_MS = 15 * 60_000;
 
 /**
+ * DV-EOS-Optimierer auflösen — Adresse und Zeitgrenze an EINER Stelle.
+ *
+ * BEWUSST OHNE Beta-Gate (Christin, 29.07.2026). Kurzzeitig hing hier
+ * `betaGateOpen(cfg, 'eosProxy')` — das war falsch, gleich doppelt:
+ *
+ *  1. Der EOS-Proxy IST die EOS-Anbindung, kein Nebenweg. Wer ihn eingerichtet
+ *     hat, fährt mit `primarySource: 'eos'`; ihn im Stable-Kanal abzuschalten
+ *     hieße, eine eingerichtete Anlage ohne Planer laufen zu lassen.
+ *  2. Das Flag wird an FÜNF Stellen gelesen (hier, optimizer/index.js,
+ *     eos-forecast-bridge.js ×2, eos-config-sync.js ×2). Ein Gate an einer
+ *     davon hätte einen Mischzustand erzeugt: Prognose-Push und
+ *     Konfigurations-Abgleich laufen weiter, nur die Planung nicht — schlimmer
+ *     als beide Extreme.
+ *
+ * Die drei BEDIENFELDER bleiben Beta (gate: 'display' in beta-features.js):
+ * versteckt im Stable-Kanal, aber wirksam, wo sie eingerichtet sind.
+ *
+ * @param {object} cfg effektive DVhub-Config
+ * @returns {{ enabled: boolean, url: string, timeoutMs: number }}
+ */
+export function resolveEosProxy(cfg = {}) {
+  const p = cfg?.optimizer?.eosProxy || {};
+  const timeoutMs = Number(p.timeoutMs);
+  return {
+    enabled: p.enabled === true,
+    url: p.url || 'http://127.0.0.1:8503',
+    timeoutMs: timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS
+  };
+}
+
+/**
  * Create a bidirectional EOS adapter for co-hosted Akkudoktor EOS integration.
  *
  * @param {object} ctx - DI context with getCfg() and pushLog()
@@ -30,7 +61,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    */
   function httpRequest(method, path, body = null) {
     const cfg = getCfg();
-    const baseUrl = cfg.optimizer?.eosProxy?.url || 'http://localhost:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
 
     return new Promise((resolve) => {
       try {

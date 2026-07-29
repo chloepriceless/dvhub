@@ -24,18 +24,68 @@
 // `paths` ist die Präfix-Liste, an der test/beta-gate.test.js abgleicht, dass
 // jedes als `beta: true` markierte Einstellungsfeld auch wirklich zu einem
 // registrierten Feature gehört (sonst wäre es zwar unsichtbar, aber ungegatet).
+// Zwei Sorten, und der Unterschied ist wichtig:
+//
+//   gate: 'runtime'  — versteckt UND abgeschaltet. Für Funktionen, die im
+//                      Zweifel gar nicht laufen sollen. Braucht eine
+//                      Auflösefunktion, die `betaGateOpen` mit-auswertet.
+//
+//   gate: 'display'  — nur versteckt, der Wert bleibt WIRKSAM. Für Werte, bei
+//                      denen das Abschalten gefährlicher wäre als das Anzeigen:
+//                      eine ausgeblendete Zugriffsbeschränkung darf nicht
+//                      bedeuten, dass die Beschränkung nicht mehr greift. Hier
+//                      geht es nur darum, dass ein Kunde sie noch nicht
+//                      verstellen kann, solange die Bedienung unfertig ist.
 export const BETA_FEATURES = {
   freezeWatchdog: {
     label: 'Einfrier-Wächter',
+    gate: 'runtime',
     paths: ['victron.freezeWatchdog']
   },
   mqttCrossCheck: {
     label: 'MQTT-Kreuzprobe',
+    gate: 'runtime',
     paths: ['victron.mqttCrossCheck']
   },
   controlWriteVerify: {
     label: 'Schreib-Verifikation',
+    gate: 'runtime',
     paths: ['schedule.controlWriteVerify']
+  },
+  eosProxy: {
+    label: 'DV-EOS-Optimierer',
+    // NUR Anzeige (Christin, 29.07.2026): der EOS-Proxy ist die EOS-Anbindung
+    // selbst, kein Feldtest. Wer ihn eingerichtet hat, fährt mit
+    // primarySource: 'eos' — ihn zur Laufzeit abzuschalten hieße, eine
+    // eingerichtete Anlage ohne Planer laufen zu lassen. Ausgeblendet sind nur
+    // die drei Bedienfelder, solange die Einrichtung über die Integrationsseite
+    // läuft. Siehe resolveEosProxy() in services/optimizer/eos-adapter.js.
+    gate: 'display',
+    paths: ['optimizer.eosProxy']
+  },
+  accessControl: {
+    label: 'Sicherheit & Zugang',
+    gate: 'display',
+    // NICHT zur Laufzeit gegated: `allowedHosts`, CORS-Herkünfte und die
+    // Modbus-Freigabeliste sind Schutzwälle. Sie im Stable-Kanal wirkungslos zu
+    // machen, würde jede Kundenbox ÖFFNEN statt sie zu schützen — das genaue
+    // Gegenteil des Zwecks. Ausgeblendet sind die Felder nur, bis die
+    // Zugangsverwaltung (Benutzer + Passwort statt Token) fertig ist; bis
+    // dahin bleibt die Bedienung dem Bleeding-Edge-Kanal vorbehalten.
+    paths: [
+      // BEWUSST nicht der ganze `security`-Zweig: `security.lanTrust` ist der
+      // vorhandene, ausgelieferte Hauptschalter der Vertrauensstufe. Ihn zu
+      // verstecken würde Kunden eine Absicherung WEGNEHMEN, die sie heute
+      // haben. Neu und deshalb noch zurückgehalten sind nur die Feinlisten.
+      'security.lanCidrs',
+      'security.lanSafeGroups',
+      'security.trustedClientIps',
+      'allowedHosts',
+      'corsAllowedOrigins',
+      'trustProxy',
+      'trustedProxyIps',
+      'modbusAllowedClients'
+    ]
   }
 };
 
@@ -64,7 +114,12 @@ export function updateChannelOf(cfg) {
  * @returns {boolean}
  */
 export function betaGateOpen(cfg, key) {
-  if (!Object.prototype.hasOwnProperty.call(BETA_FEATURES, key)) return false;
+  const feature = Object.prototype.hasOwnProperty.call(BETA_FEATURES, key)
+    ? BETA_FEATURES[key] : null;
+  // Unbekannt ODER nur ein Anzeige-Gate ⇒ zu. Wer versehentlich ein
+  // display-Feature zur Laufzeit abfragt, schaltet es damit ab statt es
+  // ungeprüft freizugeben; test/beta-gate.test.js fängt den Fall.
+  if (!feature || feature.gate !== 'runtime') return false;
   return updateChannelOf(cfg) === DEV_CHANNEL;
 }
 

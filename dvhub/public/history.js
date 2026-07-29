@@ -2442,92 +2442,13 @@ async function triggerCsvExport() {
   }
 }
 
-// Datenbank-Backup herunterladen. The endpoint streams a pg_dump (.dump) with
-// Content-Disposition: attachment, so a plain same-origin anchor click pulls it
-// straight to disk without buffering the (potentially large) dump in browser
-// memory. scope: 'full' (whole DB) | 'energy15m' (15-min energy table only).
-function triggerDbBackup(scope) {
-  const a = document.createElement('a');
-  a.href = `/api/db/backup?scope=${encodeURIComponent(scope)}`;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setBanner(
-    scope === 'energy15m'
-      ? 'DB-Backup (15-min-Werte) wird erstellt und heruntergeladen …'
-      : 'Voll-Datenbank-Backup wird erstellt und heruntergeladen (kann etwas dauern) …',
-    'success'
-  );
-}
+// Die vier Datenbank-Handlungen (Backup herunterladen, 15-min-Auszug, geplantes
+// Backup sofort, Wiederherstellen) sind am 29.07.2026 in die EINSTELLUNGEN
+// gewandert, unter „Geplantes Datenbank-Backup" — dorthin, wo auch ihre
+// Konfiguration steht. Auf einer Seite, die man täglich zum Anschauen öffnet,
+// hatte besonders das nicht umkehrbare „Wiederherstellen" nichts zu suchen.
+// Siehe GROUP_ACTIONS in public/settings.js.
 
-// Trigger the *scheduled* backup right now — writes a .dump into the configured
-// destinationDir (Settings → Geplantes Datenbank-Backup). Lets the operator
-// validate the network target without waiting for the nightly run. POST is
-// LAN-trusted like config-save (isLocalNetworkRequest bypasses the token gate).
-async function triggerScheduledBackupNow() {
-  const btn = byId('historyDbBackupRunBtn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Sichern …'; }
-  try {
-    const r = await apiFetch('/api/db/backup/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok) {
-      const pruned = Array.isArray(j.pruned) && j.pruned.length ? ` (${j.pruned.length} alte gelöscht)` : '';
-      setBanner(`Backup ins Ziel geschrieben: ${j.file || ''}${pruned}`, 'success');
-    } else {
-      setBanner(`Geplantes Backup fehlgeschlagen: ${j.error || ('HTTP ' + r.status)}`, 'error');
-    }
-  } catch (error) {
-    setBanner(`Geplantes Backup fehlgeschlagen: ${error.message}`, 'error');
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Geplantes Backup jetzt'; }
-  }
-}
-
-// Datenbank aus einer .dump-Backupdatei wiederherstellen. DESTRUKTIV — pg_restore
-// --clean überschreibt vorhandene Daten. Die Datei wird per POST (Bearer-Pflicht,
-// KEIN LAN-Bypass) direkt als Request-Body hochgeladen; der Server streamt sie in
-// eine Temp-Datei, prüft die PGDMP-Signatur und spielt sie mit dem
-// TimescaleDB-pre/post_restore-Tanz ein. Danach Neustart empfohlen.
-function triggerDbRestore() {
-  const input = byId('historyDbRestoreFile');
-  if (input) input.click();
-}
-
-async function handleDbRestoreFile(ev) {
-  const input = ev.target;
-  const file = input.files && input.files[0];
-  input.value = ''; // erlaubt erneute Auswahl derselben Datei
-  if (!file) return;
-  const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
-  const confirmed = window.confirm(
-    `Datenbank wirklich aus „${file.name}" (${sizeMb} MB) wiederherstellen?\n\n` +
-    'ACHTUNG: Vorhandene Daten werden überschrieben (pg_restore --clean). ' +
-    'Dieser Schritt ist NICHT umkehrbar. Nach der Wiederherstellung wird ein Neustart empfohlen.'
-  );
-  if (!confirmed) return;
-  const btn = byId('historyDbRestoreBtn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Wiederherstellen …'; }
-  setBanner(`Datenbank wird aus „${file.name}" wiederhergestellt — bitte warten und Seite nicht schließen …`, 'info');
-  try {
-    const r = await apiFetch('/api/db/restore', {
-      method: 'POST',
-      headers: { 'content-type': 'application/octet-stream' },
-      body: file
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok) {
-      const warn = j.ignoredErrors ? ` (${j.ignoredErrors} nicht-fatale Warnungen ignoriert)` : '';
-      setBanner(`Datenbank wiederhergestellt${warn}. Bitte DVhub neu starten, damit alle Verbindungen frisch aufsetzen.`, j.ignoredErrors ? 'warn' : 'success');
-    } else {
-      setBanner(`Wiederherstellung fehlgeschlagen: ${j.error || ('HTTP ' + r.status)}${j.detail ? ' — ' + String(j.detail).slice(0, 200) : ''}`, 'error');
-    }
-  } catch (error) {
-    setBanner(`Wiederherstellung fehlgeschlagen: ${error.message}`, 'error');
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'DB wiederherstellen'; }
-  }
-}
 
 // Ermittelt, ob eine aktive Pro-Lizenz vorliegt. Nutzt den geteilten Cache
 // window._licenseStateCache (auch von pro-modal.js/settings.js gesetzt); sonst
@@ -2594,11 +2515,6 @@ function bindHistoryControls() {
   const date = byId('historyDate');
   const backfill = byId('historyBackfillBtn');
   const exportBtn = byId('historyExportCsvBtn');
-  const dbFullBtn = byId('historyDbBackupFullBtn');
-  const db15Btn = byId('historyDbBackup15mBtn');
-  const dbRunBtn = byId('historyDbBackupRunBtn');
-  const dbRestoreBtn = byId('historyDbRestoreBtn');
-  const dbRestoreFile = byId('historyDbRestoreFile');
   const prev = byId('historyPrevBtn');
   const next = byId('historyNextBtn');
   // Karten-Dichte: persistierten Wert anwenden + Selektor spiegeln + binden.
@@ -2617,11 +2533,6 @@ function bindHistoryControls() {
   if (date) date.addEventListener('change', loadHistorySummary);
   if (backfill) backfill.addEventListener('click', triggerBackfill);
   if (exportBtn) exportBtn.addEventListener('click', triggerCsvExport);
-  if (dbFullBtn) dbFullBtn.addEventListener('click', () => triggerDbBackup('full'));
-  if (db15Btn) db15Btn.addEventListener('click', () => triggerDbBackup('energy15m'));
-  if (dbRunBtn) dbRunBtn.addEventListener('click', triggerScheduledBackupNow);
-  if (dbRestoreBtn) dbRestoreBtn.addEventListener('click', triggerDbRestore);
-  if (dbRestoreFile) dbRestoreFile.addEventListener('change', handleDbRestoreFile);
   if (prev) prev.addEventListener('click', () => stepCurrentRange(-1));
   if (next) next.addEventListener('click', () => stepCurrentRange(1));
 }

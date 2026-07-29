@@ -445,6 +445,102 @@ function buildFieldDefinitions() {
     },
     {
       section: 'system',
+      group: 'accessControl',
+      groupLabel: 'Zugang & Netzgrenzen (Beta)',
+      groupDescription: 'Wer darf DVhub überhaupt erreichen — welche Netze als „daheim" gelten, welche Adressen zusätzlich freigegeben sind, und welche Namen bzw. Herkünfte der Webserver akzeptiert. Die Werte WIRKEN auf jeder Anlage; nur die Bedienung ist noch dem Bleeding-Edge-Kanal vorbehalten, bis die Zugangsverwaltung mit Benutzer und Passwort fertig ist.',
+      groupOrder: 90,
+      beta: true,
+      path: 'security.lanCidrs',
+      label: 'Als Heimnetz zählende Netze',
+      type: 'stringList',
+      help: 'Kommagetrennte Netzbereiche in CIDR-Schreibweise, z. B. 192.168.1.0/24, 10.0.5.0/24. Nur Geräte darin gelten als „daheim" und bekommen die Erleichterungen der eingestellten Vertrauensstufe. Leer = die üblichen privaten Netze (10.x, 172.16–31.x, 192.168.x). Die Anlage selbst (127.0.0.1) zählt immer, egal was hier steht — du kannst dich damit also nicht komplett aussperren.'
+    },
+    {
+      section: 'system',
+      group: 'accessControl',
+      groupLabel: 'Zugang & Netzgrenzen (Beta)',
+      groupDescription: 'Wer darf DVhub überhaupt erreichen — welche Netze als „daheim" gelten, welche Adressen zusätzlich freigegeben sind, und welche Namen bzw. Herkünfte der Webserver akzeptiert. Die Werte WIRKEN auf jeder Anlage; nur die Bedienung ist noch dem Bleeding-Edge-Kanal vorbehalten, bis die Zugangsverwaltung mit Benutzer und Passwort fertig ist.',
+      groupOrder: 90,
+      beta: true,
+      path: 'security.trustedClientIps',
+      label: 'Zusätzlich freigegebene Adressen',
+      type: 'stringList',
+      help: 'Kommagetrennte Einzeladressen, z. B. 192.168.1.31, 192.168.1.44. Ist die Liste NICHT leer, muss ein Gerät zusätzlich zum Netzbereich oben auch hier stehen — eine Positivliste einzelner Geräte. Leer = jedes Gerät aus den obigen Netzen. Vorsicht: eine unvollständige Liste sperrt alle übrigen Geräte im Haus aus.'
+    },
+    {
+      section: 'system',
+      group: 'accessControl',
+      groupLabel: 'Zugang & Netzgrenzen (Beta)',
+      groupDescription: 'Wer darf DVhub überhaupt erreichen — welche Netze als „daheim" gelten, welche Adressen zusätzlich freigegeben sind, und welche Namen bzw. Herkünfte der Webserver akzeptiert. Die Werte WIRKEN auf jeder Anlage; nur die Bedienung ist noch dem Bleeding-Edge-Kanal vorbehalten, bis die Zugangsverwaltung mit Benutzer und Passwort fertig ist.',
+      groupOrder: 90,
+      beta: true,
+      path: 'security.lanSafeGroups',
+      label: 'Ohne Token erreichbare Bereiche',
+      type: 'stringList',
+      help: 'Gilt nur bei Vertrauensstufe „Eingeschränkt": welche Bereiche ein Gerät im Heimnetz ohne Zugangsschlüssel sehen darf. Gültige Namen: status, dashboard, history, forecast, integrations. Alles andere — Einstellungen, Steuerung, Verwaltung — verlangt dann immer einen Schlüssel. Standard sind genau diese fünf lesenden Bereiche.'
+    },
+    {
+      section: 'system',
+      group: 'accessControl',
+      groupLabel: 'Zugang & Netzgrenzen (Beta)',
+      groupDescription: 'Wer darf DVhub überhaupt erreichen — welche Netze als „daheim" gelten, welche Adressen zusätzlich freigegeben sind, und welche Namen bzw. Herkünfte der Webserver akzeptiert. Die Werte WIRKEN auf jeder Anlage; nur die Bedienung ist noch dem Bleeding-Edge-Kanal vorbehalten, bis die Zugangsverwaltung mit Benutzer und Passwort fertig ist.',
+      groupOrder: 90,
+      beta: true,
+      path: 'allowedHosts',
+      label: 'Erlaubte Adressen/Namen des Servers',
+      type: 'stringList',
+      help: 'Unter welchen Namen DVhub angesprochen werden darf, z. B. dvhub.local, 192.168.1.50, hub.meinedomain.de. Leer = jeder Name wird akzeptiert; das ist für den Heimnetz-Betrieb in Ordnung. Wer DVhub über einen Zwischenserver aus dem Internet erreichbar macht, MUSS hier seine echten Namen eintragen — sonst kann eine fremde Seite den Namen fälschen. Achtung: trägst du den Namen nicht ein, unter dem du die Oberfläche gerade aufrufst, sperrst du dich aus.'
+    },
+    {
+      section: 'system',
+      group: 'accessControl',
+      groupLabel: 'Zugang & Netzgrenzen (Beta)',
+      groupDescription: 'Wer darf DVhub überhaupt erreichen — welche Netze als „daheim" gelten, welche Adressen zusätzlich freigegeben sind, und welche Namen bzw. Herkünfte der Webserver akzeptiert. Die Werte WIRKEN auf jeder Anlage; nur die Bedienung ist noch dem Bleeding-Edge-Kanal vorbehalten, bis die Zugangsverwaltung mit Benutzer und Passwort fertig ist.',
+      groupOrder: 90,
+      beta: true,
+      path: 'corsAllowedOrigins',
+      label: 'Fremde Web-Herkünfte erlauben',
+      type: 'stringList',
+      help: 'Von welchen anderen Webseiten aus der Browser DVhub abfragen darf, z. B. https://mein-dashboard.local. Leer = keine — der Normalfall, und der sichere. Nur ausfüllen, wenn du eine eigene Oberfläche betreibst, die DVhub-Daten holt. DVhub spiegelt niemals die Herkunft des Aufrufers zurück, es prüft ausschließlich gegen diese Liste.'
+    },
+    {
+      section: 'system',
+      group: 'accessControl',
+      groupLabel: 'Zugang & Netzgrenzen (Beta)',
+      groupDescription: 'Wer darf DVhub überhaupt erreichen — welche Netze als „daheim" gelten, welche Adressen zusätzlich freigegeben sind, und welche Namen bzw. Herkünfte der Webserver akzeptiert. Die Werte WIRKEN auf jeder Anlage; nur die Bedienung ist noch dem Bleeding-Edge-Kanal vorbehalten, bis die Zugangsverwaltung mit Benutzer und Passwort fertig ist.',
+      groupOrder: 90,
+      beta: true,
+      path: 'trustProxy',
+      label: 'Zwischenserver vertrauen',
+      type: 'boolean',
+      help: 'Nur einschalten, wenn DVhub HINTER einem Zwischenserver läuft (Reverse Proxy, z. B. nginx oder ein Tunnel-Dienst). Dann übernimmt DVhub die vom Zwischenserver gemeldete Absender-Adresse und den Servernamen. Ohne Zwischenserver AUS lassen: sonst könnte ein Gerät im Netz seine Herkunft frei behaupten und damit die Heimnetz-Erleichterungen erschleichen. Standard AUS.'
+    },
+    {
+      section: 'system',
+      group: 'accessControl',
+      groupLabel: 'Zugang & Netzgrenzen (Beta)',
+      groupDescription: 'Wer darf DVhub überhaupt erreichen — welche Netze als „daheim" gelten, welche Adressen zusätzlich freigegeben sind, und welche Namen bzw. Herkünfte der Webserver akzeptiert. Die Werte WIRKEN auf jeder Anlage; nur die Bedienung ist noch dem Bleeding-Edge-Kanal vorbehalten, bis die Zugangsverwaltung mit Benutzer und Passwort fertig ist.',
+      groupOrder: 90,
+      beta: true,
+      path: 'trustedProxyIps',
+      label: 'Adressen der Zwischenserver',
+      type: 'stringList',
+      help: 'Kommagetrennte Adressen der Zwischenserver, denen die Herkunftsangabe geglaubt wird. Greift nur, wenn „Zwischenserver vertrauen" an ist. DVhub arbeitet die gemeldete Kette von hinten ab und nimmt den ersten Absender, der NICHT in dieser Liste steht, als echten Aufrufer. Leer lassen und gleichzeitig vertrauen einzuschalten, ist widersprüchlich — dann wird gewarnt.'
+    },
+    {
+      section: 'system',
+      group: 'accessControl',
+      groupLabel: 'Zugang & Netzgrenzen (Beta)',
+      groupDescription: 'Wer darf DVhub überhaupt erreichen — welche Netze als „daheim" gelten, welche Adressen zusätzlich freigegeben sind, und welche Namen bzw. Herkünfte der Webserver akzeptiert. Die Werte WIRKEN auf jeder Anlage; nur die Bedienung ist noch dem Bleeding-Edge-Kanal vorbehalten, bis die Zugangsverwaltung mit Benutzer und Passwort fertig ist.',
+      groupOrder: 90,
+      beta: true,
+      path: 'modbusAllowedClients',
+      label: 'Modbus-Zugriff nur von diesen Adressen',
+      type: 'stringList',
+      help: 'Wer den eingebauten Modbus-Zugang von DVhub (Port 1502) benutzen darf — exakte Adressen, keine Netzbereiche. Über diesen Weg lässt sich die Anlage STEUERN, deshalb ist er enger gefasst als die Weboberfläche. Leer = die Anlage selbst und die üblichen privaten Heimnetze. Abgewiesene Verbindungen werden sofort getrennt und protokolliert.'
+    },
+    {
+      section: 'system',
       group: 'general',
       groupLabel: 'Grundsystem',
       groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
@@ -705,6 +801,32 @@ function buildFieldDefinitions() {
       min: 0,
       max: 500,
       help: 'Kleiner Sicherheitsabstand zum Netz: der Regler zielt auf diesen leichten Bezug, damit Mess- und Regelfehler nicht als Einspeisung enden. Standard: 50 W.'
+    },
+    {
+      section: 'system',
+      group: 'zeroFeedIn',
+      groupLabel: 'Nulleinspeisung bei Abregelung',
+      groupDescription: 'Bei Negativpreis- oder Direktvermarkter-Abregelung läuft die Anlage in Nulleinspeisung weiter.',
+      path: 'zeroFeedIn.deadbandW',
+      label: 'Totband des Reglers (W)',
+      type: 'number',
+      min: 10,
+      max: 500,
+      step: 10,
+      help: 'Abweichungen unterhalb dieses Werts lässt der Regler stehen, statt nachzuregeln. Zu klein = der Wechselrichter pendelt dauernd nach; zu groß = die Nulleinspeisung wird ungenau. Standard: 50 W.'
+    },
+    {
+      section: 'system',
+      group: 'zeroFeedIn',
+      groupLabel: 'Nulleinspeisung bei Abregelung',
+      groupDescription: 'Bei Negativpreis- oder Direktvermarkter-Abregelung läuft die Anlage in Nulleinspeisung weiter.',
+      path: 'zeroFeedIn.revertTimeoutS',
+      label: 'Selbstrücksetzung des Wechselrichters (s)',
+      type: 'number',
+      min: 30,
+      max: 3600,
+      step: 30,
+      help: 'Totmannschalter im Wechselrichter: bleibt DVhub länger als diese Zeit stumm (Absturz, Netzwerk weg), hebt das Gerät die Drosselung von selbst wieder auf. Kürzer = die Anlage erholt sich schneller, riskiert aber ein Zurückfallen bei kurzen Aussetzern. Standard: 300 s.'
     },
 
     // T-0113 Tier 3 — Fern-Support. Nur diese zwei Felder sind nutzer-editierbar;
@@ -1105,64 +1227,429 @@ function buildFieldDefinitions() {
     },
     {
       section: 'victron',
-      group: 'connection',
-      groupLabel: 'Verbindung',
-      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
-      path: 'victron.freezeWatchdog.enabled',
-      beta: true,
-      label: 'Einfrier-W\u00e4chter',
+      group: 'deviceAlarms',
+      groupLabel: 'Geräte-Alarme der Anlage',
+      groupDescription: 'Zeigt die Alarme und Warnungen an, die der Wechselrichter und das Batteriemanagement selbst melden — als Banner in der Oberfläche. Reine Anzeige, kein Eingriff in die Regelung. Standard AUS: die Abfrage liest zwei zusätzliche Geräte auf derselben Verbindung und kann auf ausgelasteten Anlagen die Steuerung ausbremsen.',
+      groupOrder: 75,
+      path: 'victron.alarms.enabled',
+      label: 'Geräte-Alarme anzeigen',
       type: 'boolean',
-      help: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zur\u00fcckkommen (halb-tote Modbus-Sitzung an der Anlage: die Werte stehen still, die Anlage l\u00e4uft aber weiter). Bei Verdacht h\u00e4lt DVhub jede erzwungene Entladung an, verwirft die Verbindung und baut sie neu auf und schl\u00e4gt Alarm. Nur f\u00fcr Modbus-Anlagen. Standard AUS: der W\u00e4chter greift in die Regelung ein, und seine Schwellen sind bisher nur an einer einzigen Anlage erprobt \u2014 einschalten, wenn du eingefrorene Messwerte vermutest.'
+      help: 'Holt die Alarm- und Warnmeldungen des Wechselrichters (VE.Bus) und des Batteriemanagements ab und zeigt sie als Banner. Standard AUS — die Abfrage spricht zwei weitere Geräte auf derselben Verbindung an, und der Anlagenrechner arbeitet diese Anfragen nacheinander ab. Auf einer ausgelasteten Anlage hat genau das schon einmal die Steuerung ausgebremst. Einschalten, wenn du die Meldungen in DVhub sehen willst statt nur im Anlagen-Display.'
     },
     {
       section: 'victron',
-      group: 'connection',
-      groupLabel: 'Verbindung',
-      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
-      path: 'victron.mqttCrossCheck.enabled',
+      group: 'deviceAlarms',
+      groupLabel: 'Geräte-Alarme der Anlage',
+      groupDescription: 'Zeigt die Alarme und Warnungen an, die der Wechselrichter und das Batteriemanagement selbst melden — als Banner in der Oberfläche. Reine Anzeige, kein Eingriff in die Regelung. Standard AUS: die Abfrage liest zwei zusätzliche Geräte auf derselben Verbindung und kann auf ausgelasteten Anlagen die Steuerung ausbremsen.',
+      groupOrder: 75,
+      path: 'victron.alarms.pollIntervalMs',
+      label: 'Abfrage-Abstand (ms)',
+      type: 'number',
+      default: 30000,
+      min: 5000,
+      max: 900000,
+      step: 1000,
+      help: 'Grundabstand zwischen zwei Alarm-Abfragen. Alarme sind Minuten-Informationen, deshalb wird bewusst selten gefragt — die Steuerung läuft im Sekundentakt und hat immer Vorrang. Der Abstand verlängert sich automatisch, wenn eine Abfrage lange dauert oder fehlschlägt, und schrumpft wieder, sobald es rund läuft. Standard: 30 Sekunden.'
+    },
+    {
+      section: 'victron',
+      group: 'deviceAlarms',
+      groupLabel: 'Geräte-Alarme der Anlage',
+      groupDescription: 'Zeigt die Alarme und Warnungen an, die der Wechselrichter und das Batteriemanagement selbst melden — als Banner in der Oberfläche. Reine Anzeige, kein Eingriff in die Regelung. Standard AUS: die Abfrage liest zwei zusätzliche Geräte auf derselben Verbindung und kann auf ausgelasteten Anlagen die Steuerung ausbremsen.',
+      groupOrder: 75,
+      path: 'victron.alarms.timeoutMs',
+      label: 'Abbruch nach (ms)',
+      type: 'number',
+      default: 1500,
+      min: 200,
+      max: 10000,
+      step: 100,
+      help: 'So lange wartet DVhub höchstens auf eine Alarm-Antwort, bevor es aufgibt und es später erneut versucht. Bewusst kurz gehalten: eine hängende Alarm-Abfrage darf die Steuerung nicht blockieren. Standard: 1,5 Sekunden.'
+    },
+    {
+      section: 'victron',
+      group: 'deviceAlarms',
+      groupLabel: 'Geräte-Alarme der Anlage',
+      groupDescription: 'Zeigt die Alarme und Warnungen an, die der Wechselrichter und das Batteriemanagement selbst melden — als Banner in der Oberfläche. Reine Anzeige, kein Eingriff in die Regelung. Standard AUS: die Abfrage liest zwei zusätzliche Geräte auf derselben Verbindung und kann auf ausgelasteten Anlagen die Steuerung ausbremsen.',
+      groupOrder: 75,
+      path: 'victron.alarms.vebusUnitId',
+      label: 'Geräte-Nummer Wechselrichter (VE.Bus)',
+      type: 'number',
+      empty: 'null',
+      min: 1,
+      max: 255,
+      help: 'Unter welcher Geräte-Nummer der Anlagenrechner den Wechselrichter führt. Sie unterscheidet sich je nach Anlage, deshalb ist sie einstellbar. Leer lassen = keine Wechselrichter-Alarme abfragen. Bei Victron im Anlagen-Display unter den Modbus-Geräten ablesbar.'
+    },
+    {
+      section: 'victron',
+      group: 'deviceAlarms',
+      groupLabel: 'Geräte-Alarme der Anlage',
+      groupDescription: 'Zeigt die Alarme und Warnungen an, die der Wechselrichter und das Batteriemanagement selbst melden — als Banner in der Oberfläche. Reine Anzeige, kein Eingriff in die Regelung. Standard AUS: die Abfrage liest zwei zusätzliche Geräte auf derselben Verbindung und kann auf ausgelasteten Anlagen die Steuerung ausbremsen.',
+      groupOrder: 75,
+      path: 'victron.alarms.batteryUnitId',
+      label: 'Geräte-Nummer Batterie/BMS',
+      type: 'number',
+      empty: 'null',
+      min: 1,
+      max: 255,
+      help: 'Dasselbe für das Batteriemanagement — Unterspannung, Übertemperatur, Zellwarnungen. Eigene Geräte-Nummer, weil es ein eigenes Gerät am Anlagenrechner ist. Leer lassen = keine Batterie-Alarme abfragen.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
       beta: true,
+      path: 'victron.freezeWatchdog.enabled',
+      label: 'Einfrier-Wächter',
+      type: 'boolean',
+      help: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen (halb-tote Modbus-Sitzung an der Anlage: die Werte stehen still, die Anlage läuft aber weiter). Bei Verdacht hält DVhub jede erzwungene Entladung an, verwirft die Verbindung und baut sie neu auf und schlägt Alarm. Nur für Modbus-Anlagen. Standard AUS: der Wächter greift in die Regelung ein, und seine Schwellen sind bisher nur an einer einzigen Anlage erprobt — einschalten, wenn du eingefrorene Messwerte vermutest.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
+      beta: true,
+      path: 'victron.freezeWatchdog.freezeMs',
+      label: 'Stillstand bis Alarm (ms)',
+      type: 'number',
+      default: 180000,
+      min: 30000,
+      max: 3600000,
+      step: 10000,
+      help: 'So lange müssen ALLE Live-Messwerte gleichzeitig unverändert stehen (bei laufender Leistung), bevor der Wächter anschlägt. Standard 3 Minuten. Kürzer = schnellere Reaktion, aber mehr Fehlalarm-Risiko bei sehr gleichmäßigen Anlagen.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
+      beta: true,
+      path: 'victron.freezeWatchdog.minSamples',
+      label: 'Mindestzahl Abfragen',
+      type: 'number',
+      default: 20,
+      min: 2,
+      max: 500,
+      step: 1,
+      help: 'Zusätzlich zur Stillstandszeit: so viele erfolgreiche Abfragen müssen denselben Wert geliefert haben. Verhindert einen Alarm, wenn die Abfrage selbst gerade stockt und in drei Minuten nur zweimal gelesen wurde. Standard: 20.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
+      beta: true,
+      path: 'victron.freezeWatchdog.minPowerW',
+      label: 'Mindestleistung für den Verdacht (W)',
+      type: 'number',
+      default: 25,
+      min: 0,
+      max: 5000,
+      step: 5,
+      help: 'Mindestens einer der beobachteten Werte muss betragsmäßig darüber liegen, sonst gilt der Stillstand als normal. Nachts steht bei einer ruhenden Anlage berechtigterweise alles auf null — ohne diese Schwelle wäre jede stille Stunde ein Fehlalarm. Standard: 25 W.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
+      beta: true,
+      path: 'victron.freezeWatchdog.minJitterFields',
+      label: 'Mindestzahl beobachteter Größen',
+      type: 'number',
+      default: 2,
+      min: 1,
+      max: 4,
+      step: 1,
+      help: 'Der Wächter beobachtet vier Größen: Netzleistung, Akku-Leistung, PV-Leistung und Hausverbrauch. So viele davon müssen überhaupt geliefert werden, damit er urteilt. Bei nur einer Größe wäre der Zufall zu groß. Standard: 2.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
+      beta: true,
+      path: 'victron.freezeWatchdog.socStepPct',
+      label: 'Zweiter Melder: Durchsatz-Schwelle (% Kapazität)',
+      type: 'number',
+      default: 3,
+      min: 0,
+      max: 25,
+      step: 0.5,
+      help: 'Unabhängiger zweiter Melder: hat der Akku so viel Energie durchgesetzt (in Prozent seiner Kapazität), MUSS sich der Ladestand bewegt haben. Tut er das nicht, ist die Meldung eingefroren. 0 = dieser Melder aus. Braucht eine hinterlegte Akkukapazität, sonst bleibt er stumm. Standard: 3 %.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
+      beta: true,
+      path: 'victron.freezeWatchdog.socBandLowPct',
+      label: 'Zweiter Melder: unteres SoC-Band (%)',
+      type: 'number',
+      default: 10,
+      min: 0,
+      max: 50,
+      step: 1,
+      help: 'Der zweite Melder urteilt nur zwischen diesem und dem oberen Band. Darunter und darüber steht der Ladestand berechtigterweise still (Absorptions- und Erhaltungsladung, leerer Akku) — dort wäre jede Meldung ein Fehlalarm. Standard: 10 %.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
+      beta: true,
+      path: 'victron.freezeWatchdog.socBandHighPct',
+      label: 'Zweiter Melder: oberes SoC-Band (%)',
+      type: 'number',
+      default: 95,
+      min: 50,
+      max: 100,
+      step: 1,
+      help: 'Obergrenze des Bandes, in dem der zweite Melder urteilt. Oberhalb bewegt sich der Ladestand während der Absorptionsphase kaum noch, obwohl Strom fließt. Standard: 95 %.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
+      beta: true,
+      path: 'victron.freezeWatchdog.reconnectMs',
+      label: 'Mindestabstand zwischen Neuaufbauten (ms)',
+      type: 'number',
+      default: 60000,
+      min: 10000,
+      max: 600000,
+      step: 5000,
+      help: 'So lange wartet DVhub mindestens, bevor es die Modbus-Verbindung erneut verwirft und neu aufbaut. Kurze Abstände schaden dem Anlagenrechner: eine Abriss-Schleife treibt seine Prozessorlast hoch, bis der Hardware-Wächter ihn neu startet. Standard: 60 Sekunden.'
+    },
+    {
+      section: 'victron',
+      group: 'freezeWatchdog',
+      groupLabel: 'Einfrier-Wächter (Beta)',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupOrder: 80,
+      beta: true,
+      path: 'victron.freezeWatchdog.maxReconnects',
+      label: 'Neuaufbauten je Vorfall',
+      type: 'number',
+      default: 3,
+      min: 0,
+      max: 20,
+      step: 1,
+      help: 'Wie oft die Verbindung während EINES Einfrier-Vorfalls neu aufgebaut werden darf. Hilft der Neuaufbau nicht, hilft er auch beim fünfzigsten Mal nicht — der Anlagenrechner räumt tote Sitzungen nicht selbst ab, jeder weitere Versuch hinterlässt also möglicherweise eine weitere Leiche. Danach bleibt es beim Alarm. 0 = gar nicht neu aufbauen. Standard: 3.'
+    },
+    {
+      section: 'victron',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
+      beta: true,
+      path: 'victron.mqttCrossCheck.enabled',
       label: 'Zweitquellen-Kreuzprobe (MQTT)',
       type: 'boolean',
       help: 'Vergleicht die Messwerte der Anlage laufend über einen ZWEITEN, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Widersprechen sich beide Wege dauerhaft, sind die Modbus-Daten veraltet — dann schlägt DVhub Alarm und setzt keine neuen Entladebefehle mehr ab. Braucht Zugangsdaten unten (bei Victron: das Remote-Console-Passwort des GX).'
     },
     {
       section: 'victron',
-      group: 'connection',
-      groupLabel: 'Verbindung',
-      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
-      path: 'victron.mqttCrossCheck.portalId',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
       beta: true,
-      label: 'Kreuzprobe: Portal-/Geräte-ID',
+      path: 'victron.mqttCrossCheck.broker',
+      label: 'Broker-Adresse',
+      type: 'text',
+      empty: 'blank',
+      help: 'Adresse des MQTT-Dienstes der Anlage, z. B. mqtts://192.168.1.10:8883. Leer lassen = DVhub bildet sie selbst aus der Anlagenadresse (verschlüsselt, Port 8883).'
+    },
+    {
+      section: 'victron',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
+      beta: true,
+      path: 'victron.mqttCrossCheck.portalId',
+      label: 'Portal-/Geräte-ID',
       type: 'text',
       empty: 'blank',
       help: 'Die VRM-Portal-ID der Anlage (bei Victron in den Geräteeinstellungen bzw. im VRM sichtbar). Sie steht in jedem MQTT-Thema der Anlage. Leer = Kreuzprobe bleibt aus.'
     },
     {
       section: 'victron',
-      group: 'connection',
-      groupLabel: 'Verbindung',
-      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
-      path: 'victron.mqttCrossCheck.password',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
       beta: true,
-      label: 'Kreuzprobe: Passwort',
+      path: 'victron.mqttCrossCheck.username',
+      label: 'Benutzername',
+      type: 'text',
+      empty: 'blank',
+      help: 'Benutzername für den MQTT-Dienst. Bei Victron beliebig — geprüft wird nur das Passwort. Leer lassen, wenn der Broker keinen verlangt.'
+    },
+    {
+      section: 'victron',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
+      beta: true,
+      path: 'victron.mqttCrossCheck.password',
+      label: 'Passwort',
       type: 'text',
       empty: 'blank',
       help: 'Passwort für den MQTT-Dienst der Anlage. Bei Victron ist das das Remote-Console-Passwort des GX (der Benutzername ist beliebig). Wird verschlüsselt gespeichert und aus Exporten entfernt.'
     },
     {
       section: 'victron',
-      group: 'connection',
-      groupLabel: 'Verbindung',
-      groupDescription: 'Aktives Herstellerprofil und Anlagenadresse.',
-      path: 'victron.freezeWatchdog.freezeMs',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
       beta: true,
-      label: 'Einfrier-W\u00e4chter: Stillstand bis Alarm (ms)',
+      path: 'victron.mqttCrossCheck.rejectUnauthorized',
+      label: 'Zertifikat streng prüfen',
+      type: 'boolean',
+      help: 'Die Anlage liefert in der Regel ein selbst ausgestelltes Zertifikat — eine Prüfung gegen eine öffentliche Stelle schlägt dann zwangsläufig fehl. Standard AUS: die Verbindung bleibt verschlüsselt, die Gegenstelle ist die per Adresse angesprochene Anlage im eigenen Netz. Nur einschalten, wenn du eine eigene Zertifikatsstelle betreibst.'
+    },
+    {
+      section: 'victron',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
+      beta: true,
+      path: 'victron.mqttCrossCheck.compareMs',
+      label: 'Vergleichstakt (ms)',
+      type: 'number',
+      default: 15000,
+      min: 5000,
+      max: 300000,
+      step: 1000,
+      help: 'Wie oft die beiden Wege gegeneinander gehalten werden. Standard: alle 15 Sekunden.'
+    },
+    {
+      section: 'victron',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
+      beta: true,
+      path: 'victron.mqttCrossCheck.sustainMs',
+      label: 'Widerspruch muss anhalten (ms)',
       type: 'number',
       default: 180000,
       min: 30000,
       max: 3600000,
       step: 10000,
-      help: 'So lange m\u00fcssen ALLE Live-Messwerte gleichzeitig unver\u00e4ndert stehen (bei laufender Leistung), bevor der W\u00e4chter anschl\u00e4gt. Standard 3 Minuten. K\u00fcrzer = schnellere Reaktion, aber mehr Fehlalarm-Risiko bei sehr gleichm\u00e4\u00dfigen Anlagen.'
+      help: 'So lange müssen sich beide Wege ununterbrochen widersprechen, bevor Alarm ausgelöst wird. Kurze Abweichungen sind normal — die beiden Wege werden nicht im selben Augenblick abgetastet. Standard: 3 Minuten.'
+    },
+    {
+      section: 'victron',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
+      beta: true,
+      path: 'victron.mqttCrossCheck.maxAgeMs',
+      label: 'Höchstalter beider Seiten (ms)',
+      type: 'number',
+      default: 60000,
+      min: 10000,
+      max: 600000,
+      step: 5000,
+      help: 'Beide Seiten müssen so frisch sein, damit ihr Unterschied überhaupt zählt. Fehlt eine Seite, ist das kein Widerspruch, sondern Unwissen — dafür ist die normale Frischeprüfung zuständig. Standard: 60 Sekunden.'
+    },
+    {
+      section: 'victron',
+      group: 'mqttCrossCheck',
+      groupLabel: 'Zweitquellen-Kreuzprobe (Beta)',
+      groupDescription: 'Vergleicht die Messwerte laufend über einen zweiten, unabhängigen Weg (MQTT-Dienst der Anlage) mit den Modbus-Werten. Nur im Bleeding-Edge-Kanal.',
+      groupOrder: 81,
+      beta: true,
+      path: 'victron.mqttCrossCheck.keepaliveMs',
+      label: 'Lebenszeichen an den Broker (ms)',
+      type: 'number',
+      default: 25000,
+      min: 5000,
+      max: 55000,
+      step: 1000,
+      help: 'Der Victron-Broker stellt das Senden ein, wenn er 60 Sekunden lang kein Lebenszeichen bekommt. Dieser Wert muss deutlich darunter bleiben. Standard: 25 Sekunden.'
+    },
+
+    {
+      section: 'schedule',
+      group: 'controlWriteVerify',
+      groupLabel: 'Schreib-Verifikation (Beta)',
+      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm. Noch im Feldtest — erscheint nur im Bleeding-Edge-Kanal.',
+      groupOrder: 82,
+      beta: true,
+      path: 'schedule.controlWriteVerify.enabled',
+      label: 'Schreib-Verifikation',
+      type: 'boolean',
+      help: 'Nach jedem Steuerbefehl liest DVhub den Wert zurück und vergleicht ihn mit dem, was es geschrieben hat. So fällt auf, wenn die Anlage einen Befehl still verschluckt. Standard AUS.'
+    },
+    {
+      section: 'schedule',
+      group: 'controlWriteVerify',
+      groupLabel: 'Schreib-Verifikation (Beta)',
+      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm. Noch im Feldtest — erscheint nur im Bleeding-Edge-Kanal.',
+      groupOrder: 82,
+      beta: true,
+      path: 'schedule.controlWriteVerify.delayMs',
+      label: 'Wartezeit vor der Rücklesung (ms)',
+      type: 'number',
+      default: 4000,
+      min: 500,
+      max: 60000,
+      step: 500,
+      help: 'So lange wartet DVhub nach dem Schreiben, bevor es zurückliest — die Anlage braucht einen Moment, bis der neue Wert wirklich anliegt. Zu kurz = die alte Zahl kommt zurück und sieht wie ein Fehler aus. Zu lang = ein zwischenzeitlich neu geschriebener Wert wird geprüft statt des gemeinten. Standard: 4 Sekunden.'
+    },
+    {
+      section: 'schedule',
+      group: 'controlWriteVerify',
+      groupLabel: 'Schreib-Verifikation (Beta)',
+      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm. Noch im Feldtest — erscheint nur im Bleeding-Edge-Kanal.',
+      groupOrder: 82,
+      beta: true,
+      path: 'schedule.controlWriteVerify.minIntervalMs',
+      label: 'Mindestabstand zwischen Prüfungen (ms)',
+      type: 'number',
+      default: 30000,
+      min: 5000,
+      max: 600000,
+      step: 1000,
+      help: 'Höchstens eine Rücklesung je Steuergröße in diesem Zeitraum. Ohne die Bremse würde jeder Schreibvorgang eine eigene Prüfung auslösen — bei einer Neuberechnung alle 5 Sekunden wären das zwölf zusätzliche Abfragen pro Minute. Standard: 30 Sekunden.'
+    },
+    {
+      section: 'schedule',
+      group: 'controlWriteVerify',
+      groupLabel: 'Schreib-Verifikation (Beta)',
+      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm. Noch im Feldtest — erscheint nur im Bleeding-Edge-Kanal.',
+      groupOrder: 82,
+      beta: true,
+      path: 'schedule.controlWriteVerify.toleranceAbs',
+      label: 'Erlaubte Abweichung (W)',
+      type: 'number',
+      default: 0,
+      min: 0,
+      max: 5000,
+      step: 10,
+      help: 'Wie weit der zurückgelesene Wert vom geschriebenen abweichen darf, ohne als Widerspruch zu gelten. 0 verlangt exakte Gleichheit — das ist strenger, als es auf dem schnellen Einspeise-Pfad sein sollte: dort wird der Sollwert alle 5 Sekunden neu gerechnet, sodass die Rücklesung häufig schon den NÄCHSTEN gültigen Wert erwischt und ihn als Fehler meldet. Ein paar hundert Watt Toleranz fangen das ab, ohne einen echten verschluckten Befehl zu verdecken.'
     },
 
     {
@@ -1319,6 +1806,63 @@ function buildFieldDefinitions() {
     },
     {
       section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.enabled',
+      label: 'DV-EOS als Planer verwenden',
+      type: 'boolean',
+      help: 'Übergibt die Fahrplanung an den mitgelieferten EOS-Optimierer statt an die eingebaute Heuristik. Braucht mindestens Stufe 2 der Prognosequalität. Standard AUS.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.url',
+      label: 'Adresse des Optimierers',
+      type: 'text',
+      empty: 'blank',
+      help: 'Wo der EOS-Dienst erreichbar ist. Läuft er wie üblich auf derselben Maschine, bleibt es bei http://127.0.0.1:8503. Nur ändern, wenn du ihn auf einen eigenen Rechner ausgelagert hast.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.timeoutMs',
+      label: 'Abbruch nach (ms)',
+      type: 'number',
+      default: 30000,
+      min: 1000,
+      max: 300000,
+      step: 1000,
+      help: 'So lange wartet DVhub auf eine Antwort des Optimierers. Ein vollständiger Rechenlauf dauert mehrere Minuten, die einzelnen Abfragen hier sind aber kurz. Zu knapp = der Fahrplan kommt nie an, DVhub fällt auf die eingebaute Planung zurück. Standard: 30 Sekunden.'
+    },
+
+    {
+      section: 'schedule',
+      group: 'optimization',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupOrder: 10,
+      path: 'optimizer.ruleHorizonHours',
+      label: 'Vorausschau der Zeitplan-Regeln (h)',
+      type: 'number',
+      default: 12,
+      min: 1,
+      max: 48,
+      step: 1,
+      help: 'Wie weit voraus der Optimierer-Plan in echte Zeitplan-Regeln umgesetzt wird. Der Plan selbst reicht über Tage; alles jenseits dieser Grenze wird beim nächsten Lauf ohnehin neu gerechnet, wenn PV-Vorhersage und Preise sich geändert haben. Größer = mehr Regeln im Zeitplan sichtbar, aber viele davon veralten, bevor sie greifen. Standard: 12 Stunden.'
+    },
+    {
+      section: 'schedule',
       group: 'optimization',
       groupLabel: 'Optimierung',
       groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
@@ -1350,6 +1894,32 @@ function buildFieldDefinitions() {
       group: 'feedinTariff',
       groupLabel: 'Einspeisung & Tarif',
       groupDescription: 'Wie der Optimizer den Einspeise-/Verkaufserl\u00f6s bewertet.',
+      groupOrder: 30,
+      path: 'dvControl.negativePriceProtection.enabled',
+      label: 'Negativpreis-Schutz',
+      type: 'boolean',
+      help: 'Fällt der Börsenpreis unter null, kostet jede eingespeiste Kilowattstunde Geld. Ist der Schutz aktiv, sperrt DVhub für die Dauer solcher Stunden die Einspeisung und hält den Netz-Sollwert auf dem Einspeise-Puffer aus „Zeitplan → Grundzustand" (dort auf 1000 W gedeckelt, damit aus dem Ausregeln kein Verkauf wird). Ausschalten nur, wenn deine Vermarktung negative Preise anders abrechnet — sonst zahlst du fürs Einspeisen.'
+    },
+    {
+      section: 'schedule',
+      group: 'feedinTariff',
+      groupLabel: 'Einspeisung & Tarif',
+      groupDescription: 'Wie der Optimizer den Einspeise-/Verkaufserlös bewertet.',
+      groupOrder: 30,
+      path: 'optimizer.minSellPriceCtKwh',
+      label: 'Mindest-Verkaufspreis (ct/kWh)',
+      type: 'number',
+      empty: 'null',
+      min: 0,
+      max: 100,
+      step: 0.5,
+      help: 'Unter diesem Börsenpreis wird der Akku nicht mehr ins Netz entladen — der Strom bleibt für später im Speicher, statt ihn zu verschleudern. Gilt für erzwungene Netz-Entladungen ab 1 kW; Eigenverbrauch und PV-Einspeisung bleiben unberührt. EOS-Regeln sind bewusst ausgenommen: EOS trifft die Wirtschaftlichkeitsentscheidung selbst und leert den Akku manchmal absichtlich günstig, um vor einer Abregelung Platz zu schaffen. Leer lassen = keine Untergrenze.'
+    },
+    {
+      section: 'schedule',
+      group: 'feedinTariff',
+      groupLabel: 'Einspeisung & Tarif',
+      groupDescription: 'Wie der Optimizer den Einspeise-/Verkaufserlös bewertet.',
       groupOrder: 30,
       path: 'optimizer.tariff.feedInMode',
       label: 'Einspeise-Modus',
@@ -2703,9 +3273,9 @@ export function createDefaultConfig() {
       freezeWatchdog: {
         // Default AUS (Christin, 29.07.2026): der Wächter greift in den Regelpfad
         // ein (Entladung anhalten, Verbindung neu aufbauen) und seine Schwellen
-        // sind bislang nur gegen EINE Anlage kalibriert. Bis genug Feldbelege aus
-        // mehreren Installationen vorliegen, wird er opt-in ausgeliefert — wie
-        // Write-Verifikation und Kreuzprobe auch.
+        // sind bislang nur gegen EINE Anlage kalibriert. Er bleibt opt-in, bis er
+        // GENÜGEND GETESTET ist — das entscheidet Christin, nicht eine Zahl von
+        // Installationen. Wie Write-Verifikation und Kreuzprobe auch.
         enabled: false,
         freezeMs: 180000,
         minSamples: 20,
@@ -2759,7 +3329,16 @@ export function createDefaultConfig() {
       // Battery=225 on the reference plant) → the operator configures them;
       // null = that service's alarms are not polled (no banner from it).
       alarms: {
-        enabled: true,
+        // Default AUS (Christin, 29.07.2026). Die Alarm-Abfrage liest ZWEI
+        // zusätzliche Modbus-Einheiten (VE.Bus + Batterie/BMS) auf demselben
+        // einfädigen dbus-modbustcp des Anlagenrechners. Auf einer beschäftigten
+        // Venus hat genau das den Steuerpfad ausgehungert — Ursache der
+        // Modbus-Störung ab 12.07.2026 auf der Betreiber-Anlage (siehe
+        // T-ALARM-POLL-V2 in polling.js). Die eingebauten Bremsen (adaptive
+        // Kadenz, Rückfall bei Fehlern, Gesundheits-Sperre) mildern das, aber
+        // ein reines ANZEIGE-Feature darf den Regelpfad gar nicht erst
+        // gefährden. Wer die Banner will, schaltet sie bewusst ein.
+        enabled: false,
         pollIntervalMs: 30000,
         timeoutMs: 1500,
         vebusUnitId: null,
@@ -3661,6 +4240,22 @@ function sanitizeRawConfig(rawInput) {
     }
 
     if (field.type === 'array') continue;
+
+    // stringList (29.07.2026): Adress-/Namenslisten. MUSS vor dem
+    // String()-Fallback unten stehen — der hat aus ['a','b'] ein "a,b" gemacht.
+    // Das ist kein Schönheitsfehler: jede Prüfung im Code fragt
+    // `Array.isArray(...)` und behandelt „kein Array" wie „Liste leer" =
+    // ALLES ERLAUBT. Aus einer gespeicherten Zugangsbeschränkung wäre also
+    // still eine offene Tür geworden (belegt: allowedHosts, lanCidrs,
+    // modbusAllowedClients nach einem Speicher-Rundlauf).
+    // Ein String wird zerlegt, damit auch ein API-Aufruf beide Formen schicken darf.
+    if (field.type === 'stringList') {
+      const list = Array.isArray(currentValue)
+        ? currentValue
+        : String(currentValue ?? '').split(/[,;\s]+/);
+      setPath(raw, field.path, list.map((v) => String(v).trim()).filter(Boolean));
+      continue;
+    }
 
     setPath(raw, field.path, currentValue == null ? '' : String(currentValue));
   }
