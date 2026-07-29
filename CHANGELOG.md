@@ -50,7 +50,10 @@ sowohl im Normalbetrieb als auch während der Abregelung.
   Entladung anhält), verwirft die Modbus-Verbindung und baut sie neu auf und
   schlägt laut Alarm: Banner im Leitstand, Push-Benachrichtigung, Log-Eintrag
   „critical", Monitoring-Signal (`dvhub_telemetry_freeze_active`). Neue
-  Einstellungen unter „Verbindung" (`victron.freezeWatchdog.*`), Standard AN.
+  Einstellungen unter „Verbindung" (`victron.freezeWatchdog.*`), **Standard AUS**
+  — der Wächter greift in die Regelung ein und seine Schwellen sind bisher nur
+  an einer einzigen Anlage erprobt; einschalten, wenn eingefrorene Messwerte
+  vermutet werden.
   Die Schwellen sind gegen fünf Tage echte Anlagendaten kalibriert: die
   Ladestand-Erkennung arbeitet nur im linearen Bereich (10–95 %), weil der
   Ladestand in der Absorptionsphase eines vollen Akkus stundenlang legitim

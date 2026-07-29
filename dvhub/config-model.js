@@ -1087,7 +1087,7 @@ function buildFieldDefinitions() {
       path: 'victron.freezeWatchdog.enabled',
       label: 'Einfrier-W\u00e4chter',
       type: 'boolean',
-      help: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zur\u00fcckkommen (halb-tote Modbus-Sitzung an der Anlage: die Werte stehen still, die Anlage l\u00e4uft aber weiter). Bei Verdacht h\u00e4lt DVhub jede erzwungene Entladung an, verwirft die Verbindung und baut sie neu auf und schl\u00e4gt Alarm. Nur f\u00fcr Modbus-Anlagen; ausschalten nur zur Fehlersuche.'
+      help: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zur\u00fcckkommen (halb-tote Modbus-Sitzung an der Anlage: die Werte stehen still, die Anlage l\u00e4uft aber weiter). Bei Verdacht h\u00e4lt DVhub jede erzwungene Entladung an, verwirft die Verbindung und baut sie neu auf und schl\u00e4gt Alarm. Nur f\u00fcr Modbus-Anlagen. Standard AUS: der W\u00e4chter greift in die Regelung ein, und seine Schwellen sind bisher nur an einer einzigen Anlage erprobt \u2014 einschalten, wenn du eingefrorene Messwerte vermutest.'
     },
     {
       section: 'victron',
@@ -2672,7 +2672,12 @@ export function createDefaultConfig() {
       // Zwischenfall lief 2,5 h still, jeder bestehende Schutz sah „frisch".
       // Details/Detektoren: services/telemetry-freeze-watchdog.js.
       freezeWatchdog: {
-        enabled: true,
+        // Default AUS (Christin, 29.07.2026): der Wächter greift in den Regelpfad
+        // ein (Entladung anhalten, Verbindung neu aufbauen) und seine Schwellen
+        // sind bislang nur gegen EINE Anlage kalibriert. Bis genug Feldbelege aus
+        // mehreren Installationen vorliegen, wird er opt-in ausgeliefert — wie
+        // Write-Verifikation und Kreuzprobe auch.
+        enabled: false,
         freezeMs: 180000,
         minSamples: 20,
         minPowerW: 25,
