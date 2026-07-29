@@ -47,6 +47,8 @@
 // (unveränderte Werte sind dort normal) und hat seine eigene Staleness-Prüfung.
 
 /** Felder, die auf einer lebenden Anlage im Sekundentakt jittern. */
+import { betaGateOpen } from '../beta-features.js';
+
 export const FREEZE_JITTER_FIELDS = ['grid_total_w', 'batteryPowerW', 'pvTotalW', 'selfConsumptionW'];
 
 export const FREEZE_DEFAULTS = {
@@ -94,7 +96,11 @@ export function resolveFreezeOptions(cfg = {}) {
     ? (capacityWh * socStepPct) / 100
     : 0;
   return {
-    enabled: w.enabled !== false,
+    // Beta-Gate (29.07.2026): der Wächter greift in den Regelpfad ein
+    // (Entladung anhalten, Verbindung neu aufbauen) und ist bis auf Weiteres
+    // ein Feldtest. Im Stable-Kanal bleibt er AUS, unabhängig von der
+    // config.json. Siehe beta-features.js.
+    enabled: w.enabled !== false && betaGateOpen(cfg, 'freezeWatchdog'),
     freezeMs: numOr(w.freezeMs, FREEZE_DEFAULTS.freezeMs, 30000),
     minSamples: numOr(w.minSamples, FREEZE_DEFAULTS.minSamples, 2),
     minPowerW: numOr(w.minPowerW, FREEZE_DEFAULTS.minPowerW, 0),

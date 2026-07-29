@@ -29,6 +29,8 @@
 // (Steuerung auf MQTT umschalten) ist ein separater, steuerkritischer Schritt.
 
 /** Felder der Kreuzprobe. `abs`/`rel`: erlaubte Abweichung (beide müssen gerissen sein). */
+import { betaGateOpen } from '../beta-features.js';
+
 export const CROSSCHECK_FIELDS = [
   { key: 'soc', label: 'Ladestand', unit: '%', abs: 3, rel: 0 },
   { key: 'batteryPowerW', label: 'Akku-Leistung', unit: 'W', abs: 400, rel: 0.15 },
@@ -53,7 +55,10 @@ export function resolveCrossCheckOptions(cfg = {}) {
   const m = cfg?.victron?.mqtt || {};
   const host = cfg?.victron?.host || '';
   return {
-    enabled: c.enabled === true,
+    // Beta-Gate (29.07.2026): im Stable-Kanal bleibt die Kreuzprobe AUS, auch
+    // wenn ein `enabled: true` in der config.json steht — z. B. weil die Box
+    // vorher im Bleeding-Edge-Kanal lief. Siehe beta-features.js.
+    enabled: c.enabled === true && betaGateOpen(cfg, 'mqttCrossCheck'),
     broker: c.broker || m.broker || (host ? `mqtts://${host}:8883` : ''),
     portalId: c.portalId || m.portalId || '',
     username: c.username || m.username || '',

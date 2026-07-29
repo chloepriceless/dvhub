@@ -805,6 +805,13 @@ function getVisibilityValue(path) {
 function isFieldVisible(field) {
   if (field.hidden) return false;
 
+  // Beta-Gate (29.07.2026): ein Feld mit `beta: true` gehört zu einem Feature,
+  // das noch im Feldtest ist. Es erscheint nur im Bleeding-Edge-Kanal — genau
+  // wie die Beta-Herstellerprofile im Hersteller-Dropdown. Das Verstecken ist
+  // nur die halbe Miete; wirkungslos gemacht werden die Schalter serverseitig
+  // in beta-features.js, damit ein Kanalwechsel sie auch wirklich abschaltet.
+  if (field.beta === true && getVisibilityValue('updateChannel') !== 'dev') return false;
+
   if (field.visibleWhenPath) {
     const currentValue = getVisibilityValue(field.visibleWhenPath.path);
     // Support 'equals' (show when value matches) and 'notEquals' (show when value differs)

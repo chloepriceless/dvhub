@@ -19,6 +19,7 @@ import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automati
 import { safeInterval } from './services/safe-async.js';
 import { encodeSunspecFloat32 } from './services/inverter/sunspec.js';
 import { getPowerLimits } from './services/power-limits.js';
+import { betaGateOpen } from './beta-features.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -66,6 +67,25 @@ export function exportBufferFloorW(cfg) {
 // Preis — dieselbe Schwelle, mit der das EEG/§14a-Gate eine erzwungene
 // Netzentladung erkennt. Im Normalbetrieb gilt sie nicht.
 const CURTAILMENT_BUFFER_LIMIT_W = FORCED_EXPORT_THRESHOLD_W;
+
+const VERIFY_DEFAULT_DELAY_MS = 4000;
+const VERIFY_DEFAULT_MIN_INTERVAL_MS = 30000;
+
+// Schreib-Verifikation (T-VERIFY) — Beta, siehe beta-features.js. Die Auflösung
+// liegt bewusst auf Modulebene und nicht in der Evaluator-Fabrik: so kann
+// test/beta-gate.test.js für JEDES registrierte Beta-Feature dieselbe Zusage
+// prüfen — `enabled: true` in der config.json bleibt im Stable-Kanal wirkungslos.
+export function resolveControlWriteVerify(cfg = {}) {
+  const vc = cfg?.schedule?.controlWriteVerify || {};
+  const delayMs = Number(vc.delayMs);
+  const minIntervalMs = Number(vc.minIntervalMs);
+  return {
+    enabled: vc.enabled === true && betaGateOpen(cfg, 'controlWriteVerify'),
+    delayMs: delayMs > 0 ? delayMs : VERIFY_DEFAULT_DELAY_MS,
+    minIntervalMs: minIntervalMs > 0 ? minIntervalMs : VERIFY_DEFAULT_MIN_INTERVAL_MS,
+    toleranceAbs: Number(vc.toleranceAbs) || 0
+  };
+}
 
 function dischargeFloorHold(target, value) {
   const v = Number(value);
@@ -471,13 +491,11 @@ export function createScheduleEvaluator(ctx) {
   // (identisch zu den geschriebenen Words — kein Dekodier-Drift möglich).
   // Flag default OFF (schedule.controlWriteVerify.enabled) — Opt-in pro Anlage.
   // Sequenz-Dialekte (B-1112) sind v1 außen vor (eigener Aktuator, eigenes Log).
-  const VERIFY_DEFAULT_DELAY_MS = 4000;
-  const VERIFY_DEFAULT_MIN_INTERVAL_MS = 30000;
   const VERIFY_FAIL_ESCALATE = 3;
 
   function maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive }) {
-    const vc = cfg.schedule?.controlWriteVerify;
-    if (vc?.enabled !== true || isKeepalive) return;
+    const vc = resolveControlWriteVerify(cfg);
+    if (!vc.enabled || isKeepalive) return;
     if (typeof transport?.readPointSince !== 'function' && transport?.type === 'mqtt') return;
     const all = (state.schedule._verify || (state.schedule._verify = {}));
     const v = (all[target] || (all[target] = { timer: null, lastRunAt: 0, mismatches: 0, lastOkAt: null }));
@@ -485,9 +503,7 @@ export function createScheduleEvaluator(ctx) {
     // lastWrite — schnell aufeinanderfolgende Writes (5-s-Recompute) erzeugen
     // so höchstens einen Read pro minIntervalMs statt einen pro Write.
     if (v.timer) return;
-    const delayMs = Number(vc.delayMs) > 0 ? Number(vc.delayMs) : VERIFY_DEFAULT_DELAY_MS;
-    const minIntervalMs = Number(vc.minIntervalMs) > 0 ? Number(vc.minIntervalMs) : VERIFY_DEFAULT_MIN_INTERVAL_MS;
-    const wait = Math.max(delayMs, (v.lastRunAt + minIntervalMs) - Date.now());
+    const wait = Math.max(vc.delayMs, (v.lastRunAt + vc.minIntervalMs) - Date.now());
     v.timer = setTimeout(() => {
       v.timer = null;
       v.lastRunAt = Date.now();
@@ -500,12 +516,12 @@ export function createScheduleEvaluator(ctx) {
 
   async function runWriteVerify(target, confAtWrite) {
     const cfg = getCfg();
-    const vc = cfg.schedule?.controlWriteVerify || {};
+    const vc = resolveControlWriteVerify(cfg);
     const lw = state.schedule.lastWrite[target];
     const v = state.schedule._verify?.[target];
     if (!lw || !v) return;
     const expected = Number(lw.value);
-    const toleranceAbs = Number(vc.toleranceAbs) || 0;
+    const toleranceAbs = vc.toleranceAbs;
 
     let match;
     let actual;
