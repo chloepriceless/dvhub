@@ -47,7 +47,10 @@ test('shipped bridge-mqtt.json loads as manufacturer profile with mqtt transport
   assert.equal(loaded.effectiveConfig.controlWrite.minSocPct.enabled, true);
   assert.equal(loaded.effectiveConfig.controlWrite.maxDischargeW.enabled, true);
   assert.equal(loaded.effectiveConfig.dvControl.enabled, true);
-  assert.equal(loaded.effectiveConfig.dvControl.negativePriceProtection.gridSetpointW, -40);
+  assert.equal(loaded.effectiveConfig.dvControl.negativePriceProtection.enabled, true);
+  // 2026-07-29: das Profil nagelt den Puffer nicht mehr fest — ohne Eintrag
+  // folgt die Abregelung dem eingestellten schedule.defaultGridSetpointW.
+  assert.equal(loaded.effectiveConfig.dvControl.negativePriceProtection.gridSetpointW, undefined);
 });
 
 test('persisted victron.mqtt overrides the profile defaults (operator-configurable, D-27)', () => {

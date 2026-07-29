@@ -13,7 +13,18 @@ const MANUFACTURER_MANAGED_PATHS = [
   'meter',
   'points',
   'controlWrite',
-  'dvControl',
+  // 2026-07-29 (Christin): NICHT mehr der ganze `dvControl`-Baum. Gemanagt ist
+  // nur die Register-Verdrahtung der DV-Abregelung — die beiden Betreiber-
+  // Entscheidungen darin (ob DVhub überhaupt schreibt, und der Sollwert-Puffer
+  // beim Negativpreis-Schutz) gehören dem Betreiber und müssen aus der GUI
+  // setzbar sein. Vorher wurde `dvControl` komplett aus config.json gestrippt:
+  // der Schalter „Aktive Anlagensteuerung" ließ sich nicht speichern (nach dem
+  // Neuladen wieder AUS) und das im Profil stehende gridSetpointW: -40 war
+  // unerreichbar. Deshalb liegt auch `zeroFeedIn` als eigener Wurzelzweig
+  // daneben (siehe createDefaultConfig) — dieselbe Umgehung, nur älter.
+  'dvControl.feedExcessDcPv',
+  'dvControl.dontFeedExcessAcPv',
+  'dvControl.zeroFeedIn',
   'victron.transport',
   'victron.port',
   'victron.unitId',
@@ -378,7 +389,20 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   if (isPlainObject(manufacturerProfile?.meter)) effectiveConfig.meter = clone(manufacturerProfile.meter);
   if (isPlainObject(manufacturerProfile?.points)) effectiveConfig.points = clone(manufacturerProfile.points);
   if (isPlainObject(manufacturerProfile?.controlWrite)) effectiveConfig.controlWrite = clone(manufacturerProfile.controlWrite);
-  if (isPlainObject(manufacturerProfile?.dvControl)) effectiveConfig.dvControl = clone(manufacturerProfile.dvControl);
+  // dvControl: Register-Verdrahtung kommt aus dem Profil, die beiden
+  // Betreiber-Entscheidungen darin gewinnen. Nur AUSDRÜCKLICH persistierte
+  // Werte überschreiben — ein fehlender Schlüssel heißt „Profil-Default gilt",
+  // sonst würde ein frisch angelegtes config.json die Abregelung stumm
+  // umkonfigurieren. Gleiches Muster wie victron oben (D-27).
+  if (isPlainObject(manufacturerProfile?.dvControl)) {
+    const persistedDv = isPlainObject(persistedConfig?.dvControl) ? persistedConfig.dvControl : {};
+    const dvOverride = {};
+    if (typeof persistedDv.enabled === 'boolean') dvOverride.enabled = persistedDv.enabled;
+    if (isPlainObject(persistedDv.negativePriceProtection)) {
+      dvOverride.negativePriceProtection = clone(persistedDv.negativePriceProtection);
+    }
+    effectiveConfig.dvControl = deepMerge(clone(manufacturerProfile.dvControl), dvOverride);
+  }
 
   return applyVictronDefaults(effectiveConfig);
 }

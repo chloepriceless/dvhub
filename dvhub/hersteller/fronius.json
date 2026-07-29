@@ -232,9 +232,8 @@
       "enabled": true
     },
     "negativePriceProtection": {
-      "_comment": "Aktiv: bei EPEX-Negativpreis wird die Einspeisung gesperrt (feedIn=false → Force-Charge-Sequenz oben). Das Feld gridSetpointW ist ein Victron-Rest und wird bei Fronius IGNORIERT (kein Setpoint-Dialekt); die Wirkung kommt aus der Model-124-Sequenz.",
-      "enabled": true,
-      "gridSetpointW": -40
+      "_comment": "Aktiv: bei EPEX-Negativpreis wird die Einspeisung gesperrt (feedIn=false → Force-Charge-Sequenz oben). Das Feld gridSetpointW war ein Victron-Rest und wird bei Fronius ohnehin IGNORIERT (kein Setpoint-Dialekt); es steht deshalb hier nicht mehr (2026-07-29). Die Wirkung kommt aus der Model-124-Sequenz.",
+      "enabled": true
     }
   }
 }

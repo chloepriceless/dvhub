@@ -66,8 +66,8 @@
       "enabled": true
     },
     "negativePriceProtection": {
-      "enabled": true,
-      "gridSetpointW": -40
+      "_comment": "gridSetpointW steht hier bewusst NICHT mehr (2026-07-29) — die Abregelung folgt schedule.defaultGridSetpointW.",
+      "enabled": true
     }
   }
 }

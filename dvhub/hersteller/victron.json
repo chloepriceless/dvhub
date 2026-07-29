@@ -45,6 +45,9 @@
     "enabled": true,
     "feedExcessDcPv": { "enabled": true, "fc": 6, "address": 2707, "writeType": "uint16", "signed": false, "scale": 1, "offset": 0, "wordOrder": "be" },
     "dontFeedExcessAcPv": { "enabled": true, "fc": 6, "address": 2708, "writeType": "uint16", "signed": false, "scale": 1, "offset": 0, "wordOrder": "be" },
-    "negativePriceProtection": { "enabled": true, "gridSetpointW": -40 }
+    "negativePriceProtection": {
+      "_comment": "gridSetpointW steht hier bewusst NICHT mehr (2026-07-29): der feste -40 überschrieb während der Abregelung den eingestellten Default Grid Setpoint. Ohne Eintrag folgt die Abregelung schedule.defaultGridSetpointW — ein Wert für beide Situationen.",
+      "enabled": true
+    }
   }
 }

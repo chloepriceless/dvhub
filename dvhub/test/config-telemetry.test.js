@@ -106,7 +106,12 @@ test('normalizeConfigInput restores legacy placeholder write registers while ign
   assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.unitId, 100);
   assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.timeoutMs, 1000);
   assert.ok(!('controlWrite' in normalized.rawConfig));
-  assert.ok(!('dvControl' in normalized.rawConfig));
+  // 2026-07-29: NICHT mehr der ganze dvControl-Baum — nur die Register-
+  // Verdrahtung. `enabled` und der Negativpreis-Schutz gehören dem Betreiber
+  // und müssen den Speicher-Roundtrip überleben (sonst ist der GUI-Schalter
+  // „Aktive Anlagensteuerung" wirkungslos).
+  assert.ok(!('feedExcessDcPv' in (normalized.rawConfig.dvControl || {})));
+  assert.ok(!('dontFeedExcessAcPv' in (normalized.rawConfig.dvControl || {})));
   assert.ok(!('port' in normalized.rawConfig.victron));
   assert.match(normalized.warnings.join('\n'), /legacy placeholder|manufacturer profile/i);
 });

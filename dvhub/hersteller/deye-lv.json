@@ -130,9 +130,8 @@
       }
     },
     "negativePriceProtection": {
-      "_comment": "Der gridSetpointW-Anteil läuft bei Deye ins Leere (Target deaktiviert) — wirksam ist die Work-Mode-Abregelung über die Sequenz.",
-      "enabled": true,
-      "gridSetpointW": -40
+      "_comment": "Der gridSetpointW-Anteil läuft bei Deye ins Leere (Target deaktiviert) — wirksam ist die Work-Mode-Abregelung über die Sequenz. Der Schlüssel steht deshalb hier gar nicht mehr (2026-07-29).",
+      "enabled": true
     }
   }
 }

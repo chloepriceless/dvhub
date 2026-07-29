@@ -10,7 +10,7 @@ verweist hierher.
 
 ## [Unreleased]
 
-## [1.0.5] - 2026-07-28
+## [1.0.5] - 2026-07-29
 
 Zuverlässigkeits-Release. Schwerpunkt: DVhub merkt jetzt selbst, wenn die Anlage
 zwar antwortet, aber keine echten Messwerte mehr liefert — der Fall, der am
@@ -18,6 +18,25 @@ zwar antwortet, aber keine echten Messwerte mehr liefert — der Fall, der am
 Lesepfad zur Gegenprobe, der vollständige MQTT-Anschluss und — aus dem
 Anwender-Feedback — ein einstellbarer Einspeise-Puffer gegen Bezugsspitzen,
 sowohl im Normalbetrieb als auch während der Abregelung.
+
+### Behoben (Nachtrag 29.07.)
+
+- **Der Einspeise-Puffer wirkte während der Abregelung nicht.** Das
+  Herstellerprofil enthielt weiterhin ein fest eingetragenes `-40 W`, und der
+  gesamte `dvControl`-Zweig galt als „vom Hersteller verwaltet": er wurde beim
+  Laden aus der Konfiguration entfernt und komplett durch den Profil-Block
+  ersetzt. Damit gewann das Profil-`-40` gegen den eingestellten Default Grid
+  Setpoint — der Puffer kam in der Abregelung nie an. Der Schlüssel ist jetzt
+  aus allen vier ausgelieferten Profilen entfernt; die Abregelung folgt dem Wert
+  unter „Zeitplan → Grundzustand".
+- **Der Schalter „Aktive Anlagensteuerung (DV-Schnittstelle)" ließ sich nicht
+  bedienen.** Er lag im selben verworfenen Zweig: Speichern blieb wirkungslos,
+  nach dem Neuladen stand er wieder auf AUS. Vom Herstellerprofil verwaltet ist
+  jetzt nur noch die Register-Verdrahtung; der Schalter und der
+  Negativpreis-Schutz gehören dem Betreiber.
+- **Ja/Nein-Schalter ohne gespeicherten Wert zeigten AUS, obwohl die Funktion
+  lief.** Die Einstellungsseite stellte nur den gespeicherten Wert dar; fehlte
+  er, erschien ein leerer Haken statt des wirksamen Zustands.
 
 ### Neu
 

@@ -775,6 +775,15 @@ function renderFieldValueFromConfigs(field, {
     }
   }
 
+  // Ein Schalter hat keinen „leeren" Zustand: ohne gespeicherten Wert ist der
+  // WIRKSAME Wert die Wahrheit. Vorher wurde '' zurückgegeben → checked=false →
+  // die GUI zeigte AUS, während die Funktion lief (so war „Aktive
+  // Anlagensteuerung" unsichtbar aktiv). Ein Platzhalter-Hinweis wie bei
+  // Textfeldern existiert für Checkboxen nicht, deshalb inherited: null.
+  if (field.type === 'boolean' && !draftDefined) {
+    return { value: Boolean(effectiveValue), inherited: null };
+  }
+
   if (optionalOverride && !draftDefined) {
     return { value: '', inherited: effectiveValue };
   }
