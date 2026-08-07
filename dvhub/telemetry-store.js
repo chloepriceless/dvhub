@@ -33,6 +33,7 @@ const MATERIALIZED_ENERGY_SERIES = new Set([
   'battery_charge_w',
   'battery_discharge_w',
   'load_power_w',
+  'load_power_w_ex_managed',
   'vrm_solar_yield_w',
   'vrm_site_consumption_w',
   'vrm_grid_import_ref_w',

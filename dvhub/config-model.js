@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { toFiniteNumber } from './util.js';
+import { sanitizeBatteryStages, resolveCurrentBatteryCapacityWh } from './battery-stages.js';
 
 // Plan 09-01 (D-03): canonical minimum apiToken length floor. Re-exported here
 // (also defined in routes-api.js) so the settings-UI field descriptor and the
@@ -1952,7 +1953,18 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 0,
       step: 100,
-      help: 'Nutzbare Kapazit\u00e4t des Batteriespeichers in Wattstunden.'
+      help: 'Nutzbare Kapazit\u00e4t des Batteriespeichers in Wattstunden. Sobald unter "Ausbaustufen" mindestens eine Stufe gepflegt ist, wird dieser Wert aus der heute g\u00fcltigen Stufe abgeleitet und die Eingabe hier ignoriert.'
+    },
+    {
+      section: 'schedule',
+      group: 'batteryLimits',
+      groupLabel: 'Akku-Grenzen',
+      groupDescription: 'Batterie-Eckdaten und Lade-/Entlade-/SoC-Grenzen f\u00fcr die Optimierung.',
+      groupOrder: 20,
+      path: 'optimizer.batteryStages',
+      label: 'Akku-Ausbaustufen',
+      type: 'array',
+      help: 'Datierte Kapazit\u00e4tsstufen. Jede Stufe gilt ab ihrem Datum 00:00 (Berliner Zeit) bis zur n\u00e4chsten. Die Zyklenberechnung nutzt f\u00fcr jeden Tag der Historie die damals g\u00fcltige Kapazit\u00e4t \u2014 ohne das verschiebt jeder Ausbau r\u00fcckwirkend alle fr\u00fcheren Zyklenwerte. Ein R\u00fcckbau ist dieselbe Eingabe mit kleinerer Kapazit\u00e4t. Zeitr\u00e4ume vor der \u00e4ltesten Stufe erben deren Wert. Leere Liste = der Einzelwert oben gilt wie bisher.'
     },
     {
       section: 'schedule',
@@ -3508,6 +3520,20 @@ export function createDefaultConfig() {
         vrmToken: ''
       }
     },
+    // Inc 2 (Last-Separation): parameters for `load_power_w_ex_managed`, the load
+    // series with positively confirmed controllable load removed, so the forecast
+    // stops learning EV/device draw that EOS then plans on top of it again.
+    // See .planning/T-INC2-LAST-SEPARATION-DESIGN-2026-07-29.md.
+    loadSeparation: {
+      // Max age of a TeslaMate sample that may still drive a subtraction. Measured
+      // median gap between charger_power samples is 20 s, so 120 s carries 6x
+      // headroom while cutting off the stale tail (worst case measured: 22.3 h).
+      freshnessSeconds: 120,
+      // TeslaMate geofence name that means "charging at this house". Without this
+      // filter, away-from-home charging (~11 kW at destination chargers) would be
+      // subtracted from a house load that never contained it.
+      homeGeofence: 'Zuhause'
+    },
     dbBackup: {
       enabled: false,
       scope: 'full',
@@ -3535,6 +3561,10 @@ export function createDefaultConfig() {
       sfUseMstl: true
     },
     optimizer: {
+      // Datierte Akku-Ausbaustufen (Christin 2026-08-07). Leer = der manuelle
+      // batteryCapacityWh gilt wie bisher; ist die Liste gefüllt, wird
+      // batteryCapacityWh in applyVictronDefaults() daraus abgeleitet.
+      batteryStages: [],
       eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 },
       // T-LIVESOC-RESERVE (Variante B): re-derive the EOS charge reserve from the
       // LIVE battery SoC instead of the plan trajectory (self-correcting). OFF by
@@ -3707,6 +3737,21 @@ function applyVictronDefaults(config) {
   }
   if (coupling === 'ac' && next.points) {
     if (next.points.pvPowerW) next.points.pvPowerW.enabled = false;
+  }
+
+  // Akku-Ausbaustufen (Christin 2026-08-07): die heute gültige Stufe IST die
+  // aktuelle Kapazität. Damit lesen EOS-Sync, Optimizer, Freeze-Watchdog und
+  // Leitstand automatisch den richtigen Wert — es gibt weiterhin genau ein
+  // Feld, das sie abfragen. Die persistierte Config bleibt unangetastet; nur
+  // die EFFEKTIVE bekommt den abgeleiteten Wert (applyVictronDefaults läuft auf
+  // einem clone()). Leere Liste ⇒ der manuelle Wert bleibt stehen.
+  if (isPlainObject(next.optimizer) && Array.isArray(next.optimizer.batteryStages)
+      && next.optimizer.batteryStages.length) {
+    const derived = resolveCurrentBatteryCapacityWh(
+      next.optimizer.batteryStages,
+      next.optimizer.batteryCapacityWh
+    );
+    if (Number.isFinite(derived) && derived > 0) next.optimizer.batteryCapacityWh = derived;
   }
 
   return next;
@@ -4262,6 +4307,12 @@ function sanitizeRawConfig(rawInput) {
 
   raw.schedule = raw.schedule || {};
   raw.schedule.rules = sanitizeScheduleRules(raw.schedule.rules, warnings);
+  // Nur anfassen, wenn der Schlüssel wirklich da ist — sonst würde jede Config
+  // ohne Ausbaustufen eine leere Liste eingeschrieben bekommen und der
+  // Settings-Diff meldete eine Änderung, die niemand gemacht hat.
+  if (hasPath(raw, 'optimizer.batteryStages')) {
+    raw.optimizer.batteryStages = sanitizeBatteryStages(raw.optimizer.batteryStages, warnings);
+  }
   if (hasPath(raw, 'schedule.smallMarketAutomation')) {
     raw.schedule.smallMarketAutomation = sanitizeSmallMarketAutomation(raw.schedule.smallMarketAutomation, warnings);
   }

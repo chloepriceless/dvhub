@@ -1,4 +1,6 @@
 // services/history-viz/aggregator.js
+import { resolveBatteryCapacityWhForTimestamp } from '../../battery-stages.js';
+
 //
 // T-09.3-19 / 2026-06-14: the PV heatmap (getHeatmap) used to bucket + LABEL its
 // cells in UTC, while the negative-price overlay (getNegPrice) and price heatmap
@@ -1496,6 +1498,17 @@ export function createHistoryVizAggregator(ctx) {
     return 10;
   }
 
+  // Akku-Ausbaustufen (Christin 2026-08-07): Nennkapazität, die zum Zeitpunkt
+  // `ts` galt. Ohne gepflegte Stufen fällt der Resolver auf den Einzelwert
+  // zurück, also auf batteryNominalKwh() — Verhalten wie vorher.
+  function batteryNominalKwhAt(ts) {
+    let opt = {};
+    try { opt = (getCfg && getCfg().optimizer) || {}; } catch (_) { opt = {}; }
+    const wh = resolveBatteryCapacityWhForTimestamp(opt.batteryStages, ts, opt.batteryCapacityWh);
+    if (Number.isFinite(wh) && wh > 0) return wh / 1000;
+    return batteryNominalKwh();
+  }
+
   // Cumulative |ΔSOC| / 200 — the project-canonical "Vollzyklen" formula
   // (RESEARCH §Cycle-Counter Algorithm). One full cycle = 200% absolute SOC
   // change (100% discharge + 100% charge); /100 converts pct→fraction. This is
@@ -1873,12 +1886,17 @@ export function createHistoryVizAggregator(ctx) {
         seriesKeys: ['battery_charge_w', 'battery_discharge_w'],
         start, end, view,
       });
-      const capKwh = batteryNominalKwh();
       // Per-DOW charge / discharge energy, attributed to the bucket's DOW
       // (Mo=0..So=6). Each row's value×resolution integrates back to the
       // bucket kWh (fetchBucketedEnergySlots expresses kWh as equiv. power).
       const perDowCharged = new Array(7).fill(0);    // kWh charged
       const perDowDischarged = new Array(7).fill(0); // kWh discharged
+      // Akku-Ausbaustufen: die Zyklen werden PRO BUCKET mit der damals
+      // gültigen Kapazität gebildet und erst dann pro Wochentag summiert. Nach
+      // der DOW-Gruppierung ist das Datum weg — eine Division am Ende könnte
+      // nur noch EINE Kapazität benutzen und wäre über einen Ausbau hinweg
+      // falsch (Jahresansicht trifft das garantiert).
+      const perDowCycles = new Array(7).fill(0);
       for (const r of rows) {
         const w = Number(r.value);
         const dt = Number(r.resolution || 0);
@@ -1886,11 +1904,14 @@ export function createHistoryVizAggregator(ctx) {
         const kwh = (w * dt) / 3_600_000;
         const jsDow = new Date(r.ts).getUTCDay(); // 0=Sun..6=Sat
         const dowIdx = (jsDow + 6) % 7;            // Mo=0..So=6
-        if (r.key === 'battery_charge_w') perDowCharged[dowIdx] += kwh;
-        else if (r.key === 'battery_discharge_w') perDowDischarged[dowIdx] += kwh;
+        if (r.key === 'battery_charge_w') {
+          perDowCharged[dowIdx] += kwh;
+        } else if (r.key === 'battery_discharge_w') {
+          perDowDischarged[dowIdx] += kwh;
+          const capAtKwh = batteryNominalKwhAt(r.ts);
+          if (capAtKwh > 0) perDowCycles[dowIdx] += kwh / capAtKwh;
+        }
       }
-      // Equivalent full cycles per DOW = discharged kWh / nominal capacity.
-      const perDowCycles = perDowDischarged.map((kwh) => (capKwh > 0 ? kwh / capKwh : 0));
       const perDow = [];
       for (let d = 0; d < 7; d++) {
         perDow.push({

@@ -14,11 +14,13 @@ import {
   loadConfigFile,
   saveConfigFile
 } from './config-model.js';
+import { resolveCurrentBatteryCapacityWh } from './battery-stages.js';
 import { createTelemetryStorePg, ensurePgSchema, runPendingMigrations } from './telemetry-store-pg.js';
 import { createPool } from './db-client.js';
 import {
   buildLiveTelemetrySamples
 } from './telemetry-runtime.js';
+import { computeManagedLoad, DEFAULT_FRESHNESS_SECONDS, DEFAULT_HOME_GEOFENCE } from './managed-load.js';
 import {
   createTelemetryWriteBuffer
 } from './runtime-performance.js';
@@ -451,6 +453,23 @@ function applyLoadedConfig(nextLoadedConfig) {
   if (typeof monitoringHeartbeatRestart === 'function') monitoringHeartbeatRestart();
 }
 
+// Akku-Ausbaustufen (Christin 2026-08-07): zieht den abgeleiteten Jetzt-Wert
+// nach, wenn der Kalendertag über eine Stufengrenze gelaufen ist. Schreibt NUR
+// die effektive Config im Speicher — die persistierte Zeitleiste bleibt die
+// Wahrheit und wird nicht angefasst. Loggt jeden Wechsel, damit ein Sprung in
+// den KPIs später erklärbar ist.
+function refreshDerivedBatteryCapacity() {
+  const stages = cfg?.optimizer?.batteryStages;
+  if (!Array.isArray(stages) || !stages.length) return;
+  const previous = Number(cfg.optimizer.batteryCapacityWh);
+  // Fallback ist der persistierte Handwert, nicht der bereits abgeleitete —
+  // sonst friert ein einmal abgeleiteter Wert sich selbst ein.
+  const derived = resolveCurrentBatteryCapacityWh(stages, rawCfg?.optimizer?.batteryCapacityWh);
+  if (!Number.isFinite(derived) || derived <= 0 || derived === previous) return;
+  cfg.optimizer.batteryCapacityWh = derived;
+  pushLog('battery_stage_capacity_changed', { previousWh: previous, capacityWh: derived });
+}
+
 function saveAndApplyConfig(nextRawConfig) {
   const previousRaw = rawCfg;
   const saved = saveConfigFile(CONFIG_PATH, nextRawConfig);
@@ -685,6 +704,7 @@ let expireLeaseIntervalId = null;
 let liveTelemetryFlushIntervalId = null;
 let runtimeSnapshotIntervalId = null;
 let marketValueBackfillIntervalId = null;
+let batteryStageIntervalId = null;
 let monitoringTimerId = null;
 // A1 (Improvements 2026-07-02): startMonitoringHeartbeat ist INNERHALB des
 // `if (IS_RUNTIME_PROCESS) {…}`-Blocks deklariert (weiter unten) — in ESM/
@@ -1473,7 +1493,38 @@ const telemetryReady = (async () => {
   ctx.publishRuntimeSnapshot = publishRuntimeSnapshot;
   ctx.onEvalComplete = () => publishRuntimeSnapshot();
   ctx.onPollComplete = ({ ts, resolutionSeconds, meter, victron }) => {
-    liveTelemetryBuffer?.capture({ ts, resolutionSeconds, meter, victron });
+    // Inc 2 (Last-Separation): derive the cleaned load value here, where pushLog
+    // exists, so the "subtract or not" decision and its evidence stay together.
+    // Never let this throw into the poll path -- on any failure we simply write no
+    // ex_managed sample for this cycle, which degrades to "series = raw series".
+    let managed = null;
+    try {
+      const sepCfg = cfg.loadSeparation || {};
+      managed = computeManagedLoad({
+        loadW: victron?.selfConsumptionW,
+        tesla: teslamateService.getState(),
+        teslaUpdatedAt: teslamateService.getFieldUpdatedAt(),
+        devices: deviceService.getDevices(),
+        nowMs: Date.now(),
+        freshnessSeconds: sepCfg.freshnessSeconds ?? DEFAULT_FRESHNESS_SECONDS,
+        homeGeofence: sepCfg.homeGeofence ?? DEFAULT_HOME_GEOFENCE
+      });
+      // Only the implausible case is logged. Logging every "not charging" cycle
+      // would drown the log at poll frequency and teach everyone to ignore it.
+      if (managed.reason === 'implausible_negative') {
+        pushLog('load_separation_implausible', {
+          loadW: victron?.selfConsumptionW,
+          managedW: managed.managedW,
+          evW: managed.evW,
+          deviceW: managed.deviceW,
+          deviceIds: managed.deviceIds
+        });
+      }
+    } catch (err) {
+      managed = null;
+      pushLog('load_separation_error', { error: err.message });
+    }
+    liveTelemetryBuffer?.capture({ ts, resolutionSeconds, meter, victron, managed });
     liveTelemetryBuffer?.flush();
     publishRuntimeSnapshot();
     // Phase 04: Fire-and-forget notification evaluation on each poll cycle
@@ -1699,6 +1750,15 @@ if (IS_RUNTIME_PROCESS) {
     try { publishRuntimeSnapshot(); }
     catch (err) { pushLog('runtime_snapshot_publish_error', { error: err?.message ?? String(err) }); }
   }, 1000);
+  // Akku-Ausbaustufen: der abgeleitete Jetzt-Wert entsteht in
+  // applyVictronDefaults(), also beim Laden/Speichern der Config. Ohne diesen
+  // Ticker würde eine ab heute gültige Stufe erst beim nächsten Neustart
+  // greifen — ausgerechnet am Umbautag, an dem sie gebraucht wird. Stündlich
+  // reicht: der Wechsel liegt auf einer Tagesgrenze.
+  batteryStageIntervalId = setInterval(() => {
+    try { refreshDerivedBatteryCapacity(); }
+    catch (err) { pushLog('battery_stage_refresh_error', { error: err?.message ?? String(err) }); }
+  }, 60 * 60 * 1000);
 }
 
 if (PROCESS_ROLE === 'runtime-worker' && typeof process.send === 'function') {
@@ -1992,6 +2052,7 @@ async function gracefulShutdown(signal) {
   safeSync('liveTelemetryFlushInterval.clear', () => { if (liveTelemetryFlushIntervalId) clearInterval(liveTelemetryFlushIntervalId); });
   safeSync('runtimeSnapshotInterval.clear', () => { if (runtimeSnapshotIntervalId) clearInterval(runtimeSnapshotIntervalId); });
   safeSync('marketValueBackfillInterval.clear', () => { if (marketValueBackfillIntervalId) clearInterval(marketValueBackfillIntervalId); });
+  safeSync('batteryStageInterval.clear', () => { if (batteryStageIntervalId) clearInterval(batteryStageIntervalId); });
   safeSync('monitoringHeartbeat.stop', () => {
     if (monitoringTimerId) { clearInterval(monitoringTimerId); monitoringTimerId = null; }
     monitoringHeartbeatSend = null;

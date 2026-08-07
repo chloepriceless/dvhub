@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
+import { resolveBatteryCapacityWhForTimestamp } from './battery-stages.js';
 import { getEegNegativePriceRule, getFeedInCompensationCtKwh, isNegativePriceSlotAffected } from './eeg-rules.js';
 import { vollastViertelstunden, extensionFromVollast } from './eeg-extension.js';
 // Sweep package 6: shared 2-decimal rounding helper (was a local round2 duplicate).
@@ -304,6 +305,10 @@ function buildRowAccumulator(key, label) {
     batteryToGridKwh: 0,
     batteryChargeKwh: 0,
     batteryDischargeKwh: 0,
+    // Slot-genau akkumulierte Vollzyklen (Akku-Ausbaustufen). cyclesKnown
+    // unterscheidet "0 Zyklen gefahren" von "keine Kapazität hinterlegt".
+    cyclesAcc: 0,
+    cyclesKnown: false,
     selfConsumptionKwh: 0,
     gridShareKwh: 0,
     pvShareKwh: 0,
@@ -364,6 +369,13 @@ function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
   if ('netEur' in target) {
     target.netEur = round2(Number(target.exportRevenueEur || 0) - Number(target.selfConsumptionCostEur || 0));
   }
+  // Akku-Ausbaustufen: aus der slot-genauen Summe wird der Zeilenwert. Die
+  // Hilfsfelder fallen hier weg, damit sie nicht in der API-Antwort landen.
+  if ('cyclesAcc' in target) {
+    target.cycles = target.cyclesKnown ? Math.round(Number(target.cyclesAcc || 0) * 100) / 100 : null;
+    delete target.cyclesAcc;
+    delete target.cyclesKnown;
+  }
   if ('marketPremiumEur' in target || 'marketPremiumCtTotal' in target || 'premiumValuedExportKwh' in target) {
     const premiumValuedExportKwh = Number(target.premiumValuedExportKwh || 0);
     const marketPremiumCtTotal = Number(target.marketPremiumCtTotal || 0);
@@ -376,7 +388,13 @@ function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
   return target;
 }
 
-function summarizeRows(slots, view) {
+// `resolveCapacityKwhForTs` löst die zum Slot-Zeitpunkt gültige Nennkapazität
+// auf (Akku-Ausbaustufen, Christin 2026-08-07). Die Zyklen werden deshalb PRO
+// SLOT gebildet und erst dann summiert: eine Jahres- oder Monatszeile kann
+// einen Ausbau enthalten, und dann gibt es für die Zeile keine eine Kapazität,
+// durch die man ihre Summe teilen dürfte. null ⇒ keine Kapazität bekannt ⇒
+// cycles bleibt null (wie bisher), statt still mit einem Ratewert zu rechnen.
+function summarizeRows(slots, view, resolveCapacityKwhForTs = null) {
   const groups = new Map();
   for (const slot of slots) {
     let key = slot.ts;
@@ -407,6 +425,13 @@ function summarizeRows(slots, view) {
     if (Number.isFinite(Number(slot.userImportPriceCtKwh)) && importWeight > 0) {
       row.userImportPriceWeightKwh += importWeight;
       row.userImportPriceWeightedCtTotal += importWeight * Number(slot.userImportPriceCtKwh);
+    }
+    if (typeof resolveCapacityKwhForTs === 'function') {
+      const capKwh = resolveCapacityKwhForTs(slot.ts);
+      if (Number.isFinite(capKwh) && capKwh > 0) {
+        row.cyclesAcc += Math.max(0, Number(slot.batteryDischargeKwh) || 0) / capKwh;
+        row.cyclesKnown = true;
+      }
     }
     row.slotCount += 1;
     if (slot.incomplete) row.incompleteSlots += 1;
@@ -1270,16 +1295,25 @@ export function createHistoryRuntime({
     if (!Number.isFinite(totalWh) || totalWh <= 0) return null;
     return totalWh / 1000;
   }
-  // 1 cycle = cumulative discharge equal to one nominal capacity (0%→100%).
-  // 43 kWh in + 43 kWh out across one day = 1 cycle (counts the discharge half;
-  // the user's mental model). Multi-day: 90% discharge + 10% discharge = 100%
-  // cumulated = 1.0 cycles.
-  function computeCycles(dischargeKwh) {
-    const cap = batteryNominalCapacityKwh();
-    if (!Number.isFinite(cap) || cap <= 0) return null;
-    const d = Math.max(0, Number(dischargeKwh) || 0);
-    return Math.round((d / cap) * 100) / 100;
+  // Nennkapazität, die zum Zeitpunkt `ts` galt (Akku-Ausbaustufen,
+  // Christin 2026-08-07). Ohne Stufen liefert der Resolver den manuell
+  // gepflegten Einzelwert — Verhalten wie vor der Zeitleiste.
+  function batteryNominalCapacityKwhAt(ts) {
+    const cfg = getOptimizerConfig() || {};
+    const wh = resolveBatteryCapacityWhForTimestamp(cfg.batteryStages, ts, cfg.batteryCapacityWh);
+    if (!Number.isFinite(wh) || wh <= 0) return null;
+    return wh / 1000;
   }
+  // 1 Zyklus = kumulierte Entladung in Höhe einer Nennkapazität (0%→100%).
+  // 43 kWh rein + 43 kWh raus an einem Tag = 1 Zyklus (die Entladehälfte zählt
+  // — das mentale Modell des Betreibers). Mehrtägig: 90% + 10% Entladung =
+  // 100% kumuliert = 1,0 Zyklen.
+  //
+  // Die Rechnung selbst sitzt jetzt slot-genau in summarizeRows(): dieselbe
+  // Entladung ergibt bei 43 kWh Nennkapazität doppelt so viele Zyklen wie bei
+  // 77 kWh, also braucht jeder Slot seine eigene Kapazität. Eine
+  // Zeilen-/Summen-Rechnung mit EINER Kapazität ginge über einen Ausbau hinweg
+  // schief — genau der Fehler, den die Ausbaustufen beheben.
   async function listRawFallbackSlotsForRange({ start, end }) {
     const today = getCurrentDate();
     const todayStart = localDateTimeToUtcIso(today, 0, 0);
@@ -1888,12 +1922,18 @@ export function createHistoryRuntime({
       kpis,
       pricingConfig
     });
-    capacityAppliedKpis.cycles = computeCycles(capacityAppliedKpis.batteryDischargeKwh);
+    // Akku-Ausbaustufen: Zeilen UND Summe entstehen aus derselben slot-genauen
+    // Akkumulation. Die frühere Summe (Gesamtentladung ÷ heutige Kapazität) war
+    // über einen Ausbau hinweg falsch und stimmte nicht mit der Summe ihrer
+    // eigenen Zeilen überein.
+    const baseRows = summarizeRows(slots, view, batteryNominalCapacityKwhAt);
+    const rowsWithCycles = baseRows.filter((row) => row.cycles != null);
+    capacityAppliedKpis.cycles = rowsWithCycles.length
+      ? Math.round(rowsWithCycles.reduce((sum, row) => sum + Number(row.cycles || 0), 0) * 100) / 100
+      : null;
+    // Der KPI-Kachel-Wert bleibt die HEUTE gültige Nennkapazität — er
+    // beschriftet den Akku, nicht den Zeitraum.
     capacityAppliedKpis.batteryNominalCapacityKwh = batteryNominalCapacityKwh();
-    const baseRows = summarizeRows(slots, view).map((row) => ({
-      ...row,
-      cycles: computeCycles(row.batteryDischargeKwh)
-    }));
     const solarApplied = applySolarMarketValues({
       rows: baseRows,
       view,

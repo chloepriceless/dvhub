@@ -12,6 +12,40 @@ verweist hierher.
 
 ### Neu
 
+- **Akku-Ausbaustufen mit Datum.** Die Zyklenberechnung teilte die Entladeenergie
+  jedes historischen Tages durch die *heutige* Nennkapazität. Wer seinen Speicher
+  erweitert, verschob damit rückwirkend seine gesamte Zyklenhistorie: nach einem
+  Ausbau von 43 auf 77 kWh zeigte derselbe Monat nur noch gut die Hälfte der
+  tatsächlich gefahrenen Zyklen. In den Einstellungen lassen sich jetzt datierte
+  Kapazitätsstufen pflegen; jeder Tag der Historie rechnet mit der Kapazität, die
+  damals verbaut war. Ein Rückbau ist dieselbe Eingabe mit kleinerem Wert.
+
+  Die heute gültige Stufe ist zugleich der aktuelle Kapazitätswert — Optimierung
+  und EOS lesen ihn automatisch, es bleibt genau ein Feld statt zweier Wahrheiten,
+  die auseinanderlaufen können. Zeiträume vor der ältesten Stufe erben deren Wert;
+  wer das erste Inbetriebnahmedatum nicht mehr weiß, muss keines erfinden. Ohne
+  gepflegte Stufen ändert sich nichts.
+
+- **Steuerbare Last wird aus der gelernten Lastkurve herausgerechnet.** Die
+  Lastprognose lernte bisher aus dem Gesamthausverbrauch — inklusive Wallbox und
+  geschalteter Geräte. Plant EOS diese Lasten anschließend zusätzlich ein, zählt
+  dieselbe Kilowattstunde doppelt. Neben der unveränderten Rohserie steht jetzt
+  eine bereinigte Serie, aus der die Prognose künftig lernt. Abgezogen wird nur,
+  was positiv bestätigt ist: das Auto muss laden, zuhause sein, und die Messwerte
+  müssen frisch sein; Geräte müssen als gesteuert markiert und online sein. Bei
+  jedem Zweifel bleibt die bereinigte Serie gleich der rohen.
+
+  Zwei Randbedingungen sind an echten Anlagendaten gemessen, nicht angenommen:
+  Der Ortsfilter ist zwingend — ohne ihn würde Auswärtsladen am fremden Lader mit
+  rund 10,7 kW aus dem eigenen Hausverbrauch abgezogen, den es nie belastet hat.
+  Und das Ladesignal des Autos bleibt nach Ladeende stehen, im Extremfall über
+  22 Stunden; ohne Frischeprüfung würde ein solcher Wert stundenlang weiter
+  abgezogen. Ergibt die Rechnung einen negativen Wert, wird bewusst *nicht*
+  abgezogen und ein Ereignis protokolliert, statt den Fehler auf null zu kappen.
+
+  Die Prognose selbst wird noch nicht umgestellt — dafür muss die neue Serie
+  erst Historie aufbauen.
+
 - **Beta-Gate für Einstellungen.** Ein Feature, das noch im Feldtest ist, taucht
   in den Einstellungen nur im Bleeding-Edge-Kanal auf — und läuft auch nur dort.
   Der zweite Teil ist der wichtige: der Schalter eines Beta-Features wird nicht

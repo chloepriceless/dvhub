@@ -19,6 +19,8 @@ let pricingPeriodsValidation = [];
 let marketValueModeDraft = 'annual';
 let pvPlantsDraft = [];
 let pvPlantsValidation = [];
+let batteryStagesDraft = [];
+let batteryStagesValidation = [];
 let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
 let forecastStringsDraft = [];
@@ -650,6 +652,149 @@ if (typeof globalThis !== 'undefined') {
     serializeMarketValueMode,
     serializePvPlants,
     validatePvPlants
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Akku-Ausbaustufen (Christin 2026-08-07)
+//
+// Datierte Kapazitätsstufen. Gleiche Machart wie die PV-Anlagenliste darüber:
+// Draft-Array im Speicher, beim Speichern serialisiert, Validierung
+// nicht-blockierend als Banner. Die Zyklenberechnung nutzt für jeden Tag der
+// Historie die damals gültige Kapazität — ohne das verschiebt jeder Ausbau
+// rückwirkend sämtliche früheren Zyklenwerte.
+// ---------------------------------------------------------------------------
+function createEmptyBatteryStage(index = 0) {
+  return {
+    id: `battery-stage-${index + 1}`,
+    label: '',
+    startDate: '',
+    capacityKwh: ''
+  };
+}
+
+function addBatteryStage(stages = []) {
+  return [...stages, createEmptyBatteryStage(stages.length)];
+}
+
+function removeBatteryStage(stages = [], stageId) {
+  return stages.filter((stage) => stage.id !== stageId);
+}
+
+// Die UI arbeitet in kWh (so denkt der Betreiber über Akkublöcke), die Config
+// in Wh (so lesen es EOS und Optimizer). Umgerechnet wird genau hier.
+function serializeBatteryStages(stages = []) {
+  return stages.map((stage, index) => ({
+    id: stage.id || `battery-stage-${index + 1}`,
+    label: stage.label || '',
+    startDate: stage.startDate || '',
+    capacityWh: stage.capacityKwh === '' || stage.capacityKwh == null
+      ? null
+      : Math.round(Number(stage.capacityKwh) * 1000)
+  }));
+}
+
+function deserializeBatteryStages(stages = []) {
+  return (Array.isArray(stages) ? stages : []).map((stage, index) => ({
+    id: stage?.id || `battery-stage-${index + 1}`,
+    label: stage?.label || '',
+    startDate: stage?.startDate || '',
+    capacityKwh: Number.isFinite(Number(stage?.capacityWh)) && Number(stage.capacityWh) > 0
+      ? Math.round((Number(stage.capacityWh) / 1000) * 1000) / 1000
+      : ''
+  }));
+}
+
+function validateBatteryStages(stages = []) {
+  const messages = [];
+  const serialized = serializeBatteryStages(stages);
+  const seenDates = new Set();
+
+  serialized.forEach((stage, index) => {
+    const name = stage.label ? `„${stage.label}"` : `Stufe ${index + 1}`;
+    if (!stage.startDate) {
+      messages.push(`${name}: Datum fehlt.`);
+    } else if (seenDates.has(stage.startDate)) {
+      messages.push(`${name}: Für den ${stage.startDate} gibt es schon eine Stufe.`);
+    } else {
+      seenDates.add(stage.startDate);
+    }
+    if (!Number.isFinite(stage.capacityWh) || stage.capacityWh <= 0) {
+      messages.push(`${name}: Kapazität fehlt oder ist nicht größer als 0.`);
+    }
+  });
+
+  return { valid: messages.length === 0, messages, stages: serialized };
+}
+
+// Die heute gültige Stufe — dieselbe Regel wie im Server-Resolver
+// (battery-stages.js): jüngste Stufe, deren Datum nicht in der Zukunft liegt;
+// vor der ältesten Stufe gilt deren Wert rückwärts weiter.
+function currentBatteryStage(stages = [], today = new Date().toISOString().slice(0, 10)) {
+  const dated = (Array.isArray(stages) ? stages : [])
+    .filter((stage) => stage?.startDate && Number(stage?.capacityKwh) > 0)
+    .sort((left, right) => String(left.startDate).localeCompare(String(right.startDate)));
+  if (!dated.length) return null;
+  if (today < dated[0].startDate) return dated[0];
+  let match = dated[0];
+  for (const stage of dated) {
+    if (stage.startDate <= today) match = stage;
+    else break;
+  }
+  return match;
+}
+
+function buildBatteryStagesEditorMarkup({ stages = [], validationHtml = '', today = new Date().toISOString().slice(0, 10) }) {
+  const active = currentBatteryStage(stages, today);
+  const activeText = active
+    ? `${active.capacityKwh} kWh (seit ${active.startDate})`
+    : 'keine Stufen — der Einzelwert oben gilt';
+  return `
+    <div class="config-group-kicker" data-accent="teal">Akku-Ausbaustufen</div>
+    ${validationHtml}
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">Aktuell gültig</span>
+        <strong class="config-row-value">${escapeHtml(activeText)}</strong>
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">Stufen</span>
+        <strong class="config-row-value">${stages.length} definiert</strong>
+      </div>
+    </div>
+    <div class="sa-pad">
+      <button id="addBatteryStageBtn" class="btn btn-ghost btn-small" type="button">+ Ausbaustufe</button>
+    </div>
+    ${stages.map((stage) => `
+      <div class="config-row-grid sa-divider-top" data-battery-stage-id="${escapeHtml(stage.id)}">
+        <div class="config-row">
+          <span class="config-row-label">Gültig ab</span>
+          <input class="config-input sa-w-date" data-battery-stage-id="${escapeHtml(stage.id)}" data-battery-stage-path="startDate" type="date" value="${escapeHtml(stage.startDate || '')}" />
+        </div>
+        <div class="config-row">
+          <span class="config-row-label">Kapazität (kWh)</span>
+          <input class="config-input sa-w-num" data-battery-stage-id="${escapeHtml(stage.id)}" data-battery-stage-path="capacityKwh" type="number" step="0.1" min="0" value="${escapeHtml(stage.capacityKwh ?? '')}" />
+        </div>
+        <div class="config-row">
+          <span class="config-row-label">Bezeichnung</span>
+          <input class="config-input" data-battery-stage-id="${escapeHtml(stage.id)}" data-battery-stage-path="label" type="text" placeholder="z. B. Erweiterung 3. Turm" value="${escapeHtml(stage.label || '')}" />
+        </div>
+      </div>
+      <div class="sa-pad-tight"><button class="btn btn-danger btn-small" type="button" data-remove-battery-stage="${escapeHtml(stage.id)}">Entfernen</button></div>
+    `).join('')}
+  `;
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsBatteryStages = {
+    addBatteryStage,
+    buildBatteryStagesEditorMarkup,
+    createEmptyBatteryStage,
+    currentBatteryStage,
+    deserializeBatteryStages,
+    removeBatteryStage,
+    serializeBatteryStages,
+    validateBatteryStages
   };
 }
 
@@ -1663,6 +1808,11 @@ function renderGroupedCardsOb(mount, destination, destinationId) {
       mount.appendChild(renderPvPlantsEditor());
       mount.appendChild(renderPricingPeriodsEditor());
     }
+    // Direkt unter den Akku-Grenzen, weil die Stufen den Kapazitätswert dort
+    // ablösen, sobald mindestens eine gepflegt ist.
+    if (section.id === 'schedule') {
+      mount.appendChild(renderBatteryStagesEditor());
+    }
     if (section.id === 'forecast') {
       const configLevel = getVisibilityValue('forecast.pv.configLevel') || 'simple';
       if (configLevel === 'detailed') {
@@ -1791,6 +1941,52 @@ function updatePvPlantField(plantId, path, value) {
     setPath(next, path, value);
     return next;
   });
+}
+
+function updateBatteryStageField(stageId, path, value) {
+  batteryStagesDraft = batteryStagesDraft.map((stage) => {
+    if (stage.id !== stageId) return stage;
+    const next = clone(stage);
+    setPath(next, path, value);
+    return next;
+  });
+}
+
+function renderBatteryStagesEditor() {
+  const section = document.createElement('section');
+  section.className = 'config-group config-group--full';
+  section.dataset.accent = 'teal';
+  const validation = batteryStagesValidation.length
+    ? `<div class="config-banner error">${batteryStagesValidation.map((message) => `<div>${escapeHtml(message)}</div>`).join('')}</div>`
+    : '<div class="config-banner info">Ohne Ausbaustufen rechnet die Historie jeden vergangenen Tag mit der HEUTIGEN Akkugröße — nach einem Ausbau stimmen alle früheren Zyklenwerte nicht mehr. Mit Stufen bleibt jeder Tag bei der Kapazität, die damals verbaut war. Ein Rückbau ist dieselbe Eingabe mit kleinerem Wert.</div>';
+  section.innerHTML = buildBatteryStagesEditorMarkup({
+    stages: batteryStagesDraft,
+    validationHtml: validation
+  });
+
+  section.querySelector('#addBatteryStageBtn')?.addEventListener('click', () => {
+    batteryStagesDraft = addBatteryStage(batteryStagesDraft);
+    batteryStagesValidation = [];
+    renderSettingsShell();
+  });
+
+  section.querySelectorAll('[data-remove-battery-stage]').forEach((button) => {
+    button.addEventListener('click', () => {
+      batteryStagesDraft = removeBatteryStage(batteryStagesDraft, button.dataset.removeBatteryStage);
+      batteryStagesValidation = [];
+      renderSettingsShell();
+    });
+  });
+
+  section.querySelectorAll('[data-battery-stage-id][data-battery-stage-path]').forEach((input) => {
+    input.addEventListener('change', () => {
+      updateBatteryStageField(input.dataset.batteryStageId, input.dataset.batteryStagePath, input.value);
+      batteryStagesValidation = [];
+      renderSettingsShell();
+    });
+  });
+
+  return section;
 }
 
 function renderPvPlantsEditor() {
@@ -2240,6 +2436,8 @@ function collectConfigFromForm() {
   next.userEnergyPricing.marketValueMode = serializeMarketValueMode(marketValueModeDraft);
   next.userEnergyPricing.periods = serializePricingPeriods(pricingPeriodsDraft);
   next.userEnergyPricing.pvPlants = serializePvPlants(pvPlantsDraft);
+  next.optimizer = next.optimizer || {};
+  next.optimizer.batteryStages = serializeBatteryStages(batteryStagesDraft);
   return next;
 }
 
@@ -2257,8 +2455,10 @@ function applyConfigPayload(payload) {
     kwp: plant?.kwp ?? '',
     commissionedAt: plant?.commissionedAt || ''
   }));
+  batteryStagesDraft = deserializeBatteryStages(currentRawConfig?.optimizer?.batteryStages);
   pricingPeriodsValidation = [];
   pvPlantsValidation = [];
+  batteryStagesValidation = [];
   forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
   forecastTierCache = null;
   settingsShellState = createSettingsShellState(definition);
@@ -2548,11 +2748,19 @@ async function saveCurrentForm() {
   const config = collectConfigFromForm();
   const pricingValidation = validatePricingPeriods(pricingPeriodsDraft);
   const pvValidation = validatePvPlants(pvPlantsDraft);
+  // Blockierend, nicht verwerfend: der Server-Sanitizer würde eine Stufe ohne
+  // Datum oder Kapazität kommentarlos aus der Liste kippen. Dann fehlte
+  // rückwirkend eine Kapazitätsperiode, ohne dass es jemand merkt.
+  const batteryValidation = validateBatteryStages(batteryStagesDraft);
   pricingPeriodsValidation = pricingValidation.messages;
   pvPlantsValidation = pvValidation.messages;
-  if (!pricingValidation.valid || !pvValidation.valid) {
+  batteryStagesValidation = batteryValidation.messages;
+  if (!pricingValidation.valid || !pvValidation.valid || !batteryValidation.valid) {
     renderSettingsShell();
-    setBanner(`Speichern blockiert: ${pricingValidation.messages[0] || pvValidation.messages[0]}`, 'error');
+    const firstMessage = pricingValidation.messages[0]
+      || pvValidation.messages[0]
+      || batteryValidation.messages[0];
+    setBanner(`Speichern blockiert: ${firstMessage}`, 'error');
     return;
   }
   const legal = await confirmLegalGatesBeforeSave(config);
@@ -3127,8 +3335,10 @@ function initSettingsPage() {
       kwp: plant?.kwp ?? '',
       commissionedAt: plant?.commissionedAt || ''
     }));
+    batteryStagesDraft = deserializeBatteryStages(currentRawConfig?.optimizer?.batteryStages);
     pricingPeriodsValidation = [];
     pvPlantsValidation = [];
+    batteryStagesValidation = [];
     forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
     renderSettingsShell();
     updateSaveBar();

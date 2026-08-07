@@ -51,7 +51,7 @@ export function resolveTelemetryDbPath({ configPath, telemetryConfig = {}, dataD
   return path.join(baseDir, 'telemetry.sqlite');
 }
 
-export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, victron = {} }) {
+export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, victron = {}, managed = null }) {
   const rows = [];
   const base = {
     ts,
@@ -77,6 +77,13 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
   pushSample(rows, 'pv_ac_l3_w', victron.acPvL3W, 'W', base);
   pushSample(rows, 'pv_total_w', victron.pvTotalW, 'W', base);
   pushSample(rows, 'load_power_w', victron.selfConsumptionW, 'W', base);
+  // Inc 2 (Last-Separation): house load minus positively confirmed controllable
+  // load, so the forecast stops learning EV/device draw that EOS then adds again.
+  // The decision AND its log event live in server.js `onPollComplete` (this builder
+  // is a pure mapper with no logger); `managed.exManagedW` is the finished result and
+  // already equals the raw value whenever nothing qualified. null -> pushSample skips,
+  // which is the correct behaviour when the raw load itself was unusable.
+  pushSample(rows, 'load_power_w_ex_managed', managed?.exManagedW, 'W', base);
   pushSample(rows, 'self_consumption_w', victron.selfConsumptionW, 'W', base);
   pushSample(rows, 'solar_direct_use_w', victron.solarDirectUseW, 'W', base);
   pushSample(rows, 'solar_to_battery_w', victron.solarToBatteryW, 'W', base);

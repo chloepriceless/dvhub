@@ -191,6 +191,16 @@ export function createTeslamateSubscriber(hub, ctx) {
   let lastUpdateAt = null;
   let snapshotTimer = null;
 
+  // Inc 2 (Last-Separation): per-field receive timestamps. `lastUpdateAt` above is
+  // GLOBAL -- any topic bumps it -- so it cannot answer "is chargerPower still
+  // valid?". TeslaMate only republishes on change, and charger_power was measured
+  // latching for up to 22.3 h while battery_level kept ticking; a freshness gate
+  // built on lastUpdateAt would look fresh throughout and subtract a stale 10.7 kW
+  // from the load series for hours. Keyed by cache key, value = Date of the sample
+  // that produced the current value (NOT the time we learned about it -- see seed).
+  /** @type {Record<string, Date|null>} */
+  const fieldUpdatedAt = Object.create(null);
+
   // ── Historisation ──
 
   /**
@@ -302,8 +312,13 @@ export function createTeslamateSubscriber(hub, ctx) {
         cache[cacheKey] = restored;
         seeded++;
         const ts = row.ts ? new Date(row.ts) : null;
-        if (ts && !Number.isNaN(ts.getTime()) && (!newestTs || ts > newestTs)) {
-          newestTs = ts;
+        if (ts && !Number.isNaN(ts.getTime())) {
+          // Inc 2: seed the per-field stamp with the SAMPLE's ts, never now().
+          // A restart must not launder a stale value fresh: if charger_power was
+          // last published 22 h ago, the restored value has to stay 22 h old so
+          // the freshness gate rejects it instead of subtracting phantom load.
+          fieldUpdatedAt[cacheKey] = ts;
+          if (!newestTs || ts > newestTs) newestTs = ts;
         }
       }
     }
@@ -348,6 +363,7 @@ export function createTeslamateSubscriber(hub, ctx) {
       if (!Number.isFinite(parsed)) return; // Rejects NaN, Infinity, non-numeric
       cache[mapping.key] = parsed;
       lastUpdateAt = new Date();
+      fieldUpdatedAt[mapping.key] = lastUpdateAt;
       historiseField(mapping.key, parsed);
       return;
     }
@@ -356,6 +372,7 @@ export function createTeslamateSubscriber(hub, ctx) {
 
     cache[mapping.key] = parsed;
     lastUpdateAt = new Date();
+    fieldUpdatedAt[mapping.key] = lastUpdateAt;
     historiseField(mapping.key, parsed);
   }
 
@@ -447,6 +464,16 @@ export function createTeslamateSubscriber(hub, ctx) {
     return Object.freeze({ ...cache });
   }
 
+  /**
+   * Inc 2: per-field receive timestamps for the load-separation freshness gate.
+   * Returns a frozen plain object { <cacheKey>: Date|null }. A field absent from
+   * the map has never been received (or was not seeded) -- callers must treat
+   * that as "not fresh", never as "fresh by default".
+   */
+  function getFieldUpdatedAt() {
+    return Object.freeze({ ...fieldUpdatedAt });
+  }
+
   // Phase 21 (2026-05-23): expose the effective subscription topic so the
   // /api/integrations/status payload can show the operator exactly where
   // DVhub is listening (broker URL comes from the MQTT hub, prefix+carId
@@ -462,6 +489,7 @@ export function createTeslamateSubscriber(hub, ctx) {
     start,
     close,
     getState,
+    getFieldUpdatedAt,
     getSubscriptionTopic,
     get lastUpdateAt() { return lastUpdateAt; }
   };

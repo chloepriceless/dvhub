@@ -95,12 +95,25 @@ export function createDeviceService(ctx, hub) {
 
   /**
    * Aggregate readings from all adapters into a single DeviceReading[].
-   * @returns {Array<{id: string, name: string, powerW: number|null, energyTodayWh: number|null, online: boolean, lastSeen: number}>}
+   *
+   * Inc 2 (Last-Separation): the `managed` flag is resolved HERE from config
+   * rather than threaded through every adapter. It says "dvhub itself switches
+   * this device", which is what makes its power eligible to be subtracted from
+   * the learned load curve. Adapters describe what a device *measures*; whether
+   * we *control* it is registry knowledge, so it belongs in one place. Default
+   * is false -- an unmarked device is never subtracted.
+   *
+   * @returns {Array<{id: string, name: string, powerW: number|null, energyTodayWh: number|null, online: boolean, lastSeen: number, managed: boolean}>}
    */
   function getDevices() {
+    const managedById = new Map(
+      (getCfg().devices || []).map(d => [d.id, d.managed === true])
+    );
     const all = [];
     for (const adapter of adapters) {
-      all.push(...adapter.getDevices());
+      for (const dev of adapter.getDevices()) {
+        all.push({ ...dev, managed: managedById.get(dev.id) === true });
+      }
     }
     return all;
   }
