@@ -398,10 +398,43 @@ export function createEosConfigSync(ctx) {
           { section: 'devices/electric_vehicles', body: [] },
         ];
 
+    // Home appliances: DVhub does not model schedulable white goods, so EOS
+    // must be told there are NONE. This is not cosmetic — EOS *fabricates* a
+    // demo appliance when the setting is absent and then persists it:
+    //   devices.py:331          max_home_appliances defaults to None
+    //   geneticparams.py:576-578  None  -> logs "defaulting to 1"
+    //   geneticparams.py:583-605  then invents "dishwasher1" (2000 Wh / 3 h,
+    //                             windows 08:00 + 15:00) and writes it back
+    // The result is a phantom ~2 kWh/day load that EOS strictly ADDS on top of
+    // the LoadImport forecast (genetic.py:378-383) — it distorts the battery
+    // and grid plan on every box where the key was never set.
+    //
+    // NUR max_home_appliances=0 — bewusst OHNE `home_appliances: []` daneben.
+    // Die 0 ist der tragende Wert: geneticparams.py:579 schließt kurz auf
+    // home_appliance_params=None, die Liste wird dann nie gelesen. Die leere
+    // Liste bringt im Erfolgsfall also nichts — und im Fehlerfall ist sie eine
+    // Falle: die Sende-Schleife unten bricht bei einem Fehler NICHT ab
+    // (`else errors[t.section] = ...`, kein break). Scheitert der 0-PUT und
+    // gelingt der Listen-PUT, steht EOS auf max=None→1 mit leerer Liste →
+    // `home_appliances[0]` wirft IndexError → der nackte `except:` in
+    // geneticparams.py:614 erzeugt die Demo-Spülmaschine NEU. Der Halbausfall
+    // wäre damit schlimmer als gar kein Fix.
+    //
+    // Gegen ein echtes EOS verifiziert (07.08.2026, isolierte Instanz):
+    //   PUT devices/max_home_appliances = 0  → HTTP 200
+    //   Vergleich der GESAMTEN Konfiguration vorher/nachher: genau 1 geänderter
+    //   Schlüssel, sonst nichts.
+    //   prepare() ohne den Wert: max None→1, Liste None→['dishwasher1'].
+    //   prepare() mit dem Wert 0: bleibt 0 / None.
+    const homeApplianceTasks = [
+      { section: 'devices/max_home_appliances', body: 0 },
+    ];
+
     const tasks = [
       { section: 'devices/batteries', body: batteries },
       { section: 'devices/inverters', body: inverters },
       ...evTasks,
+      ...homeApplianceTasks,
       { section: 'optimization/interval', body: optimization.interval },
       { section: 'optimization/genetic/generations', body: geneticSizing.generations },
       { section: 'optimization/genetic/individuals', body: geneticSizing.individuals },

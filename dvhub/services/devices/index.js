@@ -35,7 +35,13 @@ const PERSIST_INTERVAL_MS = 60_000; // 60 seconds
  * @returns {{ start: Function, close: Function, getDevices: Function, _persistReadings: Function }}
  */
 export function createDeviceService(ctx, hub) {
-  const { getCfg, pushLog, db } = ctx;
+  const { getCfg, pushLog } = ctx;
+  // ctx.db is a LAZY GETTER in server.js — dbPool is only assigned later, inside
+  // createTelemetryStoreIfEnabled(). Destructuring `db` here would evaluate that
+  // getter at factory time (server.js:1067), long before the pool exists
+  // (server.js:1425), and freeze it to null forever: the schema was never created
+  // and no reading was ever persisted. Read it through the getter on every use.
+  const getDb = () => ctx.db || null;
   const adapters = [];
   let persistTimer = null;
 
@@ -43,6 +49,7 @@ export function createDeviceService(ctx, hub) {
    * Create DB schema if database available.
    */
   async function ensureSchema() {
+    const db = getDb();
     if (!db) return;
     try {
       await db.query(SCHEMA_SQL);
@@ -79,7 +86,7 @@ export function createDeviceService(ctx, hub) {
     }
 
     // Step 4: Start persistence timer
-    if (db) {
+    if (getDb()) {
       persistTimer = setInterval(() => persistReadings(), PERSIST_INTERVAL_MS);
     }
 
@@ -102,6 +109,7 @@ export function createDeviceService(ctx, hub) {
    * Persist current readings to PostgreSQL device_readings table.
    */
   async function persistReadings() {
+    const db = getDb();
     if (!db) return;
     const readings = getDevices();
     for (const r of readings) {
