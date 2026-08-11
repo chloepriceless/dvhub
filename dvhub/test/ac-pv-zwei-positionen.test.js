@@ -91,3 +91,42 @@ test('PV-Summe addiert beide Positionen (Rechenweg aus polling.js)', () => {
   assert.equal(pvAc, 4500);
   assert.equal(v.pvPowerW + pvAc, 8500);
 });
+
+// Regression zu genau dem Befund, der diesen Fix ausgeloest hat: das
+// Herstellerprofil besitzt victron.* komplett und ersetzte den Block. acPvSource
+// stand nicht in der Durchreich-Liste und fiel deshalb still weg — auf JEDER Box
+// mit aktivem Profil, also praktisch immer. Das Feld aus Issue #5 war seit
+// v1.0.3 wirkungslos. Auf einem Raspberry Pi mit aktivem Profil nachgewiesen.
+test('Profil darf acPvSource/acPvSource2 nicht verschlucken (Issue #5 war wirkungslos)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-acpv2-prof-'));
+  const cfgPath = path.join(dir, 'config.json');
+  fs.mkdirSync(path.join(dir, 'hersteller'), { recursive: true });
+  const profPath = path.join(dir, 'hersteller', 'victron.json');
+  try {
+    // Profil mit eigenem victron-Block — so sieht es auf jeder echten Box aus.
+    fs.writeFileSync(profPath, JSON.stringify({
+      victron: { host: '', port: 502, unitId: 100, timeoutMs: 1000 },
+      points: {
+        acPvL1W: { enabled: true, fc: 4, address: 808, quantity: 1, signed: false, scale: 1, offset: 0 },
+        acPvL2W: { enabled: true, fc: 4, address: 809, quantity: 1, signed: false, scale: 1, offset: 0 },
+        acPvL3W: { enabled: true, fc: 4, address: 810, quantity: 1, signed: false, scale: 1, offset: 0 },
+        acPv2L1W: { enabled: false, fc: 4, address: 811, quantity: 1, signed: false, scale: 1, offset: 0 },
+        acPv2L2W: { enabled: false, fc: 4, address: 812, quantity: 1, signed: false, scale: 1, offset: 0 },
+        acPv2L3W: { enabled: false, fc: 4, address: 813, quantity: 1, signed: false, scale: 1, offset: 0 },
+      },
+    }));
+    fs.writeFileSync(cfgPath, JSON.stringify({
+      pvCoupling: 'ac_dc',
+      manufacturer: 'victron',
+      victron: { acPvSource: 'grid', acPvSource2: 'output' },
+    }));
+    const { effectiveConfig } = loadConfigFile(cfgPath);
+    assert.equal(effectiveConfig.victron.acPvSource, 'grid', 'acPvSource ueberlebt den Profil-Merge');
+    assert.equal(effectiveConfig.victron.acPvSource2, 'output', 'acPvSource2 ueberlebt den Profil-Merge');
+    assert.equal(effectiveConfig.points.acPvL1W.address, 811, 'erste Position folgt der Auswahl');
+    assert.equal(effectiveConfig.points.acPv2L1W.address, 808, 'zweite Position folgt der Auswahl');
+    assert.equal(effectiveConfig.points.acPv2L1W.enabled, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

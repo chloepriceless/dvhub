@@ -372,6 +372,15 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   if (isPlainObject(persistedVictron.mqttCrossCheck)) victronOverride.mqttCrossCheck = persistedVictron.mqttCrossCheck;
   if (persistedVictron.telemetryMaxAgeMs != null) victronOverride.telemetryMaxAgeMs = persistedVictron.telemetryMaxAgeMs;
   if (persistedVictron.modbusConnectTimeoutMs != null) victronOverride.modbusConnectTimeoutMs = persistedVictron.modbusConnectTimeoutMs;
+  // Issue #5 + #13: dieselbe Klasse wie freezeWatchdog oben. acPvSource beschreibt
+  // die VERDRAHTUNG der Anlage, nicht die Register-Map — kein Profil deklariert es,
+  // und weil das Profil victron.* komplett besitzt, fiel die Auswahl bisher still
+  // weg, SOBALD ein Herstellerprofil aktiv ist (also auf jeder echten Box). Damit
+  // war das Feld aus Issue #5 seit v1.0.3 wirkungslos: der Nutzer stellt um, die
+  // effektive Config sieht den Wert nie und bleibt auf 808. Auf einem Pi mit
+  // aktivem Profil nachgewiesen (2026-08-11).
+  if (persistedVictron.acPvSource != null) victronOverride.acPvSource = persistedVictron.acPvSource;
+  if (persistedVictron.acPvSource2 != null) victronOverride.acPvSource2 = persistedVictron.acPvSource2;
   // D-27: victron.mqtt (Broker-URL, Portal-ID, …) ist installationsspezifisch und
   // operator-editierbar. Nur NICHT-LEERE persistierte Werte überschreiben den
   // Profil-Default — ein leeres GUI-Feld ('' aus createDefaultConfig bzw. einem
