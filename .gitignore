@@ -82,6 +82,28 @@ live-screenshots/
 /assets/dvhub-fullpage-192.168.1.66-8080.png
 tests/node_modules
 
-# Peer-Post: Eingangs- und Archivbriefe bleiben lokal
-.planning/inbox/
-.planning/archive/
+# ── Interne Unterlagen ────────────────────────────────────────────────────────
+# Dieses Repo ist das Arbeits- UND Veroeffentlichungs-Repo. Interne Planungs-,
+# Design- und Recherche-Unterlagen leben deshalb NICHT hier, sondern in einem
+# eigenen privaten Repo, das im Arbeitsverzeichnis unter .planning/ liegt:
+#
+#   github.com/chloepriceless/dvhub-planning  (privat)
+#   -> geklont nach ./.planning/ — ein eigenstaendiges Git-Repo
+#
+# Weil .planning/ hier ignoriert ist, kann `git add -A` interne Unterlagen
+# GAR NICHT erfassen. Das ersetzt den frueheren scripts/publish-public.sh, bei
+# dem ein Filter bei jedem Publish korrekt sein musste. Die Grenze ist jetzt
+# eine Verzeichnisgrenze, keine Regel, die man einhalten muss.
+#
+# Faustregel: intern = .planning/ — alles andere in diesem Repo ist oeffentlich.
+.planning/
+
+# Diese Pfade lagen frueher hier und sind ins Planungs-Repo umgezogen
+# (dort unter ihren urspruenglichen Pfaden wiederzufinden). Eintraege bleiben,
+# damit sie nicht versehentlich zurueckwandern.
+/docs/plans/
+/docs/research/
+/docs/superpowers/
+/docs/design-mockups/
+/dvhub/docs/superpowers/
+/dvhub/docs/SESSION-NOTES-*.md

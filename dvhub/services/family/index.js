@@ -798,7 +798,7 @@ export function createFamilyService(ctx) {
     // Haupt-Status (Increment 2). status.victron ist ein FRISCHER per-Call-
     // Snapshot (buildCurrentStatusPayload → buildVictronSnapshot), Mutation ist
     // hier sicher und leckt NICHT in die Steuerung (die liest state.victron
-    // direkt). null (Community/Pro L/Legacy) → No-op.
+    // direkt). null (Community/Legacy) → No-op.
     const victron = status.victron || {};
     const familyCapKwp = ctx.licenseService?.getCapKwp?.();
     const familyCapW = Number.isFinite(familyCapKwp) && familyCapKwp > 0 ? familyCapKwp * 1000 : null;

@@ -1,0 +1,455 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { createDefaultConfig, getConfigDefinition, normalizeConfigInput } from '../config-model.js';
+
+test('default config enables internal telemetry persistence with rollups', () => {
+  const defaults = createDefaultConfig();
+
+  assert.equal(defaults.telemetry.enabled, true);
+  assert.equal(defaults.telemetry.database.host, '/var/run/postgresql');
+  assert.equal(defaults.telemetry.database.port, 5432);
+  assert.equal(defaults.telemetry.database.name, 'dvhub');
+  assert.equal(defaults.telemetry.rawRetentionDays, 45);
+  assert.equal(defaults.telemetry.historyImport.enabled, false);
+  assert.equal(defaults.telemetry.historyImport.provider, 'vrm');
+  assert.equal(defaults.telemetry.historyImport.vrmPortalId, '');
+  assert.equal(defaults.telemetry.historyImport.vrmToken, '');
+  assert.equal(defaults.userEnergyPricing.mode, 'fixed');
+  assert.equal(defaults.userEnergyPricing.fixedGrossImportCtKwh, 30);
+  assert.equal(defaults.userEnergyPricing.marketValueMode, 'annual');
+  assert.deepEqual(defaults.userEnergyPricing.periods, []);
+  assert.deepEqual(defaults.userEnergyPricing.pvPlants, []);
+  assert.equal(defaults.userEnergyPricing.dynamicComponents.vatPct, 19);
+  assert.equal(defaults.userEnergyPricing.usesParagraph14aModule3, false);
+  assert.equal(defaults.userEnergyPricing.module3Windows.window1.enabled, false);
+  assert.equal(defaults.userEnergyPricing.module3Windows.window1.priceCtKwh, null);
+  assert.equal(defaults.userEnergyPricing.costs.pvCtKwh, 5);
+  assert.equal(defaults.userEnergyPricing.costs.batteryBaseCtKwh, 4);
+  assert.equal(defaults.userEnergyPricing.costs.batteryLossMarkupPct, 20);
+  assert.equal(defaults.dvControl.enabled, true);
+  assert.equal(defaults.dvControl.negativePriceProtection.enabled, true);
+  assert.equal(defaults.dvControl.feedExcessDcPv.address, 2707);
+  assert.equal(defaults.dvControl.dontFeedExcessAcPv.address, 2708);
+});
+
+test('normalizeConfigInput restores legacy placeholder write registers while ignoring manufacturer-managed raw overrides', () => {
+  const normalized = normalizeConfigInput({
+    manufacturer: 'victron',
+    victron: {
+      host: 'venus-gx.local',
+      port: 1502,
+      unitId: 1,
+      timeoutMs: 2500
+    },
+    controlWrite: {
+      gridSetpointW: {
+        enabled: false,
+        address: 0,
+        quantity: 0,
+        scale: 0,
+        offset: 0,
+        signed: false
+      }
+    },
+    dvControl: {
+      enabled: true,
+      feedExcessDcPv: {
+        enabled: true,
+        address: 0,
+        quantity: 0,
+        scale: 0,
+        offset: 0,
+        signed: false
+      },
+      dontFeedExcessAcPv: {
+        enabled: true,
+        address: 0,
+        quantity: 0,
+        scale: 0,
+        offset: 0,
+        signed: false
+      },
+      negativePriceProtection: {
+        enabled: true,
+        gridSetpointW: 0
+      }
+    }
+  });
+
+  assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.enabled, true);
+  // T-0107: the restored default is now the volatile 32-bit setpoint (reg 2716/2717),
+  // flash-safe vs the legacy persistent reg 2700.
+  assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.address, 2716);
+  assert.equal(normalized.persistedConfig.controlWrite.gridSetpointW.scale, 1);
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.host, 'venus-gx.local');
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.port, 502);
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.unitId, 100);
+  assert.equal(normalized.effectiveConfig.controlWrite.gridSetpointW.timeoutMs, 1000);
+
+  assert.equal(normalized.persistedConfig.dvControl.enabled, true);
+  assert.equal(normalized.persistedConfig.dvControl.feedExcessDcPv.address, 2707);
+  assert.equal(normalized.persistedConfig.dvControl.dontFeedExcessAcPv.address, 2708);
+  // 2026-07-29: der Legacy-Platzhalter (0) wird weiterhin entfernt — aber es
+  // rückt KEIN fester Vorgabewert mehr nach. Ohne Eintrag folgt die Abregelung
+  // dem schedule.defaultGridSetpointW, statt einen eingestellten Wert mit -40 zu
+  // überschreiben. Der Schlüssel muss danach also schlicht weg sein.
+  assert.equal(normalized.persistedConfig.dvControl.negativePriceProtection.gridSetpointW, undefined);
+  assert.equal(normalized.persistedConfig.dvControl.negativePriceProtection.enabled, true,
+    'die Abregelung selbst bleibt aktiv');
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.host, 'venus-gx.local');
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.port, 502);
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.unitId, 100);
+  assert.equal(normalized.effectiveConfig.dvControl.feedExcessDcPv.timeoutMs, 1000);
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.host, 'venus-gx.local');
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.port, 502);
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.unitId, 100);
+  assert.equal(normalized.effectiveConfig.dvControl.dontFeedExcessAcPv.timeoutMs, 1000);
+  assert.ok(!('controlWrite' in normalized.rawConfig));
+  // 2026-07-29: NICHT mehr der ganze dvControl-Baum — nur die Register-
+  // Verdrahtung. `enabled` und der Negativpreis-Schutz gehören dem Betreiber
+  // und müssen den Speicher-Roundtrip überleben (sonst ist der GUI-Schalter
+  // „Aktive Anlagensteuerung" wirkungslos).
+  assert.ok(!('feedExcessDcPv' in (normalized.rawConfig.dvControl || {})));
+  assert.ok(!('dontFeedExcessAcPv' in (normalized.rawConfig.dvControl || {})));
+  assert.ok(!('port' in normalized.rawConfig.victron));
+  assert.match(normalized.warnings.join('\n'), /legacy placeholder|manufacturer profile/i);
+});
+
+test('normalizeConfigInput resets out-of-range runtime intervals to defaults', () => {
+  const normalized = normalizeConfigInput({
+    meterPollMs: 0,
+    keepalivePulseSec: 0,
+    schedule: {
+      evaluateMs: 0
+    }
+  });
+
+  assert.equal(normalized.persistedConfig.meterPollMs, 2000);
+  assert.equal(normalized.persistedConfig.keepalivePulseSec, 60);
+  assert.equal(normalized.persistedConfig.schedule.evaluateMs, 5000); // T-0107: 5s = volatile reg-2716 re-assert cadence
+  assert.match(normalized.warnings.join('\n'), /out of range/i);
+});
+
+test('config definition exposes telemetry section and fields', () => {
+  const definition = getConfigDefinition();
+  const sectionIds = definition.sections.map((section) => section.id);
+  const fieldPaths = definition.fields.map((field) => field.path).filter(Boolean);
+
+  assert.ok(sectionIds.includes('telemetry'));
+  assert.ok(fieldPaths.includes('telemetry.enabled'));
+  assert.ok(fieldPaths.includes('telemetry.database.host'));
+  // c4736d0f: rawRetentionDays field removed from the definition — Migration 018
+  // dropped the retention policy, so the setting had no effect and only confused
+  // operators. The default (createDefaultConfig) still carries the value below.
+  assert.ok(!fieldPaths.includes('telemetry.rawRetentionDays'));
+  assert.ok(fieldPaths.includes('telemetry.historyImport.enabled'));
+  assert.ok(fieldPaths.includes('telemetry.historyImport.provider'));
+  assert.ok(!fieldPaths.includes('telemetry.historyImport.gxPath'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.mode'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.periods'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.marketValueMode'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.pvPlants'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.fixedGrossImportCtKwh'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.dynamicComponents.gridChargesCtKwh'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.module3Windows.window1.priceCtKwh'));
+  assert.ok(fieldPaths.includes('userEnergyPricing.costs.pvCtKwh'));
+});
+
+test('normalizeConfigInput coerces telemetry booleans and numbers', () => {
+  const normalized = normalizeConfigInput({
+    telemetry: {
+      enabled: 'false',
+      historyImport: {
+      enabled: 'true',
+      provider: 'gx'
+      }
+    }
+  });
+
+  assert.equal(normalized.rawConfig.telemetry.enabled, false);
+  assert.equal(normalized.rawConfig.telemetry.historyImport.enabled, true);
+  assert.equal(normalized.persistedConfig.telemetry.historyImport.provider, 'vrm');
+});
+
+test('normalizeConfigInput coerces user energy pricing booleans and numbers', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      mode: 'dynamic',
+      fixedGrossImportCtKwh: '31.2',
+      usesParagraph14aModule3: 'true',
+      dynamicComponents: {
+        energyMarkupCtKwh: '2.5',
+        gridChargesCtKwh: '8.75',
+        leviesAndFeesCtKwh: '3.3',
+        vatPct: '19'
+      },
+      module3Windows: {
+        window1: {
+          enabled: 'true',
+          start: '14:00',
+          end: '16:00',
+          priceCtKwh: '21.9'
+        }
+      },
+      costs: {
+        pvCtKwh: '7.1',
+        batteryBaseCtKwh: '2.2',
+        batteryLossMarkupPct: '20'
+      }
+    }
+  });
+
+  assert.equal(normalized.rawConfig.userEnergyPricing.mode, 'dynamic');
+  assert.equal(normalized.rawConfig.userEnergyPricing.fixedGrossImportCtKwh, 31.2);
+  assert.equal(normalized.rawConfig.userEnergyPricing.usesParagraph14aModule3, true);
+  assert.equal(normalized.rawConfig.userEnergyPricing.dynamicComponents.energyMarkupCtKwh, 2.5);
+  assert.equal(normalized.rawConfig.userEnergyPricing.dynamicComponents.gridChargesCtKwh, 8.75);
+  assert.equal(normalized.rawConfig.userEnergyPricing.dynamicComponents.leviesAndFeesCtKwh, 3.3);
+  assert.equal(normalized.rawConfig.userEnergyPricing.dynamicComponents.vatPct, 19);
+  assert.equal(normalized.rawConfig.userEnergyPricing.module3Windows.window1.enabled, true);
+  assert.equal(normalized.rawConfig.userEnergyPricing.module3Windows.window1.priceCtKwh, 21.9);
+  assert.equal(normalized.rawConfig.userEnergyPricing.costs.pvCtKwh, 7.1);
+  assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryBaseCtKwh, 2.2);
+  assert.equal(normalized.rawConfig.userEnergyPricing.costs.batteryLossMarkupPct, 20);
+});
+
+test('normalizeConfigInput preserves monthly market value mode', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      marketValueMode: 'monthly'
+    }
+  });
+
+  assert.equal(normalized.rawConfig.userEnergyPricing.marketValueMode, 'monthly');
+  assert.equal(normalized.persistedConfig.userEnergyPricing.marketValueMode, 'monthly');
+});
+
+test('normalizeConfigInput falls back to annual market value mode for invalid values', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      marketValueMode: 'invalid'
+    }
+  });
+
+  assert.equal(normalized.rawConfig.userEnergyPricing.marketValueMode, undefined);
+  assert.equal(normalized.persistedConfig.userEnergyPricing.marketValueMode, 'annual');
+});
+
+test('normalizeConfigInput preserves multiple pv plants for premium lookup metadata', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      pvPlants: [
+        {
+          kwp: '9.8',
+          commissionedAt: '2021-04-15'
+        },
+        {
+          kwp: '4.2',
+          commissionedAt: '2023-09-01'
+        }
+      ]
+    }
+  });
+
+  assert.deepEqual(normalized.rawConfig.userEnergyPricing.pvPlants, [
+    {
+      kwp: 9.8,
+      commissionedAt: '2021-04-15'
+    },
+    {
+      kwp: 4.2,
+      commissionedAt: '2023-09-01'
+    }
+  ]);
+  assert.deepEqual(normalized.persistedConfig.userEnergyPricing.pvPlants, [
+    {
+      kwp: 9.8,
+      commissionedAt: '2021-04-15'
+    },
+    {
+      kwp: 4.2,
+      commissionedAt: '2023-09-01'
+    }
+  ]);
+});
+
+test('normalizeConfigInput preserves small market automation settings and advanced stages', () => {
+  const normalized = normalizeConfigInput({
+    schedule: {
+      smallMarketAutomation: {
+        enabled: true,
+        searchWindowStart: '14:00',
+        searchWindowEnd: '09:00',
+        targetSlotCount: '5',
+        maxDischargeW: '-18000',
+        minSocPct: '30',
+        aggressivePremiumPct: '20',
+        location: {
+          label: 'Berlin',
+          latitude: '52.52',
+          longitude: '13.405'
+        },
+        stages: [
+          {
+            dischargeW: '-18000',
+            dischargeSlots: '1',
+            cooldownW: '-8000',
+            cooldownSlots: '1'
+          }
+        ]
+      }
+    }
+  });
+
+  assert.deepEqual(normalized.rawConfig.schedule.smallMarketAutomation, {
+    enabled: true,
+    searchWindowStart: '14:00',
+    searchWindowEnd: '09:00',
+    targetSlotCount: 5,
+    maxDischargeW: -18000,
+    minSocPct: 30,
+    aggressivePremiumPct: 20,
+    location: {
+      label: 'Berlin',
+      latitude: 52.52,
+      longitude: 13.405
+    },
+    stages: [
+      {
+        dischargeW: -18000,
+        dischargeSlots: 1,
+        cooldownW: -8000,
+        cooldownSlots: 1
+      }
+    ]
+  });
+});
+
+test('dated pricing periods accept non-overlapping date ranges', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      periods: [
+        {
+          id: 'winter-fixed',
+          label: 'Winter',
+          startDate: '2026-01-01',
+          endDate: '2026-03-31',
+          mode: 'fixed',
+          fixedGrossImportCtKwh: '31.5'
+        },
+        {
+          id: 'summer-dynamic',
+          label: 'Sommer',
+          startDate: '2026-04-01',
+          endDate: '2026-12-31',
+          mode: 'dynamic',
+          dynamicComponents: {
+            energyMarkupCtKwh: '0',
+            gridChargesCtKwh: '8.5',
+            leviesAndFeesCtKwh: '3',
+            vatPct: '19'
+          }
+        }
+      ]
+    }
+  });
+
+  assert.equal(normalized.warnings.length, 0);
+  assert.equal(normalized.persistedConfig.userEnergyPricing.periods.length, 2);
+  assert.deepEqual(normalized.persistedConfig.userEnergyPricing.periods.map((period) => period.id), [
+    'winter-fixed',
+    'summer-dynamic'
+  ]);
+  assert.equal(normalized.persistedConfig.userEnergyPricing.periods[0].fixedGrossImportCtKwh, 31.5);
+  assert.equal(normalized.persistedConfig.userEnergyPricing.periods[1].dynamicComponents.gridChargesCtKwh, 8.5);
+});
+
+test('dated pricing periods reject overlapping date ranges', () => {
+  const normalized = normalizeConfigInput({
+    userEnergyPricing: {
+      periods: [
+        {
+          id: 'winter-fixed',
+          startDate: '2026-01-01',
+          endDate: '2026-03-31',
+          mode: 'fixed',
+          fixedGrossImportCtKwh: 31.5
+        },
+        {
+          id: 'overlap-fixed',
+          startDate: '2026-03-15',
+          endDate: '2026-04-15',
+          mode: 'fixed',
+          fixedGrossImportCtKwh: 32.1
+        }
+      ]
+    }
+  });
+
+  assert.match(normalized.warnings.join('\n'), /overlap/i);
+  assert.deepEqual(
+    normalized.persistedConfig.userEnergyPricing.periods.map((period) => period.id),
+    ['winter-fixed']
+  );
+});
+
+test('normalizeConfigInput strips legacy schedule rule fields', () => {
+  const normalized = normalizeConfigInput({
+    schedule: {
+      rules: [
+        {
+          id: 'legacy',
+          enabled: true,
+          target: 'gridSetpointW',
+          start: '08:00',
+          end: '09:00',
+          value: '-40',
+          days: [1, 2, 3],
+          oneTime: true
+        }
+      ]
+    }
+  });
+
+  assert.deepEqual(normalized.rawConfig.schedule.rules, [
+    {
+      id: 'legacy',
+      enabled: true,
+      target: 'gridSetpointW',
+      start: '08:00',
+      end: '09:00',
+      value: -40
+    }
+  ]);
+});
+
+test('normalizeConfigInput preserves numeric stopSocPct on schedule rules', () => {
+  const normalized = normalizeConfigInput({
+    schedule: {
+      rules: [
+        {
+          id: 'grid-stop',
+          enabled: true,
+          target: 'gridSetpointW',
+          start: '08:00',
+          end: '09:00',
+          value: '-40',
+          stopSocPct: '25'
+        }
+      ]
+    }
+  });
+
+  assert.deepEqual(normalized.rawConfig.schedule.rules, [
+    {
+      id: 'grid-stop',
+      enabled: true,
+      target: 'gridSetpointW',
+      start: '08:00',
+      end: '09:00',
+      value: -40,
+      stopSocPct: 25
+    }
+  ]);
+});

@@ -117,7 +117,7 @@ function roundOrZero(value) {
  * die Ökonomie (Euro-Felder), exportKwh/importKwh, alle Akku-/Netz-/Share-
  * Felder sowie die zurückgegebenen Roh-Slots/Charts. Der Cap ist ein reiner
  * Anzeige-Deckel auf die Erzeugungs-Summen; für eine ehrliche Anlage
- * (real ≤ deklariert) ist er wirkungslos. capKwp==null (Community/Pro L/Legacy)
+ * (real ≤ deklariert) ist er wirkungslos. capKwp==null (Community/Legacy)
  * → No-op.
  *
  * @param {Array} slots  gemappte Slots (mit originalem slot.pvKwh aus dem Store)
@@ -1285,7 +1285,7 @@ export function createHistoryRuntime({
   // weather-blind PVGIS gap. null (e.g. in tests) => PVGIS fallback, unchanged.
   getCurtailmentService = () => null,
   // T-LICENSE-KWP-GATING Increment 3: Lizenz-kWp-Cap für die PV-KPI-Summen.
-  // Liefert den lizenzierten kWp-Deckel (Pro S/M) oder null (Community/Pro L/
+  // Liefert den lizenzierten kWp-Deckel (Pro S/M/L, Abo-Sitze) oder null (Community/Legacy/
   // Legacy = kein Cap). Lazy gelesen, damit es zur Request-Zeit verdrahtet ist.
   getCapKwp = () => null
 }) {

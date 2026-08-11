@@ -544,7 +544,7 @@ function validatePvPlants(plants = []) {
  * PV-kWp den lizenzierten Tarif-Deckel (`license.max_kwp`) übersteigt — sonst
  * null. NICHT-blockierend: der Betreiber darf seine reale Anlage eintragen; die
  * Warnung erklärt nur die Folge (Anzeige/Prognose/EOS auf max_kwp gekappt) und
- * nudged zum Upgrade. max_kwp==null (Community/Pro L/Legacy) → null (kein Cap).
+ * nudged zum Upgrade. max_kwp==null (Community/Legacy) → null (kein Cap).
  *
  * @param {Array} plants  Draft-PV-Anlagen ({ kwp } je Eintrag)
  * @param {object|null} licenseState  window._licenseStateCache (mit max_kwp)
@@ -552,7 +552,7 @@ function validatePvPlants(plants = []) {
  */
 function pvPlantsLicenseCapWarning(plants = [], licenseState = null) {
   const maxKwp = Number(licenseState?.max_kwp);
-  if (!(Number.isFinite(maxKwp) && maxKwp > 0)) return null; // Community/Pro L/Legacy
+  if (!(Number.isFinite(maxKwp) && maxKwp > 0)) return null; // Community/Legacy
   const totalKwp = (Array.isArray(plants) ? plants : []).reduce((sum, p) => {
     const k = Number(p?.kwp);
     return sum + (Number.isFinite(k) && k > 0 ? k : 0);
@@ -571,7 +571,7 @@ function pvPlantsLicenseCapWarning(plants = [], licenseState = null) {
  *   - MEASURED: plant_exceeds_license → gemessener PV-Peak > Tarif. Während der
  *     Kulanzfrist nur Upgrade-Nudge; nach Ablauf (plant_gate_active) Pro-Gate zu.
  * Nur bei status==='active' UND gesetztem Tarif (max_kwp) relevant; sonst null
- * (Community/Pro L/Legacy). Gibt reinen Text zurück (Aufrufer escaped).
+ * (Community/Legacy). Gibt reinen Text zurück (Aufrufer escaped).
  *
  * @param {object|null} state  license getState() payload
  * @returns {string|null}
@@ -1998,7 +1998,7 @@ function renderPvPlantsEditor() {
     : '<div class="config-banner info">Mehrere PV-Anlagen werden über Leistung und Inbetriebnahme für die jährliche Marktprämie gewichtet.</div>';
   // T-LICENSE-KWP-GATING Increment 4: nicht-blockierende Lizenz-kWp-Warnung,
   // wenn die konfigurierte PV-Summe den Tarif-Deckel übersteigt (max_kwp aus
-  // window._licenseStateCache). Community/Pro L/Legacy → kein Cap → kein Banner.
+  // window._licenseStateCache). Community/Legacy → kein Cap → kein Banner.
   const capWarning = pvPlantsLicenseCapWarning(
     pvPlantsDraft,
     (typeof window !== 'undefined' ? window._licenseStateCache : null)

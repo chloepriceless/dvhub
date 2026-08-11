@@ -452,9 +452,34 @@ export function createEosConfigSync(ctx) {
     // 2026-05-29) — enables evening battery Vermarktung at peak prices instead
     // of the flat EEG tariff. EOS-side planning only; the real plant is
     // unaffected (primarySource=internal).
-    if (String(cfg?.optimizer?.tariff?.feedInMode || 'fixed').toLowerCase() === 'spot') {
+    const directMarketing = String(cfg?.optimizer?.tariff?.feedInMode || 'fixed').toLowerCase() === 'spot';
+    if (directMarketing) {
       tasks.push({ section: 'feedintariff/provider', body: 'FeedInTariffImport' });
     }
+
+    // Direktvermarktungs-Generalschalter (Christin 2026-08-07).
+    //
+    // Upstream-EOS hat drei Verhaltensweisen, die unser Fork einzeln aufgesetzt
+    // hatte, hinter EINEN Konfigschalter gelegt — `genetic.py:2670-2677`:
+    //     direct_marketing_enabled = self._direct_marketing_enabled()
+    //     self.optimize_dc_charge           = direct_marketing_enabled
+    //     self.optimize_battery_grid_export = direct_marketing_enabled
+    // und derselbe Schalter gated die harte PV-Abregelung bei Negativpreis
+    // (`genetic.py:504`). Default ist FALSE (`prediction/feedintariff.py:75`).
+    //
+    // Ohne diese Zeile würde ein Umstieg auf upstream still DREI Dinge
+    // abschalten — darunter die Negativpreis-Abregelung, und die ist §51-Pflicht,
+    // keine Optimierung. Genau der Fail-open-Fehlertyp aus T-0325.
+    //
+    // OPTIONAL, weil unser aktueller Fork (dvhub-fork, Basis 17.03.) den
+    // Schlüssel NOCH NICHT kennt: dort quittiert EOS den PUT mit einem Fehler.
+    // Als Pflicht-Task würde `okAll` dauerhaft false — ein rotes Signal, das
+    // immer rot ist, bringt niemandem etwas und erzieht zum Wegsehen. Deshalb
+    // getrennt gezählt: der Fehlschlag steht sichtbar im Log, kippt aber nicht
+    // den Gesamtstatus. Sobald der Fork auf upstream steht, greift er von selbst.
+    const optionalTasks = [
+      { section: 'feedintariff/direct_marketing_enabled', body: directMarketing },
+    ];
     if (elecprice) {
       tasks.push(
         { section: 'elecprice/charges_kwh', body: elecprice.charges_kwh },
@@ -470,19 +495,32 @@ export function createEosConfigSync(ctx) {
       else errors[t.section] = res.error;
     }
 
+    // Der Gesamtstatus wird NUR aus den Pflicht-Tasks gebildet — siehe die
+    // Begründung bei optionalTasks. Optionale Fehlschläge landen in
+    // errorsOptional und sind damit im Log sichtbar, ohne okAll zu kippen.
     const okAll = applied.length === tasks.length;
+
+    const appliedOptional = [];
+    const errorsOptional = {};
+    for (const t of optionalTasks) {
+      const res = await eosHttpRequest(baseUrl, 'PUT', `/v1/config/${t.section}`, t.body);
+      if (res.ok) appliedOptional.push(t.section);
+      else errorsOptional[t.section] = res.error;
+    }
     if (pushLog) {
       pushLog('eos_config_sync', {
         ok: okAll,
         applied,
         errors,
+        appliedOptional,
+        errorsOptional,
         battery_capacity_wh: batteries[0]?.capacity_wh,
         battery_max_charge_w: batteries[0]?.max_charge_power_w,
         battery_min_soc_pct: batteries[0]?.min_soc_percentage,
         inverter_max_power_w: inverters[0]?.max_power_w,
       });
     }
-    return { ok: okAll, applied, errors };
+    return { ok: okAll, applied, errors, appliedOptional, errorsOptional };
   }
 
   /**

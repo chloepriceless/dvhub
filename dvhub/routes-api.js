@@ -6294,7 +6294,7 @@ export function createApiRoutes(ctx) {
       // übersteigt. Reines Signal für UI/API-Consumer — der Save wird NIE
       // blockiert (der Betreiber darf seine reale Anlage eintragen); Anzeige/
       // Prognose/EOS gaten bereits über getCapKwp(), Pro-Features über
-      // capacityOk(). Community/Pro L/Legacy (max_kwp==null) → keine Warnung.
+      // capacityOk(). Community/Legacy (max_kwp==null) → keine Warnung.
       let licenseCapWarning = null;
       try {
         const lic = licenseService?.getState?.();

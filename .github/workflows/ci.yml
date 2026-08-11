@@ -1,0 +1,206 @@
+# DVhub CI — runs the existing (green) test suite on every push/PR to v1.0-dev.
+#
+# The npm project lives in dvhub/ (scripts use ../tests/... relative paths and the
+# lockfile is dvhub/package-lock.json), so every job sets working-directory: dvhub.
+#
+# RESEARCH.md Open Q1 (RUNNER LOCATION — operator decision):
+#   This workflow assumes GitHub-hosted `ubuntu-latest` (zero infra, ephemeral,
+#   isolated, no LAN exposure; the suite needs only Node 22 + an ephemeral Postgres
+#   + Chromium for e2e). If you require a self-hosted runner instead (e.g. to reach
+#   internal-only resources during CI), change `runs-on:` accordingly and re-confirm
+#   the postgres service + playwright install steps. Confirm at the plan checkpoint.
+#
+# SECURITY: checkout uses the built-in GITHUB_TOKEN only — NEVER the plaintext PAT in
+# .git/config (rotate that separately). Never echo secrets, DATABASE_URL, or git
+# remotes. DATABASE_URL points ONLY at the ephemeral `dvhub_ci` service DB, NEVER prod.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - v1.0-dev
+  pull_request:
+    branches:
+      - v1.0-dev
+
+# Least-privilege: CI only needs to read the repo for checkout.
+permissions:
+  contents: read
+
+jobs:
+  # Secret/credential push-gate (scripts/check-secrets.sh). Runs from the repo
+  # root (NOT working-directory: dvhub) and fails the build on any hardcoded
+  # secret, private-key material, embedded credential or internal topology
+  # (internal LAN / RFC1918 hosts). Internal-only paths (.planning, internal docs)
+  # are excluded since they are filtered out of the public mirror via git-filter-repo.
+  secret-scan:
+    name: secret-scan (push-gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: bash scripts/check-secrets.sh
+
+  # Fast, DB-free job: node --test + the 5 lint gates, plus the sqlite suite.
+  # No DATABASE_URL → the migration describe blocks skip here (covered by pg-integration).
+  fast:
+    name: fast (no database)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dvhub
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:sqlite
+
+  # Integration job: spins up an ephemeral pinned Postgres so the DATABASE_URL-gated
+  # migration tests finally execute (they skip everywhere else).
+  pg-integration:
+    name: pg-integration (ephemeral postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dvhub_ci
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      # Ephemeral CI database ONLY — never the prod `dvhub` DB. Hostname is localhost
+      # (port-mapped to the runner), not `postgres`, because steps run on the runner.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dvhub_ci
+    defaults:
+      run:
+        working-directory: dvhub
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+      # DATABASE_URL is set → the { skip: !DATABASE_URL } migration describe blocks run.
+      - run: npm test
+
+  # ESLint (Quality-Review 2026-07-01): flat-config with a minimal, high-signal
+  # ruleset (no-var, prefer-const, no-unused-vars, eqeqeq, no-empty + eslint:recommended).
+  #
+  # NON-BLOCKING (continue-on-error) on rollout: ~220 pre-existing findings across
+  # the codebase (mostly no-unused-vars debt in older files) would make this red
+  # on day one for code nobody touched. `fast` (npm test + the 5 lint gates)
+  # remains the real gate. Flip this blocking once the backlog is worked down —
+  # see .planning/QUALITY-REVIEW-2026-07-01.md item 1.
+  lint:
+    name: lint (eslint, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: dvhub
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+
+  # e2e job: full Playwright visual-parity + setup-wizard happy-path suite
+  # against a DB-free server boot. BLOCKING (2026-07): stabilised — see
+  # .planning/ handover notes for the two fixes that got it here.
+  #
+  #   1. License bypass was silently broken since the 2026-06-22 "Hardening A"
+  #      security fix (services/license/index.js loadStateFromDisk): an
+  #      on-disk `status:"active"` is only honoured when backed by a
+  #      non-empty license_key — the old `license_key:null` bypass this job
+  #      used got rejected every boot, so EVERY Pro-gated page (/family)
+  #      403'd for the whole job. Worse: even a non-null fake key only
+  #      survives ~30s — licenseService.start()'s poller revalidates against
+  #      the REAL Keygen account (config-model.js default keygenAccount, used
+  #      whenever no config file overrides it) and correctly invalidates a
+  #      forged key. Fix: boot with a real config file that sets
+  #      licensing.keygenAccount to "" — revalidateLicense() then early-returns
+  #      on the falsy account BEFORE ever touching state.license, so the
+  #      bypass survives indefinitely. This is legitimate Hardening-A/B/C
+  #      behaviour working as designed, not a bug to route around.
+  #   2. The hand-maintained EXPECTED_IDS lists across family/history/index/
+  #      settings/integrations/history-viz had drifted from the live DOM
+  #      (some elements renamed in the settings-design-unify + custom-tabs +
+  #      pvnode-v2 redesigns, some intentionally removed — e.g. the family
+  #      message tray, the settings ML/LLM sub-group, the Spot-Ledger viz
+  #      card). Every list was re-diffed against a live-rendered DOM and
+  #      corrected; genuine feature removals are commented, not silently
+  #      dropped.
+  #   3. The full suite under Playwright's default (CPU-count) worker
+  #      parallelism reliably tripped rate-limiting/connection contention
+  #      against the single dev server instance on 2 specs — confirmed by
+  #      isolation (workers=1 was the only setting that was 100% reliable
+  #      across repeated full-suite runs). tests/playwright.config.mjs pins
+  #      workers:1 + retries:1 accordingly.
+  e2e:
+    name: e2e (playwright full visual-parity suite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dvhub
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # Boot the server DB-free on :8080 with a throwaway data dir so the e2e
+      # never touches real license_state.json/config; brief readiness wait
+      # before the spec.
+      - name: Boot server (DB-free) on :8080
+        run: |
+          export DV_DATA_DIR="$(mktemp -d)"
+          # E2E config: licensing.keygenAccount:"" disables the online
+          # revalidation poller (see job comment point 1 above) — without
+          # this override the effectiveConfig default keygenAccount is a
+          # real Keygen account, and the 30s-after-boot poller call would
+          # invalidate the dev bypass mid-run. httpPort:8080 matches the
+          # suite's baseURL (config.example.json ships the real prod
+          # default of 80).
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('config.example.json', 'utf8'));
+            cfg.licensing = cfg.licensing || {};
+            cfg.licensing.keygenAccount = '';
+            cfg.httpPort = 8080;
+            fs.writeFileSync(process.env.DV_DATA_DIR + '/e2e-config.json', JSON.stringify(cfg, null, 2));
+          "
+          # Dev licence bypass so Pro-gated pages (/family) serve 200 instead
+          # of a 403 in the licenceless ephemeral server. Non-null license_key
+          # required — Hardening A rejects status:"active" with a null key
+          # (see job comment point 1). Throwaway data dir — never touches the
+          # real license_state.json.
+          printf '{"status":"active","license_key":"e2e-dev-bypass"}' > "$DV_DATA_DIR/license_state.json"
+          DV_APP_CONFIG="$DV_DATA_DIR/e2e-config.json" node server.js &
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/ >/dev/null 2>&1; then
+              echo "server ready"
+              break
+            fi
+            sleep 1
+          done
+      - run: npm run test:e2e

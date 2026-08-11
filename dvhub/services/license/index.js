@@ -144,7 +144,7 @@ function fingerprint(key) {
  * Under-Report-Verdikt (T-LICENSE-KWP-GATING Increment 5, rein/testbar):
  * überschreitet der GEMESSENE PV-Peak den lizenzierten Tarif zzgl. Toleranz?
  *   ceilingW = maxKwp × 1000 × (1 + tolerancePct/100)
- * Kein Cap-Tarif (maxKwp==null/≤0 → Community/Pro L/Legacy) ODER keine/ungültige
+ * Kein Cap-Tarif (maxKwp==null/≤0 → Community/Legacy) ODER keine/ungültige
  * Messung → IMMER false (fail-open: nie eine Anlage ohne belastbares Signal
  * flaggen). Nur bei aktivem Pro-max_kwp UND belastbarem Peak > Ceiling → true.
  *
@@ -925,8 +925,29 @@ export function createLicenseService(ctx) {
    *
    * Christin 2026-07-02: Community is FREE for any plant size (no cap); the paid
    * value is EOS + control, tiered by plant size. So the cap applies ONLY when a
-   * Pro key carries an explicit finite max_kwp (Pro S=50 / Pro M=100). Community
-   * (no license), Pro L (unlimited) and legacy keys all have max_kwp==null → no cap.
+   * key carries an explicit finite max_kwp.
+   *
+   * Tarife (Stand 2026-08-10 — maßgeblich ist der Shop, NICHT dieser Kommentar;
+   * gestempelt wird maxKwp im Webhook, Hetzner-Docker/dvhub/webhook-handler/
+   * server.js:38-43, deckungsgleich mit dvhub.de):
+   *   Pro S  → maxKwp 40      Pro XS  → Sitze (1 Sitz = 1 kWp), Deckel 24
+   *   Pro M  → maxKwp 70      Pro XL  → Sitze, Deckel 100
+   *   Pro L  → maxKwp 100     Pro XXL → Sitze, nach oben offen
+   * Ohne maxKwp und damit UNGEDECKELT: Community (keine Lizenz) und die
+   * Alt-Produkte "DVhub Pro" / "DVhub Monthly" → max_kwp==null → no cap.
+   *
+   * WARUM die Einmalkauf-Linie bei 100 kWp endet (Christin 2026-08-10): das ist
+   * KEINE willkürliche Grenze und keine Lücke im Angebot. Ab 100 kW greift die
+   * VERPFLICHTENDE DIREKTVERMARKTUNG nach EEG — darüber ist der Betrieb ein
+   * anderer, und dafür steht die X-Linie (XS/XL/XXL, sitzbasiert). Wer hier
+   * "der Vollständigkeit halber" einen Einmalkauf über 100 kWp ergänzen will,
+   * hebelt diese Trennung aus.
+   *
+   * ⚠️ Dieser Kommentar stand bis 2026-08-10 auf "Pro S=50 / Pro M=100, Pro L
+   * unbegrenzt" — das war der Entwurfsstand vom 02.07. und hat bei einer
+   * Kundenanfrage zu einer falschen Auskunft geführt. Gedeckelt ist AUSSCHLIESSLICH
+   * die PV-Modulleistung (getSystemKwp); Wechselrichterleistung, Speicher und
+   * Gerätezahl sind nirgends begrenzt.
    *
    * The cap value is the DECLARED system kWp (getSystemKwp — "die man eingegeben
    * hat"), bounded by the tier (defensive min). When nothing is declared yet the
@@ -936,7 +957,7 @@ export function createLicenseService(ctx) {
    */
   function getCapKwp() {
     const cap = state.license.max_kwp;
-    if (!(Number.isFinite(cap) && cap > 0)) return null; // Community / Pro L / legacy → no cap
+    if (!(Number.isFinite(cap) && cap > 0)) return null; // Community / Legacy → no cap
     const declared = getSystemKwp();
     return declared > 0 ? Math.min(declared, cap) : cap;
   }

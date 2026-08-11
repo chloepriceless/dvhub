@@ -1556,7 +1556,7 @@ const telemetryReady = (async () => {
     // "Abgeregelte Energie" KPI (read lazily so it's wired by request time).
     getCurtailmentService: () => ctx.curtailmentService,
     // T-LICENSE-KWP-GATING Increment 3: Lizenz-kWp-Cap für die PV-KPI-Summen
-    // (Pro-Tier-Enforcement). Lazy gelesen; null (Community/Pro L/Legacy) = kein Cap.
+    // (Pro-Tier-Enforcement). Lazy gelesen; null (Community/Legacy) = kein Cap.
     getCapKwp: () => ctx.licenseService?.getCapKwp?.() ?? null
   }) : null;
   historyApi = createHistoryApiHandlers({
@@ -1591,7 +1591,7 @@ const telemetryReady = (async () => {
     // T-LICENSE-KWP-GATING Increment 5: Under-Report-Erkennung. Täglich den
     // robusten GEMESSENEN PV-Peak (echte, ungekappte pv_total_w aus der DB)
     // auswerten und an die Lizenz koppeln: Flag → Kulanzfrist → nach Ablauf
-    // Pro-Gate zu. VOLLSTÄNDIGER No-op ohne aktives Pro-max_kwp (Community/Pro L/
+    // Pro-Gate zu. VOLLSTÄNDIGER No-op ohne aktives Pro-max_kwp (Community/
     // Legacy → updatePlantExceedsLicense verdiktet immer false) → auf jeder
     // Bestandsbox wirkungslos. Erst ~10 min nach Boot (DB warm), dann alle 24h.
     const runUnderReportDetection = async () => {

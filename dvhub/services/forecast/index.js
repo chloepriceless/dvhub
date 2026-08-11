@@ -529,7 +529,7 @@ export function createForecastService(ctx) {
     // bewusst auch die EOS/Optimizer-Planung — dies ist der einzige Chokepoint für
     // beide — damit die Pro-Lizenz-Stufe wirksam wird. Der Live-Steuerungspfad
     // liest die echte Messung (state.victron), NIE diesen Forecast, und bleibt
-    // unberührt. Cap==null (Community/Pro L/Legacy) → No-op. `actual` (gemessene
+    // unberührt. Cap==null (Community/Legacy) → No-op. `actual` (gemessene
     // Ist-Werte, Diagnose) und `dailyTotals` (Energie) bleiben ungekappt.
     const capKwp = ctx.licenseService?.getCapKwp?.();
     const capW = Number.isFinite(capKwp) && capKwp > 0 ? capKwp * 1000 : null;

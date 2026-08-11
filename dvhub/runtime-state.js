@@ -185,7 +185,7 @@ export function buildVictronSnapshot(victron = {}) {
  * `capW` (= lizenzierte kWp × 1000). Mutiert das übergebene Snapshot-Objekt (der
  * Aufrufer reicht die frische Kopie aus buildVictronSnapshot/IPC — NIE die Quelle
  * `state.victron`, die der Steuerungspfad liest). `capW==null` → No-op
- * (Community/Pro L/Legacy). Nur Anzeige; die reale Messung bleibt unberührt.
+ * (Community/Legacy). Nur Anzeige; die reale Messung bleibt unberührt.
  *
  * @param {object} victron  frischer Snapshot (wird mutiert)
  * @param {number|null} capW  Cap in Watt, oder null = kein Cap
