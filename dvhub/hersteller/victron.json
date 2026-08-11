@@ -73,6 +73,33 @@
       "scale": 1,
       "offset": 0
     },
+    "acPv2L1W": {
+      "enabled": false,
+      "fc": 4,
+      "address": 811,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "acPv2L2W": {
+      "enabled": false,
+      "fc": 4,
+      "address": 812,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "acPv2L3W": {
+      "enabled": false,
+      "fc": 4,
+      "address": 813,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
     "gridSetpointW": {
       "enabled": true,
       "fc": 3,

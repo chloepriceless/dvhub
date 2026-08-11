@@ -605,6 +605,11 @@ export function createPoller(ctx) {
       pollPoint('batteryPowerW', cfg.points.batteryPowerW),
       pollPoint('pvPowerW', cfg.points.pvPowerW),
       pollPoint('acPvL1W', cfg.points.acPvL1W),
+      // Issue #13: zweite AC-PV-Position. Die Punkte sind AUS, solange
+      // victron.acPvSource2 nicht gesetzt ist — pollPoint ueberspringt sie dann.
+      pollPoint('acPv2L1W', cfg.points.acPv2L1W),
+      pollPoint('acPv2L2W', cfg.points.acPv2L2W),
+      pollPoint('acPv2L3W', cfg.points.acPv2L3W),
       pollPoint('acPvL2W', cfg.points.acPvL2W),
       pollPoint('acPvL3W', cfg.points.acPvL3W),
       pollPoint('gridSetpointW', cfg.points.gridSetpointW),
@@ -615,7 +620,12 @@ export function createPoller(ctx) {
     ]);
 
     const pvDc = Number(state.victron.pvPowerW || 0);
-    const pvAc = Number(state.victron.acPvL1W || 0) + Number(state.victron.acPvL2W || 0) + Number(state.victron.acPvL3W || 0);
+    // Issue #13: PV kann an zwei Positionen haengen (z. B. String-WR am
+    // Netz-Eingang + WR am Verbraucher-Ausgang). Beide Bloecke fliessen in pvAc —
+    // dieselbe Addition wie schon zwischen DC- und AC-PV. Ohne zweite Position
+    // sind acPv2* null und der Term ist 0.
+    const pvAc = Number(state.victron.acPvL1W || 0) + Number(state.victron.acPvL2W || 0) + Number(state.victron.acPvL3W || 0)
+      + Number(state.victron.acPv2L1W || 0) + Number(state.victron.acPv2L2W || 0) + Number(state.victron.acPv2L3W || 0);
     state.victron.pvAcW = Number(pvAc.toFixed(3));
     state.victron.pvTotalW = Number((pvDc + pvAc).toFixed(3));
 

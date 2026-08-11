@@ -1174,7 +1174,24 @@ function buildFieldDefinitions() {
         { value: 'grid', label: 'Am Netz-Eingang (AC-In / grid)' },
         { value: 'genset', label: 'Am Generator-Eingang (AC-In / genset)' }
       ],
-      help: 'Nur relevant bei AC-gekoppelter PV (eigener AC-Wechselrichter am Victron-System, z. B. SMA/Fronius-String-WR). Das Victron-GX f\u00fchrt die AC-PV-Leistung je nach VERDRAHTUNG in getrennten Registern: \u201eAm Verbraucher-Ausgang\u201c (Standard, hinter dem Multiplus), \u201eAm Netz-Eingang\u201c (der WR speist auf der Netzseite ein \u2014 h\u00e4ufig bei nachger\u00fcsteten String-WR) oder \u201eAm Generator-Eingang\u201c. Wenn deine AC-Erzeugung f\u00e4lschlich als Netzbezug erscheint, steht der WR vermutlich am Netz-Eingang \u2192 auf \u201eAm Netz-Eingang\u201c umstellen. In VRM siehst du die Position unter dem PV-Inverter-Ger\u00e4t (AC-in vs. AC-out).'
+      help: 'Nur relevant bei AC-gekoppelter PV (eigener AC-Wechselrichter am Victron-System, z. B. SMA/Fronius-String-WR). Das Victron-GX f\u00fchrt die AC-PV-Leistung je nach VERDRAHTUNG in getrennten Registern: \u201eAm Verbraucher-Ausgang\u201c (Standard, hinter dem Multiplus), \u201eAm Netz-Eingang\u201c (der WR speist auf der Netzseite ein \u2014 h\u00e4ufig bei nachger\u00fcsteten String-WR) oder \u201eAm Generator-Eingang\u201c. Wenn deine AC-Erzeugung f\u00e4lschlich als Netzbezug erscheint, steht der WR vermutlich am Netz-Eingang \u2192 auf \u201eAm Netz-Eingang\u201c umstellen. In VRM siehst du die Position unter dem PV-Inverter-Ger\u00e4t (AC-in vs. AC-out). H\u00e4ngt PV an ZWEI Positionen gleichzeitig, w\u00e4hle hier die eine und darunter die zweite.'
+    },
+    {
+      section: 'victron',
+      group: 'connection',
+      groupLabel: 'Verbindung',
+      groupDescription: 'Aktives Herstellerprofil und die Anlagenadresse.',
+      path: 'victron.acPvSource2',
+      label: 'Zweite AC-PV-Position (optional)',
+      type: 'select',
+      empty: 'null',
+      options: [
+        { value: '', label: 'Keine \u2014 PV h\u00e4ngt nur an einer Position' },
+        { value: 'output', label: 'Am Verbraucher-Ausgang (AC-Out)' },
+        { value: 'grid', label: 'Am Netz-Eingang (AC-In / grid)' },
+        { value: 'genset', label: 'Am Generator-Eingang (AC-In / genset)' }
+      ],
+      help: 'Nur ausf\u00fcllen, wenn PV an ZWEI Positionen gleichzeitig h\u00e4ngt \u2014 z. B. ein String-WR am Netz-Eingang und ein weiterer am Verbraucher-Ausgang. Dann werden beide Registerbl\u00f6cke gelesen und ihre Leistung in der PV-Summe addiert (genau wie DC- und AC-PV heute schon zusammengez\u00e4hlt werden). Dieselbe Position wie oben zu w\u00e4hlen bleibt wirkungslos \u2014 das w\u00fcrde denselben Registerblock doppelt z\u00e4hlen.'
     },
     {
       section: 'victron',
@@ -3268,6 +3285,11 @@ export function createDefaultConfig() {
       // statt PV (gemeldet: stefan-12). 'output' = bisheriges Verhalten (Default).
       // applyVictronDefaults setzt daraus die acPvL1/2/3W-Adressen (effektive Config).
       acPvSource: 'output',
+      // Issue #13: optionale ZWEITE Position, wenn PV an mehreren Stellen haengt
+      // (z. B. String-WR am Netz-Eingang + WR am Verbraucher-Ausgang). null = aus,
+      // dann verhaelt sich alles wie bisher. Muss sich von acPvSource
+      // unterscheiden — sonst wuerde derselbe Registerblock doppelt gezaehlt.
+      acPvSource2: null,
       timeoutMs: 1000,
       // T-0075: max age (ms) of a successful SoC/battery poll before telemetry is
       // treated as stale and forced discharge is suppressed (chokepoint floor).
@@ -3370,6 +3392,15 @@ export function createDefaultConfig() {
       acPvL1W: { enabled: true, fc: 4, address: 808, quantity: 1, signed: false, scale: 1, offset: 0 },
       acPvL2W: { enabled: true, fc: 4, address: 809, quantity: 1, signed: false, scale: 1, offset: 0 },
       acPvL3W: { enabled: true, fc: 4, address: 810, quantity: 1, signed: false, scale: 1, offset: 0 },
+      // Issue #13: ZWEITE AC-PV-Position. Wer PV gleichzeitig am Netz-Eingang UND
+      // am Verbraucher-Ausgang hat (gemeldet: FrodoVDR — Hoymiles an AC-in,
+      // SolarEdge an AC-out), sah bisher immer nur einen der beiden Bloecke.
+      // Adresse + enabled kommen aus victron.acPvSource2 (applyVictronDefaults);
+      // ohne gesetzte zweite Position bleiben die Punkte AUS → Bestandssetups
+      // pollen unveraendert drei Register.
+      acPv2L1W: { enabled: false, fc: 4, address: 811, quantity: 1, signed: false, scale: 1, offset: 0 },
+      acPv2L2W: { enabled: false, fc: 4, address: 812, quantity: 1, signed: false, scale: 1, offset: 0 },
+      acPv2L3W: { enabled: false, fc: 4, address: 813, quantity: 1, signed: false, scale: 1, offset: 0 },
       // T-0107: read the VOLATILE setpoint (2716/2717, int32) — the value actually
       // active once the write path drives 2716. Reading legacy 2700 goes stale then.
       // fc3 = holding register (verify fc3 vs fc4 at the GX). Requires Venus >= 3.50.
@@ -3727,6 +3758,19 @@ function applyVictronDefaults(config) {
     if (next.points.acPvL2W) next.points.acPvL2W.address = acPvBase + 1;
     if (next.points.acPvL3W) next.points.acPvL3W.address = acPvBase + 2;
   }
+  // Issue #13: zweite AC-PV-Position. Nur aktiv, wenn eine GUELTIGE und von der
+  // ersten VERSCHIEDENE Position gewaehlt ist — gleiche Position zweimal wuerde
+  // denselben Registerblock doppelt in die PV-Summe zaehlen.
+  const acPvSource2 = next.victron?.acPvSource2;
+  const acPv2Base = AC_PV_BASE[acPvSource2];
+  const acPv2Active = acPv2Base != null && acPvSource2 !== next.victron?.acPvSource;
+  if (next.points) {
+    for (const [key, off] of [['acPv2L1W', 0], ['acPv2L2W', 1], ['acPv2L3W', 2]]) {
+      if (!next.points[key]) continue;
+      next.points[key].enabled = acPv2Active;
+      if (acPv2Active) next.points[key].address = acPv2Base + off;
+    }
+  }
 
   // Disable PV points based on pvCoupling selection
   const coupling = next.pvCoupling || 'ac_dc';
@@ -3734,6 +3778,11 @@ function applyVictronDefaults(config) {
     if (next.points.acPvL1W) next.points.acPvL1W.enabled = false;
     if (next.points.acPvL2W) next.points.acPvL2W.enabled = false;
     if (next.points.acPvL3W) next.points.acPvL3W.enabled = false;
+    // Reine DC-Kopplung: auch die zweite AC-Position bleibt aus (sonst wuerde
+    // acPvSource2 die pvCoupling-Entscheidung aushebeln).
+    if (next.points.acPv2L1W) next.points.acPv2L1W.enabled = false;
+    if (next.points.acPv2L2W) next.points.acPv2L2W.enabled = false;
+    if (next.points.acPv2L3W) next.points.acPv2L3W.enabled = false;
   }
   if (coupling === 'ac' && next.points) {
     if (next.points.pvPowerW) next.points.pvPowerW.enabled = false;

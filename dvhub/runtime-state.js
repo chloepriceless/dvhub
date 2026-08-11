@@ -26,6 +26,10 @@ const VICTRON_FIELDS = [
   'acPvL1W',
   'acPvL2W',
   'acPvL3W',
+  // Issue #13: zweite AC-PV-Position (nur belegt, wenn victron.acPvSource2 gesetzt)
+  'acPv2L1W',
+  'acPv2L2W',
+  'acPv2L3W',
   'pvAcW',
   'pvTotalW',
   'gridSetpointW',

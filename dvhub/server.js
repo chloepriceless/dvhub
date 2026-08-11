@@ -268,6 +268,10 @@ const state = {
     acPvL1W: null,
     acPvL2W: null,
     acPvL3W: null,
+    // Issue #13: zweite AC-PV-Position (nur belegt, wenn victron.acPvSource2 gesetzt)
+    acPv2L1W: null,
+    acPv2L2W: null,
+    acPv2L3W: null,
     pvAcW: null,
     pvTotalW: null,
     gridSetpointW: null,
