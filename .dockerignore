@@ -1,0 +1,51 @@
+# Build-Kontext für das DVhub-Minimal-Image (WS6).
+#
+# Grundregel: alles ausschließen, dann gezielt zurückholen. So landet nichts
+# versehentlich im Image, wenn neue Verzeichnisse im Repo entstehen.
+*
+
+# --- Anwendung -------------------------------------------------------------
+!dvhub/
+
+# Der Entrypoint ruft dieses eine Skript auf (Herstellerprofil-Abgleich).
+!scripts/reconcile-vendor-profiles.mjs
+!docker/docker-entrypoint.sh
+
+# Lizenztexte gehören ins Image — package.json verweist auf ../LICENSE.md.
+!LICENSE.md
+!THIRD-PARTY-LICENSES.md
+
+# --- innerhalb von dvhub/ wieder aussortieren -------------------------------
+# Tests und E2E-Specs: im Laufzeitimage nutzlos (2,6 MB + devDependencies).
+dvhub/test/
+dvhub/docs/
+
+# Lokale Installation nie in den Kontext ziehen — die Abhängigkeiten kommen
+# reproduzierbar aus `npm ci` in Stage 1. Ein mitkopiertes node_modules würde
+# host-gebaute Artefakte einschleppen.
+dvhub/node_modules/
+
+# ACHTUNG: services/python-bridge/ darf NICHT ausgeschlossen werden.
+# server.js importiert services/forecast/index.js statisch, das wiederum
+# ../python-bridge/index.js statisch importiert — fehlt das Verzeichnis,
+# stirbt der Start mit ERR_MODULE_NOT_FOUND. Der Verzicht auf Forecast/ML
+# entsteht dadurch, dass kein Python-Interpreter im Image liegt, nicht durch
+# das Weglassen der Node-seitigen Bridge.
+# Nur die Python-Testsuite ist entbehrlich:
+dvhub/services/python-bridge/scripts/tests/
+
+# Enthält ausschließlich requirements.txt/.lock für den Voll-Stack-Build —
+# zur Laufzeit von keinem Modul referenziert.
+dvhub/python/
+
+# Laufzeit-/Zustandsdateien, die beim Entwickeln entstehen.
+dvhub/config.json
+dvhub/energy_state.json
+dvhub/*.log
+dvhub/.env
+dvhub/eslint.config.js
+
+# --- niemals ---------------------------------------------------------------
+.git/
+.github/
+.planning/
