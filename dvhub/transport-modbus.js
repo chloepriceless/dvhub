@@ -1,4 +1,10 @@
 import net from 'node:net';
+import {
+  isReadOnlyMode,
+  modbusWriteFunctionCode,
+  noteBlockedWrite,
+  ReadOnlyViolation
+} from './read-only-guard.js';
 // Plan 09-06 (D-08): services/log.js wrapper imported for Modbus connect/reconnect/error
 // surfaces. The current transport routes errors through Promise rejections to the polling
 // loop (which calls pushLog); the wrapper is the new preferred path for any direct stderr-
@@ -150,6 +156,17 @@ export function createModbusTransport(opts = {}) {
       },
       send(reqBuf, timeoutMs) {
         return new Promise((resolve, reject) => {
+          // Lese-Modus: Schreib-Telegramme gar nicht erst einreihen. Dies ist
+          // die einzige Stelle, durch die jede Modbus-Anfrage laeuft — was
+          // hier abgelehnt wird, erreicht die Anlage nicht.
+          if (isReadOnlyMode()) {
+            const fc = modbusWriteFunctionCode(reqBuf);
+            if (fc !== null) {
+              noteBlockedWrite(`Modbus fc=${fc} an ${this.key}`);
+              reject(new ReadOnlyViolation(`Schreibzugriff im Lese-Modus abgelehnt (Modbus fc=${fc})`));
+              return;
+            }
+          }
           const entry = { reqBuf, resolve, reject, timer: null, timeoutMs };
           this.queue.push(entry);
           this._next();
