@@ -52,6 +52,9 @@ export function loadEnergy(state, energyPath, timezone = 'Europe/Berlin') {
  */
 export function createPoller(ctx) {
   const { state, getCfg, transport, pushLog } = ctx;
+  // spine-http-Meterzweig (EnergyLink): HTTP-Client injizierbar für Tests,
+  // Default ist das globale fetch (Node >= 18).
+  const fetchImpl = ctx.fetchImpl || globalThis.fetch;
 
   const MIN_POLL_INTERVAL_MS = 1000;
 
@@ -483,7 +486,52 @@ export function createPoller(ctx) {
     const __pollStart = process.hrtime.bigint();
     try {
       let l1, l2, l3, total;
-      if (transport.type === 'mqtt') {
+      if (String(cfg.meter?.readType || '').toLowerCase() === 'spine-http') {
+        // SPiNE EnergyLink One als Netzzähler-Quelle: der eingebaute
+        // 3-Phasen-Zähler (Shelly Pro3EM) wird über die lokale HTTP-API des
+        // Geräts gelesen (GET /rpc/EM.GetStatus; Semantik: positiv = Bezug).
+        // Unabhängig vom Anlagen-Transport — Victron/Fronius-Punkte laufen
+        // weiter über Modbus/MQTT; cfg.meter wählt NUR die Netzzähler-Quelle.
+        // Läuft dvHub als Container AUF dem EnergyLink, ist die baseUrl
+        // http://local-api:80 (interner Hostname), sonst die Geräte-IP.
+        const baseUrl = String(cfg.meter.baseUrl || `http://${cfg.meter.host}`).replace(/\/+$/, '');
+        const timeoutMs = Number(cfg.meter.timeoutMs || 4000);
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+        let em;
+        try {
+          const res = await fetchImpl(`${baseUrl}/rpc/EM.GetStatus`, { signal: ctrl.signal });
+          if (!res.ok) throw new Error(`spine meter: HTTP ${res.status}`);
+          em = await res.json();
+        } finally {
+          clearTimeout(timer);
+        }
+        const fTotal = Number(em?.total_act_power);
+        // Fehlendes/NaN-Total ist ein Lesefehler — werfen, damit der normale
+        // Fehler-/Backoff-Pfad greift statt einer stillen 0 im Steuerpfad
+        // (gleiche Regel wie im float32-Zweig).
+        if (!Number.isFinite(fTotal)) throw new Error('spine meter: total power missing/NaN');
+        const fL1 = Number(em?.a_act_power) || 0;
+        const fL2 = Number(em?.b_act_power) || 0;
+        const fL3 = Number(em?.c_act_power) || 0;
+        const posImport = cfg.gridPositiveMeans === 'grid_import';
+        // EM.GetStatus: positiv = Bezug → bei feed_in-Konvention invertieren
+        const sign = posImport ? 1 : -1;
+        // Auf ganze Watt runden: state.dvRegs[0] = u16(total) unten erwartet
+        // Integer-Registersemantik (wie float32-Zweig). `|| 0` normalisiert
+        // das -0, das bei 0 * sign(-1) entsteht.
+        l1 = Math.round(fL1 * sign) || 0;
+        l2 = Math.round(fL2 * sign) || 0;
+        l3 = Math.round(fL3 * sign) || 0;
+        total = Math.round(fTotal * sign) || 0;
+        state.meter = {
+          ok: true, updatedAt: Date.now(), raw: [fTotal, fL1, fL2, fL3],
+          grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
+          error: null,
+          consecutiveErrors: 0,
+          nextRetryAt: null
+        };
+      } else if (transport.type === 'mqtt') {
         // MQTT: Werte aus Cache lesen (Venus OS: positiv = Import, negativ = Export)
         const ml1 = transport.getCached('meter_l1') ?? 0;
         const ml2 = transport.getCached('meter_l2') ?? 0;
