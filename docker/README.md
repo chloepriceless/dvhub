@@ -83,13 +83,35 @@ Ein selbst gesetztes `--max-old-space-size` in `NODE_OPTIONS` gewinnt immer;
 docker run -d --memory=256m --memory-swap=256m ...   # DVhub: Heap wird 179 MB
 ```
 
-Das lässt rund 440 MB für EOS und System. Referenzwerte von einer echten Box
-(Raspberry Pi 4, native Installation, im Leerlauf): DVhub 102 MB RSS, EOS
-46 MB, EOS-Dash 21 MB. Der Container selbst liegt bei ~42 MiB idle und stieg
-unter 20 API-Aufrufen nur auf ~106 MB RSS. Wer knapper fahren muss, kann auf
-`192m` gehen — darunter wird es ohne Lasttest mit echter Anlage unseriös,
-weil History-Aggregation und Parquet-Export deutlich mehr Heap ziehen können
-als der Leerlauf zeigt.
+Das lässt rund 440 MB für EOS und System.
+
+### Lasttest mit echten Produktivdaten
+
+`--memory=256m`, Datenbank aus einem prod-Dump (3,06 Mio Telemetriezeilen,
+2,74 Mio `optimizer_run_series`, 1,03 Mio `energy_slots_15m`), echte
+Betriebs-Config:
+
+| Situation | Verbrauch (von 256 MB) |
+|---|---|
+| Start, Config + Store geladen | 168 MiB |
+| eingeschwungen nach GC | 62–78 MiB |
+| `history/summary` + `raw`, 7d bis 365d | 68–78 MiB |
+| 10 parallele `raw`-Abfragen über 90d | 70 MiB |
+| CSV-Export 365d (180 MB Ausgabe) | 102 MiB |
+| **Parquet-Export 365d (203 MB Ausgabe), Peak** | **136 MiB** |
+
+Kein OOM-Kill, keine Neustarts, durchgehend `healthy`. Der Startwert von
+168 MiB fällt nach der ersten Garbage Collection auf unter 80 MiB — genau das
+Verhalten, das der Heap-Deckel erzwingen soll: Node räumt auf, bevor es an die
+Containergrenze stößt. Die Streaming-Exporte (pg-cursor, Parquet) halten ihr
+Versprechen — 200 MB Ausgabe bei 136 MiB Verbrauch.
+
+**Gegenrechnung fürs 700-MB-Budget** (Messwerte einer echten Box, Peak über
+5 Minuten mit laufenden Optimierungsläufen): EOS 49 MB, EOS-Dash 21 MB,
+DVhub-Container 136 MiB Peak — zusammen **rund 210 MB**. Mit `--memory=256m`
+für DVhub plus großzügig 128m für EOS bleibt man bei ~384 MB und damit
+deutlich unter 700 MB. `192m` für DVhub wäre nach diesen Zahlen noch tragfähig
+(Peak 136 MiB), lässt aber kaum Reserve für den Parquet-Export.
 
 Der Entrypoint ist idempotent: Config wird nur angelegt, nie überschrieben;
 `apiToken` und `appliance-id` nur erzeugt, wenn sie fehlen; Betreiber-Edits an

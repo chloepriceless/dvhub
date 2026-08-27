@@ -112,8 +112,14 @@ EXPOSE 8080
 
 # Ohne curl/wget: Node kann das selbst. Prüft dieselbe Route, die auch die
 # Fernüberwachung liest.
+#
+# Der Port kommt aus der CONFIG, nicht aus der Umgebung: eine mitgebrachte
+# Config (z. B. von einer bestehenden Installation) bringt ihren eigenen
+# httpPort mit — der ausgelieferte Default ist 80. Würde hier stur
+# DVHUB_HTTP_PORT geprüft, meldete der Healthcheck „unhealthy", obwohl die
+# Anwendung sauber läuft. Umgebung dient nur als Rückfallwert.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD node -e "const p=process.env.DVHUB_HTTP_PORT||8080;fetch('http://127.0.0.1:'+p+'/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const fs=require('fs');let p=process.env.DVHUB_HTTP_PORT||8080;try{const c=JSON.parse(fs.readFileSync(process.env.DV_APP_CONFIG||'/etc/dvhub/config.json','utf8'));if(Number.isFinite(c.httpPort))p=c.httpPort}catch{};fetch('http://127.0.0.1:'+p+'/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "server.js"]
