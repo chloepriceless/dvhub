@@ -75,13 +75,26 @@ Gebaut und gefahren auf einem Docker-Host im LAN (Docker 29.7.2, buildx 0.36.1):
 * **amd64**: Container `healthy`, Migrationen 001–020 gegen Postgres 16
   durchgelaufen, `/api/status` 200 in ~110 ms.
 * **arm64** unter QEMU: `healthy`, `uname -m` = `aarch64`, `process.arch` =
-  `arm64`, `/api/status` 200 (~1,2 s — Emulations-Overhead, nicht die
-  Zielhardware).
+  `arm64`, `/api/status` 200 (~1,2 s — Emulations-Overhead).
 * PID 1 läuft als `dvhub`, nicht als root.
 * Container gelöscht und aus denselben Volumes neu erzeugt: `appliance-id`
   identisch, Config unverändert — Lizenzbindung übersteht den Image-Tausch.
 * Im Image: **0** Testdateien, kein `git`, `Europe/Berlin` löst korrekt auf
   (ohne das `tzdata`-Paket fiele Alpine still auf UTC zurück).
 
-Nicht geprüft: mDNS-Discovery und Modbus unter `--network host`, Betrieb auf
-echter ARM-Hardware, Onboarding-Assistent über die Weboberfläche.
+Zusätzlich auf **echter ARM-Hardware** (Raspberry Pi 4 Model B, Debian 13,
+1,8 GB RAM) nachgezogen:
+
+* **Nativer arm64-Build** (kein QEMU) in **70 s**, Image 335 MB.
+* Container `healthy`, Migrationen 001–020 gegen Postgres 16 durch, PID 1 als
+  `dvhub`, `/api/status` 200 in **~0,36 s** (gegen ~1,2 s emuliert und ~0,11 s
+  auf amd64).
+* `appliance-id` überlebt auch hier die Neuerzeugung des Containers.
+
+Damit ist der EnergyLink-Zielarch nicht nur emuliert, sondern auf echter
+ARM64-Hardware belegt. Der Pi ist mit ~1 GB freiem RAM durch Build und Betrieb
+gekommen, ohne die parallel laufende native DVhub-Installation zu stören.
+
+Nicht geprüft: mDNS-Discovery und Modbus unter `--network host`, der
+Onboarding-Assistent über die Weboberfläche, Betrieb auf dem EnergyLink selbst
+(~1 GB RAM / ~2,3 GB Disk — enger als der Pi).
