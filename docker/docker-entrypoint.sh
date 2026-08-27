@@ -158,7 +158,46 @@ const probe = () => new Promise((resolve) => {
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Rechte ablegen
+# 7. Node-Heap an das Container-Limit koppeln
+#
+# Node richtet seinen Heap NICHT nach dem cgroup-Limit: gemessen meldet es bei
+# `--memory=96m` genauso 259 MB heap_size_limit wie bei `--memory=320m`. Ohne
+# Deckel wächst der Heap also über die Container-Grenze hinaus und der Prozess
+# wird vom OOM-Killer erschlagen, statt vorher aufzuräumen — auf einer 1-GB-Box
+# (EnergyLink, DVhub + EOS teilen sich ~700 MB) ist das der wahrscheinlichste
+# Absturzweg.
+#
+# Deshalb: Limit auslesen und daraus ~70 % als Heap-Obergrenze ableiten. Der
+# Rest ist Puffer für Node-Binary, Stacks, Puffer und die Alpine-Laufzeit.
+# Ein selbst gesetztes --max-old-space-size gewinnt immer.
+# ---------------------------------------------------------------------------
+if [ "${DVHUB_AUTO_HEAP:-1}" = "1" ] && ! echo "${NODE_OPTIONS:-}" | grep -q "max-old-space-size"; then
+  LIMIT_BYTES=""
+  if [ -r /sys/fs/cgroup/memory.max ]; then
+    LIMIT_BYTES="$(cat /sys/fs/cgroup/memory.max 2>/dev/null)"          # cgroup v2
+  elif [ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
+    LIMIT_BYTES="$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null)"  # cgroup v1
+  fi
+  # "max" (v2) bzw. absurd grosse Werte (v1 ohne Limit) bedeuten: unbegrenzt.
+  case "$LIMIT_BYTES" in
+    ''|max|*[!0-9]*) LIMIT_BYTES="" ;;
+  esac
+  if [ -n "$LIMIT_BYTES" ] && [ "$LIMIT_BYTES" -lt 68719476736 ] 2>/dev/null; then
+    HEAP_MB=$(( LIMIT_BYTES / 1024 / 1024 * 70 / 100 ))
+    # Unter ~64 MB Heap startet die Anwendung nicht sinnvoll; dann lieber
+    # nichts setzen und den Betreiber das Limit korrigieren lassen.
+    if [ "$HEAP_MB" -ge 64 ]; then
+      NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$HEAP_MB"
+      export NODE_OPTIONS
+      log "Container-Limit $(( LIMIT_BYTES / 1024 / 1024 )) MB erkannt -> --max-old-space-size=$HEAP_MB"
+    else
+      log "Container-Limit $(( LIMIT_BYTES / 1024 / 1024 )) MB ist sehr klein — kein Heap-Deckel gesetzt"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Rechte ablegen
 #
 # Läuft der Container bereits unter einer unprivilegierten UID (docker run
 # --user, viele Orchestratoren, HA-Add-on je nach Profil), ist hier nichts zu

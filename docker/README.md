@@ -47,6 +47,49 @@ Für mDNS-Discovery (Victron, Shelly) und Modbus :502 im LAN braucht es
 | `DVHUB_WAIT_FOR_DB_TIMEOUT` | `60` | Danach wird trotzdem gestartet. |
 | `DVHUB_USER` | `dvhub` | Nutzer, auf den der Entrypoint die Rechte ablegt. |
 | `DVHUB_APP_DIR` / `DVHUB_SCRIPTS_DIR` | `/opt/dvhub/…` | Nur für abweichende Layouts (Add-on-Wrapper, Testlauf). |
+| `DVHUB_AUTO_HEAP` | `1` | Leitet `--max-old-space-size` aus dem cgroup-Limit ab (70 %). `0` schaltet ab. |
+| `NODE_OPTIONS` | – | Ein eigenes `--max-old-space-size` hat Vorrang vor der Automatik. |
+
+## Speicher begrenzen (EnergyLink: ~700 MB für DVhub **und** EOS)
+
+**Node richtet seinen Heap nicht nach dem Container-Limit.** Gemessen meldet es
+bei `--memory=96m` dasselbe `heap_size_limit` (259 MB) wie bei `--memory=320m`.
+Ohne Deckel wächst der Heap über die Containergrenze hinaus und der Prozess
+wird vom OOM-Killer erschlagen, statt vorher aufzuräumen.
+
+Der Entrypoint löst das: er liest das cgroup-Limit und setzt daraus **70 %** als
+`--max-old-space-size`. Gemessen:
+
+| `--memory` | abgeleiteter Heap | Verbrauch idle | Status |
+|---|---|---|---|
+| 512m | 358 MB | ~42 MiB | healthy |
+| 320m | 224 MB | ~42 MiB | healthy |
+| 256m | 179 MB | ~42 MiB | healthy |
+| 192m | 134 MB | ~40 MiB | healthy |
+
+Ohne `--memory` wird **kein** Deckel gesetzt (Heap bleibt bei Nodes Default) —
+so bleibt das Image für den HA-Add-on-Fall auf einer großen Box unbeschränkt.
+Ein selbst gesetztes `--max-old-space-size` in `NODE_OPTIONS` gewinnt immer;
+`DVHUB_AUTO_HEAP=0` schaltet die Automatik ganz ab.
+
+> **Einschränkung:** Die Automatik braucht cgroup-Memory-Accounting. Auf
+> Raspberry Pi OS fehlt es standardmäßig (`cgroup_enable=memory` nicht in
+> `cmdline.txt`) — dort greift weder `--memory` noch die Ableitung. Wenn
+> unklar ist, ob die Zielplattform es hat, `NODE_OPTIONS` explizit setzen.
+
+**Empfehlung für den EnergyLink** (~700 MB für DVhub + EOS zusammen):
+
+```bash
+docker run -d --memory=256m --memory-swap=256m ...   # DVhub: Heap wird 179 MB
+```
+
+Das lässt rund 440 MB für EOS und System. Referenzwerte von einer echten Box
+(Raspberry Pi 4, native Installation, im Leerlauf): DVhub 102 MB RSS, EOS
+46 MB, EOS-Dash 21 MB. Der Container selbst liegt bei ~42 MiB idle und stieg
+unter 20 API-Aufrufen nur auf ~106 MB RSS. Wer knapper fahren muss, kann auf
+`192m` gehen — darunter wird es ohne Lasttest mit echter Anlage unseriös,
+weil History-Aggregation und Parquet-Export deutlich mehr Heap ziehen können
+als der Leerlauf zeigt.
 
 Der Entrypoint ist idempotent: Config wird nur angelegt, nie überschrieben;
 `apiToken` und `appliance-id` nur erzeugt, wenn sie fehlen; Betreiber-Edits an
