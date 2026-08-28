@@ -118,7 +118,13 @@ EXPOSE 8080
 # httpPort mit — der ausgelieferte Default ist 80. Würde hier stur
 # DVHUB_HTTP_PORT geprüft, meldete der Healthcheck „unhealthy", obwohl die
 # Anwendung sauber läuft. Umgebung dient nur als Rückfallwert.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+#
+# Zeiten auf schwache Zielhardware ausgelegt: auf einem Raspberry Pi 4 mit
+# echtem Datenbestand lief der Check waehrend der Startphase wiederholt in den
+# 5-Sekunden-Timeout, obwohl die Anwendung sauber antwortete (/api/status
+# danach 0,18 s). Ein Orchestrator haette den Container in dieser Phase
+# grundlos neu gestartet. Der EnergyLink ist knapper bestueckt als der Pi.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
   CMD node -e "const fs=require('fs');let p=process.env.DVHUB_HTTP_PORT||8080;try{const c=JSON.parse(fs.readFileSync(process.env.DV_APP_CONFIG||'/etc/dvhub/config.json','utf8'));if(Number.isFinite(c.httpPort))p=c.httpPort}catch{};fetch('http://127.0.0.1:'+p+'/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

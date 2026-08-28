@@ -118,6 +118,37 @@ Der Entrypoint ist idempotent: Config wird nur angelegt, nie überschrieben;
 der Config bleiben stehen. Läuft der Container bereits unter einer
 unprivilegierten UID (`--user`), überspringt er den `chown` und startet direkt.
 
+## Datenhaltung: gestufte Retention (Messung an Produktivdaten)
+
+Der EnergyLink hat ~2,3 GB Disk — die aktuelle „keep forever"-Policy passt dort
+nicht. Gemessen an einer echten Produktivkopie (69.153.918 Zeilen in
+`timeseries_samples`) mit der Staffelung **raw 3 Tage / 1 min 2 Monate /
+15 min dauerhaft**:
+
+| | Zeilen | Größe (komprimiert) |
+|---|---|---|
+| vorher | 69.153.918 | 1671 MB |
+| nachher | 2.047.977 | **27 MB** |
+
+Also **2,96 % der Zeilen** und **1,6 % des Platzes**. Der Löwenanteil sind
+61,3 Mio Zeilen im 5-Sekunden-Takt; die 15-Minuten-Serie reicht bereits bis
+Mai 2025 zurück.
+
+Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
+
+1. **Vorher aggregieren, sonst Datenverlust.** Von 43 Serien mit Rohdaten
+   existieren **26 ausschließlich als Rohdaten** — darunter `grid_l1_w`,
+   `grid_l2_w`, `grid_l3_w`, `grid_total_w`, `grid_setpoint_w`, die AC-PV-Phasen
+   und alle `tesla_*`. Ein reines Löschen nach 3 Tagen vernichtet sie ersatzlos.
+2. **`drop_chunks()` ist hier nicht nutzbar.** Alle Auflösungen liegen in
+   *derselben* Hypertable (67 Chunks, 65 komprimiert). Zeitbasierte
+   Chunk-Retention kann Rohdaten und 15-Minuten-Daten nicht trennen. Entweder
+   getrennte Hypertables je Auflösung — dann greift `drop_chunks` wieder — oder
+   zeilenweises Löschen mit Dekompression (teuer).
+3. **Textserien brauchen `last()`, nicht `avg()`.** `tesla_display_name`,
+   `tesla_geofence` und `tesla_since` führen ausschließlich `value_text`; eine
+   Mittelwert-Aggregation lässt sie stillschweigend verschwinden.
+
 ## Bewusst NICHT enthalten
 
 * **Postgres/TimescaleDB** — eigener Container bzw. externer Host.
