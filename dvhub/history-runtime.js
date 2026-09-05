@@ -49,6 +49,13 @@ const AGGREGATE_SUM_FIELDS = [
   'opportunityCostBatteryEur',
   'selfConsumptionCostEur',
   'exportRevenueEur',
+  // Börsenerlös je Einspeisequelle (Speicher vs. PV-direkt) plus die dabei
+  // BEWERTETEN kWh — Slots ohne Preis zählen weder im Betrag noch im Nenner,
+  // sonst zöge ein preisloser Slot den ct/kWh-Satz nach unten.
+  'exportPvRevenueEur',
+  'exportBatteryRevenueEur',
+  'exportPvValuedKwh',
+  'exportBatteryValuedKwh',
   'solarCompensationEur',
   'netEur',
   'premiumEligibleExportKwh',
@@ -344,6 +351,12 @@ function buildRowAccumulator(key, label) {
     opportunityCostBatteryEur: 0,
     selfConsumptionCostEur: 0,
     exportRevenueEur: 0,
+    exportPvRevenueEur: 0,
+    exportBatteryRevenueEur: 0,
+    exportPvValuedKwh: 0,
+    exportBatteryValuedKwh: 0,
+    exportPvCtKwh: null,
+    exportBatteryCtKwh: null,
     solarCompensationEur: 0,
     premiumEligibleExportKwh: 0,
     premiumValuedExportKwh: 0,
@@ -403,6 +416,18 @@ function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
   }
   if ('grossReturnEur' in target) {
     target.grossReturnEur = round2(Number(target.netEur || 0) + Number(target.avoidedImportGrossEur || 0));
+  }
+  // Erlössatz je Einspeisequelle: Betrag ÷ bewertete kWh. null heißt „nichts
+  // bewertet eingespeist" (keine Einspeisung oder kein Preis) — nicht 0 ct.
+  if ('exportPvRevenueEur' in target) {
+    target.exportPvCtKwh = Number(target.exportPvValuedKwh || 0) > 0
+      ? round2((Number(target.exportPvRevenueEur || 0) / Number(target.exportPvValuedKwh)) * 100)
+      : null;
+  }
+  if ('exportBatteryRevenueEur' in target) {
+    target.exportBatteryCtKwh = Number(target.exportBatteryValuedKwh || 0) > 0
+      ? round2((Number(target.exportBatteryRevenueEur || 0) / Number(target.exportBatteryValuedKwh)) * 100)
+      : null;
   }
   return target;
 }
@@ -529,6 +554,10 @@ function buildPeriodCharts(rows) {
       label: row.label,
       exportKwh: row.exportKwh,
       exportRevenueEur: row.exportRevenueEur,
+      exportPvRevenueEur: row.exportPvRevenueEur,
+      exportBatteryRevenueEur: row.exportBatteryRevenueEur,
+      exportPvCtKwh: row.exportPvCtKwh,
+      exportBatteryCtKwh: row.exportBatteryCtKwh,
       gridCostEur: row.gridCostEur,
       pvCostEur: row.pvCostEur,
       batteryCostEur: row.batteryCostEur,
@@ -1696,6 +1725,14 @@ export function createHistoryRuntime({
         const opportunityCostBatteryEur = costForShareEur(shares.batteryShareKwh, marketPriceCtKwh);
         const selfConsumptionCostEur = round2((gridCostEur || 0) + (pvCostEur || 0) + (batteryCostEur || 0));
         const exportRevenueEur = missingMarketPrice ? null : round2((slot.exportKwh * Number(marketPriceCtKwh || 0)) / 100);
+        // Derselbe Slotpreis, aufgeteilt nach Herkunft der eingespeisten kWh
+        // (Flow-Zerlegung solarToGrid / batteryToGrid). Was der Speicher in
+        // teuren Stunden erlöst, soll neben dem PV-Direkt-Satz sichtbar sein —
+        // der gemeinsame Schnitt (avgSpotPriceCtKwh) verdeckt genau das.
+        const exportPvRevenueEur = missingMarketPrice ? null : round2((pvExportKwh * Number(marketPriceCtKwh || 0)) / 100);
+        const exportBatteryRevenueEur = missingMarketPrice ? null : round2((batteryExportKwh * Number(marketPriceCtKwh || 0)) / 100);
+        const exportPvValuedKwh = missingMarketPrice ? 0 : round2(pvExportKwh);
+        const exportBatteryValuedKwh = missingMarketPrice ? 0 : round2(batteryExportKwh);
         const netEur = round2((exportRevenueEur || 0) - (selfConsumptionCostEur || 0));
         const premiumEligibleExportKwh =
           Number.isFinite(marketPriceCtKwh) && marketPriceCtKwh >= 0
@@ -1745,6 +1782,10 @@ export function createHistoryRuntime({
           selfConsumptionCostEur,
           importCostEur,
           exportRevenueEur,
+          exportPvRevenueEur,
+          exportBatteryRevenueEur,
+          exportPvValuedKwh,
+          exportBatteryValuedKwh,
           netEur,
           grossReturnEur,
           premiumEligibleExportKwh,
@@ -1797,6 +1838,10 @@ export function createHistoryRuntime({
       opportunityCostBatteryEur: totals.opportunityCostBatteryEur + (slot.opportunityCostBatteryEur || 0),
       selfConsumptionCostEur: totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0),
       exportRevenueEur: totals.exportRevenueEur + (slot.exportRevenueEur || 0),
+      exportPvRevenueEur: totals.exportPvRevenueEur + (slot.exportPvRevenueEur || 0),
+      exportBatteryRevenueEur: totals.exportBatteryRevenueEur + (slot.exportBatteryRevenueEur || 0),
+      exportPvValuedKwh: totals.exportPvValuedKwh + (slot.exportPvValuedKwh || 0),
+      exportBatteryValuedKwh: totals.exportBatteryValuedKwh + (slot.exportBatteryValuedKwh || 0),
       solarCompensationEur: 0,
       netEur: totals.netEur + slot.netEur,
       grossReturnEur: null,
@@ -1852,6 +1897,10 @@ export function createHistoryRuntime({
       opportunityCostBatteryEur: 0,
       selfConsumptionCostEur: 0,
       exportRevenueEur: 0,
+      exportPvRevenueEur: 0,
+      exportBatteryRevenueEur: 0,
+      exportPvValuedKwh: 0,
+      exportBatteryValuedKwh: 0,
       solarCompensationEur: 0,
       netEur: 0,
       grossReturnEur: null,
@@ -1908,6 +1957,18 @@ export function createHistoryRuntime({
       ? round2((weightedExpRev / weightedExpKwh) * 100)
       : null;
     kpis.avgSpotPriceBasis = view; // 'day'|'week'|'month'|'year'|'all'
+    // Getrennte Sätze: Speicher-Einspeisung vs. PV-Direkt-Einspeisung, jeweils
+    // Börsenerlös ÷ bewertete kWh der Quelle (siehe AGGREGATE_SUM_FIELDS).
+    kpis.exportPvRevenueEur = round2(Number(kpis.exportPvRevenueEur || 0));
+    kpis.exportBatteryRevenueEur = round2(Number(kpis.exportBatteryRevenueEur || 0));
+    kpis.exportPvValuedKwh = round2(Number(kpis.exportPvValuedKwh || 0));
+    kpis.exportBatteryValuedKwh = round2(Number(kpis.exportBatteryValuedKwh || 0));
+    kpis.exportPvCtKwh = kpis.exportPvValuedKwh > 0
+      ? round2((kpis.exportPvRevenueEur / kpis.exportPvValuedKwh) * 100)
+      : null;
+    kpis.exportBatteryCtKwh = kpis.exportBatteryValuedKwh > 0
+      ? round2((kpis.exportBatteryRevenueEur / kpis.exportBatteryValuedKwh) * 100)
+      : null;
 
     // DV comparison KPIs: week, month and year views (data exists from the
     // week view onward); null for day / all.

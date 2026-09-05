@@ -682,6 +682,13 @@ function renderKpis(summary) {
     setText('historyKpiDvRevenue', hasFiniteNumber(effDvRevenueEur) ? fmtEur(effDvRevenueEur) : '-');
     setText('historyKpiDvSpotRevenue', fmtEur(spotRevenueEur));
     setText('historyKpiDvSpotRate', hasFiniteNumber(spotRateCtKwh) ? fmtCt(spotRateCtKwh) : '-');
+    // Börsenerlös je Quelle (Backend: exportBatteryRevenueEur/-CtKwh,
+    // exportPvRevenueEur/-CtKwh). Satz null = nichts bepreist eingespeist.
+    const spotSplit = (revenueEur, ctKwh) => (hasFiniteNumber(revenueEur)
+      ? `${fmtEur(revenueEur)}${hasFiniteNumber(ctKwh) ? ` · ${fmtCt(ctKwh)}` : ''}`
+      : '-');
+    setText('historyKpiDvSpotBattery', spotSplit(kpis?.exportBatteryRevenueEur, kpis?.exportBatteryCtKwh));
+    setText('historyKpiDvSpotPv', spotSplit(kpis?.exportPvRevenueEur, kpis?.exportPvCtKwh));
     setText('historyKpiDvRevenueRate', hasFiniteNumber(effDvRevenueCtKwh) ? fmtCt(effDvRevenueCtKwh) : '-');
     setText('historyKpiDvMarketPremiumEur',
       hasFiniteNumber(effMarketPremiumEur) ? fmtEur(effMarketPremiumEur) : 'noch nicht verfügbar');
@@ -755,7 +762,7 @@ function renderKpis(summary) {
   } else {
     // Reset DV-only columns to placeholders when DV data is unavailable
     // (premium columns shown, but no dvRevenue/hypFeedIn for this period)
-    for (const id of ['historyKpiDvRevenue', 'historyKpiDvSpotRevenue', 'historyKpiDvSpotRate', 'historyKpiDvRevenueRate', 'historyKpiDvMarketValue', 'historyKpiDvApplicableValue',
+    for (const id of ['historyKpiDvRevenue', 'historyKpiDvSpotRevenue', 'historyKpiDvSpotRate', 'historyKpiDvSpotBattery', 'historyKpiDvSpotPv', 'historyKpiDvRevenueRate', 'historyKpiDvMarketValue', 'historyKpiDvApplicableValue',
                        'historyKpiDvMarketPremiumEur', 'historyKpiDvMarketPremiumRate',
                        'historyKpiHypFullFeedIn', 'historyKpiHypSurplusFeedIn', 'historyKpiDvExcess', 'historyKpiDvCost', 'historyKpiDvNetAdvantage']) {
       setText(id, '-');
@@ -2118,6 +2125,8 @@ function renderRows(summary) {
           <th>Akku-Kosten</th>
           <th>Vermiedener Bezug</th>
           <th>Erlös Einspeisung</th>
+          <th title="Börsenerlös der Speicher-Einspeisung · Satz je bepreister kWh">Erlös Speicher</th>
+          <th title="Börsenerlös der PV-Direkt-Einspeisung · Satz je bepreister kWh">Erlös PV direkt</th>
           <th>Kosten</th>
           <th>Netto</th>
           <th>Brutto-Erlös</th>
@@ -2152,6 +2161,8 @@ function renderRows(summary) {
             <td>${fmtEur(row.batteryCostEur)}</td>
             <td>${fmtEur(row.avoidedImportGrossEur)}</td>
             <td>${fmtEur(row.exportRevenueEur)}</td>
+            <td>${fmtEur(row.exportBatteryRevenueEur)}${hasFiniteNumber(row.exportBatteryCtKwh) ? ` · ${fmtCt(row.exportBatteryCtKwh)}` : ''}</td>
+            <td>${fmtEur(row.exportPvRevenueEur)}${hasFiniteNumber(row.exportPvCtKwh) ? ` · ${fmtCt(row.exportPvCtKwh)}` : ''}</td>
             <td>${fmtEur(baselineTotalCostEur(row))}</td>
             <td>${fmtEur(actualNetEur(row))}</td>
             <td>${fmtEur(grossReturnEur(row))}</td>

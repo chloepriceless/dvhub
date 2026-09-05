@@ -10,6 +10,23 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **Börsenerlös je Einspeisequelle — Speicher und PV-direkt getrennt.** Der
+  gemeinsame Börsenschnitt verdeckt, was den Speicher ausmacht: die PV speist
+  in die billigen Mittagsstunden, der Speicher entlädt gezielt in die teuren.
+  Historie zeigt in der DV-Karte jetzt unter „∅ Börse ct/kWh" zwei Zeilen —
+  „davon Speicher" und „davon PV direkt", jeweils Erlös in € und erlöster Satz
+  in ct/kWh — und in der Detailtabelle (Woche/Monat/Jahr/Alle) die Spalten
+  „Erlös Speicher" und „Erlös PV direkt". Grundlage ist die vorhandene
+  Flow-Zerlegung je Viertelstunde (PV→Netz, Akku→Netz) mit dem Slotpreis.
+  Slots ohne Börsenpreis zählen weder im Betrag noch im Nenner, damit sie den
+  Satz nicht nach unten ziehen; „–" heißt „nichts bepreist eingespeist", nicht
+  0 ct. API: `exportPvRevenueEur`, `exportBatteryRevenueEur`,
+  `exportPvCtKwh`, `exportBatteryCtKwh` sowie die bewerteten kWh
+  `exportPvValuedKwh`/`exportBatteryValuedKwh` in KPIs, Zeilen und
+  `periodFinancialBars`.
+
 ## [1.0.6] - 2026-09-05
 
 ### Neu

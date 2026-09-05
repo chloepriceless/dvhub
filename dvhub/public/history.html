@@ -283,6 +283,12 @@
             <div class="calc-row-line"><span>B&ouml;rsenerl&ouml;s</span><strong id="historyKpiDvSpotRevenue">-</strong></div>
             <div class="calc-row-line"><span>+ Marktpr&auml;mie</span><strong id="historyKpiDvMarketPremiumEur">-</strong></div>
             <div class="calc-row-line"><span>&empty;&nbsp;B&ouml;rse ct/kWh</span><strong id="historyKpiDvSpotRate">-</strong></div>
+            <!-- Börsenerlös je Einspeisequelle: der Speicher entlädt gezielt in
+                 teure Stunden, die PV speist in die billigen — der gemeinsame
+                 Schnitt verdeckt genau diesen Unterschied. Betrag · ct/kWh je
+                 Quelle, Nenner sind nur die bepreisten kWh. -->
+            <div class="calc-row-line is-sub" title="Einspeisung aus dem Speicher (Akku→Netz): Börsenerlös und erlöster Satz je kWh"><span>davon Speicher</span><strong id="historyKpiDvSpotBattery">-</strong></div>
+            <div class="calc-row-line is-sub" title="Einspeisung direkt aus der PV (PV→Netz): Börsenerlös und erlöster Satz je kWh"><span>davon PV direkt</span><strong id="historyKpiDvSpotPv">-</strong></div>
             <div class="calc-row-line"><span>+ Marktpr&auml;mie ct/kWh</span><strong id="historyKpiDvMarketPremiumRate">-</strong></div>
             <div class="calc-row-line"><span>&empty;&nbsp;kombiniert ct/kWh</span><strong id="historyKpiDvRevenueRate">-</strong></div>
             <div class="calc-row-line"><span id="historyKpiDvMarketValueLabel">Tats&auml;chlicher Monatsmarktwert</span><strong id="historyKpiDvMarketValue">-</strong></div>
@@ -627,7 +633,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20260702-dbengine-moved"></script>
+  <script src="/history.js?v=20260906-dbengine-moved"></script>
   <script src="/history-viz.js?v=20260614-sankeylayered"></script>
 </body>
 </html>
