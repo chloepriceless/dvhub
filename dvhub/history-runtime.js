@@ -1729,10 +1729,21 @@ export function createHistoryRuntime({
         // (Flow-Zerlegung solarToGrid / batteryToGrid). Was der Speicher in
         // teuren Stunden erlöst, soll neben dem PV-Direkt-Satz sichtbar sein —
         // der gemeinsame Schnitt (avgSpotPriceCtKwh) verdeckt genau das.
-        const exportPvRevenueEur = missingMarketPrice ? null : round2((pvExportKwh * Number(marketPriceCtKwh || 0)) / 100);
-        const exportBatteryRevenueEur = missingMarketPrice ? null : round2((batteryExportKwh * Number(marketPriceCtKwh || 0)) / 100);
-        const exportPvValuedKwh = missingMarketPrice ? 0 : round2(pvExportKwh);
-        const exportBatteryValuedKwh = missingMarketPrice ? 0 : round2(batteryExportKwh);
+        // „Preis fehlt" hängt hier am Preis selbst, nicht an slot.exportKwh > 0
+        // (wie bei missingMarketPrice): ein Slot mit Quell-Export-kWh, aber
+        // inkonsistentem exportKwh <= 0 fällt so aus dem Nenner, statt mit 0 ct
+        // bewertet zu werden (Codex-Hinweis 2026-09-06).
+        // Summe der beiden Teilbeträge kann vom Gesamterlös um Rundungscents
+        // abweichen: alle drei werden je Slot einzeln auf 2 Stellen gerundet,
+        // und exportRevenueEur basiert auf exportKwh, die Teile auf den Flows
+        // solarToGrid/batteryToGrid. Das wird bewusst NICHT abgeglichen — die
+        // Teile sollen die Flows ehrlich wiedergeben, nicht den Gesamterlös
+        // nachbauen.
+        const splitPriceKnown = Number.isFinite(marketPriceCtKwh);
+        const exportPvRevenueEur = splitPriceKnown ? round2((pvExportKwh * marketPriceCtKwh) / 100) : null;
+        const exportBatteryRevenueEur = splitPriceKnown ? round2((batteryExportKwh * marketPriceCtKwh) / 100) : null;
+        const exportPvValuedKwh = splitPriceKnown ? round2(pvExportKwh) : 0;
+        const exportBatteryValuedKwh = splitPriceKnown ? round2(batteryExportKwh) : 0;
         const netEur = round2((exportRevenueEur || 0) - (selfConsumptionCostEur || 0));
         const premiumEligibleExportKwh =
           Number.isFinite(marketPriceCtKwh) && marketPriceCtKwh >= 0
