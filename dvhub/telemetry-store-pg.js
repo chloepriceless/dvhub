@@ -36,6 +36,33 @@ const MATERIALIZED_ENERGY_SERIES = new Set([
   'battery_direct_use_w', 'battery_to_grid_w'
 ]);
 
+// The 23 series that become value fields on a returned slot. NOTE this is
+// deliberately NOT all of MATERIALIZED_ENERGY_SERIES: 'load_power_w_ex_managed'
+// is stored and queried but never read out, so it must not contribute to a
+// slot's source-kind sets either (the JS pivot only ever recorded the kinds of
+// series it actually picked). Order is irrelevant here; the emitted
+// estimated/incomplete key arrays are ordered by MATERIALIZED_TRACKED_SERIES.
+const MATERIALIZED_SLOT_FIELDS = [
+  ['importKwh', 'grid_import_w'], ['exportKwh', 'grid_export_w'], ['gridKwh', 'grid_total_w'],
+  ['pvKwh', 'pv_total_w'], ['pvAcKwh', 'pv_ac_w'],
+  ['batteryKwh', 'battery_power_w'], ['batteryChargeKwh', 'battery_charge_w'],
+  ['batteryDischargeKwh', 'battery_discharge_w'], ['loadKwh', 'load_power_w'],
+  ['vrmSolarYieldKwh', 'vrm_solar_yield_w'], ['vrmSiteConsumptionKwh', 'vrm_site_consumption_w'],
+  ['vrmGridImportRefKwh', 'vrm_grid_import_ref_w'], ['vrmGridExportRefKwh', 'vrm_grid_export_ref_w'],
+  ['vrmConsumptionInputKwh', 'vrm_consumption_input_w'], ['vrmConsumptionOutputKwh', 'vrm_consumption_output_w'],
+  ['selfConsumptionKwh', 'self_consumption_w'],
+  ['solarDirectUseKwh', 'solar_direct_use_w'], ['solarToBatteryKwh', 'solar_to_battery_w'],
+  ['solarToGridKwh', 'solar_to_grid_w'], ['gridDirectUseKwh', 'grid_direct_use_w'],
+  ['gridToBatteryKwh', 'grid_to_battery_w'], ['batteryDirectUseKwh', 'battery_direct_use_w'],
+  ['batteryToGridKwh', 'battery_to_grid_w']
+];
+
+// Series whose estimated/incomplete meta flags are surfaced per slot.
+const MATERIALIZED_TRACKED_SERIES = [
+  'grid_import_w', 'grid_export_w', 'pv_total_w', 'battery_power_w',
+  'battery_charge_w', 'battery_discharge_w', 'load_power_w'
+];
+
 const roundKwh = round2;
 
 function bucketIso(ts, seconds) {
@@ -795,7 +822,109 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       .filter((row) => row.priceCtKwh != null || row.priceEurMwh != null);
   }
 
+  // Pivots per slot IN POSTGRES rather than shipping one row per
+  // (slot, series, source) and folding them in JS.
+  //
+  // The table holds ~35 rows per 15-minute slot (24 series × sources), so a
+  // single year meant ~725k rows on the wire and ~725k driver row objects to
+  // yield ~24k slots. Measured on prod that was ~11.5s of query+transfer and
+  // several hundred MB resident — the reason a Jahr/Alle report ran for ~20s
+  // and, for 'Alle', exhausted RAM. GROUP BY slot_start_utc returns ONE row per
+  // slot instead, so the row count matches the answer size (~30x fewer).
+  //
+  // Source preference is reproduced exactly: ROW_NUMBER over
+  // array_position(preferred, source_kind) picks the same row the JS loop's
+  // first-match-wins did, and every value/flag aggregate reads only rn=1 rows.
+  // The kind sets deliberately ignore series outside MATERIALIZED_SLOT_FIELDS
+  // (see that constant) so they stay identical to the JS behaviour.
   async function listMaterializedEnergySlots({ start, end, sourceKinds = ['vrm_import', 'local_live'] }) {
+    const preferredSourceKinds = Array.isArray(sourceKinds) ? sourceKinds.map((k) => String(k || '').trim()).filter(Boolean) : ['vrm_import', 'local_live'];
+    const seriesList = [...MATERIALIZED_ENERGY_SERIES];
+    // $1 series list, $2 start, $3 end, $4 preferred source kinds (ordered),
+    // $5 the read-out series (kind sets + flags ignore everything else).
+    const params = [
+      seriesList,
+      isoTimestamp(start),
+      isoTimestamp(end),
+      preferredSourceKinds,
+      MATERIALIZED_SLOT_FIELDS.map(([, seriesKey]) => seriesKey),
+      MATERIALIZED_TRACKED_SERIES
+    ];
+
+    const valueColumns = MATERIALIZED_SLOT_FIELDS
+      .map(([, seriesKey]) => `MAX(value_num) FILTER (WHERE rn = 1 AND series_key = '${seriesKey}') AS "${seriesKey}"`)
+      .join(',\n        ');
+
+    const result = await pool.query(`
+      WITH ranked AS (
+        SELECT slot_start_utc, series_key, source_kind, value_num, meta_json,
+               ROW_NUMBER() OVER (
+                 PARTITION BY slot_start_utc, series_key
+                 ORDER BY array_position($4::text[], source_kind)
+               ) AS rn
+        FROM energy_slots_15m
+        WHERE series_key = ANY($1::text[])
+          AND slot_start_utc >= $2
+          AND slot_start_utc < $3
+          AND source_kind = ANY($4::text[])
+      )
+      SELECT slot_start_utc,
+        ${valueColumns},
+        array_agg(DISTINCT source_kind) FILTER (WHERE series_key = ANY($5::text[])) AS available_kinds,
+        -- Quirk preserved from the JS pivot, which the golden-diff surfaced:
+        -- 'sourceKind' is narrower than 'sourceKinds'. In the original the
+        -- overall kind was computed BEFORE the returned object literal, so at
+        -- that point only the 7 tracked series had been picked (via the
+        -- estimated/incomplete flag pass); the other 16 were picked later, while
+        -- the literal was being evaluated, and so never influenced it. Widening
+        -- this to all 23 read-out series would flip many slots from a concrete
+        -- kind to 'mixed', so selected_kinds stays scoped to the tracked series
+        -- ($6) while available_kinds ($5) covers all of them.
+        array_agg(DISTINCT source_kind) FILTER (WHERE rn = 1 AND series_key = ANY($6::text[])) AS selected_kinds,
+        array_agg(series_key) FILTER (
+          WHERE rn = 1 AND (meta_json::jsonb ->> 'estimated') = 'true'
+        ) AS estimated_keys,
+        array_agg(series_key) FILTER (
+          WHERE rn = 1 AND (meta_json::jsonb ->> 'incomplete') = 'true'
+        ) AS incomplete_keys
+      FROM ranked
+      GROUP BY slot_start_utc
+      ORDER BY slot_start_utc ASC
+    `, params);
+
+    return result.rows.map((row) => {
+      const availableSourceKinds = (row.available_kinds || []).slice().sort();
+      const selectedKinds = row.selected_kinds || [];
+      // Same rule as the JS pivot: one kind across all picked series names it,
+      // several make the slot 'mixed', none (no data at all) leaves it null.
+      const overallSourceKind = selectedKinds.length === 1
+        ? selectedKinds[0]
+        : (selectedKinds.length > 1 ? 'mixed' : null);
+      // Re-derive in MATERIALIZED_TRACKED_SERIES order — array_agg order is
+      // not guaranteed, and the emitted arrays are order-sensitive.
+      const estimatedSet = new Set(row.estimated_keys || []);
+      const incompleteSet = new Set(row.incomplete_keys || []);
+      const estimatedSeriesKeys = MATERIALIZED_TRACKED_SERIES.filter((sk) => estimatedSet.has(sk));
+      const incompleteSeriesKeys = MATERIALIZED_TRACKED_SERIES.filter((sk) => incompleteSet.has(sk));
+      const slot = {
+        ts: new Date(row.slot_start_utc).toISOString(),
+        sourceKind: overallSourceKind,
+        sourceKinds: availableSourceKinds,
+        estimated: estimatedSeriesKeys.length > 0,
+        incomplete: incompleteSeriesKeys.length > 0,
+        estimatedSeriesCount: estimatedSeriesKeys.length,
+        incompleteSeriesCount: incompleteSeriesKeys.length,
+        estimatedSeriesKeys,
+        incompleteSeriesKeys
+      };
+      for (const [field, seriesKey] of MATERIALIZED_SLOT_FIELDS) {
+        slot[field] = Number(row[seriesKey] || 0);
+      }
+      return slot;
+    });
+  }
+
+  async function listMaterializedEnergySlotsJsPivot({ start, end, sourceKinds = ['vrm_import', 'local_live'] }) {
     const preferredSourceKinds = Array.isArray(sourceKinds) ? sourceKinds.map((k) => String(k || '').trim()).filter(Boolean) : ['vrm_import', 'local_live'];
     const seriesList = [...MATERIALIZED_ENERGY_SERIES];
     const params = [...seriesList, isoTimestamp(start), isoTimestamp(end), ...preferredSourceKinds];
@@ -1206,6 +1335,9 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     listMissingPriceBuckets,
     listAggregatedEnergySlots,
     listMaterializedEnergySlots,
+    // Pre-pivot reference implementation, kept only so the SQL pivot can be
+    // golden-diffed against it on real data. Not used by the app.
+    listMaterializedEnergySlotsJsPivot,
     listImportJobRanges,
     listPriceSlots,
     async upsertSolarMarketValue(entry = {}) {

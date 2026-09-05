@@ -3838,10 +3838,28 @@ function roundCtKwh(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 }
 
+// Building an Intl.DateTimeFormat costs ~70µs; formatToParts on a built one
+// ~3µs. Both helpers below run per energy slot via
+// resolveUserImportPriceCtKwhForSlot, so a Jahr report (~24k slots) paid this
+// tens of thousands of times — several seconds of pure formatter construction.
+// One instance per (shape, timeZone) is kept instead; the formatters are
+// immutable and the options are fixed, so this is behaviour-identical.
+const DTF_CACHE = new Map();
+
+function cachedDtf(key, locale, options) {
+  const cacheKey = `${key}|${options.timeZone}`;
+  let dtf = DTF_CACHE.get(cacheKey);
+  if (!dtf) {
+    dtf = new Intl.DateTimeFormat(locale, options);
+    DTF_CACHE.set(cacheKey, dtf);
+  }
+  return dtf;
+}
+
 function formatLocalDate(value, timeZone = BERLIN_TIME_ZONE) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  const parts = new Intl.DateTimeFormat('en-CA', {
+  const parts = cachedDtf('date', 'en-CA', {
     timeZone,
     year: 'numeric',
     month: '2-digit',
@@ -3857,7 +3875,7 @@ function formatLocalDate(value, timeZone = BERLIN_TIME_ZONE) {
 function localMinutesOfDay(value, timeZone = BERLIN_TIME_ZONE) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  const parts = new Intl.DateTimeFormat('en-GB', {
+  const parts = cachedDtf('hhmm', 'en-GB', {
     timeZone,
     hour: '2-digit',
     minute: '2-digit',

@@ -198,16 +198,35 @@ function startOfWeek(value) {
   return addDays(value, 1 - day);
 }
 
+// Intl.DateTimeFormat construction costs ~70µs — formatToParts on an already
+// built instance ~3µs. getLocalParts runs per energy slot and getSummary walks
+// the slot list several times, so a year view (~24k slots) built ~200k
+// formatters and burned ~14s of CONTIGUOUS event-loop time: the whole hub
+// (UI, API, polling, Modbus) froze until the report finished, which is what
+// surfaced as a "timeout" on Jahr/Alle. Cache one formatter per time zone —
+// the sibling aggregator (services/history-viz/aggregator.js) already does
+// exactly this, which is why the viz cards stayed fast while summary did not.
+const LOCAL_PARTS_DTF_BY_TZ = new Map();
+
+function localPartsFormatter(timeZone) {
+  let dtf = LOCAL_PARTS_DTF_BY_TZ.get(timeZone);
+  if (!dtf) {
+    dtf = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    });
+    LOCAL_PARTS_DTF_BY_TZ.set(timeZone, dtf);
+  }
+  return dtf;
+}
+
 function getLocalParts(date, timeZone = BERLIN_TIME_ZONE) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23'
-  }).formatToParts(date);
+  const parts = localPartsFormatter(timeZone).formatToParts(date);
   return {
     year: Number(parts.find((part) => part.type === 'year')?.value),
     month: Number(parts.find((part) => part.type === 'month')?.value),
@@ -1365,27 +1384,89 @@ export function createHistoryRuntime({
     return await listRawFallbackSlotsForRange({ start, end });
   }
 
-  async function listYearEnergySlotsByMonth(date) {
-    const yearStart = startOfYear(date);
-    const year = parseDateOnly(yearStart)?.year;
-    if (!Number.isFinite(year)) return [];
-    const slots = [];
-    for (let month = 1; month <= 12; month += 1) {
-      const monthDate = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-01`;
-      const monthRange = normalizeViewRange('month', monthDate);
-      const start = localDateTimeToUtcIso(monthRange.startDate, 0, 0);
-      const end = localDateTimeToUtcIso(monthRange.endDateExclusive, 0, 0);
-      slots.push(...await listEnergySlotsForRange({ start, end }));
+  // Hand the event loop back between the heavy aggregation passes of a
+  // Jahr/Alle report.
+  //
+  // Everything here runs on the SAME event loop as the Modbus control path,
+  // and the passes below are ~1-2s each of uninterrupted synchronous work. Run
+  // back to back they blocked the loop for ~5.5s (measured), which is longer
+  // than schedule.controlKeepaliveMs (5000ms on prod) — so a report could make
+  // the hub miss a keepalive re-assert of Victron reg 2700, a TRANSIENT
+  // register with a Venus-side watchdog that reverts the setpoint when it is
+  // not re-written. A report must never be able to drop the grid setpoint.
+  //
+  // setImmediate yields after the current macrotask, so pending I/O and timers
+  // (the schedule tick among them) get to run. Results are untouched: the same
+  // passes run in the same order on the same data, they just no longer form one
+  // unbroken block.
+  const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
+
+  // Load a View-Range in calendar-month chunks instead of one query.
+  //
+  // The DB stores one row per (slot, series, source): a single year is ~711k
+  // raw rows and "Alle" well over a million. Read in one go, the driver holds
+  // that whole result set plus the pivot map at once — several hundred MB for
+  // 'year' and ~1 GB for 'all'. That is what stalled the 2 GiB prod LXC into a
+  // swap-thrash (services stopped answering while the kernel still replied to
+  // ping), and it is far past the ~500 MB an appliance will have.
+  //
+  // Pivoting month by month lets each chunk's raw rows be collected before the
+  // next is read, so peak memory tracks the LARGEST MONTH (~59k rows), not the
+  // span. Only the pivoted slot objects accumulate (~24k/year, a few MB).
+  // 'year' already did this; 'all' did not, which is why "Alle" was the one
+  // that took the hub down.
+  //
+  // Fallback semantics are deliberately kept whole-range: listEnergySlotsForRange
+  // falls back to raw aggregation only when the materialized table yields
+  // NOTHING. Applying that per chunk would fire a raw fallback for every empty
+  // month (the 'all' window floors at 2015, so most months are empty). So the
+  // chunks query the materialized store directly and the raw fallback runs once
+  // over the whole range, only if every chunk came back empty — bit-identical
+  // to the single-query path.
+  async function listEnergySlotsByMonthChunks({ startDate, endDateExclusive }) {
+    if (!isDateOnly(startDate) || !isDateOnly(endDateExclusive)) return [];
+    if (typeof store.listMaterializedEnergySlots !== 'function') {
+      return await listEnergySlotsForRange({
+        start: localDateTimeToUtcIso(startDate, 0, 0),
+        end: localDateTimeToUtcIso(endDateExclusive, 0, 0)
+      });
     }
-    return slots;
+
+    const slots = [];
+    let cursor = startOfMonth(startDate);
+    while (cursor < endDateExclusive) {
+      const monthEnd = normalizeViewRange('month', cursor).endDateExclusive;
+      // Clamp so a partial first/last month never reads outside the View-Range.
+      const chunkStart = cursor < startDate ? startDate : cursor;
+      const chunkEnd = monthEnd < endDateExclusive ? monthEnd : endDateExclusive;
+      const chunk = await store.listMaterializedEnergySlots({
+        start: localDateTimeToUtcIso(chunkStart, 0, 0),
+        end: localDateTimeToUtcIso(chunkEnd, 0, 0),
+        sourceKinds: ['vrm_import', 'local_live']
+      });
+      for (const slot of chunk) slots.push(slot);
+      cursor = monthEnd;
+    }
+
+    if (slots.length > 0 || typeof store.listAggregatedEnergySlots !== 'function') return slots;
+    return await listRawFallbackSlotsForRange({
+      start: localDateTimeToUtcIso(startDate, 0, 0),
+      end: localDateTimeToUtcIso(endDateExclusive, 0, 0)
+    });
   }
 
   async function getSummary({ view = 'day', date, solarMarketValues = null }) {
     const range = normalizeViewRange(view, date);
     const start = localDateTimeToUtcIso(range.startDate, 0, 0);
     const end = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
-    const energySlots = view === 'year' && typeof store.listMaterializedEnergySlots === 'function'
-      ? await listYearEnergySlotsByMonth(date)
+    // Multi-month views load in month chunks so peak memory tracks the largest
+    // month rather than the whole span (see listEnergySlotsByMonthChunks).
+    // 'all' spans the entire history and was the view that exhausted RAM.
+    const energySlots = (view === 'year' || view === 'all')
+      ? await listEnergySlotsByMonthChunks({
+        startDate: range.startDate,
+        endDateExclusive: range.endDateExclusive
+      })
       : await listEnergySlotsForRange({ start, end });
     const priceRows = await store.listPriceSlots({
       start,
@@ -1926,7 +2007,11 @@ export function createHistoryRuntime({
     // Akkumulation. Die frühere Summe (Gesamtentladung ÷ heutige Kapazität) war
     // über einen Ausbau hinweg falsch und stimmte nicht mit der Summe ihrer
     // eigenen Zeilen überein.
+    // Yield between the per-slot map, the row roll-up and the premium pass —
+    // the three long synchronous stretches (see yieldToEventLoop).
+    await yieldToEventLoop();
     const baseRows = summarizeRows(slots, view, batteryNominalCapacityKwhAt);
+    await yieldToEventLoop();
     const rowsWithCycles = baseRows.filter((row) => row.cycles != null);
     capacityAppliedKpis.cycles = rowsWithCycles.length
       ? Math.round(rowsWithCycles.reduce((sum, row) => sum + Number(row.cycles || 0), 0) * 100) / 100
