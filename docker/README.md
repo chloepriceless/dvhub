@@ -24,6 +24,13 @@ Der Build läuft aus dem **Repo-Wurzelverzeichnis**, nicht aus `docker/`.
 
 ## Betreiben
 
+> Stolperstein bei einer **TimescaleDB im Container auf Hosts ohne
+> cgroup-Memory** (z. B. Raspberry Pi mit Standard-Kernel, `cgroup_enable=memory`
+> nicht gesetzt): das Tuning-Skript des `timescale/timescaledb`-Images stürzt
+> mit `panic: bytes must be at least 1 byte` ab und der DB-Container beendet
+> sich (Exit 2) — DVhub wartet dann 60 s und startet ohne Store. Abhilfe:
+> `-e NO_TS_TUNE=true` am DB-Container (oder cgroup-Memory im Kernel aktivieren).
+
 ```bash
 docker run -d --name dvhub \
   -e DVHUB_DB_HOST=timescaledb -e DVHUB_DB_USER=dvhub \

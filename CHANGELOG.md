@@ -10,6 +10,18 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **DVhub als Container.** `Dockerfile`, `.dockerignore` und
+  `docker/docker-entrypoint.sh` liegen jetzt im Repo, Betriebsdoku unter
+  `docker/README.md`: Multi-Arch-Build (amd64/arm64), Entrypoint legt Config
+  und `appliance-id` in Volumes an, schreibt `telemetry.database.*` aus
+  `DVHUB_DB_*`, wartet auf die Datenbank und leitet den Node-Heap aus dem
+  cgroup-Limit ab. Nachgewiesen auf einem Raspberry Pi 4 (nativer arm64-Build
+  55 s, 335 MB, healthy, Store verbunden, Migrationen gelaufen). Dazu der
+  **Lese-Modus** `DVHUB_READ_ONLY=1`: sperrt jeden Modbus-/MQTT-Schreibzugriff
+  im Transport — ohne die Variable verhält sich eine Anlage exakt wie bisher.
+
 ## [1.0.6] - 2026-09-05
 
 ### Neu
