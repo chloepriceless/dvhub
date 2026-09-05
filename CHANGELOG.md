@@ -10,6 +10,8 @@ verweist hierher.
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-09-05
+
 ### Neu
 
 - **Akku-Ausbaustufen mit Datum.** Die Zyklenberechnung teilte die Entladeenergie
@@ -56,6 +58,25 @@ verweist hierher.
   gilt dasselbe für Einstellungen. Betrifft zunächst Einfrier-Wächter,
   MQTT-Kreuzprobe und Schreib-Verifikation — alle drei sind Feldtests.
 
+- **PV an Netz-Eingang UND Verbraucher-Ausgang gleichzeitig (#13).** Die
+  Positionsauswahl kannte bisher nur ein Entweder-oder — ein Registerblock,
+  verschoben. Wer zwei AC-Wechselrichter an verschiedenen Stellen des
+  Victron-Systems hat (etwa Hoymiles am Netz-Eingang, SolarEdge am
+  Verbraucher-Ausgang), konnte das nicht abbilden, egal wie das Profil
+  bearbeitet wurde. Neu unter Einstellungen → Verbindung: „Zweite AC-PV-Position
+  (optional)". Ist sie gesetzt, werden beide Registerblöcke gelesen und ihre
+  Leistung addiert (on-output 808–810, on-grid 811–813, on-genset 814–816).
+  Dieselbe Position zweimal bleibt wirkungslos, sonst stünde ein Block doppelt
+  in der Summe. Ohne zweite Position ändert sich nichts.
+
+- **SPiNE EnergyLink One als Netzzähler-Quelle.** Vierter Zählerzweig neben
+  MQTT, float32 und Modbus: liest den eingebauten Dreiphasenzähler des
+  EnergyLink One über dessen lokale API (`GET /rpc/EM.GetStatus`,
+  Shelly-Pro-3EM-Semantik). Aktiv nur mit `meter.readType = 'spine-http'`; die
+  bestehenden Zweige und die Victron-/Fronius-Punkte bleiben unverändert.
+  Fehler und ungültige Werte laufen in den vorhandenen Backoff-Pfad — keine
+  stille 0 im Steuerpfad.
+
 ### Behoben
 
 - **Der Einspeise-Puffer wirkte während der Abregelung doch nicht.** Das
@@ -79,6 +100,32 @@ verweist hierher.
   dar; fehlte er, erschien ein leerer Haken statt des wirksamen Zustands.
   Betraf auf einer typischen Anlage „Aktive Anlagensteuerung" und
   „Hausverbrauch abziehen".
+- **Die AC-PV-Positionsauswahl aus #5 war seit 1.0.3 wirkungslos.** Das
+  Herstellerprofil besitzt den kompletten `victron`-Block und ersetzt ihn beim
+  Laden; persistierte Schlüssel überleben das nur über eine ausdrückliche
+  Durchreichliste — `acPvSource` stand nicht darin und fiel still weg. Auf jeder
+  Box mit aktivem Profil, also praktisch jeder, blieben die Adressen damit auf
+  808–810, gleich was eingestellt war (der Befund hinter #13 „ohne Wirkung").
+  Beide Felder stehen jetzt in der Durchreichliste; ein Regressionstest läuft
+  mit echtem Profil-Setup, weil die bisherigen Tests ohne Profil liefen und das
+  deshalb nicht sehen konnten.
+- **Jahres- und Alle-Auswertung liefen ins Timeout — und „Alle" konnte den Hub
+  anhalten.** Die Antwort ist klein, der Weg dorthin war es nicht: die Datenbank
+  hält rund 35 Zeilen je Viertelstunden-Slot (24 Serien × Quellen), ein Jahr
+  waren ~725.000 Zeilen über die Leitung für ~24.000 Slots. Dazu lud „Alle" die
+  gesamte Historie in einer einzigen Abfrage — auf einer Box mit 2 GB hat das
+  den Speicher aufgebraucht, bis kein Dienst mehr antwortete. Und die
+  Aggregation blockierte den Prozess mehrere Sekunden am Stück, länger als der
+  Modbus-Keepalive.
+
+  Jetzt fasst die Datenbank die Zeilen zu einer je Slot zusammen, Jahr und Alle
+  laden monatsweise (der Speicherbedarf hängt am größten Monat, nicht an der
+  Spanne), Datumsformatierer werden wiederverwendet statt je Slot neu gebaut,
+  und zwischen den Rechenschritten gibt der Prozess die Steuerung zurück.
+  Gemessen auf einer 2-GB-Anlage: Jahr 20 s → 7 s, Alle 31 s → 12 s (vorher
+  Speicherabbruch), längste Blockade 14 s → 3 s. Die Zahlen selbst sind
+  unverändert — über abgeschlossene Zeiträume liefern alter und neuer Stand
+  dasselbe Ergebnis Byte für Byte.
 
 ## [1.0.5] - 2026-07-28
 
