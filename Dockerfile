@@ -52,7 +52,7 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
 FROM node:${NODE_VERSION} AS runtime
 
 ARG VCS_REF=unknown
-ARG APP_VERSION=1.0.5
+ARG APP_VERSION=1.0.6
 
 LABEL org.opencontainers.image.title="DVhub" \
       org.opencontainers.image.description="Direktvermarktungs-Schnittstelle für Victron ESS — Minimal-Laufzeitimage" \
