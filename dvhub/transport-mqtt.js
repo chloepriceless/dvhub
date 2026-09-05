@@ -8,6 +8,7 @@
 // Plan 09-07: shared safeInterval wraps the keepalive ticker so a sendKeepalive
 // throw (e.g. broker mid-disconnect) never disables the loop.
 import { safeInterval } from './services/safe-async.js';
+import { isReadOnlyMode, noteBlockedWrite, ReadOnlyViolation } from './read-only-guard.js';
 
 // T-0080 (P1 sweep): MQTT cache freshness. Venus OS pushes N/ values on change +
 // after each keepalive; if the broker connection wedges or a subscription is
@@ -364,6 +365,12 @@ export function createMqttTransport(victronConfig) {
     async mqttWrite(writeName, value) {
       const topic = WRITE_TOPICS[writeName];
       if (!topic) throw new Error(`Kein MQTT-Write-Mapping für: ${writeName}`);
+      // Lese-Modus: einzige MQTT-Schreibstelle zur Anlage (W/-Topics).
+      // Vor dem Verbindungscheck, damit die Ablehnung unabhaengig davon greift.
+      if (isReadOnlyMode()) {
+        noteBlockedWrite(`MQTT ${topic}`);
+        throw new ReadOnlyViolation(`Schreibzugriff im Lese-Modus abgelehnt (MQTT ${writeName})`);
+      }
       if (!client?.connected) throw new Error('MQTT nicht verbunden');
       const payload = JSON.stringify({ value });
       client.publish(topic, payload, { qos });
