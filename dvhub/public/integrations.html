@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=20260701-cachefmt" />
+  <link rel="stylesheet" href="/integrations.css?v=20260914-mqtt-control" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -137,24 +137,66 @@
         </header>
         <nav class="dv-tabs" role="tablist" aria-label="MQTT-Hub">
           <button type="button" role="tab" class="dv-tab is-active"
+                  id="dv-tab-mqtt-connection"
+                  aria-selected="true" aria-controls="dv-panel-mqtt-connection"
+                  data-panel="dv-panel-mqtt-connection" tabindex="0">Verbindung</button>
+          <button type="button" role="tab" class="dv-tab"
                   id="dv-tab-mqtt-settings"
-                  aria-selected="true" aria-controls="dv-panel-mqtt-settings"
-                  data-panel="dv-panel-mqtt-settings" tabindex="0">Einstellungen</button>
+                  aria-selected="false" aria-controls="dv-panel-mqtt-settings"
+                  data-panel="dv-panel-mqtt-settings" tabindex="-1">Einstellungen</button>
           <button type="button" role="tab" class="dv-tab"
                   id="dv-tab-mqtt-topics"
                   aria-selected="false" aria-controls="dv-panel-mqtt-topics"
                   data-panel="dv-panel-mqtt-topics" tabindex="-1">Live-Topics</button>
         </nav>
         <div class="dv-drawer-body">
+          <!-- Verbindung (2026-09-14): Zustand des Hubs, Steuerknöpfe und das
+               Ereignis-Log des Hubs (Reconnects, Fehler, Broker-DISCONNECT) —
+               damit sich MQTT ohne journalctl debuggen lässt. Gefüllt von
+               integrations.js#pollMqttStatus() aus GET /api/integrations/mqtt/status. -->
+          <section role="tabpanel" id="dv-panel-mqtt-connection"
+                   aria-labelledby="dv-tab-mqtt-connection" class="dv-tabpanel">
+            <div class="mqtt-conn-head">
+              <span class="mqtt-state-badge is-idle" id="mqtt-conn-state">&mdash;</span>
+              <span class="mqtt-conn-broker mono" id="mqtt-conn-broker">&mdash;</span>
+            </div>
+            <div class="dv-drawer-actions mqtt-conn-actions">
+              <button type="button" class="btn sm primary" id="mqtt-act-connect" data-mqtt-action="connect">Verbinden</button>
+              <button type="button" class="btn sm ghost" id="mqtt-act-reconnect" data-mqtt-action="reconnect" title="Verbindung komplett neu aufbauen (liest die Konfiguration neu)">Neu verbinden</button>
+              <button type="button" class="btn sm ghost" id="mqtt-act-disconnect" data-mqtt-action="disconnect">Trennen</button>
+            </div>
+            <div class="dv-info-box">
+              <div class="dv-info-row"><span class="dv-info-label">Verbunden seit</span><span class="dv-info-value mono" id="mqtt-conn-since">&mdash;</span></div>
+              <div class="dv-info-row"><span class="dv-info-label">Getrennt seit</span><span class="dv-info-value mono" id="mqtt-conn-down-since">&mdash;</span></div>
+              <div class="dv-info-row"><span class="dv-info-label">Reconnects</span><span class="dv-info-value mono" id="mqtt-conn-reconnects">&mdash;</span></div>
+              <div class="dv-info-row"><span class="dv-info-label">Letzter Fehler</span><span class="dv-info-value mono" id="mqtt-conn-error">&mdash;</span></div>
+              <div class="dv-info-row"><span class="dv-info-label">Client-ID</span><span class="dv-info-value mono" id="mqtt-conn-client-id">&mdash;</span></div>
+              <div class="dv-info-row"><span class="dv-info-label">Modus</span><span class="dv-info-value mono" id="mqtt-conn-mode">&mdash;</span></div>
+              <div class="dv-info-row"><span class="dv-info-label">Publish / Abos</span><span class="dv-info-value mono" id="mqtt-conn-counts">&mdash;</span></div>
+            </div>
+            <p class="dv-drawer-meta" id="mqtt-conn-log-meta" role="status" aria-live="polite">Ereignis-Log des Hubs (neueste zuerst)</p>
+            <div class="mqtt-conn-log" id="mqtt-conn-log" aria-live="off"></div>
+            <p class="field-hint">Vollst&auml;ndiges Systemlog: <a href="/settings.html#system">Einstellungen &rarr; System</a> oder <code>journalctl -u dvhub</code>.</p>
+          </section>
           <section role="tabpanel" id="dv-panel-mqtt-settings"
-                   aria-labelledby="dv-tab-mqtt-settings" class="dv-tabpanel">
+                   aria-labelledby="dv-tab-mqtt-settings" class="dv-tabpanel" hidden>
             <p class="dv-drawer-intro">
               MQTT-Broker f&uuml;r alle DVhub-MQTT-Verbraucher (TeslaMate-Subscriber, HA-Discovery,
-              MQTT-Tiles, Topic-Inspector). &Auml;nderungen wirken erst nach Service-Restart.
+              MQTT-Tiles, Topic-Inspector). &bdquo;Speichern &amp; &uuml;bernehmen&ldquo; baut die Verbindung
+              sofort neu auf &mdash; kein Service-Neustart n&ouml;tig.
             </p>
+            <label class="dv-field-row">
+              <input type="checkbox" class="dv-field-check" id="mqtt-enabled">
+              <span>MQTT aktiv (Hauptschalter)</span>
+            </label>
             <label class="dv-field-row">
               <input type="checkbox" class="dv-field-check" id="mqtt-embedded">
               <span>Embedded-Broker verwenden (kein externer)</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Embedded-Broker Port</span>
+              <input type="number" class="input mono" id="mqtt-embedded-port" min="1024" max="65535" step="1" placeholder="1883" inputmode="numeric">
+              <span class="field-hint">Lauscht nur auf 127.0.0.1. Nur relevant, wenn Embedded an ist.</span>
             </label>
             <label class="dv-field">
               <span class="field-label">Broker-URL</span>
@@ -176,11 +218,39 @@
               <input type="text" class="input mono" id="mqtt-topic-prefix" placeholder="dvhub" autocomplete="off" spellcheck="false" maxlength="64">
               <span class="field-hint">Pr&auml;fix unter dem DVhub eigene Status-Topics publisht. Nur DVhub-Side, kein Effekt auf TeslaMate.</span>
             </label>
+            <div class="mqtt-settings-grid">
+              <label class="dv-field">
+                <span class="field-label">Publish-Intervall (ms)</span>
+                <input type="number" class="input mono" id="mqtt-publish-interval" min="1000" max="3600000" step="1000" placeholder="5000" inputmode="numeric">
+                <span class="field-hint">Wie oft DVhub seine Status-Topics sendet.</span>
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Client-ID</span>
+                <input type="text" class="input mono" id="mqtt-client-id" placeholder="automatisch" autocomplete="off" spellcheck="false" maxlength="64" pattern="[A-Za-z0-9_.:\-]{1,64}">
+                <span class="field-hint">Leer = zuf&auml;llig. Feste ID hilft bei Broker-ACLs und im Broker-Log.</span>
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Keepalive (s)</span>
+                <input type="number" class="input mono" id="mqtt-keepalive" min="5" max="3600" step="1" placeholder="60" inputmode="numeric">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Reconnect-Periode (ms)</span>
+                <input type="number" class="input mono" id="mqtt-reconnect-period" min="1000" max="600000" step="500" placeholder="5000" inputmode="numeric">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Connect-Timeout (ms)</span>
+                <input type="number" class="input mono" id="mqtt-connect-timeout" min="1000" max="120000" step="500" placeholder="10000" inputmode="numeric">
+              </label>
+            </div>
+            <label class="dv-field-row">
+              <input type="checkbox" class="dv-field-check" id="mqtt-reject-unauthorized" checked>
+              <span>TLS-Zertifikat pr&uuml;fen (nur <code>mqtts://</code>; aus f&uuml;r selbstsignierte Broker)</span>
+            </label>
             <div class="dv-field-validation warn" id="mqtt-restart-banner" hidden>
-              Speichern startet den DVhub-Service neu (~10 s Ausfall). Browser bitte nach 10 s neu laden.
+              Die Verbindung wird sofort neu aufgebaut; laufende MQTT-Abonnenten (TeslaMate, Kacheln) melden sich automatisch wieder an.
             </div>
             <div class="dv-drawer-actions">
-              <button type="button" class="btn sm primary" id="mqtt-save">Speichern</button>
+              <button type="button" class="btn sm primary" id="mqtt-save">Speichern &amp; &uuml;bernehmen</button>
             </div>
           </section>
           <section role="tabpanel" id="dv-panel-mqtt-topics"
@@ -1083,6 +1153,6 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/integrations.js?v=20260718-pvnode-v2"></script>
+  <script src="/integrations.js?v=20260914-mqtt-control"></script>
 </body>
 </html>

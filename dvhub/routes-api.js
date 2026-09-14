@@ -15,6 +15,29 @@ import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.j
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
+
+// Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
+// alles, was der Verbindung-/Einstellungen-Tab anzeigen darf. Passwort nie —
+// nur passwordSet; brokerUrl ohne user:pass (redactUrlCreds).
+function mqttConfigView(mqttCfg) {
+  const m = mqttCfg && typeof mqttCfg === 'object' ? mqttCfg : {};
+  return {
+    enabled: m.enabled === true,
+    brokerUrl: m.brokerUrl ? redactUrlCreds(m.brokerUrl) : '',
+    embedded: !!(m.embeddedBroker && m.embeddedBroker.enabled),
+    embeddedPort: Number.isFinite(Number(m.embeddedBroker?.port)) ? Number(m.embeddedBroker.port) : 1883,
+    username: m.username || '',
+    passwordSet: !!m.password,
+    topicPrefix: m.topicPrefix || 'dvhub',
+    publishIntervalMs: Number.isFinite(Number(m.publishIntervalMs)) ? Number(m.publishIntervalMs) : 5000,
+    clientId: typeof m.clientId === 'string' ? m.clientId : '',
+    keepaliveSec: Number.isFinite(Number(m.keepaliveSec)) ? Number(m.keepaliveSec) : null,
+    reconnectPeriodMs: Number.isFinite(Number(m.reconnectPeriodMs)) ? Number(m.reconnectPeriodMs) : 5000,
+    connectTimeoutMs: Number.isFinite(Number(m.connectTimeoutMs)) ? Number(m.connectTimeoutMs) : 10000,
+    rejectUnauthorized: typeof m.rejectUnauthorized === 'boolean' ? m.rejectUnauthorized : true,
+    haDiscovery: !!(m.haDiscovery && m.haDiscovery.enabled)
+  };
+}
 import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots } from './eeg-extension.js';
 import { buildVictronAlarmsPayload } from './victron-alarms.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capVictronPvForDisplay } from './runtime-state.js';
@@ -1052,6 +1075,8 @@ export function createApiRoutes(ctx) {
     '/api/integrations/health',
     // Phase 09.4 D-05 — MQTT Inspector drawer poll; GET-only LAN bypass, Bearer for external.
     '/api/integrations/mqtt/topics',
+    // 2026-09-14 — MQTT-Hub Zustand + Ereignis-Log (Verbindung-Tab), gleiche Haltung.
+    '/api/integrations/mqtt/status',
     '/api/history/raw',
     '/api/history/raw/export.csv',
     '/api/history/raw/export.parquet',
@@ -1120,7 +1145,8 @@ export function createApiRoutes(ctx) {
     ['/api/integration/home-assistant', 'integrations'], ['/api/integration/loxone', 'integrations'],
     ['/api/integration/eos', 'integrations'], ['/api/integration/emhass', 'integrations'],
     ['/api/integration/evcc', 'integrations'], ['/api/integrations/health', 'integrations'],
-    ['/api/integrations/mqtt/topics', 'integrations'], ['/api/schedule', 'integrations'],
+    ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
+    ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
     ['/api/vpn/status', 'integrations'], ['/api/vpn/history', 'integrations'],
     ['/api/devices', 'integrations'], ['/api/log/dv-signals', 'integrations'],
@@ -3048,6 +3074,36 @@ export function createApiRoutes(ctx) {
         const tp = body.topicPrefix.trim().replace(/[+#\s]/g, '').slice(0, 64);
         if (tp) patch.topicPrefix = tp; else delete patch.topicPrefix;
       }
+      // 2026-09-14: Felder, die bisher nur in config.json lebten (Master-
+      // Schalter, Embedded-Port, Publish-Intervall, Client-ID, Keepalive,
+      // Reconnect-Periode, Connect-Timeout, TLS-Prüfung). Bereiche hart
+      // begrenzt — ein 100-ms-Reconnect wäre genau der Sturm, den T-04-04
+      // verhindert.
+      if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+      const intField = (key, min, max, error, target = patch) => {
+        if (body[key] === undefined || body[key] === null || body[key] === '') return null;
+        const n = Number(body[key]);
+        if (!Number.isInteger(n) || n < min || n > max) return error;
+        target[key] = n;
+        return null;
+      };
+      let rangeErr = intField('publishIntervalMs', 1000, 3_600_000, 'invalid_publish_interval')
+        || intField('keepaliveSec', 5, 3600, 'invalid_keepalive')
+        || intField('reconnectPeriodMs', 1000, 600_000, 'invalid_reconnect_period')
+        || intField('connectTimeoutMs', 1000, 120_000, 'invalid_connect_timeout');
+      if (rangeErr) return json(res, 400, { ok: false, error: rangeErr });
+      if (body.embeddedPort !== undefined && body.embeddedPort !== null && body.embeddedPort !== '') {
+        const p = Number(body.embeddedPort);
+        if (!Number.isInteger(p) || p < 1024 || p > 65535) return json(res, 400, { ok: false, error: 'invalid_embedded_port' });
+        patch.embeddedBroker = (patch.embeddedBroker && typeof patch.embeddedBroker === 'object') ? patch.embeddedBroker : { enabled: false };
+        patch.embeddedBroker.port = p;
+      }
+      if (typeof body.clientId === 'string') {
+        const cid = body.clientId.trim();
+        if (cid && !/^[A-Za-z0-9_.:-]{1,64}$/.test(cid)) return json(res, 400, { ok: false, error: 'invalid_client_id' });
+        if (cid) patch.clientId = cid; else delete patch.clientId;
+      }
+      if (typeof body.rejectUnauthorized === 'boolean') patch.rejectUnauthorized = body.rejectUnauthorized;
       next.mqtt = patch;
       let result;
       try {
@@ -3056,23 +3112,34 @@ export function createApiRoutes(ctx) {
         pushLog('family_mqtt_config_save_error', { error: e.message });
         return json(res, 500, { ok: false, error: 'save failed' });
       }
+      // applyNow: Hub (und Publisher-Timer) im Prozess neu starten, damit die
+      // Änderung sofort gilt — der Service-Neustart aus GH #9 entfällt.
+      let applied = false;
+      let restartRequired = !!(result && result.restartRequired);
+      if (body.applyNow === true && ctx.mqttHub && typeof ctx.mqttHub.restart === 'function') {
+        try {
+          await ctx.mqttHub.restart();
+          if (ctx.mqttPublisher && typeof ctx.mqttPublisher.restart === 'function') await ctx.mqttPublisher.restart();
+          applied = true;
+          restartRequired = false;
+        } catch (e) {
+          pushLog('mqtt_config_apply_error', { error: e.message }, 'warn');
+        }
+      }
       pushLog('family_mqtt_config_saved', {
+        enabled: patch.enabled !== false,
         brokerUrl: patch.brokerUrl ? redactUrlCreds(patch.brokerUrl) : null,
         embedded: !!(patch.embeddedBroker && patch.embeddedBroker.enabled),
         usernameSet: !!patch.username,
         passwordSet: !!patch.password,
-        restartRequired: !!(result && result.restartRequired)
+        applied,
+        restartRequired
       }, actorContext(req));
       return json(res, 200, {
         ok: true,
-        restartRequired: !!(result && result.restartRequired),
-        mqtt: {
-          brokerUrl: patch.brokerUrl ? redactUrlCreds(patch.brokerUrl) : '',
-          embedded: !!(patch.embeddedBroker && patch.embeddedBroker.enabled),
-          username: patch.username || '',
-          passwordSet: !!patch.password,
-          topicPrefix: patch.topicPrefix || 'dvhub'
-        }
+        restartRequired,
+        applied,
+        mqtt: mqttConfigView(patch)
       });
     }
 
@@ -3222,13 +3289,7 @@ export function createApiRoutes(ctx) {
           // Phase 21 (2026-05-23): operator-settable knobs for the MQTT drawer.
           // brokerUrl is echoed verbatim (without password — redactUrlCreds);
           // username is plain text; passwordSet is a boolean (never the value).
-          config: {
-            brokerUrl: mqttCfg.brokerUrl ? redactUrlCreds(mqttCfg.brokerUrl) : '',
-            embedded: !!(mqttCfg.embeddedBroker && mqttCfg.embeddedBroker.enabled),
-            username: mqttCfg.username || '',
-            passwordSet: !!mqttCfg.password,
-            topicPrefix: mqttCfg.topicPrefix || 'dvhub'
-          }
+          config: mqttConfigView(mqttCfg)
         },
         tesla: {
           enabled: getCfg().integrations?.tesla?.enabled ?? false,
@@ -3404,6 +3465,49 @@ export function createApiRoutes(ctx) {
         observedSince: ctx.mqttTopicObserver?.observedSince ?? null,
         total: topics.length,
         topics
+      });
+    }
+
+    // GET /api/integrations/mqtt/status — Zustandsmaschine + Ereignis-Ring des
+    // Hubs für den Verbindung-Tab (2026-09-14). LAN-safe GET wie /topics.
+    // config ist die redigierte Sicht (Passwort nur als passwordSet).
+    if (url.pathname === '/api/integrations/mqtt/status' && req.method === 'GET') {
+      const hub = ctx.mqttHub;
+      const limit = Number(url.searchParams.get('limit')) || 100;
+      return json(res, 200, {
+        ok: true,
+        status: hub?.getStatus?.() || { enabled: false, state: 'idle', connected: hub?.connected ?? false },
+        log: hub?.getLog?.(limit) || [],
+        config: mqttConfigView(getCfg().mqtt || {})
+      });
+    }
+
+    // POST /api/integrations/mqtt/action { action: connect|disconnect|reconnect }
+    // Steuerung ohne Service-Neustart. reconnect = Hub komplett neu (liest die
+    // Config neu, startet auch den Embedded-Broker neu).
+    if (url.pathname === '/api/integrations/mqtt/action' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); }
+      catch { return json(res, 400, { ok: false, error: 'invalid_json' }); }
+      const action = body && typeof body.action === 'string' ? body.action : '';
+      const hub = ctx.mqttHub;
+      const fnByAction = { connect: 'connect', disconnect: 'disconnect', reconnect: 'restart' };
+      const fn = fnByAction[action];
+      if (!fn) return json(res, 400, { ok: false, error: 'invalid_action' });
+      if (!hub || typeof hub[fn] !== 'function') return json(res, 503, { ok: false, error: 'mqtt_hub_unavailable' });
+      let result;
+      try {
+        result = await hub[fn]();
+      } catch (e) {
+        pushLog('mqtt_action_error', { action, error: e.message }, 'warn');
+        return json(res, 500, { ok: false, error: e.message });
+      }
+      pushLog('mqtt_action', { action, ok: !!result?.ok, reason: result?.reason || null }, actorContext(req));
+      return json(res, 200, {
+        ok: !!result?.ok,
+        reason: result?.reason || null,
+        status: hub.getStatus?.() || null
       });
     }
 

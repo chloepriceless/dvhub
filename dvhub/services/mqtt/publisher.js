@@ -120,9 +120,17 @@ export function createMqttPublisher(hub, ctx) {
     }
   }
 
+  // 2026-09-14: publishIntervalMs ist jetzt in der Oberfläche einstellbar und
+  // soll ohne Service-Neustart gelten — Timer neu aufziehen.
+  async function restart() {
+    close();
+    await start();
+  }
+
   return {
     start,
     close,
+    restart,
     get topicCount() { return lastTopicCount; },
 
     // Test-only helpers
