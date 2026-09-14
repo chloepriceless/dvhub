@@ -78,6 +78,12 @@ const ENTITIES = [
   { id: 'optimizer_source', name: 'DVhub Optimizer-Quelle', suffix: 'optimizer/source', unit: null, device_class: null, state_class: null, icon: 'mdi:source-branch' },
   // last_run is a DATE-ONLY string -> plain text, not device_class timestamp.
   { id: 'optimizer_last_run', name: 'DVhub Optimizer letzter Lauf', suffix: 'optimizer/last_run_at', unit: null, device_class: null, state_class: null, icon: 'mdi:clock-outline' },
+  // Plan (2026-09-14): Zustand = Anzahl Slots, der Plan selbst (slots[], devices[])
+  // hängt als Attribute dran — ApexCharts/Template-Karten lesen ihn direkt.
+  { id: 'optimizer_plan', name: 'DVhub Optimizer-Plan', suffix: 'optimizer/plan/slot_count', unit: 'Slots', device_class: null, state_class: null, icon: 'mdi:calendar-clock',
+    json_attributes_suffix: 'optimizer/plan/ranges', value_template: NULL_SAFE_TEMPLATE },
+  { id: 'optimizer_plan_next', name: 'DVhub Optimizer nächster Slot', suffix: 'optimizer/plan/next_start', unit: null, device_class: 'timestamp', state_class: null, icon: 'mdi:skip-next',
+    json_attributes_suffix: 'optimizer/plan/next', value_template: NULL_SAFE_TEMPLATE },
 
   // --- Control (2026-09-14): DVhubs aktive Sollwerte, gespiegelt aus dem
   // Steuerpfad (services/control-snapshot.js). Sollwerte sind KEINE Messungen
@@ -119,6 +125,9 @@ function buildPayload(entity, topicPrefix, swVersion) {
   if (entity.icon) payload.icon = entity.icon;
   if (entity.value_template) payload.value_template = entity.value_template;
   if (entity.entity_category) payload.entity_category = entity.entity_category;
+  // JSON-Attribute aus einem zweiten Topic (Plan-Slots): HA hängt das Objekt
+  // als Entitäts-Attribute an; ein "null"-Payload wird von HA ignoriert.
+  if (entity.json_attributes_suffix) payload.json_attributes_topic = `${topicPrefix}/${entity.json_attributes_suffix}`;
   if ((entity.component || 'sensor') === 'binary_sensor') {
     if (entity.payload_on) payload.payload_on = entity.payload_on;
     if (entity.payload_off) payload.payload_off = entity.payload_off;

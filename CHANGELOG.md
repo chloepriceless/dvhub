@@ -24,6 +24,17 @@ verweist hierher.
   `control/source` nennt die Herkunft (`eos`, `optimizer`,
   `market_automation`, `rule`, `override`, `default`, `runtime`), die
   Regel-ID steht in `control/rule`.
+- **EOS-/Optimizer-Plan nach Home Assistant.** `dvhub/optimizer/plan`
+  liefert die vom Optimizer erzeugten Slots „von … bis … → Befehl" (export,
+  import, hold, export_surplus mit Ladereserve) als JSON, dazu
+  `plan/ranges` (aufeinanderfolgende Slots mit gleichem Befehl als Bereiche
+  „von … bis …", kompakt für HA-Attribute), `plan/current`, `plan/next` (mit
+  Vorlauf in Minuten), `plan/next_start` und `plan/slot_count`. HA-Discovery
+  legt `sensor.dvhub_optimizer_plan`
+  (Zustand = Slots, Attribute = Bereiche) und `sensor.dvhub_optimizer_plan_next`
+  (Zeitstempel) an. `devices` ist im Plan reserviert für Geräte-Slots mit
+  An/Aus, sobald EOS flexible Verbraucher plant. Direkt nach dem Start meldet
+  `optimizer/status` jetzt `starting` statt `disabled`.
 - **MQTT-Optimizer-Topics aus dem echten Optimizer-Zustand.**
   `dvhub/optimizer/source` sagte „disabled", während EOS mit 18 Regeln lief —
   die Topics hingen nur an der Kleinmarkt-Automation. Jetzt: `eos` /

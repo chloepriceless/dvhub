@@ -152,13 +152,49 @@ Optimizer (seit 2026-09-14 aus dem echten Optimizer-Zustand, nicht mehr nur aus 
 
 | Topic | Werte |
 |---|---|
-| `dvhub/optimizer/source` | `eos`, `internal` (Prognose-Optimizer), `market_automation` (nur Kleinmarkt-Automation aktiv), `gated` (Lizenz fehlt), `none` |
-| `dvhub/optimizer/status` | `active`, `error`, `disabled` |
+| `dvhub/optimizer/source` | `eos`, `internal` (Prognose-Optimizer), `auto` (Konfiguration „best", noch kein Lauf), `market_automation` (nur Kleinmarkt-Automation aktiv), `gated` (Lizenz fehlt), `none` |
+| `dvhub/optimizer/status` | `active`, `starting` (aktiviert, erster Lauf steht aus), `error`, `disabled` |
 | `dvhub/optimizer/last_run_at` | ISO-8601 des letzten Optimizer-Laufs (Kleinmarkt-Automation: Datum) oder `null` |
 | `dvhub/optimizer/rules_count` | Anzahl der vom Optimizer erzeugten Zeitplan-Regeln |
 | `dvhub/optimizer/error` | Fehlertext des letzten Laufs oder `null` |
 
 Kodierung: Zeichenketten werden **roh** gesendet (`eos`, nicht `"eos"`), Zahlen, Booleans und `null` als JSON, Objekte als JSON. Die HA-Discovery-Entitäten tragen ein `value_template`, das `null` in „unbekannt" übersetzt.
+
+### Der Plan: `dvhub/optimizer/plan`
+
+Der Plan ist die Liste der vom Optimizer (EOS, interner Optimizer, Kleinmarkt-Automation) erzeugten Zeitplan-Slots, also das, was DVhub ausführen wird: „von … bis … → Befehl". Abgelaufene Slots fallen heraus, der laufende bleibt drin. Retained, alle `publishIntervalMs`.
+
+| Topic | Inhalt |
+|---|---|
+| `dvhub/optimizer/plan` | JSON `{ source, generatedAt, slotMinutes, validFrom, validUntil, slotCount, rangeCount, slots: [...], devices: [] }` |
+| `dvhub/optimizer/plan/ranges` | JSON mit `ranges: [...]`: aufeinanderfolgende Slots mit gleichem Befehl zu Bereichen „von … bis …" zusammengefasst (`{ start, end, action, value, slots }`, dazu `chargeReserveW` und `source`, wenn sie vom Plan abweicht). Kompakt, ohne Regel-IDs; das ist das Attribut-Topic für Home Assistant (16-KB-Grenze für Attribute) |
+| `dvhub/optimizer/plan/current` | der gerade laufende Slot oder `null` |
+| `dvhub/optimizer/plan/next` | der nächste Slot mit `startsInMin`, oder `null` |
+| `dvhub/optimizer/plan/next_start` | ISO-8601 des nächsten Slot-Beginns oder `null` |
+| `dvhub/optimizer/plan/slot_count` | Anzahl Slots |
+
+Ein Slot:
+
+```json
+{ "start": "2026-09-14T16:00:00.000Z", "end": "2026-09-14T16:15:00.000Z",
+  "target": "gridSetpointW", "value": -4000, "action": "export",
+  "source": "eos", "rule": "opt-1789…-3" }
+```
+
+`action`: `export` (Netz-Sollwert < 0, einspeisen/entladen), `import` (> 0, beziehen/laden), `hold` (0), `export_surplus` (PV-Überschuss über die Ladereserve einspeisen; dann zusätzlich `chargeReserveW`, ggf. `targetSocPct`). `devices` ist reserviert für Geräte-Slots (`{ device, start, end, action: "on" | "off" }`), sobald EOS flexible Verbraucher (Geschirrspüler, Heizstab, Wallbox) plant.
+
+Home Assistant: `sensor.dvhub_optimizer_plan` (Zustand = Anzahl Slots, Attribute = die Bereiche aus `plan/ranges`) und `sensor.dvhub_optimizer_plan_next` (Zeitstempel des nächsten Slots, Attribute = der Slot). Beispiel für eine Template-Karte:
+
+```yaml
+type: markdown
+content: >-
+  {% for r in state_attr('sensor.dvhub_optimizer_plan', 'ranges') %}
+  {{ as_timestamp(r.start) | timestamp_custom('%H:%M') }}–{{ as_timestamp(r.end) | timestamp_custom('%H:%M') }}
+  **{{ r.action }}** {{ r.value }} W
+  {% endfor %}
+```
+
+Wer die Einzel-Slots braucht (eigene Automation, Node-RED), liest `dvhub/optimizer/plan` direkt vom Broker.
 
 ---
 

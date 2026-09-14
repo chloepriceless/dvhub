@@ -9,6 +9,7 @@
 // DI: hub (MQTT Hub from index.js), ctx (full DI context with state, getCfg, pushLog)
 
 import { buildControlSnapshot, CONTROL_KEYS, CONTROL_TOPIC_SUFFIX } from '../control-snapshot.js';
+import { buildOptimizerPlan } from '../optimizer-plan.js';
 
 /**
  * @param {object} hub - MQTT Hub from services/mqtt/index.js
@@ -91,6 +92,11 @@ export function createMqttPublisher(hub, ctx) {
     const opt = state.optimizer || {};
     const sma = state.schedule?.smallMarketAutomation || {};
     const smaActive = !!sma.lastOutcome && sma.lastOutcome !== 'idle' && sma.lastOutcome !== 'disabled';
+    // Direkt nach dem Start ist state.optimizer.source noch null (erster Lauf
+    // steht aus oder scheiterte, z. B. "No price data available") — dann
+    // die konfigurierte Quelle nennen und "starting"/"error" statt "disabled".
+    const cfgSource = getCfg().optimizer?.primarySource;
+    const configuredSource = cfgSource === 'eos' || cfgSource === 'internal' ? cfgSource : (cfgSource === 'best' ? 'auto' : 'internal');
     let optSource = 'none';
     let optStatus = 'disabled';
     if (opt.source === 'eos' || opt.source === 'internal') {
@@ -98,6 +104,9 @@ export function createMqttPublisher(hub, ctx) {
       optStatus = opt.error ? 'error' : (opt.enabled ? 'active' : 'disabled');
     } else if (opt.source === 'gated_no_license') {
       optSource = 'gated';
+    } else if (opt.enabled) {
+      optSource = configuredSource;
+      optStatus = opt.error ? 'error' : 'starting';
     } else if (smaActive) {
       optSource = 'market_automation';
       optStatus = 'active';
@@ -107,6 +116,22 @@ export function createMqttPublisher(hub, ctx) {
     pub('optimizer/last_run_at', opt.lastRunAt || sma.lastRunDate || null);
     pub('optimizer/rules_count', Number.isFinite(Number(opt.rulesCount)) ? Number(opt.rulesCount) : null);
     pub('optimizer/error', opt.error ? String(opt.error) : null);
+
+    // Plan (2026-09-14): die vom Optimizer erzeugten Slots "von … bis … →
+    // Befehl" als JSON, dazu laufender/nächster Slot. HA-Discovery hängt den
+    // Plan als Attribute an sensor.dvhub_optimizer_plan (services/optimizer-plan.js).
+    const nowMs = typeof ctx.now === 'function' ? ctx.now() : Date.now();
+    const { plan, ranges, current, next } = buildOptimizerPlan(state, nowMs);
+    pub('optimizer/plan', plan);
+    // Verdichtete Bereiche "von … bis …" — das Attribut-Topic für HA (16-KB-Grenze).
+    pub('optimizer/plan/ranges', {
+      source: plan.source, generatedAt: plan.generatedAt, slotMinutes: plan.slotMinutes,
+      validFrom: plan.validFrom, validUntil: plan.validUntil, rangeCount: ranges.length, ranges
+    });
+    pub('optimizer/plan/slot_count', plan.slotCount);
+    pub('optimizer/plan/current', current);
+    pub('optimizer/plan/next', next);
+    pub('optimizer/plan/next_start', next ? next.start : null);
 
     // System
     pub('system/uptime_sec', Math.round(process.uptime()));
