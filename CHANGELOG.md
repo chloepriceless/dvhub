@@ -12,6 +12,24 @@ verweist hierher.
 
 ### Neu
 
+- **Steuerbefehle transparent nach außen — MQTT, Home Assistant, Loxone.**
+  DVhubs aktive Sollwerte (Netz-Sollwert, Ladestrom, Min-SoC, Entladegrenze)
+  werden retained unter `dvhub/control/*` publiziert, dazu Quelle/Regel,
+  Zeitstempel und Not-Halt-Status. Ein fremder Akku in Home Assistant oder
+  eine Loxone-Logik kann damit den DVhub-/EOS-Entscheidungen folgen, ohne
+  dass DVhub das Gerät kennt. HA-Auto-Discovery legt die Sollwerte als
+  Sensoren an; der Loxone-Text-Endpunkt liefert sie als flache
+  `dvhub_control_*`-Zeilen. Victron-spezifische Register (feedExcess) sind
+  bewusst nicht dabei. Schema: `docs/MQTT-SCHEMA.md`.
+- **Eingänge aus Home Assistant/Loxone: Profil „Universal (DVhub-MQTT-Schema)".**
+  Neues Herstellerprofil für Anlagen, deren Speicher/PV/Zähler nur in HA oder
+  Loxone existieren: Lesewerte kommen als nackte Zahlen unter
+  `dvhub/input/…` herein (Netz je Phase, SoC, Akkuleistung, PV, Verbrauch,
+  optional Rücklesung der Sollwerte), Steuerbefehle gehen unter
+  `dvhub/control/<ziel>/set` hinaus. Kein Venus-Keepalive, keine
+  Venus-Topics; die Frische-Disziplin (retained Replays verwerfen, Stale =
+  unbekannt) gilt unverändert. Topic-Prefix unter Einstellungen → Verbindung
+  → MQTT-Bridge einstellbar.
 - **MQTT-Hub steuern und debuggen (Integrationen → MQTT Hub).** Neuer Tab
   „Verbindung": Zustand (Verbinde/Verbunden/Offline/Getrennt/Deaktiviert),
   Broker, verbunden/getrennt seit, Reconnect-Zähler, letzter Fehler, dazu die

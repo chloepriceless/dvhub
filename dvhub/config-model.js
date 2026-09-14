@@ -1136,6 +1136,7 @@ function buildFieldDefinitions() {
       options: [
         { value: 'victron', label: 'Victron' },
         { value: 'bridge-mqtt', label: 'Universal (MQTT-Bridge)' },
+        { value: 'dvhub-mqtt', label: 'Universal (DVhub-MQTT-Schema: HA/Loxone) — Beta' },
         { value: 'fronius', label: 'Fronius GEN24 (SunSpec) — Beta' },
         { value: 'deye-lv', label: 'Deye SUN-…SG04LP3 (LV, 3-phasig) — Beta' }
       ],
@@ -1223,6 +1224,17 @@ function buildFieldDefinitions() {
       type: 'text',
       empty: 'blank',
       help: 'Vollständige Broker-URL, z. B. mqtt://192.168.1.50:1883. Leer = mqtt://<Anlagenadresse>:1883 (die Anlagenadresse oben zeigt dann auf den Broker).'
+    },
+    {
+      section: 'victron',
+      group: 'mqttBridge',
+      groupLabel: 'MQTT-Bridge (Universal)',
+      groupDescription: 'Nur relevant, wenn das Herstellerprofil über MQTT spricht (Profil „Universal (MQTT-Bridge)").',
+      path: 'victron.mqtt.topicPrefix',
+      label: 'Topic-Prefix (DVhub-MQTT-Schema)',
+      type: 'text',
+      empty: 'blank',
+      help: 'Nur für das Profil „Universal (DVhub-MQTT-Schema: HA/Loxone)": Namensraum, unter dem Home Assistant/Loxone die Lesewerte publizieren (<Prefix>/input/…) und DVhub seine Steuerbefehle absetzt (<Prefix>/control/…/set). Leer = „dvhub". Schema: docs/MQTT-SCHEMA.md.'
     },
     {
       section: 'victron',

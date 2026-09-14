@@ -75,6 +75,20 @@ const ENTITIES = [
   // last_run is a DATE-ONLY string -> plain text, not device_class timestamp.
   { id: 'optimizer_last_run', name: 'DVhub Optimizer letzter Lauf', suffix: 'optimizer/last_run_at', unit: null, device_class: null, state_class: null, icon: 'mdi:clock-outline' },
 
+  // --- Control (2026-09-14): DVhubs aktive Sollwerte, gespiegelt aus dem
+  // Steuerpfad (services/control-snapshot.js). Sollwerte sind KEINE Messungen
+  // → keine power/battery device_class; Einheit + measurement reichen HA für
+  // Verlauf und Automationen ("wenn dvhub_control_grid_setpoint_w < 0, Akku
+  // entladen"). Victron-spezifische Register (feedExcess) bleiben draußen.
+  { id: 'control_grid_setpoint_w', name: 'DVhub Sollwert Netz', suffix: 'control/grid_setpoint_w', unit: 'W', device_class: null, state_class: 'measurement', icon: 'mdi:transmission-tower' },
+  { id: 'control_charge_current_a', name: 'DVhub Sollwert Ladestrom', suffix: 'control/charge_current_a', unit: 'A', device_class: null, state_class: 'measurement', icon: 'mdi:current-dc' },
+  { id: 'control_min_soc_pct', name: 'DVhub Sollwert Min-SoC', suffix: 'control/min_soc_pct', unit: '%', device_class: null, state_class: 'measurement', icon: 'mdi:battery-arrow-down-outline' },
+  { id: 'control_max_discharge_w', name: 'DVhub Sollwert Entladegrenze', suffix: 'control/max_discharge_w', unit: 'W', device_class: null, state_class: 'measurement', icon: 'mdi:battery-arrow-up-outline' },
+  { id: 'control_source', name: 'DVhub Steuerquelle', suffix: 'control/source', unit: null, device_class: null, state_class: null, icon: 'mdi:source-branch' },
+  // updated_at ist ISO-8601 (oder null) → timestamp-Klasse; leer bleibt unknown.
+  { id: 'control_updated_at', name: 'DVhub Sollwert geändert', suffix: 'control/updated_at', unit: null, device_class: 'timestamp', state_class: null, entity_category: 'diagnostic',
+    value_template: '{{ none if value in ("null", "") else value }}' },
+
   // --- System / diagnostics ---
   { id: 'uptime_sec', name: 'DVhub Uptime', suffix: 'system/uptime_sec', unit: 's', device_class: 'duration', state_class: 'measurement', icon: 'mdi:timer-outline', entity_category: 'diagnostic' },
   // victron_updated_at is epoch MS -> convert to a timestamp, guarding the 0 case.

@@ -99,10 +99,75 @@ export function buildVenusTopicMaps(portalId) {
   return { READ_TOPICS, WRITE_TOPICS };
 }
 
+// ── DVhub-Topic-Schema (2026-09-14) ──────────────────────────────────
+// Herstellerneutrales Gegenstück zum Venus-Schema für Anlagen, deren Akku/PV/
+// Zähler nur in Home Assistant, Loxone o. ä. existieren (Profil
+// hersteller/dvhub-mqtt.json). Lesewerte kommen unter <prefix>/input/… als
+// nackte Zahlen herein, Steuerbefehle gehen unter <prefix>/control/<ziel>/set
+// hinaus. Die Zustandsspiegel <prefix>/control/<ziel> (ohne /set) publiziert
+// der Hub-Publisher retained — Command- und State-Topic sind getrennt, wie in
+// HA üblich. Kein Keepalive, kein R/-Nachfordern: der Lieferant publiziert
+// periodisch (Frische-Disziplin T-0080 gilt unverändert, staleMaxAgeMs).
+// Victron-Register (feedExcessDcPv, dontFeedExcessAcPv) haben hier bewusst
+// kein Topic. Vertrag: docs/MQTT-SCHEMA.md + test/transport-mqtt-dvhub-schema.
+export function buildDvhubTopicMaps(topicPrefix) {
+  const p = String(topicPrefix || '').replace(/^\/+|\/+$/g, '') || 'dvhub';
+  const READ_TOPICS = {
+    meter_l1:            `${p}/input/grid/l1_w`,
+    meter_l2:            `${p}/input/grid/l2_w`,
+    meter_l3:            `${p}/input/grid/l3_w`,
+    soc:                 `${p}/input/battery/soc_pct`,
+    batteryPowerW:       `${p}/input/battery/power_w`,
+    pvPowerW:            `${p}/input/pv/dc_w`,
+    acPvL1W:             `${p}/input/pv/ac_l1_w`,
+    acPvL2W:             `${p}/input/pv/ac_l2_w`,
+    acPvL3W:             `${p}/input/pv/ac_l3_w`,
+    selfConsumptionW_l1: `${p}/input/consumption/l1_w`,
+    selfConsumptionW_l2: `${p}/input/consumption/l2_w`,
+    selfConsumptionW_l3: `${p}/input/consumption/l3_w`,
+    // Rücklesung der Sollwerte (optional — fehlt sie, bleibt der Punkt null)
+    gridSetpointW:       `${p}/input/control/grid_setpoint_w`,
+    minSocPct:           `${p}/input/control/min_soc_pct`,
+    chargeCurrentA:      `${p}/input/control/charge_current_a`,
+    maxDischargeW:       `${p}/input/control/max_discharge_w`,
+  };
+  const WRITE_TOPICS = {
+    gridSetpointW:  `${p}/control/grid_setpoint_w/set`,
+    chargeCurrentA: `${p}/control/charge_current_a/set`,
+    minSocPct:      `${p}/control/min_soc_pct/set`,
+    maxDischargeW:  `${p}/control/max_discharge_w/set`,
+  };
+  return { READ_TOPICS, WRITE_TOPICS };
+}
+
+/**
+ * Payload → Zahl. Versteht nackte Zahlen ("42.5"), JSON-Zahlen und das
+ * Venus-Format {"value": X}. undefined = unbrauchbar (kein Wert erfinden);
+ * null wird als "Lieferant meldet unbekannt" durchgereicht.
+ */
+export function parseMqttPayload(payload) {
+  const text = String(payload ?? '').trim();
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed === 'number') return Number.isFinite(parsed) ? parsed : undefined;
+    if (parsed && typeof parsed === 'object' && 'value' in parsed) {
+      const v = parsed.value;
+      if (v === null) return null;
+      return typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : undefined);
+    }
+    return undefined;
+  } catch {
+    const n = Number(text);
+    return Number.isFinite(n) ? n : undefined;
+  }
+}
+
 export function createMqttTransport(victronConfig) {
   const mqttCfg = victronConfig.mqtt || {};
   const broker = mqttCfg.broker || `mqtt://${victronConfig.host}:1883`;
   const portalId = mqttCfg.portalId || '';
+  const schema = mqttCfg.schema === 'dvhub' ? 'dvhub' : 'venus';
   const keepaliveMs = Number(mqttCfg.keepaliveIntervalMs) || 30000;
   const qos = Number(mqttCfg.qos) || 0;
   // Reads older than this are treated as stale (unknown) → re-requested, and the
@@ -116,11 +181,28 @@ export function createMqttTransport(victronConfig) {
   let keepaliveTimer = null;
   const cache = {};  // topic -> { value, ts }
 
-  if (!portalId) {
+  if (schema === 'venus' && !portalId) {
     console.warn('[MQTT] Kein portalId konfiguriert — MQTT-Topics werden nicht korrekt aufgelöst.');
   }
 
-  const { READ_TOPICS, WRITE_TOPICS } = buildVenusTopicMaps(portalId);
+  const { READ_TOPICS, WRITE_TOPICS } = schema === 'dvhub'
+    ? buildDvhubTopicMaps(mqttCfg.topicPrefix)
+    : buildVenusTopicMaps(portalId);
+
+  // Venus: Wert per R/-Topic nachfordern (Venus published dann auf N/).
+  // DVhub-Schema: kein Nachfordern — der Lieferant publiziert periodisch.
+  function readRequestTopic(topic) {
+    if (schema !== 'venus') return null;
+    return String(topic).replace(/^N\//, 'R/');
+  }
+  function requestRead(topic) {
+    const rt = readRequestTopic(topic);
+    if (rt && client?.connected) client.publish(rt, '');
+  }
+  // Venus: {"value": X}; DVhub-Schema: nackte Zahl (HA/Loxone-freundlich).
+  function encodeWrite(value) {
+    return schema === 'dvhub' ? String(value) : JSON.stringify({ value });
+  }
 
   // T-MQTT-CONSUMPTION: die drei Phasen, aus denen der Summen-Punkt
   // 'selfConsumptionW' gebildet wird (siehe sumConsumptionEntries oben).
@@ -140,6 +222,12 @@ export function createMqttTransport(victronConfig) {
     // echte Werte liefert der Keepalive-Zyklus (Venus/Bridge publiziert auf
     // R/<portal>/keepalive alles frisch, Sekunden nach dem Connect).
     if (packet?.retain) return;
+    if (schema === 'dvhub') {
+      // Nackte Zahl, JSON-Zahl oder {value}; Unbrauchbares wird ignoriert.
+      const v = parseMqttPayload(payload);
+      if (v !== undefined) cache[topic] = { value: v, ts: Date.now() };
+      return;
+    }
     try {
       const msg = JSON.parse(payload.toString());
       if (msg.value !== undefined) {
@@ -172,6 +260,7 @@ export function createMqttTransport(victronConfig) {
   }
 
   function sendKeepalive() {
+    if (schema !== 'venus') return;   // DVhub-Schema kennt kein Keepalive
     if (client?.connected) {
       client.publish(`R/${portalId}/keepalive`, '');
     }
@@ -222,7 +311,7 @@ export function createMqttTransport(victronConfig) {
           // Modbus-Blockreads — auf MQTT blieb das Banner dauerhaft leer.
           // Wildcards, weil die Instanz-Nummern anlagenspezifisch sind
           // (Live-Dump Ekrano: vebus/276, battery/512).
-          const topics = Object.values(READ_TOPICS).concat(portalId ? [
+          const topics = Object.values(READ_TOPICS).concat((schema === 'venus' && portalId) ? [
             `N/${portalId}/vebus/+/Alarms/#`,
             `N/${portalId}/vebus/+/VebusError`,
             `N/${portalId}/battery/+/Alarms/#`
@@ -291,11 +380,7 @@ export function createMqttTransport(victronConfig) {
         );
         let sum = summed();
         if (sum) return { mqttValue: sum.value, ts: sum.ts };
-        if (client?.connected) {
-          for (const k of CONSUMPTION_KEYS) {
-            client.publish(READ_TOPICS[k].replace(/^N\//, 'R/'), '');
-          }
-        }
+        for (const k of CONSUMPTION_KEYS) requestRead(READ_TOPICS[k]);
         await new Promise((r) => setTimeout(r, 2000));
         sum = summed();
         if (sum) return { mqttValue: sum.value, ts: sum.ts };
@@ -315,8 +400,7 @@ export function createMqttTransport(victronConfig) {
       // the subscription may be wedged → nudge a throttled reconnect to re-subscribe.
       const wasStale = !!cache[topic];
       if (client?.connected) {
-        const readTopic = topic.replace(/^N\//, 'R/');
-        client.publish(readTopic, '');
+        requestRead(topic);
         if (wasStale && typeof client.reconnect === 'function') {
           const now = Date.now();
           if (now - lastStaleReconnectAt > staleMaxAgeMs) {
@@ -350,9 +434,7 @@ export function createMqttTransport(victronConfig) {
         return e && e.value != null && Number(e.ts || 0) >= Number(sinceTs || 0);
       };
       if (freshEnough()) return { mqttValue: cache[topic].value, ts: cache[topic].ts };
-      if (client?.connected) {
-        client.publish(topic.replace(/^N\//, 'R/'), '');
-      }
+      requestRead(topic);
       await new Promise((r) => setTimeout(r, 2000));
       if (freshEnough()) return { mqttValue: cache[topic].value, ts: cache[topic].ts };
       throw new Error(`Kein Nach-Write-Wert empfangen für: ${name}`);
@@ -372,7 +454,7 @@ export function createMqttTransport(victronConfig) {
         throw new ReadOnlyViolation(`Schreibzugriff im Lese-Modus abgelehnt (MQTT ${writeName})`);
       }
       if (!client?.connected) throw new Error('MQTT nicht verbunden');
-      const payload = JSON.stringify({ value });
+      const payload = encodeWrite(value);
       client.publish(topic, payload, { qos });
       return { ok: true, topic, value };
     },
@@ -380,6 +462,13 @@ export function createMqttTransport(victronConfig) {
     async destroy() {
       if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
       if (client) { client.removeAllListeners(); client.end(true); client = null; }
-    }
+    },
+
+    // Schema-Vertrag + Test-Seams (2026-09-14)
+    schema,
+    _writeTopics: () => ({ ...WRITE_TOPICS }),
+    _readTopics: () => ({ ...READ_TOPICS }),
+    _encodeWrite: encodeWrite,
+    _readRequestTopic: readRequestTopic
   };
 }

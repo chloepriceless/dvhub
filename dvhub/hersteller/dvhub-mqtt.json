@@ -1,0 +1,39 @@
+{
+  "label": "Universal (DVhub-MQTT-Schema: HA/Loxone) — Beta",
+  "beta": true,
+  "_doc": "2026-09-14: Für Anlagen, deren Akku/PV/Zähler nur in Home Assistant, Loxone o. ä. existieren. Lesepfade kommen unter <prefix>/input/… herein (nackte Zahlen, periodisch, nicht retained), Steuerbefehle gehen unter <prefix>/control/<ziel>/set hinaus. Schema: docs/MQTT-SCHEMA.md. Kein Venus-Keepalive, keine Victron-Register (feedExcess).",
+  "victron": {
+    "transport": "mqtt",
+    "mqtt": {
+      "schema": "dvhub",
+      "topicPrefix": "dvhub",
+      "broker": "",
+      "qos": 0,
+      "staleMaxAgeMs": 90000
+    }
+  },
+  "points": {
+    "soc": { "enabled": true },
+    "batteryPowerW": { "enabled": true },
+    "pvPowerW": { "enabled": true },
+    "acPvL1W": { "enabled": true },
+    "acPvL2W": { "enabled": true },
+    "acPvL3W": { "enabled": true },
+    "gridSetpointW": { "enabled": true },
+    "minSocPct": { "enabled": true },
+    "selfConsumptionW": { "enabled": true },
+    "maxDischargeW": { "enabled": true }
+  },
+  "controlWrite": {
+    "gridSetpointW": { "enabled": true },
+    "chargeCurrentA": { "enabled": true },
+    "minSocPct": { "enabled": true },
+    "maxDischargeW": { "enabled": true }
+  },
+  "dvControl": {
+    "enabled": true,
+    "feedExcessDcPv": { "enabled": false, "_doc": "Victron-Register (OvervoltageFeedIn) — im generischen Schema nicht vorhanden." },
+    "dontFeedExcessAcPv": { "enabled": false, "_doc": "Victron-Register (PreventFeedback) — im generischen Schema nicht vorhanden." },
+    "negativePriceProtection": { "enabled": true }
+  }
+}

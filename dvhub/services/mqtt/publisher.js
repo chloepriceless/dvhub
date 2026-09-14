@@ -8,6 +8,8 @@
 //
 // DI: hub (MQTT Hub from index.js), ctx (full DI context with state, getCfg, pushLog)
 
+import { buildControlSnapshot, CONTROL_KEYS, CONTROL_TOPIC_SUFFIX } from '../control-snapshot.js';
+
 /**
  * @param {object} hub - MQTT Hub from services/mqtt/index.js
  * @param {{ state: object, getCfg: Function, pushLog: Function }} ctx
@@ -91,6 +93,18 @@ export function createMqttPublisher(hub, ctx) {
     pub('energy/export_wh', state.energy?.exportWh ?? 0);
     pub('energy/cost_eur', state.energy?.costEur ?? 0);
     pub('energy/revenue_eur', state.energy?.revenueEur ?? 0);
+
+    // Control (2026-09-14): die aktiven Sollwerte transparent spiegeln, damit
+    // ein HA-Akku / Loxone daran hängen kann. null = unbekannt (nie 0
+    // erfinden). Schema: docs/MQTT-SCHEMA.md. Victron-spezifische Register
+    // (feedExcessDcPv) bewusst nicht dabei.
+    const control = buildControlSnapshot(state);
+    for (const key of CONTROL_KEYS) pub(CONTROL_TOPIC_SUFFIX[key], control.values[key].value);
+    pub('control/source', control.source);
+    pub('control/rule', control.rule);
+    pub('control/updated_at', control.updatedAt);
+    pub('control/paused', control.paused);
+    pub('control/state', control.values);
 
     lastTopicCount = topics.length;
     // Phase 09.2 D-04: track the bridge's own publish-cycle health.

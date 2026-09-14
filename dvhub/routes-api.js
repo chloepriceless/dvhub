@@ -15,6 +15,7 @@ import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.j
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
+import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
 // alles, was der Verbindung-/Einstellungen-Tab anzeigen darf. Passwort nie —
@@ -1733,6 +1734,10 @@ export function createApiRoutes(ctx) {
       costs: costSummary(),
       userEnergyPricing: userEnergyPricingSummary()
     };
+    // 2026-09-14: Steuerbefehle als FLACHE Felder (dvhub_control_*) — Loxone
+    // Virtual HTTP Input parst key=value je Zeile, der scheduleActive-JSON-Blob
+    // oben ist dort unbrauchbar. Gleiche Quelle wie <prefix>/control/* per MQTT.
+    Object.assign(base, controlSnapshotFlat(buildControlSnapshot(state)));
 
     // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
     // Per-section error isolation (Plan 08-07 Task 2): one section failing must
