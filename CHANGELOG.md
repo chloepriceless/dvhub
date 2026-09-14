@@ -12,6 +12,20 @@ verweist hierher.
 
 ### Neu
 
+- **MQTT-Hub steuern und debuggen (Integrationen → MQTT Hub).** Neuer Tab
+  „Verbindung": Zustand (Verbinde/Verbunden/Offline/Getrennt/Deaktiviert),
+  Broker, verbunden/getrennt seit, Reconnect-Zähler, letzter Fehler, dazu die
+  Knöpfe **Verbinden / Neu verbinden / Trennen** und das Ereignis-Log des Hubs
+  (Reconnects, Fehler, Broker-DISCONNECT) — ohne `journalctl`. Der
+  Einstellungen-Tab zeigt jetzt auch die bisher nur in `config.json`
+  erreichbaren Felder (Hauptschalter, Embedded-Port, Publish-Intervall,
+  Client-ID, Keepalive, Reconnect-Periode, Connect-Timeout, TLS-Prüfung);
+  **Speichern & übernehmen** baut die Verbindung im laufenden Prozess neu auf,
+  der Service-Neustart aus GH #9 entfällt. Neue Endpunkte
+  `GET /api/integrations/mqtt/status`, `POST /api/integrations/mqtt/action`;
+  `POST /api/family/mqtt-config` nimmt die neuen Felder plus `applyNow` an.
+  Ein wiederholter Verbindungsfehler landet nur noch alle 5 min im Audit-Log
+  statt alle 5 s (Anlass: Broker weg → 17.000 identische Zeilen pro Tag).
 - **DVhub als Container.** `Dockerfile`, `.dockerignore` und
   `docker/docker-entrypoint.sh` liegen jetzt im Repo, Betriebsdoku unter
   `docker/README.md`: Multi-Arch-Build (amd64/arm64), Entrypoint legt Config

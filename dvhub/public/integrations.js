@@ -1321,8 +1321,8 @@
       mqttDrawerInstance = createDvDrawer({
         root: els.drawer,
         backdrop: els.backdrop,
-        onOpen: function () { pollMqttTopics(); startMqttPoll(); loadMqttSettings(); },
-        onClose: function () { stopMqttPoll(); }
+        onOpen: function () { pollMqttStatus(); startMqttStatusPoll(); pollMqttTopics(); startMqttPoll(); loadMqttSettings(); },
+        onClose: function () { stopMqttPoll(); stopMqttStatusPoll(); }
       });
     }
     mqttDrawerInstance.open();
@@ -1342,6 +1342,15 @@
       if (el('mqtt-username')) el('mqtt-username').value = c.username || '';
       if (el('mqtt-embedded')) el('mqtt-embedded').checked = !!c.embedded;
       if (el('mqtt-topic-prefix')) el('mqtt-topic-prefix').value = (c.topicPrefix === 'dvhub') ? '' : (c.topicPrefix || '');
+      // 2026-09-14: Felder, die vorher nur in config.json lebten.
+      if (el('mqtt-enabled')) el('mqtt-enabled').checked = !!c.enabled;
+      if (el('mqtt-embedded-port')) el('mqtt-embedded-port').value = (c.embeddedPort && c.embeddedPort !== 1883) ? c.embeddedPort : '';
+      if (el('mqtt-publish-interval')) el('mqtt-publish-interval').value = (c.publishIntervalMs && c.publishIntervalMs !== 5000) ? c.publishIntervalMs : '';
+      if (el('mqtt-client-id')) el('mqtt-client-id').value = c.clientId || '';
+      if (el('mqtt-keepalive')) el('mqtt-keepalive').value = c.keepaliveSec || '';
+      if (el('mqtt-reconnect-period')) el('mqtt-reconnect-period').value = (c.reconnectPeriodMs && c.reconnectPeriodMs !== 5000) ? c.reconnectPeriodMs : '';
+      if (el('mqtt-connect-timeout')) el('mqtt-connect-timeout').value = (c.connectTimeoutMs && c.connectTimeoutMs !== 10000) ? c.connectTimeoutMs : '';
+      if (el('mqtt-reject-unauthorized')) el('mqtt-reject-unauthorized').checked = c.rejectUnauthorized !== false;
       if (el('mqtt-password')) {
         el('mqtt-password').value = '';
         el('mqtt-password').placeholder = c.passwordSet ? 'leer lassen = unverändert' : 'kein Passwort gespeichert';
@@ -1369,13 +1378,35 @@
     if (pwInput && pwInput.value === '') {
       body.password = (pwInput.placeholder.indexOf('unverändert') >= 0) ? '***' : '';
     }
-    if (!body.embedded && !body.brokerUrl) {
+    // 2026-09-14: erweiterte Verbindungsoptionen. Leeres Feld = Server-Default
+    // (der Server ignoriert '' und lässt den gespeicherten Wert stehen — wer
+    // einen Wert zurücksetzen will, trägt den Default explizit ein).
+    var numOrEmpty = function (id) { var v = el(id) ? String(el(id).value).trim() : ''; return v === '' ? '' : Number(v); };
+    body.enabled = !!(el('mqtt-enabled') && el('mqtt-enabled').checked);
+    body.embeddedPort = numOrEmpty('mqtt-embedded-port');
+    body.publishIntervalMs = numOrEmpty('mqtt-publish-interval');
+    body.clientId = ((el('mqtt-client-id') && el('mqtt-client-id').value) || '').trim();
+    body.keepaliveSec = numOrEmpty('mqtt-keepalive');
+    body.reconnectPeriodMs = numOrEmpty('mqtt-reconnect-period');
+    body.connectTimeoutMs = numOrEmpty('mqtt-connect-timeout');
+    body.rejectUnauthorized = !!(el('mqtt-reject-unauthorized') && el('mqtt-reject-unauthorized').checked);
+    body.applyNow = true;
+    if (body.enabled && !body.embedded && !body.brokerUrl) {
       showDrawerToast('mqtt', 'err', '✗ Broker-URL fehlt (oder Embedded aktivieren).');
       return;
     }
     var banner = el('mqtt-restart-banner');
     if (banner) banner.hidden = false;
     if (buttonEl) { buttonEl.disabled = true; var orig = buttonEl.textContent; buttonEl.textContent = 'Speichere …'; }
+    var MQTT_ERR_LABELS = {
+      invalid_broker_url_scheme: 'Broker-URL muss mit mqtt:// oder mqtts:// beginnen',
+      invalid_publish_interval: 'Publish-Intervall: 1000 … 3600000 ms',
+      invalid_keepalive: 'Keepalive: 5 … 3600 s',
+      invalid_reconnect_period: 'Reconnect-Periode: 1000 … 600000 ms',
+      invalid_connect_timeout: 'Connect-Timeout: 1000 … 120000 ms',
+      invalid_embedded_port: 'Embedded-Port: 1024 … 65535',
+      invalid_client_id: 'Client-ID: nur Buchstaben, Ziffern, _ . : - (max. 64)'
+    };
     try {
       var res = await apiFetch('/api/family/mqtt-config', {
         method: 'POST',
@@ -1384,11 +1415,16 @@
       });
       var data = await safeJson(res);
       if (res.ok && data.ok) {
-        showDrawerToast('mqtt', 'ok', data.restartRequired
-          ? '✓ Gespeichert. Service wird neu gestartet — Seite in ~10 s neu laden.'
-          : '✓ MQTT-Konfiguration gespeichert.');
+        showDrawerToast('mqtt', 'ok', data.applied
+          ? '✓ Gespeichert und übernommen — Verbindung wird neu aufgebaut.'
+          : (data.restartRequired
+            ? '✓ Gespeichert. Wirkt nach Service-Neustart.'
+            : '✓ MQTT-Konfiguration gespeichert.'));
+        setTimeout(pollMqttStatus, 800);
+        setTimeout(pollMqttStatus, 3000);
       } else {
-        showDrawerToast('mqtt', 'err', '✗ Speichern fehlgeschlagen: ' + (data.error || ('HTTP ' + res.status)));
+        var errKey = data && data.error;
+        showDrawerToast('mqtt', 'err', '✗ Speichern fehlgeschlagen: ' + (MQTT_ERR_LABELS[errKey] || errKey || ('HTTP ' + res.status)));
       }
     } catch (e) {
       showDrawerToast('mqtt', 'err', '✗ Netzwerkfehler: ' + e.message);
@@ -1396,6 +1432,118 @@
       if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = orig; }
     }
   }
+
+  /* ===================== MQTT VERBINDUNG-TAB (2026-09-14) ===================== */
+  // Zustand + Ereignis-Log des Hubs aus GET /api/integrations/mqtt/status,
+  // Steuerung über POST /api/integrations/mqtt/action. Poll läuft, solange
+  // der Drawer offen ist (4 s, wie der Topics-Poll); Pause-Knopf gilt nur
+  // für den Topics-Tab.
+  var MQTT_STATUS_POLL_MS = 4000;
+  var mqttStatusTimer = null;
+  var MQTT_STATE_LABELS = {
+    connected: 'Verbunden', connecting: 'Verbinde …', reconnecting: 'Verbinde neu …',
+    offline: 'Offline', stopped: 'Getrennt (manuell)', disabled: 'Deaktiviert', idle: 'Nicht gestartet'
+  };
+  function fmtClock(ts) {
+    if (!ts) return '—';
+    var d = new Date(typeof ts === 'string' ? ts : Number(ts));
+    if (!Number.isFinite(d.getTime())) return '—';
+    try {
+      return new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', second: '2-digit', day: '2-digit', month: '2-digit' }).format(d);
+    } catch (_) { return d.toLocaleString('de-DE'); }
+  }
+  function renderMqttStatus(payload) {
+    var el = function (id) { return document.getElementById(id); };
+    var s = (payload && payload.status) || {};
+    var state = s.state || 'idle';
+    var badge = el('mqtt-conn-state');
+    if (badge) {
+      badge.textContent = MQTT_STATE_LABELS[state] || state;
+      badge.className = 'mqtt-state-badge is-' + state;
+    }
+    if (el('mqtt-conn-broker')) el('mqtt-conn-broker').textContent = s.brokerUrl || (s.embedded ? 'embedded 127.0.0.1:' + (s.embeddedPort || 1883) : '—');
+    if (el('mqtt-conn-since')) el('mqtt-conn-since').textContent = (state === 'connected' && s.connectedAt) ? (fmtClock(s.connectedAt) + ' (' + fmtRel(s.connectedAt) + ')') : '—';
+    if (el('mqtt-conn-down-since')) el('mqtt-conn-down-since').textContent = (state !== 'connected' && s.disconnectedAt) ? (fmtClock(s.disconnectedAt) + ' (' + fmtRel(s.disconnectedAt) + ')') : '—';
+    if (el('mqtt-conn-reconnects')) el('mqtt-conn-reconnects').textContent = (s.reconnects != null ? s.reconnects : '—') + (s.connectAttempts != null ? ' (Versuche: ' + s.connectAttempts + ')' : '');
+    if (el('mqtt-conn-error')) el('mqtt-conn-error').textContent = s.lastError ? (s.lastError + ' · ' + fmtRel(s.lastErrorAt)) : '—';
+    if (el('mqtt-conn-client-id')) el('mqtt-conn-client-id').textContent = s.clientId || 'automatisch';
+    if (el('mqtt-conn-mode')) el('mqtt-conn-mode').textContent = s.enabled === false ? 'aus' : (s.embedded ? ('Embedded-Broker' + (s.embeddedListening ? ' (lauscht)' : ' (Port belegt!)')) : 'externer Broker') + ' · Reconnect alle ' + Math.round((s.reconnectPeriodMs || 5000) / 1000) + ' s';
+    var pub = payload && payload.config ? payload.config.publishIntervalMs : null;
+    if (el('mqtt-conn-counts')) el('mqtt-conn-counts').textContent = (pub ? 'alle ' + Math.round(pub / 1000) + ' s' : '—') + ' / ' + (s.handlers != null ? s.handlers + ' Abos' : '—');
+    // Knöpfe: Verbinden nur wenn nicht verbunden; Trennen nur wenn Client lebt.
+    var canConnect = s.enabled !== false && state !== 'connected' && state !== 'connecting' && state !== 'reconnecting';
+    var canDisconnect = state === 'connected' || state === 'connecting' || state === 'reconnecting' || state === 'offline';
+    if (el('mqtt-act-connect')) el('mqtt-act-connect').disabled = !canConnect;
+    if (el('mqtt-act-disconnect')) el('mqtt-act-disconnect').disabled = !canDisconnect;
+    if (el('mqtt-act-reconnect')) el('mqtt-act-reconnect').disabled = s.enabled === false;
+    var logEl = el('mqtt-conn-log');
+    if (logEl) {
+      var rows = Array.isArray(payload.log) ? payload.log : [];
+      if (!rows.length) {
+        logEl.innerHTML = '<p class="dv-drawer-empty">Noch keine Ereignisse.</p>';
+      } else {
+        var html = '';
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i];
+          var lvl = r.level === 'error' ? 'error' : (r.level === 'warn' ? 'warn' : 'info');
+          html += '<div class="mqtt-log-row is-' + lvl + '">'
+            + '<span class="mqtt-log-time">' + esc(fmtClock(r.ts)) + '</span>'
+            + '<span class="mqtt-log-level">' + esc(lvl) + '</span>'
+            + '<span class="mqtt-log-msg">' + esc(r.msg || '') + '</span>'
+            + '</div>';
+        }
+        logEl.innerHTML = html;
+      }
+    }
+    if (el('mqtt-conn-log-meta')) el('mqtt-conn-log-meta').textContent = 'Ereignis-Log des Hubs (neueste zuerst) · Stand ' + fmtClock(Date.now());
+  }
+  async function pollMqttStatus() {
+    var badge = document.getElementById('mqtt-conn-state');
+    if (!badge) return;
+    try {
+      var res = await apiFetch('/api/integrations/mqtt/status?limit=80');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      renderMqttStatus(await res.json());
+    } catch (e) {
+      badge.textContent = 'Status nicht abrufbar';
+      badge.className = 'mqtt-state-badge is-offline';
+    }
+  }
+  function startMqttStatusPoll() {
+    if (mqttStatusTimer) clearInterval(mqttStatusTimer);
+    mqttStatusTimer = setInterval(pollMqttStatus, MQTT_STATUS_POLL_MS);
+  }
+  function stopMqttStatusPoll() {
+    if (mqttStatusTimer) { clearInterval(mqttStatusTimer); mqttStatusTimer = null; }
+  }
+  async function runMqttAction(action, buttonEl) {
+    var label = { connect: 'Verbinde …', disconnect: 'Trenne …', reconnect: 'Baue neu auf …' }[action] || action;
+    var orig = buttonEl ? buttonEl.textContent : '';
+    if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = label; }
+    try {
+      var res = await apiFetch('/api/integrations/mqtt/action', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: action })
+      });
+      var data = await safeJson(res);
+      if (res.ok && data.ok) {
+        showDrawerToast('mqtt', 'ok', '✓ ' + ({ connect: 'Verbindungsaufbau gestartet', disconnect: 'Verbindung getrennt', reconnect: 'Verbindung wird neu aufgebaut' }[action] || action));
+        if (data.status) renderMqttStatus({ status: data.status, log: [], config: null });
+      } else {
+        var why = (data && data.reason === 'disabled') ? 'MQTT ist deaktiviert — Hauptschalter unter Einstellungen.' : ((data && data.error) || ('HTTP ' + res.status));
+        showDrawerToast('mqtt', 'err', '✗ ' + why);
+      }
+    } catch (e) {
+      showDrawerToast('mqtt', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      if (buttonEl) { buttonEl.textContent = orig; }
+      setTimeout(pollMqttStatus, 600);
+      setTimeout(pollMqttStatus, 2500);
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var actBtn = e.target.closest('[data-mqtt-action]');
+    if (actBtn && actBtn.closest('#dv-drawer-mqtt')) { runMqttAction(actBtn.getAttribute('data-mqtt-action'), actBtn); }
+  });
   document.addEventListener('click', function (e) {
     var saveBtn = e.target.closest('#mqtt-save');
     if (saveBtn) { saveMqttSettings(saveBtn); return; }
