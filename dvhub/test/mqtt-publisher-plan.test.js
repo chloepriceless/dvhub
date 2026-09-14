@@ -113,6 +113,17 @@ describe('optimizer/plan', () => {
   });
 });
 
+describe('plan.source vor dem ersten Lauf', () => {
+  it('state.optimizer.source null → Plan nennt die konfigurierte Quelle wie optimizer/source', () => {
+    const hub = makeHub();
+    const st = makeState();
+    st.optimizer = { enabled: true, source: null, lastRunAt: null, rulesCount: 0, error: 'No price data available' };
+    createMqttPublisher(hub, ctxFor(st))._publishOnce();
+    assert.equal(JSON.parse(raw(hub, 'dvhub/optimizer/plan')).source, 'eos');
+    assert.equal(JSON.parse(raw(hub, 'dvhub/optimizer/plan/ranges')).source, 'eos');
+  });
+});
+
 describe('optimizer/status direkt nach dem Start', () => {
   it('enabled ohne Lauf → source aus der Config, status starting', () => {
     const hub = makeHub();

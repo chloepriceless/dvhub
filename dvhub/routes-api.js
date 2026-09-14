@@ -7081,7 +7081,19 @@ export function createApiRoutes(ctx) {
         actorIp: deriveClientIp(req, getCfg()),
         range: { from: body?.requestedFrom ?? body?.start ?? null, to: body?.requestedTo ?? body?.end ?? null }
       }, { ...actorContext(req), severity: 'info' });
-      const result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: requestedMode, requestedBy: 'api' });
+      // GH #16 (FrodoVDR): ein Throw aus dem Import (VRM-Token fehlt, VRM-API
+      // 401/5xx, Store-Fehler) lief bisher in den generischen 500 "internal
+      // server error" — der Grund war weg. Jetzt 502 mit Fehlertext + Log.
+      let result;
+      try {
+        result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: requestedMode, requestedBy: 'api' });
+      } catch (e) {
+        const msg = e?.message || String(e);
+        pushLog('backfill_finished', {
+          kind: 'vrm', status: 'error', error: msg, durationMs: Date.now() - vrmBackfillStartedAt
+        }, { ...actorContext(req), severity: 'warn' });
+        return json(res, 502, { ok: false, error: `VRM-Nachimport fehlgeschlagen: ${msg}` });
+      }
       const vrmStatus = result?.ok ? 'ok' : 'error';
       pushLog('backfill_finished', {
         kind: 'vrm',

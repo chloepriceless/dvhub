@@ -35,6 +35,10 @@ verweist hierher.
   (Zeitstempel) an. `devices` ist im Plan reserviert für Geräte-Slots mit
   An/Aus, sobald EOS flexible Verbraucher plant. Direkt nach dem Start meldet
   `optimizer/status` jetzt `starting` statt `disabled`.
+- **VRM-Nachimport: Fehler wird benannt statt „internal server error" (#16).**
+  Warf der Import (fehlender VRM-Token, VRM-API 401/5xx), lief der Fehler in
+  den generischen 500. Jetzt antwortet der Endpunkt mit 502 und dem Grund und
+  schreibt `backfill_finished status=error` ins Log.
 - **MQTT-Optimizer-Topics aus dem echten Optimizer-Zustand.**
   `dvhub/optimizer/source` sagte „disabled", während EOS mit 18 Regeln lief —
   die Topics hingen nur an der Kleinmarkt-Automation. Jetzt: `eos` /

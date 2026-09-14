@@ -122,6 +122,9 @@ export function createMqttPublisher(hub, ctx) {
     // Plan als Attribute an sensor.dvhub_optimizer_plan (services/optimizer-plan.js).
     const nowMs = typeof ctx.now === 'function' ? ctx.now() : Date.now();
     const { plan, ranges, current, next } = buildOptimizerPlan(state, nowMs);
+    // Vor dem ersten Lauf ist state.optimizer.source null → dieselbe Quelle
+    // wie optimizer/source nennen, damit Plan und Status zusammenpassen.
+    if (!plan.source) plan.source = optSource;
     pub('optimizer/plan', plan);
     // Verdichtete Bereiche "von … bis …" — das Attribut-Topic für HA (16-KB-Grenze).
     pub('optimizer/plan/ranges', {
