@@ -42,6 +42,34 @@ function numOrNull(v) {
 }
 
 /**
+ * Rohquelle des Steuerpfads → Herkunft für Menschen und Automationen.
+ * schedule-eval liefert `rule:<id>`, `default`, `runtime`, `manual_override*`,
+ * `none`. Für Regeln entscheidet die Regel selbst: EOS-Plan (optimizer 'eos'),
+ * interner Prognose-Optimizer, Kleinmarkt-Automation (sma-…), sonst eine
+ * manuelle Zeitplan-Regel. Christin 2026-09-14: "sollte die Optimizer-Quelle
+ * nicht auf EOS lauten?" — ja.
+ */
+export function resolveControlOrigin(source, rules) {
+  if (!source || source === 'none') return 'none';
+  if (source === 'default' || source === 'runtime') return source;
+  if (String(source).startsWith('manual_override')) return 'override';
+  if (String(source).startsWith('rule:')) {
+    const id = source.slice(5);
+    const rule = Array.isArray(rules) ? rules.find(r => r && String(r.id) === id) : null;
+    if (rule) {
+      if (rule.optimizer === 'eos') return 'eos';
+      if (rule.source === 'forecast_optimizer' || rule.optimizer === 'internal') return 'optimizer';
+      if (rule.source === 'small_market_automation') return 'market_automation';
+      return 'rule';
+    }
+    if (id.startsWith('opt-')) return 'optimizer';
+    if (id.startsWith('sma-')) return 'market_automation';
+    return 'rule';
+  }
+  return String(source);
+}
+
+/**
  * @param {object} state  server state (schedule.active, victron, ctrl)
  * @param {number} [nowMs]
  */
@@ -68,7 +96,10 @@ export function buildControlSnapshot(state, nowMs = Date.now()) {
   const rule = typeof lead === 'string' && lead.startsWith('rule:') ? lead.slice(5) : null;
   return {
     values,
-    source: lead,
+    // Herkunft (eos | optimizer | market_automation | rule | override | default | runtime | none);
+    // die Rohquelle je Ziel steht in values[key].source.
+    source: resolveControlOrigin(lead, state?.schedule?.rules),
+    sourceRaw: lead,
     rule,
     updatedAtMs: updatedAtMs || null,
     updatedAt: updatedAtMs ? new Date(updatedAtMs).toISOString() : null,

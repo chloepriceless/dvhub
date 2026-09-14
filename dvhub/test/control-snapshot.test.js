@@ -19,6 +19,7 @@ function makeState() {
     ctrl: { discretionaryWritesPaused: false, forcedOff: false },
     victron: { gridSetpointW: -100, minSocPct: 20, maxDischargeW: -1, chargeCurrentA: null },
     schedule: {
+      rules: [{ id: 'abend-entladen', target: 'gridSetpointW', value: -3000 }],
       active: {
         gridSetpointW: { value: -3000, source: 'rule:abend-entladen', at: T0 + 5000 },
         chargeCurrentA: { value: 50, source: 'default', at: T0 + 1000, skipped: true, reason: 'unchanged' },
@@ -34,17 +35,17 @@ describe('buildControlSnapshot', () => {
     assert.deepEqual([...CONTROL_KEYS].sort(), ['chargeCurrentA', 'gridSetpointW', 'maxDischargeW', 'minSocPct']);
   });
 
-  it('nimmt den aktiven Sollwert vor der Rücklesung und nennt Quelle + Regel', () => {
+  it('nimmt den aktiven Sollwert vor der Rücklesung und nennt Herkunft + Regel', () => {
     const s = buildControlSnapshot(makeState(), T0 + 10_000);
     assert.equal(s.values.gridSetpointW.value, -3000, 'aktiver Sollwert gewinnt gegen Rücklesung -100');
     assert.equal(s.values.gridSetpointW.origin, 'active');
-    assert.equal(s.values.gridSetpointW.source, 'rule:abend-entladen');
+    assert.equal(s.values.gridSetpointW.source, 'rule:abend-entladen', 'Rohquelle bleibt im Detail erhalten');
     assert.equal(s.values.chargeCurrentA.value, 50, 'gehaltener (skipped) Wert zählt als aktiv');
     assert.equal(s.values.minSocPct.value, 20, 'ohne aktiven Sollwert: Rücklesung');
     assert.equal(s.values.minSocPct.origin, 'readback');
     assert.equal(s.values.maxDischargeW.value, -1);
     assert.equal('feedExcessDcPv' in s.values, false, 'Victron-spezifisch, nicht im Schema');
-    assert.equal(s.source, 'rule:abend-entladen');
+    assert.equal(s.source, 'rule', 'manuelle Zeitplan-Regel → Herkunft "rule"');
     assert.equal(s.rule, 'abend-entladen');
     assert.equal(s.updatedAtMs, T0 + 5000, 'jüngster at der generischen Ziele (feedExcess zählt nicht)');
     assert.equal(s.updatedAt, new Date(T0 + 5000).toISOString());
@@ -60,6 +61,31 @@ describe('buildControlSnapshot', () => {
     assert.equal(s.source, 'none');
     assert.equal(s.rule, null);
     assert.equal(s.updatedAt, null);
+  });
+
+  it('Herkunft: EOS-Regel → eos, interner Optimizer → optimizer, Kleinmarkt → market_automation, Override → override', () => {
+    const st = makeState();
+    st.schedule.rules = [
+      { id: 'opt-1-0', source: 'forecast_optimizer', optimizer: 'eos' },
+      { id: 'opt-2-0', source: 'forecast_optimizer', optimizer: 'internal' },
+      { id: 'sma-3-1', source: 'small_market_automation' }
+    ];
+    st.schedule.active.gridSetpointW = { value: -3000, source: 'rule:opt-1-0', at: T0 };
+    assert.equal(buildControlSnapshot(st).source, 'eos');
+    assert.equal(buildControlSnapshot(st).rule, 'opt-1-0');
+    st.schedule.active.gridSetpointW = { value: -3000, source: 'rule:opt-2-0', at: T0 };
+    assert.equal(buildControlSnapshot(st).source, 'optimizer');
+    st.schedule.active.gridSetpointW = { value: -3000, source: 'rule:sma-3-1', at: T0 };
+    assert.equal(buildControlSnapshot(st).source, 'market_automation');
+    st.schedule.active.gridSetpointW = { value: 0, source: 'manual_override', at: T0 };
+    assert.equal(buildControlSnapshot(st).source, 'override');
+    st.schedule.active.gridSetpointW = { value: 0, source: 'manual_override_persistent', at: T0 };
+    assert.equal(buildControlSnapshot(st).source, 'override');
+    st.schedule.active.gridSetpointW = { value: -100, source: 'default', at: T0 };
+    assert.equal(buildControlSnapshot(st).source, 'default');
+    st.schedule.active.gridSetpointW = { value: -100, source: 'rule:unbekannt-99', at: T0 };
+    assert.equal(buildControlSnapshot(st).source, 'rule', 'Regel nicht mehr in der Liste → rule');
+    assert.equal(buildControlSnapshot(st).rule, 'unbekannt-99');
   });
 
   it('meldet paused/forcedOff aus state.ctrl', () => {
@@ -80,7 +106,7 @@ describe('controlSnapshotFlat', () => {
       dvhub_control_charge_current_a: 50,
       dvhub_control_min_soc_pct: 20,
       dvhub_control_max_discharge_w: -1,
-      dvhub_control_source: 'rule:abend-entladen',
+      dvhub_control_source: 'rule',
       dvhub_control_rule: 'abend-entladen',
       dvhub_control_updated_at: new Date(T0 + 5000).toISOString(),
       dvhub_control_paused: false

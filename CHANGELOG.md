@@ -21,6 +21,18 @@ verweist hierher.
   Sensoren an; der Loxone-Text-Endpunkt liefert sie als flache
   `dvhub_control_*`-Zeilen. Victron-spezifische Register (feedExcess) sind
   bewusst nicht dabei. Schema: `docs/MQTT-SCHEMA.md`.
+  `control/source` nennt die Herkunft (`eos`, `optimizer`,
+  `market_automation`, `rule`, `override`, `default`, `runtime`), die
+  Regel-ID steht in `control/rule`.
+- **MQTT-Optimizer-Topics aus dem echten Optimizer-Zustand.**
+  `dvhub/optimizer/source` sagte „disabled", während EOS mit 18 Regeln lief —
+  die Topics hingen nur an der Kleinmarkt-Automation. Jetzt: `eos` /
+  `internal` / `market_automation` / `gated` / `none`, Status
+  `active`/`error`/`disabled`, `last_run_at` als ISO-Zeitstempel, dazu
+  `rules_count` und `error`. Textwerte werden roh gesendet, nicht mehr
+  JSON-kodiert — in Home Assistant standen sie in Anführungszeichen
+  („active"), und der Zeitstempel „Sollwert geändert" blieb deshalb
+  unbekannt.
 - **Eingänge aus Home Assistant/Loxone: Profil „Universal (DVhub-MQTT-Schema)".**
   Neues Herstellerprofil für Anlagen, deren Speicher/PV/Zähler nur in HA oder
   Loxone existieren: Lesewerte kommen als nackte Zahlen unter

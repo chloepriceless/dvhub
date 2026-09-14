@@ -19,7 +19,10 @@ function makeCtx() {
       ctrl: { forcedOff: false, discretionaryWritesPaused: false },
       meter: { grid_total_w: 120 },
       victron: { gridSetpointW: -100, minSocPct: 20, maxDischargeW: -1, soc: 55, batteryPowerW: -300, pvTotalW: 900 },
-      schedule: { active: { gridSetpointW: { value: -3000, source: 'rule:abend', at: T0 } }, lastWrite: {} },
+      schedule: {
+        rules: [{ id: 'abend', source: 'forecast_optimizer', optimizer: 'eos' }],
+        active: { gridSetpointW: { value: -3000, source: 'rule:abend', at: T0 } }, lastWrite: {}
+      },
       costs: {}, energy: { day: '2026-09-14', importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0 }, epex: { data: [] }
     },
     pushLog: () => {},
@@ -58,7 +61,7 @@ describe('GET /api/integration/loxone — dvhub_control_* Zeilen', () => {
     assert.equal(lines.dvhub_control_min_soc_pct, '20');
     assert.equal(lines.dvhub_control_max_discharge_w, '-1');
     assert.equal(lines.dvhub_control_charge_current_a, 'null');
-    assert.equal(lines.dvhub_control_source, 'rule:abend');
+    assert.equal(lines.dvhub_control_source, 'eos', 'EOS-Regel → Herkunft eos');
     assert.equal(lines.dvhub_control_rule, 'abend');
     assert.equal(lines.dvhub_control_updated_at, new Date(T0).toISOString());
     assert.equal(lines.dvhub_control_paused, 'false');

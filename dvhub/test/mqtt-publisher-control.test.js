@@ -20,6 +20,7 @@ function makeState() {
     epex: { data: [] },
     ctrl: { discretionaryWritesPaused: false },
     schedule: {
+      rules: [{ id: 'peak', source: 'forecast_optimizer', optimizer: 'eos' }],
       active: {
         gridSetpointW: { value: -2500, source: 'rule:peak', at: T0 },
         chargeCurrentA: { value: 30, source: 'default', at: T0 - 1000 },
@@ -30,9 +31,13 @@ function makeState() {
   };
 }
 
+// Strings kommen roh (ohne Anführungszeichen), alles andere als JSON.
+function decode(payload) {
+  try { return JSON.parse(payload); } catch { return payload; }
+}
 function pubMap(hub) {
   const m = {};
-  for (const p of hub._published) m[p.topic] = { value: JSON.parse(p.payload), retain: p.opts?.retain };
+  for (const p of hub._published) m[p.topic] = { value: decode(p.payload), raw: p.payload, retain: p.opts?.retain };
   return m;
 }
 
@@ -48,9 +53,9 @@ describe('MQTT publisher — control/* topics', () => {
     assert.equal(m['dvhub/control/charge_current_a'].value, 30);
     assert.equal(m['dvhub/control/min_soc_pct'].value, 15, 'Rücklesung, wenn kein aktiver Sollwert');
     assert.equal(m['dvhub/control/max_discharge_w'].value, -1);
-    assert.equal(m['dvhub/control/source'].value, 'rule:peak');
-    assert.equal(m['dvhub/control/rule'].value, 'peak');
-    assert.equal(m['dvhub/control/updated_at'].value, new Date(T0).toISOString());
+    assert.equal(m['dvhub/control/source'].raw, 'eos', 'EOS-Regel → Herkunft eos, roh ohne Anführungszeichen');
+    assert.equal(m['dvhub/control/rule'].raw, 'peak');
+    assert.equal(m['dvhub/control/updated_at'].raw, new Date(T0).toISOString(), 'ISO roh, damit HA timestamp versteht');
     assert.equal(m['dvhub/control/paused'].value, false);
     assert.equal(typeof m['dvhub/control/state'].value, 'object');
     assert.equal(m['dvhub/control/state'].value.gridSetpointW.value, -2500);

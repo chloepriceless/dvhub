@@ -54,9 +54,14 @@ export function createMqttPublisher(hub, ctx) {
     const prefix = getPrefix();
     const topics = [];
 
+    // Kodierung (2026-09-14): Strings ROH — vorher kam jeder Textwert JSON-
+    // kodiert mit Anführungszeichen in Home Assistant an ("active"), und ein
+    // ISO-Zeitstempel war damit für HAs timestamp-Klasse unbrauchbar.
+    // Zahlen, Booleans, null und Objekte bleiben JSON (null → "null", HA
+    // bekommt dafür ein value_template in ha-discovery.js).
     function pub(suffix, value) {
       const topic = `${prefix}/${suffix}`;
-      hub.publish(topic, JSON.stringify(value), { retain: true });
+      hub.publish(topic, typeof value === 'string' ? value : JSON.stringify(value), { retain: true });
       topics.push(topic);
     }
 
@@ -78,10 +83,30 @@ export function createMqttPublisher(hub, ctx) {
     // Price
     pub('price/epex_current_ct_kwh', getCurrentEpexPrice());
 
-    // Optimizer
-    pub('optimizer/status', state.schedule?.smallMarketAutomation?.lastOutcome === 'idle' ? 'disabled' : 'active');
-    pub('optimizer/source', state.schedule?.smallMarketAutomation?.lastOutcome || 'none');
-    pub('optimizer/last_run_at', state.schedule?.smallMarketAutomation?.lastRunDate || null);
+    // Optimizer (2026-09-14): aus dem echten Prognose-Optimizer-Zustand
+    // (services/optimizer/index.js: state.optimizer.source = eos | internal |
+    // gated_no_license), Kleinmarkt-Automation als Fallback. Vorher hingen
+    // die Topics nur an smallMarketAutomation.lastOutcome — "disabled",
+    // während EOS mit 18 Regeln lief (Christins HA-Auszug).
+    const opt = state.optimizer || {};
+    const sma = state.schedule?.smallMarketAutomation || {};
+    const smaActive = !!sma.lastOutcome && sma.lastOutcome !== 'idle' && sma.lastOutcome !== 'disabled';
+    let optSource = 'none';
+    let optStatus = 'disabled';
+    if (opt.source === 'eos' || opt.source === 'internal') {
+      optSource = opt.source;
+      optStatus = opt.error ? 'error' : (opt.enabled ? 'active' : 'disabled');
+    } else if (opt.source === 'gated_no_license') {
+      optSource = 'gated';
+    } else if (smaActive) {
+      optSource = 'market_automation';
+      optStatus = 'active';
+    }
+    pub('optimizer/status', optStatus);
+    pub('optimizer/source', optSource);
+    pub('optimizer/last_run_at', opt.lastRunAt || sma.lastRunDate || null);
+    pub('optimizer/rules_count', Number.isFinite(Number(opt.rulesCount)) ? Number(opt.rulesCount) : null);
+    pub('optimizer/error', opt.error ? String(opt.error) : null);
 
     // System
     pub('system/uptime_sec', Math.round(process.uptime()));

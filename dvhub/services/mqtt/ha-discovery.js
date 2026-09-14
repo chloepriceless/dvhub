@@ -39,6 +39,10 @@ const ORIGIN_BLOCK = {
   support_url: 'https://dvhub.de',
 };
 
+// Publisher sendet null als Text "null" (Strings roh, alles andere JSON).
+// HA soll daraus "unknown" machen, keinen Zahlen-Parsefehler.
+const NULL_SAFE_TEMPLATE = '{{ none if value in ("null", "") else value }}';
+
 /**
  * Full entity set for HA auto-discovery. Each maps to one
  * {prefix}/{component}/dvhub_{id}/config topic.
@@ -80,14 +84,17 @@ const ENTITIES = [
   // → keine power/battery device_class; Einheit + measurement reichen HA für
   // Verlauf und Automationen ("wenn dvhub_control_grid_setpoint_w < 0, Akku
   // entladen"). Victron-spezifische Register (feedExcess) bleiben draußen.
-  { id: 'control_grid_setpoint_w', name: 'DVhub Sollwert Netz', suffix: 'control/grid_setpoint_w', unit: 'W', device_class: null, state_class: 'measurement', icon: 'mdi:transmission-tower' },
-  { id: 'control_charge_current_a', name: 'DVhub Sollwert Ladestrom', suffix: 'control/charge_current_a', unit: 'A', device_class: null, state_class: 'measurement', icon: 'mdi:current-dc' },
-  { id: 'control_min_soc_pct', name: 'DVhub Sollwert Min-SoC', suffix: 'control/min_soc_pct', unit: '%', device_class: null, state_class: 'measurement', icon: 'mdi:battery-arrow-down-outline' },
-  { id: 'control_max_discharge_w', name: 'DVhub Sollwert Entladegrenze', suffix: 'control/max_discharge_w', unit: 'W', device_class: null, state_class: 'measurement', icon: 'mdi:battery-arrow-up-outline' },
+  // null kommt als Text "null" an → value_template macht daraus unknown statt
+  // eines Zahlenfehlers im HA-Log.
+  { id: 'control_grid_setpoint_w', name: 'DVhub Sollwert Netz', suffix: 'control/grid_setpoint_w', unit: 'W', device_class: null, state_class: 'measurement', icon: 'mdi:transmission-tower', value_template: NULL_SAFE_TEMPLATE },
+  { id: 'control_charge_current_a', name: 'DVhub Sollwert Ladestrom', suffix: 'control/charge_current_a', unit: 'A', device_class: null, state_class: 'measurement', icon: 'mdi:current-dc', value_template: NULL_SAFE_TEMPLATE },
+  { id: 'control_min_soc_pct', name: 'DVhub Sollwert Min-SoC', suffix: 'control/min_soc_pct', unit: '%', device_class: null, state_class: 'measurement', icon: 'mdi:battery-arrow-down-outline', value_template: NULL_SAFE_TEMPLATE },
+  { id: 'control_max_discharge_w', name: 'DVhub Sollwert Entladegrenze', suffix: 'control/max_discharge_w', unit: 'W', device_class: null, state_class: 'measurement', icon: 'mdi:battery-arrow-up-outline', value_template: NULL_SAFE_TEMPLATE },
   { id: 'control_source', name: 'DVhub Steuerquelle', suffix: 'control/source', unit: null, device_class: null, state_class: null, icon: 'mdi:source-branch' },
+  { id: 'control_rule', name: 'DVhub Steuerregel', suffix: 'control/rule', unit: null, device_class: null, state_class: null, icon: 'mdi:calendar-clock', entity_category: 'diagnostic', value_template: NULL_SAFE_TEMPLATE },
   // updated_at ist ISO-8601 (oder null) → timestamp-Klasse; leer bleibt unknown.
   { id: 'control_updated_at', name: 'DVhub Sollwert geändert', suffix: 'control/updated_at', unit: null, device_class: 'timestamp', state_class: null, entity_category: 'diagnostic',
-    value_template: '{{ none if value in ("null", "") else value }}' },
+    value_template: NULL_SAFE_TEMPLATE },
 
   // --- System / diagnostics ---
   { id: 'uptime_sec', name: 'DVhub Uptime', suffix: 'system/uptime_sec', unit: 's', device_class: 'duration', state_class: 'measurement', icon: 'mdi:timer-outline', entity_category: 'diagnostic' },

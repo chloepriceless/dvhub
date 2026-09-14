@@ -24,8 +24,8 @@ DVhub schreibt seine Sollwerte über Modbus oder die MQTT-Bridge an die Anlage. 
 | `dvhub/control/charge_current_a` | A | Maximaler Ladestrom (DC) |
 | `dvhub/control/min_soc_pct` | % | Untere SoC-Grenze, unter die der Speicher nicht entladen werden soll |
 | `dvhub/control/max_discharge_w` | W | Entladegrenze (AC). `0` = Entladung halten, `-1` = unbegrenzt |
-| `dvhub/control/source` | Text | Woher der Sollwert kommt: `rule:<id>` (Zeitplan-/EOS-Regel), `default`, `runtime`, `none` |
-| `dvhub/control/rule` | Text | Regel-ID aus `source`, sonst `null` |
+| `dvhub/control/source` | Text | Herkunft des Sollwerts: `eos` (EOS-Plan), `optimizer` (interner Prognose-Optimizer), `market_automation` (Kleinmarkt-Automation), `rule` (manuelle Zeitplan-Regel), `override` (manueller Eingriff über die API), `default` (Grundzustand), `runtime` (Laufzeit-Schutz wie Abregelung/SoC-Boden), `none` |
+| `dvhub/control/rule` | Text | Regel-ID, wenn eine Regel den Sollwert bestimmt (z. B. `opt-1789…-3`), sonst `null` |
 | `dvhub/control/updated_at` | ISO-8601 | Zeitpunkt der letzten Sollwert-Änderung (Europe/Berlin-Anlage, UTC-Zeitstempel) |
 | `dvhub/control/paused` | bool | `true`, wenn der Not-Halt die freiwilligen Schreibvorgänge pausiert |
 | `dvhub/control/state` | JSON | Alle vier Ziele mit `{ value, source, at, origin }` in einem Objekt (`origin`: `active` = aktiver Sollwert, `readback` = Rücklesung der Anlage) |
@@ -146,7 +146,19 @@ Loxone: ein **Virtual Output** mit MQTT-Gateway (z. B. Loxberry MQTT-Plugin) auf
 
 ## 3. Status nach außen (Bestand)
 
-Unverändert seit INTG-02: `dvhub/energy/grid_power_w`, `grid_l1_w`…`l3_w`, `import_wh`, `export_wh`, `cost_eur`, `revenue_eur`; `dvhub/battery/soc_pct`, `power_w`, `min_soc_pct`; `dvhub/solar/pv_total_w`, `pv_dc_w`; `dvhub/price/epex_current_ct_kwh`; `dvhub/optimizer/status`, `source`, `last_run_at`; `dvhub/system/uptime_sec`, `meter_ok`, `victron_updated_at`. Alle retained, alle `publishIntervalMs`.
+Unverändert seit INTG-02: `dvhub/energy/grid_power_w`, `grid_l1_w`…`l3_w`, `import_wh`, `export_wh`, `cost_eur`, `revenue_eur`; `dvhub/battery/soc_pct`, `power_w`, `min_soc_pct`; `dvhub/solar/pv_total_w`, `pv_dc_w`; `dvhub/price/epex_current_ct_kwh`; `dvhub/system/uptime_sec`, `meter_ok`, `victron_updated_at`. Alle retained, alle `publishIntervalMs`.
+
+Optimizer (seit 2026-09-14 aus dem echten Optimizer-Zustand, nicht mehr nur aus der Kleinmarkt-Automation):
+
+| Topic | Werte |
+|---|---|
+| `dvhub/optimizer/source` | `eos`, `internal` (Prognose-Optimizer), `market_automation` (nur Kleinmarkt-Automation aktiv), `gated` (Lizenz fehlt), `none` |
+| `dvhub/optimizer/status` | `active`, `error`, `disabled` |
+| `dvhub/optimizer/last_run_at` | ISO-8601 des letzten Optimizer-Laufs (Kleinmarkt-Automation: Datum) oder `null` |
+| `dvhub/optimizer/rules_count` | Anzahl der vom Optimizer erzeugten Zeitplan-Regeln |
+| `dvhub/optimizer/error` | Fehlertext des letzten Laufs oder `null` |
+
+Kodierung: Zeichenketten werden **roh** gesendet (`eos`, nicht `"eos"`), Zahlen, Booleans und `null` als JSON, Objekte als JSON. Die HA-Discovery-Entitäten tragen ein `value_template`, das `null` in „unbekannt" übersetzt.
 
 ---
 
