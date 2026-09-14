@@ -1,7 +1,7 @@
 {
   "name": "dvhub",
   "version": "1.0.6",
-  "description": "Direktvermarktungs-Schnittstelle für Victron ESS - Modbus-Proxy und DVhub Leitstand",
+  "description": "Direktvermarktungs-Schnittstelle f\u00fcr Victron ESS - Modbus-Proxy und DVhub Leitstand",
   "private": true,
   "type": "module",
   "license": "SEE LICENSE IN ../LICENSE.md",
@@ -46,5 +46,16 @@
     "@playwright/test": "^1.60.0",
     "eslint": "^9.39.4",
     "globals": "^17.7.0"
+  },
+  "overrides": {
+    "ip-address": {
+      "ip-address": "10.3.1"
+    },
+    "mqtt": {
+      "ip-address": "10.3.1"
+    },
+    "socks": {
+      "ip-address": "10.3.1"
+    }
   }
 }
