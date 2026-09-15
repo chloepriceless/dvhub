@@ -12,6 +12,17 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Fassung wird erkannt, beide Stände werden unterstützt.** DVhub fragt
+  beim Konfigurationsabgleich einmal die EOS-Konfiguration ab und erkennt
+  daraus, mit welcher Fassung es spricht: unserem DV-Fork, dem
+  Direktvermarktungs-Branch des Maintainers (dem künftigen Upstream-Stand)
+  oder dem heutigen Upstream-main. Danach richtet sich, was geschrieben wird:
+  der Direktvermarktungs-Schalter geht nur an Fassungen, die ihn kennen (beim
+  Fork entfällt der bisher dauerhaft fehlschlagende Versuch), das Intervall
+  geht auf den jeweils richtigen Pfad, und wo 15 Minuten nicht vorgesehen
+  sind, wird auf eine Stunde herabgestuft statt einen Fehler zu erzeugen. Die
+  erkannte Fassung steht in `/api/optimizer/status` unter `eos` und im Log.
+  Ein späterer Wechsel ist damit nur noch ein Umhängen des Branches.
 - **Steuerbefehle transparent nach außen — MQTT, Home Assistant, Loxone.**
   DVhubs aktive Sollwerte (Netz-Sollwert, Ladestrom, Min-SoC, Entladegrenze)
   werden retained unter `dvhub/control/*` publiziert, dazu Quelle/Regel,

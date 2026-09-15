@@ -12,6 +12,8 @@
 
 import http from 'node:http';
 
+import { createEosCapabilityProbe, EOS_FLAVOR } from './eos-capabilities.js';
+
 const TIMEOUT_MS = 8_000;
 const BATTERY_DEVICE_ID = 'battery1';   // EOS default — mirrors what EOS bootstraps.
 const INVERTER_DEVICE_ID = 'inverter1'; // EOS default — same.
@@ -327,6 +329,13 @@ function eosHttpRequest(baseUrl, method, path, body) {
 export function createEosConfigSync(ctx) {
   const { getCfg, pushLog, state } = ctx;
 
+  // 2026-09-15: Fähigkeitserkennung, damit derselbe DVhub mit unserem Fork
+  // UND mit dem Maintainer-Branch (dem künftigen upstream-main) spricht.
+  // Ergebnis wird gemerkt (5 min) und in state.optimizer.eos veröffentlicht,
+  // sodass /api/optimizer/status zeigt, welche Fassung antwortet.
+  const capabilityProbe = ctx.eosCapabilityProbe
+    || createEosCapabilityProbe({ request: (baseUrl, method, path, body) => eosHttpRequest(baseUrl, method, path, body) });
+
   async function sync() {
     const cfg = getCfg();
     const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
@@ -430,12 +439,28 @@ export function createEosConfigSync(ctx) {
       { section: 'devices/max_home_appliances', body: 0 },
     ];
 
+    // Fassung bestimmen, bevor die Aufgabenliste steht (siehe
+    // eos-capabilities.js). Schlägt die Erkennung fehl, ist flavor 'unknown'
+    // und alles verhält sich wie vor 2026-09-15.
+    const caps = await capabilityProbe.get(baseUrl);
+    if (state) {
+      state.optimizer = state.optimizer || {};
+      state.optimizer.eos = {
+        flavor: caps.flavor, version: caps.version, reachable: caps.reachable,
+        supports: caps.supports, detectedAt: caps.detectedAt,
+      };
+    }
+    // upstream-main kennt keine 15 Minuten (Intervall dort fest auf 3600 s).
+    // Herabstufen statt einen Fehlschlag zu produzieren — der Operator sieht
+    // die Fassung im Status und im Log.
+    const intervalBody = caps.supports.quarterHour ? optimization.interval : 3600;
+
     const tasks = [
       { section: 'devices/batteries', body: batteries },
       { section: 'devices/inverters', body: inverters },
       ...evTasks,
       ...homeApplianceTasks,
-      { section: 'optimization/interval', body: optimization.interval },
+      { section: caps.intervalSection, body: intervalBody },
       { section: 'optimization/genetic/generations', body: geneticSizing.generations },
       { section: 'optimization/genetic/individuals', body: geneticSizing.individuals },
       { section: 'ems/interval', body: emsIntervalSec },
@@ -477,9 +502,17 @@ export function createEosConfigSync(ctx) {
     // immer rot ist, bringt niemandem etwas und erzieht zum Wegsehen. Deshalb
     // getrennt gezählt: der Fehlschlag steht sichtbar im Log, kippt aber nicht
     // den Gesamtstatus. Sobald der Fork auf upstream steht, greift er von selbst.
-    const optionalTasks = [
-      { section: 'feedintariff/direct_marketing_enabled', body: directMarketing },
-    ];
+    //
+    // 2026-09-15: Sobald die Erkennung sagt, dass die Fassung den Schlüssel
+    // kennt (Maintainer-Branch und alles danach), wird er zum PFLICHT-Task —
+    // dort ist ein Fehlschlag ein echter Fehler und muss den Status kippen.
+    // Kennt die Fassung ihn nicht (unser Fork), wird er gar nicht erst
+    // geschrieben: kein Fehlversuch, kein Rauschen im Log. Bei 'unknown'
+    // bleibt es beim alten Verhalten (optional).
+    const directMarketingTask = { section: 'feedintariff/direct_marketing_enabled', body: directMarketing };
+    const optionalTasks = [];
+    if (caps.supports.directMarketingFlag) tasks.push(directMarketingTask);
+    else if (caps.flavor === EOS_FLAVOR.UNKNOWN) optionalTasks.push(directMarketingTask);
     if (elecprice) {
       tasks.push(
         { section: 'elecprice/charges_kwh', body: elecprice.charges_kwh },
@@ -510,6 +543,8 @@ export function createEosConfigSync(ctx) {
     if (pushLog) {
       pushLog('eos_config_sync', {
         ok: okAll,
+        eos_flavor: caps.flavor,
+        eos_version: caps.version,
         applied,
         errors,
         appliedOptional,
@@ -520,7 +555,7 @@ export function createEosConfigSync(ctx) {
         inverter_max_power_w: inverters[0]?.max_power_w,
       });
     }
-    return { ok: okAll, applied, errors, appliedOptional, errorsOptional };
+    return { ok: okAll, applied, errors, appliedOptional, errorsOptional, eos: { flavor: caps.flavor, version: caps.version, supports: caps.supports } };
   }
 
   /**
