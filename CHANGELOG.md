@@ -131,6 +131,17 @@ verweist hierher.
 
 ### Behoben
 
+- **EOS bekam die Gerätezähler nie gesetzt — und lieferte deshalb still keinen
+  Plan mehr.** Der Konfigurationsabgleich schrieb Akku und Wechselrichter, aber
+  nicht `devices/max_batteries` bzw. `max_inverters`. Ohne sie gilt die
+  Geräteliste für EOS als nicht konfiguriert: es rechnet mit einem
+  Standardakku, und die daraus abgeleiteten Messschlüssel entstehen gar nicht
+  erst. Jeder SoC-Wert läuft dann in ein „Key 'battery1-soc-factor' not found",
+  der Optimierer rechnet mit einem Ladestand von 0 und gibt keine Lösung aus —
+  DVhub fällt still auf den internen Plan zurück. Auf einer Anlage, deren EOS
+  seit Wochen durchlief, fiel das erst beim ersten Neustart auf: die Werte
+  waren nur zur Laufzeit gesetzt und nie in die EOS-Konfigurationsdatei
+  gelangt. Beide Zähler werden jetzt vor den Geräten geschrieben.
 - **Abhängigkeits-Pin für EOSdash hing an der Gewohnheit statt an seiner
   Ursache.** Die Bereitstellung nagelte `starlette` pauschal auf `<1.0` —
   nötig war das nur für EOS `v0.3.0`, das über `monsterui` ein altes

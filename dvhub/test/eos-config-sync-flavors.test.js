@@ -207,6 +207,28 @@ describe('EOS nicht erreichbar / unbekannte Fassung', () => {
 // scheitern still, wenn DVhub sie nicht mitmacht. Am 20.09. gegen die echte
 // Instanz gemessen: das alte Schema kam auf 10 von 16 PUTs, das neue auf 7/7;
 // nach dem Umbau 14/14.
+// --- Geraetezaehler: ohne sie gilt die Geraeteliste als nicht konfiguriert --
+//
+// Auf prod am 21.09.2026 aufgetreten: fehlten max_batteries/max_inverters,
+// meldete EOS "Number of battery devices not configured", leitete KEINE
+// Messschluessel ab (/v1/measurement/keys nur "date_time"), jeder SoC-PUT
+// scheiterte mit 404, der Optimierer rechnete mit SoC=0 und lieferte gar
+// keine Loesung -- DVhub fiel still auf den internen Plan zurueck.
+describe('Geraetezaehler (max_batteries / max_inverters)', () => {
+  for (const kind of ['dvFork', 'upstreamDm', 'upstreamGenetic']) {
+    it(`werden gegen ${kind} gesetzt, und zwar VOR den Geraeten`, async () => {
+      mock = await createMockEos(kind);
+      await createEosConfigSync(ctxFor(mock.port)).sync();
+      const sec = sectionsOf(mock);
+      assert.equal(bodyOf(mock, 'devices/max_batteries'), 1);
+      assert.equal(bodyOf(mock, 'devices/max_inverters'), 1);
+      assert.ok(sec.indexOf('devices/max_batteries') < sec.indexOf('devices/batteries'),
+        'das Limit muss vor der Liste stehen, sonst weist EOS die Geraete ab');
+      assert.ok(sec.indexOf('devices/max_inverters') < sec.indexOf('devices/inverters'));
+    });
+  }
+});
+
 describe('Abgleich gegen Upstream ab #1330 (upstream-genetic)', () => {
   it('schreibt Geräte als Abbildung nach device_id statt als Liste', async () => {
     mock = await createMockEos('upstreamGenetic');

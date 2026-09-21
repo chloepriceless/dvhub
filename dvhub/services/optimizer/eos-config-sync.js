@@ -498,7 +498,28 @@ export function createEosConfigSync(ctx) {
       ? [{ section: 'optimization/algorithm', body: 'GENETIC' }]
       : [];
 
+    // max_batteries / max_inverters MUESSEN gesetzt sein, und zwar VOR den
+    // Geraeten selbst. Ohne sie gilt die Geraeteliste fuer EOS als nicht
+    // konfiguriert: der Optimierer meldet "Number of battery devices not
+    // configured - defaulting to 1", rechnet mit einem Standardakku, und --
+    // schwerwiegender -- die daraus abgeleiteten Messschluessel entstehen
+    // nicht. /v1/measurement/keys liefert dann nur "date_time", jeder
+    // SoC-PUT scheitert mit 404 "Key 'battery1-soc-factor' not found in
+    // measurements", der Optimierer rechnet mit SoC=0 und liefert gar keine
+    // Loesung. DVhub faellt in dem Fall still auf den internen Plan zurueck.
+    //
+    // Auf prod am 2026-09-21 genau so aufgetreten: EOS lief seit dem 19.07.
+    // durch, die Werte waren nur zur Laufzeit gesetzt (nie in EOS.config.json)
+    // und gingen beim ersten Neustart verloren. Nach dem Nachziehen der beiden
+    // Zeilen erschienen die Messschluessel sofort, der SoC-PUT kam durch, und
+    // der naechste Lauf lieferte wieder eine vollstaendige Loesung.
+    const deviceCountTasks = [
+      { section: 'devices/max_batteries', body: batteries.length },
+      { section: 'devices/max_inverters', body: inverters.length },
+    ];
+
     const tasks = [
+      ...deviceCountTasks,
       { section: 'devices/batteries', body: asDevices(batteries) },
       { section: 'devices/inverters', body: asDevices(inverters) },
       ...evTasks,
