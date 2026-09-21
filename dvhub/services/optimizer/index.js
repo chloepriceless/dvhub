@@ -11,6 +11,8 @@ import { buildHeuristicSchedule } from './heuristic-optimizer.js';
 import { buildMilpSchedule } from './milp-battery-optimizer.js';
 import { buildScheduleRules, insertOptimizerRules, optimizerSlotsToGridSetpoints } from './schedule-builder.js';
 import { createEosAdapter, resolveEosProxy } from './eos-adapter.js';
+import { createEosFirstPlanWatch } from './eos-first-plan.js';
+import { buildEosOptimization, pickEmsIntervalSec } from './eos-config-sync.js';
 import { enrichPriceSlotsWithCosts } from './cost-model.js';
 import { createMispelTracker } from './mispel-tracker.js';
 import { assessMultiDayHold } from './multi-day.js';
@@ -196,6 +198,38 @@ export function createOptimizerService(ctx) {
   // EOS adapter (created once, used when enabled)
   const eosAdapter = createEosAdapter(ctx);
 
+  // Erstplan-Wache: holt den ersten EOS-Plan nach einem Neustart in Minuten
+  // statt in 15–30 min ab (Diagnose 2026-09-21, Begruendung in
+  // eos-first-plan.js). Sie wird im EOS-Block scharf gemacht, solange EOS noch
+  // keine Loesung hat, und entschaerft, sobald eine da ist.
+  const eosFirstPlanWatch = createEosFirstPlanWatch({
+    hasSolution: async () => (await eosAdapter.getOptimizationSolution(1)) !== null,
+    setEmsIntervalSec: (sec) => eosAdapter.setEmsIntervalSec(sec),
+    triggerOptimization: () => {
+      // Laeuft gerade ein Optimierungslauf, verpufft der Aufruf am
+      // isRunning-Mutex in runOptimization — und der frische EOS-Plan bliebe bis zum
+      // naechsten regulaeren Lauf liegen, also genau die Wartezeit, die diese
+      // Wache abschafft. Darum kurz spaeter erneut anstossen.
+      const kick = (versuch = 0) => {
+        if (isRunning && versuch < 3) {
+          const t = setTimeout(() => kick(versuch + 1), 5_000);
+          if (typeof t.unref === 'function') t.unref();
+          return;
+        }
+        runOptimization().catch(err => pushLog('optimizer_error', { error: err.message }));
+      };
+      kick();
+    },
+    pushLog,
+    // Als Getter, nicht als Wert: der Dienst wird gebaut, bevor zwingend eine
+    // Config vorliegt — und ein GUI-Save wirkt so ohne Neustart.
+    pollMs: () => Number(getCfg()?.optimizer?.eosFirstPlanPollMs) || 30_000,
+    boostIntervalSec: () => {
+      const v = Number(getCfg()?.optimizer?.eosFirstPlanBoostSec);
+      return Number.isFinite(v) ? v : 60;
+    }
+  });
+
   // Run mutex and generation guard
   let runGeneration = 0;
   let isRunning = false;
@@ -380,6 +414,27 @@ export function createOptimizerService(ctx) {
           // — the actuatable export plan the old plan→power path threw away.
           eosSchedule = await eosAdapter.pullSchedule();
           eosGridSetpoints = await eosAdapter.pullGridSetpoints();
+
+          // Direkt nach einem Neustart hat EOS noch keine Loesung: der eigene
+          // Start-Run lief ohne Prognosen ins Leere, gerechnet wird erst zum
+          // naechsten ems.interval-Tick. Ohne Wache wuerde DVhub bis zum
+          // naechsten eigenen Lauf (15 min) nicht mehr nachfragen.
+          // Leere Setpoints allein sind kein Grund zu warten: eine Loesung kann
+          // da sein und trotzdem keinen stellbaren Slot im Horizont haben.
+          // Gewartet wird nur, wenn EOS ueberhaupt noch nichts gerechnet hat.
+          const eosHatNochNichts = (!eosGridSetpoints || eosGridSetpoints.length === 0)
+            && (await eosAdapter.getOptimizationSolution(1)) === null;
+          if (eosHatNochNichts) {
+            const emsSollSec = pickEmsIntervalSec(
+              buildEosOptimization(cfg).interval,
+              cfg.optimizer?.eosEmsIntervalSec
+            );
+            eosFirstPlanWatch.arm({ restoreIntervalSec: emsSollSec })
+              .catch(err => pushLog('eos_first_plan_arm_failed', { error: err.message }));
+          } else {
+            eosFirstPlanWatch.disarm()
+              .catch(err => pushLog('eos_first_plan_disarm_failed', { error: err.message }));
+          }
         } catch (err) {
           pushLog('optimizer_eos_error', { error: err.message });
         }
@@ -648,6 +703,7 @@ export function createOptimizerService(ctx) {
     if (fallbackTimer) clearTimeout(fallbackTimer); // setTimeout-based since #16b
     pollTimer = null;
     fallbackTimer = null;
+    eosFirstPlanWatch.stop();
   }
 
   return {

@@ -155,10 +155,18 @@ fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_VENV" "$EOS_DIR"
 
 # systemd unit — bind 127.0.0.1:8503 only (no external access).
+#
+# After=dvhub.service (2026-09-21): EOS rechnet 5 s nach dem Start seinen ersten
+# Lauf (ems.startup_delay). Startet EOS vor DVhub, trifft dieser Lauf einen
+# Prozess ohne importierte Prognosen, laeuft in die Demo-Daten und wird
+# verworfen — der naechste Versuch kommt erst einen ems.interval-Tick spaeter.
+# Beim Boot war das der Unterschied zwischen einem Plan nach Minuten und einem
+# nach einer halben Stunde. Bewusst nur eine REIHENFOLGE (After), keine
+# Abhaengigkeit (Requires/Wants): faellt DVhub aus, soll EOS trotzdem laufen.
 cat <<UNIT >/etc/systemd/system/eos.service
 [Unit]
 Description=Akkudoktor EOS (Energy Optimization System)
-After=network.target
+After=network.target dvhub.service
 
 [Service]
 Type=simple

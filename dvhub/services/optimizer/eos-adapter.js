@@ -628,5 +628,28 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     return result.ok;
   }
 
-  return { pushForecast, pullSchedule, pullGridSetpoints, getOptimizationSolution, isAvailable };
+  /**
+   * ems.interval setzen (Lauf-Takt der Energy-Management-Schleife, Sekunden).
+   *
+   * Gebraucht von der Erstplan-Wache (eos-first-plan.js): nach einem Neustart
+   * senkt sie den Takt voruebergehend, damit EOS direkt nach dem Prognose-Push
+   * rechnet statt zum naechsten Viertelstunden-Tick, und setzt ihn danach auf
+   * den Soll-Wert zurueck.
+   *
+   * ACHTUNG — nicht mit optimization.interval verwechseln: das ist die
+   * SLOT-BREITE (15-min-Raster der Direktvermarktung) und darf hier nie
+   * angefasst werden. Hier geht es nur um den Takt, in dem gerechnet wird.
+   *
+   * @param {number} sec
+   * @returns {Promise<{ ok: boolean, error?: string }>}
+   */
+  async function setEmsIntervalSec(sec) {
+    const v = Number(sec);
+    if (!Number.isFinite(v) || v <= 0) return { ok: false, error: 'invalid ems interval' };
+    // EOS nimmt den Skalarwert als nackten JSON-Body (wie eos-config-sync es
+    // fuer die uebrigen Feld-PUTs tut).
+    return httpRequest('PUT', '/v1/config/ems/interval', v);
+  }
+
+  return { pushForecast, pullSchedule, pullGridSetpoints, getOptimizationSolution, setEmsIntervalSec, isAvailable };
 }
