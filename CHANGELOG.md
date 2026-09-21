@@ -23,6 +23,29 @@ verweist hierher.
   sind, wird auf eine Stunde herabgestuft statt einen Fehler zu erzeugen. Die
   erkannte Fassung steht in `/api/optimizer/status` unter `eos` und im Log.
   Ein späterer Wechsel ist damit nur noch ein Umhängen des Branches.
+  Seit dem GENETIC-Umbau von EOS (upstream #1330, enthalten in `v0.4.0rc1`)
+  kommt eine vierte Fassung dazu, und sie unterscheidet sich in mehr als dem
+  Intervall-Pfad: Geräte werden dort als Abbildung nach `device_id`
+  geschrieben statt als Liste, die Speicherkosten heißen
+  `levelized_cost_of_storage_amt_kwh`, der Algorithmus (`GENETIC` neben dem
+  alten `GENETIC0`) wird ausdrücklich gewählt, und die Preisaufschläge
+  `elecprice/charges_kwh`/`vat_rate` entfallen — es gab sie dort nicht mehr,
+  und auf DVhubs Pfad hatten sie ohnehin nie eine Wirkung, weil die Bridge
+  bereits den aufgelösten Endkundenpreis schickt. Wichtig ist die
+  Unterscheidung zum Upstream-Stand davor: dort waren 15 Minuten nicht
+  möglich, ab `v0.4.0rc1` sind sie es wieder. Wer beide gleich behandelt,
+  plant still in Stundenslots. Gegen eine echte `v0.4.0rc1`-Instanz gemessen:
+  14 von 14 Konfigurationswerten kommen an (mit dem alten Schema waren es 10
+  von 16).
+- **EOS wird mitgeliefert und lässt sich aktualisieren.** Bisher gab es für
+  Bestandsanlagen gar keinen EOS-Update-Pfad: war EOS einmal installiert,
+  prüfte ein DVhub-Update nur noch, ob der Dienst läuft. Neu legt
+  `eos-version.env` fest, welcher EOS-Stand ausgeliefert wird (Repository und
+  Tag/Branch/Commit); die Anlage merkt sich den installierten Stand und zieht
+  bei einer Abweichung im Hintergrund nach — inklusive Wechsel des
+  Repositorys und Neuaufbau der Python-Umgebung. Ein Versionssprung ist damit
+  eine Zeile. Die bisherige Speicherhürde (kein EOS unter 1 GB RAM) entfällt;
+  wer EOS nicht will, legt weiterhin `.no-eos` im Datenverzeichnis an.
 - **Steuerbefehle transparent nach außen — MQTT, Home Assistant, Loxone.**
   DVhubs aktive Sollwerte (Netz-Sollwert, Ladestrom, Min-SoC, Entladegrenze)
   werden retained unter `dvhub/control/*` publiziert, dazu Quelle/Regel,

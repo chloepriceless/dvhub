@@ -277,6 +277,34 @@ export function buildEosInverters(cfg) {
 }
 
 /**
+ * Geräteliste -> Abbildung nach device_id, wie EOS ab #1330 sie erwartet
+ * (`devices.batteries.battery1` statt `devices.batteries[0]`). Benennt dabei
+ * das Verschleiß-Feld mit um: `levelized_cost_of_storage_kwh` heißt dort
+ * `levelized_cost_of_storage_amt_kwh` — beides kam mit demselben Umbau, an
+ * v0.4.0rc1 gemessen. Ohne die Umbenennung kommen die Speicherkosten nicht an
+ * und EOS rechnet Zyklen als kostenlos.
+ *
+ * Geräte ohne `device_id` fallen weg: EOS braucht den Schlüssel, und ein
+ * Gerät ohne ihn wäre in der Abbildung nicht adressierbar.
+ *
+ * @param {Array<object>} list
+ * @returns {Object<string, object>}
+ */
+function devicesAsMap(list) {
+  const out = {};
+  for (const dev of Array.isArray(list) ? list : []) {
+    if (!dev || !dev.device_id) continue;
+    const entry = { ...dev };
+    if (Object.prototype.hasOwnProperty.call(entry, 'levelized_cost_of_storage_kwh')) {
+      entry.levelized_cost_of_storage_amt_kwh = entry.levelized_cost_of_storage_kwh;
+      delete entry.levelized_cost_of_storage_kwh;
+    }
+    out[dev.device_id] = entry;
+  }
+  return out;
+}
+
+/**
  * Internal HTTP helper. Mirrors eos-adapter.js — never throws, returns
  * { ok, data?, error? } so the caller can fan out per-section errors.
  */
@@ -350,6 +378,25 @@ export function createEosConfigSync(ctx) {
       return { ok: true, applied: [], errors: {}, skipped: 'eosProxy.enabled=false' };
     }
 
+    // Fassung bestimmen, BEVOR irgendeine Aufgabe gebaut wird (siehe
+    // eos-capabilities.js) — sie entscheidet über die Schreibweise der Geräte,
+    // über den Ort der Slot-Länge und darüber, welche Schlüssel es überhaupt
+    // noch gibt. Ein GET je Sync, nicht pro Aufgabe; das Ergebnis wird 5 min
+    // gemerkt. Schlägt die Erkennung fehl, ist flavor 'unknown' und alles
+    // verhält sich wie vor 2026-09-15.
+    const caps = await capabilityProbe.get(baseUrl);
+    if (state) {
+      state.optimizer = state.optimizer || {};
+      state.optimizer.eos = {
+        flavor: caps.flavor, version: caps.version, reachable: caps.reachable,
+        supports: caps.supports, detectedAt: caps.detectedAt,
+      };
+    }
+    // Ab #1330 führt EOS Geräte als Abbildung nach device_id. Ein Listen-PUT
+    // scheitert dort mit 400 ("Input should be a valid dictionary") — gemessen
+    // am 20.09.2026 gegen v0.4.0rc1 — und EOS behält sein Bootstrap-Gerät.
+    const asDevices = (list) => (caps.supports.deviceMap ? devicesAsMap(list) : list);
+
     // Single-floor model (2026-06-16): EOS min_soc = DVhub's ONE discharge floor.
     // Source of truth = the live Victron BMS min (the absolute level DVhub itself
     // discharges to); fall back to the configured optimizer.hardFloorSocPct, then
@@ -400,11 +447,11 @@ export function createEosConfigSync(ctx) {
     const evTasks = optimizeEv
       ? [
           { section: 'devices/max_electric_vehicles', body: 1 },
-          { section: 'devices/electric_vehicles', body: buildEosElectricVehicles(cfg) },
+          { section: 'devices/electric_vehicles', body: asDevices(buildEosElectricVehicles(cfg)) },
         ]
       : [
           { section: 'devices/max_electric_vehicles', body: 0 },
-          { section: 'devices/electric_vehicles', body: [] },
+          { section: 'devices/electric_vehicles', body: caps.supports.deviceMap ? {} : [] },
         ];
 
     // Home appliances: DVhub does not model schedulable white goods, so EOS
@@ -439,27 +486,24 @@ export function createEosConfigSync(ctx) {
       { section: 'devices/max_home_appliances', body: 0 },
     ];
 
-    // Fassung bestimmen, bevor die Aufgabenliste steht (siehe
-    // eos-capabilities.js). Schlägt die Erkennung fehl, ist flavor 'unknown'
-    // und alles verhält sich wie vor 2026-09-15.
-    const caps = await capabilityProbe.get(baseUrl);
-    if (state) {
-      state.optimizer = state.optimizer || {};
-      state.optimizer.eos = {
-        flavor: caps.flavor, version: caps.version, reachable: caps.reachable,
-        supports: caps.supports, detectedAt: caps.detectedAt,
-      };
-    }
-    // upstream-main kennt keine 15 Minuten (Intervall dort fest auf 3600 s).
-    // Herabstufen statt einen Fehlschlag zu produzieren — der Operator sieht
-    // die Fassung im Status und im Log.
+    // upstream-main (vor #1330) nagelt das Intervall auf 3600 s fest. Dort
+    // herabstufen statt einen Fehlschlag zu produzieren — der Operator sieht
+    // die Fassung im Status und im Log. Ab #1330 sind 15 Minuten wieder
+    // erlaubt, nur steht der Schlüssel woanders (caps.intervalSection).
     const intervalBody = caps.supports.quarterHour ? optimization.interval : 3600;
+    // Ab #1330 stehen zwei Engines nebeneinander: GENETIC (neu) und GENETIC0
+    // (die alte). Wir wollen ausdrücklich die neue, statt den Vorgabewert
+    // stillschweigend zu erben. Wo es die Wahl nicht gibt, entfällt der PUT.
+    const algorithmTasks = caps.supports.algorithmChoice
+      ? [{ section: 'optimization/algorithm', body: 'GENETIC' }]
+      : [];
 
     const tasks = [
-      { section: 'devices/batteries', body: batteries },
-      { section: 'devices/inverters', body: inverters },
+      { section: 'devices/batteries', body: asDevices(batteries) },
+      { section: 'devices/inverters', body: asDevices(inverters) },
       ...evTasks,
       ...homeApplianceTasks,
+      ...algorithmTasks,
       { section: caps.intervalSection, body: intervalBody },
       { section: 'optimization/genetic/generations', body: geneticSizing.generations },
       { section: 'optimization/genetic/individuals', body: geneticSizing.individuals },
@@ -513,7 +557,21 @@ export function createEosConfigSync(ctx) {
     const optionalTasks = [];
     if (caps.supports.directMarketingFlag) tasks.push(directMarketingTask);
     else if (caps.flavor === EOS_FLAVOR.UNKNOWN) optionalTasks.push(directMarketingTask);
-    if (elecprice) {
+    // charges_kwh / vat_rate gibt es nur bis 0.3.x — und selbst dort waren sie
+    // auf unserem Pfad wirkungslos: beide werden ausschliesslich in
+    // ElecPriceAkkudoktor und ElecPriceEnergyCharts gelesen
+    // (`git grep charges_kwh v0.3.0`), während DVhub ElecPriceImport nutzt und
+    // über die Bridge bereits den aufgelösten Endkundenpreis schickt. Ab #1330
+    // sind die Schlüssel gelöscht (der PUT quittiert mit 400); das dortige
+    // elecfee-Framework braucht DVhub aus demselben Grund nicht —
+    // ElecPriceImport schlägt keine Gebühren auf (`elecpriceimport.py` ruft
+    // `_store_gross_series` nicht), sonst würde doppelt gerechnet.
+    //
+    // Bei 'unknown' bleibt es beim alten Verhalten: schreiben wie bisher. Wer
+    // die Fassung nicht lesen konnte, soll sich genauso verhalten wie die
+    // ausgelieferte Flotte — und eine Fassung, die die Schlüssel nicht kennt,
+    // quittiert den PUT mit 400, genau wie vor der Erkennung.
+    if (elecprice && (caps.supports.elecPriceCharges || caps.flavor === EOS_FLAVOR.UNKNOWN)) {
       tasks.push(
         { section: 'elecprice/charges_kwh', body: elecprice.charges_kwh },
         { section: 'elecprice/vat_rate', body: elecprice.vat_rate },

@@ -290,26 +290,46 @@ fi
 # ohne EOS installiert wurden, werden hier nachgerüstet (Provisioning-Logik in
 # der gemeinsamen eos-provision.sh, geteilt mit install.sh). Das schwere
 # clone+pip darf den Service-Start NIE blockieren (ExecStartPre, TimeoutStartSec=
-# 120): fehlt EOS, wird die Provisionierung ENTKOPPELT über eine eigene transient
-# systemd-Unit gestartet (überlebt dvhub-Restarts). Bereits provisioniertes EOS
-# wird nur schnell auf "läuft" geprüft (kein fetch/pip pro Boot). Opt-out via
-# $DATA_DIR/.no-eos. NON-FATAL durchgängig.
+# 120): fehlt EOS oder ist es veraltet, wird die Provisionierung ENTKOPPELT über
+# eine eigene transient systemd-Unit gestartet (überlebt dvhub-Restarts). Ein
+# bereits aktueller Stand wird nur schnell auf "läuft" geprüft (kein fetch/pip
+# pro Boot) — "aktuell" heisst: der Marker $DATA_DIR/.eos-provisioned stimmt mit
+# eos-version.env überein. KEIN RAM-Gate mehr (Christin 2026-09-20): EOS kommt
+# immer mit. Opt-out weiterhin via $DATA_DIR/.no-eos. NON-FATAL durchgängig.
 EOS_DIR="$INSTALL_DIR/eos"
 if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
-  EOS_RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
-  if [[ "$EOS_RAM_MB" -lt 1000 ]]; then
-    # RAM-Gate gesenkt 3GB->1GB (Christin 2026-06-27): EOS nur unter 1 GB aus.
-    echo "  EOS: Uebersprungen (RAM ${EOS_RAM_MB}MB < 1GB)"
-  elif [[ -d "$EOS_DIR/.git" && -f /etc/systemd/system/eos.service ]]; then
-    # Bereits provisioniert — nur sicherstellen, dass der Dienst läuft (schnell).
+  # Gewuenschter EOS-Stand aus eos-version.env gegen den zuletzt installierten
+  # (Marker $DATA_DIR/.eos-provisioned) — reiner Dateivergleich, KEIN Netzzugriff,
+  # also weiterhin billig genug fuer jeden Boot.
+  EOS_WANT=""
+  if [[ -f "$INSTALL_DIR/eos-version.env" ]]; then
+    _pr="$(grep -E '^EOS_REPO_URL=' "$INSTALL_DIR/eos-version.env" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
+    _pp="$(grep -E '^EOS_PIN=' "$INSTALL_DIR/eos-version.env" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
+    [[ -n "$_pr" && -n "$_pp" ]] && EOS_WANT="${_pr}@${_pp}"
+  fi
+  EOS_HAVE="$(cat "$DATA_DIR/.eos-provisioned" 2>/dev/null || true)"
+  # Bestandsboxen haben noch keinen Marker. Die laufen hier einmalig durch die
+  # (entkoppelte) Provisionierung — idempotent, und danach ist die Flotte auf
+  # einem nachweisbaren Stand statt auf "irgendwas von damals".
+  EOS_CURRENT=0
+  [[ -n "$EOS_WANT" && "$EOS_HAVE" == "$EOS_WANT" ]] && EOS_CURRENT=1
+  if [[ -d "$EOS_DIR/.git" && -f /etc/systemd/system/eos.service && "$EOS_CURRENT" -eq 1 ]]; then
+    # Aktuell — nur sicherstellen, dass der Dienst läuft (schnell).
     systemctl enable eos.service >/dev/null 2>&1 || true
     systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
-    echo "  EOS: OK (bereits provisioniert)"
+    echo "  EOS: OK (aktuell: ${EOS_HAVE})"
   elif systemctl is-active --quiet dvhub-eos-provision.service 2>/dev/null; then
     echo "  EOS: Hintergrund-Provisionierung läuft bereits"
   else
-    # Fehlt -> entkoppelt nachrüsten, damit clone+pip den Boot nicht blockiert.
-    echo "  EOS: nicht installiert — starte entkoppelte Hintergrund-Provisionierung (DV-Fork)..."
+    # Fehlt ODER veraltet -> entkoppelt nachziehen, damit clone+pip den Boot nie
+    # blockiert. Genau hier landet auch das EOS-Upgrade: eine neue Version in
+    # eos-version.env macht den Marker ungleich, und der naechste Service-Start
+    # stoesst die Neu-Provisionierung an.
+    if [[ -d "$EOS_DIR/.git" && -n "$EOS_HAVE" ]]; then
+      echo "  EOS: neue Version angefordert (${EOS_HAVE:-unbekannt} -> ${EOS_WANT}) — starte entkoppelte Aktualisierung..."
+    else
+      echo "  EOS: nicht installiert oder Stand unbekannt — starte entkoppelte Hintergrund-Provisionierung..."
+    fi
     if command -v systemd-run >/dev/null 2>&1; then
       systemd-run --collect --quiet --unit "dvhub-eos-provision" \
         --description "DVhub EOS provisioning (retrofit)" \

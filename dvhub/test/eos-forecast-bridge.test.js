@@ -212,16 +212,22 @@ test('push forwards live battery SoC as factor; skips EV when absent', async () 
     const socPuts = mock.requests.filter(
       (r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'),
     );
-    // battery pushed, EV skipped (no evSocPct)
-    assert.equal(socPuts.length, 1);
-    assert.match(socPuts[0].url, /key=battery1-soc-factor/);
-    assert.match(socPuts[0].url, /value=0\.16(&|$)/);
-    // SoC must be stamped at the top of an hour (EOS seeds at ems.start_datetime
-    // = HH:00); a minute/second-precise "now" would be missed → SoC defaults 0.
-    const dtMatch = decodeURIComponent(socPuts[0].url).match(/datetime=([^&]+)/);
-    assert.ok(dtMatch, 'datetime present');
-    assert.match(dtMatch[1], /T\d\d:00:00Z$/, 'datetime floored to top of hour');
-    assert.ok(res.pushed.some((p) => p.startsWith('battery1-soc-factor=0.16')));
+    // Battery gepusht, EV uebersprungen (kein evSocPct) — aber ZWEI Stempel je
+    // Kanal: volle Stunde fuer EOS 0.3.x (sucht bei ems.start_datetime=HH:00),
+    // 'jetzt' fuer EOS 0.4 (bricht ab, wenn der Wert aelter als 300 s ist).
+    assert.equal(socPuts.length, 2);
+    for (const put of socPuts) {
+      assert.match(put.url, /key=battery1-soc-factor/);
+      assert.match(put.url, /value=0\.16(&|$)/);
+    }
+    const stamps = socPuts.map((r) => decodeURIComponent(r.url).match(/datetime=([^&]+)/)[1]);
+    assert.ok(stamps.some((d) => /T\d\d:00:00Z$/.test(d)), 'ein Stempel auf der vollen Stunde');
+    assert.ok(
+      stamps.some((d) => !/T\d\d:00:00Z$/.test(d) && Math.abs(Date.now() - Date.parse(d)) < 60_000),
+      'ein Stempel auf jetzt',
+    );
+    // Jeder Kanal wird trotz zweier PUTs nur EINMAL gemeldet.
+    assert.equal(res.pushed.filter((p) => p.startsWith('battery1-soc-factor=0.16')).length, 1);
   } finally {
     await mock.close();
   }
@@ -242,9 +248,10 @@ test('push forwards EV SoC when state provides evSocPct', async () => {
     const socPuts = mock.requests.filter(
       (r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'),
     );
-    assert.equal(socPuts.length, 2);
-    assert.ok(socPuts.some((r) => /key=battery1-soc-factor/.test(r.url) && /value=0\.5(&|$)/.test(r.url)));
-    assert.ok(socPuts.some((r) => /key=ev11-soc-factor/.test(r.url) && /value=0\.8(&|$)/.test(r.url)));
+    // zwei Kanaele x zwei Stempel
+    assert.equal(socPuts.length, 4);
+    assert.equal(socPuts.filter((r) => /key=battery1-soc-factor/.test(r.url) && /value=0\.5(&|$)/.test(r.url)).length, 2);
+    assert.equal(socPuts.filter((r) => /key=ev11-soc-factor/.test(r.url) && /value=0\.8(&|$)/.test(r.url)).length, 2);
   } finally {
     await mock.close();
   }

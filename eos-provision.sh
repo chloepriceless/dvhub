@@ -5,9 +5,13 @@
 # install) and post-update.sh (retrofit on existing boxes) so the two never
 # drift -- same pattern as support-provision.sh. Must be run as root.
 #
-# Honours the operator opt-out marker $DATA_DIR/.no-eos and the >=3GB RAM gate.
-# Idempotent: clone-or-fetch the fork branch, venv-if-missing, pip re-resolve,
-# rewrite the systemd unit, (re)start eos.service. Safe to run repeatedly.
+# Honours the operator opt-out marker $DATA_DIR/.no-eos. KEIN RAM-Gate mehr
+# (Christin 2026-09-20): EOS kommt immer mit -- die Container-Arbeit hat den
+# Speicherbedarf entschaerft, und Boxen unter 1 GB sind die Ausnahme.
+# Idempotent: clone-or-fetch den gepinnten Stand, venv-if-missing, pip
+# re-resolve, systemd-Unit neu schreiben, eos.service (neu)starten.
+# Der zuletzt erfolgreich installierte Pin landet in $DATA_DIR/.eos-provisioned,
+# damit post-update.sh eine Versionsaenderung ohne Netzzugriff erkennt.
 set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
@@ -20,8 +24,20 @@ EOS_VENV="${EOS_VENV:-$INSTALL_DIR/eos-venv}"
 # feed-in, pydantic /v1/prediction/import fix) directly from the fork branch.
 # The branch carries every patch on top of upstream v0.3.0, so the legacy
 # eos-patches/apply.sh step is no longer needed. Override repo/branch via env.
-EOS_REPO_URL="${EOS_REPO_URL:-https://github.com/chloepriceless/DV-EOS.git}"
-EOS_BRANCH="${EOS_BRANCH:-dvhub-fork}"
+# Gewuenschter Stand: eos-version.env im Repo ist die einzige Quelle. Env-
+# Variablen gewinnen weiterhin (Tests, Sonderfaelle). EOS_BRANCH bleibt als
+# Alias erhalten, damit bestehende Aufrufe nicht brechen.
+EOS_PIN_FILE="${EOS_PIN_FILE:-$INSTALL_DIR/eos-version.env}"
+if [[ -f "$EOS_PIN_FILE" ]]; then
+  # Nur die zwei erwarteten Schluessel lesen -- die Datei wird NICHT gesourct,
+  # damit ein Tippfehler darin keinen Code ausfuehrt.
+  _pin_repo="$(grep -E '^EOS_REPO_URL=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
+  _pin_ref="$(grep -E '^EOS_PIN=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
+fi
+EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/chloepriceless/DV-EOS.git}}"
+EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-fork}}}"
+EOS_BRANCH="$EOS_PIN"   # Rueckwaertskompatibler Alias
+EOS_STATE_MARKER="$DATA_DIR/.eos-provisioned"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "  EOS: eos-provision.sh muss als root laufen — uebersprungen" >&2
@@ -34,28 +50,72 @@ if [[ -f "$DATA_DIR/.no-eos" ]]; then
   exit 0
 fi
 
-# RAM gate (Christin 2026-06-27): EOS braucht max. ~1,5 GB, 2 GB sind komfortabel.
-# Nur UNTER 1 GB deaktivieren — darunter würden EOS + venv die Box ins Swappen
-# treiben. (Vorher >=3GB; auf 1 GB gesenkt, damit 2-GB-Boxen EOS bekommen.)
-RAM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
-if [[ "$RAM_MB" -lt 1000 ]]; then
-  echo "  EOS: Uebersprungen (RAM ${RAM_MB}MB < 1GB)"
-  exit 0
+# KEIN RAM-Gate (Christin 2026-09-20). Frueher sprang die Provisionierung unter
+# 1 GB ab; das kostete genau den Boxen EOS, die es am ehesten brauchen. Wer es
+# nicht will, setzt weiterhin $DATA_DIR/.no-eos.
+
+# Konnektivitaets-Vorpruefung. Kostet eine Sekunde und erspart im Fehlerfall
+# stundenlanges Raetseln: kuendigt die Box globales IPv6 an, ohne es erreichen
+# zu koennen, laeuft JEDE pip-Verbindung erst in den IPv6-Timeout -- der Download
+# dauert dann Stunden statt Minuten (auf der Testbox gemessen: 30-s-Timeout je
+# Verbindung gegen 1 s mit IPv4). curl faellt schnell zurueck, urllib/pip nicht.
+# Wir aendern hier NICHTS am System, wir sagen nur, was los ist.
+if command -v ip >/dev/null 2>&1 && ip -6 route show default 2>/dev/null | grep -q .; then
+  if ! timeout 6 python3 -c "import socket;socket.create_connection(('pypi.org',443),4)" >/dev/null 2>&1; then
+    echo "  EOS: WARNUNG — die Box hat eine IPv6-Default-Route, erreicht pypi.org darueber aber nicht." >&2
+    echo "  EOS: Der pip-Download laeuft dann in jede Verbindung erst einen Timeout und dauert ein Vielfaches." >&2
+    echo "  EOS: Abhilfe: 'precedence ::ffff:0:0/96  100' in /etc/gai.conf eintragen (IPv4 bevorzugen)." >&2
+  fi
 fi
 
-echo "  EOS: Installiere/aktualisiere DV-EOS Fork (${EOS_BRANCH}) bare-metal venv..."
-
-# Idempotent clone / fetch of the fork branch.
-if [[ ! -d "$EOS_DIR/.git" ]]; then
-  rm -rf "$EOS_DIR"
-  git clone --branch "$EOS_BRANCH" --depth 1 "$EOS_REPO_URL" "$EOS_DIR" \
-    || { echo "  EOS: git clone ${EOS_REPO_URL}@${EOS_BRANCH} fehlgeschlagen" >&2; exit 1; }
+EOS_WANT="${EOS_REPO_URL}@${EOS_PIN}"
+EOS_HAVE="$(cat "$EOS_STATE_MARKER" 2>/dev/null || true)"
+if [[ "$EOS_HAVE" == "$EOS_WANT" ]]; then
+  EOS_PIN_CHANGED=0
 else
-  git -C "$EOS_DIR" fetch --depth 1 origin "$EOS_BRANCH"
-  git -C "$EOS_DIR" checkout -B "$EOS_BRANCH" "origin/$EOS_BRANCH"
+  EOS_PIN_CHANGED=1
+  [[ -n "$EOS_HAVE" ]] && echo "  EOS: Versionswechsel ${EOS_HAVE} -> ${EOS_WANT}"
 fi
 
-# Python venv (Python 3.11+ required by EOS v0.3.0).
+echo "  EOS: Installiere/aktualisiere EOS (${EOS_PIN}) bare-metal venv..."
+
+# Idempotent clone / fetch auf den gepinnten Stand. Funktioniert fuer Tag,
+# Branch und Commit-SHA gleichermassen, weil ueber FETCH_HEAD ausgecheckt wird.
+# Der lokale Arbeitszweig heisst immer dvhub-eos -- so bleibt der Name stabil,
+# auch wenn der Pin von einem Branch auf einen Tag wechselt.
+eos_clone_fresh() {
+  rm -rf "$EOS_DIR"
+  git clone --branch "$EOS_PIN" --depth 1 "$EOS_REPO_URL" "$EOS_DIR" 2>/dev/null \
+    || git clone --depth 1 "$EOS_REPO_URL" "$EOS_DIR" \
+    || { echo "  EOS: git clone ${EOS_REPO_URL}@${EOS_PIN} fehlgeschlagen" >&2; return 1; }
+  git -C "$EOS_DIR" fetch --depth 1 origin "$EOS_PIN" 2>/dev/null || true
+  git -C "$EOS_DIR" checkout -B dvhub-eos FETCH_HEAD 2>/dev/null || true
+}
+
+if [[ ! -d "$EOS_DIR/.git" ]]; then
+  eos_clone_fresh || exit 1
+else
+  # Repo-Wechsel (Fork -> upstream) mitziehen, sonst zeigt origin ins Leere.
+  git -C "$EOS_DIR" remote set-url origin "$EOS_REPO_URL" 2>/dev/null || true
+  if git -C "$EOS_DIR" fetch --depth 1 origin "$EOS_PIN" 2>/dev/null \
+     && git -C "$EOS_DIR" checkout -B dvhub-eos FETCH_HEAD 2>/dev/null; then
+    :
+  else
+    # Ein flacher Klon kann einen Ref aus einer anderen Historie nicht
+    # nachziehen -- dann lieber frisch klonen als halb aktualisiert stehen
+    # bleiben. Der alte Stand geht dabei verloren, aber er ist reproduzierbar.
+    echo "  EOS: Fetch auf ${EOS_PIN} nicht moeglich — klone neu"
+    eos_clone_fresh || exit 1
+  fi
+fi
+
+# Python venv (Python 3.11+). Bei einem Versionswechsel wird es NEU gebaut:
+# ein 0.3->0.4-Sprung tauscht die halbe Abhaengigkeitsliste aus, und ein
+# gewachsenes venv traegt dann Altlasten mit, die niemand mehr aufloest.
+if [[ -d "$EOS_VENV" && "$EOS_PIN_CHANGED" -eq 1 && -n "$EOS_HAVE" ]]; then
+  echo "  EOS: venv wird wegen Versionswechsel neu gebaut"
+  rm -rf "$EOS_VENV"
+fi
 [[ -d "$EOS_VENV" ]] || python3 -m venv "$EOS_VENV"
 "$EOS_VENV/bin/pip" install --upgrade pip
 # T-0118: EOS v0.3.0 ships pyproject.toml, NOT requirements.txt — only honour a
@@ -99,4 +159,13 @@ UNIT
 systemctl daemon-reload
 systemctl enable eos.service
 systemctl restart eos.service
-echo "  EOS: systemd eos.service bereit (127.0.0.1:8503)"
+
+# Den tatsaechlich installierten Stand festhalten -- post-update.sh vergleicht
+# ihn gegen eos-version.env und erkennt so eine neue Version ohne Netzzugriff.
+# Bewusst ERST hier: bricht das Skript vorher ab, bleibt der alte Marker stehen
+# und der naechste Boot versucht es erneut.
+mkdir -p "$DATA_DIR"
+printf '%s\n' "$EOS_WANT" > "$EOS_STATE_MARKER"
+chown "$SERVICE_USER:$SERVICE_USER" "$EOS_STATE_MARKER" 2>/dev/null || true
+
+echo "  EOS: systemd eos.service bereit (127.0.0.1:8503), Stand ${EOS_PIN}"

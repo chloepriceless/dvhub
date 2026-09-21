@@ -8,9 +8,13 @@
 // ensemble DVhub already runs, so EOS plans on inferior inputs.
 //
 // Push contract:
-//   - Format: PydanticDateTimeDataFrame
-//       { data: {<key>: {<iso8601>: <value>}}, dtypes: {<key>: 'float64'},
+//   - Format: PydanticDateTimeDataFrame, DATETIME-FIRST
+//       { data: {<iso8601>: {<key>: <value>}}, dtypes: {<key>: 'float64'},
 //         tz: 'Europe/Berlin', datetime_columns: [] }
+//     (Die Zeitstempel sind der Index, NICHT die Spalte — s. buildDataFrameBody
+//     und die Warnung dort. Column-first wird von EOS mit HTTP 200 quittiert
+//     und still verworfen; gegen 0.3.0 wie gegen 0.4.0rc1 nachgemessen
+//     2026-09-20.)
 //   - Keys (EOS-canonical):
 //       pvforecast_ac_power     [W]      from forecastService.buildForecastResponse().pv
 //       loadforecast_power_w    [W]      from .load (hourly, forward-filled 4x)
@@ -337,29 +341,51 @@ export function createEosForecastBridge(ctx) {
       return { pushed, errors };
     }
     const socKeys = keysRes.data.filter((k) => /-soc-factor$/.test(String(k)));
-    // Stamp the SoC at the top of the current hour, NOT "now". EOS seeds the
-    // optimizer with the latest measurement at/<= ems.start_datetime, and that
-    // start is floored to the top of the current hour (observed plan
-    // valid_from=HH:00). A "now" timestamp lands AFTER start_datetime, so EOS
-    // looks back, misses it, and falls back to SoC=0 (empty battery) — the plan
-    // then optimises from a wrong start state. Berlin is a whole-hour offset,
-    // so flooring the UTC epoch to the hour aligns with local HH:00.
-    const nowIso = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000)
+    // ZWEI Zeitstempel je Kanal — einer fuer jede EOS-Generation:
+    //
+    //   1. volle Stunde: EOS 0.3.x sucht den Startwert mit
+    //      key_to_value(target_datetime=ems.start_datetime, time_window=48h),
+    //      und ems.start_datetime ist dort auf die volle Stunde abgerundet.
+    //      Das Fenster ist symmetrisch und bevorzugt den exakten Treffer, also
+    //      gewinnt dieser Wert dort weiterhin.
+    //   2. jetzt: EOS 0.4 prueft die FRISCHE. configrequest.py:108-115 nimmt
+    //      den juengsten Messwert <= observation_datetime (der echten Uhrzeit)
+    //      und bricht den Lauf ab, wenn er aelter ist als
+    //      optimization.genetic.measurement_max_age_seconds (Vorgabe 300 s).
+    //      Am 2026-09-20 auf einer frischen v0.4.0rc1-Instanz nachgemessen:
+    //      nur der Stundenstempel -> HTTP 503 "Fresh SoC missing for battery1";
+    //      zusaetzlich "jetzt" -> HTTP 200 mit vollstaendiger Loesung.
+    //
+    // Beide Werte stehen nebeneinander in derselben Messreihe; keine EOS-Version
+    // stoert sich am jeweils anderen. Deshalb braucht es hier keine
+    // Versionserkennung — anders als beim Konfigurations-Schema.
+    const hourIso = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000)
       .toISOString()
       .replace('.000Z', 'Z');
+    const freshIso = new Date().toISOString();
+    const socStamps = [hourIso, freshIso];
 
     for (const key of socKeys) {
       const isEv = /(^|[^a-z])ev\d*-soc-factor$/.test(key);
       const value = isEv ? evFactor : battFactor;
       if (value === null) continue; // EV with no live value — skip cleanly
-      // value rides as a query param (verified accepted by EOS 0.3.0); the
-      // endpoint takes datetime/key/value all on the query string, no body.
-      const path =
-        `/v1/measurement/value?datetime=${encodeURIComponent(nowIso)}` +
-        `&key=${encodeURIComponent(key)}&value=${value}`;
-      const res = await eosHttpRequest(baseUrl, 'PUT', path);
-      if (res.ok) pushed.push(`${key}=${value}`);
-      else errors[key] = res.error;
+      // value rides as a query param (verified accepted by EOS 0.3.0 und
+      // 0.4.0rc1); the endpoint takes datetime/key/value all on the query
+      // string, no body.
+      let anyOk = false;
+      let lastErr = null;
+      for (const stamp of socStamps) {
+        const path =
+          `/v1/measurement/value?datetime=${encodeURIComponent(stamp)}` +
+          `&key=${encodeURIComponent(key)}&value=${value}`;
+        const res = await eosHttpRequest(baseUrl, 'PUT', path);
+        if (res.ok) anyOk = true;
+        else lastErr = res.error;
+      }
+      // Ein Fehlschlag bei EINEM der beiden Stempel ist kein Ausfall: solange
+      // einer sitzt, hat die jeweils laufende EOS-Generation ihren Wert.
+      if (anyOk) pushed.push(`${key}=${value}`);
+      else errors[key] = lastErr;
     }
 
     return { pushed, errors };

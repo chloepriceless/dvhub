@@ -27,6 +27,32 @@ const CONFIGS = {
     feedintariff: { provider: null },
     devices: { batteries: null, inverters: null },
   },
+  // Nachgebildet aus GET /v1/config einer echten v0.4.0rc1-Instanz
+  // (ARM64-Testbox, 21.09.2026) — gekürzt auf die Schlüssel,
+  // an denen die Erkennung hängt:
+  //   optimization: ['algorithm','algorithms','genetic','genetic0','keys']
+  //   genetic.interval_sec vorhanden, optimization.interval NICHT
+  //   feedintariff.direct_marketing_enabled vorhanden
+  //   devices.batteries = {battery1: …}, electric_vehicles = {}
+  //   elecprice ohne charges_kwh / vat_rate
+  upstreamGenetic: {
+    optimization: {
+      algorithm: 'GENETIC',
+      algorithms: ['GENETIC', 'GENETIC0'],
+      genetic: { individuals: 300, generations: 400, interval_sec: 3600, horizon_hours: 48 },
+      genetic0: {},
+      keys: [],
+    },
+    feedintariff: { provider: null, direct_marketing_enabled: true },
+    devices: {
+      batteries: { battery1: { device_id: 'battery1' } },
+      inverters: { inverter1: { device_id: 'inverter1' } },
+      electric_vehicles: {},
+      home_appliances: {},
+      max_home_appliances: 0,
+    },
+    elecprice: { provider: 'ElecPriceImport', providers: [] },
+  },
 };
 
 // Mock-EOS: liefert GET /v1/config je nach Fassung, nimmt PUTs an und merkt
@@ -172,5 +198,70 @@ describe('EOS nicht erreichbar / unbekannte Fassung', () => {
     await sync.sync();
     assert.equal(mock.gets.filter((u) => u === '/v1/config').length, 1,
       'zweiter Abgleich nutzt die gemerkte Erkennung');
+  });
+});
+
+// --- v0.4.0rc1 (#1330 „complete GENETIC optimization") ---------------------
+//
+// Der Umbau vom 17.09.2026 ändert vier Dinge auf einmal, und drei davon
+// scheitern still, wenn DVhub sie nicht mitmacht. Am 20.09. gegen die echte
+// Instanz gemessen: das alte Schema kam auf 10 von 16 PUTs, das neue auf 7/7;
+// nach dem Umbau 14/14.
+describe('Abgleich gegen Upstream ab #1330 (upstream-genetic)', () => {
+  it('schreibt Geräte als Abbildung nach device_id statt als Liste', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const ctx = ctxFor(mock.port);
+    const res = await createEosConfigSync(ctx).sync();
+    assert.equal(res.ok, true);
+    assert.equal(ctx.state.optimizer.eos.flavor, 'upstream-genetic');
+
+    const bat = bodyOf(mock, 'devices/batteries');
+    assert.ok(bat && !Array.isArray(bat) && typeof bat === 'object', 'batteries als Abbildung');
+    assert.equal(bat.battery1.device_id, 'battery1', 'Schlüssel ist die device_id');
+    const inv = bodyOf(mock, 'devices/inverters');
+    assert.equal(inv.inverter1.battery_id, 'battery1', 'Wechselrichter zeigt weiter auf die Batterie');
+    assert.deepEqual(bodyOf(mock, 'devices/electric_vehicles'), {},
+      'leere Abbildung statt leerer Liste — eine Liste quittiert EOS mit 400');
+  });
+
+  it('benennt die Speicherkosten mit um (sonst rechnet EOS Zyklen als kostenlos)', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    await createEosConfigSync(ctxFor(mock.port)).sync();
+    const bat = bodyOf(mock, 'devices/batteries').battery1;
+    assert.ok('levelized_cost_of_storage_amt_kwh' in bat, 'neuer Feldname');
+    assert.equal('levelized_cost_of_storage_kwh' in bat, false, 'alter Feldname muss weg');
+  });
+
+  it('behält die 15 Minuten — auf dem neuen Pfad, ohne Herabstufung', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const ctx = ctxFor(mock.port);
+    await createEosConfigSync(ctx).sync();
+    assert.equal(bodyOf(mock, 'optimization/genetic/interval_sec'), 900,
+      'ab #1330 sind 15 Minuten wieder erlaubt — NICHT auf 3600 herabstufen');
+    assert.equal(sectionsOf(mock).includes('optimization/interval'), false,
+      'der alte Schlüssel ist gelöscht; ein PUT darauf quittiert mit 400');
+    assert.equal(ctx.state.optimizer.eos.supports.quarterHour, true);
+  });
+
+  it('wählt GENETIC ausdrücklich, statt den Vorgabewert zu erben', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    await createEosConfigSync(ctxFor(mock.port)).sync();
+    assert.equal(bodyOf(mock, 'optimization/algorithm'), 'GENETIC',
+      'GENETIC0 steht als Altlast daneben — die Wahl gehört nicht dem Zufall');
+  });
+
+  it('lässt charges_kwh und vat_rate weg (Schlüssel gelöscht, Wirkung hatten sie nie)', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    await createEosConfigSync(ctxFor(mock.port)).sync();
+    assert.equal(sectionsOf(mock).includes('elecprice/charges_kwh'), false);
+    assert.equal(sectionsOf(mock).includes('elecprice/vat_rate'), false);
+    assert.ok(sectionsOf(mock).includes('elecprice/provider'), 'der Provider wird weiter gesetzt');
+  });
+
+  it('schreibt den Direktvermarktungs-Schalter als Pflicht-Task', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const res = await createEosConfigSync(ctxFor(mock.port)).sync();
+    assert.equal(bodyOf(mock, 'feedintariff/direct_marketing_enabled'), true);
+    assert.equal(res.ok, true);
   });
 });

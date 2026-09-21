@@ -24,11 +24,12 @@ LEGACY_APP_DIR="${LEGACY_APP_DIR:-$INSTALL_DIR/dv-control-webapp}"
 # box while the customer holds a tunnel open (UI button). Disable with
 # --no-support-user (no user, no key, no remote support possible).
 SUPPORT_LOCAL_USER="${SUPPORT_LOCAL_USER:-1}"
-# Akkudoktor-EOS is installed BY DEFAULT as the DVhub Direktvermarktung fork
-# (DV-EOS: 15-min slots, slot-aware battery/inverter math, battery->grid
-# arbitrage export) when RAM >= 1GB (Christin 2026-06-27: lowered from 3GB —
-# EOS needs ~1.5GB, 2GB is comfortable; only disable below 1GB). It is the
-# productive optimizer DVhub ships with — no longer opt-in. Opt out with --no-eos.
+# Akkudoktor-EOS wird IMMER mitinstalliert — kein RAM-Gate mehr (Christin
+# 2026-09-20; vorher >=1GB, davor >=3GB). Welcher Stand installiert wird, steht
+# in eos-version.env (EOS_REPO_URL + EOS_PIN); eos-provision.sh zieht ihn und
+# haelt ihn ueber den Marker $DATA_DIR/.eos-provisioned nach, damit ein spaeteres
+# Update die Version anheben kann. Es ist der produktive Optimierer, mit dem
+# DVhub ausgeliefert wird. Opt out mit --no-eos.
 # --with-eos is kept as a backwards-compatible no-op (EOS is already the default).
 EOS_INSTALL="${EOS_INSTALL:-1}"
 
@@ -422,7 +423,7 @@ install_forecast() {
 # essential install tail (config/DB/systemd) that follows.
 ( install_forecast ) || echo "  Forecast: venv-Setup fehlgeschlagen — uebersprungen, Kern-Install laeuft weiter"
 
-# --- EOS (Akkudoktor) Installation — DEFAULT (DV fork), RAM-gated >=3GB, opt-out via --no-eos ---
+# --- EOS (Akkudoktor) Installation — DEFAULT, opt-out via --no-eos ---
 # The provisioning logic lives in the shared eos-provision.sh (single source of
 # truth, mirrors the support-provision.sh pattern) so install.sh and
 # post-update.sh never drift. The repo is already cloned to $INSTALL_DIR here, so
@@ -432,7 +433,7 @@ install_eos() {
     echo "  EOS: eos-provision.sh nicht gefunden ($INSTALL_DIR) — uebersprungen"
     return 0
   fi
-  # EOS_REPO_URL/EOS_BRANCH overrides flow through the inherited environment.
+  # EOS_REPO_URL/EOS_PIN overrides flow through the inherited environment.
   SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" \
     bash "$INSTALL_DIR/eos-provision.sh"
 }

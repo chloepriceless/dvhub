@@ -11,8 +11,13 @@
 //   upstream-dm   — Maintainer-Branch feat/direct-marketing-battery-grid-export
 //                   (= das künftige main): interval + direct_marketing_enabled
 //                   + Geräteplanung
-//   upstream-main — heutiges Upstream-main: optimization.genetic.interval_sec,
-//                   Intervall auf 3600 s festgenagelt, kein Direktvermarktungs-Schalter
+//   upstream-main — Upstream-main VOR dem GENETIC-Umbau (Stand 15.09.2026):
+//                   optimization.genetic.interval_sec, Intervall auf 3600 s
+//                   festgenagelt, kein Direktvermarktungs-Schalter
+//   upstream-genetic — Upstream ab #1330 (17.09.2026, in v0.4.0rc1): derselbe
+//                   Intervall-Pfad, aber 15 Minuten nativ erlaubt, Geräte als
+//                   Abbildung nach device_id, zwei Algorithmen nebeneinander,
+//                   keine Preisaufschläge mehr unter elecprice
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -36,6 +41,27 @@ const upstreamMainConfig = {
   optimization: { hours: 48, genetic: { individuals: 300, generations: 400, interval_sec: 3600 } },
   feedintariff: { provider: null },
   devices: { batteries: null, inverters: null },
+};
+
+// Nachgebildet aus GET /v1/config einer echten v0.4.0rc1-Instanz
+// (ARM64-Testbox, 21.09.2026).
+const upstreamGeneticConfig = {
+  optimization: {
+    algorithm: 'GENETIC',
+    algorithms: ['GENETIC', 'GENETIC0'],
+    genetic: { individuals: 300, generations: 400, interval_sec: 3600, horizon_hours: 48 },
+    genetic0: {},
+    keys: [],
+  },
+  feedintariff: { provider: null, direct_marketing_enabled: true },
+  devices: {
+    batteries: { battery1: { device_id: 'battery1' } },
+    inverters: { inverter1: { device_id: 'inverter1' } },
+    electric_vehicles: {},
+    home_appliances: {},
+    max_home_appliances: 0,
+  },
+  elecprice: { provider: 'ElecPriceImport', providers: [] },
 };
 
 describe('detectEosCapabilities', () => {
@@ -79,6 +105,43 @@ describe('detectEosCapabilities', () => {
   it('meldet, ob die Geräteliste beschreibbar ist (max_home_appliances)', () => {
     assert.equal(detectEosCapabilities(dvForkConfig, {}).supports.maxHomeAppliances, true);
     assert.equal(detectEosCapabilities(upstreamMainConfig, {}).supports.maxHomeAppliances, false);
+  });
+  it('erkennt Upstream ab #1330: 15 Minuten ja, Geräte als Abbildung, Algorithmuswahl', () => {
+    const caps = detectEosCapabilities(upstreamGeneticConfig, { version: '0.4.0rc1' });
+    assert.equal(caps.flavor, EOS_FLAVOR.UPSTREAM_GENETIC);
+    assert.equal(caps.intervalSection, 'optimization/genetic/interval_sec');
+    assert.equal(caps.supports.quarterHour, true,
+      'ab #1330 lässt EOS nur noch {900, 3600} zu — 900 ist erlaubt');
+    assert.equal(caps.supports.deviceMap, true);
+    assert.equal(caps.supports.algorithmChoice, true);
+    assert.equal(caps.supports.directMarketingFlag, true);
+    assert.equal(caps.supports.elecPriceCharges, false,
+      'charges_kwh/vat_rate sind dort gelöscht');
+    assert.equal(caps.version, '0.4.0rc1');
+  });
+
+  it('hält upstream-main und upstream-genetic auseinander — sonst 15 Minuten verloren', () => {
+    // Beide tragen das Intervall unter genetic. Nähme man nur das als
+    // Merkmal, würde v0.4.0rc1 als upstream-main durchgehen und still auf
+    // Stundenslots herabgestuft.
+    const vorher = detectEosCapabilities(upstreamMainConfig, {});
+    const nachher = detectEosCapabilities(upstreamGeneticConfig, {});
+    assert.equal(vorher.intervalSection, nachher.intervalSection, 'gleicher Intervall-Pfad');
+    assert.equal(vorher.supports.quarterHour, false);
+    assert.equal(nachher.supports.quarterHour, true);
+    assert.equal(vorher.supports.deviceMap, false);
+    assert.equal(nachher.supports.deviceMap, true);
+  });
+
+  it('eine leere Geräte-Abbildung bleibt als Abbildung erkennbar', () => {
+    // EOS liefert unbelegte Abschnitte als {} aus — ein Array-Test allein
+    // würde das mit der alten Listenform verwechseln.
+    const caps = detectEosCapabilities({
+      ...upstreamGeneticConfig,
+      devices: { batteries: {}, inverters: {}, electric_vehicles: {}, home_appliances: {} },
+    }, {});
+    assert.equal(caps.supports.deviceMap, true);
+    assert.equal(caps.flavor, EOS_FLAVOR.UPSTREAM_GENETIC);
   });
 });
 
