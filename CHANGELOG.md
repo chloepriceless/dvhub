@@ -129,6 +129,16 @@ verweist hierher.
   **Lese-Modus** `DVHUB_READ_ONLY=1`: sperrt jeden Modbus-/MQTT-Schreibzugriff
   im Transport — ohne die Variable verhält sich eine Anlage exakt wie bisher.
 
+### Behoben
+
+- **Abhängigkeits-Pin für EOSdash hing an der Gewohnheit statt an seiner
+  Ursache.** Die Bereitstellung nagelte `starlette` pauschal auf `<1.0` —
+  nötig war das nur für EOS `v0.3.0`, das über `monsterui` ein altes
+  `fasthtml` hereinzieht. Bei neueren EOS-Ständen stufte der Pin die
+  Abhängigkeit wieder herunter, in ein Regime, gegen das upstream nicht
+  testet, und zwar lautlos: EOS startete trotzdem. Der Pin greift jetzt nur
+  noch, wenn die aufgelöste `python-fasthtml` älter als 0.14 ist.
+
 ## [1.0.6] - 2026-09-05
 
 ### Neu

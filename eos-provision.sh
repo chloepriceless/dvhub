@@ -124,12 +124,32 @@ if [[ -f "$EOS_DIR/requirements.txt" ]]; then
   "$EOS_VENV/bin/pip" install -r "$EOS_DIR/requirements.txt"
 fi
 "$EOS_VENV/bin/pip" install -e "$EOS_DIR"
-# Phase 18-03: pin starlette to the 0.x line. fasthtml 0.12.x (via monsterui,
-# pulled in by EOS v0.3.0) still calls Starlette.__init__(on_startup=…), which
-# starlette 1.x dropped — without the pin EOSdash crashes on every restart while
-# the EOS HTTP API stays up. Verified on prod 2026-05-20 at starlette 0.52.1.
-# Idempotent — pip re-resolves the constraint on every run.
-"$EOS_VENV/bin/pip" install --upgrade "starlette<1.0"
+# Phase 18-03: starlette auf die 0.x-Linie pinnen — ABER nur dort, wo der Grund
+# noch gilt. fasthtml 0.12.x (via monsterui, von EOS v0.3.0 hereingezogen) ruft
+# Starlette.__init__(on_startup=…), das starlette 1.x gestrichen hat; ohne Pin
+# stuerzt EOSdash bei jedem Neustart ab, waehrend die EOS-API weiterlaeuft
+# (prod 2026-05-20 bei starlette 0.52.1 verifiziert).
+#
+# EOS 0.4 bringt fasthtml 0.14.13 mit und loest starlette 1.6.0 auf. Der alte
+# Pin wuerde dort ohne Not auf 0.52.1 herunterstufen — ein Abhaengigkeitsstand,
+# gegen den upstream gar nicht testet. Am 2026-09-20 auf der Testbox gemessen:
+# mit starlette 1.6.0 laufen EOS (v1/health 200) UND EOSdash (HTTP 200) sauber.
+# Deshalb haengt der Pin jetzt an seiner Ursache statt an der Gewohnheit.
+FASTHTML_NEEDS_OLD_STARLETTE="$("$EOS_VENV/bin/python" - <<'PYEOF' 2>/dev/null || echo 1
+try:
+    from importlib.metadata import version
+    parts = version("python-fasthtml").split(".")
+    print("1" if (int(parts[0]), int(parts[1])) < (0, 14) else "0")
+except Exception:
+    print("1")
+PYEOF
+)"
+if [[ "$FASTHTML_NEEDS_OLD_STARLETTE" == "0" ]]; then
+  echo "  EOS: fasthtml >= 0.14 — starlette bleibt auf der von EOS aufgeloesten Version"
+else
+  echo "  EOS: fasthtml < 0.14 — starlette auf die 0.x-Linie pinnen (sonst stuerzt EOSdash ab)"
+  "$EOS_VENV/bin/pip" install --upgrade "starlette<1.0"
+fi
 
 # Ownership: the systemd user must be able to execute the venv.
 chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_VENV" "$EOS_DIR"
