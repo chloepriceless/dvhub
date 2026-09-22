@@ -3,7 +3,7 @@
 // laufendes EOS pruefbar ist.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createEosFirstPlanWatch } from '../services/optimizer/eos-first-plan.js';
+import { createEosFirstPlanWatch, isFreshEosSolution } from '../services/optimizer/eos-first-plan.js';
 
 /** Kontrollierbare Timer-/Uhr-Umgebung: fire() fuehrt den faelligen Tick aus. */
 function harness(opts = {}) {
@@ -13,10 +13,12 @@ function harness(opts = {}) {
   const logs = [];
   let triggered = 0;
   let solutionReady = opts.solutionReady ?? false;
+  const probedSince = [];
 
   const watch = createEosFirstPlanWatch({
-    hasSolution: async () => {
+    hasFreshSolution: async (sinceMs) => {
       if (opts.probeThrows) throw new Error('EOS weg');
+      probedSince.push(sinceMs);
       return solutionReady;
     },
     setEmsIntervalSec: async (sec) => {
@@ -35,7 +37,7 @@ function harness(opts = {}) {
   });
 
   return {
-    watch, emsPuts, logs,
+    watch, emsPuts, logs, probedSince,
     events: () => logs.map(l => l.event),
     triggeredCount: () => triggered,
     setSolutionReady: (v) => { solutionReady = v; },
@@ -172,7 +174,7 @@ describe('eos-first-plan watch: Config als Getter', () => {
     let cfg = null; // wie beim Bauen des Dienstes: noch keine Config
     const emsPuts = [];
     const watch = createEosFirstPlanWatch({
-      hasSolution: async () => false,
+      hasFreshSolution: async () => false,
       setEmsIntervalSec: async (sec) => { emsPuts.push(sec); return { ok: true }; },
       triggerOptimization: () => {},
       pollMs: () => cfg?.pollMs ?? 30_000,
@@ -185,5 +187,43 @@ describe('eos-first-plan watch: Config als Getter', () => {
     await watch.arm({ restoreIntervalSec: 900 });
     assert.deepEqual(emsPuts, [45], 'Boost-Wert aus der spaeter geladenen Config');
     assert.equal(watch.getState().pollMs, 10_000);
+  });
+});
+
+// Nach einem Neustart stellt EOS seine letzte Loesung aus der eigenen Datenbank
+// wieder her. Sie ist da, aber nicht mit den neuen Prognosen gerechnet — auf
+// prod hat sie die Wache 2026-09-21 zu frueh entschaerft (Plan erst +10 min).
+describe('eos-first-plan: nur frische Loesungen zaehlen', () => {
+  const since = Date.parse('2026-09-22T10:00:00Z');
+
+  test('Loesung vor dem ersten Push ist veraltet, danach frisch', () => {
+    assert.equal(isFreshEosSolution({ generatedAt: '2026-09-22T09:59:00Z' }, since), false);
+    assert.equal(isFreshEosSolution({ generatedAt: '2026-09-22T10:00:30+00:00' }, since), true);
+    // EOS liefert lokale Zeit mit Offset — derselbe Zeitpunkt, anders geschrieben.
+    assert.equal(isFreshEosSolution({ generatedAt: '2026-09-22T12:00:30.5+02:00' }, since), true);
+  });
+
+  test('keine Loesung / kein generatedAt: nicht frisch', () => {
+    assert.equal(isFreshEosSolution(null, since), false);
+    assert.equal(isFreshEosSolution({ generatedAt: null }, since), false);
+    assert.equal(isFreshEosSolution({}, since), false);
+  });
+
+  test('ohne Bezugszeitpunkt (noch kein Push) genuegt eine vorhandene Loesung', () => {
+    assert.equal(isFreshEosSolution({ generatedAt: '2026-01-01T00:00:00Z' }, null), true);
+    assert.equal(isFreshEosSolution(null, null), false);
+  });
+
+  test('arm reicht freshSince an die Sonde durch; ohne Angabe gilt der Armier-Zeitpunkt', async () => {
+    const h = harness();
+    await h.watch.arm({ restoreIntervalSec: 900, freshSince: 123_456 });
+    h.advance(30_000);
+    await h.fire();
+    assert.deepEqual(h.probedSince, [123_456]);
+    assert.equal(h.watch.getState().freshSince, 123_456);
+
+    const h2 = harness();
+    await h2.watch.arm({ restoreIntervalSec: 900 });
+    assert.equal(h2.watch.getState().freshSince, 1_000_000, 'Armier-Zeitpunkt der Harness-Uhr');
   });
 });

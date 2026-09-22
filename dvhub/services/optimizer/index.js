@@ -11,7 +11,7 @@ import { buildHeuristicSchedule } from './heuristic-optimizer.js';
 import { buildMilpSchedule } from './milp-battery-optimizer.js';
 import { buildScheduleRules, insertOptimizerRules, optimizerSlotsToGridSetpoints } from './schedule-builder.js';
 import { createEosAdapter, resolveEosProxy } from './eos-adapter.js';
-import { createEosFirstPlanWatch } from './eos-first-plan.js';
+import { createEosFirstPlanWatch, isFreshEosSolution } from './eos-first-plan.js';
 import { buildEosOptimization, pickEmsIntervalSec } from './eos-config-sync.js';
 import { enrichPriceSlotsWithCosts } from './cost-model.js';
 import { createMispelTracker } from './mispel-tracker.js';
@@ -203,7 +203,7 @@ export function createOptimizerService(ctx) {
   // eos-first-plan.js). Sie wird im EOS-Block scharf gemacht, solange EOS noch
   // keine Loesung hat, und entschaerft, sobald eine da ist.
   const eosFirstPlanWatch = createEosFirstPlanWatch({
-    hasSolution: async () => (await eosAdapter.getOptimizationSolution(1)) !== null,
+    hasFreshSolution: async (sinceMs) => isFreshEosSolution(await eosAdapter.getOptimizationSolution(1), sinceMs),
     setEmsIntervalSec: (sec) => eosAdapter.setEmsIntervalSec(sec),
     triggerOptimization: () => {
       // Laeuft gerade ein Optimierungslauf, verpufft der Aufruf am
@@ -229,6 +229,12 @@ export function createOptimizerService(ctx) {
       return Number.isFinite(v) ? v : 60;
     }
   });
+
+  // Zeitpunkt des ersten erfolgreichen Prognose-Pushs dieses Prozesses. Eine
+  // EOS-Loesung, die davor gerechnet wurde, stammt aus EOS' eigener Datenbank
+  // (nach einem Neustart wiederhergestellt) und zaehlt fuer die Erstplan-Wache
+  // nicht als Plan.
+  let eosFirstPushAt = null;
 
   // Run mutex and generation guard
   let runGeneration = 0;
@@ -409,6 +415,7 @@ export function createOptimizerService(ctx) {
             price: { ...forecastResp.price, slots: enrichedPriceSlots }
           };
           await eosAdapter.pushForecast(enrichedForecast);
+          if (eosFirstPushAt === null) eosFirstPushAt = Date.now();
           // eosSchedule = FRBC dispatch (battery power) for display/comparison.
           // eosGridSetpoints = net-grid control slots from EOS' SOLUTION (T-0118)
           // — the actuatable export plan the old plan→power path threw away.
@@ -422,14 +429,16 @@ export function createOptimizerService(ctx) {
           // Leere Setpoints allein sind kein Grund zu warten: eine Loesung kann
           // da sein und trotzdem keinen stellbaren Slot im Horizont haben.
           // Gewartet wird nur, wenn EOS ueberhaupt noch nichts gerechnet hat.
+          // Eine aus EOS' Datenbank wiederhergestellte Loesung (vor unserem
+          // ersten Push gerechnet) zaehlt dabei als "nichts".
           const eosHatNochNichts = (!eosGridSetpoints || eosGridSetpoints.length === 0)
-            && (await eosAdapter.getOptimizationSolution(1)) === null;
+            && !isFreshEosSolution(await eosAdapter.getOptimizationSolution(1), eosFirstPushAt);
           if (eosHatNochNichts) {
             const emsSollSec = pickEmsIntervalSec(
               buildEosOptimization(cfg).interval,
               cfg.optimizer?.eosEmsIntervalSec
             );
-            eosFirstPlanWatch.arm({ restoreIntervalSec: emsSollSec })
+            eosFirstPlanWatch.arm({ restoreIntervalSec: emsSollSec, freshSince: eosFirstPushAt })
               .catch(err => pushLog('eos_first_plan_arm_failed', { error: err.message }));
           } else {
             eosFirstPlanWatch.disarm()

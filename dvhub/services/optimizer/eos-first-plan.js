@@ -29,7 +29,8 @@
 
 /**
  * @param {object} deps
- * @param {() => Promise<boolean>} deps.hasSolution        true, sobald EOS eine Loesung hat
+ * @param {(sinceMs: number) => Promise<boolean>} deps.hasFreshSolution
+ *        true, sobald EOS eine Loesung hat, die NACH `sinceMs` gerechnet wurde
  * @param {(sec: number) => Promise<any>} deps.setEmsIntervalSec  PUT /v1/config/ems/interval
  * @param {() => any} deps.triggerOptimization             regulaerer Optimizer-Lauf (holt die Loesung ab)
  * @param {(event: string, data?: object) => void} [deps.pushLog]
@@ -40,9 +41,25 @@
  * @param {Function} [deps.setTimer]
  * @param {Function} [deps.clearTimer]
  */
+/**
+ * Ist `solution` (Rueckgabe von eosAdapter.getOptimizationSolution) eine
+ * Loesung, die EOS nach `sinceMs` gerechnet hat? Ohne `sinceMs` genuegt, dass
+ * es eine Loesung gibt. Ohne lesbares `generatedAt` gilt sie als veraltet —
+ * lieber einmal zu lange warten als eine alte Loesung fuer den Plan halten.
+ *
+ * @param {{ generatedAt?: string|null }|null} solution
+ * @param {number|null} [sinceMs]
+ */
+export function isFreshEosSolution(solution, sinceMs) {
+  if (!solution) return false;
+  if (sinceMs == null || !Number.isFinite(Number(sinceMs))) return true;
+  const generatedMs = Date.parse(solution.generatedAt || '');
+  return Number.isFinite(generatedMs) && generatedMs >= Number(sinceMs);
+}
+
 export function createEosFirstPlanWatch(deps) {
   const {
-    hasSolution,
+    hasFreshSolution,
     setEmsIntervalSec,
     triggerOptimization,
     pushLog = () => {},
@@ -68,6 +85,7 @@ export function createEosFirstPlanWatch(deps) {
   let armed = false;
   let armedAt = 0;
   let restoreSec = null;   // Soll-Wert von ems.interval, auf den wir zuruecksetzen
+  let freshSince = 0;      // Loesungen vor diesem Zeitpunkt zaehlen als veraltet
   let boosted = false;     // haben WIR ems.interval gesenkt? Nur dann setzen wir zurueck.
   let ticking = false;     // kein zweiter tick, solange einer im Netz haengt
 
@@ -112,7 +130,7 @@ export function createEosFirstPlanWatch(deps) {
     try {
       let ready = false;
       try {
-        ready = Boolean(await hasSolution());
+        ready = Boolean(await hasFreshSolution(freshSince));
       } catch (err) {
         pushLog('eos_first_plan_probe_failed', { error: err?.message });
       }
@@ -150,13 +168,22 @@ export function createEosFirstPlanWatch(deps) {
      * tut nichts (sonst wuerde jeder Optimizer-Lauf den Boost neu setzen und die
      * Wartezeit-Messung verfaelschen).
      *
-     * @param {{ restoreIntervalSec?: number }} [opts]
+     * @param {{ restoreIntervalSec?: number, freshSince?: number }} [opts]
      * @returns {Promise<boolean>} true, wenn dieser Aufruf die Wache gestartet hat
      */
     async arm(opts = {}) {
       if (armed) return false;
       armed = true;
       armedAt = now();
+      // Ab welchem Zeitpunkt eine Loesung als frisch gilt: der Moment, in dem
+      // DVhub die Prognosen gepusht hat. EOS stellt nach einem Neustart seine
+      // LETZTE Loesung aus der eigenen Datenbank wieder her (autosave_interval_sec)
+      // — die ist vorhanden, aber mit den neuen Prognosen nicht gerechnet, und
+      // DVhub kann aus ihr keine stellbaren Slots ableiten. Auf prod hat genau
+      // das die Wache zu frueh entschaerft (2026-09-21: armiert +76 s, aufgegeben
+      // +92 s, Plan erst +10 min). Darum zaehlt nur eine Loesung, die NACH dem
+      // Push entstanden ist.
+      freshSince = Number.isFinite(Number(opts.freshSince)) ? Number(opts.freshSince) : armedAt;
       restoreSec = Number.isFinite(Number(opts.restoreIntervalSec))
         ? Number(opts.restoreIntervalSec) : null;
 
@@ -175,7 +202,8 @@ export function createEosFirstPlanWatch(deps) {
       pushLog('eos_first_plan_watch_armed', {
         boostIntervalSec: boosted ? boost : null,
         restoreIntervalSec: restoreSec,
-        pollMs: pollMs()
+        pollMs: pollMs(),
+        freshSince: new Date(freshSince).toISOString()
       });
       schedule();
       return true;
@@ -206,7 +234,7 @@ export function createEosFirstPlanWatch(deps) {
     isArmed: () => armed,
     isBoosted: () => boosted,
     getState: () => ({
-      armed, boosted, armedAt, restoreSec,
+      armed, boosted, armedAt, restoreSec, freshSince,
       pollMs: pollMs(), maxWaitMs, boostIntervalSec: boostSec()
     })
   };
