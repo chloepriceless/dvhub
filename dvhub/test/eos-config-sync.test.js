@@ -323,6 +323,51 @@ test('persist(): no-op (no HTTP) when eosProxy disabled', async () => {
   }
 });
 
+// Erstplan-Wache vs. Boot-Abgleich (prod 2026-09-22): der Abgleich lief alle
+// 20 s und setzte ems/interval jedes Mal auf 900 zurueck — der 60-s-Boost der
+// Wache wirkte nie. Und persist() darf einen aktiven Boost nicht auf Platte
+// schreiben, sonst rechnet EOS nach dem naechsten Neustart im Minutentakt.
+test('sync(): aktiver Boost der Erstplan-Wache bleibt stehen', async () => {
+  const mock = await createMockEos();
+  try {
+    const ctx = {
+      getCfg: () => ({
+        ...STD_CFG,
+        optimizer: { ...STD_CFG.optimizer, eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } },
+      }),
+      getEosEmsIntervalBoost: () => ({ boostSec: 60, restoreSec: 900 }),
+      pushLog: () => {},
+      state: {},
+    };
+    await createEosConfigSync(ctx).sync();
+    const put = mock.requests.find((r) => r.method === 'PUT' && r.url === '/v1/config/ems/interval');
+    assert.equal(put.body, 60);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('persist(): bei aktivem Boost Soll-Takt speichern, danach Boost zurueck', async () => {
+  const mock = await createMockEos();
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      getEosEmsIntervalBoost: () => ({ boostSec: 60, restoreSec: 900 }),
+      pushLog: () => {},
+      state: {},
+    };
+    await createEosConfigSync(ctx).persist();
+    const seq = mock.requests.filter((r) => r.method === 'PUT').map((r) => [r.url, r.body ?? null]);
+    assert.deepEqual(seq, [
+      ['/v1/config/ems/interval', 900],
+      ['/v1/config/file', null],
+      ['/v1/config/ems/interval', 60],
+    ]);
+  } finally {
+    await mock.close();
+  }
+});
+
 // Direktvermarktungs-Generalschalter (Christin 2026-08-07).
 //
 // Upstream-EOS leitet aus `feedintariff.direct_marketing_enabled` DREI Dinge ab

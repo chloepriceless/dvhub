@@ -364,6 +364,12 @@ export function createEosConfigSync(ctx) {
   const capabilityProbe = ctx.eosCapabilityProbe
     || createEosCapabilityProbe({ request: (baseUrl, method, path, body) => eosHttpRequest(baseUrl, method, path, body) });
 
+  // Aktiver Boost der Erstplan-Wache ({ boostSec, restoreSec }) oder null.
+  // Die Wache lebt im Optimizer-Dienst und meldet sich ueber ctx an.
+  const activeEmsBoost = () => {
+    try { return ctx.getEosEmsIntervalBoost?.() || null; } catch { return null; }
+  };
+
   async function sync() {
     const cfg = getCfg();
     const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
@@ -528,7 +534,10 @@ export function createEosConfigSync(ctx) {
       { section: caps.intervalSection, body: intervalBody },
       { section: 'optimization/genetic/generations', body: geneticSizing.generations },
       { section: 'optimization/genetic/individuals', body: geneticSizing.individuals },
-      { section: 'ems/interval', body: emsIntervalSec },
+      // Hat die Erstplan-Wache den Takt gerade hochgesetzt, bleibt ihr Wert
+      // stehen — sonst setzt der Boot-Abgleich (alle 20 s) ihn sofort auf den
+      // Soll-Takt zurueck, und der Boost wirkt nie (prod 2026-09-22).
+      { section: 'ems/interval', body: activeEmsBoost()?.boostSec ?? emsIntervalSec },
       // Phase 22.1 (2026-05-24): point EOS at the *Import providers so
       // eos-forecast-bridge can stream DVhub's native 15-min PV ensemble,
       // load model and EnergyCharts spot cache. VRM/EnergyCharts pulls on
@@ -658,7 +667,17 @@ export function createEosConfigSync(ctx) {
     if (!cfg?.optimizer?.eosProxy?.enabled) {
       return { ok: true, skipped: 'eosProxy.enabled=false' };
     }
+    // PUT /v1/config/file schreibt den LAUFENDEN Stand auf die Platte. Ein
+    // gerade aktiver Boost der Erstplan-Wache darf dort nicht landen, sonst
+    // rechnet EOS nach dem naechsten Neustart dauerhaft im Minutentakt.
+    const boost = activeEmsBoost();
+    if (boost && Number.isFinite(boost.restoreSec)) {
+      await eosHttpRequest(baseUrl, 'PUT', '/v1/config/ems/interval', boost.restoreSec);
+    }
     const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/file');
+    if (boost && Number.isFinite(boost.restoreSec)) {
+      await eosHttpRequest(baseUrl, 'PUT', '/v1/config/ems/interval', boost.boostSec);
+    }
     if (pushLog) pushLog('eos_config_persist', { ok: res.ok, error: res.error });
     return { ok: res.ok, error: res.error };
   }

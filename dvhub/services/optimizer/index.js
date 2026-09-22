@@ -236,6 +236,14 @@ export function createOptimizerService(ctx) {
   // nicht als Plan.
   let eosFirstPushAt = null;
 
+  // Fuer eos-config-sync: solange die Wache geboostet hat, schreibt der Sync
+  // ihren Takt statt des Soll-Takts und speichert den Boost nicht auf Platte.
+  ctx.getEosEmsIntervalBoost = () => {
+    if (!eosFirstPlanWatch.isBoosted()) return null;
+    const st = eosFirstPlanWatch.getState();
+    return { boostSec: st.boostIntervalSec, restoreSec: st.restoreSec };
+  };
+
   // Run mutex and generation guard
   let runGeneration = 0;
   let isRunning = false;
