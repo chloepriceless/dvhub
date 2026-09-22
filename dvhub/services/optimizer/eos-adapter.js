@@ -372,9 +372,11 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // want the battery's *_soc_factor, never the EV's.
     const tsKeys = Object.keys(data).sort();
     let socKey = null;
+    let evSocKey = null;   // nur gesetzt, wenn das E-Auto in EOS angemeldet ist
     if (tsKeys.length) {
       const sample = data[tsKeys[0]] || {};
       socKey = Object.keys(sample).find(k => /_soc_factor$/.test(k) && !/(^|_)ev\d*_/.test(k)) || null;
+      evSocKey = Object.keys(sample).find(k => /(^|_)ev\d*_soc_factor$/.test(k)) || null;
     }
     const numOrNull = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
     const allRows = tsKeys.map((ts) => {
@@ -400,6 +402,10 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         revenueAmt: numOrNull(r.revenue_amt),
         // Raw genetic intent factors — used below to classify the slot's
         // Zeitplan lever; not surfaced directly.
+        // E-Auto (optimizer.eosOptimizeEv): Anteil an der max. Ladeleistung und
+        // SoC des Fahrzeugs. null, wenn EOS kein Fahrzeug plant.
+        evChargeFactor: numOrNull(r.genetic_ev_charge_factor),
+        evSocPct: evSocKey != null && numOrNull(r[evSocKey]) != null ? Math.round(r[evSocKey] * 100) : null,
         _dischargeAllowedFactor: numOrNull(r.genetic_discharge_allowed_factor),
         _dcChargeFactor: numOrNull(r.genetic_dc_charge_factor),
       };

@@ -2063,7 +2063,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'eosEv',
       groupLabel: 'EOS \u2192 E-Auto (Beta)',
-      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Beta: Der EV-Plan wird berechnet und angezeigt; die automatische Umsetzung ans Fahrzeug (evcc) und die Live-SoC-Kopplung folgen in einem sp\u00e4teren Update.',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
       groupOrder: 21,
       path: 'optimizer.eosOptimizeEv',
       label: 'E-Auto mitoptimieren',
@@ -2075,7 +2075,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'eosEv',
       groupLabel: 'EOS \u2192 E-Auto (Beta)',
-      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Beta: Der EV-Plan wird berechnet und angezeigt; die automatische Umsetzung ans Fahrzeug (evcc) und die Live-SoC-Kopplung folgen in einem sp\u00e4teren Update.',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
       groupOrder: 21,
       path: 'optimizer.evCapacityWh',
       label: 'Akku-Kapazit\u00e4t Fahrzeug (Wh)',
@@ -2089,7 +2089,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'eosEv',
       groupLabel: 'EOS \u2192 E-Auto (Beta)',
-      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Beta: Der EV-Plan wird berechnet und angezeigt; die automatische Umsetzung ans Fahrzeug (evcc) und die Live-SoC-Kopplung folgen in einem sp\u00e4teren Update.',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
       groupOrder: 21,
       path: 'optimizer.evMaxChargeW',
       label: 'Max. Ladeleistung (W)',
@@ -2103,7 +2103,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'eosEv',
       groupLabel: 'EOS \u2192 E-Auto (Beta)',
-      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Beta: Der EV-Plan wird berechnet und angezeigt; die automatische Umsetzung ans Fahrzeug (evcc) und die Live-SoC-Kopplung folgen in einem sp\u00e4teren Update.',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
       groupOrder: 21,
       path: 'optimizer.evMinSocPct',
       label: 'Ziel-/Mindest-SoC (%)',
@@ -2113,6 +2113,81 @@ function buildFieldDefinitions() {
       max: 100,
       step: 5,
       help: 'SoC, den EOS im Planungshorizont f\u00fcr das Fahrzeug anstrebt \u2014 so g\u00fcnstig wie m\u00f6glich (PV-Mittag/Billig-Nacht). Keine harte Uhrzeit-Deadline; f\u00fcr \u201emuss um 7 Uhr voll" zus\u00e4tzlich den evcc-Ladeplan nutzen.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
+      groupOrder: 21,
+      path: 'optimizer.evEvccControl',
+      label: 'Ladepunkt \u00fcber evcc steuern',
+      type: 'boolean',
+      default: false,
+      help: 'AN: DVhub schickt f\u00fcr jede Viertelstunde den EOS-Befehl an den evcc-Ladepunkt \u2014 Laden (Modus \u201eSchnell\u201c + Ladestrom aus der geplanten Ladeleistung) oder Stopp. Geschrieben wird nur bei einem Wechsel; ein Umschalten in evcc von Hand bleibt bis zum n\u00e4chsten Wechsel stehen. Braucht \u201eE-Auto mitoptimieren\u201c und die evcc-Adresse unter Integrationen.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
+      groupOrder: 21,
+      path: 'optimizer.evEvccLoadpoint',
+      label: 'evcc-Ladepunkt (Nr.)',
+      type: 'number',
+      default: 1,
+      min: 1,
+      max: 10,
+      step: 1,
+      help: 'Nummer des Ladepunkts in evcc (1 = erster Ladepunkt, wie in der evcc-API).'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
+      groupOrder: 21,
+      path: 'optimizer.evPhases',
+      label: 'Phasen',
+      type: 'select',
+      default: 3,
+      options: [
+        { value: 3, label: '3-phasig' },
+        { value: 1, label: '1-phasig' }
+      ],
+      help: 'Mit wie vielen Phasen das Fahrzeug l\u00e4dt. Daraus wird der Ladestrom je Phase: Ladeleistung \u00f7 (230 V \u00d7 Phasen).'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
+      groupOrder: 21,
+      path: 'optimizer.evMinCurrentA',
+      label: 'Mindest-Ladestrom (A)',
+      type: 'number',
+      default: 6,
+      min: 6,
+      max: 32,
+      step: 1,
+      help: 'Kleinster Strom, den Wallbox und Fahrzeug k\u00f6nnen (Norm: 6 A). Plant EOS weniger Leistung, wird mit diesem Strom geladen.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
+      groupOrder: 21,
+      path: 'optimizer.evStopMode',
+      label: 'evcc-Modus bei Stopp',
+      type: 'select',
+      default: 'off',
+      options: [
+        { value: 'off', label: 'Aus' },
+        { value: 'pv', label: 'PV' },
+        { value: 'minpv', label: 'Min+PV' }
+      ],
+      help: 'Was evcc tun soll, wenn EOS in einer Viertelstunde nicht laden will. \u201eAus\u201c = gar nicht laden (streng nach EOS-Plan). \u201ePV\u201c = evcc darf trotzdem echten PV-\u00dcberschuss nachladen.'
     },
     {
       section: 'schedule',
@@ -3629,6 +3704,13 @@ export function createDefaultConfig() {
       evCapacityWh: 50000,
       evMaxChargeW: 5000,
       evMinSocPct: 70,
+      // EOS → evcc: Plan an den Ladepunkt weiterreichen (eos-evcc-bridge.js). AUS
+      // per Default — ohne das Flag schreibt DVhub nichts an evcc.
+      evEvccControl: false,
+      evEvccLoadpoint: 1,
+      evPhases: 3,
+      evMinCurrentA: 6,
+      evStopMode: 'off',
       // T-0075: absolute SoC floor (%) below which the chokepoint discharge floor
       // (applyControlTarget) suppresses ANY forced discharge, regardless of source.
       hardFloorSocPct: 5,

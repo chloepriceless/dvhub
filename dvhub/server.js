@@ -118,6 +118,7 @@ import { createCurtailmentService } from './services/curtailment/index.js';
 // path (T-19-05 mitigation — Pitfall 7 in 19-RESEARCH). The optimizer pipeline
 // keeps its own 30s adapter (instantiated inside services/optimizer/index.js).
 import { createEosAdapter as createEosAdapterForInspector } from './services/optimizer/eos-adapter.js';
+import { createEosEvccBridge } from './services/optimizer/eos-evcc-bridge.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createOptimizerService } from './services/optimizer/index.js';
@@ -1155,6 +1156,17 @@ const eosAdapterInspector = createEosAdapterForInspector(ctx, { timeoutMs: 5000 
 // live EOS reachability check (e.g. /api/integrations/dveos). Without this,
 // ctx.eosAdapter was undefined and the DV-EOS card always showed "nicht erreichbar".
 ctx.eosAdapter = eosAdapterInspector;
+// EOS → evcc: reicht EOS' E-Auto-Plan (Laden/Stopp + Ladestrom) an den
+// gewaehlten evcc-Ladepunkt weiter. Liest die Loesung ueber den Inspector-
+// Adapter (kurzes Timeout — ein haengendes EOS blockiert den Takt nicht lange).
+const eosEvccBridge = createEosEvccBridge({
+  getCfg: () => ctx.getCfg(),
+  getSolution: (limit) => eosAdapterInspector.getOptimizationSolution(limit),
+  evcc: evccIntegration,
+  isProActive: () => ctx.licenseService?.isProActive?.() !== false,
+  pushLog: (event, data) => ctx.pushLog?.(event, data)
+});
+ctx.eosEvccBridge = eosEvccBridge;
 const inspector = createInspector(ctx, {
   store: forecast.store,
   mlService,
@@ -1796,6 +1808,7 @@ if (IS_RUNTIME_PROCESS) {
   poller.start();
   scheduler.start();
   evccIntegration.start();
+  eosEvccBridge.start();
   epex.start();
   // forecast.start() needs dbPool — wait for telemetry IIFE to finish first
   telemetryReady.then(() => {
@@ -2062,6 +2075,7 @@ async function gracefulShutdown(signal) {
     monitoringHeartbeatSend = null;
   });
   safeSync('evccIntegration.stop', () => evccIntegration.stop?.());
+  safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
   // C2 (2026-07-02, Realitätscheck der alten Worklist 7.7): evcc/license/
   // monitoring-Heartbeat räumen ihre Timer bereits sauber auf (siehe oben +
   // licenseService.close() unten) — das war stale. Echter Rest-Gap: der

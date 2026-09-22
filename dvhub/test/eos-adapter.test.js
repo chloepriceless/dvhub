@@ -351,7 +351,7 @@ test('getOptimizationSolution parses solution.data into rows + KPIs', async () =
         },
         '2026-05-29T02:15:00+02:00': {
           battery1_soc_factor: 0.18, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 120,
-          costs_amt: 0.0, revenue_amt: 0.03, ev11_soc_factor: 0.7,
+          costs_amt: 0.0, revenue_amt: 0.03, ev11_soc_factor: 0.72, genetic_ev_charge_factor: 0.4,
         },
       },
     },
@@ -373,6 +373,11 @@ test('getOptimizationSolution parses solution.data into rows + KPIs', async () =
     assert.equal(out.rows[1].gridFeedinWh, 120);
     assert.equal(out.rows[0].costsAmt, 0.124);
     assert.equal(out.rows[1].revenueAmt, 0.03);
+    // E-Auto (EOS → evcc): Ladefaktor + SoC des Fahrzeugs; fehlender Faktor = null.
+    assert.equal(out.rows[1].evChargeFactor, 0.4);
+    assert.equal(out.rows[1].evSocPct, 72);
+    assert.equal(out.rows[0].evChargeFactor, null);
+    assert.equal(out.rows[0].evSocPct, 70);
     assert.equal(out.kpis.totalCostsAmt, 5.62);
     assert.equal(out.kpis.totalRevenuesAmt, 8.71);
     assert.equal(out.kpis.totalLossesWh, 9551.0);

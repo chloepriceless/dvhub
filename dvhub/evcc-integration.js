@@ -204,6 +204,30 @@ export function createEvccIntegration(ctx) {
     }
   }
 
+  /**
+   * Set an evcc loadpoint's maximum charge current (A per phase). Used by the
+   * EOS → evcc bridge to pass EOS' planned charge rate on. lpId is 1-based.
+   */
+  async function setMaxCurrent(lpId, currentA) {
+    const c = getCfg();
+    const url = c.url;
+    if (!url) return { ok: false, error: 'no url configured' };
+    const id = Number(lpId);
+    if (!Number.isInteger(id) || id < 1) return { ok: false, error: 'invalid loadpoint' };
+    const a = Number(currentA);
+    // 6 A ist das Norm-Minimum (IEC 61851), 63 A die groesste AC-Wallbox.
+    if (!Number.isFinite(a) || a < 6 || a > 63) return { ok: false, error: 'invalid current' };
+    try {
+      const target = new URL(`/api/loadpoints/${id}/maxcurrent/${a}`, url).toString();
+      await postEmpty(target, { timeoutMs: Number(c.requestTimeoutMs) || 5000 });
+      ctx.pushLog?.('evcc_maxcurrent_set', { loadpoint: id, currentA: a });
+      return { ok: true, currentA: a };
+    } catch (e) {
+      ctx.pushLog?.('evcc_maxcurrent_set_error', { loadpoint: id, currentA: a, error: e.message });
+      return { ok: false, error: e.message };
+    }
+  }
+
   return {
     start() {
       const c = getCfg();
@@ -223,6 +247,7 @@ export function createEvccIntegration(ctx) {
       return lastLoadpoints.map((lp) => ({ ...lp }));
     },
     setMode,
+    setMaxCurrent,
     getStatus() {
       const c = getCfg();
       return {

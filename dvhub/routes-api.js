@@ -1043,6 +1043,7 @@ export function createApiRoutes(ctx) {
     '/api/integration/eos',
     '/api/integration/emhass',
     '/api/integration/evcc',
+    '/api/integration/evcc/eos',   // EOS → evcc: Plan + letzter Befehl (keine URL, keine Secrets)
     '/api/optimizer/status',
     '/api/log/dv-signals',
     '/api/telemetry/series',
@@ -1145,7 +1146,8 @@ export function createApiRoutes(ctx) {
     // devices, messages, signals, epex, mqtt inspector, health
     ['/api/integration/home-assistant', 'integrations'], ['/api/integration/loxone', 'integrations'],
     ['/api/integration/eos', 'integrations'], ['/api/integration/emhass', 'integrations'],
-    ['/api/integration/evcc', 'integrations'], ['/api/integrations/health', 'integrations'],
+    ['/api/integration/evcc', 'integrations'], ['/api/integration/evcc/eos', 'integrations'],
+    ['/api/integrations/health', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -2421,6 +2423,23 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/integration/evcc' && req.method === 'GET') {
       const status = ctx.evccIntegration?.getStatus?.() || { enabled: false, error: 'evcc integration not initialised' };
       return json(res, 200, status);
+    }
+
+    // EOS → evcc (optimizer.evEvccControl): welcher Befehl gilt fuer den
+    // laufenden Slot, was wurde zuletzt an evcc geschickt, Plan der naechsten 24 h.
+    if (url.pathname === '/api/integration/evcc/eos' && req.method === 'GET') {
+      const status = ctx.eosEvccBridge?.getStatus?.() || { enabled: false, error: 'eos-evcc bridge not initialised' };
+      return json(res, 200, status);
+    }
+
+    // Befehl des laufenden Slots sofort (erneut) an evcc senden — z.B. nachdem
+    // jemand in evcc von Hand umgeschaltet hat. Pro wie die EOS-Steuerung selbst.
+    if (url.pathname === '/api/integration/evcc/eos/apply' && req.method === 'POST') {
+      if (!requirePro(req, res, 'eos')) return;
+      if (!ctx.eosEvccBridge) return json(res, 503, { ok: false, error: 'eos-evcc bridge not initialised' });
+      const result = await ctx.eosEvccBridge.apply();
+      pushLog('eos_evcc_apply', { ok: result?.ok === true, error: result?.error || result?.skipped || null }, actorContext(req));
+      return json(res, result?.ok ? 200 : 409, result);
     }
 
     if (url.pathname === '/api/integration/home-assistant' && req.method === 'GET') return json(res, 200, await integrationState());
