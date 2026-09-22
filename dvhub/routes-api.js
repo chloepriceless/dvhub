@@ -4299,9 +4299,25 @@ export function createApiRoutes(ctx) {
         url: e.url || '',
         dashboardLoadpoint: e.dashboardLoadpoint ?? null,
         reachable: Array.isArray(status.loadpoints) && status.loadpoints.length > 0,
+        // evcc antwortet, hat aber (noch) keine Ladepunkte — dann steht der
+        // Grund meist in `fatal`.
+        responding: !status.lastError && Number(status.lastPolledAt) > 0,
+        loadpointCount: Array.isArray(status.loadpoints) ? status.loadpoints.length : 0,
+        fatal: Array.isArray(status.fatal) ? status.fatal : [],
         lastError: status.lastError || null,
         lastPolledAt: status.lastPolledAt || null,
-        loadpoints: Array.isArray(status.loadpoints) ? status.loadpoints : []
+        loadpoints: Array.isArray(status.loadpoints) ? status.loadpoints : [],
+        // EOS → evcc (optimizer.ev*): Einstellungen + Zustand der Bruecke.
+        eos: {
+          optimizeEv: raw.optimizer?.eosOptimizeEv === true,
+          control: raw.optimizer?.evEvccControl === true,
+          loadpoint: raw.optimizer?.evEvccLoadpoint ?? 1,
+          phases: raw.optimizer?.evPhases ?? 3,
+          minCurrentA: raw.optimizer?.evMinCurrentA ?? 6,
+          stopMode: raw.optimizer?.evStopMode || 'off',
+          maxChargeW: raw.optimizer?.evMaxChargeW ?? 5000,
+          bridge: ctx.eosEvccBridge?.getStatus?.() || null
+        }
       });
     }
 
@@ -4323,7 +4339,45 @@ export function createApiRoutes(ctx) {
           return json(res, 400, { ok: false, error: 'dashboardLoadpoint must be 1..64' });
         }
       }
+      // Optional: EOS → evcc-Einstellungen (landen unter optimizer.ev*, wo
+      // auch die Einstellungsseite sie fuehrt).
+      let eosPatch = null;
+      if (body.eos != null) {
+        const e = body.eos;
+        if (typeof e !== 'object') return json(res, 400, { ok: false, error: 'eos must be an object' });
+        eosPatch = {};
+        if ('optimizeEv' in e) eosPatch.eosOptimizeEv = e.optimizeEv === true;
+        if ('control' in e) eosPatch.evEvccControl = e.control === true;
+        if ('loadpoint' in e) {
+          const v = Number(e.loadpoint);
+          if (!Number.isInteger(v) || v < 1 || v > 64) return json(res, 400, { ok: false, error: 'eos.loadpoint must be 1..64' });
+          eosPatch.evEvccLoadpoint = v;
+        }
+        if ('phases' in e) {
+          const v = Number(e.phases);
+          if (v !== 1 && v !== 3) return json(res, 400, { ok: false, error: 'eos.phases must be 1 or 3' });
+          eosPatch.evPhases = v;
+        }
+        if ('minCurrentA' in e) {
+          const v = Number(e.minCurrentA);
+          if (!Number.isFinite(v) || v < 6 || v > 32) return json(res, 400, { ok: false, error: 'eos.minCurrentA must be 6..32' });
+          eosPatch.evMinCurrentA = v;
+        }
+        if ('stopMode' in e) {
+          if (!['off', 'pv', 'minpv'].includes(e.stopMode)) return json(res, 400, { ok: false, error: 'eos.stopMode must be off|pv|minpv' });
+          eosPatch.evStopMode = e.stopMode;
+        }
+        if ('maxChargeW' in e) {
+          const v = Number(e.maxChargeW);
+          if (!Number.isFinite(v) || v < 1000 || v > 50000) return json(res, 400, { ok: false, error: 'eos.maxChargeW must be 1000..50000' });
+          eosPatch.evMaxChargeW = Math.round(v);
+        }
+      }
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      if (eosPatch) {
+        next.optimizer = (next.optimizer && typeof next.optimizer === 'object') ? next.optimizer : {};
+        Object.assign(next.optimizer, eosPatch);
+      }
       next.evcc = (next.evcc && typeof next.evcc === 'object') ? next.evcc : {};
       next.evcc.enabled = !!body.enabled;
       next.evcc.url = String(body.url == null ? (next.evcc.url || '') : body.url).trim().slice(0, 256);
@@ -4337,7 +4391,8 @@ export function createApiRoutes(ctx) {
       pushLog('evcc_config_saved', {
         enabled: next.evcc.enabled,
         urlSet: !!next.evcc.url,
-        dashboardLoadpoint: next.evcc.dashboardLoadpoint
+        dashboardLoadpoint: next.evcc.dashboardLoadpoint,
+        eos: eosPatch
       }, actorContext(req));
       return json(res, 200, {
         ok: true,

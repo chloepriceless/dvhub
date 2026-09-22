@@ -2241,12 +2241,115 @@
       var st = el('evcc-status');
       if (st) {
         st.hidden = false;
-        st.textContent = data.url
-          ? (data.reachable ? ('✓ Erreichbar · ' + data.loadpointCount + ' Ladepunkt(e)') : ('✗ Nicht erreichbar' + (data.lastError ? ' (' + data.lastError + ')' : '')))
-          : 'Noch keine Adresse konfiguriert.';
+        var fatal = Array.isArray(data.fatal) ? data.fatal : [];
+        if (!data.url) st.textContent = 'Noch keine Adresse konfiguriert.';
+        else if (data.reachable) st.textContent = '✓ Erreichbar · ' + data.loadpointCount + ' Ladepunkt(e)';
+        else if (data.responding) {
+          // evcc antwortet, hat aber keinen Ladepunkt — der Grund steht in evccs
+          // eigener Fehlerliste (z.B. Wallbox-Firmware zu alt).
+          st.textContent = '✗ evcc antwortet, meldet aber keinen Ladepunkt'
+            + (fatal.length ? ':\n' + fatal.map(function (f) { return '• ' + (f.class || '') + ' ' + (f.device || '') + ': ' + f.error; }).join('\n') : '.');
+        } else st.textContent = '✗ Nicht erreichbar' + (data.lastError ? ' (' + data.lastError + ')' : '');
       }
+      evccLoadpointsCache = Array.isArray(data.loadpoints) ? data.loadpoints : [];
+      fillEvccEos(data.eos || {}, evccLoadpointsCache);
     } catch (e) {
       showDrawerToast('evcc', 'err', '✗ EVCC laden fehlgeschlagen: ' + e.message);
+    }
+  }
+  var evccLoadpointsCache = [];
+  function fillEvccEos(eos, lps) {
+    var el = function (id) { return document.getElementById(id); };
+    if (el('evcc-eos-optimize')) el('evcc-eos-optimize').checked = !!eos.optimizeEv;
+    if (el('evcc-eos-control')) el('evcc-eos-control').checked = !!eos.control;
+    var sel = el('evcc-eos-loadpoint');
+    if (sel) {
+      var cur = String(eos.loadpoint || 1);
+      var opts = lps.length
+        ? lps.map(function (l) { return '<option value="' + l.id + '">#' + l.id + ' · ' + esc(l.title) + '</option>'; })
+        : ['<option value="' + esc(cur) + '">#' + esc(cur) + ' (evcc meldet keinen Ladepunkt)</option>'];
+      sel.innerHTML = opts.join('');
+      sel.value = cur;
+    }
+    if (el('evcc-eos-phases')) el('evcc-eos-phases').value = String(eos.phases === 1 ? 1 : 3);
+    if (el('evcc-eos-mincurrent')) el('evcc-eos-mincurrent').value = eos.minCurrentA != null ? eos.minCurrentA : 6;
+    if (el('evcc-eos-maxchargew')) el('evcc-eos-maxchargew').value = eos.maxChargeW != null ? eos.maxChargeW : 5000;
+    if (el('evcc-eos-stopmode')) el('evcc-eos-stopmode').value = eos.stopMode || 'off';
+    renderEvccEosState(eos);
+  }
+  function renderEvccEosState(eos) {
+    var box = document.getElementById('evcc-eos-state');
+    if (!box) return;
+    var b = eos.bridge || {};
+    var fmtTime = function (iso) {
+      if (!iso) return '–';
+      var d = new Date(iso);
+      return isNaN(d) ? '–' : d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    };
+    var cmd = function (slot) {
+      if (!slot || !slot.action) return 'kein Befehl';
+      return slot.action === 'charge'
+        ? 'Laden ' + slot.chargePowerW + ' W (' + slot.currentA + ' A)'
+        : 'Stopp';
+    };
+    var lines = [];
+    box.className = 'evcc-eos-state';
+    if (!eos.optimizeEv) {
+      lines.push('EOS plant das Auto nicht mit — dafür „E-Auto in EOS mitoptimieren" einschalten.');
+      box.className += ' is-warn';
+    } else if (!eos.control) {
+      lines.push('Weitergabe an evcc ist aus — DVhub schreibt nichts an evcc.');
+    } else {
+      box.className += b.lastError ? ' is-warn' : ' is-ok';
+    }
+    if (b.current) lines.push('Jetzt (' + fmtTime(b.current.ts) + '–' + fmtTime(b.current.endTs) + '): ' + cmd(b.current));
+    if (b.lastSent) lines.push('Zuletzt gesendet ' + fmtTime(b.lastSent.at) + ': ' + (b.lastSent.action === 'charge' ? 'Laden ' + b.lastSent.currentA + ' A' : 'Stopp (' + b.lastSent.mode + ')') + ' → Ladepunkt #' + b.lastSent.loadpoint);
+    if (b.lastError) lines.push('Hinweis: ' + b.lastError);
+    var plan = Array.isArray(b.plan) ? b.plan.filter(function (p) { return p.action === 'charge'; }) : [];
+    if (eos.optimizeEv && eos.control) {
+      lines.push(plan.length
+        ? 'Geplante Ladeslots (24 h): ' + plan.slice(0, 8).map(function (p) { return fmtTime(p.ts) + ' ' + p.currentA + ' A'; }).join(', ') + (plan.length > 8 ? ' … (+' + (plan.length - 8) + ')' : '')
+        : 'In den nächsten 24 h plant EOS keine Ladung.');
+    }
+    box.textContent = lines.join('\n') || '—';
+  }
+  function evccEosBody() {
+    var el = function (id) { return document.getElementById(id); };
+    return {
+      optimizeEv: !!(el('evcc-eos-optimize') && el('evcc-eos-optimize').checked),
+      control: !!(el('evcc-eos-control') && el('evcc-eos-control').checked),
+      loadpoint: parseInt((el('evcc-eos-loadpoint') && el('evcc-eos-loadpoint').value) || '1', 10),
+      phases: parseInt((el('evcc-eos-phases') && el('evcc-eos-phases').value) || '3', 10),
+      minCurrentA: Number((el('evcc-eos-mincurrent') && el('evcc-eos-mincurrent').value) || 6),
+      maxChargeW: Number((el('evcc-eos-maxchargew') && el('evcc-eos-maxchargew').value) || 5000),
+      stopMode: (el('evcc-eos-stopmode') && el('evcc-eos-stopmode').value) || 'off'
+    };
+  }
+  // Phasen, Mindeststrom und max. Leistung aus dem gewaehlten evcc-Ladepunkt.
+  function evccEosFromEvcc() {
+    var el = function (id) { return document.getElementById(id); };
+    var id = parseInt((el('evcc-eos-loadpoint') && el('evcc-eos-loadpoint').value) || '1', 10);
+    var lp = evccLoadpointsCache.find(function (l) { return l.id === id; });
+    if (!lp) { showDrawerToast('evcc', 'err', '✗ evcc meldet diesen Ladepunkt nicht.'); return; }
+    var phases = lp.phasesConfigured === 1 ? 1 : 3; // 0 = automatische Umschaltung → 3 als Obergrenze
+    if (el('evcc-eos-phases')) el('evcc-eos-phases').value = String(phases);
+    if (lp.minCurrentA != null && el('evcc-eos-mincurrent')) el('evcc-eos-mincurrent').value = Math.max(6, lp.minCurrentA);
+    if (lp.maxCurrentA != null && el('evcc-eos-maxchargew')) el('evcc-eos-maxchargew').value = Math.round(lp.maxCurrentA * 230 * phases);
+    showDrawerToast('evcc', 'ok', '✓ Übernommen — noch speichern.');
+  }
+  async function applyEvccEos(buttonEl) {
+    if (!buttonEl || buttonEl.disabled) return;
+    buttonEl.disabled = true;
+    try {
+      var res = await apiFetch('/api/integration/evcc/eos/apply', { method: 'POST' });
+      var data = await safeJson(res);
+      if (res.ok && data.ok) showDrawerToast('evcc', 'ok', '✓ An evcc gesendet.');
+      else showDrawerToast('evcc', 'err', '✗ Nicht gesendet: ' + (data.error || data.skipped || ('HTTP ' + res.status)));
+      setTimeout(loadEvccDrawer, 800);
+    } catch (e) {
+      showDrawerToast('evcc', 'err', '✗ Netzwerkfehler: ' + e.message);
+    } finally {
+      buttonEl.disabled = false;
     }
   }
   async function saveEvccDrawer(buttonEl) {
@@ -2263,7 +2366,8 @@
     var body = {
       url: urlVal,
       enabled: !!(el('evcc-enabled') && el('evcc-enabled').checked),
-      dashboardLoadpoint: lpRaw === '' ? null : parseInt(lpRaw, 10)
+      dashboardLoadpoint: lpRaw === '' ? null : parseInt(lpRaw, 10),
+      eos: evccEosBody()
     };
     buttonEl.disabled = true;
     var origText = buttonEl.textContent;
@@ -2295,6 +2399,9 @@
     if (evccSave) { saveEvccDrawer(evccSave); return; }
     var evccRefresh = e.target.closest('#evcc-refresh');
     if (evccRefresh) { loadEvccDrawer(); return; }
+    if (e.target.closest('#evcc-eos-fromevcc')) { evccEosFromEvcc(); return; }
+    var evccEosApply = e.target.closest('#evcc-eos-apply');
+    if (evccEosApply) { applyEvccEos(evccEosApply); return; }
   });
 
   // === MID / Netzzähler Drawer Wiring (2026-06-13) ===

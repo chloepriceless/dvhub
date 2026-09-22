@@ -101,6 +101,10 @@ function deriveLoadpoints(state) {
     chargePowerW: n(lp?.chargePower),
     vehicleTitle: (lp && (lp.vehicleTitle || lp.vehicleName)) || null,
     vehicleSocPct: n(lp?.vehicleSoc),
+    // Fuer die EOS-Bruecke: was der Ladepunkt kann (Einstellungen in evcc).
+    minCurrentA: n(lp?.minCurrent),
+    maxCurrentA: n(lp?.maxCurrent),
+    phasesConfigured: n(lp?.phasesConfigured),
     vehicleRangeKm: n(lp?.vehicleRange),
     limitSocPct: n(lp?.effectiveLimitSoc ?? lp?.limitSoc),
     phasesActive: n(lp?.phasesActive)
@@ -118,6 +122,9 @@ export function createEvccIntegration(ctx) {
   let lastChargePower = 0;
   let lastBatterySoc = null;
   let lastLoadpoints = [];   // compact list for the Family Dashboard (deriveLoadpoints)
+  // Fehler, die evcc selbst meldet (z.B. Wallbox nicht anlegbar) — ohne sie
+  // sieht "0 Ladepunkte" aus wie "nicht erreichbar".
+  let lastFatal = [];
 
   async function tick() {
     const c = getCfg();
@@ -125,6 +132,7 @@ export function createEvccIntegration(ctx) {
     if (!url) {
       lastError = 'no url configured';
       lastLoadpoints = [];
+      lastFatal = [];
       return;
     }
 
@@ -142,6 +150,9 @@ export function createEvccIntegration(ctx) {
     // Dashboard read — kept regardless of the battery-protect `enabled` flag so
     // the Family EV panel can show/control the loadpoints whenever a URL is set.
     lastLoadpoints = deriveLoadpoints(state);
+    lastFatal = (Array.isArray(state?.fatal) ? state.fatal : [])
+      .map((f) => ({ class: f?.class || null, device: f?.device || null, error: String(f?.error || '').slice(0, 300) }))
+      .slice(0, 10);
 
     const charging = anyCharging(state);
     lastChargePower = state?.loadpoints?.[0]?.chargePower ?? 0;
@@ -235,10 +246,14 @@ export function createEvccIntegration(ctx) {
       // Poll whenever a URL is configured (dashboard read), independent of the
       // battery-protect `enabled` flag. First tick immediately so a freshly
       // started dvhub catches an already-charging EV / current loadpoint state.
-      if (!c.url) { console.log('[evcc] no url configured — integration idle'); return; }
+      // Der Takt laeuft auch ohne URL: tick() prueft sie jedes Mal. Sonst
+      // wirkt eine spaeter in den Integrationen eingetragene Adresse erst nach
+      // einem Neustart.
       tick();
       timer = safeInterval('evcc-integration.tick', tick, intervalMs);
-      console.log(`[evcc] integration started, polling ${c.url} every ${intervalMs}ms (battery-protect ${c.enabled === false ? 'OFF' : 'ON'})`);
+      console.log(c.url
+        ? `[evcc] integration started, polling ${c.url} every ${intervalMs}ms (battery-protect ${c.enabled === false ? 'OFF' : 'ON'})`
+        : '[evcc] no url configured yet — polling starts once one is set');
     },
     stop() {
       if (timer) { clearInterval(timer); timer = null; }
@@ -259,6 +274,7 @@ export function createEvccIntegration(ctx) {
         lastError,
         lastChargePower,
         lastBatterySoc,
+        fatal: lastFatal.map((f) => ({ ...f })),
         loadpoints: lastLoadpoints.map((lp) => ({ ...lp }))
       };
     }

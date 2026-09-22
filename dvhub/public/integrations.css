@@ -1353,3 +1353,25 @@
 .dv-ha-fallback-intro code { background: rgba(0, 0, 0, 0.3); padding: 1px 5px; border-radius: 4px; }
 
 .dv-code-actions { margin-top: 8px; }
+
+/* EOS → evcc (evcc-Drawer) */
+.evcc-eos {
+  display: flex; flex-direction: column; gap: 10px;
+  margin-top: 6px; padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+.evcc-eos-title {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--text-2);
+}
+.evcc-eos-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+}
+@media (max-width: 480px) { .evcc-eos-grid { grid-template-columns: 1fr; } }
+.evcc-eos-state {
+  font-family: var(--f-mono); font-size: 11px; line-height: 1.5;
+  color: var(--text-dim); white-space: pre-line;
+}
+.evcc-eos-state.is-ok { color: var(--green); }
+.evcc-eos-state.is-warn { color: var(--warn); }
+#evcc-status { white-space: pre-line; }
