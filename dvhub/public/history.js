@@ -1415,6 +1415,8 @@ function renderDvMonthlyPriceTable(mountId, rows) {
   const batEur = sum('exportBatteryRevenueEur');
   const rate = (eur, kwh) => (kwh > 0 ? (eur / kwh) * 100 : null);
   const cell = (eur, ct) => `${fmtEur(eur)}${hasFiniteNumber(ct) ? ` · ${fmtCt(ct)}` : ''}`;
+  // Noch kein Wert (z.B. Monatsmarktwert des laufenden Monats) ist „–", nicht 0 ct.
+  const ctOrDash = (ct) => (hasFiniteNumber(ct) ? fmtCt(ct) : '–');
   mount.innerHTML = `
     <table class="history-data-table">
       <thead>
@@ -1431,8 +1433,8 @@ function renderDvMonthlyPriceTable(mountId, rows) {
         ${withData.map((row) => `
           <tr>
             <td>${escapeHtml(compactAxisLabel(row.label || row.key || '-'))}</td>
-            <td>${fmtCt(row.solarMarketValueCtKwh)}</td>
-            <td>${fmtCt(row.spotPriceAvgCtKwh)}</td>
+            <td>${ctOrDash(row.solarMarketValueCtKwh)}</td>
+            <td>${ctOrDash(row.spotPriceAvgCtKwh)}</td>
             <td>${cell(row.exportPvRevenueEur, row.exportPvCtKwh)}</td>
             <td>${cell(row.exportBatteryRevenueEur, row.exportBatteryCtKwh)}</td>
             <td>${cell((Number(row.exportPvRevenueEur) || 0) + (Number(row.exportBatteryRevenueEur) || 0), row.exportSpotCtKwh)}</td>
