@@ -124,6 +124,10 @@ export function detectEosCapabilities(config, health = {}) {
       // aus, und ab #1330 lässt EOS ohnehin nur noch {900, 3600} zu —
       // 900 s auf v0.4.0rc1 gemessen (PUT 200).
       quarterHour: flavor !== EOS_FLAVOR.UPSTREAM_MAIN,
+      // Abfahrtszeit am Fahrzeug (`min_soc_deadline_datetime`) — kam mit dem
+      // GENETIC-Umbau (#1330, v0.4.0rc1). Fork und aeltere Staende kennen nur
+      // das Ziel am Horizontende; dort bleibt die Abfahrt ungesendet.
+      evDeadline: flavor === EOS_FLAVOR.UPSTREAM_GENETIC,
     },
   };
 }

@@ -2276,6 +2276,74 @@
     if (el('evcc-eos-maxchargew')) el('evcc-eos-maxchargew').value = eos.maxChargeW != null ? eos.maxChargeW : 5000;
     if (el('evcc-eos-stopmode')) el('evcc-eos-stopmode').value = eos.stopMode || 'off';
     renderEvccEosState(eos);
+    fillEvccDeparture(eos.departure || {}, eos.capacityWh);
+  }
+  function toLocalInput(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d)) return '';
+    var p = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function fillEvccDeparture(dep, capacityWh) {
+    var el = function (id) { return document.getElementById(id); };
+    if (el('evcc-dep-enabled')) el('evcc-dep-enabled').checked = !!dep.enabled;
+    if (el('evcc-dep-time')) el('evcc-dep-time').value = dep.time || '07:00';
+    if (el('evcc-dep-capacity')) el('evcc-dep-capacity').value = capacityWh ? Math.round(capacityWh / 100) / 10 : 50;
+    var days = Array.isArray(dep.days) ? dep.days.map(Number) : [];
+    document.querySelectorAll('#evcc-dep-days input').forEach(function (cb) { cb.checked = days.indexOf(Number(cb.value)) >= 0; });
+    if (el('evcc-dep-mode')) el('evcc-dep-mode').value = dep.targetMode || 'percent';
+    if (el('evcc-dep-value')) el('evcc-dep-value').value = dep.targetValue != null ? dep.targetValue : 80;
+    if (el('evcc-dep-consumption')) el('evcc-dep-consumption').value = dep.consumptionKwhPer100km != null ? dep.consumptionKwhPer100km : 18;
+    if (el('evcc-dep-once')) el('evcc-dep-once').value = toLocalInput(dep.once);
+    syncEvccDepModeUi();
+    renderEvccDepState(dep, capacityWh);
+  }
+  function syncEvccDepModeUi() {
+    var mode = (document.getElementById('evcc-dep-mode') || {}).value || 'percent';
+    var label = document.getElementById('evcc-dep-value-label');
+    if (label) label.textContent = mode === 'kwh' ? 'kWh im Auto' : (mode === 'km' ? 'km Reichweite' : '% Ladestand');
+    var wrap = document.getElementById('evcc-dep-consumption-wrap');
+    if (wrap) wrap.hidden = mode !== 'km';
+  }
+  function renderEvccDepState(dep, capacityWh) {
+    var box = document.getElementById('evcc-dep-state');
+    if (!box) return;
+    var r = dep.resolved || {};
+    var lines = [];
+    box.className = 'evcc-eos-state';
+    if (!dep.enabled) { box.textContent = 'Aus — EOS nutzt den allgemeinen Ziel-SoC am Ende des Planungszeitraums.'; return; }
+    if (r.departureAt) {
+      var d = new Date(r.departureAt);
+      lines.push('Nächste Abfahrt: ' + d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        + (r.source === 'once' ? ' (einmalig)' : ''));
+    } else lines.push('Keine Abfahrt geplant' + (r.reason ? ' (' + r.reason + ')' : '') + '.');
+    if (r.targetSocPct != null) {
+      var kwh = capacityWh ? Math.round(capacityWh * r.targetSocPct / 100 / 100) / 10 : null;
+      lines.push('Ziel an EOS: ' + r.targetSocPct + ' %' + (kwh != null ? ' ≈ ' + String(kwh).replace('.', ',') + ' kWh' : ''));
+    }
+    if (dep.deadlineSupported) box.className += ' is-ok';
+    else {
+      box.className += ' is-warn';
+      lines.push('Dein EOS' + (dep.eosFlavor ? ' (' + dep.eosFlavor + ')' : '') + ' kennt die Abfahrtszeit noch nicht (erst ab 0.4) — das Ziel gilt bis zum Ende des Planungszeitraums.');
+    }
+    box.textContent = lines.join('\n');
+  }
+  function evccDepartureBody() {
+    var el = function (id) { return document.getElementById(id); };
+    var days = [];
+    document.querySelectorAll('#evcc-dep-days input').forEach(function (cb) { if (cb.checked) days.push(Number(cb.value)); });
+    var onceRaw = (el('evcc-dep-once') && el('evcc-dep-once').value) || '';
+    return {
+      enabled: !!(el('evcc-dep-enabled') && el('evcc-dep-enabled').checked),
+      time: (el('evcc-dep-time') && el('evcc-dep-time').value) || '07:00',
+      days: days,
+      // datetime-local ist Ortszeit des Browsers → als ISO mit Zeitzone senden.
+      once: onceRaw ? new Date(onceRaw).toISOString() : '',
+      targetMode: (el('evcc-dep-mode') && el('evcc-dep-mode').value) || 'percent',
+      targetValue: Number((el('evcc-dep-value') && el('evcc-dep-value').value) || 0),
+      consumptionKwhPer100km: Number((el('evcc-dep-consumption') && el('evcc-dep-consumption').value) || 18)
+    };
   }
   function renderEvccEosState(eos) {
     var box = document.getElementById('evcc-eos-state');
@@ -2322,7 +2390,9 @@
       phases: parseInt((el('evcc-eos-phases') && el('evcc-eos-phases').value) || '3', 10),
       minCurrentA: Number((el('evcc-eos-mincurrent') && el('evcc-eos-mincurrent').value) || 6),
       maxChargeW: Number((el('evcc-eos-maxchargew') && el('evcc-eos-maxchargew').value) || 5000),
-      stopMode: (el('evcc-eos-stopmode') && el('evcc-eos-stopmode').value) || 'off'
+      stopMode: (el('evcc-eos-stopmode') && el('evcc-eos-stopmode').value) || 'off',
+      capacityWh: Math.round(Number((el('evcc-dep-capacity') && el('evcc-dep-capacity').value) || 50) * 1000),
+      departure: evccDepartureBody()
     };
   }
   // Phasen, Mindeststrom und max. Leistung aus dem gewaehlten evcc-Ladepunkt.
@@ -2394,6 +2464,9 @@
       buttonEl.textContent = origText;
     }
   }
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.id === 'evcc-dep-mode') syncEvccDepModeUi();
+  });
   document.addEventListener('click', function (e) {
     var evccSave = e.target.closest('#evcc-save');
     if (evccSave) { saveEvccDrawer(evccSave); return; }

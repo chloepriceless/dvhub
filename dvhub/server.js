@@ -95,7 +95,7 @@ import { info as logInfo, warn as logWarn, logger as appLogger } from './service
 // is called once below, after pushLog is in scope, BEFORE any service.start()
 // fires its first interval tick. No console.error fallback — the helper throws
 // loudly if misordered. Hard dep on 09-06 (services/log.js).
-import { configureSafeAsync } from './services/safe-async.js';
+import { configureSafeAsync, safeInterval } from './services/safe-async.js';
 // T-0113 Tier 3: customer-initiated reverse-SSH support tunnel.
 import { createSupportTunnel } from './services/support-tunnel.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
@@ -119,6 +119,7 @@ import { createCurtailmentService } from './services/curtailment/index.js';
 // keeps its own 30s adapter (instantiated inside services/optimizer/index.js).
 import { createEosAdapter as createEosAdapterForInspector } from './services/optimizer/eos-adapter.js';
 import { createEosEvccBridge } from './services/optimizer/eos-evcc-bridge.js';
+import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createOptimizerService } from './services/optimizer/index.js';
@@ -1167,6 +1168,7 @@ const eosEvccBridge = createEosEvccBridge({
   pushLog: (event, data) => ctx.pushLog?.(event, data)
 });
 ctx.eosEvccBridge = eosEvccBridge;
+
 const inspector = createInspector(ctx, {
   store: forecast.store,
   mlService,
@@ -1182,6 +1184,22 @@ ctx.inspector = inspector;
 // reconcile after EOS first becomes reachable).
 const eosConfigSync = createEosConfigSync(ctx);
 ctx.eosConfigSync = eosConfigSync;
+
+// E-Auto-Abfahrt (ev-departure.js): minuetlich pruefen, ob sich Abfahrt oder
+// Ziel geaendert haben (Termin rueckt naeher und wird weitergeschoben, Config
+// gespeichert), und dann nur das Fahrzeug an EOS schicken. Der volle Abgleich
+// alle 15 min waere zu spaet: ein vergangener Termin heisst fuer EOS
+// "sofort mit voller Leistung laden".
+let evDepartureLastKey = null;
+const evDepartureTimer = safeInterval('ev-departure.watch', async () => {
+  const cfg = ctx.getCfg();
+  if (cfg?.optimizer?.eosOptimizeEv !== true || !cfg?.optimizer?.eosProxy?.enabled) { evDepartureLastKey = null; return; }
+  const d = resolveEvDeparture(cfg);
+  const key = `${d.enabled}|${d.departureAt}|${d.targetSocPct}`;
+  if (key === evDepartureLastKey) return;
+  const res = await eosConfigSync.syncEv();
+  if (res?.ok) evDepartureLastKey = key; // bei Fehler naechste Minute erneut
+}, 60_000);
 // Phase 22.1 (2026-05-24): bridges DVhub's 15-min ensemble PV forecast,
 // EnergyCharts spot cache and hour-of-day load model into EOS via the
 // *Import providers. ctx.eosConfigSync switches EOS to those providers; this
@@ -2076,6 +2094,7 @@ async function gracefulShutdown(signal) {
   });
   safeSync('evccIntegration.stop', () => evccIntegration.stop?.());
   safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
+  safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
   // C2 (2026-07-02, Realitätscheck der alten Worklist 7.7): evcc/license/
   // monitoring-Heartbeat räumen ihre Timer bereits sauber auf (siehe oben +
   // licenseService.close() unten) — das war stale. Echter Rest-Gap: der

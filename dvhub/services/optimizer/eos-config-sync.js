@@ -10,6 +10,7 @@
 // at boot when EOS first reports healthy. Same defensive contract as
 // eos-adapter.js: never throws, returns { ok, applied, errors }.
 
+import { resolveEvDeparture } from './ev-departure.js';
 import http from 'node:http';
 
 import { createEosCapabilityProbe, EOS_FLAVOR } from './eos-capabilities.js';
@@ -117,9 +118,14 @@ export function buildEosBatteries(cfg, opts = {}) {
  * @param {object} cfg
  * @returns {Array<object>}
  */
-export function buildEosElectricVehicles(cfg) {
+export function buildEosElectricVehicles(cfg, { supportsDeadline = false, nowMs = Date.now() } = {}) {
   const opt = cfg?.optimizer || {};
-  return [{
+  // Abfahrt + Ziel (ev-departure.js). Ist sie an, ersetzt ihr Ziel den
+  // allgemeinen Ziel-SoC; ohne EOS-Unterstuetzung fuer die Uhrzeit gilt das
+  // Ziel wie bisher am Horizontende.
+  const departure = resolveEvDeparture(cfg, nowMs);
+  const fallbackMinSoc = Number.isFinite(Number(opt.evMinSocPct)) ? Number(opt.evMinSocPct) : 70;
+  const ev = {
     device_id: 'ev11',
     capacity_wh: Number(opt.evCapacityWh) || 50000,
     charging_efficiency: 0.88,
@@ -127,9 +133,13 @@ export function buildEosElectricVehicles(cfg) {
     max_charge_power_w: Number(opt.evMaxChargeW) || 5000,
     min_charge_power_w: 50,
     charge_rates: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-    min_soc_percentage: Number.isFinite(Number(opt.evMinSocPct)) ? Number(opt.evMinSocPct) : 70,
+    min_soc_percentage: departure.enabled && departure.targetSocPct !== null ? departure.targetSocPct : fallbackMinSoc,
     max_soc_percentage: 100,
-  }];
+  };
+  // Immer mitsenden, wo EOS das Feld kennt — auch null: sonst bliebe eine
+  // abgeschaltete oder vergangene Abfahrt in EOS stehen.
+  if (supportsDeadline) ev.min_soc_deadline_datetime = departure.enabled ? departure.departureAt : null;
+  return [ev];
 }
 
 /**
@@ -453,7 +463,7 @@ export function createEosConfigSync(ctx) {
     const evTasks = optimizeEv
       ? [
           { section: 'devices/max_electric_vehicles', body: 1 },
-          { section: 'devices/electric_vehicles', body: asDevices(buildEosElectricVehicles(cfg)) },
+          { section: 'devices/electric_vehicles', body: asDevices(buildEosElectricVehicles(cfg, { supportsDeadline: caps.supports.evDeadline === true })) },
         ]
       : [
           { section: 'devices/max_electric_vehicles', body: 0 },
@@ -682,5 +692,31 @@ export function createEosConfigSync(ctx) {
     return { ok: res.ok, error: res.error };
   }
 
-  return { sync, persist };
+  /**
+   * Nur das Fahrzeug an EOS schicken (Ziel + Abfahrt). Fuer die Minuten-Wache
+   * in server.js: eine Abfahrt muss VOR ihrem Zeitpunkt weitergeschoben sein —
+   * der volle Abgleich laeuft nur alle 15 min, und ein vergangener Termin
+   * heisst fuer EOS "sofort laden".
+   */
+  async function syncEv() {
+    const cfg = getCfg();
+    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    if (!cfg?.optimizer?.eosProxy?.enabled) return { ok: true, skipped: 'eosProxy.enabled=false' };
+    if (cfg?.optimizer?.eosOptimizeEv !== true) return { ok: true, skipped: 'eosOptimizeEv=false' };
+    const caps = await capabilityProbe.get(baseUrl);
+    const list = buildEosElectricVehicles(cfg, { supportsDeadline: caps.supports.evDeadline === true });
+    const body = caps.supports.deviceMap ? devicesAsMap(list) : list;
+    const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/electric_vehicles', body);
+    if (pushLog) {
+      pushLog('eos_ev_sync', {
+        ok: res.ok, error: res.error,
+        minSocPct: list[0].min_soc_percentage,
+        deadline: list[0].min_soc_deadline_datetime ?? null,
+        deadlineSupported: caps.supports.evDeadline === true,
+      });
+    }
+    return { ok: res.ok, error: res.error, ev: list[0] };
+  }
+
+  return { sync, persist, syncEv };
 }

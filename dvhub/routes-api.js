@@ -16,6 +16,7 @@ import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
+import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
 // alles, was der Verbindung-/Einstellungen-Tab anzeigen darf. Passwort nie —
@@ -4316,7 +4317,23 @@ export function createApiRoutes(ctx) {
           minCurrentA: raw.optimizer?.evMinCurrentA ?? 6,
           stopMode: raw.optimizer?.evStopMode || 'off',
           maxChargeW: raw.optimizer?.evMaxChargeW ?? 5000,
-          bridge: ctx.eosEvccBridge?.getStatus?.() || null
+          capacityWh: raw.optimizer?.evCapacityWh ?? 50000,
+          bridge: ctx.eosEvccBridge?.getStatus?.() || null,
+          // Abfahrt + Ziel (ev-departure.js). `resolved` ist das, was DVhub
+          // gerade an EOS schickt; `deadlineSupported` sagt, ob die laufende
+          // EOS-Fassung die Uhrzeit kennt (ab 0.4) oder nur das Ziel.
+          departure: {
+            enabled: raw.optimizer?.evDepartureEnabled === true,
+            time: raw.optimizer?.evDepartureTime || '07:00',
+            days: Array.isArray(raw.optimizer?.evDepartureDays) ? raw.optimizer.evDepartureDays : [1, 2, 3, 4, 5],
+            once: raw.optimizer?.evDepartureOnce || '',
+            targetMode: raw.optimizer?.evTargetMode || 'percent',
+            targetValue: raw.optimizer?.evTargetValue ?? 80,
+            consumptionKwhPer100km: raw.optimizer?.evConsumptionKwhPer100km ?? 18,
+            resolved: resolveEvDeparture(getCfg()),
+            deadlineSupported: ctx.state?.optimizer?.eos?.supports?.evDeadline === true,
+            eosFlavor: ctx.state?.optimizer?.eos?.flavor || null
+          }
         }
       });
     }
@@ -4366,6 +4383,44 @@ export function createApiRoutes(ctx) {
         if ('stopMode' in e) {
           if (!['off', 'pv', 'minpv'].includes(e.stopMode)) return json(res, 400, { ok: false, error: 'eos.stopMode must be off|pv|minpv' });
           eosPatch.evStopMode = e.stopMode;
+        }
+        if (e.departure != null) {
+          const d = e.departure;
+          if (typeof d !== 'object') return json(res, 400, { ok: false, error: 'eos.departure must be an object' });
+          if ('enabled' in d) eosPatch.evDepartureEnabled = d.enabled === true;
+          if ('time' in d) {
+            if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(String(d.time))) return json(res, 400, { ok: false, error: 'eos.departure.time must be HH:MM' });
+            eosPatch.evDepartureTime = String(d.time).padStart(5, '0');
+          }
+          if ('days' in d) {
+            const days = Array.isArray(d.days) ? [...new Set(d.days.map(Number))].filter((x) => Number.isInteger(x) && x >= 1 && x <= 7).sort() : null;
+            if (!days) return json(res, 400, { ok: false, error: 'eos.departure.days must be a list of 1..7' });
+            eosPatch.evDepartureDays = days;
+          }
+          if ('once' in d) {
+            const once = String(d.once || '').trim();
+            if (once && !Number.isFinite(Date.parse(once))) return json(res, 400, { ok: false, error: 'eos.departure.once must be an ISO date time or empty' });
+            eosPatch.evDepartureOnce = once ? new Date(Date.parse(once)).toISOString() : '';
+          }
+          if ('targetMode' in d) {
+            if (!['percent', 'kwh', 'km'].includes(d.targetMode)) return json(res, 400, { ok: false, error: 'eos.departure.targetMode must be percent|kwh|km' });
+            eosPatch.evTargetMode = d.targetMode;
+          }
+          if ('targetValue' in d) {
+            const v = Number(d.targetValue);
+            if (!Number.isFinite(v) || v < 0 || v > 2000) return json(res, 400, { ok: false, error: 'eos.departure.targetValue must be 0..2000' });
+            eosPatch.evTargetValue = v;
+          }
+          if ('consumptionKwhPer100km' in d) {
+            const v = Number(d.consumptionKwhPer100km);
+            if (!Number.isFinite(v) || v < 5 || v > 60) return json(res, 400, { ok: false, error: 'eos.departure.consumptionKwhPer100km must be 5..60' });
+            eosPatch.evConsumptionKwhPer100km = v;
+          }
+        }
+        if ('capacityWh' in e) {
+          const v = Number(e.capacityWh);
+          if (!Number.isFinite(v) || v < 1000 || v > 250000) return json(res, 400, { ok: false, error: 'eos.capacityWh must be 1000..250000' });
+          eosPatch.evCapacityWh = Math.round(v);
         }
         if ('maxChargeW' in e) {
           const v = Number(e.maxChargeW);

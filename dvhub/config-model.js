@@ -3711,6 +3711,18 @@ export function createDefaultConfig() {
       evPhases: 3,
       evMinCurrentA: 6,
       evStopMode: 'off',
+      // E-Auto-Abfahrt (ev-departure.js): bis wann welcher Ladestand. Ziel in %,
+      // kWh (Energie im Fahrzeugakku bei Abfahrt) oder km (Reichweite). Die
+      // woechentliche Abfahrt rollt DVhub selbst weiter; evDepartureOnce (ISO)
+      // gilt fuer die naechste Fahrt und geht vor. Wirkt als Uhrzeit erst ab
+      // EOS 0.4 — davor als Ziel am Horizontende.
+      evDepartureEnabled: false,
+      evDepartureTime: '07:00',
+      evDepartureDays: [1, 2, 3, 4, 5],
+      evDepartureOnce: '',
+      evTargetMode: 'percent',
+      evTargetValue: 80,
+      evConsumptionKwhPer100km: 18,
       // T-0075: absolute SoC floor (%) below which the chokepoint discharge floor
       // (applyControlTarget) suppresses ANY forced discharge, regardless of source.
       hardFloorSocPct: 5,

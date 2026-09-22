@@ -1375,3 +1375,16 @@
 .evcc-eos-state.is-ok { color: var(--green); }
 .evcc-eos-state.is-warn { color: var(--warn); }
 #evcc-status { white-space: pre-line; }
+
+.evcc-eos-subtitle {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--text-dim); margin-top: 6px;
+}
+.evcc-dep-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.evcc-dep-days label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--text-2);
+  padding: 4px 8px; border: 1px solid var(--glass-brd); border-radius: 6px;
+}
+.evcc-dep-days input { margin: 0; }
+#evcc-dep-consumption-wrap[hidden] { display: none; }
