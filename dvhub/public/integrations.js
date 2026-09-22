@@ -2315,7 +2315,9 @@
     if (!dep.enabled) { box.textContent = 'Aus — EOS nutzt den allgemeinen Ziel-SoC am Ende des Planungszeitraums.'; return; }
     if (r.departureAt) {
       var d = new Date(r.departureAt);
-      lines.push('Nächste Abfahrt: ' + d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      // In DVhubs Zeitzone anzeigen, nicht in der des Browsers — „07:00" ist
+      // die Ortszeit der Anlage.
+      lines.push('Nächste Abfahrt: ' + d.toLocaleString('de-DE', { timeZone: r.timeZone || 'Europe/Berlin', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
         + (r.source === 'once' ? ' (einmalig)' : ''));
     } else lines.push('Keine Abfahrt geplant' + (r.reason ? ' (' + r.reason + ')' : '') + '.');
     if (r.targetSocPct != null) {
