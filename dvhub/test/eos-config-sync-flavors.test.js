@@ -298,9 +298,13 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
     evTargetMode: 'kwh', evTargetValue: 45,
   };
 
+  const withTesla = (ctx, batteryLevel = 40) => Object.assign(ctx, {
+    teslamateService: { getState: () => ({ batteryLevel }) },
+  });
+
   it('upstream-genetic: Ziel + Uhrzeit im Fahrzeug, auch ueber syncEv()', async () => {
     mock = await createMockEos('upstreamGenetic');
-    const ctx = ctxFor(mock.port, dep);
+    const ctx = withTesla(ctxFor(mock.port, dep));
     await createEosConfigSync(ctx).sync();
     const ev = bodyOf(mock, 'devices/electric_vehicles').ev11;
     assert.equal(ev.min_soc_percentage, 75);
@@ -310,6 +314,38 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
     const res = await createEosConfigSync(ctx).syncEv();
     assert.equal(res.ok, true);
     assert.equal(res.ev.min_soc_deadline_datetime, ev.min_soc_deadline_datetime);
+  });
+
+  // prod 2026-09-23: ohne Fahrzeug-SoC brach 0.4 JEDEN Lauf ab ("Fresh SoC
+  // missing for ev11") — auch der Hausakku blieb ohne Plan.
+  it('upstream-genetic OHNE Fahrzeug-SoC: Auto nicht anmelden, Grund im State', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const ctx = ctxFor(mock.port, dep);
+    const res = await createEosConfigSync(ctx).sync();
+    assert.equal(res.ok, true);
+    assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 0);
+    assert.deepEqual(bodyOf(mock, 'devices/electric_vehicles'), {});
+    assert.equal(ctx.state.optimizer.eosEv.wanted, true);
+    assert.equal(ctx.state.optimizer.eosEv.register, false);
+    assert.match(ctx.state.optimizer.eosEv.reason, /Ladestand/);
+    assert.equal((await createEosConfigSync(ctx).syncEv()).skipped, 'no ev soc');
+  });
+
+  it('dv-fork OHNE Fahrzeug-SoC: wie bisher anmelden (0.3 rechnet mit 0 weiter)', async () => {
+    mock = await createMockEos('dvFork');
+    await createEosConfigSync(ctxFor(mock.port, dep)).sync();
+    assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 1);
+  });
+
+  it('evcc-SoC springt ein, wenn TeslaMate nichts hat', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const ctx = Object.assign(ctxFor(mock.port, dep), {
+      teslamateService: { getState: () => ({ batteryLevel: null }) },
+      evccIntegration: { getLoadpoints: () => [{ id: 1, vehicleSocPct: 55 }] },
+    });
+    await createEosConfigSync(ctx).sync();
+    assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 1);
+    assert.equal(ctx.state.optimizer.eosEv.socSource, 'evcc');
   });
 
   it('dv-fork: nur das Ziel, kein unbekanntes Feld', async () => {

@@ -4319,6 +4319,8 @@ export function createApiRoutes(ctx) {
           maxChargeW: raw.optimizer?.evMaxChargeW ?? 5000,
           capacityWh: raw.optimizer?.evCapacityWh ?? 50000,
           bridge: ctx.eosEvccBridge?.getStatus?.() || null,
+          // Ist das Auto bei EOS angemeldet? (eos-config-sync decideEvRegistration)
+          registration: ctx.state?.optimizer?.eosEv || null,
           // Abfahrt + Ziel (ev-departure.js). `resolved` ist das, was DVhub
           // gerade an EOS schickt; `deadlineSupported` sagt, ob die laufende
           // EOS-Fassung die Uhrzeit kennt (ab 0.4) oder nur das Ziel.

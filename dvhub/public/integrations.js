@@ -2364,14 +2364,21 @@
     };
     var lines = [];
     box.className = 'evcc-eos-state';
+    var reg = eos.registration || null;
     if (!eos.optimizeEv) {
       lines.push('EOS plant das Auto nicht mit — dafür „E-Auto in EOS mitoptimieren" einschalten.');
+      box.className += ' is-warn';
+    } else if (reg && reg.wanted && !reg.register) {
+      // Ohne Ladestand des Autos wuerde EOS 0.4 gar nicht rechnen — DVhub
+      // meldet es dann ab, damit wenigstens der Hausakku einen Plan bekommt.
+      lines.push('Auto NICHT bei EOS angemeldet: ' + (reg.reason || 'kein Ladestand'));
       box.className += ' is-warn';
     } else if (!eos.control) {
       lines.push('Weitergabe an evcc ist aus — DVhub schreibt nichts an evcc.');
     } else {
       box.className += b.lastError ? ' is-warn' : ' is-ok';
     }
+    if (reg && reg.register && reg.socPct != null) lines.push('Ladestand Auto: ' + reg.socPct + ' % (' + reg.socSource + ')');
     if (b.current) lines.push('Jetzt (' + fmtTime(b.current.ts) + '–' + fmtTime(b.current.endTs) + '): ' + cmd(b.current));
     if (b.lastSent) lines.push('Zuletzt gesendet ' + fmtTime(b.lastSent.at) + ': ' + (b.lastSent.action === 'charge' ? 'Laden ' + b.lastSent.currentA + ' A' : 'Stopp (' + b.lastSent.mode + ')') + ' → Ladepunkt #' + b.lastSent.loadpoint);
     if (b.lastError) lines.push('Hinweis: ' + b.lastError);

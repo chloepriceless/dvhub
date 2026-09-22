@@ -257,6 +257,29 @@ test('push forwards EV SoC when state provides evSocPct', async () => {
   }
 });
 
+// prod 2026-09-23: state.victron.evSocPct setzte nie jemand — der EV-SoC kam
+// nie bei EOS an, und 0.4 brach deshalb jeden Lauf ab. Quelle ist jetzt
+// TeslaMate (bzw. evcc).
+test('push holt den EV-SoC aus TeslaMate', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state: { victron: { soc: 50 } },
+      teslamateService: { getState: () => ({ batteryLevel: 63 }) },
+    };
+    await createEosForecastBridge(ctx).push();
+    const evPuts = mock.requests.filter(
+      (r) => r.method === 'PUT' && /key=ev11-soc-factor/.test(r.url) && /value=0\.63(&|$)/.test(r.url),
+    );
+    assert.equal(evPuts.length, 2, 'EV-SoC mit beiden Zeitstempeln');
+  } finally {
+    await mock.close();
+  }
+});
+
 test('push skips SoC cleanly when no live battery SoC in state', async () => {
   const mock = await createMockEos(okHandler);
   try {

@@ -11,6 +11,7 @@
 // eos-adapter.js: never throws, returns { ok, applied, errors }.
 
 import { resolveEvDeparture } from './ev-departure.js';
+import { resolveEvSocPct } from './ev-soc.js';
 import http from 'node:http';
 
 import { createEosCapabilityProbe, EOS_FLAVOR } from './eos-capabilities.js';
@@ -380,6 +381,29 @@ export function createEosConfigSync(ctx) {
     try { return ctx.getEosEmsIntervalBoost?.() || null; } catch { return null; }
   };
 
+  // Fahrzeug bei EOS anmelden? Nur, wenn es mitoptimiert werden soll UND —
+  // auf Staenden, die einen frischen SoC verlangen — DVhub einen hat. Sonst
+  // bricht 0.4 den ganzen Lauf ab und auch der Hausakku bleibt ohne Plan.
+  // Ergebnis steht in state.optimizer.eosEv (Panel + /api/optimizer/status).
+  function decideEvRegistration(cfg, caps) {
+    const wanted = cfg?.optimizer?.eosOptimizeEv === true;
+    const soc = wanted ? resolveEvSocPct(ctx) : null;
+    let register = wanted;
+    let reason = wanted ? null : 'eosOptimizeEv=false';
+    if (wanted && !soc && caps.supports.freshSocRequired === true) {
+      register = false;
+      reason = 'kein Ladestand des Autos (TeslaMate/evcc) — EOS 0.4 wuerde sonst gar nicht rechnen';
+    }
+    const decision = { wanted, register, reason, socPct: soc?.pct ?? null, socSource: soc?.source ?? null };
+    if (state) {
+      state.optimizer = state.optimizer || {};
+      const prev = state.optimizer.eosEv;
+      state.optimizer.eosEv = decision;
+      if (pushLog && wanted && !register && (!prev || prev.register !== false)) pushLog('eos_ev_no_soc', { reason });
+    }
+    return decision;
+  }
+
   async function sync() {
     const cfg = getCfg();
     const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
@@ -459,7 +483,8 @@ export function createEosConfigSync(ctx) {
     // charging from the grid overnight — the operator charges the EV from PV
     // during the day, and that load is already captured by the LoadImport
     // forecast. When ON, EOS models the EV as a separately-optimised device.
-    const optimizeEv = cfg?.optimizer?.eosOptimizeEv === true;
+    const evDecision = decideEvRegistration(cfg, caps);
+    const optimizeEv = evDecision.register;
     const evTasks = optimizeEv
       ? [
           { section: 'devices/max_electric_vehicles', body: 1 },
@@ -704,6 +729,9 @@ export function createEosConfigSync(ctx) {
     if (!cfg?.optimizer?.eosProxy?.enabled) return { ok: true, skipped: 'eosProxy.enabled=false' };
     if (cfg?.optimizer?.eosOptimizeEv !== true) return { ok: true, skipped: 'eosOptimizeEv=false' };
     const caps = await capabilityProbe.get(baseUrl);
+    // Kein SoC auf 0.4: Fahrzeug nicht anfassen — der volle Abgleich hat es
+    // bereits abgemeldet, und ein Anmelden hier legte EOS lahm.
+    if (!decideEvRegistration(cfg, caps).register) return { ok: true, skipped: 'no ev soc' };
     const list = buildEosElectricVehicles(cfg, { supportsDeadline: caps.supports.evDeadline === true });
     const body = caps.supports.deviceMap ? devicesAsMap(list) : list;
     const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/electric_vehicles', body);

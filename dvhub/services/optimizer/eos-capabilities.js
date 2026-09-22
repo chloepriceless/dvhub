@@ -128,6 +128,10 @@ export function detectEosCapabilities(config, health = {}) {
       // GENETIC-Umbau (#1330, v0.4.0rc1). Fork und aeltere Staende kennen nur
       // das Ziel am Horizontende; dort bleibt die Abfahrt ungesendet.
       evDeadline: flavor === EOS_FLAVOR.UPSTREAM_GENETIC,
+      // Ab #1330 bricht EOS den GANZEN Lauf ab, wenn ein angemeldetes Geraet
+      // keinen frischen SoC hat ("Fresh SoC missing for ev11", prod
+      // 2026-09-23). Aeltere Staende rechneten mit 0 weiter.
+      freshSocRequired: flavor === EOS_FLAVOR.UPSTREAM_GENETIC,
     },
   };
 }

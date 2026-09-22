@@ -31,6 +31,7 @@
 // Defensive: never throws, mirrors eos-adapter.js / eos-config-sync.js
 // contract — { ok, pushed: string[], errors: object } per call.
 
+import { resolveEvSocPct } from './ev-soc.js';
 import http from 'node:http';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
 import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
@@ -329,10 +330,13 @@ export function createEosForecastBridge(ctx) {
     }
     const battFactor = Math.max(0, Math.min(1, socPct / 100));
 
-    // EV SoC is best-effort: DVhub does not reliably populate it. When absent
-    // we skip the EV key entirely (EOS then defaults that device to 0, which
-    // is a clean no-op, not a hard error).
-    const evPct = Number(state?.victron?.evSocPct);
+    // EV-SoC aus TeslaMate / evcc (ev-soc.js). Fehlt er, wird der EV-Kanal
+    // uebersprungen. Auf 0.3 rechnet EOS dann mit 0; ab 0.4 wuerde der Lauf
+    // abbrechen — deshalb meldet eos-config-sync das Fahrzeug dort gar nicht
+    // erst an, solange es keinen SoC gibt.
+    const evSoc = resolveEvSocPct(ctx);
+    const evLegacyPct = Number(state?.victron?.evSocPct);
+    const evPct = evSoc ? evSoc.pct : evLegacyPct;
     const evFactor = Number.isFinite(evPct) ? Math.max(0, Math.min(1, evPct / 100)) : null;
 
     const keysRes = await eosHttpRequest(baseUrl, 'GET', '/v1/measurement/keys');
