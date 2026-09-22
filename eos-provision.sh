@@ -37,7 +37,16 @@ fi
 EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/chloepriceless/DV-EOS.git}}"
 EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-fork}}}"
 EOS_BRANCH="$EOS_PIN"   # Rueckwaertskompatibler Alias
-EOS_STATE_MARKER="$DATA_DIR/.eos-provisioned"
+EOS_STATE_MARKER="${EOS_STATE_MARKER:-$DATA_DIR/.eos-provisioned}"
+# Dienstname und Port sind ueberschreibbar, damit eine zweite Instanz (A/B-Test
+# einer neuen EOS-Version neben der laufenden) mit demselben Skript entsteht.
+EOS_SERVICE_NAME="${EOS_SERVICE_NAME:-eos}"
+EOS_PORT="${EOS_PORT:-8503}"
+# Betreiber-Einstellungen fuer EOS (z.B. EOS_INVERTER_EFF_CURVE). Die Unit wird
+# bei jeder Provisionierung neu geschrieben; was dort von Hand ergaenzt wurde,
+# ging bisher dabei verloren. Diese Datei bleibt stehen.
+EOS_ENV_FILE="${EOS_ENV_FILE:-/etc/dvhub/eos.env}"
+EOS_BACKUP_ROOT="${EOS_BACKUP_ROOT:-$DATA_DIR/eos-backups}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "  EOS: eos-provision.sh muss als root laufen — uebersprungen" >&2
@@ -92,9 +101,39 @@ eos_clone_fresh() {
   git -C "$EOS_DIR" checkout -B dvhub-eos FETCH_HEAD 2>/dev/null || true
 }
 
+# Lokale Aenderungen im EOS-Ordner (von Hand eingespielte Patches) sichern,
+# bevor irgendetwas sie ueberschreiben kann. Bisher gingen sie still verloren:
+# `checkout -B … FETCH_HEAD` nahm sie entweder ungefragt auf den neuen Stand mit
+# oder scheiterte — und dann loeschte eos_clone_fresh den ganzen Ordner (prod
+# 2026-09-21: 725 Zeilen, nur per Zufall wiederhergestellt).
+eos_backup_local_changes() {
+  local dirty
+  dirty="$(git -C "$EOS_DIR" status --porcelain --untracked-files=no 2>/dev/null || true)"
+  [[ -n "$dirty" ]] || return 0
+  local dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$dest"
+  git -C "$EOS_DIR" rev-parse HEAD > "$dest/BASE_COMMIT" 2>/dev/null || true
+  git -C "$EOS_DIR" diff > "$dest/local-changes.patch"
+  # Zusaetzlich die Dateien selbst — ein Patch laesst sich auf einen anderen
+  # Stand oft nicht mehr anwenden, die Dateien kann man immer vergleichen.
+  git -C "$EOS_DIR" diff --name-only | while read -r f; do
+    mkdir -p "$dest/files/$(dirname "$f")"
+    cp -p "$EOS_DIR/$f" "$dest/files/$f" 2>/dev/null || true
+  done
+  echo "  EOS: lokale Aenderungen gesichert nach $dest ($(printf '%s\n' "$dirty" | wc -l) Dateien)"
+}
+
 if [[ ! -d "$EOS_DIR/.git" ]]; then
   eos_clone_fresh || exit 1
+elif [[ "$EOS_PIN_CHANGED" -eq 0 && -n "$(git -C "$EOS_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+  # Gleicher Stand, aber lokal geaendert: nichts anfassen. Die Aenderungen sind
+  # offensichtlich gewollt, und es gibt keinen neuen Stand, der sie ersetzt.
+  echo "  EOS: lokale Aenderungen im EOS-Ordner, Stand unveraendert — Checkout bleibt wie er ist"
 else
+  eos_backup_local_changes
+  # Beim Versionswechsel kommen die alten Patches NICHT mit: sie gehoeren zum
+  # alten Stand und sind gesichert.
+  git -C "$EOS_DIR" reset --hard -q 2>/dev/null || true
   # Repo-Wechsel (Fork -> upstream) mitziehen, sonst zeigt origin ins Leere.
   git -C "$EOS_DIR" remote set-url origin "$EOS_REPO_URL" 2>/dev/null || true
   if git -C "$EOS_DIR" fetch --depth 1 origin "$EOS_PIN" 2>/dev/null \
@@ -154,7 +193,7 @@ fi
 # Ownership: the systemd user must be able to execute the venv.
 chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_VENV" "$EOS_DIR"
 
-# systemd unit — bind 127.0.0.1:8503 only (no external access).
+# systemd unit — bind 127.0.0.1:$EOS_PORT only (no external access).
 #
 # After=dvhub.service (2026-09-21): EOS rechnet 5 s nach dem Start seinen ersten
 # Lauf (ems.startup_delay). Startet EOS vor DVhub, trifft dieser Lauf einen
@@ -163,7 +202,25 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_VENV" "$EOS_DIR"
 # Beim Boot war das der Unterschied zwischen einem Plan nach Minuten und einem
 # nach einer halben Stunde. Bewusst nur eine REIHENFOLGE (After), keine
 # Abhaengigkeit (Requires/Wants): faellt DVhub aus, soll EOS trotzdem laufen.
-cat <<UNIT >/etc/systemd/system/eos.service
+EOS_UNIT_FILE="/etc/systemd/system/${EOS_SERVICE_NAME}.service"
+# Einmalige Uebernahme: Zusatz-Environment-Zeilen einer von Hand erweiterten
+# alten Unit wandern in die Betreiberdatei, statt beim Neuschreiben zu verschwinden.
+if [[ -f "$EOS_UNIT_FILE" && ! -f "$EOS_ENV_FILE" ]]; then
+  _extra_env="$(grep -E '^Environment=' "$EOS_UNIT_FILE" | sed 's/^Environment=//' \
+    | grep -vE '^EOS_SERVER__(HOST|PORT)=' || true)"
+  if [[ -n "$_extra_env" ]]; then
+    mkdir -p "$(dirname "$EOS_ENV_FILE")"
+    {
+      echo "# Aus der alten ${EOS_SERVICE_NAME}.service uebernommen ($(date -Is))."
+      echo "# Wird von eos-provision.sh nie ueberschrieben."
+      printf '%s\n' "$_extra_env"
+    } > "$EOS_ENV_FILE"
+    chmod 644 "$EOS_ENV_FILE"
+    echo "  EOS: $(printf '%s\n' "$_extra_env" | wc -l) Zusatz-Einstellungen nach $EOS_ENV_FILE uebernommen"
+  fi
+fi
+
+cat <<UNIT >"$EOS_UNIT_FILE"
 [Unit]
 Description=Akkudoktor EOS (Energy Optimization System)
 After=network.target dvhub.service
@@ -174,7 +231,8 @@ User=$SERVICE_USER
 WorkingDirectory=$EOS_DIR
 ExecStart=$EOS_VENV/bin/python -m akkudoktoreos.server.eos
 Environment=EOS_SERVER__HOST=127.0.0.1
-Environment=EOS_SERVER__PORT=8503
+Environment=EOS_SERVER__PORT=$EOS_PORT
+EnvironmentFile=-$EOS_ENV_FILE
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -185,8 +243,8 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable eos.service
-systemctl restart eos.service
+systemctl enable "${EOS_SERVICE_NAME}.service"
+systemctl restart "${EOS_SERVICE_NAME}.service"
 
 # Den tatsaechlich installierten Stand festhalten -- post-update.sh vergleicht
 # ihn gegen eos-version.env und erkennt so eine neue Version ohne Netzzugriff.
@@ -196,4 +254,4 @@ mkdir -p "$DATA_DIR"
 printf '%s\n' "$EOS_WANT" > "$EOS_STATE_MARKER"
 chown "$SERVICE_USER:$SERVICE_USER" "$EOS_STATE_MARKER" 2>/dev/null || true
 
-echo "  EOS: systemd eos.service bereit (127.0.0.1:8503), Stand ${EOS_PIN}"
+echo "  EOS: systemd ${EOS_SERVICE_NAME}.service bereit (127.0.0.1:${EOS_PORT}), Stand ${EOS_PIN}"
