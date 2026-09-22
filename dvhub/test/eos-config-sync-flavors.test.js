@@ -287,3 +287,43 @@ describe('Abgleich gegen Upstream ab #1330 (upstream-genetic)', () => {
     assert.equal(res.ok, true);
   });
 });
+
+// --- E-Auto-Abfahrt (2026-09-22) --------------------------------------------
+// Die Uhrzeit (`min_soc_deadline_datetime`) kennt erst 0.4. Auf dem Fork waere
+// das Feld unbekannt; dort geht nur das Ziel raus.
+describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
+  const dep = {
+    eosOptimizeEv: true, evCapacityWh: 60000,
+    evDepartureEnabled: true, evDepartureTime: '07:00', evDepartureDays: [1, 2, 3, 4, 5, 6, 7],
+    evTargetMode: 'kwh', evTargetValue: 45,
+  };
+
+  it('upstream-genetic: Ziel + Uhrzeit im Fahrzeug, auch ueber syncEv()', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const ctx = ctxFor(mock.port, dep);
+    await createEosConfigSync(ctx).sync();
+    const ev = bodyOf(mock, 'devices/electric_vehicles').ev11;
+    assert.equal(ev.min_soc_percentage, 75);
+    assert.ok(Date.parse(ev.min_soc_deadline_datetime) > Date.now(), 'Abfahrt liegt in der Zukunft');
+    assert.equal(ctx.state.optimizer.eos.supports.evDeadline, true);
+
+    const res = await createEosConfigSync(ctx).syncEv();
+    assert.equal(res.ok, true);
+    assert.equal(res.ev.min_soc_deadline_datetime, ev.min_soc_deadline_datetime);
+  });
+
+  it('dv-fork: nur das Ziel, kein unbekanntes Feld', async () => {
+    mock = await createMockEos('dvFork');
+    await createEosConfigSync(ctxFor(mock.port, dep)).sync();
+    const ev = bodyOf(mock, 'devices/electric_vehicles')[0];
+    assert.equal(ev.min_soc_percentage, 75);
+    assert.equal('min_soc_deadline_datetime' in ev, false);
+  });
+
+  it('syncEv() tut nichts, solange das E-Auto nicht mitoptimiert wird', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const res = await createEosConfigSync(ctxFor(mock.port, { ...dep, eosOptimizeEv: false })).syncEv();
+    assert.equal(res.skipped, 'eosOptimizeEv=false');
+    assert.equal(sectionsOf(mock).includes('devices/electric_vehicles'), false);
+  });
+});

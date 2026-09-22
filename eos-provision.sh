@@ -42,6 +42,10 @@ EOS_STATE_MARKER="${EOS_STATE_MARKER:-$DATA_DIR/.eos-provisioned}"
 # einer neuen EOS-Version neben der laufenden) mit demselben Skript entsteht.
 EOS_SERVICE_NAME="${EOS_SERVICE_NAME:-eos}"
 EOS_PORT="${EOS_PORT:-8503}"
+# Eigener Konfig-/Datenordner (EOS liest ihn aus EOS_DIR). Leer = EOS-Default
+# (~/.local/share/net.akkudoktor.eos) wie bisher. Eine ZWEITE Instanz braucht
+# ihn zwingend — sonst teilen sich beide Konfiguration und Messreihen.
+EOS_HOME="${EOS_HOME:-}"
 # Betreiber-Einstellungen fuer EOS (z.B. EOS_INVERTER_EFF_CURVE). Die Unit wird
 # bei jeder Provisionierung neu geschrieben; was dort von Hand ergaenzt wurde,
 # ging bisher dabei verloren. Diese Datei bleibt stehen.
@@ -192,6 +196,10 @@ fi
 
 # Ownership: the systemd user must be able to execute the venv.
 chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_VENV" "$EOS_DIR"
+if [[ -n "$EOS_HOME" ]]; then
+  mkdir -p "$EOS_HOME"
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_HOME"
+fi
 
 # systemd unit — bind 127.0.0.1:$EOS_PORT only (no external access).
 #
@@ -233,6 +241,7 @@ ExecStart=$EOS_VENV/bin/python -m akkudoktoreos.server.eos
 Environment=EOS_SERVER__HOST=127.0.0.1
 Environment=EOS_SERVER__PORT=$EOS_PORT
 EnvironmentFile=-$EOS_ENV_FILE
+${EOS_HOME:+Environment=EOS_DIR=$EOS_HOME}
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
