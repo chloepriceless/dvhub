@@ -267,6 +267,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .dv-grid > * { min-width: 0; }
 .dv-section { padding: 14px 18px; }
+.dv-price-chart {
+  padding: 14px 18px 16px;
+  border-top: 1px solid var(--hairline);
+}
 .dv-section + .dv-section { border-left: 1px solid var(--hairline); }
 .dv-label {
   font-family: var(--f-mono); font-size: 10px; letter-spacing: .16em;

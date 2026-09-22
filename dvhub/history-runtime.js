@@ -357,6 +357,12 @@ function buildRowAccumulator(key, label) {
     exportBatteryValuedKwh: 0,
     exportPvCtKwh: null,
     exportBatteryCtKwh: null,
+    exportSpotCtKwh: null,
+    // Zeitmittel des Börsenpreises (jede bepreiste Viertelstunde zählt gleich,
+    // unabhängig von Einspeisung) — Vergleichslinie im DV-Jahreschart.
+    spotPriceCtSum: 0,
+    spotPriceSlotCount: 0,
+    spotPriceAvgCtKwh: null,
     solarCompensationEur: 0,
     premiumEligibleExportKwh: 0,
     premiumValuedExportKwh: 0,
@@ -429,6 +435,21 @@ function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
       ? round2((Number(target.exportBatteryRevenueEur || 0) / Number(target.exportBatteryValuedKwh)) * 100)
       : null;
   }
+  // Kombinierter Satz PV direkt + Speicher: gemeinsamer Börsenerlös ÷ gemeinsam
+  // bewertete kWh (kein Mittel der beiden Sätze — die Mengen sind ungleich).
+  if ('exportSpotCtKwh' in target) {
+    const valuedKwh = Number(target.exportPvValuedKwh || 0) + Number(target.exportBatteryValuedKwh || 0);
+    target.exportSpotCtKwh = valuedKwh > 0
+      ? round2(((Number(target.exportPvRevenueEur || 0) + Number(target.exportBatteryRevenueEur || 0)) / valuedKwh) * 100)
+      : null;
+  }
+  if ('spotPriceCtSum' in target) {
+    target.spotPriceAvgCtKwh = Number(target.spotPriceSlotCount || 0) > 0
+      ? round2(Number(target.spotPriceCtSum || 0) / Number(target.spotPriceSlotCount))
+      : null;
+    delete target.spotPriceCtSum;
+    delete target.spotPriceSlotCount;
+  }
   return target;
 }
 
@@ -464,6 +485,10 @@ function summarizeRows(slots, view, resolveCapacityKwhForTs = null) {
     if (Number.isFinite(Number(slot.marketPriceCtKwh)) && marketWeight > 0) {
       row.marketPriceWeightKwh += marketWeight;
       row.marketPriceWeightedCtTotal += marketWeight * Number(slot.marketPriceCtKwh);
+    }
+    if (slot.marketPriceCtKwh != null && Number.isFinite(Number(slot.marketPriceCtKwh))) {
+      row.spotPriceCtSum += Number(slot.marketPriceCtKwh);
+      row.spotPriceSlotCount += 1;
     }
     const importWeight = Number(slot.importKwh || 0);
     if (Number.isFinite(Number(slot.userImportPriceCtKwh)) && importWeight > 0) {

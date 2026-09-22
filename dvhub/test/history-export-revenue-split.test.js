@@ -104,3 +104,24 @@ test('Zeilen und Chart-Reihen tragen die Aufteilung mit', async () => {
 });
 
 function round2(v) { return Math.round((v + Number.EPSILON) * 100) / 100; }
+
+// DV-Jahreschart: je Monat ein kombinierter Satz (PV direkt + Speicher) und das
+// Zeitmittel der Börse als Vergleichslinie.
+test('Jahreszeile trägt kombinierten Börsensatz und Ø-Börsenpreis', async () => {
+  const runtime = makeRuntime();
+  const summary = await runtime.getSummary({ view: 'year', date: '2026-03-09' });
+  const march = summary.rows.find((r) => r.key === '2026-03');
+  assert.ok(march, 'Zeile für 2026-03 fehlt');
+  // (0,07 € + 0,09 €) ÷ (1,0 + 0,5) bewertete kWh = 10,67 ct — kein Mittel
+  // der beiden Sätze (das wäre 12,5).
+  assert.equal(march.exportSpotCtKwh, 10.67);
+  // Zeitmittel über die bepreisten Viertelstunden (7 und 18), der preislose
+  // Slot zählt nicht mit.
+  assert.equal(march.spotPriceAvgCtKwh, 12.5);
+  // Hilfsfelder landen nicht in der API-Antwort.
+  assert.equal('spotPriceCtSum' in march, false);
+  assert.equal('spotPriceSlotCount' in march, false);
+  // Monat ohne Daten taucht nicht mit 0 auf.
+  const feb = summary.rows.find((r) => r.key === '2026-02');
+  if (feb) assert.equal(feb.spotPriceAvgCtKwh, null);
+});

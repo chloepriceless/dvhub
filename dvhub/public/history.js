@@ -1316,17 +1316,25 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
 
   const chartHeight = Number(options.height || 220);
   const labels = items.map(item => compactAxisLabel(item?.label || '-'));
-  const datasets = series.map(entry => ({
-    label: entry.label,
-    data: items.map(item => Number(item?.[entry.key]) || 0),
-    borderColor: seriesColorMap[entry.className] || '#9ca3af',
-    backgroundColor: (seriesColorMap[entry.className] || '#9ca3af') + '18',
-    borderWidth: 2,
-    pointRadius: 0,
-    pointHoverRadius: 4,
-    fill: false,
-    tension: 0.3
-  }));
+  // options.keepGaps: fehlende Werte bleiben Lücken (null) statt als 0 zu
+  // erscheinen — für Sätze in ct/kWh wäre eine 0 eine falsche Aussage.
+  const datasets = series.map(entry => {
+    const color = entry.color || seriesColorMap[entry.className] || '#9ca3af';
+    return {
+      label: entry.label,
+      data: items.map(item => (options.keepGaps
+        ? (hasFiniteNumber(item?.[entry.key]) ? Number(item[entry.key]) : null)
+        : (Number(item?.[entry.key]) || 0))),
+      borderColor: color,
+      backgroundColor: color + '18',
+      borderWidth: entry.width || 2,
+      borderDash: entry.dash || [],
+      pointRadius: options.pointRadius || 0,
+      pointHoverRadius: 4,
+      fill: false,
+      tension: 0.3
+    };
+  });
 
   mount.innerHTML = `<div class="history-chart-mount-container"><canvas id="${mountId}Canvas"></canvas></div>`;
 
@@ -1361,6 +1369,7 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
             label: (ctx) => {
               const entry = series[ctx.datasetIndex];
               const val = ctx.raw;
+              if (val == null) return `${ctx.dataset.label}: –`;
               const fmt = entry?.formatter || formatter;
               return `${ctx.dataset.label}: ${fmt(val)}`;
             }
@@ -1369,7 +1378,7 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
       },
       scales: {
         x: {
-          ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+          ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: options.maxTicks || 8 },
           grid: { color: '#e5e7eb20' }
         },
         y: {
@@ -1382,6 +1391,22 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
       }
     }
   });
+}
+
+// DV-Karte, Jahresansicht: je Monat der Marktwert Solar gegen die real
+// erzielten Börsensätze (PV direkt, Speicher, beides kombiniert) und das
+// Zeitmittel der Börse. Liegt „Kombiniert" über dem Marktwert Solar, hat die
+// Einspeisung mehr als eine typische PV-Anlage erlöst.
+function renderDvMonthlyPriceChart(mountId, rows) {
+  const series = [
+    { key: 'solarMarketValueCtKwh', label: 'Marktwert Solar', color: '#f5c451', width: 2.5 },
+    { key: 'exportPvCtKwh', label: 'PV direkt', color: '#ff9f43' },
+    { key: 'exportBatteryCtKwh', label: 'Speicher', color: '#67a5ff' },
+    { key: 'exportSpotCtKwh', label: 'Kombiniert', color: '#39E06F', width: 3 },
+    { key: 'spotPriceAvgCtKwh', label: 'Ø Börsenpreis', color: '#9ca3af', dash: [5, 4] }
+  ];
+  const hasAny = rows.some((row) => series.some((entry) => hasFiniteNumber(row?.[entry.key])));
+  renderLineChart(mountId, hasAny ? rows : [], series, fmtCt, 'ct/kWh', { keepGaps: true, pointRadius: 3, height: 260, maxTicks: 12 });
 }
 
 function renderDetailedDayChart(mountId, items) {
@@ -2065,6 +2090,10 @@ function renderCharts(summary) {
     setHtml('historyAggregatePriceHint', '');
     setHtml('historySolarSummary', '');
     return;
+  }
+
+  if (view === 'year') {
+    renderDvMonthlyPriceChart('historyDvPriceChart', Array.isArray(summary?.rows) ? summary.rows : []);
   }
 
   if (aggregateModeForView(view) === 'table') {
