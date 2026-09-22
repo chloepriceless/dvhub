@@ -191,6 +191,43 @@ function eosHttpRequest(baseUrl, method, path, body) {
  *   stop: () => void,
  * }}
  */
+/**
+ * Wie viele volle Stunden ab `nowMs` sind in ALLEN Preisreihen lueckenlos
+ * belegt? Slots `{start, powerW}` (15 min). Minus 15 min Puffer, begrenzt auf
+ * 1..24. null, wenn keine Reihe Werte hat.
+ */
+export function computeControlHorizonHours(slotLists, nowMs, { slotMs = 15 * 60_000, maxHours = 24 } = {}) {
+  let coveredUntil = Infinity;
+  let any = false;
+  for (const list of slotLists) {
+    const starts = [...new Set(list
+      .filter((s) => s && Number.isFinite(Number(s.powerW)))
+      .map((s) => Date.parse(s.start))
+      .filter(Number.isFinite))].sort((a, b) => a - b);
+    // Slot-Laenge je Reihe aus den Daten (PV kann stuendlich kommen) — sonst
+    // saehe eine Stundenreihe nach 15 min wie eine Luecke aus.
+    let stepMs = slotMs;
+    for (let i = 1; i < starts.length; i += 1) {
+      const d = starts[i] - starts[i - 1];
+      if (d > 0 && (i === 1 || d < stepMs)) stepMs = d;
+    }
+    // Luecke ab "jetzt" suchen: der Slot, der jetzt laeuft, muss da sein.
+    let end = null;
+    for (const t of starts) {
+      if (t + stepMs <= nowMs) continue;
+      if (end === null) { if (t > nowMs) break; end = t + stepMs; continue; }
+      if (t > end) break; // Luecke
+      end = Math.max(end, t + stepMs);
+    }
+    if (end === null) return null; // keine Abdeckung fuer jetzt
+    any = true;
+    coveredUntil = Math.min(coveredUntil, end);
+  }
+  if (!any) return null;
+  const hours = Math.floor((coveredUntil - nowMs - slotMs) / 3_600_000);
+  return Math.max(1, Math.min(maxHours, hours));
+}
+
 export function createEosForecastBridge(ctx) {
   const {
     getCfg,
@@ -320,7 +357,7 @@ export function createEosForecastBridge(ctx) {
    * @param {string} baseUrl
    * @returns {Promise<{pushed: string[], errors: object, skipped?: string}>}
    */
-  async function pushSoc(baseUrl) {
+  async function pushSoc(baseUrl, { freshOnly = false } = {}) {
     const pushed = [];
     const errors = {};
 
@@ -367,7 +404,7 @@ export function createEosForecastBridge(ctx) {
       .toISOString()
       .replace('.000Z', 'Z');
     const freshIso = new Date().toISOString();
-    const socStamps = [hourIso, freshIso];
+    const socStamps = freshOnly ? [freshIso] : [hourIso, freshIso];
 
     for (const key of socKeys) {
       const isEv = /(^|[^a-z])ev\d*-soc-factor$/.test(key);
@@ -393,6 +430,41 @@ export function createEosForecastBridge(ctx) {
     }
 
     return { pushed, errors };
+  }
+
+  /**
+   * Nur den SoC schicken (Akku + Auto), mit Zeitstempel "jetzt". Fuer EOS ab
+   * 0.4: ein Lauf nimmt den SoC nur aus den letzten measurement_max_age_seconds
+   * (300 s, configrequest.py) und bricht sonst ab — der Prognose-Push alle
+   * 15 min reicht dafuer nicht. server.js ruft das minuetlich.
+   */
+  async function pushFreshSoc() {
+    const cfg = getCfg();
+    if (!cfg?.optimizer?.eosProxy?.enabled) return { skipped: 'eosProxy.enabled=false' };
+    if (state?.optimizer?.eos?.supports?.freshSocRequired !== true) return { skipped: 'not required' };
+    const baseUrl = cfg.optimizer.eosProxy.url || 'http://127.0.0.1:8503';
+    return pushSoc(baseUrl, { freshOnly: true });
+  }
+
+  let lastHorizonHours = null;
+  /**
+   * Steuerzeitraum = volle Stunden, die ab jetzt lueckenlos mit Preisen belegt
+   * sind, minus 15 min Puffer (EOS rechnet auf eigenem 15-min-Takt; der
+   * naechste Lauf vor dem naechsten Push muss noch abgedeckt sein), 1..24 h.
+   * Nur wenn der Abgleich eine Fassung mit Pflicht-Abdeckung erkannt hat.
+   */
+  async function syncControlHorizon(baseUrl, ...slotLists) {
+    if (state?.optimizer?.eos?.flavor !== 'upstream-genetic') return { skipped: 'flavor' };
+    const hours = computeControlHorizonHours(slotLists.filter(Boolean), Date.now());
+    if (hours === null) return { skipped: 'no prices' };
+    // Immer senden (kostet nichts): nach einem EOS-Neustart kennt EOS den
+    // zuletzt gesetzten Wert evtl. nicht mehr. Protokolliert wird nur ein Wechsel.
+    const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/optimization/genetic/horizon_hours', hours);
+    if (!res.ok) return { error: res.error };
+    if (pushLog && hours !== lastHorizonHours) pushLog('eos_control_horizon', { hours, previous: lastHorizonHours });
+    lastHorizonHours = hours;
+    if (state?.optimizer) state.optimizer.eosControlHorizonH = hours;
+    return { hours };
   }
 
   /**
@@ -544,6 +616,20 @@ export function createEosForecastBridge(ctx) {
       else errors[t.provider] = res.error;
     }
 
+    // Steuerzeitraum an die Preisabdeckung koppeln (nur EOS ab #1330 / 0.4).
+    // 0.4 bricht einen Lauf ab, wenn im Steuerzeitraum ein Preis fehlt
+    // ("Missing or invalid prices within the control horizon", prod
+    // 2026-09-23 01:51). Day-Ahead reicht nachts nur bis Mitternacht, erst
+    // gegen 13 Uhr kommt der Folgetag — mit festen 24 h plant 0.4 dann bis
+    // zum Nachmittag GAR NICHT. 0.3 zog die Luecke still mit dem letzten Wert
+    // voll. Wir erfinden keine Preise, sondern kuerzen den Steuerzeitraum auf
+    // das, was belegt ist; danach bewertet EOS die Restladung ueber seinen
+    // Endwert.
+    const horizon = await syncControlHorizon(
+      baseUrl, elecpriceSlots, feedInSpot ? feedInSlots : null, pvSlots, expandHourlyToQuarterHourly(loadSlots),
+    );
+    if (horizon.error) errors.horizon = horizon.error;
+
     // Forward the live battery SoC so EOS seeds its optimizer with the real
     // start state (not 0). Folded into the same cycle/cadence as the forecasts.
     const socRes = await pushSoc(baseUrl);
@@ -656,7 +742,7 @@ export function createEosForecastBridge(ctx) {
     }
   }
 
-  return { push, start, stop };
+  return { push, pushFreshSoc, start, stop };
 }
 
 // Exported for unit-tests.

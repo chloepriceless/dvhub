@@ -6,7 +6,7 @@
 // PydanticDateTimeDataFrame import expects.
 
 import { strict as assert } from 'node:assert';
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import http from 'node:http';
 
 import {
@@ -17,6 +17,7 @@ import {
   createEosForecastBridge,
   SOC_KEY_RE,
   EV_SOC_KEY_RE,
+  computeControlHorizonHours,
 } from '../services/optimizer/eos-forecast-bridge.js';
 
 /**
@@ -612,4 +613,71 @@ test('premium ON: auto AW from BNetzA summary (no override) + MW → premium app
     const d = feedMap(mock);
     closeTo(d['2026-05-24T12:00:00Z'], (30 + 1) / 100 / 1000);
   } finally { await mock.close(); }
+});
+
+// prod 2026-09-23 01:51: EOS 0.4 brach jeden Lauf ab, weil Day-Ahead nachts
+// nur bis Mitternacht reicht, der Steuerzeitraum aber fest 24 h war.
+describe('Steuerzeitraum = Preisabdeckung (EOS 0.4)', () => {
+  const Q = 15 * 60_000;
+  const slots = (fromMs, count) => Array.from({ length: count }, (_, i) => ({ start: new Date(fromMs + i * Q).toISOString(), powerW: 0.0001 }));
+  const now = Date.parse('2026-09-22T23:52:00Z'); // 01:52 Ortszeit
+  const midnight = Date.parse('2026-09-23T22:00:00Z'); // 24:00 Ortszeit
+
+  test('nachts: bis Mitternacht belegt (22 h 08 min) → 21 h (volle Stunden nach 15 min Puffer)', () => {
+    const list = slots(Date.parse('2026-09-22T22:00:00Z'), (midnight - Date.parse('2026-09-22T22:00:00Z')) / Q);
+    assert.equal(computeControlHorizonHours([list], now), 21);
+  });
+
+  test('nach 13 Uhr mit Folgetag: begrenzt auf 24 h', () => {
+    const list = slots(Date.parse('2026-09-22T22:00:00Z'), 48 * 4);
+    assert.equal(computeControlHorizonHours([list], now), 24);
+  });
+
+  test('Luecke in einer Reihe begrenzt den Zeitraum auf die Luecke', () => {
+    const a = slots(Date.parse('2026-09-22T23:45:00Z'), 40);
+    const b = [...slots(Date.parse('2026-09-22T23:45:00Z'), 12), ...slots(Date.parse('2026-09-23T03:00:00Z'), 40)];
+    // b ist bis 02:45 UTC belegt → 2h53 ab jetzt → minus Puffer → 2 h
+    assert.equal(computeControlHorizonHours([a, b], now), 2);
+  });
+
+  test('der laufende Slot fehlt: keine Abdeckung', () => {
+    assert.equal(computeControlHorizonHours([slots(Date.parse('2026-09-23T01:00:00Z'), 40)], now), null);
+  });
+
+  test('knapp belegt: mindestens 1 h', () => {
+    assert.equal(computeControlHorizonHours([slots(Date.parse('2026-09-22T23:45:00Z'), 3)], now), 1);
+  });
+});
+
+// EOS 0.4 nimmt den SoC nur aus den letzten 300 s — DVhub schickt ihn dort
+// minuetlich, nur mit "jetzt"-Stempel. 0.3 bleibt unberuehrt.
+test('pushFreshSoc: nur bei Fassungen mit Frische-Pflicht, nur ein Zeitstempel', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const state = { victron: { soc: 50 }, optimizer: { eos: { supports: { freshSocRequired: false } } } };
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state,
+      teslamateService: { getState: () => ({ batteryLevel: 63 }) },
+    };
+    const bridge = createEosForecastBridge(ctx);
+    assert.equal((await bridge.pushFreshSoc()).skipped, 'not required');
+    assert.equal(mock.requests.length, 0);
+
+    state.optimizer.eos.supports.freshSocRequired = true;
+    const res = await bridge.pushFreshSoc();
+    const puts = mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'));
+    assert.equal(puts.length, 2, 'Akku + Auto, je EIN Stempel');
+    assert.equal(res.pushed.length, 2);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('Steuerzeitraum: stuendliche Reihe gilt nicht als Luecke', () => {
+  const now = Date.parse('2026-09-22T23:52:00Z');
+  const hourly = Array.from({ length: 30 }, (_, i) => ({ start: new Date(Date.parse('2026-09-22T23:00:00Z') + i * 3_600_000).toISOString(), powerW: 1 }));
+  assert.equal(computeControlHorizonHours([hourly], now), 24);
 });

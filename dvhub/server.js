@@ -1216,6 +1216,11 @@ ctx.getSolarMarketValueSummary = ({ year }) =>
 ctx.getApplicableValueSummary = ({ year, pvPlants }) =>
   applicableValueService?.getApplicableValueSummary?.({ year, pvPlants });
 const eosForecastBridge = createEosForecastBridge(ctx);
+// EOS ab 0.4 verlangt einen SoC, der beim Lauf hoechstens 300 s alt ist
+// (measurement_max_age_seconds). Der Prognose-Push alle 15 min reicht dafuer
+// nicht — minuetlich nur den SoC nachschicken. pushFreshSoc() tut nichts auf
+// Fassungen, die das nicht verlangen (0.3 bleibt beim Stundenstempel).
+const eosFreshSocTimer = safeInterval('eos-fresh-soc', () => eosForecastBridge.pushFreshSoc(), 60_000);
 ctx.eosForecastBridge = eosForecastBridge;
 
 // -- ctx extensions for routes-api.js ---
@@ -2095,6 +2100,7 @@ async function gracefulShutdown(signal) {
   safeSync('evccIntegration.stop', () => evccIntegration.stop?.());
   safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
   safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
+  safeSync('eosFreshSocTimer.stop', () => clearInterval(eosFreshSocTimer));
   // C2 (2026-07-02, Realitätscheck der alten Worklist 7.7): evcc/license/
   // monitoring-Heartbeat räumen ihre Timer bereits sauber auf (siehe oben +
   // licenseService.close() unten) — das war stale. Echter Rest-Gap: der
