@@ -271,6 +271,15 @@ html, body { max-width: 100%; overflow-x: hidden; }
   padding: 14px 18px 16px;
   border-top: 1px solid var(--hairline);
 }
+.dv-price-chart-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 8px;
+}
+.dv-price-chart-head .dv-label { margin-bottom: 0; }
+.dv-price-table { overflow-x: auto; }
+.dv-price-table td:not(:first-child),
+.dv-price-table th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.dv-price-table tfoot td { font-weight: 600; border-top: 1px solid var(--hairline); }
 .dv-section + .dv-section { border-left: 1px solid var(--hairline); }
 .dv-label {
   font-family: var(--f-mono); font-size: 10px; letter-spacing: .16em;

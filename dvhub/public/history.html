@@ -319,8 +319,15 @@
         <!-- Nur Jahresansicht: Monatsverlauf der erzielten Börsensätze gegen den
              Monatsmarktwert Solar und das Zeitmittel der Börse. -->
         <div class="dv-price-chart" data-show-view="year">
-          <div class="dv-label">Monatsverlauf: Marktwert Solar vs. erzielter B&ouml;rsenpreis</div>
+          <div class="dv-price-chart-head">
+            <div class="dv-label">Monatsverlauf: Marktwert Solar vs. erzielter B&ouml;rsenpreis</div>
+            <div class="chart-mode" role="group" aria-label="Darstellung">
+              <button id="historyDvPriceChartBtn" type="button" class="is-active">Chart</button>
+              <button id="historyDvPriceTableBtn" type="button">Tabelle</button>
+            </div>
+          </div>
           <div id="historyDvPriceChart" class="history-chart-mount"></div>
+          <div id="historyDvPriceTable" class="dv-price-table" hidden></div>
         </div>
       </section>
 

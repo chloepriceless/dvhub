@@ -48,7 +48,8 @@ const historyState = {
   energyChartMode: readEnergyChartMode(),
   detailsExpanded: false,
   statusInfoExpanded: false,
-  statusInfoHtml: ''
+  statusInfoHtml: '',
+  dvPriceMode: 'chart'   // DV-Jahreskarte: 'chart' | 'table'
 };
 
 // ─── Pro-Gating der Historie-Zeiträume (Christin 2026-07-07) ────────────────
@@ -1397,6 +1398,73 @@ function renderLineChart(mountId, items, series, formatter, unitLabel, options =
 // erzielten Börsensätze (PV direkt, Speicher, beides kombiniert) und das
 // Zeitmittel der Börse. Liegt „Kombiniert" über dem Marktwert Solar, hat die
 // Einspeisung mehr als eine typische PV-Anlage erlöst.
+// Tabellenansicht derselben Monatswerte, ergänzt um die Erlöse in € — die
+// Übersicht der Einspeiseerlöse je Monat und Quelle.
+function renderDvMonthlyPriceTable(mountId, rows) {
+  const mount = byId(mountId);
+  if (!mount) return;
+  const withData = rows.filter((row) => Number(row?.exportKwh || 0) > 0 || hasFiniteNumber(row?.solarMarketValueCtKwh));
+  if (!withData.length) {
+    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
+    return;
+  }
+  const sum = (key) => withData.reduce((acc, row) => acc + (Number(row?.[key]) || 0), 0);
+  const pvKwh = sum('exportPvValuedKwh');
+  const batKwh = sum('exportBatteryValuedKwh');
+  const pvEur = sum('exportPvRevenueEur');
+  const batEur = sum('exportBatteryRevenueEur');
+  const rate = (eur, kwh) => (kwh > 0 ? (eur / kwh) * 100 : null);
+  const cell = (eur, ct) => `${fmtEur(eur)}${hasFiniteNumber(ct) ? ` · ${fmtCt(ct)}` : ''}`;
+  mount.innerHTML = `
+    <table class="history-data-table">
+      <thead>
+        <tr>
+          <th>Monat</th>
+          <th>Marktwert Solar</th>
+          <th>Ø Börse</th>
+          <th>PV direkt</th>
+          <th>Speicher</th>
+          <th>Kombiniert</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${withData.map((row) => `
+          <tr>
+            <td>${escapeHtml(compactAxisLabel(row.label || row.key || '-'))}</td>
+            <td>${fmtCt(row.solarMarketValueCtKwh)}</td>
+            <td>${fmtCt(row.spotPriceAvgCtKwh)}</td>
+            <td>${cell(row.exportPvRevenueEur, row.exportPvCtKwh)}</td>
+            <td>${cell(row.exportBatteryRevenueEur, row.exportBatteryCtKwh)}</td>
+            <td>${cell((Number(row.exportPvRevenueEur) || 0) + (Number(row.exportBatteryRevenueEur) || 0), row.exportSpotCtKwh)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td>Jahr</td>
+          <td></td>
+          <td></td>
+          <td>${cell(pvEur, rate(pvEur, pvKwh))}</td>
+          <td>${cell(batEur, rate(batEur, batKwh))}</td>
+          <td>${cell(pvEur + batEur, rate(pvEur + batEur, pvKwh + batKwh))}</td>
+        </tr>
+      </tfoot>
+    </table>
+  `;
+}
+
+function renderDvMonthlyPrices(rows) {
+  const isTable = historyState.dvPriceMode === 'table';
+  const chartMount = byId('historyDvPriceChart');
+  const tableMount = byId('historyDvPriceTable');
+  if (chartMount) chartMount.hidden = isTable;
+  if (tableMount) tableMount.hidden = !isTable;
+  byId('historyDvPriceChartBtn')?.classList.toggle('is-active', !isTable);
+  byId('historyDvPriceTableBtn')?.classList.toggle('is-active', isTable);
+  if (isTable) renderDvMonthlyPriceTable('historyDvPriceTable', rows);
+  else renderDvMonthlyPriceChart('historyDvPriceChart', rows);
+}
+
 function renderDvMonthlyPriceChart(mountId, rows) {
   const series = [
     { key: 'solarMarketValueCtKwh', label: 'Marktwert Solar', color: '#f5c451', width: 2.5 },
@@ -2093,7 +2161,7 @@ function renderCharts(summary) {
   }
 
   if (view === 'year') {
-    renderDvMonthlyPriceChart('historyDvPriceChart', Array.isArray(summary?.rows) ? summary.rows : []);
+    renderDvMonthlyPrices(Array.isArray(summary?.rows) ? summary.rows : []);
   }
 
   if (aggregateModeForView(view) === 'table') {
@@ -2336,6 +2404,15 @@ function renderSummary(summary) {
     historyState.statusInfoExpanded = !historyState.statusInfoExpanded;
     renderStatusInfo();
   });
+  const setDvPriceMode = (mode) => {
+    historyState.dvPriceMode = mode;
+    const summary = historyState.lastSummary;
+    if (String(summary?.view || '') === 'year') {
+      renderDvMonthlyPrices(Array.isArray(summary?.rows) ? summary.rows : []);
+    }
+  };
+  bindHistoryToggle('historyDvPriceChartBtn', () => setDvPriceMode('chart'));
+  bindHistoryToggle('historyDvPriceTableBtn', () => setDvPriceMode('table'));
   bindHistoryToggle('historyAggregateOverviewBtn', () => {
     const currentView = String(historyState.lastSummary?.view || '');
     if (!isAggregateView(currentView)) return;
