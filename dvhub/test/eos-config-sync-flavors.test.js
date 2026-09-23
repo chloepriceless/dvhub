@@ -341,7 +341,7 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
     mock = await createMockEos('upstreamGenetic');
     const ctx = Object.assign(ctxFor(mock.port, dep), {
       teslamateService: { getState: () => ({ batteryLevel: null }) },
-      evccIntegration: { getLoadpoints: () => [{ id: 1, vehicleSocPct: 55 }] },
+      evccIntegration: { getLoadpoints: () => [{ id: 1, connected: true, vehicleSocPct: 55 }] },
     });
     await createEosConfigSync(ctx).sync();
     assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 1);

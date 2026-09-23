@@ -17,6 +17,7 @@ import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
+import { resolveEvSocPct } from './services/optimizer/ev-soc.js';
 import { createOpenEvseAdapter, createGoeAdapter } from './services/wallbox/adapters.js';
 import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
 
@@ -4422,6 +4423,7 @@ export function createApiRoutes(ctx) {
       const lpId = Number(opt.evEvccLoadpoint) || Number(raw.evcc?.dashboardLoadpoint) || 1;
       const lp = lps.find((l) => Number(l.id) === lpId) || lps[0] || null;
       const reg = ctx.state?.optimizer?.eosEv || null;
+      const evSoc = resolveEvSocPct(ctx);
       let plan = null;
       let planError = null;
       if (opt.eosOptimizeEv === true && ctx.inspector?.getEos) {
@@ -4468,8 +4470,10 @@ export function createApiRoutes(ctx) {
           connected: lp ? lp.connected === true : null,
           charging: lp ? lp.charging === true : null,
           chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
-          socPct: reg?.socPct ?? (Number.isFinite(Number(lp?.vehicleSocPct)) ? Number(lp.vehicleSocPct) : null),
-          socSource: reg?.socPct != null ? (reg.socSource || null) : (lp?.vehicleSocPct != null ? 'evcc' : null),
+          // Dieselbe Quelle wie fuer EOS (ev-soc.js): TeslaMate, sonst evcc bei
+          // angestecktem Auto.
+          socPct: evSoc?.pct ?? null,
+          socSource: evSoc?.source ?? null,
           rangeKm: Number.isFinite(Number(lp?.vehicleRangeKm)) ? Math.round(Number(lp.vehicleRangeKm)) : null,
           registered: reg ? reg.register === true : null,
           registrationReason: reg?.reason || null

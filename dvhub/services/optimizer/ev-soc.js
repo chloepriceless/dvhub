@@ -25,7 +25,9 @@ export function resolveEvSocPct(ctx) {
   const lpId = Number(ctx?.getCfg?.()?.optimizer?.evEvccLoadpoint) || 1;
   const lps = ctx?.evccIntegration?.getLoadpoints?.() || [];
   const lp = lps.find((l) => l.id === lpId);
-  const evccPct = num(lp?.vehicleSocPct);
+  // Ohne angestecktes Fahrzeug meldet evcc vehicleSoc 0 (prod 2026-09-23) —
+  // das waere fuer EOS ein leerer Akku und ein voller Ladeplan.
+  const evccPct = lp?.connected === true ? num(lp?.vehicleSocPct) : null;
   if (evccPct !== null && evccPct >= 0 && evccPct <= 100) return { pct: evccPct, source: 'evcc' };
 
   return null;
