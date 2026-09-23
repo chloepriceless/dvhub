@@ -12,6 +12,48 @@ verweist hierher.
 
 ### Neu
 
+- **Akku halten: Last aus dem Netz, wenn EOS es plant.** EOS entscheidet
+  manchmal, den Hausakku für später aufzusparen — etwa weil seine Energie
+  abends teuer verkauft werden kann — und Haus und E-Auto solange aus dem
+  Netz zu versorgen. Bisher setzte DVhub nur Einspeise-Viertelstunden um; in
+  allen anderen machte der Victron Eigenverbrauch und entlud den Akku genau
+  dafür. Neu setzt DVhub in diesen Viertelstunden alle 5 Sekunden
+  „Netzbezug = Live-Hauslast − Live-PV − Puffer“ (300 W, beim geplanten
+  E-Auto-Laden 1 kW). Der Bezug bleibt dabei immer unter der Last, der Akku
+  lädt nie aus dem Netz — deshalb gilt das Netzlade-Verbot für genau diese
+  Regel nicht, für alles andere unverändert. Einstellung „Akku halten“ unter
+  Zeitplan → Optimierung, Standard aus.
+- **E-Auto: Abfahrtszeit und Ladeziel.** Wöchentliche Abfahrt (Tage +
+  Uhrzeit) oder ein einmaliger Termin, Ziel in %, kWh oder km (über den
+  Verbrauch je 100 km). DVhub gibt EOS 0.4 daraus den Termin und den
+  Mindest-SoC; EOS plant die Ladung so, dass das Ziel bis zur Abfahrt steht.
+  Der SoC des Autos kommt aus TeslaMate oder evcc.
+- **E-Auto-Plan an die Wallbox — über evcc, OpenEVSE oder go-e.** EOS plant
+  je Viertelstunde „laden mit x A“ oder „nicht laden“; DVhub gibt das an den
+  gewählten Ladepunkt weiter: an evcc (Modus + Ladestrom), direkt an eine
+  OpenEVSE (auch Kinetos, über die Claims-API mit eigener Priorität — ein
+  Eingriff von Hand an der Box gewinnt immer) oder an einen go-e Charger
+  (API v2). Einstellbar und beobachtbar unter Integrationen → evcc,
+  inklusive Live-Status der Box.
+- **Weniger Arbeitsspeicher: jemalloc und Port-Recht über systemd.** DVhubs
+  JavaScript braucht ~40 MB, der Prozess belegte trotzdem 250–500 MB, weil
+  der C-Speicherverwalter freigegebenen Speicher nicht zurückgibt. Mit
+  jemalloc sinkt der Bedarf auf dem Raspberry Pi von ~245 auf ~130 MB. Dafür
+  bekommt der Dienst das Recht für Port 80/443/502 jetzt von systemd statt
+  per `setcap` an der node-Datei (die schaltete glibc in einen Modus, der
+  jemalloc verhinderte). Die Umstellung passiert beim Update von selbst über
+  zwei Starts, sodass DVhub nie ohne Port 80 startet; abschaltbar mit
+  `.no-jemalloc` im Datenverzeichnis.
+- **Historie → Jahresansicht → Direktvermarktung: Monatsverlauf als Chart
+  und Tabelle.** Marktwert Solar, erzielter Börsenpreis für PV direkt, für
+  den Speicher und kombiniert sowie der Ø-Börsenpreis je Monat; per
+  Umschalter auch als Tabelle der Erzeugungserlöse.
+- **EOS 0.4 im Dauerbetrieb.** Der Steuerzeitraum folgt der tatsächlichen
+  Preis- und Prognoseabdeckung (nachts reicht Day-Ahead nur bis Mitternacht;
+  0.4 bricht sonst jeden Lauf ab), der Akku-SoC geht minütlich an EOS
+  (0.4 akzeptiert nur Messwerte der letzten 5 Minuten), und eine zweite
+  EOS-Instanz lässt sich für einen A/B-Vergleich parallel betreiben.
+
 - **EOS-Fassung wird erkannt, beide Stände werden unterstützt.** DVhub fragt
   beim Konfigurationsabgleich einmal die EOS-Konfiguration ab und erkennt
   daraus, mit welcher Fassung es spricht: unserem DV-Fork, dem
@@ -131,6 +173,17 @@ verweist hierher.
 
 ### Behoben
 
+- **Erster EOS-Plan nach einem Neustart in Minuten statt 15–30 Minuten** —
+  sowohl nach einem DVhub- als auch nach einem EOS-Neustart. Bisher zählte
+  eine aus EOS' Datenbank wiederhergestellte alte Lösung als frisch, und der
+  Boot-Abgleich setzte den kurzfristig schnelleren EOS-Takt wieder zurück.
+- **Ohne E-Auto-SoC meldet DVhub das Auto bei EOS 0.4 ab**, statt jeden
+  Planungslauf mit „Fresh SoC missing“ scheitern zu lassen.
+- **`eos-provision.sh` verliert keine lokalen EOS-Anpassungen mehr**: sie
+  werden vor einem Versionswechsel gesichert, bei unverändertem Stand bleibt
+  der Checkout unangetastet.
+- **DV-Monatstabelle zeigt einen fehlenden Monatsmarktwert als „–“** statt
+  als 0 ct.
 - **EOS bekam die Gerätezähler nie gesetzt — und lieferte deshalb still keinen
   Plan mehr.** Der Konfigurationsabgleich schrieb Akku und Wechselrichter, aber
   nicht `devices/max_batteries` bzw. `max_inverters`. Ohne sie gilt die
