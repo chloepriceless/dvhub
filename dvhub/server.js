@@ -808,7 +808,14 @@ async function telemetrySafeWrite(action, { updateRollup = false, updateCleanup 
   }
   try {
     const result = await action();
-    await refreshTelemetryStatus();
+    // Nach einem erfolgreichen Schreiben ist der Status bekannt: Store lebt,
+    // letzter Schreibzeitpunkt = jetzt. Frueher lief hier refreshTelemetryStatus()
+    // → getStatus() mit COUNT(*) ueber die ganze Messwert-Tabelle (prod 2026-09:
+    // 81 Mio. Zeilen, 2,8 s) — bei ~0,6 Schreibvorgaengen/s staute sich das zu
+    // Dauerlast auf der Datenbank. getStatus() laeuft nur noch beim Start.
+    state.telemetry.enabled = !!cfg.telemetry?.enabled;
+    state.telemetry.ok = true;
+    state.telemetry.lastWriteAt = new Date().toISOString();
     if (updateRollup) state.telemetry.lastRollupAt = Date.now();
     if (updateCleanup) state.telemetry.lastCleanupAt = Date.now();
     lastTelemetryDownAlarmAt = 0; // recovered → re-arm the alarm for the next outage

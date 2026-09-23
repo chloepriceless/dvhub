@@ -426,6 +426,10 @@ export async function runPendingMigrations(pool, cfg = {}) {
 }
 
 export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
+  // Reihen, deren series_metadata-Zeile sicher existiert (nach COMMIT gemerkt).
+  // Spart den Upsert je Zeile: vorher 1 Abfrage pro Messwert, obwohl die Reihe
+  // praktisch immer schon bekannt ist.
+  const knownSeriesKeys = new Set();
 
   async function writeSamples(rows) {
     const client = await pool.connect();
@@ -440,12 +444,14 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       // back the metadata row (no leak). $1 placeholder, no string concat
       // (T-09.2-INJ mitigation). ON CONFLICT DO NOTHING means re-writes of
       // known keys are a no-op (cheap, no UPDATE).
-      for (const row of rows) {
+      // Nur neue Reihen, alle in einer Abfrage (unnest statt Schleife).
+      const newKeys = [...new Set(rows.map((row) => row.seriesKey))].filter((k) => k != null && !knownSeriesKeys.has(k));
+      if (newKeys.length) {
         await client.query(`
           INSERT INTO series_metadata (series_key, source)
-          VALUES ($1, 'unknown')
+          SELECT k, 'unknown' FROM unnest($1::text[]) AS k
           ON CONFLICT (series_key) DO NOTHING
-        `, [row.seriesKey]);
+        `, [newKeys]);
       }
       // T-0079 (P0-5): track which raw samples were genuinely INSERTed vs UPDATEd
       // on conflict (a replay/gap re-run). `RETURNING (xmax = 0)` is the standard
@@ -497,6 +503,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       }
 
       await client.query('COMMIT');
+      for (const k of newKeys) knownSeriesKeys.add(k);
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -1225,6 +1232,19 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     return rows;
   }
 
+  // Geschaetzte Zeilenzahl aus der Statistik statt COUNT(*). Hypertables
+  // (TimescaleDB) tragen ihre Zeilen in den Chunks, dafuer gibt es
+  // approximate_row_count(); ohne TimescaleDB reicht pg_class.reltuples.
+  async function estimateRowCount(table) {
+    try {
+      const r = await pool.query('SELECT approximate_row_count($1::regclass) AS n', [table]);
+      return Math.max(0, Number(r.rows[0]?.n || 0));
+    } catch {
+      const r = await pool.query('SELECT reltuples AS n FROM pg_class WHERE oid = $1::regclass', [table]);
+      return Math.max(0, Number(r.rows[0]?.n || 0));
+    }
+  }
+
   // Abdeckung von Reihen in genau einer Aufloesung, ohne die Zeilen zu laden
   // (PV-Strings-Uebersicht: bis zu 2 Jahre 5-Minuten-Werte je Reihe).
   async function seriesStats({ seriesKeys, resolution }) {
@@ -1429,8 +1449,10 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     async getStatus() {
       const lastSample = (await pool.query(`SELECT MAX(ts_utc) AS value FROM timeseries_samples`)).rows[0]?.value;
       const lastEvent = (await pool.query(`SELECT MAX(ts_utc) AS value FROM control_events`)).rows[0]?.value;
-      const sampleCount = (await pool.query(`SELECT COUNT(*) AS count FROM timeseries_samples`)).rows[0]?.count;
-      const eventCount = (await pool.query(`SELECT COUNT(*) AS count FROM control_events`)).rows[0]?.count;
+      // Zeilenzahlen nur geschaetzt: COUNT(*) kostete auf prod 2,8 s (81 Mio.
+      // Zeilen) und wird von niemandem gelesen.
+      const sampleCount = await estimateRowCount('timeseries_samples');
+      const eventCount = await estimateRowCount('control_events');
       return {
         dbPath: 'postgresql',
         rawRetentionDays,
