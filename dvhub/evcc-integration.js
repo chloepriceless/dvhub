@@ -1,21 +1,17 @@
 /**
- * evcc integration — protects the home battery while an EV is charging.
+ * evcc integration — evcc ist nur Durchreiche zur Wallbox.
  *
- * Polls evcc's /api/state. When any loadpoint reports charging=true, writes
- * Cerbo MaxDischargePower=0 (HOLD) so the EV draws from the grid rather than
- * the battery. When charging stops, releases the cap (MaxDischargePower=-1).
- *
- * The cap can be customised per config: holdValueW (default 0). For Stage-2-style
- * use cases ("don't pull more than 8 kW from the battery") set holdValueW: 8000.
- *
- * Only writes on edge transitions (start/stop) to avoid log spam and to leave
- * room for manual operator overrides between events.
+ * Liest evcc's /api/state (Ladepunkte, Fahrzeug, Ladeleistung) und setzt auf
+ * Anweisung Modus/Ladestrom (setMode/setMaxCurrent, genutzt von der EOS-Bruecke
+ * und dem Family-Dashboard). Der Hausakku wird hier NICHT angefasst: ob das
+ * Auto aus Akku, Netz oder anteilig geladen wird, entscheidet EOS.
+ * (Der fruehere Akkuschutz — maxDischargeW=0 waehrend des Ladens — ist
+ * 2026-09-23 entfallen; er uebersteuerte EOS' Plan.)
  */
 import { safeInterval } from './services/safe-async.js';
 import http from 'node:http';
 import https from 'node:https';
 
-const SOURCE_ID = 'evcc_battery_protect';
 
 function fetchJson(urlStr, { timeoutMs = 5000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -116,7 +112,6 @@ export function createEvccIntegration(ctx) {
 
   let timer = null;
   let lastCharging = false;
-  let lastTransitionAt = 0;
   let lastPolledAt = 0;
   let lastError = null;
   let lastChargePower = 0;
@@ -154,38 +149,9 @@ export function createEvccIntegration(ctx) {
       .map((f) => ({ class: f?.class || null, device: f?.device || null, error: String(f?.error || '').slice(0, 300) }))
       .slice(0, 10);
 
-    const charging = anyCharging(state);
+    lastCharging = anyCharging(state);
     lastChargePower = state?.loadpoints?.[0]?.chargePower ?? 0;
     lastBatterySoc = state?.battery?.soc ?? null;
-
-    // Battery-protect WRITE is the only part gated on `enabled` — the operator
-    // may want the dashboard/control without the auto battery-hold behaviour.
-    if (c.enabled === false) return;
-
-    if (charging === lastCharging) return; // no edge → no write
-
-    const holdValueW = Number.isFinite(Number(c.holdValueW)) ? Number(c.holdValueW) : 0;
-    const releaseValueW = Number.isFinite(Number(c.releaseValueW)) ? Number(c.releaseValueW) : -1;
-    const cap = charging ? holdValueW : releaseValueW;
-
-    try {
-      const result = await ctx.applyControlTarget('maxDischargeW', cap, SOURCE_ID);
-      if (result?.ok) {
-        lastCharging = charging;
-        lastTransitionAt = Date.now();
-        ctx.pushLog?.('evcc_battery_protect', {
-          charging,
-          cap,
-          chargePower: lastChargePower,
-          batterySoc: lastBatterySoc,
-          loadpointTitle: state?.loadpoints?.[0]?.title ?? null
-        });
-      } else {
-        ctx.pushLog?.('evcc_battery_protect_rejected', { charging, cap, error: result?.error });
-      }
-    } catch (e) {
-      ctx.pushLog?.('evcc_battery_protect_error', { error: e.message });
-    }
   }
 
   /**
@@ -243,16 +209,15 @@ export function createEvccIntegration(ctx) {
     start() {
       const c = getCfg();
       const intervalMs = Math.max(5000, Number(c.pollIntervalMs) || 15000);
-      // Poll whenever a URL is configured (dashboard read), independent of the
-      // battery-protect `enabled` flag. First tick immediately so a freshly
-      // started dvhub catches an already-charging EV / current loadpoint state.
+      // Poll whenever a URL is configured. First tick immediately so a freshly
+      // started dvhub has the current loadpoint state.
       // Der Takt laeuft auch ohne URL: tick() prueft sie jedes Mal. Sonst
       // wirkt eine spaeter in den Integrationen eingetragene Adresse erst nach
       // einem Neustart.
       tick();
       timer = safeInterval('evcc-integration.tick', tick, intervalMs);
       console.log(c.url
-        ? `[evcc] integration started, polling ${c.url} every ${intervalMs}ms (battery-protect ${c.enabled === false ? 'OFF' : 'ON'})`
+        ? `[evcc] integration started, polling ${c.url} every ${intervalMs}ms`
         : '[evcc] no url configured yet — polling starts once one is set');
     },
     stop() {
@@ -266,11 +231,9 @@ export function createEvccIntegration(ctx) {
     getStatus() {
       const c = getCfg();
       return {
-        enabled: c.enabled !== false,
         url: c.url || null,
         charging: lastCharging,
         lastPolledAt,
-        lastTransitionAt,
         lastError,
         lastChargePower,
         lastBatterySoc,

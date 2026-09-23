@@ -25,7 +25,6 @@ const INTENTIONAL = new Map([
   // Eigene Bedienoberfläche an anderer Stelle
   ['schedule.rules', 'Zeitplan-Editor auf der Zeitplan-Seite'],
   ['updateChannel', 'Auswahl im Werkzeug-Bereich (settings.html #updateChannel)'],
-  ['evcc.enabled', 'EVCC-Schublade auf der Integrationsseite'],
   ['evcc.url', 'EVCC-Schublade auf der Integrationsseite'],
   ['evcc.dashboardLoadpoint', 'EVCC-Schublade auf der Integrationsseite'],
   ['wallbox.type', 'EVCC-Schublade auf der Integrationsseite (Wallbox direkt)'],

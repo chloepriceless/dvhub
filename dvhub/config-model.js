@@ -3794,17 +3794,13 @@ export function createDefaultConfig() {
       // B change (per slot) → no flash wear on the persistent register.
       capLoadHeadroomW: 5000
     },
-    // evcc integration. Polls evcc /api/state and writes maxDischargeW=holdValueW (default 0 = HOLD)
-    // when an EV is charging, releases (-1 = unlimited) when charging stops. Edge-triggered, so it
-    // never fights with manual operator writes or other schedule rules between transitions.
-    // Set holdValueW to a positive number (e.g. 8000) if you want a cap instead of full hold.
+    // evcc integration: nur Durchreiche zur Wallbox (Zustand lesen, Modus/Strom
+    // setzen). Kein Akkuschutz mehr — ob das Auto aus Akku oder Netz laedt,
+    // entscheidet EOS (2026-09-23).
     evcc: {
-      enabled: false,
       url: '',  // T-0080: generic default (evcc off by default; operator sets their evcc URL).
       pollIntervalMs: 15000,
       requestTimeoutMs: 5000,
-      holdValueW: 0,
-      releaseValueW: -1,
       // #23 (2026-06-13): which evcc loadpoint the Family EV panel shows/controls
       // (1-based; null = first available). Configured on the Integrations page.
       dashboardLoadpoint: null

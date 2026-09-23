@@ -3430,7 +3430,6 @@ export function createApiRoutes(ctx) {
           const es = ctx.evccIntegration?.getStatus?.() || {};
           const lps = Array.isArray(es.loadpoints) ? es.loadpoints : [];
           return {
-            enabled: !!(getCfg().evcc?.enabled),
             url: getCfg().evcc?.url || null,
             reachable: lps.length > 0,
             loadpointCount: lps.length,
@@ -4403,7 +4402,7 @@ export function createApiRoutes(ctx) {
 
     // === EVCC integration config (operator request #23, 2026-06-13) ===
     // Configured on the Integrations page (sibling of /api/integrations/vrm).
-    // cfg.evcc.{url, enabled (battery-protect), dashboardLoadpoint}. GET also
+    // cfg.evcc.{url, dashboardLoadpoint}. GET also
     // returns the live loadpoint list + reachability so the page can populate
     // the loadpoint picker. POST does a dedicated server-side merge (never the
     // POST /api/config foot-gun).
@@ -4411,7 +4410,7 @@ export function createApiRoutes(ctx) {
     // GET: plant das Auto bei EOS mit, Abfahrt + Ziel, Fahrzeugzustand und der
     // EOS-Plan fuers Auto bis zur Abfahrt. POST: NUR optimizer.eosOptimizeEv und
     // die Abfahrtsfelder — anders als POST /api/integrations/evcc, das bei jedem
-    // Speichern auch evcc.enabled/dashboardLoadpoint neu setzt.
+    // Speichern auch evcc.url/dashboardLoadpoint neu setzt.
     if (url.pathname === '/api/ev' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
       const raw = ctx.getRawCfg?.() || {};
@@ -4673,7 +4672,10 @@ export function createApiRoutes(ctx) {
         Object.assign(next.optimizer, eosPatch);
       }
       next.evcc = (next.evcc && typeof next.evcc === 'object') ? next.evcc : {};
-      next.evcc.enabled = !!body.enabled;
+      // Akkuschutz entfallen (2026-09-23): Alt-Schalter aus der Config nehmen.
+      delete next.evcc.enabled;
+      delete next.evcc.holdValueW;
+      delete next.evcc.releaseValueW;
       next.evcc.url = String(body.url == null ? (next.evcc.url || '') : body.url).trim().slice(0, 256);
       next.evcc.dashboardLoadpoint = lp;
       try {
@@ -4683,7 +4685,6 @@ export function createApiRoutes(ctx) {
         return json(res, 500, { ok: false, error: 'save failed' });
       }
       pushLog('evcc_config_saved', {
-        enabled: next.evcc.enabled,
         urlSet: !!next.evcc.url,
         dashboardLoadpoint: next.evcc.dashboardLoadpoint,
         eos: eosPatch,
@@ -4691,7 +4692,6 @@ export function createApiRoutes(ctx) {
       }, actorContext(req));
       return json(res, 200, {
         ok: true,
-        enabled: next.evcc.enabled,
         url: next.evcc.url,
         dashboardLoadpoint: next.evcc.dashboardLoadpoint
       });

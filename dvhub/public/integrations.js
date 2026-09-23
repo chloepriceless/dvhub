@@ -2237,7 +2237,7 @@
   });
 
   // === EVCC Drawer Wiring (#23, 2026-06-13) ===
-  // Loads/saves cfg.evcc.{url, enabled (battery-protect), dashboardLoadpoint}
+  // Loads/saves cfg.evcc.{url, dashboardLoadpoint}
   // via the dedicated /api/integrations/evcc server-side-merge endpoint. The
   // loadpoint <select> is populated from the live loadpoint list the GET
   // returns. The Family EV panel then shows/controls the chosen loadpoint.
@@ -2249,7 +2249,6 @@
       var data = await res.json();
       if (!data || !data.ok) return;
       if (el('evcc-url')) el('evcc-url').value = data.url || '';
-      if (el('evcc-enabled')) el('evcc-enabled').checked = !!data.enabled;
       var sel = el('evcc-loadpoint');
       if (sel) {
         var lps = Array.isArray(data.loadpoints) ? data.loadpoints : [];
@@ -2506,7 +2505,6 @@
     var lpRaw = (el('evcc-loadpoint') && el('evcc-loadpoint').value) || '';
     var body = {
       url: urlVal,
-      enabled: !!(el('evcc-enabled') && el('evcc-enabled').checked),
       dashboardLoadpoint: lpRaw === '' ? null : parseInt(lpRaw, 10),
       eos: evccEosBody(),
       wallbox: wallboxBody()
