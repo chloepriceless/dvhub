@@ -32,6 +32,7 @@ const VRM_BASE = 'https://vrmapi.victronenergy.com';
 const SLOT_S = 300;
 const DAY_S = 86400;
 export const PV_STRING_KINDS = ['victron_vrm_tracker', 'fronius_mppt'];
+const RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 120_000];
 
 export function seriesKeyFor(id) {
   return `${PV_STRING_SERIES_PREFIX}${id}_w`;
@@ -514,6 +515,9 @@ export function createPvStringsService(ctx) {
    * Quellenart hoert fuer sich auf, sobald sie drei Tage in Folge nichts
    * liefert (Beginn ihrer Aufzeichnung): VRM reicht bei prod ~6 Monate, der
    * Fronius ~14. VRM drosselt, daher 1,5 s Pause nach jedem VRM-Tag.
+   * Ein Fehler (Netzaussetzer, VRM kurz weg) bricht nicht sofort ab: der Tag
+   * wird bis zu viermal mit wachsender Pause wiederholt — Schreiben ist ein
+   * Upsert, Wiederholen also harmlos.
    */
   async function backfill({ days } = {}) {
     if (status.backfill.running) return { ok: false, error: 'laeuft bereits' };
@@ -536,9 +540,14 @@ export function createPvStringsService(ctx) {
         const date = shiftDate(today, -d);
         const startS = localMidnightS(date, tz);
         const endS = d === 0 ? endToday : localMidnightS(shiftDate(date, 1), tz);
-        const r = await syncWindow(startS, endS, { skip });
-        if (r.bySource.vrm && !r.bySource.vrm.ok && r.bySource.vrm.status === 429) { await sleep(30_000); d -= 1; continue; }
-        if (!r.ok) throw new Error(r.error);
+        let r = await syncWindow(startS, endS, { skip });
+        for (let attempt = 0; !r.ok && attempt < RETRY_DELAYS_MS.length; attempt += 1) {
+          const limited = r.bySource.vrm && !r.bySource.vrm.ok && r.bySource.vrm.status === 429;
+          pushLog('pv_strings_backfill_retry', { date, attempt: attempt + 1, error: r.error });
+          await sleep(limited ? Math.max(30_000, RETRY_DELAYS_MS[attempt]) : RETRY_DELAYS_MS[attempt]);
+          r = await syncWindow(startS, endS, { skip });
+        }
+        if (!r.ok) throw new Error(`${date}: ${r.error}`);
         status.backfill.doneDays = d + 1;
         for (const k of kinds) {
           if (skip.has(k)) continue;

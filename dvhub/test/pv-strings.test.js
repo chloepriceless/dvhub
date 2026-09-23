@@ -378,6 +378,22 @@ describe('Dienst: Fronius + Gruppe', () => {
     assert.equal(f.calls.filter((u) => !u.includes('vrmapi')).length, 11);
   });
 
+  test('Nachladen: Aussetzer wird wiederholt statt abzubrechen; Dauerfehler bricht mit Datum ab', async () => {
+    let n = 0;
+    const today = localDate(mid + 86400 * 10);
+    const flaky = setup({
+      nowS: localMidnightS(today) + 43200,
+      vrm: () => { n += 1; if (n === 2) throw new Error('fetch failed'); return vrmGraphBody({ 0: minutePoints(W0, 5, 100), 1: [] }); }
+    });
+    const r = await flaky.svc.backfill({ days: 3 });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.doneDays, 3);
+    const dead = setup({ nowS: localMidnightS(today) + 43200, vrm: () => { throw new Error('fetch failed'); } });
+    const r2 = await dead.svc.backfill({ days: 3 });
+    assert.equal(r2.ok, false);
+    assert.match(r2.error, /^\d{4}-\d{2}-\d{2}: fetch failed/);
+  });
+
   test('syncRecent holt einmal am Tag den ganzen Vortag nach', async () => {
     const { svc, f } = setup({ nowS: mid + 86400 + 3600 * 12 });
     await svc.syncRecent();
