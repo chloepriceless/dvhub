@@ -425,6 +425,13 @@ export async function runPendingMigrations(pool, cfg = {}) {
   }
 }
 
+// Zeilen je INSERT beim Messwert-Schreiben (Parameter sind Arrays, die Zahl
+// der Platzhalter bleibt 10 — die Grenze haelt nur die Abfragegroesse klein).
+const SAMPLE_INSERT_CHUNK = 5000;
+function sampleKey(seriesKey, scope, source, quality, tsIso, resolutionSeconds) {
+  return `${seriesKey}\u0000${scope}\u0000${source}\u0000${quality}\u0000${tsIso}\u0000${resolutionSeconds}`;
+}
+
 export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   // Reihen, deren series_metadata-Zeile sicher existiert (nach COMMIT gemerkt).
   // Spart den Upsert je Zeile: vorher 1 Abfrage pro Messwert, obwohl die Reihe
@@ -459,47 +466,77 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       // xmax != 0 ⇒ it was an ON CONFLICT update. Only newly-inserted samples feed
       // the accumulate-mode materialized-slot writes below, so re-processing the
       // same samples never double-counts the slot energy.
-      const insertedFlags = new Array(rows.length).fill(true);
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
+      //
+      // Ein INSERT je Paket statt je Zeile (unnest ueber Spalten-Arrays): ein
+      // Live-Schreibvorgang hat ~14 Zeilen, ein Nachladen Tausende. ON CONFLICT
+      // darf dieselbe Zeile nicht zweimal treffen — doppelte Schluessel im Paket
+      // werden vorher zusammengefasst: gespeichert wird der LETZTE Wert, als
+      // "neu" zaehlt nur das ERSTE Vorkommen (genau wie frueher zeilenweise:
+      // erstes INSERT, danach UPDATE).
+      const insertedFlags = new Array(rows.length).fill(false);
+      const firstIndexByKey = new Map();
+      const lastRowByKey = new Map();
+      rows.forEach((row, i) => {
+        const key = sampleKey(row.seriesKey, row.scope || 'live', row.source || 'local_poll', row.quality || 'raw', isoTimestamp(row.ts), Number(row.resolutionSeconds || 1));
+        if (!firstIndexByKey.has(key)) firstIndexByKey.set(key, i);
+        lastRowByKey.set(key, row);
+      });
+      const unique = [...lastRowByKey.values()];
+      for (let off = 0; off < unique.length; off += SAMPLE_INSERT_CHUNK) {
+        const chunk = unique.slice(off, off + SAMPLE_INSERT_CHUNK);
         const res = await client.query(`
           INSERT INTO timeseries_samples
             (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num, value_text, unit, meta_json)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          SELECT k, sc, so, q, ts, r, v, vt, u, m::jsonb
+          FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::int[], $7::float8[], $8::text[], $9::text[], $10::text[])
+            AS t(k, sc, so, q, ts, r, v, vt, u, m)
           ON CONFLICT (series_key, scope, source, quality, ts_utc, resolution_seconds)
           DO UPDATE SET value_num = EXCLUDED.value_num, value_text = EXCLUDED.value_text, unit = EXCLUDED.unit, meta_json = EXCLUDED.meta_json
-          RETURNING (xmax = 0) AS inserted
+          RETURNING series_key, scope, source, quality, ts_utc, resolution_seconds, (xmax = 0) AS inserted
         `, [
-          row.seriesKey,
-          row.scope || 'live',
-          row.source || 'local_poll',
-          row.quality || 'raw',
-          isoTimestamp(row.ts),
-          Number(row.resolutionSeconds || 1),
-          row.value == null ? null : Number(row.value),
-          row.valueText ?? null,
-          row.unit ?? null,
-          row.meta == null ? null : JSON.stringify(row.meta)
+          chunk.map((row) => row.seriesKey),
+          chunk.map((row) => row.scope || 'live'),
+          chunk.map((row) => row.source || 'local_poll'),
+          chunk.map((row) => row.quality || 'raw'),
+          chunk.map((row) => isoTimestamp(row.ts)),
+          chunk.map((row) => Number(row.resolutionSeconds || 1)),
+          chunk.map((row) => (row.value == null ? null : Number(row.value))),
+          chunk.map((row) => row.valueText ?? null),
+          chunk.map((row) => row.unit ?? null),
+          chunk.map((row) => (row.meta == null ? null : JSON.stringify(row.meta)))
         ]);
-        insertedFlags[i] = res.rows?.[0]?.inserted === true;
+        for (const r of res.rows || []) {
+          if (r.inserted !== true) continue;
+          const idx = firstIndexByKey.get(sampleKey(r.series_key, r.scope, r.source, r.quality, isoTimestamp(r.ts_utc), Number(r.resolution_seconds)));
+          if (idx !== undefined) insertedFlags[idx] = true;
+        }
       }
 
-      for (const slotRow of buildMaterializedEnergySlotWrites(rows, (row, i) => insertedFlags[i] === true)) {
-        if (slotRow.writeMode === 'replace') {
-          await client.query(`
-            INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, unit, meta_json)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (slot_start_utc, series_key, source_kind)
-            DO UPDATE SET quality = EXCLUDED.quality, value_num = EXCLUDED.value_num, unit = EXCLUDED.unit, meta_json = EXCLUDED.meta_json, updated_at = now()
-          `, [slotRow.slotStartUtc, slotRow.seriesKey, slotRow.sourceKind, slotRow.quality, slotRow.valueNum, slotRow.unit, slotRow.meta == null ? null : JSON.stringify(slotRow.meta)]);
-        } else {
-          await client.query(`
-            INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, unit, meta_json)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (slot_start_utc, series_key, source_kind)
-            DO UPDATE SET quality = EXCLUDED.quality, value_num = COALESCE(energy_slots_15m.value_num, 0) + COALESCE(EXCLUDED.value_num, 0), unit = EXCLUDED.unit, meta_json = EXCLUDED.meta_json, updated_at = now()
-          `, [slotRow.slotStartUtc, slotRow.seriesKey, slotRow.sourceKind, slotRow.quality, slotRow.valueNum, slotRow.unit, slotRow.meta == null ? null : JSON.stringify(slotRow.meta)]);
-        }
+      // Energie-Slots: je Modus eine Abfrage. buildMaterializedEnergySlotWrites
+      // fasst bereits je (Slot, Reihe, Quelle) zusammen — kein Schluessel doppelt.
+      const slotWrites = buildMaterializedEnergySlotWrites(rows, (row, i) => insertedFlags[i] === true);
+      for (const mode of ['replace', 'accumulate']) {
+        const list = slotWrites.filter((w) => (mode === 'replace' ? w.writeMode === 'replace' : w.writeMode !== 'replace'));
+        if (!list.length) continue;
+        const valueExpr = mode === 'replace'
+          ? 'EXCLUDED.value_num'
+          : 'COALESCE(energy_slots_15m.value_num, 0) + COALESCE(EXCLUDED.value_num, 0)';
+        await client.query(`
+          INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, unit, meta_json)
+          SELECT st, k, sk, q, v, u, m::jsonb
+          FROM unnest($1::timestamptz[], $2::text[], $3::text[], $4::text[], $5::float8[], $6::text[], $7::text[])
+            AS t(st, k, sk, q, v, u, m)
+          ON CONFLICT (slot_start_utc, series_key, source_kind)
+          DO UPDATE SET quality = EXCLUDED.quality, value_num = ${valueExpr}, unit = EXCLUDED.unit, meta_json = EXCLUDED.meta_json, updated_at = now()
+        `, [
+          list.map((w) => w.slotStartUtc),
+          list.map((w) => w.seriesKey),
+          list.map((w) => w.sourceKind),
+          list.map((w) => w.quality),
+          list.map((w) => w.valueNum),
+          list.map((w) => w.unit),
+          list.map((w) => (w.meta == null ? null : JSON.stringify(w.meta)))
+        ]);
       }
 
       await client.query('COMMIT');
