@@ -178,7 +178,7 @@
     var tgt = res && res.targetSocPct != null ? res.targetSocPct + ' %' : '—';
     if (mode !== 'percent' && data.departure.targetValue != null) tgt += ' (' + fmtNum(data.departure.targetValue) + ' ' + UNITS[mode] + ')';
     el('evSocTarget').textContent = tgt;
-    el('evSocNow').title = v.socSource ? 'Quelle: ' + v.socSource + (v.rangeKm != null ? ' · ' + v.rangeKm + ' km' : '') : '';
+    el('evSocNow').title = v.socSource ? 'Quelle: ' + v.socSource + (v.rangeKm > 0 ? ' · ' + v.rangeKm + ' km' : '') : '';
     renderState();
     renderTimeline();
     renderSummary();

@@ -1233,7 +1233,7 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .ev-timeline .ev-base { stroke:var(--hairline); vector-effect:non-scaling-stroke; }
 .ev-timeline-axis { display:flex; justify-content:space-between; font-family:var(--f-mono); font-size:10px; color:var(--text-dim); }
 .ev-inline { display:inline-flex; align-items:center; gap:8px; }
-.ev-time { width:92px; padding:3px 6px; font-size:12px; }
+.ev-time { width:104px; padding:3px 6px; font-size:12px; }
 .ev-target { width:62px; padding:3px 6px; font-size:12px; text-align:right; }
 .ev-unit { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); min-width:22px; }
 .switch.switch-sm { width:30px; height:17px; }
