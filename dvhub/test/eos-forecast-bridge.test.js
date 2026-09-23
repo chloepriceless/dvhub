@@ -481,15 +481,26 @@ test('watchdog: EOS pid change triggers an immediate reconcile (providers + data
       state: { victron: { soc: 50 } },
     };
     const bridge = createEosForecastBridge(ctx);
-    bridge.start({ fireImmediately: false, intervalMs: 100000, watchdogMs: 20, beforePush: async () => { beforeCount += 1; } });
+    const restarts = [];
+    let pushesBeforeRestartHook = null;
+    bridge.start({
+      fireImmediately: false, intervalMs: 100000, watchdogMs: 20,
+      beforePush: async () => { beforeCount += 1; },
+      onEosRestart: (info) => { restarts.push(info); pushesBeforeRestartHook = beforeCount; },
+    });
     // Let the watchdog record the initial pid — no reconcile while it is stable.
     await new Promise((r) => setTimeout(r, 70));
     assert.equal(beforeCount, 0, 'stable pid must not reconcile');
+    assert.equal(restarts.length, 0, 'kein Neustart-Hook ohne Neustart');
     // Simulate an EOS restart: the pid changes.
     pid = 2000;
     await new Promise((r) => setTimeout(r, 90));
     bridge.stop();
     assert.ok(beforeCount >= 1, 'pid change must trigger a reconcile tick (config-sync beforePush ran)');
+    // Der Optimizer wird erst NACH dem Neu-Push benachrichtigt (sonst haette
+    // EOS beim Abholen noch keine Prognosen) — und genau einmal.
+    assert.deepEqual(restarts, [{ oldPid: 1000, newPid: 2000 }]);
+    assert.ok(pushesBeforeRestartHook >= 1, 'Hook nach dem Reconcile-Tick');
     assert.ok(
       logs.some((l) => l.ev === 'eos_restart_detected' && l.d.oldPid === 1000 && l.d.newPid === 2000),
       'eos_restart_detected must log old + new pid',
@@ -642,6 +653,13 @@ describe('Steuerzeitraum = Preisabdeckung (EOS 0.4)', () => {
 
   test('der laufende Slot fehlt: keine Abdeckung', () => {
     assert.equal(computeControlHorizonHours([slots(Date.parse('2026-09-23T01:00:00Z'), 40)], now), null);
+  });
+
+  test('Reihe ganz ohne Werte zaehlt nicht mit (wird auch nicht geschickt)', () => {
+    const list = slots(Date.parse('2026-09-22T22:00:00Z'), (midnight - Date.parse('2026-09-22T22:00:00Z')) / Q);
+    assert.equal(computeControlHorizonHours([list, []], now), 21);
+    assert.equal(computeControlHorizonHours([list, [{ start: 'x', powerW: null }]], now), 21);
+    assert.equal(computeControlHorizonHours([[], []], now), null, 'gar keine Werte: kein Zeitraum');
   });
 
   test('knapp belegt: mindestens 1 h', () => {

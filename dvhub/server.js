@@ -1889,6 +1889,7 @@ if (IS_RUNTIME_PROCESS) {
       eosForecastBridge.start({
         intervalMs: _pushIntervalMs,
         fireImmediately: false,
+        onEosRestart: () => optimizer.notifyEosRestart(),
         beforePush: async () => {
           try { await eosConfigSync.sync(); }
           catch (e) {

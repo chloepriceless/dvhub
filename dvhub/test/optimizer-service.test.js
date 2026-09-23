@@ -87,6 +87,18 @@ describe('Optimizer Service', () => {
     assert.equal(typeof svc.getStatus, 'function');
   });
 
+  test('notifyEosRestart stoesst sofort einen Lauf an (holt den ersten Plan der neuen EOS-Instanz)', async () => {
+    const logs = [];
+    const { ctx, state } = buildCtx({ ctx: { pushLog: (ev) => logs.push(ev) } });
+    const svc = createOptimizerService(ctx);
+    assert.equal(state.optimizer.runCount, 0);
+    svc.notifyEosRestart();
+    await new Promise(r => setTimeout(r, 100));
+    assert.ok(logs.includes('eos_restart_first_plan'));
+    assert.ok(state.optimizer.runCount >= 1, 'ohne Neustart-Hook liefe erst der naechste regulaere Takt');
+    await svc.close();
+  });
+
   test('getStatus returns initial state with enabled=false, lastRunAt=null', () => {
     const { ctx } = buildCtx();
     const svc = createOptimizerService(ctx);

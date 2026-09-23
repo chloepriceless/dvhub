@@ -194,7 +194,8 @@ function eosHttpRequest(baseUrl, method, path, body) {
 /**
  * Wie viele volle Stunden ab `nowMs` sind in ALLEN Preisreihen lueckenlos
  * belegt? Slots `{start, powerW}` (15 min). Minus 15 min Puffer, begrenzt auf
- * 1..24. null, wenn keine Reihe Werte hat.
+ * 1..24. Reihen ohne einen einzigen Wert zaehlen nicht mit. null, wenn keine
+ * Reihe Werte hat oder eine Reihe den laufenden Slot nicht abdeckt.
  */
 export function computeControlHorizonHours(slotLists, nowMs, { slotMs = 15 * 60_000, maxHours = 24 } = {}) {
   let coveredUntil = Infinity;
@@ -204,6 +205,9 @@ export function computeControlHorizonHours(slotLists, nowMs, { slotMs = 15 * 60_
       .filter((s) => s && Number.isFinite(Number(s.powerW)))
       .map((s) => Date.parse(s.start))
       .filter(Number.isFinite))].sort((a, b) => a - b);
+    // Reihe ganz ohne Werte (z. B. Einspeisetarif nicht konfiguriert): sie
+    // wird gar nicht an EOS geschickt und darf den Zeitraum nicht kippen.
+    if (starts.length === 0) continue;
     // Slot-Laenge je Reihe aus den Daten (PV kann stuendlich kommen) — sonst
     // saehe eine Stundenreihe nach 15 min wie eine Luecke aus.
     let stepMs = slotMs;
@@ -677,6 +681,8 @@ export function createEosForecastBridge(ctx) {
    *   Polls /v1/health for the EOS pid; on a pid change (= EOS restarted) it runs
    *   a full reconcile tick immediately so providers + data recover in ~seconds
    *   instead of waiting up to intervalMs.
+   * @param {Function} [opts.onEosRestart] - called after that reconcile tick,
+   *   so the optimizer can fetch the first plan of the new EOS process quickly.
    */
   function start(opts = {}) {
     if (tickHandle) return;
@@ -721,9 +727,13 @@ export function createEosForecastBridge(ctx) {
       const pid = await readEosPid(baseUrl);
       if (pid === null) return; // EOS unreachable / still starting — decide next poll
       if (lastEosPid !== null && pid !== lastEosPid) {
+        const lastEosPidBefore = lastEosPid;
         if (pushLog) pushLog('eos_restart_detected', { oldPid: lastEosPid, newPid: pid });
         lastEosPid = pid;
         await tick(); // re-assert providers + re-push data immediately
+        if (typeof opts.onEosRestart === 'function') {
+          try { await opts.onEosRestart({ oldPid: lastEosPidBefore, newPid: pid }); } catch { /* caller logs */ }
+        }
         return;
       }
       lastEosPid = pid;

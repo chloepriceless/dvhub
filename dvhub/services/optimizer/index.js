@@ -205,21 +205,7 @@ export function createOptimizerService(ctx) {
   const eosFirstPlanWatch = createEosFirstPlanWatch({
     hasFreshSolution: async (sinceMs) => isFreshEosSolution(await eosAdapter.getOptimizationSolution(1), sinceMs),
     setEmsIntervalSec: (sec) => eosAdapter.setEmsIntervalSec(sec),
-    triggerOptimization: () => {
-      // Laeuft gerade ein Optimierungslauf, verpufft der Aufruf am
-      // isRunning-Mutex in runOptimization — und der frische EOS-Plan bliebe bis zum
-      // naechsten regulaeren Lauf liegen, also genau die Wartezeit, die diese
-      // Wache abschafft. Darum kurz spaeter erneut anstossen.
-      const kick = (versuch = 0) => {
-        if (isRunning && versuch < 3) {
-          const t = setTimeout(() => kick(versuch + 1), 5_000);
-          if (typeof t.unref === 'function') t.unref();
-          return;
-        }
-        runOptimization().catch(err => pushLog('optimizer_error', { error: err.message }));
-      };
-      kick();
-    },
+    triggerOptimization: () => kickOptimization(),
     pushLog,
     // Als Getter, nicht als Wert: der Dienst wird gebaut, bevor zwingend eine
     // Config vorliegt — und ein GUI-Save wirkt so ohne Neustart.
@@ -247,6 +233,33 @@ export function createOptimizerService(ctx) {
   // Run mutex and generation guard
   let runGeneration = 0;
   let isRunning = false;
+
+  // Laeuft gerade ein Optimierungslauf, verpufft ein Aufruf am isRunning-Mutex
+  // in runOptimization — und ein frischer EOS-Plan bliebe bis zum naechsten
+  // regulaeren Lauf liegen. Darum kurz spaeter erneut anstossen.
+  function kickOptimization(versuch = 0) {
+    if (isRunning && versuch < 3) {
+      const t = setTimeout(() => kickOptimization(versuch + 1), 5_000);
+      if (typeof t.unref === 'function') t.unref();
+      return;
+    }
+    runOptimization().catch(err => pushLog('optimizer_error', { error: err.message }));
+  }
+
+  /**
+   * EOS wurde neu gestartet (Wache in eos-forecast-bridge.js, neue pid in
+   * /v1/health). Die Bruecke hat Prognosen und Config schon neu geschickt; EOS
+   * rechnet damit aber erst zum naechsten ems.interval-Tick (bis 15 min), und
+   * die aus EOS' Datenbank wiederhergestellte Loesung gilt faelschlich als
+   * frisch, weil eosFirstPushAt noch vom DVhub-Start stammt. Deshalb: Zeitpunkt
+   * zuruecksetzen und einen Lauf anstossen — der pusht, findet keine frische
+   * Loesung und macht die Erstplan-Wache scharf (Boost auf 60 s).
+   */
+  function notifyEosRestart() {
+    eosFirstPushAt = null;
+    pushLog('eos_restart_first_plan', {});
+    kickOptimization();
+  }
 
   /**
    * Core optimization run. Gates on optimizer.enabled per run (NOT in start()).
@@ -726,6 +739,7 @@ export function createOptimizerService(ctx) {
   return {
     start,
     close,
+    notifyEosRestart,
     getSchedule: () => state.optimizer.lastSchedule,
     getStatus: () => ({ ...state.optimizer, mispel: state.optimizer.mispel })
   };
