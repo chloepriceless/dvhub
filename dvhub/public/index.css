@@ -271,6 +271,12 @@
   display:flex; flex-direction:column;
 }
 .pf-shell .dvhub-powerflow { flex:1; position:relative; min-height:340px; }
+/* Hochformat (Handy/Tablet, einspaltig): 20 % hoeher, sonst liegen PV-Wert,
+   Bilanz, Haus und Netz uebereinander (Christin 2026-09-23). */
+@media (max-width:1280px) and (orientation:portrait) {
+  .pf-shell { min-height:432px; }
+  .pf-shell .dvhub-powerflow { min-height:432px; }
+}
 
 /* ─── Steuerung card · direct-write rows ─── */
 .ctrl-section-head { margin-top:10px; }
