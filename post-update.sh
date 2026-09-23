@@ -30,7 +30,7 @@ echo "DVhub post-update (idempotent)"
 # → libstrongswan-standard-plugins = Crypto-Plugins). NIE pauschal
 # --no-install-recommends auf die ganze Liste!
 NEEDED_PKGS=""
-for pkg in openvpn strongswan autossh openssh-client; do
+for pkg in openvpn strongswan autossh openssh-client libjemalloc2; do
   if ! dpkg -s "$pkg" >/dev/null 2>&1; then
     NEEDED_PKGS="$NEEDED_PKGS $pkg"
   fi
@@ -63,9 +63,15 @@ else
   echo "  Pakete: OK"
 fi
 
-# ── 2. Node capabilities (privileged ports 80, 443, 502) ──
+# ── 2. Port-Recht (80, 443, 502) + Speicherverwalter ──
+# Frueher setcap an der node-Datei; jetzt AmbientCapabilities + jemalloc per
+# Drop-in, Umstieg ueber zwei Starts (Begruendung in node-runtime-provision.sh).
+# Fehlt das Skript (Teil-Deploy), bleibt es beim alten setcap.
 NODE_BIN="$(command -v node)"
-if [[ -n "$NODE_BIN" ]]; then
+if [[ -f "$INSTALL_DIR/node-runtime-provision.sh" ]]; then
+  SERVICE_NAME="$SERVICE_NAME" DATA_DIR="$DATA_DIR" NODE_BIN="$NODE_BIN" \
+    bash "$INSTALL_DIR/node-runtime-provision.sh" || true
+elif [[ -n "$NODE_BIN" ]]; then
   setcap cap_net_bind_service=+ep "$NODE_BIN" 2>/dev/null || true
   echo "  setcap: OK ($NODE_BIN)"
 fi

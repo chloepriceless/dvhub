@@ -303,7 +303,7 @@ apt-get update
 # Distro-generic name pulls python3.11-venv@Debian12 / python3.12-venv@Ubuntu24.
 # autossh + openssh-client: T-0113 reverse-SSH support tunnel (autossh self-heals
 # the outbound tunnel; ssh-keygen from openssh-client mints the relay keypair).
-apt-get install -y curl ca-certificates git sudo postgresql openvpn strongswan python3-venv python3-pip autossh openssh-client
+apt-get install -y curl ca-certificates git sudo postgresql openvpn strongswan python3-venv python3-pip autossh openssh-client libjemalloc2
 # wireguard-tools SEPARAT und OHNE Recommends (T-UPDATE-SHARPEN 2026-07-03): sein
 # Recommends `wireguard-modules` ist ein virtuelles Paket, das nur von linux-image-*
 # bereitgestellt wird — in einem LXC/Container (kein Kernel-Paket installiert) löst
@@ -397,11 +397,9 @@ echo "[5/7] Node-Abhaengigkeiten installieren"
 cd "$APP_DIR"
 npm install --omit=dev
 
-# Allow node to bind privileged ports (e.g. 502 for Modbus with VPN)
-NODE_BIN="$(command -v node)"
-if [[ -n "$NODE_BIN" ]]; then
-  setcap cap_net_bind_service=+ep "$NODE_BIN" 2>/dev/null || true
-fi
+# Port-Recht (80/443/502) bekommt der Dienst ueber systemd (AmbientCapabilities,
+# node-runtime-provision.sh nach dem Schreiben der Unit) — NICHT mehr per setcap
+# an der node-Datei: die schaltet glibc in den secure mode und verhindert jemalloc.
 
 # --- Python venv for PV forecast + ML stack (shared forecast-provision.sh) ---
 # The provisioning logic lives in the shared forecast-provision.sh (single source
@@ -679,6 +677,13 @@ TimeoutStopSec=15
 [Install]
 WantedBy=multi-user.target
 SERVICE
+
+# Port-Recht ueber systemd + jemalloc (Drop-in). FRESH: der Dienst startet erst
+# danach, also wirkt beides schon beim ersten Start.
+if [[ -f "$INSTALL_DIR/node-runtime-provision.sh" ]]; then
+  NODE_RUNTIME_FRESH=1 SERVICE_NAME="$SERVICE_NAME" DATA_DIR="$DATA_DIR" \
+    bash "$INSTALL_DIR/node-runtime-provision.sh" || true
+fi
 
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}.service"

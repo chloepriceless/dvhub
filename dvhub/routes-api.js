@@ -6678,9 +6678,16 @@ export function createApiRoutes(ctx) {
              '-o', 'Dpkg::Options::=--force-confdef',
              '-o', 'Dpkg::Options::=--force-confold'];
         const result = await execFileAsync('sudo', aptCmd, { timeout: 300000 });
-        // Re-apply setcap in case node was upgraded
-        const nodeBin = (await execFileAsync('which', ['node'], { timeout: 5000 }).catch(() => ({ stdout: '/usr/bin/node' }))).stdout.trim();
-        await execFileAsync('sudo', ['setcap', 'cap_net_bind_service=+ep', nodeBin], { timeout: 5000 }).catch(() => {});
+        // Ein node-Update loescht die Datei-Capability. Nur Boxen, deren Dienst
+        // das Port-Recht noch NICHT ueber systemd bekommt (vor
+        // node-runtime-provision.sh), brauchen setcap zurueck — sonst bliebe
+        // node im secure mode und jemalloc waere still wieder aus.
+        const unitAmbient = (await execFileAsync('systemctl', ['show', process.env.DV_SERVICE_NAME || 'dvhub.service', '-p', 'AmbientCapabilities', '--value'], { timeout: 5000 })
+          .catch(() => ({ stdout: '' }))).stdout;
+        if (!/cap_net_bind_service/.test(unitAmbient)) {
+          const nodeBin = (await execFileAsync('which', ['node'], { timeout: 5000 }).catch(() => ({ stdout: '/usr/bin/node' }))).stdout.trim();
+          await execFileAsync('sudo', ['setcap', 'cap_net_bind_service=+ep', nodeBin], { timeout: 5000 }).catch(() => {});
+        }
 
         const outputLines = (result.stdout || '').split('\n');
         const upgraded = outputLines.filter(l => /^Setting up/.test(l)).map(l => l.replace('Setting up ', '').replace(/ \(.*/, ''));
