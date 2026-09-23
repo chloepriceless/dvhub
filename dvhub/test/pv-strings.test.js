@@ -168,7 +168,7 @@ describe('Fronius', () => {
     const f = fakeFetch(() => froniusArchive(DAY, { 1: [[36000, 10, 600], [36300, 11, 600]], 2: [[36300, 2, 500]] }));
     const r = await fetchFroniusDay({ host: '192.168.1.50', mppts: [1, 2], date: DAY, nowS: mid + 2 * 86400, fetchImpl: f });
     assert.equal(r.ok, true);
-    assert.match(f.calls[0], /^http:\/\/192\.168\.20\.18\/solar_api\/v1\/GetArchiveData\.cgi\?Scope=System&StartDate=2026-09-22&EndDate=2026-09-22&Channel=Current_DC_String_1&Channel=Voltage_DC_String_1&Channel=Current_DC_String_2/);
+    assert.match(f.calls[0], /^http:\/\/192\.168\.1\.50\/solar_api\/v1\/GetArchiveData\.cgi\?Scope=System&StartDate=2026-09-22&EndDate=2026-09-22&Channel=Current_DC_String_1&Channel=Voltage_DC_String_1&Channel=Current_DC_String_2/);
     const m1 = r.byMppt.get(1);
     assert.equal(m1.length, 288, 'ganzer Tag, Rest mit 0 W');
     const byT = new Map(m1.map((x) => [x.slotStartS - mid, x]));
@@ -341,7 +341,7 @@ describe('Dienst: Fronius + Gruppe', () => {
     const { svc, store } = setup({ fronius: () => { throw new Error('ECONNREFUSED'); } });
     const r = await svc.syncWindow(W0, W0 + 600);
     assert.equal(r.ok, false);
-    assert.match(r.error, /Fronius 192\.168\.20\.18/);
+    assert.match(r.error, /Fronius 192\.168\.1\.50/);
     assert.equal(val(store, 'sued-rs-a', W0), 1000);
     assert.equal(val(store, 'sued', W0), undefined);
   });
