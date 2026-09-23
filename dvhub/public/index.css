@@ -77,9 +77,21 @@
   display:grid;
   gap:var(--gap-3);
   grid-template-columns:300px 1fr 320px;
+  /* Boersenchart unter linker Spalte + Energiefluss, rechte Spalte ueber beide
+     Zeilen: so bestimmt die linke Spalte die Hoehe des Energieflusses, nicht
+     die (mit der E-Auto-Kachel hoehere) rechte. */
+  grid-template-areas:
+    "left pf   right"
+    "epex epex right";
+  grid-template-rows:auto 1fr;
 }
+.leit-grid > .rail:first-child { grid-area:left; }
+.leit-grid > .pf-shell { grid-area:pf; }
+.leit-grid > .rail:last-of-type { grid-area:right; }
+.leit-grid > .leit-epex { grid-area:epex; margin-top:0; align-self:start; }
 @media (max-width:1280px) {
-  .leit-grid { grid-template-columns:1fr; }
+  .leit-grid { grid-template-columns:1fr; grid-template-areas:none; grid-template-rows:none; }
+  .leit-grid > .rail:first-child, .leit-grid > .pf-shell, .leit-grid > .rail:last-of-type, .leit-grid > .leit-epex { grid-area:auto; }
   /* Mobile / narrow: Powerflow is the most actionable info — surface it
      first so the user doesn't have to scroll past the rails on a phone. */
   .leit-grid > .pf-shell { order:-1; }

@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css?v=20260708-daylight">
-  <link rel="stylesheet" href="/index.css?v=20260923-ev2">
+  <link rel="stylesheet" href="/index.css?v=20260923-ev3">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Leitstand">
@@ -281,38 +281,41 @@
 
     </aside>
 
-  </section>
-
-  <!-- EPEX Day-Ahead chart (full width) -->
-  <section class="section-block" data-screen-label="EPEX Day-Ahead">
-    <div class="card chart-card">
-      <div class="card-head">
-        <span class="card-title"><span class="dot dot-cyan"></span>Day-Ahead-Preise (ct/kWh)</span>
-        <div class="card-actions">
+    <!-- EPEX Day-Ahead chart: unter linker Spalte + Energiefluss, die rechte
+         Spalte laeuft daneben weiter (Christin 2026-09-23 — sonst zog die hohe
+         rechte Spalte den Energiefluss in die Laenge). -->
+    <section class="section-block leit-epex" data-screen-label="EPEX Day-Ahead">
+      <div class="card chart-card">
+        <div class="card-head">
+          <span class="card-title"><span class="dot dot-cyan"></span>Day-Ahead-Preise (ct/kWh)</span>
+          <div class="card-actions">
           <span class="chip info"><span class="dot"></span>96 &times; 15min</span>
           <button id="refreshEpex" class="btn primary sm" type="button">EPEX aktualisieren</button>
+          </div>
         </div>
-      </div>
-      <div class="chart epex-chart-shell" id="priceChartContainer">
-        <canvas id="priceChartCanvas"></canvas>
-      </div>
-      <div id="tooltip" class="tooltip-hidden">&mdash;</div>
-      <div id="chartScheduleCallout" class="chart-selection-callout" hidden>
-        <div class="chart-selection-copy">
+        <div class="chart epex-chart-shell" id="priceChartContainer">
+          <canvas id="priceChartCanvas"></canvas>
+        </div>
+        <div id="tooltip" class="tooltip-hidden">&mdash;</div>
+        <div id="chartScheduleCallout" class="chart-selection-callout" hidden>
+          <div class="chart-selection-copy">
           <strong id="chartSelectionSummary">Keine Auswahl aktiv</strong>
           <span id="chartSelectionDetail">Markiere mehrere Balken im Chart.</span>
+          </div>
+          <button id="createSelectionScheduleBtn" class="btn ghost sm" type="button">Steuerung anlegen</button>
         </div>
-        <button id="createSelectionScheduleBtn" class="btn ghost sm" type="button">Steuerung anlegen</button>
+        <div class="chart-comparison-summary">
+          <strong id="chartComparisonSummary">Eigener Strompreis noch nicht konfiguriert</strong>
+          <span id="chartComparisonDetail">Lege in den Einstellungen deinen Bruttopreis an.</span>
+        </div>
+        <div class="meta" id="chartMeta">&mdash;</div>
       </div>
-      <div class="chart-comparison-summary">
-        <strong id="chartComparisonSummary">Eigener Strompreis noch nicht konfiguriert</strong>
-        <span id="chartComparisonDetail">Lege in den Einstellungen deinen Bruttopreis an.</span>
-      </div>
-      <div class="meta" id="chartMeta">&mdash;</div>
-    </div>
+    </section>
+
+    <!-- Schedule editor + automation plan (full width) -->
+
   </section>
 
-  <!-- Schedule editor + automation plan (full width) -->
   <section class="section-block" data-screen-label="Schedule Editor">
     <div class="card chart-card">
       <div class="card-head">
