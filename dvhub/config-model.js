@@ -3815,11 +3815,14 @@ export function createDefaultConfig() {
     },
     // PV-Strings / Solar-Logger (services/pv-strings): Erzeugung je String bzw.
     // Tracker erfassen und als CSV fuer die pvnode-Kalibrierung aufbereiten.
-    // sources: [{ id, label, kind: 'victron_vrm_tracker', instance, tracker, kwp }]
+    // sources: [{ id, label, kind: 'victron_vrm_tracker', instance, tracker, kwp }
+    //          | { id, label, kind: 'fronius_mppt', host, mppt, kwp }]
+    // groups:  [{ id, label, members: [source ids] }] — Summe als eigene Reihe
     pvStrings: {
       enabled: false,
       sources: [],
-      backfillDays: 365
+      groups: [],
+      backfillDays: 730
     },
     // Plan 08-04 Task 2 Step 5: Host-header + CORS + trust-proxy allowlists.
     // Defaults stay permissive for LAN-first installs (empty arrays = no check);

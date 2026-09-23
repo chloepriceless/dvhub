@@ -18,7 +18,7 @@ import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { createOpenEvseAdapter, createGoeAdapter } from './services/wallbox/adapters.js';
-import { resolvePvStringSources, buildPvnodeCsv } from './services/pv-strings/index.js';
+import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
 // alles, was der Verbindung-/Einstellungen-Tab anzeigen darf. Passwort nie —
@@ -3443,6 +3443,7 @@ export function createApiRoutes(ctx) {
           return {
             enabled: cfg.pvStrings?.enabled === true,
             sourceCount: Array.isArray(cfg.pvStrings?.sources) ? cfg.pvStrings.sources.length : 0,
+            groupCount: Array.isArray(cfg.pvStrings?.groups) ? cfg.pvStrings.groups.length : 0,
             lastSyncAt: st.lastSyncAt || null,
             lastError: st.lastError || null,
             backfillRunning: !!st.backfill?.running
@@ -3472,6 +3473,18 @@ export function createApiRoutes(ctx) {
         return json(res, 502, { ok: false, error: e.message });
       }
     }
+    if (url.pathname === '/api/pv-strings/discover-fronius' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
+      const host = normalizeFroniusHost(url.searchParams.get('host'));
+      if (!host) return json(res, 400, { ok: false, error: 'host: IP oder Hostname, ohne http:// und Pfad' });
+      try {
+        const r = await ctx.pvStrings.discoverFronius(host);
+        return json(res, r.ok ? 200 : 502, r);
+      } catch (e) {
+        return json(res, 502, { ok: false, error: e.message });
+      }
+    }
     if (url.pathname === '/api/pv-strings' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
       let body;
@@ -3488,13 +3501,22 @@ export function createApiRoutes(ctx) {
       if ('sources' in body) {
         if (!Array.isArray(body.sources) || body.sources.length > 32) return json(res, 400, { ok: false, error: 'sources must be a list (max 32)' });
         const cleaned = resolvePvStringSources({ pvStrings: { sources: body.sources } })
-          .map(({ id, label, kind, instance, tracker, kwp }) => ({ id, label, kind, instance, tracker, ...(kwp ? { kwp } : {}) }));
-        if (cleaned.length !== body.sources.length) return json(res, 400, { ok: false, error: 'invalid source (id a-z0-9_-, kind victron_vrm_tracker, instance/tracker >= 0, ids unique)' });
+          .map(({ id, label, kind, instance, tracker, host, mppt, kwp }) => (kind === 'fronius_mppt'
+            ? { id, label, kind, host, mppt, ...(kwp ? { kwp } : {}) }
+            : { id, label, kind, instance, tracker, ...(kwp ? { kwp } : {}) }));
+        if (cleaned.length !== body.sources.length) return json(res, 400, { ok: false, error: 'invalid source (id a-z0-9_-, ids unique; victron_vrm_tracker: instance/tracker >= 0; fronius_mppt: host + mppt 1..4)' });
         ps.sources = cleaned;
+      }
+      if ('groups' in body) {
+        if (!Array.isArray(body.groups) || body.groups.length > 16) return json(res, 400, { ok: false, error: 'groups must be a list (max 16)' });
+        const cleaned = resolvePvStringGroups({ pvStrings: { groups: body.groups } }, resolvePvStringSources({ pvStrings: { sources: ps.sources } }))
+          .map(({ id, label, members }) => ({ id, label, members }));
+        if (cleaned.length !== body.groups.length) return json(res, 400, { ok: false, error: 'invalid group (id a-z0-9_-, not a string id, >= 2 existing members)' });
+        ps.groups = cleaned;
       }
       next.pvStrings = ps;
       try { ctx.saveAndApplyConfig(next); } catch (e) { return json(res, 500, { ok: false, error: 'save failed' }); }
-      pushLog('pv_strings_config_saved', { enabled: ps.enabled === true, sources: (ps.sources || []).length }, actorContext(req));
+      pushLog('pv_strings_config_saved', { enabled: ps.enabled === true, sources: (ps.sources || []).length, groups: (ps.groups || []).length }, actorContext(req));
       return json(res, 200, { ok: true, pvStrings: ps });
     }
     if (url.pathname === '/api/pv-strings/backfill' && req.method === 'POST') {

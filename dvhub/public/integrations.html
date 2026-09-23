@@ -449,22 +449,37 @@
         </header>
         <div class="dv-drawer-body" id="dv-drawer-pvstrings-body">
           <p class="dv-drawer-intro">
-            DVhub speichert die Erzeugung je String in 15-Minuten-Werten &mdash; aus den
-            MPPT-Trackern deines Victron-Ladereglers &uuml;ber VRM, r&uuml;ckwirkend so weit VRM sie hat.
-            Daraus entsteht je String die CSV-Datei f&uuml;r die <strong>pvnode-Kalibrierung</strong>.
+            DVhub speichert die Erzeugung je String in 5-Minuten-Werten &mdash; aus den
+            MPPT-Trackern deines Victron-Ladereglers &uuml;ber VRM und aus den MPPT-Eing&auml;ngen eines
+            Fronius-Wechselrichters, jeweils r&uuml;ckwirkend so weit das Ger&auml;t sie hat.
+            Daraus entsteht je String oder Gruppe die CSV-Datei f&uuml;r die <strong>pvnode-Kalibrierung</strong>.
           </p>
           <label class="dv-field-row">
             <input type="checkbox" class="dv-field-check" id="pvs-enabled">
-            <span>Erfassung aktiv (alle 15&nbsp;Minuten aus VRM)</span>
+            <span>Erfassung aktiv (alle 15&nbsp;Minuten)</span>
           </label>
           <div class="pvs-sources">
             <div class="pvs-sources-head">
               <span class="field-label">Strings</span>
               <button type="button" class="btn sm" id="pvs-discover">Tracker aus VRM holen</button>
             </div>
+            <div class="pvs-fronius">
+              <input type="text" class="input" id="pvs-fronius-host" placeholder="Fronius-Adresse, z. B. 192.168.1.50" aria-label="Fronius-Adresse" autocomplete="off" spellcheck="false">
+              <button type="button" class="btn sm" id="pvs-fronius-discover">MPPTs vom Fronius holen</button>
+            </div>
             <div id="pvs-rows"></div>
             <span class="field-hint">Ein Eintrag je String. Name frei w&auml;hlbar (z.&nbsp;B. &bdquo;S&uuml;d A&ldquo;), kWp optional.
-              Strings am Fronius folgen mit der Wechselrichter-Anbindung.</span>
+              Der Fronius antwortet nur tags&uuml;ber.</span>
+          </div>
+          <div class="pvs-sources">
+            <div class="pvs-sources-head">
+              <span class="field-label">Gruppen</span>
+              <button type="button" class="btn sm" id="pvs-group-add">Gruppe hinzuf&uuml;gen</button>
+            </div>
+            <div id="pvs-groups"></div>
+            <span class="field-hint">Eine Gruppe addiert mehrere Strings zu einer Reihe &mdash; z.&nbsp;B. alle
+              S&uuml;d-Strings an verschiedenen Ger&auml;ten, wenn pvnode sie als eine Fl&auml;che rechnet.
+              Beide Quellen liegen auf demselben 5-Minuten-Raster; ein Slot z&auml;hlt nur, wenn alle Strings einen Wert haben.</span>
           </div>
           <div class="dv-field-validation" id="pvs-banner" hidden></div>
           <div class="dv-drawer-actions">
@@ -474,7 +489,7 @@
           <div class="pvs-data">
             <div class="pvs-sources-head">
               <span class="field-label">Gespeicherte Daten</span>
-              <button type="button" class="btn sm" id="pvs-backfill">Historie aus VRM nachladen</button>
+              <button type="button" class="btn sm" id="pvs-backfill">Historie nachladen</button>
             </div>
             <div class="dv-field-validation" id="pvs-status" hidden></div>
             <div id="pvs-overview"></div>

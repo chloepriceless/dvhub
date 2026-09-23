@@ -1404,5 +1404,10 @@
 .pvs-warn { color: var(--warn, #c98a00); }
 .pvs-svg { width: 100%; max-width: 160px; height: 30px; display: block; margin-top: 4px; }
 .pvs-svg rect { fill: var(--accent, #f5a623); }
+.pvs-fronius { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-bottom: 8px; }
+.pvs-group { border: 1px solid var(--border, rgba(127,127,127,.25)); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
+.pvs-group-head { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-bottom: 6px; }
+.pvs-group-members { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .9em; }
+.pvs-group-members label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .pvs-howto { margin-top: 14px; font-size: .9em; }
 .pvs-howto ol { margin: 6px 0 0 18px; padding: 0; }

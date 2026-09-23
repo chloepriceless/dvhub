@@ -42,6 +42,7 @@ const INTENTIONAL = new Map([
   ['optimizer.evConsumptionKwhPer100km', 'EVCC-Schublade auf der Integrationsseite (E-Auto-Abfahrt)'],
   ['pvStrings.enabled', 'PV-Strings-Schublade auf der Integrationsseite (Solar-Logger)'],
   ['pvStrings.backfillDays', 'PV-Strings-Schublade auf der Integrationsseite (Solar-Logger)'],
+  ['pvStrings.groups', 'PV-Strings-Schublade auf der Integrationsseite (Gruppen-Editor)'],
   ['meterSource.mode', 'Zähler-Assistent auf der Integrationsseite'],
   ['meterSource.label', 'Zähler-Assistent auf der Integrationsseite'],
   ['victron.transport', 'Einrichtungs-Assistent (Herstellerprofil-Schritt)'],
