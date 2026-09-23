@@ -223,7 +223,8 @@ export function createOptimizerService(ctx) {
   const mispelTracker = createMispelTracker(state, getCfg, pushLog);
 
   // EOS adapter (created once, used when enabled)
-  const eosAdapter = createEosAdapter(ctx);
+  // ctx.eosAdapter: Test-Naht (Minuten-Wache, Plan-Behalten).
+  const eosAdapter = ctx.eosAdapter || createEosAdapter(ctx);
 
   // Erstplan-Wache: holt den ersten EOS-Plan nach einem Neustart in Minuten
   // statt in 15–30 min ab (Diagnose 2026-09-21, Begruendung in
@@ -250,6 +251,19 @@ export function createOptimizerService(ctx) {
   let eosFirstPushAt = null;
   // Zuletzt erfolgreich geholter EOS-Plan (keepLastEosPlan).
   let lastEosPlan = null;
+  // generated_at der EOS-Loesung, die der letzte Lauf abgeholt hat. Die
+  // Minuten-Wache vergleicht damit — sonst folgt die Wallbox-Bruecke (30-s-
+  // Takt) schon dem neuen Plan, die Akku-Regeln bis zu 15 min dem alten
+  // (23.09.: Auto laedt 11 kW nach neuem Plan, Akku haelt nach altem → Netz).
+  let lastAppliedEosStamp = null;
+  async function eosSolutionStamp() {
+    try {
+      const sol = await eosAdapter.getOptimizationSolution(1);
+      return sol?.generatedAt || null;
+    } catch {
+      return null;
+    }
+  }
 
   // Fuer eos-config-sync: solange die Wache geboostet hat, schreibt der Sync
   // ihren Takt statt des Soll-Takts und speichert den Boost nicht auf Platte.
@@ -482,8 +496,12 @@ export function createOptimizerService(ctx) {
           // eosSchedule = FRBC dispatch (battery power) for display/comparison.
           // eosGridSetpoints = net-grid control slots from EOS' SOLUTION (T-0118)
           // — the actuatable export plan the old plan→power path threw away.
+          // Stempel VOR dem Abholen merken: rechnet EOS waehrenddessen neu,
+          // sieht die Minuten-Wache den neueren Stempel und zieht nach.
+          const solStamp = await eosSolutionStamp();
           eosSchedule = await eosAdapter.pullSchedule();
           eosGridSetpoints = await eosAdapter.pullGridSetpoints();
+          if (solStamp) lastAppliedEosStamp = solStamp;
 
           // Direkt nach einem Neustart hat EOS noch keine Loesung: der eigene
           // Start-Run lief ohne Prognosen ins Leere, gerechnet wird erst zum
@@ -747,10 +765,27 @@ export function createOptimizerService(ctx) {
 
   function startTimers() {
     // Poll for forecast changes every 60s (D-02)
-    pollTimer = setInterval(() => {
+    pollTimer = setInterval(async () => {
       const currentVersion = ctx.forecastService.forecastVersion;
       if (currentVersion !== state.optimizer.lastForecastVersion) {
         runOptimization().catch(err => pushLog('optimizer_error', { error: err.message }));
+        return;
+      }
+      // Neuer EOS-Plan seit dem letzten Lauf? Dann sofort uebernehmen.
+      try {
+        const cfg = getCfg();
+        if (isRunning || !cfg.optimizer?.enabled || (cfg.optimizer?.primarySource ?? 'internal') === 'internal') return;
+        if (!resolveEosProxy(cfg).enabled || lastAppliedEosStamp === null) return;
+        const stamp = await eosSolutionStamp();
+        if (stamp && stamp !== lastAppliedEosStamp) {
+          pushLog('eos_new_plan_detected', { generatedAt: stamp, previous: lastAppliedEosStamp });
+          // Je neuem Plan nur EIN Anstoss, auch wenn der Lauf den EOS-Teil
+          // ueberspringt (z. B. Tier < 2) — sonst jede Minute ein Lauf.
+          lastAppliedEosStamp = stamp;
+          runOptimization().catch(err => pushLog('optimizer_error', { error: err.message }));
+        }
+      } catch (err) {
+        pushLog('optimizer_error', { error: err.message });
       }
     }, 60_000);
 

@@ -251,3 +251,48 @@ describe('Optimizer Service', () => {
     await svc.close();
   });
 });
+
+describe('Optimizer Service: neuer EOS-Plan → sofort übernehmen (Minuten-Wache)', () => {
+  test('neues generated_at bei EOS → ein Lauf; gleiches → keiner', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    const logs = [];
+    let stamp = '2026-09-23T21:04:00+02:00';
+    let pulls = 0;
+    const now = Date.now();
+    const eosAdapter = {
+      pushForecast: async () => ({ ok: true }),
+      pullSchedule: async () => { pulls++; return [{ ts: now, endTs: now + 900_000, powerW: -1000 }]; },
+      pullGridSetpoints: async () => [],
+      getOptimizationSolution: async () => ({ generatedAt: stamp, rows: [] }),
+      setEmsIntervalSec: async () => ({ ok: true })
+    };
+    const { ctx, state } = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
+      ctx: { eosAdapter, pushLog: (ev, data) => logs.push({ ev, data }) }
+    });
+    const svc = createOptimizerService(ctx);
+    await svc.start();
+    const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+    await settle();
+    if (pulls === 0) { await svc.close(); t.skip('EOS-Pfad braucht RAM-Tier >= 2'); return; }
+    assert.equal(state.optimizer.source, 'eos');
+    const runsAfterStart = state.optimizer.runCount;
+
+    // Eine Minute, EOS unverändert → kein zusätzlicher Lauf.
+    t.mock.timers.tick(60_000); await settle();
+    assert.equal(state.optimizer.runCount, runsAfterStart);
+    assert.ok(!logs.some((l) => l.ev === 'eos_new_plan_detected'));
+
+    // EOS rechnet neu → nächste Minute zieht DVhub sofort nach.
+    stamp = '2026-09-23T21:19:19+02:00';
+    t.mock.timers.tick(60_000); await settle();
+    assert.equal(state.optimizer.runCount, runsAfterStart + 1);
+    const hit = logs.find((l) => l.ev === 'eos_new_plan_detected');
+    assert.equal(hit.data.generatedAt, stamp);
+
+    // Und nur einmal je Plan.
+    t.mock.timers.tick(60_000); await settle();
+    assert.equal(state.optimizer.runCount, runsAfterStart + 1);
+    await svc.close();
+  });
+});
