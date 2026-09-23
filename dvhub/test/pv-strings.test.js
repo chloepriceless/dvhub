@@ -288,10 +288,10 @@ describe('Dienst: Fronius + Gruppe', () => {
         .filter((r) => seriesKeys.includes(r.seriesKey) && r.ts >= start && r.ts < end && r.resolutionSeconds <= maxResolution)
         .sort((a, b) => a.ts.localeCompare(b.ts))
         .map((r) => ({ key: r.seriesKey, ts: r.ts, value: r.value, unit: r.unit, resolution: r.resolutionSeconds })),
-      seriesStats: async ({ seriesKey, resolution }) => {
-        const hit = [...rows.values()].filter((r) => r.seriesKey === seriesKey && r.resolutionSeconds === resolution).map((r) => r.ts).sort();
-        return { count: hit.length, firstTs: hit[0] || null, lastTs: hit.at(-1) || null };
-      }
+      seriesStats: async ({ seriesKeys, resolution }) => Object.fromEntries(seriesKeys.map((k) => {
+        const hit = [...rows.values()].filter((r) => r.seriesKey === k && r.resolutionSeconds === resolution).map((r) => r.ts).sort();
+        return [k, { count: hit.length, firstTs: hit[0] || null, lastTs: hit.at(-1) || null }];
+      }))
     };
   }
   const DAY = '2026-09-22';

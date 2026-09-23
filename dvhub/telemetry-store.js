@@ -949,14 +949,19 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     return result;
   }
 
-  // Abdeckung einer Reihe in genau einer Aufloesung, ohne die Zeilen zu laden
+  // Abdeckung von Reihen in genau einer Aufloesung, ohne die Zeilen zu laden
   // (PV-Strings-Uebersicht: bis zu 2 Jahre 5-Minuten-Werte je Reihe).
-  function seriesStats({ seriesKey, resolution }) {
-    const row = db.prepare(`
-      SELECT COUNT(*) AS n, MIN(ts_utc) AS first_ts, MAX(ts_utc) AS last_ts
-      FROM timeseries_samples WHERE series_key = ? AND resolution_seconds = ?
-    `).get(seriesKey, resolution);
-    return { count: Number(row?.n || 0), firstTs: row?.first_ts || null, lastTs: row?.last_ts || null };
+  function seriesStats({ seriesKeys, resolution }) {
+    const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
+    const out = Object.fromEntries(keys.map((k) => [k, { count: 0, firstTs: null, lastTs: null }]));
+    if (!keys.length) return out;
+    const rows = db.prepare(`
+      SELECT series_key, COUNT(*) AS n, MIN(ts_utc) AS first_ts, MAX(ts_utc) AS last_ts
+      FROM timeseries_samples WHERE series_key IN (${keys.map(() => '?').join(', ')}) AND resolution_seconds = ?
+      GROUP BY series_key
+    `).all(...keys, resolution);
+    for (const r of rows) out[r.series_key] = { count: Number(r.n || 0), firstTs: r.first_ts || null, lastTs: r.last_ts || null };
+    return out;
   }
 
   return {

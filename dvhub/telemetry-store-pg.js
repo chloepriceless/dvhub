@@ -1225,15 +1225,21 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     return rows;
   }
 
-  // Abdeckung einer Reihe in genau einer Aufloesung, ohne die Zeilen zu laden
+  // Abdeckung von Reihen in genau einer Aufloesung, ohne die Zeilen zu laden
   // (PV-Strings-Uebersicht: bis zu 2 Jahre 5-Minuten-Werte je Reihe).
-  async function seriesStats({ seriesKey, resolution }) {
+  async function seriesStats({ seriesKeys, resolution }) {
+    const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
+    const out = Object.fromEntries(keys.map((k) => [k, { count: 0, firstTs: null, lastTs: null }]));
+    if (!keys.length) return out;
     const { rows } = await pool.query(`
-      SELECT COUNT(*) AS n, MIN(ts_utc) AS first_ts, MAX(ts_utc) AS last_ts
-      FROM timeseries_samples WHERE series_key = $1 AND resolution_seconds = $2
-    `, [seriesKey, resolution]);
-    const r = rows[0] || {};
-    return { count: Number(r.n || 0), firstTs: r.first_ts ? isoTimestamp(r.first_ts) : null, lastTs: r.last_ts ? isoTimestamp(r.last_ts) : null };
+      SELECT series_key, COUNT(*) AS n, MIN(ts_utc) AS first_ts, MAX(ts_utc) AS last_ts
+      FROM timeseries_samples WHERE series_key = ANY($1) AND resolution_seconds = $2
+      GROUP BY series_key
+    `, [keys, resolution]);
+    for (const r of rows) {
+      out[r.series_key] = { count: Number(r.n || 0), firstTs: r.first_ts ? isoTimestamp(r.first_ts) : null, lastTs: r.last_ts ? isoTimestamp(r.last_ts) : null };
+    }
+    return out;
   }
 
   // T-CURTAIL/SoC: first + last value of a series within [start, end). Used by

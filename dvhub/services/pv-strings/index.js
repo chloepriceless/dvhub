@@ -588,15 +588,19 @@ export function createPvStringsService(ctx) {
     const tz = tzOf(cfg);
     const endMs = now();
     const out = [];
-    for (const s of allSeries(cfg)) {
-      // Nur die letzten `days` Tage als Zeilen laden; die Abdeckung kommt als
-      // Aggregat aus der Datenbank. Alles zu laden (2 Jahre x 288 Slots je
-      // Reihe) hat prod am 2026-09-23 in den Speicherdruck getrieben.
-      const recent = (await store()?.querySeries?.({ seriesKeys: [s.seriesKey], start: new Date(endMs - days * DAY_S * 1000).toISOString(), end: new Date(endMs).toISOString(), maxResolution: SLOT_S }) || [])
-        .filter((r) => Number(r.resolution) === SLOT_S);
-      const stats = (await store()?.seriesStats?.({ seriesKey: s.seriesKey, resolution: SLOT_S })) || { count: 0, firstTs: null, lastTs: null };
+    // Nur die letzten `days` Tage als Zeilen laden; die Abdeckung kommt als
+    // Aggregat aus der Datenbank. Beides in je einer Abfrage fuer alle Reihen.
+    // Alles zu laden (2 Jahre x 288 Slots je Reihe) hat prod am 2026-09-23 in
+    // den Speicherdruck getrieben.
+    const series = allSeries(cfg);
+    const keys = series.map((s) => s.seriesKey);
+    const recent = keys.length ? (await store()?.querySeries?.({ seriesKeys: keys, start: new Date(endMs - days * DAY_S * 1000).toISOString(), end: new Date(endMs).toISOString(), maxResolution: SLOT_S }) || []) : [];
+    const statsByKey = keys.length ? ((await store()?.seriesStats?.({ seriesKeys: keys, resolution: SLOT_S })) || {}) : {};
+    for (const s of series) {
+      const stats = statsByKey[s.seriesKey] || { count: 0, firstTs: null, lastTs: null };
       const daily = new Map();
       for (const r of recent) {
+        if (r.key !== s.seriesKey || Number(r.resolution) !== SLOT_S) continue;
         const day = isoWithOffset(Date.parse(r.ts), tz).slice(0, 10);
         daily.set(day, (daily.get(day) || 0) + Number(r.value) * SLOT_S / 3600 / 1000);
       }
