@@ -1249,6 +1249,19 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .ev-timeline .ev-target { stroke:var(--green); stroke-dasharray:3 3; opacity:.6; vector-effect:non-scaling-stroke; }
 .ev-timeline .ev-dep { stroke:var(--yellow); stroke-width:1.5; vector-effect:non-scaling-stroke; }
 .ev-timeline .ev-base { stroke:var(--hairline); vector-effect:non-scaling-stroke; }
+.ev-timeline { cursor:ew-resize; overscroll-behavior:contain; }
+.ev-timeline .ev-grid { stroke:var(--hairline); opacity:.5; vector-effect:non-scaling-stroke; }
+.ev-timeline .ev-now { stroke:var(--text-2); stroke-width:1; stroke-dasharray:2 2; vector-effect:non-scaling-stroke; }
+.ev-steps { display:flex; flex-direction:column; gap:1px; margin:2px 0 4px; font-family:var(--f-mono); font-size:11px; }
+.ev-step { display:grid; grid-template-columns:1fr auto 52px; gap:8px; padding:2px 4px; border-radius:4px; color:var(--text-2); }
+.ev-step.is-now { background:var(--glass-2); color:var(--text); }
+.ev-step.is-now .ev-step-w { color:var(--violet); }
+.ev-step.is-none { display:block; color:var(--text-dim); }
+.ev-step-w { text-align:right; }
+.ev-step-s { text-align:right; color:var(--text-dim); }
+.ev-steps-toggle { align-self:flex-start; margin:1px 0 0 4px; padding:0; border:0; background:none; font:inherit; font-size:10.5px; color:var(--text-dim); cursor:pointer; }
+.ev-steps-toggle:hover { color:var(--violet); }
+.ev-steps-more { display:flex; flex-direction:column; gap:1px; }
 .ev-timeline-axis { display:flex; justify-content:space-between; font-family:var(--f-mono); font-size:10px; color:var(--text-dim); }
 .ev-inline { display:inline-flex; align-items:center; gap:8px; }
 .ev-time { width:104px; padding:3px 6px; font-size:12px; }

@@ -62,6 +62,29 @@
 
   // ---------------------------------------------------------------- Anzeige
 
+  // Sichtfenster des Charts: Mausrad verschiebt, Strg/⌘ + Mausrad zoomt.
+  // startMs null = folgt „jetzt“ (bis jemand scrollt).
+  var HOUR = 3600000;
+  var view = { startMs: null, spanMs: 6 * HOUR };
+  var VIEW_MIN = 2 * HOUR;
+  var VIEW_MAX = 48 * HOUR;
+  var bounds = null;    // { t0, t1, slotMs } des aktuellen Plans
+
+  function clampView() {
+    if (!bounds) return;
+    var total = bounds.t1 - bounds.t0;
+    view.spanMs = Math.max(VIEW_MIN, Math.min(VIEW_MAX, total, view.spanMs));
+    if (view.startMs == null) return;
+    view.startMs = Math.max(bounds.t0, Math.min(bounds.t1 - view.spanMs, view.startMs));
+  }
+  function viewStart() {
+    if (!bounds) return 0;
+    if (view.startMs != null) return view.startMs;
+    // Folgt „jetzt“: laufender Slot links, eine Viertelstunde Vorlauf.
+    var now = Date.now() - bounds.slotMs;
+    return Math.max(bounds.t0, Math.min(bounds.t1 - view.spanMs, now));
+  }
+
   function renderTimeline() {
     var host = el('evTimeline');
     if (!host) return;
@@ -69,24 +92,32 @@
     var slots = plan && Array.isArray(plan.slots) ? plan.slots : [];
     if (!data.optimizeEv || !slots.length || !plan.hasEv) {
       host.innerHTML = '';
+      bounds = null;
+      el('evAxisStart').textContent = 'jetzt';
       el('evAxisEnd').textContent = '—';
       return;
     }
     var slotMs = (plan.slotMinutes || 15) * 60000;
-    var t0 = Date.parse(slots[0].ts);
-    var t1 = Date.parse(slots[slots.length - 1].ts) + slotMs;
-    var span = Math.max(1, t1 - t0);
+    bounds = { t0: Date.parse(slots[0].ts), t1: Date.parse(slots[slots.length - 1].ts) + slotMs, slotMs: slotMs };
+    clampView();
+    var v0 = viewStart();
+    var v1 = v0 + view.spanMs;
     var W = 240; var H = 44; var barH = 30;
     var maxW = data.maxChargeW || 1;
-    var x = function (t) { return ((t - t0) / span) * W; };
+    var x = function (t) { return ((t - v0) / view.spanMs) * W; };
     var yPct = function (p) { return H - 2 - (Math.max(0, Math.min(100, p)) / 100) * (H - 4); };
     var parts = ['<line class="ev-base" x1="0" y1="' + (H - 0.5) + '" x2="' + W + '" y2="' + (H - 0.5) + '"/>'];
     var socPts = [];
+    // Volle Stunden als feine Raster-Linien, damit man beim Scrollen die Zeit sieht.
+    for (var hr = Math.ceil(v0 / HOUR) * HOUR; hr < v1; hr += HOUR) {
+      parts.push('<line class="ev-grid" x1="' + x(hr).toFixed(1) + '" y1="0" x2="' + x(hr).toFixed(1) + '" y2="' + H + '"/>');
+    }
     slots.forEach(function (s) {
       var ts = Date.parse(s.ts);
+      if (ts + slotMs < v0 - slotMs || ts > v1 + slotMs) return;
       if (s.powerW > 0) {
         var h = Math.max(2, (s.powerW / maxW) * barH);
-        parts.push('<rect class="ev-bar" x="' + x(ts).toFixed(1) + '" y="' + (H - h).toFixed(1) + '" width="' + Math.max(1, (slotMs / span) * W - 0.6).toFixed(1)
+        parts.push('<rect class="ev-bar" x="' + x(ts).toFixed(1) + '" y="' + (H - h).toFixed(1) + '" width="' + Math.max(1, (slotMs / view.spanMs) * W - 0.6).toFixed(1)
           + '" height="' + h.toFixed(1) + '"><title>' + esc(fmtTime(s.ts) + ' · ' + fmtKw(s.powerW) + (s.socPct != null ? ' · ' + s.socPct + ' %' : '')) + '</title></rect>');
       }
       if (s.socPct != null) socPts.push(x(ts).toFixed(1) + ',' + yPct(s.socPct).toFixed(1));
@@ -96,13 +127,90 @@
       parts.push('<line class="ev-target" x1="0" y1="' + yPct(res.targetSocPct).toFixed(1) + '" x2="' + W + '" y2="' + yPct(res.targetSocPct).toFixed(1) + '"/>');
     }
     if (socPts.length > 1) parts.push('<polyline class="ev-soc" points="' + socPts.join(' ') + '"/>');
+    var nowMs = Date.now();
+    if (nowMs >= v0 && nowMs <= v1) parts.push('<line class="ev-now" x1="' + x(nowMs).toFixed(1) + '" y1="0" x2="' + x(nowMs).toFixed(1) + '" y2="' + H + '"><title>jetzt</title></line>');
     var depMs = res && res.departureAt ? Date.parse(res.departureAt) : NaN;
-    if (isFinite(depMs) && depMs >= t0 && depMs <= t1) {
+    if (isFinite(depMs) && depMs >= v0 && depMs <= v1) {
       parts.push('<line class="ev-dep" x1="' + x(depMs).toFixed(1) + '" y1="0" x2="' + x(depMs).toFixed(1) + '" y2="' + H + '"><title>Abfahrt ' + esc(fmtDayTime(res.departureAt)) + '</title></line>');
     }
     // SVG-Attribute statt Inline-Styles: CSP style-src ohne 'unsafe-inline'.
     host.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img">' + parts.join('') + '</svg>';
-    el('evAxisEnd').textContent = fmtDayTime(new Date(t1).toISOString());
+    el('evAxisStart').textContent = (nowMs >= v0 && nowMs < v0 + slotMs * 2) ? 'jetzt' : fmtDayTime(new Date(v0).toISOString());
+    el('evAxisEnd').textContent = fmtDayTime(new Date(v1).toISOString());
+  }
+
+  // EOS-Ladestufen: aufeinanderfolgende Slots gleicher Leistung zusammengefasst,
+  // z. B. „20:45–21:15 11 kW · 21:15–21:30 3,3 kW“. Laufende Stufe markiert.
+  function evSteps(slots, slotMs) {
+    var steps = [];
+    slots.forEach(function (s) {
+      var ts = Date.parse(s.ts);
+      var w = s.powerW > 0 ? s.powerW : 0;
+      var last = steps[steps.length - 1];
+      if (last && last.powerW === w && last.end === ts) { last.end = ts + slotMs; last.socEnd = s.socPct; return; }
+      steps.push({ start: ts, end: ts + slotMs, powerW: w, socEnd: s.socPct });
+    });
+    return steps.filter(function (st) { return st.powerW > 0; });
+  }
+
+  var stepsOpen = false;   // Ladestufen aufgeklappt (bleibt über Aktualisierungen)
+
+  function renderSteps() {
+    var host = el('evSteps');
+    if (!host) return;
+    var plan = data.plan;
+    var slots = plan && Array.isArray(plan.slots) ? plan.slots : [];
+    if (!data.optimizeEv || !plan || !plan.hasEv || !slots.length) { host.hidden = true; host.innerHTML = ''; return; }
+    var now = Date.now();
+    var steps = evSteps(slots, (plan.slotMinutes || 15) * 60000).filter(function (st) { return st.end > now; });
+    host.hidden = false;
+    if (!steps.length) { host.innerHTML = '<div class="ev-step is-none">EOS plant keine weitere Ladung</div>'; return; }
+    var row = function (st) {
+      var cur = st.start <= now && now < st.end;
+      return '<div class="ev-step' + (cur ? ' is-now' : '') + '">'
+        + '<span class="ev-step-t">' + (cur ? 'jetzt' : esc(fmtTime(new Date(st.start).toISOString()))) + '–' + esc(fmtTime(new Date(st.end).toISOString())) + '</span>'
+        + '<span class="ev-step-w">' + esc(fmtKw(st.powerW)) + '</span>'
+        + '<span class="ev-step-s">' + (st.socEnd != null ? '→ ' + st.socEnd + ' %' : '') + '</span>'
+        + '</div>';
+    };
+    // Laufende bzw. nächste Stufe immer sichtbar, der Rest zum Aufklappen.
+    var rest = steps.slice(1);
+    var toggle = '<button type="button" class="ev-steps-toggle" id="evStepsToggle" aria-expanded="' + stepsOpen + '">'
+      + (stepsOpen ? 'weniger' : '+ ' + rest.length + ' weitere Stufe' + (rest.length === 1 ? '' : 'n')) + '</button>';
+    host.innerHTML = row(steps[0])
+      + (stepsOpen && rest.length ? '<div class="ev-steps-more">' + rest.map(row).join('') + '</div>' : '')
+      + (rest.length ? toggle : '');
+  }
+
+  function wireTimelineWheel() {
+    var host = el('evTimeline');
+    if (!host || host.dataset.wheelWired === '1') return;
+    host.dataset.wheelWired = '1';
+    host.addEventListener('wheel', function (e) {
+      if (!bounds || !data) return;
+      e.preventDefault();
+      var start = viewStart();
+      var delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (!delta) return;
+      if (e.ctrlKey || e.metaKey) {
+        // Zoom um die Mausposition.
+        var rect = host.getBoundingClientRect();
+        var frac = rect.width ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0.5;
+        var anchor = start + frac * view.spanMs;
+        view.spanMs = Math.max(VIEW_MIN, Math.min(VIEW_MAX, view.spanMs * (delta > 0 ? 1.25 : 0.8)));
+        view.startMs = anchor - frac * view.spanMs;
+      } else {
+        var step = Math.max(bounds.slotMs, view.spanMs / 8);
+        view.startMs = start + (delta > 0 ? step : -step);
+      }
+      clampView();
+      renderTimeline();
+    }, { passive: false });
+    // Doppelklick: zurück auf „jetzt“, 6 h.
+    host.addEventListener('dblclick', function () {
+      view.startMs = null; view.spanMs = 6 * HOUR;
+      if (data) renderTimeline();
+    });
   }
 
   function renderSummary() {
@@ -190,6 +298,7 @@
     el('evSocNow').title = v.socSource ? 'Quelle: ' + v.socSource + (v.rangeKm > 0 ? ' · ' + v.rangeKm + ' km' : '') : '';
     renderState();
     renderTimeline();
+    renderSteps();
     renderSummary();
     if (!dirty) { draft = draftFromData(); renderForm(); }
   }
@@ -276,12 +385,14 @@
       setDirty(true);
       return;
     }
+    if (e.target.id === 'evStepsToggle') { stepsOpen = !stepsOpen; renderSteps(); return; }
     if (e.target.id === 'evSave') { save(); return; }
     if (e.target.id === 'evReset') { setDirty(false); msg(''); draft = draftFromData(); renderForm(); }
   });
 
   function start() {
     if (!el('evTile')) return;
+    wireTimelineWheel();
     load();
     timer = setInterval(function () { if (!document.hidden) load(); }, POLL_MS);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
