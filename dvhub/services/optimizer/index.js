@@ -18,6 +18,27 @@ import { createMispelTracker } from './mispel-tracker.js';
 import { assessMultiDayHold } from './multi-day.js';
 
 /**
+ * Letzten EOS-Plan weiterfahren, wenn EOS gerade nichts liefert (Neustart,
+ * Umkonfiguration, kurzer Aussetzer) — statt auf den internen Optimierer
+ * zu fallen, der EOS' Entscheidungen (Abendverkauf, Akku halten) nicht kennt.
+ * Gilt, solange der gemerkte Plan noch nicht abgelaufen ist: jünger als
+ * maxAgeMs UND mindestens ein Slot endet nach jetzt. Liefert die noch
+ * offenen Slots, sonst null (→ interner Fallback wie bisher).
+ *
+ * @param {{schedule:Array, gridSetpoints:Array|null, at:number}|null} last
+ * @param {number} nowMs
+ * @param {number} maxAgeMs
+ */
+export function keepLastEosPlan(last, nowMs, maxAgeMs) {
+  if (!last || !Number.isFinite(last.at) || nowMs - last.at > maxAgeMs) return null;
+  const open = (slot) => Number(slot.endTs ?? slot.ts) > nowMs;
+  const schedule = (Array.isArray(last.schedule) ? last.schedule : []).filter(open);
+  if (schedule.length === 0) return null;
+  const gridSetpoints = Array.isArray(last.gridSetpoints) ? last.gridSetpoints.filter(open) : [];
+  return { schedule, gridSetpoints, at: last.at };
+}
+
+/**
  * Estimate net grid cost over the horizon for a given schedule.
  * Used by 'best' primarySource selector to compare internal vs EOS schedule.
  * Lower cost = better schedule (addresses review issue #9: NOT abs(powerW * price)).
@@ -140,6 +161,12 @@ export function applyDvForecastLogic(normalized, state, getCfg) {
  * @param {number} [hourOverride] - Optional hour override for testing (0-23)
  * @returns {number} Polling interval in milliseconds
  */
+/** Wie lange ein gemerkter EOS-Plan weitergefahren wird (Standard 12 h = Regel-Horizont). */
+export function eosPlanKeepMs(cfg) {
+  const h = Number(cfg?.optimizer?.eosPlanKeepHours);
+  return (Number.isFinite(h) && h >= 0 ? h : 12) * 3_600_000;
+}
+
 export function getOptInterval(cfg, hourOverride) {
   const normalInterval = cfg.optimizer?.intervalMs ?? 900_000;       // 15 min default
   const morningInterval = cfg.optimizer?.morningReoptIntervalMs ?? 300_000; // 5 min default
@@ -221,6 +248,8 @@ export function createOptimizerService(ctx) {
   // (nach einem Neustart wiederhergestellt) und zaehlt fuer die Erstplan-Wache
   // nicht als Plan.
   let eosFirstPushAt = null;
+  // Zuletzt erfolgreich geholter EOS-Plan (keepLastEosPlan).
+  let lastEosPlan = null;
 
   // Fuer eos-config-sync: solange die Wache geboostet hat, schreibt der Sync
   // ihren Takt statt des Soll-Takts und speichert den Boost nicht auf Platte.
@@ -495,12 +524,31 @@ export function createOptimizerService(ctx) {
         winningSchedule = internalSchedule;
         source = 'internal';
       } else if (primarySource === 'eos') {
-        if (eosSchedule && eosSchedule.length > 0) {
+        const freshPlan = Array.isArray(eosSchedule) && eosSchedule.length > 0;
+        const kept = (freshPlan && eosGridSetpoints)
+          ? null
+          : keepLastEosPlan(lastEosPlan, Date.now(), eosPlanKeepMs(cfg));
+        if (freshPlan && eosGridSetpoints) {
+          winningSchedule = eosSchedule;
+          source = 'eos';
+          lastEosPlan = { schedule: eosSchedule, gridSetpoints: eosGridSetpoints, at: Date.now() };
+        } else if (kept) {
+          // EOS liefert gerade nichts Verwertbares (Neustart, Umkonfiguration,
+          // Aussetzer) → letzten gueltigen Plan weiterfahren statt intern.
+          winningSchedule = kept.schedule;
+          eosGridSetpoints = kept.gridSetpoints;
+          source = 'eos';
+          pushLog('eos_plan_kept', {
+            planAt: new Date(kept.at).toISOString(),
+            openSlots: kept.schedule.length,
+            reason: freshPlan ? 'no_solution' : 'no_plan'
+          });
+        } else if (freshPlan) {
           winningSchedule = eosSchedule;
           source = 'eos';
         } else {
           winningSchedule = internalSchedule;
-          source = 'internal'; // fallback
+          source = 'internal'; // fallback — kein gueltiger EOS-Plan (mehr)
         }
       } else if (primarySource === 'best') {
         // Estimate net-cost delta over horizon for each schedule
