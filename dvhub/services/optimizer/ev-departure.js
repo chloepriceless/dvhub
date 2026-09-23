@@ -134,3 +134,99 @@ export function resolveEvDeparture(cfg, nowMs = Date.now()) {
   if (weekly === null) return { ...base, targetSocPct: pct, reason: 'keine Abfahrt geplant' };
   return { ...base, departureAt: new Date(weekly).toISOString(), source: 'weekly', targetSocPct: pct };
 }
+
+/**
+ * Eingaben fuer Abfahrt + Ziel pruefen (Integrationsseite und Leitstand-Kachel).
+ * Nur Felder, die im Objekt stehen, landen im Patch.
+ *
+ * @returns {{ ok: true, patch: object } | { ok: false, error: string }}
+ */
+export function parseEvDeparturePatch(d, prefix = 'departure') {
+  if (!d || typeof d !== 'object') return { ok: false, error: `${prefix} must be an object` };
+  const patch = {};
+  if ('enabled' in d) patch.evDepartureEnabled = d.enabled === true;
+  if ('time' in d) {
+    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(String(d.time))) return { ok: false, error: `${prefix}.time must be HH:MM` };
+    patch.evDepartureTime = String(d.time).padStart(5, '0');
+  }
+  if ('days' in d) {
+    const days = Array.isArray(d.days) ? [...new Set(d.days.map(Number))].filter((x) => Number.isInteger(x) && x >= 1 && x <= 7).sort() : null;
+    if (!days) return { ok: false, error: `${prefix}.days must be a list of 1..7` };
+    patch.evDepartureDays = days;
+  }
+  if ('once' in d) {
+    const once = String(d.once || '').trim();
+    if (once && !Number.isFinite(Date.parse(once))) return { ok: false, error: `${prefix}.once must be an ISO date time or empty` };
+    patch.evDepartureOnce = once ? new Date(Date.parse(once)).toISOString() : '';
+  }
+  if ('targetMode' in d) {
+    if (!TARGET_MODES.includes(d.targetMode)) return { ok: false, error: `${prefix}.targetMode must be percent|kwh|km` };
+    patch.evTargetMode = d.targetMode;
+  }
+  if ('targetValue' in d) {
+    const v = Number(d.targetValue);
+    if (!Number.isFinite(v) || v < 0 || v > 2000) return { ok: false, error: `${prefix}.targetValue must be 0..2000` };
+    patch.evTargetValue = v;
+  }
+  if ('consumptionKwhPer100km' in d) {
+    const v = Number(d.consumptionKwhPer100km);
+    if (!Number.isFinite(v) || v < 5 || v > 60) return { ok: false, error: `${prefix}.consumptionKwhPer100km must be 5..60` };
+    patch.evConsumptionKwhPer100km = v;
+  }
+  return { ok: true, patch };
+}
+
+/**
+ * E-Auto-Plan aus den EOS-Slots (Inspector-Zeilen: ts_utc, evChargeFactor,
+ * evSocPct) fuer die Leitstand-Kachel: Slots im Fenster plus Kennzahlen bis zur
+ * Abfahrt — geplante Energie, Ladestand bei Abfahrt, ab wann das Ziel steht.
+ * evSocPct ist der Ladestand zu BEGINN des Slots (EOS-Ausgabe).
+ */
+export function summarizeEvPlan(rows, { maxChargeW, slotMinutes = 15, nowMs = Date.now(), departureAt = null, targetSocPct = null, horizonMs = 24 * 3600_000 } = {}) {
+  const slotMs = slotMinutes * 60_000;
+  const depMs = Date.parse(departureAt || '');
+  const endMs = Number.isFinite(depMs) ? Math.max(nowMs + horizonMs, depMs + 3600_000) : nowMs + horizonMs;
+  const slots = (Array.isArray(rows) ? rows : [])
+    .map((r) => {
+      const ts = Date.parse(r.ts_utc);
+      const f = Number(r.evChargeFactor);
+      return {
+        ts,
+        powerW: Number.isFinite(f) ? Math.max(0, Math.round(f * (Number(maxChargeW) || 0))) : null,
+        socPct: Number.isFinite(Number(r.evSocPct)) ? Number(r.evSocPct) : null
+      };
+    })
+    .filter((s) => Number.isFinite(s.ts) && s.ts + slotMs > nowMs && s.ts < endMs)
+    .sort((a, b) => a.ts - b.ts);
+  const hasEv = slots.some((s) => s.powerW !== null || s.socPct !== null);
+  const untilDep = Number.isFinite(depMs) ? slots.filter((s) => s.ts < depMs) : slots;
+  const energyWh = untilDep.reduce((a, s) => a + (s.powerW || 0) * slotMinutes / 60, 0);
+  // Ladestand bei Abfahrt: Start-SoC des Slots, in dem die Abfahrt liegt.
+  let socAtDeparture = null;
+  if (Number.isFinite(depMs)) {
+    const at = slots.find((s) => s.ts <= depMs && depMs < s.ts + slotMs) || null;
+    socAtDeparture = at?.socPct ?? null;
+  }
+  let targetReachedAt = null;
+  if (Number.isFinite(Number(targetSocPct))) {
+    const hit = untilDep.find((s) => s.socPct !== null && s.socPct >= Number(targetSocPct));
+    if (hit) targetReachedAt = new Date(hit.ts).toISOString();
+  }
+  // Zusammenhaengende Ladefenster fuer die Textzeile.
+  const windows = [];
+  for (const s of untilDep) {
+    if (!(s.powerW > 0)) continue;
+    const last = windows[windows.length - 1];
+    if (last && last.endMs === s.ts) { last.endMs = s.ts + slotMs; last.maxW = Math.max(last.maxW, s.powerW); last.wh += s.powerW * slotMinutes / 60; }
+    else windows.push({ startMs: s.ts, endMs: s.ts + slotMs, maxW: s.powerW, wh: s.powerW * slotMinutes / 60 });
+  }
+  return {
+    hasEv,
+    slotMinutes,
+    slots: slots.map((s) => ({ ts: new Date(s.ts).toISOString(), powerW: s.powerW, socPct: s.socPct })),
+    energyKwh: Math.round(energyWh / 100) / 10,
+    socAtDeparture,
+    targetReachedAt,
+    windows: windows.map((w) => ({ start: new Date(w.startMs).toISOString(), end: new Date(w.endMs).toISOString(), maxW: w.maxW, kwh: Math.round(w.wh / 100) / 10 }))
+  };
+}

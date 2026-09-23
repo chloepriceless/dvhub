@@ -2,7 +2,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  resolveEvDeparture, nextWeeklyDeparture, targetSocPct, zonedToUtcMs, DEPARTURE_LEAD_MS
+  resolveEvDeparture, nextWeeklyDeparture, targetSocPct, zonedToUtcMs, DEPARTURE_LEAD_MS,
+  parseEvDeparturePatch, summarizeEvPlan
 } from '../services/optimizer/ev-departure.js';
 import { buildEosElectricVehicles } from '../services/optimizer/eos-config-sync.js';
 
@@ -106,5 +107,65 @@ describe('buildEosElectricVehicles mit Abfahrt', () => {
     const [ev] = buildEosElectricVehicles(cfg({ evDepartureEnabled: false, evMinSocPct: 60 }), { supportsDeadline: true, nowMs: TUE_20H });
     assert.equal(ev.min_soc_percentage, 60);
     assert.equal(ev.min_soc_deadline_datetime, null);
+  });
+});
+
+describe('Eingaben pruefen (Integrationsseite + Leitstand-Kachel)', () => {
+  test('nur uebergebene Felder landen im Patch', () => {
+    const r = parseEvDeparturePatch({ time: '7:05', days: [5, 1, 1, 9, 3], targetValue: 80 });
+    assert.deepEqual(r, { ok: true, patch: { evDepartureTime: '07:05', evDepartureDays: [1, 3, 5], evTargetValue: 80 } });
+  });
+  test('Fehler mit Praefix', () => {
+    assert.equal(parseEvDeparturePatch({ time: '25:00' }, 'eos.departure').error, 'eos.departure.time must be HH:MM');
+    assert.equal(parseEvDeparturePatch({ targetMode: 'meilen' }).error, 'departure.targetMode must be percent|kwh|km');
+    assert.equal(parseEvDeparturePatch({ targetValue: -1 }).ok, false);
+    assert.equal(parseEvDeparturePatch('x').ok, false);
+  });
+  test('einmalige Abfahrt: ISO normalisiert, leer = aus', () => {
+    assert.equal(parseEvDeparturePatch({ once: '2026-09-26T09:30:00+02:00' }).patch.evDepartureOnce, '2026-09-26T07:30:00.000Z');
+    assert.equal(parseEvDeparturePatch({ once: '' }).patch.evDepartureOnce, '');
+  });
+});
+
+describe('EOS-Plan fuers Auto (Leitstand-Kachel)', () => {
+  const NOW = Date.parse('2026-09-23T15:05:00Z');
+  const row = (iso, f, soc) => ({ ts_utc: iso, evChargeFactor: f, evSocPct: soc });
+  const rows = [
+    row('2026-09-23T14:45:00Z', 1, 60),   // vorbei
+    row('2026-09-23T15:00:00Z', 0, 68),   // laeuft gerade
+    row('2026-09-23T22:15:00Z', 0.5, 68),
+    row('2026-09-23T22:30:00Z', 1, 72),
+    row('2026-09-23T22:45:00Z', 0, 78),
+    row('2026-09-24T06:30:00Z', 0.2, 78),
+    row('2026-09-24T06:45:00Z', 0, 80),
+    row('2026-09-24T07:00:00Z', 0, 80),   // Abfahrts-Slot
+    row('2026-09-24T09:00:00Z', 1, 80)    // nach der Abfahrt: zaehlt nicht
+  ];
+  const opts = { maxChargeW: 11000, nowMs: NOW, departureAt: '2026-09-24T07:00:00.000Z', targetSocPct: 80, horizonMs: 24 * 3600_000 };
+
+  test('Energie, Fenster, Ziel erreicht — nur bis zur Abfahrt', () => {
+    const p = summarizeEvPlan(rows, opts);
+    assert.equal(p.hasEv, true);
+    assert.equal(p.slots[0].ts, '2026-09-23T15:00:00.000Z', 'laufender Slot bleibt, vergangener faellt weg');
+    // 5,5 kW + 11 kW + 2,2 kW je 15 min = 4,675 kWh
+    assert.equal(p.energyKwh, 4.7);
+    assert.equal(p.socAtDeparture, 80);
+    assert.equal(p.targetReachedAt, '2026-09-24T06:45:00.000Z');
+    assert.deepEqual(p.windows.map((w) => [w.start, w.end, w.maxW, w.kwh]), [
+      ['2026-09-23T22:15:00.000Z', '2026-09-23T22:45:00.000Z', 11000, 4.1],
+      ['2026-09-24T06:30:00.000Z', '2026-09-24T06:45:00.000Z', 2200, 0.6]
+    ]);
+  });
+
+  test('Ziel verfehlt: kein targetReachedAt, Ladestand bei Abfahrt sichtbar', () => {
+    const p = summarizeEvPlan(rows, { ...opts, targetSocPct: 90 });
+    assert.equal(p.targetReachedAt, null);
+    assert.equal(p.socAtDeparture, 80);
+  });
+
+  test('EOS ohne E-Auto-Werte: hasEv false', () => {
+    const p = summarizeEvPlan([{ ts_utc: '2026-09-23T15:00:00Z' }], opts);
+    assert.equal(p.hasEv, false);
+    assert.equal(p.energyKwh, 0);
   });
 });

@@ -16,7 +16,7 @@ import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
-import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
+import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
 import { createOpenEvseAdapter, createGoeAdapter } from './services/wallbox/adapters.js';
 import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
 
@@ -1048,6 +1048,7 @@ export function createApiRoutes(ctx) {
     '/api/integration/evcc',
     '/api/integration/evcc/eos',   // EOS → evcc: Plan + letzter Befehl (keine URL, keine Secrets)
     '/api/optimizer/status',
+    '/api/ev',
     '/api/log/dv-signals',
     '/api/telemetry/series',
     '/api/forecast',
@@ -1126,7 +1127,7 @@ export function createApiRoutes(ctx) {
     ['/api/status', 'status'], ['/api/costs', 'status'], ['/api/metrics', 'status'],
     ['/dv/control-value', 'status'], ['/api/config', 'status'],
     ['/api/config/export', 'status'], ['/api/discovery/systems', 'status'],
-    ['/api/optimizer/status', 'status'],
+    ['/api/optimizer/status', 'status'], ['/api/ev', 'status'],
     // dashboard — family kiosk (token-less tablet)
     ['/api/family/status', 'dashboard'], ['/api/family/presence', 'dashboard'],
     ['/api/family/tile-history', 'dashboard'], ['/api/family/tesla-history', 'dashboard'],
@@ -4405,6 +4406,102 @@ export function createApiRoutes(ctx) {
     // returns the live loadpoint list + reachability so the page can populate
     // the loadpoint picker. POST does a dedicated server-side merge (never the
     // POST /api/config foot-gun).
+    // === E-Auto kompakt (Leitstand-Kachel) ===
+    // GET: plant das Auto bei EOS mit, Abfahrt + Ziel, Fahrzeugzustand und der
+    // EOS-Plan fuers Auto bis zur Abfahrt. POST: NUR optimizer.eosOptimizeEv und
+    // die Abfahrtsfelder — anders als POST /api/integrations/evcc, das bei jedem
+    // Speichern auch evcc.enabled/dashboardLoadpoint neu setzt.
+    if (url.pathname === '/api/ev' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const raw = ctx.getRawCfg?.() || {};
+      const opt = raw.optimizer || {};
+      const nowMs = Date.now();
+      const resolved = resolveEvDeparture(getCfg(), nowMs);
+      const evccStatus = ctx.evccIntegration?.getStatus?.() || {};
+      const lps = Array.isArray(evccStatus.loadpoints) ? evccStatus.loadpoints : [];
+      const lpId = Number(opt.evEvccLoadpoint) || Number(raw.evcc?.dashboardLoadpoint) || 1;
+      const lp = lps.find((l) => Number(l.id) === lpId) || lps[0] || null;
+      const reg = ctx.state?.optimizer?.eosEv || null;
+      let plan = null;
+      let planError = null;
+      if (opt.eosOptimizeEv === true && ctx.inspector?.getEos) {
+        try {
+          const depMs = Date.parse(resolved.departureAt || '');
+          const toMs = Math.min(nowMs + 48 * 3600_000, Math.max(nowMs + 24 * 3600_000, Number.isFinite(depMs) ? depMs + 3600_000 : 0));
+          const eos = await ctx.inspector.getEos({ from: new Date(nowMs - 15 * 60_000).toISOString(), to: new Date(toMs).toISOString() });
+          const out = eos?.output;
+          if (out && Array.isArray(out.rows)) {
+            plan = {
+              generatedAt: out.generatedAt || null,
+              ...summarizeEvPlan(out.rows, {
+                maxChargeW: Number(opt.evMaxChargeW) || 5000,
+                slotMinutes: Number(out.slotMinutes) || 15,
+                nowMs,
+                departureAt: resolved.departureAt,
+                targetSocPct: resolved.targetSocPct,
+                horizonMs: toMs - nowMs
+              })
+            };
+          } else planError = eos?.reason || 'kein EOS-Plan';
+        } catch (e) {
+          planError = e.message;
+        }
+      }
+      return json(res, 200, {
+        ok: true,
+        optimizeEv: opt.eosOptimizeEv === true,
+        evccControl: opt.evEvccControl === true,
+        capacityWh: Number(opt.evCapacityWh) || 50000,
+        maxChargeW: Number(opt.evMaxChargeW) || 5000,
+        departure: {
+          enabled: opt.evDepartureEnabled === true,
+          time: opt.evDepartureTime || '07:00',
+          days: Array.isArray(opt.evDepartureDays) ? opt.evDepartureDays : [1, 2, 3, 4, 5],
+          once: opt.evDepartureOnce || '',
+          targetMode: opt.evTargetMode || 'percent',
+          targetValue: opt.evTargetValue ?? 80,
+          resolved,
+          deadlineSupported: ctx.state?.optimizer?.eos?.supports?.evDeadline === true
+        },
+        vehicle: {
+          title: lp?.vehicleTitle || lp?.title || null,
+          connected: lp ? lp.connected === true : null,
+          charging: lp ? lp.charging === true : null,
+          chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
+          socPct: reg?.socPct ?? (Number.isFinite(Number(lp?.vehicleSocPct)) ? Number(lp.vehicleSocPct) : null),
+          socSource: reg?.socPct != null ? (reg.socSource || null) : (lp?.vehicleSocPct != null ? 'evcc' : null),
+          rangeKm: Number.isFinite(Number(lp?.vehicleRangeKm)) ? Math.round(Number(lp.vehicleRangeKm)) : null,
+          registered: reg ? reg.register === true : null,
+          registrationReason: reg?.reason || null
+        },
+        plan,
+        planError
+      });
+    }
+    if (url.pathname === '/api/ev' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'object required' });
+      const patch = {};
+      if ('optimizeEv' in body) patch.eosOptimizeEv = body.optimizeEv === true;
+      if (body.departure != null) {
+        const dep = parseEvDeparturePatch(body.departure);
+        if (!dep.ok) return json(res, 400, { ok: false, error: dep.error });
+        Object.assign(patch, dep.patch);
+      }
+      if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'nothing to change' });
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.optimizer = (next.optimizer && typeof next.optimizer === 'object') ? next.optimizer : {};
+      Object.assign(next.optimizer, patch);
+      try { ctx.saveAndApplyConfig(next); } catch (e) {
+        pushLog('ev_config_save_error', { error: e.message });
+        return json(res, 500, { ok: false, error: 'save failed' });
+      }
+      pushLog('ev_config_saved', patch, actorContext(req));
+      return json(res, 200, { ok: true, patch });
+    }
+
     if (url.pathname === '/api/integrations/evcc' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
       const raw = ctx.getRawCfg?.() || {};
@@ -4518,37 +4615,9 @@ export function createApiRoutes(ctx) {
           eosPatch.evStopMode = e.stopMode;
         }
         if (e.departure != null) {
-          const d = e.departure;
-          if (typeof d !== 'object') return json(res, 400, { ok: false, error: 'eos.departure must be an object' });
-          if ('enabled' in d) eosPatch.evDepartureEnabled = d.enabled === true;
-          if ('time' in d) {
-            if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(String(d.time))) return json(res, 400, { ok: false, error: 'eos.departure.time must be HH:MM' });
-            eosPatch.evDepartureTime = String(d.time).padStart(5, '0');
-          }
-          if ('days' in d) {
-            const days = Array.isArray(d.days) ? [...new Set(d.days.map(Number))].filter((x) => Number.isInteger(x) && x >= 1 && x <= 7).sort() : null;
-            if (!days) return json(res, 400, { ok: false, error: 'eos.departure.days must be a list of 1..7' });
-            eosPatch.evDepartureDays = days;
-          }
-          if ('once' in d) {
-            const once = String(d.once || '').trim();
-            if (once && !Number.isFinite(Date.parse(once))) return json(res, 400, { ok: false, error: 'eos.departure.once must be an ISO date time or empty' });
-            eosPatch.evDepartureOnce = once ? new Date(Date.parse(once)).toISOString() : '';
-          }
-          if ('targetMode' in d) {
-            if (!['percent', 'kwh', 'km'].includes(d.targetMode)) return json(res, 400, { ok: false, error: 'eos.departure.targetMode must be percent|kwh|km' });
-            eosPatch.evTargetMode = d.targetMode;
-          }
-          if ('targetValue' in d) {
-            const v = Number(d.targetValue);
-            if (!Number.isFinite(v) || v < 0 || v > 2000) return json(res, 400, { ok: false, error: 'eos.departure.targetValue must be 0..2000' });
-            eosPatch.evTargetValue = v;
-          }
-          if ('consumptionKwhPer100km' in d) {
-            const v = Number(d.consumptionKwhPer100km);
-            if (!Number.isFinite(v) || v < 5 || v > 60) return json(res, 400, { ok: false, error: 'eos.departure.consumptionKwhPer100km must be 5..60' });
-            eosPatch.evConsumptionKwhPer100km = v;
-          }
+          const dep = parseEvDeparturePatch(e.departure, 'eos.departure');
+          if (!dep.ok) return json(res, 400, { ok: false, error: dep.error });
+          Object.assign(eosPatch, dep.patch);
         }
         if ('capacityWh' in e) {
           const v = Number(e.capacityWh);
