@@ -195,7 +195,7 @@
     var btn = el('pvs-backfill');
     if (btn) btn.disabled = !!b.running;
     clearTimeout(pollTimer);
-    if (b.running) pollTimer = setTimeout(load, 5000);
+    if (b.running) pollTimer = setTimeout(load, 15000);
   }
 
   async function load() {

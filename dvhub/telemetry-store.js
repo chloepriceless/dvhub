@@ -949,9 +949,20 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     return result;
   }
 
+  // Abdeckung einer Reihe in genau einer Aufloesung, ohne die Zeilen zu laden
+  // (PV-Strings-Uebersicht: bis zu 2 Jahre 5-Minuten-Werte je Reihe).
+  function seriesStats({ seriesKey, resolution }) {
+    const row = db.prepare(`
+      SELECT COUNT(*) AS n, MIN(ts_utc) AS first_ts, MAX(ts_utc) AS last_ts
+      FROM timeseries_samples WHERE series_key = ? AND resolution_seconds = ?
+    `).get(seriesKey, resolution);
+    return { count: Number(row?.n || 0), firstTs: row?.first_ts || null, lastTs: row?.last_ts || null };
+  }
+
   return {
     dbPath,
     querySeries,
+    seriesStats,
     listTables() {
       return db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all().map((row) => row.name);
     },

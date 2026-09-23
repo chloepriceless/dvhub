@@ -589,21 +589,23 @@ export function createPvStringsService(ctx) {
     const endMs = now();
     const out = [];
     for (const s of allSeries(cfg)) {
-      const all = (await store()?.querySeries?.({ seriesKeys: [s.seriesKey], start: new Date(endMs - 800 * DAY_S * 1000).toISOString(), end: new Date(endMs).toISOString(), maxResolution: SLOT_S }) || [])
+      // Nur die letzten `days` Tage als Zeilen laden; die Abdeckung kommt als
+      // Aggregat aus der Datenbank. Alles zu laden (2 Jahre x 288 Slots je
+      // Reihe) hat prod am 2026-09-23 in den Speicherdruck getrieben.
+      const recent = (await store()?.querySeries?.({ seriesKeys: [s.seriesKey], start: new Date(endMs - days * DAY_S * 1000).toISOString(), end: new Date(endMs).toISOString(), maxResolution: SLOT_S }) || [])
         .filter((r) => Number(r.resolution) === SLOT_S);
+      const stats = (await store()?.seriesStats?.({ seriesKey: s.seriesKey, resolution: SLOT_S })) || { count: 0, firstTs: null, lastTs: null };
       const daily = new Map();
-      for (const r of all) {
-        const ms = Date.parse(r.ts);
-        if (ms < endMs - days * DAY_S * 1000) continue;
-        const day = isoWithOffset(ms, tz).slice(0, 10);
+      for (const r of recent) {
+        const day = isoWithOffset(Date.parse(r.ts), tz).slice(0, 10);
         daily.set(day, (daily.get(day) || 0) + Number(r.value) * SLOT_S / 3600 / 1000);
       }
       out.push({
         ...s,
-        slots: all.length,
-        firstTs: all[0]?.ts ? new Date(all[0].ts).toISOString() : null,
-        lastTs: all.at(-1)?.ts ? new Date(all.at(-1).ts).toISOString() : null,
-        coverageDays: Math.round(all.length / (DAY_S / SLOT_S)),
+        slots: stats.count,
+        firstTs: stats.firstTs ? new Date(stats.firstTs).toISOString() : null,
+        lastTs: stats.lastTs ? new Date(stats.lastTs).toISOString() : null,
+        coverageDays: Math.round(stats.count / (DAY_S / SLOT_S)),
         dailyKwh: [...daily].sort().map(([day, kwh]) => ({ day, kwh: Math.round(kwh * 100) / 100 }))
       });
     }
