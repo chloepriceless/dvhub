@@ -14,6 +14,48 @@
   var dirty = false;
   var timer = null;
 
+  // Markup der Kachel (Leitstand + Family-Panel teilen es; mount() füllt den Host).
+  var TEMPLATE = [
+    "  <div class=\"rail-card-head\">",
+    "    <span class=\"ttl\"><span class=\"dot dot-ev\"></span><span id=\"evTitle\">E-Auto</span></span>",
+    "    <label class=\"ev-plan-toggle\" title=\"EOS plant das Laden des Autos mit (Ladefenster nach Preis und PV, Ziel bis zur Abfahrt). Aus: das Auto steckt nur in der Lastprognose.\">",
+    "      <span class=\"ev-plan-toggle-l\">Plant mit</span>",
+    "      <span class=\"switch\"><input type=\"checkbox\" id=\"evOptimize\"><span class=\"track\"></span><span class=\"thumb\"></span></span>",
+    "    </label>",
+    "  </div>",
+    "  <div class=\"rail-big card-value value-ev\"><span id=\"evSocNow\">&mdash;</span><span class=\"ev-soc-arrow\">&rarr;</span><span id=\"evSocTarget\">&mdash;</span></div>",
+    "  <div class=\"ev-state\" id=\"evState\">&mdash;</div>",
+    "  <div class=\"ev-timeline\" id=\"evTimeline\" aria-label=\"EOS-Ladeplan\" title=\"Mausrad: Zeit verschieben &middot; Strg + Mausrad: zoomen &middot; Doppelklick: zur&uuml;ck auf jetzt\"></div>",
+    "  <div class=\"ev-timeline-axis\"><span id=\"evAxisStart\">jetzt</span><span id=\"evAxisEnd\">&mdash;</span></div>",
+    "  <div class=\"ev-steps\" id=\"evSteps\" aria-label=\"EOS-Ladestufen\" hidden></div>",
+    "  <div class=\"rail-row ev-edit-row\" title=\"An: EOS plant das Auto nur, solange es an der Wallbox steckt (evcc). Anstecken/Abziehen l&ouml;st sofort einen Neuplan aus &mdash; ohne Auto h&auml;lt EOS keine Energie daf&uuml;r zur&uuml;ck. Aus: EOS plant das Auto immer mit.\">",
+    "    <span class=\"l\">Nur angesteckt planen</span>",
+    "    <span class=\"switch switch-sm\"><input type=\"checkbox\" id=\"evOnlyPlugged\" aria-label=\"Nur angesteckt planen\"><span class=\"track\"></span><span class=\"thumb\"></span></span>",
+    "  </div>",
+    "  <div class=\"rail-row ev-edit-row\">",
+    "    <span class=\"l\">Abfahrt</span>",
+    "    <span class=\"ev-inline\">",
+    "      <span class=\"switch switch-sm\"><input type=\"checkbox\" id=\"evDepEnabled\" aria-label=\"Abfahrtszeit ber&uuml;cksichtigen\"><span class=\"track\"></span><span class=\"thumb\"></span></span>",
+    "      <input type=\"time\" class=\"input mono ev-time\" id=\"evDepTime\" step=\"300\" aria-label=\"Abfahrt um\">",
+    "    </span>",
+    "  </div>",
+    "  <div class=\"ev-days\" id=\"evDays\" role=\"group\" aria-label=\"Wochentage\"></div>",
+    "  <div class=\"rail-row ev-edit-row\">",
+    "    <span class=\"l\">Ziel bei Abfahrt</span>",
+    "    <span class=\"ev-inline\">",
+    "      <input type=\"number\" class=\"input mono ev-target\" id=\"evTarget\" min=\"0\" max=\"100\" step=\"5\" aria-label=\"Ziel bei Abfahrt\">",
+    "      <span class=\"ev-unit\" id=\"evTargetUnit\">%</span>",
+    "    </span>",
+    "  </div>",
+    "  <div class=\"rail-row\"><span class=\"l\">Plan</span><strong class=\"v\" id=\"evPlanSummary\">&mdash;</strong></div>",
+    "  <div class=\"ev-actions\" id=\"evActions\" hidden>",
+    "    <button type=\"button\" class=\"btn sm ghost\" id=\"evReset\">Verwerfen</button>",
+    "    <button type=\"button\" class=\"btn primary sm\" id=\"evSave\">&Uuml;bernehmen</button>",
+    "  </div>",
+    "  <div class=\"ev-msg\" id=\"evMsg\" hidden></div>",
+    ""
+  ].join('\n');
+
   function el(id) { return document.getElementById(id); }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -312,6 +354,7 @@
       var body = await res.json();
       if (!body || !body.ok) return;
       data = body;
+      try { document.dispatchEvent(new CustomEvent('dvhub:ev-data', { detail: body })); } catch (_) { /* alte Browser */ }
       // Kein Auto eingerichtet (EOS-Planung aus, keine Abfahrt, kein Ladepunkt): Kachel bleibt weg.
       var any = body.optimizeEv || (body.departure && body.departure.enabled) || (body.vehicle && body.vehicle.connected !== null);
       if (!any) { el('evTile').hidden = true; return; }
@@ -390,15 +433,26 @@
     if (e.target.id === 'evReset') { setDirty(false); msg(''); draft = draftFromData(); renderForm(); }
   });
 
-  function start() {
-    if (!el('evTile')) return;
+  // Host (#evTile) mit dem Kachel-Markup füllen und Abfrage starten. Der
+  // Leitstand hat den Host fest im HTML, die Family-Ansicht legt ihn beim
+  // Öffnen des E-Auto-Panels an und ruft mount() erneut auf.
+  function mount(host) {
+    host = host || el('evTile');
+    if (!host) return;
+    if (!host.firstElementChild) {
+      host.innerHTML = TEMPLATE;
+      draft = null; setDirty(false);
+    }
     wireTimelineWheel();
-    load();
-    timer = setInterval(function () { if (!document.hidden) load(); }, POLL_MS);
-    document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
+    if (!timer) {
+      timer = setInterval(function () { if (!document.hidden && el('evTile')) load(); }, POLL_MS);
+      document.addEventListener('visibilitychange', function () { if (!document.hidden && el('evTile')) load(); });
+    }
+    return load();
   }
+  function start() { if (el('evTile')) mount(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
 
-  window.DVhubEvTile = { load: load, stop: function () { clearInterval(timer); } };
+  window.DVhubEvTile = { load: load, mount: mount, stop: function () { clearInterval(timer); timer = null; } };
 })();

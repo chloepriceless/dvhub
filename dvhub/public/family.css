@@ -598,6 +598,8 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 /* Task #23 (2026-06-13) — EVCC charge-mode switch in the EV detail panel +
    the EVCC section in the family settings popup. */
 .panel-evcc{margin:4px 0 18px}
+.panel-evtile{margin:4px 0 14px;padding:14px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)}
+.panel-evtile .ev-timeline,.panel-evtile .ev-timeline svg{height:64px}
 .evcc-mode-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
   color:rgba(255,255,255,.4);margin-bottom:8px}
 .evcc-mode-row{display:flex;gap:8px}

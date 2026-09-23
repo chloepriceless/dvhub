@@ -13,7 +13,8 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css?v=20260708-daylight">
-  <link rel="stylesheet" href="/index.css?v=20260923-ev5">
+  <link rel="stylesheet" href="/index.css?v=20260923-ev6">
+  <link rel="stylesheet" href="/ev-tile.css?v=20260923-ev6">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Leitstand">
@@ -198,45 +199,7 @@
 
       <!-- E-Auto kompakt (ev-tile.js): plant das Auto bei EOS mit, Abfahrt + Ziel,
            EOS-Ladeplan bis zur Abfahrt. Versteckt, solange kein Auto eingerichtet ist. -->
-      <div class="card rail-card ev-tile" data-accent="ev" id="evTile" hidden>
-        <div class="rail-card-head">
-          <span class="ttl"><span class="dot dot-ev"></span><span id="evTitle">E-Auto</span></span>
-          <label class="ev-plan-toggle" title="EOS plant das Laden des Autos mit (Ladefenster nach Preis und PV, Ziel bis zur Abfahrt). Aus: das Auto steckt nur in der Lastprognose.">
-            <span class="ev-plan-toggle-l">Plant mit</span>
-            <span class="switch"><input type="checkbox" id="evOptimize"><span class="track"></span><span class="thumb"></span></span>
-          </label>
-        </div>
-        <div class="rail-big card-value value-ev"><span id="evSocNow">&mdash;</span><span class="ev-soc-arrow">&rarr;</span><span id="evSocTarget">&mdash;</span></div>
-        <div class="ev-state" id="evState">&mdash;</div>
-        <div class="ev-timeline" id="evTimeline" aria-label="EOS-Ladeplan" title="Mausrad: Zeit verschieben &middot; Strg + Mausrad: zoomen &middot; Doppelklick: zur&uuml;ck auf jetzt"></div>
-        <div class="ev-timeline-axis"><span id="evAxisStart">jetzt</span><span id="evAxisEnd">&mdash;</span></div>
-        <div class="ev-steps" id="evSteps" aria-label="EOS-Ladestufen" hidden></div>
-        <div class="rail-row ev-edit-row" title="An: EOS plant das Auto nur, solange es an der Wallbox steckt (evcc). Anstecken/Abziehen l&ouml;st sofort einen Neuplan aus &mdash; ohne Auto h&auml;lt EOS keine Energie daf&uuml;r zur&uuml;ck. Aus: EOS plant das Auto immer mit.">
-          <span class="l">Nur angesteckt planen</span>
-          <span class="switch switch-sm"><input type="checkbox" id="evOnlyPlugged" aria-label="Nur angesteckt planen"><span class="track"></span><span class="thumb"></span></span>
-        </div>
-        <div class="rail-row ev-edit-row">
-          <span class="l">Abfahrt</span>
-          <span class="ev-inline">
-            <span class="switch switch-sm"><input type="checkbox" id="evDepEnabled" aria-label="Abfahrtszeit ber&uuml;cksichtigen"><span class="track"></span><span class="thumb"></span></span>
-            <input type="time" class="input mono ev-time" id="evDepTime" step="300" aria-label="Abfahrt um">
-          </span>
-        </div>
-        <div class="ev-days" id="evDays" role="group" aria-label="Wochentage"></div>
-        <div class="rail-row ev-edit-row">
-          <span class="l">Ziel bei Abfahrt</span>
-          <span class="ev-inline">
-            <input type="number" class="input mono ev-target" id="evTarget" min="0" max="100" step="5" aria-label="Ziel bei Abfahrt">
-            <span class="ev-unit" id="evTargetUnit">%</span>
-          </span>
-        </div>
-        <div class="rail-row"><span class="l">Plan</span><strong class="v" id="evPlanSummary">&mdash;</strong></div>
-        <div class="ev-actions" id="evActions" hidden>
-          <button type="button" class="btn sm ghost" id="evReset">Verwerfen</button>
-          <button type="button" class="btn primary sm" id="evSave">&Uuml;bernehmen</button>
-        </div>
-        <div class="ev-msg" id="evMsg" hidden></div>
-      </div>
+      <div class="card rail-card ev-tile" data-accent="ev" id="evTile" hidden></div>
 
       <div class="card rail-card rail-rows-2col" data-accent="ctrl">
         <div class="rail-card-head">
@@ -549,6 +512,6 @@
 <script src="/dvhub-powerflow.js?v=20260708-swap"></script>
 <script src="/app.js?v=20260708-daynight"></script>
 <script src="/leitstand-charts.js?v=20260621-prov-energy"></script>
-<script src="/ev-tile.js?v=20260923-ev5"></script>
+<script src="/ev-tile.js?v=20260923-ev6"></script>
 </body>
 </html>

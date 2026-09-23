@@ -640,7 +640,8 @@
     if (key === 'optimizer') {
       loadEosForecastPanel(key);
     }
-    // Task #23 — EV panel evcc charge-mode switch (hidden for other panels).
+    // E-Auto-Steuerung wie im Leitstand (ev-tile.js) + evcc-Lademodus.
+    renderEvTile(key);
     renderEvccModes(key);
     // Shelly an/aus-Schalter im Geräte-Panel (2026-06-18) — nur für schaltbare
     // Geräte sichtbar, hier in der Detail-Ansicht statt auf der Karte.
@@ -650,6 +651,7 @@
   }
   function closePanel() {
     currentPanelKey = null;
+    renderEvTile(null);
     document.getElementById('overlay').classList.remove('open');
   }
 
@@ -927,6 +929,29 @@
     var hit = evcc.loadpoints.filter(function (l) { return l.id === id; })[0];
     return hit || evcc.loadpoints[0];
   }
+  // E-Auto-Kachel aus dem Leitstand im EV-Panel (Plant mit, Abfahrt, Ziel,
+  // EOS-Ladeplan). Der Host #evTile existiert nur, solange das EV-Panel offen
+  // ist — sonst pausiert ev-tile.js seine Abfrage.
+  var lastEvData = null;
+  var openPanelKey = null;
+  function renderEvTile(key) {
+    openPanelKey = key;
+    var box = document.getElementById('p-evtile');
+    if (!box) return;
+    if (key !== 'ev' || !window.DVhubEvTile) { box.innerHTML = ''; box.hidden = true; return; }
+    if (!document.getElementById('evTile')) box.innerHTML = '<div class="ev-tile ev-tile-panel" id="evTile" hidden></div>';
+    box.hidden = false;
+    window.DVhubEvTile.mount(document.getElementById('evTile'));
+  }
+  document.addEventListener('dvhub:ev-data', function (e) {
+    lastEvData = e.detail || null;
+    if (openPanelKey === 'ev') renderEvccModes('ev');
+  });
+  // Steuert EOS die Wallbox, setzt DVhub den evcc-Modus selbst (evcc ist nur
+  // Durchreiche) — die Moduswahl hier würde nach ~30 s überschrieben.
+  function eosDrivesWallbox() {
+    return !!(lastEvData && lastEvData.optimizeEv && lastEvData.evccControl);
+  }
   // Render the mode-switch buttons into #p-evcc (EV panel only). Hidden when no
   // evcc loadpoint is available.
   function renderEvccModes(key) {
@@ -934,6 +959,11 @@
     if (!box) return;
     var lp = (key === 'ev') ? famSelectedEvccLp(lastStatus) : null;
     if (!lp) { box.innerHTML = ''; box.hidden = true; return; }
+    if (eosDrivesWallbox()) {
+      box.innerHTML = '<div class="evcc-mode-sub">Wallbox ' + escapeMsg(lp.title) + ' folgt dem EOS-Plan &mdash; Laden/Stopp setzt DVhub.</div>';
+      box.hidden = false;
+      return;
+    }
     var btns = EVCC_MODE_BTNS.map(function (x) {
       return '<button class="evcc-mode-btn' + (lp.mode === x.m ? ' active' : '')
         + '" data-action="evcc-mode" data-mode="' + x.m + '" data-lp="' + lp.id + '" type="button">'

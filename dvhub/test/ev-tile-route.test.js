@@ -37,4 +37,16 @@ describe('/api/ev', () => {
     assert.match(html, /id="evTile"/);
     assert.match(html, /<script src="\/ev-tile\.js/);
   });
+
+  it('Kachel steckt auch im E-Auto-Panel der Family-Ansicht (ein Markup in ev-tile.js)', () => {
+    const pub = path.resolve(__dirname, '..', 'public');
+    const fam = fs.readFileSync(path.join(pub, 'family.html'), 'utf8');
+    assert.match(fam, /id="p-evtile"/);
+    assert.match(fam, /<script src="\/ev-tile\.js/);
+    assert.match(fam, /href="\/ev-tile\.css/);
+    assert.ok(fam.indexOf('<script src="/ev-tile.js') < fam.indexOf('<script src="/family.js'), 'ev-tile.js vor family.js');
+    const js = fs.readFileSync(path.join(pub, 'ev-tile.js'), 'utf8');
+    assert.match(js, /id=\\"evOptimize\\"/, 'Markup lebt in ev-tile.js');
+    assert.match(fs.readFileSync(path.join(pub, 'family.js'), 'utf8'), /DVhubEvTile\.mount/);
+  });
 });
