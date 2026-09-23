@@ -193,6 +193,29 @@ body::before {
   .topbar-right .theme-toggle { flex-shrink:0; white-space:nowrap; }
 }
 
+/* Menü passt nicht neben Logo + Status-Chips (common.js misst) → Hamburger
+   wie am Handy, statt die Punkte hinter den Chips abzuschneiden. */
+.topbar.nav-collapsed .nav-toggle { display:inline-flex; }
+.topbar.nav-collapsed .topbar-nav {
+  position:fixed; top:56px; left:0; right:0; z-index:49;
+  display:flex; flex-direction:column; align-items:stretch;
+  flex:none;
+  background:var(--header-bg);
+  backdrop-filter:blur(var(--glass-blur)) saturate(1.2);
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(1.2);
+  border-bottom:1px solid var(--glass-brd);
+  padding:8px 14px 12px;
+  gap:4px;
+  transform:translateY(-12px); opacity:0; pointer-events:none;
+  transition:transform .2s ease, opacity .2s ease;
+  overflow-x:visible;
+}
+.topbar.nav-collapsed .topbar-nav.is-open { transform:translateY(0); opacity:1; pointer-events:auto; }
+.topbar.nav-collapsed .topbar-nav a { padding:10px 13px; }
+.topbar.nav-collapsed .topbar-nav a.is-active::after { display:none; }
+/* Rechte Gruppe nach rechts, wenn das Menü nicht mehr den Platz füllt. */
+.topbar.nav-collapsed .topbar-right { margin-left:auto; }
+
 /* status pill in topbar */
 .status-pill {
   display:inline-flex; align-items:center; gap:6px;

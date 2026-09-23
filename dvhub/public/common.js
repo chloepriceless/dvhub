@@ -268,6 +268,8 @@
     var toggle = document.getElementById('navToggle');
     var nav = document.getElementById('topbarNav');
     if (!toggle || !nav) return;
+    // Vor der Klick-Sperre: auf index.html verdrahtet app.js den Klick ggf. zuerst.
+    wireNavOverflowCollapse(toggle, nav);
     // Idempotent: app.js#wireNavToggle (index-only) may also try to wire the
     // same nodes after this common.js call. Mark via data-attr so the second
     // call short-circuits and we don't end up with two click listeners that
@@ -285,6 +287,41 @@
         toggle.setAttribute('aria-expanded', 'false');
       });
     }
+  }
+
+  // Passen die Menüpunkte nicht mehr neben Logo + Status-Chips, klappt das
+  // Menü in den Hamburger (.topbar.nav-collapsed) — statt unsichtbar hinter
+  // den Chips abgeschnitten zu werden. Gemessen wird im ausgeklappten Zustand
+  // (Klasse kurz weg, Messung, Klasse wieder dran — im selben Frame, kein
+  // Flackern), weil nur dort nav.scrollWidth > clientWidth „passt nicht“ heißt.
+  function wireNavOverflowCollapse(toggle, nav) {
+    var bar = nav.closest('.topbar');
+    if (!bar || bar.dataset.navCollapseWired === '1') return;
+    bar.dataset.navCollapseWired = '1';
+    var pending = false;
+    function check() {
+      pending = false;
+      bar.classList.remove('nav-collapsed');
+      var over = nav.scrollWidth > nav.clientWidth + 1;
+      bar.classList.toggle('nav-collapsed', over);
+      // Wieder ausgeklappt (breites Fenster): offenen Drawer-Zustand abräumen.
+      if (!over && window.innerWidth > 760 && nav.classList.contains('is-open')) {
+        nav.classList.remove('is-open');
+        toggle.setAttribute('aria-expanded', 'false');
+      }
+    }
+    function schedule() {
+      if (pending) return;
+      pending = true;
+      window.requestAnimationFrame(check);
+    }
+    window.addEventListener('resize', schedule);
+    window.addEventListener('load', schedule);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(schedule);
+    // Status-Chips (MQTT, Tesla, Uhr …) kommen später dazu oder ändern die Breite.
+    var right = bar.querySelector('.topbar-right');
+    if (right && typeof window.ResizeObserver === 'function') new window.ResizeObserver(schedule).observe(right);
+    schedule();
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', wireAuroraTopbarNavToggle);
