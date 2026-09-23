@@ -18,6 +18,7 @@ import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { createOpenEvseAdapter, createGoeAdapter } from './services/wallbox/adapters.js';
+import { resolvePvStringSources, buildPvnodeCsv } from './services/pv-strings/index.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
 // alles, was der Verbindung-/Einstellungen-Tab anzeigen darf. Passwort nie —
@@ -3434,9 +3435,101 @@ export function createApiRoutes(ctx) {
             dashboardLoadpoint: getCfg().evcc?.dashboardLoadpoint ?? null,
             lastError: es.lastError || null
           };
+        })(),
+        // PV-Strings / Solar-Logger. Nur Zaehler und Zeitstempel.
+        pvstrings: (() => {
+          const st = ctx.pvStrings?.getStatus?.() || {};
+          const cfg = getCfg();
+          return {
+            enabled: cfg.pvStrings?.enabled === true,
+            sourceCount: Array.isArray(cfg.pvStrings?.sources) ? cfg.pvStrings.sources.length : 0,
+            lastSyncAt: st.lastSyncAt || null,
+            lastError: st.lastError || null,
+            backfillRunning: !!st.backfill?.running
+          };
         })()
       };
       return json(res, 200, payload);
+    }
+
+    // --- PV-Strings / Solar-Logger (services/pv-strings) ---
+    if (url.pathname === '/api/pv-strings' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
+      try {
+        return json(res, 200, { ok: true, ...(await ctx.pvStrings.overview()) });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+    if (url.pathname === '/api/pv-strings/discover' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
+      try {
+        const r = await ctx.pvStrings.discover();
+        return json(res, r.ok ? 200 : 502, r);
+      } catch (e) {
+        return json(res, 502, { ok: false, error: e.message });
+      }
+    }
+    if (url.pathname === '/api/pv-strings' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'object required' });
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      const ps = (next.pvStrings && typeof next.pvStrings === 'object') ? next.pvStrings : {};
+      if ('enabled' in body) ps.enabled = body.enabled === true;
+      if ('backfillDays' in body) {
+        const v = Number(body.backfillDays);
+        if (!Number.isInteger(v) || v < 1 || v > 730) return json(res, 400, { ok: false, error: 'backfillDays must be 1..730' });
+        ps.backfillDays = v;
+      }
+      if ('sources' in body) {
+        if (!Array.isArray(body.sources) || body.sources.length > 32) return json(res, 400, { ok: false, error: 'sources must be a list (max 32)' });
+        const cleaned = resolvePvStringSources({ pvStrings: { sources: body.sources } })
+          .map(({ id, label, kind, instance, tracker, kwp }) => ({ id, label, kind, instance, tracker, ...(kwp ? { kwp } : {}) }));
+        if (cleaned.length !== body.sources.length) return json(res, 400, { ok: false, error: 'invalid source (id a-z0-9_-, kind victron_vrm_tracker, instance/tracker >= 0, ids unique)' });
+        ps.sources = cleaned;
+      }
+      next.pvStrings = ps;
+      try { ctx.saveAndApplyConfig(next); } catch (e) { return json(res, 500, { ok: false, error: 'save failed' }); }
+      pushLog('pv_strings_config_saved', { enabled: ps.enabled === true, sources: (ps.sources || []).length }, actorContext(req));
+      return json(res, 200, { ok: true, pvStrings: ps });
+    }
+    if (url.pathname === '/api/pv-strings/backfill' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
+      let body = {};
+      try { body = (await parseBody(req)) || {}; } catch { /* leer = Standard */ }
+      if (ctx.pvStrings.getStatus().backfill.running) return json(res, 409, { ok: false, error: 'laeuft bereits' });
+      // Im Hintergrund: das Nachladen dauert je nach Zeitraum Minuten.
+      ctx.pvStrings.backfill({ days: body.days }).catch(() => {});
+      return json(res, 202, { ok: true, started: true });
+    }
+    if (url.pathname === '/api/pv-strings/export.csv' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
+      const id = String(url.searchParams.get('id') || '');
+      const startRaw = parseIsoOrNull(url.searchParams.get('start'));
+      const endRaw = parseIsoOrNull(url.searchParams.get('end'));
+      if (startRaw === false || endRaw === false) return json(res, 400, { ok: false, error: 'invalid_timestamp' });
+      const end = endRaw || new Date().toISOString();
+      const start = startRaw || new Date(Date.parse(end) - 730 * 86400000).toISOString();
+      try {
+        const r = await ctx.pvStrings.readSeries(id, { start, end });
+        if (!r) return json(res, 404, { ok: false, error: 'unknown string id' });
+        const csv = buildPvnodeCsv(r.rows, { timeZone: getCfg().schedule?.timezone || 'Europe/Berlin' });
+        res.writeHead(200, {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="pvnode-${r.source.id}.csv"`,
+          'cache-control': 'no-store'
+        });
+        res.end(csv);
+        return;
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
     }
 
     // GET /api/integrations/health — all-in-one per-system health response

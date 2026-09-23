@@ -107,6 +107,15 @@
       category: 'Wallbox · Lademodus',
       logo: 'EV',
       accent: 'cyan'
+    },
+    // 2026-09-23: Erzeugung je String (Victron-Tracker via VRM) + CSV fuer die
+    // pvnode-Kalibrierung. Drawer: pv-strings-drawer.js.
+    {
+      key: 'pvstrings',
+      label: 'PV-Strings',
+      category: 'Solar-Logger · pvnode-Kalibrierung',
+      logo: 'PV',
+      accent: 'orange'
     }
   ];
 
@@ -408,6 +417,10 @@
       case 'loxone': return data.configured ? 'online' : 'disabled';
       case 'devices': return data.total > 0 ? 'online' : 'disabled';
       case 'notifications': return data.enabled ? 'online' : 'disabled';
+      case 'pvstrings':
+        if (!data || !data.enabled) return 'disabled';
+        if (data.lastError) return 'stale';
+        return data.lastSyncAt ? 'online' : 'stale';
       case 'vrm':
         // Phase 20-05 D-08: VRM card status. data comes from /api/integrations/status.vrm
         // subtree, which emits {enabled, vrmPortalId, vrmTokenSet}. Never a raw token.
@@ -577,6 +590,13 @@
           { label: 'Last send', value: fmtRel(data.lastSampleAt) }
         ];
       }
+      case 'pvstrings':
+        return [
+          { label: 'Strings', value: String(data.sourceCount || 0) },
+          { label: 'Erfassung', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },
+          { label: 'Nachladen', value: data.backfillRunning ? 'läuft' : '—' },
+          { label: 'Letzte', value: fmtRel(data.lastSyncAt) }
+        ];
       case 'vrm':
         return [
           { label: 'Portal-ID', value: data.vrmPortalId || '—' },
@@ -1586,6 +1606,11 @@
     }
     if (key === 'notifications') { inst = getOrCreateDrawer('notifications'); if (inst) inst.open(); return true; }
     if (key === 'vrm') { inst = getOrCreateDrawer('vrm'); if (inst) inst.open(); return true; }
+    if (key === 'pvstrings') {
+      inst = getOrCreateDrawer('pvstrings');
+      if (inst) { inst.open(); if (window.DVhubPvStrings) setTimeout(window.DVhubPvStrings.load, 0); }
+      return true;
+    }
     if (key === 'forecast-providers') { inst = getOrCreateDrawer('forecast'); if (inst) inst.open(); return true; }
     if (key === 'evcc') {
       inst = getOrCreateDrawer('evcc');

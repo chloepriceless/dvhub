@@ -1391,3 +1391,18 @@
 
 .evcc-wallbox-fields { display: flex; flex-direction: column; gap: 10px; }
 .evcc-wallbox-fields[hidden], #evcc-eos-loadpoint-wrap[hidden], #wallbox-live[hidden] { display: none; }
+
+/* PV-Strings / Solar-Logger (pv-strings-drawer.js) */
+.pvs-sources, .pvs-data { margin-top: 14px; }
+.pvs-sources-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.pvs-row { display: grid; grid-template-columns: 1.2fr 1.6fr 70px auto; gap: 6px; margin-bottom: 6px; }
+@media (max-width: 520px) { .pvs-row { grid-template-columns: 1fr 70px auto; } .pvs-row .pvs-tracker { grid-column: 1 / -1; } }
+.pvs-card { border: 1px solid var(--border, rgba(127,127,127,.25)); border-radius: 10px; padding: 10px 12px; margin-top: 8px; display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; }
+.pvs-card-head { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.pvs-meta { opacity: .7; font-size: .85em; }
+.pvs-cover { font-size: .9em; }
+.pvs-warn { color: var(--warn, #c98a00); }
+.pvs-svg { width: 100%; max-width: 160px; height: 30px; display: block; margin-top: 4px; }
+.pvs-svg rect { fill: var(--accent, #f5a623); }
+.pvs-howto { margin-top: 14px; font-size: .9em; }
+.pvs-howto ol { margin: 6px 0 0 18px; padding: 0; }

@@ -43,6 +43,7 @@ import {
 } from './market-automation-builder.js';
 import { createScheduleEvaluator } from './schedule-eval.js';
 import { createEvccIntegration } from './evcc-integration.js';
+import { createPvStringsService } from './services/pv-strings/index.js';
 import {
   buildSunTimesCacheKey,
   isSunTimesCacheStale,
@@ -1043,6 +1044,9 @@ ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 ctx.applyControlTarget = scheduler.applyControlTarget;
 const evccIntegration = createEvccIntegration(ctx);
 ctx.evccIntegration = evccIntegration;
+// PV-Strings / Solar-Logger: Tracker-Erzeugung aus VRM, CSV fuer pvnode.
+const pvStrings = createPvStringsService(ctx);
+ctx.pvStrings = pvStrings;
 const forecast = createForecastService(ctx);
 ctx.forecastService = forecast;
 // T-CURTAIL Increment 2b: irradiance-calibrated curtailment estimator. Reads the
@@ -1837,6 +1841,7 @@ if (IS_RUNTIME_PROCESS) {
   poller.start();
   scheduler.start();
   evccIntegration.start();
+  pvStrings.start();
   eosEvccBridge.start();
   epex.start();
   // forecast.start() needs dbPool — wait for telemetry IIFE to finish first
@@ -2105,6 +2110,7 @@ async function gracefulShutdown(signal) {
     monitoringHeartbeatSend = null;
   });
   safeSync('evccIntegration.stop', () => evccIntegration.stop?.());
+  safeSync('pvStrings.stop', () => pvStrings.stop?.());
   safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
   safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
   safeSync('eosFreshSocTimer.stop', () => clearInterval(eosFreshSocTimer));

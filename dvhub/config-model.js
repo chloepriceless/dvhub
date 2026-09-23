@@ -3813,6 +3813,14 @@ export function createDefaultConfig() {
       openevse: { url: '', username: '', password: '' },
       goe: { url: '' }
     },
+    // PV-Strings / Solar-Logger (services/pv-strings): Erzeugung je String bzw.
+    // Tracker erfassen und als CSV fuer die pvnode-Kalibrierung aufbereiten.
+    // sources: [{ id, label, kind: 'victron_vrm_tracker', instance, tracker, kwp }]
+    pvStrings: {
+      enabled: false,
+      sources: [],
+      backfillDays: 365
+    },
     // Plan 08-04 Task 2 Step 5: Host-header + CORS + trust-proxy allowlists.
     // Defaults stay permissive for LAN-first installs (empty arrays = no check);
     // operators on public-facing / reverse-proxy deployments MUST populate
