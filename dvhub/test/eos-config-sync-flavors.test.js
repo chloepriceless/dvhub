@@ -298,13 +298,18 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
     evTargetMode: 'kwh', evTargetValue: 45,
   };
 
+  // Auto steckt (evcc) — ohne Stecker meldet DVhub es seit 2026-09-23 gar
+  // nicht an (evPlanOnlyWhenPlugged); diese Tests pruefen Ziel/Abfahrt/SoC.
+  const ctxP = (port, d) => Object.assign(ctxFor(port, d), {
+    evccIntegration: { getLoadpoints: () => [{ id: 1, connected: true }] },
+  });
   const withTesla = (ctx, batteryLevel = 40) => Object.assign(ctx, {
     teslamateService: { getState: () => ({ batteryLevel }) },
   });
 
   it('upstream-genetic: Ziel + Uhrzeit im Fahrzeug, auch ueber syncEv()', async () => {
     mock = await createMockEos('upstreamGenetic');
-    const ctx = withTesla(ctxFor(mock.port, dep));
+    const ctx = withTesla(ctxP(mock.port, dep));
     await createEosConfigSync(ctx).sync();
     const ev = bodyOf(mock, 'devices/electric_vehicles').ev11;
     assert.equal(ev.min_soc_percentage, 75);
@@ -320,7 +325,7 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
   // missing for ev11") — auch der Hausakku blieb ohne Plan.
   it('upstream-genetic OHNE Fahrzeug-SoC: Auto nicht anmelden, Grund im State', async () => {
     mock = await createMockEos('upstreamGenetic');
-    const ctx = ctxFor(mock.port, dep);
+    const ctx = ctxP(mock.port, dep);
     const res = await createEosConfigSync(ctx).sync();
     assert.equal(res.ok, true);
     assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 0);
@@ -333,13 +338,13 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
 
   it('dv-fork OHNE Fahrzeug-SoC: wie bisher anmelden (0.3 rechnet mit 0 weiter)', async () => {
     mock = await createMockEos('dvFork');
-    await createEosConfigSync(ctxFor(mock.port, dep)).sync();
+    await createEosConfigSync(ctxP(mock.port, dep)).sync();
     assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 1);
   });
 
   it('evcc-SoC springt ein, wenn TeslaMate nichts hat', async () => {
     mock = await createMockEos('upstreamGenetic');
-    const ctx = Object.assign(ctxFor(mock.port, dep), {
+    const ctx = Object.assign(ctxP(mock.port, dep), {
       teslamateService: { getState: () => ({ batteryLevel: null }) },
       evccIntegration: { getLoadpoints: () => [{ id: 1, connected: true, vehicleSocPct: 55 }] },
     });
@@ -350,7 +355,7 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
 
   it('dv-fork: nur das Ziel, kein unbekanntes Feld', async () => {
     mock = await createMockEos('dvFork');
-    await createEosConfigSync(ctxFor(mock.port, dep)).sync();
+    await createEosConfigSync(ctxP(mock.port, dep)).sync();
     const ev = bodyOf(mock, 'devices/electric_vehicles')[0];
     assert.equal(ev.min_soc_percentage, 75);
     assert.equal('min_soc_deadline_datetime' in ev, false);
@@ -358,8 +363,36 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
 
   it('syncEv() tut nichts, solange das E-Auto nicht mitoptimiert wird', async () => {
     mock = await createMockEos('upstreamGenetic');
-    const res = await createEosConfigSync(ctxFor(mock.port, { ...dep, eosOptimizeEv: false })).syncEv();
+    const res = await createEosConfigSync(ctxP(mock.port, { ...dep, eosOptimizeEv: false })).syncEv();
     assert.equal(res.skipped, 'eosOptimizeEv=false');
     assert.equal(sectionsOf(mock).includes('devices/electric_vehicles'), false);
+  });
+
+  it('nicht angesteckt: Auto nicht anmelden, Grund im State (evPlanOnlyWhenPlugged, Standard)', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const ctx = Object.assign(withTesla(ctxFor(mock.port, dep)), {
+      evccIntegration: { getLoadpoints: () => [{ id: 1, connected: false, vehicleSocPct: 0 }] },
+    });
+    await createEosConfigSync(ctx).sync();
+    assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 0);
+    assert.equal(ctx.state.optimizer.eosEv.register, false);
+    assert.equal(ctx.state.optimizer.eosEv.reason, 'nicht angesteckt');
+    assert.equal(ctx.state.optimizer.eosEv.plugged, false);
+  });
+
+  it('evcc unbekannt: ebenfalls nicht anmelden', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const ctx = withTesla(ctxFor(mock.port, dep));
+    await createEosConfigSync(ctx).sync();
+    assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 0);
+    assert.match(ctx.state.optimizer.eosEv.reason, /unbekannt/);
+  });
+
+  it('evPlanOnlyWhenPlugged=false: altes Verhalten, auch ohne Stecker anmelden', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const ctx = withTesla(ctxFor(mock.port, { ...dep, evPlanOnlyWhenPlugged: false }));
+    await createEosConfigSync(ctx).sync();
+    assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 1);
+    assert.equal(ctx.state.optimizer.eosEv.register, true);
   });
 });

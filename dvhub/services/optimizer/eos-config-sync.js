@@ -11,7 +11,7 @@
 // eos-adapter.js: never throws, returns { ok, applied, errors }.
 
 import { resolveEvDeparture } from './ev-departure.js';
-import { resolveEvSocPct } from './ev-soc.js';
+import { resolveEvSocPct, resolveEvPlugged } from './ev-soc.js';
 import http from 'node:http';
 
 import { createEosCapabilityProbe, EOS_FLAVOR } from './eos-capabilities.js';
@@ -388,18 +388,28 @@ export function createEosConfigSync(ctx) {
   function decideEvRegistration(cfg, caps) {
     const wanted = cfg?.optimizer?.eosOptimizeEv === true;
     const soc = wanted ? resolveEvSocPct(ctx) : null;
+    // Nur angesteckt planen (Standard): ohne Auto an der Wallbox wuerde EOS
+    // Energie fuers Auto einplanen und den Hausakku danach ausrichten (halten,
+    // aufsparen) — fuer ein Auto, das gar nicht laden kann. Beim Anstecken
+    // meldet die Steck-Wache (server.js) das Auto an und stoesst einen
+    // Neuplan an.
+    const onlyWhenPlugged = cfg?.optimizer?.evPlanOnlyWhenPlugged !== false;
+    const plugged = wanted ? resolveEvPlugged(ctx) : null;
     let register = wanted;
     let reason = wanted ? null : 'eosOptimizeEv=false';
-    if (wanted && !soc && caps.supports.freshSocRequired === true) {
+    if (wanted && onlyWhenPlugged && plugged !== true) {
+      register = false;
+      reason = plugged === false ? 'nicht angesteckt' : 'Steckzustand unbekannt (evcc)';
+    } else if (wanted && !soc && caps.supports.freshSocRequired === true) {
       register = false;
       reason = 'kein Ladestand des Autos (TeslaMate/evcc) — EOS 0.4 wuerde sonst gar nicht rechnen';
     }
-    const decision = { wanted, register, reason, socPct: soc?.pct ?? null, socSource: soc?.source ?? null };
+    const decision = { wanted, register, reason, onlyWhenPlugged, plugged, socPct: soc?.pct ?? null, socSource: soc?.source ?? null };
     if (state) {
       state.optimizer = state.optimizer || {};
       const prev = state.optimizer.eosEv;
       state.optimizer.eosEv = decision;
-      if (pushLog && wanted && !register && (!prev || prev.register !== false)) pushLog('eos_ev_no_soc', { reason });
+      if (pushLog && wanted && !register && (!prev || prev.register !== false)) pushLog(plugged === true || !onlyWhenPlugged ? 'eos_ev_no_soc' : 'eos_ev_not_plugged', { reason });
     }
     return decision;
   }

@@ -17,7 +17,7 @@ import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
-import { resolveEvSocPct } from './services/optimizer/ev-soc.js';
+import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
 import { createOpenEvseAdapter, createGoeAdapter } from './services/wallbox/adapters.js';
 import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
 
@@ -4452,6 +4452,7 @@ export function createApiRoutes(ctx) {
       return json(res, 200, {
         ok: true,
         optimizeEv: opt.eosOptimizeEv === true,
+        onlyWhenPlugged: opt.evPlanOnlyWhenPlugged !== false,
         evccControl: opt.evEvccControl === true,
         capacityWh: Number(opt.evCapacityWh) || 50000,
         maxChargeW: Number(opt.evMaxChargeW) || 5000,
@@ -4476,7 +4477,8 @@ export function createApiRoutes(ctx) {
           socSource: evSoc?.source ?? null,
           rangeKm: Number.isFinite(Number(lp?.vehicleRangeKm)) ? Math.round(Number(lp.vehicleRangeKm)) : null,
           registered: reg ? reg.register === true : null,
-          registrationReason: reg?.reason || null
+          registrationReason: reg?.reason || null,
+          plugged: resolveEvPlugged(ctx)
         },
         plan,
         planError
@@ -4489,6 +4491,7 @@ export function createApiRoutes(ctx) {
       if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'object required' });
       const patch = {};
       if ('optimizeEv' in body) patch.eosOptimizeEv = body.optimizeEv === true;
+      if ('onlyWhenPlugged' in body) patch.evPlanOnlyWhenPlugged = body.onlyWhenPlugged === true;
       if (body.departure != null) {
         const dep = parseEvDeparturePatch(body.departure);
         if (!dep.ok) return json(res, 400, { ok: false, error: dep.error });
@@ -4503,6 +4506,9 @@ export function createApiRoutes(ctx) {
         return json(res, 500, { ok: false, error: 'save failed' });
       }
       pushLog('ev_config_saved', patch, actorContext(req));
+      // An-/Abmelden des Autos aendert den EOS-Plan grundlegend: sofort neu
+      // planen statt bis zum naechsten Takt (bis 15 min) mit altem Plan.
+      if ('eosOptimizeEv' in patch || 'evPlanOnlyWhenPlugged' in patch) ctx.optimizerService?.requestEosReplan?.('ev_config');
       return json(res, 200, { ok: true, patch });
     }
 

@@ -262,6 +262,19 @@ export function createOptimizerService(ctx) {
   }
 
   /**
+   * Neuplan sofort, obwohl EOS nicht neu gestartet wurde — z. B. weil das
+   * E-Auto angesteckt/abgezogen und dadurch bei EOS an-/abgemeldet wurde. Gleicher
+   * Weg wie nach einem Neustart: die alte Loesung gilt nicht mehr als frisch,
+   * die Erstplan-Wache holt die neue (Boost auf 60 s) statt zum naechsten
+   * 15-Minuten-Takt.
+   */
+  function requestEosReplan(reason) {
+    eosFirstPushAt = null;
+    pushLog('eos_replan_requested', { reason: reason || null });
+    kickOptimization();
+  }
+
+  /**
    * Core optimization run. Gates on optimizer.enabled per run (NOT in start()).
    * Uses forecastVersion for change detection and generation guard for supersession.
    */
@@ -740,6 +753,7 @@ export function createOptimizerService(ctx) {
     start,
     close,
     notifyEosRestart,
+    requestEosReplan,
     getSchedule: () => state.optimizer.lastSchedule,
     getStatus: () => ({ ...state.optimizer, mispel: state.optimizer.mispel })
   };

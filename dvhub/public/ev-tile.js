@@ -112,6 +112,13 @@
     var res = data.departure && data.departure.resolved;
     if (!data.optimizeEv) { out.textContent = 'EOS plant das Auto nicht'; out.classList.add('dim'); return; }
     if (data.vehicle && data.vehicle.registered === false) {
+      if (data.onlyWhenPlugged && data.vehicle.plugged !== true) {
+        // Gewollt: ohne Auto an der Wallbox plant EOS ohne Auto.
+        out.textContent = 'wartet aufs Anstecken';
+        out.title = 'EOS plant gerade ohne Auto und hält keine Energie dafür zurück. Beim Anstecken meldet DVhub das Auto an und EOS plant sofort neu (1–5 min).';
+        out.classList.add('dim');
+        return;
+      }
       out.textContent = 'nicht bei EOS: ' + (data.vehicle.registrationReason || 'kein Ladestand');
       out.classList.add('warn');
       return;
@@ -171,6 +178,8 @@
     var v = data.vehicle || {};
     el('evTitle').textContent = 'E-Auto' + (v.title ? ' · ' + v.title : '');
     el('evOptimize').checked = !!data.optimizeEv;
+    el('evOnlyPlugged').checked = data.onlyWhenPlugged !== false;
+    el('evOnlyPlugged').disabled = !data.optimizeEv;
     tile.classList.toggle('is-off', !data.optimizeEv);
     el('evSocNow').textContent = v.socPct != null ? v.socPct + ' %' : '—';
     var res = data.departure && data.departure.resolved;
@@ -223,6 +232,14 @@
     load();
   }
 
+  async function toggleOnlyPlugged(on) {
+    var ok = await post({ onlyWhenPlugged: on }, on
+      ? 'EOS plant das Auto nur noch, wenn es angesteckt ist.'
+      : 'EOS plant das Auto immer mit, auch ohne Stecker.');
+    if (!ok) el('evOnlyPlugged').checked = !on;
+    load();
+  }
+
   async function save() {
     var mode = (data.departure && data.departure.targetMode) || 'percent';
     var tv = Number(el('evTarget').value);
@@ -238,6 +255,7 @@
   document.addEventListener('change', function (e) {
     if (!data) return;
     if (e.target.id === 'evOptimize') { toggleOptimize(e.target.checked); return; }
+    if (e.target.id === 'evOnlyPlugged') { toggleOnlyPlugged(e.target.checked); return; }
     if (e.target.id === 'evDepEnabled') { draft.enabled = e.target.checked; renderForm(); setDirty(true); return; }
     if (e.target.id === 'evDepTime') { draft.time = e.target.value; setDirty(true); return; }
     if (e.target.id === 'evTarget') { draft.targetValue = e.target.value; setDirty(true); }

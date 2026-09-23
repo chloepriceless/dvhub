@@ -1,7 +1,7 @@
 // test/ev-soc.test.js -- Ladestand des E-Autos fuer EOS und die Leitstand-Kachel.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveEvSocPct } from '../services/optimizer/ev-soc.js';
+import { resolveEvSocPct, resolveEvPlugged, createEvPlugTracker } from '../services/optimizer/ev-soc.js';
 
 const ctx = ({ tesla, lp }) => ({
   getCfg: () => ({ optimizer: { evEvccLoadpoint: 1 } }),
@@ -21,5 +21,41 @@ describe('resolveEvSocPct', () => {
   });
   test('ohne Quelle: null', () => {
     assert.equal(resolveEvSocPct(ctx({})), null);
+  });
+});
+
+describe('resolveEvPlugged', () => {
+  test('angesteckt / nicht / unbekannt', () => {
+    assert.equal(resolveEvPlugged(ctx({ lp: { connected: true } })), true);
+    assert.equal(resolveEvPlugged(ctx({ lp: { connected: false } })), false);
+    assert.equal(resolveEvPlugged(ctx({})), null);
+  });
+});
+
+describe('createEvPlugTracker (Entprellung)', () => {
+  test('erste Beobachtung setzt nur den Ausgangszustand', () => {
+    const t = createEvPlugTracker({ stableTicks: 2 });
+    assert.deepEqual(t.update(false), { changed: false, stable: false });
+  });
+  test('Wechsel zaehlt erst nach 2 gleichen Abfragen', () => {
+    const t = createEvPlugTracker({ stableTicks: 2 });
+    t.update(false);
+    assert.equal(t.update(true).changed, false);
+    assert.deepEqual(t.update(true), { changed: true, from: false, stable: true });
+    assert.equal(t.update(true).changed, false, 'kein zweites Mal');
+  });
+  test('kurzes Flattern loest nichts aus', () => {
+    const t = createEvPlugTracker({ stableTicks: 2 });
+    t.update(false);
+    t.update(true);
+    t.update(false);
+    assert.equal(t.update(true).changed, false);
+    assert.equal(t.stable, false);
+  });
+  test('evcc weg (null) gilt als eigener Zustand', () => {
+    const t = createEvPlugTracker({ stableTicks: 2 });
+    t.update(true);
+    t.update(null);
+    assert.deepEqual(t.update(null), { changed: true, from: true, stable: null });
   });
 });

@@ -122,6 +122,7 @@ import { createEosAdapter as createEosAdapterForInspector } from './services/opt
 import { createEosEvccBridge } from './services/optimizer/eos-evcc-bridge.js';
 import { createOpenEvseAdapter, createGoeAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
+import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createOptimizerService } from './services/optimizer/index.js';
@@ -1207,10 +1208,38 @@ ctx.eosConfigSync = eosConfigSync;
 // gespeichert), und dann nur das Fahrzeug an EOS schicken. Der volle Abgleich
 // alle 15 min waere zu spaet: ein vergangener Termin heisst fuer EOS
 // "sofort mit voller Leistung laden".
+//
+// Dazu die Steck-Wache (optimizer.evPlanOnlyWhenPlugged, Standard an): EOS
+// plant das Auto nur, solange es an der Wallbox steckt. Aendert sich der
+// (entprellte) Steck-Zustand, meldet der volle Abgleich das Auto an bzw. ab
+// und EOS rechnet sofort neu, statt bis zum naechsten Takt mit/ohne Auto
+// weiterzuplanen.
 let evDepartureLastKey = null;
+const evPlugTracker = createEvPlugTracker({ stableTicks: 2 });
+let evPlugSyncPending = 0;
 const evDepartureTimer = safeInterval('ev-departure.watch', async () => {
   const cfg = ctx.getCfg();
   if (cfg?.optimizer?.eosOptimizeEv !== true || !cfg?.optimizer?.eosProxy?.enabled) { evDepartureLastKey = null; return; }
+  if (cfg?.optimizer?.evPlanOnlyWhenPlugged !== false) {
+    const plug = evPlugTracker.update(resolveEvPlugged(ctx));
+    if (plug.changed) {
+      pushLog('ev_plug_change', { from: plug.from, plugged: plug.stable });
+      evPlugSyncPending = 5;
+    }
+    // Scheitert der Abgleich (EOS gerade weg), naechste Minute erneut —
+    // hoechstens 5x, dann trotzdem neu planen (ein dauerhafter Teilfehler
+    // darf den Neuplan nicht blockieren).
+    if (evPlugSyncPending > 0) {
+      const res = await eosConfigSync.sync();
+      evPlugSyncPending -= 1;
+      if (res?.ok === false && evPlugSyncPending > 0) return;
+      if (res?.ok === false) pushLog('ev_plug_sync_failed', { errors: res?.errors || null });
+      evPlugSyncPending = 0;
+      optimizer.requestEosReplan(evPlugTracker.stable ? 'ev_plugged' : 'ev_unplugged');
+      evDepartureLastKey = null;
+      return;
+    }
+  }
   const d = resolveEvDeparture(cfg);
   const key = `${d.enabled}|${d.departureAt}|${d.targetSocPct}`;
   if (key === evDepartureLastKey) return;

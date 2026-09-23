@@ -3758,6 +3758,10 @@ export function createDefaultConfig() {
       // woechentliche Abfahrt rollt DVhub selbst weiter; evDepartureOnce (ISO)
       // gilt fuer die naechste Fahrt und geht vor. Wirkt als Uhrzeit erst ab
       // EOS 0.4 — davor als Ziel am Horizontende.
+      // Nur angesteckt planen: EOS bekommt das Auto nur, solange es an der
+      // Wallbox steckt (evcc `connected`); Anstecken/Abziehen loest einen
+      // Neuplan aus. false = immer mitplanen (altes Verhalten).
+      evPlanOnlyWhenPlugged: true,
       evDepartureEnabled: false,
       evDepartureTime: '07:00',
       evDepartureDays: [1, 2, 3, 4, 5],
