@@ -2061,6 +2061,48 @@ function buildFieldDefinitions() {
     },
     {
       section: 'schedule',
+      group: 'optimization',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupOrder: 10,
+      path: 'optimizer.eosGridHoldEnabled',
+      label: 'Akku halten: Last aus dem Netz, wenn EOS es plant',
+      type: 'boolean',
+      default: false,
+      help: 'EOS plant manchmal, den Akku zu halten und Haus und E-Auto aus dem Netz zu versorgen, zum Beispiel weil die Akku-Energie abends teuer verkauft werden kann. AN: DVhub setzt in diesen Viertelstunden den Victron so, dass die Last aus dem Netz kommt (Live-Last minus PV minus Puffer). Der Akku wird dabei nie aus dem Netz geladen. AUS (Standard): der Victron macht Eigenverbrauch und deckt die Last aus dem Akku.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimization',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupOrder: 10,
+      path: 'optimizer.eosGridHoldMarginW',
+      label: 'Akku halten: Puffer (W)',
+      type: 'number',
+      default: 300,
+      min: 0,
+      max: 3000,
+      step: 50,
+      help: 'So viel der Hauslast deckt der Akku beim Halten trotzdem. Der Puffer verhindert, dass der Akku bei einem Lastsprung kurz aus dem Netz lädt. Standard: 300 W.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimization',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupOrder: 10,
+      path: 'optimizer.eosGridHoldEvMarginW',
+      label: 'Akku halten: Puffer beim E-Auto-Laden (W)',
+      type: 'number',
+      default: 1000,
+      min: 0,
+      max: 5000,
+      step: 100,
+      help: 'Wie oben, wenn EOS in der Viertelstunde auch das E-Auto lädt. Größer, weil die Wallbox-Leistung springt. Standard: 1000 W.'
+    },
+    {
+      section: 'schedule',
       group: 'eosEv',
       groupLabel: 'EOS \u2192 E-Auto (Beta)',
       groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eLadepunkt \u00fcber evcc steuern\u201c gibt DVhub den Plan an evcc weiter: je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Beta: Die Live-SoC-Kopplung folgt in einem sp\u00e4teren Update.',
@@ -3739,6 +3781,10 @@ export function createDefaultConfig() {
       // conditions change, so it just churns hundreds of rules. Cap the rule set to
       // the next N hours; rules beyond are not actuated until they enter the window.
       ruleHorizonHours: 12,
+      // EOS Akku halten (schedule-eval closedLoopHold): aus, bis der Betreiber es einschaltet.
+      eosGridHoldEnabled: false,
+      eosGridHoldMarginW: 300,
+      eosGridHoldEvMarginW: 1000,
       // T-0121 closed-loop: fixed load headroom (W) added to the reg-2704 battery
       // cap (cap = B + headroom). FIXED (not live load) so the cap only changes on
       // B change (per slot) → no flash wear on the persistent register.

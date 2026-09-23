@@ -798,3 +798,68 @@ test('pullSchedule fills 15-min change-point instructions until next / valid_unt
     await mock.close();
   }
 });
+
+// --- EOS Akku halten (Christin 2026-09-23): Netzbezug-Slots mit Entlade-Verbot ---
+function holdSolution() {
+  const row = (imp, extra) => ({ battery1_soc_factor: 0.6, grid_consumption_energy_wh: imp, grid_feedin_energy_wh: 0, ...extra });
+  return {
+    generated_at: '2026-06-06T20:00:00Z',
+    solution: {
+      data: {
+        // Halten, nur Haus: 350 Wh/15 min = 1400 W Bezug, Entladen verboten
+        '2026-06-06T20:00:00Z': row(350, { genetic_discharge_allowed_factor: 0, genetic_ac_charge_factor: 0, genetic_ev_charge_factor: 0 }),
+        // Halten mit E-Auto
+        '2026-06-06T20:15:00Z': row(3000, { genetic_discharge_allowed_factor: 0, genetic_ac_charge_factor: 0, genetic_ev_charge_factor: 1 }),
+        // Bezug, aber Entladen erlaubt (Akku leer) → Eigenverbrauch, keine Regel
+        '2026-06-06T20:30:00Z': row(350, { genetic_discharge_allowed_factor: 1, genetic_ac_charge_factor: 0 }),
+        // EOS will aus dem Netz LADEN → nie als Halten durchreichen
+        '2026-06-06T20:45:00Z': row(3000, { genetic_discharge_allowed_factor: 0, genetic_ac_charge_factor: 1 }),
+      },
+    },
+    prediction: { data: {} },
+  };
+}
+
+async function holdSlots(enabled) {
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(holdSolution()));
+  });
+  try {
+    const adapter = createEosAdapter({
+      getCfg: () => ({ optimizer: { eosProxy: { url: `http://127.0.0.1:${mock.port}` }, eosGridHoldEnabled: enabled } }),
+      pushLog: () => {},
+    });
+    return await adapter.pullGridSetpoints();
+  } finally {
+    await mock.close();
+  }
+}
+
+test('pullGridSetpoints: Akku halten → gridSetpointW-Regel mit closedLoopHold, nur bei Entlade-Verbot ohne Netzladen', async () => {
+  const slots = await holdSlots(true);
+  assert.equal(slots.length, 2);
+  const [house, ev] = slots;
+  assert.equal(house.lever, 'gridSetpointW');
+  assert.equal(house.closedLoopHold, true);
+  assert.equal(house.planAction, 'eos_grid_hold');
+  assert.equal(house.powerW, 1400);
+  assert.equal(house.evPlanned, false);
+  assert.equal(ev.evPlanned, true, 'E-Auto geplant → groesserer Puffer in schedule-eval');
+  assert.equal(ev.powerW, 12000);
+});
+
+test('pullGridSetpoints: Akku halten ist aus, solange eosGridHoldEnabled nicht gesetzt ist', async () => {
+  assert.deepEqual(await holdSlots(undefined), []);
+});
+
+test('Halte-Regel landet mit closedLoopHold + evPlanned im Zeitplan', () => {
+  const rules = buildScheduleRules({
+    slots: [{ ts: 1717704000000, endTs: 1717704900000, lever: 'gridSetpointW', powerW: 1400, closedLoopHold: true, evPlanned: true, confidence: 0.7 }],
+    optimizer: 'eos',
+    getCfg: () => ({ schedule: { timezone: 'Europe/Berlin' } })
+  });
+  assert.equal(rules[0].closedLoopHold, true);
+  assert.equal(rules[0].evPlanned, true);
+  assert.equal(rules[0].value, 1400);
+});

@@ -408,6 +408,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         evSocPct: evSocKey != null && numOrNull(r[evSocKey]) != null ? Math.round(r[evSocKey] * 100) : null,
         _dischargeAllowedFactor: numOrNull(r.genetic_discharge_allowed_factor),
         _dcChargeFactor: numOrNull(r.genetic_dc_charge_factor),
+        _acChargeFactor: numOrNull(r.genetic_ac_charge_factor),
       };
     });
 
@@ -474,8 +475,15 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       row.zeitplanTarget = action.target;
       row.zeitplanBatteryExportW = action.batteryExportW;
       row.zeitplanGridSetpointW = action.gridSetpointW;
+      // Akku halten: EOS verbietet das Entladen und laedt nicht aus dem Netz.
+      // Dann soll die Last (Haus + E-Auto) aus dem Netz kommen, der Akku bleibt
+      // stehen. null = die Loesung sagt dazu nichts (keine Faktoren).
+      row.batteryHold = row._dischargeAllowedFactor == null
+        ? null
+        : row._dischargeAllowedFactor === 0 && !(Number(row._acChargeFactor) > 0);
       delete row._dischargeAllowedFactor;
       delete row._dcChargeFactor;
+      delete row._acChargeFactor;
     }
 
     let slotMinutes = null;
@@ -552,6 +560,27 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       if (ts > horizonCutoff) continue; // beyond the actuation horizon — recomputed next run
       const gridW = (typeof r.dvhubSetpointW === 'number') ? r.dvhubSetpointW : null;
       if (gridW === null) continue;
+      // Akku halten bei geplantem Netzbezug (Christin 2026-09-23): EOS will den
+      // Akku fuer spaeter (z. B. teuren Abendverkauf) aufsparen und die Last —
+      // auch das E-Auto — aus dem Netz decken. Ohne Regel macht der Victron
+      // Eigenverbrauch und entlaedt den Akku genau dafuer. Kein fester Wert:
+      // schedule-eval rechnet jeden Takt Netzbezug = Live-Last − Live-PV − Puffer,
+      // der Akku kann so nie aus dem Netz geladen werden.
+      if (gridW > bandW) {
+        if (acfg.optimizer?.eosGridHoldEnabled === true && r.batteryHold === true) {
+          out.push({
+            ts,
+            endTs: ts + slotMs,
+            lever: 'gridSetpointW',
+            powerW: gridW,
+            closedLoopHold: true,
+            evPlanned: Number(r.evChargeFactor) > 0,
+            planAction: 'eos_grid_hold',
+            confidence: EOS_DEFAULT_CONFIDENCE,
+          });
+        }
+        continue;
+      }
       // Only deliberate EXPORT becomes a forced setpoint. Skip import / hold /
       // self-consumption (gridW ≥ −band) — plant default, and never force charge.
       if (gridW >= -bandW) continue;

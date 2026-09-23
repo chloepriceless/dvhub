@@ -1061,3 +1061,75 @@ test('T-VERIFY: Flag OFF (default) → kein Verify-Read', async () => {
   await sleep(80);
   assert.equal(ctx._readCalls.length, 0, 'default OFF: Verhalten unverändert');
 });
+
+// --- EOS Akku halten (Christin 2026-09-23): Last aus dem Netz, Akku steht ---
+
+function eosHoldRule({ evPlanned = false } = {}) {
+  return {
+    id: 'eos-hold', enabled: true, target: 'gridSetpointW',
+    start: '00:00', end: '23:59', value: 1400,
+    optimizer: 'eos', closedLoopHold: true, evPlanned,
+    source: 'forecast_optimizer', autoManaged: true
+  };
+}
+
+function holdCtx({ load, pv = 0, evPlanned = false, allowGridCharge = false, margins = {}, stale = false }) {
+  return makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 60;
+      state.victron.selfConsumptionW = load;
+      state.victron.pvTotalW = pv;
+      if (stale) {
+        state.victron.fieldUpdatedAt = { ...(state.victron.fieldUpdatedAt || {}), selfConsumptionW: Date.now() - 10 * 60_000 };
+      }
+      state.schedule.rules = [eosHoldRule({ evPlanned })];
+      cfg.optimizer = { enabled: true, allowGridCharge, allowGridDischarge: true, ...margins };
+    }
+  });
+}
+
+test('Akku halten: Netzbezug = Live-Last − PV − Puffer (300 W), trotz allowGridCharge=false', async () => {
+  const { ctx, state, logs } = holdCtx({ load: 1500, pv: 200 });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const gp = state.schedule.active.gridSetpointW;
+  assert.equal(Number(gp.value), 1000, '1500 − 200 − 300');
+  assert.equal(gp.source, 'eos_grid_hold');
+  assert.equal(findLog(logs, 'control_write_rejected').length, 0, 'keine Netzlade-Sperre: der Akku laedt nicht aus dem Netz');
+});
+
+test('Akku halten mit E-Auto: Puffer 1 kW', async () => {
+  const { ctx, state } = holdCtx({ load: 12500, pv: 0, evPlanned: true });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 11500);
+});
+
+test('Akku halten: PV deckt die Last → 0, nie Netzbezug in den Akku', async () => {
+  const { ctx, state } = holdCtx({ load: 1500, pv: 6000 });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 0);
+});
+
+test('Akku halten: Puffer einstellbar', async () => {
+  const { ctx, state } = holdCtx({ load: 2000, margins: { eosGridHoldMarginW: 100 } });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 1900);
+});
+
+test('Akku halten: veraltete Hauslast → 0 (Eigenverbrauch), kein blinder Netzbezug', async () => {
+  const { ctx, state } = holdCtx({ load: 3000, stale: true });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 0);
+});
+
+test('Netzlade-Sperre bleibt fuer andere positive Sollwerte bestehen', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 60;
+      state.schedule.rules = [{ id: 'm', enabled: true, target: 'gridSetpointW', start: '00:00', end: '23:59', value: 3000 }];
+      cfg.optimizer = { enabled: false, allowGridCharge: false, allowGridDischarge: true };
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.ok(findLog(logs, 'control_write_rejected').some((l) => l.payload.reason === 'grid_charge_not_allowed'));
+  assert.notEqual(Number(state.schedule.active.gridSetpointW?.value), 3000);
+});

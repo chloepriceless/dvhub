@@ -72,7 +72,9 @@ export function buildScheduleRules({ slots, source = 'forecast_optimizer', optim
       // T-0121 closed-loop: carry the deliberate battery→grid share B + flag so
       // schedule-eval re-derives gridSetpointW = -(B + live PV surplus) each cycle
       // and writes the reg-2704 cap. Present only on EOS battery-export slots.
-      ...(slot.closedLoopExport ? { closedLoopExport: true, batteryShareW: slot.batteryShareW } : {})
+      ...(slot.closedLoopExport ? { closedLoopExport: true, batteryShareW: slot.batteryShareW } : {}),
+      // Akku halten: schedule-eval ersetzt value jeden Takt durch den Live-Netzbezug.
+      ...(slot.closedLoopHold ? { closedLoopHold: true, evPlanned: slot.evPlanned === true } : {})
     };
   });
 }

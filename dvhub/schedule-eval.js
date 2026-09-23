@@ -125,6 +125,16 @@ export function isMandatoryControlSource(source) {
   return MANDATORY_CONTROL_SOURCES.has(String(source));
 }
 
+/**
+ * EOS "Akku halten" (closedLoopHold): positiver Sollwert, aber KEIN Netzladen.
+ * Der Bezug deckt nur die Last und wird jeden Takt aus Live-Werten begrenzt
+ * (Live-Last − Live-PV − Puffer), der Akku laedt dabei nie aus dem Netz. Darum
+ * nimmt das Netzlade-Verbot (allowGridCharge, EEG/MiSpeL) diese Regel aus.
+ */
+export function isEosGridHoldRule(rule) {
+  return rule?.source === 'forecast_optimizer' && rule?.optimizer === 'eos' && rule?.closedLoopHold === true;
+}
+
 export function createScheduleEvaluator(ctx) {
   const { state, getCfg, transport, pushLog, telemetrySafeWrite, persistConfig } = ctx;
 
@@ -253,7 +263,7 @@ export function createScheduleEvaluator(ctx) {
         if (!optimizerEnabled || proGateClosed) return false;
         if (r.target === 'gridSetpointW') {
           const val = Number(r.value);
-          if (val > 0 && !allowGridCharge) return false;   // Netzladen blocked
+          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r)) return false;   // Netzladen blocked
           if (val < 0 && !allowGridDischarge) return false; // Netzentladung blocked
         }
       }
@@ -782,7 +792,11 @@ export function createScheduleEvaluator(ctx) {
       const numericValue = Number(value);
       const allowGridCharge = cfg.optimizer?.allowGridCharge ?? false;
       const allowGridDischarge = cfg.optimizer?.allowGridDischarge ?? false;
-      if (numericValue > 0 && !allowGridCharge) {
+      // Ausnahme 'eos_grid_hold': Netzbezug fuer die LAST, nicht fuer den Akku.
+      // Der Wert wird jeden Takt als Live-Last − Live-PV − Puffer gerechnet und
+      // liegt damit immer unter der Netto-Last — der Akku laedt dabei nie aus
+      // dem Netz, das Netzlade-Verbot (EEG/MiSpeL) bleibt gewahrt.
+      if (numericValue > 0 && !allowGridCharge && source !== 'eos_grid_hold') {
         pushLog('control_write_rejected', { target, value: numericValue, source, reason: 'grid_charge_not_allowed' });
         return { ok: false, error: 'grid_charge_not_allowed' };
       }
@@ -1028,7 +1042,7 @@ export function createScheduleEvaluator(ctx) {
         if (!optimizerEnabled) return false; // optimizer off → purge all
         if (r.target === 'gridSetpointW') {
           const val = Number(r.value);
-          if (val > 0 && !allowGridCharge) return false;   // Netzladen verboten
+          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r)) return false;   // Netzladen verboten
           if (val < 0 && !allowGridDischarge) return false; // Netzentladung verboten
         }
         return true;
@@ -1266,6 +1280,40 @@ export function createScheduleEvaluator(ctx) {
           : -Math.round(Math.min(plannedExportW, livePvSurplusW));  // charge slot: plan-capped, PV-limited
       }
       // === end T-0121/T-0122 EOS closed-loop ==================================
+
+      // === EOS Akku halten (Christin 2026-09-23) ==============================
+      // EOS plant Netzbezug und verbietet das Entladen: die Last soll aus dem
+      // Netz kommen, der Akku stehen bleiben (Energie z. B. fuer den teuren
+      // Abendverkauf aufsparen, E-Auto aus dem Netz laden). Netzbezug jeden Takt
+      // = Live-Hauslast (inkl. Wallbox, sie haengt hinter dem Victron-Zaehler)
+      // − Live-PV − Puffer. Weil der Bezug immer UNTER der Netto-Last bleibt,
+      // laedt der Akku nie aus dem Netz; er deckt hoechstens den Puffer. Puffer
+      // beim E-Auto groesser (1 kW): dessen Last springt, und 5 s Regeltakt
+      // duerfen dann nicht in den Akku laden. Fehlen Live-Werte oder sind sie
+      // alt → 0 (Eigenverbrauch wie ohne Regel).
+      if (target === 'gridSetpointW'
+          && eff.rule?.optimizer === 'eos'
+          && eff.rule?.closedLoopHold) {
+        const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
+        const loadRaw = state.victron.selfConsumptionW;
+        const pvRaw = state.victron.pvTotalW ?? state.victron.pvPowerW;
+        const known = Number.isFinite(Number(loadRaw)) && loadRaw != null
+          && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs)
+          && !victronFieldStale(state, 'pvTotalW', maxAgeMs);
+        const marginW = eff.rule.evPlanned
+          ? Math.max(0, Number(cfg.optimizer?.eosGridHoldEvMarginW ?? 1000))
+          : Math.max(0, Number(cfg.optimizer?.eosGridHoldMarginW ?? 300));
+        const netLoadW = known ? Math.max(0, Number(loadRaw)) - Math.max(0, Number(pvRaw) || 0) : 0;
+        const holdW = known ? Math.max(0, Math.round(netLoadW - marginW)) : 0;
+        eff.value = holdW;
+        eff.source = 'eos_grid_hold';
+        const key = `${eff.rule.id}:${known}`;
+        if (state.ctrl._eosHoldKey !== key) {
+          pushLog('eos_grid_hold', { known, loadW: known ? Math.round(Number(loadRaw)) : null, pvW: known ? Math.round(Number(pvRaw) || 0) : null, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });
+          state.ctrl._eosHoldKey = key;
+        }
+      }
+      // === end EOS Akku halten =================================================
 
       // === T-0002 safety: SoC floor for a PERSISTENT discharge override ========
       // A persistent override has no TTL and is invisible to the per-rule
