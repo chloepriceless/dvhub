@@ -28,7 +28,7 @@ function loadVictronEffectiveConfig() {
   const profile = JSON.parse(fs.readFileSync(SHIPPED_PROFILE, 'utf8'));
   profile.points.maxDischargeW = {
     enabled: true, fc: 4, address: 2704, quantity: 1,
-    signed: true, scale: 10, offset: 0, rawSentinels: [-1, 0]
+    signed: true, scale: 10, offset: 0, rawSentinels: [-1, 0], rawSentinelMap: { '-1': 32767 }
   };
   fs.writeFileSync(path.join(rootDir, 'hersteller', 'victron.json'), JSON.stringify(profile));
   const configPath = path.join(rootDir, 'config.json');
@@ -74,12 +74,13 @@ function makeEvaluator(cfg, transport) {
   return { evaluator, state };
 }
 
-test('shipped victron.json: controlWrite.maxDischargeW hat scale 10 + rawSentinels [-1, 0]', () => {
+test('shipped victron.json: controlWrite.maxDischargeW hat scale 10, Sperre 0 unskaliert, -1 → raw 32767', () => {
   const loaded = loadVictronEffectiveConfig();
   assert.equal(loaded.manufacturerProfileError, null);
   const conf = loaded.effectiveConfig.controlWrite.maxDischargeW;
   assert.equal(conf.scale, 10);
-  assert.deepEqual(conf.rawSentinels, [-1, 0]);
+  assert.deepEqual(conf.rawSentinels, [0]);
+  assert.deepEqual(conf.rawSentinelMap, { '-1': 32767 });
   assert.equal(conf.address, 2704);
 });
 
@@ -98,7 +99,9 @@ test('Write: 24000 W → raw 2400 (10-W-Schritte); 20000 W → raw 2000', async 
   ]);
 });
 
-test('Write-Sentinels: -1 (unbegrenzt) → raw 0xFFFF, 0 (sperren) → raw 0 — NIE skaliert', async () => {
+// Victron verwirft raw 0xFFFF (-1 → -10 W) STILL und behält den alten Wert
+// (gemessen prod 2026-09-23: nach Sperre 0 blieb der Akku gesperrt).
+test('Write-Sentinels: -1 (unbegrenzt) → raw 32767, 0 (sperren) → raw 0 — NIE skaliert', async () => {
   const loaded = loadVictronEffectiveConfig();
   const transport = makeMockTransport();
   const { evaluator } = makeEvaluator(loaded.effectiveConfig, transport);
@@ -108,7 +111,7 @@ test('Write-Sentinels: -1 (unbegrenzt) → raw 0xFFFF, 0 (sperren) → raw 0 —
   const r2 = await evaluator.applyControlTarget('maxDischargeW', 0, 'test');
   assert.equal(r2.ok, true, JSON.stringify(r2));
   assert.deepEqual(transport.writes, [
-    { fc: 6, address: 2704, value: 0xffff }, // -1 als int16-Zweierkomplement, NICHT round(-0.1)=0
+    { fc: 6, address: 2704, value: 32767 }, // NICHT 0xFFFF (verworfen) und NICHT round(-0.1)=0
     { fc: 6, address: 2704, value: 0 }
   ]);
 });
@@ -151,4 +154,8 @@ test('Read: raw 2400 → 24000 W Anzeige; raw -1 (0xFFFF) → -1 (Sentinel, nich
   regs[2704] = 0xffff; // -1 = unbegrenzt (Victron-Sentinel)
   await poller.requestPoll();
   assert.equal(state.victron.maxDischargeW, -1, 'Sentinel unskaliert (nicht -10)');
+
+  regs[2704] = 32767; // so schreibt DVhub „unbegrenzt“
+  await poller.requestPoll();
+  assert.equal(state.victron.maxDischargeW, -1, 'raw 32767 zurück als -1');
 });

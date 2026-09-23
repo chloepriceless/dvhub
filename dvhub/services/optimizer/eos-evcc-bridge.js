@@ -10,9 +10,11 @@
  *   Faktor > 0  → Laden:  mode=now + maxcurrent = W ÷ (Spannung × Phasen)
  *   Faktor = 0  → Stopp:  mode=optimizer.evStopMode (Standard 'off')
  *
- * Geschrieben wird nur bei einem Wechsel des Befehls (Slotgrenze oder neuer
- * Plan), nicht in jedem Takt — ein manueller Eingriff in evcc bleibt bis zum
- * naechsten Wechsel stehen, wie beim Akku-Schutz in evcc-integration.js.
+ *   kein E-Auto-Wert → Stopp (evcc hoert nur auf DVhub, laedt nie selbst los)
+ *
+ * Geschrieben wird bei einem Wechsel des Befehls (Slotgrenze oder neuer Plan)
+ * und wenn evcc von aussen auf einen anderen Modus gestellt wurde — dann setzt
+ * der naechste Takt unseren Modus erneut (Log `eos_evcc_mode_corrected`).
  */
 import { safeInterval } from '../safe-async.js';
 
@@ -137,6 +139,19 @@ export function createEosEvccBridge(deps) {
     return res;
   }
 
+  // Aktueller evcc-Modus weicht von unserem letzten Befehl ab? Unbekannte
+  // Modi (evcc „smart“ u.a.) kommen als null an und zaehlen als Abweichung.
+  async function modeDrift(charger, expectedMode) {
+    try {
+      const st = await charger.status();
+      if (!st?.ok) return null;
+      const found = st.raw?.mode ?? null;
+      return found === expectedMode ? null : { found };
+    } catch {
+      return null;
+    }
+  }
+
   async function tick({ force = false } = {}) {
     if (ticking) return { ok: false, error: 'busy' };
     ticking = true;
@@ -158,17 +173,26 @@ export function createEosEvccBridge(deps) {
       lastGeneratedAt = solution?.generatedAt || null;
       lastPlan = buildEvPlan(solution, bc);
       let slot = slotAt(lastPlan, now());
+      let planNote = null;
       if (!slot || !slot.action) {
-        lastError = slot ? 'EOS-Plan ohne E-Auto-Werte (E-Auto in EOS angemeldet?)' : 'kein EOS-Slot fuer jetzt';
-        // Haben WIR zuletzt Laden befohlen, darf ein fehlender Plan (EOS weg,
-        // Loesung abgelaufen) das Auto nicht ungebremst weiterladen lassen.
-        if (lastSent?.action !== 'charge') return { ok: false, skipped: lastError };
-        pushLog('eos_evcc_plan_lost', { reason: lastError });
+        planNote = slot ? 'EOS-Plan ohne E-Auto-Werte (E-Auto in EOS angemeldet?)' : 'kein EOS-Slot fuer jetzt';
+        // evcc hoert nur auf uns: ohne E-Auto-Plan gilt Stopp — sonst laedt
+        // evcc im eigenen Modus (z.B. „smart“) los, sobald das Auto steckt.
+        if (lastSent?.action === 'charge') pushLog('eos_evcc_plan_lost', { reason: planNote });
         slot = { ts: now(), endTs: now(), action: 'stop', currentA: null, chargePowerW: null };
       }
 
       const key = commandKey(bc, slot);
-      if (!force && lastSent?.key === key) return { ok: true, unchanged: true };
+      if (!force && lastSent?.key === key) {
+        // Unveraendert — aber wurde evcc inzwischen von aussen umgestellt
+        // (evcc-App, Anstecken im Standardmodus)? Dann unseren Modus erneut setzen.
+        const drift = charger.type === 'evcc' ? await modeDrift(charger, lastSent.mode) : null;
+        if (!drift) {
+          lastError = planNote;
+          return { ok: true, unchanged: true };
+        }
+        pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: drift.found, expected: lastSent.mode });
+      }
 
       const result = await send(charger, bc, slot);
       if (!result?.ok) {
@@ -176,7 +200,7 @@ export function createEosEvccBridge(deps) {
         pushLog('eos_evcc_error', { loadpoint: bc.loadpoint, action: slot.action, error: lastError });
         return { ok: false, error: lastError };
       }
-      lastError = null;
+      lastError = planNote;
       lastSent = {
         key,
         charger: bc.charger,

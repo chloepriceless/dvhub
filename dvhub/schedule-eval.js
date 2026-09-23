@@ -171,6 +171,16 @@ export function createScheduleEvaluator(ctx) {
     // Power (2704): 0 = Entladung sperren, -1 = unbegrenzt; das Register selbst
     // zählt in 10-W-Schritten (scale 10). Ohne Passthrough würde -1 mit
     // scale 10 zu round(-0.1) = 0 — aus „unbegrenzt" würde „gesperrt".
+    // rawSentinelMap (2026-09-23): Mode-Werte, die das Gerät NICHT als eigenen
+    // Rohwert kennt, auf einen gleichwertigen Rohwert abbilden. Victron 2704
+    // verwirft raw -1 (= -10 W nach Victron-Skala) STILL und behält den alten
+    // Wert — nach einer Sperre (0) blieb der Akku gesperrt. „Unbegrenzt" geht
+    // deshalb als raw 32767 (≈ 327 kW) raus; der Poller liest es als -1 zurück.
+    const sentinelMap = conf.rawSentinelMap && typeof conf.rawSentinelMap === 'object' ? conf.rawSentinelMap : null;
+    if (sentinelMap && Object.hasOwn(sentinelMap, String(engineeringValue))) {
+      return toRawForWrite(Number(sentinelMap[String(engineeringValue)]),
+        { ...conf, scale: 1, offset: 0, rawSentinels: [], rawSentinelMap: null });
+    }
     const rawSentinels = Array.isArray(conf.rawSentinels) ? conf.rawSentinels.map(Number) : [];
     if (rawSentinels.includes(engineeringValue)) {
       // Sentinel 1:1 kodieren: scale/offset überspringen, Typ-Encoding unten

@@ -160,6 +160,11 @@ export function createPoller(ctx) {
     // skaliert — sonst würde -1 mit scale 10 als „-10 W" angezeigt.
     const rawSentinels = Array.isArray(conf.rawSentinels) ? conf.rawSentinels.map(Number) : [];
     if (rawSentinels.includes(Number(v))) return Number(v);
+    // rawSentinelMap: Rohwert, der für einen Mode-Wert steht (2704: 32767 = -1).
+    if (conf.rawSentinelMap && typeof conf.rawSentinelMap === 'object') {
+      const hit = Object.entries(conf.rawSentinelMap).find(([, raw]) => Number(raw) === Number(v));
+      if (hit) return Number(hit[0]);
+    }
     v = Number(v) * scale + offset;
     return Number(v.toFixed(3));
   }

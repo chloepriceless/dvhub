@@ -31,18 +31,24 @@ function solution(factors, { generatedAt = '2026-09-22T09:58:00Z', start = T0 } 
   };
 }
 
-function harness({ config = cfg(), sol = solution([0.5, 0, 1]), failMode = false } = {}) {
+function harness({ config = cfg(), sol = solution([0.5, 0, 1]), failMode = false, liveMode = undefined } = {}) {
   let clock = T0 + 60_000;
   let currentCfg = config;
   let currentSol = sol;
   const calls = [];
   const logs = [];
+  // Live-Modus des Ladepunkts, wie evcc-integration ihn meldet (null = kein
+  // Ladepunkt bekannt → status() scheitert, keine Modus-Pruefung).
+  let lpMode = liveMode;
   const fakeEvcc = {
     getStatus: () => ({ url: currentCfg?.evcc?.url || null }),
+    getLoadpoints: () => (lpMode === undefined ? [] : [{ id: 2, mode: lpMode, connected: true, charging: false }]),
     setMaxCurrent: async (lp, a) => { calls.push(['maxcurrent', lp, a]); return { ok: true }; },
     setMode: async (lp, m) => {
       calls.push(['mode', lp, m]);
-      return failMode ? { ok: false, error: 'HTTP 500' } : { ok: true };
+      if (failMode) return { ok: false, error: 'HTTP 500' };
+      if (lpMode !== undefined) lpMode = m;
+      return { ok: true };
     }
   };
   const bridge = createEosEvccBridge({
@@ -56,7 +62,8 @@ function harness({ config = cfg(), sol = solution([0.5, 0, 1]), failMode = false
     bridge, calls, logs,
     advance: (ms) => { clock += ms; },
     setCfg: (c) => { currentCfg = c; },
-    setSol: (s) => { currentSol = s; }
+    setSol: (s) => { currentSol = s; },
+    setLiveMode: (m) => { lpMode = m; }
   };
 }
 
@@ -72,7 +79,7 @@ describe('eos-evcc-bridge: Umrechnung', () => {
     assert.equal(powerToCurrentA(3680, one), 16);
   });
 
-  test('Plan: Faktor > 0 laden, 0 stoppen, fehlend = kein Befehl', () => {
+  test('Plan: Faktor > 0 laden, 0 stoppen, fehlend = keine Slot-Aktion', () => {
     const bc = resolveEvccBridgeConfig(cfg());
     const plan = buildEvPlan(solution([0.5, 0, null]), bc);
     assert.deepEqual(plan.map((s) => s.action), ['charge', 'stop', null]);
@@ -133,12 +140,34 @@ describe('eos-evcc-bridge: Steuern', () => {
     assert.equal(h.calls.length, 0);
   });
 
-  test('EOS plant kein E-Auto (Faktor fehlt): nichts schreiben', async () => {
+  test('EOS plant kein E-Auto (Faktor fehlt): Stopp — evcc laedt nicht auf eigene Faust', async () => {
     const h = harness({ sol: solution([null]) });
     const r = await h.bridge.tick();
-    assert.equal(r.ok, false);
-    assert.match(r.skipped, /E-Auto/);
-    assert.equal(h.calls.length, 0);
+    assert.equal(r.ok, true);
+    assert.deepEqual(h.calls, [['mode', 2, 'off']]);
+    assert.match(h.bridge.getStatus().lastError, /E-Auto/);
+    h.advance(30_000);
+    await h.bridge.tick();
+    assert.equal(h.calls.length, 1, 'Stopp nur einmal');
+  });
+
+  test('evcc von aussen umgestellt (z.B. „smart“) → unser Modus wird erneut gesetzt', async () => {
+    const h = harness({ sol: solution([0, 0, 0]), liveMode: 'off' });
+    await h.bridge.tick();
+    assert.deepEqual(h.calls, [['mode', 2, 'off']]);
+    h.advance(30_000);
+    await h.bridge.tick();
+    assert.equal(h.calls.length, 1, 'Modus stimmt → nichts senden');
+    h.setLiveMode(null); // evcc meldet einen DVhub unbekannten Modus
+    h.advance(30_000);
+    await h.bridge.tick();
+    assert.deepEqual(h.calls.at(-1), ['mode', 2, 'off']);
+    assert.ok(h.logs.some((l) => l.event === 'eos_evcc_mode_corrected' && l.data.found === null));
+    h.setLiveMode('now');
+    h.advance(30_000);
+    await h.bridge.tick();
+    assert.equal(h.calls.length, 3);
+    assert.deepEqual(h.calls.at(-1), ['mode', 2, 'off']);
   });
 
   test('Plan verloren, waehrend wir Laden befohlen haben → Stopp', async () => {
