@@ -18,6 +18,7 @@ import { safeInterval } from '../safe-async.js';
 
 const DEFAULT_VOLTAGE_V = 230;
 const STOP_MODES = ['off', 'pv', 'minpv'];
+export const CHARGER_TYPES = ['evcc', 'openevse', 'goe'];
 
 /** Einstellungen der Bruecke aus der Config, mit Standardwerten. */
 export function resolveEvccBridgeConfig(cfg) {
@@ -37,7 +38,9 @@ export function resolveEvccBridgeConfig(cfg) {
     // evcc mehr ziehen, als EOS eingeplant hat.
     maxCurrentA: Math.max(minCurrentA, maxChargeW / (DEFAULT_VOLTAGE_V * phases)),
     maxChargeW,
-    stopMode: STOP_MODES.includes(opt.evStopMode) ? opt.evStopMode : 'off'
+    stopMode: STOP_MODES.includes(opt.evStopMode) ? opt.evStopMode : 'off',
+    // Wohin der Befehl geht: evcc (Standard) oder direkt an die Wallbox.
+    charger: CHARGER_TYPES.includes(cfg?.wallbox?.type) ? cfg.wallbox.type : 'evcc'
   };
 }
 
@@ -87,14 +90,14 @@ export function slotAt(plan, nowMs) {
  * @param {object} deps
  * @param {() => object} deps.getCfg
  * @param {(limit:number) => Promise<object|null>} deps.getSolution   eosAdapter.getOptimizationSolution
- * @param {{ setMode:Function, setMaxCurrent:Function }} deps.evcc
+ * @param {(cfg:object, bc:object) => object} deps.getCharger  Adapter (services/wallbox/adapters.js)
  * @param {() => boolean} [deps.isProActive]
  * @param {(event:string, data?:object) => void} [deps.pushLog]
  * @param {() => number} [deps.now]
  */
 export function createEosEvccBridge(deps) {
   const {
-    getCfg, getSolution, evcc,
+    getCfg, getSolution, getCharger,
     isProActive = () => true,
     pushLog = () => {},
     now = () => Date.now()
@@ -109,18 +112,29 @@ export function createEosEvccBridge(deps) {
   let ticking = false;
 
   const commandKey = (bc, slot) => (slot.action === 'charge'
-    ? `${bc.loadpoint}:charge:${slot.currentA}`
-    : `${bc.loadpoint}:stop:${bc.stopMode}`);
+    ? `${bc.charger}:${bc.loadpoint}:charge:${slot.currentA}`
+    : `${bc.charger}:${bc.loadpoint}:stop:${bc.stopMode}`);
 
-  async function send(bc, slot) {
-    if (slot.action === 'charge') {
-      // Erst den Strom, dann den Modus: sonst startet evcc mit dem alten
-      // (evtl. hoeheren) Strom und regelt erst danach herunter.
-      const cur = await evcc.setMaxCurrent(bc.loadpoint, slot.currentA);
-      if (!cur?.ok) return cur || { ok: false, error: 'maxcurrent failed' };
-      return evcc.setMode(bc.loadpoint, 'now');
+  // Direkt angesteuerte Wallboxen kennen keine evcc-Modi: "Stopp = Aus" heisst
+  // nicht laden, "Stopp = PV/Min+PV" heisst Vorgabe zuruecknehmen — dann
+  // regelt die Box selbst (z.B. OpenEVSE-PV-Divert).
+  async function send(charger, bc, slot) {
+    if (slot.action === 'charge') return charger.charge(slot.currentA);
+    if (charger.type !== 'evcc' && bc.stopMode !== 'off') return charger.release();
+    return charger.stop();
+  }
+
+  // Beim Abschalten die eigene Vorgabe zuruecknehmen — sonst bliebe z.B. ein
+  // "disabled"-Claim in der OpenEVSE stehen und das Auto laedt nie wieder.
+  async function releaseIfNeeded(cfg, bc) {
+    if (!lastSent) return null;
+    const charger = getCharger(cfg, { ...bc, charger: lastSent.charger || bc.charger });
+    const res = await charger.release();
+    if (res?.ok) {
+      pushLog('eos_wallbox_released', { charger: charger.type });
+      lastSent = null;
     }
-    return evcc.setMode(bc.loadpoint, bc.stopMode);
+    return res;
   }
 
   async function tick({ force = false } = {}) {
@@ -130,8 +144,14 @@ export function createEosEvccBridge(deps) {
       lastTickAt = now();
       const cfg = getCfg() || {};
       const bc = resolveEvccBridgeConfig(cfg);
-      if (!bc.enabled) return { ok: false, skipped: 'disabled' };
-      if (!cfg.evcc?.url) return { ok: false, skipped: 'no evcc url' };
+      if (!bc.enabled) {
+        await releaseIfNeeded(cfg, bc);
+        return { ok: false, skipped: 'disabled' };
+      }
+      // Wallbox gewechselt: die alte gibt ihre Vorgabe zurueck.
+      if (lastSent && lastSent.charger && lastSent.charger !== bc.charger) await releaseIfNeeded(cfg, bc);
+      const charger = getCharger(cfg, bc);
+      if (!charger.isConfigured()) return { ok: false, skipped: `${bc.charger} not configured` };
       if (isProActive() === false) return { ok: false, skipped: 'pro required' };
 
       const solution = await getSolution(8 * 24 * 4);
@@ -150,7 +170,7 @@ export function createEosEvccBridge(deps) {
       const key = commandKey(bc, slot);
       if (!force && lastSent?.key === key) return { ok: true, unchanged: true };
 
-      const result = await send(bc, slot);
+      const result = await send(charger, bc, slot);
       if (!result?.ok) {
         lastError = result?.error || 'evcc write failed';
         pushLog('eos_evcc_error', { loadpoint: bc.loadpoint, action: slot.action, error: lastError });
@@ -159,11 +179,13 @@ export function createEosEvccBridge(deps) {
       lastError = null;
       lastSent = {
         key,
+        charger: bc.charger,
         action: slot.action,
         currentA: slot.currentA,
         chargePowerW: slot.chargePowerW,
         loadpoint: bc.loadpoint,
         mode: slot.action === 'charge' ? 'now' : bc.stopMode,
+        released: slot.action !== 'charge' && bc.charger !== 'evcc' && bc.stopMode !== 'off',
         slotTs: new Date(slot.ts).toISOString(),
         at: new Date(now()).toISOString()
       };
@@ -196,6 +218,8 @@ export function createEosEvccBridge(deps) {
       const current = slotAt(lastPlan, t);
       return {
         enabled: bc.enabled,
+        charger: bc.charger,
+        chargerConfigured: (() => { try { return getCharger(cfg, bc).isConfigured(); } catch { return false; } })(),
         evccUrlSet: Boolean(cfg.evcc?.url),
         loadpoint: bc.loadpoint,
         phases: bc.phases,

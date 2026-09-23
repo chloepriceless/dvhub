@@ -472,7 +472,7 @@
           <!-- EOS → evcc: EOS plant das E-Auto mit, DVhub gibt je Viertelstunde
                Laden (mit Ladestrom) oder Stopp an den Ladepunkt weiter. -->
           <div class="evcc-eos">
-            <div class="evcc-eos-title">EOS steuert den Ladepunkt</div>
+            <div class="evcc-eos-title">EOS steuert die Wallbox</div>
             <p class="dv-drawer-intro">
               EOS plant das Auto als zweiten Speicher mit (PV-&Uuml;berschuss, billige Stunden).
               DVhub schickt dann je Viertelstunde <strong>Laden</strong> mit der von EOS geplanten
@@ -487,6 +487,39 @@
               <span>EOS-Plan an evcc weitergeben (Laden / Stopp + Ladestrom)</span>
             </label>
             <label class="dv-field">
+              <span class="field-label">Steuern &uuml;ber</span>
+              <select class="input" id="wallbox-type">
+                <option value="evcc">evcc (Ladepunkt)</option>
+                <option value="openevse">OpenEVSE direkt</option>
+                <option value="goe">go-e Charger direkt</option>
+              </select>
+            </label>
+            <div class="evcc-wallbox-fields" id="wallbox-openevse-fields" hidden>
+              <label class="dv-field">
+                <span class="field-label">OpenEVSE-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-openevse-url" placeholder="http://192.168.x.x" autocomplete="off" spellcheck="false" inputmode="url">
+              </label>
+              <div class="evcc-eos-grid">
+                <label class="dv-field">
+                  <span class="field-label">Benutzer</span>
+                  <input type="text" class="input mono" id="wallbox-openevse-user" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="dv-field">
+                  <span class="field-label">Passwort</span>
+                  <input type="password" class="input mono" id="wallbox-openevse-pass" autocomplete="new-password">
+                </label>
+              </div>
+              <span class="field-hint">DVhub meldet sich als eigener Regler an (Claim, Priorit&auml;t 500): ein Eingriff von Hand in der OpenEVSE, RFID und OCPP haben immer Vorrang.</span>
+            </div>
+            <div class="evcc-wallbox-fields" id="wallbox-goe-fields" hidden>
+              <label class="dv-field">
+                <span class="field-label">go-e-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-goe-url" placeholder="http://192.168.x.x" autocomplete="off" spellcheck="false" inputmode="url">
+                <span class="field-hint">In der go-e-App &bdquo;HTTP API v2&ldquo; einschalten.</span>
+              </label>
+            </div>
+            <div class="evcc-eos-state" id="wallbox-live" hidden>&mdash;</div>
+            <label class="dv-field" id="evcc-eos-loadpoint-wrap">
               <span class="field-label">Gesteuerter Ladepunkt</span>
               <select class="input" id="evcc-eos-loadpoint"><option value="1">#1</option></select>
             </label>

@@ -29,7 +29,10 @@ export const REDACTED_PATHS = Object.freeze([
   'notifications.providers.telegram.chatId',
   'notifications.providers.pushover.appToken',
   'notifications.providers.pushover.userKey',
-  'notifications.providers.ntfy.token'
+  'notifications.providers.ntfy.token',
+  // Zugang zur OpenEVSE-Weboberflaeche (Basic Auth) — Geraetezugang, nie in einen Export.
+  'wallbox.openevse.username',
+  'wallbox.openevse.password'
   // Phase 09.4 gap-closure: notifications.providers.uptime-kuma removed — the
   // Uptime Kuma integration is the `monitoring` block; monitoring.pushUrl is
   // redacted below via redactUrlCreds (URL-level, not whole-field).

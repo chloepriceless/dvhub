@@ -3759,6 +3759,14 @@ export function createDefaultConfig() {
       // (1-based; null = first available). Configured on the Integrations page.
       dashboardLoadpoint: null
     },
+    // Wallbox fuer die EOS-Bruecke (eos-evcc-bridge.js): 'evcc' (Standard) oder
+    // direkt 'openevse' (Claims-API) / 'goe' (API v2). Bedienung im
+    // EVCC-Panel der Integrationsseite. Passwort/Nutzer: config-redaction.js.
+    wallbox: {
+      type: 'evcc',
+      openevse: { url: '', username: '', password: '' },
+      goe: { url: '' }
+    },
     // Plan 08-04 Task 2 Step 5: Host-header + CORS + trust-proxy allowlists.
     // Defaults stay permissive for LAN-first installs (empty arrays = no check);
     // operators on public-facing / reverse-proxy deployments MUST populate

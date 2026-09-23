@@ -119,6 +119,7 @@ import { createCurtailmentService } from './services/curtailment/index.js';
 // keeps its own 30s adapter (instantiated inside services/optimizer/index.js).
 import { createEosAdapter as createEosAdapterForInspector } from './services/optimizer/eos-adapter.js';
 import { createEosEvccBridge } from './services/optimizer/eos-evcc-bridge.js';
+import { createOpenEvseAdapter, createGoeAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
@@ -1163,7 +1164,12 @@ ctx.eosAdapter = eosAdapterInspector;
 const eosEvccBridge = createEosEvccBridge({
   getCfg: () => ctx.getCfg(),
   getSolution: (limit) => eosAdapterInspector.getOptimizationSolution(limit),
-  evcc: evccIntegration,
+  // Wohin der Befehl geht: evcc (Standard) oder direkt an OpenEVSE / go-e.
+  getCharger: (cfg, bc) => {
+    if (bc.charger === 'openevse') return createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse);
+    if (bc.charger === 'goe') return createGoeAdapter(() => ctx.getCfg()?.wallbox?.goe);
+    return createEvccAdapter(evccIntegration, () => bc.loadpoint, () => bc.stopMode);
+  },
   isProActive: () => ctx.licenseService?.isProActive?.() !== false,
   pushLog: (event, data) => ctx.pushLog?.(event, data)
 });

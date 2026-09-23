@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   createEosEvccBridge, buildEvPlan, powerToCurrentA, resolveEvccBridgeConfig, slotAt
 } from '../services/optimizer/eos-evcc-bridge.js';
+import { createEvccAdapter } from '../services/wallbox/adapters.js';
 
 const T0 = Date.parse('2026-09-22T10:00:00Z');
 const Q = 15 * 60_000;
@@ -36,16 +37,18 @@ function harness({ config = cfg(), sol = solution([0.5, 0, 1]), failMode = false
   let currentSol = sol;
   const calls = [];
   const logs = [];
+  const fakeEvcc = {
+    getStatus: () => ({ url: currentCfg?.evcc?.url || null }),
+    setMaxCurrent: async (lp, a) => { calls.push(['maxcurrent', lp, a]); return { ok: true }; },
+    setMode: async (lp, m) => {
+      calls.push(['mode', lp, m]);
+      return failMode ? { ok: false, error: 'HTTP 500' } : { ok: true };
+    }
+  };
   const bridge = createEosEvccBridge({
     getCfg: () => currentCfg,
     getSolution: async () => currentSol,
-    evcc: {
-      setMaxCurrent: async (lp, a) => { calls.push(['maxcurrent', lp, a]); return { ok: true }; },
-      setMode: async (lp, m) => {
-        calls.push(['mode', lp, m]);
-        return failMode ? { ok: false, error: 'HTTP 500' } : { ok: true };
-      }
-    },
+    getCharger: (cfg, bc) => createEvccAdapter(fakeEvcc, () => bc.loadpoint, () => bc.stopMode),
     pushLog: (event, data) => logs.push({ event, data }),
     now: () => clock
   });
@@ -126,7 +129,7 @@ describe('eos-evcc-bridge: Steuern', () => {
     const h = harness({ config: cfg({ evEvccControl: false }) });
     assert.equal((await h.bridge.tick()).skipped, 'disabled');
     h.setCfg({ ...cfg(), evcc: { url: '' } });
-    assert.equal((await h.bridge.tick()).skipped, 'no evcc url');
+    assert.equal((await h.bridge.tick()).skipped, 'evcc not configured');
     assert.equal(h.calls.length, 0);
   });
 

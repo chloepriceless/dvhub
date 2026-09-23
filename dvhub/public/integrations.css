@@ -1388,3 +1388,6 @@
 }
 .evcc-dep-days input { margin: 0; }
 #evcc-dep-consumption-wrap[hidden] { display: none; }
+
+.evcc-wallbox-fields { display: flex; flex-direction: column; gap: 10px; }
+.evcc-wallbox-fields[hidden], #evcc-eos-loadpoint-wrap[hidden], #wallbox-live[hidden] { display: none; }

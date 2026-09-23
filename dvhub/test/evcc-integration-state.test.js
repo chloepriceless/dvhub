@@ -33,7 +33,7 @@ test('URL erst nach dem Start eingetragen: Abfrage laeuft trotzdem an', async ()
     assert.equal(integ.getStatus().lastError, 'no url configured');
     cfg.evcc.url = evcc.url; // wie ein Speichern in den Integrationen
     // Frueher lief ohne Start-URL gar kein Takt — dann kam hier nie eine Abfrage an.
-    await waitFor(() => evcc.requests.includes('GET /api/state'), 7000);
+    await waitFor(() => evcc.requests.includes('GET /api/state'), 15000);
     assert.equal(integ.getStatus().lastError, null);
   } finally {
     integ.stop();

@@ -17,6 +17,7 @@ import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
+import { createOpenEvseAdapter, createGoeAdapter } from './services/wallbox/adapters.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
 // alles, was der Verbindung-/Einstellungen-Tab anzeigen darf. Passwort nie —
@@ -4336,7 +4337,22 @@ export function createApiRoutes(ctx) {
             deadlineSupported: ctx.state?.optimizer?.eos?.supports?.evDeadline === true,
             eosFlavor: ctx.state?.optimizer?.eos?.flavor || null
           }
-        }
+        },
+        // Wallbox direkt (services/wallbox/adapters.js). Zugangsdaten nie im
+        // Klartext zurueck; der Live-Zustand kommt von der Box selbst.
+        wallbox: await (async () => {
+          const w = raw.wallbox || {};
+          const type = ['evcc', 'openevse', 'goe'].includes(w.type) ? w.type : 'evcc';
+          let live = null;
+          if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
+          if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
+          return {
+            type,
+            openevse: { url: w.openevse?.url || '', usernameSet: Boolean(w.openevse?.username), passwordSet: Boolean(w.openevse?.password) },
+            goe: { url: w.goe?.url || '' },
+            live
+          };
+        })()
       });
     }
 
@@ -4430,7 +4446,34 @@ export function createApiRoutes(ctx) {
           eosPatch.evMaxChargeW = Math.round(v);
         }
       }
+      // Wallbox direkt: Typ + Adresse + (OpenEVSE) Zugang. Leeres oder '***'
+      // Passwort/Nutzer heisst "unveraendert" — das Formular kennt sie nicht.
+      let wallboxPatch = null;
+      if (body.wallbox != null) {
+        const w = body.wallbox;
+        if (typeof w !== 'object') return json(res, 400, { ok: false, error: 'wallbox must be an object' });
+        if ('type' in w && !['evcc', 'openevse', 'goe'].includes(w.type)) return json(res, 400, { ok: false, error: 'wallbox.type must be evcc|openevse|goe' });
+        const urlOk = (u) => u === '' || /^https?:\/\//i.test(u);
+        const oeUrl = w.openevse?.url != null ? String(w.openevse.url).trim().slice(0, 256) : null;
+        const goeUrl = w.goe?.url != null ? String(w.goe.url).trim().slice(0, 256) : null;
+        if ((oeUrl !== null && !urlOk(oeUrl)) || (goeUrl !== null && !urlOk(goeUrl))) {
+          return json(res, 400, { ok: false, error: 'wallbox url must be http(s)://…' });
+        }
+        wallboxPatch = { type: w.type, oeUrl, goeUrl, oeUser: w.openevse?.username, oePass: w.openevse?.password };
+      }
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      if (wallboxPatch) {
+        const wb = (next.wallbox && typeof next.wallbox === 'object') ? next.wallbox : {};
+        wb.openevse = (wb.openevse && typeof wb.openevse === 'object') ? wb.openevse : {};
+        wb.goe = (wb.goe && typeof wb.goe === 'object') ? wb.goe : {};
+        if (wallboxPatch.type) wb.type = wallboxPatch.type;
+        if (wallboxPatch.oeUrl !== null) wb.openevse.url = wallboxPatch.oeUrl;
+        if (wallboxPatch.goeUrl !== null) wb.goe.url = wallboxPatch.goeUrl;
+        const keep = (v) => v == null || v === '' || v === '***';
+        if (!keep(wallboxPatch.oeUser)) wb.openevse.username = String(wallboxPatch.oeUser).slice(0, 128);
+        if (!keep(wallboxPatch.oePass)) wb.openevse.password = String(wallboxPatch.oePass).slice(0, 256);
+        next.wallbox = wb;
+      }
       if (eosPatch) {
         next.optimizer = (next.optimizer && typeof next.optimizer === 'object') ? next.optimizer : {};
         Object.assign(next.optimizer, eosPatch);
@@ -4449,7 +4492,8 @@ export function createApiRoutes(ctx) {
         enabled: next.evcc.enabled,
         urlSet: !!next.evcc.url,
         dashboardLoadpoint: next.evcc.dashboardLoadpoint,
-        eos: eosPatch
+        eos: eosPatch,
+        wallboxType: next.wallbox?.type || null
       }, actorContext(req));
       return json(res, 200, {
         ok: true,

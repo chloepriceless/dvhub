@@ -2253,6 +2253,7 @@
       }
       evccLoadpointsCache = Array.isArray(data.loadpoints) ? data.loadpoints : [];
       fillEvccEos(data.eos || {}, evccLoadpointsCache);
+      fillWallbox(data.wallbox || {});
     } catch (e) {
       showDrawerToast('evcc', 'err', '✗ EVCC laden fehlgeschlagen: ' + e.message);
     }
@@ -2298,6 +2299,42 @@
     if (el('evcc-dep-once')) el('evcc-dep-once').value = toLocalInput(dep.once);
     syncEvccDepModeUi();
     renderEvccDepState(dep, capacityWh);
+  }
+  function fillWallbox(w) {
+    var el = function (id) { return document.getElementById(id); };
+    if (el('wallbox-type')) el('wallbox-type').value = w.type || 'evcc';
+    var oe = w.openevse || {};
+    if (el('wallbox-openevse-url')) el('wallbox-openevse-url').value = oe.url || '';
+    // Zugangsdaten kommen nie zurueck — leer lassen heisst "unveraendert".
+    if (el('wallbox-openevse-user')) { el('wallbox-openevse-user').value = ''; el('wallbox-openevse-user').placeholder = oe.usernameSet ? 'gespeichert' : ''; }
+    if (el('wallbox-openevse-pass')) { el('wallbox-openevse-pass').value = ''; el('wallbox-openevse-pass').placeholder = oe.passwordSet ? 'gespeichert' : ''; }
+    if (el('wallbox-goe-url')) el('wallbox-goe-url').value = (w.goe || {}).url || '';
+    syncWallboxTypeUi();
+    var box = el('wallbox-live');
+    if (!box) return;
+    var live = w.live;
+    if (!live || (w.type || 'evcc') === 'evcc') { box.hidden = true; return; }
+    box.hidden = false;
+    box.className = 'evcc-eos-state ' + (live.ok ? 'is-ok' : 'is-warn');
+    box.textContent = live.ok
+      ? ('Wallbox erreichbar · ' + (live.connected ? 'Auto angesteckt' : 'kein Auto') + (live.charging ? ' · lädt ' + (live.powerW != null ? Math.round(live.powerW) + ' W' : '') : '')
+        + (live.currentA != null ? ' · ' + live.currentA + ' A' : '') + (live.vehicleSocPct != null ? ' · SoC ' + live.vehicleSocPct + ' %' : ''))
+      : ('Wallbox nicht erreichbar: ' + (live.error || 'unbekannt'));
+  }
+  function syncWallboxTypeUi() {
+    var t = (document.getElementById('wallbox-type') || {}).value || 'evcc';
+    var show = function (id, on) { var e = document.getElementById(id); if (e) e.hidden = !on; };
+    show('wallbox-openevse-fields', t === 'openevse');
+    show('wallbox-goe-fields', t === 'goe');
+    show('evcc-eos-loadpoint-wrap', t === 'evcc');
+  }
+  function wallboxBody() {
+    var v = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; };
+    return {
+      type: v('wallbox-type') || 'evcc',
+      openevse: { url: v('wallbox-openevse-url'), username: v('wallbox-openevse-user'), password: (document.getElementById('wallbox-openevse-pass') || {}).value || '' },
+      goe: { url: v('wallbox-goe-url') }
+    };
   }
   function syncEvccDepModeUi() {
     var mode = (document.getElementById('evcc-dep-mode') || {}).value || 'percent';
@@ -2446,7 +2483,8 @@
       url: urlVal,
       enabled: !!(el('evcc-enabled') && el('evcc-enabled').checked),
       dashboardLoadpoint: lpRaw === '' ? null : parseInt(lpRaw, 10),
-      eos: evccEosBody()
+      eos: evccEosBody(),
+      wallbox: wallboxBody()
     };
     buttonEl.disabled = true;
     var origText = buttonEl.textContent;
@@ -2475,6 +2513,7 @@
   }
   document.addEventListener('change', function (e) {
     if (e.target && e.target.id === 'evcc-dep-mode') syncEvccDepModeUi();
+    if (e.target && e.target.id === 'wallbox-type') syncWallboxTypeUi();
   });
   document.addEventListener('click', function (e) {
     var evccSave = e.target.closest('#evcc-save');
