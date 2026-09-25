@@ -210,12 +210,19 @@ fi
 # Beim Boot war das der Unterschied zwischen einem Plan nach Minuten und einem
 # nach einer halben Stunde. Bewusst nur eine REIHENFOLGE (After), keine
 # Abhaengigkeit (Requires/Wants): faellt DVhub aus, soll EOS trotzdem laufen.
+#
+# MALLOC_ARENA_MAX=2 (2026-09-25): EOS rechnet im Worker-Thread; glibc legt
+# dafuer eigene Heap-Arenen an und gibt deren Seiten nach einem Lauf nicht
+# zurueck. Wechselt ein Lauf die Arena, belegt er den Speicher ein zweites Mal —
+# auf prod treppte EOS 0.4 so bis ans MemoryMax. Zwei Arenen reichen fuer
+# Server-Loop + einen Optimierungs-Thread. Steht vor EnvironmentFile, damit der
+# Betreiber es dort ueberschreiben kann.
 EOS_UNIT_FILE="/etc/systemd/system/${EOS_SERVICE_NAME}.service"
 # Einmalige Uebernahme: Zusatz-Environment-Zeilen einer von Hand erweiterten
 # alten Unit wandern in die Betreiberdatei, statt beim Neuschreiben zu verschwinden.
 if [[ -f "$EOS_UNIT_FILE" && ! -f "$EOS_ENV_FILE" ]]; then
   _extra_env="$(grep -E '^Environment=' "$EOS_UNIT_FILE" | sed 's/^Environment=//' \
-    | grep -vE '^EOS_SERVER__(HOST|PORT|EOSDASH_PORT)=' || true)"
+    | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX)=' || true)"
   if [[ -n "$_extra_env" ]]; then
     mkdir -p "$(dirname "$EOS_ENV_FILE")"
     {
@@ -241,6 +248,7 @@ ExecStart=$EOS_VENV/bin/python -m akkudoktoreos.server.eos
 Environment=EOS_SERVER__HOST=127.0.0.1
 Environment=EOS_SERVER__PORT=$EOS_PORT
 Environment=EOS_SERVER__EOSDASH_PORT=$((EOS_PORT + 1))
+Environment=MALLOC_ARENA_MAX=2
 EnvironmentFile=-$EOS_ENV_FILE
 ${EOS_HOME:+Environment=EOS_DIR=$EOS_HOME}
 Restart=on-failure
