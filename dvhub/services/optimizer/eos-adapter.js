@@ -327,11 +327,48 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // real horizon end (15-min cadence) rather than a heuristic gap.
     const planEndTs = (plan && plan.valid_until) ? new Date(plan.valid_until).getTime() : undefined;
 
+    let slots;
     try {
-      return convertEosPlanToSlots(entries, getCfg(), planEndTs);
+      slots = convertEosPlanToSlots(entries, getCfg(), planEndTs);
     } catch {
       return null;
     }
+
+    // T-0126 (2026-09-26): a FRBC operation_mode_id carries NO power magnitude,
+    // so planActionToPowerW maps EOS 0.4's real battery→grid modes (GRID_SUPPORT_
+    // EXPORT, PEAK_SHAVING) to 0 — the plan display read "Halten/0" while the box
+    // actually exports, because the control path (pullGridSetpoints) already
+    // actuates the export from the SOLUTION, not from the op-mode plan. Source
+    // each slot's powerW from that same solution net-grid flow (dvhubSetpointW =
+    // grid_consumption − grid_feedin, AC-side and loss-correct), joined by
+    // timestamp, so the displayed plan equals the derived setpoints. The op-mode
+    // stays as the planAction LABEL; the sign convention now matches gridSetpointW
+    // (negative = export, positive = import). Falls back to the op-mode powerW
+    // for any slot without a matching solution row (e.g. no solution computed
+    // yet) — never throws, the plan display degrades gracefully.
+    try {
+      const sol = await getOptimizationSolution(8 * 24 * 4);
+      if (sol && Array.isArray(sol.rows) && sol.rows.length) {
+        const netGridByTs = new Map();
+        for (const r of sol.rows) {
+          const t = new Date(r.ts_utc).getTime();
+          if (Number.isFinite(t) && typeof r.dvhubSetpointW === 'number') {
+            netGridByTs.set(t, r.dvhubSetpointW);
+          }
+        }
+        for (const s of slots) {
+          const sp = netGridByTs.get(s.ts);
+          if (typeof sp === 'number') {
+            s.powerW = sp;
+            // Explicit net-grid marker so estimateNetCost prices the slot from
+            // the grid flow (not by reconstructing it from battery power).
+            s.gridSetpointW = sp;
+          }
+        }
+      }
+    } catch { /* keep the op-mode powerW as a safe fallback */ }
+
+    return slots;
   }
 
   /**

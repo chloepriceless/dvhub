@@ -206,6 +206,49 @@ test('pullSchedule GETs /v1/energy-management/plan and returns parsed schedule',
   }
 });
 
+// --- Test 2b (T-0126): pullSchedule sources powerW from the SOLUTION net-grid ---
+// A FRBC operation_mode_id carries no power magnitude, so the op-mode plan alone
+// maps GRID_SUPPORT_EXPORT → 0 (planActionToPowerW). pullSchedule now joins EOS'
+// own solution net-grid flow (dvhubSetpointW) onto each slot by timestamp, so the
+// displayed plan equals the derived control setpoints; the op-mode stays as the
+// planAction LABEL.
+test('pullSchedule joins the solution net-grid setpoint onto each slot (T-0126)', async () => {
+  const eosPlan = {
+    instructions: [
+      { type: 'FRBCInstruction', actuator_id: 'battery1',
+        execution_time: '2026-04-03T12:00:00Z',
+        operation_mode_id: 'GRID_SUPPORT_EXPORT', operation_mode_factor: 0.75 }
+    ],
+    valid_until: '2026-04-03T12:15:00Z'
+  };
+  // 15-min solution; the 12:00 slot feeds 500 Wh into the grid (no import) →
+  // net grid = (0 − 500) / 0.25 h = −2000 W (export). Two rows so the parser
+  // derives the 15-min slot length.
+  const solution = {
+    generated_at: '2026-04-03T12:00:00Z',
+    solution: { data: {
+      '2026-04-03T12:00:00Z': { battery1_soc_factor: 0.9, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 500 },
+      '2026-04-03T12:15:00Z': { battery1_soc_factor: 0.85, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 0 }
+    } }
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(req.url.includes('/optimization/solution') ? solution : eosPlan));
+  });
+
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const slots = await adapter.pullSchedule();
+    assert.ok(Array.isArray(slots) && slots.length >= 1, 'returns slots');
+    const s = slots[0];
+    assert.equal(s.planAction, 'GRID_SUPPORT_EXPORT', 'op-mode stays the planAction label');
+    assert.equal(s.powerW, -2000, 'powerW reflects the solution net-grid export (−2000 W), not op-mode 0');
+    assert.equal(s.gridSetpointW, -2000, 'explicit net-grid marker set for estimateNetCost');
+  } finally {
+    await mock.close();
+  }
+});
+
 // --- Test 3: pullSchedule returns null when EOS returns non-200 status ---
 test('pullSchedule returns null when EOS returns non-200 status', async () => {
   const mock = await createMockEos((req, res) => {

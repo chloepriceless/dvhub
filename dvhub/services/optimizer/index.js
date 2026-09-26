@@ -69,6 +69,18 @@ export function estimateNetCost(schedule, priceSlots, pvSlots, loadSlots) {
     const importPrice = price.importCtKwh ?? price.ctKwh;
     const feedInPrice = price.feedInCtKwh ?? price.ctKwh * 0.8;
 
+    // T-0126: EOS plan slots carry an explicit net-grid setpoint (gridSetpointW,
+    // negative = export, positive = import) sourced from EOS' own solution. Price
+    // it straight from the net grid instead of reconstructing grid from battery
+    // power — the FRBC op-mode plan has no battery-power magnitude, so the old
+    // powerW branch would misprice every export as "does nothing".
+    if (typeof slot.gridSetpointW === 'number') {
+      const g = slot.gridSetpointW;
+      if (g > 0) totalCostCt += g * importPrice * dtHours / 1000;
+      else if (g < 0) totalCostCt -= Math.abs(g) * feedInPrice * dtHours / 1000;
+      continue;
+    }
+
     if (slot.powerW > 0) {
       // Charging: grid imports more
       const gridImportW = Math.max(0, loadW - pvW + slot.powerW);
