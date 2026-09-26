@@ -1411,3 +1411,11 @@
 .pvs-group-members label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .pvs-howto { margin-top: 14px; font-size: .9em; }
 .pvs-howto ol { margin: 6px 0 0 18px; padding: 0; }
+
+/* Planbare Verbraucher (2026-09-27) — Klassen statt inline style= (CSP, Plan 09.1-07) */
+.scheddev-sep { margin: 1.25rem 0; }
+.scheddev-h { margin: 0 0 .35rem; }
+.scheddev-row { display: flex; align-items: center; gap: .5rem; padding: .4rem 0; border-bottom: 1px solid var(--dv-border, #2a2a2a); }
+.scheddev-row-main { flex: 1; }
+.scheddev-form-card { margin-top: .6rem; padding: .6rem; border: 1px solid var(--dv-border, #2a2a2a); border-radius: 8px; }
+.scheddev-form-actions { margin-top: .5rem; }

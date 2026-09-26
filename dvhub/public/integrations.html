@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=20260914-mqtt-control" />
+  <link rel="stylesheet" href="/integrations.css?v=20260927-scheddev" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -1356,8 +1356,8 @@
           <!-- Planbare Verbraucher (2026-09-26): benutzerdefinierte Geräte, die DVhub
                mitplant (Geschirrspüler = deferrable, Heizstab = modulating) mit
                Endpunkt-Zuordnung. CRUD über /api/devices/schedulable. -->
-          <hr class="dv-sep" style="margin:1.25rem 0" />
-          <h3 style="margin:0 0 .35rem">Planbare Verbraucher</h3>
+          <hr class="dv-sep scheddev-sep" />
+          <h3 class="scheddev-h">Planbare Verbraucher</h3>
           <p class="dv-drawer-intro">
             Ger&auml;te, die DVhub <strong>mitplant</strong>: Geschirrsp&uuml;ler (An/Aus, von EOS in die
             g&uuml;nstigste/PV-reichste Zeit gelegt) oder modulierende Heizst&auml;be (MYPV&nbsp;Elwa / AC&nbsp;Thor,
@@ -1380,6 +1380,6 @@
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/pv-strings-drawer.js?v=20260923"></script>
-  <script src="/integrations.js?v=20260926-scheddev"></script>
+  <script src="/integrations.js?v=20260927-scheddev"></script>
 </body>
 </html>

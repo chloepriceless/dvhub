@@ -3864,8 +3864,8 @@
       var detail = dv.kind === 'modulating'
         ? (esc(String(plan.maxPowerW || '?')) + ' W max' + (plan.targetPct != null ? ', Ziel ' + esc(String(plan.targetPct)) + '%' : ''))
         : (esc(String(plan.energyWh || '?')) + ' Wh / ' + esc(String(plan.durationH || '?')) + ' h' + (plan.deadline ? ', bis ' + esc(plan.deadline) : ''));
-      html += '<div class="scheddev-row" style="display:flex;align-items:center;gap:.5rem;padding:.4rem 0;border-bottom:1px solid var(--dv-border,#2a2a2a)">'
-        + '<span style="flex:1"><strong>' + esc(dv.name || dv.id) + '</strong> <span class="dv-muted">· ' + esc(KIND_LABELS[dv.kind] || dv.kind) + '</span><br><small class="dv-muted">' + detail + ' · ' + esc(EP_LABELS[ep.type] || ep.type || '?') + '</small></span>'
+      html += '<div class="scheddev-row">'
+        + '<span class="scheddev-row-main"><strong>' + esc(dv.name || dv.id) + '</strong> <span class="dv-muted">· ' + esc(KIND_LABELS[dv.kind] || dv.kind) + '</span><br><small class="dv-muted">' + detail + ' · ' + esc(EP_LABELS[ep.type] || ep.type || '?') + '</small></span>'
         + '<button type="button" class="btn sm ghost scheddev-edit" data-id="' + esc(dv.id) + '">Bearbeiten</button>'
         + '<button type="button" class="btn sm ghost scheddev-del" data-id="' + esc(dv.id) + '" aria-label="Entfernen">&times;</button>'
         + '</div>';
@@ -3880,7 +3880,7 @@
     if (!f) return;
     var p = (dev && dev.plan) || {}; var ep = (dev && dev.endpoint) || {}; var kind = (dev && dev.kind) || 'deferrable';
     var shellyOpts = scheddevState.shellyDevices.map(function (s) { return '<option value="' + esc(s.id) + '"' + (ep.shellyDeviceId === s.id ? ' selected' : '') + '>' + esc(s.name || s.id) + '</option>'; }).join('');
-    f.innerHTML = '<div class="scheddev-form-card" style="margin-top:.6rem;padding:.6rem;border:1px solid var(--dv-border,#2a2a2a);border-radius:8px">'
+    f.innerHTML = '<div class="scheddev-form-card">'
       + sdField('ID', '<input class="input" id="sd-id" value="' + esc((dev && dev.id) || '') + '" ' + (dev ? 'readonly' : '') + ' placeholder="geschirrspueler" />')
       + sdField('Name', '<input class="input" id="sd-name" value="' + esc((dev && dev.name) || '') + '" placeholder="Geschirrspüler" />')
       + sdField('Typ', '<select class="input" id="sd-kind"><option value="deferrable"' + (kind === 'deferrable' ? ' selected' : '') + '>Verschiebbar (An/Aus)</option><option value="modulating"' + (kind === 'modulating' ? ' selected' : '') + '>Modulierend (Heizstab)</option></select>')
@@ -3911,7 +3911,7 @@
         + '</div>'
       + '</div>'
       + '<div data-grp="ep-mqtt_expose"><p class="dv-muted">DVhub publiziert den Soll-Zustand unter <code>dvhub/device/&lt;id&gt;/desired</code> und legt eine Home-Assistant-Entität an; eine HA-Automation schaltet das reale Gerät.</p></div>'
-      + '<div class="dv-drawer-actions" style="margin-top:.5rem"><button type="button" class="btn sm primary" id="sd-save">Speichern</button> <button type="button" class="btn sm ghost" id="sd-cancel">Abbrechen</button></div>'
+      + '<div class="dv-drawer-actions scheddev-form-actions"><button type="button" class="btn sm primary" id="sd-save">Speichern</button> <button type="button" class="btn sm ghost" id="sd-cancel">Abbrechen</button></div>'
       + '</div>';
     rebuildScheddevEndpoints(ep.type);
     syncScheddevForm();
