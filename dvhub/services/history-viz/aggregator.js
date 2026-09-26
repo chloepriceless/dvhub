@@ -221,23 +221,6 @@ export function createHistoryVizAggregator(ctx) {
     return { year, week };
   }
 
-  // Sum (W × Δt_seconds / 3600 / 1000) → kWh across all rows matching `key`.
-  // Treats gaps as zero (no row → no energy contribution); uses each row's
-  // `resolution` field as Δt (capped at 900s by querySeries). Mirrors the
-  // existing energy-integration idiom from telemetry-store-pg.js:662 closely
-  // enough that totals stay consistent with the historyApi summary tile.
-  function sumSeriesKwh(rows, key) {
-    let kwh = 0;
-    for (const r of rows) {
-      if (r.key !== key) continue;
-      const w = Number(r.value);
-      const dt = Number(r.resolution || 0);
-      if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
-      kwh += (w * dt) / 3_600_000;
-    }
-    return kwh;
-  }
-
   // Bucket rows of `key` by hour-of-day (UTC). Returns Array<{h:0..23, w:avgPower}>.
   // Average power, not energy — DayProfile renders W on the y-axis.
   function bucketSeriesByHour(rows, key) {
@@ -611,7 +594,6 @@ export function createHistoryVizAggregator(ctx) {
     if (view === 'year') {
       const out = [];
       const sd = new Date(rangeStart);
-      const startY = sd.getUTCFullYear();
       const startM = sd.getUTCMonth();
       for (let i = 0; i < 12; i++) {
         const m = (startM + i) % 12;
@@ -1508,24 +1490,6 @@ export function createHistoryVizAggregator(ctx) {
     const wh = resolveBatteryCapacityWhForTimestamp(opt.batteryStages, ts, opt.batteryCapacityWh);
     if (Number.isFinite(wh) && wh > 0) return wh / 1000;
     return batteryNominalKwh();
-  }
-
-  // Cumulative |ΔSOC| / 200 — the project-canonical "Vollzyklen" formula
-  // (RESEARCH §Cycle-Counter Algorithm). One full cycle = 200% absolute SOC
-  // change (100% discharge + 100% charge); /100 converts pct→fraction. This is
-  // equivalent to the discharge-energy/capacity formula `computeCycles()` used
-  // by the existing kpis.cycles tile in history-runtime.js — both produce a
-  // full-cycle count; this one operates directly on the SOC series.
-  function countCyclesFromSocSeries(socSeries) {
-    if (!Array.isArray(socSeries) || socSeries.length < 2) return 0;
-    let cumDelta = 0;
-    for (let i = 1; i < socSeries.length; i++) {
-      const a = Number(socSeries[i - 1].value);
-      const b = Number(socSeries[i].value);
-      if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-      cumDelta += Math.abs(b - a);
-    }
-    return cumDelta / 200;
   }
 
   async function getPheat({ view, date } = {}) {

@@ -91,15 +91,15 @@ export function redactHostCreds(raw) {
 // rather than under-redacts (a diagnostic bundle is meant to be sharable).
 const SCRUB_PATTERNS = Object.freeze([
   // "Bearer <token>"
-  [/\b(Bearer\s+)[A-Za-z0-9._~+/\-]{12,}=*/g, '$1***'],
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/-]{12,}=*/g, '$1***'],
   // key/token/secret/password = value  (json or kv form)
   [/\b(api[_-]?key|apitoken|access[_-]?token|token|secret|password|passwd|pwd|auth|signingkey|botToken)(["']?\s*[:=]\s*["']?)[^\s"',}]{6,}/gi, '$1$2***'],
   // JWT
-  [/\beyJ[A-Za-z0-9._\-]{20,}/g, '***'],
+  [/\beyJ[A-Za-z0-9._-]{20,}/g, '***'],
   // long hex blobs (>=32) — likely keys/hashes/tokens
   [/\b[A-Fa-f0-9]{32,}\b/g, '***'],
   // email addresses (PII)
-  [/\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g, '***@***'],
+  [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '***@***'],
   // userinfo embedded in URLs
   [/:\/\/[^/\s:@]+:[^/\s@]+@/g, '://***:***@'],
   // PUBLIC IPv4 → masked (PII / customer location). RFC1918 + loopback are KEPT

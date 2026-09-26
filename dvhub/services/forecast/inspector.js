@@ -32,7 +32,7 @@ export function createInspector(ctx, deps = {}) {
   const pushLog = ctx && typeof ctx.pushLog === 'function' ? ctx.pushLog : () => {};
   const state = ctx && ctx.state ? ctx.state : null;
   const getCfg = ctx && typeof ctx.getCfg === 'function' ? ctx.getCfg : () => ({});
-  const { store, mlService, eosAdapter, forecastService, vrmForecast } = deps;
+  const { store, mlService, eosAdapter, forecastService } = deps;
 
   // Plan 19-04 (B3): single-slot ML-shadow cache. Keyed on forecastVersion +
   // 60s TTL so two consecutive 30s polls share the same Python spawn. Scoped

@@ -109,7 +109,7 @@ function saveUploadToFile(req, filePath, maxBytes) {
     const ws = fs.createWriteStream(filePath);
     let total = 0;
     let failed = false;
-    const fail = (err) => { if (failed) return; failed = true; try { ws.destroy(); } catch {} try { req.destroy(); } catch {} reject(err); };
+    const fail = (err) => { if (failed) return; failed = true; try { ws.destroy(); } catch { /* ignore */ } try { req.destroy(); } catch { /* ignore */ } reject(err); };
     req.on('data', (chunk) => {
       if (failed) return;
       total += chunk.length;
@@ -972,7 +972,7 @@ export function createApiRoutes(ctx) {
       if (done) break;
       total += value.length;
       if (total > maxBytes) {
-        try { await reader.cancel(); } catch {}
+        try { await reader.cancel(); } catch { /* ignore */ }
         const e = new Error('upstream_response_too_large'); e.statusCode = 502; throw e;
       }
       chunks.push(value);
@@ -1355,7 +1355,6 @@ export function createApiRoutes(ctx) {
     const isLan = isLocalNetworkRequest(req);
     const ip = getRateLimitKey(req);
     const now = Date.now();
-    const url = new URL(req.url, `http://${req.headers.host}`);
     // Plan 09-02: admin endpoints DO get rate-limited. Auth alone is the first
     // layer; rate limit is defence-in-depth against authenticated-but-leaked
     // token brute-forcing additional config keys. Operator volume on /api/admin/*
@@ -3588,7 +3587,7 @@ export function createApiRoutes(ctx) {
         ps.groups = cleaned;
       }
       next.pvStrings = ps;
-      try { ctx.saveAndApplyConfig(next); } catch (e) { return json(res, 500, { ok: false, error: 'save failed' }); }
+      try { ctx.saveAndApplyConfig(next); } catch { return json(res, 500, { ok: false, error: 'save failed' }); }
       pushLog('pv_strings_config_saved', { enabled: ps.enabled === true, sources: (ps.sources || []).length, groups: (ps.groups || []).length }, actorContext(req));
       return json(res, 200, { ok: true, pvStrings: ps });
     }
@@ -5142,7 +5141,8 @@ export function createApiRoutes(ctx) {
       const cfg = getCfg();
       const sma = cfg.schedule?.smallMarketAutomation || {};
       const battCapKwh = Number(sma.batteryCapacityKwh) || null;
-      const minSocPct = Number(sma.minSocPct) || 5;
+      // NB: sma.minSocPct is deliberately NOT used here — EOS min_soc uses the
+      // live Victron BMS floor (see min_soc_percentage below).
       const effPct = Number(sma.inverterEfficiencyPct ?? 90);
       const maxChargeW = Number(cfg.optimizer?.maxChargeW ?? 5000);
       const lat = Number(sma.location?.latitude);
@@ -5798,7 +5798,7 @@ export function createApiRoutes(ctx) {
         'Transfer-Encoding': 'chunked',
         'Cache-Control': 'no-store',
       });
-      // UTF-8 BOM (﻿) — Excel autodetects UTF-8 from this byte sequence
+      // UTF-8 BOM (U+FEFF) — Excel autodetects UTF-8 from this byte sequence
       // and renders the German umlauts + the semicolon separator natively.
       res.write('﻿');
       res.write('ts_utc;series_key;value;unit\n');
@@ -6528,7 +6528,7 @@ export function createApiRoutes(ctx) {
       try {
         ({ bytes } = await saveUploadToFile(req, tmpFile, MAX_RESTORE_BYTES));
       } catch (e) {
-        try { fs.unlinkSync(tmpFile); } catch {}
+        try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
         if (e.code === 'TOO_LARGE') return json(res, 413, { ok: false, error: 'body_too_large' });
         return json(res, 400, { ok: false, error: 'upload_failed', detail: e.message });
       }
@@ -6541,9 +6541,9 @@ export function createApiRoutes(ctx) {
         const n = fs.readSync(fd, head, 0, 5, 0);
         fs.closeSync(fd);
         magicOk = n === 5 && head.toString('latin1') === 'PGDMP';
-      } catch {}
+      } catch { /* not readable → treated as invalid dump below */ }
       if (!magicOk) {
-        try { fs.unlinkSync(tmpFile); } catch {}
+        try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
         return json(res, 400, { ok: false, error: 'invalid_dump', hint: 'Erwartet wird eine .dump-Datei im pg_dump-Custom-Format (-Fc).' });
       }
       pushLog('db_restore_start', { bytes }, { ...actorContext(req), severity: 'warn' });
@@ -6553,7 +6553,7 @@ export function createApiRoutes(ctx) {
       } catch (e) {
         result = { ok: false, code: null, stderr: e?.message || 'restore_exception', hadTimescale: false, ignoredErrors: 0 };
       } finally {
-        try { fs.unlinkSync(tmpFile); } catch {}
+        try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
       }
       if (result.ok) {
         pushLog('db_restore_ok', { bytes, hadTimescale: result.hadTimescale, ignoredErrors: result.ignoredErrors || 0 }, { ...actorContext(req), severity: 'warn' });

@@ -34,7 +34,7 @@
  * @param {object} [deps] - { store } — forecast-store with writePvForecasts()
  */
 export function createVrmForecast(ctx, { store } = {}) {
-  const { state, pushLog } = ctx;
+  const { pushLog } = ctx;
   const getDb = () => ctx.db; // lazy — ctx.db set after telemetry store init
 
   // vrm_forecast_read_empty is a diagnostic for "VRM configured but table

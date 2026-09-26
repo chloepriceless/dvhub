@@ -533,7 +533,6 @@ export function createMlTraining({ pythonBridge, store, getCfg, pushLog, mlCorre
 
     const activePath = getActivePath();
     const candidatePath = getCandidatePath();
-    const cfg = getCfg();
 
     // Step 1: invoke triggerTraining (reuses existing DB query + ml_train.py call)
     // Directly invoke the Python bridge with an explicit candidate model_dir so

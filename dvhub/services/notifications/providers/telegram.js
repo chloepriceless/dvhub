@@ -7,7 +7,7 @@ const TELEGRAM_API = 'https://api.telegram.org';
 const TIMEOUT_MS = 10_000;
 
 // Telegram Markdown special chars that need escaping
-const MD_SPECIAL = /([_*\[\]()~`>#\+\-=|{}.!])/g;
+const MD_SPECIAL = /([_*[\]()~`>#+\-=|{}.!])/g;
 
 function escapeMarkdown(text) {
   return String(text).replace(MD_SPECIAL, '\\$1');

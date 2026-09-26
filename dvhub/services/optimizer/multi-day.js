@@ -26,11 +26,8 @@
 export function assessMultiDayHold(pvSlots, loadSlots, batteryCapacityWh, feedInCtKwh, importCtKwh, roundTripEfficiency) {
   // Compute tomorrow's time window using Berlin timezone for day boundaries
   const now = new Date();
-  // Get today's date string in Berlin timezone to derive correct day boundary
-  const berlinDate = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Berlin' }); // YYYY-MM-DD
-  const todayBerlin = new Date(berlinDate + 'T00:00:00+01:00'); // approximate -- used for day boundary
 
-  // More robust: compute end of today and start of tomorrow in local machine time
+  // Compute end of today and start of tomorrow in local machine time
   const todayEnd = new Date(now);
   todayEnd.setHours(23, 59, 59, 999);
   const tomorrowStart = todayEnd.getTime() + 1;

@@ -4,8 +4,7 @@
 // Batch mode (Tier 2): spawn, compute, exit per invocation.
 // Persistent mode (Tier 3): JSON-RPC 2.0 over stdin/stdout with heartbeat and auto-respawn.
 
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -17,7 +16,6 @@ import { fileURLToPath } from 'node:url';
 import { safeInterval } from '../safe-async.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const execFileAsync = promisify(execFile);
 const VENV_PYTHON = '/opt/dvhub/forecast-venv/bin/python3';
 const MIN_FREE_MB_FOR_SPAWN = 500;
 
@@ -296,7 +294,7 @@ export function createPersistentBridge(ctx, { scriptPath }) {
 
     // Handle process exit: reject all pending requests
     proc.on('exit', (code) => {
-      for (const [id, entry] of pending) {
+      for (const [, entry] of pending) {
         clearTimeout(entry.timer);
         entry.reject(new Error(`Python process exited with code ${code}`));
       }
@@ -427,7 +425,7 @@ export function createPersistentBridge(ctx, { scriptPath }) {
     }
 
     // Reject any remaining pending requests
-    for (const [id, entry] of pending) {
+    for (const [, entry] of pending) {
       clearTimeout(entry.timer);
       entry.reject(new Error('Persistent bridge closed'));
     }

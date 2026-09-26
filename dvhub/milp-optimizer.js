@@ -118,7 +118,7 @@ export async function pickMilpPlan({
   }
 
   let cIdx = 0;
-  for (const [si, pIds] of slotCoverage) {
+  for (const [, pIds] of slotCoverage) {
     if (pIds.length > 1) {
       lp += ` overlap_${cIdx}: ${pIds.join(' + ')} <= 1\n`;
       cIdx++;

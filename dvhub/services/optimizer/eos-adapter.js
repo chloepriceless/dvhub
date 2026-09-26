@@ -2,7 +2,6 @@
 // Sends DVhub forecasts to co-hosted EOS and receives optimized schedules.
 // Consistent { ok, error } contract -- NEVER throws (addresses Codex review concern).
 import http from 'node:http';
-import { toEosStrompreisArray } from './cost-model.js';
 import { classifyEosSlotAction } from '../../eos-zeitplan-map.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -49,7 +48,7 @@ export function resolveEosProxy(cfg = {}) {
  * @returns {{ pushForecast: Function, pullSchedule: Function, isAvailable: Function }}
  */
 export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  const { getCfg, pushLog } = ctx;
+  const { getCfg } = ctx;
 
   /**
    * Internal HTTP request helper. NEVER throws -- returns consistent { ok, data } or { ok, error }.

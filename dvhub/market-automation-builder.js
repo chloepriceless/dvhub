@@ -21,7 +21,6 @@ import {
 } from './small-market-automation.js';
 import { pickMilpPlan } from './milp-optimizer.js';
 import { readSunTimesForDate } from './sun-times-cache.js';
-import { sumForecastSlotsKwh } from './small-market-automation.js';
 
 // --- Named exports (shared constants + helper) ---
 

@@ -15,7 +15,6 @@ import crypto from 'node:crypto';
 import { solarElevationDeg, elevationBand } from './solar-position.js';
 import { calibrate, estimateWouldHaveW, binKeyFor } from './calibration.js';
 
-const SLOT_MS = 15 * 60 * 1000;
 const ARRAY_ID = 'total'; // single aggregated array (prod has one plant)
 
 // --- pure helpers (exported for testing) ---

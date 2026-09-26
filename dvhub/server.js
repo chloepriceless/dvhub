@@ -2280,8 +2280,8 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
   pushLog('uncaught_exception', { error: String(err?.message || err) }, 'error');
-  try { poller.stop(); } catch {}
-  try { liveTelemetryBuffer?.flush({ force: true }); } catch {}
+  try { poller.stop(); } catch { /* best-effort shutdown */ }
+  try { liveTelemetryBuffer?.flush({ force: true }); } catch { /* best-effort shutdown */ }
   process.exit(1);
 });
 

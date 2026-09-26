@@ -3,8 +3,6 @@
 // Preserves individual 15min price peaks for optimal slot selection.
 // Uses importCtKwh from cost-model enrichment (falls back to ctKwh for backward compat).
 
-const QUARTER_MS = 15 * 60 * 1000;
-
 let _highs = null;
 
 /**
@@ -52,7 +50,7 @@ export async function buildMilpSchedule({ priceSlots, pvSlots, loadSlots, batter
   if (N === 0) return [];
 
   // Battery parameters
-  const { capacityWh, maxSocPct, maxChargeW, maxDischargeW, currentSocPct } = batteryModel;
+  const { capacityWh, maxSocPct, maxChargeW, currentSocPct } = batteryModel;
   const minSocPct = confidenceGate.minSocPct;
   const eff = Math.sqrt(0.92); // sqrt of round-trip efficiency
   const dt = 0.25; // 0.25 hours per 15min slot
