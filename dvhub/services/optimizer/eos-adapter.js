@@ -236,18 +236,32 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    * keep rendering the same table.
    *
    * power mapping (sign = battery perspective: + = charging, - = discharging):
-   *   FORCED_CHARGE    → +factor × maxChargeW
-   *   FORCED_DISCHARGE → -factor × maxDischargeW
-   *   IDLE / SELF_CONSUMPTION / NON_EXPORT → 0  (no scheduled grid forcing)
-   *   anything else → 0  (display-only; the rate is informational)
+   *   FORCED_CHARGE / GRID_SUPPORT_IMPORT       → +factor × maxChargeW
+   *   FORCED_DISCHARGE / GRID_SUPPORT_EXPORT /  → -factor × maxDischargeW
+   *   PEAK_SHAVING
+   *   IDLE / SELF_CONSUMPTION / NON_EXPORT      → 0 (no forced dispatch)
+   * (0.4 renamed the dispatch to FRBC modes but kept operation_mode_factor.)
    */
   function planActionToPowerW(opMode, factor, maxChargeW, maxDischargeW) {
     const f = Number(factor);
     if (!Number.isFinite(f)) return 0;
+    const chargeW = Number(maxChargeW) || 0;
+    const dischargeW = Number(maxDischargeW) || 0;
     switch (opMode) {
-      case 'FORCED_CHARGE':    return +f * (Number(maxChargeW) || 0);
-      case 'FORCED_DISCHARGE': return -f * (Number(maxDischargeW) || 0);
-      default:                  return 0;
+      // 0.3: explicit forced dispatch.
+      case 'FORCED_CHARGE':        return +f * chargeW;
+      case 'FORCED_DISCHARGE':     return -f * dischargeW;
+      // T-0126 (2026-09-26): EOS 0.4 renamed the battery dispatch to FRBC modes.
+      // They carry the SAME operation_mode_factor, so scale it by the configured
+      // battery caps exactly like 0.3's FORCED_* — no new config (capacity etc.)
+      // is needed, only these mode names. Without them planActionToPowerW fell to
+      // 0 and the "Batterie-Plan" chart went flat despite real evening exports.
+      case 'GRID_SUPPORT_IMPORT':  return +f * chargeW;    // charge from grid
+      case 'GRID_SUPPORT_EXPORT':                          // discharge to grid
+      case 'PEAK_SHAVING':         return -f * dischargeW; // discharge to shave the peak
+      // IDLE / SELF_CONSUMPTION / NON_EXPORT / others: no FORCED battery dispatch
+      // to chart (matches 0.3, which only ever plotted forced charge/discharge).
+      default:                     return 0;
     }
   }
   function convertEosPlanToSlots(planEntries, ctxCfg, planEndTs) {

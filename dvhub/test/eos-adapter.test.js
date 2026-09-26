@@ -206,15 +206,15 @@ test('pullSchedule GETs /v1/energy-management/plan and returns parsed schedule',
   }
 });
 
-// --- Test 2b (T-0126): pullSchedule attaches the SOLUTION net-grid as gridSetpointW ---
-// A FRBC operation_mode_id carries no power magnitude, so the op-mode plan maps
-// GRID_SUPPORT_EXPORT → 0 (planActionToPowerW). pullSchedule now ALSO attaches
-// EOS' own solution net-grid flow (dvhubSetpointW) as a separate `gridSetpointW`
-// field per slot (joined by timestamp), so a plan display can show the same
-// setpoint the box actuates. `powerW` stays the op-mode battery dispatch (the
-// battery_power_w series / Leitstand chart depend on it), and planAction stays
-// the op-mode label.
-test('pullSchedule attaches the solution net-grid setpoint as gridSetpointW (T-0126)', async () => {
+// --- Test 2b (T-0126): 0.4 FRBC modes map to battery power; net-grid as gridSetpointW ---
+// EOS 0.4 renamed the battery dispatch to FRBC modes (GRID_SUPPORT_EXPORT etc.)
+// that keep operation_mode_factor. planActionToPowerW now scales the factor by
+// maxDischargeW/maxChargeW exactly like 0.3's FORCED_* — so `powerW` carries the
+// real battery dispatch again (the battery_power_w series / Leitstand "Batterie-
+// Plan" chart depend on it) instead of falling to 0. pullSchedule ALSO attaches
+// the solution net-grid flow (dvhubSetpointW) as a separate `gridSetpointW` field
+// (joined by timestamp). planAction stays the op-mode label.
+test('pullSchedule maps 0.4 GRID_SUPPORT_EXPORT to battery power and attaches gridSetpointW (T-0126)', async () => {
   const eosPlan = {
     instructions: [
       { type: 'FRBCInstruction', actuator_id: 'battery1',
@@ -244,7 +244,8 @@ test('pullSchedule attaches the solution net-grid setpoint as gridSetpointW (T-0
     assert.ok(Array.isArray(slots) && slots.length >= 1, 'returns slots');
     const s = slots[0];
     assert.equal(s.planAction, 'GRID_SUPPORT_EXPORT', 'op-mode stays the planAction label');
-    assert.equal(s.powerW, 0, 'powerW stays the op-mode battery dispatch (GRID_SUPPORT_EXPORT → 0), untouched');
+    // maxDischargeW unset in the test ctx → default 5000; factor 0.75 → −3750 W.
+    assert.equal(s.powerW, -3750, 'GRID_SUPPORT_EXPORT maps to battery discharge (−factor × maxDischargeW)');
     assert.equal(s.gridSetpointW, -2000, 'net-grid setpoint attached as a separate field (−2000 W export)');
   } finally {
     await mock.close();
