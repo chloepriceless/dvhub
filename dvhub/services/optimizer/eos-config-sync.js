@@ -12,6 +12,8 @@
 
 import { resolveEvDeparture } from './ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './ev-soc.js';
+import { buildEosHomeAppliances } from './eos-devices.js';
+import { loadSchedulableDevices } from '../devices/schedulable.js';
 import http from 'node:http';
 
 import { createEosCapabilityProbe, EOS_FLAVOR } from './eos-capabilities.js';
@@ -533,9 +535,28 @@ export function createEosConfigSync(ctx) {
     //   Schlüssel, sonst nichts.
     //   prepare() ohne den Wert: max None→1, Liste None→['dishwasher1'].
     //   prepare() mit dem Wert 0: bleibt 0 / None.
-    const homeApplianceTasks = [
-      { section: 'devices/max_home_appliances', body: 0 },
-    ];
+    // Planbare An/Aus-Verbraucher (Geschirrspüler & Co., 2026-09-26): als EOS
+    // home_appliances mitplanen. Nur deferrable Geräte; modulierende Heizstäbe
+    // regelt DVhub selbst (EOS' genetic kann nur EIN EV-artiges Gerät). Ohne
+    // solche Geräte bleibt es beim tragenden max=0 (siehe Kommentar oben).
+    // Reihenfolge im tasks-Array: max ZUERST, dann Liste (analog EV).
+    let applianceIdMap = {};
+    let homeApplianceTasks;
+    {
+      const sched = loadSchedulableDevices(cfg).devices.filter((d) => d.kind === 'deferrable' && d.enabled !== false);
+      if (sched.length && caps.supports.applianceScheduling !== false) {
+        const built = buildEosHomeAppliances(sched, { timeZone: cfg?.timeZone || 'Europe/Berlin' });
+        applianceIdMap = built.idMap;
+        homeApplianceTasks = [
+          { section: 'devices/max_home_appliances', body: built.appliances.length },
+          { section: 'devices/home_appliances', body: asDevices(built.appliances) },
+        ];
+        if (state) { state.optimizer = state.optimizer || {}; state.optimizer.eosApplianceIdMap = applianceIdMap; }
+      } else {
+        homeApplianceTasks = [{ section: 'devices/max_home_appliances', body: 0 }];
+        if (state?.optimizer) state.optimizer.eosApplianceIdMap = {};
+      }
+    }
 
     // upstream-main (vor #1330) nagelt das Intervall auf 3600 s fest. Dort
     // herabstufen statt einen Fehlschlag zu produzieren — der Operator sieht

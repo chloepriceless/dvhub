@@ -171,6 +171,38 @@ function buildDeviceEntities(devices) {
   return out;
 }
 
+/**
+ * HA-Entitäten für planbare Geräte mit Endpunkt `mqtt_expose` (2026-09-26):
+ * DVhub publiziert den GEWOLLTEN Zustand unter <prefix>/device/<id>/desired
+ * (+ desired_power_w bei modulierend). In HA erscheint das read-only, damit eine
+ * Automation das reale Gerät danach schaltet ("wenn desired ON → einschalten").
+ * @param {object[]} scheduled  normalisierte planbare Geräte (schedulable.js)
+ * @returns {Array} Entity-Deskriptoren
+ */
+function buildScheduledDeviceEntities(scheduled) {
+  const out = [];
+  for (const d of Array.isArray(scheduled) ? scheduled : []) {
+    if (d?.endpoint?.type !== 'mqtt_expose') continue; // nur exponierte Geräte
+    const safe = String(d.id).toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'x';
+    out.push({
+      component: 'binary_sensor', id: `sched_${safe}_desired`,
+      name: `DVhub ${d.name || d.id} (Plan)`,
+      suffix: `device/${d.id}/desired`,
+      payload_on: 'ON', payload_off: 'OFF',
+      icon: d.kind === 'modulating' ? 'mdi:radiator' : 'mdi:calendar-clock',
+    });
+    if (d.kind === 'modulating') {
+      out.push({
+        component: 'sensor', id: `sched_${safe}_desired_power`,
+        name: `DVhub ${d.name || d.id} Soll-Leistung`,
+        suffix: `device/${d.id}/desired_power_w`,
+        unit: 'W', device_class: 'power', state_class: 'measurement', icon: 'mdi:flash',
+      });
+    }
+  }
+  return out;
+}
+
 function buildPayload(entity, topicPrefix, swVersion) {
   const component = entity.component || 'sensor';
   const payload = {
@@ -220,8 +252,8 @@ function buildPayload(entity, topicPrefix, swVersion) {
  * Number of entities DVhub would publish for HA discovery (for the UI).
  * @param {Array} [devices] - schaltbare Geräte (deviceService.getDevices())
  */
-export function haDiscoveryEntityCount(devices) {
-  return ENTITIES.length + CONTROL_ENTITIES.length + buildDeviceEntities(devices).length;
+export function haDiscoveryEntityCount(devices, scheduled) {
+  return ENTITIES.length + CONTROL_ENTITIES.length + buildDeviceEntities(devices).length + buildScheduledDeviceEntities(scheduled).length;
 }
 
 /**
@@ -233,7 +265,7 @@ export function haDiscoveryEntityCount(devices) {
  * @param {Array} [devices] - schaltbare Geräte für dynamische switch-Entitäten
  * @returns {number} count of config topics published (0 if disabled / no hub)
  */
-export function publishHaDiscoveryTopics(hub, getCfg, swVersion, devices) {
+export function publishHaDiscoveryTopics(hub, getCfg, swVersion, devices, scheduled) {
   const cfg = getCfg();
   const haConfig = cfg.mqtt?.haDiscovery;
   if (!haConfig?.enabled || !hub?.publish) return 0;
@@ -242,7 +274,7 @@ export function publishHaDiscoveryTopics(hub, getCfg, swVersion, devices) {
   const topicPrefix = cfg.mqtt?.topicPrefix || 'dvhub';
 
   let n = 0;
-  const all = [...ENTITIES, ...CONTROL_ENTITIES, ...buildDeviceEntities(devices)];
+  const all = [...ENTITIES, ...CONTROL_ENTITIES, ...buildDeviceEntities(devices), ...buildScheduledDeviceEntities(scheduled)];
   for (const entity of all) {
     const component = entity.component || 'sensor';
     const topic = `${prefix}/${component}/dvhub_${entity.id}/config`;
@@ -264,12 +296,12 @@ export function publishHaDiscoveryTopics(hub, getCfg, swVersion, devices) {
  * @param {Array} [devices] - schaltbare Geräte, deren switch-Configs mit geleert werden
  * @returns {number} count of config topics cleared
  */
-export function clearHaDiscoveryTopics(hub, getCfg, prefixOverride, devices) {
+export function clearHaDiscoveryTopics(hub, getCfg, prefixOverride, devices, scheduled) {
   if (!hub?.publish) return 0;
   const cfg = getCfg();
   const prefix = prefixOverride || cfg.mqtt?.haDiscovery?.prefix || 'homeassistant';
   let n = 0;
-  const all = [...ENTITIES, ...CONTROL_ENTITIES, ...buildDeviceEntities(devices)];
+  const all = [...ENTITIES, ...CONTROL_ENTITIES, ...buildDeviceEntities(devices), ...buildScheduledDeviceEntities(scheduled)];
   for (const entity of all) {
     const component = entity.component || 'sensor';
     const topic = `${prefix}/${component}/dvhub_${entity.id}/config`;

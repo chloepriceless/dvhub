@@ -120,6 +120,9 @@ import { createCurtailmentService } from './services/curtailment/index.js';
 // keeps its own 30s adapter (instantiated inside services/optimizer/index.js).
 import { createEosAdapter as createEosAdapterForInspector } from './services/optimizer/eos-adapter.js';
 import { createEosEvccBridge } from './services/optimizer/eos-evcc-bridge.js';
+import { createEosDeviceBridge } from './services/optimizer/eos-device-bridge.js';
+import { createDeviceActuator } from './services/devices/actuator.js';
+import { loadSchedulableDevices } from './services/devices/schedulable.js';
 import { createOpenEvseAdapter, createGoeAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
@@ -1196,6 +1199,25 @@ const eosEvccBridge = createEosEvccBridge({
 });
 ctx.eosEvccBridge = eosEvccBridge;
 
+// Planbare Verbraucher (2026-09-26): Aktor (Endpunkt-Routing) + Aktuierungs-Bridge.
+// Deferrable Geräte folgen dem EOS-home_appliance-Dispatch, modulierende Heizstäbe
+// dem PV-Überschuss. Wird alle 30 s getickt (server start()-Block).
+const deviceActuator = createDeviceActuator({
+  hub: mqttHub,
+  deviceService,
+  getCfg: () => ctx.getCfg(),
+  pushLog: (event, data) => ctx.pushLog?.(event, data),
+});
+ctx.deviceActuator = deviceActuator;
+const eosDeviceBridge = createEosDeviceBridge({
+  getCfg: () => ctx.getCfg(),
+  getSolution: (limit) => eosAdapterInspector.getOptimizationSolution(limit),
+  actuator: deviceActuator,
+  state,
+  pushLog: (event, data) => ctx.pushLog?.(event, data),
+});
+ctx.eosDeviceBridge = eosDeviceBridge;
+
 const inspector = createInspector(ctx, {
   store: forecast.store,
   mlService,
@@ -1808,8 +1830,13 @@ if (IS_RUNTIME_PROCESS) {
       try { return ctx.deviceService?.getDevices?.() || []; }
       catch { return []; }
     };
-    ctx.republishHaDiscovery = () => publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel, listSwitchableDevices());
-    ctx.clearHaDiscovery = (prefixOverride) => clearHaDiscoveryTopics(mqttHub, ctx.getCfg, prefixOverride, listSwitchableDevices());
+    // Planbare mqtt_expose-Geräte als read-only HA-Entitäten (Soll-Zustand).
+    const listScheduledDevices = () => {
+      try { return loadSchedulableDevices(ctx.getCfg()).devices; }
+      catch { return []; }
+    };
+    ctx.republishHaDiscovery = () => publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel, listSwitchableDevices(), listScheduledDevices());
+    ctx.clearHaDiscovery = (prefixOverride) => clearHaDiscoveryTopics(mqttHub, ctx.getCfg, prefixOverride, listSwitchableDevices(), listScheduledDevices());
     // Boot publish — DELAYED. Publishing the retained discovery configs in the
     // raw connect .then() raced an un-settled client (and the LAN broker's
     // frequent reconnects), so the retained configs never landed and the HA card
@@ -1818,7 +1845,7 @@ if (IS_RUNTIME_PROCESS) {
     // restarts. The card's "Resync" is the manual fallback.
     setTimeout(() => {
       try {
-        const n = publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel, listSwitchableDevices());
+        const n = publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel, listSwitchableDevices(), listScheduledDevices());
         if (n) console.log(`HA Discovery: published ${n} entity configs`);
       } catch (err) {
         console.error('HA Discovery error:', err.message);
@@ -1898,6 +1925,7 @@ if (IS_RUNTIME_PROCESS) {
   evccIntegration.start();
   pvStrings.start();
   eosEvccBridge.start();
+  eosDeviceBridge.start();
   epex.start();
   // forecast.start() needs dbPool — wait for telemetry IIFE to finish first
   telemetryReady.then(() => {
@@ -2167,6 +2195,7 @@ async function gracefulShutdown(signal) {
   safeSync('evccIntegration.stop', () => evccIntegration.stop?.());
   safeSync('pvStrings.stop', () => pvStrings.stop?.());
   safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
+  safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
   safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
   safeSync('eosFreshSocTimer.stop', () => clearInterval(eosFreshSocTimer));
   // C2 (2026-07-02, Realitätscheck der alten Worklist 7.7): evcc/license/

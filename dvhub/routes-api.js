@@ -17,6 +17,7 @@ import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch } from './services/control-commands.js';
+import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
 import { createOpenEvseAdapter, createGoeAdapter } from './services/wallbox/adapters.js';
@@ -3058,6 +3059,73 @@ export function createApiRoutes(ctx) {
         devices: cleaned,
         restartRequired: !!(result && result.restartRequired)
       });
+    }
+
+    // --- Planbare Verbraucher (2026-09-26) --------------------------------
+    // Benutzerdefinierte planbare Geräte (Geschirrspüler = deferrable, Heizstab
+    // = modulating) mit Endpunkt-Zuordnung. GET liefert die normalisierten
+    // Geräte + Auswahlhilfen (Shelly-Geräte, bekannte MQTT-Topics) + Bridge-Status.
+    if (url.pathname === '/api/devices/schedulable' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const cfg = getCfg();
+      const { devices, errors } = loadSchedulableDevices(cfg);
+      const shellyDevices = (Array.isArray(cfg.devices) ? cfg.devices : [])
+        .filter(d => d && d.adapter === 'shelly-http' && !isSchedulableDevice(d))
+        .map(d => ({ id: d.id, name: d.name }));
+      // Bekannte MQTT-Topics als Endpunkt-Vorschläge (falls Topic-Observer da).
+      let mqttTopics = [];
+      try { mqttTopics = (ctx.mqttTopicObserver?.getTopics?.() || []).slice(0, 200); } catch { /* optional */ }
+      return json(res, 200, {
+        ok: true,
+        devices,
+        errors,
+        kinds: DEVICE_KINDS,
+        endpointTypes: ENDPOINT_TYPES,
+        allowedEndpoints: { deferrable: allowedEndpointsForKind('deferrable'), modulating: allowedEndpointsForKind('modulating') },
+        shellyDevices,
+        mqttTopics,
+        bridge: ctx.eosDeviceBridge?.getStatus?.() || null,
+      });
+    }
+
+    // POST: ein planbares Gerät anlegen/aktualisieren (Upsert nach id).
+    if (url.pathname === '/api/devices/schedulable' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid_json' }); }
+      const v = validateSchedulableDevice({ ...body, schedulable: true });
+      if (!v.ok) return json(res, 422, { ok: false, error: 'validation_failed', details: v.errors });
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      const existing = Array.isArray(next.devices) ? next.devices : [];
+      // Vorhandenes gleichnamiges planbares Gerät ersetzen; alles andere behalten.
+      next.devices = existing.filter(d => !(isSchedulableDevice(d) && d.id === v.device.id)).concat([v.device]);
+      let result;
+      try { result = ctx.saveAndApplyConfig(next); }
+      catch (e) { pushLog('schedulable_device_save_error', { error: e.message }); return json(res, 500, { ok: false, error: 'save failed' }); }
+      pushLog('schedulable_device_saved', { id: v.device.id, kind: v.device.kind, endpoint: v.device.endpoint.type }, actorContext(req));
+      // EOS neu abgleichen (deferrable → home_appliance) + neu planen + Bridge sofort.
+      ctx.eosConfigSync?.sync?.().catch(() => {});
+      ctx.optimizerService?.requestEosReplan?.('devices');
+      ctx.eosDeviceBridge?.apply?.();
+      return json(res, 200, { ok: true, device: v.device, restartRequired: !!(result && result.restartRequired) });
+    }
+
+    // DELETE /api/devices/schedulable/:id
+    if (url.pathname.startsWith('/api/devices/schedulable/') && req.method === 'DELETE') {
+      if (!checkAuth(req, res)) return;
+      const id = decodeURIComponent(url.pathname.split('/api/devices/schedulable/')[1] || '').split('/')[0];
+      if (!id) return json(res, 400, { ok: false, error: 'id_required' });
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      const existing = Array.isArray(next.devices) ? next.devices : [];
+      const before = existing.length;
+      next.devices = existing.filter(d => !(isSchedulableDevice(d) && d.id === id));
+      if (next.devices.length === before) return json(res, 404, { ok: false, error: 'not_found' });
+      try { ctx.saveAndApplyConfig(next); }
+      catch (e) { pushLog('schedulable_device_delete_error', { error: e.message }); return json(res, 500, { ok: false, error: 'save failed' }); }
+      pushLog('schedulable_device_deleted', { id }, actorContext(req));
+      ctx.eosConfigSync?.sync?.().catch(() => {});
+      ctx.optimizerService?.requestEosReplan?.('devices');
+      return json(res, 200, { ok: true, deleted: id });
     }
 
     // Phase 21 (2026-05-23): MQTT-hub broker configuration via the integrations

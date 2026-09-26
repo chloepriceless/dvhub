@@ -108,7 +108,12 @@ export function buildOptimizerPlan(state, nowMs = Date.now()) {
     slotCount: slots.length,
     rangeCount: ranges.length,
     slots,
-    devices: []
+    // Planbare Verbraucher (2026-09-26): der Geräte-Dispatch, den die
+    // eos-device-bridge in state.optimizer.devicePlan ablegt (deferrable Fenster
+    // aus dem EOS-home_appliance-Dispatch + modulierender Ist-Sollwert). Form je
+    // Slot: { device, kind, start, end, action:'on', ... } bzw. der laufende
+    // Leistungs-Sollwert modulierender Geräte.
+    devices: Array.isArray(opt.devicePlan) ? opt.devicePlan : []
   };
   return { plan, ranges, current, next };
 }
