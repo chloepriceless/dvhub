@@ -128,3 +128,36 @@ describe('parseApplianceRowsDispatch', () => {
     assert.deepEqual(parseApplianceRowsDispatch([{ ts_utc: t(1), appliances: {} }], {}), {});
   });
 });
+
+import { resolveApplianceWindow } from '../services/optimizer/eos-devices.js';
+describe('Codex fixes', () => {
+  it('P2: resolveApplianceWindow keeps earliest before deadline (no impossible window)', () => {
+    const noon = Date.parse('2026-09-26T10:00:00Z'); // 12:00 Berlin
+    const w = resolveApplianceWindow('08:00', '18:00', 'Europe/Berlin', noon);
+    assert.ok(new Date(w.earliestIso).getTime() < new Date(w.deadlineIso).getTime(), 'earliest < deadline');
+    // deadline heute in der Zukunft, earliest heute (schon vergangen, aber erlaubt)
+    assert.ok(new Date(w.deadlineIso).getTime() > noon);
+    assert.ok(new Date(w.earliestIso).getTime() <= noon);
+  });
+  it('P2: buildEosHomeAppliances yields earliest_start < deadline', () => {
+    const noon = Date.parse('2026-09-26T10:00:00Z');
+    const { appliances } = buildEosHomeAppliances([{ id: 'dw', kind: 'deferrable', plan: { energyWh: 1000, durationH: 1, earliestStart: '08:00', deadline: '18:00' } }], { nowMs: noon });
+    const a = appliances[0];
+    assert.ok(Date.parse(a.earliest_start_datetime) < Date.parse(a.deadline_datetime));
+  });
+  it('P2: eosApplianceId collisions get distinct EOS ids', () => {
+    const { idMap } = buildEosHomeAppliances([
+      { id: 'dw-1', kind: 'deferrable', plan: { energyWh: 1000, durationH: 1 } },
+      { id: 'dw_1', kind: 'deferrable', plan: { energyWh: 1000, durationH: 1 } },
+    ]);
+    const keys = Object.keys(idMap);
+    assert.equal(keys.length, 2, 'zwei distinkte eosIds');
+    assert.deepEqual([...new Set(Object.values(idMap))].sort(), ['dw-1', 'dw_1']);
+  });
+  it('P2: dispatch parser matches exact appliance id, not prefix', () => {
+    const rows = [{ ts_utc: '2026-09-26T12:00:00Z', appliances: { appl_dw2_running: 1 } }];
+    const d = parseApplianceRowsDispatch(rows, { appl_dw: 'dw', appl_dw2: 'dw2' });
+    assert.ok(!d.appl_dw, 'appl_dw darf NICHT durch appl_dw2_running getriggert werden');
+    assert.ok(d.appl_dw2, 'appl_dw2 wird korrekt erkannt');
+  });
+});

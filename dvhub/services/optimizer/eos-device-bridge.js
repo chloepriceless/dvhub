@@ -24,11 +24,17 @@ export function deferrableOnNow(dispatch, eosId, nowMs) {
   return windows.some((w) => Number(w.startMs) <= nowMs && nowMs < Number(w.endMs));
 }
 
-/** Aktueller PV-Überschuss (W). Export (grid < 0) plus die schon laufende Heizlast. */
+/**
+ * Aktueller PV-Überschuss (W). grid_total_w: negativ = Einspeisung, positiv = Bezug.
+ * Verfügbar = -grid + eigene laufende Heizlast, dann auf ≥0 geklemmt. Der SIGNIERTE
+ * Netzwert ist entscheidend (Codex-P1): bei Bezug (grid>0) senkt er den Wert korrekt,
+ * damit der Heizstab bei fallender PV drosselt statt Netzstrom zu verheizen. Netzwert
+ * unbekannt → 0 (fail-safe: kein Überschuss annehmen).
+ */
 export function surplusW(state, alreadyDrawingW = 0) {
   const grid = Number(state?.meter?.grid_total_w);
-  const exportW = Number.isFinite(grid) ? Math.max(0, -grid) : 0;
-  return exportW + Math.max(0, Number(alreadyDrawingW) || 0);
+  if (!Number.isFinite(grid)) return 0;
+  return Math.max(0, -grid + Math.max(0, Number(alreadyDrawingW) || 0));
 }
 
 /**
@@ -49,9 +55,11 @@ export function createEosDeviceBridge(deps) {
   let lastError = null;
   const lastCmd = new Map();      // deviceId → commandKey
   const lastPower = new Map();    // deviceId → letzte Heizleistung (für Überschuss-Ramp)
+  const lastDevice = new Map();   // deviceId → zuletzt gesteuertes (normalisiertes) Gerät
   let lastStatus = [];
 
   async function actuate(device, command) {
+    lastDevice.set(device.id, device);
     const key = actuator.commandKey(device, command);
     if (lastCmd.get(device.id) === key) return { unchanged: true, command };
     const r = await actuator.apply(device, command);
@@ -65,6 +73,19 @@ export function createEosDeviceBridge(deps) {
     return r;
   }
 
+  // Codex-P1: ein Gerät, das deaktiviert/gelöscht wurde, darf nicht in seinem
+  // letzten Zustand hängen bleiben. Vor dem Vergessen einmal AUS/0 W senden.
+  async function stopDropped(activeIds) {
+    for (const [id, dev] of [...lastDevice.entries()]) {
+      if (activeIds.has(id)) continue;
+      const off = dev.kind === 'modulating' ? { powerW: 0 } : { on: false };
+      const r = await actuator.apply(dev, off);
+      pushLog(r?.ok ? 'device_stopped_on_removal' : 'device_stop_error', { id, endpoint: dev.endpoint?.type, error: r?.ok ? undefined : (r?.error || 'unknown') });
+      // Nur vergessen, wenn der Stopp durchkam — sonst nächsten Takt erneut versuchen.
+      if (r?.ok) { lastDevice.delete(id); lastCmd.delete(id); lastPower.delete(id); }
+    }
+  }
+
   async function tick({ force = false } = {}) {
     if (ticking) return { ok: false, error: 'busy' };
     ticking = true;
@@ -75,7 +96,10 @@ export function createEosDeviceBridge(deps) {
       if (isReadOnlyMode()) return { ok: false, skipped: 'read_only' };
       const { devices } = loadSchedulableDevices(cfg);
       const enabled = devices.filter((d) => d.enabled !== false);
-      if (!enabled.length) return { ok: true, skipped: 'no_devices' };
+      // Zuvor gesteuerte, jetzt entfernte/deaktivierte Geräte einmal ausschalten.
+      const activeIds = new Set(enabled.map((d) => d.id));
+      await stopDropped(activeIds);
+      if (!enabled.length) { if (state?.optimizer) state.optimizer.devicePlan = []; return { ok: true, skipped: 'no_devices' }; }
 
       const deferrable = enabled.filter((d) => d.kind === 'deferrable');
       const modulating = enabled.filter((d) => d.kind === 'modulating');

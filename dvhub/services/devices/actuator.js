@@ -24,6 +24,11 @@ export function createDeviceActuator(deps) {
 
   function publish(topic, payload, opts = {}) {
     if (!hub?.publish) return { ok: false, error: 'mqtt_hub_unavailable' };
+    // Codex-P1: hub.publish() verwirft still, wenn der Broker getrennt ist. Dann
+    // KEINEN Erfolg melden — sonst cacht die Bridge den nie gesendeten Befehl und
+    // ein verlorenes AUS ließe das Gerät weiterlaufen. connected===false ⇒ Fehler
+    // (undefined bei Test-Mocks gilt weiter als verbunden).
+    if (hub.connected === false) return { ok: false, error: 'mqtt_disconnected' };
     hub.publish(topic, String(payload), { retain: opts.retain ?? false });
     return { ok: true };
   }
@@ -64,15 +69,17 @@ export function createDeviceActuator(deps) {
 
       if (ep.type === 'mqtt_expose') {
         // DVhub publiziert den gewollten Zustand; HA führt aus. Retained, damit ein
-        // neu verbundener HA-Client den aktuellen Wunsch sofort kennt.
+        // neu verbundener HA-Client den aktuellen Wunsch sofort kennt. Publish-Fehler
+        // (z. B. Broker getrennt) werden propagiert (Codex-P1).
         const base = `${prefix}/device/${device.id}`;
         if (isMod) {
-          publish(`${base}/desired_power_w`, powerW, { retain: true });
-          publish(`${base}/desired`, on ? 'ON' : 'OFF', { retain: true });
-          return { ok: true, endpoint: 'mqtt_expose', powerW, on };
+          const r1 = publish(`${base}/desired_power_w`, powerW, { retain: true });
+          if (!r1.ok) return r1;
+          const r2 = publish(`${base}/desired`, on ? 'ON' : 'OFF', { retain: true });
+          return r2.ok ? { ok: true, endpoint: 'mqtt_expose', powerW, on } : r2;
         }
-        publish(`${base}/desired`, on ? 'ON' : 'OFF', { retain: true });
-        return { ok: true, endpoint: 'mqtt_expose', on };
+        const r = publish(`${base}/desired`, on ? 'ON' : 'OFF', { retain: true });
+        return r.ok ? { ok: true, endpoint: 'mqtt_expose', on } : r;
       }
 
       return { ok: false, error: 'unknown_endpoint_type' };

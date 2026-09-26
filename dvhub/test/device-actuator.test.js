@@ -59,6 +59,17 @@ describe('createDeviceActuator', () => {
     assert.equal(pubs.find(p => p.t.endsWith('/desired')).p, 'OFF');
   });
 
+  it('Codex-P1: reports failure when the MQTT broker is disconnected', async () => {
+    const pubs = [];
+    const hub = { publish: (t, p, o) => pubs.push({ t, p, o }), get connected() { return false; } };
+    const act = createDeviceActuator({ hub, deviceService: {}, getCfg: () => ({ mqtt: {} }), pushLog: () => {} });
+    const dev = { id: 'dw', kind: 'deferrable', endpoint: { type: 'mqtt_expose' } };
+    const r = await act.apply(dev, { on: true });
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'mqtt_disconnected');
+    assert.equal(pubs.length, 0); // nichts gesendet
+  });
+
   it('commandKey dedups by state', () => {
     const { act } = harness();
     assert.equal(act.commandKey({ kind: 'deferrable' }, { on: true }), 'o:1');
