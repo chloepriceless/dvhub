@@ -1478,6 +1478,94 @@
   // The `ledger` slug is intentionally absent — the Spot-Ledger card was
   // removed by design, so its endpoint is never fetched (backend getLedger
   // stays in aggregator.js, harmless).
+  // Wechselrichter-Wirkungsgrad (Christin 2026-09-27). Kennzahlen Grundlast /
+  // Volllast für die gewählte Periode, darunter der Verlauf (Woche/Monat je Tag,
+  // Jahr je Monat, Alle je Jahr). Werte kommen aus dem Tagesaggregat.
+  async function buildInverterEfficiency(view, date) {
+    const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    const de = (n, digits) => Number(n).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    const kw = (w) => de(w / 1000, w % 1000 === 0 ? 0 : 1);
+    const mount = document.getElementById('vInvEff');
+    try {
+      const data = await fetchCardData('inverter-efficiency', view, date);
+      const totals = data.totals || {};
+      const buckets = data.buckets || {};
+      if (buckets.base) setText('vInvEffBaseLabel', `Grundlast (${kw(buckets.base.fromW)}–${kw(buckets.base.toW)} kW)`);
+      if (buckets.full) setText('vInvEffFullLabel', `Volllast (ab ${kw(buckets.full.fromW)} kW)`);
+      const value = (b) => {
+        if (!b || !b.enough) return 'zu wenig Daten';
+        if (b.measurable === false) return 'nicht messbar';
+        return `${de(b.etaPct, 1)} %`;
+      };
+      const info = (b) => (b ? `${de(b.hours, 1)} h · ${de(b.acKwh, 1)} kWh` : '-');
+      setText('vInvEffBase', value(totals.base));
+      setText('vInvEffFull', value(totals.full));
+      setText('vInvEffBaseInfo', info(totals.base));
+      setText('vInvEffFullInfo', info(totals.full));
+
+      if (historyVizCharts['inverter-efficiency']) {
+        try { historyVizCharts['inverter-efficiency'].destroy(); } catch (_) { /* dead */ }
+        delete historyVizCharts['inverter-efficiency'];
+      }
+      if (!mount) return;
+      const series = Array.isArray(data.series) ? data.series : [];
+      const hasPoints = series.some((s) => s.base != null || s.full != null);
+      if (view === 'day' || !hasPoints || typeof Chart === 'undefined') {
+        mount.hidden = true;
+        return;
+      }
+      mount.hidden = false;
+      const label = (p) => {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(p)) return `${p.slice(8, 10)}.${p.slice(5, 7)}.`;
+        if (/^\d{4}-\d{2}$/.test(p)) return `${p.slice(5, 7)}/${p.slice(0, 4)}`;
+        return p;
+      };
+      const canvas = mountCanvas(mount, 'vInvEffCanvas');
+      historyVizCharts['inverter-efficiency'] = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: series.map((s) => label(s.period)),
+          datasets: [
+            {
+              label: 'Grundlast %',
+              data: series.map((s) => s.base),
+              borderColor: cssVar('--green', '#3ee0a0'),
+              backgroundColor: 'transparent',
+              borderWidth: 2, pointRadius: 2, tension: 0.2, spanGaps: true,
+            },
+            {
+              label: 'Volllast %',
+              data: series.map((s) => s.full),
+              borderColor: cssVar('--violet', '#a78bfa'),
+              backgroundColor: 'transparent',
+              borderWidth: 2, pointRadius: 2, tension: 0.2, spanGaps: true,
+            },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: INTERACTION_INDEX,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { display: false } },
+            y: {
+              title: { display: true, text: 'Wirkungsgrad %' },
+              suggestedMin: 80, suggestedMax: 100,
+              grid: { color: 'rgba(141,180,221,0.1)' },
+            },
+          },
+        },
+      });
+      setTimeout(() => {
+        try { historyVizCharts['inverter-efficiency'] && historyVizCharts['inverter-efficiency'].resize(); }
+        catch (_) { /* dead chart */ }
+      }, 0);
+    } catch (e) {
+      console.error('history-viz: buildInverterEfficiency failed', e);
+      if (mount) { mount.hidden = false; showFriendlyError(mount, 'Wechselrichter-Wirkungsgrad'); }
+    }
+  }
+
   const buildDispatch = {
     sankey: buildSankey,
     heatmap: buildHeatmap,
@@ -1493,6 +1581,7 @@
     top10: buildTop10,
     'cal-year': buildCalYear,
     scatter: buildScatter,
+    'inverter-efficiency': buildInverterEfficiency,
   };
 
   // --- View-state machine.

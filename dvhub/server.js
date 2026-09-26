@@ -33,6 +33,7 @@ import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtim
 // Phase 09.3-01: history-viz aggregator factory (per-card endpoints under
 // /api/history/viz/*). Wired into ctx after telemetryStore + db are available.
 import { createHistoryVizAggregator } from './services/history-viz/aggregator.js';
+import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
@@ -1727,6 +1728,20 @@ const telemetryReady = (async () => {
     };
     setTimeout(runUnderReportDetection, 10 * 60 * 1000).unref();
     setInterval(runUnderReportDetection, 24 * 60 * 60 * 1000).unref();
+    // Wechselrichter-Wirkungsgrad als Tagesaggregat (Christin 2026-09-27):
+    // stündlich den laufenden Tag, einmal täglich den abgeschlossenen Vortag,
+    // dazu je Lauf bis zu 31 fehlende ältere Tage nachholen. Die History-Karte
+    // liest nur diese Tageszeilen. Erst ~3 min nach Boot (DB warm).
+    const inverterEfficiencyDaily = createInverterEfficiencyDaily({
+      getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
+    });
+    const runInverterEfficiencyDaily = () => {
+      inverterEfficiencyDaily.runOnce().catch((error) => {
+        pushLog('inverter_efficiency_daily_error', { error: error.message });
+      });
+    };
+    setTimeout(runInverterEfficiencyDaily, 3 * 60 * 1000).unref();
+    setInterval(runInverterEfficiencyDaily, 60 * 60 * 1000).unref();
   }
 })().catch(e => pushLog('telemetry_init_error', { error: e.message }));
 

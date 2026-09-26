@@ -1,5 +1,6 @@
 // services/history-viz/aggregator.js
 import { resolveBatteryCapacityWhForTimestamp } from '../../battery-stages.js';
+import { bucketBoundsW, summarizeEfficiencyRows } from '../inverter-efficiency/daily.js';
 
 //
 // T-09.3-19 / 2026-06-14: the PV heatmap (getHeatmap) used to bucket + LABEL its
@@ -2325,6 +2326,54 @@ export function createHistoryVizAggregator(ctx) {
     }
   }
 
+  // Wechselrichter-Wirkungsgrad (Christin 2026-09-27). Liest ausschließlich das
+  // Tagesaggregat inverter_efficiency_daily (Migration 021, befüllt von
+  // services/inverter-efficiency/daily.js) — nie die 5-s-Rohwerte. η je Periode
+  // = Σ AC / Σ DC, energiegewichtet. Verlauf: Woche/Monat je Tag, Jahr je Monat,
+  // „Alle" je Jahr.
+  async function getInverterEfficiency({ view, date } = {}) {
+    const bad = validate({ view, date });
+    if (bad) return bad;
+    const key = `inverter-efficiency:${view}:${date}`;
+    const hit = getCached(key);
+    if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
+    if (!db || typeof db.query !== 'function') {
+      return { status: 503, body: { ok: false, error: 'database unavailable' }, cached: false };
+    }
+    try {
+      const { start, end } = resolveRange(view, date);
+      const result = await db.query(
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day, bucket, ac_wh, dc_wh, seconds
+           FROM inverter_efficiency_daily
+          WHERE day >= $1::date AND day < $2::date
+          ORDER BY day`,
+        [start.slice(0, 10), end.slice(0, 10)]
+      );
+      const rows = result.rows || [];
+      const periodLen = view === 'year' ? 7 : view === 'all' ? 4 : 10;
+      const groups = new Map();
+      for (const r of rows) {
+        const k = String(r.day).slice(0, periodLen);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(r);
+      }
+      const series = view === 'day' ? [] : [...groups.entries()].map(([period, rs]) => {
+        const s = summarizeEfficiencyRows(rs);
+        return { period, base: s.base.etaPct, full: s.full.etaPct };
+      });
+      const payload = envelope('inverter-efficiency', view, date, {
+        totals: summarizeEfficiencyRows(rows),
+        series,
+        buckets: bucketBoundsW(typeof getCfg === 'function' ? getCfg() : null),
+      }, false);
+      putCached(key, payload);
+      return { status: 200, body: payload, cached: false };
+    } catch (e) {
+      if (typeof pushLog === 'function') pushLog('history_viz_inverter_efficiency_error', { error: e.message, view, date });
+      return { status: 500, body: { ok: false, error: e.message }, cached: false };
+    }
+  }
+
   const api = {
     getSankey,
     getHeatmap,
@@ -2341,6 +2390,7 @@ export function createHistoryVizAggregator(ctx) {
     getTop10,
     getCalYear,
     getScatter,
+    getInverterEfficiency,
     bustCache,
     // Exposed for unit tests only — DO NOT consume from route handlers. The
     // routes-api dispatcher calls the public getXxx methods exclusively.
