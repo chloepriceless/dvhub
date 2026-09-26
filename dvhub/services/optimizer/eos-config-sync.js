@@ -554,6 +554,13 @@ export function createEosConfigSync(ctx) {
         if (state) { state.optimizer = state.optimizer || {}; state.optimizer.eosApplianceIdMap = applianceIdMap; }
       } else {
         homeApplianceTasks = [{ section: 'devices/max_home_appliances', body: 0 }];
+        // Bei EOS 0.4 (deviceMap) MUSS die Liste mitgeleert werden: sonst bleibt
+        // ein früher gesendetes Gerät stehen und 0.4 bricht mit "home_appliances
+        // exceeds configured maximum 0" JEDEN Lauf ab (HANDOFF 2026-09-26, live
+        // auf prod aufgetreten nach Löschen eines Testgeräts). Auf 0.3 die Liste
+        // NICHT leeren — ein `[]` triggert dort die Demo-Spülmaschine (Kommentar
+        // oben, geneticparams IndexError). `asDevices([])` = deviceMap ? {} : [].
+        if (caps.supports.deviceMap) homeApplianceTasks.push({ section: 'devices/home_appliances', body: {} });
         if (state?.optimizer) state.optimizer.eosApplianceIdMap = {};
       }
     }

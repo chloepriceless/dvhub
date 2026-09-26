@@ -25,7 +25,7 @@ import {
 // `failUrls` simuliert ein EOS, das einen Konfigschluessel NICHT kennt — genau
 // die Lage unseres aktuellen Forks (Basis 17.03.) gegenueber
 // feedintariff/direct_marketing_enabled.
-function createMockEos(failUrls = []) {
+function createMockEos(failUrls = [], getConfigBody = null) {
   const requests = [];
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -38,6 +38,13 @@ function createMockEos(failUrls = []) {
         if (failUrls.includes(req.url)) {
           res.writeHead(422, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ detail: 'unknown config key' }));
+          return;
+        }
+        // Kapabilitäts-Probe: GET /v1/config kann eine device-Map-Config
+        // zurückgeben, um EOS 0.4 (deviceMap) zu simulieren.
+        if (getConfigBody && req.method === 'GET' && req.url === '/v1/config') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(getConfigBody));
           return;
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -283,6 +290,34 @@ test('sync(): disables home appliances so EOS cannot invent a phantom dishwasher
       listPut, undefined,
       'devices/home_appliances darf nicht gesendet werden — die 0 allein trägt',
     );
+  } finally {
+    await mock.close();
+  }
+});
+
+// HANDOFF 2026-09-26 / live prod-Vorfall: EOS 0.4 (deviceMap) brach jeden Lauf mit
+// "home_appliances exceeds configured maximum 0" ab, weil beim Löschen des letzten
+// planbaren Geräts nur max=0 gesetzt, die Liste aber nicht geleert wurde. Auf 0.4
+// MUSS der "keine Geräte"-Zweig die Liste auf {} leeren (auf 0.3 NICHT).
+test('sync(): 0.4/deviceMap ohne Geräte leert home_appliances auf {} (kein "exceeds maximum")', async () => {
+  // GET /v1/config gibt eine device-MAP zurück → caps.deviceMap = true (0.4).
+  const mock = await createMockEos([], { devices: { batteries: { battery1: {} } } });
+  try {
+    const ctx = {
+      getCfg: () => ({
+        ...STD_CFG,
+        devices: [], // keine planbaren Geräte
+        optimizer: { ...STD_CFG.optimizer, eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } },
+      }),
+      pushLog: () => {},
+      state: {},
+    };
+    await createEosConfigSync(ctx).sync();
+    const maxPut = mock.requests.find((r) => r.method === 'PUT' && r.url === '/v1/config/devices/max_home_appliances');
+    const listPut = mock.requests.find((r) => r.method === 'PUT' && r.url === '/v1/config/devices/home_appliances');
+    assert.ok(maxPut && maxPut.body === 0, 'max_home_appliances = 0');
+    assert.ok(listPut, 'auf 0.4 MUSS die Liste geleert werden');
+    assert.deepEqual(listPut.body, {}, 'leere Map — kein Alteintrag bleibt stehen');
   } finally {
     await mock.close();
   }
