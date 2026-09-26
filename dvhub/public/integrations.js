@@ -3785,6 +3785,7 @@
       var inst = getOrCreateDrawer('shelly');
       if (inst) inst.open();
       setTimeout(loadShellyDrawer, 0);
+      setTimeout(loadScheddev, 0);
       return;
     }
     var discoverBtn = e.target.closest('#shelly-discover');
@@ -3828,6 +3829,176 @@
       }
       return;
     }
+  });
+
+  // === Planbare Verbraucher (2026-09-26) — Abschnitt im Geräte-Drawer ===
+  var scheddevState = { devices: [], shellyDevices: [], mqttTopics: [], allowedEndpoints: { deferrable: ['mqtt_expose', 'shelly', 'mqtt_publish'], modulating: ['mqtt_expose', 'mqtt_publish'] } };
+  var EP_LABELS = { mqtt_expose: 'MQTT-ID (Home Assistant)', shelly: 'Shelly-Gerät', mqtt_publish: 'Vorhandenes MQTT-Gerät' };
+  var KIND_LABELS = { deferrable: 'Verschiebbar (An/Aus)', modulating: 'Modulierend (Heizstab)' };
+
+  async function loadScheddev() {
+    var listEl = document.getElementById('scheddev-list');
+    if (!listEl) return;
+    try {
+      var r = await apiFetch('/api/devices/schedulable');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var d = await r.json();
+      scheddevState.devices = Array.isArray(d.devices) ? d.devices : [];
+      scheddevState.shellyDevices = Array.isArray(d.shellyDevices) ? d.shellyDevices : [];
+      scheddevState.mqttTopics = Array.isArray(d.mqttTopics) ? d.mqttTopics : [];
+      if (d.allowedEndpoints) scheddevState.allowedEndpoints = d.allowedEndpoints;
+      renderScheddevList();
+    } catch (e) {
+      listEl.innerHTML = '<p class="dv-drawer-empty">Laden fehlgeschlagen: ' + esc(e.message) + '</p>';
+    }
+  }
+
+  function renderScheddevList() {
+    var listEl = document.getElementById('scheddev-list');
+    if (!listEl) return;
+    var devs = scheddevState.devices;
+    if (!devs.length) { listEl.innerHTML = '<p class="dv-drawer-empty">Noch keine planbaren Geräte.</p>'; return; }
+    var html = '';
+    for (var i = 0; i < devs.length; i++) {
+      var dv = devs[i]; var plan = dv.plan || {}; var ep = dv.endpoint || {};
+      var detail = dv.kind === 'modulating'
+        ? (esc(String(plan.maxPowerW || '?')) + ' W max' + (plan.targetPct != null ? ', Ziel ' + esc(String(plan.targetPct)) + '%' : ''))
+        : (esc(String(plan.energyWh || '?')) + ' Wh / ' + esc(String(plan.durationH || '?')) + ' h' + (plan.deadline ? ', bis ' + esc(plan.deadline) : ''));
+      html += '<div class="scheddev-row" style="display:flex;align-items:center;gap:.5rem;padding:.4rem 0;border-bottom:1px solid var(--dv-border,#2a2a2a)">'
+        + '<span style="flex:1"><strong>' + esc(dv.name || dv.id) + '</strong> <span class="dv-muted">· ' + esc(KIND_LABELS[dv.kind] || dv.kind) + '</span><br><small class="dv-muted">' + detail + ' · ' + esc(EP_LABELS[ep.type] || ep.type || '?') + '</small></span>'
+        + '<button type="button" class="btn sm ghost scheddev-edit" data-id="' + esc(dv.id) + '">Bearbeiten</button>'
+        + '<button type="button" class="btn sm ghost scheddev-del" data-id="' + esc(dv.id) + '" aria-label="Entfernen">&times;</button>'
+        + '</div>';
+    }
+    listEl.innerHTML = html;
+  }
+
+  function sdField(label, inner) { return '<div class="dv-field"><label>' + label + '</label>' + inner + '</div>'; }
+
+  function renderScheddevForm(dev) {
+    var f = document.getElementById('scheddev-form');
+    if (!f) return;
+    var p = (dev && dev.plan) || {}; var ep = (dev && dev.endpoint) || {}; var kind = (dev && dev.kind) || 'deferrable';
+    var shellyOpts = scheddevState.shellyDevices.map(function (s) { return '<option value="' + esc(s.id) + '"' + (ep.shellyDeviceId === s.id ? ' selected' : '') + '>' + esc(s.name || s.id) + '</option>'; }).join('');
+    f.innerHTML = '<div class="scheddev-form-card" style="margin-top:.6rem;padding:.6rem;border:1px solid var(--dv-border,#2a2a2a);border-radius:8px">'
+      + sdField('ID', '<input class="input" id="sd-id" value="' + esc((dev && dev.id) || '') + '" ' + (dev ? 'readonly' : '') + ' placeholder="geschirrspueler" />')
+      + sdField('Name', '<input class="input" id="sd-name" value="' + esc((dev && dev.name) || '') + '" placeholder="Geschirrspüler" />')
+      + sdField('Typ', '<select class="input" id="sd-kind"><option value="deferrable"' + (kind === 'deferrable' ? ' selected' : '') + '>Verschiebbar (An/Aus)</option><option value="modulating"' + (kind === 'modulating' ? ' selected' : '') + '>Modulierend (Heizstab)</option></select>')
+      + '<div data-grp="deferrable">'
+        + sdField('Verbrauch (Wh)', '<input class="input" id="sd-energyWh" type="number" min="1" value="' + esc(String(p.energyWh != null ? p.energyWh : 1000)) + '" />')
+        + sdField('Mindestlaufzeit (h)', '<input class="input" id="sd-durationH" type="number" min="0.25" step="0.25" value="' + esc(String(p.durationH != null ? p.durationH : 2)) + '" />')
+        + sdField('Fertig bis (HH:MM)', '<input class="input" id="sd-deadline" value="' + esc(p.deadline || '18:00') + '" placeholder="18:00" />')
+        + sdField('Frühester Start (HH:MM, optional)', '<input class="input" id="sd-earliest" value="' + esc(p.earliestStart || '') + '" placeholder="08:00" />')
+      + '</div>'
+      + '<div data-grp="modulating">'
+        + sdField('Max. Leistung (W)', '<input class="input" id="sd-maxPowerW" type="number" min="1" value="' + esc(String(p.maxPowerW != null ? p.maxPowerW : 3000)) + '" />')
+        + sdField('Min. Leistung (W)', '<input class="input" id="sd-minPowerW" type="number" min="0" value="' + esc(String(p.minPowerW != null ? p.minPowerW : 0)) + '" />')
+        + sdField('Thermische Kapazität (Wh, optional)', '<input class="input" id="sd-capacityWh" type="number" min="0" value="' + esc(String(p.capacityWh != null ? p.capacityWh : '')) + '" />')
+        + sdField('Ziel (%, optional)', '<input class="input" id="sd-targetPct" type="number" min="0" max="100" value="' + esc(String(p.targetPct != null ? p.targetPct : '')) + '" />')
+        + sdField('Fertig bis (HH:MM, optional)', '<input class="input" id="sd-deadlineM" value="' + esc(p.deadline || '') + '" placeholder="20:00" />')
+      + '</div>'
+      + sdField('Endpunkt', '<select class="input" id="sd-ep"></select>')
+      + '<div data-grp="ep-shelly">' + sdField('Shelly-Gerät', '<select class="input" id="sd-shelly">' + (shellyOpts || '<option value="">— kein Shelly konfiguriert —</option>') + '</select>') + '</div>'
+      + '<div data-grp="ep-mqtt_publish">'
+        + '<div data-grp="ep-mp-onoff">'
+          + sdField('Command-Topic', '<input class="input mono" id="sd-cmdtopic" value="' + esc(ep.commandTopic || '') + '" placeholder="haus/kueche/schalter/set" />')
+          + sdField('An-Payload', '<input class="input mono" id="sd-onpayload" value="' + esc(ep.onPayload || 'ON') + '" />')
+          + sdField('Aus-Payload', '<input class="input mono" id="sd-offpayload" value="' + esc(ep.offPayload || 'OFF') + '" />')
+        + '</div>'
+        + '<div data-grp="ep-mp-power">'
+          + sdField('Leistungs-Topic', '<input class="input mono" id="sd-powertopic" value="' + esc(ep.powerTopic || '') + '" placeholder="elwa/power/set" />')
+          + sdField('Leistungs-Vorlage', '<input class="input mono" id="sd-powertpl" value="' + esc(ep.powerTemplate || '{value}') + '" placeholder="{value}" />')
+        + '</div>'
+      + '</div>'
+      + '<div data-grp="ep-mqtt_expose"><p class="dv-muted">DVhub publiziert den Soll-Zustand unter <code>dvhub/device/&lt;id&gt;/desired</code> und legt eine Home-Assistant-Entität an; eine HA-Automation schaltet das reale Gerät.</p></div>'
+      + '<div class="dv-drawer-actions" style="margin-top:.5rem"><button type="button" class="btn sm primary" id="sd-save">Speichern</button> <button type="button" class="btn sm ghost" id="sd-cancel">Abbrechen</button></div>'
+      + '</div>';
+    rebuildScheddevEndpoints(ep.type);
+    syncScheddevForm();
+    var kEl = document.getElementById('sd-kind');
+    if (kEl) kEl.addEventListener('change', function () { rebuildScheddevEndpoints(); syncScheddevForm(); });
+    var eEl = document.getElementById('sd-ep');
+    if (eEl) eEl.addEventListener('change', syncScheddevForm);
+  }
+
+  function rebuildScheddevEndpoints(preferType) {
+    var kEl = document.getElementById('sd-kind'); var sel = document.getElementById('sd-ep');
+    if (!sel) return;
+    var kind = kEl ? kEl.value : 'deferrable';
+    var allowed = scheddevState.allowedEndpoints[kind] || ['mqtt_expose', 'mqtt_publish'];
+    var cur = (preferType && allowed.indexOf(preferType) >= 0) ? preferType : (allowed.indexOf(sel.value) >= 0 ? sel.value : allowed[0]);
+    sel.innerHTML = allowed.map(function (t) { return '<option value="' + t + '"' + (t === cur ? ' selected' : '') + '>' + esc(EP_LABELS[t] || t) + '</option>'; }).join('');
+  }
+
+  function syncScheddevForm() {
+    var kEl = document.getElementById('sd-kind'); var eEl = document.getElementById('sd-ep');
+    var kind = kEl ? kEl.value : 'deferrable'; var ep = eEl ? eEl.value : 'mqtt_expose';
+    var show = function (grp, on) { var el = document.querySelector('#scheddev-form [data-grp="' + grp + '"]'); if (el) el.hidden = !on; };
+    show('deferrable', kind === 'deferrable');
+    show('modulating', kind === 'modulating');
+    show('ep-shelly', ep === 'shelly');
+    show('ep-mqtt_publish', ep === 'mqtt_publish');
+    show('ep-mqtt_expose', ep === 'mqtt_expose');
+    show('ep-mp-onoff', ep === 'mqtt_publish' && kind === 'deferrable');
+    show('ep-mp-power', ep === 'mqtt_publish' && kind === 'modulating');
+  }
+
+  function buildScheddevBody() {
+    var val = function (id) { var el = document.getElementById(id); return el ? String(el.value).trim() : ''; };
+    var num = function (id) { var v = val(id); return v === '' ? undefined : Number(v); };
+    var kind = val('sd-kind') || 'deferrable'; var ep = val('sd-ep') || 'mqtt_expose';
+    var body = { id: val('sd-id'), name: val('sd-name'), kind: kind, plan: {}, endpoint: { type: ep } };
+    if (kind === 'deferrable') {
+      body.plan = { energyWh: num('sd-energyWh'), durationH: num('sd-durationH') };
+      if (val('sd-deadline')) body.plan.deadline = val('sd-deadline');
+      if (val('sd-earliest')) body.plan.earliestStart = val('sd-earliest');
+    } else {
+      body.plan = { maxPowerW: num('sd-maxPowerW'), minPowerW: num('sd-minPowerW') };
+      if (num('sd-capacityWh') != null) body.plan.capacityWh = num('sd-capacityWh');
+      if (num('sd-targetPct') != null) body.plan.targetPct = num('sd-targetPct');
+      if (val('sd-deadlineM')) body.plan.deadline = val('sd-deadlineM');
+    }
+    if (ep === 'shelly') body.endpoint.shellyDeviceId = val('sd-shelly');
+    else if (ep === 'mqtt_publish') {
+      if (kind === 'modulating') { body.endpoint.powerTopic = val('sd-powertopic'); body.endpoint.powerTemplate = val('sd-powertpl') || '{value}'; }
+      else { body.endpoint.commandTopic = val('sd-cmdtopic'); body.endpoint.onPayload = val('sd-onpayload') || 'ON'; body.endpoint.offPayload = val('sd-offpayload') || 'OFF'; }
+    }
+    return body;
+  }
+
+  async function saveScheddev(btn) {
+    var body = buildScheddevBody();
+    if (btn) btn.disabled = true;
+    try {
+      var r = await apiFetch('/api/devices/schedulable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      var d = await r.json().catch(function () { return {}; });
+      if (r.ok && d.ok) {
+        showDrawerToast('shelly', 'ok', '✓ Gerät gespeichert.');
+        var f = document.getElementById('scheddev-form'); if (f) f.innerHTML = '';
+        loadScheddev();
+      } else {
+        showDrawerToast('shelly', 'err', '✗ ' + ((d.details && d.details.join(', ')) || d.error || ('HTTP ' + r.status)));
+      }
+    } catch (e) { showDrawerToast('shelly', 'err', '✗ Netzwerkfehler: ' + e.message); }
+    finally { if (btn) btn.disabled = false; }
+  }
+
+  async function deleteScheddev(id) {
+    try {
+      var r = await apiFetch('/api/devices/schedulable/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (r.ok) { showDrawerToast('shelly', 'ok', '✓ Gerät entfernt.'); loadScheddev(); }
+      else { var d = await r.json().catch(function () { return {}; }); showDrawerToast('shelly', 'err', '✗ ' + (d.error || ('HTTP ' + r.status))); }
+    } catch (e) { showDrawerToast('shelly', 'err', '✗ Netzwerkfehler: ' + e.message); }
+  }
+
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('#scheddev-add')) { renderScheddevForm(null); return; }
+    var editBtn = e.target.closest('.scheddev-edit');
+    if (editBtn) { var dv = scheddevState.devices.find(function (x) { return x.id === editBtn.dataset.id; }); if (dv) renderScheddevForm(dv); return; }
+    var delB = e.target.closest('.scheddev-del');
+    if (delB) { deleteScheddev(delB.dataset.id); return; }
+    if (e.target.closest('#sd-save')) { saveScheddev(e.target.closest('#sd-save')); return; }
+    if (e.target.closest('#sd-cancel')) { var f2 = document.getElementById('scheddev-form'); if (f2) f2.innerHTML = ''; return; }
   });
 
   async function saveTeslaConfig(buttonEl) {

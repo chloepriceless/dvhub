@@ -1352,6 +1352,24 @@
           </div>
           <div id="shelly-discover-results" class="shelly-discover-results" hidden></div>
           <div class="dv-field-validation" id="shelly-banner" hidden></div>
+
+          <!-- Planbare Verbraucher (2026-09-26): benutzerdefinierte Geräte, die DVhub
+               mitplant (Geschirrspüler = deferrable, Heizstab = modulating) mit
+               Endpunkt-Zuordnung. CRUD über /api/devices/schedulable. -->
+          <hr class="dv-sep" style="margin:1.25rem 0" />
+          <h3 style="margin:0 0 .35rem">Planbare Verbraucher</h3>
+          <p class="dv-drawer-intro">
+            Ger&auml;te, die DVhub <strong>mitplant</strong>: Geschirrsp&uuml;ler (An/Aus, von EOS in die
+            g&uuml;nstigste/PV-reichste Zeit gelegt) oder modulierende Heizst&auml;be (MYPV&nbsp;Elwa / AC&nbsp;Thor,
+            folgen dem PV-&Uuml;berschuss). Ansteuerung: MQTT-ID f&uuml;r Home&nbsp;Assistant, ein zugeordnetes
+            Shelly, oder ein bereits vorhandenes MQTT-Ger&auml;t.
+          </p>
+          <div id="scheddev-list"></div>
+          <div class="dv-drawer-actions">
+            <button type="button" class="btn sm ghost" id="scheddev-add">+ Planbares Ger&auml;t</button>
+          </div>
+          <div id="scheddev-form"></div>
+          <div class="dv-field-validation" id="scheddev-banner" hidden></div>
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-shelly-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
