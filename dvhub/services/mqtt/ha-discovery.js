@@ -27,6 +27,8 @@
 // battery_power_w). Those slots remain a follow-up (publish solar/pv_total_wh,
 // battery/charge_wh, battery/discharge_wh by integrating the power curve).
 
+import { MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W, MAX_CHARGE_CURRENT_A } from '../../server-utils.js';
+
 const DEVICE_BLOCK = {
   identifiers: ['dvhub'],
   name: 'DVhub',
@@ -110,7 +112,67 @@ const ENTITIES = [
   { component: 'binary_sensor', id: 'meter_ok', name: 'DVhub Zähler', suffix: 'system/meter_ok', device_class: 'connectivity', payload_on: 'true', payload_off: 'false', entity_category: 'diagnostic' },
 ];
 
+// --- Steuerbare Entitäten (2026-09-26, bidirektionale Steuerung) ------------
+// number/switch/select mit command_topic <prefix>/cmd/…, das der
+// command-subscriber abonniert. state_topic = die vorhandenen Zustandsspiegel
+// (control/*, ev/*), damit HA den echten Wert nach dem Schreiben zurückliest.
+// Grenzen aus server-utils.js (dieselben, die der applyControlTarget-Chokepoint
+// erzwingt). mode:'box' statt Riesen-Slider. NULL_SAFE_TEMPLATE macht aus dem
+// "null"-Payload der Spiegel-Topics ein HA-"unknown" statt eines Parsefehlers.
+const CONTROL_ENTITIES = [
+  // Akku-/Netz-Sollwerte (number)
+  { component: 'number', id: 'set_grid_setpoint_w', name: 'DVhub Netz-Sollwert setzen', suffix: 'control/grid_setpoint_w', command_suffix: 'cmd/grid_setpoint_w',
+    unit: 'W', min: -MAX_GRID_SETPOINT_W, max: MAX_GRID_SETPOINT_W, step: 100, mode: 'box', icon: 'mdi:transmission-tower', value_template: NULL_SAFE_TEMPLATE },
+  { component: 'number', id: 'set_charge_current_a', name: 'DVhub Ladestrom setzen', suffix: 'control/charge_current_a', command_suffix: 'cmd/charge_current_a',
+    unit: 'A', min: 0, max: MAX_CHARGE_CURRENT_A, step: 1, mode: 'box', icon: 'mdi:current-dc', value_template: NULL_SAFE_TEMPLATE },
+  { component: 'number', id: 'set_min_soc_pct', name: 'DVhub Min-SoC setzen', suffix: 'control/min_soc_pct', command_suffix: 'cmd/min_soc_pct',
+    unit: '%', min: 0, max: MAX_MINSOC_PCT, step: 5, mode: 'box', icon: 'mdi:battery-arrow-down-outline', value_template: NULL_SAFE_TEMPLATE },
+  { component: 'number', id: 'set_max_discharge_w', name: 'DVhub Entladegrenze setzen', suffix: 'control/max_discharge_w', command_suffix: 'cmd/max_discharge_w',
+    unit: 'W', min: -1, max: MAX_BATTERY_DISCHARGE_W, step: 100, mode: 'box', icon: 'mdi:battery-arrow-up-outline', value_template: NULL_SAFE_TEMPLATE },
+
+  // Not-Halt (switch) — state aus control/paused (true = gestoppt)
+  { component: 'switch', id: 'emergency_stop', name: 'DVhub Not-Halt', suffix: 'control/paused', command_suffix: 'cmd/emergency_stop',
+    payload_on: 'ON', payload_off: 'OFF', state_on: 'true', state_off: 'false', icon: 'mdi:hand-back-right-off', entity_category: 'config' },
+
+  // E-Auto (switch/number/select) — state aus ev/*
+  { component: 'switch', id: 'ev_optimize', name: 'DVhub E-Auto mitplanen', suffix: 'ev/optimize', command_suffix: 'cmd/ev/optimize',
+    payload_on: 'ON', payload_off: 'OFF', state_on: 'true', state_off: 'false', icon: 'mdi:ev-station' },
+  { component: 'switch', id: 'ev_only_when_plugged', name: 'DVhub E-Auto nur wenn angesteckt', suffix: 'ev/only_when_plugged', command_suffix: 'cmd/ev/only_when_plugged',
+    payload_on: 'ON', payload_off: 'OFF', state_on: 'true', state_off: 'false', icon: 'mdi:power-plug', entity_category: 'config' },
+  { component: 'number', id: 'ev_target_soc_pct', name: 'DVhub E-Auto Ziel-SoC', suffix: 'ev/target_soc_pct', command_suffix: 'cmd/ev/target_soc_pct',
+    unit: '%', min: 0, max: 100, step: 1, mode: 'box', icon: 'mdi:battery-charging-high', value_template: NULL_SAFE_TEMPLATE },
+  { component: 'select', id: 'ev_mode', name: 'DVhub Wallbox-Modus', suffix: 'ev/mode', command_suffix: 'cmd/ev/mode',
+    options: ['off', 'pv', 'minpv', 'now'], icon: 'mdi:ev-plug-type2' },
+];
+
+/**
+ * HA-Config für ein schaltbares Gerät (Shelly) aus deviceService.getDevices().
+ * Nur Geräte mit boolean `output` (Relais-Zustand) werden zu einem switch.
+ * @param {Array} devices
+ * @returns {Array} Entity-Deskriptoren (component 'switch')
+ */
+function buildDeviceEntities(devices) {
+  const out = [];
+  for (const dev of Array.isArray(devices) ? devices : []) {
+    if (typeof dev?.output !== 'boolean') continue; // nicht schaltbar → kein command
+    // object_id/unique_id müssen HA-safe sein ([a-z0-9_]); die command/state-Topics
+    // behalten die ECHTE Geräte-ID (dev.id), damit setDeviceOutput sie wiederfindet.
+    const safe = String(dev.id).toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'unknown';
+    out.push({
+      component: 'switch',
+      id: `device_${safe}`,
+      name: `DVhub ${dev.name || dev.id}`,
+      suffix: `device/${dev.id}/state`,
+      command_suffix: `cmd/device/${dev.id}`,
+      payload_on: 'ON', payload_off: 'OFF', state_on: 'ON', state_off: 'OFF',
+      icon: 'mdi:toggle-switch-variant',
+    });
+  }
+  return out;
+}
+
 function buildPayload(entity, topicPrefix, swVersion) {
+  const component = entity.component || 'sensor';
   const payload = {
     name: entity.name,
     state_topic: `${topicPrefix}/${entity.suffix}`,
@@ -128,18 +190,38 @@ function buildPayload(entity, topicPrefix, swVersion) {
   // JSON-Attribute aus einem zweiten Topic (Plan-Slots): HA hängt das Objekt
   // als Entitäts-Attribute an; ein "null"-Payload wird von HA ignoriert.
   if (entity.json_attributes_suffix) payload.json_attributes_topic = `${topicPrefix}/${entity.json_attributes_suffix}`;
-  if ((entity.component || 'sensor') === 'binary_sensor') {
+  if (component === 'binary_sensor') {
     if (entity.payload_on) payload.payload_on = entity.payload_on;
     if (entity.payload_off) payload.payload_off = entity.payload_off;
+  }
+  // Steuerbare Entitäten: command_topic + typ-spezifische Felder.
+  if (entity.command_suffix) {
+    payload.command_topic = `${topicPrefix}/${entity.command_suffix}`;
+  }
+  if (component === 'number') {
+    if (entity.min != null) payload.min = entity.min;
+    if (entity.max != null) payload.max = entity.max;
+    if (entity.step != null) payload.step = entity.step;
+    if (entity.mode) payload.mode = entity.mode;
+  }
+  if (component === 'switch') {
+    payload.payload_on = entity.payload_on || 'ON';
+    payload.payload_off = entity.payload_off || 'OFF';
+    if (entity.state_on) payload.state_on = entity.state_on;
+    if (entity.state_off) payload.state_off = entity.state_off;
+  }
+  if (component === 'select' && Array.isArray(entity.options)) {
+    payload.options = entity.options;
   }
   return payload;
 }
 
 /**
  * Number of entities DVhub would publish for HA discovery (for the UI).
+ * @param {Array} [devices] - schaltbare Geräte (deviceService.getDevices())
  */
-export function haDiscoveryEntityCount() {
-  return ENTITIES.length;
+export function haDiscoveryEntityCount(devices) {
+  return ENTITIES.length + CONTROL_ENTITIES.length + buildDeviceEntities(devices).length;
 }
 
 /**
@@ -148,9 +230,10 @@ export function haDiscoveryEntityCount() {
  * @param {object} hub - MQTT Hub with publish(topic, payload, opts) method
  * @param {Function} getCfg - Config getter returning { mqtt: { haDiscovery, topicPrefix } }
  * @param {string} [swVersion] - DVhub app version for the origin block
+ * @param {Array} [devices] - schaltbare Geräte für dynamische switch-Entitäten
  * @returns {number} count of config topics published (0 if disabled / no hub)
  */
-export function publishHaDiscoveryTopics(hub, getCfg, swVersion) {
+export function publishHaDiscoveryTopics(hub, getCfg, swVersion, devices) {
   const cfg = getCfg();
   const haConfig = cfg.mqtt?.haDiscovery;
   if (!haConfig?.enabled || !hub?.publish) return 0;
@@ -159,7 +242,8 @@ export function publishHaDiscoveryTopics(hub, getCfg, swVersion) {
   const topicPrefix = cfg.mqtt?.topicPrefix || 'dvhub';
 
   let n = 0;
-  for (const entity of ENTITIES) {
+  const all = [...ENTITIES, ...CONTROL_ENTITIES, ...buildDeviceEntities(devices)];
+  for (const entity of all) {
     const component = entity.component || 'sensor';
     const topic = `${prefix}/${component}/dvhub_${entity.id}/config`;
     hub.publish(topic, JSON.stringify(buildPayload(entity, topicPrefix, swVersion)), { retain: true });
@@ -177,14 +261,16 @@ export function publishHaDiscoveryTopics(hub, getCfg, swVersion) {
  * @param {object} hub
  * @param {Function} getCfg
  * @param {string} [prefixOverride]
+ * @param {Array} [devices] - schaltbare Geräte, deren switch-Configs mit geleert werden
  * @returns {number} count of config topics cleared
  */
-export function clearHaDiscoveryTopics(hub, getCfg, prefixOverride) {
+export function clearHaDiscoveryTopics(hub, getCfg, prefixOverride, devices) {
   if (!hub?.publish) return 0;
   const cfg = getCfg();
   const prefix = prefixOverride || cfg.mqtt?.haDiscovery?.prefix || 'homeassistant';
   let n = 0;
-  for (const entity of ENTITIES) {
+  const all = [...ENTITIES, ...CONTROL_ENTITIES, ...buildDeviceEntities(devices)];
+  for (const entity of all) {
     const component = entity.component || 'sensor';
     const topic = `${prefix}/${component}/dvhub_${entity.id}/config`;
     hub.publish(topic, '', { retain: true });

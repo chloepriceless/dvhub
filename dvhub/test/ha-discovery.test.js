@@ -1,7 +1,7 @@
 // test/ha-discovery.test.js -- HA Auto-Discovery unit tests (INTG-03)
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { publishHaDiscoveryTopics } from '../services/mqtt/ha-discovery.js';
+import { publishHaDiscoveryTopics, clearHaDiscoveryTopics } from '../services/mqtt/ha-discovery.js';
 
 function makeMockHub() {
   const published = [];
@@ -29,11 +29,13 @@ describe('publishHaDiscoveryTopics', () => {
     assert.ok(hub._published.length >= 6, `published ${hub._published.length} topics, expected >= 6`);
   });
 
-  it('topics follow homeassistant/{sensor|binary_sensor}/dvhub_*/config pattern', () => {
+  it('topics follow homeassistant/{sensor|binary_sensor|number|switch|select}/dvhub_*/config pattern', () => {
     const hub = makeMockHub();
     publishHaDiscoveryTopics(hub, () => ({ mqtt: { haDiscovery: { enabled: true, prefix: 'homeassistant' }, topicPrefix: 'dvhub' } }));
     for (const pub of hub._published) {
-      assert.match(pub.topic, /^homeassistant\/(sensor|binary_sensor)\/dvhub_\w+\/config$/, `topic ${pub.topic} matches pattern`);
+      // Seit 2026-09-26 auch steuerbare Komponenten (number/switch/select) für die
+      // bidirektionale HA-Integration.
+      assert.match(pub.topic, /^homeassistant\/(sensor|binary_sensor|number|switch|select)\/dvhub_\w+\/config$/, `topic ${pub.topic} matches pattern`);
     }
   });
 
@@ -140,5 +142,91 @@ describe('publishHaDiscoveryTopics', () => {
     for (const pub of hub._published) {
       assert.ok(pub.topic.startsWith('custom_ha/'), `topic ${pub.topic} uses custom prefix`);
     }
+  });
+});
+
+// --- Steuerbare Entitäten (2026-09-26, bidirektionale HA-Integration) --------
+describe('publishHaDiscoveryTopics — steuerbare Entitäten', () => {
+  const enabledCfg = () => ({ mqtt: { haDiscovery: { enabled: true, prefix: 'homeassistant' }, topicPrefix: 'dvhub' } });
+  const find = (hub, idPart) => hub._published.find(p => p.topic.includes(idPart));
+
+  it('grid-Sollwert: number mit command_topic, state_topic und Grenzen', () => {
+    const hub = makeMockHub();
+    publishHaDiscoveryTopics(hub, enabledCfg);
+    const e = find(hub, 'homeassistant/number/dvhub_set_grid_setpoint_w');
+    assert.ok(e, 'set_grid_setpoint_w number found');
+    assert.equal(e.payload.command_topic, 'dvhub/cmd/grid_setpoint_w');
+    assert.equal(e.payload.state_topic, 'dvhub/control/grid_setpoint_w');
+    assert.equal(e.payload.unit_of_measurement, 'W');
+    assert.equal(e.payload.mode, 'box');
+    assert.equal(typeof e.payload.min, 'number');
+    assert.equal(typeof e.payload.max, 'number');
+    assert.ok(e.opts.retain === true);
+  });
+
+  it('min-SoC-number schnappt in 5%-Schritten (step=5)', () => {
+    const hub = makeMockHub();
+    publishHaDiscoveryTopics(hub, enabledCfg);
+    const e = find(hub, 'dvhub_set_min_soc_pct');
+    assert.equal(e.payload.command_topic, 'dvhub/cmd/min_soc_pct');
+    assert.equal(e.payload.step, 5);
+    assert.equal(e.payload.max, 100);
+  });
+
+  it('Not-Halt: switch mit command_topic und state_on aus control/paused', () => {
+    const hub = makeMockHub();
+    publishHaDiscoveryTopics(hub, enabledCfg);
+    const e = find(hub, 'homeassistant/switch/dvhub_emergency_stop');
+    assert.ok(e, 'emergency_stop switch found');
+    assert.equal(e.payload.command_topic, 'dvhub/cmd/emergency_stop');
+    assert.equal(e.payload.state_topic, 'dvhub/control/paused');
+    assert.equal(e.payload.payload_on, 'ON');
+    assert.equal(e.payload.state_on, 'true');
+    assert.equal(e.payload.state_off, 'false');
+  });
+
+  it('Wallbox-Modus: select mit den vier evcc-Modi', () => {
+    const hub = makeMockHub();
+    publishHaDiscoveryTopics(hub, enabledCfg);
+    const e = find(hub, 'homeassistant/select/dvhub_ev_mode');
+    assert.ok(e, 'ev_mode select found');
+    assert.equal(e.payload.command_topic, 'dvhub/cmd/ev/mode');
+    assert.deepEqual(e.payload.options, ['off', 'pv', 'minpv', 'now']);
+  });
+
+  it('E-Auto-Mitplanung: switch auf cmd/ev/optimize', () => {
+    const hub = makeMockHub();
+    publishHaDiscoveryTopics(hub, enabledCfg);
+    const e = find(hub, 'homeassistant/switch/dvhub_ev_optimize');
+    assert.ok(e, 'ev_optimize switch found');
+    assert.equal(e.payload.command_topic, 'dvhub/cmd/ev/optimize');
+    assert.equal(e.payload.state_topic, 'dvhub/ev/optimize');
+  });
+
+  it('schaltbare Geräte werden als dynamische switches ergänzt', () => {
+    const hub = makeMockHub();
+    const devices = [
+      { id: 'shelly-plug-1', name: 'Waschmaschine', output: false },
+      { id: 'sensor-only', name: 'Nur Messung', output: null }, // kein switch
+    ];
+    publishHaDiscoveryTopics(hub, enabledCfg, '1.0', devices);
+    const sw = find(hub, 'homeassistant/switch/dvhub_device_shelly_plug_1');
+    assert.ok(sw, 'device switch found');
+    assert.equal(sw.payload.command_topic, 'dvhub/cmd/device/shelly-plug-1');
+    assert.equal(sw.payload.state_topic, 'dvhub/device/shelly-plug-1/state');
+    // Nur-Mess-Gerät bekommt keinen switch.
+    assert.equal(hub._published.some(p => p.topic.includes('dvhub_device_sensor_only')), false);
+  });
+
+  it('command entities are cleared on clearHaDiscoveryTopics', () => {
+    // Roh-Mock: clear sendet leere Payloads, die der JSON-parsende Mock nicht mag.
+    const published = [];
+    const hub = { publish(topic, payload, opts) { published.push({ topic, payload, opts }); }, get connected() { return true; } };
+    clearHaDiscoveryTopics(hub, enabledCfg, undefined, [{ id: 'shelly-1', name: 'X', output: true }]);
+    const e = published.find(p => p.topic.includes('homeassistant/number/dvhub_set_grid_setpoint_w'));
+    assert.ok(e, 'number config cleared');
+    assert.equal(e.payload, ''); // leerer retained Payload = entfernt
+    assert.equal(e.opts.retain, true);
+    assert.ok(published.some(p => p.topic.includes('dvhub_device_shelly_1')), 'device config cleared too');
   });
 });

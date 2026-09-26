@@ -8,7 +8,7 @@ import path from 'node:path';
 import * as crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, controlWriteBoundsError, MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
+import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
@@ -16,6 +16,7 @@ import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
+import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch } from './services/control-commands.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
 import { createOpenEvseAdapter, createGoeAdapter } from './services/wallbox/adapters.js';
@@ -3149,6 +3150,9 @@ export function createApiRoutes(ctx) {
         try {
           await ctx.mqttHub.restart();
           if (ctx.mqttPublisher && typeof ctx.mqttPublisher.restart === 'function') await ctx.mqttPublisher.restart();
+          // Command-Subscriber auf ggf. geändertes topicPrefix neu abonnieren,
+          // sonst kämen Befehle nach einem Präfix-Wechsel erst nach Neustart an.
+          if (typeof ctx.mqttCommandSubscriber?.resubscribe === 'function') ctx.mqttCommandSubscriber.resubscribe();
           applied = true;
           restartRequired = false;
         } catch (e) {
@@ -4488,27 +4492,10 @@ export function createApiRoutes(ctx) {
       let body;
       try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'object required' });
-      const patch = {};
-      if ('optimizeEv' in body) patch.eosOptimizeEv = body.optimizeEv === true;
-      if ('onlyWhenPlugged' in body) patch.evPlanOnlyWhenPlugged = body.onlyWhenPlugged === true;
-      if (body.departure != null) {
-        const dep = parseEvDeparturePatch(body.departure);
-        if (!dep.ok) return json(res, 400, { ok: false, error: dep.error });
-        Object.assign(patch, dep.patch);
-      }
-      if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'nothing to change' });
-      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
-      next.optimizer = (next.optimizer && typeof next.optimizer === 'object') ? next.optimizer : {};
-      Object.assign(next.optimizer, patch);
-      try { ctx.saveAndApplyConfig(next); } catch (e) {
-        pushLog('ev_config_save_error', { error: e.message });
-        return json(res, 500, { ok: false, error: 'save failed' });
-      }
-      pushLog('ev_config_saved', patch, actorContext(req));
-      // An-/Abmelden des Autos aendert den EOS-Plan grundlegend: sofort neu
-      // planen statt bis zum naechsten Takt (bis 15 min) mit altem Plan.
-      if ('eosOptimizeEv' in patch || 'evPlanOnlyWhenPlugged' in patch) ctx.optimizerService?.requestEosReplan?.('ev_config');
-      return json(res, 200, { ok: true, patch });
+      // Kernlogik in services/control-commands.js (applyEvConfigPatch) — geteilt
+      // mit der MQTT-Steuerung (cmd/ev/*).
+      const { status, ...payload } = applyEvConfigPatch(ctx, { body, actor: actorContext(req) });
+      return json(res, status, payload);
     }
 
     if (url.pathname === '/api/integrations/evcc' && req.method === 'GET') {
@@ -7643,65 +7630,21 @@ export function createApiRoutes(ctx) {
     }
 
     // --- Control Write POST ---
+    // Kernlogik (Bounds → Override → applyControlTarget → Audit) liegt in
+    // services/control-commands.js, damit HTTP UND MQTT-Steuerung (2026-09-26,
+    // bidirektionale HA-Integration) denselben geprüften Pfad nutzen.
     if (url.pathname === '/api/control/write' && req.method === 'POST') {
       const body = await readJsonBody(req, res);
       if (body === null) return;
-      const target = String(body.target || '');
-      const VALID_CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'feedExcessDcPv', 'minSocPct', 'maxDischargeW']);
-      if (!VALID_CONTROL_TARGETS.has(target)) return json(res, 400, { ok: false, error: 'invalid target' });
-      // T-0002: explicitly clear a (persistent or transient) manual override so
-      // the schedule falls back to its default/rule value on the next eval.
-      if (body.clear === true) {
-        delete state.schedule.manualOverride[target];
-        pushLog('control_override_cleared', { target }, actorContext(req));
-        return json(res, 200, { ok: true, cleared: true, target });
-      }
-      const value = Number(body.value);
-      // Plan 08-04 / T-0080: numeric sanity bounds before applyControlTarget so a
-      // stolen token (or faulty client) cannot push 1e308 into the ESS write
-      // pipeline. Shared helper (server-utils) = single source of truth, IDENTICAL
-      // to the bounds the applyControlTarget chokepoint now also enforces for
-      // EOS/EMHASS/evcc. Covers finite + gridSetpointW/chargeCurrentA/maxDischargeW/
-      // feedExcessDcPv. minSocPct keeps its own strict [0,100] reject for manual
-      // input here (the chokepoint instead CLAMPS minSoc to the hard floor).
-      const boundsErr = controlWriteBoundsError(target, value);
-      if (boundsErr) {
-        return json(res, 400, { ok: false, ...boundsErr });
-      }
-      if (target === 'minSocPct' && (value < 0 || value > MAX_MINSOC_PCT)) {
-        return json(res, 400, { ok: false, error: 'minsoc_out_of_range', max: MAX_MINSOC_PCT });
-      }
-      ctx.assertValidRuntimeCommand('control_write', { target, value });
-      // T-0002: persist:true makes the override survive manualOverrideTtlMs (and
-      // a transient scheduled-rule window) until explicitly cleared (clear:true).
-      state.schedule.manualOverride[target] = body.persist === true
-        ? { value, at: Date.now(), persistent: true }
-        : { value, at: Date.now() };
-      const result = await ctx.applyControlTarget(target, value, 'api_manual_write');
-      // Plan 08-09 Task 2: every manual control write produces a durable
-      // audit_log entry with full actor attribution AND (best-effort) a row
-      // in exec.manual_overrides for the regulator-facing structured log.
-      // Both writes happen AFTER applyControlTarget so failed gates (e.g.
-      // EEG/§14a legal-gate rejection) are still recorded as attempts.
-      const actor = actorContext(req);
-      pushLog('control_write', {
-        target,
-        value,
-        result: result.ok ? 'applied' : 'rejected',
-        error: result.error || null,
-      }, actor);
-      if (result.ok && ctx.telemetryStore?.writeManualOverride) {
-        // Fire-and-forget — failures are logged inside writeManualOverride and
-        // must NEVER turn an applied control write into a 500 to the operator.
-        ctx.telemetryStore.writeManualOverride({
-          target,
-          value_num: Number(value),
-          ts_utc: new Date(),
-          ...actor,
-          reason: 'api_manual_write',
-        }).catch((err) => pushLog('manual_override_persist_error', { error: err?.message ?? String(err) }, actor));
-      }
-      return json(res, result.ok ? 200 : 500, result);
+      const { status, ...payload } = await applyManualControlWrite(ctx, {
+        target: String(body.target || ''),
+        value: Number(body.value),
+        persist: body.persist === true,
+        clear: body.clear === true,
+        actor: actorContext(req),
+        reason: 'api_manual_write',
+      });
+      return json(res, status, payload);
     }
 
     // --- T-0099 NOT-HALT (emergency stop) -------------------------------
@@ -7716,53 +7659,16 @@ export function createApiRoutes(ctx) {
     //      Venus-side reg-2700 revert timeout (T-0099 scope §1).
     // No auto-resume: the flag never expires; only POST /api/control/resume
     // (or deleting control_state.json) lifts it.
+    // Kernlogik in services/control-commands.js (setEmergencyStop) — geteilt mit
+    // der MQTT-Steuerung (cmd/emergency_stop).
     if (url.pathname === '/api/control/stop' && req.method === 'POST') {
-      const actor = actorContext(req);
-      if (state.ctrl.discretionaryWritesPaused) {
-        return json(res, 200, { ok: true, alreadyStopped: true, pausedAt: state.ctrl.pausedAt });
-      }
-      state.ctrl.discretionaryWritesPaused = true;
-      state.ctrl.pausedAt = Date.now();
-      state.ctrl.pausedBy = actor?.actor_ip || 'unknown';
-      state.ctrl._stopBlockLogged = {};
-      ctx.persistControlState?.();
-      pushLog('emergency_stop_activated', { by: state.ctrl.pausedBy }, { ...actor, severity: 'warn' });
-      let neutralize = null;
-      try {
-        neutralize = await ctx.applyControlTarget('gridSetpointW', 0, 'emergency_stop');
-      } catch (e) {
-        neutralize = { ok: false, error: e.message };
-      }
-      // Kein Setpoint-Stellpfad im Profil/Settings aktiviert (z. B. Fronius:
-      // Abregelung läuft als M124-Sequenz, controlWrite.gridSetpointW ist
-      // enabled:false) → es gibt nichts zu neutralisieren. Das ist kein Fehler
-      // und darf nicht bei jedem Not-Halt als emergency_stop_neutralize_failed
-      // im Ring landen (Operator-Report Feldtest 2026-07-18). String = exakte
-      // not-enabled-Antwort des applyControlTarget-Chokepoints (schedule-eval.js).
-      if (!neutralize?.ok && neutralize?.error === 'write target not enabled in config') {
-        neutralize = { ok: true, skipped: true, reason: 'target_not_enabled' };
-      }
-      if (!neutralize?.ok && !neutralize?.skipped) {
-        // Writes are paused either way; the operator must know the plant may
-        // still hold the last setpoint until Venus reverts it.
-        pushLog('emergency_stop_neutralize_failed', { error: neutralize?.error || 'unknown' }, { ...actor, severity: 'error' });
-      }
-      return json(res, 200, { ok: true, paused: true, pausedAt: state.ctrl.pausedAt, neutralize });
+      const { status, ...payload } = await setEmergencyStop(ctx, { on: true, actor: actorContext(req) });
+      return json(res, status, payload);
     }
 
     if (url.pathname === '/api/control/resume' && req.method === 'POST') {
-      const actor = actorContext(req);
-      if (!state.ctrl.discretionaryWritesPaused) {
-        return json(res, 200, { ok: true, alreadyRunning: true });
-      }
-      state.ctrl.discretionaryWritesPaused = false;
-      state.ctrl.pausedAt = 0;
-      state.ctrl.pausedBy = null;
-      state.ctrl._stopBlockLogged = {};
-      ctx.persistControlState?.();
-      pushLog('emergency_stop_resumed', {}, { ...actor, severity: 'warn' });
-      // The next evaluateSchedule tick (~15 s) re-applies rules/defaults.
-      return json(res, 200, { ok: true, resumed: true });
+      const { status, ...payload } = await setEmergencyStop(ctx, { on: false, actor: actorContext(req) });
+      return json(res, status, payload);
     }
 
     // --- VPN Endpoints ---

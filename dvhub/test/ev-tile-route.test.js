@@ -24,8 +24,14 @@ describe('/api/ev', () => {
   it('POST fasst nur optimizer an — nie evcc oder wallbox (anders als /api/integrations/evcc)', () => {
     const b = block('POST');
     assert.doesNotMatch(b, /next\.evcc|next\.wallbox/);
-    assert.match(b, /Object\.assign\(next\.optimizer, patch\)/);
-    assert.match(b, /parseEvDeparturePatch\(body\.departure\)/);
+    // Seit 2026-09-26 delegiert die Route an die geteilte Primitive
+    // applyEvConfigPatch (services/control-commands.js), die auch die
+    // MQTT-Steuerung nutzt. Die optimizer-Logik wird dort geprüft.
+    assert.match(b, /applyEvConfigPatch\(ctx,/);
+    const cc = fs.readFileSync(path.resolve(__dirname, '..', 'services', 'control-commands.js'), 'utf8');
+    assert.match(cc, /Object\.assign\(next\.optimizer, patch\)/);
+    assert.match(cc, /parseEvDeparturePatch\(body\.departure\)/);
+    assert.doesNotMatch(cc, /next\.evcc|next\.wallbox/);
   });
 
   it('GET liefert Plan aus dem EOS-Inspector, nur wenn das Auto mitplant', () => {

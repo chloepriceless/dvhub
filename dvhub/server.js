@@ -132,7 +132,9 @@ import { createMqttPublisher } from './services/mqtt/publisher.js';
 import { createMqttTopicObserver } from './services/mqtt/topic-observer.js';
 import { publishHaDiscoveryTopics, clearHaDiscoveryTopics } from './services/mqtt/ha-discovery.js';
 import { createTeslamateSubscriber } from './services/mqtt/teslamate.js';
+import { createMqttCommandSubscriber } from './services/mqtt/command-subscriber.js';
 import { createFamilyMqttTiles } from './services/mqtt/family-tiles.js';
+import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch } from './services/control-commands.js';
 import { createDeviceService } from './services/devices/index.js';
 import { createNotificationService } from './services/notifications/index.js';
 import { createMlService } from './services/ml/index.js';
@@ -1050,6 +1052,11 @@ ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRu
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 ctx.applyControlTarget = scheduler.applyControlTarget;
+// Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
+// MQTT-Command-Subscriber gehen durch denselben geprüften Pfad.
+ctx.applyManualControlWrite = (opts) => applyManualControlWrite(ctx, opts);
+ctx.setEmergencyStop = (opts) => setEmergencyStop(ctx, opts);
+ctx.applyEvConfigPatch = (opts) => applyEvConfigPatch(ctx, opts);
 const evccIntegration = createEvccIntegration(ctx);
 ctx.evccIntegration = evccIntegration;
 // PV-Strings / Solar-Logger: Tracker-Erzeugung aus VRM, CSV fuer pvnode.
@@ -1101,6 +1108,8 @@ const mqttTopicObserver = createMqttTopicObserver(mqttHub, ctx);
 ctx.mqttTopicObserver = mqttTopicObserver;
 const teslamateService = createTeslamateSubscriber(mqttHub, ctx);
 ctx.teslamateService = teslamateService;
+const mqttCommandSubscriber = createMqttCommandSubscriber(mqttHub, ctx);
+ctx.mqttCommandSubscriber = mqttCommandSubscriber;
 const familyMqttTiles = createFamilyMqttTiles(mqttHub, ctx);
 ctx.familyMqttTiles = familyMqttTiles;
 const deviceService = createDeviceService(ctx, mqttHub);
@@ -1775,6 +1784,10 @@ if (IS_RUNTIME_PROCESS) {
   mqttHub.start().then(() => {
     mqttPublisher.start().catch(err => console.error('MQTT Publisher start error:', err.message));
     mqttTopicObserver.start();   // sync — registers the '#' subscription (Phase 09.4 D-05)
+    // Bidirektionale Steuerung (2026-09-26): abonniert <prefix>/cmd/# und routet
+    // eingehende Befehle durch dieselben Gates wie die API. Aktiv nur bei
+    // aktiver HA-Discovery und außerhalb des Lese-Modus (Prüfung im Subscriber).
+    mqttCommandSubscriber.start();
     // teslamateService.start() seeds its in-memory cache from timeseries_samples
     // (teslamate.js seedCacheFromStore) so a restart restores the last-known
     // Tesla state while the car is offline/asleep and publishes nothing. That
@@ -1789,8 +1802,14 @@ if (IS_RUNTIME_PROCESS) {
     // Republish/clear hooks so the Integrations HA card can (re)sync discovery
     // WITHOUT a restart. Defined here where mqttHub is in scope; consumed by
     // /api/integrations/homeassistant.
-    ctx.republishHaDiscovery = () => publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel);
-    ctx.clearHaDiscovery = (prefixOverride) => clearHaDiscoveryTopics(mqttHub, ctx.getCfg, prefixOverride);
+    // Schaltbare Geräte (Shelly) werden dynamisch als HA-Switches ergänzt —
+    // Liste lazy zur Publish-Zeit lesen, damit neu gelernte Geräte mitkommen.
+    const listSwitchableDevices = () => {
+      try { return ctx.deviceService?.getDevices?.() || []; }
+      catch { return []; }
+    };
+    ctx.republishHaDiscovery = () => publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel, listSwitchableDevices());
+    ctx.clearHaDiscovery = (prefixOverride) => clearHaDiscoveryTopics(mqttHub, ctx.getCfg, prefixOverride, listSwitchableDevices());
     // Boot publish — DELAYED. Publishing the retained discovery configs in the
     // raw connect .then() raced an un-settled client (and the LAN broker's
     // frequent reconnects), so the retained configs never landed and the HA card
@@ -1799,7 +1818,7 @@ if (IS_RUNTIME_PROCESS) {
     // restarts. The card's "Resync" is the manual fallback.
     setTimeout(() => {
       try {
-        const n = publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel);
+        const n = publishHaDiscoveryTopics(mqttHub, ctx.getCfg, APP_VERSION.versionLabel, listSwitchableDevices());
         if (n) console.log(`HA Discovery: published ${n} entity configs`);
       } catch (err) {
         console.error('HA Discovery error:', err.message);
@@ -2172,6 +2191,7 @@ async function gracefulShutdown(signal) {
     safeAsync('mqttCrossCheck.stop', () => mqttCrossCheck.stop()),
     safeAsync('deviceService.close', () => deviceService.close()),
     safeAsync('teslamateService.close', () => teslamateService.close()),
+    safeAsync('mqttCommandSubscriber.close', () => mqttCommandSubscriber.close()),
     safeAsync('familyMqttTiles.close', () => familyMqttTiles.close()),
     safeAsync('mqttTopicObserver.close', () => mqttTopicObserver.close()),
     safeAsync('mqttPublisher.close', () => mqttPublisher.close()),

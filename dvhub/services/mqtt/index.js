@@ -145,12 +145,15 @@ export function createMqttHub(ctx) {
   /**
    * Dispatch an incoming MQTT message to all matching handlers.
    * Handles exact matches and wildcard patterns (+ and #).
+   * `packet` is the raw mqtt.js publish packet (carries `retain`, `qos`, …) so
+   * handlers can distinguish a fresh message from a retained replay — the
+   * command subscriber rejects retained deliveries on control topics.
    */
-  function dispatchMessage(topic, payload) {
+  function dispatchMessage(topic, payload, packet) {
     for (const [pattern, handlerSet] of handlers.entries()) {
       if (mqttTopicMatch(pattern, topic)) {
         for (const fn of handlerSet) {
-          try { fn(topic, payload); }
+          try { fn(topic, payload, packet); }
           catch (err) { pushLog(`[MQTT] Handler error for ${topic}: ${err.message}`); }
         }
       }
@@ -230,9 +233,9 @@ export function createMqttHub(ctx) {
       }
     });
 
-    c.on('message', (topic, payload) => {
+    c.on('message', (topic, payload, packet) => {
       if (!mine()) return;
-      dispatchMessage(topic, payload);
+      dispatchMessage(topic, payload, packet);
     });
 
     c.on('error', (err) => {

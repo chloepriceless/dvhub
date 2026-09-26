@@ -159,6 +159,35 @@ export function createMqttPublisher(hub, ctx) {
     pub('control/paused', control.paused);
     pub('control/state', control.values);
 
+    // E-Auto (2026-09-26): Rücklesung der steuerbaren EV-Felder, damit die
+    // bidirektionalen HA-Entitäten (ev/*) ihren echten Zustand zeigen. Quelle:
+    // Config (optimizer.*) + Wallbox-Modus aus dem evcc-Status. Booleans als JSON
+    // ("true"/"false") passend zu den switch state_on/state_off in ha-discovery.
+    const optCfg = getCfg().optimizer || {};
+    pub('ev/optimize', optCfg.eosOptimizeEv === true);
+    pub('ev/only_when_plugged', optCfg.evPlanOnlyWhenPlugged !== false);
+    // Ziel-SoC nur, wenn in Prozent geführt (sonst kWh/km → für die HA-%-Zahl null).
+    pub('ev/target_soc_pct', (optCfg.evTargetMode || 'percent') === 'percent' && optCfg.evTargetValue != null
+      ? Number(optCfg.evTargetValue) : null);
+    // Wallbox-Modus aus dem evcc-Loadpoint (cheap: gecachter Status, kein Netz-Call).
+    let evMode = null;
+    try {
+      const st = ctx.evccIntegration?.getStatus?.() || {};
+      const lps = Array.isArray(st.loadpoints) ? st.loadpoints : [];
+      const lpId = Number(optCfg.evEvccLoadpoint) || Number(getCfg().evcc?.dashboardLoadpoint) || 1;
+      const lp = lps.find((l) => Number(l.id) === lpId) || lps[0] || null;
+      evMode = lp?.mode || null;
+    } catch { /* evcc nicht verfügbar → null */ }
+    pub('ev/mode', evMode);
+
+    // Schaltbare Geräte (Shelly): Relais-Zustand als ON/OFF, passend zu den
+    // dynamischen HA-switch-Entitäten (state_on 'ON' / state_off 'OFF').
+    try {
+      for (const dev of ctx.deviceService?.getDevices?.() || []) {
+        if (typeof dev?.output === 'boolean') pub(`device/${dev.id}/state`, dev.output ? 'ON' : 'OFF');
+      }
+    } catch { /* device-service nicht verfügbar */ }
+
     lastTopicCount = topics.length;
     // Phase 09.2 D-04: track the bridge's own publish-cycle health.
     // Healthy = hub is connected; per-topic samples would flood the ring-buffer.

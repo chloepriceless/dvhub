@@ -9,6 +9,7 @@ DVhub spricht über MQTT in drei Richtungen. Alle Topics liegen unter dem **Topi
 | Status nach außen | `dvhub/energy/…`, `dvhub/battery/…`, `dvhub/solar/…`, `dvhub/price/…`, `dvhub/optimizer/…`, `dvhub/system/…` | DVhub, retained, alle 5 s | Messwerte und Zähler für Dashboards |
 | **Steuerbefehle nach außen** | `dvhub/control/<ziel>` | DVhub, retained, alle 5 s | Was DVhub gerade will (Sollwerte), damit ein fremder Akku/Wechselrichter in HA oder Loxone daran hängen kann |
 | **Eingänge von außen** | `dvhub/input/…` (Lesewerte) und `dvhub/control/<ziel>/set` (Befehle an die Anlage) | HA/Loxone liefern `input`, DVhub sendet `…/set` | Anlagen, deren Akku/PV/Zähler nur in HA oder Loxone existieren (Profil „Universal (DVhub-MQTT-Schema)") |
+| **Befehle AN DVhub** | `dvhub/cmd/<ziel>` | HA/Loxone/Node-RED senden, DVhub führt aus | Bidirektionale Steuerung: die Regler der DVhub-Oberfläche als bedienbare HA-Entitäten (Akku-Sollwerte, Not-Halt, E-Auto, Wallbox, Geräte). Nur bei aktiver HA-Discovery, siehe Abschnitt 2b |
 
 Payload ist überall eine **nackte Zahl** (`-2500`, `17.5`) bzw. `null`, wenn ein Wert unbekannt ist; Zeichenketten und Objekte sind JSON-kodiert. DVhub erfindet keine 0: `null` heißt „kein Wert", nicht „0 W".
 
@@ -144,6 +145,57 @@ Loxone: ein **Virtual Output** mit MQTT-Gateway (z. B. Loxberry MQTT-Plugin) auf
 
 ---
 
+## 2b. Steuerbefehle AN DVhub: `dvhub/cmd/*` (bidirektional)
+
+Seit 2026-09-26 nimmt DVhub Steuerbefehle über MQTT entgegen — damit erscheinen die Regler, die die DVhub-Oberfläche steuert, in Home Assistant als **bedienbare** Entitäten (`number`, `switch`, `select`) statt nur als Sensoren. Der Befehls-Namensraum `dvhub/cmd/…` ist bewusst getrennt von `dvhub/control/<ziel>` (retained Zustandsspiegel, Ausgang) und `dvhub/control/<ziel>/set` (Befehl an eine **fremde** Anlage, Ausgang) — keine Richtung kollidiert mit einer anderen.
+
+**Aktivierung:** Die Steuerung ist genau dann scharf, wenn **Home-Assistant-Auto-Discovery aktiv** ist (Integrationen → Home Assistant) **und** DVhub nicht im Lese-Modus (`DVHUB_READ_ONLY=1`) läuft. Ist eine der Bedingungen nicht erfüllt, werden eingehende `cmd/*`-Nachrichten ignoriert (Audit-Log `mqtt_command_ignored`).
+
+Payload: nackte Zahl (`number`), `ON`/`OFF` (`switch`; zusätzlich `true/false`, `1/0`) bzw. der Options-Text (`select`). Befehle **nicht retained** senden — ein Befehl ist eine einmalige Anweisung. DVhub verwirft retained `cmd/*`-Zustellungen (sonst würde der Broker sie bei jedem Reconnect erneut ausführen, z. B. einen alten Not-Halt aufheben).
+
+| Command-Topic | HA-Entität | Payload | Wirkung (identisch zur API) |
+|---|---|---|---|
+| `dvhub/cmd/grid_setpoint_w` | `number.dvhub_set_grid_setpoint_w` | W | Netz-Sollwert setzen (wie `POST /api/control/write`) |
+| `dvhub/cmd/charge_current_a` | `number.dvhub_set_charge_current_a` | A | Ladestrom-Grenze setzen |
+| `dvhub/cmd/min_soc_pct` | `number.dvhub_set_min_soc_pct` | % | Min-SoC setzen (auf 5 %-Raster geklemmt) |
+| `dvhub/cmd/max_discharge_w` | `number.dvhub_set_max_discharge_w` | W | Entladegrenze setzen (`0` halten, `-1` unbegrenzt) |
+| `dvhub/cmd/emergency_stop` | `switch.dvhub_emergency_stop` | ON/OFF | Not-Halt an/aus (`POST /api/control/stop` bzw. `/resume`) |
+| `dvhub/cmd/ev/optimize` | `switch.dvhub_ev_optimize` | ON/OFF | E-Auto von EOS mitplanen lassen |
+| `dvhub/cmd/ev/only_when_plugged` | `switch.dvhub_ev_only_when_plugged` | ON/OFF | EV nur planen, wenn angesteckt |
+| `dvhub/cmd/ev/target_soc_pct` | `number.dvhub_ev_target_soc_pct` | % | Ziel-Ladestand bei Abfahrt |
+| `dvhub/cmd/ev/mode` | `select.dvhub_ev_mode` | off\|pv\|minpv\|now | Wallbox-Modus (evcc-Loadpoint aus der Config) |
+| `dvhub/cmd/device/<id>` | `switch.dvhub_device_<id>` | ON/OFF | Schaltbares Gerät (Shelly) an/aus |
+
+`<id>` ist die echte Geräte-ID aus der Geräteliste. Für jedes schaltbare Gerät (mit Relais-Zustand) legt die HA-Discovery automatisch einen `switch` an.
+
+**Sicherheit:** Jeder `cmd/*`-Befehl läuft durch **denselben geprüften Pfad wie die HTTP-API** — der `applyControlTarget`-Chokepoint (`schedule-eval.js`) mit Wertegrenzen, Not-Halt-Gate, SoC-Boden-Clamp und `enabled`-Gate. Was MQTT nicht kann, kann auch die API nicht. Der **Broker-Zugang ist die Vertrauensgrenze**: Wer den Broker erreicht und HA-Discovery ist aktiv, kann steuern — den Broker also absichern (eigene Zugangsdaten, kein offener Port). Jeder ausgeführte, abgelehnte oder ignorierte Befehl landet im Audit-Log (`control_write`, `mqtt_command_rejected`, `mqtt_command_ignored`).
+
+### Home-Assistant-Beispiel
+
+Mit aktiver Auto-Discovery erscheinen die Entitäten automatisch unter dem Gerät „DVhub". Der Zustand wird aus den Spiegel-Topics (`control/*`, `ev/*`, `device/<id>/state`) zurückgelesen, sodass die HA-Bedienelemente den echten Wert zeigen. Manuell (ohne Discovery):
+
+```yaml
+mqtt:
+  number:
+    - name: DVhub Min-SoC
+      command_topic: dvhub/cmd/min_soc_pct
+      state_topic: dvhub/control/min_soc_pct
+      min: 0
+      max: 100
+      step: 5
+      unit_of_measurement: "%"
+  switch:
+    - name: DVhub Not-Halt
+      command_topic: dvhub/cmd/emergency_stop
+      state_topic: dvhub/control/paused
+      payload_on: "ON"
+      payload_off: "OFF"
+      state_on: "true"
+      state_off: "false"
+```
+
+---
+
 ## 3. Status nach außen (Bestand)
 
 Unverändert seit INTG-02: `dvhub/energy/grid_power_w`, `grid_l1_w`…`l3_w`, `import_wh`, `export_wh`, `cost_eur`, `revenue_eur`; `dvhub/battery/soc_pct`, `power_w`, `min_soc_pct`; `dvhub/solar/pv_total_w`, `pv_dc_w`; `dvhub/price/epex_current_ct_kwh`; `dvhub/system/uptime_sec`, `meter_ok`, `victron_updated_at`. Alle retained, alle `publishIntervalMs`.
@@ -173,6 +225,18 @@ Der Plan ist die Liste der vom Optimizer (EOS, interner Optimizer, Kleinmarkt-Au
 | `dvhub/optimizer/plan/next_start` | ISO-8601 des nächsten Slot-Beginns oder `null` |
 | `dvhub/optimizer/plan/slot_count` | Anzahl Slots |
 
+Der Batterie-/Netz-Plan (`optimizer/plan`) enthält je Slot `target`, `value`, `action`, `start`, `end` — also **welcher Wert wann** gesetzt wird. Der EV-Ladeplan als eigenes Topic (`optimizer/plan/ev` mit den Ladestufen) ist als Folgearbeit vorgesehen: er wird sinnvoll dort erzeugt, wo der Optimizer ohnehin EOS abfragt (kein zusätzlicher EOS-Lauf im 5-s-Publisher). Bis dahin zeigt `dvhub/ev/mode` den aktiven Wallbox-Modus.
+
+### E-Auto-Zustand (Rücklesung für die bidirektionalen `cmd/ev/*`)
+
+| Topic | Werte |
+|---|---|
+| `dvhub/ev/optimize` | bool — E-Auto wird von EOS mitgeplant |
+| `dvhub/ev/only_when_plugged` | bool — nur planen, wenn angesteckt |
+| `dvhub/ev/target_soc_pct` | Ziel-SoC in % (nur wenn in Prozent geführt, sonst `null`) |
+| `dvhub/ev/mode` | aktueller Wallbox-Modus (`off`/`pv`/`minpv`/`now`) oder `null` |
+| `dvhub/device/<id>/state` | `ON`/`OFF` je schaltbarem Gerät (Shelly) |
+
 Ein Slot:
 
 ```json
@@ -201,6 +265,7 @@ Wer die Einzel-Slots braucht (eigene Automation, Node-RED), liest `dvhub/optimiz
 ## 4. Sicherheit und Grenzen
 
 - Der Steuerpfad bleibt DVhubs Verantwortung: Not-Halt, SoC-Boden, Negativpreis-Schutz und Frische-Disziplin greifen vor jedem `…/set`. Was nach außen geht, ist bereits geprüft.
-- Wer `dvhub/control/<ziel>` (ohne `/set`) selbst publiziert, überschreibt nur den Spiegel — DVhub liest ihn nicht zurück. Befehle an DVhub gibt es über MQTT nicht; dafür ist die API da.
-- Im Lese-Modus (`DVHUB_READ_ONLY=1`) sendet DVhub keine `…/set`-Befehle; die `dvhub/control/<ziel>`-Spiegel werden weiter publiziert.
+- Wer `dvhub/control/<ziel>` (ohne `/set`) selbst publiziert, überschreibt nur den Spiegel — DVhub liest ihn nicht zurück.
+- **Befehle an DVhub** gibt es seit 2026-09-26 über `dvhub/cmd/*` (Abschnitt 2b), aber nur bei aktiver Home-Assistant-Auto-Discovery und außerhalb des Lese-Modus. Sie laufen durch dieselben Gates wie die API; der Broker-Zugang ist die Vertrauensgrenze und gehört abgesichert. Die HTTP-API bleibt der zweite, unabhängige Weg.
+- Im Lese-Modus (`DVHUB_READ_ONLY=1`) sendet DVhub keine `…/set`-Befehle und **führt keine `dvhub/cmd/*`-Befehle aus**; die `dvhub/control/<ziel>`-Spiegel werden weiter publiziert.
 - Broker-Zugang: der Hub verbindet mit den Zugangsdaten aus Integrationen → MQTT Hub; für das Eingangs-Profil gelten die Bridge-Einstellungen unter Einstellungen → Verbindung (eigene Verbindung, eigener Broker möglich).
