@@ -2630,9 +2630,15 @@ function slotBehaviorKey(slot) {
     cat = (Number(slot.chargeReserveW) > 0) ? 'feedin-partial' : 'feedin-full';
   } else if (slot?.grid != null && Number.isFinite(Number(slot.grid))) {
     const g = Number(slot.grid);
-    cat = g < 0 ? 'export' : (g > 0 ? 'import' : 'hold');
+    // Include the setpoint magnitude in the key. Without it, consecutive export
+    // slots of very different size coalesce into ONE block that then shows only
+    // the FIRST slot's value — e.g. an 18:15 −1.1 kW PV tail merged with the
+    // 18:30 −20.8 kW battery dump and hid the 20 kW in the table (T-0126b). Bucket
+    // to 250 W so pure plan-split jitter still merges but real steps stay separate.
+    const bucket = Math.round(g / 250) * 250;
+    cat = g < 0 ? `export:${bucket}` : (g > 0 ? `import:${bucket}` : 'hold');
   } else if (slot?.charge != null && Number.isFinite(Number(slot.charge))) {
-    cat = 'charge';
+    cat = `charge:${Math.round(Number(slot.charge))}`;
   } else if (slot?.stopSocPct != null && Number.isFinite(Number(slot.stopSocPct))) {
     cat = 'stopsoc';
   } else {
