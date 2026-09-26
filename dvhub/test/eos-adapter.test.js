@@ -206,13 +206,15 @@ test('pullSchedule GETs /v1/energy-management/plan and returns parsed schedule',
   }
 });
 
-// --- Test 2b (T-0126): pullSchedule sources powerW from the SOLUTION net-grid ---
-// A FRBC operation_mode_id carries no power magnitude, so the op-mode plan alone
-// maps GRID_SUPPORT_EXPORT → 0 (planActionToPowerW). pullSchedule now joins EOS'
-// own solution net-grid flow (dvhubSetpointW) onto each slot by timestamp, so the
-// displayed plan equals the derived control setpoints; the op-mode stays as the
-// planAction LABEL.
-test('pullSchedule joins the solution net-grid setpoint onto each slot (T-0126)', async () => {
+// --- Test 2b (T-0126): pullSchedule attaches the SOLUTION net-grid as gridSetpointW ---
+// A FRBC operation_mode_id carries no power magnitude, so the op-mode plan maps
+// GRID_SUPPORT_EXPORT → 0 (planActionToPowerW). pullSchedule now ALSO attaches
+// EOS' own solution net-grid flow (dvhubSetpointW) as a separate `gridSetpointW`
+// field per slot (joined by timestamp), so a plan display can show the same
+// setpoint the box actuates. `powerW` stays the op-mode battery dispatch (the
+// battery_power_w series / Leitstand chart depend on it), and planAction stays
+// the op-mode label.
+test('pullSchedule attaches the solution net-grid setpoint as gridSetpointW (T-0126)', async () => {
   const eosPlan = {
     instructions: [
       { type: 'FRBCInstruction', actuator_id: 'battery1',
@@ -242,8 +244,8 @@ test('pullSchedule joins the solution net-grid setpoint onto each slot (T-0126)'
     assert.ok(Array.isArray(slots) && slots.length >= 1, 'returns slots');
     const s = slots[0];
     assert.equal(s.planAction, 'GRID_SUPPORT_EXPORT', 'op-mode stays the planAction label');
-    assert.equal(s.powerW, -2000, 'powerW reflects the solution net-grid export (−2000 W), not op-mode 0');
-    assert.equal(s.gridSetpointW, -2000, 'explicit net-grid marker set for estimateNetCost');
+    assert.equal(s.powerW, 0, 'powerW stays the op-mode battery dispatch (GRID_SUPPORT_EXPORT → 0), untouched');
+    assert.equal(s.gridSetpointW, -2000, 'net-grid setpoint attached as a separate field (−2000 W export)');
   } finally {
     await mock.close();
   }

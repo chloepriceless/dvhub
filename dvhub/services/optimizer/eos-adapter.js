@@ -337,15 +337,16 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // T-0126 (2026-09-26): a FRBC operation_mode_id carries NO power magnitude,
     // so planActionToPowerW maps EOS 0.4's real battery→grid modes (GRID_SUPPORT_
     // EXPORT, PEAK_SHAVING) to 0 — the plan display read "Halten/0" while the box
-    // actually exports, because the control path (pullGridSetpoints) already
-    // actuates the export from the SOLUTION, not from the op-mode plan. Source
-    // each slot's powerW from that same solution net-grid flow (dvhubSetpointW =
-    // grid_consumption − grid_feedin, AC-side and loss-correct), joined by
-    // timestamp, so the displayed plan equals the derived setpoints. The op-mode
-    // stays as the planAction LABEL; the sign convention now matches gridSetpointW
-    // (negative = export, positive = import). Falls back to the op-mode powerW
-    // for any slot without a matching solution row (e.g. no solution computed
-    // yet) — never throws, the plan display degrades gracefully.
+    // actually exports (the control path pullGridSetpoints already actuates the
+    // export from the SOLUTION, not from the op-mode plan). Attach the net-grid
+    // flow from that same solution (dvhubSetpointW = grid_consumption − grid_
+    // feedin, AC-side and loss-correct; negative = export, positive = import) as
+    // an ADDITIONAL field per slot, joined by timestamp, so a plan display can
+    // show the same setpoint the box actuates. `powerW` is deliberately LEFT as
+    // the op-mode battery dispatch: it feeds the persisted `battery_power_w`
+    // series and the Leitstand "Batterie-Plan" chart, which need battery power,
+    // not grid flow (Codex review 2026-09-26). Never throws — a missing solution
+    // just leaves gridSetpointW unset and the plan degrades to the op-mode view.
     try {
       const sol = await getOptimizationSolution(8 * 24 * 4);
       if (sol && Array.isArray(sol.rows) && sol.rows.length) {
@@ -358,15 +359,12 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         }
         for (const s of slots) {
           const sp = netGridByTs.get(s.ts);
-          if (typeof sp === 'number') {
-            s.powerW = sp;
-            // Explicit net-grid marker so estimateNetCost prices the slot from
-            // the grid flow (not by reconstructing it from battery power).
-            s.gridSetpointW = sp;
-          }
+          // Net-grid setpoint for the plan display + estimateNetCost. NOT written
+          // to powerW (see above) — battery-power consumers must stay untouched.
+          if (typeof sp === 'number') s.gridSetpointW = sp;
         }
       }
-    } catch { /* keep the op-mode powerW as a safe fallback */ }
+    } catch { /* no solution → op-mode plan only, no gridSetpointW */ }
 
     return slots;
   }
@@ -416,12 +414,23 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       evSocKey = Object.keys(sample).find(k => /(^|_)ev\d*_soc_factor$/.test(k)) || null;
     }
     const numOrNull = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
+    // Planbare Verbraucher (2026-09-26): EOS legt An/Aus-Dispatch je home_appliance
+    // als Spalten ins Lösungs-DataFrame (aligned zum 15-min-Zeitindex). Die exakten
+    // Spaltennamen sind versionsabhängig; wir sammeln generisch alles Appliance-
+    // Bezogene je Slot ein (Prefix appl_ / *appliance*). Fehlt es, bleibt es leer →
+    // die Bridge no-opt (sicher). Live gegen echtes EOS zu bestätigen.
+    const applianceColKeys = tsKeys.length
+      ? Object.keys(data[tsKeys[0]] || {}).filter(k => /^appl_|appliance/i.test(k))
+      : [];
     const allRows = tsKeys.map((ts) => {
       const r = data[ts] || {};
       const pr = pred[ts] || {};
       const socFactor = socKey != null ? r[socKey] : undefined;
+      const appliances = {};
+      for (const k of applianceColKeys) { const v = numOrNull(r[k]); if (v != null) appliances[k] = v; }
       return {
         ts_utc: new Date(ts).toISOString(),
+        appliances: Object.keys(appliances).length ? appliances : null,
         socPct: numOrNull(socFactor) != null ? Math.round(socFactor * 100) : null,
         pvWh: numOrNull(pr.pvforecast_ac_energy_wh),
         loadWh: numOrNull(pr.loadforecast_energy_wh),
