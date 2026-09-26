@@ -5,17 +5,17 @@
 (function () {
   'use strict';
 
-  var DAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
-  var UNITS = { percent: '%', kwh: 'kWh', km: 'km' };
-  var POLL_MS = 60000;
+  const DAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+  const UNITS = { percent: '%', kwh: 'kWh', km: 'km' };
+  const POLL_MS = 60000;
 
-  var data = null;      // letzte Antwort von GET /api/ev
-  var draft = null;     // Bearbeitungsstand { enabled, time, days[], targetValue }
-  var dirty = false;
-  var timer = null;
+  let data = null;      // letzte Antwort von GET /api/ev
+  let draft = null;     // Bearbeitungsstand { enabled, time, days[], targetValue }
+  let dirty = false;
+  let timer = null;
 
   // Markup der Kachel (Leitstand + Family-Panel teilen es; mount() füllt den Host).
-  var TEMPLATE = [
+  const TEMPLATE = [
     "  <div class=\"rail-card-head\">",
     "    <span class=\"ttl\"><span class=\"dot dot-ev\"></span><span id=\"evTitle\">E-Auto</span></span>",
     "    <label class=\"ev-plan-toggle\" title=\"EOS plant das Laden des Autos mit (Ladefenster nach Preis und PV, Ziel bis zur Abfahrt). Aus: das Auto steckt nur in der Lastprognose.\">",
@@ -63,7 +63,7 @@
     });
   }
   function apiFetch(path, opts) {
-    var common = window.DVhubCommon;
+    const common = window.DVhubCommon;
     if (common && typeof common.apiFetch === 'function') return common.apiFetch(path, opts);
     return fetch(path, opts);
   }
@@ -72,14 +72,14 @@
     return new Date(iso).toLocaleTimeString('de-DE', { timeZone: tz(), hour: '2-digit', minute: '2-digit' });
   }
   function fmtDayTime(iso) {
-    var d = new Date(iso);
+    const d = new Date(iso);
     return d.toLocaleDateString('de-DE', { timeZone: tz(), weekday: 'short' }) + ' ' + fmtTime(iso);
   }
   function fmtKw(w) { return (w / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' kW'; }
   function fmtNum(v, digits) { return Number(v).toLocaleString('de-DE', { maximumFractionDigits: digits || 0 }); }
 
   function msg(text, isError) {
-    var m = el('evMsg');
+    const m = el('evMsg');
     if (!m) return;
     m.hidden = !text;
     m.textContent = text || '';
@@ -87,7 +87,7 @@
   }
 
   function draftFromData() {
-    var d = data.departure || {};
+    const d = data.departure || {};
     return {
       enabled: d.enabled === true,
       time: d.time || '07:00',
@@ -98,7 +98,7 @@
 
   function setDirty(v) {
     dirty = v;
-    var a = el('evActions');
+    const a = el('evActions');
     if (a) a.hidden = !v;
   }
 
@@ -106,15 +106,15 @@
 
   // Sichtfenster des Charts: Mausrad verschiebt, Strg/⌘ + Mausrad zoomt.
   // startMs null = folgt „jetzt“ (bis jemand scrollt).
-  var HOUR = 3600000;
-  var view = { startMs: null, spanMs: 6 * HOUR };
-  var VIEW_MIN = 2 * HOUR;
-  var VIEW_MAX = 48 * HOUR;
-  var bounds = null;    // { t0, t1, slotMs } des aktuellen Plans
+  const HOUR = 3600000;
+  const view = { startMs: null, spanMs: 6 * HOUR };
+  const VIEW_MIN = 2 * HOUR;
+  const VIEW_MAX = 48 * HOUR;
+  let bounds = null;    // { t0, t1, slotMs } des aktuellen Plans
 
   function clampView() {
     if (!bounds) return;
-    var total = bounds.t1 - bounds.t0;
+    const total = bounds.t1 - bounds.t0;
     view.spanMs = Math.max(VIEW_MIN, Math.min(VIEW_MAX, total, view.spanMs));
     if (view.startMs == null) return;
     view.startMs = Math.max(bounds.t0, Math.min(bounds.t1 - view.spanMs, view.startMs));
@@ -123,15 +123,15 @@
     if (!bounds) return 0;
     if (view.startMs != null) return view.startMs;
     // Folgt „jetzt“: laufender Slot links, eine Viertelstunde Vorlauf.
-    var now = Date.now() - bounds.slotMs;
+    const now = Date.now() - bounds.slotMs;
     return Math.max(bounds.t0, Math.min(bounds.t1 - view.spanMs, now));
   }
 
   function renderTimeline() {
-    var host = el('evTimeline');
+    const host = el('evTimeline');
     if (!host) return;
-    var plan = data.plan;
-    var slots = plan && Array.isArray(plan.slots) ? plan.slots : [];
+    const plan = data.plan;
+    const slots = plan && Array.isArray(plan.slots) ? plan.slots : [];
     if (!data.optimizeEv || !slots.length || !plan.hasEv) {
       host.innerHTML = '';
       bounds = null;
@@ -139,39 +139,39 @@
       el('evAxisEnd').textContent = '—';
       return;
     }
-    var slotMs = (plan.slotMinutes || 15) * 60000;
+    const slotMs = (plan.slotMinutes || 15) * 60000;
     bounds = { t0: Date.parse(slots[0].ts), t1: Date.parse(slots[slots.length - 1].ts) + slotMs, slotMs: slotMs };
     clampView();
-    var v0 = viewStart();
-    var v1 = v0 + view.spanMs;
-    var W = 240; var H = 44; var barH = 30;
-    var maxW = data.maxChargeW || 1;
-    var x = function (t) { return ((t - v0) / view.spanMs) * W; };
-    var yPct = function (p) { return H - 2 - (Math.max(0, Math.min(100, p)) / 100) * (H - 4); };
-    var parts = ['<line class="ev-base" x1="0" y1="' + (H - 0.5) + '" x2="' + W + '" y2="' + (H - 0.5) + '"/>'];
-    var socPts = [];
+    const v0 = viewStart();
+    const v1 = v0 + view.spanMs;
+    const W = 240; const H = 44; const barH = 30;
+    const maxW = data.maxChargeW || 1;
+    const x = function (t) { return ((t - v0) / view.spanMs) * W; };
+    const yPct = function (p) { return H - 2 - (Math.max(0, Math.min(100, p)) / 100) * (H - 4); };
+    const parts = ['<line class="ev-base" x1="0" y1="' + (H - 0.5) + '" x2="' + W + '" y2="' + (H - 0.5) + '"/>'];
+    const socPts = [];
     // Volle Stunden als feine Raster-Linien, damit man beim Scrollen die Zeit sieht.
-    for (var hr = Math.ceil(v0 / HOUR) * HOUR; hr < v1; hr += HOUR) {
+    for (let hr = Math.ceil(v0 / HOUR) * HOUR; hr < v1; hr += HOUR) {
       parts.push('<line class="ev-grid" x1="' + x(hr).toFixed(1) + '" y1="0" x2="' + x(hr).toFixed(1) + '" y2="' + H + '"/>');
     }
     slots.forEach(function (s) {
-      var ts = Date.parse(s.ts);
+      const ts = Date.parse(s.ts);
       if (ts + slotMs < v0 - slotMs || ts > v1 + slotMs) return;
       if (s.powerW > 0) {
-        var h = Math.max(2, (s.powerW / maxW) * barH);
+        const h = Math.max(2, (s.powerW / maxW) * barH);
         parts.push('<rect class="ev-bar" x="' + x(ts).toFixed(1) + '" y="' + (H - h).toFixed(1) + '" width="' + Math.max(1, (slotMs / view.spanMs) * W - 0.6).toFixed(1)
           + '" height="' + h.toFixed(1) + '"><title>' + esc(fmtTime(s.ts) + ' · ' + fmtKw(s.powerW) + (s.socPct != null ? ' · ' + s.socPct + ' %' : '')) + '</title></rect>');
       }
       if (s.socPct != null) socPts.push(x(ts).toFixed(1) + ',' + yPct(s.socPct).toFixed(1));
     });
-    var res = data.departure && data.departure.resolved;
+    const res = data.departure && data.departure.resolved;
     if (res && res.targetSocPct != null) {
       parts.push('<line class="ev-target" x1="0" y1="' + yPct(res.targetSocPct).toFixed(1) + '" x2="' + W + '" y2="' + yPct(res.targetSocPct).toFixed(1) + '"/>');
     }
     if (socPts.length > 1) parts.push('<polyline class="ev-soc" points="' + socPts.join(' ') + '"/>');
-    var nowMs = Date.now();
+    const nowMs = Date.now();
     if (nowMs >= v0 && nowMs <= v1) parts.push('<line class="ev-now" x1="' + x(nowMs).toFixed(1) + '" y1="0" x2="' + x(nowMs).toFixed(1) + '" y2="' + H + '"><title>jetzt</title></line>');
-    var depMs = res && res.departureAt ? Date.parse(res.departureAt) : NaN;
+    const depMs = res && res.departureAt ? Date.parse(res.departureAt) : NaN;
     if (isFinite(depMs) && depMs >= v0 && depMs <= v1) {
       parts.push('<line class="ev-dep" x1="' + x(depMs).toFixed(1) + '" y1="0" x2="' + x(depMs).toFixed(1) + '" y2="' + H + '"><title>Abfahrt ' + esc(fmtDayTime(res.departureAt)) + '</title></line>');
     }
@@ -184,31 +184,31 @@
   // EOS-Ladestufen: aufeinanderfolgende Slots gleicher Leistung zusammengefasst,
   // z. B. „20:45–21:15 11 kW · 21:15–21:30 3,3 kW“. Laufende Stufe markiert.
   function evSteps(slots, slotMs) {
-    var steps = [];
+    const steps = [];
     slots.forEach(function (s) {
-      var ts = Date.parse(s.ts);
-      var w = s.powerW > 0 ? s.powerW : 0;
-      var last = steps[steps.length - 1];
+      const ts = Date.parse(s.ts);
+      const w = s.powerW > 0 ? s.powerW : 0;
+      const last = steps[steps.length - 1];
       if (last && last.powerW === w && last.end === ts) { last.end = ts + slotMs; last.socEnd = s.socPct; return; }
       steps.push({ start: ts, end: ts + slotMs, powerW: w, socEnd: s.socPct });
     });
     return steps.filter(function (st) { return st.powerW > 0; });
   }
 
-  var stepsOpen = false;   // Ladestufen aufgeklappt (bleibt über Aktualisierungen)
+  let stepsOpen = false;   // Ladestufen aufgeklappt (bleibt über Aktualisierungen)
 
   function renderSteps() {
-    var host = el('evSteps');
+    const host = el('evSteps');
     if (!host) return;
-    var plan = data.plan;
-    var slots = plan && Array.isArray(plan.slots) ? plan.slots : [];
+    const plan = data.plan;
+    const slots = plan && Array.isArray(plan.slots) ? plan.slots : [];
     if (!data.optimizeEv || !plan || !plan.hasEv || !slots.length) { host.hidden = true; host.innerHTML = ''; return; }
-    var now = Date.now();
-    var steps = evSteps(slots, (plan.slotMinutes || 15) * 60000).filter(function (st) { return st.end > now; });
+    const now = Date.now();
+    const steps = evSteps(slots, (plan.slotMinutes || 15) * 60000).filter(function (st) { return st.end > now; });
     host.hidden = false;
     if (!steps.length) { host.innerHTML = '<div class="ev-step is-none">EOS plant keine weitere Ladung</div>'; return; }
-    var row = function (st) {
-      var cur = st.start <= now && now < st.end;
+    const row = function (st) {
+      const cur = st.start <= now && now < st.end;
       return '<div class="ev-step' + (cur ? ' is-now' : '') + '">'
         + '<span class="ev-step-t">' + (cur ? 'jetzt' : esc(fmtTime(new Date(st.start).toISOString()))) + '–' + esc(fmtTime(new Date(st.end).toISOString())) + '</span>'
         + '<span class="ev-step-w">' + esc(fmtKw(st.powerW)) + '</span>'
@@ -216,8 +216,8 @@
         + '</div>';
     };
     // Laufende bzw. nächste Stufe immer sichtbar, der Rest zum Aufklappen.
-    var rest = steps.slice(1);
-    var toggle = '<button type="button" class="ev-steps-toggle" id="evStepsToggle" aria-expanded="' + stepsOpen + '">'
+    const rest = steps.slice(1);
+    const toggle = '<button type="button" class="ev-steps-toggle" id="evStepsToggle" aria-expanded="' + stepsOpen + '">'
       + (stepsOpen ? 'weniger' : '+ ' + rest.length + ' weitere Stufe' + (rest.length === 1 ? '' : 'n')) + '</button>';
     host.innerHTML = row(steps[0])
       + (stepsOpen && rest.length ? '<div class="ev-steps-more">' + rest.map(row).join('') + '</div>' : '')
@@ -225,24 +225,24 @@
   }
 
   function wireTimelineWheel() {
-    var host = el('evTimeline');
+    const host = el('evTimeline');
     if (!host || host.dataset.wheelWired === '1') return;
     host.dataset.wheelWired = '1';
     host.addEventListener('wheel', function (e) {
       if (!bounds || !data) return;
       e.preventDefault();
-      var start = viewStart();
-      var delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      const start = viewStart();
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
       if (!delta) return;
       if (e.ctrlKey || e.metaKey) {
         // Zoom um die Mausposition.
-        var rect = host.getBoundingClientRect();
-        var frac = rect.width ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0.5;
-        var anchor = start + frac * view.spanMs;
+        const rect = host.getBoundingClientRect();
+        const frac = rect.width ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0.5;
+        const anchor = start + frac * view.spanMs;
         view.spanMs = Math.max(VIEW_MIN, Math.min(VIEW_MAX, view.spanMs * (delta > 0 ? 1.25 : 0.8)));
         view.startMs = anchor - frac * view.spanMs;
       } else {
-        var step = Math.max(bounds.slotMs, view.spanMs / 8);
+        const step = Math.max(bounds.slotMs, view.spanMs / 8);
         view.startMs = start + (delta > 0 ? step : -step);
       }
       clampView();
@@ -256,10 +256,10 @@
   }
 
   function renderSummary() {
-    var out = el('evPlanSummary');
+    const out = el('evPlanSummary');
     if (!out) return;
     out.className = 'v';
-    var res = data.departure && data.departure.resolved;
+    const res = data.departure && data.departure.resolved;
     if (!data.optimizeEv) { out.textContent = 'EOS plant das Auto nicht'; out.classList.add('dim'); return; }
     if (data.vehicle && data.vehicle.registered === false) {
       if (data.onlyWhenPlugged && data.vehicle.plugged !== true) {
@@ -273,9 +273,9 @@
       out.classList.add('warn');
       return;
     }
-    var plan = data.plan;
+    const plan = data.plan;
     if (!plan || !plan.hasEv) { out.textContent = data.planError ? ('kein Plan: ' + data.planError) : 'noch kein EOS-Plan'; out.classList.add('dim'); return; }
-    var parts = [];
+    const parts = [];
     parts.push(fmtNum(plan.energyKwh, 1) + ' kWh');
     if (res && res.departureAt && res.targetSocPct != null) {
       if (plan.targetReachedAt) {
@@ -287,17 +287,17 @@
       }
     }
     out.textContent = parts.join(' · ');
-    var w = (plan.windows || []).map(function (x) { return fmtTime(x.start) + '–' + fmtTime(x.end) + ' ' + fmtKw(x.maxW) + ' (' + fmtNum(x.kwh, 1) + ' kWh)'; });
+    const w = (plan.windows || []).map(function (x) { return fmtTime(x.start) + '–' + fmtTime(x.end) + ' ' + fmtKw(x.maxW) + ' (' + fmtNum(x.kwh, 1) + ' kWh)'; });
     out.title = w.length ? 'Ladefenster bis zur Abfahrt:\n' + w.join('\n') : 'Bis zur Abfahrt plant EOS keine Ladung.';
   }
 
   function renderState() {
-    var v = data.vehicle || {};
-    var st = el('evState');
-    var parts = [];
+    const v = data.vehicle || {};
+    const st = el('evState');
+    const parts = [];
     if (v.connected === true) parts.push(v.charging ? ('lädt' + (v.chargePowerW ? ' mit ' + fmtKw(v.chargePowerW) : '')) : 'angesteckt');
     else if (v.connected === false) parts.push('nicht angesteckt');
-    var res = data.departure && data.departure.resolved;
+    const res = data.departure && data.departure.resolved;
     if (res && res.departureAt) parts.push('Abfahrt ' + fmtDayTime(res.departureAt) + (res.source === 'once' ? ' (einmalig)' : ''));
     else if (data.departure && data.departure.enabled === false) parts.push('ohne Abfahrtszeit');
     if (data.departure && data.departure.enabled && data.departure.deadlineSupported === false) parts.push('EOS kennt die Uhrzeit erst ab 0.4');
@@ -306,7 +306,7 @@
   }
 
   function renderForm() {
-    var mode = (data.departure && data.departure.targetMode) || 'percent';
+    const mode = (data.departure && data.departure.targetMode) || 'percent';
     el('evDepEnabled').checked = !!draft.enabled;
     el('evDepTime').value = draft.time;
     el('evDepTime').disabled = !draft.enabled;
@@ -315,26 +315,26 @@
     el('evTarget').step = mode === 'percent' ? 5 : 1;
     el('evTargetUnit').textContent = UNITS[mode] || '%';
     el('evDays').innerHTML = DAY_LABELS.map(function (lbl, i) {
-      var day = i + 1;
-      var on = draft.days.indexOf(day) >= 0;
+      const day = i + 1;
+      const on = draft.days.indexOf(day) >= 0;
       return '<button type="button" class="ev-day" data-day="' + day + '" aria-pressed="' + on + '"' + (draft.enabled ? '' : ' disabled') + '>' + lbl + '</button>';
     }).join('');
   }
 
   function render() {
-    var tile = el('evTile');
+    const tile = el('evTile');
     if (!tile || !data) return;
     tile.hidden = false;
-    var v = data.vehicle || {};
+    const v = data.vehicle || {};
     el('evTitle').textContent = 'E-Auto' + (v.title ? ' · ' + v.title : '');
     el('evOptimize').checked = !!data.optimizeEv;
     el('evOnlyPlugged').checked = data.onlyWhenPlugged !== false;
     el('evOnlyPlugged').disabled = !data.optimizeEv;
     tile.classList.toggle('is-off', !data.optimizeEv);
     el('evSocNow').textContent = v.socPct != null ? v.socPct + ' %' : '—';
-    var res = data.departure && data.departure.resolved;
-    var mode = (data.departure && data.departure.targetMode) || 'percent';
-    var tgt = res && res.targetSocPct != null ? res.targetSocPct + ' %' : '—';
+    const res = data.departure && data.departure.resolved;
+    const mode = (data.departure && data.departure.targetMode) || 'percent';
+    let tgt = res && res.targetSocPct != null ? res.targetSocPct + ' %' : '—';
     if (mode !== 'percent' && data.departure.targetValue != null) tgt += ' (' + fmtNum(data.departure.targetValue) + ' ' + UNITS[mode] + ')';
     el('evSocTarget').textContent = tgt;
     el('evSocNow').title = v.socSource ? 'Quelle: ' + v.socSource + (v.rangeKm > 0 ? ' · ' + v.rangeKm + ' km' : '') : '';
@@ -349,14 +349,14 @@
 
   async function load() {
     try {
-      var res = await apiFetch('/api/ev');
+      const res = await apiFetch('/api/ev');
       if (!res.ok) { if (res.status === 404) el('evTile').hidden = true; return; }
-      var body = await res.json();
+      const body = await res.json();
       if (!body || !body.ok) return;
       data = body;
       try { document.dispatchEvent(new CustomEvent('dvhub:ev-data', { detail: body })); } catch (_) { /* alte Browser */ }
       // Kein Auto eingerichtet (EOS-Planung aus, keine Abfahrt, kein Ladepunkt): Kachel bleibt weg.
-      var any = body.optimizeEv || (body.departure && body.departure.enabled) || (body.vehicle && body.vehicle.connected !== null);
+      const any = body.optimizeEv || (body.departure && body.departure.enabled) || (body.vehicle && body.vehicle.connected !== null);
       if (!any) { el('evTile').hidden = true; return; }
       render();
     } catch (_) { /* naechster Takt */ }
@@ -365,8 +365,8 @@
   async function post(payload, okText) {
     msg('Speichere …');
     try {
-      var res = await apiFetch('/api/ev', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
-      var body = {};
+      const res = await apiFetch('/api/ev', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      let body = {};
       try { body = await res.json(); } catch (_) { /* leer */ }
       if (!res.ok || !body.ok) { msg('Nicht gespeichert: ' + (body.error || ('HTTP ' + res.status)), true); return false; }
       msg(okText);
@@ -379,13 +379,13 @@
   }
 
   async function toggleOptimize(on) {
-    var ok = await post({ optimizeEv: on }, on ? 'EOS plant das Auto jetzt mit — der neue Plan kommt mit dem nächsten EOS-Lauf.' : 'EOS plant das Auto nicht mehr.');
+    const ok = await post({ optimizeEv: on }, on ? 'EOS plant das Auto jetzt mit — der neue Plan kommt mit dem nächsten EOS-Lauf.' : 'EOS plant das Auto nicht mehr.');
     if (!ok) el('evOptimize').checked = !on;
     load();
   }
 
   async function toggleOnlyPlugged(on) {
-    var ok = await post({ onlyWhenPlugged: on }, on
+    const ok = await post({ onlyWhenPlugged: on }, on
       ? 'EOS plant das Auto nur noch, wenn es angesteckt ist.'
       : 'EOS plant das Auto immer mit, auch ohne Stecker.');
     if (!ok) el('evOnlyPlugged').checked = !on;
@@ -393,11 +393,11 @@
   }
 
   async function save() {
-    var mode = (data.departure && data.departure.targetMode) || 'percent';
-    var tv = Number(el('evTarget').value);
+    const mode = (data.departure && data.departure.targetMode) || 'percent';
+    const tv = Number(el('evTarget').value);
     if (!isFinite(tv) || tv < 0 || (mode === 'percent' && tv > 100)) { msg('Ziel: ' + (mode === 'percent' ? '0–100 %' : 'Zahl ≥ 0'), true); return; }
     if (draft.enabled && !draft.days.length) { msg('Mindestens einen Wochentag wählen.', true); return; }
-    var ok = await post({ departure: { enabled: draft.enabled, time: el('evDepTime').value || draft.time, days: draft.days, targetValue: tv } },
+    const ok = await post({ departure: { enabled: draft.enabled, time: el('evDepTime').value || draft.time, days: draft.days, targetValue: tv } },
       'Übernommen — EOS rechnet mit der neuen Abfahrt.');
     if (ok) { setDirty(false); load(); }
   }
@@ -418,10 +418,10 @@
   });
   document.addEventListener('click', function (e) {
     if (!data) return;
-    var dayBtn = e.target.closest && e.target.closest('.ev-day');
+    const dayBtn = e.target.closest && e.target.closest('.ev-day');
     if (dayBtn && !dayBtn.disabled) {
-      var day = Number(dayBtn.getAttribute('data-day'));
-      var i = draft.days.indexOf(day);
+      const day = Number(dayBtn.getAttribute('data-day'));
+      const i = draft.days.indexOf(day);
       if (i >= 0) draft.days.splice(i, 1); else draft.days.push(day);
       draft.days.sort();
       dayBtn.setAttribute('aria-pressed', String(i < 0));

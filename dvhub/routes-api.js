@@ -3185,7 +3185,7 @@ export function createApiRoutes(ctx) {
         target[key] = n;
         return null;
       };
-      let rangeErr = intField('publishIntervalMs', 1000, 3_600_000, 'invalid_publish_interval')
+      const rangeErr = intField('publishIntervalMs', 1000, 3_600_000, 'invalid_publish_interval')
         || intField('keepaliveSec', 5, 3600, 'invalid_keepalive')
         || intField('reconnectPeriodMs', 1000, 600_000, 'invalid_reconnect_period')
         || intField('connectTimeoutMs', 1000, 120_000, 'invalid_connect_timeout');

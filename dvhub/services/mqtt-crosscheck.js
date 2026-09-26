@@ -130,7 +130,7 @@ export function createMqttCrossCheck(ctx) {
   let keepaliveTimer = null;
   let compareTimer = null;
   let stopping = false;
-  let mem = { fields: {}, active: false, since: null };
+  const mem = { fields: {}, active: false, since: null };
   const cache = new Map();  // topic → { value, ts }
   let connectedAt = 0;
   let lastConnectError = null;

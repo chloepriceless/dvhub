@@ -163,7 +163,7 @@ export function createScheduleEvaluator(ctx) {
     const scale = Number(conf.scale ?? 1);
     const offset = Number(conf.offset ?? 0);
     if (!Number.isFinite(scale) || scale === 0) throw new Error('invalid write scale');
-    let engineeringValue = Number(value);
+    const engineeringValue = Number(value);
     if (!Number.isFinite(engineeringValue)) throw new Error('invalid write value');
 
     // rawSentinels (2026-07-12, reg-2704-Scale-Fix): Sentinel-Werte sind MODES,
