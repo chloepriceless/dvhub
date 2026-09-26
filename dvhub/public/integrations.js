@@ -172,7 +172,7 @@
         if (backdrop) backdrop.classList.add('is-open');
         // Initial focus — first focusable inside drawer.
         var first = root.querySelector('input:not([type="hidden"]), button:not([disabled]), [role="tab"][aria-selected="true"], select, textarea, [tabindex]:not([tabindex="-1"])');
-        if (first) { try { first.focus(); } catch (_) {} }
+        if (first) { try { first.focus(); } catch (_) { /* focus best-effort */ } }
       });
       if (!escHandler) {
         escHandler = function (e) {
@@ -193,7 +193,7 @@
         if (backdrop) backdrop.hidden = true;
         closeTimer = null;
         if (restoreFocusEl && typeof restoreFocusEl.focus === 'function') {
-          try { restoreFocusEl.focus(); } catch (_) {}
+          try { restoreFocusEl.focus(); } catch (_) { /* focus best-effort */ }
         }
         restoreFocusEl = null;
       }, 220);
@@ -223,7 +223,7 @@
         if (p) p.hidden = !on;
       }
     }
-    try { tab.focus(); } catch (_) {}
+    try { tab.focus(); } catch (_) { /* focus best-effort */ }
   }
 
   function tabKeyHandler(e) {
@@ -375,14 +375,6 @@
     if (ms == null || !Number.isFinite(Number(ms))) return '—';
     return Math.round(ms) + ' ms';
   }
-  function fmtUptime(s) {
-    if (s == null || !Number.isFinite(Number(s))) return '—';
-    var n = Math.floor(Number(s));
-    if (n < 60) return n + 's';
-    if (n < 3600) return Math.floor(n / 60) + 'm ' + (n % 60) + 's';
-    if (n < 86400) return Math.floor(n / 3600) + 'h ' + Math.floor((n % 3600) / 60) + 'm';
-    return Math.floor(n / 86400) + 'd ' + Math.floor((n % 86400) / 3600) + 'h';
-  }
   function fmtCount(n) {
     return n != null && Number.isFinite(Number(n)) ? String(n) : '—';
   }
@@ -485,12 +477,6 @@
   // when latency/uptime/errors aren't tracked yet. Live-tracked metrics
   // (Latency / Errors · 24h) only appear when present; otherwise we fall
   // back to identity-style values (broker / topic count / SoC / portal-ID).
-  // A stat with a missing value still shows '—' (single dash, not full row)
-  // so the slot stays the same width across cards.
-  function pickFirst(fn, data, fallback) {
-    var v = fn(data);
-    return v == null ? (fallback != null ? fallback : '—') : v;
-  }
   function fmtBool(v, on, off) {
     if (v === true) return on || 'Ja';
     if (v === false) return off || 'Nein';
@@ -674,8 +660,8 @@
       case 'forecast-providers': {
         // Phase 20-06: identity-header counts configured providers; never echos
         // any apiKey or siteId (T-20-06-01 — booleans only).
-        var s = !!(data && data.solcast && data.solcast.apiKeySet);
-        var p = !!(data && data.pvnode  && data.pvnode.apiKeySet);
+        const s = !!(data && data.solcast && data.solcast.apiKeySet);
+        const p = !!(data && data.pvnode  && data.pvnode.apiKeySet);
         if (s && p) return '2 Provider konfiguriert';
         if (s) return 'Solcast konfiguriert';
         if (p) return 'pvnode konfiguriert';
@@ -1524,7 +1510,7 @@
       var res = await apiFetch('/api/integrations/mqtt/status?limit=80');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       renderMqttStatus(await res.json());
-    } catch (e) {
+    } catch {
       badge.textContent = 'Status nicht abrufbar';
       badge.className = 'mqtt-state-badge is-offline';
     }
