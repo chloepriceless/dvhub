@@ -10,6 +10,7 @@
   },
   "scripts": {
     "start": "node server.js",
+    "pretest": "eslint .",
     "test": "node --test test/*.test.js test/api/*.test.js test/migrations/*.test.js && node ../tests/binding-contract.mjs && node ../tests/csp-lint.mjs && node ../tests/css-tokens.test.mjs && node ../tests/endpoint-inventory.mjs --verify && node ../tests/sudoers-drift.mjs",
     "test:sqlite": "node --experimental-sqlite --test test/sqlite/*.test.js",
     "test:all": "node --experimental-sqlite --test",

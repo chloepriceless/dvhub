@@ -99,15 +99,13 @@ jobs:
   # ESLint (Quality-Review 2026-07-01): flat-config with a minimal, high-signal
   # ruleset (no-var, prefer-const, no-unused-vars, eqeqeq, no-empty + eslint:recommended).
   #
-  # NON-BLOCKING (continue-on-error) on rollout: ~220 pre-existing findings across
-  # the codebase (mostly no-unused-vars debt in older files) would make this red
-  # on day one for code nobody touched. `fast` (npm test + the 5 lint gates)
-  # remains the real gate. Flip this blocking once the backlog is worked down —
-  # see .planning/QUALITY-REVIEW-2026-07-01.md item 1.
+  # BLOCKING (2026-09-27): the ~295-finding backlog is fully worked down (0 errors
+  # repo-wide), so eslint is now a hard gate. It also runs inside `npm test` via
+  # the `pretest` hook, so the `fast` job enforces it too; this dedicated job keeps
+  # a clearly-named signal. See .planning/QUALITY-REVIEW-2026-07-01.md item 1.
   lint:
-    name: lint (eslint, informational)
+    name: lint (eslint)
     runs-on: ubuntu-latest
-    continue-on-error: true
     defaults:
       run:
         working-directory: dvhub
