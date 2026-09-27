@@ -3549,7 +3549,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
       const host = normalizeFroniusHost(url.searchParams.get('host'));
-      if (!host) return json(res, 400, { ok: false, error: 'host: IP oder Hostname, ohne http:// und Pfad' });
+      if (!host) return json(res, 400, { ok: false, error: 'host: IP oder Hostname im Heimnetz (z.B. 192.168.x.x, symo.local), ohne http:// und Pfad' });
       try {
         const r = await ctx.pvStrings.discoverFronius(host);
         return json(res, r.ok ? 200 : 502, r);

@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import {
   aggregateToSlots, buildPvnodeCsv, isoWithOffset, resolvePvStringSources,
   fetchVrmTrackers, discoverVrmTrackers, createPvStringsService, seriesKeyFor,
-  resolvePvStringGroups, fetchFroniusDay, discoverFroniusMppts, localMidnightS, localDate, shiftDate
+  resolvePvStringGroups, fetchFroniusDay, discoverFroniusMppts, localMidnightS, localDate, shiftDate,
+  normalizeFroniusHost
 } from '../services/pv-strings/index.js';
 
 const T0 = Date.parse('2026-09-22T10:00:00Z') / 1000; // Slot-Grenze
@@ -206,6 +207,13 @@ describe('Fronius', () => {
     assert.deepEqual(r.mppts, [{ host: '192.168.1.50', mppt: 1, powerW: 6945 }, { host: '192.168.1.50', mppt: 2, powerW: 2150 }]);
     assert.equal(f.calls[0], 'http://192.168.1.50/components/inverter/readable');
     assert.equal((await discoverFroniusMppts({ host: 'http://evil/', fetchImpl: f })).ok, false);
+    // SSRF (Review 27.09.): nur Ziele im Heimnetz.
+    for (const bad of ['8.8.8.8', '127.0.0.1', 'localhost:8080', 'example.com', '169.255.1.1', '192.169.1.1']) {
+      assert.equal((await discoverFroniusMppts({ host: bad, fetchImpl: f })).ok, false, bad);
+    }
+    for (const ok of ['10.0.0.5', '172.20.1.1:80', '169.254.1.1', 'symo', 'symo.fritz.box']) {
+      assert.equal(normalizeFroniusHost(ok), ok, ok);
+    }
   });
 });
 

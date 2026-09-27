@@ -43,9 +43,25 @@ const ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 // die URL selbst und fragt nur die festen Solar-API-Pfade ab.
 const HOST_RE = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?$/i;
 
+// Nur Ziele im Heimnetz: private IPv4 (RFC1918, dazu 169.254/16 fuer den
+// Fronius-Access-Point) oder LAN-Namen. Sonst koennte ein Eintrag DVhub
+// beliebige Server abfragen lassen (SSRF) — auch DVhub selbst ueber localhost.
+const LAN_NAME_RE = /^(?:[a-z0-9-]+|.+\.(?:local|lan|home|home\.arpa|internal|fritz\.box|box))$/;
+
+function isLanTarget(hostname) {
+  const parts = hostname.split('.');
+  if (parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p))) {
+    const [a, b] = parts.map(Number);
+    if (parts.some((p) => Number(p) > 255)) return false;
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  return hostname !== 'localhost' && LAN_NAME_RE.test(hostname);
+}
+
 export function normalizeFroniusHost(v) {
   const h = String(v || '').trim().toLowerCase();
-  return HOST_RE.test(h) ? h : null;
+  if (!HOST_RE.test(h)) return null;
+  return isLanTarget(h.replace(/:\d+$/, '')) ? h : null;
 }
 
 /** Konfigurierte Quellen, bereinigt. Unbrauchbare Eintraege fallen weg. */
