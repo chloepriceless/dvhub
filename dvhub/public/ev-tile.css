@@ -71,3 +71,13 @@
 .ev-msg.is-error { color:var(--red); }
 .ev-tile #evPlanSummary.warn { color:var(--yellow); }
 .ev-tile #evPlanSummary.ok { color:var(--green); }
+/* „Sofort laden“ (Override) */
+.ev-boost { padding:6px 0; border-bottom:1px solid var(--hairline); }
+.ev-boost[hidden], .ev-boost [hidden] { display:none; }
+.ev-boost-idle { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 8px; }
+.ev-boost .l { font-family:var(--f-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim); }
+.ev-boost-kw { width:58px; padding:3px 6px; font-size:12px; text-align:right; }
+.ev-boost-for { padding:3px 4px; font-size:11.5px; }
+.ev-boost-active { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 8px; border-radius:6px; background:var(--glass-2); border:1px solid var(--violet); }
+.ev-boost-text { font-family:var(--f-mono); font-size:11.5px; color:var(--violet); }
+.ev-boost-text.is-error { color:var(--red); }

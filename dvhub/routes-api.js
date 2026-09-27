@@ -4519,6 +4519,7 @@ export function createApiRoutes(ctx) {
           planError = e.message;
         }
       }
+      const bridge = ctx.eosEvccBridge?.getStatus?.() || null;
       return json(res, 200, {
         ok: true,
         optimizeEv: opt.eosOptimizeEv === true,
@@ -4551,7 +4552,13 @@ export function createApiRoutes(ctx) {
           plugged: resolveEvPlugged(ctx)
         },
         plan,
-        planError
+        planError,
+        // „Sofort laden“ (eos-evcc-bridge): aktiver Override + erlaubte Leistung.
+        override: bridge?.override || null,
+        overrideLimits: bridge?.overrideLimits || null,
+        chargerConfigured: bridge?.chargerConfigured === true,
+        lastCommand: bridge?.lastSent || null,
+        lastCommandError: bridge?.lastError || null
       });
     }
     if (url.pathname === '/api/ev' && req.method === 'POST') {
@@ -4563,6 +4570,35 @@ export function createApiRoutes(ctx) {
       // mit der MQTT-Steuerung (cmd/ev/*).
       const { status, ...payload } = applyEvConfigPatch(ctx, { body, actor: actorContext(req) });
       return json(res, status, payload);
+    }
+
+    // „Sofort laden“: jetzt mit X kW laden, egal was EOS plant — auch wenn EOS
+    // nicht laeuft. Body { powerW, untilMs? | durationMin? }; ohne Ende gilt der
+    // Override bis zum Abstecken oder bis DELETE. Pro wie die EOS-Steuerung.
+    if (url.pathname === '/api/ev/override' && (req.method === 'POST' || req.method === 'DELETE')) {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.eosEvccBridge?.setOverride) return json(res, 503, { ok: false, error: 'eos-evcc bridge not initialised' });
+      // Beenden geht immer, auch ohne Pro — sonst liesse sich ein Override nach
+      // Ablauf der Lizenz nicht mehr stoppen.
+      if (req.method === 'DELETE') {
+        const out = await ctx.eosEvccBridge.clearOverride();
+        pushLog('ev_override_clear', { ok: out.ok === true, error: out.error || null }, actorContext(req));
+        return json(res, 200, out);
+      }
+      if (!requirePro(req, res, 'eos')) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'object required' });
+      let untilMs = null;
+      if (body.untilMs != null) untilMs = Number(body.untilMs);
+      else if (body.durationMin != null) {
+        const d = Number(body.durationMin);
+        if (!Number.isFinite(d) || d <= 0) return json(res, 400, { ok: false, error: 'durationMin must be > 0' });
+        untilMs = Date.now() + d * 60_000;
+      }
+      const out = await ctx.eosEvccBridge.setOverride({ powerW: body.powerW, untilMs });
+      pushLog('ev_override_set', { ok: out.ok === true, powerW: out.override?.powerW ?? null, until: out.override?.until ?? null, error: out.error || null }, actorContext(req));
+      return json(res, out.ok ? 200 : 400, out);
     }
 
     if (url.pathname === '/api/integrations/evcc' && req.method === 'GET') {

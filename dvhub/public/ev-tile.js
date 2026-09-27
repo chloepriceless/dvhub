@@ -13,6 +13,7 @@
   let draft = null;     // Bearbeitungsstand { enabled, time, days[], targetValue }
   let dirty = false;
   let timer = null;
+  let boostTouched = false;  // kW-Feld von Hand geändert — Takt überschreibt es nicht
 
   // Markup der Kachel (Leitstand + Family-Panel teilen es; mount() füllt den Host).
   const TEMPLATE = [
@@ -25,6 +26,23 @@
     "  </div>",
     "  <div class=\"rail-big card-value value-ev\"><span id=\"evSocNow\">&mdash;</span><span class=\"ev-soc-arrow\">&rarr;</span><span id=\"evSocTarget\">&mdash;</span></div>",
     "  <div class=\"ev-state\" id=\"evState\">&mdash;</div>",
+    "  <div class=\"ev-boost\" id=\"evBoost\" hidden title=\"Jetzt laden, egal was EOS plant &mdash; auch wenn EOS nicht l&auml;uft. Endet zur gew&auml;hlten Zeit, beim Abstecken oder mit Beenden; danach gilt wieder der EOS-Plan.\">",
+    "    <div class=\"ev-boost-idle\" id=\"evBoostIdle\">",
+    "      <span class=\"l\">Sofort laden</span>",
+    "      <span class=\"ev-inline\">",
+    "        <input type=\"number\" class=\"input mono ev-boost-kw\" id=\"evBoostKw\" step=\"0.5\" aria-label=\"Ladeleistung in kW\">",
+    "        <span class=\"ev-unit\">kW</span>",
+    "        <select class=\"input mono ev-boost-for\" id=\"evBoostFor\" aria-label=\"Wie lange\">",
+    "          <option value=\"\">bis Abstecken</option><option value=\"60\">1 h</option><option value=\"120\">2 h</option><option value=\"240\">4 h</option><option value=\"480\">8 h</option>",
+    "        </select>",
+    "        <button type=\"button\" class=\"btn primary sm\" id=\"evBoostStart\">Jetzt laden</button>",
+    "      </span>",
+    "    </div>",
+    "    <div class=\"ev-boost-active\" id=\"evBoostActive\" hidden>",
+    "      <span class=\"ev-boost-text\" id=\"evBoostText\">&mdash;</span>",
+    "      <button type=\"button\" class=\"btn sm ghost\" id=\"evBoostStop\">Beenden</button>",
+    "    </div>",
+    "  </div>",
     "  <div class=\"ev-timeline\" id=\"evTimeline\" aria-label=\"EOS-Ladeplan\" title=\"Mausrad: Zeit verschieben &middot; Strg + Mausrad: zoomen &middot; Doppelklick: zur&uuml;ck auf jetzt\"></div>",
     "  <div class=\"ev-timeline-axis\"><span id=\"evAxisStart\">jetzt</span><span id=\"evAxisEnd\">&mdash;</span></div>",
     "  <div class=\"rail-row ev-plan-row\"><span class=\"l\">Plan</span><strong class=\"v\" id=\"evPlanSummary\">&mdash;</strong></div>",
@@ -321,6 +339,77 @@
     }).join('');
   }
 
+  // „Sofort laden“: laden mit X kW, egal was EOS plant (POST/DELETE /api/ev/override).
+  function renderBoost() {
+    const box = el('evBoost');
+    if (!box) return;
+    box.hidden = !data.chargerConfigured && !data.override;
+    const ov = data.override;
+    const lim = data.overrideLimits || { minPowerW: 4140, maxPowerW: data.maxChargeW || 11000 };
+    el('evBoostIdle').hidden = !!ov;
+    el('evBoostActive').hidden = !ov;
+    box.classList.toggle('is-active', !!ov);
+    const kw = el('evBoostKw');
+    kw.min = String(Math.ceil(lim.minPowerW / 100) / 10);
+    kw.max = String(lim.maxPowerW / 1000);
+    if (!boostTouched && document.activeElement !== kw) kw.value = String(lim.maxPowerW / 1000);
+    if (!ov) return;
+    const parts = ['Sofort laden · ' + fmtKw(ov.powerW)];
+    parts.push(ov.until ? 'bis ' + fmtTime(ov.until) : 'bis Abstecken');
+    if (!ov.seenConnected && data.vehicle && data.vehicle.connected === false) parts.push('wartet aufs Anstecken');
+    if (data.lastCommandError) parts.push('Fehler: ' + data.lastCommandError);
+    const t = el('evBoostText');
+    t.textContent = parts.join(' · ');
+    t.classList.toggle('is-error', !!data.lastCommandError);
+    t.title = ov.requestedW && ov.requestedW !== ov.powerW
+      ? 'Gewünscht ' + fmtKw(ov.requestedW) + ', möglich ' + fmtKw(lim.minPowerW) + '–' + fmtKw(lim.maxPowerW)
+      : 'seit ' + fmtTime(ov.startedAt);
+  }
+
+  async function startBoost() {
+    const kw = Number(String(el('evBoostKw').value).replace(',', '.'));
+    if (!isFinite(kw) || kw <= 0) { msg('Ladeleistung in kW angeben.', true); return; }
+    const dur = el('evBoostFor').value;
+    const payload = { powerW: Math.round(kw * 1000) };
+    if (dur) payload.durationMin = Number(dur);
+    el('evBoostStart').disabled = true;
+    try {
+      const res = await apiFetch('/api/ev/override', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      let body = {};
+      try { body = await res.json(); } catch (_) { /* leer */ }
+      if (!res.ok || !body.ok) { msg('Nicht gestartet: ' + (body.error || ('HTTP ' + res.status)), true); return; }
+      boostTouched = false;
+      const r = body.result || {};
+      if (r.skipped === 'paused') msg('Gespeichert — Not-Halt ist aktiv, geladen wird erst nach dem Aufheben.', true);
+      else if (r.skipped === 'pro required') msg('Gespeichert, aber ohne Pro-Lizenz steuert DVhub die Wallbox nicht.', true);
+      else msg(r.ok === false && r.error ? 'Gespeichert, Wallbox meldet: ' + r.error : 'Lädt jetzt mit ' + fmtKw(body.override.powerW) + '.', r.ok === false && !!r.error);
+      setTimeout(function () { msg(''); }, 5000);
+    } catch (e) {
+      msg('Nicht gestartet: ' + e.message, true);
+    } finally {
+      el('evBoostStart').disabled = false;
+      load();
+    }
+  }
+
+  async function stopBoost() {
+    el('evBoostStop').disabled = true;
+    try {
+      const res = await apiFetch('/api/ev/override', { method: 'DELETE' });
+      let body = {};
+      try { body = await res.json(); } catch (_) { /* leer */ }
+      if (!res.ok || !body.ok) { msg('Nicht beendet: ' + (body.error || ('HTTP ' + res.status)), true); return; }
+      if (body.error) { msg('Sofort laden beendet, aber die Wallbox meldet: ' + body.error, true); return; }
+      msg('Sofort laden beendet — es gilt wieder der EOS-Plan.');
+      setTimeout(function () { msg(''); }, 4000);
+    } catch (e) {
+      msg('Nicht beendet: ' + e.message, true);
+    } finally {
+      el('evBoostStop').disabled = false;
+      load();
+    }
+  }
+
   function render() {
     const tile = el('evTile');
     if (!tile || !data) return;
@@ -339,6 +428,7 @@
     el('evSocTarget').textContent = tgt;
     el('evSocNow').title = v.socSource ? 'Quelle: ' + v.socSource + (v.rangeKm > 0 ? ' · ' + v.rangeKm + ' km' : '') : '';
     renderState();
+    renderBoost();
     renderTimeline();
     renderSteps();
     renderSummary();
@@ -356,7 +446,7 @@
       data = body;
       try { document.dispatchEvent(new CustomEvent('dvhub:ev-data', { detail: body })); } catch (_) { /* alte Browser */ }
       // Kein Auto eingerichtet (EOS-Planung aus, keine Abfahrt, kein Ladepunkt): Kachel bleibt weg.
-      const any = body.optimizeEv || (body.departure && body.departure.enabled) || (body.vehicle && body.vehicle.connected !== null);
+      const any = body.optimizeEv || body.override || (body.departure && body.departure.enabled) || (body.vehicle && body.vehicle.connected !== null);
       if (!any) { el('evTile').hidden = true; return; }
       render();
     } catch (_) { /* naechster Takt */ }
@@ -415,6 +505,7 @@
   document.addEventListener('input', function (e) {
     if (!data) return;
     if (e.target.id === 'evTarget' || e.target.id === 'evDepTime') setDirty(true);
+    if (e.target.id === 'evBoostKw') boostTouched = true;
   });
   document.addEventListener('click', function (e) {
     if (!data) return;
@@ -430,6 +521,8 @@
     }
     if (e.target.id === 'evStepsToggle') { stepsOpen = !stepsOpen; renderSteps(); return; }
     if (e.target.id === 'evSave') { save(); return; }
+    if (e.target.id === 'evBoostStart') { startBoost(); return; }
+    if (e.target.id === 'evBoostStop') { stopBoost(); return; }
     if (e.target.id === 'evReset') { setDirty(false); msg(''); draft = draftFromData(); renderForm(); }
   });
 

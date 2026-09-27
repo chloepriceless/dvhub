@@ -848,6 +848,8 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 // StorCtl_Mod/OutWRte) müssen einen Neustart WÄHREND einer aktiven Sperre
 // überleben, sonst schreibt die Freigabe nur die pauschalen restoreDefaults.
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
+// E-Auto „Sofort laden“ (eos-evcc-bridge setOverride).
+const EV_OVERRIDE_PATH = path.join(DATA_DIR || __dirname, 'ev_override.json');
 
 function persistControlState() {
   try {
@@ -1196,7 +1198,15 @@ const eosEvccBridge = createEosEvccBridge({
     return createEvccAdapter(evccIntegration, () => bc.loadpoint, () => bc.stopMode);
   },
   isProActive: () => ctx.licenseService?.isProActive?.() !== false,
-  pushLog: (event, data) => ctx.pushLog?.(event, data)
+  isPaused: () => state.ctrl?.discretionaryWritesPaused === true,
+  pushLog: (event, data) => ctx.pushLog?.(event, data),
+  // „Sofort laden“ ueberlebt einen Neustart (Update mitten im Laden) — eigene
+  // kleine Datei, Laufzeitzustand gehoert nicht in config.json.
+  loadOverride: () => (fs.existsSync(EV_OVERRIDE_PATH) ? JSON.parse(fs.readFileSync(EV_OVERRIDE_PATH, 'utf8')) : null),
+  saveOverride: (ov) => {
+    if (ov) atomicWriteControlState(EV_OVERRIDE_PATH, ov);
+    else if (fs.existsSync(EV_OVERRIDE_PATH)) fs.unlinkSync(EV_OVERRIDE_PATH);
+  }
 });
 ctx.eosEvccBridge = eosEvccBridge;
 
