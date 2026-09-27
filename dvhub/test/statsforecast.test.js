@@ -5,7 +5,7 @@
 
 import { describe, it, mock, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createLoadForecast, formatLoadSlots, computeLoadConfidence } from '../services/forecast/load-forecast.js';
+import { createLoadForecast } from '../services/forecast/load-forecast.js';
 
 describe('StatsForecast delegation in load-forecast', () => {
   let mockBridge, mockGetCfg, mockPushLog, mockStore, mockVrmForecast, ctx;

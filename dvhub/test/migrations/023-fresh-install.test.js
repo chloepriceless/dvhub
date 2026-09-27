@@ -64,10 +64,6 @@ test('config.example.json bleibt valides JSON mit telemetry.database-Block', () 
 const DATABASE_URL = process.env.DATABASE_URL;
 const RUN_PG_TESTS = !!DATABASE_URL;
 
-// Per-Prozess-eindeutiger Prefix, damit Cleanup nie mit einem parallelen Runner
-// auf derselben DB rennt.
-const TEST_PREFIX = `_t023_${process.pid}_${Date.now()}`;
-
 describe('Phase 23-01 — Frischinstall-Migrationslauf (timescaledb:false skippt 014)', { skip: !RUN_PG_TESTS }, () => {
   /** @type {any} */
   let pool;

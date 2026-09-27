@@ -1,5 +1,5 @@
 // test/notification-providers.test.js -- Telegram + Pushover provider unit tests (INTG-07)
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 
@@ -106,7 +106,6 @@ describe('createTelegramProvider', () => {
 
   it('uses AbortController for timeout', () => {
     // Structural check -- provider source must reference AbortController
-    const src = createTelegramProvider.toString();
     // We check the module instead
     assert.ok(typeof createTelegramProvider === 'function');
   });

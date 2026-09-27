@@ -31,7 +31,7 @@ test('REFUNDABLE_UMLAGEN_CT_KWH is 4.996', () => {
 // --- Test 2: createMispelTracker initializes state.optimizer.mispel ---
 test('createMispelTracker initializes state.optimizer.mispel', () => {
   const state = makeState();
-  const tracker = createMispelTracker(state, makeCfg(), makeLog());
+  createMispelTracker(state, makeCfg(), makeLog());
 
   assert.ok(state.optimizer.mispel);
   assert.equal(state.optimizer.mispel.mode, 'pauschal');

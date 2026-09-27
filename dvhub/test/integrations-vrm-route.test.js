@@ -140,7 +140,7 @@ describe('Plan 20-05: /api/integrations/status vrm subtree (T-20-05-02 boolean-o
     // value-emitting expression in the status payload — only the boolean-set form.
     // We enforce this by asserting the status block does NOT emit `vrmToken:`
     // (with a colon, indicating a JSON key emission of the raw value).
-    const noRawToken = /vrmToken:\s*[^\!]/m.test(m[0]);
+    const noRawToken = /vrmToken:\s*[^!]/m.test(m[0]);
     assert.equal(noRawToken, false,
       "status payload must not emit vrmToken: (raw value) — only vrmTokenSet: boolean");
   });

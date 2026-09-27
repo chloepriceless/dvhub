@@ -489,7 +489,6 @@ describe('Family LAN-bypass + license gate (Option B / CONTEXT Amendment)', () =
         });
         const routes = createApiRoutes(ctx);
         const res = mockRes();
-        const pathname = path.split('?')[0];
         await routes.handleRequest(
           makeReqLanNoBearer('GET', path),
           res,

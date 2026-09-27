@@ -1586,7 +1586,6 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
   // -------------------------------------------------------------------------
   it('Test W4-8 (cache hit): pheat/spaghetti/cycles each serve cached on the 2nd call', async () => {
     let pheatCalls = 0;
-    let socCalls = 0;
     const dbQuery = async () => {
       pheatCalls++;
       const rows = [];
@@ -1594,7 +1593,6 @@ describe('Plan 09.3-04 Wave 4 — Pheat/Spaghetti/Cycles builders', () => {
       return { rows };
     };
     const querySeries = async ({ start }) => {
-      socCalls++;
       return makeSocRows({ start, values: [10, 50, 90, 50, 10], stepSec: 3600 });
     };
     const ctx = mockCtxWithStores({ querySeriesFn: querySeries, dbQueryFn: dbQuery });

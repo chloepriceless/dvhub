@@ -4,7 +4,7 @@
 // D-22 (null-safe when forecast/optimizer services missing).
 // See .planning/phases/03-waf-dashboard/03-RESEARCH.md Example 4 for mock pattern.
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFamilyService } from '../services/family/index.js';
 

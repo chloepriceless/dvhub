@@ -224,7 +224,7 @@ describe("Plan 20-06: /api/integrations/status 'forecast-providers' subtree (T-2
     assert.ok(fp);
     // Anti-leak: only key:boolean expressions (must NOT have `apiKey:` as a
     // value-emitting key alone — only `apiKeySet:`).
-    const hasRawApiKey = /apiKey:\s*[^\!S]/.test(fp[1]);
+    const hasRawApiKey = /apiKey:\s*[^!S]/.test(fp[1]);
     assert.equal(hasRawApiKey, false,
       'status payload must not emit raw apiKey: (only apiKeySet:boolean is allowed)');
   });

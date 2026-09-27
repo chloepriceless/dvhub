@@ -340,7 +340,7 @@ describe('GET /api/history/raw/export.csv', () => {
 
     const body = res._captured.body;
     // Strip BOM + header
-    const lines = body.replace(/^﻿/, '').split(/\r?\n/).filter(Boolean);
+    const lines = body.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
     assert.ok(lines.length >= 6, `expected ≥6 lines (header + 5 data), got ${lines.length}: ${lines.slice(0, 3)}`);
     // First line is header; data lines start at index 1
     for (let i = 1; i < lines.length; i++) {
@@ -389,7 +389,7 @@ describe('GET /api/history/raw/export.csv', () => {
     // CSV path (Plan 06) uses pool.connect() + Cursor
     const csvRes = await dispatch(ctx, makeReq(`/api/history/raw/export.csv?${params}`), routes);
     await waitForClose(csvRes);
-    const lines = csvRes._captured.body.replace(/^﻿/, '').split(/\r?\n/).filter(Boolean);
+    const lines = csvRes._captured.body.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
     const csvDataRowCount = lines.length - 1; // minus header
     assert.equal(
       csvDataRowCount,

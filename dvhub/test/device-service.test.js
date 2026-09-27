@@ -1,5 +1,5 @@
 // test/device-service.test.js -- Device Service unit tests (INTG-05)
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeviceService } from '../services/devices/index.js';
 

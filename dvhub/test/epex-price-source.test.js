@@ -2,7 +2,7 @@
 // (epex.priceSource) routing added 2026-06-17:
 //   'dvhub'  → dvhub.online primary + Energy-Charts silent fallback
 //   'public' → Energy-Charts directly, dvhub.online skipped
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEpexFetcher } from '../epex-fetch.js';
 
@@ -32,8 +32,6 @@ function makeCtx(priceSource) {
 
 describe('epex price source selection (epex.priceSource)', () => {
   const realFetch = globalThis.fetch;
-  let recorded;
-
   function installFetch(rec) {
     globalThis.fetch = async (url) => {
       const u = String(url);
@@ -49,7 +47,6 @@ describe('epex price source selection (epex.priceSource)', () => {
     };
   }
 
-  beforeEach(() => { recorded = []; });
   afterEach(() => { globalThis.fetch = realFetch; });
 
   it("priceSource='public' fetches Energy-Charts and never hits dvhub.online", async () => {

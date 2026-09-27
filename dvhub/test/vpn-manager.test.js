@@ -32,7 +32,7 @@ function makeCtx() {
 
 test('createVpnManager initialises state.vpn with disconnected status', () => {
   const ctx = makeCtx();
-  const mgr = createVpnManager(ctx);
+  createVpnManager(ctx);
 
   assert.equal(ctx.state.vpn.status, 'disconnected');
   assert.equal(ctx.state.vpn.enabled, false);

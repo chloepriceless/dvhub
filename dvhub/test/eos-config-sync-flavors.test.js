@@ -5,7 +5,7 @@
 // ohne dass jemand etwas umstellt. Umgekehrt darf gegen den alten Fork kein
 // Schlüssel geschrieben werden, den er nicht kennt — das war bisher ein
 // dauerhaft roter optionaler Task.
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 

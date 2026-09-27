@@ -14,7 +14,7 @@
 // Strategy: monkey-patch globalThis.fetch per test to return controlled responses;
 // restore between tests so we never hit the real upstream.
 
-import { describe, it, before, after, afterEach } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { probeSolcast } from '../services/forecast/solcast-client.js';

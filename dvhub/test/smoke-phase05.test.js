@@ -328,6 +328,10 @@ describe('Phase 05 Smoke Tests', () => {
   // ── 11. POST /api/config -- settings roundtrip preserves masked originals ──
 
   it('POST /api/config with *** preserves original values', async () => {
+    // NB: the *** -> stored-value restore happens INSIDE saveAndApplyConfig
+    // (routes-api.js: restoreRedacted). We mock that function here, so this is a
+    // smoke test of the route path (no crash, 200/ok) and that routes-api
+    // forwards the '***' sentinel through unchanged for the restore step.
     let savedConfig = null;
     const ctx = mockCtx({
       saveAndApplyConfig: (cfg) => {
@@ -345,6 +349,10 @@ describe('Phase 05 Smoke Tests', () => {
     assert.equal(res._captured.status, 200);
     const body = JSON.parse(res._captured.body);
     assert.equal(body.ok, true);
+    // routes-api must forward the '***' sentinel verbatim to saveAndApplyConfig,
+    // which is where restoreRedacted swaps in the stored originals.
+    assert.ok(savedConfig, 'saveAndApplyConfig was invoked');
+    assert.equal(savedConfig.apiToken, '***', 'the *** sentinel is forwarded to saveAndApplyConfig for restore');
   });
 
   // ── 13. GET /api/optimizer/status -- optimizer status endpoint ──

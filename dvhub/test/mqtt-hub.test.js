@@ -1,29 +1,6 @@
 // test/mqtt-hub.test.js -- MQTT Hub factory unit tests (INTG-02)
-import { describe, it, beforeEach, afterEach, mock } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-
-// ---------- mock helpers ----------
-
-function makeMockClient() {
-  const handlers = {};
-  return {
-    connected: false,
-    on(ev, fn) { handlers[ev] = fn; return this; },
-    subscribe(topic, _opts, cb) { if (cb) cb(null); },
-    publish(topic, payload, opts, cb) { if (typeof opts === 'function') { cb = opts; } if (cb) cb(null); },
-    end(force, cb) { if (typeof force === 'function') { cb = force; } if (cb) cb(); },
-    _handlers: handlers,
-    _simulateConnect() { this.connected = true; if (handlers.connect) handlers.connect(); },
-    _simulateMessage(topic, payload) { if (handlers.message) handlers.message(topic, Buffer.from(payload)); }
-  };
-}
-
-function makeMockAedesBroker() {
-  return {
-    handle: () => {},
-    close(cb) { if (cb) cb(); }
-  };
-}
 
 // ---------- Tests ----------
 
@@ -75,15 +52,9 @@ describe('config-model optional-section contract', () => {
 
 describe('createMqttHub', () => {
   let hub;
-  let mockClient;
-  let originalConnect;
-
-  beforeEach(async () => {
-    mockClient = makeMockClient();
-  });
 
   afterEach(async () => {
-    if (hub) { try { await hub.close(); } catch {} }
+    if (hub) { try { await hub.close(); } catch { /* ignore */ } }
     hub = null;
   });
 

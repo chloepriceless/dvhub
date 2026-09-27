@@ -1,6 +1,6 @@
 // test/mqtt-command-subscriber.test.js -- eingehende MQTT-Steuerbefehle
 // (2026-09-26, bidirektionale HA-Integration).
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMqttCommandSubscriber } from '../services/mqtt/command-subscriber.js';
 import { createMqttHub } from '../services/mqtt/index.js';

@@ -846,7 +846,7 @@ test('T-LIVESOC-RESERVE: Log dedupliziert pro Slot (zweiter Zyklus loggt nicht e
 // Abwesenheit von reason='grid_discharge_not_allowed'.
 
 test('25-01: Idle-Default (-40, source=default) passiert das EEG-Gate bei allowGridDischarge=false', async () => {
-  const { ctx, state, logs, writes } = makeCtx({
+  const { ctx, logs, writes } = makeCtx({
     mutate: ({ cfg, state }) => {
       cfg.optimizer = { enabled: false, allowGridCharge: false, allowGridDischarge: false };
       state.victron.soc = 50;
@@ -870,7 +870,7 @@ test('25-01: Idle-Default (-40, source=default) passiert das EEG-Gate bei allowG
 });
 
 test('25-02: dc_export_mode (-3000) passiert das EEG-Gate bei allowGridDischarge=false', async () => {
-  const { ctx, state, logs } = makeCtx({
+  const { ctx, logs } = makeCtx({
     mutate: ({ cfg, state }) => {
       cfg.optimizer = { enabled: false, allowGridCharge: false, allowGridDischarge: false };
       state.victron.soc = 50;

@@ -1,5 +1,5 @@
 // test/optimizer-service.test.js -- Integration tests for optimizer service factory.
-import { describe, test, mock, beforeEach } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createOptimizerService } from '../services/optimizer/index.js';
 
@@ -155,7 +155,6 @@ describe('Optimizer Service', () => {
     const svc = createOptimizerService(ctx);
     await svc.start();
     await new Promise(r => setTimeout(r, 100));
-    const runCount1 = state.optimizer.runCount;
     // Bump forecast version -- the poll timer would detect this
     bumpVersion();
     // Directly call the internal detection logic by checking version mismatch
@@ -168,9 +167,7 @@ describe('Optimizer Service', () => {
   test('run mutex prevents concurrent execution (isRunning guard)', async () => {
     const { ctx, state } = buildCtx();
     // Make buildForecastResponse slow
-    let callCount = 0;
     ctx.forecastService.buildForecastResponse = () => {
-      callCount++;
       return {
         meta: {},
         price: { resolution: '15min', slots: [{ start: new Date().toISOString(), end: new Date(Date.now() + 900000).toISOString(), ctKwh: 10, confidence: 0.8 }] },
