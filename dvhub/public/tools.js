@@ -1,7 +1,7 @@
 (function() {
 'use strict';
 const common = window.DVhubCommon || {};
-const { apiFetch, buildApiUrl } = common;
+const { apiFetch } = common;
 // Review 2026-06-10 (P2-4): escapeHtml was used 8× below but never imported —
 // every call threw ReferenceError inside try/catch, silently breaking the
 // Systeminfo and OS-update panels. Destructure from common with a fallback.

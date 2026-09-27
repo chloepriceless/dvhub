@@ -6,7 +6,6 @@ let currentRawConfig = {};
 let currentDraftConfig = {};
 let currentEffectiveConfig = {};
 let currentMeta = null;
-let currentHealth = null;
 let currentHistoryImportStatus = null;
 let currentHistoryImportResult = null;
 let historyImportBusy = false;
@@ -24,37 +23,8 @@ let batteryStagesValidation = [];
 let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
 let forecastStringsDraft = [];
-let forecastTierCache = null;
 
-const GROUP_ACCENTS = {
-  connection: 'green', transport: 'green', victron: 'green',
-  modbus: 'yellow', dvProxy: 'yellow', dv: 'yellow', control: 'yellow',
-  schedule: 'green', automation: 'yellow', dvControl: 'blue',
-  location: 'blue', standort: 'blue',
-  telemetry: 'cyan', vrm: 'cyan',
-  webserver: 'purple', http: 'purple', api: 'purple',
-  mqtt: 'orange',
-  epex: 'green', pricing: 'yellow', pvPlants: 'blue',
-  forecast: 'cyan', forecastGeneral: 'cyan', forecastLocation: 'blue',
-  forecastPv: 'green', forecastSolcast: 'yellow', forecastWeather: 'blue',
-  forecastLoad: 'orange', forecastRetention: 'purple'
-};
 
-function getGroupAccent(section) {
-  return GROUP_ACCENTS[section.id] || GROUP_ACCENTS[section.destination] || 'green';
-}
-
-function createConfigGroup(label, accent) {
-  const group = document.createElement('div');
-  group.className = 'config-group';
-  if (accent) group.dataset.accent = accent;
-  const kicker = document.createElement('div');
-  kicker.className = 'config-group-kicker';
-  // Kicker color comes from CSS [data-accent] rules — keeps design language in styles.css
-  kicker.textContent = label;
-  group.appendChild(kicker);
-  return group;
-}
 
 function createConfigRow(label, inputEl, opts) {
   const row = document.createElement('div');
@@ -903,12 +873,6 @@ function buildMetaText(meta) {
   return parts.join(' | ');
 }
 
-function renderFieldValue(field) {
-  return renderFieldValueFromConfigs(field, {
-    draftConfig: currentDraftConfig,
-    effectiveConfig: currentEffectiveConfig
-  });
-}
 
 function renderFieldValueFromConfigs(field, {
   draftConfig = currentDraftConfig,
@@ -1269,19 +1233,6 @@ function buildDestinationWorkspace(definitionLike, destinationId, { licenseActiv
   };
 }
 
-function createSummaryCard(title, text) {
-  const card = document.createElement('div');
-  card.className = 'config-row';
-  const label = document.createElement('span');
-  label.className = 'config-row-label';
-  label.textContent = title;
-  card.appendChild(label);
-  const val = document.createElement('strong');
-  val.className = 'config-row-value';
-  val.textContent = text;
-  card.appendChild(val);
-  return card;
-}
 
 // --- Forecast section helpers ---
 
@@ -1289,40 +1240,6 @@ function createSummaryCard(title, text) {
  * Render RAM tier info card for the forecast section header.
  * Reads tier info from cached /api/status or state.forecast.
  */
-function renderForecastTierInfo() {
-  const tierDiv = document.createElement('div');
-  tierDiv.className = 'config-row-grid sa-mt-loose';
-
-  const tierLabel = forecastTierCache
-    ? `Tier ${forecastTierCache.tier} (${forecastTierCache.totalMB} MB RAM)`
-    : 'Wird ermittelt...';
-
-  const row = document.createElement('div');
-  row.className = 'config-row';
-  const label = document.createElement('span');
-  label.className = 'config-row-label';
-  label.textContent = 'Erkannte RAM-Stufe';
-  row.appendChild(label);
-  const val = document.createElement('strong');
-  val.className = 'config-row-value';
-  val.id = 'forecastTierValue';
-  val.textContent = tierLabel;
-  row.appendChild(val);
-  tierDiv.appendChild(row);
-
-  // Fetch tier info if not cached
-  if (!forecastTierCache && typeof apiFetch === 'function') {
-    apiFetch(buildApiUrl('/api/status')).then(r => r.json()).then(data => {
-      if (data?.forecast?.tier) {
-        forecastTierCache = { tier: data.forecast.tier, totalMB: data.forecast.totalMB || '?' };
-        const el = document.getElementById('forecastTierValue');
-        if (el) el.textContent = `Tier ${forecastTierCache.tier} (${forecastTierCache.totalMB} MB RAM)`;
-      }
-    }).catch(() => { /* silent */ });
-  }
-
-  return tierDiv;
-}
 
 /**
  * Render multi-string editor for PV detailed configuration mode (D-11).
@@ -2041,54 +1958,6 @@ function renderPvPlantsEditor() {
   return section;
 }
 
-function renderEpexPriceSourceInfo() {
-  const section = document.createElement('section');
-  section.className = 'config-group';
-  section.dataset.accent = 'green';
-  section.innerHTML = `
-    <div class="config-group-kicker" data-accent="green">Preisquelle</div>
-    <p class="sa-help">Day-Ahead Börsenstrompreise (EPEX SPOT). Quelle wählbar oben unter <strong>Preisquelle</strong>.</p>
-    <div id="epexBacklogInfo" class="config-banner info sa-banner-inline-loose">
-      Lade Preis-Backlog...
-    </div>
-  `;
-  // Async load backlog info
-  setTimeout(() => {
-    const { apiFetch } = window.DVhubCommon || {};
-    if (!apiFetch) return;
-    Promise.all([
-      apiFetch('/api/status').then(r => r.json()).catch(() => null),
-      apiFetch('/api/config').then(r => r.json()).catch(() => null)
-    ]).then(([status, config]) => {
-      const el = document.getElementById('epexBacklogInfo');
-      if (!el) return;
-      const epex = status?.epex || {};
-      const data = epex.data || [];
-      const bzn = config?.epex?.bzn || status?.config?.epex?.bzn || 'DE-LU';
-      const priceSource = config?.epex?.priceSource || status?.config?.epex?.priceSource || 'dvhub';
-      const sourceLabel = priceSource === 'public' ? 'Energy-Charts (öffentlich)' : 'dvhub.online';
-      const updatedAt = fmtTs(epex.updatedAt);
-      const datapoints = data.length;
-      const hoursAvailable = Math.round(datapoints * 0.25); // 15min slots → hours
-      // Telemetry bounds for overall price history
-      const bounds = status?.telemetry || {};
-      const earliest = bounds.earliest ? new Date(bounds.earliest).toLocaleDateString('de-DE') : null;
-      const latest = bounds.latest ? new Date(bounds.latest).toLocaleDateString('de-DE') : null;
-      const backlogRange = earliest && latest ? `${earliest} bis ${latest}` : `${hoursAvailable}h heute`;
-      el.innerHTML = `
-        <strong>Bidding Zone:</strong> ${escapeHtml(bzn)} &nbsp;|&nbsp;
-        <strong>Letztes Update:</strong> ${escapeHtml(updatedAt)} &nbsp;|&nbsp;
-        <strong>Heute:</strong> ${escapeHtml(datapoints)} Slots (${escapeHtml(hoursAvailable)}h)
-        ${earliest ? `<br><strong>Telemetrie-Historie:</strong> ${escapeHtml(backlogRange)}` : ''}
-        <br><small class="sa-text-mute">Quelle: ${escapeHtml(sourceLabel)} → EPEX SPOT Day-Ahead Auktion</small>
-      `;
-    }).catch(() => {
-      const el = document.getElementById('epexBacklogInfo');
-      if (el) el.textContent = 'Preis-Backlog konnte nicht geladen werden.';
-    });
-  }, 500);
-  return section;
-}
 
 function renderPricingPeriodsEditor() {
   const section = document.createElement('section');
@@ -2460,7 +2329,6 @@ function applyConfigPayload(payload) {
   pvPlantsValidation = [];
   batteryStagesValidation = [];
   forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
-  forecastTierCache = null;
   settingsShellState = createSettingsShellState(definition);
   // Do NOT clobber a real stored token with the redacted placeholder: the config
   // payload always redacts apiToken to '***' (config-redaction.js), so the only
@@ -2482,7 +2350,6 @@ function setHealthBanner(message, kind = 'info') {
 }
 
 function renderHealth(payload) {
-  currentHealth = payload;
   const mount = document.getElementById('healthChecks');
   if (!mount) return;
   mount.innerHTML = '';
@@ -3449,14 +3316,14 @@ function initSettingsPage() {
       // (Feature nicht live, ml.mlEnabled=false) → kein /api/ml/status|accuracy-Fetch nötig.
       // Wieder einkommentieren, wenn der ML-Tab reaktiviert wird.
       // try { initMlTab(); } catch (_) {}
-      try { initVpnTab(); } catch (_) {}
-      try { loadHealth().catch(function(){}); } catch (_) {}
+      try { initVpnTab(); } catch (_) { /* best-effort lazy-init */ }
+      try { loadHealth().catch(function(){}); } catch (_) { /* best-effort lazy-init */ }
       if (typeof checkForUpdate === 'function') {
         var lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
         var cooldownMs = 10 * 60 * 1000;
         if (Date.now() - lastCheck > cooldownMs) {
           sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
-          try { checkForUpdate().catch(function(){}); } catch (_) {}
+          try { checkForUpdate().catch(function(){}); } catch (_) { /* best-effort lazy-init */ }
         }
       }
     }, 300);
@@ -3477,11 +3344,11 @@ function initSettingsPage() {
       // Phase 19: Forecast tab lazy-init — fires once per page load via the
       // window._forecastTabInit guard inside initForecastTab.
       if (target === 'forecast') {
-        setTimeout(function () { try { initForecastTab(); } catch (_) {} }, 0);
+        setTimeout(function () { try { initForecastTab(); } catch (_) { /* best-effort lazy-init */ } }, 0);
       }
       // Phase 21: EOS tab — bind the sync button on first activation.
       if (target === 'eos') {
-        setTimeout(function () { try { initEosTab(); } catch (_) {} }, 0);
+        setTimeout(function () { try { initEosTab(); } catch (_) { /* best-effort lazy-init */ } }, 0);
       }
     });
 
@@ -3517,8 +3384,13 @@ window.DVhubSettings = {
    Phase 05 — ML & AI Tab (D-27)
    ========================================================================= */
 var mlMaeSparklineChart = null;
+// ML-Tab ausgesetzt 2026-06-21 (ml.mlEnabled=false, Aufruf in initSettingsPage
+// auskommentiert). initMlTab + mlTabInitialized bewusst behalten für die
+// spätere Reaktivierung — daher eslint-disable statt Löschen.
+// eslint-disable-next-line no-unused-vars
 var mlTabInitialized = false;
 
+// eslint-disable-next-line no-unused-vars
 function initMlTab() {
   // Hash-jump is now handled by the page-load handler (scrollIntoView).
   // initMlTab itself is called eagerly at page-load in the stacked-sections
@@ -4827,48 +4699,56 @@ function renderMaeSparkline(data) {
     }
   }
 
-  // Phase 21 (operator request 2026-05-23) — EOS-Settings-Sync.
-  // Hängt sich an den "Mit DVhub-Werten synchronisieren"-Button im neuen
-  // Settings → EOS-Tab. Beim Klick: POST /api/eos/sync-from-dvhub, das
-  // backend pusht DVhubs Batterie/Standort/EMS-Mode in die EOS-Config.
-  function initEosTab() {
-    if (window._eosTabInit) return;
-    window._eosTabInit = true;
-    var btn = document.getElementById('eosSyncBtn');
-    var result = document.getElementById('eosSyncResult');
-    var iframe = document.getElementById('eosdashFrame');
-    if (!btn || !result) return;
-    btn.addEventListener('click', async function () {
-      btn.disabled = true;
-      var prevLabel = btn.textContent;
-      btn.textContent = 'Synchronisiere ...';
-      result.classList.remove('u-hidden', 'ok', 'warn', 'error');
-      result.textContent = '';
-      try {
-        var resp = await apiFetch('/api/eos/sync-from-dvhub', { method: 'POST' });
-        var body = await resp.json().catch(function () { return null; });
-        if (!body) {
-          result.classList.add('error');
-          result.textContent = 'Antwort konnte nicht gelesen werden (HTTP ' + resp.status + ').';
-          return;
-        }
-        var lines = [];
-        for (var k in (body.results || {})) {
-          var r = body.results[k];
-          lines.push((r && r.ok ? '✓' : '✗') + ' ' + k +
-            (r && !r.ok ? ' — ' + (r.body || r.error || 'HTTP ' + r.status) : ''));
-        }
-        result.classList.add(body.ok ? 'ok' : 'warn');
-        result.textContent = (body.ok ? 'Sync erfolgreich:' : 'Sync mit Warnungen:') + '\n' + lines.join('\n');
-        // Reload the iframe to surface the new config in EOSdash.
-        if (iframe) iframe.src = iframe.src;
-      } catch (e) {
-        result.classList.add('error');
-        result.textContent = 'Netzwerkfehler beim Sync: ' + (e && e.message ? e.message : e);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = prevLabel;
-      }
-    });
-  }
 })();
+
+// Phase 21 (operator request 2026-05-23) — EOS-Settings-Sync.
+// Hängt sich an den "Mit DVhub-Werten synchronisieren"-Button im neuen
+// Settings → EOS-Tab. Beim Klick: POST /api/eos/sync-from-dvhub, das
+// backend pusht DVhubs Batterie/Standort/EMS-Mode in die EOS-Config.
+// WICHTIG: Modul-Scope (NICHT in der initLicenseSection-IIFE), damit der
+// Aufruf in initSettingsPage() (EOS-Tab-Klick, ~Z.3484) die Funktion via
+// Hoisting erreicht. Vorher lag die Definition in der IIFE → der Aufruf warf
+// still einen ReferenceError (vom leeren catch verschluckt) und der Sync-Button
+// wurde nie gebunden.
+function initEosTab() {
+  if (window._eosTabInit) return;
+  window._eosTabInit = true;
+  var btn = document.getElementById('eosSyncBtn');
+  var result = document.getElementById('eosSyncResult');
+  var iframe = document.getElementById('eosdashFrame');
+  if (!btn || !result) return;
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    var prevLabel = btn.textContent;
+    btn.textContent = 'Synchronisiere ...';
+    result.classList.remove('u-hidden', 'ok', 'warn', 'error');
+    result.textContent = '';
+    try {
+      var resp = await apiFetch('/api/eos/sync-from-dvhub', { method: 'POST' });
+      var body = await resp.json().catch(function () { return null; });
+      if (!body) {
+        result.classList.add('error');
+        result.textContent = 'Antwort konnte nicht gelesen werden (HTTP ' + resp.status + ').';
+        return;
+      }
+      var lines = [];
+      for (var k in (body.results || {})) {
+        var r = body.results[k];
+        lines.push((r && r.ok ? '✓' : '✗') + ' ' + k +
+          (r && !r.ok ? ' — ' + (r.body || r.error || 'HTTP ' + r.status) : ''));
+      }
+      result.classList.add(body.ok ? 'ok' : 'warn');
+      result.textContent = (body.ok ? 'Sync erfolgreich:' : 'Sync mit Warnungen:') + '\n' + lines.join('\n');
+      // Reload the iframe to surface the new config in EOSdash.
+      // (Re-assigning src via a temp var re-triggers navigation without a
+      // no-self-assign lint violation.)
+      if (iframe) { var reloadSrc = iframe.src; iframe.src = reloadSrc; }
+    } catch (e) {
+      result.classList.add('error');
+      result.textContent = 'Netzwerkfehler beim Sync: ' + (e && e.message ? e.message : e);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+    }
+  });
+}

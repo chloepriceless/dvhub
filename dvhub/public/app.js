@@ -701,7 +701,6 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
 
   // --- Colors ---
   const chartPositive = cssVar('--chart-positive', '#0077ff');
-  const chartNegative = cssVar('--chart-negative', '#ef4444');
   const chartAutomation = cssVar('--schedule-automation-yellow', '#eab308');
   const chartUserSlot = cssVar('--schedule-user-cyan', '#56d4e0');
   // Optimizer/EOS rule highlight — same Aurora --violet token the
@@ -721,20 +720,13 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const chartLabel = cssVar('--chart-label', '#9ca3af');
   const chartGrid = cssVar('--chart-grid', '#e5e7eb20');
   const chartNow = cssVar('--chart-now', '#facc15');
-  const chartNowBg = cssVarAlpha('--bg-elev', 0.93, '#1a1a2eee');
-  const chartTipBg = cssVarAlpha('--bg-elev', 0.8, '#1a1a2ecc');
   // VRM/Sunset/Sunrise overlay accents (annotation lines) — mapped to Aurora
   // semantic colour tokens. Each falls back to the pre-Aurora literal so a
   // failure to find the var still paints something sensible.
   const chartVrmCyan = cssVar('--cyan', '#22d3ee');
-  const chartPvIstYellow = cssVar('--yellow', '#f5c451');
   const chartLoadDim = cssVarAlpha('--chart-axis', 0.7, 'rgba(191,199,210,0.7)');
-  const chartLoadActual = cssVarAlpha('--chart-axis', 0.9, 'rgba(191,199,210,0.9)');
-  const chartGridLine = cssVar('--chart-negative-highlight', '#ff6b6b90');
   const chartSunset = cssVarAlpha('--orange', 0.7, 'rgba(251,146,60,0.7)');
-  const chartSunsetLabel = cssVarAlpha('--orange', 0.9, 'rgba(251,146,60,0.9)');
   const chartSunrise = cssVarAlpha('--yellow', 0.6, 'rgba(250,204,21,0.6)');
-  const chartSunriseLabel = cssVarAlpha('--yellow', 0.85, 'rgba(250,204,21,0.85)');
   const chartNegativeTint = cssVarAlpha('--chart-negative', 0.1, 'rgba(239, 68, 68, 0.10)');
   const chartNegativeRule = cssVarAlpha('--chart-negative', 0.4, 'rgba(239, 68, 68, 0.40)');
   const chartSelectionDim = cssVarAlpha('--bg-0', 0.6, 'rgba(10, 20, 40, 0.6)');
@@ -1010,7 +1002,6 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   }
 
   // --- "Jetzt" annotation line ---
-  const nowDate = new Date(nowTs);
   // Find closest data index for the now line
   let nowIdx = 0;
   for (let i = 0; i < data.length; i++) {
@@ -2378,7 +2369,6 @@ function ensureLogLevelFilterUi() {
 // alongside the dynamic template literal so a CSS/JS audit grep
 // (e.g., grep -E 'log-level-(debug|info|warn|error)') finds them. The
 // constant is also used as the level allowlist when sanitising row.level.
-const LOG_LEVEL_BADGE_CLASSES = ['log-level-debug', 'log-level-info', 'log-level-warn', 'log-level-error'];
 
 function rerenderDashboardLog() {
   const logBox = document.getElementById('logBox');
@@ -2526,7 +2516,6 @@ async function manualWriteMaxDischarge() {
 
 /* --- Schedule --- */
 
-let scheduleCache = { rules: [], config: {} };
 
 function collectScheduleRulesFromRowState(rows) {
   if (!Array.isArray(rows)) return [];
@@ -3429,7 +3418,6 @@ function collectScheduleRows() {
 async function loadScheduleDash() {
   const res = await apiFetch('/api/schedule');
   const data = await res.json();
-  scheduleCache = data || { rules: [], config: {} };
   clearScheduleRows();
   const rules = Array.isArray(data.rules) ? data.rules : [];
 

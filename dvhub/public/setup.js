@@ -376,11 +376,6 @@ function goToPreviousSetupStep(state) {
   return setActiveSetupStep(state, previousStepId);
 }
 
-function formatReviewValue(value, fallback = 'Nicht gesetzt') {
-  if (isBlankValue(value)) return fallback;
-  if (typeof value === 'boolean') return value ? 'Aktiv' : 'Deaktiviert';
-  return String(value);
-}
 
 function hasOwnDraftValue(state, path) {
   return hasPath(state?.draftConfig, path) && !isBlankValue(getPath(state?.draftConfig, path));
@@ -431,28 +426,6 @@ function collectInheritedDvControlNotes(state) {
   return notes;
 }
 
-function buildInheritedSetupInfoSections(state) {
-  const sections = [];
-  const meterNotes = collectInheritedMeterNotes(state);
-  const dvControlNotes = collectInheritedDvControlNotes(state);
-
-  if (meterNotes.length) {
-    sections.push({
-      id: 'meter',
-      title: 'Meter-Verbindung',
-      notes: meterNotes
-    });
-  }
-  if (dvControlNotes.length) {
-    sections.push({
-      id: 'dvControl',
-      title: 'DV-Register',
-      notes: dvControlNotes
-    });
-  }
-
-  return sections;
-}
 
 function validateSetupSubmissionConfig(config, state = setupWizardState) {
   const baseState = state || setupWizardState || {};

@@ -110,7 +110,7 @@ export default [
     // Until that lands, these tools.js-defined functions are real globals from
     // settings.js's point of view, not undefined references.
     files: ['public/settings.js'],
-    languageOptions: { globals: { checkForUpdate: 'readonly', initEosTab: 'readonly' } },
+    languageOptions: { globals: { checkForUpdate: 'readonly' } },
   },
   {
     // Pre-existing `eslint-disable-next-line no-console` comments predate this

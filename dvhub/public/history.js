@@ -89,7 +89,7 @@ function setHidden(id, hidden) {
   if (element) element.hidden = Boolean(hidden);
 }
 
-function valueOf(item, key) {
+function numField(item, key) {
   return Number(item?.[key] || 0);
 }
 
@@ -325,16 +325,15 @@ function renderKpis(summary) {
   // beim offiziellen Monatsmarktwert des Backends — der JMW-Override unten
   // darf dann NICHT greifen (er würde die korrekte Backend-Zahl verfälschen).
   const marketValueModeAnnual = (summary?.meta?.marketPremium?.marketValueMode || 'annual') === 'annual';
-  let mvCtKwh = null;
+  // NB: only mvSource (Herkunft) wird unten noch gebraucht — der Marktwert selbst
+  // (mvCtKwh) war früher hier zwischengespeichert, die Prämienrechnung unten leitet
+  // ihn aber direkt aus selfYearCached ab (JMW-basiert), daher entfernt.
   let mvSource = 'none';
   if (hasFiniteNumber(selfYearCached)) {
-    mvCtKwh = Number(selfYearCached);
     mvSource = 'year_derived';
   } else if (hasFiniteNumber(kpis?.periodMarketValueCtKwh)) {
-    mvCtKwh = Number(kpis.periodMarketValueCtKwh);
     mvSource = 'period_official';
   } else if (hasFiniteNumber(kpis?.annualMarketValueCtKwh)) {
-    mvCtKwh = Number(kpis.annualMarketValueCtKwh);
     mvSource = 'annual_official';
   }
   // Gesamteinnahmen zeigt die BERECHNETE Marktprämie (EEG-Marktprämie AW − Marktwert,
@@ -398,7 +397,7 @@ function renderKpis(summary) {
               window._historySelfYearMvCache[yr] = v;
               window._historySelfYearMvInflight[yr] = false;
               if (historyState.lastSummary) {
-                try { renderKpis(historyState.lastSummary); } catch {}
+                try { renderKpis(historyState.lastSummary); } catch { /* re-render best-effort */ }
               }
             })
             .catch(() => { window._historySelfYearMvInflight[yr] = false; });
@@ -841,7 +840,7 @@ function baselineTotalCostEur(item) {
 
 function actualCostEur(item) {
   if (!item) return 0;
-  return round2(importCostEur(item) + valueOf(item, 'pvCostEur') + valueOf(item, 'batteryCostEur'));
+  return round2(importCostEur(item) + numField(item, 'pvCostEur') + numField(item, 'batteryCostEur'));
 }
 
 function importCostEur(item) {
@@ -851,12 +850,12 @@ function importCostEur(item) {
 
 function cashNetEur(item) {
   if (!item) return 0;
-  return round2(valueOf(item, 'exportRevenueEur') - importCostEur(item));
+  return round2(numField(item, 'exportRevenueEur') - importCostEur(item));
 }
 
 function savedMoneyEur(item) {
   if (!item) return 0;
-  return round2(valueOf(item, 'avoidedImportGrossEur') - valueOf(item, 'pvCostEur') - valueOf(item, 'batteryCostEur'));
+  return round2(numField(item, 'avoidedImportGrossEur') - numField(item, 'pvCostEur') - numField(item, 'batteryCostEur'));
 }
 
 function grossReturnEur(item) {
@@ -868,7 +867,7 @@ function grossReturnEur(item) {
 function actualNetEur(item) {
   const explicit = Number(item?.netEur);
   if (Number.isFinite(explicit)) return round2(explicit);
-  return round2(valueOf(item, 'exportRevenueEur') - actualCostEur(item));
+  return round2(numField(item, 'exportRevenueEur') - actualCostEur(item));
 }
 
 function isAggregateView(view) {
@@ -1181,15 +1180,6 @@ function renderAggregateTable(mountId, summary) {
 
 
 
-function linePath(points, width, height, min, max) {
-  if (!points.length) return '';
-  const span = max - min || 1;
-  return points.map((point, index) => {
-    const x = points.length === 1 ? width / 2 : (index / (points.length - 1)) * width;
-    const y = height - (((point - min) / span) * height);
-    return `${index === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`;
-  }).join(' ');
-}
 
 function linePathWithOffset(points, width, height, min, max, xOffset, yOffset = 0) {
   if (!points.length) return '';
@@ -1250,25 +1240,6 @@ function xAxisTickMeta(items, maxLabels = 6) {
   ));
 }
 
-function bindLineChartPointer(mount, mountId, items, rerender) {
-  if (typeof mount.querySelector !== 'function') return;
-  const hoverSurface = mount.querySelector('.history-chart-hover-surface');
-  if (!hoverSurface || typeof hoverSurface.addEventListener !== 'function') return;
-  const setIndexFromPointer = (event) => {
-    const touch = event?.touches?.[0] || event;
-    const rect = typeof hoverSurface.getBoundingClientRect === 'function'
-      ? hoverSurface.getBoundingClientRect()
-      : { left: 0, width: 1 };
-    const widthValue = Math.max(Number(rect.width || 0), 1);
-    const ratio = Math.max(0, Math.min(1, (Number(touch?.clientX || 0) - Number(rect.left || 0)) / widthValue));
-    historyState.chartCursorByMount[mountId] = Math.round(ratio * Math.max(items.length - 1, 0));
-    rerender();
-  };
-  hoverSurface.addEventListener('mousemove', setIndexFromPointer);
-  hoverSurface.addEventListener('mouseenter', setIndexFromPointer);
-  hoverSurface.addEventListener('touchstart', setIndexFromPointer, { passive: true });
-  hoverSurface.addEventListener('touchmove', setIndexFromPointer, { passive: true });
-}
 
 function bindBarChartPointer(mount, mountId, items, rerender) {
   if (typeof mount.querySelectorAll !== 'function') return;
@@ -1518,46 +1489,6 @@ function stackHeight(value, max) {
   return Math.max(12, Math.round((Number(value) / max) * 128));
 }
 
-function renderRevenueCostBars(mountId, items) {
-  const mount = byId(mountId);
-  if (!mount) return;
-  if (!Array.isArray(items) || !items.length) {
-    mount.innerHTML = '<div class="history-chart-empty">Keine Daten für diese Ansicht.</div>';
-    return;
-  }
-
-  const max = Math.max(...items.flatMap((item) => [
-    Number(item?.exportRevenueEur || 0),
-    baselineTotalCostEur(item)
-  ]), 0.01);
-
-  mount.innerHTML = `
-    <div class="history-stack-chart">
-      <div class="history-chart-legend">
-        <span><i class="history-legend-swatch history-bar-revenue"></i>Erlös</span>
-        <span><i class="history-legend-swatch history-bar-cost"></i>Kosten</span>
-      </div>
-      <div class="history-bars">
-        ${items.map((item) => `
-          <div class="history-bar-card">
-            <div class="history-stack history-stack-compare">
-              <div class="history-bar history-bar-revenue" data-bar-height="${stackHeight(item?.exportRevenueEur, max)}"></div>
-              <div class="history-bar history-bar-cost" data-bar-height="${stackHeight(baselineTotalCostEur(item), max)}"></div>
-            </div>
-            <strong>${escapeHtml(item.label || '-')}</strong>
-            <span>Export ${fmtKwh(item?.exportKwh)}</span>
-            <span>Erlös ${fmtEur(item?.exportRevenueEur)}</span>
-            <span>Kosten ${fmtEur(baselineTotalCostEur(item))}</span>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-  // CSP-safe: apply data-bar-height to each .history-bar after innerHTML
-  // (inline style="height:..." in innerHTML is blocked by style-src without
-  // 'unsafe-inline'; data-attr + property setter is allowed).
-  mount.querySelectorAll('[data-bar-height]').forEach((el) => { el.style.height = el.dataset.barHeight + 'px'; });
-}
 
 function renderCombinedPeriodBars(mountId, items) {
   const mount = byId(mountId);
@@ -1677,22 +1608,6 @@ function renderCombinedPeriodBars(mountId, items) {
   bindBarChartPointer(mount, mountId, items, () => renderCombinedPeriodBars(mountId, items));
 }
 
-function renderPriceList(mountId, items) {
-  const mount = byId(mountId);
-  if (!mount) return;
-  mount.innerHTML = `
-    <div class="history-price-list">
-      ${items.map((item) => `
-        <div class="history-price-row">
-          <strong>${escapeHtml(item.label || '-')}</strong>
-          <span>Marktpreis ${fmtCt(item.marketPriceCtKwh)}</span>
-          <span>Bezug ${fmtCt(item.userImportPriceCtKwh)}</span>
-          <span>${item?.estimated || item?.incomplete ? (item.incomplete ? 'offen' : 'geschätzt') : 'gemessen'}</span>
-        </div>
-      `).join('')}
-    </div>
-  `;
-}
 
 function renderAggregatePriceHint(mountId) {
   const mount = byId(mountId);

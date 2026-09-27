@@ -18,9 +18,7 @@
   var POLL_INTERVAL_MS = 5000;              // D-06 (match 5s Victron poll cycle)
   var DEVICE_THRESHOLD_W = 5;               // Geräte erst ab 5W anzeigen (D-11; 50→5 am 2026-06-17 für kleine Verbraucher/Shelly)
   var LS_SLOTS_KEY = 'dvhub.family.slots';  // Pitfall 3 — namespaced
-  var LS_OFFLINE_GRACE_POLLS = 2;           // D-22 — show banner after 2 failed polls
   var lastStatus = null;
-  var lastStatusAt = 0;
   var failedPolls = 0;
 
   function apiFetchCompat(path, init) {
@@ -1178,7 +1176,6 @@
     var tx = document.createElementNS(NS, 'text'); tx.setAttribute('fill', fl.hex); tx.setAttribute('font-family', 'Inter,sans-serif'); tx.setAttribute('font-size', '11'); tx.setAttribute('font-weight', '700'); tx.setAttribute('opacity', '0.85'); tx.setAttribute('text-anchor', 'middle'); tx.id = 'ft-' + fl.id; fg.appendChild(tx); lblEls[fl.id] = tx;
     g.appendChild(fg);
   }
-  function buildFlows() { var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; particleGroupEls = {}; pathCoords = {}; lastFlowDirection = {}; flows.forEach(function (fl) { addFlowToSvg(g, fl); }); }
   var lastDeviceFlows = [];
   function rebuildAllWithDevices(visibleDevices) {
     var g = document.getElementById('flowGroup'); g.innerHTML = ''; pathEls = {}; lblEls = {}; particleGroupEls = {}; pathCoords = {}; lastFlowDirection = {};
@@ -1620,7 +1617,6 @@
       var data = await res.json();
       if (!data.ok) throw new Error(data.error || 'not ok');
       lastStatus = data;
-      lastStatusAt = Date.now();
       failedPolls = 0;
       // Plan 08-11 Task 2: SW + offline-banner removed. DVhub is a LAN-only
       // app — when the server is unreachable the dashboard simply keeps the
@@ -1720,7 +1716,6 @@
     });
 
     sr('family.ev', function () {
-      var evMode = ev.mode || 'idle';
       // Part B (checkpoint round 5) — surface the Tesla state-of-charge on the
       // EV tag, Aurora-styled, driven entirely from the top-level data.tesla
       // object. The Tesla integration (TeslaMate) delivers live SoC / charge
@@ -1771,7 +1766,7 @@
         if (tesla.stale) {
           var stWord = tesla.state === 'asleep' ? 'schläft' : 'offline';
           var sinceShort = '';
-          if (tesla.since) { try { sinceShort = new Date(tesla.since).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (_) {} }
+          if (tesla.since) { try { sinceShort = new Date(tesla.since).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (_) { /* keep default */ } }
           setText('ts-ev', 'veraltet · ' + stWord + (sinceShort ? ' seit ' + sinceShort : ''));
         } else {
           setText('ts-ev', teslaCharging ? 'Lädt gerade' : (tesla.pluggedIn === true ? 'Bereit' : 'Geparkt'));
@@ -2368,7 +2363,6 @@
      ======================================================================= */
   var screensaverOn = false;
   var inactivityTimer = null;
-  var lastActivityAt = Date.now();
   var presencePollTimer = null;
 
   function currentHHMM() {
@@ -2400,7 +2394,6 @@
   }
 
   function resetInactivity() {
-    lastActivityAt = Date.now();
     if (inactivityTimer) { clearTimeout(inactivityTimer); inactivityTimer = null; }
     if (screensaverOn) exitScreensaver();
     var timeoutSec = computeTimeout();

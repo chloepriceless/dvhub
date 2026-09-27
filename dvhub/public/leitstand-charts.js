@@ -20,21 +20,6 @@
     var c = window.DVhubCommon;
     return (c && c.aurChartColorAlpha) ? c.aurChartColorAlpha(name, alpha, fallback) : fallback;
   }
-  function getChartColors() {
-    // Fall back to legacy palette if common.js failed to load — charts must
-    // still paint even if the helper isn't available.
-    return {
-      pvForecast:       _aur('--yellow',                       '#e3b341'),
-      pvActual:         _aurA('--yellow', 0.5,                 'rgba(227, 179, 65, 0.5)'),
-      loadForecast:     _aur('--blue',                         '#58a6ff'),
-      scheduleInternal: _aur('--schedule-user-cyan',           '#0077FF'),
-      scheduleEos:      _aur('--green',                        '#39E06F'),
-      scheduleSma:      _aur('--schedule-automation-yellow',   '#f2c94c'),
-      savingsPositive:  _aur('--chart-positive',               '#39E06F'),
-      savingsNegative:  _aur('--chart-negative',               '#ff7b72'),
-      sparkline:        _aur('--text-dim',                     '#5a6a8a')
-    };
-  }
 
   const REFRESH_MS = 30000;
 
@@ -124,7 +109,6 @@
   // ---------------------------------------------------------------------------
   // Chart instances (module scope — reuse on refresh, never recreate)
   // ---------------------------------------------------------------------------
-  let refreshTimer = null;
 
   // ---------------------------------------------------------------------------
   // Data fetching helpers
@@ -1095,7 +1079,6 @@
     var totals = forecastData.dailyTotals || null;
     var pvKwh = totals?.today?.pvKwh != null ? totals.today.pvKwh : pvKwhRest;
     var loadKwh = totals?.today?.loadKwh != null ? totals.today.loadKwh : loadKwhRest;
-    var rawKwh = rawKwhRest; // ML-vs-raw delta still relates to the future portion
     if (totals?.tomorrow?.pvKwh != null && totals.tomorrow.pvKwh > 0) pvKwhTomorrow = totals.tomorrow.pvKwh;
     if (totals?.tomorrow?.loadKwh != null && totals.tomorrow.loadKwh > 0) loadKwhTomorrow = totals.tomorrow.loadKwh;
 
@@ -1448,7 +1431,6 @@
     ]);
 
     var forecastData = results[0].status === 'fulfilled' ? results[0].value : null;
-    var optimizerData = results[1].status === 'fulfilled' ? results[1].value : null;
     var mlStatus = results[2].status === 'fulfilled' ? results[2].value : null;
     var optimizerPlan = results[3].status === 'fulfilled' ? results[3].value : null;
     var statusData = results[4].status === 'fulfilled' ? results[4].value : null;
@@ -1486,7 +1468,7 @@
     initOverlayToggle();
     initForecastComparisonChart();
     refreshAllCharts();
-    refreshTimer = setInterval(refreshAllCharts, REFRESH_MS);
+    setInterval(refreshAllCharts, REFRESH_MS);
   }
 
   if (document.readyState === 'loading') {
