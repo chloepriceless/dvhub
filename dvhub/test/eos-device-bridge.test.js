@@ -53,6 +53,32 @@ describe('createEosDeviceBridge', () => {
     assert.equal(act.calls.length, 0);
   });
 
+  it('Not-Halt: friert ein — kein Schalten, auch nicht fuer entfernte Geraete; danach normal', async () => {
+    const now = () => Date.parse('2026-09-26T13:30:00.000Z');
+    const rows = [
+      { ts_utc: '2026-09-26T13:00:00.000Z', appliances: { appl_dw_running: 1 } },
+      { ts_utc: '2026-09-26T14:00:00.000Z', appliances: { appl_dw_running: 0 } },
+    ];
+    const act = fakeActuator();
+    const state = { ctrl: { discretionaryWritesPaused: true }, optimizer: { eosApplianceIdMap: { appl_dw: 'dw' } }, meter: { grid_total_w: -3000 } };
+    let devices = [dishwasher, heater];
+    const b = createEosDeviceBridge({ getCfg: () => ({ devices }), getSolution: async () => ({ rows }), actuator: act, state, now });
+    assert.equal((await b.tick()).skipped, 'paused');
+    assert.equal(act.calls.length, 0);
+    state.ctrl.discretionaryWritesPaused = false;
+    await b.tick();
+    assert.ok(act.calls.some((c) => c.id === 'dw' && c.on === true));
+    const n = act.calls.length;
+    // Geraet entfernt waehrend Not-Halt: kein Ausschalt-Befehl, bis er aufgehoben ist.
+    state.ctrl.discretionaryWritesPaused = true;
+    devices = [heater];
+    await b.tick();
+    assert.equal(act.calls.length, n);
+    state.ctrl.discretionaryWritesPaused = false;
+    await b.tick();
+    assert.ok(act.calls.slice(n).some((c) => c.id === 'dw' && c.on === false));
+  });
+
   it('deferrable: turns ON when EOS dispatch covers now', async () => {
     const now = () => Date.parse('2026-09-26T13:30:00.000Z');
     const rows = [

@@ -161,6 +161,13 @@ export function createMqttHub(ctx) {
   }
 
   async function startEmbeddedBroker(mqttCfg) {
+    // Review 2026-09-27: connect() nach disconnect() laeuft ueber start() hier
+    // durch, der Broker lief aber weiter. Ein zweiter wuerde die Referenzen auf
+    // den ersten ueberschreiben (EADDRINUSE, alter Broker nie mehr schliessbar).
+    if (aedesBroker && netServer?.listening) {
+      status.embeddedListening = true;
+      return;
+    }
     try {
       // B5 (2026-07-02): aedes 1.x removed the default export + sync
       // constructor (breaking change) — named export + async factory now.
@@ -187,10 +194,18 @@ export function createMqttHub(ctx) {
           logEvent('info', `Embedded broker listening on 127.0.0.1:${port}`);
           resolve();
         });
-        netServer.on('error', (err) => {
+        const server = netServer;
+        const broker = aedesBroker;
+        server.on('error', (err) => {
+          // Fehler nach erfolgreichem listen() nur melden — den laufenden
+          // Broker nicht verwerfen.
+          if (server.listening) { logEvent('warn', `Embedded broker error: ${err.message}`); return; }
           logEvent('warn', `Embedded broker port ${port} in use, skipping: ${err.message}`);
-          aedesBroker = null;
-          netServer = null;
+          // Den gerade erzeugten, nie lauschenden Broker schliessen statt ihn
+          // nur zu vergessen.
+          try { broker.close(() => {}); } catch { /* egal */ }
+          if (aedesBroker === broker) aedesBroker = null;
+          if (netServer === server) netServer = null;
           status.embeddedListening = false;
           resolve(); // Don't reject — continue without embedded broker
         });

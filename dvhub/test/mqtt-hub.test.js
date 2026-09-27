@@ -209,6 +209,42 @@ describe('createMqttHub — embedded broker (real aedes + real mqtt.js client)',
   });
 });
 
+// Review 2026-09-27: Trennen → Verbinden im Integrationen-Tab startete einen
+// zweiten Embedded-Broker auf demselben Port; der erste lief weiter und war
+// nicht mehr schliessbar (close() hing bzw. Port blieb belegt).
+describe('createMqttHub — disconnect() + connect() reuses the embedded broker', () => {
+  let hub;
+  afterEach(async () => { if (hub) { await hub.close(); hub = null; } });
+
+  it('keeps one broker, reconnects, and close() frees the port', async () => {
+    const net = await import('node:net');
+    const port = 18832;
+    const logs = [];
+    const { createMqttHub } = await import('../services/mqtt/index.js');
+    hub = createMqttHub({
+      getCfg: () => ({ mqtt: { enabled: true, brokerUrl: '', embeddedBroker: { enabled: true, port }, topicPrefix: 'dvhub', username: '', password: '' } }),
+      pushLog: (msg) => logs.push(msg)
+    });
+    await hub.start();
+    for (let i = 0; i < 50 && !hub.connected; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(hub.connected, true);
+
+    await hub.disconnect();
+    await hub.connect();
+    for (let i = 0; i < 50 && !hub.connected; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(hub.connected, true, 'reconnects to the still-running broker');
+    assert.equal(hub.getStatus().embeddedListening, true);
+    assert.ok(!logs.some((l) => String(l).includes('in use')), 'no second broker on the same port');
+
+    await hub.close();
+    hub = null;
+    // Port must be free again — would fail if an orphaned broker kept listening.
+    const probe = net.createServer();
+    await new Promise((resolve, reject) => { probe.once('error', reject); probe.listen(port, '127.0.0.1', resolve); });
+    await new Promise((resolve) => probe.close(resolve));
+  });
+});
+
 // C1 (2026-07-02): reproduces the actual failure class that caused the proven
 // prod shutdown hang — a broker that accepts the TCP connection but never
 // behaves like a real MQTT broker (never sends CONNACK, never acks

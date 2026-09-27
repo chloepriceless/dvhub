@@ -9,7 +9,7 @@
 //   modulating (Elwa/AC Thor): DVhub-seitiger PV-Überschuss-Regler
 //     (computeHeaterPowerW) → Leistungs-Sollwert am Endpunkt.
 //
-// Gate: nur wenn nicht Lese-Modus. Jedes Gerät hat zusätzlich seinen enabled-Flag.
+// Gate: nur wenn nicht Lese-Modus und kein Not-Halt. Jedes Gerät hat zusätzlich seinen enabled-Flag.
 
 import { safeInterval } from '../safe-async.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
@@ -94,6 +94,11 @@ export function createEosDeviceBridge(deps) {
     try {
       const cfg = getCfg() || {};
       if (isReadOnlyMode()) return { ok: false, skipped: 'read_only' };
+      // Not-Halt (state.ctrl.discretionaryWritesPaused) friert wie ueberall im
+      // Code ein: Geraete bleiben im letzten Zustand, kein Schalten, auch nicht
+      // das Ausschalten entfernter Geraete. Nach dem Aufheben regelt der
+      // naechste Takt normal weiter.
+      if (state?.ctrl?.discretionaryWritesPaused === true) return { ok: false, skipped: 'paused' };
       const { devices } = loadSchedulableDevices(cfg);
       const enabled = devices.filter((d) => d.enabled !== false);
       // Zuvor gesteuerte, jetzt entfernte/deaktivierte Geräte einmal ausschalten.
