@@ -1,0 +1,257 @@
+/* ════════════════════════════════════════════════════════════
+   DVhub Installateurs-Portal — Aurora Design (übernommen aus
+   dvhub/public/dvhub-app.css, gleicher Token-Satz wie der Leitstand)
+   ════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── brand accents (geteilt mit DVhub-App) ── */
+  --blue:#1f8dff;
+  --cyan:#34dbff;
+  --violet:#a78bff;
+  --yellow:#ffd421;
+  --green:#3ee0a0;
+  --red:#ff5d5d;
+  --orange:#ff9f43;
+  --aurora:conic-gradient(from 220deg at 50% 50%, #34dbff 0deg, #1f8dff 80deg, #a78bff 160deg, #ffd421 240deg, #34dbff 360deg);
+
+  --accent: var(--cyan);
+  --accent-2: var(--blue);
+  --accent-glow: rgba(52,219,255,.35);
+
+  /* ── DSGVO-konform: System-Font-Stack ── */
+  --f-brand:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  --f-body:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  --f-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;
+
+  /* ── radii / elevation ── */
+  --r-sm:8px; --r-md:10px; --r-lg:14px; --r-xl:18px;
+  --shadow-sm:0 2px 6px rgba(0,0,0,.18);
+  --shadow-md:0 8px 24px rgba(0,0,0,.32);
+
+  /* ── glass ── */
+  --glass-blur:14px;
+  --glass-opacity:.65;
+  --bg-0:#030610;
+  --bg-1:#0a1226;
+  --bg-2:#101a36;
+  --bg-elev:rgba(10,18,38,var(--glass-opacity));
+  --glass:rgba(120,180,255,.06);
+  --glass-2:rgba(120,180,255,.10);
+  --glass-brd:rgba(120,180,255,.16);
+  --glass-brd-strong:rgba(120,180,255,.28);
+  --text:#eaf2ff;
+  --text-2:#b4c4e0;
+  --text-dim:#6b7c9b;
+  --header-bg:rgba(3,6,16,.72);
+  --code-bg:rgba(5,10,22,.85);
+  --hairline:rgba(120,180,255,.08);
+
+  /* status (semantic) */
+  --ok:#3ee0a0;
+  --warn:#ffd421;
+  --danger:#ff5d5d;
+  --info:#34dbff;
+}
+
+* { box-sizing:border-box; margin:0; padding:0; }
+html, body { background:var(--bg-0); color:var(--text); font-family:var(--f-body); min-height:100vh; -webkit-font-smoothing:antialiased; line-height:1.5; }
+body {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(31,141,255,.16), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 30%, rgba(167,139,255,.10), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 10% 80%, rgba(52,219,255,.08), transparent 60%),
+    var(--bg-0);
+  background-attachment: fixed;
+  overflow-x: hidden;
+  font-size: 14px;
+}
+
+/* ── Topbar ─────────────────────────────────────────────────── */
+header {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:14px 24px;
+  background:var(--header-bg);
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  border-bottom:1px solid var(--hairline);
+  position:sticky; top:0; z-index:50;
+}
+.brand {
+  font-family:var(--f-mono); font-weight:700; letter-spacing:.06em; font-size:15px;
+}
+.brand span { color:var(--accent); text-transform:uppercase; font-size:11px; letter-spacing:.18em; margin-left:8px; }
+.head-right { display:flex; gap:12px; align-items:center; }
+.whoami {
+  font-family:var(--f-mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--text-dim); padding:4px 9px; border-radius:99px;
+  background:var(--glass); border:1px solid var(--glass-brd);
+}
+
+/* ── Layout ─────────────────────────────────────────────────── */
+.view { max-width:1100px; margin:0 auto; padding:26px 20px 70px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:16px; }
+
+/* ── Cards (Aurora glass) ───────────────────────────────────── */
+.card {
+  background:var(--bg-elev);
+  border:1px solid var(--glass-brd);
+  border-radius:var(--r-lg);
+  padding:16px;
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  box-shadow:var(--shadow-sm);
+  position:relative;
+}
+.card.aurora-edge::before {
+  content:''; position:absolute; inset:-1px; border-radius:inherit; padding:1px;
+  background:var(--aurora); opacity:.5; pointer-events:none;
+  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor; mask-composite:exclude;
+}
+.auth-card { max-width:460px; margin:6vh auto 0; }
+h1 { font-size:17px; margin-bottom:6px; letter-spacing:.01em; }
+h2 { font-size:15px; }
+.sub, .hint { color:var(--text-2); font-size:13px; margin-bottom:14px; }
+.steps { margin:0 0 14px; padding-left:20px; }
+.steps li { margin-bottom:4px; }
+code { font-family:var(--f-mono); font-size:12px; background:var(--code-bg); padding:1px 6px; border-radius:5px; border:1px solid var(--hairline); }
+
+/* ── Buttons (DVhub Leitstand-Stil) ─────────────────────────── */
+.btn {
+  appearance:none; border:1px solid var(--glass-brd); background:var(--glass);
+  color:var(--text); font-family:var(--f-mono); font-size:11px;
+  letter-spacing:.12em; text-transform:uppercase;
+  padding:7px 13px; border-radius:8px;
+  display:inline-flex; align-items:center; gap:7px; transition:.15s; cursor:pointer;
+}
+.btn:hover { background:var(--glass-2); border-color:var(--glass-brd-strong); color:var(--accent); transform:translateY(-1px); }
+.btn:active { transform:translateY(0); }
+.btn:disabled { opacity:.45; cursor:default; transform:none; }
+.btn.primary {
+  background:linear-gradient(135deg,var(--accent),var(--accent-2));
+  border-color:transparent; color:#031024; font-weight:600;
+  box-shadow:0 6px 18px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.4);
+}
+.btn.primary:hover { filter:brightness(1.08); color:#031024; }
+.btn.ghost { background:transparent; border-color:transparent; }
+.btn.ghost:hover { background:var(--glass); border-color:var(--glass-brd); }
+.btn.small { padding:5px 10px; font-size:10px; }
+.btn.tiny { padding:3px 8px; font-size:10px; letter-spacing:.06em; }
+
+/* ── Tabs ───────────────────────────────────────────────────── */
+.tabs { display:flex; gap:8px; margin-bottom:14px; }
+.tab {
+  font-family:var(--f-mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+  background:transparent; border:1px solid var(--glass-brd); color:var(--text-dim);
+  padding:6px 13px; border-radius:8px; cursor:pointer; transition:.15s;
+}
+.tab:hover { color:var(--accent); border-color:var(--glass-brd-strong); }
+.tab.active {
+  color:#031024; background:linear-gradient(135deg,var(--accent),var(--accent-2));
+  border-color:transparent; font-weight:600;
+}
+
+/* ── Formulare ──────────────────────────────────────────────── */
+.stack { display:flex; flex-direction:column; gap:12px; }
+label {
+  display:flex; flex-direction:column; gap:5px;
+  font-family:var(--f-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--text-dim);
+}
+input {
+  background:var(--code-bg); color:var(--text);
+  border:1px solid var(--glass-brd); border-radius:8px;
+  padding:9px 11px; font-size:14px; font-family:var(--f-body);
+  transition:.15s;
+}
+input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(52,219,255,.12); }
+input::placeholder { color:var(--text-dim); }
+.addform { display:flex; flex-direction:column; gap:8px; }
+.addrow { display:flex; gap:8px; flex-wrap:wrap; }
+.addrow input { flex:1 1 220px; }
+
+/* ── Status-Badges (status-pill-Sprache) ────────────────────── */
+.badge {
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--f-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase;
+  padding:4px 9px; border-radius:99px; border:1px solid var(--glass-brd);
+  color:var(--text-2); background:var(--glass); white-space:nowrap;
+}
+.badge::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--text-dim); }
+.badge.ok   { color:var(--ok);   border-color:rgba(62,224,160,.35); }
+.badge.ok::before   { background:var(--ok);   box-shadow:0 0 6px var(--ok);   animation:pulse 2s infinite; }
+.badge.warn { color:var(--warn); border-color:rgba(255,212,33,.35); }
+.badge.warn::before { background:var(--warn); box-shadow:0 0 6px var(--warn); }
+.badge.teal { color:var(--info); border-color:rgba(52,219,255,.35); }
+.badge.teal::before { background:var(--info); box-shadow:0 0 6px var(--info); animation:pulse 2s infinite; }
+.badge.err  { color:var(--danger); border-color:rgba(255,93,93,.35); }
+.badge.err::before  { background:var(--danger); box-shadow:0 0 6px var(--danger); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* ── Anlagen-Kachel ─────────────────────────────────────────── */
+.appliance { display:flex; flex-direction:column; gap:12px; }
+.ap-head { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+.ap-meta { color:var(--text-dim); font-size:11px; font-family:var(--f-mono); margin-top:3px; word-break:break-all; }
+.ap-customer { color:var(--text-2); font-size:13px; margin-top:2px; }
+
+.paircode { font-size:13px; display:flex; gap:10px; align-items:center; margin-bottom:6px; }
+.paircode strong {
+  font-family:var(--f-mono); font-size:20px; letter-spacing:.3em;
+  color:var(--accent); text-shadow:0 0 12px var(--accent-glow);
+}
+
+/* ── KPI-Chips (wie Leitstand-Kacheln) ──────────────────────── */
+.chips { display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:8px; }
+.chip {
+  border:1px solid var(--glass-brd); border-radius:var(--r-md);
+  padding:9px 10px; background:var(--glass);
+}
+.chip span {
+  display:block; font-family:var(--f-mono); font-size:9px;
+  text-transform:uppercase; letter-spacing:.14em; color:var(--text-dim); margin-bottom:3px;
+}
+.chip b { font-size:17px; font-family:var(--f-mono); color:var(--text); }
+
+.alarms { color:var(--danger); font-size:13px; margin-top:8px; }
+.flags  { color:var(--warn);  font-size:13px; margin-top:4px; min-height:18px; }
+.ap-msg { color:var(--text-2); font-size:13px; min-height:18px; margin-top:6px; }
+.seen   { color:var(--text-dim); font-size:11px; font-family:var(--f-mono); margin-top:6px; }
+.ap-detail {
+  background:var(--code-bg); border:1px solid var(--glass-brd); border-radius:var(--r-md);
+  padding:12px; font-size:11.5px; font-family:var(--f-mono); overflow:auto;
+  max-height:320px; white-space:pre-wrap; word-break:break-word; color:var(--text-2);
+}
+.msg { min-height:20px; font-size:13px; color:var(--warn); margin-top:8px; }
+
+.row { display:flex; align-items:center; }
+.row.gap { gap:8px; flex-wrap:wrap; }
+.appliance footer.row { margin-top:auto; padding-top:10px; border-top:1px solid var(--hairline); }
+.empty { text-align:center; grid-column:1/-1; padding:24px; color:var(--text-dim); }
+
+/* Admin (Hersteller): Übersicht + Backup */
+.admin-wrap { overflow-x:auto; }
+.admin-table { width:100%; border-collapse:collapse; font-size:13px; }
+.admin-table th {
+  text-align:left; font-family:var(--f-mono); font-size:10px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--text-dim); padding:8px 10px; border-bottom:1px solid var(--glass-brd);
+}
+.admin-table td { padding:10px; border-bottom:1px solid var(--hairline); vertical-align:top; }
+.admin-name { font-weight:600; }
+.admin-sub { color:var(--text-dim); font-size:12px; margin-top:2px; }
+.admin-num { font-family:var(--f-mono); }
+.admin-det { min-width:260px; }
+.admin-ap { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:3px 0; }
+.admin-ap select {
+  background:var(--code-bg); color:var(--text); border:1px solid var(--glass-brd);
+  border-radius:6px; padding:3px 6px; font-size:12px;
+}
+.importlink { display:inline-flex; align-items:center; gap:6px; color:var(--accent); cursor:pointer; }
+.importlink input { font-size:12px; max-width:180px; }
+
+/* Zugang & Sicherheit */
+.seccard { padding: 12px 0; border-top: 1px solid var(--line, rgba(255,255,255,.08)); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.seccard:first-of-type { border-top: none; }
+.seccard input { background: rgba(10,14,22,.6); border: 1px solid rgba(255,255,255,.12); color: #e8ecf4; border-radius: 8px; padding: 8px 10px; font: inherit; }
+.totpsecret { font-family: ui-monospace, monospace; letter-spacing: .06em; background: rgba(93,241,237,.08); border: 1px dashed rgba(93,241,237,.4); color: #5df1ed; padding: 6px 10px; border-radius: 8px; user-select: all; word-break: break-all; }
+#passkeyLoginBtn { margin-top: 6px; }
+.btn.tiny { padding: 4px 10px; font-size: 12px; }

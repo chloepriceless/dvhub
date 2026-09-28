@@ -3,6 +3,7 @@
 // Factory pattern: createApiRoutes(ctx) returns { handleRequest }.
 
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
@@ -2166,6 +2167,345 @@ export function createApiRoutes(ctx) {
     fs.createReadStream(file).pipe(res);
   }
 
+  // ── T-INSTALLER-PORTAL: /api/installer/* ──────────────────────────────
+  // Installateurs-Portal-Gegenstelle. Trust-Modell (analog Support-Tunnel,
+  // nichts geht ohne Kunden-Opt-In):
+  //   1. Portal registriert sein X.509-Zertifikat (POST register, WAN-offen,
+  //      rate-limited) → Anlage legt "pending" an + erzeugt Kopplungs-Code.
+  //   2. Kunde bestätigt den Code in der DVhub-Oberfläche (confirm/revoke/
+  //      list laufen durch das normale checkAuth-Gate: LAN oder Bearer).
+  //   3. Portal loggt sich per Challenge/Response (Signieren mit dem Private
+  //      Key, der niemals das Portal verlässt) → kurzlebiges Session-Token.
+  //   4. Daten-Endpunkte (Status/Alarme/Historie/Updates/Support-Tunnel)
+  //      verlangen das Session-Token im Header X-Installer-Session.
+  // Transportverschlüsselung: TLS (HTTPS-Listener bzw. Support-Tunnel-Relay).
+  // Die Sektion liegt ABSICHTLICH vor dem globalen checkAuth-Gate und
+  // gate-ved sich pro Endpunkt selbst — Portal-Calls kommen von extern (WAN),
+  // Kunden-Calls delegieren an checkAuth.
+  const INSTALLER_SESSION_HEADER = 'x-installer-session';
+  const INSTALLER_ERR_STATUS = {
+    name_required: 400, invalid_certificate: 400, certificate_expired: 400,
+    certificate_not_yet_valid: 400, unsupported_key: 400,
+    installer_limit_reached: 409, installer_pending_limit: 429,
+    pairing_code_expired: 410, installer_not_found: 404,
+    installer_not_pending: 409, pairing_code_invalid: 403,
+    installer_not_active: 403, challenge_unknown: 401,
+    challenge_mismatch: 401, signature_invalid: 401,
+  };
+  // Lese-/Steuer-Endpunkte werden auf die bestehenden internen Routen
+  // delegiert (Loopback, Bearer = apiToken) — eine Quelle der Wahrheit für
+  // Status-Historie-Update-Tunnel-Semantik (inkl. service-actions-Gate,
+  // Semver-Downgrade-Guard, Tunnel-Regeln).
+  const INSTALLER_DELEGATE = {
+    'GET /api/installer/status': '/api/status',
+    'GET /api/installer/history/summary': '/api/history/summary',
+    'GET /api/installer/history/raw': '/api/history/raw',
+    'GET /api/installer/updates/check': '/api/admin/update/check',
+    'POST /api/installer/updates/apply': '/api/admin/update/apply',
+    'GET /api/installer/support-tunnel/status': '/api/support/tunnel/status',
+    'POST /api/installer/support-tunnel/open': '/api/support/tunnel/open',
+    'POST /api/installer/support-tunnel/close': '/api/support/tunnel/close',
+  };
+
+  function installerHasValidBearer(req) {
+    const expectedTok = getCfg().apiToken;
+    if (typeof expectedTok !== 'string' || expectedTok.length === 0) return false;
+    const m = /^Bearer\s+(.+)$/i.exec(String(req.headers?.authorization || ''));
+    if (!m) return false;
+    const got = Buffer.from(m[1]);
+    const want = Buffer.from(expectedTok);
+    return got.length === want.length && crypto.timingSafeEqual(got, want);
+  }
+
+  function installerErr(res, e) {
+    const code = String(e && e.message || 'internal_error').split(':')[0];
+    const status = INSTALLER_ERR_STATUS[code] || 500;
+    return json(res, status, { ok: false, error: code });
+  }
+
+  // Loopback-Delegierung an eine bestehende DVhub-Route. Status/Content-Type/
+  // Body werden unverändert durchgereicht. Host-Header wird gespiegelt, damit
+  // die Host-Allowlist-Prüfung des Servers nicht scheitert.
+  function delegateToInternal(req, res, targetPath, { method = 'GET', body = null, search = '' } = {}) {
+    const cfg = getCfg();
+    const port = Number(cfg.httpPort) || 80;
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const headers = {
+        host: req.headers.host || `127.0.0.1:${port}`,
+        authorization: 'Bearer ' + (cfg.apiToken || ''),
+        'x-dvhub-installer': '1',
+      };
+      if (body != null) {
+        headers['content-type'] = 'application/json';
+        headers['content-length'] = String(Buffer.byteLength(body));
+      }
+      const upstream = http.request({ host: '127.0.0.1', port, path: targetPath + (search || ''), method, headers }, (up) => {
+        const chunks = [];
+        up.on('data', (c) => chunks.push(c));
+        up.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          res.writeHead(up.statusCode, {
+            ...SECURITY_HEADERS,
+            'content-type': up.headers['content-type'] || 'application/json',
+          });
+          res.end(buf);
+          done(true);
+        });
+      });
+      upstream.on('error', (e) => {
+        pushLog('installer_delegate_failed', { path: targetPath, error: String(e.message || e).slice(0, 200) });
+        json(res, 502, { ok: false, error: 'installer_delegate_failed' });
+        done(false);
+      });
+      // Update-Apply läuft synchron (git, npm install ≤60 s, Migrationen ≤120 s)
+      // — 20 s würden ein laufendes Update als Fehler melden.
+      const timeoutMs = targetPath === '/api/admin/update/apply' ? 10 * 60_000 : 20_000;
+      upstream.setTimeout(timeoutMs, () => { upstream.destroy(new Error('timeout')); });
+      if (body != null) upstream.write(body);
+      upstream.end();
+    });
+  }
+
+  // Session-Gate für die Daten-Endpunkte. Liefert die Session oder null
+  // (Antwort ist dann schon gesendet). Revocation wirkt sofort, da der Store
+  // bei jedem Call gegengeprüft wird.
+  function installerSessionGate(req, res) {
+    const portal = ctx.installerPortal;
+    if (!portal || !portal.enabled()) {
+      json(res, 503, { ok: false, error: 'installer_portal_disabled' });
+      return null;
+    }
+    const sess = portal.verifySession(req.headers[INSTALLER_SESSION_HEADER]);
+    if (!sess) {
+      pushLog('installer_auth_failed', { path: req.url }, actorContext(req));
+      json(res, 401, { ok: false, error: 'installer_session_invalid' });
+      return null;
+    }
+    portal.touchSession(sess.installerId);
+    return sess;
+  }
+
+  async function handleInstallerRequest(req, res, url) {
+    const portal = ctx.installerPortal;
+    if (!portal) return json(res, 503, { ok: false, error: 'installer_portal_unavailable' });
+    if (!checkRateLimit(req, res)) return;
+    const p = url.pathname;
+    const method = req.method;
+
+    // ── Portal-seitig (WAN erlaubt, durch Pairing/Signaturen abgesichert) ──
+    if (p === '/api/installer/register' && method === 'POST') {
+      if (!portal.enabled()) return json(res, 503, { ok: false, error: 'installer_portal_disabled' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      try {
+        const r = portal.register({ name: body.name, company: body.company, certPem: body.cert });
+        return json(res, r.alreadyRegistered ? 200 : 201, {
+          ok: true,
+          installerId: r.installer.id,
+          status: r.installer.status,
+          // Kopplungs-Code nur solange pending. Der Installateur nennt ihn dem
+          // Kunden; aktiv wird die Kopplung erst durch dessen confirm (checkAuth).
+          pairingCode: r.pairingCode || null,
+          hint: r.installer.status === 'pending'
+            ? 'kopplungscode_bestaetigt_den_kunden_in_seiner_dvhub_oberflaeche'
+            : null,
+          installer: r.installer,
+        });
+      } catch (e) { return installerErr(res, e); }
+    }
+    if (p === '/api/installer/login/challenge' && method === 'POST') {
+      if (!portal.enabled()) return json(res, 503, { ok: false, error: 'installer_portal_disabled' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      try {
+        return json(res, 200, { ok: true, ...portal.issueChallenge(body.installerId) });
+      } catch (e) { return installerErr(res, e); }
+    }
+    if (p === '/api/installer/login' && method === 'POST') {
+      if (!portal.enabled()) return json(res, 503, { ok: false, error: 'installer_portal_disabled' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      try {
+        return json(res, 200, { ok: true, ...portal.verifyLogin({
+          installerId: body.installerId, challenge: body.challenge, signature: body.signature,
+        }) });
+      } catch (e) { return installerErr(res, e); }
+    }
+
+    // ── Kunden-seitig (LAN oder API-Token über das normale checkAuth) ──────
+    if (p === '/api/installer/list' || p === '/api/installer/confirm'
+        || p === '/api/installer/revoke' || p === '/api/installer/settings'
+        || p === '/api/installer/client/pair' || p === '/api/installer/client/status'
+        || p === '/api/installer/client/disconnect') {
+      if (!checkAuth(req, res)) return;
+      // Pull-Pfad (NAT-Modell): Anlage meldet sich AUSGEHEND beim Online-Portal.
+      const ipc = ctx.installerPortalClient;
+      // CSRF-Gate für privilegien-erweiternde Aufrufe: gültiger Bearer ODER
+      // der UI-Nonce aus GET /api/installer/settings (siehe installer-portal.js).
+      const csrfOk = (body) => installerHasValidBearer(req) || portal.checkUiToken(body?.uiToken);
+      const csrfFail = () => json(res, 403, {
+        ok: false, error: 'ui_token_required',
+        detail: 'Sicherheits-Token fehlt oder abgelaufen — Seite neu laden und erneut versuchen.',
+      });
+      if (p === '/api/installer/client/status' && method === 'GET') {
+        const st = ipc ? ipc.status() : { paired: false };
+        st.applianceId = portal.applianceId();
+        return json(res, 200, { ok: true, ...st });
+      }
+      if (p === '/api/installer/client/disconnect' && method === 'POST') {
+        if (!ipc) return json(res, 503, { ok: false, error: 'installer_portal_unavailable' });
+        return json(res, 200, ipc.disconnect());
+      }
+      if (p === '/api/installer/client/pair' && method === 'POST') {
+        if (!ipc) return json(res, 503, { ok: false, error: 'installer_portal_unavailable' });
+        const body = await readJsonBody(req, res);
+        if (body === null) return;
+        if (!csrfOk(body)) return csrfFail();
+        try {
+          const r = await ipc.claim({
+            portalUrl: body.portalUrl,
+            pairingCode: body.pairingCode,
+            name: body.name,
+          });
+          // Der Kunde hat die Kopplung selbst gestartet — das ist die
+          // Zustimmung zum Portal-Zugang. Ist der (ab Werk aus) Schalter noch
+          // aus, schalten wir ihn jetzt ein, sonst würde der Client nie pollen.
+          if (!portal.enabled()) {
+            const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+            next.installerPortal = { ...(next.installerPortal || {}), enabled: true };
+            ctx.saveAndApplyConfig(next);
+            pushLog('installer_portal_setting_changed', { enabled: true, via: 'client_pair' }, actorContext(req));
+          }
+          return json(res, 200, { ok: true, ...r });
+        } catch (e) {
+          const code = String(e.message || 'internal_error').split(':')[0];
+          const hints = {
+            portal_url_not_allowed: 400, pairing_code_invalid: 400,
+            appliance_id_missing: 503, pairing_not_found: 404, pairing_code_mismatch: 403,
+            pairing_already_claimed: 409, pairing_declined: 409,
+            pairing_code_expired: 410, pairing_locked: 429, rate_limited: 429,
+            pairing_cancelled: 409,
+          };
+          const status = hints[code] || (/claim_http_/.test(code) ? 502 : (/fetch|timeout|ECONN|ENOTFOUND/i.test(code) ? 502 : 500));
+          pushLog('installer_portal_pair_failed', { error: code }, actorContext(req));
+          return json(res, status, { ok: false, error: code });
+        }
+      }
+      if (p === '/api/installer/settings' && method === 'GET') {
+        const ipCfg = getCfg().installerPortal || {};
+        return json(res, 200, {
+          ok: true,
+          enabled: portal.enabled(),
+          ...portal.permissions(),
+          sessionTtlMin: ipCfg.sessionTtlMin || 60,
+          uiToken: portal.issueUiToken(),
+        });
+      }
+      if (p === '/api/installer/settings' && method === 'POST') {
+        // Schalter im UI: installerPortal.{enabled,allowTunnel,allowUpdates}
+        // patchen (gleiches Raw-Cfg-Klon-Muster wie /api/admin/update/channel).
+        // Wirkt sofort, ohne Neustart — die Gates lesen live getCfg().
+        const body = await readJsonBody(req, res);
+        if (body === null) return;
+        const patch = {};
+        for (const k of ['enabled', 'allowTunnel', 'allowUpdates']) {
+          if (body[k] === undefined) continue;
+          if (typeof body[k] !== 'boolean') return json(res, 400, { ok: false, error: `${k}_must_be_boolean` });
+          patch[k] = body[k];
+        }
+        if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'enabled_must_be_boolean' });
+        // Nur Ausschalten ist privilegien-REDUZIEREND und geht immer (Kill-Switch).
+        const onlyReducing = Object.values(patch).every((v) => v === false);
+        if (!onlyReducing && !csrfOk(body)) return csrfFail();
+        try {
+          const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+          next.installerPortal = { ...(next.installerPortal || {}), ...patch };
+          ctx.saveAndApplyConfig(next);
+          // Ausschalten verwirft auch eine gerade laufende Kopplungs-Anfrage —
+          // deren Erfolg würde den Zugang sonst wieder einschalten.
+          if (patch.enabled === false) ctx.installerPortalClient?.cancelPending?.();
+          pushLog('installer_portal_setting_changed', patch, actorContext(req));
+          return json(res, 200, { ok: true, ...patch });
+        } catch (e) {
+          return json(res, 500, { ok: false, error: 'config_save_failed', detail: String(e.message || e).slice(0, 160) });
+        }
+      }
+      if (p === '/api/installer/list' && method === 'GET') {
+        // applianceId mitgeben: die Settings-UI zeigt sie dem Kunden als
+        // Referenz fürs Portal (dort muss die Anlage zugeordnet werden).
+        // Auch bei ausgeschaltetem Portal lesbar — die ID braucht der Kunde
+        // gerade für die erste Kopplung, und Widerrufen muss immer gehen.
+        return json(res, 200, { ok: true, enabled: portal.enabled(), applianceId: portal.applianceId(), installers: portal.list() });
+      }
+      if (p === '/api/installer/revoke' && method === 'POST') {
+        const body = await readJsonBody(req, res);
+        if (body === null) return;
+        try {
+          return json(res, 200, { ok: true, ...portal.revoke({ installerId: body.installerId }) });
+        } catch (e) { return installerErr(res, e); }
+      }
+      if (!portal.enabled()) return json(res, 503, { ok: false, error: 'installer_portal_disabled' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      if (p === '/api/installer/confirm' && method === 'POST' && !csrfOk(body)) return csrfFail();
+      try {
+        if (p === '/api/installer/confirm' && method === 'POST') {
+          return json(res, 200, { ok: true, ...portal.confirm({ installerId: body.installerId, pairingCode: body.pairingCode }) });
+        }
+        return json(res, 405, { ok: false, error: 'method_not_allowed' });
+      } catch (e) { return installerErr(res, e); }
+    }
+
+    // ── Installateur-seitig (Session-Token erforderlich) ────────────────────
+    const sess = installerSessionGate(req, res);
+    if (!sess) return;
+
+    if (p === '/api/installer/info' && method === 'GET') {
+      return json(res, 200, {
+        ok: true,
+        applianceId: portal.applianceId(),
+        app: ctx.getAppVersion(),
+        updateChannel: getCfg().updateChannel || 'stable',
+        uptimeSec: Math.round(process.uptime()),
+        installer: sess.installer,
+      });
+    }
+
+    const delegateKey = `${method} ${p}`;
+    const target = INSTALLER_DELEGATE[delegateKey];
+    // Eingreifende Aktionen brauchen eine eigene Kunden-Freigabe zusätzlich
+    // zur Kopplung (Tunnel schließen bleibt immer erlaubt).
+    const perms = portal.permissions();
+    if (delegateKey === 'POST /api/installer/support-tunnel/open' && !perms.allowTunnel) {
+      pushLog('installer_action_denied', { action: 'tunnel_open', installerId: sess.installerId }, actorContext(req));
+      return json(res, 403, { ok: false, error: 'tunnel_not_permitted' });
+    }
+    if (delegateKey === 'POST /api/installer/updates/apply' && !perms.allowUpdates) {
+      pushLog('installer_action_denied', { action: 'updates_apply', installerId: sess.installerId }, actorContext(req));
+      return json(res, 403, { ok: false, error: 'updates_not_permitted' });
+    }
+    if (target) {
+      const search = (method === 'GET') ? (url.search || '') : '';
+      let body = null;
+      if (method === 'POST') {
+        const parsed = await readJsonBody(req, res);
+        if (parsed === null) return; // Body-Leser hat schon geantwortet
+        const out = { ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+        // Tunnel-open verlangt Bearer ODER Tunnel-UI-Nonce. Ohne apiToken
+        // (tokenlose Installation) holen wir uns den Nonce in-process.
+        if (target === '/api/support/tunnel/open') {
+          delete out.uiToken;
+          if (!getCfg().apiToken) out.uiToken = ctx.supportTunnel?.status?.()?.uiToken;
+        }
+        body = Buffer.from(JSON.stringify(out));
+      }
+      return delegateToInternal(req, res, target, { method, body, search });
+    }
+    return json(res, 404, { ok: false, error: 'not_found' });
+  }
+
   // ── Main request handler ─────────────────────────────────────────────
   async function handleRequest(req, res, url) {
     // T-0080 P1: unauthenticated liveness probe for uptime monitoring
@@ -2309,6 +2649,13 @@ export function createApiRoutes(ctx) {
         return completeSetup(req, res, body);
       }
       return json(res, 404, { ok: false, error: 'not_found' });
+    }
+
+    // T-INSTALLER-PORTAL: die Installateur-Sektion gate-ved sich pro Endpunkt
+    // selbst (Portal-Calls kommen von WAN, Kunden-Calls delegieren intern an
+    // checkAuth) und liegt deshalb vor dem globalen Gate unten.
+    if (url.pathname === '/api/installer' || url.pathname.startsWith('/api/installer/')) {
+      return await handleInstallerRequest(req, res, url);
     }
 
     if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
@@ -6659,6 +7006,16 @@ export function createApiRoutes(ctx) {
       if (body === null) return;
       if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
         return json(res, 400, { ok: false, error: 'config object required' });
+      }
+      // T-INSTALLER-PORTAL: installerPortal.* (Fernzugang + Freigaben) ist
+      // AUSSCHLIESSLICH über /api/installer/settings änderbar. Die Settings-
+      // Seite schickt ihren beim Laden geklonten Entwurf mit — ein unabhängiges
+      // Speichern würde sonst einen inzwischen ausgeschalteten Zugang wieder
+      // einschalten; ein Import darf Fernzugang ebenfalls nicht mitbringen.
+      {
+        const curIp = ctx.getRawCfg?.()?.installerPortal;
+        if (curIp === undefined) delete body.config.installerPortal;
+        else body.config.installerPortal = JSON.parse(JSON.stringify(curIp));
       }
       // Encrypted secrets bundle (config-secrets-crypto): a password-protected
       // migration export carries the REDACTED_PATHS values sealed under the

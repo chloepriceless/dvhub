@@ -100,6 +100,13 @@ import { info as logInfo, warn as logWarn, logger as appLogger } from './service
 import { configureSafeAsync, safeInterval } from './services/safe-async.js';
 // T-0113 Tier 3: customer-initiated reverse-SSH support tunnel.
 import { createSupportTunnel } from './services/support-tunnel.js';
+// T-INSTALLER-PORTAL: Installateur-Portal-Anbindung (Zertifikats-Kopplung +
+// Challenge/Response-Login für /api/installer/* in routes-api.js).
+import { createInstallerPortal } from './services/installer-portal.js';
+// T-INSTALLER-PORTAL: ausgehender Kopplungspfad (NAT-Modell) — die Anlage
+// pollt das Online-Portal, Kommandos (Tunnel/Updates) kommen über denselben
+// Strang zurück.
+import { createInstallerPortalClient } from './services/installer-portal-client.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies. Imported here
@@ -1128,6 +1135,20 @@ ctx.notificationService = notificationService;
 // /api/support/tunnel/* endpoints + the transparency UI status. The tunnel
 // process itself only spawns when the customer hits "open" — OFF by default.
 const supportTunnel = createSupportTunnel(ctx);
+// T-INSTALLER-PORTAL: Kopplungs-/Session-Store für das Installateurs-Portal.
+// Unbedingt konstruiert (routes-api.js bedient /api/installer/* darüber);
+// Kopplungen müssen vom Kunden per Kopplungs-Code bestätigt werden.
+ctx.installerPortal = createInstallerPortal(ctx);
+// T-INSTALLER-PORTAL Pull-Pfad: wählt das Online-Portal ausgehend an
+// (Sidecar installer-portal-client.json). Gepollt wird nur, wenn der Kunde
+// das Portal eingeschaltet hat und eine Kopplung existiert; alle Timer sind
+// unref (Test-/Shutdown-sicher). Nur im Web-Prozess starten — im Split-Betrieb
+// liefe sonst im Runtime-Worker ein zweiter Poller gegen dasselbe Sidecar.
+// DV_INSTALLER_POLL_MS: Poll-Takt überschreiben (E2E-Tests/Diagnose; Default 30 s).
+ctx.installerPortalClient = createInstallerPortalClient(ctx, {
+  pollIntervalMs: Number(process.env.DV_INSTALLER_POLL_MS) || undefined,
+});
+if (IS_WEB_PROCESS) ctx.installerPortalClient.startPolling();
 // T-CROSSCHECK: unbedingt konstruiert (routes-api liest getStatus), gestartet nur
 // im Runtime-Prozess und nur wenn konfiguriert (siehe IS_RUNTIME_PROCESS-Block).
 const mqttCrossCheck = createMqttCrossCheck(ctx);

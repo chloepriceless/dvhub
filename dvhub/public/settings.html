@@ -394,6 +394,82 @@
               <p class="svc-meta"><strong>Notfall:</strong> Startet DVhub selbst nicht mehr, kann der Tunnel direkt an der Box ge&ouml;ffnet werden &mdash; per SSH/Konsole anmelden und ausf&uuml;hren: <code>sudo bash /opt/dvhub/dvhub-support-tunnel.sh</code> (Anleitung: <code>docs/NOTFALL-FERNZUGANG.md</code>).</p>
             </div>
 
+            <!-- Installateurs-Portal (T-INSTALLER-PORTAL) -->
+            <div class="config-group" data-accent="teal">
+              <div class="config-group-kicker">Installateurs-Portal</div>
+              <p class="svc-meta">Dein Installateur kann diese Anlage &uuml;ber das <strong>Installateurs-Portal</strong> aus der Ferne &uuml;berwachen (Live-Status, Fehler, Historie). Support-Tunnel &ouml;ffnen und Updates einspielen darf er nur, wenn du das unten ausdr&uuml;cklich erlaubst. Jede Kopplung musst <strong>du</strong> hier starten bzw. per <strong>Kopplungs-Code</strong> best&auml;tigen &mdash; ohne das bleibt er ausgeschlossen. Der Zugriff ist jederzeit widerrufbar.</p>
+              <div class="config-row">
+                <span class="config-row-label">Portal-Zugang aktiviert</span>
+                <div class="config-row-stack">
+                  <input id="installerPortalEnabled" type="checkbox" />
+                  <small class="config-row-stack-small">Ab Werk aus. &bdquo;Kopplung starten&ldquo; schaltet ihn ein; &bdquo;aus&ldquo; sperrt den gesamten Portal-Zugang sofort (auch die laufende Verbindung).</small>
+                </div>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Installateur darf Support-Tunnel &ouml;ffnen</span>
+                <div class="config-row-stack">
+                  <input id="installerPortalAllowTunnel" type="checkbox" />
+                  <small class="config-row-stack-small">Erlaubt dem Portal, den Fernwartungs-Tunnel (SSH) zu &ouml;ffnen. Schlie&szlig;en geht immer.</small>
+                </div>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Installateur darf Updates einspielen</span>
+                <div class="config-row-stack">
+                  <input id="installerPortalAllowUpdates" type="checkbox" />
+                  <small class="config-row-stack-small">Update-Pr&uuml;fung ist immer erlaubt; Einspielen nur mit diesem Haken.</small>
+                </div>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Appliance-ID</span>
+                <span class="config-row-value api-row-value" id="installerPortalApplianceId">&mdash;</span>
+              </div>
+              <!-- Portal-Kopplung (Pull/NAT-Modell): die Anlage ruft das Online-Portal
+                   ausgehend an — kein Portforwarding nötig. Ablauf: Im Portal die
+                   Appliance-ID eintragen → Code erzeugen → hier eintragen → das Portal
+                   gibt die Anfrage frei. -->
+              <div class="config-row">
+                <span class="config-row-label">Portal-Kopplung</span>
+                <span class="config-row-value api-row-value" id="installerPortalClientState">&mdash;</span>
+              </div>
+              <div id="installerPortalPairForm" class="config-row-stack-tight">
+                <div class="config-row">
+                  <span class="config-row-label">Portal-URL</span>
+                  <div class="config-row-stack">
+                    <input id="installerPortalUrl" class="config-input" placeholder="https://portal.example.de" autocomplete="url" spellcheck="false" />
+                    <small class="config-row-stack-small">Adresse eures Installateurs-Portals (https, im Ausnahmefall http im lokalen Netz).</small>
+                  </div>
+                </div>
+                <div class="config-row">
+                  <span class="config-row-label">Kopplungs-Code vom Portal</span>
+                  <div class="config-row-stack">
+                    <input id="installerPortalClientCode" class="config-input" placeholder="6-stelliger Code" inputmode="numeric" maxlength="6" autocomplete="off" />
+                  </div>
+                </div>
+                <div class="svc-actions-row">
+                  <button id="installerPortalPairBtn" class="btn btn-primary btn-small" type="button">Kopplung starten</button>
+                </div>
+              </div>
+              <div class="config-row" id="installerPortalPendingRow" hidden>
+                <span class="config-row-label">Offene Kopplungsanfragen</span>
+                <div class="config-row-stack"><span class="config-row-value api-row-value" id="installerPortalPending">&mdash;</span></div>
+              </div>
+              <div id="installerPortalList" class="installer-portal-list"></div>
+              <div class="config-row">
+                <span class="config-row-label">Kopplungs-Code best&auml;tigen</span>
+                <div class="config-row-stack">
+                  <input id="installerPortalPairId" class="config-input" placeholder="Installateur-ID (aus der Liste oben)" autocomplete="off" spellcheck="false" />
+                  <input id="installerPortalPairCode" class="config-input" placeholder="6-stelliger Kopplungs-Code" inputmode="numeric" maxlength="6" autocomplete="off" />
+                </div>
+              </div>
+              <div class="svc-actions-row">
+                <button id="installerPortalConfirmBtn" class="btn btn-primary btn-small" type="button">Kopplung best&auml;tigen</button>
+                <button id="installerPortalDisconnectBtn" class="btn btn-danger btn-small" type="button">Portal-Kopplung trennen</button>
+                <button id="installerPortalRefreshBtn" class="btn btn-ghost btn-small" type="button">Aktualisieren</button>
+              </div>
+              <p class="svc-meta" id="installerPortalResult"></p>
+              <p class="svc-meta"><strong>Hinweis:</strong> Die Anlage verbindet sich selbst ausgehend mit dem Portal &mdash; kein Portforwarding und keine Freigabe im Router n&ouml;tig.</p>
+            </div>
+
             <!-- DV-Schaltsignal-Log -->
             <div class="config-group" data-accent="yellow">
               <div class="config-group-kicker">DV-Signale</div>
@@ -764,7 +840,7 @@
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20260720-reserve-visibility"></script>
-  <script src="/tools.js?v=20260703-prerelease"></script>
+  <script src="/tools.js?v=20260927-installer-portal-2"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>

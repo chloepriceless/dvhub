@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DVhub Installateurs-Portal</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">DVhub <span>Installateurs-Portal</span></div>
+    <div class="head-right">
+      <button id="adminBtn" class="btn small" hidden>Admin</button>
+      <span id="whoami" class="whoami"></span>
+      <button id="logoutBtn" class="btn ghost" hidden>Abmelden</button>
+    </div>
+  </header>
+
+  <!-- ── Login / Registrierung ─────────────────────────────────────────── -->
+  <main id="authView" class="view" hidden>
+    <div class="card auth-card aurora-edge">
+      <h1>Konto</h1>
+      <p class="sub">Lege dein Installateurs-Konto an. Das Portal erzeugt dabei dein
+        Schlüsselpaar — der Private Key bleibt hier, DVhub erhält nur das Zertifikat.</p>
+      <div class="tabs">
+        <button id="tabRegister" class="tab active">Registrieren</button>
+        <button id="tabLogin" class="tab">Anmelden</button>
+      </div>
+      <form id="authForm" class="stack">
+        <label>Name / Firma<input id="authName" required autocomplete="username" /></label>
+        <label id="companyField">Firma (optional)<input id="authCompany" autocomplete="organization" /></label>
+        <label>Passwort (min. 8 Zeichen)<input id="authPass" type="password" required minlength="8" autocomplete="current-password" /></label>
+        <label id="setupField">Admin-Setup-Token (nur für Admin-Konten bzw. Import auf frischem Portal)<input id="authSetupToken" type="password" autocomplete="off" /></label>
+        <label id="totpField" hidden>Zwei-Faktor-Code<input id="authTotp" type="text" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" placeholder="123456" /></label>
+        <button class="btn primary" type="submit" id="authSubmit">Registrieren</button>
+        <button class="btn" type="button" id="passkeyLoginBtn" hidden>🔑 Mit Passkey anmelden</button>
+        <p id="authMsg" class="msg"></p>
+        <p class="hint" id="firstRunImport" hidden>
+          Frisches Portal — du hast schon ein Backup?
+          <label class="importlink"><input type="file" id="importFileFresh" accept="application/json,.json" hidden />Jetzt importieren</label>
+        </p>
+      </form>
+    </div>
+  </main>
+
+  <!-- ── Admin (Hersteller) ──────────────────────────────────────────── -->
+  <main id="adminView" class="view" hidden>
+    <section class="card aurora-edge">
+      <h1>Installateure &amp; Anlagen</h1>
+      <p class="sub">Herstellersicht: wer betreibt wie viele Anlagen, in welcher Größe — und Anlagen lassen sich umverteilen (z. B. bei Installateur-Wechsel).</p>
+      <div id="adminOverview" class="admin-wrap"></div>
+      <p class="msg" id="adminMsg"></p>
+    </section>
+
+    <section class="card">
+      <h1>Backup</h1>
+      <p class="sub">Vollständiger Export: Konten, Key-Paare (Private Keys!) und alle Kopplungen —
+        damit lässt sich ein neues Portal identisch wieder aufsetzen. Export-Datei sicher aufbewahren!</p>
+      <div class="row gap">
+        <button id="exportBtn" class="btn primary small" type="button">Backup exportieren</button>
+        <label class="btn small importlink"><input type="file" id="importFile" accept="application/json,.json" hidden /> Backup importieren</label>
+      </div>
+      <p class="msg" id="backupMsg"></p>
+    </section>
+
+    <section class="card">
+      <button id="adminBackBtn" class="btn ghost small" type="button">◂ Zurück zu meinen Anlagen</button>
+    </section>
+  </main>
+
+  <!-- ── Anlagen-Übersicht ─────────────────────────────────────────────── -->
+  <main id="mainView" class="view" hidden>
+    <section class="card">
+      <h1>Zugang &amp; Sicherheit</h1>
+      <p class="sub">Zwei-Faktor (Authenticator-App) und Passkeys für dein Konto.</p>
+      <div id="totpBox" class="seccard"></div>
+      <div id="passkeyBox" class="seccard"></div>
+    </section>
+    <section class="card">
+      <h1>Anlage koppeln</h1>
+      <p class="sub">So läuft’s (die Anlage meldet sich <strong>bei uns</strong> — kein
+        Portforwarding beim Kunden nötig):</p>
+      <ol class="sub steps">
+        <li><strong>Appliance-ID holen:</strong> Beim Kunden unter Einstellungen → Status →
+          „Installateurs-Portal“ ablesen (oder vom Kunden durchsagen lassen).</li>
+        <li><strong>Code erzeugen:</strong> ID unten eingeben — du bekommst einen
+          6-stelligen Kopplungs-Code.</li>
+        <li><strong>Zurück zur Anlage:</strong> Code + Portal-URL in die DVhub-Oberfläche
+          eintragen (gleiche Kachel) und „Kopplung starten“ — die Anlage ruft uns an.</li>
+        <li><strong>Freigeben:</strong> Die Anfrage erscheint hier — einmal „Annehmen“
+          klicken, dann ist die Anlage live.</li>
+      </ol>
+      <form id="addForm" class="addform">
+        <div class="addrow">
+          <input id="addApplianceId" placeholder="Appliance-ID des Kunden (z. B. a1b2c3d4-…)" required autocomplete="off" spellcheck="false" />
+          <button class="btn primary" type="submit">Kopplungs-Code erzeugen</button>
+        </div>
+        <div class="addrow">
+          <input id="addName" placeholder="Name der Anlage (optional, z. B. Musterhof)" autocomplete="off" />
+          <input id="addCustomer" placeholder="Kunde (optional, z. B. Familie Muster)" autocomplete="off" />
+          <input id="addSize" placeholder="Anlagengröße kWp (optional)" inputmode="decimal" autocomplete="off" />
+        </div>
+      </form>
+      <p id="addMsg" class="msg"></p>
+    </section>
+
+    <section id="pairingList" class="grid"></section>
+  </main>
+
+  <template id="pairTpl">
+    <article class="card appliance aurora-edge">
+      <header class="ap-head">
+        <div>
+          <h2 class="ap-name"></h2>
+          <p class="ap-customer" hidden></p>
+          <p class="ap-meta"></p>
+        </div>
+        <span class="badge"></span>
+      </header>
+
+      <div class="ap-waiting" hidden>
+        <p class="paircode">Kopplungs-Code: <strong></strong>
+          <button class="btn tiny ghost copyCode" type="button">Kopieren</button></p>
+        <p class="hint">Trage diesen Code zusammen mit der Portal-URL in der
+          DVhub-Anlage ein (Einstellungen → Status → Installateurs-Portal).
+          Warte auf den Anruf der Anlage…</p>
+      </div>
+
+      <div class="ap-requested" hidden>
+        <p class="hint">Die Anlage hat sich gemeldet. einmal freigeben:</p>
+        <div class="row gap">
+          <button class="btn small primary accept" type="button">Annehmen</button>
+          <button class="btn small ghost decline" type="button">Ablehnen</button>
+        </div>
+      </div>
+
+      <div class="ap-live" hidden>
+        <div class="chips">
+          <div class="chip"><span>Akku-SoC</span><b class="soc">–</b></div>
+          <div class="chip"><span>Batterie</span><b class="bat">–</b></div>
+          <div class="chip"><span>PV</span><b class="pv">–</b></div>
+          <div class="chip"><span>Grid-Setpoint</span><b class="grid">–</b></div>
+          <div class="chip"><span>Min-SoC</span><b class="minsoc">–</b></div>
+        </div>
+        <p class="alarms" hidden></p>
+        <p class="flags"></p>
+        <p class="seen"></p>
+        <div class="row gap">
+          <button class="btn small tunnelOpen" type="button">Support-Tunnel öffnen</button>
+          <button class="btn small ghost tunnelClose" type="button">Tunnel schließen</button>
+          <button class="btn small loadUpdates" type="button">Updates prüfen</button>
+        </div>
+        <p class="ap-msg"></p>
+        <pre class="ap-detail" hidden></pre>
+      </div>
+
+      <div class="ap-declined" hidden>
+        <p class="hint">Anfrage abgelehnt. Zum Nochmal-Versuchen entfernen und neu koppeln.</p>
+      </div>
+
+      <footer class="row gap">
+        <button class="btn tiny ghost rename" type="button">Umbenennen</button>
+        <button class="btn tiny ghost remove" type="button">Entfernen</button>
+      </footer>
+    </article>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>

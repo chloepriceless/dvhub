@@ -2939,3 +2939,10 @@ body.dv-modal-open {
 /* Zugang: Token-Anzeige/Kopieren (settings → Zugang) */
 .token-reveal-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 .token-reveal-input { flex: 1 1 240px; min-width: 0; font-family: var(--f-mono); letter-spacing: 0.02em; }
+
+/* Installateurs-Portal (T-INSTALLER-PORTAL): Kopplungsliste in Settings → Status */
+.installer-portal-list { margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.installer-portal-head { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.65; margin-top: 6px; }
+.installer-portal-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; background: rgba(255,255,255,0.02); }
+.installer-portal-name { font-weight: 600; }
+.installer-portal-meta { font-family: var(--f-mono); font-size: 11px; opacity: 0.7; flex: 1 1 220px; }

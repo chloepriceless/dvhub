@@ -3873,6 +3873,21 @@ export function createDefaultConfig() {
       lanSafeGroups: ['status', 'dashboard', 'history', 'forecast', 'integrations'],
       trustedClientIps: []
     },
+    // T-INSTALLER-PORTAL: Installateurs-Portal-Anbindung (/api/installer/*).
+    //   enabled:        Opt-in (Default false). Aus → WAN-Endpunkte register/
+    //                   login + Daten liefern 503 und der ausgehende Poll-
+    //                   Client ruht. „Kopplung starten“ in der UI schaltet ein.
+    //   allowTunnel:    Installateur darf den Support-Tunnel öffnen (Default aus).
+    //   allowUpdates:   Installateur darf Updates einspielen (Default aus).
+    //   sessionTtlMin:  Lebensdauer der Portal-Sessions (5…1440 Minuten).
+    // Der Kopplungs-Store selbst liegt in DATA_DIR/installer-portal.json,
+    // nicht in config.json (config wird bei jedem UI-Save überschrieben).
+    installerPortal: {
+      enabled: false,
+      allowTunnel: false,
+      allowUpdates: false,
+      sessionTtlMin: 60
+    },
     // Licensing (Phase 17 license service). keygenAccount is the Keygen CE
     // account ID on license.dvhub.de — product-wide, identical for every
     // DVhub installation (it identifies the VENDOR account, not the customer;

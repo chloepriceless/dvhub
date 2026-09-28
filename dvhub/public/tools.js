@@ -990,6 +990,268 @@ async function closeSupportTunnel() {
   }
 }
 
+// --- T-INSTALLER-PORTAL: Installateurs-Portal-Kachel ---------------------------
+// Kunden-Sicht auf die /api/installer/*-Kopplungen: Zugang an/aus, offene
+// Kopplungsanfragen (Name + Fingerprint — den 6-stelligen Code nennt der
+// Installateur dem Kunden z. B. am Telefon), Bestätigen, Widerrufen.
+// Rein DOM-API-Rendering (kein innerHTML — CSP-/XSS-Hausregel).
+let installerPortalTimer = null;
+// CSRF-Nonce aus GET /api/installer/settings — wird bei koppeln/bestätigen/
+// freigeben automatisch mitgeschickt (fremde Webseiten können ihn nicht lesen).
+let installerPortalUiToken = null;
+
+async function fetchInstallerUiToken() {
+  try {
+    const res = await apiFetch('/api/installer/settings');
+    if (res.ok) installerPortalUiToken = (await res.json()).uiToken || null;
+  } catch { /* best-effort */ }
+  return installerPortalUiToken;
+}
+
+// POST mit Nonce; ist er abgelaufen (403 ui_token_required), einmal frisch
+// holen und wiederholen.
+async function installerPortalFetch(path, body) {
+  const send = () => apiFetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...(body || {}), uiToken: installerPortalUiToken || undefined }),
+  });
+  if (!installerPortalUiToken) await fetchInstallerUiToken();
+  let res = await send();
+  if (res.status === 403) {
+    const j = await res.clone().json().catch(() => ({}));
+    if (j.error === 'ui_token_required') { await fetchInstallerUiToken(); res = await send(); }
+  }
+  return res;
+}
+
+function installerPortalEl(id) { return document.getElementById(id); }
+
+function fmtInstallerRow(i) {
+  const fp = (i.fingerprint || '').slice(0, 16).match(/.{2}/g)?.join(':') || '—';
+  const seen = i.lastSeenAt ? new Date(i.lastSeenAt).toLocaleString('de-DE') : 'noch nie';
+  return { fp, seen };
+}
+
+function renderInstallerList(installers) {
+  const box = installerPortalEl('installerPortalList');
+  if (!box) return;
+  box.replaceChildren();
+  const pending = installers.filter((i) => i.status === 'pending');
+  const active = installers.filter((i) => i.status === 'active');
+  const pendingRow = installerPortalEl('installerPortalPendingRow');
+  if (pendingRow) pendingRow.hidden = pending.length === 0;
+  setText('installerPortalPending', pending.length
+    ? `${pending.length} Anfrage${pending.length > 1 ? 'n' : ''} warten auf deine Bestätigung — den Kopplungs-Code nennt dir dein Installateur.`
+    : '—');
+  const mk = (tag, cls, text) => {
+    const el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (text != null) el.textContent = text;
+    return el;
+  };
+  const section = (title, list, action) => {
+    if (!list.length) return;
+    box.appendChild(mk('div', 'installer-portal-head', title));
+    for (const i of list) {
+      const { fp, seen } = fmtInstallerRow(i);
+      const row = mk('div', 'installer-portal-row');
+      row.appendChild(mk('span', 'installer-portal-name', `${i.name}${i.company ? ' · ' + i.company : ''}`));
+      row.appendChild(mk('span', 'installer-portal-meta', `ID ${i.id} · Key ${fp} · zuletzt: ${seen}`));
+      if (action) {
+        const btn = mk('button', 'btn btn-small ' + (action.danger ? 'btn-danger' : 'btn-primary'), action.label);
+        btn.type = 'button';
+        btn.addEventListener('click', () => action.onClick(i));
+        row.appendChild(btn);
+      }
+      box.appendChild(row);
+    }
+  };
+  section('Warten auf deine Bestätigung', pending, {
+    label: 'Code eingeben',
+    onClick: (i) => {
+      // Bestätigung braucht den Code — das Eingabefeld unten ist der Weg.
+      setText('installerPortalResult', `Bitte den 6-stelligen Code für „${i.name}“ unten eintragen und „Kopplung bestätigen“ drücken.`);
+      const idEl = installerPortalEl('installerPortalPairId');
+      const codeEl = installerPortalEl('installerPortalPairCode');
+      if (idEl) idEl.value = i.id;
+      if (codeEl) codeEl.focus();
+    },
+  });
+  section('Aktive Installateure', active, {
+    label: 'Widerrufen',
+    danger: true,
+    onClick: async (i) => {
+      if (!window.confirm(`Zugang von „${i.name}“ wirklich widerrufen? Das Portal verliert sofort den Zugriff.`)) return;
+      await installerPortalPost('/api/installer/revoke', { installerId: i.id }, `Zugang von „${i.name}“ widerrufen.`);
+    },
+  });
+  if (!installers.length) {
+    box.appendChild(mk('div', 'installer-portal-meta', 'Noch kein Installateur gekoppelt. Lege im Portal ein Konto an und trage die Appliance-ID sowie den Kopplungs-Code hier ein.'));
+  }
+}
+
+async function refreshInstallerPortal() {
+  try {
+    const res = await apiFetch('/api/installer/list');
+    if (res.ok) {
+      const j = await res.json();
+      setText('installerPortalApplianceId', j.applianceId || '—');
+      renderInstallerList(Array.isArray(j.installers) ? j.installers : []);
+    }
+  } catch { /* best-effort, wie Support-Tunnel-Status */ }
+  try {
+    const res = await apiFetch('/api/installer/settings');
+    if (res.ok) {
+      const j = await res.json();
+      installerPortalUiToken = j.uiToken || installerPortalUiToken;
+      const set = (id, v) => { const cb = installerPortalEl(id); if (cb) cb.checked = v === true; };
+      set('installerPortalEnabled', j.enabled);
+      set('installerPortalAllowTunnel', j.allowTunnel);
+      set('installerPortalAllowUpdates', j.allowUpdates);
+    }
+  } catch { /* best-effort */ }
+  refreshPortalClientState();
+}
+
+// Portal-Kopplung (Pull/NAT-Modell): Zustand der ausgehenden Verbindung
+// zum Online-Portal anzeigen + Formular ein-/ausblenden.
+async function refreshPortalClientState() {
+  try {
+    const res = await apiFetch('/api/installer/client/status');
+    if (!res.ok) return;
+    const j = await res.json();
+    const urlEl = installerPortalEl('installerPortalUrl');
+    if (urlEl && !urlEl.value && j.portalUrl) urlEl.value = j.portalUrl;
+    const form = installerPortalEl('installerPortalPairForm');
+    let text = 'Nicht gekoppelt — Code im Portal erzeugen und hier eintragen.';
+    if (j.paired && j.revoked) {
+      text = 'Das Portal hat die Kopplung beendet oder abgelehnt — bitte „Portal-Kopplung trennen“ und bei Bedarf neu koppeln.';
+      if (form) form.hidden = true;
+    } else if (j.paired && j.approved) {
+      const seen = j.lastPollAt ? new Date(j.lastPollAt).toLocaleString('de-DE') : '…';
+      text = j.lastError
+        ? `Gekoppelt, aber letzter Poll fehlgeschlagen: ${j.lastError}`
+        : `✓ Verbunden mit dem Portal — letzte Übertragung: ${seen}`;
+      if (form) form.hidden = true;
+    } else if (j.paired) {
+      text = 'Anfrage gesendet — warte auf Freigabe im Portal…';
+      if (form) form.hidden = true;
+    } else if (form) {
+      form.hidden = false;
+    }
+    setText('installerPortalClientState', text);
+  } catch { /* best-effort */ }
+}
+
+async function startPortalPairing() {
+  const urlEl = installerPortalEl('installerPortalUrl');
+  const codeEl = installerPortalEl('installerPortalClientCode');
+  const result = installerPortalEl('installerPortalResult');
+  const portalUrl = String(urlEl?.value || '').trim();
+  const pairingCode = String(codeEl?.value || '').trim();
+  if (!/^https?:\/\//.test(portalUrl)) {
+    setText('installerPortalResult', 'Bitte die Portal-URL mit https:// eintragen.');
+    return;
+  }
+  if (!/^\d{6}$/.test(pairingCode)) {
+    setText('installerPortalResult', 'Der Kopplungs-Code sind 6 Ziffern (aus dem Portal).');
+    return;
+  }
+  if (result) result.textContent = 'Kopplung wird zum Portal gesendet…';
+  try {
+    const res = await installerPortalFetch('/api/installer/client/pair', { portalUrl, pairingCode });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.ok) {
+      const hints = {
+        portal_url_not_allowed: 'Portal-URL nicht erlaubt — https oder http im lokalen Netz.',
+        pairing_not_found: 'Code nicht gefunden — im Portal neu erzeugen lassen.',
+        pairing_code_mismatch: 'Code stimmt nicht mit der Anfrage im Portal überein.',
+        pairing_already_claimed: 'Diese Anlage wurde bereits anderweitig gekoppelt.',
+        pairing_declined: 'Die Anfrage wurde im Portal abgelehnt.',
+        appliance_id_missing: 'Appliance-ID fehlt auf der Box (Neuinstallation?).',
+        pairing_code_expired: 'Code abgelaufen — im Portal neu erzeugen lassen.',
+        pairing_locked: 'Zu viele falsche Codes — im Portal einen neuen Code erzeugen lassen.',
+      };
+      if (result) result.textContent = 'Fehler: ' + (hints[j.error] || j.error || `HTTP ${res.status}`);
+      return;
+    }
+    if (codeEl) codeEl.value = '';
+    if (result) result.textContent = j.status === 'approved'
+      ? '✓ Gekoppelt und freigegeben — die Anlage meldet sich jetzt regelmäßig beim Portal.'
+      : '✓ Anlage hat sich beim Portal gemeldet — der Installateur muss die Anfrage noch freigeben.';
+  } catch (e) {
+    if (result) result.textContent = 'Fehler: ' + (e && e.message ? e.message : String(e));
+  } finally {
+    // Volle Aktualisierung: die Kopplung schaltet den Portal-Schalter ggf. ein.
+    refreshInstallerPortal();
+  }
+}
+
+async function installerPortalPost(path, body, okText) {
+  const result = installerPortalEl('installerPortalResult');
+  if (result) result.textContent = '…';
+  try {
+    const res = await installerPortalFetch(path, body);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.ok) {
+      const hints = {
+        ui_token_required: 'Sicherheits-Token abgelaufen — bitte Seite neu laden.',
+        pairing_code_invalid: 'Kopplungs-Code stimmt nicht — bitte beim Installateur rückfragen.',
+        installer_not_found: 'Installateur-ID unbekannt — nutze die ID aus der Liste oben.',
+        installer_not_pending: 'Diese Kopplungsanfrage wurde bereits bestätigt oder widerrufen.',
+        installer_portal_disabled: 'Der Portal-Zugang ist deaktiviert — zuerst oben aktivieren.',
+        pairing_code_expired: 'Der Kopplungs-Code ist abgelaufen (30 min) — der Installateur muss neu anfragen.',
+      };
+      if (result) result.textContent = 'Fehler: ' + (hints[j.error] || j.error || `HTTP ${res.status}`);
+    } else if (result) {
+      result.textContent = '✓ ' + okText;
+    }
+  } catch (e) {
+    if (result) result.textContent = 'Fehler: ' + (e && e.message ? e.message : String(e));
+  } finally {
+    await refreshInstallerPortal();
+  }
+}
+
+function wireInstallerPortal() {
+  if (!installerPortalEl('installerPortalEnabled')) return;
+  installerPortalEl('installerPortalEnabled')?.addEventListener('change', async (e) => {
+    await installerPortalPost('/api/installer/settings', { enabled: !!e.target.checked },
+      e.target.checked ? 'Portal-Zugang aktiviert.' : 'Portal-Zugang deaktiviert — kein Installateur kommt mehr durch.');
+  });
+  installerPortalEl('installerPortalAllowTunnel')?.addEventListener('change', async (e) => {
+    await installerPortalPost('/api/installer/settings', { allowTunnel: !!e.target.checked },
+      e.target.checked ? 'Installateur darf den Support-Tunnel öffnen.' : 'Support-Tunnel durch den Installateur gesperrt.');
+  });
+  installerPortalEl('installerPortalAllowUpdates')?.addEventListener('change', async (e) => {
+    await installerPortalPost('/api/installer/settings', { allowUpdates: !!e.target.checked },
+      e.target.checked ? 'Installateur darf Updates einspielen.' : 'Updates durch den Installateur gesperrt.');
+  });
+  installerPortalEl('installerPortalConfirmBtn')?.addEventListener('click', async () => {
+    const installerId = String(installerPortalEl('installerPortalPairId')?.value || '').trim();
+    const pairingCode = String(installerPortalEl('installerPortalPairCode')?.value || '').trim();
+    if (!installerId || !/^\d{6}$/.test(pairingCode)) {
+      setText('installerPortalResult', 'Bitte Installateur-ID und den 6-stelligen Kopplungs-Code ausfüllen.');
+      return;
+    }
+    await installerPortalPost('/api/installer/confirm', { installerId, pairingCode }, 'Kopplung bestätigt — der Installateur hat jetzt Zugriff.');
+    const codeEl = installerPortalEl('installerPortalPairCode');
+    if (codeEl) codeEl.value = '';
+  });
+  installerPortalEl('installerPortalRefreshBtn')?.addEventListener('click', () => refreshInstallerPortal());
+  installerPortalEl('installerPortalPairBtn')?.addEventListener('click', () => startPortalPairing());
+  installerPortalEl('installerPortalDisconnectBtn')?.addEventListener('click', async () => {
+    if (!window.confirm('Portal-Kopplung wirklich trennen? Das Portal verliert den Zugriff auf diese Anlage.')) return;
+    try { await apiFetch('/api/installer/client/disconnect', { method: 'POST' }); } catch { /* egal */ }
+    setText('installerPortalResult', 'Portal-Kopplung getrennt.');
+    refreshPortalClientState();
+  });
+  refreshInstallerPortal();
+  if (installerPortalTimer) clearInterval(installerPortalTimer);
+  installerPortalTimer = setInterval(refreshInstallerPortal, 30000);
+}
+
 function initToolsPage() {
   const bootstrapPlan = buildMaintenanceBootstrapPlan();
   document.getElementById('startScan')?.addEventListener('click', () => {
@@ -1044,6 +1306,9 @@ function initToolsPage() {
     if (supportTunnelTimer) clearInterval(supportTunnelTimer);
     supportTunnelTimer = setInterval(refreshSupportTunnelStatus, 15000);
   }
+
+  // T-INSTALLER-PORTAL — Kachel nur verdrahten, wenn sie im DOM liegt.
+  wireInstallerPortal();
 
   // VPN tools
   document.getElementById('vpnToolStart')?.addEventListener('click', () => vpnAction('start'));
