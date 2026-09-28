@@ -1155,7 +1155,7 @@ export function createApiRoutes(ctx) {
     ['/api/integration/home-assistant', 'integrations'], ['/api/integration/loxone', 'integrations'],
     ['/api/integration/eos', 'integrations'], ['/api/integration/emhass', 'integrations'],
     ['/api/integration/evcc', 'integrations'], ['/api/integration/evcc/eos', 'integrations'],
-    ['/api/integrations/health', 'integrations'],
+    ['/api/integrations/health', 'integrations'], ['/api/datenspende/status', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -2206,6 +2206,26 @@ export function createApiRoutes(ctx) {
     'POST /api/installer/support-tunnel/open': '/api/support/tunnel/open',
     'POST /api/installer/support-tunnel/close': '/api/support/tunnel/close',
   };
+
+  // CSRF-Nonce für die Datenspende-Kachel (gleiches Prinzip wie der
+  // Installateurs-Portal-Nonce): nur per GET lesbar, cross-origin nicht,
+  // innerhalb der TTL mehrfach nutzbar, danach rotiert er.
+  const datenspendeNonce = (() => {
+    let token = null;
+    let at = 0;
+    const TTL = 10 * 60_000;
+    return {
+      issue() {
+        if (!token || Date.now() - at > TTL) { token = crypto.randomBytes(16).toString('hex'); at = Date.now(); }
+        return token;
+      },
+      check(candidate) {
+        if (!token || typeof candidate !== 'string' || Date.now() - at > TTL) return false;
+        const a = Buffer.from(candidate), b = Buffer.from(token);
+        return a.length === b.length && crypto.timingSafeEqual(a, b);
+      },
+    };
+  })();
 
   function installerHasValidBearer(req) {
     const expectedTok = getCfg().apiToken;
@@ -4553,6 +4573,125 @@ export function createApiRoutes(ctx) {
     // adapter (ctx.eosAdapter.isAvailable hits EOS /v1/health, 5s timeout). Read
     // model only; the EOS engine config lives in EOSdash. (Operator request
     // 2026-06-13: a dedicated card for her DV-EOS fork, not the stock EOS.)
+    // ── Datenspende (COMSYS, RWTH Aachen) ─────────────────────────────────
+    // Einrichtung/Einwilligung, Status, Schalter. Rechte-erweiternde Aufrufe
+    // (verknüpfen, einschalten, trennen) brauchen den UI-Nonce aus GET /status
+    // oder einen Bearer — bei lanTrust 'open' könnte sonst eine fremde Webseite
+    // im Browser des Kunden (JSON als text/plain) die Spende einschalten.
+    // Ausschalten geht immer ohne Nonce.
+    if (url.pathname.startsWith('/api/datenspende/')) {
+      const ds = ctx.datenspende;
+      if (!ds) return json(res, 503, { ok: false, error: 'datenspende_unavailable' });
+      const nonceOk = (body) => installerHasValidBearer(req) || datenspendeNonce.check(body?.uiToken);
+      const nonceFail = () => json(res, 403, { ok: false, error: 'ui_token_required' });
+      if (url.pathname === '/api/datenspende/status' && req.method === 'GET') {
+        return json(res, 200, { ok: true, ...ds.status(), uiToken: datenspendeNonce.issue() });
+      }
+      if (url.pathname === '/api/datenspende/link' && req.method === 'POST') {
+        const body = await readJsonBody(req, res);
+        if (body === null) return;
+        if (!nonceOk(body)) return nonceFail();
+        try {
+          if (body.mode === 'apikey') {
+            await ds.linkApiKey({ apiKey: body.apiKey, consent: body.consent === true });
+          } else {
+            await ds.link({
+              mode: body.mode === 'signin' ? 'signin' : 'signup',
+              username: body.username, password: body.password, email: body.email, secret: body.secret,
+              consent: body.consent === true, household: body.household || {},
+            });
+          }
+          // Verknüpft + eingewilligt → Spende einschalten.
+          const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+          next.datenspende = { ...(next.datenspende || {}), enabled: true };
+          ctx.saveAndApplyConfig(next);
+          pushLog('datenspende_setting_changed', { enabled: true, via: 'link' }, actorContext(req));
+          return json(res, 200, { ok: true, ...ds.status() });
+        } catch (e) {
+          const code = e?.code || 'datenspende_error';
+          const status = e?.name === 'DatenspendeConnError' || e?.name === 'DatenspendeServerError' ? 502
+            : e?.name === 'DatenspendeAuthError' ? (code === 'consent_required' ? 400 : 401) : 400;
+          pushLog('datenspende_link_failed', { error: code }, actorContext(req));
+          return json(res, status, { ok: false, error: code, detail: String(e?.message || e).slice(0, 200) });
+        }
+      }
+      if (url.pathname === '/api/datenspende/settings' && req.method === 'POST') {
+        const body = await readJsonBody(req, res);
+        if (body === null) return;
+        const patch = {};
+        if (body.enabled !== undefined) {
+          if (typeof body.enabled !== 'boolean') return json(res, 400, { ok: false, error: 'enabled_must_be_boolean' });
+          patch.enabled = body.enabled;
+        }
+        if (body.intervalSec !== undefined) {
+          const iv = Number(body.intervalSec);
+          if (!Number.isInteger(iv) || iv < 5 || iv > 300) return json(res, 400, { ok: false, error: 'intervalSec_5_bis_300' });
+          patch.intervalSec = iv;
+        }
+        if (body.clientType !== undefined) {
+          if (typeof body.clientType !== 'string' || !/^[a-z0-9_-]{1,40}$/i.test(body.clientType)) {
+            return json(res, 400, { ok: false, error: 'clientType_ungueltig' });
+          }
+          patch.clientType = body.clientType;
+        }
+        if (body.sources !== undefined) {
+          if (!body.sources || typeof body.sources !== 'object') return json(res, 400, { ok: false, error: 'sources_ungueltig' });
+          patch.sources = {};
+          for (const [k, v] of Object.entries(body.sources)) {
+            if (!['grid', 'pv', 'load', 'battery', 'devices', 'mqttTiles', 'wallbox'].includes(k) || typeof v !== 'boolean') {
+              return json(res, 400, { ok: false, error: `source_ungueltig:${k}` });
+            }
+            patch.sources[k] = v;
+          }
+        }
+        if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'nichts_zu_aendern' });
+        // Nur reines Ausschalten ist privilegien-reduzierend und geht ohne Nonce.
+        const onlyDisable = Object.keys(patch).length === 1 && patch.enabled === false;
+        if (!onlyDisable && !nonceOk(body)) return nonceFail();
+        // Ausschalten verwirft auch eine gerade laufende Einrichtung.
+        if (patch.enabled === false) ds.cancelPendingLink?.();
+        if (patch.enabled === true && !ds.status().linked) return json(res, 409, { ok: false, error: 'nicht_verknuepft' });
+        try {
+          const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+          const cur = next.datenspende || {};
+          next.datenspende = { ...cur, ...patch, ...(patch.sources ? { sources: { ...(cur.sources || {}), ...patch.sources } } : {}) };
+          ctx.saveAndApplyConfig(next);
+          pushLog('datenspende_setting_changed', patch, actorContext(req));
+          return json(res, 200, { ok: true, ...ds.status() });
+        } catch (e) {
+          return json(res, 500, { ok: false, error: 'config_save_failed', detail: String(e.message || e).slice(0, 160) });
+        }
+      }
+      if (url.pathname === '/api/datenspende/backfill' && req.method === 'POST') {
+        // Bestandsdaten nachsenden. Starten erweitert, was gespendet wird → Nonce;
+        // Stoppen geht immer.
+        const body = await readJsonBody(req, res);
+        if (body === null) return;
+        if (body.action === 'stop') {
+          pushLog('datenspende_backfill_stopped', {}, actorContext(req));
+          return json(res, 200, { ok: true, ...ds.stopBackfill() });
+        }
+        if (body.action !== 'start') return json(res, 400, { ok: false, error: 'action_start_oder_stop' });
+        if (!nonceOk(body)) return nonceFail();
+        try {
+          return json(res, 200, { ok: true, ...ds.startBackfill() });
+        } catch (e) {
+          return json(res, 409, { ok: false, error: e?.code || 'backfill_failed', detail: String(e?.message || e).slice(0, 200) });
+        }
+      }
+      if (url.pathname === '/api/datenspende/unlink' && req.method === 'POST') {
+        const body = await readJsonBody(req, res);
+        if (body === null) return;
+        if (!nonceOk(body)) return nonceFail();
+        const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+        next.datenspende = { ...(next.datenspende || {}), enabled: false };
+        try { ctx.saveAndApplyConfig(next); } catch { /* Trennen geht trotzdem */ }
+        pushLog('datenspende_setting_changed', { enabled: false, via: 'unlink' }, actorContext(req));
+        return json(res, 200, { ok: true, ...ds.unlink() });
+      }
+      return json(res, 404, { ok: false, error: 'not_found' });
+    }
+
     if (url.pathname === '/api/integrations/dveos' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
       const opt = getCfg().optimizer || {};
@@ -7012,10 +7151,12 @@ export function createApiRoutes(ctx) {
       // Seite schickt ihren beim Laden geklonten Entwurf mit — ein unabhängiges
       // Speichern würde sonst einen inzwischen ausgeschalteten Zugang wieder
       // einschalten; ein Import darf Fernzugang ebenfalls nicht mitbringen.
-      {
-        const curIp = ctx.getRawCfg?.()?.installerPortal;
-        if (curIp === undefined) delete body.config.installerPortal;
-        else body.config.installerPortal = JSON.parse(JSON.stringify(curIp));
+      // Gleiches gilt für die Datenspende (Einwilligung/Schalter nur über
+      // /api/datenspende/*).
+      for (const key of ['installerPortal', 'datenspende']) {
+        const cur = ctx.getRawCfg?.()?.[key];
+        if (cur === undefined) delete body.config[key];
+        else body.config[key] = JSON.parse(JSON.stringify(cur));
       }
       // Encrypted secrets bundle (config-secrets-crypto): a password-protected
       // migration export carries the REDACTED_PATHS values sealed under the

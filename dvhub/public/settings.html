@@ -470,6 +470,80 @@
               <p class="svc-meta"><strong>Hinweis:</strong> Die Anlage verbindet sich selbst ausgehend mit dem Portal &mdash; kein Portforwarding und keine Freigabe im Router n&ouml;tig.</p>
             </div>
 
+            <!-- Datenspende (COMSYS, RWTH Aachen) -->
+            <div class="config-group" data-accent="teal">
+              <div class="config-group-kicker">Datenspende für die Forschung</div>
+              <p class="svc-meta">Spende die Leistungsdaten deiner Anlage an das Forschungsprojekt <strong>„Datenspende“</strong> des Lehrstuhls COMSYS der <strong>RWTH Aachen</strong> (SAFEr Grid). Die Daten helfen, zukünftige Stromnetze realistisch zu simulieren. Gespendet werden nur Leistungswerte (W) der unten ausgewählten Quellen, keine Namen oder Adressen. Die Teilnahme ist freiwillig, jederzeit beendbar, und gespendete Daten kannst du beim Projekt löschen lassen. <a href="https://datenspende.comsys.rwth-aachen.de" target="_blank" rel="noopener">Projekt &amp; Datenschutz</a></p>
+              <div class="config-row">
+                <span class="config-row-label">Status</span>
+                <span class="config-row-value api-row-value" id="dsState">&mdash;</span>
+              </div>
+              <div id="dsLinkForm" class="config-row-stack-tight" hidden>
+                <div class="config-row">
+                  <span class="config-row-label">Konto</span>
+                  <div class="config-row-stack">
+                    <select id="dsMode" class="config-input">
+                      <option value="signup">Neues Konto beim Projekt anlegen</option>
+                      <option value="signin">Vorhandenes Konto verwenden</option>
+                      <option value="apikey">Vorhandenen API-Key verwenden</option>
+                    </select>
+                    <input id="dsApiKey" class="config-input" type="password" placeholder="API-Key vom Projekt" autocomplete="off" spellcheck="false" hidden />
+                    <input id="dsUsername" class="config-input" placeholder="Benutzername" autocomplete="username" spellcheck="false" />
+                    <input id="dsPassword" class="config-input" type="password" placeholder="Passwort" autocomplete="new-password" />
+                    <input id="dsEmail" class="config-input" type="email" placeholder="E-Mail (optional)" autocomplete="email" />
+                    <input id="dsSecret" class="config-input" placeholder="Anmelde-Schlüssel vom Projekt (optional)" autocomplete="off" spellcheck="false" />
+                    <small class="config-row-stack-small">Das Passwort wird nur für die Einrichtung verwendet und von DVhub nicht gespeichert.</small>
+                  </div>
+                </div>
+                <div class="config-row">
+                  <span class="config-row-label">Haushalt (alles optional)</span>
+                  <div class="config-row-stack">
+                    <input id="dsHouseName" class="config-input" placeholder="Name des Haushalts" autocomplete="off" />
+                    <input id="dsInhabitants" class="config-input" type="number" min="1" max="50" placeholder="Personen im Haushalt" />
+                    <input id="dsZip" class="config-input" placeholder="Postleitzahl" autocomplete="postal-code" />
+                    <input id="dsCountry" class="config-input" placeholder="Land (z. B. Deutschland)" autocomplete="country-name" />
+                  </div>
+                </div>
+                <div class="config-row">
+                  <span class="config-row-label">Einwilligung</span>
+                  <label class="config-row-stack"><span><input id="dsConsent" type="checkbox" /> Ich möchte teilnehmen und die Daten meiner Anlage an die RWTH Aachen spenden.</span></label>
+                </div>
+                <div class="svc-actions-row">
+                  <button id="dsLinkBtn" class="btn btn-primary btn-small" type="button">Verbinden &amp; Spende starten</button>
+                </div>
+              </div>
+              <div id="dsLinked" hidden>
+                <div class="config-row">
+                  <span class="config-row-label">Spende aktiv</span>
+                  <div class="config-row-stack"><input id="dsEnabled" type="checkbox" /><small class="config-row-stack-small">Aus = es wird nichts mehr gesammelt oder gesendet.</small></div>
+                </div>
+                <div class="config-row">
+                  <span class="config-row-label">Gespendete Quellen</span>
+                  <div class="config-row-stack" id="dsSources"></div>
+                </div>
+                <div class="config-row">
+                  <span class="config-row-label">Bestandsdaten</span>
+                  <div class="config-row-stack">
+                    <span class="config-row-value api-row-value" id="dsBackfillState">&mdash;</span>
+                    <small class="config-row-stack-small">Sendet die in DVhub gespeicherten älteren Messwerte nach (Viertelstunden aus dem VRM-Import, ab Beginn der Live-Aufzeichnung 5-Sekunden-Werte). Läuft schonend im Hintergrund, auch über Neustarts.</small>
+                    <div class="svc-actions-row">
+                      <button id="dsBackfillStartBtn" class="btn btn-primary btn-small" type="button">Bestandsdaten nachsenden</button>
+                      <button id="dsBackfillStopBtn" class="btn btn-ghost btn-small" type="button">Nachversand anhalten</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="config-row">
+                  <span class="config-row-label">Gerade gespendet (Vorschau)</span>
+                  <div id="dsPreview" class="installer-portal-list"></div>
+                </div>
+                <div class="svc-actions-row">
+                  <button id="dsUnlinkBtn" class="btn btn-danger btn-small" type="button">Verbindung trennen</button>
+                  <button id="dsRefreshBtn" class="btn btn-ghost btn-small" type="button">Aktualisieren</button>
+                </div>
+              </div>
+              <p class="svc-meta" id="dsResult"></p>
+            </div>
+
             <!-- DV-Schaltsignal-Log -->
             <div class="config-group" data-accent="yellow">
               <div class="config-group-kicker">DV-Signale</div>
@@ -840,7 +914,7 @@
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20260720-reserve-visibility"></script>
-  <script src="/tools.js?v=20260927-installer-portal-2"></script>
+  <script src="/tools.js?v=20260928-datenspende-2"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>

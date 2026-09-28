@@ -1252,6 +1252,186 @@ function wireInstallerPortal() {
   installerPortalTimer = setInterval(refreshInstallerPortal, 30000);
 }
 
+// --- Datenspende (COMSYS, RWTH Aachen) -----------------------------------------
+// Opt-in-Kachel: Konto verknüpfen (mit Einwilligung), Quellen wählen, Status +
+// Vorschau der gerade gespendeten Werte. Rein DOM-API (kein innerHTML).
+let dsUiToken = null;
+let dsTimer = null;
+const DS_SOURCE_LABELS = {
+  grid: 'Netzanschluss', pv: 'PV-Erzeugung', load: 'Hausverbrauch', battery: 'Batterie',
+  devices: 'Geräte (Shelly/MQTT)', mqttTiles: 'MQTT-Kacheln (W)', wallbox: 'Wallbox (evcc)',
+};
+const dsEl = (id) => document.getElementById(id);
+
+async function dsPost(path, body) {
+  const send = () => apiFetch(path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...(body || {}), uiToken: dsUiToken || undefined }),
+  });
+  let res = await send();
+  if (res.status === 403) {
+    const j = await res.clone().json().catch(() => ({}));
+    if (j.error === 'ui_token_required') { await refreshDatenspende(); res = await send(); }
+  }
+  const j = await res.json().catch(() => ({}));
+  return { ok: res.ok && j.ok, status: res.status, j };
+}
+
+function dsFmtTime(iso) { return iso ? new Date(iso).toLocaleString('de-DE') : '—'; }
+
+function renderDatenspende(st) {
+  const linked = !!st.linked;
+  dsEl('dsLinkForm').hidden = linked;
+  dsEl('dsLinked').hidden = !linked;
+  let text = 'Nicht verbunden — Teilnahme ist freiwillig.';
+  if (linked) {
+    text = `${st.enabled ? '✓ Spende aktiv' : 'Spende pausiert'} · Konto „${st.username || '?'}“ · `
+      + `${Number(st.donated || 0).toLocaleString('de-DE')} Werte gespendet · letzte Übertragung: ${dsFmtTime(st.lastFlushAt)}`
+      + (st.queued ? ` · ${st.queued} in der Warteschlange` : '')
+      + (st.lastError ? ` · letzter Fehler: ${st.lastError}` : '');
+  }
+  setText('dsState', text);
+  const bf = st.backfill;
+  const bfLabels = { running: 'läuft', done: 'fertig', stopped: 'angehalten', error: 'angehalten (Fehler)' };
+  setText('dsBackfillState', !bf ? 'Noch nicht gestartet.'
+    : `${bfLabels[bf.status] || bf.status} · ${Number(bf.sent || 0).toLocaleString('de-DE')} Werte · Stand: ${bf.cursor ? new Date(bf.cursor).toLocaleDateString('de-DE') : '—'} von ${bf.firstData ? new Date(bf.firstData).toLocaleDateString('de-DE') : '—'} bis ${bf.until ? new Date(bf.until).toLocaleDateString('de-DE') : '—'}${bf.error ? ` · ${bf.error}` : ''}`);
+  const bfStart = dsEl('dsBackfillStartBtn');
+  const bfStop = dsEl('dsBackfillStopBtn');
+  if (bfStart) bfStart.hidden = bf?.status === 'running' || bf?.status === 'done';
+  if (bfStop) bfStop.hidden = bf?.status !== 'running';
+  const en = dsEl('dsEnabled');
+  if (en) en.checked = st.enabled === true;
+  const src = dsEl('dsSources');
+  if (src) {
+    src.replaceChildren();
+    for (const [key, label] of Object.entries(DS_SOURCE_LABELS)) {
+      const lab = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = st.sources?.[key] !== false;
+      cb.addEventListener('change', async () => {
+        const r = await dsPost('/api/datenspende/settings', { sources: { [key]: cb.checked } });
+        setText('dsResult', r.ok ? `✓ ${label} ${cb.checked ? 'wird gespendet' : 'wird nicht mehr gespendet'}.` : `Fehler: ${r.j.error || r.status}`);
+        refreshDatenspende();
+      });
+      lab.append(cb, ` ${label} `);
+      src.appendChild(lab);
+    }
+  }
+  const pv = dsEl('dsPreview');
+  if (pv) {
+    pv.replaceChildren();
+    for (const p of st.preview || []) {
+      const row = document.createElement('div');
+      row.className = 'installer-portal-row';
+      const name = document.createElement('span');
+      name.className = 'installer-portal-name';
+      name.textContent = p.name;
+      const val = document.createElement('span');
+      val.className = 'installer-portal-meta';
+      val.textContent = `${Math.round(p.power)} W${p.energy != null ? ` · ${p.energy} kWh` : ''}`;
+      row.append(name, val);
+      pv.appendChild(row);
+    }
+    if (!(st.preview || []).length) {
+      const empty = document.createElement('div');
+      empty.className = 'installer-portal-meta';
+      empty.textContent = 'Keine Werte verfügbar.';
+      pv.appendChild(empty);
+    }
+  }
+}
+
+async function refreshDatenspende() {
+  try {
+    const res = await apiFetch('/api/datenspende/status');
+    if (!res.ok) return;
+    const st = await res.json();
+    dsUiToken = st.uiToken || dsUiToken;
+    renderDatenspende(st);
+  } catch { /* best effort */ }
+}
+
+function wireDatenspende() {
+  if (!dsEl('dsState')) return;
+  dsEl('dsLinkBtn')?.addEventListener('click', async () => {
+    if (!dsEl('dsConsent').checked) {
+      setText('dsResult', 'Bitte zuerst die Einwilligung bestätigen — ohne sie findet keine Spende statt.');
+      return;
+    }
+    const mode = dsEl('dsMode').value;
+    const username = dsEl('dsUsername').value.trim();
+    const password = dsEl('dsPassword').value;
+    const apiKey = dsEl('dsApiKey').value.trim();
+    if (mode === 'apikey' ? !apiKey : (!username || !password)) {
+      setText('dsResult', mode === 'apikey' ? 'API-Key eintragen.' : 'Benutzername und Passwort eintragen.');
+      return;
+    }
+    setText('dsResult', 'Verbinde mit dem Projekt…');
+    const inhabitants = Number(dsEl('dsInhabitants').value);
+    const r = mode === 'apikey'
+      ? await dsPost('/api/datenspende/link', { mode, apiKey, consent: true })
+      : await dsPost('/api/datenspende/link', {
+      mode: dsEl('dsMode').value, username, password,
+      email: dsEl('dsEmail').value.trim() || undefined,
+      secret: dsEl('dsSecret').value.trim() || undefined,
+      consent: true,
+      household: {
+        name: dsEl('dsHouseName').value.trim() || undefined,
+        numberInhabitants: Number.isInteger(inhabitants) && inhabitants > 0 ? inhabitants : undefined,
+        zip: dsEl('dsZip').value.trim() || undefined,
+        country: dsEl('dsCountry').value.trim() || undefined,
+      },
+    });
+    dsEl('dsPassword').value = '';
+    dsEl('dsApiKey').value = '';
+    const hints = {
+      taken_username: 'Benutzername ist beim Projekt schon vergeben — „Vorhandenes Konto verwenden“ wählen oder anderen Namen nehmen.',
+      invalid_credentials: 'Benutzername oder Passwort falsch.',
+      password_too_short: 'Passwort zu kurz.',
+      invalid_secret: 'Anmelde-Schlüssel ungültig.',
+      taken_email: 'E-Mail ist beim Projekt schon registriert.',
+      connection_error: 'Projekt-Server nicht erreichbar — Internetverbindung prüfen.',
+    };
+    setText('dsResult', r.ok ? '✓ Verbunden — die Spende läuft. Danke!' : `Fehler: ${hints[r.j.error] || r.j.detail || r.j.error || r.status}`);
+    refreshDatenspende();
+  });
+  dsEl('dsEnabled')?.addEventListener('change', async (e) => {
+    const r = await dsPost('/api/datenspende/settings', { enabled: !!e.target.checked });
+    setText('dsResult', r.ok ? (e.target.checked ? '✓ Spende wieder aktiv.' : 'Spende pausiert — es wird nichts mehr gesendet.') : `Fehler: ${r.j.error || r.status}`);
+    refreshDatenspende();
+  });
+  dsEl('dsUnlinkBtn')?.addEventListener('click', async () => {
+    if (!window.confirm('Verbindung zum Datenspende-Projekt trennen? DVhub vergisst den Zugang und sendet nichts mehr. Bereits gespendete Daten kannst du beim Projekt löschen lassen.')) return;
+    const r = await dsPost('/api/datenspende/unlink', {});
+    setText('dsResult', r.ok ? 'Verbindung getrennt.' : `Fehler: ${r.j.error || r.status}`);
+    refreshDatenspende();
+  });
+  dsEl('dsRefreshBtn')?.addEventListener('click', () => refreshDatenspende());
+  // API-Key-Modus: nur das Key-Feld zeigen, Konto-/Haushaltsfelder ausblenden.
+  const syncMode = () => {
+    const apikey = dsEl('dsMode').value === 'apikey';
+    for (const id of ['dsUsername', 'dsPassword', 'dsEmail', 'dsSecret']) dsEl(id).hidden = apikey;
+    dsEl('dsApiKey').hidden = !apikey;
+  };
+  dsEl('dsMode')?.addEventListener('change', syncMode);
+  syncMode();
+  dsEl('dsBackfillStartBtn')?.addEventListener('click', async () => {
+    if (!window.confirm('Alle in DVhub gespeicherten älteren Messwerte an das Datenspende-Projekt nachsenden? Das läuft schonend im Hintergrund und kann einige Stunden dauern.')) return;
+    const r = await dsPost('/api/datenspende/backfill', { action: 'start' });
+    setText('dsResult', r.ok ? '✓ Nachversand gestartet.' : `Fehler: ${r.j.detail || r.j.error || r.status}`);
+    refreshDatenspende();
+  });
+  dsEl('dsBackfillStopBtn')?.addEventListener('click', async () => {
+    const r = await dsPost('/api/datenspende/backfill', { action: 'stop' });
+    setText('dsResult', r.ok ? 'Nachversand angehalten — „nachsenden“ macht am Stand weiter.' : `Fehler: ${r.j.error || r.status}`);
+    refreshDatenspende();
+  });
+  refreshDatenspende();
+  if (dsTimer) clearInterval(dsTimer);
+  dsTimer = setInterval(refreshDatenspende, 30000);
+}
+
 function initToolsPage() {
   const bootstrapPlan = buildMaintenanceBootstrapPlan();
   document.getElementById('startScan')?.addEventListener('click', () => {
@@ -1309,6 +1489,8 @@ function initToolsPage() {
 
   // T-INSTALLER-PORTAL — Kachel nur verdrahten, wenn sie im DOM liegt.
   wireInstallerPortal();
+  // Datenspende-Kachel (COMSYS, RWTH Aachen).
+  wireDatenspende();
 
   // VPN tools
   document.getElementById('vpnToolStart')?.addEventListener('click', () => vpnAction('start'));

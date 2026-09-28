@@ -3882,6 +3882,18 @@ export function createDefaultConfig() {
     //   sessionTtlMin:  Lebensdauer der Portal-Sessions (5…1440 Minuten).
     // Der Kopplungs-Store selbst liegt in DATA_DIR/installer-portal.json,
     // nicht in config.json (config wird bei jedem UI-Save überschrieben).
+    // Datenspende (COMSYS, RWTH Aachen — https://datenspende.comsys.rwth-aachen.de):
+    //   enabled:     Opt-in (Default false); Einrichtung + Einwilligung über
+    //                /api/datenspende/link, API-Key liegt in DATA_DIR/datenspende.json.
+    //   intervalSec: Abstand der Messwerte (5…300 s, Default 10).
+    //   clientType:  Client-Typ beim Projekt (Default 'dvhub'; mit COMSYS abstimmen).
+    //   sources:     welche Quellen gespendet werden (jeweils true/false).
+    datenspende: {
+      enabled: false,
+      intervalSec: 10,
+      clientType: 'dvhub',
+      sources: { grid: true, pv: true, load: true, battery: true, devices: true, mqttTiles: true, wallbox: true }
+    },
     installerPortal: {
       enabled: false,
       allowTunnel: false,

@@ -107,6 +107,9 @@ import { createInstallerPortal } from './services/installer-portal.js';
 // pollt das Online-Portal, Kommandos (Tunnel/Updates) kommen über denselben
 // Strang zurück.
 import { createInstallerPortalClient } from './services/installer-portal-client.js';
+// Datenspende (COMSYS, RWTH Aachen): Opt-in-Spende von Leistungs-Zeitreihen
+// an das Forschungsprojekt — ausgehend, ab Werk aus.
+import { createDatenspende } from './services/datenspende/index.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies. Imported here
@@ -1149,6 +1152,15 @@ ctx.installerPortalClient = createInstallerPortalClient(ctx, {
   pollIntervalMs: Number(process.env.DV_INSTALLER_POLL_MS) || undefined,
 });
 if (IS_WEB_PROCESS) ctx.installerPortalClient.startPolling();
+// Datenspende: immer konstruiert (Routen für Einrichtung/Status), gesammelt und
+// gesendet wird im Runtime-Prozess — nur dort sind Geräte-/evcc-Werte live.
+// Ohne Verknüpfung und Einwilligung (datenspende.enabled) passiert nichts.
+// DV_DATENSPENDE_URL / DV_DATENSPENDE_FLUSH_SEC: Server + Versand-Takt nur für
+// E2E-Tests/Diagnose überschreiben.
+ctx.datenspende = createDatenspende(ctx, {
+  flushIntervalSec: Number(process.env.DV_DATENSPENDE_FLUSH_SEC) || undefined,
+});
+if (IS_RUNTIME_PROCESS) ctx.datenspende.start();
 // T-CROSSCHECK: unbedingt konstruiert (routes-api liest getStatus), gestartet nur
 // im Runtime-Prozess und nur wenn konfiguriert (siehe IS_RUNTIME_PROCESS-Block).
 const mqttCrossCheck = createMqttCrossCheck(ctx);
@@ -2241,6 +2253,7 @@ async function gracefulShutdown(signal) {
   safeSync('evccIntegration.stop', () => evccIntegration.stop?.());
   safeSync('pvStrings.stop', () => pvStrings.stop?.());
   safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
+  safeSync('datenspende.stop', () => ctx.datenspende?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
   safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
   safeSync('eosFreshSocTimer.stop', () => clearInterval(eosFreshSocTimer));
