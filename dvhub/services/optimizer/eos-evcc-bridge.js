@@ -132,6 +132,13 @@ export function normalizeOverride({ powerW, untilMs = null }, bc, nowMs) {
   };
 }
 
+// Ist die EOS-Loesung voruebergehend nicht abrufbar (EOS rechnet gerade und
+// antwortet nicht binnen Timeout), gilt der zuletzt abgerufene Plan weiter —
+// hoechstens so lange nach dem letzten erfolgreichen Abruf. EOS rechnet alle
+// 15 min (ein Lauf 2–5 min); 60 min sind reichlich Puffer, ohne einem
+// stundenalten Plan zu folgen, falls EOS wirklich weg ist.
+export const PLAN_GRACE_MS = 60 * 60_000;
+
 /** Slot, der `nowMs` enthaelt — oder null (Plan veraltet / noch keiner). */
 export function slotAt(plan, nowMs) {
   return plan.find((slot) => slot.ts <= nowMs && nowMs < slot.endTs) || null;
@@ -165,6 +172,8 @@ export function createEosEvccBridge(deps) {
   let lastError = null;
   let lastPlan = [];
   let lastGeneratedAt = null;
+  let lastPlanFetchedAt = 0;  // letzter ERFOLGREICHER Abruf der EOS-Loesung
+  let usingStalePlan = false; // gerade Rueckfall auf den letzten Plan (fuer Log/Status)
   let lastTickAt = 0;
   // Ein Takt bzw. eine Override-Aenderung zur Zeit. Der 30-s-Takt ueberspringt,
   // wenn schon etwas laeuft; Knopfdruck und erzwungene Takte warten.
@@ -337,11 +346,29 @@ export function createEosEvccBridge(deps) {
       if (!charger.isConfigured()) return { ok: false, skipped: `${bc.charger} not configured` };
       if (isProActive() === false) return { ok: false, skipped: 'pro required' };
 
-      const solution = await getSolution(8 * 24 * 4);
-      lastGeneratedAt = solution?.generatedAt || null;
-      lastPlan = buildEvPlan(solution, bc);
-      let slot = slotAt(lastPlan, now());
+      let solution = null;
+      try { solution = await getSolution(8 * 24 * 4); } catch { solution = null; }
       let planNote = null;
+      // Leere Loesung (z. B. direkt nach EOS-Neustart vor dem ersten Lauf) gilt
+      // ebenfalls als „nicht abrufbar“, nicht als „EOS will stoppen“.
+      const fetched = !!(solution && Array.isArray(solution.rows) && solution.rows.length);
+      if (fetched) {
+        lastGeneratedAt = solution.generatedAt || null;
+        lastPlan = buildEvPlan(solution, bc);
+        lastPlanFetchedAt = now();
+        usingStalePlan = false;
+      } else if (lastPlan.length && now() - lastPlanFetchedAt <= PLAN_GRACE_MS) {
+        // Abruf gescheitert (Timeout waehrend EOS rechnet) — das ist KEIN
+        // „EOS will stoppen“. Gueltige Slots des letzten Plans nicht verwerfen,
+        // sonst schaltet die Wallbox im Minutentakt an/aus (schadet dem Auto).
+        planNote = 'EOS-Plan gerade nicht abrufbar — letzter Plan gilt weiter';
+        if (!usingStalePlan) pushLog('eos_evcc_plan_fallback', { planGeneratedAt: lastGeneratedAt, fetchedAt: new Date(lastPlanFetchedAt).toISOString() });
+        usingStalePlan = true;
+      } else {
+        lastPlan = [];
+        usingStalePlan = false;
+      }
+      let slot = slotAt(lastPlan, now());
       if (!slot || !slot.action) {
         planNote = slot ? 'EOS-Plan ohne E-Auto-Werte (E-Auto in EOS angemeldet?)' : 'kein EOS-Slot fuer jetzt';
         // evcc hoert nur auf uns: ohne E-Auto-Plan gilt Stopp — sonst laedt

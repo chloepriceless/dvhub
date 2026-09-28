@@ -170,12 +170,15 @@ describe('eos-evcc-bridge: Steuern', () => {
     assert.deepEqual(h.calls.at(-1), ['mode', 2, 'off']);
   });
 
-  test('Plan verloren, waehrend wir Laden befohlen haben → Stopp', async () => {
-    const h = harness({ sol: solution([1]) });
+  test('Plan verloren, waehrend wir Laden befohlen haben → Stopp erst, wenn der letzte Plan ausgelaufen ist', async () => {
+    const h = harness({ sol: solution([1]) }); // ein Lade-Slot T0 … T0+15 min
     await h.bridge.tick();
     assert.deepEqual(h.calls.at(-1), ['mode', 2, 'now']);
-    h.setSol(null); // EOS weg
+    h.setSol(null); // EOS nicht abrufbar
     h.advance(30_000);
+    await h.bridge.tick();
+    assert.equal(h.calls.length, 2, 'noch im gueltigen Slot: kein Stopp');
+    h.advance(Q); // Slot vorbei, kein neuer Plan
     await h.bridge.tick();
     assert.deepEqual(h.calls.at(-1), ['mode', 2, 'off']);
     assert.ok(h.logs.some((l) => l.event === 'eos_evcc_plan_lost'));
@@ -183,6 +186,58 @@ describe('eos-evcc-bridge: Steuern', () => {
     h.advance(30_000);
     await h.bridge.tick();
     assert.equal(h.calls.length, 3);
+  });
+
+  test('EOS antwortet waehrend eines Rechenlaufs zeitweise nicht → kein An/Aus-Flattern', async () => {
+    // Prod 2026-09-28: Abruf scheiterte jeden 2. Takt (Timeout waehrend GA-Lauf),
+    // die Bruecke schickte abwechselnd Laden/Stopp im Minutentakt.
+    const h = harness({ sol: solution([0.5, 0.5, 0.5, 0.5]) });
+    await h.bridge.tick();
+    assert.deepEqual(h.calls, [['maxcurrent', 2, 8], ['mode', 2, 'now']]);
+    const good = solution([0.5, 0.5, 0.5, 0.5]);
+    for (let i = 0; i < 8; i++) {
+      h.setSol(i % 2 ? good : null);
+      h.advance(30_000);
+      await h.bridge.tick();
+    }
+    assert.equal(h.calls.length, 2, `keine weiteren Befehle, bekam: ${JSON.stringify(h.calls.slice(2))}`);
+    assert.ok(!h.logs.some((l) => l.event === 'eos_evcc_plan_lost'));
+    assert.ok(h.logs.some((l) => l.event === 'eos_evcc_plan_fallback'), 'Rueckfall wird protokolliert');
+  });
+
+  test('Rueckfall auf den letzten Plan hoechstens 60 min nach dem letzten erfolgreichen Abruf', async () => {
+    const h = harness({ sol: solution(new Array(16).fill(1)) }); // 4 h Laden geplant
+    await h.bridge.tick();
+    assert.deepEqual(h.calls.at(-1), ['mode', 2, 'now']);
+    h.setSol(null); // EOS dauerhaft weg
+    h.advance(59 * 60_000);
+    await h.bridge.tick();
+    assert.equal(h.calls.length, 2, 'nach 59 min gilt der Plan noch');
+    h.advance(2 * 60_000);
+    await h.bridge.tick();
+    assert.deepEqual(h.calls.at(-1), ['mode', 2, 'off'], 'nach 61 min: kein stundenalter Plan mehr');
+  });
+
+  test('Neuer EOS-Plan ohne Slot fuer jetzt ist eine echte Entscheidung → sofort Stopp', async () => {
+    const h = harness({ sol: solution([1, 1, 1, 1]) });
+    await h.bridge.tick();
+    assert.deepEqual(h.calls.at(-1), ['mode', 2, 'now']);
+    // EOS hat neu gerechnet: Plan beginnt erst in 2 h (kein Slot fuer jetzt).
+    h.setSol(solution([1, 1], { start: T0 + 8 * Q, generatedAt: '2026-09-22T10:05:00Z' }));
+    h.advance(30_000);
+    await h.bridge.tick();
+    assert.deepEqual(h.calls.at(-1), ['mode', 2, 'off']);
+  });
+
+  test('Leere EOS-Loesung (z. B. direkt nach EOS-Neustart) verwirft den gueltigen Plan nicht', async () => {
+    const h = harness({ sol: solution([1, 1]) });
+    await h.bridge.tick();
+    h.setSol({ generatedAt: null, slotMinutes: 15, rows: [] });
+    h.advance(30_000);
+    await h.bridge.tick();
+    assert.equal(h.calls.length, 2, 'kein Stopp');
+    const st = h.bridge.getStatus();
+    assert.match(String(st.lastError || ''), /letzter Plan gilt weiter/);
   });
 
   test('Fehler von evcc: Befehl gilt als nicht gesendet, naechster Takt versucht erneut', async () => {
