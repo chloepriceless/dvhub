@@ -10,6 +10,7 @@
 // step; for *securing* the data the dump is complete and correct.
 
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 
 // Two scopes the operator can pick at download time.
 export const DB_BACKUP_SCOPES = new Set(['full', 'energy15m']);
@@ -27,10 +28,52 @@ const PG_RESTORE_BIN = '/usr/bin/pg_restore';
 const PG_PSQL_BIN = '/usr/bin/psql';
 const PG_SUPERUSER = 'postgres';
 
-/** Wrap a pg binary + argv to run as the postgres superuser: `sudo -u postgres <bin> <args…>`. */
-function pgWrap(bin, binArgs) {
+// Container (DVHUB_RUNTIME=container): kein sudo, keine Unix-Socket-Peer-Auth —
+// die DB läuft in einem eigenen Container. Die pg-Werkzeuge liegen im Image
+// (postgresql17-client unter DVHUB_PG_BIN_DIR) und verbinden sich per TCP als
+// DB-Admin (DVHUB_DB_ADMIN_USER/PASSWORD, im Compose der postgres-Superuser).
+// Die App selbst bleibt die nicht-privilegierte Rolle dvhub — sonst griffe die
+// Aussperrung während des Restores (CONNECTION LIMIT 0) nicht.
+/**
+ * Wie werden die pg-Werkzeuge aufgerufen? Rein, aus der Umgebung.
+ * @returns {{direct:false} | {direct:true, binDir:string, adminUser:string, adminPassword:string}}
+ */
+export function pgRuntime(env = process.env) {
+  const direct = env.DVHUB_RUNTIME === 'container' || env.DVHUB_PG_DIRECT === '1';
+  if (!direct) return { direct: false };
+  return {
+    direct: true,
+    binDir: env.DVHUB_PG_BIN_DIR || '/usr/bin',
+    adminUser: env.DVHUB_DB_ADMIN_USER || PG_SUPERUSER,
+    adminPassword: env.DVHUB_DB_ADMIN_PASSWORD || '',
+  };
+}
+
+function adminUser(runtime) {
+  return runtime?.direct ? runtime.adminUser : PG_SUPERUSER;
+}
+
+/**
+ * Wrap a pg binary + argv. Native: `sudo -u postgres <bin> <args…>` (fester
+ * Pfad, passend zur sudoers-Regel). Container: das Binary direkt aus binDir.
+ */
+function pgWrap(bin, binArgs, runtime = { direct: false }) {
+  if (runtime.direct) return { cmd: path.join(runtime.binDir, path.basename(bin)), args: binArgs };
   return { cmd: 'sudo', args: ['-u', PG_SUPERUSER, bin, ...binArgs] };
 }
+
+/** Umgebung für einen Admin-Aufruf: im Container mit PGPASSWORD des DB-Admins. */
+function adminEnv(runtime) {
+  const env = { ...process.env };
+  if (runtime.direct && runtime.adminPassword) env.PGPASSWORD = runtime.adminPassword;
+  return env;
+}
+
+/** Im Container ohne Admin-Passwort sind Backup/Restore nicht möglich. */
+function adminMissing(runtime) {
+  return runtime.direct && !runtime.adminPassword;
+}
+const ADMIN_MISSING_HINT = 'DVHUB_DB_ADMIN_PASSWORD ist im Container nicht gesetzt (Passwort des DB-Admins, siehe docker/compose.yml).';
 
 /**
  * Pure: build the pg_dump argv for a scope against a telemetry.database config.
@@ -40,7 +83,7 @@ function pgWrap(bin, binArgs) {
  *
  * @returns {{ok:true, args:string[], dbName:string} | {ok:false, error:string}}
  */
-export function buildPgDumpArgs({ scope, database = {}, superuser = false } = {}) {
+export function buildPgDumpArgs({ scope, database = {}, superuser = false, runtime = { direct: false } } = {}) {
   if (!DB_BACKUP_SCOPES.has(scope)) {
     return { ok: false, error: 'invalid scope' };
   }
@@ -52,7 +95,7 @@ export function buildPgDumpArgs({ scope, database = {}, superuser = false } = {}
   // the app (dvhub) keeps access to postgres-owned tables like victron_internals.
   // legacy path: connect as the app role, --no-owner/--no-privileges for a
   // role-portable dump of dvhub-owned tables only.
-  const user = superuser ? PG_SUPERUSER : (database.user || 'dvhub');
+  const user = superuser ? adminUser(runtime) : (database.user || 'dvhub');
   const args = ['-h', host, '-p', port, '-U', user, '-d', dbName, '-Fc'];
   if (!superuser) args.push('--no-owner', '--no-privileges');
   // "Nur 15-min-Werte": just the aggregated energy table the dashboards use.
@@ -85,20 +128,25 @@ export function backupFilename(scope, stamp) {
  * @param {(event:string, data:object)=>void} [p.pushLog]
  * @param {(cmd:string,args:string[],opts:object)=>any} [p.spawnFn]  injectable for tests
  */
-export function streamPgDump({ scope, database = {}, res, securityHeaders = {}, stamp, pushLog, spawnFn = spawn } = {}) {
+export function streamPgDump({ scope, database = {}, res, securityHeaders = {}, stamp, pushLog, spawnFn = spawn, runtime = pgRuntime() } = {}) {
   // superuser:true → dump EVERYTHING (incl. postgres-owned tables) as postgres.
-  const built = buildPgDumpArgs({ scope, database, superuser: true });
+  const built = buildPgDumpArgs({ scope, database, superuser: true, runtime });
   if (!built.ok) {
     res.writeHead(400, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: built.error }));
     return;
   }
+  if (adminMissing(runtime)) {
+    res.writeHead(503, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'db_admin_missing', hint: ADMIN_MISSING_HINT }));
+    return;
+  }
 
-  const env = { ...process.env };
+  const env = adminEnv(runtime);
 
   let child;
   try {
-    const w = pgWrap(PG_DUMP_BIN, built.args);
+    const w = pgWrap(PG_DUMP_BIN, built.args, runtime);
     child = spawnFn(w.cmd, w.args, { env });
   } catch (err) {
     res.writeHead(503, { 'content-type': 'application/json' });
@@ -162,16 +210,20 @@ export function streamPgDump({ scope, database = {}, res, securityHeaders = {}, 
  *
  * @returns {Promise<{ok:boolean, code:number|null, stderr:string, file:string}>}
  */
-export function dumpToFile({ scope, database = {}, outFile, spawnFn = spawn } = {}) {
+export function dumpToFile({ scope, database = {}, outFile, spawnFn = spawn, runtime = pgRuntime() } = {}) {
   return new Promise((resolve) => {
-    const built = buildPgDumpArgs({ scope, database });
+    // Container mit Admin-Zugang: wie der GUI-Download als DB-Admin (sonst
+    // scheitert ein Full-Dump an postgres-eigenen Tabellen einer migrierten DB).
+    const asAdmin = runtime.direct && !adminMissing(runtime);
+    const built = buildPgDumpArgs({ scope, database, superuser: asAdmin, runtime });
     if (!built.ok) { resolve({ ok: false, code: null, stderr: built.error, file: outFile }); return; }
     const args = [...built.args, '-f', outFile];
-    const env = { ...process.env };
-    if (database.password) env.PGPASSWORD = String(database.password);
+    const env = asAdmin ? adminEnv(runtime) : { ...process.env };
+    if (!asAdmin && database.password) env.PGPASSWORD = String(database.password);
     let child;
     try {
-      child = spawnFn('pg_dump', args, { env });
+      // Container: pg_dump liegt nicht im PATH (postgresql17-client → binDir).
+      child = spawnFn(runtime.direct ? path.join(runtime.binDir, 'pg_dump') : 'pg_dump', args, { env });
     } catch (err) {
       resolve({ ok: false, code: null, stderr: err.message, file: outFile });
       return;
@@ -197,7 +249,7 @@ export function dumpToFile({ scope, database = {}, outFile, spawnFn = spawn } = 
  *
  * @returns {{ok:true, args:string[], dbName:string} | {ok:false, error:string}}
  */
-export function buildPgRestoreArgs({ database = {}, file } = {}) {
+export function buildPgRestoreArgs({ database = {}, file, runtime = { direct: false }, clean = true } = {}) {
   if (!file || typeof file !== 'string') return { ok: false, error: 'missing_file' };
   const host = database.host || '/var/run/postgresql';
   const port = String(database.port || 5432);
@@ -206,8 +258,10 @@ export function buildPgRestoreArgs({ database = {}, file } = {}) {
   // dump's ownership + grants (no --no-owner/--no-privileges) so every object
   // lands under its original role — the app (dvhub) keeps write access, and
   // postgres-owned tables (victron_internals) restore correctly too.
-  const args = ['-h', host, '-p', port, '-U', PG_SUPERUSER, '-d', dbName,
-    '--clean', '--if-exists', file];
+  const args = ['-h', host, '-p', port, '-U', adminUser(runtime), '-d', dbName];
+  // clean=false: Ziel-DB wurde frisch angelegt (Vollwiederherstellung, s. runDbRestore).
+  if (clean) args.push('--clean', '--if-exists');
+  args.push(file);
   return { ok: true, args, dbName };
 }
 
@@ -216,24 +270,90 @@ export function buildPgRestoreArgs({ database = {}, file } = {}) {
  * the TimescaleDB pre/post_restore dance + backend termination). -Atqc keeps
  * output minimal and script-parseable; ON_ERROR_STOP surfaces real failures.
  */
-export function buildPsqlArgs({ database = {}, sql } = {}) {
+export function buildPsqlArgs({ database = {}, sql, runtime = { direct: false }, dbOverride = null } = {}) {
   const host = database.host || '/var/run/postgresql';
   const port = String(database.port || 5432);
-  const dbName = database.name || database.database || 'dvhub';
+  // dbOverride: Wartungs-DB (postgres) für DROP/CREATE DATABASE.
+  const dbName = dbOverride || database.name || database.database || 'dvhub';
   // Runs as postgres (peer auth after sudo): the pre/post_restore dance +
   // pg_terminate_backend must reliably reach background workers and every
   // client backend, not just the app role's own connections.
-  return ['-h', host, '-p', port, '-U', PG_SUPERUSER, '-d', dbName, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql];
+  return ['-h', host, '-p', port, '-U', adminUser(runtime), '-d', dbName, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql];
+}
+
+const ROLE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_$-]{0,62}$/;
+const BUILTIN_ROLES = new Set(['public', 'postgres', 'current_user', 'session_user', 'current_role']);
+
+/**
+ * Pure: Rollen, auf die sich das Schema-SQL eines Dumps bezieht (Eigentümer,
+ * GRANT … TO, REVOKE … FROM). Für den Container-Restore: eine frische DB kennt
+ * nur postgres + dvhub; Rollen einer Alt-Installation (grafana, vlogger, …)
+ * werden vorher als NOLOGIN angelegt, damit GRANTs und Eigentümer 1:1 ankommen
+ * — auch die GRANTs an dvhub auf postgres-eigenen Tabellen. Nur gültige,
+ * einfache Rollennamen; pg_*-Systemrollen und PUBLIC ausgenommen.
+ * @param {string} sql
+ * @returns {string[]}
+ */
+export function rolesFromSchemaSql(sql) {
+  const roles = new Set();
+  const take = (list) => {
+    for (const raw of String(list).split(',')) {
+      const name = raw.trim().replace(/;$/, '').replace(/^"(.*)"$/, '$1');
+      if (!ROLE_NAME_RE.test(name) || BUILTIN_ROLES.has(name.toLowerCase()) || name.startsWith('pg_')) continue;
+      roles.add(name);
+    }
+  };
+  for (const line of String(sql || '').split('\n')) {
+    let m;
+    if ((m = /^ALTER .* OWNER TO (.+);$/.exec(line))) take(m[1]);
+    else if ((m = /^GRANT .* TO (.+?)( WITH GRANT OPTION)?;$/.exec(line))) take(m[1]);
+    else if ((m = /^REVOKE .* FROM (.+);$/.exec(line))) take(m[1]);
+  }
+  return [...roles].sort();
+}
+
+/** Schema-SQL eines Dumps lesen (pg_restore -s -f -, ohne DB) → Rollen. */
+function dumpRoles(file, runtime, spawnFn) {
+  return new Promise((resolve) => {
+    let child;
+    try { child = spawnFn(path.join(runtime.binDir, 'pg_restore'), ['-s', '-f', '-', file], { env: { ...process.env } }); }
+    catch { resolve([]); return; }
+    const roles = new Set();
+    let rest = '';
+    const feed = (text) => { for (const r of rolesFromSchemaSql(text)) roles.add(r); };
+    if (child.stdout) {
+      child.stdout.on('data', (d) => {
+        const buf = rest + d.toString();
+        const cut = buf.lastIndexOf('\n');
+        if (cut < 0) { rest = buf; return; }
+        feed(buf.slice(0, cut));
+        rest = buf.slice(cut + 1);
+      });
+    }
+    child.on('error', () => resolve([...roles]));
+    child.on('close', () => { feed(rest); resolve([...roles].sort()); });
+  });
+}
+
+/**
+ * Pure: ist das Inhaltsverzeichnis (pg_restore -l) ein VOLLSTÄNDIGER
+ * TimescaleDB-Dump? Nur dann wird die Ziel-DB neu angelegt; ein Dump nur der
+ * 15-min-Tabelle ersetzt ausschließlich diese Tabelle.
+ */
+export function isFullTimescaleToc(toc) {
+  return /^\s*\d+;\s*\d+\s+\d+\s+EXTENSION\s+-\s+timescaledb\b/m.test(String(toc || ''));
 }
 
 /** Spawn a command, buffer stdout/stderr, resolve an outcome. Never rejects. */
-function runCmd(cmd, args, env, spawnFn) {
+function runCmd(cmd, args, env, spawnFn, { fullStdout = false } = {}) {
   return new Promise((resolve) => {
     let child;
     try { child = spawnFn(cmd, args, { env }); }
     catch (err) { resolve({ ok: false, code: null, stdout: '', stderr: err.message }); return; }
     let stdout = '', stderr = '';
-    if (child.stdout) child.stdout.on('data', (d) => { if (stdout.length < 8000) stdout += d.toString(); });
+    // fullStdout: Inhaltsverzeichnis eines Dumps (einige MB) — bis 64 MB.
+    const cap = fullStdout ? 64 * 1024 * 1024 : 8000;
+    if (child.stdout) child.stdout.on('data', (d) => { if (stdout.length < cap) stdout += d.toString(); });
     if (child.stderr) child.stderr.on('data', (d) => { if (stderr.length < 8000) stderr += d.toString(); });
     child.on('error', (err) => resolve({ ok: false, code: null, stdout: stdout.trim(), stderr: (stderr || err.message).trim() }));
     child.on('close', (code) => resolve({ ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim() }));
@@ -257,23 +377,40 @@ function runCmd(cmd, args, env, spawnFn) {
  *
  * @returns {Promise<{ok:boolean, code:number|null, stderr:string, hadTimescale:boolean, ignoredErrors:number}>}
  */
-export async function runDbRestore({ database = {}, inFile, spawnFn = spawn } = {}) {
-  const built = buildPgRestoreArgs({ database, file: inFile });
-  if (!built.ok) return { ok: false, code: null, stderr: built.error, hadTimescale: false, ignoredErrors: 0 };
-  const env = { ...process.env };
-  const psql = (sql) => {
-    const w = pgWrap(PG_PSQL_BIN, buildPsqlArgs({ database, sql }));
+export async function runDbRestore({ database = {}, inFile, spawnFn = spawn, runtime = pgRuntime() } = {}) {
+  const probeArgs = buildPgRestoreArgs({ database, file: inFile, runtime });
+  if (!probeArgs.ok) return { ok: false, code: null, stderr: probeArgs.error, hadTimescale: false, ignoredErrors: 0 };
+  if (adminMissing(runtime)) return { ok: false, code: null, stderr: ADMIN_MISSING_HINT, hadTimescale: false, ignoredErrors: 0 };
+  const env = adminEnv(runtime);
+  const psql = (sql, dbOverride = null) => {
+    const w = pgWrap(PG_PSQL_BIN, buildPsqlArgs({ database, sql, runtime, dbOverride }), runtime);
     return runCmd(w.cmd, w.args, env, spawnFn);
   };
 
+  // 0. Inhaltsverzeichnis lesen (prüft zugleich, dass die Datei lesbar ist —
+  //    VOR jedem zerstörenden Schritt). Ein vollständiger TimescaleDB-Dump
+  //    lässt sich NICHT per --clean über eine laufende DB legen: DROP TABLE der
+  //    Hypertable scheitert an ihren Chunks („other objects depend on it“), die
+  //    Extension ebenso. Dann wird die DB leer neu angelegt (wie Timescale es
+  //    für pg_restore vorsieht) und ohne --clean eingespielt.
+  const tocWrap = pgWrap(PG_RESTORE_BIN, ['-l', inFile], runtime);
+  const toc = await runCmd(tocWrap.cmd, tocWrap.args, env, spawnFn, { fullStdout: true });
+  if (!toc.ok) return { ok: false, code: toc.code, stderr: `Dump unlesbar: ${toc.stderr}`.slice(0, 2000), hadTimescale: false, ignoredErrors: 0 };
+  const recreate = isFullTimescaleToc(toc.stdout);
+  const built = buildPgRestoreArgs({ database, file: inFile, runtime, clean: !recreate });
+  const owner = database.user || 'dvhub';
+  if (recreate && !ROLE_NAME_RE.test(owner)) {
+    return { ok: false, code: null, stderr: 'ungültiger DB-Benutzer', hadTimescale: false, ignoredErrors: 0 };
+  }
+
   // 1. Is TimescaleDB present on the target?
   const extProbe = await psql("SELECT 1 FROM pg_extension WHERE extname='timescaledb'");
-  const hadTimescale = extProbe.ok && extProbe.stdout.includes('1');
+  const hadTimescale = recreate || (extProbe.ok && extProbe.stdout.includes('1'));
 
   // 2. Enter TimescaleDB restore mode (stops background workers; imports chunks
   //    as plain tables). Flag the DB (not just the session) so pg_restore's own
   //    connection sees it.
-  if (hadTimescale) {
+  if (hadTimescale && !recreate) {
     await psql('SELECT timescaledb_pre_restore()');
     await psql(`ALTER DATABASE "${built.dbName}" SET timescaledb.restoring = 'on'`);
   }
@@ -285,11 +422,35 @@ export async function runDbRestore({ database = {}, inFile, spawnFn = spawn } = 
   //    CONNECTION LIMIT 0 blocks all NON-superuser connects; postgres (our
   //    pg_dump/pg_restore/psql, all superuser) is exempt, so the restore proceeds
   //    while the app cannot reconnect. Then terminate the existing backends.
+  // Container: fehlende Rollen des Dumps (Alt-Installation) vorher anlegen,
+  // damit Eigentümer und GRANTs 1:1 ankommen (s. rolesFromSchemaSql).
+  if (runtime.direct) {
+    for (const role of await dumpRoles(inFile, runtime, spawnFn)) {
+      await psql(`DO $$BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN CREATE ROLE "${role}" NOLOGIN; END IF; END$$`);
+    }
+  }
+
   await psql(`ALTER DATABASE "${built.dbName}" CONNECTION LIMIT 0`);
   await psql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'");
 
+  if (recreate) {
+    // Leer neu anlegen — gesperrt (CONNECTION LIMIT 0), bis der Restore durch ist.
+    const drop = await psql(`DROP DATABASE IF EXISTS "${built.dbName}" WITH (FORCE)`, 'postgres');
+    const create = drop.ok
+      ? await psql(`CREATE DATABASE "${built.dbName}" OWNER "${owner}" CONNECTION LIMIT 0`, 'postgres')
+      : drop;
+    if (!create.ok) {
+      // Nichts eingespielt; DB (falls noch vorhanden) wieder freigeben.
+      await psql(`ALTER DATABASE "${built.dbName}" CONNECTION LIMIT -1`, 'postgres');
+      return { ok: false, code: create.code, stderr: `DB konnte nicht neu angelegt werden: ${create.stderr}`.slice(0, 2000), hadTimescale, ignoredErrors: 0 };
+    }
+    await psql('CREATE EXTENSION IF NOT EXISTS timescaledb');
+    await psql('SELECT timescaledb_pre_restore()');
+    await psql(`ALTER DATABASE "${built.dbName}" SET timescaledb.restoring = 'on'`);
+  }
+
   // 4. The restore itself (as postgres via sudo).
-  const restoreWrap = pgWrap(PG_RESTORE_BIN, built.args);
+  const restoreWrap = pgWrap(PG_RESTORE_BIN, built.args, runtime);
   const restore = await runCmd(restoreWrap.cmd, restoreWrap.args, env, spawnFn);
 
   // 5. ALWAYS unwind — re-open connections + leave restore mode — even on

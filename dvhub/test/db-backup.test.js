@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { buildPgDumpArgs, backupFilename, streamPgDump, selectBackupsToDelete, DB_BACKUP_SCOPES, buildPgRestoreArgs, buildPsqlArgs, runDbRestore } from '../services/db-backup.js';
+import { buildPgDumpArgs, backupFilename, streamPgDump, selectBackupsToDelete, DB_BACKUP_SCOPES, buildPgRestoreArgs, buildPsqlArgs, runDbRestore, dumpToFile, pgRuntime, rolesFromSchemaSql, isFullTimescaleToc } from '../services/db-backup.js';
 
 test('selectBackupsToDelete keeps the N newest of a scope, oldest deleted first', () => {
   const files = [
@@ -211,7 +211,7 @@ test('runDbRestore: TimescaleDB present → pre/post_restore dance around pg_res
   assert.equal(out.ok, true);
   assert.equal(out.hadTimescale, true);
   assert.ok(spawnFn.calls.every(isSudoPostgres), 'every pg tool runs via sudo -u postgres');
-  const seq = spawnFn.calls.map((c) => c.bin === 'pg_restore' ? 'RESTORE' : c.sql);
+  const seq = spawnFn.calls.map((c) => c.bin === 'pg_restore' ? (c.args.includes('-l') ? 'TOC' : 'RESTORE') : c.sql);
   const iPre = seq.findIndex((s) => String(s).includes('timescaledb_pre_restore'));
   const iSet = seq.findIndex((s) => String(s).includes("restoring = 'on'"));
   const iRestore = seq.indexOf('RESTORE');
@@ -260,7 +260,7 @@ test('runDbRestore: parses "errors ignored on restore: N"', async () => {
 test('runDbRestore: pg_restore FAILS but post_restore STILL runs (DB never left stuck)', async () => {
   const spawnFn = mockSpawn((bin, args) => {
     if (bin === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1' };
-    if (bin === 'pg_restore') return { code: 1, stderr: 'pg_restore: error: could not connect' };
+    if (bin === 'pg_restore' && !args.includes('-l')) return { code: 1, stderr: 'pg_restore: error: could not connect' };
     return {};
   });
   const out = await runDbRestore({ database: {}, inFile: '/tmp/x.dump', spawnFn });
@@ -275,4 +275,170 @@ test('runDbRestore: missing file → ok:false, nothing spawned', async () => {
   const out = await runDbRestore({ database: {}, inFile: '', spawnFn: () => { spawned = true; } });
   assert.equal(out.ok, false);
   assert.equal(spawned, false);
+});
+
+// --- Container (DVHUB_RUNTIME=container): direkt, per TCP als DB-Admin ------
+
+test('pgRuntime: nativ ohne Kennzeichen, Container mit Admin + binDir', () => {
+  assert.deepEqual(pgRuntime({}), { direct: false });
+  assert.deepEqual(pgRuntime({ DVHUB_RUNTIME: 'container', DVHUB_PG_BIN_DIR: '/usr/libexec/postgresql17', DVHUB_DB_ADMIN_PASSWORD: 'pw' }),
+    { direct: true, binDir: '/usr/libexec/postgresql17', adminUser: 'postgres', adminPassword: 'pw' });
+  assert.equal(pgRuntime({ DVHUB_PG_DIRECT: '1', DVHUB_DB_ADMIN_USER: 'admin' }).adminUser, 'admin');
+});
+
+const CT = { direct: true, binDir: '/usr/libexec/postgresql17', adminUser: 'postgres', adminPassword: 'geheim' };
+const CT_DB = { host: 'db', port: 5432, name: 'dvhub', user: 'dvhub', password: 'apppw' };
+
+test('Container: Restore als Admin über TCP, Eigentümer UND Rechte bleiben', () => {
+  const r = buildPgRestoreArgs({ database: CT_DB, file: '/tmp/x.dump', runtime: CT });
+  assert.deepEqual(r.args.slice(0, 8), ['-h', 'db', '-p', '5432', '-U', 'postgres', '-d', 'dvhub']);
+  assert.ok(!r.args.includes('--no-privileges'), 'GRANTs an dvhub auf postgres-eigenen Tabellen müssen ankommen');
+  assert.ok(!r.args.includes('--no-owner'));
+  assert.equal(r.args[r.args.length - 1], '/tmp/x.dump');
+});
+
+test('rolesFromSchemaSql: Eigentümer, GRANT, REVOKE; ohne PUBLIC/postgres/pg_*/Unsinn', () => {
+  const sql = [
+    'ALTER TABLE public.ts OWNER TO dvhub;',
+    'ALTER TABLE public.victron_internals OWNER TO postgres;',
+    'GRANT SELECT ON TABLE public.victron_internals TO dvhub;',
+    'GRANT SELECT ON TABLE public.victron_internals TO grafana;',
+    'GRANT USAGE ON SCHEMA public TO "vlogger" WITH GRANT OPTION;',
+    'REVOKE ALL ON SCHEMA public FROM PUBLIC;',
+    'GRANT pg_read_all_data TO pg_monitor;',
+    "GRANT x TO \"a'b\";",
+    '-- GRANT SELECT ON t TO kommentar;',
+  ].join('\n');
+  assert.deepEqual(rolesFromSchemaSql(sql), ['dvhub', 'grafana', 'vlogger']);
+});
+
+test('Container-Restore: fehlende Rollen aus dem Dump werden vor dem Restore angelegt', async () => {
+  const sqls = [];
+  const fake = (cmd, args) => {
+    const c = fakeChild();
+    setImmediate(() => {
+      if (cmd.endsWith('pg_restore') && args[0] === '-s') c.stdout.emit('data', Buffer.from('GRANT SELECT ON TABLE public.v TO gra'));
+      if (cmd.endsWith('pg_restore') && args[0] === '-s') c.stdout.emit('data', Buffer.from('fana;\nALTER TABLE public.v OWNER TO postgres;\n'));
+      if (cmd.endsWith('psql')) sqls.push(args[args.length - 1]);
+      c.emit('close', 0);
+    });
+    return c;
+  };
+  const r = await runDbRestore({ database: CT_DB, inFile: '/tmp/x.dump', runtime: CT, spawnFn: fake });
+  assert.equal(r.ok, true);
+  const create = sqls.findIndex((q) => /CREATE ROLE "grafana" NOLOGIN/.test(q));
+  const lock = sqls.findIndex((q) => /CONNECTION LIMIT 0/.test(q));
+  assert.ok(create >= 0, 'grafana wird angelegt (über Chunk-Grenze hinweg erkannt)');
+  assert.ok(create < lock, 'vor der Aussperrung/dem Restore');
+  assert.ok(!sqls.some((q) => /CREATE ROLE "postgres"/.test(q)));
+});
+
+test('Container: Download-Dump ruft pg_dump direkt (kein sudo) mit Admin-Passwort', () => {
+  let seen = null;
+  const child = fakeChild();
+  const res = fakeRes();
+  streamPgDump({ scope: 'full', database: CT_DB, res, stamp: 's', runtime: CT,
+    spawnFn: (cmd, args, opts) => { seen = { cmd, args, pw: opts.env.PGPASSWORD }; return child; } });
+  assert.equal(seen.cmd, '/usr/libexec/postgresql17/pg_dump');
+  assert.equal(seen.args[seen.args.indexOf('-U') + 1], 'postgres');
+  assert.equal(seen.pw, 'geheim');
+});
+
+test('Container ohne Admin-Passwort: Download 503 db_admin_missing, Restore bricht vor jedem Aufruf ab', async () => {
+  const res = fakeRes();
+  let spawned = 0;
+  streamPgDump({ scope: 'full', database: CT_DB, res, stamp: 's', runtime: { ...CT, adminPassword: '' }, spawnFn: () => { spawned++; return fakeChild(); } });
+  assert.equal(res.statusCode, 503);
+  assert.match(res.chunks.join(''), /db_admin_missing/);
+  const r = await runDbRestore({ database: CT_DB, inFile: '/tmp/x.dump', runtime: { ...CT, adminPassword: '' }, spawnFn: () => { spawned++; return fakeChild(); } });
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /DVHUB_DB_ADMIN_PASSWORD/);
+  assert.equal(spawned, 0);
+});
+
+test('Container: geplanter Dump als Admin mit binDir-Pfad; ohne Admin als App-Rolle', async () => {
+  const calls = [];
+  const fake = (cmd, args, opts) => { calls.push({ cmd, user: args[args.indexOf('-U') + 1], pw: opts.env.PGPASSWORD }); const c = fakeChild(); setImmediate(() => c.emit('close', 0)); return c; };
+  await dumpToFile({ scope: 'full', database: CT_DB, outFile: '/tmp/o.dump', spawnFn: fake, runtime: CT });
+  await dumpToFile({ scope: 'full', database: CT_DB, outFile: '/tmp/o.dump', spawnFn: fake, runtime: { ...CT, adminPassword: '' } });
+  assert.deepEqual(calls, [
+    { cmd: '/usr/libexec/postgresql17/pg_dump', user: 'postgres', pw: 'geheim' },
+    { cmd: '/usr/libexec/postgresql17/pg_dump', user: 'dvhub', pw: 'apppw' },
+  ]);
+});
+
+// --- Vollständiger TimescaleDB-Dump: DB leer neu anlegen statt --clean -------
+const FULL_TOC = [
+  ';',
+  '; Archive created at 2026-09-29 22:03:01 CEST',
+  '2; 3079 16390 EXTENSION - timescaledb ',
+  '4501; 0 0 COMMENT - EXTENSION timescaledb ',
+  '301; 1259 17001 TABLE public timeseries_samples dvhub',
+].join('\n');
+const TABLE_TOC = ';\n412; 1259 17220 TABLE public energy_slots_15m dvhub\n';
+
+test('isFullTimescaleToc: Extension im TOC = vollständig; Einzeltabelle/Kommentar nicht', () => {
+  assert.equal(isFullTimescaleToc(FULL_TOC), true);
+  assert.equal(isFullTimescaleToc(TABLE_TOC), false);
+  assert.equal(isFullTimescaleToc('4501; 0 0 COMMENT - EXTENSION timescaledb '), false);
+  assert.equal(isFullTimescaleToc(''), false);
+});
+
+test('Vollständiger Dump auf laufende DB: sperren → DROP/CREATE (Wartungs-DB) → Extension+pre_restore → Restore OHNE --clean → freigeben', async () => {
+  const spawnFn = mockSpawn((bin, args) => {
+    if (bin === 'pg_restore' && args.includes('-l')) return { stdout: FULL_TOC };
+    if (bin === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1' };
+    return {};
+  });
+  const out = await runDbRestore({ database: { name: 'dvhub', user: 'dvhub' }, inFile: '/tmp/x.dump', spawnFn });
+  assert.equal(out.ok, true);
+  const steps = spawnFn.calls.map((c) => ({
+    s: c.bin === 'pg_restore' ? (c.args.includes('-l') ? 'TOC' : 'RESTORE') : c.sql,
+    db: c.args[c.args.indexOf('-d') + 1], args: c.args,
+  }));
+  const at = (re) => steps.findIndex((x) => re.test(String(x.s)));
+  const iToc = at(/^TOC$/), iLock = at(/CONNECTION LIMIT 0$/), iDrop = at(/DROP DATABASE/), iCreate = at(/CREATE DATABASE/);
+  const iExt = at(/CREATE EXTENSION/), iPre = at(/timescaledb_pre_restore/), iRestore = at(/^RESTORE$/), iUnlock = at(/CONNECTION LIMIT -1/);
+  assert.ok(iToc === 0, 'Dump wird zuerst gelesen (vor jedem zerstörenden Schritt)');
+  assert.ok(iLock < iDrop && iDrop < iCreate && iCreate < iExt && iExt < iPre && iPre < iRestore && iRestore < iUnlock, JSON.stringify(steps.map((x) => x.s)));
+  assert.equal(steps[iDrop].db, 'postgres', 'DROP/CREATE aus der Wartungs-DB');
+  assert.equal(steps[iCreate].db, 'postgres');
+  assert.match(steps[iCreate].s, /OWNER "dvhub" CONNECTION LIMIT 0/);
+  assert.ok(!steps[iRestore].args.includes('--clean'), 'frische DB: kein --clean');
+  assert.equal(steps.filter((x) => /timescaledb_pre_restore/.test(String(x.s))).length, 1, 'pre_restore nur einmal (auf der neuen DB)');
+});
+
+test('Nur-15-min-Dump: keine DB-Neuanlage, Restore mit --clean (Rest der Daten bleibt)', async () => {
+  const spawnFn = mockSpawn((bin, args) => {
+    if (bin === 'pg_restore' && args.includes('-l')) return { stdout: TABLE_TOC };
+    if (bin === 'psql' && args[args.length - 1].includes('pg_extension')) return { stdout: '1' };
+    return {};
+  });
+  const out = await runDbRestore({ database: { name: 'dvhub' }, inFile: '/tmp/x.dump', spawnFn });
+  assert.equal(out.ok, true);
+  const sqls = spawnFn.calls.map((c) => String(c.sql));
+  assert.ok(!sqls.some((q) => /DROP DATABASE|CREATE DATABASE/.test(q)));
+  const restore = spawnFn.calls.find((c) => c.bin === 'pg_restore' && !c.args.includes('-l'));
+  assert.ok(restore.args.includes('--clean'));
+});
+
+test('Dump unlesbar → Abbruch vor jedem zerstörenden Schritt', async () => {
+  const spawnFn = mockSpawn((bin, args) => (bin === 'pg_restore' && args.includes('-l') ? { code: 1, stderr: 'input file does not appear to be a valid archive' } : {}));
+  const out = await runDbRestore({ database: { name: 'dvhub' }, inFile: '/tmp/x.dump', spawnFn });
+  assert.equal(out.ok, false);
+  assert.match(out.stderr, /Dump unlesbar/);
+  assert.equal(spawnFn.calls.length, 1);
+});
+
+test('DROP scheitert → kein Restore, DB wird wieder freigegeben', async () => {
+  const spawnFn = mockSpawn((bin, args) => {
+    if (bin === 'pg_restore' && args.includes('-l')) return { stdout: FULL_TOC };
+    if (bin === 'psql' && /DROP DATABASE/.test(args[args.length - 1])) return { code: 1, stderr: 'must be owner' };
+    return {};
+  });
+  const out = await runDbRestore({ database: { name: 'dvhub' }, inFile: '/tmp/x.dump', spawnFn });
+  assert.equal(out.ok, false);
+  assert.match(out.stderr, /nicht neu angelegt/);
+  assert.ok(!spawnFn.calls.some((c) => c.bin === 'pg_restore' && !c.args.includes('-l')), 'kein Restore');
+  assert.ok(spawnFn.calls.some((c) => /CONNECTION LIMIT -1/.test(String(c.sql))), 'freigegeben');
 });
