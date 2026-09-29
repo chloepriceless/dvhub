@@ -11,6 +11,7 @@ import { createScheduleEvaluator } from '../schedule-eval.js';
 // des aktiven NOT-HALT). Der reine Helper lebt in einem eigenen Modul, das KEINEN
 // HTTP-Server bootet (server.js würde web.listen() auslösen).
 import { atomicWriteControlState } from '../control-state-io.js';
+import { activeWindow } from './helpers/active-window.js';
 
 // T-0002 Control-Path-Hardening contract:
 //   1. Reg-2700 keepalive — identical-value writes are normally short-circuited
@@ -226,7 +227,7 @@ test('a scheduled rule ENDS a persistent override — no resume after the rule w
   const { evaluator, state, writes, logs } = makeCtx();
   state.schedule.manualOverride.gridSetpointW = { value: -8000, at: Date.now() - 400000, persistent: true };
   state.schedule.rules = [
-    { id: 'r1', target: 'gridSetpointW', enabled: true, start: '00:00', end: '23:59', value: -16000, source: 'manual' }
+    { id: 'r1', target: 'gridSetpointW', enabled: true, ...activeWindow(), value: -16000, source: 'manual' }
   ];
 
   await evaluator.evaluateSchedule(); // rule active → writes -16000, ends the override

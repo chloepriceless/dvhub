@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createScheduleEvaluator } from '../schedule-eval.js';
+import { activeWindow } from './helpers/active-window.js';
 
 // makeCtx — a fake ctx matching the real createScheduleEvaluator destructure:
 //   { state, getCfg, transport, pushLog, telemetrySafeWrite, persistConfig }
@@ -14,8 +15,7 @@ function makeCtx(overrides = {}) {
     id: 'sma-1',
     enabled: true,
     target: 'gridSetpointW',
-    start: '00:00',
-    end: '23:59',
+    ...activeWindow(),
     value: -16000,
     source: 'small_market_automation',
     autoManaged: true,
@@ -102,7 +102,7 @@ test('T-0075 2b: stop-SoC rule latched OFF on stale SoC despite frozen value abo
     mutate: ({ state }) => {
       state.schedule.rules = [{
         id: 'stopsoc-1', enabled: true, target: 'gridSetpointW',
-        start: '00:00', end: '23:59', value: -8000, source: 'manual', stopSocPct: 30
+        ...activeWindow(), value: -8000, source: 'manual', stopSocPct: 30
       }];
       state.victron.soc = 50;            // frozen ABOVE stopSocPct → would normally stay active
       state.victron.batteryDischargeW = 0;
@@ -125,7 +125,7 @@ test('T-0075 2b: stop-SoC rule stays active when SoC is fresh + above threshold 
     mutate: ({ state }) => {
       state.schedule.rules = [{
         id: 'stopsoc-1', enabled: true, target: 'gridSetpointW',
-        start: '00:00', end: '23:59', value: -8000, source: 'manual', stopSocPct: 30
+        ...activeWindow(), value: -8000, source: 'manual', stopSocPct: 30
       }];
       state.victron.soc = 50;
       state.victron.fieldUpdatedAt = { soc: Date.now() }; // fresh
@@ -207,7 +207,7 @@ test('T-0118: with no floor configured, a cheap-price export is NOT suppressed (
 function eosExportRule() {
   return {
     id: 'opt-eos-1', enabled: true, target: 'gridSetpointW',
-    start: '00:00', end: '23:59', value: -16000,
+    ...activeWindow(), value: -16000,
     source: 'forecast_optimizer', optimizer: 'eos', autoManaged: true,
   };
 }
@@ -266,7 +266,7 @@ test('T-0118: an EOS-sourced export is STILL blocked at a negative spot price (n
 function holdRule(value) {
   return {
     id: 'hold-1', enabled: true, target: 'gridSetpointW',
-    start: '00:00', end: '23:59', value, source: 'small_market_automation', autoManaged: true
+    ...activeWindow(), value, source: 'small_market_automation', autoManaged: true
   };
 }
 
@@ -457,7 +457,7 @@ test('T-0107: gridSetpointW write to reg 2716 proceeds via fc16 int32 big-endian
 function eosClosedLoopRule(batteryShareW = 16000) {
   return {
     id: 'eos-cl', enabled: true, target: 'gridSetpointW',
-    start: '00:00', end: '23:59', value: -batteryShareW,
+    ...activeWindow(), value: -batteryShareW,
     optimizer: 'eos', closedLoopExport: true, batteryShareW,
     source: 'forecast_optimizer', autoManaged: true
   };
@@ -537,7 +537,7 @@ test('T-0122: closed-loop never writes maxDischargeW (operator/evcc owns it)', a
 function eosChargeSlotRule(plannedExportW = 5000) {
   return {
     id: 'eos-cl-b0', enabled: true, target: 'gridSetpointW',
-    start: '00:00', end: '23:59', value: -plannedExportW,
+    ...activeWindow(), value: -plannedExportW,
     optimizer: 'eos', closedLoopExport: true, batteryShareW: 0,
     source: 'forecast_optimizer', autoManaged: true
   };
@@ -604,8 +604,7 @@ function makeDcExportCtx({ autoManaged }) {
         enabled: true,
         target: 'dcExportMode',
         value: 1,
-        start: '00:00',
-        end: '23:59',
+        ...activeWindow(),
         source: autoManaged ? 'forecast_optimizer' : 'schedule',
         ...(autoManaged ? { autoManaged: true, optimizer: 'eos' } : {})
       }];
@@ -655,7 +654,7 @@ function makeChargeReserveCtx({
     mutate: ({ state, cfg }) => {
       state.schedule.rules = [{
         id: 'opt-dc-charge-1', enabled: true, target: 'dcExportMode', value: 1,
-        start: '00:00', end: '23:59', source: 'forecast_optimizer',
+        ...activeWindow(), source: 'forecast_optimizer',
         autoManaged: true, optimizer: 'eos',
         ...(chargeReserveW != null ? { chargeReserveW } : {}),
         ...(targetSocPct != null ? { targetSocPct } : {})
@@ -900,7 +899,7 @@ test('Pro-Gating: forecast_optimizer rule actuates when the licence is active', 
     mutate: ({ state, cfg, ctx }) => {
       state.schedule.rules = [{
         id: 'opt-1', enabled: true, target: 'gridSetpointW',
-        start: '00:00', end: '23:59', value: -5000,
+        ...activeWindow(), value: -5000,
         source: 'forecast_optimizer', autoManaged: true
       }];
       cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
@@ -918,7 +917,7 @@ test('Pro-Gating: forecast_optimizer rule is skipped without a licence (Stage 1/
     mutate: ({ state, cfg, ctx }) => {
       state.schedule.rules = [{
         id: 'opt-1', enabled: true, target: 'gridSetpointW',
-        start: '00:00', end: '23:59', value: -5000,
+        ...activeWindow(), value: -5000,
         source: 'forecast_optimizer', autoManaged: true
       }];
       cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
@@ -1067,7 +1066,7 @@ test('T-VERIFY: Flag OFF (default) → kein Verify-Read', async () => {
 function eosHoldRule({ evPlanned = false } = {}) {
   return {
     id: 'eos-hold', enabled: true, target: 'gridSetpointW',
-    start: '00:00', end: '23:59', value: 1400,
+    ...activeWindow(), value: 1400,
     optimizer: 'eos', closedLoopHold: true, evPlanned,
     source: 'forecast_optimizer', autoManaged: true
   };
@@ -1125,7 +1124,7 @@ test('Netzlade-Sperre bleibt fuer andere positive Sollwerte bestehen', async () 
   const { ctx, state, logs } = makeCtx({
     mutate: ({ state, cfg }) => {
       state.victron.soc = 60;
-      state.schedule.rules = [{ id: 'm', enabled: true, target: 'gridSetpointW', start: '00:00', end: '23:59', value: 3000 }];
+      state.schedule.rules = [{ id: 'm', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: 3000 }];
       cfg.optimizer = { enabled: false, allowGridCharge: false, allowGridDischarge: true };
     }
   });

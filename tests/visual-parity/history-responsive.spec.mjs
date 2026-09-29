@@ -31,12 +31,14 @@ for (const vp of VIEWPORTS) {
     const clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
     expect(scrollWidth, `horizontal overflow at ${vp.name}`).toBeLessThanOrEqual(clientWidth + 1);
 
-    // Topbar hamburger visibility flips at 760px
+    // Hamburger: immer ≤ 760px; darüber genau dann, wenn das Menü nicht neben
+    // Logo + Status-Chips passt (common.js misst und setzt .topbar.nav-collapsed).
     const navToggleVisible = await page.locator('.nav-toggle').isVisible();
+    const navCollapsed = await page.locator('.topbar.nav-collapsed').count() > 0;
     if (vp.width <= 760) {
       expect(navToggleVisible, `hamburger should show below 760px`).toBe(true);
     } else {
-      expect(navToggleVisible, `hamburger should hide above 760px`).toBe(false);
+      expect(navToggleVisible, `hamburger visible iff the menu does not fit (nav-collapsed=${navCollapsed})`).toBe(navCollapsed);
     }
 
     await page.screenshot({

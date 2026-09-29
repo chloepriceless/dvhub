@@ -104,10 +104,11 @@ test.describe('History Viz Cards (Phase 09.3, all 14 cards across 4 views)', () 
   // in history.html — pheat does NOT include "day" (day dropped 'pheat' at
   // some point); 'neg-price' (Plan 09.4 Negativpreis-Heatmap) is month+year only.
   const visibleCards = {
-    day:   ['sankey', 'day-profile', 'stack', 'autarky-calendar', 'ring', 'duration'],
-    week:  ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'cycles', 'top10', 'scatter'],
-    month: ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'neg-price', 'cycles', 'top10', 'scatter'],
-    year:  ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'neg-price', 'cycles', 'top10', 'cal-year', 'scatter']
+    // 'inverter-efficiency' (Wechselrichter-Wirkungsgrad) ist in allen Ansichten sichtbar.
+    day:   ['sankey', 'day-profile', 'stack', 'autarky-calendar', 'ring', 'duration', 'inverter-efficiency'],
+    week:  ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'cycles', 'top10', 'scatter', 'inverter-efficiency'],
+    month: ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'neg-price', 'cycles', 'top10', 'scatter', 'inverter-efficiency'],
+    year:  ['sankey', 'heatmap', 'stack', 'autarky-calendar', 'duration', 'pheat', 'spaghetti', 'neg-price', 'cycles', 'top10', 'cal-year', 'scatter', 'inverter-efficiency']
   };
 
   for (const [view, cards] of Object.entries(visibleCards)) {

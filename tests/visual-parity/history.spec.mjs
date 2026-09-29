@@ -89,8 +89,11 @@ test.describe('History page (Aurora Wave 2, AURORA-01/02/03/05/06)', () => {
     //   page port, not API-token provisioning. The page MUST render
     //   chrome (topbar, KPI scaffolding, chart mounts) regardless of
     //   whether data fetches succeed.
-    const benign = /favicon-|apple-touch-icon\.png|manifest\.json|family-scene\.png|\/api\//;
-    const blocking = errors.filter((e) => !benign.test(e.url || e.text));
+    // Wie history-viz.spec (BENIGN): ein vom Viz-Builder geloggter 503/429 der
+    // DB-losen Testinstanz ist kein UI-Fehler. URL UND Text prüfen — `e.url ||
+    // e.text` prüfte nur die (immer gesetzte) Skript-URL der Konsolenmeldung.
+    const benign = /favicon-|apple-touch-icon\.png|manifest\.json|family-scene\.png|\/api\/|history-viz: build|HTTP 429|HTTP 503/;
+    const blocking = errors.filter((e) => !benign.test(e.url) && !benign.test(e.text));
     const blockingTexts = blocking.map((e) => `${e.text}  (url=${e.url || '<none>'})`);
     expect(blocking, blockingTexts.join('\n')).toEqual([]);
     const blockingFailed = failedResources.filter((r) => !benign.test(r.url));
