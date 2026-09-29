@@ -1,3 +1,7 @@
+/* Das hidden-Attribut muss immer gewinnen — .btn/label setzen sonst eigenes display
+   (sonst standen "Admin"/"Abmelden" auch ohne Anmeldung im Kopf). */
+[hidden] { display:none !important; }
+
 /* ════════════════════════════════════════════════════════════
    DVhub Installateurs-Portal — Aurora Design (übernommen aus
    dvhub/public/dvhub-app.css, gleicher Token-Satz wie der Leitstand)
@@ -255,3 +259,8 @@ input::placeholder { color:var(--text-dim); }
 .totpsecret { font-family: ui-monospace, monospace; letter-spacing: .06em; background: rgba(93,241,237,.08); border: 1px dashed rgba(93,241,237,.4); color: #5df1ed; padding: 6px 10px; border-radius: 8px; user-select: all; word-break: break-all; }
 #passkeyLoginBtn { margin-top: 6px; }
 .btn.tiny { padding: 4px 10px; font-size: 12px; }
+
+/* Zugangsdaten nach Anlegen/Reset — einmalig angezeigt */
+.credbox { margin-top:14px; padding:12px 14px; border:1px solid var(--glass-brd-strong); border-radius:12px; background:var(--glass); }
+.credbox pre { margin:8px 0; white-space:pre-wrap; font-size:13px; user-select:all; }
+.admin-actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }

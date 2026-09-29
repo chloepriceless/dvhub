@@ -20,14 +20,14 @@
   <main id="authView" class="view" hidden>
     <div class="card auth-card aurora-edge">
       <h1>Konto</h1>
-      <p class="sub">Lege dein Installateurs-Konto an. Das Portal erzeugt dabei dein
-        Schlüsselpaar — der Private Key bleibt hier, DVhub erhält nur das Zertifikat.</p>
-      <div class="tabs">
-        <button id="tabRegister" class="tab active">Registrieren</button>
-        <button id="tabLogin" class="tab">Anmelden</button>
+      <p class="sub" id="authIntro">Melde dich mit dem Zugang an, den du von DVhub erhalten hast.
+        Noch kein Zugang? Installateurs-Konten legt DVhub für dich an.</p>
+      <div class="tabs" id="authTabs" hidden>
+        <button id="tabRegister" class="tab">Registrieren</button>
+        <button id="tabLogin" class="tab active">Anmelden</button>
       </div>
       <form id="authForm" class="stack">
-        <label>Name / Firma<input id="authName" required autocomplete="username" /></label>
+        <label>Username<input id="authName" required autocomplete="username" /></label>
         <label id="companyField">Firma (optional)<input id="authCompany" autocomplete="organization" /></label>
         <label>Passwort (min. 8 Zeichen)<input id="authPass" type="password" required minlength="8" autocomplete="current-password" /></label>
         <label id="setupField">Admin-Setup-Token (nur für Admin-Konten bzw. Import auf frischem Portal)<input id="authSetupToken" type="password" autocomplete="off" /></label>
@@ -44,7 +44,34 @@
   </main>
 
   <!-- ── Admin (Hersteller) ──────────────────────────────────────────── -->
+  <!-- ── Pflicht: Startpasswort ändern ─────────────────────────────────── -->
+  <main id="pwView" class="view" hidden>
+    <div class="card auth-card aurora-edge">
+      <h1>Neues Passwort festlegen</h1>
+      <p class="sub">Du meldest dich mit einem Startpasswort an. Bitte lege jetzt dein eigenes Passwort fest (mindestens 8 Zeichen).</p>
+      <form id="pwForm" class="stack">
+        <label>Startpasswort<input id="pwOld" type="password" required autocomplete="current-password" /></label>
+        <label>Neues Passwort<input id="pwNew" type="password" required minlength="8" autocomplete="new-password" /></label>
+        <label>Neues Passwort wiederholen<input id="pwNew2" type="password" required minlength="8" autocomplete="new-password" /></label>
+        <button class="btn primary" type="submit">Passwort speichern</button>
+      </form>
+      <p class="msg" id="pwMsg"></p>
+    </div>
+  </main>
+
   <main id="adminView" class="view" hidden>
+    <section class="card aurora-edge">
+      <h1>Installateur anlegen</h1>
+      <p class="sub">Registrieren können sich Installateure nicht selbst. Hier legst du das Konto an; das Portal erzeugt ein Startpasswort, das beim ersten Login geändert werden muss. Zugangsdaten gib bitte auf getrenntem Weg weiter.</p>
+      <form id="newInstForm" class="addform">
+        <div class="addrow">
+          <input id="newInstName" placeholder="Username (z. B. solar-meier)" required autocomplete="off" />
+          <input id="newInstCompany" placeholder="Firma (optional)" autocomplete="off" />
+          <button class="btn primary" type="submit">Konto anlegen</button>
+        </div>
+      </form>
+      <div id="credBox" class="credbox" hidden></div>
+    </section>
     <section class="card aurora-edge">
       <h1>Installateure &amp; Anlagen</h1>
       <p class="sub">Herstellersicht: wer betreibt wie viele Anlagen, in welcher Größe — und Anlagen lassen sich umverteilen (z. B. bei Installateur-Wechsel).</p>
@@ -73,6 +100,7 @@
     <section class="card">
       <h1>Zugang &amp; Sicherheit</h1>
       <p class="sub">Zwei-Faktor (Authenticator-App) und Passkeys für dein Konto.</p>
+      <div id="pwBox" class="seccard"></div>
       <div id="totpBox" class="seccard"></div>
       <div id="passkeyBox" class="seccard"></div>
     </section>

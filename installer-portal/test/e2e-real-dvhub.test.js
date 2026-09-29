@@ -84,7 +84,7 @@ test(`E2E echter DVhub ↔ echtes Portal (${apiToken ? 'mit' : 'OHNE'} apiToken)
     NODE_ENV: 'test',
   }, path.join(rig, 'dvhub.log'));
   const portalProc = startProc([path.join(ROOT, 'installer-portal', 'server.js')], {
-    PORT: String(portalPort), DATA_DIR: path.join(rig, 'portal'),
+    PORT: String(portalPort), DATA_DIR: path.join(rig, 'portal'), ALLOW_SELF_REGISTER: '1',
   }, path.join(rig, 'portal.log'));
   t.after(() => {
     dvProc.kill('SIGKILL');

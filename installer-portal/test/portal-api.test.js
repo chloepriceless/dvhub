@@ -33,7 +33,7 @@ async function startPortal(t, env = {}) {
   const port = await freePort();
   let log = '';
   const proc = spawn(process.execPath, [SERVER], {
-    env: { ...process.env, PORT: String(port), DATA_DIR: dataDir, ...env },
+    env: { ...process.env, PORT: String(port), DATA_DIR: dataDir, ALLOW_SELF_REGISTER: '1', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stdout.on('data', (d) => { log += d; });

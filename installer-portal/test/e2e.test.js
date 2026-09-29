@@ -104,7 +104,7 @@ test('E2E Pull-Modell: Code → Claim → Freigabe → Poll → Tunnel-Kommando 
   const portalData = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-e2e-portal-'));
   portalPort = 18700 + Math.floor(Math.random() * 200);
   portalProc = spawn(process.execPath, [path.join(import.meta.dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(portalPort), DATA_DIR: portalData, ADMIN_SETUP_TOKEN: 'e2e-setup-token' },
+    env: { ...process.env, PORT: String(portalPort), DATA_DIR: portalData, ADMIN_SETUP_TOKEN: 'e2e-setup-token', ALLOW_SELF_REGISTER: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   for (let i = 0; i < 50; i++) {

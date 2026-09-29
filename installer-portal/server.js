@@ -47,6 +47,12 @@ const ADMIN_ACCOUNTS = new Set(String(process.env.ADMIN_ACCOUNTS || 'admin')
 // angelegter Name (z. B. der Default 'admin') jedem zufallen, der ihn zuerst
 // registriert. Gleiches Token schützt den Backup-Import auf frischem Portal.
 const ADMIN_SETUP_TOKEN = String(process.env.ADMIN_SETUP_TOKEN || '');
+// Selbstregistrierung ist aus: Installateurs-Konten legt der Admin an (Startpasswort,
+// muss beim ersten Login geaendert werden). Nur das erste Admin-Konto entsteht per
+// ADMIN_SETUP_TOKEN. ALLOW_SELF_REGISTER=1 schaltet die offene Registrierung wieder ein.
+const ALLOW_SELF_REGISTER = process.env.ALLOW_SELF_REGISTER === '1';
+const MIN_PASSWORD = 8;
+function tempPassword() { return crypto.randomBytes(12).toString('base64url'); }
 // TOTP: nach so vielen falschen Codes wird das Konto so lange für 2FA gesperrt.
 const TOTP_MAX_FAILS = 5;
 const TOTP_LOCK_MS = 15 * 60_000;
@@ -169,6 +175,26 @@ function issueIdentity(accountDir, commonName) {
 function certFingerprint(pem) {
   const der = new crypto.X509Certificate(pem).raw;
   return crypto.createHash('sha256').update(der).digest('hex').toUpperCase();
+}
+
+// Konto anlegen (Schluesselpaar + Zertifikat); schreibt nicht, das macht der Aufrufer.
+function createAccount(accounts, key, name, company, password, extra = {}) {
+  const id = crypto.randomBytes(8).toString('hex');
+  const keyDir = `acct-${id}`;
+  const { certPath } = issueIdentity(path.join(KEYS_DIR, keyDir), `${name} (DVhub Installateurs-Portal)`);
+  const certPem = fs.readFileSync(certPath, 'utf8');
+  accounts[key] = {
+    id, keyDir, name, company: String(company || '').trim().slice(0, 120),
+    passHash: hashPassword(password),
+    createdAt: nowIso(),
+    fingerprint: certFingerprint(certPem),
+    ...extra,
+  };
+  return accounts[key];
+}
+function validName(name) {
+  // eslint-disable-next-line no-control-regex
+  return !!name && name.length <= 80 && !/[\u0000-\u001f\u007f]/.test(name);
 }
 
 function isAdmin(acctKey) { return ADMIN_ACCOUNTS.has(String(acctKey).toLowerCase()); }
@@ -480,7 +506,8 @@ async function handleApi(req, res, url) {
   // Öffentlich, damit die Login-Seite den Backup-Import-Hinweis nur auf
   // einem frischen Portal zeigt. Nur ein Boolean — keine Kontennamen.
   if (p === '/api/portal-info' && method === 'GET') {
-    return jsonRes(res, 200, { ok: true, hasAccounts: Object.keys(readJsonFile(ACCOUNTS_FILE, {})).length > 0 });
+    const hasAccounts = Object.keys(readJsonFile(ACCOUNTS_FILE, {})).length > 0;
+    return jsonRes(res, 200, { ok: true, hasAccounts, selfRegister: ALLOW_SELF_REGISTER || !hasAccounts });
   }
 
   // Backup-Import. Auf einem FRISCHEN Portal (noch kein Konto) ohne Login
@@ -541,16 +568,11 @@ async function handleApi(req, res, url) {
     if (isAdmin(key) && !setupTokenOk(b.setupToken)) {
       return jsonRes(res, 403, { ok: false, error: 'name_reserviert' });
     }
-    const id = crypto.randomBytes(8).toString('hex');
-    const keyDir = `acct-${id}`;
-    const { certPath } = issueIdentity(path.join(KEYS_DIR, keyDir), `${name} (DVhub Installateurs-Portal)`);
-    const certPem = fs.readFileSync(certPath, 'utf8');
-    accounts[key] = {
-      id, keyDir, name, company: String(b.company || '').trim().slice(0, 120),
-      passHash: hashPassword(password),
-      createdAt: nowIso(),
-      fingerprint: certFingerprint(certPem),
-    };
+    // Installateurs-Konten nur durch den Admin (ausser ALLOW_SELF_REGISTER=1)
+    if (!isAdmin(key) && !ALLOW_SELF_REGISTER) {
+      return jsonRes(res, 403, { ok: false, error: 'registrierung_nur_durch_admin' });
+    }
+    createAccount(accounts, key, name, b.company, password);
     writeJsonFile(ACCOUNTS_FILE, accounts);
     setSessionCookie(res, key, accounts[key]);
     return jsonRes(res, 201, { ok: true, name, fingerprint: accounts[key].fingerprint });
@@ -646,10 +668,31 @@ async function handleApi(req, res, url) {
     return { b: body, accounts: fresh, acct: cur };
   };
 
+  // Eigenes Passwort aendern (Pflicht nach Startpasswort/Reset)
+  if (p === '/api/password' && method === 'POST') {
+    if (rateLimited(req, 'password', 10)) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
+    const ctx = await bodyWithFreshAccount(); if (!ctx) return;
+    const { b, accounts: fresh, acct: cur } = ctx;
+    if (!verifyPassword(b.oldPassword, cur.passHash)) return jsonRes(res, 403, { ok: false, error: 'altes_passwort_falsch' });
+    const np = String(b.newPassword || '');
+    if (np.length < MIN_PASSWORD) return jsonRes(res, 400, { ok: false, error: 'passwort_zu_kurz' });
+    if (np === String(b.oldPassword)) return jsonRes(res, 400, { ok: false, error: 'passwort_unveraendert' });
+    cur.passHash = hashPassword(np);
+    delete cur.mustChangePassword;
+    rotateSessions(res, sess.acct, cur);
+    writeJsonFile(ACCOUNTS_FILE, fresh);
+    return jsonRes(res, 200, { ok: true });
+  }
+  // Solange das Startpasswort nicht geaendert ist, geht nur /api/me, /api/password, /api/logout
+  if (acct.mustChangePassword && p !== '/api/me') {
+    return jsonRes(res, 403, { ok: false, error: 'passwort_aendern' });
+  }
+
   if (p === '/api/me' && method === 'GET') {
     return jsonRes(res, 200, {
       ok: true, name: acct.name, company: acct.company, fingerprint: acct.fingerprint,
       role: isAdmin(sess.acct) ? 'admin' : 'installer',
+      mustChangePassword: !!acct.mustChangePassword,
       totpEnabled: !!acct.totpEnabled,
       passkeys: (acct.passkeys || []).map((k) => ({ id: k.id, label: k.label || 'Passkey', addedAt: k.addedAt, lastUsed: k.lastUsed || null })),
     });
@@ -745,6 +788,52 @@ async function handleApi(req, res, url) {
   if (p.startsWith('/api/admin/')) {
     if (!isAdmin(sess.acct)) return jsonRes(res, 403, { ok: false, error: 'kein_admin_konto' });
 
+    // Installateur anlegen: Startpasswort wird erzeugt und einmal angezeigt
+    if (p === '/api/admin/accounts' && method === 'POST') {
+      const b = await readBody(req);
+      const name = String(b.name || '').trim();
+      if (!validName(name)) return jsonRes(res, 400, { ok: false, error: 'name_ungueltig' });
+      const key = name.toLowerCase();
+      if (isAdmin(key)) return jsonRes(res, 403, { ok: false, error: 'name_reserviert' });
+      const fresh = readJsonFile(ACCOUNTS_FILE, {});
+      if (fresh[key]) return jsonRes(res, 409, { ok: false, error: 'konto_existiert_bereits' });
+      const password = tempPassword();
+      createAccount(fresh, key, name, b.company, password, { mustChangePassword: true, createdBy: sess.acct });
+      writeJsonFile(ACCOUNTS_FILE, fresh);
+      return jsonRes(res, 201, { ok: true, name, password });
+    }
+    // Passwort zuruecksetzen (optional auch 2FA/Passkeys entfernen); beendet alle Sitzungen
+    if (p === '/api/admin/accounts/reset' && method === 'POST') {
+      const b = await readBody(req);
+      const key = String(b.account || '').trim().toLowerCase();
+      const fresh = readJsonFile(ACCOUNTS_FILE, {});
+      const a = fresh[key];
+      if (!a) return jsonRes(res, 404, { ok: false, error: 'konto_nicht_gefunden' });
+      if (isAdmin(key)) return jsonRes(res, 403, { ok: false, error: 'admin_konto' });
+      const password = tempPassword();
+      a.passHash = hashPassword(password);
+      a.mustChangePassword = true;
+      a.sessionVersion = (a.sessionVersion || 0) + 1;
+      if (b.resetSecurity) { for (const k of Object.keys(a)) if (k.startsWith('totp')) delete a[k]; a.passkeys = []; }
+      writeJsonFile(ACCOUNTS_FILE, fresh);
+      return jsonRes(res, 200, { ok: true, name: a.name, password });
+    }
+    // Konto loeschen — nur ohne zugeordnete Anlagen (vorher umverteilen)
+    if (p === '/api/admin/accounts/delete' && method === 'POST') {
+      const b = await readBody(req);
+      const key = String(b.account || '').trim().toLowerCase();
+      const fresh = readJsonFile(ACCOUNTS_FILE, {});
+      const a = fresh[key];
+      if (!a) return jsonRes(res, 404, { ok: false, error: 'konto_nicht_gefunden' });
+      if (isAdmin(key)) return jsonRes(res, 403, { ok: false, error: 'admin_konto' });
+      const owned = Object.values(readJsonFile(PAIRINGS_FILE, {})).filter((pr) => pr.acct === key).length;
+      if (owned) return jsonRes(res, 409, { ok: false, error: 'konto_hat_anlagen', count: owned });
+      delete fresh[key];
+      writeJsonFile(ACCOUNTS_FILE, fresh);
+      if (a.keyDir && /^acct-[0-9a-f]{16}$/.test(a.keyDir)) fs.rmSync(path.join(KEYS_DIR, a.keyDir), { recursive: true, force: true });
+      return jsonRes(res, 200, { ok: true });
+    }
+
     // Übersicht: alle Installateure mit Anlagenzahl, freigegeben/live,
     // installierter Leistung (summierte sizeKwp) und Anlagendetails.
     if (p === '/api/admin/overview' && method === 'GET') {
@@ -755,7 +844,8 @@ async function handleApi(req, res, url) {
         const kwp = mine.reduce((sum, pr) => sum + (Number(pr.sizeKwp) || 0), 0);
         return {
           key, name: a.name, company: a.company || '', role: isAdmin(key) ? 'admin' : 'installer',
-          createdAt: a.createdAt || null,
+          createdAt: a.createdAt || null, mustChangePassword: !!a.mustChangePassword,
+          totpEnabled: !!a.totpEnabled, passkeys: (a.passkeys || []).length,
           appliances: mine.map((pr) => ({
             applianceId: pr.applianceId, name: pr.name || pr.applianceName || null,
             customer: pr.customer || null, status: pr.status,

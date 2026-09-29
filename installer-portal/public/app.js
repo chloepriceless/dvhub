@@ -6,7 +6,8 @@
 const $ = (sel, el) => (el || document).querySelector(sel);
 const $$ = (sel, el) => Array.from((el || document).querySelectorAll(sel));
 
-let mode = 'register'; // auth-Tab
+let mode = 'login'; // auth-Tab (Registrieren nur auf frischem Portal oder mit ALLOW_SELF_REGISTER)
+let mustChangePassword = false;
 let pairings = [];
 let refreshTimer = null;
 let isAdminUser = false;
@@ -25,14 +26,16 @@ async function api(path, opts = {}) {
 
 function setView() {
   const authed = !!localStorage.getItem('dvportal-name');
+  const pwOnly = authed && mustChangePassword;
   $('#authView').hidden = authed;
-  $('#mainView').hidden = !authed;
+  $('#pwView').hidden = !pwOnly;
+  $('#mainView').hidden = !authed || pwOnly;
   $('#adminView').hidden = true;
   $('#logoutBtn').hidden = !authed;
-  $('#adminBtn').hidden = !(authed && isAdminUser);
+  $('#adminBtn').hidden = !(authed && isAdminUser) || pwOnly;
   $('#whoami').textContent = authed ? localStorage.getItem('dvportal-name') : '';
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
-  if (authed) {
+  if (authed && !pwOnly) {
     refreshPairings();
     refreshTimer = setInterval(refreshPairings, 10000);
   }
@@ -60,6 +63,7 @@ function setMode(m) {
 }
 $('#tabRegister').addEventListener('click', () => setMode('register'));
 $('#tabLogin').addEventListener('click', () => setMode('login'));
+setMode('login');
 
 $('#authForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -80,10 +84,11 @@ $('#authForm').addEventListener('submit', async (e) => {
       return;
     }
     msg.textContent = { 'konto_existiert_bereits': 'Konto existiert bereits — bitte anmelden.',
-      'name_reserviert': 'Dieser Name ist für Admins reserviert (Admin-Setup-Token nötig).',
-      'anmeldung_fehlgeschlagen': 'Anmeldung fehlgeschlagen — Name oder Passwort falsch.',
+      'name_reserviert': 'Dieser Username ist für Admins reserviert (Admin-Setup-Token nötig).',
+      'anmeldung_fehlgeschlagen': 'Anmeldung fehlgeschlagen — Username oder Passwort falsch.',
       'rate_limited': 'Zu viele Versuche — bitte eine Minute warten.',
-      'name_ungueltig': 'Name ungültig (max. 80 Zeichen, keine Steuerzeichen).',
+      'name_ungueltig': 'Username ungültig (max. 80 Zeichen, keine Steuerzeichen).',
+      'registrierung_nur_durch_admin': 'Konten legt DVhub an — bitte beim DVhub-Team einen Zugang anfragen.',
     }[j.error] || `Fehler: ${j.error || status}`;
     return;
   }
@@ -100,7 +105,7 @@ const bufToB64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(
 $('#passkeyLoginBtn').addEventListener('click', async () => {
   const msg = $('#authMsg');
   const name = $('#authName').value.trim();
-  if (!name) { msg.textContent = 'Erst den Kontonamen eintragen.'; return; }
+  if (!name) { msg.textContent = 'Erst den Username eintragen.'; return; }
   try {
     msg.textContent = 'Warte auf Passkey…';
     const { status, j } = await api('/api/passkey/login-begin', { method: 'POST', body: { name } });
@@ -299,8 +304,9 @@ setView();
 // Sessioncheck beim Start: wenn Cookie abgelaufen, liefert /api/me 401 → zurück zu Login
 async function refreshMe() {
   const { status, j } = await api('/api/me');
-  if (status === 401) { localStorage.removeItem('dvportal-name'); setView(); return; }
+  if (status === 401) { localStorage.removeItem('dvportal-name'); mustChangePassword = false; setView(); return; }
   isAdminUser = j.role === 'admin';
+  mustChangePassword = !!j.mustChangePassword;
   renderSecurity(j);
 }
 (async () => {
@@ -309,6 +315,12 @@ async function refreshMe() {
     const info = await (await fetch('/api/portal-info')).json();
     const hint = $('#firstRunImport');
     if (hint) hint.hidden = !!info.hasAccounts;
+    // Registrieren nur anbieten, wo der Server es zulaesst (frisches Portal / ALLOW_SELF_REGISTER)
+    $('#authTabs').hidden = !info.selfRegister;
+    if (!info.hasAccounts) {
+      $('#authIntro').textContent = 'Frisches Portal: lege zuerst das Admin-Konto an (Name „admin“ + Admin-Setup-Token) oder importiere ein Backup.';
+      setMode('register');
+    } else setMode('login');
   } catch { /* egal */ }
   if (localStorage.getItem('dvportal-name')) {
     await refreshMe();
@@ -316,10 +328,44 @@ async function refreshMe() {
   }
 })();
 
-// ── Sicherheit-Kachel: TOTP einrichten, Passkeys verwalten ─────────────
+// ── Passwort ändern (Pflicht nach Startpasswort, sonst in „Zugang & Sicherheit“) ──
+const PW_ERR = { altes_passwort_falsch: 'Bisheriges Passwort falsch.', passwort_zu_kurz: 'Mindestens 8 Zeichen.',
+  passwort_unveraendert: 'Neues Passwort muss sich unterscheiden.', rate_limited: 'Zu viele Versuche — eine Minute warten.' };
+async function changePassword(oldPassword, newPassword, newPassword2, msgEl) {
+  if (newPassword !== newPassword2) { msgEl.textContent = 'Die beiden neuen Passwörter stimmen nicht überein.'; return false; }
+  const { status, j } = await api('/api/password', { method: 'POST', body: { oldPassword, newPassword } });
+  if (!j.ok) { msgEl.textContent = PW_ERR[j.error] || `Fehler: ${j.error || status}`; return false; }
+  msgEl.textContent = '✓ Passwort geändert.';
+  return true;
+}
+$('#pwForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (await changePassword($('#pwOld').value, $('#pwNew').value, $('#pwNew2').value, $('#pwMsg'))) {
+    $('#pwOld').value = $('#pwNew').value = $('#pwNew2').value = '';
+    await refreshMe();
+    setView();
+  }
+});
+
+// ── Sicherheit-Kachel: Passwort, TOTP einrichten, Passkeys verwalten ────
 function renderSecurity(me) {
   const mk = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const btn = (label, cls, fn) => { const b = mk('button', 'btn ' + (cls || ''), label); b.type = 'button'; b.addEventListener('click', fn); return b; };
+
+  // ── Passwort ──
+  const pwBox = $('#pwBox');
+  if (pwBox) {
+    pwBox.replaceChildren();
+    pwBox.appendChild(mk('b', null, 'Passwort'));
+    const inp = (ph, ac) => { const i = document.createElement('input'); i.type = 'password'; i.placeholder = ph; i.autocomplete = ac; i.style.maxWidth = '220px'; return i; };
+    const o = inp('bisheriges Passwort', 'current-password'), n1 = inp('neues Passwort', 'new-password'), n2 = inp('wiederholen', 'new-password');
+    const m = mk('span', 'admin-sub');
+    const row = mk('div', 'admin-actions');
+    row.append(o, n1, n2, btn('Ändern', '', async () => {
+      if (await changePassword(o.value, n1.value, n2.value, m)) { o.value = n1.value = n2.value = ''; }
+    }), m);
+    pwBox.appendChild(row);
+  }
 
   // ── TOTP ──
   const totpBox = $('#totpBox');
@@ -419,7 +465,7 @@ async function refreshAdmin() {
   const table = mk('table', 'admin-table');
   const thead = mk('thead');
   const hr = mk('tr');
-  for (const h of ['Installateur', 'Anlagen', 'live', 'kWp gesamt', 'Anlagen im Detail']) hr.appendChild(mk('th', null, h));
+  for (const h of ['Installateur', 'Anlagen', 'live', 'kWp gesamt', 'Anlagen im Detail', 'Konto']) hr.appendChild(mk('th', null, h));
   thead.appendChild(hr); table.appendChild(thead);
   const tbody = mk('tbody');
   for (const ins of j.installers) {
@@ -462,11 +508,65 @@ async function refreshAdmin() {
       det.appendChild(row);
     }
     tr.appendChild(det);
+    // Konto: Status + Passwort zuruecksetzen / loeschen
+    const acc = mk('td', 'admin-det');
+    const st = mk('div', 'admin-actions');
+    if (ins.mustChangePassword) st.appendChild(mk('span', 'badge warn', 'Startpasswort offen'));
+    if (ins.totpEnabled) st.appendChild(mk('span', 'badge ok', '2FA'));
+    if (ins.passkeys) st.appendChild(mk('span', 'badge ok', `${ins.passkeys} Passkey${ins.passkeys > 1 ? 's' : ''}`));
+    acc.appendChild(st);
+    if (ins.role !== 'admin') {
+      const acts = mk('div', 'admin-actions');
+      const reset = mk('button', 'btn tiny', 'Passwort zurücksetzen'); reset.type = 'button';
+      reset.addEventListener('click', async () => {
+        if (!confirm(`Neues Startpasswort für „${ins.name}“ erzeugen? Laufende Anmeldungen werden beendet.`)) return;
+        const resetSecurity = (ins.totpEnabled || ins.passkeys) ? confirm('Auch 2FA und Passkeys entfernen (z. B. Handy verloren)?') : false;
+        const r = await api('/api/admin/accounts/reset', { method: 'POST', body: { account: ins.key, resetSecurity } });
+        if (!r.j.ok) { $('#adminMsg').textContent = `Fehler: ${r.j.error || r.status}`; return; }
+        showCredentials(r.j.name, r.j.password, 'Passwort zurückgesetzt');
+        refreshAdmin();
+      });
+      const del = mk('button', 'btn tiny', 'Löschen'); del.type = 'button';
+      if (ins.counts.total) { del.disabled = true; del.title = 'Erst die Anlagen umverteilen'; }
+      del.addEventListener('click', async () => {
+        if (!confirm(`Konto „${ins.name}“ endgültig löschen? Schlüsselpaar wird entfernt.`)) return;
+        const r = await api('/api/admin/accounts/delete', { method: 'POST', body: { account: ins.key } });
+        $('#adminMsg').textContent = r.j.ok ? '✓ Konto gelöscht.' : (r.j.error === 'konto_hat_anlagen' ? 'Konto hat noch Anlagen — erst umverteilen.' : `Fehler: ${r.j.error || r.status}`);
+        if (r.j.ok) refreshAdmin();
+      });
+      acts.append(reset, del);
+      acc.appendChild(acts);
+    }
+    tr.appendChild(acc);
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
   box.appendChild(table);
 }
+
+// Zugangsdaten einmalig anzeigen (Anlegen/Reset)
+function showCredentials(name, password, title) {
+  const box = $('#credBox');
+  const text = `DVhub Installateurs-Portal\n${location.origin}\nUsername: ${name}\nStartpasswort: ${password}\n(Beim ersten Login muss das Passwort geändert werden.)`;
+  box.replaceChildren();
+  const h = document.createElement('b'); h.textContent = `${title} — wird nur jetzt angezeigt:`;
+  const pre = document.createElement('pre'); pre.textContent = text;
+  const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'btn small'; copy.textContent = 'Kopieren';
+  copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(text); copy.textContent = '✓ Kopiert'; } catch { copy.textContent = 'Bitte markieren und kopieren'; } });
+  box.append(h, pre, copy);
+  box.hidden = false;
+}
+$('#newInstForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const r = await api('/api/admin/accounts', { method: 'POST', body: { name: $('#newInstName').value.trim(), company: $('#newInstCompany').value.trim() } });
+  if (!r.j.ok) {
+    $('#adminMsg').textContent = { konto_existiert_bereits: 'Diesen Username gibt es schon.', name_reserviert: 'Username ist für Admins reserviert.', name_ungueltig: 'Username ungültig.' }[r.j.error] || `Fehler: ${r.j.error || r.status}`;
+    return;
+  }
+  $('#newInstName').value = ''; $('#newInstCompany').value = '';
+  showCredentials(r.j.name, r.j.password, 'Konto angelegt');
+  refreshAdmin();
+});
 
 $('#exportBtn')?.addEventListener('click', async () => {
   const res = await fetch('/api/admin/export', { credentials: 'same-origin' });
