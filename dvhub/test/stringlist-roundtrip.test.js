@@ -41,17 +41,17 @@ function saveAndReload(configPath, mutate) {
 test('Listen bleiben nach dem Speichern Listen', () => {
   const configPath = freshBox();
   const eff = saveAndReload(configPath, (c) => {
-    c.allowedHosts = ['dvhub.local', '192.168.20.66'];
-    c.security.lanCidrs = ['192.168.20.0/24', '10.0.5.0/24'];
-    c.security.trustedClientIps = ['192.168.20.31'];
-    c.trustedProxyIps = ['192.168.20.1'];
-    c.modbusAllowedClients = ['192.168.20.31'];
+    c.allowedHosts = ['dvhub.local', '192.168.1.66'];
+    c.security.lanCidrs = ['192.168.1.0/24', '10.0.5.0/24'];
+    c.security.trustedClientIps = ['192.168.1.31'];
+    c.trustedProxyIps = ['192.168.1.1'];
+    c.modbusAllowedClients = ['192.168.1.31'];
   });
-  assert.deepEqual(eff.allowedHosts, ['dvhub.local', '192.168.20.66']);
-  assert.deepEqual(eff.security.lanCidrs, ['192.168.20.0/24', '10.0.5.0/24']);
-  assert.deepEqual(eff.security.trustedClientIps, ['192.168.20.31']);
-  assert.deepEqual(eff.trustedProxyIps, ['192.168.20.1']);
-  assert.deepEqual(eff.modbusAllowedClients, ['192.168.20.31']);
+  assert.deepEqual(eff.allowedHosts, ['dvhub.local', '192.168.1.66']);
+  assert.deepEqual(eff.security.lanCidrs, ['192.168.1.0/24', '10.0.5.0/24']);
+  assert.deepEqual(eff.security.trustedClientIps, ['192.168.1.31']);
+  assert.deepEqual(eff.trustedProxyIps, ['192.168.1.1']);
+  assert.deepEqual(eff.modbusAllowedClients, ['192.168.1.31']);
 });
 
 test('eine geleerte Liste ist die LEERE LISTE, nicht der leere Text', () => {
@@ -69,10 +69,10 @@ test('Textform wird zerlegt (ein API-Aufruf darf beides schicken)', () => {
   const configPath = freshBox();
   const eff = saveAndReload(configPath, (c) => {
     c.corsAllowedOrigins = 'https://a.local, https://b.local';
-    c.allowedHosts = 'dvhub.local;192.168.20.66';
+    c.allowedHosts = 'dvhub.local;192.168.1.66';
   });
   assert.deepEqual(eff.corsAllowedOrigins, ['https://a.local', 'https://b.local']);
-  assert.deepEqual(eff.allowedHosts, ['dvhub.local', '192.168.20.66']);
+  assert.deepEqual(eff.allowedHosts, ['dvhub.local', '192.168.1.66']);
 });
 
 test('Leerraum und Leereinträge fliegen raus', () => {

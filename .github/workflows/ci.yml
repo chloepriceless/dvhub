@@ -1,4 +1,4 @@
-# DVhub CI — runs the existing (green) test suite on every push/PR to v1.0-dev.
+# DVhub CI — runs the test suite on every push/PR to main (and the legacy v1.0-dev).
 #
 # The npm project lives in dvhub/ (scripts use ../tests/... relative paths and the
 # lockfile is dvhub/package-lock.json), so every job sets working-directory: dvhub.
@@ -19,9 +19,11 @@ name: CI
 on:
   push:
     branches:
+      - main
       - v1.0-dev
   pull_request:
     branches:
+      - main
       - v1.0-dev
 
 # Least-privilege: CI only needs to read the repo for checkout.

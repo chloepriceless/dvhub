@@ -44,7 +44,7 @@ function makeSpinePoller({ fetchImpl, gridPositiveMeans = 'feed_in', meter = {} 
   const cfg = {
     pollMs: 500,
     gridPositiveMeans,
-    meter: { readType: 'spine-http', host: '192.168.20.137', ...meter },
+    meter: { readType: 'spine-http', host: '192.168.1.137', ...meter },
     points: {},
     epex: { timezone: 'UTC' },
     userEnergyPricing: {},
@@ -91,7 +91,7 @@ test('spine-http: EM.GetStatus wird gemappt, feed_in invertiert (Bezug → negat
   assert.deepEqual(state.meter.raw, [3.7, 3.7, 0, 0]);
   assert.equal(state.meter.consecutiveErrors, 0);
   // korrekter Endpoint auf dem konfigurierten Host
-  assert.ok(fetchImpl.calls[0].url === 'http://192.168.20.137/rpc/EM.GetStatus');
+  assert.ok(fetchImpl.calls[0].url === 'http://192.168.1.137/rpc/EM.GetStatus');
 });
 
 test('spine-http: grid_import-Konvention behält das Vorzeichen (Bezug → positiv)', async () => {
