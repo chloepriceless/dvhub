@@ -1041,6 +1041,12 @@ function renderInstallerList(installers) {
   const active = installers.filter((i) => i.status === 'active');
   const pendingRow = installerPortalEl('installerPortalPendingRow');
   if (pendingRow) pendingRow.hidden = pending.length === 0;
+  // Bestaetigungsfelder (Installateur-ID + Code) nur bei offener Direkt-Anfrage zeigen;
+  // bei genau einer Anfrage die ID gleich vorbelegen.
+  const confirmBox = installerPortalEl('installerPortalConfirmBox');
+  if (confirmBox) confirmBox.hidden = pending.length === 0;
+  const pairIdEl = installerPortalEl('installerPortalPairId');
+  if (pairIdEl && pending.length === 1 && !pairIdEl.value) pairIdEl.value = pending[0].id;
   setText('installerPortalPending', pending.length
     ? `${pending.length} Anfrage${pending.length > 1 ? 'n' : ''} warten auf deine Bestätigung — den Kopplungs-Code nennt dir dein Installateur.`
     : '—');
@@ -1087,7 +1093,7 @@ function renderInstallerList(installers) {
     },
   });
   if (!installers.length) {
-    box.appendChild(mk('div', 'installer-portal-meta', 'Noch kein Installateur gekoppelt. Lege im Portal ein Konto an und trage die Appliance-ID sowie den Kopplungs-Code hier ein.'));
+    box.appendChild(mk('div', 'installer-portal-meta', 'Noch kein Installateur gekoppelt. Der Installateur erzeugt im Portal mit der Appliance-ID oben einen Kopplungs-Code — den zusammen mit der Portal-URL oben eintragen und „Kopplung starten“.'));
   }
 }
 

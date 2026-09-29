@@ -454,15 +454,23 @@
                 <div class="config-row-stack"><span class="config-row-value api-row-value" id="installerPortalPending">&mdash;</span></div>
               </div>
               <div id="installerPortalList" class="installer-portal-list"></div>
-              <div class="config-row">
-                <span class="config-row-label">Kopplungs-Code best&auml;tigen</span>
-                <div class="config-row-stack">
-                  <input id="installerPortalPairId" class="config-input" placeholder="Installateur-ID (aus der Liste oben)" autocomplete="off" spellcheck="false" />
-                  <input id="installerPortalPairCode" class="config-input" placeholder="6-stelliger Kopplungs-Code" inputmode="numeric" maxlength="6" autocomplete="off" />
+              <!-- Direkt-Kopplung (Push-Modell): das Portal hat die Anlage selbst angerufen
+                   (LAN/Portfreigabe) und wartet als Anfrage mit ID. Nur sichtbar, wenn eine
+                   solche Anfrage offen ist — fuers Online-Portal gilt der Block oben. -->
+              <div id="installerPortalConfirmBox" hidden>
+                <div class="config-row">
+                  <span class="config-row-label">Direkt-Anfrage best&auml;tigen</span>
+                  <div class="config-row-stack">
+                    <input id="installerPortalPairId" class="config-input" placeholder="Installateur-ID (aus der Liste oben)" autocomplete="off" spellcheck="false" />
+                    <input id="installerPortalPairCode" class="config-input" placeholder="6-stelliger Kopplungs-Code" inputmode="numeric" maxlength="6" autocomplete="off" />
+                    <small class="config-row-stack-small">Nur f&uuml;r Anfragen, bei denen das Portal diese Anlage direkt erreicht hat (lokales Netz). F&uuml;r das Online-Portal: Portal-URL + Code oben und &bdquo;Kopplung starten&ldquo;.</small>
+                  </div>
+                </div>
+                <div class="svc-actions-row">
+                  <button id="installerPortalConfirmBtn" class="btn btn-primary btn-small" type="button">Kopplung best&auml;tigen</button>
                 </div>
               </div>
               <div class="svc-actions-row">
-                <button id="installerPortalConfirmBtn" class="btn btn-primary btn-small" type="button">Kopplung best&auml;tigen</button>
                 <button id="installerPortalDisconnectBtn" class="btn btn-danger btn-small" type="button">Portal-Kopplung trennen</button>
                 <button id="installerPortalRefreshBtn" class="btn btn-ghost btn-small" type="button">Aktualisieren</button>
               </div>
