@@ -59,7 +59,10 @@ einem vollwertigen HEMS ausgebaut.
 - **Optionale ML-Prognose-Korrektur** — selbstlernende Korrektur systematischer Prognosefehler (LightGBM)
 - **Historie** mit PostgreSQL-Telemetrie, Finanz-Karten und 14 Visualisierungs-Karten
 - **Familien-Dashboard** als haushaltstaugliche Übersicht inkl. Tesla-/Haus-Flow und Screensaver *(DVhub Pro)*
-- **Integrationsplattform** für Home Assistant, Loxone, EOS, EMHASS, evcc, MQTT und TeslaMate
+- **Integrationsplattform** für Home Assistant, Loxone, EOS, EMHASS, evcc, MQTT und TeslaMate — Home Assistant und Loxone können DVhub auch **Messwerte liefern** (MQTT oder HTTP-Push)
+- **E-Auto-Laden nach EOS-Plan** über evcc, OpenEVSE oder go-e, mit Abfahrtszeit, Ladeziel und „Sofort laden“
+- **Installateurs-Portal** *(opt-in)* — der Installateur sieht Status und Historie; Updates und Support-Tunnel nur mit Freigabe des Kunden
+- **Datenspende** *(opt-in)* — Leistungsdaten an das Forschungsprojekt der RWTH Aachen (COMSYS) spenden
 - **DVhub Price Feed** (dvhub.online) als zentraler Preisfeed für alle EPEX-Preiszonen
 - **VPN-Manager** für OpenVPN-/WireGuard-/IPsec-Tunnel zum Direktvermarkter *(DVhub Pro)*
 
@@ -99,7 +102,7 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.s
 
 Der Installer:
 
-- installiert Node.js 22 (nur falls keine Node ≥ 18 vorhanden ist), PostgreSQL, die VPN-Pakete (OpenVPN, WireGuard, strongSwan) sowie `python3-venv`, `python3-pip`, `autossh` und `openssh-client`
+- installiert Node.js 22 (nur falls keine Node ≥ 22 vorhanden ist), PostgreSQL, die VPN-Pakete (OpenVPN, WireGuard, strongSwan) sowie `python3-venv`, `python3-pip`, `autossh` und `openssh-client`
 - legt PostgreSQL-User und Datenbank `dvhub` an (Peer-Auth via Unix-Socket)
 - klont das Repo nach `/opt/dvhub` und betreibt die App unter `/opt/dvhub/dvhub`
 - generiert automatisch einen `apiToken` und ein selbstsigniertes TLS-Zertifikat
@@ -184,6 +187,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 - **DV-Signalerkennung** mit Lease-Logik (`offLeaseMs`) und automatischer, sicherer Rückkehr in Freigabe nach Ablauf
 - **Victron-Steuerung** für Grid Setpoint, Charge Current, Min SOC, Max Discharge sowie die DC-/AC-Einspeise-Flags (`feedExcessDcPv`, `dontFeedExcessAcPv`)
 - **Transport wahlweise Modbus TCP** (On-Demand-Client mit Connection-Pool und Connect-Timeout-Guard) **oder MQTT** (Venus OS, mit Keepalive und Cache-Frische-Prüfung)
+- **Universal-Profil für Home Assistant / Loxone** — Herstellerprofil „Universal (DVhub-MQTT-Schema: HA/Loxone)" (`hersteller/dvhub-mqtt.json`, Beta): Anlagen, deren Zähler/Speicher/PV nur in Home Assistant oder Loxone vorliegen, liefern Netz, PV, Batterie, SoC und Hausverbrauch per MQTT (`dvhub/input/…`) oder per HTTP-Push (`/api/input/push`, eigener Push-Schlüssel); fehlt der Hausverbrauch, rechnet DVhub ihn aus der Energiebilanz. Veraltete Werte machen den Zähler ungültig statt 0 W zu melden — [MQTT-Schema](docs/MQTT-SCHEMA.md), [Loxone-Anleitung](docs/LOXONE.md)
 - **Universal-MQTT-Schnittstelle** — Herstellerprofil „Universal (MQTT-Bridge)" (`hersteller/bridge-mqtt.json`): jeder nicht nativ unterstützte Wechselrichter (Deye, Growatt, …) wird über eine kleine MQTT-Bridge angebunden, die das dokumentierte Venus-Topic-Schema spricht; Broker und Portal-ID sind direkt in den Einstellungen konfigurierbar — [Anleitung mit Node-RED-Referenz-Flow](docs/DEYE-NODERED-BRIDGE.md)
 - **Negativpreis-Schutz** — blockiert die Einspeisung automatisch, sobald der EPEX-Preis < 0 ct/kWh fällt
 - **Rechtliches Schreibgate (EEG/§14a)** — Netzladen bzw. erzwungene Netzentladung nur bei freigegebenen Flags (`allowGridCharge`/`allowGridDischarge`)
@@ -226,6 +230,11 @@ separat unter [DVhub Pro](#dvhub-pro).
 ### Integrationen &amp; Plattform
 
 - **Home Assistant** (JSON-Endpunkt + MQTT-Auto-Discovery), **Loxone** (Textformat), **EOS**, **EMHASS**, **evcc**, **TeslaMate**
+- **Messwert-Eingang** für Home Assistant und Loxone per MQTT oder HTTP-Push (siehe oben, Universal-Profil)
+- **E-Auto**: EOS plant die Ladung bis zur Abfahrt (Ziel in %, kWh oder km), DVhub gibt den Plan an **evcc**, **OpenEVSE** oder **go-e** weiter; „**Sofort laden**“ übersteuert den Plan, auch wenn EOS nicht läuft. Fällt der EOS-Plan kurz aus, gelten die schon geplanten Viertelstunden weiter (kein Ein/Aus-Flattern an der Wallbox)
+- **Planbare Verbraucher** — Geschirrspüler & Co. legt EOS in die günstigste bzw. PV-reichste Zeit; Heizstäbe (MYPV Elwa, AC Thor) regelt DVhub dem PV-Überschuss nach — [Anleitung](docs/PLANBARE-GERAETE.md)
+- **Datenspende** *(opt-in)* — Netz, PV, Hausverbrauch, Batterie und alle Geräte alle 10 s an die COMSYS-Datenspende (RWTH Aachen); historische Daten lassen sich nachsenden. API-Schlüssel bleibt lokal (`/var/lib/dvhub/datenspende.json`, 0600)
+- **Installateurs-Portal** *(opt-in)* — Kopplung per Code, Anmeldung mit Signatur; der Installateur liest Status/Historie, Updates und Support-Tunnel brauchen eine eigene Kunden-Freigabe
 - **Eingebauter MQTT-Broker** (aedes, gebunden auf Loopback) + Publisher + MQTT-Inspector
 - **Geräte-Schaltung** über Shelly-HTTP- und MQTT-Generic-Adapter (Live-Leistung + schaltbares Relais)
 - **Benachrichtigungen** über **Telegram, Pushover und ntfy**; separater **Uptime-Kuma-Heartbeat** (signiert, SSRF-geschützt)
@@ -414,8 +423,9 @@ EPEX-Grunddaten — alle Felder sind mit sinnvollen Defaults vorbelegt.
 
 ### API-Dokumentation
 
-Die vollständige, immer aktuelle Endpunkt-Referenz steht als Swagger UI unter
-`/api-docs.html` (`openapi.json`) zur Verfügung. Die frühere eigenständige
+Alle Endpunkte mit Zugangsregeln stehen in [`docs/API.md`](docs/API.md); die
+Swagger UI unter `/api-docs.html` (`openapi.json`) zeigt die Kern-Endpunkte mit
+Beispiel-Antworten. Die frühere eigenständige
 Tools-Seite (`tools.html`) ist nur noch eine Weiterleitung auf
 **Einstellungen / Status**.
 
@@ -522,7 +532,7 @@ DVhub spiegelt diese serverseitig als `/api/epex/zones`, `/api/epex/gaps` und
 ## Sicherheit &amp; Betrieb
 
 - **DV-Modbus-Server LAN-only** — akzeptiert nur Loopback + RFC1918 oder eine explizite `modbusAllowedClients`-Allowlist
-- **LAN-Trust-Posture** — `security.lanTrust` (open/restricted/strict, Neuinstall-Default `restricted`) steuert den Token-Bypass für LAN-Clients; ergänzend Allowlists für Host-Header (`allowedHosts`), CORS (`corsAllowedOrigins`) und Reverse-Proxy-Vertrauen (`trustProxy`/`trustedProxyIps`)
+- **LAN-Trust-Posture** — `security.lanTrust` (open/restricted/strict, Default `open` = Geräte im Heimnetz ohne Token) steuert den Token-Bypass für LAN-Clients; ergänzend Allowlists für Host-Header (`allowedHosts`), CORS (`corsAllowedOrigins`) und Reverse-Proxy-Vertrauen (`trustProxy`/`trustedProxyIps`)
 - **API-Token erzwungen** — der Service startet nur mit einem `apiToken` ≥ 16 Zeichen (vom Installer auto-generiert); Rotation/Widerruf über die API
 - **TLS** — selbstsigniertes Zertifikat (397 Tage) ab Werk; eigene Zertifikate über `tlsCertPath`/`tlsKeyPath`
 - **Fern-Support unter deiner Kontrolle** — der Support-User hat keinen Zugriff; erreichbar ist die Box nur über einen von dir geöffneten, zeitbegrenzten Reverse-SSH-Tunnel (Kill-Switch, gepinnter Relay-Hostkey)
@@ -594,7 +604,7 @@ hilft das Skript [`20-dv-modbus.sh`](20-dv-modbus.sh) für die iptables-Regeln.
 ### Voraussetzungen
 
 - Debian/Ubuntu mit `apt-get` (x86_64)
-- Node.js 22+ (der Installer akzeptiert vorhandene Node-Versionen ab 18; `package.json` fordert `>=18`)
+- Node.js 22+ (Installer und `package.json` fordern `>=22`)
 - PostgreSQL 14+ (für Telemetrie)
 - Victron GX-Gerät im lokalen Netz
 - Python 3.11+ für Prognose/ML (vom Installer im venv eingerichtet)
@@ -698,9 +708,10 @@ DV_APP_CONFIG=/etc/dvhub/config.json DV_DATA_DIR=/var/lib/dvhub npm start
 ## API und Konfiguration
 
 DVhub stellt eine HTTP-API unter `/api/*` bereit (plus den DV-Endpunkt
-`/dv/control-value`). Die folgenden Tabellen listen die wichtigsten Routen; die
-vollständige, immer aktuelle Referenz steht als Swagger UI unter `/api-docs.html`
-(`openapi.json`). Eine Regressionsschranke für client-seitig genutzte Endpunkte
+`/dv/control-value`). Die folgenden Tabellen listen die wichtigsten Routen.
+**Alle Endpunkte** mit Zugangsregeln (Token, LAN-Gruppen, Pro, Nonce) stehen in
+[`docs/API.md`](docs/API.md); die Swagger UI unter `/api-docs.html`
+(`openapi.json`) zeigt Beispiel-Antworten für die Kern-Endpunkte. Eine Regressionsschranke für client-seitig genutzte Endpunkte
 liefert `tests/endpoint-inventory.mjs`.
 
 ### Status &amp; DV
@@ -753,7 +764,7 @@ liefert `tests/endpoint-inventory.mjs`.
 | `POST` `GET` | `/api/history/import`, `/api/history/import/status` | Historische Telemetrie importieren / Status |
 | `POST` | `/api/history/backfill/vrm` | VRM Full/Gap-Backfill |
 | `POST` | `/api/history/backfill/prices` | Preis-Backfill via Energy Charts |
-| `GET` | `/api/history/viz/<slug>` | Visualisierungs-Karten (14 Slugs) |
+| `GET` | `/api/history/viz/<slug>` | Visualisierungs-Karten (16 Slugs) |
 | `GET` | `/api/telemetry/series?keys=...&start=...` | Telemetrie-Zeitreihen |
 | `GET` `POST` | `/api/admin/backfill/status`, `/api/admin/backfill`, `/api/admin/accuracy-backfill` | Marktwert-/Accuracy-Backfill |
 | `GET` `POST` | `/api/curtailment/preview`, `/api/curtailment/recalibrate` | Abregelungs-Schätzung |
@@ -767,7 +778,7 @@ liefert `tests/endpoint-inventory.mjs`.
 | `GET` | `/api/forecast/pvnode/quota` | pvnode.de-Kontingent |
 | `GET` `POST` | `/api/forecast/providers/{solcast,pvnode,eos-akkudoktor}(/probe)` | Cloud-PV-Provider konfigurieren / proben |
 | `POST` `GET` | `/api/forecast/ghi-backfill`, `/api/forecast/ghi-coverage` | Einstrahlungs-Nachimport (Curtailment-Kalibrierung) |
-| `GET` | `/api/forecast/inspector/{eos,ml-correction,stage2,…}` | Forecast-Inspector (teils *Pro*) |
+| `GET` | `/api/forecast/inspector/{pv-providers,load,optimizer-cold,ml-correction,eos}` | Forecast-Inspector (`ml-correction`, `eos` *Pro*) |
 | `GET` `POST` | `/api/ml/status`, `/api/ml/accuracy`, `/api/ml/retrain` | ML-Status / Accuracy / Retraining |
 | `GET` | `/api/optimizer/status`, `/api/optimizer/runs/latest` | Optimizer-Status / letzter Lauf |
 
@@ -792,7 +803,11 @@ liefert `tests/endpoint-inventory.mjs`.
 | `GET` `POST` | `/api/integrations/uptime-kuma(/test)` | Monitoring-Heartbeat |
 | `GET` | `/api/integration/home-assistant`, `/api/integration/loxone` | HA-JSON / Loxone-Text |
 | `GET` `POST` | `/api/integration/eos(/apply)`, `/api/integration/emhass(/apply)` | EOS/EMHASS Messwerte / Optimierung anwenden |
-| `GET` | `/api/integration/evcc` | evcc-Status |
+| `GET` | `/api/integration/evcc`, `/api/integration/evcc/eos` | evcc-Status / EOS-Plan an die Wallbox |
+| `GET` `POST` `DELETE` | `/api/ev`, `/api/ev/override` | E-Auto: Abfahrt/Ziel, „Sofort laden“ |
+| `GET` `POST` | `/api/input/push`, `/api/input/status`, `/api/input/push-key` | Messwert-Eingang HA/Loxone (Push-Schlüssel) |
+| `GET` `POST` | `/api/datenspende/{status,link,settings,backfill,unlink}` | Datenspende |
+| `GET` `POST` | `/api/installer/…` | Installateurs-Portal (Kunden- und Portalseite) |
 | `GET` `POST` | `/api/vpn/{status,config,history,config/upload,restart,start,stop}` | VPN-Manager |
 | `POST` `GET` | `/api/license/{activate,state,revalidate,remove}` | DVhub-Pro-Lizenz |
 
@@ -808,6 +823,7 @@ liefert `tests/endpoint-inventory.mjs`.
 | `POST` | `/api/family/evcc/mode` | evcc-Lademodus setzen |
 | `GET` | `/api/discovery/systems` | Netzwerk-Systemerkennung |
 | `GET` | `/api/devices`, `/api/devices/<id>` | Erkannte Geräte |
+| `GET` `POST` `DELETE` | `/api/devices/schedulable(/<id>)` | Planbare Verbraucher |
 | `GET` `POST` | `/api/meter/scan` | Modbus Register-Scan |
 
 ### Wichtige Config-Sektionen
@@ -818,7 +834,7 @@ Schlüssel strikt ab — jedes neue Feld muss in `ALLOWED_CONFIG_ROOTS`.
 
 | Sektion | Beschreibung |
 |---------|--------------|
-| `manufacturer` / `updateChannel` | Aktives Herstellerprofil (`victron` oder `bridge-mqtt` = Universal-MQTT) und Update-Channel (`stable`/`dev`) |
+| `manufacturer` / `updateChannel` | Aktives Herstellerprofil (`victron`, `fronius`, `deye-lv`, `bridge-mqtt` = Universal-MQTT-Bridge, `dvhub-mqtt` = Universal HA/Loxone) und Update-Channel (`stable`/`dev`) |
 | `httpPort` / `httpsPort` / `tlsCertPath` / `tlsKeyPath` | Webserver-Ports und TLS (Installer: 80 / 443; Code-Default `httpPort` 8080) |
 | `modbusListenHost` / `modbusListenPort` / `modbusAllowedClients` | DV-Modbus-Server-Bind (Default `0.0.0.0:1502`) und Client-Allowlist |
 | `victron` | Anlagenadresse, Transport (Modbus/MQTT), Timeouts, `victron.alarms` |
@@ -838,6 +854,8 @@ Schlüssel strikt ab — jedes neue Feld muss in `ALLOWED_CONFIG_ROOTS`.
 | `security` / `allowedHosts` / `corsAllowedOrigins` / `trustProxy` | Härtung (LAN-Trust, Host-/CORS-/Proxy-Allowlists) |
 | `licensing` | DVhub-Pro (`keygenAccount`) |
 | `support` | Fern-Support (Login-User, Tunnel-Relay) |
+| `installerPortal` | Installateurs-Portal (Kopplung, Kunden-Freigaben) — nur über die eigenen Endpunkte änderbar |
+| `datenspende` | Datenspende (an/aus, Intervall, Quellen) — Zugangsdaten liegen nicht in der Config |
 | `scan` | Modbus Scan-Parameter |
 
 > Die `schedule.smallMarketAutomation`-Sektion enthält die zweistufige
@@ -851,6 +869,8 @@ Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 |-------|-------|
 | `/etc/dvhub/hersteller/victron.json` | Victron-spezifische Kommunikations- und Registerwerte (nativer Modbus-Treiber) |
 | `/etc/dvhub/hersteller/bridge-mqtt.json` | Universal (MQTT-Bridge) — bindet jeden anderen Wechselrichter über das Venus-Topic-Schema an ([Anleitung](docs/DEYE-NODERED-BRIDGE.md)) |
+| `/etc/dvhub/hersteller/dvhub-mqtt.json` | Universal (DVhub-MQTT-Schema: HA/Loxone) — Messwerte aus Home Assistant/Loxone per MQTT oder HTTP-Push ([Schema](docs/MQTT-SCHEMA.md), [Loxone](docs/LOXONE.md)) |
+| `/etc/dvhub/hersteller/fronius.json`, `deye-lv.json` | weitere native Profile |
 
 Das aktive Profil wählt `manufacturer` in der Config bzw. das Hersteller-Dropdown
 in den Einstellungen; die Auswahlliste entsteht dynamisch aus den `*.json`-Dateien
