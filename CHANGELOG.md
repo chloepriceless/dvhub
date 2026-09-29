@@ -30,6 +30,30 @@ verweist hierher.
 - **„Sofort laden“ fürs E-Auto** — mit gewählter Leistung laden, unabhängig
   vom EOS-Plan und auch, wenn EOS nicht läuft.
 - **API-Referenz aller Endpunkte** in `docs/API.md`.
+- **DVhub als Container-Suite: DVhub + TimescaleDB + EOS in ≤ 704 MB RAM.**
+  `docker/compose.yml` startet DVhub, TimescaleDB 2.28/PostgreSQL 17 (Rollen
+  wie nativ: `postgres` Admin, `dvhub` App) und optional EOS (DV-EOS
+  `dvhub-v0.4.0rc1.3`, ohne EOSdash). Die Speicher-Obergrenzen aller drei
+  zusammen: 704 MB (gemessen im Betrieb ~400–500 MB, mit 18 Monaten Echtdaten).
+  Images öffentlich auf Docker Hub (`bikinibottomcapital/dvhub`,
+  `…/dvhub-eos`), gespiegelt nach GHCR; Workflow `container.yml` baut nach
+  einem Smoke-Test für amd64 + arm64. DB-Backup und -Restore funktionieren im
+  Container (pg-Client im Image, direkt als DB-Admin) — eine bestehende Anlage
+  samt Datenbank lässt sich umziehen (`docker/README.md`). Update-, Reboot- und
+  Neustart-Knöpfe sagen im Container, dass das Image getauscht wird; Configs
+  mit Port 80/443 laufen auf 8080/8443.
+- **Historie: Jahr und „Alle“ rechnen Monat für Monat.** Bisher lag der ganze
+  Zeitraum als bewertete 15-min-Slots gleichzeitig im Speicher (Jahr ~100 MB,
+  „Alle“ auf einer Anlage mit 18 Monaten Daten bis ~1 GB Prozess-Spitze). Jetzt
+  wird je Monat geladen, bewertet und in die Summen gefüttert — Jahr +41 MB,
+  „Alle“ +51 MB, und das wächst kaum noch mit der Länge der Historie.
+  Ergebnisse bit-identisch (Golden-Vergleich auf Echtdaten, alle Ansichten und
+  §51-Regeln); der §51-Stundenzähler läuft über Monatsgrenzen weiter.
+- **Familien-Dashboard rechnet nur, wenn es jemand ansieht.** Die Monats- und
+  Jahres-KPIs wurden beim Start und danach alle 10 Minuten berechnet — auch
+  ohne Lizenz und ohne Zuschauer (bis ~100 MB Speicher-Spitze, beim Booten).
+  Jetzt stößt der erste Abruf des Dashboards die Rechnung an; ohne Abruf in den
+  letzten 15 Minuten ruht sie. Monat und Jahr laufen nacheinander.
 - **Heizstab lässt dem E-Auto den Vortritt.** Neue Option je Heizstab
   (MYPV Elwa / AC Thor): „Pausieren, solange das E-Auto lädt“ — lädt die
   Wallbox (evcc, OpenEVSE oder go-e), bekommt der Heizstab 0 W; danach heizt
@@ -197,6 +221,12 @@ verweist hierher.
 
 ### Behoben
 
+- **DB-Wiederherstellung auf eine laufende Anlage schlug fehl**, sobald
+  TimescaleDB aktiv war: `pg_restore --clean` kann die Hypertable nicht
+  löschen („other objects depend on it“). Ein vollständiger Dump legt die
+  Datenbank jetzt leer neu an und spielt ohne `--clean` ein; ein Dump nur der
+  15-min-Werte ersetzt weiterhin nur diese Tabelle. Geprüft mit einem
+  echten 857-MB-Dump (85 Mio. Zeilen): 84 s, 0 Fehler.
 - **Wallbox schaltet nicht mehr ab, wenn der EOS-Plan kurz nicht abrufbar
   ist** — die schon geplanten Viertelstunden gelten weiter.
 - **Node.js 22 ist Mindestversion** (Installer und `package.json`).

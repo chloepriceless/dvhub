@@ -41,10 +41,12 @@ fi
 # 3. Config nachziehen
 #
 #   * apiToken        — nur erzeugen, wenn keiner/zu kurz (wie install.sh)
-#   * httpPort        — nur bei FRISCHER Config auf den Container-Port; der
+#   * httpPort        — bei FRISCHER Config auf den Container-Port; der
 #                       ausgelieferte Default 80 ist für einen non-root-Prozess
-#                       nicht bindbar. Eine bestehende Config bleibt unberührt.
-#   * telemetry.database.* — deklarativ aus DVHUB_DB_*, weil der Default ein
+#                       nicht bindbar. Eine mitgebrachte Config behält ihren
+#                       Port — außer er liegt unter 1024 (httpPort → 8080,
+#                       httpsPort → 8443, bzw. DVHUB_HTTP(S)_PORT).
+#   * telemetry.database.* — deklarativ aus DVHUB_DB_* (inkl. DVHUB_DB_TIMESCALEDB), weil der Default ein
 #                       Unix-Socket (/var/run/postgresql) ist, den es im
 #                       Container nicht gibt. Nur GESETZTE Variablen wirken;
 #                       nicht gesetzte lassen den vorhandenen Wert stehen.
@@ -71,23 +73,58 @@ try {
     }
   }
 
+  // Mitgebrachte Config einer nativen Installation (httpPort 80, httpsPort
+  // 443): der Prozess läuft ohne root und kann Ports < 1024 nicht öffnen —
+  // web.listen würde den Start abbrechen. Auf die Container-Ports umlegen.
+  const lowPort = (v) => Number.isFinite(Number(v)) && Number(v) > 0 && Number(v) < 1024;
+  if (lowPort(c.httpPort)) {
+    const to = Number(process.env.DVHUB_HTTP_PORT || 8080);
+    console.log(`[entrypoint] httpPort ${c.httpPort} ist ohne root nicht nutzbar -> ${to}`);
+    c.httpPort = to;
+    changed = true;
+  }
+  if (lowPort(c.httpsPort)) {
+    const to = Number(process.env.DVHUB_HTTPS_PORT || 8443);
+    console.log(`[entrypoint] httpsPort ${c.httpsPort} ist ohne root nicht nutzbar -> ${to}`);
+    c.httpsPort = to;
+    changed = true;
+  }
+
   const dbEnv = {
     host: process.env.DVHUB_DB_HOST,
     port: process.env.DVHUB_DB_PORT,
     name: process.env.DVHUB_DB_NAME,
     user: process.env.DVHUB_DB_USER,
-    password: process.env.DVHUB_DB_PASSWORD
+    password: process.env.DVHUB_DB_PASSWORD,
+    // TimescaleDB-Flag: erst damit laufen Hypertable/Continuous-Aggregate-
+    // Migrationen (nativ setzt es timescale-provision.sh). "true"/"false".
+    timescaledb: process.env.DVHUB_DB_TIMESCALEDB
   };
   if (Object.values(dbEnv).some((v) => v !== undefined && v !== "")) {
     c.telemetry = c.telemetry || {};
     c.telemetry.database = c.telemetry.database || {};
     for (const [key, raw] of Object.entries(dbEnv)) {
       if (raw === undefined || raw === "") continue;
-      const value = key === "port" ? Number(raw) : raw;
+      const value = key === "port" ? Number(raw)
+        : key === "timescaledb" ? /^(1|true|yes|on)$/i.test(String(raw))
+        : raw;
       if (c.telemetry.database[key] !== value) {
         c.telemetry.database[key] = value;
         changed = true;
       }
+    }
+  }
+
+  // EOS im Nachbar-Container (docker/compose.yml, Profil „eos“): Adresse
+  // deklarativ setzen — eine mitgebrachte Config zeigt sonst auf den EOS der
+  // alten Anlage (z. B. :8506). Eingeschaltet wird EOS weiter in DVhub (Pro).
+  const eosUrl = process.env.DVHUB_EOS_URL;
+  if (eosUrl) {
+    c.optimizer = c.optimizer || {};
+    c.optimizer.eosProxy = c.optimizer.eosProxy || {};
+    if (c.optimizer.eosProxy.url !== eosUrl) {
+      c.optimizer.eosProxy.url = eosUrl;
+      changed = true;
     }
   }
 

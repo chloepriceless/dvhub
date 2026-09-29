@@ -1,0 +1,207 @@
+# DVhub Container-Images → Docker Hub (öffentlich) + GitHub Container Registry
+#
+#   docker.io/bikinibottomcapital/dvhub      ghcr.io/chloepriceless/dvhub
+#   docker.io/bikinibottomcapital/dvhub-eos  ghcr.io/chloepriceless/dvhub-eos
+#
+#   Tag vX.Y.Z  → :X.Y.Z, :X.Y, :latest
+#   Push main   → :dev
+#   manuell     → :dev (bzw. der gewählte Ref)
+#
+# EOS: gebaut aus dem Dockerfile des DV-EOS-Forks am Tag aus docker/.env.example
+# (EOS_TAG) und unter genau diesem Tag veröffentlicht.
+#
+# Secrets (Repo → Settings → Secrets → Actions): DOCKERHUB_USERNAME,
+# DOCKERHUB_TOKEN (Docker-Hub-Access-Token mit Schreibrecht). Fehlen sie,
+# wird nur nach GHCR veröffentlicht.
+#
+# Ablauf: erst ein amd64-Image bauen und mit docker/compose.yml (TimescaleDB)
+# durchstarten — Healthcheck, Migrationen, DB-Backup-Download und Update-Sperre
+# prüfen. Nur wenn das grün ist, wird für amd64 + arm64 gebaut und gepusht.
+#
+# SECURITY: nur GITHUB_TOKEN (packages: write fürs Pushen). Die DB-Passwörter
+# des Smoke-Tests sind Wegwerfwerte der ephemeren Runner-Instanz.
+
+name: Container
+
+on:
+  push:
+    tags: ['v*.*.*']
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker/**'
+      - 'dvhub/**'
+      - 'scripts/reconcile-vendor-profiles.mjs'
+      - '.github/workflows/container.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: smoke (amd64 + TimescaleDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compose-Umgebung
+        run: |
+          {
+            echo "DB_ADMIN_PASSWORD=$(openssl rand -hex 16)"
+            echo "DVHUB_DB_PASSWORD=$(openssl rand -hex 16)"
+            echo "DVHUB_TAG=ci"
+          } > docker/.env
+
+      - name: Bauen und starten
+        run: docker compose -f docker/compose.yml --env-file docker/.env up -d --build
+
+      - name: Warten bis healthy
+        run: |
+          for i in $(seq 1 60); do
+            s=$(docker inspect --format '{{.State.Health.Status}}' dvhub-dvhub-1 2>/dev/null || true)
+            echo "dvhub: $s"
+            [ "$s" = healthy ] && exit 0
+            sleep 5
+          done
+          docker compose -f docker/compose.yml --env-file docker/.env logs --tail=200
+          exit 1
+
+      - name: Prüfen
+        run: |
+          set -e
+          B=http://127.0.0.1:8080
+          curl -fsS $B/api/status > /dev/null
+          # Migrationen gegen TimescaleDB gelaufen, Telemetrie verbunden
+          curl -fsS $B/health | tee /tmp/health.json
+          node -e 'const h=require("/tmp/health.json");if(!h.telemetry||h.telemetry.ok!==true){console.error("Telemetrie nicht bereit");process.exit(1)}'
+          # DB-Backup-Download aus der Oberfläche (pg_dump im Image, als DB-Admin)
+          curl -fsS "$B/api/db/backup?scope=energy15m" -o /tmp/b.dump
+          head -c 5 /tmp/b.dump | grep -q PGDMP
+          # Update/Reboot antworten im Container mit Hinweis statt git/apt
+          code=$(curl -s -o /tmp/u.json -w '%{http_code}' $B/api/admin/update/check)
+          test "$code" = 409 && grep -q container_runtime /tmp/u.json
+          # die Anwendung (PID 1 nach su-exec) läuft nicht als root — `docker exec
+          # id -u` wäre die UID der exec-Shell (root), nicht die der App
+          uid=$(docker exec dvhub-dvhub-1 awk '/^Uid:/{print $2}' /proc/1/status)
+          echo "PID 1 uid=$uid"; test -n "$uid" && test "$uid" != 0
+
+      - name: Logs bei Fehler
+        if: failure()
+        run: docker compose -f docker/compose.yml --env-file docker/.env logs --tail=300
+
+  publish:
+    name: publish (amd64 + arm64)
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version aus package.json
+        id: v
+        run: echo "version=$(node -p 'require("./dvhub/package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Hub verfügbar?
+        id: hub
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: echo "enabled=$([ -n "$HUB_USER" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        if: steps.hub.outputs.enabled == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/dvhub
+            name=docker.io/bikinibottomcapital/dvhub,enable=${{ steps.hub.outputs.enabled == 'true' }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=dev,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            APP_VERSION=${{ steps.v.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish-eos:
+    name: publish EOS (amd64 + arm64)
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: EOS-Stand aus docker/.env.example
+        id: eos
+        run: echo "tag=$(grep '^EOS_TAG=' docker/.env.example | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Hub verfügbar?
+        id: hub
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: echo "enabled=$([ -n "$HUB_USER" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        if: steps.hub.outputs.enabled == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: https://github.com/chloepriceless/DV-EOS.git#${{ steps.eos.outputs.tag }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.tag }}
+            ${{ steps.hub.outputs.enabled == 'true' && format('docker.io/bikinibottomcapital/dvhub-eos:{0}', steps.eos.outputs.tag) || '' }}
+          build-args: |
+            BUILD_VERSION=${{ steps.eos.outputs.tag }}
+          cache-from: type=gha,scope=eos
+          cache-to: type=gha,mode=max,scope=eos

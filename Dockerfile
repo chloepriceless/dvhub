@@ -6,7 +6,8 @@
 # Home-Assistant-Add-on-Wrapper. Bewusst SCHLANK: nur die Node-Anwendung.
 #
 # NICHT enthalten (Absicht, siehe .planning/T-CONTAINER-STACK-KONZEPT-2026-07-01.md):
-#   * Postgres/TimescaleDB — eigener Container bzw. externer Host (§2)
+#   * Postgres/TimescaleDB — eigener Container (docker/compose.yml) bzw.
+#     externer Host (§2); nur der pg-Client ist für Backup/Restore enthalten
 #   * Python-Forecast-venv und ML-Modelle — würden das Image vervielfachen;
 #     der EnergyLink hat ~1 GB RAM / ~2,3 GB Disk. Forecast/ML bleiben dem
 #     Voll-Stack-Image vorbehalten.
@@ -19,7 +20,7 @@
 # Bauen (Multi-Arch, benötigt buildx):
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     --build-arg VCS_REF="$(git rev-parse --short HEAD)" \
-#     -t ghcr.io/chloepriceless/dvhub:dev --push .
+#     -t bikinibottomcapital/dvhub:dev --push .
 
 ARG NODE_VERSION=22-alpine
 
@@ -65,7 +66,12 @@ LABEL org.opencontainers.image.title="DVhub" \
 # Zeitzonenrechnung auf UTC zurück — für Preisfenster, Zeitpläne und die
 # 15-Minuten-Slots wäre das ein stiller Datenfehler, kein Schönheitsfehler.
 # su-exec (~10 kB) lässt den Entrypoint nach dem Setup die Rechte ablegen.
-RUN apk add --no-cache tzdata su-exec \
+# postgresql17-client: pg_dump/pg_restore/psql für DB-Backup und -Restore aus
+# der Oberfläche (services/db-backup.js, Container-Modus). Version passend zum
+# DB-Container (docker/compose.yml: TimescaleDB auf PostgreSQL 17) — pg_dump
+# muss mindestens so neu sein wie der Server. Die Binaries liegen unter
+# /usr/libexec/postgresql17, nicht im PATH (→ DVHUB_PG_BIN_DIR).
+RUN apk add --no-cache tzdata su-exec postgresql17-client \
     && addgroup -g 10001 -S dvhub \
     && adduser -u 10001 -G dvhub -S -H -s /sbin/nologin dvhub
 
@@ -73,10 +79,10 @@ RUN apk add --no-cache tzdata su-exec \
 # DV_ENABLE_SERVICE_ACTIONS bleibt bewusst UNGESETZT (Default aus) — sonst
 # verlangt server.js einen apiToken und der Neustart-Pfad liefe ins Leere.
 #
-# DVHUB_RUNTIME=container ist das Kennzeichen für den künftigen Runtime-Guard
-# (Konzept §8.3 / Roadmap 4): der Update-Button darf im Container nicht
-# `git fetch/merge` aufrufen. Dieser Backend-Zweig existiert noch NICHT — die
-# Variable ist gesetzt, damit er sie vorfindet, wenn er gebaut wird.
+# DVHUB_RUNTIME=container: Update/Reboot/Restart/Timescale-Upgrade antworten
+# mit einem Klartext-Hinweis statt git/apt/systemd aufzurufen (routes-api.js
+# CONTAINER_REFUSED_ENDPOINTS); DB-Backup/-Restore laufen direkt als DB-Admin
+# statt über sudo (services/db-backup.js pgRuntime).
 ENV NODE_ENV=production \
     TZ=Europe/Berlin \
     DV_APP_CONFIG=/etc/dvhub/config.json \
@@ -84,7 +90,8 @@ ENV NODE_ENV=production \
     DVHUB_VERSION=${APP_VERSION} \
     DVHUB_HTTP_PORT=8080 \
     DV_SERVICE_USE_SUDO=0 \
-    DVHUB_RUNTIME=container
+    DVHUB_RUNTIME=container \
+    DVHUB_PG_BIN_DIR=/usr/libexec/postgresql17
 
 # Verzeichnislayout wie bei der nativen Installation, damit Pfade und Skripte
 # (z. B. scripts/reconcile-vendor-profiles.mjs "$CONFIG_DIR" "$APP_DIR")

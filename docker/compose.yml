@@ -1,0 +1,135 @@
+# DVhub + TimescaleDB — Docker Compose
+#
+#   cp docker/.env.example docker/.env      # Passwörter setzen!
+#   docker compose -f docker/compose.yml --env-file docker/.env up -d
+#
+# Danach: http://<host>:8080  (Port über DVHUB_HTTP_PORT, nur beim ersten Start)
+#
+# Aufbau wie die native Installation:
+#   * Rolle `postgres` = DB-Admin (nur für Backup/Restore aus der Oberfläche),
+#     Rolle `dvhub`    = die App, KEIN Superuser, Eigentümer der DB `dvhub`.
+#     Die Trennung ist nötig: der Restore sperrt die App per CONNECTION LIMIT 0
+#     aus — das wirkt nur auf Nicht-Superuser.
+#   * TimescaleDB-Version wie auf den Appliances (PostgreSQL 17, TimescaleDB
+#     2.28.x) — damit lässt sich ein Backup einer bestehenden Anlage 1:1
+#     einspielen (docker/README.md → „Bestandsdaten übernehmen“).
+#   * Der pg-Client im DVhub-Image ist Version 17 — pg_dump muss mindestens so
+#     neu sein wie der Server. Bei einem Wechsel auf PostgreSQL 18 beides anheben.
+#
+# DVhub läuft im Host-Netz: Modbus-TCP zur Anlage, der DV-Modbus-Server (:1502)
+# und mDNS-Discovery (Victron, Shelly) brauchen das echte LAN; im Bridge-Netz
+# funktioniert Multicast nicht. Die DB ist nur auf 127.0.0.1 veröffentlicht.
+#
+# EOS (Pro-Optimierer) läuft als dritter Container im Profil „eos“ — in
+# .env.example per COMPOSE_PROFILES=eos eingeschaltet (komplette Suite). Auf
+# kleinen Boxen weglassen; DVhub plant dann mit der eigenen Börsenautomatik.
+#
+# NICHT enthalten: Python-Prognose/ML, VPN, Support-Tunnel.
+
+name: dvhub
+
+services:
+  db:
+    image: timescale/timescaledb:${TIMESCALE_TAG:-2.28.2-pg17}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD in docker/.env setzen}
+      # für docker/db-init/10-dvhub.sh
+      DVHUB_DB_PASSWORD: ${DVHUB_DB_PASSWORD:?DVHUB_DB_PASSWORD in docker/.env setzen}
+      TZ: ${TZ:-Europe/Berlin}
+      # timescaledb-tune bekommt ein festes Budget, statt es aus der cgroup zu
+      # lesen — auf Hosts ohne cgroup-Memory (Raspberry Pi OS) stürzt die
+      # Erkennung sonst mit „bytes must be at least 1 byte“ ab.
+      TS_TUNE_MEMORY: ${DB_TUNE_MEMORY:-256MB}
+    # shared_buffers explizit (wirkt auch auf bestehende Volumes, anders als das
+    # einmalige timescaledb-tune). 64 MB reichen: DVhub liest über Continuous
+    # Aggregates und die 15-min-Tabelle, der Rest ist freigebbarer Page-Cache.
+    command: ["postgres", "-c", "shared_buffers=${DB_SHARED_BUFFERS:-64MB}"]
+    volumes:
+      - dvhub-db:/var/lib/postgresql/data
+      - ./db-init/10-dvhub.sh:/docker-entrypoint-initdb.d/010-dvhub.sh:ro
+    ports:
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
+    shm_size: 256m
+    # Speicherbudget der Suite: die OBERGRENZEN aller drei Container ergeben
+    # zusammen 704 MB (DB 160 + DVhub 192 + EOS 352). Page-Cache zählt mit,
+    # wird bei Druck aber freigegeben.
+    mem_limit: ${DB_MEM_LIMIT:-160m}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dvhub"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  dvhub:
+    image: ${DVHUB_IMAGE:-docker.io/bikinibottomcapital/dvhub}:${DVHUB_TAG:-latest}
+    # Zum lokalen Bauen statt Ziehen: docker compose ... up -d --build
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      DVHUB_HTTP_PORT: ${DVHUB_HTTP_PORT:-8080}
+      DVHUB_DB_HOST: 127.0.0.1
+      DVHUB_DB_PORT: ${DB_PORT:-5433}
+      DVHUB_DB_NAME: dvhub
+      DVHUB_DB_USER: dvhub
+      DVHUB_DB_PASSWORD: ${DVHUB_DB_PASSWORD}
+      DVHUB_DB_TIMESCALEDB: "true"
+      # Nur für DB-Backup/-Restore aus der Oberfläche (Einstellungen → Status).
+      DVHUB_DB_ADMIN_USER: postgres
+      DVHUB_DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}
+      # EOS-Container (Profil eos). Einschalten in DVhub: Einstellungen → EOS.
+      DVHUB_EOS_URL: http://127.0.0.1:${EOS_PORT:-8503}
+    volumes:
+      # Beide Pflicht: Config + Datenverzeichnis (appliance-id = Lizenzbindung,
+      # Push-Schlüssel, Datenspende-Zugang, Sitzungsschlüssel …).
+      - dvhub-config:/etc/dvhub
+      - dvhub-data:/var/lib/dvhub
+      # Optional: Ziel für das geplante DB-Backup (Einstellungen → DB-Backup →
+      # Zielverzeichnis /backups), z. B. ein ins Host-OS gemounteter NAS-Share.
+      # - /srv/dvhub-backups:/backups
+    # Der Entrypoint leitet daraus den Node-Heap ab (70 % → ~134 MB). Gemessen:
+    # Leerlauf ~50 MB, Parquet-Export 365 Tage ~136 MB.
+    mem_limit: ${DVHUB_MEM_LIMIT:-192m}
+
+  eos:
+    # DV-EOS (Fork von Akkudoktor-EOS) im selben Stand wie auf den Appliances.
+    # Gebaut aus dem Dockerfile des Forks am Git-Tag — kein zweites Rezept hier.
+    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_TAG:-dvhub-v0.4.0rc1.3}
+    build:
+      context: https://github.com/chloepriceless/DV-EOS.git#${EOS_TAG:-dvhub-v0.4.0rc1.3}
+    profiles: [eos]
+    restart: unless-stopped
+    # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).
+    network_mode: host
+    command: ["python", "-m", "akkudoktoreos.server.eos",
+              "--host", "127.0.0.1", "--port", "${EOS_PORT:-8503}", "--run_as_user", "eos"]
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      # EOSdash aus: DVhub hat eine eigene Oberfläche, spart ~190 MB.
+      EOS_SERVER__STARTUP_EOSDASH: "false"
+      MALLOC_ARENA_MAX: "2"
+    # Optionale anlagenspezifische EOS-Einstellungen (z. B. EOS_INVERTER_EFF_CURVE).
+    env_file:
+      - path: ./eos.env
+        required: false
+    volumes:
+      - dvhub-eos:/data
+    # Eigener Speicher frisch ~205 MB, nach Tagen Dauerbetrieb ~290 MB
+    # (Appliance, 15-min-Optimierung); Spitze dort 352 MB inkl. Page-Cache.
+    mem_limit: ${EOS_MEM_LIMIT:-352m}
+    cpus: ${EOS_CPUS:-1}
+
+volumes:
+  dvhub-config:
+  dvhub-data:
+  dvhub-db:
+  dvhub-eos:

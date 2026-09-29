@@ -1438,6 +1438,15 @@ export function createApiRoutes(ctx) {
   // Bearer even on a trusted LAN (lanTrust:open), like the support bundle.
   const BEARER_REQUIRED_ENDPOINTS = new Set(['/api/support/bundle', '/api/db/restore', '/api/db/timescale/upgrade']);
 
+  // Im Container sinnlos bzw. gefährlich (git/apt/systemd/Host) → 409 mit Hinweis.
+  const CONTAINER_REFUSED_ENDPOINTS = new Set([
+    '/api/admin/service/restart',
+    '/api/admin/system/updates/check', '/api/admin/system/updates/apply',
+    '/api/admin/system/reboot',
+    '/api/admin/update/check', '/api/admin/update/apply', '/api/admin/update/channel',
+    '/api/db/timescale/upgrade',
+  ]);
+
   function checkAuth(req, res) {
     const cfg = getCfg();
     // BEARER_REQUIRED_ENDPOINTS (currently empty — see set definition above)
@@ -2729,6 +2738,19 @@ export function createApiRoutes(ctx) {
     if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/dv/')) {
       if (!checkRateLimit(req, res)) return;
       if (!checkAuth(req, res)) return;
+    }
+
+    // Container (DVHUB_RUNTIME=container, Dockerfile): kein git, kein apt, kein
+    // systemd, kein Host-Reboot, PostgreSQL läuft in einem eigenen Container.
+    // Aktualisiert wird durch Tausch des Images. Statt eines kryptischen
+    // „service actions disabled“ sagt die Antwort, was zu tun ist (die UI zeigt
+    // `error` im Klartext). Gilt auch für Installateurs-Portal-Delegationen.
+    if (process.env.DVHUB_RUNTIME === 'container' && CONTAINER_REFUSED_ENDPOINTS.has(url.pathname)) {
+      return json(res, 409, {
+        ok: false,
+        code: 'container_runtime',
+        error: 'Im Container nicht möglich — DVhub wird durch ein neues Image aktualisiert bzw. neu gestartet (docker compose pull && docker compose up -d).',
+      });
     }
 
     // Plan 08-03 Task 1: gate OpenAPI/Swagger UI behind auth.
@@ -7113,7 +7135,11 @@ export function createApiRoutes(ctx) {
     // the app's pool reconnects against the fresh schema.
     if (url.pathname === '/api/db/restore' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
-      if (!ctx.getServiceActionsEnabled || !ctx.getServiceActionsEnabled()) {
+      // Im Container gibt es keine Service-Actions (kein systemd) — der Restore
+      // ist dort aber DER Weg, Bestandsdaten zu übernehmen. Er läuft dann direkt
+      // als DB-Admin (services/db-backup.js pgRuntime); Bearer bleibt Pflicht.
+      const inContainer = process.env.DVHUB_RUNTIME === 'container';
+      if (!inContainer && (!ctx.getServiceActionsEnabled || !ctx.getServiceActionsEnabled())) {
         return json(res, 403, { ok: false, error: 'service actions disabled' });
       }
       const cfg = getCfg();

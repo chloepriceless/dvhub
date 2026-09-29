@@ -3,10 +3,150 @@
 Minimal-Laufzeitimage als gemeinsame Basis für die SPiNE-EnergyLink-App
 (ARM64) und einen künftigen Home-Assistant-Add-on-Wrapper.
 
-Konzept und Gesamtbild: `.planning/T-CONTAINER-STACK-KONZEPT-2026-07-01.md`.
-Dieses Verzeichnis deckt dessen Roadmap-Punkte 1 und 2 ab (Dockerfile +
-Entrypoint). `docker-compose.yml`, CI-Workflow und der Runtime-Guard für den
-Update-Button stehen noch aus.
+Inhalt dieses Verzeichnisses:
+
+| Datei | Zweck |
+|---|---|
+| `../Dockerfile`, `docker-entrypoint.sh` | Image + idempotenter Start (Config, appliance-id, Profile, DB-Warten, Heap) |
+| `compose.yml`, `.env.example` | DVhub + TimescaleDB (PostgreSQL 17) zum Betreiben |
+| `db-init/10-dvhub.sh` | Erststart der DB: Rolle `dvhub`, DB `dvhub`, Extension `timescaledb` |
+| `../.github/workflows/container.yml` | Smoke-Test mit Compose, dann Build amd64+arm64 → Docker Hub `bikinibottomcapital/dvhub` + `…/dvhub-eos` (gespiegelt nach GHCR) |
+
+## Schnellstart (Compose)
+
+```bash
+git clone https://github.com/chloepriceless/dvhub.git && cd dvhub
+cp docker/.env.example docker/.env      # DB_ADMIN_PASSWORD + DVHUB_DB_PASSWORD setzen
+docker compose -f docker/compose.yml --env-file docker/.env up -d
+```
+
+Danach `http://<host>:8080`. DVhub läuft im Host-Netz (Modbus zur Anlage,
+DV-Modbus-Server :1502, mDNS-Discovery); die DB ist nur auf `127.0.0.1:5433`
+erreichbar. Beim ersten Start legt die DB die App-Rolle `dvhub` an (kein
+Superuser) und aktiviert TimescaleDB; DVhub wartet auf die DB und spielt seine
+Migrationen ein.
+
+Den API-Token (für Skripte und den DB-Restore) zeigt:
+
+```bash
+docker compose -f docker/compose.yml exec dvhub node -p 'require("/etc/dvhub/config.json").apiToken'
+```
+
+### Images und Tags
+
+| Image | Tags |
+|---|---|
+| `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.7` = Releases (Git-Tag `vX.Y.Z`); `dev` = Stand von `main` |
+| `bikinibottomcapital/dvhub-eos` | EOS-Stand, z. B. `dvhub-v0.4.0rc1.3` (= `EOS_TAG`) |
+
+Beide für `linux/amd64` und `linux/arm64`, auf Docker Hub öffentlich und nach
+`ghcr.io/chloepriceless/…` gespiegelt (`DVHUB_IMAGE`/`EOS_IMAGE` in `.env`).
+Befüllt vom Workflow `container.yml` — erst nach einem grünen Smoke-Test (Start
+mit TimescaleDB, Migrationen, Backup-Download, Update-Sperre, kein root).
+
+### Speicherbudget der Suite
+
+Die Obergrenzen (`mem_limit`) ergeben zusammen **704 MB**:
+
+| Container | Obergrenze | gemessen (echte Daten: 85 Mio. Zeilen, 18 Monate) |
+|---|---|---|
+| DB | 160 MB (`shared_buffers` 64 MB) | 35–120 MB, Rest freigebbarer Cache |
+| DVhub | 192 MB (Node-Heap ~134 MB) | ~50 MB; Jahres-/Gesamtansicht der Historie +41/+51 MB Heap |
+| EOS | 352 MB | frisch ~215 MB, nach Tagen ~290 MB (Appliance) |
+
+Die Historie rechnet Jahr und „Alle“ Monat für Monat — der Speicher folgt dem
+größten Monat, nicht der Länge der Historie. Mehr RAM vorhanden: die Werte in
+`.env` großzügiger setzen.
+
+## Aktualisieren
+
+Im Container wird nicht per `git` aktualisiert, sondern das Image getauscht:
+
+```bash
+docker compose -f docker/compose.yml --env-file docker/.env pull
+docker compose -f docker/compose.yml --env-file docker/.env up -d
+```
+
+Config und Daten bleiben in den Volumes. Die Knöpfe „Update“, „System-Updates“,
+„Neustart“, „Reboot“ und „TimescaleDB aktualisieren“ antworten im Container mit
+genau diesem Hinweis (HTTP 409, `code: container_runtime`) statt git/apt/systemd
+aufzurufen. Die TimescaleDB-Version hebt man über `TIMESCALE_TAG` in `.env`
+(gleiche PostgreSQL-Hauptversion; danach einmal
+`docker compose exec db psql -U postgres -d dvhub -c 'ALTER EXTENSION timescaledb UPDATE'`).
+
+## Bestandsdaten übernehmen (native Installation → Container)
+
+Eine laufende Anlage bringt drei Dinge mit: **Config**, **Datenverzeichnis**
+(u. a. `appliance-id` — daran hängt die Pro-Lizenz — Push-Schlüssel,
+Datenspende-Zugang, Installateurs-Portal-Schlüssel) und die **Datenbank**.
+
+**1. Auf der alten Anlage sichern**
+
+```bash
+# Datenbank — vollständig, als postgres (auch postgres-eigene Tabellen)
+sudo -u postgres pg_dump -Fc dvhub > dvhub-full.dump
+# oder in der Oberfläche: Einstellungen → Status → DB-Backup → Vollständig
+
+# Config + Datenverzeichnis
+sudo tar czf dvhub-state.tgz -C / etc/dvhub var/lib/dvhub
+```
+
+Danach den nativen Dienst stoppen (`sudo systemctl disable --now dvhub`),
+wenn der Container auf **demselben** Host laufen soll — beide wollen dieselben
+Ports (Web, Modbus :1502).
+
+**2. Config + Datenverzeichnis in die Volumes legen** (vor dem ersten Start):
+
+```bash
+docker compose -f docker/compose.yml --env-file docker/.env create
+docker run --rm -v dvhub_dvhub-config:/etc/dvhub -v dvhub_dvhub-data:/var/lib/dvhub \
+  -v "$PWD":/in alpine tar xzf /in/dvhub-state.tgz -C /
+docker compose -f docker/compose.yml --env-file docker/.env up -d
+```
+
+Der Entrypoint passt die mitgebrachte Config an den Container an: DB-Verbindung
+aus `DVHUB_DB_*` (TCP statt Unix-Socket), TimescaleDB-Flag, und Ports unter 1024
+(nativ 80/443) auf 8080/8443 — der Prozess läuft ohne root. Alles andere
+(Anlage, Tarife, Zeitpläne, Integrationen, API-Token) bleibt, wie es war.
+
+**3. Datenbank einspielen**
+
+```bash
+TOKEN=$(docker compose -f docker/compose.yml exec -T dvhub node -p 'require("/etc/dvhub/config.json").apiToken')
+curl -H "Authorization: Bearer $TOKEN" -H 'content-type: application/octet-stream' \
+     --data-binary @dvhub-full.dump http://127.0.0.1:8080/api/db/restore
+docker compose -f docker/compose.yml --env-file docker/.env restart dvhub
+```
+
+Oder in der Oberfläche: Einstellungen → Status → DB-Backup → Wiederherstellen
+(verlangt den API-Token). Der Restore läuft als DB-Admin `postgres`: er sperrt
+die App währenddessen aus, erledigt die TimescaleDB-Schritte
+(`timescaledb_pre_restore`/`post_restore`, Versionsabgleich), behält die
+Eigentümer und Rechte der Tabellen 1:1 bei. Rollen der alten Anlage, die es im
+Container nicht gibt (z. B. `grafana`), legt er vorher ohne Login-Recht an.
+Die Antwort meldet `ignoredErrors` — `0` heißt sauber.
+
+Hinweise:
+
+* **Versionen:** Der Dump sollte von derselben oder einer älteren
+  TimescaleDB-Version stammen als der DB-Container (Appliances: PostgreSQL 17 +
+  TimescaleDB 2.28.x = `TIMESCALE_TAG=2.28.2-pg17`). Eine ältere Quelle wird
+  beim Restore hochgezogen; eine neuere geht nicht.
+* **Größe:** Der Upload wird im Container unter `/tmp` zwischengespeichert
+  (bis 8 GB). Ein 7-GB-Bestand ergibt einen deutlich kleineren Dump, braucht
+  aber entsprechend freien Platz im Container-Dateisystem und einige Zeit.
+* **Probe vorher:** Gleicher Ablauf mit einem Dump nur der 15-Minuten-Werte
+  (`?scope=energy15m` bzw. „Nur 15-min-Werte“) geht in Sekunden.
+
+## DB-Backup im Container
+
+Download und geplantes Backup funktionieren wie auf der Appliance: das Image
+enthält den PostgreSQL-17-Client, DVhub verbindet sich per TCP als DB-Admin
+(`DVHUB_DB_ADMIN_USER`/`DVHUB_DB_ADMIN_PASSWORD`, im Compose `postgres`).
+Als Ziel für das geplante Backup ein Verzeichnis im Volume
+(`/var/lib/dvhub/backups`) oder einen eingehängten Pfad (`/backups`, siehe
+`compose.yml`) eintragen. SMB-Ziele brauchen `smbclient` — der ist nicht im
+Image; einen Share stattdessen im Host-OS mounten und einhängen.
 
 ## Bauen
 
@@ -17,12 +157,12 @@ docker build -t dvhub:dev .
 # beide Zielarchitekturen (benötigt buildx + QEMU/binfmt für Fremdarch)
 docker buildx build --platform linux/amd64,linux/arm64 \
   --build-arg VCS_REF="$(git rev-parse --short HEAD)" \
-  -t ghcr.io/chloepriceless/dvhub:dev --push .
+  -t bikinibottomcapital/dvhub:dev --push .
 ```
 
 Der Build läuft aus dem **Repo-Wurzelverzeichnis**, nicht aus `docker/`.
 
-## Betreiben
+## Betreiben ohne Compose
 
 > Stolperstein bei einer **TimescaleDB im Container auf Hosts ohne
 > cgroup-Memory** (z. B. Raspberry Pi mit Standard-Kernel, `cgroup_enable=memory`
@@ -30,13 +170,14 @@ Der Build läuft aus dem **Repo-Wurzelverzeichnis**, nicht aus `docker/`.
 > mit `panic: bytes must be at least 1 byte` ab und der DB-Container beendet
 > sich (Exit 2) — DVhub wartet dann 60 s und startet ohne Store. Abhilfe:
 > `-e NO_TS_TUNE=true` am DB-Container (oder cgroup-Memory im Kernel aktivieren).
+> `compose.yml` umgeht das, indem es `TS_TUNE_MEMORY` fest vorgibt.
 
 ```bash
 docker run -d --name dvhub \
   -e DVHUB_DB_HOST=timescaledb -e DVHUB_DB_USER=dvhub \
   -e DVHUB_DB_PASSWORD=... -e DVHUB_DB_NAME=dvhub \
   -v dvhub-config:/etc/dvhub -v dvhub-data:/var/lib/dvhub \
-  -p 8080:8080 ghcr.io/chloepriceless/dvhub:dev
+  -p 8080:8080 bikinibottomcapital/dvhub:dev
 ```
 
 Beide Volumes sind **Pflicht**. `/var/lib/dvhub` trägt die `appliance-id`, an
@@ -48,8 +189,12 @@ Für mDNS-Discovery (Victron, Shelly) und Modbus :502 im LAN braucht es
 
 | Variable | Default | Zweck |
 |---|---|---|
-| `DVHUB_HTTP_PORT` | `8080` | Nur beim **ersten** Start in die Config geschrieben. Der ausgelieferte Default 80 ist für den non-root-Prozess nicht bindbar. |
+| `DVHUB_HTTP_PORT` | `8080` | Beim **ersten** Start in die Config geschrieben; außerdem Ersatz, wenn eine mitgebrachte Config einen Port < 1024 hat. Der ausgelieferte Default 80 ist für den non-root-Prozess nicht bindbar. |
+| `DVHUB_HTTPS_PORT` | `8443` | Ersatz für einen mitgebrachten `httpsPort` < 1024. |
 | `DVHUB_DB_HOST/PORT/NAME/USER/PASSWORD` | – | Schreiben `telemetry.database.*`. Nötig, weil der ausgelieferte Default ein Unix-Socket (`/var/run/postgresql`) ist, den es im Container nicht gibt. Nur gesetzte Variablen wirken. |
+| `DVHUB_DB_TIMESCALEDB` | – | `true` setzt `telemetry.database.timescaledb` — erst damit laufen die TimescaleDB-Migrationen (Hypertable, Continuous Aggregates, Kompression). |
+| `DVHUB_DB_ADMIN_USER` / `DVHUB_DB_ADMIN_PASSWORD` | `postgres` / – | DB-Admin für Backup-Download, geplantes Backup und Restore. Ohne Passwort antworten Backup/Restore mit `db_admin_missing`. |
+| `DVHUB_PG_BIN_DIR` | `/usr/libexec/postgresql17` | Ort von `pg_dump`/`pg_restore`/`psql` im Image. |
 | `DVHUB_WAIT_FOR_DB` | `1` | Wartet vor dem Start auf die DB. |
 | `DVHUB_WAIT_FOR_DB_TIMEOUT` | `60` | Danach wird trotzdem gestartet. |
 | `DVHUB_USER` | `dvhub` | Nutzer, auf den der Entrypoint die Rechte ablegt. |
@@ -158,7 +303,8 @@ Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
 
 ## Bewusst NICHT enthalten
 
-* **Postgres/TimescaleDB** — eigener Container bzw. externer Host.
+* **Postgres/TimescaleDB** — eigener Container (`compose.yml`) bzw. externer
+  Host; im Image liegt nur der Client für Backup/Restore.
 * **Python-Forecast und ML** — würden das Image vervielfachen; der EnergyLink
   hat ~1 GB RAM / ~2,3 GB Disk. Die Node-seitige `services/python-bridge/`
   ist drin (sie wird von `server.js` statisch importiert), nur der Interpreter
@@ -166,8 +312,8 @@ Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
 * **EOS (Pro)** — eigenes Image aus dem DV-EOS-Fork.
 * **VPN und Support-Tunnel** — v1 nativ-only.
 * **git** — im Container wird nicht per `git pull` aktualisiert, sondern das
-  Image getauscht. Der Update-Button im Backend kennt diesen Fall noch nicht;
-  das Image setzt `DVHUB_RUNTIME=container` als Haken für den späteren Guard.
+  Image getauscht (siehe „Aktualisieren“); die Update-Knöpfe sagen das.
+* **smbclient** — SMB-Backup-Ziele im Host-OS mounten und einhängen.
 
 ## Verifikationsstand (2026-08-27)
 

@@ -140,6 +140,20 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.s
 
 > Flags sind kombinierbar, z. B. `--channel dev --no-eos --no-support-user`.
 
+### Docker
+
+Alternativ als Container (amd64/arm64) mit TimescaleDB:
+
+```bash
+cp docker/.env.example docker/.env      # Passwörter setzen
+docker compose -f docker/compose.yml --env-file docker/.env up -d
+```
+
+Images auf Docker Hub: [`bikinibottomcapital/dvhub`](https://hub.docker.com/r/bikinibottomcapital/dvhub) und `bikinibottomcapital/dvhub-eos` (`latest` = Release, `dev` = `main`; gespiegelt nach `ghcr.io/chloepriceless/…`).
+Suite aus DVhub, TimescaleDB und optional EOS, zusammen ≤ 704 MB RAM (Obergrenzen) — ohne Python-Prognose/ML, VPN und Fern-Support.
+Aktualisiert wird durch Tausch des Images. Einrichtung, Umzug einer bestehenden
+Anlage samt Datenbank und Betrieb: [`docker/README.md`](docker/README.md).
+
 Nach der Erstinstallation (bzw. wenn die Config fehlt/ungültig ist) öffnet DVhub beim ersten Aufruf unter `/` automatisch den Onboarding-Assistenten (`onboarding.html`) — ein manueller Aufruf einer Setup-Seite ist nicht nötig.
 
 ### Leistungsstufen (RAM-Tiers)

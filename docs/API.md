@@ -28,6 +28,7 @@ Quelle ist der Router `dvhub/routes-api.js`. Die interaktive Swagger-Oberfläche
 | Nonce | Einige Einstellungs-Aktionen verlangen zusätzlich zum LAN-Zugang einen Einmal-Wert `uiToken` im Body (Schutz gegen Cross-Site-Anfragen). Man bekommt ihn aus dem zugehörigen `GET …/status`. Ein gültiges Bearer-Token ersetzt ihn |
 | Config speichern | `POST /api/config` ersetzt die **gesamte** Config. Einzelne Bereiche über die spezialisierten Endpunkte ändern (sie mergen serverseitig) |
 | Fehler | `{ "ok": false, "error": "<code>", … }` mit passendem HTTP-Status (400 Eingabe, 401 Token, 403 Pro/Nonce, 404, 409 Zustand, 429, 503 Dienst nicht verfügbar) |
+| Container | Im Docker-Image (`DVHUB_RUNTIME=container`) antworten Update, System-Updates, Neustart, Reboot, Update-Kanal und TimescaleDB-Upgrade mit `409`, `code: "container_runtime"` — dort wird das Image getauscht. `POST /api/db/restore` ist im Container ohne Service-Actions erlaubt (Token bleibt Pflicht) |
 
 ## 2. Zugang: Legende
 
