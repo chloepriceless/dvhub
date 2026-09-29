@@ -198,3 +198,27 @@ describe('ipMatchesCidr (pure)', () => {
     assert.equal(ipMatchesCidr('', '192.168.1.0/24'), false);
   });
 });
+
+// Einstellungs-Kacheln Datenspende + Eingang HA/Loxone (2026-09-29): Status-
+// Reads sind LAN-sicher in der Gruppe 'integrations' — POSTs bleiben es nicht.
+describe('LAN-trust: Datenspende-/Eingangs-Status unter restricted', () => {
+  async function codeFor(pathname, security, reqOpts) {
+    const routes = createApiRoutes(mockCtx(security));
+    const req = makeReq(pathname, reqOpts);
+    const res = mockRes();
+    await routes.handleRequest(req, res, new URL(req.url, `http://${req.headers.host}`));
+    return res._captured.status;
+  }
+  for (const p of ['/api/input/status', '/api/datenspende/status']) {
+    it(`${p}: LAN-GET ohne Token, wenn 'integrations' freigegeben`, async () => {
+      assert.notEqual(await codeFor(p, { lanTrust: 'restricted', lanSafeGroups: ['integrations'] }, { ip: LAN_IP }), 401);
+    });
+    it(`${p}: Gruppe nicht freigegeben / von außen → 401`, async () => {
+      assert.equal(await codeFor(p, { lanTrust: 'restricted', lanSafeGroups: ['status'] }, { ip: LAN_IP }), 401);
+      assert.equal(await codeFor(p, { lanTrust: 'restricted', lanSafeGroups: ['integrations'] }, { ip: REMOTE_IP }), 401);
+    });
+  }
+  it('POST /api/input/push-key bleibt unter restricted tokenpflichtig', async () => {
+    assert.equal(await codeFor('/api/input/push-key', { lanTrust: 'restricted', lanSafeGroups: ['integrations'] }, { ip: LAN_IP, method: 'POST' }), 401);
+  });
+});

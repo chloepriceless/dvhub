@@ -10,6 +10,10 @@
 //     (computeHeaterPowerW) → Leistungs-Sollwert am Endpunkt.
 //
 // Gate: nur wenn nicht Lese-Modus und kein Not-Halt. Jedes Gerät hat zusätzlich seinen enabled-Flag.
+//
+// Heizstab mit plan.pauseWhileEvCharging: solange die Wallbox lädt, 0 W — der
+// PV-Überschuss gehört dann dem Auto. Wallbox-Zustand unbekannt → normal regeln
+// (eine ausgefallene Wallbox-Abfrage soll das Warmwasser nicht dauerhaft sperren).
 
 import { safeInterval } from '../safe-async.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
@@ -44,10 +48,11 @@ export function surplusW(state, alreadyDrawingW = 0) {
  * @param {object} deps.actuator  createDeviceActuator(...)
  * @param {object} deps.state
  * @param {(event:string,data?:object)=>void} [deps.pushLog]
+ * @param {()=>Promise<boolean|null>} [deps.isEvCharging]  services/wallbox/ev-charging.js
  * @param {()=>number} [deps.now]
  */
 export function createEosDeviceBridge(deps) {
-  const { getCfg, getSolution, actuator, state, pushLog = () => {}, now = () => Date.now() } = deps;
+  const { getCfg, getSolution, actuator, state, pushLog = () => {}, isEvCharging = null, now = () => Date.now() } = deps;
 
   let timer = null;
   let ticking = false;
@@ -132,8 +137,19 @@ export function createEosDeviceBridge(deps) {
       }
 
       // --- modulating: PV-Überschuss-Regler ---
+      // Wallbox nur fragen, wenn ein Heizstab ihr Vorrang lassen soll.
+      let evCharging = null;
+      if (typeof isEvCharging === 'function' && modulating.some((d) => d.plan?.pauseWhileEvCharging === true)) {
+        try { evCharging = await isEvCharging(); } catch { evCharging = null; }
+      }
       for (const d of modulating) {
         const p = d.plan || {};
+        if (p.pauseWhileEvCharging === true && evCharging === true) {
+          const r = await actuate(d, { powerW: 0 });
+          status.push({ id: d.id, kind: 'modulating', powerW: 0, reason: 'ev_charging', ok: r?.ok !== false });
+          devicePlan.push({ device: d.id, kind: 'modulating', powerW: 0, reason: 'ev_charging', at: new Date(now()).toISOString() });
+          continue;
+        }
         const avail = surplusW(state, lastPower.get(d.id) || 0);
         const { powerW, reason } = computeHeaterPowerW({
           maxPowerW: p.maxPowerW, minPowerW: p.minPowerW,

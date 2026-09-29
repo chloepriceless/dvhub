@@ -134,6 +134,7 @@ import { createCurtailmentService } from './services/curtailment/index.js';
 import { createEosAdapter as createEosAdapterForInspector } from './services/optimizer/eos-adapter.js';
 import { createEosEvccBridge } from './services/optimizer/eos-evcc-bridge.js';
 import { createEosDeviceBridge } from './services/optimizer/eos-device-bridge.js';
+import { createEvChargingProbe } from './services/wallbox/ev-charging.js';
 import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
 import { createOpenEvseAdapter, createGoeAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
@@ -1281,6 +1282,15 @@ const eosDeviceBridge = createEosDeviceBridge({
   actuator: deviceActuator,
   state,
   pushLog: (event, data) => ctx.pushLog?.(event, data),
+  // Heizstab-Option „Pausieren, solange das E-Auto lädt“: dieselbe Wallbox wie
+  // die EOS-Brücke (evcc aus dem Poll-Cache, OpenEVSE/go-e direkt).
+  isEvCharging: createEvChargingProbe({
+    getCfg: () => ctx.getCfg(),
+    evccIntegration,
+    getAdapter: (type) => (type === 'openevse'
+      ? createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse)
+      : createGoeAdapter(() => ctx.getCfg()?.wallbox?.goe)),
+  }),
 });
 ctx.eosDeviceBridge = eosDeviceBridge;
 

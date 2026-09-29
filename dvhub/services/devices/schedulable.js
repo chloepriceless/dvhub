@@ -125,6 +125,8 @@ function validateModulatingPlan(p, errs) {
   if (p.deadline != null && String(p.deadline) !== '') {
     if (!HHMM_RE.test(String(p.deadline))) errs.push('plan.deadline muss HH:MM sein'); else out.deadline = String(p.deadline).padStart(5, '0');
   }
+  // Der Wallbox Vorrang lassen: solange das E-Auto lädt, 0 W (eos-device-bridge).
+  if (p.pauseWhileEvCharging === true) out.pauseWhileEvCharging = true;
   return out;
 }
 

@@ -3848,7 +3848,7 @@
     for (var i = 0; i < devs.length; i++) {
       var dv = devs[i]; var plan = dv.plan || {}; var ep = dv.endpoint || {};
       var detail = dv.kind === 'modulating'
-        ? (esc(String(plan.maxPowerW || '?')) + ' W max' + (plan.targetPct != null ? ', Ziel ' + esc(String(plan.targetPct)) + '%' : ''))
+        ? (esc(String(plan.maxPowerW || '?')) + ' W max' + (plan.targetPct != null ? ', Ziel ' + esc(String(plan.targetPct)) + '%' : '') + (plan.pauseWhileEvCharging ? ', pausiert beim E-Auto-Laden' : ''))
         : (esc(String(plan.energyWh || '?')) + ' Wh / ' + esc(String(plan.durationH || '?')) + ' h' + (plan.deadline ? ', bis ' + esc(plan.deadline) : ''));
       html += '<div class="scheddev-row">'
         + '<span class="scheddev-row-main"><strong>' + esc(dv.name || dv.id) + '</strong> <span class="dv-muted">· ' + esc(KIND_LABELS[dv.kind] || dv.kind) + '</span><br><small class="dv-muted">' + detail + ' · ' + esc(EP_LABELS[ep.type] || ep.type || '?') + '</small></span>'
@@ -3882,6 +3882,8 @@
         + sdField('Thermische Kapazität (Wh, optional)', '<input class="input" id="sd-capacityWh" type="number" min="0" value="' + esc(String(p.capacityWh != null ? p.capacityWh : '')) + '" />')
         + sdField('Ziel (%, optional)', '<input class="input" id="sd-targetPct" type="number" min="0" max="100" value="' + esc(String(p.targetPct != null ? p.targetPct : '')) + '" />')
         + sdField('Fertig bis (HH:MM, optional)', '<input class="input" id="sd-deadlineM" value="' + esc(p.deadline || '') + '" placeholder="20:00" />')
+        + '<div class="dv-field"><label><input type="checkbox" id="sd-pauseEv"' + (p.pauseWhileEvCharging ? ' checked' : '') + ' /> Pausieren, solange das E-Auto lädt</label>'
+        + '<small class="dv-muted">Der PV-Überschuss geht dann an die Wallbox (evcc, OpenEVSE oder go-e — wie unter Integrationen → evcc eingestellt). Nach dem Laden heizt der Stab wieder.</small></div>'
       + '</div>'
       + sdField('Endpunkt', '<select class="input" id="sd-ep"></select>')
       + '<div data-grp="ep-shelly">' + sdField('Shelly-Gerät', '<select class="input" id="sd-shelly">' + (shellyOpts || '<option value="">— kein Shelly konfiguriert —</option>') + '</select>') + '</div>'
@@ -3943,6 +3945,8 @@
       if (num('sd-capacityWh') != null) body.plan.capacityWh = num('sd-capacityWh');
       if (num('sd-targetPct') != null) body.plan.targetPct = num('sd-targetPct');
       if (val('sd-deadlineM')) body.plan.deadline = val('sd-deadlineM');
+      var pauseEl = document.getElementById('sd-pauseEv');
+      if (pauseEl && pauseEl.checked) body.plan.pauseWhileEvCharging = true;
     }
     if (ep === 'shelly') body.endpoint.shellyDeviceId = val('sd-shelly');
     else if (ep === 'mqtt_publish') {

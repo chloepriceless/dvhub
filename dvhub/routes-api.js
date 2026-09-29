@@ -1119,6 +1119,12 @@ export function createApiRoutes(ctx) {
     // T-CURTAIL Increment 2b: calibrated-curtailment preview (read-only history
     // diagnostic). POST /api/curtailment/recalibrate stays OUT (Bearer required).
     '/api/curtailment/preview',
+    // Einstellungs-Kacheln Datenspende + Eingang HA/Loxone: reine Zustands-
+    // Reads (Schlüssel nie im Klartext). Der mitgelieferte uiToken schützt nur
+    // gegen Cross-Site — die zugehörigen POSTs brauchen unter 'restricted'/
+    // 'strict' weiterhin ein Token (POST ist nie LAN-sicher).
+    '/api/datenspende/status',
+    '/api/input/status',
   ]);
 
   // Go-Live-Review 2026-06-10: map each LAN-safe GET endpoint to a coarse group

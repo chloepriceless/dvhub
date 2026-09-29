@@ -12,6 +12,30 @@ verweist hierher.
 
 ### Neu
 
+- **Home Assistant und Loxone liefern Messwerte — auch ohne MQTT.** Im
+  Profil „Universal (DVhub-MQTT-Schema: HA/Loxone)“ nimmt DVhub Netz, PV,
+  Batterie, SoC und Hausverbrauch jetzt auch als Gesamtwerte
+  (`dvhub/input/grid/total_w`, `pv/total_w`, `consumption/total_w`) und per
+  HTTP-Push an `/api/input/push` an (Loxone Virtueller Ausgang, HA
+  `rest_command`), gesichert mit eigenem Push-Schlüssel. Ohne Broker läuft
+  der Eingang als reiner HTTP-Push. Fehlt der Hausverbrauch, rechnet DVhub
+  ihn aus PV, Netz und Batterie. Kommen keine Netzwerte mehr, ist der Zähler
+  ungültig statt „0 W“. Anleitung: `docs/LOXONE.md`.
+- **Datenspende an die RWTH Aachen (COMSYS).** Opt-in: Netz, PV,
+  Hausverbrauch, Batterie und alle Geräte alle 10 s; historische Daten
+  lassen sich nachsenden. Einstellungen → Status → Datenspende.
+- **Installateurs-Portal.** Opt-in: Kopplung per Code, Anmeldung mit
+  Signatur; der Installateur liest Status und Historie, Updates und
+  Support-Tunnel nur mit eigener Freigabe des Kunden.
+- **„Sofort laden“ fürs E-Auto** — mit gewählter Leistung laden, unabhängig
+  vom EOS-Plan und auch, wenn EOS nicht läuft.
+- **API-Referenz aller Endpunkte** in `docs/API.md`.
+- **Heizstab lässt dem E-Auto den Vortritt.** Neue Option je Heizstab
+  (MYPV Elwa / AC Thor): „Pausieren, solange das E-Auto lädt“ — lädt die
+  Wallbox (evcc, OpenEVSE oder go-e), bekommt der Heizstab 0 W; danach heizt
+  er wieder dem Überschuss nach.
+- **Datenspende- und Eingangs-Status unter „LAN-Vertrauen: eingeschränkt“**
+  ohne Token lesbar (Gruppe „integrations“), wie die übrigen Status-Kacheln.
 - **Akku halten: Last aus dem Netz, wenn EOS es plant.** EOS entscheidet
   manchmal, den Hausakku für später aufzusparen — etwa weil seine Energie
   abends teuer verkauft werden kann — und Haus und E-Auto solange aus dem
@@ -173,6 +197,9 @@ verweist hierher.
 
 ### Behoben
 
+- **Wallbox schaltet nicht mehr ab, wenn der EOS-Plan kurz nicht abrufbar
+  ist** — die schon geplanten Viertelstunden gelten weiter.
+- **Node.js 22 ist Mindestversion** (Installer und `package.json`).
 - **Erster EOS-Plan nach einem Neustart in Minuten statt 15–30 Minuten** —
   sowohl nach einem DVhub- als auch nach einem EOS-Neustart. Bisher zählte
   eine aus EOS' Datenbank wiederhergestellte alte Lösung als frisch, und der

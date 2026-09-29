@@ -28,7 +28,8 @@ wählbaren Endpunkt schaltet. Zwei Geräteklassen:
 
 // modulating (MYPV Elwa)
 { "id": "elwa", "name": "MYPV Elwa", "kind": "modulating",
-  "plan": { "maxPowerW": 3000, "minPowerW": 100, "capacityWh": 8000, "targetPct": 80, "deadline": "20:00" },
+  "plan": { "maxPowerW": 3000, "minPowerW": 100, "capacityWh": 8000, "targetPct": 80, "deadline": "20:00",
+            "pauseWhileEvCharging": true },
   "endpoint": { "type": "mqtt_publish", "powerTopic": "elwa/power/set", "powerTemplate": "{value}" } }
 ```
 
@@ -62,6 +63,25 @@ Eine 30-s-Bridge (`services/optimizer/eos-device-bridge.js`) liest je Takt den
 EOS-Dispatch (deferrable) bzw. rechnet den Überschuss-Sollwert (modulating) und setzt
 ihn über den Endpunkt um (Dedup: nur bei Änderung). Im Lese-Modus (`DVHUB_READ_ONLY=1`)
 schaltet die Bridge nicht.
+
+### Heizstab pausiert, solange das E-Auto lädt
+
+Option `plan.pauseWhileEvCharging` (Integrationen → Planbare Verbraucher →
+Heizstab bearbeiten → „Pausieren, solange das E-Auto lädt“): Lädt die Wallbox,
+bekommt der Heizstab **0 W** (`reason: "ev_charging"`) — der PV-Überschuss geht
+ans Auto. Nach dem Laden regelt er im nächsten Takt (≤ 30 s) wieder dem
+Überschuss nach.
+
+- Welche Wallbox: dieselbe wie für den EOS-Ladeplan (`wallbox.type`). Bei
+  **evcc** zählt jeder Ladepunkt, der mit mehr als 100 W lädt (aus dem
+  laufenden evcc-Abruf); bei **OpenEVSE** / **go-e** fragt DVhub die Box direkt.
+- Ist der Wallbox-Zustand unbekannt (nicht eingerichtet, keine Antwort,
+  evcc-Daten älter als 3 min), heizt der Stab normal weiter.
+- Hinweis evcc im Modus **„PV“**: evcc startet erst bei Überschuss. Nimmt der
+  Heizstab den Überschuss schon vorher komplett, sieht evcc keinen und startet
+  nicht. Dann in evcc **„Min+PV“**/**„Schnell“** laden, den EOS-Ladeplan oder
+  „Sofort laden“ nutzen, oder die Mindestleistung des Heizstabs so wählen, dass
+  Überschuss übrig bleibt.
 
 ## Grenzen / offen
 
