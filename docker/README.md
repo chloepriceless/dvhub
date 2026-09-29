@@ -58,9 +58,9 @@ Der Workflow prüft, dass der Tag zur `package.json`-Version passt, startet die
 Suite mit TimescaleDB (Health, Migrationen, Backup-Download, Update-Sperre,
 kein root) und veröffentlicht erst danach `1.0.7`, `1.0` und `latest` für
 amd64 + arm64 auf Docker Hub und GHCR. Voraussetzung im GitHub-Repo
-(Settings → Secrets and variables → Actions): `DOCKERHUB_USERNAME` und
-`DOCKERHUB_TOKEN` (Docker-Hub-Access-Token, Read & Write) — ohne sie bricht der
-Lauf vor dem Bauen ab.
+(Settings → Secrets and variables → Actions): ein Secret `BIKINIBOTTOMCAPITAL`
+(oder `DOCKERHUB_TOKEN`) mit dem Docker-Hub-Access-Token (Read & Write) — ohne
+es bricht der Lauf vor dem Bauen ab. Der Benutzername steht im Workflow.
 
 ### Speicherbudget der Suite
 

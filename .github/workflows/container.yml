@@ -13,10 +13,10 @@
 # EOS: gebaut aus dem Dockerfile des DV-EOS-Forks am Tag aus docker/.env.example
 # (EOS_TAG) und unter genau diesem Tag veröffentlicht (plus :latest).
 #
-# Secrets (Repo → Settings → Secrets and variables → Actions):
-#   DOCKERHUB_USERNAME  = bikinibottomcapital
-#   DOCKERHUB_TOKEN     = Docker-Hub-Access-Token (Read & Write)
-# Fehlen sie, bricht der Release-Lauf ab (kein halb veröffentlichtes Release).
+# Docker Hub: Benutzer bikinibottomcapital (kein Geheimnis, steht hier fest).
+# Token als Repo-Secret (Settings → Secrets and variables → Actions), Name
+# BIKINIBOTTOMCAPITAL (oder DOCKERHUB_TOKEN), Wert = Docker-Hub-Access-Token
+# (Read & Write). Fehlt es, bricht der Release-Lauf ab (kein halbes Release).
 # GHCR braucht nichts weiter (GITHUB_TOKEN, packages: write).
 #
 # Ablauf: erst ein amd64-Image bauen und mit docker/compose.yml (TimescaleDB)
@@ -53,12 +53,11 @@ jobs:
           echo "Tag ${GITHUB_REF_NAME}, package.json ${want}"
           test "${GITHUB_REF_NAME}" = "${want}" || { echo "::error::Tag ${GITHUB_REF_NAME} passt nicht zu dvhub/package.json (${want})"; exit 1; }
 
-      - name: Docker-Hub-Secrets vorhanden
+      - name: Docker-Hub-Token vorhanden
         env:
-          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
         run: |
-          test -n "$HUB_USER" && test -n "$HUB_TOKEN" || { echo "::error::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN fehlen (Settings → Secrets and variables → Actions)"; exit 1; }
+          test -n "$HUB_TOKEN" || { echo "::error::Docker-Hub-Token fehlt (Secret BIKINIBOTTOMCAPITAL oder DOCKERHUB_TOKEN)"; exit 1; }
 
       - name: Compose-Umgebung
         run: |
@@ -131,8 +130,8 @@ jobs:
 
       - uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: bikinibottomcapital
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
 
       - id: meta
         uses: docker/metadata-action@v5
@@ -184,8 +183,8 @@ jobs:
 
       - uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: bikinibottomcapital
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
 
       - uses: docker/build-push-action@v6
         with:

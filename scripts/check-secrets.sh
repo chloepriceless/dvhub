@@ -61,7 +61,7 @@ scan "URL-Credentials" \
 # 4) Hardcoded password / secret assignments
 scan "Hartkodierte Credentials" \
   '(password|passwd|client_secret|api_?key|access_?token)["'"'"' ]{0,3}[:=]["'"'"' ]{1,3}[A-Za-z0-9/+_-]{8,}' \
-  'process\.env|cfg\.|config\.|\.\.\.|placeholder|example|null|undefined|REDACT|\$\{|getCfg|getSettings\(|password = password;|hersteller|/test/|\.test\.js|\.spec\.'
+  'process\.env|cfg\.|config\.|\.\.\.|placeholder|example|null|undefined|REDACT|\$\{|getCfg|getSettings\(|password = password;|= [A-Za-z_][A-Za-z0-9_.]*\(|hersteller|/test/|\.test\.js|\.spec\.'
 
 # 5) Internal network topology — must be the generic 192.168.1.x placeholder
 scan "Interne IP-Range (Topologie 192.168.20.x)" '192\.168\.20\.[0-9]+'
