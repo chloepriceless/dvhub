@@ -12,6 +12,7 @@
     <div class="head-right">
       <button id="adminBtn" class="btn small" hidden>Admin</button>
       <span id="whoami" class="whoami"></span>
+      <button id="accountBtn" class="btn small" hidden>Konto</button>
       <button id="logoutBtn" class="btn ghost" hidden>Abmelden</button>
     </div>
   </header>
@@ -96,16 +97,27 @@
   </main>
 
   <!-- ── Anlagen-Übersicht ─────────────────────────────────────────────── -->
-  <main id="mainView" class="view" hidden>
+  <!-- ── Konto: Passwort, Zwei-Faktor, Passkeys ────────────────────────── -->
+  <main id="accountView" class="view" hidden>
     <section class="card">
-      <h1>Zugang &amp; Sicherheit</h1>
-      <p class="sub">Zwei-Faktor (Authenticator-App) und Passkeys für dein Konto.</p>
+      <h1>Konto</h1>
+      <p class="sub">Passwort, Zwei-Faktor (Authenticator-App) und Passkeys für dein Konto.</p>
       <div id="pwBox" class="seccard"></div>
       <div id="totpBox" class="seccard"></div>
       <div id="passkeyBox" class="seccard"></div>
     </section>
     <section class="card">
-      <h1>Anlage koppeln</h1>
+      <button id="accountBackBtn" class="btn ghost small" type="button">◂ Zurück zu meinen Anlagen</button>
+    </section>
+  </main>
+
+  <main id="mainView" class="view" hidden>
+    <!-- Nur sichtbar nach Klick auf „+“ — oder solange es noch keine Anlage gibt. -->
+    <section id="addCard" class="card" hidden>
+      <div class="card-head">
+        <h1>Anlage koppeln</h1>
+        <button id="addCloseBtn" class="btn ghost tiny" type="button" aria-label="Schließen" hidden>✕</button>
+      </div>
       <p class="sub">So läuft’s (die Anlage meldet sich <strong>bei uns</strong> — kein
         Portforwarding beim Kunden nötig):</p>
       <ol class="sub steps">
@@ -146,6 +158,10 @@
         <span class="badge"></span>
       </header>
 
+      <!-- Lizenz der Anlage (von DVhub gemeldet) + Größenprüfung -->
+      <p class="ap-license" hidden></p>
+      <p class="ap-sizewarn" hidden></p>
+
       <div class="ap-waiting" hidden>
         <p class="paircode">Kopplungs-Code: <strong></strong>
           <button class="btn tiny ghost copyCode" type="button">Kopieren</button></p>
@@ -163,20 +179,23 @@
       </div>
 
       <div class="ap-live" hidden>
-        <div class="chips">
+        <div class="chips ap-pro">
+          <div class="chip"><span>Heute</span><b class="today">–</b></div>
           <div class="chip"><span>Akku-SoC</span><b class="soc">–</b></div>
           <div class="chip"><span>Batterie</span><b class="bat">–</b></div>
           <div class="chip"><span>PV</span><b class="pv">–</b></div>
           <div class="chip"><span>Grid-Setpoint</span><b class="grid">–</b></div>
           <div class="chip"><span>Min-SoC</span><b class="minsoc">–</b></div>
         </div>
+        <p class="ap-yield" hidden></p>
         <p class="alarms" hidden></p>
         <p class="flags"></p>
         <p class="seen"></p>
         <div class="row gap">
-          <button class="btn small tunnelOpen" type="button">Support-Tunnel öffnen</button>
-          <button class="btn small ghost tunnelClose" type="button">Tunnel schließen</button>
-          <button class="btn small loadUpdates" type="button">Updates prüfen</button>
+          <button class="btn small tunnelOpen ap-pro" type="button">Support-Tunnel öffnen</button>
+          <button class="btn small ghost tunnelClose ap-pro" type="button">Tunnel schließen</button>
+          <button class="btn small loadUpdates ap-pro" type="button">Updates prüfen</button>
+          <button class="btn small licenseSet" type="button">Lizenz einspielen</button>
         </div>
         <p class="ap-msg"></p>
         <pre class="ap-detail" hidden></pre>

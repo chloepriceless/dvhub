@@ -252,7 +252,7 @@ input::placeholder { color:var(--text-dim); }
 .importlink { display:inline-flex; align-items:center; gap:6px; color:var(--accent); cursor:pointer; }
 .importlink input { font-size:12px; max-width:180px; }
 
-/* Zugang & Sicherheit */
+/* Konto: Passwort, Zwei-Faktor, Passkeys */
 .seccard { padding: 12px 0; border-top: 1px solid var(--line, rgba(255,255,255,.08)); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .seccard:first-of-type { border-top: none; }
 .seccard input { background: rgba(10,14,22,.6); border: 1px solid rgba(255,255,255,.12); color: #e8ecf4; border-radius: 8px; padding: 8px 10px; font: inherit; }
@@ -264,3 +264,25 @@ input::placeholder { color:var(--text-dim); }
 .credbox { margin-top:14px; padding:12px 14px; border:1px solid var(--glass-brd-strong); border-radius:12px; background:var(--glass); }
 .credbox pre { margin:8px 0; white-space:pre-wrap; font-size:13px; user-select:all; }
 .admin-actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+
+/* Kopf einer Karte mit Titel links, Aktion rechts (z. B. „Anlage koppeln“ + ✕). */
+.card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.card-head h1 { margin:0; }
+
+/* „+“-Kachel neben den Anlagen: öffnet „Anlage koppeln“. */
+.add-tile {
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+  min-height:180px; cursor:pointer; color:var(--text-dim); font:inherit;
+  border:1px dashed var(--glass-brd-strong); background:transparent;
+  transition:color .15s, border-color .15s, background .15s;
+}
+.add-tile:hover, .add-tile:focus-visible { color:var(--accent); border-color:var(--accent); background:var(--glass); outline:none; }
+.add-tile .add-plus { font-size:44px; line-height:1; font-weight:300; }
+.add-tile .add-label { font-size:14px; }
+
+/* Lizenz-Zeile + Größenwarnung auf der Anlagen-Karte */
+.ap-license { font-size:13px; margin:8px 0 0; }
+.ap-license.lic-ok { color:var(--ok); }
+.ap-license.lic-none { color:var(--warn); }
+.ap-sizewarn { font-size:13px; margin:6px 0 0; color:var(--danger); }
+.ap-yield { font-size:13px; color:var(--text-dim); margin:8px 0 0; }

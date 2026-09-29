@@ -11,6 +11,8 @@ let mustChangePassword = false;
 let pairings = [];
 let refreshTimer = null;
 let isAdminUser = false;
+let pairingsLoaded = false; // erst nach der ersten Antwort entscheiden, ob „Anlage koppeln“ offen ist
+let addOpen = false;        // per „+“ geöffnet (bei 0 Anlagen immer offen)
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -31,8 +33,10 @@ function setView() {
   $('#pwView').hidden = !pwOnly;
   $('#mainView').hidden = !authed || pwOnly;
   $('#adminView').hidden = true;
+  $('#accountView').hidden = true;
   $('#logoutBtn').hidden = !authed;
   $('#adminBtn').hidden = !(authed && isAdminUser) || pwOnly;
+  $('#accountBtn').hidden = !authed || pwOnly;
   $('#whoami').textContent = authed ? localStorage.getItem('dvportal-name') : '';
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
   if (authed && !pwOnly) {
@@ -41,13 +45,37 @@ function setView() {
   }
 }
 
-function showAdmin(on) {
-  $('#mainView').hidden = !on ? false : true;
-  $('#adminView').hidden = !on;
-  if (on) refreshAdmin();
+// Angemeldete Ansichten: 'main' (Anlagen), 'account' (Konto), 'admin'.
+function showView(name) {
+  $('#mainView').hidden = name !== 'main';
+  $('#accountView').hidden = name !== 'account';
+  $('#adminView').hidden = name !== 'admin';
+  if (name === 'admin') refreshAdmin();
+  window.scrollTo({ top: 0 });
 }
-$('#adminBtn')?.addEventListener('click', () => showAdmin(true));
-$('#adminBackBtn')?.addEventListener('click', () => showAdmin(false));
+$('#adminBtn')?.addEventListener('click', () => showView('admin'));
+$('#adminBackBtn')?.addEventListener('click', () => showView('main'));
+$('#accountBtn')?.addEventListener('click', () => showView('account'));
+$('#accountBackBtn')?.addEventListener('click', () => showView('main'));
+
+// „Anlage koppeln“: offen bei 0 Anlagen, sonst nur nach Klick auf „+“.
+function syncAddCard() {
+  const none = pairings.length === 0;
+  $('#addCard').hidden = !pairingsLoaded || (!none && !addOpen);
+  $('#addCloseBtn').hidden = none;
+}
+function openAddCard() {
+  addOpen = true;
+  syncAddCard();
+  $('#addCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#addApplianceId').focus({ preventScroll: true });
+}
+$('#addCloseBtn')?.addEventListener('click', () => {
+  addOpen = false;
+  $('#addForm').reset();
+  $('#addMsg').textContent = '';
+  syncAddCard();
+});
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 function setMode(m) {
@@ -159,6 +187,7 @@ $('#addForm').addEventListener('submit', async (e) => {
   }
   $('#addForm').reset();
   msg.textContent = '';
+  addOpen = false; // die neue Anlage erscheint als Karte mit Kopplungs-Code
   refreshPairings();
 });
 
@@ -166,10 +195,22 @@ async function refreshPairings() {
   const { status, j } = await api('/api/pairings');
   if (status === 401) { localStorage.removeItem('dvportal-name'); setView(); return; }
   pairings = j.pairings || [];
+  pairingsLoaded = true;
   render();
 }
 
 const fmtW = (w) => w == null ? '–' : `${Math.round(w)} W`;
+const fmtEur = (v, sign = false) => v == null ? '–'
+  : `${sign && v > 0 ? '+' : ''}${Number(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+const fmtNum = (v, digits = 0) => v == null ? '–' : Number(v).toLocaleString('de-DE', { maximumFractionDigits: digits });
+const fmtDay = (iso) => iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.` : '';
+const fmtStand = (iso) => {
+  if (!iso) return '';
+  if (iso.length <= 10) return fmtDay(iso);
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })} ${d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`;
+};
+const MONTHS = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
 const fmtPct = (v) => v == null ? '–' : `${Math.round(v)} %`;
 const fmtAge = (iso) => {
   if (!iso) return 'noch nie';
@@ -208,6 +249,27 @@ function render() {
     $('.ap-declined', card).hidden = pr.status !== 'declined';
     if (pr.status === 'waiting') $('strong', $('.paircode', card)).textContent = pr.code;
 
+    // Lizenz der Anlage + Größenprüfung (ältere DVhub melden keine Lizenz → nichts zeigen).
+    const lic = pr.license;
+    const licEl = $('.ap-license', card);
+    if (lic) {
+      licEl.hidden = false;
+      licEl.className = `ap-license ${lic.proActive ? 'lic-ok' : 'lic-none'}`;
+      licEl.textContent = lic.proActive
+        ? `Lizenz: Pro${lic.maxKwp ? ` · bis ${fmtNum(lic.maxKwp, 1)} kWp` : ''}${lic.systemKwp ? ` · in DVhub eingetragen ${fmtNum(lic.systemKwp, 1)} kWp` : ''}`
+        : (lic.capacityOk === false
+          ? 'Lizenz vorhanden, aber die Anlage ist größer als die Lizenz — Pro-Funktionen gesperrt. Größere Lizenz einspielen.'
+          : 'Keine Pro-Lizenz — Status, Support-Tunnel und Updates erst mit Lizenz. Du kannst sie hier einspielen.');
+    }
+    const sc = pr.sizeCheck;
+    const warnEl = $('.ap-sizewarn', card);
+    if (sc && !sc.ok) {
+      warnEl.hidden = false;
+      warnEl.textContent = sc.reason === 'size_exceeds_license'
+        ? `⚠ Angegebene Anlagengröße ${fmtNum(sc.sizeKwp, 1)} kWp ist größer als die Lizenz (bis ${fmtNum(sc.maxKwp, 1)} kWp).`
+        : `⚠ DVhub meldet: die Anlage (${fmtNum(sc.systemKwp, 1)} kWp) ist größer als die Lizenz${sc.maxKwp ? ` (bis ${fmtNum(sc.maxKwp, 1)} kWp)` : ''}.`;
+    }
+
     const msg = (t) => flash(card, t);
     $('.copyCode', card)?.addEventListener('click', (e) => {
       navigator.clipboard?.writeText(pr.code || '');
@@ -240,6 +302,23 @@ function render() {
 
     if (pr.status === 'approved') {
       const s = pr.lastStatus || {};
+      const pro = !lic || lic.proActive;   // ältere DVhub ohne Lizenz-Meldung: wie bisher
+      for (const el of card.querySelectorAll('.ap-pro')) el.hidden = !pro;
+      $('.licenseSet', card).classList.toggle('primary', !pro);
+      $('.today', card).textContent = fmtEur(s.todayNetEur, true);
+      $('.today', card).title = s.todayNetEur == null ? '' : `Einspeisung ${fmtEur(s.todayRevenueEur)} · Bezug ${fmtEur(s.todayCostEur)}`;
+      // Gespeicherte Tagesberichte: gestern + DV-Erlös des Monats.
+      const yieldEl = $('.ap-yield', card);
+      const parts2 = [];
+      if (pr.lastDay) parts2.push(`${fmtDay(pr.lastDay.day)}: ${fmtEur(pr.lastDay.netEur, true)} (Einspeisung ${fmtEur(pr.lastDay.exportRevenueEur)})`);
+      const monthKeys = Object.keys(pr.months || {}).sort();
+      const mk = monthKeys[monthKeys.length - 1];
+      if (mk) {
+        const m = pr.months[mk];
+        parts2.push(`${MONTHS[Number(mk.slice(5, 7)) - 1]} DV-Erlös: ${fmtEur(m.dvRevenueEur)} · ${fmtNum(m.exportKwh)} kWh${m.dvRevenueCtKwh != null ? ` · ${fmtNum(m.dvRevenueCtKwh, 2)} ct/kWh` : ''} (Stand ${fmtStand(m.asOf)})`);
+      }
+      yieldEl.hidden = parts2.length === 0;
+      yieldEl.textContent = parts2.join('  ·  ');
       $('.soc', card).textContent = fmtPct(s.soc);
       $('.bat', card).textContent = fmtW(s.batteryPowerW);
       $('.pv', card).textContent = fmtW(s.pvTotalW);
@@ -273,6 +352,12 @@ function render() {
         await queueCmd('open_tunnel', { ttlMin: Number(ttl) || 60 });
       });
       $('.tunnelClose', card).addEventListener('click', () => queueCmd('close_tunnel'));
+      $('.licenseSet', card).addEventListener('click', async () => {
+        const key = prompt(`Lizenzschlüssel für ${pr.name || pr.applianceName || pr.applianceId} einspielen:`, '');
+        if (!key || !key.trim()) return;
+        await queueCmd('license_activate', { key: key.trim() });
+        setTimeout(refreshPairings, 35000);
+      });
       $('.loadUpdates', card).addEventListener('click', async () => {
         await queueCmd('updates_check');
         // Ergebnis erscheint, sobald die Anlage es geliefert hat.
@@ -293,6 +378,19 @@ function render() {
     p.textContent = 'Noch keine Anlage gekoppelt.';
     list.appendChild(p);
   }
+  // „+“ neben den bestehenden Anlagen öffnet „Anlage koppeln“.
+  if (pairings.length > 0) {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'card add-tile';
+    add.setAttribute('aria-label', 'Anlage hinzufügen');
+    const plus = document.createElement('span'); plus.className = 'add-plus'; plus.textContent = '+';
+    const label = document.createElement('span'); label.className = 'add-label'; label.textContent = 'Anlage hinzufügen';
+    add.append(plus, label);
+    add.addEventListener('click', openAddCard);
+    list.appendChild(add);
+  }
+  syncAddCard();
 }
 
 function flash(card, text) {
@@ -328,7 +426,7 @@ async function refreshMe() {
   }
 })();
 
-// ── Passwort ändern (Pflicht nach Startpasswort, sonst in „Zugang & Sicherheit“) ──
+// ── Passwort ändern (Pflicht nach Startpasswort, sonst unter „Konto“) ──
 const PW_ERR = { altes_passwort_falsch: 'Bisheriges Passwort falsch.', passwort_zu_kurz: 'Mindestens 8 Zeichen.',
   passwort_unveraendert: 'Neues Passwort muss sich unterscheiden.', rate_limited: 'Zu viele Versuche — eine Minute warten.' };
 async function changePassword(oldPassword, newPassword, newPassword2, msgEl) {
