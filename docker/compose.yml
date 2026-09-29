@@ -35,7 +35,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD in docker/.env setzen}
-      # für docker/db-init/10-dvhub.sh
+      # für die DB-Ersteinrichtung (configs: dvhub-db-init, unten)
       DVHUB_DB_PASSWORD: ${DVHUB_DB_PASSWORD:?DVHUB_DB_PASSWORD in docker/.env setzen}
       TZ: ${TZ:-Europe/Berlin}
       # timescaledb-tune bekommt ein festes Budget, statt es aus der cgroup zu
@@ -48,7 +48,12 @@ services:
     command: ["postgres", "-c", "shared_buffers=${DB_SHARED_BUFFERS:-64MB}"]
     volumes:
       - dvhub-db:/var/lib/postgresql/data
-      - ./db-init/10-dvhub.sh:/docker-entrypoint-initdb.d/010-dvhub.sh:ro
+    # Erststart der DB (siehe configs unten) — steckt in dieser Datei, damit die
+    # Installation nur compose.yml + .env braucht (Docker Compose ≥ 2.23).
+    configs:
+      - source: dvhub-db-init
+        target: /docker-entrypoint-initdb.d/010-dvhub.sh
+        mode: 0555
     ports:
       - "127.0.0.1:${DB_PORT:-5433}:5432"
     shm_size: 256m
@@ -127,6 +132,28 @@ services:
     # (Appliance, 15-min-Optimierung); Spitze dort 352 MB inkl. Page-Cache.
     mem_limit: ${EOS_MEM_LIMIT:-352m}
     cpus: ${EOS_CPUS:-1}
+
+# Erststart der DB (läuft nur bei leerem Datenverzeichnis, als postgres):
+# App-Rolle + DB + TimescaleDB anlegen — wie install.sh/timescale-provision.sh
+# auf der nativen Appliance. dvhub ist bewusst KEIN Superuser (der DB-Restore
+# sperrt die App per CONNECTION LIMIT 0 aus; das wirkt nur auf Nicht-Superuser).
+# $$ = ein wörtliches $ (Compose ersetzt sonst Variablen im Inhalt).
+configs:
+  dvhub-db-init:
+    content: |
+      #!/bin/sh
+      set -eu
+      : "$${DVHUB_DB_PASSWORD:?DVHUB_DB_PASSWORD fehlt}"
+      psql -v ON_ERROR_STOP=1 --username postgres --dbname postgres -v pw="$$DVHUB_DB_PASSWORD" <<'SQL'
+      SELECT format('CREATE ROLE dvhub LOGIN PASSWORD %L', :'pw')
+      WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dvhub') \gexec
+      SELECT 'CREATE DATABASE dvhub OWNER dvhub'
+      WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'dvhub') \gexec
+      SQL
+      psql -v ON_ERROR_STOP=1 --username postgres --dbname dvhub <<'SQL'
+      CREATE EXTENSION IF NOT EXISTS timescaledb;
+      SQL
+      echo "[db-init] Rolle dvhub, DB dvhub und TimescaleDB angelegt"
 
 volumes:
   dvhub-config:

@@ -100,6 +100,18 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.s
 curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh | sudo bash -s -- --channel dev
 ```
 
+**Docker (DVhub + TimescaleDB + EOS, amd64/arm64):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash
+```
+
+Legt den Ordner `./dvhub` an (nur `compose.yml` + `.env` mit zufälligen
+Passwörtern), lädt die Images von Docker Hub und startet alles; danach
+`http://<host>:8080`. Voraussetzung: Docker mit Compose ≥ 2.23. Optionen:
+`bash -s -- --no-eos` (ohne EOS, kleine Boxen), `--tag dev` (Vorab-Stand),
+`--dir <ordner>`, `--port <port>`. Details unter [Docker](#docker).
+
 Der Installer:
 
 - installiert Node.js 22 (nur falls keine Node ≥ 22 vorhanden ist), PostgreSQL, die VPN-Pakete (OpenVPN, WireGuard, strongSwan) sowie `python3-venv`, `python3-pip`, `autossh` und `openssh-client`
@@ -142,12 +154,16 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.s
 
 ### Docker
 
-Alternativ als Container (amd64/arm64) mit TimescaleDB:
+Installation per Einzeiler (siehe oben):
 
 ```bash
-cp docker/.env.example docker/.env      # Passwörter setzen
-docker compose -f docker/compose.yml --env-file docker/.env up -d
+curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash
 ```
+
+Aktualisieren: `cd dvhub && docker compose pull && docker compose up -d` (oder
+den Einzeiler erneut ausführen — `.env` und Daten bleiben). Von Hand geht es
+auch: `compose.yml` und `.env.example` (als `.env`, Passwörter setzen) aus
+[`docker/`](docker/) in einen Ordner legen und `docker compose up -d`.
 
 Images auf Docker Hub: [`bikinibottomcapital/dvhub`](https://hub.docker.com/r/bikinibottomcapital/dvhub) und `bikinibottomcapital/dvhub-eos` (`latest` = letztes Release, `dev` = Vorab-Stand; gespiegelt nach `ghcr.io/chloepriceless/…`). Images entstehen nur bei einem Release-Tag `vX.Y.Z`.
 Suite aus DVhub, TimescaleDB und optional EOS, zusammen ≤ 704 MB RAM (Obergrenzen) — ohne Python-Prognose/ML, VPN und Fern-Support.

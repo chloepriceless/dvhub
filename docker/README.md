@@ -8,11 +8,22 @@ Inhalt dieses Verzeichnisses:
 | Datei | Zweck |
 |---|---|
 | `../Dockerfile`, `docker-entrypoint.sh` | Image + idempotenter Start (Config, appliance-id, Profile, DB-Warten, Heap) |
-| `compose.yml`, `.env.example` | DVhub + TimescaleDB (PostgreSQL 17) zum Betreiben |
-| `db-init/10-dvhub.sh` | Erststart der DB: Rolle `dvhub`, DB `dvhub`, Extension `timescaledb` |
+| `install.sh` | Einzeiler-Installation: Ordner, `compose.yml`, `.env` mit Zufallspasswörtern, Images, Start |
+| `compose.yml`, `.env.example` | DVhub + TimescaleDB (PostgreSQL 17) + EOS; die DB-Ersteinrichtung (Rolle `dvhub`, DB `dvhub`, Extension `timescaledb`) steckt als `configs` darin |
 | `../.github/workflows/container.yml` | Smoke-Test mit Compose, dann Build amd64+arm64 → Docker Hub `bikinibottomcapital/dvhub` + `…/dvhub-eos` (gespiegelt nach GHCR) |
 
-## Schnellstart (Compose)
+## Schnellstart
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash
+# Optionen: bash -s -- --no-eos | --tag dev | --dir /opt/dvhub | --port 8090
+```
+
+Voraussetzung: Docker mit Compose ≥ 2.23 (die DB-Einrichtung steckt als
+`configs.content` in `compose.yml`). Der Einzeiler ist wiederholbar: `.env`
+(Passwörter) und Daten bleiben, `compose.yml` und die Images werden erneuert.
+
+Von Hand, im Repo:
 
 ```bash
 git clone https://github.com/chloepriceless/dvhub.git && cd dvhub

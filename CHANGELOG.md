@@ -30,6 +30,12 @@ verweist hierher.
 - **„Sofort laden“ fürs E-Auto** — mit gewählter Leistung laden, unabhängig
   vom EOS-Plan und auch, wenn EOS nicht läuft.
 - **API-Referenz aller Endpunkte** in `docs/API.md`.
+- **Docker-Installation per Einzeiler:**
+  `curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash`
+  — legt `./dvhub` mit `compose.yml` und `.env` (Zufallspasswörter) an, lädt
+  die Images und startet; wiederholbar zum Aktualisieren. Die DB-Einrichtung
+  steckt jetzt in `compose.yml` (vorher eigene Datei, die beim Fehlen die
+  Einrichtung still übersprang → DVhub konnte sich nicht anmelden).
 - **DVhub als Container-Suite: DVhub + TimescaleDB + EOS in ≤ 704 MB RAM.**
   `docker/compose.yml` startet DVhub, TimescaleDB 2.28/PostgreSQL 17 (Rollen
   wie nativ: `postgres` Admin, `dvhub` App) und optional EOS (DV-EOS
