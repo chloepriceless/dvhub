@@ -32,7 +32,7 @@ import { buildVictronAlarmsPayload } from '../victron-alarms.js';
 export const SIDECAR_NAME = 'installer-portal-client.json';
 export const POLL_INTERVAL_MS_DEFAULT = 30_000;
 export const PAIRING_CODE_RE = /^\d{6}$/;
-export const COMMAND_TYPES = ['open_tunnel', 'close_tunnel', 'updates_check'];
+export const COMMAND_TYPES = ['open_tunnel', 'close_tunnel', 'updates_check', 'license_activate'];
 
 // URL-Validierung für die Portal-Adresse (SSRF-Bremse beim Pairing):
 //   https:// ist überall erlaubt (Portal ist online),
@@ -59,6 +59,99 @@ export function isAllowedPortalUrl(raw) {
 // Kompakt-Status für den Poll — genau die Felder, die das Portal anzeigt.
 // Quelle ist wie im Leitstand der Poller-Snapshot (IPC), nie Web-Prozess-
 // lokales state — sonst bleibt alles leer im Split-Prozess-Betrieb.
+function roundEur(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+// Lizenz der Anlage fürs Portal (Pro aktiv? lizenzierte kWp? eingetragene
+// Anlagengröße?). Ohne Pro darf das Portal nur eine Lizenz einspielen — Status,
+// Support-Tunnel und Updates erst mit aktiver Pro-Lizenz. Kein Schlüssel,
+// keine Maschinendatei (getState schwärzt beides).
+export function buildLicenseInfo(ctx) {
+  const ls = ctx.licenseService;
+  if (!ls || typeof ls.getState !== 'function') return null;
+  let s;
+  try { s = ls.getState() || {}; } catch { return null; }
+  const kwp = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.round(Number(v) * 10) / 10 : null);
+  return {
+    proActive: typeof ls.isProActive === 'function' ? ls.isProActive() === true : false,
+    status: String(s.effective_status || s.status || 'none'),
+    kind: s.license_kind || null,
+    maxKwp: kwp(s.max_kwp),
+    systemKwp: kwp(s.system_kwp),
+    capacityOk: s.capacity_ok !== false,
+  };
+}
+
+// ── Tagesbericht ─────────────────────────────────────────────────────────────
+// Nach jedem abgeschlossenen Tag meldet die Anlage dem Portal den Tagesertrag
+// und den Direktvermarktungs-Erlös des Monats bis dahin (wie die DV-Karte der
+// Historie). Das Portal speichert beides — die Werte bleiben dort sichtbar,
+// auch wenn die Anlage offline ist. Fehlende Tage (Anlage war offline) werden
+// nachgeholt, höchstens DAY_REPORT_BACKLOG Tage zurück, einer je Poll.
+export const DAY_REPORT_BACKLOG = 31;
+
+export function localDateIso(ms, timeZone = 'Europe/Berlin') {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+}
+function addDaysIso(day, n) {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Nächster zu meldender Tag: der Tag nach dem zuletzt gemeldeten, frühestens
+// DAY_REPORT_BACKLOG Tage zurück; beim ersten Mal nur „gestern“. null = aktuell.
+export function nextReportDay(lastReported, yesterday) {
+  if (!lastReported) return yesterday;
+  if (lastReported >= yesterday) return null;
+  const floor = addDaysIso(yesterday, -(DAY_REPORT_BACKLOG - 1));
+  const next = addDaysIso(lastReported, 1);
+  return next < floor ? floor : next;
+}
+
+// null/undefined/'' bleiben null — „unbekannt“ ist nicht „0 €“ (Number(null) === 0).
+const isNum = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+const num2 = (v) => (isNum(v) ? Math.round(Number(v) * 100) / 100 : null);
+const num0 = (v) => (isNum(v) ? Math.round(Number(v)) : null);
+
+// Tages- und Monats-Zusammenfassung → kompakter Bericht (nur Zahlen).
+// withMonth: nur beim NEUESTEN Tag. Die Monats-Zusammenfassung umfasst immer den
+// ganzen Monat bis jetzt — bei nachgeholten älteren Tagen stünde sonst ein
+// neuerer Stand unter einem alten Datum. asOf = echter Rechenzeitpunkt.
+export async function buildDayReport(ctx, day, { withMonth = true, nowMs = Date.now() } = {}) {
+  const getSummary = ctx.historyApi?.getSummary;
+  if (typeof getSummary !== 'function') return null;
+  const d = await getSummary({ view: 'day', date: day });
+  const m = withMonth ? await getSummary({ view: 'month', date: `${day.slice(0, 7)}-01` }) : null;
+  const dk = d?.body?.kpis || d?.kpis;
+  const mk = m?.body?.kpis || m?.kpis;
+  if (!dk) return null;
+  return {
+    day,
+    netEur: num2(dk.netEur),
+    exportRevenueEur: num2(dk.exportRevenueEur),
+    importCostEur: num2(dk.importCostEur),
+    exportKwh: num2(dk.exportKwh),
+    pvKwh: num2(dk.pvKwh),
+    month: mk ? {
+      month: day.slice(0, 7),
+      asOf: new Date(nowMs).toISOString(),
+      dvRevenueEur: num2(mk.dvRevenueEur ?? mk.exportRevenueEur),
+      exportRevenueEur: num2(mk.exportRevenueEur),
+      marketPremiumEur: num2(mk.marketPremiumEur),
+      exportKwh: num0(mk.exportKwh),
+      dvRevenueCtKwh: num2(mk.dvRevenueCtKwh),
+    } : null,
+  };
+}
+
+function proActive(ctx) {
+  try { return ctx.licenseService?.isProActive?.() === true; } catch { return false; }
+}
+
 export function buildCompactStatus(ctx, now = Date.now()) {
   const payload = (ctx.getCachedRuntimeStatusPayload && ctx.getCachedRuntimeStatusPayload())
     || (ctx.buildFallbackStatusPayload && ctx.buildFallbackStatusPayload(now))
@@ -80,6 +173,10 @@ export function buildCompactStatus(ctx, now = Date.now()) {
     emergencyStop: !!ctx.state?.ctrl?.discretionaryWritesPaused,
     telemetryFrozen: !!v.freeze?.active,
     supportTunnelOpen: !!(ctx.supportTunnel && ctx.supportTunnel.liteStatus && ctx.supportTunnel.liteStatus().open),
+    // Tagesertrag (heute, wie im Leitstand): Netto = Einspeiseerlös − Bezugskosten.
+    todayNetEur: roundEur(payload.costs?.netEur),
+    todayRevenueEur: roundEur(payload.costs?.revenueEur),
+    todayCostEur: roundEur(payload.costs?.costEur),
     version: (ctx.getAppVersion && ctx.getAppVersion().versionLabel) || null,
   };
 }
@@ -175,6 +272,12 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
         method: 'POST', headers: { ...hostHdr, authorization: auth }, body: {},
       });
     }
+    if (cmd.type === 'license_activate') {
+      // Lizenz für den Kunden einspielen — gleicher Weg wie in den Einstellungen.
+      return fetchImpl(`${base}/api/license/activate`, {
+        method: 'POST', headers: { ...hostHdr, authorization: auth }, body: { key: String(args.key || '') },
+      });
+    }
     if (cmd.type === 'updates_check') {
       return fetchImpl(`${base}/api/admin/update/check`, {
         method: 'GET', headers: { ...hostHdr, authorization: auth },
@@ -220,11 +323,20 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
     const applianceId = readApplianceId(dataDir(), fsImpl);
     if (!applianceId) return { skipped: true, reason: 'no_appliance_id' };
     const gen = generation;
+    // Tagesbericht: fertig gerechneten beilegen, sonst im Hintergrund anstoßen.
+    const pro = proActive(ctx);
+    const dayReport = pro ? takeDayReport(sc) : null;
     try {
       const r = await fetchImpl(`${sc.portalUrl}/api/poll`, {
         method: 'POST',
         headers: { 'x-appliance-token': sc.applianceToken },
-        body: { applianceId, status: buildCompactStatus(ctx, now()) },
+        // Ohne Pro-Lizenz nur die Lizenz-Info, keine Live-Werte.
+        body: {
+          applianceId,
+          license: buildLicenseInfo(ctx),
+          status: pro ? buildCompactStatus(ctx, now()) : null,
+          ...(dayReport ? { dayReport } : {}),
+        },
       });
       if (!stillCurrent(gen, sc)) return { ok: false, aborted: true };
       if (r.status === 401 || r.status === 410) {
@@ -245,6 +357,14 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
       for (const cmd of commands) {
         if (!cmd || !COMMAND_TYPES.includes(cmd.type)) { results.push({ id: cmd?.id, ok: false, error: 'unknown_command' }); continue; }
         if (!stillCurrent(gen, sc)) return { ok: false, aborted: true };
+        // Ohne aktive Pro-Lizenz ist das Portal auf „Lizenz einspielen“
+        // beschränkt (je Kommando neu geprüft — ein vorheriges license_activate
+        // im selben Durchlauf kann die Lizenz gerade aktiviert haben).
+        if (cmd.type !== 'license_activate' && !proActive(ctx)) {
+          results.push({ id: cmd.id, ok: false, status: 403, result: { ok: false, error: 'license_required' } });
+          pushLog('installer_portal_command_denied', { type: cmd.type, reason: 'license_required' });
+          continue;
+        }
         if (cmd.type === 'open_tunnel' && !tunnelAllowed()) {
           results.push({ id: cmd.id, ok: false, status: 403, result: { ok: false, error: 'tunnel_not_permitted' } });
           pushLog('installer_portal_command_denied', { type: cmd.type });
@@ -275,6 +395,8 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
       sc.lastPollAt = new Date(now()).toISOString();
       sc.lastError = null;
       sc.approved = approved;
+      // Nur nach Freigabe speichert das Portal den Bericht — dann gilt er als gemeldet.
+      if (dayReport && approved) { sc.lastDayReported = dayReport.day; pendingReport = null; }
       saveSidecar(sc);
       return { ok: true, approved: sc.approved, executed: results.length };
     } catch (e) {
@@ -284,6 +406,32 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
       saveSidecar(sc);
       return { ok: false, error: sc.lastError };
     }
+  }
+
+  // Tagesbericht vorbereiten: wird im Hintergrund gerechnet (Tages- und
+  // Monats-Zusammenfassung) und dem NÄCHSTEN Poll beigelegt — der Poll selbst
+  // wartet nie darauf.
+  let pendingReport = null;   // { day, report } fertig zum Mitschicken
+  let reportRunning = false;
+  function takeDayReport(sc) {
+    const tz = (ctx.getCfg() || {}).schedule?.timezone || 'Europe/Berlin';
+    // Kalendertag zurück — nicht „jetzt − 24 h“ (am Zeitumstellungstag wäre das
+    // zwischen 23 und 24 Uhr noch HEUTE).
+    const yesterday = addDaysIso(localDateIso(now(), tz), -1);
+    const day = nextReportDay(sc.lastDayReported || null, yesterday);
+    if (!day) return null;
+    if (pendingReport && pendingReport.day === day) return pendingReport.report;
+    if (!reportRunning) {
+      reportRunning = true;
+      // Monatswert beim neuesten Tag UND beim letzten Tag jedes abgeschlossenen
+      // Monats (sonst bliebe ein über den Monatswechsel verpasster Monat
+      // dauerhaft unvollständig). Die Monats-Zusammenfassung ist dann vollständig.
+      buildDayReport(ctx, day, { withMonth: day === yesterday || addDaysIso(day, 1).slice(0, 7) !== day.slice(0, 7), nowMs: now() })
+        .then((report) => { if (report) pendingReport = { day, report }; })
+        .catch(() => { /* nächster Poll versucht es erneut */ })
+        .finally(() => { reportRunning = false; });
+    }
+    return null;
   }
 
   let timer = null;
@@ -313,6 +461,7 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
         applianceId,
         code: String(pairingCode),
         name: String(name || '').slice(0, 80) || undefined,
+        license: buildLicenseInfo(ctx),
       },
     });
     if (r.status !== 200 || !r.json || !r.json.ok) {

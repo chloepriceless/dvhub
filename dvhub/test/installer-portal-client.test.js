@@ -10,12 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  createInstallerPortalClient,
-  isAllowedPortalUrl,
-  buildCompactStatus,
-  SIDECAR_NAME,
-} from '../services/installer-portal-client.js';
+import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, SIDECAR_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
 
 function tmpDir(withApplianceId = true) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-ipc-'));
@@ -29,6 +24,14 @@ function ctxFor(dir, cfg = {}) {
     pushLog: () => {},
     getCachedRuntimeStatusPayload: () => ({ victron: { soc: 42, batteryPowerW: 111, pvTotalW: 999, alarms: null } }),
     getAppVersion: () => ({ versionLabel: 'v1.0.6' }),
+    // Standard: aktive Pro-Lizenz (ohne Lizenz ist nur license_activate erlaubt — eigene Tests).
+    licenseService: proLicense(),
+  };
+}
+function proLicense(over = {}) {
+  return {
+    isProActive: () => over.pro !== false,
+    getState: () => ({ status: over.pro === false ? 'none' : 'active', max_kwp: over.maxKwp ?? 30, system_kwp: over.systemKwp ?? 29.7, capacity_ok: true, license_kind: null }),
   };
 }
 // Portal-Welt als Fetch-Stub: routet /api/pair/claim, /api/poll,
@@ -411,4 +414,175 @@ test('cancelPending während laufender Kopplungs-Anfrage: verworfen, nichts gesp
   await assert.rejects(pending, /pairing_cancelled/);
   assert.equal(client.status().paired, false);
   assert.equal(fs.existsSync(path.join(dir, SIDECAR_NAME)), false);
+});
+
+// ── Lizenz: ohne Pro nur „Lizenz einspielen“ ────────────────────────────────
+
+test('Ohne Pro-Lizenz: Poll meldet nur die Lizenz (kein Status); Tunnel verweigert, Lizenz einspielen läuft', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const executed = [];
+  const ctx = { ...ctxFor(dir, { installerPortal: { enabled: true, allowTunnel: true } }), licenseService: proLicense({ pro: false }) };
+  const client = createInstallerPortalClient(ctx, {
+    fetchImpl: portal.fetchImpl,
+    execCommand: async (cmd) => { executed.push(cmd); return { status: 200, json: { ok: true } }; },
+  });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  const claimCall = portal.calls.find((c) => c.url.endsWith('/api/pair/claim'));
+  assert.equal(claimCall.body.license.proActive, false, 'Kopplung ohne Lizenz ist erlaubt und meldet das');
+  portal.state.commands = [
+    { id: 'c1', type: 'open_tunnel', args: { ttlMin: 15 } },
+    { id: 'c2', type: 'license_activate', args: { key: 'ABC-123' } },
+  ];
+  await client.pollOnce();
+  const poll = portal.calls.find((c) => c.url.endsWith('/api/poll'));
+  assert.equal(poll.body.status, null, 'ohne Lizenz keine Live-Werte');
+  assert.equal(poll.body.license.proActive, false);
+  assert.deepEqual(executed.map((c) => c.type), ['license_activate'], 'nur die Lizenz wird ausgeführt');
+  assert.equal(executed[0].args.key, 'ABC-123');
+  assert.equal(portal.state.results.find((r) => r.id === 'c1').result.error, 'license_required');
+});
+
+test('Lizenz im selben Durchlauf aktiviert → folgende Kommandos laufen', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  let pro = false;
+  const ctx = { ...ctxFor(dir), licenseService: { isProActive: () => pro, getState: () => ({ status: pro ? 'active' : 'none' }) } };
+  const executed = [];
+  const client = createInstallerPortalClient(ctx, {
+    fetchImpl: portal.fetchImpl,
+    execCommand: async (cmd) => { executed.push(cmd.type); if (cmd.type === 'license_activate') pro = true; return { status: 200, json: { ok: true } }; },
+  });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  portal.state.commands = [{ id: 'a', type: 'license_activate', args: { key: 'K' } }, { id: 'b', type: 'updates_check' }];
+  await client.pollOnce();
+  assert.deepEqual(executed, ['license_activate', 'updates_check']);
+});
+
+test('buildLicenseInfo: Pro, Tarif-kWp, eingetragene Größe — ohne Schlüssel', () => {
+  const info = buildLicenseInfo({ licenseService: proLicense({ maxKwp: 30, systemKwp: 29.7 }) });
+  assert.deepEqual(info, { proActive: true, status: 'active', kind: null, maxKwp: 30, systemKwp: 29.7, capacityOk: true });
+  assert.equal(buildLicenseInfo({}), null);
+});
+
+test('buildCompactStatus: Tagesertrag heute in Euro aus den Tageskosten', () => {
+  const dir = tmpDir();
+  const ctx = { ...ctxFor(dir), getCachedRuntimeStatusPayload: () => ({ victron: {}, costs: { netEur: 12.345, revenueEur: 14.001, costEur: 1.656 } }) };
+  const s = buildCompactStatus(ctx, Date.now());
+  assert.deepEqual([s.todayNetEur, s.todayRevenueEur, s.todayCostEur], [12.35, 14, 1.66]);
+});
+
+// ── Tagesbericht ─────────────────────────────────────────────────────────────
+
+test('nextReportDay: erstes Mal gestern, dann lückenlos, höchstens 31 Tage zurück', () => {
+  assert.equal(nextReportDay(null, '2026-09-29'), '2026-09-29');
+  assert.equal(nextReportDay('2026-09-29', '2026-09-29'), null);
+  assert.equal(nextReportDay('2026-09-26', '2026-09-29'), '2026-09-27');
+  assert.equal(nextReportDay('2026-01-01', '2026-09-29'), '2026-08-30', 'lange offline → nur die letzten 31 Tage');
+  assert.equal(nextReportDay('2026-02-28', '2026-03-02'), '2026-03-01');
+});
+
+test('Tagesbericht: im Hintergrund gerechnet, beim nächsten Poll mitgeschickt, danach nicht erneut', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const asked = [];
+  const ctx = {
+    ...ctxFor(dir),
+    historyApi: {
+      async getSummary({ view, date }) {
+        asked.push(`${view}:${date}`);
+        return view === 'day'
+          ? { status: 200, body: { kpis: { netEur: 4.2, exportRevenueEur: 5.1, importCostEur: 0.9, exportKwh: 60.5, pvKwh: 80 } } }
+          : { status: 200, body: { kpis: { dvRevenueEur: 123.45, exportRevenueEur: 100, marketPremiumEur: 23.45, exportKwh: 1500, dvRevenueCtKwh: 8.23 } } };
+      },
+    },
+  };
+  const t = Date.parse('2026-09-30T08:00:00Z');
+  const client = createInstallerPortalClient(ctx, { fetchImpl: portal.fetchImpl, now: () => t, execCommand: async () => ({ status: 200, json: { ok: true } }) });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  await client.pollOnce();                       // stößt die Rechnung an
+  await new Promise((r) => setImmediate(r));
+  await client.pollOnce();                       // schickt den Bericht mit
+  await client.pollOnce();                       // gemeldet → nicht erneut
+  const polls = portal.calls.filter((c) => c.url.endsWith('/api/poll'));
+  assert.equal(polls[0].body.dayReport, undefined);
+  const rep = polls[1].body.dayReport;
+  assert.equal(rep.day, '2026-09-29');
+  assert.equal(rep.netEur, 4.2);
+  assert.deepEqual(rep.month, { month: '2026-09', asOf: '2026-09-30T08:00:00.000Z', dvRevenueEur: 123.45, exportRevenueEur: 100, marketPremiumEur: 23.45, exportKwh: 1500, dvRevenueCtKwh: 8.23 });
+  assert.equal(polls[2].body.dayReport, undefined);
+  assert.deepEqual(asked, ['day:2026-09-29', 'month:2026-09-01']);
+});
+
+function reportCtx(summaries = {}) {
+  const dir = tmpDir();
+  const asked = [];
+  return { asked, ctx: {
+    ...ctxFor(dir),
+    historyApi: {
+      async getSummary({ view, date }) {
+        asked.push(`${view}:${date}`);
+        return { status: 200, body: { kpis: summaries[view] || { netEur: 1, exportRevenueEur: 1 } } };
+      },
+    },
+  } };
+}
+async function pollTwice(client) {
+  await client.pollOnce();
+  await new Promise((r) => setImmediate(r));
+  await client.pollOnce();
+}
+
+test('Zeitumstellung: 25.10.2026 23:30 (Winterzeit) meldet den 24.10. — nicht den laufenden Tag', async () => {
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const { ctx } = reportCtx();
+  const t = Date.parse('2026-10-25T22:30:00Z'); // 23:30 MEZ, Tag hatte 25 Stunden
+  const client = createInstallerPortalClient(ctx, { fetchImpl: portal.fetchImpl, now: () => t, execCommand: async () => ({ status: 200, json: { ok: true } }) });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  await pollTwice(client);
+  const rep = portal.calls.filter((c) => c.url.endsWith('/api/poll')).map((c) => c.body.dayReport).find(Boolean);
+  assert.equal(rep.day, '2026-10-24');
+});
+
+test('Nachgeholte ältere Tage: ohne Monatswert (der gilt nur für den neuesten Tag); unbekannt bleibt null', async () => {
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const { ctx, asked } = reportCtx({ day: { netEur: 2.5, exportRevenueEur: null, importCostEur: undefined, exportKwh: 10, pvKwh: 12 } });
+  const t = Date.parse('2026-09-30T08:00:00Z');
+  const dir = ctx.getDataDir();
+  fs.writeFileSync(path.join(dir, 'installer-portal-client.json'), '{}'); // wird beim claim überschrieben
+  const client = createInstallerPortalClient(ctx, { fetchImpl: portal.fetchImpl, now: () => t, execCommand: async () => ({ status: 200, json: { ok: true } }) });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  // Letzte Meldung liegt 3 Tage zurück → 27., 28. ohne Monat, 29. mit Monat
+  const sc = JSON.parse(fs.readFileSync(path.join(dir, 'installer-portal-client.json'), 'utf8'));
+  sc.lastDayReported = '2026-09-26';
+  fs.writeFileSync(path.join(dir, 'installer-portal-client.json'), JSON.stringify(sc));
+  for (let i = 0; i < 3; i++) await pollTwice(client);
+  const reps = portal.calls.filter((c) => c.url.endsWith('/api/poll')).map((c) => c.body.dayReport).filter(Boolean);
+  assert.deepEqual(reps.map((r) => r.day), ['2026-09-27', '2026-09-28', '2026-09-29']);
+  assert.deepEqual(reps.map((r) => r.month == null), [true, true, false]);
+  assert.equal(reps[0].exportRevenueEur, null, 'unbekannt ist nicht 0 €');
+  assert.equal(reps[0].importCostEur, null);
+  assert.ok(!asked.includes('month:2026-09-01') || asked.filter((a) => a.startsWith('month')).length === 1, 'Monat nur einmal gerechnet');
+});
+
+test('Monatswechsel offline: letzter Tag des Vormonats bekommt den (vollständigen) Monatswert', async () => {
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const { ctx, asked } = reportCtx({ month: { dvRevenueEur: 300, exportRevenueEur: 280, exportKwh: 3000 } });
+  const dir = ctx.getDataDir();
+  const t = Date.parse('2026-10-03T08:00:00Z');
+  const client = createInstallerPortalClient(ctx, { fetchImpl: portal.fetchImpl, now: () => t, execCommand: async () => ({ status: 200, json: { ok: true } }) });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  const scPath = path.join(dir, 'installer-portal-client.json');
+  fs.writeFileSync(scPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(scPath, 'utf8')), lastDayReported: '2026-09-29' }));
+  for (let i = 0; i < 4; i++) await pollTwice(client);
+  const reps = portal.calls.filter((c) => c.url.endsWith('/api/poll')).map((c) => c.body.dayReport).filter(Boolean);
+  assert.deepEqual(reps.map((r) => [r.day, r.month?.month ?? null]),
+    [['2026-09-30', '2026-09'], ['2026-10-01', null], ['2026-10-02', '2026-10']]);
+  assert.ok(asked.includes('month:2026-09-01'));
 });

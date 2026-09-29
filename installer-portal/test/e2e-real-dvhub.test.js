@@ -68,6 +68,9 @@ test(`E2E echter DVhub ↔ echtes Portal (${apiToken ? 'mit' : 'OHNE'} apiToken)
   fs.mkdirSync(path.join(rig, 'data'));
   fs.mkdirSync(path.join(rig, 'portal'));
   fs.writeFileSync(path.join(rig, 'data', 'appliance-id'), APPLIANCE_ID);
+  // Aktive Pro-Lizenz wie im e2e-Lauf von ci.yml (Dev-Bypass, Wegwerf-Verzeichnis):
+  // ohne Lizenz darf das Portal nur eine Lizenz einspielen, Status/Tunnel erst mit.
+  fs.writeFileSync(path.join(rig, 'data', 'license_state.json'), JSON.stringify({ status: 'active', license_key: 'e2e-dev-bypass' }));
   fs.copyFileSync(path.join(ROOT, 'dvhub', 'hersteller', 'victron.json'), path.join(rig, 'etc', 'hersteller', 'victron.json'));
   const dvPort = await freePort();
   const portalPort = await freePort();
@@ -75,6 +78,7 @@ test(`E2E echter DVhub ↔ echtes Portal (${apiToken ? 'mit' : 'OHNE'} apiToken)
     manufacturer: 'victron', httpPort: dvPort, httpsPort: 0,
     apiToken,
     victron: { host: '127.0.0.1' },
+    licensing: { keygenAccount: '' }, // kein Online-Nachprüfen des Dev-Bypass
   }));
 
   const dvProc = startProc([path.join(ROOT, 'dvhub', 'server.js')], {
@@ -247,14 +251,12 @@ test(`E2E echter DVhub ↔ echtes Portal (${apiToken ? 'mit' : 'OHNE'} apiToken)
   assert.equal(st.status, 200, st.text);
   assert.ok(st.j.compact, 'kompakter Status über Signatur-Session');
 
-  // Historie: Query-Parameter müssen bis DVhub durchkommen. view=month ist in
-  // DVhub eine Pro-Ansicht → ohne Lizenz 403 pro_required; ginge der Parameter
-  // verloren, käme die Tagesansicht (hier 503, kein Telemetrie-Store im Rig).
+  // Historie: der Aufruf erreicht die Historie-Route von DVhub. Die Anlage hat
+  // eine Pro-Lizenz → view=month passiert das Pro-Gate; im Rig gibt es keinen
+  // Telemetrie-Store, also 503 von genau dieser Route (nicht 403/404).
   const hist = await call(pv(`/api/appliances/${apId}/history?view=month&date=2026-08-01`), { cookie });
-  assert.equal(hist.status, 403, `view=month muss ankommen: ${hist.text}`);
-  assert.equal(hist.j.error, 'pro_required');
-  const histDay = await call(pv(`/api/appliances/${apId}/history`), { cookie });
-  assert.notEqual(histDay.status, 403, histDay.text);
+  assert.equal(hist.status, 503, `Historie-Route erreicht: ${hist.text}`);
+  assert.equal(hist.j.error, 'internal telemetry store disabled');
 
   const tOpen = await call(pv(`/api/appliances/${apId}/tunnel/open`), { method: 'POST', cookie, body: { ttlMin: 15 } });
   assert.equal(tOpen.status, 403, tOpen.text);

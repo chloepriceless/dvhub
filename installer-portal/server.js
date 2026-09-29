@@ -415,6 +415,47 @@ async function handleApi(req, res, url) {
   // ── Maschinen-Endpunkte (Anlage → Portal, ausgehend, Token-Auth) ─────────
   // Kein Cookie: die Anlage meldet sich mit dem Appliance-Token, das sie beim
   // Claim bekommen hat. Firewalls: nur ausgehend, nie eingehend.
+  // ── Von der Anlage gemeldete Lizenz / Tagesberichte (nur Zahlen, gekappt) ──
+  // null/undefined/'' bleiben null — „unbekannt“ ist nicht 0 (Number(null) === 0).
+  const isNum = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+  const kwpOrNull = (v) => (isNum(v) && Number(v) > 0 && Number(v) < 100000 ? Math.round(Number(v) * 10) / 10 : null);
+  const eurOrNull = (v) => (isNum(v) && Math.abs(Number(v)) < 1e7 ? Math.round(Number(v) * 100) / 100 : null);
+  const cleanLicense = (l) => (l && typeof l === 'object' ? {
+    proActive: l.proActive === true,
+    status: String(l.status || 'none').slice(0, 24),
+    kind: l.kind ? String(l.kind).slice(0, 24) : null,
+    maxKwp: kwpOrNull(l.maxKwp),
+    systemKwp: kwpOrNull(l.systemKwp),
+    capacityOk: l.capacityOk !== false,
+    at: nowIso(),
+  } : null);
+  const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const MONTH_RE = /^\d{4}-\d{2}$/;
+  const DAYS_KEEP = 400;
+  function storeDayReport(pr, r) {
+    if (!r || typeof r !== 'object' || !DAY_RE.test(String(r.day || ''))) return;
+    pr.days = { ...(pr.days || {}) };
+    pr.days[r.day] = {
+      netEur: eurOrNull(r.netEur), exportRevenueEur: eurOrNull(r.exportRevenueEur),
+      importCostEur: eurOrNull(r.importCostEur), exportKwh: eurOrNull(r.exportKwh), pvKwh: eurOrNull(r.pvKwh),
+    };
+    const keys = Object.keys(pr.days).sort();
+    for (const k of keys.slice(0, Math.max(0, keys.length - DAYS_KEEP))) delete pr.days[k];
+    const m = r.month;
+    // asOf: Rechenzeitpunkt (ISO), vergleichbar als String.
+    if (m && MONTH_RE.test(String(m.month || '')) && /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z)?$/.test(String(m.asOf || ''))) {
+      pr.months = { ...(pr.months || {}) };
+      const prev = pr.months[m.month];
+      // Nur vorwärts: ein nachgeholter älterer Tag überschreibt keinen neueren Monatsstand.
+      if (!prev || String(prev.asOf) <= m.asOf) {
+        pr.months[m.month] = {
+          asOf: m.asOf, dvRevenueEur: eurOrNull(m.dvRevenueEur), exportRevenueEur: eurOrNull(m.exportRevenueEur),
+          marketPremiumEur: eurOrNull(m.marketPremiumEur), exportKwh: eurOrNull(m.exportKwh), dvRevenueCtKwh: eurOrNull(m.dvRevenueCtKwh),
+        };
+      }
+    }
+  }
+
   if (p === '/api/pair/claim' && method === 'POST') {
     if (rateLimited(req, 'claim')) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
     const b = await readBody(req);
@@ -447,6 +488,7 @@ async function handleApi(req, res, url) {
     pr.applianceToken = crypto.randomBytes(32).toString('hex');
     pr.applianceName = String(b.name || '').slice(0, 80) || null;
     pr.requestedAt = nowIso();
+    pr.license = cleanLicense(b.license);
     writeJsonFile(PAIRINGS_FILE, pairings);
     return jsonRes(res, 200, { ok: true, applianceToken: pr.applianceToken, status: pr.status });
   }
@@ -465,7 +507,9 @@ async function handleApi(req, res, url) {
     // Anlage am Haken und weiß immerhin, dass sie wartet.
     if (approved) {
       pr.lastSeenAt = nowIso();
-      pr.lastStatus = b.status || null;
+      pr.lastStatus = b.status || null;   // ohne Pro-Lizenz schickt die Anlage keinen Status
+      if (b.license) pr.license = cleanLicense(b.license);
+      storeDayReport(pr, b.dayReport);
     }
     const commands = approved ? (pr.commands || []).splice(0, 5) : [];
     writeJsonFile(PAIRINGS_FILE, pairings);
@@ -931,7 +975,29 @@ async function handleApi(req, res, url) {
     seenAt: pr.lastSeenAt || null, lastStatus: pr.lastStatus || null,
     pendingCommands: (pr.commands || []).length,
     results: pr.results || {},
+    license: pr.license || null,
+    // Passt die angegebene Anlagengröße zur Lizenz? (nur wenn beides bekannt)
+    sizeCheck: sizeCheck(pr),
+    // Tagesertrag: letzter gemeldeter Tag + Monatsstände (DV-Erlös), vom Portal gespeichert.
+    lastDay: lastDayOf(pr),
+    months: pr.months || {},
   });
+  // Lizenz vorhanden (auch wenn Pro gerade gesperrt ist — „Anlage größer als
+  // Lizenz“ sperrt Pro in DVhub selbst, genau dann braucht es den Hinweis).
+  function sizeCheck(pr) {
+    const lic = pr.license;
+    const size = Number(pr.sizeKwp) || null;
+    if (!lic) return null;
+    if (lic.capacityOk === false) return { ok: false, reason: 'plant_exceeds_license', systemKwp: lic.systemKwp, maxKwp: lic.maxKwp };
+    if (!lic.proActive) return null;
+    if (lic.maxKwp && size && size > lic.maxKwp) return { ok: false, reason: 'size_exceeds_license', sizeKwp: size, maxKwp: lic.maxKwp };
+    return { ok: true, maxKwp: lic.maxKwp };
+  }
+  function lastDayOf(pr) {
+    const keys = Object.keys(pr.days || {}).sort();
+    const k = keys[keys.length - 1];
+    return k ? { day: k, ...pr.days[k] } : null;
+  }
   if (p === '/api/pairings' && method === 'GET') {
     const list = Object.values(readJsonFile(PAIRINGS_FILE, {}))
       .filter((pr) => pr.acct === sess.acct).map(pairingView);
@@ -1019,11 +1085,25 @@ async function handleApi(req, res, url) {
       if (!cur || cur.acct !== sess.acct) return jsonRes(res, 404, { ok: false, error: 'pairing_nicht_gefunden' });
       if (cur.status !== 'approved') return jsonRes(res, 409, { ok: false, error: 'anlage_nicht_freigegeben' });
       const type = String(b.type || '');
-      if (!['open_tunnel', 'close_tunnel', 'updates_check'].includes(type)) {
+      if (!['open_tunnel', 'close_tunnel', 'updates_check', 'license_activate'].includes(type)) {
         return jsonRes(res, 400, { ok: false, error: 'unbekanntes_kommando' });
       }
-      const ttlMin = Number(b.args?.ttlMin);
-      const args = type === 'open_tunnel' && Number.isFinite(ttlMin) ? { ttlMin } : {};
+      // Ohne aktive Pro-Lizenz nur „Lizenz einspielen“ (DVhub prüft es selbst
+      // noch einmal). Ältere Anlagen melden keine Lizenz → nicht blockieren.
+      if (type !== 'license_activate' && cur.license && cur.license.proActive === false) {
+        return jsonRes(res, 409, { ok: false, error: 'lizenz_erforderlich' });
+      }
+      let args = {};
+      if (type === 'open_tunnel') {
+        const ttlMin = Number(b.args?.ttlMin);
+        if (Number.isFinite(ttlMin)) args = { ttlMin };
+      } else if (type === 'license_activate') {
+        // Wie DVhub (normalizeKey): Leerzeichen/Zeilenumbrüche aus kopierten
+        // Mails entfernen, dann prüfen — druckbar, begrenzte Länge.
+        const key = String(b.args?.key || '').replace(/\s+/g, '');
+        if (!/^[\x21-\x7e]{8,512}$/.test(key)) return jsonRes(res, 400, { ok: false, error: 'lizenzschluessel_ungueltig' });
+        args = { key };
+      }
       const cmd = { id: crypto.randomBytes(8).toString('hex'), type, args, queuedAt: nowIso() };
       cur.commands = [...(cur.commands || []), cmd].slice(-20);
       writeJsonFile(PAIRINGS_FILE, fresh);

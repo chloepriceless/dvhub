@@ -53,7 +53,8 @@ function startMockDvhub() {
     saveAndApplyConfig: (n) => { rawCfg = n; cfg.installerPortal = { ...(n.installerPortal || {}) }; },
     pushLog: () => {},
     telemetrySafeWrite: () => {},
-    licenseService: null,
+    // Anlage mit aktiver Pro-Lizenz (ohne Lizenz nur „Lizenz einspielen“ — eigener Test).
+    licenseService: { isProActive: () => true, requirePro: () => true, getState: () => ({ status: 'active', max_kwp: 30, system_kwp: 29.7, capacity_ok: true }), getCapKwp: () => null },
     getAppVersion: () => ({ version: '1.0.6', versionLabel: 'v1.0.6' }),
     getDataDir: () => dvDir,
     installerPortal: portal,

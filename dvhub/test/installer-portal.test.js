@@ -219,7 +219,7 @@ function routes(ipCfg = { enabled: true }, { client = null } = {}) {
     saveAndApplyConfig: (next) => { savedCfg = next; },
     pushLog: (e, d, a) => logs.push({ event: e, detail: d, actor: a }),
     telemetrySafeWrite: () => {},
-    licenseService: null,
+    licenseService: { isProActive: () => true, requirePro: () => true, getState: () => ({ status: 'active' }), getCapKwp: () => null },
     getAppVersion: () => ({ version: '1.0.6', versionLabel: 'v1.0.6' }),
     installerPortal: portal,
     installerPortalClient: client,
@@ -345,7 +345,7 @@ test('Route: deaktiviertes Portal → 503 installer_portal_disabled', async () =
   const cfg = { apiToken: API_TOKEN, httpPort: 1, installerPortal: { enabled: false } };
   const portal = createInstallerPortal({ getDataDir: () => dir, getCfg: () => cfg, pushLog: () => {} });
   const ctx = {
-    state: {}, pushLog: () => {}, telemetrySafeWrite: () => {}, licenseService: null,
+    state: {}, pushLog: () => {}, telemetrySafeWrite: () => {}, licenseService: { isProActive: () => true, requirePro: () => true, getState: () => ({ status: 'active' }), getCapKwp: () => null },
     getCfg: () => ({ ...cfg, epex: { enabled: false }, telemetry: { enabled: false }, security: { lanTrust: 'open' }, allowedHosts: [] }),
     getAppVersion: () => ({}), installerPortal: portal,
   };

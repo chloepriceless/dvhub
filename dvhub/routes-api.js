@@ -2222,6 +2222,8 @@ export function createApiRoutes(ctx) {
     'GET /api/installer/support-tunnel/status': '/api/support/tunnel/status',
     'POST /api/installer/support-tunnel/open': '/api/support/tunnel/open',
     'POST /api/installer/support-tunnel/close': '/api/support/tunnel/close',
+    // Lizenz für den Kunden einspielen — geht auch OHNE aktive Pro-Lizenz.
+    'POST /api/installer/license/activate': '/api/license/activate',
   };
 
   // CSRF-Nonce für die Einstellungs-Kacheln Datenspende + Eingang HA/Loxone
@@ -2512,6 +2514,11 @@ export function createApiRoutes(ctx) {
 
     const delegateKey = `${method} ${p}`;
     const target = INSTALLER_DELEGATE[delegateKey];
+    // Ohne aktive Pro-Lizenz darf das Portal nur eine Lizenz einspielen —
+    // Status, Historie, Updates und Support-Tunnel erst mit Lizenz.
+    if (target && target !== '/api/license/activate' && !ctx.licenseService?.isProActive?.()) {
+      return json(res, 403, { ok: false, error: 'license_required' });
+    }
     // Eingreifende Aktionen brauchen eine eigene Kunden-Freigabe zusätzlich
     // zur Kopplung (Tunnel schließen bleibt immer erlaubt).
     const perms = portal.permissions();
