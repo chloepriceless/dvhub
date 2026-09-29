@@ -36,13 +36,31 @@ docker compose -f docker/compose.yml exec dvhub node -p 'require("/etc/dvhub/con
 
 | Image | Tags |
 |---|---|
-| `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.7` = Releases (Git-Tag `vX.Y.Z`); `dev` = Stand von `main` |
-| `bikinibottomcapital/dvhub-eos` | EOS-Stand, z. B. `dvhub-v0.4.0rc1.3` (= `EOS_TAG`) |
+| `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.7` = Releases; `dev` = Vorab-Stand (von Hand gebaut, kein Release) |
+| `bikinibottomcapital/dvhub-eos` | EOS-Stand, z. B. `dvhub-v0.4.0rc1.3` (= `EOS_TAG`), `latest` = der des letzten Releases |
 
 Beide für `linux/amd64` und `linux/arm64`, auf Docker Hub öffentlich und nach
 `ghcr.io/chloepriceless/…` gespiegelt (`DVHUB_IMAGE`/`EOS_IMAGE` in `.env`).
-Befüllt vom Workflow `container.yml` — erst nach einem grünen Smoke-Test (Start
-mit TimescaleDB, Migrationen, Backup-Download, Update-Sperre, kein root).
+Bis zum ersten Release gibt es nur `dev` — dann `DVHUB_TAG=dev` in `.env`.
+
+### Release veröffentlichen
+
+Images entstehen **nur** bei einem Release-Tag (Workflow `container.yml`);
+Pushes auf `main` bauen kein Image.
+
+```bash
+# 1. Version in dvhub/package.json anheben (z. B. 1.0.7), CHANGELOG-Eintrag
+# 2. committen, pushen, dann taggen:
+git tag v1.0.7 && git push origin v1.0.7
+```
+
+Der Workflow prüft, dass der Tag zur `package.json`-Version passt, startet die
+Suite mit TimescaleDB (Health, Migrationen, Backup-Download, Update-Sperre,
+kein root) und veröffentlicht erst danach `1.0.7`, `1.0` und `latest` für
+amd64 + arm64 auf Docker Hub und GHCR. Voraussetzung im GitHub-Repo
+(Settings → Secrets and variables → Actions): `DOCKERHUB_USERNAME` und
+`DOCKERHUB_TOKEN` (Docker-Hub-Access-Token, Read & Write) — ohne sie bricht der
+Lauf vor dem Bauen ab.
 
 ### Speicherbudget der Suite
 

@@ -3,16 +3,21 @@
 #   docker.io/bikinibottomcapital/dvhub      ghcr.io/chloepriceless/dvhub
 #   docker.io/bikinibottomcapital/dvhub-eos  ghcr.io/chloepriceless/dvhub-eos
 #
-#   Tag vX.Y.Z  → :X.Y.Z, :X.Y, :latest
-#   Push main   → :dev
-#   manuell     → :dev (bzw. der gewählte Ref)
+# NUR bei einem Release: Tag vX.Y.Z pushen → :X.Y.Z, :X.Y, :latest.
+# Pushes auf main bauen KEIN Image (dort laufen nur die Tests, ci.yml).
+#
+#   Release: Version in dvhub/package.json anheben, CHANGELOG, dann
+#     git tag v1.0.7 && git push origin v1.0.7
+#   Der Tag muss zur package.json-Version passen, sonst bricht der Lauf ab.
 #
 # EOS: gebaut aus dem Dockerfile des DV-EOS-Forks am Tag aus docker/.env.example
-# (EOS_TAG) und unter genau diesem Tag veröffentlicht.
+# (EOS_TAG) und unter genau diesem Tag veröffentlicht (plus :latest).
 #
-# Secrets (Repo → Settings → Secrets → Actions): DOCKERHUB_USERNAME,
-# DOCKERHUB_TOKEN (Docker-Hub-Access-Token mit Schreibrecht). Fehlen sie,
-# wird nur nach GHCR veröffentlicht.
+# Secrets (Repo → Settings → Secrets and variables → Actions):
+#   DOCKERHUB_USERNAME  = bikinibottomcapital
+#   DOCKERHUB_TOKEN     = Docker-Hub-Access-Token (Read & Write)
+# Fehlen sie, bricht der Release-Lauf ab (kein halb veröffentlichtes Release).
+# GHCR braucht nichts weiter (GITHUB_TOKEN, packages: write).
 #
 # Ablauf: erst ein amd64-Image bauen und mit docker/compose.yml (TimescaleDB)
 # durchstarten — Healthcheck, Migrationen, DB-Backup-Download und Update-Sperre
@@ -26,15 +31,6 @@ name: Container
 on:
   push:
     tags: ['v*.*.*']
-    branches: [main]
-    paths:
-      - 'Dockerfile'
-      - '.dockerignore'
-      - 'docker/**'
-      - 'dvhub/**'
-      - 'scripts/reconcile-vendor-profiles.mjs'
-      - '.github/workflows/container.yml'
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -50,6 +46,19 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+
+      - name: Release-Tag passt zur package.json-Version
+        run: |
+          want="v$(node -p 'require("./dvhub/package.json").version')"
+          echo "Tag ${GITHUB_REF_NAME}, package.json ${want}"
+          test "${GITHUB_REF_NAME}" = "${want}" || { echo "::error::Tag ${GITHUB_REF_NAME} passt nicht zu dvhub/package.json (${want})"; exit 1; }
+
+      - name: Docker-Hub-Secrets vorhanden
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          test -n "$HUB_USER" && test -n "$HUB_TOKEN" || { echo "::error::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN fehlen (Settings → Secrets and variables → Actions)"; exit 1; }
 
       - name: Compose-Umgebung
         run: |
@@ -120,14 +129,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker Hub verfügbar?
-        id: hub
-        env:
-          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-        run: echo "enabled=$([ -n "$HUB_USER" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
       - uses: docker/login-action@v3
-        if: steps.hub.outputs.enabled == 'true'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -136,13 +138,12 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
+            docker.io/bikinibottomcapital/dvhub
             ghcr.io/${{ github.repository_owner }}/dvhub
-            name=docker.io/bikinibottomcapital/dvhub,enable=${{ steps.hub.outputs.enabled == 'true' }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=dev,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest
 
       - uses: docker/build-push-action@v6
         with:
@@ -181,14 +182,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker Hub verfügbar?
-        id: hub
-        env:
-          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-        run: echo "enabled=$([ -n "$HUB_USER" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
       - uses: docker/login-action@v3
-        if: steps.hub.outputs.enabled == 'true'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -199,8 +193,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
+            docker.io/bikinibottomcapital/dvhub-eos:${{ steps.eos.outputs.tag }}
+            docker.io/bikinibottomcapital/dvhub-eos:latest
             ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.tag }}
-            ${{ steps.hub.outputs.enabled == 'true' && format('docker.io/bikinibottomcapital/dvhub-eos:{0}', steps.eos.outputs.tag) || '' }}
           build-args: |
             BUILD_VERSION=${{ steps.eos.outputs.tag }}
           cache-from: type=gha,scope=eos

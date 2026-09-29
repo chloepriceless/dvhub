@@ -149,7 +149,7 @@ cp docker/.env.example docker/.env      # Passwörter setzen
 docker compose -f docker/compose.yml --env-file docker/.env up -d
 ```
 
-Images auf Docker Hub: [`bikinibottomcapital/dvhub`](https://hub.docker.com/r/bikinibottomcapital/dvhub) und `bikinibottomcapital/dvhub-eos` (`latest` = Release, `dev` = `main`; gespiegelt nach `ghcr.io/chloepriceless/…`).
+Images auf Docker Hub: [`bikinibottomcapital/dvhub`](https://hub.docker.com/r/bikinibottomcapital/dvhub) und `bikinibottomcapital/dvhub-eos` (`latest` = letztes Release, `dev` = Vorab-Stand; gespiegelt nach `ghcr.io/chloepriceless/…`). Images entstehen nur bei einem Release-Tag `vX.Y.Z`.
 Suite aus DVhub, TimescaleDB und optional EOS, zusammen ≤ 704 MB RAM (Obergrenzen) — ohne Python-Prognose/ML, VPN und Fern-Support.
 Aktualisiert wird durch Tausch des Images. Einrichtung, Umzug einer bestehenden
 Anlage samt Datenbank und Betrieb: [`docker/README.md`](docker/README.md).
