@@ -22,6 +22,11 @@ import { capVictronPvForDisplay } from '../../runtime-state.js';
 
 const CACHE_TTL_MS = 2000;
 const TODAY_KPIS_REFRESH_MS = 60_000;
+// Die KPIs (heute + Monat + Jahr) werden nur gerechnet, solange das Familien-
+// Dashboard tatsächlich abgefragt wird. Die Jahres-Zusammenfassung lädt die
+// 15-min-Historie des ganzen Jahres (gemessen ~100 MB Heap bei 18 Monaten
+// Bestand) — ohne Zuschauer war das reine Speicherlast, auch beim Booten.
+export const FAMILY_DEMAND_WINDOW_MS = 15 * 60_000;
 
 /**
  * Create the family service. Aggregates cross-service data into the
@@ -59,6 +64,7 @@ export function createFamilyService(ctx) {
   // heavy aggregate queries, the kiosk does not need them minute-fresh.
   const periodKpis = { month: null, year: null };
   let periodKpisAt = 0;
+  let lastDemandAt = 0; // letzter Abruf von buildFamilyStatus (Dashboard offen?)
   const PERIOD_KPIS_TTL_MS = 10 * 60 * 1000;
 
   // --------------------------------------------------------------------
@@ -682,10 +688,10 @@ export function createFamilyService(ctx) {
       const now = new Date();
       const monthDate = now.toISOString().slice(0, 8) + '01';
       const yearDate = now.getFullYear() + '-01-01';
-      const [m, y] = await Promise.all([
-        ctx.historyApi.getSummary({ view: 'month', date: monthDate }),
-        ctx.historyApi.getSummary({ view: 'year', date: yearDate })
-      ]);
+      // Nacheinander statt parallel: sonst liegen Monat UND Jahr gleichzeitig
+      // als 15-min-Slots im Speicher (Spitze addiert sich).
+      const m = await ctx.historyApi.getSummary({ view: 'month', date: monthDate });
+      const y = await ctx.historyApi.getSummary({ view: 'year', date: yearDate });
       if (m?.body?.kpis) periodKpis.month = m.body.kpis;
       if (y?.body?.kpis) periodKpis.year = y.body.kpis;
       cached = null;
@@ -785,6 +791,13 @@ export function createFamilyService(ctx) {
    */
   function buildFamilyStatus() {
     const now = Date.now();
+    // Nachfrage merken; kommt das Dashboard (wieder) dazu, sofort rechnen statt
+    // bis zum nächsten Timer-Takt zu warten.
+    const resumed = !lastDemandAt || (now - lastDemandAt) > FAMILY_DEMAND_WINDOW_MS;
+    lastDemandAt = now;
+    if (resumed) {
+      refreshTodayKpis().catch((err) => pushLog?.('family_today_kpis_error', { error: err.message }));
+    }
     if (cached && (now - cachedAt) < CACHE_TTL_MS) return cached;
 
     const cfg = getCfg?.() || {};
@@ -936,24 +949,11 @@ export function createFamilyService(ctx) {
 
   async function start() {
     pushLog?.('family_service_started', {});
-    // server.js wires `ctx.historyApi` inside an async IIFE that races the
-    // synchronous top-level code that calls familyService.start(). Poll ctx
-    // with a short backoff (up to ~10 s) before firing the first refresh,
-    // otherwise the first tablet poll after boot reports today=null and the
-    // UI has to wait for the 60 s interval to tick.
-    (async () => {
-      for (let attempt = 0; attempt < 40; attempt++) {
-        if (ctx.historyApi && typeof ctx.historyApi.getSummary === 'function') {
-          await refreshTodayKpis();
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      pushLog?.('family_today_kpis_bootstrap_timeout', {});
-    })().catch((err) => {
-      pushLog?.('family_today_kpis_bootstrap_error', { error: err.message });
-    });
+    // Kein Rechnen beim Booten: der erste Abruf des Dashboards stößt es an
+    // (buildFamilyStatus), danach hält der Timer es frisch — aber nur, solange
+    // jemand zuschaut (FAMILY_DEMAND_WINDOW_MS).
     todayKpisTimer = setInterval(() => {
+      if (!lastDemandAt || (Date.now() - lastDemandAt) > FAMILY_DEMAND_WINDOW_MS) return;
       refreshTodayKpis().catch((err) => {
         pushLog?.('family_today_kpis_timer_error', { error: err.message });
       });

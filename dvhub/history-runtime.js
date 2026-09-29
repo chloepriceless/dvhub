@@ -302,7 +302,7 @@ function normalizeViewRange(view, date) {
     // 'all' what months are to 'year'). The window floors at a fixed early
     // bound (no DVhub appliance data predates 2015) and ends at the start of
     // next year, so it always covers the full history regardless of the
-    // anchor date. summarizeRows groups by year, so only years that actually
+    // anchor date. createRowsAccumulator groups by year, so only years that actually
     // carry data produce a row — empty floor years never appear.
     const nowYear = parseDateOnly(currentBerlinDate())?.year
       ?? parseDateOnly(date)?.year;
@@ -459,9 +459,12 @@ function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
 // einen Ausbau enthalten, und dann gibt es für die Zeile keine eine Kapazität,
 // durch die man ihre Summe teilen dürfte. null ⇒ keine Kapazität bekannt ⇒
 // cycles bleibt null (wie bisher), statt still mit einem Ratewert zu rechnen.
-function summarizeRows(slots, view, resolveCapacityKwhForTs = null) {
+// Zeilen-Summen schrittweise (Jahr/Alle werden Monat für Monat gefüttert,
+// damit nie die ganze Historie gleichzeitig im Speicher liegt). Reihenfolge
+// der Additionen wie bei einem Durchlauf über alle Slots → identische Summen.
+function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
   const groups = new Map();
-  for (const slot of slots) {
+  function add(slot) {
     let key = slot.ts;
     let label = localTimeLabel(slot.ts);
     if (view === 'week' || view === 'month') {
@@ -517,7 +520,10 @@ function summarizeRows(slots, view, resolveCapacityKwhForTs = null) {
       : (row.sourceKinds.length > 1 ? 'mixed' : null);
     groups.set(key, row);
   }
-  return [...groups.values()].map((row) => finalizeAggregateSums(row));
+  return {
+    add,
+    finish: () => [...groups.values()].map((row) => finalizeAggregateSums(row)),
+  };
 }
 
 function buildDayCharts(slots) {
@@ -1382,7 +1388,7 @@ export function createHistoryRuntime({
   // — das mentale Modell des Betreibers). Mehrtägig: 90% + 10% Entladung =
   // 100% kumuliert = 1,0 Zyklen.
   //
-  // Die Rechnung selbst sitzt jetzt slot-genau in summarizeRows(): dieselbe
+  // Die Rechnung selbst sitzt jetzt slot-genau in createRowsAccumulator(): dieselbe
   // Entladung ergibt bei 43 kWh Nennkapazität doppelt so viele Zyklen wie bei
   // 77 kWh, also braucht jeder Slot seine eigene Kapazität. Eine
   // Zeilen-/Summen-Rechnung mit EINER Kapazität ginge über einen Ausbau hinweg
@@ -1455,79 +1461,12 @@ export function createHistoryRuntime({
   // unbroken block.
   const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 
-  // Load a View-Range in calendar-month chunks instead of one query.
-  //
-  // The DB stores one row per (slot, series, source): a single year is ~711k
-  // raw rows and "Alle" well over a million. Read in one go, the driver holds
-  // that whole result set plus the pivot map at once — several hundred MB for
-  // 'year' and ~1 GB for 'all'. That is what stalled the 2 GiB prod LXC into a
-  // swap-thrash (services stopped answering while the kernel still replied to
-  // ping), and it is far past the ~500 MB an appliance will have.
-  //
-  // Pivoting month by month lets each chunk's raw rows be collected before the
-  // next is read, so peak memory tracks the LARGEST MONTH (~59k rows), not the
-  // span. Only the pivoted slot objects accumulate (~24k/year, a few MB).
-  // 'year' already did this; 'all' did not, which is why "Alle" was the one
-  // that took the hub down.
-  //
-  // Fallback semantics are deliberately kept whole-range: listEnergySlotsForRange
-  // falls back to raw aggregation only when the materialized table yields
-  // NOTHING. Applying that per chunk would fire a raw fallback for every empty
-  // month (the 'all' window floors at 2015, so most months are empty). So the
-  // chunks query the materialized store directly and the raw fallback runs once
-  // over the whole range, only if every chunk came back empty — bit-identical
-  // to the single-query path.
-  async function listEnergySlotsByMonthChunks({ startDate, endDateExclusive }) {
-    if (!isDateOnly(startDate) || !isDateOnly(endDateExclusive)) return [];
-    if (typeof store.listMaterializedEnergySlots !== 'function') {
-      return await listEnergySlotsForRange({
-        start: localDateTimeToUtcIso(startDate, 0, 0),
-        end: localDateTimeToUtcIso(endDateExclusive, 0, 0)
-      });
-    }
-
-    const slots = [];
-    let cursor = startOfMonth(startDate);
-    while (cursor < endDateExclusive) {
-      const monthEnd = normalizeViewRange('month', cursor).endDateExclusive;
-      // Clamp so a partial first/last month never reads outside the View-Range.
-      const chunkStart = cursor < startDate ? startDate : cursor;
-      const chunkEnd = monthEnd < endDateExclusive ? monthEnd : endDateExclusive;
-      const chunk = await store.listMaterializedEnergySlots({
-        start: localDateTimeToUtcIso(chunkStart, 0, 0),
-        end: localDateTimeToUtcIso(chunkEnd, 0, 0),
-        sourceKinds: ['vrm_import', 'local_live']
-      });
-      for (const slot of chunk) slots.push(slot);
-      cursor = monthEnd;
-    }
-
-    if (slots.length > 0 || typeof store.listAggregatedEnergySlots !== 'function') return slots;
-    return await listRawFallbackSlotsForRange({
-      start: localDateTimeToUtcIso(startDate, 0, 0),
-      end: localDateTimeToUtcIso(endDateExclusive, 0, 0)
-    });
-  }
-
   async function getSummary({ view = 'day', date, solarMarketValues = null }) {
     const range = normalizeViewRange(view, date);
     const start = localDateTimeToUtcIso(range.startDate, 0, 0);
     const end = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
-    // Multi-month views load in month chunks so peak memory tracks the largest
-    // month rather than the whole span (see listEnergySlotsByMonthChunks).
-    // 'all' spans the entire history and was the view that exhausted RAM.
-    const energySlots = (view === 'year' || view === 'all')
-      ? await listEnergySlotsByMonthChunks({
-        startDate: range.startDate,
-        endDateExclusive: range.endDateExclusive
-      })
-      : await listEnergySlotsForRange({ start, end });
-    const priceRows = await store.listPriceSlots({
-      start,
-      end
-    });
-    const priceByTs = new Map(priceRows.map((row) => [row.ts, row]));
-    const priceByBucketTs = new Map(priceRows.map((row) => [bucketTimestamp(row.ts), row]));
+    // Jahr/Alle werden Monat für Monat geladen UND bewertet (processByMonth
+    // unten) — der Speicherbedarf folgt dem größten Monat, nicht dem Zeitraum.
     const pricingConfig = getPricingConfig() || {};
     const applicableValueSummary = getApplicableValueSummary({
       year: parseDateOnly(startOfYear(date))?.year ?? parseDateOnly(currentBerlinDate())?.year,
@@ -1599,57 +1538,34 @@ export function createHistoryRuntime({
     const pvCostCtKwh = Number(pricingConfig?.costs?.pvCtKwh);
     const batteryCostCtKwh = effectiveBatteryCostCtKwh(pricingConfig?.costs || {});
 
-    // Pre-pass: compute isNegPriceAffected per slot timestamp for negative price curtailment.
-    // For hour-based rules (6h/4h/tiered), track consecutive negative hours using hourly averages.
-    // For 15min rule: just check slot price directly.
-    // For 'none': always false.
-    const negPriceAffectedByTs = await (async () => {
-      const result = new Map();
-      if (negPriceRule.rule === 'none') return result; // all false (map returns undefined -> falsy)
+    // ── Preise, §51-Negativpreis-Markierung, Slot-Bewertung, Summen ─────────
+    // Jahr/Alle laufen MONAT FÜR MONAT durch (Christin 2026-09-29): vorher lag
+    // die ganze Historie als bewertete 15-min-Slots (~60 Felder je Slot)
+    // gleichzeitig im Speicher — gemessen ~100 MB Heap für ein Jahr, auf prod
+    // bis ~1 GB Prozess-Spitze bei „Alle“. Jetzt wird je Monat geladen,
+    // bewertet, in die laufenden Summen gefüttert und verworfen. Die Summen
+    // laufen in derselben Reihenfolge wie vorher → bit-identische Ergebnisse
+    // (Golden-Vergleich gegen die alte Fassung auf Echtdaten).
+    const inRange = (ts) => {
+      const localDate = localDateString(ts);
+      return localDate >= range.startDate && localDate < range.endDateExclusive;
+    };
+    const buildPriceIndex = (rows) => ({
+      byTs: new Map(rows.map((row) => [row.ts, row])),
+      byBucketTs: new Map(rows.map((row) => [bucketTimestamp(row.ts), row]))
+    });
+    const priceFor = (index, ts) => index.byTs.get(ts) || index.byBucketTs.get(bucketTimestamp(ts)) || {};
+    const priceCtOf = (price) => (Number.isFinite(Number(price.priceCtKwh)) ? Number(price.priceCtKwh) : null);
+    const hourBasedRule = negPriceRule.rule !== 'none' && negPriceRule.rule !== '15min';
 
-      const rawFiltered = energySlots.filter((slot) => {
-        const localDate = localDateString(slot.ts);
-        return localDate >= range.startDate && localDate < range.endDateExclusive;
-      });
-
-      if (negPriceRule.rule === '15min') {
-        // Per-slot price check, no streak — the range-bounded slots are sufficient.
-        for (const slot of rawFiltered) {
-          const price = priceByTs.get(slot.ts) || priceByBucketTs.get(bucketTimestamp(slot.ts)) || {};
-          const priceCtKwh = Number.isFinite(Number(price.priceCtKwh)) ? Number(price.priceCtKwh) : null;
-          result.set(slot.ts, priceCtKwh != null && priceCtKwh < 0);
-        }
-        return result;
-      }
-
-      // Hour-based rules (6h/4h/tiered): the consecutive-negative-hour counter must NOT reset
-      // at the lower View-Range boundary. A streak that began the previous day and crosses
-      // range.startDate has to keep its running count, otherwise the first in-range hours are
-      // §51-UNDER-counted and the affected result of one and the same hour depends on the
-      // chosen View-Range (Fix #6, 26-06).
-      //
-      // Solution: feed the hour-bucketing/streak loop a LOOKBACK-extended slice that starts a
-      // safe warm-up window before range.startDate. A full prior calendar day comfortably covers
-      // the longest rule window (6h). The warm-up slots feed ONLY the counter — result.set still
-      // writes exclusively for in-range slots, so no §51 status leaks into neighbouring days and
-      // the UI output filter further below stays untouched. At the absolute data start no older
-      // slot exists, so the streak legitimately begins at 0 (no artificial lookahead).
-      const lookbackStart = addDays(range.startDate, -1); // one full Vortag ≥ 6h warm-up
-      const lookbackStartUtc = localDateTimeToUtcIso(lookbackStart, 0, 0);
-      const lookbackSlots = await listEnergySlotsForRange({ start: lookbackStartUtc, end });
-      const lookbackPriceRows = await store.listPriceSlots({ start: lookbackStartUtc, end });
-      const lookbackPriceByTs = new Map(lookbackPriceRows.map((row) => [row.ts, row]));
-      const lookbackPriceByBucketTs = new Map(lookbackPriceRows.map((row) => [bucketTimestamp(row.ts), row]));
-
-      // Pre-pass scope: every slot from the warm-up start through the end of the View-Range.
-      // (The warm-up tail before range.startDate only ever feeds the streak counter.)
-      const prePassSlots = lookbackSlots.filter((slot) => {
-        const localDate = localDateString(slot.ts);
-        return localDate >= lookbackStart && localDate < range.endDateExclusive;
-      });
-
-      // Hour-based rules: group slots by hour key, compute hourly average price,
-      // then track consecutive negative hours
+    // §51 stundenbasierte Regeln (6h/4h/gestaffelt): Zähler aufeinanderfolgender
+    // Negativstunden. Wird in zeitlicher Reihenfolge gefüttert und trägt den
+    // Zähler über Monatsgrenzen (die fallen auf lokale Mitternacht = volle
+    // UTC-Stunde, keine Stunde wird geteilt). Warm-up-Slots vor dem Zeitraum
+    // speisen NUR den Zähler — ein Ergebnis wird nur für Slots im Zeitraum
+    // geschrieben, damit kein §51-Status in Nachbartage leckt (Fix #6, 26-06).
+    let consecutiveNegHours = 0;
+    function feedNegPriceStreak(prePassSlots, priceIndex, result) {
       const slotsByHour = new Map();
       for (const slot of prePassSlots) {
         const ts = new Date(slot.ts);
@@ -1661,34 +1577,16 @@ export function createHistoryRuntime({
         if (!slotsByHour.has(hourKey)) slotsByHour.set(hourKey, []);
         slotsByHour.get(hourKey).push(slot);
       }
-
-      // Sort hours
       const sortedHourKeys = [...slotsByHour.keys()].sort();
-      const hourNegative = new Map();
       for (const hourKey of sortedHourKeys) {
-        const hourSlots = slotsByHour.get(hourKey);
         let priceSum = 0;
         let priceCount = 0;
-        for (const slot of hourSlots) {
-          // Use the lookback-extended price maps: warm-up (pre-range) slot prices are not in
-          // the range-bounded priceByTs. For in-range slots these maps are a strict superset,
-          // so the resolved price is bit-identical to before.
-          const price = lookbackPriceByTs.get(slot.ts) || lookbackPriceByBucketTs.get(bucketTimestamp(slot.ts)) || {};
-          const priceCtKwh = Number.isFinite(Number(price.priceCtKwh)) ? Number(price.priceCtKwh) : null;
+        for (const slot of slotsByHour.get(hourKey)) {
+          const priceCtKwh = priceCtOf(priceFor(priceIndex, slot.ts));
           if (priceCtKwh != null) { priceSum += priceCtKwh; priceCount += 1; }
         }
-        hourNegative.set(hourKey, priceCount > 0 && (priceSum / priceCount) < 0);
-      }
-
-      // Track consecutive negative hours and mark affected slots
-      let consecutiveNegHours = 0;
-      for (const hourKey of sortedHourKeys) {
-        const isNeg = hourNegative.get(hourKey);
-        if (isNeg) {
-          consecutiveNegHours += 1;
-        } else {
-          consecutiveNegHours = 0;
-        }
+        const isNeg = priceCount > 0 && (priceSum / priceCount) < 0;
+        consecutiveNegHours = isNeg ? consecutiveNegHours + 1 : 0;
         const affected = isNegativePriceSlotAffected({
           rule: negPriceRule.rule,
           consecutiveNegativeHours: consecutiveNegHours,
@@ -1696,24 +1594,30 @@ export function createHistoryRuntime({
           tiers: negPriceRule.tiers
         });
         for (const slot of slotsByHour.get(hourKey)) {
-          // Warm-up (pre-range) slots feed ONLY the streak counter — never write a result
-          // entry outside the View-Range, so no §51 status leaks into neighbouring days.
-          const localDate = localDateString(slot.ts);
-          if (localDate >= range.startDate && localDate < range.endDateExclusive) {
-            result.set(slot.ts, affected);
-          }
+          if (inRange(slot.ts)) result.set(slot.ts, affected);
         }
       }
-      return result;
-    })();
+    }
 
-    const slots = energySlots
-      .filter((slot) => {
-        const localDate = localDateString(slot.ts);
-        return localDate >= range.startDate && localDate < range.endDateExclusive;
-      })
-      .map((slot) => {
-        const price = priceByTs.get(slot.ts) || priceByBucketTs.get(bucketTimestamp(slot.ts)) || {};
+    // §51-Status je Slot eines Abschnitts (15-min-Regel: Slotpreis < 0).
+    function negPriceAffectedFor(sectionSlots, priceIndex) {
+      const result = new Map();
+      if (negPriceRule.rule === 'none') return result;
+      if (negPriceRule.rule === '15min') {
+        for (const slot of sectionSlots) {
+          if (!inRange(slot.ts)) continue;
+          const priceCtKwh = priceCtOf(priceFor(priceIndex, slot.ts));
+          result.set(slot.ts, priceCtKwh != null && priceCtKwh < 0);
+        }
+        return result;
+      }
+      feedNegPriceStreak(sectionSlots, priceIndex, result);
+      return result;
+    }
+
+    // Ein Slot → bewerteter Slot (Kosten, Erlöse, Prämie, §51, DV-Vergleich).
+    function enrichSlot(slot, priceIndex, negPriceAffectedByTs) {
+        const price = priceFor(priceIndex, slot.ts);
         const marketPriceCtKwh = Number.isFinite(Number(price.priceCtKwh)) ? Number(price.priceCtKwh) : null;
         const userImportPriceCtKwh = resolveUserImportPriceCtKwhForSlot({
           ts: slot.ts,
@@ -1837,13 +1741,10 @@ export function createHistoryRuntime({
           estimated: Boolean(slot.estimated),
           incomplete: Boolean(slot.incomplete) || missingImportPrice || missingMarketPrice
         };
-      });
+    }
 
-    const missingImportPriceSlots = slots.filter((slot) => slot.importKwh > 0 && !Number.isFinite(slot.userImportPriceCtKwh)).length;
-    const missingMarketPriceSlots = slots.filter((slot) => slot.exportKwh > 0 && !Number.isFinite(slot.marketPriceCtKwh)).length;
-    const incompleteSlots = slots.filter((slot) => slot.incomplete).length;
-    const estimatedSlots = slots.filter((slot) => slot.estimated).length;
-    const kpis = finalizeAggregateSums(slots.reduce((totals, slot) => ({
+    // Laufende Summen über alle bewerteten Slots des Zeitraums.
+    const addSlotToKpiTotals = (totals, slot) => ({
       importKwh: totals.importKwh + slot.importKwh,
       exportKwh: totals.exportKwh + slot.exportKwh,
       loadKwh: totals.loadKwh + Number(slot.loadKwh || 0),
@@ -1902,7 +1803,8 @@ export function createHistoryRuntime({
       hypSurplusFeedInCtTotal: slot.hypSurplusFeedInCtTotal != null
         ? (totals.hypSurplusFeedInCtTotal || 0) + slot.hypSurplusFeedInCtTotal
         : totals.hypSurplusFeedInCtTotal
-    }), {
+    });
+    let kpiTotals = {
       importKwh: 0,
       exportKwh: 0,
       loadKwh: 0,
@@ -1954,7 +1856,120 @@ export function createHistoryRuntime({
       negPriceAffectedSlots: 0,
       hypFullFeedInCtTotal: evFullCtKwh != null ? 0 : null,
       hypSurplusFeedInCtTotal: evPartialCtKwh != null ? 0 : null
-    }));
+    };
+    let missingImportPriceSlots = 0;
+    let missingMarketPriceSlots = 0;
+    let incompleteSlots = 0;
+    let estimatedSlots = 0;
+    let slotCount = 0;
+    const rowsAcc = createRowsAccumulator(view, batteryNominalCapacityKwhAt);
+    const activeExportMonths = new Set();
+    const sourceSummary = { localLiveSlots: 0, vrmImportSlots: 0 };
+    // Tag–Monat: alle bewerteten Slots (Tages-Charts, Reihen, Antwort).
+    // Jahr/Alle: nur die schlanken Felder, die die Prämien-Rechnung und der
+    // kWp-Deckel brauchen (ts, Preis, Einspeisung, PV-Flüsse).
+    const keepFullSlots = !(view === 'year' || view === 'all');
+    const slots = [];
+    function accumulate(slot) {
+      kpiTotals = addSlotToKpiTotals(kpiTotals, slot);
+      if (slot.importKwh > 0 && !Number.isFinite(slot.userImportPriceCtKwh)) missingImportPriceSlots += 1;
+      if (slot.exportKwh > 0 && !Number.isFinite(slot.marketPriceCtKwh)) missingMarketPriceSlots += 1;
+      if (slot.incomplete) incompleteSlots += 1;
+      if (slot.estimated) estimatedSlots += 1;
+      slotCount += 1;
+      rowsAcc.add(slot);
+      if (Number(slot.exportKwh || 0) > 0) activeExportMonths.add(localMonthString(slot.ts));
+      const sourceKinds = new Set(Array.isArray(slot?.sourceKinds) ? slot.sourceKinds : []);
+      if (slot?.sourceKind === 'local_live') sourceKinds.add('local_live');
+      if (slot?.sourceKind === 'vrm_import') sourceKinds.add('vrm_import');
+      if (sourceKinds.has('local_live')) sourceSummary.localLiveSlots += 1;
+      if (sourceKinds.has('vrm_import')) sourceSummary.vrmImportSlots += 1;
+      slots.push(keepFullSlots ? slot : {
+        ts: slot.ts,
+        exportKwh: slot.exportKwh,
+        marketPriceCtKwh: slot.marketPriceCtKwh,
+        pvKwh: slot.pvKwh,
+        pvAcKwh: slot.pvAcKwh,
+        solarDirectUseKwh: slot.solarDirectUseKwh,
+        solarToBatteryKwh: slot.solarToBatteryKwh,
+        solarToGridKwh: slot.solarToGridKwh
+      });
+    }
+
+    // Ganzer Zeitraum auf einmal (Tag/Woche/Monat — und Jahr/Alle, wenn keine
+    // materialisierten 15-min-Werte existieren und roh aggregiert werden muss).
+    async function processWholeRange(energySlots) {
+      const priceIndex = buildPriceIndex(await store.listPriceSlots({ start, end }));
+      let prePassSlots = energySlots;
+      let prePassIndex = priceIndex;
+      if (hourBasedRule) {
+        // Warm-up: ein ganzer Vortag (≥ 6 h) vor dem Zeitraum für den Zähler.
+        const lookbackStart = addDays(range.startDate, -1);
+        const lookbackStartUtc = localDateTimeToUtcIso(lookbackStart, 0, 0);
+        const lookbackSlots = await listEnergySlotsForRange({ start: lookbackStartUtc, end });
+        prePassIndex = buildPriceIndex(await store.listPriceSlots({ start: lookbackStartUtc, end }));
+        prePassSlots = lookbackSlots.filter((slot) => {
+          const localDate = localDateString(slot.ts);
+          return localDate >= lookbackStart && localDate < range.endDateExclusive;
+        });
+      }
+      const negAffected = negPriceAffectedFor(prePassSlots, prePassIndex);
+      for (const slot of energySlots) {
+        if (!inRange(slot.ts)) continue;
+        accumulate(enrichSlot(slot, priceIndex, negAffected));
+      }
+    }
+
+    // Jahr/Alle: Monat für Monat (materialisierte 15-min-Werte).
+    async function processByMonth() {
+      if (hourBasedRule) {
+        const lookbackStart = addDays(range.startDate, -1);
+        const lookbackStartUtc = localDateTimeToUtcIso(lookbackStart, 0, 0);
+        const warmup = (await store.listMaterializedEnergySlots({
+          start: lookbackStartUtc,
+          end: start,
+          sourceKinds: ['vrm_import', 'local_live']
+        })).filter((slot) => localDateString(slot.ts) >= lookbackStart);
+        feedNegPriceStreak(warmup, buildPriceIndex(await store.listPriceSlots({ start: lookbackStartUtc, end: start })), new Map());
+      }
+      let cursor = startOfMonth(range.startDate);
+      while (cursor < range.endDateExclusive) {
+        const monthEnd = normalizeViewRange('month', cursor).endDateExclusive;
+        const chunkStart = cursor < range.startDate ? range.startDate : cursor;
+        const chunkEnd = monthEnd < range.endDateExclusive ? monthEnd : range.endDateExclusive;
+        const chunkStartUtc = localDateTimeToUtcIso(chunkStart, 0, 0);
+        const chunkEndUtc = localDateTimeToUtcIso(chunkEnd, 0, 0);
+        const monthSlots = await store.listMaterializedEnergySlots({
+          start: chunkStartUtc,
+          end: chunkEndUtc,
+          sourceKinds: ['vrm_import', 'local_live']
+        });
+        if (monthSlots.length > 0) {
+          const priceIndex = buildPriceIndex(await store.listPriceSlots({ start: chunkStartUtc, end: chunkEndUtc }));
+          const negAffected = negPriceAffectedFor(monthSlots, priceIndex);
+          for (const slot of monthSlots) {
+            if (!inRange(slot.ts)) continue;
+            accumulate(enrichSlot(slot, priceIndex, negAffected));
+          }
+          // Zwischen den Monaten den Event-Loop freigeben (Modbus-Steuerpfad).
+          await yieldToEventLoop();
+        }
+        cursor = monthEnd;
+      }
+    }
+
+    if ((view === 'year' || view === 'all') && typeof store.listMaterializedEnergySlots === 'function') {
+      await processByMonth();
+      if (slotCount === 0 && typeof store.listAggregatedEnergySlots === 'function') {
+        // Keine materialisierten Werte im ganzen Zeitraum → roh aggregieren wie bisher.
+        consecutiveNegHours = 0;
+        await processWholeRange(await listRawFallbackSlotsForRange({ start, end }));
+      }
+    } else {
+      await processWholeRange(await listEnergySlotsForRange({ start, end }));
+    }
+
+    const kpis = finalizeAggregateSums(kpiTotals);
 
     // §51 EEG (Solarspitzengesetz) Förder-Verlängerung. Jede negativ-bepreiste
     // Viertelstunde, in der die EEG-Vergütung auf 0 gekürzt wird, verlängert den
@@ -2044,10 +2059,7 @@ export function createHistoryRuntime({
           dvCostEur = round2(cost);
         } else {
           // Year view: count distinct months with export > 0
-          const activeMonthSet = new Set(
-            slots.filter((s) => Number(s.exportKwh || 0) > 0).map((s) => localMonthString(s.ts))
-          );
-          const activeMonths = activeMonthSet.size > 0 ? activeMonthSet.size : 1;
+          const activeMonths = activeExportMonths.size > 0 ? activeExportMonths.size : 1;
           dvCostEur = round2(dvCostMonthlyEurVal * activeMonths);
         }
       }
@@ -2107,7 +2119,7 @@ export function createHistoryRuntime({
     // Yield between the per-slot map, the row roll-up and the premium pass —
     // the three long synchronous stretches (see yieldToEventLoop).
     await yieldToEventLoop();
-    const baseRows = summarizeRows(slots, view, batteryNominalCapacityKwhAt);
+    const baseRows = rowsAcc.finish();
     await yieldToEventLoop();
     const rowsWithCycles = baseRows.filter((row) => row.cycles != null);
     capacityAppliedKpis.cycles = rowsWithCycles.length
@@ -2129,7 +2141,7 @@ export function createHistoryRuntime({
           missingMarketPriceSlots,
           incompleteSlots,
           estimatedSlots,
-          slotCount: slots.length
+          slotCount
         }
       },
       solarMarketValues: solarMarketValueSummary
@@ -2235,18 +2247,6 @@ export function createHistoryRuntime({
     const charts = view === 'day'
       ? buildDayCharts(slots)
       : buildPeriodCharts(rows);
-    const sourceSummary = slots.reduce((summary, slot) => {
-      const sourceKinds = new Set(Array.isArray(slot?.sourceKinds) ? slot.sourceKinds : []);
-      if (slot?.sourceKind === 'local_live') sourceKinds.add('local_live');
-      if (slot?.sourceKind === 'vrm_import') sourceKinds.add('vrm_import');
-      return {
-        localLiveSlots: summary.localLiveSlots + (sourceKinds.has('local_live') ? 1 : 0),
-        vrmImportSlots: summary.vrmImportSlots + (sourceKinds.has('vrm_import') ? 1 : 0)
-      };
-    }, {
-      localLiveSlots: 0,
-      vrmImportSlots: 0
-    });
 
     return {
       view,
