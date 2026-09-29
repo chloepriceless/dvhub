@@ -210,3 +210,133 @@ test('getConfigDefinition liefert defaults (kanonisches Default-Objekt) mit', ()
   def.defaults.httpPort = 99999;
   assert.notEqual(getConfigDefinition().defaults.httpPort, 99999);
 });
+
+// --- T-MQTT-BROKER-TYPO (Kundenfall 2026-09-29) --------------------------------
+// Ein vertippter Broker-Port (1833 statt 1883) kappte still den kompletten
+// Steuerpfad; im Leitstand war nur „MQTT nicht verbunden" sichtbar. Die
+// Broker-URL-Felder werden jetzt beim Normalisieren geprüft.
+
+test('broker port typo (1833) produces a warning referencing victron.mqtt.broker', () => {
+  const normalized = normalizeConfigInput({
+    victron: { mqtt: { broker: 'mqtt://192.168.155.72:1833' } }
+  });
+  assert.ok(
+    normalized.warnings.some((w) => /victron\.mqtt\.broker/.test(String(w)) && /1833/.test(String(w))),
+    `erwartete Warnung zu victron.mqtt.broker, kam: ${JSON.stringify(normalized.warnings)}`
+  );
+  assert.equal(
+    normalized.persistedConfig.victron.mqtt.broker,
+    'mqtt://192.168.155.72:1833',
+    'Warnung darf den Wert nicht verlieren (Custom-Port bleibt möglich)'
+  );
+});
+
+test('broker schema gets normalized to lowercase (MQTT:// → mqtt://)', () => {
+  const normalized = normalizeConfigInput({
+    victron: { mqtt: { broker: 'MQTT://192.168.155.72:1883' } }
+  });
+  assert.equal(normalized.persistedConfig.victron.mqtt.broker, 'mqtt://192.168.155.72:1883');
+  assert.equal(
+    normalized.warnings.some((w) => /victron\.mqtt\.broker/.test(String(w))),
+    false,
+    'Großschreibung ist korrigierbar und braucht keine Warnung, wenn der Port stimmt'
+  );
+});
+
+test('standard broker URL stays silent', () => {
+  const normalized = normalizeConfigInput({
+    mqtt: { brokerUrl: 'mqtt://192.168.155.72:1883' },
+    victron: { mqtt: { broker: 'mqtts://broker.example:8883' } }
+  });
+  assert.equal(
+    normalized.warnings.some((w) => /broker/i.test(String(w))),
+    false,
+    `keine Broker-Warnung erwartet, kam: ${JSON.stringify(normalized.warnings)}`
+  );
+});
+
+test('unparseable broker URL warns but does not invalidate the config', () => {
+  const normalized = normalizeConfigInput({
+    mqtt: { brokerUrl: '192.168.155.72:1883' }
+  });
+  assert.ok(
+    normalized.warnings.some((w) => /mqtt\.brokerUrl/.test(String(w))),
+    `erwartete Warnung zu mqtt.brokerUrl, kam: ${JSON.stringify(normalized.warnings)}`
+  );
+  assert.equal(normalized.persistedConfig.mqtt.brokerUrl, '192.168.155.72:1883');
+});
+
+test('wrong scheme (http://) on a broker field warns', () => {
+  const normalized = normalizeConfigInput({
+    victron: { mqttCrossCheck: { broker: 'http://192.168.155.72:1883' } }
+  });
+  assert.ok(
+    normalized.warnings.some((w) => /victron\.mqttCrossCheck\.broker/.test(String(w))),
+    `erwartete Warnung zu victron.mqttCrossCheck.broker, kam: ${JSON.stringify(normalized.warnings)}`
+  );
+});
+
+test('empty broker field (default-from-host path) stays silent', () => {
+  const normalized = normalizeConfigInput({
+    victron: { mqtt: { broker: '' } }
+  });
+  assert.equal(
+    normalized.warnings.some((w) => /victron\.mqtt\.broker/.test(String(w))),
+    false
+  );
+});
+
+test('websocket broker URLs (ws://…:8083/mqtt) bekommen keinen Port-Hinweis', () => {
+  // EMQX-Default 8083 / mosquitto-WS 9001 sind legitim — der Hinweis waer ein
+  // False-Positive und wuerde Admins bei jedem Speichern zumuellen.
+  const normalized = normalizeConfigInput({
+    victron: { mqtt: { broker: 'ws://192.168.1.9:8083/mqtt' } },
+    mqtt: { brokerUrl: 'ws://192.168.1.9:9001' }
+  });
+  assert.equal(
+    normalized.warnings.some((w) => /broker/i.test(String(w))),
+    false,
+    `keine Broker-Warnung bei ws-Ports erwartet, kam: ${JSON.stringify(normalized.warnings)}`
+  );
+});
+
+// Regression (Selbst-Review 2026-09-30): der Warn-Text enthält den
+// Nutzereingabe-Rohwert. Ein Newline darin würde im Leitstand/Audit eine
+// zusätzliche (gefälschte) Log-Zeile erzeugen.
+test('broker warning escapes newlines from user input (no log forging)', () => {
+  const normalized = normalizeConfigInput({
+    mqtt: { brokerUrl: 'kaputt\n/api/log?forge=1' }
+  });
+  const brokerWarnings = normalized.warnings.filter((w) => /broker/i.test(String(w)));
+  assert.equal(brokerWarnings.length, 1, `genau eine Broker-Warnung erwartet, kam: ${JSON.stringify(normalized.warnings)}`);
+  assert.ok(!/[\r\n]/.test(brokerWarnings[0]),
+    `Warnung darf kein Roh-Newline enthalten (Log-Fälschung): ${JSON.stringify(brokerWarnings[0])}`);
+  assert.equal(normalized.persistedConfig.mqtt.brokerUrl, 'kaputt\n/api/log?forge=1',
+    'Wert bleibt erhalten, nur die Warnung ist escaped');
+});
+
+// Regression (Selbst-Review Runde 2, 2026-09-30): der unparseable-Zweig gab den
+// Rohwert zurück — bei kaputten URLs mit Zugangsdaten stand das Passwort im
+// Leitstand/Audit (Regel: Secrets nie ins Log).
+test('broker warning masks credentials in unparseable URLs', () => {
+  const normalized = normalizeConfigInput({
+    mqtt: { brokerUrl: 'mqtt://u:g3heim@broken host:1883' }
+  });
+  const brokerWarnings = normalized.warnings.filter((w) => /broker/i.test(String(w)));
+  assert.equal(brokerWarnings.length, 1, `genau eine Broker-Warnung erwartet, kam: ${JSON.stringify(normalized.warnings)}`);
+  assert.ok(!brokerWarnings[0].includes('g3heim'),
+    `Passwort darf nicht in der Warnung auftauchen: ${brokerWarnings[0]}`);
+  assert.equal(normalized.persistedConfig.mqtt.brokerUrl, 'mqtt://u:g3heim@broken host:1883',
+    'Wert selbst bleibt unangetastet (Nutzer soll ihn korrigieren können)');
+});
+
+// Codex-Review 2026-09-29: Schwärzung per Regex versagte bei Leerzeichen im
+// Passwort ("my secret") — der Rohwert wird deshalb gar nicht mehr ausgegeben.
+test('broker warning never echoes the raw value (password with spaces, no @, garbage)', () => {
+  for (const broker of ['mqtt://u:my secret@broken host:1883', 'mqtt://nur-passwort geheimXYZ', 'geheimXYZ ohne schema']) {
+    const normalized = normalizeConfigInput({ victron: { mqtt: { broker } } });
+    const w = normalized.warnings.filter((x) => /victron\.mqtt\.broker/.test(String(x)));
+    assert.equal(w.length, 1, `eine Warnung erwartet für ${JSON.stringify(broker)}: ${JSON.stringify(normalized.warnings)}`);
+    assert.ok(!/secret|geheimXYZ/.test(w[0]), `Rohwert/Passwort in der Warnung: ${w[0]}`);
+  }
+});

@@ -34,7 +34,11 @@ test('URL erst nach dem Start eingetragen: Abfrage laeuft trotzdem an', async ()
     cfg.evcc.url = evcc.url; // wie ein Speichern in den Integrationen
     // Frueher lief ohne Start-URL gar kein Takt — dann kam hier nie eine Abfrage an.
     await waitFor(() => evcc.requests.includes('GET /api/state'), 15000);
-    assert.equal(integ.getStatus().lastError, null);
+    // Der Request-Eingang allein beweist noch nicht, dass der Erfolgszweig
+    // durchgelaufen ist (Antwort-Handling folgt Millisekunden spaeter) — bei
+    // parallel laufender Suite gab das einen Fluxer. Auf den eigentlichen
+    // Zustand warten statt auf die Reihenfolge im Mock.
+    await waitFor(() => integ.getStatus().lastError === null, 5000);
   } finally {
     integ.stop();
     await evcc.close();

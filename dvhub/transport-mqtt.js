@@ -116,15 +116,21 @@ export function buildDvhubTopicMaps(topicPrefix) {
     meter_l1:            `${p}/input/grid/l1_w`,
     meter_l2:            `${p}/input/grid/l2_w`,
     meter_l3:            `${p}/input/grid/l3_w`,
+    // Gesamtwerte (HA/Loxone liefern meist nur diese). Haben Vorrang vor den
+    // Phasen; Netz/Verbrauch: entweder total_w ODER Phasen publizieren.
+    meter_total:         `${p}/input/grid/total_w`,
     soc:                 `${p}/input/battery/soc_pct`,
     batteryPowerW:       `${p}/input/battery/power_w`,
     pvPowerW:            `${p}/input/pv/dc_w`,
+    // PV gesamt (DC + AC in einem Wert) — Alternative zu dc_w/ac_*_w, nicht zusätzlich.
+    pvTotalInput:        `${p}/input/pv/total_w`,
     acPvL1W:             `${p}/input/pv/ac_l1_w`,
     acPvL2W:             `${p}/input/pv/ac_l2_w`,
     acPvL3W:             `${p}/input/pv/ac_l3_w`,
     selfConsumptionW_l1: `${p}/input/consumption/l1_w`,
     selfConsumptionW_l2: `${p}/input/consumption/l2_w`,
     selfConsumptionW_l3: `${p}/input/consumption/l3_w`,
+    selfConsumptionW_total: `${p}/input/consumption/total_w`,
     // Rücklesung der Sollwerte (optional — fehlt sie, bleibt der Punkt null)
     gridSetpointW:       `${p}/input/control/grid_setpoint_w`,
     minSocPct:           `${p}/input/control/min_soc_pct`,
@@ -139,6 +145,15 @@ export function buildDvhubTopicMaps(topicPrefix) {
   };
   return { READ_TOPICS, WRITE_TOPICS };
 }
+
+// Logische Eingänge (HTTP-Push, services/input-push.js) → Schlüssel in
+// READ_TOPICS des DVhub-Schemas. Push und MQTT füllen denselben Cache.
+export const DVHUB_INPUT_KEYS = {
+  grid_total: 'meter_total', grid_l1: 'meter_l1', grid_l2: 'meter_l2', grid_l3: 'meter_l3',
+  pv_total: 'pvTotalInput', battery_power: 'batteryPowerW', battery_soc: 'soc',
+  consumption_total: 'selfConsumptionW_total',
+  consumption_l1: 'selfConsumptionW_l1', consumption_l2: 'selfConsumptionW_l2', consumption_l3: 'selfConsumptionW_l3',
+};
 
 /**
  * Payload → Zahl. Versteht nackte Zahlen ("42.5"), JSON-Zahlen und das
@@ -163,9 +178,60 @@ export function parseMqttPayload(payload) {
   }
 }
 
-export function createMqttTransport(victronConfig) {
+// Broker-URL für Leitstand-Events: nur Schema/Host/Port, niemals Zugangsdaten
+// (mqtt://user:pass@host → mqtt://host:port).
+function sanitizeBrokerUrl(raw) {
+  try {
+    const u = new URL(String(raw));
+    const port = u.port ? `:${u.port}` : '';
+    return `${u.protocol}//${u.hostname}${port}`;
+  } catch {
+    return String(raw).replace(/\/\/[^/@]*@/, '//');
+  }
+}
+
+export function createMqttTransport(victronConfig, options = {}) {
   const mqttCfg = victronConfig.mqtt || {};
-  const broker = mqttCfg.broker || `mqtt://${victronConfig.host}:1883`;
+  // DVhub-Schema ohne eigene Broker-URL: Standard ist der eingebaute DVhub-
+  // Broker (server.js reicht ihn als options.defaultBroker herein) — HA/Loxone
+  // publizieren dann direkt an DVhub, ein eigener Mosquitto ist nicht nötig.
+  // Ohne Broker (DVhub-Schema, kein eigener, kein laufender DVhub-Broker):
+  // reiner Push-Modus — Werte nur per HTTP (/api/input/push), keine Verbindung,
+  // keine Endlos-Wiederholungen im Log. Steuerwerte liest Loxone dann über
+  // /api/integration/loxone (dvhub_control_*).
+  const pushOnly = mqttCfg.schema === 'dvhub' && !mqttCfg.broker && !options?.defaultBroker;
+  const brokerMode = mqttCfg.broker ? 'own' : (pushOnly ? 'push-only' : (mqttCfg.schema === 'dvhub' ? 'hub' : 'own'));
+  const broker = pushOnly ? null : (mqttCfg.broker
+    || (mqttCfg.schema === 'dvhub' && options?.defaultBroker)
+    || `mqtt://${victronConfig.host}:1883`);
+  // Leitstand-Sichtbarkeit (test/transport-mqtt-events.test.js, Kundenfall
+  // 2026-09-29): optionale Ereignis-Callback (server.js → pushLog) für
+  // mqtt_connected / mqtt_connect_error / mqtt_disconnected. onEvent ist
+  // optional — Aufrufer ohne options (altesignal) dürfen nicht brechen.
+  const onEvent = typeof options?.onEvent === 'function' ? options.onEvent : null;
+  const brokerLabel = pushOnly ? 'kein Broker (nur HTTP-Push)' : sanitizeBrokerUrl(broker);
+  let pushOnlyNoted = false;
+  function emitEvent(event, details, level) {
+    if (!onEvent) return;
+    try { onEvent(event, details, level); } catch { /* Log darf den Transport nicht killen */ }
+  }
+  // Spam-Schutz: an einem toten Broker wirft mqtt.js pro Reconnect-Versuch
+  // (~alle 1 s) ein error-Event — Leitstand-Ring (1000 Einträge) und Audit-DB
+  // würden von der Sturmschleife zugespült. Identische Fehlertexte melden
+  // höchstens alle 30 s einmal; der Kundenfall braucht die Ursache, nicht
+  // jeden einzelnen Fehlversuch.
+  const CONNECT_ERROR_DEDUP_MS = 30000;
+  let lastConnectError = { message: '', ts: 0 };
+  // event: 'mqtt_connect_error' (Verbindungsaufbau scheitert) oder 'mqtt_error'
+  // (Fehler während einer bestehenden Sitzung) — gleiche Entprellung.
+  function emitConnectError(errMessage, event = 'mqtt_connect_error') {
+    const message = String(errMessage || 'unknown');
+    const now = Date.now();
+    const key = `${event}|${message}`;
+    if (key === lastConnectError.message && now - lastConnectError.ts < CONNECT_ERROR_DEDUP_MS) return;
+    lastConnectError = { message: key, ts: now };
+    emitEvent(event, { broker: brokerLabel, error: message }, 'error');
+  }
   const portalId = mqttCfg.portalId || '';
   const schema = mqttCfg.schema === 'dvhub' ? 'dvhub' : 'venus';
   const keepaliveMs = Number(mqttCfg.keepaliveIntervalMs) || 30000;
@@ -180,6 +246,11 @@ export function createMqttTransport(victronConfig) {
   let client = null;
   let keepaliveTimer = null;
   const cache = {};  // topic -> { value, ts }
+  // Disconnect-Events nur für echte, aktive Sitzungen — nicht für den
+  // controlled shutdown (destroy) und nicht für eine nie zustande gekommene
+  // Erstverbindung (die meldet mqtt_connect_error).
+  let sessionActive = false;
+  let closing = false;
 
   if (schema === 'venus' && !portalId) {
     console.warn('[MQTT] Kein portalId konfiguriert — MQTT-Topics werden nicht korrekt aufgelöst.');
@@ -207,6 +278,20 @@ export function createMqttTransport(victronConfig) {
   // T-MQTT-CONSUMPTION: die drei Phasen, aus denen der Summen-Punkt
   // 'selfConsumptionW' gebildet wird (siehe sumConsumptionEntries oben).
   const CONSUMPTION_KEYS = ['selfConsumptionW_l1', 'selfConsumptionW_l2', 'selfConsumptionW_l3'];
+  const GRID_KEYS = ['meter_l1', 'meter_l2', 'meter_l3'];
+  const freshEntry = (key) => {
+    const e = READ_TOPICS[key] ? cache[READ_TOPICS[key]] : null;
+    return mqttCacheEntryFresh(e, staleMaxAgeMs) ? { value: Number(e.value), ts: e.ts } : null;
+  };
+  // Hausverbrauch: frischer Gesamtwert hat Vorrang, sonst Phasensumme.
+  function consumptionEntry() {
+    return freshEntry('selfConsumptionW_total')
+      || sumConsumptionEntries(CONSUMPTION_KEYS.map((k) => cache[READ_TOPICS[k]]), staleMaxAgeMs);
+  }
+  // PV (DVhub-Schema): dc_w, sonst pv/total_w.
+  function pvEntry() {
+    return freshEntry('pvPowerW') || freshEntry('pvTotalInput');
+  }
 
   // ── Helpers ────────────────────────────────────────────────────────
   function onMessage(topic, payload, packet) {
@@ -272,11 +357,21 @@ export function createMqttTransport(victronConfig) {
     getAlarmValues,
 
     async init() {
+      if (pushOnly) {
+        if (!pushOnlyNoted) {
+          pushOnlyNoted = true;
+          console.log('[MQTT] DVhub-Schema ohne Broker — nur HTTP-Push (/api/input/push).');
+          emitEvent('mqtt_push_only', { broker: brokerLabel }, 'info');
+        }
+        return;
+      }
       const mqtt = await import('mqtt');
-      const connectFn = mqtt.default?.connect || mqtt.connect;
+      // options.connectFn: nur für Tests (Fake-Client); Betrieb nutzt mqtt.js.
+      const connectFn = typeof options?.connectFn === 'function' ? options.connectFn : (mqtt.default?.connect || mqtt.connect);
 
       // Clean up any existing connection first
       this.destroy();
+      closing = false;
 
       return new Promise((resolve, reject) => {
         let settled = false;
@@ -288,25 +383,51 @@ export function createMqttTransport(victronConfig) {
         // MQTT-Transport an einem aktuellen GX gar nicht arbeiten. Zusätzlich
         // TLS-Option: das Gerät liefert ein selbstsigniertes Zertifikat
         // (CN=venus.local), eine CA-Prüfung schlägt zwangsläufig fehl.
+        // clean: true + resubscribe-Default (mqtt.js >=2 verdrahtet): NACH einem
+        // Reconnect uebernimmt mqtt.js die Registration der damals abonnierten
+        // Topics selbst — unser subscribe() laeuft im settled-Zweig NICHT mehr.
+        // Der Reconnect-Test in test/transport-mqtt-events.test.js prueft den
+        // Datenfluss nach Reconnect explizit, falls sich diese Abhaengigkeit je
+        // aendert (Upgrade/Refactor).
         const connectOpts = { clean: true, connectTimeout: 5000 };
-        if (mqttCfg.username) connectOpts.username = mqttCfg.username;
-        if (mqttCfg.password) connectOpts.password = mqttCfg.password;
+        // Broker der DVhub-MQTT-Integration mitbenutzt: auch deren Zugangsdaten
+        // übernehmen (sonst anonym → abgewiesen), eigene Angaben unter
+        // victron.mqtt haben aber Vorrang.
+        const auth = brokerMode === 'hub' ? (options?.defaultBrokerAuth || {}) : {};
+        const username = mqttCfg.username || auth.username;
+        const password = mqttCfg.password || auth.password;
+        if (username) connectOpts.username = username;
+        if (password) connectOpts.password = password;
         if (String(broker).startsWith('mqtts://')) {
-          connectOpts.rejectUnauthorized = mqttCfg.rejectUnauthorized === true;
+          connectOpts.rejectUnauthorized = typeof mqttCfg.rejectUnauthorized === 'boolean'
+            ? mqttCfg.rejectUnauthorized === true
+            : auth.rejectUnauthorized === true;
         }
         client = connectFn(broker, connectOpts);
 
         const timeoutHandle = setTimeout(() => {
           if (settled) return;
           settled = true;
+          emitConnectError('timeout');
           if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
           if (client) { client.end(true); client = null; }
-          reject(new Error(`MQTT connect timeout (${broker})`));
+          // brokerLabel statt broker: die Meldung landet über server.js im
+          // journal/console — Zugangsdaten gehören nicht in Logs.
+          reject(new Error(`MQTT connect timeout (${brokerLabel})`));
         }, 8000);
 
         client.on('connect', () => {
-          if (settled) return;
-          console.log(`[MQTT] Verbunden mit ${broker}`);
+          if (settled) {
+            // Reconnect im laufenden Betrieb (mqtt.js resubscribed selbst): die
+            // Sitzung gilt wieder als aktiv — ohne das bliebe sessionActive auf
+            // false und JEDE spätere Trennung wäre unsichtbar; zudem wäre der
+            // Leitstand einseitig (getrennt ja, wieder verbunden nein).
+            sessionActive = true;
+            lastConnectError = { message: '', ts: 0 };
+            emitEvent('mqtt_connected', { broker: brokerLabel }, 'info');
+            return;
+          }
+          console.log(`[MQTT] Verbunden mit ${brokerLabel}`);
           // T-MQTT-ALARMS (2026-07-25): Geräte-Alarme kamen bisher NUR über
           // Modbus-Blockreads — auf MQTT blieb das Banner dauerhaft leer.
           // Wildcards, weil die Instanz-Nummern anlagenspezifisch sind
@@ -321,9 +442,15 @@ export function createMqttTransport(victronConfig) {
             settled = true;
             clearTimeout(timeoutHandle);
             if (err) {
+              emitConnectError(err?.message || err);
               if (client) { client.end(true); client = null; }
               return reject(err);
             }
+            sessionActive = true;
+            // Neue SUCCESS-Session setzt das Dedup-Fenster zurueck: ein frischer
+            // Ausfall nach einem Reconnect ist ein neues Ereignis, kein Echo.
+            lastConnectError = { message: '', ts: 0 };
+            emitEvent('mqtt_connected', { broker: brokerLabel }, 'info');
             // Keepalive starten — sorgt dafür, dass Settings-Topics gepublished werden
             sendKeepalive();
             if (keepaliveTimer) clearInterval(keepaliveTimer);
@@ -334,6 +461,10 @@ export function createMqttTransport(victronConfig) {
 
         client.on('message', (topic, payload, packet) => onMessage(topic, payload, packet));
         client.on('error', (err) => {
+          // Während einer bestehenden Sitzung ist ein Fehler KEIN Verbindungs-
+          // aufbau-Problem — eigener Ereignisname, sonst führt der Leitstand in
+          // die falsche Richtung (Broker-Port prüfen, obwohl die Verbindung steht).
+          emitConnectError(err?.message || err, sessionActive ? 'mqtt_error' : 'mqtt_connect_error');
           if (!settled) {
             settled = true;
             clearTimeout(timeoutHandle);
@@ -344,6 +475,15 @@ export function createMqttTransport(victronConfig) {
             console.error('[MQTT] Fehler:', err?.message || err);
           }
         });
+        // Broker-Neustart/Keepalive-Aus: mqtt.js feuert dafür nur 'close', kein
+        // 'error'. Ohne mqtt_disconnected wäre verbunden→getrennt im Leitstand
+        // unsichtbar (dieselbe Blindstelle wie der Kundenfall).
+        client.on('close', () => {
+          if (sessionActive && !closing) {
+            sessionActive = false;
+            emitEvent('mqtt_disconnected', { broker: brokerLabel }, 'warn');
+          }
+        });
         client.on('reconnect', () => console.log('[MQTT] Reconnecting...'));
       });
     },
@@ -352,13 +492,59 @@ export function createMqttTransport(victronConfig) {
      * Liest einen gecachten Wert. name = logischer Punktname (z.B. 'soc', 'batteryPowerW').
      * MQTT liefert Engineering-Werte direkt (kein Register-Decoding nötig).
      */
+    // Netzleistung für den Poller: { total, l1, l2, l3, ts } (Rohwerte, Bezug
+    // positiv) oder null, wenn nichts Frisches vorliegt. Frischer Gesamtwert
+    // hat Vorrang; sonst Phasensumme mit derselben Regel wie beim Verbrauch
+    // (nie gesehene Phase = 0, gesehene aber veraltete → alles ungültig).
+    // null ist WICHTIG: früher wurde ein toter Zufluss als 0 W „ok“ gemeldet.
+    readGrid() {
+      const total = freshEntry('meter_total');
+      if (total) {
+        const ph = GRID_KEYS.map((k) => freshEntry(k));
+        return { total: total.value, l1: ph[0]?.value ?? null, l2: ph[1]?.value ?? null, l3: ph[2]?.value ?? null, ts: total.ts };
+      }
+      const entries = GRID_KEYS.map((k) => cache[READ_TOPICS[k]]);
+      const sum = sumConsumptionEntries(entries, staleMaxAgeMs);
+      if (!sum) return null;
+      const v = entries.map((e) => (e ? Number(e.value) : 0));
+      return { total: sum.value, l1: v[0], l2: v[1], l3: v[2], ts: sum.ts };
+    },
+
+    // HTTP-Push (services/input-push.js): Wert eines logischen Eingangs in den
+    // Cache schreiben, als wäre er per MQTT gekommen. Nur im DVhub-Schema.
+    ingest(input, value, nowMs = Date.now()) {
+      if (schema !== 'dvhub') return false;
+      const key = DVHUB_INPUT_KEYS[input];
+      const topic = key && READ_TOPICS[key];
+      const v = Number(value);
+      if (!topic || !Number.isFinite(v)) return false;
+      cache[topic] = { value: v, ts: nowMs };
+      return true;
+    },
+    inputStatus(nowMs = Date.now()) {
+      if (schema !== 'dvhub') return null;
+      return Object.fromEntries(Object.entries(DVHUB_INPUT_KEYS).map(([input, key]) => {
+        const e = cache[READ_TOPICS[key]];
+        return [input, {
+          topic: READ_TOPICS[key],
+          value: e ? e.value : null,
+          ageMs: e ? nowMs - e.ts : null,
+          fresh: mqttCacheEntryFresh(e, staleMaxAgeMs, nowMs),
+        }];
+      }));
+    },
+    get staleMaxAgeMs() { return staleMaxAgeMs; },
+    get brokerMode() { return brokerMode; },
+
     getCached(name) {
-      // T-MQTT-CONSUMPTION: Summen-Punkt aus den drei Phasen-Topics.
+      // T-MQTT-CONSUMPTION: Summen-Punkt aus den Phasen-Topics bzw. Gesamtwert.
       if (name === 'selfConsumptionW') {
-        const sum = sumConsumptionEntries(
-          CONSUMPTION_KEYS.map((k) => cache[READ_TOPICS[k]]), staleMaxAgeMs
-        );
+        const sum = consumptionEntry();
         return sum ? sum.value : null;
+      }
+      if (name === 'pvPowerW' && schema === 'dvhub') {
+        const pv = pvEntry();
+        return pv ? pv.value : null;
       }
       const topic = READ_TOPICS[name];
       if (!topic) return null;
@@ -375,9 +561,7 @@ export function createMqttTransport(victronConfig) {
       // Fehlt/stale → alle drei Phasen per R/ nachfordern und einmal nachfassen
       // (gleicher Recovery-Pfad wie der generische Zweig unten).
       if (name === 'selfConsumptionW') {
-        const summed = () => sumConsumptionEntries(
-          CONSUMPTION_KEYS.map((k) => cache[READ_TOPICS[k]]), staleMaxAgeMs
-        );
+        const summed = consumptionEntry;
         let sum = summed();
         if (sum) return { mqttValue: sum.value, ts: sum.ts };
         for (const k of CONSUMPTION_KEYS) requestRead(READ_TOPICS[k]);
@@ -385,6 +569,14 @@ export function createMqttTransport(victronConfig) {
         sum = summed();
         if (sum) return { mqttValue: sum.value, ts: sum.ts };
         throw new Error('MQTT-Wert nicht verfügbar oder veraltet für: selfConsumptionW');
+      }
+      if (name === 'pvPowerW' && schema === 'dvhub') {
+        let pv = pvEntry();
+        if (pv) return { mqttValue: pv.value, ts: pv.ts };
+        await new Promise((r) => setTimeout(r, 2000));
+        pv = pvEntry();
+        if (pv) return { mqttValue: pv.value, ts: pv.ts };
+        throw new Error('MQTT-Wert nicht verfügbar oder veraltet für: pvPowerW');
       }
       const topic = READ_TOPICS[name];
       if (!topic) throw new Error(`Kein MQTT-Topic-Mapping für: ${name}`);
@@ -453,6 +645,11 @@ export function createMqttTransport(victronConfig) {
         noteBlockedWrite(`MQTT ${topic}`);
         throw new ReadOnlyViolation(`Schreibzugriff im Lese-Modus abgelehnt (MQTT ${writeName})`);
       }
+      if (pushOnly) {
+        // Kein Broker: der Sollwert ist im DVhub-Zustand gespeichert und steht
+        // Loxone unter /api/integration/loxone bereit — kein Fehler pro Zyklus.
+        return { ok: true, topic: null, value, pushOnly: true };
+      }
       if (!client?.connected) throw new Error('MQTT nicht verbunden');
       const payload = encodeWrite(value);
       client.publish(topic, payload, { qos });
@@ -460,6 +657,8 @@ export function createMqttTransport(victronConfig) {
     },
 
     async destroy() {
+      closing = true;
+      sessionActive = false;
       if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
       if (client) { client.removeAllListeners(); client.end(true); client = null; }
     },

@@ -4691,6 +4691,56 @@ function validateConfigSchema(raw, warnings) {
   }
 }
 
+// Broker-URL-Felder der Konfiguration (Pfade zu getPath/setPath). Alle werden
+// nach demselben Muster geprüft: Schema kleinschreiben (korrigierbar, stumm),
+// unlesbare URLs und fremde Schemata warnen, ungewöhnliche MQTT-Ports anmeckern.
+const BROKER_URL_PATHS = [
+  'victron.mqtt.broker',
+  'victron.mqttCrossCheck.broker',
+  'mqtt.brokerUrl',
+  'forecast.weather.mqtt.brokerUrl'
+];
+const STANDARD_MQTT_PORTS = { mqtt: '1883', mqtts: '8883' };
+
+function inspectBrokerUrls(config) {
+  const warnings = [];
+  for (const path of BROKER_URL_PATHS) {
+    const value = getPath(config, path);
+    if (typeof value !== 'string' || !value.trim()) continue; // leer → Default-Pfad vom Host, still
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      // Den ROHWERT nie ausgeben: eine kaputte URL kann Zugangsdaten in jeder
+      // Form enthalten (Leerzeichen, fehlendes @, …) — keine Schwärzungs-Regex
+      // deckt das sicher ab, und die Warnung landet im Journal/Health-Log.
+      // Nur Schema + Länge nennen; der Nutzer sieht den Wert ohnehin im Formular.
+      const rawScheme = /^([A-Za-z][A-Za-z0-9+.-]{0,15}):\/\//.exec(value)?.[1];
+      const hint = rawScheme ? `Schema „${rawScheme.toLowerCase()}://“, ${value.length} Zeichen` : `${value.length} Zeichen, ohne Schema`;
+      warnings.push(`${path}: Broker-URL ist nicht lesbar (${hint}) — erwartet mqtt://host:port`);
+      continue;
+    }
+    const scheme = url.protocol.replace(':', '').toLowerCase();
+    // Der URL-Parser kleinschreibt das Schema bereits intern — Vergleich mit dem
+    // ROHWERT entscheidet, ob wir korrigiert zurückschreiben müssen.
+    const schemeMatch = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(value);
+    if (schemeMatch && schemeMatch[1] !== scheme) {
+      // Großschreibung ist korrigierbar → direkt beheben, keine Warnung (zu laut bei jedem Speichern).
+      setPath(config, path, value.replace(schemeMatch[1], scheme));
+    }
+    if (!['mqtt', 'mqtts', 'ws', 'wss'].includes(scheme)) {
+      warnings.push(`${path}: unbekanntes Schema "${scheme}://" für Broker-URL — erwartet mqtt(s):// oder ws(s)://`);
+      continue;
+    }
+    // WebSocket-Ports (8083/9001 …) sind legitim → kein Port-Hinweis.
+    const stdPort = STANDARD_MQTT_PORTS[scheme];
+    if (stdPort && url.port && url.port !== stdPort) {
+      warnings.push(`${path}: Broker-Port ${url.port} ist ungewöhnlich (Standard für ${scheme}:// ist ${stdPort}) — Tippfehler möglich?`);
+    }
+  }
+  return warnings;
+}
+
 export function normalizeConfigInput(rawInput) {
   const defaults = createDefaultConfig();
   // sanitizeRawConfig runs the sweep-package-6 validateConfigSchema shape checks
@@ -4709,6 +4759,11 @@ export function normalizeConfigInput(rawInput) {
   }
   // Ensure priceApiUrl is always set (legacy configs may omit it)
   if (persistedConfig.epex && !persistedConfig.epex.priceApiUrl) persistedConfig.epex.priceApiUrl = 'https://dvhub.online';
+  // T-MQTT-BROKER-TYPO (Kundenfall 2026-09-29): ein vertippter Broker-Port
+  // (1833 statt 1883) kappte still den kompletten Steuerpfad — im Leitstand
+  // war nur „MQTT nicht verbunden" sichtbar. Beim Normalisieren warnen;
+  // der Wert wird NIE verworfen (Custom-Ports bleiben legitim).
+  warnings.push(...inspectBrokerUrls(persistedConfig));
   const effectiveConfig = applyVictronDefaults(persistedConfig);
   return { rawConfig: raw, persistedConfig, effectiveConfig, warnings };
 }

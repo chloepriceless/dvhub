@@ -9,7 +9,7 @@
     "test": "node --test --test-force-exit test/"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "license": "MIT"
 }

@@ -110,6 +110,8 @@ import { createInstallerPortalClient } from './services/installer-portal-client.
 // Datenspende (COMSYS, RWTH Aachen): Opt-in-Spende von Leistungs-Zeitreihen
 // an das Forschungsprojekt — ausgehend, ab Werk aus.
 import { createDatenspende } from './services/datenspende/index.js';
+// Messwert-Eingang HA/Loxone per HTTP-Push (Push-Schlüssel in DATA_DIR).
+import { createInputPush } from './services/input-push.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies. Imported here
@@ -358,7 +360,25 @@ const state = {
 
 // ── Transport erstellen (Modbus oder MQTT) ──────────────────────────
 const transport = cfg.victron?.transport === 'mqtt'
-  ? createMqttTransport(cfg.victron)
+  ? createMqttTransport(cfg.victron, {
+      // DVhub-Schema (HA/Loxone) ohne eigene Broker-URL: den Broker nehmen,
+      // den auch der DVhub-MQTT-Hub nutzt (externe brokerUrl oder eingebauter).
+      // Den eingebauten Broker gibt es nur, wenn die MQTT-Integration an ist
+      // (mqtt.enabled). Sonst kein Default → Transport läuft im reinen
+      // HTTP-Push-Modus (Loxone ohne Broker).
+      defaultBroker: cfg.mqtt?.brokerUrl
+        || (cfg.mqtt?.enabled && cfg.mqtt?.embeddedBroker?.enabled !== false
+          ? `mqtt://127.0.0.1:${cfg.mqtt?.embeddedBroker?.port || 1883}` : undefined),
+      // Zugangsdaten eines externen Integrations-Brokers mitgeben (der
+      // eingebaute braucht keine).
+      defaultBrokerAuth: cfg.mqtt?.brokerUrl
+        ? { username: cfg.mqtt?.username, password: cfg.mqtt?.password, rejectUnauthorized: cfg.mqtt?.rejectUnauthorized }
+        : undefined,
+      // Connect-Fehler/Ergebnisse ins Systemprotokoll (pushLog) — sonst ist ein
+      // falscher Broker-Port für den Nutzer nur als „MQTT nicht verbunden"-Folge
+      // sichtbar, die Ursache aber nie (Kundenfall 2026-09-29).
+      onEvent: (event, details, level) => pushLog(event, details, level)
+    })
   : createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs });
 
 // Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
@@ -1157,6 +1177,8 @@ if (IS_WEB_PROCESS) ctx.installerPortalClient.startPolling();
 // Ohne Verknüpfung und Einwilligung (datenspende.enabled) passiert nichts.
 // DV_DATENSPENDE_URL / DV_DATENSPENDE_FLUSH_SEC: Server + Versand-Takt nur für
 // E2E-Tests/Diagnose überschreiben.
+ctx.inputPush = createInputPush(ctx);
+ctx.processRole = PROCESS_ROLE;
 ctx.datenspende = createDatenspende(ctx, {
   flushIntervalSec: Number(process.env.DV_DATENSPENDE_FLUSH_SEC) || undefined,
 });

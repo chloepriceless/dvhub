@@ -313,7 +313,9 @@ apt-get install -y curl ca-certificates git sudo postgresql openvpn strongswan p
 # ist linux-image-* bereits installiert. wg/wg-quick brauchen keine Recommends.
 apt-get install -y --no-install-recommends wireguard-tools
 
-if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)'; then
+# Node 22 ist die unterstützte Basis (package.json engines, CI, Prod) — ein
+# älteres vorhandenes Node (18/20) wird aktualisiert, statt still zu bleiben.
+if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)'; then
   echo "[2/7] Node.js 22 installieren"
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs

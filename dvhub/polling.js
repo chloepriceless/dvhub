@@ -537,19 +537,28 @@ export function createPoller(ctx) {
           nextRetryAt: null
         };
       } else if (transport.type === 'mqtt') {
-        // MQTT: Werte aus Cache lesen (Venus OS: positiv = Import, negativ = Export)
-        const ml1 = transport.getCached('meter_l1') ?? 0;
-        const ml2 = transport.getCached('meter_l2') ?? 0;
-        const ml3 = transport.getCached('meter_l3') ?? 0;
+        // MQTT: Werte aus Cache lesen (Venus/DVhub-Schema: positiv = Import).
+        // readGrid() liefert null, wenn nichts Frisches da ist — dann ist der
+        // Zähler UNGÜLTIG (Fehlerzweig unten, Backoff, meter.ok=false). Früher
+        // wurde ein toter Zufluss (HA/Loxone/Bridge weg) als 0 W „ok“ gemeldet
+        // und die Nulleinspeisungs-Regelung merkte nichts.
+        const grid = typeof transport.readGrid === 'function'
+          ? transport.readGrid()
+          : (() => {
+            const v = ['meter_l1', 'meter_l2', 'meter_l3'].map((k) => transport.getCached(k));
+            return v.some((x) => x != null) ? { total: v.reduce((a, b) => a + (b ?? 0), 0), l1: v[0] ?? 0, l2: v[1] ?? 0, l3: v[2] ?? 0 } : null;
+          })();
+        if (!grid) throw new Error('MQTT: Netzwerte fehlen oder sind veraltet (Zufluss prüfen)');
         const posImport = cfg.gridPositiveMeans === 'grid_import';
-        // Venus MQTT: positiv = Import -> bei feed_in-Konvention invertieren
+        // positiv = Import -> bei feed_in-Konvention invertieren
         const sign = posImport ? 1 : -1;
-        l1 = ml1 * sign;
-        l2 = ml2 * sign;
-        l3 = ml3 * sign;
-        total = (ml1 + ml2 + ml3) * sign;
+        const ph = (v) => (v == null ? null : v * sign);
+        l1 = ph(grid.l1);
+        l2 = ph(grid.l2);
+        l3 = ph(grid.l3);
+        total = grid.total * sign;
         state.meter = {
-          ok: true, updatedAt: Date.now(), raw: [ml1, ml2, ml3],
+          ok: true, updatedAt: Date.now(), raw: [grid.l1, grid.l2, grid.l3],
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
           error: null,
           // Plan 09-08 Task 3: success path resets backoff (consecutiveErrors=0,
@@ -751,6 +760,30 @@ export function createPoller(ctx) {
         + Number(state.victron.gridImportW || 0)
         - Number(state.victron.gridExportW || 0);
       state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
+    }
+
+    // Hauslast aus der Energiebilanz (Profil-opt-in derive = 'energy_balance',
+    // DVhub-MQTT-Schema): nur als RÜCKFALL, wenn die Quelle (HA/Loxone) keinen
+    // Verbrauch liefert. Last = PV + Bezug − Einspeisung − Batterie (Laden +).
+    // Gilt, wenn PV, Netz und Batterie am selben AC-Knoten gemessen werden.
+    if (cfg.points?.selfConsumptionW?.derive === 'energy_balance'
+      && (state.victron.selfConsumptionW == null || state.victron.errors?.selfConsumptionW)
+      // PV muss in DIESEM Durchlauf gültig gelesen sein: pvTotalW ist immer eine
+      // Zahl (0 bei fehlender PV) und pollPoint behält bei Fehlern den alten
+      // Wert — ohne diese Prüfung würde eine ausgefallene PV als frischer
+      // Verbrauch weiterlaufen (Codex-Review 2026-09-29).
+      && state.meter.ok && state.victron.pvPowerW != null && !state.victron.errors?.pvPowerW
+      && state.victron.batteryPowerW != null && !state.victron.errors?.batteryPowerW) {
+      const derived = Number(state.victron.pvTotalW || 0)
+        + Number(state.victron.gridImportW || 0)
+        - Number(state.victron.gridExportW || 0)
+        - Number(state.victron.batteryPowerW || 0);
+      state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
+      state.victron.selfConsumptionDerived = true;
+      if (state.victron.errors) delete state.victron.errors.selfConsumptionW;
+      if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
+    } else if (state.victron.selfConsumptionDerived && !state.victron.errors?.selfConsumptionW) {
+      state.victron.selfConsumptionDerived = false;
     }
 
     const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));

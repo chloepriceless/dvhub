@@ -1252,6 +1252,62 @@ function wireInstallerPortal() {
   installerPortalTimer = setInterval(refreshInstallerPortal, 30000);
 }
 
+// --- Messwert-Eingang Home Assistant / Loxone -----------------------------------
+let inUiToken = null;
+let inTimer = null;
+const IN_LABELS = {
+  grid_total: 'Netz gesamt (Bezug +)', grid_l1: 'Netz L1', grid_l2: 'Netz L2', grid_l3: 'Netz L3',
+  pv_total: 'PV gesamt', battery_power: 'Batterie (Laden +)', battery_soc: 'SoC',
+  consumption_total: 'Hausverbrauch', consumption_l1: 'Verbrauch L1', consumption_l2: 'Verbrauch L2', consumption_l3: 'Verbrauch L3',
+};
+async function refreshInputPush() {
+  try {
+    const res = await apiFetch('/api/input/status');
+    if (!res.ok) return;
+    const st = await res.json();
+    inUiToken = st.uiToken || inUiToken;
+    setText('inState', st.active
+      ? `✓ aktiv · Topic-Prefix „${st.prefix}/input/…“ · ${st.broker} · Werte gelten ${Math.round((st.staleMaxAgeMs || 0) / 1000)} s`
+      : 'Nicht aktiv — Hersteller-Profil „Universal (DVhub-MQTT-Schema: HA/Loxone)“ wählen.');
+    const box = document.getElementById('inInputs');
+    if (box) {
+      box.replaceChildren();
+      for (const [key, inp] of Object.entries(st.inputs || {})) {
+        const row = document.createElement('div');
+        row.className = 'installer-portal-row';
+        const name = document.createElement('span');
+        name.className = 'installer-portal-name';
+        name.textContent = IN_LABELS[key] || key;
+        const meta = document.createElement('span');
+        meta.className = 'installer-portal-meta';
+        meta.textContent = `${inp.topic} · ${inp.value == null ? 'noch kein Wert' : `${inp.value} (vor ${Math.round(inp.ageMs / 1000)} s${inp.fresh ? '' : ', VERALTET'})`}`;
+        row.append(name, meta);
+        box.appendChild(row);
+      }
+    }
+    setText('inPushUrl', `${location.origin}/api/input/push?grid_w=<v>&pv_w=<v>&battery_w=<v>&soc_pct=<v>&load_w=<v>`);
+    setText('inPushHeader', st.pushHeader || 'X-DVhub-Push-Key');
+    setText('inKeyState', st.pushKeySet ? 'Push-Schlüssel ist gesetzt (aus Sicherheitsgründen nicht erneut anzeigbar).' : 'Noch kein Push-Schlüssel — Loxone-Push ist gesperrt.');
+  } catch { /* best effort */ }
+}
+function wireInputPush() {
+  if (!document.getElementById('inState')) return;
+  document.getElementById('inKeyBtn')?.addEventListener('click', async () => {
+    if (!window.confirm('Neuen Push-Schlüssel erzeugen? Ein vorhandener Schlüssel wird ungültig — Loxone muss den neuen bekommen.')) return;
+    const send = () => apiFetch('/api/input/push-key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uiToken: inUiToken || undefined }),
+    });
+    let res = await send();
+    if (res.status === 403) { await refreshInputPush(); res = await send(); }
+    const j = await res.json().catch(() => ({}));
+    setText('inResult', j.ok ? `Neuer Schlüssel (nur jetzt sichtbar, bitte in Loxone eintragen): ${j.key}` : `Fehler: ${j.error || res.status}`);
+    refreshInputPush();
+  });
+  refreshInputPush();
+  if (inTimer) clearInterval(inTimer);
+  inTimer = setInterval(refreshInputPush, 15000);
+}
+
 // --- Datenspende (COMSYS, RWTH Aachen) -----------------------------------------
 // Opt-in-Kachel: Konto verknüpfen (mit Einwilligung), Quellen wählen, Status +
 // Vorschau der gerade gespendeten Werte. Rein DOM-API (kein innerHTML).
@@ -1491,6 +1547,8 @@ function initToolsPage() {
   wireInstallerPortal();
   // Datenspende-Kachel (COMSYS, RWTH Aachen).
   wireDatenspende();
+  // Messwert-Eingang HA/Loxone.
+  wireInputPush();
 
   // VPN tools
   document.getElementById('vpnToolStart')?.addEventListener('click', () => vpnAction('start'));

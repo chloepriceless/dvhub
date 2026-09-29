@@ -470,6 +470,30 @@
               <p class="svc-meta"><strong>Hinweis:</strong> Die Anlage verbindet sich selbst ausgehend mit dem Portal &mdash; kein Portforwarding und keine Freigabe im Router n&ouml;tig.</p>
             </div>
 
+            <!-- Messwert-Eingang Home Assistant / Loxone -->
+            <div class="config-group" data-accent="teal">
+              <div class="config-group-kicker">Eingang für Home Assistant / Loxone</div>
+              <p class="svc-meta">Liefert Home Assistant oder Loxone die Werte deiner Anlage (PV, Batterie, SoC, Netzübergabepunkt, Hausverbrauch), nimmt DVhub sie hier entgegen &mdash; per <strong>MQTT</strong> (Home Assistant) oder per <strong>HTTP-Push</strong> (Loxone Virtueller Ausgang). Voraussetzung: Hersteller-Profil &bdquo;Universal (DVhub-MQTT-Schema: HA/Loxone)&ldquo;. Anleitung: <code>docs/MQTT-SCHEMA.md</code>.</p>
+              <div class="config-row">
+                <span class="config-row-label">Status</span>
+                <span class="config-row-value api-row-value" id="inState">&mdash;</span>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Eingänge</span>
+                <div id="inInputs" class="installer-portal-list"></div>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Loxone / HTTP-Push</span>
+                <div class="config-row-stack">
+                  <code id="inPushUrl">&mdash;</code>
+                  <small class="config-row-stack-small">Loxone: Virtueller Ausgang &rarr; Befehl mit dieser URL, im Feld &bdquo;HTTP-Header&ldquo; <code id="inPushHeader">X-DVhub-Push-Key</code>: &lt;Schlüssel&gt;. Mehrere Werte in einer URL möglich (&amp;soc_pct=&lt;v&gt; …). Alle 5–10 s senden.</small>
+                  <span class="config-row-value api-row-value" id="inKeyState">&mdash;</span>
+                  <div class="svc-actions-row"><button id="inKeyBtn" class="btn btn-primary btn-small" type="button">Push-Schlüssel erzeugen</button></div>
+                </div>
+              </div>
+              <p class="svc-meta" id="inResult"></p>
+            </div>
+
             <!-- Datenspende (COMSYS, RWTH Aachen) -->
             <div class="config-group" data-accent="teal">
               <div class="config-group-kicker">Datenspende für die Forschung</div>
@@ -914,7 +938,7 @@
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20260720-reserve-visibility"></script>
-  <script src="/tools.js?v=20260928-datenspende-2"></script>
+  <script src="/tools.js?v=20260929-input-push"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>

@@ -83,12 +83,15 @@ Für Anlagen, deren Speicher, PV oder Zähler nur in Home Assistant oder Loxone 
 
 | Topic | Einheit | Pflicht | Bedeutung |
 |---|---|---|---|
-| `dvhub/input/grid/l1_w`, `l2_w`, `l3_w` | W | ja (mind. L1) | Leistung am Einspeisepunkt je Phase, Bezug positiv |
+| `dvhub/input/grid/total_w` | W | ja* | Leistung am Netzübergabepunkt gesamt, **Bezug positiv**, Einspeisung negativ |
+| `dvhub/input/grid/l1_w`, `l2_w`, `l3_w` | W | ja* | alternativ je Phase, Bezug positiv (* `total_w` **oder** Phasen) |
 | `dvhub/input/battery/soc_pct` | % | ja | Ladezustand |
 | `dvhub/input/battery/power_w` | W | ja | Batterieleistung, Laden positiv |
+| `dvhub/input/pv/total_w` | W | empfohlen | PV-Leistung gesamt (ein Wert) — **oder** `dc_w` + `ac_*_w`, nicht beides |
 | `dvhub/input/pv/dc_w` | W | empfohlen | PV-Leistung DC (MPPT) |
 | `dvhub/input/pv/ac_l1_w`, `ac_l2_w`, `ac_l3_w` | W | optional | AC-gekoppelte PV je Phase |
-| `dvhub/input/consumption/l1_w`, `l2_w`, `l3_w` | W | empfohlen | Hausverbrauch je Phase (Lastprognose, EOS) |
+| `dvhub/input/consumption/total_w` | W | optional | Hausverbrauch gesamt (Lastprognose, EOS) |
+| `dvhub/input/consumption/l1_w`, `l2_w`, `l3_w` | W | optional | alternativ je Phase. Fehlt der Verbrauch ganz, leitet DVhub ihn ab: **PV + Bezug − Einspeisung − Batterie (Laden +)** |
 | `dvhub/input/control/grid_setpoint_w`, `min_soc_pct`, `charge_current_a`, `max_discharge_w` | W / % / A / W | optional | Rücklesung der Sollwerte, wie die Anlage sie wirklich fährt (Schreib-Verifikation) |
 
 Regeln:
@@ -96,6 +99,8 @@ Regeln:
 - **Periodisch publizieren, nicht retained.** DVhub verwirft retained Replays bewusst (ein Replay beweist keine Frische). Ein Wert, der älter als `staleMaxAgeMs` ist (Profil: 90 s), gilt als unbekannt; dann hält DVhub die Entladung an, statt mit einem eingefrorenen SoC zu rechnen. Empfehlung: alle 5–10 s.
 - Payload: nackte Zahl (`4200`, `-350.5`). JSON `{"value": 4200}` wird ebenfalls verstanden. `unavailable`, leer oder Text werden ignoriert.
 - Phasen, die es nicht gibt, einfach nicht publizieren (1-phasige Anlage: nur `l1_w`).
+- **Fällt der Zufluss aus** (keine frischen Netzwerte), meldet DVhub den Zähler als *ungültig* (Leitstand: „Netzwerte fehlen oder sind veraltet“) — nicht als 0 W. Die Regelung verlässt sich dann nicht auf erfundene Werte.
+- **Broker:** Ist unter „MQTT-Bridge (Universal)“ keine Broker-URL eingetragen, nutzt DVhub den Broker der DVhub-MQTT-Integration (Integrationen → MQTT: eingebauter Broker oder dort hinterlegte Broker-URL). Home Assistant verbindet sich dann mit DVhub als MQTT-Broker bzw. mit demselben Mosquitto. Ist die MQTT-Integration aus und keine URL eingetragen, läuft der Eingang im **reinen HTTP-Push-Modus** (§2.3).
 
 Home-Assistant-Beispiel (`configuration.yaml`, publiziert alle 10 s ohne retain):
 
@@ -111,9 +116,11 @@ automation:
       - service: mqtt.publish
         data: { topic: dvhub/input/battery/power_w, payload: "{{ states('sensor.akku_leistung') }}", retain: false }
       - service: mqtt.publish
-        data: { topic: dvhub/input/grid/l1_w, payload: "{{ states('sensor.netz_l1') }}", retain: false }
+        data: { topic: dvhub/input/grid/total_w, payload: "{{ states('sensor.netz_leistung') }}", retain: false }
       - service: mqtt.publish
-        data: { topic: dvhub/input/pv/dc_w, payload: "{{ states('sensor.pv_leistung') }}", retain: false }
+        data: { topic: dvhub/input/pv/total_w, payload: "{{ states('sensor.pv_leistung') }}", retain: false }
+      - service: mqtt.publish
+        data: { topic: dvhub/input/consumption/total_w, payload: "{{ states('sensor.hausverbrauch') }}", retain: false }
 ```
 
 ### 2.2 Befehle, die DVhub an die Anlage sendet (`dvhub/control/<ziel>/set`)
@@ -144,6 +151,44 @@ automation:
 Loxone: ein **Virtual Output** mit MQTT-Gateway (z. B. Loxberry MQTT-Plugin) auf `dvhub/control/grid_setpoint_w/set` abonnieren; Lesewerte über dasselbe Gateway nach `dvhub/input/…` publizieren.
 
 ---
+
+### 2.3 HTTP-Push (Loxone Virtueller Ausgang, HA `rest_command`, Skripte)
+
+> Schritt-für-Schritt-Anleitung für Loxone (beide Richtungen, Fehlersuche): [LOXONE.md](LOXONE.md)
+
+Dieselben Werte können statt per MQTT per HTTP an DVhub geschickt werden — ohne MQTT-Broker. Sie landen im selben Zwischenspeicher wie die MQTT-Eingänge (gleiche Frische-Regeln, gleiche Ableitungen).
+
+1. Einstellungen → Status → Kachel **„Eingang für Home Assistant / Loxone“** → **Push-Schlüssel erzeugen** (wird nur einmal angezeigt).
+2. Senden an `http://<dvhub>/api/input/push` — `GET` mit Parametern (Loxone) oder `POST` mit JSON.
+3. **Header `X-DVhub-Push-Key: <Schlüssel>`** ist Pflicht (alternativ `Authorization: Bearer <apiToken>`). Es gibt bewusst keinen LAN-Freibrief: gefälschte SoC-/Netzwerte würden die Batteriesteuerung beeinflussen.
+
+| Feld | Einheit | Bedeutung |
+|---|---|---|
+| `grid_w` (`grid_l1_w` … `grid_l3_w`) | W | Netzübergabepunkt, **Bezug positiv** |
+| `pv_w` | W | PV-Leistung gesamt |
+| `battery_w` | W | Batterie, **Laden positiv** |
+| `soc_pct` | % | Ladezustand (0–100) |
+| `load_w` (`load_l1_w` … `load_l3_w`) | W | Hausverbrauch (optional, sonst abgeleitet) |
+
+Antwort: `{"ok":true,"accepted":[…],"errors":[…]}` — unbekannte Felder und Werte außerhalb der Grenzen stehen in `errors`.
+
+**Loxone:** Virtueller Ausgang, Adresse `http://<dvhub>`; je Wert ein Befehl oder alles in einem, z. B. Befehl bei EIN
+`/api/input/push?grid_w=<v>&pv_w=<v2>&battery_w=<v3>&soc_pct=<v4>&load_w=<v5>`, im Feld **HTTP-Header** `X-DVhub-Push-Key: <Schlüssel>`. Alle 5–10 s senden (Werte gelten 90 s). Sollwerte von DVhub liest Loxone über `GET /api/integration/loxone` (`dvhub_control_*`).
+
+**Home Assistant** (ohne MQTT), `configuration.yaml`:
+
+```yaml
+rest_command:
+  dvhub_push:
+    url: http://<dvhub>/api/input/push
+    method: POST
+    headers: { X-DVhub-Push-Key: !secret dvhub_push_key }
+    content_type: application/json
+    payload: >-
+      {"grid_w": {{ states('sensor.netz_leistung') }}, "pv_w": {{ states('sensor.pv_leistung') }},
+       "battery_w": {{ states('sensor.akku_leistung') }}, "soc_pct": {{ states('sensor.akku_soc') }}}
+```
+(dazu eine Automation mit `time_pattern` alle 10 s, die `rest_command.dvhub_push` aufruft.)
 
 ## 2b. Steuerbefehle AN DVhub: `dvhub/cmd/*` (bidirektional)
 

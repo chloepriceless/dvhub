@@ -7,6 +7,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
+import { PUSH_HEADER as INPUT_PUSH_HEADER, PUSH_FIELDS as INPUT_PUSH_FIELDS, parsePushFields as parseInputPushFields } from './services/input-push.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
@@ -1156,6 +1157,7 @@ export function createApiRoutes(ctx) {
     ['/api/integration/eos', 'integrations'], ['/api/integration/emhass', 'integrations'],
     ['/api/integration/evcc', 'integrations'], ['/api/integration/evcc/eos', 'integrations'],
     ['/api/integrations/health', 'integrations'], ['/api/datenspende/status', 'integrations'],
+    ['/api/input/status', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -2207,10 +2209,10 @@ export function createApiRoutes(ctx) {
     'POST /api/installer/support-tunnel/close': '/api/support/tunnel/close',
   };
 
-  // CSRF-Nonce für die Datenspende-Kachel (gleiches Prinzip wie der
-  // Installateurs-Portal-Nonce): nur per GET lesbar, cross-origin nicht,
+  // CSRF-Nonce für die Einstellungs-Kacheln Datenspende + Eingang HA/Loxone
+  // (gleiches Prinzip wie der Installateurs-Portal-Nonce): nur per GET lesbar, cross-origin nicht,
   // innerhalb der TTL mehrfach nutzbar, danach rotiert er.
-  const datenspendeNonce = (() => {
+  const uiNonce = (() => {
     let token = null;
     let at = 0;
     const TTL = 10 * 60_000;
@@ -2526,6 +2528,39 @@ export function createApiRoutes(ctx) {
     return json(res, 404, { ok: false, error: 'not_found' });
   }
 
+  // ── Messwert-Eingang HA/Loxone (HTTP-Push) ─────────────────────────────
+  async function handleInputPush(req, res, url) {
+    if (!checkRateLimit(req, res)) return;
+    const push = ctx.inputPush;
+    const transport = ctx.transport;
+    if (!push || !transport) return json(res, 503, { ok: false, error: 'input_push_unavailable' });
+    const keyOk = push.verifyKey(String(req.headers[INPUT_PUSH_HEADER] || ''));
+    if (!keyOk && !installerHasValidBearer(req)) {
+      pushLog('input_push_auth_failed', { path: url.pathname }, actorContext(req));
+      return json(res, 401, { ok: false, error: 'push_key_invalid', hint: `Header ${INPUT_PUSH_HEADER} mit dem Push-Schlüssel aus den Einstellungen setzen` });
+    }
+    if (transport.type !== 'mqtt' || typeof transport.ingest !== 'function' || transport.schema !== 'dvhub') {
+      return json(res, 409, { ok: false, error: 'input_push_inactive', hint: 'Hersteller-Profil „Universal (DVhub-MQTT-Schema: HA/Loxone)“ wählen' });
+    }
+    // Im getrennten Web-/Runtime-Betrieb liegt der gepollte Transport im
+    // anderen Prozess — ein Push hier käme nie beim Poller an.
+    if (ctx.processRole === 'web') return json(res, 503, { ok: false, error: 'input_push_split_process' });
+    let fields = {};
+    if (req.method === 'GET') {
+      fields = Object.fromEntries(url.searchParams.entries());
+    } else {
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      fields = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+    }
+    const { values, errors } = parseInputPushFields(fields);
+    if (!values.length) return json(res, 400, { ok: false, error: 'keine_gueltigen_werte', errors });
+    const now = Date.now();
+    const accepted = [];
+    for (const v of values) if (transport.ingest(v.input, v.value, now)) accepted.push(v.field);
+    return json(res, 200, { ok: true, accepted, errors });
+  }
+
   // ── Main request handler ─────────────────────────────────────────────
   async function handleRequest(req, res, url) {
     // T-0080 P1: unauthenticated liveness probe for uptime monitoring
@@ -2674,6 +2709,13 @@ export function createApiRoutes(ctx) {
     // T-INSTALLER-PORTAL: die Installateur-Sektion gate-ved sich pro Endpunkt
     // selbst (Portal-Calls kommen von WAN, Kunden-Calls delegieren intern an
     // checkAuth) und liegt deshalb vor dem globalen Gate unten.
+    // Messwert-Eingang für Loxone/HA per HTTP (services/input-push.js). Vor dem
+    // globalen Gate: prüft selbst — Push-Schlüssel (Header) oder Bearer, KEIN
+    // LAN-Freibrief (gefälschte SoC/Netzwerte würden die Steuerung beeinflussen).
+    if (url.pathname === '/api/input/push' && (req.method === 'POST' || req.method === 'GET')) {
+      return await handleInputPush(req, res, url);
+    }
+
     if (url.pathname === '/api/installer' || url.pathname.startsWith('/api/installer/')) {
       return await handleInstallerRequest(req, res, url);
     }
@@ -4573,6 +4615,34 @@ export function createApiRoutes(ctx) {
     // adapter (ctx.eosAdapter.isAvailable hits EOS /v1/health, 5s timeout). Read
     // model only; the EOS engine config lives in EOSdash. (Operator request
     // 2026-06-13: a dedicated card for her DV-EOS fork, not the stock EOS.)
+    // ── Eingang HA/Loxone: Status + Push-Schlüssel ─────────────────────────
+    if (url.pathname === '/api/input/status' && req.method === 'GET') {
+      const t = ctx.transport;
+      const active = t?.type === 'mqtt' && t?.schema === 'dvhub';
+      return json(res, 200, {
+        ok: true,
+        active,
+        prefix: active ? (getCfg().victron?.mqtt?.topicPrefix || 'dvhub') : null,
+        broker: active ? ({ own: 'eigene Broker-URL', hub: 'Broker der DVhub-MQTT-Integration', 'push-only': 'kein Broker — nur HTTP-Push (für MQTT: MQTT-Integration einschalten oder Broker-URL eintragen)' }[t.brokerMode] || t.brokerMode) : null,
+        staleMaxAgeMs: active ? t.staleMaxAgeMs : null,
+        inputs: active ? t.inputStatus() : null,
+        pushKeySet: !!ctx.inputPush?.hasKey(),
+        pushHeader: INPUT_PUSH_HEADER,
+        pushFields: Object.fromEntries(Object.entries(INPUT_PUSH_FIELDS).map(([k, v]) => [k, v.label])),
+        uiToken: uiNonce.issue(),
+      });
+    }
+    if (url.pathname === '/api/input/push-key' && req.method === 'POST') {
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      if (!(installerHasValidBearer(req) || uiNonce.check(body?.uiToken))) return json(res, 403, { ok: false, error: 'ui_token_required' });
+      if (!ctx.inputPush) return json(res, 503, { ok: false, error: 'input_push_unavailable' });
+      const key = ctx.inputPush.regenerate();
+      pushLog('input_push_key_regenerated', {}, actorContext(req));
+      // Einmalig im Klartext — danach nur noch „gesetzt“ im Status.
+      return json(res, 200, { ok: true, key, header: INPUT_PUSH_HEADER });
+    }
+
     // ── Datenspende (COMSYS, RWTH Aachen) ─────────────────────────────────
     // Einrichtung/Einwilligung, Status, Schalter. Rechte-erweiternde Aufrufe
     // (verknüpfen, einschalten, trennen) brauchen den UI-Nonce aus GET /status
@@ -4582,10 +4652,10 @@ export function createApiRoutes(ctx) {
     if (url.pathname.startsWith('/api/datenspende/')) {
       const ds = ctx.datenspende;
       if (!ds) return json(res, 503, { ok: false, error: 'datenspende_unavailable' });
-      const nonceOk = (body) => installerHasValidBearer(req) || datenspendeNonce.check(body?.uiToken);
+      const nonceOk = (body) => installerHasValidBearer(req) || uiNonce.check(body?.uiToken);
       const nonceFail = () => json(res, 403, { ok: false, error: 'ui_token_required' });
       if (url.pathname === '/api/datenspende/status' && req.method === 'GET') {
-        return json(res, 200, { ok: true, ...ds.status(), uiToken: datenspendeNonce.issue() });
+        return json(res, 200, { ok: true, ...ds.status(), uiToken: uiNonce.issue() });
       }
       if (url.pathname === '/api/datenspende/link' && req.method === 'POST') {
         const body = await readJsonBody(req, res);

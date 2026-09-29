@@ -14,7 +14,12 @@ describe('buildDvhubTopicMaps', () => {
     const venus = buildVenusTopicMaps('x');
     const dv = buildDvhubTopicMaps('dvhub');
     const venusRead = Object.keys(venus.READ_TOPICS).filter(k => !/feedExcessDcPv|dontFeedExcessAcPv/.test(k)).sort();
-    assert.deepEqual(Object.keys(dv.READ_TOPICS).sort(), venusRead);
+    // Zusätzlich NUR im DVhub-Schema: Gesamtwerte für HA/Loxone (Netz, PV, Verbrauch).
+    const DVHUB_ONLY = ['meter_total', 'pvTotalInput', 'selfConsumptionW_total'];
+    assert.deepEqual(Object.keys(dv.READ_TOPICS).filter((k) => !DVHUB_ONLY.includes(k)).sort(), venusRead);
+    assert.equal(dv.READ_TOPICS.meter_total, 'dvhub/input/grid/total_w');
+    assert.equal(dv.READ_TOPICS.pvTotalInput, 'dvhub/input/pv/total_w');
+    assert.equal(dv.READ_TOPICS.selfConsumptionW_total, 'dvhub/input/consumption/total_w');
     assert.deepEqual(Object.keys(dv.WRITE_TOPICS).sort(), ['chargeCurrentA', 'gridSetpointW', 'maxDischargeW', 'minSocPct']);
   });
 

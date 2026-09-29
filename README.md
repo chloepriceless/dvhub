@@ -467,7 +467,7 @@ Die ML- und EOS-Komponenten sind hardware-abhängig zuschaltbar (siehe
 DVhub stellt Daten bereit oder nimmt Optimierungsergebnisse entgegen für:
 
 - **Home Assistant** — JSON-Endpunkt und MQTT-Auto-Discovery (DVhub erscheint als Gerät mit Sensoren; Wh-Zähler als `total_increasing` für das HA-Energy-Dashboard)
-- **Loxone** — Textformat-Endpunkt
+- **Loxone** — Textformat-Endpunkt zum Lesen, HTTP-Push als Messwert-Eingang ([Anleitung](docs/LOXONE.md))
 - **EOS (Akkudoktor)** — Messwerte/Preise raus, Optimierung rein; EOSdash-Proxy unter `/eosdash/`
 - **EMHASS** — Messwerte/Preisarrays raus, Optimierung rein
 - **evcc** — schützt den Hausakku während der EV-Ladung (setzt `MaxDischargePower`-Hold, damit das Fahrzeug aus dem Netz statt aus dem Akku lädt) und zeigt/steuert Ladepunkte im Familien-Dashboard
