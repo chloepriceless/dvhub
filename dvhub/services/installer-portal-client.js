@@ -164,6 +164,12 @@ export function buildCompactStatus(ctx, now = Date.now()) {
     batteryPowerW: v.batteryPowerW ?? null,
     pvTotalW: v.pvTotalW ?? v.pvPowerW ?? null,
     gridSetpointW: v.gridSetpointW ?? null,
+    // Netzübergabepunkt (gemessen) — getrennt, damit das Portal kein
+    // Vorzeichen-Setting kennen muss; ohne gültigen Zähler null.
+    gridImportW: payload.meter?.ok === false ? null : (v.gridImportW ?? null),
+    gridExportW: payload.meter?.ok === false ? null : (v.gridExportW ?? null),
+    // Hausverbrauch (gemessen oder aus der Energiebilanz abgeleitet)
+    loadW: v.selfConsumptionW ?? null,
     minSocPct: v.minSocPct ?? null,
     alarmsActive: alarms.active.length,
     alarmsSeverity: alarms.severity || 0,

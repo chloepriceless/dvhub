@@ -323,6 +323,13 @@ function render() {
       $('.bat', card).textContent = fmtW(s.batteryPowerW);
       $('.pv', card).textContent = fmtW(s.pvTotalW);
       $('.grid', card).textContent = fmtW(s.gridSetpointW);
+      // Netz: Bezug bzw. Einspeisung am Übergabepunkt (ältere DVhub melden es nicht).
+      const gridEl = $('.gridNow', card);
+      const imp = Number(s.gridImportW), exp = Number(s.gridExportW);
+      if (s.gridImportW == null && s.gridExportW == null) { gridEl.textContent = '–'; gridEl.title = ''; }
+      else if (exp > imp) { gridEl.textContent = `↑ ${fmtW(exp - (imp || 0))}`; gridEl.title = 'Einspeisung'; }
+      else { gridEl.textContent = `↓ ${fmtW(imp - (exp || 0))}`; gridEl.title = 'Bezug'; }
+      $('.load', card).textContent = fmtW(s.loadW);
       $('.minsoc', card).textContent = fmtPct(s.minSocPct);
       const alarmP = $('.alarms', card);
       const n = Number(s.alarmsActive) || 0;

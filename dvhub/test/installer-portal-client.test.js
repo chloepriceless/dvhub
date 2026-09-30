@@ -586,3 +586,12 @@ test('Monatswechsel offline: letzter Tag des Vormonats bekommt den (vollständig
     [['2026-09-30', '2026-09'], ['2026-10-01', null], ['2026-10-02', '2026-10']]);
   assert.ok(asked.includes('month:2026-09-01'));
 });
+
+test('buildCompactStatus: Netzbezug/-einspeisung und Hausverbrauch; ungültiger Zähler → null', () => {
+  const dir = tmpDir();
+  const ctx = { ...ctxFor(dir), getCachedRuntimeStatusPayload: () => ({ meter: { ok: true }, victron: { gridImportW: 0, gridExportW: 128, selfConsumptionW: 1314, gridSetpointW: -100 } }) };
+  const s = buildCompactStatus(ctx, Date.now());
+  assert.deepEqual([s.gridImportW, s.gridExportW, s.loadW, s.gridSetpointW], [0, 128, 1314, -100]);
+  const bad = buildCompactStatus({ ...ctx, getCachedRuntimeStatusPayload: () => ({ meter: { ok: false }, victron: { gridImportW: 0, gridExportW: 0 } }) }, Date.now());
+  assert.deepEqual([bad.gridImportW, bad.gridExportW], [null, null], 'kein gültiger Zähler ist nicht „0 W“');
+});
