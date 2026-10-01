@@ -719,40 +719,29 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     };
   }
 
+  // Fehlende Preise je 15-min-Slot — vollständig in SQL (2026-10-01): früher
+  // holte das alle Zeitstempel der Mess- UND Preisreihen nach DVhub (ohne
+  // Zeitgrenze Millionen Zeilen, mehrere 100 MB Speicher) und verglich in JS.
+  // Jetzt liefert die Datenbank nur die Slots mit Messdaten, aber ohne Preis.
   async function listMissingPriceBuckets({ start = null, end = null, seriesKeys = ['grid_import_w', 'grid_export_w', 'grid_total_w', 'pv_total_w', 'battery_power_w'] } = {}) {
     const keys = Array.isArray(seriesKeys) && seriesKeys.length ? seriesKeys : ['grid_import_w', 'grid_export_w', 'grid_total_w', 'pv_total_w', 'battery_power_w'];
-
-    // Telemetry query: union both raw samples and 15-min aggregated slots so
-    // the price-backfill picks up coverage gaps even for periods where only
-    // energy_slots_15m exists (long-term aggregates) without per-minute samples.
-    const telemetryParams = [...keys];
-    let telemetryIdx = keys.length;
-    let tsWhere = '';
-    let slotWhere = '';
-    if (start) { telemetryIdx++; const p = `$${telemetryIdx}`; tsWhere += ` AND ts_utc >= ${p}`; slotWhere += ` AND slot_start_utc >= ${p}`; telemetryParams.push(isoTimestamp(start)); }
-    if (end) { telemetryIdx++; const p = `$${telemetryIdx}`; tsWhere += ` AND ts_utc < ${p}`; slotWhere += ` AND slot_start_utc < ${p}`; telemetryParams.push(isoTimestamp(end)); }
-    const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
-    const telemetryRows = (await pool.query(
-      `SELECT ts_utc FROM timeseries_samples WHERE series_key IN (${placeholders})${tsWhere}`
-      + ` UNION `
-      + `SELECT slot_start_utc AS ts_utc FROM energy_slots_15m WHERE series_key IN (${placeholders})${slotWhere}`,
-      telemetryParams
-    )).rows;
-
-    // Price query: separate params with own indices
-    const priceParams = [];
-    let priceIdx = 0;
-    let priceWhere = '';
-    if (start) { priceIdx++; priceWhere += ` AND ts_utc >= $${priceIdx}`; priceParams.push(isoTimestamp(start)); }
-    if (end) { priceIdx++; priceWhere += ` AND ts_utc < $${priceIdx}`; priceParams.push(isoTimestamp(end)); }
-    const priceQuery = priceParams.length
-      ? `SELECT ts_utc FROM timeseries_samples WHERE series_key = 'price_ct_kwh'${priceWhere}`
-      : `SELECT ts_utc FROM timeseries_samples WHERE series_key = 'price_ct_kwh'`;
-    const priceRows = (await pool.query(priceQuery, priceParams)).rows;
-
-    const telemetryBuckets = new Set(telemetryRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
-    const pricedBuckets = new Set(priceRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
-    return [...telemetryBuckets].filter((ts) => !pricedBuckets.has(ts)).sort();
+    const bucket = `${DEFAULT_PRICE_BUCKET_SECONDS} seconds`;
+    const origin = "TIMESTAMPTZ '2000-01-01 00:00:00+00'";
+    const params = [keys, start ? isoTimestamp(start) : null, end ? isoTimestamp(end) : null];
+    const range = (col) => `($2::timestamptz IS NULL OR ${col} >= $2) AND ($3::timestamptz IS NULL OR ${col} < $3)`;
+    const res = await pool.query(`
+      WITH measured AS (
+        SELECT DISTINCT date_bin('${bucket}', ts_utc, ${origin}) AS b
+          FROM timeseries_samples WHERE series_key = ANY($1::text[]) AND ${range('ts_utc')}
+        UNION
+        SELECT DISTINCT date_bin('${bucket}', slot_start_utc, ${origin})
+          FROM energy_slots_15m WHERE series_key = ANY($1::text[]) AND ${range('slot_start_utc')}
+      ), priced AS (
+        SELECT DISTINCT date_bin('${bucket}', ts_utc, ${origin}) AS b
+          FROM timeseries_samples WHERE series_key = 'price_ct_kwh' AND ${range('ts_utc')}
+      )
+      SELECT m.b FROM measured m LEFT JOIN priced p ON p.b = m.b WHERE p.b IS NULL ORDER BY m.b`, params);
+    return (res.rows || []).map((r) => bucketIso(r.b, DEFAULT_PRICE_BUCKET_SECONDS));
   }
 
   async function listAggregatedEnergySlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS, scopes = null }) {
