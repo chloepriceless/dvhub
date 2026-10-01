@@ -13,6 +13,18 @@ import path from 'node:path';
 import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from './services/log.js';
 
 const execFileAsync = promisify(execFile);
+
+// Status-Prüfungen OHNE sudo (2026-10-01): der Watchdog lief alle 10 s mit
+// `sudo pkill -0` + `sudo ip link show` — jede sudo-Sitzung schreibt mehrere
+// Zeilen ins Journal (prod: ~25 Zeilen/min, SD-Karte). Beides ist für jeden
+// Benutzer lesbar: /sys/class/net/<if> und /proc/<pid>/comm.
+export function interfaceExists(iface, fsImpl = fs) {
+  return /^[A-Za-z0-9_.-]{1,15}$/.test(String(iface || '')) && fsImpl.existsSync(`/sys/class/net/${iface}`);
+}
+export function processIsOpenvpn(pid, fsImpl = fs) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;   // unbekannt → Aufrufer prüft anders
+  try { return fsImpl.readFileSync(`/proc/${pid}/comm`, 'utf8').trim() === 'openvpn'; } catch { return false; }
+}
 const fsPromises = fs.promises;
 
 const CONFIG_DIR = process.env.DV_APP_CONFIG
@@ -707,7 +719,7 @@ export function createVpnManager(ctx) {
 
     // read tunnel IP
     try {
-      const { stdout } = await execFileAsync('sudo', ['ip', 'addr', 'show', iface]);
+      const { stdout } = await execFileAsync('ip', ['addr', 'show', iface]);
       const m = stdout.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
       if (m) state.vpn.tunIp = m[1];
     } catch { /* ignore */ }
@@ -735,10 +747,7 @@ export function createVpnManager(ctx) {
   async function waitForInterface(iface, timeoutMs) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      try {
-        const { stdout } = await execFileAsync('sudo', ['ip', 'link', 'show', iface]);
-        if (stdout.includes(iface)) return true;
-      } catch { /* not yet */ }
+      if (interfaceExists(iface)) return true;
       await sleep(1000);
     }
     return false;
@@ -875,9 +884,11 @@ export function createVpnManager(ctx) {
     // and non-zero otherwise — same semantics as `kill -0 <pid>` without
     // needing the generic `kill -0 *` sudoers rule.
     if (state.vpn.protocol === 'openvpn' && openvpnPid) {
-      try {
-        await execFileAsync('sudo', ['pkill', '-0', '-x', 'openvpn']);
-      } catch {
+      let alive = processIsOpenvpn(openvpnPid);
+      if (alive === null) {
+        try { await execFileAsync('sudo', ['pkill', '-0', '-x', 'openvpn']); alive = true; } catch { alive = false; }
+      }
+      if (!alive) {
         pushLog('vpn_watchdog_pid_dead', {});
         scheduleReconnect();
         return;
@@ -885,9 +896,7 @@ export function createVpnManager(ctx) {
     }
 
     // 2. interface exists
-    try {
-      await execFileAsync('sudo', ['ip', 'link', 'show', iface]);
-    } catch {
+    if (!interfaceExists(iface)) {
       pushLog('vpn_watchdog_tun_missing', { interface: iface });
       scheduleReconnect();
       return;

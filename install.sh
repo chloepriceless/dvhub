@@ -515,6 +515,8 @@ chmod 700 "$CONFIG_DIR/vpn/profiles"
 # PostgreSQL: Datenbank und User anlegen falls noch nicht vorhanden
 if command -v psql >/dev/null 2>&1; then
   systemctl enable --now postgresql 2>/dev/null || true
+  # Schreibarm (SD-Karte/eMMC): weniger fsync/Checkpoints — pg-write-tuning.sh.
+  [[ -f "$INSTALL_DIR/pg-write-tuning.sh" ]] && bash "$INSTALL_DIR/pg-write-tuning.sh" || true
   if ! su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='dvhub'\"" 2>/dev/null | grep -q 1; then
     su postgres -c "createuser dvhub" 2>/dev/null || true
   fi

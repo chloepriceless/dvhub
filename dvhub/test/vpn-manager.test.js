@@ -436,3 +436,17 @@ test('startTunnel sets error when config file missing (ipsec)', async () => {
   assert.ok(ctx.state.vpn.lastError.includes('not found'));
   assert.ok(ctx.logs.some(l => l.event === 'vpn_start_error'));
 });
+
+import { interfaceExists, processIsOpenvpn } from '../vpn-manager.js';
+
+test('VPN-Watchdog prüft ohne sudo über /sys und /proc', () => {
+  const files = { '/sys/class/net/tun0': '', '/proc/42/comm': 'openvpn\n', '/proc/43/comm': 'bash\n' };
+  const fsImpl = { existsSync: (p) => p in files, readFileSync: (p) => { if (!(p in files)) throw new Error('ENOENT'); return files[p]; } };
+  assert.equal(interfaceExists('tun0', fsImpl), true);
+  assert.equal(interfaceExists('tun1', fsImpl), false);
+  assert.equal(interfaceExists('../etc', fsImpl), false, 'kein Pfad-Trick');
+  assert.equal(processIsOpenvpn(42, fsImpl), true);
+  assert.equal(processIsOpenvpn(43, fsImpl), false, 'PID gehört jetzt einem anderen Prozess');
+  assert.equal(processIsOpenvpn(44, fsImpl), false);
+  assert.equal(processIsOpenvpn(null, fsImpl), null, 'PID unbekannt → Aufrufer prüft anders');
+});

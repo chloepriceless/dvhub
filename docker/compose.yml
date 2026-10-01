@@ -57,7 +57,12 @@ services:
               "-c", "max_parallel_workers_per_gather=0",
               "-c", "work_mem=2MB",
               "-c", "autovacuum_max_workers=2",
-              "-c", "timescaledb.max_background_workers=4"]
+              "-c", "timescaledb.max_background_workers=4",
+              # Schreibarm (SD-Karte/eMMC, wie pg-write-tuning.sh nativ).
+              "-c", "synchronous_commit=off",
+              "-c", "wal_writer_delay=1s",
+              "-c", "checkpoint_timeout=15min",
+              "-c", "wal_compression=on"]
     volumes:
       - dvhub-db:/var/lib/postgresql/data
     # Erststart der DB (siehe configs unten) — steckt in dieser Datei, damit die

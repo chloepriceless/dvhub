@@ -402,6 +402,10 @@ fi
 # COMMUNITY-Edition schon aktiv ist (prod = No-op); eine Apache-Box oder eine Box
 # ganz ohne Extension triggert die (Re-)Provisionierung, die dann auf Community
 # hochzieht (ALTER EXTENSION UPDATE). NON-FATAL durchgängig.
+# PostgreSQL schreibarm (2026-10-01, SD-Karte): idempotent, nur Reload.
+if [[ -f "$INSTALL_DIR/pg-write-tuning.sh" ]] && command -v psql >/dev/null 2>&1; then
+  bash "$INSTALL_DIR/pg-write-tuning.sh" || true
+fi
 if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 2>&1; then
   TS_ACTIVE=0
   # `su postgres` (NON-login): a login shell would prepend the postgres user's MOTD
