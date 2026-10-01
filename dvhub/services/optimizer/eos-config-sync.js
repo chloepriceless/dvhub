@@ -74,6 +74,7 @@ function isGridArbitrageLicensed(cfg) {
  */
 
 export const EOS_MEASUREMENT_HISTORIC_HOURS = 48;
+export const EOS_AUTOSAVE_INTERVAL_SEC = 600;
 export function buildEosBatteries(cfg, opts = {}) {
   const opt = cfg?.optimizer || {};
   const eff = splitRoundTripEff(opt.roundTripEfficiency);
@@ -642,6 +643,10 @@ export function createEosConfigSync(ctx) {
       // 14 MB/min ≈ 20 GB/Tag. DVhub braucht dort nur den frischen SoC (≤ 5 min)
       // und den Tageszähler der Geräte → 48 h reichen, die Datei bleibt klein.
       { section: 'measurement/historic_hours', body: EOS_MEASUREMENT_HISTORIC_HOURS },
+      // EOS speichert Messwerte + Prognosen alle autosave_interval_sec komplett
+      // (Vorgabe 10 s → auf prod 12 MB/min). DVhub schickt beides laufend neu
+      // (SoC alle 2 min, Prognosen alle 15 min) — 10 min reichen.
+      { section: 'database/autosave_interval_sec', body: EOS_AUTOSAVE_INTERVAL_SEC },
     ];
     // In spot feed-in mode, point feedintariff at FeedInTariffImport so EOS
     // values grid export at the spot price the bridge pushes (operator request
