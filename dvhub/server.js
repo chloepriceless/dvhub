@@ -137,7 +137,8 @@ import { createEosEvccBridge } from './services/optimizer/eos-evcc-bridge.js';
 import { createEosDeviceBridge } from './services/optimizer/eos-device-bridge.js';
 import { createEvChargingProbe } from './services/wallbox/ev-charging.js';
 import { createChargerStatusPoller } from './services/wallbox/charger-status.js';
-import { createEosSolutionCache } from './services/optimizer/eos-solution-cache.js';
+import { createEosMonitor } from './services/optimizer/eos-monitor.js';
+import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
 import { createOpenEvseAdapter, createGoeAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
@@ -1248,17 +1249,22 @@ const eosAdapterInspector = createEosAdapterForInspector(ctx, { timeoutMs: 5000 
 // live EOS reachability check (e.g. /api/integrations/dveos). Without this,
 // ctx.eosAdapter was undefined and the DV-EOS card always showed "nicht erreichbar".
 ctx.eosAdapter = eosAdapterInspector;
-// EOS-Lösung für die E-Auto-Kachel (/api/ev): NUR lesen (kein Prognose-Push wie
-// im Inspector) und den letzten guten Plan bis 30 min weiterreichen. EOS mit
-// 1 Kern antwortet beim Rechnen oft > 5 s — vorher stand dann „kein Plan:
-// eos_off“, obwohl EOS lief (prod 2026-10-01).
-ctx.eosSolutionCache = createEosSolutionCache({ fetchSolution: () => eosAdapterInspector.getOptimizationSolution() });
+// Zentraler EOS-Monitor: EIN Punkt für „läuft EOS?“ (up/busy/down) und den
+// letzten Plan. Kachel, DV-EOS-Karte, Inspector, Neustart-Wache und die
+// Bridges lesen hier, statt EOS jeweils selbst zu fragen (eos-monitor.js).
+const eosAdapterMonitor = createEosAdapterForInspector(ctx, { timeoutMs: 15_000 });
+ctx.eosMonitor = createEosMonitor({
+  isEnabled: () => resolveEosProxy(ctx.getCfg()).enabled,
+  getHealth: () => eosAdapterMonitor.getHealth(),
+  fetchSolution: (rows) => eosAdapterMonitor.getOptimizationSolution(rows),
+});
+ctx.eosMonitor.start();
 // EOS → evcc: reicht EOS' E-Auto-Plan (Laden/Stopp + Ladestrom) an den
 // gewaehlten evcc-Ladepunkt weiter. Liest die Loesung ueber den Inspector-
 // Adapter (kurzes Timeout — ein haengendes EOS blockiert den Takt nicht lange).
 const eosEvccBridge = createEosEvccBridge({
   getCfg: () => ctx.getCfg(),
-  getSolution: (limit) => eosAdapterInspector.getOptimizationSolution(limit),
+  getSolution: () => ctx.eosMonitor.latestSolution(),
   // Wohin der Befehl geht: evcc (Standard) oder direkt an OpenEVSE / go-e.
   getCharger: (cfg, bc) => {
     if (bc.charger === 'openevse') return createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse);
@@ -1300,7 +1306,7 @@ const deviceActuator = createDeviceActuator({
 ctx.deviceActuator = deviceActuator;
 const eosDeviceBridge = createEosDeviceBridge({
   getCfg: () => ctx.getCfg(),
-  getSolution: (limit) => eosAdapterInspector.getOptimizationSolution(limit),
+  getSolution: () => ctx.eosMonitor.latestSolution(),
   actuator: deviceActuator,
   state,
   pushLog: (event, data) => ctx.pushLog?.(event, data),
@@ -1320,6 +1326,7 @@ const inspector = createInspector(ctx, {
   store: forecast.store,
   mlService,
   eosAdapter: eosAdapterInspector,
+  eosMonitor: ctx.eosMonitor,
   forecastService: forecast,
 });
 ctx.inspector = inspector;

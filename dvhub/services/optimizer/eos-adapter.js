@@ -715,6 +715,11 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    *
    * @returns {Promise<boolean>}
    */
+  /** Rohantwort von /v1/health ({ ok, data:{status,pid,version} } | { ok:false, error }). */
+  function getHealth() {
+    return httpRequest('GET', '/v1/health');
+  }
+
   async function isAvailable() {
     // EOS Akkudoktor FastAPI exposes /v1/health (returns {status:"alive",...}).
     // /v1/ returns 404 on EOS v0.3.0 (post-starlette<1.0 pin from Phase 18).
@@ -745,5 +750,5 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     return httpRequest('PUT', '/v1/config/ems/interval', v);
   }
 
-  return { pushForecast, pullSchedule, pullGridSetpoints, getOptimizationSolution, setEmsIntervalSec, isAvailable };
+  return { pushForecast, pullSchedule, pullGridSetpoints, getOptimizationSolution, setEmsIntervalSec, isAvailable, getHealth };
 }

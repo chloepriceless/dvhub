@@ -1126,6 +1126,7 @@ export function createApiRoutes(ctx) {
     '/api/datenspende/status',
     '/api/input/status',
     '/api/ortsnetz/status',
+    '/api/eos/status',
   ]);
 
   // Go-Live-Review 2026-06-10: map each LAN-safe GET endpoint to a coarse group
@@ -1139,7 +1140,7 @@ export function createApiRoutes(ctx) {
     ['/api/status', 'status'], ['/api/costs', 'status'], ['/api/metrics', 'status'],
     ['/dv/control-value', 'status'], ['/api/config', 'status'],
     ['/api/config/export', 'status'], ['/api/discovery/systems', 'status'],
-    ['/api/optimizer/status', 'status'], ['/api/ev', 'status'],
+    ['/api/optimizer/status', 'status'], ['/api/ev', 'status'], ['/api/eos/status', 'status'],
     // dashboard — family kiosk (token-less tablet)
     ['/api/family/status', 'dashboard'], ['/api/family/presence', 'dashboard'],
     ['/api/family/tile-history', 'dashboard'], ['/api/family/tesla-history', 'dashboard'],
@@ -4866,7 +4867,8 @@ export function createApiRoutes(ctx) {
       const primarySource = opt.primarySource || 'internal';
       const enabled = resolveEosProxy(getCfg()).enabled;
       let reachable = false;
-      if (enabled) {
+      if (enabled && ctx.eosMonitor) reachable = ctx.eosMonitor.isUp();
+      else if (enabled) {
         try { reachable = !!(await ctx.eosAdapter?.isAvailable?.()); }
         catch { reachable = false; }
       }
@@ -4877,8 +4879,17 @@ export function createApiRoutes(ctx) {
         active: enabled && (primarySource === 'eos' || primarySource === 'best'),
         url: (opt.eosProxy && opt.eosProxy.url) || '',
         reachable,
+        monitor: ctx.eosMonitor?.status?.() ?? null,
         eosdashUrl: '/eosdash/'
       });
+    }
+
+    // Zentraler EOS-Zustand (eos-monitor.js): up/busy/down, PID, Version,
+    // letzter Plan — Momentaufnahme ohne eigenen EOS-Aufruf.
+    if (url.pathname === '/api/eos/status' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.eosMonitor) return json(res, 200, { ok: true, status: 'disabled', enabled: false });
+      return json(res, 200, { ok: true, ...ctx.eosMonitor.status() });
     }
 
     // Editable EOS endpoint (2026-07-17): the drawer may point DVhub at ANY
@@ -5154,9 +5165,9 @@ export function createApiRoutes(ctx) {
         try {
           const depMs = Date.parse(resolved.departureAt || '');
           const toMs = Math.min(nowMs + 48 * 3600_000, Math.max(nowMs + 24 * 3600_000, Number.isFinite(depMs) ? depMs + 3600_000 : 0));
-          const cached = ctx.eosSolutionCache ? await ctx.eosSolutionCache.get() : null;
-          const eos = cached
-            ? { output: cached.solution, reason: cached.reason }
+          // Zentraler EOS-Monitor: letzter Plan ohne eigenen EOS-Aufruf.
+          const eos = ctx.eosMonitor
+            ? { output: await ctx.eosMonitor.latestSolution(), reason: ctx.eosMonitor.isUp() ? 'noch kein EOS-Plan' : 'EOS antwortet nicht' }
             : await ctx.inspector.getEos({ from: new Date(nowMs - 15 * 60_000).toISOString(), to: new Date(toMs).toISOString() });
           const out = eos?.output;
           if (out && Array.isArray(out.rows)) {

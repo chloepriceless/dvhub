@@ -32,7 +32,7 @@ export function createInspector(ctx, deps = {}) {
   const pushLog = ctx && typeof ctx.pushLog === 'function' ? ctx.pushLog : () => {};
   const state = ctx && ctx.state ? ctx.state : null;
   const getCfg = ctx && typeof ctx.getCfg === 'function' ? ctx.getCfg : () => ({});
-  const { store, mlService, eosAdapter, forecastService } = deps;
+  const { store, mlService, eosAdapter, eosMonitor, forecastService } = deps;
 
   // Plan 19-04 (B3): single-slot ML-shadow cache. Keyed on forecastVersion +
   // 60s TTL so two consecutive 30s polls share the same Python spawn. Scoped
@@ -504,7 +504,9 @@ export function createInspector(ctx, deps = {}) {
 
     let available = false;
     try {
-      available = await eosAdapter.isAvailable();
+      // Zentraler Monitor (server.js): kein eigener Health-Aufruf, und „rechnet
+      // gerade“ (busy) gilt als erreichbar.
+      available = eosMonitor ? eosMonitor.isUp() : await eosAdapter.isAvailable();
     } catch (e) {
       pushLog('inspector_eos_isavailable_error', { error: e && e.message ? e.message : String(e) });
       return { available: false, reason: 'eos_off', window: { from, to } };

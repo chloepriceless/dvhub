@@ -724,7 +724,8 @@ export function createEosForecastBridge(ctx) {
       const cfg = getCfg();
       if (cfg?.optimizer?.eosProxy?.enabled === false) return;
       const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
-      const pid = await readEosPid(baseUrl);
+      // PID vom zentralen EOS-Monitor (kein eigener Health-Aufruf), sonst selbst fragen.
+      const pid = ctx.eosMonitor ? ctx.eosMonitor.status().pid : await readEosPid(baseUrl);
       if (pid === null) return; // EOS unreachable / still starting — decide next poll
       if (lastEosPid !== null && pid !== lastEosPid) {
         const lastEosPidBefore = lastEosPid;

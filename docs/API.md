@@ -192,6 +192,7 @@ Spalte **Zugang** in den Tabellen:
 | POST | `/api/integration/eos/apply` | Token | EOS-Ergebnis übernehmen |
 | POST | `/api/eos/sync-from-dvhub` | Token | EOS-Einstellungen aus DVhub übernehmen (Batterie, Standort, …) |
 | GET / POST | `/api/integrations/dveos` | Token | Verbindung zur EOS-Instanz lesen / setzen |
+| GET | `/api/eos/status` | LAN·status | Zentraler EOS-Zustand: `status` (`up` / `busy` = rechnet gerade / `down` / `disabled` / `unknown`), `pid`, `version`, `lastOkAt`, `lastError`, Neustarts, Zeit des letzten Plans. Momentaufnahme, fragt EOS nicht selbst |
 | GET | `/api/integration/emhass` | LAN·integrations | Messwerte + Preisreihen für EMHASS |
 | POST | `/api/integration/emhass/apply` | Token | EMHASS-Ergebnis übernehmen |
 
