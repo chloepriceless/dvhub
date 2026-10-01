@@ -150,6 +150,10 @@ export function createEosCapabilityProbe({ request, ttlMs = 5 * 60 * 1000 } = {}
     if (cached && cached.baseUrl === baseUrl && (now - cached.at) < ttlMs) return cached.caps;
     const cfgRes = await request(baseUrl, 'GET', '/v1/config');
     if (!cfgRes || !cfgRes.ok) {
+      // EOS rechnet gerade (ein Kern) und antwortet nicht rechtzeitig: die
+      // zuletzt erkannte Fassung gilt weiter. Sonst ginge das E-Auto als
+      // Liste raus und 0.4 lehnte es mit 400 ab (prod 2026-10-01).
+      if (cached && cached.baseUrl === baseUrl) return cached.caps;
       return detectEosCapabilities(null, {});
     }
     let version = null;

@@ -29,3 +29,20 @@ test('eos-solution-cache: Fehler wirft nicht', async () => {
   const c = createEosSolutionCache({ fetchSolution: async () => { throw new Error('timeout'); } });
   assert.equal((await c.get()).reason, 'EOS antwortet nicht');
 });
+
+import { createEosCapabilityProbe } from '../services/optimizer/eos-capabilities.js';
+
+test('capability-probe: Timeout nach erfolgreicher Erkennung → gemerkte Fassung (Geräte bleiben Abbildung)', async () => {
+  let ok = true;
+  const probe = createEosCapabilityProbe({
+    ttlMs: 0,
+    request: async (_b, _m, path) => (!ok ? { ok: false, error: 'timeout' }
+      : path === '/v1/config' ? { ok: true, data: { devices: { batteries: { battery1: {} }, electric_vehicles: {} }, optimization: { genetic: { interval_sec: 900 } } } }
+        : { ok: true, data: { version: '0.4.0' } }),
+  });
+  assert.equal((await probe.get('http://x')).supports.deviceMap, true);
+  ok = false;
+  const caps = await probe.get('http://x');
+  assert.equal(caps.reachable, true);
+  assert.equal(caps.supports.deviceMap, true);
+});

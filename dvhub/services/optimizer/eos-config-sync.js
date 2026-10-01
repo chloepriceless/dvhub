@@ -447,6 +447,12 @@ export function createEosConfigSync(ctx) {
     // Ab #1330 führt EOS Geräte als Abbildung nach device_id. Ein Listen-PUT
     // scheitert dort mit 400 ("Input should be a valid dictionary") — gemessen
     // am 20.09.2026 gegen v0.4.0rc1 — und EOS behält sein Bootstrap-Gerät.
+    // EOS antwortete beim Erkennen nicht (rechnet, Timeout) und es gibt keine
+    // gemerkte Fassung: lieber diesen Lauf auslassen als Geräte in der falschen
+    // Schreibweise schicken (0.4 lehnt Listen mit 400 ab). Nächster Lauf holt es nach.
+    if (!caps.reachable) {
+      return { ok: false, applied: [], errors: { probe: 'eos_unreachable' }, skipped: 'eos_unreachable' };
+    }
     const asDevices = (list) => (caps.supports.deviceMap ? devicesAsMap(list) : list);
 
     // Single-floor model (2026-06-16): EOS min_soc = DVhub's ONE discharge floor.
@@ -767,6 +773,9 @@ export function createEosConfigSync(ctx) {
     if (!cfg?.optimizer?.eosProxy?.enabled) return { ok: true, skipped: 'eosProxy.enabled=false' };
     if (cfg?.optimizer?.eosOptimizeEv !== true) return { ok: true, skipped: 'eosOptimizeEv=false' };
     const caps = await capabilityProbe.get(baseUrl);
+    // Fassung unbekannt (EOS antwortet nicht): nichts schreiben — die
+    // Schreibweise der Geräte hängt an der Fassung. Der nächste Lauf holt es nach.
+    if (!caps.reachable) return { ok: false, skipped: 'eos_unreachable' };
     // Kein SoC auf 0.4: Fahrzeug nicht anfassen — der volle Abgleich hat es
     // bereits abgemeldet, und ein Anmelden hier legte EOS lahm.
     if (!decideEvRegistration(cfg, caps).register) return { ok: true, skipped: 'no ev soc' };
