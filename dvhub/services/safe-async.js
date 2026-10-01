@@ -29,6 +29,8 @@
 let _logger = null;
 let _pushLog = null;
 
+import { trackJob } from './memory-watch.js';
+
 export function configureSafeAsync({ logger, pushLog }) {
   if (!logger || typeof logger.error !== 'function') {
     throw new TypeError('configureSafeAsync requires a logger with .error (got: ' + typeof logger + ')');
@@ -60,6 +62,7 @@ export function safeInterval(name, fn, ms) {
   if (!Number.isFinite(ms) || ms <= 0) throw new RangeError('safeInterval requires positive ms');
 
   const handle = setInterval(async () => {
+    const done = trackJob(name);   // für memory-watch.js: was lief bei einer Speicherspitze?
     try {
       const result = fn();
       // Await Promise return without unwrapping non-Promise return — keeps
@@ -73,6 +76,8 @@ export function safeInterval(name, fn, ms) {
         message: String(err?.message || err),
         stack: String(err?.stack || '').slice(0, 500)
       });
+    } finally {
+      done();
     }
   }, ms);
 

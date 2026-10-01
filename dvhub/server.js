@@ -37,6 +37,7 @@ import { createInverterEfficiencyDaily } from './services/inverter-efficiency/da
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
 import { createLogRetention } from './services/log-retention.js';
 import { applyDbTuning, dbBudgetMb } from './services/db-tuning.js';
+import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
@@ -1611,14 +1612,26 @@ function scheduleServiceRestart() {
 // the proxy. Lets us iframe EOSdash from a DVhub Settings tab.
 const eosdashProxy = createEosdashProxy(ctx);
 
+// Speicher-Wächter: protokolliert Speichersprünge mit dem, was gerade lief.
+ctx.memoryWatch = createMemoryWatch({ pushLog });
+ctx.memoryWatch.start();
+
 const web = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     const reqStart = Date.now();
+    const reqDone = trackRequest(req.method, url.pathname);
+    res.on('close', reqDone);
     res.on('finish', () => {
+      reqDone();
       const ms = Date.now() - reqStart;
-      console.log(`${req.method} ${url.pathname} ${res.statusCode} ${ms}ms`);
+      // Ins Journal nur, was zählt (SD-Karte: vorher jede UI-Abfrage, ~27
+      // Zeilen/min): Änderungen, Fehler, langsame Anfragen. Alles mit
+      // DVHUB_LOG_REQUESTS=1.
+      if (req.method !== 'GET' || res.statusCode >= 400 || ms >= 2000 || process.env.DVHUB_LOG_REQUESTS === '1') {
+        console.log(`${req.method} ${url.pathname} ${res.statusCode} ${ms}ms`);
+      }
     });
 
     // Plan 08-04 Task 2 Step 5: CORS allowlist + Host-header guard.
