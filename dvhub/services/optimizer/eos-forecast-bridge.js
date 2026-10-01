@@ -65,6 +65,34 @@ function slotsToTimeMap(slots) {
 }
 
 /**
+ * Lastprognose bis zum Beginn der laufenden Stunde (minus padHours) zurück
+ * auffüllen (2026-10-02). Die Prognose beginnt erst zur NÄCHSTEN vollen Stunde;
+ * EOS braucht aber Last ab dem laufenden Slot, sonst bricht jeder Lauf mit
+ * „Missing or invalid load within the control horizon“ ab. Früher füllte EOS
+ * die Lücke aus älteren, auf Platte gespeicherten Pushes — seit dem
+ * Autosave-aus (SD-Schonung) fehlte nach jedem EOS-Neustart bis zu 1 h der Plan.
+ * Aufgefüllt wird mit dem ersten Prognosewert (für die laufende Stunde gut genug).
+ */
+export function padSlotsBackToNow(slots, nowMs, { padHours = 2 } = {}) {
+  if (!Array.isArray(slots) || !slots.length) return slots || [];
+  const HOUR = 3_600_000;
+  const startOf = (sl) => {
+    const v = sl?.start ?? sl?.ts;
+    const t = v instanceof Date ? v.getTime() : (typeof v === 'number' ? v : Date.parse(v));
+    return Number.isFinite(t) ? t : null;
+  };
+  const first = slots[0];
+  const firstMs = startOf(first);
+  if (firstMs == null) return slots;
+  const target = Math.floor(nowMs / HOUR) * HOUR - padHours * HOUR;
+  const pad = [];
+  for (let t = firstMs - HOUR; t >= target; t -= HOUR) {
+    pad.unshift({ ...first, start: new Date(t).toISOString(), padded: true });
+  }
+  return pad.length ? [...pad, ...slots] : slots;
+}
+
+/**
  * Forward-fill a 1-hour load slot grid into 15-minute granularity. EOS sees
  * 4× the row count with the same watt-value repeated per quarter — equivalent
  * to a step function. Acceptable because DVhub's load-forecast is itself a
@@ -504,7 +532,7 @@ export function createEosForecastBridge(ctx) {
     }
 
     const pvSlots = forecast?.pv?.slots || [];
-    const loadSlots = forecast?.load?.slots || [];
+    const loadSlots = padSlotsBackToNow(forecast?.load?.slots || [], Date.now());
     const priceSlotsCt = forecast?.price?.slots || [];
     const tz = cfg?.optimizer?.timezone || 'Europe/Berlin';
 

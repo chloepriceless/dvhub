@@ -721,3 +721,16 @@ test('pushFreshSoc: abgeschlossene Geräteläufe als Messwert (0 ohne Zähler, h
     await mock.close();
   }
 });
+
+import { padSlotsBackToNow } from '../services/optimizer/eos-forecast-bridge.js';
+
+test('Lastprognose bis vor die laufende Stunde aufgefüllt (sonst bricht EOS nach Neustart ab)', () => {
+  const now = Date.parse('2026-10-02T00:33:00+02:00');
+  const slots = [{ start: '2026-10-01T23:00:00.000Z', powerW: 700 }, { start: '2026-10-02T00:00:00.000Z', powerW: 650 }];
+  const out = padSlotsBackToNow(slots, now);
+  assert.equal(out[0].start, '2026-10-01T20:00:00.000Z', 'ab 2 h vor der laufenden Stunde (22:00 UTC = 00:00 lokal)');
+  assert.equal(out.length, 5);
+  assert.ok(out.slice(0, 3).every((s) => s.powerW === 700 && s.padded));
+  assert.deepEqual(padSlotsBackToNow(out, now), out, 'idempotent, wenn schon abgedeckt');
+  assert.deepEqual(padSlotsBackToNow([], now), []);
+});
