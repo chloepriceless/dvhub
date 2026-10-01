@@ -96,6 +96,15 @@ docker compose -f docker/compose.yml --env-file docker/.env pull
 docker compose -f docker/compose.yml --env-file docker/.env up -d
 ```
 
+**Neue `compose.yml` mitnehmen.** `pull` tauscht nur die Images. Ändert sich
+die Suite selbst (z. B. Datenbank-Einstellungen für SD-Karten und große
+Restores, 2026-10-01), holt der Installer sie neu — `.env` (Passwörter) und
+die Daten bleiben:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash -s -- --dir <installationsordner>
+```
+
 Config und Daten bleiben in den Volumes. Die Knöpfe „Update“, „System-Updates“,
 „Neustart“, „Reboot“ und „TimescaleDB aktualisieren“ antworten im Container mit
 genau diesem Hinweis (HTTP 409, `code: container_runtime`) statt git/apt/systemd
@@ -104,6 +113,14 @@ aufzurufen. Die TimescaleDB-Version hebt man über `TIMESCALE_TAG` in `.env`
 `docker compose exec db psql -U postgres -d dvhub -c 'ALTER EXTENSION timescaledb UPDATE'`).
 
 ## Bestandsdaten übernehmen (native Installation → Container)
+
+**Einfachster Weg (ab 2026-10-01): voller Export + DB-Backup.** Auf der alten
+Anlage *Einstellungen → Export → „Mit Geheimnissen (Passwort)“* und
+*Status → Datenbank-Backup*; im Container *Import* (Frage „Geräte-Tausch?“ mit
+**Ja** beantworten) und *Datenbank wiederherstellen*, danach den Container neu
+starten. Der volle Export trägt Lizenz, Geräte-Kennung, API-Token,
+Datenspende-, Portal-, TLS- und VPN-Schlüssel — die alte Anlage danach nicht
+mehr parallel betreiben. Der Weg von Hand:
 
 Eine laufende Anlage bringt drei Dinge mit: **Config**, **Datenverzeichnis**
 (u. a. `appliance-id` — daran hängt die Pro-Lizenz — Push-Schlüssel,
