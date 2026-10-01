@@ -144,6 +144,12 @@ services:
       # EOSdash aus: DVhub hat eine eigene Oberfläche, spart ~190 MB.
       EOS_SERVER__STARTUP_EOSDASH: "false"
       MALLOC_ARENA_MAX: "2"
+      # Speicher eines Planungslaufs danach zurückgeben (eos-provision.sh nativ gleich).
+      PYTHONMALLOC: malloc
+      MALLOC_TRIM_THRESHOLD_: "131072"
+      MALLOC_MMAP_THRESHOLD_: "131072"
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
     # Optionale anlagenspezifische EOS-Einstellungen (z. B. EOS_INVERTER_EFF_CURVE).
     env_file:
       - path: ./eos.env

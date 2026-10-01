@@ -234,7 +234,7 @@ if [[ -z "${EOS_CPU_QUOTA:-}" && "$_ncpu" -ge 2 ]]; then EOS_CPU_QUOTA="$(( (_nc
 # alten Unit wandern in die Betreiberdatei, statt beim Neuschreiben zu verschwinden.
 if [[ -f "$EOS_UNIT_FILE" && ! -f "$EOS_ENV_FILE" ]]; then
   _extra_env="$(grep -E '^Environment=' "$EOS_UNIT_FILE" | sed 's/^Environment=//' \
-    | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX)=' || true)"
+    | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX|PYTHONMALLOC|MALLOC_TRIM_THRESHOLD_|MALLOC_MMAP_THRESHOLD_|OPENBLAS_NUM_THREADS|OMP_NUM_THREADS)=' || true)"
   if [[ -n "$_extra_env" ]]; then
     mkdir -p "$(dirname "$EOS_ENV_FILE")"
     {
@@ -261,6 +261,14 @@ Environment=EOS_SERVER__HOST=127.0.0.1
 Environment=EOS_SERVER__PORT=$EOS_PORT
 Environment=EOS_SERVER__EOSDASH_PORT=$((EOS_PORT + 1))
 Environment=MALLOC_ARENA_MAX=2
+# Python-Objekte über den Systemallokator, Trim-Schwellen niedrig: EOS gibt den
+# Speicher eines Planungslaufs danach zurück (prod: Leerlauf 295 → 238 MB).
+Environment=PYTHONMALLOC=malloc
+Environment=MALLOC_TRIM_THRESHOLD_=131072
+Environment=MALLOC_MMAP_THRESHOLD_=131072
+# Eine Rechen-Thread-Puffer-Garnitur reicht (OpenBLAS legt sonst je Kern eigene an).
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
 EnvironmentFile=-$EOS_ENV_FILE
 # EOS 0.4 rechnet einen Lauf minutenlang auf voller Last. Niedrige Prioritaet
 # und hoechstens (Kerne - 1) Kerne, damit DVhub und die Regelschleife immer
