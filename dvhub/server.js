@@ -1777,6 +1777,9 @@ const telemetryReady = (async () => {
   });
   liveTelemetryBuffer = IS_RUNTIME_PROCESS && telemetryStore ? createTelemetryWriteBuffer({
     flushIntervalMs: LIVE_TELEMETRY_FLUSH_MS,
+    // 5-s-Werte im RAM sammeln, einmal pro Minute schreiben (SD-Karte);
+    // telemetry.writeBatchSec = 0 schreibt wie früher sofort.
+    batchMs: Math.max(0, Number(cfg.telemetry?.writeBatchSec ?? 60)) * 1000,
     buildSamples: (snapshot) => buildLiveTelemetrySamples(snapshot),
     writeSamples: (rows) => telemetrySafeWrite(() => telemetryStore.writeSamples(rows))
   }) : null;

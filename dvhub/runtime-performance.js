@@ -36,14 +36,34 @@ export function createSerialTaskRunner({ task, queueWhileRunning = true }) {
   };
 }
 
+// batchMs (2026-10-01, SD-Karte): die 5-s-Zeilen werden im RAM gesammelt und
+// nur alle batchMs als EIN Block geschrieben — volle Auflösung, aber ein
+// Schreibvorgang pro Minute statt zwölf. force (Beenden) schreibt sofort.
+// maxQueuedRows begrenzt den RAM, falls die Datenbank länger weg ist (älteste
+// Zeilen fallen dann weg).
 export function createTelemetryWriteBuffer({
   flushIntervalMs = 5000,
+  batchMs = 0,
+  maxQueuedRows = 20000,
   now = () => Date.now(),
   buildSamples,
   writeSamples
 }) {
   let pendingSnapshot = null;
   let lastFlushedAt = null;
+  let queue = [];
+  let lastWriteAt = null;
+
+  function writeQueued(force) {
+    if (!queue.length) return;
+    const t = Number(now());
+    if (!force && batchMs > 0 && lastWriteAt != null && (t - lastWriteAt) < batchMs) return;
+    if (lastWriteAt == null && !force && batchMs > 0) { lastWriteAt = t; return; }
+    const rows = queue;
+    queue = [];
+    lastWriteAt = t;
+    writeSamples(rows);
+  }
 
   function capture(snapshot) {
     pendingSnapshot = {
@@ -54,7 +74,7 @@ export function createTelemetryWriteBuffer({
   }
 
   function flush({ force = false } = {}) {
-    if (!pendingSnapshot) return false;
+    if (!pendingSnapshot) { if (force) writeQueued(true); return false; }
     const currentNow = Number(now());
     if (!force && lastFlushedAt != null && (currentNow - lastFlushedAt) < flushIntervalMs) {
       return false;
@@ -72,10 +92,16 @@ export function createTelemetryWriteBuffer({
       resolutionSeconds
     });
     if (Array.isArray(rows) && rows.length) {
-      writeSamples(rows);
+      if (batchMs > 0) {
+        queue.push(...rows);
+        if (queue.length > maxQueuedRows) queue = queue.slice(queue.length - maxQueuedRows);
+      } else {
+        writeSamples(rows);
+      }
     }
     pendingSnapshot = null;
     lastFlushedAt = currentNow;
+    if (batchMs > 0) writeQueued(force);
     return true;
   }
 
@@ -83,7 +109,8 @@ export function createTelemetryWriteBuffer({
     capture,
     flush,
     hasPending() {
-      return Boolean(pendingSnapshot);
-    }
+      return Boolean(pendingSnapshot) || queue.length > 0;
+    },
+    queuedRows: () => queue.length
   };
 }
