@@ -54,3 +54,30 @@ test('Schreibwerte auch ohne Speicherprofil', () => {
   const { settings } = desiredSettings({ includeMemory: false });
   assert.deepEqual(Object.keys(settings).sort(), ['checkpoint_timeout', 'synchronous_commit', 'wal_compression', 'wal_writer_delay']);
 });
+
+import { tuneTimescale } from '../services/db-tuning.js';
+
+test('Timescale: Tagesblöcke + Kompression nach 2 Tagen, idempotent', async () => {
+  let interval = 7 * 86400; let after = '7 days'; const calls = [];
+  const q = async (sql) => {
+    calls.push(sql);
+    if (sql.includes('pg_extension')) return { rows: [{ 1: 1 }] };
+    if (sql.includes('dimensions')) return { rows: [{ s: interval }] };
+    if (sql.includes('set_chunk_time_interval')) { interval = 86400; return { rows: [] }; }
+    if (sql.includes("config->>'compress_after'")) return { rows: after ? [{ after }] : [] };
+    if (sql.includes('remove_compression_policy')) { after = null; return { rows: [] }; }
+    if (sql.includes('add_compression_policy')) { after = '2 days'; return { rows: [] }; }
+    return { rows: [] };
+  };
+  const r1 = await tuneTimescale(q);
+  assert.deepEqual(r1.changed, ['chunk_interval', 'compress_after']);
+  const r2 = await tuneTimescale(q);
+  assert.deepEqual(r2.changed, []);
+  assert.equal(interval, 86400);
+  assert.equal(after, '2 days');
+});
+
+test('Timescale: ohne Extension nichts tun', async () => {
+  const r = await tuneTimescale(async () => ({ rows: [] }));
+  assert.equal(r.skipped, 'no_timescaledb');
+});

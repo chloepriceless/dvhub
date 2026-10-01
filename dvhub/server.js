@@ -36,7 +36,7 @@ import { createHistoryVizAggregator } from './services/history-viz/aggregator.js
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
 import { createLogRetention } from './services/log-retention.js';
-import { applyDbTuning, dbBudgetMb } from './services/db-tuning.js';
+import { applyDbTuning, dbBudgetMb, tuneTimescale } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
@@ -623,6 +623,12 @@ async function createTelemetryStoreIfEnabled() {
     // services/db-tuning.js) — wo ein Admin-Zugang da ist (Container/balena).
     // Nativ setzt pg-write-tuning.sh dieselben Werte. Blockiert den Start nie.
     if (IS_RUNTIME_PROCESS) tuneDatabase(dbConfig).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
+    // Messwerte: Tagesblöcke, Kompression nach 2 Tagen (als Eigentümer, überall).
+    if (IS_RUNTIME_PROCESS) {
+      tuneTimescale((q, p) => pool.query(q, p))
+        .then((r) => { state.timescaleTuning = r; if (r.changed?.length) pushLog('timescale_tuning', r); })
+        .catch((e) => pushLog('timescale_tuning_error', { error: e.message }, 'warn'));
+    }
     return store;
   } catch (error) {
     state.telemetry.enabled = true;

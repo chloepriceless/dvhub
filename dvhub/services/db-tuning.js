@@ -136,3 +136,39 @@ function sameValue(row, want) {
   if (ws != null) return toSeconds(row.setting, row.unit) === ws;
   return String(row.setting) === String(want);
 }
+
+// ── TimescaleDB: kleine Blöcke, früh komprimieren (2026-10-01) ─────────────
+// Auf prod lag die laufende Woche unkomprimiert bei 1,45 GB (7-Tage-Blöcke,
+// Kompression nach 7 Tagen) — auf einem Board mit 2–3 GB eMMC zu viel.
+// Tagesblöcke + Kompression nach 2 Tagen: höchstens ~2 Tage unkomprimiert.
+// Auflösung bleibt 5 s, komprimierte Blöcke sind normal abfragbar. Wirkt für
+// neue Blöcke; braucht Tabellen-Eigentümer (DVhub ist es für timeseries_samples).
+export const SAMPLES_CHUNK_INTERVAL = '1 day';
+export const SAMPLES_COMPRESS_AFTER = '2 days';
+
+export async function tuneTimescale(query) {
+  const out = { chunkInterval: null, compressAfter: null, changed: [] };
+  const ext = await query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'");
+  if (!ext.rows?.length) return { ...out, skipped: 'no_timescaledb' };
+  const dim = await query(
+    `SELECT extract(epoch FROM time_interval)::bigint AS s FROM timescaledb_information.dimensions
+      WHERE hypertable_name = 'timeseries_samples' AND dimension_type = 'Time'`);
+  const curS = Number(dim.rows?.[0]?.s);
+  if (!Number.isFinite(curS)) return { ...out, skipped: 'no_hypertable' };
+  if (curS > 86400) {
+    await query(`SELECT set_chunk_time_interval('timeseries_samples', INTERVAL '${SAMPLES_CHUNK_INTERVAL}')`);
+    out.changed.push('chunk_interval');
+  }
+  out.chunkInterval = curS > 86400 ? SAMPLES_CHUNK_INTERVAL : `${curS / 3600} h`;
+  const job = await query(
+    `SELECT config->>'compress_after' AS after FROM timescaledb_information.jobs
+      WHERE proc_name = 'policy_compression' AND hypertable_name = 'timeseries_samples'`);
+  const after = job.rows?.[0]?.after || null;
+  if (after !== SAMPLES_COMPRESS_AFTER) {
+    if (after) await query("SELECT remove_compression_policy('timeseries_samples', if_exists => true)");
+    await query(`SELECT add_compression_policy('timeseries_samples', compress_after => INTERVAL '${SAMPLES_COMPRESS_AFTER}', if_not_exists => true)`);
+    out.changed.push('compress_after');
+  }
+  out.compressAfter = SAMPLES_COMPRESS_AFTER;
+  return out;
+}
