@@ -1400,8 +1400,8 @@ ctx.getApplicableValueSummary = ({ year, pvPlants }) =>
 const eosForecastBridge = createEosForecastBridge(ctx);
 // EOS ab 0.4 verlangt einen SoC, der beim Lauf hoechstens 300 s alt ist
 // (measurement_max_age_seconds). Der Prognose-Push alle 15 min reicht dafuer
-// nicht — minuetlich nur den SoC nachschicken. pushFreshSoc() tut nichts auf
-// Fassungen, die das nicht verlangen (0.3 bleibt beim Stundenstempel).
+// nicht — minuetlich nur den SoC nachschicken. pushFreshSoc() tut nichts,
+// solange der Abgleich kein EOS 0.4 erkannt hat.
 const eosFreshSocTimer = safeInterval('eos-fresh-soc', () => eosForecastBridge.pushFreshSoc(), 60_000);
 ctx.eosForecastBridge = eosForecastBridge;
 

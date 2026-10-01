@@ -667,12 +667,12 @@ describe('Steuerzeitraum = Preisabdeckung (EOS 0.4)', () => {
   });
 });
 
-// EOS 0.4 nimmt den SoC nur aus den letzten 300 s — DVhub schickt ihn dort
-// minuetlich, nur mit "jetzt"-Stempel. 0.3 bleibt unberuehrt.
-test('pushFreshSoc: nur bei Fassungen mit Frische-Pflicht, nur ein Zeitstempel', async () => {
+// EOS 0.4 nimmt den SoC nur aus den letzten 300 s — DVhub schickt ihn
+// minuetlich, nur mit "jetzt"-Stempel. Erst nachdem ein EOS 0.4 erkannt ist.
+test('pushFreshSoc: nur bei erkanntem EOS 0.4, nur ein Zeitstempel', async () => {
   const mock = await createMockEos(okHandler);
   try {
-    const state = { victron: { soc: 50 }, optimizer: { eos: { supports: { freshSocRequired: false } } } };
+    const state = { victron: { soc: 50 }, optimizer: { eos: { supported: false } } };
     const ctx = {
       getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
       pushLog: () => {},
@@ -681,10 +681,10 @@ test('pushFreshSoc: nur bei Fassungen mit Frische-Pflicht, nur ein Zeitstempel',
       teslamateService: { getState: () => ({ batteryLevel: 63 }) },
     };
     const bridge = createEosForecastBridge(ctx);
-    assert.equal((await bridge.pushFreshSoc()).skipped, 'not required');
+    assert.equal((await bridge.pushFreshSoc()).skipped, 'eos not supported');
     assert.equal(mock.requests.length, 0);
 
-    state.optimizer.eos.supports.freshSocRequired = true;
+    state.optimizer.eos.supported = true;
     const res = await bridge.pushFreshSoc();
     const puts = mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'));
     assert.equal(puts.length, 2, 'Akku + Auto, je EIN Stempel');

@@ -652,7 +652,7 @@ export function createInspector(ctx, deps = {}) {
           price: { rows: [], unit: 'ct/kWh', truncated: false, totalCount: 0 } };
 
     // Phase 19.1-01: detect "EOS up but not configured for auto-optimization".
-    // EOS v0.3.0 returns HTTP 404 with body
+    // EOS returns HTTP 404 with body
     //   {"detail":"Can not get the energy management plan.\nDid you configure automatic optimization?"}
     // when /v1/energy-management/plan is hit on an unconfigured instance.
     // The adapter today maps this to {ok:false, error:'EOS returned HTTP 404'}

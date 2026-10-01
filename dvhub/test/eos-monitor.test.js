@@ -62,7 +62,7 @@ test('eos-monitor: Neustart (neue PID) verwirft alten Plan und meldet sich', asy
   assert.equal(r.m.status().solutionAt, null);
 });
 
-test('capability-probe: Timeout nach erfolgreicher Erkennung → gemerkte Fassung (Geräte bleiben Abbildung)', async () => {
+test('capability-probe: Timeout nach erfolgreicher Erkennung → gemerkte Fassung (bleibt EOS 0.4)', async () => {
   let ok = true;
   const probe = createEosCapabilityProbe({
     ttlMs: 0,
@@ -70,9 +70,9 @@ test('capability-probe: Timeout nach erfolgreicher Erkennung → gemerkte Fassun
       : path === '/v1/config' ? { ok: true, data: { devices: { batteries: { battery1: {} }, electric_vehicles: {} }, optimization: { genetic: { interval_sec: 900 } } } }
         : { ok: true, data: { version: '0.4.0' } }),
   });
-  assert.equal((await probe.get('http://x')).supports.deviceMap, true);
+  assert.equal((await probe.get('http://x')).supported, true);
   ok = false;
   const caps = await probe.get('http://x');
   assert.equal(caps.reachable, true);
-  assert.equal(caps.supports.deviceMap, true);
+  assert.equal(caps.supported, true);
 });

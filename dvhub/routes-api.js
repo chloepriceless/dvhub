@@ -5203,7 +5203,7 @@ export function createApiRoutes(ctx) {
           targetMode: opt.evTargetMode || 'percent',
           targetValue: opt.evTargetValue ?? 80,
           resolved,
-          deadlineSupported: ctx.state?.optimizer?.eos?.supports?.evDeadline === true
+          deadlineSupported: ctx.state?.optimizer?.eos?.supported === true
         },
         vehicle: {
           title: lp?.vehicleTitle || lp?.title || null,
@@ -5310,8 +5310,8 @@ export function createApiRoutes(ctx) {
           // Ist das Auto bei EOS angemeldet? (eos-config-sync decideEvRegistration)
           registration: ctx.state?.optimizer?.eosEv || null,
           // Abfahrt + Ziel (ev-departure.js). `resolved` ist das, was DVhub
-          // gerade an EOS schickt; `deadlineSupported` sagt, ob die laufende
-          // EOS-Fassung die Uhrzeit kennt (ab 0.4) oder nur das Ziel.
+          // gerade an EOS schickt; `deadlineSupported` sagt, ob ein EOS 0.4
+          // erkannt ist (nur das bekommt Ziel + Uhrzeit geschrieben).
           departure: {
             enabled: raw.optimizer?.evDepartureEnabled === true,
             time: raw.optimizer?.evDepartureTime || '07:00',
@@ -5321,7 +5321,7 @@ export function createApiRoutes(ctx) {
             targetValue: raw.optimizer?.evTargetValue ?? 80,
             consumptionKwhPer100km: raw.optimizer?.evConsumptionKwhPer100km ?? 18,
             resolved: resolveEvDeparture(getCfg()),
-            deadlineSupported: ctx.state?.optimizer?.eos?.supports?.evDeadline === true,
+            deadlineSupported: ctx.state?.optimizer?.eos?.supported === true,
             eosFlavor: ctx.state?.optimizer?.eos?.flavor || null
           }
         },

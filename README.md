@@ -139,7 +139,9 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.s
 Akkudoktor-EOS wird **standardmäßig mitinstalliert** — als DVhubs eigener
 **Direktvermarktungs-Fork** (DV-EOS: 15-Minuten-Slots, slot-genaue Batterie-/
 Wechselrichter-Mathematik, Akku→Netz-Arbitrage) als eigener Dienst unter
-`127.0.0.1:8503`, sofern ≥ 1 GB RAM verfügbar sind. Mit `--no-eos` lässt sich das
+`127.0.0.1:8503`. DVhub unterstützt **nur EOS 0.4** (DV-EOS `dvhub-v0.4.0rc1.3`,
+derselbe Stand wie im Docker-Image); Boxen mit dem alten 0.3-Fork wechseln beim
+nächsten Update automatisch, die EOS-Daten werden vorher gesichert. Mit `--no-eos` lässt sich das
 überspringen (z. B. auf RAM-armen/Headless-Boxen); die interne MILP-/Heuristik-
 Optimierung läuft auch ohne EOS. (`--with-eos` bleibt als kompatibler No-op
 erhalten, da EOS jetzt Default ist.)

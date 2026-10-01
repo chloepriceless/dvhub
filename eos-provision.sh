@@ -19,11 +19,9 @@ SERVICE_USER="${SERVICE_USER:-dvhub}"
 DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
 EOS_DIR="${EOS_DIR:-$INSTALL_DIR/eos}"
 EOS_VENV="${EOS_VENV:-$INSTALL_DIR/eos-venv}"
-# T-0121: install the DVhub DV-EOS *fork* (15-min slots, slot-aware
-# battery/inverter math, battery->grid arbitrage export, EnergyCharts spot
-# feed-in, pydantic /v1/prediction/import fix) directly from the fork branch.
-# The branch carries every patch on top of upstream v0.3.0, so the legacy
-# eos-patches/apply.sh step is no longer needed. Override repo/branch via env.
+# DV-EOS (Fork von Akkudoktor-EOS) im Stand 0.4 — DVhub unterstuetzt nur noch
+# EOS 0.4 (GENETIC-Engine). Der fruehere 0.3-Fork-Branch „dvhub-fork“ wird beim
+# naechsten Update automatisch ersetzt. Override repo/ref via env.
 # Gewuenschter Stand: eos-version.env im Repo ist die einzige Quelle. Env-
 # Variablen gewinnen weiterhin (Tests, Sonderfaelle). EOS_BRANCH bleibt als
 # Alias erhalten, damit bestehende Aufrufe nicht brechen.
@@ -35,7 +33,7 @@ if [[ -f "$EOS_PIN_FILE" ]]; then
   _pin_ref="$(grep -E '^EOS_PIN=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
 fi
 EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/chloepriceless/DV-EOS.git}}"
-EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-fork}}}"
+EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-v0.4.0rc1.3}}}"
 EOS_BRANCH="$EOS_PIN"   # Rueckwaertskompatibler Alias
 EOS_STATE_MARKER="${EOS_STATE_MARKER:-$DATA_DIR/.eos-provisioned}"
 # Dienstname und Port sind ueberschreibbar, damit eine zweite Instanz (A/B-Test
@@ -91,6 +89,18 @@ else
 fi
 
 echo "  EOS: Installiere/aktualisiere EOS (${EOS_PIN}) bare-metal venv..."
+
+# Versionswechsel (z. B. 0.3-Fork -> 0.4): EOS-Konfiguration und Messreihen
+# vorher sichern. 0.4 migriert die Konfiguration beim Start selbst; geht dabei
+# etwas schief, liegt der alte Stand hier.
+if [[ "$EOS_PIN_CHANGED" -eq 1 && -n "$EOS_HAVE" ]]; then
+  _eos_data="${EOS_HOME:-$(getent passwd "$SERVICE_USER" | cut -d: -f6)/.local/share/net.akkudoktor.eos}"
+  if [[ -d "$_eos_data" ]]; then
+    _dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)-data-before-${EOS_PIN//\//_}"
+    mkdir -p "$_dest" && cp -a "$_eos_data/." "$_dest/" \
+      && echo "  EOS: Daten/Konfiguration vor dem Versionswechsel gesichert nach $_dest"
+  fi
+fi
 
 # Idempotent clone / fetch auf den gepinnten Stand. Funktioniert fuer Tag,
 # Branch und Commit-SHA gleichermassen, weil ueber FETCH_HEAD ausgecheckt wird.
@@ -218,6 +228,8 @@ fi
 # Server-Loop + einen Optimierungs-Thread. Steht vor EnvironmentFile, damit der
 # Betreiber es dort ueberschreiben kann.
 EOS_UNIT_FILE="/etc/systemd/system/${EOS_SERVICE_NAME}.service"
+_ncpu="$(nproc 2>/dev/null || echo 1)"
+if [[ -z "${EOS_CPU_QUOTA:-}" && "$_ncpu" -ge 2 ]]; then EOS_CPU_QUOTA="$(( (_ncpu - 1) * 100 ))%"; fi
 # Einmalige Uebernahme: Zusatz-Environment-Zeilen einer von Hand erweiterten
 # alten Unit wandern in die Betreiberdatei, statt beim Neuschreiben zu verschwinden.
 if [[ -f "$EOS_UNIT_FILE" && ! -f "$EOS_ENV_FILE" ]]; then
@@ -250,6 +262,12 @@ Environment=EOS_SERVER__PORT=$EOS_PORT
 Environment=EOS_SERVER__EOSDASH_PORT=$((EOS_PORT + 1))
 Environment=MALLOC_ARENA_MAX=2
 EnvironmentFile=-$EOS_ENV_FILE
+# EOS 0.4 rechnet einen Lauf minutenlang auf voller Last. Niedrige Prioritaet
+# und hoechstens (Kerne - 1) Kerne, damit DVhub und die Regelschleife immer
+# Luft haben (prod 2026-09-27: 2-Kern-Box sonst ausgelastet).
+Nice=10
+CPUWeight=20
+${EOS_CPU_QUOTA:+CPUQuota=$EOS_CPU_QUOTA}
 ${EOS_HOME:+Environment=EOS_DIR=$EOS_HOME}
 Restart=on-failure
 RestartSec=5

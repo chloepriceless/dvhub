@@ -16,7 +16,7 @@ import { buildEosHomeAppliances } from './eos-devices.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
 import http from 'node:http';
 
-import { createEosCapabilityProbe, EOS_FLAVOR } from './eos-capabilities.js';
+import { createEosCapabilityProbe } from './eos-capabilities.js';
 
 const TIMEOUT_MS = 8_000;
 const BATTERY_DEVICE_ID = 'battery1';   // EOS default — mirrors what EOS bootstraps.
@@ -124,8 +124,8 @@ export function buildEosBatteries(cfg, opts = {}) {
 export function buildEosElectricVehicles(cfg, { supportsDeadline = false, nowMs = Date.now() } = {}) {
   const opt = cfg?.optimizer || {};
   // Abfahrt + Ziel (ev-departure.js). Ist sie an, ersetzt ihr Ziel den
-  // allgemeinen Ziel-SoC; ohne EOS-Unterstuetzung fuer die Uhrzeit gilt das
-  // Ziel wie bisher am Horizontende.
+  // allgemeinen Ziel-SoC. Die Uhrzeit (min_soc_deadline_datetime, EOS 0.4)
+  // geht nur mit supportsDeadline mit — der Abgleich setzt es immer.
   const departure = resolveEvDeparture(cfg, nowMs);
   const fallbackMinSoc = Number.isFinite(Number(opt.evMinSocPct)) ? Number(opt.evMinSocPct) : 70;
   const ev = {
@@ -146,37 +146,10 @@ export function buildEosElectricVehicles(cfg, { supportsDeadline = false, nowMs 
 }
 
 /**
- * Build the EOS elecprice section. When the operator has configured the
- * dynamicComponents (Netzentgelte + Abgaben + Energie-Markup), surface their
- * sum as `charges_kwh` so the genetic algo prices grid imports at the real
- * Endkundenpreis instead of pure spot. Without this, EOS would systematically
- * under-estimate the cost of grid charging and over-recommend it.
- *
- * @param {object} cfg
- * @returns {object|null} { charges_kwh, vat_rate } or null when not in dynamic mode.
- */
-export function buildEosElecprice(cfg) {
-  const pricing = cfg?.userEnergyPricing;
-  if (pricing?.mode !== 'dynamic') return null;
-  const dc = pricing.dynamicComponents || {};
-  const sumCtKwh =
-    (Number(dc.energyMarkupCtKwh) || 0) +
-    (Number(dc.gridChargesCtKwh) || 0) +
-    (Number(dc.leviesAndFeesCtKwh) || 0);
-  if (sumCtKwh <= 0) return null; // nothing meaningful to push
-  const vatPct = Number(dc.vatPct);
-  const vatRate = Number.isFinite(vatPct) && vatPct > 0 ? 1 + vatPct / 100 : 1.19;
-  return {
-    charges_kwh: Number((sumCtKwh / 100).toFixed(6)),
-    vat_rate: Number(vatRate.toFixed(4)),
-  };
-}
-
-/**
- * Build the EOS optimization section. interval=900 (15-min slots) is enabled
- * by the DVhub fork's genetic-slot-math refactor (see eos-patches/apply.sh
- * Phase A) and gives DV operators the EPEX day-ahead-2024 resolution. Default
- * stays 3600 for safety; operators opt-in via optimizer.eosOptimizationIntervalSec.
+ * Build the EOS optimization section. interval=900 (15-min slots) gives DV
+ * operators the EPEX day-ahead-2024 resolution; EOS 0.4 accepts it natively
+ * (optimization.genetic.interval_sec ∈ {900, 3600}). Default stays 3600 for
+ * safety; operators opt-in via optimizer.eosOptimizationIntervalSec.
  *
  * @param {object} cfg
  * @returns {object}
@@ -370,12 +343,34 @@ function eosHttpRequest(baseUrl, method, path, body) {
 export function createEosConfigSync(ctx) {
   const { getCfg, pushLog, state } = ctx;
 
-  // 2026-09-15: Fähigkeitserkennung, damit derselbe DVhub mit unserem Fork
-  // UND mit dem Maintainer-Branch (dem künftigen upstream-main) spricht.
-  // Ergebnis wird gemerkt (5 min) und in state.optimizer.eos veröffentlicht,
-  // sodass /api/optimizer/status zeigt, welche Fassung antwortet.
+  // Erkennung, ob ein EOS 0.4 antwortet (eos-capabilities.js). Ergebnis wird
+  // gemerkt (5 min) und in state.optimizer.eos veröffentlicht, sodass
+  // /api/optimizer/status zeigt, welche Fassung antwortet. Ältere Fassungen
+  // bekommen nichts mehr geschrieben.
   const capabilityProbe = ctx.eosCapabilityProbe
     || createEosCapabilityProbe({ request: (baseUrl, method, path, body) => eosHttpRequest(baseUrl, method, path, body) });
+
+  // Zuletzt gesehenes `supported` (nur von erreichbaren Erkennungen), damit
+  // `eos_unsupported_version` nur beim Wechsel ins Log geht, nicht bei jedem Lauf.
+  let lastSupported = null;
+  function publishCaps(caps) {
+    if (state) {
+      state.optimizer = state.optimizer || {};
+      state.optimizer.eos = {
+        flavor: caps.flavor, version: caps.version, reachable: caps.reachable,
+        supported: caps.supported, reason: caps.reason, detectedAt: caps.detectedAt,
+      };
+    }
+    if (!caps.reachable) return;
+    if (caps.supported === false && lastSupported !== false && pushLog) {
+      pushLog('eos_unsupported_version', { version: caps.version, flavor: caps.flavor });
+    }
+    lastSupported = caps.supported;
+  }
+  const unsupportedResult = (caps) => ({
+    ok: false, applied: [], errors: {}, skipped: 'eos_unsupported', reason: caps.reason,
+    eos: { flavor: caps.flavor, version: caps.version, supported: false },
+  });
 
   // Aktiver Boost der Erstplan-Wache ({ boostSec, restoreSec }) oder null.
   // Die Wache lebt im Optimizer-Dienst und meldet sich ueber ctx an.
@@ -383,11 +378,11 @@ export function createEosConfigSync(ctx) {
     try { return ctx.getEosEmsIntervalBoost?.() || null; } catch { return null; }
   };
 
-  // Fahrzeug bei EOS anmelden? Nur, wenn es mitoptimiert werden soll UND —
-  // auf Staenden, die einen frischen SoC verlangen — DVhub einen hat. Sonst
-  // bricht 0.4 den ganzen Lauf ab und auch der Hausakku bleibt ohne Plan.
+  // Fahrzeug bei EOS anmelden? Nur, wenn es mitoptimiert werden soll UND
+  // DVhub einen frischen SoC hat. Sonst bricht 0.4 den ganzen Lauf ab ("Fresh
+  // SoC missing for ev11", prod 2026-09-23) und auch der Hausakku bleibt ohne Plan.
   // Ergebnis steht in state.optimizer.eosEv (Panel + /api/optimizer/status).
-  function decideEvRegistration(cfg, caps) {
+  function decideEvRegistration(cfg) {
     const wanted = cfg?.optimizer?.eosOptimizeEv === true;
     const soc = wanted ? resolveEvSocPct(ctx) : null;
     // Nur angesteckt planen (Standard): ohne Auto an der Wallbox wuerde EOS
@@ -402,7 +397,7 @@ export function createEosConfigSync(ctx) {
     if (wanted && onlyWhenPlugged && plugged !== true) {
       register = false;
       reason = plugged === false ? 'nicht angesteckt' : 'Steckzustand unbekannt (Wallbox/evcc nicht erreichbar)';
-    } else if (wanted && !soc && caps.supports.freshSocRequired === true) {
+    } else if (wanted && !soc) {
       register = false;
       reason = 'kein Ladestand des Autos (TeslaMate/evcc) — EOS 0.4 wuerde sonst gar nicht rechnen';
     }
@@ -431,29 +426,23 @@ export function createEosConfigSync(ctx) {
     }
 
     // Fassung bestimmen, BEVOR irgendeine Aufgabe gebaut wird (siehe
-    // eos-capabilities.js) — sie entscheidet über die Schreibweise der Geräte,
-    // über den Ort der Slot-Länge und darüber, welche Schlüssel es überhaupt
-    // noch gibt. Ein GET je Sync, nicht pro Aufgabe; das Ergebnis wird 5 min
-    // gemerkt. Schlägt die Erkennung fehl, ist flavor 'unknown' und alles
-    // verhält sich wie vor 2026-09-15.
+    // eos-capabilities.js). Ein GET je Sync, nicht pro Aufgabe; das Ergebnis
+    // wird 5 min gemerkt.
     const caps = await capabilityProbe.get(baseUrl);
-    if (state) {
-      state.optimizer = state.optimizer || {};
-      state.optimizer.eos = {
-        flavor: caps.flavor, version: caps.version, reachable: caps.reachable,
-        supports: caps.supports, detectedAt: caps.detectedAt,
-      };
-    }
-    // Ab #1330 führt EOS Geräte als Abbildung nach device_id. Ein Listen-PUT
-    // scheitert dort mit 400 ("Input should be a valid dictionary") — gemessen
-    // am 20.09.2026 gegen v0.4.0rc1 — und EOS behält sein Bootstrap-Gerät.
+    publishCaps(caps);
     // EOS antwortete beim Erkennen nicht (rechnet, Timeout) und es gibt keine
-    // gemerkte Fassung: lieber diesen Lauf auslassen als Geräte in der falschen
-    // Schreibweise schicken (0.4 lehnt Listen mit 400 ab). Nächster Lauf holt es nach.
+    // gemerkte Fassung: lieber diesen Lauf auslassen als blind schreiben.
+    // Nächster Lauf holt es nach.
     if (!caps.reachable) {
       return { ok: false, applied: [], errors: { probe: 'eos_unreachable' }, skipped: 'eos_unreachable' };
     }
-    const asDevices = (list) => (caps.supports.deviceMap ? devicesAsMap(list) : list);
+    // Kein EOS 0.4: gar nichts schreiben. Das alte Schema (Listen,
+    // optimization.interval, charges_kwh …) pflegt DVhub nicht mehr.
+    if (caps.supported === false) return unsupportedResult(caps);
+    // EOS 0.4 führt Geräte als Abbildung nach device_id. Ein Listen-PUT
+    // scheitert dort mit 400 ("Input should be a valid dictionary") — gemessen
+    // am 20.09.2026 gegen v0.4.0rc1 — und EOS behält sein Bootstrap-Gerät.
+    const asDevices = devicesAsMap;
 
     // Single-floor model (2026-06-16): EOS min_soc = DVhub's ONE discharge floor.
     // Source of truth = the live Victron BMS min (the absolute level DVhub itself
@@ -471,7 +460,6 @@ export function createEosConfigSync(ctx) {
 
     const batteries = buildEosBatteries(cfg, { minSocPct: eosMinSocPct });
     const inverters = buildEosInverters(cfg);
-    const elecprice = buildEosElecprice(cfg);
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval);
 
@@ -490,9 +478,8 @@ export function createEosConfigSync(ctx) {
     // device hardware spec (battery + inverter capacities). Provider choice
     // + ems.mode stay operator-owned via EOSdash.
     //
-    // Phase 22 (2026-05-24): added optimization.interval (15-min slots) and
-    // elecprice.charges_kwh (Bezugs-Aufschlag for grid-import pricing).
-    // These hit field-level PUT endpoints (PUT /v1/config/{path}) one value
+    // Phase 22 (2026-05-24): added the optimization interval (15-min slots).
+    // Scalar settings hit field-level PUT endpoints (PUT /v1/config/{path}) one value
     // at a time — the section-level shape only works for {device,inverter}.
     const emsIntervalSec = pickEmsIntervalSec(optimization.interval, cfg?.optimizer?.eosEmsIntervalSec);
     // EV optimization is opt-in via cfg.optimizer.eosOptimizeEv (default OFF,
@@ -501,16 +488,16 @@ export function createEosConfigSync(ctx) {
     // charging from the grid overnight — the operator charges the EV from PV
     // during the day, and that load is already captured by the LoadImport
     // forecast. When ON, EOS models the EV as a separately-optimised device.
-    const evDecision = decideEvRegistration(cfg, caps);
+    const evDecision = decideEvRegistration(cfg);
     const optimizeEv = evDecision.register;
     const evTasks = optimizeEv
       ? [
           { section: 'devices/max_electric_vehicles', body: 1 },
-          { section: 'devices/electric_vehicles', body: asDevices(buildEosElectricVehicles(cfg, { supportsDeadline: caps.supports.evDeadline === true })) },
+          { section: 'devices/electric_vehicles', body: asDevices(buildEosElectricVehicles(cfg, { supportsDeadline: true })) },
         ]
       : [
           { section: 'devices/max_electric_vehicles', body: 0 },
-          { section: 'devices/electric_vehicles', body: caps.supports.deviceMap ? {} : [] },
+          { section: 'devices/electric_vehicles', body: {} },
         ];
 
     // Home appliances: DVhub does not model schedulable white goods, so EOS
@@ -524,23 +511,10 @@ export function createEosConfigSync(ctx) {
     // the LoadImport forecast (genetic.py:378-383) — it distorts the battery
     // and grid plan on every box where the key was never set.
     //
-    // NUR max_home_appliances=0 — bewusst OHNE `home_appliances: []` daneben.
-    // Die 0 ist der tragende Wert: geneticparams.py:579 schließt kurz auf
-    // home_appliance_params=None, die Liste wird dann nie gelesen. Die leere
-    // Liste bringt im Erfolgsfall also nichts — und im Fehlerfall ist sie eine
-    // Falle: die Sende-Schleife unten bricht bei einem Fehler NICHT ab
-    // (`else errors[t.section] = ...`, kein break). Scheitert der 0-PUT und
-    // gelingt der Listen-PUT, steht EOS auf max=None→1 mit leerer Liste →
-    // `home_appliances[0]` wirft IndexError → der nackte `except:` in
-    // geneticparams.py:614 erzeugt die Demo-Spülmaschine NEU. Der Halbausfall
-    // wäre damit schlimmer als gar kein Fix.
-    //
-    // Gegen ein echtes EOS verifiziert (07.08.2026, isolierte Instanz):
-    //   PUT devices/max_home_appliances = 0  → HTTP 200
-    //   Vergleich der GESAMTEN Konfiguration vorher/nachher: genau 1 geänderter
-    //   Schlüssel, sonst nichts.
-    //   prepare() ohne den Wert: max None→1, Liste None→['dishwasher1'].
-    //   prepare() mit dem Wert 0: bleibt 0 / None.
+    // max_home_appliances=0 ist der tragende Wert (gegen ein echtes EOS am
+    // 07.08.2026 verifiziert: prepare() ohne den Wert erfindet die
+    // Demo-Spülmaschine, mit 0 bleibt es leer). Dazu wird die Abbildung mit
+    // `{}` geleert, sonst bleibt ein früher gesendetes Gerät stehen (unten).
     // Planbare An/Aus-Verbraucher (Geschirrspüler & Co., 2026-09-26): als EOS
     // home_appliances mitplanen. Nur deferrable Geräte; modulierende Heizstäbe
     // regelt DVhub selbst (EOS' genetic kann nur EIN EV-artiges Gerät). Ohne
@@ -550,7 +524,7 @@ export function createEosConfigSync(ctx) {
     let homeApplianceTasks;
     {
       const sched = loadSchedulableDevices(cfg).devices.filter((d) => d.kind === 'deferrable' && d.enabled !== false);
-      if (sched.length && caps.supports.applianceScheduling !== false) {
+      if (sched.length) {
         const built = buildEosHomeAppliances(sched, { timeZone: cfg?.timeZone || 'Europe/Berlin' });
         applianceIdMap = built.idMap;
         homeApplianceTasks = [
@@ -559,29 +533,24 @@ export function createEosConfigSync(ctx) {
         ];
         if (state) { state.optimizer = state.optimizer || {}; state.optimizer.eosApplianceIdMap = applianceIdMap; }
       } else {
-        homeApplianceTasks = [{ section: 'devices/max_home_appliances', body: 0 }];
-        // Bei EOS 0.4 (deviceMap) MUSS die Liste mitgeleert werden: sonst bleibt
-        // ein früher gesendetes Gerät stehen und 0.4 bricht mit "home_appliances
-        // exceeds configured maximum 0" JEDEN Lauf ab (HANDOFF 2026-09-26, live
-        // auf prod aufgetreten nach Löschen eines Testgeräts). Auf 0.3 die Liste
-        // NICHT leeren — ein `[]` triggert dort die Demo-Spülmaschine (Kommentar
-        // oben, geneticparams IndexError). `asDevices([])` = deviceMap ? {} : [].
-        if (caps.supports.deviceMap) homeApplianceTasks.push({ section: 'devices/home_appliances', body: {} });
+        // Die Abbildung MUSS mitgeleert werden: sonst bleibt ein früher
+        // gesendetes Gerät stehen und 0.4 bricht mit "home_appliances exceeds
+        // configured maximum 0" JEDEN Lauf ab (HANDOFF 2026-09-26, live auf
+        // prod aufgetreten nach Löschen eines Testgeräts). Reihenfolge: max
+        // zuerst, dann die leere Abbildung.
+        homeApplianceTasks = [
+          { section: 'devices/max_home_appliances', body: 0 },
+          { section: 'devices/home_appliances', body: {} },
+        ];
         if (state?.optimizer) state.optimizer.eosApplianceIdMap = {};
       }
     }
 
-    // upstream-main (vor #1330) nagelt das Intervall auf 3600 s fest. Dort
-    // herabstufen statt einen Fehlschlag zu produzieren — der Operator sieht
-    // die Fassung im Status und im Log. Ab #1330 sind 15 Minuten wieder
-    // erlaubt, nur steht der Schlüssel woanders (caps.intervalSection).
-    const intervalBody = caps.supports.quarterHour ? optimization.interval : 3600;
-    // Ab #1330 stehen zwei Engines nebeneinander: GENETIC (neu) und GENETIC0
-    // (die alte). Wir wollen ausdrücklich die neue, statt den Vorgabewert
-    // stillschweigend zu erben. Wo es die Wahl nicht gibt, entfällt der PUT.
-    const algorithmTasks = caps.supports.algorithmChoice
-      ? [{ section: 'optimization/algorithm', body: 'GENETIC' }]
-      : [];
+    // EOS 0.4 führt die Slot-Länge unter optimization.genetic.interval_sec und
+    // lässt 15 Minuten nativ zu ({900, 3600}, 900 s an v0.4.0rc1 gemessen).
+    // Zwei Engines stehen nebeneinander: GENETIC (neu) und GENETIC0 (die
+    // alte). Wir wählen ausdrücklich die neue, statt den Vorgabewert
+    // stillschweigend zu erben.
 
     // max_batteries / max_inverters MUESSEN gesetzt sein, und zwar VOR den
     // Geraeten selbst. Ohne sie gilt die Geraeteliste fuer EOS als nicht
@@ -609,8 +578,8 @@ export function createEosConfigSync(ctx) {
       { section: 'devices/inverters', body: asDevices(inverters) },
       ...evTasks,
       ...homeApplianceTasks,
-      ...algorithmTasks,
-      { section: caps.intervalSection, body: intervalBody },
+      { section: 'optimization/algorithm', body: 'GENETIC' },
+      { section: 'optimization/genetic/interval_sec', body: optimization.interval },
       { section: 'optimization/genetic/generations', body: geneticSizing.generations },
       { section: 'optimization/genetic/individuals', body: geneticSizing.individuals },
       // Hat die Erstplan-Wache den Takt gerade hochgesetzt, bleibt ihr Wert
@@ -637,55 +606,25 @@ export function createEosConfigSync(ctx) {
 
     // Direktvermarktungs-Generalschalter (Christin 2026-08-07).
     //
-    // Upstream-EOS hat drei Verhaltensweisen, die unser Fork einzeln aufgesetzt
-    // hatte, hinter EINEN Konfigschalter gelegt — `genetic.py:2670-2677`:
+    // EOS legt drei Verhaltensweisen hinter EINEN Konfigschalter — `genetic.py:2670-2677`:
     //     direct_marketing_enabled = self._direct_marketing_enabled()
     //     self.optimize_dc_charge           = direct_marketing_enabled
     //     self.optimize_battery_grid_export = direct_marketing_enabled
     // und derselbe Schalter gated die harte PV-Abregelung bei Negativpreis
     // (`genetic.py:504`). Default ist FALSE (`prediction/feedintariff.py:75`).
     //
-    // Ohne diese Zeile würde ein Umstieg auf upstream still DREI Dinge
-    // abschalten — darunter die Negativpreis-Abregelung, und die ist §51-Pflicht,
+    // Ohne diese Zeile blieben still DREI Dinge
+    // abgeschaltet — darunter die Negativpreis-Abregelung, und die ist §51-Pflicht,
     // keine Optimierung. Genau der Fail-open-Fehlertyp aus T-0325.
     //
-    // OPTIONAL, weil unser aktueller Fork (dvhub-fork, Basis 17.03.) den
-    // Schlüssel NOCH NICHT kennt: dort quittiert EOS den PUT mit einem Fehler.
-    // Als Pflicht-Task würde `okAll` dauerhaft false — ein rotes Signal, das
-    // immer rot ist, bringt niemandem etwas und erzieht zum Wegsehen. Deshalb
-    // getrennt gezählt: der Fehlschlag steht sichtbar im Log, kippt aber nicht
-    // den Gesamtstatus. Sobald der Fork auf upstream steht, greift er von selbst.
+    // Pflicht-Task: ein Fehlschlag ist ein echter Fehler und kippt okAll.
     //
-    // 2026-09-15: Sobald die Erkennung sagt, dass die Fassung den Schlüssel
-    // kennt (Maintainer-Branch und alles danach), wird er zum PFLICHT-Task —
-    // dort ist ein Fehlschlag ein echter Fehler und muss den Status kippen.
-    // Kennt die Fassung ihn nicht (unser Fork), wird er gar nicht erst
-    // geschrieben: kein Fehlversuch, kein Rauschen im Log. Bei 'unknown'
-    // bleibt es beim alten Verhalten (optional).
-    const directMarketingTask = { section: 'feedintariff/direct_marketing_enabled', body: directMarketing };
-    const optionalTasks = [];
-    if (caps.supports.directMarketingFlag) tasks.push(directMarketingTask);
-    else if (caps.flavor === EOS_FLAVOR.UNKNOWN) optionalTasks.push(directMarketingTask);
-    // charges_kwh / vat_rate gibt es nur bis 0.3.x — und selbst dort waren sie
-    // auf unserem Pfad wirkungslos: beide werden ausschliesslich in
-    // ElecPriceAkkudoktor und ElecPriceEnergyCharts gelesen
-    // (`git grep charges_kwh v0.3.0`), während DVhub ElecPriceImport nutzt und
-    // über die Bridge bereits den aufgelösten Endkundenpreis schickt. Ab #1330
-    // sind die Schlüssel gelöscht (der PUT quittiert mit 400); das dortige
-    // elecfee-Framework braucht DVhub aus demselben Grund nicht —
-    // ElecPriceImport schlägt keine Gebühren auf (`elecpriceimport.py` ruft
+    // Keine elecprice.charges_kwh / vat_rate: die Schlüssel sind ab #1330
+    // gelöscht (der PUT quittiert mit 400), und das elecfee-Framework braucht
+    // DVhub nicht — die Bridge schickt über ElecPriceImport bereits den
+    // aufgelösten Endkundenpreis (`elecpriceimport.py` ruft
     // `_store_gross_series` nicht), sonst würde doppelt gerechnet.
-    //
-    // Bei 'unknown' bleibt es beim alten Verhalten: schreiben wie bisher. Wer
-    // die Fassung nicht lesen konnte, soll sich genauso verhalten wie die
-    // ausgelieferte Flotte — und eine Fassung, die die Schlüssel nicht kennt,
-    // quittiert den PUT mit 400, genau wie vor der Erkennung.
-    if (elecprice && (caps.supports.elecPriceCharges || caps.flavor === EOS_FLAVOR.UNKNOWN)) {
-      tasks.push(
-        { section: 'elecprice/charges_kwh', body: elecprice.charges_kwh },
-        { section: 'elecprice/vat_rate', body: elecprice.vat_rate },
-      );
-    }
+    tasks.push({ section: 'feedintariff/direct_marketing_enabled', body: directMarketing });
 
     const applied = [];
     const errors = {};
@@ -695,18 +634,8 @@ export function createEosConfigSync(ctx) {
       else errors[t.section] = res.error;
     }
 
-    // Der Gesamtstatus wird NUR aus den Pflicht-Tasks gebildet — siehe die
-    // Begründung bei optionalTasks. Optionale Fehlschläge landen in
-    // errorsOptional und sind damit im Log sichtbar, ohne okAll zu kippen.
     const okAll = applied.length === tasks.length;
 
-    const appliedOptional = [];
-    const errorsOptional = {};
-    for (const t of optionalTasks) {
-      const res = await eosHttpRequest(baseUrl, 'PUT', `/v1/config/${t.section}`, t.body);
-      if (res.ok) appliedOptional.push(t.section);
-      else errorsOptional[t.section] = res.error;
-    }
     if (pushLog) {
       pushLog('eos_config_sync', {
         ok: okAll,
@@ -714,15 +643,13 @@ export function createEosConfigSync(ctx) {
         eos_version: caps.version,
         applied,
         errors,
-        appliedOptional,
-        errorsOptional,
         battery_capacity_wh: batteries[0]?.capacity_wh,
         battery_max_charge_w: batteries[0]?.max_charge_power_w,
         battery_min_soc_pct: batteries[0]?.min_soc_percentage,
         inverter_max_power_w: inverters[0]?.max_power_w,
       });
     }
-    return { ok: okAll, applied, errors, appliedOptional, errorsOptional, eos: { flavor: caps.flavor, version: caps.version, supports: caps.supports } };
+    return { ok: okAll, applied, errors, eos: { flavor: caps.flavor, version: caps.version, supported: true } };
   }
 
   /**
@@ -773,21 +700,26 @@ export function createEosConfigSync(ctx) {
     if (!cfg?.optimizer?.eosProxy?.enabled) return { ok: true, skipped: 'eosProxy.enabled=false' };
     if (cfg?.optimizer?.eosOptimizeEv !== true) return { ok: true, skipped: 'eosOptimizeEv=false' };
     const caps = await capabilityProbe.get(baseUrl);
-    // Fassung unbekannt (EOS antwortet nicht): nichts schreiben — die
-    // Schreibweise der Geräte hängt an der Fassung. Der nächste Lauf holt es nach.
+    // Fassung unbekannt (EOS antwortet nicht): nichts schreiben. Der nächste
+    // Lauf holt es nach.
     if (!caps.reachable) return { ok: false, skipped: 'eos_unreachable' };
-    // Kein SoC auf 0.4: Fahrzeug nicht anfassen — der volle Abgleich hat es
-    // bereits abgemeldet, und ein Anmelden hier legte EOS lahm.
-    if (!decideEvRegistration(cfg, caps).register) return { ok: true, skipped: 'no ev soc' };
-    const list = buildEosElectricVehicles(cfg, { supportsDeadline: caps.supports.evDeadline === true });
-    const body = caps.supports.deviceMap ? devicesAsMap(list) : list;
+    // Kein EOS 0.4: nichts schreiben (siehe sync()).
+    if (caps.supported === false) {
+      publishCaps(caps);
+      return { ok: false, skipped: 'eos_unsupported', reason: caps.reason };
+    }
+    // Kein SoC: Fahrzeug nicht anfassen — der volle Abgleich hat es bereits
+    // abgemeldet, und ein Anmelden hier legte EOS lahm.
+    if (!decideEvRegistration(cfg).register) return { ok: true, skipped: 'no ev soc' };
+    const list = buildEosElectricVehicles(cfg, { supportsDeadline: true });
+    const body = devicesAsMap(list);
     const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/electric_vehicles', body);
     if (pushLog) {
       pushLog('eos_ev_sync', {
         ok: res.ok, error: res.error,
         minSocPct: list[0].min_soc_percentage,
         deadline: list[0].min_soc_deadline_datetime ?? null,
-        deadlineSupported: caps.supports.evDeadline === true,
+        deadlineSupported: true,
       });
     }
     return { ok: res.ok, error: res.error, ev: list[0] };

@@ -10,6 +10,24 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Geändert
+
+- **Nur noch EOS 0.4.** Der Installer liefert DV-EOS `dvhub-v0.4.0rc1.3` aus
+  (wie das Docker-Image); Boxen mit dem 0.3-Fork wechseln beim nächsten Update
+  automatisch, EOS-Daten und -Konfiguration werden vorher gesichert. Findet
+  DVhub ein älteres EOS, schreibt es nichts mehr hinein und meldet „EOS-Version
+  wird nicht mehr unterstützt“. EOS läuft mit niedriger Priorität und höchstens
+  (Kerne − 1) Kernen.
+- **Zentraler EOS-Monitor** (`/api/eos/status`): ein Punkt für „läuft EOS?“
+  (`up` / `busy` = rechnet / `down`) und den letzten Plan; Kacheln, Inspector,
+  Neustart-Wache und Bridges fragen EOS nicht mehr jeweils selbst.
+
+### Behoben
+
+- E-Auto-Kachel zeigte „kein Plan: eos_off“, während EOS rechnete.
+- Antwortete EOS beim Abgleich nicht rechtzeitig, ging das E-Auto im alten
+  Listenformat raus und EOS 0.4 lehnte es ab.
+
 ### Neu
 
 - **OpenEVSE / go-e: Anstecken wird direkt an der Wallbox erkannt.** Bisher

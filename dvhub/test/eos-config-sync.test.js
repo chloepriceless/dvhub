@@ -13,7 +13,6 @@ import http from 'node:http';
 import {
   buildEosBatteries,
   buildEosInverters,
-  buildEosElecprice,
   buildEosOptimization,
   buildEosElectricVehicles,
   pickGeneticSizing,
@@ -21,11 +20,17 @@ import {
   createEosConfigSync,
 } from '../services/optimizer/eos-config-sync.js';
 
+// GET /v1/config eines EOS 0.4 (gekürzt auf die Erkennungsmerkmale). Ohne
+// sie gilt das Mock-EOS als alte Fassung, und der Abgleich schreibt nichts.
+const EOS04_CONFIG = {
+  optimization: { genetic: { interval_sec: 3600 } },
+  feedintariff: { direct_marketing_enabled: false },
+  devices: { batteries: { battery1: {} }, electric_vehicles: {}, home_appliances: {} },
+};
+
 // Minimal mock EOS server — captures {method, url} per request, 200-OKs all.
-// `failUrls` simuliert ein EOS, das einen Konfigschluessel NICHT kennt — genau
-// die Lage unseres aktuellen Forks (Basis 17.03.) gegenueber
-// feedintariff/direct_marketing_enabled.
-function createMockEos(failUrls = [], getConfigBody = null) {
+// `failUrls` simuliert ein EOS, das einen PUT ablehnt.
+function createMockEos(failUrls = [], getConfigBody = EOS04_CONFIG) {
   const requests = [];
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -106,44 +111,6 @@ test('buildEosBatteries: full charge_rates also for mispel.mode=abgrenzung', () 
   };
   const bat = buildEosBatteries(cfg)[0];
   assert.equal(bat.charge_rates.length, 11);
-});
-
-test('buildEosElecprice: null when pricing.mode is not "dynamic"', () => {
-  assert.equal(buildEosElecprice({}), null);
-  assert.equal(buildEosElecprice({ userEnergyPricing: { mode: 'fixed' } }), null);
-});
-
-test('buildEosElecprice: null when dynamic but all components are 0/missing', () => {
-  const cfg = { userEnergyPricing: { mode: 'dynamic', dynamicComponents: {} } };
-  assert.equal(buildEosElecprice(cfg), null);
-});
-
-test('buildEosElecprice: sums energy markup + grid charges + levies into charges_kwh (€/kWh)', () => {
-  const cfg = {
-    userEnergyPricing: {
-      mode: 'dynamic',
-      dynamicComponents: {
-        energyMarkupCtKwh: 2.5,
-        gridChargesCtKwh: 8.2,
-        leviesAndFeesCtKwh: 4.3,
-        vatPct: 19,
-      },
-    },
-  };
-  const result = buildEosElecprice(cfg);
-  // (2.5 + 8.2 + 4.3) ct = 15.0 ct → 0.15 €/kWh
-  assert.equal(result.charges_kwh, 0.15);
-  assert.equal(result.vat_rate, 1.19);
-});
-
-test('buildEosElecprice: defaults vat_rate to 1.19 when vatPct is missing', () => {
-  const cfg = {
-    userEnergyPricing: {
-      mode: 'dynamic',
-      dynamicComponents: { gridChargesCtKwh: 10 },
-    },
-  };
-  assert.equal(buildEosElecprice(cfg).vat_rate, 1.19);
 });
 
 test('buildEosOptimization: defaults to interval=3600 when unset', () => {
@@ -282,14 +249,10 @@ test('sync(): disables home appliances so EOS cannot invent a phantom dishwasher
     assert.ok(maxPut, 'devices/max_home_appliances must be synced, never left unset');
     assert.equal(maxPut.body, 0, 'max_home_appliances must be 0 (geneticparams.py:579)');
 
-    // Die leere Geräteliste darf NICHT mitgeschickt werden (07.08.2026): bei 0
-    // liest EOS sie nie, und die Sende-Schleife bricht bei einem Fehler nicht
-    // ab — scheitert der 0-PUT und gelingt der Listen-PUT, erzeugt der nackte
-    // `except:` in geneticparams.py:614 die Demo-Spülmaschine neu.
-    assert.equal(
-      listPut, undefined,
-      'devices/home_appliances darf nicht gesendet werden — die 0 allein trägt',
-    );
+    // EOS 0.4: die Abbildung wird NACH der 0 mitgeleert (siehe nächster Test).
+    assert.ok(listPut, 'devices/home_appliances wird mitgeleert');
+    assert.deepEqual(listPut.body, {});
+    assert.ok(mock.requests.indexOf(maxPut) < mock.requests.indexOf(listPut), 'max zuerst');
   } finally {
     await mock.close();
   }
@@ -297,11 +260,10 @@ test('sync(): disables home appliances so EOS cannot invent a phantom dishwasher
 
 // HANDOFF 2026-09-26 / live prod-Vorfall: EOS 0.4 (deviceMap) brach jeden Lauf mit
 // "home_appliances exceeds configured maximum 0" ab, weil beim Löschen des letzten
-// planbaren Geräts nur max=0 gesetzt, die Liste aber nicht geleert wurde. Auf 0.4
-// MUSS der "keine Geräte"-Zweig die Liste auf {} leeren (auf 0.3 NICHT).
-test('sync(): 0.4/deviceMap ohne Geräte leert home_appliances auf {} (kein "exceeds maximum")', async () => {
-  // GET /v1/config gibt eine device-MAP zurück → caps.deviceMap = true (0.4).
-  const mock = await createMockEos([], { devices: { batteries: { battery1: {} } } });
+// planbaren Geräts nur max=0 gesetzt, die Liste aber nicht geleert wurde. Der
+// "keine Geräte"-Zweig MUSS die Abbildung auf {} leeren.
+test('sync(): ohne Geräte wird home_appliances auf {} geleert (kein "exceeds maximum")', async () => {
+  const mock = await createMockEos();
   try {
     const ctx = {
       getCfg: () => ({
@@ -316,7 +278,7 @@ test('sync(): 0.4/deviceMap ohne Geräte leert home_appliances auf {} (kein "exc
     const maxPut = mock.requests.find((r) => r.method === 'PUT' && r.url === '/v1/config/devices/max_home_appliances');
     const listPut = mock.requests.find((r) => r.method === 'PUT' && r.url === '/v1/config/devices/home_appliances');
     assert.ok(maxPut && maxPut.body === 0, 'max_home_appliances = 0');
-    assert.ok(listPut, 'auf 0.4 MUSS die Liste geleert werden');
+    assert.ok(listPut, 'die Abbildung MUSS geleert werden');
     assert.deepEqual(listPut.body, {}, 'leere Map — kein Alteintrag bleibt stehen');
   } finally {
     await mock.close();
@@ -408,8 +370,8 @@ test('persist(): bei aktivem Boost Soll-Takt speichern, danach Boost zurueck', a
 // Upstream-EOS leitet aus `feedintariff.direct_marketing_enabled` DREI Dinge ab
 // (`genetic.py:2670-2677` + `:504`): DC-Charge-Optimierung, Battery-to-Grid-
 // Export und die harte PV-Abregelung bei Negativpreis. Default ist FALSE.
-// Ohne diesen PUT würde ein Umstieg auf upstream alle drei still abschalten —
-// die Abregelung ist §51-Pflicht, keine Optimierung.
+// Ohne diesen PUT blieben alle drei still abgeschaltet — die Abregelung ist
+// §51-Pflicht, keine Optimierung.
 test('sync(): pusht den Direktvermarktungs-Schalter im Spot-Modus', async () => {
   const mock = await createMockEos();
   try {
@@ -432,9 +394,10 @@ test('sync(): pusht den Direktvermarktungs-Schalter im Spot-Modus', async () => 
     assert.ok(put, 'direct_marketing_enabled muss gesendet werden');
     assert.equal(put.body, true);
     assert.ok(
-      res.appliedOptional.includes('feedintariff/direct_marketing_enabled'),
-      'erfolgreicher optionaler Task muss in appliedOptional stehen',
+      res.applied.includes('feedintariff/direct_marketing_enabled'),
+      'Pflicht-Task, steht in applied',
     );
+    assert.equal(res.ok, true);
   } finally {
     await mock.close();
   }
@@ -466,10 +429,9 @@ test('sync(): sendet false, wenn nicht im Spot-Modus', async () => {
   }
 });
 
-test('sync(): ein alter EOS-Fork ohne den Schluessel kippt den Gesamtstatus NICHT', async () => {
-  // Der Kern des optionalen Tasks. Waere er Pflicht, stuende okAll auf unserem
-  // heutigen Fork dauerhaft auf false — ein Signal, das immer rot ist, erzieht
-  // zum Wegsehen. Der Fehlschlag muss sichtbar sein, ohne alles rot zu faerben.
+test('sync(): ein abgelehnter Direktvermarktungs-Schalter kippt den Gesamtstatus', async () => {
+  // Auf EOS 0.4 kennt jede Instanz den Schlüssel — ein Fehlschlag ist ein
+  // echter Fehler und darf nicht versteckt werden.
   const mock = await createMockEos(['/v1/config/feedintariff/direct_marketing_enabled']);
   try {
     const ctx = {
@@ -485,12 +447,9 @@ test('sync(): ein alter EOS-Fork ohne den Schluessel kippt den Gesamtstatus NICH
       state: {},
     };
     const res = await createEosConfigSync(ctx).sync();
-    assert.equal(res.ok, true, 'Pflicht-Tasks sind durch → ok bleibt true');
-    assert.deepEqual(res.appliedOptional, []);
-    assert.ok(
-      res.errorsOptional['feedintariff/direct_marketing_enabled'],
-      'der Fehlschlag muss sichtbar protokolliert sein, nicht verschluckt',
-    );
+    assert.equal(res.ok, false);
+    assert.ok(res.errors['feedintariff/direct_marketing_enabled']);
+    assert.equal('appliedOptional' in res, false, 'keine optionalen Tasks mehr');
   } finally {
     await mock.close();
   }

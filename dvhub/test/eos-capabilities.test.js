@@ -1,32 +1,19 @@
-// test/eos-capabilities.test.js -- Erkennung der EOS-Fassung (2026-09-15).
+// test/eos-capabilities.test.js -- antwortet ein EOS 0.4?
 //
-// Christin: "können wir die Unterstützung schon einbauen, sodass man beide
-// EOS-Versionen unterstützt — sobald Andreas das nach main portiert, switchen
-// wir einfach." DVhub soll also erkennen, mit welchem EOS es spricht, und den
-// Konfigurationsabgleich danach richten, statt Schlüssel blind zu schreiben.
-//
-// Drei Fassungen sind unterwegs:
-//   dv-fork       — unser Fork (Basis v0.3.0): optimization.interval, KEIN
-//                   feedintariff.direct_marketing_enabled
-//   upstream-dm   — Maintainer-Branch feat/direct-marketing-battery-grid-export
-//                   (= das künftige main): interval + direct_marketing_enabled
-//                   + Geräteplanung
-//   upstream-main — Upstream-main VOR dem GENETIC-Umbau (Stand 15.09.2026):
-//                   optimization.genetic.interval_sec, Intervall auf 3600 s
-//                   festgenagelt, kein Direktvermarktungs-Schalter
-//   upstream-genetic — Upstream ab #1330 (17.09.2026, in v0.4.0rc1): derselbe
-//                   Intervall-Pfad, aber 15 Minuten nativ erlaubt, Geräte als
-//                   Abbildung nach device_id, zwei Algorithmen nebeneinander,
-//                   keine Preisaufschläge mehr unter elecprice
+// DVhub unterstützt nur noch EOS 0.4 (Upstream ab #1330, DV-EOS-Tag
+// dvhub-v0.4.0rc1.x). Ältere Fassungen werden noch erkannt, aber als
+// `supported: false` gemeldet — der Abgleich schreibt dann nichts.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
   EOS_FLAVOR,
+  EOS_UNSUPPORTED_REASON,
   detectEosCapabilities,
   createEosCapabilityProbe,
 } from '../services/optimizer/eos-capabilities.js';
 
+// Ältere Fassungen, nur noch zur Erkennung.
 const dvForkConfig = {
   optimization: { interval: 900, hours: 48, genetic: { individuals: 300, generations: 400 } },
   feedintariff: { provider: 'FeedInTariffImport' },
@@ -45,7 +32,7 @@ const upstreamMainConfig = {
 
 // Nachgebildet aus GET /v1/config einer echten v0.4.0rc1-Instanz
 // (ARM64-Testbox, 21.09.2026).
-const upstreamGeneticConfig = {
+const eos04Config = {
   optimization: {
     algorithm: 'GENETIC',
     algorithms: ['GENETIC', 'GENETIC0'],
@@ -65,83 +52,65 @@ const upstreamGeneticConfig = {
 };
 
 describe('detectEosCapabilities', () => {
-  it('erkennt unseren Fork: Intervall-Schlüssel ja, Direktvermarktungs-Schalter nein', () => {
-    const c = detectEosCapabilities(dvForkConfig, { version: '0.3.0' });
-    assert.equal(c.flavor, EOS_FLAVOR.DV_FORK);
-    assert.equal(c.version, '0.3.0');
-    assert.equal(c.supports.directMarketingFlag, false);
-    assert.equal(c.supports.quarterHour, true);
-    assert.equal(c.supports.applianceScheduling, false);
-    assert.equal(c.intervalSection, 'optimization/interval');
+  it('EOS 0.4 → supported', () => {
+    const c = detectEosCapabilities(eos04Config, { version: '0.4.0rc1' });
+    assert.equal(c.flavor, EOS_FLAVOR.UPSTREAM_GENETIC);
+    assert.equal(c.reachable, true);
+    assert.equal(c.supported, true);
+    assert.equal(c.reason, null);
+    assert.equal(c.version, '0.4.0rc1');
   });
 
-  it('erkennt den Maintainer-Branch: Schalter, Geräteplanung, 15 Minuten', () => {
-    const c = detectEosCapabilities(upstreamDmConfig, { version: '0.3.0.dev2609140667381389' });
-    assert.equal(c.flavor, EOS_FLAVOR.UPSTREAM_DM);
-    assert.equal(c.supports.directMarketingFlag, true);
-    assert.equal(c.supports.applianceScheduling, true);
-    assert.equal(c.supports.quarterHour, true);
-    assert.equal(c.intervalSection, 'optimization/interval');
+  it('eine leere Geräte-Abbildung bleibt als 0.4 erkennbar', () => {
+    const c = detectEosCapabilities({
+      ...eos04Config,
+      devices: { batteries: {}, inverters: {}, electric_vehicles: {}, home_appliances: {} },
+    }, {});
+    assert.equal(c.flavor, EOS_FLAVOR.UPSTREAM_GENETIC);
+    assert.equal(c.supported, true);
   });
 
-  it('erkennt heutiges Upstream-main: anderer Intervall-Pfad, keine 15 Minuten', () => {
-    const c = detectEosCapabilities(upstreamMainConfig, { version: '0.3.0' });
-    assert.equal(c.flavor, EOS_FLAVOR.UPSTREAM_MAIN);
-    assert.equal(c.supports.directMarketingFlag, false);
-    assert.equal(c.supports.quarterHour, false);
-    assert.equal(c.intervalSection, 'optimization/genetic/interval_sec');
+  for (const [name, cfg, flavor] of [
+    ['unser 0.3-Fork', dvForkConfig, EOS_FLAVOR.DV_FORK],
+    ['Maintainer-Branch', upstreamDmConfig, EOS_FLAVOR.UPSTREAM_DM],
+    ['Upstream-main vor #1330', upstreamMainConfig, EOS_FLAVOR.UPSTREAM_MAIN],
+  ]) {
+    it(`${name} → erreichbar, aber nicht unterstützt`, () => {
+      const c = detectEosCapabilities(cfg, { version: '0.3.0' });
+      assert.equal(c.flavor, flavor);
+      assert.equal(c.reachable, true);
+      assert.equal(c.supported, false);
+      assert.equal(c.reason, EOS_UNSUPPORTED_REASON);
+      assert.match(c.reason, /EOS 0\.4/);
+    });
+  }
+
+  it('genetic-Intervall mit Direktvermarktung, aber Geräte als Liste → nicht unterstützt', () => {
+    const c = detectEosCapabilities({
+      ...eos04Config,
+      devices: { batteries: [], inverters: [], electric_vehicles: [], home_appliances: [] },
+    }, {});
+    assert.equal(c.flavor, EOS_FLAVOR.UPSTREAM_GENETIC);
+    assert.equal(c.supported, false, 'ohne Geräte-Abbildung kein 0.4');
   });
 
-  it('unbekannte Antwort → flavor unknown und die vorsichtigen Vorgaben', () => {
-    for (const bad of [null, undefined, {}, { irgendwas: 1 }, 'kein Objekt']) {
+  it('erreichbar, aber unbekannte Antwort → nicht unterstützt', () => {
+    for (const bad of [{}, { irgendwas: 1 }]) {
       const c = detectEosCapabilities(bad, {});
-      assert.equal(c.flavor, EOS_FLAVOR.UNKNOWN, `Eingabe ${JSON.stringify(bad)}`);
-      assert.equal(c.supports.directMarketingFlag, false, 'im Zweifel nicht schreiben');
-      assert.equal(c.intervalSection, 'optimization/interval', 'Pfad wie bisher');
-      assert.equal(c.supports.quarterHour, true, 'kein grundloses Herabstufen');
+      assert.equal(c.flavor, EOS_FLAVOR.UNKNOWN);
+      assert.equal(c.reachable, true);
+      assert.equal(c.supported, false);
     }
   });
 
-  it('meldet, ob die Geräteliste beschreibbar ist (max_home_appliances)', () => {
-    assert.equal(detectEosCapabilities(dvForkConfig, {}).supports.maxHomeAppliances, true);
-    assert.equal(detectEosCapabilities(upstreamMainConfig, {}).supports.maxHomeAppliances, false);
-  });
-  it('erkennt Upstream ab #1330: 15 Minuten ja, Geräte als Abbildung, Algorithmuswahl', () => {
-    const caps = detectEosCapabilities(upstreamGeneticConfig, { version: '0.4.0rc1' });
-    assert.equal(caps.flavor, EOS_FLAVOR.UPSTREAM_GENETIC);
-    assert.equal(caps.intervalSection, 'optimization/genetic/interval_sec');
-    assert.equal(caps.supports.quarterHour, true,
-      'ab #1330 lässt EOS nur noch {900, 3600} zu — 900 ist erlaubt');
-    assert.equal(caps.supports.deviceMap, true);
-    assert.equal(caps.supports.algorithmChoice, true);
-    assert.equal(caps.supports.directMarketingFlag, true);
-    assert.equal(caps.supports.elecPriceCharges, false,
-      'charges_kwh/vat_rate sind dort gelöscht');
-    assert.equal(caps.version, '0.4.0rc1');
-  });
-
-  it('hält upstream-main und upstream-genetic auseinander — sonst 15 Minuten verloren', () => {
-    // Beide tragen das Intervall unter genetic. Nähme man nur das als
-    // Merkmal, würde v0.4.0rc1 als upstream-main durchgehen und still auf
-    // Stundenslots herabgestuft.
-    const vorher = detectEosCapabilities(upstreamMainConfig, {});
-    const nachher = detectEosCapabilities(upstreamGeneticConfig, {});
-    assert.equal(vorher.intervalSection, nachher.intervalSection, 'gleicher Intervall-Pfad');
-    assert.equal(vorher.supports.quarterHour, false);
-    assert.equal(nachher.supports.quarterHour, true);
-    assert.equal(vorher.supports.deviceMap, false);
-    assert.equal(nachher.supports.deviceMap, true);
-  });
-
-  it('eine leere Geräte-Abbildung bleibt als Abbildung erkennbar', () => {
-    // EOS liefert unbelegte Abschnitte als {} aus — ein Array-Test allein
-    // würde das mit der alten Listenform verwechseln.
-    const caps = detectEosCapabilities({
-      ...upstreamGeneticConfig,
-      devices: { batteries: {}, inverters: {}, electric_vehicles: {}, home_appliances: {} },
-    }, {});
-    assert.equal(caps.supports.deviceMap, true);
-    assert.equal(caps.flavor, EOS_FLAVOR.UPSTREAM_GENETIC);
+  it('keine Antwort → nicht erreichbar, supported offen', () => {
+    for (const bad of [null, undefined, 'kein Objekt']) {
+      const c = detectEosCapabilities(bad, {});
+      assert.equal(c.flavor, EOS_FLAVOR.UNKNOWN);
+      assert.equal(c.reachable, false);
+      assert.equal(c.supported, null);
+      assert.equal(c.reason, null);
+    }
   });
 });
 
@@ -156,13 +125,14 @@ describe('createEosCapabilityProbe', () => {
     };
     return { probe: createEosCapabilityProbe({ request, ttlMs }), calls };
   }
-  const okConfig = { ok: true, data: upstreamDmConfig };
-  const okHealth = { ok: true, data: { version: '0.3.0.dev1' } };
+  const okConfig = { ok: true, data: eos04Config };
+  const okHealth = { ok: true, data: { version: '0.4.0rc1' } };
 
   it('fragt Konfiguration und Health einmal ab und liefert die Fähigkeiten', async () => {
     const { probe, calls } = probeWith([okConfig, okHealth]);
     const c = await probe.get('http://eos:8503');
-    assert.equal(c.flavor, EOS_FLAVOR.UPSTREAM_DM);
+    assert.equal(c.supported, true);
+    assert.equal(c.version, '0.4.0rc1');
     assert.deepEqual(calls, ['GET /v1/config', 'GET /v1/health']);
   });
 
@@ -183,12 +153,21 @@ describe('createEosCapabilityProbe', () => {
     assert.equal(calls.length, 4);
   });
 
-  it('EOS nicht erreichbar → unknown, kein Wurf, kein Zwischenspeichern des Fehlers', async () => {
+  it('EOS nicht erreichbar → reachable false, kein Wurf, kein Zwischenspeichern des Fehlers', async () => {
     const { probe, calls } = probeWith([{ ok: false, error: 'ECONNREFUSED' }]);
     const c = await probe.get('http://eos:8503');
     assert.equal(c.flavor, EOS_FLAVOR.UNKNOWN);
     assert.equal(c.reachable, false);
+    assert.equal(c.supported, null);
     await probe.get('http://eos:8503');
     assert.ok(calls.length >= 2, 'ein Fehlversuch wird nicht zwischengespeichert');
+  });
+
+  it('Timeout nach Erkennung einer alten Fassung → bleibt nicht unterstützt', async () => {
+    const { probe } = probeWith([{ ok: true, data: dvForkConfig }, okHealth, { ok: false, error: 'EOS timeout' }], 0);
+    assert.equal((await probe.get('http://eos:8503')).supported, false);
+    const c = await probe.get('http://eos:8503');
+    assert.equal(c.reachable, true);
+    assert.equal(c.supported, false);
   });
 });

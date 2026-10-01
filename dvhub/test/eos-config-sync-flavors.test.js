@@ -1,10 +1,7 @@
-// test/eos-config-sync-flavors.test.js -- der Konfigurationsabgleich richtet
-// sich nach der erkannten EOS-Fassung (2026-09-15).
-//
-// Ziel: derselbe DVhub spricht mit unserem Fork UND mit dem Maintainer-Branch,
-// ohne dass jemand etwas umstellt. Umgekehrt darf gegen den alten Fork kein
-// Schlüssel geschrieben werden, den er nicht kennt — das war bisher ein
-// dauerhaft roter optionaler Task.
+// test/eos-config-sync-flavors.test.js -- der Konfigurationsabgleich schreibt
+// nur noch gegen EOS 0.4 (Upstream ab #1330). Ältere Fassungen (0.3-Fork,
+// Maintainer-Branch, Upstream-main vor #1330) werden erkannt und bekommen
+// GAR NICHTS geschrieben.
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -119,78 +116,67 @@ afterEach(async () => { if (mock) { await mock.close(); mock = null; } });
 const sectionsOf = (m) => m.puts.map((p) => p.section);
 const bodyOf = (m, section) => (m.puts.find((p) => p.section === section) || {}).body;
 
-describe('Abgleich gegen unseren Fork (dv-fork)', () => {
-  it('schreibt den Direktvermarktungs-Schalter NICHT und meldet die Fassung', async () => {
+const LEGACY = ['dvFork', 'upstreamDm', 'upstreamMain'];
+
+describe('Alte EOS-Fassung (nicht mehr unterstützt)', () => {
+  for (const kind of LEGACY) {
+    it(`${kind}: sync() schreibt nichts, meldet eos_unsupported`, async () => {
+      mock = await createMockEos(kind);
+      const logs = [];
+      const ctx = ctxFor(mock.port);
+      ctx.pushLog = (ev, data) => logs.push({ ev, data });
+      const res = await createEosConfigSync(ctx).sync();
+      assert.equal(res.ok, false);
+      assert.equal(res.skipped, 'eos_unsupported');
+      assert.match(res.reason, /EOS 0\.4/);
+      assert.deepEqual(mock.puts, [], 'kein einziger PUT');
+      assert.equal(ctx.state.optimizer.eos.supported, false);
+      assert.equal(ctx.state.optimizer.eos.reachable, true);
+      assert.match(ctx.state.optimizer.eos.reason, /nicht mehr unterstützt/);
+      const unsupported = logs.filter((l) => l.ev === 'eos_unsupported_version');
+      assert.equal(unsupported.length, 1);
+      assert.equal(unsupported[0].data.version, '0.3.0-test');
+      assert.ok(unsupported[0].data.flavor);
+      assert.equal(logs.some((l) => l.ev === 'eos_config_sync'), false);
+    });
+  }
+
+  it('syncEv() schreibt nichts gegen eine alte Fassung', async () => {
     mock = await createMockEos('dvFork');
-    const ctx = ctxFor(mock.port);
-    const res = await createEosConfigSync(ctx).sync();
-    assert.equal(res.ok, true);
-    assert.equal(sectionsOf(mock).includes('feedintariff/direct_marketing_enabled'), false,
-      'der Fork kennt den Schlüssel nicht — gar nicht erst schreiben');
-    assert.ok(sectionsOf(mock).includes('optimization/interval'));
-    assert.equal(ctx.state.optimizer.eos.flavor, 'dv-fork');
-    assert.equal(ctx.state.optimizer.eos.supports.directMarketingFlag, false);
-  });
-
-  it('behält das 15-Minuten-Intervall', async () => {
-    mock = await createMockEos('dvFork');
-    await createEosConfigSync(ctxFor(mock.port)).sync();
-    assert.equal(bodyOf(mock, 'optimization/interval'), 900);
-  });
-});
-
-describe('Abgleich gegen den Maintainer-Branch (upstream-dm)', () => {
-  it('schreibt den Direktvermarktungs-Schalter als Pflicht-Task', async () => {
-    mock = await createMockEos('upstreamDm');
-    const ctx = ctxFor(mock.port);
-    const res = await createEosConfigSync(ctx).sync();
-    assert.equal(res.ok, true);
-    assert.equal(bodyOf(mock, 'feedintariff/direct_marketing_enabled'), true,
-      'Einspeisemodus spot → Direktvermarktung an');
-    assert.equal(ctx.state.optimizer.eos.flavor, 'upstream-dm');
-    assert.equal(ctx.state.optimizer.eos.supports.applianceScheduling, true);
-  });
-
-  it('ein abgelehnter Pflicht-Schalter kippt den Gesamtstatus', async () => {
-    mock = await createMockEos('upstreamDm', ['feedintariff/direct_marketing_enabled']);
-    const res = await createEosConfigSync(ctxFor(mock.port)).sync();
+    const ctx = ctxFor(mock.port, { eosOptimizeEv: true, evPlanOnlyWhenPlugged: false });
+    ctx.teslamateService = { getState: () => ({ batteryLevel: 40 }) };
+    const res = await createEosConfigSync(ctx).syncEv();
     assert.equal(res.ok, false);
-    assert.ok(res.errors['feedintariff/direct_marketing_enabled']);
+    assert.equal(res.skipped, 'eos_unsupported');
+    assert.deepEqual(mock.puts, []);
+    assert.equal(ctx.state.optimizer.eos.supported, false);
   });
 
-  it('Einspeisemodus fest → Schalter wird auf false gesetzt, nicht weggelassen', async () => {
-    mock = await createMockEos('upstreamDm');
-    await createEosConfigSync(ctxFor(mock.port, { tariff: { feedInMode: 'fixed' } })).sync();
-    assert.equal(bodyOf(mock, 'feedintariff/direct_marketing_enabled'), false);
-  });
-});
-
-describe('Abgleich gegen heutiges Upstream-main', () => {
-  it('schreibt das Intervall auf den anderen Pfad und stuft auf 3600 s herab', async () => {
+  it('eos_unsupported_version nur beim Wechsel, nicht bei jedem Lauf', async () => {
     mock = await createMockEos('upstreamMain');
+    const logs = [];
     const ctx = ctxFor(mock.port);
-    const res = await createEosConfigSync(ctx).sync();
-    assert.equal(res.ok, true);
-    assert.equal(sectionsOf(mock).includes('optimization/interval'), false);
-    assert.equal(bodyOf(mock, 'optimization/genetic/interval_sec'), 3600,
-      'main kennt keine 15 Minuten — herabstufen statt Fehler');
-    assert.equal(ctx.state.optimizer.eos.flavor, 'upstream-main');
-    assert.equal(ctx.state.optimizer.eos.supports.quarterHour, false);
+    ctx.pushLog = (ev) => logs.push(ev);
+    const sync = createEosConfigSync(ctx);
+    await sync.sync();
+    await sync.sync();
+    await sync.syncEv();
+    assert.equal(logs.filter((e) => e === 'eos_unsupported_version').length, 1);
   });
 });
 
-describe('EOS nicht erreichbar / unbekannte Fassung', () => {
-  it('verhält sich wie bisher: Schalter bleibt optional, Intervall auf dem alten Pfad', async () => {
-    mock = await createMockEos('dvFork', ['feedintariff/direct_marketing_enabled']);
-    // Erkennung ins Leere laufen lassen: GET /v1/config beantwortet der Mock,
-    // aber wir tun so, als käme Unsinn zurück → über eine leere Konfiguration.
-    const ctx = ctxFor(mock.port);
+describe('EOS nicht erreichbar', () => {
+  it('schreibt nichts und meldet eos_unreachable', async () => {
+    const ctx = ctxFor(1); // Port 1: niemand hört zu
     const res = await createEosConfigSync(ctx).sync();
-    assert.equal(res.ok, true, 'ein unbekannter optionaler Schlüssel kippt nichts');
+    assert.equal(res.ok, false);
+    assert.equal(res.skipped, 'eos_unreachable');
+    assert.equal(ctx.state.optimizer.eos.reachable, false);
+    assert.equal(ctx.state.optimizer.eos.supported, null);
   });
 
   it('Erkennung läuft höchstens einmal je Abgleich', async () => {
-    mock = await createMockEos('upstreamDm');
+    mock = await createMockEos('upstreamGenetic');
     const sync = createEosConfigSync(ctxFor(mock.port));
     await sync.sync();
     const nachErstem = mock.gets.filter((u) => u === '/v1/config').length;
@@ -215,7 +201,7 @@ describe('EOS nicht erreichbar / unbekannte Fassung', () => {
 // scheiterte mit 404, der Optimierer rechnete mit SoC=0 und lieferte gar
 // keine Loesung -- DVhub fiel still auf den internen Plan zurueck.
 describe('Geraetezaehler (max_batteries / max_inverters)', () => {
-  for (const kind of ['dvFork', 'upstreamDm', 'upstreamGenetic']) {
+  for (const kind of ['upstreamGenetic']) {
     it(`werden gegen ${kind} gesetzt, und zwar VOR den Geraeten`, async () => {
       mock = await createMockEos(kind);
       await createEosConfigSync(ctxFor(mock.port)).sync();
@@ -230,12 +216,40 @@ describe('Geraetezaehler (max_batteries / max_inverters)', () => {
 });
 
 describe('Abgleich gegen Upstream ab #1330 (upstream-genetic)', () => {
+  it('schreibt genau diese Abschnitte, in dieser Reihenfolge', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const res = await createEosConfigSync(ctxFor(mock.port)).sync();
+    assert.equal(res.ok, true);
+    assert.equal(res.eos.supported, true);
+    assert.deepEqual(sectionsOf(mock), [
+      'devices/max_batteries', 'devices/max_inverters', 'devices/batteries', 'devices/inverters',
+      'devices/max_electric_vehicles', 'devices/electric_vehicles',
+      'devices/max_home_appliances', 'devices/home_appliances',
+      'optimization/algorithm', 'optimization/genetic/interval_sec',
+      'optimization/genetic/generations', 'optimization/genetic/individuals',
+      'ems/interval', 'pvforecast/provider', 'load/provider', 'elecprice/provider',
+      'feedintariff/provider', 'feedintariff/direct_marketing_enabled',
+    ]);
+    assert.equal(bodyOf(mock, 'devices/max_home_appliances'), 0);
+    assert.deepEqual(bodyOf(mock, 'devices/home_appliances'), {}, 'Abbildung wird mitgeleert');
+  });
+
+  it('dynamische Preise: trotzdem kein charges_kwh / vat_rate', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    const ctx = ctxFor(mock.port);
+    const base = ctx.getCfg();
+    ctx.getCfg = () => ({ ...base, userEnergyPricing: { mode: 'dynamic', dynamicComponents: { gridChargesCtKwh: 10, vatPct: 19 } } });
+    await createEosConfigSync(ctx).sync();
+    assert.equal(sectionsOf(mock).some((x) => x.startsWith('elecprice/charges') || x === 'elecprice/vat_rate'), false);
+  });
+
   it('schreibt Geräte als Abbildung nach device_id statt als Liste', async () => {
     mock = await createMockEos('upstreamGenetic');
     const ctx = ctxFor(mock.port);
     const res = await createEosConfigSync(ctx).sync();
     assert.equal(res.ok, true);
     assert.equal(ctx.state.optimizer.eos.flavor, 'upstream-genetic');
+    assert.equal(ctx.state.optimizer.eos.supported, true);
 
     const bat = bodyOf(mock, 'devices/batteries');
     assert.ok(bat && !Array.isArray(bat) && typeof bat === 'object', 'batteries als Abbildung');
@@ -262,7 +276,6 @@ describe('Abgleich gegen Upstream ab #1330 (upstream-genetic)', () => {
       'ab #1330 sind 15 Minuten wieder erlaubt — NICHT auf 3600 herabstufen');
     assert.equal(sectionsOf(mock).includes('optimization/interval'), false,
       'der alte Schlüssel ist gelöscht; ein PUT darauf quittiert mit 400');
-    assert.equal(ctx.state.optimizer.eos.supports.quarterHour, true);
   });
 
   it('wählt GENETIC ausdrücklich, statt den Vorgabewert zu erben', async () => {
@@ -289,9 +302,8 @@ describe('Abgleich gegen Upstream ab #1330 (upstream-genetic)', () => {
 });
 
 // --- E-Auto-Abfahrt (2026-09-22) --------------------------------------------
-// Die Uhrzeit (`min_soc_deadline_datetime`) kennt erst 0.4. Auf dem Fork waere
-// das Feld unbekannt; dort geht nur das Ziel raus.
-describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
+// Ziel + Uhrzeit (`min_soc_deadline_datetime`, EOS 0.4) gehen immer mit.
+describe('E-Auto: Ziel + Abfahrt', () => {
   const dep = {
     eosOptimizeEv: true, evCapacityWh: 60000,
     evDepartureEnabled: true, evDepartureTime: '07:00', evDepartureDays: [1, 2, 3, 4, 5, 6, 7],
@@ -314,7 +326,7 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
     const ev = bodyOf(mock, 'devices/electric_vehicles').ev11;
     assert.equal(ev.min_soc_percentage, 75);
     assert.ok(Date.parse(ev.min_soc_deadline_datetime) > Date.now(), 'Abfahrt liegt in der Zukunft');
-    assert.equal(ctx.state.optimizer.eos.supports.evDeadline, true);
+    assert.equal(ctx.state.optimizer.eos.supported, true);
 
     const res = await createEosConfigSync(ctx).syncEv();
     assert.equal(res.ok, true);
@@ -336,11 +348,6 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
     assert.equal((await createEosConfigSync(ctx).syncEv()).skipped, 'no ev soc');
   });
 
-  it('dv-fork OHNE Fahrzeug-SoC: wie bisher anmelden (0.3 rechnet mit 0 weiter)', async () => {
-    mock = await createMockEos('dvFork');
-    await createEosConfigSync(ctxP(mock.port, dep)).sync();
-    assert.equal(bodyOf(mock, 'devices/max_electric_vehicles'), 1);
-  });
 
   it('evcc-SoC springt ein, wenn TeslaMate nichts hat', async () => {
     mock = await createMockEos('upstreamGenetic');
@@ -353,13 +360,6 @@ describe('E-Auto: Ziel + Abfahrt je Fassung', () => {
     assert.equal(ctx.state.optimizer.eosEv.socSource, 'evcc');
   });
 
-  it('dv-fork: nur das Ziel, kein unbekanntes Feld', async () => {
-    mock = await createMockEos('dvFork');
-    await createEosConfigSync(ctxP(mock.port, dep)).sync();
-    const ev = bodyOf(mock, 'devices/electric_vehicles')[0];
-    assert.equal(ev.min_soc_percentage, 75);
-    assert.equal('min_soc_deadline_datetime' in ev, false);
-  });
 
   it('syncEv() tut nichts, solange das E-Auto nicht mitoptimiert wird', async () => {
     mock = await createMockEos('upstreamGenetic');

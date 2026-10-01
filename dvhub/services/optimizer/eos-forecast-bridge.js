@@ -372,9 +372,8 @@ export function createEosForecastBridge(ctx) {
     const battFactor = Math.max(0, Math.min(1, socPct / 100));
 
     // EV-SoC aus TeslaMate / evcc (ev-soc.js). Fehlt er, wird der EV-Kanal
-    // uebersprungen. Auf 0.3 rechnet EOS dann mit 0; ab 0.4 wuerde der Lauf
-    // abbrechen — deshalb meldet eos-config-sync das Fahrzeug dort gar nicht
-    // erst an, solange es keinen SoC gibt.
+    // uebersprungen. EOS 0.4 wuerde den Lauf sonst abbrechen — deshalb meldet
+    // eos-config-sync das Fahrzeug gar nicht erst an, solange es keinen SoC gibt.
     const evSoc = resolveEvSocPct(ctx);
     const evLegacyPct = Number(state?.victron?.evSocPct);
     const evPct = evSoc ? evSoc.pct : evLegacyPct;
@@ -445,7 +444,8 @@ export function createEosForecastBridge(ctx) {
   async function pushFreshSoc() {
     const cfg = getCfg();
     if (!cfg?.optimizer?.eosProxy?.enabled) return { skipped: 'eosProxy.enabled=false' };
-    if (state?.optimizer?.eos?.supports?.freshSocRequired !== true) return { skipped: 'not required' };
+    // Erst wenn der Abgleich ein EOS 0.4 erkannt hat (state.optimizer.eos).
+    if (state?.optimizer?.eos?.supported !== true) return { skipped: 'eos not supported' };
     const baseUrl = cfg.optimizer.eosProxy.url || 'http://127.0.0.1:8503';
     return pushSoc(baseUrl, { freshOnly: true });
   }
@@ -455,10 +455,10 @@ export function createEosForecastBridge(ctx) {
    * Steuerzeitraum = volle Stunden, die ab jetzt lueckenlos mit Preisen belegt
    * sind, minus 15 min Puffer (EOS rechnet auf eigenem 15-min-Takt; der
    * naechste Lauf vor dem naechsten Push muss noch abgedeckt sein), 1..24 h.
-   * Nur wenn der Abgleich eine Fassung mit Pflicht-Abdeckung erkannt hat.
+   * Nur wenn der Abgleich ein EOS 0.4 erkannt hat.
    */
   async function syncControlHorizon(baseUrl, ...slotLists) {
-    if (state?.optimizer?.eos?.flavor !== 'upstream-genetic') return { skipped: 'flavor' };
+    if (state?.optimizer?.eos?.supported !== true) return { skipped: 'eos not supported' };
     const hours = computeControlHorizonHours(slotLists.filter(Boolean), Date.now());
     if (hours === null) return { skipped: 'no prices' };
     // Immer senden (kostet nichts): nach einem EOS-Neustart kennt EOS den
@@ -620,13 +620,12 @@ export function createEosForecastBridge(ctx) {
       else errors[t.provider] = res.error;
     }
 
-    // Steuerzeitraum an die Preisabdeckung koppeln (nur EOS ab #1330 / 0.4).
+    // Steuerzeitraum an die Preisabdeckung koppeln (EOS 0.4).
     // 0.4 bricht einen Lauf ab, wenn im Steuerzeitraum ein Preis fehlt
     // ("Missing or invalid prices within the control horizon", prod
     // 2026-09-23 01:51). Day-Ahead reicht nachts nur bis Mitternacht, erst
     // gegen 13 Uhr kommt der Folgetag — mit festen 24 h plant 0.4 dann bis
-    // zum Nachmittag GAR NICHT. 0.3 zog die Luecke still mit dem letzten Wert
-    // voll. Wir erfinden keine Preise, sondern kuerzen den Steuerzeitraum auf
+    // zum Nachmittag GAR NICHT. Wir erfinden keine Preise, sondern kuerzen den Steuerzeitraum auf
     // das, was belegt ist; danach bewertet EOS die Restladung ueber seinen
     // Endwert.
     const horizon = await syncControlHorizon(

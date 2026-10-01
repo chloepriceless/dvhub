@@ -2391,7 +2391,7 @@
     if (dep.deadlineSupported) box.className += ' is-ok';
     else {
       box.className += ' is-warn';
-      lines.push('Dein EOS' + (dep.eosFlavor ? ' (' + dep.eosFlavor + ')' : '') + ' kennt die Abfahrtszeit noch nicht (erst ab 0.4) — das Ziel gilt bis zum Ende des Planungszeitraums.');
+      lines.push('Kein EOS 0.4 erkannt' + (dep.eosFlavor ? ' (' + dep.eosFlavor + ')' : '') + ' — DVhub schreibt Ziel und Abfahrt erst, wenn EOS 0.4 antwortet.');
     }
     box.textContent = lines.join('\n');
   }
