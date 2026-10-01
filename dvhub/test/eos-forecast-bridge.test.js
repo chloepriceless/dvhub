@@ -213,21 +213,18 @@ test('push forwards live battery SoC as factor; skips EV when absent', async () 
     const socPuts = mock.requests.filter(
       (r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'),
     );
-    // Battery gepusht, EV uebersprungen (kein evSocPct) — aber ZWEI Stempel je
-    // Kanal: volle Stunde fuer EOS 0.3.x (sucht bei ems.start_datetime=HH:00),
-    // 'jetzt' fuer EOS 0.4 (bricht ab, wenn der Wert aelter als 300 s ist).
-    assert.equal(socPuts.length, 2);
+    // Battery gepusht, EV uebersprungen (kein evSocPct) — ein Stempel 'jetzt'
+    // (EOS 0.4 bricht ab, wenn der Wert aelter als 300 s ist).
+    assert.equal(socPuts.length, 1, 'nur der „jetzt“-Stempel (EOS 0.4)');
     for (const put of socPuts) {
       assert.match(put.url, /key=battery1-soc-factor/);
       assert.match(put.url, /value=0\.16(&|$)/);
     }
     const stamps = socPuts.map((r) => decodeURIComponent(r.url).match(/datetime=([^&]+)/)[1]);
-    assert.ok(stamps.some((d) => /T\d\d:00:00Z$/.test(d)), 'ein Stempel auf der vollen Stunde');
     assert.ok(
       stamps.some((d) => !/T\d\d:00:00Z$/.test(d) && Math.abs(Date.now() - Date.parse(d)) < 60_000),
       'ein Stempel auf jetzt',
     );
-    // Jeder Kanal wird trotz zweier PUTs nur EINMAL gemeldet.
     assert.equal(res.pushed.filter((p) => p.startsWith('battery1-soc-factor=0.16')).length, 1);
   } finally {
     await mock.close();
@@ -250,9 +247,9 @@ test('push forwards EV SoC when state provides evSocPct', async () => {
       (r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'),
     );
     // zwei Kanaele x zwei Stempel
-    assert.equal(socPuts.length, 4);
-    assert.equal(socPuts.filter((r) => /key=battery1-soc-factor/.test(r.url) && /value=0\.5(&|$)/.test(r.url)).length, 2);
-    assert.equal(socPuts.filter((r) => /key=ev11-soc-factor/.test(r.url) && /value=0\.8(&|$)/.test(r.url)).length, 2);
+    assert.equal(socPuts.length, 2);
+    assert.equal(socPuts.filter((r) => /key=battery1-soc-factor/.test(r.url) && /value=0\.5(&|$)/.test(r.url)).length, 1);
+    assert.equal(socPuts.filter((r) => /key=ev11-soc-factor/.test(r.url) && /value=0\.8(&|$)/.test(r.url)).length, 1);
   } finally {
     await mock.close();
   }
@@ -275,7 +272,7 @@ test('push holt den EV-SoC aus TeslaMate', async () => {
     const evPuts = mock.requests.filter(
       (r) => r.method === 'PUT' && /key=ev11-soc-factor/.test(r.url) && /value=0\.63(&|$)/.test(r.url),
     );
-    assert.equal(evPuts.length, 2, 'EV-SoC mit beiden Zeitstempeln');
+    assert.equal(evPuts.length, 1, 'EV-SoC mit dem „jetzt“-Stempel');
   } finally {
     await mock.close();
   }

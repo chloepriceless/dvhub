@@ -1419,7 +1419,9 @@ const eosForecastBridge = createEosForecastBridge(ctx);
 // (measurement_max_age_seconds). Der Prognose-Push alle 15 min reicht dafuer
 // nicht — minuetlich nur den SoC nachschicken. pushFreshSoc() tut nichts,
 // solange der Abgleich kein EOS 0.4 erkannt hat.
-const eosFreshSocTimer = safeInterval('eos-fresh-soc', () => eosForecastBridge.pushFreshSoc(), 60_000);
+// Alle 2 min (EOS nimmt den SoC bis 5 min alt): jeder Push schreibt bei EOS
+// die Messwert-Datei neu — halb so oft wie vorher schont die SD-Karte.
+const eosFreshSocTimer = safeInterval('eos-fresh-soc', () => eosForecastBridge.pushFreshSoc(), 120_000);
 ctx.eosForecastBridge = eosForecastBridge;
 
 // -- ctx extensions for routes-api.js ---

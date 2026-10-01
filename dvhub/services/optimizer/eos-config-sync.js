@@ -72,6 +72,8 @@ function isGridArbitrageLicensed(cfg) {
  * @param {object} cfg - DVhub raw config (from getCfg()).
  * @returns {Array<object>}
  */
+
+export const EOS_MEASUREMENT_HISTORIC_HOURS = 48;
 export function buildEosBatteries(cfg, opts = {}) {
   const opt = cfg?.optimizer || {};
   const eff = splitRoundTripEff(opt.roundTripEfficiency);
@@ -634,6 +636,12 @@ export function createEosConfigSync(ctx) {
       { section: 'pvforecast/provider', body: 'PVForecastImport' },
       { section: 'load/provider', body: 'LoadImport' },
       { section: 'elecprice/provider', body: 'ElecPriceImport' },
+      // SD-Karten-Schonung (2026-10-01): EOS hält Messwerte in EINER JSON-Datei
+      // (measurement.json) und schreibt sie bei jedem Messwert komplett neu.
+      // Mit der Vorgabe 17520 h (2 Jahre) waren das auf prod 2,9 MB je Write,
+      // 14 MB/min ≈ 20 GB/Tag. DVhub braucht dort nur den frischen SoC (≤ 5 min)
+      // und den Tageszähler der Geräte → 48 h reichen, die Datei bleibt klein.
+      { section: 'measurement/historic_hours', body: EOS_MEASUREMENT_HISTORIC_HOURS },
     ];
     // In spot feed-in mode, point feedintariff at FeedInTariffImport so EOS
     // values grid export at the spot price the bridge pushes (operator request

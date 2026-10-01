@@ -385,29 +385,17 @@ export function createEosForecastBridge(ctx) {
       return { pushed, errors };
     }
     const socKeys = keysRes.data.filter((k) => /-soc-factor$/.test(String(k)));
-    // ZWEI Zeitstempel je Kanal — einer fuer jede EOS-Generation:
-    //
-    //   1. volle Stunde: EOS 0.3.x sucht den Startwert mit
-    //      key_to_value(target_datetime=ems.start_datetime, time_window=48h),
-    //      und ems.start_datetime ist dort auf die volle Stunde abgerundet.
-    //      Das Fenster ist symmetrisch und bevorzugt den exakten Treffer, also
-    //      gewinnt dieser Wert dort weiterhin.
-    //   2. jetzt: EOS 0.4 prueft die FRISCHE. configrequest.py:108-115 nimmt
+    // Ein Zeitstempel „jetzt“: EOS 0.4 prueft die FRISCHE. configrequest.py:108-115 nimmt
     //      den juengsten Messwert <= observation_datetime (der echten Uhrzeit)
     //      und bricht den Lauf ab, wenn er aelter ist als
     //      optimization.genetic.measurement_max_age_seconds (Vorgabe 300 s).
     //      Am 2026-09-20 auf einer frischen v0.4.0rc1-Instanz nachgemessen:
     //      nur der Stundenstempel -> HTTP 503 "Fresh SoC missing for battery1";
     //      zusaetzlich "jetzt" -> HTTP 200 mit vollstaendiger Loesung.
-    //
-    // Beide Werte stehen nebeneinander in derselben Messreihe; keine EOS-Version
-    // stoert sich am jeweils anderen. Deshalb braucht es hier keine
-    // Versionserkennung — anders als beim Konfigurations-Schema.
-    const hourIso = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000)
-      .toISOString()
-      .replace('.000Z', 'Z');
+    // Der fruehere zweite Stempel zur vollen Stunde war nur fuer EOS 0.3 und
+    // kostete einen zusaetzlichen Komplett-Schreibvorgang von measurement.json.
     const freshIso = new Date().toISOString();
-    const socStamps = freshOnly ? [freshIso] : [hourIso, freshIso];
+    const socStamps = [freshIso];
 
     for (const key of socKeys) {
       const isEv = /(^|[^a-z])ev\d*-soc-factor$/.test(key);
