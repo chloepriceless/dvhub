@@ -5154,7 +5154,10 @@ export function createApiRoutes(ctx) {
         try {
           const depMs = Date.parse(resolved.departureAt || '');
           const toMs = Math.min(nowMs + 48 * 3600_000, Math.max(nowMs + 24 * 3600_000, Number.isFinite(depMs) ? depMs + 3600_000 : 0));
-          const eos = await ctx.inspector.getEos({ from: new Date(nowMs - 15 * 60_000).toISOString(), to: new Date(toMs).toISOString() });
+          const cached = ctx.eosSolutionCache ? await ctx.eosSolutionCache.get() : null;
+          const eos = cached
+            ? { output: cached.solution, reason: cached.reason }
+            : await ctx.inspector.getEos({ from: new Date(nowMs - 15 * 60_000).toISOString(), to: new Date(toMs).toISOString() });
           const out = eos?.output;
           if (out && Array.isArray(out.rows)) {
             plan = {
