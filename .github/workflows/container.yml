@@ -170,7 +170,9 @@ jobs:
 
       - name: EOS-Stand aus docker/.env.example
         id: eos
-        run: echo "tag=$(grep '^EOS_TAG=' docker/.env.example | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "tag=$(grep '^EOS_TAG=' docker/.env.example | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          echo "repo=$(grep '^EOS_REPO=' docker/.env.example | cut -d= -f2)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -188,7 +190,7 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: https://github.com/chloepriceless/DV-EOS.git#${{ steps.eos.outputs.tag }}
+          context: ${{ steps.eos.outputs.repo }}#${{ steps.eos.outputs.tag }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

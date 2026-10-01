@@ -110,7 +110,7 @@ services:
     # Gebaut aus dem Dockerfile des Forks am Git-Tag — kein zweites Rezept hier.
     image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_TAG:-dvhub-v0.4.0rc1.3}
     build:
-      context: https://github.com/chloepriceless/DV-EOS.git#${EOS_TAG:-dvhub-v0.4.0rc1.3}
+      context: ${EOS_REPO:-https://github.com/chloepriceless/DV-EOS.git}#${EOS_TAG:-dvhub-v0.4.0rc1.3}
     profiles: [eos]
     restart: unless-stopped
     # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).
