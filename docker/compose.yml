@@ -108,6 +108,8 @@ services:
       DVHUB_DB_USER: dvhub
       DVHUB_DB_PASSWORD: ${DVHUB_DB_PASSWORD}
       DVHUB_DB_TIMESCALEDB: "true"
+      # Speicher-Limit der DB — DVhub wählt danach sein DB-Profil (db-tuning.js).
+      DVHUB_DB_MEM_LIMIT: ${DB_MEM_LIMIT:-160m}
       # Nur für DB-Backup/-Restore aus der Oberfläche (Einstellungen → Status).
       DVHUB_DB_ADMIN_USER: postgres
       DVHUB_DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}

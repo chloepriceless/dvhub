@@ -36,6 +36,7 @@ import { createHistoryVizAggregator } from './services/history-viz/aggregator.js
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
 import { createLogRetention } from './services/log-retention.js';
+import { applyDbTuning, dbBudgetMb } from './services/db-tuning.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
@@ -578,6 +579,24 @@ function persistConfig(source = 'config_persist') {
 
 let dbPool = null; // raw pg pool — shared between telemetry store and forecast services
 
+async function tuneDatabase(dbConfig) {
+  const adminUser = process.env.DVHUB_DB_ADMIN_USER;
+  const adminPassword = process.env.DVHUB_DB_ADMIN_PASSWORD;
+  if (!adminUser || !adminPassword || cfg.telemetry?.database?.selfTune === false) {
+    state.dbTuning = { applied: false, reason: adminUser ? 'abgeschaltet' : 'kein Admin-Zugang (nativ: pg-write-tuning.sh)' };
+    return;
+  }
+  const admin = createPool({ ...dbConfig, user: adminUser, password: adminPassword, name: 'postgres', pool: { min: 0, max: 1 } });
+  try {
+    const budgetMb = dbBudgetMb({ totalMemBytes: os.totalmem() });
+    const r = await applyDbTuning((q, p) => admin.query(q, p), { budgetMb });
+    state.dbTuning = { applied: true, budgetMb, ...r, at: new Date().toISOString() };
+    if (r.changed.length || r.pendingRestart.length) pushLog('db_tuning', state.dbTuning);
+  } finally {
+    await admin.end().catch(() => {});
+  }
+}
+
 async function createTelemetryStoreIfEnabled() {
   if (!cfg.telemetry?.enabled) return null;
   try {
@@ -599,6 +618,10 @@ async function createTelemetryStoreIfEnabled() {
     state.telemetry.ok = true;
     state.telemetry.lastError = null;
     dbPool = pool; // save reference for ctx.db
+    // Datenbank selbst einstellen (schreibarm + kleiner Speicher-Footprint,
+    // services/db-tuning.js) — wo ein Admin-Zugang da ist (Container/balena).
+    // Nativ setzt pg-write-tuning.sh dieselben Werte. Blockiert den Start nie.
+    if (IS_RUNTIME_PROCESS) tuneDatabase(dbConfig).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
     return store;
   } catch (error) {
     state.telemetry.enabled = true;
