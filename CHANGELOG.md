@@ -12,6 +12,14 @@ verweist hierher.
 
 ### Neu
 
+- **OpenEVSE / go-e: Anstecken wird direkt an der Wallbox erkannt.** Bisher
+  kam der Steckzustand nur aus evcc — lief evcc nicht, blieb das Auto
+  „Steckzustand unbekannt“ und wurde bei EOS nicht angemeldet. DVhub fragt
+  OpenEVSE bzw. go-e jetzt selbst alle 15 s (angesteckt / lädt / Leistung);
+  evcc bleibt die Quelle, wenn evcc als Wallbox gewählt ist.
+- **Integrationskachel heißt jetzt „Wallbox“ statt „EVCC Wallbox“.** Status und
+  Details zeigen die gewählte Wallbox (OpenEVSE / go-e direkt, evcc separat).
+
 - **Home Assistant und Loxone liefern Messwerte — auch ohne MQTT.** Im
   Profil „Universal (DVhub-MQTT-Schema: HA/Loxone)“ nimmt DVhub Netz, PV,
   Batterie, SoC und Hausverbrauch jetzt auch als Gesamtwerte

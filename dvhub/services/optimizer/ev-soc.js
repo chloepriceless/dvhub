@@ -38,6 +38,10 @@ export function resolveEvSocPct(ctx) {
  * @returns {boolean|null} null = unbekannt (evcc nicht erreichbar/kein Ladepunkt)
  */
 export function resolveEvPlugged(ctx) {
+  // OpenEVSE / go-e: die Wallbox selbst ist die Quelle (charger-status.js).
+  // Antwortet sie > 90 s nicht, ersatzweise evcc (falls dort ein Ladepunkt ist).
+  const direct = ctx?.chargerStatus?.fresh?.();
+  if (direct) return direct.connected === true;
   const lpId = Number(ctx?.getCfg?.()?.optimizer?.evEvccLoadpoint) || 1;
   const lps = ctx?.evccIntegration?.getLoadpoints?.() || [];
   const lp = lps.find((l) => l.id === lpId);

@@ -401,7 +401,7 @@ export function createEosConfigSync(ctx) {
     let reason = wanted ? null : 'eosOptimizeEv=false';
     if (wanted && onlyWhenPlugged && plugged !== true) {
       register = false;
-      reason = plugged === false ? 'nicht angesteckt' : 'Steckzustand unbekannt (evcc)';
+      reason = plugged === false ? 'nicht angesteckt' : 'Steckzustand unbekannt (Wallbox/evcc nicht erreichbar)';
     } else if (wanted && !soc && caps.supports.freshSocRequired === true) {
       register = false;
       reason = 'kein Ladestand des Autos (TeslaMate/evcc) — EOS 0.4 wuerde sonst gar nicht rechnen';

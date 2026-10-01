@@ -136,6 +136,7 @@ import { createEosAdapter as createEosAdapterForInspector } from './services/opt
 import { createEosEvccBridge } from './services/optimizer/eos-evcc-bridge.js';
 import { createEosDeviceBridge } from './services/optimizer/eos-device-bridge.js';
 import { createEvChargingProbe } from './services/wallbox/ev-charging.js';
+import { createChargerStatusPoller } from './services/wallbox/charger-status.js';
 import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
 import { createOpenEvseAdapter, createGoeAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
@@ -1271,6 +1272,16 @@ const eosEvccBridge = createEosEvccBridge({
 });
 ctx.eosEvccBridge = eosEvccBridge;
 
+// Steck-/Ladezustand direkt von OpenEVSE / go-e (alle 15 s) — Quelle für die
+// Steck-Wache und die E-Auto-Kachel, wenn die Wallbox nicht evcc ist.
+ctx.chargerStatus = createChargerStatusPoller({
+  getCfg: () => ctx.getCfg(),
+  getAdapter: (type) => (type === 'openevse'
+    ? createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse)
+    : createGoeAdapter(() => ctx.getCfg()?.wallbox?.goe)),
+});
+if (IS_RUNTIME_PROCESS) ctx.chargerStatus.start();
+
 // Planbare Verbraucher (2026-09-26): Aktor (Endpunkt-Routing) + Aktuierungs-Bridge.
 // Deferrable Geräte folgen dem EOS-home_appliance-Dispatch, modulierende Heizstäbe
 // dem PV-Überschuss. Wird alle 30 s getickt (server start()-Block).
@@ -2292,6 +2303,7 @@ async function gracefulShutdown(signal) {
   safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
   safeSync('datenspende.stop', () => ctx.datenspende?.stop?.());
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
+  safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
   safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
   safeSync('eosFreshSocTimer.stop', () => clearInterval(eosFreshSocTimer));

@@ -103,8 +103,8 @@
     // loadpoint selection). Status from /api/integrations/status.evcc.
     {
       key: 'evcc',
-      label: 'EVCC Wallbox',
-      category: 'Wallbox · Lademodus',
+      label: 'Wallbox',
+      category: 'evcc · OpenEVSE · go-e',
       logo: 'EV',
       accent: 'cyan'
     },
@@ -433,8 +433,12 @@
         return 'stale';
       }
       case 'evcc':
-        // #23: data from /api/integrations/status.evcc {enabled, url, reachable}.
-        // No URL = not configured. URL set but unreachable = stale (warn).
+        // Wallbox: bei OpenEVSE / go-e zählt die Box selbst (data.charger),
+        // sonst evcc {url, reachable}. Ohne Adresse = nicht eingerichtet.
+        if (data && data.wallboxType && data.wallboxType !== 'evcc') {
+          if (!data.charger) return 'disabled';
+          return data.charger.reachable ? 'online' : 'stale';
+        }
         if (!data || !data.url) return 'disabled';
         return data.reachable ? 'online' : 'stale';
       case 'mid':
@@ -602,7 +606,20 @@
         ];
       }
       case 'evcc':
+        if (data.wallboxType && data.wallboxType !== 'evcc') {
+          var c = data.charger;
+          var car = !c || !c.reachable ? '—'
+            : (c.charging ? ('lädt' + (c.powerW != null ? ' · ' + (Math.round(c.powerW / 100) / 10).toLocaleString('de-DE') + ' kW' : ''))
+              : (c.connected ? 'angesteckt' : 'nicht angesteckt'));
+          return [
+            { label: 'Wallbox', value: data.wallboxType === 'openevse' ? 'OpenEVSE' : 'go-e Charger' },
+            { label: 'Status', value: !c ? 'Nicht konfiguriert' : (c.reachable ? 'Erreichbar' : 'Nicht erreichbar') },
+            { label: 'Auto', value: car },
+            { label: 'evcc', value: data.url ? (data.reachable ? 'Erreichbar' : 'Nicht erreichbar') : '—' }
+          ];
+        }
         return [
+          { label: 'Wallbox', value: 'evcc' },
           { label: 'Status', value: data.url ? (data.reachable ? 'Erreichbar' : 'Nicht erreichbar') : 'Nicht konfiguriert' },
           { label: 'Ladepunkte', value: data.url ? fmtCount(data.loadpointCount) : '—' },
           { label: 'Akkuschutz', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },

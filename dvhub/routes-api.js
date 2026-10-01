@@ -3950,7 +3950,22 @@ export function createApiRoutes(ctx) {
             reachable: lps.length > 0,
             loadpointCount: lps.length,
             dashboardLoadpoint: getCfg().evcc?.dashboardLoadpoint ?? null,
-            lastError: es.lastError || null
+            lastError: es.lastError || null,
+            // Gewählte Wallbox (Kachel „Wallbox“): bei OpenEVSE / go-e Zustand
+            // direkt von der Box (charger-status.js), nicht von evcc.
+            wallboxType: getCfg().wallbox?.type || 'evcc',
+            charger: (() => {
+              const raw = ctx.chargerStatus?.raw?.();
+              const fresh = ctx.chargerStatus?.fresh?.();
+              if (!raw) return null;
+              return {
+                reachable: !!fresh,
+                connected: fresh ? fresh.connected : null,
+                charging: fresh ? fresh.charging : null,
+                powerW: fresh ? fresh.powerW : null,
+                lastError: raw.error || null,
+              };
+            })(),
           };
         })(),
         // PV-Strings / Solar-Logger. Nur Zaehler und Zeitstempel.
@@ -5178,9 +5193,17 @@ export function createApiRoutes(ctx) {
         },
         vehicle: {
           title: lp?.vehicleTitle || lp?.title || null,
-          connected: lp ? lp.connected === true : null,
-          charging: lp ? lp.charging === true : null,
-          chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
+          // OpenEVSE / go-e: Zustand direkt von der Wallbox; sonst evcc.
+          ...(() => {
+            const d = ctx.chargerStatus?.fresh?.();
+            if (d) return { connected: d.connected, charging: d.charging, chargePowerW: d.powerW, source: d.type };
+            return {
+              connected: lp ? lp.connected === true : null,
+              charging: lp ? lp.charging === true : null,
+              chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
+              source: lp ? 'evcc' : null,
+            };
+          })(),
           // Dieselbe Quelle wie fuer EOS (ev-soc.js): TeslaMate, sonst evcc bei
           // angestecktem Auto.
           socPct: evSoc?.pct ?? null,
