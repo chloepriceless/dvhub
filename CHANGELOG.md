@@ -30,6 +30,14 @@ verweist hierher.
 - **„Sofort laden“ fürs E-Auto** — mit gewählter Leistung laden, unabhängig
   vom EOS-Plan und auch, wenn EOS nicht läuft.
 - **API-Referenz aller Endpunkte** in `docs/API.md`.
+- **Ortsnetz-Auslastung** (opt-in, Einstellungen → Status): DVhub sendet
+  alle 5 Minuten die Netzspannung L1–L3 und die Netzfrequenz des Netzzählers
+  am Übergabepunkt an www.ortsnetz-auslastung.de (Karte der Spannungen in
+  Ortsnetzen, Projekt von Thomas Lehmann). Standort aus dem Prognose-Standort
+  oder eigene Angabe, optional Anlagengröße und heutige PV-Prognose. Regeln
+  wie in den offiziellen Integrationen: nur 150–300 V, Frequenz nur 45–55 Hz.
+  Die Antwort (Ampel je Phase, Speicherempfehlung) steht in der Kachel. Quelle
+  bisher Victron GX per Modbus (Netzzähler-Register 2616/2618/2620, 2644).
 - **Docker-Installation per Einzeiler:**
   `curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash`
   — legt `./dvhub` mit `compose.yml` und `.env` (Zufallspasswörter) an, lädt

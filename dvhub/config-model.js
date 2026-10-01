@@ -3894,6 +3894,15 @@ export function createDefaultConfig() {
       clientType: 'dvhub',
       sources: { grid: true, pv: true, load: true, battery: true, devices: true, mqttTiles: true, wallbox: true }
     },
+    // Ortsnetz-Auslastung (www.ortsnetz-auslastung.de): opt-in, alle 5 min
+    // Netzspannung L1–L3 + Frequenz des Netzzählers. latitude/longitude leer =
+    // Prognose-Standort (forecast.location) verwenden.
+    ortsnetz: {
+      enabled: false,
+      latitude: null,
+      longitude: null,
+      sendPvForecast: true
+    },
     installerPortal: {
       enabled: false,
       allowTunnel: false,

@@ -269,6 +269,16 @@ Spende der Leistungsdaten an die COMSYS-Datenspende (RWTH Aachen).
 | POST | `/api/datenspende/backfill` | Token+Nonce | Historische Daten nachsenden (`{ action: 'stop' }` bricht ab) |
 | POST | `/api/datenspende/unlink` | Token+Nonce | Verknüpfung trennen |
 
+### 3.17a Ortsnetz-Auslastung
+
+Netzspannung + Frequenz an www.ortsnetz-auslastung.de (opt-in, alle 5 min).
+
+| Methode | Pfad | Zugang | Beschreibung |
+|---|---|---|---|
+| GET | `/api/ortsnetz/status` | LAN·integrations | An/aus, Standort (Quelle), Messquelle, letzte Messung, letzte Bewertung (Ampel, Speicherempfehlung), Fehler, `uiToken` |
+| POST | `/api/ortsnetz/settings` | Token+Nonce | `{ enabled?, latitude?, longitude?, sendPvForecast? }` — leere Koordinaten = Prognose-Standort |
+| POST | `/api/ortsnetz/send-now` | Token+Nonce | Sofort messen und senden (zum Prüfen) |
+
 ### 3.18 Benachrichtigungen & Monitoring
 
 | Methode | Pfad | Zugang | Beschreibung |

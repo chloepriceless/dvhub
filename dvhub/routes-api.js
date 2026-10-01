@@ -1125,6 +1125,7 @@ export function createApiRoutes(ctx) {
     // 'strict' weiterhin ein Token (POST ist nie LAN-sicher).
     '/api/datenspende/status',
     '/api/input/status',
+    '/api/ortsnetz/status',
   ]);
 
   // Go-Live-Review 2026-06-10: map each LAN-safe GET endpoint to a coarse group
@@ -1163,7 +1164,7 @@ export function createApiRoutes(ctx) {
     ['/api/integration/eos', 'integrations'], ['/api/integration/emhass', 'integrations'],
     ['/api/integration/evcc', 'integrations'], ['/api/integration/evcc/eos', 'integrations'],
     ['/api/integrations/health', 'integrations'], ['/api/datenspende/status', 'integrations'],
-    ['/api/input/status', 'integrations'],
+    ['/api/input/status', 'integrations'], ['/api/ortsnetz/status', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -4684,6 +4685,53 @@ export function createApiRoutes(ctx) {
     // oder einen Bearer — bei lanTrust 'open' könnte sonst eine fremde Webseite
     // im Browser des Kunden (JSON als text/plain) die Spende einschalten.
     // Ausschalten geht immer ohne Nonce.
+    // ── Ortsnetz-Auslastung (ortsnetz-auslastung.de) ─────────────────────
+    // Status lesbar wie die anderen Kacheln; Einstellungen + „Jetzt senden“
+    // brauchen den UI-Nonce oder einen Bearer (Opt-in schickt Standort raus).
+    if (url.pathname.startsWith('/api/ortsnetz/')) {
+      const on = ctx.ortsnetz;
+      if (!on) return json(res, 503, { ok: false, error: 'ortsnetz_unavailable' });
+      const nonceOk = (body) => installerHasValidBearer(req) || uiNonce.check(body?.uiToken);
+      if (url.pathname === '/api/ortsnetz/status' && req.method === 'GET') {
+        return json(res, 200, { ok: true, ...on.status(), uiToken: uiNonce.issue() });
+      }
+      if (url.pathname === '/api/ortsnetz/settings' && req.method === 'POST') {
+        const body = await readJsonBody(req, res);
+        if (body === null) return;
+        if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        const patch = {};
+        if (body.enabled !== undefined) {
+          if (typeof body.enabled !== 'boolean') return json(res, 400, { ok: false, error: 'enabled_must_be_boolean' });
+          patch.enabled = body.enabled;
+        }
+        if (body.sendPvForecast !== undefined) {
+          if (typeof body.sendPvForecast !== 'boolean') return json(res, 400, { ok: false, error: 'sendPvForecast_must_be_boolean' });
+          patch.sendPvForecast = body.sendPvForecast;
+        }
+        for (const [k, lim] of [['latitude', 90], ['longitude', 180]]) {
+          if (body[k] === undefined) continue;
+          if (body[k] === null || body[k] === '') { patch[k] = null; continue; }
+          const n = Number(String(body[k]).replace(',', '.'));
+          if (!Number.isFinite(n) || Math.abs(n) > lim) return json(res, 400, { ok: false, error: `${k}_invalid` });
+          patch[k] = Math.round(n * 1e6) / 1e6;
+        }
+        const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+        next.ortsnetz = { ...(next.ortsnetz || {}), ...patch };
+        ctx.saveAndApplyConfig(next);
+        pushLog('ortsnetz_setting_changed', patch, actorContext(req));
+        if (patch.enabled === true) setTimeout(() => { on.tick().catch(() => {}); }, 1500).unref?.();
+        return json(res, 200, { ok: true, ...on.status() });
+      }
+      if (url.pathname === '/api/ortsnetz/send-now' && req.method === 'POST') {
+        const body = await readJsonBody(req, res);
+        if (body === null) return;
+        if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        const r = await on.tick();
+        return json(res, 200, { ok: true, result: r, ...on.status() });
+      }
+      return json(res, 404, { ok: false, error: 'not_found' });
+    }
+
     if (url.pathname.startsWith('/api/datenspende/')) {
       const ds = ctx.datenspende;
       if (!ds) return json(res, 503, { ok: false, error: 'datenspende_unavailable' });

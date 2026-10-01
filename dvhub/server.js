@@ -110,6 +110,7 @@ import { createInstallerPortalClient } from './services/installer-portal-client.
 // Datenspende (COMSYS, RWTH Aachen): Opt-in-Spende von Leistungs-Zeitreihen
 // an das Forschungsprojekt — ausgehend, ab Werk aus.
 import { createDatenspende } from './services/datenspende/index.js';
+import { createOrtsnetz } from './services/ortsnetz/index.js';
 // Messwert-Eingang HA/Loxone per HTTP-Push (Push-Schlüssel in DATA_DIR).
 import { createInputPush } from './services/input-push.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
@@ -1184,6 +1185,10 @@ ctx.datenspende = createDatenspende(ctx, {
   flushIntervalSec: Number(process.env.DV_DATENSPENDE_FLUSH_SEC) || undefined,
 });
 if (IS_RUNTIME_PROCESS) ctx.datenspende.start();
+// Ortsnetz-Auslastung (ortsnetz-auslastung.de): opt-in, Netzspannung L1–L3 +
+// Frequenz des Netzzählers alle 5 min (nur lesend, eigener Takt).
+ctx.ortsnetz = createOrtsnetz(ctx, { getTransport: () => transport });
+if (IS_RUNTIME_PROCESS) ctx.ortsnetz.start();
 // T-CROSSCHECK: unbedingt konstruiert (routes-api liest getStatus), gestartet nur
 // im Runtime-Prozess und nur wenn konfiguriert (siehe IS_RUNTIME_PROCESS-Block).
 const mqttCrossCheck = createMqttCrossCheck(ctx);
@@ -2286,6 +2291,7 @@ async function gracefulShutdown(signal) {
   safeSync('pvStrings.stop', () => pvStrings.stop?.());
   safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
   safeSync('datenspende.stop', () => ctx.datenspende?.stop?.());
+  safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
   safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
   safeSync('eosFreshSocTimer.stop', () => clearInterval(eosFreshSocTimer));

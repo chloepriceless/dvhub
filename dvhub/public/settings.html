@@ -576,6 +576,45 @@
               <p class="svc-meta" id="dsResult"></p>
             </div>
 
+            <!-- Ortsnetz-Auslastung (ortsnetz-auslastung.de) -->
+            <div class="config-group" data-accent="teal">
+              <div class="config-group-kicker">Ortsnetz-Auslastung</div>
+              <p class="svc-meta">Teile die <strong>Netzspannung (L1–L3)</strong> und <strong>Netzfrequenz</strong> deines Netzzählers alle 5 Minuten mit der Karte <a href="https://www.ortsnetz-auslastung.de" target="_blank" rel="noopener">ortsnetz-auslastung.de</a>. Sie zeigt, wie stark Ortsnetze in Deutschland ausgelastet sind (Über-/Unterspannung durch PV). Übertragen werden Zeitstempel, Standort (öffentlich nur auf ca. 100 m gerastert), die Spannungen, die Frequenz, die Anlagengröße und – wenn gewählt – die heutige PV-Prognose. Freiwillig und jederzeit abschaltbar. <a href="https://github.com/thomaslehmann1234/datenerfassung-ortsnetz-auslastung" target="_blank" rel="noopener">Projekt</a></p>
+              <div class="config-row">
+                <span class="config-row-label">Status</span>
+                <span class="config-row-value api-row-value" id="onState">&mdash;</span>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Teilnehmen</span>
+                <div class="config-row-stack"><input id="onEnabled" type="checkbox" /><small class="config-row-stack-small">Aus = es wird nichts gesendet.</small></div>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Standort</span>
+                <div class="config-row-stack">
+                  <input id="onLat" class="config-input" inputmode="decimal" placeholder="Breitengrad" autocomplete="off" />
+                  <input id="onLon" class="config-input" inputmode="decimal" placeholder="Längengrad" autocomplete="off" />
+                  <small class="config-row-stack-small" id="onLocHint">Leer = Standort der Prognose. Ein leicht versetzter Punkt ist in Ordnung — Ort und Straße sollen stimmen.</small>
+                </div>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">PV-Prognose mitsenden</span>
+                <div class="config-row-stack"><input id="onForecast" type="checkbox" /><small class="config-row-stack-small">Heutige Gesamtprognose in kWh (für den Vergleich auf der Karte).</small></div>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Letzte Messung</span>
+                <span class="config-row-value api-row-value" id="onMeasure">&mdash;</span>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Bewertung</span>
+                <span class="config-row-value api-row-value" id="onResponse">&mdash;</span>
+              </div>
+              <div class="svc-actions-row">
+                <button id="onSaveBtn" class="btn btn-primary btn-small" type="button">Speichern</button>
+                <button id="onSendBtn" class="btn btn-ghost btn-small" type="button">Jetzt senden</button>
+              </div>
+              <p class="svc-meta" id="onResult"></p>
+            </div>
+
             <!-- DV-Schaltsignal-Log -->
             <div class="config-group" data-accent="yellow">
               <div class="config-group-kicker">DV-Signale</div>
@@ -946,7 +985,7 @@
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20260720-reserve-visibility"></script>
-  <script src="/tools.js?v=20260930-installer-confirm"></script>
+  <script src="/tools.js?v=20261001-ortsnetz"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>

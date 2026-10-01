@@ -1404,6 +1404,93 @@ function renderDatenspende(st) {
   }
 }
 
+// ── Ortsnetz-Auslastung (ortsnetz-auslastung.de) ─────────────────────────────
+let onUiToken = null;
+const onEl = (id) => document.getElementById(id);
+const ON_SKIP = {
+  disabled: 'aus',
+  source_unsupported: 'Messquelle nicht unterstützt (bisher: Victron GX per Modbus)',
+  location_missing: 'Standort fehlt — Breiten-/Längengrad eintragen',
+  voltage_missing: 'Netzzähler liefert keine Spannungen',
+  voltage_out_of_range: 'Spannung außerhalb 150–300 V — nicht gesendet',
+};
+const ON_LIGHT = { green: '🟢 normal', yellow: '🟡 Warnung', red: '🔴 kritisch' };
+const ON_STORAGE = { none: 'keine Aktion', charge: 'Speicher laden (Überspannung)', discharge: 'Speicher entladen (Unterspannung)' };
+const onNum = (v, d) => (v == null ? '–' : Number(v).toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d }));
+
+async function onPost(path, body) {
+  const send = () => apiFetch(path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...(body || {}), uiToken: onUiToken || undefined }),
+  });
+  let res = await send();
+  if (res.status === 403) { await refreshOrtsnetz(); res = await send(); }
+  const j = await res.json().catch(() => ({}));
+  return { ok: res.ok && j.ok, status: res.status, j };
+}
+
+function renderOrtsnetz(st) {
+  let state;
+  if (!st.enabled) state = 'aus';
+  else if (st.lastError) state = st.lastError === 'standort_gesperrt' ? '⚠ Standort vom Projekt gesperrt' : `⚠ Fehler: ${st.lastError}`;
+  else if (st.lastSkip) state = `⚠ ${ON_SKIP[st.lastSkip] || st.lastSkip}`;
+  else if (st.lastSentAt) state = `aktiv — zuletzt gesendet ${new Date(st.lastSentAt).toLocaleString('de-DE')} (${st.sentCount} seit Start)`;
+  else state = 'aktiv — erste Messung folgt in Kürze';
+  onEl('onState').textContent = state;
+  onEl('onEnabled').checked = !!st.enabled;
+  onEl('onForecast').checked = st.sendPvForecast !== false;
+  const loc = st.location;
+  const own = loc && loc.source === 'ortsnetz';
+  if (document.activeElement !== onEl('onLat')) onEl('onLat').value = own ? String(loc.latitude) : '';
+  if (document.activeElement !== onEl('onLon')) onEl('onLon').value = own ? String(loc.longitude) : '';
+  onEl('onLat').placeholder = loc && !own ? `Prognose-Standort: ${loc.latitude}` : 'Breitengrad';
+  onEl('onLon').placeholder = loc && !own ? `Prognose-Standort: ${loc.longitude}` : 'Längengrad';
+  const m = st.lastMeasurement;
+  onEl('onMeasure').textContent = m
+    ? `L1 ${onNum(m.l1, 1)} V · L2 ${onNum(m.l2, 1)} V · L3 ${onNum(m.l3, 1)} V · ${onNum(m.frequencyHz, 2)} Hz`
+    : '—';
+  const r = st.lastResponse;
+  onEl('onResponse').textContent = r && r.status
+    ? `${ON_LIGHT[r.status.overall] || r.status.overall} (L1 ${ON_LIGHT[r.status.l1] || r.status.l1 || '–'}, L2 ${ON_LIGHT[r.status.l2] || r.status.l2 || '–'}, L3 ${ON_LIGHT[r.status.l3] || r.status.l3 || '–'}) · Empfehlung: ${ON_STORAGE[r.storageRecommendation] || r.storageRecommendation || '–'}`
+    : '—';
+}
+
+async function refreshOrtsnetz() {
+  try {
+    const res = await apiFetch('/api/ortsnetz/status');
+    if (!res.ok) return;
+    const st = await res.json();
+    onUiToken = st.uiToken || onUiToken;
+    renderOrtsnetz(st);
+  } catch { /* best effort */ }
+}
+
+function wireOrtsnetz() {
+  if (!onEl('onState')) return;
+  const msg = (t) => { onEl('onResult').textContent = t; };
+  onEl('onSaveBtn').addEventListener('click', async () => {
+    const r = await onPost('/api/ortsnetz/settings', {
+      enabled: onEl('onEnabled').checked,
+      sendPvForecast: onEl('onForecast').checked,
+      latitude: onEl('onLat').value.trim() || null,
+      longitude: onEl('onLon').value.trim() || null,
+    });
+    if (!r.ok) { msg(`Speichern fehlgeschlagen: ${r.j.error || r.status}`); return; }
+    msg(r.j.enabled ? 'Gespeichert — die erste Messung wird gleich gesendet.' : 'Gespeichert — es wird nichts gesendet.');
+    renderOrtsnetz(r.j);
+    setTimeout(refreshOrtsnetz, 5000);
+  });
+  onEl('onSendBtn').addEventListener('click', async () => {
+    msg('Sende …');
+    const r = await onPost('/api/ortsnetz/send-now', {});
+    if (!r.ok) { msg(`Fehler: ${r.j.error || r.status}`); return; }
+    msg(r.j.result?.ok ? 'Gesendet.' : `Nicht gesendet: ${ON_SKIP[r.j.result?.skipped] || r.j.result?.skipped || r.j.lastError || 'unbekannt'}`);
+    renderOrtsnetz(r.j);
+  });
+  refreshOrtsnetz();
+  setInterval(refreshOrtsnetz, 60_000);
+}
+
 async function refreshDatenspende() {
   try {
     const res = await apiFetch('/api/datenspende/status');
@@ -1553,6 +1640,7 @@ function initToolsPage() {
   wireInstallerPortal();
   // Datenspende-Kachel (COMSYS, RWTH Aachen).
   wireDatenspende();
+  wireOrtsnetz();
   // Messwert-Eingang HA/Loxone.
   wireInputPush();
 
