@@ -34,6 +34,7 @@ import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtim
 // /api/history/viz/*). Wired into ctx after telemetryStore + db are available.
 import { createHistoryVizAggregator } from './services/history-viz/aggregator.js';
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
+import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
@@ -1336,6 +1337,17 @@ ctx.inspector = inspector;
 // its 8-kWh / 5-kW bootstrap defaults. Wired into ctx.saveAndApplyConfig below
 // (auto-sync on every config save) and the boot start() block (one-shot
 // reconcile after EOS first becomes reachable).
+// Autonom kalibrierte Wechselrichter-Kurve (services/inverter-efficiency/curve.js).
+// Vor dem Config-Sync angelegt, damit schon der erste Sync nach dem Boot den
+// zuletzt kalibrierten Wert aus der Datei mitschickt.
+ctx.inverterCurve = createInverterCurveCalibrator({
+  getDb: () => ctx.db,
+  getCfg: () => ctx.getCfg(),
+  filePath: path.join(DATA_DIR || __dirname, 'inverter-curve.json'),
+  pushLog: (event, data) => ctx.pushLog?.(event, data),
+  // Kurve geändert → EOS sofort neu konfigurieren (sonst erst beim nächsten Sync).
+  onChange: () => ctx.eosConfigSync?.sync?.(),
+});
 const eosConfigSync = createEosConfigSync(ctx);
 ctx.eosConfigSync = eosConfigSync;
 
@@ -1840,9 +1852,13 @@ const telemetryReady = (async () => {
       getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
     });
     const runInverterEfficiencyDaily = () => {
-      inverterEfficiencyDaily.runOnce().catch((error) => {
-        pushLog('inverter_efficiency_daily_error', { error: error.message });
-      });
+      inverterEfficiencyDaily.runOnce()
+        // Danach die Kurve aus dem 180-Tage-Fenster bis gestern — ändert sich nur,
+        // wenn ein neuer Tag abgeschlossen ist (curveHash), dann EOS neu.
+        .then(() => ctx.inverterCurve.refresh())
+        .catch((error) => {
+          pushLog('inverter_efficiency_daily_error', { error: error.message });
+        });
     };
     setTimeout(runInverterEfficiencyDaily, 3 * 60 * 1000).unref();
     setInterval(runInverterEfficiencyDaily, 60 * 60 * 1000).unref();

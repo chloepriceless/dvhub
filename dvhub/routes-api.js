@@ -1127,6 +1127,7 @@ export function createApiRoutes(ctx) {
     '/api/input/status',
     '/api/ortsnetz/status',
     '/api/eos/status',
+    '/api/inverter-efficiency/curve',
   ]);
 
   // Go-Live-Review 2026-06-10: map each LAN-safe GET endpoint to a coarse group
@@ -1140,7 +1141,7 @@ export function createApiRoutes(ctx) {
     ['/api/status', 'status'], ['/api/costs', 'status'], ['/api/metrics', 'status'],
     ['/dv/control-value', 'status'], ['/api/config', 'status'],
     ['/api/config/export', 'status'], ['/api/discovery/systems', 'status'],
-    ['/api/optimizer/status', 'status'], ['/api/ev', 'status'], ['/api/eos/status', 'status'],
+    ['/api/optimizer/status', 'status'], ['/api/ev', 'status'], ['/api/eos/status', 'status'], ['/api/inverter-efficiency/curve', 'status'],
     // dashboard — family kiosk (token-less tablet)
     ['/api/family/status', 'dashboard'], ['/api/family/presence', 'dashboard'],
     ['/api/family/tile-history', 'dashboard'], ['/api/family/tesla-history', 'dashboard'],
@@ -4886,6 +4887,18 @@ export function createApiRoutes(ctx) {
 
     // Zentraler EOS-Zustand (eos-monitor.js): up/busy/down, PID, Version,
     // letzter Plan — Momentaufnahme ohne eigenen EOS-Aufruf.
+    // Autonom kalibrierte Wechselrichter-Kurve (services/inverter-efficiency).
+    if (url.pathname === '/api/inverter-efficiency/curve' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const curve = ctx.inverterCurve?.get?.() || null;
+      return json(res, 200, {
+        ok: true,
+        auto: getCfg().optimizer?.inverterEfficiencyAuto !== false,
+        applied: !!(curve && curve.status === 'ok' && getCfg().optimizer?.inverterEfficiencyAuto !== false),
+        curve,
+      });
+    }
+
     if (url.pathname === '/api/eos/status' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
       if (!ctx.eosMonitor) return json(res, 200, { ok: true, status: 'disabled', enabled: false });

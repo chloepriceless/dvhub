@@ -11,6 +11,7 @@
 // eos-adapter.js: never throws, returns { ok, applied, errors }.
 
 import { resolveEvDeparture } from './ev-departure.js';
+import { effectiveInverterCurve } from '../inverter-efficiency/calibrator.js';
 import { resolveEvSocPct, resolveEvPlugged } from './ev-soc.js';
 import { buildEosHomeAppliances } from './eos-devices.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
@@ -228,7 +229,7 @@ export function pickEmsIntervalSec(intervalSec, overrideSec) {
  * @param {object} cfg
  * @returns {Array<object>}
  */
-export function buildEosInverters(cfg) {
+export function buildEosInverters(cfg, { curve = null } = {}) {
   const opt = cfg?.optimizer || {};
   const pvKwp = Number(opt?.mispel?.pvKwp);
   // max_power_w is the inverter's TOTAL AC throughput cap (PV + battery feed-in
@@ -256,8 +257,14 @@ export function buildEosInverters(cfg) {
     device_id: INVERTER_DEVICE_ID,
     max_power_w: maxPowerW,
     battery_id: BATTERY_DEVICE_ID,
+    // AC→DC (Laden) wird nicht gemessen — bleibt 1.0, die Ladeverluste stecken
+    // in charging_efficiency des Akkus.
     ac_to_dc_efficiency: 1.0,
-    dc_to_ac_efficiency: 1.0,
+    // DC→AC: autonom kalibriert (services/inverter-efficiency). Ohne freigegebene
+    // Kurve 1.0 wie bisher. Mit Kurve der energiegewichtete Mittelwert über alle
+    // gemessenen Entladungen (Σ AC / Σ DC) — offizielles EOS kennt nur eine
+    // Konstante; die Kurve selbst geht mit, sobald EOS sie annimmt.
+    dc_to_ac_efficiency: curve ? curve.referenceEta : 1.0,
     max_ac_charge_power_w: gridChargeAllowed ? (Number(opt.maxChargeW) || null) : 0,
   }];
 }
@@ -459,7 +466,7 @@ export function createEosConfigSync(ctx) {
       : (Number.isFinite(configHardFloor) ? configHardFloor : 5);
 
     const batteries = buildEosBatteries(cfg, { minSocPct: eosMinSocPct });
-    const inverters = buildEosInverters(cfg);
+    const inverters = buildEosInverters(cfg, { curve: effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()) });
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval);
 

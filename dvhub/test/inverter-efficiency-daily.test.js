@@ -16,6 +16,10 @@ import {
   localDateString,
   nominalInverterPowerW,
   summarizeEfficiencyRows,
+  EFFICIENCY_BIN_EDGES,
+  EFFICIENCY_BIN_COUNT,
+  UPSERT_BIN_SQL,
+  bucketOfBin,
 } from '../services/inverter-efficiency/daily.js';
 
 test('Perioden-η ist energiegewichtet, kein Mittel der Tageswerte', () => {
@@ -86,21 +90,38 @@ function fakeDb({ dayRows = {}, firstDay = null, missing = [] } = {}) {
 
 const upserts = (db) => db.calls.filter((c) => c.sql === UPSERT_EFFICIENCY_SQL).map((c) => c.params);
 
-test('computeDay schreibt immer beide Bereiche — 0-Zeile markiert den Tag als berechnet', async () => {
+test('computeDay schreibt alle Bins und Grund-/Volllast als deren Summe', async () => {
+  // Bin 3 = [0,05; 0,06) und Bin 6 = [0,08; 0,10) → Grundlast; Bin 17 (≥ 0,85) → Volllast.
   const db = fakeDb({
-    dayRows: { '2026-09-26': [{ bucket: 'full', ac_wh: 58088, dc_wh: 65413, seconds: 9828, samples: 1907 }] },
+    dayRows: { '2026-09-26': [
+      { bin: 3, ac_wh: 1000, dc_wh: 1100, seconds: 3000, samples: 600 },
+      { bin: 6, ac_wh: 500, dc_wh: 540, seconds: 1000, samples: 200 },
+      { bin: 17, ac_wh: 58088, dc_wh: 65413, seconds: 9828, samples: 1907 },
+    ] },
   });
   const job = createInverterEfficiencyDaily({
     getDb: () => db,
     getCfg: () => ({ timeZone: 'Europe/Berlin', optimizer: { inverterMaxPowerW: 24000 } }),
   });
   await job.computeDay(db, '2026-09-26');
-  const day = db.calls[0];
-  assert.deepEqual(day.params, ['2026-09-26', 'Europe/Berlin', EFFICIENCY_SERIES_KEYS, 24000, 0.02, 0.125, 0.75]);
+  assert.deepEqual(db.calls[0].params, ['2026-09-26', 'Europe/Berlin', EFFICIENCY_SERIES_KEYS, 24000, EFFICIENCY_BIN_EDGES]);
+  const bins = db.calls.filter((c) => c.sql === UPSERT_BIN_SQL).map((c) => c.params);
+  assert.equal(bins.length, EFFICIENCY_BIN_COUNT, 'jeder Bin bekommt eine Zeile, auch 0');
+  assert.deepEqual(bins[3], ['2026-09-26', 3, 1000, 1100, 3000, 600, 24000]);
+  assert.deepEqual(bins[0], ['2026-09-26', 0, 0, 0, 0, 0, 24000]);
   assert.deepEqual(upserts(db), [
-    ['2026-09-26', 'base', 0, 0, 0, 0, 24000],
+    ['2026-09-26', 'base', 1500, 1640, 4000, 800, 24000],
     ['2026-09-26', 'full', 58088, 65413, 9828, 1907, 24000],
   ]);
+});
+
+test('Grund-/Volllast-Grenzen sind Bin-Grenzen', () => {
+  assert.ok(EFFICIENCY_BIN_EDGES.includes(0.02));
+  assert.ok(EFFICIENCY_BIN_EDGES.includes(0.125));
+  assert.ok(EFFICIENCY_BIN_EDGES.includes(0.75));
+  assert.equal(bucketOfBin(0), 'base');
+  assert.equal(bucketOfBin(EFFICIENCY_BIN_EDGES.indexOf(0.125)), null);
+  assert.equal(bucketOfBin(EFFICIENCY_BIN_EDGES.indexOf(0.75)), 'full');
 });
 
 test('runOnce: heute + Vortag, dann fehlende Tage; Vortag nur einmal pro Tag', async () => {

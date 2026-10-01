@@ -37,6 +37,26 @@ export const EFFICIENCY_BUCKETS = Object.freeze({
   full: Object.freeze({ fromFrac: 0.75, toFrac: null }),
 });
 
+// Feine Lastbereiche für die Kurven-Kalibrierung (Migration 022, curve.js),
+// relativ zur Nennleistung. Bin i = [EDGES[i], EDGES[i+1]), der letzte offen.
+// Unten eng, weil η dort steil abfällt. Die Grenzen von Grund- (0,02–0,125)
+// und Volllast (≥ 0,75) sind Bin-Grenzen — beide Bereiche sind deshalb exakt
+// die Summe ihrer Bins, ein Datenbankdurchlauf reicht für beides.
+// ACHTUNG: Grenzen nie ändern, ohne die Tabelle neu zu rechnen (alte Zeilen
+// hätten sonst eine andere Bedeutung).
+export const EFFICIENCY_BIN_EDGES = Object.freeze([
+  0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.10, 0.125,
+  0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.75, 0.85,
+]);
+export const EFFICIENCY_BIN_COUNT = EFFICIENCY_BIN_EDGES.length;
+
+export function bucketOfBin(bin) {
+  const from = EFFICIENCY_BIN_EDGES[bin];
+  if (from >= EFFICIENCY_BUCKETS.base.fromFrac && from < EFFICIENCY_BUCKETS.base.toFrac) return 'base';
+  if (from >= EFFICIENCY_BUCKETS.full.fromFrac) return 'full';
+  return null;
+}
+
 // Unter 10 Minuten Datenbasis in einer Periode wird kein Wert angezeigt.
 export const MIN_SECONDS_FOR_VALUE = 600;
 
@@ -80,22 +100,31 @@ r AS (
     AND (pac + pdc) < 0.10 * (-bp)
 ),
 b AS (
-  SELECT CASE
-           WHEN ac >= $4::float8 * $5::float8 AND ac < $4::float8 * $6::float8 THEN 'base'
-           WHEN ac >= $4::float8 * $7::float8 THEN 'full'
-         END AS bucket,
+  SELECT width_bucket(ac / $4::float8, $5::float8[]) - 1 AS bin,
          ac, dc, dt
   FROM r
   WHERE dc > 0 AND ac / dc BETWEEN 0.4 AND 1.02
 )
-SELECT bucket,
+SELECT bin,
        sum(ac * dt) / 3600.0 AS ac_wh,
        sum(dc * dt) / 3600.0 AS dc_wh,
        sum(dt) AS seconds,
        count(*)::int AS samples
 FROM b
-WHERE bucket IS NOT NULL
-GROUP BY bucket`;
+WHERE bin >= 0
+GROUP BY bin
+ORDER BY bin`;
+
+export const UPSERT_BIN_SQL = `
+INSERT INTO inverter_efficiency_bins_daily (day, bin, ac_wh, dc_wh, seconds, samples, pnom_w, computed_at)
+VALUES ($1::date, $2, $3, $4, $5, $6, $7, now())
+ON CONFLICT (day, bin) DO UPDATE SET
+  ac_wh = EXCLUDED.ac_wh,
+  dc_wh = EXCLUDED.dc_wh,
+  seconds = EXCLUDED.seconds,
+  samples = EXCLUDED.samples,
+  pnom_w = EXCLUDED.pnom_w,
+  computed_at = now()`;
 
 export const UPSERT_EFFICIENCY_SQL = `
 INSERT INTO inverter_efficiency_daily (day, bucket, ac_wh, dc_wh, seconds, samples, pnom_w, computed_at)
@@ -119,7 +148,7 @@ WHERE series_key = 'battery_power_w' AND scope = 'live'
 export const MISSING_DAYS_SQL = `
 SELECT to_char(d, 'YYYY-MM-DD') AS day
 FROM generate_series($1::date, $2::date, interval '1 day') AS d
-WHERE NOT EXISTS (SELECT 1 FROM inverter_efficiency_daily e WHERE e.day = d::date)
+WHERE NOT EXISTS (SELECT 1 FROM inverter_efficiency_bins_daily e WHERE e.day = d::date)
 ORDER BY d DESC
 LIMIT $3`;
 
@@ -188,19 +217,22 @@ export function createInverterEfficiencyDaily({ getDb, getCfg, pushLog, maxBackf
   async function computeDay(db, day) {
     const cfg = getCfg?.() || {};
     const pnom = nominalInverterPowerW(cfg);
-    const { base, full } = EFFICIENCY_BUCKETS;
     const res = await db.query(DAILY_EFFICIENCY_SQL, [
-      day, timeZone(), EFFICIENCY_SERIES_KEYS, pnom, base.fromFrac, base.toFrac, full.fromFrac,
+      day, timeZone(), EFFICIENCY_SERIES_KEYS, pnom, EFFICIENCY_BIN_EDGES,
     ]);
-    const byBucket = new Map((res.rows || []).map((r) => [r.bucket, r]));
-    // Beide Bereiche immer schreiben — eine 0-Zeile markiert den Tag als berechnet.
-    for (const bucket of Object.keys(EFFICIENCY_BUCKETS)) {
-      const r = byBucket.get(bucket) || {};
-      await db.query(UPSERT_EFFICIENCY_SQL, [
-        day, bucket,
-        Number(r.ac_wh) || 0, Number(r.dc_wh) || 0, Number(r.seconds) || 0, Number(r.samples) || 0,
-        pnom,
-      ]);
+    const byBin = new Map((res.rows || []).map((r) => [Number(r.bin), r]));
+    const buckets = Object.fromEntries(Object.keys(EFFICIENCY_BUCKETS).map((k) => [k, { ac: 0, dc: 0, seconds: 0, samples: 0 }]));
+    // Alle Bins immer schreiben — 0-Zeilen markieren den Tag als berechnet.
+    for (let bin = 0; bin < EFFICIENCY_BIN_COUNT; bin++) {
+      const r = byBin.get(bin) || {};
+      const row = { ac: Number(r.ac_wh) || 0, dc: Number(r.dc_wh) || 0, seconds: Number(r.seconds) || 0, samples: Number(r.samples) || 0 };
+      await db.query(UPSERT_BIN_SQL, [day, bin, row.ac, row.dc, row.seconds, row.samples, pnom]);
+      const bucket = bucketOfBin(bin);
+      if (bucket) for (const k of ['ac', 'dc', 'seconds', 'samples']) buckets[bucket][k] += row[k];
+    }
+    // Grund-/Volllast (History-Karte, Migration 021) = Summe ihrer Bins.
+    for (const [bucket, t] of Object.entries(buckets)) {
+      await db.query(UPSERT_EFFICIENCY_SQL, [day, bucket, t.ac, t.dc, t.seconds, t.samples, pnom]);
     }
   }
 
