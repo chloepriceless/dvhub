@@ -39,6 +39,31 @@ verweist hierher.
   übernimmt sie nur dann. Zusammen mit dem Datenbank-Backup ist ein Ersatzgerät
   ohne Neueinrichtung betriebsbereit (Prod → Container durchgetestet).
 
+- **Gestufte Log-Aufbewahrung** (bisher wuchsen die Log-Tabellen unbegrenzt,
+  prod 1,2 GB nach 7 Monaten): Seltenes (Abregelung, Steuerung an/aus,
+  Schreibfehler, Negativpreis-Schutz, Einstellungen, Lizenz, Restore,
+  Rechtsfreigaben) bleibt für immer; Sollwert-Befehle nach 60 Tagen als
+  15-min-Werte, Rauschen als Tageszähler — beides für immer. Fehler: ohne
+  Installateur-Portal 60 Tage voll, dann Episoden (Beginn, Ende, Anzahl, erste
+  Meldung); mit Portal lokal 24 h voll + 7 Tage 15-min-Bündel, dauerhaft im
+  Portal. Optimierer-Reihen nach 60 Tagen nur der letzte Lauf je Tag.
+- **Installateur-Portal: Fehlerprotokoll je Anlage.** Die Anlage meldet ihre
+  Fehler beim Poll, das Portal speichert und quittiert sie; Ansicht mit
+  Übersicht je Fehlerart und den neuesten Einträgen.
+- **SD-Karten-/eMMC-Schonung** (gemessen auf prod):
+  - EOS schrieb alle 10 s seinen kompletten Zustand (12–14 MB/min ≈ 20 GB/Tag):
+    automatisches Speichern aus (Daten liegen im RAM, DVhub schickt nach einem
+    EOS-Neustart alles neu), Messwerte 48 h statt 2 Jahre, SoC alle 2 statt
+    1 min mit einem statt zwei Zeitstempeln → ~1 KiB/min.
+  - PostgreSQL schreibarm (synchronous_commit=off, Checkpoint 15 min,
+    WAL-Kompression) → 1,66 → 0,73 MB/min; Live-Messwerte werden im RAM
+    gesammelt und einmal pro Minute geschrieben (`telemetry.writeBatchSec`).
+  - VPN-Watchdog ohne sudo (vorher ~25 Journalzeilen/min).
+- **DVhub stellt seine Datenbank selbst ein** — kleiner Speicher-Footprint für
+  alle Boxen (64 MB shared_buffers, ohne Parallel-Worker), „winzig“ für
+  512-MB-Boards; nativ über `pg-write-tuning.sh` (Updates), im Container und
+  unter balena per Admin-Zugang beim Start — unabhängig von der Compose-Datei.
+
 ### Behoben
 
 - E-Auto-Kachel zeigte „kein Plan: eos_off“, während EOS rechnete.
@@ -54,6 +79,7 @@ verweist hierher.
   (Index-Aufbau mit 3 × 48 MB). Speicher-Parameter fest begrenzt; die volle
   Prod-DB (6 GB) läuft jetzt in 85 s durch.
 - Integrationskarte „Wallbox“ mit evcc zeigte 5 statt 4 Kacheln (CI rot).
+- `control_write` stand doppelt im Audit-Log (zusätzlich zu `control_events`).
 
 ### Neu
 
