@@ -105,3 +105,63 @@ test('full migration flow: export secrets, fresh box restores them', () => {
   // the fresh box keeps its OWN auth token — never overwritten by the bundle
   assert.equal(merged.apiToken, 'fresh-box-own-token');
 });
+
+// ── Geräte-Tausch (2026-10-01) ─────────────────────────────────────────────
+import fsx from 'node:fs';
+import osx from 'node:os';
+import pathx from 'node:path';
+import {
+  collectMigrationFiles, restoreMigrationFiles, isAllowedMigrationFile,
+} from '../services/config-secrets-crypto.js';
+
+function box() {
+  const root = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'dvhub-mig-'));
+  const dataDir = pathx.join(root, 'data'); const configDir = pathx.join(root, 'etc');
+  fsx.mkdirSync(pathx.join(dataDir, 'support'), { recursive: true });
+  fsx.mkdirSync(pathx.join(configDir, 'tls'), { recursive: true });
+  fsx.mkdirSync(pathx.join(configDir, 'vpn/profiles/direktvermarkter'), { recursive: true });
+  return { root, dataDir, configDir };
+}
+
+test('Geräte-Tausch: Schlüssel-Dateien + Token reisen verschlüsselt und kommen bitgleich zurück', () => {
+  const a = box();
+  fsx.writeFileSync(pathx.join(a.dataDir, 'appliance-id'), 'dvhub-abc123\n');
+  fsx.writeFileSync(pathx.join(a.dataDir, 'license_state.json'), '{"license_key":"K"}');
+  fsx.writeFileSync(pathx.join(a.dataDir, 'support/relay_id_ed25519'), 'PRIVKEY');
+  fsx.writeFileSync(pathx.join(a.configDir, 'tls/key.pem'), 'TLSKEY');
+  fsx.writeFileSync(pathx.join(a.configDir, 'vpn/profiles/direktvermarkter/client.ovpn'), 'remote dv.example 1194');
+  fsx.writeFileSync(pathx.join(a.dataDir, 'telemetry.sqlite'), 'nicht mitnehmen');
+  const files = collectMigrationFiles(a);
+  assert.deepEqual(Object.keys(files).sort(), [
+    'config/tls/key.pem', 'config/vpn/profiles/direktvermarkter/client.ovpn',
+    'data/appliance-id', 'data/license_state.json', 'data/support/relay_id_ed25519',
+  ]);
+  const blob = encryptSecrets({ forecast: { solcast: { apiKey: 'S' } } }, 'pw-12345678', { files, apiToken: 'TOKEN-xyz' });
+  assert.ok(blob.paths.includes('apiToken') && blob.paths.includes('data/appliance-id'));
+  assert.ok(!JSON.stringify(blob).includes('PRIVKEY'), 'Inhalt nur verschlüsselt');
+  const secrets = decryptSecrets(blob, 'pw-12345678');
+  assert.equal(secrets.__apiToken, 'TOKEN-xyz');
+  // applySecrets übernimmt weder Token noch Dateien.
+  const applied = applySecrets({}, secrets);
+  assert.equal(applied.apiToken, undefined);
+  assert.equal(applied.__files, undefined);
+
+  const b = box();
+  const written = restoreMigrationFiles(secrets.__files, b);
+  assert.equal(written.length, 5);
+  assert.equal(fsx.readFileSync(pathx.join(b.dataDir, 'appliance-id'), 'utf8'), 'dvhub-abc123\n');
+  assert.equal(fsx.readFileSync(pathx.join(b.configDir, 'vpn/profiles/direktvermarkter/client.ovpn'), 'utf8'), 'remote dv.example 1194');
+  assert.equal(fsx.statSync(pathx.join(b.dataDir, 'support/relay_id_ed25519')).mode & 0o777, 0o600);
+  fsx.rmSync(a.root, { recursive: true, force: true }); fsx.rmSync(b.root, { recursive: true, force: true });
+});
+
+test('Geräte-Tausch: nur erlaubte Pfade, kein Ausbruch aus den Ordnern', () => {
+  for (const bad of ['data/../../etc/passwd', 'data/telemetry.sqlite', 'config/config.json', 'config/vpn/profiles/../../x', 'etc/shadow', 'data/support/../appliance-id']) {
+    assert.equal(isAllowedMigrationFile(bad), false, bad);
+  }
+  const b = box();
+  const written = restoreMigrationFiles({ 'data/../evil': 'eA==', 'config/config.json': 'eA==', 'data/appliance-id': Buffer.from('ok').toString('base64') }, b);
+  assert.deepEqual(written, ['data/appliance-id']);
+  assert.equal(fsx.existsSync(pathx.join(b.root, 'evil')), false);
+  fsx.rmSync(b.root, { recursive: true, force: true });
+});

@@ -45,7 +45,19 @@ services:
     # shared_buffers explizit (wirkt auch auf bestehende Volumes, anders als das
     # einmalige timescaledb-tune). 64 MB reichen: DVhub liest über Continuous
     # Aggregates und die 15-min-Tabelle, der Rest ist freigebbarer Page-Cache.
-    command: ["postgres", "-c", "shared_buffers=${DB_SHARED_BUFFERS:-64MB}"]
+    #
+    # Speicherfresser fest begrenzen (2026-10-01): beim Restore der vollen
+    # Prod-DB (6 GB) baute PostgreSQL Indizes mit 48 MB maintenance_work_mem ×
+    # (1 + 2 Parallel-Worker) neben 64 MB shared_buffers → OOM-Kill bei 160 MB.
+    # Ohne Parallel-Worker und mit 16 MB passt Restore und Dauerbetrieb.
+    command: ["postgres",
+              "-c", "shared_buffers=${DB_SHARED_BUFFERS:-64MB}",
+              "-c", "maintenance_work_mem=${DB_MAINTENANCE_WORK_MEM:-16MB}",
+              "-c", "max_parallel_maintenance_workers=0",
+              "-c", "max_parallel_workers_per_gather=0",
+              "-c", "work_mem=2MB",
+              "-c", "autovacuum_max_workers=2",
+              "-c", "timescaledb.max_background_workers=4"]
     volumes:
       - dvhub-db:/var/lib/postgresql/data
     # Erststart der DB (siehe configs unten) — steckt in dieser Datei, damit die
@@ -82,6 +94,9 @@ services:
     environment:
       TZ: ${TZ:-Europe/Berlin}
       DVHUB_HTTP_PORT: ${DVHUB_HTTP_PORT:-8080}
+      # 1 = Lese-Modus: keine Schreibzugriffe auf Anlage, Wallbox, Relais
+      # (Test-/Zweitinstanz mit kopierter Prod-Konfiguration).
+      DVHUB_READ_ONLY: ${DVHUB_READ_ONLY:-}
       DVHUB_DB_HOST: 127.0.0.1
       DVHUB_DB_PORT: ${DB_PORT:-5433}
       DVHUB_DB_NAME: dvhub

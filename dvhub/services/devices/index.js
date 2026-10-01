@@ -10,6 +10,7 @@
 // DI context: { getCfg, pushLog, db }
 
 import { createMqttGenericAdapter } from './adapters/mqtt-generic.js';
+import { isReadOnlyMode } from '../../read-only-guard.js';
 import { createShellyHttpAdapter } from './adapters/shelly-http.js';
 
 // --- Inline DB Schema (matches forecast-store.js pattern) ---
@@ -143,6 +144,8 @@ export function createDeviceService(ctx, hub) {
    * adapter's setOutput(). Returns { ok, output } or { ok:false, error }.
    */
   async function setDeviceOutput(deviceId, on) {
+    // Lese-Modus (DVHUB_READ_ONLY=1): keine echten Relais schalten.
+    if (isReadOnlyMode()) return { ok: false, error: 'read_only' };
     for (const adapter of adapters) {
       if (typeof adapter.setOutput !== 'function') continue;
       const r = await adapter.setOutput(deviceId, on);

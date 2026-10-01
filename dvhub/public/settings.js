@@ -2430,6 +2430,8 @@ async function saveConfig(config, source = 'settings', opts = {}) {
   // opts.password unlocks an `_encryptedSecrets` migration bundle on import.
   const reqBody = { config };
   if (typeof opts.password === 'string' && opts.password) reqBody.password = opts.password;
+  // Geräte-Tausch: Token + Schlüssel-Dateien aus dem Bundle übernehmen.
+  if (opts.migrate === true) reqBody.migrate = true;
   const res = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
     headers,
@@ -2658,6 +2660,19 @@ async function importConfigFromFile(file) {
         : null;
       if (password == null) { setImportBanner('Import abgebrochen.', 'info'); return; }
     }
+    // Voller Export (Geräte-Tausch): enthält API-Token und Schlüssel-Dateien.
+    // Nur übernehmen, wenn diese Box die alte ERSETZT — sonst liefen zwei Geräte
+    // mit derselben Kennung, Lizenz und Portal-Kopplung.
+    let migrate = false;
+    const bundlePaths = Array.isArray(parsed?._encryptedSecrets?.paths) ? parsed._encryptedSecrets.paths : [];
+    if (bundlePaths.some((p) => p === 'apiToken' || /^(data|config)\//.test(p)) && typeof window.dvConfirm === 'function') {
+      migrate = await window.dvConfirm('Ersetzt dieses Gerät das alte (Geräte-Tausch)? Dann werden zusätzlich API-Token, Lizenz, Geräte-Kennung, Datenspende-Schlüssel, Installateur-Portal-Kopplung, HTTPS-Zertifikat und VPN-Profile (z. B. Direktvermarkter) übernommen. Das alte Gerät danach nicht mehr parallel betreiben.', {
+        title: 'Geräte-Tausch?',
+        okLabel: 'Ja, Gerät ersetzen',
+        cancelLabel: 'Nein, nur Einstellungen',
+        variant: 'primary'
+      });
+    }
     // An imported config that ENABLES a legal gate (allowGridCharge/Discharge,
     // false→true vs the current config) would otherwise be rejected by the server
     // with legal_gate_flip_requires_confirmation. Surface the same confirmation
@@ -2676,9 +2691,11 @@ async function importConfigFromFile(file) {
     // saveConfig('import') persists server-side, re-hydrates the form with the
     // imported values, sets the main banner and — when restartRequired — shows
     // the "Neustart empfohlen" button. We mirror a concise result here.
-    const ok = await saveConfig(parsed, 'import', { confirmLegalGate, password });
+    const ok = await saveConfig(parsed, 'import', { confirmLegalGate, password, migrate });
     setImportBanner(
-      ok ? 'Config importiert und angewendet — Werte oben aktualisiert.' : 'Import fehlgeschlagen — Details im Banner oben.',
+      ok ? (migrate
+        ? 'Geräte-Tausch importiert — bitte DVhub neu starten, damit Lizenz, Kennung und Kopplungen greifen.'
+        : 'Config importiert und angewendet — Werte oben aktualisiert.') : 'Import fehlgeschlagen — Details im Banner oben.',
       ok ? 'success' : 'error'
     );
   } catch (error) {
@@ -2708,7 +2725,7 @@ async function exportConfig() {
   // encrypted bundle so a FRESH box can restore them on import. Otherwise the
   // plain export keeps them redacted ('***') as before.
   const withSecrets = typeof window.dvConfirm === 'function'
-    ? await window.dvConfirm('Sollen die Geheimnisse (Forecast-API-Keys, Passwörter, Tokens) verschlüsselt mit-exportiert werden? Dann brauchst du beim Import ein Passwort. Sonst werden sie wie bisher geschwärzt.', {
+    ? await window.dvConfirm('Voller Export mit allen Geheimnissen und Schlüsseln (API-Keys, Passwörter, API-Token, Lizenz, Geräte-Kennung, Portal-Kopplung, HTTPS-Zertifikat, VPN-Profile) — verschlüsselt mit einem Passwort, für Umzug oder Geräte-Tausch? Sonst werden sie wie bisher geschwärzt.', {
         title: 'Konfiguration exportieren',
         okLabel: 'Mit Geheimnissen (Passwort)',
         cancelLabel: 'Ohne (geschwärzt)',

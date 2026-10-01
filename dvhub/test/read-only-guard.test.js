@@ -145,3 +145,20 @@ test('ohne Lese-Modus geht der Schreibzugriff normal durch', async (t) => {
     if (prev !== undefined) process.env.DVHUB_READ_ONLY = prev;
   }
 });
+
+import { createOpenEvseAdapter, createGoeAdapter } from '../services/wallbox/adapters.js';
+
+test('Lese-Modus: Wallbox-Befehle werden nicht gesendet, Status lesen bleibt', async () => {
+  const prev = process.env.DVHUB_READ_ONLY;
+  process.env.DVHUB_READ_ONLY = '1';
+  try {
+    for (const a of [createOpenEvseAdapter(() => ({ url: 'http://127.0.0.1:9' })), createGoeAdapter(() => ({ url: 'http://127.0.0.1:9' }))]) {
+      assert.deepEqual(await a.charge(16), { ok: false, error: 'read_only' });
+      assert.deepEqual(await a.stop(), { ok: false, error: 'read_only' });
+      assert.deepEqual(await a.release(), { ok: false, error: 'read_only' });
+      assert.equal(typeof a.status, 'function');
+    }
+  } finally {
+    if (prev === undefined) delete process.env.DVHUB_READ_ONLY; else process.env.DVHUB_READ_ONLY = prev;
+  }
+});

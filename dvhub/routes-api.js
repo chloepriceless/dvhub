@@ -52,7 +52,7 @@ import { buildVictronAlarmsPayload } from './victron-alarms.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capVictronPvForDisplay } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
-import { encryptSecrets, decryptSecrets, applySecrets } from './services/config-secrets-crypto.js';
+import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from './services/config-secrets-crypto.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig } from './config-model.js';
 import { streamPgDump, runDbRestore } from './services/db-backup.js';
@@ -718,6 +718,11 @@ export function actorContext(req) {
 }
 
 export function createApiRoutes(ctx) {
+  // Daten- und Konfigordner für den Geräte-Tausch-Export (config-secrets-crypto).
+  const migrationDirs = () => ({
+    dataDir: process.env.DV_DATA_DIR || (typeof ctx.getAppDir === 'function' ? ctx.getAppDir() : process.cwd()),
+    configDir: path.dirname(ctx.getConfigPath?.() || '/etc/dvhub/config.json'),
+  });
   const { state, getCfg, pushLog, telemetrySafeWrite, licenseService } = ctx;
 
   // §51a lifetime extension (T-0004): the since-commissioning price scan is
@@ -2844,7 +2849,13 @@ export function createApiRoutes(ctx) {
       if (password.length < 8) return json(res, 400, { ok: false, error: 'password_too_short' });
       let bundle;
       try {
-        bundle = encryptSecrets(ctx.getRawCfg(), password);
+        // Voller Export (Geräte-Tausch): zusätzlich API-Token und die Schlüssel-
+        // Dateien (Lizenz, Kennung, Datenspende, Portal, TLS, VPN …) verschlüsselt
+        // mitgeben. Übernommen werden sie nur beim Import mit migrate:true.
+        bundle = encryptSecrets(ctx.getRawCfg(), password, {
+          apiToken: ctx.getRawCfg()?.apiToken || null,
+          files: collectMigrationFiles(migrationDirs()),
+        });
       } catch (e) {
         return json(res, 400, { ok: false, error: e.message || 'encrypt_failed' });
       }
@@ -7370,6 +7381,7 @@ export function createApiRoutes(ctx) {
       // operator's password. Decrypt + restore them into body.config BEFORE the
       // strict-root check (otherwise `_encryptedSecrets` reads as an unknown root)
       // and before the apiToken strength gate.
+      let migrationFiles = null;
       if (Object.prototype.hasOwnProperty.call(body.config, '_encryptedSecrets')) {
         const blob = body.config._encryptedSecrets;
         delete body.config._encryptedSecrets;
@@ -7387,7 +7399,18 @@ export function createApiRoutes(ctx) {
             return json(res, 400, { ok: false, error: code });
           }
           body.config = applySecrets(body.config, secrets);
-          pushLog('config_import_secrets_restored', { count: Object.keys(secrets).length }, actorContext(req));
+          // Geräte-Tausch: Token + Schlüssel-Dateien nur auf ausdrücklichen Wunsch
+          // (GUI-Frage „Geräte-Tausch?“) — wer nur Einstellungen kopiert, behält
+          // Token, Lizenz und Kopplungen der Zielbox.
+          if (body.migrate === true) {
+            if (typeof secrets.__apiToken === 'string' && secrets.__apiToken) body.config.apiToken = secrets.__apiToken;
+            migrationFiles = secrets.__files && typeof secrets.__files === 'object' ? secrets.__files : null;
+          }
+          pushLog('config_import_secrets_restored', {
+            count: Object.keys(secrets).filter((k) => !k.startsWith('__')).length,
+            migrate: body.migrate === true,
+            files: migrationFiles ? Object.keys(migrationFiles).length : 0,
+          }, actorContext(req));
         }
       }
       // Plan 09-01 (D-05, supersedes Plan 08-01 rejection): apiToken stays
@@ -7530,6 +7553,20 @@ export function createApiRoutes(ctx) {
         }, cfgActor);
       }
       const result = ctx.saveAndApplyConfig(body.config);
+      // Geräte-Tausch: Schlüssel-Dateien erst NACH erfolgreichem Speichern
+      // zurückschreiben (nur erlaubte Pfade, atomar). Lizenz, Kennung, Portal
+      // & Co. lesen sie beim Start — deshalb Neustart nötig.
+      let migration = null;
+      if (migrationFiles) {
+        try {
+          const written = restoreMigrationFiles(migrationFiles, migrationDirs());
+          migration = { files: written, apiToken: typeof body.config.apiToken === 'string' && body.config.apiToken.length > 0 };
+          pushLog('config_import_migration_files', { files: written }, cfgActor);
+        } catch (e) {
+          migration = { error: e.message };
+          pushLog('config_import_migration_error', { error: e.message }, cfgActor);
+        }
+      }
       // Plan 08-06 Task 2 Step 2: consume the one-shot bootstrap token after
       // a successful setup-phase save. From here on, only Bearer-authenticated
       // requests can rewrite config — the takeover window is closed.
@@ -7589,9 +7626,10 @@ export function createApiRoutes(ctx) {
         config: redactConfig(ctx.getRawCfg()),
         effectiveConfig: redactConfig(freshCfg),
         changedPaths: result.changedPaths,
-        restartRequired: result.restartRequired,
+        restartRequired: result.restartRequired || !!(migration && migration.files && migration.files.length),
         restartRequiredPaths: result.restartRequiredPaths,
-        licenseCapWarning
+        licenseCapWarning,
+        migration
       });
     }
 

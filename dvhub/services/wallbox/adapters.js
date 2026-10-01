@@ -21,6 +21,19 @@
  */
 import http from 'node:http';
 import https from 'node:https';
+import { isReadOnlyMode } from '../../read-only-guard.js';
+
+// Lese-Modus (DVHUB_READ_ONLY=1, read-only-guard.js) auch für die Wallbox:
+// eine Zweit-/Testinstanz mit kopierter Prod-Konfiguration darf die echte
+// Wallbox nicht steuern. Lesen (status) bleibt erlaubt.
+const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
+function guardWrites(adapter) {
+  for (const k of ['charge', 'stop', 'release']) {
+    const fn = adapter[k];
+    if (typeof fn === 'function') adapter[k] = (...a) => (isReadOnlyMode() ? Promise.resolve(READ_ONLY) : fn(...a));
+  }
+  return adapter;
+}
 
 // Vendor 0xFFFE (Unregistered) << 16 | 0x0D01 ("DVhub"). evcc nutzt 0x00040001.
 export const OPENEVSE_DVHUB_CLIENT = 0xFFFE0D01;
@@ -63,7 +76,7 @@ export function createOpenEvseAdapter(getSettings) {
   const claimUrl = () => `${base()}/claims/${OPENEVSE_DVHUB_CLIENT}`;
   const opts = (extra) => ({ auth: auth(), timeoutMs: Number(getSettings()?.timeoutMs) || 5000, ...extra });
 
-  return {
+  return guardWrites({
     type: 'openevse',
     isConfigured: () => Boolean(base()),
     async charge(currentA) {
@@ -91,7 +104,7 @@ export function createOpenEvseAdapter(getSettings) {
         raw: { status: d.status, state: d.state, vehicle: d.vehicle, pilot: d.pilot, amp: d.amp, max_current: d.max_current }
       };
     }
-  };
+  });
 }
 
 export function createGoeAdapter(getSettings) {
@@ -107,7 +120,7 @@ export function createGoeAdapter(getSettings) {
     return bad.length ? { ok: false, error: bad.map(([k, v]) => `${k}: ${v}`).join(', ') } : { ok: true };
   };
 
-  return {
+  return guardWrites({
     type: 'goe',
     isConfigured: () => Boolean(base()),
     async charge(currentA) {
@@ -135,7 +148,7 @@ export function createGoeAdapter(getSettings) {
         raw: { car: d.car, amp: d.amp, frc: d.frc, alw: d.alw, fwv: d.fwv }
       };
     }
-  };
+  });
 }
 
 /**
@@ -143,7 +156,7 @@ export function createGoeAdapter(getSettings) {
  * Stopp-Modus bleibt evcc-spezifisch (off / pv / minpv).
  */
 export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
-  return {
+  return guardWrites({
     type: 'evcc',
     isConfigured: () => Boolean(evccIntegration?.getStatus?.().url),
     async charge(currentA) {
@@ -165,5 +178,5 @@ export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
       if (!lp) return { ok: false, error: 'Ladepunkt nicht gefunden' };
       return { ok: true, connected: lp.connected, charging: lp.charging, powerW: lp.chargePowerW, currentA: null, vehicleSocPct: lp.vehicleSocPct, raw: { mode: lp.mode } };
     }
-  };
+  });
 }

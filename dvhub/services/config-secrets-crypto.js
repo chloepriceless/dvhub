@@ -17,6 +17,8 @@
 //
 // The password is never stored; it only derives the key in-memory per call.
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { REDACTED_PATHS } from '../config-redaction.js';
 
 const VERSION = 1;
@@ -64,14 +66,109 @@ export function collectSecrets(config) {
   return out;
 }
 
+// ── Geräte-Tausch (Christin 2026-10-01) ─────────────────────────────────────
+// Ein voller Export muss ALLE Schlüssel tragen, damit ein Ersatzgerät ohne
+// Neueinrichtung weiterläuft. Neben den Config-Geheimnissen liegen sie in
+// Dateien. Nur diese feste Liste wandert mit (relativ zu Daten- bzw.
+// Konfigordner); beim Import wird nichts anderes geschrieben.
+//   appliance-id          Geräte-Kennung — die Lizenz (Machine-File) ist daran
+//                         gebunden, gleiche Identität für Portal/Datenspende
+//   license_state.json    Lizenzschlüssel + signiertes Machine-File
+//   datenspende.json      API-Schlüssel der Datenspende
+//   installer-portal-*    Kopplung mit dem Installateur-Portal
+//   input-push-key        Push-Schlüssel HA/Loxone
+//   support/*             Schlüssel des Fernwartungs-Relays
+//   tls/*                 HTTPS-Zertifikat (keine neue Browser-Warnung)
+//   vpn/profiles/**       VPN-Profile, u. a. das des Direktvermarkters
+export const MIGRATION_DATA_FILES = Object.freeze([
+  'appliance-id', 'license_state.json', 'datenspende.json',
+  'installer-portal-client.json', 'installer-portal-secret', 'input-push-key',
+  'support/relay_id_ed25519', 'support/relay_id_ed25519.pub', 'support/known_hosts', 'support/relay.json',
+]);
+export const MIGRATION_CONFIG_FILES = Object.freeze(['tls/cert.pem', 'tls/key.pem']);
+export const MIGRATION_CONFIG_DIRS = Object.freeze(['vpn/profiles']);
+const MIGRATION_MAX_FILE_BYTES = 256 * 1024;
+const SAFE_SEGMENT = /^[A-Za-z0-9._@+-]+$/;
+
+/** Gehört dieser Bundle-Pfad (data/… oder config/…) zur erlaubten Liste? */
+export function isAllowedMigrationFile(rel) {
+  const s = String(rel || '');
+  const segs = s.split('/');
+  if (segs.some((x) => !SAFE_SEGMENT.test(x) || x === '.' || x === '..')) return false;
+  if (segs[0] === 'data') return MIGRATION_DATA_FILES.includes(segs.slice(1).join('/'));
+  if (segs[0] === 'config') {
+    const r = segs.slice(1).join('/');
+    return MIGRATION_CONFIG_FILES.includes(r) || MIGRATION_CONFIG_DIRS.some((d) => r.startsWith(`${d}/`));
+  }
+  return false;
+}
+
+function walkFiles(root, rel, fsImpl, out) {
+  let entries = [];
+  try { entries = fsImpl.readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const r = `${rel}/${e.name}`;
+    if (e.isDirectory()) walkFiles(root, r, fsImpl, out);
+    else if (e.isFile()) out.push(r);
+  }
+}
+
+/** Dateien für den Geräte-Tausch einsammeln → { 'data/appliance-id': base64, … }. */
+export function collectMigrationFiles({ dataDir, configDir, fsImpl = fs } = {}) {
+  const out = {};
+  const add = (root, rel, prefix) => {
+    if (!root) return;
+    try {
+      const p = path.join(root, rel);
+      const st = fsImpl.statSync(p);
+      if (!st.isFile() || st.size > MIGRATION_MAX_FILE_BYTES) return;
+      const key = `${prefix}/${rel}`;
+      if (isAllowedMigrationFile(key)) out[key] = fsImpl.readFileSync(p).toString('base64');
+    } catch { /* fehlt auf dieser Box — kein Fehler */ }
+  };
+  for (const f of MIGRATION_DATA_FILES) add(dataDir, f, 'data');
+  for (const f of MIGRATION_CONFIG_FILES) add(configDir, f, 'config');
+  for (const d of MIGRATION_CONFIG_DIRS) {
+    const files = [];
+    if (configDir) walkFiles(configDir, d, fsImpl, files);
+    for (const f of files.sort()) add(configDir, f, 'config');
+  }
+  return out;
+}
+
+/** Dateien aus dem Bundle zurückschreiben (nur erlaubte Pfade, atomar, 0600). */
+export function restoreMigrationFiles(files, { dataDir, configDir, fsImpl = fs } = {}) {
+  const written = [];
+  for (const [key, b64] of Object.entries(files || {})) {
+    if (!isAllowedMigrationFile(key) || typeof b64 !== 'string') continue;
+    const root = key.startsWith('data/') ? dataDir : configDir;
+    if (!root) continue;
+    const target = path.join(root, key.slice(key.indexOf('/') + 1));
+    if (!path.resolve(target).startsWith(path.resolve(root) + path.sep)) continue;
+    fsImpl.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    const tmp = `${target}.tmp-${process.pid}`;
+    const mode = /\.(pub|pem)$/.test(target) && !/key\.pem$/.test(target) ? 0o644 : 0o600;
+    fsImpl.writeFileSync(tmp, Buffer.from(b64, 'base64'), { mode });
+    fsImpl.renameSync(tmp, target);
+    written.push(key);
+  }
+  return written;
+}
+
 // Seal the config's secrets under password. Returns a JSON-serialisable blob, or
 // null when there is nothing to protect (so callers can skip the field entirely).
-export function encryptSecrets(config, password) {
+// opts.files / opts.apiToken: Geräte-Tausch (siehe oben). Sie liegen im selben
+// verschlüsselten Block unter __files / __apiToken; applySecrets ignoriert sie,
+// übernommen werden sie nur beim Import mit ausdrücklichem migrate:true.
+export function encryptSecrets(config, password, { files = null, apiToken = null } = {}) {
   if (typeof password !== 'string' || password.length === 0) {
     throw new Error('password_required');
   }
   const secrets = collectSecrets(config);
-  if (Object.keys(secrets).length === 0) return null;
+  const names = Object.keys(secrets);
+  if (files && Object.keys(files).length) { secrets.__files = files; names.push(...Object.keys(files)); }
+  if (typeof apiToken === 'string' && apiToken) { secrets.__apiToken = apiToken; names.push('apiToken'); }
+  if (names.length === 0) return null;
 
   const salt = crypto.randomBytes(SALT_LEN);
   const iv = crypto.randomBytes(IV_LEN);
@@ -91,7 +188,7 @@ export function encryptSecrets(config, password) {
     data: enc.toString('base64'),
     // Path NAMES only (e.g. 'forecast.solcast.apiKey') — not the values. Lets the
     // UI show "what's inside" without decrypting.
-    paths: Object.keys(secrets)
+    paths: names
   };
 }
 
