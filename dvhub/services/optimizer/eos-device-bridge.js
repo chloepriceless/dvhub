@@ -61,6 +61,31 @@ export function createEosDeviceBridge(deps) {
   const lastCmd = new Map();      // deviceId → commandKey
   const lastPower = new Map();    // deviceId → letzte Heizleistung (für Überschuss-Ramp)
   const lastDevice = new Map();   // deviceId → zuletzt gesteuertes (normalisiertes) Gerät
+  // Abgeschlossene Läufe heute je planbarem Gerät (EOS 0.4 will sie als
+  // Messwert <eosId>.cycles_completed — fehlt er, bricht EOS JEDEN Lauf ab,
+  // „Invalid completed cycle count“, Pi 2026-10-01). Ein Lauf zählt, wenn das
+  // Gerät nach mindestens der halben geplanten Dauer wieder ausgeht.
+  const onSince = new Map();      // deviceId → ms seit an
+  const cycles = { day: null, byDevice: new Map() };
+  const localDay = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: getCfg()?.timeZone || 'Europe/Berlin' }).format(new Date(ms));
+  function trackCycle(d, on, eosId) {
+    const t = now();
+    const day = localDay(t);
+    if (cycles.day !== day) { cycles.day = day; cycles.byDevice.clear(); }
+    const since = onSince.get(d.id);
+    if (on && since == null) onSince.set(d.id, t);
+    if (!on && since != null) {
+      onSince.delete(d.id);
+      const minMs = 0.5 * (Number(d.plan?.durationH) || 1) * 3_600_000;
+      if (t - since >= minMs) cycles.byDevice.set(d.id, (cycles.byDevice.get(d.id) || 0) + 1);
+    }
+    if (state && eosId) {
+      state.optimizer = state.optimizer || {};
+      const m = state.optimizer.applianceCyclesToday || {};
+      m[eosId] = cycles.byDevice.get(d.id) || 0;
+      state.optimizer.applianceCyclesToday = m;
+    }
+  }
   let lastStatus = [];
 
   async function actuate(device, command) {
@@ -132,6 +157,7 @@ export function createEosDeviceBridge(deps) {
           const eosId = byDevId[d.id];
           const on = eosId ? deferrableOnNow(dispatch, eosId, now()) : false;
           const r = await actuate(d, { on });
+          if (r?.ok !== false) trackCycle(d, on, eosId);
           status.push({ id: d.id, kind: 'deferrable', on, ok: r?.ok !== false });
         }
       }

@@ -432,6 +432,22 @@ export function createEosForecastBridge(ctx) {
       else errors[key] = lastErr;
     }
 
+    // Planbare Geräte (EOS 0.4): heute abgeschlossene Läufe als Messwert. EOS
+    // liest den jüngsten Wert seit Tagesbeginn und bricht den GANZEN Lauf ab,
+    // wenn dort nur Lücken stehen („Invalid completed cycle count“). Zähler aus
+    // der Geräte-Bridge; DVhub sendet keine num_cycles (EOS-Vorgabe 1) → 0..1.
+    const cycleKeys = keysRes.data.filter((k) => /\.cycles_completed$/.test(String(k)));
+    const cyclesToday = state?.optimizer?.applianceCyclesToday || {};
+    for (const key of cycleKeys) {
+      const eosId = String(key).slice(0, -'.cycles_completed'.length);
+      const n = Math.min(1, Math.max(0, Math.trunc(Number(cyclesToday[eosId]) || 0)));
+      const path = `/v1/measurement/value?datetime=${encodeURIComponent(freshIso)}`
+        + `&key=${encodeURIComponent(key)}&value=${n}`;
+      const res = await eosHttpRequest(baseUrl, 'PUT', path);
+      if (res.ok) pushed.push(`${key}=${n}`);
+      else errors[key] = res.error;
+    }
+
     return { pushed, errors };
   }
 

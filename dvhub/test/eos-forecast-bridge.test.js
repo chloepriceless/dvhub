@@ -699,3 +699,28 @@ test('Steuerzeitraum: stuendliche Reihe gilt nicht als Luecke', () => {
   const hourly = Array.from({ length: 30 }, (_, i) => ({ start: new Date(Date.parse('2026-09-22T23:00:00Z') + i * 3_600_000).toISOString(), powerW: 1 }));
   assert.equal(computeControlHorizonHours([hourly], now), 24);
 });
+
+// EOS 0.4 bricht ohne Messwert <gerät>.cycles_completed JEDEN Lauf ab
+// („Invalid completed cycle count“, Pi 2026-10-01).
+test('pushFreshSoc: abgeschlossene Geräteläufe als Messwert (0 ohne Zähler, höchstens 1)', async () => {
+  const mock = await createMockEos((req, res) => {
+    if (req.method === 'GET' && req.url.startsWith('/v1/measurement/keys')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(['battery1-soc-factor', 'appl_spuele.cycles_completed', 'appl_trockner.cycles_completed']));
+      return;
+    }
+    okHandler(req, res);
+  });
+  try {
+    const state = { victron: { soc: 50 }, optimizer: { eos: { supported: true }, applianceCyclesToday: { appl_trockner: 3 } } };
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {}, forecastService: { buildForecastResponse: async () => forecastSlots() }, state,
+    };
+    const res = await createEosForecastBridge(ctx).pushFreshSoc();
+    assert.ok(res.pushed.includes('appl_spuele.cycles_completed=0'));
+    assert.ok(res.pushed.includes('appl_trockner.cycles_completed=1'));
+  } finally {
+    await mock.close();
+  }
+});

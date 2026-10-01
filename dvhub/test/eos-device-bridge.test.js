@@ -92,6 +92,22 @@ describe('createEosDeviceBridge', () => {
     assert.deepEqual(act.calls, [{ id: 'dw', on: true }]);
   });
 
+  it('zählt abgeschlossene Läufe je Tag (EOS 0.4 cycles_completed)', async () => {
+    let t = Date.parse('2026-09-26T13:10:00.000Z');
+    const rows = [
+      { ts_utc: '2026-09-26T13:00:00.000Z', appliances: { appl_dw_running: 1 } },
+      { ts_utc: '2026-09-26T14:00:00.000Z', appliances: { appl_dw_running: 0 } },
+    ];
+    const state = { optimizer: { eosApplianceIdMap: { appl_dw: 'dw' } } };
+    const b = createEosDeviceBridge({ getCfg: () => ({ devices: [dishwasher] }), getSolution: async () => ({ rows }), actuator: fakeActuator(), state, now: () => t });
+    await b.tick();
+    assert.equal(state.optimizer.applianceCyclesToday.appl_dw, 0, 'läuft noch');
+    t = Date.parse('2026-09-26T14:05:00.000Z'); await b.tick();
+    assert.equal(state.optimizer.applianceCyclesToday.appl_dw, 1, '55 min ≥ halbe Dauer → 1 Lauf');
+    t = Date.parse('2026-09-27T08:00:00.000Z'); await b.tick();
+    assert.equal(state.optimizer.applianceCyclesToday.appl_dw, 0, 'neuer Tag');
+  });
+
   it('deferrable: OFF when no dispatch window now', async () => {
     const now = () => Date.parse('2026-09-26T20:00:00.000Z');
     const rows = [{ ts_utc: '2026-09-26T13:00:00.000Z', appliances: { appl_dw_running: 1 } }];
