@@ -618,9 +618,10 @@
             { label: 'evcc', value: data.url ? (data.reachable ? 'Erreichbar' : 'Nicht erreichbar') : '—' }
           ];
         }
+        // Genau 4 Kacheln je Karte (Layout-Vertrag, integrations.spec) — die
+        // Wallbox-Art steckt deshalb in der Status-Kachel.
         return [
-          { label: 'Wallbox', value: 'evcc' },
-          { label: 'Status', value: data.url ? (data.reachable ? 'Erreichbar' : 'Nicht erreichbar') : 'Nicht konfiguriert' },
+          { label: 'evcc', value: data.url ? (data.reachable ? 'Erreichbar' : 'Nicht erreichbar') : 'Nicht konfiguriert' },
           { label: 'Ladepunkte', value: data.url ? fmtCount(data.loadpointCount) : '—' },
           { label: 'Akkuschutz', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },
           { label: 'Dashboard-LP', value: data.dashboardLoadpoint != null ? ('#' + data.dashboardLoadpoint) : 'Auto' }
