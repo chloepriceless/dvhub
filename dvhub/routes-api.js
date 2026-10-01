@@ -1133,6 +1133,7 @@ export function createApiRoutes(ctx) {
     '/api/ortsnetz/status',
     '/api/eos/status',
     '/api/inverter-efficiency/curve',
+    '/api/storage/status',
   ]);
 
   // Go-Live-Review 2026-06-10: map each LAN-safe GET endpoint to a coarse group
@@ -1146,7 +1147,7 @@ export function createApiRoutes(ctx) {
     ['/api/status', 'status'], ['/api/costs', 'status'], ['/api/metrics', 'status'],
     ['/dv/control-value', 'status'], ['/api/config', 'status'],
     ['/api/config/export', 'status'], ['/api/discovery/systems', 'status'],
-    ['/api/optimizer/status', 'status'], ['/api/ev', 'status'], ['/api/eos/status', 'status'], ['/api/inverter-efficiency/curve', 'status'],
+    ['/api/optimizer/status', 'status'], ['/api/ev', 'status'], ['/api/eos/status', 'status'], ['/api/inverter-efficiency/curve', 'status'], ['/api/storage/status', 'status'],
     // dashboard — family kiosk (token-less tablet)
     ['/api/family/status', 'dashboard'], ['/api/family/presence', 'dashboard'],
     ['/api/family/tile-history', 'dashboard'], ['/api/family/tesla-history', 'dashboard'],
@@ -4894,6 +4895,12 @@ export function createApiRoutes(ctx) {
         monitor: ctx.eosMonitor?.status?.() ?? null,
         eosdashUrl: '/eosdash/'
       });
+    }
+
+    // Speicherplatz (storage-guard.js): frei/belegt, Stufe, letzte Maßnahmen.
+    if (url.pathname === '/api/storage/status' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      return json(res, 200, { ok: true, ...(ctx.storageGuard?.status?.() || { level: 'unbekannt' }) });
     }
 
     // Zentraler EOS-Zustand (eos-monitor.js): up/busy/down, PID, Version,

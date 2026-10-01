@@ -38,6 +38,7 @@ import { createInverterCurveCalibrator } from './services/inverter-efficiency/ca
 import { createLogRetention } from './services/log-retention.js';
 import { applyDbTuning, dbBudgetMb, tuneTimescale } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
+import { createStorageGuard } from './services/storage-guard.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
@@ -1929,6 +1930,19 @@ const telemetryReady = (async () => {
       if (hm === '03:40') runLogRetention();
     };
     setInterval(scheduleNightly, 60 * 1000).unref();
+    // Platz-Wache (kleine eMMC/SD): früher komprimieren, im Notfall älteste
+    // Rohwerte entfernen — 15-min-Werte und die letzten 30 Tage bleiben.
+    ctx.storageGuard = createStorageGuard({
+      getDb: () => ctx.db,
+      getDataDir: () => DATA_DIR || '/var/lib/dvhub',
+      pushLog,
+      setWarning: (id, message) => {
+        const i = state.systemWarnings.findIndex((w) => w.id === id);
+        if (message == null) { if (i >= 0) state.systemWarnings.splice(i, 1); return; }
+        if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
+      },
+    });
+    ctx.storageGuard.start();
     setInterval(runInverterEfficiencyDaily, 60 * 60 * 1000).unref();
   }
 })().catch(e => pushLog('telemetry_init_error', { error: e.message }));
