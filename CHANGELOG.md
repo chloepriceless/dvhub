@@ -53,11 +53,14 @@ verweist hierher.
 - **SD-Karten-/eMMC-Schonung** (gemessen auf prod):
   - EOS schrieb alle 10 s seinen kompletten Zustand (12–14 MB/min ≈ 20 GB/Tag):
     automatisches Speichern aus (Daten liegen im RAM, DVhub schickt nach einem
-    EOS-Neustart alles neu), Messwerte 48 h statt 2 Jahre, SoC alle 2 statt
-    1 min mit einem statt zwei Zeitstempeln → ~1 KiB/min.
+    EOS-Neustart alles neu), EOS-interne Messwerte 48 h statt 2 Jahre, SoC an
+    EOS mit einem statt zwei Zeitstempeln → ~1 KiB/min.
+  - DVhubs eigene Aufzeichnung behält ihre volle Auflösung (5 s) — es wird nur
+    seltener auf die Platte geschrieben.
   - PostgreSQL schreibarm (synchronous_commit=off, Checkpoint 15 min,
-    WAL-Kompression) → 1,66 → 0,73 MB/min; Live-Messwerte werden im RAM
-    gesammelt und einmal pro Minute geschrieben (`telemetry.writeBatchSec`).
+    WAL-Kompression) → 1,66 → 0,73 MB/min; die 5-s-Live-Messwerte werden im
+    RAM gesammelt und einmal pro Minute als Block geschrieben
+    (`telemetry.writeBatchSec`, Auflösung unverändert).
   - VPN-Watchdog ohne sudo (vorher ~25 Journalzeilen/min).
 - **DVhub stellt seine Datenbank selbst ein** — kleiner Speicher-Footprint für
   alle Boxen (64 MB shared_buffers, ohne Parallel-Worker), „winzig“ für

@@ -647,7 +647,7 @@ export function createEosConfigSync(ctx) {
       // auf die Platte (Vorgabe 10 s → auf prod 12 MB/min). Die Daten liegen
       // ohnehin im RAM; die Plattenkopie braucht es nicht: DVhub schickt nach
       // einem EOS-Neustart sofort alles neu (Neustart-Wache, PID-Wechsel), danach
-      // laufend (SoC alle 2 min, Prognosen alle 15 min). null = automatisches
+      // laufend (SoC jede Minute, Prognosen alle 15 min). null = automatisches
       // Speichern aus; beim normalen Beenden speichert EOS weiterhin.
       { section: 'database/autosave_interval_sec', body: EOS_AUTOSAVE_INTERVAL_SEC },
     ];
