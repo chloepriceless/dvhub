@@ -21,12 +21,39 @@ verweist hierher.
 - **Zentraler EOS-Monitor** (`/api/eos/status`): ein Punkt für „läuft EOS?“
   (`up` / `busy` = rechnet / `down`) und den letzten Plan; Kacheln, Inspector,
   Neustart-Wache und Bridges fragen EOS nicht mehr jeweils selbst.
+- **Wechselrichter-Wirkungsgrad wird autonom gemessen und an EOS gegeben.**
+  Aus den eigenen 5-s-Messwerten entsteht je Lastbereich (18 Bereiche) ein
+  Tageswert; daraus rechnet DVhub die lastabhängige Kurve über 180 Tage —
+  nur alle 30 Tage neu (feste Perioden ab 01.01.2026), deterministisch:
+  gleiche Daten ergeben bitgleich dieselbe Kurve (Prüfsumme). Freigabe erst
+  nach 14 Tagen Betrieb. EOS bekommt den Mittelwert als `dc_to_ac_efficiency`
+  und — sobald EOS die Kurve kennt (Akkudoktor-EOS PR #1375) — die Kurve selbst.
+  `GET /api/inverter-efficiency/curve`; abschaltbar mit
+  `optimizer.inverterEfficiencyAuto: false`.
+- **EOS-Quelle als Parameter** (`EOS_REPO`/`EOS_TAG`, `EOS_REPO_URL`/`EOS_PIN`):
+  der Umstieg auf ein offizielles Akkudoktor-EOS-Release ist eine Pin-Änderung.
+- **Voller Export für den Geräte-Tausch.** Der passwortgeschützte Export trägt
+  jetzt auch API-Token, Lizenz, Geräte-Kennung, Datenspende-Schlüssel,
+  Installateur-Portal-Kopplung, Support-Schlüssel, HTTPS-Zertifikat und
+  VPN-Profile (u. a. Direktvermarkter). Der Import fragt „Geräte-Tausch?“ und
+  übernimmt sie nur dann. Zusammen mit dem Datenbank-Backup ist ein Ersatzgerät
+  ohne Neueinrichtung betriebsbereit (Prod → Container durchgetestet).
 
 ### Behoben
 
 - E-Auto-Kachel zeigte „kein Plan: eos_off“, während EOS rechnete.
 - Antwortete EOS beim Abgleich nicht rechtzeitig, ging das E-Auto im alten
   Listenformat raus und EOS 0.4 lehnte es ab.
+- **Planbare Geräte legten EOS 0.4 lahm:** ohne Messwert
+  `<gerät>.cycles_completed` brach EOS jeden Lauf ab („Invalid completed cycle
+  count“). DVhub zählt die Läufe je Tag und meldet sie mit dem SoC.
+- **Lese-Modus sperrte die Wallbox nicht:** mit `DVHUB_READ_ONLY=1` waren
+  Modbus/MQTT gesperrt, OpenEVSE/go-e/evcc und Shelly-Relais aber nicht — eine
+  Kopie mit Prod-Konfiguration hätte die echte Wallbox gesteuert.
+- **Docker: Restore großer Datenbanken** wurde im DB-Container OOM-gekillt
+  (Index-Aufbau mit 3 × 48 MB). Speicher-Parameter fest begrenzt; die volle
+  Prod-DB (6 GB) läuft jetzt in 85 s durch.
+- Integrationskarte „Wallbox“ mit evcc zeigte 5 statt 4 Kacheln (CI rot).
 
 ### Neu
 
