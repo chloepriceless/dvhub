@@ -23,6 +23,7 @@
 // das Portal-Token muss einen Neustart überleben).
 
 import fs from 'node:fs';
+import { AUDIT_ERROR_SQL } from './log-retention.js';
 import path from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
@@ -321,6 +322,39 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
     return inflight;
   }
 
+  // Fehler ans Portal (Christin 2026-10-01): alles aus dem Audit-Log, was als
+  // Fehler gilt (…_error, …_failed, MQTT), ab dem Quittungs-Cursor, aufsteigend,
+  // höchstens 300 je Poll. Wiederholt, bis das Portal quittiert (errorsAck);
+  // erst dann kürzt log-retention.js lokal auf 24 h / 7 Tage.
+  const ERRORS_PER_POLL = 300;
+  async function takeErrors(sc) {
+    const db = ctx.db;
+    if (!db || typeof db.query !== 'function') return { errors: [], reset: false };
+    const from = Number(sc.errorAckId) || 0;
+    try {
+      const res = await db.query(
+        `SELECT id, ts_utc, event_type, severity, payload FROM audit_log
+          WHERE ${AUDIT_ERROR_SQL} AND id > $1 ORDER BY id LIMIT ${ERRORS_PER_POLL}`, [from]);
+      const errors = (res.rows || []).map((row) => ({
+        id: Number(row.id),
+        ts: new Date(row.ts_utc).toISOString(),
+        type: String(row.event_type || '').slice(0, 200),
+        sev: String(row.severity || 'error'),
+        msg: (row.payload == null ? '' : JSON.stringify(row.payload)).slice(0, 1000),
+      }));
+      // Datenbank neu (Geräte-Tausch ohne DB-Übernahme): lokale ids liegen unter
+      // dem Portal-Cursor — einmal zurücksetzen, sonst verwirft das Portal alles.
+      let reset = false;
+      if (!errors.length && from > 0) {
+        const mx = await db.query('SELECT coalesce(max(id), 0) AS m FROM audit_log');
+        reset = Number(mx.rows?.[0]?.m) < from;
+      }
+      return { errors, reset };
+    } catch {
+      return { errors: [], reset: false };
+    }
+  }
+
   async function doPoll() {
     if (!isEnabled()) return { skipped: true, reason: 'disabled' };
     const sc = loadSidecar();
@@ -332,6 +366,7 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
     // Tagesbericht: fertig gerechneten beilegen, sonst im Hintergrund anstoßen.
     const pro = proActive(ctx);
     const dayReport = pro ? takeDayReport(sc) : null;
+    const errBatch = sc.approved ? await takeErrors(sc) : { errors: [], reset: false };
     try {
       const r = await fetchImpl(`${sc.portalUrl}/api/poll`, {
         method: 'POST',
@@ -342,6 +377,8 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
           license: buildLicenseInfo(ctx),
           status: pro ? buildCompactStatus(ctx, now()) : null,
           ...(dayReport ? { dayReport } : {}),
+          ...(errBatch.errors.length ? { errors: errBatch.errors } : {}),
+          ...(errBatch.reset ? { errorsReset: true } : {}),
         },
       });
       if (!stillCurrent(gen, sc)) return { ok: false, aborted: true };
@@ -403,6 +440,12 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
       sc.approved = approved;
       // Nur nach Freigabe speichert das Portal den Bericht — dann gilt er als gemeldet.
       if (dayReport && approved) { sc.lastDayReported = dayReport.day; pendingReport = null; }
+      // Quittung: nie über das hinaus, was wir in DIESEM Poll geschickt haben.
+      if (approved && Number.isFinite(Number(r.json.errorsAck))) {
+        const sentMax = errBatch.errors.length ? errBatch.errors[errBatch.errors.length - 1].id : null;
+        if (errBatch.reset) sc.errorAckId = 0;
+        else if (sentMax != null) sc.errorAckId = Math.max(Number(sc.errorAckId) || 0, Math.min(Number(r.json.errorsAck), sentMax));
+      }
       saveSidecar(sc);
       return { ok: true, approved: sc.approved, executed: results.length };
     } catch (e) {
@@ -540,5 +583,14 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
     return { ok: true };
   }
 
-  return { claim, status, disconnect, cancelPending, pollOnce, startPolling, buildCompactStatus: (n) => buildCompactStatus(ctx, n) };
+  /** Höchste vom Portal quittierte Fehler-id (für log-retention.js), sonst null. */
+  function errorAckId() {
+    if (!isEnabled()) return null;
+    const sc = loadSidecar();
+    if (!sc || !sc.approved || sc.revoked) return null;
+    const v = Number(sc.errorAckId);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+
+  return { claim, status, disconnect, cancelPending, pollOnce, startPolling, errorAckId, buildCompactStatus: (n) => buildCompactStatus(ctx, n) };
 }

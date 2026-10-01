@@ -68,6 +68,12 @@ const APPLIANCES_FILE = path.join(DATA_DIR, 'appliances.json');
 const PAIRINGS_FILE = path.join(DATA_DIR, 'pairings.json');
 const SECRET_FILE = path.join(DATA_DIR, 'portal-secret');
 const KEYS_DIR = path.join(DATA_DIR, 'keys');
+// Fehlerprotokoll je Anlage (JSONL, nur anhängen) — die Anlage meldet ihre
+// Fehler beim Poll, das Portal hebt sie dauerhaft auf und quittiert sie
+// (errorsAck). Erst danach kürzt die Anlage ihr lokales Log (24 h / 7 Tage).
+const ERRORS_DIR = path.join(DATA_DIR, 'errors');
+const ERRORS_MAX_BYTES = 20 * 1024 * 1024;
+const ERRORS_KEEP_LINES = 100_000;
 
 fs.mkdirSync(KEYS_DIR, { recursive: true });
 
@@ -429,6 +435,54 @@ async function handleApi(req, res, url) {
     capacityOk: l.capacityOk !== false,
     at: nowIso(),
   } : null);
+  // Fehler der Anlage anhängen. Nur ids über dem bisherigen Quittungs-Cursor
+  // (die Anlage schickt aufsteigend und wiederholt, bis quittiert) → kein
+  // Doppeleintrag. Gibt den neuen Cursor zurück.
+  function storeErrors(aid, pr, list) {
+    if (!Array.isArray(list) || !list.length) return pr.errorAckId || 0;
+    const ack = Number(pr.errorAckId) || 0;
+    const rows = list
+      .map((e) => ({
+        id: Number(e?.id), ts: String(e?.ts || '').slice(0, 40),
+        type: String(e?.type || '').slice(0, 200), sev: String(e?.sev || 'error').slice(0, 16),
+        msg: String(e?.msg || '').slice(0, 1000),
+      }))
+      .filter((e) => Number.isSafeInteger(e.id) && e.id > ack && e.type && !Number.isNaN(Date.parse(e.ts)))
+      .sort((a, b) => a.id - b.id)
+      .slice(0, 1000);
+    if (!rows.length) return ack;
+    fs.mkdirSync(ERRORS_DIR, { recursive: true, mode: 0o700 });
+    const file = path.join(ERRORS_DIR, `${aid}.jsonl`);
+    fs.appendFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n', { mode: 0o600 });
+    try {
+      if (fs.statSync(file).size > ERRORS_MAX_BYTES) {
+        const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+        const tmp = `${file}.tmp`;
+        fs.writeFileSync(tmp, lines.slice(-ERRORS_KEEP_LINES).join('\n') + '\n', { mode: 0o600 });
+        fs.renameSync(tmp, file);
+      }
+    } catch { /* Kürzen ist best effort */ }
+    pr.errorAckId = rows[rows.length - 1].id;
+    pr.errorCount = (Number(pr.errorCount) || 0) + rows.length;
+    pr.lastErrorAt = rows[rows.length - 1].ts;
+    return pr.errorAckId;
+  }
+  function readErrors(aid, { limit = 200, type = '' } = {}) {
+    const file = path.join(ERRORS_DIR, `${aid}.jsonl`);
+    if (!fs.existsSync(file)) return { errors: [], summary: [] };
+    const all = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => {
+      try { return JSON.parse(l); } catch { return null; }
+    }).filter(Boolean);
+    const byType = new Map();
+    for (const e of all) {
+      const t = byType.get(e.type) || { type: e.type, count: 0, first: e.ts, last: e.ts };
+      t.count += 1; t.last = e.ts;
+      byType.set(e.type, t);
+    }
+    const sel = (type ? all.filter((e) => e.type === type) : all).slice(-limit).reverse();
+    return { errors: sel, summary: [...byType.values()].sort((a, b) => (a.last < b.last ? 1 : -1)) };
+  }
+
   const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
   const MONTH_RE = /^\d{4}-\d{2}$/;
   const DAYS_KEEP = 400;
@@ -510,10 +564,12 @@ async function handleApi(req, res, url) {
       pr.lastStatus = b.status || null;   // ohne Pro-Lizenz schickt die Anlage keinen Status
       if (b.license) pr.license = cleanLicense(b.license);
       storeDayReport(pr, b.dayReport);
+      if (b.errorsReset === true) pr.errorAckId = 0;   // Anlage hat eine neue Datenbank
+      storeErrors(aid, pr, b.errors);
     }
     const commands = approved ? (pr.commands || []).splice(0, 5) : [];
     writeJsonFile(PAIRINGS_FILE, pairings);
-    return jsonRes(res, 200, { ok: true, approved, commands });
+    return jsonRes(res, 200, { ok: true, approved, commands, ...(approved ? { errorsAck: Number(pr.errorAckId) || 0 } : {}) });
   }
   // Anlage trennt sich (Kunde hat „Portal-Kopplung trennen“ gedrückt):
   // Kopplung hier löschen, damit die Anlage frei für einen neuen Code ist.
@@ -981,6 +1037,8 @@ async function handleApi(req, res, url) {
     // Tagesertrag: letzter gemeldeter Tag + Monatsstände (DV-Erlös), vom Portal gespeichert.
     lastDay: lastDayOf(pr),
     months: pr.months || {},
+    errorCount: Number(pr.errorCount) || 0,
+    lastErrorAt: pr.lastErrorAt || null,
   });
   // Lizenz vorhanden (auch wenn Pro gerade gesperrt ist — „Anlage größer als
   // Lizenz“ sperrt Pro in DVhub selbst, genau dann braucht es den Hinweis).
@@ -1046,6 +1104,12 @@ async function handleApi(req, res, url) {
     const pr = pairings[aid];
     if (!pr || pr.acct !== sess.acct) return jsonRes(res, 404, { ok: false, error: 'pairing_nicht_gefunden' });
     if (sub === '' && method === 'GET') return jsonRes(res, 200, { ok: true, pairing: pairingView(pr) });
+    // Fehlerprotokoll der Anlage (neueste zuerst) + Übersicht je Fehlerart.
+    if (sub === '/errors' && method === 'GET') {
+      const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
+      const type = String(url.searchParams.get('type') || '').slice(0, 200);
+      return jsonRes(res, 200, { ok: true, ...readErrors(aid, { limit, type }) });
+    }
     // Umbenennen (Installateur-Vergabe): name/customer setzen oder mit leerem
     // Wert zurück auf die Anlagen-Reportierung (applianceName) löschen.
     if (sub === '/rename' && method === 'POST') {

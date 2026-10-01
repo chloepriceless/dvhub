@@ -114,3 +114,31 @@ test('Tagesberichte: gespeichert, Monat nur vorwärts, letzter Tag sichtbar', as
   await poll({ license: pro30, status: { soc: 50 }, dayReport: { day: 'gestern', netEur: 'viel' } });
   assert.equal((await view()).lastDay.day, '2026-09-29');
 });
+
+// Fehlerprotokoll (2026-10-01): die Anlage meldet Fehler beim Poll, das Portal
+// hebt sie je Anlage auf und quittiert (errorsAck) — erst dann kürzt die
+// Anlage lokal.
+test('Fehler: gespeichert, quittiert, keine Doppelten, Übersicht je Art', async (t) => {
+  const { p, cookie, poll, view } = await pairedAppliance(t);
+  const e = (id, type, ts = `2026-10-01T10:0${id % 10}:00.000Z`) => ({ id, ts, type, sev: 'error', msg: `{"error":"x${id}"}` });
+  const r1 = await poll({ license: pro30, errors: [e(1, 'evcc_poll_error'), e(2, '[MQTT] Client error: ECONNREFUSED'), e(3, 'evcc_poll_error')] });
+  assert.equal(r1.j.errorsAck, 3);
+  // Wiederholung (Quittung nicht angekommen) + Neues → nur das Neue zählt.
+  const r2 = await poll({ license: pro30, errors: [e(2, '[MQTT] Client error: ECONNREFUSED'), e(3, 'evcc_poll_error'), e(4, 'evcc_poll_error')] });
+  assert.equal(r2.j.errorsAck, 4);
+  const v = await view();
+  assert.equal(v.errorCount, 4);
+  const list = await p.call(`/api/pairings/${AID}/errors?limit=10`, { cookie });
+  assert.equal(list.status, 200, list.text);
+  assert.deepEqual(list.j.errors.map((x) => x.id), [4, 3, 2, 1], 'neueste zuerst, ohne Doppelte');
+  assert.deepEqual(list.j.summary.map((s) => [s.type, s.count]).sort(), [['[MQTT] Client error: ECONNREFUSED', 1], ['evcc_poll_error', 3]]);
+  const only = await p.call(`/api/pairings/${AID}/errors?type=evcc_poll_error`, { cookie });
+  assert.equal(only.j.errors.length, 3);
+  // Kaputtes wird verworfen, Quittung bleibt.
+  assert.equal((await poll({ license: pro30, errors: [{ id: 'x', ts: 'nie', type: '' }] })).j.errorsAck, 4);
+  // Neue Datenbank auf der Anlage: Cursor zurück, kleine ids werden wieder angenommen.
+  assert.equal((await poll({ license: pro30, errorsReset: true, errors: [e(1, 'eos_sync_failed')] })).j.errorsAck, 1);
+  // Fremdes Konto sieht nichts.
+  const other = await p.call('/api/account', { method: 'POST', body: { name: 'Andere GmbH', password: 'geheim12345' } });
+  assert.equal((await p.call(`/api/pairings/${AID}/errors`, { cookie: other.cookie })).status, 404);
+});

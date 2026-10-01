@@ -227,6 +227,37 @@ const STATUS = {
   declined:  ['abgelehnt', 'err'],
 };
 
+async function toggleErrors(aid, box, type = '') {
+  const mk = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  if (!box.hidden && !type) { box.hidden = true; return; }
+  box.hidden = false;
+  box.replaceChildren(mk('p', 'muted', 'Lade Fehlerprotokoll …'));
+  const r = await api(`/api/pairings/${aid}/errors?limit=200${type ? `&type=${encodeURIComponent(type)}` : ''}`);
+  box.replaceChildren();
+  if (!r.j?.ok) { box.append(mk('p', 'muted', `Fehler: ${r.j?.error || r.status}`)); return; }
+  if (!r.j.summary.length) { box.append(mk('p', 'muted', 'Keine Fehler gemeldet.')); return; }
+  const sum = mk('table', 'err-summary');
+  const head = mk('tr'); for (const h of ['Fehlerart', 'Anzahl', 'Zuerst', 'Zuletzt']) head.append(mk('th', '', h));
+  sum.append(head);
+  for (const s of r.j.summary) {
+    const tr = mk('tr', type === s.type ? 'sel' : '');
+    const tdType = mk('td'); const a = mk('a', '', s.type); a.href = '#';
+    a.addEventListener('click', (e) => { e.preventDefault(); toggleErrors(aid, box, type === s.type ? '' : s.type); });
+    tdType.append(a);
+    tr.append(tdType, mk('td', 'num', String(s.count)), mk('td', '', fmtStand(s.first)), mk('td', '', fmtStand(s.last)));
+    sum.append(tr);
+  }
+  box.append(sum);
+  box.append(mk('p', 'muted', type ? `Neueste ${r.j.errors.length} von „${type}“ (Klick auf die Art = alle):` : `Neueste ${r.j.errors.length} Einträge (Klick auf eine Art filtert):`));
+  const list = mk('table', 'err-list');
+  for (const e of r.j.errors) {
+    const tr = mk('tr');
+    tr.append(mk('td', 'nowrap', fmtStand(e.ts)), mk('td', '', e.type), mk('td', 'mono', e.msg));
+    list.append(tr);
+  }
+  box.append(list);
+}
+
 function render() {
   const list = $('#pairingList');
   list.replaceChildren();
@@ -365,6 +396,12 @@ function render() {
         await queueCmd('license_activate', { key: key.trim() });
         setTimeout(refreshPairings, 35000);
       });
+      // Fehlerprotokoll: die Anlage meldet ihre Fehler mit jedem Poll, das
+      // Portal hebt sie dauerhaft auf (lokal behält DVhub dann nur 24 h / 7 Tage).
+      const errBtn = $('.errorsBtn', card);
+      errBtn.textContent = pr.errorCount ? `Fehlerprotokoll (${pr.errorCount})` : 'Fehlerprotokoll';
+      errBtn.title = pr.lastErrorAt ? `Letzter Fehler: ${fmtStand(pr.lastErrorAt)}` : 'Keine Fehler gemeldet';
+      errBtn.addEventListener('click', () => toggleErrors(pr.applianceId, $('.ap-errors', card)));
       $('.loadUpdates', card).addEventListener('click', async () => {
         await queueCmd('updates_check');
         // Ergebnis erscheint, sobald die Anlage es geliefert hat.

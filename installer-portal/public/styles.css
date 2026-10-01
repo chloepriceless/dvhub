@@ -286,3 +286,13 @@ input::placeholder { color:var(--text-dim); }
 .ap-license.lic-none { color:var(--warn); }
 .ap-sizewarn { font-size:13px; margin:6px 0 0; color:var(--danger); }
 .ap-yield { font-size:13px; color:var(--text-dim); margin:8px 0 0; }
+
+/* Fehlerprotokoll je Anlage */
+.ap-errors { margin-top: .6rem; max-height: 26rem; overflow: auto; border-top: 1px solid var(--line, #ddd); padding-top: .5rem; }
+.ap-errors table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.ap-errors th, .ap-errors td { text-align: left; padding: .2rem .4rem; vertical-align: top; border-bottom: 1px solid var(--line, #eee); }
+.ap-errors td.num { text-align: right; }
+.ap-errors td.mono { font-family: ui-monospace, monospace; word-break: break-all; }
+.ap-errors td.nowrap { white-space: nowrap; }
+.ap-errors tr.sel td { font-weight: 600; }
+.ap-errors .err-summary { margin-bottom: .6rem; }

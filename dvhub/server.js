@@ -35,6 +35,7 @@ import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtim
 import { createHistoryVizAggregator } from './services/history-viz/aggregator.js';
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
+import { createLogRetention } from './services/log-retention.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
@@ -929,6 +930,7 @@ function loadControlState() {
 // When omitted, level defaults to 'info'. Callers that pass options.severity
 // keep working (severity wins over level when both are present).
 const VALID_LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error', 'critical']);
+const AUDIT_SKIP_EVENTS = new Set(['control_write']);
 function pushLog(event, details = {}, levelOrOptions = {}) {
   // Plan 09-06: accept 3rd arg as a level shorthand OR the existing options object.
   let options;
@@ -955,7 +957,10 @@ function pushLog(event, details = {}, levelOrOptions = {}) {
   // come from routes-api.js actorContext(req) at every mutation boundary;
   // older callers that still pass two args get NULL actor columns and the
   // event is still durably persisted.
-  if (telemetryStore?.writeAuditEntry) {
+  // control_write steht vollständig in control_events (mit Ziel und Wert) —
+  // der Spiegel ins Audit-Log war ein reines Duplikat (prod: 37.600/Woche).
+  // Fehler und alles andere gehen unverändert in voller Auflösung hinein.
+  if (telemetryStore?.writeAuditEntry && !AUDIT_SKIP_EVENTS.has(event)) {
     telemetryStore.writeAuditEntry({
       eventType: event,
       payload: details,
@@ -1861,6 +1866,22 @@ const telemetryReady = (async () => {
         });
     };
     setTimeout(runInverterEfficiencyDaily, 3 * 60 * 1000).unref();
+    // Gestufte Log-Aufbewahrung (services/log-retention.js): 60 Tage voll,
+    // dann verdichtet bis 2 Jahre. Nachts um ~03:40 und einmal 15 min nach dem
+    // Start; je Lauf höchstens 5 min Arbeit.
+    const logRetention = createLogRetention({
+      getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
+      // Fehler, die das Installateur-Portal quittiert hat, dürfen lokal früher weg.
+      getErrorAckId: () => ctx.installerPortalClient?.errorAckId?.() ?? null,
+    });
+    const runLogRetention = () => { logRetention.runOnce().catch((e) => pushLog('log_retention_error', { error: e.message })); };
+    setTimeout(runLogRetention, 15 * 60 * 1000).unref();
+    const scheduleNightly = () => {
+      const tz = ctx.getCfg()?.timeZone || 'Europe/Berlin';
+      const hm = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+      if (hm === '03:40') runLogRetention();
+    };
+    setInterval(scheduleNightly, 60 * 1000).unref();
     setInterval(runInverterEfficiencyDaily, 60 * 60 * 1000).unref();
   }
 })().catch(e => pushLog('telemetry_init_error', { error: e.message }));
