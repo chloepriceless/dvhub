@@ -220,6 +220,32 @@ export function pickEmsIntervalSec(intervalSec, overrideSec) {
 }
 
 /**
+ * Kurvenfelder für EOS. DVhub kalibriert relativ zu seiner Nennleistung
+ * (curve.pnomW); EOS bezieht den Lastanteil auf max_power_w des Wechselrichters.
+ * Deshalb umrechnen: x_eos = x · pnomW / maxPowerW. Punkte über 1 fallen weg
+ * (EOS lässt nur [0, 1] zu). Bleiben < 2 Punkte, wird keine Kurve gesendet.
+ */
+export function eosEfficiencyCurveFields(curve, maxPowerW) {
+  const none = { dc_to_ac_efficiency_curve: null };
+  if (!curve || !Array.isArray(curve.points) || !(maxPowerW > 0) || !(curve.pnomW > 0)) return none;
+  const k = curve.pnomW / maxPowerW;
+  const round4 = (v) => Math.round(v * 1e4) / 1e4;
+  const points = [];
+  for (const [x, eta] of curve.points) {
+    const fx = round4(x * k);
+    if (fx < 0 || fx > 1) continue;
+    if (points.length && fx <= points[points.length - 1][0]) continue;
+    points.push([fx, eta]);
+  }
+  if (points.length < 2) return none;
+  const out = { dc_to_ac_efficiency_curve: points };
+  if (Number.isFinite(curve.referenceFrac)) {
+    out.dc_to_ac_efficiency_reference_load_fraction = Math.min(1, Math.max(0, round4(curve.referenceFrac * k)));
+  }
+  return out;
+}
+
+/**
  * Build the EOS inverters array. DVhub doesn't yet expose AC-cap or per-
  * direction conversion efficiencies as first-class config; we derive max_power_w
  * from the PV nameplate (mispel.pvKwp × 1000) as a defensible upper bound and
@@ -229,7 +255,7 @@ export function pickEmsIntervalSec(intervalSec, overrideSec) {
  * @param {object} cfg
  * @returns {Array<object>}
  */
-export function buildEosInverters(cfg, { curve = null } = {}) {
+export function buildEosInverters(cfg, { curve = null, curveSupported = false } = {}) {
   const opt = cfg?.optimizer || {};
   const pvKwp = Number(opt?.mispel?.pvKwp);
   // max_power_w is the inverter's TOTAL AC throughput cap (PV + battery feed-in
@@ -265,6 +291,10 @@ export function buildEosInverters(cfg, { curve = null } = {}) {
     // gemessenen Entladungen (Σ AC / Σ DC) — offizielles EOS kennt nur eine
     // Konstante; die Kurve selbst geht mit, sobald EOS sie annimmt.
     dc_to_ac_efficiency: curve ? curve.referenceEta : 1.0,
+    // Kennt EOS die Kurve (PR #1375 / DV-EOS rc1.4), geht sie selbst mit — sie
+    // ersetzt dort dc_to_ac_efficiency. Ohne Kurve explizit null, damit eine
+    // früher gesendete Kurve nicht stehen bleibt.
+    ...(curveSupported ? eosEfficiencyCurveFields(curve, maxPowerW) : {}),
     max_ac_charge_power_w: gridChargeAllowed ? (Number(opt.maxChargeW) || null) : 0,
   }];
 }
@@ -366,6 +396,7 @@ export function createEosConfigSync(ctx) {
       state.optimizer.eos = {
         flavor: caps.flavor, version: caps.version, reachable: caps.reachable,
         supported: caps.supported, reason: caps.reason, detectedAt: caps.detectedAt,
+        inverterEfficiencyCurve: caps.inverterEfficiencyCurve === true,
       };
     }
     if (!caps.reachable) return;
@@ -466,7 +497,10 @@ export function createEosConfigSync(ctx) {
       : (Number.isFinite(configHardFloor) ? configHardFloor : 5);
 
     const batteries = buildEosBatteries(cfg, { minSocPct: eosMinSocPct });
-    const inverters = buildEosInverters(cfg, { curve: effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()) });
+    const inverters = buildEosInverters(cfg, {
+      curve: effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()),
+      curveSupported: caps.inverterEfficiencyCurve === true,
+    });
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval);
 
@@ -639,6 +673,21 @@ export function createEosConfigSync(ctx) {
       const res = await eosHttpRequest(baseUrl, 'PUT', `/v1/config/${t.section}`, t.body);
       if (res.ok) applied.push(t.section);
       else errors[t.section] = res.error;
+    }
+
+    // Frisches EOS: vor diesem Sync gab es noch keinen Wechselrichter, an dem das
+    // Kurvenfeld erkennbar war. Jetzt gibt es ihn — einmal neu erkennen und die
+    // Kurve gleich nachschicken, statt bis zum nächsten Sync (15 min) zu warten.
+    const curveNow = effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.());
+    if (curveNow && !caps.inverterEfficiencyCurve && applied.includes('devices/inverters')) {
+      capabilityProbe.reset?.();
+      const again = await capabilityProbe.get(baseUrl);
+      if (again.reachable && again.inverterEfficiencyCurve) {
+        publishCaps(again);
+        const body = asDevices(buildEosInverters(cfg, { curve: curveNow, curveSupported: true }));
+        const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/inverters', body);
+        if (!res.ok) errors['devices/inverters'] = res.error;
+      }
     }
 
     const okAll = applied.length === tasks.length;

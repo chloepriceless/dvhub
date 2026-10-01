@@ -122,3 +122,29 @@ test('Fenster: nur alle 30 Tage neu — dazwischen bleibt es gleich', () => {
   const w = curveWindow('2026-09-30');
   assert.equal((Date.parse(w.to) - Date.parse(w.from)) / 864e5, 179);
 });
+
+import { eosEfficiencyCurveFields } from '../services/optimizer/eos-config-sync.js';
+import { detectEosCapabilities } from '../services/optimizer/eos-capabilities.js';
+
+test('EOS-Kurve: nur wenn EOS das Feld kennt; Lastanteil auf max_power_w umgerechnet', () => {
+  const cfg = { optimizer: { inverterMaxPowerW: 24000 } };
+  const fit = fitInverterCurve(rows(30), { pnomW: 24000 });
+  const curve = effectiveInverterCurve(cfg, fit);
+  assert.equal('dc_to_ac_efficiency_curve' in buildEosInverters(cfg, { curve })[0], false, 'altes EOS: Feld nicht senden');
+  const inv = buildEosInverters(cfg, { curve, curveSupported: true })[0];
+  assert.deepEqual(inv.dc_to_ac_efficiency_curve, fit.points);
+  assert.equal(inv.dc_to_ac_efficiency_reference_load_fraction, fit.referenceFrac);
+  // Ohne freigegebene Kurve explizit null (alte Kurve in EOS löschen).
+  assert.equal(buildEosInverters(cfg, { curve: null, curveSupported: true })[0].dc_to_ac_efficiency_curve, null);
+  // Andere Nennleistung in EOS (12 kW statt 24 kW): Anteile verdoppeln, > 1 fällt weg.
+  const f = eosEfficiencyCurveFields({ ...fit, points: [[0.1, 0.9], [0.4, 0.92], [0.6, 0.9]] }, 12000);
+  assert.deepEqual(f.dc_to_ac_efficiency_curve, [[0.2, 0.9], [0.8, 0.92]]);
+});
+
+test('Fähigkeit: Kurvenfeld im Wechselrichter erkannt', () => {
+  const base = { optimization: { genetic: { interval_sec: 900 } }, feedintariff: { direct_marketing_enabled: true } };
+  const withCurve = detectEosCapabilities({ ...base, devices: { inverters: { inverter1: { dc_to_ac_efficiency: 1, dc_to_ac_efficiency_curve: null } } } });
+  const without = detectEosCapabilities({ ...base, devices: { inverters: { inverter1: { dc_to_ac_efficiency: 1 } } } });
+  assert.equal(withCurve.inverterEfficiencyCurve, true);
+  assert.equal(without.inverterEfficiencyCurve, false);
+});

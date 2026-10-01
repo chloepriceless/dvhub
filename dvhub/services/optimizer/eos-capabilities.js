@@ -62,6 +62,13 @@ export function detectEosCapabilities(config, health = {}) {
     flavor = (deviceMap || directMarketingFlag) ? EOS_FLAVOR.UPSTREAM_GENETIC : EOS_FLAVOR.UPSTREAM_MAIN;
   } else if (optimizationInterval) flavor = EOS_FLAVOR.DV_FORK;
 
+  // Lastabhängige Wirkungsgradkurve (Akkudoktor-EOS PR #1375, in DV-EOS ab
+  // dvhub-v0.4.0rc1.4): erkennbar am Feld im konfigurierten Wechselrichter —
+  // EOS liefert unbelegte Felder als null mit aus. Ohne Wechselrichter in der
+  // Config (allererster Sync) bleibt es false; der nächste Sync holt es nach.
+  const inverters = devices && isObj(devices.inverters) ? Object.values(devices.inverters) : [];
+  const inverterEfficiencyCurve = inverters.some((inv) => hasKey(inv, 'dc_to_ac_efficiency_curve'));
+
   const reachable = !!cfg;
   const supported = reachable ? (flavor === EOS_FLAVOR.UPSTREAM_GENETIC && deviceMap) : null;
 
@@ -71,6 +78,7 @@ export function detectEosCapabilities(config, health = {}) {
     reachable,
     supported,
     reason: supported === false ? EOS_UNSUPPORTED_REASON : null,
+    inverterEfficiencyCurve,
     detectedAt: Date.now(),
   };
 }
