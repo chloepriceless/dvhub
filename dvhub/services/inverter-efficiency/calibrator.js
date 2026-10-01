@@ -1,6 +1,7 @@
 // services/inverter-efficiency/calibrator.js — hält die kalibrierte Kurve aktuell.
 //
-// Läuft nach jedem Tagesjob (daily.js): liest das 180-Tage-Fenster bis gestern,
+// Läuft nach jedem Tagesjob (daily.js): liest das 180-Tage-Fenster bis zum Ende
+// der zuletzt abgeschlossenen 30-Tage-Periode (curveWindow),
 // rechnet die Kurve (curve.js, deterministisch) und meldet nur dann eine
 // Änderung, wenn sich die Kurve wirklich geändert hat (curveHash). Das letzte
 // Ergebnis liegt in einer kleinen Datei, damit DVhub nach einem Neustart sofort

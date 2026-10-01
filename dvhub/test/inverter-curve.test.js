@@ -53,8 +53,8 @@ test('Kurve: erst nach der Betriebsphase freigegeben', () => {
 
 test('Kurve: Fenster schneidet ältere Tage ab', () => {
   const all = rows(200, { start: '2026-01-01' });
-  const w = curveWindow('2026-07-19');
-  assert.deepEqual(w, { from: '2026-01-21', to: '2026-07-19' });
+  const w = curveWindow('2026-07-19', { epoch: '2026-01-21' });
+  assert.deepEqual(w, { from: '2026-01-21', to: '2026-07-19' }, '180 Tage = 6 volle Perioden');
   const fit = fitInverterCurve(all, { pnomW: PNOM, window: w });
   assert.equal(fit.days, 180);
 });
@@ -102,6 +102,23 @@ test('Kalibrator: meldet nur echte Änderungen, überlebt Neustart über die Dat
   const c2 = mk();
   assert.equal(c2.get().curveHash, c1.get().curveHash, 'nach Neustart aus Datei');
   assert.equal((await c2.refresh({ now })).changed, false);
+  // Ein neuer Tag NACH dem Periodenende (28.08.) ändert nichts …
   data = [...data, ...rows(1, { start: '2026-08-31' }).map((x) => ({ ...x, dc_wh: x.dc_wh * 1.2 }))];
-  assert.equal((await c2.refresh({ now })).changed, true);
+  assert.equal((await c2.refresh({ now })).changed, false);
+  // … erst wenn die nächste Periode abgeschlossen ist (27.09.), zählt er mit.
+  assert.equal((await c2.refresh({ now: new Date('2026-09-28T10:00:00Z') })).changed, true);
+});
+
+test('Fenster: nur alle 30 Tage neu — dazwischen bleibt es gleich', () => {
+  // Perioden ab 01.01.2026: [01.01.–30.01.], [31.01.–01.03.], …
+  assert.equal(curveWindow('2026-01-29').to, '2025-12-31');
+  assert.equal(curveWindow('2026-01-30').to, '2026-01-30');
+  assert.equal(curveWindow('2026-02-15').to, '2026-01-30');
+  assert.equal(curveWindow('2026-03-01').to, '2026-03-01');
+  // Ein ganzer Monat Gestern-Werte → genau zwei verschiedene Fenster.
+  const tos = new Set();
+  for (let d = 0; d < 31; d++) tos.add(curveWindow(new Date(Date.UTC(2026, 9, 1) + d * 864e5).toISOString().slice(0, 10)).to);
+  assert.ok(tos.size <= 2);
+  const w = curveWindow('2026-09-30');
+  assert.equal((Date.parse(w.to) - Date.parse(w.from)) / 864e5, 179);
 });

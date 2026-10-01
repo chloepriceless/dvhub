@@ -17,6 +17,12 @@
 import { createHash } from 'node:crypto';
 
 export const CURVE_WINDOW_DAYS = 180;
+// Neu kalibriert wird in festen 30-Tage-Perioden ab diesem Stichtag. Das Fenster
+// endet immer am letzten Tag der zuletzt ABGESCHLOSSENEN Periode — die Kurve
+// ändert sich also höchstens alle 30 Tage, und das Ergebnis hängt nur am
+// Kalender, nicht daran, wann DVhub zufällig rechnet.
+export const CURVE_PERIOD_DAYS = 30;
+export const CURVE_PERIOD_EPOCH = '2026-01-01';
 export const CURVE_MIN_DAYS = 14;
 export const CURVE_MIN_HOURS = 10;
 export const CURVE_MIN_POINTS = 3;
@@ -35,11 +41,20 @@ function sha(obj) {
   return createHash('sha256').update(JSON.stringify(obj)).digest('hex').slice(0, 16);
 }
 
-/** Fenster [from, to] der abgeschlossenen Tage (YYYY-MM-DD), to = gestern. */
-export function curveWindow(yesterday, days = CURVE_WINDOW_DAYS) {
-  const t = Date.parse(`${yesterday}T00:00:00Z`);
-  const from = new Date(t - (days - 1) * 86_400_000).toISOString().slice(0, 10);
-  return { from, to: yesterday };
+const DAY = 86_400_000;
+const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/**
+ * Fenster [from, to] (YYYY-MM-DD): to = letzter Tag der zuletzt abgeschlossenen
+ * 30-Tage-Periode bis einschließlich `yesterday`, from = to − (days − 1).
+ */
+export function curveWindow(yesterday, { days = CURVE_WINDOW_DAYS, periodDays = CURVE_PERIOD_DAYS, epoch = CURVE_PERIOD_EPOCH } = {}) {
+  const y = Date.parse(`${yesterday}T00:00:00Z`);
+  const e = Date.parse(`${epoch}T00:00:00Z`);
+  // Anzahl vollständig abgelaufener Perioden bis einschließlich `yesterday`.
+  const completed = Math.floor((Math.round((y - e) / DAY) + 1) / periodDays);
+  const toMs = e + (completed * periodDays - 1) * DAY;
+  return { from: isoDay(toMs - (days - 1) * DAY), to: isoDay(toMs) };
 }
 
 /**

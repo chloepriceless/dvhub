@@ -1853,8 +1853,8 @@ const telemetryReady = (async () => {
     });
     const runInverterEfficiencyDaily = () => {
       inverterEfficiencyDaily.runOnce()
-        // Danach die Kurve aus dem 180-Tage-Fenster bis gestern — ändert sich nur,
-        // wenn ein neuer Tag abgeschlossen ist (curveHash), dann EOS neu.
+        // Danach die Kurve (180 Tage bis zum letzten 30-Tage-Periodenende) — ändert sich nur
+        // alle 30 Tage (curveHash), dann EOS neu. Kosten: 1 Abfrage ~2 ms.
         .then(() => ctx.inverterCurve.refresh())
         .catch((error) => {
           pushLog('inverter_efficiency_daily_error', { error: error.message });
