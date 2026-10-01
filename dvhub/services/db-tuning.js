@@ -172,3 +172,15 @@ export async function tuneTimescale(query) {
   out.compressAfter = SAMPLES_COMPRESS_AFTER;
   return out;
 }
+
+/**
+ * Wie viele Datenbankverbindungen DVhub gleichzeitig öffnet. Jede aktive
+ * Abfrage kostet in PostgreSQL eigenen Speicher (Sortieren, Hash, Entpacken
+ * komprimierter Blöcke). Die History-Jahresansicht schickt 14 Abfragen
+ * gleichzeitig — bei 160 MB DB-Limit beendete der Kernel dreimal einen
+ * DB-Prozess (Container-Test 2026-10-02). Weniger Verbindungen = die Anfragen
+ * warten kurz in DVhub statt die DB zu überfluten.
+ */
+export function dbPoolMax(budgetMb) {
+  return memoryProfile(budgetMb).name === 'winzig' ? 3 : 5;
+}

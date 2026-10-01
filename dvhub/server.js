@@ -36,7 +36,7 @@ import { createHistoryVizAggregator } from './services/history-viz/aggregator.js
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
 import { createLogRetention } from './services/log-retention.js';
-import { applyDbTuning, dbBudgetMb, tuneTimescale } from './services/db-tuning.js';
+import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createStorageGuard } from './services/storage-guard.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
@@ -603,7 +603,10 @@ async function createTelemetryStoreIfEnabled() {
   if (!cfg.telemetry?.enabled) return null;
   try {
     const dbConfig = cfg.telemetry.database || {};
-    const pool = createPool(dbConfig);
+    // Gleichzeitige DB-Verbindungen nach Speicherprofil (db-tuning.js), außer
+    // telemetry.database.pool.max ist ausdrücklich gesetzt.
+    const poolMax = Number(dbConfig.pool?.max) > 0 ? Number(dbConfig.pool.max) : dbPoolMax(dbBudgetMb({ totalMemBytes: os.totalmem() }));
+    const pool = createPool({ ...dbConfig, pool: { ...(dbConfig.pool || {}), min: Math.min(2, poolMax), max: poolMax } });
     // Connectivity check + schema init — fail fast if DB is unreachable
     await pool.query('SELECT 1');
     await ensurePgSchema(pool);

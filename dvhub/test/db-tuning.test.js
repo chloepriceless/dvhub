@@ -81,3 +81,10 @@ test('Timescale: ohne Extension nichts tun', async () => {
   const r = await tuneTimescale(async () => ({ rows: [] }));
   assert.equal(r.skipped, 'no_timescaledb');
 });
+
+import { dbPoolMax } from '../services/db-tuning.js';
+test('DB-Verbindungen nach Profil begrenzt', () => {
+  assert.equal(dbPoolMax(160), 3);
+  assert.equal(dbPoolMax(512), 5);
+  assert.equal(dbPoolMax(4096), 5);
+});
