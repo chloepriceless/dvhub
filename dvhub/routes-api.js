@@ -2,6 +2,7 @@
 // Extracted from server.js (Phase 5, Plans 01+02).
 // Factory pattern: createApiRoutes(ctx) returns { handleRequest }.
 
+import { createHeavyQueue, SKIPPED as HEAVY_SKIPPED } from './services/heavy-queue.js';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -718,6 +719,10 @@ export function actorContext(req) {
 }
 
 export function createApiRoutes(ctx) {
+  // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
+  // gleichzeitig, weggeklickte überspringen, gleiche Anfragen nur einmal.
+  const historyQueue = createHeavyQueue({ max: 2 });
+  const vizQueue = createHeavyQueue({ max: 3 });   // Karten sind leichter, die Jahresansicht hat 13
   // Daten- und Konfigordner für den Geräte-Tausch-Export (config-secrets-crypto).
   const migrationDirs = () => ({
     dataDir: process.env.DV_DATA_DIR || (typeof ctx.getAppDir === 'function' ? ctx.getAppDir() : process.cwd()),
@@ -7145,10 +7150,11 @@ export function createApiRoutes(ctx) {
       if (!ctx.historyApi || typeof ctx.historyApi.getSummary !== 'function') {
         return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
       }
-      const result = await ctx.historyApi.getSummary({
+      const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, () => ctx.historyApi.getSummary({
         view: url.searchParams.get('view'),
         date: url.searchParams.get('date')
-      });
+      }));
+      if (result === HEAVY_SKIPPED) return;   // Browser hat schon weitergeklickt
       return json(res, result.status, result.body);
     }
 
@@ -7174,11 +7180,12 @@ export function createApiRoutes(ctx) {
       // `granularity` is only consumed by the heatmap builder ('1h' | '15min');
       // other builders ignore the extra key. Passed through unconditionally so
       // the dispatcher stays slug-agnostic.
-      const result = await handler({
+      const result = await vizQueue.run({ key: url.pathname + url.search, req, res }, () => handler({
         view: url.searchParams.get('view'),
         date: url.searchParams.get('date'),
         granularity: url.searchParams.get('granularity')
-      });
+      }));
+      if (result === HEAVY_SKIPPED) return;
       return json(res, result.status, result.body);
     }
 
