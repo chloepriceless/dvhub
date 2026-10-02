@@ -343,3 +343,56 @@ test('Leitstand-Kurzfassung: Steuerbox, LPC/LPP und Umsetzung; aus → nur enabl
   h.setCfg((cfg) => ({ ...cfg, eebus: { ...cfg.eebus, enabled: false } }));
   assert.deepEqual(h.svc.summary(), { enabled: false });
 });
+
+test('LPP mit negativem Wert (EEBUS: Erzeugung negativ) wirkt als Betrag', async () => {
+  const h = setup({ extraCfg: { controlWrite: { dvFeedInLimitW: { enabled: true } } } });
+  await h.svc.start();
+  const c = h.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
+  c.emitEvent({ ev: 'grid_write', uc: 'lpp', kind: 'failsafe_limit', ski: SKI_BOX, w: -6000, approved: true });
+  c.emitEvent({ ev: 'grid_write', uc: 'lpp', kind: 'limit', ski: SKI_BOX, w: -4200, duration_s: 0, active: true, approved: true });
+  c.emitEvent({ ev: 'grid_limit', uc: 'lpp', w: -4200, duration_s: 0, active: true });
+  await settle();
+  assert.deepEqual(h.feedIn.at(-1), ['eebus_lpp', 4200]);
+  assert.equal(h.svc.summary().lpp.limitW, 4200);
+  assert.equal(h.svc._machines().lpp.snapshot().failsafeW, 6000);
+});
+
+test('Absturz des Hilfsprozesses: Neustart übernimmt die zuletzt geschriebenen Failsafe-Werte', async () => {
+  const s = setup();
+  await s.svc.start();
+  let c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
+  c.emitEvent({ ev: 'grid_write', uc: 'lpc', kind: 'failsafe_limit', ski: SKI_BOX, w: 3800, approved: true });
+  await settle();
+  c.emit('exit', null, 'SIGSEGV');
+  await settle();
+  await s.timers.find((x) => x.ms === 5_000).fn();
+  c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
+  c.emitEvent({ ev: 'grid_write', uc: 'lpc', kind: 'failsafe_limit', ski: SKI_BOX, w: 1_000_000, approved: true });
+  await settle();
+  c.emit('exit', null, 'SIGSEGV');
+  await settle();
+  await s.timers.filter((x) => x.ms > 0).at(-1).fn();
+  assert.equal(s.children.length, 3);
+  assert.equal(s.svc.status().grid.lpc.failsafeW, 1_000_000, 'nicht der Stand vom Start von DVhub (3800)');
+});
+
+test('LPP ohne Begrenzer: Sperre nur, wenn die Grenze unter der Anlagenleistung liegt', async () => {
+  const s = setup({ eebus: { grid: { productionNominalMaxW: 30_000 } } });
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
+  c.emitEvent({ ev: 'grid_write', uc: 'lpp', kind: 'limit', ski: SKI_BOX, w: -30_000, duration_s: 0, active: true, approved: true });
+  c.emitEvent({ ev: 'grid_limit', uc: 'lpp', w: -30_000, duration_s: 0, active: true });
+  await settle();
+  assert.equal(s.state.ctrl.eebusProductionBlock, false, 'Grenze = Nennleistung schränkt nichts ein');
+  c.emitEvent({ ev: 'grid_limit', uc: 'lpp', w: -4200, duration_s: 0, active: true });
+  await settle();
+  assert.equal(s.state.ctrl.eebusProductionBlock, true);
+});

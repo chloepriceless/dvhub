@@ -40,6 +40,13 @@ export const EEBUS_BINARY_CANDIDATES = [
 ];
 
 /** Normalisierte Einstellungen (config.json → eebus). */
+// EEBUS zählt Erzeugung negativ: Steuerboxen schreiben die Einspeisegrenze (LPP)
+// z. B. als -4200 W. DVhub rechnet mit dem Betrag.
+function gridW(uc, w) {
+  const n = Number(w);
+  return uc === 'lpp' && Number.isFinite(n) ? Math.abs(n) : n;
+}
+
 export function resolveEebusConfig(cfg) {
   const e = cfg?.eebus || {};
   const num = (v, d, min = 0) => (Number.isFinite(Number(v)) && Number(v) >= min ? Number(v) : d);
@@ -195,7 +202,6 @@ export function createEebusService(ctx, deps = {}) {
       : createLimitStateMachine({ kind, failsafeW: c.grid.failsafeProductionW || c.grid.productionNominalMaxW || defaultProductionNominal(), failsafeDurationS: c.grid.failsafeProductionDurationS, now });
   }
   let machines = { lpc: makeMachine('lpc', cfgNow()), lpp: makeMachine('lpp', cfgNow()) };
-  const savedGrid = loadJson('grid-state.json');
 
   // --- Dateien --------------------------------------------------------------
 
@@ -306,6 +312,10 @@ export function createEebusService(ctx, deps = {}) {
     const enabled = hasGridPeer();
     machines.lpc.setEnabled(enabled);
     machines.lpp.setEnabled(enabled);
+    // Bei jedem Start frisch lesen: auch der Neustart nach einem Absturz des
+    // Hilfsprozesses muss die zuletzt geschriebenen Failsafe-Werte übernehmen,
+    // nicht den Stand vom Start von DVhub.
+    const savedGrid = loadJson('grid-state.json');
     if (savedGrid) {
       machines.lpc.restore(savedGrid.lpc);
       machines.lpp.restore(savedGrid.lpp);
@@ -469,7 +479,7 @@ export function createEebusService(ctx, deps = {}) {
         // meldet bei jeder Änderung auch den unveränderten Wert des anderen
         // Anwendungsfalls (grid_failsafe_*), das ist keine Vorgabe.
         if (ev.approved && ev.kind === 'failsafe_limit') {
-          machines[ev.uc]?.onFailsafeLimit(ev.w);
+          machines[ev.uc]?.onFailsafeLimit(gridW(ev.uc, ev.w));
           saveGridState();
           apply();
         } else if (ev.approved && ev.kind === 'failsafe_duration') {
@@ -482,7 +492,7 @@ export function createEebusService(ctx, deps = {}) {
         break;
       case 'grid_limit':
         if (ui.grid.lastWriteSki && roleOf(ui.grid.lastWriteSki) !== 'grid') break;
-        machines[ev.uc]?.onLimit({ w: ev.w, durationS: ev.duration_s, active: ev.active });
+        machines[ev.uc]?.onLimit({ w: gridW(ev.uc, ev.w), durationS: ev.duration_s, active: ev.active });
         pushLog('paragraph14a_limit_received', { uc: ev.uc, w: ev.w, durationS: ev.duration_s, active: ev.active });
         saveGridState();
         apply();
@@ -594,6 +604,9 @@ export function createEebusService(ctx, deps = {}) {
 
     // Einspeisung (LPP)
     const productionW = Number.isFinite(lpp.limitW) ? lpp.limitW : null;
+    // Sperren nur, wenn die Grenze unter der Anlagenleistung liegt — ein
+    // Failsafe in Höhe der Nennleistung schränkt nichts ein.
+    const blockNeeded = productionW != null && productionW < (cfgNow().grid.productionNominalMaxW || defaultProductionNominal());
     if (productionW !== ui.applied.productionLimitW) {
       ui.applied.productionLimitW = productionW;
       pushLog(productionW == null ? 'eebus_production_released' : 'eebus_production_limited', { limitW: productionW, state: lpp.state });
@@ -604,14 +617,14 @@ export function createEebusService(ctx, deps = {}) {
         Promise.resolve(ctx.feedInLimit.set('eebus_lpp', productionW)).catch((e) => {
           pushLog('eebus_production_limit_error', { error: e?.message || String(e) });
           // Begrenzer nicht schreibbar: Grenze nur durch Sperren einhaltbar.
-          if (productionW != null) {
+          if (blockNeeded && ui.applied.productionLimitW === productionW) {
             ui.applied.productionBlock = true;
             state.ctrl.eebusProductionBlock = true;
           }
         });
       } else {
-        ui.applied.productionBlock = productionW != null;
-        state.ctrl.eebusProductionBlock = productionW != null;
+        ui.applied.productionBlock = blockNeeded;
+        state.ctrl.eebusProductionBlock = blockNeeded;
       }
     }
   }

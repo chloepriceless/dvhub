@@ -42,8 +42,8 @@ Die Wallbox wird nur begrenzt, wenn DVhub sie steuert (Integrationen → Wallbox
 
 ## Anzeige
 
-- **Leitstand → „§14a · EEBUS“** (nur bei eingeschaltetem EEBUS): Steuerbox verbunden/getrennt,
-  Bezugs- (LPC) und Einspeisegrenze (LPP) mit Zustand und Ablauf, was DVhub gerade umsetzt.
+- **Leitstand → „§14a / §9 · EEBUS“** (nur bei eingeschaltetem EEBUS): Steuerbox verbunden/getrennt,
+  Bezugsgrenze (§14a EnWG, LPC) und Einspeisegrenze (§9 EEG, LPP) mit Zustand und Ablauf, was DVhub gerade umsetzt.
 - **Integrationen → EEBUS**: Kopplung, gefundene Gegenstellen, Details.
 - **Protokoll**: jeder Schreibversuch der Steuerbox (`paragraph14a_write`, abgelehnt:
   `paragraph14a_write_denied`), angenommene Grenzen (`paragraph14a_limit_received`) und ihre
