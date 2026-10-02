@@ -319,13 +319,16 @@ static void ApproverDestruct(CsLpcApproverObject* self) {
   (void)self;
 }
 
-// EEBUS zählt Erzeugung negativ: Steuerboxen schreiben die Einspeisegrenze (LPP)
-// als z. B. -4200 W, openeebus prüft aber nur auf >= 0 und lehnte sie ab. Für LPP
-// zählt der Betrag; der geschriebene Wert bleibt unverändert gespeichert, die
-// Steuerbox liest ihn so zurück, wie sie ihn geschrieben hat. DVhub rechnet mit
+// Vorzeichen nach EEBus LPP TestSpec V1.0.0: die Einspeisegrenze (APPL) ist
+// immer <= 0 [LPP-TS-001] — eine positive wird abgelehnt —, der Failsafe-Wert
+// (FPAPL) >= 0 [LPP-TS-038]. openeebus bietet nur CsLpIsLimitValid (>= 0, passend
+// für LPC) und lehnte damit jede korrekte LPP-Grenze ab. DVhub rechnet bei LPP mit
 // dem Betrag (services/eebus/index.js).
-static double LimitMagnitude(UseCaseTag uc, double w) {
-  return uc == kUcCsLpp ? fabs(w) : w;
+static bool LimitValid(UseCaseTag uc, double w, int64_t duration_s) {
+  if (uc == kUcCsLpp) {
+    return w <= 0.0 && duration_s >= 0;
+  }
+  return CsLpIsLimitValid(w, (int32_t)duration_s);
 }
 
 static void ApproverOnPowerLimit(
@@ -339,7 +342,7 @@ static void ApproverOnPowerLimit(
   const UseCaseTag uc         = LISTENER_UC(self);
   const double w              = ScaledToDouble(limit);
   const int64_t duration_s    = DurationSeconds(duration);
-  const bool valid            = CsLpIsLimitValid(LimitMagnitude(uc, w), (int32_t)duration_s);
+  const bool valid            = LimitValid(uc, w, duration_s);
   CsLpUseCaseObject* const cs = CsFor(uc);
 
   cJSON* ev = OutEvent("grid_write");
@@ -363,7 +366,7 @@ static void ApproverOnPowerLimit(
 static void ApproverOnFailsafeValue(CsLpcApproverObject* self, const char* ski, MsgCounterType msg_cnt, const ScaledValue* value) {
   const UseCaseTag uc = LISTENER_UC(self);
   const double w      = ScaledToDouble(value);
-  const bool valid    = CsLpIsFailsafeValueValid(LimitMagnitude(uc, w));
+  const bool valid    = CsLpIsFailsafeValueValid(w);
   cJSON* ev           = OutEvent("grid_write");
   cJSON_AddStringToObject(ev, "uc", UcName(uc));
   cJSON_AddStringToObject(ev, "kind", "failsafe_limit");

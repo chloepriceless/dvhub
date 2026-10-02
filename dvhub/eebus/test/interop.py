@@ -176,11 +176,18 @@ try:
           bool(lim) and abs(lim.get("w", 0) - 4200) < 0.5 and lim.get("active") is True and lim.get("duration_s") == 7200,
           json.dumps(lim))
 
+    # Einspeisegrenzen sind <= 0 (EEBus LPP TestSpec [LPP-TS-001]); eine positive
+    # muss die CS ablehnen.
     n = len(bridge.events)
     hems.send("eg_lpp set power_limit 8000 PT1H true")
+    deny = bridge.wait_ev(lambda e: e.get("ev") == "grid_write" and e.get("uc") == "lpp" and e.get("kind") == "limit", 20, n)
+    check("LPP: positive Einspeisegrenze abgelehnt", bool(deny) and deny.get("approved") is False, json.dumps(deny))
+
+    n = len(bridge.events)
+    hems.send("eg_lpp set power_limit -8000 PT1H true")
     lpp = bridge.wait_ev(lambda e: e.get("ev") == "grid_limit" and e.get("uc") == "lpp", 20, n)
-    check("LPP-Einspeisebegrenzung 8000 W / 1 h übernommen",
-          bool(lpp) and abs(lpp.get("w", 0) - 8000) < 0.5 and lpp.get("active") is True, json.dumps(lpp))
+    check("LPP-Einspeisebegrenzung -8000 W / 1 h übernommen",
+          bool(lpp) and abs(lpp.get("w", 0) + 8000) < 0.5 and lpp.get("active") is True, json.dumps(lpp))
 
     n = len(bridge.events)
     hems.send("eg_lpc set failsafe_limit 3000")

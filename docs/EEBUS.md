@@ -100,7 +100,7 @@ enthält sie, Failsafe-Zustand und Zählerstände; nach dem Import gilt die Kopp
 ## Tests
 
 - `dvhub/eebus/test/interop.py` — dvhub-eebus gegen die openeebus-Beispiele (hems als
-  Steuerbox, heat_pump als Gerät), 26 Prüfungen.
+  Steuerbox, heat_pump als Gerät), 27 Prüfungen.
 - `dvhub/eebus/test/e2e-dvhub.py` — laufendes DVhub mit EEBUS, nur über die API: Kopplung,
   §14a-Grenze → Akku/Wärmepumpe, Einspeisegrenze, Aufhebung, Failsafe nach 120 s, 16 Prüfungen.
 - Node-Tests `test/eebus-*.test.js`.

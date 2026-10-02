@@ -144,7 +144,7 @@ try:
     s = wait(lambda s: (peer(s, SKI_HP).get("device") or {}).get("powerW") == 2100, 30)
     check("Leistung der Wärmepumpe in DVhub sichtbar", bool(s))
 
-    hems.send("eg_lpp set power_limit 5000 PT1H true")
+    hems.send("eg_lpp set power_limit -5000 PT1H true")  # Einspeisegrenzen sind <= 0 [LPP-TS-001]
     s = wait(lambda s: s["applied"]["productionLimitW"] == 5000, 30)
     check("Einspeisebegrenzung 5 kW in DVhub aktiv", bool(s), json.dumps((s or {}).get("applied")))
 
