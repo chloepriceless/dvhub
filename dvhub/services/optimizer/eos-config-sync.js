@@ -653,6 +653,11 @@ export function createEosConfigSync(ctx) {
       // laufend (SoC jede Minute, Prognosen alle 15 min). null = automatisches
       // Speichern aus; beim normalen Beenden speichert EOS weiterhin.
       { section: 'database/autosave_interval_sec', body: EOS_AUTOSAVE_INTERVAL_SEC },
+      // EOS rechnet nur im Modus OPTIMIZATION. Ein frisch aufgesetztes EOS steht
+      // auf DISABLED — nimmt dann alle Daten an, plant aber nie (Container-Test
+      // 2026-10-02: Docker-Suite und jede Neuinstallation ohne Plan; prod nur,
+      // weil der Modus dort einmal von Hand gesetzt worden war).
+      { section: 'ems/mode', body: 'OPTIMIZATION' },
       // Fitness-Cache aus (EOS PR #1376 / DV-EOS rc1.5): kostete 120–170 MB je
       // Lauf (mit E-Auto und Geräten mehr), bringt bei 6–15 % Treffern kaum Zeit
       // — Plan bitgleich, ~3 % längere Rechnung. Für alle Boxen (kleiner Footprint).

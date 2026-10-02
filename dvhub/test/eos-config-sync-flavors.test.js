@@ -227,7 +227,7 @@ describe('Abgleich gegen Upstream ab #1330 (upstream-genetic)', () => {
       'devices/max_home_appliances', 'devices/home_appliances',
       'optimization/algorithm', 'optimization/genetic/interval_sec',
       'optimization/genetic/generations', 'optimization/genetic/individuals',
-      'ems/interval', 'pvforecast/provider', 'load/provider', 'elecprice/provider', 'measurement/historic_hours', 'database/autosave_interval_sec',
+      'ems/interval', 'pvforecast/provider', 'load/provider', 'elecprice/provider', 'measurement/historic_hours', 'database/autosave_interval_sec', 'ems/mode',
       'feedintariff/provider', 'feedintariff/direct_marketing_enabled',
     ]);
     assert.equal(bodyOf(mock, 'devices/max_home_appliances'), 0);
