@@ -51,7 +51,11 @@ eigentliche Ingenieursarbeit.
 
 ### 3.1 Grundregeln
 
-- **Payload-Format:** immer JSON `{"value": <Zahl>}` — z. B. `{"value": 57.4}`
+- **Payload-Format:** immer JSON `{"value": <Zahl>}` — z. B. `{"value": 57.4}`. Nackte Zahlen
+  (`57.4`) liest DVhub ebenfalls — vertraut wird aber auf das JSON-Format, denn nur es kann
+  `null` (= „kein Wert", nicht „0 W") eindeutig übertragen. Alles andere (leer, `unavailable`,
+  Text) wird ignoriert **und im Log gemeldet** (`[MQTT] Payload für <topic> nicht verwertbar`),
+  statt stillschweigend zu verschwinden.
 - **Portal-ID:** frei wählbar, in dieser Anleitung `deye1` (in DVhub und Node-RED identisch!)
 - **Frische-Regel (wichtig!):** DVhub verwirft Werte, die älter als **90 Sekunden** sind
   (3 x Keepalive-Intervall). Publiziere jeden Messwert daher **mindestens alle 30 s**,

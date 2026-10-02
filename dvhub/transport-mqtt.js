@@ -275,6 +275,27 @@ export function createMqttTransport(victronConfig, options = {}) {
     return schema === 'dvhub' ? String(value) : JSON.stringify({ value });
   }
 
+  // ── MQTT-PAYLOAD-FIX (Kundenfall 2026-10-02, Deye-Bridge deye1) ────────
+  // Ein verwerfbarer Payload war bisher UNSICHTBAR: der Venus-Zweig unten
+  // verwarf alles, was kein JSON-Objekt mit .value ist, ohne eine Zeile Log.
+  // Eine Bridge, die nackte Zahlen publiziert ("26" statt {"value":26}),
+  // sah damit aus wie ein Lieferausfall ("Wert nicht verfügbar oder
+  // veraltet") statt wie ein Formatfehler. Je Topic entprellt gemeldet
+  // (gleiches Muster wie CONNECT_ERROR_DEDUP_MS oben) — ein 1-s-Takt darf
+  // den Leitstand-Ring nicht fluten.
+  const BAD_PAYLOAD_DEDUP_MS = 60000;
+  const badPayloadAt = new Map();
+  function noteUnusablePayload(topic, payload) {
+    const now = Date.now();
+    if (now - (badPayloadAt.get(topic) || 0) < BAD_PAYLOAD_DEDUP_MS) return;
+    badPayloadAt.set(topic, now);
+    const sample = JSON.stringify(String(payload ?? '').slice(0, 60));
+    console.warn(`[MQTT] Payload für ${topic} nicht verwertbar (Venus erwartet {"value":X}): ${sample}`);
+    // typeof-Guard: Stände zwischen 2026-09-14 und 2026-09-29 (z. B. 572475c)
+    // haben den Parser, aber noch kein emitEvent — Warnung geht auch ohne Leitstand.
+    if (typeof emitEvent === 'function') emitEvent('mqtt_payload_unusable', { topic, sample }, 'warn');
+  }
+
   // T-MQTT-CONSUMPTION: die drei Phasen, aus denen der Summen-Punkt
   // 'selfConsumptionW' gebildet wird (siehe sumConsumptionEntries oben).
   const CONSUMPTION_KEYS = ['selfConsumptionW_l1', 'selfConsumptionW_l2', 'selfConsumptionW_l3'];
@@ -313,13 +334,18 @@ export function createMqttTransport(victronConfig, options = {}) {
       if (v !== undefined) cache[topic] = { value: v, ts: Date.now() };
       return;
     }
-    try {
-      const msg = JSON.parse(payload.toString());
-      if (msg.value !== undefined) {
-        cache[topic] = { value: msg.value, ts: Date.now() };
-        rememberAlarmTopic(topic, msg.value);
-      }
-    } catch { /* parse-Fehler ignorieren */ }
+    // MQTT-PAYLOAD-FIX: parseMqttPayload ist derselbe Toleranz-Parser, den der
+    // dvhub-Zweig oben schon nutzt — er versteht das dokumentierte Venus-Format
+    // {"value": X} (docs/DEYE-NODERED-BRIDGE.md), zusätzlich aber auch nackte
+    // Zahlen ("-952") und JSON-Zahlen. {"value": null} bleibt null und wird
+    // bewusst MIT gespeichert (Alarm-Decoderei: null ≠ 0).
+    const v = parseMqttPayload(payload);
+    if (v !== undefined) {
+      cache[topic] = { value: v, ts: Date.now() };
+      rememberAlarmTopic(topic, v);
+    } else {
+      noteUnusablePayload(topic, payload);
+    }
   }
 
   // T-MQTT-ALARMS: Alarmwerte je Dienst nach dbus-Pfad ablegen
@@ -665,6 +691,8 @@ export function createMqttTransport(victronConfig, options = {}) {
 
     // Schema-Vertrag + Test-Seams (2026-09-14)
     schema,
+    _onMessage: onMessage,
+    _cacheSnapshot: () => ({ ...cache }),
     _writeTopics: () => ({ ...WRITE_TOPICS }),
     _readTopics: () => ({ ...READ_TOPICS }),
     _encodeWrite: encodeWrite,

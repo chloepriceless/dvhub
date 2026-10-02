@@ -88,6 +88,22 @@ verweist hierher.
 
 ### Behoben
 
+- **MQTT: nackte Zahlen aus der Bridge wurden wortlos verworfen.** Der
+  Venus-Zweig (`N/`-Topics) verlangte ausschließlich `{"value": X}` und ignorierte
+  alles andere ohne eine Zeile Log — eine Bridge, die `26` statt `{"value":26}`
+  publiziert (live gefunden auf Deye-Bridge „deye1“, 2026-10-02), hinterließ
+  `victron.soc/batteryPowerW/pvPowerW = null` und `meter.error = "MQTT: Netzwerte
+  fehlen oder sind veraltet (Zufluss prüfen)"`, obwohl der Bus voll Daten war.
+  Der Zweig nutzt jetzt denselben Toleranz-Parser wie das DVhub-Schema
+  (`parseMqttPayload`: nacktes Zahl, JSON-Zahl, `{"value":X}`) und meldet
+  unverwertbare Payloads entprellt (1×/min/Topic) als
+  `[MQTT] Payload für <topic> nicht verwertbar` plus Leitstand-Event
+  `mqtt_payload_unusable`. `emitEvent` ist per `typeof`-Guard abgesichert, damit die
+  Toleranz auch auf Ständen zwischen 2026-09-14 und 2026-09-29 läuft. Unverändert:
+  `{"value": null}` bleibt „kein Wert“ (nicht 0), retained Replays bleiben
+  verworfen (T-MQTT-RETAIN). Test `test/bridge-mqtt-venus-bare-payload.test.js`
+  schlägt ohne den Fix fehl; gegengeprüft gegen v1.0.4, v1.0.5/v1.0.6, 572475c und main.
+
 - **EOS 0.4 plante bei fester Einspeisevergütung nie.** EOS bekam die
   Einspeisevergütung nur im Spot-Modus; 0.4 bricht ohne sie jeden Lauf ab
   („Missing or invalid feed-in tariff within the control horizon"). Jetzt geht
