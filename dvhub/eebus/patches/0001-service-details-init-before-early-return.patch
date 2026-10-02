@@ -1,0 +1,29 @@
+diff --git a/src/common/service_details.c b/src/common/service_details.c
+index ce26b47..779b9dc 100644
+--- a/src/common/service_details.c
++++ b/src/common/service_details.c
+@@ -41,10 +41,9 @@ EebusError ServiceDetailsConstruct(
+     const char* device_type,
+     bool auto_accept
+ ) {
+-  if (StringIsEmpty(ski) || StringIsEmpty(ship_id) || StringIsEmpty(device_type)) {
+-    return kEebusErrorInputArgument;
+-  }
+-
++  // Initialise every pointer before the first early return: the caller frees
++  // the struct via ServiceDetailsDelete() on any error, which would otherwise
++  // free uninitialised pointers (GCC -Wmaybe-uninitialized at -O3).
+   service_details->ski         = NULL;
+   service_details->ipv4        = NULL;
+   service_details->ship_id     = NULL;
+@@ -53,6 +52,10 @@ EebusError ServiceDetailsConstruct(
+   service_details->is_trusted  = false;
+   service_details->state       = kConnectionStateNone;
+ 
++  if (StringIsEmpty(ski) || StringIsEmpty(ship_id) || StringIsEmpty(device_type)) {
++    return kEebusErrorInputArgument;
++  }
++
+   service_details->ski = StringCopy(ski);
+   if (service_details->ski == NULL) {
+     return kEebusErrorMemoryAllocate;

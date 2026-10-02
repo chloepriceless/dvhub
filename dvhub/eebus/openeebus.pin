@@ -1,0 +1,4 @@
+# openeebus (NIBE, Apache-2.0) — gepinnter Stand für dvhub-eebus.
+# Neue Version: Commit und Prüfsumme des codeload-Tarballs ändern, bauen, testen.
+OPENEEBUS_COMMIT=850c295023c8fd5310401590a1a86fdeedf9094c
+OPENEEBUS_SHA256=e784012922de88eb6fef9e58d287d26629d9934b551b574f2a1eae5608836dbd
