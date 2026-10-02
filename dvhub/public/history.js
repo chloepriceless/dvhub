@@ -2362,14 +2362,38 @@ function renderSummary(summary) {
   });
 }
 
+// Nur die jüngste Summary-Anfrage zählt: eine neue bricht die vorige ab, und
+// eine verspätete Antwort eines übersprungenen Zeitraums wird verworfen.
+let summaryAbort = null;
+let summaryGeneration = 0;
+let summaryDebounceTimer = null;
+const SUMMARY_DEBOUNCE_MS = 500;
+
+function scheduleHistorySummary() {
+  clearTimeout(summaryDebounceTimer);
+  if (summaryAbort) summaryAbort.abort();
+  setBanner('Historie wird geladen...');
+  summaryDebounceTimer = setTimeout(() => { loadHistorySummary(); }, SUMMARY_DEBOUNCE_MS);
+}
+
 async function loadHistorySummary() {
+  clearTimeout(summaryDebounceTimer);
   const view = byId('historyView')?.value || 'day';
   const date = byId('historyDate')?.value || currentDateValue();
+  if (summaryAbort) summaryAbort.abort();
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  summaryAbort = controller;
+  const generation = ++summaryGeneration;
+  const isStale = () => generation !== summaryGeneration;
   historyState.loading = true;
   setBanner('Historie wird geladen...');
   try {
-    const response = await apiFetch(`/api/history/summary?view=${encodeURIComponent(view)}&date=${encodeURIComponent(date)}`);
+    const response = await apiFetch(
+      `/api/history/summary?view=${encodeURIComponent(view)}&date=${encodeURIComponent(date)}`,
+      controller ? { signal: controller.signal } : {}
+    );
     const payload = await response.json();
+    if (isStale()) return;
     if (!response.ok) {
       if (response.status === 403 && payload && payload.error === 'pro_required') {
         // Zeitraum-Ansicht ist Pro — Fallnetz, falls die Lizenz zwischenzeitlich
@@ -2394,9 +2418,10 @@ async function loadHistorySummary() {
     }
     renderSummary(payload);
   } catch (error) {
+    if (error?.name === 'AbortError' || isStale()) return;
     setBanner(`Historie konnte nicht geladen werden: ${error.message}`, 'error');
   } finally {
-    historyState.loading = false;
+    if (!isStale()) historyState.loading = false;
   }
 }
 
@@ -2440,11 +2465,9 @@ function stepCurrentRange(delta) {
   // A programmatic `.value =` assignment does NOT fire a `change` event, so
   // history-viz.js's applyView-on-`change` listener never runs — the viz cards
   // would stay stuck on the date the page loaded with. Dispatch the event
-  // explicitly so the viz module follows prev/next navigation. (history.js's
-  // own `change` listener also re-runs loadHistorySummary, which is idempotent;
-  // the explicit call below is kept so the error-banner catch path is preserved.)
+  // explicitly so the viz module follows prev/next navigation. history.js's own
+  // `change` listener loads the summary (debounced) — no second call here.
   date.dispatchEvent(new Event('change', { bubbles: true }));
-  loadHistorySummary().catch((error) => setBanner(`Historie konnte nicht geladen werden: ${error.message}`, 'error'));
 }
 
 async function triggerCsvExport() {
@@ -2564,7 +2587,7 @@ function bindHistoryControls() {
     });
   }
   if (view) view.addEventListener('change', loadHistorySummary);
-  if (date) date.addEventListener('change', loadHistorySummary);
+  if (date) date.addEventListener('change', scheduleHistorySummary);
   if (backfill) backfill.addEventListener('click', triggerBackfill);
   if (exportBtn) exportBtn.addEventListener('click', triggerCsvExport);
   if (prev) prev.addEventListener('click', () => stepCurrentRange(-1));

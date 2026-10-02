@@ -103,6 +103,11 @@
 
   // --- Aggregator-fetch helper. Each builder calls fetchCardData(slug, view, date).
 
+  let vizAbort = null;
+  let vizGeneration = 0;
+  let dateChangeTimer = null;
+  const DATE_CHANGE_DEBOUNCE_MS = 500;
+
   async function fetchCardData(slug, view, date, extra) {
     let url = `/api/history/viz/${slug}?view=${encodeURIComponent(view || '')}&date=${encodeURIComponent(date || '')}`;
     // Optional extra query params (e.g. the heatmap `granularity` toggle).
@@ -113,7 +118,9 @@
         url += `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
       }
     }
-    const r = await apiFetch(url);
+    // Beim schnellen Durchblättern bricht applyView die Abrufe des vorigen
+    // Zeitraums ab — sonst stauen sich veraltete Anfragen am Server.
+    const r = await apiFetch(url, vizAbort ? { signal: vizAbort.signal } : {});
     if (!r.ok) throw new Error(`HTTP ${r.status} for ${slug}`);
     return r.json();
   }
@@ -1616,6 +1623,9 @@
     const dateInp = document.getElementById('historyDate');
     currentView = view || (viewSel ? viewSel.value : null) || 'day';
     const d = date || (dateInp ? dateInp.value : '') || new Date().toISOString().slice(0, 10);
+    if (vizAbort) vizAbort.abort();
+    vizAbort = typeof AbortController === 'function' ? new AbortController() : null;
+    const generation = ++vizGeneration;
     const buildQueue = [];
     document.querySelectorAll('[data-show-view]').forEach((section) => {
       const showViews = (section.dataset.showView || '').split(/\s+/).filter(Boolean);
@@ -1644,11 +1654,14 @@
         // the view again mid-stagger; don't build a now-hidden card.
         const stillRelevant = (document.querySelector(`[data-viz-card="${card}"]`)
           ?.dataset.showView || '').split(/\s+/).includes(currentView);
-        if (!stillRelevant) return;
+        if (!stillRelevant || generation !== vizGeneration) return;
         Promise.resolve()
           .then(() => buildDispatch[card](currentView, d))
           .then(() => { built.add(memoKey); })   // memo on SUCCESS only — T-09.3-27 retry
-          .catch((e) => console.error('history-viz build failed', card, e));
+          .catch((e) => {
+            if (e?.name === 'AbortError' || generation !== vizGeneration) return;
+            console.error('history-viz build failed', card, e);
+          });
       }, delay);
       delay += 1;
     }
@@ -1674,14 +1687,21 @@
     // registry clean and avoids stale instances from a prior date.
     if (viewSel) {
       viewSel.addEventListener('change', () => {
+        clearTimeout(dateChangeTimer);
         destroyAll();
         applyView(viewSel.value, dateInp ? dateInp.value : '');
       });
     }
     if (dateInp) {
+      // Entprellt: schnelles Vor/Zurück baut nur den Zeitraum, bei dem der
+      // Nutzer stehen bleibt — nicht jeden übersprungenen.
       dateInp.addEventListener('change', () => {
-        destroyAll();
-        applyView(viewSel ? viewSel.value : 'day', dateInp.value);
+        clearTimeout(dateChangeTimer);
+        if (vizAbort) vizAbort.abort();
+        dateChangeTimer = setTimeout(() => {
+          destroyAll();
+          applyView(viewSel ? viewSel.value : 'day', dateInp.value);
+        }, DATE_CHANGE_DEBOUNCE_MS);
       });
     }
     // Round-2 — PV-Heatmap 1h/15min granularity toggle. Event-delegated on the
