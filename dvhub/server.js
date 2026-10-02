@@ -699,6 +699,7 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     costs: ctx.costSummary(),
     userEnergyPricing: ctx.userEnergyPricingSummary(),
     epex: { ...state.epex, summary: epex.epexNowNext() },
+    eebus: ctx.eebus?.summary?.() ?? null,
     telemetry: {
       ...runtimeSnapshot.telemetry,
       historyImport: runtimeSnapshot.historyImport

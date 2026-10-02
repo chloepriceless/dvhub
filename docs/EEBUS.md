@@ -40,6 +40,15 @@ Es kann genau **eine Steuerbox** gekoppelt sein, Geräte beliebig viele.
 
 Die Wallbox wird nur begrenzt, wenn DVhub sie steuert (Integrationen → Wallbox, EOS-Steuerung).
 
+## Anzeige
+
+- **Leitstand → „§14a · EEBUS“** (nur bei eingeschaltetem EEBUS): Steuerbox verbunden/getrennt,
+  Bezugs- (LPC) und Einspeisegrenze (LPP) mit Zustand und Ablauf, was DVhub gerade umsetzt.
+- **Integrationen → EEBUS**: Kopplung, gefundene Gegenstellen, Details.
+- **Protokoll**: jeder Schreibversuch der Steuerbox (`paragraph14a_write`, abgelehnt:
+  `paragraph14a_write_denied`), angenommene Grenzen (`paragraph14a_limit_received`) und ihre
+  Umsetzung (`paragraph14a_consumption_limited` …).
+
 ## Zustände (LPC/LPP)
 
 Nach der EEBUS-Spezifikation:
@@ -55,7 +64,8 @@ Nach der EEBUS-Spezifikation:
 - Failsafe-Werte setzt die Steuerbox. Bis dahin gelten die Einstellungen: Bezug 4200 W,
   Einspeisung = maximale Einspeiseleistung (keine Einschränkung), jeweils 2 h.
 - Von der Steuerbox geschriebene Failsafe-Werte und ein laufender Failsafe überdauern einen
-  Neustart (`<Datenordner>/eebus/grid-state.json`).
+  Neustart (`<Datenordner>/eebus/grid-state.json`). Wird eine andere Steuerbox gekoppelt,
+  gelten wieder die Einstellungen.
 - **Ohne gekoppelte Steuerbox gibt es keinen Failsafe** — Anlagen ohne §14a bleiben unbegrenzt.
 
 ## Verdichterläufe (OHPCF)

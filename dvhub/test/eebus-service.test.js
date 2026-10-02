@@ -286,3 +286,60 @@ test('Prozess stirbt → Neustart geplant, ausstehende Anfragen enden', async ()
   await restart.fn();
   assert.equal(s.children.length, 2, 'Prozess neu gestartet');
 });
+
+test('neue Steuerbox erbt keine Failsafe-Werte der alten', async () => {
+  const s = setup();
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
+  c.emitEvent({ ev: 'grid_write', uc: 'lpc', kind: 'failsafe_limit', ski: SKI_BOX, w: 3800, approved: true });
+  await settle();
+  assert.equal(s.svc.status().grid.lpc.failsafeW, 3800);
+  s.setCfg((cfg) => ({ ...cfg, eebus: { ...cfg.eebus, trusted: [{ ski: SKI_OTHER, name: 'neu', role: 'grid' }] } }));
+  await s.svc.reload();
+  await settle();
+  assert.equal(s.svc.status().grid.lpc.failsafeW, 4200, 'zurück auf den Wert aus der Konfiguration');
+  const saved = JSON.parse(fs.readFileSync(path.join(s.dir, 'eebus', 'grid-state.json'), 'utf8'));
+  assert.equal(saved.lpc.failsafeW, null);
+  assert.ok(c.commands.some((x) => x.cmd === 'grid_config' && x.uc === 'lpc' && x.failsafe_w === 4200), 'Wert auch in openeebus zurückgesetzt');
+});
+
+test('Rollenvorschlag: EEBUS-Handwerkertool (GCPH) als Steuerbox', async () => {
+  const s = setup();
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'mdns', services: [{ ski: 'f'.repeat(40), brand: 'EEBus_Initiative_e.V.', model: 'EEBUS-Handwerkertool', type: 'GCPH' }] });
+  await settle();
+  assert.equal(s.svc.status().discovered[0].suggestedRole, 'grid');
+});
+
+test('Leitstand-Kurzfassung: Steuerbox, LPC/LPP und Umsetzung; aus → nur enabled:false', async () => {
+  const h = setup({ extraCfg: { controlWrite: { dvFeedInLimitW: { enabled: true } } } });
+  await h.svc.start();
+  const c = h.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'connected', ski: SKI_BOX });
+  c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
+  c.emitEvent({ ev: 'grid_write', uc: 'lpc', kind: 'limit', ski: SKI_BOX, w: 4200, duration_s: 900, active: true, approved: true });
+  c.emitEvent({ ev: 'grid_limit', uc: 'lpc', w: 4200, duration_s: 900, active: true });
+  await settle();
+  const s = h.svc.summary();
+  assert.equal(s.enabled, true);
+  assert.equal(s.status, 'running');
+  assert.deepEqual(s.grid, { name: 'Steuerbox', connected: true });
+  assert.equal(s.lpc.state, 'limited');
+  assert.equal(s.lpc.limitW, 4200);
+  assert.equal(s.lpp.state, 'unlimited_controlled');
+  assert.equal(s.applied.consumptionLimitW, 4200);
+  assert.deepEqual(s.devices, { total: 1, connected: 0 });
+  assert.ok(h.logs.some(([e, d]) => e === 'paragraph14a_write' && d.uc === 'lpc' && d.w === 4200));
+
+  c.emitEvent({ ev: 'grid_write', uc: 'lpp', kind: 'limit', ski: SKI_BOX, w: -5000, duration_s: 0, active: true, approved: false });
+  await settle();
+  assert.ok(h.logs.some(([e, d]) => e === 'paragraph14a_write_denied' && d.uc === 'lpp' && d.w === -5000), 'abgelehnte Vorgabe steht im Protokoll');
+
+  h.setCfg((cfg) => ({ ...cfg, eebus: { ...cfg.eebus, enabled: false } }));
+  assert.deepEqual(h.svc.summary(), { enabled: false });
+});

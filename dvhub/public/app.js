@@ -2170,6 +2170,61 @@ function renderDashboardStatus(status) {
     }
   });
 
+  safeRender('dashboard.eebus', () => {
+    // §14a / EEBUS: Vorgaben der Steuerbox (LPC Bezug, LPP Einspeisung) und
+    // ihre Umsetzung. Karte nur sichtbar, wenn EEBUS eingeschaltet ist.
+    const eb = status.eebus;
+    const card = document.getElementById('eebusCard');
+    if (!card) return;
+    card.hidden = !eb?.enabled;
+    if (!eb?.enabled) return;
+    const kw = (w) => `${(Number(w) / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} kW`;
+    const STATE = {
+      init: 'Start', unlimited_controlled: 'frei', limited: 'begrenzt',
+      failsafe: 'Failsafe', unlimited_autonomous: 'frei (autonom)', disabled: '-',
+    };
+    const lpText = (lp) => {
+      if (!lp) return ['-', 'dim'];
+      const label = STATE[lp.state] || lp.state;
+      if (lp.limitW == null) return [label, lp.state === 'unlimited_autonomous' ? 'warn' : 'ok'];
+      const until = lp.until ? ` bis ${fmtHm(lp.until)}` : '';
+      return [`${label} ≤ ${kw(lp.limitW)}${until}`, lp.state === 'failsafe' ? 'danger' : 'warn'];
+    };
+    const failsafe = eb.lpc?.state === 'failsafe' || eb.lpp?.state === 'failsafe';
+    let chip = ['info', 'ohne Steuerbox'];
+    if (eb.status === 'error') chip = ['danger', 'Fehler'];
+    else if (eb.status === 'not_installed') chip = ['warn', 'nicht installiert'];
+    else if (eb.status !== 'running') chip = ['warn', 'startet'];
+    else if (failsafe) chip = ['danger', 'Failsafe'];
+    else if (eb.grid) chip = eb.grid.connected ? ['ok', 'verbunden'] : ['warn', 'getrennt'];
+    const chipEl = document.getElementById('eebusChip');
+    if (chipEl) chipEl.className = `chip sm ${chip[0]}`;
+    setText('eebusChipText', chip[1]);
+
+    let headline = ['frei', 'ok'];
+    if (!eb.grid) headline = ['keine Steuerbox', 'dim'];
+    else if (eb.lpc?.limitW != null) headline = [`Bezug ≤ ${kw(eb.lpc.limitW)}`, failsafe ? 'danger' : 'warn'];
+    else if (eb.lpp?.limitW != null) headline = [`Einspeisung ≤ ${kw(eb.lpp.limitW)}`, failsafe ? 'danger' : 'warn'];
+    setText('eebusHeadline', headline[0], headline[1]);
+
+    setText('eebusGrid', eb.grid ? `${eb.grid.name || 'gekoppelt'}${eb.grid.connected ? '' : ' · getrennt'}` : 'nicht gekoppelt',
+      eb.grid ? (eb.grid.connected ? 'ok' : 'warn') : 'dim');
+    setText('eebusLpc', ...lpText(eb.grid ? eb.lpc : null));
+    setText('eebusLpp', ...lpText(eb.grid ? eb.lpp : null));
+
+    const a = eb.applied || {};
+    const parts = [];
+    if (a.consumptionLimitW != null) parts.push('Akku lädt nicht aus dem Netz');
+    if (a.wallboxCapW != null) parts.push(`Wallbox ≤ ${kw(a.wallboxCapW)}`);
+    if (a.productionBlock) parts.push('Einspeisung gesperrt');
+    else if (a.productionLimitW != null) parts.push(`Einspeisebegrenzer ${kw(a.productionLimitW)}`);
+    setText('eebusApplied', parts.length ? parts.join(' · ') : 'keine Eingriffe', parts.length ? 'warn' : 'dim');
+
+    const devRow = document.getElementById('eebusDevicesRow');
+    if (devRow) devRow.hidden = !(eb.devices?.total > 0);
+    if (eb.devices?.total > 0) setText('eebusDevices', `${eb.devices.connected} von ${eb.devices.total} verbunden`);
+  });
+
   safeRender('dashboard.meter-flow', () => {
     setText('l1', `${status.meter?.grid_l1_w ?? '-'} W`);
     setText('l2', `${status.meter?.grid_l2_w ?? '-'} W`);

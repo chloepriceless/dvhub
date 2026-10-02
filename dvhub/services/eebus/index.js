@@ -31,7 +31,8 @@ const PAIRING_WINDOW_MS = 10 * 60_000;
 const GCP_INTERVAL_MS = 5_000;
 const DEVICE_LIMIT_REFRESH_MS = 5 * 60_000;
 const STDERR_KEEP = 40;
-const GRID_ROLE_HINT = /(control|guard|gateway|grid|smgw|steuer)/i;
+// Gerätetypen von Steuerboxen/Gateways (u. a. EEBUS-Handwerkertool: „GCPH“).
+const GRID_ROLE_HINT = /(control|guard|gateway|grid|smgw|steuer|gcph|connectionhub)/i;
 
 export const EEBUS_BINARY_CANDIDATES = [
   '/opt/dvhub/bin/dvhub-eebus',
@@ -455,6 +456,11 @@ export function createEebusService(ctx, deps = {}) {
       // Netzseite (Steuerbox)
       case 'grid_write':
         ui.grid.lastWriteSki = ev.ski || null;
+        // Jeder Schreibversuch der Steuerbox ins Protokoll, abgelehnte als Warnung:
+        // sonst ist nicht nachvollziehbar, warum eine Vorgabe nicht ankam.
+        pushLog(ev.approved ? 'paragraph14a_write' : 'paragraph14a_write_denied', {
+          uc: ev.uc, kind: ev.kind, w: ev.w ?? null, durationS: ev.duration_s ?? null, active: ev.active ?? null, ski: ev.ski || null,
+        }, ev.approved ? 'info' : 'warn');
         if (ev.ski && roleOf(ev.ski) !== 'grid') {
           pushLog('eebus_grid_write_from_non_grid_peer', { ski: ev.ski, uc: ev.uc, kind: ev.kind });
           break;
@@ -470,6 +476,9 @@ export function createEebusService(ctx, deps = {}) {
           machines[ev.uc]?.onFailsafeDuration(ev.duration_s);
           saveGridState();
         }
+        break;
+      case 'grid_write_expired':
+        pushLog('paragraph14a_write_expired', { uc: ev.uc, ski: ev.ski || null }, 'warn');
         break;
       case 'grid_limit':
         if (ui.grid.lastWriteSki && roleOf(ui.grid.lastWriteSki) !== 'grid') break;
@@ -680,7 +689,8 @@ export function createEebusService(ctx, deps = {}) {
   // --- Bedienung (API) ----------------------------------------------------------
 
   function configKey(c) {
-    return JSON.stringify([c.enabled, c.port, c.binaryPath, c.trusted.map((t) => t.ski).sort()]);
+    return JSON.stringify([c.enabled, c.port, c.binaryPath, c.trusted.map((t) => t.ski).sort(),
+      c.trusted.find((t) => t.role === 'grid')?.ski || null]);
   }
 
   async function reload() {
@@ -701,10 +711,20 @@ export function createEebusService(ctx, deps = {}) {
     for (const ski of nextSkis) if (!prevSkis.has(ski)) await send({ cmd: 'trust', ski });
     for (const ski of prevSkis) if (!nextSkis.has(ski)) await send({ cmd: 'untrust', ski });
     const enabled = hasGridPeer();
+    const prevGrid = (prev[4] || null);
+    const nextGrid = c.trusted.find((t) => t.role === 'grid')?.ski || null;
+    if (prevGrid !== nextGrid) {
+      // Andere oder keine Steuerbox: Failsafe-Werte und Grenzen gehörten der
+      // alten Box — frisch aus der Konfiguration starten, die neue Box schreibt
+      // ihre eigenen. Auch kein gespeicherter Failsafe darf weiterwirken.
+      machines = { lpc: makeMachine('lpc', c), lpp: makeMachine('lpp', c) };
+      const lpc = machines.lpc.snapshot();
+      const lpp = machines.lpp.snapshot();
+      send({ cmd: 'grid_config', uc: 'lpc', failsafe_w: lpc.failsafeW, failsafe_duration_s: lpc.failsafeDurationS });
+      send({ cmd: 'grid_config', uc: 'lpp', failsafe_w: lpp.failsafeW, failsafe_duration_s: lpp.failsafeDurationS });
+    }
     machines.lpc.setEnabled(enabled);
     machines.lpp.setEnabled(enabled);
-    // Steuerbox entkoppelt: kein gespeicherter Failsafe darf eine später
-    // gekoppelte Box im Failsafe starten lassen.
     saveGridState();
     apply();
   }
@@ -772,6 +792,27 @@ export function createEebusService(ctx, deps = {}) {
     };
   }
 
+  // Kurzfassung für den Leitstand (/api/status, alle paar Sekunden abgefragt).
+  function summary() {
+    const c = cfgNow();
+    if (!c.enabled) return { enabled: false };
+    const gridPeer = c.trusted.find((t) => t.role === 'grid') || null;
+    const lp = (snap) => (snap ? { state: snap.state, limitW: snap.limitW, until: snap.until } : null);
+    const devices = c.trusted.filter((t) => t.role === 'device');
+    return {
+      enabled: true,
+      status: ui.status,
+      error: ui.error,
+      grid: gridPeer
+        ? { name: gridPeer.name || null, connected: ui.peers[gridPeer.ski]?.connected === true }
+        : null,
+      lpc: lp(ui.grid.lpc),
+      lpp: lp(ui.grid.lpp),
+      applied: { ...ui.applied },
+      devices: { total: devices.length, connected: devices.filter((t) => ui.peers[t.ski]?.connected === true).length },
+    };
+  }
+
   async function setDeviceLimit(ski, w, durationS = 0) {
     const d = ui.devices[ski];
     if (!d?.entities?.lpc) return { ok: false, error: 'device has no LPC entity' };
@@ -784,6 +825,7 @@ export function createEebusService(ctx, deps = {}) {
     stop,
     reload,
     status,
+    summary,
     setPairing,
     setDeviceLimit,
     certPaths,

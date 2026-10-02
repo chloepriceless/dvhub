@@ -22,6 +22,10 @@ verweist hierher.
   Hilfsprozess dvhub-eebus auf Basis von openeebus (NIBE), ~13 MB RAM; Kopplung
   unter Integrationen → EEBUS. Drei Fehler in openeebus behoben und als Pull
   Requests gemeldet.
+  Der Leitstand zeigt in der Karte „§14a · EEBUS“ Steuerbox, Bezugs- und
+  Einspeisegrenze und ihre Umsetzung; jeder Schreibversuch der Steuerbox steht
+  im Protokoll, abgelehnte als Warnung. Eine neu gekoppelte Steuerbox erbt keine
+  Failsafe-Werte der vorherigen.
 
 - **Direktvermarkter-Schnittstelle umschaltbar: Plexlog oder LUOX/Lumenaza.**
   Einstellungen → System → „Direktvermarkter-Schnittstelle" (`dvInterface.profile`,
