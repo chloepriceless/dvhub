@@ -168,21 +168,27 @@ test('Grenze von einem Gerät statt der Steuerbox wird ignoriert', async () => {
   assert.ok(s.logs.some(([e]) => e === 'eebus_grid_write_from_non_grid_peer'));
 });
 
-test('Heartbeat der Steuerbox weg → Failsafe-Grenze, die die Steuerbox vorher geschrieben hat', async () => {
+test('Heartbeat der Steuerbox 120 s weg → Failsafe-Grenze, die die Steuerbox vorher geschrieben hat', async () => {
   const s = setup();
   await s.svc.start();
   const c = s.child();
   c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
   c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
+  c.emitEvent({ ev: 'grid_write', uc: 'lpc', kind: 'failsafe_limit', ski: SKI_BOX, w: 3500, approved: true });
   c.emitEvent({ ev: 'grid_failsafe_limit', uc: 'lpc', w: 3500 });
+  c.emitEvent({ ev: 'grid_failsafe_limit', uc: 'lpp', w: 0 }); // Spiegelmeldung, keine Vorgabe
   await settle();
   assert.equal(s.state.ctrl.eebusConsumptionLimitW, null);
   c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: false, lpp_ok: false });
   await settle();
+  assert.equal(s.state.ctrl.eebusConsumptionLimitW, null, 'kurzer Abbruch: noch kein Failsafe');
+  s.advance(120_000);
+  s.svc._apply();
   assert.equal(s.state.ctrl.eebusConsumptionLimitW, 3500);
   assert.equal(s.svc.status().grid.lpc.state, 'failsafe');
   const saved = JSON.parse(fs.readFileSync(path.join(s.dir, 'eebus', 'grid-state.json'), 'utf8'));
   assert.equal(saved.lpc.failsafeW, 3500, 'Failsafe-Wert überdauert einen Neustart');
+  assert.equal(saved.lpp.failsafeW, null, 'eigene Vorgabe wird nicht gespeichert, Spiegelmeldung ignoriert');
 });
 
 test('ohne gekoppelte Steuerbox nie Failsafe (Anlagen ohne §14a bleiben unbegrenzt)', async () => {

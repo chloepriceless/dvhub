@@ -189,7 +189,9 @@ export function createEebusService(ctx, deps = {}) {
   function makeMachine(kind, c) {
     return kind === 'lpc'
       ? createLimitStateMachine({ kind, failsafeW: c.grid.failsafeConsumptionW, failsafeDurationS: c.grid.failsafeConsumptionDurationS, now })
-      : createLimitStateMachine({ kind, failsafeW: c.grid.failsafeProductionW, failsafeDurationS: c.grid.failsafeProductionDurationS, now });
+      // 0 = keine Vorgabe → Nennleistung: ein Abbruch zur Steuerbox darf die
+      // PV nicht für Stunden auf null setzen, solange sie selbst nichts schreibt.
+      : createLimitStateMachine({ kind, failsafeW: c.grid.failsafeProductionW || c.grid.productionNominalMaxW || defaultProductionNominal(), failsafeDurationS: c.grid.failsafeProductionDurationS, now });
   }
   let machines = { lpc: makeMachine('lpc', cfgNow()), lpp: makeMachine('lpp', cfgNow()) };
   const savedGrid = loadJson('grid-state.json');
@@ -410,7 +412,10 @@ export function createEebusService(ctx, deps = {}) {
       case 'ready': onReady(ev); break;
       case 'fatal':
         ui.status = 'error';
-        ui.error = ev.error || 'dvhub-eebus konnte nicht starten';
+        ui.error = ev.error === 'port in use'
+          ? `EEBUS-Port ${ev.port} ist belegt (anderer EEBUS-Dienst auf diesem Gerät?) — Port in den Einstellungen ändern`
+          : (ev.error || 'dvhub-eebus konnte nicht starten');
+        pushLog('eebus_fatal', { error: ev.error, port: ev.port });
         break;
       case 'reply': {
         const p = pending.get(ev.id);
@@ -452,6 +457,18 @@ export function createEebusService(ctx, deps = {}) {
         ui.grid.lastWriteSki = ev.ski || null;
         if (ev.ski && roleOf(ev.ski) !== 'grid') {
           pushLog('eebus_grid_write_from_non_grid_peer', { ski: ev.ski, uc: ev.uc, kind: ev.kind });
+          break;
+        }
+        // Failsafe-Werte nur aus echten Schreibvorgängen der Steuerbox: openeebus
+        // meldet bei jeder Änderung auch den unveränderten Wert des anderen
+        // Anwendungsfalls (grid_failsafe_*), das ist keine Vorgabe.
+        if (ev.approved && ev.kind === 'failsafe_limit') {
+          machines[ev.uc]?.onFailsafeLimit(ev.w);
+          saveGridState();
+          apply();
+        } else if (ev.approved && ev.kind === 'failsafe_duration') {
+          machines[ev.uc]?.onFailsafeDuration(ev.duration_s);
+          saveGridState();
         }
         break;
       case 'grid_limit':
@@ -462,14 +479,8 @@ export function createEebusService(ctx, deps = {}) {
         apply();
         break;
       case 'grid_failsafe_limit':
-        machines[ev.uc]?.onFailsafeLimit(ev.w);
-        saveGridState();
-        apply();
-        break;
       case 'grid_failsafe_duration':
-        machines[ev.uc]?.onFailsafeDuration(ev.duration_s);
-        saveGridState();
-        break;
+        break; // siehe grid_write
       case 'grid_heartbeat_state':
         machines.lpc.onHeartbeat(ev.lpc_ok === true);
         machines.lpp.onHeartbeat(ev.lpp_ok === true);
@@ -692,6 +703,9 @@ export function createEebusService(ctx, deps = {}) {
     const enabled = hasGridPeer();
     machines.lpc.setEnabled(enabled);
     machines.lpp.setEnabled(enabled);
+    // Steuerbox entkoppelt: kein gespeicherter Failsafe darf eine später
+    // gekoppelte Box im Failsafe starten lassen.
+    saveGridState();
     apply();
   }
 

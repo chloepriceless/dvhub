@@ -69,7 +69,7 @@
   }
 
   function roleSelect(name, suggested) {
-    return '<select class="eebus-role" data-name="' + esc(name) + '">'
+    return '<select class="input eebus-role" data-name="' + esc(name) + '">'
       + '<option value="device"' + (suggested !== 'grid' ? ' selected' : '') + '>Gerät (Wärmepumpe, Wallbox …)</option>'
       + '<option value="grid"' + (suggested === 'grid' ? ' selected' : '') + '>Steuerbox (Netzbetreiber, §14a)</option>'
       + '</select>';
@@ -130,8 +130,8 @@
         + (found ? '<ul class="eebus-list">' + found + '</ul>' : '<p class="muted eebus-small">Keine weiteren EEBUS-Geräte gefunden.</p>');
 
       html += '<h4>SKI von Hand</h4><div class="eebus-manual">'
-        + '<input type="text" id="eebus-manual-ski" placeholder="40 Hex-Zeichen" maxlength="60" spellcheck="false">'
-        + '<input type="text" id="eebus-manual-name" placeholder="Name" maxlength="80">'
+        + '<input type="text" class="input" id="eebus-manual-ski" placeholder="40 Hex-Zeichen" maxlength="60" spellcheck="false">'
+        + '<input type="text" class="input" id="eebus-manual-name" placeholder="Name" maxlength="80">'
         + roleSelect('manual', 'grid')
         + '<button type="button" class="btn sm" id="eebus-manual-add">Vertrauen</button></div>'
         + '</section>';

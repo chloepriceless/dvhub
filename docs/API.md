@@ -310,6 +310,18 @@ Netzspannung + Frequenz an www.ortsnetz-auslastung.de (opt-in, alle 5 min).
 | POST | `/api/meter/scan` | Token | Modbus-Register-Scan starten |
 | GET | `/api/meter/scan` | LAN·integrations | Ergebnis des Scans |
 
+### 3.19a EEBUS (§14a-Steuerbox, EEBUS-Geräte)
+
+Siehe [EEBUS.md](EEBUS.md).
+
+| Methode | Pfad | Zugang | Beschreibung |
+|---|---|---|---|
+| GET | `/api/eebus/status` | Token | Dienst (`status`, eigene `ski`, `shipId`, `port`, `qr`), mDNS-Funde, Kopplungsanfragen, gekoppelte Gegenstellen mit Verbindung und Geräte-Messwerten, §14a-Zustand je LPC/LPP (`state`, `limitW`, `until`, Failsafe-Werte, Heartbeat), umgesetzte Grenzen (`applied`) |
+| POST | `/api/eebus/pairing` | Token | `{ on: true\|false }` — Kopplungsanfragen 10 min annehmen |
+| POST | `/api/eebus/trust` | Token | `{ ski, name, role: 'grid'\|'device' }` — Gegenstelle vertrauen; höchstens eine Steuerbox (`409 grid_peer_exists`) |
+| DELETE | `/api/eebus/trust?ski=…` | Token | Gegenstelle entkoppeln |
+| POST | `/api/eebus/device-limit` | Token | `{ ski, w, durationS }` — Leistungsgrenze an ein EEBUS-Gerät von Hand (`w: null` hebt sie auf) |
+
 ### 3.20 Familien-Dashboard *(DVhub Pro)*
 
 | Methode | Pfad | Zugang | Beschreibung |

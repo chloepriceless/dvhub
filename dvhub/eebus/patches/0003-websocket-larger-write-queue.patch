@@ -1,0 +1,20 @@
+diff --git a/src/ship/websocket/websocket.c b/src/ship/websocket/websocket.c
+index d1ce964..a57e24b 100644
+--- a/src/ship/websocket/websocket.c
++++ b/src/ship/websocket/websocket.c
+@@ -41,7 +41,14 @@
+ #include "src/ship/tls_certificate/tls_certificate.h"
+ #include "src/ship/websocket/websocket_debug.h"
+ 
+-static const size_t kWriteQueueSize  = 50;
++// Messages are queued here and written from the lws writeable callback. During
++// SPINE discovery a node with many entities/features answers dozens of reads,
++// subscriptions and bindings at once; with 50 entries the queue overflowed,
++// WebsocketWrite failed and the whole SHIP connection was torn down
++// ("kDataExchange: data exchange failed"). Entries only hold a pointer, the
++// payload is allocated per queued message, so a larger queue costs nothing
++// while idle.
++static const size_t kWriteQueueSize  = 1024;
+ static const size_t kMaxInputMsgSize = EEBUS_WEBSOCKET_MAX_INPUT_MSG_SIZE;
+ 
+ typedef struct WriteMessage WriteMessage;

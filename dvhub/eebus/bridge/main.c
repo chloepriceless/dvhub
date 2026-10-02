@@ -13,8 +13,11 @@
  *   stderr — diagnostics (libwebsockets, errors)
  * When stdin closes (DVhub stopped or crashed) the process shuts down.
  */
+#include <errno.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/socket.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +48,28 @@ static void* TickThread(void* arg) {
     }
   }
   return NULL;
+}
+
+// libwebsockets reports a failed bind only in its log and the service would
+// run on without a listening socket. Check the port first and fail loudly, so
+// DVhub shows the error and retries.
+static int PortAvailable(int port) {
+  const int fd = socket(AF_INET6, SOCK_STREAM, 0);
+  if (fd < 0) {
+    return 1;  // cannot check, let the service try
+  }
+  const int on = 1;
+  const int off = 0;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+  setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
+  struct sockaddr_in6 addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin6_family = AF_INET6;
+  addr.sin6_addr   = in6addr_any;
+  addr.sin6_port   = htons((uint16_t)port);
+  const int ok = bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0 || errno != EADDRINUSE;
+  close(fd);
+  return ok;
 }
 
 static void Usage(void) {
@@ -114,9 +139,23 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  signal(SIGINT, OnSignal);
-  signal(SIGTERM, OnSignal);
+  // No SA_RESTART: a signal must interrupt the blocking read on stdin, so
+  // SIGTERM alone (docker stop, systemd) ends the process cleanly.
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = OnSignal;
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
   signal(SIGPIPE, SIG_IGN);
+
+  if (!PortAvailable(opts.port)) {
+    cJSON* ev = OutEvent("fatal");
+    cJSON_AddStringToObject(ev, "error", "port in use");
+    cJSON_AddNumberToObject(ev, "port", opts.port);
+    OutEmit(ev);
+    return 1;
+  }
 
   if (BridgeStart(&opts) != 0) {
     cJSON* ev = OutEvent("fatal");

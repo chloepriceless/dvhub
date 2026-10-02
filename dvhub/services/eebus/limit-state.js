@@ -47,6 +47,11 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
     failsafeDurationS: Number(failsafeDurationS),
     failsafeSince: null,
     lastWriteAt: null,
+    // Nur von der Steuerbox geschriebene Failsafe-Werte werden gespeichert und
+    // nach einem Neustart wieder übernommen; DVhubs eigene Vorgaben kommen
+    // immer frisch aus der Konfiguration.
+    failsafeWFromEg: false,
+    failsafeDurationFromEg: false,
   };
 
   function go(next) {
@@ -92,12 +97,18 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
     return go(controlledState());
   }
 
+  /** Failsafe-Grenze, von der Steuerbox geschrieben. */
   function onFailsafeLimit(w) {
-    if (Number.isFinite(Number(w)) && Number(w) >= 0) s.failsafeW = Number(w);
+    if (!Number.isFinite(Number(w)) || Number(w) < 0) return;
+    s.failsafeW = Number(w);
+    s.failsafeWFromEg = true;
   }
 
+  /** Failsafe-Mindestdauer, von der Steuerbox geschrieben. */
   function onFailsafeDuration(seconds) {
-    if (Number.isFinite(Number(seconds)) && Number(seconds) > 0) s.failsafeDurationS = Number(seconds);
+    if (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0) return;
+    s.failsafeDurationS = Number(seconds);
+    s.failsafeDurationFromEg = true;
   }
 
   /** Heartbeat-Zustand laut Brücke (openeebus prüft die Frist). */
@@ -107,9 +118,19 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
     return evaluate();
   }
 
+  // Heartbeat seit mehr als 120 s weg? openeebus meldet einen Verbindungsabbau
+  // sofort als „kein Heartbeat“; EEBUS verlangt den Failsafe erst nach 120 s
+  // ohne Heartbeat — ein Neustart der Steuerbox oder ein kurzer Netzaussetzer
+  // darf die Anlage nicht für mindestens 2 h in den Failsafe schicken.
+  function heartbeatLost(t) {
+    if (s.heartbeatOk) return false;
+    return s.lastHeartbeatAt == null || t - s.lastHeartbeatAt >= HEARTBEAT_TIMEOUT_MS;
+  }
+
   /** Zeitabhängige Übergänge; regelmäßig aufrufen. Liefert true bei Zustandswechsel. */
   function evaluate() {
     const t = now();
+    if (s.heartbeatOk) s.lastHeartbeatAt = t;
     switch (s.state) {
       case 'disabled':
         return false;
@@ -119,7 +140,7 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
         return false;
       case 'limited':
       case 'unlimited_controlled':
-        if (!s.heartbeatOk) return go('failsafe');
+        if (heartbeatLost(t)) return go('failsafe');
         return go(controlledState());
       case 'failsafe': {
         // Eine neue Grenze der wieder verbundenen Steuerbox beendet den Failsafe.
@@ -170,8 +191,8 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
   /** Persistierbarer Stand (Failsafe-Werte, letzte Grenze, laufender Failsafe). */
   function toJSON() {
     return {
-      failsafeW: s.failsafeW,
-      failsafeDurationS: s.failsafeDurationS,
+      failsafeW: s.failsafeWFromEg ? s.failsafeW : null,
+      failsafeDurationS: s.failsafeDurationFromEg ? s.failsafeDurationS : null,
       limit: s.limit,
       failsafeSince: s.state === 'failsafe' ? s.failsafeSince : null,
     };
@@ -183,8 +204,8 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
    */
   function restore(saved) {
     if (!saved || typeof saved !== 'object') return;
-    onFailsafeLimit(saved.failsafeW);
-    onFailsafeDuration(saved.failsafeDurationS);
+    if (saved.failsafeW != null) onFailsafeLimit(saved.failsafeW);
+    if (saved.failsafeDurationS != null) onFailsafeDuration(saved.failsafeDurationS);
     if (saved.limit && typeof saved.limit === 'object') s.limit = { ...saved.limit };
     const since = Number(saved.failsafeSince);
     if (Number.isFinite(since) && since > 0 && now() - since < s.failsafeDurationS * 1000 && s.state !== 'disabled') {

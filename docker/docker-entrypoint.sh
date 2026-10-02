@@ -234,6 +234,45 @@ if [ "${DVHUB_AUTO_HEAP:-1}" = "1" ] && ! echo "${NODE_OPTIONS:-}" | grep -q "ma
 fi
 
 # ---------------------------------------------------------------------------
+# EEBUS mDNS: dvhub-eebus findet Steuerbox und Geräte über Avahi (D-Bus).
+# Stellt der Host Avahi bereit (D-Bus-Socket eingebunden, z. B. balena
+# io.balena.features.dbus oder /run/dbus als Volume), wird der genutzt.
+# Sonst — und nur wenn EEBUS aktiv ist — eigener dbus + avahi im Container
+# (Host-Netz). Fehlschläge sind nicht fatal: EEBUS meldet sie in der GUI.
+# ---------------------------------------------------------------------------
+EEBUS_ON=0
+CONFIG_PATH="$CONFIG_PATH" node -e 'const c=JSON.parse(require("fs").readFileSync(process.env.CONFIG_PATH,"utf8"));process.exit(c?.eebus?.enabled===true?0:1)' 2>/dev/null && EEBUS_ON=1
+if [ "$EEBUS_ON" = 1 ] && [ "$(id -u)" = 0 ]; then
+  HOST_BUS="${DBUS_SYSTEM_BUS_ADDRESS:-}"
+  if [ -z "$HOST_BUS" ] && [ -S /run/dbus/system_bus_socket ] && [ ! -f /run/dbus/.dvhub-own ]; then
+    log "EEBUS: nutze Avahi des Hosts (D-Bus /run/dbus)"
+  elif [ -n "$HOST_BUS" ]; then
+    log "EEBUS: nutze D-Bus des Hosts ($HOST_BUS)"
+  elif command -v avahi-daemon >/dev/null 2>&1; then
+    mkdir -p /run/dbus /run/avahi-daemon
+    rm -f /run/dbus/dbus.pid /run/avahi-daemon/pid
+    dbus-daemon --system --fork >/dev/null 2>&1 && touch /run/dbus/.dvhub-own || log "EEBUS: dbus-daemon startet nicht"
+    # Nur DVhubs eigene Dienste (SHIP) veröffentlichen — keine Rechner- oder
+    # Hardware-Angaben; rlimits leer, weil Container sie nicht setzen dürfen.
+    cat > /run/avahi-daemon/dvhub.conf <<'AVAHI'
+[server]
+use-ipv4=yes
+use-ipv6=no
+[wide-area]
+enable-wide-area=no
+[publish]
+publish-hinfo=no
+publish-workstation=no
+[reflector]
+[rlimits]
+AVAHI
+    avahi-daemon --daemonize --no-drop-root --no-chroot -f /run/avahi-daemon/dvhub.conf 2>/dev/null \
+      && log "EEBUS: eigenes Avahi im Container gestartet" \
+      || log "EEBUS: avahi-daemon startet nicht — Kopplung nur ohne mDNS"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 8. Rechte ablegen
 #
 # Läuft der Container bereits unter einer unprivilegierten UID (docker run

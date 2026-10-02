@@ -686,7 +686,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 0,
       max: 1000000,
-      help: 'Einspeisegrenze, wenn die Verbindung zur Steuerbox abreißt (LPP). 0 = keine Einspeisung im Failsafe.'
+      help: 'Einspeisegrenze, wenn die Verbindung zur Steuerbox abreißt (LPP), bis die Steuerbox einen eigenen Wert schreibt. 0 = maximale Einspeiseleistung (keine Einschränkung).'
     },
     {
       section: 'system',

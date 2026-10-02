@@ -51,6 +51,15 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
 # ---------------------------------------------------------------------------
 # Stage 2 — Laufzeit
 # ---------------------------------------------------------------------------
+# --- EEBUS-Knoten (dvhub-eebus, openeebus von NIBE) --------------------------
+# Eigene Bau-Stufe: Toolchain und Header bleiben draußen, ins Image kommt nur
+# das Binary (~0,7 MB) plus Laufzeitbibliotheken. Gleiches build.sh wie nativ.
+FROM node:${NODE_VERSION} AS eebus
+RUN apk add --no-cache bash build-base cmake ninja pkgconf curl patch \
+      openssl-dev libwebsockets-dev cjson-dev avahi-dev
+COPY dvhub/eebus /src/eebus
+RUN bash /src/eebus/build.sh /out
+
 FROM node:${NODE_VERSION} AS runtime
 
 ARG VCS_REF=unknown
@@ -78,7 +87,10 @@ LABEL org.opencontainers.image.title="DVhub" \
 # Prüfen/Beenden von openvpn, genau wie die nativen sudoers-Regeln. Der
 # Container braucht dafür NET_ADMIN + /dev/net/tun (docker/compose.yml); mit
 # Host-Netz entsteht tun0 wie nativ direkt auf dem Gerät.
+# EEBUS: libwebsockets/cJSON/Avahi-Client für dvhub-eebus; dbus + avahi nur,
+# falls der Host kein Avahi über D-Bus bereitstellt (docker-entrypoint.sh).
 RUN apk add --no-cache tzdata su-exec postgresql17-client openvpn wireguard-tools sudo iproute2 procps \
+      libwebsockets cjson avahi-libs avahi dbus \
     && addgroup -g 10001 -S dvhub \
     && adduser -u 10001 -G dvhub -S -H -s /sbin/nologin dvhub \
     && printf '%s\n' \
@@ -125,6 +137,7 @@ COPY --chown=dvhub:dvhub scripts/reconcile-vendor-profiles.mjs /opt/dvhub/script
 # package.json verweist mit "SEE LICENSE IN ../LICENSE.md" hierauf.
 COPY --chown=dvhub:dvhub LICENSE.md THIRD-PARTY-LICENSES.md /opt/dvhub/
 COPY --chmod=0755 docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --from=eebus /out/dvhub-eebus /usr/local/bin/dvhub-eebus
 
 RUN mkdir -p /etc/dvhub /var/lib/dvhub \
     && chown dvhub:dvhub /etc/dvhub /var/lib/dvhub

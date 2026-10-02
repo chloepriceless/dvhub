@@ -12,6 +12,17 @@ verweist hierher.
 
 ### Neu
 
+- **EEBUS: §14a-Steuerbox und EEBUS-Geräte** ([docs/EEBUS.md](docs/EEBUS.md)).
+  DVhub nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (LPC/LPP mit
+  den EEBUS-Zuständen inkl. Failsafe nach 120 s ohne Heartbeat), meldet den
+  Netzanschlusspunkt (MGCP) und setzt die Grenzen um: Akku lädt nicht aus dem
+  Netz, Wallbox und EEBUS-Wärmepumpen teilen sich die Bezugsgrenze, die
+  Einspeisegrenze geht an den Einspeisebegrenzer. EEBUS-Geräte werden begrenzt
+  und gemessen, angekündigte Verdichterläufe in die günstigste Zeit gelegt.
+  Hilfsprozess dvhub-eebus auf Basis von openeebus (NIBE), ~13 MB RAM; Kopplung
+  unter Integrationen → EEBUS. Drei Fehler in openeebus behoben und als Pull
+  Requests gemeldet.
+
 - **Direktvermarkter-Schnittstelle umschaltbar: Plexlog oder LUOX/Lumenaza.**
   Einstellungen → System → „Direktvermarkter-Schnittstelle" (`dvInterface.profile`,
   Standard `plexlog` = unverändert). Das LUOX-Profil folgt der offiziellen

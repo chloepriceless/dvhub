@@ -66,17 +66,38 @@ test('Grenze ohne Dauer gilt unbefristet; active=false hebt sie auf', () => {
   assert.equal(m.effective().state, 'unlimited_controlled');
 });
 
-test('Heartbeat-Verlust in limited → Failsafe mit vom EG geschriebenen Werten', () => {
-  const { m } = machine();
+test('Heartbeat-Verlust in limited → nach 120 s Failsafe mit vom EG geschriebenen Werten', () => {
+  const { m, advance } = machine();
   m.setEnabled(true);
   m.onHeartbeat(true);
   m.onFailsafeLimit(3000);
   m.onFailsafeDuration(10800);
   m.onLimit({ w: 6000, durationS: 3600, active: true });
   m.onHeartbeat(false);
+  assert.equal(m.effective().state, 'limited', 'sofort nach dem Abbruch: Grenze gilt weiter');
+  advance(HEARTBEAT_TIMEOUT_MS - 1);
+  m.evaluate();
+  assert.equal(m.effective().state, 'limited');
+  advance(1);
+  m.evaluate();
   const e = m.effective();
   assert.equal(e.state, 'failsafe');
   assert.equal(e.limitW, 3000);
+});
+
+test('kurzer Verbindungsabbruch (< 120 s) löst keinen Failsafe aus', () => {
+  const { m, advance } = machine();
+  m.setEnabled(true);
+  m.onHeartbeat(true);
+  advance(10 * 60_000);
+  m.evaluate();
+  m.onHeartbeat(false);
+  advance(90_000);
+  m.evaluate();
+  m.onHeartbeat(true);
+  advance(60_000);
+  m.evaluate();
+  assert.equal(m.effective().state, 'unlimited_controlled');
 });
 
 test('Failsafe hält die Mindestdauer, auch wenn der Heartbeat zurückkommt', () => {
@@ -84,6 +105,8 @@ test('Failsafe hält die Mindestdauer, auch wenn der Heartbeat zurückkommt', ()
   m.setEnabled(true);
   m.onHeartbeat(true);
   m.onHeartbeat(false);
+  advance(HEARTBEAT_TIMEOUT_MS);
+  m.evaluate();
   advance(600_000);
   m.onHeartbeat(true);
   assert.equal(m.effective().state, 'failsafe', 'Heartbeat allein beendet den Failsafe nicht');
@@ -97,6 +120,9 @@ test('neue Grenze der wieder verbundenen Steuerbox beendet den Failsafe sofort',
   m.setEnabled(true);
   m.onHeartbeat(true);
   m.onHeartbeat(false);
+  advance(HEARTBEAT_TIMEOUT_MS);
+  m.evaluate();
+  assert.equal(m.effective().state, 'failsafe');
   advance(60_000);
   m.onLimit({ w: 7000, durationS: 600, active: true });
   m.evaluate();
@@ -109,6 +135,8 @@ test('Failsafe abgelaufen, Steuerbox weiter weg → unlimited_autonomous; Rückk
   m.setEnabled(true);
   m.onHeartbeat(true);
   m.onHeartbeat(false);
+  advance(HEARTBEAT_TIMEOUT_MS);
+  m.evaluate();
   advance(7200_000);
   m.evaluate();
   assert.equal(m.effective().state, 'unlimited_autonomous');
@@ -124,6 +152,8 @@ test('Neustart: Failsafe-Werte und laufender Failsafe bleiben erhalten', () => {
   a.m.onFailsafeLimit(2500);
   a.m.onFailsafeDuration(14400);
   a.m.onHeartbeat(false);
+  a.advance(HEARTBEAT_TIMEOUT_MS);
+  a.m.evaluate();
   const saved = JSON.parse(JSON.stringify(a.m.toJSON()));
 
   let t = a.now() + 3600_000;
@@ -135,4 +165,13 @@ test('Neustart: Failsafe-Werte und laufender Failsafe bleiben erhalten', () => {
   t += 3 * 3600_000 + 1;
   b.evaluate();
   assert.equal(b.effective().state, 'unlimited_autonomous', 'Failsafe endet 4 h nach seinem ursprünglichen Beginn');
+});
+
+test('nur von der Steuerbox geschriebene Failsafe-Werte werden gespeichert', () => {
+  const { m } = machine();
+  m.setEnabled(true);
+  assert.equal(m.toJSON().failsafeW, null, 'Vorgabe aus der Konfiguration: nicht speichern');
+  m.onFailsafeLimit(3100);
+  assert.equal(m.toJSON().failsafeW, 3100);
+  assert.equal(m.toJSON().failsafeDurationS, null);
 });

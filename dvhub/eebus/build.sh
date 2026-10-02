@@ -20,6 +20,12 @@ trap cleanup EXIT
 mkdir -p "$WORK"
 
 SRC="$WORK/openeebus-$OPENEEBUS_COMMIT"
+# Ein wiederverwendetes Bauverzeichnis (EEBUS_BUILD_DIR) neu auspacken, sobald
+# sich die Patches ändern — sonst fehlten neue Patches still im Binary.
+PATCH_STAMP="$(cat "$HERE"/patches/*.patch 2>/dev/null | sha256sum | cut -c1-16)"
+if [ -d "$SRC" ] && [ "$(cat "$SRC/.dvhub-patches" 2>/dev/null)" != "$PATCH_STAMP" ]; then
+  rm -rf "$SRC"
+fi
 if [ ! -d "$SRC" ]; then
   url="https://codeload.github.com/NIBEGroup/openeebus/tar.gz/$OPENEEBUS_COMMIT"
   echo "eebus: lade openeebus $OPENEEBUS_COMMIT"
@@ -35,6 +41,7 @@ if [ ! -d "$SRC" ]; then
     [ -e "$p" ] || continue
     patch -d "$SRC" -p1 --forward --silent < "$p"
   done
+  echo "$PATCH_STAMP" > "$SRC/.dvhub-patches"
 fi
 
 # Our bridge as an additional subproject, like openeebus' own examples.
@@ -48,7 +55,7 @@ command -v ninja >/dev/null 2>&1 && GEN=(-G Ninja)
 cmake -S "$SRC" -B "$SRC/build" "${GEN[@]}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DOPTION_MDNS_USE_AVAHI_CLIENT=ON \
-  -DCMAKE_C_FLAGS="-Wno-error=maybe-uninitialized" >/dev/null
+  -DCMAKE_C_FLAGS="-Wno-error=maybe-uninitialized ${EEBUS_EXTRA_CFLAGS:-}" >/dev/null
 cmake --build "$SRC/build" --target dvhub-eebus -j"$(nproc 2>/dev/null || echo 2)"
 
 install -d "$OUT"
