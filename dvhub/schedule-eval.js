@@ -1364,20 +1364,25 @@ export function createScheduleEvaluator(ctx) {
       }
       // === end T-0002 persistent-override SoC floor ===========================
 
-      // === §14a EnWG (EEBUS LPC) =============================================
-      // Solange die Steuerbox den Bezug begrenzt (Begrenzung oder Failsafe),
-      // lädt der Akku nicht aus dem Netz: ein positiver Sollwert (= Netzbezug
-      // zum Laden) wird auf den Standard-Sollwert (Eigenverbrauch) gehalten.
-      // Entladen und Eigenverbrauch bleiben erlaubt — sie senken den Bezug.
-      if (target === 'gridSetpointW' && Number.isFinite(state.ctrl.eebusConsumptionLimitW)
-          && Number(eff.value) > 0) {
+      // === §14a EnWG (services/paragraph14a) ===================================
+      // Solange der Netzbetreiber den Bezug begrenzt (EEBUS-Steuerbox oder
+      // Relais), darf der Akku nur bis zu seinem Anteil am §14a-Budget aus dem
+      // Netz laden (p14aBatteryGridW; 0 = gar nicht). Der Sollwert ist der
+      // Netzbezug am Anschlusspunkt, der Haushalt zählt also mit — das hält die
+      // Grenze sicher ein. Entladen und Eigenverbrauch bleiben erlaubt.
+      if (target === 'gridSetpointW' && state.p14a?.active === true && Number(eff.value) > 0) {
         const hold = Math.min(0, Number(cfg.schedule?.defaultGridSetpointW ?? 0));
-        await applyControlTarget('gridSetpointW', hold, 'paragraph14a_limit');
-        if (!state.ctrl._p14aHoldLogged) {
-          pushLog('paragraph14a_grid_charge_blocked', { limitW: state.ctrl.eebusConsumptionLimitW, suppressed: Number(eff.value), held: hold });
-          state.ctrl._p14aHoldLogged = true;
+        const capW = Math.max(hold, Number(state.ctrl.p14aBatteryGridW) || 0);
+        if (Number(eff.value) > capW) {
+          await applyControlTarget('gridSetpointW', capW, 'paragraph14a_limit');
+          if (!state.ctrl._p14aHoldLogged) {
+            pushLog('paragraph14a_grid_charge_capped', {
+              limitW: state.p14a.limitW, source: state.p14a.source, suppressed: Number(eff.value), capW,
+            });
+            state.ctrl._p14aHoldLogged = true;
+          }
+          continue;
         }
-        continue;
       }
       state.ctrl._p14aHoldLogged = false;
 

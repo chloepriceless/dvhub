@@ -435,6 +435,29 @@
         <div class="dv-drawer-toast" id="dv-drawer-vrm-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
 
+      <!-- §14a (2026-10-02): steuerbare Verbrauchseinrichtungen, Mindestleistung
+           Pmin,14a, Aufteilung. Inhalt rendert p14a-drawer.js. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-p14a-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-p14a" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-p14a-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-p14a-title">&sect;14a &ndash; Steuerbare Verbrauchseinrichtungen</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-p14a-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body" id="dv-drawer-p14a-body">
+          <p class="dv-drawer-intro">
+            Begrenzt der Netzbetreiber den Bezug (&sect;14a EnWG, EEBUS-Steuerbox oder Relais), teilt DVhub
+            die Grenze auf W&auml;rmepumpe, Wallbox und Speicher auf. Der Anlage steht dabei mindestens
+            die <strong>Mindestleistung</strong> zu (BK6-22-300 Anlage 1, Ziffer 4.5.2).
+          </p>
+          <div id="p14a-content"><p class="muted">Lade &hellip;</p></div>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-p14a-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
+
       <!-- EEBUS (2026-10-02): §14a-Steuerbox (LPC/LPP, Netzanschlusspunkt) und
            EEBUS-Geräte. Inhalt rendert eebus-drawer.js. -->
       <div class="dv-drawer-backdrop" id="dv-drawer-eebus-backdrop" hidden></div>
@@ -1405,6 +1428,7 @@
   <script src="/pro-modal.js" defer></script>
   <script src="/pv-strings-drawer.js?v=20260923"></script>
   <script src="/eebus-drawer.js?v=20261002"></script>
+  <script src="/p14a-drawer.js?v=20261002"></script>
   <script src="/integrations.js?v=20261001-wallbox4"></script>
 </body>
 </html>

@@ -50,9 +50,9 @@ test('Wallbox: §14a-Anteil kappt den Ladestrom, unter dem Mindeststrom wird ges
   assert.equal(applyGridCap({ action: 'stop', currentA: null }, bc, 1000).action, 'stop');
 });
 
-// --- Akku: kein Netzladen unter §14a ------------------------------------------
+// --- Akku: Netzladen unter §14a nur bis zum Anteil -----------------------------
 
-function evalCtx(limitW) {
+function evalCtx(limitW, batteryGridW = 0) {
   const writes = [];
   const logs = [];
   const state = {
@@ -63,7 +63,8 @@ function evalCtx(limitW) {
       config: { defaultGridSetpointW: -40, defaultChargeCurrentA: null, defaultFeedExcessDcPv: 1 },
       lastEvalAt: 0,
     },
-    ctrl: { negativePriceActive: false, forcedOff: false, eebusConsumptionLimitW: limitW },
+    ctrl: { negativePriceActive: false, forcedOff: false, p14aBatteryGridW: limitW == null ? null : batteryGridW },
+    p14a: { active: limitW != null, limitW, source: 'eebus' },
     epex: { data: [] },
   };
   const cfg = {
@@ -88,16 +89,27 @@ function evalCtx(limitW) {
   return { evaluator: createScheduleEvaluator(ctx), writes, logs };
 }
 
-test('Akku: unter §14a-Bezugsgrenze kein Netzladen — Sollwert bleibt beim Eigenverbrauch', async () => {
-  const limited = evalCtx(4200);
+test('Akku: unter §14a-Bezugsgrenze ohne Anteil kein Netzladen — Sollwert bleibt beim Eigenverbrauch', async () => {
+  const limited = evalCtx(4200, 0);
   await limited.evaluator.evaluateSchedule();
   const grid = limited.writes.filter((w) => w.target === 'gridSetpointW');
   assert.ok(grid.length > 0, 'Sollwert wird geschrieben');
   assert.ok(grid.every((w) => w.value <= 0), `kein positiver Sollwert: ${JSON.stringify(grid)}`);
-  assert.ok(limited.logs.some((l) => l.event === 'paragraph14a_grid_charge_blocked'));
+  assert.ok(limited.logs.some((l) => l.event === 'paragraph14a_grid_charge_capped'));
 
   const free = evalCtx(null);
   await free.evaluator.evaluateSchedule();
   const g2 = free.writes.filter((w) => w.target === 'gridSetpointW');
   assert.equal(g2.at(-1)?.value, 3000, 'ohne Grenze lädt der Akku wie geplant');
+});
+
+test('Akku: mit §14a-Anteil lädt er bis zum Anteil aus dem Netz', async () => {
+  const capped = evalCtx(7560, 2000);
+  await capped.evaluator.evaluateSchedule();
+  const grid = capped.writes.filter((w) => w.target === 'gridSetpointW');
+  assert.equal(grid.at(-1)?.value, 2000, 'Plan 3000 W → Anteil 2000 W');
+
+  const enough = evalCtx(7560, 5000);
+  await enough.evaluator.evaluateSchedule();
+  assert.equal(enough.writes.filter((w) => w.target === 'gridSetpointW').at(-1)?.value, 3000, 'Plan unter dem Anteil: unverändert');
 });

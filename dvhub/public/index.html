@@ -144,9 +144,11 @@
           <span class="chip info sm" id="eebusChip"><span class="dot"></span><span id="eebusChipText">&mdash;</span></span>
         </div>
         <div class="rail-big card-value value-dv" id="eebusHeadline">&mdash;</div>
-        <div class="rail-row"><span class="l">Steuerbox</span><strong class="v" id="eebusGrid">&mdash;</strong></div>
-        <div class="rail-row" title="Leistungsbegrenzung Bezug nach &sect;14a EnWG (EEBUS LPC)"><span class="l">&sect;14a Bezug</span><strong class="v" id="eebusLpc">&mdash;</strong></div>
-        <div class="rail-row" title="Leistungsbegrenzung Einspeisung nach &sect;9 EEG (EEBUS LPP)"><span class="l">&sect;9 Einspeisung</span><strong class="v" id="eebusLpp">&mdash;</strong></div>
+        <div class="rail-row" id="eebusGridRow"><span class="l">Steuerbox</span><strong class="v" id="eebusGrid">&mdash;</strong></div>
+        <div class="rail-row" id="p14aRelayRow" hidden title="Schaltkontakt einer FNN-Steuerbox (meldet nur &bdquo;gedimmt&ldquo;)"><span class="l">Relais</span><strong class="v" id="p14aRelay">&mdash;</strong></div>
+        <div class="rail-row" title="Leistungsbegrenzung Bezug nach &sect;14a EnWG (EEBUS LPC oder Relais)"><span class="l">&sect;14a Bezug</span><strong class="v" id="eebusLpc">&mdash;</strong></div>
+        <div class="rail-row" title="Mindestleistung Pmin,14a nach BK6-22-300 Anlage 1 Ziffer 4.5.2 (Steuerung mittels EMS)"><span class="l">Mindestleistung</span><strong class="v" id="p14aPmin">&mdash;</strong></div>
+        <div class="rail-row" id="eebusLppRow" title="Leistungsbegrenzung Einspeisung nach &sect;9 EEG (EEBUS LPP)"><span class="l">&sect;9 Einspeisung</span><strong class="v" id="eebusLpp">&mdash;</strong></div>
         <div class="rail-row"><span class="l">Umsetzung</span><strong class="v" id="eebusApplied">&mdash;</strong></div>
         <div class="rail-row" id="eebusDevicesRow" hidden><span class="l">EEBUS-Ger&auml;te</span><strong class="v" id="eebusDevices">&mdash;</strong></div>
       </div>

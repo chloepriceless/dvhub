@@ -321,6 +321,8 @@ Siehe [EEBUS.md](EEBUS.md).
 | POST | `/api/eebus/trust` | Token | `{ ski, name, role: 'grid'\|'device' }` — Gegenstelle vertrauen; höchstens eine Steuerbox (`409 grid_peer_exists`) |
 | DELETE | `/api/eebus/trust?ski=…` | Token | Gegenstelle entkoppeln |
 | POST | `/api/eebus/device-limit` | Token | `{ ski, w, durationS }` — Leistungsgrenze an ein EEBUS-Gerät von Hand (`w: null` hebt sie auf) |
+| GET | `/api/p14a/status` | Token | §14a: aktuelle Grenze (Quelle EEBUS/Relais), Mindestleistung Pmin,14a (n, GZF, Formel), Budget, Aufteilung, Geräte, Relais |
+| PUT | `/api/p14a/devices` | Token | `{ devices: [{ name, kind, powerW, control }] }` — steuerbare Verbrauchseinrichtungen von Hand (`kind`: ladepunkt, waermepumpe, klima, speicher; `control`: ems, direct) |
 
 ### 3.20 Familien-Dashboard *(DVhub Pro)*
 

@@ -650,7 +650,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 0,
       max: 1000000,
-      help: 'Gilt, wenn die Verbindung zur Steuerbox abreißt, bis die Steuerbox einen eigenen Wert schreibt. §14a: mindestens 4200 W.'
+      help: 'Gilt, wenn die Verbindung zur Steuerbox abreißt, bis die Steuerbox einen eigenen Wert schreibt. 0 = automatisch: Mindestleistung Pmin,14a der steuerbaren Verbrauchseinrichtungen (mindestens 4200 W).'
     },
     {
       section: 'system',
@@ -720,7 +720,7 @@ function buildFieldDefinitions() {
       path: 'eebus.devices.forwardGridLimit',
       label: '§14a-Grenze an EEBUS-Geräte weitergeben',
       type: 'boolean',
-      help: 'Teilt eine Bezugsgrenze der Steuerbox anteilig (nach Nennleistung) auf Wallbox und gekoppelte EEBUS-Geräte auf. Der Akku lädt während der Begrenzung nicht aus dem Netz.'
+      help: 'Gekoppelte EEBUS-Geräte bekommen während einer §14a-Begrenzung ihren Anteil als Leistungsgrenze (Aufteilung: System → §14a).'
     },
     {
       section: 'system',
@@ -736,6 +736,93 @@ function buildFieldDefinitions() {
         { value: 'off', label: 'Nicht einplanen' }
       ],
       help: 'Kündigt eine EEBUS-Wärmepumpe einen verschiebbaren Verdichterlauf an, legt DVhub den Start in das angegebene Fenster.'
+    },
+    {
+      section: 'system',
+      group: 'paragraph14a',
+      groupLabel: '§14a – Steuerbare Verbrauchseinrichtungen',
+      groupDescription: 'Netzorientierte Steuerung nach § 14a EnWG (Steuerung mittels EMS): DVhub teilt die Vorgabe des Netzbetreibers auf Wärmepumpe, Wallbox und Stromspeicher auf. Geräteliste und Mindestleistung: Integrationen → §14a.',
+      path: 'paragraph14a.allocation',
+      label: 'Aufteilung der Grenze',
+      type: 'select',
+      options: [
+        { value: 'priority', label: 'Nach Vorrang' },
+        { value: 'proportional', label: 'Anteilig nach Leistung' }
+      ],
+      help: 'Nach Vorrang: Geräte bekommen in der Reihenfolge unten ihre volle Leistung, bis die Grenze erreicht ist. Anteilig: jedes Gerät nach seiner Leistung (Ziffer 4.5.2 Satz 6: nach eigener Maßgabe).'
+    },
+    {
+      section: 'system',
+      group: 'paragraph14a',
+      groupLabel: '§14a – Steuerbare Verbrauchseinrichtungen',
+      groupDescription: 'Netzorientierte Steuerung nach § 14a EnWG (Steuerung mittels EMS): DVhub teilt die Vorgabe des Netzbetreibers auf Wärmepumpe, Wallbox und Stromspeicher auf. Geräteliste und Mindestleistung: Integrationen → §14a.',
+      path: 'paragraph14a.priorityPreset',
+      label: 'Vorrang',
+      type: 'select',
+      options: [
+        { value: 'heat_first', label: 'Wärmepumpe → Klima → Wallbox → Speicher' },
+        { value: 'ev_first', label: 'Wallbox → Wärmepumpe → Klima → Speicher' },
+        { value: 'storage_first', label: 'Speicher → Wärmepumpe → Klima → Wallbox' }
+      ],
+      visibleWhenPath: { path: 'paragraph14a.allocation', equals: 'priority' },
+      help: 'Reihenfolge, in der die Geräte während einer Begrenzung Leistung bekommen.'
+    },
+    {
+      section: 'system',
+      group: 'paragraph14a',
+      groupLabel: '§14a – Steuerbare Verbrauchseinrichtungen',
+      groupDescription: 'Netzorientierte Steuerung nach § 14a EnWG (Steuerung mittels EMS): DVhub teilt die Vorgabe des Netzbetreibers auf Wärmepumpe, Wallbox und Stromspeicher auf. Geräteliste und Mindestleistung: Integrationen → §14a.',
+      path: 'paragraph14a.usePvSurplus',
+      label: 'PV-Überschuss zusätzlich nutzen',
+      type: 'boolean',
+      help: 'Begrenzt ist nur der netzwirksame Bezug (Ziffer 2.3). Mit PV-Überschuss dürfen die Geräte zusätzlich zur Grenze laufen, solange der Strom nicht aus dem Netz kommt.'
+    },
+    {
+      section: 'system',
+      group: 'paragraph14a',
+      groupLabel: '§14a – Steuerbare Verbrauchseinrichtungen',
+      groupDescription: 'Netzorientierte Steuerung nach § 14a EnWG (Steuerung mittels EMS): DVhub teilt die Vorgabe des Netzbetreibers auf Wärmepumpe, Wallbox und Stromspeicher auf. Geräteliste und Mindestleistung: Integrationen → §14a.',
+      path: 'paragraph14a.autoDevices',
+      label: 'Geräte automatisch erkennen',
+      type: 'boolean',
+      help: 'Wallbox (EOS-Steuerung), Stromspeicher (Max. Ladeleistung) und gekoppelte EEBUS-Geräte zählen als steuerbare Verbrauchseinrichtungen.'
+    },
+    {
+      section: 'system',
+      group: 'paragraph14a',
+      groupLabel: '§14a – Steuerbare Verbrauchseinrichtungen',
+      groupDescription: 'Netzorientierte Steuerung nach § 14a EnWG (Steuerung mittels EMS): DVhub teilt die Vorgabe des Netzbetreibers auf Wärmepumpe, Wallbox und Stromspeicher auf. Geräteliste und Mindestleistung: Integrationen → §14a.',
+      path: 'paragraph14a.relay.enabled',
+      label: 'Steuerbox-Relais auswerten',
+      type: 'boolean',
+      help: 'Für FNN-Steuerboxen mit Schaltkontakt: der Kontakt meldet nur „gedimmt“. Dann gilt die Mindestleistung Pmin,14a nach der Formel der BNetzA.'
+    },
+    {
+      section: 'system',
+      group: 'paragraph14a',
+      groupLabel: '§14a – Steuerbare Verbrauchseinrichtungen',
+      groupDescription: 'Netzorientierte Steuerung nach § 14a EnWG (Steuerung mittels EMS): DVhub teilt die Vorgabe des Netzbetreibers auf Wärmepumpe, Wallbox und Stromspeicher auf. Geräteliste und Mindestleistung: Integrationen → §14a.',
+      path: 'paragraph14a.relay.topic',
+      label: 'Relais: MQTT-Thema',
+      type: 'text',
+      visibleWhenPath: { path: 'paragraph14a.relay.enabled', equals: true },
+      placeholder: 'N/<portal-id>/digitalinput/1/InputState',
+      help: 'Thema auf dem MQTT-Broker von DVhub (System → MQTT), z. B. ein Digitaleingang des Victron GX oder ein Shelly-/Tasmota-Eingang. Werte 1/0, on/off, true/false.'
+    },
+    {
+      section: 'system',
+      group: 'paragraph14a',
+      groupLabel: '§14a – Steuerbare Verbrauchseinrichtungen',
+      groupDescription: 'Netzorientierte Steuerung nach § 14a EnWG (Steuerung mittels EMS): DVhub teilt die Vorgabe des Netzbetreibers auf Wärmepumpe, Wallbox und Stromspeicher auf. Geräteliste und Mindestleistung: Integrationen → §14a.',
+      path: 'paragraph14a.relay.activeWhen',
+      label: 'Relais: gedimmt bei',
+      type: 'select',
+      options: [
+        { value: 'high', label: 'Kontakt geschlossen / 1' },
+        { value: 'low', label: 'Kontakt offen / 0' }
+      ],
+      visibleWhenPath: { path: 'paragraph14a.relay.enabled', equals: true },
+      help: 'Je nach Verdrahtung. Der aktuelle Zustand steht unter Integrationen → §14a.'
     },
     {
       section: 'system',
@@ -3528,7 +3615,7 @@ export function createDefaultConfig() {
       trusted: [],
       grid: {
         consumptionNominalMaxW: 0,
-        failsafeConsumptionW: 4200,
+        failsafeConsumptionW: 0,
         failsafeConsumptionDurationS: 7200,
         productionNominalMaxW: 0,
         failsafeProductionW: 0,
@@ -3536,6 +3623,17 @@ export function createDefaultConfig() {
       },
       devices: { forwardGridLimit: true, defaultNominalW: 4200 },
       ohpcf: { mode: 'cheapest' },
+    },
+    // § 14a EnWG (services/paragraph14a): Aufteilung der Vorgabe des
+    // Netzbetreibers (EEBUS oder Relais) auf die steuerbaren Verbrauchs-
+    // einrichtungen. devices = Einträge von Hand (Integrationen → §14a).
+    paragraph14a: {
+      autoDevices: true,
+      devices: [],
+      allocation: 'priority',
+      priorityPreset: 'heat_first',
+      usePvSurplus: true,
+      relay: { enabled: false, topic: '', activeWhen: 'high' },
     },
     meterPollMs: 2000,
     keepalivePulseSec: 60,
@@ -4701,6 +4799,32 @@ function resetLegacyPlaceholderRegisters(raw, warnings) {
   }
 }
 
+// § 14a: Geräte von Hand (Integrationen → §14a). Nur Fallgruppen nach
+// Ziffer 2.4.1 und eine Leistung > 0; Steuerung „ems“ oder „direct“.
+const P14A_DEVICE_KINDS = ['ladepunkt', 'waermepumpe', 'klima', 'speicher'];
+function sanitizeParagraph14aDevices(list, warnings) {
+  if (!Array.isArray(list)) {
+    warnings.push({ path: 'paragraph14a.devices', message: 'keine Liste — verworfen' });
+    return [];
+  }
+  const out = [];
+  list.forEach((d, i) => {
+    const powerW = Math.round(Number(d?.powerW));
+    if (!d || !P14A_DEVICE_KINDS.includes(d.kind) || !(powerW > 0) || powerW > 1_000_000) {
+      warnings.push({ path: `paragraph14a.devices[${i}]`, message: 'ungültiges Gerät — verworfen' });
+      return;
+    }
+    out.push({
+      id: String(d.id || `manual-${i + 1}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || `manual-${i + 1}`,
+      name: String(d.name || '').slice(0, 60),
+      kind: d.kind,
+      powerW,
+      control: d.control === 'direct' ? 'direct' : 'ems',
+    });
+  });
+  return out.slice(0, 50);
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
@@ -4788,6 +4912,9 @@ function sanitizeRawConfig(rawInput) {
   }
   if (hasPath(raw, 'userEnergyPricing')) {
     raw.userEnergyPricing = sanitizeUserEnergyPricing(raw.userEnergyPricing, warnings);
+  }
+  if (hasPath(raw, 'paragraph14a.devices')) {
+    raw.paragraph14a.devices = sanitizeParagraph14aDevices(raw.paragraph14a.devices, warnings);
   }
   resetLegacyPlaceholderRegisters(raw, warnings);
   stripManufacturerManagedFields(raw, warnings);

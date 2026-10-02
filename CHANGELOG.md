@@ -12,6 +12,14 @@ verweist hierher.
 
 ### Neu
 
+- **§14a: Aufteilung und Mindestleistung nach BNetzA-Festlegung** ([docs/EEBUS.md](docs/EEBUS.md)).
+  DVhub berechnet die Mindestleistung Pmin,14a nach Anlage 1 Ziffer 4.5.2 (Gleichzeitigkeitsfaktor,
+  Sonderfall Wärmepumpe/Klima über 11 kW) aus Wallbox, Speicher, EEBUS-Geräten und Geräten von Hand.
+  Vorgaben kommen von der EEBUS-Steuerbox oder dem Relais einer FNN-Steuerbox (MQTT). Das Budget
+  (Grenze + PV-Überschuss) geht nach Vorrang oder anteilig an Wärmepumpe, Wallbox und Speicher; der
+  Speicher lädt jetzt bis zu seinem Anteil aus dem Netz statt gar nicht. Integrationen → §14a zeigt
+  Rechenweg und Geräteliste; Leitstand und Installateurportal zeigen, welche Steuerungen und
+  Abregelungen gelten (DV, §51, Einspeisegrenze, §14a, §9).
 - **EEBUS: §14a-Steuerbox und EEBUS-Geräte** ([docs/EEBUS.md](docs/EEBUS.md)).
   DVhub nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (LPC/LPP mit
   den EEBUS-Zuständen inkl. Failsafe nach 120 s ohne Heartbeat), meldet den

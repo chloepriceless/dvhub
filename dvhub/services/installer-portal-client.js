@@ -153,6 +153,55 @@ function proActive(ctx) {
   try { return ctx.licenseService?.isProActive?.() === true; } catch { return false; }
 }
 
+/**
+ * Welche Steuerungen und Abregelungen für die Anlage gelten — damit der
+ * Installateur im Portal sieht, wer die Anlage gerade begrenzen darf:
+ * Direktvermarktung (Plexlog/LUOX), §51-Negativpreis-Abregelung,
+ * Einspeisebegrenzung (§9 / DV-Teilvorgabe), §14a (EEBUS-Steuerbox oder
+ * Relais, Mindestleistung, steuerbare Verbrauchseinrichtungen).
+ */
+export function buildControlsSummary(ctx, payload = {}) {
+  const cfg = (ctx.getCfg && ctx.getCfg()) || {};
+  const ctrl = ctx.state?.ctrl || {};
+  const p = payload.p14a || null;
+  const eb = payload.eebus?.enabled ? payload.eebus : null;
+  return {
+    dv: {
+      profile: cfg.dvInterface?.profile === 'luox' ? 'luox' : 'plexlog',
+      curtailed: ctrl.forcedOff === true,
+      limitPct: Number.isFinite(ctrl.dvLimitPct) ? ctrl.dvLimitPct : null,
+      until: ctrl.forcedOff ? (ctrl.offUntil || null) : (Number.isFinite(ctrl.dvLimitPct) ? (ctrl.dvLimitUntil || null) : null),
+    },
+    negativePrice: {
+      protection: cfg.dvControl?.negativePriceProtection?.enabled !== false,
+      active: ctrl.negativePriceActive === true,
+    },
+    feedInLimit: {
+      limitW: ctx.feedInLimit?.effective?.() ?? null,
+      sources: ctx.feedInLimit?.sources?.() ?? {},
+      blocked: ctrl.eebusProductionBlock === true,
+    },
+    p14a: p ? {
+      active: p.active === true,
+      source: p.source || null,
+      limitW: p.limitW ?? null,
+      belowPmin: p.belowPmin === true,
+      pminW: p.pminW ?? 0,
+      n: p.n ?? 0,
+      gzf: p.gzf ?? 1,
+      relay: p.relay?.enabled ? { level: p.relay.level ?? null, dimmed: p.relay.level != null && p.relay.level === p.relay.activeWhen } : null,
+      devices: (p.devices || []).map((d) => ({ kind: d.kind, name: d.name || null, powerW: d.powerW, control: d.control, controllable: d.controllable === true })),
+    } : null,
+    eebus: eb ? {
+      status: eb.status || null,
+      gridPeer: !!eb.grid,
+      connected: eb.grid ? eb.grid.connected === true : null,
+      lpc: eb.lpc ? { state: eb.lpc.state, limitW: eb.lpc.limitW ?? null } : null,
+      lpp: eb.lpp ? { state: eb.lpp.state, limitW: eb.lpp.limitW ?? null } : null,
+    } : null,
+  };
+}
+
 export function buildCompactStatus(ctx, now = Date.now()) {
   const payload = (ctx.getCachedRuntimeStatusPayload && ctx.getCachedRuntimeStatusPayload())
     || (ctx.buildFallbackStatusPayload && ctx.buildFallbackStatusPayload(now))
@@ -185,6 +234,7 @@ export function buildCompactStatus(ctx, now = Date.now()) {
     todayRevenueEur: roundEur(payload.costs?.revenueEur),
     todayCostEur: roundEur(payload.costs?.costEur),
     version: (ctx.getAppVersion && ctx.getAppVersion().versionLabel) || null,
+    controls: buildControlsSummary(ctx, payload),
   };
 }
 

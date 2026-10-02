@@ -4028,6 +4028,21 @@ export function createApiRoutes(ctx) {
             })(),
           };
         })(),
+        // § 14a: Mindestleistung, Geräte, aktuelle Begrenzung (services/paragraph14a).
+        p14a: (() => {
+          const p = ctx.p14a?.summary?.();
+          if (!p) return { available: false };
+          return {
+            available: true,
+            active: p.active === true,
+            source: p.source || null,
+            limitW: p.limitW ?? null,
+            pminW: p.pminW ?? 0,
+            n: p.n ?? 0,
+            devices: (p.devices || []).length,
+            relayEnabled: p.relay?.enabled === true,
+          };
+        })(),
         // EEBUS: nur Zustände und Zähler, keine Schlüssel.
         eebus: (() => {
           const st = ctx.eebus?.status?.() || { enabled: false };
@@ -4983,6 +4998,27 @@ export function createApiRoutes(ctx) {
         applied: !!(curve && curve.status === 'ok' && getCfg().optimizer?.inverterEfficiencyAuto !== false),
         curve,
       });
+    }
+
+    // --- § 14a EnWG (services/paragraph14a) ----------------------------------
+    if (url.pathname === '/api/p14a/status' && req.method === 'GET') {
+      if (!ctx.p14a) return json(res, 503, { ok: false, error: 'p14a not available' });
+      ctx.p14a.update();
+      return json(res, 200, { ok: true, ...ctx.p14a.summary() });
+    }
+    if (url.pathname === '/api/p14a/devices' && req.method === 'PUT') {
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      if (!Array.isArray(body?.devices)) return json(res, 400, { ok: false, error: 'devices_must_be_array' });
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.paragraph14a = (next.paragraph14a && typeof next.paragraph14a === 'object') ? next.paragraph14a : {};
+      next.paragraph14a.devices = body.devices;
+      try { ctx.saveAndApplyConfig(next); } catch (e) {
+        return json(res, 500, { ok: false, error: e?.message || 'save_failed' });
+      }
+      pushLog('paragraph14a_devices_saved', { count: body.devices.length }, actorContext(req));
+      ctx.p14a?.update();
+      return json(res, 200, { ok: true, ...(ctx.p14a?.summary() || {}) });
     }
 
     // --- EEBUS (§14a-Steuerbox, EEBUS-Geräte) — services/eebus ---------------

@@ -125,6 +125,15 @@
       category: '§14a-Steuerbox · Wärmepumpe · Wallbox',
       logo: 'EE',
       accent: 'green'
+    },
+    // 2026-10-02: §14a — steuerbare Verbrauchseinrichtungen, Mindestleistung,
+    // Aufteilung. Drawer: p14a-drawer.js, Status aus /api/integrations/status.p14a.
+    {
+      key: 'p14a',
+      label: '§14a',
+      category: 'Steuerbare Verbrauchseinrichtungen · Mindestleistung',
+      logo: '14a',
+      accent: 'green'
     }
   ];
 
@@ -423,6 +432,9 @@
         if (data.status !== 'running') return 'offline';
         if (data.gridPeer && !data.gridConnected) return 'stale';
         return 'online';
+      case 'p14a':
+        if (!data || !data.available || (!data.n && !data.relayEnabled)) return 'disabled';
+        return data.active ? 'stale' : 'online';
       case 'pvstrings':
         if (!data || !data.enabled) return 'disabled';
         if (data.lastError) return 'stale';
@@ -594,6 +606,13 @@
           { label: 'Last send', value: fmtRel(data.lastSampleAt) }
         ];
       }
+      case 'p14a':
+        return [
+          { label: 'Mindestleistung', value: data.pminW ? (data.pminW / 1000).toLocaleString('de-DE', { maximumFractionDigits: 2 }) + ' kW' : '—' },
+          { label: 'SteuVE', value: String(data.n || 0) },
+          { label: 'Bezug', value: data.active ? ('begrenzt (' + (data.source === 'relay' ? 'Relais' : 'EEBUS') + ')') : 'frei' },
+          { label: 'Relais', value: data.relayEnabled ? 'an' : 'aus' }
+        ];
       case 'eebus':
         return [
           { label: 'Steuerbox', value: data.gridPeer ? (data.gridConnected ? 'verbunden' : 'getrennt') : '—' },
@@ -1631,6 +1650,11 @@
     }
     if (key === 'notifications') { inst = getOrCreateDrawer('notifications'); if (inst) inst.open(); return true; }
     if (key === 'vrm') { inst = getOrCreateDrawer('vrm'); if (inst) inst.open(); return true; }
+    if (key === 'p14a') {
+      inst = getOrCreateDrawer('p14a');
+      if (inst) { inst.open(); if (window.DVhubP14a) setTimeout(window.DVhubP14a.load, 0); }
+      return true;
+    }
     if (key === 'eebus') {
       inst = getOrCreateDrawer('eebus');
       if (inst) { inst.open(); if (window.DVhubEebus) setTimeout(window.DVhubEebus.load, 0); }

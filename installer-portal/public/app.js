@@ -200,6 +200,63 @@ async function refreshPairings() {
 }
 
 const fmtW = (w) => w == null ? '–' : `${Math.round(w)} W`;
+const fmtKw = (w) => w == null ? '–' : `${(Number(w) / 1000).toLocaleString('de-DE', { maximumFractionDigits: 2 })} kW`;
+const P14A_KINDS = { ladepunkt: 'Ladepunkt', waermepumpe: 'Wärmepumpe', klima: 'Raumkühlung', speicher: 'Stromspeicher' };
+const LP_STATES = { init: 'Start', unlimited_controlled: 'frei', limited: 'begrenzt', failsafe: 'Failsafe', unlimited_autonomous: 'frei (autonom)', disabled: '–' };
+
+// Welche Steuerungen und Abregelungen für den Kunden gelten (DVhub meldet sie
+// im Status, ältere Versionen nicht — dann bleibt der Block verborgen).
+function renderControls(box, c) {
+  if (!box) return;
+  box.hidden = !c;
+  if (!c) return;
+  const ul = box.querySelector('ul');
+  ul.replaceChildren();
+  const row = (key, text, on = false) => {
+    const li = document.createElement('li');
+    if (on) li.className = 'on';
+    const k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = key;
+    li.append(k, document.createTextNode(text));
+    ul.append(li);
+  };
+  const time = (ts) => ts ? new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : null;
+
+  const dv = c.dv || {};
+  const dvName = dv.profile === 'luox' ? 'LUOX' : 'Plexlog';
+  if (dv.curtailed) row(`Direktvermarktung (${dvName})`, `abgeregelt${dv.until ? ` bis ${time(dv.until)}` : ''}`, true);
+  else if (dv.limitPct != null && dv.limitPct < 100) row(`Direktvermarktung (${dvName})`, `Teilvorgabe ${dv.limitPct} %${dv.until ? ` bis ${time(dv.until)}` : ''}`, true);
+  else row(`Direktvermarktung (${dvName})`, 'Freigabe');
+
+  const np = c.negativePrice || {};
+  row('§51 Negativpreise', np.active ? 'Abregelung aktiv' : (np.protection ? 'Schutz an, nicht aktiv' : 'Schutz aus'), np.active === true);
+
+  const fl = c.feedInLimit || {};
+  if (fl.blocked) row('Einspeisung', 'gesperrt (§9, kein Begrenzer)', true);
+  else if (fl.limitW != null) {
+    const SRC = { dv: 'DV-Teilvorgabe', eebus_lpp: '§9 EEBUS' };
+    const src = Object.keys(fl.sources || {}).map((k) => SRC[k] || k).join(', ');
+    row('Einspeisebegrenzung', `${fmtKw(fl.limitW)}${src ? ` (${src})` : ''}`, true);
+  }
+
+  const p = c.p14a;
+  const eb = c.eebus;
+  if (p || eb) {
+    const via = [];
+    if (eb) via.push(eb.gridPeer ? `EEBUS-Steuerbox ${eb.connected ? 'verbunden' : 'getrennt'}` : 'EEBUS ohne Steuerbox');
+    if (p?.relay) via.push(`Relais ${p.relay.level == null ? 'ohne Signal' : p.relay.dimmed ? 'gedimmt' : 'frei'}`);
+    if (p?.active) row('§14a Bezug', `begrenzt ≤ ${fmtKw(p.limitW)} (${p.source === 'relay' ? 'Relais' : 'EEBUS'})${p.belowPmin ? ` — unter der Mindestleistung ${fmtKw(p.pminW)}!` : ''}`, true);
+    else row('§14a Bezug', `frei${via.length ? ` · ${via.join(', ')}` : ''}`);
+    if (p?.active && via.length) row('§14a Quelle', via.join(', '));
+    if (p && p.n > 0) {
+      row('§14a Mindestleistung', `${fmtKw(p.pminW)} · ${p.n} ${p.n === 1 ? 'SteuVE' : `SteuVE, GZF ${String(p.gzf).replace('.', ',')}`}`);
+      const devs = (p.devices || []).map((d) => `${d.name || P14A_KINDS[d.kind] || d.kind} ${fmtKw(d.powerW)}${d.control === 'direct' ? ' (Direktsteuerung)' : d.controllable ? '' : ' (nicht von DVhub gesteuert)'}`);
+      if (devs.length) row('§14a Geräte', devs.join(', '));
+    }
+    if (eb?.lpp) row('§9 Einspeisung', eb.lpp.limitW != null ? `${LP_STATES[eb.lpp.state] || eb.lpp.state} ≤ ${fmtKw(eb.lpp.limitW)}` : (LP_STATES[eb.lpp.state] || eb.lpp.state), eb.lpp.limitW != null);
+  }
+}
 const fmtEur = (v, sign = false) => v == null ? '–'
   : `${sign && v > 0 ? '+' : ''}${Number(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
 const fmtNum = (v, digits = 0) => v == null ? '–' : Number(v).toLocaleString('de-DE', { maximumFractionDigits: digits });
@@ -350,6 +407,7 @@ function render() {
       }
       yieldEl.hidden = parts2.length === 0;
       yieldEl.textContent = parts2.join('  ·  ');
+      renderControls($('.ap-controls', card), s.controls);
       $('.soc', card).textContent = fmtPct(s.soc);
       $('.bat', card).textContent = fmtW(s.batteryPowerW);
       $('.pv', card).textContent = fmtW(s.pvTotalW);

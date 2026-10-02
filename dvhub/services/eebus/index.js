@@ -21,7 +21,6 @@ import path from 'node:path';
 import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process';
 
 import { createLimitStateMachine } from './limit-state.js';
-import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
 import { readApplianceId } from '../support-tunnel.js';
 
 export const EEBUS_DEFAULT_PORT = 4712;
@@ -65,7 +64,8 @@ export function resolveEebusConfig(cfg) {
       })),
     grid: {
       consumptionNominalMaxW: num(e.grid?.consumptionNominalMaxW, 0),
-      failsafeConsumptionW: num(e.grid?.failsafeConsumptionW, 4200),
+      // 0 = automatisch: Mindestleistung Pmin,14a (services/paragraph14a), mind. 4200 W
+      failsafeConsumptionW: num(e.grid?.failsafeConsumptionW, 0),
       failsafeConsumptionDurationS: num(e.grid?.failsafeConsumptionDurationS, 7200, 7200),
       productionNominalMaxW: num(e.grid?.productionNominalMaxW, 0),
       failsafeProductionW: num(e.grid?.failsafeProductionW, 0),
@@ -80,25 +80,6 @@ export function resolveEebusConfig(cfg) {
       mode: ['cheapest', 'immediate', 'off'].includes(e.ohpcf?.mode) ? e.ohpcf.mode : 'cheapest',
     },
   };
-}
-
-/**
- * §14a-Grenze anteilig auf die steuerbaren Verbraucher verteilen (nach
- * Nennleistung). Der Akku bekommt nichts (er lädt in der Begrenzung nicht aus
- * dem Netz). Rundung auf ganze Watt, die Summe überschreitet die Grenze nie.
- * @param {number} limitW
- * @param {Array<{id:string, nominalW:number}>} consumers
- * @returns {Record<string, number>}
- */
-export function distributeConsumptionLimit(limitW, consumers) {
-  const list = (consumers || []).filter((c) => c && Number(c.nominalW) > 0);
-  const total = list.reduce((s, c) => s + Number(c.nominalW), 0);
-  const out = {};
-  if (!list.length || !(limitW >= 0)) return out;
-  for (const c of list) {
-    out[c.id] = total <= limitW ? Number(c.nominalW) : Math.floor((limitW * Number(c.nominalW)) / total);
-  }
-  return out;
 }
 
 /**
@@ -170,7 +151,7 @@ export function createEebusService(ctx, deps = {}) {
     peers: {},              // ski → { connected, shipId, lastSeen, waitingTrust }
     grid: { lpc: null, lpp: null, lastWriteSki: null },
     devices: {},            // ski → { entities:{lpc,lpp,mpc,ohpcf}, powerW, nominalW, limit, ohpcf }
-    applied: { consumptionLimitW: null, productionLimitW: null, wallboxCapW: null, productionBlock: false },
+    applied: { consumptionLimitW: null, productionLimitW: null, productionBlock: false },
     stderr: [],
     startedAt: null,
     restarts: 0,
@@ -187,6 +168,7 @@ export function createEebusService(ctx, deps = {}) {
   const pending = new Map();
   const deviceLimitCache = new Map(); // entity → { w, at }
   let lastConfigKey = null;
+  let prevConsumptionW = null;
   const energy = loadJson('energy.json') || { importWh: 0, exportWh: 0, lastDailyImportWh: null, lastDailyExportWh: null };
   let lastEnergySave = 0;
 
@@ -194,9 +176,15 @@ export function createEebusService(ctx, deps = {}) {
   const roleOf = (ski) => cfgNow().trusted.find((t) => t.ski === ski)?.role || null;
   const hasGridPeer = () => cfgNow().trusted.some((t) => t.role === 'grid');
 
+  // Failsafe-Vorgabe ohne eigenen Wert: die Mindestleistung nach § 14a
+  // (bei mehreren steuerbaren Verbrauchseinrichtungen mehr als 4,2 kW).
+  function autoFailsafeConsumptionW() {
+    return Math.max(4200, Number(ctx.p14a?.pminW?.()) || 0);
+  }
+
   function makeMachine(kind, c) {
     return kind === 'lpc'
-      ? createLimitStateMachine({ kind, failsafeW: c.grid.failsafeConsumptionW, failsafeDurationS: c.grid.failsafeConsumptionDurationS, now })
+      ? createLimitStateMachine({ kind, failsafeW: c.grid.failsafeConsumptionW || autoFailsafeConsumptionW(), failsafeDurationS: c.grid.failsafeConsumptionDurationS, now })
       // 0 = keine Vorgabe → Nennleistung: ein Abbruch zur Steuerbox darf die
       // PV nicht für Stunden auf null setzen, solange sie selbst nichts schreibt.
       : createLimitStateMachine({ kind, failsafeW: c.grid.failsafeProductionW || c.grid.productionNominalMaxW || defaultProductionNominal(), failsafeDurationS: c.grid.failsafeProductionDurationS, now });
@@ -558,22 +546,44 @@ export function createEebusService(ctx, deps = {}) {
 
   // --- Umsetzung ----------------------------------------------------------------
 
-  function consumers(c, limitActive) {
+  /**
+   * Verbundene EEBUS-Geräte mit LPC — für die §14a-Aufteilung
+   * (services/paragraph14a). Art: mit Verdichter-Ankündigung (OHPCF) eine
+   * Wärmepumpe, sonst die Rolle aus der Kopplung, Vorgabe Wärmepumpe.
+   */
+  function consumptionDevices() {
+    const c = cfgNow();
+    if (!c.devices.forwardGridLimit) return [];
     const list = [];
-    const bc = resolveEvccBridgeConfig(getCfg());
-    if (bc.enabled) list.push({ id: 'wallbox', nominalW: bc.maxChargeW });
-    if (c.devices.forwardGridLimit && limitActive) {
-      for (const [ski, d] of Object.entries(ui.devices)) {
-        if (d.entities.lpc && ui.peers[ski]?.connected) {
-          list.push({ id: `eebus:${ski}`, ski, entity: d.entities.lpc, nominalW: d.nominalW || c.devices.defaultNominalW });
-        }
-      }
+    for (const [ski, d] of Object.entries(ui.devices)) {
+      if (!d.entities.lpc || !ui.peers[ski]?.connected) continue;
+      const trusted = c.trusted.find((t) => t.ski === ski);
+      list.push({
+        id: `eebus:${ski}`,
+        ski,
+        entity: d.entities.lpc,
+        name: trusted?.name || null,
+        kind: d.entities.ohpcf ? 'waermepumpe' : (trusted?.kind || 'waermepumpe'),
+        maxW: d.nominalW || c.devices.defaultNominalW,
+        powerW: d.powerW ?? null,
+      });
     }
     return list;
   }
 
+  /**
+   * Anteile der §14a-Grenze an die Geräte schreiben (id → W, null = frei).
+   * @param {Record<string, number|null>} shares
+   * @param {number|null} untilMs  Ende der Grenze (für die Dauer am Gerät)
+   */
+  function applyConsumptionShares(shares, untilMs) {
+    const list = consumptionDevices();
+    const active = {};
+    for (const d of list) if (shares?.[d.id] != null) active[d.id] = shares[d.id];
+    applyDeviceLimits(active, list.filter((d) => active[d.id] != null), { until: untilMs });
+  }
+
   function apply() {
-    const c = cfgNow();
     machines.lpc.evaluate();
     machines.lpp.evaluate();
     const lpc = machines.lpc.effective();
@@ -594,13 +604,11 @@ export function createEebusService(ctx, deps = {}) {
     }
     ui.applied.consumptionLimitW = consumptionW;
     state.ctrl.eebusConsumptionLimitW = consumptionW;
-
-    const list = consumers(c, consumptionW != null);
-    const shares = consumptionW == null ? {} : distributeConsumptionLimit(consumptionW, list);
-    const wallboxCap = consumptionW == null ? null : (shares.wallbox ?? null);
-    ui.applied.wallboxCapW = wallboxCap;
-    state.ctrl.eebusWallboxCapW = wallboxCap;
-    applyDeviceLimits(shares, list, lpc);
+    state.ctrl.eebusConsumptionLimitUntil = consumptionW == null ? null : (lpc.until ?? null);
+    // Aufteilung auf Wallbox, Speicher und Geräte: services/paragraph14a
+    // (Grenze, Relais, Mindestleistung, PV-Überschuss) — sofort neu rechnen.
+    if (consumptionW !== prevConsumptionW) ctx.p14a?.update?.();
+    prevConsumptionW = consumptionW;
 
     // Einspeisung (LPP)
     const productionW = Number.isFinite(lpp.limitW) ? lpp.limitW : null;
@@ -762,7 +770,7 @@ export function createEebusService(ctx, deps = {}) {
     if (ui.applied.productionLimitW != null && ctx.feedInLimit) {
       Promise.resolve(ctx.feedInLimit.set('eebus_lpp', null)).catch(() => {});
     }
-    ui.applied = { consumptionLimitW: null, productionLimitW: null, wallboxCapW: null, productionBlock: false };
+    ui.applied = { consumptionLimitW: null, productionLimitW: null, productionBlock: false };
     const proc = child;
     if (!proc) return;
     await new Promise((resolve) => {
@@ -839,6 +847,8 @@ export function createEebusService(ctx, deps = {}) {
     reload,
     status,
     summary,
+    consumptionDevices,
+    applyConsumptionShares,
     setPairing,
     setDeviceLimit,
     certPaths,

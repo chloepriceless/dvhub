@@ -30,11 +30,39 @@ DVhub spricht EEBUS (SHIP/SPINE) über den Hilfsprozess **dvhub-eebus**, gebaut 
 
 Es kann genau **eine Steuerbox** gekoppelt sein, Geräte beliebig viele.
 
+## §14a: Aufteilung und Mindestleistung
+
+DVhub ist das Energie-Management-System im Sinne der BNetzA-Festlegung BK6-22-300 (Anlage 1,
+Ziffer 4.4.b „Steuerung mittels EMS“). Einstellungen: **System → §14a**, Geräteliste und Rechenweg:
+**Integrationen → §14a**.
+
+- **Quellen:** die EEBUS-Steuerbox schickt einen Wert. Eine FNN-Steuerbox mit **Relais** meldet nur
+  „gedimmt“ (MQTT-Thema, z. B. Digitaleingang des Victron GX oder ein Shelly-Eingang) — dann gilt die
+  Mindestleistung. Kommen beide, gilt die kleinere Grenze.
+- **Mindestleistung Pmin,14a** (Ziffer 4.5.2, bestätigt vom VDE FNN Hinweis zu Tenorziffer 2f, 04/2025):
+  `4,2 kW + (n − 1) × GZF × 4,2 kW`; mit Wärmepumpen oder Klimaanlagen über 11 kW ersetzt
+  `max(0,4 × ΣP_WP ; 0,4 × ΣP_Klima)` die ersten 4,2 kW. GZF: 0,8 bei zwei SteuVE, je weitere 0,05
+  weniger, ab neun 0,45. Beispiele: Wallbox + Speicher 7,56 kW; mit Wärmepumpe 10,5 kW.
+  - Steuerbare Verbrauchseinrichtungen (SteuVE) sind nur Anlagen über 4,2 kW; mehrere Wärmepumpen bzw.
+    Klimaanlagen zählen je Fallgruppe als eine (Ziffer 2.4.2).
+  - Direkt angesteuerte Anlagen (Ziffer 4.4.a) haben eine eigene Mindestleistung und zählen nicht mit.
+- **Geräte:** automatisch die Wallbox (EOS-Steuerung), der Stromspeicher (Max. Ladeleistung) und
+  gekoppelte EEBUS-Geräte; Anlagen, die DVhub nicht steuert, von Hand. Sie zählen für Pmin,14a.
+- **Budget:** begrenzt ist nur der netzwirksame Bezug (Ziffer 2.3): Grenze + PV-Überschuss
+  (abschaltbar).
+- **Aufteilung** (Ziffer 4.5.2 Satz 6, nach eigener Maßgabe): nach Vorrang (Standard: Wärmepumpe →
+  Klima → Wallbox → Speicher) oder anteilig nach Leistung. Der Speicher lädt höchstens mit seinem
+  Anteil aus dem Netz (Grid-Setpoint, der Haushalt zählt mit), die Wallbox bekommt ihren Anteil als
+  Obergrenze, EEBUS-Geräte als LPC-Grenze.
+- Liegt die Vorgabe unter Pmin,14a, setzt DVhub sie trotzdem um (Ziffer 4.6) und meldet es
+  (`paragraph14a_below_minimum`, Leitstand, Installateurportal).
+- Der Failsafe-Vorgabewert der Bezugsgrenze ist ohne eigenen Wert Pmin,14a (mindestens 4,2 kW).
+
 ## Was DVhub mit den Grenzen macht
 
 | Vorgabe | Umsetzung |
 |---|---|
-| Bezugsgrenze (LPC) | Akku lädt nicht aus dem Netz (Sollwert bleibt beim Eigenverbrauch). Wallbox und gekoppelte EEBUS-Geräte teilen sich die Grenze anteilig nach Nennleistung; unter dem Mindeststrom lädt die Wallbox nicht. |
+| Bezugsgrenze (LPC) | Aufteilung auf Wärmepumpe, Wallbox und Speicher wie oben (§14a); unter dem Mindeststrom lädt die Wallbox nicht. |
 | Einspeisegrenze (LPP) | Einspeisebegrenzer des Wechselrichters (Victron `MaxFeedInPower`, Reg. 2706; der vorherige Wert wird gesichert und zurückgeschrieben). Gilt gleichzeitig eine Teilvorgabe des Direktvermarkters (LUOX), gilt die kleinere. Ohne Begrenzer wird die Einspeisung gesperrt. |
 | Netzanschlusspunkt (MGCP) | Leistung (Bezug positiv) und Zählerstände Bezug/Einspeisung, die DVhub seit dem Einschalten selbst zählt. |
 

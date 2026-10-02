@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, SIDECAR_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
+import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, buildControlsSummary, SIDECAR_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
 
 function tmpDir(withApplianceId = true) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-ipc-'));
@@ -231,6 +231,30 @@ test('buildCompactStatus extrahiert die Portal-Felder aus dem Runtime-Snapshot',
   assert.equal(s.version, 'v1.0.6');
   assert.equal(s.alarmsActive, 0);   // alarms: null → konfiguriert=false
   assert.equal(s.emergencyStop, false);
+});
+
+test('Steuerungen fürs Portal: DV, §51, Einspeisegrenze, §14a, EEBUS', () => {
+  const ctx = {
+    getCfg: () => ({ dvInterface: { profile: 'luox' }, dvControl: { negativePriceProtection: { enabled: true } } }),
+    state: { ctrl: { forcedOff: false, dvLimitPct: 60, dvLimitUntil: 1700, negativePriceActive: true } },
+    feedInLimit: { effective: () => 5000, sources: () => ({ dv: 6000, eebus_lpp: 5000 }) },
+  };
+  const c = buildControlsSummary(ctx, {
+    p14a: {
+      active: true, source: 'relay', limitW: 7560, pminW: 7560, n: 2, gzf: 0.8,
+      relay: { enabled: true, level: 'high', activeWhen: 'high' },
+      devices: [{ id: 'wallbox', name: 'Wallbox', kind: 'ladepunkt', powerW: 11000, control: 'ems', controllable: true, source: 'auto' }],
+    },
+    eebus: { enabled: true, status: 'running', grid: { connected: true }, lpc: { state: 'limited', limitW: 4200 }, lpp: { state: 'unlimited_controlled', limitW: null } },
+  });
+  assert.deepEqual(c.dv, { profile: 'luox', curtailed: false, limitPct: 60, until: 1700 });
+  assert.deepEqual(c.negativePrice, { protection: true, active: true });
+  assert.equal(c.feedInLimit.limitW, 5000);
+  assert.equal(c.p14a.pminW, 7560);
+  assert.deepEqual(c.p14a.relay, { level: 'high', dimmed: true });
+  assert.deepEqual(c.p14a.devices, [{ kind: 'ladepunkt', name: 'Wallbox', powerW: 11000, control: 'ems', controllable: true }]);
+  assert.equal(c.eebus.connected, true);
+  assert.equal(buildControlsSummary({ getCfg: () => ({}) }, {}).p14a, null, 'ohne §14a-Dienst: null');
 });
 
 // ── Review-Fixes 2026-09-27 ──────────────────────────────────────────────────

@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
 import {
-  createEebusService, resolveEebusConfig, distributeConsumptionLimit, planOhpcfStart, gridImportPositiveW,
+  createEebusService, resolveEebusConfig, planOhpcfStart, gridImportPositiveW,
 } from '../services/eebus/index.js';
 
 const SKI_BOX = 'a'.repeat(40);
@@ -78,7 +78,7 @@ function setup({ eebus = {}, extraCfg = {}, withBinary = true } = {}) {
     clearTimeout: () => {},
   });
   return {
-    svc, state, feedIn, logs, children, dir, timers,
+    svc, state, ctx, feedIn, logs, children, dir, timers,
     setCfg: (next) => { cfg = next(cfg); },
     advance: (ms) => { t += ms; },
     child: () => children.at(-1),
@@ -89,7 +89,7 @@ test('Konfiguration: Standardwerte, ungültige SKIs fallen raus, Failsafe-Dauer 
   const c = resolveEebusConfig({ eebus: { enabled: true, trusted: [{ ski: 'xyz' }, { ski: SKI_BOX.toUpperCase(), role: 'grid' }], grid: { failsafeConsumptionDurationS: 60 } } });
   assert.equal(c.port, 4712);
   assert.deepEqual(c.trusted.map((t) => [t.ski, t.role]), [[SKI_BOX, 'grid']]);
-  assert.equal(c.grid.failsafeConsumptionW, 4200);
+  assert.equal(c.grid.failsafeConsumptionW, 0, '0 = automatisch (Pmin,14a)');
   assert.equal(c.grid.failsafeConsumptionDurationS, 7200);
   assert.equal(c.ohpcf.mode, 'cheapest');
 });
@@ -123,8 +123,10 @@ test('Start: Prozess mit Port, Zertifikat und Vertrauensliste; ready → Netzsei
   assert.equal(cfgCmds[0].failsafe_duration_s, 7200);
 });
 
-test('§14a: Grenze der Steuerbox sperrt Akku-Netzladen und teilt sich auf Wallbox und Wärmepumpe auf', async () => {
-  const s = setup({ extraCfg: { optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000 } } });
+test('§14a: Grenze der Steuerbox geht an den §14a-Dienst, Anteile an die Wärmepumpe', async () => {
+  const s = setup();
+  let updates = 0;
+  s.ctx.p14a = { update: () => { updates += 1; } };
   await s.svc.start();
   const c = s.child();
   c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
@@ -137,8 +139,13 @@ test('§14a: Grenze der Steuerbox sperrt Akku-Netzladen und teilt sich auf Wallb
   c.emitEvent({ ev: 'grid_limit', uc: 'lpc', w: 7000, duration_s: 7200, active: true });
   await settle();
   assert.equal(s.state.ctrl.eebusConsumptionLimitW, 7000);
-  // 11000 + 3000 = 14000 nominal, 7000 Grenze → 5500 / 1500
-  assert.equal(s.state.ctrl.eebusWallboxCapW, 5500);
+  assert.ok(s.state.ctrl.eebusConsumptionLimitUntil > 0, 'Ende der Grenze für die Dauer am Gerät');
+  assert.ok(updates >= 1, '§14a-Dienst rechnet sofort neu');
+
+  const devices = s.svc.consumptionDevices();
+  assert.deepEqual(devices.map((d) => [d.id, d.kind, d.maxW]), [[`eebus:${SKI_HP}`, 'waermepumpe', 3000]]);
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 1500 }, s.state.ctrl.eebusConsumptionLimitUntil);
+  await settle();
   const dl = c.commands.find((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1');
   assert.ok(dl, 'Grenze an die Wärmepumpe');
   assert.equal(dl.w, 1500);
@@ -150,7 +157,8 @@ test('§14a: Grenze der Steuerbox sperrt Akku-Netzladen und teilt sich auf Wallb
   c.emitEvent({ ev: 'grid_limit', uc: 'lpc', w: 7000, duration_s: 7200, active: false });
   await settle();
   assert.equal(s.state.ctrl.eebusConsumptionLimitW, null);
-  assert.equal(s.state.ctrl.eebusWallboxCapW, null);
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: null }, null);
+  await settle();
   const release = c.commands.filter((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1').at(-1);
   assert.equal(release.active, false, 'Gerätegrenze wird zurückgenommen');
 });
@@ -262,9 +270,6 @@ test('Verdichterlauf: Start im günstigsten Fenster', async () => {
 });
 
 test('Hilfsfunktionen: Aufteilung, Startplanung, Vorzeichen am Netzanschlusspunkt', () => {
-  assert.deepEqual(distributeConsumptionLimit(10000, [{ id: 'a', nominalW: 4000 }, { id: 'b', nominalW: 2000 }]), { a: 4000, b: 2000 });
-  assert.deepEqual(distributeConsumptionLimit(3000, [{ id: 'a', nominalW: 4000 }, { id: 'b', nominalW: 2000 }]), { a: 2000, b: 1000 });
-  assert.deepEqual(distributeConsumptionLimit(3000, []), {});
   assert.equal(planOhpcfStart({ earliest_start_s: 120, latest_end_s: 3600, min_duration_s: 900 }, [], 0), 120);
   assert.equal(gridImportPositiveW({ meter: { grid_total_w: -500 } }, { gridPositiveMeans: 'feed_in' }), 500);
   assert.equal(gridImportPositiveW({ meter: { grid_total_w: -500 } }, { gridPositiveMeans: 'grid_import' }), -500);
@@ -395,4 +400,14 @@ test('LPP ohne Begrenzer: Sperre nur, wenn die Grenze unter der Anlagenleistung 
   c.emitEvent({ ev: 'grid_limit', uc: 'lpp', w: -4200, duration_s: 0, active: true });
   await settle();
   assert.equal(s.state.ctrl.eebusProductionBlock, true);
+});
+
+test('Failsafe-Vorgabe automatisch: Mindestleistung Pmin,14a aus dem §14a-Dienst', async () => {
+  const s = setup();
+  s.ctx.p14a = { pminW: () => 7560, update: () => {} };
+  await s.svc.start();
+  s.child().emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  await settle();
+  assert.equal(s.svc._machines().lpc.snapshot().failsafeW, 7560);
+  assert.ok(s.child().commands.some((x) => x.cmd === 'grid_config' && x.uc === 'lpc' && x.failsafe_w === 7560));
 });

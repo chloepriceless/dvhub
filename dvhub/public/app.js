@@ -2171,14 +2171,17 @@ function renderDashboardStatus(status) {
   });
 
   safeRender('dashboard.eebus', () => {
-    // §14a / EEBUS: Vorgaben der Steuerbox (LPC Bezug, LPP Einspeisung) und
-    // ihre Umsetzung. Karte nur sichtbar, wenn EEBUS eingeschaltet ist.
-    const eb = status.eebus;
+    // §14a / §9: Vorgaben des Netzbetreibers — EEBUS-Steuerbox (LPC Bezug, LPP
+    // Einspeisung) und/oder Relais einer FNN-Steuerbox — und ihre Umsetzung
+    // (services/paragraph14a). Sichtbar, sobald EEBUS oder das Relais aktiv ist.
+    const eb = status.eebus?.enabled ? status.eebus : null;
+    const p = status.p14a || null;
+    const relayOn = p?.relay?.enabled === true;
     const card = document.getElementById('eebusCard');
     if (!card) return;
-    card.hidden = !eb?.enabled;
-    if (!eb?.enabled) return;
-    const kw = (w) => `${(Number(w) / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} kW`;
+    card.hidden = !eb && !relayOn && !p?.active;
+    if (card.hidden) return;
+    const kw = (w) => `${(Number(w) / 1000).toLocaleString('de-DE', { maximumFractionDigits: 2 })} kW`;
     const STATE = {
       init: 'Start', unlimited_controlled: 'frei', limited: 'begrenzt',
       failsafe: 'Failsafe', unlimited_autonomous: 'frei (autonom)', disabled: '-',
@@ -2190,39 +2193,75 @@ function renderDashboardStatus(status) {
       const until = lp.until ? ` bis ${fmtHm(lp.until)}` : '';
       return [`${label} ≤ ${kw(lp.limitW)}${until}`, lp.state === 'failsafe' ? 'danger' : 'warn'];
     };
-    const failsafe = eb.lpc?.state === 'failsafe' || eb.lpp?.state === 'failsafe';
+    const failsafe = eb && (eb.lpc?.state === 'failsafe' || eb.lpp?.state === 'failsafe');
     let chip = ['info', 'ohne Steuerbox'];
-    if (eb.status === 'error') chip = ['danger', 'Fehler'];
-    else if (eb.status === 'not_installed') chip = ['warn', 'nicht installiert'];
-    else if (eb.status !== 'running') chip = ['warn', 'startet'];
+    if (eb?.status === 'error') chip = ['danger', 'Fehler'];
+    else if (eb?.status === 'not_installed') chip = ['warn', 'nicht installiert'];
+    else if (eb && eb.status !== 'running') chip = ['warn', 'startet'];
     else if (failsafe) chip = ['danger', 'Failsafe'];
-    else if (eb.grid) chip = eb.grid.connected ? ['ok', 'verbunden'] : ['warn', 'getrennt'];
+    else if (p?.active) chip = ['warn', p.source === 'relay' ? 'Relais: gedimmt' : 'begrenzt'];
+    else if (eb?.grid) chip = eb.grid.connected ? ['ok', 'verbunden'] : ['warn', 'getrennt'];
+    else if (relayOn) chip = p.relay.level == null ? ['warn', 'Relais unbekannt'] : ['ok', 'Relais frei'];
     const chipEl = document.getElementById('eebusChip');
     if (chipEl) chipEl.className = `chip sm ${chip[0]}`;
     setText('eebusChipText', chip[1]);
 
     let headline = ['frei', 'ok'];
-    if (!eb.grid) headline = ['keine Steuerbox', 'dim'];
-    else if (eb.lpc?.limitW != null) headline = [`Bezug ≤ ${kw(eb.lpc.limitW)}`, failsafe ? 'danger' : 'warn'];
-    else if (eb.lpp?.limitW != null) headline = [`Einspeisung ≤ ${kw(eb.lpp.limitW)}`, failsafe ? 'danger' : 'warn'];
+    if (p?.active) headline = [`Bezug ≤ ${kw(p.limitW)}`, failsafe ? 'danger' : 'warn'];
+    else if (eb?.lpp?.limitW != null) headline = [`Einspeisung ≤ ${kw(eb.lpp.limitW)}`, failsafe ? 'danger' : 'warn'];
+    else if (!eb?.grid && !relayOn) headline = ['keine Steuerbox', 'dim'];
     setText('eebusHeadline', headline[0], headline[1]);
 
-    setText('eebusGrid', eb.grid ? `${eb.grid.name || 'gekoppelt'}${eb.grid.connected ? '' : ' · getrennt'}` : 'nicht gekoppelt',
-      eb.grid ? (eb.grid.connected ? 'ok' : 'warn') : 'dim');
-    setText('eebusLpc', ...lpText(eb.grid ? eb.lpc : null));
-    setText('eebusLpp', ...lpText(eb.grid ? eb.lpp : null));
+    const gridRow = document.getElementById('eebusGridRow');
+    if (gridRow) gridRow.hidden = !eb;
+    if (eb) {
+      setText('eebusGrid', eb.grid ? `${eb.grid.name || 'gekoppelt'}${eb.grid.connected ? '' : ' · getrennt'}` : 'nicht gekoppelt',
+        eb.grid ? (eb.grid.connected ? 'ok' : 'warn') : 'dim');
+    }
+    const relayRow = document.getElementById('p14aRelayRow');
+    if (relayRow) relayRow.hidden = !relayOn;
+    if (relayOn) {
+      const lvl = p.relay.level;
+      const dimmed = lvl != null && lvl === p.relay.activeWhen;
+      setText('p14aRelay', lvl == null ? 'kein Signal' : dimmed ? 'gedimmt' : 'frei', lvl == null ? 'warn' : dimmed ? 'warn' : 'ok');
+    }
 
-    const a = eb.applied || {};
+    // §14a Bezug: die geltende Grenze (EEBUS oder Relais), sonst der EEBUS-Zustand.
+    if (p?.active) {
+      const until = p.source === 'eebus' && eb?.lpc?.until ? ` bis ${fmtHm(eb.lpc.until)}` : '';
+      setText('eebusLpc', `≤ ${kw(p.limitW)}${until} (${p.source === 'relay' ? 'Relais' : 'EEBUS'})`, failsafe ? 'danger' : 'warn');
+    } else {
+      setText('eebusLpc', ...(eb?.grid ? lpText(eb.lpc) : ['frei', 'ok']));
+    }
+    if (p?.belowPmin) {
+      setText('p14aPmin', `${kw(p.pminW)} — Vorgabe liegt darunter`, 'danger');
+    } else if (p?.n > 0) {
+      setText('p14aPmin', `${kw(p.pminW)} · ${p.n} ${p.n === 1 ? 'Gerät' : `Geräte, GZF ${String(p.gzf).replace('.', ',')}`}`);
+    } else {
+      setText('p14aPmin', 'keine SteuVE', 'dim');
+    }
+    const lppRow = document.getElementById('eebusLppRow');
+    if (lppRow) lppRow.hidden = !eb;
+    if (eb) setText('eebusLpp', ...lpText(eb.grid ? eb.lpp : null));
+
+    const NAMES = { wallbox: 'Wallbox', speicher: 'Akku' };
     const parts = [];
-    if (a.consumptionLimitW != null) parts.push('Akku lädt nicht aus dem Netz');
-    if (a.wallboxCapW != null) parts.push(`Wallbox ≤ ${kw(a.wallboxCapW)}`);
+    if (p?.active) {
+      for (const d of p.devices || []) {
+        if (!d.controllable) continue;
+        const w = p.shares?.[d.id];
+        if (w == null) continue;
+        parts.push(`${NAMES[d.id] || d.name || 'Gerät'} ${w > 0 ? `≤ ${kw(w)}` : 'aus dem Netz gesperrt'}`);
+      }
+    }
+    const a = eb?.applied || {};
     if (a.productionBlock) parts.push('Einspeisung gesperrt');
     else if (a.productionLimitW != null) parts.push(`Einspeisebegrenzer ${kw(a.productionLimitW)}`);
     setText('eebusApplied', parts.length ? parts.join(' · ') : 'keine Eingriffe', parts.length ? 'warn' : 'dim');
 
     const devRow = document.getElementById('eebusDevicesRow');
-    if (devRow) devRow.hidden = !(eb.devices?.total > 0);
-    if (eb.devices?.total > 0) setText('eebusDevices', `${eb.devices.connected} von ${eb.devices.total} verbunden`);
+    if (devRow) devRow.hidden = !(eb?.devices?.total > 0);
+    if (eb?.devices?.total > 0) setText('eebusDevices', `${eb.devices.connected} von ${eb.devices.total} verbunden`);
   });
 
   safeRender('dashboard.meter-flow', () => {

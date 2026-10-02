@@ -286,6 +286,12 @@ input::placeholder { color:var(--text-dim); }
 .ap-license.lic-none { color:var(--warn); }
 .ap-sizewarn { font-size:13px; margin:6px 0 0; color:var(--danger); }
 .ap-yield { font-size:13px; color:var(--text-dim); margin:8px 0 0; }
+.ap-controls { margin:10px 0 0; font-size:13px; }
+.ap-controls-head { margin:0 0 4px; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-dim); }
+.ap-controls ul { list-style:none; margin:0; padding:0; display:grid; gap:3px; }
+.ap-controls li { color:var(--text); }
+.ap-controls li .k { color:var(--text-dim); margin-right:6px; }
+.ap-controls li.on { color:var(--warn); }
 
 /* Fehlerprotokoll je Anlage */
 .ap-errors { margin-top: .6rem; max-height: 26rem; overflow: auto; border-top: 1px solid var(--line, #ddd); padding-top: .5rem; }

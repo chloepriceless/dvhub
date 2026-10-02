@@ -78,6 +78,7 @@ import { createModbusServer } from './modbus-server.js';
 import { createDvLimitController } from './dv-interface-luox.js';
 import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
 import { createEebusService } from './services/eebus/index.js';
+import { createParagraph14aService } from './services/paragraph14a/index.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
 // T-CROSSCHECK (2026-07-25): Zweitquellen-Kreuzprobe gegen den MQTT-Dienst der
@@ -700,6 +701,7 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     userEnergyPricing: ctx.userEnergyPricingSummary(),
     epex: { ...state.epex, summary: epex.epexNowNext() },
     eebus: ctx.eebus?.summary?.() ?? null,
+    p14a: ctx.p14a?.summary?.() ?? null,
     telemetry: {
       ...runtimeSnapshot.telemetry,
       historyImport: runtimeSnapshot.historyImport
@@ -1343,8 +1345,8 @@ const eosEvccBridge = createEosEvccBridge({
   },
   isProActive: () => ctx.licenseService?.isProActive?.() !== false,
   isPaused: () => state.ctrl?.discretionaryWritesPaused === true,
-  // §14a: Anteil der Steuerbox-Grenze für die Wallbox (services/eebus).
-  getGridCapW: () => (Number.isFinite(state.ctrl?.eebusWallboxCapW) ? state.ctrl.eebusWallboxCapW : null),
+  // §14a: Anteil am Budget für die Wallbox (services/paragraph14a).
+  getGridCapW: () => (Number.isFinite(state.ctrl?.p14aWallboxCapW) ? state.ctrl.p14aWallboxCapW : null),
   pushLog: (event, data) => ctx.pushLog?.(event, data),
   // „Sofort laden“ ueberlebt einen Neustart (Update mitten im Laden) — eigene
   // kleine Datei, Laufzeitzustand gehoert nicht in config.json.
@@ -1359,6 +1361,10 @@ ctx.eosEvccBridge = eosEvccBridge;
 // EEBUS (§14a-Steuerbox, EEBUS-Geräte) über den Hilfsprozess dvhub-eebus.
 const eebusService = createEebusService(ctx, { dataDir: DATA_DIR || undefined });
 ctx.eebus = eebusService;
+// § 14a EnWG: Vorgabe des Netzbetreibers (EEBUS oder Steuerbox-Relais) auf
+// Wärmepumpe, Wallbox und Speicher aufteilen, Mindestleistung Pmin,14a.
+const paragraph14aService = createParagraph14aService(ctx);
+ctx.p14a = paragraph14aService;
 
 // Steck-/Ladezustand direkt von OpenEVSE / go-e (alle 15 s) — Quelle für die
 // Steck-Wache und die E-Auto-Kachel, wenn die Wallbox nicht evcc ist.
@@ -2126,6 +2132,7 @@ if (IS_RUNTIME_PROCESS) {
     });
   }
   eebusService.start().catch((err) => pushLog('eebus_start_error', { error: err?.message || String(err) }, 'error'));
+  paragraph14aService.start();
   expireLeaseIntervalId = setInterval(() => {
     try { expireLeaseIfNeeded(); }
     catch (err) { pushLog('expire_lease_interval_error', { error: err?.message ?? String(err) }); }
@@ -2453,6 +2460,7 @@ async function gracefulShutdown(signal) {
   safeSync('pvStrings.stop', () => pvStrings.stop?.());
   safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
   safeSync('eebus.stop', () => { eebusService.stop().catch(() => {}); });
+  safeSync('paragraph14a.stop', () => paragraph14aService.stop());
   safeSync('datenspende.stop', () => ctx.datenspende?.stop?.());
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
