@@ -178,6 +178,20 @@
       "rawSentinelMap": {
         "-1": 32767
       }
+    },
+    "dvFeedInLimitW": {
+      "_comment": "Venus /Settings/CGwacs/MaxFeedInPower (Einspeisegrenze): Register zählt in 100-W-Schritten (Victron-Scalefactor 0.01) → scale 100. -1 = unbegrenzt (rawSentinels). Nur für die LUOX-Teilvorgabe des Direktvermarkters; DVhub sichert den Wert davor und schreibt ihn danach zurück.",
+      "enabled": true,
+      "fc": 6,
+      "address": 2706,
+      "writeType": "int16",
+      "signed": true,
+      "scale": 100,
+      "offset": 0,
+      "wordOrder": "be",
+      "rawSentinels": [
+        -1
+      ]
     }
   },
   "dvControl": {

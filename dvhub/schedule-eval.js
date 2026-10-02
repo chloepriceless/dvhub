@@ -414,6 +414,18 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
+  // LUOX-Teilvorgabe des Direktvermarkters: Einspeisegrenze in W über den
+  // Steuerpunkt dvFeedInLimitW (Victron 2706 MaxFeedInPower). Der Wert vor der
+  // ersten Begrenzung wird gesichert (persistiert) und bei limitW = null
+  // zurückgeschrieben — eine vom Installateur gesetzte Grenze bleibt erhalten.
+  async function applyDvFeedInLimit(limitW) {
+    const steps = limitW == null
+      ? [{ point: 'dvFeedInLimitW', restore: true }]
+      : [{ point: 'dvFeedInLimitW', value: Math.max(0, Math.round(Number(limitW))), saveBefore: true }];
+    await runDvControlSequence(steps);
+    pushLog('dv_feedin_limit_write', { limitW: limitW == null ? 'restore' : limitW });
+  }
+
   async function applyDvVictronControl(feedIn) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
@@ -1756,5 +1768,5 @@ export function createScheduleEvaluator(ctx) {
     // aktiver Deckel am Gerät verfällt über WMaxLimPct_RvrtTms von selbst.
   }
 
-  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, zeroFeedInTick, start, stop };
+  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, applyDvFeedInLimit, zeroFeedInTick, start, stop };
 }

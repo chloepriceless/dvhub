@@ -608,6 +608,33 @@ function buildFieldDefinitions() {
       group: 'general',
       groupLabel: 'Grundsystem',
       groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
+      path: 'dvInterface.profile',
+      label: 'Direktvermarkter-Schnittstelle',
+      type: 'select',
+      options: [
+        { value: 'plexlog', label: 'Plexlog (bisher)' },
+        { value: 'luox', label: 'LUOX / Lumenaza (Belegung 06/2026)' }
+      ],
+      help: 'Registerbelegung, die der Direktvermarkter per Modbus liest und schreibt. LUOX: Einspeisung, Produktion, Referenzleistung, Vorgabe 0–100 % mit 15-min-Watchdog. Wirkt sofort, ohne Neustart.'
+    },
+    {
+      section: 'system',
+      group: 'general',
+      groupLabel: 'Grundsystem',
+      groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
+      path: 'dvInterface.luox.referencePowerW',
+      label: 'LUOX: Referenzleistung (Wp)',
+      type: 'number',
+      min: 0,
+      max: 10000000,
+      visibleWhenPath: { path: 'dvInterface.profile', equals: 'luox' },
+      help: 'Leistung der Anlage ohne Abregelung, Grundlage für Teilvorgaben. 0 = Summe der PV-Anlagen aus den Strompreis-Einstellungen.'
+    },
+    {
+      section: 'system',
+      group: 'general',
+      groupLabel: 'Grundsystem',
+      groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
       path: 'offLeaseMs',
       label: 'OFF Lease (ms)',
       type: 'number',
@@ -3355,6 +3382,10 @@ export function createDefaultConfig() {
     // Non-empty = exact-string allowlist (no CIDR).
     modbusAllowedClients: [],
     offLeaseMs: 8 * 60 * 1000,
+    // Register-Schnittstelle zum Direktvermarkter: 'plexlog' (bisher) oder
+    // 'luox' (LUOX/Lumenaza-Belegung 02.06.2026, dv-interface-luox.js).
+    // referencePowerW 0 = Summe der PV-Anlagen (kWp).
+    dvInterface: { profile: 'plexlog', luox: { referencePowerW: 0 } },
     meterPollMs: 2000,
     keepalivePulseSec: 60,
     gridPositiveMeans: 'feed_in',
@@ -3562,7 +3593,12 @@ export function createDefaultConfig() {
       // Cerbo reg 2704 — AC-side discharge cap (com.victronenergy.settings).
       // 0 = no discharge (hold), positive int = cap in W, -1 (0xFFFF) = unlimited.
       // Same register evcc batteryDischargeControl writes; see docs/research/inverter-control-landscape-eu.csv.
-      maxDischargeW: { enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' }
+      maxDischargeW: { enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
+      // Cerbo reg 2706 — /Settings/CGwacs/MaxFeedInPower, Einspeisegrenze, zählt
+      // in 100-W-Schritten (Victron-Skala 0.01), -1 = unbegrenzt. Nur für die
+      // LUOX-Teilvorgabe des Direktvermarkters (dv-interface-luox.js); der Wert
+      // davor wird gesichert und danach zurückgeschrieben.
+      dvFeedInLimitW: { enabled: true, fc: 6, address: 2706, writeType: 'int16', signed: true, scale: 100, offset: 0, wordOrder: 'be', rawSentinels: [-1] }
     },
     dvControl: {
       enabled: true,

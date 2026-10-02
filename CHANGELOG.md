@@ -10,6 +10,20 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **Direktvermarkter-Schnittstelle umschaltbar: Plexlog oder LUOX/Lumenaza.**
+  Einstellungen → System → „Direktvermarkter-Schnittstelle" (`dvInterface.profile`,
+  Standard `plexlog` = unverändert). Das LUOX-Profil folgt der offiziellen
+  Registerbelegung vom 02.06.2026: getrennte Input-/Holding-Register,
+  Einspeisung (i32), Produktion (u32), Netzbetreiber-Vorgabe (immer 100 %),
+  Referenzleistung (aus den kWp der PV-Anlagen oder fest eingestellt),
+  Vorgabe 0–100 % und Watchdog: 15 min ohne Schreibvorgang → wieder 100 %.
+  Teilvorgaben (1–99 %) begrenzen die Einspeisung über Victron
+  `MaxFeedInPower` (Reg. 2706); der Wert davor wird gesichert und danach
+  zurückgeschrieben. Ohne Begrenzer oder bei Schreibfehlern regelt DVhub
+  sicherheitshalber ganz ab. Wirkt ohne Neustart.
+
 ### Geändert
 
 - **DV-EOS rc1.6:** Die SciPy-freie Eigenverbrauchstabelle ist in EOS jetzt ein

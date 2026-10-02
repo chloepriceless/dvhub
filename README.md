@@ -214,7 +214,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 
 ### Direktvermarktung &amp; Steuerung
 
-- **DV-Modbus-Server** auf Port `1502` (Default `modbusListenPort`) mit FC3/FC4 Read und FC6/FC16 Write — PLEXLOG-kompatibel *(DVhub Pro — die DV-Schnittstelle; ohne Lizenz startet der Server nicht. Der Victron-Modbus-CLIENT + Steuerpfad unten bleiben frei.)*
+- **DV-Modbus-Server** auf Port `1502` (Default `modbusListenPort`) mit FC3/FC4 Read und FC6/FC16 Write — Registerbelegung umschaltbar (`dvInterface.profile`): **PLEXLOG-kompatibel** (Standard) oder **LUOX/Lumenaza** (Belegung 06/2026: Einspeisung, Produktion, Referenzleistung, Vorgabe 0–100 % inkl. Teilvorgaben über die Victron-Einspeisegrenze, 15-min-Watchdog) *(DVhub Pro — die DV-Schnittstelle; ohne Lizenz startet der Server nicht. Der Victron-Modbus-CLIENT + Steuerpfad unten bleiben frei.)*
 - **LAN-only-Zugriffsschutz** für den Modbus-Server: nur Loopback + RFC1918 (oder eine explizite `modbusAllowedClients`-Allowlist); fremde Clients werden sofort getrennt und protokolliert
 - **DV-Signalerkennung** mit Lease-Logik (`offLeaseMs`) und automatischer, sicherer Rückkehr in Freigabe nach Ablauf
 - **Victron-Steuerung** für Grid Setpoint, Charge Current, Min SOC, Max Discharge sowie die DC-/AC-Einspeise-Flags (`feedExcessDcPv`, `dontFeedExcessAcPv`)

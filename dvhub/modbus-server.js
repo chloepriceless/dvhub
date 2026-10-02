@@ -4,6 +4,9 @@
 
 import net from 'node:net';
 import { u16 } from './server-utils.js';
+import {
+  dvInterfaceProfile, luoxInputRegisters, luoxHoldingRegisters, readWindow, luoxApplyWrite,
+} from './dv-interface-luox.js';
 
 export function createModbusServer(ctx) {
   const { state, getCfg, pushLog } = ctx;
@@ -96,6 +99,8 @@ export function createModbusServer(ctx) {
 
     ctx.expireLeaseIfNeeded();
 
+    if (dvInterfaceProfile(getCfg()) === 'luox') return processLuoxFrame(frame, remote, { tid, unit, fc, len });
+
     if (fc === 3 || fc === 4) {
       if (len < 6) return buildException(tid, unit, fc, 3);
       const addr = frame.readUInt16BE(8);
@@ -145,6 +150,81 @@ export function createModbusServer(ctx) {
     }
 
     return buildException(tid, unit, fc, 1);
+  }
+
+  // LUOX/Lumenaza: getrennte Input- (FC4) und Holding-Register (FC3/6/16),
+  // Belegung und Semantik in dv-interface-luox.js.
+  function writeAck(tid, unit, fc, addr, qtyOrValue) {
+    const ack = Buffer.alloc(12);
+    ack.writeUInt16BE(tid, 0);
+    ack.writeUInt16BE(0, 2);
+    ack.writeUInt16BE(6, 4);
+    ack.writeUInt8(unit, 6);
+    ack.writeUInt8(fc, 7);
+    ack.writeUInt16BE(addr, 8);
+    ack.writeUInt16BE(qtyOrValue, 10);
+    return ack;
+  }
+
+  function regsResponse(tid, unit, fc, regs) {
+    const out = Buffer.alloc(9 + regs.length * 2);
+    out.writeUInt16BE(tid, 0);
+    out.writeUInt16BE(0, 2);
+    out.writeUInt16BE(3 + regs.length * 2, 4);
+    out.writeUInt8(unit, 6);
+    out.writeUInt8(fc, 7);
+    out.writeUInt8(regs.length * 2, 8);
+    regs.forEach((v, i) => out.writeUInt16BE(v, 9 + i * 2));
+    return out;
+  }
+
+  function processLuoxFrame(frame, remote, { tid, unit, fc, len }) {
+    const luox = (state.dvLuox ??= { setpointPct: 100, watchdog: [0, 0], watchdogAt: null });
+    if (fc === 3 || fc === 4) {
+      if (len < 6) return buildException(tid, unit, fc, 3);
+      const addr = frame.readUInt16BE(8);
+      const qty = frame.readUInt16BE(10);
+      if (qty < 1 || qty > 125) return buildException(tid, unit, fc, 3);
+      const area = fc === 4 ? luoxInputRegisters(state, getCfg()) : luoxHoldingRegisters(luox);
+      const regs = readWindow(area, addr, qty);
+      rememberModbusQuery({ remote, fc, addr, qty, sample: regs.slice(0, 8) });
+      return regsResponse(tid, unit, fc, regs);
+    }
+    if (fc !== 6 && fc !== 16) return buildException(tid, unit, fc, 1);
+
+    let addr; let values;
+    if (fc === 6) {
+      if (len < 6) return buildException(tid, unit, fc, 3);
+      addr = frame.readUInt16BE(8);
+      values = [frame.readUInt16BE(10)];
+    } else {
+      if (len < 7) return buildException(tid, unit, fc, 3);
+      addr = frame.readUInt16BE(8);
+      const qty = frame.readUInt16BE(10);
+      const bc = frame.readUInt8(12);
+      if (bc !== qty * 2 || 13 + bc > 6 + len) return buildException(tid, unit, fc, 3);
+      values = [];
+      for (let i = 0; i < qty; i++) values.push(frame.readUInt16BE(13 + i * 2));
+    }
+    const change = luoxApplyWrite(luox, addr, values);
+    if (change.error) {
+      pushLog('modbus_luox_rejected', { remote, fc, addr, values });
+      return buildException(tid, unit, fc, change.error);
+    }
+    // Watchdog zuerst: ein Schreibvorgang über Register 2–4 verlängert die
+    // Frist, bevor die Vorgabe wirkt.
+    if (change.watchdog) {
+      luox.watchdog = change.watchdog;
+      ctx.luoxWatchdogRefresh();
+    }
+    if (change.setpointPct !== undefined) {
+      luox.setpointPct = change.setpointPct;
+      ctx.setDvLimitPct(change.setpointPct, `luox_holding2_${change.setpointPct}`);
+    }
+    pushLog(fc === 6 ? 'modbus_fc6' : 'modbus_fc16', {
+      remote, addr, values, profile: 'luox', setpointPct: luox.setpointPct, forcedOff: state.ctrl.forcedOff,
+    });
+    return fc === 6 ? frame.subarray(0, 12) : writeAck(tid, unit, 16, addr, values.length);
   }
 
   function start() {

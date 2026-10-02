@@ -75,6 +75,7 @@ import {
 // HTTP-Server zu booten (server-utils.js ist bewusst importfrei).
 import { atomicWriteControlState } from './control-state-io.js';
 import { createModbusServer } from './modbus-server.js';
+import { createDvLimitController } from './dv-interface-luox.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
 // T-CROSSCHECK (2026-07-25): Zweitquellen-Kreuzprobe gegen den MQTT-Dienst der
@@ -1037,12 +1038,15 @@ function expireLeaseIfNeeded() {
       source: 'direktvermarkter'
     }));
     // feedExcessDcPv: nächster evaluateSchedule()-Lauf setzt den Schedule-Zustand
+    if (state.dvLuox) state.dvLuox.setpointPct = 100;
   }
+  // LUOX-Teilvorgabe: Watchdog 15 min nicht beschrieben → wieder 100 %.
+  dvLimit.expireIfNeeded();
 }
 
-function setForcedOff(reason) {
+function setForcedOff(reason, { until } = {}) {
   state.ctrl.forcedOff = true;
-  state.ctrl.offUntil = Date.now() + cfg.offLeaseMs;
+  state.ctrl.offUntil = Number.isFinite(until) ? until : Date.now() + cfg.offLeaseMs;
   state.ctrl.lastSignal = reason;
   state.ctrl.updatedAt = Date.now();
   pushLog('ctrl_off', { reason, offUntil: new Date(state.ctrl.offUntil).toISOString() });
@@ -1071,6 +1075,19 @@ function clearForcedOff(reason) {
   // feedExcessDcPv: nächster evaluateSchedule()-Lauf setzt den Schedule-Zustand
 }
 
+// LUOX/Lumenaza: Vorgabe 0–100 % mit 15-min-Watchdog (dv-interface-luox.js).
+const dvLimit = createDvLimitController({
+  state,
+  getCfg: () => cfg,
+  setForcedOff,
+  clearForcedOff,
+  applyDvFeedInLimit: (limitW) => ctx.applyDvFeedInLimit?.(limitW),
+  pushLog,
+  writeControlEvent: (event) => telemetrySafeWrite(() => telemetryStore.writeControlEvent(event)),
+});
+const setDvLimitPct = dvLimit.setDvLimitPct;
+const luoxWatchdogRefresh = dvLimit.watchdogRefresh;
+
 function controlValue() {
   expireLeaseIfNeeded();
   return state.ctrl.forcedOff ? 0 : 1;
@@ -1091,6 +1108,8 @@ const ctx = {
   setForcedOff,
   clearForcedOff,
   expireLeaseIfNeeded,
+  setDvLimitPct,
+  luoxWatchdogRefresh,
   persistControlState,
   get db() { return dbPool; }, // lazy getter — dbPool set during createTelemetryStoreIfEnabled()
 };
@@ -1132,6 +1151,7 @@ const mab = createMarketAutomationBuilder(ctx);
 ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRules;
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
+ctx.applyDvFeedInLimit = scheduler.applyDvFeedInLimit;
 ctx.applyControlTarget = scheduler.applyControlTarget;
 // Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
 // MQTT-Command-Subscriber gehen durch denselben geprüften Pfad.
