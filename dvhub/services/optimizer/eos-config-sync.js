@@ -75,6 +75,7 @@ function isGridArbitrageLicensed(cfg) {
 
 export const EOS_MEASUREMENT_HISTORIC_HOURS = 48;
 export const EOS_AUTOSAVE_INTERVAL_SEC = null;
+export const EOS_FITNESS_CACHE_MAX_ENTRIES = 0;
 export function buildEosBatteries(cfg, opts = {}) {
   const opt = cfg?.optimizer || {};
   const eff = splitRoundTripEff(opt.roundTripEfficiency);
@@ -400,6 +401,8 @@ export function createEosConfigSync(ctx) {
         flavor: caps.flavor, version: caps.version, reachable: caps.reachable,
         supported: caps.supported, reason: caps.reason, detectedAt: caps.detectedAt,
         inverterEfficiencyCurve: caps.inverterEfficiencyCurve === true,
+        fitnessCacheLimit: caps.fitnessCacheLimit === true,
+        timezoneOverride: caps.timezoneOverride === true,
       };
     }
     if (!caps.reachable) return;
@@ -650,6 +653,13 @@ export function createEosConfigSync(ctx) {
       // laufend (SoC jede Minute, Prognosen alle 15 min). null = automatisches
       // Speichern aus; beim normalen Beenden speichert EOS weiterhin.
       { section: 'database/autosave_interval_sec', body: EOS_AUTOSAVE_INTERVAL_SEC },
+      // Fitness-Cache aus (EOS PR #1376 / DV-EOS rc1.5): kostete 120–170 MB je
+      // Lauf (mit E-Auto und Geräten mehr), bringt bei 6–15 % Treffern kaum Zeit
+      // — Plan bitgleich, ~3 % längere Rechnung. Für alle Boxen (kleiner Footprint).
+      ...(caps.fitnessCacheLimit ? [{ section: 'optimization/genetic/fitness_cache_max_entries', body: EOS_FITNESS_CACHE_MAX_ENTRIES }] : []),
+      // Feste Zeitzone statt Nachschlagen aus Breiten-/Längengrad (PR #1377):
+      // spart ~25 MB beim nächsten EOS-Start.
+      ...(caps.timezoneOverride ? [{ section: 'general/timezone_override', body: cfg?.timeZone || 'Europe/Berlin' }] : []),
     ];
     // In spot feed-in mode, point feedintariff at FeedInTariffImport so EOS
     // values grid export at the spot price the bridge pushes (operator request

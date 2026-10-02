@@ -130,9 +130,9 @@ services:
   eos:
     # DV-EOS (Fork von Akkudoktor-EOS) im selben Stand wie auf den Appliances.
     # Gebaut aus dem Dockerfile des Forks am Git-Tag — kein zweites Rezept hier.
-    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_TAG:-dvhub-v0.4.0rc1.3}
+    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_TAG:-dvhub-v0.4.0rc1.5}
     build:
-      context: ${EOS_REPO:-https://github.com/chloepriceless/DV-EOS.git}#${EOS_TAG:-dvhub-v0.4.0rc1.3}
+      context: ${EOS_REPO:-https://github.com/chloepriceless/DV-EOS.git}#${EOS_TAG:-dvhub-v0.4.0rc1.5}
     profiles: [eos]
     restart: unless-stopped
     # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).
@@ -150,6 +150,8 @@ services:
       MALLOC_MMAP_THRESHOLD_: "131072"
       OPENBLAS_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
+      # Feste Zeitzone statt Nachschlagen (spart ~25 MB; EOS ab rc1.5).
+      EOS_GENERAL__TIMEZONE_OVERRIDE: ${TZ:-Europe/Berlin}
     # Optionale anlagenspezifische EOS-Einstellungen (z. B. EOS_INVERTER_EFF_CURVE).
     env_file:
       - path: ./eos.env

@@ -33,7 +33,7 @@ if [[ -f "$EOS_PIN_FILE" ]]; then
   _pin_ref="$(grep -E '^EOS_PIN=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
 fi
 EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/chloepriceless/DV-EOS.git}}"
-EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-v0.4.0rc1.3}}}"
+EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-v0.4.0rc1.5}}}"
 EOS_BRANCH="$EOS_PIN"   # Rueckwaertskompatibler Alias
 EOS_STATE_MARKER="${EOS_STATE_MARKER:-$DATA_DIR/.eos-provisioned}"
 # Dienstname und Port sind ueberschreibbar, damit eine zweite Instanz (A/B-Test
@@ -228,13 +228,14 @@ fi
 # Server-Loop + einen Optimierungs-Thread. Steht vor EnvironmentFile, damit der
 # Betreiber es dort ueberschreiben kann.
 EOS_UNIT_FILE="/etc/systemd/system/${EOS_SERVICE_NAME}.service"
+EOS_TZ="$(timedatectl show -p Timezone --value 2>/dev/null || true)"; EOS_TZ="${EOS_TZ:-Europe/Berlin}"
 _ncpu="$(nproc 2>/dev/null || echo 1)"
 if [[ -z "${EOS_CPU_QUOTA:-}" && "$_ncpu" -ge 2 ]]; then EOS_CPU_QUOTA="$(( (_ncpu - 1) * 100 ))%"; fi
 # Einmalige Uebernahme: Zusatz-Environment-Zeilen einer von Hand erweiterten
 # alten Unit wandern in die Betreiberdatei, statt beim Neuschreiben zu verschwinden.
 if [[ -f "$EOS_UNIT_FILE" && ! -f "$EOS_ENV_FILE" ]]; then
   _extra_env="$(grep -E '^Environment=' "$EOS_UNIT_FILE" | sed 's/^Environment=//' \
-    | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX|PYTHONMALLOC|MALLOC_TRIM_THRESHOLD_|MALLOC_MMAP_THRESHOLD_|OPENBLAS_NUM_THREADS|OMP_NUM_THREADS)=' || true)"
+    | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX|PYTHONMALLOC|MALLOC_TRIM_THRESHOLD_|MALLOC_MMAP_THRESHOLD_|OPENBLAS_NUM_THREADS|OMP_NUM_THREADS|EOS_GENERAL__TIMEZONE_OVERRIDE)=' || true)"
   if [[ -n "$_extra_env" ]]; then
     mkdir -p "$(dirname "$EOS_ENV_FILE")"
     {
@@ -269,6 +270,8 @@ Environment=MALLOC_MMAP_THRESHOLD_=131072
 # Eine Rechen-Thread-Puffer-Garnitur reicht (OpenBLAS legt sonst je Kern eigene an).
 Environment=OPENBLAS_NUM_THREADS=1
 Environment=OMP_NUM_THREADS=1
+# Feste Zeitzone statt Nachschlagen aus Breiten-/Längengrad (spart ~25 MB; EOS ab rc1.5).
+Environment=EOS_GENERAL__TIMEZONE_OVERRIDE=$EOS_TZ
 EnvironmentFile=-$EOS_ENV_FILE
 # EOS 0.4 rechnet einen Lauf minutenlang auf voller Last. Niedrige Prioritaet
 # und hoechstens (Kerne - 1) Kerne, damit DVhub und die Regelschleife immer

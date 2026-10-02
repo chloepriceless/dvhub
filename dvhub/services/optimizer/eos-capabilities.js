@@ -68,6 +68,10 @@ export function detectEosCapabilities(config, health = {}) {
   // Config (allererster Sync) bleibt es false; der nächste Sync holt es nach.
   const inverters = devices && isObj(devices.inverters) ? Object.values(devices.inverters) : [];
   const inverterEfficiencyCurve = inverters.some((inv) => hasKey(inv, 'dc_to_ac_efficiency_curve'));
+  // Fitness-Cache-Grenze (PR #1376) und feste Zeitzone (PR #1377), DV-EOS rc1.5.
+  const fitnessCacheLimit = hasKey(genetic, 'fitness_cache_max_entries');
+  const general = cfg && isObj(cfg.general) ? cfg.general : null;
+  const timezoneOverride = hasKey(general, 'timezone_override');
 
   const reachable = !!cfg;
   const supported = reachable ? (flavor === EOS_FLAVOR.UPSTREAM_GENETIC && deviceMap) : null;
@@ -79,6 +83,8 @@ export function detectEosCapabilities(config, health = {}) {
     supported,
     reason: supported === false ? EOS_UNSUPPORTED_REASON : null,
     inverterEfficiencyCurve,
+    fitnessCacheLimit,
+    timezoneOverride,
     detectedAt: Date.now(),
   };
 }

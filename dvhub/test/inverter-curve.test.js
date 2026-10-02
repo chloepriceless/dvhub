@@ -148,3 +148,13 @@ test('Fähigkeit: Kurvenfeld im Wechselrichter erkannt', () => {
   assert.equal(withCurve.inverterEfficiencyCurve, true);
   assert.equal(without.inverterEfficiencyCurve, false);
 });
+
+test('Fähigkeit: Fitness-Cache-Grenze und feste Zeitzone erkannt (DV-EOS rc1.5)', () => {
+  const base = { optimization: { genetic: { interval_sec: 900 } }, feedintariff: { direct_marketing_enabled: true }, devices: { inverters: {} } };
+  const neu = detectEosCapabilities({ ...base, optimization: { genetic: { interval_sec: 900, fitness_cache_max_entries: null } }, general: { timezone_override: null } });
+  assert.equal(neu.fitnessCacheLimit, true);
+  assert.equal(neu.timezoneOverride, true);
+  const alt = detectEosCapabilities(base);
+  assert.equal(alt.fitnessCacheLimit, false);
+  assert.equal(alt.timezoneOverride, false);
+});
