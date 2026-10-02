@@ -356,7 +356,7 @@ Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
   ist drin (sie wird von `server.js` statisch importiert), nur der Interpreter
   fehlt.
 * **EOS (Pro)** — eigenes Image aus dem DV-EOS-Fork.
-* **VPN:** OpenVPN zum Direktvermarkter läuft im DVhub-Container (Rechte `NET_ADMIN` + `/dev/net/tun`, in `compose.yml` gesetzt); WireGuard/IPsec und der Support-Tunnel weiterhin nur nativ.
+* **VPN:** OpenVPN und WireGuard zum Direktvermarkter laufen im DVhub-Container (Rechte `NET_ADMIN` + `/dev/net/tun`, in `compose.yml` gesetzt; WireGuard nutzt das Kernelmodul des Hosts). IPsec und der Support-Tunnel weiterhin nur nativ.
 * **git** — im Container wird nicht per `git pull` aktualisiert, sondern das
   Image getauscht (siehe „Aktualisieren“); die Update-Knöpfe sagen das.
 * **smbclient** — SMB-Backup-Ziele im Host-OS mounten und einhängen.

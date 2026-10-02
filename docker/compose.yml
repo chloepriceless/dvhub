@@ -96,7 +96,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # VPN zum Direktvermarkter (OpenVPN) im DVhub-Container: Tunnel anlegen
+    # VPN zum Direktvermarkter (OpenVPN/WireGuard) im DVhub-Container: Tunnel anlegen
     # braucht NET_ADMIN und das TUN-Gerät. Host-Netz → tun0 wie nativ.
     cap_add: [NET_ADMIN]
     devices: ["/dev/net/tun:/dev/net/tun"]
