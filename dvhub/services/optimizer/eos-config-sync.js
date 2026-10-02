@@ -676,10 +676,11 @@ export function createEosConfigSync(ctx) {
     // 2026-05-29) — enables evening battery Vermarktung at peak prices instead
     // of the flat EEG tariff. EOS-side planning only; the real plant is
     // unaffected (primarySource=internal).
+    // Seit EOS 0.4 auch bei fester Vergütung: ohne Einspeisevergütung im
+    // Steuerzeitraum bricht 0.4 jeden Lauf ab. Der Bridge pusht dann die feste
+    // Vergütung als Reihe (fixedFeedInSlots).
     const directMarketing = String(cfg?.optimizer?.tariff?.feedInMode || 'fixed').toLowerCase() === 'spot';
-    if (directMarketing) {
-      tasks.push({ section: 'feedintariff/provider', body: 'FeedInTariffImport' });
-    }
+    tasks.push({ section: 'feedintariff/provider', body: 'FeedInTariffImport' });
 
     // Direktvermarktungs-Generalschalter (Christin 2026-08-07).
     //

@@ -165,6 +165,27 @@ function buildDataFrameBody(columnKey, slots, tz = 'Europe/Berlin') {
 }
 
 /**
+ * Feste Einspeisevergütung als Reihe für EOS (FeedInTariffImport, €/Wh).
+ *
+ * EOS 0.4 bricht jeden Lauf ab, wenn im Steuerzeitraum keine Einspeisevergütung
+ * vorliegt ("Missing or invalid feed-in tariff within the control horizon",
+ * Pi 2026-10-02). Bisher bekam EOS sie nur im Spot-Modus — Boxen mit fester
+ * EEG-Vergütung planten unter 0.4 gar nicht. Gleiche Regel wie der interne
+ * Optimierer (cost-model.js computeSlotCosts): optimizer.tariff.feedInCtKwh
+ * (Standard 7,78 ct), bei negativem Spot 0. Zeitachse = die der Preise.
+ */
+export function fixedFeedInSlots(priceSlotsCt, tariff = {}) {
+  const fixedCt = Number.isFinite(Number(tariff.feedInCtKwh)) ? Number(tariff.feedInCtKwh) : 7.78;
+  return (Array.isArray(priceSlotsCt) ? priceSlotsCt : [])
+    .filter((s) => s && s.start)
+    .map((s) => {
+      const spotCt = Number(s.ctKwh);
+      const ct = Number.isFinite(spotCt) && spotCt < 0 ? 0 : fixedCt;
+      return { start: s.start, powerW: ct / 100 / 1000 };
+    });
+}
+
+/**
  * Nur Stempel auf dem Slot-Raster an EOS geben.
  *
  * forecast.solar liefert neben den Rasterwerten Punkte zu Sonnenauf- und
@@ -620,7 +641,7 @@ export function createEosForecastBridge(ctx) {
               : (spotCt / 100 / 1000) * feedInFactor;
             return { start: s.start, powerW };
           })
-      : [];
+      : fixedFeedInSlots(priceSlotsCt, tariff);
 
     const tasks = [
       {
@@ -643,7 +664,7 @@ export function createEosForecastBridge(ctx) {
         rows: elecpriceSlots.length,
       },
     ];
-    if (feedInSpot && feedInSlots.length) {
+    if (feedInSlots.length) {
       tasks.push({
         provider: 'FeedInTariffImport',
         body: buildDataFrameBody('feed_in_tariff_wh', feedInSlots, tz),
@@ -685,7 +706,7 @@ export function createEosForecastBridge(ctx) {
     // das, was belegt ist; danach bewertet EOS die Restladung ueber seinen
     // Endwert.
     const horizon = await syncControlHorizon(
-      baseUrl, elecpriceSlots, feedInSpot ? feedInSlots : null, pvSlots, expandHourlyToQuarterHourly(loadSlots),
+      baseUrl, elecpriceSlots, feedInSlots.length ? feedInSlots : null, pvSlots, expandHourlyToQuarterHourly(loadSlots),
     );
     if (horizon.error) errors.horizon = horizon.error;
 

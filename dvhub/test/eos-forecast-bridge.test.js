@@ -372,11 +372,11 @@ test('start({beforePush}): beforePush runs BEFORE each push (config re-asserted 
   assert.equal(order[0], 'before', 'beforePush runs before push');
 });
 
-test('push does NOT send FeedInTariffImport in fixed mode', async () => {
+test('push sends the FIXED feed-in tariff in fixed mode (EOS 0.4 cancels runs without one)', async () => {
   const mock = await createMockEos(okHandler);
   try {
     const ctx = {
-      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff: { feedInMode: 'fixed' } } }),
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff: { feedInMode: 'fixed', feedInCtKwh: 8.1 } } }),
       pushLog: () => {},
       forecastService: { buildForecastResponse: async () => forecastSlots() },
       state: { victron: { soc: 50 } },
@@ -384,10 +384,20 @@ test('push does NOT send FeedInTariffImport in fixed mode', async () => {
     const bridge = createEosForecastBridge(ctx);
     await bridge.push();
     const feedReq = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/prediction/import/FeedInTariffImport'));
-    assert.ok(!feedReq, 'no FeedInTariffImport in fixed mode');
+    assert.ok(feedReq, 'FeedInTariffImport also in fixed mode');
+    const values = Object.values(feedReq.body.data).map((row) => row.feed_in_tariff_wh);
+    assert.ok(values.length > 0);
+    for (const v of values) assert.ok(v === 0 || Math.abs(v - 8.1 / 100 / 1000) < 1e-12, `fixed 8.1 ct or 0 at negative spot, got ${v}`);
   } finally {
     await mock.close();
   }
+});
+
+test('fixedFeedInSlots: feste Vergütung, 0 bei negativem Spot, Standard 7,78 ct', async () => {
+  const { fixedFeedInSlots } = await import('../services/optimizer/eos-forecast-bridge.js');
+  const slots = [{ start: '2026-10-02T10:00:00Z', ctKwh: 5 }, { start: '2026-10-02T10:15:00Z', ctKwh: -1 }, { start: '2026-10-02T10:30:00Z', ctKwh: null }];
+  assert.deepEqual(fixedFeedInSlots(slots, {}).map((s) => s.powerW), [7.78 / 100 / 1000, 0, 7.78 / 100 / 1000]);
+  assert.deepEqual(fixedFeedInSlots(slots, { feedInCtKwh: 0 }).map((s) => s.powerW), [0, 0, 0]);
 });
 
 test('push: ElecPriceImport resolves the import price PER active tariff PERIOD (date-based)', async () => {

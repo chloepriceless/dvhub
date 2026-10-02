@@ -88,6 +88,13 @@ verweist hierher.
 
 ### Behoben
 
+- **EOS 0.4 plante bei fester Einspeisevergütung nie.** EOS bekam die
+  Einspeisevergütung nur im Spot-Modus; 0.4 bricht ohne sie jeden Lauf ab
+  („Missing or invalid feed-in tariff within the control horizon"). Jetzt geht
+  auch die feste Vergütung als Reihe an EOS — gleiche Regel wie der interne
+  Optimierer (`optimizer.tariff.feedInCtKwh`, Standard 7,78 ct, 0 bei negativem
+  Spot).
+
 - **Explorer: große Zeiträume in feiner Auflösung** (z. B. 7 Tage × 5 s) ließen
   DVhub mit „JavaScript heap out of memory“ abstürzen — alle ~970.000 Zeilen
   lagen gleichzeitig im Speicher. Feine Abfragen (5 s … 5 min) werden jetzt in
