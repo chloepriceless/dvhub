@@ -69,6 +69,14 @@ verweist hierher.
 
 ### Behoben
 
+- **Explorer: große Zeiträume in feiner Auflösung** (z. B. 7 Tage × 5 s) ließen
+  DVhub mit „JavaScript heap out of memory“ abstürzen — alle ~970.000 Zeilen
+  lagen gleichzeitig im Speicher. Feine Abfragen (5 s … 5 min) werden jetzt in
+  der Datenbank auf die gewählte Auflösung gebündelt und in 6-h-Fenstern
+  komprimiert gestreamt (7 Tage × 5 s: 61 MB JSON → 3,7 MB übertragen, DVhub
+  bleibt unter 135 MB). Dabei behoben: „1min“/„5min“ lieferten bisher trotzdem
+  alle 5-s-Rohwerte.
+
 - **EOS plante nie, wenn forecast.solar die PV-Prognose lieferte.** forecast.solar
   schickt neben den Rasterwerten Punkte zu Sonnenauf- und -untergang (z. B.
   19:00:15 neben 19:00:00). EOS 0.4 leitet die Taktung aus dem kleinsten

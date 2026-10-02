@@ -10,6 +10,9 @@ import { round2 } from './server-utils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Auflösungen, die der Explorer fein (gestreamt) abfragt; alle teilen 6 h.
+export const STREAM_BUCKET_SECONDS = new Set([5, 10, 15, 30, 60, 300]);
+
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
   return new Date(input).toISOString();
@@ -1222,6 +1225,47 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     }));
   }
 
+  // Feine Explorer-Reihen (5 s … 5 min) in Zeitfenstern statt am Stück.
+  // Christin 2026-10-02: 7 Tage × 5 s × 8 Reihen sind ~970.000 Zeilen —
+  // querySeries hielt sie alle gleichzeitig (pg-Ergebnis + Dedup-Map + Zeilen
+  // + JSON) und Node lief im 192-MB-Container in „heap out of memory“.
+  // Hier rechnet die DB auf genau die gewünschte Auflösung (date_bin, auch
+  // ohne TimescaleDB) und liefert je Fenster ein kleines Paket; der Aufrufer
+  // schreibt es sofort weg. Fenstergrenzen liegen auf dem Bucket-Raster, ein
+  // Bucket wird also nie zwischen zwei Fenstern geteilt.
+  async function* iterateSeriesBuckets({ seriesKeys, start, end, bucketSec, chunkMs = 6 * 3_600_000 }) {
+    const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
+    if (!keys.length) return;
+    if (!STREAM_BUCKET_SECONDS.has(bucketSec)) throw new Error(`iterateSeriesBuckets: unsupported bucketSec ${bucketSec}`);
+    const startMs = Date.parse(isoTimestamp(start));
+    const endMs = Date.parse(isoTimestamp(end));
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return;
+    let from = startMs;
+    while (from < endMs) {
+      const to = Math.min(endMs, (Math.floor(from / chunkMs) + 1) * chunkMs);
+      const { rows } = await pool.query(`
+        SELECT series_key,
+               date_bin(make_interval(secs => $2), ts_utc, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS bucket_ts,
+               AVG(value_num) AS value,
+               MAX(unit) AS unit
+        FROM timeseries_samples
+        WHERE series_key = ANY($1)
+          AND ts_utc >= $3 AND ts_utc < $4
+          AND resolution_seconds <= $2
+        GROUP BY 1, 2
+        ORDER BY 2, 1
+      `, [keys, bucketSec, new Date(from).toISOString(), new Date(to).toISOString()]);
+      yield rows.map((row) => ({
+        key: row.series_key,
+        ts: row.bucket_ts instanceof Date ? row.bucket_ts.toISOString() : row.bucket_ts,
+        value: Number(row.value),
+        unit: row.unit,
+        resolution: bucketSec,
+      }));
+      from = to;
+    }
+  }
+
   // Query arbitrary telemetry series (e.g. battery_soc_pct)
   async function querySeries({ seriesKeys, start, end, maxResolution = 900 }) {
     const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
@@ -1352,6 +1396,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     getSeriesBoundaryValues,
     getRecentPvPeakW,
     queryBucketedSeries,
+    iterateSeriesBuckets,
     async listTables() {
       const result = await pool.query(`SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`);
       return result.rows.map((row) => row.name);

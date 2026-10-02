@@ -4,6 +4,9 @@
 
 import { createHeavyQueue, SKIPPED as HEAVY_SKIPPED } from './services/heavy-queue.js';
 import fs from 'node:fs';
+import zlib from 'node:zlib';
+import { once } from 'node:events';
+import { STREAM_BUCKET_SECONDS } from './telemetry-store-pg.js';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -722,6 +725,44 @@ export function createApiRoutes(ctx) {
   // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
   // gleichzeitig, weggeklickte überspringen, gleiche Anfragen nur einmal.
   const historyQueue = createHeavyQueue({ max: 2 });
+  // Gestreamte Explorer-Reihen: je Strom nur ein 6-h-Fenster im Speicher,
+  // trotzdem höchstens zwei gleichzeitig (DB-Last).
+  const seriesQueue = createHeavyQueue({ max: 2 });
+
+  async function streamTelemetrySeries(req, res, { keys, start, end, bucketSec }) {
+    const gone = () => req.destroyed || res.destroyed || req.socket?.destroyed;
+    const iter = ctx.telemetryStore.iterateSeriesBuckets({ seriesKeys: keys, start, end, bucketSec });
+    let out = null;
+    let total = 0;
+    try {
+      for await (const rows of iter) {
+        if (!out) {
+          const gzip = /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
+          res.writeHead(200, {
+            ...SECURITY_HEADERS,
+            'content-type': 'application/json; charset=utf-8',
+            ...(gzip ? { 'content-encoding': 'gzip', vary: 'Accept-Encoding' } : {}),
+          });
+          out = gzip ? zlib.createGzip({ level: 4 }) : res;
+          if (gzip) out.pipe(res);
+          out.write(`{"ok":true,"keys":${JSON.stringify(keys)},"start":${JSON.stringify(start)},"end":${JSON.stringify(end)},"resolution":${bucketSec},"data":[`);
+        }
+        if (gone()) { await iter.return(); out.destroy?.(); return; }
+        let chunk = '';
+        for (const row of rows) {
+          chunk += (total ? ',' : '') + JSON.stringify(row);
+          total += 1;
+        }
+        if (chunk && !out.write(chunk)) await once(out, 'drain');
+      }
+      if (!out) return json(res, 200, { ok: true, keys, start, end, resolution: bucketSec, total: 0, data: [] });
+      out.end(`],"total":${total}}`);
+    } catch (e) {
+      if (!out) return json(res, 500, { ok: false, error: e.message });
+      // Kopf schon gesendet: sauber abschließen, ok wird überschrieben.
+      try { out.end(`],"total":${total},"ok":false,"error":${JSON.stringify(e.message)}}`); } catch { /* Verbindung weg */ }
+    }
+  }
   const vizQueue = createHeavyQueue({ max: 3 });   // Karten sind leichter, die Jahresansicht hat 13
   // Daten- und Konfigordner für den Geräte-Tausch-Export (config-secrets-crypto).
   const migrationDirs = () => ({
@@ -6215,6 +6256,14 @@ export function createApiRoutes(ctx) {
           limit: MAX_TELEMETRY_SCAN_SLOTS,
           requested: Number.isFinite(totalSlots) ? totalSlots : null
         });
+      }
+      // Feine Auflösungen (Explorer 5 s … 5 min) werden in der DB gebündelt
+      // und in Zeitfenstern gestreamt — der Speicher hängt dann nicht mehr an
+      // der Länge des Zeitraums (7 Tage × 5 s lief vorher in „heap out of
+      // memory“). Grobe Abfragen behalten das bisherige Verhalten.
+      if (ctx.telemetryStore.iterateSeriesBuckets && STREAM_BUCKET_SECONDS.has(maxRes)) {
+        await seriesQueue.run({ req, res }, () => streamTelemetrySeries(req, res, { keys, start, end, bucketSec: maxRes }));
+        return;
       }
       try {
         const rows = await ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes });
