@@ -234,6 +234,18 @@ describe('Abgleich gegen Upstream ab #1330 (upstream-genetic)', () => {
     assert.deepEqual(bodyOf(mock, 'devices/home_appliances'), {}, 'Abbildung wird mitgeleert');
   });
 
+  it('rc1.6: setzt die Eigenverbrauchstabelle auf numpy, wenn EOS den Schalter kennt', async () => {
+    const saved = CONFIGS.upstreamGenetic;
+    CONFIGS.upstreamGenetic = { ...saved, optimization: { ...saved.optimization, self_consumption_interpolator: 'scipy' } };
+    try {
+      mock = await createMockEos('upstreamGenetic');
+      await createEosConfigSync(ctxFor(mock.port)).sync();
+      assert.equal(bodyOf(mock, 'optimization/self_consumption_interpolator'), 'numpy');
+    } finally {
+      CONFIGS.upstreamGenetic = saved;
+    }
+  });
+
   it('dynamische Preise: trotzdem kein charges_kwh / vat_rate', async () => {
     mock = await createMockEos('upstreamGenetic');
     const ctx = ctxFor(mock.port);

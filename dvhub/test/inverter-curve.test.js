@@ -158,3 +158,10 @@ test('Fähigkeit: Fitness-Cache-Grenze und feste Zeitzone erkannt (DV-EOS rc1.5)
   assert.equal(alt.fitnessCacheLimit, false);
   assert.equal(alt.timezoneOverride, false);
 });
+
+test('Fähigkeit: Schalter für die SciPy-freie Eigenverbrauchstabelle erkannt (DV-EOS rc1.6)', () => {
+  const base = { optimization: { genetic: { interval_sec: 900 } }, feedintariff: { direct_marketing_enabled: true }, devices: { inverters: {} } };
+  const neu = detectEosCapabilities({ ...base, optimization: { genetic: { interval_sec: 900 }, self_consumption_interpolator: 'scipy' } });
+  assert.equal(neu.selfConsumptionInterpolator, true);
+  assert.equal(detectEosCapabilities(base).selfConsumptionInterpolator, false);
+});

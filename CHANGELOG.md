@@ -12,6 +12,11 @@ verweist hierher.
 
 ### Geändert
 
+- **DV-EOS rc1.6:** Die SciPy-freie Eigenverbrauchstabelle ist in EOS jetzt ein
+  Schalter (`optimization.self_consumption_interpolator`, Standard `scipy`, wie
+  im Upstream-PR #1378). DVhub setzt ihn automatisch auf `numpy`, sobald EOS den
+  Schalter kennt — gleiche Werte, ~35 MB weniger nach dem ersten Lauf.
+
 - **Nur noch EOS 0.4.** Der Installer liefert DV-EOS `dvhub-v0.4.0rc1.3` aus
   (wie das Docker-Image); Boxen mit dem 0.3-Fork wechseln beim nächsten Update
   automatisch, EOS-Daten und -Konfiguration werden vorher gesichert. Findet

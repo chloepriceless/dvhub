@@ -72,6 +72,8 @@ export function detectEosCapabilities(config, health = {}) {
   const fitnessCacheLimit = hasKey(genetic, 'fitness_cache_max_entries');
   const general = cfg && isObj(cfg.general) ? cfg.general : null;
   const timezoneOverride = hasKey(general, 'timezone_override');
+  // SciPy-freie Eigenverbrauchstabelle als Schalter (PR #1378, DV-EOS rc1.6).
+  const selfConsumptionInterpolator = hasKey(optimization, 'self_consumption_interpolator');
 
   const reachable = !!cfg;
   const supported = reachable ? (flavor === EOS_FLAVOR.UPSTREAM_GENETIC && deviceMap) : null;
@@ -85,6 +87,7 @@ export function detectEosCapabilities(config, health = {}) {
     inverterEfficiencyCurve,
     fitnessCacheLimit,
     timezoneOverride,
+    selfConsumptionInterpolator,
     detectedAt: Date.now(),
   };
 }

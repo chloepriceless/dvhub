@@ -76,6 +76,7 @@ function isGridArbitrageLicensed(cfg) {
 export const EOS_MEASUREMENT_HISTORIC_HOURS = 48;
 export const EOS_AUTOSAVE_INTERVAL_SEC = null;
 export const EOS_FITNESS_CACHE_MAX_ENTRIES = 0;
+export const EOS_SELF_CONSUMPTION_INTERPOLATOR = 'numpy';
 export function buildEosBatteries(cfg, opts = {}) {
   const opt = cfg?.optimizer || {};
   const eff = splitRoundTripEff(opt.roundTripEfficiency);
@@ -403,6 +404,7 @@ export function createEosConfigSync(ctx) {
         inverterEfficiencyCurve: caps.inverterEfficiencyCurve === true,
         fitnessCacheLimit: caps.fitnessCacheLimit === true,
         timezoneOverride: caps.timezoneOverride === true,
+        selfConsumptionInterpolator: caps.selfConsumptionInterpolator === true,
       };
     }
     if (!caps.reachable) return;
@@ -665,6 +667,9 @@ export function createEosConfigSync(ctx) {
       // Feste Zeitzone statt Nachschlagen aus Breiten-/Längengrad (PR #1377):
       // spart ~25 MB beim nächsten EOS-Start.
       ...(caps.timezoneOverride ? [{ section: 'general/timezone_override', body: cfg?.timeZone || 'Europe/Berlin' }] : []),
+      // Eigenverbrauchstabelle ohne SciPy (PR #1378 / DV-EOS rc1.6, dort
+      // Standard „scipy“): gleiche Werte, ~35 MB weniger nach dem ersten Lauf.
+      ...(caps.selfConsumptionInterpolator ? [{ section: 'optimization/self_consumption_interpolator', body: EOS_SELF_CONSUMPTION_INTERPOLATOR }] : []),
     ];
     // In spot feed-in mode, point feedintariff at FeedInTariffImport so EOS
     // values grid export at the spot price the bridge pushes (operator request
