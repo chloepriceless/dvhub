@@ -96,6 +96,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # VPN zum Direktvermarkter (OpenVPN) im DVhub-Container: Tunnel anlegen
+    # braucht NET_ADMIN und das TUN-Gerät. Host-Netz → tun0 wie nativ.
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
     environment:
       TZ: ${TZ:-Europe/Berlin}
       DVHUB_HTTP_PORT: ${DVHUB_HTTP_PORT:-8080}

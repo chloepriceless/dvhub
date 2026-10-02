@@ -12,7 +12,8 @@
 #     der EnergyLink hat ~1 GB RAM / ~2,3 GB Disk. Forecast/ML bleiben dem
 #     Voll-Stack-Image vorbehalten.
 #   * EOS (Pro) — eigenes Image `dvhub-eos` aus dem DV-EOS-Fork (§6)
-#   * VPN (openvpn/wireguard/strongswan) — v1 nativ-only (§9)
+#   * VPN: OpenVPN (Direktvermarkter) läuft im DVhub-Container (NET_ADMIN +
+#     /dev/net/tun); WireGuard/IPsec weiterhin nur nativ
 #
 # Updates laufen image-basiert. Im Container wird NICHT per git aktualisiert;
 # deshalb liegt hier auch kein .git und kein git-Binary im Image.
@@ -71,9 +72,23 @@ LABEL org.opencontainers.image.title="DVhub" \
 # DB-Container (docker/compose.yml: TimescaleDB auf PostgreSQL 17) — pg_dump
 # muss mindestens so neu sein wie der Server. Die Binaries liegen unter
 # /usr/libexec/postgresql17, nicht im PATH (→ DVHUB_PG_BIN_DIR).
-RUN apk add --no-cache tzdata su-exec postgresql17-client \
+# openvpn + sudo + iproute2 (2026-10-02): das VPN zum Direktvermarkter läuft
+# IM DVhub-Container — gleicher Code wie nativ (vpn-manager.js startet
+# `sudo openvpn --config …`). sudo darf NUR openvpn mit DVhub-Profilen und das
+# Prüfen/Beenden von openvpn, genau wie die nativen sudoers-Regeln. Der
+# Container braucht dafür NET_ADMIN + /dev/net/tun (docker/compose.yml); mit
+# Host-Netz entsteht tun0 wie nativ direkt auf dem Gerät.
+RUN apk add --no-cache tzdata su-exec postgresql17-client openvpn sudo iproute2 procps \
     && addgroup -g 10001 -S dvhub \
-    && adduser -u 10001 -G dvhub -S -H -s /sbin/nologin dvhub
+    && adduser -u 10001 -G dvhub -S -H -s /sbin/nologin dvhub \
+    && printf '%s\n' \
+      'Defaults:dvhub !requiretty' \
+      'dvhub ALL=(root) NOPASSWD: /usr/sbin/openvpn --config /etc/dvhub/vpn/profiles/*' \
+      'dvhub ALL=(root) NOPASSWD: /usr/bin/pkill -0 -x openvpn' \
+      'dvhub ALL=(root) NOPASSWD: /usr/bin/pkill -15 -x openvpn' \
+      'dvhub ALL=(root) NOPASSWD: /usr/bin/pkill -9 -x openvpn' \
+      > /etc/sudoers.d/dvhub-vpn \
+    && chmod 0440 /etc/sudoers.d/dvhub-vpn
 
 # DV_SERVICE_USE_SUDO=0: im Container gibt es weder systemd noch sudo.
 # DV_ENABLE_SERVICE_ACTIONS bleibt bewusst UNGESETZT (Default aus) — sonst
