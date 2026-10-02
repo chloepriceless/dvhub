@@ -734,3 +734,19 @@ test('Lastprognose bis vor die laufende Stunde aufgefüllt (sonst bricht EOS nac
   assert.deepEqual(padSlotsBackToNow(out, now), out, 'idempotent, wenn schon abgedeckt');
   assert.deepEqual(padSlotsBackToNow([], now), []);
 });
+
+test('keepOnGridSlots drops forecast.solar sunrise/sunset stamps (EOS cadence would collapse to 15 s)', async () => {
+  const { keepOnGridSlots } = await import('../services/optimizer/eos-forecast-bridge.js');
+  const slots = [
+    { start: '2026-10-02T17:00:00+02:00', powerW: 0 },
+    { start: '2026-10-02T17:15:00+02:00', powerW: 10 },
+    { start: '2026-10-02T19:00:00+02:00', powerW: 305 },
+    { start: '2026-10-02T19:00:15+02:00', powerW: 2 },
+    { start: '2026-10-03T07:24:22+02:00', powerW: 0 },
+    { start: 'kaputt', powerW: 1 },
+  ];
+  assert.deepEqual(keepOnGridSlots(slots).map((s) => s.start), [
+    '2026-10-02T17:00:00+02:00', '2026-10-02T17:15:00+02:00', '2026-10-02T19:00:00+02:00',
+  ]);
+  assert.deepEqual(keepOnGridSlots(null), []);
+});

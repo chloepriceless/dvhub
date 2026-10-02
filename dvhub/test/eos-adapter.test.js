@@ -909,3 +909,28 @@ test('Halte-Regel landet mit closedLoopHold + evPlanned im Zeitplan', () => {
   assert.equal(rules[0].evPlanned, true);
   assert.equal(rules[0].value, 1400);
 });
+
+test('pushForecast keeps positional PV aligned when forecast.solar adds sunrise/sunset stamps', async () => {
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const result = await adapter.pushForecast({
+      pv: { slots: [
+        { start: '2026-10-02T05:00:00Z', powerW: 0 },
+        { start: '2026-10-02T05:15:00Z', powerW: 0 },
+        { start: '2026-10-02T05:22:57Z', powerW: 0 },
+        { start: '2026-10-02T05:30:00Z', powerW: 50 },
+      ] },
+    });
+    assert.equal(result.ok, true);
+    const pvReq = mock.requests.find((r) => r.url.startsWith('/v1/prediction/import/PVForecastImport'));
+    const body = pvReq.body;
+    assert.equal(body.interval, '15 minutes');
+    assert.deepEqual(body.pvforecast_ac_power, [0, 0, 50]);
+  } finally {
+    await mock.close();
+  }
+});

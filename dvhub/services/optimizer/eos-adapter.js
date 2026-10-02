@@ -3,6 +3,7 @@
 // Consistent { ok, error } contract -- NEVER throws (addresses Codex review concern).
 import http from 'node:http';
 import { classifyEosSlotAction } from '../../eos-zeitplan-map.js';
+import { keepOnGridSlots } from './eos-forecast-bridge.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -170,8 +171,20 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // HTTP 400 "Invalid JSON string 'null'" for every provider. Read the real
     // field names (start, powerW, ctKwh) so the body is populated.
     function buildDateTimeData(slots, recordKey, valueFn) {
-      const validSlots = slots.filter(s => s && !Number.isNaN(new Date(s.start).getTime()));
+      // Nur Rasterpunkte: forecast.solar liefert zusätzlich Sonnenauf-/
+      // -untergangsstempel (07:22:57 …). Dieses Format ordnet Werte nach
+      // Position zu (start + i·interval) — ein Zwischenpunkt verschöbe alle
+      // folgenden Werte um einen Slot. Siehe keepOnGridSlots im Bridge.
+      const validSlots = keepOnGridSlots(slots.filter(s => s && !Number.isNaN(new Date(s.start).getTime())));
       if (!validSlots.length) return null;
+      // Positionsformat geht nur bei gleichmäßigem Abstand; sonst nichts senden
+      // — der Forecast-Bridge liefert dieselben Daten mit Zeitstempeln.
+      const stepMs = validSlots.length >= 2
+        ? new Date(validSlots[1].start).getTime() - new Date(validSlots[0].start).getTime()
+        : 0;
+      for (let i = 2; i < validSlots.length; i += 1) {
+        if (new Date(validSlots[i].start).getTime() - new Date(validSlots[i - 1].start).getTime() !== stepMs) return null;
+      }
       const values = validSlots.map(valueFn);
       const start = new Date(validSlots[0].start).toISOString();
       // Derive interval from the first two slot timestamps. Default to
@@ -188,7 +201,9 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // PV
     if (forecastResponse.pv?.slots?.length) {
       const body = buildDateTimeData(forecastResponse.pv.slots, 'pvforecast_ac_power', s => Number(s.powerW) || 0);
-      const res = await httpRequest('PUT', '/v1/prediction/import/PVForecastImport?force_enable=true', body);
+      const res = body
+        ? await httpRequest('PUT', '/v1/prediction/import/PVForecastImport?force_enable=true', body)
+        : { ok: true, skipped: 'uneven_slots' };
       perProvider.pv = { ok: res.ok, error: res.error || null };
       if (!res.ok) errors.push(`PV: ${res.error}`);
     }
@@ -196,7 +211,9 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // Load
     if (forecastResponse.load?.slots?.length) {
       const body = buildDateTimeData(forecastResponse.load.slots, 'loadforecast_power_w', s => Number(s.powerW) || 0);
-      const res = await httpRequest('PUT', '/v1/prediction/import/LoadImport?force_enable=true', body);
+      const res = body
+        ? await httpRequest('PUT', '/v1/prediction/import/LoadImport?force_enable=true', body)
+        : { ok: true, skipped: 'uneven_slots' };
       perProvider.load = { ok: res.ok, error: res.error || null };
       if (!res.ok) errors.push(`Load: ${res.error}`);
     }

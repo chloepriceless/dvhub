@@ -69,6 +69,22 @@ verweist hierher.
 
 ### Behoben
 
+- **EOS plante nie, wenn forecast.solar die PV-Prognose lieferte.** forecast.solar
+  schickt neben den Rasterwerten Punkte zu Sonnenauf- und -untergang (z. B.
+  19:00:15 neben 19:00:00). EOS 0.4 leitet die Taktung aus dem kleinsten
+  Abstand ab, hielt die PV-Reihe für 15-Sekunden-Werte ohne Abdeckung und brach
+  jeden Lauf ab („Missing or invalid PV within the control horizon“). DVhub
+  gibt EOS jetzt nur Rasterpunkte; der Positions-Push des Optimierers verschob
+  durch solche Punkte zudem alle folgenden PV-Werte um einen Slot.
+- **Frische EOS-Installationen planten nie** (EMS-Modus stand auf DISABLED);
+  der Abgleich setzt jetzt `ems/mode = OPTIMIZATION`.
+- **Historie: schnelles Durchblättern** der Monate brachte den 192-MB-Container
+  zum Absturz („Load failed“) und danach das Anfrage-Limit (429). Schwere
+  History-Abfragen laufen serverseitig in Reihe (gleiche Anfrage nur einmal,
+  verlassene Anfragen entfallen); die Seite wartet 0,5 s, bis man stehen
+  bleibt, und bricht veraltete Abrufe ab — statt ~1500 nur noch ~150 Anfragen
+  für 120 Monatswechsel.
+
 - E-Auto-Kachel zeigte „kein Plan: eos_off“, während EOS rechnete.
 - Antwortete EOS beim Abgleich nicht rechtzeitig, ging das E-Auto im alten
   Listenformat raus und EOS 0.4 lehnte es ab.

@@ -165,6 +165,30 @@ function buildDataFrameBody(columnKey, slots, tz = 'Europe/Berlin') {
 }
 
 /**
+ * Nur Stempel auf dem Slot-Raster an EOS geben.
+ *
+ * forecast.solar liefert neben den Rasterwerten Punkte zu Sonnenauf- und
+ * -untergang (07:22:57, 19:00:15 …). EOS 0.4 leitet die Kadenz einer Reihe aus
+ * dem KLEINSTEN Abstand zweier Stempel ab (optimization/genetic/forecast.py
+ * bounded_forecast_array): 19:00:00 neben 19:00:15 ergibt 15 s, kein Wert
+ * deckt dann einen 15-min-Slot ganz ab, die Reihe gilt als leer und JEDER Lauf
+ * bricht ab ("Missing or invalid PV within the control horizon", Container
+ * auf prod 2026-10-02). Einmal in EOS, lässt sich so ein Datensatz über die
+ * API nicht mehr entfernen — DELETE /v1/prediction/range leert nur den Wert,
+ * der leere Datensatz bleibt. Deshalb hier filtern, bevor er EOS erreicht.
+ *
+ * @param {Array<{start: string}>} slots
+ * @param {number} slotMs - Rasterweite, Standard 15 min
+ */
+export function keepOnGridSlots(slots, slotMs = 15 * 60_000) {
+  if (!Array.isArray(slots)) return [];
+  return slots.filter((sl) => {
+    const ms = Date.parse(sl?.start ?? sl?.ts);
+    return Number.isFinite(ms) && ms % slotMs === 0;
+  });
+}
+
+/**
  * Internal HTTP helper. Mirrors eos-config-sync.js — never throws,
  * returns { ok, data?, error? }.
  */
@@ -531,7 +555,7 @@ export function createEosForecastBridge(ctx) {
       return { ok: false, pushed: [], errors: { build: err } };
     }
 
-    const pvSlots = forecast?.pv?.slots || [];
+    const pvSlots = keepOnGridSlots(forecast?.pv?.slots || []);
     const loadSlots = padSlotsBackToNow(forecast?.load?.slots || [], Date.now());
     const priceSlotsCt = forecast?.price?.slots || [];
     const tz = cfg?.optimizer?.timezone || 'Europe/Berlin';
