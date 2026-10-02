@@ -80,10 +80,13 @@ export function collectSecrets(config) {
 //   support/*             Schlüssel des Fernwartungs-Relays
 //   tls/*                 HTTPS-Zertifikat (keine neue Browser-Warnung)
 //   vpn/profiles/**       VPN-Profile, u. a. das des Direktvermarkters
+//   eebus/*               EEBUS-Identität (Zertifikat/SKI — die Steuerbox kennt
+//                         DVhub nur darüber), Failsafe-Werte, Zählerstände
 export const MIGRATION_DATA_FILES = Object.freeze([
   'appliance-id', 'license_state.json', 'datenspende.json',
   'installer-portal-client.json', 'installer-portal-secret', 'input-push-key',
   'support/relay_id_ed25519', 'support/relay_id_ed25519.pub', 'support/known_hosts', 'support/relay.json',
+  'eebus/cert.pem', 'eebus/key.pem', 'eebus/grid-state.json', 'eebus/energy.json',
 ]);
 export const MIGRATION_CONFIG_FILES = Object.freeze(['tls/cert.pem', 'tls/key.pem']);
 export const MIGRATION_CONFIG_DIRS = Object.freeze(['vpn/profiles']);

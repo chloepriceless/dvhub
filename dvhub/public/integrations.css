@@ -1419,3 +1419,20 @@
 .scheddev-row-main { flex: 1; }
 .scheddev-form-card { margin-top: .6rem; padding: .6rem; border: 1px solid var(--dv-border, #2a2a2a); border-radius: 8px; }
 .scheddev-form-actions { margin-top: .5rem; }
+
+/* EEBUS-Drawer (eebus-drawer.js) */
+.eebus-sec { margin: 14px 0; }
+.eebus-sec h3 { margin: 0 0 6px; font-size: 1rem; }
+.eebus-sec h4 { margin: 12px 0 4px; font-size: .9rem; }
+.eebus-list { list-style: none; margin: 0; padding: 0; }
+.eebus-list li { padding: 6px 0; border-bottom: 1px solid var(--line, rgba(255,255,255,.08)); }
+.eebus-small { font-size: .82rem; }
+.eebus-ski, .eebus-qr { font-size: .8rem; word-break: break-all; }
+.eebus-error { color: var(--red); margin: 4px 0; }
+.eebus-grid-row { margin-top: 6px; }
+.eebus-manual { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.eebus-manual input[type="text"] { flex: 1 1 180px; min-width: 0; }
+.eebus-role { max-width: 100%; }
+.eebus-list .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.eebus-list .dot-ok { background: var(--green); }
+.eebus-list .dot-off { background: var(--muted, #777); }

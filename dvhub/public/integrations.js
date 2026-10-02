@@ -116,6 +116,15 @@
       category: 'Solar-Logger · pvnode-Kalibrierung',
       logo: 'PV',
       accent: 'orange'
+    },
+    // 2026-10-02: EEBUS — §14a-Steuerbox (LPC/LPP) und EEBUS-Geräte. Drawer:
+    // eebus-drawer.js, Status aus /api/integrations/status.eebus.
+    {
+      key: 'eebus',
+      label: 'EEBUS',
+      category: '§14a-Steuerbox · Wärmepumpe · Wallbox',
+      logo: 'EE',
+      accent: 'green'
     }
   ];
 
@@ -409,6 +418,11 @@
       case 'loxone': return data.configured ? 'online' : 'disabled';
       case 'devices': return data.total > 0 ? 'online' : 'disabled';
       case 'notifications': return data.enabled ? 'online' : 'disabled';
+      case 'eebus':
+        if (!data || !data.enabled) return 'disabled';
+        if (data.status !== 'running') return 'offline';
+        if (data.gridPeer && !data.gridConnected) return 'stale';
+        return 'online';
       case 'pvstrings':
         if (!data || !data.enabled) return 'disabled';
         if (data.lastError) return 'stale';
@@ -580,6 +594,13 @@
           { label: 'Last send', value: fmtRel(data.lastSampleAt) }
         ];
       }
+      case 'eebus':
+        return [
+          { label: 'Steuerbox', value: data.gridPeer ? (data.gridConnected ? 'verbunden' : 'getrennt') : '—' },
+          { label: '§14a', value: data.gridStateLabel || '—' },
+          { label: 'Geräte', value: String(data.devices || 0) },
+          { label: 'Dienst', value: data.statusLabel || '—' }
+        ];
       case 'pvstrings':
         return [
           { label: 'Strings', value: String(data.sourceCount || 0) },
@@ -1610,6 +1631,11 @@
     }
     if (key === 'notifications') { inst = getOrCreateDrawer('notifications'); if (inst) inst.open(); return true; }
     if (key === 'vrm') { inst = getOrCreateDrawer('vrm'); if (inst) inst.open(); return true; }
+    if (key === 'eebus') {
+      inst = getOrCreateDrawer('eebus');
+      if (inst) { inst.open(); if (window.DVhubEebus) setTimeout(window.DVhubEebus.load, 0); }
+      return true;
+    }
     if (key === 'pvstrings') {
       inst = getOrCreateDrawer('pvstrings');
       if (inst) { inst.open(); if (window.DVhubPvStrings) setTimeout(window.DVhubPvStrings.load, 0); }

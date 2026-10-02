@@ -4028,6 +4028,28 @@ export function createApiRoutes(ctx) {
             })(),
           };
         })(),
+        // EEBUS: nur Zustände und Zähler, keine Schlüssel.
+        eebus: (() => {
+          const st = ctx.eebus?.status?.() || { enabled: false };
+          const grid = (st.trusted || []).find((t) => t.role === 'grid');
+          const STATE_LABELS = {
+            disabled: '—', init: 'Start', unlimited_controlled: 'frei', limited: 'begrenzt',
+            failsafe: 'Failsafe', unlimited_autonomous: 'frei (autonom)',
+          };
+          const STATUS_LABELS = {
+            disabled: 'aus', not_installed: 'nicht installiert', starting: 'startet', running: 'läuft',
+            restarting: 'Neustart', error: 'Fehler', stopped: 'gestoppt',
+          };
+          return {
+            enabled: st.enabled === true,
+            status: st.status || 'disabled',
+            statusLabel: STATUS_LABELS[st.status] || st.status || '—',
+            gridPeer: Boolean(grid),
+            gridConnected: grid?.connected === true,
+            gridStateLabel: STATE_LABELS[st.grid?.lpc?.state] || null,
+            devices: (st.trusted || []).filter((t) => t.role === 'device').length,
+          };
+        })(),
         // PV-Strings / Solar-Logger. Nur Zaehler und Zeitstempel.
         pvstrings: (() => {
           const st = ctx.pvStrings?.getStatus?.() || {};
@@ -4961,6 +4983,54 @@ export function createApiRoutes(ctx) {
         applied: !!(curve && curve.status === 'ok' && getCfg().optimizer?.inverterEfficiencyAuto !== false),
         curve,
       });
+    }
+
+    // --- EEBUS (§14a-Steuerbox, EEBUS-Geräte) — services/eebus ---------------
+    if (url.pathname === '/api/eebus/status' && req.method === 'GET') {
+      if (!ctx.eebus) return json(res, 503, { ok: false, error: 'eebus not available' });
+      return json(res, 200, { ok: true, ...ctx.eebus.status() });
+    }
+    if (url.pathname === '/api/eebus/pairing' && req.method === 'POST') {
+      if (!ctx.eebus) return json(res, 503, { ok: false, error: 'eebus not available' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const r = await ctx.eebus.setPairing(body?.on === true);
+      return json(res, r?.ok ? 200 : 409, { ok: r?.ok === true, error: r?.error || null, pairing: ctx.eebus.status().pairing });
+    }
+    if (url.pathname === '/api/eebus/trust' && (req.method === 'POST' || req.method === 'DELETE')) {
+      const body = req.method === 'POST' ? await readJsonBody(req, res) : null;
+      if (req.method === 'POST' && body === null) return;
+      const ski = String((req.method === 'POST' ? body?.ski : url.searchParams.get('ski')) || '')
+        .toLowerCase().replace(/[\s:]/g, '');
+      if (!/^[0-9a-f]{40}$/.test(ski)) return json(res, 400, { ok: false, error: 'invalid_ski' });
+      const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+      next.eebus = (next.eebus && typeof next.eebus === 'object') ? next.eebus : {};
+      const list = Array.isArray(next.eebus.trusted) ? next.eebus.trusted.filter((t) => String(t?.ski || '').toLowerCase() !== ski) : [];
+      if (req.method === 'POST') {
+        const role = body?.role === 'grid' ? 'grid' : 'device';
+        if (role === 'grid' && list.some((t) => t?.role === 'grid')) {
+          return json(res, 409, { ok: false, error: 'grid_peer_exists' });
+        }
+        list.push({ ski, name: String(body?.name || '').slice(0, 80), role, addedAt: new Date().toISOString() });
+      }
+      next.eebus.trusted = list;
+      try { ctx.saveAndApplyConfig(next); } catch (e) {
+        return json(res, 500, { ok: false, error: e?.message || 'save_failed' });
+      }
+      pushLog(req.method === 'POST' ? 'eebus_trusted' : 'eebus_untrusted', { ski, role: body?.role || null }, actorContext(req));
+      await ctx.eebus?.reload?.();
+      return json(res, 200, { ok: true, trusted: list });
+    }
+    if (url.pathname === '/api/eebus/device-limit' && req.method === 'POST') {
+      if (!ctx.eebus) return json(res, 503, { ok: false, error: 'eebus not available' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const ski = String(body?.ski || '').toLowerCase();
+      const w = body?.w === null || body?.w === undefined ? null : Number(body.w);
+      if (w !== null && (!Number.isFinite(w) || w < 0)) return json(res, 400, { ok: false, error: 'invalid_w' });
+      const r = await ctx.eebus.setDeviceLimit(ski, w, Number(body?.durationS) || 0);
+      pushLog('eebus_device_limit_manual', { ski, w }, actorContext(req));
+      return json(res, r?.ok ? 200 : 409, { ok: r?.ok === true, error: r?.error || null });
     }
 
     if (url.pathname === '/api/eos/status' && req.method === 'GET') {

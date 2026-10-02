@@ -221,6 +221,9 @@ const SETUP_WIZARD_FIELD_META = {
 
 const restartSensitivePrefixes = [
   'httpPort',
+  // Erstes Einschalten: auf nativen Installationen baut der nächste Start
+  // (post-update.sh → eebus-provision.sh) den Hilfsprozess dvhub-eebus.
+  'eebus.enabled',
   'modbusListenHost',
   'modbusListenPort',
   'meterPollMs',
@@ -602,6 +605,137 @@ function buildFieldDefinitions() {
       min: 1,
       max: 65535,
       help: 'Port, auf dem DVhub als Modbus-Proxy lauscht.'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.enabled',
+      label: 'EEBUS aktivieren',
+      type: 'boolean',
+      help: 'Startet den EEBUS-Dienst (dvhub-eebus). Ohne gekoppelte Steuerbox gibt es keine §14a-Begrenzung und keinen Failsafe.'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.port',
+      label: 'EEBUS-Port (SHIP)',
+      type: 'number',
+      min: 1024,
+      max: 65535,
+      help: 'TCP-Port für SHIP. Die Gegenstellen finden DVhub per mDNS, der Port muss im Heimnetz erreichbar sein.'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.grid.consumptionNominalMaxW',
+      label: 'Maximale Bezugsleistung (W)',
+      type: 'number',
+      min: 0,
+      max: 1000000,
+      help: 'Höchste Bezugsleistung der Anlage, die DVhub der Steuerbox meldet (LPC). 0 = 43 470 W (3 × 63 A).'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.grid.failsafeConsumptionW',
+      label: 'Failsafe-Bezugsgrenze (W)',
+      type: 'number',
+      min: 0,
+      max: 1000000,
+      help: 'Gilt, wenn die Verbindung zur Steuerbox abreißt, bis die Steuerbox einen eigenen Wert schreibt. §14a: mindestens 4200 W.'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.grid.failsafeConsumptionDurationS',
+      label: 'Failsafe-Mindestdauer Bezug (s)',
+      type: 'number',
+      min: 7200,
+      max: 86400,
+      help: 'So lange gilt die Failsafe-Grenze mindestens (EEBUS: 2–24 h).'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.grid.productionNominalMaxW',
+      label: 'Maximale Einspeiseleistung (W)',
+      type: 'number',
+      min: 0,
+      max: 1000000,
+      help: 'Höchste Einspeiseleistung, die DVhub der Steuerbox meldet (LPP). 0 = Summe der PV-Anlagen.'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.grid.failsafeProductionW',
+      label: 'Failsafe-Einspeisegrenze (W)',
+      type: 'number',
+      min: 0,
+      max: 1000000,
+      help: 'Einspeisegrenze, wenn die Verbindung zur Steuerbox abreißt (LPP). 0 = keine Einspeisung im Failsafe.'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.grid.failsafeProductionDurationS',
+      label: 'Failsafe-Mindestdauer Einspeisung (s)',
+      type: 'number',
+      min: 7200,
+      max: 86400,
+      help: 'So lange gilt die Failsafe-Einspeisegrenze mindestens (EEBUS: 2–24 h).'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.devices.defaultNominalW',
+      label: 'Nennleistung von EEBUS-Geräten ohne Angabe (W)',
+      type: 'number',
+      min: 1,
+      max: 100000,
+      help: 'Für die anteilige Aufteilung einer §14a-Grenze, solange ein Gerät seine Nennleistung nicht meldet.'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.devices.forwardGridLimit',
+      label: '§14a-Grenze an EEBUS-Geräte weitergeben',
+      type: 'boolean',
+      help: 'Teilt eine Bezugsgrenze der Steuerbox anteilig (nach Nennleistung) auf Wallbox und gekoppelte EEBUS-Geräte auf. Der Akku lädt während der Begrenzung nicht aus dem Netz.'
+    },
+    {
+      section: 'system',
+      group: 'eebus',
+      groupLabel: 'EEBUS (§14a-Steuerbox & Geräte)',
+      groupDescription: 'DVhub als EEBUS-Energiemanager: nimmt Leistungsgrenzen der Steuerbox des Netzbetreibers an (§14a EnWG, LPC/LPP), meldet den Netzanschlusspunkt und steuert EEBUS-Wärmepumpen und -Wallboxen. Kopplung auf der Seite „EEBUS“.',
+      path: 'eebus.ohpcf.mode',
+      label: 'Flexible Wärmepumpen-Läufe (OHPCF)',
+      type: 'select',
+      options: [
+        { value: 'cheapest', label: 'In den günstigsten Zeitraum legen' },
+        { value: 'immediate', label: 'Frühestmöglich starten' },
+        { value: 'off', label: 'Nicht einplanen' }
+      ],
+      help: 'Kündigt eine EEBUS-Wärmepumpe einen verschiebbaren Verdichterlauf an, legt DVhub den Start in das angegebene Fenster.'
     },
     {
       section: 'system',
@@ -3386,6 +3520,23 @@ export function createDefaultConfig() {
     // 'luox' (LUOX/Lumenaza-Belegung 02.06.2026, dv-interface-luox.js).
     // referencePowerW 0 = Summe der PV-Anlagen (kWp).
     dvInterface: { profile: 'plexlog', luox: { referencePowerW: 0 } },
+    // EEBUS (services/eebus): §14a-Steuerbox (LPC/LPP, Netzanschlusspunkt) und
+    // EEBUS-Geräte. Gekoppelte Gegenstellen (trusted) verwaltet die EEBUS-Seite.
+    eebus: {
+      enabled: false,
+      port: 4712,
+      trusted: [],
+      grid: {
+        consumptionNominalMaxW: 0,
+        failsafeConsumptionW: 4200,
+        failsafeConsumptionDurationS: 7200,
+        productionNominalMaxW: 0,
+        failsafeProductionW: 0,
+        failsafeProductionDurationS: 7200,
+      },
+      devices: { forwardGridLimit: true, defaultNominalW: 4200 },
+      ohpcf: { mode: 'cheapest' },
+    },
     meterPollMs: 2000,
     keepalivePulseSec: 60,
     gridPositiveMeans: 'feed_in',

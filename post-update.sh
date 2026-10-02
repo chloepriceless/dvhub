@@ -291,6 +291,29 @@ if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
   fi
 fi
 
+# ── 9b. EEBUS (dvhub-eebus) bauen/aktualisieren (entkoppelt, idempotent) ──
+# Nur wenn EEBUS aktiviert ist oder dvhub-eebus schon installiert war: dann
+# baut eebus-provision.sh den Hilfsprozess im Hintergrund (Toolchain + openeebus,
+# ~1 min auf einem Pi 4) — der Boot wird nie blockiert. NON-FATAL.
+if [[ -f "$INSTALL_DIR/eebus-provision.sh" && ! -f "$DATA_DIR/.no-eebus" ]]; then
+  EEBUS_ON=0
+  if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
+    node -e 'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(c?.eebus?.enabled===true?0:1)' "$CONFIG_PATH" 2>/dev/null && EEBUS_ON=1
+  fi
+  if [[ "$EEBUS_ON" -eq 1 || -x "$INSTALL_DIR/bin/dvhub-eebus" ]]; then
+    if systemctl is-active --quiet dvhub-eebus-provision.service 2>/dev/null; then
+      echo "  EEBUS: Bau läuft bereits"
+    elif command -v systemd-run >/dev/null 2>&1; then
+      systemd-run --collect --quiet --unit "dvhub-eebus-provision" \
+        --description "DVhub EEBUS provisioning" \
+        --setenv=INSTALL_DIR="$INSTALL_DIR" --setenv=DATA_DIR="$DATA_DIR" \
+        bash "$INSTALL_DIR/eebus-provision.sh" 2>/dev/null \
+        && echo "  EEBUS: Prüfung/Bau im Hintergrund gestartet" \
+        || echo "  EEBUS: Hintergrund-Start fehlgeschlagen (non-fatal)"
+    fi
+  fi
+fi
+
 # ── 10. EOS-Provisionierung / Retrofit (idempotent, entkoppelt) ──
 # EOS läuft seit v1.0 standardmäßig als DV-Fork. Boxen, die vor dieser Änderung
 # ohne EOS installiert wurden, werden hier nachgerüstet (Provisioning-Logik in

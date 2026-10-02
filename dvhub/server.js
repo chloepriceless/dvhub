@@ -76,6 +76,8 @@ import {
 import { atomicWriteControlState } from './control-state-io.js';
 import { createModbusServer } from './modbus-server.js';
 import { createDvLimitController } from './dv-interface-luox.js';
+import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
+import { createEebusService } from './services/eebus/index.js';
 import { createEpexFetcher } from './epex-fetch.js';
 import { createPoller, loadEnergy } from './polling.js';
 // T-CROSSCHECK (2026-07-25): Zweitquellen-Kreuzprobe gegen den MQTT-Dienst der
@@ -1081,7 +1083,8 @@ const dvLimit = createDvLimitController({
   getCfg: () => cfg,
   setForcedOff,
   clearForcedOff,
-  applyDvFeedInLimit: (limitW) => ctx.applyDvFeedInLimit?.(limitW),
+  // Über den Arbiter: DV-Teilvorgabe und EEBUS-LPP teilen sich den Begrenzer.
+  applyDvFeedInLimit: (limitW) => ctx.feedInLimit.set('dv', limitW),
   pushLog,
   writeControlEvent: (event) => telemetrySafeWrite(() => telemetryStore.writeControlEvent(event)),
 });
@@ -1152,6 +1155,12 @@ ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRu
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 ctx.applyDvFeedInLimit = scheduler.applyDvFeedInLimit;
+// Eine Einspeisegrenze für alle Quellen (DV-Teilvorgabe, EEBUS-LPP): die
+// kleinste gilt, beim Aufheben wird der Wert davor zurückgeschrieben.
+ctx.feedInLimit = createFeedInLimitArbiter({
+  applyLimit: (limitW) => scheduler.applyDvFeedInLimit(limitW),
+  pushLog,
+});
 ctx.applyControlTarget = scheduler.applyControlTarget;
 // Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
 // MQTT-Command-Subscriber gehen durch denselben geprüften Pfad.
@@ -1333,6 +1342,8 @@ const eosEvccBridge = createEosEvccBridge({
   },
   isProActive: () => ctx.licenseService?.isProActive?.() !== false,
   isPaused: () => state.ctrl?.discretionaryWritesPaused === true,
+  // §14a: Anteil der Steuerbox-Grenze für die Wallbox (services/eebus).
+  getGridCapW: () => (Number.isFinite(state.ctrl?.eebusWallboxCapW) ? state.ctrl.eebusWallboxCapW : null),
   pushLog: (event, data) => ctx.pushLog?.(event, data),
   // „Sofort laden“ ueberlebt einen Neustart (Update mitten im Laden) — eigene
   // kleine Datei, Laufzeitzustand gehoert nicht in config.json.
@@ -1343,6 +1354,10 @@ const eosEvccBridge = createEosEvccBridge({
   }
 });
 ctx.eosEvccBridge = eosEvccBridge;
+
+// EEBUS (§14a-Steuerbox, EEBUS-Geräte) über den Hilfsprozess dvhub-eebus.
+const eebusService = createEebusService(ctx, { dataDir: DATA_DIR || undefined });
+ctx.eebus = eebusService;
 
 // Steck-/Ladezustand direkt von OpenEVSE / go-e (alle 15 s) — Quelle für die
 // Steck-Wache und die E-Auto-Kachel, wenn die Wallbox nicht evcc ist.
@@ -2109,6 +2124,7 @@ if (IS_RUNTIME_PROCESS) {
       pushLog('vpn_start_error', { error: err.message }, 'error');
     });
   }
+  eebusService.start().catch((err) => pushLog('eebus_start_error', { error: err?.message || String(err) }, 'error'));
   expireLeaseIntervalId = setInterval(() => {
     try { expireLeaseIfNeeded(); }
     catch (err) { pushLog('expire_lease_interval_error', { error: err?.message ?? String(err) }); }
@@ -2435,6 +2451,7 @@ async function gracefulShutdown(signal) {
   safeSync('evccIntegration.stop', () => evccIntegration.stop?.());
   safeSync('pvStrings.stop', () => pvStrings.stop?.());
   safeSync('eosEvccBridge.stop', () => eosEvccBridge.stop?.());
+  safeSync('eebus.stop', () => { eebusService.stop().catch(() => {}); });
   safeSync('datenspende.stop', () => ctx.datenspende?.stop?.());
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());

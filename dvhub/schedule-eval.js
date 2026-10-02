@@ -1364,6 +1364,23 @@ export function createScheduleEvaluator(ctx) {
       }
       // === end T-0002 persistent-override SoC floor ===========================
 
+      // === §14a EnWG (EEBUS LPC) =============================================
+      // Solange die Steuerbox den Bezug begrenzt (Begrenzung oder Failsafe),
+      // lädt der Akku nicht aus dem Netz: ein positiver Sollwert (= Netzbezug
+      // zum Laden) wird auf den Standard-Sollwert (Eigenverbrauch) gehalten.
+      // Entladen und Eigenverbrauch bleiben erlaubt — sie senken den Bezug.
+      if (target === 'gridSetpointW' && Number.isFinite(state.ctrl.eebusConsumptionLimitW)
+          && Number(eff.value) > 0) {
+        const hold = Math.min(0, Number(cfg.schedule?.defaultGridSetpointW ?? 0));
+        await applyControlTarget('gridSetpointW', hold, 'paragraph14a_limit');
+        if (!state.ctrl._p14aHoldLogged) {
+          pushLog('paragraph14a_grid_charge_blocked', { limitW: state.ctrl.eebusConsumptionLimitW, suppressed: Number(eff.value), held: hold });
+          state.ctrl._p14aHoldLogged = true;
+        }
+        continue;
+      }
+      state.ctrl._p14aHoldLogged = false;
+
       // Bei negativen Preisen: DC/AC Einspeisung blockieren + Grid Setpoint begrenzen
       if (target === 'gridSetpointW' && priceNegative) {
         // 2026-07-29 (Christin): der Puffer während der Abregelung ist DERSELBE
@@ -1469,6 +1486,10 @@ export function createScheduleEvaluator(ctx) {
       // DV forcedOff und negative Preise blockieren DC-Einspeisung immer
       if (state.ctrl.forcedOff) {
         dcSource = 'dv_forced_off';
+      } else if (state.ctrl.eebusProductionBlock === true) {
+        // EEBUS LPP ohne Einspeisebegrenzer (controlWrite.dvFeedInLimitW):
+        // die Grenze lässt sich nur durch Sperren der Einspeisung einhalten.
+        dcSource = 'paragraph14a_production_block';
       } else if (priceNegative) {
         dcSource = 'negative_price_protection';
       } else if (state.ctrl.discretionaryWritesPaused) {

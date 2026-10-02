@@ -435,6 +435,29 @@
         <div class="dv-drawer-toast" id="dv-drawer-vrm-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
 
+      <!-- EEBUS (2026-10-02): §14a-Steuerbox (LPC/LPP, Netzanschlusspunkt) und
+           EEBUS-Geräte. Inhalt rendert eebus-drawer.js. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-eebus-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-eebus" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-eebus-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-eebus-title">EEBUS</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-eebus-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body" id="dv-drawer-eebus-body">
+          <p class="dv-drawer-intro">
+            DVhub als EEBUS-Energiemanager: Die <strong>Steuerbox</strong> des Netzbetreibers kann
+            Bezug und Einspeisung begrenzen (&sect;14a EnWG, LPC/LPP) und liest den Netzanschlusspunkt.
+            EEBUS-<strong>Ger&auml;te</strong> wie W&auml;rmepumpen und Wallboxen begrenzt und misst DVhub selbst.
+          </p>
+          <div id="eebus-content"><p class="muted">Lade &hellip;</p></div>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-eebus-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
+
       <!-- PV-Strings / Solar-Logger (2026-09-23): Erzeugung je String aus den
            Victron-Trackern (VRM), CSV fuer die pvnode-Kalibrierung. -->
       <div class="dv-drawer-backdrop" id="dv-drawer-pvstrings-backdrop" hidden></div>
@@ -1381,6 +1404,7 @@
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/pv-strings-drawer.js?v=20260923"></script>
+  <script src="/eebus-drawer.js?v=20261002"></script>
   <script src="/integrations.js?v=20261001-wallbox4"></script>
 </body>
 </html>

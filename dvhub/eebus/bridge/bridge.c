@@ -769,24 +769,14 @@ static int AddDeviceSide(DeviceLocalObject* device) {
   return 0;
 }
 
+// DVhub has the grid power and (its own integrated) energy counters, but no
+// per-phase currents, voltages or grid frequency — so only power (MGCP
+// scenario 2) and energy (scenarios 3 and 4) are offered.
 static int AddGridConnectionPoint(DeviceLocalObject* device) {
-  static const GcpMgcpMeasurementConfig measured = {.value_source = kMeasurementValueSourceTypeMeasuredValue};
+  static const GcpMgcpMeasurementConfig calculated = {.value_source = kMeasurementValueSourceTypeCalculatedValue};
   static const GcpMgcpMonitorEnergyConfig energy_cfg = {
-      .energy_feed_in_cfg  = &measured,
-      .energy_consumed_cfg = &measured,
-  };
-  static const GcpMgcpMonitorCurrentConfig current_cfg = {
-      .current_phase_a_cfg = &measured,
-      .current_phase_b_cfg = &measured,
-      .current_phase_c_cfg = &measured,
-  };
-  static const GcpMgcpMonitorVoltageConfig voltage_cfg = {
-      .voltage_phase_a_cfg = &measured,
-      .voltage_phase_b_cfg = &measured,
-      .voltage_phase_c_cfg = &measured,
-  };
-  static const GcpMgcpMonitorFrequencyConfig frequency_cfg = {
-      .frequency_cfg = {.value_source = kMeasurementValueSourceTypeMeasuredValue},
+      .energy_feed_in_cfg  = &calculated,
+      .energy_consumed_cfg = &calculated,
   };
   static const GcpMgcpConfig cfg = {
       .power_cfg =
@@ -794,10 +784,7 @@ static int AddGridConnectionPoint(DeviceLocalObject* device) {
               .phases          = kElectricalConnectionPhaseNameTypeAbc,
               .power_total_cfg = {.value_source = kMeasurementValueSourceTypeMeasuredValue},
           },
-      .energy_cfg    = &energy_cfg,
-      .current_cfg   = &current_cfg,
-      .voltage_cfg   = &voltage_cfg,
-      .frequency_cfg = &frequency_cfg,
+      .energy_cfg = &energy_cfg,
   };
 
   EntityLocalObject* entity = NewEntity(device, kEntityTypeTypeGridConnectionPointOfPremises);
@@ -1009,13 +996,6 @@ struct GcpField {
 static void CmdGcp(const cJSON* cmd) {
   static const GcpField fields[] = {
       {"power_w", kGcpPowerTotal},
-      {"current_l1_a", kGcpCurrentPhaseA},
-      {"current_l2_a", kGcpCurrentPhaseB},
-      {"current_l3_a", kGcpCurrentPhaseC},
-      {"voltage_l1_v", kGcpVoltagePhaseA},
-      {"voltage_l2_v", kGcpVoltagePhaseB},
-      {"voltage_l3_v", kGcpVoltagePhaseC},
-      {"frequency_hz", kGcpFrequency},
   };
   double v = 0.0;
   for (size_t i = 0; i < ARRAY_SIZE(fields); ++i) {

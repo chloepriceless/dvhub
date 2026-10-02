@@ -58,6 +58,7 @@ const INTENTIONAL = new Map([
   ['optimizer.evTargetValue', 'EVCC-Schublade auf der Integrationsseite (E-Auto-Abfahrt)'],
   ['optimizer.evConsumptionKwhPer100km', 'EVCC-Schublade auf der Integrationsseite (E-Auto-Abfahrt)'],
   ['pvStrings.enabled', 'PV-Strings-Schublade auf der Integrationsseite (Solar-Logger)'],
+  ['eebus.trusted', 'EEBUS-Schublade auf der Integrationsseite (Kopplung, /api/eebus/trust)'],
   ['pvStrings.backfillDays', 'PV-Strings-Schublade auf der Integrationsseite (Solar-Logger)'],
   ['optimizer.evPlanOnlyWhenPlugged', 'Leitstand-Kachel E-Auto (Schalter „Nur angesteckt planen“)'],
   ['pvStrings.groups', 'PV-Strings-Schublade auf der Integrationsseite (Gruppen-Editor)'],

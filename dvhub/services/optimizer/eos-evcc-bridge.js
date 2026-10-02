@@ -89,6 +89,22 @@ export function buildEvPlan(solution, bc) {
   }).filter((slot) => Number.isFinite(slot.ts));
 }
 
+/**
+ * §14a EnWG: Leistungsgrenze der Steuerbox (EEBUS LPC) auf den Ladebefehl
+ * anwenden. capW = für die Wallbox freigegebene Leistung oder null (keine
+ * Grenze). Liegt die Grenze unter dem Mindeststrom, wird nicht geladen — ein
+ * Laden mit Mindeststrom würde sie überschreiten.
+ */
+export function applyGridCap(slot, bc, capW) {
+  if (capW == null || !Number.isFinite(Number(capW)) || slot?.action !== 'charge') return slot;
+  const capA = Number(capW) / (bc.voltageV * bc.phases);
+  if (capA < bc.minCurrentA) {
+    return { ...slot, action: 'stop', currentA: null, gridCapW: Number(capW) };
+  }
+  const currentA = Math.min(Number(slot.currentA), Math.floor(capA * 10) / 10);
+  return currentA === slot.currentA ? slot : { ...slot, currentA, gridCapW: Number(capW) };
+}
+
 /** Kleinste Ladeleistung, die der Ladepunkt kann (Mindeststrom × Phasen). */
 export function minChargeW(bc) {
   return Math.ceil(bc.minCurrentA * bc.voltageV * bc.phases);
@@ -150,6 +166,7 @@ export function slotAt(plan, nowMs) {
  * @param {(limit:number) => Promise<object|null>} deps.getSolution   eosAdapter.getOptimizationSolution
  * @param {(cfg:object, bc:object) => object} deps.getCharger  Adapter (services/wallbox/adapters.js)
  * @param {() => boolean} [deps.isProActive]
+ * @param {() => number|null} [deps.getGridCapW]  §14a-Grenze für die Wallbox (EEBUS), null = keine
  * @param {() => boolean} [deps.isPaused]  Not-Halt aktiv (state.ctrl.discretionaryWritesPaused)
  * @param {(event:string, data?:object) => void} [deps.pushLog]
  * @param {() => number} [deps.now]
@@ -159,6 +176,7 @@ export function slotAt(plan, nowMs) {
 export function createEosEvccBridge(deps) {
   const {
     getCfg, getSolution, getCharger,
+    getGridCapW = () => null,
     isProActive = () => true,
     isPaused = () => false,
     pushLog = () => {},
@@ -280,7 +298,20 @@ export function createEosEvccBridge(deps) {
       return null;
     }
 
-    const currentA = powerToCurrentA(override.powerW, bc);
+    const capped = applyGridCap({ action: 'charge', currentA: powerToCurrentA(override.powerW, bc) }, bc, getGridCapW());
+    if (capped.action === 'stop') {
+      // §14a-Grenze unter dem Mindeststrom: „Sofort laden“ pausiert, bis die
+      // Steuerbox die Grenze aufhebt.
+      const key = `${bc.charger}:${bc.loadpoint}:override:grid-cap`;
+      if (force || lastSent?.key !== key) {
+        const res = await charger.stop();
+        if (!res?.ok) return { ok: false, error: res?.error || 'wallbox write failed', override: true };
+        lastSent = { key, charger: bc.charger, action: 'stop', currentA: null, loadpoint: bc.loadpoint, at: new Date(now()).toISOString() };
+        pushLog('ev_override_grid_cap', { capW: capped.gridCapW });
+      }
+      return { ok: true, override: true, gridCapW: capped.gridCapW };
+    }
+    const currentA = capped.currentA;
     const key = `${bc.charger}:${bc.loadpoint}:override:${currentA}`;
     if (!force && lastSent?.key === key) {
       const drift = charger.type === 'evcc' && st?.ok && (st.raw?.mode ?? null) !== 'now';
@@ -377,6 +408,7 @@ export function createEosEvccBridge(deps) {
         slot = { ts: now(), endTs: now(), action: 'stop', currentA: null, chargePowerW: null };
       }
 
+      slot = applyGridCap(slot, bc, getGridCapW());
       const key = commandKey(bc, slot);
       if (!force && lastSent?.key === key) {
         // Unveraendert — aber wurde evcc inzwischen von aussen umgestellt
