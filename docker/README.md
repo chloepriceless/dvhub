@@ -75,13 +75,13 @@ es bricht der Lauf vor dem Bauen ab. Der Benutzername steht im Workflow.
 
 ### Speicherbudget der Suite
 
-Die Obergrenzen (`mem_limit`) ergeben zusammen **704 MB**:
+Die Obergrenzen (`mem_limit`) ergeben zusammen **672 MB** (Stand 2026-10-02):
 
-| Container | Obergrenze | gemessen (echte Daten: 85 Mio. Zeilen, 18 Monate) |
+| Container | Obergrenze | gemessen (echte Prod-Daten) |
 |---|---|---|
-| DB | 160 MB (`shared_buffers` 64 MB) | 35–120 MB, Rest freigebbarer Cache |
-| DVhub | 192 MB (Node-Heap ~134 MB) | ~50 MB; Jahres-/Gesamtansicht der Historie +41/+51 MB Heap |
-| EOS | 352 MB | frisch ~215 MB, nach Tagen ~290 MB (Appliance) |
+| DB | 224 MB (`shared_buffers` 64 MB, 3 DVhub-Verbindungen) | Betrieb ~110–120 MB; ein voller Restore braucht mehr — mit 160 MB wurde er auf x86 abgebrochen |
+| DVhub | 192 MB | max ~130–150 MB (Bedienung + Wohnzimmer-Tablet gleichzeitig) |
+| EOS | 256 MB | DV-EOS rc1.5, Fitness-Cache aus: ~150–155 MB Prozessspeicher, ~217 MB inkl. Bibliotheken — auch beim Planen mit E-Auto und Geräten |
 
 Die Historie rechnet Jahr und „Alle“ Monat für Monat — der Speicher folgt dem
 größten Monat, nicht der Länge der Historie. Mehr RAM vorhanden: die Werte in

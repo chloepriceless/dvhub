@@ -77,7 +77,7 @@ services:
     # Speicherbudget der Suite: die OBERGRENZEN aller drei Container ergeben
     # zusammen 704 MB (DB 160 + DVhub 192 + EOS 352). Page-Cache zählt mit,
     # wird bei Druck aber freigegeben.
-    mem_limit: ${DB_MEM_LIMIT:-160m}
+    mem_limit: ${DB_MEM_LIMIT:-224m}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d dvhub"]
       interval: 10s
@@ -113,7 +113,7 @@ services:
       DVHUB_DB_PASSWORD: ${DVHUB_DB_PASSWORD}
       DVHUB_DB_TIMESCALEDB: "true"
       # Speicher-Limit der DB — DVhub wählt danach sein DB-Profil (db-tuning.js).
-      DVHUB_DB_MEM_LIMIT: ${DB_MEM_LIMIT:-160m}
+      DVHUB_DB_MEM_LIMIT: ${DB_MEM_LIMIT:-224m}
       # Nur für DB-Backup/-Restore aus der Oberfläche (Einstellungen → Status).
       DVHUB_DB_ADMIN_USER: postgres
       DVHUB_DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}
@@ -164,7 +164,7 @@ services:
       - dvhub-eos:/data
     # Eigener Speicher frisch ~205 MB, nach Tagen Dauerbetrieb ~290 MB
     # (Appliance, 15-min-Optimierung); Spitze dort 352 MB inkl. Page-Cache.
-    mem_limit: ${EOS_MEM_LIMIT:-352m}
+    mem_limit: ${EOS_MEM_LIMIT:-256m}
     cpus: ${EOS_CPUS:-1}
 
 # Erststart der DB (läuft nur bei leerem Datenverzeichnis, als postgres):
