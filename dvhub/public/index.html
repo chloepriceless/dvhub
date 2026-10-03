@@ -463,7 +463,7 @@
       <!-- DV-EOS day plan (operator request 2026-06-21): the EOS optimiser's
            Fahrplan for the full ~27h horizon — planned battery SoC trajectory
            (right axis) + PV-Prognose + Netz-Einspeisung (left kW axis) + KPIs.
-           From /api/forecast/inspector/eos (output.rows), rendered by
+           From /api/eos/plan (output.rows, Plan aus dem EOS-Monitor), rendered by
            leitstand-charts.js#renderEosPlanChart. -->
       <div class="forecast-chart-shell" id="eosPlanCard">
         <div class="chart-skeleton" id="eosPlanSkeleton">
@@ -528,7 +528,7 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20260708-swap"></script>
 <script src="/app.js?v=20260708-daynight"></script>
-<script src="/leitstand-charts.js?v=20260621-prov-energy"></script>
+<script src="/leitstand-charts.js?v=20261003-eos-plan"></script>
 <script src="/ev-tile.js?v=20260927-ev-boost"></script>
 </body>
 </html>

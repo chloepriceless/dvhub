@@ -8,6 +8,14 @@
 // Jetzt: alle 30 s ein /v1/health (Timeout 15 s), alle 60 s die Lösung. Wer
 // etwas wissen will, liest status() / latestSolution() — ohne eigenen Aufruf.
 //
+// Push (DV-EOS ab rc1.9, ems.notify_url): EOS meldet jeden fertigen Lauf an
+// POST /api/eos/solution-ready, der Monitor holt die Lösung dann sofort.
+// Solange Meldungen kommen, fragt er nur noch alle 10 min nach (Rückfall).
+//
+// Der Leitstand zeigt displayPlan(): den zuletzt geholten Plan, auch wenn EOS
+// inzwischen neu gestartet ist (dann gilt er nicht mehr für die Regelung,
+// latestSolution() liefert null, aber er ist weiterhin der letzte Plan).
+//
 // Zustände:
 //   disabled — EOS-Anbindung aus
 //   unknown  — noch keine Antwort seit dem Start
@@ -19,6 +27,9 @@ export const EOS_HEALTH_INTERVAL_MS = 30_000;
 export const EOS_SOLUTION_INTERVAL_MS = 60_000;
 export const EOS_BUSY_GRACE_MS = 5 * 60_000;
 export const EOS_SOLUTION_MAX_AGE_MS = 30 * 60_000;
+export const EOS_SOLUTION_FALLBACK_MS = 10 * 60_000;
+// Ohne Meldung so lange gilt Push als ausgefallen → wieder minütlich fragen.
+export const EOS_PUSH_STALE_MS = 2 * 3600_000;
 const SOLUTION_ROWS = 8 * 24 * 4;
 
 const isTimeout = (err) => /timed out|timeout/i.test(String(err || ''));
@@ -36,7 +47,11 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
     lastCheckAt: null, lastOkAt: null, lastError: null, restarts: 0, lastRestartAt: null,
   };
   let solution = null;       // { data, at }
+  let displayed = null;      // { data, at } — überlebt EOS-Neustarts
   let solutionTryAt = 0;
+  let lastPushAt = null;
+  let pushCount = 0;
+  const solutionListeners = new Set();
   let healthFlight = null;
   let solutionFlight = null;
   const restartListeners = new Set();
@@ -72,16 +87,32 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
     return healthFlight;
   }
 
-  async function refreshSolution() {
+  const pushActive = () => lastPushAt !== null && now() - lastPushAt < EOS_PUSH_STALE_MS;
+  const solutionIntervalMs = () => (pushActive() ? EOS_SOLUTION_FALLBACK_MS : EOS_SOLUTION_INTERVAL_MS);
+
+  /** Eine geholte Lösung übernehmen; Zuhörer hören nur neue Pläne. */
+  function ingest(sol) {
+    if (!sol || !Array.isArray(sol.rows)) return false;
+    const previous = solution?.data?.generatedAt ?? null;
+    solution = { data: sol, at: now() };
+    displayed = solution;
+    const stamp = sol.generatedAt ?? null;
+    if (stamp && stamp !== previous) {
+      for (const fn of solutionListeners) { try { fn(stamp, sol); } catch { /* Aufrufer loggt */ } }
+    }
+    return true;
+  }
+
+  async function refreshSolution({ force = false } = {}) {
     if (!isEnabled()) return solution;
     if (solutionFlight) return solutionFlight;
     // Rechnet EOS gerade, nicht noch zusätzlich die große Lösung abholen.
-    if (st.status === 'down' || st.status === 'busy') return solution;
+    // Eine Push-Meldung (force) heißt: Lauf fertig, EOS antwortet wieder.
+    if (!force && (st.status === 'down' || st.status === 'busy')) return solution;
     solutionFlight = (async () => {
       solutionTryAt = now();
       try {
-        const sol = await fetchSolution(SOLUTION_ROWS);
-        if (sol && Array.isArray(sol.rows)) solution = { data: sol, at: now() };
+        ingest(await fetchSolution(SOLUTION_ROWS));
       } catch { /* letzter Plan bleibt */ }
       return solution;
     })().finally(() => { solutionFlight = null; });
@@ -93,7 +124,10 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
       if (healthTimer) return;
       checkHealth().then(() => refreshSolution()).catch(() => {});
       healthTimer = setInterval(() => { checkHealth().catch(() => {}); }, EOS_HEALTH_INTERVAL_MS);
-      solutionTimer = setInterval(() => { refreshSolution().catch(() => {}); }, EOS_SOLUTION_INTERVAL_MS);
+      solutionTimer = setInterval(() => {
+        if (now() - solutionTryAt < solutionIntervalMs() - 1000) return;
+        refreshSolution().catch(() => {});
+      }, EOS_SOLUTION_INTERVAL_MS);
       healthTimer.unref?.(); solutionTimer.unref?.();
     },
     stop() {
@@ -102,6 +136,18 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
     },
     checkHealth,
     refreshSolution,
+    ingest,
+    /**
+     * Push von EOS (POST /api/eos/solution-ready): Lauf fertig → Lösung sofort
+     * holen. Meldet EOS denselben Plan doppelt, wird trotzdem nur einmal geholt
+     * (laufender Abruf wird geteilt).
+     */
+    async notifySolutionReady() {
+      lastPushAt = now();
+      pushCount += 1;
+      if (st.status === 'busy' || st.status === 'unknown') st.status = 'up';
+      return refreshSolution({ force: true });
+    },
     /** Momentaufnahme — kein Netzaufruf. */
     status() {
       const enabled = isEnabled();
@@ -112,6 +158,7 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
         reachable: enabled && (st.status === 'up' || st.status === 'busy'),
         solutionAt: solution?.at ?? null,
         solutionGeneratedAt: solution?.data?.generatedAt ?? null,
+        push: { active: pushActive(), lastAt: lastPushAt, count: pushCount },
       };
     },
     /** up oder busy: EOS läuft (rechnet evtl. gerade). */
@@ -124,11 +171,26 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
       if (!solution) {
         if (st.status === 'unknown') await checkHealth();
         await refreshSolution();
-      } else if (now() - solutionTryAt >= EOS_SOLUTION_INTERVAL_MS) {
+      } else if (now() - solutionTryAt >= solutionIntervalMs()) {
         refreshSolution().catch(() => {});
       }
+      // Auch mit Push wird spätestens alle 10 min neu geholt (solution.at).
       return solution && now() - solution.at <= maxAgeMs ? solution.data : null;
     },
+    /**
+     * Für die Anzeige: der zuletzt geholte Plan, auch über EOS-Neustarts hinweg.
+     * Holt einmal selbst, wenn noch gar keiner da ist. Kein Plan → null.
+     * @returns {Promise<null|{data:object, at:number, current:boolean}>}
+     */
+    async displayPlan() {
+      if (!displayed && isEnabled()) {
+        if (st.status === 'unknown') await checkHealth();
+        await refreshSolution();
+      }
+      if (!displayed) return null;
+      return { data: displayed.data, at: displayed.at, current: solution === displayed };
+    },
+    onSolution(fn) { solutionListeners.add(fn); return () => solutionListeners.delete(fn); },
     onRestart(fn) { restartListeners.add(fn); return () => restartListeners.delete(fn); },
   };
 }

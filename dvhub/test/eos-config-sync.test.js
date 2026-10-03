@@ -490,3 +490,22 @@ test('Sync sendet nur Geändertes; nach invalidateSentConfig wieder alles', asyn
     await new Promise((r) => server.close(r));
   }
 });
+
+test('EOS-Push-Adresse und Fitness-Cache (2026-10-03)', async (t) => {
+  await t.test('Push-Adresse nur bei EOS auf derselben Box, mit DVhub-Port', async () => {
+    const { eosNotifyUrl } = await import('../services/optimizer/eos-config-sync.js');
+    assert.equal(eosNotifyUrl({ httpPort: 8080 }, 'http://127.0.0.1:8503'), 'http://127.0.0.1:8080/api/eos/solution-ready');
+    assert.equal(eosNotifyUrl({ httpPort: 9000 }, 'http://localhost:8503'), 'http://127.0.0.1:9000/api/eos/solution-ready');
+    assert.equal(eosNotifyUrl({}, 'http://127.0.0.1:8503'), 'http://127.0.0.1:8080/api/eos/solution-ready');
+    assert.equal(eosNotifyUrl({ httpPort: 8080 }, 'http://192.168.20.66:8503'), null, 'entferntes EOS: DVhub fragt selbst');
+    assert.equal(eosNotifyUrl({ httpPort: 8080 }, 'kaputt'), null);
+  });
+
+  await t.test('Fitness-Cache: 0/leer/ungültig = aus, sonst ganze Zahl', async () => {
+    const { eosFitnessCacheMaxEntries } = await import('../services/optimizer/eos-config-sync.js');
+    assert.equal(eosFitnessCacheMaxEntries({}), 0);
+    assert.equal(eosFitnessCacheMaxEntries({ optimizer: { eosFitnessCacheMaxEntries: '' } }), 0);
+    assert.equal(eosFitnessCacheMaxEntries({ optimizer: { eosFitnessCacheMaxEntries: -5 } }), 0);
+    assert.equal(eosFitnessCacheMaxEntries({ optimizer: { eosFitnessCacheMaxEntries: 20000.7 } }), 20000);
+  });
+});

@@ -338,7 +338,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     return slots;
   }
 
-  async function pullSchedule() {
+  async function pullSchedule({ solution } = {}) {
     const result = await httpRequest('GET', '/v1/energy-management/plan');
 
     if (!result.ok) {
@@ -378,7 +378,8 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // not grid flow (Codex review 2026-09-26). Never throws — a missing solution
     // just leaves gridSetpointW unset and the plan degrades to the op-mode view.
     try {
-      const sol = await getOptimizationSolution(8 * 24 * 4);
+      // Bereits geholte Lösung (optimizer/index.js) statt eines zweiten Abrufs.
+      const sol = solution !== undefined ? solution : await getOptimizationSolution(8 * 24 * 4);
       if (sol && Array.isArray(sol.rows) && sol.rows.length) {
         const netGridByTs = new Map();
         for (const r of sol.rows) {
@@ -613,11 +614,13 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    *     defense in depth at the actuation edge.
    *
    * @param {number} [bandW=300] |net grid| ≤ this ⇒ self-consumption ⇒ no rule
+   * @param {{solution?: object|null}} [opts] bereits geholte Lösung (spart einen Abruf)
    * @returns {Promise<Array<{ts:number,endTs:number,powerW:number,planAction:string,confidence:number}>|null>}
    */
-  async function pullGridSetpoints(bandW = 300) {
+  async function pullGridSetpoints(bandW = 300, { solution } = {}) {
     // Cover the full EOS horizon (≤8 days of 15-min slots) — no tail truncation.
-    const sol = await getOptimizationSolution(8 * 24 * 4);
+    // Bereits geholte Lösung (optimizer/index.js) statt eines zweiten Abrufs.
+    const sol = solution !== undefined ? solution : await getOptimizationSolution(8 * 24 * 4);
     if (!sol || !Array.isArray(sol.rows) || sol.rows.length === 0) return null;
     const slotMin = Number(sol.slotMinutes) > 0 ? Number(sol.slotMinutes) : 15;
     const slotMs = slotMin * 60 * 1000;

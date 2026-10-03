@@ -263,13 +263,30 @@ export function createOptimizerService(ctx) {
   // Takt) schon dem neuen Plan, die Akku-Regeln bis zu 15 min dem alten
   // (23.09.: Auto laedt 11 kW nach neuem Plan, Akku haelt nach altem → Netz).
   let lastAppliedEosStamp = null;
+  // Die Minuten-Wache liest den Stempel aus dem EOS-Monitor (kein eigener
+  // Abruf der grossen Loesung). Ohne Monitor (Tests) wie frueher selbst fragen.
   async function eosSolutionStamp() {
+    if (ctx.eosMonitor?.status) return ctx.eosMonitor.status().solutionGeneratedAt || null;
     try {
       const sol = await eosAdapter.getOptimizationSolution(1);
       return sol?.generatedAt || null;
     } catch {
       return null;
     }
+  }
+  // Neuer EOS-Plan (Push von EOS oder Rueckfall-Abfrage des Monitors) → sofort
+  // uebernehmen, nicht erst zur naechsten vollen Minute.
+  function onNewEosPlan(stamp) {
+    const cfg = getCfg();
+    if (isRunning || !cfg.optimizer?.enabled || (cfg.optimizer?.primarySource ?? 'internal') === 'internal') return;
+    // Auch ohne bisher übernommenen EOS-Plan (z. B. DVhub neu gestartet, als EOS
+    // noch keinen hatte, und die Erstplan-Wache hat aufgegeben): ein neuer Plan
+    // wird sofort übernommen. Je Plan nur ein Anstoß (Stempel wird vorher gesetzt).
+    if (!resolveEosProxy(cfg).enabled) return;
+    if (!stamp || stamp === lastAppliedEosStamp) return;
+    pushLog('eos_new_plan_detected', { generatedAt: stamp, previous: lastAppliedEosStamp });
+    lastAppliedEosStamp = stamp;
+    runOptimization().catch(err => pushLog('optimizer_error', { error: err.message }));
   }
 
   // Fuer eos-config-sync: solange die Wache geboostet hat, schreibt der Sync
@@ -506,11 +523,16 @@ export function createOptimizerService(ctx) {
           // eosSchedule = FRBC dispatch (battery power) for display/comparison.
           // eosGridSetpoints = net-grid control slots from EOS' SOLUTION (T-0118)
           // — the actuatable export plan the old plan→power path threw away.
-          // Stempel VOR dem Abholen merken: rechnet EOS waehrenddessen neu,
-          // sieht die Minuten-Wache den neueren Stempel und zieht nach.
-          const solStamp = await eosSolutionStamp();
-          eosSchedule = await eosAdapter.pullSchedule();
-          eosGridSetpoints = await eosAdapter.pullGridSetpoints();
+          // Die Loesung EINMAL holen und fuer Stempel, Plan-Anzeige, Stellwerte
+          // und Erstplan-Pruefung nutzen (vorher 3–4 Abrufe je Lauf; EOS
+          // serialisiert dafuer jedes Mal den ganzen Plan). Der Stempel gehoert
+          // damit genau zu den Stellwerten; rechnet EOS waehrenddessen neu,
+          // meldet der Monitor den neueren Plan und es wird nachgezogen.
+          const eosSolution = await eosAdapter.getOptimizationSolution(8 * 24 * 4).catch(() => null);
+          if (eosSolution) ctx.eosMonitor?.ingest?.(eosSolution);
+          const solStamp = eosSolution?.generatedAt || null;
+          eosSchedule = await eosAdapter.pullSchedule({ solution: eosSolution });
+          eosGridSetpoints = await eosAdapter.pullGridSetpoints(undefined, { solution: eosSolution });
           if (solStamp) lastAppliedEosStamp = solStamp;
 
           // Direkt nach einem Neustart hat EOS noch keine Loesung: der eigene
@@ -523,7 +545,7 @@ export function createOptimizerService(ctx) {
           // Eine aus EOS' Datenbank wiederhergestellte Loesung (vor unserem
           // ersten Push gerechnet) zaehlt dabei als "nichts".
           const eosHatNochNichts = (!eosGridSetpoints || eosGridSetpoints.length === 0)
-            && !isFreshEosSolution(await eosAdapter.getOptimizationSolution(1), eosFirstPushAt);
+            && !isFreshEosSolution(eosSolution, eosFirstPushAt);
           if (eosHatNochNichts) {
             const emsSollSec = pickEmsIntervalSec(
               buildEosOptimization(cfg).interval,
@@ -772,7 +794,11 @@ export function createOptimizerService(ctx) {
   let pollTimer = null;
   let fallbackTimer = null;
 
+  let unsubscribeEosPlan = null;
   function startTimers() {
+    if (!unsubscribeEosPlan && ctx.eosMonitor?.onSolution) {
+      unsubscribeEosPlan = ctx.eosMonitor.onSolution((stamp) => onNewEosPlan(stamp));
+    }
     // Poll for forecast changes every 60s (D-02)
     pollTimer = setInterval(async () => {
       const currentVersion = ctx.forecastService.forecastVersion;
@@ -784,15 +810,10 @@ export function createOptimizerService(ctx) {
       try {
         const cfg = getCfg();
         if (isRunning || !cfg.optimizer?.enabled || (cfg.optimizer?.primarySource ?? 'internal') === 'internal') return;
-        if (!resolveEosProxy(cfg).enabled || lastAppliedEosStamp === null) return;
-        const stamp = await eosSolutionStamp();
-        if (stamp && stamp !== lastAppliedEosStamp) {
-          pushLog('eos_new_plan_detected', { generatedAt: stamp, previous: lastAppliedEosStamp });
-          // Je neuem Plan nur EIN Anstoss, auch wenn der Lauf den EOS-Teil
-          // ueberspringt (z. B. EOS-Proxy aus) — sonst jede Minute ein Lauf.
-          lastAppliedEosStamp = stamp;
-          runOptimization().catch(err => pushLog('optimizer_error', { error: err.message }));
-        }
+        if (!resolveEosProxy(cfg).enabled) return;
+        // Je neuem Plan nur EIN Anstoss, auch wenn der Lauf den EOS-Teil
+        // ueberspringt (z. B. EOS-Proxy aus) — sonst jede Minute ein Lauf.
+        onNewEosPlan(await eosSolutionStamp());
       } catch (err) {
         pushLog('optimizer_error', { error: err.message });
       }
@@ -835,6 +856,7 @@ export function createOptimizerService(ctx) {
    */
   async function close() {
     if (pollTimer) clearInterval(pollTimer);
+    if (unsubscribeEosPlan) { unsubscribeEosPlan(); unsubscribeEosPlan = null; }
     if (fallbackTimer) clearTimeout(fallbackTimer); // setTimeout-based since #16b
     pollTimer = null;
     fallbackTimer = null;

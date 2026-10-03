@@ -293,3 +293,89 @@ describe('Optimizer Service: neuer EOS-Plan → sofort übernehmen (Minuten-Wach
     await svc.close();
   });
 });
+
+describe('Optimizer Service: EOS-Lösung einmal je Lauf, Push über den Monitor', () => {
+  test('ein Abruf je Lauf; neuer Plan vom Monitor (Push) → sofort ein Lauf', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    const logs = [];
+    let stamp = '2026-10-03T11:13:46+02:00';
+    let solutionCalls = 0;
+    const seen = { schedule: [], setpoints: [] };
+    const now = Date.now();
+    const eosAdapter = {
+      pushForecast: async () => ({ ok: true }),
+      pullSchedule: async (opts) => { seen.schedule.push(opts); return [{ ts: now, endTs: now + 900_000, powerW: -1000 }]; },
+      pullGridSetpoints: async (_band, opts) => { seen.setpoints.push(opts); return []; },
+      getOptimizationSolution: async () => { solutionCalls++; return { generatedAt: stamp, rows: [] }; },
+      setEmsIntervalSec: async () => ({ ok: true })
+    };
+    const listeners = new Set();
+    const ingested = [];
+    const eosMonitor = {
+      status: () => ({ solutionGeneratedAt: stamp }),
+      onSolution: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+      ingest: (sol) => { ingested.push(sol.generatedAt); },
+    };
+    const { ctx, state } = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
+      ctx: { eosAdapter, eosMonitor, pushLog: (ev, data) => logs.push({ ev, data }) }
+    });
+    const svc = createOptimizerService(ctx);
+    await svc.start();
+    const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+    await settle();
+    assert.equal(state.optimizer.source, 'eos');
+    assert.equal(solutionCalls, 1, 'Lösung nur einmal je Lauf geholt');
+    assert.equal(seen.schedule[0].solution.generatedAt, stamp, 'Plan-Anzeige nutzt dieselbe Lösung');
+    assert.equal(seen.setpoints[0].solution.generatedAt, stamp, 'Stellwerte nutzen dieselbe Lösung');
+    assert.deepEqual(ingested, [stamp], 'Lösung an den Monitor (Leitstand) weitergereicht');
+    const runsAfterStart = state.optimizer.runCount;
+
+    // EOS meldet einen neuen Plan (Push) → ohne auf die Minute zu warten.
+    stamp = '2026-10-03T11:29:00+02:00';
+    for (const fn of listeners) fn(stamp);
+    await settle();
+    assert.equal(state.optimizer.runCount, runsAfterStart + 1);
+    assert.equal(logs.find((l) => l.ev === 'eos_new_plan_detected').data.generatedAt, stamp);
+
+    // Dieselbe Meldung erneut und die Minuten-Wache: kein weiterer Lauf.
+    for (const fn of listeners) fn(stamp);
+    t.mock.timers.tick(60_000); await settle();
+    assert.equal(state.optimizer.runCount, runsAfterStart + 1);
+    await svc.close();
+    assert.equal(listeners.size, 0, 'beim Stoppen abgemeldet');
+  });
+
+  test('EOS hatte beim Start noch keinen Plan: erster gemeldeter Plan wird trotzdem übernommen', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    let stamp = null;
+    const now = Date.now();
+    const eosAdapter = {
+      pushForecast: async () => ({ ok: true }),
+      pullSchedule: async () => [{ ts: now, endTs: now + 900_000, powerW: -1000 }],
+      pullGridSetpoints: async () => [],
+      getOptimizationSolution: async () => (stamp ? { generatedAt: stamp, rows: [] } : null),
+      setEmsIntervalSec: async () => ({ ok: true })
+    };
+    const listeners = new Set();
+    const eosMonitor = {
+      status: () => ({ solutionGeneratedAt: stamp }),
+      onSolution: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+      ingest: () => {},
+    };
+    const { ctx, state } = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
+      ctx: { eosAdapter, eosMonitor, pushLog: () => {} }
+    });
+    const svc = createOptimizerService(ctx);
+    await svc.start();
+    const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+    await settle();
+    const runsAfterStart = state.optimizer.runCount;
+    stamp = '2026-10-03T11:57:57+02:00';
+    for (const fn of listeners) fn(stamp);
+    await settle();
+    assert.equal(state.optimizer.runCount, runsAfterStart + 1);
+    await svc.close();
+  });
+});

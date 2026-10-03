@@ -2182,6 +2182,17 @@ function buildFieldDefinitions() {
     },
     {
       section: 'schedule',
+      group: 'optimization',
+      path: 'optimizer.eosFitnessCacheMaxEntries',
+      label: 'EOS Fitness-Cache (Einträge)',
+      type: 'number',
+      min: 0,
+      max: 500000,
+      step: 1000,
+      help: 'Merkt sich bereits bewertete Pläne innerhalb eines EOS-Laufs, damit sie nicht neu gerechnet werden. 0 = aus (Standard). Kostet RAM je Eintrag; der Plan ist mit und ohne Cache gleich.'
+    },
+    {
+      section: 'schedule',
       group: 'feedinTariff',
       groupLabel: 'Einspeisung & Tarif',
       groupDescription: 'Wie der Optimizer den Einspeise-/Verkaufserl\u00f6s bewertet.',

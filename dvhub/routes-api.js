@@ -1160,6 +1160,8 @@ export function createApiRoutes(ctx) {
     '/api/forecast/inspector/ml-correction',
     '/api/forecast/inspector/eos',
     '/api/forecast/inspector/optimizer-cold',
+    // Leitstand-Karte DV-EOS-Fahrplan aus dem Plan, den DVhub schon hat (read-only).
+    '/api/eos/plan',
     // pvnode-Nowcast-Tracking (Christin 2026-07-08): read-only Diagnose,
     // gleiche Appliance-Trust wie die Inspector-Reads (GET-only LAN-Bypass, extern Bearer).
     '/api/forecast/nowcast-track',
@@ -6027,6 +6029,43 @@ export function createApiRoutes(ctx) {
 
     // EOS (Akkudoktor) -- Messwerte + Preise abrufen
     if (url.pathname === '/api/integration/eos' && req.method === 'GET') return json(res, 200, eosState());
+
+    // Push von EOS (DV-EOS ab rc1.9, ems.notify_url): ein Lauf ist fertig.
+    // Nur von der Box selbst — EOS läuft im Host-Netz bzw. nativ daneben.
+    // Löst nur einen Abruf der Lösung aus; doppelte Meldungen teilen ihn.
+    if (url.pathname === '/api/eos/solution-ready' && req.method === 'POST') {
+      if (!isLoopbackRequest(req)) return json(res, 403, { ok: false, error: 'loopback_only' });
+      req.resume();
+      if (!ctx.eosMonitor?.notifySolutionReady) return json(res, 503, { ok: false, error: 'eos_monitor_unavailable' });
+      ctx.eosMonitor.notifySolutionReady().catch(() => {});
+      res.writeHead(204); res.end();
+      return;
+    }
+
+    // Leitstand-Karte „DV-EOS Fahrplan“: der Plan, den DVhub schon hat (EOS-
+    // Monitor) — kein Live-Aufruf an EOS und kein Prognose-Push wie beim
+    // Inspector. Bleibt über EOS-Neustarts sichtbar (current:false).
+    if (url.pathname === '/api/eos/plan' && req.method === 'GET') {
+      if (!requirePro(req, res, 'forecast-inspector-eos')) return;
+      if (!ctx.eosMonitor?.displayPlan) return json(res, 200, { ok: true, available: false, reason: 'eos_off', output: null });
+      const status = ctx.eosMonitor.status();
+      if (!status.enabled) return json(res, 200, { ok: true, available: false, reason: 'eos_off', output: null });
+      const plan = await ctx.eosMonitor.displayPlan();
+      if (!plan) {
+        return json(res, 200, { ok: true, available: status.reachable, reason: status.reachable ? null : 'eos_off', output: null, eos: { status: status.status } });
+      }
+      const maxRows = Math.min(Math.max(Number(url.searchParams.get('rows')) || 300, 1), 8 * 24 * 4);
+      const rows = Array.isArray(plan.data.rows) ? plan.data.rows : [];
+      const output = { ...plan.data, rows: rows.slice(0, maxRows), truncated: rows.length > maxRows, totalCount: rows.length };
+      return json(res, 200, {
+        ok: true,
+        available: true,
+        reason: null,
+        output,
+        plan: { fetchedAt: new Date(plan.at).toISOString(), current: plan.current },
+        eos: { status: status.status, push: status.push },
+      });
+    }
 
     // Phase 21 (operator request 2026-05-23): EOS Konfigurations-Sync.
     // Liest die EOS-relevanten DVhub-Settings (Batterie, Standort, EMS-Mode)

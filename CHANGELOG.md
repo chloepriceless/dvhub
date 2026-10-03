@@ -12,6 +12,17 @@ verweist hierher.
 
 ### Neu
 
+- **EOS meldet fertige Pläne (Push statt Abfrage, DV-EOS rc1.9).** EOS ruft nach jedem
+  Lauf `POST /api/eos/solution-ready` auf (nur von der Box selbst); DVhub holt den Plan
+  sofort und übernimmt ihn. Solange Meldungen kommen, fragt DVhub nur noch alle 10 min
+  nach statt jede Minute. Je DVhub-Lauf wird die EOS-Lösung nur noch einmal geholt
+  (vorher 3–4 Mal). DVhub trägt die Adresse selbst ein, wenn EOS auf derselben Box läuft.
+- **Leitstand: DV-EOS-Fahrplan aus dem Plan, den DVhub schon hat** (`/api/eos/plan`).
+  Kein Live-Aufruf an EOS und kein Prognose-Push mehr beim Anschauen (vorher 6–15 s auf
+  dem eHive). Nach einem EOS-Neustart bleibt der letzte Plan sichtbar („EOS rechnet neu“).
+- **EOS-Fitness-Cache einstellbar** (`optimizer.eosFitnessCacheMaxEntries`, 0 = aus wie
+  bisher).
+
 - **EOS rechnet mit zwei Kernen (DV-EOS rc1.8).** Die Bewertung der Kandidaten läuft
   in bis zu zwei Prozessen; ein Kern bleibt immer frei (2 Kerne → 1, ab 3 Kernen → 2).
   eHive One (4× Cortex-A55, 300×200): Lauf 460 s statt 703 s, Spitze 224 MB. Der

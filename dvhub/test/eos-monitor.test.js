@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createEosMonitor, EOS_BUSY_GRACE_MS } from '../services/optimizer/eos-monitor.js';
+import { createEosMonitor, EOS_BUSY_GRACE_MS, EOS_SOLUTION_FALLBACK_MS, EOS_PUSH_STALE_MS } from '../services/optimizer/eos-monitor.js';
 import { createEosCapabilityProbe } from '../services/optimizer/eos-capabilities.js';
 
 function rig() {
@@ -60,6 +60,54 @@ test('eos-monitor: Neustart (neue PID) verwirft alten Plan und meldet sich', asy
   assert.deepEqual(seen, [{ oldPid: 10, newPid: 11 }]);
   assert.equal(r.m.status().restarts, 1);
   assert.equal(r.m.status().solutionAt, null);
+});
+
+test('eos-monitor: Anzeige behält den letzten Plan über einen EOS-Neustart', async () => {
+  const r = rig();
+  await r.m.checkHealth();
+  assert.equal((await r.m.displayPlan()).data.generatedAt, 'g1');
+  r.health = { ok: true, data: { pid: 11 } }; r.sol = null; r.t += 30_000;
+  await r.m.checkHealth();
+  r.t += 60_000;
+  assert.equal(await r.m.latestSolution(), null, 'Regelung: Plan des alten Prozesses gilt nicht');
+  const shown = await r.m.displayPlan();
+  assert.equal(shown.data.generatedAt, 'g1', 'Anzeige: letzter Plan bleibt sichtbar');
+  assert.equal(shown.current, false);
+  r.sol = { rows: [{ ts: 2 }], generatedAt: 'g2' };
+  await r.m.refreshSolution();
+  assert.deepEqual([(await r.m.displayPlan()).data.generatedAt, (await r.m.displayPlan()).current], ['g2', true]);
+});
+
+test('eos-monitor: Push holt sofort (auch wenn busy), meldet neuen Plan einmal', async () => {
+  const r = rig(); const stamps = [];
+  r.m.onSolution((stamp) => stamps.push(stamp));
+  await r.m.checkHealth(); await r.m.latestSolution();
+  r.health = { ok: false, error: 'EOS request timed out' }; r.t += 60_000;
+  await r.m.checkHealth();
+  assert.equal(r.m.status().status, 'busy');
+  r.sol = { rows: [{ ts: 2 }], generatedAt: 'g2' };
+  await r.m.notifySolutionReady();
+  assert.equal(r.solCalls, 2);
+  assert.equal(r.m.status().solutionGeneratedAt, 'g2');
+  assert.equal(r.m.status().push.active, true);
+  await r.m.notifySolutionReady(); // gleicher Plan erneut gemeldet
+  assert.deepEqual(stamps, ['g1', 'g2']);
+});
+
+test('eos-monitor: mit Push nur noch alle 10 min nachfragen, ohne Meldung wieder minütlich', async () => {
+  const r = rig();
+  await r.m.checkHealth();
+  await r.m.notifySolutionReady();
+  const calls = r.solCalls;
+  r.t += 5 * 60_000; await r.m.latestSolution();
+  assert.equal(r.solCalls, calls, 'innerhalb 10 min kein Abruf');
+  r.t += EOS_SOLUTION_FALLBACK_MS; await r.m.latestSolution();
+  assert.equal(r.solCalls, calls + 1, 'Rückfall-Abruf nach 10 min');
+  r.t += EOS_PUSH_STALE_MS; await r.m.latestSolution();
+  const after = r.solCalls;
+  r.t += 61_000; await r.m.latestSolution();
+  assert.equal(r.solCalls, after + 1, 'Push ausgefallen → wieder minütlich');
+  assert.equal(r.m.status().push.active, false);
 });
 
 test('capability-probe: Timeout nach erfolgreicher Erkennung → gemerkte Fassung (bleibt EOS 0.4)', async () => {

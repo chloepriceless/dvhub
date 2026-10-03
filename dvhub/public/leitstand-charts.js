@@ -1284,16 +1284,16 @@
   // DV-EOS day plan (operator request 2026-06-21) — the EOS optimiser's Fahrplan
   // for the full horizon: planned battery SoC trajectory (right axis) + PV
   // forecast + grid feed-in (left kW axis), plus the run's KPIs. Sourced from
-  // /api/forecast/inspector/eos (output.rows are 15-min slots). Distinct from the
-  // existing optimizerPlanCard, which charts the DVhub /api/optimizer run.
+  // /api/eos/plan (output.rows are 15-min slots): the plan DVhub already holds
+  // (EOS monitor), no live EOS round trip and no forecast push (2026-10-03,
+  // vorher /api/forecast/inspector/eos mit 6–15 s). Stays visible across an EOS
+  // restart. Distinct from the existing optimizerPlanCard, which charts the
+  // DVhub /api/optimizer run.
   // ---------------------------------------------------------------------------
   var eosPlanChart = null;
   async function fetchEosPlan() {
     try {
-      var now = new Date();
-      var to = new Date(now.getTime() + 24 * 3600 * 1000);
-      var qs = '?from=' + encodeURIComponent(now.toISOString()) + '&to=' + encodeURIComponent(to.toISOString());
-      var res = await apiFetch('/api/forecast/inspector/eos' + qs);
+      var res = await apiFetch('/api/eos/plan');
       return (res && res.ok) ? await res.json() : null;
     } catch { return null; }
   }
@@ -1307,6 +1307,9 @@
     var output = eos && eos.output;
     var rows = (output && Array.isArray(output.rows)) ? output.rows : [];
     if (!eos || eos.available === false || rows.length === 0) {
+      // Kein Plan: ein früher gezeichnetes Diagramm entfernen, sonst stünde die
+      // Meldung über einem alten Fahrplan.
+      if (eosPlanChart) { eosPlanChart.destroy(); eosPlanChart = null; }
       if (skeleton) {
         skeleton.style.display = '';
         skeleton.textContent = (eos && eos.reason) ? ('EOS: ' + eos.reason) : 'Kein EOS-Fahrplan verfügbar';
@@ -1416,7 +1419,11 @@
     }
     if (subtitle && output.validFrom && output.validUntil) {
       var fmtHm = function (d) { return new Date(d).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); };
-      subtitle.textContent = fmtHm(output.validFrom) + ' → ' + fmtHm(output.validUntil) + ' · ' + (Number(output.slotMinutes) || 15) + '-Min';
+      var text = fmtHm(output.validFrom) + ' → ' + fmtHm(output.validUntil) + ' · ' + (Number(output.slotMinutes) || 15) + '-Min';
+      if (output.generatedAt) text += ' · gerechnet ' + fmtHm(output.generatedAt);
+      // Nach einem EOS-Neustart bleibt der letzte Plan sichtbar, bis EOS neu gerechnet hat.
+      if (eos.plan && eos.plan.current === false) text += ' · EOS rechnet neu';
+      subtitle.textContent = text;
     }
   }
 

@@ -522,10 +522,9 @@
   }
 
   function loadEosForecastPanel(key) {
-    var now = new Date();
-    var qs = '?from=' + encodeURIComponent(now.toISOString()) +
-             '&to=' + encodeURIComponent(new Date(now.getTime() + 24 * 3600 * 1000).toISOString());
-    apiFetchCompat('/api/forecast/inspector/eos' + qs)
+    // Plan, den DVhub schon hat (EOS-Monitor) — kein Live-Aufruf an EOS und
+    // kein Prognose-Push bei jedem Öffnen (2026-10-03).
+    apiFetchCompat('/api/eos/plan')
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
         if (currentPanelKey !== key) return;

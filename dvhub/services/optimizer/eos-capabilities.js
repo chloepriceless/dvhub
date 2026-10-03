@@ -74,6 +74,9 @@ export function detectEosCapabilities(config, health = {}) {
   const timezoneOverride = hasKey(general, 'timezone_override');
   // SciPy-freie Eigenverbrauchstabelle als Schalter (PR #1378, DV-EOS rc1.6).
   const selfConsumptionInterpolator = hasKey(optimization, 'self_consumption_interpolator');
+  // Meldung nach jedem fertigen Lauf (ems.notify_url, DV-EOS rc1.9).
+  const ems = cfg && isObj(cfg.ems) ? cfg.ems : null;
+  const solutionNotify = hasKey(ems, 'notify_url');
 
   const reachable = !!cfg;
   const supported = reachable ? (flavor === EOS_FLAVOR.UPSTREAM_GENETIC && deviceMap) : null;
@@ -88,6 +91,7 @@ export function detectEosCapabilities(config, health = {}) {
     fitnessCacheLimit,
     timezoneOverride,
     selfConsumptionInterpolator,
+    solutionNotify,
     detectedAt: Date.now(),
   };
 }

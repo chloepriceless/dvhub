@@ -76,6 +76,31 @@ function isGridArbitrageLicensed(cfg) {
 export const EOS_MEASUREMENT_HISTORIC_HOURS = 48;
 export const EOS_AUTOSAVE_INTERVAL_SEC = null;
 export const EOS_FITNESS_CACHE_MAX_ENTRIES = 0;
+export const EOS_SOLUTION_READY_PATH = '/api/eos/solution-ready';
+
+/**
+ * Fitness-Cache-Grenze für EOS aus optimizer.eosFitnessCacheMaxEntries:
+ * 0/leer = aus (Standard), N > 0 = höchstens N Einträge. Unbegrenzt gibt es
+ * bewusst nicht (RAM).
+ */
+export function eosFitnessCacheMaxEntries(cfg) {
+  const n = Math.floor(Number(cfg?.optimizer?.eosFitnessCacheMaxEntries));
+  return Number.isFinite(n) && n > 0 ? n : EOS_FITNESS_CACHE_MAX_ENTRIES;
+}
+
+/**
+ * Adresse, an die EOS jeden fertigen Lauf meldet (ems.notify_url). Nur wenn
+ * EOS auf derselben Box läuft (Loopback) — dann erreicht EOS DVhub sicher über
+ * 127.0.0.1, auch im Container (beide im Host-Netz). Sonst null: DVhub fragt
+ * wie bisher selbst nach.
+ */
+export function eosNotifyUrl(cfg, eosUrl) {
+  let host = '';
+  try { host = new URL(eosUrl).hostname; } catch { return null; }
+  if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(host)) return null;
+  const port = Number(cfg?.httpPort) > 0 ? Number(cfg.httpPort) : 8080;
+  return `http://127.0.0.1:${port}${EOS_SOLUTION_READY_PATH}`;
+}
 export const EOS_SELF_CONSUMPTION_INTERPOLATOR = 'numpy';
 export function buildEosBatteries(cfg, opts = {}) {
   const opt = cfg?.optimizer || {};
@@ -419,6 +444,7 @@ export function createEosConfigSync(ctx) {
         fitnessCacheLimit: caps.fitnessCacheLimit === true,
         timezoneOverride: caps.timezoneOverride === true,
         selfConsumptionInterpolator: caps.selfConsumptionInterpolator === true,
+        solutionNotify: caps.solutionNotify === true,
       };
     }
     if (!caps.reachable) return;
@@ -674,10 +700,12 @@ export function createEosConfigSync(ctx) {
       // 2026-10-02: Docker-Suite und jede Neuinstallation ohne Plan; prod nur,
       // weil der Modus dort einmal von Hand gesetzt worden war).
       { section: 'ems/mode', body: 'OPTIMIZATION' },
-      // Fitness-Cache aus (EOS PR #1376 / DV-EOS rc1.5): kostete 120–170 MB je
-      // Lauf (mit E-Auto und Geräten mehr), bringt bei 6–15 % Treffern kaum Zeit
-      // — Plan bitgleich, ~3 % längere Rechnung. Für alle Boxen (kleiner Footprint).
-      ...(caps.fitnessCacheLimit ? [{ section: 'optimization/genetic/fitness_cache_max_entries', body: EOS_FITNESS_CACHE_MAX_ENTRIES }] : []),
+      // Fitness-Cache standardmäßig aus (EOS PR #1376 / DV-EOS rc1.5): kostete
+      // unbegrenzt 120–170 MB je Lauf, brachte auf dem Pi bei 6–15 % Treffern
+      // kaum Zeit. Begrenzt einschaltbar (optimizer.eosFitnessCacheMaxEntries).
+      ...(caps.fitnessCacheLimit ? [{ section: 'optimization/genetic/fitness_cache_max_entries', body: eosFitnessCacheMaxEntries(cfg) }] : []),
+      // Fertigen Lauf an DVhub melden (Push statt minütlicher Abfrage).
+      ...(caps.solutionNotify ? [{ section: 'ems/notify_url', body: eosNotifyUrl(cfg, baseUrl) }] : []),
       // Feste Zeitzone statt Nachschlagen aus Breiten-/Längengrad (PR #1377):
       // spart ~25 MB beim nächsten EOS-Start.
       ...(caps.timezoneOverride ? [{ section: 'general/timezone_override', body: cfg?.timeZone || 'Europe/Berlin' }] : []),
