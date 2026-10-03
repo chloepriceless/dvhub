@@ -27,6 +27,10 @@ function makeMockHub() {
   const subs = []; // { pattern, handler }
   return {
     subscribe(pattern, handler) { subs.push({ pattern, handler }); },
+    unsubscribe(pattern, handler) {
+      const i = subs.findIndex((x) => x.pattern === pattern && x.handler === handler);
+      if (i >= 0) subs.splice(i, 1);
+    },
     _fire(topic, payload) {
       const buf = Buffer.from(String(payload));
       for (const s of subs) {
@@ -46,6 +50,7 @@ describe('createMqttTopicObserver', () => {
     const hub = makeMockHub();
     const observer = createMqttTopicObserver(hub, makeMockCtx());
     observer.start();
+    observer.getTopics(); // erster Abruf (Inspektor geöffnet) setzt das '#'-Abo
 
     hub._fire('a/b', '1');
     hub._fire('a/b', '2');
@@ -69,6 +74,7 @@ describe('createMqttTopicObserver', () => {
     const hub = makeMockHub();
     const observer = createMqttTopicObserver(hub, makeMockCtx());
     observer.start();
+    observer.getTopics(); // erster Abruf (Inspektor geöffnet) setzt das '#'-Abo
 
     hub._fire('big/topic', 'x'.repeat(1000));
 
@@ -81,6 +87,7 @@ describe('createMqttTopicObserver', () => {
     const hub = makeMockHub();
     const observer = createMqttTopicObserver(hub, makeMockCtx());
     observer.start();
+    observer.getTopics(); // erster Abruf (Inspektor geöffnet) setzt das '#'-Abo
 
     hub._fire('old', '1');
     hub._fire('new', '2');
@@ -93,6 +100,7 @@ describe('createMqttTopicObserver', () => {
     const hub = makeMockHub();
     const observer = createMqttTopicObserver(hub, makeMockCtx());
     observer.start();
+    observer.getTopics(); // erster Abruf (Inspektor geöffnet) setzt das '#'-Abo
 
     // 501 distinct topics t0..t500 — exceeds the MAX_TOPICS=500 cap by one.
     // t0 is fired first so it has the oldest lastAt and must be evicted.
@@ -113,6 +121,7 @@ describe('createMqttTopicObserver', () => {
     const hub = makeMockHub();
     const observer = createMqttTopicObserver(hub, makeMockCtx());
     observer.start();
+    observer.getTopics(); // erster Abruf (Inspektor geöffnet) setzt das '#'-Abo
 
     hub._fire('a/b', 'payload');
     observer.close();
@@ -120,23 +129,57 @@ describe('createMqttTopicObserver', () => {
     assert.deepEqual(observer.getTopics(), [], 'close() empties the topic Map');
   });
 
-  it('observedSince is set after start()', () => {
+  it('hört erst mit, wenn die Liste gelesen wird (kein Dauer-Abo auf #)', () => {
     const hub = makeMockHub();
     const observer = createMqttTopicObserver(hub, makeMockCtx());
     observer.start();
 
-    assert.equal(typeof observer.observedSince, 'number', 'observedSince is a number after start()');
-    assert.ok(observer.observedSince > 0, 'observedSince is a positive timestamp');
+    assert.equal(hub._subs.length, 0, 'start() allein abonniert nichts');
+    assert.equal(observer.observing, false);
+    assert.equal(observer.observedSince, null);
+
+    hub._fire('N/x/system/0/Dc/Battery/Soc', '50'); // niemand hört zu
+    assert.deepEqual(observer.getTopics(), [], 'erster Abruf: noch leer, setzt aber das Abo');
+    assert.ok(hub._subs.some((x) => x.pattern === '#'), "getTopics() abonniert '#'");
+    assert.equal(observer.observing, true);
+    assert.equal(typeof observer.observedSince, 'number');
+
+    hub._fire('N/x/system/0/Dc/Battery/Soc', '51');
+    assert.equal(observer.getTopics().length, 1);
+    assert.equal(hub._subs.length, 1, 'kein zweites Abo bei weiteren Abrufen');
   });
 
-  it('subscribes to the # wildcard on start()', () => {
+  it('beendet das Abo 10 min nach dem letzten Abruf und setzt es beim nächsten wieder', () => {
+    const hub = makeMockHub();
+    let t = 1_000_000;
+    const observer = createMqttTopicObserver(hub, { pushLog: () => {}, now: () => t });
+    observer.start();
+    observer.getTopics();
+    hub._fire('a/b', '1');
+
+    t += 9 * 60_000; observer.checkIdle();
+    assert.equal(observer.observing, true, 'nach 9 min noch aktiv');
+    observer.getTopics();                      // Inspektor fragt wieder → Frist neu
+    t += 9 * 60_000; observer.checkIdle();
+    assert.equal(observer.observing, true);
+
+    t += 60_000; observer.checkIdle();
+    assert.equal(observer.observing, false, '10 min ohne Abruf → Abo beendet');
+    assert.equal(hub._subs.length, 0, "'#' beim Hub abgemeldet");
+
+    assert.deepEqual(observer.getTopics(), [], 'Liste beginnt neu');
+    assert.equal(hub._subs.length, 1, 'nächster Abruf abonniert wieder');
+    observer.close();
+    assert.equal(hub._subs.length, 0, 'close() meldet ab');
+  });
+
+  it('vor start() und nach close() wird nichts abonniert', () => {
     const hub = makeMockHub();
     const observer = createMqttTopicObserver(hub, makeMockCtx());
-    observer.start();
-
-    assert.ok(
-      hub._subs.some(s => s.pattern === '#'),
-      "start() subscribes to the '#' multi-level wildcard"
-    );
+    observer.getTopics();
+    assert.equal(hub._subs.length, 0);
+    observer.start(); observer.getTopics(); observer.close();
+    observer.getTopics();
+    assert.equal(hub._subs.length, 0);
   });
 });

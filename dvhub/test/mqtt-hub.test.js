@@ -112,6 +112,33 @@ describe('createMqttHub', () => {
     assert.equal(received.length, 1, '+ does not match multiple levels');
   });
 
+  it('gemerkte Zuordnung Topic → Abos bleibt bei subscribe/unsubscribe richtig', async () => {
+    const { createMqttHub } = await import('../services/mqtt/index.js');
+    hub = createMqttHub({
+      getCfg: () => ({ mqtt: { brokerUrl: 'mqtt://test:1883', embeddedBroker: { enabled: false, port: 1883 }, topicPrefix: 'dvhub', username: '', password: '' } }),
+      pushLog: () => {}
+    });
+    const all = []; const exact = []; const late = [];
+    const onAll = (topic) => all.push(topic);
+    hub.subscribe('#', onAll);
+    hub.subscribe('a/b', (topic) => exact.push(topic));
+    hub._dispatchMessage('a/b', Buffer.from('1'));   // Zuordnung wird gemerkt
+    hub._dispatchMessage('a/b', Buffer.from('2'));
+    assert.deepEqual([all.length, exact.length], [2, 2]);
+
+    // Neues Abo nach dem Merken: muss ab sofort mitbekommen.
+    hub.subscribe('a/+', (topic) => late.push(topic));
+    hub._dispatchMessage('a/b', Buffer.from('3'));
+    assert.deepEqual([all.length, exact.length, late.length], [3, 3, 1]);
+
+    // Abmelden: '#' bekommt nichts mehr, die anderen weiter.
+    hub.unsubscribe('#', onAll);
+    hub._dispatchMessage('a/b', Buffer.from('4'));
+    hub._dispatchMessage('x/y', Buffer.from('5'));
+    assert.deepEqual([all.length, exact.length, late.length], [3, 4, 2]);
+    hub.unsubscribe('gibt/es/nicht', onAll);        // kein Fehler
+  });
+
   it('embedded broker detection when brokerUrl is empty', async () => {
     const { createMqttHub } = await import('../services/mqtt/index.js');
     hub = createMqttHub({

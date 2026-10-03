@@ -66,6 +66,24 @@ export function createMqttHub(ctx) {
 
   /** @type {Map<string, Set<Function>>} topic-pattern -> handlers */
   const handlers = new Map();
+  // Welche Abos zu einem Topic passen, einmal ermitteln und merken: Topics
+  // wiederholen sich (Victron sendet dieselben im Sekundentakt), der Vergleich
+  // mit jedem Abo je Nachricht kostete im Leerlauf ~10 % der DVhub-CPU.
+  // Bei jeder Änderung der Abos verworfen; begrenzt gegen Topic-Fluten.
+  /** @type {Map<string, Array<Set<Function>>>} */
+  const matchCache = new Map();
+  const MATCH_CACHE_MAX = 5000;
+  function handlerSetsFor(topic) {
+    let sets = matchCache.get(topic);
+    if (sets) return sets;
+    sets = [];
+    for (const [pattern, handlerSet] of handlers.entries()) {
+      if (mqttTopicMatch(pattern, topic)) sets.push(handlerSet);
+    }
+    if (matchCache.size >= MATCH_CACHE_MAX) matchCache.clear();
+    matchCache.set(topic, sets);
+    return sets;
+  }
 
   let client = null;
   let aedesBroker = null;
@@ -150,12 +168,10 @@ export function createMqttHub(ctx) {
    * command subscriber rejects retained deliveries on control topics.
    */
   function dispatchMessage(topic, payload, packet) {
-    for (const [pattern, handlerSet] of handlers.entries()) {
-      if (mqttTopicMatch(pattern, topic)) {
-        for (const fn of handlerSet) {
-          try { fn(topic, payload, packet); }
-          catch (err) { pushLog(`[MQTT] Handler error for ${topic}: ${err.message}`); }
-        }
+    for (const handlerSet of handlerSetsFor(topic)) {
+      for (const fn of handlerSet) {
+        try { fn(topic, payload, packet); }
+        catch (err) { pushLog(`[MQTT] Handler error for ${topic}: ${err.message}`); }
       }
     }
   }
@@ -328,11 +344,28 @@ export function createMqttHub(ctx) {
   }
 
   function subscribe(topic, handler) {
-    if (!handlers.has(topic)) handlers.set(topic, new Set());
+    if (!handlers.has(topic)) { handlers.set(topic, new Set()); matchCache.clear(); }
     handlers.get(topic).add(handler);
     // If already connected, subscribe on the wire
     if (client?.connected) {
       client.subscribe(topic, { qos: 0 });
+    }
+  }
+
+  /**
+   * Handler wieder abmelden. War es der letzte für dieses Abo, wird es auch
+   * beim Broker beendet — der schickt die Nachrichten dann gar nicht mehr
+   * (z. B. das '#'-Abo des Topic-Beobachters, wenn niemand den Inspektor nutzt).
+   */
+  function unsubscribe(topic, handler) {
+    const set = handlers.get(topic);
+    if (!set) return;
+    set.delete(handler);
+    if (set.size > 0) return;
+    handlers.delete(topic);
+    matchCache.clear();
+    if (client?.connected) {
+      try { client.unsubscribe(topic); } catch { /* Verbindung gerade weg */ }
     }
   }
 
@@ -453,6 +486,7 @@ export function createMqttHub(ctx) {
     start,
     close,
     subscribe,
+    unsubscribe,
     publish,
     connect,
     disconnect,
