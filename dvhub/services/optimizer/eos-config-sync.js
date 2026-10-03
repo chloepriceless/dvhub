@@ -79,6 +79,19 @@ export const EOS_FITNESS_CACHE_MAX_ENTRIES = 0;
 export const EOS_SOLUTION_READY_PATH = '/api/eos/solution-ready';
 
 /**
+ * EOS-Läufe zur vollen Viertelstunde starten (ems.start_on_interval_boundary):
+ * :00, :15, :30, :45 bei 15-Minuten-Takt, passend zu den Börsen-Slots. Die
+ * Laufzeit hängt von Temperatur, Horizont und E-Auto ab und lässt sich nicht
+ * vorhersagen — darum fester Start statt „fertig vor der Grenze“. Dauert ein
+ * Lauf länger als der Takt, startet der nächste zur nächsten Grenze nach
+ * seinem Ende. Standard an; optimizer.eosStartAfterPreviousRun = true stellt
+ * auf das alte Verhalten zurück (Takt ab dem Ende des vorigen Laufs).
+ */
+export function eosStartOnBoundary(cfg) {
+  return cfg?.optimizer?.eosStartAfterPreviousRun !== true;
+}
+
+/**
  * Fitness-Cache-Grenze für EOS aus optimizer.eosFitnessCacheMaxEntries:
  * 0/leer = aus (Standard), N > 0 = höchstens N Einträge. Unbegrenzt gibt es
  * bewusst nicht (RAM).
@@ -445,6 +458,7 @@ export function createEosConfigSync(ctx) {
         timezoneOverride: caps.timezoneOverride === true,
         selfConsumptionInterpolator: caps.selfConsumptionInterpolator === true,
         solutionNotify: caps.solutionNotify === true,
+        startOnBoundary: caps.startOnBoundary === true,
       };
     }
     if (!caps.reachable) return;
@@ -706,6 +720,8 @@ export function createEosConfigSync(ctx) {
       ...(caps.fitnessCacheLimit ? [{ section: 'optimization/genetic/fitness_cache_max_entries', body: eosFitnessCacheMaxEntries(cfg) }] : []),
       // Fertigen Lauf an DVhub melden (Push statt minütlicher Abfrage).
       ...(caps.solutionNotify ? [{ section: 'ems/notify_url', body: eosNotifyUrl(cfg, baseUrl) }] : []),
+      // Läufe zur vollen Viertelstunde starten (statt Takt ab Laufende).
+      ...(caps.startOnBoundary ? [{ section: 'ems/start_on_interval_boundary', body: eosStartOnBoundary(cfg) }] : []),
       // Feste Zeitzone statt Nachschlagen aus Breiten-/Längengrad (PR #1377):
       // spart ~25 MB beim nächsten EOS-Start.
       ...(caps.timezoneOverride ? [{ section: 'general/timezone_override', body: cfg?.timeZone || 'Europe/Berlin' }] : []),

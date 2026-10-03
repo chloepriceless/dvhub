@@ -77,6 +77,8 @@ export function detectEosCapabilities(config, health = {}) {
   // Meldung nach jedem fertigen Lauf (ems.notify_url, DV-EOS rc1.9).
   const ems = cfg && isObj(cfg.ems) ? cfg.ems : null;
   const solutionNotify = hasKey(ems, 'notify_url');
+  // Läufe zur vollen Viertelstunde starten (rc1.11).
+  const startOnBoundary = hasKey(ems, 'start_on_interval_boundary');
 
   const reachable = !!cfg;
   const supported = reachable ? (flavor === EOS_FLAVOR.UPSTREAM_GENETIC && deviceMap) : null;
@@ -92,6 +94,7 @@ export function detectEosCapabilities(config, health = {}) {
     timezoneOverride,
     selfConsumptionInterpolator,
     solutionNotify,
+    startOnBoundary,
     detectedAt: Date.now(),
   };
 }

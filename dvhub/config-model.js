@@ -2183,6 +2183,14 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'optimization',
+      path: 'optimizer.eosStartAfterPreviousRun',
+      label: 'EOS-Takt ab Laufende statt zur vollen Viertelstunde',
+      type: 'boolean',
+      help: 'Standard (aus): EOS startet jeden Lauf zur vollen Viertelstunde (:00, :15, :30, :45), passend zu den Börsen-Slots; dauert ein Lauf länger als der Takt, startet der nächste zur nächsten Viertelstunde nach seinem Ende. An = wie früher: der Takt zählt ab dem Ende des vorigen Laufs.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimization',
       path: 'optimizer.eosFitnessCacheMaxEntries',
       label: 'EOS Fitness-Cache (Einträge)',
       type: 'number',

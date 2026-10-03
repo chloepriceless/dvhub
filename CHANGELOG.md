@@ -12,6 +12,12 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Läufe starten zur vollen Viertelstunde (DV-EOS rc1.11).** Bisher begann ein Lauf
+  15 Minuten nach dem Ende des vorigen, die Starts wanderten gegen die Uhr. Jetzt startet
+  EOS bei :00, :15, :30, :45, passend zu den Börsen-Slots; dauert ein Lauf länger als der
+  Takt, startet der nächste zur nächsten Viertelstunde nach seinem Ende. Abschaltbar über
+  `optimizer.eosStartAfterPreviousRun`.
+
 - **EOS-Warmstart bleibt erhalten, wenn DVhub den Steuerhorizont ändert (DV-EOS rc1.10).**
   DVhub kürzt den Horizont stündlich auf die bekannten Preise; EOS verwarf den
   Vorgängerplan dann wegen der anderen Länge und startete ohne Warmstart. Jetzt wird er
