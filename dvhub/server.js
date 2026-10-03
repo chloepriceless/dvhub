@@ -2245,7 +2245,11 @@ if (IS_RUNTIME_PROCESS) {
       eosForecastBridge.start({
         intervalMs: _pushIntervalMs,
         fireImmediately: false,
-        onEosRestart: () => optimizer.notifyEosRestart(),
+        onEosRestart: () => {
+          // Neues EOS kennt unsere Werte nicht — beim nächsten Sync alles senden.
+          eosConfigSync.invalidateSentConfig?.();
+          return optimizer.notifyEosRestart();
+        },
         beforePush: async () => {
           try { await eosConfigSync.sync(); }
           catch (e) {

@@ -400,6 +400,15 @@ export function createEosConfigSync(ctx) {
   // Zuletzt gesehenes `supported` (nur von erreichbaren Erkennungen), damit
   // `eos_unsupported_version` nur beim Wechsel ins Log geht, nicht bei jedem Lauf.
   let lastSupported = null;
+
+  // Was zuletzt erfolgreich an EOS ging (section → JSON), siehe sync().
+  const SENT_CONFIG_TTL_MS = 30 * 60_000;
+  const sentConfig = { baseUrl: null, at: 0, values: new Map() };
+  function invalidateSentConfig() {
+    sentConfig.values.clear();
+    sentConfig.at = 0;
+  }
+
   function publishCaps(caps) {
     if (state) {
       state.optimizer = state.optimizer || {};
@@ -711,10 +720,33 @@ export function createEosConfigSync(ctx) {
 
     const applied = [];
     const errors = {};
+    // Nur Geändertes senden (2026-10-03): jeder PUT lässt EOS seine Config-
+    // Datei schreiben (SD-Karte), und ein Wert, der sich mitten in einem Lauf
+    // ändert, traf EOS-Versionen ohne Momentaufnahme pro Lauf (IndexError am
+    // Laufende). Spätestens nach SENT_CONFIG_TTL_MS geht alles einmal komplett
+    // raus; ein Fehler oder EOS-Neustart (invalidateSentConfig) leert den Merker.
+    const now = Date.now();
+    if (sentConfig.baseUrl !== baseUrl || now - sentConfig.at > SENT_CONFIG_TTL_MS) {
+      sentConfig.values.clear();
+      sentConfig.baseUrl = baseUrl;
+      sentConfig.at = now;
+    }
+    let unchanged = 0;
     for (const t of tasks) {
+      const body = JSON.stringify(t.body);
+      if (sentConfig.values.get(t.section) === body) {
+        applied.push(t.section);
+        unchanged += 1;
+        continue;
+      }
       const res = await eosHttpRequest(baseUrl, 'PUT', `/v1/config/${t.section}`, t.body);
-      if (res.ok) applied.push(t.section);
-      else errors[t.section] = res.error;
+      if (res.ok) {
+        applied.push(t.section);
+        sentConfig.values.set(t.section, body);
+      } else {
+        errors[t.section] = res.error;
+        sentConfig.values.delete(t.section);
+      }
     }
 
     // Frisches EOS: vor diesem Sync gab es noch keinen Wechselrichter, an dem das
@@ -747,7 +779,7 @@ export function createEosConfigSync(ctx) {
         inverter_max_power_w: inverters[0]?.max_power_w,
       });
     }
-    return { ok: okAll, applied, errors, eos: { flavor: caps.flavor, version: caps.version, supported: true } };
+    return { ok: okAll, applied, unchanged, errors, eos: { flavor: caps.flavor, version: caps.version, supported: true } };
   }
 
   /**
@@ -823,5 +855,5 @@ export function createEosConfigSync(ctx) {
     return { ok: res.ok, error: res.error, ev: list[0] };
   }
 
-  return { sync, persist, syncEv };
+  return { sync, persist, syncEv, invalidateSentConfig };
 }

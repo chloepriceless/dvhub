@@ -459,3 +459,34 @@ test('sync(): ein abgelehnter Direktvermarktungs-Schalter kippt den Gesamtstatus
     await mock.close();
   }
 });
+
+test('Sync sendet nur Geändertes; nach invalidateSentConfig wieder alles', async () => {
+  const puts = [];
+  const server = http.createServer((req, res) => {
+    req.on('data', () => {}); req.on('end', () => {
+      if (req.method === 'GET' && req.url === '/v1/config') { res.writeHead(200); return res.end(JSON.stringify({ optimization: { algorithm: 'GENETIC', genetic: { interval_sec: 900 } }, feedintariff: { provider: null, direct_marketing_enabled: true }, devices: { batteries: { battery1: {} }, inverters: { inverter1: {} } }, elecprice: { provider: 'ElecPriceImport' } })); }
+      if (req.method === 'GET' && req.url === '/v1/health') { res.writeHead(200); return res.end(JSON.stringify({ version: '0.4.0rc1' })); }
+      if (req.method === 'PUT') puts.push(req.url);
+      res.writeHead(200); res.end('{}');
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const cfg = { optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${server.address().port}` }, batteryCapacityWh: 10000, maxChargeW: 5000 } };
+    const s = createEosConfigSync({ state: { victron: { minSocPct: 5 }, optimizer: {} }, pushLog: () => {}, getCfg: () => cfg });
+    const first = await s.sync();
+    const n1 = puts.length;
+    assert.ok(n1 > 0 && first.ok);
+    const second = await s.sync();
+    assert.equal(puts.length, n1, 'unveränderte Werte gehen nicht erneut raus');
+    assert.equal(second.unchanged, second.applied.length);
+    cfg.optimizer.eosGeneticGenerations = 200;
+    await s.sync();
+    assert.deepEqual(puts.slice(n1), ['/v1/config/optimization/genetic/generations'], 'nur die geänderte Einstellung');
+    s.invalidateSentConfig();
+    await s.sync();
+    assert.ok(puts.length >= 2 * n1, 'nach EOS-Neustart wieder alles');
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
