@@ -7307,7 +7307,8 @@ export function createApiRoutes(ctx) {
       }
       const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, () => ctx.historyApi.getSummary({
         view: url.searchParams.get('view'),
-        date: url.searchParams.get('date')
+        date: url.searchParams.get('date'),
+        slots: url.searchParams.get('slots')
       }));
       if (result === HEAVY_SKIPPED) return;   // Browser hat schon weitergeklickt
       return json(res, result.status, result.body);

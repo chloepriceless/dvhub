@@ -116,7 +116,8 @@ test('history runtime computes slot-level import cost, export revenue, and unres
 
   const summary = await runtime.getSummary({
     view: 'week',
-    date: '2026-03-09'
+    date: '2026-03-09',
+    includeSlots: true
   });
 
   assert.equal(summary.kpis.importKwh, 3);
@@ -325,7 +326,8 @@ test('history runtime matches export revenue per slot even when price timestamps
 
   const summary = await runtime.getSummary({
     view: 'week',
-    date: '2026-03-09'
+    date: '2026-03-09',
+    includeSlots: true
   });
 
   assert.equal(summary.slots[0].exportRevenueEur, 0.05);
@@ -446,16 +448,27 @@ test('history runtime exposes aggregated net-analysis payloads with real export 
 
   const week = await runtime.getSummary({
     view: 'week',
-    date: '2026-03-09'
+    date: '2026-03-09',
+    includeSlots: true
   });
   const month = await runtime.getSummary({
     view: 'month',
-    date: '2026-03-09'
+    date: '2026-03-09',
+    includeSlots: true
   });
   const year = await runtime.getSummary({
     view: 'year',
     date: '2026-03-09'
   });
+  // Ohne ?slots=1 keine 15-min-Daten in Woche/Monat (Monat waren 7,5 MB) —
+  // Kennzahlen, Tageszeilen und Diagramme bleiben gleich.
+  const monthLean = await runtime.getSummary({ view: 'month', date: '2026-03-09' });
+  assert.deepEqual(monthLean.slots, []);
+  assert.deepEqual(monthLean.series, { financial: [], energy: [], prices: [] });
+  assert.ok(month.slots.length > 0, 'mit includeSlots kommen die Slots');
+  assert.deepEqual(monthLean.kpis, month.kpis);
+  assert.deepEqual(monthLean.rows, month.rows);
+  assert.deepEqual(monthLean.charts, month.charts);
 
   assert.deepEqual(week.charts.periodCombinedBars[0], {
     label: '2026-03-09',
@@ -530,8 +543,8 @@ test('history runtime groups day, week, month, and year views with correct total
   });
 
   const day = await runtime.getSummary({ view: 'day', date: '2026-03-09' });
-  const week = await runtime.getSummary({ view: 'week', date: '2026-03-09' });
-  const month = await runtime.getSummary({ view: 'month', date: '2026-03-09' });
+  const week = await runtime.getSummary({ view: 'week', date: '2026-03-09', includeSlots: true });
+  const month = await runtime.getSummary({ view: 'month', date: '2026-03-09', includeSlots: true });
   const year = await runtime.getSummary({ view: 'year', date: '2026-03-09' });
 
   assert.equal(day.rows.length, 2);
@@ -652,7 +665,7 @@ test('history runtime computes §51 EEG Förder-Verlängerung from negative-pric
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const month = await runtime.getSummary({ view: 'month', date: '2026-01-15' });
+  const month = await runtime.getSummary({ view: 'month', date: '2026-01-15', includeSlots: true });
   assert.equal(month.kpis.negPriceRule, '15min');
   assert.equal(month.kpis.eegExtensionHours, 0.5); // 2 negative quarter-hours × 0,25 h
   assert.equal(month.kpis.eegExtensionMonths, 0); // 0,5 h / 730,5 → rundet auf 0 Monate
@@ -677,7 +690,7 @@ test('history runtime reports no §51 Förder-Verlängerung for plants not subje
     getCurrentDate: () => FIXED_CURRENT_DATE
   });
 
-  const month = await runtime.getSummary({ view: 'month', date: '2026-01-15' });
+  const month = await runtime.getSummary({ view: 'month', date: '2026-01-15', includeSlots: true });
   assert.equal(month.kpis.negPriceRule, 'none');
   assert.equal(month.kpis.eegExtensionHours, 0);
   assert.equal(month.kpis.eegExtensionMonths, 0);
@@ -785,7 +798,7 @@ test('§51 cross-boundary streak: same hour is window-INDEPENDENT (day vs week)'
   // fall INSIDE the week window — the week view naturally counts the full streak. The day view
   // starts exactly on the boundary. The affected result of the SAME hour must be identical.
   const day = await make().getSummary({ view: 'day', date: '2026-03-10' });
-  const week = await make().getSummary({ view: 'week', date: '2026-03-10' });
+  const week = await make().getSummary({ view: 'week', date: '2026-03-10', includeSlots: true });
 
   const hourTs = '2026-03-09T23:00:00.000Z'; // Berlin 2026-03-10 00:00, in BOTH ranges
   const dayHour = findSlot(day, hourTs);
@@ -896,7 +909,7 @@ test('history runtime exposes chart-ready series with split costs and estimation
   });
 
   const day = await runtime.getSummary({ view: 'day', date: '2026-03-09' });
-  const week = await runtime.getSummary({ view: 'week', date: '2026-03-09' });
+  const week = await runtime.getSummary({ view: 'week', date: '2026-03-09', includeSlots: true });
 
   assert.equal(Array.isArray(day.charts?.dayEnergyLines), true);
   assert.equal(day.charts.dayEnergyLines[0].label, '12:00');
@@ -1011,7 +1024,7 @@ test('history runtime splits ranges that span today into history and live querie
     getCurrentDate: () => '2026-03-10'
   });
 
-  await runtime.getSummary({ view: 'week', date: '2026-03-10' });
+  await runtime.getSummary({ view: 'week', date: '2026-03-10', includeSlots: true });
 
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].scopes, ['history']);
@@ -1510,8 +1523,8 @@ test('history runtime exposes monthly and cross-month weekly market premium rate
     })
   });
 
-  const week = await runtime.getSummary({ view: 'week', date: '2026-02-01' });
-  const month = await runtime.getSummary({ view: 'month', date: '2026-02-15' });
+  const week = await runtime.getSummary({ view: 'week', date: '2026-02-01', includeSlots: true });
+  const month = await runtime.getSummary({ view: 'month', date: '2026-02-15', includeSlots: true });
   const year = await runtime.getSummary({ view: 'year', date: '2026-06-01' });
 
   const januaryWeekRow = week.rows.find((row) => row.label === '2026-01-31');
@@ -1597,7 +1610,7 @@ test('history runtime uses monthly market value for month view when no annual va
     })
   });
 
-  const month = await runtime.getSummary({ view: 'month', date: '2027-02-10' });
+  const month = await runtime.getSummary({ view: 'month', date: '2027-02-10', includeSlots: true });
 
   assert.equal(month.kpis.periodMarketValueCtKwh, 4.5);
   assert.equal(month.kpis.marketPremiumCtKwh, 3.7);
@@ -1669,7 +1682,7 @@ test('history runtime keeps month premium on monthly market values when configur
     })
   });
 
-  const month = await runtime.getSummary({ view: 'month', date: '2026-02-15' });
+  const month = await runtime.getSummary({ view: 'month', date: '2026-02-15', includeSlots: true });
 
   assert.equal(month.kpis.periodMarketValueCtKwh, 4.5);
   assert.equal(month.kpis.marketPremiumCtKwh, 3.7);
@@ -2057,6 +2070,7 @@ test('history summary API validates views and delegates to the runtime', async (
   assert.deepEqual(valid.body.echo, {
     view: 'month',
     date: '2026-03-09',
+    includeSlots: false,
     solarMarketValues: {
       monthlyCtKwhByMonth: { '2026-03': 4.5 },
       annualCtKwhByYear: {}
@@ -2065,6 +2079,7 @@ test('history summary API validates views and delegates to the runtime', async (
   assert.deepEqual(week.body.echo, {
     view: 'week',
     date: '2026-03-09',
+    includeSlots: false,
     solarMarketValues: {
       monthlyCtKwhByMonth: { '2026-03': 4.5 },
       annualCtKwhByYear: {}
@@ -2156,7 +2171,7 @@ test('getSummary month view: hypFullFeedInEur uses Volleinspeisung AW minus 0.4 
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   assert.equal(summary.kpis.hypFullFeedInEur, 11.95,
     'hypFullFeedInEur = pvKwh * (AW_VOLL - 0.4) / 100 = 100 * 11.95/100');
 });
@@ -2190,7 +2205,7 @@ test('getSummary month view: hypSurplusFeedInEur uses Teileinspeisung AW minus 0
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   assert.equal(summary.kpis.hypSurplusFeedInEur, 4.43,
     'hypSurplusFeedInEur = exportKwh * (AW_TEIL - 0.4) / 100 = 60 * 7.39/100');
 });
@@ -2226,7 +2241,7 @@ test('getSummary month view: dvExcessEur = dvRevenueEur - hypSurplusFeedInEur', 
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   // exportRevenueEur = 60 * 10 / 100 = 6.00 (no market premium)
   assert.equal(summary.kpis.dvExcessEur, 1.57,
     'dvExcessEur = dvRevenueEur(6.00) - hypSurplusFeedInEur(4.43)');
@@ -2260,7 +2275,7 @@ test('getSummary month view: dvCostEur equals dvCostMonthlyEur for month view', 
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   assert.equal(summary.kpis.dvCostEur, 8.50, 'dvCostEur = dvCostMonthlyEur for month view');
 });
 
@@ -2342,7 +2357,7 @@ test('getSummary month view: dvNetAdvantageEur = dvExcessEur - dvCostEur', async
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   assert.equal(summary.kpis.dvNetAdvantageEur, -6.93,
     'dvNetAdvantageEur = dvExcessEur(1.57) - dvCostEur(8.50) = -6.93');
 });
@@ -2374,7 +2389,7 @@ test('getSummary: DV comparison fields are null when AW is null (no BNetzA data)
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   assert.equal(summary.kpis.hypFullFeedInEur, null, 'hypFullFeedInEur null when AW is null');
   assert.equal(summary.kpis.hypSurplusFeedInEur, null, 'hypSurplusFeedInEur null when AW is null');
   assert.equal(summary.kpis.dvExcessEur, null, 'dvExcessEur null when AW is null');
@@ -2455,7 +2470,7 @@ test('getSummary month view: negative price slot reduces eligible pvKwh for full
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   // Only slot 2 pvKwh=50 is eligible (slot 1 has negative price -> 15min rule)
   // hypFullFeedInEur = 50 * (12.35 - 0.4) / 100 = 50 * 11.95 / 100 = 5.975 -> 5.98
   assert.equal(summary.kpis.hypFullFeedInEur, 5.98,
@@ -2492,7 +2507,7 @@ test('getSummary month view: rule=none plant keeps all pvKwh even when price is 
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   // rule=none: all 100 pvKwh eligible even with negative price
   // hypFullFeedInEur = 100 * (12.35 - 0.4) / 100 = 11.95
   assert.equal(summary.kpis.hypFullFeedInEur, 11.95,
@@ -2530,7 +2545,7 @@ test('getSummary month view: pre-EEG-2023 plant falls back to single AW for both
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   // Both scenarios use same AW=9.50 (fallback from null full to partial)
   // hypFullFeedInEur = 100 * (9.50 - 0.4) / 100 = 9.10
   // hypSurplusFeedInEur = 50 * (9.50 - 0.4) / 100 = 4.55
@@ -2571,7 +2586,7 @@ test('getSummary month view: dvRevenueEur = exportRevenueEur + marketPremiumCtTo
     getCurrentDate: () => '2025-04-15'
   });
 
-  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01' });
+  const summary = await runtime.getSummary({ view: 'month', date: '2025-03-01', includeSlots: true });
   assert.equal(summary.kpis.dvRevenueEur, 6.00,
     'dvRevenueEur = exportRevenueEur(6.00) + marketPremium(0)');
   assert.equal(summary.kpis.dvRevenueCtKwh, 10,

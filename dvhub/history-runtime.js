@@ -1433,7 +1433,7 @@ export function createHistoryRuntime({
   // unbroken block.
   const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 
-  async function getSummary({ view = 'day', date, solarMarketValues = null }) {
+  async function getSummary({ view = 'day', date, solarMarketValues = null, includeSlots = false }) {
     const range = normalizeViewRange(view, date);
     const start = localDateTimeToUtcIso(range.startDate, 0, 0);
     const end = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
@@ -2230,10 +2230,15 @@ export function createHistoryRuntime({
         end
       },
       kpis: periodPremiumApplied.kpis,
-      series: buildSummarySeries(view, slots),
+      // 15-min-Daten nur in der Tagesansicht (oder auf ausdrücklichen Wunsch,
+      // ?slots=1): die Woche-/Monatsansicht der Oberfläche liest nur kpis/rows/
+      // charts. Ein Monat mit allen Slots war 7,5 MB JSON — auf schwacher
+      // Hardware Sekunden fürs Serialisieren, im Browser fürs Einlesen.
+      // Die PV-/Negativpreis-Heatmap hat ihren eigenen Endpunkt (viz/heatmap).
+      series: (view === 'day' || includeSlots) ? buildSummarySeries(view, slots) : buildSummarySeries('year', []),
       charts,
       rows,
-      slots: (view === 'year' || view === 'all') ? [] : slots,
+      slots: (view === 'day' || (includeSlots && view !== 'year' && view !== 'all')) ? slots : [],
       meta: {
         ...periodPremiumApplied.meta,
         sourceSummary
@@ -2277,10 +2282,11 @@ export function createHistoryApiHandlers({
           solarMarketValues = null;
         }
       }
+      const includeSlots = query.slots === true || query.slots === '1' || query.slots === 'true';
       return {
         status: 200,
         body: {
-          ...await historyRuntime.getSummary({ view, date, solarMarketValues }),
+          ...await historyRuntime.getSummary({ view, date, solarMarketValues, includeSlots }),
           app: appVersion
         }
       };

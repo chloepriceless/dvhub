@@ -52,7 +52,7 @@ function makeRuntime() {
 
 test('Börsenerlös wird je Einspeisequelle ausgewiesen — Speicher und PV-direkt getrennt, Summe = Gesamterlös', async () => {
   const runtime = makeRuntime();
-  const summary = await runtime.getSummary({ view: 'week', date: '2026-03-09' });
+  const summary = await runtime.getSummary({ view: 'week', date: '2026-03-09', includeSlots: true });
   const k = summary.kpis;
 
   // Beträge: 1,0 kWh × 7 ct = 0,07 € (PV), 0,5 kWh × 18 ct = 0,09 € (Speicher).
@@ -81,7 +81,7 @@ test('Börsenerlös wird je Einspeisequelle ausgewiesen — Speicher und PV-dire
 
 test('Zeilen und Chart-Reihen tragen die Aufteilung mit', async () => {
   const runtime = makeRuntime();
-  const summary = await runtime.getSummary({ view: 'week', date: '2026-03-09' });
+  const summary = await runtime.getSummary({ view: 'week', date: '2026-03-09', includeSlots: true });
 
   // Wochenansicht → eine Zeile je Tag; der 09.03. hält beide bepreisten Slots.
   const day = summary.rows.find((r) => r.key === '2026-03-09');
