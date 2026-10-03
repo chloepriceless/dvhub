@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Warmstart bleibt erhalten, wenn DVhub den Steuerhorizont ändert (DV-EOS rc1.10).**
+  DVhub kürzt den Horizont stündlich auf die bekannten Preise; EOS verwarf den
+  Vorgängerplan dann wegen der anderen Länge und startete ohne Warmstart. Jetzt wird er
+  verschoben und auf die neue Länge gebracht (eHive: 10 Warmstarts + 50 Varianten statt 0).
 - **EOS meldet fertige Pläne (Push statt Abfrage, DV-EOS rc1.9).** EOS ruft nach jedem
   Lauf `POST /api/eos/solution-ready` auf (nur von der Box selbst); DVhub holt den Plan
   sofort und übernimmt ihn. Solange Meldungen kommen, fragt DVhub nur noch alle 10 min
@@ -25,9 +29,10 @@ verweist hierher.
 
 - **EOS rechnet mit zwei Kernen (DV-EOS rc1.8).** Die Bewertung der Kandidaten läuft
   in bis zu zwei Prozessen; ein Kern bleibt immer frei (2 Kerne → 1, ab 3 Kernen → 2).
-  eHive One (4× Cortex-A55, 300×200): Lauf 460 s statt 703 s, Spitze 224 MB. Der
-  Container ist auf 2 Kerne begrenzt (`EOS_CPUS=2`, vorher 1), mit niedrigerer
-  CPU-Gewichtung; `EOS_MEM_LIMIT` 320 MB. rc1.7 friert zudem die Einstellungen je
+  eHive One (4× Cortex-A55, 300×200): Lauf 460 s statt 703 s, Spitze 224 MB. Ab rc1.10
+  sind die Rechenprozesse auf die letzten Kerne gepinnt; der EOS-Server bleibt frei
+  und antwortet auch während eines Laufs (10–110 ms). Der Container hat deshalb kein
+  CPU-Kontingent mehr (`EOS_CPUS=0`, vorher 1), dafür eine niedrigere CPU-Gewichtung; `EOS_MEM_LIMIT` 320 MB. rc1.7 friert zudem die Einstellungen je
   Lauf ein (Horizont-Änderung mitten im Lauf führte zu `IndexError`).
 
 - **RAM-Stufen entfernt.** DVhub schaltet keine Funktionen mehr nach Speichergröße
