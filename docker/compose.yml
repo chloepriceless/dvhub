@@ -134,9 +134,9 @@ services:
   eos:
     # DV-EOS (Fork von Akkudoktor-EOS) im selben Stand wie auf den Appliances.
     # Gebaut aus dem Dockerfile des Forks am Git-Tag — kein zweites Rezept hier.
-    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_TAG:-dvhub-v0.4.0rc1.11}
+    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_TAG:-dvhub-v0.4.0rc1.12}
     build:
-      context: ${EOS_REPO:-https://github.com/chloepriceless/DV-EOS.git}#${EOS_TAG:-dvhub-v0.4.0rc1.11}
+      context: ${EOS_REPO:-https://github.com/chloepriceless/DV-EOS.git}#${EOS_TAG:-dvhub-v0.4.0rc1.12}
     profiles: [eos]
     restart: unless-stopped
     # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).
