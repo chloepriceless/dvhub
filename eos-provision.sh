@@ -33,7 +33,7 @@ if [[ -f "$EOS_PIN_FILE" ]]; then
   _pin_ref="$(grep -E '^EOS_PIN=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
 fi
 EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/chloepriceless/DV-EOS.git}}"
-EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-v0.4.0rc1.6}}}"
+EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-v0.4.0rc1.8}}}"
 EOS_BRANCH="$EOS_PIN"   # Rueckwaertskompatibler Alias
 EOS_STATE_MARKER="${EOS_STATE_MARKER:-$DATA_DIR/.eos-provisioned}"
 # Dienstname und Port sind ueberschreibbar, damit eine zweite Instanz (A/B-Test

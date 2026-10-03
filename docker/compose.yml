@@ -134,9 +134,9 @@ services:
   eos:
     # DV-EOS (Fork von Akkudoktor-EOS) im selben Stand wie auf den Appliances.
     # Gebaut aus dem Dockerfile des Forks am Git-Tag — kein zweites Rezept hier.
-    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_TAG:-dvhub-v0.4.0rc1.6}
+    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_TAG:-dvhub-v0.4.0rc1.8}
     build:
-      context: ${EOS_REPO:-https://github.com/chloepriceless/DV-EOS.git}#${EOS_TAG:-dvhub-v0.4.0rc1.6}
+      context: ${EOS_REPO:-https://github.com/chloepriceless/DV-EOS.git}#${EOS_TAG:-dvhub-v0.4.0rc1.8}
     profiles: [eos]
     restart: unless-stopped
     # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).
@@ -164,8 +164,15 @@ services:
       - dvhub-eos:/data
     # Eigener Speicher frisch ~205 MB, nach Tagen Dauerbetrieb ~290 MB
     # (Appliance, 15-min-Optimierung); Spitze dort 352 MB inkl. Page-Cache.
-    mem_limit: ${EOS_MEM_LIMIT:-256m}
-    cpus: ${EOS_CPUS:-1}
+    # rc1.8 mit 2 Rechenprozessen (eHive, 300×200): Spitze 224 MB, danach 128 MB
+    # — die Prozesse teilen sich den Speicher per fork.
+    mem_limit: ${EOS_MEM_LIMIT:-320m}
+    # Kein festes CPU-Limit (0): EOS rechnet selbst mit höchstens 2 Prozessen
+    # und lässt immer einen Kern frei (2 Kerne -> 1, ab 3 Kernen -> 2).
+    # Niedrigere Gewichtung wie nativ (Nice=10/CPUWeight=20): bei Engpass hat
+    # die Regelschleife von DVhub Vorrang.
+    cpus: ${EOS_CPUS:-0}
+    cpu_shares: 256
 
 # Erststart der DB (läuft nur bei leerem Datenverzeichnis, als postgres):
 # App-Rolle + DB + TimescaleDB anlegen — wie install.sh/timescale-provision.sh

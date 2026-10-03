@@ -12,6 +12,13 @@ verweist hierher.
 
 ### Neu
 
+- **EOS rechnet mit zwei Kernen (DV-EOS rc1.8).** Die Bewertung der Kandidaten läuft
+  in bis zu zwei Prozessen; ein Kern bleibt immer frei (2 Kerne → 1, ab 3 Kernen → 2).
+  eHive One (4× Cortex-A55, 300×200): Lauf 460 s statt 703 s, Spitze 224 MB. Der
+  Container hat kein festes CPU-Limit mehr (`EOS_CPUS=0`), dafür eine niedrigere
+  CPU-Gewichtung; `EOS_MEM_LIMIT` 320 MB. rc1.7 friert zudem die Einstellungen je
+  Lauf ein (Horizont-Änderung mitten im Lauf führte zu `IndexError`).
+
 - **RAM-Stufen entfernt.** DVhub schaltet keine Funktionen mehr nach Speichergröße
   ab. EOS-Pläne werden jetzt auch auf Boxen mit 1 GB RAM übernommen (vorher rechnete
   EOS dort, DVhub nutzte den Plan aber nie). Python-Prognosemodule hängen nur noch an
