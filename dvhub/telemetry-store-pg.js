@@ -292,6 +292,17 @@ export async function ensurePgSchema(pool) {
     );
     CREATE INDEX IF NOT EXISTS idx_energy_slots_15m_slot_start ON energy_slots_15m(slot_start_utc);
 
+    -- Vorberechnete Historie (Jahr/Alle): Rechenstand nach jedem abgeschlossenen
+    -- Monat, gesondert von den Rohdaten (die bleiben unangetastet und sind die
+    -- Quelle, aus der jederzeit neu gerechnet werden kann). fingerprint deckt
+    -- alles ab, was in den Stand einfließt; passt er nicht, wird neu gerechnet.
+    CREATE TABLE IF NOT EXISTS history_summary_cache (
+      cache_key TEXT PRIMARY KEY,
+      fingerprint TEXT NOT NULL,
+      payload BYTEA NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS solar_market_values (
       id BIGSERIAL PRIMARY KEY,
       scope TEXT NOT NULL,
@@ -476,6 +487,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       // werden vorher zusammengefasst: gespeichert wird der LETZTE Wert, als
       // "neu" zaehlt nur das ERSTE Vorkommen (genau wie frueher zeilenweise:
       // erstes INSERT, danach UPDATE).
+      noteHistoryWrite(rows);
       const insertedFlags = new Array(rows.length).fill(false);
       const firstIndexByKey = new Map();
       const lastRowByKey = new Map();
@@ -826,6 +838,112 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           estimatedSeriesKeys, incompleteSeriesKeys
         };
       });
+  }
+
+  /**
+   * Prüfwert der Rohdaten je Abschnitt (für die vorberechnete Historie).
+   * boundaries = aufsteigende UTC-Grenzen; Abschnitt i = [b[i], b[i+1]).
+   * Je Abschnitt: Anzahl + letztes updated_at der 15-min-Energiewerte (gleiche
+   * Reihen und Quellen wie listMaterializedEnergySlots) und Anzahl + Summe +
+   * letztes created_at der Preise. slotRows = 0 ⇒ der Abschnitt hat keine Slots.
+   * @returns {Promise<Array<{slotRows:number, fp:string}>>}
+   */
+  // Die Prüfwert-Abfragen zählen alle Zeilen der Abschnitte (eHive: ~8 s für
+  // neun Monate). Abgeschlossene Monate ändern sich nur, wenn nachträglich in
+  // sie geschrieben wird — und alles Schreiben läuft über diesen Prozess
+  // (writeSamples). Darum gemerkt, und verworfen, sobald ein Schreibvorgang
+  // einen gemerkten Zeitraum trifft. Die Frist ist nur die Rückfallebene für
+  // Änderungen an dieser Funktion vorbei (z. B. Aufräumen alter Rohwerte).
+  const FINGERPRINT_MEMO_TTL_MS = 6 * 3600_000;
+  const fingerprintMemo = new Map(); // key -> { at, value }
+  let fingerprintMemoEndMs = 0;      // spätestes Ende aller gemerkten Zeiträume
+  function noteHistoryWrite(rows) {
+    if (fingerprintMemo.size === 0) return;
+    for (const row of rows) {
+      const t = new Date(row.ts).getTime();
+      if (Number.isFinite(t) && t < fingerprintMemoEndMs) {
+        fingerprintMemo.clear();
+        fingerprintMemoEndMs = 0;
+        return;
+      }
+    }
+  }
+
+  async function historySectionFingerprints({ boundaries, sourceKinds = ['vrm_import', 'local_live'] }) {
+    const bounds = (Array.isArray(boundaries) ? boundaries : []).map((b) => isoTimestamp(b));
+    const sections = Math.max(0, bounds.length - 1);
+    if (sections === 0) return [];
+    const memoKey = `${bounds.join(',')}|${sourceKinds.join(',')}`;
+    const memo = fingerprintMemo.get(memoKey);
+    if (memo && Date.now() - memo.at < FINGERPRINT_MEMO_TTL_MS) return memo.value;
+    const value = await queryHistorySectionFingerprints(bounds, sections, sourceKinds);
+    if (fingerprintMemo.size >= 32) fingerprintMemo.clear();
+    fingerprintMemo.set(memoKey, { at: Date.now(), value });
+    fingerprintMemoEndMs = Math.max(fingerprintMemoEndMs, new Date(bounds[bounds.length - 1]).getTime());
+    return value;
+  }
+
+  async function queryHistorySectionFingerprints(bounds, sections, sourceKinds) {
+    const out = Array.from({ length: sections }, () => ({ slotRows: 0, fp: '0||0||' }));
+    const first = bounds[0];
+    const last = bounds[bounds.length - 1];
+    const [energy, prices] = await Promise.all([
+      pool.query(`
+        SELECT width_bucket(slot_start_utc, $1::timestamptz[]) AS section,
+               COUNT(*)::bigint AS n,
+               (EXTRACT(EPOCH FROM MAX(updated_at)) * 1000000)::bigint AS last_us
+        FROM energy_slots_15m
+        WHERE series_key = ANY($2::text[])
+          AND slot_start_utc >= $3 AND slot_start_utc < $4
+          AND source_kind = ANY($5::text[])
+        GROUP BY 1
+      `, [bounds, [...MATERIALIZED_ENERGY_SERIES], first, last, sourceKinds]),
+      pool.query(`
+        SELECT width_bucket(ts_utc, $1::timestamptz[]) AS section,
+               COUNT(*)::bigint AS n,
+               SUM(value_num::numeric)::text AS total,
+               (EXTRACT(EPOCH FROM MAX(created_at)) * 1000000)::bigint AS last_us
+        FROM timeseries_samples
+        WHERE series_key IN ('price_ct_kwh', 'price_eur_mwh')
+          AND value_num IS NOT NULL
+          AND ts_utc >= $2 AND ts_utc < $3
+        GROUP BY 1
+      `, [bounds, first, last])
+    ]);
+    const parts = out.map(() => ({ e: '0|', p: '0||' }));
+    for (const row of energy.rows) {
+      const i = Number(row.section) - 1;
+      if (i < 0 || i >= sections) continue;
+      out[i].slotRows = Number(row.n);
+      parts[i].e = `${row.n}|${row.last_us}`;
+    }
+    for (const row of prices.rows) {
+      const i = Number(row.section) - 1;
+      if (i < 0 || i >= sections) continue;
+      parts[i].p = `${row.n}|${row.total}|${row.last_us}`;
+    }
+    for (let i = 0; i < sections; i++) out[i].fp = `${parts[i].e}|${parts[i].p}`;
+    return out;
+  }
+
+  /** Alle abgelegten Rechenstände, deren Schlüssel mit prefix beginnt. */
+  async function getHistoryCacheEntries(prefix) {
+    const result = await pool.query(
+      `SELECT cache_key, fingerprint, payload FROM history_summary_cache
+       WHERE starts_with(cache_key, $1)`,
+      [String(prefix)]
+    );
+    return new Map(result.rows.map((row) => [row.cache_key, { fingerprint: row.fingerprint, payload: row.payload }]));
+  }
+
+  async function putHistoryCacheEntry(cacheKey, fingerprint, payload) {
+    await pool.query(
+      `INSERT INTO history_summary_cache (cache_key, fingerprint, payload, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (cache_key)
+       DO UPDATE SET fingerprint = EXCLUDED.fingerprint, payload = EXCLUDED.payload, updated_at = now()`,
+      [String(cacheKey), String(fingerprint), payload]
+    );
   }
 
   async function listPriceSlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS }) {
@@ -1444,6 +1562,9 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     listMissingPriceBuckets,
     listAggregatedEnergySlots,
     listMaterializedEnergySlots,
+    historySectionFingerprints,
+    getHistoryCacheEntries,
+    putHistoryCacheEntry,
     // Pre-pivot reference implementation, kept only so the SQL pivot can be
     // golden-diffed against it on real data. Not used by the app.
     listMaterializedEnergySlotsJsPivot,

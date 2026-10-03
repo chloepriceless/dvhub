@@ -133,3 +133,42 @@ describe('PG-Store: Messwerte als Paket', () => {
     assert.match(slots[1].text, /value_num = EXCLUDED\.value_num/);
   });
 });
+
+describe('PG-Store: Prüfwerte der vorberechneten Historie', () => {
+  const fpQueries = (pool) => pool.sql.filter((q) => /width_bucket/.test(q.text));
+  const boundaries = ['2026-06-30T22:00:00.000Z', '2026-07-31T22:00:00.000Z', '2026-08-31T22:00:00.000Z'];
+
+  test('gemerkt bis ein Schreibvorgang in den gemerkten Zeitraum fällt', async () => {
+    const pool = fakePool();
+    const store = createTelemetryStorePg(pool);
+    const first = await store.historySectionFingerprints({ boundaries });
+    assert.equal(first.length, 2, 'ein Prüfwert je Abschnitt');
+    assert.deepEqual(first.map((x) => x.slotRows), [0, 0]);
+    assert.equal(fpQueries(pool).length, 2, 'eine Abfrage für Energie, eine für Preise');
+
+    await store.historySectionFingerprints({ boundaries });
+    assert.equal(fpQueries(pool).length, 2, 'zweiter Aufruf aus dem Merker');
+
+    // Laufender Betrieb schreibt hinter das Ende der gemerkten Abschnitte.
+    await store.writeSamples([row('a', '2026-09-23T14:00:00Z')]);
+    await store.historySectionFingerprints({ boundaries });
+    assert.equal(fpQueries(pool).length, 2, 'Schreiben im laufenden Monat verwirft nichts');
+
+    // Nachgeladene alte Daten (z. B. VRM-Import in den Juli).
+    await store.writeSamples([row('a', '2026-07-14T10:00:00Z')]);
+    await store.historySectionFingerprints({ boundaries });
+    assert.equal(fpQueries(pool).length, 4, 'Schreiben in einen gemerkten Monat → neu abfragen');
+  });
+
+  test('Ablage: Einträge lesen und schreiben', async () => {
+    const pool = fakePool();
+    const store = createTelemetryStorePg(pool);
+    await store.putHistoryCacheEntry('v1|year|2026-01-01|2026-03', 'abc', Buffer.from('x'));
+    const put = pool.sql.find((q) => /INSERT INTO history_summary_cache/.test(q.text));
+    assert.deepEqual(put.params.slice(0, 2), ['v1|year|2026-01-01|2026-03', 'abc']);
+    assert.match(put.text, /ON CONFLICT \(cache_key\) DO UPDATE/);
+    const entries = await store.getHistoryCacheEntries('v1|year|2026-01-01|');
+    assert.equal(entries.size, 0);
+    assert.match(pool.sql.at(-1).text, /starts_with\(cache_key, \$1\)/);
+  });
+});

@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { resolveBatteryCapacityWhForTimestamp } from './battery-stages.js';
 import { getEegNegativePriceRule, getFeedInCompensationCtKwh, isNegativePriceSlotAffected } from './eeg-rules.js';
@@ -495,7 +497,45 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
   return {
     add,
     finish: () => [...groups.values()].map((row) => finalizeAggregateSums(row)),
+    // Für die vorberechnete Historie: Zeilen-Zwischenstände sichern und laden.
+    exportState: () => [...groups.entries()],
+    importState: (entries) => {
+      groups.clear();
+      for (const [key, row] of entries) groups.set(key, row);
+    },
   };
+}
+
+// ── Vorberechnete Historie (Jahr/Alle) ────────────────────────────────────
+// Der Rechenstand nach jedem ABGESCHLOSSENEN Monat wird gesondert abgelegt
+// (history_summary_cache); ein Aufruf lädt den letzten gültigen Stand und
+// rechnet nur die Monate danach — in der Regel den laufenden. Weil vom
+// gesicherten Stand aus in derselben Reihenfolge weitergerechnet wird, sind
+// die Ergebnisse bitgleich zur Rechnung ohne Ablage.
+//
+// Jeder Stand trägt einen Prüfwert über alles, was in ihn einfließt: Rohdaten
+// und Preise bis einschließlich dieses Monats, Tarife/Kosten/Anlagen, die
+// Monatsmarktwerte der enthaltenen Monate, Akku-Kapazitäten und diese
+// Versionsnummer. Ändert sich etwas davon (z. B. der Monatsmarktwert wird
+// veröffentlicht, ein VRM-Import ergänzt Daten), gilt der Stand ab diesem
+// Monat nicht mehr und es wird ab dort neu aus den Rohdaten gerechnet.
+// Die Rohdaten selbst werden nie verändert.
+//
+// SUMMARY_CACHE_VERSION bei JEDER Änderung an der Slot-Bewertung oder den
+// Summen erhöhen — dann wird alles einmal neu aus den Rohdaten gerechnet.
+export const SUMMARY_CACHE_VERSION = 1;
+
+const sha256 = (text) => createHash('sha256').update(text).digest('hex');
+
+/** true, wenn der Wert JSON verlustfrei übersteht (kein NaN/Infinity). */
+function isJsonSafe(value) {
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (value === null || typeof value !== 'object') return true;
+  if (Array.isArray(value)) return value.every(isJsonSafe);
+  for (const key of Object.keys(value)) {
+    if (!isJsonSafe(value[key])) return false;
+  }
+  return true;
 }
 
 function buildDayCharts(slots) {
@@ -1716,66 +1756,70 @@ export function createHistoryRuntime({
     }
 
     // Laufende Summen über alle bewerteten Slots des Zeitraums.
-    const addSlotToKpiTotals = (totals, slot) => ({
-      importKwh: totals.importKwh + slot.importKwh,
-      exportKwh: totals.exportKwh + slot.exportKwh,
-      loadKwh: totals.loadKwh + Number(slot.loadKwh || 0),
-      pvKwh: totals.pvKwh + Number(slot.pvKwh || 0),
-      pvAcKwh: totals.pvAcKwh + Number(slot.pvAcKwh || 0),
-      solarDirectUseKwh: totals.solarDirectUseKwh + Number(slot.solarDirectUseKwh || 0),
-      solarToBatteryKwh: totals.solarToBatteryKwh + Number(slot.solarToBatteryKwh || 0),
-      solarToGridKwh: totals.solarToGridKwh + Number(slot.solarToGridKwh || 0),
-      gridDirectUseKwh: totals.gridDirectUseKwh + Number(slot.gridDirectUseKwh || 0),
-      gridToBatteryKwh: totals.gridToBatteryKwh + Number(slot.gridToBatteryKwh || 0),
-      batteryDirectUseKwh: totals.batteryDirectUseKwh + Number(slot.batteryDirectUseKwh || 0),
-      batteryToGridKwh: totals.batteryToGridKwh + Number(slot.batteryToGridKwh || 0),
-      batteryChargeKwh: totals.batteryChargeKwh + Number(slot.batteryChargeKwh || 0),
-      batteryDischargeKwh: totals.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0),
-      selfConsumptionKwh: totals.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0),
-      gridShareKwh: totals.gridShareKwh + Number(slot.gridShareKwh || 0),
-      pvShareKwh: totals.pvShareKwh + Number(slot.pvShareKwh || 0),
-      batteryShareKwh: totals.batteryShareKwh + Number(slot.batteryShareKwh || 0),
-      importCostEur: totals.importCostEur + (slot.importCostEur || 0),
-      gridCostEur: totals.gridCostEur + (slot.gridCostEur || 0),
-      pvCostEur: totals.pvCostEur + (slot.pvCostEur || 0),
-      batteryCostEur: totals.batteryCostEur + (slot.batteryCostEur || 0),
-      avoidedImportGrossEur: totals.avoidedImportGrossEur + (slot.avoidedImportGrossEur || 0),
-      avoidedImportPvGrossEur: totals.avoidedImportPvGrossEur + (slot.avoidedImportPvGrossEur || 0),
-      avoidedImportBatteryGrossEur: totals.avoidedImportBatteryGrossEur + (slot.avoidedImportBatteryGrossEur || 0),
-      opportunityCostEur: totals.opportunityCostEur + (slot.opportunityCostEur || 0),
-      opportunityCostPvEur: totals.opportunityCostPvEur + (slot.opportunityCostPvEur || 0),
-      opportunityCostBatteryEur: totals.opportunityCostBatteryEur + (slot.opportunityCostBatteryEur || 0),
-      selfConsumptionCostEur: totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0),
-      exportRevenueEur: totals.exportRevenueEur + (slot.exportRevenueEur || 0),
-      exportPvRevenueEur: totals.exportPvRevenueEur + (slot.exportPvRevenueEur || 0),
-      exportBatteryRevenueEur: totals.exportBatteryRevenueEur + (slot.exportBatteryRevenueEur || 0),
-      exportPvValuedKwh: totals.exportPvValuedKwh + (slot.exportPvValuedKwh || 0),
-      exportBatteryValuedKwh: totals.exportBatteryValuedKwh + (slot.exportBatteryValuedKwh || 0),
-      solarCompensationEur: 0,
-      netEur: totals.netEur + slot.netEur,
-      grossReturnEur: null,
-      configuredPvCapacityKwp: null,
-      pvFullLoadHours: null,
-      annualMarketValueCtKwh: null,
-      weightedApplicableValueCtKwh: null,
-      premiumEligibleExportKwh: totals.premiumEligibleExportKwh + (slot.premiumEligibleExportKwh || 0),
-      premiumValuedExportKwh: totals.premiumValuedExportKwh + (slot.premiumValuedExportKwh || 0),
-      marketPremiumCtTotal: totals.marketPremiumCtTotal + (slot.marketPremiumCtTotal || 0),
-      marketPremiumEur: null,
-      marketPremiumCtKwh: null,
-      negPriceEligiblePvKwh: totals.negPriceEligiblePvKwh + (slot.negPriceEligiblePvKwh || 0),
-      negPriceEligibleExportKwh: totals.negPriceEligibleExportKwh + (slot.negPriceEligibleExportKwh || 0),
+    // In place: je Slot ein neues Objekt mit ~60 Feldern kostete in der
+    // Jahresansicht (≈30 000 Slots) spürbar Speicherbereinigung. Jede Zeile
+    // liest nur ihr eigenes Feld, die Summen sind dieselben.
+    const addSlotToKpiTotals = (totals, slot) => {
+      totals.importKwh = totals.importKwh + slot.importKwh;
+      totals.exportKwh = totals.exportKwh + slot.exportKwh;
+      totals.loadKwh = totals.loadKwh + Number(slot.loadKwh || 0);
+      totals.pvKwh = totals.pvKwh + Number(slot.pvKwh || 0);
+      totals.pvAcKwh = totals.pvAcKwh + Number(slot.pvAcKwh || 0);
+      totals.solarDirectUseKwh = totals.solarDirectUseKwh + Number(slot.solarDirectUseKwh || 0);
+      totals.solarToBatteryKwh = totals.solarToBatteryKwh + Number(slot.solarToBatteryKwh || 0);
+      totals.solarToGridKwh = totals.solarToGridKwh + Number(slot.solarToGridKwh || 0);
+      totals.gridDirectUseKwh = totals.gridDirectUseKwh + Number(slot.gridDirectUseKwh || 0);
+      totals.gridToBatteryKwh = totals.gridToBatteryKwh + Number(slot.gridToBatteryKwh || 0);
+      totals.batteryDirectUseKwh = totals.batteryDirectUseKwh + Number(slot.batteryDirectUseKwh || 0);
+      totals.batteryToGridKwh = totals.batteryToGridKwh + Number(slot.batteryToGridKwh || 0);
+      totals.batteryChargeKwh = totals.batteryChargeKwh + Number(slot.batteryChargeKwh || 0);
+      totals.batteryDischargeKwh = totals.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0);
+      totals.selfConsumptionKwh = totals.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0);
+      totals.gridShareKwh = totals.gridShareKwh + Number(slot.gridShareKwh || 0);
+      totals.pvShareKwh = totals.pvShareKwh + Number(slot.pvShareKwh || 0);
+      totals.batteryShareKwh = totals.batteryShareKwh + Number(slot.batteryShareKwh || 0);
+      totals.importCostEur = totals.importCostEur + (slot.importCostEur || 0);
+      totals.gridCostEur = totals.gridCostEur + (slot.gridCostEur || 0);
+      totals.pvCostEur = totals.pvCostEur + (slot.pvCostEur || 0);
+      totals.batteryCostEur = totals.batteryCostEur + (slot.batteryCostEur || 0);
+      totals.avoidedImportGrossEur = totals.avoidedImportGrossEur + (slot.avoidedImportGrossEur || 0);
+      totals.avoidedImportPvGrossEur = totals.avoidedImportPvGrossEur + (slot.avoidedImportPvGrossEur || 0);
+      totals.avoidedImportBatteryGrossEur = totals.avoidedImportBatteryGrossEur + (slot.avoidedImportBatteryGrossEur || 0);
+      totals.opportunityCostEur = totals.opportunityCostEur + (slot.opportunityCostEur || 0);
+      totals.opportunityCostPvEur = totals.opportunityCostPvEur + (slot.opportunityCostPvEur || 0);
+      totals.opportunityCostBatteryEur = totals.opportunityCostBatteryEur + (slot.opportunityCostBatteryEur || 0);
+      totals.selfConsumptionCostEur = totals.selfConsumptionCostEur + (slot.selfConsumptionCostEur || 0);
+      totals.exportRevenueEur = totals.exportRevenueEur + (slot.exportRevenueEur || 0);
+      totals.exportPvRevenueEur = totals.exportPvRevenueEur + (slot.exportPvRevenueEur || 0);
+      totals.exportBatteryRevenueEur = totals.exportBatteryRevenueEur + (slot.exportBatteryRevenueEur || 0);
+      totals.exportPvValuedKwh = totals.exportPvValuedKwh + (slot.exportPvValuedKwh || 0);
+      totals.exportBatteryValuedKwh = totals.exportBatteryValuedKwh + (slot.exportBatteryValuedKwh || 0);
+      totals.solarCompensationEur = 0;
+      totals.netEur = totals.netEur + slot.netEur;
+      totals.grossReturnEur = null;
+      totals.configuredPvCapacityKwp = null;
+      totals.pvFullLoadHours = null;
+      totals.annualMarketValueCtKwh = null;
+      totals.weightedApplicableValueCtKwh = null;
+      totals.premiumEligibleExportKwh = totals.premiumEligibleExportKwh + (slot.premiumEligibleExportKwh || 0);
+      totals.premiumValuedExportKwh = totals.premiumValuedExportKwh + (slot.premiumValuedExportKwh || 0);
+      totals.marketPremiumCtTotal = totals.marketPremiumCtTotal + (slot.marketPremiumCtTotal || 0);
+      totals.marketPremiumEur = null;
+      totals.marketPremiumCtKwh = null;
+      totals.negPriceEligiblePvKwh = totals.negPriceEligiblePvKwh + (slot.negPriceEligiblePvKwh || 0);
+      totals.negPriceEligibleExportKwh = totals.negPriceEligibleExportKwh + (slot.negPriceEligibleExportKwh || 0);
       // §51-EEG: count of slots whose feed-in compensation is curtailed to 0 by
       // negative prices — drives the Förder-Verlängerung KPI (see below). Plain
       // integer; not in AGGREGATE_SUM_FIELDS so finalizeAggregateSums leaves it.
-      negPriceAffectedSlots: totals.negPriceAffectedSlots + (slot.isNegPriceAffected ? 1 : 0),
-      hypFullFeedInCtTotal: slot.hypFullFeedInCtTotal != null
+      totals.negPriceAffectedSlots = totals.negPriceAffectedSlots + (slot.isNegPriceAffected ? 1 : 0);
+      totals.hypFullFeedInCtTotal = slot.hypFullFeedInCtTotal != null
         ? (totals.hypFullFeedInCtTotal || 0) + slot.hypFullFeedInCtTotal
-        : totals.hypFullFeedInCtTotal,
-      hypSurplusFeedInCtTotal: slot.hypSurplusFeedInCtTotal != null
+        : totals.hypFullFeedInCtTotal;
+      totals.hypSurplusFeedInCtTotal = slot.hypSurplusFeedInCtTotal != null
         ? (totals.hypSurplusFeedInCtTotal || 0) + slot.hypSurplusFeedInCtTotal
-        : totals.hypSurplusFeedInCtTotal
-    });
+        : totals.hypSurplusFeedInCtTotal;
+      return totals;
+    };
     let kpiTotals = {
       importKwh: 0,
       exportKwh: 0,
@@ -1851,11 +1895,9 @@ export function createHistoryRuntime({
       slotCount += 1;
       rowsAcc.add(slot);
       if (Number(slot.exportKwh || 0) > 0) activeExportMonths.add(localMonthString(slot.ts));
-      const sourceKinds = new Set(Array.isArray(slot?.sourceKinds) ? slot.sourceKinds : []);
-      if (slot?.sourceKind === 'local_live') sourceKinds.add('local_live');
-      if (slot?.sourceKind === 'vrm_import') sourceKinds.add('vrm_import');
-      if (sourceKinds.has('local_live')) sourceSummary.localLiveSlots += 1;
-      if (sourceKinds.has('vrm_import')) sourceSummary.vrmImportSlots += 1;
+      const kinds = Array.isArray(slot?.sourceKinds) ? slot.sourceKinds : null;
+      if (slot?.sourceKind === 'local_live' || kinds?.includes('local_live')) sourceSummary.localLiveSlots += 1;
+      if (slot?.sourceKind === 'vrm_import' || kinds?.includes('vrm_import')) sourceSummary.vrmImportSlots += 1;
       slots.push(keepFullSlots ? slot : {
         ts: slot.ts,
         exportKwh: slot.exportKwh,
@@ -1892,9 +1934,136 @@ export function createHistoryRuntime({
       }
     }
 
-    // Jahr/Alle: Monat für Monat (materialisierte 15-min-Werte).
+    // Jahr/Alle: Monat für Monat (materialisierte 15-min-Werte). Abgeschlossene
+    // Monate kommen aus der vorberechneten Ablage, soweit ihr Prüfwert passt.
     async function processByMonth() {
-      if (hourBasedRule) {
+      const months = [];
+      {
+        let cursor = startOfMonth(range.startDate);
+        while (cursor < range.endDateExclusive) {
+          const monthEnd = normalizeViewRange('month', cursor).endDateExclusive;
+          const chunkStart = cursor < range.startDate ? range.startDate : cursor;
+          const chunkEnd = monthEnd < range.endDateExclusive ? monthEnd : range.endDateExclusive;
+          months.push({
+            key: String(cursor).slice(0, 7),
+            chunkStart,
+            chunkEnd,
+            startUtc: localDateTimeToUtcIso(chunkStart, 0, 0),
+            endUtc: localDateTimeToUtcIso(chunkEnd, 0, 0)
+          });
+          cursor = monthEnd;
+        }
+      }
+
+      const snapshotState = () => ({
+        kpiTotals,
+        missingImportPriceSlots,
+        missingMarketPriceSlots,
+        incompleteSlots,
+        estimatedSlots,
+        slotCount,
+        rows: rowsAcc.exportState(),
+        activeExportMonths: [...activeExportMonths],
+        sourceSummary: { ...sourceSummary },
+        consecutiveNegHours
+      });
+      const restoreState = (state) => {
+        kpiTotals = state.kpiTotals;
+        missingImportPriceSlots = state.missingImportPriceSlots;
+        missingMarketPriceSlots = state.missingMarketPriceSlots;
+        incompleteSlots = state.incompleteSlots;
+        estimatedSlots = state.estimatedSlots;
+        slotCount = state.slotCount;
+        rowsAcc.importState(state.rows);
+        activeExportMonths.clear();
+        for (const month of state.activeExportMonths) activeExportMonths.add(month);
+        sourceSummary.localLiveSlots = state.sourceSummary.localLiveSlots;
+        sourceSummary.vrmImportSlots = state.sourceSummary.vrmImportSlots;
+        consecutiveNegHours = state.consecutiveNegHours;
+      };
+
+      // Ablage vorbereiten: Prüfwerte der abgeschlossenen Monate, letzter
+      // gültiger Stand. Jeder Fehler hier heißt nur: ohne Ablage rechnen.
+      const cachePrefix = `v${SUMMARY_CACHE_VERSION}|${view}|${range.startDate}|`;
+      const cacheKeyOf = (month) => `${cachePrefix}${month.key}`;
+      const chain = new Array(months.length).fill(null);
+      const empty = new Array(months.length).fill(false);
+      let completeCount = 0;
+      let entries = null;
+      let restoreIndex = -1;
+      const cacheUsable = typeof store.historySectionFingerprints === 'function'
+        && typeof store.getHistoryCacheEntries === 'function'
+        && typeof store.putHistoryCacheEntry === 'function';
+      if (cacheUsable) {
+        try {
+          const currentMonthStart = startOfMonth(getCurrentDate());
+          while (completeCount < months.length && months[completeCount].chunkEnd <= currentMonthStart) completeCount += 1;
+          if (completeCount > 0) {
+            const lookbackStartUtc = hourBasedRule ? localDateTimeToUtcIso(addDays(range.startDate, -1), 0, 0) : null;
+            const boundaries = [
+              ...(lookbackStartUtc ? [lookbackStartUtc] : []),
+              ...months.slice(0, completeCount).map((month) => month.startUtc),
+              months[completeCount - 1].endUtc
+            ];
+            const fps = await store.historySectionFingerprints({ boundaries, sourceKinds: ['vrm_import', 'local_live'] });
+            const offset = lookbackStartUtc ? 1 : 0;
+            const optimizerCfg = getOptimizerConfig() || {};
+            let link = sha256(JSON.stringify({
+              v: SUMMARY_CACHE_VERSION,
+              view,
+              rangeStart: range.startDate,
+              pricingConfig,
+              weightedApplicableValueCtKwh,
+              evFullCtKwh,
+              evPartialCtKwh,
+              pvCostCtKwh,
+              batteryCostCtKwh,
+              negPriceRule,
+              battery: { stages: optimizerCfg.batteryStages ?? null, capacityWh: optimizerCfg.batteryCapacityWh ?? null },
+              warmup: lookbackStartUtc ? fps[0].fp : null
+            }));
+            for (let i = 0; i < completeCount; i++) {
+              const fp = fps[i + offset];
+              empty[i] = fp.slotRows === 0;
+              link = sha256(`${link}|${months[i].key}|${fp.fp}|${JSON.stringify(solarMarketValueMonthlyCtKwhByMonth?.[months[i].key] ?? null)}`);
+              chain[i] = link;
+            }
+            entries = await store.getHistoryCacheEntries(cachePrefix);
+            for (let i = 0; i < completeCount; i++) {
+              if (empty[i]) continue; // Monat ohne Slots: nichts zu laden, Stand bleibt gültig
+              const entry = entries.get(cacheKeyOf(months[i]));
+              if (!entry || entry.fingerprint !== chain[i]) break;
+              restoreIndex = i;
+            }
+          }
+        } catch {
+          entries = null;
+          restoreIndex = -1;
+          completeCount = 0;
+        }
+      }
+
+      if (restoreIndex >= 0) {
+        try {
+          const restoredSlots = [];
+          let state = null;
+          for (let i = 0; i <= restoreIndex; i++) {
+            if (empty[i]) continue;
+            const payload = JSON.parse(gunzipSync(entries.get(cacheKeyOf(months[i])).payload).toString('utf8'));
+            for (const slot of payload.slots) restoredSlots.push(slot);
+            state = payload.state;
+          }
+          restoreState(state);
+          for (const slot of restoredSlots) slots.push(slot);
+        } catch {
+          // Beschädigter Eintrag: alles verwerfen und ohne Ablage von vorn.
+          // (Bis hier wurde nichts am Rechenstand verändert außer ggf. restoreState
+          // — das passiert erst nach dem fehlerfreien Lesen aller Einträge.)
+          restoreIndex = -1;
+        }
+      }
+
+      if (restoreIndex < 0 && hourBasedRule) {
         const lookbackStart = addDays(range.startDate, -1);
         const lookbackStartUtc = localDateTimeToUtcIso(lookbackStart, 0, 0);
         const warmup = (await store.listMaterializedEnergySlots({
@@ -1904,29 +2073,36 @@ export function createHistoryRuntime({
         })).filter((slot) => localDateString(slot.ts) >= lookbackStart);
         feedNegPriceStreak(warmup, buildPriceIndex(await store.listPriceSlots({ start: lookbackStartUtc, end: start })), new Map());
       }
-      let cursor = startOfMonth(range.startDate);
-      while (cursor < range.endDateExclusive) {
-        const monthEnd = normalizeViewRange('month', cursor).endDateExclusive;
-        const chunkStart = cursor < range.startDate ? range.startDate : cursor;
-        const chunkEnd = monthEnd < range.endDateExclusive ? monthEnd : range.endDateExclusive;
-        const chunkStartUtc = localDateTimeToUtcIso(chunkStart, 0, 0);
-        const chunkEndUtc = localDateTimeToUtcIso(chunkEnd, 0, 0);
+
+      for (let i = restoreIndex + 1; i < months.length; i++) {
+        const month = months[i];
+        const slotsBefore = slots.length;
         const monthSlots = await store.listMaterializedEnergySlots({
-          start: chunkStartUtc,
-          end: chunkEndUtc,
+          start: month.startUtc,
+          end: month.endUtc,
           sourceKinds: ['vrm_import', 'local_live']
         });
         if (monthSlots.length > 0) {
-          const priceIndex = buildPriceIndex(await store.listPriceSlots({ start: chunkStartUtc, end: chunkEndUtc }));
+          const priceIndex = buildPriceIndex(await store.listPriceSlots({ start: month.startUtc, end: month.endUtc }));
           const negAffected = negPriceAffectedFor(monthSlots, priceIndex);
           for (const slot of monthSlots) {
             if (!inRange(slot.ts)) continue;
             accumulate(enrichSlot(slot, priceIndex, negAffected));
           }
+          // Abgeschlossener Monat: Stand ablegen. Nur wenn die Ablage den
+          // Stand verlustfrei wiedergeben kann und der Prüfwert zu genau diesen
+          // Daten gehört (der Monat hatte beim Prüfen Slots).
+          if (i < completeCount && chain[i] && !empty[i]) {
+            try {
+              const payload = { state: snapshotState(), slots: slots.slice(slotsBefore) };
+              if (isJsonSafe(payload)) {
+                await store.putHistoryCacheEntry(cacheKeyOf(month), chain[i], gzipSync(Buffer.from(JSON.stringify(payload), 'utf8')));
+              }
+            } catch { /* Ablage ist nur eine Beschleunigung */ }
+          }
           // Zwischen den Monaten den Event-Loop freigeben (Modbus-Steuerpfad).
           await yieldToEventLoop();
         }
-        cursor = monthEnd;
       }
     }
 
