@@ -167,11 +167,11 @@ services:
     # rc1.8 mit 2 Rechenprozessen (eHive, 300×200): Spitze 224 MB, danach 128 MB
     # — die Prozesse teilen sich den Speicher per fork.
     mem_limit: ${EOS_MEM_LIMIT:-320m}
-    # Kein festes CPU-Limit (0): EOS rechnet selbst mit höchstens 2 Prozessen
-    # und lässt immer einen Kern frei (2 Kerne -> 1, ab 3 Kernen -> 2).
-    # Niedrigere Gewichtung wie nativ (Nice=10/CPUWeight=20): bei Engpass hat
-    # die Regelschleife von DVhub Vorrang.
-    cpus: ${EOS_CPUS:-0}
+    # Höchstens 2 Kerne, damit DVhub, PostgreSQL und weitere Container (z. B.
+    # MQTT) Luft haben. EOS selbst lässt zusätzlich immer einen Kern frei
+    # (2 Kerne -> 1 Rechenprozess, ab 3 Kernen -> 2). Niedrigere Gewichtung wie
+    # nativ (Nice=10/CPUWeight=20): bei Engpass hat DVhub Vorrang.
+    cpus: ${EOS_CPUS:-2}
     cpu_shares: 256
 
 # Erststart der DB (läuft nur bei leerem Datenverzeichnis, als postgres):

@@ -15,7 +15,7 @@ verweist hierher.
 - **EOS rechnet mit zwei Kernen (DV-EOS rc1.8).** Die Bewertung der Kandidaten läuft
   in bis zu zwei Prozessen; ein Kern bleibt immer frei (2 Kerne → 1, ab 3 Kernen → 2).
   eHive One (4× Cortex-A55, 300×200): Lauf 460 s statt 703 s, Spitze 224 MB. Der
-  Container hat kein festes CPU-Limit mehr (`EOS_CPUS=0`), dafür eine niedrigere
+  Container ist auf 2 Kerne begrenzt (`EOS_CPUS=2`, vorher 1), mit niedrigerer
   CPU-Gewichtung; `EOS_MEM_LIMIT` 320 MB. rc1.7 friert zudem die Einstellungen je
   Lauf ein (Horizont-Änderung mitten im Lauf führte zu `IndexError`).
 
