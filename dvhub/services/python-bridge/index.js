@@ -1,8 +1,9 @@
 // python-bridge/index.js -- Node.js bridge for Python child_process invocation.
-// Tier-gated: only available on Tier 2+ (>= 2GB RAM).
+// Available when the forecast venv is installed (isPythonAvailable); the RAM
+// tiers that used to gate it were removed 2026-10-03.
 // Spawns Python scripts via execFile, passes JSON via stdin, reads JSON from stdout.
-// Batch mode (Tier 2): spawn, compute, exit per invocation.
-// Persistent mode (Tier 3): JSON-RPC 2.0 over stdin/stdout with heartbeat and auto-respawn.
+// Batch mode: spawn, compute, exit per invocation.
+// Persistent mode: JSON-RPC 2.0 over stdin/stdout with heartbeat and auto-respawn.
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -19,15 +20,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VENV_PYTHON = '/opt/dvhub/forecast-venv/bin/python3';
 const MIN_FREE_MB_FOR_SPAWN = 500;
 
+/** Is the forecast Python environment installed? (No venv → no pvlib/StatsForecast/ML.) */
+export function isPythonAvailable() {
+  return fs.existsSync(VENV_PYTHON);
+}
+
 /**
  * Create a Python bridge for invoking Python scripts as child processes.
- * Only available on Tier 2+ hardware (>= 2GB RAM).
  *
  * @param {object} ctx - DI context { state, getCfg, pushLog }
- * @param {object} options - { tier: number }
  * @returns {{ call: Function, start: Function, close: Function }}
  */
-export function createPythonBridge(ctx, { tier }) {
+export function createPythonBridge(ctx) {
   const { pushLog } = ctx;
 
   /**
@@ -43,11 +47,6 @@ export function createPythonBridge(ctx, { tier }) {
   // dropped — StatsForecast ran against the 60s default and timed out on
   // larger datasets. Honour the caller's timeout when provided.
   async function call(scriptPath, inputData, callerTimeoutMs) {
-    // Tier gate: refuse on Tier 1
-    if (tier < 2) {
-      throw new Error('Python bridge not available on Tier 1');
-    }
-
     // OOM guard: check free memory before spawning
     const freeMB = Math.floor(os.freemem() / (1024 * 1024));
     if (freeMB < MIN_FREE_MB_FOR_SPAWN) {
@@ -148,7 +147,7 @@ export function createPythonBridge(ctx, { tier }) {
 
   /**
    * Start the Python bridge.
-   * Phase 1: async no-op (Tier 3 persistent process deferred to Phase 5).
+   * Phase 1: async no-op (persistent process: createPersistentBridge).
    */
   async function start() {
     // No-op for Phase 1 batch mode
@@ -167,7 +166,7 @@ export function createPythonBridge(ctx, { tier }) {
 
 /**
  * Create a persistent Python bridge using JSON-RPC 2.0 over stdin/stdout.
- * Only used on Tier 3 (8GB+ RAM) for long-running Python ML server.
+ * Used for the long-running Python ML server (only with ml.mlEnabled).
  * Per D-19, D-20: heartbeat, auto-respawn, timeout handling.
  *
  * @param {object} ctx - DI context { pushLog }

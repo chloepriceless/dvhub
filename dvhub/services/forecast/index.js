@@ -1,7 +1,7 @@
 // services/forecast/index.js -- Forecast service factory.
 // Wires all subsystems: weather, Solcast, PV forecast, load forecast, accuracy tracker.
 // Exposes buildForecastResponse() for /api/forecast endpoint (D-01).
-// Follows the factory pattern: createForecastService(ctx) -> { start, close, tier, store, buildForecastResponse }
+// Follows the factory pattern: createForecastService(ctx) -> { start, close, store, buildForecastResponse }
 
 // Plan 09-06 (D-08): services/log.js wrapper imported by this heavy-hitter
 // module per D-08. Current forecast subsystem startup uses pushLog for
@@ -13,7 +13,7 @@ import { info as logInfo, warn as logWarn, error as logError, debug as logDebug 
 // scrapers see "seconds since most recent PV forecast persist". Model label
 // keeps cardinality bounded (one series per forecast model in use).
 import { forecastAgeSeconds } from '../../routes-api.js';
-import { detectRamTier } from './ram-tier.js';
+import os from 'node:os';
 import { createForecastStore } from './forecast-store.js';
 import { createWeatherFetch } from './weather-fetch.js';
 import { createMqttWeather } from './mqtt-weather.js';
@@ -25,24 +25,26 @@ import { createPvnodeClient } from './pvnode-client.js';
 import { createPvForecast } from './pv-forecast.js';
 import { createLoadForecast } from './load-forecast.js';
 import { createAccuracyTracker } from './accuracy-tracker.js';
-import { createPythonBridge } from '../python-bridge/index.js';
+import { createPythonBridge, isPythonAvailable } from '../python-bridge/index.js';
 // T-CURTAIL: observed-GHI backfill from the Open-Meteo Archive (universal,
 // location-based, no key) — fills weather_observed so the curtailment estimator
 // has historical irradiance. See .planning/T-CURTAIL-IRRADIANCE-DESIGN.md.
 import { backfillObservedGhi, computeBackfillWindows, ARCHIVE_SOURCE } from './open-meteo-archive.js';
 
 /**
- * Create the forecast service. Detects RAM tier, initializes subsystems,
+ * Create the forecast service. Initializes subsystems,
  * and provides buildForecastResponse() for the combined API endpoint.
  *
  * @param {object} ctx - DI context { state, getCfg, pushLog, db }
- * @returns {{ start: Function, close: Function, tier: number, store: object, buildForecastResponse: Function }}
+ * @returns {{ start: Function, close: Function, store: object, buildForecastResponse: Function }}
  */
 export function createForecastService(ctx) {
   const { state, getCfg, pushLog } = ctx;
 
-  // Detect hardware tier
-  const { tier, totalMB } = detectRamTier();
+  // Installed memory (info only — the RAM tiers were removed 2026-10-03;
+  // Python-based models depend on an installed venv, see isPythonAvailable).
+  const totalMB = Math.floor(os.totalmem() / (1024 * 1024));
+  const pythonAvailable = isPythonAvailable();
 
   // ML correction sanity-fallback logger — fires pushLog only on state
   // transitions (or once per 6h while the same state persists) so the
@@ -80,18 +82,17 @@ export function createForecastService(ctx) {
   function bumpForecastVersion() { forecastVersion++; }
   ctx.bumpForecastVersion = bumpForecastVersion;
 
-  // Initialize forecast state with tier-gated flags
+  // Initialize forecast state
   state.forecast = {
-    tier,
     totalMB,
+    pythonAvailable,
     weather: { lastFetchAt: null, data: null, error: null },
     pv: { lastFetchAt: null, model: null, data: null, confidence: 0.3 },
     load: { lastFetchAt: null, data: null, confidence: 0.3 },
-    price: { source: 'epex', data: null },
-    workerReady: tier === 1  // Tier 1 has no worker, always "ready"
+    price: { source: 'epex', data: null }
   };
 
-  pushLog('forecast_init', { tier, totalMB });
+  pushLog('forecast_init', { totalMB, pythonAvailable });
 
   // Create store (schema will be ensured on start)
   const store = createForecastStore(ctx);
@@ -106,8 +107,8 @@ export function createForecastService(ctx) {
   const vrmForecast = createVrmForecast(ctx, { store }); // Phase 18-01j: deps-object threads store for pv_forecasts mirror
   const openMeteoSolar = createOpenMeteoSolar(ctx, { store });
   const pvnodeClient = createPvnodeClient(ctx, { store });
-  const pythonBridge = tier >= 2 ? createPythonBridge(ctx, { tier }) : null;
-  const pvForecast = createPvForecast(ctx, { tier, store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient });
+  const pythonBridge = pythonAvailable ? createPythonBridge(ctx) : null;
+  const pvForecast = createPvForecast(ctx, { store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient });
   const loadForecast = createLoadForecast(ctx, { store, vrmForecast, pythonBridge });
   const accuracyTracker = createAccuracyTracker(ctx, { store });
 
@@ -179,7 +180,7 @@ export function createForecastService(ctx) {
     if (ctx.db) {
       try {
         await store.ensureSchema(ctx.db);
-        pushLog('forecast_schema_ready', { tier });
+        pushLog('forecast_schema_ready', {});
       } catch (err) {
         pushLog('forecast_schema_error', { error: err?.message ?? String(err) });
       }
@@ -202,7 +203,7 @@ export function createForecastService(ctx) {
         pushLog(`forecast_${name}_start_error`, { error: err?.message ?? String(err) });
       }
     }
-    pushLog('forecast_started', { tier, subsystems: started });
+    pushLog('forecast_started', { subsystems: started });
 
     // T-CURTAIL: ~25s after boot (DB/telemetry settled) fill the observed-GHI
     // gaps, THEN refit the curtailment calibration so fresh clean days are
@@ -341,7 +342,7 @@ export function createForecastService(ctx) {
     const pv = buildPvSection();
     const load = buildLoadSection();
 
-    // ML post-processing: correct PV forecast if model available (Tier 2+).
+    // ML post-processing: correct PV forecast if a model is available.
     // correct() is async (spawns Python), so await it.
     // D-A1/A3: correct() now builds features internally and uses forecastVersion cache.
     let mlResult = { applied: false, corrected: pv.slots, model: null };
@@ -545,7 +546,6 @@ export function createForecastService(ctx) {
       meta: {
         generatedAt: new Date().toISOString(),
         horizon: '72h',
-        tier,
         pvCapKwp: capKwp ?? null,   // aktive kWp-Kappung (null = keine) für UI/Debug
         pvModel: state.forecast.pv.model || cfg.forecast?.pv?.model || 'solcast',
         // Phase 18-02: meta.loadModel now reports the ACTUAL source the
@@ -553,7 +553,7 @@ export function createForecastService(ctx) {
         // not the config string. The config field `forecast.load.model` was
         // being read here as if it switched between SF and SQL paths, but it
         // does not — runForecast() tries SF first unconditionally when
-        // ml.sfEnabled + tier>=2 + pythonBridge are present, and only falls
+        // ml.sfEnabled + pythonBridge are present, and only falls
         // back to SQL rollup when SF returns null. On prod verified
         // 2026-05-20: cfg.forecast.load.model="sql_weekday" (misleading) while
         // load_forecast_state.source="statsforecast" (truth). Cold-start
@@ -594,7 +594,6 @@ export function createForecastService(ctx) {
   return {
     start,
     close,
-    tier,
     store,
     pvnodeClient,
     // Phase 18-01c: expose accuracyTracker so /api/admin/accuracy-backfill can call

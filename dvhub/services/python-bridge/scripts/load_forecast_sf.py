@@ -6,15 +6,14 @@ Reads JSON from stdin, writes JSON to stdout.
 Produces hourly kWh load forecast using StatsForecast (Nixtla).
 Same output contract as SQL rollups.
 
-Tier 2 (use_mstl=false): AutoARIMA(season_length=24)
-Tier 3 (use_mstl=true): MSTL(season_length=[24, 168], trend_forecaster=AutoARIMA())
+use_mstl=false: AutoARIMA(season_length=24)
+use_mstl=true:  MSTL(season_length=[24, 168], trend_forecaster=AutoARIMA())
 
 Input schema:
 {
   "history": [{"ts_utc": "2026-04-01T00:00:00Z", "power_w": 1200}],
   "horizon": 72,
-  "use_mstl": true,
-  "tier": 3
+  "use_mstl": true
 }
 
 Output schema (success):
@@ -39,7 +38,6 @@ def forecast_load(params):
     history = params.get('history', [])
     horizon = params.get('horizon', 72)
     use_mstl = params.get('use_mstl', True)
-    tier = params.get('tier', 3)
 
     if not history:
         return {'ok': False, 'error': 'No history data provided'}
@@ -82,17 +80,17 @@ def forecast_load(params):
         }
 
     # Pitfall SF-3: MSTL requires ≥336 hourly samples (2× longest season = 2 × 168h)
-    if use_mstl and tier >= 3 and len(df_hourly) < 336:
+    if use_mstl and len(df_hourly) < 336:
         use_mstl = False
 
-    # Select model based on tier and use_mstl flag
-    if use_mstl and tier >= 3:
-        # Tier 3: MSTL with daily (24h) and weekly (168h) seasonality
+    # Select model based on the use_mstl flag
+    if use_mstl:
+        # MSTL with daily (24h) and weekly (168h) seasonality
         models = [
             MSTL(season_length=[24, 168], trend_forecaster=AutoARIMA())
         ]
     else:
-        # Tier 2: Simple AutoARIMA with daily seasonality
+        # Simple AutoARIMA with daily seasonality
         models = [
             AutoARIMA(season_length=24)
         ]

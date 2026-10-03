@@ -1,6 +1,6 @@
 // services/ml/index.js -- ML service factory.
 // Wires ML correction, training, and health modules into a unified service.
-// Tier-gated: returns stub on Tier 1, full service on Tier 2+.
+// Needs the forecast Python environment: without it a stub service is returned.
 // Factory: createMlService(ctx) -> { start, close, correct, getStatus, getAccuracyTrend, getTrainingLog }
 
 import fs from 'node:fs';
@@ -8,33 +8,33 @@ import path from 'node:path';
 import { createMlCorrection } from './ml-correction.js';
 import { createMlTraining } from './ml-training.js';
 import { createMlHealth } from './ml-health.js';
-import { createPersistentBridge, createPythonBridge } from '../python-bridge/index.js';
+import { createPersistentBridge, createPythonBridge, isPythonAvailable } from '../python-bridge/index.js';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ML_SERVER_SCRIPT = path.resolve(__dirname, '../python-bridge/scripts/ml_server.py');
 
 /**
- * Create the ML service. Detects tier, wires sub-modules.
- * Tier 1: Returns stub service (bypass all ML features).
- * Tier 2: Batch Python bridge + ML correction + training.
- * Tier 3: Persistent Python bridge + ML correction + training.
+ * Create the ML service and wire its sub-modules.
+ * Without an installed Python environment: stub service (no ML features).
+ * With it: batch Python bridge + ML correction + training; the persistent
+ * Python server only runs with ml.mlEnabled.
  *
  * @param {object} ctx - DI context { state, getCfg, pushLog, db, forecastService, pythonBridge }
  * @returns {{ start: Function, close: Function, correct: Function, getStatus: Function, getAccuracyTrend: Function, getTrainingLog: Function }}
  */
 export function createMlService(ctx) {
   const { getCfg, pushLog } = ctx;
-  const tier = ctx.forecastService?.tier ?? 1;
+  const pythonAvailable = ctx.pythonBridge ? true : isPythonAvailable();
 
-  // Tier 1 stub: no ML features
-  if (tier < 2) {
+  // No Python environment: stub service, no ML features.
+  if (!pythonAvailable) {
     return {
       start: async () => {},
       close: async () => {},
       correct: async (pvSlots) => ({ applied: false, corrected: pvSlots, model: null }),
       getStatus: () => ({
-        tier,
+        pythonAvailable: false,
         mlEnabled: false,
         modelType: null,
         modelVersion: 0,
@@ -45,8 +45,8 @@ export function createMlService(ctx) {
         trainingLog: [],
         sfEnabled: false,
         sfUseMstl: false,
-        tierFeatures: [],
-        // Phase 07 FORE-12 D-D2: consistent shape across all tiers.
+        features: [],
+        // Phase 07 FORE-12 D-D2: consistent shape with the full service.
         load_forecast: {
           source: 'unknown',
           status: 'unknown',
@@ -56,22 +56,22 @@ export function createMlService(ctx) {
       }),
       getAccuracyTrend: () => [],
       getTrainingLog: () => [],
-      // Phase 07 MLAI-08 Tier-1 stubs: admin endpoints still return 409/ok
-      // so the HTTP handler has a consistent contract regardless of tier.
+      // Phase 07 MLAI-08 stubs: admin endpoints still return 409/ok so the
+      // HTTP handler has a consistent contract without Python.
       has14DaysOfAccuracyData: async () => ({ ok: false, daysAvailable: 0 }),
       runRetrainEndpoint: async () => ({
         ok: false,
-        error: 'ml_disabled_tier1',
-        message: 'ML retrain requires Tier 2+',
+        error: 'ml_python_unavailable',
+        message: 'ML retrain requires the forecast Python environment',
       }),
-      promoteIfBetter: async () => { throw new Error('ml_disabled_tier1'); },
+      promoteIfBetter: async () => { throw new Error('ml_python_unavailable'); },
     };
   }
 
-  // Tier 2+: Full ML service.
+  // Full ML service.
   // Create our own batch python-bridge (forecast service does not expose its bridge on ctx).
-  // Tier 3 will also start a persistent bridge below; that's still a separate concern.
-  const pythonBridge = ctx.pythonBridge ?? createPythonBridge(ctx, { tier });
+  // start() may also launch the persistent bridge (only with ml.mlEnabled).
+  const pythonBridge = ctx.pythonBridge ?? createPythonBridge(ctx);
   let persistentBridge = null;
 
   const mlCorrection = createMlCorrection({
@@ -94,7 +94,7 @@ export function createMlService(ctx) {
     mlCorrection,
     mlTraining,
     getCfg,
-    tier,
+    pythonAvailable: true,
     // Phase 07 FORE-12 D-D2: route load-forecast state into /api/ml/status.
     getLoadForecastState: () => ctx.forecastService?.getLoadForecastState?.() ?? null
   });
@@ -102,7 +102,7 @@ export function createMlService(ctx) {
   /**
    * Start the ML service.
    * Loads existing model if available, schedules daily training.
-   * On Tier 3: starts persistent Python bridge.
+   * With ml.mlEnabled: starts the persistent Python bridge.
    */
   async function start() {
     // Try to load existing model metadata.
@@ -179,8 +179,8 @@ export function createMlService(ctx) {
     // Schedule daily training
     mlTraining.scheduleDaily();
 
-    // Tier 3: start persistent Python bridge
-    if (tier >= 3) {
+    // Persistent Python server only serves ML correction — run it only with ML on.
+    if (getCfg().ml?.mlEnabled === true) {
       try {
         persistentBridge = createPersistentBridge(ctx, { scriptPath: ML_SERVER_SCRIPT });
         await persistentBridge.start();
@@ -189,7 +189,7 @@ export function createMlService(ctx) {
       }
     }
 
-    pushLog('ml_service_started', { tier, modelLoaded });
+    pushLog('ml_service_started', { modelLoaded });
   }
 
   /**

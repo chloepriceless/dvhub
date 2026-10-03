@@ -206,7 +206,7 @@ test('getFreeDiskPct returns a number between 0 and 100 or null', () => {
 
 // --- Service skeleton tests ---
 
-test('createForecastService initializes state.forecast with tier', async () => {
+test('createForecastService initializes state.forecast', async () => {
   const { createForecastService } = await import('../services/forecast/index.js');
 
   const state = {};
@@ -221,21 +221,15 @@ test('createForecastService initializes state.forecast with tier', async () => {
   const service = createForecastService(ctx);
 
   assert.ok(state.forecast, 'state.forecast should be set');
-  assert.equal(typeof state.forecast.tier, 'number');
-  assert.ok(state.forecast.tier >= 1 && state.forecast.tier <= 3);
+  assert.equal(state.forecast.tier, undefined, 'RAM tiers were removed');
+  assert.equal(typeof state.forecast.pythonAvailable, 'boolean');
   assert.equal(typeof state.forecast.totalMB, 'number');
   assert.ok(state.forecast.totalMB > 0);
   assert.equal(state.forecast.weather.lastFetchAt, null);
   assert.equal(state.forecast.pv.confidence, 0.3);
   assert.equal(state.forecast.price.source, 'epex');
 
-  // Tier 1 should have workerReady true (no worker needed)
-  if (state.forecast.tier === 1) {
-    assert.equal(state.forecast.workerReady, true);
-  }
-
-  // Service exposes tier and store
-  assert.equal(service.tier, state.forecast.tier);
+  // Service exposes the store
   assert.ok(service.store);
   assert.equal(typeof service.start, 'function');
   assert.equal(typeof service.close, 'function');

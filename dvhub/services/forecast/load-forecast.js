@@ -1,5 +1,5 @@
 // load-forecast.js -- Load prediction from telemetry rollups.
-// Primary: StatsForecast delegation on Tier 2+ (via Python bridge, D-09, D-10).
+// Primary: StatsForecast delegation (ml.sfEnabled + Python bridge, D-09, D-10).
 // Fallback: SQL same-weekday rollups from energy_slots_15m.
 // Produces 72 x 1h slots (per D-02, D-03). Falls back to constant power on cold-start.
 // Factory: createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) -> { start, close, runForecast, getState }
@@ -194,8 +194,8 @@ function formatStatsForecastSlots(sfRows) {
 /**
  * Create load forecast service.
  * Queries same-weekday data from energy_slots_15m, produces 72 x 1h slots.
- * On Tier 2+: delegates to StatsForecast via Python bridge (D-09, D-10).
- * On error or Tier 1: falls back to SQL rollup.
+ * With ml.sfEnabled and an installed Python bridge: StatsForecast (D-09, D-10).
+ * Otherwise, or on error: SQL rollup.
  * @param {object} ctx - DI context { state, getCfg, pushLog, db, forecastService }
  * @param {{ store: object, vrmForecast: object, pythonBridge?: object }} options
  * @returns {{ start: Function, close: Function, runForecast: Function }}
@@ -250,14 +250,13 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
   }
 
   /**
-   * Try StatsForecast delegation on Tier 2+.
+   * Try StatsForecast delegation (needs ml.sfEnabled and the Python bridge).
    * @returns {Promise<{slots: Array, source: string, confidence: number}|null>} SF result or null
    */
   async function tryStatsForecast() {
     const cfg = getCfg();
-    const tier = ctx.forecastService?.tier ?? 1;
 
-    if (tier < 2 || !cfg.ml?.sfEnabled || !pythonBridge) {
+    if (!cfg.ml?.sfEnabled || !pythonBridge) {
       return null;
     }
 
@@ -279,8 +278,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       const sfResult = await pythonBridge.call(scriptPath, {
         history,
         horizon: 72,
-        use_mstl: tier >= 3 && (cfg.ml?.sfUseMstl ?? false),
-        tier
+        use_mstl: cfg.ml?.sfUseMstl ?? false
       }, 120000); // 2 min timeout
 
       // Handle Python-side error responses (#19)
@@ -357,7 +355,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
     const cfg = getCfg();
     const defaultPowerW = cfg?.forecast?.load?.defaultPowerW ?? 800;
 
-    // Try StatsForecast delegation first (Tier 2+)
+    // Try StatsForecast delegation first
     const sfResult = await tryStatsForecast();
     if (sfResult) {
       const { slots, source, confidence } = sfResult;

@@ -8856,7 +8856,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       try {
         const status = ctx.mlService?.getStatus() || {
-          tier: 1,
+          pythonAvailable: false,
           mlEnabled: false,
           load_forecast: { source: 'unknown', status: 'unknown', consecutive_non_sf_runs: 0, last_updated_at: null }
         };

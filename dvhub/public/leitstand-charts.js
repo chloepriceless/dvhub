@@ -777,7 +777,7 @@
     var badge = document.getElementById('badge-ml');
     if (!badge) return;
 
-    if (!mlStatus || mlStatus.tier < 2 || !mlStatus.mlEnabled) {
+    if (!mlStatus || mlStatus.pythonAvailable === false || !mlStatus.mlEnabled) {
       badge.style.display = 'none';
       return;
     }

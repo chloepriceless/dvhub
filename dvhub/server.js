@@ -711,9 +711,8 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
       historyImport: runtimeSnapshot.historyImport
     },
     forecast: state.forecast ? {
-      tier: state.forecast.tier,
       totalMB: state.forecast.totalMB,
-      workerReady: state.forecast.workerReady,
+      pythonAvailable: state.forecast.pythonAvailable === true,
       pvModel: state.forecast.pv?.model || null,
       pvLastFetchAt: state.forecast.pv?.lastFetchAt || null,
       loadLastFetchAt: state.forecast.load?.lastFetchAt || null,

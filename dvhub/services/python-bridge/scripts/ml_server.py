@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Persistent Python JSON-RPC server for Tier 3.
+Persistent Python JSON-RPC server for the ML service.
 Reads JSON-RPC 2.0 requests from stdin (newline-delimited), writes responses to stdout.
 
 Methods:
@@ -29,7 +29,7 @@ import ml_train
 import ml_predict
 import load_forecast_sf
 
-# Cache for loaded models (Tier 3 keeps models in memory)
+# Cache for loaded models (kept in memory)
 loaded_models = {}
 
 

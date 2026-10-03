@@ -1237,11 +1237,6 @@ function buildDestinationWorkspace(definitionLike, destinationId, { licenseActiv
 // --- Forecast section helpers ---
 
 /**
- * Render RAM tier info card for the forecast section header.
- * Reads tier info from cached /api/status or state.forecast.
- */
-
-/**
  * Render multi-string editor for PV detailed configuration mode (D-11).
  * Dynamic list of { label, kwp, tiltDeg, azimuthDeg } entries.
  */
@@ -1476,7 +1471,7 @@ const HIDDEN_FIELD_PATHS = [
 
 // Onboarding-styled, per-group collapsible cards. Renders one card per field
 // group (collapse via grp.openByDefault) plus the section-level extras
-// (discovery rows, PV-plant/pricing editors, forecast tier + string editor,
+// (discovery rows, PV-plant/pricing editors, forecast string editor,
 // history-import panel). Used for ALL config destinations.
 // ── Aktionen einer Einstellungs-Gruppe ───────────────────────────────────────
 // Christin, 29.07.2026: die vier Datenbank-Schaltflächen lagen in der Kopfzeile
@@ -4247,8 +4242,8 @@ function renderMlStatus(status) {
   var mae30dEl = document.getElementById('mlMae30d');
   if (mae30dEl) mae30dEl.textContent = (status.mae30d != null) ? String(status.mae30d) : (status.mae != null ? String(status.mae) : '--');
 
-  // Tier Features
-  renderTierFeatures(status);
+  // Features (availability depends on the Python environment)
+  renderFeatures(status);
 
   // Training Log
   renderTrainingLog(status);
@@ -4257,7 +4252,7 @@ function renderMlStatus(status) {
 
 
 // Translate backend feature keys to German UI labels
-var TIER_FEATURE_LABELS = {
+var FEATURE_LABELS = {
   sql_load_forecast: 'SQL Lastvorhersage',
   pvlib_batch: 'pvlib (Batch)',
   statsforecast: 'StatsForecast',
@@ -4267,37 +4262,33 @@ var TIER_FEATURE_LABELS = {
   persistent_python: 'Persistenter Python-Prozess'
 };
 
-function renderTierFeatures(status) {
-  var container = document.getElementById('mlTierFeatures');
+function renderFeatures(status) {
+  var container = document.getElementById('mlFeatures');
   if (!container) return;
 
-  var tier = status.tier || 1;
-  var tierFeatures = status.tierFeatures || [];
+  var features = status.features || [];
 
-  if (tierFeatures.length === 0) {
-    container.innerHTML = '<div class="detail-row"><span class="detail-key sa-empty">Keine Tier-Informationen verfuegbar</span></div>';
+  if (features.length === 0) {
+    container.innerHTML = '<div class="detail-row"><span class="detail-key sa-empty">Keine Prognose-Module verfuegbar' + (status.pythonAvailable === false ? ' (Python-Umgebung nicht installiert)' : '') + '</span></div>';
     return;
   }
 
-  container.innerHTML = tierFeatures.map(function (f) {
-    // Normalize backend shape { feature, status, requiredTier }
+  container.innerHTML = features.map(function (f) {
+    // Backend shape { feature, status, requires }
     var key = f.feature || f.name || '';
-    var featureLabel = TIER_FEATURE_LABELS[key] || key || 'Unbekannt';
+    var featureLabel = FEATURE_LABELS[key] || key || 'Unbekannt';
     var rawStatus = f.status || 'inactive';
-    var minTier = f.requiredTier != null ? f.requiredTier : (f.minTier || 1);
 
     var label, dataStatus;
     if (rawStatus === 'active') {
       label = 'aktiv';
       dataStatus = 'active';
+    } else if (rawStatus === 'unavailable') {
+      label = 'nicht verfuegbar (Python fehlt)';
+      dataStatus = 'inactive-locked';
     } else if (rawStatus === 'inactive') {
-      if (tier < minTier) {
-        label = 'nicht verfuegbar (Tier ' + minTier + '+)';
-        dataStatus = 'inactive-locked';
-      } else {
-        label = 'inaktiv';
-        dataStatus = 'inactive';
-      }
+      label = 'inaktiv';
+      dataStatus = 'inactive';
     } else if (rawStatus === 'collecting') {
       label = 'sammelt Daten';
       dataStatus = 'collecting';

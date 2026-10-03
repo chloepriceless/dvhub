@@ -1,56 +1,30 @@
 // ml-health.js -- ML health status aggregator.
-// Combines ML correction, training, and tier info into a single status object.
+// Combines ML correction, training and feature availability into a single status object.
 // Per D-26, D-27: queryable health status for API endpoints and dashboard.
-// Factory: createMlHealth({ mlCorrection, mlTraining, getCfg, tier, getLoadForecastState? })
+// Factory: createMlHealth({ mlCorrection, mlTraining, getCfg, pythonAvailable, getLoadForecastState? })
 //   -> { getStatus, getAccuracyTrend }
 // Phase 07 FORE-12 D-D2: `getLoadForecastState` optional dep surfaces load_forecast
 // source/status on /api/ml/status for operator visibility.
 
 /**
- * Build tier feature table per D-27.
- * Returns which features are active/inactive/unavailable for this tier.
- * @param {number} tier - RAM tier (1, 2, or 3)
+ * Feature table per D-27: which forecast/ML features are active, inactive
+ * (switched off in the config) or unavailable (no Python environment).
+ * The RAM tiers that used to decide availability were removed 2026-10-03.
+ * @param {boolean} pythonAvailable - forecast Python environment installed
  * @param {object} cfg - Full config object
- * @returns {Array<{feature: string, status: string, requiredTier: number}>}
+ * @returns {Array<{feature: string, status: string, requires: string|null}>}
  */
-export function buildTierFeatures(tier, cfg) {
+export function buildFeatures(pythonAvailable, cfg) {
   const ml = cfg.ml || {};
+  const py = (enabled) => (pythonAvailable ? (enabled ? 'active' : 'inactive') : 'unavailable');
   const features = [
-    {
-      feature: 'sql_load_forecast',
-      status: 'active', // Always active on all tiers
-      requiredTier: 1
-    },
-    {
-      feature: 'pvlib_batch',
-      status: tier >= 2 ? 'active' : 'unavailable',
-      requiredTier: 2
-    },
-    {
-      feature: 'statsforecast',
-      status: tier >= 2 && ml.sfEnabled ? 'active' : tier >= 2 ? 'inactive' : 'unavailable',
-      requiredTier: 2
-    },
-    {
-      feature: 'ml_correction',
-      status: tier >= 2 && ml.mlEnabled ? 'active' : tier >= 2 ? 'inactive' : 'unavailable',
-      requiredTier: 2
-    },
-    {
-      feature: 'ml_training',
-      status: tier >= 2 && ml.mlEnabled ? 'active' : tier >= 2 ? 'inactive' : 'unavailable',
-      requiredTier: 2
-    },
-    {
-      feature: 'statsforecast_mstl',
-      status: tier >= 3 && ml.sfEnabled && ml.sfUseMstl ? 'active' : tier >= 3 ? 'inactive' : 'unavailable',
-      requiredTier: 3
-    },
-    {
-      feature: 'persistent_python',
-      status: tier >= 3 ? 'active' : 'unavailable',
-      requiredTier: 3
-    }
+    { feature: 'sql_load_forecast', status: 'active', requires: null },
+    { feature: 'pvlib_batch', status: py(true), requires: 'python' },
+    { feature: 'statsforecast', status: py(Boolean(ml.sfEnabled)), requires: 'python' },
+    { feature: 'ml_correction', status: py(Boolean(ml.mlEnabled)), requires: 'python' },
+    { feature: 'ml_training', status: py(Boolean(ml.mlEnabled)), requires: 'python' },
+    { feature: 'statsforecast_mstl', status: py(Boolean(ml.sfEnabled && ml.sfUseMstl)), requires: 'python' },
+    { feature: 'persistent_python', status: py(Boolean(ml.mlEnabled)), requires: 'python' }
   ];
 
   // ML-Korrektur + ML-Training nur listen, wenn ML aktiv ist (selbstheilend:
@@ -65,10 +39,10 @@ export function buildTierFeatures(tier, cfg) {
 /**
  * Create ML health status aggregator.
  *
- * @param {object} deps - { mlCorrection, mlTraining, getCfg, tier }
+ * @param {object} deps - { mlCorrection, mlTraining, getCfg, pythonAvailable }
  * @returns {{ getStatus: Function, getAccuracyTrend: Function }}
  */
-export function createMlHealth({ mlCorrection, mlTraining, getCfg, tier, getLoadForecastState }) {
+export function createMlHealth({ mlCorrection, mlTraining, getCfg, pythonAvailable = true, getLoadForecastState }) {
   /**
    * Get ML system status for API and dashboard.
    * @returns {object} Full ML status object
@@ -116,7 +90,7 @@ export function createMlHealth({ mlCorrection, mlTraining, getCfg, tier, getLoad
     }
 
     return {
-      tier,
+      pythonAvailable,
       mlEnabled: ml.mlEnabled || false,
       modelType: modelInfo?.model_type || null,
       modelVersion: modelInfo?.version || 0,
@@ -126,8 +100,8 @@ export function createMlHealth({ mlCorrection, mlTraining, getCfg, tier, getLoad
       lastTraining: log[0]?.ts || null,
       trainingLog: log,
       sfEnabled: ml.sfEnabled || false,
-      sfUseMstl: tier >= 3 && (ml.sfUseMstl || false),
-      tierFeatures: buildTierFeatures(tier, cfg),
+      sfUseMstl: Boolean(ml.sfUseMstl),
+      features: buildFeatures(pythonAvailable, cfg),
       // Phase 07 FORE-12 D-D2 exposure
       load_forecast: loadForecast
     };

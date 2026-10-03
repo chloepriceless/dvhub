@@ -53,22 +53,22 @@ function createMockCtx(overrides = {}) {
 
 describe('createForecastService', () => {
 
-  it('should return an object with start, close, tier, store, buildForecastResponse', () => {
+  it('should return an object with start, close, store, buildForecastResponse (no RAM tier)', () => {
     const ctx = createMockCtx();
     const service = createForecastService(ctx);
     assert.equal(typeof service.start, 'function');
     assert.equal(typeof service.close, 'function');
-    assert.equal(typeof service.tier, 'number');
+    assert.equal(service.tier, undefined, 'RAM tiers were removed');
     assert.ok(service.store);
     assert.equal(typeof service.buildForecastResponse, 'function');
   });
 
-  it('should initialize state.forecast with tier info', () => {
+  it('should initialize state.forecast with memory and Python availability', () => {
     const ctx = createMockCtx();
     createForecastService(ctx);
-    assert.equal(typeof ctx.state.forecast.tier, 'number');
+    assert.equal(ctx.state.forecast.tier, undefined);
     assert.equal(typeof ctx.state.forecast.totalMB, 'number');
-    assert.ok(ctx.state.forecast.tier >= 1 && ctx.state.forecast.tier <= 3);
+    assert.equal(typeof ctx.state.forecast.pythonAvailable, 'boolean');
   });
 
   it('should log forecast_init on creation', () => {
@@ -76,7 +76,7 @@ describe('createForecastService', () => {
     createForecastService(ctx);
     const initLog = ctx._logs.find(l => l.type === 'forecast_init');
     assert.ok(initLog, 'forecast_init log should exist');
-    assert.ok(initLog.data.tier);
+    assert.equal(typeof initLog.data.pythonAvailable, 'boolean');
     assert.ok(initLog.data.totalMB);
   });
 });
@@ -98,11 +98,11 @@ describe('buildForecastResponse', () => {
     assert.ok(response.load, 'response should have load');
   });
 
-  it('meta should contain generatedAt, horizon, tier, pvModel, loadModel', async () => {
+  it('meta should contain generatedAt, horizon, pvModel, loadModel', async () => {
     const { meta } = await service.buildForecastResponse();
     assert.ok(meta.generatedAt, 'meta.generatedAt should exist');
     assert.equal(meta.horizon, '72h');
-    assert.equal(typeof meta.tier, 'number');
+    assert.equal(meta.tier, undefined);
     assert.ok(meta.pvModel, 'meta.pvModel should exist');
     assert.ok(meta.loadModel, 'meta.loadModel should exist');
   });

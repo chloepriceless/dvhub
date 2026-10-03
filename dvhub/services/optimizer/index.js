@@ -4,7 +4,6 @@
 // Hot-reload safe: start() does NOT exit if !enabled -- service stays running, gates per run.
 // Event-triggered: polls forecastVersion for change detection + 30min fallback timer.
 
-import { detectRamTier } from '../forecast/ram-tier.js';
 import { applyConfidenceGating } from './confidence-gate.js';
 import { normalizeForecast, averageSlotConfidence, aggregateTo1h } from './forecast-normalizer.js';
 import { buildHeuristicSchedule } from './heuristic-optimizer.js';
@@ -214,12 +213,8 @@ export function getOptInterval(cfg, hourOverride) {
 export function createOptimizerService(ctx) {
   const { state, getCfg, pushLog } = ctx;
 
-  // Detect hardware tier
-  const { tier } = detectRamTier();
-
   // Initialize optimizer state
   state.optimizer = {
-    tier,
     enabled: false,
     lastRunAt: null,
     lastSchedule: null,
@@ -465,25 +460,26 @@ export function createOptimizerService(ctx) {
         });
       }
 
-      // 7. Choose optimizer based on tier and strategy
+      // 7. Choose the internal optimizer: 'heuristic' explicitly, otherwise
+      //    MILP with heuristic fallback (RAM tiers removed 2026-10-03).
       const strategy = cfg.optimizer.strategy ?? 'auto';
       let internalSchedule;
 
-      if (strategy === 'heuristic' || (strategy === 'auto' && tier === 1)) {
+      if (strategy === 'heuristic') {
         internalSchedule = buildHeuristicSchedule({
           priceSlots: effectivePriceSlots, pvSlots, loadSlots,
           batteryModel, confidenceGate: gate,
           allowGridCharge, allowGridDischarge: effectiveAllowGridDischarge
         });
       } else {
-        // Tier 2+: try MILP, fall back to heuristic
+        // Try MILP, fall back to heuristic
         internalSchedule = await buildMilpSchedule({
           priceSlots: effectivePriceSlots, pvSlots, loadSlots,
           batteryModel, confidenceGate: gate,
           allowGridCharge, allowGridDischarge: effectiveAllowGridDischarge
         });
         if (internalSchedule === null) {
-          // MILP unavailable (Tier 1 or HiGHS missing), fall back
+          // MILP unavailable (HiGHS missing), fall back
           internalSchedule = buildHeuristicSchedule({
             priceSlots: effectivePriceSlots, pvSlots, loadSlots,
             batteryModel, confidenceGate: gate,
@@ -492,10 +488,12 @@ export function createOptimizerService(ctx) {
         }
       }
 
-      // 7b. EOS adapter (when enabled on Tier 2+)
+      // 7b. EOS adapter (whenever an EOS is configured). Until 2026-10-03 this
+      // was gated on the RAM tier (>= 2 GB): a 1-GB box (eHive) ran EOS every
+      // 15 min and never used a single plan. The tiers are gone.
       let eosSchedule = null;
       let eosGridSetpoints = null;
-      if (resolveEosProxy(cfg).enabled && tier >= 2) {
+      if (resolveEosProxy(cfg).enabled) {
         try {
           // Send enriched forecast with fully-loaded prices to EOS
           const forecastResp = await ctx.forecastService.buildForecastResponse();
@@ -744,7 +742,7 @@ export function createOptimizerService(ctx) {
             runFinishedAt: new Date(),
             status: 'applied',
             source: 'dvhub_optimizer',
-            inputJson: { confidence, tier, rulesCount: newRules.length },
+            inputJson: { confidence, rulesCount: newRules.length },
             resultJson: { slots: winningSchedule.slice(0, 50) },
             series
           });
@@ -757,7 +755,6 @@ export function createOptimizerService(ctx) {
       pushLog('optimizer_run', {
         source,
         rulesCount: newRules.length,
-        tier,
         confidence,
         runCount: state.optimizer.runCount,
         forecastVersion: currentVersion
@@ -792,7 +789,7 @@ export function createOptimizerService(ctx) {
         if (stamp && stamp !== lastAppliedEosStamp) {
           pushLog('eos_new_plan_detected', { generatedAt: stamp, previous: lastAppliedEosStamp });
           // Je neuem Plan nur EIN Anstoss, auch wenn der Lauf den EOS-Teil
-          // ueberspringt (z. B. Tier < 2) — sonst jede Minute ein Lauf.
+          // ueberspringt (z. B. EOS-Proxy aus) — sonst jede Minute ein Lauf.
           lastAppliedEosStamp = stamp;
           runOptimization().catch(err => pushLog('optimizer_error', { error: err.message }));
         }

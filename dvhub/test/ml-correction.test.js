@@ -6,7 +6,7 @@ import { describe, it, mock, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMlCorrection } from '../services/ml/ml-correction.js';
 import { createMlTraining } from '../services/ml/ml-training.js';
-import { createMlHealth, buildTierFeatures } from '../services/ml/ml-health.js';
+import { createMlHealth, buildFeatures } from '../services/ml/ml-health.js';
 
 describe('createMlCorrection', () => {
   let mockBridge, mockGetCfg, mockPushLog, correction;
@@ -278,13 +278,13 @@ describe('createMlHealth', () => {
       mlCorrection: mockCorrection,
       mlTraining: mockTraining,
       getCfg: mockGetCfg,
-      tier: 2
+      pythonAvailable: true
     });
   });
 
   it('test 11: getStatus returns complete status object', () => {
     const status = health.getStatus();
-    assert.equal(status.tier, 2);
+    assert.equal(status.pythonAvailable, true);
     assert.equal(status.mlEnabled, true);
     assert.equal(status.modelType, 'lgbm');
     assert.equal(status.modelVersion, 2);
@@ -293,7 +293,7 @@ describe('createMlHealth', () => {
     assert.ok(Array.isArray(status.trainingLog));
     assert.equal(status.trainingLog.length, 1);
     assert.equal(status.sfEnabled, true);
-    assert.ok(Array.isArray(status.tierFeatures));
+    assert.ok(Array.isArray(status.features));
   });
 
   it('test 12: getStatus with no model returns nulls', () => {
@@ -309,11 +309,11 @@ describe('createMlHealth', () => {
           sfUseMstl: false
         }
       }),
-      tier: 1
+      pythonAvailable: false
     });
 
     const status = healthNoModel.getStatus();
-    assert.equal(status.tier, 1);
+    assert.equal(status.pythonAvailable, false);
     assert.equal(status.mlEnabled, false);
     assert.equal(status.modelType, null);
     assert.equal(status.modelVersion, 0);
@@ -321,8 +321,8 @@ describe('createMlHealth', () => {
   });
 });
 
-describe('buildTierFeatures ML-Sichtbarkeit (selbstheilend)', () => {
-  const keysOf = (cfg) => buildTierFeatures(3, cfg).map(f => f.feature);
+describe('buildFeatures ML-Sichtbarkeit (selbstheilend)', () => {
+  const keysOf = (cfg) => buildFeatures(true, cfg).map(f => f.feature);
 
   it('blendet ml_correction + ml_training aus, wenn ml.mlEnabled=false', () => {
     const keys = keysOf({ ml: { mlEnabled: false, sfEnabled: true, sfUseMstl: true } });
@@ -335,11 +335,21 @@ describe('buildTierFeatures ML-Sichtbarkeit (selbstheilend)', () => {
   });
 
   it('zeigt ml_correction + ml_training wieder, sobald ml.mlEnabled=true', () => {
-    const features = buildTierFeatures(3, { ml: { mlEnabled: true, sfEnabled: true, sfUseMstl: true } });
+    const features = buildFeatures(true, { ml: { mlEnabled: true, sfEnabled: true, sfUseMstl: true } });
     const keys = features.map(f => f.feature);
     assert.ok(keys.includes('ml_correction'), 'ml_correction soll bei ML-an erscheinen');
     assert.ok(keys.includes('ml_training'), 'ml_training soll bei ML-an erscheinen');
     assert.equal(features.find(f => f.feature === 'ml_correction').status, 'active');
     assert.equal(features.find(f => f.feature === 'ml_training').status, 'active');
+  });
+});
+
+describe('buildFeatures ohne Python-Umgebung', () => {
+  it('Python-Module sind nicht verfügbar, die SQL-Lastprognose bleibt aktiv', () => {
+    const features = buildFeatures(false, { ml: { mlEnabled: true, sfEnabled: true, sfUseMstl: true } });
+    assert.equal(features.find(f => f.feature === 'sql_load_forecast').status, 'active');
+    for (const f of features.filter(x => x.requires === 'python')) {
+      assert.equal(f.status, 'unavailable', f.feature);
+    }
   });
 });

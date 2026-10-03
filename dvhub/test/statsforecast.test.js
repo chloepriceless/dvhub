@@ -1,5 +1,5 @@
 // statsforecast.test.js -- StatsForecast load forecast delegation tests (MLAI-03).
-// Tests: SF delegation on tier>=2, SF skip on tier<2, SF skip when sfEnabled=false,
+// Tests: SF delegation with a Python bridge, SF skip without it, SF skip when sfEnabled=false,
 // SQL fallback on bridge error, output contract validation.
 // Uses node:test and node:assert with mock dependencies.
 
@@ -29,13 +29,12 @@ describe('StatsForecast delegation in load-forecast', () => {
       db: {
         query: mock.fn(async () => ({ rows: [] }))
       },
-      forecastService: { tier: 2 },
+      forecastService: {},
       bumpForecastVersion: mock.fn()
     };
   });
 
-  it('test 1: SF delegation on tier >= 2 with sfEnabled=true', async () => {
-    ctx.forecastService = { tier: 2 };
+  it('test 1: SF delegation with sfEnabled=true and a Python bridge', async () => {
 
     // Mock python bridge returns SF data
     mockBridge.call.mock.mockImplementation(async () => [
@@ -70,23 +69,21 @@ describe('StatsForecast delegation in load-forecast', () => {
     );
   });
 
-  it('test 2: SF skipped on tier < 2', async () => {
-    ctx.forecastService = { tier: 1 };
-
+  it('test 2: SF skipped without Python bridge (no venv installed)', async () => {
     const loadForecast = createLoadForecast(ctx, {
       store: mockStore,
       vrmForecast: mockVrmForecast,
-      pythonBridge: mockBridge
+      pythonBridge: null
     });
 
-    await loadForecast.runForecast();
+    const result = await loadForecast.runForecast();
 
-    // Python bridge should NOT be called
-    assert.equal(mockBridge.call.mock.calls.length, 0, 'Bridge should not be called on tier 1');
+    // Falls back to SQL rollup; the (unused) bridge is never called
+    assert.equal(mockBridge.call.mock.calls.length, 0, 'Bridge should not be called without Python');
+    assert.ok(result === undefined || result === null || typeof result === 'object');
   });
 
   it('test 3: SF skipped when sfEnabled=false', async () => {
-    ctx.forecastService = { tier: 2 };
     ctx.getCfg = () => ({
       ml: { sfEnabled: false, mlSlidingWindowMonths: 1, sfUseMstl: false },
       forecast: { load: { defaultPowerW: 800 } }
@@ -105,7 +102,6 @@ describe('StatsForecast delegation in load-forecast', () => {
   });
 
   it('test 4: SQL fallback on bridge error', async () => {
-    ctx.forecastService = { tier: 2 };
 
     // Mock python bridge to throw
     mockBridge.call.mock.mockImplementation(async () => {
@@ -141,7 +137,6 @@ describe('StatsForecast delegation in load-forecast', () => {
   });
 
   it('test 5: output contract matches [{ts_utc, power_w, confidence}]', async () => {
-    ctx.forecastService = { tier: 2 };
 
     // Mock python bridge returns valid SF data
     const sfData = [
@@ -182,8 +177,7 @@ describe('StatsForecast delegation in load-forecast', () => {
     }
   });
 
-  it('test 6: SF passes use_mstl=true on tier 3 when sfUseMstl enabled', async () => {
-    ctx.forecastService = { tier: 3 };
+  it('test 6: SF passes use_mstl=true when sfUseMstl enabled', async () => {
     ctx.getCfg = () => ({
       ml: { sfEnabled: true, mlSlidingWindowMonths: 1, sfUseMstl: true },
       forecast: { load: { defaultPowerW: 800 } }
@@ -213,6 +207,6 @@ describe('StatsForecast delegation in load-forecast', () => {
     // Verify use_mstl was passed as true
     const callArgs = mockBridge.call.mock.calls[0].arguments;
     const inputData = callArgs[1];
-    assert.equal(inputData.use_mstl, true, 'Should pass use_mstl=true on tier 3');
+    assert.equal(inputData.use_mstl, true, 'Should pass use_mstl=true');
   });
 });

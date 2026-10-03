@@ -44,7 +44,7 @@ test('refreshPvnodeOnly re-merges fresh pvnode WITHOUT re-fetching Solcast', asy
   let solcastCalls = 0;
 
   const pv = createPvForecast(makeCtx(state), {
-    tier: 1,
+
     store,
     pythonBridge: { call: async () => [] },
     solcastClient: { fetchPvForecast: async () => { solcastCalls++; return []; } },
@@ -89,7 +89,7 @@ test('refreshPvnodeOnly is a no-op when pvnode data is unchanged', async () => {
     { ts_utc: '2026-04-03T12:15:00Z', power_w: 2100 },
   ];
   const pv = createPvForecast(makeCtx(state), {
-    tier: 1, store,
+    store,
     pythonBridge: { call: async () => [] },
     solcastClient: { fetchPvForecast: async () => [] },
     forecastSolar: { fetchForecast: async () => [
@@ -115,7 +115,7 @@ test('refreshPvnodeOnly is a no-op when pvnode data is unchanged', async () => {
 test('refreshPvnodeOnly is a no-op before the first full run (no baseline)', async () => {
   const store = makeStore();
   const pv = createPvForecast(makeCtx({ forecast: { pv: {} } }), {
-    tier: 1, store,
+    store,
     pythonBridge: { call: async () => [] },
     solcastClient: { fetchPvForecast: async () => [] },
     forecastSolar: { fetchForecast: async () => [] },

@@ -1,5 +1,5 @@
 // pv-forecast.js -- PV forecast orchestrator.
-// Gates pvlib to Tier 2+ (D-09). Tier 1 uses Solcast-only.
+// pvlib runs only when the Python bridge exists (installed venv).
 // Supports 3 config levels: simple, standard, detailed (D-11).
 // Model can be 'solcast', 'pvlib', or 'both'.
 //
@@ -276,13 +276,13 @@ export async function mergePvForecastsWeighted({ providersBySlot, store, pushLog
 
 /**
  * Create PV forecast orchestrator.
- * Gates pvlib to Tier 2+ per D-09. Tier 1 uses Solcast-only.
+ * pvlib runs only when the Python bridge exists (installed venv).
  *
  * @param {object} ctx - DI context { state, getCfg, pushLog }
- * @param {object} deps - { tier, store, pythonBridge, solcastClient }
+ * @param {object} deps - { store, pythonBridge, solcastClient }
  * @returns {{ start: Function, close: Function, runForecast: Function }}
  */
-export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient }) {
+export function createPvForecast(ctx, { store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient }) {
   const { state, getCfg, pushLog } = ctx;
   let intervalId = null;
   let pvnodeTimerId = null;
@@ -324,15 +324,14 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
 
   /**
    * Run a PV forecast cycle.
-   * On Tier 1 or model='solcast': Solcast only.
-   * On Tier 2+ and model='pvlib': pvlib only.
-   * On Tier 2+ and model='both': run both, merge results.
+   * model='solcast': Solcast only.
+   * model='pvlib' / 'both': pvlib as well, when the Python bridge exists.
    */
   async function runForecast() {
     const cfg = getCfg();
     const pvCfg = cfg.forecast?.pv;
     const model = pvCfg?.model || 'auto';
-    const isTier1 = tier === 1;
+    const pvlibAvailable = Boolean(pythonBridge);
 
     let solcastResult = [];
     let pvlibResult = [];
@@ -348,7 +347,7 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       }
     }
 
-    // --- Forecast.Solar (free, no API key, all tiers) ---
+    // --- Forecast.Solar (free, no API key) ---
     if (model === 'auto' || model === 'forecast_solar' || model === 'both') {
       try {
         forecastSolarResult = await forecastSolar.fetchForecast() || [];
@@ -386,8 +385,8 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
       }
     }
 
-    // --- pvlib (Tier 2+ only) ---
-    if (!isTier1 && (model === 'pvlib' || model === 'both')) {
+    // --- pvlib (needs the Python bridge) ---
+    if (pvlibAvailable && (model === 'pvlib' || model === 'both')) {
       try {
         const input = buildPvlibInput(cfg);
 
@@ -592,7 +591,6 @@ export function createPvForecast(ctx, { tier, store, pythonBridge, solcastClient
 
     pushLog('pv_forecast_complete', {
       model,
-      tier,
       solcastCount: solcastResult.length,
       pvlibCount: pvlibResult.length,
       forecastSolarCount: forecastSolarResult.length,

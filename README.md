@@ -120,7 +120,7 @@ Der Installer:
 - generiert automatisch einen `apiToken` und ein selbstsigniertes TLS-Zertifikat
 - richtet einen systemd-Service mit Selbstheilung beim Start ein (`post-update.sh` als `ExecStartPre`)
 - nutzt eine externe Config unter `/etc/dvhub/config.json`
-- installiert den vollen Prognose-/ML-Stack hash-gepinnt aus `requirements.lock` (auf jeder Box) und zusätzlich Akkudoktor-EOS ab ≥ 1 GB RAM (siehe **Leistungsstufen**)
+- installiert den vollen Prognose-/ML-Stack hash-gepinnt aus `requirements.lock` (auf jeder Box) und zusätzlich Akkudoktor-EOS (siehe **Hardware**)
 - **Stable-Channel** (Standard): checkt den neuesten Semver-Release-Tag aus
 - **Dev-Channel** (`--channel dev`): checkt `origin/main` HEAD aus
 - **Commit-Pin** (`--ref <commit|tag>`): checkt exakt diesen Stand aus — für
@@ -174,15 +174,16 @@ Anlage samt Datenbank und Betrieb: [`docker/README.md`](docker/README.md).
 
 Nach der Erstinstallation (bzw. wenn die Config fehlt/ungültig ist) öffnet DVhub beim ersten Aufruf unter `/` automatisch den Onboarding-Assistenten (`onboarding.html`) — ein manueller Aufruf einer Setup-Seite ist nicht nötig.
 
-### Leistungsstufen (RAM-Tiers)
+### Hardware
 
-DVhub skaliert mit der verfügbaren Hardware. Der Installer erkennt den RAM und
-installiert nur die Komponenten, die das System tragen kann:
-
-| Stufe | RAM | Funktionen |
-|-------|-----|------------|
-| **Vollständig** | ≥ 1 GB | Kern-DV, Steuerung, Telemetrie, Börsenautomatik, **voller Prognose-/ML-Stack** (pvlib, scikit-learn, LightGBM, statsforecast — hash-gepinnt aus `requirements.lock`, auf jeder Box) **und Akkudoktor-EOS** (DVhub-Direktvermarktungs-Fork) als externer Optimizer-Dienst — standardmäßig mitinstalliert, opt-out mit `--no-eos` |
-| **Ohne EOS** | < 1 GB | wie oben, aber **ohne EOS** (zu RAM-hungrig unter 1 GB); die interne MILP-/Heuristik-Optimierung + kleine Börsenautomatik laufen weiter |
+DVhub läuft ab **1 GB RAM** vollständig, **inklusive Akkudoktor-EOS** (DVhub-
+Direktvermarktungs-Fork) als Optimierer — standardmäßig mitinstalliert, opt-out
+mit `--no-eos`. Es gibt keine RAM-Stufen mehr: Funktionen werden nicht nach
+Speichergröße abgeschaltet. Die Python-Prognosemodule (pvlib, StatsForecast,
+ML-Korrektur) laufen nur, wenn ihre Python-Umgebung installiert ist und sie in
+den Einstellungen eingeschaltet sind; ohne sie nutzt DVhub die SQL-Lastprognose
+und die PV-Prognose-Anbieter. Die Einstellungen zeigen unter „Prognose-Module“,
+was verfügbar ist.
 
 > Hinweis: Ein früher dokumentierter Edge-LLM-Layer (Ollama/TinyLlama für
 > Kachel-Erläuterungen) ist in v1.0 nicht mehr Bestandteil von DVhub und wird vom
@@ -501,8 +502,7 @@ DVhub trifft Lade-/Entladeentscheidungen nicht nur reaktiv, sondern vorausschaue
    (`schedule-eval.js`), die die gemessene Akku-Entladung hart auf das
    Akku-Hard-Limit begrenzt.
 
-Die ML- und EOS-Komponenten sind hardware-abhängig zuschaltbar (siehe
-[Leistungsstufen](#leistungsstufen-ram-tiers)) und laufen vollständig lokal.
+Die ML- und EOS-Komponenten laufen vollständig lokal (siehe [Hardware](#hardware)).
 
 ---
 
@@ -678,9 +678,9 @@ Technische Werte wie Register, Port, Unit-ID oder Timeout werden nicht in
 Universal-MQTT-Bridge: `bridge-mqtt.json`).
 
 Prognose-/ML-Funktionen benötigen zusätzlich eine Python-Umgebung
-(`dvhub/python/requirements.txt`, hash-gepinnt über `requirements.lock`); der
-Installer richtet diese je nach [Leistungsstufe](#leistungsstufen-ram-tiers)
-automatisch ein.
+(`dvhub/python/requirements.txt`, hash-gepinnt über `requirements.lock`), die der
+native Installer einrichtet; im Container ist sie nicht enthalten (siehe
+[Hardware](#hardware)).
 
 ### systemd Service
 

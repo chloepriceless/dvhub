@@ -12,6 +12,12 @@ verweist hierher.
 
 ### Neu
 
+- **RAM-Stufen entfernt.** DVhub schaltet keine Funktionen mehr nach Speichergröße
+  ab. EOS-Pläne werden jetzt auch auf Boxen mit 1 GB RAM übernommen (vorher rechnete
+  EOS dort, DVhub nutzte den Plan aber nie). Python-Prognosemodule hängen nur noch an
+  ihren Schaltern und an einer installierten Python-Umgebung; die Einstellungen zeigen
+  sie unter „Prognose-Module“. Der interne Optimierer nutzt bei „auto“ MILP mit
+  Heuristik als Rückfall.
 - **§14a: Aufteilung und Mindestleistung nach BNetzA-Festlegung** ([docs/EEBUS.md](docs/EEBUS.md)).
   DVhub berechnet die Mindestleistung Pmin,14a nach Anlage 1 Ziffer 4.5.2 (Gleichzeitigkeitsfaktor,
   Sonderfall Wärmepumpe/Klima über 11 kW) aus Wallbox, Speicher, EEBUS-Geräten und Geräten von Hand.
