@@ -12,6 +12,31 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Läufe 30–45 % schneller bei identischem Ergebnis (DV-EOS rc1.13).** Die
+  Lastverteilung der Eigenverbrauchs-Tabelle wird je Lastwert nur einmal berechnet, und
+  Nachkommen entstehen ohne `deepcopy`. Beide Referenz-Eingaben aus dem EOS-Repo liefern
+  bei 400 Generationen eine identische Lösung. eHive (Auto + 2 Geräte, 3 Kerne): 461 s
+  statt 707–916 s; Raspberry Pi 4 (2 Kerne): 233 s statt 333 s.
+- **Heizstab in der EOS-Planung berücksichtigt.** EOS kann neben dem Akku nur ein stufenlos
+  regelbares Gerät planen (das Auto); der Heizstab wird weiter von DVhub nach Überschuss
+  geregelt. Neu: sein erwarteter Verbrauch (Tagesmenge = `capacityWh`, heute abzüglich der
+  schon gelieferten Energie) geht als Last in die Prognose für EOS — in den Stunden mit
+  PV-Überschuss, die mit dem niedrigsten Einspeisewert zuerst. EOS verplant denselben
+  Überschuss damit nicht mehr doppelt. Abschaltbar: `optimizer.heaterLoadReservation: false`
+  oder je Gerät `plan.reserveInForecast: false`.
+- **Historie Jahr/Alle aus vorberechneten Monatsständen.** Nach jedem abgeschlossenen Monat
+  wird der Rechenstand gesondert abgelegt (`history_summary_cache`); ein Aufruf rechnet nur
+  noch die Monate danach. Ein Prüfwert über Rohdaten, Preise, Tarife, Monatsmarktwerte und
+  Programmversion entscheidet, ab welchem Monat neu aus den Rohdaten gerechnet wird. Die
+  Rohdaten bleiben unverändert; das Ergebnis ist bitgleich zur Rechnung ohne Ablage.
+- **MQTT-Explorer hört nur noch bei Bedarf mit.** Das Abo auf alle Topics (`#`) lief
+  dauerhaft und war der größte Posten der Leerlauf-CPU. Jetzt wird es beim Öffnen des
+  Inspektors bzw. Geräte-Editors gesetzt und 10 Minuten nach dem letzten Abruf beendet.
+  Datenverbindungen (Victron-MQTT, Geräte, Kacheln, TeslaMate, Befehle) sind nicht betroffen.
+- **Prüfung der Systemuhr.** DVhub fragt stündlich einen Zeitserver ab (stellt nichts),
+  zeigt die Abweichung im Status (`clock`) und warnt im Protokoll ab 2 s. Ein Container kann
+  die Uhr nicht stellen — der Abgleich ist Sache des Betriebssystems (`clockCheck`).
+
 - **EOS-Läufe starten zur vollen Viertelstunde (DV-EOS rc1.11).** Bisher begann ein Lauf
   15 Minuten nach dem Ende des vorigen, die Starts wanderten gegen die Uhr. Jetzt startet
   EOS bei :00, :15, :30, :45, passend zu den Börsen-Slots; dauert ein Lauf länger als der
@@ -146,6 +171,15 @@ verweist hierher.
 
 ### Behoben
 
+- **Heizstab lief mit Netzbezug statt mit PV-Überschuss.** Die Überschuss-Regelung nahm
+  fest „Einspeisung = negativer Netzwert“ an. Auf Anlagen mit `gridPositiveMeans: feed_in`
+  galt damit Netzbezug als Überschuss (nachts kleine Leistungen aus dem Netz), echte
+  Einspeisung wurde nicht erkannt. Außerdem zählte jede Einspeisung als Überschuss, auch
+  eine geplante Akku-Einspeisung zu hohen Preisen. Jetzt zählt nur PV-Leistung, die ins Netz
+  geht (plus die eigene Heizleistung), abzüglich Netzbezug und Akku-Entladung.
+- **EOS brach Läufe mit „Fresh SoC missing“ ab** (DV-EOS rc1.12), wenn ein Lauf genau
+  zwischen zwei Messwert-Schreibvorgängen derselben Minute startete — seit dem Start zur
+  vollen Viertelstunde bei jedem Lauf. EOS nimmt jetzt den neuesten gültigen Wert.
 - **MQTT: nackte Zahlen aus der Bridge wurden wortlos verworfen.** Der
   Venus-Zweig (`N/`-Topics) verlangte ausschließlich `{"value": X}` und ignorierte
   alles andere ohne eine Zeile Log — eine Bridge, die `26` statt `{"value":26}`
