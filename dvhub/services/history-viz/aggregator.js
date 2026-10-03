@@ -380,6 +380,7 @@ export function createHistoryVizAggregator(ctx) {
     if (hit && now - hit.at < SHARED_SLOTS_TTL_MS) return hit.promise;
     const promise = (async () => {
       const result = await db.query(`
+        /* history-viz shared energy slots */
         SELECT DISTINCT ON (slot_start_utc, series_key)
           slot_start_utc, series_key, value_num
         FROM energy_slots_15m

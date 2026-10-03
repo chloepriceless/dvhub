@@ -24,7 +24,7 @@ function aggregator(queries) {
     db: {
       async query(sql, params) {
         queries.push({ sql: String(sql), params });
-        return { rows: /DISTINCT ON/.test(sql) && params.length === 2 ? ROWS : [] };
+        return { rows: /history-viz shared energy slots/.test(sql) ? ROWS : [] };
       },
     },
     telemetryStore: null,
@@ -36,13 +36,13 @@ test('Monat: einmal laden, stündlich bündeln wie time_bucket, zweiter Abruf au
   const agg = aggregator(queries);
   const a = await agg.getCycles({ view: 'month', date: '2026-06-15' });
   assert.equal(a.status, 200);
-  const shared = queries.filter((q) => /DISTINCT ON/.test(q.sql) && q.params.length === 2);
+  const shared = queries.filter((q) => /history-viz shared energy slots/.test(q.sql));
   assert.equal(shared.length, 1, 'ein gemeinsamer Abruf');
   // 10+11 Uhr Entladung 1+2+3+4 + 5 = 15 kWh → 1,5 Zyklen bei 10 kWh
   assert.equal(a.body.totals.cycles, 1.5);
 
   const b = await agg.getCycles({ view: 'month', date: '2026-06-15' });
   assert.equal(b.body.totals.cycles, 1.5);
-  assert.equal(queries.filter((q) => /DISTINCT ON/.test(q.sql) && q.params.length === 2).length, 1,
+  assert.equal(queries.filter((q) => /history-viz shared energy slots/.test(q.sql)).length, 1,
     'innerhalb von 2 min keine zweite Datenbankabfrage');
 });

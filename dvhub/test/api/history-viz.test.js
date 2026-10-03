@@ -288,6 +288,8 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
 // =============================================================================
 
 const ANCHOR_DATE = '2026-05-14'; // a yesterday-stable choice
+// Energie-Reihen, die die Karten über fetchBucketedEnergySlots lesen.
+const VIZ_ENERGY_KEYS = ['pv_total_w', 'grid_import_w', 'grid_export_w', 'load_power_w', 'battery_charge_w', 'battery_discharge_w'];
 const SLOT_RES_SEC = 900;          // 15-min buckets, matches querySeries cap
 
 function makeFlatSeriesRows({ start, end, key, watts, stepSec = SLOT_RES_SEC }) {
@@ -380,6 +382,18 @@ function mockCtxWithStores({ querySeriesFn = async () => [], dbQueryFn = async (
   // fetchBucketedEnergySlots query (energy_slots_15m + `WITH dedup`), bucket
   // the querySeries rows and return them in {key, bucket_ts, kwh} shape.
   const dbQueryAdapter = async (sql, params) => {
+    // Gemeinsamer Abruf (Tag/Woche/Monat, 2026-10-03): alle Energie-Reihen
+    // eines Zeitraums als 15-min-Zeilen (slot_start_utc, series_key, value_num
+    // in kWh); die Karten bündeln selbst.
+    if (typeof sql === 'string' && /history-viz shared energy slots/.test(sql)) {
+      const [start, end] = params;
+      const rawRows = await querySeriesFn({ seriesKeys: VIZ_ENERGY_KEYS, start, end, maxResolution: 900 });
+      return {
+        rows: bucketRawRows(rawRows, 900)
+          .filter((r) => VIZ_ENERGY_KEYS.includes(r.key))
+          .map((r) => ({ slot_start_utc: new Date(r.ts), series_key: r.key, value_num: (r.value * r.resolution) / 3_600_000 })),
+      };
+    }
     if (typeof sql === 'string' && /energy_slots_15m/.test(sql) && /WITH dedup AS/.test(sql)) {
       const m = sql.match(/time_bucket\('([^']+)'/);
       const bucketSec = (m && BUCKET_INTERVAL_SECONDS[m[1]]) || 900;
