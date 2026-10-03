@@ -8,6 +8,7 @@ import { round2 } from './server-utils.js';
 // WS3 (2026-05-30): PVGIS-derived monthly expected production (real array
 // geometry) replaces the crude static monthly-distribution estimate.
 import { readCachedPvgisMonthly } from './pvgis-expected-production.js';
+import { localParts as fastLocalParts } from './tz-fast.js';
 
 const PVGIS_EXPECTED_CACHE_PATH = path.join(
   process.env.DV_DATA_DIR || '.',
@@ -205,42 +206,13 @@ function startOfWeek(value) {
   return addDays(value, 1 - day);
 }
 
-// Intl.DateTimeFormat construction costs ~70µs — formatToParts on an already
-// built instance ~3µs. getLocalParts runs per energy slot and getSummary walks
-// the slot list several times, so a year view (~24k slots) built ~200k
-// formatters and burned ~14s of CONTIGUOUS event-loop time: the whole hub
-// (UI, API, polling, Modbus) froze until the report finished, which is what
-// surfaced as a "timeout" on Jahr/Alle. Cache one formatter per time zone —
-// the sibling aggregator (services/history-viz/aggregator.js) already does
-// exactly this, which is why the viz cards stayed fast while summary did not.
-const LOCAL_PARTS_DTF_BY_TZ = new Map();
-
-function localPartsFormatter(timeZone) {
-  let dtf = LOCAL_PARTS_DTF_BY_TZ.get(timeZone);
-  if (!dtf) {
-    dtf = new Intl.DateTimeFormat('en-CA', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23'
-    });
-    LOCAL_PARTS_DTF_BY_TZ.set(timeZone, dtf);
-  }
-  return dtf;
-}
-
+// Lokale Zeitbestandteile über tz-fast.js: der Abstand zu UTC wird je
+// UTC-Stunde einmal bestimmt, alles Weitere ist Arithmetik. Vorher kostete
+// formatToParts je Slot (getSummary läuft die Slotliste mehrfach ab) auf dem
+// eHive über 10 s pro Monatsansicht und blockierte die Event-Loop.
 function getLocalParts(date, timeZone = BERLIN_TIME_ZONE) {
-  const parts = localPartsFormatter(timeZone).formatToParts(date);
-  return {
-    year: Number(parts.find((part) => part.type === 'year')?.value),
-    month: Number(parts.find((part) => part.type === 'month')?.value),
-    day: Number(parts.find((part) => part.type === 'day')?.value),
-    hour: Number(parts.find((part) => part.type === 'hour')?.value),
-    minute: Number(parts.find((part) => part.type === 'minute')?.value)
-  };
+  // tz-fast statt formatToParts je Slot (Monatsansicht: >10 s auf dem eHive).
+  return fastLocalParts(date, timeZone);
 }
 
 function localDateString(value, timeZone = BERLIN_TIME_ZONE) {

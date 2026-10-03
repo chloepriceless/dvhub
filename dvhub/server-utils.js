@@ -2,6 +2,8 @@
 // Extracted from server.js (Phase 1, Plan 01).
 // ZERO imports. ZERO state/config dependencies.
 
+import { localDate as fastLocalDate, localMinutesOfDay as fastLocalMinutesOfDay } from './tz-fast.js';
+
 export const MAX_BODY_BYTES = 256 * 1024; // 256 KB
 
 export function nowIso() { return new Date().toISOString(); }
@@ -67,7 +69,7 @@ export function round2(value, { nullOnInvalid = false } = {}) {
 }
 
 export function berlinDateString(d = new Date(), timezone = 'Europe/Berlin') {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone: timezone }).format(d);
+  return fastLocalDate(d, timezone);
 }
 
 export function addDays(dateStr, days) {
@@ -81,9 +83,7 @@ export function addDays(dateStr, days) {
 }
 
 export function localMinutesOfDay(date = new Date(), timezone = 'Europe/Berlin') {
-  const hh = Number(date.toLocaleString('en-GB', { timeZone: timezone, hour: '2-digit', hour12: false }));
-  const mm = Number(date.toLocaleString('en-GB', { timeZone: timezone, minute: '2-digit', hour12: false }));
-  return hh * 60 + mm;
+  return fastLocalMinutesOfDay(date, timezone);
 }
 
 // T-0075 telemetry-freshness helpers. polling.js stamps

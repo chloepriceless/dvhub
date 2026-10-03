@@ -24,6 +24,8 @@
 // die Telemetrie-DB: die ist optional (`telemetry.enabled`), und die
 // Zyklenrechner sind synchron und laufen pro Zeile.
 
+import { localDate } from './tz-fast.js';
+
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
 
 // Bewusst strenger als das reine Formatmuster: geprüft wird, ob der Tag als
@@ -50,19 +52,9 @@ function isPlainObject(value) {
  * Tag, nicht zum UTC-Tag. Vgl. formatLocalDate() in config-model.js.
  */
 export function localDateOf(value, timeZone = BERLIN_TIME_ZONE) {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).formatToParts(date);
-  const year = parts.find((part) => part.type === 'year')?.value;
-  const month = parts.find((part) => part.type === 'month')?.value;
-  const day = parts.find((part) => part.type === 'day')?.value;
-  if (!year || !month || !day) return null;
-  return `${year}-${month}-${day}`;
+  // tz-fast: Abstand je UTC-Stunde gemerkt — ein Intl-Formatter pro Aufruf
+  // kostete auf dem eHive den größten Teil der Leerlauf-CPU.
+  return localDate(value, timeZone);
 }
 
 /**

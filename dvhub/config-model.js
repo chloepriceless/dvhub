@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { toFiniteNumber } from './util.js';
 import { sanitizeBatteryStages, resolveCurrentBatteryCapacityWh } from './battery-stages.js';
+import { localDate as fastLocalDate, localMinutesOfDay as fastLocalMinutesOfDay } from './tz-fast.js';
 
 // Plan 09-01 (D-03): canonical minimum apiToken length floor. Re-exported here
 // (also defined in routes-api.js) so the settings-UI field descriptor and the
@@ -2164,6 +2165,20 @@ function buildFieldDefinitions() {
         { value: 3600, label: '1 Stunde' }
       ],
       help: 'Wie oft EOS einen frischen Optimierungslauf startet (ems.interval), ENTKOPPELT von der Slot-Aufl\u00f6sung. Der Lauf startet zur vollen Slot-Grenze (:00/:15/:30/:45 bei 15min, :00/:30 bei 30min), damit der frische Plan die Folge-Slots steuert. \u201eAutomatisch\u201c drosselt 15-min-Slots auf st\u00fcndlich. Ein Lauf dauert ~6 min; f\u00fcr schw\u00e4chere Hardware (z.B. Raspberry-Pi-EOS-Host) 30 Minuten w\u00e4hlen \u2014 dann l\u00e4uft EOS zur vollen halben Stunde. \u00dcberzieht ein Lauf die n\u00e4chste Grenze, verschiebt er sich automatisch auf den n\u00e4chsten freien Slot (Kadenz halbiert sich selbst).'
+    },
+    {
+      section: 'schedule',
+      group: 'optimization',
+      groupLabel: 'Optimierung',
+      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupOrder: 10,
+      path: 'optimizer.eosGeneticGenerations',
+      label: 'EOS Generationen',
+      type: 'number',
+      min: 0,
+      max: 1000,
+      step: 10,
+      help: 'Generationen des genetischen Optimierers je EOS-Lauf. 0 = Standard (400). Auf schwacher Hardware (z. B. eHive, 1 GB RAM) 200 wählen: im Test gleicher Plan in der halben Rechenzeit; so passt ein Lauf in einen 15-Minuten-Takt.'
     },
     {
       section: 'schedule',
@@ -4336,47 +4351,12 @@ function roundCtKwh(value) {
 // tens of thousands of times — several seconds of pure formatter construction.
 // One instance per (shape, timeZone) is kept instead; the formatters are
 // immutable and the options are fixed, so this is behaviour-identical.
-const DTF_CACHE = new Map();
-
-function cachedDtf(key, locale, options) {
-  const cacheKey = `${key}|${options.timeZone}`;
-  let dtf = DTF_CACHE.get(cacheKey);
-  if (!dtf) {
-    dtf = new Intl.DateTimeFormat(locale, options);
-    DTF_CACHE.set(cacheKey, dtf);
-  }
-  return dtf;
-}
-
 function formatLocalDate(value, timeZone = BERLIN_TIME_ZONE) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const parts = cachedDtf('date', 'en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).formatToParts(date);
-  const year = parts.find((part) => part.type === 'year')?.value;
-  const month = parts.find((part) => part.type === 'month')?.value;
-  const day = parts.find((part) => part.type === 'day')?.value;
-  if (!year || !month || !day) return null;
-  return `${year}-${month}-${day}`;
+  return fastLocalDate(value, timeZone);
 }
 
 function localMinutesOfDay(value, timeZone = BERLIN_TIME_ZONE) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const parts = cachedDtf('hhmm', 'en-GB', {
-    timeZone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23'
-  }).formatToParts(date);
-  const hour = Number(parts.find((part) => part.type === 'hour')?.value);
-  const minute = Number(parts.find((part) => part.type === 'minute')?.value);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
-  return hour * 60 + minute;
+  return fastLocalMinutesOfDay(value, timeZone);
 }
 
 function parseHHMM(value) {
@@ -5151,13 +5131,60 @@ export function resolveActiveUserEnergyPricingForTimestamp(ts, pricing = {}, opt
   return deepMerge(buildEffectiveUserEnergyPricing(pricing), clone(match));
 }
 
+// Zwischenspeicher für den Slot-Preis (2026-10-03): die Historie fragt den
+// Bezugspreis für JEDEN 15-min-Slot ab, und jedes Mal wurden Konfiguration und
+// Preisperiode per JSON kopiert und zusammengeführt — auf dem eHive mehrere
+// Sekunden pro Monatsansicht. Das Ergebnis hängt nur von der Preis-Konfiguration
+// (Objekt) und der gültigen Periode ab. Die Objekte im Cache werden nur gelesen.
+const SLOT_PRICING_CACHE = new WeakMap(); // pricing → { base, byPeriod: Map, windows: WeakMap }
+
+function slotPricingCache(pricing) {
+  let entry = SLOT_PRICING_CACHE.get(pricing);
+  if (!entry) {
+    entry = { base: null, byPeriod: new Map(), windows: new WeakMap() };
+    SLOT_PRICING_CACHE.set(pricing, entry);
+  }
+  return entry;
+}
+
+function cachedEffectivePricingForTimestamp(ts, pricing, timeZone) {
+  const cache = slotPricingCache(pricing);
+  const localDate = formatLocalDate(ts, timeZone);
+  const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
+  const match = localDate ? periods.find((period) => period?.startDate <= localDate && period?.endDate >= localDate) : null;
+  if (!match) {
+    cache.base ||= buildEffectiveUserEnergyPricing(pricing);
+    return cache.base;
+  }
+  let merged = cache.byPeriod.get(match);
+  if (!merged) {
+    merged = deepMerge(buildEffectiveUserEnergyPricing(pricing), clone(match));
+    cache.byPeriod.set(match, merged);
+  }
+  return merged;
+}
+
+function cachedModule3Windows(pricing, effectivePricing) {
+  const cache = slotPricingCache(pricing);
+  let windows = cache.windows.get(effectivePricing);
+  if (!windows) {
+    windows = configuredModule3Windows(effectivePricing);
+    cache.windows.set(effectivePricing, windows);
+  }
+  return windows;
+}
+
 export function resolveUserImportPriceCtKwhForSlot(row, pricing = {}, options = {}) {
   if (!row?.ts) return null;
   const timeZone = options.timeZone || BERLIN_TIME_ZONE;
   const minuteOfDay = localMinutesOfDay(row.ts, timeZone);
-  const effectivePricing = resolveActiveUserEnergyPricingForTimestamp(row.ts, pricing, options) || buildEffectiveUserEnergyPricing(pricing);
+  const effectivePricing = pricing && typeof pricing === 'object'
+    ? cachedEffectivePricingForTimestamp(row.ts, pricing, timeZone)
+    : buildEffectiveUserEnergyPricing(pricing);
 
-  const activeWindow = configuredModule3Windows(effectivePricing)
+  const activeWindow = (pricing && typeof pricing === 'object'
+    ? cachedModule3Windows(pricing, effectivePricing)
+    : configuredModule3Windows(effectivePricing))
     .find((window) => slotMinuteMatchesWindow(minuteOfDay, window)) || null;
 
   if (effectivePricing.mode === 'fixed') {

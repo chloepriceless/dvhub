@@ -38,24 +38,23 @@ export function createMqttTopicObserver(hub, ctx) {
 
   function onMessage(topic, payload) {
     let entry = topics.get(topic);
-    if (!entry) {
-      if (topics.size >= MAX_TOPICS) {
-        // Evict the oldest topic by lastAt (seq breaks lastAt ties) — keeps the Map bounded.
-        let oldestKey = null, oldestAt = Infinity, oldestSeq = Infinity;
-        for (const [k, v] of topics) {
-          if (v.lastAt < oldestAt || (v.lastAt === oldestAt && v.seq < oldestSeq)) {
-            oldestAt = v.lastAt; oldestSeq = v.seq; oldestKey = k;
-          }
-        }
-        if (oldestKey) topics.delete(oldestKey);
-      }
+    if (entry) {
+      // Map in Zugriffsreihenfolge halten (zuletzt aktualisiert = hinten): so ist
+      // der erste Schlüssel immer der älteste und das Verdrängen kostet O(1)
+      // statt eines Durchlaufs über alle 500 Themen bei jedem neuen Thema.
+      topics.delete(topic);
+    } else {
+      if (topics.size >= MAX_TOPICS) topics.delete(topics.keys().next().value);
       entry = { count: 0, lastAt: 0, lastPayload: '', seq: 0 };
-      topics.set(topic, entry);
     }
+    topics.set(topic, entry);
     entry.count++;
     entry.lastAt = Date.now();
     entry.seq = ++seq;
-    entry.lastPayload = String(payload).slice(0, MAX_PAYLOAD_CHARS);
+    // Nur den Anfang dekodieren — große Payloads (Bilder, JSON-Dumps) nicht
+    // komplett in einen String wandeln.
+    entry.lastPayload = (Buffer.isBuffer(payload) ? payload.subarray(0, MAX_PAYLOAD_CHARS * 4).toString() : String(payload))
+      .slice(0, MAX_PAYLOAD_CHARS);
   }
 
   function start() {

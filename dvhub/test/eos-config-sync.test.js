@@ -175,6 +175,11 @@ test('pickGeneticSizing: full upstream sizing at all resolutions', () => {
   assert.deepEqual(pickGeneticSizing(1800), { generations: 400, individuals: 300 });
   assert.deepEqual(pickGeneticSizing(900),  { generations: 400, individuals: 300 });
   assert.deepEqual(pickGeneticSizing(7200), { generations: 400, individuals: 300 });
+  // optimizer.eosGeneticGenerations (kleine Boards): 50–1000, 0/leer = 400
+  assert.deepEqual(pickGeneticSizing(900, 200), { generations: 200, individuals: 300 });
+  assert.deepEqual(pickGeneticSizing(900, 0), { generations: 400, individuals: 300 });
+  assert.deepEqual(pickGeneticSizing(900, 10), { generations: 50, individuals: 300 });
+  assert.deepEqual(pickGeneticSizing(900, 5000), { generations: 1000, individuals: 300 });
 });
 
 test('pickEmsIntervalSec: stretches at finer slot resolutions', () => {

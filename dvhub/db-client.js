@@ -45,3 +45,34 @@ export function createPool(config = {}) {
 
   return pool;
 }
+
+/** Wartezeiten zwischen den Verbindungsversuchen beim Start (ms), zusammen gut 2 min. */
+export const DB_CONNECT_RETRY_DELAYS_MS = Object.freeze([5_000, 10_000, 15_000, 20_000, 30_000, 30_000, 30_000]);
+
+/**
+ * Verbindung beim Start prüfen und bei Fehlschlag mit wachsenden Pausen erneut
+ * versuchen. Auf kleinen Geräten (1 GB RAM, SD-Karte) läuft der erste Versuch
+ * während des Hochfahrens leicht in die Zeitüberschreitung — ohne Wiederholung
+ * lief DVhub dann bis zum nächsten Neustart ohne Datenbank (keine Messwerte,
+ * keine Last-/Wetterprognose, EOS ohne Lastreihe).
+ *
+ * @param {{query: Function}} pool
+ * @param {object} [opts]
+ * @param {number[]} [opts.delaysMs]
+ * @param {(ms:number) => Promise<void>} [opts.sleep]
+ * @param {(info:{attempt:number, error:string, nextInMs:number}) => void} [opts.onRetry]
+ * @returns {Promise<number>} Anzahl der Versuche bis zum Erfolg; wirft den letzten Fehler
+ */
+export async function connectWithRetry(pool, { delaysMs = DB_CONNECT_RETRY_DELAYS_MS, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onRetry = () => {} } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await pool.query('SELECT 1');
+      return attempt;
+    } catch (err) {
+      const nextInMs = delaysMs[attempt - 1];
+      if (nextInMs == null) throw err;
+      onRetry({ attempt, error: err?.message || String(err), nextInMs });
+      await sleep(nextInMs);
+    }
+  }
+}

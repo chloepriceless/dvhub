@@ -16,7 +16,7 @@ import {
 } from './config-model.js';
 import { resolveCurrentBatteryCapacityWh } from './battery-stages.js';
 import { createTelemetryStorePg, ensurePgSchema, runPendingMigrations } from './telemetry-store-pg.js';
-import { createPool } from './db-client.js';
+import { createPool, connectWithRetry } from './db-client.js';
 import {
   buildLiveTelemetrySamples
 } from './telemetry-runtime.js';
@@ -611,8 +611,12 @@ async function createTelemetryStoreIfEnabled() {
     // telemetry.database.pool.max ist ausdrücklich gesetzt.
     const poolMax = Number(dbConfig.pool?.max) > 0 ? Number(dbConfig.pool.max) : dbPoolMax(dbBudgetMb({ totalMemBytes: os.totalmem() }));
     const pool = createPool({ ...dbConfig, pool: { ...(dbConfig.pool || {}), min: Math.min(2, poolMax), max: poolMax } });
-    // Connectivity check + schema init — fail fast if DB is unreachable
-    await pool.query('SELECT 1');
+    // Connectivity check + schema init. Mehrere Versuche: auf kleinen Geräten
+    // läuft der erste beim Hochfahren leicht in die Zeitüberschreitung.
+    const attempts = await connectWithRetry(pool, {
+      onRetry: (info) => pushLog('telemetry_store_connect_retry', info, 'warn'),
+    });
+    if (attempts > 1) pushLog('telemetry_store_connected', { attempts });
     await ensurePgSchema(pool);
     // Plan 08-01 Task 3: apply any pending SQL migrations under dvhub/db/migrations/
     // directly after ensurePgSchema so schema is always brought up to date before

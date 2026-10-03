@@ -148,22 +148,18 @@ VOLUME ["/etc/dvhub", "/var/lib/dvhub"]
 
 EXPOSE 8080
 
-# Ohne curl/wget: Node kann das selbst. Prüft dieselbe Route, die auch die
-# Fernüberwachung liest.
+# busybox-wget auf /healthz (docker/dvhub-healthcheck.sh) statt einer Node-
+# Laufzeit pro Prüfung: auf schwacher Hardware (eHive, Cortex-A55) kostete der
+# alte Check alle 30 s eine volle Node-Instanz plus /api/status.
 #
 # Der Port kommt aus der CONFIG, nicht aus der Umgebung: eine mitgebrachte
-# Config (z. B. von einer bestehenden Installation) bringt ihren eigenen
-# httpPort mit — der ausgelieferte Default ist 80. Würde hier stur
-# DVHUB_HTTP_PORT geprüft, meldete der Healthcheck „unhealthy", obwohl die
-# Anwendung sauber läuft. Umgebung dient nur als Rückfallwert.
+# Config bringt ihren eigenen httpPort mit (ausgelieferter Default 80).
 #
-# Zeiten auf schwache Zielhardware ausgelegt: auf einem Raspberry Pi 4 mit
-# echtem Datenbestand lief der Check waehrend der Startphase wiederholt in den
-# 5-Sekunden-Timeout, obwohl die Anwendung sauber antwortete (/api/status
-# danach 0,18 s). Ein Orchestrator haette den Container in dieser Phase
-# grundlos neu gestartet. Der EnergyLink ist knapper bestueckt als der Pi.
+# Zeiten auf schwache Zielhardware ausgelegt: während der Startphase kann die
+# Anwendung auf dem Pi/eHive einige Sekunden brauchen — start-period 90 s.
+COPY --chmod=0755 docker/dvhub-healthcheck.sh /usr/local/bin/dvhub-healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-  CMD node -e "const fs=require('fs');let p=process.env.DVHUB_HTTP_PORT||8080;try{const c=JSON.parse(fs.readFileSync(process.env.DV_APP_CONFIG||'/etc/dvhub/config.json','utf8'));if(Number.isFinite(c.httpPort))p=c.httpPort}catch{};fetch('http://127.0.0.1:'+p+'/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD ["/usr/local/bin/dvhub-healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "server.js"]

@@ -10,6 +10,7 @@
 # Der Entrypoint ruft dieses eine Skript auf (Herstellerprofil-Abgleich).
 !scripts/reconcile-vendor-profiles.mjs
 !docker/docker-entrypoint.sh
+!docker/dvhub-healthcheck.sh
 
 # Lizenztexte gehören ins Image — package.json verweist auf ../LICENSE.md.
 !LICENSE.md

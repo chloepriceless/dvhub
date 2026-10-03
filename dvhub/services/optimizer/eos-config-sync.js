@@ -190,14 +190,19 @@ export function buildEosOptimization(cfg) {
  * @param {number} intervalSec
  * @returns {{generations: number, individuals: number}}
  */
-export function pickGeneticSizing(intervalSec) {
+export function pickGeneticSizing(intervalSec, generationsOverride) {
   // Operator preference 2026-05-24: at 15-min resolution we'd rather have a
   // high-quality plan once an hour than a degraded plan every 5min. PV/load/
   // spot inputs don't shift fast enough to warrant a sub-hourly refresh at
   // this granularity. Hourly EMS-runs (see pickEmsIntervalSec) give the
   // genetic algo enough wallclock for the full upstream sizing even at
   // 192-slot horizons.
-  return { generations: 400, individuals: 300 };
+  // Kleine Boards (2026-10-03, eHive: Cortex-A55, gedrosselt ~600 MHz): 400
+  // Generationen dauerten ~45 min. Im Pi-Test lieferten 300×200 denselben Plan
+  // in der halben Zeit — optimizer.eosGeneticGenerations (50–1000) erlaubt das.
+  const g = Number(generationsOverride);
+  const generations = Number.isFinite(g) && g > 0 ? Math.min(1000, Math.max(50, Math.round(g))) : 400;
+  return { generations, individuals: 300 };
 }
 
 /**
@@ -510,7 +515,7 @@ export function createEosConfigSync(ctx) {
       curveSupported: caps.inverterEfficiencyCurve === true,
     });
     const optimization = buildEosOptimization(cfg);
-    const geneticSizing = pickGeneticSizing(optimization.interval);
+    const geneticSizing = pickGeneticSizing(optimization.interval, cfg?.optimizer?.eosGeneticGenerations);
 
     // Phase 21 hotfix (2026-05-23): provider auto-flip REVERTED. The
     // earlier idea (auto-set elecprice/load/pvforecast/feedintariff providers

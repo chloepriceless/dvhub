@@ -14,6 +14,7 @@
 import crypto from 'node:crypto';
 import { solarElevationDeg, elevationBand } from './solar-position.js';
 import { calibrate, estimateWouldHaveW, binKeyFor } from './calibration.js';
+import { localDate } from '../../tz-fast.js';
 
 const ARRAY_ID = 'total'; // single aggregated array (prod has one plant)
 
@@ -31,7 +32,7 @@ export function slotKey(tsMs) {
 
 /** Local (Europe/Berlin) calendar date 'YYYY-MM-DD' for an instant. Deterministic. */
 export function berlinDate(tsMs) {
-  return new Date(tsMs).toLocaleDateString('en-CA', { timeZone: 'Europe/Berlin' });
+  return localDate(tsMs, 'Europe/Berlin');
 }
 
 /**
