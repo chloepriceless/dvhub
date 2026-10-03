@@ -1617,6 +1617,7 @@
   // and matching the date history.js's loadHistorySummary defaults to.
 
   let currentView = 'day';
+  let vizObserver = null;
 
   function applyView(view, date) {
     const viewSel = document.getElementById('historyView');
@@ -1643,26 +1644,47 @@
       if (built.has(memoKey)) return;
       buildQueue.push({ card, memoKey });
     });
-    // RESEARCH §Pitfall 4 — stagger via a setTimeout chain so a 9-card burst
-    // serialises across frames instead of slamming the rate-limiter. 1ms
-    // increments spread 9 cards over ~9ms — well below the user-perceptible
-    // threshold yet enough to break the single-microtask fetch burst.
+    // Karten erst bauen, wenn sie in die Nähe des Bildschirms kommen
+    // (2026-10-03): auf dem Handy liefen sonst ~12 Karten-Abfragen gleich-
+    // zeitig mit der Übersicht los und teilten sich auf schwacher Hardware
+    // (eHive) Node-Thread und die 3–5 DB-Verbindungen — Übersicht 15–30 s,
+    // einzelne Karten mit 500 (Pool-Timeout). Ohne IntersectionObserver wie
+    // bisher gestaffelt (RESEARCH §Pitfall 4).
+    const startBuild = (card, memoKey) => {
+      // Re-check visibility at execution time — the user may have toggled
+      // the view again mid-stagger; don't build a now-hidden card.
+      const stillRelevant = (document.querySelector(`[data-viz-card="${card}"]`)
+        ?.dataset.showView || '').split(/\s+/).includes(currentView);
+      if (!stillRelevant || generation !== vizGeneration || built.has(memoKey)) return;
+      Promise.resolve()
+        .then(() => buildDispatch[card](currentView, d))
+        .then(() => { built.add(memoKey); })   // memo on SUCCESS only — T-09.3-27 retry
+        .catch((e) => {
+          if (e?.name === 'AbortError' || generation !== vizGeneration) return;
+          console.error('history-viz build failed', card, e);
+        });
+    };
+    if (vizObserver) { vizObserver.disconnect(); vizObserver = null; }
+    if (typeof IntersectionObserver === 'function') {
+      const pending = new Map(buildQueue.map((q) => [q.card, q.memoKey]));
+      vizObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const card = entry.target.dataset.vizCard;
+          const memoKey = pending.get(card);
+          vizObserver?.unobserve(entry.target);
+          if (memoKey) { pending.delete(card); startBuild(card, memoKey); }
+        }
+      }, { rootMargin: '300px 0px' });
+      for (const { card } of buildQueue) {
+        const el = document.querySelector(`[data-viz-card="${card}"]`);
+        if (el) vizObserver.observe(el);
+      }
+      return;
+    }
     let delay = 0;
     for (const { card, memoKey } of buildQueue) {
-      setTimeout(() => {
-        // Re-check visibility at execution time — the user may have toggled
-        // the view again mid-stagger; don't build a now-hidden card.
-        const stillRelevant = (document.querySelector(`[data-viz-card="${card}"]`)
-          ?.dataset.showView || '').split(/\s+/).includes(currentView);
-        if (!stillRelevant || generation !== vizGeneration) return;
-        Promise.resolve()
-          .then(() => buildDispatch[card](currentView, d))
-          .then(() => { built.add(memoKey); })   // memo on SUCCESS only — T-09.3-27 retry
-          .catch((e) => {
-            if (e?.name === 'AbortError' || generation !== vizGeneration) return;
-            console.error('history-viz build failed', card, e);
-          });
-      }, delay);
+      setTimeout(() => startBuild(card, memoKey), delay);
       delay += 1;
     }
   }

@@ -361,9 +361,78 @@ export function createHistoryVizAggregator(ctx) {
   // the downstream `value × resolution / 3_600_000` integration still yields
   // the exact bucket kWh.
   const BUCKET_SECONDS = { '15 minutes': 900, '1 hour': 3600, '1 day': 86400 };
+
+  // Gemeinsamer Abruf für Tag/Woche/Monat (2026-10-03): die Karten einer
+  // Ansicht fragten energy_slots_15m für denselben Zeitraum je einzeln ab, nur
+  // mit anderen Reihen — auf dem eHive (Cortex-A55) 3–15 s pro Karte, alle
+  // gleichzeitig. Jetzt einmal alle Reihen (deduppt wie unten) für den
+  // Zeitraum laden, 2 min vorhalten, je Karte in JS bündeln. 15 min / 1 h /
+  // 1 Tag sind in time_bucket auf UTC ausgerichtet — Bündeln per
+  // floor(ts / Raster) ist identisch. Jahr/Alle bleiben in SQL (Datenmenge).
+  const SHARED_SLOTS_TTL_MS = 120_000;
+  const SHARED_SLOTS_MAX = 3;
+  const sharedSlots = new Map(); // `${start}|${end}` → { at, promise }
+
+  function loadSharedEnergySlots(start, end) {
+    const key = `${new Date(start).toISOString()}|${new Date(end).toISOString()}`;
+    const now = Date.now();
+    const hit = sharedSlots.get(key);
+    if (hit && now - hit.at < SHARED_SLOTS_TTL_MS) return hit.promise;
+    const promise = (async () => {
+      const result = await db.query(`
+        SELECT DISTINCT ON (slot_start_utc, series_key)
+          slot_start_utc, series_key, value_num
+        FROM energy_slots_15m
+        WHERE unit = 'kWh'
+          AND value_num IS NOT NULL
+          AND slot_start_utc >= $1::timestamptz
+          AND slot_start_utc <  $2::timestamptz
+        ORDER BY slot_start_utc, series_key,
+          CASE source_kind WHEN 'vrm_import' THEN 0 WHEN 'local_live' THEN 1 ELSE 2 END
+      `, [start, end]);
+      const bySeries = new Map(); // series → { ts: number[], kwh: number[] }
+      for (const r of (result && Array.isArray(result.rows)) ? result.rows : []) {
+        let e = bySeries.get(r.series_key);
+        if (!e) { e = { ts: [], kwh: [] }; bySeries.set(r.series_key, e); }
+        e.ts.push(r.slot_start_utc instanceof Date ? r.slot_start_utc.getTime() : Date.parse(r.slot_start_utc));
+        e.kwh.push(Number(r.value_num) || 0);
+      }
+      return bySeries;
+    })();
+    sharedSlots.delete(key);
+    sharedSlots.set(key, { at: now, promise });
+    while (sharedSlots.size > SHARED_SLOTS_MAX) sharedSlots.delete(sharedSlots.keys().next().value);
+    promise.catch(() => { if (sharedSlots.get(key)?.promise === promise) sharedSlots.delete(key); });
+    return promise;
+  }
+
   async function fetchBucketedEnergySlots({ seriesKeys, start, end, view, intervalOverride = null }) {
     const bucket = intervalOverride || bucketIntervalForView(view);
     const bucketSeconds = BUCKET_SECONDS[bucket] || 900;
+    if (view !== 'year' && view !== 'all' && db && typeof db.query === 'function') {
+      const bySeries = await loadSharedEnergySlots(start, end);
+      const bucketMs = bucketSeconds * 1000;
+      const sums = new Map(); // `${bucketMs}|${key}` → { key, t, kwh }
+      for (const key of seriesKeys) {
+        const e = bySeries.get(key);
+        if (!e) continue;
+        for (let i = 0; i < e.ts.length; i += 1) {
+          const t = Math.floor(e.ts[i] / bucketMs) * bucketMs;
+          const k = `${t}|${key}`;
+          const acc = sums.get(k);
+          if (acc) acc.kwh += e.kwh[i];
+          else sums.set(k, { key, t, kwh: e.kwh[i] });
+        }
+      }
+      return [...sums.values()]
+        .sort((a, b) => a.t - b.t)
+        .map(({ key, t, kwh }) => ({
+          key,
+          ts: new Date(t).toISOString(),
+          value: (kwh * 3_600_000) / bucketSeconds,
+          resolution: bucketSeconds,
+        }));
+    }
     // `bucket` is one of three fixed literals (bucketIntervalForView /
     // intervalOverride) — never user input — so it is safe to inline.
     const sql = `
