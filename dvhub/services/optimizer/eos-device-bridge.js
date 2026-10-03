@@ -20,6 +20,7 @@ import { loadSchedulableDevices } from '../devices/schedulable.js';
 import { parseApplianceRowsDispatch, applianceDispatchToPlanSlots } from './eos-devices.js';
 import { computeHeaterPowerW } from '../devices/modulating-heater.js';
 import { isReadOnlyMode } from '../../read-only-guard.js';
+import { localDate } from '../../tz-fast.js';
 
 /** Ist `nowMs` in einem Dispatch-Fenster dieses Geräts? */
 export function deferrableOnNow(dispatch, eosId, nowMs) {
@@ -29,16 +30,34 @@ export function deferrableOnNow(dispatch, eosId, nowMs) {
 }
 
 /**
- * Aktueller PV-Überschuss (W). grid_total_w: negativ = Einspeisung, positiv = Bezug.
- * Verfügbar = -grid + eigene laufende Heizlast, dann auf ≥0 geklemmt. Der SIGNIERTE
- * Netzwert ist entscheidend (Codex-P1): bei Bezug (grid>0) senkt er den Wert korrekt,
- * damit der Heizstab bei fallender PV drosselt statt Netzstrom zu verheizen. Netzwert
- * unbekannt → 0 (fail-safe: kein Überschuss annehmen).
+ * Aktueller PV-Überschuss (W) für einen Heizstab, auf ≥0 geklemmt. Der SIGNIERTE
+ * Netzbezug senkt den Wert, damit der Heizstab bei fallender PV drosselt statt
+ * Netzstrom zu verheizen. Nichts bekannt → 0 (fail-safe: kein Überschuss annehmen).
  */
-export function surplusW(state, alreadyDrawingW = 0) {
+export function surplusW(state, alreadyDrawingW = 0, cfg = null) {
+  const own = Math.max(0, Number(alreadyDrawingW) || 0);
+  // Nur echter PV-Überschuss (2026-10-04): PV-Leistung, die gerade ins Netz
+  // geht, plus die eigene Heizleistung (ohne sie ginge auch die ins Netz) —
+  // abzüglich Netzbezug und Akku-Entladung. Damit zählt weder eine geplante
+  // Akku-Einspeisung (abends zu hohen Preisen) als „Überschuss“, noch heizt
+  // der Stab weiter, wenn die PV einbricht und Akku oder Netz ihn speisen.
+  // Die Flüsse sind bereits vorzeichenrichtig aufgeteilt (state.victron.*).
+  const v = state?.victron;
+  if (v && v.solarToGridW != null && v.gridImportW != null && v.batteryDischargeW != null) {
+    const pvToGrid = Number(v.solarToGridW);
+    const gridImport = Number(v.gridImportW);
+    const discharge = Number(v.batteryDischargeW);
+    if (Number.isFinite(pvToGrid) && Number.isFinite(gridImport) && Number.isFinite(discharge)) {
+      return Math.max(0, pvToGrid + own - Math.max(0, gridImport) - Math.max(0, discharge));
+    }
+  }
+  // Ohne aufgeteilte Flüsse: Netzwert, mit dem Vorzeichen der Anlage. Vorher
+  // stand hier fest „Einspeisung = negativ“ — bei gridPositiveMeans='feed_in'
+  // galt damit Netzbezug als Überschuss und der Heizstab lief mit Netzstrom.
   const grid = Number(state?.meter?.grid_total_w);
   if (!Number.isFinite(grid)) return 0;
-  return Math.max(0, -grid + Math.max(0, Number(alreadyDrawingW) || 0));
+  const exportW = cfg?.gridPositiveMeans === 'feed_in' ? grid : -grid;
+  return Math.max(0, exportW + own);
 }
 
 /**
@@ -60,6 +79,20 @@ export function createEosDeviceBridge(deps) {
   let lastError = null;
   const lastCmd = new Map();      // deviceId → commandKey
   const lastPower = new Map();    // deviceId → letzte Heizleistung (für Überschuss-Ramp)
+  // Heute an jeden Heizstab gelieferte Energie (aus der gestellten Leistung
+  // hochgerechnet) — die Lastvorhaltung für EOS zieht sie von der Tagesmenge ab
+  // (heater-load-reservation.js). state.optimizer.heaterEnergyToday[id] = {date, wh}.
+  let lastHeaterTickMs = 0;
+  function trackHeaterEnergy(id, powerW, nowMs, timeZone) {
+    if (!state) return;
+    state.optimizer = state.optimizer || {};
+    const book = state.optimizer.heaterEnergyToday = state.optimizer.heaterEnergyToday || {};
+    const today = localDate(nowMs, timeZone);
+    if (!book[id] || book[id].date !== today) book[id] = { date: today, wh: 0 };
+    // Zeit seit dem letzten Takt, höchstens 2 min (Pausen/Neustart nicht als Laufzeit zählen).
+    const dtH = lastHeaterTickMs > 0 ? Math.min(Math.max(0, nowMs - lastHeaterTickMs), 120_000) / 3600_000 : 0;
+    book[id].wh += Math.max(0, Number(powerW) || 0) * dtH;
+  }
   const lastDevice = new Map();   // deviceId → zuletzt gesteuertes (normalisiertes) Gerät
   // Abgeschlossene Läufe heute je planbarem Gerät (EOS 0.4 will sie als
   // Messwert <eosId>.cycles_completed — fehlt er, bricht EOS JEDEN Lauf ab,
@@ -176,7 +209,7 @@ export function createEosDeviceBridge(deps) {
           devicePlan.push({ device: d.id, kind: 'modulating', powerW: 0, reason: 'ev_charging', at: new Date(now()).toISOString() });
           continue;
         }
-        const avail = surplusW(state, lastPower.get(d.id) || 0);
+        const avail = surplusW(state, lastPower.get(d.id) || 0, getCfg());
         const { powerW, reason } = computeHeaterPowerW({
           maxPowerW: p.maxPowerW, minPowerW: p.minPowerW,
           surplusW: avail,
@@ -186,10 +219,13 @@ export function createEosDeviceBridge(deps) {
           deadlineMs: null,           // Deadline-Boost aktiv, sobald socPct verfügbar (Folgearbeit)
           nowMs: now(),
         });
+        // Die bis jetzt gestellte Leistung gilt für die Zeit seit dem letzten Takt.
+        trackHeaterEnergy(d.id, lastPower.get(d.id) || 0, now(), getCfg()?.optimizer?.timezone || 'Europe/Berlin');
         const r = await actuate(d, { powerW });
         status.push({ id: d.id, kind: 'modulating', powerW, reason, ok: r?.ok !== false });
         devicePlan.push({ device: d.id, kind: 'modulating', powerW, reason, at: new Date(now()).toISOString() });
       }
+      lastHeaterTickMs = now();
 
       lastStatus = status;
       // Geräte-Plan für optimizer-plan.js (plan.devices) / MQTT ablegen.

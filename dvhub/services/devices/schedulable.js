@@ -127,6 +127,9 @@ function validateModulatingPlan(p, errs) {
   }
   // Der Wallbox Vorrang lassen: solange das E-Auto lädt, 0 W (eos-device-bridge).
   if (p.pauseWhileEvCharging === true) out.pauseWhileEvCharging = true;
+  // Erwarteten Verbrauch NICHT in die Lastprognose für EOS legen (Standard: wird
+  // vorgehalten, sofern capacityWh gesetzt ist — heater-load-reservation.js).
+  if (p.reserveInForecast === false) out.reserveInForecast = false;
   return out;
 }
 

@@ -760,3 +760,47 @@ test('keepOnGridSlots drops forecast.solar sunrise/sunset stamps (EOS cadence wo
   ]);
   assert.deepEqual(keepOnGridSlots(null), []);
 });
+
+test('Heizstab: erwarteter Verbrauch geht als Last an EOS (Vorhaltung in Überschuss-Stunden)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    // Morgen 10–13 Uhr UTC: 4 kW PV bei 500 W Last → 3,5 kW Überschuss je Stunde.
+    const day = new Date(Date.now() + 24 * 3600_000); day.setUTCHours(0, 0, 0, 0);
+    const at = (h, q = 0) => new Date(day.getTime() + h * 3600_000 + q * 900_000).toISOString();
+    const hours = Array.from({ length: 24 }, (_, h) => h);
+    const forecast = {
+      pv: { slots: hours.flatMap((h) => [0, 1, 2, 3].map((q) => ({ start: at(h, q), powerW: h >= 10 && h <= 13 ? 4000 : 0 }))) },
+      load: { slots: hours.map((h) => ({ start: at(h), powerW: 500 })) },
+      price: { slots: hours.flatMap((h) => [0, 1, 2, 3].map((q) => ({ start: at(h, q), ctKwh: 10 }))) },
+    };
+    const heater = { id: 'Heizstaab', name: 'Heizstab', schedulable: true, kind: 'modulating', enabled: true, plan: { maxPowerW: 3000, minPowerW: 0, capacityWh: 8000 }, endpoint: { type: 'mqtt_expose' } };
+    const state = { victron: { soc: 50 } };
+    const logs = [];
+    const run = async (cfgExtra) => {
+      mock.requests.length = 0;
+      const bridge = createEosForecastBridge({
+        getCfg: () => ({ devices: [heater], optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, ...cfgExtra } }),
+        pushLog: (event, data) => logs.push({ event, data }),
+        forecastService: { buildForecastResponse: async () => forecast },
+        state,
+      });
+      await bridge.push();
+      const put = mock.requests.find((r) => r.method === 'PUT' && r.url.includes('/v1/prediction/import/LoadImport'));
+      assert.ok(put, 'LoadImport gesendet');
+      return Object.values(put.body.data).map((row) => row.loadforecast_power_w);
+    };
+
+    const withHeater = await run({});
+    const extraWh = withHeater.reduce((sum, w) => sum + (w - 500) / 4, 0);
+    assert.equal(Math.round(extraWh), 8000, 'genau die Tagesmenge des Heizstabs zusätzlich');
+    assert.equal(Math.max(...withHeater), 3500, 'höchstens Grundlast + Maximalleistung');
+    assert.deepEqual(Object.values(state.optimizer.heaterReservation.byDay), [8000]);
+    assert.ok(logs.some((l) => l.event === 'eos_forecast_bridge' && l.data.heaterReservedWh));
+
+    const off = await run({ heaterLoadReservation: false });
+    assert.ok(off.every((w) => w === 500), 'abgeschaltet: Lastprognose unverändert');
+    assert.equal(state.optimizer.heaterReservation, null);
+  } finally {
+    await mock.close();
+  }
+});

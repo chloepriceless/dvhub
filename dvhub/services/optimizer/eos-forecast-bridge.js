@@ -35,6 +35,9 @@ import { resolveEvSocPct } from './ev-soc.js';
 import http from 'node:http';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
 import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
+import { loadSchedulableDevices } from '../devices/schedulable.js';
+import { reserveHeaterLoad } from '../devices/heater-load-reservation.js';
+import { localDate } from '../../tz-fast.js';
 
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
@@ -643,6 +646,39 @@ export function createEosForecastBridge(ctx) {
           })
       : fixedFeedInSlots(priceSlotsCt, tariff);
 
+    // Heizstab (stufenlos regelbar): EOS plant ihn nicht — DVhub regelt ihn
+    // nach Überschuss. Sein erwarteter Verbrauch kommt als Last in die Prognose,
+    // damit EOS denselben PV-Überschuss nicht noch einmal verplant
+    // (heater-load-reservation.js). Abschaltbar je Gerät (plan.reserveInForecast
+    // = false) oder ganz (optimizer.heaterLoadReservation = false).
+    let loadSlotsForEos = loadSlots;
+    let heaterReservation = null;
+    if (cfg?.optimizer?.heaterLoadReservation !== false) {
+      try {
+        const heaters = loadSchedulableDevices(cfg).devices
+          .filter((d) => d.kind === 'modulating' && d.enabled !== false && d.plan?.reserveInForecast !== false)
+          .map((d) => ({ id: d.id, maxPowerW: d.plan?.maxPowerW, minPowerW: d.plan?.minPowerW, capacityWh: d.plan?.capacityWh }));
+        if (heaters.length) {
+          const reserved = reserveHeaterLoad({
+            loadSlots,
+            pvSlots,
+            feedInSlots,
+            heaters,
+            localDateOf: (ms) => localDate(ms, tz),
+            nowMs: Date.now(),
+            deliveredToday: state?.optimizer?.heaterEnergyToday || {},
+          });
+          if (reserved.reservedWh > 0) {
+            loadSlotsForEos = reserved.slots;
+            heaterReservation = { reservedWh: reserved.reservedWh, byDay: reserved.byDay };
+          }
+        }
+      } catch (e) {
+        if (pushLog) pushLog('eos_heater_reservation_error', { error: e?.message || String(e) });
+      }
+    }
+    if (state) { state.optimizer = state.optimizer || {}; state.optimizer.heaterReservation = heaterReservation; }
+
     const tasks = [
       {
         provider: 'PVForecastImport',
@@ -653,10 +689,10 @@ export function createEosForecastBridge(ctx) {
         provider: 'LoadImport',
         body: buildDataFrameBody(
           'loadforecast_power_w',
-          expandHourlyToQuarterHourly(loadSlots),
+          expandHourlyToQuarterHourly(loadSlotsForEos),
           tz,
         ),
-        rows: loadSlots.length * 4,
+        rows: loadSlotsForEos.length * 4,
       },
       {
         provider: 'ElecPriceImport',
@@ -706,7 +742,7 @@ export function createEosForecastBridge(ctx) {
     // das, was belegt ist; danach bewertet EOS die Restladung ueber seinen
     // Endwert.
     const horizon = await syncControlHorizon(
-      baseUrl, elecpriceSlots, feedInSlots.length ? feedInSlots : null, pvSlots, expandHourlyToQuarterHourly(loadSlots),
+      baseUrl, elecpriceSlots, feedInSlots.length ? feedInSlots : null, pvSlots, expandHourlyToQuarterHourly(loadSlotsForEos),
     );
     if (horizon.error) errors.horizon = horizon.error;
 
@@ -719,7 +755,7 @@ export function createEosForecastBridge(ctx) {
     const okAll = pushed.length === tasks.length + socRes.pushed.length
       && Object.keys(socRes.errors).length === 0;
     if (pushLog) {
-      pushLog('eos_forecast_bridge', { ok: okAll, pushed, errors, socSkipped: socRes.skipped });
+      pushLog('eos_forecast_bridge', { ok: okAll, pushed, errors, socSkipped: socRes.skipped, ...(heaterReservation ? { heaterReservedWh: heaterReservation.byDay } : {}) });
     }
     return { ok: okAll, pushed, errors };
   }
