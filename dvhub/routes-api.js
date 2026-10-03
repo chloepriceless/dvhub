@@ -651,7 +651,10 @@ export const ALLOWED_CONFIG_ROOTS = Object.freeze(new Set([
   // LLM stack removed 2026-06-13 — existing config.json files still carry the
   // `llm` block and the settings UI round-trips the whole config, so the root
   // must stay allowlisted (legacy echo) or every save is rejected.
-  'llm'
+  'llm',
+  // Prüfung der Systemuhr gegen einen Zeitserver (services/clock-check.js):
+  // { enabled, server, warnOffsetMs } — optional, Standard an.
+  'clockCheck'
 ]));
 
 // Meter/inverter manufacturer profiles (2026-06-13). The available manufacturers
