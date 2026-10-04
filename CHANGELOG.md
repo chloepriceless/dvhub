@@ -12,6 +12,17 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Läufe nochmals rund 30 % schneller bei identischem Ergebnis (DV-EOS rc1.15).** Vier
+  Stellen im Rechenkern: (1) der Vergleichsschlüssel je Kandidat wird in C geprüft und ohne
+  Kopie gebildet; (2) die Eigenverbrauchs-Tabelle hat einen eigenen schlanken
+  Zwischenspeicher je Lauf (vorher gemeinsamer Speicher mit nur 100 Plätzen, 18 % Fehlgriffe);
+  (3) die Slot-Schleife der Simulation rechnet mit einfachen Zahlen statt mit
+  NumPy-Einzelzugriffen und überspringt Laden/Einspeisen in Slots ohne PV-Überschuss;
+  (4) gleiche Kandidaten innerhalb einer Generation werden auch ohne Fitness-Cache nur einmal
+  gerechnet (kostet keinen Speicher; der Cache bräuchte 85–95 MB). Beide Referenz-Eingaben aus
+  dem EOS-Repo liefern bei 400 Generationen eine Byte für Byte gleiche Lösung. eHive live
+  (Auto + 2 Geräte, 3 Kerne): 269–294 s statt 408–437 s; Raspberry Pi 4: 197 s statt 233 s
+  (2 Kerne), 150 s statt 170 s (3 Kerne).
 - **EOS-Läufe 30–45 % schneller bei identischem Ergebnis (DV-EOS rc1.13).** Die
   Lastverteilung der Eigenverbrauchs-Tabelle wird je Lastwert nur einmal berechnet, und
   Nachkommen entstehen ohne `deepcopy`. Beide Referenz-Eingaben aus dem EOS-Repo liefern
