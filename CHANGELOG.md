@@ -12,6 +12,16 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Läufe weitere 11–20 % schneller bei identischem Ergebnis (DV-EOS rc1.16).** Sechs
+  Stellen im Rechenkern, jede einzeln gemessen (Mac, 36 h Steuerhorizont, 1–3 Kerne, mit und
+  ohne Auto): Entlade-Freigabe zuerst prüfen und Entlade-Buchführung in einfachen Zahlen
+  (7–9 %), Lade-Buchführung in einfachen Zahlen und vorsortierte Ladestufen (3–5 %),
+  Gerätelasten einmal je Kandidat summieren (3–5 %), Verschiebe-Ziele der Mutation einmal je
+  Lauf (bis 6 % bei 3 Kernen), Wirkungsgradkurve per binärer Suche und Horizont-Ende einmal je
+  Lauf (je 1–3 %). Alle Läufe der Messreihe liefern dieselbe Bilanz, beide Referenz-Eingaben
+  aus dem EOS-Repo bei 400 Generationen eine Byte für Byte gleiche Lösung. eHive live
+  (2 Geräte, 3 Kerne, 24 h + Ausblick): 300–313 s statt 371–388 s; Raspberry Pi 4: 174 s statt
+  197 s (2 Kerne), 134 s statt 150 s (3 Kerne).
 - **EOS-Läufe nochmals rund 30 % schneller bei identischem Ergebnis (DV-EOS rc1.15).** Vier
   Stellen im Rechenkern: (1) der Vergleichsschlüssel je Kandidat wird in C geprüft und ohne
   Kopie gebildet; (2) die Eigenverbrauchs-Tabelle hat einen eigenen schlanken
