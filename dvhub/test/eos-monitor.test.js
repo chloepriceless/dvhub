@@ -57,7 +57,7 @@ test('eos-monitor: Neustart (neue PID) verwirft alten Plan und meldet sich', asy
   await r.m.checkHealth(); await r.m.latestSolution();
   r.health = { ok: true, data: { pid: 11 } }; r.t += 30_000;
   await r.m.checkHealth();
-  assert.deepEqual(seen, [{ oldPid: 10, newPid: 11 }]);
+  assert.deepEqual(seen, [{ oldPid: 10, newPid: 11, reason: 'pid' }]);
   assert.equal(r.m.status().restarts, 1);
   assert.equal(r.m.status().solutionAt, null);
 });
@@ -108,6 +108,48 @@ test('eos-monitor: mit Push nur noch alle 10 min nachfragen, ohne Meldung wieder
   r.t += 61_000; await r.m.latestSolution();
   assert.equal(r.solCalls, after + 1, 'Push ausgefallen → wieder minütlich');
   assert.equal(r.m.status().push.active, false);
+});
+
+test('eos-monitor: Neustart im Container — gleiche PID, andere Startzeit', async () => {
+  const r = rig(); const seen = [];
+  r.m.onRestart((e) => seen.push(e));
+  r.health = { ok: true, data: { pid: 1, started_at: '2026-10-03T23:50:11+02:00' } };
+  await r.m.checkHealth(); await r.m.latestSolution();
+  r.t += 30_000; await r.m.checkHealth();
+  assert.equal(r.m.status().restarts, 0, 'gleiche Startzeit: kein Neustart');
+  r.health = { ok: true, data: { pid: 1, started_at: '2026-10-04T01:46:02+02:00' } }; r.t += 30_000;
+  await r.m.checkHealth();
+  assert.deepEqual(seen, [{ oldPid: 1, newPid: 1, reason: 'started_at' }]);
+  assert.equal(r.m.status().lastRestartReason, 'started_at');
+  assert.equal(r.m.status().solutionAt, null, 'Plan des alten Prozesses verworfen');
+});
+
+test('eos-monitor: Verbindung abgelehnt und wieder da = Neustart; Zeitüberschreitung nicht', async () => {
+  const r = rig(); const seen = [];
+  r.m.onRestart((e) => seen.push(e.reason));
+  r.health = { ok: true, data: { pid: 1 } };
+  await r.m.checkHealth();
+  // EOS rechnet: Zeitüberschreitung, dann wieder Antwort → kein Neustart.
+  r.health = { ok: false, error: 'EOS request timed out' }; r.t += 30_000; await r.m.checkHealth();
+  r.health = { ok: true, data: { pid: 1 } }; r.t += 30_000; await r.m.checkHealth();
+  assert.deepEqual(seen, []);
+  // Container wird neu erstellt: Verbindung abgelehnt, danach wieder da.
+  r.health = { ok: false, error: 'connect ECONNREFUSED 127.0.0.1:8503' }; r.t += 30_000; await r.m.checkHealth();
+  r.health = { ok: true, data: { pid: 1 } }; r.t += 30_000; await r.m.checkHealth();
+  assert.deepEqual(seen, ['connection_refused']);
+  r.t += 30_000; await r.m.checkHealth();
+  assert.deepEqual(seen, ['connection_refused'], 'nur einmal je Neustart');
+});
+
+test('eos-monitor: EOS beim DVhub-Start noch nicht da ist kein Neustart', async () => {
+  const r = rig(); const seen = [];
+  r.m.onRestart((e) => seen.push(e));
+  r.health = { ok: false, error: 'connect ECONNREFUSED 127.0.0.1:8503' };
+  await r.m.checkHealth();
+  r.health = { ok: true, data: { pid: 1, started_at: 'x' } }; r.t += 30_000;
+  await r.m.checkHealth();
+  assert.deepEqual(seen, []);
+  assert.equal(r.m.status().restarts, 0);
 });
 
 test('capability-probe: Timeout nach erfolgreicher Erkennung → gemerkte Fassung (bleibt EOS 0.4)', async () => {

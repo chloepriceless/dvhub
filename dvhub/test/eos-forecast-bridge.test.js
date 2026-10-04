@@ -804,3 +804,37 @@ test('Heizstab: erwarteter Verbrauch geht als Last an EOS (Vorhaltung in Übersc
     await mock.close();
   }
 });
+
+test('watchdog: Neustart im Container (PID bleibt 1) löst über den Monitor den Neu-Push aus', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    let beforeCount = 0;
+    const logs = [];
+    const monitor = { pid: 1, restarts: 0, lastRestartReason: null };
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: (ev, d) => logs.push({ ev, d }),
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state: { victron: { soc: 50 } },
+      eosMonitor: { status: () => ({ ...monitor }) },
+    };
+    const bridge = createEosForecastBridge(ctx);
+    const restarts = [];
+    bridge.start({
+      fireImmediately: false, intervalMs: 100000, watchdogMs: 20,
+      beforePush: async () => { beforeCount += 1; },
+      onEosRestart: (info) => { restarts.push(info); },
+    });
+    await new Promise((r) => setTimeout(r, 70));
+    assert.equal(beforeCount, 0, 'ohne Neustart kein Reconcile');
+    // EOS-Container neu erstellt: gleiche PID, der Monitor zählt den Neustart.
+    monitor.restarts = 1; monitor.lastRestartReason = 'started_at';
+    await new Promise((r) => setTimeout(r, 90));
+    bridge.stop();
+    assert.ok(beforeCount >= 1, 'Neustart → Einstellungen und Prognosen sofort neu');
+    assert.equal(restarts.length, 1, 'Optimierer genau einmal benachrichtigt');
+    assert.ok(logs.some((l) => l.ev === 'eos_restart_detected' && l.d.reason === 'started_at'));
+  } finally {
+    await mock.close();
+  }
+});

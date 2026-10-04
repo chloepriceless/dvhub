@@ -836,12 +836,23 @@ export function createEosForecastBridge(ctx) {
       const cfg = getCfg();
       if (cfg?.optimizer?.eosProxy?.enabled === false) return;
       const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
-      // PID vom zentralen EOS-Monitor (kein eigener Health-Aufruf), sonst selbst fragen.
-      const pid = ctx.eosMonitor ? ctx.eosMonitor.status().pid : await readEosPid(baseUrl);
+      // Neustart-Zähler des zentralen EOS-Monitors (erkennt auch Neustarts im
+      // Container, wo die Prozessnummer immer 1 ist — siehe eos-monitor.js);
+      // ohne Monitor die Prozessnummer selbst erfragen.
+      let pid;
+      let reason = 'pid';
+      if (ctx.eosMonitor) {
+        const mon = ctx.eosMonitor.status();
+        if (mon.pid === null && !mon.restarts) return; // EOS noch nie erreicht
+        pid = `restart#${mon.restarts || 0}`;
+        reason = mon.lastRestartReason || 'pid';
+      } else {
+        pid = await readEosPid(baseUrl);
+      }
       if (pid === null) return; // EOS unreachable / still starting — decide next poll
       if (lastEosPid !== null && pid !== lastEosPid) {
         const lastEosPidBefore = lastEosPid;
-        if (pushLog) pushLog('eos_restart_detected', { oldPid: lastEosPid, newPid: pid });
+        if (pushLog) pushLog('eos_restart_detected', { oldPid: lastEosPid, newPid: pid, reason });
         lastEosPid = pid;
         await tick(); // re-assert providers + re-push data immediately
         if (typeof opts.onEosRestart === 'function') {

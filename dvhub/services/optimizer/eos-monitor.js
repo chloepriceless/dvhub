@@ -16,6 +16,17 @@
 // inzwischen neu gestartet ist (dann gilt er nicht mehr für die Regelung,
 // latestSolution() liefert null, aber er ist weiterhin der letzte Plan).
 //
+// Neustart-Erkennung (2026-10-04): früher nur über die Prozessnummer aus
+// /v1/health. Im Container ist die immer 1 — ein neu gestartetes EOS blieb
+// unbemerkt, DVhub schickte Prognosen und Einstellungen erst mit dem nächsten
+// 15-Minuten-Push, die ersten Läufe brachen ab („Missing or invalid PV“).
+// Jetzt gilt als Neustart, wenn EINES davon zutrifft:
+//   - die Prozessnummer hat sich geändert (native Installation),
+//   - die Startzeit des Prozesses hat sich geändert (health.started_at,
+//     DV-EOS ab rc1.14),
+//   - EOS hat Verbindungen abgelehnt und antwortet wieder (ein laufender
+//     Server lehnt nicht ab; Zeitüberschreitungen zählen nicht — da rechnet er).
+//
 // Zustände:
 //   disabled — EOS-Anbindung aus
 //   unknown  — noch keine Antwort seit dem Start
@@ -43,9 +54,11 @@ const isTimeout = (err) => /timed out|timeout/i.test(String(err || ''));
  */
 export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = () => Date.now() }) {
   const st = {
-    status: 'unknown', pid: null, version: null,
+    status: 'unknown', pid: null, version: null, startedAt: null,
     lastCheckAt: null, lastOkAt: null, lastError: null, restarts: 0, lastRestartAt: null,
+    lastRestartReason: null,
   };
+  let refusedSinceOk = false; // Verbindung abgelehnt, seit EOS zuletzt geantwortet hat
   let solution = null;       // { data, at }
   let displayed = null;      // { data, at } — überlebt EOS-Neustarts
   let solutionTryAt = 0;
@@ -68,17 +81,27 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
       if (res?.ok) {
         const pid = Number(res.data?.pid);
         const newPid = Number.isFinite(pid) ? pid : null;
-        const restarted = st.pid !== null && newPid !== null && newPid !== st.pid;
+        const newStartedAt = typeof res.data?.started_at === 'string' && res.data.started_at ? res.data.started_at : null;
+        const pidChanged = st.pid !== null && newPid !== null && newPid !== st.pid;
+        const startChanged = st.startedAt !== null && newStartedAt !== null && newStartedAt !== st.startedAt;
+        // Nur wenn wir EOS in diesem Prozess schon einmal erreicht hatten: ein
+        // beim DVhub-Start noch nicht laufendes EOS ist kein „Neustart“.
+        const cameBack = refusedSinceOk && st.lastOkAt !== null;
+        const reason = pidChanged ? 'pid' : (startChanged ? 'started_at' : (cameBack ? 'connection_refused' : null));
+        const restarted = reason !== null;
         const oldPid = st.pid;
+        refusedSinceOk = false;
         Object.assign(st, { status: 'up', lastOkAt: now(), lastError: null, version: res.data?.version || st.version });
         if (newPid !== null) st.pid = newPid;
+        if (newStartedAt !== null) st.startedAt = newStartedAt;
         if (restarted) {
-          st.restarts += 1; st.lastRestartAt = now();
+          st.restarts += 1; st.lastRestartAt = now(); st.lastRestartReason = reason;
           solution = null; // Plan des alten Prozesses gilt nicht mehr
-          for (const fn of restartListeners) { try { await fn({ oldPid, newPid }); } catch { /* Aufrufer loggt */ } }
+          for (const fn of restartListeners) { try { await fn({ oldPid, newPid, reason }); } catch { /* Aufrufer loggt */ } }
         }
       } else {
         st.lastError = res?.error || 'no_response';
+        if (/ECONNREFUSED|ECONNRESET|socket hang up/i.test(st.lastError)) refusedSinceOk = true;
         const recentlyOk = st.lastOkAt !== null && now() - st.lastOkAt < EOS_BUSY_GRACE_MS;
         st.status = isTimeout(st.lastError) && recentlyOk ? 'busy' : 'down';
       }

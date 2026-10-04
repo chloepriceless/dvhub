@@ -708,6 +708,11 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     eebus: ctx.eebus?.summary?.() ?? null,
     p14a: ctx.p14a?.summary?.() ?? null,
     clock: state.clock ?? null,
+    // Heizstab: Vorhaltung in der EOS-Lastprognose und heute gelieferte Energie.
+    heater: {
+      reservation: state.optimizer?.heaterReservation ?? null,
+      energyToday: state.optimizer?.heaterEnergyToday ?? null,
+    },
     telemetry: {
       ...runtimeSnapshot.telemetry,
       historyImport: runtimeSnapshot.historyImport

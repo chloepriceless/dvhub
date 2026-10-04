@@ -9,9 +9,11 @@
 // bei Abgleich nur „beim Booten + täglich“).
 //
 // Dieser Dienst STELLT nichts. Er fragt stündlich per SNTP die Abweichung ab,
-// legt sie im Status ab (state.clock) und schreibt eine Warnung ins Protokoll,
-// sobald die Uhr mehr als warnMs danebenliegt (einmal je Zustandswechsel).
-// Ohne Internet bleibt es bei einem stillen „nicht prüfbar“.
+// legt sie im Status ab (state.clock) und schreibt sie ins Protokoll
+// (clock_check, eine Zeile je Prüfung — so ist der Verlauf der Abweichung
+// nachlesbar). Liegt die Uhr mehr als warnMs daneben, kommt zusätzlich eine
+// Warnung (einmal je Zustandswechsel). Ohne Internet bleibt es bei einem
+// stillen „nicht prüfbar“.
 
 import dgram from 'node:dgram';
 
@@ -113,6 +115,7 @@ export function createClockCheck(ctx, { query = querySntp, now = () => Date.now(
       const rounded = Math.round(offsetMs);
       const ok = Math.abs(rounded) <= warnMs;
       state.clock = { enabled: true, ok, offsetMs: rounded, delayMs: Math.round(delayMs), server, checkedAt: now(), error: null };
+      pushLog('clock_check', { offsetMs: rounded, offsetSec: Math.round(rounded / 10) / 100, delayMs: Math.round(delayMs), server, ok });
       if (!ok && !warned) {
         warned = true;
         pushLog('clock_offset_warning', {

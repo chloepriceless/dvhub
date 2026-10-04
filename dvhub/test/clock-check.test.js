@@ -74,17 +74,19 @@ test('querySntp: fragt Port 123 und liefert die Abweichung; Zeitüberschreitung 
 
 test('Dienst: Status, Warnung einmal je Zustandswechsel, kein Alarm ohne Internet', async () => {
   const logs = [];
+  const checks = [];
   const state = {};
   let result = { offsetMs: 120.4, delayMs: 18 };
   let cfg = {};
   const svc = createClockCheck(
-    { getCfg: () => cfg, state, pushLog: (event, data, level) => logs.push({ event, data, level }) },
+    { getCfg: () => cfg, state, pushLog: (event, data, level) => { if (event === 'clock_check') checks.push(data); else logs.push({ event, data, level }); } },
     { query: async ({ server }) => { if (result instanceof Error) throw result; return { ...result, server }; }, now: () => 42 }
   );
 
   await svc.check();
   assert.deepEqual(state.clock, { enabled: true, ok: true, offsetMs: 120, delayMs: 18, server: 'pool.ntp.org', checkedAt: 42, error: null });
   assert.equal(logs.length, 0);
+  assert.deepEqual(checks, [{ offsetMs: 120, offsetSec: 0.12, delayMs: 18, server: 'pool.ntp.org', ok: true }], 'jede Prüfung steht im Protokoll');
 
   result = { offsetMs: CLOCK_WARN_OFFSET_MS + 700, delayMs: 20 };
   await svc.check(); await svc.check();
@@ -97,6 +99,8 @@ test('Dienst: Status, Warnung einmal je Zustandswechsel, kein Alarm ohne Interne
   assert.equal(state.clock.error, 'timeout');
   assert.equal(state.clock.ok, false, 'letzter bekannter Stand bleibt');
   assert.equal(logs.length, 1, 'nicht prüfbar ist kein Alarm');
+  assert.equal(checks.length, 3, 'ohne Antwort keine Prüfzeile');
+  assert.equal(checks[2].offsetSec, 2.7);
 
   result = { offsetMs: -30, delayMs: 20 };
   await svc.check();

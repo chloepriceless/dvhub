@@ -171,6 +171,13 @@ verweist hierher.
 
 ### Behoben
 
+- **EOS-Neustart im Container wurde nicht erkannt.** DVhub erkannte ihn nur an einer
+  geänderten Prozessnummer; im Container ist die immer 1. Prognosen und Einstellungen kamen
+  dann erst mit dem nächsten 15-Minuten-Push, die ersten Läufe brachen ab. Jetzt zählt auch
+  eine geänderte Startzeit (`started_at`, DV-EOS rc1.14) und „Verbindung abgelehnt, wieder
+  da“. eHive: Neustart nach 58 s erkannt, Prognosen nach 95 s neu, Lauf nach 2 min.
+- **Uhr-Prüfung schreibt jede Messung ins Protokoll** (`clock_check` mit der Abweichung in
+  Sekunden); der Status zeigt zusätzlich die Heizstab-Vorhaltung (`heater`).
 - **Heizstab lief mit Netzbezug statt mit PV-Überschuss.** Die Überschuss-Regelung nahm
   fest „Einspeisung = negativer Netzwert“ an. Auf Anlagen mit `gridPositiveMeans: feed_in`
   galt damit Netzbezug als Überschuss (nachts kleine Leistungen aus dem Netz), echte
