@@ -12,6 +12,14 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Läufe weitere 10–16 % schneller bei identischem Ergebnis (DV-EOS rc1.17).** Drei
+  Stellen, jede einzeln gemessen (Mac, 36 h, 1–3 Kerne, mit und ohne Auto): der Restwert des
+  Speichers wird je Kandidat nur noch als Betrag berechnet, der Bericht dazu nur für die
+  fertige Lösung (5–8 %); Gerätestarts und Lastkurven werden je Kombination einmal berechnet
+  (2–4 %); das Entladen eines Slots wird in einem Zug gerechnet (2–3 %). Überall dieselbe
+  Bilanz, beide Referenz-Eingaben aus dem EOS-Repo Byte für Byte gleich. Raspberry Pi 4:
+  145 s statt 174 s (2 Kerne), 116 s statt 134 s (3 Kerne); eHive ohne Lüfter (gedrosselt,
+  ohne Geräte): 384–416 s statt 447–504 s.
 - **EOS-Läufe weitere 11–20 % schneller bei identischem Ergebnis (DV-EOS rc1.16).** Sechs
   Stellen im Rechenkern, jede einzeln gemessen (Mac, 36 h Steuerhorizont, 1–3 Kerne, mit und
   ohne Auto): Entlade-Freigabe zuerst prüfen und Entlade-Buchführung in einfachen Zahlen
