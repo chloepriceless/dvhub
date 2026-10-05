@@ -12,6 +12,13 @@ verweist hierher.
 
 ### Neu
 
+- **Integrationen: Liste links, Einstellungen in der Mitte.** Für die inzwischen 15 Integrationen
+  war das Kachelraster zu eng. Auf breiten Bildschirmen (ab 1000 px) steht links eine kompakte
+  Liste mit Status, in der Mitte die Kachel der gewählten Integration und direkt darunter ihre
+  Einstellungen — das, was bisher rechts als Seitenleiste aufging. Die Auswahl steht in der
+  Adresse (`#schlüssel`) und bleibt beim Neuladen erhalten; die MQTT-Kacheln sind ein eigener
+  Eintrag in der Liste. Auf dem Handy bleibt es bei Kacheln mit Seitenleiste. Im
+  Wallbox-Bereich erscheint „Bei Stopp“ nur noch mit evcc.
 - **E-Auto: Einstellungen je Wallbox-Typ, Ladestand aus wählbarer Quelle.** Die evcc-Felder
   („evcc-Ladepunkt“, „evcc-Modus bei Stopp“) erscheinen nur noch, wenn unter Integrationen evcc
   als Wallbox gewählt ist; der Schalter heißt jetzt „Wallbox nach EOS-Plan steuern“ und gilt

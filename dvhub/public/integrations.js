@@ -160,6 +160,139 @@
   // Used by #dv-drawer-mqtt (refactored), #dv-drawer-notifications, #dv-drawer-vrm,
   // #dv-drawer-forecast. Per CONTEXT D-01/D-14 + UI-SPEC Component Inventory 1.
 
+  /* ===================== ZWEISPALTIGES LAYOUT ===================== */
+  // Ab 1000 px: links die Liste, in der Mitte Kachel + Einstellungen der
+  // gewählten Integration. Die Einstellungen sind dieselben .dv-drawer-Elemente
+  // wie in der Seitenleiste — sie werden nur in die Mitte gehängt statt von
+  // rechts eingeblendet (Klasse dv-drawer--inline). Darunter bleibt alles wie
+  // bisher. Jede Seitenleiste läuft über createDvDrawer, darum reicht der eine
+  // Einhängepunkt dort.
+  var intgSelectedKey = null;      // gewählte Integration (data-system) oder '__mqttTiles'
+  var intgPrimaryRoot = null;      // Einstellungs-Element der gewählten Integration
+  var intgLastMounted = null;
+  var intgInline = (function () {
+    var mq = window.matchMedia ? window.matchMedia('(min-width: 1000px)') : null;
+    function active() { return !!(mq && mq.matches && document.getElementById('intg-detail-body')); }
+    function hideOthers(except) {
+      var open = document.querySelectorAll('.dv-drawer.dv-drawer--inline');
+      for (var i = 0; i < open.length; i++) {
+        if (open[i] !== except && !open[i].hidden) {
+          // Über den Schließen-Knopf des Elements, damit dessen Aufräumen läuft
+          // (Abfragen stoppen usw.) — ohne danach die Hauptansicht neu zu öffnen.
+          open[i]._intgSilentClose = true;
+          var btn = open[i].querySelector('.dv-drawer-close');
+          if (btn) btn.click(); else { open[i].hidden = true; open[i].classList.remove('is-open'); open[i]._intgInlineOpen = false; }
+          open[i]._intgSilentClose = false;
+        }
+      }
+    }
+    function mount(root) {
+      var body = document.getElementById('intg-detail-body');
+      hideOthers(root);
+      var editor = document.getElementById('mqttTilesEditor');
+      if (editor && editor.parentNode === body) editor.hidden = true;
+      if (root.parentNode !== body) body.appendChild(root);
+      root.classList.add('dv-drawer--inline');
+      root.hidden = false;
+      intgLastMounted = root;
+      var hint = document.getElementById('intg-detail-nosettings');
+      if (hint) hint.hidden = true;
+    }
+    function unmount(root) {
+      root.hidden = true;
+      root.classList.remove('is-open');
+    }
+    function afterClose(root) {
+      if (root._intgSilentClose) return;
+      // Eine Nebenansicht (z. B. Logs) wurde geschlossen: zurück zu den
+      // Einstellungen der gewählten Integration.
+      if (intgPrimaryRoot && root !== intgPrimaryRoot && intgSelectedKey && intgSelectedKey !== '__mqttTiles') {
+        openDrawerForSystem(intgSelectedKey);
+      }
+    }
+    return { active: active, mount: mount, unmount: unmount, afterClose: afterClose, hideOthers: hideOthers, mq: mq };
+  })();
+
+  // Wechsel über die Breitengrenze (Fenster verkleinert, Tablet gedreht):
+  // schmal → Einstellungen wieder als Seitenleiste, MQTT-Kacheln wieder
+  // sichtbar; breit → gewählte Integration wieder in die Mitte.
+  function intgLayoutChanged() {
+    var editor = document.getElementById('mqttTilesEditor');
+    if (intgInline.active()) {
+      var key = intgSelectedKey;
+      intgSelectedKey = null;
+      if (lastData) selectSystem(key || SYSTEMS[0].key);
+      return;
+    }
+    intgInline.hideOthers(null);
+    var inl = document.querySelectorAll('.dv-drawer.dv-drawer--inline');
+    for (var i = 0; i < inl.length; i++) inl[i].classList.remove('dv-drawer--inline');
+    intgPrimaryRoot = null;
+    if (editor) editor.hidden = false;
+    var box = document.getElementById('intg-detail-card');
+    if (box) box.innerHTML = '';
+  }
+  if (intgInline.mq) {
+    if (intgInline.mq.addEventListener) intgInline.mq.addEventListener('change', intgLayoutChanged);
+    else if (intgInline.mq.addListener) intgInline.mq.addListener(intgLayoutChanged);
+  }
+
+  function intgSystemByKey(key) {
+    for (var i = 0; i < SYSTEMS.length; i++) if (SYSTEMS[i].key === key) return SYSTEMS[i];
+    return null;
+  }
+
+  // Kachel der gewählten Integration oben in der Mitte (wird bei jeder
+  // Statusabfrage erneuert; die Einstellungen darunter bleiben stehen).
+  function renderIntgDetailCard() {
+    var box = document.getElementById('intg-detail-card');
+    if (!box) return;
+    var sys = intgSelectedKey ? intgSystemByKey(intgSelectedKey) : null;
+    if (!sys || !lastData || !intgInline.active()) { box.innerHTML = ''; return; }
+    var sysData = lastData[sys.key] || {};
+    box.innerHTML = buildCard(sys, sysData, getSystemStatus(sys.key, sysData));
+    applyPulseHeights(box);
+  }
+
+  function markIntgSelection() {
+    var cards = document.querySelectorAll('#intg-list .conn-card');
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].classList.toggle('is-selected', cards[i].getAttribute('data-system') === intgSelectedKey);
+    }
+    var extra = document.getElementById('intg-extra-mqtt-tiles');
+    if (extra) extra.classList.toggle('is-selected', intgSelectedKey === '__mqttTiles');
+    var empty = document.getElementById('intg-detail-empty');
+    if (empty) empty.hidden = !!intgSelectedKey;
+  }
+
+  // Integration wählen: Kachel + Einstellungen in die Mitte. Liefert false,
+  // wenn das zweispaltige Layout nicht aktiv ist (dann gilt der alte Weg).
+  function selectSystem(key) {
+    if (!intgInline.active()) return false;
+    intgSelectedKey = key;
+    intgPrimaryRoot = null;
+    intgLastMounted = null;
+    try { history.replaceState(null, '', '#' + encodeURIComponent(key)); } catch (_) { /* nur Komfort */ }
+    var body = document.getElementById('intg-detail-body');
+    var hint = document.getElementById('intg-detail-nosettings');
+    var editor = document.getElementById('mqttTilesEditor');
+    if (key === '__mqttTiles') {
+      intgInline.hideOthers(null);
+      if (editor && body) { if (editor.parentNode !== body) body.appendChild(editor); editor.hidden = false; }
+      if (hint) hint.hidden = true;
+    } else {
+      if (editor && editor.parentNode === body) editor.hidden = true;
+      var opened = openDrawerForSystem(key);
+      var marked = document.querySelectorAll('.dv-drawer.is-primary');
+      for (var m = 0; m < marked.length; m++) marked[m].classList.remove('is-primary');
+      if (opened && intgLastMounted) { intgPrimaryRoot = intgLastMounted; intgPrimaryRoot.classList.add('is-primary'); }
+      else { intgInline.hideOthers(null); if (hint) hint.hidden = false; }
+    }
+    markIntgSelection();
+    renderIntgDetailCard();
+    return true;
+  }
+
   function createDvDrawer(opts) {
     var root = opts && opts.root;
     var backdrop = opts && opts.backdrop;
@@ -180,6 +313,17 @@
       var others = document.querySelectorAll('.dv-drawer.is-open');
       for (var i = 0; i < others.length; i++) {
         if (others[i] !== root) others[i].classList.remove('is-open');
+      }
+      if (intgInline.active()) {
+        // Zweispaltiges Layout: der Inhalt der Seitenleiste steht in der Mitte.
+        if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+        intgInline.mount(root);
+        root.classList.add('is-open');
+        if (!root._intgInlineOpen) {
+          root._intgInlineOpen = true;
+          if (onOpen) { try { onOpen(); } catch (e) { console.debug('[integrations] drawer onOpen threw', e); } }
+        }
+        return;
       }
       // Snapshot trigger for return-focus on close.
       restoreFocusEl = document.activeElement;
@@ -203,6 +347,14 @@
 
     function close() {
       if (!root) return;
+      if (root.classList.contains('dv-drawer--inline')) {
+        var wasOpen = !!root._intgInlineOpen;
+        root._intgInlineOpen = false;
+        intgInline.unmount(root);
+        if (wasOpen && onClose) { try { onClose(); } catch (e) { console.debug('[integrations] drawer onClose threw', e); } }
+        intgInline.afterClose(root);
+        return;
+      }
       if (escHandler) { document.removeEventListener('keydown', escHandler); escHandler = null; }
       root.classList.remove('is-open');
       if (backdrop) backdrop.classList.remove('is-open');
@@ -872,6 +1024,17 @@
     applyPulseHeights(list);
     updateFilterCounts(counts);
     applyFilter(currentFilter);
+    if (intgInline.active()) {
+      if (!intgSelectedKey) {
+        // Erste Anzeige: die Integration aus der Adresse (#eebus), sonst die erste.
+        var wanted = '';
+        try { wanted = decodeURIComponent((location.hash || '').replace(/^#/, '')); } catch (_) { wanted = ''; }
+        selectSystem(wanted === '__mqttTiles' || intgSystemByKey(wanted) ? wanted : SYSTEMS[0].key);
+      } else {
+        markIntgSelection();
+        renderIntgDetailCard();
+      }
+    }
   }
 
   function updateFilterCounts(counts) {
@@ -1756,6 +1919,7 @@
     var konfigLink = e.target.closest('a[data-action="card-konfig"]');
     if (konfigLink) {
       var kKey = konfigLink.getAttribute('data-system') || '';
+      if (selectSystem(kKey)) { e.preventDefault(); return; }
       if (openDrawerForSystem(kKey)) e.preventDefault();
       return;
     }
@@ -1764,9 +1928,19 @@
     if (e.target.closest('a')) return;
 
     // Card → drawer routing by data-system (single shared path with "Konfig.").
+    var extraBtn = e.target.closest('[data-intg-extra="mqttTiles"]');
+    if (extraBtn) {
+      if (selectSystem('__mqttTiles')) { e.preventDefault(); return; }
+      var editorEl = document.getElementById('mqttTilesEditor');
+      if (editorEl && editorEl.scrollIntoView) editorEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
     var card = e.target.closest('.conn-card[data-system]');
     if (card) {
+      // Die Kachel in der Mitte zeigt nur den Zustand — sie wählt nichts neu.
+      if (card.closest('#intg-detail-card')) return;
       var cKey = card.getAttribute('data-system');
+      if (selectSystem(cKey)) { e.preventDefault(); return; }
       if (openDrawerForSystem(cKey)) { e.preventDefault(); return; }
     }
   });
@@ -2319,6 +2493,7 @@
       var st = el('evcc-status');
       if (st) {
         st.hidden = false;
+        st.classList.toggle('is-ok', !!(data.url && data.reachable));
         var fatal = Array.isArray(data.fatal) ? data.fatal : [];
         if (!data.url) st.textContent = 'Noch keine Adresse konfiguriert.';
         else if (data.reachable) st.textContent = '✓ Erreichbar · ' + data.loadpointCount + ' Ladepunkt(e)';
@@ -2405,6 +2580,9 @@
     show('wallbox-openevse-fields', t === 'openevse');
     show('wallbox-goe-fields', t === 'goe');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
+    // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
+    var only = document.querySelectorAll('[data-wallbox-only]');
+    for (var i = 0; i < only.length; i++) only[i].hidden = only[i].getAttribute('data-wallbox-only') !== t;
   }
   function wallboxBody() {
     var v = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; };

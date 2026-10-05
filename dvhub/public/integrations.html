@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=20260927-scheddev" />
+  <link rel="stylesheet" href="/integrations.css?v=20261005-layout" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -72,6 +72,12 @@
 
       <!-- Filter toolbar — segmented control filters .conn-card by data-status.
            Counts are filled by integrations.js after the status poll. -->
+      <!-- Zweispaltig ab 1000 px (2026-10-05): links die Liste aller Integrationen,
+           in der Mitte Kachel + Einstellungen der gewählten Integration — der
+           Inhalt, der sonst rechts als Seitenleiste aufging. Darunter bleibt es
+           beim Kachelraster mit Seitenleiste. integrations.js#selectSystem(). -->
+      <div class="intg-layout" id="intg-layout">
+      <div class="intg-side">
       <section class="card int-toolbar" aria-label="Filter">
         <div class="segmented" role="tablist" aria-label="Status-Filter">
           <button id="intg-filter-all" class="is-active" type="button" data-status-filter="all" role="tab" aria-selected="true">
@@ -92,6 +98,18 @@
            non-empty so it never showed, and its is-empty CSS overrode [hidden]
            → a blank full-width card. renderAll no longer references it. -->
       <section id="intg-list" class="conn-grid" aria-label="Verbundene Systeme"></section>
+      <button type="button" class="intg-extra" id="intg-extra-mqtt-tiles" data-intg-extra="mqttTiles">
+        <span class="intg-extra-logo" aria-hidden="true">&#9638;</span>
+        <span class="intg-extra-text"><strong>MQTT-Kacheln</strong><small>Family-Dashboard</small></span>
+      </button>
+      </div>
+      <section class="intg-detail" id="intg-detail" aria-label="Gew&auml;hlte Integration">
+        <div class="intg-detail-card" id="intg-detail-card"></div>
+        <p class="intg-detail-empty" id="intg-detail-empty">Links eine Integration w&auml;hlen &mdash; hier erscheinen ihr Zustand und ihre Einstellungen.</p>
+        <p class="intg-detail-empty" id="intg-detail-nosettings" hidden>F&uuml;r diese Integration gibt es hier keine eigenen Einstellungen.</p>
+        <div class="intg-detail-body" id="intg-detail-body"></div>
+      </section>
+      </div>
 
       <!-- Family-Dashboard MQTT tiles editor — operator configures generic
            MQTT topics (Wallbox, any consumer, sensor) that appear as cards
@@ -655,7 +673,7 @@
                 <span class="field-label">Max. Ladeleistung (W)</span>
                 <input type="number" class="input mono" id="evcc-eos-maxchargew" min="1000" max="50000" step="100">
               </label>
-              <label class="dv-field">
+              <label class="dv-field" data-wallbox-only="evcc">
                 <span class="field-label">Bei Stopp</span>
                 <select class="input" id="evcc-eos-stopmode">
                   <option value="off">Aus (streng nach Plan)</option>
@@ -1429,6 +1447,6 @@
   <script src="/pv-strings-drawer.js?v=20260923"></script>
   <script src="/eebus-drawer.js?v=20261002"></script>
   <script src="/p14a-drawer.js?v=20261002"></script>
-  <script src="/integrations.js?v=20261001-wallbox4"></script>
+  <script src="/integrations.js?v=20261005-layout"></script>
 </body>
 </html>

@@ -838,6 +838,12 @@
   line-height: 1.4;
 }
 .dv-field-validation[hidden] { display: none; }
+.dv-field-validation.is-ok {
+  background: rgba(52, 211, 153, 0.08);
+  border-color: rgba(52, 211, 153, 0.3);
+  border-left-color: var(--green, #34d399);
+  color: var(--green, #34d399);
+}
 .dv-field-validation.is-warning {
   background: rgba(255, 212, 33, 0.08);
   border-color: rgba(255, 212, 33, 0.3);
@@ -1436,3 +1442,136 @@
 .eebus-list .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 .eebus-list .dot-ok { background: var(--green); }
 .eebus-list .dot-off { background: var(--muted, #777); }
+
+
+/* ===== Zweispaltiges Layout (2026-10-05) =====
+   Ab 1000 px: links die Liste aller Integrationen, in der Mitte Kachel und
+   Einstellungen der gewählten. Die Einstellungen sind die .dv-drawer-Elemente
+   der Seitenleiste; integrations.js hängt sie mit .dv-drawer--inline in die
+   Mitte. Unter 1000 px gilt weiter Kachelraster + Seitenleiste. */
+.intg-extra { display: none; }
+.intg-detail-card:empty { display: none; }
+.intg-detail-empty { display: none; }
+
+@media (min-width: 1000px) {
+  /* Die Seite schrumpft sonst auf die Breite ihres Inhalts — je nach gewählter
+     Integration wäre die Mitte mal breit, mal schmal. */
+  .page-content { width: 100%; box-sizing: border-box; }
+  .intg-layout {
+    display: grid;
+    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+  .intg-side {
+    position: sticky;
+    top: 68px;   /* unter der Kopfleiste (56 px, sticky) */
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: calc(100vh - 80px);
+    min-width: 0;
+  }
+  .intg-side .int-toolbar { padding: 8px; margin: 0; }
+  .intg-side .int-toolbar .segmented { width: 100%; display: flex; }
+  .intg-side .int-toolbar .segmented button { flex: 1 1 0; padding-left: 6px; padding-right: 6px; font-size: 11px; white-space: nowrap; }
+
+  /* Liste: eine Zeile je Integration */
+  .intg-side .conn-grid {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    overflow-y: auto;
+    padding-right: 2px;
+    min-height: 0;
+  }
+  .intg-side .conn-card {
+    padding: 8px 10px;
+    gap: 0;
+    cursor: pointer;
+    border-radius: var(--r-sm, 8px);
+  }
+  .intg-side .conn-card:hover { transform: none; }
+  .intg-side .conn-card .conn-stats,
+  .intg-side .conn-card .conn-pulse,
+  .intg-side .conn-card .conn-badges,
+  .intg-side .conn-card .conn-actions,
+  .intg-side .conn-card .conn-identity,
+  .intg-side .conn-card .conn-cat { display: none; }
+  .intg-side .conn-card .conn-head { gap: 8px; align-items: center; }
+  .intg-side .conn-card .conn-logo { width: 28px; height: 28px; font-size: 11px; flex: 0 0 28px; }
+  .intg-side .conn-card .conn-meta { min-width: 0; flex: 1 1 auto; }
+  .intg-side .conn-card .conn-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .intg-side .conn-card .conn-status-chip { font-size: 10px; padding: 2px 6px; white-space: nowrap; flex: 0 0 auto; }
+  .intg-side .conn-card.is-selected,
+  .intg-extra.is-selected {
+    border-color: var(--accent, var(--cyan));
+    background: var(--glass-3, var(--glass-2));
+    box-shadow: inset 3px 0 0 var(--accent, var(--cyan));
+  }
+
+  .intg-extra {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    text-align: left;
+    color: var(--text);
+    background: var(--glass-2);
+    border: 1px solid var(--glass-brd);
+    border-radius: var(--r-sm, 8px);
+    cursor: pointer;
+    font: inherit;
+  }
+  .intg-extra-logo {
+    width: 28px; height: 28px; flex: 0 0 28px;
+    display: grid; place-items: center;
+    border: 1px solid var(--glass-brd-strong);
+    border-radius: 8px;
+    color: var(--text-2);
+  }
+  .intg-extra-text { display: flex; flex-direction: column; min-width: 0; }
+  .intg-extra-text strong { font-size: 13px; font-weight: 600; }
+  .intg-extra-text small { font-size: 10px; color: var(--text-2); }
+
+  /* Mitte */
+  .intg-detail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .intg-detail-card .conn-card { cursor: default; }
+  .intg-detail-card .conn-card:hover { transform: none; border-color: var(--glass-brd); }
+  .intg-detail-empty:not([hidden]) {
+    display: block;
+    margin: 0;
+    padding: 28px 18px;
+    text-align: center;
+    color: var(--text-2);
+    border: 1px dashed var(--glass-brd);
+    border-radius: var(--r-md, 10px);
+  }
+  .intg-detail-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .intg-detail-body .mqtt-tiles-editor { margin: 0; }
+
+  /* Einstellungen in der Mitte statt als Seitenleiste */
+  .dv-drawer.dv-drawer--inline {
+    position: static;
+    width: auto;
+    z-index: auto;
+    transform: none;
+    transition: none;
+    overflow: visible;
+    box-shadow: none;
+    background: var(--glass-2);
+    border: 1px solid var(--glass-brd);
+    border-radius: var(--r-md, 10px);
+  }
+  .dv-drawer.dv-drawer--inline[hidden] { display: none; }
+  /* Die Hauptansicht braucht kein Schließen-Kreuz; Nebenansichten (Logs)
+     schon — sie führen damit zurück zu den Einstellungen. */
+  .dv-drawer.dv-drawer--inline.is-primary .dv-drawer-close { display: none; }
+}
+
+@media (min-width: 1000px) {
+  /* Die MQTT-Kacheln stehen nicht mehr unter der Liste, sondern als eigener
+     Eintrag links; sichtbar erst, wenn er gewählt ist (dann in der Mitte). */
+  .page-content > .mqtt-tiles-editor { display: none; }
+}
+.mqtt-tiles-editor[hidden] { display: none; }
