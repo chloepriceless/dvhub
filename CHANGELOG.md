@@ -12,6 +12,13 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Läufe weitere 5–9 % schneller bei identischem Ergebnis (DV-EOS rc1.18).** Vier
+  Kleinteile rund um die Simulation, einzeln und zusammen gemessen (Mac, 36 h, 1–3 Kerne, mit
+  und ohne Auto): Steuergrößen je Slot aus einer Nachschlagetabelle (2–3 %), Auto-Korrektur
+  erst nach der Prüfung, ob das Auto irgendwo voll ist (4–5 % mit Auto), weniger Aufrufe je
+  Slot (1–2 %), restliche Grenzwerte der Slot-Verarbeitung als Bedingungen (rund 1 %). Überall
+  dieselbe Bilanz. Raspberry Pi 4: 136 s statt 145 s (2 Kerne), 107 s statt 116 s (3 Kerne) —
+  seit rc1.11 insgesamt 136 s statt 333 s.
 - **EOS-Läufe weitere 10–16 % schneller bei identischem Ergebnis (DV-EOS rc1.17).** Drei
   Stellen, jede einzeln gemessen (Mac, 36 h, 1–3 Kerne, mit und ohne Auto): der Restwert des
   Speichers wird je Kandidat nur noch als Betrag berechnet, der Bericht dazu nur für die
