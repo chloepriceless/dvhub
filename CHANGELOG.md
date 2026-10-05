@@ -12,6 +12,13 @@ verweist hierher.
 
 ### Behoben
 
+- **Geräte-Tausch nimmt Datenspende, Fernzugang und Ortsnetz eins zu eins mit.** Beim Umzug auf
+  eine neue Box (Voll-Backup mit Passwort, Antwort „Geräte-Tausch“) blieben die Schalter für
+  Datenspende und Installateur-Fernzugang bisher auf dem Stand der neuen Box, also aus — obwohl
+  die Kopplungs-Dateien mit umgezogen sind. Jetzt kommen sie aus der Sicherung. Wer nur
+  Einstellungen kopiert, behält wie bisher die Schalter der Zielbox. Außerdem ändert das
+  Speichern der Einstellungsseite den Ortsnetz-Schalter nicht mehr: ein älterer Entwurf der
+  Seite konnte ihn zurückschalten.
 - **PV-Strings: Einstellungen erscheinen sofort.** Auf kleinen Boards blieb die Liste der
   Strings 45–50 Sekunden leer und sah aus, als seien keine Strings eingerichtet (eHive). DVhub
   hat für die Tageserträge bei jedem der rund 64 000 Messwerte einen neuen

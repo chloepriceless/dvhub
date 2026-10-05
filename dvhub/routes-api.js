@@ -57,6 +57,7 @@ import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capV
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from './services/config-secrets-crypto.js';
+import { protectOwnRouteKeys, applyCarriedKeys } from './services/config-protected-keys.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig } from './config-model.js';
 import { streamPgDump, runDbRestore } from './services/db-backup.js';
@@ -7576,18 +7577,10 @@ export function createApiRoutes(ctx) {
       if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
         return json(res, 400, { ok: false, error: 'config object required' });
       }
-      // T-INSTALLER-PORTAL: installerPortal.* (Fernzugang + Freigaben) ist
-      // AUSSCHLIESSLICH über /api/installer/settings änderbar. Die Settings-
-      // Seite schickt ihren beim Laden geklonten Entwurf mit — ein unabhängiges
-      // Speichern würde sonst einen inzwischen ausgeschalteten Zugang wieder
-      // einschalten; ein Import darf Fernzugang ebenfalls nicht mitbringen.
-      // Gleiches gilt für die Datenspende (Einwilligung/Schalter nur über
-      // /api/datenspende/*).
-      for (const key of ['installerPortal', 'datenspende']) {
-        const cur = ctx.getRawCfg?.()?.[key];
-        if (cur === undefined) delete body.config[key];
-        else body.config[key] = JSON.parse(JSON.stringify(cur));
-      }
+      // Fernzugang, Datenspende und Ortsnetz haben eigene Wege — siehe
+      // services/config-protected-keys.js. Ein Geräte-Tausch (unten) bringt
+      // sie aus der Datei mit, alles andere lässt sie, wie die Box sie hat.
+      const carriedKeys = protectOwnRouteKeys(body.config, ctx.getRawCfg?.(), { isImport: url.pathname === '/api/config/import' });
       // Encrypted secrets bundle (config-secrets-crypto): a password-protected
       // migration export carries the REDACTED_PATHS values sealed under the
       // operator's password. Decrypt + restore them into body.config BEFORE the
@@ -7617,6 +7610,8 @@ export function createApiRoutes(ctx) {
           if (body.migrate === true) {
             if (typeof secrets.__apiToken === 'string' && secrets.__apiToken) body.config.apiToken = secrets.__apiToken;
             migrationFiles = secrets.__files && typeof secrets.__files === 'object' ? secrets.__files : null;
+            const carried = applyCarriedKeys(body.config, carriedKeys);
+            if (carried.length) pushLog('config_import_switches_carried', { keys: carried }, actorContext(req));
           }
           pushLog('config_import_secrets_restored', {
             count: Object.keys(secrets).filter((k) => !k.startsWith('__')).length,
