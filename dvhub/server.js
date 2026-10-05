@@ -165,6 +165,7 @@ import { publishHaDiscoveryTopics, clearHaDiscoveryTopics } from './services/mqt
 import { createTeslamateSubscriber } from './services/mqtt/teslamate.js';
 import { createMqttCommandSubscriber } from './services/mqtt/command-subscriber.js';
 import { createFamilyMqttTiles } from './services/mqtt/family-tiles.js';
+import { createVehicleMqtt } from './services/mqtt/vehicle-mqtt.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch } from './services/control-commands.js';
 import { createDeviceService } from './services/devices/index.js';
 import { createNotificationService } from './services/notifications/index.js';
@@ -1235,6 +1236,9 @@ const mqttCommandSubscriber = createMqttCommandSubscriber(mqttHub, ctx);
 ctx.mqttCommandSubscriber = mqttCommandSubscriber;
 const familyMqttTiles = createFamilyMqttTiles(mqttHub, ctx);
 ctx.familyMqttTiles = familyMqttTiles;
+// Fahrzeugdaten (Ladestand, angesteckt) über frei wählbare MQTT-Topics — für
+// Marken ohne eigene Anbindung, z. B. über Home Assistant (ev-soc.js).
+ctx.vehicleMqtt = createVehicleMqtt(mqttHub, ctx);
 const deviceService = createDeviceService(ctx, mqttHub);
 ctx.deviceService = deviceService;
 const notificationService = createNotificationService(ctx);
@@ -2096,6 +2100,7 @@ if (IS_RUNTIME_PROCESS) {
       teslamateService.start().catch(err => console.error('TeslaMate start error:', err.message));
     });
     familyMqttTiles.start().catch(err => console.error('Family MQTT tiles start error:', err.message));
+    try { ctx.vehicleMqtt.start(); } catch (err) { console.error('Vehicle MQTT start error:', err.message); }
     // Republish/clear hooks so the Integrations HA card can (re)sync discovery
     // WITHOUT a restart. Defined here where mqttHub is in scope; consumed by
     // /api/integrations/homeassistant.

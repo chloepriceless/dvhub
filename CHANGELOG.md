@@ -12,6 +12,15 @@ verweist hierher.
 
 ### Neu
 
+- **E-Auto: Einstellungen je Wallbox-Typ, Ladestand aus wählbarer Quelle.** Die evcc-Felder
+  („evcc-Ladepunkt“, „evcc-Modus bei Stopp“) erscheinen nur noch, wenn unter Integrationen evcc
+  als Wallbox gewählt ist; der Schalter heißt jetzt „Wallbox nach EOS-Plan steuern“ und gilt
+  für evcc, OpenEVSE und go-e. Neu: „Ladestand des Autos von“ — automatisch (TeslaMate, sonst
+  evcc, sonst MQTT), TeslaMate, evcc oder ein frei wählbares MQTT-Topic. Über MQTT lässt sich
+  jede Marke anbinden, z. B. aus Home Assistant; das Topic darf eine Zahl oder ein JSON-Objekt
+  mit Feldname liefern. Optional ein zweites Topic für „angesteckt“, falls weder Wallbox noch
+  evcc das melden. Bisher gab es ohne Tesla und ohne evcc keinen Ladestand, und EOS konnte das
+  Auto dann nicht planen.
 - **EOS-Läufe weitere 5–9 % schneller bei identischem Ergebnis (DV-EOS rc1.18).** Vier
   Kleinteile rund um die Simulation, einzeln und zusammen gemessen (Mac, 36 h, 1–3 Kerne, mit
   und ohne Auto): Steuergrößen je Slot aus einer Nachschlagetabelle (2–3 %), Auto-Korrektur

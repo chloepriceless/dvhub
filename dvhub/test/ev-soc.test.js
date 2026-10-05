@@ -3,10 +3,12 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveEvSocPct, resolveEvPlugged, createEvPlugTracker } from '../services/optimizer/ev-soc.js';
 
-const ctx = ({ tesla, lp }) => ({
-  getCfg: () => ({ optimizer: { evEvccLoadpoint: 1 } }),
+const ctx = ({ tesla, lp, mqtt, source, charger }) => ({
+  getCfg: () => ({ optimizer: { evEvccLoadpoint: 1, ...(source ? { evSocSource: source } : {}) } }),
   teslamateService: { getState: () => tesla || {} },
-  evccIntegration: { getLoadpoints: () => (lp ? [{ id: 1, ...lp }] : []) }
+  evccIntegration: { getLoadpoints: () => (lp ? [{ id: 1, ...lp }] : []) },
+  vehicleMqtt: { getState: () => mqtt || {} },
+  chargerStatus: { fresh: () => charger || null }
 });
 
 describe('resolveEvSocPct', () => {
@@ -22,6 +24,20 @@ describe('resolveEvSocPct', () => {
   test('ohne Quelle: null', () => {
     assert.equal(resolveEvSocPct(ctx({})), null);
   });
+  test('MQTT liefert den Ladestand, wenn weder TeslaMate noch evcc einen haben', () => {
+    assert.deepEqual(resolveEvSocPct(ctx({ mqtt: { socPct: 47 } })), { pct: 47, source: 'mqtt' });
+    assert.deepEqual(resolveEvSocPct(ctx({ lp: { connected: true, vehicleSocPct: 55 }, mqtt: { socPct: 47 } })), { pct: 55, source: 'evcc' });
+  });
+  test('gewaehlte Quelle gilt allein — auch wenn eine andere einen Wert haette', () => {
+    const all = { tesla: { batteryLevel: 68 }, lp: { connected: true, vehicleSocPct: 40 }, mqtt: { socPct: 47 } };
+    assert.deepEqual(resolveEvSocPct(ctx({ ...all, source: 'mqtt' })), { pct: 47, source: 'mqtt' });
+    assert.deepEqual(resolveEvSocPct(ctx({ ...all, source: 'evcc' })), { pct: 40, source: 'evcc' });
+    assert.deepEqual(resolveEvSocPct(ctx({ ...all, source: 'teslamate' })), { pct: 68, source: 'teslamate' });
+    assert.equal(resolveEvSocPct(ctx({ tesla: { batteryLevel: 68 }, source: 'mqtt' })), null);
+  });
+  test('unbekannte Einstellung verhaelt sich wie automatisch', () => {
+    assert.deepEqual(resolveEvSocPct(ctx({ tesla: { batteryLevel: 68 }, source: 'quatsch' })), { pct: 68, source: 'teslamate' });
+  });
 });
 
 describe('resolveEvPlugged', () => {
@@ -29,6 +45,12 @@ describe('resolveEvPlugged', () => {
     assert.equal(resolveEvPlugged(ctx({ lp: { connected: true } })), true);
     assert.equal(resolveEvPlugged(ctx({ lp: { connected: false } })), false);
     assert.equal(resolveEvPlugged(ctx({})), null);
+  });
+  test('MQTT nur, wenn weder Wallbox noch evcc es melden', () => {
+    assert.equal(resolveEvPlugged(ctx({ mqtt: { plugged: true } })), true);
+    assert.equal(resolveEvPlugged(ctx({ mqtt: { plugged: false } })), false);
+    assert.equal(resolveEvPlugged(ctx({ lp: { connected: false }, mqtt: { plugged: true } })), false);
+    assert.equal(resolveEvPlugged(ctx({ charger: { connected: true }, mqtt: { plugged: false } })), true);
   });
 });
 

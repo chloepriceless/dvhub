@@ -7,34 +7,56 @@
  * 2026-09-23). DVhub hat den Wert bisher nie geliefert: `state.victron.evSocPct`
  * setzt niemand.
  *
- * Quellen, in dieser Reihenfolge:
- *   1. TeslaMate (`batteryLevel`) — sendet nur bei Aenderung, der letzte Wert
- *      gilt (ein schlafendes Auto aendert seinen SoC nicht) und wird beim
- *      Start aus der DB vorgeladen.
- *   2. evcc — SoC am gesteuerten Ladepunkt (nur wenn ein Fahrzeug erkannt ist).
+ * Quellen:
+ *   - TeslaMate (`batteryLevel`) — sendet nur bei Aenderung, der letzte Wert
+ *     gilt (ein schlafendes Auto aendert seinen SoC nicht) und wird beim
+ *     Start aus der DB vorgeladen.
+ *   - evcc — SoC am gesteuerten Ladepunkt (nur wenn ein Fahrzeug erkannt ist).
+ *   - MQTT — frei waehlbares Topic (services/mqtt/vehicle-mqtt.js), fuer jede
+ *     Marke, z. B. ueber Home Assistant.
+ *
+ * `optimizer.evSocSource` legt fest, welche gilt: 'auto' (Standard) nimmt die
+ * erste, die einen Wert hat, in der Reihenfolge TeslaMate, evcc, MQTT;
+ * 'teslamate' / 'evcc' / 'mqtt' nehmen genau diese Quelle — so entscheidet der
+ * Betreiber, welches Auto gemeint ist, wenn mehrere Quellen Werte liefern.
  *
  * @returns {{ pct: number, source: string } | null}
  */
+export const EV_SOC_SOURCES = Object.freeze(['auto', 'teslamate', 'evcc', 'mqtt']);
+
 export function resolveEvSocPct(ctx) {
   const num = (v) => (v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+  const opt = ctx?.getCfg?.()?.optimizer || {};
+  const wanted = EV_SOC_SOURCES.includes(opt.evSocSource) ? opt.evSocSource : 'auto';
+  const use = (source) => wanted === 'auto' || wanted === source;
 
-  const tesla = ctx?.teslamateService?.getState?.();
-  const teslaPct = num(tesla?.batteryLevel);
-  if (teslaPct !== null && teslaPct >= 0 && teslaPct <= 100) return { pct: teslaPct, source: 'teslamate' };
+  if (use('teslamate')) {
+    const tesla = ctx?.teslamateService?.getState?.();
+    const teslaPct = num(tesla?.batteryLevel);
+    if (teslaPct !== null && teslaPct >= 0 && teslaPct <= 100) return { pct: teslaPct, source: 'teslamate' };
+  }
 
-  const lpId = Number(ctx?.getCfg?.()?.optimizer?.evEvccLoadpoint) || 1;
-  const lps = ctx?.evccIntegration?.getLoadpoints?.() || [];
-  const lp = lps.find((l) => l.id === lpId);
-  // Ohne angestecktes Fahrzeug meldet evcc vehicleSoc 0 (prod 2026-09-23) —
-  // das waere fuer EOS ein leerer Akku und ein voller Ladeplan.
-  const evccPct = lp?.connected === true ? num(lp?.vehicleSocPct) : null;
-  if (evccPct !== null && evccPct >= 0 && evccPct <= 100) return { pct: evccPct, source: 'evcc' };
+  if (use('evcc')) {
+    const lpId = Number(opt.evEvccLoadpoint) || 1;
+    const lps = ctx?.evccIntegration?.getLoadpoints?.() || [];
+    const lp = lps.find((l) => l.id === lpId);
+    // Ohne angestecktes Fahrzeug meldet evcc vehicleSoc 0 (prod 2026-09-23) —
+    // das waere fuer EOS ein leerer Akku und ein voller Ladeplan.
+    const evccPct = lp?.connected === true ? num(lp?.vehicleSocPct) : null;
+    if (evccPct !== null && evccPct >= 0 && evccPct <= 100) return { pct: evccPct, source: 'evcc' };
+  }
+
+  if (use('mqtt')) {
+    const mqttPct = num(ctx?.vehicleMqtt?.getState?.()?.socPct);
+    if (mqttPct !== null && mqttPct >= 0 && mqttPct <= 100) return { pct: mqttPct, source: 'mqtt' };
+  }
 
   return null;
 }
 
 /**
- * Steckt das Auto am gesteuerten Ladepunkt? Quelle: evcc (`connected`).
+ * Steckt das Auto am gesteuerten Ladepunkt? Quelle: die Wallbox selbst
+ * (OpenEVSE/go-e), sonst evcc (`connected`), sonst ein MQTT-Topic.
  * @returns {boolean|null} null = unbekannt (evcc nicht erreichbar/kein Ladepunkt)
  */
 export function resolveEvPlugged(ctx) {
@@ -45,8 +67,11 @@ export function resolveEvPlugged(ctx) {
   const lpId = Number(ctx?.getCfg?.()?.optimizer?.evEvccLoadpoint) || 1;
   const lps = ctx?.evccIntegration?.getLoadpoints?.() || [];
   const lp = lps.find((l) => l.id === lpId);
-  if (!lp) return null;
-  return lp.connected === true;
+  if (lp) return lp.connected === true;
+  // Weder Wallbox noch evcc sagen es: ein eingestelltes MQTT-Topic
+  // (vehicle-mqtt.js), sonst unbekannt.
+  const viaMqtt = ctx?.vehicleMqtt?.getState?.()?.plugged;
+  return typeof viaMqtt === 'boolean' ? viaMqtt : null;
 }
 
 /**
