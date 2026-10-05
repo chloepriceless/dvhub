@@ -296,8 +296,9 @@ describe('Dienst: Fronius + Gruppe', () => {
         .filter((r) => seriesKeys.includes(r.seriesKey) && r.ts >= start && r.ts < end && r.resolutionSeconds <= maxResolution)
         .sort((a, b) => a.ts.localeCompare(b.ts))
         .map((r) => ({ key: r.seriesKey, ts: r.ts, value: r.value, unit: r.unit, resolution: r.resolutionSeconds })),
-      seriesStats: async ({ seriesKeys, resolution }) => Object.fromEntries(seriesKeys.map((k) => {
-        const hit = [...rows.values()].filter((r) => r.seriesKey === k && r.resolutionSeconds === resolution).map((r) => r.ts).sort();
+      seriesStats: async ({ seriesKeys, resolution, start = null, end = null }) => Object.fromEntries(seriesKeys.map((k) => {
+        const hit = [...rows.values()].filter((r) => r.seriesKey === k && r.resolutionSeconds === resolution
+          && (!start || Date.parse(r.ts) >= Date.parse(start)) && (!end || Date.parse(r.ts) < Date.parse(end))).map((r) => r.ts).sort();
         return [k, { count: hit.length, firstTs: hit[0] || null, lastTs: hit.at(-1) || null }];
       }))
     };
@@ -369,6 +370,43 @@ describe('Dienst: Fronius + Gruppe', () => {
     assert.equal(g.slots, 2);
     const a = await svc.readSeries('sued-rs-a', { start: new Date((W0 - 3600) * 1000).toISOString(), end: new Date((W0 + 3600) * 1000).toISOString() });
     assert.deepEqual(a.rows.map((x) => x.value), [1000, 1000]);
+  });
+
+  test('Uebersicht ohne Warten: erst „wird gezaehlt“, danach die Abdeckung; neue Werte kommen ohne Neuzaehlen dazu', async () => {
+    const { svc, store } = setup();
+    await svc.syncWindow(W0, W0 + 600);
+    let full = 0;
+    const orig = store.seriesStats.bind(store);
+    store.seriesStats = (q) => { if (!q.start) full += 1; return orig(q); };
+    const first = await svc.overview({ wait: false });
+    assert.equal(first.coveragePending, true);
+    assert.equal(first.sources.find((s) => s.id === 'sued').slots, 0);
+    assert.equal(first.sources.length > 0, true, 'die Einstellungen kommen sofort');
+    await new Promise((r) => setImmediate(r));
+    const second = await svc.overview({ wait: false });
+    assert.equal(second.coveragePending, false);
+    const before = second.sources.find((s) => s.id === 'sued-rs-a').slots;
+    await store.writeSamples([{ seriesKey: seriesKeyFor('sued-rs-a'), ts: new Date((W0 + 3600) * 1000).toISOString(), resolutionSeconds: 300, value: 500, unit: 'W' }]);
+    const third = await svc.overview({ wait: false });
+    assert.equal(third.sources.find((s) => s.id === 'sued-rs-a').slots, before + 1);
+    assert.equal(full, 1, 'die ganze Historie wird nur einmal gezaehlt');
+  });
+
+  test('Uebersicht: abgeschlossene Tage werden gemerkt, gelesen wird danach nur ab gestern', async () => {
+    const { svc, store } = setup();
+    const key = seriesKeyFor('sued-rs-a');
+    // Drei Tage vor dem Messtag: liegt beim zweiten Aufruf ausserhalb des gelesenen Fensters.
+    await store.writeSamples([{ seriesKey: key, ts: new Date((W0 - 3 * 86400) * 1000).toISOString(), resolutionSeconds: 300, value: 1200, unit: 'W' }]);
+    await svc.syncWindow(W0, W0 + 600);
+    const starts = [];
+    const orig = store.querySeries.bind(store);
+    store.querySeries = (q) => { starts.push(Date.parse(q.start)); return orig(q); };
+    const a = await svc.overview();
+    const b = await svc.overview();
+    const daily = (ov) => ov.sources.find((s) => s.id === 'sued-rs-a').dailyKwh;
+    assert.equal(daily(a).length, 2);
+    assert.deepEqual(daily(b), daily(a));
+    assert.equal(starts[1] > starts[0] + 10 * 86400 * 1000, true, 'zweiter Aufruf liest nur gestern und heute');
   });
 
   test('Nachladen: VRM endet frueher, Fronius laeuft weiter; VRM wird danach nicht mehr gefragt', async () => {

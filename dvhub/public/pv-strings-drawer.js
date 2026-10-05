@@ -163,7 +163,7 @@
         + '<div class="pvs-card-head"><strong>' + esc(s.label) + '</strong>'
         + '<span class="pvs-meta">' + (s.kwp ? esc(s.kwp) + ' kWp · ' : '') + esc(overviewSource(s, src)) + '</span></div>'
         + '<div class="pvs-card-body">'
-        + '<div class="pvs-cover">' + (s.slots ? (fmtDate(s.firstTs) + ' – ' + fmtDate(s.lastTs) + ' · ' + s.coverageDays + ' Tage') : 'noch keine Daten')
+        + '<div class="pvs-cover">' + (s.slots ? (fmtDate(s.firstTs) + ' – ' + fmtDate(s.lastTs) + ' · ' + s.coverageDays + ' Tage') : (data.coveragePending ? 'Abdeckung wird berechnet …' : 'noch keine Daten'))
         + (s.slots && !enough ? ' <span class="pvs-warn">(pvnode braucht ≥ 90 Tage)</span>' : '') + '</div>'
         + '<div class="pvs-bars" aria-label="Tagesertrag letzte 7 Tage">' + bars + '</div>'
         + (last ? '<div class="pvs-meta">' + esc(last.day) + ': ' + last.kwh.toFixed(1) + ' kWh</div>' : '')
@@ -196,6 +196,7 @@
     if (btn) btn.disabled = !!b.running;
     clearTimeout(pollTimer);
     if (b.running) pollTimer = setTimeout(load, 15000);
+    else if (st && st.coveragePending) pollTimer = setTimeout(load, 8000);
   }
 
   async function load() {
@@ -224,7 +225,7 @@
       const needsVrm = rows.some(function (r) { return r.kind !== 'fronius_mppt'; });
       if (needsVrm && !data.vrmConfigured) banner('pvs-banner', 'VRM-Zugang fehlt — erst unter „VRM Cloud“ Portal-ID und Token eintragen.', 'error');
       renderOverview(data);
-      renderStatus(data.status);
+      renderStatus(Object.assign({}, data.status, { coveragePending: !!data.coveragePending }));
     } catch (e) {
       banner('pvs-banner', e.message, 'error');
     }

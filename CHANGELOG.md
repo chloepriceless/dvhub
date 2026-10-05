@@ -10,6 +10,17 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Behoben
+
+- **PV-Strings: Einstellungen erscheinen sofort.** Auf kleinen Boards blieb die Liste der
+  Strings 45–50 Sekunden leer und sah aus, als seien keine Strings eingerichtet (eHive). DVhub
+  hat für die Tageserträge bei jedem der rund 64 000 Messwerte einen neuen
+  Zeitzonen-Formatierer gebaut; jetzt gibt es einen je Zeitzone, und der Kalendertag wird je
+  Viertelstunde nur einmal bestimmt. Zusätzlich wartet die Anzeige nicht mehr auf das Zählen
+  der Abdeckung über die ganze Historie: das läuft einmal im Hintergrund („Abdeckung wird
+  berechnet …“) und wird danach nur um die letzten drei Tage ergänzt. Abgeschlossene Tage
+  der Ertragsbalken werden gemerkt, gelesen werden nur noch gestern und heute.
+
 ### Neu
 
 - **Integrationen: Liste links, Einstellungen in der Mitte.** Für die inzwischen 15 Integrationen

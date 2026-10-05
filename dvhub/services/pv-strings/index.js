@@ -31,6 +31,9 @@ export const PV_STRING_SERIES_PREFIX = 'pv_string_';
 const VRM_BASE = 'https://vrmapi.victronenergy.com';
 const SLOT_S = 300;
 const DAY_S = 86400;
+const COVERAGE_TAIL_DAYS = 3;
+const COVERAGE_MAX_AGE_MS = 24 * 3600 * 1000;
+const DAILY_CACHE_MAX_AGE_MS = 6 * 3600 * 1000;
 export const PV_STRING_KINDS = ['victron_vrm_tracker', 'fronius_mppt'];
 const RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 120_000];
 
@@ -165,12 +168,24 @@ export function aggregateToSlots(points, { slotS = SLOT_S, minCoverage = 0.5 } =
 }
 
 /** "2026-06-01T12:00:00+02:00" in der Anlagen-Zeitzone. */
+// Ein Formatierer je Zeitzone: ihn bei jedem Aufruf neu zu bauen kostet auf
+// kleinen Boards rund 0,7 ms — die Uebersicht ruft das zigtausendfach auf.
+const offsetFormatters = new Map();
+function offsetFormatter(timeZone) {
+  let f = offsetFormatters.get(timeZone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-GB', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'longOffset'
+    });
+    offsetFormatters.set(timeZone, f);
+  }
+  return f;
+}
+
 export function isoWithOffset(ms, timeZone = 'Europe/Berlin') {
   const d = new Date(ms);
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
-    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'longOffset'
-  }).formatToParts(d).map((p) => [p.type, p.value]));
+  const parts = Object.fromEntries(offsetFormatter(timeZone).formatToParts(d).map((p) => [p.type, p.value]));
   const off = parts.timeZoneName === 'GMT' ? '+00:00' : parts.timeZoneName.replace('GMT', '');
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${off}`;
 }
@@ -580,6 +595,8 @@ export function createPvStringsService(ctx) {
     } finally {
       status.backfill.running = false;
       status.backfill.finishedAt = new Date(now()).toISOString();
+      coverageBase = null;
+      dailyCache = null;
     }
     return { ok: !status.backfill.error, doneDays: status.backfill.doneDays, error: status.backfill.error };
   }
@@ -598,8 +615,56 @@ export function createPvStringsService(ctx) {
     return { source, rows };
   }
 
-  /** Uebersicht: je String/Gruppe Abdeckung und Tagesertraege der letzten 14 Tage. */
-  async function overview({ days = 14 } = {}) {
+  // Abdeckung (Anzahl, erster, letzter Wert) je Reihe. Ueber die ganze Historie
+  // gezaehlt dauert das auf kleinen Boards lange (eHive, 2026-10-05: 40 s —
+  // alle komprimierten Bloecke muessen entpackt werden; die Einstellungen
+  // blieben so lange leer). Deshalb: der alte Teil bis `boundary` wird einmal
+  // gezaehlt und gemerkt, bei jedem Aufruf kommt nur der junge Teil dazu.
+  // Neu gezaehlt wird nach COVERAGE_MAX_AGE_MS, nach dem Nachladen (schreibt
+  // alte Tage) und wenn sich die Reihen aendern.
+  let coverageBase = null;   // { sig, boundaryIso, at, stats }
+  let dailyCache = null;     // { sig, tz, days, today, at, closed: Map(key -> Map(tag -> kWh)) }
+  let coverageJob = null;    // { sig, promise }
+
+  function countCoverageBase(keys, sig) {
+    if (coverageJob?.sig === sig) return coverageJob.promise;
+    const at = now();
+    const boundaryIso = new Date(at - COVERAGE_TAIL_DAYS * DAY_S * 1000).toISOString();
+    const promise = Promise.resolve()
+      .then(() => store()?.seriesStats?.({ seriesKeys: keys, resolution: SLOT_S, end: boundaryIso }))
+      .then((stats) => { coverageBase = { sig, boundaryIso, at, stats: stats || {} }; return coverageBase; })
+      .finally(() => { if (coverageJob?.promise === promise) coverageJob = null; });
+    coverageJob = { sig, promise };
+    return promise;
+  }
+
+  /** @returns {Promise<object|null>} null = wird noch gezaehlt (nur mit wait=false). */
+  async function coverage(keys, { wait = true } = {}) {
+    const sig = keys.join('|');
+    let base = coverageBase?.sig === sig ? coverageBase : null;
+    if (!base || now() - base.at > COVERAGE_MAX_AGE_MS) {
+      const job = countCoverageBase(keys, sig);
+      if (!base) {
+        if (!wait) { job.catch((e) => pushLog('pv_strings_coverage_error', { error: e.message })); return null; }
+        base = await job;
+      } else job.catch(() => {});
+    }
+    const tail = (await store()?.seriesStats?.({ seriesKeys: keys, resolution: SLOT_S, start: base.boundaryIso })) || {};
+    const out = {};
+    for (const key of keys) {
+      const a = base.stats[key] || { count: 0, firstTs: null, lastTs: null };
+      const b = tail[key] || { count: 0, firstTs: null, lastTs: null };
+      out[key] = { count: a.count + b.count, firstTs: a.firstTs || b.firstTs, lastTs: b.lastTs || a.lastTs };
+    }
+    return out;
+  }
+
+  /**
+   * Uebersicht: je String/Gruppe Abdeckung und Tagesertraege der letzten 14 Tage.
+   * Mit wait=false kommt sie sofort; `coveragePending` sagt dann, dass die
+   * Abdeckung noch gezaehlt wird (Werte bis dahin 0).
+   */
+  async function overview({ days = 14, wait = true } = {}) {
     const cfg = getCfg();
     const tz = tzOf(cfg);
     const endMs = now();
@@ -610,16 +675,46 @@ export function createPvStringsService(ctx) {
     // den Speicherdruck getrieben.
     const series = allSeries(cfg);
     const keys = series.map((s) => s.seriesKey);
-    const recent = keys.length ? (await store()?.querySeries?.({ seriesKeys: keys, start: new Date(endMs - days * DAY_S * 1000).toISOString(), end: new Date(endMs).toISOString(), maxResolution: SLOT_S }) || []) : [];
-    const statsByKey = keys.length ? ((await store()?.seriesStats?.({ seriesKeys: keys, resolution: SLOT_S })) || {}) : {};
-    for (const s of series) {
-      const stats = statsByKey[s.seriesKey] || { count: 0, firstTs: null, lastTs: null };
-      const daily = new Map();
-      for (const r of recent) {
-        if (r.key !== s.seriesKey || Number(r.resolution) !== SLOT_S) continue;
-        const day = isoWithOffset(Date.parse(r.ts), tz).slice(0, 10);
-        daily.set(day, (daily.get(day) || 0) + Number(r.value) * SLOT_S / 3600 / 1000);
+    // Tagesertraege: abgeschlossene Tage (bis vorgestern) aendern sich nicht
+    // mehr und werden gemerkt; gelesen werden dann nur gestern und heute
+    // statt 14 Tage (eHive: 16 000 Zeilen, mehrere Sekunden).
+    const sig = keys.join('|');
+    const today = localDate(Math.floor(endMs / 1000), tz);
+    const yesterday = shiftDate(today, -1);
+    const firstDay = localDate(Math.floor(endMs / 1000) - days * DAY_S, tz);
+    const reuse = dailyCache && dailyCache.sig === sig && dailyCache.tz === tz && dailyCache.days === days
+      && dailyCache.today === today && endMs - dailyCache.at < DAILY_CACHE_MAX_AGE_MS;
+    const startMs = reuse ? localMidnightS(yesterday, tz) * 1000 : endMs - days * DAY_S * 1000;
+    const recent = keys.length ? (await store()?.querySeries?.({ seriesKeys: keys, start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(), maxResolution: SLOT_S }) || []) : [];
+    const statsByKey = keys.length ? await coverage(keys, { wait }) : {};
+    const coveragePending = statsByKey === null;
+    // Ein Durchgang ueber alle Zeilen; der Kalendertag wird je Viertelstunde
+    // nur einmal bestimmt (alle Reihen teilen sich die Zeitpunkte, und jede
+    // Zeitzone liegt auf einem Viertelstundenraster).
+    const dayOfQuarter = new Map();
+    const dailyByKey = new Map(keys.map((k) => [k, new Map()]));
+    for (const r of recent) {
+      const daily = dailyByKey.get(r.key);
+      if (!daily || Number(r.resolution) !== SLOT_S) continue;
+      const ms = r.ts instanceof Date ? r.ts.getTime() : Date.parse(r.ts);
+      const quarter = Math.floor(ms / 900_000);
+      let day = dayOfQuarter.get(quarter);
+      if (day === undefined) { day = isoWithOffset(ms, tz).slice(0, 10); dayOfQuarter.set(quarter, day); }
+      daily.set(day, (daily.get(day) || 0) + Number(r.value) * SLOT_S / 3600 / 1000);
+    }
+    if (reuse) {
+      for (const [key, daily] of dailyByKey) {
+        for (const [day, kwh] of dailyCache.closed.get(key) || []) if (day >= firstDay && day < yesterday) daily.set(day, kwh);
       }
+    } else {
+      dailyCache = {
+        sig, tz, days, today, at: endMs,
+        closed: new Map([...dailyByKey].map(([key, daily]) => [key, new Map([...daily].filter(([day]) => day < yesterday))]))
+      };
+    }
+    for (const s of series) {
+      const stats = statsByKey?.[s.seriesKey] || { count: 0, firstTs: null, lastTs: null };
+      const daily = dailyByKey.get(s.seriesKey);
       out.push({
         ...s,
         slots: stats.count,
@@ -629,7 +724,7 @@ export function createPvStringsService(ctx) {
         dailyKwh: [...daily].sort().map(([day, kwh]) => ({ day, kwh: Math.round(kwh * 100) / 100 }))
       });
     }
-    return { enabled: cfg?.pvStrings?.enabled === true, vrmConfigured: Boolean(vrmCreds(cfg)), sources: out, status: getStatus() };
+    return { enabled: cfg?.pvStrings?.enabled === true, vrmConfigured: Boolean(vrmCreds(cfg)), coveragePending, sources: out, status: getStatus() };
   }
 
   function getStatus() {
@@ -643,6 +738,13 @@ export function createPvStringsService(ctx) {
     timer = setInterval(tick, 15 * 60 * 1000);
     if (typeof timer.unref === 'function') timer.unref();
     setTimeout(tick, 60_000).unref?.();
+    // Abdeckung schon im Hintergrund zaehlen, bevor jemand die Seite oeffnet.
+    setTimeout(() => {
+      const cfg = getCfg();
+      if (cfg?.pvStrings?.enabled !== true) return;
+      const keys = allSeries(cfg).map((x) => x.seriesKey);
+      if (keys.length) overview({ wait: false }).catch(() => {});
+    }, 90_000).unref?.();
   }
 
   function stop() {

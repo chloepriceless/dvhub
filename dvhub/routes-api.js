@@ -4092,7 +4092,7 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
       try {
-        return json(res, 200, { ok: true, ...(await ctx.pvStrings.overview()) });
+        return json(res, 200, { ok: true, ...(await ctx.pvStrings.overview({ wait: false })) });
       } catch (e) {
         return json(res, 500, { ok: false, error: e.message });
       }
