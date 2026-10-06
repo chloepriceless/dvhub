@@ -3754,6 +3754,8 @@ async function loadAutomationConfig() {
     };
     lockTo('automationBatteryCapacity', plant.capacityKwh, plant.capacityKwh);
     lockTo('automationMaxDischargeW', plant.maxDischargeW, -plant.maxDischargeW);
+    lockTo('automationInverterEfficiency', plant.efficiencyPct, plant.efficiencyPct);
+    if (plant.efficiencyPct != null && el('automationInverterEfficiency')) el('automationInverterEfficiency').title = 'Gemessener Wirkungsgrad Akku → Netz, derselbe wie für EOS';
     if (el('automationForecastAware')) el('automationForecastAware').checked = c.forecastAware === true;
     if (el('automationSafetyMargin')) el('automationSafetyMargin').value = c.forecastSafetyMarginKwh ?? 1.5;
     automationGlobalMinSocPct = Number.isFinite(Number(data.globalMinSocPct)) ? Number(data.globalMinSocPct) : null;
@@ -3788,7 +3790,7 @@ async function saveAutomationConfig() {
     searchWindowStart: el('automationSearchStart')?.value || '14:00',
     searchWindowEnd: el('automationSearchEnd')?.value || '09:00',
     ...(el('automationBatteryCapacity')?.disabled ? {} : { batteryCapacityKwh: el('automationBatteryCapacity')?.value ? Number(el('automationBatteryCapacity').value) : null }),
-    inverterEfficiencyPct: Number(el('automationInverterEfficiency')?.value) || 85,
+    ...(el('automationInverterEfficiency')?.disabled ? {} : { inverterEfficiencyPct: Number(el('automationInverterEfficiency')?.value) || 85 }),
     ...(el('automationMaxDischargeW')?.disabled ? {} : { maxDischargeW: Number(el('automationMaxDischargeW')?.value) || -12000 }),
     // 0 ist ein gültiger Wert (keine Reserve) — nur ein leeres Feld fällt auf 30 zurück.
     minSocPct: readAutomationMinSocPct(),

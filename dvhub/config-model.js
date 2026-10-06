@@ -1094,7 +1094,7 @@ function buildFieldDefinitions() {
     {
       section: 'system',
       group: 'support',
-      groupLabel: 'Fern-Support (Remote-Zugang)',
+      groupLabel: 'Fern-Support · Voreinstellungen',
       groupDescription: 'Optionaler, vom Kunden kontrollierter Support-Zugang. Der Zugang ist STANDARDMÄSSIG VERSCHLOSSEN — ein Tunnel zum Support öffnet sich NUR, wenn du ihn aktiv per Knopf startest, ist zeitlich begrenzt und jederzeit abbrechbar. Ohne offenen Tunnel ist die Box von außen nicht erreichbar.',
       path: 'support.localUser.enabled',
       label: 'Support-Login-User bereithalten',
@@ -1104,7 +1104,7 @@ function buildFieldDefinitions() {
     {
       section: 'system',
       group: 'support',
-      groupLabel: 'Fern-Support (Remote-Zugang)',
+      groupLabel: 'Fern-Support · Voreinstellungen',
       groupDescription: 'Optionaler, vom Kunden kontrollierter Support-Zugang.',
       path: 'support.tunnel.autoCloseMin',
       label: 'Tunnel-Auto-Schließung (Minuten)',
@@ -1994,21 +1994,6 @@ function buildFieldDefinitions() {
     },
     {
       section: 'schedule',
-      group: 'scheduleTech',
-      groupLabel: 'Zeitzone & Regeltakt',
-      groupDescription: 'Die Zeitzone gilt für alles. Die Takte darunter sind technische Feinwerte und im Normalbetrieb nicht nötig.',
-      groupOrder: 70,
-      path: 'schedule.manualOverrideMinSocPct',
-      label: 'Persistenter Override SoC-Floor (%)',
-      type: 'number',
-      default: 10,
-      min: 0,
-      max: 100,
-      step: 1,
-      help: 'Unter diesem SoC wird ein persistenter Entlade-Override (gridSetpointW < 0) unterdrückt (Hold), damit er den Akku nicht bis zum reinen Hardware-Minimum entleert.'
-    },
-    {
-      section: 'schedule',
       group: 'baseState',
       groupLabel: 'Grundzustand (Fallback)',
       groupDescription: 'Was die Anlage am Netzpunkt tut, wenn gerade keine Regel/Optimierung greift — und zugleich die Untergrenze, die auch unter einer Regel nicht unterschritten wird.',
@@ -2292,7 +2277,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'batteryLimits',
       groupLabel: 'Akku-Grenzen',
-      groupDescription: 'Batterie-Eckdaten und Lade-/Entlade-/SoC-Grenzen f\u00fcr die Optimierung.',
+      groupDescription: 'Kapazität, Leistung und Ladestand-Grenzen des Akkus. Gilt für alles: EOS, Kleine Börsenautomatik, Zeitplan. Die Ladestand-Grenzen von unten nach oben: (1) Mindest-Ladestand im Wechselrichter (dort eingestellt, DVhub liest ihn nur) — tiefer entlädt die Hardware nie. (2) Untergrenze Sicherheit — darunter gibt DVhub keinen Entladebefehl mehr. (3) Untergrenze bei dauerhafter Handsteuerung. (4) Reserve der Kleinen Börsenautomatik (unter Betriebsart) — nur für deren Verkauf.',
       groupOrder: 20,
       path: 'optimizer.batteryCapacityWh',
       label: 'Akkukapazit\u00e4t (Wh)',
@@ -2305,7 +2290,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'batteryLimits',
       groupLabel: 'Akku-Grenzen',
-      groupDescription: 'Batterie-Eckdaten und Lade-/Entlade-/SoC-Grenzen f\u00fcr die Optimierung.',
+      groupDescription: 'Kapazität, Leistung und Ladestand-Grenzen des Akkus. Gilt für alles: EOS, Kleine Börsenautomatik, Zeitplan. Die Ladestand-Grenzen von unten nach oben: (1) Mindest-Ladestand im Wechselrichter (dort eingestellt, DVhub liest ihn nur) — tiefer entlädt die Hardware nie. (2) Untergrenze Sicherheit — darunter gibt DVhub keinen Entladebefehl mehr. (3) Untergrenze bei dauerhafter Handsteuerung. (4) Reserve der Kleinen Börsenautomatik (unter Betriebsart) — nur für deren Verkauf.',
       groupOrder: 20,
       path: 'optimizer.batteryStages',
       label: 'Akku-Ausbaustufen',
@@ -2316,7 +2301,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'batteryLimits',
       groupLabel: 'Akku-Grenzen',
-      groupDescription: 'Batterie-Eckdaten und Lade-/Entlade-/SoC-Grenzen f\u00fcr die Optimierung.',
+      groupDescription: 'Kapazität, Leistung und Ladestand-Grenzen des Akkus. Gilt für alles: EOS, Kleine Börsenautomatik, Zeitplan. Die Ladestand-Grenzen von unten nach oben: (1) Mindest-Ladestand im Wechselrichter (dort eingestellt, DVhub liest ihn nur) — tiefer entlädt die Hardware nie. (2) Untergrenze Sicherheit — darunter gibt DVhub keinen Entladebefehl mehr. (3) Untergrenze bei dauerhafter Handsteuerung. (4) Reserve der Kleinen Börsenautomatik (unter Betriebsart) — nur für deren Verkauf.',
       groupOrder: 20,
       path: 'optimizer.maxChargeW',
       label: 'Max. Ladeleistung (W)',
@@ -2329,7 +2314,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'batteryLimits',
       groupLabel: 'Akku-Grenzen',
-      groupDescription: 'Batterie-Eckdaten und Lade-/Entlade-/SoC-Grenzen f\u00fcr die Optimierung.',
+      groupDescription: 'Kapazität, Leistung und Ladestand-Grenzen des Akkus. Gilt für alles: EOS, Kleine Börsenautomatik, Zeitplan. Die Ladestand-Grenzen von unten nach oben: (1) Mindest-Ladestand im Wechselrichter (dort eingestellt, DVhub liest ihn nur) — tiefer entlädt die Hardware nie. (2) Untergrenze Sicherheit — darunter gibt DVhub keinen Entladebefehl mehr. (3) Untergrenze bei dauerhafter Handsteuerung. (4) Reserve der Kleinen Börsenautomatik (unter Betriebsart) — nur für deren Verkauf.',
       groupOrder: 20,
       path: 'optimizer.maxDischargeW',
       label: 'Max. Entladeleistung (W)',
@@ -2342,7 +2327,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'batteryLimits',
       groupLabel: 'Akku-Grenzen',
-      groupDescription: 'Batterie-Eckdaten und Lade-/Entlade-/SoC-Grenzen f\u00fcr die Optimierung.',
+      groupDescription: 'Kapazität, Leistung und Ladestand-Grenzen des Akkus. Gilt für alles: EOS, Kleine Börsenautomatik, Zeitplan. Die Ladestand-Grenzen von unten nach oben: (1) Mindest-Ladestand im Wechselrichter (dort eingestellt, DVhub liest ihn nur) — tiefer entlädt die Hardware nie. (2) Untergrenze Sicherheit — darunter gibt DVhub keinen Entladebefehl mehr. (3) Untergrenze bei dauerhafter Handsteuerung. (4) Reserve der Kleinen Börsenautomatik (unter Betriebsart) — nur für deren Verkauf.',
       groupOrder: 20,
       path: 'optimizer.maxSocPct',
       label: 'Max. SOC (%)',
@@ -2356,16 +2341,31 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'batteryLimits',
       groupLabel: 'Akku-Grenzen',
-      groupDescription: 'Batterie-Eckdaten und Lade-/Entlade-/SoC-Grenzen f\u00fcr die Optimierung.',
+      groupDescription: 'Kapazität, Leistung und Ladestand-Grenzen des Akkus. Gilt für alles: EOS, Kleine Börsenautomatik, Zeitplan. Die Ladestand-Grenzen von unten nach oben: (1) Mindest-Ladestand im Wechselrichter (dort eingestellt, DVhub liest ihn nur) — tiefer entlädt die Hardware nie. (2) Untergrenze Sicherheit — darunter gibt DVhub keinen Entladebefehl mehr. (3) Untergrenze bei dauerhafter Handsteuerung. (4) Reserve der Kleinen Börsenautomatik (unter Betriebsart) — nur für deren Verkauf.',
       groupOrder: 20,
       path: 'optimizer.hardFloorSocPct',
-      label: 'Min. SoC / Entlade-Floor (%)',
+      label: 'Untergrenze Sicherheit (% Ladestand)',
       type: 'number',
       default: 5,
       min: 0,
       max: 100,
       step: 1,
-      help: 'Der EINE effektive Entlade-Floor f\u00fcr ALLE Quellen inkl. EOS: bei oder unter diesem SoC wird jede erzwungene Entladung im Steuerpfad unterdr\u00fcckt (Hold). Dies ist der Min-SoC, den Optimizer und EOS respektieren (der fr\u00fchere separate weiche \u201eMin. SOC" wurde entfernt \u2014 er galt f\u00fcr den EOS-Pfad nie). Sollte nicht unter dem Hardware-Minimum (Victron minSoc) liegen. Standard 5 %.'
+      help: 'Bei oder unter diesem Ladestand gibt DVhub keinen Entladebefehl mehr \u2014 egal ob er aus dem EOS-Plan, dem Zeitplan oder von Hand kommt, und auch dann nicht, wenn der Ladestand unbekannt oder veraltet ist. EOS plant mit dem Mindest-Ladestand, der im Wechselrichter eingestellt ist; kennt DVhub den nicht, gilt dieser Wert. Sollte nicht unter dem Mindest-Ladestand des Wechselrichters liegen. Standard 5 %.'
+    },
+    {
+      section: 'schedule',
+      group: 'batteryLimits',
+      groupLabel: 'Akku-Grenzen',
+      groupDescription: 'Kapazität, Leistung und Ladestand-Grenzen des Akkus. Gilt für alles: EOS, Kleine Börsenautomatik, Zeitplan. Die Ladestand-Grenzen von unten nach oben: (1) Mindest-Ladestand im Wechselrichter (dort eingestellt, DVhub liest ihn nur) — tiefer entlädt die Hardware nie. (2) Untergrenze Sicherheit — darunter gibt DVhub keinen Entladebefehl mehr. (3) Untergrenze bei dauerhafter Handsteuerung. (4) Reserve der Kleinen Börsenautomatik (unter Betriebsart) — nur für deren Verkauf.',
+      groupOrder: 20,
+      path: 'schedule.manualOverrideMinSocPct',
+      label: 'Untergrenze bei dauerhafter Handsteuerung (% Ladestand)',
+      type: 'number',
+      default: 10,
+      min: 0,
+      max: 100,
+      step: 1,
+      help: 'Gilt nur, wenn du im Leitstand von Hand dauerhaft Entladen eingestellt hast (ohne Ablaufzeit): unter diesem Ladestand hält DVhub an, damit der Akku nicht bis zum Mindest-Ladestand des Wechselrichters leerläuft. Standard 10 %.'
     },
     {
       section: 'schedule',
@@ -2679,7 +2679,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 0,
       max: 100,
-      help: 'So viel bleibt bei Sonnenuntergang im Akku und wird nicht verkauft. Über Nacht sinkt die Grenze gleichmäßig bis eine Stunde nach Sonnenaufgang auf den Mindest-Ladestand des Wechselrichters. Beispiel: 30 % am Abend, 5 % Mindest-Ladestand — um Mitternacht liegt die Grenze etwa in der Mitte. Höherer Wert = mehr Eigenverbrauch über Nacht, weniger Verkauf.'
+      help: 'Gilt nur für den Verkauf der Kleinen Börsenautomatik (die allgemeinen Untergrenzen stehen unter Meine Anlage → Akku-Grenzen). So viel bleibt bei Sonnenuntergang im Akku und wird nicht verkauft. Über Nacht sinkt die Grenze gleichmäßig bis eine Stunde nach Sonnenaufgang auf den Mindest-Ladestand des Wechselrichters. Beispiel: 30 % am Abend, 5 % Mindest-Ladestand — um Mitternacht liegt die Grenze etwa in der Mitte. Höherer Wert = mehr Eigenverbrauch über Nacht, weniger Verkauf.'
     },
     {
       section: 'schedule',
@@ -2712,8 +2712,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smaBattery',
-      groupLabel: 'Kleine Börsenautomatik · Wirkungsgrad & Grenzen',
-      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“. Daraus, aus Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
+      groupLabel: 'Kleine Börsenautomatik · Grenzen',
+      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“, der Wirkungsgrad aus der Messung (derselbe wie für EOS) — das Feld dafür erscheint nur, solange noch keine Messung vorliegt. Daraus und aus Ladestand und Reserve rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.batteryCapacityKwh',
@@ -2725,8 +2725,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smaBattery',
-      groupLabel: 'Kleine Börsenautomatik · Wirkungsgrad & Grenzen',
-      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“. Daraus, aus Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
+      groupLabel: 'Kleine Börsenautomatik · Grenzen',
+      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“, der Wirkungsgrad aus der Messung (derselbe wie für EOS) — das Feld dafür erscheint nur, solange noch keine Messung vorliegt. Daraus und aus Ladestand und Reserve rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.inverterEfficiencyPct',
@@ -2737,8 +2737,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smaBattery',
-      groupLabel: 'Kleine Börsenautomatik · Wirkungsgrad & Grenzen',
-      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“. Daraus, aus Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
+      groupLabel: 'Kleine Börsenautomatik · Grenzen',
+      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“, der Wirkungsgrad aus der Messung (derselbe wie für EOS) — das Feld dafür erscheint nur, solange noch keine Messung vorliegt. Daraus und aus Ladestand und Reserve rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.maxDischargeW',
@@ -2749,8 +2749,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smaBattery',
-      groupLabel: 'Kleine Börsenautomatik · Wirkungsgrad & Grenzen',
-      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“. Daraus, aus Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
+      groupLabel: 'Kleine Börsenautomatik · Grenzen',
+      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“, der Wirkungsgrad aus der Messung (derselbe wie für EOS) — das Feld dafür erscheint nur, solange noch keine Messung vorliegt. Daraus und aus Ladestand und Reserve rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.targetSlotCount',
@@ -5555,14 +5555,32 @@ const SETTINGS_AREAS = [
     icon: '◆',
     description: 'Zeitzone, Datenbank und Sicherung, Zugang und Fernwartung.',
     groups: ['scheduleTech', 'dbBackup', 'security'],
-    advanced: ['historyImport', 'support', 'database', 'general', 'accessControl', 'monitoring', 'scan'],
+    advanced: ['historyImport', 'database', 'general', 'accessControl', 'monitoring', 'scan'],
     editors: ['historyImport']
+  },
+  {
+    id: 'shares',
+    label: 'Freigaben',
+    icon: '\u21c4',
+    description: 'Wer von außen auf die Anlage zugreifen darf und welche Daten sie nach außen gibt. Alles ist freiwillig und jederzeit abschaltbar.',
+    groups: ['support'],
+    advanced: [],
+    editors: []
   }
 ];
+
+// Verweise zwischen Einstellungen und Integrationen: dort wird gekoppelt und
+// der Zustand gezeigt, hier stehen Grenzwerte und Regeln. Die Karte der Gruppe
+// bekommt einen Link, damit beides zusammen gefunden wird.
+const SETTINGS_GROUP_LINKS = {
+  eebus: { href: '/integrations#eebus', label: 'Steuerbox koppeln, Geräte und Zustand: Integrationen → EEBUS' },
+  paragraph14a: { href: '/integrations#p14a', label: 'Geräte und aktuelle Begrenzung: Integrationen → §14a' }
+};
 
 export function getConfigDefinition() {
   return {
     areas: clone(SETTINGS_AREAS),
+    groupLinks: clone(SETTINGS_GROUP_LINKS),
     destinations: clone(SETTINGS_DESTINATIONS),
     sections: clone(SECTIONS),
     fields: clone(FIELD_DEFINITIONS),

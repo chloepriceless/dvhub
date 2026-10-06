@@ -512,7 +512,12 @@ export function createInspector(ctx, deps = {}) {
       return { available: false, reason: 'eos_off', window: { from, to } };
     }
     if (!available) {
-      return { available: false, reason: 'eos_off', window: { from, to } };
+      // Eingeschaltet, aber gerade keine Antwort (rechnet, überlastet, startet
+      // neu) ist nicht „aus“ — sonst rät die Anzeige, EOS einzuschalten, obwohl
+      // es läuft (eHive 2026-10-06).
+      let enabled = false;
+      try { enabled = eosMonitor?.status?.().enabled === true; } catch { /* unbekannt → aus */ }
+      return { available: false, reason: enabled ? 'eos_not_answering' : 'eos_off', window: { from, to } };
     }
 
     // Build the same payload the optimizer pushes to EOS — mirrors RESEARCH §B4.

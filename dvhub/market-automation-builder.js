@@ -2,6 +2,7 @@
 // Extracted from server.js (Phase 4, Plan 01).
 // Imports: small-market-automation.js, milp-optimizer.js, sun-times-cache.js, server-utils.js
 
+import { effectiveInverterCurve } from './services/inverter-efficiency/calibrator.js';
 import { berlinDateString } from './server-utils.js';
 import { toFiniteNumber } from './util.js';
 import {
@@ -46,24 +47,37 @@ export const VICTRON_MIN_SOC_FALLBACK_PCT = 5;
 // Börsenautomatik hatte eigene Werte, die davon abweichen konnten. Jetzt
 // rechnet sie mit den Anlagenwerten; ihre eigenen gelten nur noch, solange die
 // Anlagenwerte fehlen (Anlagen, die nie etwas anderes eingerichtet haben).
-export function resolvePlantBattery(cfg) {
+export function resolvePlantBattery(cfg, curve = null) {
   const opt = cfg?.optimizer || {};
   const capacityWh = Number(opt.batteryCapacityWh);
   const powers = [Math.abs(Number(opt.maxDischargeW)), Math.abs(Number(opt.inverterMaxPowerW))].filter((w) => Number.isFinite(w) && w > 0);
   return {
     capacityKwh: Number.isFinite(capacityWh) && capacityWh > 0 ? Math.round(capacityWh / 10) / 100 : null,
     // Verkauft wird über den Wechselrichter: die kleinere der beiden Grenzen zählt.
-    maxDischargeW: powers.length ? Math.min(...powers) : null
+    maxDischargeW: powers.length ? Math.min(...powers) : null,
+    // Gemessener Wirkungsgrad Akku → Netz: derselbe, mit dem EOS rechnet
+    // (Entlade-Wirkungsgrad des Akkus × gemessene Wechselrichter-Kennlinie).
+    // null, solange keine freigegebene Kennlinie vorliegt.
+    efficiencyPct: measuredDischargeEfficiencyPct(cfg, curve)
   };
 }
 
-export function withPlantBattery(automationConfig, cfg) {
+export function measuredDischargeEfficiencyPct(cfg, curve) {
+  const eta = Number(curve?.referenceEta);
+  if (!Number.isFinite(eta) || eta <= 0 || eta > 1) return null;
+  const roundTrip = Number(cfg?.optimizer?.roundTripEfficiency);
+  const battery = Number.isFinite(roundTrip) && roundTrip > 0 && roundTrip <= 1 ? Math.sqrt(roundTrip) : 0.94;
+  return Math.round(battery * eta * 1000) / 10;
+}
+
+export function withPlantBattery(automationConfig, cfg, curve = null) {
   if (!automationConfig) return automationConfig;
-  const plant = resolvePlantBattery(cfg);
+  const plant = resolvePlantBattery(cfg, curve);
   return {
     ...automationConfig,
     ...(plant.capacityKwh != null ? { batteryCapacityKwh: plant.capacityKwh } : {}),
-    ...(plant.maxDischargeW != null ? { maxDischargeW: -plant.maxDischargeW } : {})
+    ...(plant.maxDischargeW != null ? { maxDischargeW: -plant.maxDischargeW } : {}),
+    ...(plant.efficiencyPct != null ? { inverterEfficiencyPct: plant.efficiencyPct } : {})
   };
 }
 
@@ -112,6 +126,10 @@ export function buildNeedsRegeneration({ runDate, lastState, priceSlotCount, cur
 
 export function createMarketAutomationBuilder(ctx) {
   const { state, getCfg, pushLog } = ctx;
+  // Freigegebene Wechselrichter-Kennlinie (services/inverter-efficiency), wie für EOS.
+  const measuredCurve = (cfg) => {
+    try { return effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()) || null; } catch { return null; }
+  };
 
   // --- Private helpers (closure-scoped) ---
 
@@ -194,7 +212,7 @@ export function createMarketAutomationBuilder(ctx) {
     sunTimesCache
   } = {}) {
     const cfg = getCfg();
-    automationConfig = withPlantBattery(automationConfig, cfg);
+    automationConfig = withPlantBattery(automationConfig, cfg, measuredCurve(cfg));
     if (!automationConfig?.enabled || !sunTimesCache) return [];
 
     const timeZoneForFilter = cfg.schedule?.timezone || 'Europe/Berlin';
@@ -635,7 +653,7 @@ export function createMarketAutomationBuilder(ctx) {
 
   async function regenerateSmallMarketAutomationRules({ now = Date.now(), force = false } = {}) {
     const cfg = getCfg();
-    const automationConfig = withPlantBattery(cfg.schedule?.smallMarketAutomation, cfg);
+    const automationConfig = withPlantBattery(cfg.schedule?.smallMarketAutomation, cfg, measuredCurve(cfg));
     const runDate = berlinDateString(new Date(now), cfg.epex.timezone);
     const manualRules = state.schedule.rules.filter((rule) => !isSmallMarketAutomationRule(rule));
     const previousAutomationRules = state.schedule.rules.filter((rule) => isSmallMarketAutomationRule(rule));

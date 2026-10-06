@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/settings.css?v=20260629-install-btn-conditional">
-  <link rel="stylesheet" href="/settings-redesign.css?v=20261006-final2">
+  <link rel="stylesheet" href="/settings-redesign.css?v=20261006-links">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Einstellungen">
@@ -185,8 +185,9 @@
               <div id="areaExtra-sys" class="config-grid sa-legacy-grid"></div>
             </section>
             <section id="tab-shares" class="settings-tab-panel" hidden>
-              <header class="sa-section-head"><h2>Freigaben</h2><p class="sub">Wer von au&szlig;en auf die Anlage zugreifen darf und welche Daten sie nach au&szlig;en gibt: Installateur, Fern-Support, Datenspende, Ortsnetz, Werte von Home Assistant oder Loxone. Alles ist freiwillig und jederzeit abschaltbar.</p></header>
+              <header class="sa-section-head"><h2>Freigaben</h2><p class="sub" id="areaSub-shares"></p></header>
               <div id="areaExtra-shares" class="config-grid sa-legacy-grid"></div>
+              <div id="areaGrid-shares" class="config-grid sa-area-grid sa-area-grid--after" data-area="shares"></div>
             </section>
             <section id="tab-system" class="settings-tab-panel" hidden>
               <header class="sa-section-head"><h2>Status</h2><p class="sub">Zustand der Anlage auf einen Blick: Pr&uuml;fungen, Schnittstellen, DV-Signale, Modbus, Zeitplan.</p></header>
@@ -1018,7 +1019,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/settings.js?v=20261006-akku"></script>
+  <script src="/settings.js?v=20261006-links"></script>
   <script src="/tools.js?v=20261001-ortsnetz"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>

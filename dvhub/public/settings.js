@@ -1714,6 +1714,16 @@ function renderGroupedCardsOb(mount, destination, destinationId) {
         }
       }
 
+      // Verweis zur passenden Stelle unter Integrationen (definition.groupLinks).
+      const groupLink = definition?.groupLinks?.[grp.id];
+      if (groupLink) {
+        const link = document.createElement('a');
+        link.className = 'sa-group-link';
+        link.href = groupLink.href;
+        link.textContent = groupLink.label;
+        body.appendChild(link);
+      }
+
       // Handlungen der Gruppe (z. B. Backup herunterladen / wiederherstellen)
       // ans Ende der Karte, unter die Einstellungen, zu denen sie gehören.
       if (groupActions) body.appendChild(groupActions);
@@ -1789,6 +1799,14 @@ function renderAreaEditor(name) {
 // (für Sonnenauf- und -untergang) ein zweites Mal — der zweite Satz Felder
 // erscheint nur, solange der Anlagen-Standort fehlt, und folgt ihm beim Speichern.
 const SMA_LOCATION_DEFAULT = { latitude: 51.1657, longitude: 10.4515 };
+// Vom Server: Akku-Werte der Anlage samt gemessenem Wirkungsgrad (falls vorhanden).
+let plantBatteryInfo = null;
+function loadPlantBatteryInfo() {
+  return apiFetch('/api/schedule/automation/config').then((res) => res.json()).then((data) => {
+    plantBatteryInfo = data && data.plantBattery ? data.plantBattery : null;
+    if (definition) renderSettingsShell();
+  }).catch(() => {});
+}
 function plantLocation(config) {
   const lat = Number(getPath(config, 'forecast.location.latitude'));
   const lon = Number(getPath(config, 'forecast.location.longitude'));
@@ -1800,6 +1818,8 @@ function isDuplicateOfPlantValue(path) {
   // Akku: Kapazität und Entladeleistung stehen unter „Meine Anlage → Akku-Grenzen“
   // und gelten auch für die Automatik (resolvePlantBattery im Server).
   if (path === 'schedule.smallMarketAutomation.batteryCapacityKwh') return Number(getVisibilityValue('optimizer.batteryCapacityWh')) > 0;
+  // Wirkungsgrad: sobald gemessen (wie für EOS), gilt der Messwert.
+  if (path === 'schedule.smallMarketAutomation.inverterEfficiencyPct') return plantBatteryInfo?.efficiencyPct != null;
   if (path === 'schedule.smallMarketAutomation.maxDischargeW') {
     return Math.abs(Number(getVisibilityValue('optimizer.maxDischargeW'))) > 0 || Math.abs(Number(getVisibilityValue('optimizer.inverterMaxPowerW'))) > 0;
   }
@@ -1978,6 +1998,14 @@ function renderAreaGrid(area) {
       wrap.appendChild(inner);
       mount.appendChild(wrap);
     }
+  }
+
+  if (area.id === 'shares') {
+    // Die beiden Fern-Support-Karten gehören zusammen: Voreinstellungen direkt
+    // hinter die Karte, mit der der Tunnel geöffnet wird.
+    const extra = document.getElementById('areaExtra-shares');
+    const supportCard = mount.querySelector('.sa-cfg-card[data-group="support"]');
+    if (extra && supportCard) supportCard.open = true;
   }
 
   if (!mount.children.length) {
@@ -3714,6 +3742,7 @@ function initSettingsPage() {
   loadConfig().catch((error) => {
     setBanner(`Konfiguration konnte nicht geladen werden: ${error.message}`, 'error');
   });
+  loadPlantBatteryInfo();
   loadHistoryImportStatus().then(() => {
     renderSettingsShell();
   }).catch((error) => {
@@ -4197,7 +4226,7 @@ function renderEosInspector(payload) {
   if (!payload.available) {
     if (summary) {
       summary.innerHTML =
-        '<div class="stat-card"><div class="stat-label">EOS</div><div class="stat-val">aus</div></div>' +
+        '<div class="stat-card"><div class="stat-label">EOS</div><div class="stat-val">' + (payload.reason === 'eos_not_answering' ? 'antwortet nicht' : 'aus') + '</div></div>' +
         '<div class="stat-card"><div class="stat-label">Push</div><div class="stat-val">--</div></div>' +
         '<div class="stat-card"><div class="stat-label">Pull-Slots</div><div class="stat-val">--</div></div>';
     }
@@ -4205,11 +4234,13 @@ function renderEosInspector(payload) {
       banner.classList.remove('u-hidden');
       banner.classList.remove('error');
       banner.classList.add('warn');
-      banner.textContent = (payload.reason === 'eos_off')
-        ? 'EOS-Service deaktiviert oder nicht erreichbar. Aktiviere EOS unter Einstellungen → Anlage.'
-        : 'EOS-Inspector nicht verfügbar.';
+      banner.textContent = (payload.reason === 'eos_not_answering')
+        ? 'EOS ist eingeschaltet, antwortet aber gerade nicht — es rechnet, startet neu oder ist überlastet. DVhub fährt solange den letzten Plan weiter. Diese Ansicht füllt sich, sobald EOS wieder antwortet.'
+        : (payload.reason === 'eos_off')
+          ? 'EOS ist ausgeschaltet. Einschalten unter Einstellungen → Betriebsart (Stellung „EOS“).'
+          : 'EOS-Daten nicht verfügbar.';
     }
-    if (tbody) tbody.innerHTML = '<tr><td colspan="4" class="dv-log-empty">EOS aus.</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="4" class="dv-log-empty">' + (payload.reason === 'eos_not_answering' ? 'EOS antwortet gerade nicht.' : 'EOS aus.') + '</td></tr>';
     if (meta) meta.textContent = '--';
     return;
   }
@@ -4291,7 +4322,7 @@ function renderEosInspector(payload) {
 
   if (!outRows.length) {
     var hint = push.ok
-      ? 'EOS hat noch kein Optimierungsergebnis geliefert (ein Lauf dauert ~6 Min). Nach dem nächsten EMS-Tick erscheint der Plan hier.'
+      ? 'EOS hat seit dem letzten Start von DVhub noch kein Ergebnis geliefert. Ein Lauf dauert je nach Gerät 5 bis 15 Minuten; danach erscheint der Plan hier.'
       : ('EOS-Push fehlgeschlagen: ' + escHtmlForecastInspector(push.error || 'unbekannt') + '. Ohne Eingangsdaten rechnet EOS keinen Plan.');
     detailsBody.innerHTML = '<div class="eos-subtbl-empty">' + hint + '</div>';
     return;

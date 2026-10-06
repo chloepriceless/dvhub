@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getConfigDefinition } from '../config-model.js';
 
-test('Einstellungen: jede Gruppe gehört zu genau einem der sieben Bereiche', () => {
+test('Einstellungen: jede Gruppe gehört zu genau einem Bereich', () => {
   const def = getConfigDefinition();
-  assert.deepEqual(def.areas.map((a) => a.label), ['Meine Anlage', 'Strompreise', 'Betriebsart', 'Geräte', 'Netz & Recht', 'Prognosen', 'System']);
+  assert.deepEqual(def.areas.map((a) => a.label), ['Meine Anlage', 'Strompreise', 'Betriebsart', 'Geräte', 'Netz & Recht', 'Prognosen', 'System', 'Freigaben']);
   const placed = def.areas.flatMap((a) => [...a.groups, ...a.advanced]);
   assert.equal(new Set(placed).size, placed.length, 'keine Gruppe doppelt');
   const used = new Set(def.fields.map((f) => f.group || 'main'));

@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Behoben
 
+- **„EOS deaktiviert“, obwohl EOS lief.** Die Ansicht Prognose-Daten meldete „EOS-Service
+  deaktiviert oder nicht erreichbar“, sobald EOS während einer Rechnung nicht antwortete.
+  Jetzt unterscheidet sie: „eingeschaltet, antwortet gerade nicht — DVhub fährt den letzten Plan
+  weiter“ gegenüber „ausgeschaltet“ (mit Weg zum Betriebsart-Schalter).
 - **Leitstand: Prognose-Zeile lief aus der Karte.** Die Aufschlüsselung neben PV-Tagesprognose,
   erwartetem Verbrauch und Überschuss stand in einer Zeile und ragte bei fast jeder
   Bildschirmbreite (1024 bis 1600 px und am Handy) bis zu 200 px über den Kartenrand. Sie steht
@@ -63,6 +67,20 @@ verweist hierher.
 
 ### Neu
 
+- **Kleine Börsenautomatik rechnet mit dem gemessenen Wirkungsgrad.** Sobald DVhub den
+  Wechselrichter vermessen hat, gilt für die Automatik derselbe Wirkungsgrad Akku → Netz wie
+  für EOS (Entlade-Wirkungsgrad des Akkus × gemessene Kennlinie). Das eigene Feld der Automatik
+  erscheint nur noch, solange keine Messung vorliegt.
+- **Ladestand-Grenzen an einer Stelle erklärt.** „Meine Anlage → Akku-Grenzen“ zeigt jetzt beide
+  allgemeinen Untergrenzen nebeneinander — „Untergrenze Sicherheit“ (bisher „Min. SoC /
+  Entlade-Floor“) und „Untergrenze bei dauerhafter Handsteuerung“ (bisher „Persistenter Override
+  SoC-Floor“ unter Zeitplan) — und beschreibt, wie sie mit dem Mindest-Ladestand im
+  Wechselrichter und der Reserve der Kleinen Börsenautomatik zusammenhängen.
+- **Integrations-Ansichten vereinheitlicht.** Eingabefelder überall gleich hoch (vorher 24 bis
+  40 px), Schalter als Pillen wie in den Einstellungen, Zwischenüberschriften mit Trennlinie,
+  Hinweise in einer Schrift. EEBUS und §14a verweisen in beide Richtungen: Kopplung, Geräte
+  und Zustand unter Integrationen, Grenzwerte und Aufteilung unter Einstellungen → Netz & Recht.
+  Die Voreinstellungen zum Fern-Support stehen jetzt bei den Freigaben statt unter System.
 - **Akku-Werte der Anlage gelten für alles.** Kapazität und Entladeleistung unter „Meine Anlage →
   Akku-Grenzen“ gelten jetzt auch für die Kleine Börsenautomatik; ihre eigenen Felder dafür
   entfallen in Einstellungen und Leitstand (im Leitstand werden die Anlagenwerte angezeigt).

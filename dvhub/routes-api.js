@@ -2,6 +2,7 @@
 // Extracted from server.js (Phase 5, Plans 01+02).
 // Factory pattern: createApiRoutes(ctx) returns { handleRequest }.
 
+import { effectiveInverterCurve } from './services/inverter-efficiency/calibrator.js';
 import { createHeavyQueue, SKIPPED as HEAVY_SKIPPED } from './services/heavy-queue.js';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -6056,7 +6057,10 @@ export function createApiRoutes(ctx) {
       if (!status.enabled) return json(res, 200, { ok: true, available: false, reason: 'eos_off', output: null });
       const plan = await ctx.eosMonitor.displayPlan();
       if (!plan) {
-        return json(res, 200, { ok: true, available: status.reachable, reason: status.reachable ? null : 'eos_off', output: null, eos: { status: status.status } });
+        // Eingeschaltet, aber gerade keine Antwort (rechnet, überlastet, startet
+        // neu) ist etwas anderes als „aus“ — die Anzeige sagte bisher „EOS
+        // deaktiviert“, obwohl EOS lief (eHive 2026-10-06, gedrosselter Prozessor).
+        return json(res, 200, { ok: true, available: status.reachable, reason: status.reachable ? null : 'eos_not_answering', output: null, eos: { status: status.status } });
       }
       const maxRows = Math.min(Math.max(Number(url.searchParams.get('rows')) || 300, 1), 8 * 24 * 4);
       const rows = Array.isArray(plan.data.rows) ? plan.data.rows : [];
@@ -8640,7 +8644,7 @@ export function createApiRoutes(ctx) {
         config: getCfg().schedule?.smallMarketAutomation || {},
         optimizerEnabled: getCfg().optimizer?.enabled === true,
         // Akku-Werte aus „Meine Anlage“ — gesetzt gelten sie auch für die Automatik.
-        plantBattery: resolvePlantBattery(getCfg()),
+        plantBattery: resolvePlantBattery(getCfg(), (() => { try { return effectiveInverterCurve(getCfg(), ctx.inverterCurve?.get?.()) || null; } catch { return null; } })()),
         globalMinSocPct: Number.isFinite(Number(state?.victron?.minSocPct)) && state?.victron?.minSocPct != null
           ? Number(state.victron.minSocPct) : VICTRON_MIN_SOC_FALLBACK_PCT
       });
