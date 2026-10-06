@@ -12,6 +12,13 @@ verweist hierher.
 
 ### Behoben
 
+- **Eine Zeitzone für alles.** Die Einstellung „Zeitzone“ (Zeitplan → Zeitplan & Technik) gilt
+  jetzt überall. Bisher rechneten etliche Stellen mit der Zeitzone des Betriebssystems —
+  Tagesgrenzen beim Abruf der Börsenpreise, die Mehrtages-Logik, das Familien-Dashboard,
+  Ruhezeiten der Benachrichtigungen, die Backup-Uhrzeit. Stand das System auf UTC (frisch
+  aufgesetztes Linux), lagen sie im Sommer zwei Stunden daneben, obwohl die Einstellung
+  stimmte. DVhub stellt die Uhr des Prozesses nun selbst auf die eingestellte Zeitzone. Das
+  getrennte Feld „EPEX Zeitzone“ entfällt, Börsenpreise und EOS folgen derselben Einstellung.
 - **EOS-Plan übersteht einen Neustart von DVhub.** DVhub fährt den letzten EOS-Plan weiter,
   wenn EOS gerade nichts liefert — gemerkt war er aber nur im Arbeitsspeicher. Nach einem
   Neustart (Update) war er vergessen, und solange EOS mitten in einer Rechnung nicht antwortete,

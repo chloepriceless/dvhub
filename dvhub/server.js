@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { applySystemTimeZone } from './services/system-timezone.js';
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
@@ -199,6 +200,8 @@ const CONFIG_DEFINITION = getConfigDefinition();
 let loadedConfig = loadConfigFile(CONFIG_PATH);
 let rawCfg = loadedConfig.rawConfig;
 let cfg = loadedConfig.effectiveConfig;
+// Eine Zeitzone für alles (services/system-timezone.js) — schon vor dem ersten Date-Gebrauch.
+applySystemTimeZone(cfg);
 
 // Sweep package 6: surface config-load warnings (wrong-typed / out-of-range
 // fields caught by config-model's warn-and-continue schema validation). These
@@ -501,6 +504,10 @@ function applyLoadedConfig(nextLoadedConfig) {
   loadedConfig = nextLoadedConfig;
   rawCfg = nextLoadedConfig.rawConfig;
   cfg = nextLoadedConfig.effectiveConfig;
+  // Eine Zeitzone für alles: die Einstellung gilt auch für die Uhr des
+  // Prozesses, unabhängig von der Zeitzone des Betriebssystems.
+  const zone = applySystemTimeZone(cfg);
+  if (zone.changed) console.log(`Zeitzone: ${zone.timeZone} (System: ${zone.previous ?? 'nicht gesetzt'})`);
   state.keepalive.appPulse.periodSec = cfg.keepalivePulseSec;
   state.schedule.rules = Array.isArray(cfg.schedule.rules) ? cfg.schedule.rules : [];
   state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;

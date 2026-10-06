@@ -1949,7 +1949,7 @@ function buildFieldDefinitions() {
       path: 'schedule.timezone',
       label: 'Zeitzone',
       type: 'text',
-      help: 'Zum Beispiel Europe/Berlin.'
+      help: 'Zum Beispiel Europe/Berlin. Gilt f\u00fcr alles: Zeitplan, B\u00f6rsenpreise, EOS, Dashboard, Benachrichtigungen und Backups \u2014 unabh\u00e4ngig von der Zeitzone des Betriebssystems.'
     },
     {
       section: 'schedule',
@@ -3675,16 +3675,6 @@ function buildFieldDefinitions() {
       type: 'dynamicSelect',
       dynamicOptionsUrl: '/api/epex/zones',
       help: 'EPEX Day-Ahead Bidding Zone. Wird von dvhub.online geladen.'
-    },
-    {
-      section: 'epex',
-      group: 'market',
-      groupLabel: 'EPEX',
-      groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
-      path: 'epex.timezone',
-      label: 'EPEX Zeitzone',
-      type: 'text',
-      help: 'Zum Beispiel Europe/Berlin.'
     },
     {
       section: 'epex',
