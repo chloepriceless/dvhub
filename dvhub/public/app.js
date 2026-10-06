@@ -3738,6 +3738,13 @@ async function loadAutomationConfig() {
     if (el('automationForecastAware')) el('automationForecastAware').checked = c.forecastAware === true;
     automationGlobalMinSocPct = Number.isFinite(Number(data.globalMinSocPct)) ? Number(data.globalMinSocPct) : null;
     if (el('automationOptimizerNote')) el('automationOptimizerNote').hidden = data.optimizerEnabled !== true;
+    // Betriebsart wird in den Einstellungen gestellt (Aus · Kleine Börsenautomatik
+    // · EOS). Läuft die Optimierung, lässt sich die Automatik hier nicht
+    // zusätzlich einschalten — ausschalten geht immer.
+    if (el('automationEnabled')) {
+      el('automationEnabled').disabled = data.optimizerEnabled === true && !c.enabled;
+      el('automationEnabled').title = el('automationEnabled').disabled ? 'Betriebsart ist „EOS“ — umstellen unter Einstellungen → Betriebsart' : '';
+    }
     renderAutomationReserveNote();
 
     // Load stages

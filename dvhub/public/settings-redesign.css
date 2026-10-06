@@ -662,3 +662,70 @@
   .settings-aurora .settings-tab-panel .config-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-aurora .settings-tab-panel .config-row { flex-wrap: wrap; }
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   TEIL 5 — Betriebsart-Schalter (Aus · Kleine Börsenautomatik · EOS).
+   ─────────────────────────────────────────────────────────────────────────── */
+.settings-aurora .sa-mode {
+  grid-column: 1 / -1;
+  padding: 18px 20px 16px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 38%, transparent);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--cyan) 7%, var(--glass-2)), var(--glass));
+  box-shadow: var(--shadow-md);
+}
+.settings-aurora .sa-mode-title {
+  font-family: var(--f-mono, var(--f-body)); font-size: 0.7rem; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--cyan); margin-bottom: 12px;
+}
+.settings-aurora .sa-mode-track {
+  position: relative; display: grid; grid-template-columns: repeat(3, 1fr);
+  padding: 4px; border-radius: 999px;
+  border: 1px solid var(--glass-brd); background: color-mix(in srgb, #000 22%, var(--glass));
+  max-width: 620px;
+}
+.settings-aurora .sa-mode-thumb {
+  position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / 3);
+  border-radius: 999px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--cyan) 55%, transparent), color-mix(in srgb, var(--cyan) 30%, transparent));
+  border: 1px solid color-mix(in srgb, var(--cyan) 70%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--cyan) 28%, transparent);
+  transition: transform 0.22s ease;
+}
+.settings-aurora .sa-mode-track[data-pos="1"] .sa-mode-thumb { transform: translateX(100%); }
+.settings-aurora .sa-mode-track[data-pos="2"] .sa-mode-thumb { transform: translateX(200%); }
+.settings-aurora .sa-mode-pos {
+  position: relative; z-index: 1; padding: 10px 8px; border: 0; background: transparent; cursor: pointer;
+  color: var(--text-2); font-family: var(--f-body); font-size: 0.86rem; font-weight: 600;
+  border-radius: 999px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.settings-aurora .sa-mode-pos.is-active { color: var(--text); }
+.settings-aurora .sa-mode-pos:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.settings-aurora .sa-mode-text { margin: 14px 0 0; color: var(--text-2); font-size: 0.88rem; line-height: 1.5; max-width: 80ch; }
+.settings-aurora .sa-mode-note { margin: 8px 0 0; color: var(--warn, #ffd421); font-size: 0.8rem; line-height: 1.45; max-width: 80ch; }
+
+.settings-aurora .sa-cfg-card.sa-mode-on {
+  border-color: color-mix(in srgb, var(--cyan) 60%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cyan) 22%, transparent), var(--shadow-md);
+}
+.settings-aurora .sa-cfg-card.sa-mode-dim { opacity: 0.55; }
+.settings-aurora .sa-cfg-card.sa-mode-dim[open],
+.settings-aurora .sa-cfg-card.sa-mode-dim:hover,
+.settings-aurora .sa-cfg-card.sa-mode-dim:focus-within { opacity: 0.9; }
+.settings-aurora .sa-mode-badge {
+  margin-left: auto; margin-right: 10px; padding: 2px 9px; border-radius: 999px;
+  font-family: var(--f-mono, var(--f-body)); font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--text-dim); border: 1px solid var(--glass-brd);
+}
+.settings-aurora .sa-mode-on .sa-mode-badge {
+  color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 55%, transparent);
+  background: color-mix(in srgb, var(--cyan) 12%, transparent);
+}
+@media (max-width: 600px) {
+  .settings-aurora .sa-mode { padding: 14px 12px; }
+  .settings-aurora .sa-mode-pos { font-size: 0.72rem; padding: 10px 3px; white-space: normal; line-height: 1.15; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; hyphens: auto; }
+  .settings-aurora .sa-mode-track { border-radius: 18px; }
+  .settings-aurora .sa-mode-thumb, .settings-aurora .sa-mode-pos { border-radius: 14px; }
+  .settings-aurora .sa-mode-badge { display: none; }
+}

@@ -1412,6 +1412,10 @@ function syncForecastStringsToDraft() {
 
 // Fields hidden from UI (managed automatically, user should not edit)
 const HIDDEN_FIELD_PATHS = [
+  // Betriebsart-Schalter (Bereich „Betriebsart“): er stellt diese beiden
+  // Schalter gemeinsam — einzeln stünden sie im Widerspruch dazu.
+  'optimizer.enabled',
+  'schedule.smallMarketAutomation.enabled',
   'telemetry.database.host',
   'telemetry.database.port',
   'telemetry.database.name',
@@ -1780,6 +1784,108 @@ function renderAreaEditor(name) {
   return null;
 }
 
+// ── Betriebsart-Schalter (Aus · Kleine Börsenautomatik · EOS) ────────────────
+// Liest und stellt drei Konfigurationswerte gemeinsam:
+//   optimizer.enabled, optimizer.primarySource, schedule.smallMarketAutomation.enabled
+// 'internal' = Optimierung an, aber mit dem eingebauten Planer statt EOS —
+// keine eigene Stellung, wird nur angezeigt, bis jemand den Schalter bewegt.
+function getOperatingMode() {
+  const optimizerOn = getVisibilityValue('optimizer.enabled') === true;
+  const smaOn = getVisibilityValue('schedule.smallMarketAutomation.enabled') === true;
+  if (optimizerOn) {
+    const source = getVisibilityValue('optimizer.primarySource') || 'internal';
+    return { mode: source === 'eos' || source === 'best' ? 'eos' : 'internal', both: smaOn };
+  }
+  return { mode: smaOn ? 'sma' : 'off', both: false };
+}
+
+function setOperatingMode(mode) {
+  syncRenderedFieldsToDraft();
+  const next = clone(currentDraftConfig || {});
+  setPath(next, 'optimizer.enabled', mode === 'eos');
+  setPath(next, 'schedule.smallMarketAutomation.enabled', mode === 'sma');
+  if (mode === 'eos') {
+    setPath(next, 'optimizer.primarySource', 'eos');
+    setPath(next, 'optimizer.eosProxy.enabled', true);
+  }
+  currentDraftConfig = next;
+  renderSettingsShell();
+}
+
+function renderModeSwitch(area) {
+  const def = area.modeSwitch;
+  const { mode, both } = getOperatingMode();
+  const wrap = document.createElement('section');
+  wrap.className = 'sa-mode';
+  const title = document.createElement('div');
+  title.className = 'sa-mode-title';
+  title.textContent = 'Betriebsart';
+  wrap.appendChild(title);
+
+  const track = document.createElement('div');
+  track.className = 'sa-mode-track';
+  track.setAttribute('role', 'radiogroup');
+  track.setAttribute('aria-label', 'Betriebsart');
+  const shown = mode === 'internal' ? 'eos' : mode;
+  track.dataset.pos = String(Math.max(0, def.positions.findIndex((p) => p.id === shown)));
+  const thumb = document.createElement('span');
+  thumb.className = 'sa-mode-thumb';
+  thumb.setAttribute('aria-hidden', 'true');
+  track.appendChild(thumb);
+  for (const pos of def.positions) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sa-mode-pos' + (pos.id === shown ? ' is-active' : '');
+    btn.setAttribute('role', 'radio');
+    btn.setAttribute('aria-checked', pos.id === shown ? 'true' : 'false');
+    btn.dataset.mode = pos.id;
+    btn.textContent = pos.label;
+    btn.addEventListener('click', () => { if (pos.id !== mode) setOperatingMode(pos.id); });
+    track.appendChild(btn);
+  }
+  wrap.appendChild(track);
+
+  const text = document.createElement('p');
+  text.className = 'sa-mode-text';
+  text.textContent = (def.positions.find((p) => p.id === shown) || {}).text || '';
+  wrap.appendChild(text);
+
+  const notes = [];
+  if (mode === 'internal') notes.push('Zurzeit plant der eingebaute Planer, nicht EOS. Ein Klick auf „EOS“ stellt auf den EOS-Optimierer um.');
+  if (both) notes.push('Zusätzlich ist die Kleine Börsenautomatik eingeschaltet. Ein Klick auf eine Stellung räumt das auf — es gilt dann nur noch die gewählte Betriebsart.');
+  for (const line of notes) {
+    const note = document.createElement('p');
+    note.className = 'sa-mode-note';
+    note.textContent = line;
+    wrap.appendChild(note);
+  }
+  return wrap;
+}
+
+// Karten der gewählten Betriebsart hervorheben und öffnen, die der anderen
+// abblenden. Nichts wird versteckt: wer umstellen will, sieht vorher, was ihn erwartet.
+function markModeCards(mount, area, firstRender) {
+  const groups = area.modeSwitch.groups || {};
+  const { mode } = getOperatingMode();
+  const active = mode === 'internal' ? 'eos' : mode;
+  const labelOf = (id) => (area.modeSwitch.positions.find((p) => p.id === id) || {}).label || id;
+  for (const [modeId, ids] of Object.entries(groups)) {
+    for (const id of ids) {
+      const card = mount.querySelector('.sa-cfg-card[data-group="' + id + '"]');
+      if (!card) continue;
+      const isActive = modeId === active;
+      card.classList.add(isActive ? 'sa-mode-on' : 'sa-mode-dim');
+      const badge = document.createElement('span');
+      badge.className = 'sa-mode-badge';
+      badge.textContent = isActive ? 'aktiv' : 'nur bei „' + labelOf(modeId) + '“';
+      const head = card.querySelector('.sa-cfg-card-head');
+      head.insertBefore(badge, head.querySelector('.sa-cfg-card-count'));
+      if (firstRender || mount.dataset.lastMode !== active) card.open = isActive;
+    }
+  }
+  mount.dataset.lastMode = active;
+}
+
 function renderAreaGrid(area) {
   const mount = document.getElementById('areaGrid-' + area.id);
   if (!mount) return;
@@ -1798,7 +1904,9 @@ function renderAreaGrid(area) {
     ...group,
     openByDefault: firstRender ? index === 0 : openCards.has(group.id)
   }));
+  if (area.modeSwitch) mount.appendChild(renderModeSwitch(area));
   renderGroupedCardsOb(mount, { sections: [{ id: 'area-' + area.id, groups: main }] }, area.id);
+  if (area.modeSwitch) markModeCards(mount, area, firstRender);
   for (const name of area.editors || []) {
     const editor = renderAreaEditor(name);
     if (editor) mount.appendChild(editor);
@@ -2407,6 +2515,10 @@ function countChangedFields() {
     const saved = getPath(currentRawConfig, field.path);
     if (JSON.stringify(draft) !== JSON.stringify(saved)) count++;
   }
+  // Der Betriebsart-Schalter hat keine eigenen Eingabefelder — er zählt als eine Änderung.
+  const modePaths = ['optimizer.enabled', 'schedule.smallMarketAutomation.enabled', 'optimizer.primarySource', 'optimizer.eosProxy.enabled'];
+  if (modePaths.some((path) => !document.getElementById(fieldId(path))
+    && JSON.stringify(getPath(currentDraftConfig, path)) !== JSON.stringify(getPath(currentRawConfig, path)))) count++;
   return count;
 }
 

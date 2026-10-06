@@ -22,3 +22,10 @@ test('Einstellungen: Reserve und Zeitzone stehen dort, wo man sie sucht', () => 
   assert.equal(areaOf(groupOf('optimizer.batteryCapacityWh')), 'plant');
   assert.equal(areaOf(groupOf('userEnergyPricing.mode')), 'prices');
 });
+
+test('Betriebsart-Schalter: drei Stellungen, jede Gruppe des Schalters liegt im Bereich', () => {
+  const area = getConfigDefinition().areas.find((a) => a.id === 'mode');
+  assert.deepEqual(area.modeSwitch.positions.map((p) => p.id), ['off', 'sma', 'eos']);
+  const inArea = new Set([...area.groups, ...area.advanced]);
+  for (const g of [...area.modeSwitch.groups.sma, ...area.modeSwitch.groups.eos]) assert.equal(inArea.has(g), true, g);
+});

@@ -2046,13 +2046,13 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'optimization',
-      groupLabel: 'Optimierung',
-      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
       groupOrder: 10,
       path: 'optimizer.enabled',
       label: 'Optimierung aktiv',
       type: 'boolean',
-      help: 'Master-Schalter: Aktiviert die automatische Batterie-Optimierung (EOS bzw. eingebauter Planer). An: der Planer entscheidet über Verkauf und Reserve; die Einstellungen der Kleinen Börsenautomatik erscheinen dann nur, wenn sie eingeschaltet ist. Aus: alle Optimizer-Regeln werden sofort entfernt, und es gelten die Einstellungen der Kleinen Börsenautomatik weiter unten.'
+      help: 'Master-Schalter der automatischen Batterie-Optimierung (EOS bzw. eingebauter Planer). Auf der Einstellungsseite stellt ihn der Betriebsart-Schalter. Aus: alle Optimizer-Regeln werden sofort entfernt.'
     },
     {
       section: 'schedule',
@@ -2105,8 +2105,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'optimization',
-      groupLabel: 'Optimierung',
-      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
       groupOrder: 10,
       path: 'optimizer.eosOptimizationIntervalSec',
       label: 'EOS Slot-Aufl\u00f6sung',
@@ -2163,8 +2163,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'optimization',
-      groupLabel: 'Optimierung',
-      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
       groupOrder: 10,
       path: 'optimizer.ruleHorizonHours',
       label: 'Vorausschau der Zeitplan-Regeln (h)',
@@ -2178,8 +2178,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'optimization',
-      groupLabel: 'Optimierung',
-      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
       groupOrder: 10,
       path: 'optimizer.eosEmsIntervalSec',
       label: 'EOS Re-Planungs-Intervall',
@@ -2195,8 +2195,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'optimization',
-      groupLabel: 'Optimierung',
-      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
       groupOrder: 10,
       path: 'optimizer.eosGeneticGenerations',
       label: 'EOS Generationen',
@@ -2370,8 +2370,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'optimization',
-      groupLabel: 'Optimierung',
-      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
       groupOrder: 10,
       path: 'optimizer.eosGridHoldEnabled',
       label: 'Akku halten: Last aus dem Netz, wenn EOS es plant',
@@ -2382,8 +2382,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'optimization',
-      groupLabel: 'Optimierung',
-      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
       groupOrder: 10,
       path: 'optimizer.eosGridHoldMarginW',
       label: 'Akku halten: Puffer (W)',
@@ -2397,8 +2397,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'optimization',
-      groupLabel: 'Optimierung',
-      groupDescription: 'Master-Schalter und EOS-Takt der automatischen Batterie-Optimierung.',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
       groupOrder: 10,
       path: 'optimizer.eosGridHoldEvMarginW',
       label: 'Akku halten: Puffer beim E-Auto-Laden (W)',
@@ -2634,24 +2634,23 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik · Ein/Aus & Zeitfenster',
-      groupDescription: 'Für Anlagen OHNE aktive Optimierung (EOS): verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Ist die Optimierung aktiv, plant sie die Anlage samt Reserve selbst; die übrigen Einstellungen der Kleinen Börsenautomatik erscheinen dann erst, wenn du sie hier einschaltest.',
+      groupLabel: 'Kleine Börsenautomatik · Zeitfenster',
+      groupDescription: 'Verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Gilt in der Betriebsart „Kleine Börsenautomatik“.',
       groupOrder: 50,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.enabled',
       label: 'Kleine Börsenautomatik aktiv',
       type: 'boolean',
-      help: 'Erzeugt täglich Verkaufsregeln für die teuersten freien Viertelstunden im Suchfenster. Die Reserve bleibt dabei unangetastet. Mit aktiver Optimierung (EOS) wird sie nicht gebraucht: der Plan belegt dann alle Viertelstunden.'
+      help: 'Erzeugt täglich Verkaufsregeln für die teuersten freien Viertelstunden im Suchfenster. Die Reserve bleibt dabei unangetastet.'
     },
     {
       section: 'schedule',
       group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik · Ein/Aus & Zeitfenster',
-      groupDescription: 'Für Anlagen OHNE aktive Optimierung (EOS): verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Ist die Optimierung aktiv, plant sie die Anlage samt Reserve selbst; die übrigen Einstellungen der Kleinen Börsenautomatik erscheinen dann erst, wenn du sie hier einschaltest.',
+      groupLabel: 'Kleine Börsenautomatik · Zeitfenster',
+      groupDescription: 'Verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Gilt in der Betriebsart „Kleine Börsenautomatik“.',
       groupOrder: 50,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.searchWindowStart',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Suchfenster Start',
       type: 'time',
       help: 'Ab dieser Uhrzeit (Ortszeit) sucht die Automatik nach teuren Viertelstunden.'
@@ -2659,12 +2658,11 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smallMarketAutomation',
-      groupLabel: 'Kleine Börsenautomatik · Ein/Aus & Zeitfenster',
-      groupDescription: 'Für Anlagen OHNE aktive Optimierung (EOS): verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Ist die Optimierung aktiv, plant sie die Anlage samt Reserve selbst; die übrigen Einstellungen der Kleinen Börsenautomatik erscheinen dann erst, wenn du sie hier einschaltest.',
+      groupLabel: 'Kleine Börsenautomatik · Zeitfenster',
+      groupDescription: 'Verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Gilt in der Betriebsart „Kleine Börsenautomatik“.',
       groupOrder: 50,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.searchWindowEnd',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Suchfenster Ende',
       type: 'time',
       help: 'Bis zu dieser Uhrzeit. Liegt das Ende vor dem Start (z. B. 14:00 bis 09:00), reicht das Fenster über Nacht.'
@@ -2677,7 +2675,6 @@ function buildFieldDefinitions() {
       groupOrder: 51,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.minSocPct',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Reserve am Abend (% Ladestand)',
       type: 'number',
       min: 0,
@@ -2692,7 +2689,6 @@ function buildFieldDefinitions() {
       groupOrder: 51,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.forecastAware',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Reserve nach Prognose anpassen (Beta)',
       type: 'boolean',
       help: 'Aus: es gilt immer die eingestellte Reserve. An: die Automatik rechnet aus PV- und Verbrauchsprognose der nächsten 24 Stunden, wie viel Reserve wirklich nötig ist. Reicht die Sonne morgen, darf sie mehr verkaufen (Reserve niedriger, nie höher als eingestellt). Reicht die Energie voraussichtlich nicht, verkauft sie gar nichts. Der Stopp je Verkaufsregel bleibt bei der eingestellten Reserve — eine zu optimistische Prognose kann den Akku nicht leerziehen. Gilt nur für die Kleine Börsenautomatik, nicht für EOS.'
@@ -2705,7 +2701,6 @@ function buildFieldDefinitions() {
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.batteryCapacityKwh',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Akkukapazität (kWh)',
       type: 'number',
       empty: 'null',
@@ -2719,7 +2714,6 @@ function buildFieldDefinitions() {
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.inverterEfficiencyPct',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Wechselrichter-Effizienz (%)',
       type: 'number',
       help: 'Anteil der Akku-Energie, der am Netz ankommt (Standard 85 %).'
@@ -2732,7 +2726,6 @@ function buildFieldDefinitions() {
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.maxDischargeW',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Maximale Entladeleistung (W)',
       type: 'number',
       help: 'Mit höchstens dieser Leistung wird verkauft. Als negativer Wert einzutragen (z. B. -12000).'
@@ -2745,7 +2738,6 @@ function buildFieldDefinitions() {
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.targetSlotCount',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Höchstzahl Verkaufs-Viertelstunden (optional)',
       type: 'number',
       min: 0,
@@ -2760,7 +2752,6 @@ function buildFieldDefinitions() {
       groupOrder: 53,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.location.label',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Standort Bezeichnung',
       type: 'text',
       help: 'Freier Name für den Anlagenstandort.'
@@ -2773,7 +2764,6 @@ function buildFieldDefinitions() {
       groupOrder: 53,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.location.latitude',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Breitengrad',
       type: 'number',
       min: -90,
@@ -2789,7 +2779,6 @@ function buildFieldDefinitions() {
       groupOrder: 53,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.location.longitude',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Längengrad',
       type: 'number',
       min: -180,
@@ -2805,7 +2794,6 @@ function buildFieldDefinitions() {
       groupOrder: 54,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.engine',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Rechenverfahren',
       type: 'select',
       options: [
@@ -2822,7 +2810,6 @@ function buildFieldDefinitions() {
       groupOrder: 54,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.stages',
-      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Erweiterte Stufen',
       type: 'array',
       help: 'Optionale Folge aus Entlade- und Abkühl-Abschnitten mit eigener Leistung.'
@@ -5500,10 +5487,23 @@ const SETTINGS_AREAS = [
     id: 'mode',
     label: 'Betriebsart',
     icon: '⚡',
-    description: 'Wer entscheidet, wann der Akku lädt, hält oder verkauft: die Optimierung (EOS) oder die Kleine Börsenautomatik. Ohne beides läuft die Anlage im Eigenverbrauch.',
-    groups: ['optimization', 'eosProxy', 'smallMarketAutomation', 'smaReserve', 'smaBattery', 'smaLocation'],
-    advanced: ['smaAdvanced', 'baseState', 'dcExportMode', 'controlWriteVerify'],
-    editors: []
+    description: 'Wer entscheidet, wann der Akku lädt, hält oder verkauft. Der Schalter stellt die Betriebsart; darunter sind die Einstellungen der gewählten Art hervorgehoben.',
+    groups: ['optimization', 'eosProxy', 'smallMarketAutomation', 'smaReserve', 'smaBattery', 'smaLocation', 'smaAdvanced'],
+    advanced: ['baseState', 'dcExportMode', 'controlWriteVerify'],
+    editors: [],
+    // Betriebsart-Schalter: drei Stellungen. Die Seite zeichnet ihn über den
+    // Karten und hebt die Gruppen der gewählten Stellung hervor.
+    modeSwitch: {
+      positions: [
+        { id: 'off', label: 'Aus', text: 'Keine Automatik. Der Wechselrichter fährt Eigenverbrauch; es gelten nur deine Zeitplan-Regeln im Leitstand.' },
+        { id: 'sma', label: 'Kleine Börsenautomatik', text: 'DVhub verkauft Akkustrom in den teuersten Viertelstunden des Suchfensters — nur, was über der Reserve liegt.' },
+        { id: 'eos', label: 'EOS', text: 'Der EOS-Optimierer plant alle Viertelstunden aus Preisen, PV- und Verbrauchsprognose: Laden, Halten, Verkaufen und die Reserve.' }
+      ],
+      groups: {
+        sma: ['smallMarketAutomation', 'smaReserve', 'smaBattery', 'smaLocation', 'smaAdvanced'],
+        eos: ['optimization', 'eosProxy']
+      }
+    }
   },
   {
     id: 'devices',

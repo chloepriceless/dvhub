@@ -121,23 +121,17 @@ test('config definition exposes the small market automation fields and advanced 
   assert.ok(paths.includes('schedule.smallMarketAutomation.stages'));
 });
 
-test('Kleine Börsenautomatik: eigener Abschnitt für die Reserve; Details ohne Optimierung oder bei eingeschalteter Automatik', async () => {
+test('Kleine Börsenautomatik: eigener Abschnitt für die Reserve; alles sichtbar', async () => {
   const { getConfigDefinition } = await import('../config-model.js');
   const fields = getConfigDefinition().fields.filter((f) => String(f.path).startsWith('schedule.smallMarketAutomation.'));
   const by = (key) => fields.find((f) => f.path === `schedule.smallMarketAutomation.${key}`);
   assert.equal(by('minSocPct').group, 'smaReserve');
   assert.equal(by('forecastAware').group, 'smaReserve');
   assert.match(by('minSocPct').groupLabel, /Reserve \(wird nicht verkauft\)/);
-  // Der Ein/Aus-Schalter bleibt immer erreichbar. Alles andere erscheint, wenn
-  // die Optimierung aus ist ODER die Automatik eingeschaltet ist — wer sie
-  // einschaltet, muss sie auch einstellen können.
-  assert.equal(by('enabled').visibleWhenPath, undefined);
-  assert.equal(by('enabled').visibleWhenAny, undefined);
-  for (const f of fields.filter((x) => x !== by('enabled'))) {
-    assert.deepEqual(f.visibleWhenAny, [
-      { path: 'optimizer.enabled', notEquals: true },
-      { path: 'schedule.smallMarketAutomation.enabled', equals: true }
-    ], f.path);
+  // Immer sichtbar: die Seite hebt je nach Betriebsart hervor, statt zu verstecken.
+  for (const f of fields) {
+    assert.equal(f.visibleWhenPath, undefined, f.path);
+    assert.equal(f.visibleWhenAny, undefined, f.path);
   }
   const groups = [...new Set(fields.map((f) => f.group))];
   assert.deepEqual(groups, ['smallMarketAutomation', 'smaReserve', 'smaBattery', 'smaLocation', 'smaAdvanced']);

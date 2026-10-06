@@ -51,6 +51,15 @@ verweist hierher.
 
 ### Neu
 
+- **Betriebsart-Schalter mit drei Stellungen: Aus · Kleine Börsenautomatik · EOS.** Oben im
+  Bereich „Betriebsart“ steht ein Schieber statt zweier unabhängiger Schalter („Optimierung
+  aktiv“, „Kleine Börsenautomatik aktiv“), die sich auch widersprechen konnten. Ein Satz
+  darunter sagt, was die gewählte Art tut. Die Karten der gewählten Betriebsart sind
+  hervorgehoben und aufgeklappt („aktiv“), die der anderen abgeblendet („nur bei …“), aber
+  weiter einsehbar. Die bisherige Karte „Optimierung“ heißt „EOS-Optimierung“ und enthält nur
+  noch EOS-Werte. Die Stellung „EOS“ schaltet die Optimierung ein und wählt EOS als Planer.
+  Im Leitstand lässt sich die Kleine Börsenautomatik nicht mehr zusätzlich einschalten, solange
+  die Optimierung läuft; der Hinweis dort führt zum Schalter.
 - **Einstellungen nach Aufgabe gegliedert.** Statt der Reiter Anlage / Steuerung / Preise (allein
   „Steuerung“ hatte 69 Felder in 15 Gruppen) gibt es sieben Bereiche: **Meine Anlage ·
   Strompreise · Betriebsart · Geräte · Netz & Recht · Prognosen · System**. Jeder Bereich zeigt
