@@ -726,6 +726,18 @@ export function actorContext(req) {
   };
 }
 
+// Einstellungen, die in den EOS-Plan eingehen. Reine Anzeige-, Takt- und
+// Diagnosewerte lösen keinen Sofort-Lauf aus.
+const EOS_REPLAN_PREFIXES = ['optimizer.', 'userEnergyPricing.', 'wallbox.', 'forecast.pv.', 'forecast.location.', 'paragraph14a.'];
+const EOS_REPLAN_IGNORE = ['optimizer.eosEmsIntervalSec', 'optimizer.eosGeneticGenerations', 'optimizer.eosFitnessCacheMaxEntries',
+  'optimizer.eosStartAfterPreviousRun', 'optimizer.ruleHorizonHours', 'optimizer.eosProxy.timeoutMs', 'optimizer.eosFallbackSma'];
+export function configChangeNeedsEosReplan(changedPaths) {
+  if (!Array.isArray(changedPaths)) return false;
+  return changedPaths.some((p) => typeof p === 'string'
+    && EOS_REPLAN_PREFIXES.some((prefix) => p.startsWith(prefix))
+    && !EOS_REPLAN_IGNORE.some((skip) => p === skip || p.startsWith(skip + '.')));
+}
+
 export function createApiRoutes(ctx) {
   // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
   // gleichzeitig, weggeklickte überspringen, gleiche Anfragen nur einmal.
@@ -7809,6 +7821,12 @@ export function createApiRoutes(ctx) {
       if (smaChanged && typeof ctx.regenerateSmallMarketAutomationRules === 'function') {
         ctx.regenerateSmallMarketAutomationRules({ force: true })
           .catch((e) => pushLog('sma_regen_after_config_save_error', { error: e.message }));
+      }
+      // Ändert eine Einstellung die Grundlage des EOS-Plans (Akku, Preise,
+      // Netzladen/-entladen, Wallbox, PV-Größe), rechnet EOS sofort neu statt
+      // erst zum nächsten Takt — wie beim An- und Abstecken des Autos.
+      if (configChangeNeedsEosReplan(result.changedPaths)) {
+        ctx.optimizerService?.requestEosReplan?.('config');
       }
       const freshCfg = getCfg();
       // T-LICENSE-KWP-GATING Increment 4: nicht-blockierende Lizenz-kWp-Warnung

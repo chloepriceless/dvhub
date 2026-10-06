@@ -87,6 +87,10 @@ verweist hierher.
 
 ### Neu
 
+- **EOS rechnet sofort neu, wenn sich die Grundlage ändert.** Bisher löste nur das An- und
+  Abstecken des Autos (und Änderungen an Geräten und Auto-Zielen) einen Sofort-Lauf aus. Jetzt
+  auch jede gespeicherte Einstellung, die in den Plan eingeht: Akku-Grenzen, Strompreise,
+  Netzladen/-entladen, Wallbox, PV-Größe, §14a. Reine Takt- und Anzeigewerte lösen keinen aus.
 - **Energiefluss: Zahlen zählen statt zu springen.** Im Leitstand und auf der Familienseite laufen
   die Werte für PV, Akku, Haus, Netz und die Tagesbilanz in knapp einer Sekunde zum neuen Stand
   — auch durch die Null, wenn das Netz von Einspeisung auf Bezug dreht. Aufteilung und
