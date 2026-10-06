@@ -1,7 +1,10 @@
 // test/eos-plan-keep.test.js -- Letzten EOS-Plan weiterfahren statt interner Fallback.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { keepLastEosPlan, eosPlanKeepMs } from '../services/optimizer/index.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { keepLastEosPlan, eosPlanKeepMs, lastEosPlanPath, readLastEosPlan, writeLastEosPlan } from '../services/optimizer/index.js';
 
 const T0 = Date.parse('2026-09-23T18:30:00Z');
 const Q = 15 * 60_000;
@@ -47,4 +50,23 @@ test('Haltedauer: Standard 12 h, per optimizer.eosPlanKeepHours einstellbar, 0 =
   assert.equal(eosPlanKeepMs({ optimizer: { eosPlanKeepHours: 3 } }), 3 * 3_600_000);
   assert.equal(eosPlanKeepMs({ optimizer: { eosPlanKeepHours: 0 } }), 0);
   assert.equal(eosPlanKeepMs({ optimizer: { eosPlanKeepHours: 'x' } }), H12);
+});
+
+test('gemerkter EOS-Plan übersteht einen Neustart (Datei im Datenverzeichnis)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-plan-'));
+  try {
+    const file = lastEosPlanPath(dir);
+    assert.equal(readLastEosPlan(file), null, 'noch keine Datei');
+    const saved = plan(T0 - 60_000, [0, 1, 2]);
+    writeLastEosPlan(file, saved);
+    const restored = readLastEosPlan(file);
+    assert.deepEqual(restored, { schedule: saved.schedule, gridSetpoints: saved.gridSetpoints, at: saved.at });
+    assert.equal(keepLastEosPlan(restored, T0, H12).schedule.length > 0, true);
+    fs.writeFileSync(file, '{kaputt');
+    assert.equal(readLastEosPlan(file), null, 'kaputte Datei zählt als kein Plan');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.equal(lastEosPlanPath(''), null);
+  assert.equal(readLastEosPlan(null), null);
 });

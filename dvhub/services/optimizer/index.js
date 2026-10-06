@@ -4,6 +4,8 @@
 // Hot-reload safe: start() does NOT exit if !enabled -- service stays running, gates per run.
 // Event-triggered: polls forecastVersion for change detection + 30min fallback timer.
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { isGridStorageOnly } from './grid-storage.js';
 import { applyConfidenceGating } from './confidence-gate.js';
 import { normalizeForecast, averageSlotConfidence, aggregateTo1h } from './forecast-normalizer.js';
@@ -173,6 +175,35 @@ export function applyDvForecastLogic(normalized, state, getCfg) {
  * @param {number} [hourOverride] - Optional hour override for testing (0-23)
  * @returns {number} Polling interval in milliseconds
  */
+/** Datei fuer den gemerkten EOS-Plan; null ohne Datenverzeichnis (Tests). */
+export function lastEosPlanPath(dataDir) {
+  return dataDir ? path.join(dataDir, 'eos-last-plan.json') : null;
+}
+
+/** Gemerkten EOS-Plan lesen; null, wenn es keinen (lesbaren) gibt. */
+export function readLastEosPlan(file) {
+  if (!file) return null;
+  try {
+    const plan = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!plan || !Number.isFinite(plan.at) || !Array.isArray(plan.schedule)) return null;
+    return { schedule: plan.schedule, gridSetpoints: Array.isArray(plan.gridSetpoints) ? plan.gridSetpoints : [], at: plan.at };
+  } catch {
+    return null;
+  }
+}
+
+/** Gemerkten EOS-Plan schreiben (erst daneben, dann umbenennen). */
+export function writeLastEosPlan(file, plan, onError = () => {}) {
+  if (!file) return;
+  try {
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(plan));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    onError(e);
+  }
+}
+
 /** Wie lange ein gemerkter EOS-Plan weitergefahren wird (Standard 12 h = Regel-Horizont). */
 export function eosPlanKeepMs(cfg) {
   const h = Number(cfg?.optimizer?.eosPlanKeepHours);
@@ -257,8 +288,12 @@ export function createOptimizerService(ctx) {
   // (nach einem Neustart wiederhergestellt) und zaehlt fuer die Erstplan-Wache
   // nicht als Plan.
   let eosFirstPushAt = null;
-  // Zuletzt erfolgreich geholter EOS-Plan (keepLastEosPlan).
-  let lastEosPlan = null;
+  // Zuletzt erfolgreich geholter EOS-Plan (keepLastEosPlan). Liegt auch als
+  // Datei im Datenverzeichnis: nach einem Neustart von DVhub war der Plan
+  // sonst vergessen, und solange EOS nicht antwortete (laufende Rechnung),
+  // uebernahm der interne Optimierer (eHive 2026-10-06: 20 Minuten).
+  const lastEosPlanFile = lastEosPlanPath(ctx.dataDir ?? process.env.DV_DATA_DIR);
+  let lastEosPlan = readLastEosPlan(lastEosPlanFile);
   // generated_at der EOS-Loesung, die der letzte Lauf abgeholt hat. Die
   // Minuten-Wache vergleicht damit — sonst folgt die Wallbox-Bruecke (30-s-
   // Takt) schon dem neuen Plan, die Akku-Regeln bis zu 15 min dem alten
@@ -584,6 +619,7 @@ export function createOptimizerService(ctx) {
           winningSchedule = eosSchedule;
           source = 'eos';
           lastEosPlan = { schedule: eosSchedule, gridSetpoints: eosGridSetpoints, at: Date.now() };
+          writeLastEosPlan(lastEosPlanFile, lastEosPlan, (e) => pushLog('eos_plan_store_error', { error: e.message }));
         } else if (kept) {
           // EOS liefert gerade nichts Verwertbares (Neustart, Umkonfiguration,
           // Aussetzer) → letzten gueltigen Plan weiterfahren statt intern.

@@ -12,6 +12,11 @@ verweist hierher.
 
 ### Behoben
 
+- **EOS-Plan übersteht einen Neustart von DVhub.** DVhub fährt den letzten EOS-Plan weiter,
+  wenn EOS gerade nichts liefert — gemerkt war er aber nur im Arbeitsspeicher. Nach einem
+  Neustart (Update) war er vergessen, und solange EOS mitten in einer Rechnung nicht antwortete,
+  übernahm der interne Optimierer (eHive am 06.10.: 20 Minuten). Der Plan liegt jetzt zusätzlich
+  im Datenverzeichnis und gilt nach dem Neustart weiter, bis EOS den nächsten liefert.
 - **Geräte-Tausch nimmt Datenspende, Fernzugang und Ortsnetz eins zu eins mit.** Beim Umzug auf
   eine neue Box (Voll-Backup mit Passwort, Antwort „Geräte-Tausch“) blieben die Schalter für
   Datenspende und Installateur-Fernzugang bisher auf dem Stand der neuen Box, also aus — obwohl
