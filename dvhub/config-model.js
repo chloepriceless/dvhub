@@ -2689,7 +2689,7 @@ function buildFieldDefinitions() {
       groupOrder: 51,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.forecastAware',
-      label: 'Reserve nach Prognose anpassen (Beta)',
+      label: 'Reserve nach Prognose anpassen',
       type: 'boolean',
       help: 'Aus: es gilt immer die eingestellte Reserve. An: die Automatik rechnet aus PV- und Verbrauchsprognose der nächsten 24 Stunden, wie viel Reserve wirklich nötig ist. Reicht die Sonne morgen, darf sie mehr verkaufen (Reserve niedriger, nie höher als eingestellt). Reicht die Energie voraussichtlich nicht, verkauft sie gar nichts. Der Stopp je Verkaufsregel bleibt bei der eingestellten Reserve — eine zu optimistische Prognose kann den Akku nicht leerziehen. Gilt nur für die Kleine Börsenautomatik, nicht für EOS.'
     },

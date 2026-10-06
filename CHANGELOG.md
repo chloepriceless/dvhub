@@ -12,6 +12,14 @@ verweist hierher.
 
 ### Behoben
 
+- **Status, Prognose-Daten, EOS-Daten und VPN im selben Bild wie die übrigen Einstellungen.** Über
+  dem ersten Buchstaben jeder Kartenüberschrift lag ein Farbpunkt, der Inhalt war 24 px tiefer
+  eingerückt als die Überschrift, Schalter waren zu breiten Balken gezogen, Ankreuzlisten
+  erschienen als Striche, und Karten wurden paarweise auf gleiche Höhe gestreckt (große leere
+  Flächen). Jetzt: eine gemeinsame Kante mit Trennlinie unter der Überschrift, Schalter in fester
+  Größe, Bezeichnung und Feld in festen Spalten, Prüfkacheln mit Bezeichnung über dem Wert,
+  Datei-Auswahl im Knopf-Stil. Der leere Zustand der Installateur-Liste nahm 220 px ein und
+  stand in Festbreitenschrift.
 - **Speichern der Einstellungen schreibt nur noch, was geändert wurde.** Ein leeres Feld, für das
   nie etwas gespeichert war, wurde beim Speichern als „leer“ in die Konfiguration geschrieben —
   bei manchen Feldern ist das etwas anderes als der Standard (0 statt 100 W Puffer, leere statt
@@ -75,7 +83,7 @@ verweist hierher.
   die Automatik sie verkauft, war nicht zu erkennen. Jetzt fünf Abschnitte: Ein/Aus &
   Zeitfenster · **Reserve (wird nicht verkauft)** · Akku & Leistung · Standort · Erweitert. Die
   Reserve heißt „Reserve am Abend (% Ladestand)“ statt „Automatik Minimum-SOC“, der
-  Prognose-Schalter „Reserve nach Prognose anpassen (Beta)“; beide Texte sagen, was verkauft
+  Prognose-Schalter „Reserve nach Prognose anpassen“; beide Texte sagen, was verkauft
   wird und was stehen bleibt. Die Karte im Leitstand hat dieselben Abschnitte, den
   Prognose-Schalter (bisher nur in den Einstellungen) und einen Satz in Klartext: bis zu welchem
   Ladestand verkauft wird, wohin die Grenze über Nacht sinkt und was der letzte Plan daraus
