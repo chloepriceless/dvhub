@@ -65,9 +65,35 @@ function request(urlStr, { method = 'GET', body, auth, timeoutMs = 5000 } = {}) 
   });
 }
 
-/** Ganze Ampere, nie unter 6 A (Norm-Minimum) — beide Boxen nehmen nur Ganzzahlen. */
-function wholeAmps(currentA) {
-  return Math.max(6, Math.floor(Number(currentA)));
+/**
+ * Ganze Ampere, nie unter 6 A (Norm-Minimum) — beide Boxen nehmen nur Ganzzahlen.
+ * Gerundet, nicht abgeschnitten: 11 kW an 3 × 230 V sind 15,94 A und meinen die
+ * 16-A-Stufe; abgeschnitten wurden daraus 15 A (10,35 kW).
+ */
+export function wholeAmps(currentA) {
+  return Math.max(6, Math.round(Number(currentA)));
+}
+
+/**
+ * Hält ein ANDERER Regler an der OpenEVSE einen eigenen Auftrag (Claim)? Zwei
+ * Regler mit gleicher Priorität blockieren sich: der ältere Auftrag gewinnt.
+ * So blieb „Sofort laden 11 kW“ am 06.10.2026 bei 6 A (4,2 kW) — an der Box
+ * stand ein fremder Auftrag mit 6 A.
+ * @returns {{client:number, priority:number|null, state:string|null, chargeCurrentA:number|null}|null}
+ */
+export function findForeignClaim(claims, ownClient = OPENEVSE_DVHUB_CLIENT) {
+  if (!Array.isArray(claims)) return null;
+  const foreign = claims.filter((c) => c && Number(c.client) !== Number(ownClient)
+    && (c.state === 'disabled' || Number.isFinite(Number(c.charge_current))));
+  if (!foreign.length) return null;
+  foreign.sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0));
+  const c = foreign[0];
+  return {
+    client: Number(c.client),
+    priority: Number.isFinite(Number(c.priority)) ? Number(c.priority) : null,
+    state: typeof c.state === 'string' ? c.state : null,
+    chargeCurrentA: Number.isFinite(Number(c.charge_current)) ? Number(c.charge_current) : null
+  };
 }
 
 export function createOpenEvseAdapter(getSettings) {
@@ -94,8 +120,15 @@ export function createOpenEvseAdapter(getSettings) {
       const res = await request(`${base()}/status`, opts());
       if (!res.ok || typeof res.data !== 'object') return { ok: false, error: res.error || 'no status' };
       const d = res.data;
+      // Fremde Aufträge mitlesen (best effort — ohne sie bleibt alles wie bisher).
+      let foreignClaim = null;
+      try {
+        const claims = await request(`${base()}/claims`, opts());
+        if (claims.ok) foreignClaim = findForeignClaim(claims.data);
+      } catch { /* optional */ }
       return {
         ok: true,
+        foreignClaim,
         connected: Number(d.vehicle) === 1,
         charging: String(d.status) === 'active' && Number(d.amp) > 0,
         powerW: Number.isFinite(Number(d.power)) ? Number(d.power) : null,

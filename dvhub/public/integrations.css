@@ -1731,3 +1731,5 @@
   border: 1px solid var(--glass-brd); border-radius: var(--r-md); background: var(--glass);
 }
 .shelly-row .input { min-height: 34px; }
+
+.evcc-eos-state { white-space: pre-line; }

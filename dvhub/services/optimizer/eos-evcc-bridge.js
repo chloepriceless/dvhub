@@ -325,6 +325,12 @@ export function createEosEvccBridge(deps) {
       return { ok: false, error: lastError, override: true };
     }
     lastError = null;
+    // Ein fremder Auftrag an der Box, der weniger erlaubt als wir wollen?
+    const foreign = st?.foreignClaim;
+    if (foreign && (foreign.state === 'disabled' || (foreign.chargeCurrentA != null && foreign.chargeCurrentA < currentA))) {
+      lastError = `Ein anderer Regler hält an der Wallbox einen eigenen Auftrag (${foreign.state === 'disabled' ? 'gesperrt' : foreign.chargeCurrentA + ' A'}) — der Ladestrom lässt sich nicht erhöhen.`;
+      pushLog('wallbox_foreign_claim', { charger: charger.type, wantedA: currentA, foreign });
+    }
     lastSent = {
       key,
       charger: bc.charger,
@@ -349,6 +355,27 @@ export function createEosEvccBridge(deps) {
     try { return await run; } finally { if (inflight === run) inflight = null; }
   }
 
+  // Nur die §14a-Grenze durchsetzen (keine EOS-Steuerung, kein „Sofort laden“).
+  async function gridCapOnlyTick(cfg, bc) {
+    const capW = getGridCapW();
+    if (capW == null || !Number.isFinite(Number(capW)) || bc.charger === 'evcc') return null;
+    const charger = getCharger(cfg, bc);
+    if (!charger.isConfigured()) return null;
+    // Ohne Grenze lädt die Box mit ihrem Höchststrom; mit Grenze höchstens der Anteil.
+    const slot = applyGridCap({ action: 'charge', currentA: bc.maxCurrentA }, bc, capW);
+    const key = `${bc.charger}:${bc.loadpoint}:p14a:${slot.action}:${slot.currentA ?? ''}`;
+    if (lastSent?.key === key) return { ok: true, unchanged: true, gridCapW: Number(capW) };
+    const res = slot.action === 'stop' ? await charger.stop() : await charger.charge(slot.currentA);
+    if (!res?.ok) {
+      lastError = res?.error || 'wallbox write failed';
+      pushLog('paragraph14a_wallbox_error', { charger: charger.type, error: lastError });
+      return { ok: false, error: lastError };
+    }
+    lastSent = { key, charger: bc.charger, action: slot.action, currentA: slot.currentA ?? null, loadpoint: bc.loadpoint, at: new Date(now()).toISOString(), gridCap: true };
+    pushLog('paragraph14a_wallbox_capped', { charger: charger.type, capW: Number(capW), action: slot.action, currentA: slot.currentA ?? null });
+    return { ok: true, sent: lastSent, gridCapW: Number(capW) };
+  }
+
   function tick({ force = false } = {}) {
     if (inflight && !force) return Promise.resolve({ ok: false, error: 'busy' });
     return locked(() => runTick(force));
@@ -368,6 +395,11 @@ export function createEosEvccBridge(deps) {
         force = true;
       }
       if (!bc.enabled) {
+        // §14a EnWG gilt für die Wallbox auch dann, wenn EOS sie nicht steuert:
+        // begrenzt der Netzbetreiber, deckelt DVhub eine direkt angebundene
+        // Wallbox (OpenEVSE, go-e) auf ihren Anteil und gibt sie danach wieder frei.
+        const capped = await gridCapOnlyTick(cfg, bc);
+        if (capped) return capped;
         await releaseIfNeeded(cfg, bc);
         return { ok: false, skipped: 'disabled' };
       }

@@ -12,6 +12,17 @@ verweist hierher.
 
 ### Behoben
 
+- **„Sofort laden 11 kW“ blieb bei 4,2 kW.** An der OpenEVSE hielt ein zweiter Regler einen
+  eigenen Auftrag mit 6 A; bei gleicher Priorität gewinnt der ältere, DVhubs Auftrag blieb
+  wirkungslos. DVhub liest die Aufträge der Box jetzt mit und sagt es deutlich: im
+  Wallbox-Status („Ein anderer Regler hält … 6 A“) und im Protokoll. Außerdem werden Ampere
+  gerundet statt abgeschnitten — 11 kW an 3 × 230 V sind 15,94 A und ergeben jetzt 16 A statt
+  15 A.
+- **§14a begrenzt die Wallbox auch ohne EOS-Steuerung.** Eine direkt angebundene Wallbox
+  (OpenEVSE, go-e) zählte nur dann als steuerbare Verbrauchseinrichtung, wenn „E-Auto in EOS
+  mitoptimieren“ und die Wallbox-Steuerung an waren. Jetzt zählt sie, sobald sie eingerichtet
+  ist: bei einer Begrenzung des Netzbetreibers deckelt DVhub sie auf ihren Anteil (oder stoppt,
+  wenn der unter dem Mindeststrom liegt) und gibt sie danach wieder frei.
 - **„EOS deaktiviert“, obwohl EOS lief.** Die Ansicht Prognose-Daten meldete „EOS-Service
   deaktiviert oder nicht erreichbar“, sobald EOS während einer Rechnung nicht antwortete.
   Jetzt unterscheidet sie: „eingeschaltet, antwortet gerade nicht — DVhub fährt den letzten Plan

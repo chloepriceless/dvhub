@@ -2601,6 +2601,14 @@
       ? ('Wallbox erreichbar · ' + (live.connected ? 'Auto angesteckt' : 'kein Auto') + (live.charging ? ' · lädt ' + (live.powerW != null ? Math.round(live.powerW) + ' W' : '') : '')
         + (live.currentA != null ? ' · ' + live.currentA + ' A' : '') + (live.vehicleSocPct != null ? ' · SoC ' + live.vehicleSocPct + ' %' : ''))
       : ('Wallbox nicht erreichbar: ' + (live.error || 'unbekannt'));
+    // Zwei Regler an einer Wallbox blockieren sich — deutlich sagen.
+    var fc = live.ok ? live.foreignClaim : null;
+    if (fc) {
+      box.className = 'evcc-eos-state is-warn';
+      box.textContent += '\n⚠ Ein anderer Regler (z. B. evcc) hält an der Wallbox einen eigenen Auftrag: '
+        + (fc.state === 'disabled' ? 'Laden gesperrt' : '') + (fc.chargeCurrentA != null ? (fc.state === 'disabled' ? ', ' : '') + fc.chargeCurrentA + ' A' : '')
+        + '. Solange er besteht, kann DVhub den Ladestrom nicht erhöhen — dort den Ladepunkt entfernen oder den Höchststrom anheben, oder oben „Steuern über: evcc“ wählen.';
+    }
   }
   function syncWallboxTypeUi() {
     var t = (document.getElementById('wallbox-type') || {}).value || 'evcc';
