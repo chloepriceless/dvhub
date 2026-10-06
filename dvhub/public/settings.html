@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/settings.css?v=20260629-install-btn-conditional">
-  <link rel="stylesheet" href="/settings-redesign.css?v=20260701-shell">
+  <link rel="stylesheet" href="/settings-redesign.css?v=20261006-areas4">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Einstellungen">
@@ -108,8 +108,8 @@
         <div class="sa-page-header">
           <div>
             <div class="sa-page-kicker">Einstellungen</div>
-            <h1>System &middot; Konfiguration</h1>
-            <p class="sa-page-sub">Anlage, Steuerung, Preise, Systemstatus und ML &mdash; alles in einer Ansicht.</p>
+            <h1>Einstellungen</h1>
+            <p class="sa-page-sub">Sieben Bereiche nach Aufgabe. Selten gebrauchte Feineinstellungen liegen jeweils unter &bdquo;Erweitert&ldquo;.</p>
             <small id="configMeta" class="sa-meta">-</small>
           </div>
           <div class="sa-header-actions">
@@ -120,20 +120,28 @@
         <div class="sa-shell">
           <!-- Linke Sektions-Navigation (nav-rail · mockup pattern) -->
           <nav class="settings-tabs" aria-label="Einstellungs-Sektionen">
-            <div class="sa-nav-group">Konfiguration</div>
-            <button class="settings-tab is-active" data-tab="connection" type="button"><span class="sa-ico">&#9881;</span>Anlage</button>
-            <button class="settings-tab" data-tab="control" type="button"><span class="sa-ico">&#9889;</span>Steuerung</button>
-            <button class="settings-tab" data-tab="services" type="button"><span class="sa-ico">&euro;</span>Preise</button>
+            <label class="sa-search" for="settingsSearch">
+              <span class="sa-search-ico" aria-hidden="true">&#8981;</span>
+              <input id="settingsSearch" type="search" placeholder="Einstellung suchen &hellip;" autocomplete="off" spellcheck="false" aria-label="Einstellung suchen">
+            </label>
+            <div class="sa-nav-group">Einstellungen</div>
+            <button class="settings-tab is-active" data-tab="plant" type="button"><span class="sa-ico">&#8962;</span>Meine Anlage</button>
+            <button class="settings-tab" data-tab="prices" type="button"><span class="sa-ico">&euro;</span>Strompreise</button>
+            <button class="settings-tab" data-tab="mode" type="button"><span class="sa-ico">&#9889;</span>Betriebsart</button>
+            <button class="settings-tab" data-tab="devices" type="button"><span class="sa-ico">&#9881;</span>Ger&auml;te</button>
+            <button class="settings-tab" data-tab="grid" type="button"><span class="sa-ico">&sect;</span>Netz &amp; Recht</button>
+            <button class="settings-tab" data-tab="prognosis" type="button"><span class="sa-ico">&#9729;</span>Prognosen</button>
+            <button class="settings-tab" data-tab="sys" type="button"><span class="sa-ico">&#9670;</span>System</button>
 
-            <div class="sa-nav-group">System</div>
-            <button class="settings-tab" data-tab="system" type="button"><span class="sa-ico">&#9670;</span>Status</button>
-            <button class="settings-tab" data-tab="forecast" type="button"><span class="sa-ico">&#9729;</span>Forecast</button>
+            <div class="sa-nav-group">Diagnose &amp; Dienste</div>
+            <button class="settings-tab" data-tab="system" type="button"><span class="sa-ico">&#9673;</span>Status</button>
+            <button class="settings-tab" data-tab="forecast" type="button"><span class="sa-ico">&#9729;</span>Prognose-Daten</button>
             <!-- Machine-Learning-Tab (LightGBM) ausgeblendet 2026-06-21: Feature ist nicht live
                  (ml.mlEnabled=false). Das Panel #tab-ml bleibt im DOM (hidden) → Re-Aktivierung =
                  nur diese Zeile wieder einkommentieren. Die Provider-Gewichtung (Inverse-MAE-
                  Ensemble) ist davon unabhängig und bleibt im Forecast-Tab sichtbar. -->
             <!-- <button class="settings-tab" data-tab="ml" type="button"><span class="sa-ico">&#9728;</span>Machine Learning</button> -->
-            <button class="settings-tab" data-tab="eos" type="button"><span class="sa-ico">&#9881;</span>EOS</button>
+            <button class="settings-tab" data-tab="eos" type="button"><span class="sa-ico">&#9881;</span>EOS-Daten</button>
             <button class="settings-tab" data-tab="vpn" type="button"><span class="sa-ico">&#10070;</span>VPN</button>
           </nav>
 
@@ -141,18 +149,36 @@
           <div class="sa-body">
             <div id="settingsBanner" class="config-banner warn">Konfiguration wird geladen...</div>
 
-            <section id="tab-connection" class="settings-tab-panel">
-              <header class="sa-section-head"><h2>Anlage</h2><p class="sub">Geräte-Verbindungen, Modbus-Mapping, Cloud-Integrationen.</p></header>
+            <div id="settingsSearchResults" class="sa-search-results" hidden></div>
+
+            <section id="tab-plant" class="settings-tab-panel">
+              <header class="sa-section-head"><h2>Meine Anlage</h2><p class="sub" id="areaSub-plant"></p></header>
               <div id="connectionBanner" class="config-banner u-hidden"></div>
-              <div id="connectionGrid" class="config-grid"></div>
+              <div id="areaGrid-plant" class="config-grid sa-area-grid" data-area="plant"></div>
             </section>
-            <section id="tab-control" class="settings-tab-panel" hidden>
-              <header class="sa-section-head"><h2>Steuerung</h2><p class="sub">Optimizer, Zeitplan, SMA-Automatik (Min-SoC, Stages).</p></header>
-              <div id="controlGrid" class="config-grid"></div>
+            <section id="tab-prices" class="settings-tab-panel" hidden>
+              <header class="sa-section-head"><h2>Strompreise</h2><p class="sub" id="areaSub-prices"></p></header>
+              <div id="areaGrid-prices" class="config-grid sa-area-grid" data-area="prices"></div>
             </section>
-            <section id="tab-services" class="settings-tab-panel" hidden>
-              <header class="sa-section-head"><h2>Preise</h2><p class="sub">EPEX, Tarif &amp; Spot, Direktvermarktung.</p></header>
-              <div id="servicesGrid" class="config-grid"></div>
+            <section id="tab-mode" class="settings-tab-panel" hidden>
+              <header class="sa-section-head"><h2>Betriebsart</h2><p class="sub" id="areaSub-mode"></p></header>
+              <div id="areaGrid-mode" class="config-grid sa-area-grid" data-area="mode"></div>
+            </section>
+            <section id="tab-devices" class="settings-tab-panel" hidden>
+              <header class="sa-section-head"><h2>Ger&auml;te</h2><p class="sub" id="areaSub-devices"></p></header>
+              <div id="areaGrid-devices" class="config-grid sa-area-grid" data-area="devices"></div>
+            </section>
+            <section id="tab-grid" class="settings-tab-panel" hidden>
+              <header class="sa-section-head"><h2>Netz &amp; Recht</h2><p class="sub" id="areaSub-grid"></p></header>
+              <div id="areaGrid-grid" class="config-grid sa-area-grid" data-area="grid"></div>
+            </section>
+            <section id="tab-prognosis" class="settings-tab-panel" hidden>
+              <header class="sa-section-head"><h2>Prognosen</h2><p class="sub" id="areaSub-prognosis"></p></header>
+              <div id="areaGrid-prognosis" class="config-grid sa-area-grid" data-area="prognosis"></div>
+            </section>
+            <section id="tab-sys" class="settings-tab-panel" hidden>
+              <header class="sa-section-head"><h2>System</h2><p class="sub" id="areaSub-sys"></p></header>
+              <div id="areaGrid-sys" class="config-grid sa-area-grid" data-area="sys"></div>
             </section>
             <section id="tab-system" class="settings-tab-panel" hidden>
               <header class="sa-section-head"><h2>Status</h2><p class="sub">Health, Updates, Dienst, Config, Historie, API, Diagnose.</p></header>
@@ -984,7 +1010,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/settings.js?v=20261001-migration"></script>
+  <script src="/settings.js?v=20261006-areas3"></script>
   <script src="/tools.js?v=20261001-ortsnetz"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>

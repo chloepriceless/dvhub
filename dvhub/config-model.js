@@ -1943,8 +1943,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'scheduleTech',
-      groupLabel: 'Zeitplan & Technik',
-      groupDescription: 'Low-Level-Parameter für Auswertung, Timing und Persistenz. Im Normalbetrieb selten nötig.',
+      groupLabel: 'Zeitzone & Regeltakt',
+      groupDescription: 'Die Zeitzone gilt für alles. Die Takte darunter sind technische Feinwerte und im Normalbetrieb nicht nötig.',
       groupOrder: 70,
       path: 'schedule.timezone',
       label: 'Zeitzone',
@@ -1954,8 +1954,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'scheduleTech',
-      groupLabel: 'Zeitplan & Technik',
-      groupDescription: 'Low-Level-Parameter für Auswertung, Timing und Persistenz. Im Normalbetrieb selten nötig.',
+      groupLabel: 'Zeitzone & Regeltakt',
+      groupDescription: 'Die Zeitzone gilt für alles. Die Takte darunter sind technische Feinwerte und im Normalbetrieb nicht nötig.',
       groupOrder: 70,
       path: 'schedule.evaluateMs',
       label: 'Schedule Evaluate (ms)',
@@ -1968,8 +1968,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'scheduleTech',
-      groupLabel: 'Zeitplan & Technik',
-      groupDescription: 'Low-Level-Parameter für Auswertung, Timing und Persistenz. Im Normalbetrieb selten nötig.',
+      groupLabel: 'Zeitzone & Regeltakt',
+      groupDescription: 'Die Zeitzone gilt für alles. Die Takte darunter sind technische Feinwerte und im Normalbetrieb nicht nötig.',
       groupOrder: 70,
       path: 'schedule.manualOverrideTtlMs',
       label: 'Manual Override TTL',
@@ -1980,8 +1980,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'scheduleTech',
-      groupLabel: 'Zeitplan & Technik',
-      groupDescription: 'Low-Level-Parameter für Auswertung, Timing und Persistenz. Im Normalbetrieb selten nötig.',
+      groupLabel: 'Zeitzone & Regeltakt',
+      groupDescription: 'Die Zeitzone gilt für alles. Die Takte darunter sind technische Feinwerte und im Normalbetrieb nicht nötig.',
       groupOrder: 70,
       path: 'schedule.controlKeepaliveMs',
       label: 'Grid-Setpoint Keepalive (ms)',
@@ -1995,8 +1995,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'scheduleTech',
-      groupLabel: 'Zeitplan & Technik',
-      groupDescription: 'Low-Level-Parameter für Auswertung, Timing und Persistenz. Im Normalbetrieb selten nötig.',
+      groupLabel: 'Zeitzone & Regeltakt',
+      groupDescription: 'Die Zeitzone gilt für alles. Die Takte darunter sind technische Feinwerte und im Normalbetrieb nicht nötig.',
       groupOrder: 70,
       path: 'schedule.manualOverrideMinSocPct',
       label: 'Persistenter Override SoC-Floor (%)',
@@ -2052,7 +2052,7 @@ function buildFieldDefinitions() {
       path: 'optimizer.enabled',
       label: 'Optimierung aktiv',
       type: 'boolean',
-      help: 'Master-Schalter: Aktiviert die automatische Batterie-Optimierung (EOS bzw. eingebauter Planer). An: der Planer entscheidet über Verkauf und Reserve, die Einstellungen der Kleinen Börsenautomatik sind ausgeblendet. Aus: alle Optimizer-Regeln werden sofort entfernt, und es gelten die Einstellungen der Kleinen Börsenautomatik weiter unten.'
+      help: 'Master-Schalter: Aktiviert die automatische Batterie-Optimierung (EOS bzw. eingebauter Planer). An: der Planer entscheidet über Verkauf und Reserve; die Einstellungen der Kleinen Börsenautomatik erscheinen dann nur, wenn sie eingeschaltet ist. Aus: alle Optimizer-Regeln werden sofort entfernt, und es gelten die Einstellungen der Kleinen Börsenautomatik weiter unten.'
     },
     {
       section: 'schedule',
@@ -2635,7 +2635,7 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'smallMarketAutomation',
       groupLabel: 'Kleine Börsenautomatik · Ein/Aus & Zeitfenster',
-      groupDescription: 'Für Anlagen OHNE aktive Optimierung (EOS): verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Ist die Optimierung aktiv, plant sie die Anlage samt Reserve selbst — die übrigen Einstellungen der Kleinen Börsenautomatik sind dann ausgeblendet.',
+      groupDescription: 'Für Anlagen OHNE aktive Optimierung (EOS): verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Ist die Optimierung aktiv, plant sie die Anlage samt Reserve selbst; die übrigen Einstellungen der Kleinen Börsenautomatik erscheinen dann erst, wenn du sie hier einschaltest.',
       groupOrder: 50,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.enabled',
@@ -2647,11 +2647,11 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'smallMarketAutomation',
       groupLabel: 'Kleine Börsenautomatik · Ein/Aus & Zeitfenster',
-      groupDescription: 'Für Anlagen OHNE aktive Optimierung (EOS): verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Ist die Optimierung aktiv, plant sie die Anlage samt Reserve selbst — die übrigen Einstellungen der Kleinen Börsenautomatik sind dann ausgeblendet.',
+      groupDescription: 'Für Anlagen OHNE aktive Optimierung (EOS): verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Ist die Optimierung aktiv, plant sie die Anlage samt Reserve selbst; die übrigen Einstellungen der Kleinen Börsenautomatik erscheinen dann erst, wenn du sie hier einschaltest.',
       groupOrder: 50,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.searchWindowStart',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Suchfenster Start',
       type: 'time',
       help: 'Ab dieser Uhrzeit (Ortszeit) sucht die Automatik nach teuren Viertelstunden.'
@@ -2660,11 +2660,11 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'smallMarketAutomation',
       groupLabel: 'Kleine Börsenautomatik · Ein/Aus & Zeitfenster',
-      groupDescription: 'Für Anlagen OHNE aktive Optimierung (EOS): verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Ist die Optimierung aktiv, plant sie die Anlage samt Reserve selbst — die übrigen Einstellungen der Kleinen Börsenautomatik sind dann ausgeblendet.',
+      groupDescription: 'Für Anlagen OHNE aktive Optimierung (EOS): verkauft Akkustrom automatisch in den teuersten Viertelstunden des Suchfensters, aber nur, was über der Reserve liegt (nächster Abschnitt). Ist die Optimierung aktiv, plant sie die Anlage samt Reserve selbst; die übrigen Einstellungen der Kleinen Börsenautomatik erscheinen dann erst, wenn du sie hier einschaltest.',
       groupOrder: 50,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.searchWindowEnd',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Suchfenster Ende',
       type: 'time',
       help: 'Bis zu dieser Uhrzeit. Liegt das Ende vor dem Start (z. B. 14:00 bis 09:00), reicht das Fenster über Nacht.'
@@ -2677,7 +2677,7 @@ function buildFieldDefinitions() {
       groupOrder: 51,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.minSocPct',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Reserve am Abend (% Ladestand)',
       type: 'number',
       min: 0,
@@ -2692,7 +2692,7 @@ function buildFieldDefinitions() {
       groupOrder: 51,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.forecastAware',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Reserve nach Prognose anpassen (Beta)',
       type: 'boolean',
       help: 'Aus: es gilt immer die eingestellte Reserve. An: die Automatik rechnet aus PV- und Verbrauchsprognose der nächsten 24 Stunden, wie viel Reserve wirklich nötig ist. Reicht die Sonne morgen, darf sie mehr verkaufen (Reserve niedriger, nie höher als eingestellt). Reicht die Energie voraussichtlich nicht, verkauft sie gar nichts. Der Stopp je Verkaufsregel bleibt bei der eingestellten Reserve — eine zu optimistische Prognose kann den Akku nicht leerziehen. Gilt nur für die Kleine Börsenautomatik, nicht für EOS.'
@@ -2705,7 +2705,7 @@ function buildFieldDefinitions() {
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.batteryCapacityKwh',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Akkukapazität (kWh)',
       type: 'number',
       empty: 'null',
@@ -2719,7 +2719,7 @@ function buildFieldDefinitions() {
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.inverterEfficiencyPct',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Wechselrichter-Effizienz (%)',
       type: 'number',
       help: 'Anteil der Akku-Energie, der am Netz ankommt (Standard 85 %).'
@@ -2732,7 +2732,7 @@ function buildFieldDefinitions() {
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.maxDischargeW',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Maximale Entladeleistung (W)',
       type: 'number',
       help: 'Mit höchstens dieser Leistung wird verkauft. Als negativer Wert einzutragen (z. B. -12000).'
@@ -2745,7 +2745,7 @@ function buildFieldDefinitions() {
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.targetSlotCount',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Höchstzahl Verkaufs-Viertelstunden (optional)',
       type: 'number',
       min: 0,
@@ -2760,7 +2760,7 @@ function buildFieldDefinitions() {
       groupOrder: 53,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.location.label',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Standort Bezeichnung',
       type: 'text',
       help: 'Freier Name für den Anlagenstandort.'
@@ -2773,7 +2773,7 @@ function buildFieldDefinitions() {
       groupOrder: 53,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.location.latitude',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Breitengrad',
       type: 'number',
       min: -90,
@@ -2789,7 +2789,7 @@ function buildFieldDefinitions() {
       groupOrder: 53,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.location.longitude',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Längengrad',
       type: 'number',
       min: -180,
@@ -2805,7 +2805,7 @@ function buildFieldDefinitions() {
       groupOrder: 54,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.engine',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Rechenverfahren',
       type: 'select',
       options: [
@@ -2822,7 +2822,7 @@ function buildFieldDefinitions() {
       groupOrder: 54,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.stages',
-      visibleWhenPath: { path: 'optimizer.enabled', notEquals: true },
+      visibleWhenAny: [{ path: 'optimizer.enabled', notEquals: true }, { path: 'schedule.smallMarketAutomation.enabled', equals: true }],
       label: 'Erweiterte Stufen',
       type: 'array',
       help: 'Optionale Folge aus Entlade- und Abkühl-Abschnitten mit eigener Leistung.'
@@ -5470,8 +5470,82 @@ export function saveConfigFile(configPath, rawInput) {
   return loadConfigFile(configPath);
 }
 
+// Menüführung der Einstellungsseite (2026-10-06): sieben Bereiche nach Aufgabe
+// statt nach Technik. Jede Gruppe (group-ID der Felddefinitionen) gehört zu
+// genau einem Bereich — entweder direkt sichtbar (`groups`) oder unter
+// „Erweitert“ eingeklappt (`advanced`). Die Reihenfolge hier ist die
+// Reihenfolge auf der Seite. `editors` sind die Sondereditoren (Listen), die
+// die Seite selbst zeichnet. Die Pfade in der Konfiguration ändern sich
+// dadurch nicht — nur der Ort, an dem ein Feld erscheint.
+const SETTINGS_AREAS = [
+  {
+    id: 'plant',
+    label: 'Meine Anlage',
+    icon: '⌂',
+    description: 'Wechselrichter, Akku, PV und Standort — was DVhub über deine Anlage wissen muss.',
+    groups: ['connection', 'batteryLimits', 'pv', 'location'],
+    advanced: ['mqttBridge', 'deviceAlarms', 'freezeWatchdog', 'mqttCrossCheck'],
+    editors: ['batteryStages', 'forecastStrings']
+  },
+  {
+    id: 'prices',
+    label: 'Strompreise',
+    icon: '€',
+    description: 'Was du für Strom bezahlst und was du für Einspeisung bekommst. Damit rechnen Planung und Auswertung.',
+    groups: ['mode', 'dynamic', 'feedinTariff', 'marketPremium', 'market'],
+    advanced: ['costs'],
+    editors: ['pricingPeriods', 'pvPlants']
+  },
+  {
+    id: 'mode',
+    label: 'Betriebsart',
+    icon: '⚡',
+    description: 'Wer entscheidet, wann der Akku lädt, hält oder verkauft: die Optimierung (EOS) oder die Kleine Börsenautomatik. Ohne beides läuft die Anlage im Eigenverbrauch.',
+    groups: ['optimization', 'eosProxy', 'smallMarketAutomation', 'smaReserve', 'smaBattery', 'smaLocation'],
+    advanced: ['smaAdvanced', 'baseState', 'dcExportMode', 'controlWriteVerify'],
+    editors: []
+  },
+  {
+    id: 'devices',
+    label: 'Geräte',
+    icon: '⚙',
+    description: 'Verbraucher, die DVhub mitplant. Wallbox, Heizstab und weitere Geräte werden unter „Integrationen“ verbunden.',
+    groups: ['eosEv'],
+    advanced: [],
+    editors: []
+  },
+  {
+    id: 'grid',
+    label: 'Netz & Recht',
+    icon: '§',
+    description: 'Was am Netzanschluss erlaubt und vorgeschrieben ist: Netzladen und Netzentladung, §14a, Abregelung.',
+    groups: ['legalSwitches', 'paragraph14a', 'module3', 'eebus'],
+    advanced: ['zeroFeedIn'],
+    editors: []
+  },
+  {
+    id: 'prognosis',
+    label: 'Prognosen',
+    icon: '☁',
+    description: 'Woher die Vorhersagen für PV-Ertrag, Wetter und Verbrauch kommen.',
+    groups: ['solcast', 'pvnode', 'weather', 'load'],
+    advanced: ['ghi', 'loadAdaptiveNight'],
+    editors: []
+  },
+  {
+    id: 'sys',
+    label: 'System',
+    icon: '◆',
+    description: 'Zeitzone, Datenbank und Sicherung, Zugang und Fernwartung.',
+    groups: ['scheduleTech', 'dbBackup', 'historyImport', 'security', 'support'],
+    advanced: ['database', 'general', 'accessControl', 'monitoring', 'scan'],
+    editors: ['historyImport']
+  }
+];
+
 export function getConfigDefinition() {
   return {
+    areas: clone(SETTINGS_AREAS),
     destinations: clone(SETTINGS_DESTINATIONS),
     sections: clone(SECTIONS),
     fields: clone(FIELD_DEFINITIONS),

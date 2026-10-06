@@ -928,6 +928,20 @@ function isFieldVisible(field) {
   // in beta-features.js, damit ein Kanalwechsel sie auch wirklich abschaltet.
   if (field.beta === true && getVisibilityValue('updateChannel') !== 'dev') return false;
 
+  // visibleWhenAny: sichtbar, sobald EINE der Bedingungen zutrifft (gleiche
+  // Form wie visibleWhenPath). Beispiel Kleine Börsenautomatik: Details zeigen,
+  // wenn die Optimierung aus ist ODER die Automatik eingeschaltet ist.
+  if (Array.isArray(field.visibleWhenAny) && field.visibleWhenAny.length) {
+    const matches = (rule) => {
+      const value = getVisibilityValue(rule.path);
+      if ('equals' in rule && !valuesEqual(value, rule.equals)) return false;
+      if ('notEquals' in rule && valuesEqual(value, rule.notEquals)) return false;
+      if (Array.isArray(rule.oneOf) && !rule.oneOf.some((v) => valuesEqual(value, v))) return false;
+      return true;
+    };
+    if (!field.visibleWhenAny.some(matches)) return false;
+  }
+
   if (field.visibleWhenPath) {
     const currentValue = getVisibilityValue(field.visibleWhenPath.path);
     // Support 'equals' (show when value matches) and 'notEquals' (show when value differs)
@@ -954,6 +968,7 @@ function isFieldVisible(field) {
 function fieldAffectsVisibility(path) {
   return (definition?.fields || []).some((field) => (
     field.visibleWhenPath?.path === path
+    || (Array.isArray(field.visibleWhenAny) && field.visibleWhenAny.some((rule) => rule.path === path))
     || (path === 'victron.transport' && Array.isArray(field.visibleWhenTransport) && field.visibleWhenTransport.length)
   ));
 }
@@ -1665,7 +1680,10 @@ function renderGroupedCardsOb(mount, destination, destinationId) {
       for (const field of fields) {
         const model = buildFieldRenderModel(field);
         const input = createConfigInput(field, model.value, model.inherited);
-        body.appendChild(createConfigRow(field.label, input, { help: field.help }));
+        const row = createConfigRow(field.label, input, { help: field.help });
+        row.dataset.path = field.path;
+        row.dataset.search = `${field.label} ${grp.label} ${field.help || ''} ${field.path}`.toLowerCase();
+        body.appendChild(row);
         if (model.discovery && model.discovery.visible) {
           const discoveryRow = document.createElement('div');
           discoveryRow.className = 'sa-discovery-row';
@@ -1738,23 +1756,139 @@ function renderGroupedCardsOb(mount, destination, destinationId) {
   }
 }
 
-function renderDestinationGrid(destinationId) {
-  const gridId = destinationId + 'Grid';
-  const mount = document.getElementById(gridId);
-  if (!mount) return;
-  mount.innerHTML = '';
-
-  const licenseActive = !!(typeof window !== 'undefined'
-    && window._licenseStateCache
-    && window._licenseStateCache.status === 'active');
-  const destination = buildDestinationWorkspace(definition, destinationId, { licenseActive });
-  if (!destination || !destination.sections.length) return;
-
-  // All config destinations now render Onboarding-styled, per-group cards.
-  renderGroupedCardsOb(mount, destination, destinationId);
-  if (mount.children.length === 1) {
-    mount.children[0].classList.add('config-group--full');
+// ── Bereiche (Menüführung nach Aufgabe, definition.areas) ────────────────────
+// Ein Bereich sammelt Gruppen aus allen Sektionen. Direkt sichtbar sind die
+// `groups`, eingeklappt unter „Erweitert“ die `advanced`. Die Karten selbst
+// zeichnet weiterhin renderGroupedCardsOb.
+function collectSettingsGroupsById() {
+  const byId = new Map();
+  for (const section of definition?.sections || []) {
+    const fields = getSettingsSectionFields(definition, section.id);
+    for (const group of groupFields(fields)) byId.set(group.id, group);
   }
+  return byId;
+}
+
+function renderAreaEditor(name) {
+  if (name === 'pvPlants') return renderPvPlantsEditor();
+  if (name === 'pricingPeriods') return renderPricingPeriodsEditor();
+  if (name === 'batteryStages') return renderBatteryStagesEditor();
+  if (name === 'forecastStrings') {
+    return (getVisibilityValue('forecast.pv.configLevel') || 'simple') === 'detailed' ? renderForecastStringEditor() : null;
+  }
+  if (name === 'historyImport') return renderHistoryImportPanel('services');
+  return null;
+}
+
+function renderAreaGrid(area) {
+  const mount = document.getElementById('areaGrid-' + area.id);
+  if (!mount) return;
+  // Offene Karten und „Erweitert“ über ein Neuzeichnen hinweg merken.
+  const openCards = new Set([...mount.querySelectorAll('details.sa-cfg-card[open]')].map((c) => c.dataset.group));
+  const advancedWasOpen = !!mount.querySelector('details.sa-advanced[open]');
+  const firstRender = mount.dataset.rendered !== '1';
+  mount.innerHTML = '';
+  mount.dataset.rendered = '1';
+  const sub = document.getElementById('areaSub-' + area.id);
+  if (sub) sub.textContent = area.description || '';
+
+  const byId = collectSettingsGroupsById();
+  const pick = (ids) => (ids || []).map((id) => byId.get(id)).filter(Boolean);
+  const main = pick(area.groups).map((group, index) => ({
+    ...group,
+    openByDefault: firstRender ? index === 0 : openCards.has(group.id)
+  }));
+  renderGroupedCardsOb(mount, { sections: [{ id: 'area-' + area.id, groups: main }] }, area.id);
+  for (const name of area.editors || []) {
+    const editor = renderAreaEditor(name);
+    if (editor) mount.appendChild(editor);
+  }
+
+  const advanced = pick(area.advanced).map((group) => ({ ...group, openByDefault: openCards.has(group.id) }));
+  if (advanced.length) {
+    const inner = document.createElement('div');
+    inner.className = 'config-grid sa-advanced-grid';
+    renderGroupedCardsOb(inner, { sections: [{ id: 'area-' + area.id + '-advanced', groups: advanced }] }, area.id);
+    if (inner.children.length) {
+      const wrap = document.createElement('details');
+      wrap.className = 'sa-advanced';
+      wrap.open = advancedWasOpen;
+      const head = document.createElement('summary');
+      head.className = 'sa-advanced-head';
+      const title = document.createElement('span');
+      title.className = 'sa-advanced-title';
+      title.textContent = 'Erweitert';
+      const hint = document.createElement('span');
+      hint.className = 'sa-advanced-hint';
+      hint.textContent = [...inner.querySelectorAll('.sa-cfg-card-title')].map((t) => t.textContent).join(' · ');
+      head.appendChild(title);
+      head.appendChild(hint);
+      wrap.appendChild(head);
+      wrap.appendChild(inner);
+      mount.appendChild(wrap);
+    }
+  }
+
+  if (!mount.children.length) {
+    const empty = document.createElement('p');
+    empty.className = 'sa-area-empty';
+    empty.textContent = 'Für die aktuelle Konfiguration gibt es hier nichts einzustellen.';
+    mount.appendChild(empty);
+  }
+}
+
+// ── Suche über alle Bereiche ────────────────────────────────────────────────
+function openSettingsField(path) {
+  const row = [...document.querySelectorAll('.sa-area-grid .config-row')].find((r) => r.dataset.path === path);
+  if (!row) return;
+  const panel = row.closest('.settings-tab-panel');
+  const tab = panel && document.querySelector('.settings-tab[data-tab="' + panel.id.replace('tab-', '') + '"]');
+  if (tab && !tab.classList.contains('is-active')) tab.click();
+  for (let el = row.parentElement; el && el !== panel; el = el.parentElement) {
+    if (el.tagName === 'DETAILS') el.open = true;
+  }
+  const results = document.getElementById('settingsSearchResults');
+  if (results) results.hidden = true;
+  setTimeout(() => {
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    row.classList.add('sa-row-found');
+    setTimeout(() => row.classList.remove('sa-row-found'), 2600);
+  }, 60);
+}
+
+function applySettingsSearch() {
+  const input = document.getElementById('settingsSearch');
+  const results = document.getElementById('settingsSearchResults');
+  if (!input || !results) return;
+  const words = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  results.innerHTML = '';
+  if (!words.length || words.join('').length < 2) { results.hidden = true; return; }
+  const hits = [...document.querySelectorAll('.sa-area-grid .config-row')]
+    .filter((row) => row.dataset.search && words.every((w) => row.dataset.search.includes(w)))
+    .slice(0, 30);
+  const head = document.createElement('div');
+  head.className = 'sa-search-head';
+  head.textContent = hits.length ? `${hits.length === 30 ? 'Die ersten 30' : hits.length} Treffer` : 'Kein Treffer — die Suche findet nur Einstellungen, die zur aktuellen Konfiguration passen.';
+  results.appendChild(head);
+  for (const row of hits) {
+    const panel = row.closest('.settings-tab-panel');
+    const card = row.closest('.sa-cfg-card');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sa-search-hit';
+    const where = document.createElement('span');
+    where.className = 'sa-search-where';
+    where.textContent = [panel?.querySelector('.sa-section-head h2')?.textContent, row.closest('.sa-advanced') ? 'Erweitert' : null,
+      card?.querySelector('.sa-cfg-card-title')?.textContent].filter(Boolean).join(' › ');
+    const what = document.createElement('span');
+    what.className = 'sa-search-what';
+    what.textContent = row.querySelector('.config-row-label')?.firstChild?.textContent || row.dataset.path;
+    btn.appendChild(what);
+    btn.appendChild(where);
+    btn.addEventListener('click', () => openSettingsField(row.dataset.path));
+    results.appendChild(btn);
+  }
+  results.hidden = false;
 }
 
 function buildHistoryImportSummary(status) {
@@ -2211,11 +2345,8 @@ function bindHistoryImportControls(panel) {
 
 function renderSettingsShell() {
   settingsShellState = createSettingsShellState(definition, settingsShellState.activeSectionId);
-  const DEST_TO_GRID = { connection: 'connection', control: 'control', services: 'services' };
-  for (const dest of settingsShellState.destinations) {
-    if (!DEST_TO_GRID[dest.id]) continue;
-    renderDestinationGrid(dest.id);
-  }
+  for (const area of definition?.areas || []) renderAreaGrid(area);
+  applySettingsSearch();
   updateSaveBar();
 }
 
@@ -2226,11 +2357,28 @@ function syncRenderedFieldsToDraft() {
     if (!input) continue;
     const parsed = parseFieldInput(field);
     if (parsed === undefined) continue; // json-type fields return undefined — skip
+    // Ein leeres Feld, für das nie etwas gespeichert war, bleibt ungesetzt:
+    // dann gilt weiter der Standard (als Platzhalter angezeigt). Sonst stünde
+    // nach dem Speichern ein leerer Wert in der Konfiguration, und bei manchen
+    // Feldern ist „leer“ etwas anderes als der Standard (0 statt 100 W, leere
+    // statt der üblichen Liste).
+    if (isUntouchedEmptyField(field, parsed, next)) continue;
     if (parsed && parsed.action === 'delete') deletePath(next, field.path);
     else setPath(next, field.path, parsed);
   }
   currentDraftConfig = next;
   return next;
+}
+
+function isEmptyFieldValue(value) {
+  return value === '' || value === null || (Array.isArray(value) && value.length === 0)
+    || (value && typeof value === 'object' && value.action === 'delete');
+}
+
+// Leer im Formular UND weder gespeichert noch im Entwurf je gesetzt.
+function isUntouchedEmptyField(field, parsed, draft) {
+  if (field.type === 'boolean' || !isEmptyFieldValue(parsed)) return false;
+  return getPath(currentRawConfig, field.path) === undefined && getPath(draft, field.path) === undefined;
 }
 
 function activateSettingsDestination(sectionId) {
@@ -2254,6 +2402,8 @@ function countChangedFields() {
     const input = document.getElementById(fieldId(field.path));
     if (!input) continue;
     const draft = parseFieldInput(field);
+    if (draft === undefined) continue;
+    if (isUntouchedEmptyField(field, draft, currentDraftConfig)) continue;
     const saved = getPath(currentRawConfig, field.path);
     if (JSON.stringify(draft) !== JSON.stringify(saved)) count++;
   }
@@ -3176,8 +3326,9 @@ function initVpnTab() {
 
 function initSettingsPage() {
   // Delegated change listeners on the three grid containers
-  for (const gridId of ['connectionGrid', 'controlGrid', 'servicesGrid']) {
-    document.getElementById(gridId)?.addEventListener('change', (event) => {
+  document.getElementById('settingsSearch')?.addEventListener('input', applySettingsSearch);
+  for (const grid of document.querySelectorAll('.sa-area-grid')) {
+    grid.addEventListener('change', (event) => {
       const input = event.target;
       if (!input?.dataset?.path) return;
       syncRenderedFieldsToDraft();
@@ -3186,7 +3337,7 @@ function initSettingsPage() {
       if (fieldAffectsVisibility(input.dataset.path)) renderSettingsShell();
     });
 
-    document.getElementById(gridId)?.addEventListener('click', (event) => {
+    grid.addEventListener('click', (event) => {
       const runButton = event.target.closest('[data-discovery-run]');
       if (runButton) {
         triggerFieldDiscovery(runButton.dataset.discoveryRun).catch((error) => {
@@ -3366,6 +3517,8 @@ function initSettingsPage() {
 
     // Restore tab from URL hash on load.
     var hash = location.hash.replace('#', '');
+    // Alte Sprungmarken (vor der Gliederung nach Bereichen) weiterleiten.
+    hash = ({ connection: 'plant', control: 'mode', services: 'prices' })[hash] || hash;
     if (hash) {
       var tabFromHash = document.querySelector('.settings-tab[data-tab="' + hash + '"]');
       if (tabFromHash) tabFromHash.click();

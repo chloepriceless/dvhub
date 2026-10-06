@@ -12,10 +12,16 @@ verweist hierher.
 
 ### Behoben
 
+- **Speichern der Einstellungen schreibt nur noch, was geändert wurde.** Ein leeres Feld, für das
+  nie etwas gespeichert war, wurde beim Speichern als „leer“ in die Konfiguration geschrieben —
+  bei manchen Feldern ist das etwas anderes als der Standard (0 statt 100 W Puffer, leere statt
+  der üblichen Freigabe-Liste). Solche Felder bleiben jetzt ungesetzt, der Standard gilt weiter.
+  Der Zähler „Felder geändert“ zählte sie mit (33 nach einem einzigen Klick) und stimmt nun.
+  Einstellungsseite, Status und VPN laufen auf Handy und Tablet nicht mehr seitlich aus dem Bild.
 - **Kleine Börsenautomatik: Reserve 0 % ließ sich im Leitstand nicht speichern** — die Karte
   machte daraus 30 %. Das Feld „Aggressiver Preisaufschlag (%)“ ist aus den Einstellungen
   entfernt: es hatte nie eine Wirkung.
-- **Eine Zeitzone für alles.** Die Einstellung „Zeitzone“ (Zeitplan → Zeitplan & Technik) gilt
+- **Eine Zeitzone für alles.** Die Einstellung „Zeitzone“ (System → Zeitzone & Regeltakt) gilt
   jetzt überall. Bisher rechneten etliche Stellen mit der Zeitzone des Betriebssystems —
   Tagesgrenzen beim Abruf der Börsenpreise, die Mehrtages-Logik, das Familien-Dashboard,
   Ruhezeiten der Benachrichtigungen, die Backup-Uhrzeit. Stand das System auf UTC (frisch
@@ -45,6 +51,16 @@ verweist hierher.
 
 ### Neu
 
+- **Einstellungen nach Aufgabe gegliedert.** Statt der Reiter Anlage / Steuerung / Preise (allein
+  „Steuerung“ hatte 69 Felder in 15 Gruppen) gibt es sieben Bereiche: **Meine Anlage ·
+  Strompreise · Betriebsart · Geräte · Netz & Recht · Prognosen · System**. Jeder Bereich zeigt
+  zuerst das Nötige; selten gebrauchte Feineinstellungen und Beta-Funktionen liegen eingeklappt
+  unter „Erweitert“. Neu ist die **Suche** oben in der Seitenleiste: Stichwort eingeben, Treffer
+  anklicken, die Seite springt zum Feld und hebt es hervor. §14a, EEBUS, Nulleinspeisung und die
+  Zugangs-Einstellungen sind jetzt auch auf der Einstellungsseite erreichbar (bisher nur über
+  Einrichtung bzw. Integrationen). Status, Prognose-Daten, EOS-Daten und VPN stehen darunter
+  als „Diagnose & Dienste“. An den gespeicherten Werten ändert sich nichts; alte Sprungmarken
+  führen auf den passenden neuen Bereich.
 - **Kleine Börsenautomatik: klare Gliederung, Reserve auf einen Blick.** In den Einstellungen
   stand alles in einem Block mit 15 Feldern; wo die Reserve über Nacht eingestellt wird und ob
   die Automatik sie verkauft, war nicht zu erkennen. Jetzt fünf Abschnitte: Ein/Aus &
@@ -56,12 +72,13 @@ verweist hierher.
   Ladestand verkauft wird, wohin die Grenze über Nacht sinkt und was der letzte Plan daraus
   gemacht hat.
 - **Einstellungen unterscheiden „Optimierung an“ und „aus“.** Ist die Optimierung (EOS) aktiv,
-  plant sie Verkauf und Reserve selbst — von der Kleinen Börsenautomatik bleibt dann nur der
-  Ein/Aus-Schalter sichtbar, die übrigen Felder sind ausgeblendet (ihre Werte bleiben
-  gespeichert). Ist sie aus, erscheinen alle Abschnitte. Im Leitstand steht derselbe Hinweis.
+  plant sie Verkauf und Reserve selbst — von der Kleinen Börsenautomatik steht dann zunächst
+  nur der Ein/Aus-Schalter da. Wer sie einschaltet, bekommt sofort alle ihre Abschnitte zum
+  Einstellen; ausgeblendete Werte bleiben gespeichert. Ist die Optimierung aus, erscheinen die
+  Abschnitte immer. Im Leitstand steht derselbe Hinweis.
 - **Betriebsart „Nur Netzspeicher“ (Graustrom-Arbitrage).** Für einen Speicher ohne PV-Anlage
   und ohne Hausverbrauch hinter einem einzigen Zähler, der nur aus dem Netz lädt und nur ins
-  Netz einspeist (Einstellungen → Zeitplan → Rechtliche Schalter). EOS bekommt dann PV = 0 als
+  Netz einspeist (Einstellungen → Netz & Recht → Rechtliche Schalter). EOS bekommt dann PV = 0 als
   Reihe — ohne PV-Reihe rechnet EOS nicht — und als Verbrauch nur den Ruhebedarf der Anlage.
   Den Ruhebedarf nimmt DVhub aus dem Netzzähler in den Minuten, in denen der Akku ruht (Median,
   bis genug Werte da sind 100 W); ein fester Wert lässt sich eintragen. Netzladen hängt in

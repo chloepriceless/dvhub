@@ -3,20 +3,20 @@
    dvhub-app.css-Tokens (Glass/Aurora). Wird NACH settings.css geladen →
    überschreibt deren Alt-Optik.
    TEIL 1 — Config-Tabs (Anlage / Steuerung / Preise & Daten), gescoped auf die
-            drei Config-Grids #connectionGrid/#controlGrid/#servicesGrid.
+            sieben Bereichs-Raster #areaGrid-* (Meine Anlage … System).
    TEIL 2 — Custom-Tabs (Status / Forecast / EOS / VPN), gescoped auf
             #tab-system/#tab-forecast/#tab-eos/#tab-vpn (siehe unten). #tab-ml
             (deaktiviert) bleibt bewusst außen vor.
    ─────────────────────────────────────────────────────────────────────────── */
 
-:is(#connectionGrid, #controlGrid, #servicesGrid) {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) {
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--gap-3);
 }
 
 /* ── Gruppen-Karte (entspricht .ob-card) ─────────────────────────────────── */
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card {
   background: linear-gradient(180deg, var(--glass-2), var(--glass));
   border: 1px solid var(--glass-brd);
   border-radius: var(--r-lg);
@@ -26,13 +26,13 @@
   overflow: hidden;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card[open] {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card[open] {
   border-color: var(--glass-brd-strong);
   box-shadow: var(--shadow-lg);
 }
 
 /* ── Karten-Kopf (klickbar, klappt ein/aus) ──────────────────────────────── */
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-head {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card-head {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -41,10 +41,10 @@
   list-style: none;
   user-select: none;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-head::-webkit-details-marker { display: none; }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-head:hover .sa-cfg-card-title { color: var(--cyan); }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card-head::-webkit-details-marker { display: none; }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card-head:hover .sa-cfg-card-title { color: var(--cyan); }
 
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-title {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card-title {
   flex: 1 1 auto;
   font-family: var(--f-brand);
   font-size: 0.98rem;
@@ -53,7 +53,7 @@
   color: var(--text);
   transition: color 0.15s ease;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-count {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card-count {
   flex: 0 0 auto;
   font-size: 0.7rem;
   font-weight: 600;
@@ -65,7 +65,7 @@
   min-width: 22px;
   text-align: center;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-chev {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card-chev {
   flex: 0 0 auto;
   width: 9px; height: 9px;
   border-right: 2px solid var(--text-dim);
@@ -73,14 +73,14 @@
   transform: rotate(-45deg);
   transition: transform 0.2s ease;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card[open] .sa-cfg-card-chev { transform: rotate(45deg); }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card[open] .sa-cfg-card-chev { transform: rotate(45deg); }
 
 /* ── Karten-Körper ───────────────────────────────────────────────────────── */
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-body {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card-body {
   padding: 2px 18px 18px;
   border-top: 1px solid var(--hairline);
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-desc {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card-desc {
   margin: 13px 0 4px;
   font-size: 0.83rem;
   line-height: 1.5;
@@ -88,15 +88,15 @@
 }
 
 /* ── Felder (entspricht .ob-field / .ob-label / .ob-input) ───────────────── */
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-row {
   display: block;
   padding: 13px 0;
   border: none;
   margin: 0;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row + .config-row { border-top: 1px solid var(--hairline); }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-row + .config-row { border-top: 1px solid var(--hairline); }
 
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row-label {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-row-label {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -105,15 +105,15 @@
   font-weight: 600;
   color: var(--text-2);
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-required { color: var(--cyan); }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-help-icon {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-required { color: var(--cyan); }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-help-icon {
   font-size: 0.85rem;
   color: var(--text-dim);
   cursor: help;
 }
 
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-input,
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-select {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-input,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-select {
   width: 100%;
   font-family: var(--f-body);
   font-size: 0.94rem;
@@ -124,24 +124,24 @@
   padding: 10px 12px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-input:focus,
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-select:focus {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-input:focus,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-select:focus {
   outline: none;
   border-color: var(--cyan);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-input::placeholder { color: var(--text-dim); }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-input::placeholder { color: var(--text-dim); }
 
 /* ── Boolean: echter iOS-/Apple-Switch (Label links, Slider rechts) ──────── */
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row:has(.config-checkbox) {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-row:has(.config-checkbox) {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row:has(.config-checkbox) .config-row-label { margin-bottom: 0; }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-row:has(.config-checkbox) .config-row-label { margin-bottom: 0; }
 
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-checkbox {
   appearance: none;
   -webkit-appearance: none;
   position: relative;
@@ -154,7 +154,7 @@
   cursor: pointer;
   transition: background 0.2s ease, border-color 0.2s ease;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox::after {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-checkbox::after {
   content: "";
   position: absolute;
   top: 2px;
@@ -166,27 +166,27 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   transition: transform 0.2s ease, background 0.2s ease;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox:checked {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-checkbox:checked {
   background: var(--green);
   border-color: var(--green);
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox:checked::after {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-checkbox:checked::after {
   transform: translateX(18px);
   background: #ffffff;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-checkbox:focus-visible {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-checkbox:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 /* Karten-Buttons (Map-Picker, Discovery) */
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-map-row,
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-discovery-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-map-row,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-discovery-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* ── Spezial-Editor-Panels (PV-Anlagen, Preis-Perioden, History-Import) ─────
    Diese nutzen `.config-group` statt `.sa-cfg-card`. Gleicher Karten-Look,
    damit die Preise-Seite nicht alt/neu mischt. ──────────────────────────── */
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-group {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-group {
   background: linear-gradient(180deg, var(--glass-2), var(--glass));
   border: 1px solid var(--glass-brd);
   border-radius: var(--r-lg);
@@ -195,7 +195,7 @@
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
   backdrop-filter: blur(var(--glass-blur)) saturate(140%);
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-group-kicker {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-group-kicker {
   font-family: var(--f-brand);
   font-size: 0.98rem;
   font-weight: 700;
@@ -207,7 +207,7 @@
   border: none;
   text-transform: none;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-banner {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-banner {
   border-radius: var(--r-md);
   border: 1px solid var(--glass-brd);
   background: var(--glass-2);
@@ -217,13 +217,13 @@
   line-height: 1.5;
   margin-bottom: 12px;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-banner.error {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-banner.error {
   border-color: var(--red);
   color: var(--red);
 }
 
 /* Buttons innerhalb der Karten/Editoren im ob-Look */
-:is(#connectionGrid, #controlGrid, #servicesGrid) .btn {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .btn {
   font-family: var(--f-body);
   font-size: 0.85rem;
   font-weight: 600;
@@ -235,36 +235,36 @@
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .btn:hover {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .btn:hover {
   border-color: var(--cyan);
   background: var(--glass);
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .btn-primary,
-:is(#connectionGrid, #controlGrid, #servicesGrid) .btn.primary {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .btn-primary,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .btn.primary {
   background: var(--cyan);
   border-color: var(--cyan);
   color: #04101f;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .btn-danger,
-:is(#connectionGrid, #controlGrid, #servicesGrid) .btn.danger {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .btn-danger,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .btn.danger {
   border-color: var(--red);
   color: var(--red);
 }
 
 /* Tabellen in den Editoren (PV-Anlagen/Perioden) — Hairline-Look */
-:is(#connectionGrid, #controlGrid, #servicesGrid) table {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) th,
-:is(#connectionGrid, #controlGrid, #servicesGrid) td {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) th,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--hairline);
   text-align: left;
   color: var(--text-2);
 }
-:is(#connectionGrid, #controlGrid, #servicesGrid) th {
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) th {
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -273,17 +273,17 @@
 
 /* ── Tooltips über Karten-/Tabellen-Grenzen hinaus (overflow-Clip aufheben,
    z-index ganz nach oben) ──────────────────────────────────────────────── */
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card,
-:is(#connectionGrid, #controlGrid, #servicesGrid) .sa-cfg-card-body,
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-group,
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row,
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-row-grid,
-:is(#connectionGrid, #controlGrid, #servicesGrid) table,
-:is(#connectionGrid, #controlGrid, #servicesGrid) td { overflow: visible; }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-help-icon { position: relative; }
-:is(#connectionGrid, #controlGrid, #servicesGrid) .config-help-icon:hover { z-index: 999; }
-:is(#connectionGrid, #controlGrid, #servicesGrid) [data-tooltip]::after,
-:is(#connectionGrid, #controlGrid, #servicesGrid) [data-tooltip]::before { z-index: 9999; }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .sa-cfg-card-body,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-group,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-row,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-row-grid,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) table,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) td { overflow: visible; }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-help-icon { position: relative; }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) .config-help-icon:hover { z-index: 999; }
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) [data-tooltip]::after,
+:is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys) [data-tooltip]::before { z-index: 9999; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Custom-Tabs (Status / Forecast / EOS / VPN) im Onboarding-Look.
@@ -555,3 +555,110 @@
 .settings-aurora .sa-page-header h1 { font-family: var(--f-brand); color: var(--text); }
 .settings-aurora .sa-page-kicker { font-family: var(--f-mono, var(--f-body)); color: var(--cyan); }
 .settings-aurora .sa-page-sub { color: var(--text-dim); }
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   TEIL 4 — Bereiche: Suche, „Erweitert“, Treffer (2026-10-06).
+   ─────────────────────────────────────────────────────────────────────────── */
+.settings-aurora .sa-search {
+  display: flex; align-items: center; gap: 8px;
+  margin: 2px 2px 8px; padding: 7px 10px;
+  border: 1px solid var(--glass-brd); border-radius: var(--r-md);
+  background: var(--glass);
+}
+.settings-aurora .sa-search:focus-within { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
+.settings-aurora .sa-search-ico { color: var(--cyan); font-size: 0.95rem; line-height: 1; }
+.settings-aurora .sa-search input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+  color: var(--text); font-family: var(--f-body); font-size: 0.82rem;
+}
+.settings-aurora .sa-search input::placeholder { color: var(--text-dim); }
+
+.settings-aurora .sa-search-results {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-bottom: 16px; padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 35%, transparent);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--glass-2), var(--glass));
+}
+.settings-aurora .sa-search-results[hidden] { display: none; }
+.settings-aurora .sa-search-head {
+  font-family: var(--f-mono, var(--f-body)); font-size: 0.68rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--text-dim); padding: 2px 6px 6px;
+}
+.settings-aurora .sa-search-hit {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  width: 100%; padding: 8px 10px; text-align: left; cursor: pointer;
+  border: 1px solid transparent; border-radius: var(--r-md);
+  background: transparent; color: var(--text); font-family: var(--f-body); font-size: 0.85rem;
+}
+.settings-aurora .sa-search-hit:hover,
+.settings-aurora .sa-search-hit:focus-visible {
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+  border-color: color-mix(in srgb, var(--cyan) 35%, transparent); outline: 0;
+}
+.settings-aurora .sa-search-where { color: var(--text-dim); font-size: 0.76rem; }
+
+.settings-aurora .sa-advanced {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  border: 1px dashed var(--glass-brd); border-radius: var(--r-lg);
+  background: transparent;
+}
+.settings-aurora .sa-advanced[open] { padding-bottom: 12px; }
+.settings-aurora .sa-advanced-head {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  padding: 13px 18px; cursor: pointer; list-style: none;
+}
+.settings-aurora .sa-advanced-head::-webkit-details-marker { display: none; }
+.settings-aurora .sa-advanced-head::before {
+  content: '\203A'; color: var(--cyan); font-size: 1.1rem; line-height: 1;
+  transition: transform 0.15s ease; display: inline-block;
+}
+.settings-aurora .sa-advanced[open] > .sa-advanced-head::before { transform: rotate(90deg); }
+.settings-aurora .sa-advanced-title {
+  font-family: var(--f-mono, var(--f-body)); font-size: 0.72rem; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--text-2);
+}
+.settings-aurora .sa-advanced-hint { color: var(--text-dim); font-size: 0.78rem; }
+.settings-aurora .sa-advanced-grid { padding: 0 12px; }
+.settings-aurora .sa-area-empty { color: var(--text-dim); font-size: 0.85rem; padding: 6px 2px; }
+
+.settings-aurora .config-row.sa-row-found {
+  outline: 2px solid color-mix(in srgb, var(--cyan) 70%, transparent);
+  outline-offset: 4px; border-radius: var(--r-md);
+  transition: outline-color 0.4s ease;
+}
+
+/* Schmale Bildschirme: Suche über die volle Breite, Bereiche als umbrechende
+   Kacheln statt einer seitlich scrollenden Zeile — so sind alle sichtbar. */
+@media (max-width: 600px) {
+  .settings-aurora .settings-tabs { flex-wrap: wrap; overflow-x: visible; gap: 4px; }
+  .settings-aurora .sa-search { flex: 0 0 100%; margin: 2px 0 4px; box-sizing: border-box; }
+  .settings-aurora .settings-tabs .sa-nav-group { flex: 0 0 100%; padding: 6px 6px 0; }
+  .settings-aurora .settings-tab { flex: 1 1 auto; }
+  .settings-aurora .sa-search-hit { flex-direction: column; gap: 2px; }
+  .settings-aurora .sa-advanced-grid { padding: 0 6px; }
+  /* PV-String-Zeilen: fünf Felder passen nicht nebeneinander — zweizeilig. */
+  .settings-aurora .sa-grid-strings-row { grid-template-columns: 1fr 1fr 1fr auto; }
+  .settings-aurora .sa-grid-strings-row > :first-child { grid-column: 1 / -1; }
+  .settings-aurora .sa-grid-strings-row > .config-input { min-width: 0; }
+  .settings-aurora .sa-grid-strings-header { display: none; }
+  /* Status und VPN: lange Werte und Karten dürfen die Seite nicht verbreitern. */
+  .settings-aurora .config-row-value { overflow-wrap: anywhere; min-width: 0; }
+  .settings-aurora .settings-tab-panel,
+  .settings-aurora .settings-tab-panel .config-grid,
+  .settings-aurora .settings-tab-panel .config-group { min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .settings-aurora .settings-tab-panel .config-row { flex-wrap: wrap; }
+  .settings-aurora .settings-tab-panel .config-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Lange Werte (Pfade, Schlüssel, Adressen) brechen um, statt die Seite zu
+   verbreitern — auf jeder Breite. */
+.settings-aurora .config-row-value { overflow-wrap: anywhere; min-width: 0; }
+.settings-aurora .settings-tab-panel,
+.settings-aurora .settings-tab-panel .config-group { min-width: 0; max-width: 100%; box-sizing: border-box; }
+@media (max-width: 900px) {
+  .settings-aurora .settings-tab-panel .config-grid { grid-template-columns: minmax(0, 1fr); }
+  .settings-aurora .settings-tab-panel .config-row { flex-wrap: wrap; }
+}
