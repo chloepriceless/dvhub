@@ -2796,6 +2796,8 @@ function initHistoryDateParts() {
   const yearEl = document.getElementById('historyYear');
   const view = document.getElementById('historyView');
   if (!date || !dayEl || !monthEl || !yearEl) return;
+  // Nur im echten Browser: Testumgebungen stellen ein unvollständiges DOM.
+  if (typeof document.createElement !== 'function' || typeof dayEl.replaceChildren !== 'function') return;
   const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
   const thisYear = new Date().getFullYear();
   const option = (value, label) => { const o = document.createElement('option'); o.value = String(value); o.textContent = label; return o; };
