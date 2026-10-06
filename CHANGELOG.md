@@ -87,6 +87,11 @@ verweist hierher.
 
 ### Neu
 
+- **Energiefluss: Zahlen zählen statt zu springen.** Im Leitstand und auf der Familienseite laufen
+  die Werte für PV, Akku, Haus, Netz und die Tagesbilanz in knapp einer Sekunde zum neuen Stand
+  — auch durch die Null, wenn das Netz von Einspeisung auf Bezug dreht. Aufteilung und
+  Teilchenströme laufen mit. Mit der Systemeinstellung „Bewegung reduzieren“ wird wie bisher
+  direkt umgeschaltet.
 - **Kleine Börsenautomatik rechnet mit dem gemessenen Wirkungsgrad.** Sobald DVhub den
   Wechselrichter vermessen hat, gilt für die Automatik derselbe Wirkungsgrad Akku → Netz wie
   für EOS (Entlade-Wirkungsgrad des Akkus × gemessene Kennlinie). Das eigene Feld der Automatik

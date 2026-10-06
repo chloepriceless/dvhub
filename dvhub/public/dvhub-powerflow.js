@@ -278,15 +278,51 @@
       }
     }
 
+    // Zahlen zählen zum neuen Wert hoch bzw. runter, statt zu springen
+    // (Christin 2026-10-06). Gezählt wird der Zustand selbst — so laufen
+    // Werte, Aufteilung (PV/Akku/Netz) und Teilchenströme gemeinsam mit.
+    // Beim ersten Wert, bei „unbekannt“ und mit „Bewegung reduzieren“ wird
+    // direkt gesetzt.
+    const TWEEN_MS = 900;
+    const TWEEN_KEYS = ['pv', 'bat', 'house', 'grid', 'costEur'];
+    const reduceMotion = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let tween = null;      // { from, to, start }
+    let tweenRaf = 0;
+    function tweenStep(ts) {
+      if (!alive || !tween) return;
+      if (tween.start === null) tween.start = ts;
+      const t = Math.min(1, (ts - tween.start) / TWEEN_MS);
+      const e = 1 - Math.pow(1 - t, 3);   // läuft schnell an und kommt weich an
+      for (const k of TWEEN_KEYS) {
+        if (k in tween.to) state[k] = t >= 1 ? tween.to[k] : tween.from[k] + (tween.to[k] - tween.from[k]) * e;
+      }
+      applyFlows();
+      if (t < 1) tweenRaf = requestAnimationFrame(tweenStep); else tween = null;
+    }
+
     const api = {
       update(s){
         if (s && typeof s === 'object') {
-          if (typeof s.pv    === 'number') state.pv    = s.pv;
-          if (typeof s.bat   === 'number') state.bat   = s.bat;
-          if (typeof s.house === 'number') state.house = s.house;
-          if (typeof s.soc   === 'number') state.soc   = s.soc;
-          if ('grid' in s) state.grid = (typeof s.grid === 'number') ? s.grid : null;
-          if ('costEur' in s) state.costEur = (typeof s.costEur === 'number') ? s.costEur : null;
+          const next = {};
+          if (typeof s.pv    === 'number') next.pv    = s.pv;
+          if (typeof s.bat   === 'number') next.bat   = s.bat;
+          if (typeof s.house === 'number') next.house = s.house;
+          if (typeof s.soc   === 'number') state.soc  = s.soc;
+          if ('grid' in s) next.grid = (typeof s.grid === 'number') ? s.grid : null;
+          if ('costEur' in s) next.costEur = (typeof s.costEur === 'number') ? s.costEur : null;
+
+          const first = !skeletonCleared;
+          const from = {}, to = {};
+          for (const k of Object.keys(next)) {
+            const cur = state[k], target = next[k];
+            // Zählen nur von Zahl zu Zahl; alles andere wird direkt gesetzt.
+            if (first || reduceMotion || typeof cur !== 'number' || typeof target !== 'number' || cur === target) state[k] = target;
+            else { from[k] = cur; to[k] = target; }
+          }
+          cancelAnimationFrame(tweenRaf);
+          tween = Object.keys(to).length ? { from, to, start: null } : null;
+          if (tween) tweenRaf = requestAnimationFrame(tweenStep);
         }
         clearSkeletons();
         applyFlows();
@@ -294,6 +330,7 @@
       destroy(){
         alive = false;
         cancelAnimationFrame(raf);
+        cancelAnimationFrame(tweenRaf);
         ro.disconnect();
         root.innerHTML = '';
       },
