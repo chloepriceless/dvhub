@@ -3743,6 +3743,17 @@ async function loadAutomationConfig() {
     if (el('automationInverterEfficiency')) el('automationInverterEfficiency').value = c.inverterEfficiencyPct ?? 85;
     if (el('automationMaxDischargeW')) el('automationMaxDischargeW').value = c.maxDischargeW ?? -12000;
     if (el('automationMinSocPct')) el('automationMinSocPct').value = c.minSocPct ?? 30;
+    // Akku-Werte der Anlage gelten auch für die Automatik: dann nur anzeigen.
+    const plant = data.plantBattery || {};
+    const lockTo = (id, value, text) => {
+      const input = el(id);
+      if (!input) return;
+      input.disabled = value != null;
+      input.title = value != null ? 'Kommt aus Einstellungen → Meine Anlage → Akku-Grenzen' : '';
+      if (value != null) input.value = text;
+    };
+    lockTo('automationBatteryCapacity', plant.capacityKwh, plant.capacityKwh);
+    lockTo('automationMaxDischargeW', plant.maxDischargeW, -plant.maxDischargeW);
     if (el('automationForecastAware')) el('automationForecastAware').checked = c.forecastAware === true;
     if (el('automationSafetyMargin')) el('automationSafetyMargin').value = c.forecastSafetyMarginKwh ?? 1.5;
     automationGlobalMinSocPct = Number.isFinite(Number(data.globalMinSocPct)) ? Number(data.globalMinSocPct) : null;
@@ -3776,9 +3787,9 @@ async function saveAutomationConfig() {
     enabled: el('automationEnabled')?.checked ?? false,
     searchWindowStart: el('automationSearchStart')?.value || '14:00',
     searchWindowEnd: el('automationSearchEnd')?.value || '09:00',
-    batteryCapacityKwh: el('automationBatteryCapacity')?.value ? Number(el('automationBatteryCapacity').value) : null,
+    ...(el('automationBatteryCapacity')?.disabled ? {} : { batteryCapacityKwh: el('automationBatteryCapacity')?.value ? Number(el('automationBatteryCapacity').value) : null }),
     inverterEfficiencyPct: Number(el('automationInverterEfficiency')?.value) || 85,
-    maxDischargeW: Number(el('automationMaxDischargeW')?.value) || -12000,
+    ...(el('automationMaxDischargeW')?.disabled ? {} : { maxDischargeW: Number(el('automationMaxDischargeW')?.value) || -12000 }),
     // 0 ist ein gültiger Wert (keine Reserve) — nur ein leeres Feld fällt auf 30 zurück.
     minSocPct: readAutomationMinSocPct(),
     forecastAware: el('automationForecastAware')?.checked === true,

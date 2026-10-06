@@ -2712,8 +2712,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smaBattery',
-      groupLabel: 'Kleine Börsenautomatik · Akku & Leistung',
-      groupDescription: 'Aus Kapazität, Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
+      groupLabel: 'Kleine Börsenautomatik · Wirkungsgrad & Grenzen',
+      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“. Daraus, aus Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.batteryCapacityKwh',
@@ -2725,8 +2725,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smaBattery',
-      groupLabel: 'Kleine Börsenautomatik · Akku & Leistung',
-      groupDescription: 'Aus Kapazität, Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
+      groupLabel: 'Kleine Börsenautomatik · Wirkungsgrad & Grenzen',
+      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“. Daraus, aus Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.inverterEfficiencyPct',
@@ -2737,8 +2737,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smaBattery',
-      groupLabel: 'Kleine Börsenautomatik · Akku & Leistung',
-      groupDescription: 'Aus Kapazität, Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
+      groupLabel: 'Kleine Börsenautomatik · Wirkungsgrad & Grenzen',
+      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“. Daraus, aus Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.maxDischargeW',
@@ -2749,8 +2749,8 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'smaBattery',
-      groupLabel: 'Kleine Börsenautomatik · Akku & Leistung',
-      groupDescription: 'Aus Kapazität, Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
+      groupLabel: 'Kleine Börsenautomatik · Wirkungsgrad & Grenzen',
+      groupDescription: 'Akku-Kapazität und Entladeleistung kommen aus „Meine Anlage → Akku-Grenzen“. Daraus, aus Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
       groupOrder: 52,
       groupCollapseWhenPro: true,
       path: 'schedule.smallMarketAutomation.targetSlotCount',

@@ -1797,6 +1797,12 @@ function plantLocation(config) {
   return Number.isFinite(lat) && Number.isFinite(lon) ? { latitude: lat, longitude: lon } : null;
 }
 function isDuplicateOfPlantValue(path) {
+  // Akku: Kapazität und Entladeleistung stehen unter „Meine Anlage → Akku-Grenzen“
+  // und gelten auch für die Automatik (resolvePlantBattery im Server).
+  if (path === 'schedule.smallMarketAutomation.batteryCapacityKwh') return Number(getVisibilityValue('optimizer.batteryCapacityWh')) > 0;
+  if (path === 'schedule.smallMarketAutomation.maxDischargeW') {
+    return Math.abs(Number(getVisibilityValue('optimizer.maxDischargeW'))) > 0 || Math.abs(Number(getVisibilityValue('optimizer.inverterMaxPowerW'))) > 0;
+  }
   if (!path.startsWith('schedule.smallMarketAutomation.location.')) return false;
   return plantLocation(currentDraftConfig) !== null || plantLocation(currentEffectiveConfig) !== null;
 }
@@ -1842,20 +1848,6 @@ function setOperatingMode(mode) {
   if (mode === 'eos') {
     setPath(next, 'optimizer.primarySource', 'eos');
     setPath(next, 'optimizer.eosProxy.enabled', true);
-  }
-  // Wer die Kleine Börsenautomatik zum ersten Mal einschaltet, bekommt Akku-
-  // Kapazität und Entladeleistung aus „Meine Anlage“ vorgeschlagen — statt der
-  // Werkswerte (30 kWh, 12 kW), die zu keiner echten Anlage passen. Bereits
-  // gespeicherte Werte der Automatik bleiben unangetastet.
-  if (mode === 'sma') {
-    const capacityWh = Number(getVisibilityValue('optimizer.batteryCapacityWh'));
-    if (getPath(currentRawConfig, 'schedule.smallMarketAutomation.batteryCapacityKwh') == null && capacityWh > 0) {
-      setPath(next, 'schedule.smallMarketAutomation.batteryCapacityKwh', Math.round(capacityWh / 100) / 10);
-    }
-    const dischargeW = Math.abs(Number(getVisibilityValue('optimizer.maxDischargeW')));
-    if (getPath(currentRawConfig, 'schedule.smallMarketAutomation.maxDischargeW') === undefined && dischargeW > 0) {
-      setPath(next, 'schedule.smallMarketAutomation.maxDischargeW', -dischargeW);
-    }
   }
   currentDraftConfig = next;
   renderSettingsShell();

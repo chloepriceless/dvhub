@@ -898,7 +898,17 @@ export function createLicenseService(ctx) {
       if (sum > 0) return sum;
     }
     const total = Number(cfg?.forecast?.pv?.totalKwp);
-    return Number.isFinite(total) && total > 0 ? total : 0;
+    if (Number.isFinite(total) && total > 0) return total;
+    // Betriebsart „Nur Netzspeicher“ (keine PV): die Leistung des
+    // Akku-Wechselrichters in kW zählt wie kWp — sonst fiele ein großer
+    // Netzspeicher mit 0 kWp immer in die kleinste Stufe. Für Anlagen mit PV
+    // ändert sich nichts: dort bleibt die PV-Größe das Maß.
+    if (cfg?.optimizer?.gridStorageOnly === true) {
+      const powers = [Math.abs(Number(cfg.optimizer.inverterMaxPowerW)), Math.abs(Number(cfg.optimizer.maxDischargeW))]
+        .filter((w) => Number.isFinite(w) && w > 0);
+      if (powers.length) return Math.min(...powers) / 1000;
+    }
+    return 0;
   }
 
   /**

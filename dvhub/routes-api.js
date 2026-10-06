@@ -16,7 +16,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredModule3Windows } from './user-energy-pricing.js';
-import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT } from './market-automation-builder.js';
+import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT, resolvePlantBattery } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
@@ -6078,7 +6078,7 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/eos/sync-from-dvhub' && req.method === 'POST') {
       const cfg = getCfg();
       const sma = cfg.schedule?.smallMarketAutomation || {};
-      const battCapKwh = Number(sma.batteryCapacityKwh) || null;
+      const battCapKwh = resolvePlantBattery(cfg).capacityKwh ?? (Number(sma.batteryCapacityKwh) || null);
       // NB: sma.minSocPct is deliberately NOT used here — EOS min_soc uses the
       // live Victron BMS floor (see min_soc_percentage below).
       const effPct = Number(sma.inverterEfficiencyPct ?? 90);
@@ -8639,6 +8639,8 @@ export function createApiRoutes(ctx) {
         ok: true,
         config: getCfg().schedule?.smallMarketAutomation || {},
         optimizerEnabled: getCfg().optimizer?.enabled === true,
+        // Akku-Werte aus „Meine Anlage“ — gesetzt gelten sie auch für die Automatik.
+        plantBattery: resolvePlantBattery(getCfg()),
         globalMinSocPct: Number.isFinite(Number(state?.victron?.minSocPct)) && state?.victron?.minSocPct != null
           ? Number(state.victron.minSocPct) : VICTRON_MIN_SOC_FALLBACK_PCT
       });

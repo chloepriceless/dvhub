@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Behoben
 
+- **Leitstand: Prognose-Zeile lief aus der Karte.** Die Aufschlüsselung neben PV-Tagesprognose,
+  erwartetem Verbrauch und Überschuss stand in einer Zeile und ragte bei fast jeder
+  Bildschirmbreite (1024 bis 1600 px und am Handy) bis zu 200 px über den Kartenrand. Sie steht
+  jetzt unter dem Wert und bricht um.
 - **Status, Prognose-Daten, EOS-Daten und VPN im selben Bild wie die übrigen Einstellungen.** Über
   dem ersten Buchstaben jeder Kartenüberschrift lag ein Farbpunkt, der Inhalt war 24 px tiefer
   eingerückt als die Überschrift, Schalter waren zu breiten Balken gezogen, Ankreuzlisten
@@ -59,6 +63,19 @@ verweist hierher.
 
 ### Neu
 
+- **Akku-Werte der Anlage gelten für alles.** Kapazität und Entladeleistung unter „Meine Anlage →
+  Akku-Grenzen“ gelten jetzt auch für die Kleine Börsenautomatik; ihre eigenen Felder dafür
+  entfallen in Einstellungen und Leitstand (im Leitstand werden die Anlagenwerte angezeigt).
+  Verkauft wird höchstens mit der kleineren aus Entladeleistung und Wechselrichterleistung.
+  Anlagen, bei denen unter „Meine Anlage“ nichts eingetragen ist, rechnen unverändert mit den
+  bisherigen Werten der Automatik.
+- **Lizenzstufe für reine Netzspeicher.** In der Betriebsart „Nur Netzspeicher“ zählt die Leistung
+  des Akku-Wechselrichters in kW wie kWp. Bisher fiel ein Speicher ohne PV mit 0 kWp immer in
+  die kleinste Stufe. Für Anlagen mit PV bleibt die PV-Größe das Maß.
+- **Integrationen im Bild der Einstellungen.** Die Liste links ist eine Navigationskarte mit
+  Suche, der gewählte Eintrag sieht aus wie ein aktiver Reiter, die Karten in der Mitte haben
+  Überschrift und Trennlinie wie dort. Die Farbe je Integration bleibt (Logo, Kante am gewählten
+  Eintrag, Linie über der Kachel). Erfolgsmeldungen („✓ …“) sind grün statt rot.
 - **Sicherheitspuffer der Prognose-Anpassung einstellbar.** Die Kleine Börsenautomatik ließ bei
   „Reserve nach Prognose anpassen“ fest 1,5 kWh zusätzlich im Akku — für einen 10-kWh-Akku
   etwas anderes als für einen mit 60 kWh. Der Wert steht jetzt im Abschnitt „Reserve“

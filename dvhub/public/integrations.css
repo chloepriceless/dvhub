@@ -1575,3 +1575,88 @@
   .page-content > .mqtt-tiles-editor { display: none; }
 }
 .mqtt-tiles-editor[hidden] { display: none; }
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Optik wie die Einstellungsseite (2026-10-06): Liste als eine Navigations-
+   karte mit Suche, gewählter Eintrag wie ein aktiver Reiter, Karten mit
+   Überschrift + Trennlinie. Die Farbe je Integration (Logo, Kante am
+   gewählten Eintrag, Linie über der Kachel) bleibt.
+   ─────────────────────────────────────────────────────────────────────────── */
+.intg-search { display: none; }
+.conn-card.intg-search-miss { display: none; }
+@media (min-width: 1000px) {
+  .intg-side {
+    gap: 2px; padding: 7px;
+    border: 1px solid var(--glass-brd); border-radius: var(--r-lg);
+    background: linear-gradient(180deg, var(--glass-2), var(--glass));
+    box-shadow: var(--shadow-md);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  }
+  .intg-search {
+    display: flex; align-items: center; gap: 8px;
+    margin: 2px 2px 6px; padding: 7px 10px;
+    border: 1px solid var(--glass-brd); border-radius: var(--r-md);
+    background: var(--glass);
+  }
+  .intg-search:focus-within { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
+  .intg-search-ico { color: var(--cyan); font-size: 0.95rem; line-height: 1; }
+  .intg-search input {
+    flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+    color: var(--text); font-family: var(--f-body); font-size: 0.82rem;
+  }
+  .intg-search input::placeholder { color: var(--text-dim); }
+  .intg-side .int-toolbar {
+    padding: 0 2px 6px; margin: 0; background: none; border: 0; box-shadow: none;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+
+  /* Einträge: flache Zeilen wie die Reiter der Einstellungen */
+  .intg-side .conn-grid { gap: 2px; padding-right: 0; }
+  .intg-side .conn-card,
+  .intg-extra {
+    padding: 6px 10px;
+    background: transparent; border: 1px solid transparent; box-shadow: none;
+    border-radius: var(--r-md);
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .intg-side .conn-card::before,
+  .intg-side .conn-card::after { display: none; }
+  .intg-side .conn-card:hover,
+  .intg-extra:hover { background: var(--glass-2); border-color: transparent; }
+  .intg-side .conn-card.is-selected,
+  .intg-extra.is-selected {
+    background: color-mix(in srgb, var(--cyan) 14%, transparent);
+    border-color: color-mix(in srgb, var(--cyan) 42%, transparent);
+    box-shadow: inset 3px 0 0 var(--accent, var(--cyan));
+  }
+  .intg-side .conn-card .conn-name { font-family: var(--f-body); font-size: 0.82rem; font-weight: 500; color: var(--text-2); }
+  .intg-side .conn-card.is-selected .conn-name,
+  .intg-side .conn-card:hover .conn-name { color: var(--text); }
+  .intg-side .conn-card .conn-logo { width: 26px; height: 26px; flex: 0 0 26px; border-radius: 7px; }
+  .intg-extra { margin-top: 6px; border-top: 1px solid var(--glass-brd); border-radius: 0 0 var(--r-md) var(--r-md); padding-top: 10px; }
+  .intg-extra.is-selected { border-top-color: color-mix(in srgb, var(--cyan) 42%, transparent); border-radius: var(--r-md); }
+
+  /* Mitte: Karten wie in den Einstellungen */
+  .intg-detail { gap: 14px; }
+  .intg-detail-card .conn-card,
+  .dv-drawer.dv-drawer--inline {
+    border-radius: var(--r-lg);
+    background: linear-gradient(180deg, var(--glass-2), var(--glass));
+    border: 1px solid var(--glass-brd);
+    box-shadow: var(--shadow-md);
+  }
+  .dv-drawer.dv-drawer--inline .dv-drawer-head {
+    padding: 18px 20px 12px; margin: 0;
+    border-bottom: 1px solid var(--glass-brd);
+  }
+  .dv-drawer.dv-drawer--inline .dv-drawer-head h2 {
+    font-family: var(--f-brand); font-size: 1.02rem; font-weight: 700; letter-spacing: -0.01em; color: var(--text); margin: 0;
+  }
+  .dv-drawer.dv-drawer--inline .dv-drawer-body { padding: 16px 20px 18px; }
+  .intg-side .int-toolbar .segmented { padding: 3px; }
+  .intg-side .int-toolbar .segmented button { font-size: 10px; letter-spacing: 0.04em; padding: 6px 2px; min-width: 0; overflow: hidden; text-overflow: clip; }
+  .dv-drawer.dv-drawer--inline .dv-drawer-intro { color: var(--text-dim); font-size: 0.85rem; line-height: 1.5; }
+}

@@ -1197,6 +1197,21 @@ test('capacity: demo kind is surfaced; fresh box with no pvPlants is never gated
   assert.equal(svc.isProActive(), true);
 });
 
+test('capacity: Nur Netzspeicher — Wechselrichterleistung zählt wie kWp', () => {
+  const { ctx, privateKey } = capSetup({ userEnergyPricing: { pvPlants: [] }, optimizer: { gridStorageOnly: true, inverterMaxPowerW: 24000, maxDischargeW: 27000 } });
+  writeCapacityState(ctx._appDir, {
+    signedKey: mintSignedKey(privateKey, { license: { id: 'lic-1' } }),
+    machineFile: mintMachineFile(privateKey, 'fp', null, 'lic-1', { maxKwp: 50, kind: 'demo' })
+  });
+  const svc = createLicenseService(ctx);
+  svc.loadStateFromDisk();
+  const st = svc.getState();
+  assert.equal(st.license_kind, 'demo', 'demo kind surfaced for the UI');
+  assert.equal(st.system_kwp, 24, 'kleinere der beiden Leistungen in kW');
+  assert.equal(st.capacity_ok, true, '0 kWp -> never gate a fresh box');
+  assert.equal(svc.isProActive(), true);
+});
+
 // ---------------------------------------------------------------------------
 // getCapKwp() — Pro-Tier kWp-Cap (Christin 2026-07-02, T-LICENSE-KWP-GATING)
 // ---------------------------------------------------------------------------

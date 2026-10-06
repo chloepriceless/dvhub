@@ -254,6 +254,34 @@
     applyPulseHeights(box);
   }
 
+  // Suche in der Liste: blendet Einträge aus, deren Name nicht passt.
+  function applyIntgSearch() {
+    var input = document.getElementById('intg-search');
+    var q = input ? input.value.trim().toLowerCase() : '';
+    var cards = document.querySelectorAll('#intg-list .conn-card');
+    for (var i = 0; i < cards.length; i++) {
+      var name = (cards[i].querySelector('.conn-name') || {}).textContent || '';
+      cards[i].classList.toggle('intg-search-miss', !!q && name.toLowerCase().indexOf(q) === -1);
+    }
+  }
+  document.addEventListener('input', function (e) { if (e.target && e.target.id === 'intg-search') applyIntgSearch(); });
+
+  // Statusmeldungen der Einstellungen: „✓ …“ grün, alles andere wie gehabt.
+  // Die Meldungen kommen aus vielen Stellen; statt jede anzufassen, liest ein
+  // Beobachter den Text und setzt die Klasse.
+  function tintValidation(el) {
+    if (!el || !el.classList || !el.classList.contains('dv-field-validation')) return;
+    el.classList.toggle('is-ok', /^\s*\u2713/.test(el.textContent || ''));
+  }
+  if (typeof MutationObserver !== 'undefined') {
+    new MutationObserver(function (records) {
+      for (var i = 0; i < records.length; i++) {
+        var t = records[i].target;
+        tintValidation(t.nodeType === 1 ? t : t.parentElement);
+      }
+    }).observe(document.documentElement, { subtree: true, childList: true, characterData: true });
+  }
+
   function markIntgSelection() {
     var cards = document.querySelectorAll('#intg-list .conn-card');
     for (var i = 0; i < cards.length; i++) {

@@ -40,6 +40,33 @@ export const VICTRON_MIN_SOC_FALLBACK_PCT = 5;
 // Sicherheitspuffer der Prognose-Anpassung: bleibt zusätzlich zur errechneten
 // Reserve im Akku. Einstellbar (schedule.smallMarketAutomation.forecastSafetyMarginKwh),
 // weil 1,5 kWh für einen 10-kWh-Akku etwas anderes sind als für einen mit 60 kWh.
+// Akku-Werte der Anlage gelten für alles (Christin 2026-10-06): Kapazität und
+// Entladeleistung stehen unter „Meine Anlage“ (optimizer.batteryCapacityWh,
+// optimizer.maxDischargeW, optimizer.inverterMaxPowerW). Die Kleine
+// Börsenautomatik hatte eigene Werte, die davon abweichen konnten. Jetzt
+// rechnet sie mit den Anlagenwerten; ihre eigenen gelten nur noch, solange die
+// Anlagenwerte fehlen (Anlagen, die nie etwas anderes eingerichtet haben).
+export function resolvePlantBattery(cfg) {
+  const opt = cfg?.optimizer || {};
+  const capacityWh = Number(opt.batteryCapacityWh);
+  const powers = [Math.abs(Number(opt.maxDischargeW)), Math.abs(Number(opt.inverterMaxPowerW))].filter((w) => Number.isFinite(w) && w > 0);
+  return {
+    capacityKwh: Number.isFinite(capacityWh) && capacityWh > 0 ? Math.round(capacityWh / 10) / 100 : null,
+    // Verkauft wird über den Wechselrichter: die kleinere der beiden Grenzen zählt.
+    maxDischargeW: powers.length ? Math.min(...powers) : null
+  };
+}
+
+export function withPlantBattery(automationConfig, cfg) {
+  if (!automationConfig) return automationConfig;
+  const plant = resolvePlantBattery(cfg);
+  return {
+    ...automationConfig,
+    ...(plant.capacityKwh != null ? { batteryCapacityKwh: plant.capacityKwh } : {}),
+    ...(plant.maxDischargeW != null ? { maxDischargeW: -plant.maxDischargeW } : {})
+  };
+}
+
 export const FORECAST_SAFETY_MARGIN_DEFAULT_KWH = 1.5;
 export function resolveForecastSafetyMarginKwh(automationConfig) {
   const raw = automationConfig?.forecastSafetyMarginKwh;
@@ -167,6 +194,7 @@ export function createMarketAutomationBuilder(ctx) {
     sunTimesCache
   } = {}) {
     const cfg = getCfg();
+    automationConfig = withPlantBattery(automationConfig, cfg);
     if (!automationConfig?.enabled || !sunTimesCache) return [];
 
     const timeZoneForFilter = cfg.schedule?.timezone || 'Europe/Berlin';
@@ -607,7 +635,7 @@ export function createMarketAutomationBuilder(ctx) {
 
   async function regenerateSmallMarketAutomationRules({ now = Date.now(), force = false } = {}) {
     const cfg = getCfg();
-    const automationConfig = cfg.schedule?.smallMarketAutomation;
+    const automationConfig = withPlantBattery(cfg.schedule?.smallMarketAutomation, cfg);
     const runDate = berlinDateString(new Date(now), cfg.epex.timezone);
     const manualRules = state.schedule.rules.filter((rule) => !isSmallMarketAutomationRule(rule));
     const previousAutomationRules = state.schedule.rules.filter((rule) => isSmallMarketAutomationRule(rule));
