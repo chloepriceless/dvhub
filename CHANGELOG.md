@@ -12,6 +12,12 @@ verweist hierher.
 
 ### Behoben
 
+- **Ohne EOS-Plan wird gewartet statt ersatzweise verkauft.** Lieferte EOS keinen Plan und war
+  auch kein gemerkter mehr gültig, sprang bisher die eingebaute Schwellenregel ein: sie setzt in
+  jeder Viertelstunde über 130 % des Durchschnittspreises „Akku ins Netz“ mit voller Leistung
+  und kennt keine Reserve für die Nacht. In der Betriebsart „EOS“ gibt es diesen Ersatz nicht
+  mehr — es gelten dann nur die Regeln von Hand, die Anlage fährt Eigenverbrauch, bis EOS
+  wieder liefert (Protokoll: `eos_plan_waiting`).
 - **„Sofort laden 11 kW“ blieb bei 4,2 kW.** An der OpenEVSE hielt ein zweiter Regler einen
   eigenen Auftrag mit 6 A; bei gleicher Priorität gewinnt der ältere, DVhubs Auftrag blieb
   wirkungslos. DVhub liest die Aufträge der Box jetzt mit und sagt es deutlich: im

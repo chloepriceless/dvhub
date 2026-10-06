@@ -606,6 +606,7 @@ export function createOptimizerService(ctx) {
       const primarySource = cfg.optimizer.primarySource ?? 'internal';
       let winningSchedule;
       let source;
+      let eosWaiting = false;
 
       if (primarySource === 'internal') {
         winningSchedule = internalSchedule;
@@ -635,8 +636,17 @@ export function createOptimizerService(ctx) {
           winningSchedule = eosSchedule;
           source = 'eos';
         } else {
-          winningSchedule = internalSchedule;
-          source = 'internal'; // fallback — kein gueltiger EOS-Plan (mehr)
+          // Kein gueltiger EOS-Plan (mehr) — weder frisch noch gemerkt. Dann
+          // wird GEWARTET, nicht ersatzweise geplant (Christin 2026-10-06): die
+          // eingebaute Schwellenregel verkauft in teuren Viertelstunden mit
+          // voller Leistung und kennt keine Nachtreserve; als stiller Ersatz
+          // hat sie am 06.10. nach einem Neustart 21 Verkaufsregeln gesetzt.
+          // Ohne Plan gelten nur die Regeln von Hand; die Anlage faehrt
+          // Eigenverbrauch, bis EOS wieder liefert.
+          winningSchedule = [];
+          eosGridSetpoints = [];
+          source = 'eos';
+          eosWaiting = true;
         }
       } else if (primarySource === 'best') {
         // Estimate net-cost delta over horizon for each schedule
@@ -704,6 +714,8 @@ export function createOptimizerService(ctx) {
       state.optimizer.lastSchedule = winningSchedule;
       state.optimizer.lastEosSchedule = eosSchedule;
       state.optimizer.source = source;
+      if (eosWaiting && state.optimizer.eosWaiting !== true) pushLog('eos_plan_waiting', { reason: 'kein gueltiger EOS-Plan — es wird gewartet, kein Ersatzplan' });
+      state.optimizer.eosWaiting = eosWaiting;
       state.optimizer.rulesCount = newRules.length;
       state.optimizer.error = null;
       state.optimizer.runCount++;
