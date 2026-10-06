@@ -408,7 +408,7 @@ export function createOptimizerService(ctx) {
     const thisGeneration = ++runGeneration;
 
     try {
-      // 1. Get forecast via forecastService (async since Phase 05 ML correction)
+      // 1. Get forecast via forecastService (async)
       const forecastResponse = await ctx.forecastService.buildForecastResponse();
 
       // 2. Normalize forecast (ISO -> epoch-ms)

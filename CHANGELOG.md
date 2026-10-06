@@ -10,8 +10,40 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Entfernt
+
+- **ML-Prognose-Korrektur (LightGBM) komplett entfernt.** Die Korrektur war seit Mai abgeschaltet
+  und hatte keine Oberfläche mehr, lief im Hintergrund aber weiter mit: Der Standardwert
+  `ml.mlEnabled` stand auf „an“, DVhub startete deshalb bei jedem Start einen dauerhaften
+  Python-Prozess (`ml_server.py`). Fehlten der Python-Umgebung Pakete, stürzte er sofort ab, und das
+  Protokoll lief danach mit `python_heartbeat_fail` / `python_heartbeat_kill` voll (im Feld: 225 von
+  381 Einträgen in knapp drei Stunden). Entfallen sind der ML-Dienst samt Training, der dauerhafte
+  Python-Prozess mit Heartbeat, die Endpunkte `/api/ml/*` und `/api/forecast/inspector/ml-correction`,
+  der ausgeblendete Einstellungs-Tab „Machine Learning“, die Kurve „ML-korrigiert“ und das ML-Abzeichen
+  im Leitstand sowie die Python-Pakete `lightgbm`, `scikit-learn` und `joblib`. PV-Prognose (pvlib,
+  Anbieter-Ensemble) und Lastprognose (StatsForecast) arbeiten unverändert. In `/api/forecast`
+  entfallen `meta.mlActive`, `meta.mlModel` und `meta.mlSanityFallback`; `rawPv` bleibt und ist
+  gleich `pv`. Bestehende Konfigurationen laden weiter, die alten `ml.*`-Schlüssel der Korrektur
+  werden ignoriert.
+- **Update räumt die Python-Umgebung auf.** Pakete, die ein früheres Lockfile installiert hat und
+  die das aktuelle nicht mehr enthält, werden beim nächsten Update aus `/opt/dvhub/forecast-venv`
+  deinstalliert (bisher blieb alles liegen). Die Umgebung gehört allein DVhub; EOS hat seine eigene.
+  Das Verzeichnis `/opt/dvhub/ml-models` wird nur entfernt, wenn es leer ist.
+
 ### Behoben
 
+- **Prognose-Python ohne Pakete blieb unbemerkt.** Scheiterte die Paket-Installation (im Feld auf
+  einer Anlage seit Wochen: `ModuleNotFoundError: No module named 'pvlib'`), blieb eine Python-Umgebung
+  ohne Pakete zurück. DVhub prüfte nur, ob der Interpreter existiert, meldete „Python vorhanden“ und
+  ließ jedes Prognose-Skript in den Fehler laufen; die Installation wurde bei jedem Dienststart neu
+  versucht. Jetzt: `forecast-provision.sh` prüft die Python-Version vorab (das Lockfile braucht
+  Python ≥ 3.11 — Ubuntu 22.04 bringt 3.10 mit und kann die Pakete nicht installieren), probiert
+  nach der Installation den Import, schreibt den Grund eines Fehlschlags nach
+  `forecast-venv-status.json` im Datenverzeichnis und versucht denselben Fehlschlag frühestens nach
+  24 Stunden erneut (`--force` sofort). DVhub prüft Interpreter **und** Pakete, startet ohne sie kein
+  Skript mehr und meldet stattdessen `python_env_incomplete` mit den fehlenden Modulen und dem Grund
+  (höchstens stündlich). Wird die Installation später fertig, greift die Python-Prognose ohne
+  Neustart. PV- und Lastprognose laufen in der Zwischenzeit wie bisher über die Ersatzwege.
 - **Historie am Handy breiter als der Bildschirm.** Die Inhaltsspalte war 430 statt 390 px breit;
   rechts fehlte bei allen Kacheln ein Streifen (Werte abgeschnitten).
 - **Ohne EOS-Plan wird gewartet statt ersatzweise verkauft.** Lieferte EOS keinen Plan und war

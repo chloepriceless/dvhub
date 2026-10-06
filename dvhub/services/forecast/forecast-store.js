@@ -469,7 +469,7 @@ export function createForecastStore(ctx) {
   }
 
   /**
-   * Latest accuracy row for ml-correction feature-read (used by Plan 05).
+   * Latest accuracy row (fallback for the ensemble weights when yesterday's row is missing).
    * REVIEWS H2.
    * @returns {Promise<object|null>}
    */

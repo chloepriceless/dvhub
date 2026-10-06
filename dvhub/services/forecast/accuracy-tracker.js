@@ -282,7 +282,7 @@ export function createAccuracyTracker(ctx, { store }) {
 
       // Get yesterday's actual values from energy_slots_15m
       // PV actuals are stored under 'pv_total_w' (the same series evaluatePerProvider
-      // and the Phase-06 ml-correction use) — 'solar_power_w' was never written, so
+      // uses) — 'solar_power_w' was never written, so
       // the 'pv' path silently skipped on every run.
       const seriesKey = forecastType === 'pv' ? 'pv_total_w' : 'load_power_w';
       const actualResult = await db.query(`
@@ -402,7 +402,7 @@ export function createAccuracyTracker(ctx, { store }) {
 
     const { start, end } = dayRange(dateStr);
 
-    // Pitfall A-2: UTC-only. Match the series used by Phase 06 ml-correction (pv_total_w).
+    // Pitfall A-2: UTC-only. Series: pv_total_w.
     let actuals = [];
     try {
       const actualsResult = await store.query(`

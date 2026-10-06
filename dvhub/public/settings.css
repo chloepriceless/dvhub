@@ -1746,8 +1746,6 @@ body:has(.settings-aurora) .location-picker-footer {
 }
 .stat-card-padded { padding: 16px; }
 .ml-spark-wrap { position: relative; height: 80px; }
-.ml-stat-row { display: flex; justify-content: space-between; margin-top: 8px; }
-.ml-stat-text { color: var(--flow-text); }
 .llm-select-narrow { max-width: 320px; }
 
 
@@ -2599,8 +2597,8 @@ body.dv-modal-open {
   overflow: hidden;
   /* Phase 19.1-04: min-height ensures the absolutely-positioned .pro-gate-banner
      (~280px including lock icon + title + body + CTA padding) fits inside the
-     section without clipping. Previously short Inspector sections (e.g. empty
-     ML-Korrektur with no rows yet) collapsed to <200px and the banner top/bottom
+     section without clipping. Previously short Inspector sections (e.g. one
+     with no rows yet) collapsed to <200px and the banner top/bottom
      got cropped by the overflow:hidden rule. */
   min-height: 320px;
 }

@@ -331,7 +331,6 @@
     return [
       { key: 'actual', label: 'Ist (gemessen)',        color: _aur('--green', 'rgba(46, 204, 113, 1)'),       dash: [],     width: 2   },
       { key: 'past',   label: 'Prognose (historisch)', color: _aurA('--green', 0.55, 'rgba(46, 204, 113, 0.55)'), dash: [3, 3], width: 1.5 },
-      { key: 'ml',     label: 'ML-korrigiert',         color: _aur('--violet', '#A78BFA'),                     dash: [],     width: 2.5 },
       { key: 'merged', label: 'Basis-Prognose',        color: _aur('--cyan', '#22D3EE'),                       dash: [4, 3], width: 1.8 },
       { key: 'load',   label: 'Last-Prognose',         color: _aur('--blue', '#58a6ff'),                       dash: [4, 3], width: 1.5 }
     ];
@@ -478,7 +477,7 @@
     getComparisonDatasets().forEach(function (ds, i) {
       var item = document.createElement('span');
       // Tag with the dataset index so updateForecastComparison can find and
-      // hide this legend item when its dataset is disabled (e.g. ML off).
+      // hide this legend item when its dataset has no data.
       item.dataset.dsIndex = String(i);
       item.style.display = 'inline-flex';
       item.style.alignItems = 'center';
@@ -551,9 +550,8 @@
     if (!forecastCompChart) initForecastComparisonChart();
     if (!forecastCompChart) return;
 
-    // Extract ML-corrected PV slots (final merged forecast)
     var pvSlots = forecastData && forecastData.pv && forecastData.pv.slots ? forecastData.pv.slots : [];
-    // Extract raw PV (pre-ML merged) slots
+    // rawPv: gleiche Reihe wie pv (Feld der /api/forecast-Antwort)
     var rawPvSlots = forecastData && forecastData.rawPv && forecastData.rawPv.slots ? forecastData.rawPv.slots : [];
 
     if (pvSlots.length === 0 && rawPvSlots.length === 0) {
@@ -621,52 +619,26 @@
 
     var actualPoints    = toPoints(forecastData && forecastData.actual);
     var pastFcPoints    = toPoints(forecastData && forecastData.pastForecast);
-    var mlRawPoints     = toPoints(pvSlots);
     var mergedRawPoints = toPoints(rawPvSlots);
     var loadRawPoints   = toPoints(forecastData && forecastData.load && forecastData.load.slots);
 
     // Stitch past+future for the forecast lines so they span the chart.
-    var mlAllPoints     = pastFcPoints.concat(mlRawPoints.filter(function (p) {
-      return pastFcPoints.length === 0 || p.x > pastFcPoints[pastFcPoints.length - 1].x;
-    }));
     var mergedAllPoints = pastFcPoints.concat(mergedRawPoints.filter(function (p) {
       return pastFcPoints.length === 0 || p.x > pastFcPoints[pastFcPoints.length - 1].x;
     }));
 
     var actualData       = resample(actualPoints);
     var pastForecastData = resample(pastFcPoints);
-    var mlData           = resample(mlAllPoints);
     var mergedData       = resample(mergedAllPoints);
     var loadData         = resample(loadRawPoints);
 
     forecastCompChart.data.datasets[0].data = actualData;        // Ist (gemessen)
     forecastCompChart.data.datasets[1].data = pastForecastData;  // Prognose (historisch)
-    forecastCompChart.data.datasets[2].data = mlData;            // ML-korrigiert
-    forecastCompChart.data.datasets[3].data = mergedData;        // Basis-Prognose
-    forecastCompChart.data.datasets[4].data = loadData;          // Last-Prognose
+    forecastCompChart.data.datasets[2].data = mergedData;        // Basis-Prognose
+    forecastCompChart.data.datasets[3].data = loadData;          // Last-Prognose
     // With common 15-min grid + linear interpolation, spanGaps is irrelevant
     // — null values are explicit gaps where the source dataset had no data.
     forecastCompChart.data.datasets.forEach(function (ds) { ds.spanGaps = false; });
-
-    // ML disabled on prod 2026-05-22 (lightgbm v1 squashed daytime peaks to
-    // ~10-15% of the ensemble forecast — MAE 2658W vs 550W on the older
-    // models). With cfg.ml.mlEnabled=false, the backend returns
-    // forecastData.pv = forecastData.rawPv — they're byte-identical. Hiding
-    // the ML-korrigiert dataset AND its legend entry prevents two overlapping
-    // identical lines and removes the "ML-korrigiert" chip from the legend.
-    // When ML is re-enabled (model retrained / squash fixed), meta.mlActive
-    // flips back to true and both line + legend chip return automatically.
-    var mlActive = !!(forecastData && forecastData.meta && forecastData.meta.mlActive);
-    if (!mlActive) {
-      // Empty the data so even if the meta.hidden flag is ignored somewhere,
-      // there are simply no points to plot.
-      forecastCompChart.data.datasets[2].data = [];
-    }
-    var mlMeta = forecastCompChart.getDatasetMeta(2);
-    if (mlMeta) mlMeta.hidden = !mlActive;
-    // Hide the ML chip in our custom legend (built via buildComparisonLegend).
-    var mlLegendItem = document.querySelector('#forecastCompLegend [data-ds-index="2"]');
-    if (mlLegendItem) mlLegendItem.style.display = mlActive ? 'inline-flex' : 'none';
 
     // Operator complaint 2026-05-22: the forecast chart's X-axis was sliding
     // with data extent (was: min(allTimestamps) - 1h → max(allTimestamps) + 1h)
@@ -768,67 +740,6 @@
     }
 
     container.textContent = parts.length > 0 ? parts.join(' | ') : '';
-  }
-
-  // ---------------------------------------------------------------------------
-  // 7. ML Badge (D-26) — active/collecting/error state indicator
-  // ---------------------------------------------------------------------------
-  function updateMlBadge(mlStatus) {
-    var badge = document.getElementById('badge-ml');
-    if (!badge) return;
-
-    if (!mlStatus || mlStatus.pythonAvailable === false || !mlStatus.mlEnabled) {
-      badge.style.display = 'none';
-      return;
-    }
-
-    var dot = badge.querySelector('.dot');
-    if (!dot) return;
-
-    // Reset dot classes
-    dot.classList.remove('dot-ok', 'dot-warn', 'dot-danger');
-
-    var dataStatus = mlStatus.dataStatus || '';
-    if (dataStatus === 'active') {
-      dot.classList.add('dot-ok');
-      var modelType = mlStatus.modelType || 'Linear';
-      var version = mlStatus.modelVersion || 0;
-      var mae = mlStatus.mae || '?';
-      badge.title = 'ML aktiv -- ' + modelType + ' v' + version + ', MAE ' + mae + 'W';
-    } else if (dataStatus === 'collecting') {
-      dot.classList.add('dot-warn');
-      var days = mlStatus.datadays || '?';
-      badge.title = 'ML sammelt Daten (' + days + '/30 Tage)';
-    } else if (dataStatus === 'error') {
-      dot.classList.add('dot-danger');
-      badge.title = 'ML Fehler -- letztes Training fehlgeschlagen';
-    } else {
-      dot.classList.add('dot-warn');
-      badge.title = 'ML Status unbekannt';
-    }
-
-    badge.style.display = '';
-
-    // Click navigates to ML settings
-    if (!badge._mlClickBound) {
-      badge.addEventListener('click', function () {
-        window.location.href = '/settings.html#ml';
-      });
-      badge._mlClickBound = true;
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // ML status fetch helper
-  // ---------------------------------------------------------------------------
-  async function fetchMlStatus() {
-    try {
-      var res = await apiFetch('/api/ml/status');
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1030,7 +941,6 @@
     }
 
     var pvSlotsAll = forecastData.pv?.slots || [];
-    var rawSlotsAll = forecastData.rawPv?.slots || [];
     var loadSlotsAll = forecastData.load?.slots || [];
     var pvRes = forecastData.pv?.resolution || '1h';
     var loadRes = forecastData.load?.resolution || '1h';
@@ -1062,14 +972,12 @@
       return slots.filter(function (s) { return localDateKey(s.start) === berlinTomorrowKey; });
     }
     var pvSlots = filterToday(pvSlotsAll);
-    var rawSlots = filterToday(rawSlotsAll);
     var loadSlots = filterToday(loadSlotsAll);
     var pvSlotsTomorrow = filterTomorrow(pvSlotsAll);
     var loadSlotsTomorrow = filterTomorrow(loadSlotsAll);
 
     // "Rest" = future-only (slots with ts_utc >= NOW, already filtered server-side).
     var pvKwhRest = 0; pvSlots.forEach(function (s) { pvKwhRest += (s.powerW || 0) / 1000 * pvH; });
-    var rawKwhRest = 0; rawSlots.forEach(function (s) { rawKwhRest += (s.powerW || 0) / 1000 * pvH; });
     var loadKwhRest = 0; loadSlots.forEach(function (s) { loadKwhRest += (s.powerW || 0) / 1000 * loadH; });
     var pvKwhTomorrow = 0; pvSlotsTomorrow.forEach(function (s) { pvKwhTomorrow += (s.powerW || 0) / 1000 * pvH; });
     var loadKwhTomorrow = 0; loadSlotsTomorrow.forEach(function (s) { loadKwhTomorrow += (s.powerW || 0) / 1000 * loadH; });
@@ -1111,9 +1019,6 @@
     // Detail lines
     if (detailEl) {
       var pvParts = ['Rest heute: ' + pvKwhRest.toFixed(1) + ' kWh'];
-      if (Math.abs(pvKwhRest - rawKwhRest) > 0.5) {
-        pvParts.push('ML/Basis: ' + pvKwhRest.toFixed(1) + '/' + rawKwhRest.toFixed(1));
-      }
       if (pvKwhTomorrow > 0) pvParts.push('Morgen: ' + pvKwhTomorrow.toFixed(1) + ' kWh');
       detailEl.innerHTML = '<span class="leitstand-forecast-detail">' + pvParts.join(' · ') + '</span>';
       detailEl.firstChild.style.color = _dimColor;
@@ -1431,17 +1336,15 @@
     var results = await Promise.allSettled([
       fetchForecastData(),
       fetchOptimizerData(),
-      fetchMlStatus(),
       fetchOptimizerPlan(),
       fetchStatusData(),
       fetchEosPlan()
     ]);
 
     var forecastData = results[0].status === 'fulfilled' ? results[0].value : null;
-    var mlStatus = results[2].status === 'fulfilled' ? results[2].value : null;
-    var optimizerPlan = results[3].status === 'fulfilled' ? results[3].value : null;
-    var statusData = results[4].status === 'fulfilled' ? results[4].value : null;
-    var eosPlan = results[5].status === 'fulfilled' ? results[5].value : null;
+    var optimizerPlan = results[2].status === 'fulfilled' ? results[2].value : null;
+    var statusData = results[3].status === 'fulfilled' ? results[3].value : null;
+    var eosPlan = results[4].status === 'fulfilled' ? results[4].value : null;
 
     // Plan 09-04: each chart render is wrapped in DVhubCommon.safeRender so a
     // throw in ONE chart does NOT abort the sibling charts in the same refresh
@@ -1460,8 +1363,6 @@
     // Savings card removed 2026-06-12 (duplicate of the "Kosten heute" rail card).
     sr('leitstand.badges', function () { updateBadges(); });
 
-    // ML additions
-    sr('leitstand.ml-badge', function () { updateMlBadge(mlStatus); });
     if (forecastData) sr('leitstand.forecast-comparison', function () { updateForecastComparisonChart(forecastData); });
 
     // Optimizer-Plan chart (Phase 05 follow-up)

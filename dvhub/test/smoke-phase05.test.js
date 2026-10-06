@@ -134,7 +134,7 @@ function mockCtx(overrides = {}) {
     // ── Phase 05 services ──────────────────────────────────────────
     forecastService: {
       buildForecastResponse: async () => ({
-        meta: { mlActive: true, horizon: 48, forecastVersion: 1 },
+        meta: { horizon: 48, forecastVersion: 1 },
         price: [],
         pv: [{ start: '2026-04-11T06:00:00Z', powerW: 5000 }],
         rawPv: [{ start: '2026-04-11T06:00:00Z', powerW: 4800 }],
@@ -144,10 +144,6 @@ function mockCtx(overrides = {}) {
         consumption: []
       }),
       store: {}
-    },
-    mlService: {
-      getStatus: () => ({ modelLoaded: true, modelType: 'lightgbm', version: 1, mae: 0.56, tier: 2, mlEnabled: true }),
-      getAccuracyTrend: async () => [{ date: '2026-04-11', mae: 0.56, samples: 100 }]
     },
     optimizerService: {
       getStatus: () => ({ enabled: true, lastRun: Date.now() }),
@@ -195,25 +191,11 @@ function mockCtx(overrides = {}) {
   return { ...base, ...overrides };
 }
 
-// ── 1. GET /api/ml/status ─────────────────────────────────────────
-
 describe('Phase 05 Smoke Tests', () => {
 
-  it('GET /api/ml/status -- returns model status with modelLoaded', async () => {
-    const ctx = mockCtx();
-    const routes = createApiRoutes(ctx);
-    const res = mockRes();
-    const url = new URL('http://localhost/api/ml/status');
-    await routes.handleRequest(makeReq('GET', '/api/ml/status'), res, url);
-    assert.equal(res._captured.status, 200);
-    const body = JSON.parse(res._captured.body);
-    assert.equal(body.modelLoaded, true);
-    assert.equal(body.modelType, 'lightgbm');
-  });
+  // ── 2. GET /api/forecast -- forecast with actual[] ──
 
-  // ── 2. GET /api/forecast -- forecast with ML active and actual[] ──
-
-  it('GET /api/forecast -- returns forecast with mlActive and actual[]', async () => {
+  it('GET /api/forecast -- returns forecast with actual[]', async () => {
     const ctx = mockCtx();
     const routes = createApiRoutes(ctx);
     const res = mockRes();
@@ -222,7 +204,6 @@ describe('Phase 05 Smoke Tests', () => {
     assert.equal(res._captured.status, 200);
     const body = JSON.parse(res._captured.body);
     assert.equal(body.ok, true);
-    assert.equal(body.meta.mlActive, true);
     assert.ok(Array.isArray(body.actual), 'actual must be an array');
     assert.ok(body.actual.length > 0, 'actual must have entries');
   });
@@ -260,20 +241,6 @@ describe('Phase 05 Smoke Tests', () => {
     assert.ok(keys.load_power_w.length > 0);
     assert.ok(Array.isArray(keys.battery_power_w), 'battery_power_w must be present');
     assert.ok(Array.isArray(keys.price_import_ct_kwh), 'price_import_ct_kwh must be present');
-  });
-
-  // ── 6. GET /api/ml/accuracy -- returns accuracy data ──
-
-  it('GET /api/ml/accuracy -- returns accuracy trend', async () => {
-    const ctx = mockCtx();
-    const routes = createApiRoutes(ctx);
-    const res = mockRes();
-    const url = new URL('http://localhost/api/ml/accuracy');
-    await routes.handleRequest(makeReq('GET', '/api/ml/accuracy'), res, url);
-    assert.equal(res._captured.status, 200);
-    const body = JSON.parse(res._captured.body);
-    assert.ok(Array.isArray(body), 'accuracy response must be an array');
-    assert.ok(body.length > 0, 'accuracy trend must have entries');
   });
 
   // ── 8. POST /api/integration/eos/apply -- accepts setpoints ──
@@ -371,7 +338,7 @@ describe('Phase 05 Smoke Tests', () => {
 
 // ── C-1 Regression: dead isLanSafeRequest guard on POST endpoints ──
 //
-// Before the fix, both /api/ml/retrain and /api/admin/backfill were guarded by
+// Before the fix, POST /api/admin/backfill (and the since-removed /api/ml/retrain) was guarded by
 // `if (!isLanSafeRequest(req) || !checkAuth(req, res)) return;`. isLanSafeRequest
 // short-circuits to false on any non-GET request, so every POST returned from
 // handleRequest WITHOUT writing a response → serveStatic 404 fallthrough. The
@@ -379,23 +346,7 @@ describe('Phase 05 Smoke Tests', () => {
 // so a POST reaches the handler and produces the handler's own status (503 when
 // the backing service is absent), never the 404 static fallback.
 
-describe('C-1 Regression: dead guard on POST /api/ml/retrain + /api/admin/backfill', () => {
-  it('POST /api/ml/retrain reaches the handler (503, not 404)', async () => {
-    // Omit mlService + mlRetrainJobs → handler returns 503 service-unavailable.
-    // A 404 here would prove the isLanSafeRequest guard still short-circuits.
-    const ctx = mockCtx({ mlService: undefined, mlRetrainJobs: undefined });
-    const routes = createApiRoutes(ctx);
-    const res = mockRes();
-    await routes.handleRequest(
-      makeReq('POST', '/api/ml/retrain'), res,
-      new URL('http://localhost/api/ml/retrain')
-    );
-    assert.equal(res._captured.status, 503,
-      'POST /api/ml/retrain must reach its handler (503), not fall through to a 404');
-    const body = JSON.parse(res._captured.body);
-    assert.equal(body.error, 'ml_retrain_service_unavailable');
-  });
-
+describe('C-1 Regression: dead guard on POST /api/admin/backfill', () => {
   it('POST /api/admin/backfill reaches the handler (503, not 404)', async () => {
     // pvnodeBackfill is absent from mockCtx → handler returns 503 service-unavailable.
     const ctx = mockCtx();

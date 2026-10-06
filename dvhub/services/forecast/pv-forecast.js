@@ -604,9 +604,8 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
     // REVIEWS L3: AUTHORITATIVE event-driven snapshot trigger.
     // Fires once per forecast cycle after bumpForecastVersion; forecastSnapshots.writeSnapshot
     // uses its in-memory `lastSnapshotForecastDate` guard to prevent duplicate same-day writes.
-    // ML-corrected rows are supplied by ml-correction in buildForecastResponse, so the snapshot
-    // recorded here is the raw (pre-ML) merge. Plan 05 ml-correction will add an ml layer when
-    // it lands; for Plan 04 we persist pvnode/solcast/pvlib/merged layers from this cycle.
+    // Persists the provider layers + the merge from this cycle. The `ml` layer of the
+    // snapshot schema stays empty (ML correction removed 2026-10).
     if (stateUpdated && ctx.forecastSnapshots?.writeSnapshot) {
       Promise.resolve(
         ctx.forecastSnapshots.writeSnapshot({

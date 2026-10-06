@@ -8,8 +8,8 @@
 # NICHT enthalten (Absicht, siehe .planning/T-CONTAINER-STACK-KONZEPT-2026-07-01.md):
 #   * Postgres/TimescaleDB — eigener Container (docker/compose.yml) bzw.
 #     externer Host (§2); nur der pg-Client ist für Backup/Restore enthalten
-#   * Python-Forecast-venv und ML-Modelle — würden das Image vervielfachen;
-#     der EnergyLink hat ~1 GB RAM / ~2,3 GB Disk. Forecast/ML bleiben dem
+#   * Python-Forecast-venv — würde das Image vervielfachen;
+#     der EnergyLink hat ~1 GB RAM / ~2,3 GB Disk. Die Python-Prognose bleibt dem
 #     Voll-Stack-Image vorbehalten.
 #   * EOS (Pro) — eigenes Image `dvhub-eos` aus dem DV-EOS-Fork (§6)
 #   * VPN: OpenVPN und WireGuard laufen im DVhub-Container (NET_ADMIN +

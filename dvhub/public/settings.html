@@ -49,9 +49,6 @@
         <span class="chip intg-badge" id="badge-loxone" data-system="loxone" title="Loxone" hidden>
           <span class="dot"></span>Loxone
         </span>
-        <span class="chip intg-badge u-hidden" id="badge-ml" data-system="ml" title="ML Forecast">
-          <span class="dot"></span>ML
-        </span>
         <span class="chip topbar-conn" id="connStatus" title="Verbindungsstatus">
           <span class="dot"></span>Live
         </span>
@@ -137,11 +134,6 @@
             <div class="sa-nav-group">Diagnose &amp; Dienste</div>
             <button class="settings-tab" data-tab="system" type="button"><span class="sa-ico">&#9673;</span>Status</button>
             <button class="settings-tab" data-tab="forecast" type="button"><span class="sa-ico">&#9729;</span>Prognose-Daten</button>
-            <!-- Machine-Learning-Tab (LightGBM) ausgeblendet 2026-06-21: Feature ist nicht live
-                 (ml.mlEnabled=false). Das Panel #tab-ml bleibt im DOM (hidden) → Re-Aktivierung =
-                 nur diese Zeile wieder einkommentieren. Die Provider-Gewichtung (Inverse-MAE-
-                 Ensemble) ist davon unabhängig und bleibt im Forecast-Tab sichtbar. -->
-            <!-- <button class="settings-tab" data-tab="ml" type="button"><span class="sa-ico">&#9728;</span>Machine Learning</button> -->
             <button class="settings-tab" data-tab="eos" type="button"><span class="sa-ico">&#9881;</span>EOS-Daten</button>
             <button class="settings-tab" data-tab="vpn" type="button"><span class="sa-ico">&#10070;</span>VPN</button>
           </nav>
@@ -799,10 +791,6 @@
               </details>
             </div>
 
-            <!-- B3 ML-Korrektur ENTFERNT 2026-05-22: lightgbm v1 squashed daytime peaks
-                 (#999.17). ML global deaktiviert (cfg.ml.mlEnabled=false). Re-aktivierung
-                 erst nach Backlog #999.17 Fix — siehe seed SEED-001. -->
-
             <!-- B4 EOS-Output (Plan 19-05, Pro) — full row width (2 col span) so
                  the 4 sub-tables (PV/Load/Price push + Plan pull) breathe.
                  Operator request 2026-05-23. -->
@@ -839,64 +827,6 @@
 
           </div><!-- /.config-grid -->
         </section><!-- /#tab-forecast -->
-
-        <section id="tab-ml" class="settings-tab-panel" hidden>
-          <header class="sa-section-head"><h2>Machine Learning</h2><p class="sub">Modell-Status, Genauigkeits-Trend, Tier-Features.</p></header>
-          <div class="config-grid">
-
-            <!-- Modell-Status -->
-            <div class="config-group" data-accent="purple">
-              <div class="config-group-kicker">Modell-Status</div>
-              <div class="panel-stats">
-                <div class="stat-card">
-                  <div class="stat-label">Aktives Modell</div>
-                  <div class="stat-val" id="mlModelType">--</div>
-                  <div class="stat-delta" id="mlModelVersion">v0</div>
-                </div>
-                <div class="stat-card">
-                  <div class="stat-label">Letztes Training</div>
-                  <div class="stat-val" id="mlLastTrain">--</div>
-                </div>
-                <div class="stat-card">
-                  <div class="stat-label">Naechstes Training</div>
-                  <div class="stat-val" id="mlNextTrain">--</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Genauigkeits-Trend -->
-            <div class="config-group" data-accent="yellow">
-              <div class="config-group-kicker">Genauigkeits-Trend</div>
-              <div class="stat-card stat-card-padded">
-                <div class="stat-label">MAE (Letzte 30 Tage)</div>
-                <div class="ml-spark-wrap">
-                  <canvas id="mlMaeSparkline"></canvas>
-                </div>
-                <div class="ml-stat-row">
-                  <span class="stat-label">7-Tage: <span id="mlMae7d" class="ml-stat-text">--</span> W</span>
-                  <span class="stat-label">30-Tage: <span id="mlMae30d" class="ml-stat-text">--</span> W</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Prognose-Module (abhängig von der Python-Umgebung) -->
-            <div class="config-group" data-accent="blue">
-              <div class="config-group-kicker">Prognose-Module</div>
-              <div class="panel-details" id="mlFeatures">
-                <!-- Rendered by settings.js -->
-              </div>
-            </div>
-
-            <!-- Training-Log -->
-            <div class="config-group" data-accent="green">
-              <div class="config-group-kicker">Training-Log</div>
-              <div class="panel-details" id="mlTrainingLog">
-                <!-- Last 5 training runs rendered by settings.js -->
-              </div>
-            </div>
-
-          </div><!-- /.config-grid -->
-        </section><!-- /#tab-ml -->
 
         <section id="tab-eos" class="settings-tab-panel" hidden>
           <header class="sa-section-head">

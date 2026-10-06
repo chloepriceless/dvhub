@@ -170,8 +170,6 @@ import { createVehicleMqtt } from './services/mqtt/vehicle-mqtt.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch } from './services/control-commands.js';
 import { createDeviceService } from './services/devices/index.js';
 import { createNotificationService } from './services/notifications/index.js';
-import { createMlService } from './services/ml/index.js';
-import { createRetrainJobs } from './services/ml/ml-retrain-jobs.js';
 // Phase 17 Plan 03 — license-service bootstrap. Sync state-load runs in the
 // IS_RUNTIME_PROCESS block right after loadEnergy(); async start() (the 24h
 // poller) chains after notificationService.start() so on-revoke notifications
@@ -1318,16 +1316,8 @@ ctx.monitoringAlertPush = (status, msg) => {
   catch { return Promise.resolve(); }
 };
 
-// Phase 05: ML & Edge-AI (v0.9)
-const mlService = createMlService(ctx);
-ctx.mlService = mlService;
-// Phase 07 MLAI-08 REVIEWS H12: async retrain job registry — POST /api/ml/retrain
-// returns 202 + jobId and the heavy work runs in a background Promise tracked here.
-const mlRetrainJobs = createRetrainJobs(ctx);
-ctx.mlRetrainJobs = mlRetrainJobs;
-
 // Phase 19 Plan 19-01: Forecast Inspector — read-only diagnostic factory.
-// The inspector composes existing forecast/store/telemetry/ml services and
+// The inspector composes existing forecast/store/telemetry services and
 // shapes their state for the /api/forecast/inspector/* read endpoints.
 // Pro-gating happens at the route layer (routes-api.js) via licenseService.requirePro.
 // Note: telemetryStore is read LAZILY from ctx (Phase 18 lesson) — ctx.telemetryStore
@@ -1430,7 +1420,6 @@ ctx.eosDeviceBridge = eosDeviceBridge;
 
 const inspector = createInspector(ctx, {
   store: forecast.store,
-  mlService,
   eosAdapter: eosAdapterInspector,
   eosMonitor: ctx.eosMonitor,
   forecastService: forecast,
@@ -2150,7 +2139,6 @@ if (IS_RUNTIME_PROCESS) {
   // (active -> !active transition) can reach configured providers without a
   // bootstrap-order race.
   licenseService.start().catch(err => console.error('License service start error:', err.message));
-  mlService.start().catch(err => console.error('ML service start error:', err.message));
   if (cfg.vpn?.enabled && cfg.vpn?.autoConnect) {
     vpnManager.start().catch(err => {
       pushLog('vpn_start_error', { error: err.message }, 'error');
@@ -2515,7 +2503,6 @@ async function gracefulShutdown(signal) {
     safeAsync('forecast.close', () => forecast.close()),
     safeAsync('optimizer.close', () => optimizer.close()),
     safeAsync('familyService.close', () => familyService.close()),
-    safeAsync('mlService.close', () => mlService.close()),
     safeAsync('notificationService.close', () => notificationService.close()),
     safeAsync('mqttCrossCheck.stop', () => mqttCrossCheck.stop()),
     safeAsync('deviceService.close', () => deviceService.close()),

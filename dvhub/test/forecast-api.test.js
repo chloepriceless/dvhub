@@ -2,7 +2,7 @@
 // Uses mock state objects (no live DB needed).
 //
 // Plan 16-04 (D-06 triage, brittle test): buildForecastResponse() became async
-// (it awaits ML correction + VRM fetch). The buildForecastResponse describe
+// (it awaits the VRM fetch). The buildForecastResponse describe
 // block called it synchronously and inspected the returned Promise — every
 // `response.meta` etc. was undefined. Fixed by awaiting the call and making the
 // affected `it()` callbacks async.

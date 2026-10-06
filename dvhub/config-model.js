@@ -121,13 +121,9 @@ const SECTIONS = [
     description: 'PV-Anlage, Standort, Solcast/pvnode API-Keys und Wetter-Provider.',
     destination: 'services'
   }
-  // Sektion 'ml' ENTFERNT aus der GUI (Christin 2026-07-12): ML-Korrektur ist
-  // seit #999.17 global deaktiviert (lightgbm v1 squashte Tages-Peaks) — die
-  // Einstellungs-Karte „ML & Forecast-Korrektur" bot eine tote Funktion an.
-  // cfg.ml (createDefaultConfig) + Backend-Module bleiben erhalten, damit
-  // bestehende Configs mit ml-Block weiter laden/speichern; bei einer
-  // Re-Aktivierung die Felder (section 'ml') hier + in buildFieldDefinitions
-  // wieder einführen.
+  // Keine Sektion 'ml': die ML-Korrektur (LightGBM) ist 2026-10 komplett aus dem
+  // Code entfernt. cfg.ml (createDefaultConfig) trägt nur noch die Schalter der
+  // StatsForecast-Lastprognose und hat keine GUI-Felder.
 ];
 
 const SETUP_WIZARD_STEPS = [
@@ -3482,7 +3478,7 @@ function buildFieldDefinitions() {
       section: 'forecast',
       group: 'weather',
       groupLabel: 'Wetter',
-      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib.',
       path: 'forecast.weather.provider',
       label: 'Wetter-Provider',
       type: 'select',
@@ -3496,7 +3492,7 @@ function buildFieldDefinitions() {
       section: 'forecast',
       group: 'weather',
       groupLabel: 'Wetter',
-      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib.',
       path: 'forecast.weather.mqtt.preset',
       label: 'MQTT-Wetter: Schema',
       type: 'select',
@@ -3511,7 +3507,7 @@ function buildFieldDefinitions() {
       section: 'forecast',
       group: 'weather',
       groupLabel: 'Wetter',
-      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib.',
       path: 'forecast.weather.mqtt.brokerUrl',
       label: 'MQTT-Wetter: Broker-URL',
       type: 'text',
@@ -3522,7 +3518,7 @@ function buildFieldDefinitions() {
       section: 'forecast',
       group: 'weather',
       groupLabel: 'Wetter',
-      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib.',
       path: 'forecast.weather.mqtt.prefix',
       label: 'Weather4Lox: Topic-Pr\u00e4fix',
       type: 'text',
@@ -3533,7 +3529,7 @@ function buildFieldDefinitions() {
       section: 'forecast',
       group: 'weather',
       groupLabel: 'Wetter',
-      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib.',
       path: 'forecast.weather.mqtt.ghiTopic',
       label: 'Eigenes Mapping: Globalstrahlung-Topic',
       type: 'text',
@@ -3548,7 +3544,7 @@ function buildFieldDefinitions() {
       section: 'forecast',
       group: 'weather',
       groupLabel: 'Wetter',
-      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib.',
       path: 'forecast.weather.mqtt.tempTopic',
       label: 'Eigenes Mapping: Temperatur-Topic',
       type: 'text',
@@ -3559,7 +3555,7 @@ function buildFieldDefinitions() {
       section: 'forecast',
       group: 'weather',
       groupLabel: 'Wetter',
-      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib.',
       path: 'forecast.weather.mqtt.cloudTopic',
       label: 'Eigenes Mapping: Bew\u00f6lkung-Topic',
       type: 'text',
@@ -3570,7 +3566,7 @@ function buildFieldDefinitions() {
       section: 'forecast',
       group: 'weather',
       groupLabel: 'Wetter',
-      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib und ML-Korrektur.',
+      groupDescription: 'Wetterdaten-Provider f\u00fcr pvlib.',
       path: 'forecast.weather.fetchIntervalMs',
       label: 'Abruf-Intervall (ms)',
       type: 'number',
@@ -3746,13 +3742,6 @@ function buildFieldDefinitions() {
       ],
       help: 'DVhub Price API Endpunkt. Standard: https://dvhub.online'
     },
-
-    // --- ML & Forecast-Korrektur: GUI-Felder ENTFERNT (Christin 2026-07-12) ---
-    // ML ist seit #999.17 global deaktiviert (lightgbm v1 squashte Tages-Peaks);
-    // die 8 Felder (ml.mlEnabled, mlModelDir, mlTrainingHour/-Minute,
-    // mlMinDataDays, mlSlidingWindowMonths, sfEnabled, sfUseMstl) boten eine
-    // tote Funktion an. cfg.ml in createDefaultConfig bleibt (Config-Root +
-    // Backward-Compat); bei Re-Aktivierung Felder + Sektion 'ml' wiederherstellen.
 
   ];
 
@@ -4188,12 +4177,11 @@ export function createDefaultConfig() {
       priceSource: 'dvhub',
       priceApiUrl: 'https://dvhub.online'
     },
+    // Nur noch die StatsForecast-Lastprognose (services/forecast/load-forecast.js).
+    // Der Name 'ml' bleibt, damit bestehende Configs unverändert weiter gelten;
+    // die früheren ML-Schlüssel (mlEnabled, mlModelDir, mlTraining*) sind entfallen
+    // und werden in alten Configs ignoriert.
     ml: {
-      mlEnabled: true,
-      mlModelDir: '/opt/dvhub/ml-models',
-      mlTrainingHour: 21,
-      mlTrainingMinute: 30,
-      mlMinDataDays: 30,
       mlSlidingWindowMonths: 12,
       sfEnabled: true,
       sfUseMstl: true

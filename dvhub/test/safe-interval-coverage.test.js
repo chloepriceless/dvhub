@@ -34,7 +34,6 @@ const TARGET_FILES = [
   'transport-mqtt.js',
   'system-discovery.js',
   'schedule-eval.js',
-  'services/python-bridge/index.js',
 ];
 
 for (const rel of TARGET_FILES) {

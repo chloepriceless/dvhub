@@ -51,7 +51,6 @@
 
   var ALLOWED_FEATURES = {
     'family-dashboard': true,
-    'forecast-inspector-ml': true,
     'forecast-inspector-eos': true,
     'vpn-manager': true,
     // Pro-Gating #12 (2026-06-27): DV-Schnittstelle + EOS sind Pro (serverseitig
@@ -66,8 +65,6 @@
   var FEATURE_BODY = {
     'family-dashboard':
       'Family Dashboard ist ein DVhub-Pro-Feature und benötigt eine aktive Lizenz.',
-    'forecast-inspector-ml':
-      'Der ML-Korrektur-Inspector zeigt das aktive Modell, Tier-Features und die Genauigkeits-Historie — ein DVhub-Pro-Feature.',
     'forecast-inspector-eos':
       'Der EOS-Output-Inspector zeigt push/pull pro Slot — ein DVhub-Pro-Feature.',
     'vpn-manager':

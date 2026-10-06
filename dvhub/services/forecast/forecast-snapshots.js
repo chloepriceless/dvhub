@@ -8,7 +8,7 @@
 //
 // REVIEWS L3 (authoritative event-driven + recovery fallback):
 //   - AUTHORITATIVE path: called from forecast/index.js runForecast() after a successful
-//     forecastVersion increment (post merge + ml-correction). This is the source-of-record.
+//     forecastVersion increment (post merge). This is the source-of-record.
 //   - RECOVERY fallback: scheduler at 00:05 local only writes if `lastSnapshotForecastDate`
 //     does NOT already match today. If the event-driven path already wrote the snapshot
 //     today (startup + midnight bump), the recovery pass is a no-op.

@@ -48,30 +48,3 @@ test('SF recovery from failed state resets to ok', () => {
   assert.equal(s.status, 'ok');
   assert.equal(s.consecutiveNonSfRuns, 0);
 });
-
-test('/api/ml/status load_forecast shape is well-formed', () => {
-  // Pure unit-style — mock mlService.getStatus result shape
-  const mockMlService = {
-    getStatus: () => ({
-      tier: 2,
-      mlEnabled: true,
-      load_forecast: {
-        source: 'statsforecast',
-        status: 'ok',
-        consecutive_non_sf_runs: 0,
-        last_updated_at: '2026-04-17T12:00:00Z'
-      }
-    })
-  };
-  const status = mockMlService.getStatus();
-  assert.ok(status.load_forecast);
-  assert.ok(
-    ['statsforecast', 'sql_rollup', 'vrm_fallback', 'naive_constant', 'unknown']
-      .includes(status.load_forecast.source)
-  );
-  assert.ok(
-    ['ok', 'degraded', 'failed', 'unknown']
-      .includes(status.load_forecast.status)
-  );
-  assert.equal(typeof status.load_forecast.consecutive_non_sf_runs, 'number');
-});

@@ -90,7 +90,6 @@ const ACCOUNT_PUBLIC_KEY = '2b8cc3310c0958f58bf9b9d3a52cb868f8f2c2260a679b5ebf4b
 // ('family-dashboard'). Phase 18+ extends this set.
 const ALLOWED_FEATURES = new Set([
   'family-dashboard',
-  'forecast-inspector-ml',     // Phase 19 Plan 19-04 (B3 ML-Korrektur-Inspector)
   'forecast-inspector-eos',    // Phase 19 Plan 19-05 (B4 EOS-Output-Inspector) — Teil von EOS-Pro
   'vpn-manager',               // 2026-06-21: VPN-Manager als Pro-Feature gegated (/api/vpn/*)
   // Pro-Gating #12 (2026-06-27): die DV-Schnittstelle (Modbus-Server + HTTP-Read

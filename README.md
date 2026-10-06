@@ -56,7 +56,6 @@ einem vollwertigen HEMS ausgebaut.
 - **Kleine Börsenautomatik** mit zweistufigem Forecast-aware-Modus (Stufe 2: vorausschauendes Akku-Leeren)
 - **Prognose-Engine** — PV-Ertrag (pvlib), Lastvorhersage und Multi-Modell-Ensemble mit Accuracy-Tracking
 - **Optimierung** — freie kleine Börsenautomatik (Greedy/MILP-Abend-Slots) plus der **Akkudoktor-EOS-Arbitrage-Optimizer** *(DVhub Pro)* (DV-Direktvermarktungs-Fork, 15-Minuten-Slots, standardmäßig mitinstalliert)
-- **Optionale ML-Prognose-Korrektur** — selbstlernende Korrektur systematischer Prognosefehler (LightGBM)
 - **Historie** mit PostgreSQL-Telemetrie, Finanz-Karten und 14 Visualisierungs-Karten
 - **Familien-Dashboard** als haushaltstaugliche Übersicht inkl. Tesla-/Haus-Flow und Screensaver *(DVhub Pro)*
 - **Integrationsplattform** für Home Assistant, Loxone, EOS, EMHASS, evcc, MQTT und TeslaMate — Home Assistant und Loxone können DVhub auch **Messwerte liefern** (MQTT oder HTTP-Push)
@@ -120,7 +119,7 @@ Der Installer:
 - generiert automatisch einen `apiToken` und ein selbstsigniertes TLS-Zertifikat
 - richtet einen systemd-Service mit Selbstheilung beim Start ein (`post-update.sh` als `ExecStartPre`)
 - nutzt eine externe Config unter `/etc/dvhub/config.json`
-- installiert den vollen Prognose-/ML-Stack hash-gepinnt aus `requirements.lock` (auf jeder Box) und zusätzlich Akkudoktor-EOS (siehe **Hardware**)
+- installiert den Prognose-Stack (pvlib, StatsForecast) hash-gepinnt aus `requirements.lock` und zusätzlich Akkudoktor-EOS (siehe **Hardware**). Der Prognose-Stack braucht Python ≥ 3.11 (Debian 12/13, Ubuntu 24.04); auf älteren Systemen wird er übersprungen, der Grund steht im Protokoll (`python_env_incomplete`) und DVhub nutzt die SQL-Lastprognose und die PV-Prognose-Anbieter
 - **Stable-Channel** (Standard): checkt den neuesten Semver-Release-Tag aus
 - **Dev-Channel** (`--channel dev`): checkt `origin/main` HEAD aus
 - **Commit-Pin** (`--ref <commit|tag>`): checkt exakt diesen Stand aus — für
@@ -179,8 +178,8 @@ Nach der Erstinstallation (bzw. wenn die Config fehlt/ungültig ist) öffnet DVh
 DVhub läuft ab **1 GB RAM** vollständig, **inklusive Akkudoktor-EOS** (DVhub-
 Direktvermarktungs-Fork) als Optimierer — standardmäßig mitinstalliert, opt-out
 mit `--no-eos`. Es gibt keine RAM-Stufen mehr: Funktionen werden nicht nach
-Speichergröße abgeschaltet. Die Python-Prognosemodule (pvlib, StatsForecast,
-ML-Korrektur) laufen nur, wenn ihre Python-Umgebung installiert ist und sie in
+Speichergröße abgeschaltet. Die Python-Prognosemodule (pvlib, StatsForecast)
+laufen nur, wenn ihre Python-Umgebung installiert ist und sie in
 den Einstellungen eingeschaltet sind; ohne sie nutzt DVhub die SQL-Lastprognose
 und die PV-Prognose-Anbieter. Die Einstellungen zeigen unter „Prognose-Module“,
 was verfügbar ist.
@@ -244,7 +243,6 @@ separat unter [DVhub Pro](#dvhub-pro).
 - **Multi-Provider-Ensemble** — kombiniert pvlib, Solcast, pvnode.de, forecast_solar, Open-Meteo und VRM, gewichtet nach rollierendem Prognosefehler (inverse MAE); fehlende Provider renormalisieren automatisch
 - **Lastvorhersage** über statistische Modelle (statsforecast) mit SQL-Wochentag-Fallback
 - **Nebel-Korrektur** und **Accuracy-Tracking** — jede Prognose wird als Snapshot gespeichert und gegen die Messwerte ausgewertet
-- **Optionale ML-Korrektur** (`ml.mlEnabled`) — selbstlernendes LightGBM-Modell korrigiert systematische Prognosefehler, mit atomarem Modell-Swap, Schema-Guard und automatischem Sanity-Fallback auf die Rohprognose
 - **Optimizer-Dispatch** *(DVhub Pro)* — MILP-Batterieoptimierung über den HiGHS-Solver (15-Minuten-Slots) mit schneller Heuristik als Fallback; der `internal`-Modus ist Teil des Pro-Optimizer-Layers (`services/optimizer`) und geht ohne Lizenz mit aus. Die freie kleine Börsenautomatik oben nutzt ihre eigene Engine
 - **Akkudoktor-EOS-Anbindung** *(DVhub Pro — Arbitrage)* (standardmäßig mitinstalliert als DVhub-Direktvermarktungs-Fork; opt-out `--no-eos`) — externer Optimizer-Dienst mit Config-Sync, Forecast-Bridge (Selbstheilung nach EOS-Neustart) und Akku→Netz-Arbitrage; **ohne aktive Lizenz aktuiert EOS nicht** (automatischer Fallback auf Stufe 1/2, Prognosewerte bleiben sichtbar)
 - **Marktprämien-Modulation** (optional, `optimizer.tariff.feedInIncludeMarketPremium`) — bewertet die Einspeisung am realen Direktvermarktungs-Margin (Spot + Marktprämie) statt am Rohspot; §51-konform (keine Prämie in Negativpreis-Slots)
@@ -307,7 +305,6 @@ Live-Dienste) und die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich:
 | `eos` | **EOS / DV-EOS** Arbitrage-Optimizer-Dispatch (`services/optimizer`, `primarySource=eos`) | EOS **aktuiert nicht** → automatischer Fallback auf die freie kleine Börsenautomatik (Stufe 1/2); Prognosewerte bleiben sichtbar |
 | `family-dashboard` | Familien-Dashboard (`/family` + alle `/api/family/*`-Routen) | `403 pro_required` + 🔒-Badge in der Top-Nav, Klick öffnet das Pro-Modal |
 | `vpn-manager` | Einstellungen → VPN (`/api/vpn/*` — Status, Profil-Upload, Start/Stop/Restart) | `403 pro_required`; Tab zeigt Pro-Hinweis mit Lizenz-Link |
-| `forecast-inspector-ml` | Einstellungen → Forecast → ML-Korrektur-Inspector | `403` + Pro-Banner inline, CTA öffnet das Pro-Modal |
 | `forecast-inspector-eos` | Einstellungen → Forecast → EOS-Output-Inspector (Teil von EOS-Pro) | dito |
 | `history-multiperiod` | **Historie-Zeiträume** Woche/Monat/Jahr/Alle (`/api/history/summary\|viz/*\|export` mit `view≠day`) | `403 pro_required`; im Historie-Dropdown tragen die Zeiträume ein 🔒, Auswahl öffnet das Pro-Modal und springt zurück auf **Tag** — die **Tagesansicht bleibt frei** |
 
@@ -479,13 +476,7 @@ DVhub trifft Lade-/Entladeentscheidungen nicht nur reaktiv, sondern vorausschaue
    dämpft typische Schönwetter-Überschätzungen. Jede Prognose wird als Snapshot
    gespeichert und gegen die Messwerte ausgewertet (Accuracy-Tracking).
 
-2. **Optionale ML-Korrektur** — Bei aktiviertem `ml.mlEnabled` lernt DVhub aus dem
-   gemessenen Prognosefehler ein LightGBM-Korrekturmodell. Modelle werden im
-   Hintergrund neu trainiert und atomar getauscht; ein Schema-Guard verhindert das
-   Laden inkompatibler Modelle, und ein Sanity-Fallback fällt automatisch auf die
-   Rohprognose zurück, falls die Korrektur die PV-Erwartung kollabieren lässt.
-
-3. **Optimierung** — Ein interner Optimizer plant das Batterie-Lade-/Entladeprofil
+2. **Optimierung** — Ein interner Optimizer plant das Batterie-Lade-/Entladeprofil
    über bis zu 192 Viertelstunden-Slots gegen die Day-Ahead-Preise: als MILP
    (HiGHS-Solver) oder als schnelle Heuristik. Alternativ übernimmt **Akkudoktor-EOS**
    die Optimierung — DVhubs standardmäßig mitinstallierter Direktvermarktungs-Fork
@@ -812,8 +803,7 @@ liefert `tests/endpoint-inventory.mjs`.
 | `GET` | `/api/forecast/pvnode/quota` | pvnode.de-Kontingent |
 | `GET` `POST` | `/api/forecast/providers/{solcast,pvnode,eos-akkudoktor}(/probe)` | Cloud-PV-Provider konfigurieren / proben |
 | `POST` `GET` | `/api/forecast/ghi-backfill`, `/api/forecast/ghi-coverage` | Einstrahlungs-Nachimport (Curtailment-Kalibrierung) |
-| `GET` | `/api/forecast/inspector/{pv-providers,load,optimizer-cold,ml-correction,eos}` | Forecast-Inspector (`ml-correction`, `eos` *Pro*) |
-| `GET` `POST` | `/api/ml/status`, `/api/ml/accuracy`, `/api/ml/retrain` | ML-Status / Accuracy / Retraining |
+| `GET` | `/api/forecast/inspector/{pv-providers,load,optimizer-cold,eos}` | Forecast-Inspector (`eos` *Pro*) |
 | `GET` | `/api/optimizer/status`, `/api/optimizer/runs/latest` | Optimizer-Status / letzter Lauf |
 
 ### Schedule / Steuerung
@@ -879,7 +869,7 @@ Schlüssel strikt ab — jedes neue Feld muss in `ALLOWED_CONFIG_ROOTS`.
 | `userEnergyPricing` | Preislogik (fix/dynamisch), Tarif-Perioden, §14a Modul 3, Marktwert, PV-Anlagen |
 | `epex` | EPEX aktiviert, Preiszone (`bzn`), Zeitzone, `priceSource` (`dvhub`/`public`), `priceApiUrl` |
 | `optimizer` | Optimizer (intern/EOS), `optimizer.tariff` (Einspeise-Modus, Marktprämie) |
-| `ml` | ML-Prognose-Korrektur (`mlEnabled`, Training, statsforecast-Schalter) |
+| `ml` | Schalter der StatsForecast-Lastprognose (`sfEnabled`, `sfUseMstl`, `mlSlidingWindowMonths`) |
 | `forecast` | Prognose-Provider, Standort, GHI-Kalibrierung |
 | `telemetry` / `dbBackup` | PostgreSQL, TimescaleDB, Retention, VRM-Import; geplantes DB-Backup (lokal/SMB) |
 | `evcc` | evcc-Integration (Akku-Hold während EV-Ladung) |

@@ -1657,8 +1657,6 @@ body:has(.settings-aurora) .location-picker-footer {
 }
 .stat-card-padded { padding: 16px; }
 .ml-spark-wrap { position: relative; height: 80px; }
-.ml-stat-row { display: flex; justify-content: space-between; margin-top: 8px; }
-.ml-stat-text { color: var(--flow-text); }
 .llm-select-narrow { max-width: 320px; }
 
 

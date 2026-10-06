@@ -6,8 +6,8 @@
 // schema, Plan 07-04 activation), we can now weight providers by their rolling 7-day MAE:
 // the provider with the smallest error gets the largest weight.
 //
-// Single-source invariant (D-C3): the mae7d argument MUST be sourced from accuracy_tracker
-// to stay consistent with ml-correction's feature pipeline. Plan 07-04 will wire the DB read;
+// Single-source invariant (D-C3): the mae7d argument MUST be sourced from accuracy_tracker.
+// Plan 07-04 will wire the DB read;
 // for now `computeWeights(mae7d)` is a pure function taking the dict directly.
 //
 // Pure functions — no DI context, no side effects. Matches pv-forecast.js `mergePvForecasts`

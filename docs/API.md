@@ -8,7 +8,7 @@ Quelle ist der Router `dvhub/routes-api.js`. Die interaktive Swagger-Oberfläche
 - [3. Endpunkte](#3-endpunkte)
   - [Betrieb & Seiten](#31-betrieb--seiten) · [Status & DV](#32-status--dv) · [Konfiguration](#33-konfiguration) · [Admin & System](#34-admin--system) · [Support](#35-support)
   - [Datenbank](#36-datenbank) · [Historie & Telemetrie](#37-historie--telemetrie) · [EPEX / Preise](#38-epex--preise)
-  - [Prognose](#39-prognose) · [ML](#310-ml) · [Optimizer & EOS](#311-optimizer--eos) · [Zeitplan & Steuerung](#312-zeitplan--steuerung)
+  - [Prognose](#39-prognose) · [Optimizer & EOS](#311-optimizer--eos) · [Zeitplan & Steuerung](#312-zeitplan--steuerung)
   - [E-Auto](#313-e-auto) · [Integrationen (Datenausgabe)](#314-integrationen-datenausgabe) · [Integrationen (Einstellungen)](#315-integrationen-einstellungen)
   - [Messwert-Eingang HA / Loxone](#316-messwert-eingang-home-assistant--loxone) · [Datenspende](#317-datenspende) · [Benachrichtigungen & Monitoring](#318-benachrichtigungen--monitoring)
   - [Geräte, PV-Strings, Zähler](#319-geräte-pv-strings-zähler) · [Familien-Dashboard](#320-familien-dashboard-dvhub-pro) · [VPN](#321-vpn-dvhub-pro) · [Lizenz](#322-lizenz) · [Installateurs-Portal](#323-installateurs-portal)
@@ -164,7 +164,6 @@ Spalte **Zugang** in den Tabellen:
 | GET | `/api/forecast/inspector/pv-providers` | LAN·forecast | Inspector: PV-Provider im Vergleich |
 | GET | `/api/forecast/inspector/load` | LAN·forecast | Inspector: Lastprognose |
 | GET | `/api/forecast/inspector/optimizer-cold` | LAN·forecast | Inspector: Optimizer-Eingänge |
-| GET | `/api/forecast/inspector/ml-correction` | LAN·forecast, *Pro* | Inspector: ML-Korrektur |
 | GET | `/api/forecast/inspector/eos` | LAN·forecast, *Pro* | Inspector: EOS-Ausgabe |
 | GET / POST | `/api/forecast/providers/solcast` | Token | Solcast-Zugang lesen (Schlüssel geschwärzt) / setzen |
 | POST | `/api/forecast/providers/solcast/probe` | Token | Solcast-Zugang testen |
@@ -172,15 +171,6 @@ Spalte **Zugang** in den Tabellen:
 | POST | `/api/forecast/providers/pvnode/probe` | Token | pvnode-Zugang testen |
 | GET | `/api/forecast/pvnode/quota` | Token | pvnode-Kontingent |
 | POST | `/api/forecast/providers/eos-akkudoktor/probe` | Token | PV-Prognose der EOS-Instanz testen |
-
-### 3.10 ML
-
-| Methode | Pfad | Zugang | Beschreibung |
-|---|---|---|---|
-| GET | `/api/ml/status` | Token | Modellstand, Lastprognose-Quelle |
-| GET | `/api/ml/accuracy` | Token | Genauigkeitsverlauf |
-| POST | `/api/ml/retrain` | Token | Training starten → Job-ID |
-| GET | `/api/ml/retrain/status/<jobId>` | Token | Stand eines Trainings |
 
 ### 3.11 Optimizer & EOS
 

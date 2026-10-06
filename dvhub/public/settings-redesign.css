@@ -5,8 +5,7 @@
    TEIL 1 — Config-Tabs (Anlage / Steuerung / Preise & Daten), gescoped auf die
             sieben Bereichs-Raster #areaGrid-* (Meine Anlage … System).
    TEIL 2 — Custom-Tabs (Status / Forecast / EOS / VPN), gescoped auf
-            #tab-system/#tab-forecast/#tab-eos/#tab-vpn (siehe unten). #tab-ml
-            (deaktiviert) bleibt bewusst außen vor.
+            #tab-system/#tab-forecast/#tab-eos/#tab-vpn (siehe unten).
    ─────────────────────────────────────────────────────────────────────────── */
 
 :is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys, #areaGrid-shares) {
@@ -290,7 +289,7 @@
    Diese Panels sind handgebautes HTML (nicht aus config-model). Hier wird die
    OBERFLÄCHE drübergelegt (Glass-Karten, Borders, ob-Buttons/Inputs/Tabellen);
    das vorhandene LAYOUT (settings.css: display/flex/grid der Zeilen) bleibt
-   unangetastet, damit nichts verrutscht. #tab-ml ist bewusst NICHT im Scope.
+   unangetastet, damit nichts verrutscht.
    ─────────────────────────────────────────────────────────────────────────── */
 
 /* ── Section-Kopf (h2 + Sub) ─────────────────────────────────────────────── */

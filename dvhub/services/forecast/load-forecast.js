@@ -227,7 +227,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
     ctx.bumpForecastVersion?.();
   }
 
-  // Phase 07 FORE-12 D-D2: in-memory load-forecast state for /api/ml/status visibility.
+  // Phase 07 FORE-12 D-D2: in-memory load-forecast state (source / status, see getState).
   // Sources: 'statsforecast' | 'sql_rollup' | 'vrm_fallback' | 'naive_constant' | 'unknown'
   // Status: 'ok' | 'degraded' | 'failed'
   // degraded = 2+ consecutive non-SF runs; failed = 4+ consecutive non-SF runs.

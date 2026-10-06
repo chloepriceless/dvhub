@@ -28,7 +28,6 @@ function makeInspectorStub({ overrides = {} } = {}) {
   const def = {
     getPvProviders: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b1', window: { from, to } }),
     getLoad: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b2', window: { from, to } }),
-    getMlCorrection: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b3', window: { from, to } }),
     getEos: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b4', window: { from, to } }),
     getOptimizerCold: async () => ({ lastRunAt: '2026-05-19T10:00:00.000Z', daysSinceLastRun: 1.0, isStale: false, optimizer: 'internal' }),
   };
@@ -90,7 +89,7 @@ function mockCtx({ licenseActive = true, inspector = makeInspectorStub(), eosMon
       // Mimic services/license/index.js: requirePro returns true when license active,
       // else writes 403 {error:'pro_required',feature:<whitelisted>} and returns false.
       requirePro(req, res, featureName) {
-        const ALLOWED = new Set(['family-dashboard','forecast-inspector-ml','forecast-inspector-eos']);
+        const ALLOWED = new Set(['family-dashboard','forecast-inspector-eos']);
         const feat = ALLOWED.has(featureName) ? featureName : 'unknown';
         if (licenseActive) return true;
         const body = JSON.stringify({ error: 'pro_required', feature: feat });

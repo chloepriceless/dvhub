@@ -16,12 +16,6 @@
 // is fine when the caller has already wired the dep — the inspector is
 // composed AFTER its deps are stable.
 
-// Plan 19-04 (B3 ML Shadow Correction): preference rank for selecting an
-// input PV-forecast model to feed into mlService.correct({shadow:true}).
-// Mirrors the order used by buildForecastResponse in services/forecast/index.js
-// — combined (ensemble) is preferred; falls through to single-provider models.
-const ML_SHADOW_INPUT_MODEL_RANK = ['combined', 'solcast', 'forecast_solar', 'pvnode', 'open_meteo_solar', 'vrm'];
-
 // T-RESERVE-VISIBILITY (2026-07-20): die Übernacht-Reserve-Gates des EOS-Forks
 // (systemd-Env der eos.service) read-only im Inspector-Envelope mitliefern,
 // damit die Einstellungen zeigen, WAS aktiv ist (price-aware, Marge, Puffer,
@@ -32,13 +26,8 @@ export function createInspector(ctx, deps = {}) {
   const pushLog = ctx && typeof ctx.pushLog === 'function' ? ctx.pushLog : () => {};
   const state = ctx && ctx.state ? ctx.state : null;
   const getCfg = ctx && typeof ctx.getCfg === 'function' ? ctx.getCfg : () => ({});
-  const { store, mlService, eosAdapter, eosMonitor, forecastService } = deps;
+  const { store, eosAdapter, eosMonitor, forecastService } = deps;
 
-  // Plan 19-04 (B3): single-slot ML-shadow cache. Keyed on forecastVersion +
-  // 60s TTL so two consecutive 30s polls share the same Python spawn. Scoped
-  // to the factory closure — every createInspector call gets its own cache,
-  // which matches the production wiring (one inspector per server process).
-  let mlShadowCache = null; // { forecastVersion, expiresAt, payload } | null
   // telemetryStore is read lazily — supports both deps.telemetryStore (passed
   // at factory time) AND ctx.telemetryStore (set later in server bootstrap).
   function getTelemetryStore() {
@@ -260,212 +249,6 @@ export function createInspector(ctx, deps = {}) {
         actualCount: actualRows.length,
       },
     };
-  }
-
-  // ───────────── B3 — ML Shadow Correction (Plan 19-04 — IMPLEMENTED) ─────────────
-  //
-  // Runs the ML model in SHADOW mode (mlService.correct(..., {shadow:true}))
-  // so the operator can preview ML output BEFORE flipping cfg.ml.mlEnabled.
-  // The Python spawn cost is amortised by a 60s sliding cache keyed on
-  // forecastService.forecastVersion — two consecutive 30s polls hit the cache
-  // (one spawn, not two). A forecastVersion bump (new forecast pipeline run)
-  // invalidates the cache transparently.
-  //
-  // Input-model selection per ML_SHADOW_INPUT_MODEL_RANK. The cache stores
-  // the FULL payload (raw + corrected + delta) so cacheHit serves the same
-  // envelope shape the frontend already renders.
-  //
-  // Returns envelope:
-  //   {
-  //     window: { from, to },
-  //     raw:        [{ ts_utc, power_w }],     // input PV slots
-  //     corrected:  [{ ts_utc, power_w }]|null, // null when applied=false
-  //     delta:      [{ ts_utc, delta_w }]|null, // null when applied=false
-  //     model:      string|null,
-  //     applied:    boolean,
-  //     reason:     string|null,    // 'no_model'|'no_input'|null
-  //     mlEnabled:  boolean,
-  //     meta: { inputModel: string|null, cacheHit: boolean }
-  //   }
-  // Or, on hard failure: { ok: false, error: ..., window }.
-  async function getMlCorrection({ from, to } = {}) {
-    if (!store || typeof store.getLatestPvForecast !== 'function') {
-      return { ok: false, error: 'store_unavailable', window: { from, to } };
-    }
-    if (!mlService || typeof mlService.correct !== 'function') {
-      return { ok: false, error: 'ml_unavailable', window: { from, to } };
-    }
-
-    // Read forecastVersion lazily — forecastService may expose a getter or a
-    // plain numeric field. Default to 0 when unavailable (cache still works
-    // — every call shares fv=0 until a real forecast version lands).
-    let fv = 0;
-    if (forecastService) {
-      const rawFv = forecastService.forecastVersion;
-      const n = Number(rawFv);
-      if (Number.isFinite(n)) fv = n;
-    }
-
-    const now = Date.now();
-    if (mlShadowCache && mlShadowCache.forecastVersion === fv && mlShadowCache.expiresAt > now) {
-      // Cache hit — return clone with cacheHit:true (preserve cached envelope shape).
-      const cachedMeta = mlShadowCache.payload.meta || {};
-      return Object.assign({}, mlShadowCache.payload, {
-        meta: Object.assign({}, cachedMeta, { cacheHit: true }),
-      });
-    }
-
-    let rows = [];
-    try {
-      rows = (await store.getLatestPvForecast({ start: from, end: to })) || [];
-    } catch (e) {
-      pushLog('inspector_ml_correction_query_error', { error: e && e.message ? e.message : String(e) });
-      return { ok: false, error: 'query_failed', window: { from, to } };
-    }
-
-    // Bucket rows by model
-    const byModel = {};
-    for (const r of rows) {
-      if (!r || typeof r !== 'object') continue;
-      const m = r.model || 'unknown';
-      if (!byModel[m]) byModel[m] = [];
-      byModel[m].push(r);
-    }
-
-    // Pick first non-empty model per preference rank
-    let inputModel = null;
-    let inputRows = [];
-    for (const m of ML_SHADOW_INPUT_MODEL_RANK) {
-      if (byModel[m] && byModel[m].length > 0) {
-        inputModel = m;
-        inputRows = byModel[m];
-        break;
-      }
-    }
-
-    const raw = inputRows
-      .map(r => ({
-        ts_utc: r.ts_utc instanceof Date ? r.ts_utc.toISOString() : String(r.ts_utc),
-        power_w: Number.isFinite(Number(r.power_w)) ? Number(r.power_w) : 0,
-      }))
-      .sort((a, b) => a.ts_utc.localeCompare(b.ts_utc));
-
-    const mlEnabled = !!(getCfg().ml && getCfg().ml.mlEnabled);
-
-    if (raw.length === 0) {
-      // Transient empty — do NOT cache, so a follow-up poll re-queries cheaply.
-      return {
-        window: { from, to },
-        raw: [],
-        corrected: null,
-        delta: null,
-        model: null,
-        applied: false,
-        reason: 'no_input',
-        mlEnabled,
-        meta: { inputModel: null, cacheHit: false },
-      };
-    }
-
-    // Phase 19.1-02: guard against degenerate all-zero PV input. Solcast on a
-    // sub-scribed-without-key install returns flat zeros; the v1 ML model's
-    // feature-only prediction path (weather + time + system params, NO input
-    // PV) then emits ~1 kW typical-day values that look like load forecasts
-    // to the operator. Skip the predict and surface reason:'no_input_signal'
-    // — Inspector banner explains the diagnostic instead of misleading data.
-    const hasSignal = raw.some(r => Number(r.power_w) > 0);
-    if (!hasSignal) {
-      return {
-        window: { from, to },
-        raw,
-        corrected: null,
-        delta: null,
-        model: null,
-        applied: false,
-        reason: 'no_input_signal',
-        mlEnabled,
-        meta: { inputModel, cacheHit: false },
-      };
-    }
-
-    // Adapt to mlService.correct input shape: [{start, powerW}]
-    const slotsForMl = raw.map(r => ({ start: r.ts_utc, powerW: r.power_w }));
-    let mlResult;
-    try {
-      mlResult = await mlService.correct(slotsForMl, { forecastVersion: fv, shadow: true });
-    } catch (e) {
-      pushLog('inspector_ml_correction_predict_error', { error: e && e.message ? e.message : String(e) });
-      return { ok: false, error: 'ml_predict_failed', window: { from, to } };
-    }
-
-    let corrected = null;
-    let delta = null;
-    if (mlResult && mlResult.applied && Array.isArray(mlResult.corrected)) {
-      corrected = mlResult.corrected.map((c, i) => ({
-        ts_utc: (c && c.start) || (raw[i] && raw[i].ts_utc) || null,
-        power_w: Number.isFinite(Number(c && c.powerW)) ? Number(c.powerW) : 0,
-      }));
-      delta = corrected.map((c, i) => ({
-        ts_utc: c.ts_utc,
-        delta_w: Number(c.power_w) - Number((raw[i] && raw[i].power_w) || 0),
-      }));
-    }
-
-    // Phase 19.1-07: coherence guard against the v1-collapse pattern flagged
-    // in Plan 16-05 D-01. Even with raw>0, the v1 lightgbm model can emit a
-    // suspiciously load-like output (~1 kW typical-day baseline) when feature
-    // drift compresses the prediction surface. Heuristic check on the delta:
-    //   - rawSum = total energy in the raw window (W * slot_count)
-    //   - corrSum = same for corrected
-    // If the corrected curve flattens the raw signal by >70% (i.e. corrSum < 0.3*rawSum
-    // when rawSum is meaningful — sunny midday) we flag low_confidence so the
-    // UI banner explains why the operator should not trust this prediction.
-    // This is a runtime SAFETY NET, not a fix — the real fix is retrain (Phase
-    // 19.1 retrain plan deferred until accuracy-tracker has more 7d-MAE data).
-    let coherenceFlag = null;
-    if (corrected && corrected.length > 0) {
-      const rawSum = raw.reduce((s, r) => s + (Number(r.power_w) || 0), 0);
-      const corrSum = corrected.reduce((s, c) => s + (Number(c.power_w) || 0), 0);
-      // Only run the check when rawSum is substantial (>1 kWh-equivalent across the
-      // window) — at night both sums are ~0 and noisy ratios mean nothing.
-      if (rawSum > 4000 && corrSum < rawSum * 0.3) {
-        coherenceFlag = 'collapsed_low';
-        pushLog('inspector_ml_correction_coherence_flag', {
-          rawSum: Math.round(rawSum),
-          corrSum: Math.round(corrSum),
-          ratio: rawSum > 0 ? Math.round((corrSum / rawSum) * 100) / 100 : null,
-          model: mlResult?.model || null,
-        });
-      } else if (rawSum > 4000 && corrSum > rawSum * 2.5) {
-        coherenceFlag = 'collapsed_high';
-        pushLog('inspector_ml_correction_coherence_flag', {
-          rawSum: Math.round(rawSum),
-          corrSum: Math.round(corrSum),
-          ratio: rawSum > 0 ? Math.round((corrSum / rawSum) * 100) / 100 : null,
-          model: mlResult?.model || null,
-        });
-      }
-    }
-
-    const payload = {
-      window: { from, to },
-      raw,
-      corrected,
-      delta,
-      model: (mlResult && mlResult.model) || null,
-      applied: !!(mlResult && mlResult.applied),
-      reason: coherenceFlag ? coherenceFlag : ((mlResult && mlResult.reason) || null),
-      mlEnabled,
-      meta: { inputModel, cacheHit: false, coherenceFlag },
-    };
-
-    // Cache only when applied — skipping caches for no_model / no_input avoids
-    // 60s 'stuck' UX after the operator loads a model or rectifies the input.
-    if (payload.applied) {
-      mlShadowCache = { forecastVersion: fv, expiresAt: now + 60_000, payload };
-    }
-
-    return payload;
   }
 
   // ───────────── B4 — EOS Output (Plan 19-05 — IMPLEMENTED) ─────────────
@@ -747,7 +530,6 @@ export function createInspector(ctx, deps = {}) {
   return {
     getPvProviders,
     getLoad,
-    getMlCorrection,
     getEos,
     getOptimizerCold,
   };

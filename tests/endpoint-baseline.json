@@ -78,8 +78,6 @@
     "/api/log?limit=1000",
     "/api/log?limit=400",
     "/api/meter/scan",
-    "/api/ml/accuracy",
-    "/api/ml/status",
     "/api/notifications/providers/ntfy",
     "/api/notifications/providers/pushover",
     "/api/notifications/providers/telegram",

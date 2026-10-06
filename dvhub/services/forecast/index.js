@@ -25,7 +25,7 @@ import { createPvnodeClient } from './pvnode-client.js';
 import { createPvForecast } from './pv-forecast.js';
 import { createLoadForecast } from './load-forecast.js';
 import { createAccuracyTracker } from './accuracy-tracker.js';
-import { createPythonBridge, isPythonAvailable } from '../python-bridge/index.js';
+import { createPythonBridge, pythonEnvStatus, readProvisionStatus } from '../python-bridge/index.js';
 // T-CURTAIL: observed-GHI backfill from the Open-Meteo Archive (universal,
 // location-based, no key) — fills weather_observed so the curtailment estimator
 // has historical irradiance. See .planning/T-CURTAIL-IRRADIANCE-DESIGN.md.
@@ -42,37 +42,10 @@ export function createForecastService(ctx) {
   const { state, getCfg, pushLog } = ctx;
 
   // Installed memory (info only — the RAM tiers were removed 2026-10-03;
-  // Python-based models depend on an installed venv, see isPythonAvailable).
+  // Python-based models depend on an installed venv, see pythonEnvStatus).
   const totalMB = Math.floor(os.totalmem() / (1024 * 1024));
-  const pythonAvailable = isPythonAvailable();
-
-  // ML correction sanity-fallback logger — fires pushLog only on state
-  // transitions (or once per 6h while the same state persists) so the
-  // Systemprotokoll isn't spammed every forecast build (~5 min).
-  const mlSanityFallbackLogger = (() => {
-    const REPEAT_MS = 6 * 60 * 60 * 1000;
-    let lastState = false; // start in "healthy" so an initially-healthy startup is silent
-    let lastLogAt = 0;
-    return {
-      report(active, detailsFn) {
-        const stateChanged = active !== lastState;
-        const repeatDue = active && (Date.now() - lastLogAt) > REPEAT_MS;
-        if (!stateChanged && !repeatDue) return;
-        if (active) {
-          const details = (typeof detailsFn === 'function') ? detailsFn() : {};
-          pushLog('ml_correction_sanity_fallback', details);
-          lastLogAt = Date.now();
-        } else if (stateChanged && lastState === true) {
-          pushLog('ml_correction_sanity_recovered', {
-            severity: 'info',
-            note: 'ML correction sanity-fallback disengaged — the ML-corrected '
-                + 'PV forecast is back within sane bounds.'
-          });
-        }
-        lastState = active;
-      }
-    };
-  })();
+  const pythonEnv = pythonEnvStatus();
+  const pythonAvailable = pythonEnv.ok;
 
   // Version counter: increments on any forecast data change.
   // Optimizer polls this to detect when re-optimization is needed (D-02).
@@ -93,6 +66,16 @@ export function createForecastService(ctx) {
   };
 
   pushLog('forecast_init', { totalMB, pythonAvailable });
+  // venv da, Pakete nicht: sichtbar melden statt „Python vorhanden" vorzutäuschen.
+  if (pythonEnv.reason === 'packages_missing') {
+    const prov = readProvisionStatus();
+    pushLog('python_env_incomplete', {
+      missing: pythonEnv.missing,
+      provisionReason: prov?.reason ?? null,
+      provisionDetail: prov?.detail ?? null,
+      hint: 'sudo bash /opt/dvhub/forecast-provision.sh --force',
+    }, 'warn');
+  }
 
   // Create store (schema will be ensured on start)
   const store = createForecastStore(ctx);
@@ -107,7 +90,10 @@ export function createForecastService(ctx) {
   const vrmForecast = createVrmForecast(ctx, { store }); // Phase 18-01j: deps-object threads store for pv_forecasts mirror
   const openMeteoSolar = createOpenMeteoSolar(ctx, { store });
   const pvnodeClient = createPvnodeClient(ctx, { store });
-  const pythonBridge = pythonAvailable ? createPythonBridge(ctx) : null;
+  // Bridge auch bei unvollständigem venv anlegen: sie prüft die Pakete je Aufruf
+  // und greift von selbst, sobald die Hintergrund-Provisionierung fertig ist.
+  // Ganz ohne venv (z. B. Docker-Image) bleibt sie wie bisher aus.
+  const pythonBridge = pythonEnv.reason !== 'no_venv' ? createPythonBridge(ctx) : null;
   const pvForecast = createPvForecast(ctx, { store, pythonBridge, solcastClient, forecastSolar, vrmForecast, openMeteoSolar, pvnodeClient });
   const loadForecast = createLoadForecast(ctx, { store, vrmForecast, pythonBridge });
   const accuracyTracker = createAccuracyTracker(ctx, { store });
@@ -334,7 +320,6 @@ export function createForecastService(ctx) {
 
   /**
    * Build combined forecast response for /api/forecast per D-01.
-   * ML post-processing: applies ML correction after PV section is built (D-02).
    * @returns {{ meta: object, price: object, pv: object, rawPv: object, load: object }}
    */
   async function buildForecastResponse() {
@@ -342,64 +327,7 @@ export function createForecastService(ctx) {
     const pv = buildPvSection();
     const load = buildLoadSection();
 
-    // ML post-processing: correct PV forecast if a model is available.
-    // correct() is async (spawns Python), so await it.
-    // D-A1/A3: correct() now builds features internally and uses forecastVersion cache.
-    let mlResult = { applied: false, corrected: pv.slots, model: null };
-    if (ctx.mlService?.correct) {
-      try {
-        mlResult = (await ctx.mlService.correct(pv.slots, {
-          forecastVersion
-        })) ?? mlResult;
-      } catch {
-        // Swallow — bypass ML correction on error, keep raw pv
-      }
-    }
-
-    let mlActive = mlResult.applied || false;
-    let correctedPv = mlActive ? { ...pv, slots: mlResult.corrected } : pv;
-
-    // Sanity fallback: if ML correction collapses the forecast to ~zero while raw
-    // has real values (observed: lightgbm v7 squashing 22kW peaks down to <1W),
-    // disable ML for this response and fall back to raw — otherwise the
-    // Börsenchart overlay disappears entirely.
-    //
-    // The condition usually persists across consecutive forecast builds (the
-    // model is bad until retrained), so logging every call would spam the
-    // Systemprotokoll. We log only on state TRANSITIONS (off→on, on→off) and
-    // throttle re-fires of the same state to once per 6h, so the engineer sees
-    // when the fallback engages or disengages without the log getting buried.
-    let mlSanityFallback = false;
-    if (mlActive) {
-      const maxOf = (slots) => slots.reduce((m, s) => Math.max(m, Number(s?.powerW) || 0), 0);
-      const rawMax = maxOf(pv.slots);
-      const corrMax = maxOf(correctedPv.slots);
-      if (rawMax >= 200 && corrMax < rawMax * 0.01) {
-        mlSanityFallbackLogger.report(true, () => ({
-          severity: 'emergency',
-          note: 'EMERGENCY: ML correction collapsed the PV forecast to ~0 W — '
-              + 'raw PV substituted to keep the forecast usable. The active ML '
-              + 'model is unhealthy; investigate model health / retrain.',
-          rawMaxW: Math.round(rawMax),
-          corrMaxW: Math.round(corrMax * 10) / 10,
-          mlModel: mlResult.model
-        }));
-        correctedPv = pv;
-        mlActive = false;
-        mlSanityFallback = true;
-      } else {
-        mlSanityFallbackLogger.report(false, () => ({
-          rawMaxW: Math.round(rawMax),
-          corrMaxW: Math.round(corrMax * 10) / 10,
-          mlModel: mlResult.model
-        }));
-      }
-    } else {
-      mlSanityFallbackLogger.report(false);
-    }
-
-    // H-12 restored: use ML-corrected PV for Börsenchart solar overlay (not raw PV)
-    const solar = correctedPv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
+    const solar = pv.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
     const consumption = load.slots.map(s => ({ ts: new Date(s.start).getTime(), w: s.powerW || 0 }));
 
     // VRM PV forecast for Börsenchart overlay — independent of active model.
@@ -564,16 +492,13 @@ export function createForecastService(ctx) {
           if (liveSource && liveSource !== 'unknown') return liveSource;
           return cfg.forecast?.load?.model || 'sql_weekday';
         })(),
-        mlActive,
-        mlModel: mlActive ? (mlResult.model || null) : null,
-        mlSanityFallback,
         // Phase 07 Plan 07-04: ensembleWeights from inverse-MAE merge (REVIEWS H2 + D-C3).
         // Dashboard debug-overlay renders these per forecast cycle.
         ensembleWeights: state.forecast.pv.ensembleWeights ?? null
       },
       price: buildPriceSection(),
-      pv: capSlots(correctedPv),     // ML-corrected (or raw if no model), kWp-gekappt
-      rawPv: capSlots(pv),           // Pre-ML for comparison chart (D-22), kWp-gekappt
+      pv: capSlots(pv),              // kWp-gekappt
+      rawPv: capSlots(pv),           // gleiche Reihe wie pv — Feld bleibt für bestehende Abnehmer der API
       load,
       actual,              // D-B1: measured PV from energy_slots_15m (last 12h, in Watts) — UNGEKAPPT (Ist/Diagnose)
       pastForecast: capKey(pastForecast, 'powerW'),  // Historic pv_forecasts (chart overlay), kWp-gekappt
@@ -597,17 +522,12 @@ export function createForecastService(ctx) {
     store,
     pvnodeClient,
     // Phase 18-01c: expose accuracyTracker so /api/admin/accuracy-backfill can call
-    // evaluateAndWrite() over a date range to seed forecast_accuracy ahead of the
-    // 14-day retrain gate. Without this admin path the gate never opens on a fresh
-    // prod box because the tracker only writes one row per day at 02:00 UTC.
+    // evaluateAndWrite() over a date range to seed forecast_accuracy — the tracker
+    // itself only writes one row per day at 02:00 UTC.
     accuracyTracker,
     // T-CURTAIL: manual trigger + diagnostics for the observed-GHI backfill.
     runGhiBackfill: runOpportunisticGhiBackfill,
     buildForecastResponse,
-    // Phase 07 FORE-12 D-D2: load-forecast degradation visibility via /api/ml/status.
-    getLoadForecastState: () => loadForecast.getState?.() ?? {
-      source: 'unknown', status: 'unknown', consecutiveNonSfRuns: 0, lastUpdatedAt: null
-    },
     get forecastVersion() { return forecastVersion; }
   };
 }

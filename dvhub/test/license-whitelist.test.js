@@ -28,13 +28,6 @@ test('ALLOWED_FEATURES contains family-dashboard (Phase 17)', () => {
   assert.match(m[1], /'family-dashboard'/);
 });
 
-test('ALLOWED_FEATURES contains forecast-inspector-ml (Phase 19 Plan 19-04)', () => {
-  const src = fs.readFileSync(LICENSE_SRC, 'utf8');
-  const m = src.match(/const\s+ALLOWED_FEATURES\s*=\s*new\s+Set\(\[([\s\S]*?)\]\s*\)/);
-  assert.ok(m);
-  assert.match(m[1], /'forecast-inspector-ml'/);
-});
-
 test('ALLOWED_FEATURES contains forecast-inspector-eos (Phase 19 Plan 19-05)', () => {
   const src = fs.readFileSync(LICENSE_SRC, 'utf8');
   const m = src.match(/const\s+ALLOWED_FEATURES\s*=\s*new\s+Set\(\[([\s\S]*?)\]\s*\)/);

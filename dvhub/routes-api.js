@@ -1174,7 +1174,6 @@ export function createApiRoutes(ctx) {
     // kiosks see 403 too when license inactive (Option B per Phase 17 D-15 spirit).
     '/api/forecast/inspector/pv-providers',
     '/api/forecast/inspector/load',
-    '/api/forecast/inspector/ml-correction',
     '/api/forecast/inspector/eos',
     '/api/forecast/inspector/optimizer-cold',
     // Leitstand-Karte DV-EOS-Fahrplan aus dem Plan, den DVhub schon hat (read-only).
@@ -1227,7 +1226,7 @@ export function createApiRoutes(ctx) {
     // forecast — forecast reads + inspector
     ['/api/forecast', 'forecast'],
     ['/api/forecast/inspector/pv-providers', 'forecast'], ['/api/forecast/inspector/load', 'forecast'],
-    ['/api/forecast/inspector/ml-correction', 'forecast'], ['/api/forecast/inspector/eos', 'forecast'],
+    ['/api/forecast/inspector/eos', 'forecast'],
     ['/api/forecast/inspector/optimizer-cold', 'forecast'],
     ['/api/forecast/nowcast-track', 'forecast'],
     ['/api/forecast/ghi-coverage', 'forecast'],
@@ -7131,31 +7130,6 @@ export function createApiRoutes(ctx) {
       }
     }
 
-    // B3 — ML Shadow Correction (Pro; stubbed in Plan 19-01, body in Plan 19-04)
-    if (url.pathname === '/api/forecast/inspector/ml-correction' && req.method === 'GET') {
-      if (!requirePro(req, res, 'forecast-inspector-ml')) return;
-      if (!ctx.inspector) return json(res, 503, { ok: false, error: 'inspector_unavailable' });
-      const from = url.searchParams.get('from');
-      const to   = url.searchParams.get('to');
-      if (!from || !to || isNaN(Date.parse(from)) || isNaN(Date.parse(to))) {
-        return json(res, 400, { ok: false, error: 'invalid_window' });
-      }
-      const spanMs = Date.parse(to) - Date.parse(from);
-      if (spanMs < 0 || spanMs > 7 * 86_400_000) {
-        return json(res, 400, { ok: false, error: 'invalid_window' });
-      }
-      try {
-        const payload = await ctx.inspector.getMlCorrection({ from, to });
-        if (payload && payload.ok === false && payload.error === 'not_implemented') {
-          return json(res, 501, payload);
-        }
-        return json(res, 200, { ok: true, ...payload });
-      } catch (e) {
-        pushLog('inspector_ml_correction_error', { error: e.message });
-        return json(res, 500, { ok: false, error: 'inspector_failed' });
-      }
-    }
-
     // B4 — EOS Output (Pro; stubbed in Plan 19-01, body in Plan 19-05)
     if (url.pathname === '/api/forecast/inspector/eos' && req.method === 'GET') {
       if (!requirePro(req, res, 'forecast-inspector-eos')) return;
@@ -8927,105 +8901,6 @@ export function createApiRoutes(ctx) {
       return json(res, result.ok ? 200 : 400, result);
     }
 
-    // ── Phase 05: ML & Edge-AI endpoints ──────────────────────────────
-
-    // GET /api/ml/status — ML model status (auth required, contains config data)
-    // Phase 07 FORE-12 D-D2: response body includes `load_forecast: { source, status,
-    // consecutive_non_sf_runs, last_updated_at }` so operators can see when the
-    // StatsForecast pipeline degrades to SQL rollup / VRM / naive_constant.
-    // Source is populated by forecastService.getLoadForecastState() via ml-health.getStatus().
-    if (url.pathname === '/api/ml/status' && req.method === 'GET') {
-      if (!checkAuth(req, res)) return;
-      try {
-        const status = ctx.mlService?.getStatus() || {
-          pythonAvailable: false,
-          mlEnabled: false,
-          load_forecast: { source: 'unknown', status: 'unknown', consecutive_non_sf_runs: 0, last_updated_at: null }
-        };
-        return json(res, 200, status);
-      } catch (e) {
-        return json(res, 500, { error: e.message });
-      }
-    }
-
-    // GET /api/ml/accuracy — ML accuracy trend (auth required)
-    if (url.pathname === '/api/ml/accuracy' && req.method === 'GET') {
-      if (!checkAuth(req, res)) return;
-      try {
-        const trend = (await ctx.mlService?.getAccuracyTrend(30)) || [];
-        return json(res, 200, trend);
-      } catch (e) {
-        return json(res, 500, { error: e.message });
-      }
-    }
-
-    // Phase 07 MLAI-08 D-C1 + REVIEWS H10 + H12: async retrain pipeline.
-    // POST /api/ml/retrain — dual gate (isLanSafeRequest + checkAuth), then
-    //   1. REVIEWS H10 14-day precondition check — 409 on insufficient data,
-    //      BEFORE spawning a job so operators see the reason immediately
-    //   2. REVIEWS H12 async — ctx.mlRetrainJobs.startJob wraps
-    //      mlService.runRetrainEndpoint; return 202 with {jobId, statusUrl}
-    //      so the handler releases the HTTP socket immediately
-    if (url.pathname === '/api/ml/retrain' && req.method === 'POST') {
-      if (!checkAuth(req, res)) return;
-      try {
-        if (!ctx.mlService || !ctx.mlRetrainJobs) {
-          return json(res, 503, { error: 'ml_retrain_service_unavailable' });
-        }
-        // Plan 08-04 Task 2 Step 2: concurrency mutex pre-check. Without this
-        // a second POST during an active retrain would fork a second Python
-        // training process on the Pi — OOM + CPU starvation. Fast-fail 409
-        // before the 14-day gate so operators see the real reason.
-        const mutex = ctx.mlRetrainJobs.isRetrainInProgress?.() || { inProgress: false };
-        if (mutex.inProgress) {
-          return json(res, 409, {
-            error: 'retrain_in_progress',
-            jobId: mutex.jobId,
-            elapsedMs: mutex.elapsedMs,
-            statusUrl: mutex.jobId ? `/api/ml/retrain/status/${mutex.jobId}` : null,
-          });
-        }
-        // REVIEWS H10: 14-day precondition check — 409 fast-fail
-        const gate = await ctx.mlService.has14DaysOfAccuracyData?.();
-        if (gate && !gate.ok) {
-          return json(res, 409, {
-            error: 'insufficient_accuracy_data',
-            message: 'Need ≥14 days of rolling MAE data before retrain',
-            daysAvailable: gate.daysAvailable ?? 0,
-          });
-        }
-
-        // REVIEWS H12: async — return 202 immediately.
-        // Plan 08-04 Task 2: startJob now returns null if the mutex was grabbed
-        // between our pre-check and now (race window with a concurrent request).
-        const jobId = ctx.mlRetrainJobs.startJob(() => ctx.mlService.runRetrainEndpoint());
-        if (!jobId) {
-          return json(res, 409, { error: 'retrain_in_progress' });
-        }
-        return json(res, 202, {
-          jobId,
-          statusUrl: `/api/ml/retrain/status/${jobId}`,
-        });
-      } catch (e) {
-        return json(res, 500, { error: e.message });
-      }
-    }
-
-    // Phase 07 MLAI-08 REVIEWS H12: job status endpoint.
-    // GET /api/ml/retrain/status/:jobId — returns current state.
-    if (url.pathname.startsWith('/api/ml/retrain/status/') && req.method === 'GET') {
-      if (!checkAuth(req, res)) return;
-      try {
-        const jobId = url.pathname.substring('/api/ml/retrain/status/'.length);
-        if (!jobId) return json(res, 400, { error: 'jobId required' });
-        const status = ctx.mlRetrainJobs?.getStatus(jobId);
-        if (!status) return json(res, 404, { error: 'job not found', jobId });
-        return json(res, 200, { jobId, ...status });
-      } catch (e) {
-        return json(res, 500, { error: e.message });
-      }
-    }
-
     // Phase 07 FORE-10 / D-A5 (re-scoped): pvnode client-side quota counter exposure.
     // GET /api/forecast/pvnode/quota — read-only, auth-gated.
     if (url.pathname === '/api/forecast/pvnode/quota' && req.method === 'GET') {
@@ -9106,7 +8981,7 @@ export function createApiRoutes(ctx) {
       }
     }
 
-    // Phase 18-01c: forecast_accuracy backfill so the 14-day retrain gate can open.
+    // Phase 18-01c: forecast_accuracy backfill (seeds the accuracy history after install).
     // POST /api/admin/accuracy-backfill body: { days?: 14 } — runs the existing
     // evaluateAndWrite for each of the last N days (default 14). Idempotent: the
     // INSERT inside evaluateAndWrite is ON CONFLICT DO UPDATE keyed on

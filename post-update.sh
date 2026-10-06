@@ -374,13 +374,13 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   fi
 fi
 
-# ── 11. Forecast/ML-venv-Provisionierung / Retrofit (idempotent, entkoppelt) ──
-# Das Forecast+ML-Python-venv (/opt/dvhub/forecast-venv, pvlib/lightgbm/scikit-
-# learn/… aus python/requirements.lock) wird vom Installer angelegt. Boxen, die
+# ── 11. Forecast-venv-Provisionierung / Retrofit (idempotent, entkoppelt) ──
+# Das Forecast-Python-venv (/opt/dvhub/forecast-venv, pvlib/statsforecast/…
+# aus python/requirements.lock) wird vom Installer angelegt. Boxen, die
 # VOR der Forecast-venv-Einführung installiert wurden — oder deren Lockfile sich
 # geändert hat — werden hier nachgerüstet (Provisioning in der gemeinsamen
 # forecast-provision.sh, geteilt mit install.sh). Der pip-Lauf ist schwer
-# (numpy/scipy/pvlib/lightgbm) und darf den Service-Start NIE blockieren
+# (numpy/scipy/pvlib/statsforecast) und darf den Service-Start NIE blockieren
 # (ExecStartPre, TimeoutStartSec=120): fehlt/veraltet das venv, wird die
 # Provisionierung ENTKOPPELT über eine eigene transiente systemd-Unit gestartet
 # (überlebt dvhub-Restarts). Aktuelles venv = schneller Marker-Check (kein pip pro
@@ -400,7 +400,7 @@ if [[ -f "$INSTALL_DIR/forecast-provision.sh" && -f "$FC_LOCK" ]]; then
     echo "  Forecast-venv: fehlt/veraltet — starte entkoppelte Hintergrund-Provisionierung..."
     if command -v systemd-run >/dev/null 2>&1; then
       systemd-run --collect --quiet --unit "dvhub-forecast-provision" \
-        --description "DVhub Forecast/ML venv provisioning (retrofit)" \
+        --description "DVhub forecast venv provisioning (retrofit)" \
         --setenv=SERVICE_USER="$SERVICE_USER" \
         --setenv=INSTALL_DIR="$INSTALL_DIR" \
         --setenv=APP_DIR="$APP_DIR" \

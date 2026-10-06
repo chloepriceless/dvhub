@@ -3684,15 +3684,11 @@ function initSettingsPage() {
   // others — same behavior as the pre-mockup tab-switch but presented with
   // the new left-rail sidebar + section-head + field-pattern aesthetic.
   // Lazy inits still fire once at page-load: the panels exist in the DOM
-  // (just `hidden`), so initMlTab / initVpnTab / loadHealth can populate
+  // (just `hidden`), so initVpnTab / loadHealth can populate
   // them eagerly without waiting for the user to click.
   const tabContainer = document.querySelector('.settings-tabs');
   if (tabContainer) {
     setTimeout(function () {
-      // initMlTab() ausgesetzt 2026-06-21: der Machine-Learning-Tab (LightGBM) ist ausgeblendet
-      // (Feature nicht live, ml.mlEnabled=false) → kein /api/ml/status|accuracy-Fetch nötig.
-      // Wieder einkommentieren, wenn der ML-Tab reaktiviert wird.
-      // try { initMlTab(); } catch (_) {}
       try { initVpnTab(); } catch (_) { /* best-effort lazy-init */ }
       try { loadHealth().catch(function(){}); } catch (_) { /* best-effort lazy-init */ }
       if (typeof checkForUpdate === 'function') {
@@ -3761,47 +3757,10 @@ window.DVhubSettings = {
 };
 
 /* =========================================================================
-   Phase 05 — ML & AI Tab (D-27)
-   ========================================================================= */
-var mlMaeSparklineChart = null;
-// ML-Tab ausgesetzt 2026-06-21 (ml.mlEnabled=false, Aufruf in initSettingsPage
-// auskommentiert). initMlTab + mlTabInitialized bewusst behalten für die
-// spätere Reaktivierung — daher eslint-disable statt Löschen.
-// eslint-disable-next-line no-unused-vars
-var mlTabInitialized = false;
-
-// eslint-disable-next-line no-unused-vars
-function initMlTab() {
-  // Hash-jump is now handled by the page-load handler (scrollIntoView).
-  // initMlTab itself is called eagerly at page-load in the stacked-sections
-  // layout — no tab-click coupling. Always run the body.
-  if (!apiFetch) return;
-
-  apiFetch('/api/ml/status').then(function (res) {
-    if (!res.ok) throw new Error('ML status unavailable');
-    return res.json();
-  }).then(function (status) {
-    renderMlStatus(status);
-  }).catch(function () {
-    var banner = document.getElementById('mlModelType');
-    if (banner) banner.textContent = '--';
-  });
-
-  apiFetch('/api/ml/accuracy').then(function (res) {
-    if (!res.ok) throw new Error('ML accuracy unavailable');
-    return res.json();
-  }).then(function (data) {
-    renderMaeSparkline(Array.isArray(data) ? data : []);
-  }).catch(function () {
-    // Sparkline stays empty
-  });
-}
-
-/* =========================================================================
    Phase 19 — Forecast Inspector (initForecastTab)
    Polls /api/forecast/inspector/* every 30s while the tab is visible.
    License-aware: pre-fetches /api/license/state once and gates the 3 Pro
-   sections (B3/B4/B5) by toggling [data-pro-gated] + the .inspector-live-scaffold
+   sections (B4/B5) by toggling [data-pro-gated] + the .inspector-live-scaffold
    sibling. Stub renderers are placeholders that Plans 19-02..19-06 replace.
    The Pro-CTA click handler is delegated and idempotent.
    ========================================================================= */
@@ -4170,10 +4129,6 @@ function renderLoadInspector(payload) {
   var canvas = document.querySelector('canvas[data-inspector-spark="load-sf"]');
   renderInspectorSparkline(canvas, sparkData, '#1f8dff', 'rgba(31,141,255,0.10)');
 }
-// renderMlCorrectionInspector ENTFERNT 2026-05-22 — ML global deaktiviert
-// (cfg.ml.mlEnabled=false, siehe Memory [[ml-disabled-2026-05-22]]). Der
-// HTML-Block in settings.html ist auch raus. Re-Aktivierung über SEED-001
-// wenn Backlog #999.17 (lightgbm-Squash) gefixt ist.
 // Phase 19 Plan 19-05 — B4 EOS-Output Inspector renderer.
 //
 // Consumes the GET /api/forecast/inspector/eos envelope built by
@@ -4488,7 +4443,6 @@ function pollOnceForecastInspector() {
   }).catch(function () { setInspectorPollState('load', 'error'); });
 
   if (isInspectorProActive()) {
-    // B3 ML-Korrektur Inspector ENTFERNT 2026-05-22 (lightgbm squash, ML global off).
     apiFetch('/api/forecast/inspector/eos' + qs).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (j) {
       if (j && j.ok) { renderEosInspector(j); setInspectorPollState('eos', 'live'); }
       else if (j && j.error === 'not_implemented') { setInspectorPollState('eos', 'loading'); }
@@ -4575,195 +4529,6 @@ function initForecastTab() {
       }
     };
     document.addEventListener('visibilitychange', forecastInspectorVisibilityHandler);
-  }
-}
-
-function formatMlDate(ts) {
-  if (!ts) return '--';
-  try {
-    var d = new Date(ts);
-    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
-      ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '--';
-  }
-}
-
-function renderMlStatus(status) {
-  if (!status) return;
-
-  // Model Status card
-  var modelTypeEl = document.getElementById('mlModelType');
-  if (modelTypeEl) modelTypeEl.textContent = status.modelType || '--';
-
-  var modelVersionEl = document.getElementById('mlModelVersion');
-  if (modelVersionEl) modelVersionEl.textContent = 'v' + (status.modelVersion || 0);
-
-  var lastTrainEl = document.getElementById('mlLastTrain');
-  if (lastTrainEl) lastTrainEl.textContent = status.lastTraining ? formatMlDate(status.lastTraining) : '--';
-
-  var nextTrainEl = document.getElementById('mlNextTrain');
-  if (nextTrainEl) nextTrainEl.textContent = status.nextTraining ? formatMlDate(status.nextTraining) : '--';
-
-  // MAE values
-  var mae7dEl = document.getElementById('mlMae7d');
-  if (mae7dEl) mae7dEl.textContent = (status.mae != null) ? String(status.mae) : '--';
-
-  var mae30dEl = document.getElementById('mlMae30d');
-  if (mae30dEl) mae30dEl.textContent = (status.mae30d != null) ? String(status.mae30d) : (status.mae != null ? String(status.mae) : '--');
-
-  // Features (availability depends on the Python environment)
-  renderFeatures(status);
-
-  // Training Log
-  renderTrainingLog(status);
-
-}
-
-
-// Translate backend feature keys to German UI labels
-var FEATURE_LABELS = {
-  sql_load_forecast: 'SQL Lastvorhersage',
-  pvlib_batch: 'pvlib (Batch)',
-  statsforecast: 'StatsForecast',
-  ml_correction: 'ML-Korrektur (PV)',
-  ml_training: 'ML-Training (taeglich)',
-  statsforecast_mstl: 'StatsForecast MSTL',
-  persistent_python: 'Persistenter Python-Prozess'
-};
-
-function renderFeatures(status) {
-  var container = document.getElementById('mlFeatures');
-  if (!container) return;
-
-  var features = status.features || [];
-
-  if (features.length === 0) {
-    container.innerHTML = '<div class="detail-row"><span class="detail-key sa-empty">Keine Prognose-Module verfuegbar' + (status.pythonAvailable === false ? ' (Python-Umgebung nicht installiert)' : '') + '</span></div>';
-    return;
-  }
-
-  container.innerHTML = features.map(function (f) {
-    // Backend shape { feature, status, requires }
-    var key = f.feature || f.name || '';
-    var featureLabel = FEATURE_LABELS[key] || key || 'Unbekannt';
-    var rawStatus = f.status || 'inactive';
-
-    var label, dataStatus;
-    if (rawStatus === 'active') {
-      label = 'aktiv';
-      dataStatus = 'active';
-    } else if (rawStatus === 'unavailable') {
-      label = 'nicht verfuegbar (Python fehlt)';
-      dataStatus = 'inactive-locked';
-    } else if (rawStatus === 'inactive') {
-      label = 'inaktiv';
-      dataStatus = 'inactive';
-    } else if (rawStatus === 'collecting') {
-      label = 'sammelt Daten';
-      dataStatus = 'collecting';
-    } else {
-      label = rawStatus;
-      dataStatus = 'unknown';
-    }
-
-    return '<div class="detail-row">' +
-      '<span class="detail-key">' + escapeHtml(featureLabel) + '</span>' +
-      '<span class="detail-val sa-tier-label" data-status="' + dataStatus + '">' + escapeHtml(label) + '</span>' +
-      '</div>';
-  }).join('');
-}
-
-function renderTrainingLog(status) {
-  var container = document.getElementById('mlTrainingLog');
-  if (!container) return;
-
-  var log = status.trainingLog || [];
-  if (log.length === 0) {
-    container.innerHTML = '<div class="detail-row"><span class="detail-key sa-empty">Noch keine Trainingslaeufe</span></div>';
-    return;
-  }
-
-  // Show last 5 entries
-  var entries = log.slice(-5).reverse();
-  container.innerHTML = entries.map(function (entry) {
-    var ts = formatMlDate(entry.ts || entry.date);
-    var model = escapeHtml(entry.model || entry.modelType || '--');
-    var version = entry.version || entry.modelVersion || '?';
-    var mae = entry.mae != null ? entry.mae + 'W' : '--';
-    var result = entry.status || entry.result || 'OK';
-    var resultClass;
-
-    if (result === 'OK' || result === 'ok' || result === 'success') {
-      resultClass = 'sa-text-ok';
-    } else if (result === 'Rollback' || result === 'rollback') {
-      resultClass = 'sa-text-warn';
-    } else {
-      resultClass = 'sa-text-err';
-      result = 'Fehler';
-    }
-
-    return '<div class="detail-row">' +
-      '<span class="detail-key sa-ts-mono">' + escapeHtml(ts) + '</span>' +
-      '<span class="detail-val">' + model + ' v' + escapeHtml(String(version)) + ' &middot; MAE ' + escapeHtml(mae) +
-      ' <span class="sa-result ' + resultClass + '">' + escapeHtml(result) + '</span></span>' +
-      '</div>';
-  }).join('');
-}
-
-function renderMaeSparkline(data) {
-  var canvas = document.getElementById('mlMaeSparkline');
-  if (!canvas || typeof Chart === 'undefined') return;
-
-  var maeValues = data.map(function (d) { return d.mae || 0; });
-  var labels = data.map(function (d) { return d.date || ''; });
-
-  var config = {
-    type: 'line',
-    data: {
-      labels: labels,
-      datasets: [{
-        data: maeValues,
-        borderColor: '#5a6a8a',
-        backgroundColor: 'rgba(90, 106, 138, 0.08)',
-        borderWidth: 1.5,
-        pointRadius: 0,
-        pointHoverRadius: 3,
-        tension: 0.3,
-        fill: true
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: 'rgba(11, 15, 26, 0.95)',
-          titleColor: '#e8eaf0',
-          bodyColor: '#c8cdd8',
-          borderColor: 'rgba(99, 102, 241, 0.3)',
-          borderWidth: 1,
-          padding: 6,
-          cornerRadius: 4,
-          bodyFont: { family: 'JetBrains Mono', size: 10 },
-          callbacks: {
-            label: function (ctx) { return 'MAE: ' + ctx.parsed.y.toFixed(1) + ' W'; }
-          }
-        }
-      },
-      scales: {
-        x: { display: false },
-        y: { display: false }
-      }
-    }
-  };
-
-  if (mlMaeSparklineChart) {
-    mlMaeSparklineChart.data = config.data;
-    mlMaeSparklineChart.update('none');
-  } else {
-    mlMaeSparklineChart = new Chart(canvas, config);
   }
 }
 

@@ -1,29 +1,60 @@
 // python-bridge/index.js -- Node.js bridge for Python child_process invocation.
-// Available when the forecast venv is installed (isPythonAvailable); the RAM
+// Available when the forecast venv is installed (pythonEnvStatus); the RAM
 // tiers that used to gate it were removed 2026-10-03.
 // Spawns Python scripts via execFile, passes JSON via stdin, reads JSON from stdout.
 // Batch mode: spawn, compute, exit per invocation.
-// Persistent mode: JSON-RPC 2.0 over stdin/stdout with heartbeat and auto-respawn.
 
 import { spawn } from 'node:child_process';
-import { createInterface } from 'node:readline';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-// Plan 09-07: shared safeInterval wraps the heartbeat ticker so a thrown
-// health-check error never disables the loop. Awaits the async callback
-// inside the wrapper so a Promise rejection becomes a logged error tick.
-import { safeInterval } from '../safe-async.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const VENV_PYTHON = '/opt/dvhub/forecast-venv/bin/python3';
+const VENV_DIR = '/opt/dvhub/forecast-venv';
+const VENV_PYTHON = path.join(VENV_DIR, 'bin', 'python3');
 const MIN_FREE_MB_FOR_SPAWN = 500;
+// Top-level-Module, die die Skripte in scripts/ importieren. Der Interpreter
+// allein genügt nicht: scheitert der pip-Lauf von forecast-provision.sh (z. B.
+// Python zu alt für das Lockfile, kein PyPI), bleibt ein venv OHNE Pakete
+// zurück — im Feld sah das wie „Python vorhanden" aus und jedes Skript starb mit
+// ModuleNotFoundError (Kundenfall deye1, 2026-10-06).
+const REQUIRED_MODULES = ['numpy', 'pandas', 'pvlib', 'statsforecast'];
+const ENV_INCOMPLETE_LOG_DEDUP_MS = 60 * 60 * 1000;
 
-/** Is the forecast Python environment installed? (No venv → no pvlib/StatsForecast/ML.) */
-export function isPythonAvailable() {
-  return fs.existsSync(VENV_PYTHON);
+/**
+ * Zustand der Forecast-Python-Umgebung — reiner Dateisystem-Blick (kein Spawn),
+ * billig genug für jeden Aufruf.
+ * @returns {{ ok: boolean, reason: null|'no_venv'|'packages_missing', missing: string[] }}
+ */
+export function pythonEnvStatus(venvDir = VENV_DIR) {
+  if (!fs.existsSync(path.join(venvDir, 'bin', 'python3'))) {
+    return { ok: false, reason: 'no_venv', missing: [...REQUIRED_MODULES] };
+  }
+  let sitePackages = [];
+  try {
+    sitePackages = fs.readdirSync(path.join(venvDir, 'lib'))
+      .filter((d) => d.startsWith('python3'))
+      .map((d) => path.join(venvDir, 'lib', d, 'site-packages'));
+  } catch { /* kein lib/ → alles fehlt */ }
+  const missing = REQUIRED_MODULES.filter((m) => !sitePackages.some((sp) => fs.existsSync(path.join(sp, m))));
+  return missing.length
+    ? { ok: false, reason: 'packages_missing', missing }
+    : { ok: true, reason: null, missing: [] };
 }
+
+/**
+ * Was forecast-provision.sh zuletzt gemeldet hat (Grund eines Fehlschlags),
+ * oder null. Datei: $DV_DATA_DIR/forecast-venv-status.json.
+ */
+export function readProvisionStatus(dataDir = process.env.DV_DATA_DIR || '/var/lib/dvhub') {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dataDir, 'forecast-venv-status.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 
 /**
  * Create a Python bridge for invoking Python scripts as child processes.
@@ -33,6 +64,7 @@ export function isPythonAvailable() {
  */
 export function createPythonBridge(ctx) {
   const { pushLog } = ctx;
+  let envIncompleteLoggedAt = 0;
 
   /**
    * Call a Python script with JSON input data.
@@ -42,7 +74,7 @@ export function createPythonBridge(ctx) {
    * @param {object} inputData - JSON-serializable input data (passed via stdin)
    * @returns {Promise<object|null>} Parsed JSON output or null on error
    */
-  // Review 2026-06-10 (P2-10): callers (load-forecast 120s, ml-correction 30s)
+  // Review 2026-06-10 (P2-10): callers (load-forecast 120s)
   // always passed a third timeout argument that this signature silently
   // dropped — StatsForecast ran against the 60s default and timed out on
   // larger datasets. Honour the caller's timeout when provided.
@@ -59,13 +91,33 @@ export function createPythonBridge(ctx) {
       pushLog('python_not_installed', { expectedPath: VENV_PYTHON });
       return null;
     }
+    // Interpreter da, Pakete (noch) nicht: nicht spawnen — das gäbe pro Lauf nur
+    // einen ModuleNotFoundError-Traceback. Bei jedem Aufruf neu geprüft, damit
+    // die Bridge von selbst greift, sobald die Hintergrund-Provisionierung
+    // fertig ist; gemeldet höchstens 1×/h, mit dem Grund aus forecast-provision.sh.
+    const env = pythonEnvStatus();
+    if (ctx.state?.forecast) ctx.state.forecast.pythonAvailable = env.ok;
+    if (!env.ok) {
+      const now = Date.now();
+      if (now - envIncompleteLoggedAt > ENV_INCOMPLETE_LOG_DEDUP_MS) {
+        envIncompleteLoggedAt = now;
+        const prov = readProvisionStatus();
+        pushLog('python_env_incomplete', {
+          script: path.basename(scriptPath),
+          missing: env.missing,
+          provisionReason: prov?.reason ?? null,
+          provisionDetail: prov?.detail ?? null,
+          hint: 'sudo bash /opt/dvhub/forecast-provision.sh --force',
+        }, 'warn');
+      }
+      return null;
+    }
+    envIncompleteLoggedAt = 0;
 
     const stdinStr = JSON.stringify(inputData);
-    // ML training with 90+ days of data can take several minutes — use longer timeout for train scripts
-    const isTraining = path.basename(scriptPath) === 'ml_train.py';
     const timeoutMs = (Number.isFinite(Number(callerTimeoutMs)) && Number(callerTimeoutMs) > 0)
       ? Number(callerTimeoutMs)
-      : (isTraining ? 600_000 : 60_000);
+      : 60_000;
 
     // Use spawn with explicit pipes — execFile with `input` option was returning
     // non-zero exit codes silently on Debian 13 / Node 22 with no captured stderr.
@@ -147,7 +199,7 @@ export function createPythonBridge(ctx) {
 
   /**
    * Start the Python bridge.
-   * Phase 1: async no-op (persistent process: createPersistentBridge).
+   * Async no-op (batch mode has no long-running process).
    */
   async function start() {
     // No-op for Phase 1 batch mode
@@ -162,274 +214,4 @@ export function createPythonBridge(ctx) {
   }
 
   return { call, start, close };
-}
-
-/**
- * Create a persistent Python bridge using JSON-RPC 2.0 over stdin/stdout.
- * Used for the long-running Python ML server (only with ml.mlEnabled).
- * Per D-19, D-20: heartbeat, auto-respawn, timeout handling.
- *
- * @param {object} ctx - DI context { pushLog }
- * @param {object} options - { scriptPath: string }
- * @returns {{ call: Function, start: Function, close: Function }}
- */
-export function createPersistentBridge(ctx, { scriptPath }) {
-  const { pushLog } = ctx;
-
-  let proc = null;
-  let rl = null;
-  /** @type {Map<number, {resolve: Function, reject: Function, timer: ReturnType<typeof setTimeout>}>} */
-  const pending = new Map();
-  let nextId = 1;
-  let heartbeatTimer = null;
-  let heartbeatFailures = 0;
-  const MAX_HEARTBEAT_FAILURES = 3;
-  const HEARTBEAT_INTERVAL_MS = 60_000;
-  let closing = false;
-
-  // Respawn circuit breaker (08-12 — REPOLENS concurrency MEDIUM):
-  // If the persistent Python child keeps crashing (>= maxRestarts within windowMs)
-  // the model is broken — stop respawning and surface a fatal pushLog so ops can
-  // intervene. Without this we'd hammer the OS with fork() retries indefinitely.
-  // The breaker is per-bridge-instance (closure-scoped) to avoid cross-test leakage.
-  const PYTHON_BRIDGE_BREAKER = {
-    windowMs: 60_000,
-    maxRestarts: 5,
-    /** @type {number[]} timestamps of recent respawn-triggering exits */
-    restartTimestamps: [],
-    tripped: false,
-  };
-
-  /**
-   * Record a restart attempt and check the breaker.
-   * Returns true if a respawn is allowed; false if the breaker has tripped.
-   * Pushes a `python_bridge_breaker_tripped` log event on trip (the legacy
-   * `python_persistent_breaker_tripped` event is also emitted for
-   * back-compat with existing log consumers).
-   */
-  function recordRestart() {
-    const now = Date.now();
-    const b = PYTHON_BRIDGE_BREAKER;
-    // Drop timestamps older than the rolling window.
-    b.restartTimestamps = b.restartTimestamps.filter((t) => now - t < b.windowMs);
-    b.restartTimestamps.push(now);
-    if (b.restartTimestamps.length > b.maxRestarts) {
-      b.tripped = true;
-      pushLog('python_bridge_breaker_tripped', {
-        count: b.restartTimestamps.length,
-        windowMs: b.windowMs,
-        maxRestarts: b.maxRestarts,
-        reason: `>${b.maxRestarts} respawns in ${b.windowMs / 1000}s — stopped to avoid fork-loop`,
-      });
-      // Legacy event name kept for back-compat with existing dashboards / log scrapers.
-      pushLog('python_persistent_breaker_tripped', {
-        crashes: b.restartTimestamps.length,
-        windowMs: b.windowMs,
-        reason: `>${b.maxRestarts} respawns in ${b.windowMs / 1000}s — stopped to avoid fork-loop`,
-      });
-      return false;
-    }
-    return true;
-  }
-
-  /**
-   * Manually reset the breaker (e.g. via an admin endpoint). Clears the
-   * tripped flag and the restart history, then attempts a fresh spawn.
-   */
-  function resetBreaker() {
-    PYTHON_BRIDGE_BREAKER.tripped = false;
-    PYTHON_BRIDGE_BREAKER.restartTimestamps = [];
-    pushLog('python_bridge_breaker_reset', {});
-    if (!closing) spawnProcess();
-  }
-
-  /**
-   * Spawn the Python process and set up JSON-RPC line reader.
-   * Refuses to spawn when the circuit breaker has tripped — call resetBreaker()
-   * to clear the trip and try again.
-   */
-  function spawnProcess() {
-    if (PYTHON_BRIDGE_BREAKER.tripped) {
-      // Circuit open — do not respawn; only a manual reset clears it.
-      return;
-    }
-    if (!fs.existsSync(VENV_PYTHON)) {
-      pushLog('python_persistent_not_installed', { expectedPath: VENV_PYTHON });
-      return;
-    }
-
-    proc = spawn(VENV_PYTHON, [scriptPath], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    // Parse stdout line by line for JSON-RPC responses
-    rl = createInterface({ input: proc.stdout });
-    rl.on('line', (line) => {
-      try {
-        const msg = JSON.parse(line);
-        if (msg.id != null && pending.has(msg.id)) {
-          const entry = pending.get(msg.id);
-          pending.delete(msg.id);
-          clearTimeout(entry.timer);
-
-          if (msg.error) {
-            entry.reject(new Error(msg.error.message || 'JSON-RPC error'));
-          } else {
-            entry.resolve(msg.result);
-          }
-        }
-      } catch {
-        // Skip malformed lines
-      }
-    });
-
-    // Pipe stderr to pushLog
-    if (proc.stderr) {
-      const stderrRl = createInterface({ input: proc.stderr });
-      stderrRl.on('line', (text) => {
-        pushLog('python_stderr', { text });
-      });
-    }
-
-    // Handle process exit: reject all pending requests
-    proc.on('exit', (code) => {
-      for (const [, entry] of pending) {
-        clearTimeout(entry.timer);
-        entry.reject(new Error(`Python process exited with code ${code}`));
-      }
-      pending.clear();
-
-      if (!closing) {
-        pushLog('python_persistent_exit', { code });
-
-        // Run the breaker: returns false (and emits *_breaker_tripped) once we exceed
-        // maxRestarts inside windowMs. When the breaker trips we stop respawning until
-        // resetBreaker() is called.
-        if (!recordRestart()) {
-          return;
-        }
-
-        // Auto-respawn after 2s — defensive double-check on tripped + closing.
-        setTimeout(() => {
-          if (!closing && !PYTHON_BRIDGE_BREAKER.tripped) {
-            pushLog('python_persistent_respawn', { recent: PYTHON_BRIDGE_BREAKER.restartTimestamps.length });
-            spawnProcess();
-          }
-        }, 2000);
-      }
-    });
-
-    heartbeatFailures = 0;
-  }
-
-  /**
-   * Send a JSON-RPC 2.0 request to the persistent Python process.
-   * @param {string} method - RPC method name
-   * @param {object} params - Method parameters
-   * @param {number} timeoutMs - Timeout in milliseconds (default 30000)
-   * @returns {Promise<object>} Result from Python
-   */
-  function call(method, params, timeoutMs = 30000) {
-    return new Promise((resolve, reject) => {
-      if (!proc || !proc.stdin?.writable) {
-        reject(new Error('Persistent Python bridge not running'));
-        return;
-      }
-
-      const id = nextId++;
-      const timer = setTimeout(() => {
-        if (pending.has(id)) {
-          pending.delete(id);
-          reject(new Error(`JSON-RPC timeout after ${timeoutMs}ms for method ${method}`));
-        }
-      }, timeoutMs);
-
-      pending.set(id, { resolve, reject, timer });
-
-      const request = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
-      proc.stdin.write(request);
-    });
-  }
-
-  /**
-   * Start heartbeat monitor. Sends health check every 60s.
-   * After 3 consecutive failures, kills and respawns process.
-   */
-  function startHeartbeat() {
-    heartbeatTimer = safeInterval('python-bridge.heartbeat', async () => {
-      try {
-        await call('health', {}, 10_000);
-        heartbeatFailures = 0;
-      } catch {
-        heartbeatFailures++;
-        pushLog('python_heartbeat_fail', { failures: heartbeatFailures });
-        if (heartbeatFailures >= MAX_HEARTBEAT_FAILURES) {
-          pushLog('python_heartbeat_kill', { failures: heartbeatFailures });
-          if (proc) {
-            proc.kill('SIGTERM');
-          }
-          heartbeatFailures = 0;
-        }
-      }
-    }, HEARTBEAT_INTERVAL_MS);
-  }
-
-  /**
-   * Start the persistent bridge: spawn process, start heartbeat.
-   */
-  async function start() {
-    closing = false;
-    spawnProcess();
-    startHeartbeat();
-    pushLog('python_persistent_started', { scriptPath });
-  }
-
-  /**
-   * Close the persistent bridge: send shutdown, wait, then kill.
-   */
-  async function close() {
-    closing = true;
-
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
-    }
-
-    if (proc) {
-      try {
-        // Send shutdown command
-        const shutdownReq = JSON.stringify({ jsonrpc: '2.0', id: nextId++, method: 'shutdown', params: {} }) + '\n';
-        proc.stdin.write(shutdownReq);
-
-        // Wait up to 5 seconds for graceful exit
-        await new Promise((resolve) => {
-          const killTimer = setTimeout(() => {
-            if (proc) {
-              proc.kill('SIGTERM');
-            }
-            resolve();
-          }, 5000);
-
-          proc.on('exit', () => {
-            clearTimeout(killTimer);
-            resolve();
-          });
-        });
-      } catch {
-        if (proc) {
-          proc.kill('SIGTERM');
-        }
-      }
-      proc = null;
-    }
-
-    // Reject any remaining pending requests
-    for (const [, entry] of pending) {
-      clearTimeout(entry.timer);
-      entry.reject(new Error('Persistent bridge closed'));
-    }
-    pending.clear();
-  }
-
-  return { call, start, close, resetBreaker };
 }

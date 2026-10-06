@@ -403,13 +403,13 @@ npm install --omit=dev
 # node-runtime-provision.sh nach dem Schreiben der Unit) — NICHT mehr per setcap
 # an der node-Datei: die schaltet glibc in den secure mode und verhindert jemalloc.
 
-# --- Python venv for PV forecast + ML stack (shared forecast-provision.sh) ---
+# --- Python venv for the PV/load forecast (shared forecast-provision.sh) ---
 # The provisioning logic lives in the shared forecast-provision.sh (single source
 # of truth, mirrors eos-provision.sh / support-provision.sh) so install.sh and
 # post-update.sh never drift — boxes installed before the forecast-venv existed
-# get it retrofitted on update. Holds the full ML stack (pvlib, lightgbm,
-# scikit-learn, statsforecast, …) hash-pinned in python/requirements.lock and the
-# ml-models directory. The repo is already cloned to $INSTALL_DIR here, so
+# get it retrofitted on update. Holds the forecast stack (pvlib, statsforecast,
+# …) hash-pinned in python/requirements.lock. The repo is already cloned to
+# $INSTALL_DIR here, so
 # $INSTALL_DIR/forecast-provision.sh exists.
 install_forecast() {
   if [ ! -f "$INSTALL_DIR/forecast-provision.sh" ]; then

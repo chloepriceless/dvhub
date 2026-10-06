@@ -249,7 +249,7 @@ Der Großteil dieser Pakete (AWS SDK / Smithy) wird transitiv über
 
 ---
 
-## 2. Python-Pakete (server-seitige Prognose / ML)
+## 2. Python-Pakete (server-seitige Prognose)
 
 Wird über `dvhub/python/requirements.txt` in eine virtuelle Umgebung installiert
 (läuft als separater Prozess via `python-bridge`, nicht in den Node.js-Code
@@ -259,9 +259,6 @@ eingebunden).
 |---|---|---|
 | pvlib | BSD-3-Clause | pvlib python Developers |
 | pandas | BSD-3-Clause | AQR Capital Management, Lambda Foundry, PyData Development Team, pandas Development Team |
-| scikit-learn | BSD-3-Clause | The scikit-learn developers |
-| joblib | BSD-3-Clause | Gael Varoquaux and the joblib developers |
-| lightgbm | MIT | Microsoft Corporation |
 | statsforecast | Apache-2.0 | Nixtla |
 
 Alle permissiv — kommerzielle Nutzung und Weitergabe uneingeschränkt zulässig.

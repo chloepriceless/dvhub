@@ -36,7 +36,6 @@ function makeInspectorStub({ overrides = {} } = {}) {
   const def = {
     getPvProviders: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b1', window: { from, to } }),
     getLoad: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b2', window: { from, to } }),
-    getMlCorrection: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b3', window: { from, to } }),
     getEos: async ({ from, to }) => ({ ok: false, error: 'not_implemented', stub: 'b4', window: { from, to } }),
     getOptimizerCold: async () => ({ lastRunAt: '2026-05-19T10:00:00.000Z', daysSinceLastRun: 1.0, isStale: false, optimizer: 'internal' }),
   };
@@ -97,7 +96,7 @@ function mockCtx({ licenseActive = true, inspector = makeInspectorStub() } = {})
       // Mimic services/license/index.js: requirePro returns true when license active,
       // else writes 403 {error:'pro_required',feature:<whitelisted>} and returns false.
       requirePro(req, res, featureName) {
-        const ALLOWED = new Set(['family-dashboard','forecast-inspector-ml','forecast-inspector-eos']);
+        const ALLOWED = new Set(['family-dashboard','forecast-inspector-eos']);
         const feat = ALLOWED.has(featureName) ? featureName : 'unknown';
         if (licenseActive) return true;
         const body = JSON.stringify({ error: 'pro_required', feature: feat });
@@ -210,21 +209,6 @@ test('GET /load — 400 invalid_window on missing params', async () => {
 });
 
 // ───────── Pro-gated endpoints (B3, B4, B5) — 403 when license inactive ─────────
-
-test('GET /ml-correction — 403 pro_required when license inactive', async () => {
-  const ctx = mockCtx({ licenseActive: false });
-  const captured = await dispatch(ctx, makeReq('/api/forecast/inspector/ml-correction?from=2026-05-20T00:00:00Z&to=2026-05-21T00:00:00Z'));
-  assert.equal(captured.status, 403, `body=${captured.body}`);
-  const body = JSON.parse(captured.body);
-  assert.equal(body.error, 'pro_required');
-  assert.equal(body.feature, 'forecast-inspector-ml');
-});
-
-test('GET /ml-correction — 501 stub when license active', async () => {
-  const ctx = mockCtx({ licenseActive: true });
-  const captured = await dispatch(ctx, makeReq('/api/forecast/inspector/ml-correction?from=2026-05-20T00:00:00Z&to=2026-05-21T00:00:00Z'));
-  assert.equal(captured.status, 501);
-});
 
 test('GET /eos — 403 pro_required when license inactive', async () => {
   const ctx = mockCtx({ licenseActive: false });
