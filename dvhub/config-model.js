@@ -2695,6 +2695,22 @@ function buildFieldDefinitions() {
     },
     {
       section: 'schedule',
+      group: 'smaReserve',
+      groupLabel: 'Kleine Börsenautomatik · Reserve (wird nicht verkauft)',
+      groupDescription: 'Wie viel Akku für den eigenen Verbrauch über Nacht stehen bleibt. Ab Sonnenuntergang gilt die eingestellte Reserve; sie sinkt gleichmäßig bis eine Stunde nach Sonnenaufgang auf den Mindest-Ladestand des Wechselrichters — die Nacht ist dann überstanden, und die PV übernimmt. Unter die jeweils gültige Reserve entlädt die Automatik nicht: jede Verkaufsregel stoppt dort.',
+      groupOrder: 51,
+      groupCollapseWhenPro: true,
+      path: 'schedule.smallMarketAutomation.forecastSafetyMarginKwh',
+      label: 'Sicherheitspuffer der Prognose (kWh)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      step: 0.5,
+      visibleWhenPath: { path: 'schedule.smallMarketAutomation.forecastAware', equals: true },
+      help: 'Bleibt bei der Prognose-Anpassung zusätzlich zur errechneten Reserve im Akku, falls die Sonne schwächer kommt oder der Verbrauch höher ausfällt als vorhergesagt. Standard 1,5 kWh. Größerer Akku oder unsichere Prognose: höher setzen. 0 = kein Puffer.'
+    },
+    {
+      section: 'schedule',
       group: 'smaBattery',
       groupLabel: 'Kleine Börsenautomatik · Akku & Leistung',
       groupDescription: 'Aus Kapazität, Ladestand, Reserve und Wirkungsgrad rechnet die Automatik, wie viele Viertelstunden sie verkaufen kann.',
@@ -4051,6 +4067,7 @@ export function createDefaultConfig() {
       engine: 'milp',
         enabled: false,
         forecastAware: false,
+        forecastSafetyMarginKwh: 1.5,
         searchWindowStart: '14:00',
         searchWindowEnd: '09:00',
         targetSlotCount: null,
@@ -5537,8 +5554,8 @@ const SETTINGS_AREAS = [
     label: 'System',
     icon: '◆',
     description: 'Zeitzone, Datenbank und Sicherung, Zugang und Fernwartung.',
-    groups: ['scheduleTech', 'dbBackup', 'historyImport', 'security', 'support'],
-    advanced: ['database', 'general', 'accessControl', 'monitoring', 'scan'],
+    groups: ['scheduleTech', 'dbBackup', 'security'],
+    advanced: ['historyImport', 'support', 'database', 'general', 'accessControl', 'monitoring', 'scan'],
     editors: ['historyImport']
   }
 ];

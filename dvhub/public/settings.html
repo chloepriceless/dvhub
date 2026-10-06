@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/settings.css?v=20260629-install-btn-conditional">
-  <link rel="stylesheet" href="/settings-redesign.css?v=20261006-status">
+  <link rel="stylesheet" href="/settings-redesign.css?v=20261006-final2">
   <script src="/theme.js"></script>
 </head>
 <body data-screen-label="Einstellungen">
@@ -132,6 +132,7 @@
             <button class="settings-tab" data-tab="grid" type="button"><span class="sa-ico">&sect;</span>Netz &amp; Recht</button>
             <button class="settings-tab" data-tab="prognosis" type="button"><span class="sa-ico">&#9729;</span>Prognosen</button>
             <button class="settings-tab" data-tab="sys" type="button"><span class="sa-ico">&#9670;</span>System</button>
+            <button class="settings-tab" data-tab="shares" type="button"><span class="sa-ico">&#8644;</span>Freigaben</button>
 
             <div class="sa-nav-group">Diagnose &amp; Dienste</div>
             <button class="settings-tab" data-tab="system" type="button"><span class="sa-ico">&#9673;</span>Status</button>
@@ -179,9 +180,16 @@
             <section id="tab-sys" class="settings-tab-panel" hidden>
               <header class="sa-section-head"><h2>System</h2><p class="sub" id="areaSub-sys"></p></header>
               <div id="areaGrid-sys" class="config-grid sa-area-grid" data-area="sys"></div>
+              <h3 class="sa-subhead">Werkzeuge</h3>
+              <p class="sa-subhead-text">Zugangstoken, Sicherung der Konfiguration, Updates und Neustart, Import der Historie, Diagnose-Paket.</p>
+              <div id="areaExtra-sys" class="config-grid sa-legacy-grid"></div>
+            </section>
+            <section id="tab-shares" class="settings-tab-panel" hidden>
+              <header class="sa-section-head"><h2>Freigaben</h2><p class="sub">Wer von au&szlig;en auf die Anlage zugreifen darf und welche Daten sie nach au&szlig;en gibt: Installateur, Fern-Support, Datenspende, Ortsnetz, Werte von Home Assistant oder Loxone. Alles ist freiwillig und jederzeit abschaltbar.</p></header>
+              <div id="areaExtra-shares" class="config-grid sa-legacy-grid"></div>
             </section>
             <section id="tab-system" class="settings-tab-panel" hidden>
-              <header class="sa-section-head"><h2>Status</h2><p class="sub">Health, Updates, Dienst, Config, Historie, API, Diagnose.</p></header>
+              <header class="sa-section-head"><h2>Status</h2><p class="sub">Zustand der Anlage auf einen Blick: Pr&uuml;fungen, Schnittstellen, DV-Signale, Modbus, Zeitplan.</p></header>
           <div class="config-grid">
 
             <!-- Systemstatus -->
@@ -1010,7 +1018,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/settings.js?v=20261006-mode2"></script>
+  <script src="/settings.js?v=20261006-final"></script>
   <script src="/tools.js?v=20261001-ortsnetz"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>

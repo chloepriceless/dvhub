@@ -8655,7 +8655,7 @@ export function createApiRoutes(ctx) {
         'enabled', 'searchWindowStart', 'searchWindowEnd', 'targetSlotCount',
         'maxDischargeW', 'batteryCapacityKwh', 'inverterEfficiencyPct',
         'minSocPct', 'aggressivePremiumPct', 'location', 'stages',
-        'engine', 'forecastAware'
+        'engine', 'forecastAware', 'forecastSafetyMarginKwh'
       ]);
       const filteredBody = Object.fromEntries(
         Object.entries(body).filter(([key]) => allowedKeys.has(key))

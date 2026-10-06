@@ -811,6 +811,7 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .sma-group-title:first-of-type { margin-top:4px; }
 .sma-note { margin:6px 0 2px; font-size:12px; line-height:1.5; color:var(--muted, #8fa3b8); max-width:90ch; }
 .sma-note[hidden] { display:none; }
+.sma-grid .settings-field[hidden] { display:none; }
 .sma-grid .settings-field.sma-check { flex-direction:row; align-items:center; gap:8px; }
 .sma-grid .settings-field.sma-check input { width:auto; }
 

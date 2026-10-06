@@ -3695,6 +3695,12 @@ function readAutomationMinSocPct() {
   return raw === '' || raw == null || !Number.isFinite(value) ? 30 : Math.min(100, Math.max(0, value));
 }
 
+function readAutomationSafetyMargin() {
+  const raw = document.getElementById('automationSafetyMargin')?.value;
+  const value = Number(raw);
+  return raw === '' || raw == null || !Number.isFinite(value) || value < 0 ? 1.5 : Math.min(100, value);
+}
+
 // Klartext zur Reserve: was bleibt im Akku, wohin sinkt die Grenze über Nacht,
 // und was die Prognose-Anpassung gerade daraus macht.
 function renderAutomationReserveNote() {
@@ -3703,13 +3709,15 @@ function renderAutomationReserveNote() {
   const reserve = readAutomationMinSocPct();
   const floor = automationGlobalMinSocPct;
   const aware = document.getElementById('automationForecastAware')?.checked === true;
+  const marginWrap = document.getElementById('automationSafetyMarginWrap');
+  if (marginWrap) marginWrap.hidden = !aware;
   const parts = [];
   parts.push(`Verkauft wird nur, was über der Reserve liegt: ${reserve} % bei Sonnenuntergang`
     + (floor != null && floor < reserve
       ? `, gleichmäßig sinkend bis eine Stunde nach Sonnenaufgang auf ${floor} % (Mindest-Ladestand des Wechselrichters).`
       : '.'));
   parts.push(aware
-    ? 'Prognose-Anpassung an: reicht die Sonne morgen, darf mehr verkauft werden; reicht die Energie nicht, wird nichts verkauft. Jede Verkaufsregel stoppt weiterhin an der eingestellten Reserve.'
+    ? `Prognose-Anpassung an: reicht die Sonne morgen, darf mehr verkauft werden; reicht die Energie nicht, wird nichts verkauft. ${readAutomationSafetyMargin()} kWh bleiben dabei als Sicherheitspuffer zusätzlich im Akku. Jede Verkaufsregel stoppt weiterhin an der eingestellten Reserve.`
     : 'Prognose-Anpassung aus: es gilt immer die eingestellte Reserve.');
   const plan = automationLastPlan;
   if (plan && plan.effectiveMinSocPct != null) {
@@ -3736,6 +3744,7 @@ async function loadAutomationConfig() {
     if (el('automationMaxDischargeW')) el('automationMaxDischargeW').value = c.maxDischargeW ?? -12000;
     if (el('automationMinSocPct')) el('automationMinSocPct').value = c.minSocPct ?? 30;
     if (el('automationForecastAware')) el('automationForecastAware').checked = c.forecastAware === true;
+    if (el('automationSafetyMargin')) el('automationSafetyMargin').value = c.forecastSafetyMarginKwh ?? 1.5;
     automationGlobalMinSocPct = Number.isFinite(Number(data.globalMinSocPct)) ? Number(data.globalMinSocPct) : null;
     if (el('automationOptimizerNote')) el('automationOptimizerNote').hidden = data.optimizerEnabled !== true;
     // Betriebsart wird in den Einstellungen gestellt (Aus · Kleine Börsenautomatik
@@ -3773,6 +3782,7 @@ async function saveAutomationConfig() {
     // 0 ist ein gültiger Wert (keine Reserve) — nur ein leeres Feld fällt auf 30 zurück.
     minSocPct: readAutomationMinSocPct(),
     forecastAware: el('automationForecastAware')?.checked === true,
+    forecastSafetyMarginKwh: readAutomationSafetyMargin(),
     stages: serializeAutomationStages(automationStagesDraft)
   };
 
@@ -4042,6 +4052,7 @@ function initDashboard() {
   document.getElementById('saveAutomationConfigBtn')?.addEventListener('click', saveAutomationConfig);
   document.getElementById('automationMinSocPct')?.addEventListener('input', renderAutomationReserveNote);
   document.getElementById('automationForecastAware')?.addEventListener('change', renderAutomationReserveNote);
+  document.getElementById('automationSafetyMargin')?.addEventListener('input', renderAutomationReserveNote);
 
   // SMA <details> summary contains the Aktiv toggle — stop the click from
   // bubbling so toggling 'Aktiv' doesn't also collapse/expand the panel.

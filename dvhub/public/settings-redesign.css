@@ -294,20 +294,20 @@
    ─────────────────────────────────────────────────────────────────────────── */
 
 /* ── Section-Kopf (h2 + Sub) ─────────────────────────────────────────────── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .sa-section-head { margin-bottom: var(--gap-3); }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .sa-section-head h2 {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .sa-section-head { margin-bottom: var(--gap-3); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .sa-section-head h2 {
   font-family: var(--f-brand);
   font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em;
   color: var(--text); margin: 0 0 4px;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .sa-section-head .sub {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .sa-section-head .sub {
   font-size: 0.85rem; color: var(--text-dim); margin: 0; line-height: 1.5;
 }
 
 /* ── Karten-Container (config-group in system/forecast/vpn, .card in eos) ──── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .eos-sync-panel.card,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .eos-iframe-wrap {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .eos-sync-panel.card,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .eos-iframe-wrap {
   background: linear-gradient(180deg, var(--glass-2), var(--glass));
   border: 1px solid var(--glass-brd);
   border-radius: var(--r-lg);
@@ -316,11 +316,11 @@
   backdrop-filter: blur(var(--glass-blur)) saturate(140%);
   padding: 16px 18px;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .eos-iframe-wrap { padding: 6px; overflow: hidden; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) #eosdashFrame { border-radius: var(--r-md); border: 0; display: block; width: 100%; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .eos-iframe-wrap { padding: 6px; overflow: hidden; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) #eosdashFrame { border-radius: var(--r-md); border: 0; display: block; width: 100%; }
 
 /* Karten-Titel (Kicker) — brand-Font, kein Uppercase-Alt-Look */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group-kicker {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group-kicker {
   font-family: var(--f-brand);
   font-size: 0.98rem; font-weight: 700; letter-spacing: -0.01em;
   color: var(--text); margin: 0 0 12px; padding: 0;
@@ -328,27 +328,27 @@
 }
 
 /* ── Info-/Meta-Texte ─────────────────────────────────────────────────────── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .svc-meta,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .svc-meta-tight,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .svc-meta,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .svc-meta-tight,
 :is(#tab-forecast) .config-group > .sub {
   font-size: 0.83rem; color: var(--text-dim); line-height: 1.5;
 }
 
 /* ── Zeilen (nur Optik, Layout aus settings.css bleibt) ──────────────────── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-label {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row-label {
   font-size: 0.82rem; font-weight: 600; color: var(--text-2);
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-value { color: var(--text); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row-value { color: var(--text); }
 
 /* ── Eingaben (alle Feld-Typen, nicht nur .config-input/.config-select) ────── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-input,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-select,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) select,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) textarea,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="text"],
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="number"],
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="password"],
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="datetime-local"] {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-input,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-select,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) select,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) textarea,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input[type="text"],
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input[type="number"],
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input[type="password"],
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input[type="datetime-local"] {
   /* Overflow-Fix (Smartphone): Feld nimmt volle Spaltenbreite, Text wird nicht
      mehr abgeschnitten (min-width:0 löst den Flex-Shrink-Deadlock). */
   width: 100%;
@@ -362,57 +362,57 @@
   padding: 9px 12px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-input:focus,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-select:focus,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) select:focus,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) textarea:focus,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input:focus {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-input:focus,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-select:focus,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) select:focus,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) textarea:focus,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input:focus {
   outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px var(--accent-glow);
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-input::placeholder { color: var(--text-dim); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-input::placeholder { color: var(--text-dim); }
 /* Rohe Checkboxen nur akzentuieren + auf natürlicher Größe halten (nicht 100% breit) */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="checkbox"],
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="radio"] {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input[type="checkbox"],
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input[type="radio"] {
   accent-color: var(--green); width: auto; min-width: 0; flex: 0 0 auto;
 }
 
 /* ── Statischer Wert in einer Zeile (z. B. „15 Minuten") ─────────────────── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-value {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row-value {
   font-family: var(--f-body); font-weight: 600; color: var(--text);
   min-width: 0; overflow: hidden; text-overflow: ellipsis;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-stack-small { color: var(--text-dim); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row-stack-small { color: var(--text-dim); }
 
 /* ── Mobile: Eingabe-Zeilen stapeln (Label oben, Feld darunter voll breit) ──
    Behebt abgeschnittene Dropdowns/Datumsfelder auf dem Smartphone. Nur Zeilen
    OHNE Checkbox (die bleiben Label ↔ Switch nebeneinander). ─────────────────── */
 @media (max-width: 620px) {
-  :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row:not(:has(input[type="checkbox"])) {
+  :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row:not(:has(input[type="checkbox"])) {
     flex-direction: column;
     align-items: stretch;
     gap: 6px;
   }
-  :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row:not(:has(input[type="checkbox"])) .config-row-label { margin-bottom: 0; }
+  :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row:not(:has(input[type="checkbox"])) .config-row-label { margin-bottom: 0; }
 }
 
 /* ── Banner (info/warn/error) ─────────────────────────────────────────────── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-banner {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-banner {
   border-radius: var(--r-md);
   border: 1px solid var(--glass-brd);
   background: var(--glass-2);
   color: var(--text-2);
   padding: 10px 12px; font-size: 0.83rem; line-height: 1.5;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-banner.warn {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-banner.warn {
   border-color: color-mix(in srgb, var(--orange, #ff9f43) 55%, transparent);
   color: var(--orange, #ff9f43);
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-banner.error {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-banner.error {
   border-color: var(--red); color: var(--red);
 }
 
 /* ── Buttons (Konvention A: btn-primary/-ghost/-danger  UND  B: .btn.primary/.ghost) ── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn {
   font-family: var(--f-body); font-size: 0.85rem; font-weight: 600;
   color: var(--text);
   background: var(--glass-2);
@@ -421,32 +421,32 @@
   padding: 8px 14px; cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-small,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.sm { padding: 6px 11px; font-size: 0.8rem; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn:hover { border-color: var(--cyan); background: var(--glass); }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-primary,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.primary {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.btn-small,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.sm { padding: 6px 11px; font-size: 0.8rem; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn:hover { border-color: var(--cyan); background: var(--glass); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.btn-primary,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.primary {
   background: var(--cyan); border-color: var(--cyan); color: #04101f;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-primary:hover,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.primary:hover { background: var(--cyan); filter: brightness(1.08); }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-danger,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.danger { border-color: var(--red); color: var(--red); }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.btn-danger:hover,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .btn.danger:hover { background: color-mix(in srgb, var(--red) 12%, transparent); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.btn-primary:hover,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.primary:hover { background: var(--cyan); filter: brightness(1.08); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.btn-danger,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.danger { border-color: var(--red); color: var(--red); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.btn-danger:hover,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .btn.danger:hover { background: color-mix(in srgb, var(--red) 12%, transparent); }
 
 /* ── Stat-Cards (Forecast-Inspector-Summary, EOS) ─────────────────────────── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .stat-card {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .stat-card {
   background: var(--glass-2);
   border: 1px solid var(--glass-brd);
   border-radius: var(--r-md);
   padding: 10px 12px;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .stat-label {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .stat-label {
   font-family: var(--f-mono); font-size: 0.66rem; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--text-dim);
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .stat-val {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .stat-val {
   font-family: var(--f-brand); font-size: 1.05rem; font-weight: 700; color: var(--text);
 }
 
@@ -489,12 +489,12 @@
 }
 
 /* ── Tooltips über Karten-/Tabellen-Grenzen (wie bei den Config-Tabs) ─────── */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) table,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) td { overflow: visible; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) [data-tooltip]::after,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) [data-tooltip]::before { z-index: 9999; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) table,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) td { overflow: visible; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) [data-tooltip]::after,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) [data-tooltip]::before { z-index: 9999; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    TEIL 3 — Einstellungs-Shell / Menü (Nav-Rail + Seitenkopf) im ob-Look.
@@ -737,74 +737,85 @@
    Balken gezogen, Karten paarweise auf gleiche Höhe gestreckt.
    ─────────────────────────────────────────────────────────────────────────── */
 /* Eine Kante: Überschrift und Inhalt beginnen an derselben Linie. */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group[data-accent]::before { display: none; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group { padding: 18px 20px 16px; margin: 0; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group + .config-group { margin-top: 0; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group-kicker {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group[data-accent]::before { display: none; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group { padding: 18px 20px 16px; margin: 0; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group + .config-group { margin-top: 0; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group-kicker {
   padding: 0 0 12px; margin: 0 0 14px;
   border-bottom: 1px solid var(--glass-brd);
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row { padding: 7px 0; gap: 12px; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-grid { padding: 0; gap: 8px; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group .svc-meta,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group .svc-meta-tight { padding: 2px 0 6px; margin: 0; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group .svc-actions-row,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group .svc-actions-row-center { padding: 10px 0 2px; gap: 8px; flex-wrap: wrap; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group .config-banner,
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group .sa-banner-inline { margin: 6px 0 10px; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group > :last-child { margin-bottom: 0; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row { padding: 7px 0; gap: 12px; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row-grid { padding: 0; gap: 8px; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group .svc-meta,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group .svc-meta-tight { padding: 2px 0 6px; margin: 0; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group .svc-actions-row,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group .svc-actions-row-center { padding: 10px 0 2px; gap: 8px; flex-wrap: wrap; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group .config-banner,
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group .sa-banner-inline { margin: 6px 0 10px; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group > :last-child { margin-bottom: 0; }
 
 /* Karten nicht paarweise strecken — jede so hoch wie ihr Inhalt. */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-grid { align-items: start; gap: 14px; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-grid { align-items: start; gap: 14px; }
 
 /* Schalter: feste Pillen-Größe wie in den Bereichen (nicht auf Zeilenbreite gezogen). */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row input[type="checkbox"] { width: 44px; height: 20px; flex: 0 0 auto; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row input[type="checkbox"] { width: 44px; height: 20px; flex: 0 0 auto; }
 /* Ankreuzlisten (mehrere Kästchen in einer Zeile) bleiben echte Kästchen. */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-stack > label { display: flex; align-items: center; gap: 8px; font-size: 0.86rem; color: var(--text); cursor: pointer; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-stack > label > input[type="checkbox"] {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row-stack > label { display: flex; align-items: center; gap: 8px; font-size: 0.86rem; color: var(--text); cursor: pointer; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row-stack > label > input[type="checkbox"] {
   appearance: auto; -webkit-appearance: checkbox; width: 16px; height: 16px;
   background: none; border: 0; border-radius: 3px; accent-color: var(--cyan);
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row:has(> .config-row-stack > label) { align-items: flex-start; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row:has(> .config-row-stack > label) { align-items: flex-start; }
 
 /* Prüfkacheln: Bezeichnung über dem Wert, mit Luft. */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .summary-card {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .summary-card {
   display: flex; flex-direction: column; gap: 4px; padding: 10px 12px;
   border: 1px solid var(--glass-brd); border-radius: var(--r-md); background: var(--glass);
   min-width: 0;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .summary-card strong { font-family: var(--f-mono, var(--f-body)); font-size: 0.66rem; letter-spacing: 0.14em; color: var(--cyan); }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .summary-card span { font-size: 0.82rem; color: var(--text-2); overflow-wrap: anywhere; line-height: 1.4; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .summary-card strong { font-family: var(--f-mono, var(--f-body)); font-size: 0.66rem; letter-spacing: 0.14em; color: var(--cyan); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .summary-card span { font-size: 0.82rem; color: var(--text-2); overflow-wrap: anywhere; line-height: 1.4; }
 
 /* Fließtext ist Fließtext — Festbreitenschrift nur für Kennungen. */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-group p { font-family: var(--f-body); }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .token-reveal-row { margin: 4px 0 8px; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-group p { font-family: var(--f-body); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .token-reveal-row { margin: 4px 0 8px; }
 
 /* Zeilen mit Bezeichnung links und Feld + Hinweis rechts: feste Spalten, damit
    Schalter und Felder in einer Karte untereinander fluchten. */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row:has(> .config-row-stack) {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row:has(> .config-row-stack) {
   display: grid; grid-template-columns: minmax(150px, 38%) minmax(0, 1fr);
   align-items: start; column-gap: 16px;
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row:has(> .config-row-stack) > .config-row-label { padding-top: 2px; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-stack { gap: 6px; min-width: 0; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row-stack-small { font-size: 0.74rem; line-height: 1.4; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .installer-portal-list { font-family: var(--f-body); font-size: 0.83rem; line-height: 1.5; color: var(--text-dim); min-height: 0; padding: 4px 0; white-space: normal; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row:has(> .config-row-stack) > .config-row-label { padding-top: 2px; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row-stack { gap: 6px; min-width: 0; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row-stack-small { font-size: 0.74rem; line-height: 1.4; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .installer-portal-list { font-family: var(--f-body); font-size: 0.83rem; line-height: 1.5; color: var(--text-dim); min-height: 0; padding: 4px 0; white-space: normal; }
 @media (max-width: 620px) {
-  :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .config-row:has(> .config-row-stack) { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
+  :is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .config-row:has(> .config-row-stack) { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
 }
 
 /* Leerer Zustand der Installateur-Liste: Hinweistext, kein 220 px hoher
    Festbreiten-Block (die Klasse ist für Zeilen in einer Reihe gedacht). */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) .installer-portal-list > .installer-portal-meta {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) .installer-portal-list > .installer-portal-meta {
   flex: 0 0 auto; font-family: var(--f-body); font-size: 0.83rem; line-height: 1.5; opacity: 1; color: var(--text-dim);
 }
 /* Datei-Auswahl im Stil der übrigen Knöpfe. */
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="file"] { font-family: var(--f-body); font-size: 0.8rem; color: var(--text-dim); max-width: 100%; }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="file"]::file-selector-button {
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input[type="file"] { font-family: var(--f-body); font-size: 0.8rem; color: var(--text-dim); max-width: 100%; }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input[type="file"]::file-selector-button {
   margin-right: 10px; padding: 6px 12px; cursor: pointer;
   font-family: var(--f-mono, var(--f-body)); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase;
   color: var(--text); background: var(--glass-2);
   border: 1px solid var(--glass-brd); border-radius: var(--r-md);
 }
-:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn) input[type="file"]::file-selector-button:hover { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
+:is(#tab-system, #tab-forecast, #tab-eos, #tab-vpn, #tab-shares, #areaExtra-sys) input[type="file"]::file-selector-button:hover { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
+
+/* Zwischenüberschrift innerhalb eines Bereichs (System → Wartung). */
+.settings-aurora .sa-subhead {
+  margin: 26px 0 4px; font-family: var(--f-brand); font-size: 1rem; font-weight: 700; color: var(--text);
+}
+.settings-aurora .sa-subhead-text { margin: 0 0 14px; font-size: 0.85rem; color: var(--text-dim); line-height: 1.5; }
+@media (min-width: 901px) {
+  .settings-aurora .sa-legacy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.settings-aurora .sa-legacy-grid { align-items: start; gap: 14px; }

@@ -129,10 +129,13 @@ test('Kleine Börsenautomatik: eigener Abschnitt für die Reserve; alles sichtba
   assert.equal(by('forecastAware').group, 'smaReserve');
   assert.match(by('minSocPct').groupLabel, /Reserve \(wird nicht verkauft\)/);
   // Immer sichtbar: die Seite hebt je nach Betriebsart hervor, statt zu verstecken.
-  for (const f of fields) {
+  // Einzige Ausnahme: der Sicherheitspuffer gehört zur Prognose-Anpassung.
+  for (const f of fields.filter((x) => x !== by('forecastSafetyMarginKwh'))) {
     assert.equal(f.visibleWhenPath, undefined, f.path);
     assert.equal(f.visibleWhenAny, undefined, f.path);
   }
+  assert.deepEqual(by('forecastSafetyMarginKwh').visibleWhenPath, { path: 'schedule.smallMarketAutomation.forecastAware', equals: true });
+  assert.equal(by('forecastSafetyMarginKwh').group, 'smaReserve');
   const groups = [...new Set(fields.map((f) => f.group))];
   assert.deepEqual(groups, ['smallMarketAutomation', 'smaReserve', 'smaBattery', 'smaLocation', 'smaAdvanced']);
 });

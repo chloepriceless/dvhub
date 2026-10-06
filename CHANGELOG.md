@@ -59,6 +59,22 @@ verweist hierher.
 
 ### Neu
 
+- **Sicherheitspuffer der Prognose-Anpassung einstellbar.** Die Kleine Börsenautomatik ließ bei
+  „Reserve nach Prognose anpassen“ fest 1,5 kWh zusätzlich im Akku — für einen 10-kWh-Akku
+  etwas anderes als für einen mit 60 kWh. Der Wert steht jetzt im Abschnitt „Reserve“
+  (Einstellungen und Leitstand), sobald die Prognose-Anpassung an ist. Standard bleibt 1,5 kWh.
+- **Einstellungen: Karten offen, Status aufgeräumt, neuer Bereich „Freigaben“.** Die Karten eines
+  Bereichs stehen beim ersten Öffnen aufgeklappt; nur „Erweitert“ bleibt zu. Die Sammelseite
+  „Status“ ist aufgeteilt: Zugangstoken, Konfiguration sichern & einspielen, Updates, Neustart,
+  Historie importieren und Diagnose-Paket stehen unter **System → Werkzeuge**;
+  Installateurs-Portal, Fern-Support, Datenspende, Ortsnetz-Auslastung und der Eingang für Home
+  Assistant / Loxone im neuen Bereich **Freigaben**. „Status“ zeigt nur noch den Zustand:
+  Prüfungen, API, DV-Signale, Modbus, Zeitplan.
+- **Standort nur noch einmal.** Der Standort unter „Meine Anlage“ gilt auch für die Kleine
+  Börsenautomatik (Sonnenauf- und -untergang); ihre eigenen Standort-Felder erscheinen nur noch,
+  solange der Anlagen-Standort fehlt. Wer die Kleine Börsenautomatik zum ersten Mal einschaltet,
+  bekommt Akku-Kapazität und Entladeleistung aus „Meine Anlage“ vorgeschlagen statt der
+  Werkswerte (30 kWh, 12 kW). Bereits gespeicherte Werte bleiben unverändert.
 - **Betriebsart-Schalter mit drei Stellungen: Aus · Kleine Börsenautomatik · EOS.** Oben im
   Bereich „Betriebsart“ steht ein Schieber statt zweier unabhängiger Schalter („Optimierung
   aktiv“, „Kleine Börsenautomatik aktiv“), die sich auch widersprechen konnten. Ein Satz

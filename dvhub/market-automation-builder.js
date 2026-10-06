@@ -37,6 +37,17 @@ export const SLOT_DURATION_MS = 15 * 60 * 1000;
 // configured floors regardless of this fallback (operator-confirmed 2026-06-20).
 export const VICTRON_MIN_SOC_FALLBACK_PCT = 5;
 
+// Sicherheitspuffer der Prognose-Anpassung: bleibt zusätzlich zur errechneten
+// Reserve im Akku. Einstellbar (schedule.smallMarketAutomation.forecastSafetyMarginKwh),
+// weil 1,5 kWh für einen 10-kWh-Akku etwas anderes sind als für einen mit 60 kWh.
+export const FORECAST_SAFETY_MARGIN_DEFAULT_KWH = 1.5;
+export function resolveForecastSafetyMarginKwh(automationConfig) {
+  const raw = automationConfig?.forecastSafetyMarginKwh;
+  const value = Number(raw);
+  if (raw === null || raw === undefined || raw === '' || !Number.isFinite(value) || value < 0) return FORECAST_SAFETY_MARGIN_DEFAULT_KWH;
+  return Math.min(value, 100);
+}
+
 export function isSmallMarketAutomationRule(rule) {
   if (!rule || typeof rule !== 'object') return false;
   return rule.source === SMALL_MARKET_AUTOMATION_SOURCE
@@ -238,7 +249,7 @@ export function createMarketAutomationBuilder(ctx) {
           batteryCapacityKwh,
           configuredMinSocPct: automationConfig?.minSocPct,
           globalMinSocPct: state.victron?.minSocPct ?? VICTRON_MIN_SOC_FALLBACK_PCT,
-          safetyMarginKwh: 1.5,
+          safetyMarginKwh: resolveForecastSafetyMarginKwh(automationConfig),
           // Ensemble forecast confidences on prod sit at 0.25-0.30 (PV baseline, load baseline).
           // 0.25 is the lowest meaningful threshold that lets the forecast actually drive the
           // reserve; tighter values silently fall back to the configured static floor.

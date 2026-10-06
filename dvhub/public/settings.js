@@ -1647,7 +1647,7 @@ function renderGroupedCardsOb(mount, destination, destinationId) {
   for (const section of destination.sections) {
     for (const grp of section.groups || []) {
       const fields = (grp.fields || []).filter((f) =>
-        f.type !== 'array' && isFieldVisible(f) && !HIDDEN_FIELD_PATHS.includes(f.path));
+        f.type !== 'array' && isFieldVisible(f) && !HIDDEN_FIELD_PATHS.includes(f.path) && !isDuplicateOfPlantValue(f.path));
       const groupActions = renderGroupActions(grp.id);
       if (!fields.length && !groupActions) continue;
 
@@ -1784,6 +1784,41 @@ function renderAreaEditor(name) {
   return null;
 }
 
+// ── Ein Wert, eine Stelle ───────────────────────────────────────────────────
+// Der Standort steht unter „Meine Anlage“. Die Kleine Börsenautomatik hat ihn
+// (für Sonnenauf- und -untergang) ein zweites Mal — der zweite Satz Felder
+// erscheint nur, solange der Anlagen-Standort fehlt, und folgt ihm beim Speichern.
+const SMA_LOCATION_DEFAULT = { latitude: 51.1657, longitude: 10.4515 };
+function plantLocation(config) {
+  const lat = Number(getPath(config, 'forecast.location.latitude'));
+  const lon = Number(getPath(config, 'forecast.location.longitude'));
+  const set = (v) => v !== null && v !== undefined && v !== '';
+  if (!set(getPath(config, 'forecast.location.latitude')) || !set(getPath(config, 'forecast.location.longitude'))) return null;
+  return Number.isFinite(lat) && Number.isFinite(lon) ? { latitude: lat, longitude: lon } : null;
+}
+function isDuplicateOfPlantValue(path) {
+  if (!path.startsWith('schedule.smallMarketAutomation.location.')) return false;
+  return plantLocation(currentDraftConfig) !== null || plantLocation(currentEffectiveConfig) !== null;
+}
+// Beim Speichern: Standort der Automatik nachziehen, wenn der Anlagen-Standort
+// in dieser Sitzung geändert wurde oder die Automatik noch den Werkswert hat.
+function syncPlantLocation(next) {
+  const plant = plantLocation(next);
+  if (!plant) return next;
+  const before = plantLocation(currentRawConfig);
+  const smaLat = Number(getPath(next, 'schedule.smallMarketAutomation.location.latitude'));
+  const smaLon = Number(getPath(next, 'schedule.smallMarketAutomation.location.longitude'));
+  const smaUnset = !Number.isFinite(smaLat) || !Number.isFinite(smaLon)
+    || getPath(next, 'schedule.smallMarketAutomation.location.latitude') === undefined
+    || (smaLat === SMA_LOCATION_DEFAULT.latitude && smaLon === SMA_LOCATION_DEFAULT.longitude);
+  const changed = !before || before.latitude !== plant.latitude || before.longitude !== plant.longitude;
+  if (changed || smaUnset) {
+    setPath(next, 'schedule.smallMarketAutomation.location.latitude', plant.latitude);
+    setPath(next, 'schedule.smallMarketAutomation.location.longitude', plant.longitude);
+  }
+  return next;
+}
+
 // ── Betriebsart-Schalter (Aus · Kleine Börsenautomatik · EOS) ────────────────
 // Liest und stellt drei Konfigurationswerte gemeinsam:
 //   optimizer.enabled, optimizer.primarySource, schedule.smallMarketAutomation.enabled
@@ -1807,6 +1842,20 @@ function setOperatingMode(mode) {
   if (mode === 'eos') {
     setPath(next, 'optimizer.primarySource', 'eos');
     setPath(next, 'optimizer.eosProxy.enabled', true);
+  }
+  // Wer die Kleine Börsenautomatik zum ersten Mal einschaltet, bekommt Akku-
+  // Kapazität und Entladeleistung aus „Meine Anlage“ vorgeschlagen — statt der
+  // Werkswerte (30 kWh, 12 kW), die zu keiner echten Anlage passen. Bereits
+  // gespeicherte Werte der Automatik bleiben unangetastet.
+  if (mode === 'sma') {
+    const capacityWh = Number(getVisibilityValue('optimizer.batteryCapacityWh'));
+    if (getPath(currentRawConfig, 'schedule.smallMarketAutomation.batteryCapacityKwh') == null && capacityWh > 0) {
+      setPath(next, 'schedule.smallMarketAutomation.batteryCapacityKwh', Math.round(capacityWh / 100) / 10);
+    }
+    const dischargeW = Math.abs(Number(getVisibilityValue('optimizer.maxDischargeW')));
+    if (getPath(currentRawConfig, 'schedule.smallMarketAutomation.maxDischargeW') === undefined && dischargeW > 0) {
+      setPath(next, 'schedule.smallMarketAutomation.maxDischargeW', -dischargeW);
+    }
   }
   currentDraftConfig = next;
   renderSettingsShell();
@@ -1902,7 +1951,9 @@ function renderAreaGrid(area) {
   const pick = (ids) => (ids || []).map((id) => byId.get(id)).filter(Boolean);
   const main = pick(area.groups).map((group, index) => ({
     ...group,
-    openByDefault: firstRender ? index === 0 : openCards.has(group.id)
+    // Erste Anzeige: alles Wichtige eines Bereichs steht offen (höchstens zwei
+    // Klappstufen: Bereich → „Erweitert“). Danach gilt, was der Nutzer auf- oder zuklappt.
+    openByDefault: firstRender ? true : openCards.has(group.id)
   }));
   if (area.modeSwitch) mount.appendChild(renderModeSwitch(area));
   renderGroupedCardsOb(mount, { sections: [{ id: 'area-' + area.id, groups: main }] }, area.id);
@@ -2557,7 +2608,7 @@ function parseFieldInput(field) {
 function collectConfigFromForm() {
   syncRenderedFieldsToDraft();
   syncForecastStringsToDraft(); // MUST run after syncRenderedFieldsToDraft to override string-coerced value
-  const next = clone(currentDraftConfig || {});
+  const next = syncPlantLocation(clone(currentDraftConfig || {}));
   next.userEnergyPricing = next.userEnergyPricing || {};
   next.userEnergyPricing.marketValueMode = serializeMarketValueMode(marketValueModeDraft);
   next.userEnergyPricing.periods = serializePricingPeriods(pricingPeriodsDraft);
@@ -3436,7 +3487,38 @@ function initVpnTab() {
   }
 }
 
+// Die handgebauten Karten der früheren Sammelseite „Status“ dorthin setzen, wo
+// man sie sucht. Es werden nur die Knoten umgehängt — alle IDs und damit alle
+// Skripte bleiben unverändert. Zuordnung über die Kartenüberschrift.
+const STATUS_CARD_TARGETS = {
+  'areaExtra-sys': ['Zugang', 'Config', 'Software', 'Betriebssystem', 'Datenbank-Engine', 'Dienst', 'Historie', 'Support-Bundle'],
+  'areaExtra-shares': ['Installateurs-Portal', 'Fern-Support (Remote-Zugang)', 'Datenspende für die Forschung', 'Ortsnetz-Auslastung', 'Eingang für Home Assistant / Loxone']
+};
+const STATUS_CARD_TITLES = { Config: 'Konfiguration sichern & einspielen', Software: 'Updates', Dienst: 'Neustart', Historie: 'Historie importieren', Zugang: 'Zugangstoken' };
+
+function relocateStatusCards() {
+  const source = document.querySelector('#tab-system .config-grid');
+  if (!source) return;
+  const byTitle = new Map();
+  for (const card of source.querySelectorAll(':scope > .config-group')) {
+    const title = card.querySelector(':scope > .config-group-kicker')?.textContent.trim();
+    if (title) byTitle.set(title, card);
+  }
+  for (const [targetId, titles] of Object.entries(STATUS_CARD_TARGETS)) {
+    const target = document.getElementById(targetId);
+    if (!target) continue;
+    for (const title of titles) {
+      const card = byTitle.get(title);
+      if (!card) continue;
+      const kicker = card.querySelector(':scope > .config-group-kicker');
+      if (kicker && STATUS_CARD_TITLES[title]) kicker.textContent = STATUS_CARD_TITLES[title];
+      target.appendChild(card);
+    }
+  }
+}
+
 function initSettingsPage() {
+  relocateStatusCards();
   // Delegated change listeners on the three grid containers
   document.getElementById('settingsSearch')?.addEventListener('input', applySettingsSearch);
   for (const grid of document.querySelectorAll('.sa-area-grid')) {
