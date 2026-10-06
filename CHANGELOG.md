@@ -12,6 +12,9 @@ verweist hierher.
 
 ### Behoben
 
+- **Kleine Börsenautomatik: Reserve 0 % ließ sich im Leitstand nicht speichern** — die Karte
+  machte daraus 30 %. Das Feld „Aggressiver Preisaufschlag (%)“ ist aus den Einstellungen
+  entfernt: es hatte nie eine Wirkung.
 - **Eine Zeitzone für alles.** Die Einstellung „Zeitzone“ (Zeitplan → Zeitplan & Technik) gilt
   jetzt überall. Bisher rechneten etliche Stellen mit der Zeitzone des Betriebssystems —
   Tagesgrenzen beim Abruf der Börsenpreise, die Mehrtages-Logik, das Familien-Dashboard,
@@ -42,6 +45,20 @@ verweist hierher.
 
 ### Neu
 
+- **Kleine Börsenautomatik: klare Gliederung, Reserve auf einen Blick.** In den Einstellungen
+  stand alles in einem Block mit 15 Feldern; wo die Reserve über Nacht eingestellt wird und ob
+  die Automatik sie verkauft, war nicht zu erkennen. Jetzt fünf Abschnitte: Ein/Aus &
+  Zeitfenster · **Reserve (wird nicht verkauft)** · Akku & Leistung · Standort · Erweitert. Die
+  Reserve heißt „Reserve am Abend (% Ladestand)“ statt „Automatik Minimum-SOC“, der
+  Prognose-Schalter „Reserve nach Prognose anpassen (Beta)“; beide Texte sagen, was verkauft
+  wird und was stehen bleibt. Die Karte im Leitstand hat dieselben Abschnitte, den
+  Prognose-Schalter (bisher nur in den Einstellungen) und einen Satz in Klartext: bis zu welchem
+  Ladestand verkauft wird, wohin die Grenze über Nacht sinkt und was der letzte Plan daraus
+  gemacht hat.
+- **Einstellungen unterscheiden „Optimierung an“ und „aus“.** Ist die Optimierung (EOS) aktiv,
+  plant sie Verkauf und Reserve selbst — von der Kleinen Börsenautomatik bleibt dann nur der
+  Ein/Aus-Schalter sichtbar, die übrigen Felder sind ausgeblendet (ihre Werte bleiben
+  gespeichert). Ist sie aus, erscheinen alle Abschnitte. Im Leitstand steht derselbe Hinweis.
 - **Betriebsart „Nur Netzspeicher“ (Graustrom-Arbitrage).** Für einen Speicher ohne PV-Anlage
   und ohne Hausverbrauch hinter einem einzigen Zähler, der nur aus dem Netz lädt und nur ins
   Netz einspeist (Einstellungen → Zeitplan → Rechtliche Schalter). EOS bekommt dann PV = 0 als

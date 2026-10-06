@@ -16,7 +16,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredModule3Windows } from './user-energy-pricing.js';
-import { isSmallMarketAutomationRule } from './market-automation-builder.js';
+import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
@@ -8633,7 +8633,15 @@ export function createApiRoutes(ctx) {
 
     // --- Schedule Automation Config GET ---
     if (url.pathname === '/api/schedule/automation/config' && req.method === 'GET') {
-      return json(res, 200, { ok: true, config: getCfg().schedule?.smallMarketAutomation || {} });
+      // optimizerEnabled / globalMinSocPct: die Karte im Leitstand erklärt damit,
+      // ob die Automatik überhaupt gebraucht wird und wohin die Reserve sinkt.
+      return json(res, 200, {
+        ok: true,
+        config: getCfg().schedule?.smallMarketAutomation || {},
+        optimizerEnabled: getCfg().optimizer?.enabled === true,
+        globalMinSocPct: Number.isFinite(Number(state?.victron?.minSocPct)) && state?.victron?.minSocPct != null
+          ? Number(state.victron.minSocPct) : VICTRON_MIN_SOC_FALLBACK_PCT
+      });
     }
 
     // --- Schedule Automation Config POST ---

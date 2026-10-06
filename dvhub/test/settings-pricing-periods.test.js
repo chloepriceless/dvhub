@@ -114,6 +114,25 @@ test('config definition exposes the small market automation fields and advanced 
   assert.ok(paths.includes('schedule.smallMarketAutomation.enabled'));
   assert.ok(paths.includes('schedule.smallMarketAutomation.searchWindowStart'));
   assert.ok(paths.includes('schedule.smallMarketAutomation.location.latitude'));
-  assert.ok(paths.includes('schedule.smallMarketAutomation.aggressivePremiumPct'));
+  // aggressivePremiumPct hatte nie eine Wirkung und steht nicht mehr in der Oberfläche.
+  assert.equal(paths.includes('schedule.smallMarketAutomation.aggressivePremiumPct'), false);
+  assert.ok(paths.includes('schedule.smallMarketAutomation.minSocPct'));
+  assert.ok(paths.includes('schedule.smallMarketAutomation.forecastAware'));
   assert.ok(paths.includes('schedule.smallMarketAutomation.stages'));
+});
+
+test('Kleine Börsenautomatik: eigener Abschnitt für die Reserve; Details nur ohne aktive Optimierung', async () => {
+  const { getConfigDefinition } = await import('../config-model.js');
+  const fields = getConfigDefinition().fields.filter((f) => String(f.path).startsWith('schedule.smallMarketAutomation.'));
+  const by = (key) => fields.find((f) => f.path === `schedule.smallMarketAutomation.${key}`);
+  assert.equal(by('minSocPct').group, 'smaReserve');
+  assert.equal(by('forecastAware').group, 'smaReserve');
+  assert.match(by('minSocPct').groupLabel, /Reserve \(wird nicht verkauft\)/);
+  // Der Ein/Aus-Schalter bleibt immer erreichbar, alles andere nur ohne Optimierung.
+  assert.equal(by('enabled').visibleWhenPath, undefined);
+  for (const f of fields.filter((x) => x !== by('enabled'))) {
+    assert.deepEqual(f.visibleWhenPath, { path: 'optimizer.enabled', notEquals: true }, f.path);
+  }
+  const groups = [...new Set(fields.map((f) => f.group))];
+  assert.deepEqual(groups, ['smallMarketAutomation', 'smaReserve', 'smaBattery', 'smaLocation', 'smaAdvanced']);
 });

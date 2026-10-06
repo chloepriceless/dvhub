@@ -3686,6 +3686,40 @@ function renderAutomationStages() {
   });
 }
 
+let automationGlobalMinSocPct = null;
+let automationLastPlan = null;
+
+function readAutomationMinSocPct() {
+  const raw = document.getElementById('automationMinSocPct')?.value;
+  const value = Number(raw);
+  return raw === '' || raw == null || !Number.isFinite(value) ? 30 : Math.min(100, Math.max(0, value));
+}
+
+// Klartext zur Reserve: was bleibt im Akku, wohin sinkt die Grenze über Nacht,
+// und was die Prognose-Anpassung gerade daraus macht.
+function renderAutomationReserveNote() {
+  const note = document.getElementById('automationReserveNote');
+  if (!note) return;
+  const reserve = readAutomationMinSocPct();
+  const floor = automationGlobalMinSocPct;
+  const aware = document.getElementById('automationForecastAware')?.checked === true;
+  const parts = [];
+  parts.push(`Verkauft wird nur, was über der Reserve liegt: ${reserve} % bei Sonnenuntergang`
+    + (floor != null && floor < reserve
+      ? `, gleichmäßig sinkend bis eine Stunde nach Sonnenaufgang auf ${floor} % (Mindest-Ladestand des Wechselrichters).`
+      : '.'));
+  parts.push(aware
+    ? 'Prognose-Anpassung an: reicht die Sonne morgen, darf mehr verkauft werden; reicht die Energie nicht, wird nichts verkauft. Jede Verkaufsregel stoppt weiterhin an der eingestellten Reserve.'
+    : 'Prognose-Anpassung aus: es gilt immer die eingestellte Reserve.');
+  const plan = automationLastPlan;
+  if (plan && plan.effectiveMinSocPct != null) {
+    const reason = plan.forecastReserve?.hoardingActive ? ' — Prognose: Energie reicht nicht, kein Verkauf'
+      : (plan.forecastAware && plan.forecastReserve?.reason === 'forecast_relaxed' ? ' (nach Prognose gesenkt)' : '');
+    parts.push(`Letzter Plan: verkauft bis ${plan.effectiveMinSocPct} % Ladestand${reason}.`);
+  }
+  note.textContent = parts.join(' ');
+}
+
 async function loadAutomationConfig() {
   try {
     const res = await apiFetch('/api/schedule/automation/config');
@@ -3701,6 +3735,10 @@ async function loadAutomationConfig() {
     if (el('automationInverterEfficiency')) el('automationInverterEfficiency').value = c.inverterEfficiencyPct ?? 85;
     if (el('automationMaxDischargeW')) el('automationMaxDischargeW').value = c.maxDischargeW ?? -12000;
     if (el('automationMinSocPct')) el('automationMinSocPct').value = c.minSocPct ?? 30;
+    if (el('automationForecastAware')) el('automationForecastAware').checked = c.forecastAware === true;
+    automationGlobalMinSocPct = Number.isFinite(Number(data.globalMinSocPct)) ? Number(data.globalMinSocPct) : null;
+    if (el('automationOptimizerNote')) el('automationOptimizerNote').hidden = data.optimizerEnabled !== true;
+    renderAutomationReserveNote();
 
     // Load stages
     automationStagesDraft = (c.stages || []).map((s, i) => ({
@@ -3725,7 +3763,9 @@ async function saveAutomationConfig() {
     batteryCapacityKwh: el('automationBatteryCapacity')?.value ? Number(el('automationBatteryCapacity').value) : null,
     inverterEfficiencyPct: Number(el('automationInverterEfficiency')?.value) || 85,
     maxDischargeW: Number(el('automationMaxDischargeW')?.value) || -12000,
-    minSocPct: Number(el('automationMinSocPct')?.value) || 30,
+    // 0 ist ein gültiger Wert (keine Reserve) — nur ein leeres Feld fällt auf 30 zurück.
+    minSocPct: readAutomationMinSocPct(),
+    forecastAware: el('automationForecastAware')?.checked === true,
     stages: serializeAutomationStages(automationStagesDraft)
   };
 
@@ -3786,6 +3826,8 @@ function renderAutomationStatus(scheduleData) {
   const isEnabled = enabledEl?.checked;
 
   if (titleEl) titleEl.textContent = isEnabled ? 'Aktiv' : 'Inaktiv';
+  automationLastPlan = sma.plan || null;
+  renderAutomationReserveNote();
 
   const outcomeLabels = {
     idle: 'Warte auf Ausführung',
@@ -3991,6 +4033,8 @@ function initDashboard() {
 
   document.getElementById('addAutomationStageBtn')?.addEventListener('click', addAutomationStage);
   document.getElementById('saveAutomationConfigBtn')?.addEventListener('click', saveAutomationConfig);
+  document.getElementById('automationMinSocPct')?.addEventListener('input', renderAutomationReserveNote);
+  document.getElementById('automationForecastAware')?.addEventListener('change', renderAutomationReserveNote);
 
   // SMA <details> summary contains the Aktiv toggle — stop the click from
   // bubbling so toggling 'Aktiv' doesn't also collapse/expand the panel.

@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css?v=20260708-daylight">
-  <link rel="stylesheet" href="/index.css?v=20260923-ev6">
+  <link rel="stylesheet" href="/index.css?v=20261006-sma">
   <link rel="stylesheet" href="/ev-tile.css?v=20260927-ev-boost">
   <script src="/theme.js"></script>
 </head>
@@ -379,14 +379,31 @@
         </summary>
 
         <div class="sma-body">
+          <p class="sma-note" id="automationOptimizerNote" hidden>
+            Die Optimierung (EOS) ist aktiv und plant Verkauf und Reserve selbst. Die Kleine B&ouml;rsenautomatik wird daf&uuml;r nicht gebraucht &mdash; ist sie zus&auml;tzlich an, verkauft sie in Viertelstunden, die der Plan frei gelassen hat.
+          </p>
+
+          <h4 class="sma-group-title">Zeitfenster</h4>
           <div class="sma-grid" id="automationConfigGrid">
             <label class="settings-field"><span>Such-Start</span><input type="time" id="automationSearchStart" value="14:00"></label>
             <label class="settings-field"><span>Such-Ende</span><input type="time" id="automationSearchEnd" value="09:00"></label>
+          </div>
+
+          <h4 class="sma-group-title">Reserve &mdash; wird nicht verkauft</h4>
+          <div class="sma-grid">
+            <label class="settings-field"><span>Reserve am Abend (% Ladestand)</span><input type="number" id="automationMinSocPct" min="0" max="100" step="5" value="30"></label>
+            <label class="settings-field sma-check"><span>Reserve nach Prognose anpassen (Beta)</span><input type="checkbox" id="automationForecastAware"></label>
+          </div>
+          <p class="sma-note" id="automationReserveNote">&mdash;</p>
+
+          <h4 class="sma-group-title">Akku &amp; Leistung</h4>
+          <div class="sma-grid">
             <label class="settings-field"><span>Kapazit&auml;t (kWh)</span><input type="number" id="automationBatteryCapacity" min="0" step="0.1" placeholder="z.B. 25.6"></label>
             <label class="settings-field"><span>Effizienz (%)</span><input type="number" id="automationInverterEfficiency" min="1" max="100" value="85"></label>
             <label class="settings-field"><span>Max Entladung (W)</span><input type="number" id="automationMaxDischargeW" value="-12000"></label>
-            <label class="settings-field"><span>Min SOC (%)</span><input type="number" id="automationMinSocPct" min="0" max="100" step="5" value="30"></label>
           </div>
+
+          <h4 class="sma-group-title">Erweiterte Stufen</h4>
           <div id="automationStagesContainer"></div>
           <div class="sma-controls">
             <button id="addAutomationStageBtn" class="btn sm" type="button">+ Stufe</button>
@@ -527,7 +544,7 @@
 <script src="/dv-modal.js"></script>
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20260708-swap"></script>
-<script src="/app.js?v=20260708-daynight"></script>
+<script src="/app.js?v=20261006-sma"></script>
 <script src="/leitstand-charts.js?v=20261003-eos-plan"></script>
 <script src="/ev-tile.js?v=20260927-ev-boost"></script>
 </body>
