@@ -81,6 +81,13 @@ export function withPlantBattery(automationConfig, cfg, curve = null) {
   };
 }
 
+/** Springt die Kleine Börsenautomatik gerade für EOS ein? */
+export function isEosFallbackActive(cfg, state) {
+  return cfg?.optimizer?.enabled === true
+    && cfg?.optimizer?.eosFallbackSma !== false
+    && state?.optimizer?.eosWaiting === true;
+}
+
 export const FORECAST_SAFETY_MARGIN_DEFAULT_KWH = 1.5;
 export function resolveForecastSafetyMarginKwh(automationConfig) {
   const raw = automationConfig?.forecastSafetyMarginKwh;
@@ -653,7 +660,14 @@ export function createMarketAutomationBuilder(ctx) {
 
   async function regenerateSmallMarketAutomationRules({ now = Date.now(), force = false } = {}) {
     const cfg = getCfg();
-    const automationConfig = withPlantBattery(cfg.schedule?.smallMarketAutomation, cfg, measuredCurve(cfg));
+    let automationConfig = withPlantBattery(cfg.schedule?.smallMarketAutomation, cfg, measuredCurve(cfg));
+    // Rückfallebene (Christin 2026-10-06): Betriebsart EOS, aber kein gültiger
+    // EOS-Plan (weder frisch noch gemerkt) → die Kleine Börsenautomatik plant
+    // ersatzweise mit ihren Einstellungen (Suchfenster, Reserve), bis EOS wieder
+    // liefert. Besser als gar kein Plan, und anders als die alte Schwellenregel
+    // lässt sie die Nachtreserve stehen.
+    const eosFallback = isEosFallbackActive(cfg, state);
+    if (eosFallback && automationConfig && !automationConfig.enabled) automationConfig = { ...automationConfig, enabled: true };
     const runDate = berlinDateString(new Date(now), cfg.epex.timezone);
     const manualRules = state.schedule.rules.filter((rule) => !isSmallMarketAutomationRule(rule));
     const previousAutomationRules = state.schedule.rules.filter((rule) => isSmallMarketAutomationRule(rule));
@@ -809,6 +823,7 @@ export function createMarketAutomationBuilder(ctx) {
     state.schedule.smallMarketAutomation = {
       lastRunDate: runDate,
       lastOutcome: generatedRules.length ? 'generated' : 'no_slots',
+      fallbackForEos: eosFallback,
       generatedRuleCount: generatedRules.length,
       lastPriceSlotCount: priceSlotCount,
       availableEnergyKwh: effectiveAvailableEnergyKwh,

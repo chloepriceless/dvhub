@@ -16,8 +16,11 @@ verweist hierher.
   auch kein gemerkter mehr gültig, sprang bisher die eingebaute Schwellenregel ein: sie setzt in
   jeder Viertelstunde über 130 % des Durchschnittspreises „Akku ins Netz“ mit voller Leistung
   und kennt keine Reserve für die Nacht. In der Betriebsart „EOS“ gibt es diesen Ersatz nicht
-  mehr — es gelten dann nur die Regeln von Hand, die Anlage fährt Eigenverbrauch, bis EOS
-  wieder liefert (Protokoll: `eos_plan_waiting`).
+  mehr. Stattdessen springt die **Kleine Börsenautomatik als Rückfallebene** ein: sie plant mit
+  ihrem Suchfenster und lässt die eingestellte Reserve stehen, bis EOS wieder liefert; dann
+  räumt sie ihre Regeln weg. Abschaltbar unter Betriebsart → EOS-Optimierung („Ohne EOS-Plan:
+  Kleine Börsenautomatik als Ersatz“) — dann gelten ohne Plan nur die Regeln von Hand.
+  Protokoll: `eos_plan_waiting`, `eos_plan_back`.
 - **„Sofort laden 11 kW“ blieb bei 4,2 kW.** An der OpenEVSE hielt ein zweiter Regler einen
   eigenen Auftrag mit 6 A; bei gleicher Priorität gewinnt der ältere, DVhubs Auftrag blieb
   wirkungslos. DVhub liest die Aufträge der Box jetzt mit und sagt es deutlich: im

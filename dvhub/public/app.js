@@ -3855,7 +3855,12 @@ function renderAutomationStatus(scheduleData) {
   const enabledEl = document.getElementById('automationEnabled');
   const isEnabled = enabledEl?.checked;
 
-  if (titleEl) titleEl.textContent = isEnabled ? 'Aktiv' : 'Inaktiv';
+  if (titleEl) titleEl.textContent = sma.fallbackForEos ? 'Ersatz für EOS' : (isEnabled ? 'Aktiv' : 'Inaktiv');
+  const optNote = document.getElementById('automationOptimizerNote');
+  if (optNote && sma.fallbackForEos) {
+    optNote.hidden = false;
+    optNote.textContent = 'EOS liefert gerade keinen Plan. Die Kleine Börsenautomatik plant ersatzweise mit den Einstellungen unten, bis EOS wieder liefert.';
+  }
   automationLastPlan = sma.plan || null;
   renderAutomationReserveNote();
 

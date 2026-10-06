@@ -641,8 +641,9 @@ export function createOptimizerService(ctx) {
           // eingebaute Schwellenregel verkauft in teuren Viertelstunden mit
           // voller Leistung und kennt keine Nachtreserve; als stiller Ersatz
           // hat sie am 06.10. nach einem Neustart 21 Verkaufsregeln gesetzt.
-          // Ohne Plan gelten nur die Regeln von Hand; die Anlage faehrt
-          // Eigenverbrauch, bis EOS wieder liefert.
+          // Stattdessen plant die Kleine Boersenautomatik als Rueckfallebene
+          // (market-automation-builder: isEosFallbackActive) — mit Suchfenster
+          // und Reserve. Ist das abgeschaltet, gelten nur die Regeln von Hand.
           winningSchedule = [];
           eosGridSetpoints = [];
           source = 'eos';
@@ -714,8 +715,21 @@ export function createOptimizerService(ctx) {
       state.optimizer.lastSchedule = winningSchedule;
       state.optimizer.lastEosSchedule = eosSchedule;
       state.optimizer.source = source;
-      if (eosWaiting && state.optimizer.eosWaiting !== true) pushLog('eos_plan_waiting', { reason: 'kein gueltiger EOS-Plan — es wird gewartet, kein Ersatzplan' });
+      const waitingChanged = (state.optimizer.eosWaiting === true) !== eosWaiting;
+      if (eosWaiting && waitingChanged) {
+        pushLog('eos_plan_waiting', {
+          reason: 'kein gueltiger EOS-Plan',
+          fallback: cfg.optimizer?.eosFallbackSma !== false ? 'Kleine Börsenautomatik' : 'keiner (nur Regeln von Hand)'
+        });
+      }
+      if (!eosWaiting && waitingChanged) pushLog('eos_plan_back', {});
       state.optimizer.eosWaiting = eosWaiting;
+      // Rückfallebene ein- bzw. ausschalten: die Kleine Börsenautomatik plant
+      // sofort neu (und räumt ihre Regeln weg, sobald EOS wieder liefert).
+      if (waitingChanged && typeof ctx.regenerateSmallMarketAutomationRules === 'function') {
+        ctx.regenerateSmallMarketAutomationRules({ force: true })
+          .catch((e) => pushLog('sma_regen_error', { error: e.message }));
+      }
       state.optimizer.rulesCount = newRules.length;
       state.optimizer.error = null;
       state.optimizer.runCount++;

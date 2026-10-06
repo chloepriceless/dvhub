@@ -2373,6 +2373,17 @@ function buildFieldDefinitions() {
       groupLabel: 'EOS-Optimierung',
       groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
       groupOrder: 10,
+      path: 'optimizer.eosFallbackSma',
+      label: 'Ohne EOS-Plan: Kleine Börsenautomatik als Ersatz',
+      type: 'boolean',
+      help: 'Liefert EOS keinen Plan und ist auch kein gemerkter mehr gültig (er gilt bis zu 12 Stunden), plant die Kleine Börsenautomatik ersatzweise mit ihren Einstellungen — Suchfenster und Reserve unter „Kleine Börsenautomatik“. Sobald EOS wieder liefert, gilt wieder dessen Plan. Aus: ohne EOS-Plan gelten nur die Regeln von Hand.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimization',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
+      groupOrder: 10,
       path: 'optimizer.eosGridHoldEnabled',
       label: 'Akku halten: Last aus dem Netz, wenn EOS es plant',
       type: 'boolean',
@@ -4253,6 +4264,7 @@ export function createDefaultConfig() {
       ruleHorizonHours: 12,
       // EOS Akku halten (schedule-eval closedLoopHold): aus, bis der Betreiber es einschaltet.
       eosGridHoldEnabled: false,
+      eosFallbackSma: true,
       gridStorageOnly: false,
       gridStorageStandbyW: 0,
       eosGridHoldMarginW: 300,
