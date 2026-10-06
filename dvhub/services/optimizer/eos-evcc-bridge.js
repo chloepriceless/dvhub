@@ -28,6 +28,17 @@ const DEFAULT_VOLTAGE_V = 230;
 const STOP_MODES = ['off', 'pv', 'minpv'];
 export const CHARGER_TYPES = ['evcc', 'openevse', 'goe'];
 
+/**
+ * Nennleistungen meinen ganze Ampere: 11 kW an 3 × 230 V sind rechnerisch
+ * 15,94 A, gemeint ist die 16-A-Stufe (3,7 kW einphasig: 16,09 A). Liegt der
+ * Wert knapp (< 0,1 A) unter einer ganzen Zahl, gilt die ganze Zahl — sonst
+ * schnitt die Wallbox auf 15 A ab und lud 10,35 statt 11 kW.
+ */
+export function snapToWholeAmps(amps) {
+  const up = Math.ceil(amps);
+  return up - amps < 0.1 ? up : amps;
+}
+
 /** Einstellungen der Bruecke aus der Config, mit Standardwerten. */
 export function resolveEvccBridgeConfig(cfg) {
   const opt = cfg?.optimizer || {};
@@ -44,7 +55,7 @@ export function resolveEvccBridgeConfig(cfg) {
     minCurrentA,
     // Die Obergrenze folgt aus der Ladeleistung, die EOS kennt — sonst koennte
     // evcc mehr ziehen, als EOS eingeplant hat.
-    maxCurrentA: Math.max(minCurrentA, maxChargeW / (DEFAULT_VOLTAGE_V * phases)),
+    maxCurrentA: Math.max(minCurrentA, snapToWholeAmps(maxChargeW / (DEFAULT_VOLTAGE_V * phases))),
     maxChargeW,
     stopMode: STOP_MODES.includes(opt.evStopMode) ? opt.evStopMode : 'off',
     // Wohin der Befehl geht: evcc (Standard) oder direkt an die Wallbox.
@@ -58,7 +69,7 @@ export function resolveEvccBridgeConfig(cfg) {
  * laden; ganz auszulassen waere die groessere Abweichung vom Plan).
  */
 export function powerToCurrentA(powerW, bc) {
-  const raw = powerW / (bc.voltageV * bc.phases);
+  const raw = snapToWholeAmps(powerW / (bc.voltageV * bc.phases));
   const clamped = Math.min(bc.maxCurrentA, Math.max(bc.minCurrentA, raw));
   return Math.round(clamped * 10) / 10;
 }

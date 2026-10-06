@@ -71,10 +71,10 @@ describe('eos-evcc-bridge: Umrechnung', () => {
   test('Faktor × max. Ladeleistung → Strom je Phase, begrenzt auf min/max', () => {
     const bc = resolveEvccBridgeConfig(cfg());
     assert.equal(bc.loadpoint, 2);
-    assert.equal(Math.round(bc.maxCurrentA * 10) / 10, 15.9); // 11 kW ÷ (230 V × 3)
+    assert.equal(bc.maxCurrentA, 16); // 11 kW ÷ (230 V × 3) = 15,94 A → 16-A-Stufe
     assert.equal(powerToCurrentA(5500, bc), 8);
     assert.equal(powerToCurrentA(1100, bc), 6, 'unter dem Mindeststrom → Mindeststrom');
-    assert.equal(powerToCurrentA(20000, bc), 15.9, 'nie mehr als EOS kennt');
+    assert.equal(powerToCurrentA(20000, bc), 16, 'nie mehr als EOS kennt');
     const one = resolveEvccBridgeConfig(cfg({ evPhases: 1, evMaxChargeW: 3680 }));
     assert.equal(powerToCurrentA(3680, one), 16);
   });
@@ -116,7 +116,7 @@ describe('eos-evcc-bridge: Steuern', () => {
     // Danach volle Leistung.
     h.advance(Q);
     await h.bridge.tick();
-    assert.deepEqual(h.calls.slice(-2), [['maxcurrent', 2, 15.9], ['mode', 2, 'now']]);
+    assert.deepEqual(h.calls.slice(-2), [['maxcurrent', 2, 16], ['mode', 2, 'now']]);
   });
 
   test('Stopp-Modus ist einstellbar (pv laesst evcc Ueberschuss nachladen)', async () => {

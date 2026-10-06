@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { wholeAmps, findForeignClaim, OPENEVSE_DVHUB_CLIENT } from '../services/wallbox/adapters.js';
-import { createEosEvccBridge } from '../services/optimizer/eos-evcc-bridge.js';
+import { createEosEvccBridge, snapToWholeAmps, powerToCurrentA, resolveEvccBridgeConfig } from '../services/optimizer/eos-evcc-bridge.js';
 
-test('ganze Ampere: gerundet, nie unter 6 A — 11 kW meinen die 16-A-Stufe', () => {
-  assert.equal(wholeAmps(15.9), 16);
-  assert.equal(wholeAmps(15.4), 15);
-  assert.equal(wholeAmps(8), 8);
+test('11 kW meinen die 16-A-Stufe; die Wallbox schneidet weiter ab und geht nie unter 6 A', () => {
+  assert.equal(snapToWholeAmps(11000 / 690), 16, '15,94 A → 16 A');
+  assert.equal(snapToWholeAmps(15.4), 15.4);
+  assert.equal(powerToCurrentA(11000, resolveEvccBridgeConfig({ optimizer: { evMaxChargeW: 11000 } })), 16);
+  assert.equal(wholeAmps(16), 16);
+  assert.equal(wholeAmps(9.7), 9, 'nie mehr als geplant');
   assert.equal(wholeAmps(3), 6);
 });
 

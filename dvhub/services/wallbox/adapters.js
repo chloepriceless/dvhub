@@ -67,11 +67,11 @@ function request(urlStr, { method = 'GET', body, auth, timeoutMs = 5000 } = {}) 
 
 /**
  * Ganze Ampere, nie unter 6 A (Norm-Minimum) — beide Boxen nehmen nur Ganzzahlen.
- * Gerundet, nicht abgeschnitten: 11 kW an 3 × 230 V sind 15,94 A und meinen die
- * 16-A-Stufe; abgeschnitten wurden daraus 15 A (10,35 kW).
+ * Abgeschnitten, damit nie mehr geladen wird als geplant. Dass 11 kW die
+ * 16-A-Stufe meinen (15,94 A), regelt die Brücke (snapToWholeAmps).
  */
 export function wholeAmps(currentA) {
-  return Math.max(6, Math.round(Number(currentA)));
+  return Math.max(6, Math.floor(Number(currentA)));
 }
 
 /**

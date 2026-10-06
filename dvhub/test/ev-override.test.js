@@ -77,7 +77,7 @@ describe('ev-override: Steuern', () => {
   test('laedt auch, wenn die EOS-Weitergabe aus ist — Ende stellt den evcc-Modus von vorher her', async () => {
     const h = harness({ config: cfg({ evEvccControl: false }), mode: 'pv' });
     await h.bridge.setOverride({ powerW: 11000 });
-    assert.deepEqual(h.calls, [['maxcurrent', 1, 15.9], ['mode', 1, 'now']]);
+    assert.deepEqual(h.calls, [['maxcurrent', 1, 16], ['mode', 1, 'now']]);
     await h.bridge.clearOverride();
     assert.deepEqual(h.calls.at(-1), ['mode', 1, 'pv']);
     assert.equal(h.bridge.getOverride(), null);
@@ -89,7 +89,7 @@ describe('ev-override: Steuern', () => {
     h.setLp({ mode: 'off' });
     h.advance(30_000);
     await h.bridge.tick();
-    assert.deepEqual(h.calls.slice(-2), [['maxcurrent', 1, 15.9], ['mode', 1, 'now']]);
+    assert.deepEqual(h.calls.slice(-2), [['maxcurrent', 1, 16], ['mode', 1, 'now']]);
   });
 
   test('Ablauf der Zeit → wieder EOS-Plan (hier Stopp)', async () => {
@@ -251,6 +251,6 @@ describe('ev-override: Not-Halt', () => {
     assert.ok(bridge.getOverride());
     paused = false;
     await bridge.tick();
-    assert.deepEqual(calls, [['maxcurrent', 1, 15.9], ['mode', 1, 'now']]);
+    assert.deepEqual(calls, [['maxcurrent', 1, 16], ['mode', 1, 'now']]);
   });
 });
