@@ -72,6 +72,16 @@
       logo: 'Sh',
       accent: 'orange'
     },
+    // 2026-10-07: eigene Integration (vorher Abschnitt der Shelly-Ansicht).
+    // Geräte, die DVhub mitplant: Geschirrspüler, Heizstab. Status aus
+    // /api/integrations/status.schedulable.
+    {
+      key: 'schedulable',
+      label: 'Planbare Verbraucher',
+      category: 'Geräte · von EOS und Überschuss gesteuert',
+      logo: 'PL',
+      accent: 'green'
+    },
     {
       key: 'notifications',
       label: 'Notifications',
@@ -615,6 +625,8 @@
       case 'p14a':
         if (!data || !data.available || (!data.n && !data.relayEnabled)) return 'disabled';
         return data.active ? 'stale' : 'online';
+      case 'schedulable':
+        return data && data.total > 0 ? 'online' : 'disabled';
       case 'pvstrings':
         if (!data || !data.enabled) return 'disabled';
         if (data.lastError) return 'stale';
@@ -799,6 +811,13 @@
           { label: '§14a', value: data.gridStateLabel || '—' },
           { label: 'Geräte', value: String(data.devices || 0) },
           { label: 'Dienst', value: data.statusLabel || '—' }
+        ];
+      case 'schedulable':
+        return [
+          { label: 'Geräte', value: String(data.total || 0) },
+          { label: 'Zeitlich verschiebbar', value: String(data.deferrable || 0) },
+          { label: 'Stufenlos (Heizstab)', value: String(data.modulating || 0) },
+          { label: 'Planung', value: data.total > 0 ? (data.eosActive ? 'EOS plant mit' : 'nach Überschuss') : '—' }
         ];
       case 'pvstrings':
         return [
@@ -1849,6 +1868,11 @@
     if (key === 'eebus') {
       inst = getOrCreateDrawer('eebus');
       if (inst) { inst.open(); if (window.DVhubEebus) setTimeout(window.DVhubEebus.load, 0); }
+      return true;
+    }
+    if (key === 'schedulable') {
+      inst = getOrCreateDrawer('scheddev');
+      if (inst) { inst.open(); setTimeout(loadScheddev, 0); }
       return true;
     }
     if (key === 'pvstrings') {
@@ -3078,7 +3102,8 @@
     'forecast-providers': ['forecast', 'solcast', 'pvnode', 'accuracy'],
     homeAssistant: ['ha_', 'homeassistant', 'hadiscovery'],
     loxone: ['loxone'],
-    devices: ['device', 'shelly']
+    devices: ['device', 'shelly'],
+    schedulable: ['schedulable', 'appliance', 'heater']
   };
   function logMatchesSystem(row, key) {
     var kws = LOG_FILTERS[key];
@@ -4053,7 +4078,6 @@
       var inst = getOrCreateDrawer('shelly');
       if (inst) inst.open();
       setTimeout(loadShellyDrawer, 0);
-      setTimeout(loadScheddev, 0);
       return;
     }
     var discoverBtn = e.target.closest('#shelly-discover');
@@ -4245,22 +4269,22 @@
       var r = await apiFetch('/api/devices/schedulable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       var d = await r.json().catch(function () { return {}; });
       if (r.ok && d.ok) {
-        showDrawerToast('shelly', 'ok', '✓ Gerät gespeichert.');
+        showDrawerToast('scheddev', 'ok', '✓ Gerät gespeichert.');
         var f = document.getElementById('scheddev-form'); if (f) f.innerHTML = '';
         loadScheddev();
       } else {
-        showDrawerToast('shelly', 'err', '✗ ' + ((d.details && d.details.join(', ')) || d.error || ('HTTP ' + r.status)));
+        showDrawerToast('scheddev', 'err', '✗ ' + ((d.details && d.details.join(', ')) || d.error || ('HTTP ' + r.status)));
       }
-    } catch (e) { showDrawerToast('shelly', 'err', '✗ Netzwerkfehler: ' + e.message); }
+    } catch (e) { showDrawerToast('scheddev', 'err', '✗ Netzwerkfehler: ' + e.message); }
     finally { if (btn) btn.disabled = false; }
   }
 
   async function deleteScheddev(id) {
     try {
       var r = await apiFetch('/api/devices/schedulable/' + encodeURIComponent(id), { method: 'DELETE' });
-      if (r.ok) { showDrawerToast('shelly', 'ok', '✓ Gerät entfernt.'); loadScheddev(); }
-      else { var d = await r.json().catch(function () { return {}; }); showDrawerToast('shelly', 'err', '✗ ' + (d.error || ('HTTP ' + r.status))); }
-    } catch (e) { showDrawerToast('shelly', 'err', '✗ Netzwerkfehler: ' + e.message); }
+      if (r.ok) { showDrawerToast('scheddev', 'ok', '✓ Gerät entfernt.'); loadScheddev(); }
+      else { var d = await r.json().catch(function () { return {}; }); showDrawerToast('scheddev', 'err', '✗ ' + (d.error || ('HTTP ' + r.status))); }
+    } catch (e) { showDrawerToast('scheddev', 'err', '✗ Netzwerkfehler: ' + e.message); }
   }
 
   document.addEventListener('click', function (e) {

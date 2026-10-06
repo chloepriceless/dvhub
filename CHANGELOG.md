@@ -87,6 +87,12 @@ verweist hierher.
 
 ### Neu
 
+- **Planbare Verbraucher als eigene Integration.** Geschirrspüler, Heizstab und andere Geräte, die
+  DVhub mitplant, standen bisher als Abschnitt unten in der Shelly-Ansicht. Jetzt gibt es dafür
+  den eigenen Eintrag „Planbare Verbraucher“ in der Integrationsliste, mit eigener Kachel
+  (Anzahl Geräte, zeitlich verschiebbar / stufenlos, ob EOS mitplant) und eigener
+  Einstellungsansicht. Die Shelly-Ansicht zeigt nur noch die Shelly-Geräte. An den
+  gespeicherten Geräten ändert sich nichts.
 - **EOS rechnet sofort neu, wenn sich die Grundlage ändert.** Bisher löste nur das An- und
   Abstecken des Autos (und Änderungen an Geräten und Auto-Zielen) einen Sofort-Lauf aus. Jetzt
   auch jede gespeicherte Einstellung, die in den Plan eingeht: Akku-Grenzen, Strompreise,

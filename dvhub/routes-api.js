@@ -4084,6 +4084,19 @@ export function createApiRoutes(ctx) {
             devices: (st.trusted || []).filter((t) => t.role === 'device').length,
           };
         })(),
+        // Planbare Verbraucher (eigene Integration). Nur Zaehler.
+        schedulable: (() => {
+          const cfgNow = getCfg();
+          let list = [];
+          try { list = loadSchedulableDevices(cfgNow).devices || []; } catch { list = []; }
+          const active = list.filter((d) => d.enabled !== false);
+          return {
+            total: active.length,
+            deferrable: active.filter((d) => d.kind === 'deferrable').length,
+            modulating: active.filter((d) => d.kind === 'modulating').length,
+            eosActive: cfgNow.optimizer?.enabled === true
+          };
+        })(),
         // PV-Strings / Solar-Logger. Nur Zaehler und Zeitstempel.
         pvstrings: (() => {
           const st = ctx.pvStrings?.getStatus?.() || {};

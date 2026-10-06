@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=20261006-claims" />
+  <link rel="stylesheet" href="/integrations.css?v=20261007-scheddev" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -1392,6 +1392,37 @@
            missing). Save endpoint POST /api/family/shelly-devices replaces the
            shelly-http slice of cfg.devices while keeping non-shelly adapters
            (mqtt-generic) intact. SSRF guard enforces private-IP-only hosts. -->
+      <!-- Planbare Verbraucher (eigene Integration seit 2026-10-07; vorher ein
+           Abschnitt der Shelly-Ansicht): Geräte, die DVhub mitplant
+           (Geschirrspüler = deferrable, Heizstab = modulating). CRUD über
+           /api/devices/schedulable. -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-scheddev-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-scheddev" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-scheddev-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-scheddev-title">Planbare Verbraucher</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-scheddev-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body">
+          <p class="dv-drawer-intro">
+            Ger&auml;te, die DVhub <strong>mitplant</strong>: Geschirrsp&uuml;ler (An/Aus, von EOS in die
+            g&uuml;nstigste/PV-reichste Zeit gelegt) oder modulierende Heizst&auml;be (MYPV&nbsp;Elwa / AC&nbsp;Thor,
+            folgen dem PV-&Uuml;berschuss). Ansteuerung: MQTT-ID f&uuml;r Home&nbsp;Assistant, ein zugeordnetes
+            Shelly, oder ein bereits vorhandenes MQTT-Ger&auml;t.
+          </p>
+          <div id="scheddev-list"></div>
+          <div class="dv-drawer-actions">
+            <button type="button" class="btn sm ghost" id="scheddev-add">+ Planbares Ger&auml;t</button>
+          </div>
+          <div id="scheddev-form"></div>
+          <div class="dv-field-validation" id="scheddev-banner" hidden></div>
+        </div>
+        <div class="dv-drawer-toast" id="dv-drawer-scheddev-toast" role="status" aria-live="polite" hidden>&mdash;</div>
+      </aside>
+
       <div class="dv-drawer-backdrop" id="dv-drawer-shelly-backdrop" hidden></div>
       <aside class="dv-drawer" id="dv-drawer-shelly" role="dialog" aria-modal="true"
              aria-labelledby="dv-drawer-shelly-title" hidden>
@@ -1424,23 +1455,6 @@
           <div id="shelly-discover-results" class="shelly-discover-results" hidden></div>
           <div class="dv-field-validation" id="shelly-banner" hidden></div>
 
-          <!-- Planbare Verbraucher (2026-09-26): benutzerdefinierte Geräte, die DVhub
-               mitplant (Geschirrspüler = deferrable, Heizstab = modulating) mit
-               Endpunkt-Zuordnung. CRUD über /api/devices/schedulable. -->
-          <hr class="dv-sep scheddev-sep" />
-          <h3 class="scheddev-h">Planbare Verbraucher</h3>
-          <p class="dv-drawer-intro">
-            Ger&auml;te, die DVhub <strong>mitplant</strong>: Geschirrsp&uuml;ler (An/Aus, von EOS in die
-            g&uuml;nstigste/PV-reichste Zeit gelegt) oder modulierende Heizst&auml;be (MYPV&nbsp;Elwa / AC&nbsp;Thor,
-            folgen dem PV-&Uuml;berschuss). Ansteuerung: MQTT-ID f&uuml;r Home&nbsp;Assistant, ein zugeordnetes
-            Shelly, oder ein bereits vorhandenes MQTT-Ger&auml;t.
-          </p>
-          <div id="scheddev-list"></div>
-          <div class="dv-drawer-actions">
-            <button type="button" class="btn sm ghost" id="scheddev-add">+ Planbares Ger&auml;t</button>
-          </div>
-          <div id="scheddev-form"></div>
-          <div class="dv-field-validation" id="scheddev-banner" hidden></div>
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-shelly-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
@@ -1453,6 +1467,6 @@
   <script src="/pv-strings-drawer.js?v=20261005"></script>
   <script src="/eebus-drawer.js?v=20261002"></script>
   <script src="/p14a-drawer.js?v=20261002"></script>
-  <script src="/integrations.js?v=20261006-claims"></script>
+  <script src="/integrations.js?v=20261007-scheddev"></script>
 </body>
 </html>

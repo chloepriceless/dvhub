@@ -1733,3 +1733,14 @@
 .shelly-row .input { min-height: 34px; }
 
 .evcc-eos-state { white-space: pre-line; }
+
+/* Planbare Verbraucher: Formular im selben Bild wie die anderen Ansichten. */
+.dv-drawer .scheddev-form-card {
+  margin-top: 12px; padding: 16px;
+  border: 1px solid var(--glass-brd); border-radius: var(--r-md); background: var(--glass);
+}
+.dv-drawer .scheddev-form-card .dv-field > label {
+  font-family: var(--f-mono, var(--f-body)); font-size: 0.68rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.dv-drawer .scheddev-row { border-bottom: 1px solid var(--glass-brd); padding: 8px 0; }
