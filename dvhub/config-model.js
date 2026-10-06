@@ -2063,7 +2063,33 @@ function buildFieldDefinitions() {
       path: 'optimizer.allowGridCharge',
       label: '\u26a0\ufe0f Netzladen erlaubt (Netz \u2192 Akku)',
       type: 'boolean',
-      help: 'Erlaubt dem Optimizer, den Akku aus dem Stromnetz zu laden. ACHTUNG: Ohne aktive MiSpeL-Registrierung (Pauschaloption/Abgrenzung) ist Netzladen EEG-rechtlich problematisch \u2014 Vermischung Gr\u00fcnstrom/Graustrom, Risiko F\u00f6rderungsverlust.'
+      help: 'Erlaubt dem Optimizer, den Akku aus dem Stromnetz zu laden. Mit PV-Anlage plant und stellt DVhub Netzladen nur, wenn zus\u00e4tzlich die MiSpeL-Pauschal- oder Abgrenzungsoption gilt \u2014 sonst vermischen sich Gr\u00fcnstrom und Graustrom (Risiko F\u00f6rderungsverlust). In der Betriebsart \u201eNur Netzspeicher\u201c reicht dieser Schalter. Eine \u00a714a-Begrenzung des Netzbetreibers gilt in jedem Fall.'
+    },
+    {
+      section: 'schedule',
+      group: 'legalSwitches',
+      groupLabel: '⚠️ Rechtliche Schalter',
+      groupDescription: 'Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG). Nur aktivieren, wenn rechtlich abgesichert.',
+      groupOrder: 40,
+      path: 'optimizer.gridStorageOnly',
+      label: 'Nur Netzspeicher (Graustrom-Arbitrage)',
+      type: 'boolean',
+      help: 'F\u00fcr einen Speicher ohne PV-Anlage und ohne Hausverbrauch hinter einem einzigen Z\u00e4hler: er l\u00e4dt nur aus dem Netz und speist nur ins Netz ein. EOS rechnet dann mit PV = 0 und als Verbrauch nur mit dem Ruhebedarf der Anlage. Netzladen h\u00e4ngt in dieser Betriebsart allein am Schalter \u201eNetzladen erlaubt\u201c, Einspeisen am Schalter \u201eNetzentladung erlaubt\u201c. Nicht einschalten, wenn eine PV-Anlage oder ein Haushalt am selben Z\u00e4hler h\u00e4ngt.'
+    },
+    {
+      section: 'schedule',
+      group: 'legalSwitches',
+      groupLabel: '⚠️ Rechtliche Schalter',
+      groupDescription: 'Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG). Nur aktivieren, wenn rechtlich abgesichert.',
+      groupOrder: 40,
+      path: 'optimizer.gridStorageStandbyW',
+      label: 'Ruhebedarf der Anlage (W)',
+      type: 'number',
+      min: 0,
+      max: 2000,
+      step: 10,
+      visibleWhenPath: { path: 'optimizer.gridStorageOnly', equals: true },
+      help: '0 = automatisch: DVhub nimmt den Netzbezug in den Minuten, in denen der Akku ruht (Median, bis genug Werte da sind 100 W). Ein fester Wert \u00fcbersteuert die Messung.'
     },
     {
       section: 'schedule',
@@ -4206,6 +4232,8 @@ export function createDefaultConfig() {
       ruleHorizonHours: 12,
       // EOS Akku halten (schedule-eval closedLoopHold): aus, bis der Betreiber es einschaltet.
       eosGridHoldEnabled: false,
+      gridStorageOnly: false,
+      gridStorageStandbyW: 0,
       eosGridHoldMarginW: 300,
       eosGridHoldEvMarginW: 1000,
       // T-0121 closed-loop: fixed load headroom (W) added to the reg-2704 battery

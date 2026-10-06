@@ -866,14 +866,14 @@ function holdSolution() {
   };
 }
 
-async function holdSlots(enabled) {
+async function holdSlots(enabled, optimizer = {}) {
   const mock = await createMockEos((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(holdSolution()));
   });
   try {
     const adapter = createEosAdapter({
-      getCfg: () => ({ optimizer: { eosProxy: { url: `http://127.0.0.1:${mock.port}` }, eosGridHoldEnabled: enabled } }),
+      getCfg: () => ({ optimizer: { eosProxy: { url: `http://127.0.0.1:${mock.port}` }, eosGridHoldEnabled: enabled, ...optimizer } }),
       pushLog: () => {},
     });
     return await adapter.pullGridSetpoints();
@@ -897,6 +897,30 @@ test('pullGridSetpoints: Akku halten → gridSetpointW-Regel mit closedLoopHold,
 
 test('pullGridSetpoints: Akku halten ist aus, solange eosGridHoldEnabled nicht gesetzt ist', async () => {
   assert.deepEqual(await holdSlots(undefined), []);
+});
+
+// --- Netzladen (2026-10-06): EOS-Ladeslots werden gestellt, wenn es erlaubt ist ---
+test('pullGridSetpoints: Netzladen bleibt ohne Erlaubnis aus (Schalter aus, oder PV-Anlage ohne MiSpeL)', async () => {
+  const charge = (slots) => slots.filter((x) => x.planAction === 'eos_grid_charge');
+  assert.deepEqual(charge(await holdSlots(true)), []);
+  assert.deepEqual(charge(await holdSlots(true, { allowGridCharge: true })), [], 'PV-Anlage braucht zusaetzlich den MiSpeL-Modus');
+  assert.deepEqual(charge(await holdSlots(true, { gridStorageOnly: true })), [], 'Netzspeicher braucht den Schalter');
+});
+
+test('pullGridSetpoints: Nur Netzspeicher + „Netzladen erlaubt“ → Ladeslot als positiver Sollwert', async () => {
+  const slots = await holdSlots(true, { allowGridCharge: true, gridStorageOnly: true });
+  const charge = slots.filter((x) => x.planAction === 'eos_grid_charge');
+  assert.equal(charge.length, 1);
+  assert.equal(charge[0].lever, 'gridSetpointW');
+  assert.equal(charge[0].powerW, 12000, '3000 Wh in 15 min');
+  assert.equal(charge[0].closedLoopHold, undefined, 'kein Halten — der Akku soll laden');
+  assert.equal(charge[0].closedLoopExport, undefined);
+  assert.equal(slots.filter((x) => x.planAction === 'eos_grid_hold').length, 2, 'Halte-Slots bleiben Halte-Slots');
+});
+
+test('pullGridSetpoints: PV-Anlage mit MiSpeL-Abgrenzung → Ladeslot wird gestellt', async () => {
+  const slots = await holdSlots(false, { allowGridCharge: true, mispel: { mode: 'abgrenzung' } });
+  assert.deepEqual(slots.map((x) => x.planAction), ['eos_grid_charge']);
 });
 
 test('Halte-Regel landet mit closedLoopHold + evPlanned im Zeitplan', () => {

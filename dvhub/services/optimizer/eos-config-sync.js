@@ -10,6 +10,7 @@
 // at boot when EOS first reports healthy. Same defensive contract as
 // eos-adapter.js: never throws, returns { ok, applied, errors }.
 
+import { isGridChargeLicensed } from './grid-storage.js';
 import { resolveEvDeparture } from './ev-departure.js';
 import { effectiveInverterCurve } from '../inverter-efficiency/calibrator.js';
 import { resolveEvSocPct, resolveEvPlugged } from './ev-soc.js';
@@ -51,9 +52,8 @@ function splitRoundTripEff(rt) {
  * @returns {boolean}
  */
 function isGridArbitrageLicensed(cfg) {
-  const allow = cfg?.optimizer?.allowGridCharge === true;
-  const mispelMode = cfg?.optimizer?.mispel?.mode;
-  return allow && (mispelMode === 'pauschal' || mispelMode === 'abgrenzung');
+  // Nur Netzspeicher: der Schalter allein; PV-Anlage: Schalter + MiSpeL-Modus.
+  return isGridChargeLicensed(cfg);
 }
 
 /**

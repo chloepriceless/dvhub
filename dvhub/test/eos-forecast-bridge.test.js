@@ -324,6 +324,40 @@ test('push sends FeedInTariffImport (spot price × factor) only in spot mode', a
   }
 });
 
+test('push: Nur Netzspeicher → PV als Nullen, Verbrauch = Ruhebedarf, auch ohne jede Prognose', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+    const price = Array.from({ length: 8 }, (_, i) => ({ start: new Date(hour + i * 900_000).toISOString(), ctKwh: 10 + i }));
+    const ctx = {
+      getCfg: () => ({ optimizer: {
+        eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` },
+        tariff: { feedInMode: 'spot', feedInSpotFactor: 1 },
+        gridStorageOnly: true, gridStorageStandbyW: 150,
+      } }),
+      pushLog: () => {},
+      // Keine PV-Prognose, und eine Hausprognose, die nicht gelten darf.
+      forecastService: { buildForecastResponse: async () => ({ pv: { slots: [] }, load: { slots: [{ start: new Date(hour).toISOString(), powerW: 900 }] }, price: { slots: price } }) },
+      state: { victron: { soc: 50 } },
+    };
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+    const bodyOf = (provider) => {
+      const req = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith(`/v1/prediction/import/${provider}`));
+      assert.ok(req, `${provider} gesendet`);
+      return Object.values(req.body.data).map((row) => Object.values(row)[0]);
+    };
+    const pv = bodyOf('PVForecastImport');
+    assert.equal(pv.length, 16, '2 h vor jetzt + 2 h Preise, je Viertelstunde');
+    assert.equal(pv.every((v) => v === 0), true);
+    const load = bodyOf('LoadImport');
+    assert.equal(load.every((v) => v === 150), true);
+    assert.deepEqual(ctx.state.optimizer.gridStorage, { standbyW: 150, standbySource: 'config', samples: 0 });
+  } finally {
+    await mock.close();
+  }
+});
+
 test('push: every forecast import carries force_enable=true (lands before provider flip)', async () => {
   const mock = await createMockEos(okHandler);
   try {

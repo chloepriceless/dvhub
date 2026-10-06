@@ -31,6 +31,7 @@
 // Defensive: never throws, mirrors eos-adapter.js / eos-config-sync.js
 // contract — { ok, pushed: string[], errors: object } per call.
 
+import { isGridStorageOnly, createStandbyEstimator, resolveStandbyW, buildGridStorageSeries, gridImportW } from './grid-storage.js';
 import { resolveEvSocPct } from './ev-soc.js';
 import http from 'node:http';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
@@ -322,6 +323,17 @@ export function createEosForecastBridge(ctx) {
 
   let tickHandle = null;
   let watchdogHandle = null;
+  // Nur Netzspeicher: Ruhebedarf aus dem Netzzähler, ein Wert je Minute.
+  const standbyEstimator = createStandbyEstimator();
+  let standbyHandle = null;
+  function sampleStandby() {
+    const cfg = getCfg?.();
+    if (!isGridStorageOnly(cfg) || !state?.meter?.ok) return;
+    standbyEstimator.sample({
+      importW: gridImportW(state.meter.grid_total_w, cfg.gridPositiveMeans),
+      batteryPowerW: state.victron?.batteryPowerW,
+    });
+  }
   let lastEosPid = null;
 
   /**
@@ -579,9 +591,18 @@ export function createEosForecastBridge(ctx) {
       return { ok: false, pushed: [], errors: { build: err } };
     }
 
-    const pvSlots = keepOnGridSlots(forecast?.pv?.slots || []);
-    const loadSlots = padSlotsBackToNow(forecast?.load?.slots || [], Date.now());
     const priceSlotsCt = forecast?.price?.slots || [];
+    let pvSlots = keepOnGridSlots(forecast?.pv?.slots || []);
+    let loadSlots = padSlotsBackToNow(forecast?.load?.slots || [], Date.now());
+    // Nur Netzspeicher: PV = 0, Verbrauch = Ruhebedarf aus dem Netzzähler
+    // (grid-storage.js). Prognosen für PV und Hausverbrauch gelten dann nicht.
+    let gridStorage = null;
+    if (isGridStorageOnly(cfg)) {
+      const standby = resolveStandbyW(cfg, standbyEstimator);
+      ({ pvSlots, loadSlots } = buildGridStorageSeries(priceSlotsCt, standby.watts));
+      gridStorage = { standbyW: standby.watts, standbySource: standby.source, samples: standbyEstimator.count() };
+    }
+    if (state) { state.optimizer = state.optimizer || {}; state.optimizer.gridStorage = gridStorage; }
     const tz = cfg?.optimizer?.timezone || 'Europe/Berlin';
 
     // Import (Bezugs) price. In FIXED-tariff mode the operator pays a flat gross
@@ -819,6 +840,8 @@ export function createEosForecastBridge(ctx) {
     };
     if (opts.fireImmediately !== false) tick();
     tickHandle = setInterval(tick, intervalMs);
+    standbyHandle = setInterval(sampleStandby, 60_000);
+    standbyHandle.unref?.();
 
     // EOS-restart watchdog (2026-06-28). An EOS restart wipes ALL pushed
     // *Import series AND reverts some providers (observed: load/pvforecast fall
@@ -873,6 +896,10 @@ export function createEosForecastBridge(ctx) {
     if (watchdogHandle) {
       clearInterval(watchdogHandle);
       watchdogHandle = null;
+    }
+    if (standbyHandle) {
+      clearInterval(standbyHandle);
+      standbyHandle = null;
     }
   }
 

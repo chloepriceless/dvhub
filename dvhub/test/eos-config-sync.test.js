@@ -86,6 +86,15 @@ test('buildEosBatteries: charge_rates = [1.0] when allowGridCharge=true but no M
   assert.deepEqual(bat.charge_rates, [1.0]);
 });
 
+test('Nur Netzspeicher: Netzladen haengt allein am Schalter (Laderaten + AC-Ladeleistung)', () => {
+  const on = { ...STD_CFG, optimizer: { ...STD_CFG.optimizer, allowGridCharge: true, gridStorageOnly: true, maxChargeW: 12000 } };
+  assert.equal(buildEosBatteries(on)[0].charge_rates.length > 1, true);
+  assert.equal(buildEosInverters(on)[0].max_ac_charge_power_w, 12000);
+  const off = { ...STD_CFG, optimizer: { ...STD_CFG.optimizer, allowGridCharge: false, gridStorageOnly: true, maxChargeW: 12000 } };
+  assert.deepEqual(buildEosBatteries(off)[0].charge_rates, [1.0]);
+  assert.equal(buildEosInverters(off)[0].max_ac_charge_power_w, 0);
+});
+
 test('buildEosBatteries: full 11-step charge_rates when allowGridCharge=true AND mispel.mode=pauschal', () => {
   const cfg = {
     ...STD_CFG,

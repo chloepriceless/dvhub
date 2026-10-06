@@ -4,6 +4,7 @@
 // Hot-reload safe: start() does NOT exit if !enabled -- service stays running, gates per run.
 // Event-triggered: polls forecastVersion for change detection + 30min fallback timer.
 
+import { isGridStorageOnly } from './grid-storage.js';
 import { applyConfidenceGating } from './confidence-gate.js';
 import { normalizeForecast, averageSlotConfidence, aggregateTo1h } from './forecast-normalizer.js';
 import { buildHeuristicSchedule } from './heuristic-optimizer.js';
@@ -424,7 +425,8 @@ export function createOptimizerService(ctx) {
       //    Without MiSpeL: either charge OR discharge, never both (no grid arbitrage).
       const rawGridCharge = cfg.optimizer.allowGridCharge ?? false;
       const rawGridDischarge = cfg.optimizer.allowGridDischarge ?? false;
-      const mispelActive = ['pauschal', 'abgrenzung'].includes(cfg.optimizer?.mispel?.mode);
+      // Nur Netzspeicher (grid-storage.js): ohne PV gibt es nichts zu vermischen.
+      const mispelActive = ['pauschal', 'abgrenzung'].includes(cfg.optimizer?.mispel?.mode) || isGridStorageOnly(cfg);
 
       let allowGridCharge = rawGridCharge;
       const allowGridDischarge = rawGridDischarge;

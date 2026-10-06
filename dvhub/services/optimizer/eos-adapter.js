@@ -1,6 +1,7 @@
 // services/optimizer/eos-adapter.js -- Bidirectional EOS adapter per D-12/D-14.
 // Sends DVhub forecasts to co-hosted EOS and receives optimized schedules.
 // Consistent { ok, error } contract -- NEVER throws (addresses Codex review concern).
+import { isGridChargeLicensed } from './grid-storage.js';
 import http from 'node:http';
 import { classifyEosSlotAction } from '../../eos-zeitplan-map.js';
 import { keepOnGridSlots } from './eos-forecast-bridge.js';
@@ -558,6 +559,16 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       row.batteryHold = row._dischargeAllowedFactor == null
         ? null
         : row._dischargeAllowedFactor === 0 && !(Number(row._acChargeFactor) > 0);
+      // EOS laedt in diesem Slot aus dem Netz (nur moeglich, wenn DVhub es EOS
+      // erlaubt hat: max_ac_charge_power_w > 0, siehe eos-config-sync).
+      row.gridCharge = Number(row._acChargeFactor) > 0;
+      if (row.gridCharge && Number(row.dvhubSetpointW) > 300) {
+        row.zeitplanAction = 'grid_charge';
+        row.zeitplanLabel = 'Akku lädt aus dem Netz';
+        row.zeitplanTarget = 'gridSetpointW';
+        row.zeitplanBatteryExportW = 0;
+        row.zeitplanGridSetpointW = Math.round(Number(row.dvhubSetpointW));
+      }
       delete row._dischargeAllowedFactor;
       delete row._dcChargeFactor;
       delete row._acChargeFactor;
@@ -608,7 +619,11 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    *       – deliberate battery export (B>0, e.g. the evening dump) → lever
    *         'gridSetpointW' with the closed-loop (B + live PV on top, reg-2704 cap).
    *     Import / self-consumption / PV-charge slots are still skipped → plant
-   *     default. We NEVER write a positive (grid-charge) value (§14a-safe).
+   *     default.
+   *   • Netzladen (2026-10-06): plant EOS das Laden aus dem Netz UND ist es
+   *     erlaubt (isGridChargeLicensed), wird der geplante Netzbezug als
+   *     positiver Sollwert gestellt ('eos_grid_charge'). Ohne Erlaubnis bleibt
+   *     es dabei: nie ein positiver Sollwert.
    *   • Hard guard — never export at a negative feed-in price (curtail instead +
    *     keep the §51 Förder hours). EOS already curtails internally; this is
    *     defense in depth at the actuation edge.
@@ -646,6 +661,24 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       // schedule-eval rechnet jeden Takt Netzbezug = Live-Last − Live-PV − Puffer,
       // der Akku kann so nie aus dem Netz geladen werden.
       if (gridW > bandW) {
+        // Netzladen (2026-10-06): EOS laedt den Akku bewusst aus dem Netz. Das
+        // plant EOS nur, wenn DVhub es erlaubt hat (isGridChargeLicensed —
+        // „Netzladen erlaubt“, bei PV-Anlagen zusaetzlich der MiSpeL-Modus);
+        // dieselbe Bedingung gilt hier, damit ein alter Plan nach dem
+        // Ausschalten nicht weiterlaedt. Der Sollwert ist der geplante
+        // Netzbezug des Slots. §14a begrenzt den Bezug an der Ausfuehrung
+        // (schedule-eval), schedule-eval prueft „Netzladen erlaubt“ noch einmal.
+        if (r.gridCharge === true && isGridChargeLicensed(acfg)) {
+          out.push({
+            ts,
+            endTs: ts + slotMs,
+            lever: 'gridSetpointW',
+            powerW: Math.round(gridW),
+            planAction: 'eos_grid_charge',
+            confidence: EOS_DEFAULT_CONFIDENCE,
+          });
+          continue;
+        }
         if (acfg.optimizer?.eosGridHoldEnabled === true && r.batteryHold === true) {
           out.push({
             ts,

@@ -30,6 +30,19 @@ verweist hierher.
 
 ### Neu
 
+- **Betriebsart „Nur Netzspeicher“ (Graustrom-Arbitrage).** Für einen Speicher ohne PV-Anlage
+  und ohne Hausverbrauch hinter einem einzigen Zähler, der nur aus dem Netz lädt und nur ins
+  Netz einspeist (Einstellungen → Zeitplan → Rechtliche Schalter). EOS bekommt dann PV = 0 als
+  Reihe — ohne PV-Reihe rechnet EOS nicht — und als Verbrauch nur den Ruhebedarf der Anlage.
+  Den Ruhebedarf nimmt DVhub aus dem Netzzähler in den Minuten, in denen der Akku ruht (Median,
+  bis genug Werte da sind 100 W); ein fester Wert lässt sich eintragen. Netzladen hängt in
+  dieser Betriebsart allein am Schalter „Netzladen erlaubt“, ohne MiSpeL-Bedingung.
+- **EOS-Netzladen wird ausgeführt.** Plant EOS das Laden aus dem Netz, stellt DVhub den
+  geplanten Netzbezug jetzt als Sollwert (im Plan: „Akku lädt aus dem Netz“). Bisher wurde ein
+  solcher Slot nie gestellt. Voraussetzung ist dieselbe wie für die Planung: „Netzladen
+  erlaubt“, bei Anlagen mit PV zusätzlich die MiSpeL-Pauschal- oder Abgrenzungsoption. Eine
+  §14a-Begrenzung des Netzbetreibers kappt den Bezug wie bisher an der Ausführung. Anlagen
+  ohne diese Erlaubnis verhalten sich unverändert.
 - **Integrationen: Liste links, Einstellungen in der Mitte.** Für die inzwischen 15 Integrationen
   war das Kachelraster zu eng. Auf breiten Bildschirmen (ab 1000 px) steht links eine kompakte
   Liste mit Status, in der Mitte die Kachel der gewählten Integration und direkt darunter ihre
