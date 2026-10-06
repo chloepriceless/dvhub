@@ -24,7 +24,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/history.css?v=20260701-cachefmt" />
+  <link rel="stylesheet" href="/history.css?v=20261007-look" />
   <link rel="stylesheet" href="/history-viz.css?v=20260701-cachefmt" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
@@ -94,6 +94,14 @@
         <div class="hist-toolbar-group">
           <span class="hist-toolbar-lbl">Datum</span>
           <input id="historyDate" type="date" class="hist-toolbar-date" />
+        <!-- Tag, Monat und Jahr einzeln wählbar (2026-10-07): schneller als der
+             Kalender, wenn man z. B. denselben Tag im Vorjahr oder den Vormonat
+             sehen will. Stellt das Datumsfeld und löst dessen change aus. -->
+        <span class="hist-date-parts" aria-label="Datum in Teilen">
+          <select id="historyDay" class="hist-toolbar-select" aria-label="Tag"></select>
+          <select id="historyMonth" class="hist-toolbar-select" aria-label="Monat"></select>
+          <select id="historyYear" class="hist-toolbar-select" aria-label="Jahr"></select>
+        </span>
         </div>
         <!-- Karten-Dichte (Christin 2026-06-14): max. Karten pro Reihe auf
              breiten Schirmen; schmale Schirme reduzieren automatisch (CSS-
@@ -667,7 +675,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20260906-dbengine-moved"></script>
+  <script src="/history.js?v=20261007-dateparts"></script>
   <script src="/history-viz.js?v=20260927-inverter-efficiency"></script>
 </body>
 </html>

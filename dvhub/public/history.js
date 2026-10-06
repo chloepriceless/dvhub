@@ -2775,3 +2775,65 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.
     }, 200);
   });
 }
+
+
+// ── Datum in Teilen: Tag, Monat, Jahr einzeln (2026-10-07) ───────────────────
+// Drei Auswahlfelder neben dem Kalender. Sie stellen das Datumsfeld und lösen
+// dessen `change` aus — alles Weitere (Zusammenfassung, Diagramme) hängt daran.
+function clampDayToMonth(year, month, day) {
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();   // month: 1–12
+  return Math.min(Math.max(1, day), last);
+}
+function composeDateParts(year, month, day) {
+  const d = clampDayToMonth(year, month, day);
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+function initHistoryDateParts() {
+  const date = document.getElementById('historyDate');
+  const dayEl = document.getElementById('historyDay');
+  const monthEl = document.getElementById('historyMonth');
+  const yearEl = document.getElementById('historyYear');
+  const view = document.getElementById('historyView');
+  if (!date || !dayEl || !monthEl || !yearEl) return;
+  const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+  const thisYear = new Date().getFullYear();
+  const option = (value, label) => { const o = document.createElement('option'); o.value = String(value); o.textContent = label; return o; };
+  monthEl.replaceChildren(...MONTHS.map((name, i) => option(i + 1, name)));
+
+  let shown = '';
+  function sync() {
+    const value = date.value || '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    // Je nach Ansicht zählen nicht alle Teile.
+    const mode = view ? view.value : 'day';
+    dayEl.disabled = mode === 'month' || mode === 'year' || mode === 'all';
+    monthEl.disabled = mode === 'year' || mode === 'all';
+    yearEl.disabled = mode === 'all';
+    if (!m || value === shown) return;
+    shown = value;
+    const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+    const first = Math.min(year, thisYear - 8);
+    yearEl.replaceChildren(...Array.from({ length: Math.max(year, thisYear) - first + 1 }, (_, i) => option(first + i, String(first + i))));
+    const last = clampDayToMonth(year, month, 31);
+    dayEl.replaceChildren(...Array.from({ length: last }, (_, i) => option(i + 1, String(i + 1).padStart(2, '0') + '.')));
+    yearEl.value = String(year); monthEl.value = String(month); dayEl.value = String(day);
+  }
+  function apply() {
+    const next = composeDateParts(Number(yearEl.value), Number(monthEl.value), Number(dayEl.value));
+    if (next === date.value) return;
+    date.value = next;
+    date.dispatchEvent(new Event('change', { bubbles: true }));
+    sync();
+  }
+  for (const el of [dayEl, monthEl, yearEl]) el.addEventListener('change', apply);
+  date.addEventListener('change', sync);
+  if (view) view.addEventListener('change', sync);
+  // Das Datumsfeld wird auch per Skript gesetzt (Laden, Pfeile) — ohne Ereignis.
+  setInterval(sync, 400);
+  sync();
+}
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initHistoryDateParts);
+  else initHistoryDateParts();
+}

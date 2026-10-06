@@ -12,6 +12,8 @@ verweist hierher.
 
 ### Behoben
 
+- **Historie am Handy breiter als der Bildschirm.** Die Inhaltsspalte war 430 statt 390 px breit;
+  rechts fehlte bei allen Kacheln ein Streifen (Werte abgeschnitten).
 - **Ohne EOS-Plan wird gewartet statt ersatzweise verkauft.** Lieferte EOS keinen Plan und war
   auch kein gemerkter mehr gültig, sprang bisher die eingebaute Schwellenregel ein: sie setzt in
   jeder Viertelstunde über 130 % des Durchschnittspreises „Akku ins Netz“ mit voller Leistung
@@ -87,6 +89,12 @@ verweist hierher.
 
 ### Neu
 
+- **Historie: Tag, Monat und Jahr einzeln wählbar; Kacheln im Bild der Einstellungen.** Neben dem
+  Kalender stehen drei Auswahlfelder — so springt man direkt zum selben Tag im Vorjahr oder in
+  einen anderen Monat. Je nach Ansicht sind nur die passenden aktiv (Monatsansicht: Monat und
+  Jahr). Die Kacheln haben Überschrift mit Trennlinie und Text in der Lese-Schrift statt
+  Festbreite; die Farbe je Kachel bleibt. Jede Kachel ist so hoch wie ihr Inhalt, die lange
+  Energiebilanz belegt zwei Zeilen statt eine Lücke aufzureißen.
 - **Planbare Verbraucher als eigene Integration.** Geschirrspüler, Heizstab und andere Geräte, die
   DVhub mitplant, standen bisher als Abschnitt unten in der Shelly-Ansicht. Jetzt gibt es dafür
   den eigenen Eintrag „Planbare Verbraucher“ in der Integrationsliste, mit eigener Kachel
