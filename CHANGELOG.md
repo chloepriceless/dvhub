@@ -32,6 +32,10 @@ verweist hierher.
 
 ### Behoben
 
+- **Familienseite ohne Hintergrundbild.** Die Seite lud `/assets/family-scene.png`, das im Paket nie
+  enthalten war (404) — zu sehen war nur ein dunkler Verlauf. Sie zeigt jetzt dieselben Bilder wie
+  der Energiefluss im Leitstand: nachts das Nachtbild, zwischen Sonnenauf- und -untergang am
+  Anlagenstandort das Tagbild, weich übergeblendet.
 - **Prognose-Python ohne Pakete blieb unbemerkt.** Scheiterte die Paket-Installation (im Feld auf
   einer Anlage seit Wochen: `ModuleNotFoundError: No module named 'pvlib'`), blieb eine Python-Umgebung
   ohne Pakete zurück. DVhub prüfte nur, ob der Interpreter existiert, meldete „Python vorhanden“ und

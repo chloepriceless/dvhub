@@ -3034,7 +3034,9 @@ export function createApiRoutes(ctx) {
       if (!ctx.familyService) return json(res, 503, { ok: false, error: 'family service not available' });
       try {
         const payload = ctx.familyService.buildFamilyStatus();
-        return json(res, 200, { ok: true, ...payload });
+        // Tag oder Nacht (aus Standort + Sonnenzeiten, wie im Leitstand) — die
+        // Familienseite wählt danach ihr Hintergrundbild.
+        return json(res, 200, { ok: true, ...payload, isDay: ctx.getIsDay?.(Date.now()) ?? null });
       } catch (e) {
         pushLog('family_api_error', { error: e.message });
         return json(res, 500, { ok: false, error: 'family status failed' });

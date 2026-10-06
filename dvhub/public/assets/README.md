@@ -31,3 +31,8 @@ On viewports ≤ 768px, `family.html` shifts the tag positions via a media query
 ### Additional assets
 
 Other files in this directory (`dvhub.jpg`, `favicon-32.png`, `logo-192.png`, `logo-512.png`, `apple-touch-icon.png`) are used by the main DVhub pages and are unrelated to the family dashboard.
+
+> Stand 2026-10-07: Die Familienseite nutzt kein eigenes `family-scene.png` mehr,
+> sondern dieselben Bilder wie der Energiefluss im Leitstand —
+> `dvhub-powerflow-bg.png` (Nacht) und `dvhub-powerflow-bg-day-light.png` (Tag),
+> umgeschaltet nach Sonnenauf- und -untergang am Anlagenstandort.

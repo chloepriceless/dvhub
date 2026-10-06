@@ -1617,6 +1617,12 @@
       if (!data.ok) throw new Error(data.error || 'not ok');
       lastStatus = data;
       failedPolls = 0;
+      // Hintergrund wie im Leitstand: Tagbild zwischen Sonnenauf- und -untergang,
+      // sonst das Nachtbild. Ohne Auskunft bleibt, was gerade gezeigt wird.
+      if (typeof data.isDay === 'boolean') {
+        var bgEl = document.querySelector('.bg');
+        if (bgEl) bgEl.classList.toggle('is-day', data.isDay);
+      }
       // Plan 08-11 Task 2: SW + offline-banner removed. DVhub is a LAN-only
       // app — when the server is unreachable the dashboard simply keeps the
       // last-known values on screen. No banner needed.
@@ -2579,8 +2585,14 @@
 
   function bgFlowDraw() {
     if (!bgFlowCtx) return;
-    bgFlowCtx.fillStyle = 'rgba(3,6,16,.32)';
+    // Spuren gegen TRANSPARENZ ausblenden (destination-out), nicht gegen eine
+    // deckende Farbe: sonst läuft die Leinwand nach wenigen Bildern dunkel zu
+    // und verdeckt das Hintergrundbild darunter (wie im Leitstand gelöst).
+    bgFlowCtx.save();
+    bgFlowCtx.globalCompositeOperation = 'destination-out';
+    bgFlowCtx.fillStyle = 'rgba(0,0,0,.28)';
     bgFlowCtx.fillRect(0, 0, BG_FLOW_W, BG_FLOW_H);
+    bgFlowCtx.restore();
     bgFlowCtx.globalCompositeOperation = 'lighter';
     for (var i = 0; i < bgFlowDust.length; i++) {
       var d = bgFlowDust[i], s = d.s;

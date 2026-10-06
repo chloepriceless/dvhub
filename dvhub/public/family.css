@@ -19,7 +19,11 @@
 html,body{height:100%;overflow:hidden;touch-action:manipulation}
 body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
 .viewport{position:relative;width:100%;height:100vh;overflow:hidden}
-.bg{position:absolute;inset:0;background:url('/assets/family-scene.png') center center/cover no-repeat;background-color:#0c1220;transform:scale(1.02);animation:drift 50s ease-in-out infinite alternate}
+/* Dieselben Bilder wie der Energiefluss im Leitstand (2026-10-07; vorher
+   /assets/family-scene.png, das es im Paket nie gab → 404 und nur Verlauf).
+   Nacht ist die Grundlage, family.js setzt .is-day zwischen Sonnenauf- und
+   -untergang. Das Tagbild liegt als Ebene darüber und blendet weich ein. */
+.bg{position:absolute;inset:0;background:url('/assets/dvhub-powerflow-bg.png') center center/cover no-repeat;background-color:#0c1220;transform:scale(1.02);animation:drift 50s ease-in-out infinite alternate}
 @keyframes drift{0%{transform:scale(1.02)}100%{transform:scale(1.05) translate(-0.5%,-0.3%)}}
 .bg-dim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.35) 0%,rgba(0,0,0,.05) 25%,rgba(0,0,0,0) 45%,rgba(0,0,0,.15) 65%,rgba(0,0,0,.7) 88%,rgba(0,0,0,.92) 100%);pointer-events:none}
 .greeting{position:absolute;top:0;left:0;right:0;z-index:30;padding:24px 28px 16px;pointer-events:none}
@@ -624,3 +628,12 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
   .widgets { max-width: 170px; }
   .tag-grid { top: 30%; right: 26%; z-index: 22; }
 }
+
+.bg::after{content:'';position:absolute;inset:0;background:url('/assets/dvhub-powerflow-bg-day-light.png') center center/cover no-repeat;opacity:0;transition:opacity 1.6s ease}
+.bg.is-day::after{opacity:1}
+@media (prefers-reduced-motion: reduce){.bg::after{transition:none}}
+
+/* Etwas Abdunklung über dem Foto, damit Kacheln und Zahlen lesbar bleiben. */
+.bg::before{content:'';position:absolute;inset:0;z-index:1;background:rgba(3,6,16,.38);pointer-events:none}
+.bg.is-day::before{background:rgba(3,6,16,.26)}
+.bg::after{z-index:0}
