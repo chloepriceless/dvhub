@@ -2641,7 +2641,7 @@ function buildFieldDefinitions() {
       path: 'schedule.smallMarketAutomation.enabled',
       label: 'Kleine Börsenautomatik aktiv',
       type: 'boolean',
-      help: 'Erzeugt täglich Verkaufsregeln für die teuersten freien Viertelstunden im Suchfenster. Die Reserve bleibt dabei unangetastet. Mit aktiver Optimierung (EOS) ausschalten: sonst verkauft die Automatik zusätzlich in Viertelstunden, die der Plan frei gelassen hat.'
+      help: 'Erzeugt täglich Verkaufsregeln für die teuersten freien Viertelstunden im Suchfenster. Die Reserve bleibt dabei unangetastet. Mit aktiver Optimierung (EOS) wird sie nicht gebraucht: der Plan belegt dann alle Viertelstunden.'
     },
     {
       section: 'schedule',
