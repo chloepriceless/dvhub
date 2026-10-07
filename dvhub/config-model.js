@@ -1968,7 +1968,7 @@ function buildFieldDefinitions() {
       groupDescription: 'Die Zeitzone gilt für alles. Die Takte darunter sind technische Feinwerte und im Normalbetrieb nicht nötig.',
       groupOrder: 70,
       path: 'schedule.manualOverrideTtlMs',
-      label: 'Manual Override TTL',
+      label: 'Manual Override TTL (ms)',
       type: 'number',
       default: 300000,
       help: 'Wie lange ein manueller Override gilt (ms). Persistente Overrides (persist:true) ignorieren dies.'
