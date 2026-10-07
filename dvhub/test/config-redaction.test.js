@@ -145,3 +145,55 @@ test('24-05: meterSource.modbus.host — plain host is a no-op, @-credential for
   const restoredCreds = restoreRedacted(maskedCreds, creds);
   assert.equal(restoredCreds.meterSource.modbus.host, 'user:pass@192.168.1.7');
 });
+
+// 07.10.2026: auf der Anlage standen bei Pushover und Telegram die Platzhalter
+// „***" als Wert in der Config — die Oberfläche zeigte „gesetzt", jeder Versand
+// scheiterte. Der Platzhalter darf nie gespeichert und ein leeres Feld nie als
+// gesetzt ausgegeben werden.
+test('config-redaction: Platzhalter ohne echten Wert wird nicht gespeichert', () => {
+  const incoming = { notifications: { providers: { pushover: { enabled: true, appToken: '***', userKey: '***' } } } };
+  // Feld fehlt in der laufenden Config
+  let out = restoreRedacted(incoming, { notifications: { providers: { pushover: { enabled: false } } } });
+  assert.deepEqual(out.notifications.providers.pushover, { enabled: true, appToken: '', userKey: '' });
+  // ganzer Abschnitt fehlt (exportierte Config auf frischem Gerät eingespielt)
+  out = restoreRedacted(incoming, {});
+  assert.deepEqual(out.notifications.providers.pushover, { enabled: true, appToken: '', userKey: '' });
+  // in der laufenden Config steht schon der Platzhalter
+  out = restoreRedacted(incoming, incoming);
+  assert.equal(out.notifications.providers.pushover.appToken, '');
+  // echter Wert wird weiterhin zurückgeholt
+  out = restoreRedacted(incoming, { notifications: { providers: { pushover: { appToken: 'echt-1', userKey: 'echt-2' } } } });
+  assert.equal(out.notifications.providers.pushover.appToken, 'echt-1');
+  assert.equal(out.notifications.providers.pushover.userKey, 'echt-2');
+});
+
+test('config-redaction: leere oder nur als Platzhalter gespeicherte Felder gelten als nicht gesetzt', () => {
+  const out = redactConfig({ notifications: { providers: {
+    pushover: { appToken: '***', userKey: '' },
+    telegram: { botToken: 'echtes-token', chatId: '12345' }
+  } } });
+  assert.equal(out.notifications.providers.pushover.appToken, '');
+  assert.equal(out.notifications.providers.pushover.userKey, '');
+  assert.equal(out.notifications.providers.telegram.botToken, '***');
+  assert.equal(out.notifications.providers.telegram.chatId, '***');
+});
+
+test('config-redaction: gespeicherte Platzhalter werden beim Laden geleert', async () => {
+  const { loadConfigFile } = await import('../config-model.js');
+  const os = await import('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-scrub-'));
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ notifications: { enabled: true, providers: {
+    pushover: { enabled: true, appToken: '***', userKey: '***' },
+    telegram: { enabled: false, botToken: 'echtes-token', chatId: '***' }
+  } } }));
+  try {
+    const { rawConfig } = loadConfigFile(file);
+    assert.equal(rawConfig.notifications.providers.pushover.appToken, '');
+    assert.equal(rawConfig.notifications.providers.pushover.userKey, '');
+    assert.equal(rawConfig.notifications.providers.telegram.botToken, 'echtes-token');
+    assert.equal(rawConfig.notifications.providers.telegram.chatId, '');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

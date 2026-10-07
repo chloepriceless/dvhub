@@ -13,6 +13,7 @@ import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms, buildActiveAlarmsFromDbu
 // ERFOLGREICHER Reads (halb-tote GX-Modbus-Session) — die eine Lücke, die weder die
 // T-0075-Frische noch die T-VERIFY-Rücklesung schließt.
 import { createFreezeWatchdog } from './services/telemetry-freeze-watchdog.js';
+import { createSetpointFollowWatchdog } from './services/setpoint-follow-watchdog.js';
 // Plan 09-06 (D-08): wrapper around console.* for the polling heavy-hitter module.
 import { info as logInfo, error as logError } from './services/log.js';
 // Plan 09-06 (D-06): meter-poll instruments. Wired in pollMeter success/error
@@ -77,6 +78,8 @@ export function createPoller(ctx) {
   // onPollComplete) und datiert bei erkanntem Einfrierer die Frische-Stempel zurück
   // → der bestehende T-0075-Entlade-Boden-Schutz greift. Auf MQTT ein No-op.
   const freezeWatchdog = createFreezeWatchdog(ctx);
+  // Meldet, wenn der Speicher trotz Sollwert nicht entlädt (nur Meldung, kein Eingriff).
+  const setpointFollowWatchdog = createSetpointFollowWatchdog(ctx);
 
   // --- effectivePollIntervalMs ---
   const effectivePollIntervalMs = () => normalizePollIntervalMs(getCfg().meterPollMs, MIN_POLL_INTERVAL_MS);
@@ -818,6 +821,9 @@ export function createPoller(ctx) {
       freezeWatchdog.tick();
       telemetryFreezeActive.set(state.victron?.freeze?.active ? 1 : 0);
     } catch (e) { pushLog('telemetry_freeze_watchdog_error', { error: e?.message || String(e) }, 'warn'); }
+    try {
+      setpointFollowWatchdog.tick();
+    } catch (e) { pushLog('setpoint_follow_watchdog_error', { error: e?.message || String(e) }, 'warn'); }
 
     ctx.onPollComplete?.({
       ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),
