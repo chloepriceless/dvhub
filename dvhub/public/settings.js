@@ -2292,17 +2292,17 @@ function renderPricingPeriodsEditor() {
   ` : `
     <div class="config-row-grid">
       <div class="config-row">
-        <span class="config-row-label">Energie-Aufschlag</span>
+        <span class="config-row-label">Energie-Aufschlag (ct/kWh)</span>
         <input class="config-input sa-w-num" data-std-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${escapeHtml(stdDc.energyMarkupCtKwh ?? '')}" />
       </div>
       <div class="config-row">
-        <span class="config-row-label">Netzentgelte</span>
+        <span class="config-row-label">Netzentgelte (ct/kWh)</span>
         <input class="config-input sa-w-num" data-std-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${escapeHtml(stdDc.gridChargesCtKwh ?? '')}" />
       </div>
     </div>
     <div class="config-row-grid">
       <div class="config-row">
-        <span class="config-row-label">Umlagen &amp; Abgaben</span>
+        <span class="config-row-label">Umlagen &amp; Abgaben (ct/kWh)</span>
         <input class="config-input sa-w-num" data-std-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${escapeHtml(stdDc.leviesAndFeesCtKwh ?? '')}" />
       </div>
       <div class="config-row">
