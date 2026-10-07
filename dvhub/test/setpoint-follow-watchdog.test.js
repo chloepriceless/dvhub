@@ -117,7 +117,8 @@ test('Wächter im Poll-Pfad: Push bei Alarm und bei Entwarnung, Status im Live-S
     pushLog: (event, detail) => logs.push([event, detail]),
     notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
   });
-  for (let t = 0; t <= OPTS.holdMs; t += 5000) watchdog.tick(T0 + t);
+  const stamp = (t) => { state.victron.fieldUpdatedAt = { gridSetpointW: t, batteryPowerW: t, soc: t }; };
+  for (let t = 0; t <= OPTS.holdMs; t += 5000) { stamp(T0 + t); watchdog.tick(T0 + t); }
   assert.equal(sent.length, 1);
   assert.equal(sent[0].event, 'setpoint_not_followed');
   assert.match(sent[0].body, /1,8 kW aus dem Netz/);
@@ -126,7 +127,7 @@ test('Wächter im Poll-Pfad: Push bei Alarm und bei Entwarnung, Status im Live-S
   assert.equal(logs[0][0], 'setpoint_not_followed');
 
   Object.assign(state.victron, { gridImportW: 0, gridExportW: 90, batteryPowerW: -1900 });
-  for (let t = OPTS.holdMs + 5000; t <= OPTS.holdMs + OPTS.clearMs + 10000; t += 5000) watchdog.tick(T0 + t);
+  for (let t = OPTS.holdMs + 5000; t <= OPTS.holdMs + OPTS.clearMs + 10000; t += 5000) { stamp(T0 + t); watchdog.tick(T0 + t); }
   assert.equal(sent.length, 2);
   assert.equal(sent[1].event, 'setpoint_followed_again');
   assert.equal(state.victron.setpointFollow, null);
@@ -147,5 +148,27 @@ test('abgeschaltet oder eingefrorene Live-Daten: keine Meldung', () => {
   state.victron.freeze = null;
   cfg = { victron: { setpointWatchdog: { enabled: false } } };
   for (let t = 0; t <= OPTS.holdMs * 2; t += 5000) watchdog.tick(T0 + OPTS.holdMs * 3 + t);
+  assert.equal(sent.length, 0);
+});
+
+test('veraltete Messwerte (fehlgeschlagene Reads): keine Meldung', () => {
+  const sent = [];
+  const state = {
+    meter: { ok: true },
+    victron: {
+      gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5,
+      fieldUpdatedAt: { gridSetpointW: T0, batteryPowerW: T0, soc: T0 }
+    }
+  };
+  const watchdog = createSetpointFollowWatchdog({
+    state, getCfg: () => ({}), pushLog: () => {},
+    notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
+  });
+  // Der Akku-Wert wird nie wieder gelesen, die anderen Felder schon.
+  for (let t = 0; t <= OPTS.holdMs * 2; t += 5000) {
+    state.victron.fieldUpdatedAt.gridSetpointW = T0 + t;
+    state.victron.fieldUpdatedAt.soc = T0 + t;
+    watchdog.tick(T0 + t);
+  }
   assert.equal(sent.length, 0);
 });

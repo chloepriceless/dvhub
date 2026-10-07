@@ -30,7 +30,8 @@ export const SETPOINT_FOLLOW_DEFAULTS = {
   idleW: 150,              // Akku gilt als „entlädt nicht" oberhalb von −idleW
   socMarginPct: 3,         // Abstand zur Entlade-Untergrenze
   fallbackMinSocPct: 5,    // falls die Anlage keine Untergrenze meldet
-  reminderMs: 3 * 3600000  // Erinnerung, solange es anhält
+  reminderMs: 3 * 3600000, // Erinnerung, solange es anhält
+  maxAgeMs: 60000          // so alt darf ein Messwert höchstens sein
 };
 
 function numOr(value, fallback, min = -Infinity) {
@@ -50,7 +51,8 @@ export function resolveSetpointFollowOptions(cfg = {}) {
     idleW: numOr(w.idleW, d.idleW, 0),
     socMarginPct: numOr(w.socMarginPct, d.socMarginPct, 0),
     fallbackMinSocPct: numOr(w.fallbackMinSocPct, d.fallbackMinSocPct, 0),
-    reminderMs: numOr(w.reminderMs, d.reminderMs, 600000)
+    reminderMs: numOr(w.reminderMs, d.reminderMs, 600000),
+    maxAgeMs: numOr(w.maxAgeMs, d.maxAgeMs, 5000)
   };
 }
 
@@ -159,15 +161,21 @@ export function createSetpointFollowWatchdog(ctx) {
       return null;
     }
 
+    // Nur frisch gelesene Werte zählen: schlägt ein Read fehl, behält der
+    // Live-State den alten Wert — ein alter „Akku steht"-Wert wäre ein Fehlalarm.
+    const stamps = v.fieldUpdatedAt || {};
+    const fresh = (name) => Number(stamps[name]) > 0 && (nowMs - Number(stamps[name])) <= opts.maxAgeMs;
+    const live = (name) => (fresh(name) ? v[name] : null);
+
     const netImportW = (v.gridImportW == null || v.gridExportW == null)
       ? null
       : Number(v.gridImportW) - Number(v.gridExportW);
     const { transition } = evaluateSetpointFollow(wstate, {
       nowMs,
-      setpointW: v.gridSetpointW,
+      setpointW: live('gridSetpointW'),
       netImportW,
-      batteryW: v.batteryPowerW,
-      soc: v.soc,
+      batteryW: live('batteryPowerW'),
+      soc: live('soc'),
       minSocPct: v.minSocPct,
       maxDischargeW: v.maxDischargeW
     }, opts);
