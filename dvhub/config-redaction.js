@@ -152,6 +152,21 @@ export function scrubDeep(value, _seen) {
   return out;
 }
 
+/**
+ * Gespeicherte Platzhalter leeren (verändert `config`). Ein „***" als Wert ist
+ * nie ein echter Zugang — es ist der Rest eines früheren fehlerhaften Speicherns.
+ */
+export function scrubStoredPlaceholders(config) {
+  for (const dotPath of REDACTED_PATHS) {
+    const parts = dotPath.split('.');
+    let obj = config;
+    for (let i = 0; i < parts.length - 1; i++) obj = obj?.[parts[i]];
+    const key = parts[parts.length - 1];
+    if (obj && typeof obj === 'object' && obj[key] === REDACTED) obj[key] = '';
+  }
+  return config;
+}
+
 export function redactConfig(config) {
   const copy = JSON.parse(JSON.stringify(config));
   for (const dotPath of REDACTED_PATHS) {
@@ -161,8 +176,13 @@ export function redactConfig(config) {
       obj = obj?.[parts[i]];
       if (!obj) break;
     }
-    if (obj && parts[parts.length - 1] in obj) {
-      obj[parts[parts.length - 1]] = REDACTED;
+    const key = parts[parts.length - 1];
+    if (obj && key in obj) {
+      // Leer oder nur der gespeicherte Platzhalter = nichts hinterlegt. Das als
+      // „***" auszugeben ließe die Oberfläche „gesetzt" anzeigen, obwohl kein
+      // Zugang da ist (07.10.2026: Pushover/Telegram standen so auf der Anlage).
+      const value = obj[key];
+      obj[key] = (value == null || value === '' || value === REDACTED) ? '' : REDACTED;
     }
   }
   // Plan 08-03 Task 2: strip embedded userinfo from URL-shaped config fields
@@ -218,11 +238,14 @@ export function restoreRedacted(incoming, current) {
     for (let i = 0; i < parts.length - 1; i++) {
       target = target?.[parts[i]];
       source = source?.[parts[i]];
-      if (!target || !source) break;
     }
     const key = parts[parts.length - 1];
-    if (target && source && target[key] === REDACTED && key in source) {
-      target[key] = source[key];
+    if (target && typeof target === 'object' && target[key] === REDACTED) {
+      // Der Platzhalter darf nie als Wert gespeichert werden: gibt es keinen
+      // echten Wert zum Zurückholen (z. B. beim Einspielen einer exportierten
+      // Config auf ein frisches Gerät), bleibt das Feld leer.
+      const original = source && typeof source === 'object' && key in source ? source[key] : '';
+      target[key] = original === REDACTED ? '' : original;
     }
   }
   // URL-level restoration for fields redacted via redactUrlCreds (Plan 08-03).

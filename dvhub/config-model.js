@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { toFiniteNumber } from './util.js';
+import { scrubStoredPlaceholders } from './config-redaction.js';
 import { sanitizeBatteryStages, resolveCurrentBatteryCapacityWh } from './battery-stages.js';
 import { localDate as fastLocalDate, localMinutesOfDay as fastLocalMinutesOfDay } from './tz-fast.js';
 
@@ -5396,6 +5397,7 @@ export function loadConfigFile(configPath) {
     }
   }
 
+  scrubStoredPlaceholders(parsed);
   const normalized = normalizeConfigInput(parsed);
   const manufacturer = normalized.persistedConfig.manufacturer || 'victron';
   manufacturerProfilePath = resolveManufacturerProfilePath(configPath, manufacturer);
@@ -5439,7 +5441,7 @@ export function loadConfigFile(configPath) {
 const CONFIG_BACKUP_RETENTION = 10;
 
 export function saveConfigFile(configPath, rawInput) {
-  const normalized = normalizeConfigInput(rawInput);
+  const normalized = normalizeConfigInput(scrubStoredPlaceholders(JSON.parse(JSON.stringify(rawInput ?? {}))));
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   // Plan 08-09 Task 1: backup-on-write — copy the existing config.json to a
   // timestamped sibling BEFORE we overwrite it, so a bad save can be rolled
