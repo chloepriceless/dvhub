@@ -215,7 +215,7 @@
            EOS-Ladeplan bis zur Abfahrt. Versteckt, solange kein Auto eingerichtet ist. -->
       <div class="card rail-card ev-tile" data-accent="ev" id="evTile" hidden></div>
 
-      <div class="card rail-card rail-rows-2col" data-accent="ctrl">
+      <div class="card rail-card ctrl-card" data-accent="ctrl">
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-ctrl"></span>Steuerung</span>
         </div>
@@ -232,7 +232,7 @@
         <div class="rail-row"><span class="l">Aktiver Minimum-SOC</span><strong class="v" id="activeMinSoc">&mdash;</strong></div>
         <div class="rail-row" title="Max. AC-Entladeleistung der Batterie. 0 = halten, -1 = unbegrenzt, sonst Cap in Watt. Setzt Cerbo Settings/CGwacs/MaxDischargePower."><span class="l">Max Discharge</span><strong class="v" id="activeMaxDischarge">&mdash;</strong></div>
         <div class="rail-row"><span class="l">DC-Einspeisung</span><strong class="v" id="activeDcFeed">&mdash;</strong></div>
-        <div class="rail-row rail-row-span-2"><span class="l">Letzter Write</span><strong class="v" id="lastControlWrite">&mdash;</strong></div>
+        <div class="rail-row rail-row-stack"><span class="l">Letzter Write</span><strong class="v" id="lastControlWrite">&mdash;</strong></div>
 
         <p class="card-title ctrl-section-head">Direkt schreiben</p>
         <div class="ctrl-row">
@@ -249,14 +249,10 @@
         </div>
 
         <p class="card-title ctrl-section-head">Standards</p>
-        <div class="ctrl-row">
-          <label class="ctrl-label">Default Grid<input id="defaultGridSetpointInput" class="input mono" type="number" value="-40"></label>
-        </div>
-        <div class="ctrl-row">
-          <label class="ctrl-label">Default Charge<input id="defaultChargeCurrentInput" class="input mono" type="number" value="100"></label>
-        </div>
-        <div class="ctrl-row">
-          <label class="ctrl-label">Default DC<input id="defaultFeedExcessDcPvInput" class="input mono" type="number" min="0" max="1" step="1" value="1"></label>
+        <div class="ctrl-defaults">
+          <label class="ctrl-label">Grid (W)<input id="defaultGridSetpointInput" class="input mono" type="number" value="-40"></label>
+          <label class="ctrl-label">Charge (A)<input id="defaultChargeCurrentInput" class="input mono" type="number" value="100"></label>
+          <label class="ctrl-label">DC (0/1)<input id="defaultFeedExcessDcPvInput" class="input mono" type="number" min="0" max="1" step="1" value="1"></label>
         </div>
         <button id="saveDefaultsBtn" class="btn primary sm ctrl-save-defaults" type="button">Defaults speichern</button>
       </div>

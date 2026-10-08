@@ -1217,7 +1217,13 @@
       if (eosPlanChart) { eosPlanChart.destroy(); eosPlanChart = null; }
       if (skeleton) {
         skeleton.style.display = '';
-        skeleton.textContent = (eos && eos.reason) ? ('EOS: ' + eos.reason) : 'Kein EOS-Fahrplan verfügbar';
+        var eosReasonText = {
+          eos_not_answering: 'EOS antwortet gerade nicht — der Fahrplan erscheint nach dem nächsten Lauf.',
+          eos_off: 'EOS ist ausgeschaltet.'
+        };
+        skeleton.textContent = (eos && eos.reason)
+          ? (eosReasonText[eos.reason] || ('Kein EOS-Fahrplan: ' + eos.reason))
+          : 'Kein EOS-Fahrplan verfügbar';
         skeleton.style.lineHeight = '200px';
         skeleton.style.textAlign = 'center';
         skeleton.style.color = _aur('--chart-axis', '#5a6a8a');

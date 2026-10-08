@@ -56,6 +56,13 @@ function isOptimizerRule(rule) {
 }
 
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
+// Heute nur die Uhrzeit, sonst Tag + Uhrzeit — spart in den schmalen Karten den Umbruch.
+function fmtTsShort(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  if (d.toDateString() === new Date().toDateString()) return d.toLocaleTimeString('de-DE');
+  return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
 function fmtHm(ts) { return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
 function fmtDmHm(ts) { return new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
 function fmtCentValue(value, maximumFractionDigits = 2) {
@@ -1340,6 +1347,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
               if (date.getMinutes() !== 0) return null;
               const h = date.getHours();
               if (data.length > 100 && h % 2 !== 0) return null;
+              // Schmale Anzeige (Handy): nur alle 4 bzw. 6 Stunden, sonst überlappen die Uhrzeiten.
+              const chartWidth = this?.chart?.width || 0;
+              if (chartWidth > 0 && chartWidth < 520 && h % (data.length > 100 ? 6 : 4) !== 0) return null;
               return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false });
             }
           },
@@ -2026,7 +2036,7 @@ function renderDashboardStatus(status) {
     setText('nowTime', status.now ? new Date(status.now).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--');
     setText('dvValue', String(status.dvControlValue));
     setText('offUntil', status.ctrl?.offUntil ? fmtTs(status.ctrl.offUntil) : '-');
-    setText('kaModbus', status.keepalive?.modbusLastQuery?.ts ? fmtTs(status.keepalive.modbusLastQuery.ts) : '-');
+    setText('kaModbus', status.keepalive?.modbusLastQuery?.ts ? fmtTsShort(status.keepalive.modbusLastQuery.ts) : '-');
   });
 
   safeRender('dashboard.vpn', () => {
@@ -2329,11 +2339,11 @@ function renderDashboardStatus(status) {
     const adc = sch.active?.feedExcessDcPv;
     setText('activeDcFeed', adc?.value == null ? '-' : `${adc.value ? 'EIN' : 'AUS'} (${adc.source || '-'})`);
     const lwParts = [];
-    if (lwG?.at) lwParts.push(`Grid: ${lwG.value} @ ${fmtTs(lwG.at)}`);
-    if (lwC?.at) lwParts.push(`Charge: ${lwC.value} @ ${fmtTs(lwC.at)}`);
-    if (lwM?.at) lwParts.push(`MinSOC: ${lwM.value} @ ${fmtTs(lwM.at)}`);
-    if (lwMD?.at) lwParts.push(`MaxDis: ${lwMD.value} @ ${fmtTs(lwMD.at)}`);
-    setText('lastControlWrite', lwParts.length ? lwParts.join(' | ') : '-');
+    if (lwG?.at) lwParts.push(`Grid ${lwG.value} W · ${fmtTsShort(lwG.at)}`);
+    if (lwC?.at) lwParts.push(`Charge ${lwC.value} A · ${fmtTsShort(lwC.at)}`);
+    if (lwM?.at) lwParts.push(`Min-SoC ${lwM.value} % · ${fmtTsShort(lwM.at)}`);
+    if (lwMD?.at) lwParts.push(`Max Discharge ${lwMD.value} W · ${fmtTsShort(lwMD.at)}`);
+    setText('lastControlWrite', lwParts.length ? lwParts.join('\n') : '-');
     applyScheduleRowStates(status.now);
     // Per-slot economics: cache the EPEX slots from /api/status and refresh
     // the price/€ cells (cheap textContent updates — no table re-render).

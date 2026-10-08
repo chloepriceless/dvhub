@@ -216,6 +216,12 @@ body::before {
 /* Rechte Gruppe nach rechts, wenn das Menü nicht mehr den Platz füllt. */
 .topbar.nav-collapsed .topbar-right { margin-left:auto; }
 
+/* Steht das Menü offen in der Leiste, ist die aktive Seite dort schon markiert —
+   der Seitenname neben dem Logo wäre doppelt. Er bleibt für das eingeklappte Menü. */
+@media (min-width:761px) {
+  .topbar:not(.nav-collapsed) .topbar-brand .product { display:none; }
+}
+
 /* status pill in topbar */
 .status-pill {
   display:inline-flex; align-items:center; gap:6px;

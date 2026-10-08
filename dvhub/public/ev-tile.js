@@ -155,8 +155,13 @@
       bounds = null;
       el('evAxisStart').textContent = 'jetzt';
       el('evAxisEnd').textContent = '—';
+      // Ohne Ladeplan bliebe hier eine leere Fläche stehen.
+      host.hidden = true;
+      if (el('evAxisStart').parentElement) el('evAxisStart').parentElement.hidden = true;
       return;
     }
+    host.hidden = false;
+    if (el('evAxisStart').parentElement) el('evAxisStart').parentElement.hidden = false;
     const slotMs = (plan.slotMinutes || 15) * 60000;
     bounds = { t0: Date.parse(slots[0].ts), t1: Date.parse(slots[slots.length - 1].ts) + slotMs, slotMs: slotMs };
     clampView();

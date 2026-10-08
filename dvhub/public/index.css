@@ -299,7 +299,19 @@
 }
 .ctrl-label .input:focus { outline:none; border-color:var(--accent); }
 .ctrl-row .btn.sm { padding:6px 12px; flex-shrink:0; }
-.ctrl-save-defaults { margin-top:8px; align-self:stretch; }
+.ctrl-save-defaults { margin-top:8px; width:100%; justify-content:center; text-align:center; }
+/* Standards nebeneinander: drei kurze Zahlenfelder, darunter der Speichern-Knopf. */
+.ctrl-defaults { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px; }
+.ctrl-card .ctrl-row .btn.sm { min-width:84px; justify-content:center; }
+/* Lange Werte (Letzter Write): Beschriftung oben, Wert darunter, zeilenweise. */
+.rail-row.rail-row-stack { flex-direction:column; align-items:stretch; gap:3px; }
+.rail-row.rail-row-stack .v { white-space:pre-line; font-size:11px; line-height:1.5; color:var(--text-2, var(--text)); }
+/* Beschriftung bleibt einzeilig, der Wert darf rechtsbündig umbrechen. */
+.rail-row .l { flex-shrink:0; }
+.rail-row .v { text-align:right; min-width:0; overflow-wrap:anywhere; }
+.rail-row.rail-row-stack .v { text-align:left; }
+/* Die Meldung „kein Fahrplan" liegt unter der Überschrift, nicht darüber. */
+#eosPlanSkeleton { top:44px; }
 
 /* ─── Section spacing for full-width cards ─── */
 .section-block { margin-top:var(--gap-3); }
@@ -1243,3 +1255,13 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .fp-row.fp-head .fp-age { font-size:10px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--text-dim); }
 
 /* E-Auto-Kachel: ev-tile.css (auch in der Family-Ansicht genutzt) */
+
+/* Handy: Kartenkopf mit Aktionen bricht sauber um — Titel in einer Zeile,
+   Chips/Knöpfe darunter, statt den Titel auf drei Zeilen zu quetschen. */
+@media (max-width:560px) {
+  .card-head { flex-wrap:wrap; row-gap:8px; }
+  .card-head > .card-title { flex:1 1 100%; }
+  .card-head > .card-actions { flex-wrap:wrap; }
+  .card-head > .card-actions .chip,
+  .card-head > .card-actions .btn { white-space:nowrap; }
+}
