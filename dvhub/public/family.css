@@ -5,20 +5,20 @@
    SECURITY_HEADERS), and the gstatic font-src already allows the actual font files.
    See .planning/phases/09.1-aurora-ui-redesign/09.1-02-PLAN.md Task 1 action 2. */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --f:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
-  --solar:#F7B731;--solar-g:rgba(247,183,49,0.5);
-  --bat:#26de81;--bat-g:rgba(38,222,129,0.5);
-  --home:#4b7bec;--home-g:rgba(75,123,236,0.5);
-  --ev:#a55eea;--ev-g:rgba(165,94,234,0.5);
-  --grid:#fd9644;--grid-g:rgba(253,150,68,0.5);
+  /* Aurora: System-Schrift und Palette aus dvhub-app.css (kein Nachladen von Google Fonts). */
+  --f:var(--f-body);
+  --solar:var(--yellow);--solar-g:rgba(255,212,33,0.5);
+  --bat:var(--green);--bat-g:rgba(62,224,160,0.5);
+  --home:var(--cyan);--home-g:rgba(52,219,255,0.5);
+  --ev:var(--violet);--ev-g:rgba(167,139,255,0.5);
+  --grid:var(--pink);--grid-g:rgba(255,122,198,0.5);
   --device:#78909c;
 }
 html,body{height:100%;overflow:hidden;touch-action:manipulation}
 body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
-.viewport{position:relative;width:100%;height:100vh;overflow:hidden}
+.viewport{position:relative;width:100%;height:calc(100vh / var(--fam-zoom, 1));overflow:hidden}
 /* Dieselben Bilder wie der Energiefluss im Leitstand (2026-10-07; vorher
    /assets/family-scene.png, das es im Paket nie gab → 404 und nur Verlauf).
    Nacht ist die Grundlage, family.js setzt .is-day zwischen Sonnenauf- und
@@ -31,8 +31,8 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .greeting-top{display:flex;justify-content:space-between;align-items:flex-start}
 .greeting-hello{font-size:14px;font-weight:500;color:rgba(255,255,255,.5);margin-bottom:2px}
 .greeting-msg{font-size:22px;font-weight:700;letter-spacing:-.5px;line-height:1.3}
-.greeting-mood{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:5px 14px;background:rgba(38,222,129,.1);border:1px solid rgba(38,222,129,.15);border-radius:100px;font-size:12px;font-weight:600;color:var(--bat)}
-.greeting-mood.warn{background:rgba(253,150,68,.1);border-color:rgba(253,150,68,.15);color:var(--grid)}
+.greeting-mood{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:5px 14px;background:rgba(62,224,160,.1);border:1px solid rgba(62,224,160,.15);border-radius:100px;font-size:12px;font-weight:600;color:var(--bat)}
+.greeting-mood.warn{background:rgba(255,122,198,.1);border-color:rgba(255,122,198,.15);color:var(--grid)}
 .greeting-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .greeting-time{font-size:28px;font-weight:700;letter-spacing:-1px;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.8)}
 .greeting-date{font-size:11px;color:rgba(255,255,255,.35);font-weight:500}
@@ -53,8 +53,8 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-val{font-size:20px;font-weight:800;letter-spacing:-1px;font-variant-numeric:tabular-nums;line-height:1;pointer-events:none}
 .tag-status{display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:3px 10px;border-radius:100px;font-size:10px;font-weight:600;pointer-events:none}
 .tag-dot{position:absolute;width:8px;height:8px;border-radius:50%;pointer-events:none}
-.tag-solar{top:6%;left:43%;border:1px solid rgba(247,183,49,.2);animation-delay:.1s}
-.tag-solar .tag-val{color:var(--solar)}.tag-solar .tag-status{background:rgba(247,183,49,.12);color:var(--solar)}
+.tag-solar{top:6%;left:43%;border:1px solid rgba(255,212,33,.2);animation-delay:.1s}
+.tag-solar .tag-val{color:var(--solar)}.tag-solar .tag-status{background:rgba(255,212,33,.12);color:var(--solar)}
 .tag-solar .tag-dot{background:var(--solar);box-shadow:0 0 12px var(--solar-g);bottom:-12px;left:50%;transform:translateX(-50%)}
 /* Powerflow-2.0 rework (2026-06-13): the House tile is BACK — the centre is a
    crossing now (see .pf-center-readout below). Default below the battery on
@@ -62,8 +62,8 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-home{top:58%;left:12%;border:1px solid rgba(52,219,255,.2);animation-delay:.3s}
 .tag-home .tag-val{color:#34dbff}.tag-home .tag-status{background:rgba(52,219,255,.12);color:#34dbff}
 .tag-home .tag-dot{background:#34dbff;box-shadow:0 0 12px rgba(52,219,255,.6);right:-12px;top:50%;transform:translateY(-50%)}
-.tag-bat{top:36%;left:4%;border:1px solid rgba(38,222,129,.2);animation-delay:.15s}
-.tag-bat .tag-val{color:var(--bat)}.tag-bat .tag-status{background:rgba(38,222,129,.12);color:var(--bat)}
+.tag-bat{top:36%;left:4%;border:1px solid rgba(62,224,160,.2);animation-delay:.15s}
+.tag-bat .tag-val{color:var(--bat)}.tag-bat .tag-status{background:rgba(62,224,160,.12);color:var(--bat)}
 .tag-bat .tag-dot{background:var(--bat);box-shadow:0 0 12px var(--bat-g);right:-12px;top:50%;transform:translateY(-50%)}
 /* Phase 11-06 round 9: the EV tag grew much taller after round 5 added the
    .tag-soc SoC block, so at the old top:32%;right:5% it extended down into the
@@ -72,11 +72,11 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
    widgets horizontally — the full tall tag (icon + charge power + SoC block +
    status) is now entirely visible. The bgFlow k_ev stream still resolves via
    bgFlowEndpoint('tag-ev') (id unchanged) and draws to the new position. */
-.tag-ev{top:58%;left:6%;border:1px solid rgba(165,94,234,.2);animation-delay:.25s}
-.tag-ev .tag-val{color:var(--ev)}.tag-ev .tag-status{background:rgba(165,94,234,.12);color:var(--ev)}
+.tag-ev{top:58%;left:6%;border:1px solid rgba(167,139,255,.2);animation-delay:.25s}
+.tag-ev .tag-val{color:var(--ev)}.tag-ev .tag-status{background:rgba(167,139,255,.12);color:var(--ev)}
 .tag-ev .tag-dot{background:var(--ev);box-shadow:0 0 12px var(--ev-g);left:-12px;top:50%;transform:translateY(-50%)}
-.tag-grid{top:38%;left:62%;border:1px solid rgba(253,150,68,.15);animation-delay:.35s}
-.tag-grid .tag-val{color:var(--grid)}.tag-grid .tag-status{background:rgba(253,150,68,.12);color:var(--grid)}
+.tag-grid{top:38%;left:62%;border:1px solid rgba(255,122,198,.15);animation-delay:.35s}
+.tag-grid .tag-val{color:var(--grid)}.tag-grid .tag-status{background:rgba(255,122,198,.12);color:var(--grid)}
 .tag-grid .tag-dot{background:var(--grid);box-shadow:0 0 12px var(--grid-g);bottom:-12px;left:50%;transform:translateX(-50%)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
 
@@ -87,7 +87,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .tag-soc-row{display:flex;align-items:baseline;gap:8px;margin-bottom:5px}
 .tag-soc-pct{font-size:14px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums;color:var(--ev)}
 .tag-soc-limit{font-size:10px;font-weight:600;color:rgba(255,255,255,.5);font-variant-numeric:tabular-nums}
-.tag-soc-bar{position:relative;height:6px;border-radius:100px;background:rgba(165,94,234,.16);overflow:hidden}
+.tag-soc-bar{position:relative;height:6px;border-radius:100px;background:rgba(167,139,255,.16);overflow:hidden}
 .tag-soc-fill{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:100px;background:linear-gradient(90deg,var(--ev),#c89bf2);box-shadow:0 0 8px var(--ev-g);transition:width .6s cubic-bezier(.34,1.1,.64,1)}
 .tag-soc-bar.is-charging .tag-soc-fill{animation:socPulse 2.2s ease-in-out infinite}
 @keyframes socPulse{0%,100%{opacity:1}50%{opacity:.62}}
@@ -242,7 +242,7 @@ body{font-family:var(--f);background:#000;color:#fff;-webkit-font-smoothing:anti
 .detail-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(255,255,255,.03);border-radius:10px}
 .detail-key{font-size:12px;color:rgba(255,255,255,.4);font-weight:500}
 .detail-val{font-size:13px;font-weight:600}
-.api-hint{margin-top:16px;padding:12px 16px;background:rgba(75,123,236,.06);border:1px solid rgba(75,123,236,.1);border-radius:12px;font-size:11px;color:rgba(255,255,255,.45);line-height:1.5}
+.api-hint{margin-top:16px;padding:12px 16px;background:rgba(52,219,255,.06);border:1px solid rgba(52,219,255,.1);border-radius:12px;font-size:11px;color:rgba(255,255,255,.45);line-height:1.5}
 .api-hint code{background:rgba(255,255,255,.08);padding:1px 6px;border-radius:4px;font-size:10px;font-family:'SF Mono',monospace}
 @media(max-width:768px){
   .greeting-msg{font-size:18px}.greeting-time{font-size:22px}
@@ -380,7 +380,7 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .pf-center-readout .pf-net-label{
   font-size:11px;
   letter-spacing:.22em;
-  color:#46d344;
+  color:#3ee0a0;
   font-weight:600;
   text-transform:uppercase;
 }
@@ -403,7 +403,7 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .pf-center-readout .pf-mix-pill .d{width:7px;height:7px;border-radius:50%;flex:none}
 .pf-center-readout .pf-mix-pill b{font-weight:800;color:#fff}
 .pf-center-readout .pf-mix-pv .d{background:#ffd421;box-shadow:0 0 8px rgba(255,212,33,.6)}
-.pf-center-readout .pf-mix-bt .d{background:#46d344;box-shadow:0 0 8px rgba(70,211,68,.5)}
+.pf-center-readout .pf-mix-bt .d{background:#3ee0a0;box-shadow:0 0 8px rgba(62,224,160,.5)}
 .pf-center-readout .pf-mix-gd .d{background:#ff7ac6;box-shadow:0 0 8px rgba(255,122,198,.5)}
 .pf-center-readout .pf-mix-idle .d{background:rgba(255,255,255,.3)}
 
@@ -489,7 +489,7 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .fam-set-row{display:flex;align-items:center;justify-content:space-between;gap:14px;
   padding:12px 4px;font-size:14px;font-weight:600;color:rgba(255,255,255,.85);
   border-bottom:1px solid rgba(255,255,255,.08)}
-.fam-set-row input[type="checkbox"]{width:22px;height:22px;accent-color:#26de81}
+.fam-set-row input[type="checkbox"]{width:22px;height:22px;accent-color:#3ee0a0}
 .fam-set-row input[type="number"]{width:84px;padding:8px 10px;border-radius:10px;
   border:1px solid rgba(255,255,255,.18);background:rgba(8,10,16,.6);color:#fff;
   font-size:16px;font-weight:700;text-align:center}
@@ -497,7 +497,7 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .fam-set-btn{flex:1;padding:12px 14px;border-radius:12px;font-size:14px;font-weight:700;
   cursor:pointer;border:1px solid rgba(255,255,255,.18);min-width:130px}
 .fam-set-btn.ghost{background:rgba(255,255,255,.08);color:rgba(255,255,255,.85)}
-.fam-set-btn.primary{background:#26de81;border-color:#26de81;color:#06281a}
+.fam-set-btn.primary{background:#3ee0a0;border-color:#3ee0a0;color:#06281a}
 .fam-zoom-ctl{display:inline-flex;align-items:center;gap:10px}
 .fam-zoom-btn{flex:0 0 auto;min-width:44px;width:44px;padding:8px 0;font-size:20px;line-height:1;text-align:center}
 .fam-zoom-val{min-width:3.6em;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.9)}
@@ -506,9 +506,9 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .panel-device-toggle[hidden]{display:none}
 .p-device-toggle-btn{width:100%}
 /* Schwebendes Symbol zum Wieder-Einschalten (display via JS umgeschaltet) */
-.shelly-reenable-fab{display:none;position:fixed;bottom:18px;right:18px;z-index:60;align-items:center;justify-content:center;width:52px;height:52px;border-radius:50%;border:1px solid rgba(38,222,129,.4);background:rgba(38,222,129,.16);color:#26de81;font-size:22px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+.shelly-reenable-fab{display:none;position:fixed;bottom:18px;right:18px;z-index:60;align-items:center;justify-content:center;width:52px;height:52px;border-radius:50%;border:1px solid rgba(62,224,160,.4);background:rgba(62,224,160,.16);color:#3ee0a0;font-size:22px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
 .shelly-reenable-icon{line-height:1}
-.shelly-reenable-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;border-radius:9px;background:#26de81;color:#06281a;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
+.shelly-reenable-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;border-radius:9px;background:#3ee0a0;color:#06281a;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
 .shelly-reenable-list{display:flex;flex-direction:column;gap:10px;margin:8px 0 4px}
 .shelly-off-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .shelly-off-name{font-size:15px;color:rgba(255,255,255,.9)}
@@ -550,10 +550,10 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .fam-eos-tbl td{padding:7px 12px;border-top:1px solid rgba(255,255,255,.05);color:rgba(255,255,255,.85);white-space:nowrap}
 .fam-eos-tbl .num{text-align:right;font-variant-numeric:tabular-nums}
 .fam-eos-tbl th.num{text-align:right}
-.fam-eos-exp{color:#26de81}
+.fam-eos-exp{color:#3ee0a0}
 .fam-eos-chg{color:#fed330}
 .fam-eos-imp{color:#fc5c65}
-.fam-eos-now td{background:rgba(75,123,236,.22)}
+.fam-eos-now td{background:rgba(52,219,255,.22)}
 
 /* Task #21 (2026-06-13) — weather widget detail + size levels.
    cfg.family.weather.{detail,size} → wx-detail-* / wx-size-* classes on
@@ -611,9 +611,9 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
   background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
   color:rgba(255,255,255,.8);cursor:pointer;transition:background .15s,border-color .15s,transform .1s}
 .evcc-mode-btn:active{transform:scale(.96)}
-.evcc-mode-btn.active{background:rgba(165,94,234,.28);border-color:#a55eea;color:#fff}
+.evcc-mode-btn.active{background:rgba(167,139,255,.28);border-color:#a78bff;color:#fff}
 .evcc-mode-sub{margin-top:8px;font-size:12px;color:rgba(255,255,255,.5)}
-.evcc-mode-msg{margin-top:6px;font-size:12px;color:rgba(38,222,129,.9);min-height:15px}
+.evcc-mode-msg{margin-top:6px;font-size:12px;color:rgba(62,224,160,.9);min-height:15px}
 .fam-set-row input[type="text"]{flex:1;min-width:0;max-width:60%;padding:8px 10px;border-radius:10px;
   background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
   color:rgba(255,255,255,.9);font-size:13px}
@@ -637,3 +637,126 @@ body:not(.screensaver) .viewport > *{transition:opacity 600ms ease}
 .bg::before{content:'';position:absolute;inset:0;z-index:1;background:rgba(3,6,16,.38);pointer-events:none}
 .bg.is-day::before{background:rgba(3,6,16,.26)}
 .bg::after{z-index:0}
+
+/* ============================================================================
+   Aurora-Angleichung (2026-10-08): dieselbe Kartenoptik, Beschriftung und
+   Farbwelt wie im Leitstand. Die Anordnung als Küchen-Tablet bleibt.
+   ========================================================================== */
+body{color:var(--text)}
+/* Karten: ein Glas, ein Rahmen, ein Radius. */
+.tag,.widget,.dev-card,.glass,.pf-center-readout{
+  background:var(--bg-elev);
+  border:1px solid var(--glass-brd);
+  border-radius:var(--r-lg);
+  backdrop-filter:blur(var(--glass-blur)) saturate(1.2);
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(1.2);
+  box-shadow:var(--shadow-sm);
+}
+.tag-solar,.tag-bat{background:transparent;border:none;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none}
+.tag:hover,.tag:active{background:rgba(10,18,38,.8)}
+.tag-solar:hover,.tag-solar:active,.tag-bat:hover,.tag-bat:active{background:transparent}
+.tag{padding:12px 16px}
+.widget{padding:12px 14px}
+
+/* Beschriftungen: schmal, gesperrt, in Großbuchstaben — wie die Kartenköpfe im Leitstand. */
+.tag-friendly,.widget-title,.slot-label,.dev-name,.stat-label,.chart-label,.greeting-hello,.greeting-date,.evcc-mode-label,.fam-set-sep{
+  font-family:var(--f-mono);
+  text-transform:uppercase;
+  letter-spacing:.14em;
+  font-weight:500;
+  color:var(--text-2);
+}
+.tag-friendly{font-size:10.5px;margin-bottom:6px;display:flex;align-items:center;gap:7px}
+.tag-solar .tag-friendly,.tag-bat .tag-friendly{justify-content:center}
+.widget-title{font-size:10px;display:flex;align-items:center;gap:7px;margin-bottom:8px;color:var(--text-2)}
+.slot-label{font-size:9px;color:var(--text-2);opacity:.8}
+.dev-name{font-size:9px;letter-spacing:.1em}
+.greeting-hello{font-size:11px;color:var(--text-2)}
+.greeting-date{font-size:10px;color:var(--text-2)}
+/* Farbpunkt vor der Beschriftung statt Symbol. */
+.tag-grid .tag-friendly::before,.tag-ev .tag-friendly::before,.widget-title::before{
+  content:'';width:6px;height:6px;border-radius:50%;flex:none;
+  background:var(--accent);box-shadow:0 0 6px var(--accent-glow);
+}
+.tag-grid .tag-friendly::before{background:var(--grid);box-shadow:0 0 6px var(--grid-g)}
+.tag-ev .tag-friendly::before{background:var(--ev);box-shadow:0 0 6px var(--ev-g)}
+.widget-weather .widget-title::before{background:var(--cyan)}
+.widget-forecast .widget-title::before{background:var(--yellow);box-shadow:0 0 6px var(--solar-g)}
+.widget-price .widget-title::before{background:var(--orange);box-shadow:0 0 6px rgba(255,159,67,.5)}
+.widget-optimizer .widget-title::before{background:var(--violet);box-shadow:0 0 6px var(--ev-g)}
+.tag-grid .tag-emoji{display:none}
+
+/* Zahlen: ruhiger gesetzt, Ziffern gleich breit. */
+.tag-val,.widget-main,.slot-val,.dev-watts,.fam-extra-val,.stat-val,.tag-soc-pct,.greeting-time,.panel-title{
+  font-weight:600;letter-spacing:-.01em;font-variant-numeric:tabular-nums;
+}
+.tag-val{font-size:22px}
+.widget-main{font-size:22px;color:var(--text)}
+.widget-price .widget-main{color:var(--yellow)}
+.greeting-time{font-size:30px;color:var(--text)}
+.widget-sub,.weather-extra{color:var(--text-2)}
+.tag-status{font-family:var(--f-mono);font-size:10px;font-weight:500;letter-spacing:.04em}
+.tag-bat .tag-status{font-family:var(--f-body);font-size:15px;font-weight:600;background:var(--bg-elev);border:1px solid var(--glass-brd)}
+.fam-tile .fam-extra-val{color:var(--cyan)}
+
+/* Kennzahlen-Leiste: Beschriftung oben, Zahl darunter; nichts läuft ineinander. */
+.glass{padding:12px 18px;max-width:1080px}
+.slot{padding:6px 10px;gap:4px;overflow:hidden}
+.slot+.slot{border-left:1px solid var(--hairline)}
+.slot-icon{display:none}
+.slot-label{order:1;max-width:100%;margin-top:0;white-space:normal;overflow:visible;text-overflow:clip;
+  letter-spacing:.08em;line-height:1.35;min-height:2.7em;display:flex;align-items:center;justify-content:center;text-align:center}
+/* E-Auto unter den Akku, nicht darüber. */
+.tag-ev{top:65%}
+.slot-val{order:2;max-width:100%;font-size:19px}
+.edit-toggle{top:8px;right:8px;width:24px;height:24px;font-size:11px;background:var(--glass);border-color:var(--glass-brd);color:var(--text-dim)}
+
+/* Auswahl- und Detailflächen im selben Glas. */
+.picker,.panel{background:rgba(6,12,28,.94);border-top:1px solid var(--glass-brd)}
+.stat-card,.detail-row,.panel-chart,.picker-item,.panel-evtile{background:var(--glass);border:1px solid var(--hairline);border-radius:var(--r-md)}
+.fam-set-btn.primary{background:var(--green);border-color:var(--green)}
+.fam-set-row input[type="checkbox"]{accent-color:var(--green)}
+
+/* Handy: die Seitenleiste wird ein wischbarer Streifen unter der Uhr, die
+   Kacheln rücken darunter auseinander, statt übereinander zu liegen. */
+@media (max-width:600px){
+  .greeting{padding:14px 16px 8px}
+  .greeting-time{font-size:22px}
+  .widgets{position:absolute;top:80px;left:0;right:0;transform:none;max-width:none;
+    flex-direction:row;flex-wrap:nowrap;gap:8px;padding:0 12px;overflow-x:auto;
+    scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .widgets::-webkit-scrollbar{display:none}
+  .widget{flex:0 0 150px;min-width:0;padding:10px 12px}
+  .widget .weather-extra,.widget .weather-hourly,.widget .weather-days{display:none!important}
+  .widget-chart-wrap{height:44px}
+  .widget-main{font-size:18px}
+  .fam-taganim.pf-sky{width:84px;height:84px}
+  .fam-taganim.pf-bat-anim{width:30px;height:76px}
+  .tag{min-width:0}
+  .tag-solar{top:23%;left:50%;transform:translateX(-50%);min-width:0}
+  .tag-solar:hover,.tag-solar:active{transform:translateX(-50%)}
+  .tag-bat{top:23%;left:0;min-width:96px}
+  .tag-bat .tag-status{font-size:12px;padding:3px 10px}
+  .tag-grid{top:25%;right:2%;left:auto;padding:10px 12px}
+  .tag-grid .tag-status{display:none}
+  .pf-center-readout{top:54%;padding:10px 14px}
+  .pf-center-readout .v{font-size:26px;white-space:nowrap}
+  .pf-center-readout .pf-house-icon{font-size:18px}
+  .pf-center-readout .l{font-size:9px;letter-spacing:.22em}
+  .tag-ev{top:68%;left:3%;max-width:56%;padding:10px 12px}
+  .devices-tray{bottom:112px;left:auto;right:8px;max-width:40%;justify-content:flex-end}
+  .slot-val{font-size:16px}
+  .glass{padding:10px 12px}
+}
+
+/* Niedrige Bildschirme (Tablet quer, 768 px hoch): die Seitenleiste beginnt
+   unter der Uhr und spart die Tagesvorschau, Akku und E-Auto rücken auseinander. */
+@media (min-width:601px) and (max-height:820px){
+  .widgets{top:100px;transform:none;gap:6px}
+  .widget{padding:9px 12px}
+  .widget-chart-wrap{height:64px}
+  .widget-weather .weather-days{display:none!important}
+  .tag-bat{top:27%}
+  .tag-ev{top:63%}
+  .tag-grid{right:21%}
+}

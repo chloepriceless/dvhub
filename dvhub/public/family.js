@@ -96,14 +96,14 @@
   /* Panel data for main tags (static copy seeded from original; stats are
      rewritten on every poll via applyFamilyStatus -> updatePanelStats) */
   var panelData = {
-    solar: { icon: '&#9728;&#65039;', iconBg: 'rgba(247,183,49,.1)', title: 'Solaranlage', sub: 'Deine Module auf dem Dach', color: '#F7B731', summary: 'Die Solaranlage wandelt Sonnenlicht in Strom um. An guten Tagen deckst du den gesamten Hausverbrauch und lädst gleichzeitig Batterie und Auto.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Morgen', val: '—', delta: '', up: true }], chart: null, details: [['Status', 'Live von /api/family/status']] },
-    home: { icon: '&#127968;', iconBg: 'rgba(75,123,236,.1)', title: 'Dein Zuhause', sub: 'Gesamtverbrauch', color: '#4b7bec', summary: 'Der Verbrauch wird berechnet aus Solar minus Batterie, Auto und Netz.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Eigenverbrauch', val: '—', delta: '', up: true }], chart: null, details: [['Berechnung', 'Solar - Batterie - Auto - Netz']] },
-    bat: { icon: '&#128267;', iconBg: 'rgba(38,222,129,.1)', title: 'Batteriespeicher', sub: 'Dein Stromspeicher', color: '#26de81', summary: 'Speichert Solarüberschuss für den Abend.', stats: [{ label: 'Stand', val: '—', delta: '', up: true }, { label: 'Leistung', val: '—', delta: '', up: true }, { label: 'Reicht', val: '—', delta: '', up: true }], chart: null, details: [['Kapazität', '—']] },
-    ev: { icon: TESLA_GLYPH_SVG, iconBg: 'rgba(165,94,234,.1)', title: 'E-Auto', sub: 'Solarüberschuss-Laden', color: '#a55eea', summary: 'Lädt clever mit dem Strom den die Sonne liefert.', stats: [{ label: 'Leistung', val: '—', delta: '', up: true }, { label: 'Akku', val: '—', delta: '', up: true }, { label: 'Modus', val: '—', delta: '', up: true }], chart: null, details: [['Wallbox', '—']] },
-    grid: { icon: '&#9889;', iconBg: 'rgba(253,150,68,.1)', title: 'Stromnetz', sub: 'Einspeisung & Bezug', color: '#fd9644', summary: 'Richtung und Preis live vom /api/family/status Endpoint.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Preis jetzt', val: '—', delta: '', up: true }, { label: 'Min/Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Tarif', 'Dynamisch']] },
-    forecast: { icon: '&#9925;', iconBg: 'rgba(247,183,49,.08)', title: 'PV Vorhersage', sub: 'Heute & Morgen', color: '#F7B731', summary: 'Die PV-Vorhersage basiert auf Wetterdaten und pvlib-Simulation.', stats: [{ label: 'Heute', val: '—', delta: '', up: true }, { label: 'Morgen', val: '—', delta: '', up: true }, { label: 'Peak', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast']] },
-    price: { icon: '&#128181;', iconBg: 'rgba(253,150,68,.08)', title: 'EPEX Strompreis', sub: 'Day-Ahead Markt', color: '#fd9644', summary: 'EPEX Day-Ahead Börsenpreise (15-min). Die Kurve zeigt den kompletten verfügbaren Verlauf — heute und, sobald gegen 13 Uhr veröffentlicht, auch morgen.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Min heute', val: '—', delta: '', up: true }, { label: 'Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast (price slots)']] },
-    optimizer: { icon: '&#129302;', iconBg: 'rgba(75,123,236,.08)', title: 'Optimizer', sub: 'DV-EOS Vorhersage', color: '#4b7bec', summary: 'DV-EOS plant Laden, Entladen und Einspeisen aus EPEX-Preisen, PV- und Last-Prognose. Die Tabelle zeigt den geplanten Verlauf inkl. erwartetem Akkustand.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Als nächstes', val: '—', delta: '', up: true }, { label: 'Status', val: '—', delta: '', up: true }], chart: null, details: [['Fahrplan', '\u2014']] },
+    solar: { icon: '&#9728;&#65039;', iconBg: 'rgba(255,212,33,.1)', title: 'Solaranlage', sub: 'Deine Module auf dem Dach', color: '#ffd421', summary: 'Die Solaranlage wandelt Sonnenlicht in Strom um. An guten Tagen deckst du den gesamten Hausverbrauch und lädst gleichzeitig Batterie und Auto.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Morgen', val: '—', delta: '', up: true }], chart: null, details: [['Status', 'Live von /api/family/status']] },
+    home: { icon: '&#127968;', iconBg: 'rgba(52,219,255,.1)', title: 'Dein Zuhause', sub: 'Gesamtverbrauch', color: '#34dbff', summary: 'Der Verbrauch wird berechnet aus Solar minus Batterie, Auto und Netz.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Eigenverbrauch', val: '—', delta: '', up: true }], chart: null, details: [['Berechnung', 'Solar - Batterie - Auto - Netz']] },
+    bat: { icon: '&#128267;', iconBg: 'rgba(62,224,160,.1)', title: 'Batteriespeicher', sub: 'Dein Stromspeicher', color: '#3ee0a0', summary: 'Speichert Solarüberschuss für den Abend.', stats: [{ label: 'Stand', val: '—', delta: '', up: true }, { label: 'Leistung', val: '—', delta: '', up: true }, { label: 'Reicht', val: '—', delta: '', up: true }], chart: null, details: [['Kapazität', '—']] },
+    ev: { icon: TESLA_GLYPH_SVG, iconBg: 'rgba(167,139,255,.1)', title: 'E-Auto', sub: 'Solarüberschuss-Laden', color: '#a78bff', summary: 'Lädt clever mit dem Strom den die Sonne liefert.', stats: [{ label: 'Leistung', val: '—', delta: '', up: true }, { label: 'Akku', val: '—', delta: '', up: true }, { label: 'Modus', val: '—', delta: '', up: true }], chart: null, details: [['Wallbox', '—']] },
+    grid: { icon: '&#9889;', iconBg: 'rgba(255,122,198,.1)', title: 'Stromnetz', sub: 'Einspeisung & Bezug', color: '#ff7ac6', summary: 'Richtung und Preis live vom /api/family/status Endpoint.', stats: [{ label: 'Gerade', val: '—', delta: '', up: true }, { label: 'Preis jetzt', val: '—', delta: '', up: true }, { label: 'Min/Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Tarif', 'Dynamisch']] },
+    forecast: { icon: '&#9925;', iconBg: 'rgba(255,212,33,.08)', title: 'PV Vorhersage', sub: 'Heute & Morgen', color: '#ffd421', summary: 'Die PV-Vorhersage basiert auf Wetterdaten und pvlib-Simulation.', stats: [{ label: 'Heute', val: '—', delta: '', up: true }, { label: 'Morgen', val: '—', delta: '', up: true }, { label: 'Peak', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast']] },
+    price: { icon: '&#128181;', iconBg: 'rgba(255,159,67,.08)', title: 'EPEX Strompreis', sub: 'Day-Ahead Markt', color: '#ff9f43', summary: 'EPEX Day-Ahead Börsenpreise (15-min). Die Kurve zeigt den kompletten verfügbaren Verlauf — heute und, sobald gegen 13 Uhr veröffentlicht, auch morgen.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Min heute', val: '—', delta: '', up: true }, { label: 'Max heute', val: '—', delta: '', up: true }], chart: null, details: [['Quelle', '/api/forecast (price slots)']] },
+    optimizer: { icon: '&#129302;', iconBg: 'rgba(52,219,255,.08)', title: 'Optimizer', sub: 'DV-EOS Vorhersage', color: '#34dbff', summary: 'DV-EOS plant Laden, Entladen und Einspeisen aus EPEX-Preisen, PV- und Last-Prognose. Die Tabelle zeigt den geplanten Verlauf inkl. erwartetem Akkustand.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Als nächstes', val: '—', delta: '', up: true }, { label: 'Status', val: '—', delta: '', up: true }], chart: null, details: [['Fahrplan', '\u2014']] },
     weather: { icon: '&#9925;', iconBg: 'rgba(52,219,255,.08)', title: 'Wetter', sub: 'Open-Meteo · Standort der Anlage', color: '#34dbff', summary: 'Stundenprognose aus der Wetter-Integration, die auch die PV-Vorhersage speist.', stats: [{ label: 'Jetzt', val: '—', delta: '', up: true }, { label: 'Heute', val: '—', delta: '', up: true }, { label: 'Regen', val: '—', delta: '', up: true }], chart: null, details: [] },
   };
 
@@ -126,15 +126,15 @@
   // across ALL rules before any topic rule, so a power unit always wins over a
   // topic match (unit `W` + topic `tesla` → ⚡, not 🚗).
   var TILE_META_RULES = [
-    { units: ['w', 'kw', 'mw'],            icon: '⚡',  color: '#F7B731' },
-    { units: ['wh', 'kwh'],                icon: '🔋', color: '#26de81' },
+    { units: ['w', 'kw', 'mw'],            icon: '⚡',  color: '#ffd421' },
+    { units: ['wh', 'kwh'],                icon: '🔋', color: '#3ee0a0' },
     { units: ['°c', '°f', 'c', 'k'],       icon: '🌡️', color: '#ff6b6b' },
-    { units: ['%'],                        icon: '💧', color: '#4b7bec' },
+    { units: ['%'],                        icon: '💧', color: '#34dbff' },
     { units: ['v', 'a', 'hz'],             icon: '🔌', color: '#22d3ee' },
-    { units: ['ct', 'ct/kwh', 'eur', '€'], icon: '💡', color: '#fd9644' },
-    { units: ['lx', 'lux'],                icon: '💡', color: '#F7B731' },
-    { units: ['ppm', 'µg/m³'],             icon: '💨', color: '#4b7bec' },
-    { topicIncludes: ['tesla', 'car', 'ev'], icon: '🚗', color: '#a55eea' },
+    { units: ['ct', 'ct/kwh', 'eur', '€'], icon: '💡', color: '#ff9f43' },
+    { units: ['lx', 'lux'],                icon: '💡', color: '#ffd421' },
+    { units: ['ppm', 'µg/m³'],             icon: '💨', color: '#34dbff' },
+    { topicIncludes: ['tesla', 'car', 'ev'], icon: '🚗', color: '#a78bff' },
     { topicIncludes: ['temp', 'klima'],      icon: '🌡️', color: '#ff6b6b' }
   ];
 
@@ -285,13 +285,13 @@
     // ct/kWh, so the price branch wins over the generic isMqtt unit.
     if (isMqtt && !isPrice) {
       unitFn = function (v) {
-        var n = (typeof v === 'number') ? (Number.isInteger(v) ? String(v) : v.toFixed(1)) : v;
+        var n = (typeof v === 'number') ? (Number.isInteger(v) ? String(v) : v.toFixed(1).replace('.', ',')) : v;
         return mqttUnit ? n + ' ' + mqttUnit : String(n);
       };
     } else if (isPrice) {
-      unitFn = function (v) { return (typeof v === 'number' ? v.toFixed(1) : v) + ' ct'; };
+      unitFn = function (v) { return (typeof v === 'number' ? v.toFixed(1).replace('.', ',') : v) + ' ct'; };
     } else {
-      unitFn = function (v) { return (typeof v === 'number' ? v.toFixed(2) : v) + ' kW'; };
+      unitFn = function (v) { return (typeof v === 'number' ? v.toFixed(2).replace('.', ',') : v) + ' kW'; };
     }
     panelChart = new Chart(ctx, {
       type: 'line',
@@ -560,7 +560,7 @@
             '<td class="num">' + (r.socPct != null ? escapeMsg(String(r.socPct)) + '\u202f%' : '\u2013') + '</td>' +
             '<td class="' + act.cls + '">' + escapeMsg(act.txt) + '</td>' +
             '<td class="num ' + spCls + '">' + escapeMsg(spTxt) + '</td>' +
-            '<td class="num">' + ((typeof r.feedInCtKwh === 'number' && isFinite(r.feedInCtKwh)) ? escapeMsg(r.feedInCtKwh.toFixed(1)) + ' ct' : '\u2013') + '</td>' +
+            '<td class="num">' + ((typeof r.feedInCtKwh === 'number' && isFinite(r.feedInCtKwh)) ? escapeMsg(r.feedInCtKwh.toFixed(1).replace('.', ',')) + ' ct' : '\u2013') + '</td>' +
             '</tr>';
           if (r.socPct != null) prevSoc = r.socPct;
         }
@@ -727,7 +727,7 @@
       // at the source. Static panels above keep raw HTML icons by design.
       var statusTxt = d.switchable ? (d.output ? 'Eingeschaltet' : 'Ausgeschaltet') : (d.online ? 'Live' : 'Offline');
       var energyTxt = (d.energyTodayWh != null && isFinite(d.energyTodayWh))
-        ? (d.energyTodayWh >= 1000 ? (d.energyTodayWh / 1000).toFixed(2) + ' kWh' : Math.round(d.energyTodayWh) + ' Wh')
+        ? (d.energyTodayWh >= 1000 ? (d.energyTodayWh / 1000).toFixed(2).replace('.', ',') + ' kWh' : Math.round(d.energyTodayWh) + ' Wh')
         : '—';
       panelData[cardId] = {
         icon: escapeMsg(d.emoji), iconBg: 'rgba(120,144,156,.1)', title: escapeMsg(d.name), sub: d.switchable ? 'Schaltbare Steckdose' : 'Einzelverbraucher', color: d.color || '#78909c',
@@ -765,7 +765,7 @@
     updateOffShellys(offShellys);
   }
 
-  function formatW(w) { return w >= 1000 ? (w / 1000).toFixed(1) + ' kW' : Math.round(w) + ' W'; }
+  function formatW(w) { return w >= 1000 ? (w / 1000).toFixed(1).replace('.', ',') + ' kW' : Math.round(w) + ' W'; }
 
   /* ===================== Ausgeschaltete Shellys (Re-Enable) =====================
      Schwebendes Symbol unten rechts, sichtbar NUR wenn ≥1 verbundene + ausge-
@@ -861,7 +861,7 @@
     if (value == null || value === '') return '—';
     var out;
     if (typeof value === 'number' && isFinite(value)) {
-      out = Number.isInteger(value) ? String(value) : String(Math.round(value * 10) / 10);
+      out = Number.isInteger(value) ? String(value) : String(Math.round(value * 10) / 10).replace('.', ',');
     } else if (typeof value === 'boolean') {
       out = value ? 'an' : 'aus';
     } else {
@@ -1097,10 +1097,10 @@
      'tag-home' endpoint was removed (the House is now #pfCenter), so these flows
      route through 'pfCenter' instead. They remain visually invisible. */
   var flows = [
-    { from: 'tag-solar', to: 'pfCenter', hex: '#F7B731', w: 2.5, p: 3, wh: 2, dur: 1.8, id: 'f1' },
-    { from: 'pfCenter', to: 'tag-bat', hex: '#26de81', w: 2, p: 2, wh: 1, dur: 2.2, id: 'f2' },
-    { from: 'pfCenter', to: 'tag-ev', hex: '#a55eea', w: 2, p: 2, wh: 1, dur: 2.0, id: 'f3' },
-    { from: 'pfCenter', to: 'tag-grid', hex: '#fd9644', w: 1.8, p: 1, wh: 1, dur: 2.8, id: 'f4' }
+    { from: 'tag-solar', to: 'pfCenter', hex: '#ffd421', w: 2.5, p: 3, wh: 2, dur: 1.8, id: 'f1' },
+    { from: 'pfCenter', to: 'tag-bat', hex: '#3ee0a0', w: 2, p: 2, wh: 1, dur: 2.2, id: 'f2' },
+    { from: 'pfCenter', to: 'tag-ev', hex: '#a78bff', w: 2, p: 2, wh: 1, dur: 2.0, id: 'f3' },
+    { from: 'pfCenter', to: 'tag-grid', hex: '#ff7ac6', w: 1.8, p: 1, wh: 1, dur: 2.8, id: 'f4' }
   ];
   var pathEls = {}, lblEls = {};         // pathEls[fl.id] = { fwd, rev } — two <path> elements per flow
   var particleGroupEls = {};             // particleGroupEls[fl.id] = { fwd, rev } — two <g> with circles+animateMotion
@@ -1383,63 +1383,63 @@
     return v == null ? '--' : (digits === 0 ? Math.round(v) : v.toFixed(digits));
   }
   var allMetrics = {
-    eigenverbrauch: { id: 'eigenverbrauch', icon: '\u{1F340}', label: 'Eigenverbrauch', color: '#26de81', unit: '%', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    eigenverbrauch: { id: 'eigenverbrauch', icon: '\u{1F340}', label: 'Eigenverbrauch', color: '#3ee0a0', unit: '%', periods: ['day', 'month', 'year'], calc: function (s, p) {
       var pv = pk(s, p, 'pvKwh'); var ex = pk(s, p, 'exportKwh');
       if (pv == null || ex == null || pv <= 0) return s.live.sr;
       return Math.max(0, Math.min(100, Math.round((pv - ex) / pv * 100)));
     } },
-    autarkie: { id: 'autarkie', icon: '\u{1F3E0}', label: 'Autarkie', color: '#4b7bec', unit: '%', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    autarkie: { id: 'autarkie', icon: '\u{1F3E0}', label: 'Autarkie', color: '#34dbff', unit: '%', periods: ['day', 'month', 'year'], calc: function (s, p) {
       var load = pk(s, p, 'loadKwh'); var imp = pk(s, p, 'importKwh');
       if (load == null || imp == null || load <= 0) return s.live.autarkie;
       return Math.max(0, Math.min(100, Math.round((load - imp) / load * 100)));
     } },
-    bilanz: { id: 'bilanz', icon: '\u{1F4C8}', label: 'Bilanz', color: '#F7B731', unit: '\u20ac', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    bilanz: { id: 'bilanz', icon: '\u{1F4C8}', label: 'Bilanz', color: '#ffd421', unit: '\u20ac', periods: ['day', 'month', 'year'], calc: function (s, p) {
       var v = pk(s, p, 'netEur');
-      if (v == null && (p === 'day' || !p)) { var n = parseFloat(s.savings.todayEur); return isFinite(n) ? n.toFixed(2) : '--'; }
+      if (v == null && (p === 'day' || !p)) { var n = parseFloat(s.savings.todayEur); return isFinite(n) ? n.toFixed(2).replace('.', ',') : '--'; }
       return fmtOr(v, 2);
     } },
-    einnahmen: { id: 'einnahmen', icon: '\u{1F4B8}', label: 'Einnahmen', color: '#fd9644', unit: '\u20ac', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    einnahmen: { id: 'einnahmen', icon: '\u{1F4B8}', label: 'Einnahmen', color: '#ff9f43', unit: '\u20ac', periods: ['day', 'month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'exportRevenueEur'), 2);
     } },
-    kosten_vermieden: { id: 'kosten_vermieden', icon: '\u{1F6E1}\uFE0F', label: 'Kosten vermieden', color: '#26de81', unit: '\u20ac', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    kosten_vermieden: { id: 'kosten_vermieden', icon: '\u{1F6E1}\uFE0F', label: 'Kosten vermieden', color: '#3ee0a0', unit: '\u20ac', periods: ['day', 'month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'avoidedImportGrossEur'), 2);
     } },
-    ertrag: { id: 'ertrag', icon: '\u2600\uFE0F', label: 'PV-Ertrag', color: '#F7B731', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    ertrag: { id: 'ertrag', icon: '\u2600\uFE0F', label: 'PV-Ertrag', color: '#ffd421', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'pvKwh'), 1);
     } },
-    einspeisung_kwh: { id: 'einspeisung_kwh', icon: '\u{1F50C}', label: 'Eingespeist', color: '#fd9644', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    einspeisung_kwh: { id: 'einspeisung_kwh', icon: '\u{1F50C}', label: 'Eingespeist', color: '#ff9f43', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'exportKwh'), 1);
     } },
     bezug_kwh: { id: 'bezug_kwh', icon: '\u26A1', label: 'Netzbezug', color: '#ff6b6b', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'importKwh'), 1);
     } },
-    erzielt_ct: { id: 'erzielt_ct', icon: '\u{1F3AF}', label: 'Erzielt (Einspeisung)', color: '#a55eea', unit: 'ct/kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    erzielt_ct: { id: 'erzielt_ct', icon: '\u{1F3AF}', label: 'Erzielt (Einspeisung)', color: '#a78bff', unit: 'ct/kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'dvRevenueCtKwh'), 2);
     } },
     boerse_avg: { id: 'boerse_avg', icon: '\u{1F4B9}', label: '\u00d8 B\u00f6rsen-Verg\u00fctung', color: '#34dbff', unit: 'ct/kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'periodMarketValueCtKwh'), 2);
     } },
-    aw_mittel: { id: 'aw_mittel', icon: '\u2696\uFE0F', label: 'Anzulegender Wert', color: '#4b7bec', unit: 'ct/kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    aw_mittel: { id: 'aw_mittel', icon: '\u2696\uFE0F', label: 'Anzulegender Wert', color: '#34dbff', unit: 'ct/kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'weightedApplicableValueCtKwh'), 2);
     } },
     jahresmarktwert: { id: 'jahresmarktwert', icon: '\u{1F4C5}', label: 'Jahresmarktwert', color: '#34dbff', unit: 'ct/kWh', periods: ['year'], calc: function (s, p) {
       return fmtOr(pk(s, 'year', 'annualMarketValueCtKwh'), 2);
     } },
-    zyklen: { id: 'zyklen', icon: '\u{1F504}', label: 'Akku-Zyklen', color: '#26de81', unit: '', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    zyklen: { id: 'zyklen', icon: '\u{1F504}', label: 'Akku-Zyklen', color: '#3ee0a0', unit: '', periods: ['day', 'month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'cycles'), 1);
     } },
-    eeg51a: { id: 'eeg51a', icon: '\u00a7', label: '\u00a751a Verl\u00e4ngerung', color: '#a55eea', unit: 'Mon.', periods: ['month', 'year'], calc: function (s, p) {
+    eeg51a: { id: 'eeg51a', icon: '\u00a7', label: '\u00a751a Verl\u00e4ngerung', color: '#a78bff', unit: 'Mon.', periods: ['month', 'year'], calc: function (s, p) {
       return fmtOr(pk(s, p, 'eegExtensionMonths'), 2);
     } },
-    co2: { id: 'co2', icon: '\u{1F33F}', label: 'CO\u2082 vermieden', color: '#26de81', unit: 'kg', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    co2: { id: 'co2', icon: '\u{1F33F}', label: 'CO\u2082 vermieden', color: '#3ee0a0', unit: 'kg', periods: ['day', 'month', 'year'], calc: function (s, p) {
       var sc = pk(s, p, 'selfConsumptionKwh');
-      return sc == null ? '--' : (sc * 0.4).toFixed(1);
+      return sc == null ? '--' : (sc * 0.4).toFixed(1).replace('.', ',');
     } },
-    baeume: { id: 'baeume', icon: '\u{1F333}', label: 'B\u00e4ume-\u00c4quivalent', color: '#26de81', unit: '', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    baeume: { id: 'baeume', icon: '\u{1F333}', label: 'B\u00e4ume-\u00c4quivalent', color: '#3ee0a0', unit: '', periods: ['day', 'month', 'year'], calc: function (s, p) {
       var sc = pk(s, p, 'selfConsumptionKwh');
-      return sc == null ? '--' : (sc * 0.4 / 25).toFixed(2);
+      return sc == null ? '--' : (sc * 0.4 / 25).toFixed(2).replace('.', ',');
     } },
-    solar_km: { id: 'solar_km', icon: '\u{1F697}', label: 'Solar-Kilometer', color: '#a55eea', unit: 'km', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    solar_km: { id: 'solar_km', icon: '\u{1F697}', label: 'Solar-Kilometer', color: '#a78bff', unit: 'km', periods: ['day', 'month', 'year'], calc: function (s, p) {
       var pv = pk(s, p, 'pvKwh');
       return pv == null ? '--' : Math.round(pv * 6);
     } },
@@ -1451,11 +1451,11 @@
       var pv = pk(s, p, 'pvKwh');
       return pv == null ? '--' : Math.round(pv / 0.08);
     } },
-    netz_bilanz: { id: 'netz_bilanz', icon: '\u2696\uFE0F', label: 'Netz-Saldo', color: '#fd9644', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
+    netz_bilanz: { id: 'netz_bilanz', icon: '\u2696\uFE0F', label: 'Netz-Saldo', color: '#ff9f43', unit: 'kWh', periods: ['day', 'month', 'year'], calc: function (s, p) {
       var ex = pk(s, p, 'exportKwh'); var im = pk(s, p, 'importKwh');
       if (ex == null || im == null) return '--';
       var net = ex - im;
-      return (net >= 0 ? '+' : '') + net.toFixed(1);
+      return (net >= 0 ? '+' : '') + net.toFixed(1).replace('.', ',');
     } }
   };
 
@@ -1601,7 +1601,8 @@
       var el = document.getElementById('sv-' + i);
       if (!el) continue;
       var val = entry.metric.calc(slotStats, entry.period);
-      el.textContent = val + (entry.metric.unit && val !== '--' ? ' ' + entry.metric.unit : '');
+      // Dezimalkomma wie überall sonst (manche Kennzahlen kommen als fertige Zeichenkette).
+      el.textContent = String(val).replace('.', ',') + (entry.metric.unit && val !== '--' ? ' ' + entry.metric.unit : '');
     }
   }
 
@@ -1648,7 +1649,7 @@
     if (Math.abs(v) < 1.0) {
       return Math.round(v * 1000) + ' W';
     }
-    return v.toFixed(2) + ' kW';
+    return v.toFixed(2).replace('.', ',') + ' kW';
   }
 
   function formatPct(v) {
@@ -1715,7 +1716,7 @@
 
     sr('family.battery', function () {
       if (typeof battery.powerKw === 'number') {
-        setText('ts-bat', (battery.powerKw >= 0 ? '+' : '') + battery.powerKw.toFixed(1) + ' kW');
+        setText('ts-bat', (battery.powerKw >= 0 ? '+' : '') + battery.powerKw.toFixed(1).replace('.', ',') + ' kW');
       }
       famUpdateTagAnims(energy, battery);
     });
@@ -1840,7 +1841,7 @@
         : (typeof price.nowCtKwh === 'number' ? price.nowCtKwh : null);
       setText('ts-grid', energy.feedingToGrid
         ? 'Einspeisung'
-        : (importPrice != null ? 'Bezug · ' + importPrice.toFixed(1) + ' ct/kWh' : 'Bezug'));
+        : (importPrice != null ? 'Bezug · ' + importPrice.toFixed(1).replace('.', ',') + ' ct/kWh' : 'Bezug'));
     });
 
     sr('family.greeting', function () {
@@ -1945,12 +1946,12 @@
     // the "Morgen" row on the forecast widget/panel only.
     panelData.solar.stats = [
       { label: 'Gerade', val: formatKw(energy.solarKw), delta: energy.surplus ? 'Überschuss' : '', up: true },
-      { label: 'Heute', val: typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true },
-      { label: 'Eingespeist', val: typeof today.exportKwh === 'number' ? today.exportKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true }
+      { label: 'Heute', val: typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1).replace('.', ',') + ' kWh' : '—', delta: '', up: true },
+      { label: 'Eingespeist', val: typeof today.exportKwh === 'number' ? today.exportKwh.toFixed(1).replace('.', ',') + ' kWh' : '—', delta: '', up: true }
     ];
     panelData.home.stats = [
       { label: 'Gerade', val: formatKw(energy.homeKw), delta: '', up: true },
-      { label: 'Heute', val: typeof today.loadKwh === 'number' ? today.loadKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true },
+      { label: 'Heute', val: typeof today.loadKwh === 'number' ? today.loadKwh.toFixed(1).replace('.', ',') + ' kWh' : '—', delta: '', up: true },
       // Eigenverbrauchsquote: live (momentary) while PV produces; at night the
       // live ratio is undefined, so fall back to the day quota
       // (PV − Einspeisung)/PV from the real telemetry counters.
@@ -1968,8 +1969,8 @@
       { label: 'Leistung', val: typeof battery.powerKw === 'number' ? (battery.powerKw > 0 ? '+' + formatKw(battery.powerKw) : formatKw(battery.powerKw)) : '—', delta: '', up: true },
       { label: 'Heute',
         val: typeof today.batteryChargeKwh === 'number' && typeof today.batteryDischargeKwh === 'number'
-          ? '+' + today.batteryChargeKwh.toFixed(1) + ' / -' + today.batteryDischargeKwh.toFixed(1) + ' kWh'
-          : (typeof battery.runtimeHours === 'number' ? '~' + battery.runtimeHours.toFixed(1) + ' h' : '—'),
+          ? '+' + today.batteryChargeKwh.toFixed(1).replace('.', ',') + ' / -' + today.batteryDischargeKwh.toFixed(1).replace('.', ',') + ' kWh'
+          : (typeof battery.runtimeHours === 'number' ? '~' + battery.runtimeHours.toFixed(1).replace('.', ',') + ' h' : '—'),
         delta: '', up: true }
     ];
     // EV detail panel — Part B (checkpoint round 5): when a Tesla is live,
@@ -2022,8 +2023,8 @@
     }
     panelData.grid.stats = [
       { label: 'Gerade', val: formatKw(Math.abs(energy.gridKw || 0)) + (energy.feedingToGrid ? ' ein' : ' bez'), delta: '', up: energy.feedingToGrid },
-      { label: 'Bezug jetzt', val: typeof price.importCtKwh === 'number' ? price.importCtKwh.toFixed(1) + ' ct' : '—', delta: typeof price.nowCtKwh === 'number' ? 'EPEX ' + price.nowCtKwh.toFixed(1) + ' ct' : '', up: true },
-      { label: 'EPEX min/max heute', val: (typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) : '—') + ' / ' + (typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) : '—') + ' ct', delta: '', up: true }
+      { label: 'Bezug jetzt', val: typeof price.importCtKwh === 'number' ? price.importCtKwh.toFixed(1).replace('.', ',') + ' ct' : '—', delta: typeof price.nowCtKwh === 'number' ? 'EPEX ' + price.nowCtKwh.toFixed(1).replace('.', ',') + ' ct' : '', up: true },
+      { label: 'EPEX min/max heute', val: (typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1).replace('.', ',') : '—') + ' / ' + (typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1).replace('.', ',') : '—') + ' ct', delta: '', up: true }
     ];
     // Forecast panel: "Heute" pulls the real counter from today.pvKwh
     // because the forecast service frequently has no slots (no Solcast key
@@ -2032,16 +2033,16 @@
     // forecast service is empty. Peak heute is derived from the 24-bucket
     // today.charts.solar so we can at least show a real number now.
     var tomorrowKwh = forecast.pv && forecast.pv.tomorrow && typeof forecast.pv.tomorrow.kwhTotal === 'number' && forecast.pv.tomorrow.kwhTotal > 0
-      ? forecast.pv.tomorrow.kwhTotal.toFixed(1) + ' kWh' : '—';
+      ? forecast.pv.tomorrow.kwhTotal.toFixed(1).replace('.', ',') + ' kWh' : '—';
     var tomorrowPeak = forecast.pv && forecast.pv.tomorrow && typeof forecast.pv.tomorrow.peakKw === 'number' && forecast.pv.tomorrow.peakKw > 0
-      ? forecast.pv.tomorrow.peakKw.toFixed(2) + ' kW' : '—';
+      ? forecast.pv.tomorrow.peakKw.toFixed(2).replace('.', ',') + ' kW' : '—';
     var peakHeuteKw = null;
     if (today.charts && Array.isArray(today.charts.solar)) {
       peakHeuteKw = today.charts.solar.reduce(function (m, v) { return typeof v === 'number' && v > m ? v : m; }, 0);
     }
     panelData.forecast.stats = [
-      { label: 'Heute', val: typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1) + ' kWh' : '—', delta: '', up: true },
-      { label: 'Peak heute', val: peakHeuteKw != null && peakHeuteKw > 0 ? peakHeuteKw.toFixed(2) + ' kW' : '—', delta: '', up: true },
+      { label: 'Heute', val: typeof today.pvKwh === 'number' ? today.pvKwh.toFixed(1).replace('.', ',') + ' kWh' : '—', delta: '', up: true },
+      { label: 'Peak heute', val: peakHeuteKw != null && peakHeuteKw > 0 ? peakHeuteKw.toFixed(2).replace('.', ',') + ' kW' : '—', delta: '', up: true },
       { label: 'Morgen', val: tomorrowKwh, delta: tomorrowPeak !== '—' ? 'Peak ' + tomorrowPeak : 'keine Prognose', up: true }
     ];
     // Tomorrow's day-ahead range — surfaced in the deltas once published
@@ -2053,9 +2054,9 @@
     var tomMin = tomVals.length ? Math.min.apply(null, tomVals) : null;
     var tomMax = tomVals.length ? Math.max.apply(null, tomVals) : null;
     panelData.price.stats = [
-      { label: 'Jetzt', val: typeof price.nowCtKwh === 'number' ? price.nowCtKwh.toFixed(1) + ' ct' : '—', delta: typeof price.importCtKwh === 'number' ? 'Bezug ' + price.importCtKwh.toFixed(1) + ' ct' : '', up: true },
-      { label: 'Min heute', val: typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) + ' ct' : '—', delta: tomMin != null ? 'morgen ' + tomMin.toFixed(1) + ' ct' : '', up: true },
-      { label: 'Max heute', val: typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) + ' ct' : '—', delta: tomMax != null ? 'morgen ' + tomMax.toFixed(1) + ' ct' : '', up: true }
+      { label: 'Jetzt', val: typeof price.nowCtKwh === 'number' ? price.nowCtKwh.toFixed(1).replace('.', ',') + ' ct' : '—', delta: typeof price.importCtKwh === 'number' ? 'Bezug ' + price.importCtKwh.toFixed(1).replace('.', ',') + ' ct' : '', up: true },
+      { label: 'Min heute', val: typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1).replace('.', ',') + ' ct' : '—', delta: tomMin != null ? 'morgen ' + tomMin.toFixed(1).replace('.', ',') + ' ct' : '', up: true },
+      { label: 'Max heute', val: typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1).replace('.', ',') + ' ct' : '—', delta: tomMax != null ? 'morgen ' + tomMax.toFixed(1).replace('.', ',') + ' ct' : '', up: true }
     ];
     // Panel "Verlauf heute" charts — 24 hourly values per panel from
     // data.today.charts (96 for price, native 15-min EPEX resolution).
@@ -2136,7 +2137,7 @@
     } else {
       forecastChart = new Chart(canvas.getContext('2d'), {
         type: 'line',
-        data: { labels: labels, datasets: [{ data: values, borderColor: '#F7B731', backgroundColor: 'rgba(247,183,49,0.12)', fill: true, tension: 0.4, pointRadius: 0, borderWidth: 2 }] },
+        data: { labels: labels, datasets: [{ data: values, borderColor: '#ffd421', backgroundColor: 'rgba(255,212,33,0.12)', fill: true, tension: 0.4, pointRadius: 0, borderWidth: 2 }] },
         options: {
           responsive: true, maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
@@ -2145,7 +2146,7 @@
             tooltip: {
               backgroundColor: 'rgba(14,16,24,.9)', titleColor: '#fff', bodyColor: '#ccc',
               borderColor: 'rgba(255,255,255,.1)', borderWidth: 1, cornerRadius: 8, padding: 8,
-              callbacks: { label: function (c) { return c.parsed.y.toFixed(2) + ' kW'; } }
+              callbacks: { label: function (c) { return c.parsed.y.toFixed(2).replace('.', ',') + ' kW'; } }
             }
           },
           scales: { x: { ticks: { color: 'rgba(255,255,255,0.3)', maxTicksLimit: 8 } }, y: { ticks: { color: 'rgba(255,255,255,0.3)' }, beginAtZero: true } }
@@ -2184,11 +2185,11 @@
 
   function renderPriceWidget(price) {
     var el = document.getElementById('price-now');
-    if (el) el.textContent = (typeof price.nowCtKwh === 'number' ? price.nowCtKwh.toFixed(1) : '—') + ' ct';
+    if (el) el.textContent = (typeof price.nowCtKwh === 'number' ? price.nowCtKwh.toFixed(1).replace('.', ',') : '—') + ' ct';
     var elMin = document.getElementById('price-min');
-    if (elMin) elMin.textContent = typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1) : '—';
+    if (elMin) elMin.textContent = typeof price.todayMinCtKwh === 'number' ? price.todayMinCtKwh.toFixed(1).replace('.', ',') : '—';
     var elMax = document.getElementById('price-max');
-    if (elMax) elMax.textContent = typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1) : '—';
+    if (elMax) elMax.textContent = typeof price.todayMaxCtKwh === 'number' ? price.todayMaxCtKwh.toFixed(1).replace('.', ',') : '—';
   }
 
   /* Weather widget (2026-06-13) — WMO weather_code → emoji symbol. */
@@ -3253,15 +3254,51 @@
      <html> angewandt. CSP-konform: kein inline-style, nur CSSOM (element.style). */
   var ZOOM_KEY = 'dvhub.family.zoom.v1';
   var ZOOM_MIN = 0.5, ZOOM_MAX = 1.6, ZOOM_STEP = 0.1, ZOOM_DEFAULT = 1.0;
+  // Tablets (2026-10-08): ein iPad 10,2" hat 2160 Bildpunkte, meldet sich aber mit
+  // 1080 Breite — alles erschien so groß, als wäre der Schirm klein. Auf
+  // Touch-Geräten skaliert deshalb der Browser selbst: die Seite bekommt über
+  // den viewport-Eintrag eine größere Rechenbreite und wird passend
+  // verkleinert. So bleiben Höhe, Messwerte und Flusslinien stimmig — CSS-zoom
+  // ließ beim Verkleinern unten einen schwarzen Streifen und verschob die Linien.
+  var ZOOM_DESIGN_WIDTH = 1540;   // Breite, für die das Dashboard gestaltet ist
+  function zoomUsesViewport() {
+    try { return ('ontouchstart' in window) && window.matchMedia('(pointer: coarse)').matches; } catch { return false; }
+  }
+  function zoomDeviceWidth() {
+    var a = Number(window.screen && window.screen.width) || window.innerWidth;
+    var b = Number(window.screen && window.screen.height) || window.innerHeight;
+    var landscape = false;
+    try { landscape = window.matchMedia('(orientation: landscape)').matches; } catch { landscape = window.innerWidth > window.innerHeight; }
+    return landscape ? Math.max(a, b) : Math.min(a, b);
+  }
+  // Voreinstellung ohne eigene Wahl: Tablets (700–1400 breit) so, dass die
+  // Gestaltungsbreite hineinpasst; Handys und große Schirme bleiben bei 100 %.
+  function zoomAuto() {
+    if (!zoomUsesViewport()) return ZOOM_DEFAULT;
+    var w = zoomDeviceWidth();
+    if (w < 700 || w > 1400) return ZOOM_DEFAULT;
+    return Math.max(0.6, Math.min(1, Math.round((w / ZOOM_DESIGN_WIDTH) * 10) / 10));
+  }
   function zoomLoad() {
-    var v = parseFloat(localStorage.getItem(ZOOM_KEY));
-    return (isFinite(v) && v >= ZOOM_MIN && v <= ZOOM_MAX) ? v : ZOOM_DEFAULT;
+    var v = NaN;
+    try { v = parseFloat(localStorage.getItem(ZOOM_KEY)); } catch { /* private mode */ }
+    return (isFinite(v) && v >= ZOOM_MIN && v <= ZOOM_MAX) ? v : zoomAuto();
   }
   function zoomApply(level) {
     var v = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(Number(level) * 10) / 10));
-    document.documentElement.style.zoom = String(v);
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (zoomUsesViewport() && meta) {
+      document.documentElement.style.zoom = '';
+      document.documentElement.style.removeProperty('--fam-zoom');
+      meta.setAttribute('content', 'width=' + Math.round(zoomDeviceWidth() / v) + ', user-scalable=no');
+    } else {
+      document.documentElement.style.zoom = String(v);
+      // .viewport gleicht die Höhe damit aus (family.css), sonst bliebe beim
+      // Verkleinern unten ein leerer Streifen.
+      document.documentElement.style.setProperty('--fam-zoom', String(v));
+    }
     var lbl = document.getElementById('famSetZoomVal');
-    if (lbl) lbl.textContent = Math.round(v * 100) + ' %';
+    if (lbl) lbl.textContent = Math.round(v * 100) + ' %';
     return v;
   }
   function zoomSet(level) {
@@ -3269,6 +3306,8 @@
     try { localStorage.setItem(ZOOM_KEY, String(v)); } catch { /* private mode */ }
   }
   function zoomNudge(dir) { zoomSet(zoomLoad() + dir * ZOOM_STEP); }
+  // Hoch-/Querformat hat eine andere Gerätebreite → Rechenbreite neu setzen.
+  window.addEventListener('orientationchange', function () { setTimeout(function () { zoomApply(zoomLoad()); }, 150); });
 
   function initFamSettings() {
     zoomApply(zoomLoad());
