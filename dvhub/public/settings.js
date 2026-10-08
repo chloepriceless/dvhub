@@ -2397,7 +2397,7 @@ function renderPricingPeriodsEditor() {
     <div class="config-group-kicker" data-accent="yellow">§14a Modul 3 — zeitabhängige Netzentgelte (optional)</div>
     <div class="svc-meta">Zeitvariable Brutto-Netzentgelte des Netzbetreibers je Tageszeitfenster — ersetzen beim dynamischen Tarif das Standard-Netzentgelt (beim Festpreis-Tarif: finaler Bezugspreis im Fenster).</div>
     <div class="config-row">
-      <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.usesParagraph14aModule3', 'Paragraph 14a Modul 3 aktiv')}</span>
+      <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.usesParagraph14aModule3', '§14a Modul 3 aktiv')}</span>
       <input class="config-checkbox" type="checkbox" data-std-path="usesParagraph14aModule3" data-std-rerender="1"${m3Active ? ' checked' : ''} />
     </div>
     ${m3Active ? m3WindowHtml(1) + m3WindowHtml(2) + m3WindowHtml(3) : ''}
