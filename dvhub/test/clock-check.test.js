@@ -69,7 +69,15 @@ test('querySntp: fragt Port 123 und liefert die Abweichung; Zeitüberschreitung 
   assert.deepEqual(lib.sent, [{ port: 123, host: 'zeit.example', length: 48 }]);
   assert.ok(Math.abs(r.offsetMs + 3000) < 1, 'lokale Uhr geht 3 s vor');
 
-  await assert.rejects(querySntp({ dgramLib: fakeDgram(() => null), timeoutMs: 20 }), /timeout/);
+  // Der Zeitüberschreitungs-Timer hält den Prozess absichtlich nicht am Leben
+  // (unref). Ohne echten Socket gäbe es hier sonst nichts, worauf Node wartet —
+  // der Testprozess endete, bevor die Zeitüberschreitung gemeldet ist.
+  const keepAlive = setTimeout(() => {}, 2000);
+  try {
+    await assert.rejects(querySntp({ dgramLib: fakeDgram(() => null), timeoutMs: 20 }), /timeout/);
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
 
 test('Dienst: Status, Warnung einmal je Zustandswechsel, kein Alarm ohne Internet', async () => {

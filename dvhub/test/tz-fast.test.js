@@ -3,9 +3,20 @@ import assert from 'node:assert/strict';
 
 import { localDate, localParts, localMinutesOfDay, zoneOffsetMs } from '../tz-fast.js';
 
+// Ein Formatierer je Zone: einen neuen pro Zeitpunkt anzulegen kostet bei
+// über 200.000 Zeitpunkten je Zone so viel, dass der Test auf langsamen
+// Rechnern (CI) die Zeitgrenze riss.
+const intlFormatters = new Map();
+function intlFormatter(timeZone) {
+  if (!intlFormatters.has(timeZone)) {
+    intlFormatters.set(timeZone, new Intl.DateTimeFormat('en-CA', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }));
+  }
+  return intlFormatters.get(timeZone);
+}
+
 function intlParts(ms, timeZone) {
   const p = {};
-  for (const x of new Intl.DateTimeFormat('en-CA', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(ms))) {
+  for (const x of intlFormatter(timeZone).formatToParts(new Date(ms))) {
     if (x.type !== 'literal') p[x.type] = x.value;
   }
   return p;

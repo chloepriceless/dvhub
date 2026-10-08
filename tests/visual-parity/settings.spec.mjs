@@ -35,16 +35,20 @@ import { test, expect } from '@playwright/test';
 const EXPECTED_IDS = [
   // Topbar (Wave-3 chips preserved on settings)
   'navToggle', 'topbarNav',
-  'badge-mqtt', 'badge-tesla', 'badge-ha', 'badge-loxone', 'badge-ml',
+  'badge-mqtt', 'badge-tesla', 'badge-ha', 'badge-loxone',
   'connStatus', 'nowTime',
   // Page header
   'configMeta', 'saveAllHeaderBtn',
   // Settings banner
   'settingsBanner',
-  // Tabs (panel containers) — 6 tabs
-  'tab-connection', 'tab-control', 'tab-services', 'tab-system', 'tab-ml', 'tab-vpn',
-  // Per-tab grid mounts (JS field-generator targets)
-  'connectionGrid', 'connectionBanner', 'controlGrid', 'servicesGrid',
+  // Bereiche (Umbau 2026-10): acht Bereiche mit je einem Raster, dazu die
+  // eigenen Seiten Status, Prognose, EOS und VPN.
+  'tab-plant', 'tab-prices', 'tab-mode', 'tab-devices', 'tab-grid', 'tab-prognosis',
+  'tab-sys', 'tab-shares', 'tab-system', 'tab-forecast', 'tab-eos', 'tab-vpn',
+  // Raster je Bereich (Ziel des Feld-Generators)
+  'areaGrid-plant', 'areaGrid-prices', 'areaGrid-mode', 'areaGrid-devices',
+  'areaGrid-grid', 'areaGrid-prognosis', 'areaGrid-sys', 'areaGrid-shares',
+  'connectionBanner', 'settingsSearch',
   // Toast
   'settingsAuroraToast',
   // System tab — health
@@ -73,12 +77,6 @@ const EXPECTED_IDS = [
   'scanMeta', 'startScan', 'scanRows',
   // System tab — schedule editor
   'loadSchedule', 'saveSchedule', 'scheduleJson', 'scheduleMeta',
-  // ML tab (the LLM sub-group was removed with the Custom-Tabs redesign —
-  // 2026-07: settings-tab-nav dropped the "ml" button in favour of
-  // forecast/eos custom tabs; #tab-ml + these core metric fields still exist
-  // in the DOM, just unreachable via the tab nav)
-  'mlModelType', 'mlModelVersion', 'mlLastTrain', 'mlNextTrain',
-  'mlMaeSparkline', 'mlMae7d', 'mlMae30d', 'mlTierFeatures', 'mlTrainingLog',
   // VPN tab — static fields (the upload panel + buttons are injected by
   // renderVpnUploadPanel into #vpnUploadMount lazily; binding-contract
   // handles those)
@@ -171,25 +169,28 @@ test.describe('Settings page (Aurora Wave 4, AURORA-01/02/03/05/06)', () => {
     expect(hasSettingsCss, 'settings.css must be linked from settings.html').toBe(true);
   });
 
-  test('all 7 tab anchors exist and tab switching works', async ({ page }) => {
+  test('alle Bereiche haben einen Reiter, und der Wechsel zeigt genau das gewählte Panel', async ({ page }) => {
     await page.goto('/settings.html');
     await page.waitForLoadState('networkidle');
-    // Custom-Tabs redesign (2026-07): "ml" button dropped, "forecast" + "eos"
-    // added (Status/Forecast/EOS/VPN custom tabs, onboarding-look nav rail).
-    const tabs = ['connection', 'control', 'services', 'system', 'forecast', 'eos', 'vpn'];
+    // Umbau 2026-10: acht Bereiche + Status, Prognose, EOS, VPN.
+    const tabs = ['plant', 'prices', 'mode', 'devices', 'grid', 'prognosis', 'sys', 'shares', 'system', 'forecast', 'eos', 'vpn'];
     for (const t of tabs) {
       const button = page.locator(`button.settings-tab[data-tab="${t}"]`);
       await expect(button, `tab button for "${t}" must be attached`).toBeAttached();
     }
-    // Subpage-style nav (mockup port follow-up 2026-05-13): clicking a rail
-    // item hides the others and shows only the target panel.
     for (const t of tabs) {
-      await page.locator(`button.settings-tab[data-tab="${t}"]`).click();
+      const button = page.locator(`button.settings-tab[data-tab="${t}"]`);
+      // Manche Reiter sind je nach Anlage ausgeblendet (z. B. ohne Lizenz) —
+      // geprüft wird das Umschalten bei allen sichtbaren.
+      if (!(await button.isVisible())) continue;
+      await button.click();
       await page.waitForTimeout(50);
       const panelHidden = await page.locator(`#tab-${t}`).evaluate((el) => el.hidden);
       expect(panelHidden, `panel #tab-${t} must be visible after clicking its tab`).toBe(false);
-      const isActive = await page.locator(`button.settings-tab[data-tab="${t}"]`).evaluate((el) => el.classList.contains('is-active'));
+      const isActive = await button.evaluate((el) => el.classList.contains('is-active'));
       expect(isActive, `clicked tab "${t}" must receive .is-active`).toBe(true);
+      const othersVisible = await page.evaluate((id) => [...document.querySelectorAll('.settings-tab-panel')].filter((el) => !el.hidden && el.id !== id).map((el) => el.id), `tab-${t}`);
+      expect(othersVisible, `only #tab-${t} may be visible`).toEqual([]);
     }
   });
 
@@ -215,7 +216,7 @@ test.describe('Settings page (Aurora Wave 4, AURORA-01/02/03/05/06)', () => {
     expect(pattern).toBe('[A-Za-z0-9_-]+');
   });
 
-  test('per-slot stopSocPct knob (hotfix b3c4901) — field-generator emits input on control tab', async ({ page }) => {
+  test('per-slot stopSocPct knob (hotfix b3c4901) — field-generator emits input in the mode area', async ({ page }) => {
     // Setup: navigate, wait for settings.js to fetch /api/config (which on a
     // dev server with no apiToken returns 503, so this assertion is gated
     // on the apiToken being set). When unset, the field generator never runs
@@ -225,13 +226,14 @@ test.describe('Settings page (Aurora Wave 4, AURORA-01/02/03/05/06)', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1500);
     // Hard gate: the control tab anchor + controlGrid mount must exist.
-    const controlTab = page.locator('button.settings-tab[data-tab="control"]');
-    await expect(controlTab, 'control tab anchor must survive the port').toBeAttached();
-    const controlGrid = page.locator('#controlGrid');
-    await expect(controlGrid, 'controlGrid mount (host of cfg_schedule_smallMarketAutomation_minSocPct) must survive the port').toBeAttached();
+    // Umbau 2026-10: die Kleine Börsenautomatik liegt im Bereich „Betriebsart".
+    const controlTab = page.locator('button.settings-tab[data-tab="mode"]');
+    await expect(controlTab, 'mode tab anchor must exist').toBeAttached();
+    const controlGrid = page.locator('#areaGrid-mode');
+    await expect(controlGrid, 'areaGrid-mode mount (host of cfg_schedule_smallMarketAutomation_minSocPct) must exist').toBeAttached();
     // Subpage-style: click the control tab to switch to it before asserting.
     await controlTab.click();
-    const panelHidden = await page.locator('#tab-control').evaluate((el) => el.hidden);
+    const panelHidden = await page.locator('#tab-mode').evaluate((el) => el.hidden);
     expect(panelHidden, 'control tab panel must be visible after clicking its tab').toBe(false);
     // Soft gate: if the field generator ran (apiToken set), the
     // schedule.smallMarketAutomation.minSocPct input is emitted at
@@ -246,7 +248,7 @@ test.describe('Settings page (Aurora Wave 4, AURORA-01/02/03/05/06)', () => {
     } else {
       console.warn(
         'settings.spec: per-slot stopSocPct field generator did not run on this dev server ' +
-        '(likely no apiToken set; /api/config returned 503). Host container (#controlGrid) ' +
+        '(likely no apiToken set; /api/config returned 503). Host container (#areaGrid-mode) ' +
         'is verified above, which is what the hotfix b3c4901 actually requires to survive the port.',
       );
     }

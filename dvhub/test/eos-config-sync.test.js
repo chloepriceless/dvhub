@@ -506,7 +506,7 @@ test('EOS-Push-Adresse und Fitness-Cache (2026-10-03)', async (t) => {
     assert.equal(eosNotifyUrl({ httpPort: 8080 }, 'http://127.0.0.1:8503'), 'http://127.0.0.1:8080/api/eos/solution-ready');
     assert.equal(eosNotifyUrl({ httpPort: 9000 }, 'http://localhost:8503'), 'http://127.0.0.1:9000/api/eos/solution-ready');
     assert.equal(eosNotifyUrl({}, 'http://127.0.0.1:8503'), 'http://127.0.0.1:8080/api/eos/solution-ready');
-    assert.equal(eosNotifyUrl({ httpPort: 8080 }, 'http://192.168.20.66:8503'), null, 'entferntes EOS: DVhub fragt selbst');
+    assert.equal(eosNotifyUrl({ httpPort: 8080 }, 'http://192.0.2.66:8503'), null, 'entferntes EOS: DVhub fragt selbst');
     assert.equal(eosNotifyUrl({ httpPort: 8080 }, 'kaputt'), null);
   });
 

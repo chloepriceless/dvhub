@@ -248,8 +248,16 @@ test('reconnect: nach Broker-Neustart mqtt_connected erneut, nächste Trennung b
     // Datenfluss nach Reconnect explicit prüfen: subscribe() lief nur beim
     // Erstkontakt — ohne funktionierende Resubscription (mqtt.js-Default) zeigt
     // der Leitstand „verbunden", während die Werte einfrieren.
-    await broker2.publish('N/p1/system/0/Dc/Battery/Soc', 42);
-    await waitUntil(events, 'SoC-Wert nach Reconnect im Cache', () => transport.getCached('soc') === 42, 5000);
+    // Wiederholt senden: „verbunden" wird gemeldet, bevor das erneute Abonnieren
+    // beim Broker angekommen ist — eine einzelne Nachricht in dieser Lücke ginge
+    // verloren und der Test wackelte (lokal und in der CI beobachtet).
+    const republish = setInterval(() => { broker2.publish('N/p1/system/0/Dc/Battery/Soc', 42).catch(() => {}); }, 150);
+    try {
+      await broker2.publish('N/p1/system/0/Dc/Battery/Soc', 42);
+      await waitUntil(events, 'SoC-Wert nach Reconnect im Cache', () => transport.getCached('soc') === 42, 5000);
+    } finally {
+      clearInterval(republish);
+    }
 
     // Kern des Fixes: sessionActive ist wieder true → die nächste Trennung wird gemeldet.
     const before = count('mqtt_disconnected');

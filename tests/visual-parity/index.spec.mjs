@@ -31,7 +31,7 @@ import { test, expect } from '@playwright/test';
 const EXPECTED_IDS = [
   // Topbar (TOPBAR-DECISION Option A — chips preserved in .topbar-right)
   'badge-mqtt', 'badge-tesla', 'badge-ha', 'badge-loxone',
-  'badge-ml', 'connStatus', 'nowTime',
+  'connStatus', 'nowTime',
   // Left rail — PV card
   'pvTotal', 'pvP', 'pvAc', 'dvDcPv', 'dvAcPv',
   // Left rail — Battery card

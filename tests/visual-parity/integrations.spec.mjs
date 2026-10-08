@@ -246,7 +246,7 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
     }
   });
 
-  test('drawer closes on the close button and on Escape', async ({ page }) => {
+  test('Bereich schließt beim Wechsel (breit) bzw. über ✕ und Escape (schmal)', async ({ page }) => {
     await page.goto('/integrations.html');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
@@ -257,14 +257,30 @@ test.describe('Integrations page (Aurora Wave 5 + Option-B, AURORA-01/02/03/05/0
       return;
     }
     const drawer = page.locator('#dv-drawer-mqtt');
-    // Close path 1 — the ✕ button.
+    // Breite Ansicht (Umbau 2026-10): Liste links, Einstellungen in der Mitte.
+    // Der Bereich bleibt offen, bis ein anderer Eintrag gewählt wird — es gibt
+    // dort bewusst keinen Schließen-Knopf.
+    await card.first().click();
+    await page.waitForTimeout(300);
+    await expect(drawer).toHaveClass(/is-open/);
+    const other = page.locator('.conn-card:not([data-system="mqtt"])').first();
+    if ((await other.count()) > 0) {
+      await other.click();
+      await page.waitForTimeout(300);
+      await expect(drawer).not.toHaveClass(/is-open/);
+    }
+    // Schmale Ansicht: der Bereich liegt als Blatt über der Liste und schließt
+    // über ✕ und über Escape.
+    await page.setViewportSize({ width: 700, height: 900 });
+    await page.goto('/integrations.html');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(500);
     await card.first().click();
     await page.waitForTimeout(300);
     await expect(drawer).toHaveClass(/is-open/);
     await page.locator('#dv-drawer-mqtt-close').click();
     await page.waitForTimeout(300);
     await expect(drawer).not.toHaveClass(/is-open/);
-    // Close path 2 — the Escape key.
     await card.first().click();
     await page.waitForTimeout(300);
     await expect(drawer).toHaveClass(/is-open/);
