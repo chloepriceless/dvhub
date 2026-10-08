@@ -10,6 +10,48 @@ verweist hierher.
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-10-08
+
+Großes Sammel-Release nach fünf Wochen: EOS 0.4 mit eigenem Rechenkern-Stand (DV-EOS rc1.18),
+offizielle Container-Images für Docker (DVhub + EOS, amd64 und arm64), komplett neu geordnete
+Einstellungen, überarbeitete Integrationen, Leitstand und Familien-Dashboard.
+
+### Neu
+
+- **Meldung, wenn der Speicher trotz Sollwert nicht entlädt.** Am 07.10. gab ein Wechselrichter ab
+  dem Nachmittag nichts mehr aus dem Akku ab, obwohl DVhub den Sollwert korrekt schrieb — der
+  Abendverkauf fiel aus und niemand bekam es mit. Ein Wächter erkennt jetzt Netzbezug über dem
+  Sollwert bei stehendem, gefülltem Akku und meldet es nach zehn Minuten per Push (Pushover,
+  Telegram, ntfy) und im Protokoll (`setpoint_not_followed`, Entwarnung `setpoint_followed_again`);
+  solange es anhält, erinnert er alle drei Stunden. Er meldet nur und steuert nichts. Gegen 22 Tage
+  Messdaten geprüft: kein Fehlalarm. Abschaltbar über `victron.setpointWatchdog.enabled`.
+- **Familien-Dashboard im Bild des Leitstands, Tablets richtig skaliert.** Farben, Karten und
+  Beschriftungen wie im Leitstand (Netz pink, ein Glas, gesperrte Kartenköpfe), Zahlen mit
+  Dezimalkomma, Systemschrift statt nachgeladener Google Fonts. Auf Touch-Geräten skaliert der
+  Browser die Seite selbst: ein iPad 10,2" zeigt damit so viel wie ein großer Bildschirm
+  (Voreinstellung automatisch, pro Gerät über die Uhr einstellbar). Vorher ließ der Zoom beim
+  Verkleinern unten einen schwarzen Streifen und verschob die Flusslinien.
+- **Beschriftungen der Preis-Einstellungen aus einer Quelle.** Die handgebauten Editoren holen ihre
+  Beschriftungen samt Einheiten aus der zentralen Felddefinition (Beitrag von @elschman, #22, #21).
+
+### Behoben
+
+- **Zugangsdaten für Push-Dienste gingen als „***" verloren.** Die Oberfläche bekommt Geheimnisse
+  nur maskiert. Gab es beim Speichern keinen echten Wert zum Zurückholen, blieb der Platzhalter als
+  Wert in der Config stehen: die Oberfläche zeigte „gesetzt", jeder Versand scheiterte. Der
+  Platzhalter wird jetzt nie mehr gespeichert, leere Felder gelten nicht als gesetzt, und schon
+  gespeicherte Platzhalter werden beim Laden entfernt (die Zugangsdaten müssen dann einmal neu
+  eingetragen werden).
+- **Jahr im Datumsfeld nicht tippbar (#18).** Datumsfelder der PV-Anlagen, Akku-Stufen und
+  Preiszeiträume wurden schon nach der ersten Ziffer des Jahres übernommen und neu gezeichnet
+  („0002"). Sie werden jetzt erst beim Verlassen oder mit Enter übernommen.
+- **„Version wird geprüft…" blieb stehen (#19).** In den Einstellungen wurde die Update-Prüfung nie
+  von selbst ausgelöst. Sie startet jetzt, sobald die Software-Karte sichtbar wird.
+- **Leitstand aufgeräumt.** Steuerungs-Karte einspaltig mit den Standardwerten nebeneinander,
+  E-Auto-Karte ohne leere Fläche, Seitenname neben dem Logo nur noch bei eingeklapptem Menü,
+  Zeitstempel von heute nur als Uhrzeit, Klartext statt Fehlercode beim EOS-Fahrplan; am Handy
+  brechen Kartenköpfe sauber um und die Zeitachse im Preis-Diagramm ist lesbar.
+
 ### Entfernt
 
 - **ML-Prognose-Korrektur (LightGBM) komplett entfernt.** Die Korrektur war seit Mai abgeschaltet

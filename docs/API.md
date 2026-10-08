@@ -1,6 +1,6 @@
 # DVhub HTTP-API — alle Endpunkte
 
-Vollständige Liste der HTTP-Endpunkte von DVhub (Stand: Version 1.0.6 + Unreleased, September 2026), gruppiert nach Bereich.
+Vollständige Liste der HTTP-Endpunkte von DVhub (Stand: Version 1.0.7, Oktober 2026), gruppiert nach Bereich.
 Quelle ist der Router `dvhub/routes-api.js`. Die interaktive Swagger-Oberfläche unter `/api-docs.html` (`/openapi.json`) beschreibt nur einen Teil davon (≈ 35 Kern-Endpunkte) und zeigt dafür Beispiel-Antworten.
 
 - [1. Grundlagen](#1-grundlagen)
