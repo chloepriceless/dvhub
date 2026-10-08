@@ -18,9 +18,30 @@ verweist hierher.
 
 ## [1.0.7] - 2026-10-08
 
-Großes Sammel-Release nach fünf Wochen: EOS 0.4 mit eigenem Rechenkern-Stand (DV-EOS rc1.18),
-offizielle Container-Images für Docker (DVhub + EOS, amd64 und arm64), komplett neu geordnete
-Einstellungen, überarbeitete Integrationen, Leitstand und Familien-Dashboard.
+Sammel-Release nach fünf Wochen, 220 Commits seit 1.0.6. Überblick nach Themen — die Einzelheiten
+stehen in den Einträgen darunter:
+
+- **E-Auto und Wallbox:** Wallbox nach EOS-Plan steuern über evcc, OpenEVSE oder go-e; Abfahrtszeit
+  und Ladeziel; „Sofort laden“; Anstecken direkt an der Wallbox erkannt; Ladestand aus TeslaMate,
+  evcc oder einem MQTT-Topic; §14a begrenzt die Wallbox; Heizstab und planbare Verbraucher.
+- **EOS 0.4:** nur noch EOS 0.4 (DV-EOS `dvhub-v0.4.0rc1.18`), Läufe in fünf Schritten deutlich
+  schneller bei identischem Ergebnis (Raspberry Pi 4: 136 s statt 333 s), zwei Kerne, Start zur
+  Viertelstunde, sofortige Neuberechnung bei geänderter Grundlage, gemessener
+  Wechselrichter-Wirkungsgrad, Netzladen, Betriebsart „Nur Netzspeicher“, Kleine Börsenautomatik
+  als Rückfallebene.
+- **MQTT, Home Assistant, Loxone:** Sollwerte und EOS-Plan nach außen, Profil „Universal“ für
+  Messwerte aus Home Assistant/Loxone (MQTT oder HTTP-Push), MQTT-Hub steuern und debuggen,
+  MQTT-Explorer hört nur bei Bedarf mit.
+- **Netz und Direktvermarktung:** EEBUS mit §14a-Steuerbox, §14a nach BNetzA-Festlegung,
+  Direktvermarkter-Schnittstelle Plexlog oder LUOX/Lumenaza, Börsenerlös je Einspeisequelle.
+- **Geschwindigkeit und kleine Geräte:** Historie Jahr/Alle aus Monatsständen, weniger
+  Arbeitsspeicher (jemalloc), Schonung von SD-Karte und eMMC, gestufte Log-Aufbewahrung.
+- **Docker:** offizielle Images für amd64 und arm64 (`bikinibottomcapital/dvhub`,
+  `bikinibottomcapital/dvhub-eos`), Container-Suite mit TimescaleDB und EOS in ≤ 704 MB.
+- **Oberfläche:** Einstellungen nach Aufgabe gegliedert, Integrationen mit Liste und Mittelteil,
+  Historie mit Tag/Monat/Jahr, Leitstand und Familien-Dashboard überarbeitet, eine Zeitzone für alles.
+- **Betrieb:** Meldung bei verweigerter Entladung, Datenspende, Installateurs-Portal,
+  Ortsnetz-Auslastung, voller Export für den Geräte-Tausch, Prüfung der Systemuhr.
 
 ### Neu
 
