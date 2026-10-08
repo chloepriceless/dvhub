@@ -24,6 +24,30 @@ let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
 let forecastStringsDraft = [];
 
+// Beschriftungen kommen aus config-model.js (definition.fields) — eine Quelle
+// für Auto-Form und die handgebauten Editoren hier. Der Fallback greift nur,
+// solange die Definition noch nicht geladen ist (und in den vm-Unit-Tests).
+function findFieldDefinition(path) {
+  return (definition?.fields || []).find((field) => field.path === path) || null;
+}
+
+function fieldLabel(path, fallback = path) {
+  return findFieldDefinition(path)?.label || fallback;
+}
+
+function fieldOptionLabel(path, value, fallback = String(value)) {
+  const option = (findFieldDefinition(path)?.options || []).find((entry) => entry.value === value);
+  return option?.label || fallback;
+}
+
+function fieldLabelHtml(path, fallback) {
+  return escapeHtml(fieldLabel(path, fallback));
+}
+
+function fieldOptionLabelHtml(path, value, fallback) {
+  return escapeHtml(fieldOptionLabel(path, value, fallback));
+}
+
 
 
 function createConfigRow(label, inputEl, opts) {
@@ -581,14 +605,14 @@ function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [
     ${validationHtml}
     <div class="config-row-grid">
       <div class="config-row">
-        <span class="config-row-label">Marktwert-Modus</span>
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.marketValueMode', 'Marktwert-Modus')}</span>
         <select id="marketValueModeSelect" class="config-select">
-          <option value="annual"${selectedMode === 'annual' ? ' selected' : ''}>Jahresmarktwert</option>
-          <option value="monthly"${selectedMode === 'monthly' ? ' selected' : ''}>Monatsmarktwert</option>
+          <option value="annual"${selectedMode === 'annual' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.marketValueMode', 'annual', 'Jahresmarktwert')}</option>
+          <option value="monthly"${selectedMode === 'monthly' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.marketValueMode', 'monthly', 'Monatsmarktwert')}</option>
         </select>
       </div>
       <div class="config-row">
-        <span class="config-row-label">Anlagen</span>
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.pvPlants', 'PV-Anlagen')}</span>
         <strong class="config-row-value">${plants.length} konfiguriert</strong>
       </div>
     </div>
@@ -720,7 +744,7 @@ function buildBatteryStagesEditorMarkup({ stages = [], validationHtml = '', toda
     ? `${active.capacityKwh} kWh (seit ${active.startDate})`
     : 'keine Stufen — der Einzelwert oben gilt';
   return `
-    <div class="config-group-kicker" data-accent="teal">Akku-Ausbaustufen</div>
+    <div class="config-group-kicker" data-accent="teal">${fieldLabelHtml('optimizer.batteryStages', 'Akku-Ausbaustufen')}</div>
     ${validationHtml}
     <div class="config-row-grid">
       <div class="config-row">
@@ -1880,13 +1904,13 @@ function renderModeSwitch(area) {
   wrap.className = 'sa-mode';
   const title = document.createElement('div');
   title.className = 'sa-mode-title';
-  title.textContent = 'Betriebsart';
+  title.textContent = area.label || 'Betriebsart';
   wrap.appendChild(title);
 
   const track = document.createElement('div');
   track.className = 'sa-mode-track';
   track.setAttribute('role', 'radiogroup');
-  track.setAttribute('aria-label', 'Betriebsart');
+  track.setAttribute('aria-label', area.label || 'Betriebsart');
   const shown = mode === 'internal' ? 'eos' : mode;
   track.dataset.pos = String(Math.max(0, def.positions.findIndex((p) => p.id === shown)));
   const thumb = document.createElement('span');
@@ -2101,11 +2125,11 @@ function renderHistoryImportPanel(destinationId) {
     </div>
     <div class="config-row-grid">
       <div class="config-row">
-        <span class="config-row-label">Quelle</span>
+        <span class="config-row-label">${fieldLabelHtml('telemetry.historyImport.provider', 'Import Quelle')}</span>
         <strong class="config-row-value">VRM Portal</strong>
       </div>
       <div class="config-row">
-        <span class="config-row-label">Portal ID</span>
+        <span class="config-row-label">${fieldLabelHtml('telemetry.historyImport.vrmPortalId', 'VRM Portal ID')}</span>
         <strong class="config-row-value">${escapeHtml(currentHistoryImportStatus?.vrmPortalId || '-')}</strong>
       </div>
     </div>
@@ -2304,28 +2328,28 @@ function renderPricingPeriodsEditor() {
   const stdFieldsHtml = stdMode === 'fixed' ? `
     <div class="config-row-grid">
       <div class="config-row">
-        <span class="config-row-label">Bruttopreis (ct/kWh)</span>
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.fixedGrossImportCtKwh', 'Fester Bruttopreis (ct/kWh)')}</span>
         <input class="config-input sa-w-num" data-std-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${escapeHtml(uep.fixedGrossImportCtKwh ?? '')}" />
       </div>
     </div>
   ` : `
     <div class="config-row-grid">
       <div class="config-row">
-        <span class="config-row-label">Energie-Aufschlag</span>
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.dynamicComponents.energyMarkupCtKwh', 'Energie-Aufschlag (ct/kWh)')}</span>
         <input class="config-input sa-w-num" data-std-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${escapeHtml(stdDc.energyMarkupCtKwh ?? '')}" />
       </div>
       <div class="config-row">
-        <span class="config-row-label">Netzentgelte</span>
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.dynamicComponents.gridChargesCtKwh', 'Netzentgelte (ct/kWh)')}</span>
         <input class="config-input sa-w-num" data-std-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${escapeHtml(stdDc.gridChargesCtKwh ?? '')}" />
       </div>
     </div>
     <div class="config-row-grid">
       <div class="config-row">
-        <span class="config-row-label">Umlagen &amp; Abgaben</span>
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.dynamicComponents.leviesAndFeesCtKwh', 'Umlagen & Abgaben (ct/kWh)')}</span>
         <input class="config-input sa-w-num" data-std-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${escapeHtml(stdDc.leviesAndFeesCtKwh ?? '')}" />
       </div>
       <div class="config-row">
-        <span class="config-row-label">MwSt (%)</span>
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.dynamicComponents.vatPct', 'MwSt (%)')}</span>
         <input class="config-input sa-w-num" data-std-path="dynamicComponents.vatPct" type="number" step="0.01" value="${escapeHtml(stdDc.vatPct ?? '')}" />
       </div>
     </div>
@@ -2342,27 +2366,27 @@ function renderPricingPeriodsEditor() {
       <div class="sa-divider-top">
         <div class="config-row-grid">
           <div class="config-row">
-            <span class="config-row-label">Fenster ${n} aktiv</span>
+            <span class="config-row-label">${fieldLabelHtml(`userEnergyPricing.module3Windows.window${n}.enabled`, `Fenster ${n} aktiv`)}</span>
             <input class="config-checkbox" type="checkbox" data-std-path="module3Windows.window${n}.enabled"${w.enabled ? ' checked' : ''} />
           </div>
           <div class="config-row">
-            <span class="config-row-label">Bezeichnung</span>
+            <span class="config-row-label">${fieldLabelHtml(`userEnergyPricing.module3Windows.window${n}.label`, `Fenster ${n} Bezeichnung`)}</span>
             <input class="config-input sa-w-label" type="text" data-std-path="module3Windows.window${n}.label" data-std-type="text" value="${escapeHtml(w.label || '')}" />
           </div>
         </div>
         <div class="config-row-grid">
           <div class="config-row">
-            <span class="config-row-label">Start (HH:MM)</span>
-            <input class="config-input sa-w-date" type="text" data-std-path="module3Windows.window${n}.start" data-std-type="text" value="${escapeHtml(w.start || '')}" />
+            <span class="config-row-label">${fieldLabelHtml(`userEnergyPricing.module3Windows.window${n}.start`, `Fenster ${n} Start`)}</span>
+            <input class="config-input sa-w-date" type="text" placeholder="HH:MM" data-std-path="module3Windows.window${n}.start" data-std-type="text" value="${escapeHtml(w.start || '')}" />
           </div>
           <div class="config-row">
-            <span class="config-row-label">Ende (HH:MM)</span>
-            <input class="config-input sa-w-date" type="text" data-std-path="module3Windows.window${n}.end" data-std-type="text" value="${escapeHtml(w.end || '')}" />
+            <span class="config-row-label">${fieldLabelHtml(`userEnergyPricing.module3Windows.window${n}.end`, `Fenster ${n} Ende`)}</span>
+            <input class="config-input sa-w-date" type="text" placeholder="HH:MM" data-std-path="module3Windows.window${n}.end" data-std-type="text" value="${escapeHtml(w.end || '')}" />
           </div>
         </div>
         <div class="config-row-grid">
           <div class="config-row">
-            <span class="config-row-label">Brutto-Netzentgelt (ct/kWh)</span>
+            <span class="config-row-label">${fieldLabelHtml(`userEnergyPricing.module3Windows.window${n}.priceCtKwh`, `Fenster ${n} Brutto-Netzentgelt (ct/kWh)`)}</span>
             <input class="config-input sa-w-num" type="number" step="0.01" data-std-path="module3Windows.window${n}.priceCtKwh" value="${escapeHtml(w.priceCtKwh ?? '')}" />
           </div>
         </div>
@@ -2373,7 +2397,7 @@ function renderPricingPeriodsEditor() {
     <div class="config-group-kicker" data-accent="yellow">§14a Modul 3 — zeitabhängige Netzentgelte (optional)</div>
     <div class="svc-meta">Zeitvariable Brutto-Netzentgelte des Netzbetreibers je Tageszeitfenster — ersetzen beim dynamischen Tarif das Standard-Netzentgelt (beim Festpreis-Tarif: finaler Bezugspreis im Fenster).</div>
     <div class="config-row">
-      <span class="config-row-label">§14a Modul 3 aktiv</span>
+      <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.usesParagraph14aModule3', 'Paragraph 14a Modul 3 aktiv')}</span>
       <input class="config-checkbox" type="checkbox" data-std-path="usesParagraph14aModule3" data-std-rerender="1"${m3Active ? ' checked' : ''} />
     </div>
     ${m3Active ? m3WindowHtml(1) + m3WindowHtml(2) + m3WindowHtml(3) : ''}
@@ -2384,10 +2408,10 @@ function renderPricingPeriodsEditor() {
     <div class="svc-meta">Basis-Bezugspreis für alle Zeiträume ohne eigene Abweichung.</div>
     <div class="config-row-grid">
       <div class="config-row">
-        <span class="config-row-label">Modus</span>
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.mode', 'Preislogik')}</span>
         <select class="config-select" data-std-path="mode" data-std-rerender="1">
-          <option value="fixed"${stdMode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
-          <option value="dynamic"${stdMode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
+          <option value="fixed"${stdMode === 'fixed' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'fixed', 'Fester Bruttopreis')}</option>
+          <option value="dynamic"${stdMode === 'dynamic' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'dynamic', 'Dynamisch aus EPEX + Preisbestandteilen')}</option>
         </select>
       </div>
     </div>
@@ -2396,7 +2420,7 @@ function renderPricingPeriodsEditor() {
     <div class="sa-divider-top"></div>
     <div class="config-group-kicker" data-accent="yellow">Abweichungen nach Zeitraum (optional)</div>
     <div class="config-row">
-      <span class="config-row-label">Tarifzeiträume</span>
+      <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.periods', 'Preiszeiträume')}</span>
       <strong class="config-row-value">${pricingPeriodsDraft.length} definiert</strong>
     </div>
     ${validation}
@@ -2411,10 +2435,10 @@ function renderPricingPeriodsEditor() {
             <input class="config-input sa-w-label" data-period-id="${escapeHtml(period.id)}" data-period-path="label" type="text" value="${escapeHtml(period.label || '')}" />
           </div>
           <div class="config-row">
-            <span class="config-row-label">Modus</span>
+            <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.mode', 'Preislogik')}</span>
             <select class="config-select" data-period-id="${escapeHtml(period.id)}" data-period-path="mode">
-              <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>Fixpreis</option>
-              <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>Dynamisch</option>
+              <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'fixed', 'Fester Bruttopreis')}</option>
+              <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'dynamic', 'Dynamisch aus EPEX + Preisbestandteilen')}</option>
             </select>
           </div>
         </div>
@@ -2431,28 +2455,28 @@ function renderPricingPeriodsEditor() {
         ${period.mode === 'fixed' ? `
           <div class="config-row-grid">
             <div class="config-row">
-              <span class="config-row-label">Bruttopreis (ct/kWh)</span>
+              <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.fixedGrossImportCtKwh', 'Fester Bruttopreis (ct/kWh)')}</span>
               <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${escapeHtml(period.fixedGrossImportCtKwh ?? '')}" />
             </div>
           </div>
         ` : `
           <div class="config-row-grid">
             <div class="config-row">
-              <span class="config-row-label">Energie-Aufschlag</span>
+              <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.dynamicComponents.energyMarkupCtKwh', 'Energie-Aufschlag (ct/kWh)')}</span>
               <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.energyMarkupCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.energyMarkupCtKwh ?? '')}" />
             </div>
             <div class="config-row">
-              <span class="config-row-label">Netzentgelte</span>
+              <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.dynamicComponents.gridChargesCtKwh', 'Netzentgelte (ct/kWh)')}</span>
               <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.gridChargesCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.gridChargesCtKwh ?? '')}" />
             </div>
           </div>
           <div class="config-row-grid">
             <div class="config-row">
-              <span class="config-row-label">Umlagen &amp; Abgaben</span>
+              <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.dynamicComponents.leviesAndFeesCtKwh', 'Umlagen & Abgaben (ct/kWh)')}</span>
               <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.leviesAndFeesCtKwh" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.leviesAndFeesCtKwh ?? '')}" />
             </div>
             <div class="config-row">
-              <span class="config-row-label">MwSt (%)</span>
+              <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.dynamicComponents.vatPct', 'MwSt (%)')}</span>
               <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="dynamicComponents.vatPct" type="number" step="0.01" value="${escapeHtml(period.dynamicComponents?.vatPct ?? '')}" />
             </div>
           </div>
