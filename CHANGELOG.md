@@ -32,7 +32,8 @@ stehen in den Einträgen darunter:
 - **MQTT, Home Assistant, Loxone:** Sollwerte und EOS-Plan nach außen, Profil „Universal“ für
   Messwerte aus Home Assistant/Loxone (MQTT oder HTTP-Push), MQTT-Hub steuern und debuggen,
   MQTT-Explorer hört nur bei Bedarf mit.
-- **Netz und Direktvermarktung:** EEBUS mit §14a-Steuerbox, §14a nach BNetzA-Festlegung,
+- **Netz und Direktvermarktung:** EEBUS-Steuerbox nach §14a (wirkt auf Speicher, Wallbox und
+  Einspeisebegrenzer; Weitergabe an EEBUS-Geräte nur gegen Referenzprogramme geprüft), §14a nach BNetzA-Festlegung,
   Direktvermarkter-Schnittstelle Plexlog oder LUOX/Lumenaza, Börsenerlös je Einspeisequelle.
 - **Geschwindigkeit und kleine Geräte:** Historie Jahr/Alle aus Monatsständen, weniger
   Arbeitsspeicher (jemalloc), Schonung von SD-Karte und eMMC, gestufte Log-Aufbewahrung.
