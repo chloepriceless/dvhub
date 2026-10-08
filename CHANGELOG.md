@@ -10,6 +10,12 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Behoben
+
+- **Nach jedem Update blieb eine lokale Änderung zurück.** `package-lock.json` nannte für DVhub
+  noch Node ≥ 18, `package.json` verlangt ≥ 22. `npm install` schrieb die Datei deshalb auf der
+  Anlage um; der nächste Update-Lauf musste sie erst beiseitelegen. Beide stimmen jetzt überein.
+
 ## [1.0.7] - 2026-10-08
 
 Großes Sammel-Release nach fünf Wochen: EOS 0.4 mit eigenem Rechenkern-Stand (DV-EOS rc1.18),
