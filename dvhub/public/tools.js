@@ -646,6 +646,33 @@ async function checkForUpdate() {
       setText('updateMeta', '-');
       return;
     }
+    try { sessionStorage.setItem('dvhub_update_check_result', JSON.stringify(data)); } catch (_) { /* ohne Speicher wird eben neu geprüft */ }
+    renderUpdateCheck(data);
+  } catch (error) {
+    setBanner('updateBanner', `Update-Check fehlgeschlagen: ${error.message}`, 'error');
+  }
+}
+
+// Automatische Prüfung beim Öffnen: höchstens alle 10 Minuten neu abfragen,
+// dazwischen das letzte Ergebnis zeigen. Ohne das blieb nach einem erneuten
+// Öffnen der Seite „Version wird geprüft..." stehen, obwohl nichts lief.
+function autoCheckForUpdate() {
+  const cooldownMs = 10 * 60 * 1000;
+  let lastCheck = 0;
+  let cached = null;
+  try {
+    lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
+    cached = JSON.parse(sessionStorage.getItem('dvhub_update_check_result') || 'null');
+  } catch (_) { cached = null; }
+  if (cached && cached.ok && Date.now() - lastCheck <= cooldownMs) {
+    try { renderUpdateCheck(cached); return; } catch (_) { /* dann eben neu prüfen */ }
+  }
+  try { sessionStorage.setItem('dvhub_update_check_at', String(Date.now())); } catch (_) { /* noop */ }
+  checkForUpdate().catch(() => {});
+}
+
+function renderUpdateCheck(data) {
+  {
     // Sync channel dropdown with server state
     const channelSelect = document.getElementById('updateChannel');
     if (channelSelect && data.channel) channelSelect.value = data.channel;
@@ -690,8 +717,6 @@ async function checkForUpdate() {
       // explicit visible value — matches the working systemUpdatesActions reveal.
       document.getElementById('updateActions').style.display = 'flex';
     }
-  } catch (error) {
-    setBanner('updateBanner', `Update-Check fehlgeschlagen: ${error.message}`, 'error');
   }
 }
 
@@ -1734,16 +1759,20 @@ function initToolsPage() {
     loadHealth().catch((error) => setBanner('healthBanner', `Health-Status konnte nicht geladen werden: ${error.message}`, 'error'));
   }
   // Auto-check for updates: only when System tab is visible (tools page or settings #system)
-  if (document.getElementById('checkUpdateBtn')) {
-    const systemPanel = document.getElementById('tab-system');
-    const isSystemVisible = !systemPanel || !systemPanel.hidden; // no tabs (tools page) or tab visible
-    if (isSystemVisible) {
-      const lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
-      const cooldownMs = 10 * 60 * 1000;
-      if (Date.now() - lastCheck > cooldownMs) {
-        sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
-        checkForUpdate().catch(() => {});
-      }
+  // In den Einstellungen liegt die Karte in einem Reiter, der beim Öffnen
+  // verborgen ist — die Prüfung startet deshalb, sobald die Karte sichtbar wird
+  // (Issue #19: vorher blieb dort „Version wird geprüft..." stehen).
+  const updateBannerEl = document.getElementById('updateBanner');
+  if (document.getElementById('checkUpdateBtn') && updateBannerEl) {
+    if (typeof IntersectionObserver === 'function') {
+      const seen = new IntersectionObserver((entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        seen.disconnect();
+        autoCheckForUpdate();
+      });
+      seen.observe(updateBannerEl);
+    } else {
+      autoCheckForUpdate();
     }
   }
   if (bootstrapPlan.loadHistoryImportStatus) {

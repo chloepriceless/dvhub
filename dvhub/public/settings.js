@@ -2159,6 +2159,25 @@ function updatePricingPeriodField(periodId, path, value) {
   });
 }
 
+// Ein Datumsfeld meldet „change" schon, sobald beim Tippen ein gültiges Datum
+// dasteht — beim Jahr also nach der ersten Ziffer (0002). Das Neuzeichnen riss
+// dann die Eingabe ab (Issue #18). Datumsfelder werden deshalb erst beim
+// Verlassen oder mit Enter übernommen; alle anderen Felder wie bisher.
+function onDraftFieldCommit(input, commit) {
+  if (input.type !== 'date') {
+    input.addEventListener('change', commit);
+    return;
+  }
+  let committed = input.value;
+  const commitIfChanged = () => {
+    if (input.value === committed) return;
+    committed = input.value;
+    commit();
+  };
+  input.addEventListener('blur', commitIfChanged);
+  input.addEventListener('keydown', (event) => { if (event.key === 'Enter') commitIfChanged(); });
+}
+
 function updatePvPlantField(plantId, path, value) {
   pvPlantsDraft = pvPlantsDraft.map((plant) => {
     if (plant.id !== plantId) return plant;
@@ -2204,7 +2223,7 @@ function renderBatteryStagesEditor() {
   });
 
   section.querySelectorAll('[data-battery-stage-id][data-battery-stage-path]').forEach((input) => {
-    input.addEventListener('change', () => {
+    onDraftFieldCommit(input, () => {
       updateBatteryStageField(input.dataset.batteryStageId, input.dataset.batteryStagePath, input.value);
       batteryStagesValidation = [];
       renderSettingsShell();
@@ -2256,7 +2275,7 @@ function renderPvPlantsEditor() {
   });
 
   section.querySelectorAll('[data-pv-plant-id][data-pv-plant-path]').forEach((input) => {
-    input.addEventListener('change', () => {
+    onDraftFieldCommit(input, () => {
       updatePvPlantField(input.dataset.pvPlantId, input.dataset.pvPlantPath, input.value);
       pvPlantsValidation = [];
       renderSettingsShell();
@@ -2458,7 +2477,7 @@ function renderPricingPeriodsEditor() {
   });
 
   section.querySelectorAll('[data-period-id][data-period-path]').forEach((input) => {
-    input.addEventListener('change', () => {
+    onDraftFieldCommit(input, () => {
       updatePricingPeriodField(input.dataset.periodId, input.dataset.periodPath, input.value);
       pricingPeriodsValidation = [];
       renderSettingsShell();
@@ -3691,14 +3710,6 @@ function initSettingsPage() {
     setTimeout(function () {
       try { initVpnTab(); } catch (_) { /* best-effort lazy-init */ }
       try { loadHealth().catch(function(){}); } catch (_) { /* best-effort lazy-init */ }
-      if (typeof checkForUpdate === 'function') {
-        var lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
-        var cooldownMs = 10 * 60 * 1000;
-        if (Date.now() - lastCheck > cooldownMs) {
-          sessionStorage.setItem('dvhub_update_check_at', String(Date.now()));
-          try { checkForUpdate().catch(function(){}); } catch (_) { /* best-effort lazy-init */ }
-        }
-      }
     }, 300);
 
     tabContainer.addEventListener('click', function (e) {
