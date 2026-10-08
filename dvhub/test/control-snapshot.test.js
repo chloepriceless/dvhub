@@ -113,3 +113,47 @@ describe('controlSnapshotFlat', () => {
     });
   });
 });
+
+// 2026-10-08: Grenzen des Netzbetreibers (§14a / EEBUS) als Spiegel für MQTT und Loxone.
+describe('buildGridLimitSnapshot', () => {
+  it('ohne Grenze: nicht aktiv, Werte null (nie 0 erfinden)', async () => {
+    const { buildGridLimitSnapshot } = await import('../services/control-snapshot.js');
+    assert.deepEqual(buildGridLimitSnapshot({}), {
+      active: false, source: 'none', consumptionW: null, productionW: null,
+      productionBlocked: false, belowMinimum: false, budgetW: null, shares: {}
+    });
+    // Ein gemerkter Grenzwert zählt nicht, solange §14a nicht aktiv ist.
+    const idle = buildGridLimitSnapshot({ p14a: { active: false, limitW: 4200, source: 'eebus', shares: { speicher: 4200 } } });
+    assert.equal(idle.active, false);
+    assert.equal(idle.consumptionW, null);
+    assert.deepEqual(idle.shares, {});
+  });
+
+  it('Bezugsgrenze der Steuerbox mit Aufteilung', async () => {
+    const { buildGridLimitSnapshot, gridLimitSnapshotFlat } = await import('../services/control-snapshot.js');
+    const snap = buildGridLimitSnapshot({
+      p14a: { active: true, limitW: 7560, source: 'eebus', belowPmin: false, budgetW: 7560, shares: { speicher: 3780, wallbox: 3780, kaputt: null } }
+    });
+    assert.equal(snap.active, true);
+    assert.equal(snap.source, 'eebus');
+    assert.equal(snap.consumptionW, 7560);
+    assert.equal(snap.productionW, null);
+    assert.deepEqual(snap.shares, { speicher: 3780, wallbox: 3780 });
+    assert.deepEqual(gridLimitSnapshotFlat(snap), {
+      dvhub_control_grid_limit_active: true,
+      dvhub_control_grid_limit_source: 'eebus',
+      dvhub_control_grid_limit_consumption_w: 7560,
+      dvhub_control_grid_limit_production_w: null,
+      dvhub_control_grid_limit_production_blocked: false
+    });
+  });
+
+  it('Dimm-Eingang als Quelle; Einspeisegrenze und Sperre der Steuerbox', async () => {
+    const { buildGridLimitSnapshot } = await import('../services/control-snapshot.js');
+    assert.equal(buildGridLimitSnapshot({ p14a: { active: true, limitW: 4200, source: 'relay' } }).source, 'relay');
+    const feed = buildGridLimitSnapshot({ eebus: { applied: { consumptionLimitW: null, productionLimitW: 4200, productionBlock: false } } });
+    assert.deepEqual([feed.active, feed.source, feed.consumptionW, feed.productionW], [true, 'eebus', null, 4200]);
+    const block = buildGridLimitSnapshot({ eebus: { applied: { productionLimitW: null, productionBlock: true } } });
+    assert.deepEqual([block.active, block.productionBlocked], [true, true]);
+  });
+});

@@ -10,6 +10,16 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **Grenzen des Netzbetreibers per MQTT.** Die Bezugsgrenze nach §14a (EEBUS-Steuerbox oder
+  Dimm-Eingang) und die Einspeisegrenze wirkten bisher nur auf Speicher, Wallbox und
+  Einspeisebegrenzer und waren sonst nur über die API lesbar. DVhub veröffentlicht sie jetzt
+  unter `dvhub/control/grid_limit/*` (aktiv, Quelle, Bezugsgrenze, Einspeisegrenze, Sperre, dazu
+  die Aufteilung je Gerät als JSON), mit Home-Assistant-Erkennung und als
+  `dvhub_control_grid_limit_*`-Zeilen für Loxone. Damit kann auch ein Gerät ohne EEBUS — etwa
+  eine Wärmepumpe über Home Assistant — der Grenze folgen.
+
 ### Behoben
 
 - **Nach jedem Update blieb eine lokale Änderung zurück.** `package-lock.json` nannte für DVhub

@@ -119,3 +119,66 @@ export function controlSnapshotFlat(snapshot) {
   flat.dvhub_control_paused = snapshot.paused;
   return flat;
 }
+
+// --- Netzbetreiber-Grenzen (§14a / EEBUS) ------------------------------------
+//
+// 2026-10-08 (Christin): die Grenzen der Steuerbox wirkten nur auf Speicher,
+// Wallbox und Einspeisebegrenzer und waren sonst nur über die API zu lesen.
+// Ein Gerät ohne EEBUS (Wärmepumpe über Home Assistant, Loxone-Logik) konnte
+// ihnen nicht folgen. Hier derselbe Zustand als Spiegel für MQTT und Loxone.
+//
+// Bezug: state.p14a (Quelle „eebus" oder „relay", Aufteilung je Gerät).
+// Einspeisung: state.eebus.applied (Grenze oder Sperre ohne Begrenzer).
+
+/** Topic-Suffixe unter mqtt.topicPrefix. */
+export const GRID_LIMIT_TOPIC = Object.freeze({
+  active: 'control/grid_limit/active',
+  source: 'control/grid_limit/source',
+  consumptionW: 'control/grid_limit/consumption_w',
+  productionW: 'control/grid_limit/production_w',
+  productionBlocked: 'control/grid_limit/production_blocked',
+  state: 'control/grid_limit/state'
+});
+
+/**
+ * @param {object} state  server state (p14a, eebus)
+ * @returns {{ active:boolean, source:string, consumptionW:number|null,
+ *   productionW:number|null, productionBlocked:boolean, belowMinimum:boolean,
+ *   budgetW:number|null, shares:object }}
+ */
+export function buildGridLimitSnapshot(state) {
+  const p = state?.p14a || {};
+  const applied = state?.eebus?.applied || {};
+  const consumptionActive = p.active === true && numOrNull(p.limitW) != null;
+  const productionW = numOrNull(applied.productionLimitW);
+  const productionBlocked = applied.productionBlock === true;
+  const shares = {};
+  for (const [id, w] of Object.entries(p.shares || {})) {
+    if (numOrNull(w) != null) shares[id] = Number(w);
+  }
+  let source = 'none';
+  if (consumptionActive) source = p.source || 'unknown';
+  else if (productionW != null || productionBlocked) source = 'eebus';
+  return {
+    active: consumptionActive || productionW != null || productionBlocked,
+    source,
+    // null = keine Grenze. Nie 0 erfinden: 0 W hieße „nichts beziehen".
+    consumptionW: consumptionActive ? Number(p.limitW) : null,
+    productionW,
+    productionBlocked,
+    belowMinimum: consumptionActive && p.belowPmin === true,
+    budgetW: consumptionActive ? numOrNull(p.budgetW) : null,
+    shares: consumptionActive ? shares : {}
+  };
+}
+
+/** Flache Felder für Loxone (key=value je Zeile). */
+export function gridLimitSnapshotFlat(snapshot) {
+  return {
+    dvhub_control_grid_limit_active: snapshot.active,
+    dvhub_control_grid_limit_source: snapshot.source,
+    dvhub_control_grid_limit_consumption_w: snapshot.consumptionW,
+    dvhub_control_grid_limit_production_w: snapshot.productionW,
+    dvhub_control_grid_limit_production_blocked: snapshot.productionBlocked
+  };
+}

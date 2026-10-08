@@ -68,6 +68,10 @@ Ziffer 4.4.b „Steuerung mittels EMS“). Einstellungen: **System → §14a**, 
 
 Die Wallbox wird nur begrenzt, wenn DVhub sie steuert (Integrationen → Wallbox, EOS-Steuerung).
 
+Geräte ohne EEBUS können der Grenze über MQTT folgen: DVhub veröffentlicht sie unter
+`dvhub/control/grid_limit/*` (mit Home-Assistant-Erkennung) und für Loxone als
+`dvhub_control_grid_limit_*` — siehe [MQTT-SCHEMA.md](MQTT-SCHEMA.md).
+
 ## Anzeige
 
 - **Leitstand → „§14a / §9 · EEBUS“** (nur bei eingeschaltetem EEBUS): Steuerbox verbunden/getrennt,
@@ -133,7 +137,9 @@ enthält sie, Failsafe-Zustand und Zählerstände; nach dem Import gilt die Kopp
   §14a-Grenze → Akku/Wärmepumpe, Einspeisegrenze, Aufhebung, Failsafe nach 120 s, 16 Prüfungen.
 - Node-Tests `test/eebus-*.test.js`.
 
-Geprüft gegen die Referenzprogramme von openeebus. Gegen eine echte Steuerbox und einen
+Von Hand geprüft mit dem EEBUS-Handwerkertool (Installateurs-Tester) in der Rolle der
+Steuerbox; die automatischen Tests laufen gegen die Beispielprogramme von openeebus. Mit einer
+echten Steuerbox eines Netzbetreibers, einem echten EEBUS-Gerät (z. B. Wärmepumpe) und einem
 EEBUS-Konformitätstester steht der Test noch aus; eine Zertifizierung hat DVhub nicht.
 
 ## Fehlersuche

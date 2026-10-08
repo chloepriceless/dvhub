@@ -8,7 +8,7 @@
 //
 // DI: hub (MQTT Hub from index.js), ctx (full DI context with state, getCfg, pushLog)
 
-import { buildControlSnapshot, CONTROL_KEYS, CONTROL_TOPIC_SUFFIX } from '../control-snapshot.js';
+import { buildControlSnapshot, CONTROL_KEYS, CONTROL_TOPIC_SUFFIX, buildGridLimitSnapshot, GRID_LIMIT_TOPIC } from '../control-snapshot.js';
 import { buildOptimizerPlan } from '../optimizer-plan.js';
 
 /**
@@ -158,6 +158,16 @@ export function createMqttPublisher(hub, ctx) {
     pub('control/updated_at', control.updatedAt);
     pub('control/paused', control.paused);
     pub('control/state', control.values);
+
+    // Netzbetreiber-Grenzen (§14a / EEBUS-Steuerbox), damit auch Geräte ohne
+    // EEBUS ihnen folgen können. null = keine Grenze.
+    const gridLimit = buildGridLimitSnapshot(state);
+    pub(GRID_LIMIT_TOPIC.active, gridLimit.active);
+    pub(GRID_LIMIT_TOPIC.source, gridLimit.source);
+    pub(GRID_LIMIT_TOPIC.consumptionW, gridLimit.consumptionW);
+    pub(GRID_LIMIT_TOPIC.productionW, gridLimit.productionW);
+    pub(GRID_LIMIT_TOPIC.productionBlocked, gridLimit.productionBlocked);
+    pub(GRID_LIMIT_TOPIC.state, gridLimit);
 
     // E-Auto (2026-09-26): Rücklesung der steuerbaren EV-Felder, damit die
     // bidirektionalen HA-Entitäten (ev/*) ihren echten Zustand zeigen. Quelle:

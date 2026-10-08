@@ -31,6 +31,21 @@ DVhub schreibt seine Sollwerte über Modbus oder die MQTT-Bridge an die Anlage. 
 | `dvhub/control/paused` | bool | `true`, wenn der Not-Halt die freiwilligen Schreibvorgänge pausiert |
 | `dvhub/control/state` | JSON | Alle vier Ziele mit `{ value, source, at, origin }` in einem Objekt (`origin`: `active` = aktiver Sollwert, `readback` = Rücklesung der Anlage) |
 
+### Grenzen des Netzbetreibers (§14a / EEBUS-Steuerbox)
+
+Begrenzt der Netzbetreiber den Bezug (§14a, über die EEBUS-Steuerbox oder den Dimm-Eingang) oder die Einspeisung, setzt DVhub das selbst für Speicher, Wallbox und Einspeisebegrenzer um. Diese Topics spiegeln die Grenze, damit auch Geräte ohne EEBUS ihr folgen können — z. B. eine Wärmepumpe über Home Assistant oder eine Loxone-Logik.
+
+| Topic | Einheit | Bedeutung |
+|---|---|---|
+| `dvhub/control/grid_limit/active` | bool | `true`, solange eine Bezugs- oder Einspeisegrenze gilt |
+| `dvhub/control/grid_limit/source` | Text | `eebus` (Steuerbox), `relay` (Dimm-Eingang) oder `none` |
+| `dvhub/control/grid_limit/consumption_w` | W | Bezugsgrenze am Netzanschluss für alle steuerbaren Verbraucher zusammen, `null` = keine Grenze |
+| `dvhub/control/grid_limit/production_w` | W | Einspeisegrenze, `null` = keine Grenze |
+| `dvhub/control/grid_limit/production_blocked` | bool | `true`, wenn die Einspeisung ganz gesperrt ist (Grenze ohne Einspeisebegrenzer) |
+| `dvhub/control/grid_limit/state` | JSON | Alles in einem Objekt, dazu `budgetW`, `belowMinimum` und `shares` (Anteil je Gerät in W, wie DVhub die Bezugsgrenze aufteilt) |
+
+`null` heißt „keine Grenze“ — nicht 0 W. Die Aufteilung in `shares` nennt nur Geräte, die DVhub kennt; ein eigenes Gerät richtet sich nach `consumption_w` abzüglich dessen, was die anderen gerade ziehen. Loxone bekommt dieselben Werte als `dvhub_control_grid_limit_*`-Zeilen.
+
 Auflösung je Ziel: zuerst der zuletzt **gewollte** Wert aus dem Steuerpfad (auch wenn er gerade unverändert gehalten wird), sonst die Rücklesung der Anlage, sonst `null`.
 
 Nicht im Schema: `feedExcessDcPv` und `dontFeedExcessAcPv`. Das sind Victron-Register (OvervoltageFeedIn, PreventFeedback) und ergeben für andere Hersteller keinen Sinn. Wer sie braucht, hat einen Victron-GX und damit Modbus.

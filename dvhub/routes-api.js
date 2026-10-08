@@ -22,7 +22,7 @@ import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.j
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
-import { buildControlSnapshot, controlSnapshotFlat } from './services/control-snapshot.js';
+import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, gridLimitSnapshotFlat } from './services/control-snapshot.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
@@ -1837,6 +1837,7 @@ export function createApiRoutes(ctx) {
     // Virtual HTTP Input parst key=value je Zeile, der scheduleActive-JSON-Blob
     // oben ist dort unbrauchbar. Gleiche Quelle wie <prefix>/control/* per MQTT.
     Object.assign(base, controlSnapshotFlat(buildControlSnapshot(state)));
+    Object.assign(base, gridLimitSnapshotFlat(buildGridLimitSnapshot(state)));
 
     // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
     // Per-section error isolation (Plan 08-07 Task 2): one section failing must

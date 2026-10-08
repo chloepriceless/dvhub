@@ -90,3 +90,34 @@ describe('MQTT publisher — control/* topics', () => {
     assert.equal(m['dvhub/control/updated_at'].value, null);
   });
 });
+
+// 2026-10-08: Grenzen des Netzbetreibers (§14a / EEBUS) für Geräte ohne EEBUS.
+describe('MQTT publisher — control/grid_limit/* topics', () => {
+  it('ohne Grenze: active false, Werte null', () => {
+    const hub = makeMockHub();
+    const pub = createMqttPublisher(hub, { state: makeState(), getCfg: () => ({ mqtt: { topicPrefix: 'dvhub' } }), pushLog: () => {} });
+    pub._publishOnce();
+    const m = pubMap(hub);
+    assert.equal(m['dvhub/control/grid_limit/active'].value, false);
+    assert.equal(m['dvhub/control/grid_limit/active'].retain, true);
+    assert.equal(m['dvhub/control/grid_limit/source'].raw, 'none');
+    assert.equal(m['dvhub/control/grid_limit/consumption_w'].value, null);
+    assert.equal(m['dvhub/control/grid_limit/production_w'].value, null);
+    assert.equal(m['dvhub/control/grid_limit/production_blocked'].value, false);
+  });
+
+  it('Bezugsgrenze der Steuerbox samt Aufteilung, Einspeisegrenze', () => {
+    const hub = makeMockHub();
+    const state = makeState();
+    state.p14a = { active: true, limitW: 7560, source: 'eebus', budgetW: 7560, shares: { speicher: 3780, wallbox: 3780 } };
+    state.eebus = { applied: { consumptionLimitW: 7560, productionLimitW: 4200, productionBlock: false } };
+    const pub = createMqttPublisher(hub, { state, getCfg: () => ({ mqtt: { topicPrefix: 'dvhub' } }), pushLog: () => {} });
+    pub._publishOnce();
+    const m = pubMap(hub);
+    assert.equal(m['dvhub/control/grid_limit/active'].value, true);
+    assert.equal(m['dvhub/control/grid_limit/source'].raw, 'eebus');
+    assert.equal(m['dvhub/control/grid_limit/consumption_w'].value, 7560);
+    assert.equal(m['dvhub/control/grid_limit/production_w'].value, 4200);
+    assert.deepEqual(m['dvhub/control/grid_limit/state'].value.shares, { speicher: 3780, wallbox: 3780 });
+  });
+});

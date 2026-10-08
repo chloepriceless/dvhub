@@ -109,6 +109,12 @@ const ENTITIES = [
   // victron_updated_at is epoch MS -> convert to a timestamp, guarding the 0 case.
   { id: 'victron_updated_at', name: 'DVhub Victron letztes Update', suffix: 'system/victron_updated_at', unit: null, device_class: 'timestamp', state_class: null, entity_category: 'diagnostic',
     value_template: '{{ none if (value|int) == 0 else ((value|int / 1000) | timestamp_utc) }}' },
+  // Netzbetreiber-Grenzen (§14a / EEBUS-Steuerbox) — damit Geräte ohne EEBUS
+  // (Wärmepumpe, eigene Logik) der Grenze folgen können. „unknown“ = keine Grenze.
+  { component: 'binary_sensor', id: 'control_grid_limit_active', name: 'DVhub Netzbetreiber-Grenze aktiv', suffix: 'control/grid_limit/active', device_class: null, payload_on: 'true', payload_off: 'false', icon: 'mdi:transmission-tower-off' },
+  { id: 'control_grid_limit_consumption_w', name: 'DVhub Bezugsgrenze (§14a)', suffix: 'control/grid_limit/consumption_w', unit: 'W', device_class: null, state_class: 'measurement', icon: 'mdi:transmission-tower-import', value_template: NULL_SAFE_TEMPLATE },
+  { id: 'control_grid_limit_production_w', name: 'DVhub Einspeisegrenze', suffix: 'control/grid_limit/production_w', unit: 'W', device_class: null, state_class: 'measurement', icon: 'mdi:transmission-tower-export', value_template: NULL_SAFE_TEMPLATE },
+  { id: 'control_grid_limit_source', name: 'DVhub Netzbetreiber-Grenze Quelle', suffix: 'control/grid_limit/source', unit: null, device_class: null, state_class: null, icon: 'mdi:source-branch', entity_category: 'diagnostic' },
   { component: 'binary_sensor', id: 'meter_ok', name: 'DVhub Zähler', suffix: 'system/meter_ok', device_class: 'connectivity', payload_on: 'true', payload_off: 'false', entity_category: 'diagnostic' },
 ];
 
