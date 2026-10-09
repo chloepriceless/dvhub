@@ -310,4 +310,40 @@ test.describe('Index/Leitstand page (Aurora Wave 3, AURORA-01/02/03/04/05/06)', 
       expect(epexBg.length).toBeGreaterThan(2);
     }
   });
+
+  // Ansicht „Einfach" / „Erweitert" (2026-10-09, leit-view.js).
+  test('Ansicht: neuer Browser startet einfach, Umschalten blendet ein und bleibt gemerkt', async ({ page }) => {
+    await page.goto('/index.html');
+    await page.waitForLoadState('networkidle');
+    const simple = () => page.evaluate(() => document.documentElement.classList.contains('leit-simple'));
+    expect(await simple(), 'frischer Browser → einfache Ansicht').toBe(true);
+    // Ausgeblendet, aber weiter im Dokument (die Aktualisierung läuft unverändert).
+    await expect(page.locator('#gridSetpoint')).toBeAttached();
+    await expect(page.locator('#gridSetpoint')).toBeHidden();
+    await expect(page.locator('#log')).toBeHidden();
+    // Das Wichtigste bleibt sichtbar: Energiefluss, Ladestand, Preis, Not-Halt.
+    await expect(page.locator('#leitstandPowerflow')).toBeVisible();
+    await expect(page.locator('#soc')).toBeVisible();
+    await expect(page.locator('#priceNow')).toBeVisible();
+    await expect(page.locator('#emergencyStopBtn')).toBeVisible();
+
+    await page.locator('#leitViewToggle [data-leit-view="advanced"]').click();
+    expect(await simple()).toBe(false);
+    await expect(page.locator('#gridSetpoint')).toBeVisible();
+    await expect(page.locator('#leitViewToggle [data-leit-view="advanced"]')).toHaveAttribute('aria-pressed', 'true');
+
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+    expect(await simple(), 'Wahl bleibt nach dem Neuladen').toBe(false);
+  });
+
+  test('Ansicht: ein Browser, der DVhub schon kennt, behält die erweiterte Ansicht', async ({ page }) => {
+    await page.addInitScript(() => {
+      try { if (!window.localStorage.getItem('dvhub.leitstand.view.v1')) window.localStorage.setItem('irgendein-alter-eintrag', '1'); } catch { /* egal */ }
+    });
+    await page.goto('/index.html');
+    await page.waitForLoadState('networkidle');
+    expect(await page.evaluate(() => document.documentElement.classList.contains('leit-simple'))).toBe(false);
+    await expect(page.locator('#gridSetpoint')).toBeVisible();
+  });
 });

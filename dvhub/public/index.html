@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="/index.css?v=20261006-fc">
   <link rel="stylesheet" href="/ev-tile.css?v=20260927-ev-boost">
   <script src="/theme.js"></script>
+  <script src="/leit-view.js?v=20261009"></script>
 </head>
 <body data-screen-label="Leitstand">
 
@@ -62,6 +63,15 @@
 
 <main class="page" data-screen-label="Leitstand &middot; Hauptbereich">
 
+  <!-- Ansicht: „Einfach" blendet Stellgrößen und Details aus (leit-view.js). -->
+  <div class="leit-viewbar">
+    <span class="leit-viewbar-hint" id="leitViewHint">Einfache Ansicht &middot; Sollwerte, Zeitplan und Details sind ausgeblendet</span>
+    <div class="segmented" id="leitViewToggle" role="group" aria-label="Ansicht des Leitstands">
+      <button type="button" data-leit-view="simple" aria-pressed="false">Einfach</button>
+      <button type="button" data-leit-view="advanced" aria-pressed="false">Erweitert</button>
+    </div>
+  </div>
+
   <!-- 3-column dashboard: LEFT RAIL · POWERFLOW · RIGHT RAIL -->
   <section class="leit-grid" data-screen-label="Dashboard 3-Col">
 
@@ -75,8 +85,8 @@
         <div class="rail-big card-value value-pv" id="pvTotal">&mdash;</div>
         <div class="rail-row"><span class="l">DC-PV</span><strong class="v" id="pvP">&mdash;</strong></div>
         <div class="rail-row"><span class="l">AC-PV</span><strong class="v" id="pvAc">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">DC-PV-Einspeisung</span><strong class="v" id="dvDcPv">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">AC-PV blockiert</span><strong class="v" id="dvAcPv">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">DC-PV-Einspeisung</span><strong class="v" id="dvDcPv">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">AC-PV blockiert</span><strong class="v" id="dvAcPv">&mdash;</strong></div>
       </div>
 
       <div class="card rail-card" data-accent="bat">
@@ -92,22 +102,22 @@
           <span>100%</span>
         </div>
         <div class="rail-row"><span class="l">Akku-Leistung</span><strong class="v" id="batP">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">Grid Setpoint</span><strong class="v" id="gridSetpoint">&mdash;</strong></div>
-        <div class="rail-row rail-row-action" id="minSocRow" role="button" tabindex="0" aria-expanded="false" aria-controls="minSocEditor">
+        <div class="rail-row" data-leit="adv"><span class="l">Grid Setpoint</span><strong class="v" id="gridSetpoint">&mdash;</strong></div>
+        <div class="rail-row rail-row-action" id="minSocRow" role="button" tabindex="0" aria-expanded="false" aria-controls="minSocEditor" data-leit="adv">
           <span class="l">Minimum-SOC <small class="rail-row-hint">Anpassen</small></span>
           <strong class="v" id="minSoc">&mdash;</strong>
         </div>
-        <div class="min-soc-editor" id="minSocEditor" hidden>
+        <div class="min-soc-editor" id="minSocEditor" hidden data-leit="adv">
           <label class="min-soc-editor-label" for="minSocSlider">Minimum-SOC</label>
           <strong class="min-soc-editor-value" id="minSocEditorValue">20 %</strong>
           <input id="minSocSlider" class="min-soc-editor-slider" type="range" min="0" max="100" step="5" value="20">
           <button id="minSocSubmitBtn" class="btn primary sm" type="button">Absenden</button>
         </div>
-        <div class="rail-row rail-row-action" id="maxDischargeRow" role="button" tabindex="0" aria-expanded="false" aria-controls="maxDischargeEditor" title="Max. AC-Entladeleistung Akku&rarr;Haus (Cerbo Settings/CGwacs/MaxDischargePower, reg 2704 &mdash; Ist-Wert aus der GX). -1 = unbegrenzt, 0 = Hold (Akku liefert nichts), positiver Wert = Cap in Watt. Begrenzt direkt, wie viel der Akku zur Hausdeckung beitragen darf.">
+        <div class="rail-row rail-row-action" id="maxDischargeRow" role="button" tabindex="0" aria-expanded="false" aria-controls="maxDischargeEditor" title="Max. AC-Entladeleistung Akku&rarr;Haus (Cerbo Settings/CGwacs/MaxDischargePower, reg 2704 &mdash; Ist-Wert aus der GX). -1 = unbegrenzt, 0 = Hold (Akku liefert nichts), positiver Wert = Cap in Watt. Begrenzt direkt, wie viel der Akku zur Hausdeckung beitragen darf." data-leit="adv">
           <span class="l">Max Entladung <small class="rail-row-hint">Anpassen</small></span>
           <strong class="v" id="maxDischargeReadback">&mdash;</strong>
         </div>
-        <div class="min-soc-editor" id="maxDischargeEditor" hidden>
+        <div class="min-soc-editor" id="maxDischargeEditor" hidden data-leit="adv">
           <label class="min-soc-editor-label" for="maxDischargeInput">Max Entladung Akku&rarr;Haus (W)</label>
           <input id="maxDischargeInput" class="input mono" type="number" min="-1" max="30000" step="100" value="-1">
           <div class="max-discharge-presets">
@@ -119,7 +129,7 @@
         </div>
       </div>
 
-      <div class="card rail-card" data-accent="dv">
+      <div class="card rail-card" data-accent="dv" data-leit="adv">
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-dv"></span>DV-Signale &middot; LUOX</span>
           <span class="chip info sm" id="dvLuoxStatusChip" hidden><span class="dot"></span><span id="dvLuoxStatusText">&mdash;</span></span>
@@ -135,7 +145,7 @@
 
       <!-- §14a / EEBUS: Vorgaben der Steuerbox des Netzbetreibers und was DVhub daraus
            macht. Versteckt, solange EEBUS aus ist. -->
-      <div class="card rail-card" data-accent="dv" id="eebusCard" hidden>
+      <div class="card rail-card" data-accent="dv" id="eebusCard" hidden data-leit="adv">
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-dv"></span>&sect;14a / &sect;9 &middot; EEBUS</span>
           <span class="chip info sm" id="eebusChip"><span class="dot"></span><span id="eebusChipText">&mdash;</span></span>
@@ -163,7 +173,7 @@
         <div class="rail-row rail-row-span-2"><span class="l">Netto</span><strong class="v" id="costNet">&mdash;</strong></div>
       </div>
 
-      <div class="card rail-card u-hidden" data-accent="vpn" id="vpnCard">
+      <div class="card rail-card u-hidden" data-accent="vpn" id="vpnCard" data-leit="adv">
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-vpn"></span>VPN-Tunnel</span>
         </div>
@@ -199,13 +209,13 @@
         </div>
         <div class="rail-big card-value value-market" id="priceNow">&mdash;</div>
         <div class="rail-row"><span class="l">Min &middot; <span id="priceMinTime">--:--</span></span><strong class="v ok" id="priceMin">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">Negativ-Fenster</span><strong class="v ok" id="negWindow">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Negativ-Fenster</span><strong class="v ok" id="negWindow">&mdash;</strong></div>
         <div class="rail-row"><span class="l">Max &middot; <span id="priceMaxTime">--:--</span></span><strong class="v warn" id="priceMax">&mdash;</strong></div>
         <div class="rail-row"><span class="l">&Oslash; Tag</span><strong class="v cyan" id="priceAvg">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">N&auml;chster Slot &middot; <span id="priceNextTime">--:--</span></span><strong class="v" id="priceNext">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">N&auml;chster Slot &middot; <span id="priceNextTime">--:--</span></span><strong class="v" id="priceNext">&mdash;</strong></div>
         <div class="rail-row"><span class="l">Eigenbezug</span><strong class="v violet" id="priceEigenbezug">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">Morgen Min/Max</span><strong class="v dim" id="tomorrowMinMax">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">Negativpreis-Schutz</span><strong class="v" id="negPriceProtection">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Morgen Min/Max</span><strong class="v dim" id="tomorrowMinMax">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Negativpreis-Schutz</span><strong class="v" id="negPriceProtection">&mdash;</strong></div>
         <span hidden id="todayMinMax">&mdash;</span>
         <span hidden id="negLater">&mdash;</span>
         <span hidden id="negTomorrow">&mdash;</span>
@@ -227,34 +237,34 @@
           <button id="emergencyResumeBtn" class="btn nothalt-resume-btn" type="button" hidden title="Hebt den Not-Halt auf. Der Zeitplan &uuml;bernimmt beim n&auml;chsten Takt (~15 s) wieder.">&#9654; Steuerung fortsetzen</button>
           <div class="meta nothalt-meta" id="emergencyStopMeta" hidden>&mdash;</div>
         </div>
-        <div class="rail-row"><span class="l">Aktiver Grid Setpoint</span><strong class="v" id="activeGridSetpoint">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">Aktiver Charge Current</span><strong class="v" id="activeChargeCurrent">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">Aktiver Minimum-SOC</span><strong class="v" id="activeMinSoc">&mdash;</strong></div>
-        <div class="rail-row" title="Max. AC-Entladeleistung der Batterie. 0 = halten, -1 = unbegrenzt, sonst Cap in Watt. Setzt Cerbo Settings/CGwacs/MaxDischargePower."><span class="l">Max Discharge</span><strong class="v" id="activeMaxDischarge">&mdash;</strong></div>
-        <div class="rail-row"><span class="l">DC-Einspeisung</span><strong class="v" id="activeDcFeed">&mdash;</strong></div>
-        <div class="rail-row rail-row-stack"><span class="l">Letzter Write</span><strong class="v" id="lastControlWrite">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Aktiver Grid Setpoint</span><strong class="v" id="activeGridSetpoint">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Aktiver Charge Current</span><strong class="v" id="activeChargeCurrent">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Aktiver Minimum-SOC</span><strong class="v" id="activeMinSoc">&mdash;</strong></div>
+        <div class="rail-row" title="Max. AC-Entladeleistung der Batterie. 0 = halten, -1 = unbegrenzt, sonst Cap in Watt. Setzt Cerbo Settings/CGwacs/MaxDischargePower." data-leit="adv"><span class="l">Max Discharge</span><strong class="v" id="activeMaxDischarge">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">DC-Einspeisung</span><strong class="v" id="activeDcFeed">&mdash;</strong></div>
+        <div class="rail-row rail-row-stack" data-leit="adv"><span class="l">Letzter Write</span><strong class="v" id="lastControlWrite">&mdash;</strong></div>
 
-        <p class="card-title ctrl-section-head">Direkt schreiben</p>
-        <div class="ctrl-row">
+        <p class="card-title ctrl-section-head" data-leit="adv">Direkt schreiben</p>
+        <div class="ctrl-row" data-leit="adv">
           <label class="ctrl-label">Grid (W)<input id="manualGridValue" class="input mono" type="number" value="-40"></label>
           <button id="manualGridBtn" class="btn primary sm" type="button">Senden</button>
         </div>
-        <div class="ctrl-row">
+        <div class="ctrl-row" data-leit="adv">
           <label class="ctrl-label">Charge (A)<input id="manualChargeValue" class="input mono" type="number" value="100"></label>
           <button id="manualChargeBtn" class="btn primary sm" type="button">Senden</button>
         </div>
-        <div class="ctrl-row" title="Max AC-Entladeleistung. 0 = Hold (Akku darf nichts raushauen), -1 = unbegrenzt, positiver Wert = Cap in Watt.">
+        <div class="ctrl-row" data-leit="adv" title="Max AC-Entladeleistung. 0 = Hold (Akku darf nichts raushauen), -1 = unbegrenzt, positiver Wert = Cap in Watt.">
           <label class="ctrl-label">Max Discharge (W)<input id="manualMaxDischargeValue" class="input mono" type="number" min="-1" max="30000" step="100" value="-1"></label>
           <button id="manualMaxDischargeBtn" class="btn primary sm" type="button">Senden</button>
         </div>
 
-        <p class="card-title ctrl-section-head">Standards</p>
-        <div class="ctrl-defaults">
+        <p class="card-title ctrl-section-head" data-leit="adv">Standards</p>
+        <div class="ctrl-defaults" data-leit="adv">
           <label class="ctrl-label">Grid (W)<input id="defaultGridSetpointInput" class="input mono" type="number" value="-40"></label>
           <label class="ctrl-label">Charge (A)<input id="defaultChargeCurrentInput" class="input mono" type="number" value="100"></label>
           <label class="ctrl-label">DC (0/1)<input id="defaultFeedExcessDcPvInput" class="input mono" type="number" min="0" max="1" step="1" value="1"></label>
         </div>
-        <button id="saveDefaultsBtn" class="btn primary sm ctrl-save-defaults" type="button">Defaults speichern</button>
+        <button id="saveDefaultsBtn" class="btn primary sm ctrl-save-defaults" type="button" data-leit="adv">Defaults speichern</button>
       </div>
 
     </aside>
@@ -275,7 +285,7 @@
           <canvas id="priceChartCanvas"></canvas>
         </div>
         <div id="tooltip" class="tooltip-hidden">&mdash;</div>
-        <div id="chartScheduleCallout" class="chart-selection-callout" hidden>
+        <div id="chartScheduleCallout" class="chart-selection-callout" hidden data-leit="adv">
           <div class="chart-selection-copy">
           <strong id="chartSelectionSummary">Keine Auswahl aktiv</strong>
           <span id="chartSelectionDetail">Markiere mehrere Balken im Chart.</span>
@@ -284,9 +294,9 @@
         </div>
         <div class="chart-comparison-summary">
           <strong id="chartComparisonSummary">Eigener Strompreis noch nicht konfiguriert</strong>
-          <span id="chartComparisonDetail">Lege in den Einstellungen deinen Bruttopreis an.</span>
+          <span id="chartComparisonDetail" data-leit="adv">Lege in den Einstellungen deinen Bruttopreis an.</span>
         </div>
-        <div class="meta" id="chartMeta">&mdash;</div>
+        <div class="meta" id="chartMeta" data-leit="adv">&mdash;</div>
       </div>
     </section>
 
@@ -294,7 +304,7 @@
 
   </section>
 
-  <section class="section-block" data-screen-label="Schedule Editor">
+  <section class="section-block" data-screen-label="Schedule Editor" data-leit="adv">
     <div class="card chart-card">
       <div class="card-head">
         <span class="card-title"><span class="dot dot-violet"></span>Optimizer &middot; Schedule</span>
@@ -353,7 +363,7 @@
   </section>
 
   <!-- SMA · Kleine B&ouml;rsenautomatik (own card, mockup parity — whole header toggles) -->
-  <section class="section-block" data-screen-label="SMA &middot; Kleine B&ouml;rsenautomatik">
+  <section class="section-block" data-screen-label="SMA &middot; Kleine B&ouml;rsenautomatik" data-leit="adv">
     <div class="card sma-card">
       <details id="automationPanel" class="sma-details-root">
         <summary class="sma-summary">
@@ -415,7 +425,7 @@
     <div class="card chart-card">
       <div class="card-head">
         <span class="card-title"><span class="dot dot-violet"></span>Forecast &amp; Energiebilanz</span>
-        <label class="overlay-toggle-label">
+        <label class="overlay-toggle-label" data-leit="adv">
           <input type="checkbox" id="overlay-toggle"> Overlay: PV / Last
         </label>
       </div>
@@ -439,7 +449,7 @@
       </div>
 
       <!-- Forecast comparison chart -->
-      <div class="forecast-chart-shell" id="forecastComparisonCard">
+      <div class="forecast-chart-shell" id="forecastComparisonCard" data-leit="adv">
         <div class="chart-skeleton" id="forecastCompSkeleton">
           <div class="skeleton-bar"></div>
         </div>
@@ -461,7 +471,7 @@
            by leitstand-charts.js#renderForecastProviders from
            /api/forecast/inspector/pv-providers (the merged /api/forecast does NOT
            expose per-source series). -->
-      <div class="forecast-providers-card" id="forecastProvidersCard">
+      <div class="forecast-providers-card" id="forecastProvidersCard" data-leit="adv">
         <div class="chart-head">
           <span class="card-title">PV-Forecast-Provider</span>
           <span class="card-sub" id="forecastProvidersEnsemble">&mdash;</span>
@@ -476,7 +486,7 @@
            (right axis) + PV-Prognose + Netz-Einspeisung (left kW axis) + KPIs.
            From /api/eos/plan (output.rows, Plan aus dem EOS-Monitor), rendered by
            leitstand-charts.js#renderEosPlanChart. -->
-      <div class="forecast-chart-shell" id="eosPlanCard">
+      <div class="forecast-chart-shell" id="eosPlanCard" data-leit="adv">
         <div class="chart-skeleton" id="eosPlanSkeleton">
           <div class="skeleton-bar"></div>
         </div>
@@ -491,7 +501,7 @@
       </div>
 
       <!-- Optimizer plan chart -->
-      <div class="forecast-chart-shell u-hidden" id="optimizerPlanCard">
+      <div class="forecast-chart-shell u-hidden" id="optimizerPlanCard" data-leit="adv">
         <div class="chart-skeleton" id="optimizerPlanSkeleton">
           <div class="skeleton-bar"></div>
         </div>
@@ -511,7 +521,7 @@
   </section>
 
   <!-- Bottom: Log -->
-  <section class="section-block bottom-panel" data-screen-label="Log">
+  <section class="section-block bottom-panel" data-screen-label="Log" data-leit="adv">
     <div class="card bottom-card">
       <div class="card-head">
         <span class="card-title"><span class="dot"></span>Systemprotokoll</span>

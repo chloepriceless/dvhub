@@ -1265,3 +1265,23 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   .card-head > .card-actions .chip,
   .card-head > .card-actions .btn { white-space:nowrap; }
 }
+
+
+/* ─── Ansicht „Einfach" / „Erweitert" (leit-view.js) ─── */
+.leit-viewbar {
+  display:flex; align-items:center; justify-content:flex-end; gap:12px;
+  margin:0 0 var(--gap-3);
+}
+.leit-viewbar-hint {
+  font-family:var(--f-mono); font-size:10.5px; letter-spacing:.08em;
+  color:var(--text-dim); display:none;
+}
+html.leit-simple .leit-viewbar-hint { display:inline; }
+/* Nur ausblenden — die Elemente bleiben im Dokument und werden weiter befüllt. */
+html.leit-simple [data-leit="adv"] { display:none !important; }
+/* Die Steuerungs-Karte zeigt dann nur den Not-Halt; ohne Abstand nach unten. */
+html.leit-simple .ctrl-card .nothalt-block { margin-bottom:0; }
+@media (max-width:560px) {
+  .leit-viewbar { justify-content:space-between; }
+  .leit-viewbar-hint { font-size:9.5px; letter-spacing:.04em; }
+}

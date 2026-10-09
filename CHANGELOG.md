@@ -12,6 +12,13 @@ verweist hierher.
 
 ### Neu
 
+- **Leitstand: Ansicht „Einfach" oder „Erweitert".** Der Leitstand zeigt alles, was DVhub weiß und
+  stellen kann — für Einsteiger zu viel auf einmal. Ein Umschalter oben rechts wechselt zwischen
+  beiden Ansichten. „Einfach" lässt Energiefluss, PV, Akku, Kosten, Börsenpreis, E-Auto, die
+  Tagesprognose und den Not-Halt stehen und blendet Sollwerte, Direktvermarkter-Signale, §14a-Karte,
+  VPN, Zeitplan, Kleine Börsenautomatik, Prognose-Diagramme und das Systemprotokoll aus. Die Wahl
+  gilt je Browser. Ohne eigene Wahl startet ein neuer Browser einfach; wer DVhub schon nutzt,
+  behält die erweiterte Ansicht.
 - **Grenzen des Netzbetreibers per MQTT.** Die Bezugsgrenze nach §14a (EEBUS-Steuerbox oder
   Dimm-Eingang) und die Einspeisegrenze wirkten bisher nur auf Speicher, Wallbox und
   Einspeisebegrenzer und waren sonst nur über die API lesbar. DVhub veröffentlicht sie jetzt
