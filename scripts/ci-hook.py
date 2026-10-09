@@ -7,8 +7,9 @@ Eingebunden in .claude/settings.json (Vorlage: scripts/claude-settings.example.j
       Merkt sich den Commit, wenn der Befehl ein `git push` war.
   Stop                →  ci-hook.py stop
       Wartet auf die CI dieses Commits. Grün: nichts weiter. Rot oder nach der
-      Wartezeit noch offen: Rückgabe 2 — Claude bekommt die Meldung und kann
-      die Arbeit nicht als erledigt abschließen, ohne darauf einzugehen.
+      Wartezeit noch offen: Ausgabe {"decision": "block", "reason": …} — Claude
+      bekommt die Meldung und kann die Arbeit nicht als erledigt abschließen,
+      ohne darauf einzugehen.
 
 Jeder Commit wird nur einmal gemeldet (sonst hinge die Sitzung an einer roten
 CI fest, die sich gerade nicht beheben lässt). Der Merkzettel liegt unter
@@ -103,8 +104,10 @@ def stop(root):
         "Die GitHub-CI für den zuletzt gepushten Commit ist nach der Wartezeit noch nicht fertig. "
         "Bitte mit `python3 scripts/ci-check.py --wait 600` nachsehen, bevor die Arbeit als erledigt gilt."
     )
-    print(text + "\n" + hint, file=sys.stderr)
-    return 2
+    # Stop-Hook: mit {"decision": "block"} bleibt die Sitzung offen und Claude
+    # bekommt den Text als Grund (Rückgabe 0, Ausgabe als JSON auf stdout).
+    print(json.dumps({"decision": "block", "reason": text + "\n" + hint}, ensure_ascii=False))
+    return 0
 
 
 if __name__ == "__main__":
