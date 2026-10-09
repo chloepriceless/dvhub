@@ -35,6 +35,24 @@ Please ensure that:
 
 ---
 
+## Checks before commit and push, CI after push
+
+The CI (`.github/workflows/ci.yml`: lint, tests, Postgres integration, browser suite, secret scan)
+runs on every push to `main` and on pull requests. It was red for a week in October 2026 without
+anyone noticing, because only local tests were run — so the result is now checked in three places:
+
+- **Git hooks** (once per clone: `git config core.hooksPath scripts/git-hooks`)
+  - `pre-commit`: secret scan and ESLint for the staged JavaScript files (a few seconds).
+  - `pre-push`: secret scan and ESLint for the whole project; warns if the CI of the current
+    `origin/main` is already red.
+- **After a push:** `python3 scripts/ci-check.py --wait 900` waits for the CI of `origin/main` and
+  prints the failed jobs. Exit code 0 = green, 1 = red, 3 = still running.
+- **Claude Code sessions:** copy `scripts/claude-settings.example.json` to `.claude/settings.json`.
+  After every `git push` the session then waits for the CI before it can finish, and gets the
+  failed jobs reported if it is red (`scripts/ci-hook.py`).
+
+A green CI on `main` also publishes the preview image `bikinibottomcapital/dvhub:dev`.
+
 ## Frontend cache-buster convention
 
 Every `<script src>`/`<link href>` in `dvhub/public/*.html` that points at a

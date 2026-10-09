@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# pre-push — vor jedem Push: was die CI sofort ablehnen würde, hier schon merken.
+#
+#   1. Secret-Scan und ESLint über das ganze Projekt (blockiert bei Fehlern).
+#   2. Stand der CI für den bisherigen Stand von origin/main (nur Hinweis):
+#      ist sie schon rot, soll das beim Pushen auffallen statt Tage später.
+#
+# Die vollständige Testrunde läuft in der CI; ihr Ergebnis nach dem Push:
+#   python3 scripts/ci-check.py --wait 900
+#
+# Einschalten (einmal je Klon):  git config core.hooksPath scripts/git-hooks
+# Im Notfall überspringen:       git push --no-verify
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# Nur für Zweige prüfen — ein reiner Tag-Push ändert keinen Code.
+BRANCH_PUSH=0
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  [[ "$remote_ref" == refs/heads/* ]] && BRANCH_PUSH=1
+done
+[[ "$BRANCH_PUSH" -eq 1 ]] || exit 0
+
+if ! bash scripts/check-secrets.sh >/tmp/dvhub-secret-scan.$$ 2>&1; then
+  cat /tmp/dvhub-secret-scan.$$; rm -f /tmp/dvhub-secret-scan.$$
+  echo "pre-push: Secret-Scan fehlgeschlagen — Push abgebrochen." >&2
+  exit 1
+fi
+rm -f /tmp/dvhub-secret-scan.$$
+
+if [[ -x dvhub/node_modules/.bin/eslint ]]; then
+  if ! (cd dvhub && node_modules/.bin/eslint .); then
+    echo "pre-push: ESLint meldet Fehler — Push abgebrochen." >&2
+    exit 1
+  fi
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  STATUS="$(python3 scripts/ci-check.py 2>/dev/null || true)"
+  case "$STATUS" in
+    *ROT*) printf '\npre-push: ACHTUNG — die CI des bisherigen Stands ist rot:\n%s\n\n' "$STATUS" >&2 ;;
+  esac
+fi
+exit 0

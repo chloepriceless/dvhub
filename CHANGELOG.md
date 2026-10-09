@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **CI-Ergebnis wird nach jedem Push geprüft.** `scripts/ci-check.py` fragt den Stand der GitHub-CI
+  für einen Commit ab und wartet auf Wunsch darauf; Git-Hooks (`scripts/git-hooks/`) prüfen vor
+  Commit und Push Secret-Scan und ESLint, und Claude-Code-Sitzungen warten nach einem Push auf
+  das Ergebnis (`scripts/ci-hook.py`). Anlass: die CI war Anfang Oktober eine Woche unbemerkt rot.
 - **Vorab-Image `dev` in der Registry.** Nach jedem Push auf `main` mit grüner CI baut GitHub
   `bikinibottomcapital/dvhub:dev` (auch `ghcr.io/chloepriceless/dvhub:dev`) für amd64 und arm64.
   `latest` bleibt das letzte Release. Hebt `main` den EOS-Stand an, wird das passende EOS-Image

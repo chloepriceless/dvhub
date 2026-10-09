@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# pre-commit — schnelle Prüfungen vor jedem Commit (wenige Sekunden).
+#
+#   1. Secret-Scan (scripts/check-secrets.sh): Zugangsdaten, Schlüssel, interne
+#      Adressen — derselbe Scan, der in der CI als Push-Gate läuft.
+#   2. ESLint über die geänderten JavaScript-Dateien unter dvhub/.
+#
+# Einschalten (einmal je Klon):  git config core.hooksPath scripts/git-hooks
+# Im Notfall überspringen:       git commit --no-verify
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if ! bash scripts/check-secrets.sh >/tmp/dvhub-secret-scan.$$ 2>&1; then
+  cat /tmp/dvhub-secret-scan.$$; rm -f /tmp/dvhub-secret-scan.$$
+  echo "pre-commit: Secret-Scan fehlgeschlagen — Commit abgebrochen." >&2
+  exit 1
+fi
+rm -f /tmp/dvhub-secret-scan.$$
+
+FILES=()
+while IFS= read -r f; do FILES+=("${f#dvhub/}"); done < <(git diff --cached --name-only --diff-filter=ACMR -- 'dvhub/*.js' 'dvhub/**/*.js' 'dvhub/*.mjs' 'dvhub/**/*.mjs')
+if [[ ${#FILES[@]} -gt 0 && -x dvhub/node_modules/.bin/eslint ]]; then
+  if ! (cd dvhub && node_modules/.bin/eslint --no-warn-ignored "${FILES[@]}"); then
+    echo "pre-commit: ESLint meldet Fehler — Commit abgebrochen." >&2
+    exit 1
+  fi
+fi
