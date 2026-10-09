@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **Vorab-Image `dev` in der Registry.** Nach jedem Push auf `main` mit grüner CI baut GitHub
+  `bikinibottomcapital/dvhub:dev` (auch `ghcr.io/chloepriceless/dvhub:dev`) für amd64 und arm64.
+  `latest` bleibt das letzte Release. Hebt `main` den EOS-Stand an, wird das passende EOS-Image
+  mitgebaut. Das Image trägt seinen Commit: die Versionsanzeige nennt ihn (z. B. `v1.0.7+4c066da`).
 - **Leitstand: Ansicht „Einfach" oder „Erweitert".** Der Leitstand zeigt alles, was DVhub weiß und
   stellen kann — für Einsteiger zu viel auf einmal. Ein Umschalter oben rechts wechselt zwischen
   beiden Ansichten. „Einfach" lässt Energiefluss, PV, Akku, Kosten, Börsenpreis, E-Auto, die

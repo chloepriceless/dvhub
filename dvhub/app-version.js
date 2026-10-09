@@ -43,7 +43,13 @@ export function readAppVersionInfo({ appDir }) {
   const pkg = readJson(path.join(appDir, 'package.json')) || {};
   const name = String(pkg.name || 'dvhub');
   const version = String(pkg.version || '0.0.0');
-  const revision = readGitRevision(path.resolve(appDir, '..'));
+  // Im Container gibt es kein .git — das Image trägt den Commit als
+  // DVHUB_REVISION (Dockerfile, Build-Argument VCS_REF). So zeigt auch ein
+  // Vorab-Image (Tag „dev") genau, welcher Stand läuft.
+  const envRevision = /^[0-9a-f]{7,40}$/i.test(String(process.env.DVHUB_REVISION || ''))
+    ? String(process.env.DVHUB_REVISION).slice(0, 7)
+    : null;
+  const revision = readGitRevision(path.resolve(appDir, '..')) || envRevision;
 
   return {
     name,

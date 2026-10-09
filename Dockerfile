@@ -118,6 +118,7 @@ ENV NODE_ENV=production \
     DV_APP_CONFIG=/etc/dvhub/config.json \
     DV_DATA_DIR=/var/lib/dvhub \
     DVHUB_VERSION=${APP_VERSION} \
+    DVHUB_REVISION=${VCS_REF} \
     DVHUB_HTTP_PORT=8080 \
     DV_SERVICE_USE_SUDO=0 \
     DVHUB_RUNTIME=container \

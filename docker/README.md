@@ -47,7 +47,7 @@ docker compose -f docker/compose.yml exec dvhub node -p 'require("/etc/dvhub/con
 
 | Image | Tags |
 |---|---|
-| `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.7` = Releases; `dev` = Vorab-Stand (von Hand gebaut, kein Release) |
+| `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.7` = Releases; `dev` = Vorab-Stand: der aktuelle `main`, automatisch gebaut nach jedem Push mit grüner CI (kein Release) |
 | `bikinibottomcapital/dvhub-eos` | EOS-Stand, z. B. `dvhub-v0.4.0rc1.18` (= `EOS_TAG`), `latest` = der des letzten Releases |
 
 Beide für `linux/amd64` und `linux/arm64`, auf Docker Hub öffentlich und nach

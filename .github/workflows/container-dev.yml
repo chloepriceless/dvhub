@@ -1,0 +1,152 @@
+# DVhub Vorab-Image → Docker Hub + GitHub Container Registry, Tag „dev"
+#
+#   docker.io/bikinibottomcapital/dvhub:dev      ghcr.io/chloepriceless/dvhub:dev
+#
+# Läuft nach jedem Push auf main, sobald die CI (ci.yml) dafür GRÜN ist — ein
+# roter Stand wird nie veröffentlicht. „dev" ist der aktuelle main, kein Release;
+# Releases (:X.Y.Z, :X.Y, :latest) baut weiterhin nur container.yml beim Tag.
+#
+# EOS: das dev-Image braucht den EOS-Stand aus docker/.env.example (EOS_TAG).
+# Wird der Pin zwischen zwei Releases angehoben, gäbe es das Image noch nicht —
+# deshalb wird es hier nachgebaut, FALLS der Tag auf Docker Hub fehlt
+# (:latest von EOS bleibt dem Release vorbehalten).
+#
+# Docker-Hub-Token: Repo-Secret BIKINIBOTTOMCAPITAL (oder DOCKERHUB_TOKEN), wie
+# in container.yml.
+#
+# SECURITY: ausgelöst über workflow_run, also mit Repo-Secrets — deshalb nur für
+# Push-Läufe auf main (nie für Pull Requests aus Forks) und mit dem Commit, den
+# die CI geprüft hat.
+
+name: Container (dev)
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-dev
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: publish dev (amd64 + arm64)
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Docker-Hub-Token vorhanden
+        env:
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
+        run: |
+          test -n "$HUB_TOKEN" || { echo "::error::Docker-Hub-Token fehlt (Secret BIKINIBOTTOMCAPITAL oder DOCKERHUB_TOKEN)"; exit 1; }
+
+      - name: Version aus package.json
+        id: v
+        run: echo "version=$(node -p 'require("./dvhub/package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@v3
+        with:
+          username: bikinibottomcapital
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            docker.io/bikinibottomcapital/dvhub:dev
+            ghcr.io/${{ github.repository_owner }}/dvhub:dev
+          build-args: |
+            VCS_REF=${{ github.event.workflow_run.head_sha }}
+            APP_VERSION=${{ steps.v.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish-eos:
+    name: EOS-Image nachbauen, falls der Pin neu ist
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: EOS-Stand aus docker/.env.example
+        id: eos
+        run: |
+          tag="$(grep '^EOS_TAG=' docker/.env.example | cut -d= -f2)"
+          repo="$(grep '^EOS_REPO=' docker/.env.example | cut -d= -f2)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "docker.io/bikinibottomcapital/dvhub-eos:$tag" >/dev/null 2>&1; then
+            echo "EOS-Image $tag ist schon veröffentlicht."
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "EOS-Image $tag fehlt — wird gebaut."
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.eos.outputs.missing == 'true'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.eos.outputs.missing == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.eos.outputs.missing == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@v3
+        if: steps.eos.outputs.missing == 'true'
+        with:
+          username: bikinibottomcapital
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
+
+      - uses: docker/build-push-action@v6
+        if: steps.eos.outputs.missing == 'true'
+        with:
+          context: ${{ steps.eos.outputs.repo }}#${{ steps.eos.outputs.tag }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            docker.io/bikinibottomcapital/dvhub-eos:${{ steps.eos.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.tag }}
+          build-args: |
+            BUILD_VERSION=${{ steps.eos.outputs.tag }}
+          cache-from: type=gha,scope=eos
+          cache-to: type=gha,mode=max,scope=eos

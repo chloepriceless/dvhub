@@ -47,3 +47,21 @@ test('readAppVersionInfo falls back to package version when no git metadata is p
     versionLabel: 'v0.3.0'
   });
 });
+
+// Container: kein .git im Image — der Commit kommt aus DVHUB_REVISION.
+test('readAppVersionInfo nimmt im Container den Commit aus DVHUB_REVISION', () => {
+  const { appDir } = createTempAppDir();
+  fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({ name: 'dvhub', version: '1.0.7' }));
+  const before = process.env.DVHUB_REVISION;
+  try {
+    process.env.DVHUB_REVISION = '4c066dab1234567890abcdef1234567890abcdef';
+    assert.equal(readAppVersionInfo({ appDir }).versionLabel, 'v1.0.7+4c066da');
+    // Platzhalter des Dockerfile („unknown") und Unsinn zählen nicht.
+    process.env.DVHUB_REVISION = 'unknown';
+    assert.equal(readAppVersionInfo({ appDir }).versionLabel, 'v1.0.7');
+    delete process.env.DVHUB_REVISION;
+    assert.equal(readAppVersionInfo({ appDir }).versionLabel, 'v1.0.7');
+  } finally {
+    if (before === undefined) delete process.env.DVHUB_REVISION; else process.env.DVHUB_REVISION = before;
+  }
+});
