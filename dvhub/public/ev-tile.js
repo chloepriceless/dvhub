@@ -47,7 +47,7 @@
     "  <div class=\"ev-timeline-axis\"><span id=\"evAxisStart\">jetzt</span><span id=\"evAxisEnd\">&mdash;</span></div>",
     "  <div class=\"rail-row ev-plan-row\"><span class=\"l\">Plan</span><strong class=\"v\" id=\"evPlanSummary\">&mdash;</strong></div>",
     "  <div class=\"ev-steps\" id=\"evSteps\" aria-label=\"EOS-Ladestufen\" hidden></div>",
-    "  <div class=\"rail-row ev-edit-row\" title=\"An: EOS plant das Auto nur, solange es an der Wallbox steckt (evcc). Anstecken/Abziehen l&ouml;st sofort einen Neuplan aus &mdash; ohne Auto h&auml;lt EOS keine Energie daf&uuml;r zur&uuml;ck. Aus: EOS plant das Auto immer mit.\">",
+    "  <div class=\"rail-row ev-edit-row\" title=\"An: EOS plant das Auto nur, solange es an der Wallbox steckt. Anstecken/Abziehen l&ouml;st sofort einen Neuplan aus &mdash; ohne Auto h&auml;lt EOS keine Energie daf&uuml;r zur&uuml;ck. Aus: EOS plant das Auto immer mit.\">",
     "    <span class=\"l\">Nur angesteckt planen</span>",
     "    <span class=\"switch switch-sm\"><input type=\"checkbox\" id=\"evOnlyPlugged\" aria-label=\"Nur angesteckt planen\"><span class=\"track\"></span><span class=\"thumb\"></span></span>",
     "  </div>",

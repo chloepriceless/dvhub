@@ -38,6 +38,8 @@ export function createChargerStatusPoller({ getCfg, getAdapter, now = () => Date
           charging: st.charging === true,
           // go-e/Wattpilot unterscheiden „wartet auf Ladestart“ und „fertig“ (mypv-regulator.js).
           carState: typeof st.carState === 'string' ? st.carState : null,
+          // Rohwerte der Box (z. B. frc beim go-e/Wattpilot → Lademodus, main-wallbox.js).
+          raw: st.raw && typeof st.raw === 'object' ? st.raw : null,
           powerW: Number.isFinite(Number(st.powerW)) ? Math.round(Number(st.powerW)) : null,
           currentA: Number.isFinite(Number(st.currentA)) ? Number(st.currentA) : null,
           vehicleSocPct: Number.isFinite(Number(st.vehicleSocPct)) ? Number(st.vehicleSocPct) : null,

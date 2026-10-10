@@ -179,15 +179,19 @@ export function createMqttPublisher(hub, ctx) {
     // Ziel-SoC nur, wenn in Prozent geführt (sonst kWh/km → für die HA-%-Zahl null).
     pub('ev/target_soc_pct', (optCfg.evTargetMode || 'percent') === 'percent' && optCfg.evTargetValue != null
       ? Number(optCfg.evTargetValue) : null);
-    // Wallbox-Modus aus dem evcc-Loadpoint (cheap: gecachter Status, kein Netz-Call).
+    // Wallbox-Modus der Hauptwallbox (main-wallbox.js; gecachter Status, kein Netz-Call).
     let evMode = null;
     try {
-      const st = ctx.evccIntegration?.getStatus?.() || {};
-      const lps = Array.isArray(st.loadpoints) ? st.loadpoints : [];
-      const lpId = Number(optCfg.evEvccLoadpoint) || Number(getCfg().evcc?.dashboardLoadpoint) || 1;
-      const lp = lps.find((l) => Number(l.id) === lpId) || lps[0] || null;
-      evMode = lp?.mode || null;
-    } catch { /* evcc nicht verfügbar → null */ }
+      if (ctx.mainWallbox) {
+        evMode = ctx.mainWallbox.state().mode || null;
+      } else {
+        const st = ctx.evccIntegration?.getStatus?.() || {};
+        const lps = Array.isArray(st.loadpoints) ? st.loadpoints : [];
+        const lpId = Number(optCfg.evEvccLoadpoint) || Number(getCfg().evcc?.dashboardLoadpoint) || 1;
+        const lp = lps.find((l) => Number(l.id) === lpId) || lps[0] || null;
+        evMode = lp?.mode || null;
+      }
+    } catch { /* Wallbox nicht verfügbar → null */ }
     pub('ev/mode', evMode);
 
     // Schaltbare Geräte (Shelly): Relais-Zustand als ON/OFF, passend zu den

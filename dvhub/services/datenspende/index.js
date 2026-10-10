@@ -109,10 +109,17 @@ export function collectSources(ctx, cfg, nowMs) {
       out.push({ key: `tile:${t.id}`, name: String(t.label || t.id), vendor: 'MQTT', model: 'MQTT-Kachel', power: round1(unit === 'kW' ? val * 1000 : val) });
     }
   }
-  if (on('wallbox') && ctx.evccIntegration?.getLoadpoints) {
-    for (const lp of ctx.evccIntegration.getLoadpoints() || []) {
+  // Hauptwallbox (main-wallbox.js): evcc mit seinen Ladepunkten oder die
+  // direkt angebundene Box als ein Ladepunkt.
+  const wallbox = ctx.mainWallbox;
+  if (on('wallbox') && (wallbox || ctx.evccIntegration?.getLoadpoints)) {
+    const direct = wallbox?.isDirect?.() === true;
+    const lps = wallbox ? wallbox.loadpoints() : (ctx.evccIntegration.getLoadpoints() || []);
+    for (const lp of lps) {
       if (!lp || num(lp.chargePowerW) === null) continue;
-      out.push({ key: `evcc:${lp.id}`, name: String(lp.title || `Ladepunkt ${lp.id}`), vendor: 'evcc', model: 'Wallbox-Ladeleistung', power: round1(lp.chargePowerW) });
+      out.push(direct
+        ? { key: `wallbox:${wallbox.type()}`, name: String(lp.title || wallbox.label()), vendor: wallbox.label(), model: 'Wallbox-Ladeleistung', power: round1(lp.chargePowerW) }
+        : { key: `evcc:${lp.id}`, name: String(lp.title || `Ladepunkt ${lp.id}`), vendor: 'evcc', model: 'Wallbox-Ladeleistung', power: round1(lp.chargePowerW) });
     }
   }
   return out;

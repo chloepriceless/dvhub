@@ -36,7 +36,15 @@ export function resolveEvSocPct(ctx) {
     if (teslaPct !== null && teslaPct >= 0 && teslaPct <= 100) return { pct: teslaPct, source: 'teslamate' };
   }
 
-  if (use('evcc')) {
+  // Hauptwallbox direkt angebunden (OpenEVSE meldet den Ladestand mit):
+  // dann gilt sie, evcc wird nicht gefragt (main-wallbox.js).
+  const wallbox = ctx?.mainWallbox?.state?.();
+  if (wallbox && wallbox.type !== 'evcc') {
+    if (use('evcc') || use('wallbox')) {
+      const pct = wallbox.connected === true ? num(wallbox.vehicleSocPct) : null;
+      if (pct !== null && pct >= 0 && pct <= 100) return { pct, source: wallbox.type };
+    }
+  } else if (use('evcc')) {
     const lpId = Number(opt.evEvccLoadpoint) || 1;
     const lps = ctx?.evccIntegration?.getLoadpoints?.() || [];
     const lp = lps.find((l) => l.id === lpId);
@@ -60,14 +68,20 @@ export function resolveEvSocPct(ctx) {
  * @returns {boolean|null} null = unbekannt (evcc nicht erreichbar/kein Ladepunkt)
  */
 export function resolveEvPlugged(ctx) {
-  // OpenEVSE / go-e: die Wallbox selbst ist die Quelle (charger-status.js).
-  // Antwortet sie > 90 s nicht, ersatzweise evcc (falls dort ein Ladepunkt ist).
-  const direct = ctx?.chargerStatus?.fresh?.();
-  if (direct) return direct.connected === true;
-  const lpId = Number(ctx?.getCfg?.()?.optimizer?.evEvccLoadpoint) || 1;
-  const lps = ctx?.evccIntegration?.getLoadpoints?.() || [];
-  const lp = lps.find((l) => l.id === lpId);
-  if (lp) return lp.connected === true;
+  // Die Hauptwallbox ist die Quelle (main-wallbox.js): eine direkt angebundene
+  // Box selbst, sonst evcc. Ist eine Box direkt gewählt, wird evcc NICHT
+  // ersatzweise gefragt — schweigt die Box, ist der Zustand unbekannt.
+  const wallbox = ctx?.mainWallbox?.state?.();
+  if (wallbox) {
+    if (wallbox.available && typeof wallbox.connected === 'boolean') return wallbox.connected;
+  } else {
+    const direct = ctx?.chargerStatus?.fresh?.();
+    if (direct) return direct.connected === true;
+    const lpId = Number(ctx?.getCfg?.()?.optimizer?.evEvccLoadpoint) || 1;
+    const lps = ctx?.evccIntegration?.getLoadpoints?.() || [];
+    const lp = lps.find((l) => l.id === lpId);
+    if (lp) return lp.connected === true;
+  }
   // Weder Wallbox noch evcc sagen es: ein eingestelltes MQTT-Topic
   // (vehicle-mqtt.js), sonst unbekannt.
   const viaMqtt = ctx?.vehicleMqtt?.getState?.()?.plugged;

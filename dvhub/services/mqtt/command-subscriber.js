@@ -120,11 +120,13 @@ export function createMqttCommandSubscriber(hub, ctx) {
     if (cmd === 'ev/mode') {
       const mode = String(payload ?? '').trim().toLowerCase();
       if (!EVCC_MODES.includes(mode)) return { ok: false, error: `mode must be one of ${EVCC_MODES.join('|')}` };
-      if (!ctx.evccIntegration || typeof ctx.evccIntegration.setMode !== 'function') {
-        return { ok: false, error: 'evcc not available' };
-      }
       const lpId = Number(getCfg().optimizer?.evEvccLoadpoint) || Number(getCfg().evcc?.dashboardLoadpoint) || 1;
-      const r = await ctx.evccIntegration.setMode(lpId, mode);
+      // Hauptwallbox (main-wallbox.js): evcc oder die direkt angebundene Box
+      // (dort: off = Aus, pv/minpv = Automatisch, now = Schnell).
+      let r;
+      if (ctx.mainWallbox) r = await ctx.mainWallbox.setMode(mode, lpId);
+      else if (ctx.evccIntegration && typeof ctx.evccIntegration.setMode === 'function') r = await ctx.evccIntegration.setMode(lpId, mode);
+      else return { ok: false, error: 'wallbox not available' };
       if (r?.ok) pushLog('mqtt_ev_mode', { loadpoint: lpId, mode }, MQTT_ACTOR);
       return r || { ok: false, error: 'mode set failed' };
     }

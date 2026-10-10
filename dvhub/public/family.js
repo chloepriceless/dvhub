@@ -961,7 +961,11 @@
       box.hidden = false;
       return;
     }
-    var btns = EVCC_MODE_BTNS.map(function (x) {
+    // Lademodi kommen von der Hauptwallbox (evcc: vier, direkte Box: drei).
+    var modeList = (lastStatus && lastStatus.evcc && Array.isArray(lastStatus.evcc.modes) && lastStatus.evcc.modes.length)
+      ? lastStatus.evcc.modes.map(function (x) { return { m: x.mode, label: x.label }; })
+      : EVCC_MODE_BTNS;
+    var btns = modeList.map(function (x) {
       return '<button class="evcc-mode-btn' + (lp.mode === x.m ? ' active' : '')
         + '" data-action="evcc-mode" data-mode="' + x.m + '" data-lp="' + lp.id + '" type="button">'
         + x.label + '</button>';

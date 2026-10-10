@@ -154,6 +154,7 @@ import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
 import { createMypvRegulator } from './services/devices/mypv-regulator.js';
+import { createMainWallbox } from './services/wallbox/main-wallbox.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
@@ -1394,6 +1395,15 @@ ctx.chargerStatus = createChargerStatusPoller({
 });
 if (IS_RUNTIME_PROCESS) ctx.chargerStatus.start();
 
+// Die eine Hauptwallbox (Integrationen → Wallbox): evcc oder eine direkt
+// angebundene Box — gilt für Anzeige, Abfrage und Steuerung überall.
+ctx.mainWallbox = createMainWallbox({
+  getCfg: () => ctx.getCfg(),
+  evccIntegration,
+  chargerStatus: ctx.chargerStatus,
+  getAdapter: (type) => directWallboxAdapter(type),
+});
+
 // Planbare Verbraucher (2026-09-26): Aktor (Endpunkt-Routing) + Aktuierungs-Bridge.
 // Deferrable Geräte folgen dem EOS-home_appliance-Dispatch, modulierende Heizstäbe
 // dem PV-Überschuss. Wird alle 30 s getickt (server start()-Block).
@@ -1421,17 +1431,14 @@ const eosDeviceBridge = createEosDeviceBridge({
 ctx.eosDeviceBridge = eosDeviceBridge;
 
 // my-PV-Heizstäbe (AC THOR / ELWA 2) direkt per Modbus, eigener schneller Takt.
-// Auto-Vorrang aus der direkt angebundenen Wallbox, sonst aus evcc.
+// Auto-Vorrang aus der Hauptwallbox.
 const mypvRegulator = createMypvRegulator({
   getCfg: () => ctx.getCfg(),
   state,
   pushLog,
   getCharger: () => {
-    const direct = ctx.chargerStatus?.fresh?.();
-    if (direct) return direct;
-    const st = evccIntegration?.getStatus?.();
-    const lp = Array.isArray(st?.loadpoints) ? st.loadpoints[0] : null;
-    return lp ? { connected: lp.connected === true, charging: lp.charging === true, carState: null } : null;
+    const w = ctx.mainWallbox?.state?.();
+    return w?.available ? { connected: w.connected === true, charging: w.charging === true, carState: w.carState } : null;
   },
 });
 ctx.mypvRegulator = mypvRegulator;

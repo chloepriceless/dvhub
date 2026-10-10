@@ -3144,12 +3144,13 @@ export function createApiRoutes(ctx) {
       } catch {
         return json(res, 400, { ok: false, error: 'invalid json' });
       }
-      if (!ctx.evccIntegration || typeof ctx.evccIntegration.setMode !== 'function') {
-        return json(res, 503, { ok: false, error: 'evcc not available' });
-      }
       const loadpoint = Number(body && body.loadpoint);
       const mode = String((body && body.mode) || '');
-      const result = await ctx.evccIntegration.setMode(loadpoint, mode);
+      // Hauptwallbox (main-wallbox.js): evcc oder die direkt angebundene Box.
+      let result;
+      if (ctx.mainWallbox) result = await ctx.mainWallbox.setMode(mode, loadpoint);
+      else if (ctx.evccIntegration && typeof ctx.evccIntegration.setMode === 'function') result = await ctx.evccIntegration.setMode(loadpoint, mode);
+      else return json(res, 503, { ok: false, error: 'wallbox not available' });
       if (!result || result.ok !== true) {
         return json(res, 400, result || { ok: false, error: 'mode set failed' });
       }
@@ -4045,6 +4046,7 @@ export function createApiRoutes(ctx) {
                 connected: fresh ? fresh.connected : null,
                 charging: fresh ? fresh.charging : null,
                 powerW: fresh ? fresh.powerW : null,
+                mode: ctx.mainWallbox?.state?.()?.mode || null,
                 lastError: raw.error || null,
               };
             })(),
@@ -5424,9 +5426,11 @@ export function createApiRoutes(ctx) {
           deadlineSupported: ctx.state?.optimizer?.eos?.supported === true
         },
         vehicle: {
-          title: lp?.vehicleTitle || lp?.title || null,
-          // OpenEVSE / go-e: Zustand direkt von der Wallbox; sonst evcc.
+          title: (ctx.mainWallbox?.isDirect?.() ? ctx.mainWallbox.label() : null) || lp?.vehicleTitle || lp?.title || null,
+          // Hauptwallbox (main-wallbox.js): direkt angebundene Box, sonst evcc.
           ...(() => {
+            const w = ctx.mainWallbox?.state?.();
+            if (w && w.type !== 'evcc') return { connected: w.connected, charging: w.charging, chargePowerW: w.powerW, source: w.type };
             const d = ctx.chargerStatus?.fresh?.();
             if (d) return { connected: d.connected, charging: d.charging, chargePowerW: d.powerW, source: d.type };
             return {
@@ -5440,7 +5444,7 @@ export function createApiRoutes(ctx) {
           // angestecktem Auto.
           socPct: evSoc?.pct ?? null,
           socSource: evSoc?.source ?? null,
-          rangeKm: Number.isFinite(Number(lp?.vehicleRangeKm)) ? Math.round(Number(lp.vehicleRangeKm)) : null,
+          rangeKm: !ctx.mainWallbox?.isDirect?.() && Number.isFinite(Number(lp?.vehicleRangeKm)) ? Math.round(Number(lp.vehicleRangeKm)) : null,
           registered: reg ? reg.register === true : null,
           registrationReason: reg?.reason || null,
           plugged: resolveEvPlugged(ctx)

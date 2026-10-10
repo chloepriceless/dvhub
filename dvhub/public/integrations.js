@@ -854,7 +854,8 @@
             { label: 'Wallbox', value: ({ openevse: 'OpenEVSE', goe: 'go-e Charger', wattpilot: 'Fronius Wattpilot' })[data.wallboxType] || data.wallboxType },
             { label: 'Status', value: !c ? 'Nicht konfiguriert' : (c.reachable ? 'Erreichbar' : 'Nicht erreichbar') },
             { label: 'Auto', value: car },
-            { label: 'evcc', value: data.url ? (data.reachable ? 'Erreichbar' : 'Nicht erreichbar') : '—' }
+            // Die gewählte Box ist die Hauptwallbox — evcc spielt dann keine Rolle.
+            { label: 'Lademodus', value: c && c.mode ? ({ off: 'Aus', pv: 'Automatisch', now: 'Schnell' })[c.mode] || c.mode : '—' }
           ];
         }
         // Genau 4 Kacheln je Karte (Layout-Vertrag, integrations.spec) — die

@@ -265,6 +265,18 @@ export function createFamilyService(ctx) {
    * Returns { available:false, loadpoints:[] } when evcc is unreachable/unset.
    */
   function deriveEvccSection() {
+    // Hauptwallbox (main-wallbox.js): evcc oder eine direkt angebundene Box.
+    const main = ctx.mainWallbox;
+    if (main && main.isDirect()) {
+      const lps = main.loadpoints();
+      return {
+        available: lps.length > 0,
+        type: main.type(),
+        modes: main.state().modes,
+        selectedLoadpoint: lps[0]?.id ?? null,
+        loadpoints: lps
+      };
+    }
     const svc = ctx.evccIntegration;
     if (!svc || typeof svc.getLoadpoints !== 'function') return { available: false, loadpoints: [] };
     let lps = [];
@@ -280,6 +292,8 @@ export function createFamilyService(ctx) {
       : (lps[0]?.id ?? null);
     return {
       available: lps.length > 0,
+      type: 'evcc',
+      modes: main ? main.state().modes : undefined,
       selectedLoadpoint: selected,
       loadpoints: lps
     };

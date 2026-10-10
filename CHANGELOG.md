@@ -12,6 +12,14 @@ verweist hierher.
 
 ### Neu
 
+- **Eine Hauptwallbox für alles.** Unter Integrationen → Wallbox steht die Wahl jetzt ganz oben:
+  über evcc, OpenEVSE, go-e Charger oder Fronius Wattpilot. Diese Wallbox gilt überall —
+  Leitstand und Familien-Dashboard (Zustand und Lademodus), MQTT/Home Assistant (`ev/mode`),
+  Ladestand und Steckzustand für EOS, Datenspende, §14a und der Auto-Vorrang des Heizstabs.
+  Vorher fragten einige Stellen evcc, obwohl eine Box direkt angebunden war, und die Auswahl
+  versteckte sich im EOS-Abschnitt. Ist eine Box direkt gewählt, wird evcc nicht mehr ersatzweise
+  gefragt; die evcc-Felder erscheinen nur noch bei „über evcc". Eine direkte Box hat drei
+  Lademodi: Aus, Automatisch (die Box bzw. der EOS-Plan entscheidet) und Schnell.
 - **Fronius Wattpilot als Wallbox.** Neben OpenEVSE und go-e lässt sich jetzt ein Fronius
   Wattpilot direkt ansteuern (Integrationen → evcc → „Steuern über: Fronius Wattpilot direkt",
   Adresse und das Passwort aus der Wattpilot-App). DVhub spricht die Box über dieselbe lokale

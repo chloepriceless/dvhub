@@ -592,22 +592,70 @@
         </header>
         <div class="dv-drawer-body" id="dv-drawer-evcc-body">
           <p class="dv-drawer-intro">
-            Verbindet DVhub mit deiner <strong>Wallbox</strong> — über <strong>evcc</strong>
-            oder direkt mit einer <strong>OpenEVSE</strong> bzw. einem <strong>go-e Charger</strong>
-            (Auswahl unten bei „Steuern über“). Die evcc-Felder brauchst du nur, wenn du evcc
-            nutzt (Lademodus Aus / PV / Min+PV / Schnell vom Familien-Dashboard).
+            W&auml;hle deine <strong>Wallbox</strong>. Sie ist f&uuml;r DVhub die Hauptwallbox: Leitstand,
+            Familien-Dashboard, Lademodus, Home Assistant, EOS-Ladeplan, &sect;14a und der Auto-Vorrang
+            des Heizstabs nutzen genau diese &mdash; direkt angebunden oder &uuml;ber evcc.
           </p>
           <label class="dv-field">
-            <span class="field-label">evcc-Adresse (nur mit evcc)</span>
-            <input type="text" class="input mono" id="evcc-url" placeholder="http://192.168.x.x:7070" autocomplete="off" spellcheck="false" inputmode="url">
-            <span class="field-hint">Basis-URL der EVCC-Weboberfl&auml;che inkl. Port (Standard 7070).</span>
+            <span class="field-label">Deine Wallbox</span>
+            <select class="input" id="wallbox-type">
+              <option value="evcc">&uuml;ber evcc (Ladepunkt)</option>
+              <option value="openevse">OpenEVSE</option>
+              <option value="goe">go-e Charger</option>
+              <option value="wattpilot">Fronius Wattpilot</option>
+            </select>
           </label>
-          <label class="dv-field">
-            <span class="field-label">Ladepunkt f&uuml;rs Dashboard</span>
-            <select class="input" id="evcc-loadpoint" disabled><option value="">&mdash; erst Adresse speichern &mdash;</option></select>
-            <span class="field-hint">Welchen Ladepunkt die Auto-Kachel anzeigt &amp; steuert.</span>
-          </label>
-          <div class="dv-field-validation" id="evcc-status" hidden>&mdash;</div>
+          <div class="evcc-wallbox-fields" id="wallbox-openevse-fields" hidden>
+            <label class="dv-field">
+              <span class="field-label">OpenEVSE-Adresse</span>
+              <input type="text" class="input mono" id="wallbox-openevse-url" placeholder="http://192.168.x.x" autocomplete="off" spellcheck="false" inputmode="url">
+            </label>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">Benutzer</span>
+                <input type="text" class="input mono" id="wallbox-openevse-user" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Passwort</span>
+                <input type="password" class="input mono" id="wallbox-openevse-pass" autocomplete="new-password">
+              </label>
+            </div>
+            <span class="field-hint">DVhub meldet sich als eigener Regler an (Claim, Priorit&auml;t 500): ein Eingriff von Hand in der OpenEVSE, RFID und OCPP haben immer Vorrang.</span>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-goe-fields" hidden>
+            <label class="dv-field">
+              <span class="field-label">go-e-Adresse</span>
+              <input type="text" class="input mono" id="wallbox-goe-url" placeholder="http://192.168.x.x" autocomplete="off" spellcheck="false" inputmode="url">
+              <span class="field-hint">In der go-e-App &bdquo;HTTP API v2&ldquo; einschalten.</span>
+            </label>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-wattpilot-fields" hidden>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">Wattpilot-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-wattpilot-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Passwort</span>
+                <input type="password" class="input mono" id="wallbox-wattpilot-pass" autocomplete="new-password">
+              </label>
+            </div>
+            <span class="field-hint">Das Passwort aus der Wattpilot-App. DVhub spricht die Box &uuml;ber dieselbe lokale Schnittstelle an wie die App.</span>
+          </div>
+          <div class="evcc-eos-state" id="wallbox-live" hidden>&mdash;</div>
+          <div class="evcc-wallbox-fields" data-wallbox-only="evcc">
+            <label class="dv-field">
+              <span class="field-label">evcc-Adresse</span>
+              <input type="text" class="input mono" id="evcc-url" placeholder="http://192.168.x.x:7070" autocomplete="off" spellcheck="false" inputmode="url">
+              <span class="field-hint">Basis-URL der EVCC-Weboberfl&auml;che inkl. Port (Standard 7070).</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Ladepunkt f&uuml;rs Dashboard</span>
+              <select class="input" id="evcc-loadpoint" disabled><option value="">&mdash; erst Adresse speichern &mdash;</option></select>
+              <span class="field-hint">Welchen Ladepunkt die Auto-Kachel anzeigt &amp; steuert.</span>
+            </label>
+            <div class="dv-field-validation" id="evcc-status" hidden>&mdash;</div>
+          </div>
 
           <!-- EOS → evcc: EOS plant das E-Auto mit, DVhub gibt je Viertelstunde
                Laden (mit Ladestrom) oder Stopp an den Ladepunkt weiter. -->
@@ -626,53 +674,6 @@
               <input type="checkbox" class="dv-field-check" id="evcc-eos-control">
               <span>EOS-Plan an die Wallbox weitergeben (Laden / Stopp + Ladestrom)</span>
             </label>
-            <label class="dv-field">
-              <span class="field-label">Steuern &uuml;ber</span>
-              <select class="input" id="wallbox-type">
-                <option value="evcc">evcc (Ladepunkt)</option>
-                <option value="openevse">OpenEVSE direkt</option>
-                <option value="goe">go-e Charger direkt</option>
-                <option value="wattpilot">Fronius Wattpilot direkt</option>
-              </select>
-            </label>
-            <div class="evcc-wallbox-fields" id="wallbox-openevse-fields" hidden>
-              <label class="dv-field">
-                <span class="field-label">OpenEVSE-Adresse</span>
-                <input type="text" class="input mono" id="wallbox-openevse-url" placeholder="http://192.168.x.x" autocomplete="off" spellcheck="false" inputmode="url">
-              </label>
-              <div class="evcc-eos-grid">
-                <label class="dv-field">
-                  <span class="field-label">Benutzer</span>
-                  <input type="text" class="input mono" id="wallbox-openevse-user" autocomplete="off" spellcheck="false">
-                </label>
-                <label class="dv-field">
-                  <span class="field-label">Passwort</span>
-                  <input type="password" class="input mono" id="wallbox-openevse-pass" autocomplete="new-password">
-                </label>
-              </div>
-              <span class="field-hint">DVhub meldet sich als eigener Regler an (Claim, Priorit&auml;t 500): ein Eingriff von Hand in der OpenEVSE, RFID und OCPP haben immer Vorrang.</span>
-            </div>
-            <div class="evcc-wallbox-fields" id="wallbox-goe-fields" hidden>
-              <label class="dv-field">
-                <span class="field-label">go-e-Adresse</span>
-                <input type="text" class="input mono" id="wallbox-goe-url" placeholder="http://192.168.x.x" autocomplete="off" spellcheck="false" inputmode="url">
-                <span class="field-hint">In der go-e-App &bdquo;HTTP API v2&ldquo; einschalten.</span>
-              </label>
-            </div>
-            <div class="evcc-wallbox-fields" id="wallbox-wattpilot-fields" hidden>
-              <div class="evcc-eos-grid">
-                <label class="dv-field">
-                  <span class="field-label">Wattpilot-Adresse</span>
-                  <input type="text" class="input mono" id="wallbox-wattpilot-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
-                </label>
-                <label class="dv-field">
-                  <span class="field-label">Passwort</span>
-                  <input type="password" class="input mono" id="wallbox-wattpilot-pass" autocomplete="new-password">
-                </label>
-              </div>
-              <span class="field-hint">Das Passwort aus der Wattpilot-App. DVhub spricht die Box &uuml;ber dieselbe lokale Schnittstelle an wie die App.</span>
-            </div>
-            <div class="evcc-eos-state" id="wallbox-live" hidden>&mdash;</div>
             <label class="dv-field" id="evcc-eos-loadpoint-wrap">
               <span class="field-label">Gesteuerter Ladepunkt</span>
               <select class="input" id="evcc-eos-loadpoint"><option value="1">#1</option></select>
