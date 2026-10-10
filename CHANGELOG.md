@@ -60,6 +60,13 @@ verweist hierher.
 
 ### Behoben
 
+- **EOS: Wirkungsgradkurve bei fast leerem Akku (DV-EOS rc1.19).** Kann der Akku in einem
+  Zeitschritt weniger liefern als angefragt — fast leer oder an der Leistungsgrenze —, rechnete
+  EOS die Umwandlung in Wechselstrom mit dem Wirkungsgrad der angefragten, höheren Last. Bei einer
+  hinterlegten Wechselrichter-Kurve kam so etwas mehr Strom heraus, als der Wechselrichter bei der
+  kleinen Last wirklich liefert. Jetzt gilt der Wirkungsgrad bei der tatsächlich gelieferten
+  Leistung. Ohne Kurve und in allen Schritten mit voller Lieferung ändert sich nichts. Derselbe
+  Fix liegt upstream in Akkudoktor-EOS #1375.
 - **Nach jedem Update blieb eine lokale Änderung zurück.** `package-lock.json` nannte für DVhub
   noch Node ≥ 18, `package.json` verlangt ≥ 22. `npm install` schrieb die Datei deshalb auf der
   Anlage um; der nächste Update-Lauf musste sie erst beiseitelegen. Beide stimmen jetzt überein.
