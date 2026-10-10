@@ -22,9 +22,12 @@
 //   - "mqtt_publish": DVhub publiziert an ein konfiguriertes fremdes Command-Topic
 //                     (An/Aus-Payload bzw. Leistungs-Topic) — z. B. ein bereits
 //                     über MQTT verfügbarer Schalter.
+//   - "mypv":         DVhub spricht einen my-PV AC THOR / ELWA 2 direkt per Modbus TCP
+//                     an (nur modulierend) und regelt ihn im eigenen 5-s-Takt
+//                     (services/devices/mypv-regulator.js) statt im 30-s-Takt der Brücke.
 
 export const DEVICE_KINDS = Object.freeze(['deferrable', 'modulating']);
-export const ENDPOINT_TYPES = Object.freeze(['mqtt_expose', 'shelly', 'mqtt_publish']);
+export const ENDPOINT_TYPES = Object.freeze(['mqtt_expose', 'shelly', 'mqtt_publish', 'mypv']);
 
 const HHMM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -51,7 +54,7 @@ export function isSchedulableDevice(d) {
  * grober Bang-Bang-Fallback und wird NICHT als zulässiger Endpunkt angeboten.
  */
 export function allowedEndpointsForKind(kind) {
-  if (kind === 'modulating') return ['mqtt_expose', 'mqtt_publish'];
+  if (kind === 'modulating') return ['mqtt_expose', 'mqtt_publish', 'mypv'];
   return ['mqtt_expose', 'shelly', 'mqtt_publish'];
 }
 
@@ -64,6 +67,19 @@ function validateEndpoint(ep, kind, errs) {
     return null;
   }
   const out = { type };
+  if (type === 'mypv') {
+    // Adresse oder Hostname, optional Port; der AC THOR lässt nur EINEN
+    // Modbus-Teilnehmer zu (Steuerungsart „Modbus TCP“ am Gerät einstellen).
+    const host = String(ep.host || '').trim().replace(/^(?:tcp|https?):\/\//i, '').replace(/\/.*$/, '');
+    if (!host) { errs.push('endpoint.host erforderlich (my-PV)'); return null; }
+    if (!/^[A-Za-z0-9.-]{1,128}$/.test(host)) { errs.push('endpoint.host ungültig'); return null; }
+    out.host = host;
+    const port = numOrNull(ep.port);
+    out.port = port != null && Number.isInteger(port) && port > 0 && port < 65536 ? port : 502;
+    const unit = numOrNull(ep.unit);
+    out.unit = unit != null && Number.isInteger(unit) && unit >= 0 && unit <= 247 ? unit : 1;
+    return out;
+  }
   if (type === 'shelly') {
     // Referenz auf ein vorhandenes schaltbares Gerät (dessen id) oder ein Host.
     const ref = String(ep.shellyDeviceId || '').trim();
@@ -130,6 +146,17 @@ function validateModulatingPlan(p, errs) {
   // Erwarteten Verbrauch NICHT in die Lastprognose für EOS legen (Standard: wird
   // vorgehalten, sofern capacityWh gesetzt ist — heater-load-reservation.js).
   if (p.reserveInForecast === false) out.reserveInForecast = false;
+  // Feineinstellungen des schnellen Reglers (Endpunkt my-PV, mypv-regulator.js).
+  // Fehlen sie, gelten dort die Vorgaben aus dem erprobten Ohmpilot-Übersetzer.
+  const ranges = {
+    exportReserveW: [0, 20_000], startThresholdW: [0, 5_000], rampUpWps: [10, 5_000],
+    minSocPct: [0, 100], carSettleS: [0, 1_800], carWaitTimeoutMin: [0, 1_440], intervalS: [2, 60]
+  };
+  for (const [key, [lo, hi]] of Object.entries(ranges)) {
+    const v = numOrNull(p[key]);
+    if (v == null) continue;
+    if (v < lo || v > hi) errs.push(`plan.${key} muss ${lo}..${hi} sein`); else out[key] = v;
+  }
   return out;
 }
 

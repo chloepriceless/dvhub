@@ -163,7 +163,9 @@ export function createEosDeviceBridge(deps) {
       // naechste Takt normal weiter.
       if (state?.ctrl?.discretionaryWritesPaused === true) return { ok: false, skipped: 'paused' };
       const { devices } = loadSchedulableDevices(cfg);
-      const enabled = devices.filter((d) => d.enabled !== false);
+      // my-PV-Heizstäbe regelt der schnelle Regler (devices/mypv-regulator.js) im
+      // eigenen 5-s-Takt; hier nicht doppelt.
+      const enabled = devices.filter((d) => d.enabled !== false && d.endpoint?.type !== 'mypv');
       // Zuvor gesteuerte, jetzt entfernte/deaktivierte Geräte einmal ausschalten.
       const activeIds = new Set(enabled.map((d) => d.id));
       await stopDropped(activeIds);

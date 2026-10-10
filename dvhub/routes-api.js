@@ -27,7 +27,7 @@ import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch } from '.
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
-import { createOpenEvseAdapter, createGoeAdapter } from './services/wallbox/adapters.js';
+import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
 import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
@@ -3610,6 +3610,7 @@ export function createApiRoutes(ctx) {
         shellyDevices,
         mqttTopics,
         bridge: ctx.eosDeviceBridge?.getStatus?.() || null,
+        mypv: ctx.mypvRegulator?.getStatus?.() || null,
       });
     }
 
@@ -5546,14 +5547,16 @@ export function createApiRoutes(ctx) {
         // Klartext zurueck; der Live-Zustand kommt von der Box selbst.
         wallbox: await (async () => {
           const w = raw.wallbox || {};
-          const type = ['evcc', 'openevse', 'goe'].includes(w.type) ? w.type : 'evcc';
+          const type = ['evcc', 'openevse', 'goe', 'wattpilot'].includes(w.type) ? w.type : 'evcc';
           let live = null;
           if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
           if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
+          if (type === 'wattpilot' && w.wattpilot?.host && w.wattpilot?.password) live = await createWattpilotAdapter(() => w.wattpilot).status();
           return {
             type,
             openevse: { url: w.openevse?.url || '', usernameSet: Boolean(w.openevse?.username), passwordSet: Boolean(w.openevse?.password) },
             goe: { url: w.goe?.url || '' },
+            wattpilot: { host: w.wattpilot?.host || '', passwordSet: Boolean(w.wattpilot?.password) },
             live
           };
         })()
@@ -5628,26 +5631,34 @@ export function createApiRoutes(ctx) {
       if (body.wallbox != null) {
         const w = body.wallbox;
         if (typeof w !== 'object') return json(res, 400, { ok: false, error: 'wallbox must be an object' });
-        if ('type' in w && !['evcc', 'openevse', 'goe'].includes(w.type)) return json(res, 400, { ok: false, error: 'wallbox.type must be evcc|openevse|goe' });
+        if ('type' in w && !['evcc', 'openevse', 'goe', 'wattpilot'].includes(w.type)) return json(res, 400, { ok: false, error: 'wallbox.type must be evcc|openevse|goe|wattpilot' });
         const urlOk = (u) => u === '' || /^https?:\/\//i.test(u);
         const oeUrl = w.openevse?.url != null ? String(w.openevse.url).trim().slice(0, 256) : null;
         const goeUrl = w.goe?.url != null ? String(w.goe.url).trim().slice(0, 256) : null;
         if ((oeUrl !== null && !urlOk(oeUrl)) || (goeUrl !== null && !urlOk(goeUrl))) {
           return json(res, 400, { ok: false, error: 'wallbox url must be http(s)://…' });
         }
-        wallboxPatch = { type: w.type, oeUrl, goeUrl, oeUser: w.openevse?.username, oePass: w.openevse?.password };
+        // Wattpilot: nur Adresse/Hostname (ws://<host>/ws baut der Adapter).
+        const wpHost = w.wattpilot?.host != null ? String(w.wattpilot.host).trim().replace(/^(?:wss?|https?):\/\//i, '').replace(/\/.*$/, '').slice(0, 128) : null;
+        if (wpHost !== null && wpHost !== '' && !/^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(wpHost)) {
+          return json(res, 400, { ok: false, error: 'wallbox.wattpilot.host must be an address or hostname' });
+        }
+        wallboxPatch = { type: w.type, oeUrl, goeUrl, oeUser: w.openevse?.username, oePass: w.openevse?.password, wpHost, wpPass: w.wattpilot?.password };
       }
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
       if (wallboxPatch) {
         const wb = (next.wallbox && typeof next.wallbox === 'object') ? next.wallbox : {};
         wb.openevse = (wb.openevse && typeof wb.openevse === 'object') ? wb.openevse : {};
         wb.goe = (wb.goe && typeof wb.goe === 'object') ? wb.goe : {};
+        wb.wattpilot = (wb.wattpilot && typeof wb.wattpilot === 'object') ? wb.wattpilot : {};
         if (wallboxPatch.type) wb.type = wallboxPatch.type;
+        if (wallboxPatch.wpHost !== null) wb.wattpilot.host = wallboxPatch.wpHost;
         if (wallboxPatch.oeUrl !== null) wb.openevse.url = wallboxPatch.oeUrl;
         if (wallboxPatch.goeUrl !== null) wb.goe.url = wallboxPatch.goeUrl;
         const keep = (v) => v == null || v === '' || v === '***';
         if (!keep(wallboxPatch.oeUser)) wb.openevse.username = String(wallboxPatch.oeUser).slice(0, 128);
         if (!keep(wallboxPatch.oePass)) wb.openevse.password = String(wallboxPatch.oePass).slice(0, 256);
+        if (!keep(wallboxPatch.wpPass)) wb.wattpilot.password = String(wallboxPatch.wpPass).slice(0, 256);
         next.wallbox = wb;
       }
       if (eosPatch) {

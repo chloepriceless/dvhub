@@ -136,7 +136,8 @@ export function createParagraph14aService(ctx, deps = {}) {
       // Eine direkt angebundene Wallbox (OpenEVSE, go-e) ist eine steuerbare
       // Verbrauchseinrichtung, sobald sie eingerichtet ist — auch wenn EOS sie
       // nicht plant. Über evcc nur, wenn DVhub evcc auch steuert.
-      const direct = (bc.charger === 'openevse' && cfg.wallbox?.openevse?.url) || (bc.charger === 'goe' && cfg.wallbox?.goe?.url);
+      const direct = (bc.charger === 'openevse' && cfg.wallbox?.openevse?.url) || (bc.charger === 'goe' && cfg.wallbox?.goe?.url)
+        || (bc.charger === 'wattpilot' && cfg.wallbox?.wattpilot?.host);
       if (bc.enabled || direct) {
         list.push({ id: 'wallbox', name: 'Wallbox', kind: 'ladepunkt', powerW: bc.maxChargeW, control: 'ems',
           controllable: true, currentW: wallboxPowerW(cfg), source: 'auto' });

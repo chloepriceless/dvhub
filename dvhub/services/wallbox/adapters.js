@@ -14,6 +14,9 @@
  * von Hand in der OpenEVSE (Manual, 1000), RFID, OCPP und Sicherheitsgrenzen
  * gewinnen immer. Quelle: openevse_esp32_firmware src/evse_man.h, api.yml.
  *
+ * Fronius Wattpilot: nur WebSocket mit Passwort (services/wallbox/wattpilot.js),
+ * sonst dieselben Schlüssel wie go-e API v2 (frc, amp, car, nrg).
+ *
  * go-e (API v2, in der App "HTTP API v2" aktivieren): GET /api/set mit frc
  * (0 neutral, 1 aus, 2 an) und amp (Strom in A). Quelle: goecharger/
  * go-eCharger-API-v2 apikeys-en.md; evcc charger/go-e.go nutzt bei v2 genauso
@@ -22,6 +25,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { isReadOnlyMode } from '../../read-only-guard.js';
+import { getWattpilotConnection } from './wattpilot.js';
 
 // Lese-Modus (DVHUB_READ_ONLY=1, read-only-guard.js) auch für die Wallbox:
 // eine Zweit-/Testinstanz mit kopierter Prod-Konfiguration darf die echte
@@ -175,10 +179,59 @@ export function createGoeAdapter(getSettings) {
         ok: true,
         connected: car >= 2 && car <= 4,
         charging: car === 2,
+        carState: car === 3 ? 'waiting' : car === 4 ? 'complete' : car === 2 ? 'charging' : null,
         powerW: totalW,
         currentA: Number.isFinite(Number(d.amp)) ? Number(d.amp) : null,
         vehicleSocPct: null,
         raw: { car: d.car, amp: d.amp, frc: d.frc, alw: d.alw, fwv: d.fwv }
+      };
+    }
+  });
+}
+
+/**
+ * Fronius Wattpilot über die gemeinsame WebSocket-Verbindung (wattpilot.js).
+ * Gleiche Bedeutung wie beim go-e: frc 0 neutral / 1 aus / 2 an, amp in A.
+ */
+export function createWattpilotAdapter(getSettings, deps) {
+  const conn = () => getWattpilotConnection(getSettings() || {}, deps);
+  const configured = () => Boolean(String(getSettings()?.host || '').trim() && getSettings()?.password);
+
+  return guardWrites({
+    type: 'wattpilot',
+    isConfigured: configured,
+    async charge(currentA) {
+      const c = conn();
+      const st = await c.readStatus();
+      if (!st.ok) return st;
+      // Nie über dem, was die Box selbst erlaubt (ama = Absicherung/Kabel).
+      const max = Number(st.status.ama);
+      const amps = Number.isFinite(max) && max >= 6 ? Math.min(wholeAmps(currentA), max) : wholeAmps(currentA);
+      const amp = await c.setValue('amp', amps);
+      if (!amp.ok) return amp;
+      return c.setValue('frc', 2);
+    },
+    async stop() {
+      return conn().setValue('frc', 1);
+    },
+    async release() {
+      return conn().setValue('frc', 0);
+    },
+    async status() {
+      const res = await conn().readStatus();
+      if (!res.ok) return { ok: false, error: res.error || 'no status' };
+      const d = res.status;
+      const car = Number(d.car);
+      const totalW = Array.isArray(d.nrg) && Number.isFinite(Number(d.nrg[11])) ? Number(d.nrg[11]) : null;
+      return {
+        ok: true,
+        connected: car >= 2 && car <= 4,
+        charging: car === 2,
+        carState: car === 3 ? 'waiting' : car === 4 ? 'complete' : car === 2 ? 'charging' : null,
+        powerW: totalW,
+        currentA: Number.isFinite(Number(d.amp)) ? Number(d.amp) : null,
+        vehicleSocPct: null,
+        raw: { car: d.car, amp: d.amp, frc: d.frc, ama: d.ama, serial: res.serial || null }
       };
     }
   });

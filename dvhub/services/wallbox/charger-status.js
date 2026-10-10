@@ -9,7 +9,7 @@
 
 export const CHARGER_STATUS_INTERVAL_MS = 15_000;
 export const CHARGER_STATUS_MAX_AGE_MS = 90_000;
-export const DIRECT_CHARGERS = Object.freeze(['openevse', 'goe']);
+export const DIRECT_CHARGERS = Object.freeze(['openevse', 'goe', 'wattpilot']);
 
 /**
  * @param {object} deps
@@ -36,6 +36,8 @@ export function createChargerStatusPoller({ getCfg, getAdapter, now = () => Date
           type, ok: true, at: now(), error: null,
           connected: st.connected === true,
           charging: st.charging === true,
+          // go-e/Wattpilot unterscheiden „wartet auf Ladestart“ und „fertig“ (mypv-regulator.js).
+          carState: typeof st.carState === 'string' ? st.carState : null,
           powerW: Number.isFinite(Number(st.powerW)) ? Math.round(Number(st.powerW)) : null,
           currentA: Number.isFinite(Number(st.currentA)) ? Number(st.currentA) : null,
           vehicleSocPct: Number.isFinite(Number(st.vehicleSocPct)) ? Number(st.vehicleSocPct) : null,

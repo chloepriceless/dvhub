@@ -12,6 +12,21 @@ verweist hierher.
 
 ### Neu
 
+- **Fronius Wattpilot als Wallbox.** Neben OpenEVSE und go-e lässt sich jetzt ein Fronius
+  Wattpilot direkt ansteuern (Integrationen → evcc → „Steuern über: Fronius Wattpilot direkt",
+  Adresse und das Passwort aus der Wattpilot-App). DVhub spricht die Box über dieselbe lokale
+  WebSocket-Schnittstelle wie die App an — Anmeldung und signierte Befehle wie im erprobten
+  Ohmpilot-Übersetzer — und kann damit den EOS-Ladeplan, „Sofort laden", §14a und den Steckzustand
+  genauso nutzen wie bei den anderen Boxen. Der Ladestrom bleibt unter der Grenze der Box.
+- **my-PV-Heizstab direkt (AC THOR / ELWA 2).** Planbare Verbraucher kennen den Endpunkt
+  „my-PV direkt": DVhub schreibt die Heizleistung per Modbus TCP (Register 1000) und liest
+  Leistung, Temperatur, Status und Steuerungsart zurück. Ein eigener schneller Regler (alle 5 s
+  statt 30 s) übernimmt die Regel aus dem Ohmpilot-Übersetzer: Überschuss am Netzanschlusspunkt
+  minus Mindest-Einspeisung, langsam hoch, zügig herunter, bei Netzbezug sofort, nie aus dem Akku
+  oder dem Netz; mit Einschaltschwelle, Mindest-Akkustand und Auto-Vorrang (wartet ein
+  angestecktes Auto auf den Ladestart, bleibt der Stab aus; lädt es, bekommt er nach einer
+  Wartezeit den Rest). Bei go-e und Wattpilot unterscheidet DVhub dafür jetzt „wartet" und
+  „fertig". Der Verbrauch fließt in die Last-Vorhaltung für EOS ein.
 - **CI-Ergebnis wird nach jedem Push geprüft.** `scripts/ci-check.py` fragt den Stand der GitHub-CI
   für einen Commit ab und wartet auf Wunsch darauf; Git-Hooks (`scripts/git-hooks/`) prüfen vor
   Commit und Push Secret-Scan und ESLint, und Claude-Code-Sitzungen warten nach einem Push auf

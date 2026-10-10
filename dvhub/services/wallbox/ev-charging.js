@@ -23,7 +23,7 @@ const EVCC_STALE_MS = 3 * 60_000;
 export function createEvChargingProbe({ getCfg, evccIntegration, getAdapter, now = () => Date.now() }) {
   return async function isEvCharging() {
     const type = getCfg()?.wallbox?.type;
-    if (type === 'openevse' || type === 'goe') {
+    if (type === 'openevse' || type === 'goe' || type === 'wattpilot') {
       const adapter = getAdapter?.(type);
       if (!adapter || adapter.isConfigured?.() === false) return null;
       let st;

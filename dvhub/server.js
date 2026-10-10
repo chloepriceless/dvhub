@@ -152,7 +152,8 @@ import { createEosMonitor } from './services/optimizer/eos-monitor.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
-import { createOpenEvseAdapter, createGoeAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
+import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
+import { createMypvRegulator } from './services/devices/mypv-regulator.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
@@ -1345,15 +1346,20 @@ ctx.eosMonitor.start();
 // EOS → evcc: reicht EOS' E-Auto-Plan (Laden/Stopp + Ladestrom) an den
 // gewaehlten evcc-Ladepunkt weiter. Liest die Loesung ueber den Inspector-
 // Adapter (kurzes Timeout — ein haengendes EOS blockiert den Takt nicht lange).
+// Direkt angebundene Wallbox (ohne evcc) — eine Stelle für alle Aufrufer.
+function directWallboxAdapter(type) {
+  if (type === 'openevse') return createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse);
+  if (type === 'goe') return createGoeAdapter(() => ctx.getCfg()?.wallbox?.goe);
+  if (type === 'wattpilot') return createWattpilotAdapter(() => ctx.getCfg()?.wallbox?.wattpilot);
+  return null;
+}
+
 const eosEvccBridge = createEosEvccBridge({
   getCfg: () => ctx.getCfg(),
   getSolution: () => ctx.eosMonitor.latestSolution(),
-  // Wohin der Befehl geht: evcc (Standard) oder direkt an OpenEVSE / go-e.
-  getCharger: (cfg, bc) => {
-    if (bc.charger === 'openevse') return createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse);
-    if (bc.charger === 'goe') return createGoeAdapter(() => ctx.getCfg()?.wallbox?.goe);
-    return createEvccAdapter(evccIntegration, () => bc.loadpoint, () => bc.stopMode);
-  },
+  // Wohin der Befehl geht: evcc (Standard) oder direkt an OpenEVSE / go-e / Wattpilot.
+  getCharger: (cfg, bc) => directWallboxAdapter(bc.charger)
+    || createEvccAdapter(evccIntegration, () => bc.loadpoint, () => bc.stopMode),
   isProActive: () => ctx.licenseService?.isProActive?.() !== false,
   isPaused: () => state.ctrl?.discretionaryWritesPaused === true,
   // §14a: Anteil am Budget für die Wallbox (services/paragraph14a).
@@ -1384,9 +1390,7 @@ const clockCheck = createClockCheck({ getCfg: () => ctx.getCfg(), state, pushLog
 // Steck-Wache und die E-Auto-Kachel, wenn die Wallbox nicht evcc ist.
 ctx.chargerStatus = createChargerStatusPoller({
   getCfg: () => ctx.getCfg(),
-  getAdapter: (type) => (type === 'openevse'
-    ? createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse)
-    : createGoeAdapter(() => ctx.getCfg()?.wallbox?.goe)),
+  getAdapter: (type) => directWallboxAdapter(type),
 });
 if (IS_RUNTIME_PROCESS) ctx.chargerStatus.start();
 
@@ -1411,12 +1415,26 @@ const eosDeviceBridge = createEosDeviceBridge({
   isEvCharging: createEvChargingProbe({
     getCfg: () => ctx.getCfg(),
     evccIntegration,
-    getAdapter: (type) => (type === 'openevse'
-      ? createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse)
-      : createGoeAdapter(() => ctx.getCfg()?.wallbox?.goe)),
+    getAdapter: (type) => directWallboxAdapter(type),
   }),
 });
 ctx.eosDeviceBridge = eosDeviceBridge;
+
+// my-PV-Heizstäbe (AC THOR / ELWA 2) direkt per Modbus, eigener schneller Takt.
+// Auto-Vorrang aus der direkt angebundenen Wallbox, sonst aus evcc.
+const mypvRegulator = createMypvRegulator({
+  getCfg: () => ctx.getCfg(),
+  state,
+  pushLog,
+  getCharger: () => {
+    const direct = ctx.chargerStatus?.fresh?.();
+    if (direct) return direct;
+    const st = evccIntegration?.getStatus?.();
+    const lp = Array.isArray(st?.loadpoints) ? st.loadpoints[0] : null;
+    return lp ? { connected: lp.connected === true, charging: lp.charging === true, carState: null } : null;
+  },
+});
+ctx.mypvRegulator = mypvRegulator;
 
 const inspector = createInspector(ctx, {
   store: forecast.store,
@@ -2204,6 +2222,7 @@ if (IS_RUNTIME_PROCESS) {
   pvStrings.start();
   eosEvccBridge.start();
   eosDeviceBridge.start();
+  mypvRegulator.start();
   epex.start();
   // forecast.start() needs dbPool — wait for telemetry IIFE to finish first
   telemetryReady.then(() => {
@@ -2484,6 +2503,7 @@ async function gracefulShutdown(signal) {
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
+  safeSync('mypvRegulator.stop', () => { mypvRegulator.stop?.().catch?.(() => {}); });
   safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
   safeSync('eosFreshSocTimer.stop', () => clearInterval(eosFreshSocTimer));
   // C2 (2026-07-02, Realitätscheck der alten Worklist 7.7): evcc/license/

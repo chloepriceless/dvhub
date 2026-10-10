@@ -1744,3 +1744,7 @@
   text-transform: uppercase; color: var(--text-dim);
 }
 .dv-drawer .scheddev-row { border-bottom: 1px solid var(--glass-brd); padding: 8px 0; }
+
+/* Planbare Verbraucher · my-PV direkt: Port und Unit nebeneinander, Live-Zeile */
+.scheddev-pair { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; }
+.scheddev-row-main .dv-warn { color:var(--yellow); }

@@ -632,6 +632,7 @@
                 <option value="evcc">evcc (Ladepunkt)</option>
                 <option value="openevse">OpenEVSE direkt</option>
                 <option value="goe">go-e Charger direkt</option>
+                <option value="wattpilot">Fronius Wattpilot direkt</option>
               </select>
             </label>
             <div class="evcc-wallbox-fields" id="wallbox-openevse-fields" hidden>
@@ -657,6 +658,19 @@
                 <input type="text" class="input mono" id="wallbox-goe-url" placeholder="http://192.168.x.x" autocomplete="off" spellcheck="false" inputmode="url">
                 <span class="field-hint">In der go-e-App &bdquo;HTTP API v2&ldquo; einschalten.</span>
               </label>
+            </div>
+            <div class="evcc-wallbox-fields" id="wallbox-wattpilot-fields" hidden>
+              <div class="evcc-eos-grid">
+                <label class="dv-field">
+                  <span class="field-label">Wattpilot-Adresse</span>
+                  <input type="text" class="input mono" id="wallbox-wattpilot-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="dv-field">
+                  <span class="field-label">Passwort</span>
+                  <input type="password" class="input mono" id="wallbox-wattpilot-pass" autocomplete="new-password">
+                </label>
+              </div>
+              <span class="field-hint">Das Passwort aus der Wattpilot-App. DVhub spricht die Box &uuml;ber dieselbe lokale Schnittstelle an wie die App.</span>
             </div>
             <div class="evcc-eos-state" id="wallbox-live" hidden>&mdash;</div>
             <label class="dv-field" id="evcc-eos-loadpoint-wrap">

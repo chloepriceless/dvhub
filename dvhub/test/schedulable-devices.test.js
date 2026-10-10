@@ -81,7 +81,7 @@ describe('validateSchedulableDevice', () => {
 
 describe('allowedEndpointsForKind', () => {
   it('modulating excludes shelly', () => {
-    assert.deepEqual(allowedEndpointsForKind('modulating'), ['mqtt_expose', 'mqtt_publish']);
+    assert.deepEqual(allowedEndpointsForKind('modulating'), ['mqtt_expose', 'mqtt_publish', 'mypv']);
   });
   it('deferrable includes shelly', () => {
     assert.ok(allowedEndpointsForKind('deferrable').includes('shelly'));
@@ -111,7 +111,7 @@ describe('loadSchedulableDevices', () => {
 describe('constants', () => {
   it('kinds and endpoint types', () => {
     assert.deepEqual(DEVICE_KINDS, ['deferrable', 'modulating']);
-    assert.deepEqual(ENDPOINT_TYPES, ['mqtt_expose', 'shelly', 'mqtt_publish']);
+    assert.deepEqual(ENDPOINT_TYPES, ['mqtt_expose', 'shelly', 'mqtt_publish', 'mypv']);
   });
   it('isSchedulableDevice gate', () => {
     assert.equal(isSchedulableDevice({ schedulable: true }), true);

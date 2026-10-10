@@ -851,7 +851,7 @@
             : (c.charging ? ('lädt' + (c.powerW != null ? ' · ' + (Math.round(c.powerW / 100) / 10).toLocaleString('de-DE') + ' kW' : ''))
               : (c.connected ? 'angesteckt' : 'nicht angesteckt'));
           return [
-            { label: 'Wallbox', value: data.wallboxType === 'openevse' ? 'OpenEVSE' : 'go-e Charger' },
+            { label: 'Wallbox', value: ({ openevse: 'OpenEVSE', goe: 'go-e Charger', wattpilot: 'Fronius Wattpilot' })[data.wallboxType] || data.wallboxType },
             { label: 'Status', value: !c ? 'Nicht konfiguriert' : (c.reachable ? 'Erreichbar' : 'Nicht erreichbar') },
             { label: 'Auto', value: car },
             { label: 'evcc', value: data.url ? (data.reachable ? 'Erreichbar' : 'Nicht erreichbar') : '—' }
@@ -2614,6 +2614,9 @@
     if (el('wallbox-openevse-user')) { el('wallbox-openevse-user').value = ''; el('wallbox-openevse-user').placeholder = oe.usernameSet ? 'gespeichert' : ''; }
     if (el('wallbox-openevse-pass')) { el('wallbox-openevse-pass').value = ''; el('wallbox-openevse-pass').placeholder = oe.passwordSet ? 'gespeichert' : ''; }
     if (el('wallbox-goe-url')) el('wallbox-goe-url').value = (w.goe || {}).url || '';
+    var wp = w.wattpilot || {};
+    if (el('wallbox-wattpilot-host')) el('wallbox-wattpilot-host').value = wp.host || '';
+    if (el('wallbox-wattpilot-pass')) { el('wallbox-wattpilot-pass').value = ''; el('wallbox-wattpilot-pass').placeholder = wp.passwordSet ? 'gespeichert' : ''; }
     syncWallboxTypeUi();
     var box = el('wallbox-live');
     if (!box) return;
@@ -2639,6 +2642,7 @@
     var show = function (id, on) { var e = document.getElementById(id); if (e) e.hidden = !on; };
     show('wallbox-openevse-fields', t === 'openevse');
     show('wallbox-goe-fields', t === 'goe');
+    show('wallbox-wattpilot-fields', t === 'wattpilot');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
     // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
     var only = document.querySelectorAll('[data-wallbox-only]');
@@ -2649,7 +2653,8 @@
     return {
       type: v('wallbox-type') || 'evcc',
       openevse: { url: v('wallbox-openevse-url'), username: v('wallbox-openevse-user'), password: (document.getElementById('wallbox-openevse-pass') || {}).value || '' },
-      goe: { url: v('wallbox-goe-url') }
+      goe: { url: v('wallbox-goe-url') },
+      wattpilot: { host: v('wallbox-wattpilot-host'), password: (document.getElementById('wallbox-wattpilot-pass') || {}).value || '' }
     };
   }
   function syncEvccDepModeUi() {
@@ -4125,7 +4130,7 @@
 
   // === Planbare Verbraucher (2026-09-26) — Abschnitt im Geräte-Drawer ===
   var scheddevState = { devices: [], shellyDevices: [], mqttTopics: [], allowedEndpoints: { deferrable: ['mqtt_expose', 'shelly', 'mqtt_publish'], modulating: ['mqtt_expose', 'mqtt_publish'] } };
-  var EP_LABELS = { mqtt_expose: 'MQTT-ID (Home Assistant)', shelly: 'Shelly-Gerät', mqtt_publish: 'Vorhandenes MQTT-Gerät' };
+  var EP_LABELS = { mqtt_expose: 'MQTT-ID (Home Assistant)', shelly: 'Shelly-Gerät', mqtt_publish: 'Vorhandenes MQTT-Gerät', mypv: 'my-PV direkt (AC THOR / ELWA 2)' };
   var KIND_LABELS = { deferrable: 'Verschiebbar (An/Aus)', modulating: 'Modulierend (Heizstab)' };
 
   async function loadScheddev() {
@@ -4139,6 +4144,7 @@
       scheddevState.shellyDevices = Array.isArray(d.shellyDevices) ? d.shellyDevices : [];
       scheddevState.mqttTopics = Array.isArray(d.mqttTopics) ? d.mqttTopics : [];
       if (d.allowedEndpoints) scheddevState.allowedEndpoints = d.allowedEndpoints;
+      scheddevState.mypv = d.mypv || {};
       renderScheddevList();
     } catch (e) {
       listEl.innerHTML = '<p class="dv-drawer-empty">Laden fehlgeschlagen: ' + esc(e.message) + '</p>';
@@ -4157,12 +4163,25 @@
         ? (esc(String(plan.maxPowerW || '?')) + ' W max' + (plan.targetPct != null ? ', Ziel ' + esc(String(plan.targetPct)) + '%' : '') + (plan.pauseWhileEvCharging ? ', pausiert beim E-Auto-Laden' : ''))
         : (esc(String(plan.energyWh || '?')) + ' Wh / ' + esc(String(plan.durationH || '?')) + ' h' + (plan.deadline ? ', bis ' + esc(plan.deadline) : ''));
       html += '<div class="scheddev-row">'
-        + '<span class="scheddev-row-main"><strong>' + esc(dv.name || dv.id) + '</strong> <span class="dv-muted">· ' + esc(KIND_LABELS[dv.kind] || dv.kind) + '</span><br><small class="dv-muted">' + detail + ' · ' + esc(EP_LABELS[ep.type] || ep.type || '?') + '</small></span>'
+        + '<span class="scheddev-row-main"><strong>' + esc(dv.name || dv.id) + '</strong> <span class="dv-muted">· ' + esc(KIND_LABELS[dv.kind] || dv.kind) + '</span><br><small class="dv-muted">' + detail + ' · ' + esc(EP_LABELS[ep.type] || ep.type || '?') + '</small>' + mypvLiveLine(dv) + '</span>'
         + '<button type="button" class="btn sm ghost scheddev-edit" data-id="' + esc(dv.id) + '">Bearbeiten</button>'
         + '<button type="button" class="btn sm ghost scheddev-del" data-id="' + esc(dv.id) + '" aria-label="Entfernen">&times;</button>'
         + '</div>';
     }
     listEl.innerHTML = html;
+  }
+
+  // my-PV direkt: was der schnelle Regler gerade tut (mypv-regulator.js).
+  function mypvLiveLine(dv) {
+    var st = (dv.endpoint && dv.endpoint.type === 'mypv') ? (scheddevState.mypv || {})[dv.id] : null;
+    if (!st) return '';
+    var bits = [];
+    if (st.powerW != null) bits.push(Math.round(st.powerW) + ' W');
+    if (st.tempC != null) bits.push(String(st.tempC).replace('.', ',') + ' °C');
+    if (st.reason) bits.push(st.reason);
+    if (st.ctrlMode != null && st.ctrlMode !== 2) bits.push('Steuerungsart am Gerät ist nicht „Modbus TCP“');
+    if (st.error) bits.push('Fehler: ' + st.error);
+    return '<br><small class="' + (st.error ? 'dv-warn' : 'dv-muted') + '">' + esc(bits.join(' · ')) + '</small>';
   }
 
   function sdField(label, inner) { return '<div class="dv-field"><label>' + label + '</label>' + inner + '</div>'; }
@@ -4189,7 +4208,7 @@
         + sdField('Ziel (%, optional)', '<input class="input" id="sd-targetPct" type="number" min="0" max="100" value="' + esc(String(p.targetPct != null ? p.targetPct : '')) + '" />')
         + sdField('Fertig bis (HH:MM, optional)', '<input class="input" id="sd-deadlineM" value="' + esc(p.deadline || '') + '" placeholder="20:00" />')
         + '<div class="dv-field"><label><input type="checkbox" id="sd-pauseEv"' + (p.pauseWhileEvCharging ? ' checked' : '') + ' /> Pausieren, solange das E-Auto lädt</label>'
-        + '<small class="dv-muted">Der PV-Überschuss geht dann an die Wallbox (evcc, OpenEVSE oder go-e — wie unter Integrationen → evcc eingestellt). Nach dem Laden heizt der Stab wieder.</small></div>'
+        + '<small class="dv-muted">Der PV-Überschuss geht dann an die Wallbox (evcc, OpenEVSE, go-e oder Fronius Wattpilot — wie unter Integrationen → evcc eingestellt). Nach dem Laden heizt der Stab wieder.</small></div>'
       + '</div>'
       + sdField('Endpunkt', '<select class="input" id="sd-ep"></select>')
       + '<div data-grp="ep-shelly">' + sdField('Shelly-Gerät', '<select class="input" id="sd-shelly">' + (shellyOpts || '<option value="">— kein Shelly konfiguriert —</option>') + '</select>') + '</div>'
@@ -4203,6 +4222,18 @@
           + sdField('Leistungs-Topic', '<input class="input mono" id="sd-powertopic" value="' + esc(ep.powerTopic || '') + '" placeholder="elwa/power/set" />')
           + sdField('Leistungs-Vorlage', '<input class="input mono" id="sd-powertpl" value="' + esc(ep.powerTemplate || '{value}') + '" placeholder="{value}" />')
         + '</div>'
+      + '</div>'
+      + '<div data-grp="ep-mypv">'
+        + sdField('Adresse des Heizstabs', '<input class="input mono" id="sd-mypv-host" value="' + esc(ep.host || '') + '" placeholder="192.168.x.x" />')
+        + sdField('Modbus-Port / Unit', '<span class="scheddev-pair"><input class="input mono" id="sd-mypv-port" type="number" min="1" max="65535" value="' + esc(String(ep.port || 502)) + '" /><input class="input mono" id="sd-mypv-unit" type="number" min="0" max="247" value="' + esc(String(ep.unit != null ? ep.unit : 1)) + '" /></span>')
+        + '<p class="dv-muted">Am Gerät die Steuerungsart „Modbus TCP“ wählen und einen „Power Timeout“ (z. B. 30 s) setzen — fällt DVhub aus, schaltet der Heizstab von selbst ab. Der AC THOR lässt nur einen Modbus-Teilnehmer zu. DVhub regelt ihn alle paar Sekunden: langsam hoch, schnell herunter, bei Netzbezug sofort, nie aus dem Akku.</p>'
+        + sdField('Mindest-Einspeisung (W)', '<input class="input" id="sd-exportReserveW" type="number" min="0" max="20000" step="50" value="' + esc(String(p.exportReserveW != null ? p.exportReserveW : 1000)) + '" />')
+        + sdField('Einschaltschwelle (W)', '<input class="input" id="sd-startThresholdW" type="number" min="0" max="5000" step="50" value="' + esc(String(p.startThresholdW != null ? p.startThresholdW : 200)) + '" />')
+        + sdField('Anstieg höchstens (W/s)', '<input class="input" id="sd-rampUpWps" type="number" min="10" max="5000" step="10" value="' + esc(String(p.rampUpWps != null ? p.rampUpWps : 300)) + '" />')
+        + sdField('Mindest-Akkustand (%)', '<input class="input" id="sd-minSocPct" type="number" min="0" max="100" value="' + esc(String(p.minSocPct != null ? p.minSocPct : 0)) + '" />')
+        + sdField('Regeltakt (s)', '<input class="input" id="sd-intervalS" type="number" min="2" max="60" value="' + esc(String(p.intervalS != null ? p.intervalS : 5)) + '" />')
+        + sdField('Wartezeit nach Ladestart des Autos (s)', '<input class="input" id="sd-carSettleS" type="number" min="0" max="1800" step="5" value="' + esc(String(p.carSettleS != null ? p.carSettleS : 60)) + '" />')
+        + sdField('Höchstens warten auf den Ladestart (min, 0 = unbegrenzt)', '<input class="input" id="sd-carWaitTimeoutMin" type="number" min="0" max="1440" step="5" value="' + esc(String(p.carWaitTimeoutMin != null ? p.carWaitTimeoutMin : 0)) + '" />')
       + '</div>'
       + '<div data-grp="ep-mqtt_expose"><p class="dv-muted">DVhub publiziert den Soll-Zustand unter <code>dvhub/device/&lt;id&gt;/desired</code> und legt eine Home-Assistant-Entität an; eine HA-Automation schaltet das reale Gerät.</p></div>'
       + '<div class="dv-drawer-actions scheddev-form-actions"><button type="button" class="btn sm primary" id="sd-save">Speichern</button> <button type="button" class="btn sm ghost" id="sd-cancel">Abbrechen</button></div>'
@@ -4233,6 +4264,7 @@
     show('ep-shelly', ep === 'shelly');
     show('ep-mqtt_publish', ep === 'mqtt_publish');
     show('ep-mqtt_expose', ep === 'mqtt_expose');
+    show('ep-mypv', ep === 'mypv');
     show('ep-mp-onoff', ep === 'mqtt_publish' && kind === 'deferrable');
     show('ep-mp-power', ep === 'mqtt_publish' && kind === 'modulating');
   }
@@ -4253,6 +4285,14 @@
       if (val('sd-deadlineM')) body.plan.deadline = val('sd-deadlineM');
       var pauseEl = document.getElementById('sd-pauseEv');
       if (pauseEl && pauseEl.checked) body.plan.pauseWhileEvCharging = true;
+    }
+    if (ep === 'mypv' && kind === 'modulating') {
+      body.endpoint.host = val('sd-mypv-host');
+      if (num('sd-mypv-port') != null) body.endpoint.port = num('sd-mypv-port');
+      if (num('sd-mypv-unit') != null) body.endpoint.unit = num('sd-mypv-unit');
+      ['exportReserveW', 'startThresholdW', 'rampUpWps', 'minSocPct', 'intervalS', 'carSettleS', 'carWaitTimeoutMin'].forEach(function (k) {
+        if (num('sd-' + k) != null) body.plan[k] = num('sd-' + k);
+      });
     }
     if (ep === 'shelly') body.endpoint.shellyDeviceId = val('sd-shelly');
     else if (ep === 'mqtt_publish') {
