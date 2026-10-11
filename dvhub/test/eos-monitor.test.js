@@ -166,3 +166,19 @@ test('capability-probe: Timeout nach erfolgreicher Erkennung → gemerkte Fassun
   assert.equal(caps.reachable, true);
   assert.equal(caps.supported, true);
 });
+
+test('peekPlan liest nur die Ablage und löst nie einen Abruf aus', async () => {
+  let fetches = 0;
+  const mon = createEosMonitor({
+    isEnabled: () => true,
+    getHealth: async () => ({ ok: true, data: { pid: 1 } }),
+    fetchSolution: async () => { fetches += 1; return { generatedAt: 'a', rows: [{ ts_utc: 'x' }] }; },
+  });
+  assert.equal(mon.peekPlan(), null);
+  assert.equal(fetches, 0, 'leere Ablage → kein Abruf');
+  mon.ingest({ generatedAt: 'b', rows: [{ ts_utc: 'y' }] });
+  const shown = mon.peekPlan();
+  assert.equal(shown.data.generatedAt, 'b');
+  assert.equal(shown.current, true);
+  assert.equal(fetches, 0);
+});

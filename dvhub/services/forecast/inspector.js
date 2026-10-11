@@ -290,7 +290,7 @@ export function createInspector(ctx, deps = {}) {
     // Fahrplan“), obwohl der Plan längst übernommen war — und die Abrufe
     // bremsten EOS zusätzlich (eHive 2026-10-11).
     //   Plan     ← der zuletzt übernommene EOS-Plan (optimizer: ctx.eosPlanStore)
-    //   Lösung   ← eosMonitor.displayPlan() (letzte abgeholte Lösung)
+    //   Lösung   ← eosMonitor.peekPlan() (letzte abgeholte Lösung, ohne Abruf)
     //   Push     ← Ergebnis der letzten echten Übertragung (state.optimizer.lastEosPush)
     const optState = (state && state.optimizer) || {};
     let storedPlan = null;
@@ -298,7 +298,9 @@ export function createInspector(ctx, deps = {}) {
     if (storedPlan && !Array.isArray(storedPlan.schedule)) storedPlan = null;
     let shownSolution = null;
     try {
-      if (eosMonitor && typeof eosMonitor.displayPlan === 'function') shownSolution = await eosMonitor.displayPlan();
+      // peekPlan(): nur lesen. displayPlan() würde ohne Plan in der Ablage bei
+      // jedem Aufruf selbst bei EOS nachfragen (bis 15 s, eHive 2026-10-11).
+      if (eosMonitor && typeof eosMonitor.peekPlan === 'function') shownSolution = eosMonitor.peekPlan();
     } catch { /* keine Lösung in der Ablage */ }
     let monitorStatus = null;
     try { monitorStatus = eosMonitor?.status?.() || null; } catch { /* unbekannt */ }

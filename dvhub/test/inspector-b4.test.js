@@ -78,7 +78,7 @@ test('B4 getEos returns adapter_unavailable when no adapter is wired', async () 
 
 // Zentrale Ablage (2026-10-11): der Inspector fragt EOS nicht mehr selbst. Plan
 // aus ctx.eosPlanStore, Push-Ergebnis aus state.optimizer.lastEosPush, Lösung
-// aus eosMonitor.displayPlan().
+// aus eosMonitor.peekPlan() (ohne Abruf).
 const PLAN = [
   { ts: Date.parse('2026-05-20T10:00:00Z'), endTs: Date.parse('2026-05-20T10:15:00Z'), powerW: 3200, confidence: 0.7 },
   { ts: Date.parse('2026-05-20T10:15:00Z'), endTs: Date.parse('2026-05-20T10:30:00Z'), powerW: 0, confidence: 0.7 },
@@ -152,7 +152,8 @@ test('B4 getEos zeigt Plan und Lösung aus der Ablage, auch wenn EOS gerade nich
   const eosMonitor = {
     isUp: () => false,
     status: () => ({ enabled: true, status: 'down' }),
-    displayPlan: async () => ({ data: solution, at: PLAN_AT, current: true }),
+    peekPlan: () => ({ data: solution, at: PLAN_AT, current: true }),
+    displayPlan: async () => { throw new Error('der Inspector darf keinen Abruf auslösen'); },
   };
   const out = await createInspector(makeStoreCtx(), { eosAdapter, eosMonitor, forecastService }).getEos({ from: 'a', to: 'b' });
   assert.equal(out.available, true);
@@ -166,7 +167,7 @@ test('B4 getEos zeigt Plan und Lösung aus der Ablage, auch wenn EOS gerade nich
 
 test('B4 getEos: EOS antwortet nicht und die Ablage ist leer → eos_not_answering', async () => {
   const eosAdapter = makeEosStub({ available: false });
-  const eosMonitor = { isUp: () => false, status: () => ({ enabled: true, status: 'down' }), displayPlan: async () => null };
+  const eosMonitor = { isUp: () => false, status: () => ({ enabled: true, status: 'down' }), peekPlan: () => null };
   const ctx = makeStoreCtx({ plan: null, push: null });
   const out = await createInspector(ctx, { eosAdapter, eosMonitor, forecastService: makeForecastService({}) }).getEos({ from: 'a', to: 'b' });
   assert.equal(out.available, false);

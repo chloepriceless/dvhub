@@ -213,6 +213,15 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
       if (!displayed) return null;
       return { data: displayed.data, at: displayed.at, current: solution === displayed };
     },
+    /**
+     * Wie displayPlan(), aber ohne je selbst bei EOS nachzufragen: nur was in der
+     * Ablage liegt. Für Anzeigen, die im Sekundentakt gefragt werden (Inspector).
+     * @returns {null|{data:object, at:number, current:boolean}}
+     */
+    peekPlan() {
+      if (!displayed) return null;
+      return { data: displayed.data, at: displayed.at, current: solution === displayed };
+    },
     onSolution(fn) { solutionListeners.add(fn); return () => solutionListeners.delete(fn); },
     onRestart(fn) { restartListeners.add(fn); return () => restartListeners.delete(fn); },
   };
