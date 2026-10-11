@@ -1529,10 +1529,11 @@ ctx.getSolarMarketValueSummary = ({ year }) =>
 ctx.getApplicableValueSummary = ({ year, pvPlants }) =>
   applicableValueService?.getApplicableValueSummary?.({ year, pvPlants });
 const eosForecastBridge = createEosForecastBridge(ctx);
-// EOS ab 0.4 verlangt einen SoC, der beim Lauf hoechstens 300 s alt ist
-// (measurement_max_age_seconds). Der Prognose-Push alle 15 min reicht dafuer
-// nicht — minuetlich nur den SoC nachschicken. pushFreshSoc() tut nichts,
-// solange der Abgleich kein EOS 0.4 erkannt hat.
+// Nur noch fuer optimizer.eosStartAfterPreviousRun (EOS rechnet nach eigenem
+// Takt): dann liest EOS den SoC aus Messwerten und verlangt ihn hoechstens
+// 300 s alt — minuetlich nachschicken. Im Standard stoesst DVhub die Laeufe an
+// und gibt den SoC im Aufruf mit (eos-run-trigger.js); pushFreshSoc() tut dann
+// nichts. Ebenso, solange der Abgleich kein EOS 0.4 erkannt hat.
 // Minütlich (EOS nimmt den SoC bis 5 min alt). Kostet keine Schreibzugriffe
 // mehr, seit EOS nicht mehr automatisch auf die Platte speichert.
 const eosFreshSocTimer = safeInterval('eos-fresh-soc', () => eosForecastBridge.pushFreshSoc(), 60_000);

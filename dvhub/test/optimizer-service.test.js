@@ -379,3 +379,71 @@ describe('Optimizer Service: EOS-Lösung einmal je Lauf, Push über den Monitor'
     await svc.close();
   });
 });
+
+// Seit 2026-10-11 stößt DVhub die EOS-Läufe an (eos-run-trigger.js).
+describe('Optimizer Service: DVhub stößt den EOS-Lauf an', () => {
+  function eosWithoutPlan() {
+    const calls = { trigger: [], emsInterval: [] };
+    const eosAdapter = {
+      pushForecast: async () => ({ ok: true }),
+      pullSchedule: async () => null,
+      pullGridSetpoints: async () => null,
+      getOptimizationSolution: async () => null,
+      setEmsIntervalSec: async (sec) => { calls.emsInterval.push(sec); return { ok: true }; },
+      triggerOptimization: async (body, timeoutMs) => {
+        calls.trigger.push({ body, timeoutMs });
+        return { ok: true, data: { start_solution: [1, 0], start_solution_datetime: '2026-10-11T12:00:00+02:00' } };
+      },
+    };
+    return { calls, eosAdapter };
+  }
+  const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r)); };
+
+  test('EOS hat noch keinen Plan → sofort ein Lauf mit dem Ladestand, kein Takt-Boost', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    const { calls, eosAdapter } = eosWithoutPlan();
+    const logs = [];
+    let notified = 0;
+    const { ctx, state } = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
+      ctx: {
+        eosAdapter,
+        eosMonitor: { status: () => ({ status: 'up', solutionGeneratedAt: null }), onSolution: () => () => {}, ingest: () => {}, notifySolutionReady: async () => { notified += 1; } },
+        eosForecastBridge: { socForRun: async () => ({ soc: { battery1: 50 } }) },
+        pushLog: (ev, data) => logs.push({ ev, data }),
+      }
+    });
+    const svc = createOptimizerService(ctx);
+    state.optimizer.eos = { supported: true }; // setzt sonst der Abgleich (eos-config-sync)
+    await svc.start();
+    await settle();
+    assert.equal(calls.trigger.length, 1);
+    assert.deepEqual(calls.trigger[0].body, { soc: { battery1: 50 } });
+    assert.equal(logs.find((l) => l.ev === 'eos_run_started').data.reason, 'no_plan');
+    assert.equal(notified, 1, 'fertiger Lauf → Lösung über den Monitor abholen');
+    assert.deepEqual(calls.emsInterval, [], 'EOS\' eigener Takt wird nicht mehr angefasst');
+    await svc.close();
+  });
+
+  test('kein Anstoß, solange kein EOS 0.4 erkannt ist oder EOS nach eigenem Takt rechnen soll', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    for (const variant of ['unerkannt', 'eigenerTakt']) {
+      const { calls, eosAdapter } = eosWithoutPlan();
+      const { ctx, state } = buildCtx({
+        optimizerCfg: {
+          primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' },
+          ...(variant === 'eigenerTakt' ? { eosStartAfterPreviousRun: true } : {}),
+        },
+        ctx: { eosAdapter, eosForecastBridge: { socForRun: async () => ({ soc: { battery1: 50 } }) }, pushLog: () => {} }
+      });
+      const svc = createOptimizerService(ctx);
+      if (variant === 'eigenerTakt') state.optimizer.eos = { supported: true };
+      await svc.start();
+      await settle();
+      assert.equal(calls.trigger.length, 0, variant);
+      // Wie bisher: die Erstplan-Wache senkt dann EOS' Takt.
+      assert.equal(calls.emsInterval.length, 1, variant);
+      await svc.close();
+    }
+  });
+});

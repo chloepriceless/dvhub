@@ -33,6 +33,7 @@
 
 import { isGridStorageOnly, createStandbyEstimator, resolveStandbyW, buildGridStorageSeries, gridImportW } from './grid-storage.js';
 import { resolveEvSocPct } from './ev-soc.js';
+import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
 import http from 'node:http';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
 import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
@@ -485,7 +486,9 @@ export function createEosForecastBridge(ctx) {
     const freshIso = new Date().toISOString();
     const socStamps = [freshIso];
 
-    for (const key of socKeys) {
+    // Stößt DVhub die Läufe an, reist der Ladestand im Aufruf mit (socForRun)
+    // und wird nicht als Messwert geschrieben.
+    for (const key of (dvhubTriggersEosRuns(getCfg()) ? [] : socKeys)) {
       const isEv = /(^|[^a-z])ev\d*-soc-factor$/.test(key);
       const value = isEv ? evFactor : battFactor;
       if (value === null) continue; // EV with no live value — skip cleanly
@@ -536,10 +539,45 @@ export function createEosForecastBridge(ctx) {
   async function pushFreshSoc() {
     const cfg = getCfg();
     if (!cfg?.optimizer?.eosProxy?.enabled) return { skipped: 'eosProxy.enabled=false' };
+    if (dvhubTriggersEosRuns(cfg)) return { skipped: 'soc travels with the run request' };
     // Erst wenn der Abgleich ein EOS 0.4 erkannt hat (state.optimizer.eos).
     if (state?.optimizer?.eos?.supported !== true) return { skipped: 'eos not supported' };
     const baseUrl = cfg.optimizer.eosProxy.url || 'http://127.0.0.1:8503';
     return pushSoc(baseUrl, { freshOnly: true });
+  }
+
+  /**
+   * Ladestände für einen angestoßenen Lauf (POST /v1/optimize, Feld `soc`):
+   * ganze Prozent je EOS-Gerät. Die Geräte kommen aus EOS selbst
+   * (`<device_id>-soc-factor` in /v1/measurement/keys) — ein Ladestand für ein
+   * dort nicht angemeldetes Gerät ließe den Lauf scheitern. Ein Auto ohne
+   * Ladestand fehlt in der Antwort (eos-config-sync meldet es dann ohnehin ab).
+   * @returns {Promise<{soc?: Record<string, number>, skipped?: string, error?: string}>}
+   */
+  async function socForRun() {
+    const cfg = getCfg();
+    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    const socPct = Number(state?.victron?.soc);
+    if (!Number.isFinite(socPct)) return { skipped: 'no live battery soc in state' };
+    const evSoc = resolveEvSocPct(ctx);
+    const evLegacyPct = Number(state?.victron?.evSocPct);
+    const evPct = evSoc ? evSoc.pct : evLegacyPct;
+    const keysRes = await eosHttpRequest(baseUrl, 'GET', '/v1/measurement/keys');
+    if (!keysRes.ok || !Array.isArray(keysRes.data)) {
+      return { error: `could not read measurement keys: ${keysRes.error || 'unexpected shape'}` };
+    }
+    const whole = (pct) => Math.max(0, Math.min(100, Math.round(pct)));
+    const soc = {};
+    for (const key of keysRes.data.map(String).filter((k) => SOC_KEY_RE.test(k))) {
+      const deviceId = key.slice(0, -'-soc-factor'.length);
+      if (EV_SOC_KEY_RE.test(key)) {
+        if (Number.isFinite(evPct)) soc[deviceId] = whole(evPct);
+      } else {
+        soc[deviceId] = whole(socPct);
+      }
+    }
+    if (!Object.keys(soc).length) return { skipped: 'no battery registered in EOS' };
+    return { soc };
   }
 
   let lastHorizonHours = null;
@@ -903,7 +941,7 @@ export function createEosForecastBridge(ctx) {
     }
   }
 
-  return { push, pushFreshSoc, start, stop };
+  return { push, pushFreshSoc, socForRun, start, stop };
 }
 
 // Exported for unit-tests.

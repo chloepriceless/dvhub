@@ -2192,9 +2192,9 @@ function buildFieldDefinitions() {
       section: 'schedule',
       group: 'optimization',
       path: 'optimizer.eosStartAfterPreviousRun',
-      label: 'EOS-Takt ab Laufende statt zur vollen Viertelstunde',
+      label: 'EOS rechnet nach eigenem Takt (ab Laufende)',
       type: 'boolean',
-      help: 'Standard (aus): EOS startet jeden Lauf zur vollen Viertelstunde (:00, :15, :30, :45), passend zu den Börsen-Slots; dauert ein Lauf länger als der Takt, startet der nächste zur nächsten Viertelstunde nach seinem Ende. An = wie früher: der Takt zählt ab dem Ende des vorigen Laufs.'
+      help: 'Standard (aus): DVhub stößt jeden EOS-Lauf selbst an, zur vollen Viertelstunde (:00, :15, :30, :45) passend zu den Börsen-Slots, und gibt den Ladestand gleich mit; rechnet der vorige Lauf noch, startet der nächste zur nächsten Viertelstunde nach seinem Ende. An = wie früher: EOS rechnet nach eigenem Takt ab dem Ende des vorigen Laufs und liest den Ladestand aus Messwerten, die DVhub dann minütlich schreibt.'
     },
     {
       section: 'schedule',

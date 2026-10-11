@@ -510,11 +510,11 @@ test('EOS-Push-Adresse und Fitness-Cache (2026-10-03)', async (t) => {
     assert.equal(eosNotifyUrl({ httpPort: 8080 }, 'kaputt'), null);
   });
 
-  await t.test('Start zur vollen Viertelstunde: Standard an, abschaltbar', async () => {
-    const { eosStartOnBoundary } = await import('../services/optimizer/eos-config-sync.js');
-    assert.equal(eosStartOnBoundary({}), true);
-    assert.equal(eosStartOnBoundary({ optimizer: { eosStartAfterPreviousRun: false } }), true);
-    assert.equal(eosStartOnBoundary({ optimizer: { eosStartAfterPreviousRun: true } }), false);
+  await t.test('DVhub stößt die EOS-Läufe an: Standard an, abschaltbar', async () => {
+    const { dvhubTriggersEosRuns } = await import('../services/optimizer/eos-run-trigger.js');
+    assert.equal(dvhubTriggersEosRuns({}), true);
+    assert.equal(dvhubTriggersEosRuns({ optimizer: { eosStartAfterPreviousRun: false } }), true);
+    assert.equal(dvhubTriggersEosRuns({ optimizer: { eosStartAfterPreviousRun: true } }), false);
   });
 
   await t.test('Fitness-Cache: 0/leer/ungültig = aus, sonst ganze Zahl', async () => {

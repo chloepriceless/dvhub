@@ -958,3 +958,38 @@ test('pushForecast keeps positional PV aligned when forecast.solar adds sunrise/
     await mock.close();
   }
 });
+
+// DVhub stößt jeden EOS-Lauf selbst an (eos-run-trigger.js).
+test('triggerOptimization: POST /v1/optimize mit Ladestand, wartet länger als die übliche Frist', async () => {
+  const mock = await createMockEos((req, res) => {
+    // Länger als die Frist des Adapters (50 ms): ein Lauf dauert Minuten.
+    setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ start_solution: [1, 0, 1], start_solution_datetime: '2026-10-11T12:00:00+02:00' }));
+    }, 150);
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`), { timeoutMs: 50 });
+    const res = await adapter.triggerOptimization({ soc: { battery1: 55 } }, 5_000);
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.data.start_solution, [1, 0, 1]);
+    assert.equal(mock.requests[0].method, 'POST');
+    assert.equal(mock.requests[0].url, '/v1/optimize');
+    assert.deepEqual(mock.requests[0].body, { soc: { battery1: 55 } });
+  } finally {
+    await mock.close();
+  }
+});
+
+test('triggerOptimization: kein Plan (HTTP 503) → { ok: false }, wirft nicht', async () => {
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ title: 'GENETIC optimization failed' }));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    assert.deepEqual(await adapter.triggerOptimization({ soc: { battery1: 55 } }, 5_000), { ok: false, error: 'EOS returned HTTP 503' });
+  } finally {
+    await mock.close();
+  }
+});

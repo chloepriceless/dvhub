@@ -14,6 +14,7 @@ import { buildMilpSchedule } from './milp-battery-optimizer.js';
 import { buildScheduleRules, insertOptimizerRules, optimizerSlotsToGridSetpoints } from './schedule-builder.js';
 import { createEosAdapter, resolveEosProxy } from './eos-adapter.js';
 import { createEosFirstPlanWatch, isFreshEosSolution } from './eos-first-plan.js';
+import { createEosRunTrigger, dvhubTriggersEosRuns } from './eos-run-trigger.js';
 import { buildEosOptimization, pickEmsIntervalSec } from './eos-config-sync.js';
 import { enrichPriceSlotsWithCosts } from './cost-model.js';
 import { createMispelTracker } from './mispel-tracker.js';
@@ -283,6 +284,32 @@ export function createOptimizerService(ctx) {
     }
   });
 
+  // DVhub stößt jeden EOS-Lauf selbst an: zur vollen Viertelstunde, mit dem
+  // Ladestand im Aufruf (eos-run-trigger.js). Die Erstplan-Wache oben wird nur
+  // noch gebraucht, wenn EOS nach eigenem Takt rechnet
+  // (optimizer.eosStartAfterPreviousRun).
+  const eosRunTrigger = createEosRunTrigger({
+    isActive: () => {
+      const cfg = getCfg();
+      return resolveEosProxy(cfg).enabled && dvhubTriggersEosRuns(cfg) && state.optimizer?.eos?.supported === true;
+    },
+    getIntervalSec: () => {
+      const cfg = getCfg();
+      return pickEmsIntervalSec(buildEosOptimization(cfg).interval, cfg.optimizer?.eosEmsIntervalSec);
+    },
+    getSlotSec: () => buildEosOptimization(getCfg()).interval,
+    getHorizonHours: () => state.optimizer?.eosControlHorizonH ?? null,
+    collectSoc: async () => (ctx.eosForecastBridge?.socForRun
+      ? ctx.eosForecastBridge.socForRun()
+      : { skipped: 'forecast bridge not ready' }),
+    postOptimize: (body, runTimeoutMs) => eosAdapter.triggerOptimization(body, runTimeoutMs),
+    // Auch ohne Meldung von EOS (ems.notify_url gibt es nur auf derselben Box).
+    onSolution: () => ctx.eosMonitor?.notifySolutionReady?.(),
+    eosStatus: () => ctx.eosMonitor?.status?.() || null,
+    state,
+    pushLog,
+  });
+
   // Zeitpunkt des ersten erfolgreichen Prognose-Pushs dieses Prozesses. Eine
   // EOS-Loesung, die davor gerechnet wurde, stammt aus EOS' eigener Datenbank
   // (nach einem Neustart wiederhergestellt) und zaehlt fuer die Erstplan-Wache
@@ -379,6 +406,7 @@ export function createOptimizerService(ctx) {
   function requestEosReplan(reason) {
     eosFirstPushAt = null;
     pushLog('eos_replan_requested', { reason: reason || null });
+    eosRunTrigger.kick(`replan:${reason || 'unknown'}`);
     kickOptimization();
   }
 
@@ -589,7 +617,13 @@ export function createOptimizerService(ctx) {
           // ersten Push gerechnet) zaehlt dabei als "nichts".
           const eosHatNochNichts = (!eosGridSetpoints || eosGridSetpoints.length === 0)
             && !isFreshEosSolution(eosSolution, eosFirstPushAt);
-          if (eosHatNochNichts) {
+          if (eosRunTrigger.isActive()) {
+            // DVhub stößt die Läufe an: fehlt der Plan, sofort rechnen lassen
+            // statt bis zur nächsten Viertelstunde zu warten.
+            if (eosHatNochNichts) eosRunTrigger.kick('no_plan');
+            eosFirstPlanWatch.disarm()
+              .catch(err => pushLog('eos_first_plan_disarm_failed', { error: err.message }));
+          } else if (eosHatNochNichts) {
             const emsSollSec = pickEmsIntervalSec(
               buildEosOptimization(cfg).interval,
               cfg.optimizer?.eosEmsIntervalSec
@@ -914,6 +948,7 @@ export function createOptimizerService(ctx) {
   async function start() {
     state.optimizer.enabled = getCfg().optimizer?.enabled ?? false;
     startTimers(); // Always start timers -- runOptimization gates on enabled
+    eosRunTrigger.start(); // tut nichts, solange keine EOS-Anbindung erkannt ist
 
     // Initial run (if enabled)
     if (getCfg().optimizer?.enabled) {
@@ -931,6 +966,7 @@ export function createOptimizerService(ctx) {
     pollTimer = null;
     fallbackTimer = null;
     eosFirstPlanWatch.stop();
+    eosRunTrigger.stop();
   }
 
   return {

@@ -234,6 +234,17 @@ describe('Abgleich gegen Upstream ab #1330 (upstream-genetic)', () => {
     assert.deepEqual(bodyOf(mock, 'devices/home_appliances'), {}, 'Abbildung wird mitgeleert');
   });
 
+  // Seit 2026-10-11 stößt DVhub jeden Lauf selbst an (eos-run-trigger.js).
+  it('schaltet EOS\' eigene Läufe ab (DVhub stößt sie an), mit eosStartAfterPreviousRun wieder ein', async () => {
+    mock = await createMockEos('upstreamGenetic');
+    await createEosConfigSync(ctxFor(mock.port)).sync();
+    assert.equal(bodyOf(mock, 'ems/mode'), 'DISABLED');
+    await mock.close();
+    mock = await createMockEos('upstreamGenetic');
+    await createEosConfigSync(ctxFor(mock.port, { eosStartAfterPreviousRun: true })).sync();
+    assert.equal(bodyOf(mock, 'ems/mode'), 'OPTIMIZATION');
+  });
+
   it('rc1.6: setzt die Eigenverbrauchstabelle auf numpy, wenn EOS den Schalter kennt', async () => {
     const saved = CONFIGS.upstreamGenetic;
     CONFIGS.upstreamGenetic = { ...saved, optimization: { ...saved.optimization, self_consumption_interpolator: 'scipy' } };

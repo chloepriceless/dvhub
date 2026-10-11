@@ -202,7 +202,7 @@ test('push forwards live battery SoC as factor; skips EV when absent', async () 
   const mock = await createMockEos(okHandler);
   try {
     const ctx = {
-      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      getCfg: () => ({ optimizer: { eosStartAfterPreviousRun: true, eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
       pushLog: () => {},
       forecastService: { buildForecastResponse: async () => forecastSlots() },
       state: { victron: { soc: 16 } }, // 16% → factor 0.16, no EV SoC
@@ -235,7 +235,7 @@ test('push forwards EV SoC when state provides evSocPct', async () => {
   const mock = await createMockEos(okHandler);
   try {
     const ctx = {
-      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      getCfg: () => ({ optimizer: { eosStartAfterPreviousRun: true, eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
       pushLog: () => {},
       forecastService: { buildForecastResponse: async () => forecastSlots() },
       state: { victron: { soc: 50, evSocPct: 80 } },
@@ -262,7 +262,7 @@ test('push holt den EV-SoC aus TeslaMate', async () => {
   const mock = await createMockEos(okHandler);
   try {
     const ctx = {
-      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      getCfg: () => ({ optimizer: { eosStartAfterPreviousRun: true, eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
       pushLog: () => {},
       forecastService: { buildForecastResponse: async () => forecastSlots() },
       state: { victron: { soc: 50 } },
@@ -710,12 +710,14 @@ describe('Steuerzeitraum = Preisabdeckung (EOS 0.4)', () => {
 
 // EOS 0.4 nimmt den SoC nur aus den letzten 300 s — DVhub schickt ihn
 // minuetlich, nur mit "jetzt"-Stempel. Erst nachdem ein EOS 0.4 erkannt ist.
-test('pushFreshSoc: nur bei erkanntem EOS 0.4, nur ein Zeitstempel', async () => {
+// Altes Verhalten (optimizer.eosStartAfterPreviousRun): EOS rechnet nach eigenem
+// Takt und liest den Ladestand aus Messwerten.
+test('pushFreshSoc (EOS-eigener Takt): nur bei erkanntem EOS 0.4, nur ein Zeitstempel', async () => {
   const mock = await createMockEos(okHandler);
   try {
     const state = { victron: { soc: 50 }, optimizer: { eos: { supported: false } } };
     const ctx = {
-      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      getCfg: () => ({ optimizer: { eosStartAfterPreviousRun: true, eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
       pushLog: () => {},
       forecastService: { buildForecastResponse: async () => forecastSlots() },
       state,
@@ -755,7 +757,7 @@ test('pushFreshSoc: abgeschlossene Geräteläufe als Messwert (0 ohne Zähler, h
   try {
     const state = { victron: { soc: 50 }, optimizer: { eos: { supported: true }, applianceCyclesToday: { appl_trockner: 3 } } };
     const ctx = {
-      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      getCfg: () => ({ optimizer: { eosStartAfterPreviousRun: true, eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
       pushLog: () => {}, forecastService: { buildForecastResponse: async () => forecastSlots() }, state,
     };
     const res = await createEosForecastBridge(ctx).pushFreshSoc();
@@ -868,6 +870,79 @@ test('watchdog: Neustart im Container (PID bleibt 1) löst über den Monitor den
     assert.ok(beforeCount >= 1, 'Neustart → Einstellungen und Prognosen sofort neu');
     assert.equal(restarts.length, 1, 'Optimierer genau einmal benachrichtigt');
     assert.ok(logs.some((l) => l.ev === 'eos_restart_detected' && l.d.reason === 'started_at'));
+  } finally {
+    await mock.close();
+  }
+});
+
+// Seit 2026-10-11 stößt DVhub die Läufe an (eos-run-trigger.js): der Ladestand
+// reist im Aufruf mit, als Messwert wird er nicht mehr geschrieben.
+function socCtx(mock, { state, cfgExtra = {}, teslamate } = {}) {
+  return {
+    getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, ...cfgExtra } }),
+    pushLog: () => {},
+    forecastService: { buildForecastResponse: async () => forecastSlots() },
+    state,
+    ...(teslamate ? { teslamateService: { getState: () => teslamate } } : {}),
+  };
+}
+const keysHandler = (keys) => (req, res) => {
+  if (req.method === 'GET' && req.url.startsWith('/v1/measurement/keys')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(keys));
+    return;
+  }
+  okHandler(req, res);
+};
+
+test('Standard: kein Ladestand mehr als Messwert — weder minütlich noch im Prognose-Push', async () => {
+  const mock = await createMockEos(keysHandler(['battery1-soc-factor', 'ev11-soc-factor', 'appl_spuele.cycles_completed']));
+  try {
+    const state = { victron: { soc: 50, evSocPct: 40 }, optimizer: { eos: { supported: true }, applianceCyclesToday: { appl_spuele: 1 } } };
+    const bridge = createEosForecastBridge(socCtx(mock, { state }));
+    const fresh = await bridge.pushFreshSoc();
+    assert.equal(fresh.skipped, 'soc travels with the run request');
+    assert.equal(mock.requests.length, 0, 'der Minutentakt fragt EOS gar nicht mehr');
+
+    const res = await bridge.push();
+    const values = mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'));
+    assert.deepEqual(values.map((r) => new URL(r.url, 'http://x').searchParams.get('key')), ['appl_spuele.cycles_completed'],
+      'nur noch der Zähler des Geräts, kein *-soc-factor');
+    assert.ok(res.pushed.includes('appl_spuele.cycles_completed=1'));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('socForRun: ganze Prozent je EOS-Gerät, Auto nur mit Ladestand', async () => {
+  const mock = await createMockEos(keysHandler(['date_time', 'battery1-power-l1-w', 'battery1-soc-factor', 'ev11-soc-factor']));
+  try {
+    const state = { victron: { soc: 54.6 }, optimizer: { eos: { supported: true } } };
+    // Auto angemeldet, DVhub kennt seinen Ladestand: 63 % aus TeslaMate.
+    const withEv = createEosForecastBridge(socCtx(mock, { state, teslamate: { batteryLevel: 63 } }));
+    assert.deepEqual(await withEv.socForRun(), { soc: { battery1: 55, ev11: 63 } });
+    // Ohne Ladestand fürs Auto: nur der Akku (54,6 → 55).
+    const withoutEv = createEosForecastBridge(socCtx(mock, { state }));
+    assert.deepEqual(await withoutEv.socForRun(), { soc: { battery1: 55 } });
+    // Grenzen: 100,4 → 100, −3 → 0.
+    state.victron.soc = 100.4;
+    assert.deepEqual(await withoutEv.socForRun(), { soc: { battery1: 100 } });
+    state.victron.soc = -3;
+    assert.deepEqual(await withoutEv.socForRun(), { soc: { battery1: 0 } });
+    assert.equal(mock.requests.filter((r) => r.method !== 'GET').length, 0, 'liest nur, schreibt nichts');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('socForRun: ohne Akku-Ladestand oder ohne Akku in EOS kein Aufruf', async () => {
+  const mock = await createMockEos(keysHandler(['date_time']));
+  try {
+    const noSoc = createEosForecastBridge(socCtx(mock, { state: { victron: {}, optimizer: {} } }));
+    assert.equal((await noSoc.socForRun()).skipped, 'no live battery soc in state');
+    assert.equal(mock.requests.length, 0);
+    const noBattery = createEosForecastBridge(socCtx(mock, { state: { victron: { soc: 50 }, optimizer: {} } }));
+    assert.equal((await noBattery.socForRun()).skipped, 'no battery registered in EOS');
   } finally {
     await mock.close();
   }

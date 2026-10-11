@@ -19,6 +19,7 @@ import { loadSchedulableDevices } from '../devices/schedulable.js';
 import http from 'node:http';
 
 import { createEosCapabilityProbe } from './eos-capabilities.js';
+import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
 
 const TIMEOUT_MS = 8_000;
 const BATTERY_DEVICE_ID = 'battery1';   // EOS default — mirrors what EOS bootstraps.
@@ -77,19 +78,6 @@ export const EOS_MEASUREMENT_HISTORIC_HOURS = 48;
 export const EOS_AUTOSAVE_INTERVAL_SEC = null;
 export const EOS_FITNESS_CACHE_MAX_ENTRIES = 0;
 export const EOS_SOLUTION_READY_PATH = '/api/eos/solution-ready';
-
-/**
- * EOS-Läufe zur vollen Viertelstunde starten (ems.start_on_interval_boundary):
- * :00, :15, :30, :45 bei 15-Minuten-Takt, passend zu den Börsen-Slots. Die
- * Laufzeit hängt von Temperatur, Horizont und E-Auto ab und lässt sich nicht
- * vorhersagen — darum fester Start statt „fertig vor der Grenze“. Dauert ein
- * Lauf länger als der Takt, startet der nächste zur nächsten Grenze nach
- * seinem Ende. Standard an; optimizer.eosStartAfterPreviousRun = true stellt
- * auf das alte Verhalten zurück (Takt ab dem Ende des vorigen Laufs).
- */
-export function eosStartOnBoundary(cfg) {
-  return cfg?.optimizer?.eosStartAfterPreviousRun !== true;
-}
 
 /**
  * Fitness-Cache-Grenze für EOS aus optimizer.eosFitnessCacheMaxEntries:
@@ -713,15 +701,20 @@ export function createEosConfigSync(ctx) {
       // auf DISABLED — nimmt dann alle Daten an, plant aber nie (Container-Test
       // 2026-10-02: Docker-Suite und jede Neuinstallation ohne Plan; prod nur,
       // weil der Modus dort einmal von Hand gesetzt worden war).
-      { section: 'ems/mode', body: 'OPTIMIZATION' },
+      // Seit 2026-10-11 stößt DVhub jeden Lauf selbst an (eos-run-trigger.js):
+      // EOS' eigene Läufe sind dann aus (DISABLED); ein angestoßener Lauf
+      // rechnet trotzdem. Nur mit optimizer.eosStartAfterPreviousRun rechnet
+      // EOS wie früher nach eigenem Takt.
+      { section: 'ems/mode', body: dvhubTriggersEosRuns(cfg) ? 'DISABLED' : 'OPTIMIZATION' },
       // Fitness-Cache standardmäßig aus (EOS PR #1376 / DV-EOS rc1.5): kostete
       // unbegrenzt 120–170 MB je Lauf, brachte auf dem Pi bei 6–15 % Treffern
       // kaum Zeit. Begrenzt einschaltbar (optimizer.eosFitnessCacheMaxEntries).
       ...(caps.fitnessCacheLimit ? [{ section: 'optimization/genetic/fitness_cache_max_entries', body: eosFitnessCacheMaxEntries(cfg) }] : []),
       // Fertigen Lauf an DVhub melden (Push statt minütlicher Abfrage).
       ...(caps.solutionNotify ? [{ section: 'ems/notify_url', body: eosNotifyUrl(cfg, baseUrl) }] : []),
-      // Läufe zur vollen Viertelstunde starten (statt Takt ab Laufende).
-      ...(caps.startOnBoundary ? [{ section: 'ems/start_on_interval_boundary', body: eosStartOnBoundary(cfg) }] : []),
+      // Nur der alte DV-EOS-Fork kennt den Schalter. Die Viertelstunde hält jetzt
+      // DVhub ein; im Fork bleibt er aus, damit nie beide den Takt vorgeben.
+      ...(caps.startOnBoundary ? [{ section: 'ems/start_on_interval_boundary', body: false }] : []),
       // Feste Zeitzone statt Nachschlagen aus Breiten-/Längengrad (PR #1377):
       // spart ~25 MB beim nächsten EOS-Start.
       ...(caps.timezoneOverride ? [{ section: 'general/timezone_override', body: cfg?.timeZone || 'Europe/Berlin' }] : []),

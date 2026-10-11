@@ -60,7 +60,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    * @param {object|null} [body=null] - JSON body to send
    * @returns {Promise<{ ok: boolean, data?: any, error?: string }>}
    */
-  function httpRequest(method, path, body = null) {
+  function httpRequest(method, path, body = null, requestTimeoutMs = timeoutMs) {
     const cfg = getCfg();
     const baseUrl = resolveEosProxy(cfg).url;
 
@@ -83,7 +83,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
           path: url.pathname + url.search,
           method,
           headers,
-          timeout: timeoutMs
+          timeout: requestTimeoutMs
         }, (res) => {
           let chunks = '';
           res.on('data', chunk => chunks += chunk);
@@ -802,5 +802,21 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     return httpRequest('PUT', '/v1/config/ems/interval', v);
   }
 
-  return { pushForecast, pullSchedule, pullGridSetpoints, getOptimizationSolution, setEmsIntervalSec, isAvailable, getHealth };
+  /**
+   * Einen EOS-Lauf anstoßen (POST /v1/optimize) und auf sein Ende warten.
+   * `body`: { soc: {<device_id>: 0..100}, start_solution?, start_solution_datetime? }
+   * — Geräte, Tarife und Prognosen nimmt EOS aus seiner Konfiguration. Die
+   * Antwort ist EOS' eigene GENETIC-Lösung; DVhub liest daraus nur die
+   * Startlösung für den nächsten Lauf (eos-run-trigger.js). Plan und Lösung
+   * holt wie bisher der Monitor. HTTP 503 heißt: kein Plan (z. B. fehlende
+   * Prognosen direkt nach einem EOS-Neustart).
+   *
+   * @param {object} body
+   * @param {number} runTimeoutMs  ein Lauf dauert Minuten bis über eine halbe Stunde
+   */
+  function triggerOptimization(body, runTimeoutMs) {
+    return httpRequest('POST', '/v1/optimize', body, runTimeoutMs);
+  }
+
+  return { pushForecast, pullSchedule, pullGridSetpoints, getOptimizationSolution, setEmsIntervalSec, triggerOptimization, isAvailable, getHealth };
 }
