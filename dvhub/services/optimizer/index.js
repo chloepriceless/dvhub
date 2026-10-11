@@ -617,9 +617,12 @@ export function createOptimizerService(ctx) {
           // ersten Push gerechnet) zaehlt dabei als "nichts".
           const eosHatNochNichts = (!eosGridSetpoints || eosGridSetpoints.length === 0)
             && !isFreshEosSolution(eosSolution, eosFirstPushAt);
-          if (eosRunTrigger.isActive()) {
+          if (dvhubTriggersEosRuns(cfg)) {
             // DVhub stößt die Läufe an: fehlt der Plan, sofort rechnen lassen
-            // statt bis zur nächsten Viertelstunde zu warten.
+            // statt bis zur nächsten Viertelstunde zu warten. Die Erstplan-Wache
+            // (senkt EOS' eigenen Takt) bleibt dabei immer aus — auch solange der
+            // Abgleich EOS noch nicht erkannt hat (eHive 2026-10-11: sonst blieb
+            // ems.interval nach dem Start auf 60 s stehen).
             if (eosHatNochNichts) eosRunTrigger.kick('no_plan');
             eosFirstPlanWatch.disarm()
               .catch(err => pushLog('eos_first_plan_disarm_failed', { error: err.message }));

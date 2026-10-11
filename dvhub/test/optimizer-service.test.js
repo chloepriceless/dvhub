@@ -441,8 +441,9 @@ describe('Optimizer Service: DVhub stößt den EOS-Lauf an', () => {
       await svc.start();
       await settle();
       assert.equal(calls.trigger.length, 0, variant);
-      // Wie bisher: die Erstplan-Wache senkt dann EOS' Takt.
-      assert.equal(calls.emsInterval.length, 1, variant);
+      // EOS' Takt senkt die Erstplan-Wache nur noch, wenn EOS selbst den Takt
+      // vorgibt — nicht, während DVhub bloß auf die Erkennung wartet.
+      assert.equal(calls.emsInterval.length, variant === 'eigenerTakt' ? 1 : 0, variant);
       await svc.close();
     }
   });
