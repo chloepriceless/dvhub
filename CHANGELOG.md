@@ -60,6 +60,13 @@ verweist hierher.
 
 ### Behoben
 
+- **Prognosedaten zeigen den EOS-Fahrplan auch, während EOS rechnet.** Die Seite Einstellungen →
+  Prognosedaten fragte EOS bei jedem Aufruf selbst — alle 30 Sekunden schickte sie sämtliche
+  Prognosen hin und holte Plan und Lösung mit 5 Sekunden Frist. Rechnete EOS gerade oder war es
+  ausgelastet, blieb der Fahrplan leer, obwohl DVhub ihn längst übernommen hatte, und die Abrufe
+  bremsten EOS zusätzlich. Jetzt liest die Seite aus DVhubs zentraler Ablage: den zuletzt
+  übernommenen Plan, die zuletzt abgeholte Lösung und das Ergebnis der letzten echten
+  Übertragung, jeweils mit Uhrzeit. An EOS geht dafür kein Aufruf mehr.
 - **EOS: Wirkungsgradkurve bei fast leerem Akku (DV-EOS rc1.19).** Kann der Akku in einem
   Zeitschritt weniger liefern als angefragt — fast leer oder an der Leistungsgrenze —, rechnete
   EOS die Umwandlung in Wechselstrom mit dem Wirkungsgrad der angefragten, höheren Last. Bei einer

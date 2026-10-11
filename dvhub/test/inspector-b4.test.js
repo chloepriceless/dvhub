@@ -76,44 +76,101 @@ test('B4 getEos returns adapter_unavailable when no adapter is wired', async () 
   assert.equal(out.reason, 'adapter_unavailable');
 });
 
-test('B4 getEos calls pushForecast AND pullSchedule when isAvailable=true', async () => {
-  const eosAdapter = makeEosStub({
-    available: true,
-    pullData: [
-      { ts: Date.parse('2026-05-20T10:00:00Z'), endTs: Date.parse('2026-05-20T10:15:00Z'), powerW: 3200, confidence: 0.7 },
-      { ts: Date.parse('2026-05-20T10:15:00Z'), endTs: Date.parse('2026-05-20T10:30:00Z'), powerW: 0, confidence: 0.7 },
-    ],
-  });
+// Zentrale Ablage (2026-10-11): der Inspector fragt EOS nicht mehr selbst. Plan
+// aus ctx.eosPlanStore, Push-Ergebnis aus state.optimizer.lastEosPush, Lösung
+// aus eosMonitor.displayPlan().
+const PLAN = [
+  { ts: Date.parse('2026-05-20T10:00:00Z'), endTs: Date.parse('2026-05-20T10:15:00Z'), powerW: 3200, confidence: 0.7 },
+  { ts: Date.parse('2026-05-20T10:15:00Z'), endTs: Date.parse('2026-05-20T10:30:00Z'), powerW: 0, confidence: 0.7 },
+];
+const PLAN_AT = Date.parse('2026-05-20T09:51:00Z');
+const PUSH_AT = Date.parse('2026-05-20T09:45:00Z');
+
+function makeStoreCtx({ plan = PLAN, push = { ok: true, error: null, at: PUSH_AT } } = {}) {
+  const ctx = makeCtx();
+  ctx.state.optimizer = { lastEosPush: push };
+  ctx.eosPlanStore = { get: () => (plan ? { schedule: plan, at: PLAN_AT } : null) };
+  return ctx;
+}
+
+test('B4 getEos liest Plan und Push-Ergebnis aus der Ablage und ruft EOS nicht auf', async () => {
+  const eosAdapter = makeEosStub({ available: true, pullData: [] });
   const forecastService = makeForecastService({
     pv: { slots: [{ start: '2026-05-20T10:00:00Z', powerW: 5000 }, { start: '2026-05-20T10:15:00Z', powerW: 4800 }, { start: '2026-05-20T10:30:00Z', powerW: 4500 }] },
     load: { slots: [{ start: '2026-05-20T10:00:00Z', powerW: 800 }, { start: '2026-05-20T10:15:00Z', powerW: 850 }] },
     price: { slots: [{ start: '2026-05-20T10:00:00Z', ctKwh: 12 }, { start: '2026-05-20T10:15:00Z', ctKwh: 12 }, { start: '2026-05-20T10:30:00Z', ctKwh: 13 }, { start: '2026-05-20T10:45:00Z', ctKwh: 13 }] },
   });
-  const inspector = createInspector(makeCtx(), { eosAdapter, forecastService });
+  const inspector = createInspector(makeStoreCtx(), { eosAdapter, forecastService });
   const out = await inspector.getEos({ from: 'a', to: 'b' });
   assert.equal(out.available, true);
   const counts = eosAdapter._counts();
-  assert.equal(counts.pushCalls, 1);
-  assert.equal(counts.pullCalls, 1);
+  assert.equal(counts.pushCalls, 0, 'kein Prognose-Push durch die Anzeige');
+  assert.equal(counts.pullCalls, 0, 'kein Plan-Abruf durch die Anzeige');
   assert.equal(out.push.ok, true);
+  assert.equal(out.push.at, '2026-05-20T09:45:00.000Z');
   assert.equal(out.pull.ok, true);
+  assert.equal(out.pull.at, '2026-05-20T09:51:00.000Z');
   assert.equal(out.pull.slots.length, 2);
   assert.equal(out.pull.slots[0].planPowerW, 3200);
   assert.equal(out.push.payloadSummary.pvSlotCount, 3);
   assert.equal(out.push.payloadSummary.loadSlotCount, 2);
   assert.equal(out.push.payloadSummary.priceSlotCount, 4);
-  assert.equal(out.meta.timeoutMs, 5000);
+  assert.equal(out.meta.source, 'store');
 });
 
-test('B4 getEos surfaces pushForecast failure as push.ok=false but still attempts pullSchedule', async () => {
-  const eosAdapter = makeEosStub({ available: true, pushOk: false, pullData: [] });
+test('B4 getEos zeigt den Fehler der letzten echten Übertragung, der Plan bleibt sichtbar', async () => {
+  const eosAdapter = makeEosStub({ available: true });
   const forecastService = makeForecastService({ pv: { slots: [] }, load: { slots: [] }, price: { slots: [] } });
-  const inspector = createInspector(makeCtx(), { eosAdapter, forecastService });
-  const out = await inspector.getEos({ from: 'a', to: 'b' });
+  const ctx = makeStoreCtx({ push: { ok: false, error: 'mock_push_err', at: PUSH_AT } });
+  const out = await createInspector(ctx, { eosAdapter, forecastService }).getEos({ from: 'a', to: 'b' });
   assert.equal(out.available, true);
   assert.equal(out.push.ok, false);
   assert.equal(out.push.error, 'mock_push_err');
-  assert.equal(out.pull.ok, true, 'pull should be attempted in parallel even when push fails');
+  assert.equal(out.pull.ok, true);
+  assert.equal(out.pull.slots.length, 2);
+});
+
+test('B4 getEos ohne Plan in der Ablage: pull.ok=false mit Grund, kein Aufruf an EOS', async () => {
+  const eosAdapter = makeEosStub({ available: true, pullData: PLAN });
+  const forecastService = makeForecastService({ pv: { slots: [] }, load: { slots: [] }, price: { slots: [] } });
+  const ctx = makeStoreCtx({ plan: null, push: null });
+  const out = await createInspector(ctx, { eosAdapter, forecastService }).getEos({ from: 'a', to: 'b' });
+  assert.equal(out.available, true);
+  assert.equal(out.pull.ok, false);
+  assert.equal(out.pull.slots.length, 0);
+  assert.match(out.pull.error, /noch kein EOS-Plan/);
+  assert.equal(out.push.ok, false);
+  assert.equal(eosAdapter._counts().pullCalls, 0);
+});
+
+// eHive 2026-10-11: EOS rechnete bzw. war ausgelastet, die Seite zeigte „kein
+// Fahrplan“, obwohl der Plan längst übernommen war.
+test('B4 getEos zeigt Plan und Lösung aus der Ablage, auch wenn EOS gerade nicht antwortet', async () => {
+  const eosAdapter = makeEosStub({ available: false });
+  const forecastService = makeForecastService({ pv: { slots: [] }, load: { slots: [] }, price: { slots: [] } });
+  const solution = { generatedAt: '2026-05-20T09:50:00Z', rows: [{ ts_utc: '2026-05-20T10:00:00.000Z', socPct: 55 }] };
+  const eosMonitor = {
+    isUp: () => false,
+    status: () => ({ enabled: true, status: 'down' }),
+    displayPlan: async () => ({ data: solution, at: PLAN_AT, current: true }),
+  };
+  const out = await createInspector(makeStoreCtx(), { eosAdapter, eosMonitor, forecastService }).getEos({ from: 'a', to: 'b' });
+  assert.equal(out.available, true);
+  assert.equal(out.pull.slots.length, 2);
+  assert.equal(out.output.rows[0].socPct, 55);
+  assert.equal(out.eos.status, 'down');
+  assert.equal(out.eos.solutionAt, '2026-05-20T09:51:00.000Z');
+  const counts = eosAdapter._counts();
+  assert.equal(counts.pushCalls + counts.pullCalls, 0);
+});
+
+test('B4 getEos: EOS antwortet nicht und die Ablage ist leer → eos_not_answering', async () => {
+  const eosAdapter = makeEosStub({ available: false });
+  const eosMonitor = { isUp: () => false, status: () => ({ enabled: true, status: 'down' }), displayPlan: async () => null };
+  const ctx = makeStoreCtx({ plan: null, push: null });
+  const out = await createInspector(ctx, { eosAdapter, eosMonitor, forecastService: makeForecastService({}) }).getEos({ from: 'a', to: 'b' });
+  assert.equal(out.available, false);
+  assert.equal(out.reason, 'eos_not_answering');
 });
 
 test('B4 getEos treats isAvailable() throw as unavailable (DoS-safe)', async () => {

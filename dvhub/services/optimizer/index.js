@@ -294,6 +294,11 @@ export function createOptimizerService(ctx) {
   // uebernahm der interne Optimierer (eHive 2026-10-06: 20 Minuten).
   const lastEosPlanFile = lastEosPlanPath(ctx.dataDir ?? process.env.DV_DATA_DIR);
   let lastEosPlan = readLastEosPlan(lastEosPlanFile);
+  // Zentrale Ablage für die Anzeige (Inspector u. a.): der zuletzt übernommene
+  // Plan samt Zeitpunkt. Wer den Plan sehen will, liest hier — kein Aufruf an
+  // EOS. Am ctx und nicht in state.optimizer, damit /api/optimizer/status den
+  // Plan nicht doppelt ausliefert.
+  ctx.eosPlanStore = { get: () => (lastEosPlan ? { schedule: lastEosPlan.schedule, at: lastEosPlan.at } : null) };
   // generated_at der EOS-Loesung, die der letzte Lauf abgeholt hat. Die
   // Minuten-Wache vergleicht damit — sonst folgt die Wallbox-Bruecke (30-s-
   // Takt) schon dem neuen Plan, die Akku-Regeln bis zu 15 min dem alten
@@ -555,7 +560,8 @@ export function createOptimizerService(ctx) {
             ...forecastResp,
             price: { ...forecastResp.price, slots: enrichedPriceSlots }
           };
-          await eosAdapter.pushForecast(enrichedForecast);
+          const pushRes = await eosAdapter.pushForecast(enrichedForecast);
+          state.optimizer.lastEosPush = { ok: pushRes?.ok === true, error: pushRes?.error || null, at: Date.now() };
           if (eosFirstPushAt === null) eosFirstPushAt = Date.now();
           // eosSchedule = FRBC dispatch (battery power) for display/comparison.
           // eosGridSetpoints = net-grid control slots from EOS' SOLUTION (T-0118)

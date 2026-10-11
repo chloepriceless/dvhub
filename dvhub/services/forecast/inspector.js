@@ -253,33 +253,22 @@ export function createInspector(ctx, deps = {}) {
 
   // ───────────── B4 — EOS Output (Plan 19-05 — IMPLEMENTED) ─────────────
   //
-  // Surfaces the EOSdash push/pull exchange so operators can see exactly which
-  // payload is shipped to EOS and which schedule comes back. Uses a DEDICATED
-  // 5s-timeout adapter (wired in server.js Plan 19-05) so a hung EOS process
-  // caps Inspector polls at 5s instead of the optimizer's 30s.
-  //
-  // Threat-model mitigations (19-PLAN §threat_model):
-  //   - T-19-05 (DoS via cascading 30s timeouts): mitigated by 5s adapter wiring
-  //     verified statically in inspector-b4.test.js
-  //   - T-19-07 (DoS via cascading isAvailable timeouts): isAvailable() short-
-  //     circuit — when false, NO pushForecast/pullSchedule attempted
-  //   - T-19-22 (XSS via untrusted plan strings): all string values pass
-  //     through escHtmlForecastInspector in settings.js before innerHTML
-  //
-  // Adapter shape from services/optimizer/eos-adapter.js (live impl):
-  //   - pushForecast(payload) → { ok, error? }    (never throws)
-  //   - pullSchedule()        → Array<slot>|null  (never throws)
-  //   - isAvailable()         → boolean
+  // Zeigt, was DVhub an EOS schickt und welchen Plan es übernommen hat — aus
+  // der zentralen Ablage, ohne eigenen Aufruf an EOS (siehe unten).
   //
   // Returns envelope:
   //   {
   //     available: boolean,
   //     window: { from, to },
-  //     push: { ok, payloadSummary:{pvSlotCount,loadSlotCount,priceSlotCount}, error|null },
-  //     pull: { ok, slots:[{ts_utc, planAction, planPowerW}], error|null },
-  //     meta: { timeoutMs: 5000 },
+  //     push: { ok, payloadSummary:{pvSlotCount,loadSlotCount,priceSlotCount}, error|null, at },
+  //     pull: { ok, slots:[{ts_utc, planAction, planPowerW}], error|null, at },
+  //     eos:  { status, solutionAt },
+  //     meta: { source: 'store' },
   //   }
-  // Or, if EOS off: { available:false, reason:'eos_off'|'adapter_unavailable', window }.
+  // Or: { available:false, reason:'eos_off'|'eos_not_answering'|'adapter_unavailable', window }.
+  // String values pass through escHtmlForecastInspector in settings.js (T-19-22).
+  const isoOrNull = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+
   async function getEos({ from, to } = {}) {
     if (!eosAdapter || typeof eosAdapter.isAvailable !== 'function') {
       return { available: false, reason: 'adapter_unavailable', window: { from, to } };
@@ -294,13 +283,36 @@ export function createInspector(ctx, deps = {}) {
       pushLog('inspector_eos_isavailable_error', { error: e && e.message ? e.message : String(e) });
       return { available: false, reason: 'eos_off', window: { from, to } };
     }
+    // Zentrale Ablage (2026-10-11): der Inspector fragt EOS nicht mehr selbst.
+    // Vorher schickte jeder Aufruf (alle 30 s bei offener Seite) sämtliche
+    // Prognosen an EOS und holte Plan und Lösung live mit 5 s Frist. Rechnete
+    // EOS gerade oder war es ausgelastet, blieb die Seite leer („kein
+    // Fahrplan“), obwohl der Plan längst übernommen war — und die Abrufe
+    // bremsten EOS zusätzlich (eHive 2026-10-11).
+    //   Plan     ← der zuletzt übernommene EOS-Plan (optimizer: ctx.eosPlanStore)
+    //   Lösung   ← eosMonitor.displayPlan() (letzte abgeholte Lösung)
+    //   Push     ← Ergebnis der letzten echten Übertragung (state.optimizer.lastEosPush)
+    const optState = (state && state.optimizer) || {};
+    let storedPlan = null;
+    try { storedPlan = ctx?.eosPlanStore?.get?.() || null; } catch { /* keine Ablage */ }
+    if (storedPlan && !Array.isArray(storedPlan.schedule)) storedPlan = null;
+    let shownSolution = null;
+    try {
+      if (eosMonitor && typeof eosMonitor.displayPlan === 'function') shownSolution = await eosMonitor.displayPlan();
+    } catch { /* keine Lösung in der Ablage */ }
+    let monitorStatus = null;
+    try { monitorStatus = eosMonitor?.status?.() || null; } catch { /* unbekannt */ }
+
     if (!available) {
       // Eingeschaltet, aber gerade keine Antwort (rechnet, überlastet, startet
       // neu) ist nicht „aus“ — sonst rät die Anzeige, EOS einzuschalten, obwohl
-      // es läuft (eHive 2026-10-06).
-      let enabled = false;
-      try { enabled = eosMonitor?.status?.().enabled === true; } catch { /* unbekannt → aus */ }
-      return { available: false, reason: enabled ? 'eos_not_answering' : 'eos_off', window: { from, to } };
+      // es läuft (eHive 2026-10-06). Liegt ein Plan in der Ablage, wird er
+      // trotzdem gezeigt.
+      const enabled = monitorStatus?.enabled === true;
+      if (!enabled) return { available: false, reason: 'eos_off', window: { from, to } };
+      if (!storedPlan && !shownSolution) {
+        return { available: false, reason: 'eos_not_answering', window: { from, to } };
+      }
     }
 
     // Build the same payload the optimizer pushes to EOS — mirrors RESEARCH §B4.
@@ -317,21 +329,12 @@ export function createInspector(ctx, deps = {}) {
       // Continue with null — pushForecast will degrade gracefully (empty payload).
     }
 
-    // Fire push + pull in parallel. The 5s timeout is enforced inside the
-    // adapter (per adapter-instance closure); we don't need to add a Promise.race
-    // wrapper here. Each adapter call resolves to its own envelope and NEVER
-    // throws (eos-adapter.js wraps errors as { ok:false, error } / null).
-    // Also fetch EOS' optimization OUTPUT (solution: predicted SoC trajectory,
-    // grid flows, per-slot costs). Defensive: older/mock adapters may not expose
-    // getOptimizationSolution — fall back to a resolved null.
-    const solutionFetch = (eosAdapter && typeof eosAdapter.getOptimizationSolution === 'function')
-      ? eosAdapter.getOptimizationSolution().catch(() => null)
-      : Promise.resolve(null);
-    const [pushResult, pullResult, solutionResult] = await Promise.all([
-      eosAdapter.pushForecast(forecastPayload),
-      eosAdapter.pullSchedule(),
-      solutionFetch,
-    ]);
+    const lastPush = optState.lastEosPush || null;
+    const pushResult = lastPush
+      ? { ok: lastPush.ok === true, error: lastPush.error || null }
+      : { ok: false, error: 'seit dem Start noch keine Übertragung' };
+    const pullResult = storedPlan ? storedPlan.schedule : null;
+    const solutionResult = shownSolution ? shownSolution.data : null;
 
     // pushResult shape: { ok:boolean, error?:string }
     const pushOk = !!(pushResult && pushResult.ok);
@@ -352,8 +355,9 @@ export function createInspector(ctx, deps = {}) {
     } else if (pullResult && typeof pullResult === 'object' && pullResult.ok === false) {
       pullError = pullResult.error || 'pull_failed';
     } else if (pullResult == null) {
-      // Real adapter returns null on any pull error — we surface as ok:false.
+      // Noch kein EOS-Plan in der Ablage (z. B. kurz nach dem ersten Start).
       pullOk = false;
+      pullError = 'noch kein EOS-Plan übernommen';
     }
 
     // Shape pull slots for the frontend. Real adapter rows look like
@@ -464,8 +468,12 @@ export function createInspector(ctx, deps = {}) {
       available: true,
       reason: looksNotConfigured ? 'eos_not_configured' : null,
       window: { from, to },
-      push: { ok: pushOk, payloadSummary, providers, error: pushError },
-      pull: { ok: pullOk, slots: pullSlots, error: pullError },
+      // at = Zeitpunkt der letzten echten Übertragung bzw. Übernahme (ISO), nicht
+      // der Zeitpunkt dieser Abfrage.
+      push: { ok: pushOk, payloadSummary, providers, error: pushError, at: isoOrNull(lastPush && lastPush.at) },
+      pull: { ok: pullOk, slots: pullSlots, error: pullError, at: isoOrNull(storedPlan && storedPlan.at) },
+      // Zustand laut zentralem Monitor (up / busy = rechnet / down / unknown).
+      eos: { status: monitorStatus ? monitorStatus.status : null, solutionAt: isoOrNull(shownSolution && shownSolution.at) },
       // EOS OUTPUT — the optimizer's predicted trajectory (SoC/grid/costs per
       // 15-min slot) + KPI totals. null when EOS hasn't produced a solution yet.
       output: solutionResult || null,
@@ -478,7 +486,7 @@ export function createInspector(ctx, deps = {}) {
         try { return readEosReserveStatus(); }
         catch (e) { return { available: false, reason: e?.message || 'read_failed' }; }
       })(),
-      meta: { timeoutMs: 5000, previewLimit: PAYLOAD_PREVIEW_LIMIT },
+      meta: { source: 'store', previewLimit: PAYLOAD_PREVIEW_LIMIT },
     };
   }
 

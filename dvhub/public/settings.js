@@ -4266,12 +4266,22 @@ function renderEosInspector(payload) {
          ' · load ' + (push.payloadSummary.loadSlotCount || 0) +
          ' · preis ' + (push.payloadSummary.priceSlotCount || 0))
       : '';
-    var pullDelta = pull.ok ? '' : ('Fehler: ' + (pull.error || 'unbekannt'));
+    var pullDelta = pull.ok ? '' : (pull.error || 'unbekannt');
+    // Plan und Push-Ergebnis kommen aus DVhubs Ablage, nicht live von EOS:
+    // die Zeiten sagen, von wann sie sind.
+    var hhmm = function (iso) {
+      var d = iso ? new Date(iso) : null;
+      return d && !isNaN(d.getTime()) ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : null;
+    };
+    var eosStatus = payload.eos && payload.eos.status;
+    var eosStateLabel = eosStatus === 'busy' ? 'rechnet' : eosStatus === 'down' ? 'antwortet nicht' : 'online';
+    var planStand = hhmm(pull.at) ? ('Plan von ' + hhmm(pull.at)) : 'noch kein Plan';
+    if (hhmm(push.at)) pushDelta += (pushDelta ? ' · ' : '') + hhmm(push.at);
     summary.innerHTML =
       '<div class="stat-card">' +
         '<div class="stat-label">EOS</div>' +
-        '<div class="stat-val">online</div>' +
-        '<div class="stat-delta">timeout 5 s</div>' +
+        '<div class="stat-val">' + escHtmlForecastInspector(eosStateLabel) + '</div>' +
+        '<div class="stat-delta">' + escHtmlForecastInspector(planStand) + '</div>' +
       '</div>' +
       '<div class="stat-card">' +
         '<div class="stat-label">Push</div>' +
