@@ -1,7 +1,8 @@
 // services/optimizer/eos-capabilities.js -- antwortet ein EOS 0.4?
 //
-// DVhub unterstützt nur noch EOS 0.4 (DV-EOS-Tag dvhub-v0.4.0rc1.x = Upstream
-// ab #1330 „complete GENETIC optimization", 17.09.2026). Ältere Stände (unser
+// DVhub unterstützt nur noch EOS 0.4 (Akkudoktor-EOS ab v0.4.0rc2; früher der
+// eigene Fork DV-EOS dvhub-v0.4.0rc1.x = Upstream ab #1330 „complete GENETIC
+// optimization", 17.09.2026). Ältere Stände (unser
 // 0.3-Fork, der Maintainer-Branch, Upstream-main vor #1330) bekommen KEINE
 // Konfiguration mehr geschrieben — sie werden nur noch erkannt, damit DVhub
 // sagen kann, warum nichts passiert.

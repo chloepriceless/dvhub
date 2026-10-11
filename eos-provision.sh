@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# eos-provision.sh -- Idempotent provisioning of the DVhub DV-EOS fork.
+# eos-provision.sh -- Idempotent provisioning of Akkudoktor-EOS for DVhub.
 #
 # Single source of truth for the EOS install, SHARED by install.sh (fresh
 # install) and post-update.sh (retrofit on existing boxes) so the two never
@@ -19,9 +19,10 @@ SERVICE_USER="${SERVICE_USER:-dvhub}"
 DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
 EOS_DIR="${EOS_DIR:-$INSTALL_DIR/eos}"
 EOS_VENV="${EOS_VENV:-$INSTALL_DIR/eos-venv}"
-# DV-EOS (Fork von Akkudoktor-EOS) im Stand 0.4 — DVhub unterstuetzt nur noch
-# EOS 0.4 (GENETIC-Engine). Der fruehere 0.3-Fork-Branch „dvhub-fork“ wird beim
-# naechsten Update automatisch ersetzt. Override repo/ref via env.
+# Akkudoktor-EOS 0.4, unveraendert (seit 2026-10-11; vorher der eigene Fork
+# DV-EOS). DVhub unterstuetzt nur EOS 0.4 (GENETIC-Engine). Ein aelterer Stand
+# (Fork, 0.3-Branch „dvhub-fork“) wird beim naechsten Update automatisch
+# ersetzt. Override repo/ref via env.
 # Gewuenschter Stand: eos-version.env im Repo ist die einzige Quelle. Env-
 # Variablen gewinnen weiterhin (Tests, Sonderfaelle). EOS_BRANCH bleibt als
 # Alias erhalten, damit bestehende Aufrufe nicht brechen.
@@ -32,8 +33,8 @@ if [[ -f "$EOS_PIN_FILE" ]]; then
   _pin_repo="$(grep -E '^EOS_REPO_URL=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
   _pin_ref="$(grep -E '^EOS_PIN=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
 fi
-EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/chloepriceless/DV-EOS.git}}"
-EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-v0.4.0rc1.19}}}"
+EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/Akkudoktor-EOS/EOS.git}}"
+EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-v0.4.0rc2}}}"
 EOS_BRANCH="$EOS_PIN"   # Rueckwaertskompatibler Alias
 EOS_STATE_MARKER="${EOS_STATE_MARKER:-$DATA_DIR/.eos-provisioned}"
 # Dienstname und Port sind ueberschreibbar, damit eine zweite Instanz (A/B-Test

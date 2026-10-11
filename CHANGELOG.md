@@ -58,8 +58,28 @@ verweist hierher.
   `dvhub_control_grid_limit_*`-Zeilen für Loxone. Damit kann auch ein Gerät ohne EEBUS — etwa
   eine Wärmepumpe über Home Assistant — der Grenze folgen.
 
+### Geändert
+
+- **EOS ist jetzt das offizielle Akkudoktor-EOS, unverändert.** Der eigene Fork (DV-EOS) wird nicht
+  mehr gebraucht: Wirkungsgradkurve, parallele Bewertung, Fertig-Meldung und die Laufzeit- und
+  RAM-Verbesserungen sind dort aufgenommen. Ausgeliefert wird `v0.4.0rc2` aus
+  `github.com/Akkudoktor-EOS/EOS` (nativ und als Image `bikinibottomcapital/dvhub-eos:v0.4.0rc2`).
+  Boxen mit dem Fork wechseln beim nächsten Update von selbst; EOS übernimmt seine Konfiguration.
+- **DVhub stößt jeden EOS-Lauf selbst an.** Was bisher nur der Fork konnte, macht DVhub jetzt über
+  die offizielle Schnittstelle (`POST /v1/optimize`): Der Lauf startet zur vollen Viertelstunde, der
+  Ladestand von Akku und Auto reist im Aufruf mit, und ändert sich der Steuerzeitraum, passt DVhub
+  die Startlösung selbst an, damit EOS nicht bei null beginnt. EOS' eigene Läufe sind dafür aus
+  (`ems.mode = DISABLED`). Fehlt nach einem EOS-Neustart der Plan, rechnet EOS sofort statt erst
+  zur nächsten Viertelstunde. „EOS rechnet nach eigenem Takt" in den Einstellungen stellt auf das
+  alte Verhalten zurück.
+
 ### Behoben
 
+- **EOS antwortet zwischen den Läufen wieder.** DVhub schrieb den Ladestand jede Minute in EOS'
+  Messwertspeicher. EOS kürzt diesen Speicher nie und verarbeitet bei jedem Schreiben die ganze
+  Reihe — nach einigen Tagen war der EOS-Prozess damit dauerhaft ausgelastet, Plan und Status
+  kamen nur noch mit Zeitüberschreitung (eHive, 11.10.2026). Der Ladestand wird nicht mehr als
+  Messwert geschrieben; nur der Zähler planbarer Geräte bleibt, alle 15 Minuten.
 - **Prognosedaten zeigen den EOS-Fahrplan auch, während EOS rechnet.** Die Seite Einstellungen →
   Prognosedaten fragte EOS bei jedem Aufruf selbst — alle 30 Sekunden schickte sie sämtliche
   Prognosen hin und holte Plan und Lösung mit 5 Sekunden Frist. Rechnete EOS gerade oder war es

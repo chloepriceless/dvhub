@@ -11,7 +11,7 @@
 #   * Python-Forecast-venv — würde das Image vervielfachen;
 #     der EnergyLink hat ~1 GB RAM / ~2,3 GB Disk. Die Python-Prognose bleibt dem
 #     Voll-Stack-Image vorbehalten.
-#   * EOS (Pro) — eigenes Image `dvhub-eos` aus dem DV-EOS-Fork (§6)
+#   * EOS (Pro) — eigenes Image `dvhub-eos` aus dem unveränderten Akkudoktor-EOS (§6)
 #   * VPN: OpenVPN und WireGuard laufen im DVhub-Container (NET_ADMIN +
 #     /dev/net/tun); IPsec weiterhin nur nativ
 #

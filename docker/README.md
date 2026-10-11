@@ -48,7 +48,7 @@ docker compose -f docker/compose.yml exec dvhub node -p 'require("/etc/dvhub/con
 | Image | Tags |
 |---|---|
 | `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.7` = Releases; `dev` = Vorab-Stand: der aktuelle `main`, automatisch gebaut nach jedem Push mit grüner CI (kein Release) |
-| `bikinibottomcapital/dvhub-eos` | EOS-Stand, z. B. `dvhub-v0.4.0rc1.19` (= `EOS_TAG`), `latest` = der des letzten Releases |
+| `bikinibottomcapital/dvhub-eos` | EOS-Stand, z. B. `v0.4.0rc2` (= `EOS_TAG`, gebaut aus dem unveränderten Akkudoktor-EOS), `latest` = der des letzten Releases |
 
 Beide für `linux/amd64` und `linux/arm64`, auf Docker Hub öffentlich und nach
 `ghcr.io/chloepriceless/…` gespiegelt (`DVHUB_IMAGE`/`EOS_IMAGE` in `.env`).
@@ -355,7 +355,7 @@ Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
   hat ~1 GB RAM / ~2,3 GB Disk. Die Node-seitige `services/python-bridge/`
   ist drin (sie wird von `server.js` statisch importiert), nur der Interpreter
   fehlt.
-* **EOS (Pro)** — eigenes Image aus dem DV-EOS-Fork.
+* **EOS (Pro)** — eigenes Image aus dem unveränderten Akkudoktor-EOS.
 * **VPN:** OpenVPN und WireGuard zum Direktvermarkter laufen im DVhub-Container (Rechte `NET_ADMIN` + `/dev/net/tun`, in `compose.yml` gesetzt; WireGuard nutzt das Kernelmodul des Hosts). IPsec und der Support-Tunnel weiterhin nur nativ.
 * **git** — im Container wird nicht per `git pull` aktualisiert, sondern das
   Image getauscht (siehe „Aktualisieren“); die Update-Knöpfe sagen das.

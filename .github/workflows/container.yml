@@ -10,7 +10,7 @@
 #     git tag v1.0.7 && git push origin v1.0.7
 #   Der Tag muss zur package.json-Version passen, sonst bricht der Lauf ab.
 #
-# EOS: gebaut aus dem Dockerfile des DV-EOS-Forks am Tag aus docker/.env.example
+# EOS: gebaut aus dem Dockerfile von Akkudoktor-EOS am Tag aus docker/.env.example
 # (EOS_TAG) und unter genau diesem Tag veröffentlicht (plus :latest).
 #
 # Docker Hub: Benutzer bikinibottomcapital (kein Geheimnis, steht hier fest).
