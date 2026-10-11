@@ -7,9 +7,10 @@
 # Releases (:X.Y.Z, :X.Y, :latest) baut weiterhin nur container.yml beim Tag.
 #
 # EOS: das dev-Image braucht den EOS-Stand aus docker/.env.example (EOS_TAG).
-# Wird der Pin zwischen zwei Releases angehoben, gäbe es das Image noch nicht —
-# deshalb wird es hier nachgebaut, FALLS der Tag auf Docker Hub fehlt
-# (:latest von EOS bleibt dem Release vorbehalten).
+# scripts/eos-image-plan.sh entscheidet: Zeigt der Pin auf ein offizielles
+# Image (akkudoktor/eos), wird nichts gebaut. Sonst (Vorab-Stände, die
+# Akkudoktor nicht als Image veröffentlicht) wird unser dvhub-eos nachgebaut,
+# FALLS der Tag auf Docker Hub fehlt (:latest bleibt dem Release vorbehalten).
 #
 # Docker-Hub-Token: Repo-Secret BIKINIBOTTOMCAPITAL (oder DOCKERHUB_TOKEN), wie
 # in container.yml.
@@ -89,7 +90,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   publish-eos:
-    name: EOS-Image nachbauen, falls der Pin neu ist
+    name: EOS-Image (nur ohne offizielles, und nur falls es fehlt)
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
@@ -104,41 +105,30 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: EOS-Stand aus docker/.env.example
+      - name: EOS-Image zum Pin (offiziell, vorhanden oder bauen)
         id: eos
-        run: |
-          tag="$(grep '^EOS_TAG=' docker/.env.example | cut -d= -f2)"
-          repo="$(grep '^EOS_REPO=' docker/.env.example | cut -d= -f2)"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "repo=$repo" >> "$GITHUB_OUTPUT"
-          if docker manifest inspect "docker.io/bikinibottomcapital/dvhub-eos:$tag" >/dev/null 2>&1; then
-            echo "EOS-Image $tag ist schon veröffentlicht."
-            echo "missing=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "EOS-Image $tag fehlt — wird gebaut."
-            echo "missing=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: scripts/eos-image-plan.sh
 
       - uses: docker/setup-qemu-action@v3
-        if: steps.eos.outputs.missing == 'true'
+        if: steps.eos.outputs.build == 'true'
       - uses: docker/setup-buildx-action@v3
-        if: steps.eos.outputs.missing == 'true'
+        if: steps.eos.outputs.build == 'true'
 
       - uses: docker/login-action@v3
-        if: steps.eos.outputs.missing == 'true'
+        if: steps.eos.outputs.build == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/login-action@v3
-        if: steps.eos.outputs.missing == 'true'
+        if: steps.eos.outputs.build == 'true'
         with:
           username: bikinibottomcapital
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
 
       - uses: docker/build-push-action@v6
-        if: steps.eos.outputs.missing == 'true'
+        if: steps.eos.outputs.build == 'true'
         with:
           context: ${{ steps.eos.outputs.repo }}#${{ steps.eos.outputs.tag }}
           platforms: linux/amd64,linux/arm64

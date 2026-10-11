@@ -134,7 +134,10 @@ services:
   eos:
     # Akkudoktor-EOS, unverändert, im selben Stand wie auf den Appliances.
     # Gebaut aus dem Dockerfile des EOS-Repos am Git-Tag — kein zweites Rezept hier.
-    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_TAG:-v0.4.0rc2}
+    # Vorab-Stände (rc) veröffentlicht Akkudoktor nicht als Image, deshalb
+    # dvhub-eos:<Git-Tag> aus unserer CI. Für ein EOS-Release das offizielle:
+    # EOS_IMAGE=docker.io/akkudoktor/eos, EOS_IMAGE_TAG=<Version ohne „v“>.
+    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_IMAGE_TAG:-${EOS_TAG:-v0.4.0rc2}}
     build:
       context: ${EOS_REPO:-https://github.com/Akkudoktor-EOS/EOS.git}#${EOS_TAG:-v0.4.0rc2}
     profiles: [eos]

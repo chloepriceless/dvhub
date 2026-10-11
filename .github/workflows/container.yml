@@ -10,8 +10,12 @@
 #     git tag v1.0.7 && git push origin v1.0.7
 #   Der Tag muss zur package.json-Version passen, sonst bricht der Lauf ab.
 #
-# EOS: gebaut aus dem Dockerfile von Akkudoktor-EOS am Tag aus docker/.env.example
-# (EOS_TAG) und unter genau diesem Tag veröffentlicht (plus :latest).
+# EOS: scripts/eos-image-plan.sh entscheidet anhand von docker/.env.example.
+# Zeigt der Pin auf ein offizielles Image (akkudoktor/eos), wird nichts gebaut.
+# Sonst (Vorab-Stände, die Akkudoktor nicht als Image veröffentlicht) wird
+# dvhub-eos aus dem Dockerfile von Akkudoktor-EOS am Tag EOS_TAG gebaut und
+# unter genau diesem Tag veröffentlicht (plus :latest). Gibt es zum Pin ein
+# offizielles Image, das noch nicht eingetragen ist, bricht das Release ab.
 #
 # Docker Hub: Benutzer bikinibottomcapital (kein Geheimnis, steht hier fest).
 # Token als Repo-Secret (Settings → Secrets and variables → Actions), Name
@@ -58,6 +62,10 @@ jobs:
           HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
         run: |
           test -n "$HUB_TOKEN" || { echo "::error::Docker-Hub-Token fehlt (Secret BIKINIBOTTOMCAPITAL oder DOCKERHUB_TOKEN)"; exit 1; }
+
+      # Vor jedem Veröffentlichen: passt das EOS-Image zum Pin?
+      - name: EOS-Image zum Pin
+        run: scripts/eos-image-plan.sh --release
 
       - name: Compose-Umgebung
         run: |
@@ -158,7 +166,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   publish-eos:
-    name: publish EOS (amd64 + arm64)
+    name: publish EOS (nur ohne offizielles Image)
     needs: smoke
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -168,27 +176,30 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: EOS-Stand aus docker/.env.example
+      - name: EOS-Image zum Pin (offiziell oder bauen)
         id: eos
-        run: |
-          echo "tag=$(grep '^EOS_TAG=' docker/.env.example | cut -d= -f2)" >> "$GITHUB_OUTPUT"
-          echo "repo=$(grep '^EOS_REPO=' docker/.env.example | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+        run: scripts/eos-image-plan.sh --release
 
       - uses: docker/setup-qemu-action@v3
+        if: steps.eos.outputs.build == 'true'
       - uses: docker/setup-buildx-action@v3
+        if: steps.eos.outputs.build == 'true'
 
       - uses: docker/login-action@v3
+        if: steps.eos.outputs.build == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/login-action@v3
+        if: steps.eos.outputs.build == 'true'
         with:
           username: bikinibottomcapital
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
 
       - uses: docker/build-push-action@v6
+        if: steps.eos.outputs.build == 'true'
         with:
           context: ${{ steps.eos.outputs.repo }}#${{ steps.eos.outputs.tag }}
           platforms: linux/amd64,linux/arm64

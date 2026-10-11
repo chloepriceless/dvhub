@@ -65,6 +65,12 @@ verweist hierher.
   RAM-Verbesserungen sind dort aufgenommen. Ausgeliefert wird `v0.4.0rc2` aus
   `github.com/Akkudoktor-EOS/EOS` (nativ und als Image `bikinibottomcapital/dvhub-eos:v0.4.0rc2`).
   Boxen mit dem Fork wechseln beim nächsten Update von selbst; EOS übernimmt seine Konfiguration.
+- **EOS-Image: das offizielle, sobald es eines gibt.** Die Pipeline entscheidet anhand von
+  `docker/.env.example` (`scripts/eos-image-plan.sh`): Zeigt der Pin auf ein offizielles Image
+  (`akkudoktor/eos:<Version>`, neu `EOS_IMAGE` und `EOS_IMAGE_TAG`), baut sie kein EOS-Image mehr.
+  Nur für Vorab-Stände, die Akkudoktor nicht als Image veröffentlicht (wie `v0.4.0rc2`), baut sie
+  weiter `dvhub-eos`. Gibt es zum Pin ein offizielles Image, das noch nicht eingetragen ist, weist
+  der Lauf auf `main` darauf hin und ein Release bricht ab.
 - **DVhub stößt jeden EOS-Lauf selbst an.** Was bisher nur der Fork konnte, macht DVhub jetzt über
   die offizielle Schnittstelle (`POST /v1/optimize`): Der Lauf startet zur vollen Viertelstunde, der
   Ladestand von Akku und Auto reist im Aufruf mit, und ändert sich der Steuerzeitraum, passt DVhub
