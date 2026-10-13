@@ -95,6 +95,9 @@ export function buildSupportBundle(sources = {}, options = {}) {
 
 // Stable, human-readable filename for the downloaded bundle.
 export function supportBundleFilename(nowIso, version) {
+  // Die Route reicht das Versionsobjekt der App durch ({ version, versionLabel, … }).
+  if (version && typeof version === 'object') version = version.version || version.versionLabel || '';
+  version = String(version || '').replace(/^v/i, '');
   const stamp = String(nowIso || new Date().toISOString()).replace(/[:.]/g, '-').replace('T', '_').replace('Z', '');
   const v = version ? `_v${scrubText(String(version)).replace(/[^A-Za-z0-9._-]/g, '')}` : '';
   return `dvhub-support_${stamp}${v}.json`;

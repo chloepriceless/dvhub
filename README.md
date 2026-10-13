@@ -765,7 +765,7 @@ liefert `tests/endpoint-inventory.mjs`.
 | `POST` `GET` | `/api/admin/update/{channel,check,apply}` | App-Update-Channel / prüfen / anwenden |
 | `GET` `POST` | `/api/admin/system/updates/{check,apply}` | System-Updates prüfen / anwenden |
 | `POST` | `/api/admin/token/rotate`, `/api/admin/token/revoke` | API-Token rotieren/widerrufen |
-| `GET` | `/api/support/bundle` | Diagnose-Bundle (Bearer) |
+| `GET` | `/api/support/bundle` | Diagnose-Bundle (im Heimnetz ohne Token) |
 | `GET` `POST` | `/api/support/tunnel/{status,open,close}` | Fern-Support-Tunnel |
 | `GET` `POST` | `/api/db/backup`, `/api/db/backup/{run,status}` | DB-Backup (Stream / geplant) |
 

@@ -222,3 +222,64 @@ describe('LAN-trust: Datenspende-/Eingangs-Status unter restricted', () => {
     assert.equal(await codeFor('/api/input/push-key', { lanTrust: 'restricted', lanSafeGroups: ['integrations'] }, { ip: LAN_IP, method: 'POST' }), 401);
   });
 });
+
+// Support-Bundle (2026-10-13): war Bearer-only auch im Heimnetz — der Kunde ohne
+// Token im Browser bekam beim Download "unauthorized". Folgt jetzt lanTrust.
+describe('LAN-trust: Support-Bundle im Heimnetz ohne Token', () => {
+  async function codeFor(security, reqOpts) {
+    const routes = createApiRoutes(mockCtx(security));
+    const req = makeReq('/api/support/bundle', reqOpts);
+    const res = mockRes();
+    await routes.handleRequest(req, res, new URL(req.url, `http://${req.headers.host}`));
+    return res._captured.status;
+  }
+  it('open: LAN-GET ohne Token wird nicht abgewiesen', async () => {
+    assert.notEqual(await codeFor({ lanTrust: 'open' }, { ip: LAN_IP }), 401);
+  });
+  it('von außen und unter strict bleibt der Token Pflicht', async () => {
+    assert.equal(await codeFor({ lanTrust: 'open' }, { ip: REMOTE_IP }), 401);
+    assert.equal(await codeFor({ lanTrust: 'strict' }, { ip: LAN_IP }), 401);
+  });
+});
+
+// IPv6 im Heimnetz (2026-10-13): Wer DVhub über IPv6 erreicht (z. B. per Name
+// hinter einer Fritzbox), galt als „nicht im Heimnetz“ und bekam überall
+// "unauthorized" — erkannt wurden nur private IPv4-Adressen und fe80::.
+describe('LAN-trust: IPv6-Adressen aus dem Heimnetz', () => {
+  // Eigene Schnittstelle der Box: öffentliches Präfix 2001:db8:1:2::/64 vom Router.
+  const OWN_IFACES = () => ({
+    eth0: [
+      { address: '192.168.1.10', netmask: '255.255.255.0', family: 'IPv4', internal: false, cidr: '192.168.1.10/24' },
+      { address: '2001:db8:1:2::10', netmask: 'ffff:ffff:ffff:ffff::', family: 'IPv6', internal: false, cidr: '2001:db8:1:2::10/64' },
+    ],
+  });
+  async function codeFor(ip, security = { lanTrust: 'open' }) {
+    const routes = createApiRoutes({ ...mockCtx(security), networkInterfaces: OWN_IFACES });
+    const req = makeReq('/api/support/bundle', { ip });
+    const res = mockRes();
+    await routes.handleRequest(req, res, new URL(req.url, `http://${req.headers.host}`));
+    return res._captured.status;
+  }
+  it('ULA (fd00::/8) gilt als Heimnetz', async () => {
+    assert.notEqual(await codeFor('fd12:3456:789a:1::25'), 401);
+  });
+  it('link-local mit Zonenangabe gilt als Heimnetz', async () => {
+    assert.notEqual(await codeFor('fe80::1c2d:3e4f:5a6b:7c8d%eth0'), 401);
+  });
+  it('öffentliche IPv6 im eigenen Präfix der Box gilt als Heimnetz', async () => {
+    assert.notEqual(await codeFor('2001:db8:1:2:aaaa:bbbb:cccc:dddd'), 401);
+  });
+  it('öffentliche IPv6 aus einem fremden Präfix bleibt außen', async () => {
+    assert.equal(await codeFor('2001:db8:1:3::1'), 401);
+    assert.equal(await codeFor('2a02:8071:1::1'), 401);
+  });
+  it('öffentliche IPv4 bleibt außen', async () => {
+    assert.equal(await codeFor(REMOTE_IP), 401);
+  });
+  it('strict: auch IPv6 aus dem Heimnetz braucht den Token', async () => {
+    assert.equal(await codeFor('fd12:3456:789a:1::25', { lanTrust: 'strict' }), 401);
+  });
+  it('lanCidrs gesetzt: nur diese Bereiche, das eigene Präfix zählt dann nicht', async () => {
+    assert.equal(await codeFor('2001:db8:1:2::99', { lanTrust: 'open', lanCidrs: ['192.168.1.0/24'] }), 401);
+  });
+});

@@ -81,6 +81,16 @@ verweist hierher.
 
 ### Behoben
 
+- **Support-Bundle ohne Token im Heimnetz.** Der Knopf unter Tools antwortete mit „unauthorized",
+  weil das Bundle als eine von drei Stellen immer den API-Token verlangte — den hat im Browser kein
+  Kunde. Support-Bundle, Datenbank-Wiederherstellung und TimescaleDB-Upgrade folgen jetzt der
+  normalen Heimnetz-Regel: im Heimnetz ohne Token, von außen und in den strengeren Stufen mit.
+- **Heimnetz auch über IPv6.** Wer DVhub über IPv6 erreichte (z. B. per Namen hinter einer
+  Fritzbox), galt als „nicht im Heimnetz" und bekam überall „unauthorized". Als Heimnetz zählen
+  jetzt auch die lokalen IPv6-Adressen (`fe80::`, `fd00::`) und das Präfix, das der Router der
+  Anlage zugeteilt hat. Mit eigenen Netzen unter „Als Heimnetz zählende Netze" gilt weiter nur die
+  Liste.
+- **Dateiname des Support-Bundles** trägt wieder die Versionsnummer statt „objectObject".
 - **EOS antwortet zwischen den Läufen wieder.** DVhub schrieb den Ladestand jede Minute in EOS'
   Messwertspeicher. EOS kürzt diesen Speicher nie und verarbeitet bei jedem Schreiben die ganze
   Reihe — nach einigen Tagen war der EOS-Prozess damit dauerhaft ausgelastet, Plan und Status

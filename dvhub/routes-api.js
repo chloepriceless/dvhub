@@ -460,6 +460,32 @@ export function _resetTrustProxyWarnForTesting() {
   trustProxyMisconfigWarned = false;
 }
 
+// IPv6-Adresse (auch gekürzt, mit Zone „%eth0“) als acht 16-Bit-Zahlen; null,
+// wenn es keine ist. Eingebettete IPv4-Schreibweise (::ffff:1.2.3.4) wird hier
+// nicht gebraucht — deriveClientIp entfernt das Präfix vorher.
+export function ipv6ToHextets(ip) {
+  const str = String(ip || '').toLowerCase().split('%')[0];
+  if (!str.includes(':') || str.includes('.')) return null;
+  const halves = str.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? missing !== 0 : missing < 1) return null;
+  const all = [...head, ...Array(halves.length === 2 ? missing : 0).fill('0'), ...tail];
+  const out = all.map((x) => (/^[0-9a-f]{1,4}$/.test(x) ? parseInt(x, 16) : NaN));
+  return out.length === 8 && out.every(Number.isInteger) ? out : null;
+}
+
+/** Stimmen die ersten `bits` Bits zweier IPv6-Adressen (als Hextets) überein? */
+export function ipv6PrefixEqual(a, b, bits) {
+  for (let i = 0, left = bits; left > 0; i += 1, left -= 16) {
+    const mask = left >= 16 ? 0xffff : (0xffff << (16 - left)) & 0xffff;
+    if ((a[i] & mask) !== (b[i] & mask)) return false;
+  }
+  return true;
+}
+
 // ── Go-Live-Review 2026-06-10: LAN-trust CIDR matching ──────────────────
 // Pure + exported so the security.lanCidrs decision is unit-testable without a
 // live socket. IPv4 is matched bit-exact against a.b.c.d/n. IPv6 is matched by
@@ -1062,9 +1088,12 @@ export function createApiRoutes(ctx) {
     return addr === '127.0.0.1' || addr === '::1';
   }
 
-  // Built-in "is this a private/LAN address" test — RFC1918 + loopback + IPv6
-  // link-local. Used when the operator has NOT narrowed the definition via
-  // security.lanCidrs.
+  // Built-in "is this a private/LAN address" test, used when the operator has
+  // NOT narrowed the definition via security.lanCidrs: RFC1918 + loopback, and
+  // for IPv6 link-local (fe80::/10), ULA (fc00::/7) and the box's own prefix.
+  // IPv6 kam 2026-10-13 dazu: Wer die Box per IPv6 erreichte (z. B. über den
+  // Namen hinter einer Fritzbox), galt als „nicht im Heimnetz“ und bekam auf
+  // jeder Seite "unauthorized".
   function isDefaultPrivateAddr(addr) {
     if (addr === '127.0.0.1' || addr === '::1') return true;
     const parts = addr.split('.').map(Number);
@@ -1072,8 +1101,32 @@ export function createApiRoutes(ctx) {
       if (parts[0] === 10) return true;                                    // 10.0.0.0/8
       if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // 172.16.0.0/12
       if (parts[0] === 192 && parts[1] === 168) return true;               // 192.168.0.0/16
+      return false;
     }
-    if (addr.startsWith('fe80:')) return true;                             // IPv6 link-local
+    const h = ipv6ToHextets(addr);
+    if (!h) return false;
+    if ((h[0] & 0xffc0) === 0xfe80) return true;                           // IPv6 link-local
+    if ((h[0] & 0xfe00) === 0xfc00) return true;                           // IPv6 ULA
+    return isInOwnIpv6Prefix(h);
+  }
+
+  // Öffentliche IPv6-Adresse aus demselben Präfix wie eine Schnittstelle der
+  // Box: der Router verteilt es im Heimnetz, der Absender hängt also am selben
+  // Netz. Nur IPv6 — ein öffentliches IPv4-Netz teilt man mit Fremden.
+  function isInOwnIpv6Prefix(h) {
+    let ifaces;
+    try { ifaces = (ctx.networkInterfaces || os.networkInterfaces)() || {}; } catch { return false; }
+    for (const list of Object.values(ifaces)) {
+      for (const i of list || []) {
+        if (i.internal || (i.family !== 'IPv6' && i.family !== 6)) continue;
+        const own = ipv6ToHextets(i.address);
+        const bits = Number(String(i.cidr || '').split('/')[1]);
+        // Ohne brauchbare Präfixlänge (oder bei einer Hostroute /128) keine Aussage.
+        if (!own || !Number.isInteger(bits) || bits < 16 || bits > 64) continue;
+        if ((own[0] & 0xffc0) === 0xfe80) continue;                        // link-local: oben erledigt
+        if (ipv6PrefixEqual(h, own, bits)) return true;
+      }
+    }
     return false;
   }
 
@@ -1503,13 +1556,16 @@ export function createApiRoutes(ctx) {
   // matching /api/telemetry/series, /api/forecast, /api/history/summary.
   // Set kept empty as the explicit override mechanism for any future endpoint
   // that genuinely needs Bearer-only-from-anywhere.
-  // T-0113: the support bundle carries redacted-but-still-sensitive diagnostics
-  // (config shape, logs, host info). Require Bearer even on LAN, like the raw
-  // history exports — the CLI (`dvhub support dump`) is the unauthenticated
-  // local-shell path for an operator already on the box.
-  // /api/db/restore is DESTRUCTIVE (drops+recreates the telemetry DB) — force
-  // Bearer even on a trusted LAN (lanTrust:open), like the support bundle.
-  const BEARER_REQUIRED_ENDPOINTS = new Set(['/api/support/bundle', '/api/db/restore', '/api/db/timescale/upgrade']);
+  // T-0113: the support bundle was Bearer-only until 2026-10-13. Same failure as
+  // D-15 above: a customer on the LAN has no token in the browser, so the
+  // download button answered "unauthorized" exactly when support needed the
+  // bundle. It now follows the normal LAN-trust stance (redacted content; the
+  // Bearer is still required from outside the LAN and under 'restricted'/'strict').
+  // /api/db/restore and /api/db/timescale/upgrade were Bearer-only too and are
+  // released for the same reason (Christin 2026-10-13): customers never see or
+  // store the token (onboarding generates it), so no button in the LAN UI may
+  // depend on it. Restore keeps its explicit confirmation in the UI.
+  const BEARER_REQUIRED_ENDPOINTS = new Set();
 
   // Im Container sinnlos bzw. gefährlich (git/apt/systemd/Host) → 409 mit Hinweis.
   const CONTAINER_REFUSED_ENDPOINTS = new Set([
@@ -1522,7 +1578,7 @@ export function createApiRoutes(ctx) {
 
   function checkAuth(req, res) {
     const cfg = getCfg();
-    // BEARER_REQUIRED_ENDPOINTS (currently empty — see set definition above)
+    // BEARER_REQUIRED_ENDPOINTS (empty — see set definition above)
     // skip the LAN bypass. Compute pathname BEFORE the LAN check so the gate
     // applies to every caller — LAN or external.
     const reqPathForBearerGate = (() => {
@@ -6228,11 +6284,10 @@ export function createApiRoutes(ctx) {
       return json(res, 200, { rows });
     }
 
-    // T-0113 Tier 1: redacted diagnostic support bundle (Bearer-required, see
-    // BEARER_REQUIRED_ENDPOINTS). Collects ALLOWLISTED live sources only (never a
-    // raw FS dump) and hands them to buildSupportBundle() which applies
-    // redactConfig() + scrubDeep(). Operator pulls one shareable JSON; the
-    // matching `dvhub support dump` CLI is the local-shell path.
+    // T-0113 Tier 1: redacted diagnostic support bundle (normal LAN-trust auth,
+    // see BEARER_REQUIRED_ENDPOINTS). Collects ALLOWLISTED live sources only
+    // (never a raw FS dump) and hands them to buildSupportBundle() which applies
+    // redactConfig() + scrubDeep(). Operator pulls one shareable JSON.
     //   ?sinceHours=<n>  optional time window   ?maxEntries=<n>  optional cap
     if (url.pathname === '/api/support/bundle' && req.method === 'GET') {
       const actor = actorContext(req);
@@ -7476,8 +7531,7 @@ export function createApiRoutes(ctx) {
     }
 
     // DESTRUCTIVE restore from an uploaded pg_dump (.dump, custom -Fc format).
-    // Bearer-required (in BEARER_REQUIRED_ENDPOINTS → never LAN-bypassable, even
-    // on lanTrust:open) AND service-actions-gated, matching the posture of a
+    // Normal LAN-trust auth AND service-actions-gated, matching the posture of a
     // restart/update: it drops+recreates the telemetry DB. The upload streams
     // straight to a temp file (never buffered in memory), is validated as a
     // PGDMP archive, then pg_restore'd with the TimescaleDB pre/post_restore
@@ -7553,7 +7607,7 @@ export function createApiRoutes(ctx) {
 
     // --- TimescaleDB extension upgrade ("Jetzt aktualisieren") ---
     // The deliberate, operator-triggered `ALTER EXTENSION timescaledb UPDATE`.
-    // Bearer-required (never LAN-bypassable) AND service-actions-gated, like the
+    // Normal LAN-trust auth AND service-actions-gated, like the
     // restore/restart endpoints, because it bounces PostgreSQL twice. Runs the
     // SAFE sequence (restart → ALTER → reconcile → restart), then — only when the
     // version actually moved — schedules a dvhub restart so the pg pool reconnects

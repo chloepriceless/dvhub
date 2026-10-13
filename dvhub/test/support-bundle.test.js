@@ -125,3 +125,10 @@ test('supportBundleFilename: stable, filesystem-safe, carries version', () => {
   assert.match(fn, /^dvhub-support_2026-06-08_12-00-00-000_v0\.8\.0\.json$/);
   assert.ok(!fn.includes(':'));
 });
+
+test('supportBundleFilename: Versionsobjekt der App ergibt die Versionsnummer, nicht "objectObject"', () => {
+  const fn = supportBundleFilename('2026-10-13T10:39:27.762Z', { version: '1.0.7', versionLabel: 'v1.0.7', revision: 'abc1234' });
+  assert.equal(fn, 'dvhub-support_2026-10-13_10-39-27-762_v1.0.7.json');
+  assert.equal(supportBundleFilename('2026-10-13T10:39:27.762Z', { versionLabel: 'v1.0.7' }), 'dvhub-support_2026-10-13_10-39-27-762_v1.0.7.json');
+  assert.equal(supportBundleFilename('2026-10-13T10:39:27.762Z', {}), 'dvhub-support_2026-10-13_10-39-27-762.json');
+});

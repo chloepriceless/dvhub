@@ -464,7 +464,7 @@ function buildFieldDefinitions() {
       path: 'security.lanCidrs',
       label: 'Als Heimnetz zählende Netze',
       type: 'stringList',
-      help: 'Kommagetrennte Netzbereiche in CIDR-Schreibweise, z. B. 192.168.1.0/24, 10.0.5.0/24. Nur Geräte darin gelten als „daheim" und bekommen die Erleichterungen der eingestellten Vertrauensstufe. Leer = die üblichen privaten Netze (10.x, 172.16–31.x, 192.168.x). Die Anlage selbst (127.0.0.1) zählt immer, egal was hier steht — du kannst dich damit also nicht komplett aussperren.'
+      help: 'Kommagetrennte Netzbereiche in CIDR-Schreibweise, z. B. 192.168.1.0/24, 10.0.5.0/24. Nur Geräte darin gelten als „daheim" und bekommen die Erleichterungen der eingestellten Vertrauensstufe. Leer = die üblichen privaten Netze (10.x, 172.16–31.x, 192.168.x) sowie bei IPv6 die lokalen Adressen (fe80::, fd00::) und das Präfix, das der Router der Anlage zugeteilt hat. Die Anlage selbst (127.0.0.1) zählt immer, egal was hier steht — du kannst dich damit also nicht komplett aussperren.'
     },
     {
       section: 'system',
@@ -4325,7 +4325,7 @@ export function createDefaultConfig() {
     //                    control writes, eosdash) needs a Bearer token even on LAN
     //     'strict'     — no LAN bypass at all; only 127.0.0.1/::1 (the box itself)
     //                    is trusted, every other client needs a Bearer token
-    //   lanCidrs:        [] = built-in RFC1918 + loopback + fe80 definition of "LAN".
+    //   lanCidrs:        [] = built-in RFC1918 + loopback + IPv6 fe80/ULA/own-prefix definition of "LAN".
     //                    Non-empty = ONLY these CIDRs count as LAN (e.g. just the
     //                    smart-home VLAN). IPv4 a.b.c.d/n and IPv6 prefix/n.
     //   lanSafeGroups:   endpoint groups that bypass under 'restricted'. Groups:
