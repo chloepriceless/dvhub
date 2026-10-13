@@ -283,3 +283,50 @@ describe('LAN-trust: IPv6-Adressen aus dem Heimnetz', () => {
     assert.equal(await codeFor('2001:db8:1:2::99', { lanTrust: 'open', lanCidrs: ['192.168.1.0/24'] }), 401);
   });
 });
+
+// Herkunftsprüfung (2026-10-13): Im Heimnetz braucht niemand mehr einen Token.
+// Damit eine fremde Webseite im Browser des Kunden keine Befehle an die Box
+// schicken kann, muss ein schreibender Aufruf mit Origin-Angabe von der eigenen
+// Oberfläche kommen. Ohne Origin (Skripte, Home Assistant) bleibt alles wie es war.
+describe('Schreibende Aufrufe: nur von der eigenen Oberfläche', () => {
+  async function errorFor(headers, { method = 'POST', cfgExtra = {} } = {}) {
+    const ctx = mockCtx({ lanTrust: 'open' });
+    const base = ctx.getCfg();
+    ctx.getCfg = () => ({ ...base, ...cfgExtra });
+    const routes = createApiRoutes(ctx);
+    const req = { method, url: '/api/db/restore', headers: { host: '192.168.1.10:8080', ...headers }, socket: { remoteAddress: LAN_IP } };
+    const res = mockRes();
+    await routes.handleRequest(req, res, new URL(req.url, `http://${req.headers.host}`));
+    let err = null;
+    try { err = JSON.parse(res._captured.body).error; } catch { /* kein JSON */ }
+    return { status: res._captured.status, error: err };
+  }
+  const BLOCKED = { status: 403, error: 'cors_origin_not_allowed' };
+  it('fremde Webseite wird abgewiesen', async () => {
+    assert.deepEqual(await errorFor({ origin: 'https://boese.example' }), BLOCKED);
+  });
+  it('Origin "null" (eingebettete/lokale Seite) wird abgewiesen', async () => {
+    assert.deepEqual(await errorFor({ origin: 'null' }), BLOCKED);
+  });
+  it('gleicher Name, anderer Port ist eine andere Herkunft', async () => {
+    assert.deepEqual(await errorFor({ origin: 'http://192.168.1.10:9000' }), BLOCKED);
+  });
+  it('eigene Oberfläche kommt durch', async () => {
+    assert.notEqual((await errorFor({ origin: 'http://192.168.1.10:8080' })).error, 'cors_origin_not_allowed');
+    assert.notEqual((await errorFor({ origin: 'http://DVHUB.local', host: 'dvhub.local' })).error, 'cors_origin_not_allowed');
+  });
+  it('ohne Origin (Skript, Home Assistant) kommt durch', async () => {
+    assert.notEqual((await errorFor({})).error, 'cors_origin_not_allowed');
+  });
+  it('eingetragene fremde Herkunft (corsAllowedOrigins) kommt durch', async () => {
+    const r = await errorFor({ origin: 'https://portal.example' }, { cfgExtra: { corsAllowedOrigins: ['https://portal.example'] } });
+    assert.notEqual(r.error, 'cors_origin_not_allowed');
+  });
+  it('hinter einem Proxy zählt der weitergereichte Name', async () => {
+    const r = await errorFor({ origin: 'https://dvhub.example', host: '127.0.0.1:8080', 'x-forwarded-host': 'dvhub.example' });
+    assert.notEqual(r.error, 'cors_origin_not_allowed');
+  });
+  it('lesende Aufrufe werden nicht geprüft', async () => {
+    assert.notEqual((await errorFor({ origin: 'https://boese.example' }, { method: 'GET' })).error, 'cors_origin_not_allowed');
+  });
+});

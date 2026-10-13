@@ -397,6 +397,22 @@ export function getRequestHost(req, cfg) {
   return raw.toLowerCase();
 }
 
+// Kommt der Aufruf von der eigenen Oberfläche? Die Herkunft (Origin) muss auf
+// denselben Namen und Port zeigen wie der Aufruf selbst (Host). Hinter einem
+// Proxy zählt auch der weitergereichte Name — eine fremde Webseite kann
+// X-Forwarded-Host nicht setzen, ohne dass der Browser vorher nachfragt.
+export function isOwnOrigin(originHeader, req) {
+  let originHost;
+  try { originHost = new URL(String(originHeader)).host.toLowerCase(); } catch { return false; }
+  if (!originHost) return false;
+  const first = (v) => String(v || '').split(',')[0].trim().toLowerCase();
+  // Standard-Ports lässt der Browser in Origin weg, ein Proxy im Host nicht immer.
+  const bare = (h) => h.replace(/:(80|443)$/, '');
+  return [first(req.headers?.host), first(req.headers?.['x-forwarded-host'])]
+    .filter(Boolean)
+    .some((h) => h === originHost || bare(h) === bare(originHost));
+}
+
 // Host allowlist check. Empty array = permissive (LAN-dev default). Operators
 // on public / reverse-proxy deployments MUST populate cfg.allowedHosts with
 // their real FQDN(s) before exposing the service.
@@ -2768,13 +2784,15 @@ export function createApiRoutes(ctx) {
       return json(res, 400, { ok: false, error: 'host_not_allowed' });
     }
 
-    // Plan 08-04 Task 2 Step 5: defense-in-depth CORS check for non-OPTIONS
-    // state-changing requests. The orchestrator (server.js) already handles
-    // OPTIONS preflights and sets ACAO on allowed origins; here we reject
-    // writes from any unlisted Origin so a misconfigured CDN / proxy that
-    // strips preflights cannot tunnel cross-origin writes. GET/HEAD pass
-    // through (no Origin check) — browsers never send them with credentials
-    // cross-origin unless the server opted in with ACAO, which we don't.
+    // Herkunftsprüfung für schreibende Aufrufe (2026-10-13). Im Heimnetz braucht
+    // niemand einen Token — also darf eine fremde Webseite, die der Kunde zu
+    // Hause öffnet, über seinen Browser keine Befehle an die Box schicken.
+    // Browser nennen bei jedem schreibenden Aufruf die Herkunft (Origin); sie
+    // muss die eigene Oberfläche sein (gleicher Name und Port wie der Aufruf)
+    // oder in corsAllowedOrigins stehen. Ohne Origin (Skripte, Home Assistant,
+    // curl) wird nichts geprüft; GET/HEAD auch nicht. Für den Kunden unsichtbar.
+    // Vorher griff die Prüfung nur bei gefüllter corsAllowedOrigins-Liste —
+    // mit leerer Liste (Standard) kam jede fremde Seite durch.
     if (
       url.pathname.startsWith('/api/')
       && req.method !== 'GET'
@@ -2782,15 +2800,9 @@ export function createApiRoutes(ctx) {
       && req.method !== 'OPTIONS'
     ) {
       const originHeader = String(req.headers.origin || '');
-      if (originHeader) {
-        const allowed = resolveCorsAllowedOrigin(originHeader, cfgForHost);
-        // When corsAllowedOrigins is empty, cross-origin writes are rejected.
-        // When populated, only listed origins are accepted.
-        const list = Array.isArray(cfgForHost.corsAllowedOrigins) ? cfgForHost.corsAllowedOrigins : [];
-        if (list.length > 0 && !allowed) {
-          pushLog('cors_origin_rejected', { origin: originHeader, path: url.pathname, method: req.method });
-          return json(res, 403, { ok: false, error: 'cors_origin_not_allowed' });
-        }
+      if (originHeader && !isOwnOrigin(originHeader, req) && !resolveCorsAllowedOrigin(originHeader, cfgForHost)) {
+        pushLog('cors_origin_rejected', { origin: originHeader, path: url.pathname, method: req.method });
+        return json(res, 403, { ok: false, error: 'cors_origin_not_allowed' });
       }
     }
 

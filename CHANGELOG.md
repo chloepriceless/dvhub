@@ -91,6 +91,11 @@ verweist hierher.
   Anlage zugeteilt hat. Mit eigenen Netzen unter „Als Heimnetz zählende Netze" gilt weiter nur die
   Liste.
 - **Dateiname des Support-Bundles** trägt wieder die Versionsnummer statt „objectObject".
+- **Fremde Webseiten können der Anlage nichts befehlen.** Da im Heimnetz kein Token nötig ist, prüft
+  DVhub bei schreibenden Aufrufen aus dem Browser, ob sie von der eigenen Oberfläche kommen. Eine
+  fremde Seite, die jemand zu Hause öffnet, wird abgewiesen. Vorher griff das nur mit gefüllter
+  Liste „corsAllowedOrigins". Für die Bedienung ändert sich nichts; Skripte und Home Assistant
+  sind nicht betroffen.
 - **EOS antwortet zwischen den Läufen wieder.** DVhub schrieb den Ladestand jede Minute in EOS'
   Messwertspeicher. EOS kürzt diesen Speicher nie und verarbeitet bei jedem Schreiben die ganze
   Reihe — nach einigen Tagen war der EOS-Prozess damit dauerhaft ausgelastet, Plan und Status

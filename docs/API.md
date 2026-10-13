@@ -27,6 +27,7 @@ Quelle ist der Router `dvhub/routes-api.js`. Die interaktive Swagger-Oberfläche
 | Pro | Mit *Pro* markierte Endpunkte antworten ohne aktive DVhub-Pro-Lizenz mit `403` |
 | Nonce | Einige Einstellungs-Aktionen verlangen zusätzlich zum LAN-Zugang einen Einmal-Wert `uiToken` im Body (Schutz gegen Cross-Site-Anfragen). Man bekommt ihn aus dem zugehörigen `GET …/status`. Ein gültiges Bearer-Token ersetzt ihn |
 | Config speichern | `POST /api/config` ersetzt die **gesamte** Config. Einzelne Bereiche über die spezialisierten Endpunkte ändern (sie mergen serverseitig) |
+| Herkunft | Schreibende Aufrufe (`POST`, `PUT`, `DELETE`) mit `Origin`-Header müssen von der eigenen Oberfläche kommen (gleicher Name und Port wie der Aufruf) oder in `corsAllowedOrigins` stehen, sonst `403`, `cors_origin_not_allowed`. Aufrufe ohne `Origin` (Skripte, curl, Home Assistant) sind nicht betroffen |
 | Fehler | `{ "ok": false, "error": "<code>", … }` mit passendem HTTP-Status (400 Eingabe, 401 Token, 403 Pro/Nonce, 404, 409 Zustand, 429, 503 Dienst nicht verfügbar) |
 | Container | Im Docker-Image (`DVHUB_RUNTIME=container`) antworten Update, System-Updates, Neustart, Reboot, Update-Kanal und TimescaleDB-Upgrade mit `409`, `code: "container_runtime"` — dort wird das Image getauscht. `POST /api/db/restore` ist im Container ohne Service-Actions erlaubt |
 
