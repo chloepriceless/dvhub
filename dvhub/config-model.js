@@ -1096,6 +1096,7 @@ function buildFieldDefinitions() {
       path: 'support.localUser.enabled',
       label: 'Support-Login-User bereithalten',
       type: 'boolean',
+      default: true, // support-tunnel.js / support-provision.sh: an, solange nicht false
       help: 'Hinterlegt den öffentlichen Support-Schlüssel für den Login — als Bereitschaft für Fern-Diagnose. Native Installation: eigener User „dvhub-support“ (Gruppe dvhub, KEIN sudo). Docker-Container: Login als „dvhub“ über einen eigenen SSH-Dienst, der nur bei offenem Tunnel läuft. Das allein gibt KEINEN Zugriff: der Support kommt nur rein, solange ein Tunnel offen ist. Deaktivieren entfernt User bzw. Schlüssel beim nächsten Neustart (kein Fern-Support mehr möglich).'
     },
     {
@@ -2253,6 +2254,7 @@ function buildFieldDefinitions() {
       path: 'optimizer.tariff.feedInMode',
       label: 'Einspeise-Modus',
       type: 'select',
+      default: 'fixed', // eos-config-sync.js / eos-forecast-bridge.js: feedInMode || 'fixed'
       options: [
         { value: 'spot', label: 'Spot (Direktvermarktung) \u2014 B\u00f6rsenpreis pro Slot' },
         { value: 'fixed', label: 'Fest (EEG) \u2014 feste Einspeisverg\u00fctung' }

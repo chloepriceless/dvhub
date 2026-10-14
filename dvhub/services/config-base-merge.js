@@ -11,6 +11,7 @@
 //   Formular = base   → nicht angefasst, die Box behält ihren jetzigen Wert
 //   Formular ≠ base   → im Formular geändert, das Formular gewinnt
 //   (fehlt im Formular, stand in base → im Formular gelöscht)
+//   beides geändert, verschieden → Konflikt (409, die Seite fragt nach)
 //
 // Objekte werden je Schlüssel abgeglichen, Listen als Ganzes. `current` ist
 // die GESCHWÄRZTE Konfiguration der Box (wie GET /api/config sie liefert):
@@ -21,12 +22,18 @@ const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
-function merge(incoming, base, current) {
+function merge(incoming, base, current, conflicts, path) {
   if (same(incoming, base)) return clone(current);
-  if (!isObject(incoming) || !isObject(base) || !isObject(current)) return clone(incoming);
+  if (!isObject(incoming) || !isObject(base) || !isObject(current)) {
+    // Konflikt: im Formular geändert UND auf der Box seitdem anders geändert.
+    if (!same(current, base) && !same(current, incoming)) {
+      conflicts.push({ path, yours: clone(incoming), box: clone(current), base: clone(base) });
+    }
+    return clone(incoming);
+  }
   const out = {};
   for (const key of new Set([...Object.keys(current), ...Object.keys(base), ...Object.keys(incoming)])) {
-    const v = merge(incoming[key], base[key], current[key]);
+    const v = merge(incoming[key], base[key], current[key], conflicts, path ? `${path}.${key}` : key);
     if (v !== undefined) out[key] = v;
   }
   return out;
@@ -39,6 +46,18 @@ function merge(incoming, base, current) {
  * @returns {object} zu speichernde Konfiguration
  */
 export function mergeAgainstBase(incoming, base, current) {
-  if (!isObject(incoming) || !isObject(base) || !isObject(current)) return incoming;
-  return merge(incoming, base, current);
+  return mergeAgainstBaseWithConflicts(incoming, base, current).config;
+}
+
+/**
+ * Wie mergeAgainstBase, zusätzlich die Konflikte: Pfade, die im Formular UND
+ * auf der Box seit dem Öffnen verschieden geändert wurden. In `config` gewinnt
+ * dort das Formular; der Aufrufer entscheidet, ob er nachfragt (HTTP 409).
+ * @returns {{ config: object, conflicts: Array<{path, yours, box, base}> }}
+ */
+export function mergeAgainstBaseWithConflicts(incoming, base, current) {
+  if (!isObject(incoming) || !isObject(base) || !isObject(current)) return { config: incoming, conflicts: [] };
+  const conflicts = [];
+  const config = merge(incoming, base, current, conflicts, '');
+  return { config, conflicts };
 }

@@ -13,6 +13,7 @@ import {
   detectRestartRequired,
   getConfigDefinition,
   loadConfigFile,
+  normalizeConfigInput,
   saveConfigFile
 } from './config-model.js';
 import { resolveCurrentBatteryCapacityWh } from './battery-stages.js';
@@ -161,7 +162,7 @@ import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-s
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createOptimizerService } from './services/optimizer/index.js';
-import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules } from './services/optimizer/rule-store.js';
+import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules, createScheduleRuleStore, scheduleRulesPath, readScheduleRules } from './services/optimizer/rule-store.js';
 import { createFamilyService } from './services/family/index.js';
 import { createMqttHub } from './services/mqtt/index.js';
 import { createMqttPublisher } from './services/mqtt/publisher.js';
@@ -511,8 +512,8 @@ function applyLoadedConfig(nextLoadedConfig) {
   const zone = applySystemTimeZone(cfg);
   if (zone.changed) console.log(`Zeitzone: ${zone.timeZone} (System: ${zone.previous ?? 'nicht gesetzt'})`);
   state.keepalive.appPulse.periodSec = cfg.keepalivePulseSec;
-  // Plan-Regeln aus dem laufenden Zustand behalten, Regeln von Hand aus der Config.
-  state.schedule.rules = mergeLoadedScheduleRules(state.schedule.rules, cfg.schedule.rules);
+  // Zeitplan-Regeln stehen nicht in der Config (schedule-rules.json bzw.
+  // optimizer-rules.json, 2026-10-14) — ein Neuladen lässt sie, wie sie sind.
   state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;
   state.schedule.config.defaultChargeCurrentA = cfg.schedule.defaultChargeCurrentA;
   state.schedule.config.defaultFeedExcessDcPv = cfg.schedule.defaultFeedExcessDcPv ?? 1;
@@ -586,27 +587,78 @@ function persistOptimizerRules() {
   }
 }
 
+// Regeln von Hand und der Börsenautomatik: eigene Ablage (2026-10-14).
+let rulesMigratedFromConfig = false;
+const scheduleRuleStore = createScheduleRuleStore({
+  file: scheduleRulesPath(DATA_DIR || __dirname),
+  onError: (e) => pushLog('schedule_rules_store_error', { error: e.message }, 'warn'),
+});
+/** Regeln wie früher in der Config geprüft (config-model) — ohne Plan-Regeln. */
+function normalizeManualScheduleRules(rules) {
+  return normalizeConfigInput({ schedule: { rules: sanitizePersistedScheduleRules(rules) } }).persistedConfig.schedule.rules;
+}
+{
+  const stored = readScheduleRules(scheduleRuleStore.file, {
+    onError: (e) => console.error(`schedule-rules.json unlesbar: ${e.message}`),
+  });
+  if (stored) {
+    const manual = normalizeManualScheduleRules(stored);
+    state.schedule.rules = [...state.schedule.rules.filter((r) => r?.source === 'forecast_optimizer'), ...manual];
+    scheduleRuleStore.prime(manual);
+  } else {
+    // Erster Start mit eigener Ablage: Regeln aus der Config übernehmen.
+    // Aus der Config genommen werden sie erst, wenn die Ablage geschrieben ist.
+    const fromConfig = normalizeManualScheduleRules(state.schedule.rules);
+    if (scheduleRuleStore.save(fromConfig, { force: true })) {
+      console.log(`Zeitplan-Regeln aus der Config übernommen: ${fromConfig.length}`);
+      // Herausnehmen erst, wenn der Start weit genug ist (applyLoadedConfig
+      // braucht monitoringHeartbeatRestart) — siehe dropMigratedRulesFromConfig.
+      rulesMigratedFromConfig = Array.isArray(rawCfg?.schedule?.rules) && rawCfg.schedule.rules.length > 0;
+    }
+  }
+}
+function getManualScheduleRules() {
+  return sanitizePersistedScheduleRules(state.schedule.rules);
+}
+/** Import: Regeln von Hand aus einer Datei übernehmen; Plan-Regeln bleiben. */
+function replaceManualScheduleRules(rules) {
+  state.schedule.rules = [
+    ...state.schedule.rules.filter((r) => r?.source === 'forecast_optimizer'),
+    ...normalizeManualScheduleRules(Array.isArray(rules) ? rules : []),
+  ];
+  persistConfig('config_import');
+  return getManualScheduleRules().length;
+}
+
 function persistConfig(source = 'config_persist') {
   try {
     persistOptimizerRules();
-    const current = JSON.parse(JSON.stringify(rawCfg || {}));
-    current.schedule = current.schedule || {};
-    current.schedule.rules = sanitizePersistedScheduleRules(state.schedule.rules);
-    current.schedule.defaultGridSetpointW = state.schedule.config.defaultGridSetpointW;
-    current.schedule.defaultChargeCurrentA = state.schedule.config.defaultChargeCurrentA;
-    current.schedule.defaultFeedExcessDcPv = state.schedule.config.defaultFeedExcessDcPv;
-    // Hat sich nur an den Plan-Regeln etwas geändert (Slot abgelaufen, Plan
-    // bereinigt), bleibt die Config unberührt — keine Sicherung, kein Neuladen.
-    const before = rawCfg?.schedule || {};
-    const unchanged = JSON.stringify(sanitizePersistedScheduleRules(before.rules || [])) === JSON.stringify(current.schedule.rules)
-      && before.defaultGridSetpointW === current.schedule.defaultGridSetpointW
-      && before.defaultChargeCurrentA === current.schedule.defaultChargeCurrentA
-      && before.defaultFeedExcessDcPv === current.schedule.defaultFeedExcessDcPv;
-    if (unchanged) return;
-    saveAndApplyConfig(current);
+    // Wie früher beim Neuladen der Config: Regeln von Hand normalisiert in den
+    // Zustand (Zahlen als Zahlen, unbekannte Felder weg); _wasActive unveränderter
+    // Regeln bleibt (mergeLoadedScheduleRules).
+    const manual = normalizeManualScheduleRules(state.schedule.rules);
+    const rulesChanged = scheduleRuleStore.save(manual);
+    if (rulesChanged) state.schedule.rules = mergeLoadedScheduleRules(state.schedule.rules, manual);
+    // Standard-Sollwerte sind Einstellungen und bleiben in der Config; nur
+    // wenn sie sich geändert haben, wird die Config geschrieben.
+    // Verglichen mit dem, was applyLoadedConfig aus der Config in den Zustand
+    // übernimmt — sonst zählte „fehlt in der Config“ gegen null/1 als Änderung.
+    const loaded = cfg?.schedule || {};
+    const defaultsChanged = loaded.defaultGridSetpointW !== state.schedule.config.defaultGridSetpointW
+      || loaded.defaultChargeCurrentA !== state.schedule.config.defaultChargeCurrentA
+      || (loaded.defaultFeedExcessDcPv ?? 1) !== state.schedule.config.defaultFeedExcessDcPv;
+    if (defaultsChanged) {
+      const current = JSON.parse(JSON.stringify(rawCfg || {}));
+      current.schedule = current.schedule || {};
+      current.schedule.defaultGridSetpointW = state.schedule.config.defaultGridSetpointW;
+      current.schedule.defaultChargeCurrentA = state.schedule.config.defaultChargeCurrentA;
+      current.schedule.defaultFeedExcessDcPv = state.schedule.config.defaultFeedExcessDcPv;
+      saveAndApplyConfig(current);
+    }
+    if (!rulesChanged && !defaultsChanged) return;
     telemetrySafeWrite(() => telemetryStore.writeScheduleSnapshot({
       ts: new Date(),
-      rules: current.schedule.rules,
+      rules: getManualScheduleRules(),
       defaultGridSetpointW: state.schedule.config.defaultGridSetpointW,
       defaultChargeCurrentA: state.schedule.config.defaultChargeCurrentA,
       defaultFeedExcessDcPv: state.schedule.config.defaultFeedExcessDcPv,
@@ -856,6 +908,18 @@ let monitoringTimerId = null;
 // Der Block hebt die Funktions-Referenz beim Boot hierher; bleibt null in
 // Prozess-Rollen ohne Runtime-Teil (dort gibt es keinen Heartbeat zu re-armen).
 let monitoringHeartbeatRestart = null;
+
+// Nach der Übernahme in schedule-rules.json die Regeln aus config.json nehmen
+// (einmalig; die letzte Config-Sicherung behält sie).
+if (rulesMigratedFromConfig) {
+  try {
+    const next = JSON.parse(JSON.stringify(rawCfg));
+    delete next.schedule.rules;
+    saveAndApplyConfig(next);
+  } catch (e) {
+    console.error(`Regeln nicht aus der Config entfernt: ${e.message}`);
+  }
+}
 
 function startDedicatedRuntimeWorker() {
   const worker = startRuntimeWorker({
@@ -1161,6 +1225,8 @@ const ctx = {
   telemetrySafeWrite,
   persistConfig,
   persistOptimizerRules,
+  getManualScheduleRules,
+  replaceManualScheduleRules,
   setForcedOff,
   clearForcedOff,
   expireLeaseIfNeeded,
@@ -2625,7 +2691,7 @@ console.log('Config loaded:', {
   meterAddress: `${cfg.meter.host}:${cfg.meter.port} uid=${cfg.meter.unitId} reg=${cfg.meter.address}`,
   apiTokenSet: !!cfg.apiToken,
   epexEnabled: cfg.epex.enabled,
-  scheduleRules: cfg.schedule.rules.length,
+  scheduleRules: state.schedule.rules.length,
   telemetryEnabled: cfg.telemetry?.enabled,
   telemetryDbPath: state.telemetry.dbPath,
   configPath: CONFIG_PATH,

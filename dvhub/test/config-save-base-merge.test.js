@@ -125,13 +125,48 @@ describe('POST /api/config mit Stand beim Öffnen (base)', () => {
     assert.equal(out.schedule.defaultChargeCurrentA, 20);
   });
 
-  it('im Formular geänderter Wert gewinnt auch gegen eine Änderung der Box', async () => {
+  it('Konflikt: im Formular und auf der Box verschieden geändert → 409 mit Pfad und Box-Wert', async () => {
+    const ctx = mockCtx(boxNow());                       // Box: −100 W (beim Öffnen 0)
+    const config = loadedConfig();
+    config.schedule.defaultGridSetpointW = 250;          // Formular: 250 W
+    const r = await post(ctx, '/api/config', { config, base: loadedConfig() });
+    assert.equal(r.status, 409, r.body);
+    const body = JSON.parse(r.body);
+    assert.equal(body.error, 'config_conflict');
+    assert.deepEqual(body.conflicts, [{ path: 'schedule.defaultGridSetpointW', yours: 250, box: -100, base: 0 }]);
+    assert.equal(ctx.saved.length, 0, 'nichts gespeichert');
+  });
+
+  it('Konflikt bestätigt (overwriteConflicts) → Formular gewinnt', async () => {
     const ctx = mockCtx(boxNow());
     const config = loadedConfig();
     config.schedule.defaultGridSetpointW = 250;
-    const r = await post(ctx, '/api/config', { config, base: loadedConfig() });
+    const r = await post(ctx, '/api/config', { config, base: loadedConfig(), overwriteConflicts: true });
     assert.equal(r.status, 200, r.body);
     assert.equal(ctx.saved.at(-1).schedule.defaultGridSetpointW, 250);
+  });
+
+  it('kein Konflikt, wenn Formular und Box auf denselben Wert geändert haben', async () => {
+    const ctx = mockCtx(boxNow());
+    const config = loadedConfig();
+    config.schedule.defaultGridSetpointW = -100;
+    const r = await post(ctx, '/api/config', { config, base: loadedConfig() });
+    assert.equal(r.status, 200, r.body);
+  });
+
+  it('Konflikt in einem Geheimnis zeigt keinen Wert', async () => {
+    const box = boxNow();
+    box.telemetry = { enabled: false, database: { password: 'box-geheim' } };
+    const ctx = mockCtx(box);
+    const loaded = loadedConfig();
+    loaded.telemetry = { enabled: false, database: { password: '***' } };
+    const base = clone(loaded);
+    base.telemetry.database.password = 'alt';            // künstlich: Box hat es seitdem geändert
+    const config = clone(loaded);
+    config.telemetry.database.password = 'neu-im-formular';
+    const r = await post(ctx, '/api/config', { config, base }, { lan: true });
+    assert.equal(r.status, 409, r.body);
+    assert.equal(r.body.includes('box-geheim') || r.body.includes('neu-im-formular') || r.body.includes('"alt"'), false, r.body);
   });
 
   it('im Formular geleertes Feld (gelöscht) bleibt gelöscht', async () => {
@@ -157,18 +192,53 @@ describe('POST /api/config mit Stand beim Öffnen (base)', () => {
     assert.equal(ctx.saved.at(-1).apiToken, '***');
   });
 
-  it('ohne base bleibt das alte Verhalten (Aufrufer schickt bewusst alles)', async () => {
+  it('ohne base gilt die geschickte Config — nur Zeitplan-Regeln werden ignoriert', async () => {
     const ctx = mockCtx(boxNow());
-    const r = await post(ctx, '/api/config', { config: loadedConfig() });
+    const config = loadedConfig();
+    config.schedule.rules = [{ ...manualA, value: 9999 }];   // alter Stand einer Seite
+    const r = await post(ctx, '/api/config', { config });
     assert.equal(r.status, 200, r.body);
-    assert.deepEqual(ctx.saved.at(-1).schedule.rules, [manualA]);
+    const out = ctx.saved.at(-1);
+    assert.equal('rules' in out.schedule, false, 'Regeln gehören nicht in die Config');
+    assert.equal(out.schedule.defaultGridSetpointW, 0, 'ohne base gewinnt die geschickte Config');
   });
 
-  it('Import nimmt die Datei, auch wenn base mitkommt', async () => {
+  it('Import: Config aus der Datei (ohne Regeln), Regeln gehen in die eigene Ablage', async () => {
     const ctx = mockCtx(boxNow());
+    const imported = [];
+    ctx.replaceManualScheduleRules = (rules) => { imported.push(clone(rules)); return rules.length; };
     const r = await post(ctx, '/api/config/import', { config: loadedConfig(), base: loadedConfig() });
     assert.equal(r.status, 200, r.body);
-    assert.deepEqual(ctx.saved.at(-1).schedule.rules, [manualA]);
+    assert.equal('rules' in ctx.saved.at(-1).schedule, false);
+    assert.equal(ctx.saved.at(-1).schedule.defaultGridSetpointW, 0, 'Import nimmt die Datei, nicht den Stand der Box');
+    assert.deepEqual(imported, [[manualA]]);
+  });
+
+  it('Import ohne Regeln in der Datei lässt die Regeln der Box', async () => {
+    const ctx = mockCtx(boxNow());
+    let called = false;
+    ctx.replaceManualScheduleRules = () => { called = true; return 0; };
+    const config = loadedConfig();
+    delete config.schedule.rules;
+    const r = await post(ctx, '/api/config/import', { config });
+    assert.equal(r.status, 200, r.body);
+    assert.equal(called, false);
+  });
+
+  it('Export legt die Regeln von Hand bei (Sicherung, Geräte-Tausch)', async () => {
+    const box = boxNow();
+    delete box.schedule.rules;                       // stehen nicht mehr in der Config
+    const ctx = mockCtx(box);
+    ctx.getManualScheduleRules = () => [manualB];
+    const res = mockRes();
+    const req = Readable.from([]);
+    Object.assign(req, { method: 'GET', url: '/api/config/export', headers: { host: 'dvhub.test', authorization: `Bearer ${API_TOKEN}` }, socket: { remoteAddress: '203.0.113.5' } });
+    await createApiRoutes(ctx).handleRequest(req, res, new URL(req.url, 'http://dvhub.test'));
+    const r = res._captured;
+    assert.equal(r.status, 200, r.body);
+    const exported = JSON.parse(r.body);
+    assert.deepEqual(exported.schedule.rules, [manualB]);
+    assert.equal(exported.apiToken, '***');
   });
 });
 
@@ -215,13 +285,45 @@ describe('Einrichtungsassistent schickt den geladenen Stand mit', () => {
     return sandbox.DVhubSetupWizard;
   }
 
-  it('vorhandene Config → base; frische Einrichtung (leer) → ohne base; Import → ohne base', () => {
+  it('vorhandene Config → base (überschreibt Konflikte bewusst); frische Einrichtung (leer) → ohne base; Import → ohne base', () => {
     const { createSetupWizardState, buildSetupSaveBody } = loadWizard();
     const raw = { schedule: { rules: [manualA] } };
     const existing = createSetupWizardState({ config: raw, effectiveConfig: { a: 1 } });
-    assert.deepEqual(JSON.parse(JSON.stringify(buildSetupSaveBody({ x: 1 }, 'setup', existing))), { config: { x: 1 }, base: raw });
+    assert.deepEqual(JSON.parse(JSON.stringify(buildSetupSaveBody({ x: 1 }, 'setup', existing))), { config: { x: 1 }, base: raw, overwriteConflicts: true });
     const fresh = createSetupWizardState({ config: {}, effectiveConfig: { a: 1 } });
     assert.deepEqual(JSON.parse(JSON.stringify(buildSetupSaveBody({ x: 1 }, 'setup', fresh))), { config: { x: 1 } });
     assert.deepEqual(JSON.parse(JSON.stringify(buildSetupSaveBody({ x: 1 }, 'import', existing))), { config: { x: 1 } });
+  });
+});
+
+describe('Einstellungsseite: Konflikt beim Speichern', () => {
+  function loadHelpers() {
+    const settingsPath = fileURLToPath(new URL('../public/settings.js', import.meta.url));
+    const sandbox = { console, globalThis: {}, window: { DVhubCommon: {}, addEventListener() {}, setTimeout() {} } };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(fs.readFileSync(settingsPath, 'utf8'), sandbox, { filename: path.basename(settingsPath) });
+    return sandbox.DVhubSettingsSave;
+  }
+
+  it('Speicherkörper trägt overwriteConflicts nur auf Wunsch', () => {
+    const { buildConfigSaveBody } = loadHelpers();
+    const plain = JSON.parse(JSON.stringify(buildConfigSaveBody({ a: 1 }, 'settings', {}, { a: 0 })));
+    assert.equal('overwriteConflicts' in plain, false);
+    const forced = JSON.parse(JSON.stringify(buildConfigSaveBody({ a: 1 }, 'settings', { overwriteConflicts: true }, { a: 0 })));
+    assert.equal(forced.overwriteConflicts, true);
+  });
+
+  it('Konfliktzeilen: Feldname, dein Wert, Wert der Box; Geheimnis ohne Werte', () => {
+    const { describeConfigConflicts } = loadHelpers();
+    const lines = JSON.parse(JSON.stringify(describeConfigConflicts([
+      { path: 'schedule.defaultGridSetpointW', yours: 250, box: -100, base: 0 },
+      { path: 'mqtt.password', secret: true },
+      { path: 'optimizer.enabled', yours: true, box: undefined, base: false },
+    ], (p) => ({ 'schedule.defaultGridSetpointW': 'Standard-Sollwert Netz' }[p] || p))));
+    assert.deepEqual(lines, [
+      'Standard-Sollwert Netz: deine Eingabe 250, auf der Box jetzt -100',
+      'mqtt.password: auf der Box geändert (Wert verborgen)',
+      'optimizer.enabled: deine Eingabe an, auf der Box jetzt (nicht gesetzt)',
+    ]);
   });
 });

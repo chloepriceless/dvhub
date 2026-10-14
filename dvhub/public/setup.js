@@ -507,7 +507,9 @@ if (typeof globalThis !== 'undefined') {
 
 function buildSetupSaveBody(config, source, state) {
   const body = { config };
-  if (source !== 'import' && state?.baseConfig) body.base = state.baseConfig;
+  // Der Assistent überschreibt bewusst, was eingetragen wurde (Konflikte ohne
+  // Rückfrage); Unangetastetes behält den Stand der Box.
+  if (source !== 'import' && state?.baseConfig) Object.assign(body, { base: state.baseConfig, overwriteConflicts: true });
   return body;
 }
 

@@ -57,10 +57,10 @@ import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots 
 import { buildVictronAlarmsPayload } from './victron-alarms.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capVictronPvForDisplay } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
-import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
+import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds, isRedactedPath } from './config-redaction.js';
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from './services/config-secrets-crypto.js';
-import { protectOwnRouteKeys, applyCarriedKeys } from './services/config-protected-keys.js';
-import { mergeAgainstBase } from './services/config-base-merge.js';
+import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS } from './services/config-protected-keys.js';
+import { mergeAgainstBaseWithConflicts } from './services/config-base-merge.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp } from './config-model.js';
 import { streamPgDump, runDbRestore } from './services/db-backup.js';
@@ -2128,6 +2128,14 @@ export function createApiRoutes(ctx) {
     };
   }
 
+  // Export: die Zeitplan-Regeln von Hand liegen nicht in der Config, gehören
+  // aber in eine Sicherung bzw. zum Geräte-Tausch (Import übernimmt sie).
+  function withScheduleRules(exported) {
+    const rules = ctx.getManualScheduleRules?.();
+    if (!Array.isArray(rules)) return exported;
+    return { ...exported, schedule: { ...(exported.schedule || {}), rules } };
+  }
+
   function configApiPayload() {
     const cfg = getCfg();
     return {
@@ -2988,7 +2996,7 @@ export function createApiRoutes(ctx) {
         actorIp: deriveClientIp(req, getCfg()),
         redactedKeyCount: Array.isArray(REDACTED_PATHS) ? REDACTED_PATHS.length : 0
       }, { ...actorContext(req), severity: 'info' });
-      return downloadJson(res, 'dvhub-config.json', redactConfig(ctx.getRawCfg()));
+      return downloadJson(res, 'dvhub-config.json', withScheduleRules(redactConfig(ctx.getRawCfg())));
     }
 
     // Password-protected migration export. Same redacted config PLUS an encrypted
@@ -3014,7 +3022,7 @@ export function createApiRoutes(ctx) {
       } catch (e) {
         return json(res, 400, { ok: false, error: e.message || 'encrypt_failed' });
       }
-      const out = redactConfig(ctx.getRawCfg());
+      const out = withScheduleRules(redactConfig(ctx.getRawCfg()));
       if (bundle) out._encryptedSecrets = bundle;
       pushLog('config_exported', {
         actor: req.headers['x-actor'] || 'admin',
@@ -7685,11 +7693,30 @@ export function createApiRoutes(ctx) {
       if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
         return json(res, 400, { ok: false, error: 'config object required' });
       }
+      // Zeitplan-Regeln stehen nicht in der Config (schedule-rules.json): Beim
+      // Speichern werden mitgeschickte Regeln ignoriert — sie ändern sich nur über
+      // /api/schedule/* —, ein Import übernimmt sie nach dem Speichern.
+      const importedScheduleRules = url.pathname === '/api/config/import' && Array.isArray(body.config.schedule?.rules)
+        ? body.config.schedule.rules : null;
+      for (const c of [body.config, body.base]) {
+        if (c?.schedule && typeof c.schedule === 'object') delete c.schedule.rules;
+      }
       // Einstellungsseite: nur übernehmen, was im Formular geändert wurde —
       // alles andere so, wie die Box es jetzt hat (services/config-base-merge.js).
       // Ohne `base` (andere Aufrufer) und beim Import gilt die geschickte Config.
       if (url.pathname === '/api/config' && body.base && typeof body.base === 'object' && !Array.isArray(body.base)) {
-        body.config = mergeAgainstBase(body.config, body.base, redactConfig(ctx.getRawCfg?.() || {}));
+        const merged = mergeAgainstBaseWithConflicts(body.config, body.base, redactConfig(ctx.getRawCfg?.() || {}));
+        // Schlüssel mit eigenen Wegen setzt protectOwnRouteKeys ohnehin auf den Stand der Box.
+        const conflicts = merged.conflicts.filter((c) => !OWN_ROUTE_KEYS.some((k) => c.path === k || c.path.startsWith(`${k}.`)));
+        if (conflicts.length && body.overwriteConflicts !== true) {
+          return json(res, 409, {
+            ok: false,
+            error: 'config_conflict',
+            // Geheimnisse ohne Werte — nur der Pfad.
+            conflicts: conflicts.map((c) => (isRedactedPath(c.path) ? { path: c.path, secret: true } : c)),
+          });
+        }
+        body.config = merged.config;
       }
       // Fernzugang, Datenspende und Ortsnetz haben eigene Wege — siehe
       // services/config-protected-keys.js. Ein Geräte-Tausch (unten) bringt
@@ -7874,6 +7901,10 @@ export function createApiRoutes(ctx) {
         }, cfgActor);
       }
       const result = ctx.saveAndApplyConfig(body.config);
+      if (importedScheduleRules && typeof ctx.replaceManualScheduleRules === 'function') {
+        const count = ctx.replaceManualScheduleRules(importedScheduleRules);
+        pushLog('config_import_schedule_rules', { count }, cfgActor);
+      }
       // Geräte-Tausch: Schlüssel-Dateien erst NACH erfolgreichem Speichern
       // zurückschreiben (nur erlaubte Pfade, atomar). Lizenz, Kennung, Portal
       // & Co. lesen sie beim Start — deshalb Neustart nötig.

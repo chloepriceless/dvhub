@@ -126,3 +126,22 @@ test('Neuladen: zwei gleiche Regeln — die Markierung geht nur an eine', () => 
   const { reloaded } = persistAndReload(live);
   assert.deepEqual(reloaded.map((r) => r._wasActive === true), [true, false]);
 });
+
+test('schedule-rules.json: fehlt → null (Übernahme aus der Config), kaputt → [], Plan-Regeln bleiben draußen', async () => {
+  const { createScheduleRuleStore, readScheduleRules } = await import('../services/optimizer/rule-store.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sched-rules-'));
+  try {
+    const file = path.join(dir, 'schedule-rules.json');
+    assert.equal(readScheduleRules(file), null);
+    const store = createScheduleRuleStore({ file, now: () => NOW });
+    assert.equal(store.save([hold(0), { ...manual, _wasActive: true }]), true);
+    assert.equal(store.save([hold(1), manual]), false, 'unverändert → nicht neu geschrieben');
+    assert.deepEqual(readScheduleRules(file), [manual]);
+    fs.writeFileSync(file, '{kaputt');
+    let err = null;
+    assert.deepEqual(readScheduleRules(file, { onError: (e) => { err = e; } }), []);
+    assert.ok(err);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

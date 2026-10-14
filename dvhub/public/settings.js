@@ -20,6 +20,7 @@ let pvPlantsDraft = [];
 let pvPlantsValidation = [];
 let batteryStagesDraft = [];
 let batteryStagesValidation = [];
+let forecastStringsValidation = [];
 let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
 let forecastStringsDraft = [];
@@ -102,9 +103,7 @@ function createConfigInput(field, value, inherited) {
     // Select (EPEX-Preisquelle/Strahlungsquelle zeigten nichts). Ohne default
     // gar nicht setzen → Browser wählt die erste Option statt „nichts".
     const hasValue = value !== null && value !== undefined && value !== '';
-    const effectiveSelectValue = hasValue
-      ? value
-      : (field.default !== undefined ? field.default : undefined);
+    const effectiveSelectValue = hasValue ? value : fieldDefaultValue(field);
     if (effectiveSelectValue !== undefined) input.value = String(effectiveSelectValue);
   } else if (field.type === 'dynamicSelect') {
     input = document.createElement('select');
@@ -165,6 +164,8 @@ function createConfigInput(field, value, inherited) {
   input.id = fieldId(field.path);
   input.dataset.path = field.path;
   input.dataset.type = field.type;
+  // Was das Feld beim Zeichnen zeigt — für „nicht angefasst“ beim Speichern.
+  input.dataset.initialValue = JSON.stringify(parseInputElement(field, input) ?? null);
   if (field.readOnly) {
     input.readOnly = true;
     input.disabled = true;
@@ -826,11 +827,47 @@ function buildConfigSaveBody(config, source, opts = {}, base = null) {
   if (typeof opts.password === 'string' && opts.password) body.password = opts.password;
   // Geräte-Tausch: Token + Schlüssel-Dateien aus dem Bundle übernehmen.
   if (opts.migrate === true) body.migrate = true;
+  // Nach Rückfrage: Konflikte (Feld auch auf der Box geändert) überschreiben.
+  if (opts.overwriteConflicts === true) body.overwriteConflicts = true;
   return body;
 }
 
+// Zeilen für die Rückfrage bei HTTP 409 config_conflict.
+function describeConfigConflicts(conflicts = [], labelFor = (path) => fieldLabel(path, path)) {
+  const show = (v) => (v === undefined || v === null || v === '' ? '(nicht gesetzt)'
+    : v === true ? 'an' : v === false ? 'aus'
+      : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  return (Array.isArray(conflicts) ? conflicts : []).map((c) => (c.secret
+    ? `${labelFor(c.path)}: auf der Box geändert (Wert verborgen)`
+    : `${labelFor(c.path)}: deine Eingabe ${show(c.yours)}, auf der Box jetzt ${show(c.box)}`));
+}
+
+async function confirmConfigConflicts(conflicts) {
+  const lines = describeConfigConflicts(conflicts);
+  const intro = 'Seit du die Seite geöffnet hast, wurden diese Einstellungen auch auf der Box geändert:';
+  const outro = 'Mit „Trotzdem speichern“ gilt deine Eingabe. Mit „Abbrechen“ bleibt das Formular, wie es ist — Seite neu laden zeigt den Stand der Box.';
+  if (typeof window.dvConfirm === 'function') {
+    const wrap = document.createElement('div');
+    const p1 = document.createElement('p');
+    p1.textContent = intro;
+    wrap.appendChild(p1);
+    const ul = document.createElement('ul');
+    for (const line of lines) {
+      const li = document.createElement('li');
+      li.textContent = line;
+      ul.appendChild(li);
+    }
+    wrap.appendChild(ul);
+    const p2 = document.createElement('p');
+    p2.textContent = outro;
+    wrap.appendChild(p2);
+    return window.dvConfirm(wrap, { title: 'Inzwischen auf der Box geändert', okLabel: 'Trotzdem speichern', cancelLabel: 'Abbrechen', variant: 'primary' });
+  }
+  return window.confirm(`${intro}\n\n${lines.join('\n')}\n\n${outro}`);
+}
+
 if (typeof globalThis !== 'undefined') {
-  globalThis.DVhubSettingsSave = { buildConfigSaveBody };
+  globalThis.DVhubSettingsSave = { buildConfigSaveBody, describeConfigConflicts };
 }
 
 function getParts(path) {
@@ -962,7 +999,7 @@ function renderFieldValueFromConfigs(field, {
   // Anlagensteuerung" unsichtbar aktiv). Ein Platzhalter-Hinweis wie bei
   // Textfeldern existiert für Checkboxen nicht, deshalb inherited: null.
   if (field.type === 'boolean' && !draftDefined) {
-    return { value: Boolean(effectiveValue), inherited: null };
+    return { value: Boolean(effectiveValue ?? fieldDefaultValue(field)), inherited: null };
   }
 
   if (optionalOverride && !draftDefined) {
@@ -1320,14 +1357,35 @@ function buildDestinationWorkspace(definitionLike, destinationId, { licenseActiv
  * Render multi-string editor for PV detailed configuration mode (D-11).
  * Dynamic list of { label, kwp, tiltDeg, azimuthDeg } entries.
  */
+// Eingabe eines Zahlenfelds: leer oder ungültig → null („fehlt“), nie still 0
+// (Richtung 0 hieße Norden). Kommastellen bleiben.
+function parseStringNumber(value) {
+  const text = String(value ?? '').trim().replace(',', '.');
+  if (!text) return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
+
+function validateForecastStrings(strings = []) {
+  const messages = [];
+  const inRange = (v, min, max) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+  (Array.isArray(strings) ? strings : []).forEach((s, index) => {
+    const name = `String „${s?.label || index + 1}“`;
+    if (!(typeof s?.kwp === 'number' && Number.isFinite(s.kwp) && s.kwp > 0)) messages.push(`${name}: kWp fehlt oder ist nicht größer als 0.`);
+    if (!inRange(s?.tiltDeg, 0, 90)) messages.push(`${name}: Neigung fehlt oder liegt nicht zwischen 0 und 90°.`);
+    if (!inRange(s?.azimuthDeg, 0, 360)) messages.push(`${name}: Richtung fehlt oder liegt nicht zwischen 0 und 360°.`);
+  });
+  return { valid: messages.length === 0, messages };
+}
+
 function renderForecastStringEditor() {
-  // Initialize draft from config if empty
+  // Entwurf aus der Config übernehmen. Ohne Strings bleibt die Liste leer —
+  // früher stand hier ein Beispiel „String 1, 5 kWp“, das beim Speichern als
+  // echter String in der Config landete.
   if (!forecastStringsDraft.length) {
     const cfgStrings = getVisibilityValue('forecast.pv.strings');
     if (Array.isArray(cfgStrings) && cfgStrings.length > 0) {
       forecastStringsDraft = cfgStrings.map(s => ({ ...s }));
-    } else {
-      forecastStringsDraft = [{ label: 'String 1', kwp: 5, tiltDeg: 35, azimuthDeg: 180 }];
     }
   }
 
@@ -1344,6 +1402,23 @@ function renderForecastStringEditor() {
   desc.className = 'sa-help';
   desc.textContent = 'Jede Dachflaeche mit eigener Ausrichtung als separaten String anlegen. Beispiel: Sued-Dach 15 kWp + Ost-Garage 5 kWp.';
   section.appendChild(desc);
+
+  if (forecastStringsValidation.length) {
+    const banner = document.createElement('div');
+    banner.className = 'config-banner error';
+    for (const message of forecastStringsValidation) {
+      const line = document.createElement('div');
+      line.textContent = message;
+      banner.appendChild(line);
+    }
+    section.appendChild(banner);
+  }
+  if (!forecastStringsDraft.length) {
+    const empty = document.createElement('p');
+    empty.className = 'sa-help';
+    empty.textContent = 'Noch kein String angelegt — mit „+ String hinzufuegen“ die erste Dachflaeche eintragen.';
+    section.appendChild(empty);
+  }
 
   // Column headers
   const headerRow = document.createElement('div');
@@ -1411,7 +1486,7 @@ function renderStringRow(index) {
   kwpInput.style.textAlign = 'right';
   kwpInput.title = 'Installierte Leistung dieser Dachflaeche in kWp';
   kwpInput.addEventListener('input', () => {
-    forecastStringsDraft[index].kwp = parseFloat(kwpInput.value) || 0;
+    forecastStringsDraft[index].kwp = parseStringNumber(kwpInput.value);
     syncForecastStringsToDraft();
     updateSaveBar();
   });
@@ -1427,7 +1502,7 @@ function renderStringRow(index) {
   tiltInput.style.textAlign = 'right';
   tiltInput.title = 'Dachneigung in Grad (0=flach, 35=typisch, 90=senkrecht)';
   tiltInput.addEventListener('input', () => {
-    forecastStringsDraft[index].tiltDeg = parseInt(tiltInput.value, 10) || 0;
+    forecastStringsDraft[index].tiltDeg = parseStringNumber(tiltInput.value);
     syncForecastStringsToDraft();
     updateSaveBar();
   });
@@ -1443,7 +1518,7 @@ function renderStringRow(index) {
   azInput.style.textAlign = 'right';
   azInput.title = 'Himmelsrichtung (0=Nord, 90=Ost, 180=Sued, 270=West)';
   azInput.addEventListener('input', () => {
-    forecastStringsDraft[index].azimuthDeg = parseInt(azInput.value, 10) || 0;
+    forecastStringsDraft[index].azimuthDeg = parseStringNumber(azInput.value);
     syncForecastStringsToDraft();
     updateSaveBar();
   });
@@ -1455,9 +1530,6 @@ function renderStringRow(index) {
   removeBtn.textContent = 'X';
   removeBtn.addEventListener('click', () => {
     forecastStringsDraft.splice(index, 1);
-    if (!forecastStringsDraft.length) {
-      forecastStringsDraft.push({ label: 'String 1', kwp: 5, tiltDeg: 35, azimuthDeg: 180 });
-    }
     syncForecastStringsToDraft();
     renderSettingsShell();
     updateSaveBar();
@@ -1468,6 +1540,9 @@ function renderStringRow(index) {
 }
 
 function syncForecastStringsToDraft() {
+  // Keine Strings und nie welche gespeichert → nichts anlegen.
+  if (!forecastStringsDraft.length && getPath(currentRawConfig, 'forecast.pv.strings') === undefined
+    && getPath(currentDraftConfig, 'forecast.pv.strings') === undefined) return;
   if (!currentDraftConfig.forecast) currentDraftConfig.forecast = {};
   if (!currentDraftConfig.forecast.pv) currentDraftConfig.forecast.pv = {};
   currentDraftConfig.forecast.pv.strings = forecastStringsDraft.map(s => ({ ...s }));
@@ -2638,10 +2713,24 @@ function isEmptyFieldValue(value) {
     || (value && typeof value === 'object' && value.action === 'delete');
 }
 
-// Leer im Formular UND weder gespeichert noch im Entwurf je gesetzt.
+// Weder gespeichert noch im Entwurf je gesetzt UND (leer im Formular ODER
+// unverändert seit dem Zeichnen). Dann bleibt das Feld ungesetzt und es gilt
+// weiter der Standard im Code. Sonst schrieb ein Speichern für jeden Schalter
+// und jedes Auswahlfeld ohne Wert das fest, was die Seite zeigte — bei
+// fehlendem Standard „aus“ bzw. die erste Option (Prüftest 2026-10-14:
+// Support-Login aus, Einspeisung auf Spot, MILP → Greedy).
 function isUntouchedEmptyField(field, parsed, draft) {
-  if (field.type === 'boolean' || !isEmptyFieldValue(parsed)) return false;
-  return getPath(currentRawConfig, field.path) === undefined && getPath(draft, field.path) === undefined;
+  if (getPath(currentRawConfig, field.path) !== undefined || getPath(draft, field.path) !== undefined) return false;
+  if (field.type !== 'boolean' && isEmptyFieldValue(parsed)) return true;
+  const input = typeof document !== 'undefined' ? document.getElementById(fieldId(field.path)) : null;
+  return !!input?.dataset && input.dataset.initialValue === JSON.stringify(parsed ?? null);
+}
+
+// Standard eines Felds für die Anzeige: Feld-Definition, sonst die Standards
+// der Konfiguration (wie beim Platzhalter der Textfelder).
+function fieldDefaultValue(field) {
+  if (field.default !== undefined) return field.default;
+  return getPath(definition && definition.defaults, field.path);
 }
 
 function activateSettingsDestination(sectionId) {
@@ -2680,9 +2769,11 @@ function countChangedFields() {
 function parseFieldInput(field) {
   // JSON fields (e.g. forecast.pv.strings) are managed by custom handlers, not form inputs
   if (field.type === 'json') return undefined;
+  return parseInputElement(field, document.getElementById(fieldId(field.path)));
+}
 
-  const input = document.getElementById(fieldId(field.path));
-  if (!input) return undefined;
+function parseInputElement(field, input) {
+  if (field.type === 'json' || !input) return undefined;
 
   if (field.type === 'boolean') return input.checked;
 
@@ -2722,7 +2813,9 @@ function collectConfigFromForm() {
   return next;
 }
 
-function applyConfigPayload(payload) {
+// Zustand der Seite aus der Antwort von GET /api/config (ohne Zeichnen) —
+// getrennt, damit der Prüftest Laden → Formular → Speichern denselben Weg geht.
+function loadConfigPayloadState(payload) {
   definition = payload.definition || definition;
   currentRawConfig = payload.config || {};
   currentDraftConfig = clone(currentRawConfig);
@@ -2736,8 +2829,13 @@ function applyConfigPayload(payload) {
   pricingPeriodsValidation = [];
   pvPlantsValidation = [];
   batteryStagesValidation = [];
+  forecastStringsValidation = [];
   forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
   settingsShellState = createSettingsShellState(definition);
+}
+
+function applyConfigPayload(payload) {
+  loadConfigPayloadState(payload);
   // Do NOT clobber a real stored token with the redacted placeholder: the config
   // payload always redacts apiToken to '***' (config-redaction.js), so the only
   // genuine source of the token is the onboarding claim / ?token= / localStorage.
@@ -2842,6 +2940,11 @@ async function saveConfig(config, source = 'settings', opts = {}) {
     body: JSON.stringify(reqBody)
   });
   const payload = await res.json();
+  if (res.status === 409 && payload?.error === 'config_conflict' && source !== 'import' && opts.overwriteConflicts !== true) {
+    if (await confirmConfigConflicts(payload.conflicts)) return saveConfig(config, source, { ...opts, overwriteConflicts: true });
+    setBanner('Nicht gespeichert — einige Einstellungen wurden inzwischen auf der Box geändert.', 'warn');
+    return false;
+  }
   if (!res.ok || !payload.ok) {
     setBanner(`Speichern fehlgeschlagen: ${payload.error || res.status}`, 'error');
     return false;
@@ -3025,14 +3128,18 @@ async function saveCurrentForm() {
   // Datum oder Kapazität kommentarlos aus der Liste kippen. Dann fehlte
   // rückwirkend eine Kapazitätsperiode, ohne dass es jemand merkt.
   const batteryValidation = validateBatteryStages(batteryStagesDraft);
+  // PV-Strings: ein fehlender Wert würde sonst als 0 gerechnet (Richtung 0 = Norden).
+  const stringsValidation = validateForecastStrings(forecastStringsDraft);
   pricingPeriodsValidation = pricingValidation.messages;
   pvPlantsValidation = pvValidation.messages;
   batteryStagesValidation = batteryValidation.messages;
-  if (!pricingValidation.valid || !pvValidation.valid || !batteryValidation.valid) {
+  forecastStringsValidation = stringsValidation.messages;
+  if (!pricingValidation.valid || !pvValidation.valid || !batteryValidation.valid || !stringsValidation.valid) {
     renderSettingsShell();
     const firstMessage = pricingValidation.messages[0]
       || pvValidation.messages[0]
-      || batteryValidation.messages[0];
+      || batteryValidation.messages[0]
+      || stringsValidation.messages[0];
     setBanner(`Speichern blockiert: ${firstMessage}`, 'error');
     return;
   }
@@ -3656,6 +3763,7 @@ function initSettingsPage() {
     pricingPeriodsValidation = [];
     pvPlantsValidation = [];
     batteryStagesValidation = [];
+    forecastStringsValidation = [];
     forecastStringsDraft = clone(currentRawConfig?.forecast?.pv?.strings || []);
     renderSettingsShell();
     updateSaveBar();

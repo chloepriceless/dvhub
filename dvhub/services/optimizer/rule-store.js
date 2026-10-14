@@ -67,3 +67,63 @@ export function createOptimizerRuleStore({ file, onError = () => {}, now = () =>
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Regeln von Hand und der Börsenautomatik (alles außer Plan-Regeln), seit
+// 2026-10-14 ebenfalls nicht mehr in config.json: Sie ändern sich im Betrieb
+// (Dashboard, Automatik, Abschalten nach Ablauf/Stop-SoC). In der Config
+// erzeugte jede Änderung eine Config-Sicherung und ein Neuladen, und eine
+// Seite mit altem Stand konnte sie zurücksetzen. Die Config bleibt für
+// Einstellungen; Export und Import tragen die Regeln weiter mit.
+export const SCHEDULE_RULES_FILE = 'schedule-rules.json';
+
+export function scheduleRulesPath(dataDir) {
+  return dataDir ? path.join(dataDir, SCHEDULE_RULES_FILE) : null;
+}
+
+/**
+ * Abgelegte Regeln lesen. `null`, wenn es die Datei (noch) nicht gibt — dann
+ * übernimmt der Start die Regeln einmalig aus der Config. Kaputte Datei → [].
+ */
+export function readScheduleRules(file, { onError = () => {} } = {}) {
+  if (!file || !fs.existsSync(file)) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return (Array.isArray(data?.rules) ? data.rules : [])
+      .filter((r) => r && typeof r === 'object' && !Array.isArray(r) && !isOptimizerRule(r))
+      .map(stripRuntime);
+  } catch (e) {
+    onError(e);
+    return [];
+  }
+}
+
+export function createScheduleRuleStore({ file, onError = () => {}, now = () => Date.now() } = {}) {
+  let lastJson = null;
+  return {
+    file,
+    /** Schreibt die Nicht-Plan-Regeln, wenn sie sich geändert haben. true = geschrieben. */
+    save(allRules, { force = false } = {}) {
+      if (!file) return false;
+      const rules = (Array.isArray(allRules) ? allRules : [])
+        .filter((r) => r && typeof r === 'object' && !Array.isArray(r) && !isOptimizerRule(r))
+        .map(stripRuntime);
+      const json = JSON.stringify(rules);
+      if (!force && json === lastJson) return false;
+      try {
+        const tmp = `${file}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify({ savedAt: new Date(now()).toISOString(), rules }));
+        fs.renameSync(tmp, file);
+        lastJson = json;
+        return true;
+      } catch (e) {
+        onError(e);
+        return false;
+      }
+    },
+    /** Stand nach dem Lesen beim Start merken (kein unnötiges Schreiben). */
+    prime(rules) {
+      lastJson = JSON.stringify((Array.isArray(rules) ? rules : []).filter((r) => !isOptimizerRule(r)).map(stripRuntime));
+    },
+  };
+}
