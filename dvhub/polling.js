@@ -7,7 +7,7 @@ import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
-import { resolveImportPriceCtKwhForSlot } from './user-energy-pricing.js';
+import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms, buildActiveAlarmsFromDbus } from './victron-alarms.js';
 // T-FREEZE (2026-07-24): Einfrier-Wächter. Erkennt eingefrorene Live-Werte trotz
 // ERFOLGREICHER Reads (halb-tote GX-Modbus-Session) — die eine Lücke, die weder die
@@ -428,10 +428,11 @@ export function createPoller(ctx) {
     const epexCtKwh = Number(currentEpex?.ct_kwh ?? 0);
 
     // Import cost: use the user's configured electricity price (Bezugspreis),
-    // not the raw EPEX price. resolveImportPriceCtKwhForSlot handles fixed,
-    // dynamic, and Paragraph 14a Module 3 pricing modes.
+    // not the raw EPEX price. resolveUserImportPriceCtKwhForSlot handles fixed,
+    // dynamic and Paragraph 14a Module 3 — and the pricing period valid at this
+    // moment (userEnergyPricing.periods, same as the history; 2026-10-14).
     const importSlot = { ts: nowMs, ct_kwh: epexCtKwh };
-    const importCtKwh = resolveImportPriceCtKwhForSlot(importSlot, cfg.userEnergyPricing || {}, cfg.schedule?.timezone) ?? epexCtKwh;
+    const importCtKwh = resolveUserImportPriceCtKwhForSlot(importSlot, cfg.userEnergyPricing || {}, { timeZone: cfg.schedule?.timezone }) ?? epexCtKwh;
     state.energy.costEur += (importW / 1000) * dtH * (importCtKwh / 100);
 
     // Export revenue: EPEX price is the actual feed-in compensation
@@ -899,5 +900,6 @@ export function createPoller(ctx) {
     persistEnergy();  // Final save before shutdown
   }
 
-  return { start, stop, requestPoll };
+  // updateEnergyIntegrals: für Tests der laufenden Kosten erreichbar.
+  return { start, stop, requestPoll, updateEnergyIntegrals };
 }

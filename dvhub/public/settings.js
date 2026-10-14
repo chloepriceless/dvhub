@@ -423,6 +423,11 @@ function serializePricingPeriods(periods = []) {
         vatPct: Number(period.dynamicComponents?.vatPct || 0)
       };
     }
+    // Ohne eigenes Eingabefeld, aber Teil des Zeitraums: unverändert zurückschicken
+    // (sonst gingen sie bei jedem Speichern verloren, Audit 2026-10-14).
+    for (const key of ['usesParagraph14aModule3', 'module3Windows', 'costs']) {
+      if (period[key] !== undefined) next[key] = period[key];
+    }
     return next;
   });
 }
@@ -504,11 +509,28 @@ function removePvPlant(plants = [], plantId) {
   return plants.filter((plant) => plant.id !== plantId);
 }
 
+// Felder einer PV-Anlage ohne eigenes Eingabefeld (Prognose-Geometrie, pvnode-
+// Verschattung): beim Laden in den Entwurf übernehmen und unverändert zurück-
+// schicken — sonst gingen sie bei jedem Speichern verloren (Audit 2026-10-14).
+const PV_PLANT_KEPT_FIELDS = ['tiltDeg', 'azimuthDeg', 'skyObstructionConfig', 'shadingConfig'];
+
+function deserializePvPlants(plants = []) {
+  return (Array.isArray(plants) ? plants : []).map((plant, index) => {
+    const draft = { ...createEmptyPvPlant(index), kwp: plant?.kwp ?? '', commissionedAt: plant?.commissionedAt || '' };
+    for (const key of PV_PLANT_KEPT_FIELDS) if (plant?.[key] !== undefined) draft[key] = plant[key];
+    return draft;
+  });
+}
+
 function serializePvPlants(plants = []) {
-  return plants.map((plant) => ({
-    kwp: plant.kwp === '' || plant.kwp == null ? null : Number(plant.kwp),
-    commissionedAt: plant.commissionedAt || ''
-  }));
+  return plants.map((plant) => {
+    const out = {
+      kwp: plant.kwp === '' || plant.kwp == null ? null : Number(plant.kwp),
+      commissionedAt: plant.commissionedAt || ''
+    };
+    for (const key of PV_PLANT_KEPT_FIELDS) if (plant[key] !== undefined) out[key] = plant[key];
+    return out;
+  });
 }
 
 function validatePvPlants(plants = []) {
@@ -640,6 +662,7 @@ if (typeof globalThis !== 'undefined') {
     addPvPlant,
     buildMarketPremiumEditorMarkup,
     createEmptyPvPlant,
+    deserializePvPlants,
     getDraftMarketValueMode,
     pvPlantsLicenseCapWarning,
     removePvPlant,
@@ -790,6 +813,24 @@ if (typeof globalThis !== 'undefined') {
     serializeBatteryStages,
     validateBatteryStages
   };
+}
+
+// Speichern schickt den Stand beim Öffnen als `base` mit: Der Server übernimmt
+// nur, was im Formular geändert wurde, und lässt alles andere (Zeitplan-Regeln,
+// Dashboard-Sollwerte, Schalter anderer Wege) so, wie die Box es jetzt hat.
+// Ein Import bringt eine ganze Datei und schickt deshalb keinen Stand mit.
+function buildConfigSaveBody(config, source, opts = {}, base = null) {
+  const body = { config };
+  if (source !== 'import' && base && typeof base === 'object') body.base = base;
+  // opts.password unlocks an `_encryptedSecrets` migration bundle on import.
+  if (typeof opts.password === 'string' && opts.password) body.password = opts.password;
+  // Geräte-Tausch: Token + Schlüssel-Dateien aus dem Bundle übernehmen.
+  if (opts.migrate === true) body.migrate = true;
+  return body;
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsSave = { buildConfigSaveBody };
 }
 
 function getParts(path) {
@@ -2690,11 +2731,7 @@ function applyConfigPayload(payload) {
   settingsDiscoveryStates = {};
   pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
   marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
-  pvPlantsDraft = (currentRawConfig?.userEnergyPricing?.pvPlants || []).map((plant, index) => ({
-    ...createEmptyPvPlant(index),
-    kwp: plant?.kwp ?? '',
-    commissionedAt: plant?.commissionedAt || ''
-  }));
+  pvPlantsDraft = deserializePvPlants(currentRawConfig?.userEnergyPricing?.pvPlants);
   batteryStagesDraft = deserializeBatteryStages(currentRawConfig?.optimizer?.batteryStages);
   pricingPeriodsValidation = [];
   pvPlantsValidation = [];
@@ -2798,11 +2835,7 @@ async function saveConfig(config, source = 'settings', opts = {}) {
   // requires this header to ENABLE optimizer.allowGridCharge/allowGridDischarge —
   // surfaced at the toggle in Einstellungen, not in a one-time setup step.
   if (opts.confirmLegalGate) headers['x-confirm-legal-gate'] = 'true';
-  // opts.password unlocks an `_encryptedSecrets` migration bundle on import.
-  const reqBody = { config };
-  if (typeof opts.password === 'string' && opts.password) reqBody.password = opts.password;
-  // Geräte-Tausch: Token + Schlüssel-Dateien aus dem Bundle übernehmen.
-  if (opts.migrate === true) reqBody.migrate = true;
+  const reqBody = buildConfigSaveBody(config, source, opts, currentRawConfig);
   const res = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
     headers,
@@ -3618,11 +3651,7 @@ function initSettingsPage() {
     currentDraftConfig = clone(currentRawConfig);
     pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
     marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
-    pvPlantsDraft = (currentRawConfig?.userEnergyPricing?.pvPlants || []).map((plant, index) => ({
-      ...createEmptyPvPlant(index),
-      kwp: plant?.kwp ?? '',
-      commissionedAt: plant?.commissionedAt || ''
-    }));
+    pvPlantsDraft = deserializePvPlants(currentRawConfig?.userEnergyPricing?.pvPlants);
     batteryStagesDraft = deserializeBatteryStages(currentRawConfig?.optimizer?.batteryStages);
     pricingPeriodsValidation = [];
     pvPlantsValidation = [];

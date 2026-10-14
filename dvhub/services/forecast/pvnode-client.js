@@ -196,12 +196,19 @@ function resolveLocation(cfg) {
   return { lat: Number(lat), lon: Number(lon) };
 }
 
-/** Read + sanitize plants from cfg (pvPlants[] preferred, single-string legacy fallback). */
+/**
+ * Read + sanitize plants from cfg. Order: the PV strings from Einstellungen →
+ * Prognose (forecast.pv.strings, level 'detailed' — same rule as pvlib and
+ * Open-Meteo), then pvPlants[] geometry, then the single-string legacy fields.
+ * Until 2026-10-14 the strings were ignored here (audit finding 2).
+ */
 function resolvePlants(cfg) {
   const fc = cfg.forecast || {};
-  const raw = Array.isArray(cfg.userEnergyPricing?.pvPlants)
-    ? cfg.userEnergyPricing.pvPlants
-    : [];
+  const useStrings = fc.pv?.configLevel === 'detailed' && Array.isArray(fc.pv?.strings)
+    && fc.pv.strings.some(p => Number(p?.kwp) > 0 && Number.isFinite(Number(p?.tiltDeg)) && Number.isFinite(Number(p?.azimuthDeg)));
+  const raw = useStrings
+    ? fc.pv.strings
+    : Array.isArray(cfg.userEnergyPricing?.pvPlants) ? cfg.userEnergyPricing.pvPlants : [];
   const plants = raw
     .filter(p => Number(p?.kwp) > 0
       && Number.isFinite(Number(p?.tiltDeg))

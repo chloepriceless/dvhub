@@ -60,8 +60,9 @@ import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, redactUrlCreds } from './config-redaction.js';
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from './services/config-secrets-crypto.js';
 import { protectOwnRouteKeys, applyCarriedKeys } from './services/config-protected-keys.js';
+import { mergeAgainstBase } from './services/config-base-merge.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
-import { createDefaultConfig } from './config-model.js';
+import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp } from './config-model.js';
 import { streamPgDump, runDbRestore } from './services/db-backup.js';
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
 import { readTimescaleStatus, runTimescaleExtUpgrade } from './services/timescale-maintenance.js';
@@ -1806,10 +1807,22 @@ export function createApiRoutes(ctx) {
 
   function userEnergyPricingSummary() {
     const cfg = getCfg();
-    const pricing = cfg.userEnergyPricing || {};
-    const costs = pricing.costs || {};
-    const slots = Array.isArray(state.epex.data) ? state.epex.data.map((row) => slotComparison(row, pricing, cfg.schedule?.timezone)) : [];
+    const basePricing = cfg.userEnergyPricing || {};
+    const timeZone = cfg.schedule?.timezone;
+    // Je Slot (und für „jetzt“) der gültige Preis-Zeitraum, sonst der
+    // Grundtarif — wie in der Historie (2026-10-14, vorher nur Grundtarif).
+    const byHour = new Map(); // Ortsdatum wechselt zur vollen Stunde (Zonen mit ganzstündigem Versatz wie Europe/Berlin)
+    const pricingAt = (ts) => {
+      const key = new Date(ts).toISOString().slice(0, 13);
+      if (!byHour.has(key)) byHour.set(key, resolveActiveUserEnergyPricingForTimestamp(ts, basePricing, { timeZone }) || basePricing);
+      return byHour.get(key);
+    };
+    const slots = Array.isArray(state.epex.data)
+      ? state.epex.data.map((row) => (Number.isFinite(new Date(row?.ts).getTime()) ? slotComparison(row, pricingAt(row.ts), timeZone) : slotComparison(row, basePricing, timeZone)))
+      : [];
     const currentTs = ctx.epexNowNext()?.current?.ts;
+    const pricing = pricingAt(Number.isFinite(new Date(currentTs).getTime()) ? currentTs : Date.now());
+    const costs = pricing.costs || {};
     const current = slots.find((row) => row?.ts === currentTs) || null;
     const configured =
       (pricing.mode === 'fixed' && Number.isFinite(Number(pricing.fixedGrossImportCtKwh)))
@@ -6382,7 +6395,7 @@ export function createApiRoutes(ctx) {
       }
     }
 
-    // T-0113 Tier 3: customer-initiated reverse-SSH support tunnel.
+    // T-0113 Tier 3: customer-controlled reverse-SSH support tunnel.
     //   GET  /api/support/tunnel/status  — transparency: open?, ttl, relay,
     //        appliance key fingerprint, provisioned?, local-support-user on/off.
     //   POST /api/support/tunnel/open    — { ttlMin? } opens an auto-closing tunnel.
@@ -7671,6 +7684,12 @@ export function createApiRoutes(ctx) {
       if (body === null) return;
       if (!body || typeof body !== 'object' || !body.config || typeof body.config !== 'object' || Array.isArray(body.config)) {
         return json(res, 400, { ok: false, error: 'config object required' });
+      }
+      // Einstellungsseite: nur übernehmen, was im Formular geändert wurde —
+      // alles andere so, wie die Box es jetzt hat (services/config-base-merge.js).
+      // Ohne `base` (andere Aufrufer) und beim Import gilt die geschickte Config.
+      if (url.pathname === '/api/config' && body.base && typeof body.base === 'object' && !Array.isArray(body.base)) {
+        body.config = mergeAgainstBase(body.config, body.base, redactConfig(ctx.getRawCfg?.() || {}));
       }
       // Fernzugang, Datenspende und Ortsnetz haben eigene Wege — siehe
       // services/config-protected-keys.js. Ein Geräte-Tausch (unten) bringt

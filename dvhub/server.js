@@ -110,7 +110,7 @@ import { info as logInfo, warn as logWarn, logger as appLogger } from './service
 // fires its first interval tick. No console.error fallback — the helper throws
 // loudly if misordered. Hard dep on 09-06 (services/log.js).
 import { configureSafeAsync, safeInterval } from './services/safe-async.js';
-// T-0113 Tier 3: customer-initiated reverse-SSH support tunnel.
+// T-0113 Tier 3: customer-controlled reverse-SSH support tunnel.
 import { createSupportTunnel } from './services/support-tunnel.js';
 // T-INSTALLER-PORTAL: Installateur-Portal-Anbindung (Zertifikats-Kopplung +
 // Challenge/Response-Login für /api/installer/* in routes-api.js).
@@ -1283,7 +1283,7 @@ ctx.deviceService = deviceService;
 const notificationService = createNotificationService(ctx);
 ctx.notificationService = notificationService;
 
-// T-0113 Tier 3: reverse-SSH support tunnel (customer-initiated, time-bounded,
+// T-0113 Tier 3: reverse-SSH support tunnel (customer-controlled, time-bounded,
 // killable). Constructed unconditionally so routes-api.js can serve the three
 // /api/support/tunnel/* endpoints + the transparency UI status. The tunnel
 // process itself only spawns when the customer hits "open" — OFF by default.

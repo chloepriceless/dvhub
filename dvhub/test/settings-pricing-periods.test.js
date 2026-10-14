@@ -139,3 +139,19 @@ test('Kleine Börsenautomatik: eigener Abschnitt für die Reserve; alles sichtba
   const groups = [...new Set(fields.map((f) => f.group))];
   assert.deepEqual(groups, ['smallMarketAutomation', 'smaReserve', 'smaBattery', 'smaLocation', 'smaAdvanced']);
 });
+
+// Audit 2026-10-14, Befund 4: Speichern in den Einstellungen warf die §14a-
+// Modul-3-Angaben und die Kosten eines Zeitraums weg (die Seite hat dafür keine
+// eigenen Felder, schickte sie aber auch nicht zurück).
+test('pricing periods keep §14a module 3 and costs through save', () => {
+  const windows = { window1: { enabled: true, label: 'NT', start: '00:00', end: '06:00', priceCtKwh: 12.3 } };
+  const costs = { baseFeeEurMonth: 9.9 };
+  const saved = JSON.parse(JSON.stringify(serializePricingPeriods([{
+    id: 'p1', label: '2026', startDate: '2026-01-01', endDate: '2026-12-31', mode: 'fixed',
+    fixedGrossImportCtKwh: '26.9', usesParagraph14aModule3: true, module3Windows: windows, costs,
+  }])));
+  assert.deepEqual(saved, [{
+    id: 'p1', label: '2026', startDate: '2026-01-01', endDate: '2026-12-31', mode: 'fixed',
+    fixedGrossImportCtKwh: 26.9, usesParagraph14aModule3: true, module3Windows: windows, costs,
+  }]);
+});

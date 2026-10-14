@@ -943,7 +943,7 @@ async function downloadSupportBundle() {
   }
 }
 
-// --- T-0113 Tier 3: customer-initiated reverse-SSH support tunnel -------------
+// --- T-0113 Tier 3: customer-controlled reverse-SSH support tunnel -------------
 // Transparency first: the customer sees which key can reach them, the relay
 // endpoint, and the live tunnel state. Opening is an explicit, time-bounded,
 // killable action — the box is OFF by default and unreachable behind NAT.

@@ -1092,11 +1092,11 @@ function buildFieldDefinitions() {
       section: 'system',
       group: 'support',
       groupLabel: 'Fern-Support · Voreinstellungen',
-      groupDescription: 'Optionaler, vom Kunden kontrollierter Support-Zugang. Der Zugang ist STANDARDMÄSSIG VERSCHLOSSEN — ein Tunnel zum Support öffnet sich NUR, wenn du ihn aktiv per Knopf startest, ist zeitlich begrenzt und jederzeit abbrechbar. Ohne offenen Tunnel ist die Box von außen nicht erreichbar.',
+      groupDescription: 'Optionaler, vom Kunden kontrollierter Support-Zugang. Der Zugang ist STANDARDMÄSSIG VERSCHLOSSEN — ein Tunnel zum Support öffnet sich NUR, wenn du ihn per Knopf startest oder dem Support im Installateurs-Portal erlaubt hast, ihn zu öffnen (mit Benachrichtigung). Er ist zeitlich begrenzt und jederzeit abbrechbar. Ohne offenen Tunnel ist die Box von außen nicht erreichbar.',
       path: 'support.localUser.enabled',
       label: 'Support-Login-User bereithalten',
       type: 'boolean',
-      help: 'Legt den Login-User „dvhub-support“ (Gruppe dvhub, KEIN sudo) an und hinterlegt den öffentlichen Support-Schlüssel — als Bereitschaft für Fern-Diagnose. Das allein gibt KEINEN Zugriff: der Support kommt nur rein, solange DU den Tunnel geöffnet hast. Deaktivieren entfernt User + Schlüssel beim nächsten Neustart (kein Fern-Support mehr möglich).'
+      help: 'Hinterlegt den öffentlichen Support-Schlüssel für den Login — als Bereitschaft für Fern-Diagnose. Native Installation: eigener User „dvhub-support“ (Gruppe dvhub, KEIN sudo). Docker-Container: Login als „dvhub“ über einen eigenen SSH-Dienst, der nur bei offenem Tunnel läuft. Das allein gibt KEINEN Zugriff: der Support kommt nur rein, solange ein Tunnel offen ist. Deaktivieren entfernt User bzw. Schlüssel beim nächsten Neustart (kein Fern-Support mehr möglich).'
     },
     {
       section: 'system',
@@ -4963,14 +4963,14 @@ function resetLegacyPlaceholderRegisters(raw, warnings) {
 const P14A_DEVICE_KINDS = ['ladepunkt', 'waermepumpe', 'klima', 'speicher'];
 function sanitizeParagraph14aDevices(list, warnings) {
   if (!Array.isArray(list)) {
-    warnings.push({ path: 'paragraph14a.devices', message: 'keine Liste — verworfen' });
+    warnings.push('paragraph14a.devices: keine Liste — verworfen');
     return [];
   }
   const out = [];
   list.forEach((d, i) => {
     const powerW = Math.round(Number(d?.powerW));
     if (!d || !P14A_DEVICE_KINDS.includes(d.kind) || !(powerW > 0) || powerW > 1_000_000) {
-      warnings.push({ path: `paragraph14a.devices[${i}]`, message: 'ungültiges Gerät — verworfen' });
+      warnings.push(`paragraph14a.devices[${i}]: ungültiges Gerät — verworfen`);
       return;
     }
     out.push({

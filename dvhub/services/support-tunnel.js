@@ -1,24 +1,28 @@
-// services/support-tunnel.js — T-0113 Tier 3: customer-initiated reverse-SSH
+// services/support-tunnel.js — T-0113 Tier 3: customer-controlled reverse-SSH
 // support tunnel.
 //
 // Trust model (Christin, 2026-06-08): the tunnel is the ONLY network path a
-// supporter has into the appliance. It is OFF by default, opened ONLY by the
-// customer via the UI button, time-bounded (auto-close), and killable. Without
-// an open tunnel the box sits behind NAT and is unreachable — the deposited
-// support key alone grants nothing.
+// supporter has into the appliance. It is OFF by default, opened by the
+// customer via the UI button — or, since 2026-10-14, by the support via the
+// installer portal, but ONLY if the customer allowed it
+// (installerPortal.allowTunnel, consent box when pairing; notified on every
+// open). Time-bounded (auto-close) and killable. Without an open tunnel the box
+// sits behind NAT and is unreachable — the deposited support key alone grants
+// nothing.
 //
 // Mechanics: `autossh -R` (userspace, no /dev/net/tun — works in unprivileged
 // LXC) dials OUT to the self-hosted relay (support.dvhub.de) and reverse-forwards
-//   relay:127.0.0.1:<shellPort> -> appliance:127.0.0.1:22   (SSH shell)
-//   relay:127.0.0.1:<webPort>   -> appliance:127.0.0.1:80   (Web UI)
+//   relay:127.0.0.1:<shellPort> -> appliance:127.0.0.1:22     (SSH shell; container: own sshd :2222)
+//   relay:127.0.0.1:<webPort>   -> appliance:127.0.0.1:<httpPort> (Web UI, default 80)
 // The relay enforces the two permitlisten ports server-side, so shellPort/webPort
 // MUST match the relay registry (peer assigns them; we mirror into config).
 //
 // Keys: the appliance owns a dedicated relay keypair (Level A, Appliance->Relay,
 // generated at install, private key never leaves the box). The relay hostkey is
 // PINNED (StrictHostKeyChecking=yes + a baked known_hosts) against MITM on first
-// connect. The supporter logs in as the local `dvhub-support` user with Christin's
-// support key (Level B) — a separate, customer-controllable opt-out.
+// connect. The supporter logs in with Christin's support key (Level B) — natively
+// as the local `dvhub-support` user, in the Docker container as `dvhub` on the
+// container's own sshd — a separate, customer-controllable opt-out.
 
 import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process';
 import fs from 'node:fs';

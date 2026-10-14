@@ -144,3 +144,21 @@ test('licence cap warning: ignores invalid/negative kWp entries in the sum', () 
   const warning = pvPlantsLicenseCapWarning(plants, { max_kwp: 50 });
   assert.match(warning, /55 kWp/);
 });
+
+// Audit 2026-10-14, Befund 2: Speichern in den Einstellungen warf Neigung,
+// Ausrichtung und die Verschattungsangaben jeder PV-Anlage weg — der Entwurf
+// übernahm nur kWp und Datum.
+test('pv plants keep geometry and shading through load → save', () => {
+  const { deserializePvPlants } = loadPvPlantHelpers();
+  const stored = [
+    { kwp: 9.8, commissionedAt: '2021-04-15', tiltDeg: 30, azimuthDeg: 200, skyObstructionConfig: 'H1', shadingConfig: 'S1' },
+    { kwp: 4.2, commissionedAt: '2023-09-01' },
+  ];
+  const draft = deserializePvPlants(stored);
+  draft[0].kwp = '10.1';                   // im Formular geändert
+  const saved = JSON.parse(JSON.stringify(serializePvPlants(draft)));
+  assert.deepEqual(saved, [
+    { kwp: 10.1, commissionedAt: '2021-04-15', tiltDeg: 30, azimuthDeg: 200, skyObstructionConfig: 'H1', shadingConfig: 'S1' },
+    { kwp: 4.2, commissionedAt: '2023-09-01' },
+  ]);
+});

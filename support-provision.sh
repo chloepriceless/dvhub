@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # support-provision.sh — T-0113 Tier 3: idempotent provisioning for the
-# customer-initiated reverse-SSH support tunnel.
+# customer-controlled reverse-SSH support tunnel.
 #
 # Shared by install.sh (first install) AND post-update.sh (ExecStartPre on every
 # service start) so the two never drift — same pattern as the sudoers block.
@@ -19,9 +19,12 @@
 #                      the config flag support.localUser.enabled unless overridden.
 #
 # Security model: the deposited support key alone grants NOTHING — the box sits
-# behind NAT and is only reachable while the customer holds a tunnel open (a
-# customer-initiated, time-bounded, killable action in the UI). The runtime tunnel
-# runs entirely as the unprivileged dvhub user (outbound autossh, no sudo).
+# behind NAT and is only reachable while a tunnel is open: started by the customer
+# in the UI, or by the support via the installer portal if the customer allowed it
+# (installerPortal.allowTunnel). Time-bounded and killable. The tunnel runs as the
+# unprivileged dvhub user (outbound autossh) in its own unit
+# dvhub-support-tunnel.service, which DVhub starts/stops via two fixed sudo rules
+# (see 5b). The dvhub-support login user itself has no sudo.
 set -euo pipefail
 
 SERVICE_USER="${SERVICE_USER:-dvhub}"
@@ -165,7 +168,7 @@ if [[ "$WANT_USER" == "1" ]]; then
   chown -R "$SUPPORT_USER:$SERVICE_USER" "$SSH_DIR"
   chmod 700 "$SSH_DIR"
   chmod 600 "$AUTH"
-  echo "  Support: Login-User '$SUPPORT_USER' bereit (Gruppe $SERVICE_USER, kein sudo). Zugang nur via kundeninitiiertem Tunnel."
+  echo "  Support: Login-User '$SUPPORT_USER' bereit (Gruppe $SERVICE_USER, kein sudo). Zugang nur über einen offenen Tunnel (vom Kunden oder mit seiner Freigabe vom Portal geöffnet)."
 else
   if id "$SUPPORT_USER" >/dev/null 2>&1; then
     userdel -r "$SUPPORT_USER" 2>/dev/null || userdel "$SUPPORT_USER" 2>/dev/null || true

@@ -298,6 +298,9 @@ function createSetupWizardState(payload = {}) {
         : payload.effectiveConfig || {}
     ),
     effectiveConfig: clone(payload.effectiveConfig || {}),
+    // Stand beim Laden (nur bei vorhandener Config): geht beim Speichern als
+    // `base` mit, damit der Server nur Geändertes übernimmt (config-base-merge.js).
+    baseConfig: payload.config && Object.keys(payload.config).length > 0 ? clone(payload.config) : null,
     meta: clone(payload.meta || {}),
     steps,
     stepOrder: steps.map((step) => step.id),
@@ -501,6 +504,14 @@ const setupWizardHelpers = {
 if (typeof globalThis !== 'undefined') {
   globalThis.DVhubSetupWizard = setupWizardHelpers;
 }
+
+function buildSetupSaveBody(config, source, state) {
+  const body = { config };
+  if (source !== 'import' && state?.baseConfig) body.base = state.baseConfig;
+  return body;
+}
+
+if (typeof globalThis !== 'undefined') globalThis.DVhubSetupWizard.buildSetupSaveBody = buildSetupSaveBody;
 
 function setSetupWizardState(nextState) {
   setupDefinition = clone(nextState?.definition || setupDefinition || {});
@@ -834,7 +845,7 @@ async function saveSetup(config, source = 'setup') {
   const response = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ config })
+    body: JSON.stringify(buildSetupSaveBody(config, source, setupWizardState))
   });
   const payload = await response.json();
   if (!response.ok || !payload.ok) {

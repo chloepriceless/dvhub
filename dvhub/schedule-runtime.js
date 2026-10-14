@@ -26,10 +26,26 @@ export function scheduleMatch(rule, nowMin) {
  * Config stehen dort, wo im laufenden Zustand die erste Nicht-Plan-Regel stand;
  * die Plan-Regeln behalten ihre Lage davor bzw. dahinter. Ohne Regeln von Hand
  * im Zustand kommen die aus der Config ans Ende.
+ *
+ * Eine Regel von Hand, die beim Neuladen unverändert bleibt, behält ihre
+ * Laufzeit-Markierung _wasActive — sonst würde sie nach ihrem Fenster nicht
+ * abgeschaltet, wenn das Neuladen zwischen den letzten Durchlauf im Fenster
+ * und den ersten danach fällt (Audit 2026-10-14). Eine geänderte Regel gilt
+ * als neu.
  */
 export function mergeLoadedScheduleRules(liveRules, configRules) {
   const isPlan = (r) => r?.source === 'forecast_optimizer';
-  const fromConfig = (Array.isArray(configRules) ? configRules : []).filter((r) => !isPlan(r));
+  const content = (r) => JSON.stringify(Object.keys(r).filter((k) => !k.startsWith('_') && k !== 'days' && k !== 'oneTime').sort().map((k) => [k, r[k]]));
+  const wasActive = (Array.isArray(liveRules) ? liveRules : [])
+    .filter((r) => r && typeof r === 'object' && !isPlan(r) && r._wasActive)
+    .map(content);
+  const fromConfig = (Array.isArray(configRules) ? configRules : []).filter((r) => !isPlan(r)).map((r) => {
+    if (!r || typeof r !== 'object' || !wasActive.length) return r;
+    const i = wasActive.indexOf(content(r));
+    if (i < 0) return r;
+    wasActive.splice(i, 1);
+    return { ...r, _wasActive: true };
+  });
   const out = [];
   let placed = false;
   for (const r of Array.isArray(liveRules) ? liveRules : []) {

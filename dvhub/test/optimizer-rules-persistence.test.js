@@ -95,3 +95,34 @@ test('Reihenfolge bleibt: Plan-Regeln vor oder hinter den Regeln von Hand wie zu
   // Nur Plan-Regeln im Zustand.
   assert.deepEqual(mergeLoadedScheduleRules([hold(0)], [manual]).map((r) => r.id), ['opt-0', 'm1']);
 });
+
+// Audit 2026-10-14, Befund 5: Eine Regel von Hand trägt im Speicher die
+// Markierung _wasActive, solange ihr Fenster lief. Lud ein Speichern die Config
+// neu, kam die Regel ohne Markierung zurück — fiel das zwischen den letzten
+// Durchlauf im Fenster und den ersten danach, wurde sie nie abgeschaltet und
+// lief am nächsten Tag wieder.
+test('Neuladen behält _wasActive einer unveränderten Regel von Hand — sie wird nach dem Fenster abgeschaltet', async () => {
+  const { autoDisableExpiredScheduleRules } = await import('../schedule-runtime.js');
+  const live = [{ ...manual, _wasActive: true }];          // lief bis 21:00
+  const { reloaded } = persistAndReload(live);
+  assert.equal(reloaded[0]._wasActive, true);
+  // 21:05 (1265 min): Fenster 20:00–21:00 vorbei → abschalten.
+  const after = autoDisableExpiredScheduleRules(reloaded, 21 * 60 + 5);
+  assert.equal(after.changed, true);
+  assert.equal(after.rules[0].enabled, false);
+});
+
+test('Neuladen: eine geänderte Regel gilt als neu und verliert _wasActive', () => {
+  const live = [{ ...manual, _wasActive: true }];
+  const edited = normalizeConfigInput({ schedule: { rules: [{ ...manual, end: '23:00' }] } }).persistedConfig;
+  const reloaded = mergeLoadedScheduleRules(live, edited.schedule.rules);
+  assert.equal(reloaded[0].end, '23:00');
+  assert.equal('_wasActive' in reloaded[0], false);
+});
+
+test('Neuladen: zwei gleiche Regeln — die Markierung geht nur an eine', () => {
+  const twin = { target: 'gridSetpointW', value: 0, start: '08:00', end: '09:00', enabled: true };
+  const live = [{ ...twin, _wasActive: true }, { ...twin }];
+  const { reloaded } = persistAndReload(live);
+  assert.deepEqual(reloaded.map((r) => r._wasActive === true), [true, false]);
+});
