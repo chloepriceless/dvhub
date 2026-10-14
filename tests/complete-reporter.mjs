@@ -21,9 +21,12 @@
 
 const keyOf = (d) => `${d.file || '?'}\u0000${d.nesting}\u0000${d.name}\u0000${d.line ?? ''}:${d.column ?? ''}`;
 
+import { writeFileSync } from 'node:fs';
+
 export default async function* completeReporter(source) {
   const open = new Map();
   let total = 0;
+  let failed = 0;
   for await (const ev of source) {
     const d = ev.data || {};
     // Der Eintrag für die Datei selbst (Name = Dateiname, Ebene 0) bekommt bei
@@ -35,12 +38,19 @@ export default async function* completeReporter(source) {
       open.set(keyOf(d), (open.get(keyOf(d)) || 0) + 1);
       total++;
     } else if (ev.type === 'test:pass' || ev.type === 'test:fail') {
+      if (ev.type === 'test:fail') failed++;
       const k = keyOf(d);
       const n = open.get(k) || 0;
       if (n <= 1) open.delete(k); else open.set(k, n - 1);
     }
   }
   const missing = [...open.keys()].map((k) => k.split('\u0000'));
+  // Für tests/run-node-tests.mjs: welche Dateien still abgebrochen sind.
+  if (process.env.DVHUB_COMPLETE_REPORT) {
+    writeFileSync(process.env.DVHUB_COMPLETE_REPORT, JSON.stringify({
+      total, failed, missingFiles: [...new Set(missing.map(([file]) => file))],
+    }));
+  }
   if (!missing.length) {
     yield `complete-reporter: OK (${total} eingereiht, alle mit Ergebnis)\n`;
     return;
