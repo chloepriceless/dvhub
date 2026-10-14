@@ -4583,6 +4583,12 @@ function sanitizeScheduleRules(value, warnings) {
   const rules = [];
   for (const item of value) {
     if (!isPlainObject(item)) continue;
+    // Plan-Regeln des Optimizers (EOS/intern) stehen nicht in der Config: sie
+    // leben im Speicher und für Neustarts in optimizer-rules.json. Früher hier
+    // gespeichert, verloren sie dabei optimizer/closedLoopHold & Co. — die
+    // Bereinigung löschte darauf die „Akku halten“-Regeln (2026-10-14).
+    // Alte Einträge fallen beim Laden weg.
+    if (item.source === 'forecast_optimizer') continue;
     const next = {};
     if (item.id != null) next.id = String(item.id);
     if (item.target != null) next.target = String(item.target);

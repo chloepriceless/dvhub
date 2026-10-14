@@ -59,7 +59,8 @@ import {
 } from './sun-times-cache.js';
 import { buildSunTimesYearCache, computeSunriseSunset } from './sun-times-compute.js';
 import {
-  sanitizePersistedScheduleRules
+  sanitizePersistedScheduleRules,
+  mergeLoadedScheduleRules
 } from './schedule-runtime.js';
 import { createHistoryImportManager } from './history-import.js';
 import { createModbusTransport } from './transport-modbus.js';
@@ -160,6 +161,7 @@ import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-s
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createOptimizerService } from './services/optimizer/index.js';
+import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules } from './services/optimizer/rule-store.js';
 import { createFamilyService } from './services/family/index.js';
 import { createMqttHub } from './services/mqtt/index.js';
 import { createMqttPublisher } from './services/mqtt/publisher.js';
@@ -509,7 +511,8 @@ function applyLoadedConfig(nextLoadedConfig) {
   const zone = applySystemTimeZone(cfg);
   if (zone.changed) console.log(`Zeitzone: ${zone.timeZone} (System: ${zone.previous ?? 'nicht gesetzt'})`);
   state.keepalive.appPulse.periodSec = cfg.keepalivePulseSec;
-  state.schedule.rules = Array.isArray(cfg.schedule.rules) ? cfg.schedule.rules : [];
+  // Plan-Regeln aus dem laufenden Zustand behalten, Regeln von Hand aus der Config.
+  state.schedule.rules = mergeLoadedScheduleRules(state.schedule.rules, cfg.schedule.rules);
   state.schedule.config.defaultGridSetpointW = cfg.schedule.defaultGridSetpointW;
   state.schedule.config.defaultChargeCurrentA = cfg.schedule.defaultChargeCurrentA;
   state.schedule.config.defaultFeedExcessDcPv = cfg.schedule.defaultFeedExcessDcPv ?? 1;
@@ -564,14 +567,42 @@ function saveAndApplyConfig(nextRawConfig) {
 // (Stage-1/Stage-2 planner, schedule-eval cleanups). Default 'config_persist'
 // preserves backward compat for the ~7 callers in market-automation-builder
 // and schedule-eval that do not pass an explicit tag.
+// Plan-Regeln (Optimizer/EOS) liegen nicht in der Config, sondern hier — für
+// einen Neustart vollständig, bis der nächste Lauf neu plant (2026-10-14).
+const optimizerRuleStore = createOptimizerRuleStore({
+  file: optimizerRulesPath(DATA_DIR || __dirname),
+  onError: (e) => pushLog('optimizer_rules_store_error', { error: e.message }, 'warn'),
+});
+function persistOptimizerRules() {
+  optimizerRuleStore.save(state.schedule.rules);
+}
+// Neustart: die zuletzt gültigen Plan-Regeln gleich wieder einsetzen
+// (abgelaufene Slots fallen weg) — der nächste Optimizer-Lauf ersetzt sie.
+{
+  const restored = readOptimizerRules(optimizerRuleStore.file);
+  if (restored.length) {
+    state.schedule.rules = mergeLoadedScheduleRules(restored, state.schedule.rules);
+    console.log(`Plan-Regeln wiederhergestellt: ${restored.length}`);
+  }
+}
+
 function persistConfig(source = 'config_persist') {
   try {
+    persistOptimizerRules();
     const current = JSON.parse(JSON.stringify(rawCfg || {}));
     current.schedule = current.schedule || {};
     current.schedule.rules = sanitizePersistedScheduleRules(state.schedule.rules);
     current.schedule.defaultGridSetpointW = state.schedule.config.defaultGridSetpointW;
     current.schedule.defaultChargeCurrentA = state.schedule.config.defaultChargeCurrentA;
     current.schedule.defaultFeedExcessDcPv = state.schedule.config.defaultFeedExcessDcPv;
+    // Hat sich nur an den Plan-Regeln etwas geändert (Slot abgelaufen, Plan
+    // bereinigt), bleibt die Config unberührt — keine Sicherung, kein Neuladen.
+    const before = rawCfg?.schedule || {};
+    const unchanged = JSON.stringify(sanitizePersistedScheduleRules(before.rules || [])) === JSON.stringify(current.schedule.rules)
+      && before.defaultGridSetpointW === current.schedule.defaultGridSetpointW
+      && before.defaultChargeCurrentA === current.schedule.defaultChargeCurrentA
+      && before.defaultFeedExcessDcPv === current.schedule.defaultFeedExcessDcPv;
+    if (unchanged) return;
     saveAndApplyConfig(current);
     telemetrySafeWrite(() => telemetryStore.writeScheduleSnapshot({
       ts: new Date(),
@@ -1129,6 +1160,7 @@ const ctx = {
   pushLog,
   telemetrySafeWrite,
   persistConfig,
+  persistOptimizerRules,
   setForcedOff,
   clearForcedOff,
   expireLeaseIfNeeded,

@@ -751,6 +751,8 @@ export function createOptimizerService(ctx) {
       state.schedule.rules = insertOptimizerRules(
         state.schedule.rules, newRules, 'forecast_optimizer'
       );
+      // Für einen Neustart ablegen (nicht in die Config — rule-store.js).
+      ctx.persistOptimizerRules?.();
 
       // 14. Update optimizer state
       const currentVersion = ctx.forecastService.forecastVersion;

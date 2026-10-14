@@ -97,6 +97,14 @@ verweist hierher.
 
 ### Behoben
 
+- **EOS-„Akku halten“ fiel jede Viertelstunde für einige Minuten aus.** Die Plan-Regeln von EOS
+  standen in der Konfiguration. Beim Speichern zur Viertelstunde gingen ihre Kennzeichen verloren
+  (`optimizer`, `closedLoopHold` u. a.), die Bereinigung hielt sie dann für verbotenes Netzladen und
+  löschte sie bis zum nächsten Plan. Jetzt leben Plan-Regeln nur im Speicher; für einen Neustart
+  liegen sie vollständig in `optimizer-rules.json` im Datenverzeichnis und werden beim Start sofort
+  wieder eingesetzt, bis der nächste Lauf neu plant. In der Konfiguration stehen nur noch Regeln,
+  die jemand selbst eingestellt hat. Nebenbei entfällt das Speichern der Konfiguration zu jeder
+  Viertelstunde samt Sicherungskopie.
 - **Support-Tunnel überlebt einen Neustart von DVhub.** Er läuft jetzt als eigener Dienst
   (`dvhub-support-tunnel.service`) statt als Kindprozess von DVhub; vorher riss jeder
   `systemctl restart dvhub` die Verbindung des Supports ab. Im Docker-Container bleibt es beim

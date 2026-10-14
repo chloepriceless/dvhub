@@ -17,10 +17,35 @@ export function scheduleMatch(rule, nowMin) {
   return nowMin >= start || nowMin < end;
 }
 
+/**
+ * Config neu geladen (Speichern, Oberfläche, Import): Regeln von Hand kommen
+ * aus der Config, Plan-Regeln (source 'forecast_optimizer') bleiben aus dem
+ * laufenden Zustand — sie stehen nie in der Config (2026-10-14).
+ *
+ * Die Reihenfolge zählt (die erste passende Regel greift): Die Regeln aus der
+ * Config stehen dort, wo im laufenden Zustand die erste Nicht-Plan-Regel stand;
+ * die Plan-Regeln behalten ihre Lage davor bzw. dahinter. Ohne Regeln von Hand
+ * im Zustand kommen die aus der Config ans Ende.
+ */
+export function mergeLoadedScheduleRules(liveRules, configRules) {
+  const isPlan = (r) => r?.source === 'forecast_optimizer';
+  const fromConfig = (Array.isArray(configRules) ? configRules : []).filter((r) => !isPlan(r));
+  const out = [];
+  let placed = false;
+  for (const r of Array.isArray(liveRules) ? liveRules : []) {
+    if (isPlan(r)) out.push(r);
+    else if (!placed) { out.push(...fromConfig); placed = true; }
+  }
+  if (!placed) out.push(...fromConfig);
+  return out;
+}
+
 export function sanitizePersistedScheduleRules(rules) {
   if (!Array.isArray(rules)) return [];
   return rules
     .filter((rule) => rule && typeof rule === 'object' && !Array.isArray(rule))
+    // Plan-Regeln gehören nicht in die Config (eigene Ablage, rule-store.js).
+    .filter((rule) => rule.source !== 'forecast_optimizer')
     .map(({ _wasActive, days, oneTime, ...rest }) => ({ ...rest }));
 }
 
