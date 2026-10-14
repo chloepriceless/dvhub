@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureSchemaMigrations } from '../helpers/pg-schema-migrations.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIG_DIR = path.join(__dirname, '../../db/migrations');
@@ -87,13 +88,7 @@ describe('migration 018 — no-op without timescaledb extension', { skip: !RUN_P
     // 018 references schema_migrations; ensure the minimal table exists so the
     // un-gated INSERT does not fail for an unrelated (missing-table) reason on a
     // bare ephemeral DB. CREATE IF NOT EXISTS keeps this safe on a primed DB.
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version     integer PRIMARY KEY,
-        description text,
-        applied_at  timestamptz NOT NULL DEFAULT NOW()
-      )
-    `);
+    await ensureSchemaMigrations(pool);
   });
 
   after(async () => {

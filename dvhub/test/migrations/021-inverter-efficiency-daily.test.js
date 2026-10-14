@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { UPSERT_EFFICIENCY_SQL } from '../../services/inverter-efficiency/daily.js';
+import { ensureSchemaMigrations } from '../helpers/pg-schema-migrations.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SQL_PATH = path.join(__dirname, '../../db/migrations/021-inverter-efficiency-daily.sql');
@@ -40,8 +41,7 @@ describe('migration 021 — gegen Postgres', { skip: !DATABASE_URL }, () => {
   before(async () => {
     const pg = (await import('pg')).default;
     pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
-      version INTEGER PRIMARY KEY, description TEXT, applied_at TIMESTAMPTZ)`);
+    await ensureSchemaMigrations(pool);
     await pool.query('DROP TABLE IF EXISTS inverter_efficiency_daily');
     await pool.query('DELETE FROM schema_migrations WHERE version = 21');
   });

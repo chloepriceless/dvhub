@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureSchemaMigrations } from '../helpers/pg-schema-migrations.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SQL_PATH = path.join(__dirname, '../../db/migrations/020-integration-health-snapshots.sql');
@@ -45,13 +46,7 @@ describe('migration 020 — integration_health_snapshots', { skip: !RUN_PG_TESTS
     // Make sure schema_migrations exists — every migration self-registers
     // into it. ensurePgSchema() in production wires this up; here we
     // create the minimal shape so the test doesn't depend on boot order.
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY,
-        description TEXT NOT NULL,
-        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
+    await ensureSchemaMigrations(pool);
     const sql = fs.readFileSync(SQL_PATH, 'utf8');
     await pool.query(sql);
   });

@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureSchemaMigrations } from '../helpers/pg-schema-migrations.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIG_DIR = path.join(__dirname, '../../db/migrations');
@@ -75,13 +76,7 @@ describe('migration 004 — no-op when forecast tables are absent (fresh-install
   before(async () => {
     const pg = (await import('pg')).default;
     pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version     integer PRIMARY KEY,
-        description text,
-        applied_at  timestamptz NOT NULL DEFAULT NOW()
-      )
-    `);
+    await ensureSchemaMigrations(pool);
     // Simulate the fresh-install order: forecast tables NOT yet created.
     await pool.query('DROP TABLE IF EXISTS pv_forecasts, forecast_accuracy, tesla_snapshots CASCADE');
     await pool.query('DELETE FROM schema_migrations WHERE version = 4');
