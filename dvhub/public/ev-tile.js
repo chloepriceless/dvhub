@@ -36,6 +36,7 @@
     "          <option value=\"\">bis Abstecken</option><option value=\"60\">1 h</option><option value=\"120\">2 h</option><option value=\"240\">4 h</option><option value=\"480\">8 h</option>",
     "        </select>",
     "        <button type=\"button\" class=\"btn primary sm\" id=\"evBoostStart\">Jetzt laden</button>",
+    "        <button type=\"button\" class=\"btn sm ghost\" id=\"evStopStart\" title=\"Die Wallbox l&auml;dt nicht, egal was EOS plant &mdash; auch im Not-Halt. Endet zur gew&auml;hlten Zeit, beim Abstecken oder mit Beenden.\">Laden stoppen</button>",
     "      </span>",
     "    </div>",
     "    <div class=\"ev-boost-active\" id=\"evBoostActive\" hidden>",
@@ -359,14 +360,15 @@
     kw.max = String(lim.maxPowerW / 1000);
     if (!boostTouched && document.activeElement !== kw) kw.value = String(lim.maxPowerW / 1000);
     if (!ov) return;
-    const parts = ['Sofort laden · ' + fmtKw(ov.powerW)];
+    const isStop = ov.kind === 'stop';
+    const parts = [isStop ? 'Laden gestoppt' : 'Sofort laden · ' + fmtKw(ov.powerW)];
     parts.push(ov.until ? 'bis ' + fmtTime(ov.until) : 'bis Abstecken');
     if (!ov.seenConnected && data.vehicle && data.vehicle.connected === false) parts.push('wartet aufs Anstecken');
     if (data.lastCommandError) parts.push('Fehler: ' + data.lastCommandError);
     const t = el('evBoostText');
     t.textContent = parts.join(' · ');
     t.classList.toggle('is-error', !!data.lastCommandError);
-    t.title = ov.requestedW && ov.requestedW !== ov.powerW
+    t.title = !isStop && ov.requestedW && ov.requestedW !== ov.powerW
       ? 'Gewünscht ' + fmtKw(ov.requestedW) + ', möglich ' + fmtKw(lim.minPowerW) + '–' + fmtKw(lim.maxPowerW)
       : 'seit ' + fmtTime(ov.startedAt);
   }
@@ -397,15 +399,41 @@
     }
   }
 
+  // „Laden stoppen“: die Wallbox lädt nicht, egal was EOS plant (kind 'stop').
+  async function startStop() {
+    const dur = el('evBoostFor').value;
+    const payload = { kind: 'stop' };
+    if (dur) payload.durationMin = Number(dur);
+    el('evStopStart').disabled = true;
+    try {
+      const res = await apiFetch('/api/ev/override', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      let body = {};
+      try { body = await res.json(); } catch (_) { /* leer */ }
+      if (!res.ok || !body.ok) { msg('Nicht gestoppt: ' + (body.error || ('HTTP ' + res.status)), true); return; }
+      const r = body.result || {};
+      if (r.skipped === 'pro required') msg('Gespeichert, aber ohne Pro-Lizenz steuert DVhub die Wallbox nicht.', true);
+      else msg(r.ok === false && r.error ? 'Gespeichert, Wallbox meldet: ' + r.error : 'Laden gestoppt.', r.ok === false && !!r.error);
+      setTimeout(function () { msg(''); }, 5000);
+    } catch (e) {
+      msg('Nicht gestoppt: ' + e.message, true);
+    } finally {
+      el('evStopStart').disabled = false;
+      load();
+    }
+  }
+
   async function stopBoost() {
     el('evBoostStop').disabled = true;
+    const wasStop = data && data.override && data.override.kind === 'stop';
     try {
       const res = await apiFetch('/api/ev/override', { method: 'DELETE' });
       let body = {};
       try { body = await res.json(); } catch (_) { /* leer */ }
+      if (body.error === 'emergency_stop_active') { msg('Not-Halt ist aktiv — „Laden stoppen“ bleibt bis zum Aufheben.', true); return; }
       if (!res.ok || !body.ok) { msg('Nicht beendet: ' + (body.error || ('HTTP ' + res.status)), true); return; }
-      if (body.error) { msg('Sofort laden beendet, aber die Wallbox meldet: ' + body.error, true); return; }
-      msg('Sofort laden beendet — es gilt wieder der EOS-Plan.');
+      const what = wasStop ? 'Laden stoppen' : 'Sofort laden';
+      if (body.error) { msg(what + ' beendet, aber die Wallbox meldet: ' + body.error, true); return; }
+      msg(what + ' beendet — es gilt wieder der EOS-Plan bzw. die Wallbox selbst.');
       setTimeout(function () { msg(''); }, 4000);
     } catch (e) {
       msg('Nicht beendet: ' + e.message, true);
@@ -528,6 +556,7 @@
     if (e.target.id === 'evSave') { save(); return; }
     if (e.target.id === 'evBoostStart') { startBoost(); return; }
     if (e.target.id === 'evBoostStop') { stopBoost(); return; }
+    if (e.target.id === 'evStopStart') { startStop(); return; }
     if (e.target.id === 'evReset') { setDirty(false); msg(''); draft = draftFromData(); renderForm(); }
   });
 

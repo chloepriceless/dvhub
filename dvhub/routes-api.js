@@ -5555,8 +5555,10 @@ export function createApiRoutes(ctx) {
         if (!Number.isFinite(d) || d <= 0) return json(res, 400, { ok: false, error: 'durationMin must be > 0' });
         untilMs = Date.now() + d * 60_000;
       }
-      const out = await ctx.eosEvccBridge.setOverride({ powerW: body.powerW, untilMs });
-      pushLog('ev_override_set', { ok: out.ok === true, powerW: out.override?.powerW ?? null, until: out.override?.until ?? null, error: out.error || null }, actorContext(req));
+      // kind 'stop' = „Laden stoppen“ (2026-10-15), sonst „Sofort laden“ mit powerW.
+      const kind = body.kind === 'stop' ? 'stop' : 'charge';
+      const out = await ctx.eosEvccBridge.setOverride({ kind, powerW: body.powerW, untilMs });
+      pushLog('ev_override_set', { ok: out.ok === true, kind, powerW: out.override?.powerW ?? null, until: out.override?.until ?? null, error: out.error || null }, actorContext(req));
       return json(res, out.ok ? 200 : 400, out);
     }
 

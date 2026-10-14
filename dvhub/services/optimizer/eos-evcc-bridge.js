@@ -132,28 +132,39 @@ export function overrideLimits(bc) {
 }
 
 /**
- * Override-Anfrage pruefen. `powerW` wird auf [Mindestleistung, evMaxChargeW]
- * begrenzt; `untilMs` null = bis zum Abstecken bzw. Beenden.
+ * Override-Anfrage pruefen. Zwei Arten:
+ *   kind 'charge' (Standard, „Sofort laden“): `powerW` wird auf
+ *     [Mindestleistung, evMaxChargeW] begrenzt;
+ *   kind 'stop' („Laden stoppen“, 2026-10-15): die Wallbox laedt nicht, egal
+ *     was EOS plant — fuer jede angebundene Wallbox.
+ * `untilMs` null = bis zum Abstecken bzw. Beenden.
  * @returns {{ok:true, override:object}|{ok:false, error:string}}
  */
-export function normalizeOverride({ powerW, untilMs = null }, bc, nowMs) {
-  const p = Number(powerW);
-  if (!Number.isFinite(p) || p <= 0) return { ok: false, error: 'powerW must be > 0' };
+export const OVERRIDE_KINDS = Object.freeze(['charge', 'stop']);
+export function normalizeOverride({ kind = 'charge', powerW, untilMs = null }, bc, nowMs) {
+  if (!OVERRIDE_KINDS.includes(kind)) return { ok: false, error: `kind must be ${OVERRIDE_KINDS.join('|')}` };
   if (untilMs != null && (!Number.isFinite(Number(untilMs)) || Number(untilMs) <= nowMs)) {
     return { ok: false, error: 'until must lie in the future' };
   }
   if (untilMs != null && Number(untilMs) > nowMs + 48 * 3600_000) {
     return { ok: false, error: 'until must be within 48 h' };
   }
+  const until = untilMs == null ? null : new Date(Number(untilMs)).toISOString();
+  if (kind === 'stop') {
+    return { ok: true, override: { kind: 'stop', powerW: 0, requestedW: 0, startedAt: new Date(nowMs).toISOString(), until, seenConnected: false } };
+  }
+  const p = Number(powerW);
+  if (!Number.isFinite(p) || p <= 0) return { ok: false, error: 'powerW must be > 0' };
   const lim = overrideLimits(bc);
   const clampedW = Math.round(Math.min(lim.maxPowerW, Math.max(lim.minPowerW, p)));
   return {
     ok: true,
     override: {
+      kind: 'charge',
       powerW: clampedW,
       requestedW: Math.round(p),
       startedAt: new Date(nowMs).toISOString(),
-      until: untilMs == null ? null : new Date(Number(untilMs)).toISOString(),
+      until,
       seenConnected: false
     }
   };
@@ -207,11 +218,12 @@ export function createEosEvccBridge(deps) {
   // Ein Takt bzw. eine Override-Aenderung zur Zeit. Der 30-s-Takt ueberspringt,
   // wenn schon etwas laeuft; Knopfdruck und erzwungene Takte warten.
   let inflight = null;
-  let override = null;       // { powerW, requestedW, startedAt, until, seenConnected, prevMode? }
+  let override = null;       // { kind, powerW, requestedW, startedAt, until, seenConnected, prevMode? }
   try {
     const saved = loadOverride();
-    if (saved && Number(saved.powerW) > 0) override = saved;
+    if (saved && (saved.kind === 'stop' || Number(saved.powerW) > 0)) override = saved;
   } catch { /* kaputte Datei: ohne Override weiter */ }
+  const isStopOverride = () => override?.kind === 'stop';
 
   function persistOverride() {
     try { saveOverride(override); } catch (e) { pushLog('ev_override_persist_error', { error: e?.message || String(e) }); }
@@ -281,10 +293,12 @@ export function createEosEvccBridge(deps) {
     return releaseIfNeeded(cfg, bc);
   }
 
-  // Ein Takt im Override: laden mit der gewaehlten Leistung, EOS-Plan egal.
-  // Rueckgabe null = Override ist gerade zu Ende gegangen, normaler Takt folgt.
-  async function overrideTick(cfg, bc, force) {
-    if (override.until && Date.parse(override.until) <= now()) {
+  // Ein Takt im Override: laden mit der gewaehlten Leistung bzw. nicht laden,
+  // EOS-Plan egal. Rueckgabe null = Override ist gerade zu Ende gegangen,
+  // normaler Takt folgt. `paused`: Not-Halt — ein Stopp wird gehalten, aber
+  // nicht beendet (Ende hiesse: Laden wieder erlauben).
+  async function overrideTick(cfg, bc, force, { paused = false } = {}) {
+    if (!paused && override.until && Date.parse(override.until) <= now()) {
       await endOverride('expired', cfg, bc);
       return null;
     }
@@ -304,9 +318,35 @@ export function createEosEvccBridge(deps) {
     }
     // Erst nach dem Anstecken zaehlt Abziehen als Ende — so kann man den
     // Knopf druecken und danach einstecken.
-    if (st?.ok && st.connected === false && override.seenConnected) {
+    if (!paused && st?.ok && st.connected === false && override.seenConnected) {
       await endOverride('unplugged', cfg, bc);
       return null;
+    }
+
+    if (override.kind === 'stop') {
+      // „Laden stoppen“: wirklich nicht laden — evcc im Modus off (nicht der
+      // eingestellte Stopp-Modus, der bei pv/minpv weiter mit PV laedt), eine
+      // direkte Box mit stop() (nicht release()).
+      const key = `${bc.charger}:${bc.loadpoint}:override:stop`;
+      if (!force && lastSent?.key === key) {
+        const drift = charger.type === 'evcc' && st?.ok && (st.raw?.mode ?? null) !== 'off';
+        if (!drift) { lastError = null; return { ok: true, unchanged: true, override: true }; }
+        pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: st.raw?.mode ?? null, expected: 'off', override: true });
+      }
+      const stopper = charger.type === 'evcc' ? getCharger(cfg, { ...bc, stopMode: 'off' }) : charger;
+      const res = await stopper.stop();
+      if (!res?.ok) {
+        lastError = res?.error || 'wallbox write failed';
+        pushLog('ev_override_error', { charger: charger.type, error: lastError, kind: 'stop' });
+        return { ok: false, error: lastError, override: true };
+      }
+      lastError = null;
+      lastSent = {
+        key, charger: bc.charger, action: 'stop', currentA: null, chargePowerW: 0, loadpoint: bc.loadpoint,
+        mode: 'off', released: false, override: true, slotTs: null, at: new Date(now()).toISOString()
+      };
+      pushLog('ev_override_command', lastSent);
+      return { ok: true, sent: lastSent, override: true };
     }
 
     const capped = applyGridCap({ action: 'charge', currentA: powerToCurrentA(override.powerW, bc) }, bc, getGridCapW());
@@ -399,7 +439,15 @@ export function createEosEvccBridge(deps) {
       const bc = resolveEvccBridgeConfig(cfg);
       // Not-Halt friert ein wie ueberall: kein Befehl an die Wallbox, auch kein
       // Override. Ein gesetzter Override bleibt stehen und greift nach dem Aufheben.
-      if (isPaused()) return { ok: false, skipped: 'paused' };
+      // Ausnahme „Laden stoppen“: Stoppen ist die sichere Richtung und wird auch
+      // im Not-Halt durchgesetzt (2026-10-15).
+      if (isPaused()) {
+        if (isStopOverride()) {
+          const res = await overrideTick(cfg, bc, force, { paused: true });
+          if (res) return { ...res, paused: true };
+        }
+        return { ok: false, skipped: 'paused' };
+      }
       if (override) {
         const res = await overrideTick(cfg, bc, force);
         if (res) return res;
@@ -507,10 +555,10 @@ export function createEosEvccBridge(deps) {
      * Sofort laden mit `powerW`, bis `untilMs` (null = bis Abstecken/Beenden).
      * Wartet einen laufenden Takt ab und sendet den Befehl dann sofort.
      */
-    async setOverride({ powerW, untilMs = null } = {}) {
+    async setOverride({ kind = 'charge', powerW, untilMs = null } = {}) {
       const cfg = getCfg() || {};
       const bc = resolveEvccBridgeConfig(cfg);
-      const norm = normalizeOverride({ powerW, untilMs }, bc, now());
+      const norm = normalizeOverride({ kind, powerW, untilMs }, bc, now());
       if (!norm.ok) return norm;
       const next = norm.override;
       // evcc-Modus von vorher merken (fuer das Ende bei ausgeschalteter
@@ -518,7 +566,8 @@ export function createEosEvccBridge(deps) {
       if (!override && bc.charger === 'evcc') {
         try {
           const st = await getCharger(cfg, bc).status();
-          if (st?.ok && typeof st.raw?.mode === 'string' && st.raw.mode !== 'now') next.prevMode = st.raw.mode;
+          const own = next.kind === 'stop' ? 'off' : 'now';
+          if (st?.ok && typeof st.raw?.mode === 'string' && st.raw.mode !== own) next.prevMode = st.raw.mode;
         } catch { /* ohne Vorher-Modus: Ende = Stopp-Modus */ }
       }
       return locked(async () => {
@@ -530,7 +579,7 @@ export function createEosEvccBridge(deps) {
         }
         override = next;
         persistOverride();
-        pushLog('ev_override_start', { powerW: next.powerW, requestedW: next.requestedW, until: next.until });
+        pushLog('ev_override_start', { kind: next.kind, powerW: next.powerW, requestedW: next.requestedW, until: next.until });
         const result = await runTick(true);
         return { ok: true, override: override ? { ...override } : null, result };
       });
@@ -541,6 +590,11 @@ export function createEosEvccBridge(deps) {
     async clearOverride() {
       return locked(async () => {
         if (!override) return { ok: true, override: null, result: null, error: null };
+        // Im Not-Halt bleibt „Laden stoppen“ stehen: Beenden hiesse Laden wieder
+        // erlauben — eine Steuerhandlung, die der Not-Halt gerade unterbindet.
+        if (isPaused() && isStopOverride()) {
+          return { ok: false, error: 'emergency_stop_active', override: { ...override } };
+        }
         const cfg = getCfg() || {};
         const bc = resolveEvccBridgeConfig(cfg);
         const ended = await endOverride('cleared', cfg, bc);

@@ -203,6 +203,15 @@ describe('publishHaDiscoveryTopics — steuerbare Entitäten', () => {
     assert.equal(e.payload.state_topic, 'dvhub/ev/optimize');
   });
 
+  it('Laden stoppen: switch auf cmd/ev/stop, Zustand ev/stop', () => {
+    const hub = makeMockHub();
+    publishHaDiscoveryTopics(hub, enabledCfg);
+    const e = find(hub, 'homeassistant/switch/dvhub_ev_stop');
+    assert.ok(e, 'ev_stop switch found');
+    assert.equal(e.payload.command_topic, 'dvhub/cmd/ev/stop');
+    assert.equal(e.payload.state_topic, 'dvhub/ev/stop');
+  });
+
   it('schaltbare Geräte werden als dynamische switches ergänzt', () => {
     const hub = makeMockHub();
     const devices = [

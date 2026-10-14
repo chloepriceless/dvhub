@@ -78,6 +78,9 @@
 .ev-boost .l { font-family:var(--f-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim); }
 .ev-boost-kw { width:58px; padding:3px 6px; font-size:12px; text-align:right; }
 .ev-boost-for { padding:3px 4px; font-size:11.5px; }
+/* Laden stoppen (2026-10-15): drei Bedienelemente — die Zeile darf umbrechen, die Knöpfe nicht. */
+.ev-boost-idle .ev-inline { flex-wrap:wrap; justify-content:flex-end; row-gap:6px; }
+.ev-boost .btn { white-space:nowrap; }
 .ev-boost-active { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 8px; border-radius:6px; background:var(--glass-2); border:1px solid var(--violet); }
 .ev-boost-text { font-family:var(--f-mono); font-size:11.5px; color:var(--violet); }
 .ev-boost-text.is-error { color:var(--red); }

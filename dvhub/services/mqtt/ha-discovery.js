@@ -149,6 +149,9 @@ const CONTROL_ENTITIES = [
     unit: '%', min: 0, max: 100, step: 1, mode: 'box', icon: 'mdi:battery-charging-high', value_template: NULL_SAFE_TEMPLATE },
   { component: 'select', id: 'ev_mode', name: 'DVhub Wallbox-Modus', suffix: 'ev/mode', command_suffix: 'cmd/ev/mode',
     options: ['off', 'pv', 'minpv', 'now'], icon: 'mdi:ev-plug-type2' },
+  // „Laden stoppen“ (2026-10-15): gilt vor dem EOS-Plan, für jede Wallbox.
+  { component: 'switch', id: 'ev_stop', name: 'DVhub E-Auto Laden stoppen', suffix: 'ev/stop', command_suffix: 'cmd/ev/stop',
+    payload_on: 'ON', payload_off: 'OFF', state_on: 'true', state_off: 'false', icon: 'mdi:ev-plug-type2' },
 ];
 
 /**

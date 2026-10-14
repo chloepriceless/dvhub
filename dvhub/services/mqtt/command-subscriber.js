@@ -131,6 +131,22 @@ export function createMqttCommandSubscriber(hub, ctx) {
       return r || { ok: false, error: 'mode set failed' };
     }
 
+    // E-Auto „Laden stoppen“ (2026-10-15): ON = die Wallbox lädt nicht, egal was
+    // EOS plant (Override der Brücke, jede Wallbox); OFF beendet nur diesen Stopp,
+    // nie ein laufendes „Sofort laden“.
+    if (cmd === 'ev/stop') {
+      const on = parseBool(payload);
+      if (on === null) return { ok: false, error: 'expected ON/OFF' };
+      const bridge = ctx.eosEvccBridge;
+      if (!bridge?.setOverride) return { ok: false, error: 'wallbox bridge not available' };
+      let r;
+      if (on) r = await bridge.setOverride({ kind: 'stop' });
+      else if (bridge.getOverride?.()?.kind === 'stop') r = await bridge.clearOverride();
+      else r = { ok: true, unchanged: true };
+      pushLog('mqtt_ev_stop', { on, ok: r?.ok === true, error: r?.error || null }, MQTT_ACTOR);
+      return r;
+    }
+
     // Schaltbare Geräte (Shelly): cmd/device/<id>
     if (cmd.startsWith('device/')) {
       const id = cmd.slice('device/'.length);

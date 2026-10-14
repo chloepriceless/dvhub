@@ -25,6 +25,13 @@ import {
  * handler reply. Body is parsed as JSON only when present (the SoC measurement
  * PUT carries everything on the query string with no body).
  */
+// Bis zu `ms` warten, bis cond() stimmt — statt fester Wartezeiten, die unter
+// Last (volle Suite neben anderer Arbeit) zu knapp waren (2026-10-15).
+async function waitUntil(cond, ms = 3000) {
+  const t0 = Date.now();
+  while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 10));
+}
+
 function createMockEos(handler) {
   const requests = [];
   return new Promise((resolve) => {
@@ -530,12 +537,16 @@ test('watchdog: EOS pid change triggers an immediate reconcile (providers + data
       onEosRestart: (info) => { restarts.push(info); pushesBeforeRestartHook = beforeCount; },
     });
     // Let the watchdog record the initial pid — no reconcile while it is stable.
-    await new Promise((r) => setTimeout(r, 70));
+    // (Zwei /v1/health-Abfragen: die erste hat die Ausgangs-PID sicher gemerkt.)
+    const healthPolls = () => mock.requests.filter((q) => q.url.startsWith('/v1/health')).length;
+    await waitUntil(() => healthPolls() >= 2);
     assert.equal(beforeCount, 0, 'stable pid must not reconcile');
     assert.equal(restarts.length, 0, 'kein Neustart-Hook ohne Neustart');
     // Simulate an EOS restart: the pid changes.
     pid = 2000;
-    await new Promise((r) => setTimeout(r, 90));
+    await waitUntil(() => restarts.length >= 1 && beforeCount >= 1);
+    // Ein paar Takte weiter: eine doppelte Benachrichtigung soll auffallen.
+    await new Promise((r) => setTimeout(r, 100));
     bridge.stop();
     assert.ok(beforeCount >= 1, 'pid change must trigger a reconcile tick (config-sync beforePush ran)');
     // Der Optimizer wird erst NACH dem Neu-Push benachrichtigt (sonst haette
@@ -852,8 +863,9 @@ test('watchdog: Neustart im Container (PID bleibt 1) löst über den Monitor den
       pushLog: (ev, d) => logs.push({ ev, d }),
       forecastService: { buildForecastResponse: async () => forecastSlots() },
       state: { victron: { soc: 50 } },
-      eosMonitor: { status: () => ({ ...monitor }) },
+      eosMonitor: { status: () => { statusCalls += 1; return { ...monitor }; } },
     };
+    let statusCalls = 0;
     const bridge = createEosForecastBridge(ctx);
     const restarts = [];
     bridge.start({
@@ -861,11 +873,14 @@ test('watchdog: Neustart im Container (PID bleibt 1) löst über den Monitor den
       beforePush: async () => { beforeCount += 1; },
       onEosRestart: (info) => { restarts.push(info); },
     });
-    await new Promise((r) => setTimeout(r, 70));
+    // Zwei Watchdog-Takte: der erste hat den Ausgangsstand sicher gemerkt.
+    await waitUntil(() => statusCalls >= 2);
     assert.equal(beforeCount, 0, 'ohne Neustart kein Reconcile');
     // EOS-Container neu erstellt: gleiche PID, der Monitor zählt den Neustart.
     monitor.restarts = 1; monitor.lastRestartReason = 'started_at';
-    await new Promise((r) => setTimeout(r, 90));
+    await waitUntil(() => restarts.length >= 1 && beforeCount >= 1);
+    // Ein paar Takte weiter: eine doppelte Benachrichtigung soll auffallen.
+    await new Promise((r) => setTimeout(r, 100));
     bridge.stop();
     assert.ok(beforeCount >= 1, 'Neustart → Einstellungen und Prognosen sofort neu');
     assert.equal(restarts.length, 1, 'Optimierer genau einmal benachrichtigt');

@@ -193,6 +193,10 @@ export function createMqttPublisher(hub, ctx) {
       }
     } catch { /* Wallbox nicht verfügbar → null */ }
     pub('ev/mode', evMode);
+    // „Laden stoppen“ aktiv? (Override der EOS→Wallbox-Brücke, 2026-10-15)
+    let evStop = false;
+    try { evStop = ctx.eosEvccBridge?.getOverride?.()?.kind === 'stop'; } catch { /* Brücke fehlt → false */ }
+    pub('ev/stop', evStop);
 
     // Schaltbare Geräte (Shelly): Relais-Zustand als ON/OFF, passend zu den
     // dynamischen HA-switch-Entitäten (state_on 'ON' / state_off 'OFF').

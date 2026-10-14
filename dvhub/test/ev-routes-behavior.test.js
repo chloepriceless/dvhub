@@ -165,3 +165,23 @@ describe('/api/ev/override („Sofort laden“)', () => {
     assert.deepEqual(ctx.bridgeCalls, [['clear']]);
   });
 });
+
+describe('/api/ev/override „Laden stoppen“', () => {
+  it('POST { kind: stop } → Brücke bekommt kind stop, ohne Leistung', async () => {
+    const ctx = makeCtx();
+    ctx.eosEvccBridge.setOverride = async (o) => { ctx.bridgeCalls.push(['set', o]); return { ok: true, override: { kind: o.kind, powerW: 0, until: null } }; };
+    const r = await call(ctx, 'POST', '/api/ev/override', { kind: 'stop' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(ctx.bridgeCalls, [['set', { kind: 'stop', powerW: undefined, untilMs: null }]]);
+    assert.ok(ctx.logs.some((l) => l.event === 'ev_override_set' && l.payload.kind === 'stop'));
+  });
+
+  it('POST { kind: stop, durationMin: 60 } → Ende in 60 min', async () => {
+    const ctx = makeCtx();
+    ctx.eosEvccBridge.setOverride = async (o) => { ctx.bridgeCalls.push(['set', o]); return { ok: true, override: { kind: 'stop' } }; };
+    const t0 = Date.now();
+    await call(ctx, 'POST', '/api/ev/override', { kind: 'stop', durationMin: 60 });
+    const o = ctx.bridgeCalls[0][1];
+    assert.ok(o.untilMs >= t0 + 3_600_000 && o.untilMs <= Date.now() + 3_600_000);
+  });
+});

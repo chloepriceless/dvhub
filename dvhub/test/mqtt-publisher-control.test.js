@@ -121,3 +121,14 @@ describe('MQTT publisher — control/grid_limit/* topics', () => {
     assert.deepEqual(m['dvhub/control/grid_limit/state'].value.shares, { speicher: 3780, wallbox: 3780 });
   });
 });
+
+describe('MQTT publisher — ev/stop', () => {
+  it('true, solange „Laden stoppen“ gilt, sonst false', () => {
+    for (const [override, want] of [[{ kind: 'stop' }, true], [{ kind: 'charge', powerW: 7000 }, false], [null, false]]) {
+      const hub = makeMockHub();
+      const pub = createMqttPublisher(hub, { state: makeState(), getCfg: () => ({ mqtt: { topicPrefix: 'dvhub' } }), pushLog: () => {}, eosEvccBridge: { getOverride: () => override } });
+      pub._publishOnce();
+      assert.equal(pubMap(hub)['dvhub/ev/stop'].value, want, JSON.stringify(override));
+    }
+  });
+});

@@ -187,3 +187,33 @@ describe('createMqttCommandSubscriber', () => {
     assert.equal(subs.length, 2);
   });
 });
+
+describe('cmd/ev/stop — „Laden stoppen“ (2026-10-15)', () => {
+  function withBridge(initial = null) {
+    let override = initial;
+    const bridgeCalls = [];
+    const eosEvccBridge = {
+      getOverride: () => override,
+      setOverride: async (o) => { bridgeCalls.push(['set', o]); override = { kind: o.kind }; return { ok: true, override }; },
+      clearOverride: async () => { bridgeCalls.push(['clear']); override = null; return { ok: true }; },
+    };
+    return { eosEvccBridge, bridgeCalls };
+  }
+
+  it('ON setzt den Stopp, OFF beendet ihn', async () => {
+    const b = withBridge();
+    const { ctx } = makeCtx({ eosEvccBridge: b.eosEvccBridge });
+    const sub = createMqttCommandSubscriber(noopHub, ctx);
+    await sub._handleMessage('dvhub/cmd/ev/stop', 'ON');
+    await sub._handleMessage('dvhub/cmd/ev/stop', 'OFF');
+    assert.deepEqual(b.bridgeCalls, [['set', { kind: 'stop' }], ['clear']]);
+  });
+
+  it('OFF beendet kein laufendes „Sofort laden“', async () => {
+    const b = withBridge({ kind: 'charge', powerW: 7000 });
+    const { ctx } = makeCtx({ eosEvccBridge: b.eosEvccBridge });
+    const sub = createMqttCommandSubscriber(noopHub, ctx);
+    await sub._handleMessage('dvhub/cmd/ev/stop', 'OFF');
+    assert.deepEqual(b.bridgeCalls, []);
+  });
+});
