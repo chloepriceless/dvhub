@@ -59,6 +59,14 @@ for (const rel of TARGET_FILES) {
 
 // --- Behavior tests --------------------------------------------------------
 
+// Bis zu `ms` warten, bis cond() stimmt (statt fester 100 ms): unter Last
+// (volle Testsuite neben anderer Arbeit) kamen in 100 ms nur 3 Takte — der Test
+// war dann rot, ohne dass safeInterval etwas falsch machte (2026-10-15).
+async function waitUntil(cond, ms = 3000) {
+  const t0 = Date.now();
+  while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 10));
+}
+
 test('safeInterval catches sync throws and continues ticking', async () => {
   _resetForTests();
   let calls = 0;
@@ -71,7 +79,7 @@ test('safeInterval catches sync throws and continues ticking', async () => {
     calls++;
     if (calls === 2) throw new Error('boom');
   }, 10);
-  await new Promise((r) => setTimeout(r, 100));
+  await waitUntil(() => calls >= 4);
   clearInterval(handle);
   assert.ok(calls >= 4, `expected at least 4 ticks, got ${calls}`);
   assert.ok(errors.length >= 1, `expected at least 1 error logged, got ${errors.length}`);
@@ -90,7 +98,7 @@ test('safeInterval catches async Promise rejections and continues ticking', asyn
     calls++;
     if (calls === 2) throw new Error('async boom');
   }, 10);
-  await new Promise((r) => setTimeout(r, 100));
+  await waitUntil(() => calls >= 4);
   clearInterval(handle);
   assert.ok(calls >= 4, `expected at least 4 ticks, got ${calls}`);
   assert.ok(errors.length >= 1, `expected at least 1 error logged, got ${errors.length}`);
