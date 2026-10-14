@@ -55,10 +55,27 @@ export async function applyManualControlWrite(ctx, opts) {
     return { ok: false, status: 400, error: 'minsoc_out_of_range', max: MAX_MINSOC_PCT };
   }
   ctx.assertValidRuntimeCommand('control_write', { target, value: num });
+  // Override vor dem Schreiben setzen (ein Eval-Takt während des await soll den
+  // neuen Wert sehen) — scheitert der Befehl, wird der vorherige Zustand
+  // wiederhergestellt. Sonst wandte der nächste Takt einen abgelehnten Befehl
+  // später doch an: im Not-Halt abgelehnt, nach dem Aufheben geschrieben
+  // (2026-10-15). Was als fehlgeschlagen gemeldet wird, wirkt nicht später.
+  const previous = state.schedule.manualOverride[target];
   state.schedule.manualOverride[target] = persist === true
     ? { value: num, at: Date.now(), persistent: true }
     : { value: num, at: Date.now() };
-  const result = await ctx.applyControlTarget(target, num, reason);
+  const restore = () => {
+    if (previous === undefined) delete state.schedule.manualOverride[target];
+    else state.schedule.manualOverride[target] = previous;
+  };
+  let result;
+  try {
+    result = await ctx.applyControlTarget(target, num, reason);
+  } catch (e) {
+    restore();
+    throw e;
+  }
+  if (!result.ok) restore();
   ctx.pushLog('control_write', {
     target,
     value: num,
