@@ -1,0 +1,10 @@
+# /etc/systemd/system/support-relay-enroll.path — startet die Freischaltung,
+# sobald das Portal einen Auftrag ablegt (siehe enroll-from-portal.py).
+[Unit]
+Description=DVhub Fern-Support: Freischaltaufträge vom Portal
+
+[Path]
+PathExistsGlob=/opt/support-relay/spool/requests/*.json
+
+[Install]
+WantedBy=multi-user.target

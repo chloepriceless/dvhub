@@ -261,3 +261,159 @@ test('B7: liteStatus exposes only in-memory fields and NO uiToken', () => {
   assert.equal(ls.open, false);
   assert.ok(!('uiToken' in ls), 'liteStatus must never leak the nonce');
 });
+
+// --- Portal-Freischaltung + eigener Dienst (2026-10-14) ----------------------
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { validateRelayPorts, normalizePublicKey, TUNNEL_UNIT } from '../services/support-tunnel.js';
+
+const PUB = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAsaBYifIY6dFAGzDtF28qVa75IHaMRzEx5buoGDhWBN';
+
+function realBox({ ports = null } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sup-'));
+  fs.writeFileSync(path.join(dir, 'appliance-id'), 'box-01\n');
+  const sup = path.join(dir, 'support');
+  fs.mkdirSync(sup);
+  fs.writeFileSync(path.join(sup, 'relay_id_ed25519'), 'PRIVATE\n', { mode: 0o600 });
+  fs.writeFileSync(path.join(sup, 'relay_id_ed25519.pub'), `${PUB} dvhub-appliance-box-01\n`);
+  fs.writeFileSync(path.join(sup, 'relay.json'), JSON.stringify({ host: 'support.dvhub.de', port: 47821, user: 'dvhub-support', shellPort: ports?.[0] ?? 0, webPort: ports?.[1] ?? 0 }));
+  const logs = [];
+  const ctx = { getDataDir: () => dir, getCfg: () => ({}), pushLog: (ev, d) => logs.push({ ev, d }) };
+  return { dir, sup, ctx, logs };
+}
+
+test('validateRelayPorts: nur ganze, verschiedene Ports im Relay-Bereich', () => {
+  assert.deepEqual(validateRelayPorts({ shellPort: 49120, webPort: '49121' }), { shellPort: 49120, webPort: 49121 });
+  assert.equal(validateRelayPorts({ shellPort: 48999, webPort: 49001 }), null);
+  assert.equal(validateRelayPorts({ shellPort: 49120, webPort: 50000 }), null);
+  assert.equal(validateRelayPorts({ shellPort: 49120, webPort: 49120 }), null);
+  assert.equal(validateRelayPorts({ shellPort: 49120.5, webPort: 49121 }), null);
+  assert.equal(validateRelayPorts({ shellPort: '49120;x', webPort: 49121 }), null);
+  assert.equal(validateRelayPorts(null), null);
+});
+
+test('normalizePublicKey: genau eine Zeile, erlaubter Typ, Kommentar fällt weg', () => {
+  assert.equal(normalizePublicKey(`${PUB} kommentar\n`), PUB);
+  assert.equal(normalizePublicKey(`${PUB}\n${PUB}`), null);
+  assert.equal(normalizePublicKey('ssh-dss AAAA'), null);
+  assert.equal(normalizePublicKey('ssh-ed25519 AAAA"x'), null);
+  assert.equal(normalizePublicKey(''), null);
+});
+
+test('publicKey liefert Schlüssel und Fingerprint aus der .pub-Datei', () => {
+  const { ctx } = realBox();
+  const tun = createSupportTunnel(ctx, { unitMode: () => false });
+  const k = tun.publicKey();
+  assert.equal(k.pubkey, PUB);
+  assert.equal(k.fingerprint, sshKeyFingerprint(PUB));
+});
+
+test('assignRelayPorts schreibt nur die Ports, Host/Port/Benutzer bleiben; danach provisioned', () => {
+  const { sup, ctx, logs } = realBox();
+  const tun = createSupportTunnel(ctx, { unitMode: () => false });
+  assert.equal(tun.status().provisioned, false);
+  assert.deepEqual(tun.assignRelayPorts({ shellPort: 49120, webPort: 49121 }), { ok: true, changed: true });
+  const rj = JSON.parse(fs.readFileSync(path.join(sup, 'relay.json'), 'utf8'));
+  assert.deepEqual(rj, { host: 'support.dvhub.de', port: 47821, user: 'dvhub-support', shellPort: 49120, webPort: 49121 });
+  assert.equal(tun.status().provisioned, true);
+  assert.deepEqual(tun.assignRelayPorts({ shellPort: 49120, webPort: 49121 }), { ok: true, changed: false });
+  assert.equal(tun.assignRelayPorts({ shellPort: 1, webPort: 2 }).error, 'invalid_ports');
+  assert.equal(logs.filter((l) => l.ev === 'support_tunnel_ports_assigned').length, 1);
+  assert.deepEqual(fs.readdirSync(sup).filter((f) => f.includes('.tmp')), []);
+});
+
+test('Dienst-Modus: Öffnen schreibt den Auftrag und startet die Unit, Schließen stoppt sie', async () => {
+  const { sup, ctx, logs } = realBox({ ports: [49120, 49121] });
+  const calls = [];
+  const nowMs = 1_800_000_000_000;
+  const tun = createSupportTunnel(ctx, {
+    unitMode: () => true,
+    now: () => nowMs,
+    sleep: async () => {},
+    isAlive: (pid) => pid === 4242,
+    setTimeout: () => ({ unref() {} }),
+    clearTimeout: () => {},
+    execFile: (bin, args, opts, cb) => {
+      calls.push([bin, ...args]);
+      // Wie das Tunnel-Skript: Zustand schreiben bzw. beim Stoppen löschen.
+      if (args[2] === 'start') fs.writeFileSync(path.join(sup, 'tunnel-state.json'), JSON.stringify({ pid: 4242, startedAt: nowMs, expiresAt: nowMs + 30 * 60_000 }));
+      if (args[2] === 'stop') fs.rmSync(path.join(sup, 'tunnel-state.json'), { force: true });
+      cb(null, '', '');
+    },
+  });
+  const r = await tun.open({ ttlMin: 30 }, { ip: '127.0.0.1', via: 'installer_portal' });
+  assert.equal(r.ok, true);
+  assert.deepEqual(calls[0], ['sudo', '-n', 'systemctl', 'start', TUNNEL_UNIT]);
+  const req = JSON.parse(fs.readFileSync(path.join(sup, 'tunnel.json'), 'utf8'));
+  assert.equal(req.expiresAt, nowMs + 30 * 60_000);
+  assert.equal(fs.statSync(path.join(sup, 'tunnel.json')).mode & 0o777, 0o600);
+  const st = tun.status();
+  assert.equal(st.open, true);
+  assert.equal(st.mode, 'service');
+  assert.equal(st.ttlRemainingSec, 1800);
+  assert.equal(tun.liteStatus().open, true);
+  // Ein neuer DVhub-Prozess (Neustart) sieht den laufenden Tunnel ebenfalls.
+  const after = createSupportTunnel(ctx, { unitMode: () => true, now: () => nowMs + 60_000, isAlive: (pid) => pid === 4242 });
+  assert.equal(after.status().open, true);
+  assert.equal((await tun.open({ ttlMin: 30 })).alreadyOpen, true);
+  const c = await tun.close({ ip: '127.0.0.1' });
+  assert.equal(c.ok, true);
+  assert.deepEqual(calls.at(-1), ['sudo', '-n', 'systemctl', 'stop', TUNNEL_UNIT]);
+  assert.equal(fs.existsSync(path.join(sup, 'tunnel.json')), false);
+  assert.equal(tun.status().open, false);
+  assert.ok(logs.some((l) => l.ev === 'support_tunnel_opened') && logs.some((l) => l.ev === 'support_tunnel_closed'));
+});
+
+test('Dienst-Modus: lehnt das Relay ab, meldet open den Fehler aus dem Protokoll', async () => {
+  const { sup, ctx } = realBox({ ports: [49120, 49121] });
+  const tun = createSupportTunnel(ctx, {
+    unitMode: () => true,
+    sleep: async () => {},
+    isAlive: () => false,
+    execFile: (bin, args, opts, cb) => {
+      fs.writeFileSync(path.join(sup, 'tunnel.log'), 'Error: remote port forwarding failed for listen port 49120\n');
+      cb(null, '', '');
+    },
+  });
+  const r = await tun.open({ ttlMin: 30 });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'tunnel_failed');
+  assert.match(r.detail, /remote port forwarding failed/);
+  assert.match(tun.status().lastError, /remote port forwarding failed/);
+});
+
+test('Dienst-Modus: Zustandsdatei eines toten oder abgelaufenen Tunnels zählt nicht', () => {
+  const { sup, ctx } = realBox({ ports: [49120, 49121] });
+  const nowMs = 1_800_000_000_000;
+  fs.writeFileSync(path.join(sup, 'tunnel-state.json'), JSON.stringify({ pid: 4242, startedAt: nowMs - 10, expiresAt: nowMs - 1 }));
+  assert.equal(createSupportTunnel(ctx, { unitMode: () => true, now: () => nowMs, isAlive: () => true }).status().open, false);
+  fs.writeFileSync(path.join(sup, 'tunnel-state.json'), JSON.stringify({ pid: 4242, startedAt: nowMs, expiresAt: nowMs + 60_000 }));
+  assert.equal(createSupportTunnel(ctx, { unitMode: () => true, now: () => nowMs, isAlive: () => false }).status().open, false);
+  assert.equal(createSupportTunnel(ctx, { unitMode: () => true, now: () => nowMs, isAlive: () => true }).status().open, true);
+});
+
+test('Dienst-Modus: der Auftrag trägt die wirksamen Relay-Werte (Konfiguration vor relay.json)', async () => {
+  const { sup, ctx } = realBox({ ports: [49120, 49121] });
+  ctx.getCfg = () => ({ support: { relay: { host: 'relay.test', port: 2222, shellPort: 49130, webPort: 49131 } } });
+  const tun = createSupportTunnel(ctx, {
+    unitMode: () => true, sleep: async () => {}, isAlive: () => true,
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+    execFile: (bin, args, opts, cb) => {
+      fs.writeFileSync(path.join(sup, 'tunnel-state.json'), JSON.stringify({ pid: 4242, startedAt: Date.now(), expiresAt: Date.now() + 60_000 }));
+      cb(null, '', '');
+    },
+  });
+  assert.equal((await tun.open({ ttlMin: 5 })).ok, true);
+  const req = JSON.parse(fs.readFileSync(path.join(sup, 'tunnel.json'), 'utf8'));
+  assert.deepEqual([req.host, req.port, req.user, req.shellPort, req.webPort], ['relay.test', 2222, 'dvhub-support', 49130, 49131]);
+});
+
+test('tunnelBinaryAvailable: ohne ssh/autossh (Docker-Image) kein Tunnel möglich', async () => {
+  const { tunnelBinaryAvailable } = await import('../services/support-tunnel.js');
+  assert.equal(tunnelBinaryAvailable({ existsSync: () => false }), false);
+  assert.equal(tunnelBinaryAvailable({ existsSync: (p) => p === '/usr/bin/ssh' }), true);
+  const { ctx } = realBox();
+  assert.equal(createSupportTunnel(ctx, { unitMode: () => false, fs: { ...fs, existsSync: (p) => (p.includes('ssh') && !p.includes('/support/') ? false : fs.existsSync(p)) } }).status().capable, false);
+});

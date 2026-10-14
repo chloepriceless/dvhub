@@ -1,5 +1,10 @@
 # Notfall-Fernzugang (wenn DVhub nicht mehr startet)
 
+> **Normalfall seit 2026-10-14:** Der Support öffnet den Tunnel über das
+> Installateurs-Portal („Fern-Support öffnen"), sofern du das beim Koppeln
+> erlaubt hast. Du musst dafür nichts tun und wirst bei jeder Öffnung
+> benachrichtigt. Dieses Dokument beschreibt nur den Notfall-Weg ohne App.
+
 Wenn die **DVhub-Oberfläche/App nicht mehr startet** (z. B. nach einem Fehler oder
 einem fehlgeschlagenen Update), kannst du den Support-Tunnel **nicht** über die
 Einstellungen öffnen. Solange die **Box selbst** noch läuft und erreichbar ist

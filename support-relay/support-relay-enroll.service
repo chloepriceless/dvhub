@@ -1,0 +1,13 @@
+# /etc/systemd/system/support-relay-enroll.service — verarbeitet Aufträge des
+# Portals: prüfen, Ports vergeben, authorized_keys des Relays neu rendern.
+[Unit]
+Description=DVhub Fern-Support: Freischaltauftrag verarbeiten
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/support-relay/enroll-from-portal.py
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/support-relay /etc/ssh-support/authorized_keys.d /var/log

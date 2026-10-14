@@ -95,6 +95,44 @@ chmod 700 "$SUP_DIR"
 chmod 600 "$KEY" 2>/dev/null || true
 chmod 644 "$KEY.pub" "$KNOWN_HOSTS" "$SIDECAR" "$APPLIANCE_ID_FILE" 2>/dev/null || true
 
+# 5b. Tunnel als eigener Dienst (2026-10-14) ------------------------------------
+# Als Kindprozess von DVhub starb ein offener Tunnel bei jedem Neustart von
+# DVhub. Die Unit läuft als SERVICE_USER, hält den Tunnel bis zum Ablauf des
+# Auftrags (support/tunnel.json) und darf nur in support/ schreiben. DVhub
+# startet/stoppt sie über zwei feste sudo-Regeln (post-update.sh/install.sh).
+if command -v systemctl >/dev/null 2>&1 && [[ -d /etc/systemd/system ]]; then
+  INSTALL_DIR="${INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+  TUNNEL_UNIT_FILE="/etc/systemd/system/dvhub-support-tunnel.service"
+  TUNNEL_UNIT_WANT="$(cat <<UNIT
+# Angelegt von support-provision.sh — Änderungen werden beim nächsten Start überschrieben.
+[Unit]
+Description=DVhub Fern-Support-Tunnel (zeitbegrenzt, vom Kunden bzw. Portal geöffnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
+Environment=DV_DATA_DIR=${DATA_DIR}
+ExecStart=/usr/bin/bash ${INSTALL_DIR}/dvhub-support-tunnel.sh --service
+Restart=no
+RuntimeMaxSec=14460
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=${SUP_DIR}
+UNIT
+)"
+  if [[ ! -f "$TUNNEL_UNIT_FILE" ]] || [[ "$(cat "$TUNNEL_UNIT_FILE")" != "$TUNNEL_UNIT_WANT" ]]; then
+    printf '%s\n' "$TUNNEL_UNIT_WANT" > "$TUNNEL_UNIT_FILE"
+    chmod 644 "$TUNNEL_UNIT_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    echo "  Support: Tunnel-Dienst dvhub-support-tunnel.service angelegt."
+  fi
+fi
+
 # 6. decide whether the dvhub-support login user should exist ------------------
 WANT_USER=1
 if [[ "$SUPPORT_LOCAL_USER" == "0" ]]; then

@@ -327,6 +327,19 @@ function render() {
     const custEl = $('.ap-customer', card);
     if (pr.customer) { custEl.hidden = false; custEl.textContent = `Kunde: ${pr.customer}`; }
     $('.ap-meta', card).textContent = `Appliance-ID ${pr.applianceId}` + (pr.sizeKwp ? ` · ${pr.sizeKwp} kWp` : '');
+    // Worauf läuft die Anlage? Ein Container wird durch ein neues Image ersetzt,
+    // nicht über „Updates prüfen/einspielen“.
+    const rt = pr.runtime;
+    const rtEl = $('.ap-runtime', card);
+    if (rt && (rt.label || rt.version)) {
+      rtEl.hidden = false;
+      const isCt = rt.kind === 'container';
+      rtEl.className = `ap-runtime ${isCt ? 'rt-container' : 'rt-native'}`;
+      rtEl.textContent = `${isCt ? '🐳 Docker-Container' : `🖥 ${rt.label || 'native Installation'}`}`
+        + (rt.version ? ` · ${rt.version}` : '')
+        + (rt.arch ? ` · ${rt.arch}` : '')
+        + (isCt ? ' — Update durch neues Image, nicht über „Updates“' : '');
+    }
     const badge = $('.badge', card);
     const [label, cls] = STATUS[pr.status] || [pr.status, ''];
     badge.textContent = label;
@@ -442,10 +455,45 @@ function render() {
         if (!r.j.ok) return msg(`Kommando-Fehler: ${r.j.error || r.status}`);
         msg('Kommando eingereiht — die Anlage holt es beim nächsten Poll ab (≤ 30 s)…');
       };
+      // Fern-Support: Zustand, den die Anlage meldet.
+      const sp = pr.support;
+      const spEl = $('.ap-support', card);
+      if (!sp) {
+        spEl.textContent = 'Fern-Support: Die Anlage meldet noch nichts dazu (DVhub-Update nötig).';
+      } else if (sp.open) {
+        spEl.textContent = `🔓 Fern-Support offen${sp.expiresAt ? ` bis ${new Date(sp.expiresAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}` : ''}`
+          + (pr.relay ? ` · Shell-Port ${pr.relay.shellPort}, Web-Port ${pr.relay.webPort}` : '');
+      } else if (sp.capable === false) {
+        spEl.textContent = 'Fern-Support: in dieser Installation nicht möglich (kein ssh — z. B. Docker-Container). Zugriff hier nur über das Heimnetz oder ein VPN.';
+      } else if (!sp.allowTunnel) {
+        spEl.textContent = 'Fern-Support: vom Kunden nicht erlaubt (in DVhub: Einstellungen → Freigaben → „Installateur darf Support-Tunnel öffnen“).';
+      } else if (!sp.keyKnown) {
+        spEl.textContent = 'Fern-Support: Die Anlage hat keinen Relay-Schlüssel (z. B. Docker-Container ohne Fern-Support).';
+      } else {
+        spEl.textContent = 'Fern-Support: erlaubt, geschlossen'
+          + (pr.relay ? ` · beim Relay eingetragen (Ports ${pr.relay.shellPort}/${pr.relay.webPort})` : ' · wird beim ersten Öffnen beim Relay eingetragen')
+          + (sp.lastError ? ` · letzter Fehler: ${sp.lastError}` : '');
+      }
+      $('.tunnelOpen', card).disabled = !!sp && (sp.capable === false || !sp.allowTunnel || !sp.keyKnown);
       $('.tunnelOpen', card).addEventListener('click', async () => {
-        const ttl = prompt('Tunnel-Öffnungsdauer in Minuten (5–240):', '60');
+        const ttl = prompt('Wie lange soll der Fern-Support offen bleiben? Minuten (5–240):', '60');
         if (ttl == null) return;
-        await queueCmd('open_tunnel', { ttlMin: Number(ttl) || 60 });
+        msg('Fern-Support wird eingerichtet…');
+        const r = await api(`/api/pairings/${pr.applianceId}/support-open`, { method: 'POST', body: { ttlMin: Number(ttl) || 60 } });
+        if (!r.j.ok) {
+          const hints = {
+            kunde_hat_fernsupport_nicht_erlaubt: 'Der Kunde hat den Fern-Support nicht erlaubt.',
+            fernsupport_hier_nicht_moeglich: 'In dieser Installation ist kein Fern-Support-Tunnel möglich (kein ssh, z. B. Docker-Container).',
+            anlage_hat_keinen_relay_schluessel: 'Die Anlage hat keinen Relay-Schlüssel.',
+            relay_freischaltung_nicht_eingerichtet: 'Die Relay-Freischaltung ist auf dem Server nicht eingerichtet.',
+            relay_antwortet_nicht: 'Das Relay hat nicht rechtzeitig geantwortet — bitte erneut versuchen.',
+            relay_key_mismatch: 'Beim Relay ist für diese Anlage ein anderer Schlüssel eingetragen (Neuinstallation?). Bitte von Hand prüfen.',
+            lizenz_erforderlich: 'Ohne Pro-Lizenz ist kein Fern-Support möglich.',
+          };
+          return msg(`Fern-Support: ${hints[r.j.error] || r.j.error || r.status}${r.j.detail ? ` (${r.j.detail})` : ''}`);
+        }
+        msg(`Fern-Support angefordert — die Anlage öffnet den Tunnel beim nächsten Melden (≤ 30 s). Ports ${r.j.relay.shellPort}/${r.j.relay.webPort}.`);
+        setTimeout(refreshPairings, 35000);
       });
       $('.tunnelClose', card).addEventListener('click', () => queueCmd('close_tunnel'));
       $('.licenseSet', card).addEventListener('click', async () => {

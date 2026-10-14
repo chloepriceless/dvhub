@@ -634,6 +634,24 @@ function updatePinRefVisibility(channel) {
   if (row) row.hidden = channel !== 'dev';
 }
 
+// Version und Laufzeit (Container oder Betriebssystem) neben dem Update-Kasten:
+// Ein Docker-Container wird nicht per Update aktualisiert, sondern durch ein
+// neues Image ersetzt.
+async function renderAppRuntimeLine() {
+  const el = document.getElementById('appRuntimeLine');
+  if (!el) return;
+  try {
+    const res = await apiFetch('/api/admin/health');
+    const j = await res.json();
+    if (!res.ok || !j.ok) return;
+    const rt = j.runtime || {};
+    const version = j.app?.versionLabel || '';
+    let text = `Läuft als: ${rt.label || '—'}${version ? ` · ${version}` : ''}`;
+    if (rt.kind === 'container') text += ' — Updates per neuem Image (docker compose pull && docker compose up -d)';
+    el.textContent = text;
+  } catch { /* Anzeige ist optional */ }
+}
+
 async function checkForUpdate() {
   setBanner('updateBanner', 'Prüfe auf Updates...', 'info');
   document.getElementById('updateChangelog').style.display = 'none';
@@ -642,7 +660,11 @@ async function checkForUpdate() {
     const res = await apiFetch('/api/admin/update/check');
     const data = await res.json();
     if (!data.ok) {
-      setBanner('updateBanner', `Fehler: ${data.error}`, 'error');
+      if (data.code === 'container_runtime') {
+        setBanner('updateBanner', 'Docker-Container: DVhub wird durch ein neues Image aktualisiert, nicht hier.', 'info');
+      } else {
+        setBanner('updateBanner', `Fehler: ${data.error}`, 'error');
+      }
       setText('updateMeta', '-');
       return;
     }
@@ -1191,7 +1213,8 @@ async function startPortalPairing() {
   }
   if (result) result.textContent = 'Kopplung wird zum Portal gesendet…';
   try {
-    const res = await installerPortalFetch('/api/installer/client/pair', { portalUrl, pairingCode });
+    const allowTunnel = installerPortalEl('installerPortalPairAllowTunnel')?.checked === true;
+    const res = await installerPortalFetch('/api/installer/client/pair', { portalUrl, pairingCode, allowTunnel });
     const j = await res.json().catch(() => ({}));
     if (!res.ok || !j.ok) {
       const hints = {
@@ -1769,10 +1792,12 @@ function initToolsPage() {
         if (!entries.some((entry) => entry.isIntersecting)) return;
         seen.disconnect();
         autoCheckForUpdate();
+        renderAppRuntimeLine();
       });
       seen.observe(updateBannerEl);
     } else {
       autoCheckForUpdate();
+      renderAppRuntimeLine();
     }
   }
   if (bootstrapPlan.loadHistoryImportStatus) {

@@ -214,6 +214,7 @@
                        inputmode="latin" maxlength="40" pattern="[0-9a-fA-F]{7,40}"
                        placeholder="z.&nbsp;B. 0ae0128 &mdash; leer = neuester Dev-Stand" />
               </div>
+              <p class="svc-meta" id="appRuntimeLine">L&auml;uft als: &hellip;</p>
               <div id="updateBanner" class="config-banner info svc-banner-margin-tl">Version wird gepr&uuml;ft...</div>
               <div id="updateChangelog" class="config-row-grid svc-changelog-block"></div>
               <div id="updateActions" class="svc-actions-block">
@@ -470,6 +471,13 @@
                   <span class="config-row-label">Kopplungs-Code vom Portal</span>
                   <div class="config-row-stack">
                     <input id="installerPortalClientCode" class="config-input" placeholder="6-stelliger Code" inputmode="numeric" maxlength="6" autocomplete="off" />
+                  </div>
+                </div>
+                <div class="config-row">
+                  <span class="config-row-label">Fern-Support erlauben</span>
+                  <div class="config-row-stack">
+                    <label><input id="installerPortalPairAllowTunnel" type="checkbox" /> Der Support darf bei Bedarf einen Fernzugang &ouml;ffnen.</label>
+                    <small class="config-row-stack-small">Du wirst bei jeder &Ouml;ffnung benachrichtigt und kannst den Zugang jederzeit oben unter &bdquo;Fern-Support&ldquo; schlie&szlig;en. Hinein kommt nur der hinterlegte Support-Schl&uuml;ssel. Jederzeit wieder abschaltbar (&bdquo;Installateur darf Support-Tunnel &ouml;ffnen&ldquo;).</small>
                   </div>
                 </div>
                 <div class="svc-actions-row">
@@ -950,7 +958,7 @@
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20261011-ablage"></script>
-  <script src="/tools.js?v=20261001-ortsnetz"></script>
+  <script src="/tools.js?v=20261014-fernsupport"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>

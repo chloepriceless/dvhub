@@ -20,6 +20,7 @@ import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredMo
 import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT, resolvePlantBattery } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
+import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, gridLimitSnapshotFlat } from './services/control-snapshot.js';
@@ -882,6 +883,8 @@ export function createApiRoutes(ctx) {
       app: ctx.getAppVersion(),
       service,
       runtime: {
+        // Container oder native Installation + Betriebssystem (runtime-info.js).
+        ...runtimeInfo(),
         node: process.version,
         platform: `${process.platform}/${process.arch}`,
         pid: process.pid,
@@ -2557,11 +2560,16 @@ export function createApiRoutes(ctx) {
           // Der Kunde hat die Kopplung selbst gestartet — das ist die
           // Zustimmung zum Portal-Zugang. Ist der (ab Werk aus) Schalter noch
           // aus, schalten wir ihn jetzt ein, sonst würde der Client nie pollen.
-          if (!portal.enabled()) {
+          // Fern-Support-Haken im Kopplungsdialog (2026-10-14): Der Kunde
+          // erlaubt dem Portal gleich beim Koppeln, bei Bedarf den Tunnel zu
+          // öffnen — dann muss er die Einstellung später nicht suchen.
+          // Nur einschalten, nie stillschweigend ausschalten.
+          const wantTunnel = body.allowTunnel === true && portal.permissions?.()?.allowTunnel !== true;
+          if (!portal.enabled() || wantTunnel) {
             const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
-            next.installerPortal = { ...(next.installerPortal || {}), enabled: true };
+            next.installerPortal = { ...(next.installerPortal || {}), enabled: true, ...(body.allowTunnel === true ? { allowTunnel: true } : {}) };
             ctx.saveAndApplyConfig(next);
-            pushLog('installer_portal_setting_changed', { enabled: true, via: 'client_pair' }, actorContext(req));
+            pushLog('installer_portal_setting_changed', { enabled: true, ...(body.allowTunnel === true ? { allowTunnel: true } : {}), via: 'client_pair' }, actorContext(req));
           }
           return json(res, 200, { ok: true, ...r });
         } catch (e) {
@@ -6417,14 +6425,14 @@ export function createApiRoutes(ctx) {
         });
       }
       const ttlRaw = Number(body?.ttlMin);
-      const r = ctx.supportTunnel.open({ ttlMin: Number.isFinite(ttlRaw) ? ttlRaw : undefined }, actor);
+      const r = await ctx.supportTunnel.open({ ttlMin: Number.isFinite(ttlRaw) ? ttlRaw : undefined }, actor);
       // not_provisioned / misconfigured / spawn_failed -> 409 (caller can't open yet)
       return json(res, r.ok ? 200 : 409, r);
     }
     if (url.pathname === '/api/support/tunnel/close' && req.method === 'POST') {
       if (!ctx.supportTunnel) return json(res, 503, { ok: false, error: 'support_tunnel_unavailable' });
       const actor = actorContext(req);
-      return json(res, 200, ctx.supportTunnel.close(actor));
+      return json(res, 200, await ctx.supportTunnel.close(actor));
     }
 
     // Plan 08-07 Task 3: frontend error reporting endpoint. The browser POSTs
@@ -8048,6 +8056,7 @@ export function createApiRoutes(ctx) {
         const nodeVersion = process.version;
         return json(res, 200, {
           ok: true,
+          runtime: runtimeInfo(),
           hostname: hostnameOut,
           uptime: uptimeOut,
           kernel: kernelOut,

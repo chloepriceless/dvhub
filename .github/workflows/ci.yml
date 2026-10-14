@@ -121,6 +121,26 @@ jobs:
       - run: npm ci
       - run: npm run lint
 
+  # Installateurs-Portal + Relay-Freischaltung (2026-10-14): Die Portal-Tests
+  # liefen bisher nur von Hand. Sie starten echte Portal-Prozesse (und einmal
+  # DVhub dazu); die Relay-Tests prüfen enroll-from-portal.py mit einem
+  # Ersatz-Renderer (python3 + ssh-keygen sind auf dem Runner vorhanden).
+  installer-portal:
+    name: installer-portal + support-relay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+        working-directory: dvhub
+      - run: npm test
+        working-directory: installer-portal
+      - run: python3 support-relay/test_enroll.py
+
   # e2e job: full Playwright visual-parity + setup-wizard happy-path suite
   # against a DB-free server boot. BLOCKING (2026-07): stabilised — see
   # .planning/ handover notes for the two fixes that got it here.

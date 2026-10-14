@@ -619,3 +619,93 @@ test('buildCompactStatus: Netzbezug/-einspeisung und Hausverbrauch; ungültiger 
   const bad = buildCompactStatus({ ...ctx, getCachedRuntimeStatusPayload: () => ({ meter: { ok: false }, victron: { gridImportW: 0, gridExportW: 0 } }) }, Date.now());
   assert.deepEqual([bad.gridImportW, bad.gridExportW], [null, null], 'kein gültiger Zähler ist nicht „0 W“');
 });
+
+// ── Fern-Support über das Portal (2026-10-14) ───────────────────────────────
+
+function tunnelStub({ pub = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample dvhub-appliance-x', open = false } = {}) {
+  const assigned = [];
+  return {
+    assigned,
+    status: () => ({ provisioned: assigned.length > 0, open, expiresAt: open ? 123 : null, mode: 'service', relay: { shellPort: assigned.at(-1)?.shellPort || 0, webPort: assigned.at(-1)?.webPort || 0 }, lastError: null }),
+    publicKey: () => (pub ? { pubkey: pub.split(' ').slice(0, 2).join(' '), fingerprint: 'SHA256:fp' } : null),
+    assignRelayPorts: (p) => { assigned.push(p); return { ok: true, changed: true }; },
+  };
+}
+
+test('Poll meldet Laufzeit und öffentlichen Relay-Schlüssel, nie den privaten', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const ctx = { ...ctxFor(dir, { installerPortal: { enabled: true, allowTunnel: true } }), supportTunnel: tunnelStub() };
+  const client = createInstallerPortalClient(ctx, { fetchImpl: portal.fetchImpl });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  await client.pollOnce();
+  const body = portal.calls.find((c) => c.url.endsWith('/api/poll')).body;
+  assert.ok(['container', 'native'].includes(body.runtime.kind));
+  assert.equal(body.runtime.version, 'v1.0.6');
+  assert.equal(typeof body.runtime.label, 'string');
+  assert.equal(body.support.pubkey, 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample');
+  assert.equal(body.support.allowTunnel, true);
+  assert.ok(!JSON.stringify(body).includes('PRIVATE KEY'));
+});
+
+test('open_tunnel mit Ports: erst Ports übernehmen, dann öffnen', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const tun = tunnelStub();
+  const order = [];
+  tun.assignRelayPorts = (p) => { order.push(['ports', p]); return { ok: true, changed: true }; };
+  const client = createInstallerPortalClient({ ...ctxFor(dir, { installerPortal: { enabled: true, allowTunnel: true } }), supportTunnel: tun }, {
+    fetchImpl: portal.fetchImpl,
+    execCommand: async (cmd) => { order.push(['exec', cmd.type]); return { status: 200, json: { ok: true } }; },
+  });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  portal.state.commands = [{ id: 'c1', type: 'open_tunnel', args: { ttlMin: 60, shellPort: 49120, webPort: 49121 } }];
+  await client.pollOnce();
+  assert.deepEqual(order, [['ports', { shellPort: 49120, webPort: 49121 }], ['exec', 'open_tunnel']]);
+  assert.equal(portal.state.results[0].ok, true);
+});
+
+test('open_tunnel mit ungültigen Ports wird abgewiesen, ohne etwas zu schreiben', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const tun = tunnelStub();
+  const executed = [];
+  const client = createInstallerPortalClient({ ...ctxFor(dir, { installerPortal: { enabled: true, allowTunnel: true } }), supportTunnel: tun }, {
+    fetchImpl: portal.fetchImpl,
+    execCommand: async (cmd) => { executed.push(cmd.type); return { status: 200, json: { ok: true } }; },
+  });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  portal.state.commands = [
+    { id: 'a', type: 'open_tunnel', args: { shellPort: 22, webPort: 80 } },        // außerhalb des Relay-Bereichs
+    { id: 'b', type: 'open_tunnel', args: { shellPort: 49120, webPort: 49120 } },  // gleich
+    { id: 'c', type: 'open_tunnel', args: { shellPort: '49120; rm -rf /', webPort: 49121 } },
+  ];
+  await client.pollOnce();
+  assert.deepEqual(executed, []);
+  assert.deepEqual(tun.assigned, []);
+  assert.ok(portal.state.results.every((r) => r.ok === false && r.result.error === 'invalid_ports'));
+});
+
+test('open_tunnel mit Ports ohne Kundenfreigabe: keine Ports übernommen', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const tun = tunnelStub();
+  const client = createInstallerPortalClient({ ...ctxFor(dir), supportTunnel: tun }, { fetchImpl: portal.fetchImpl, execCommand: async () => ({ status: 200, json: { ok: true } }) });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  portal.state.commands = [{ id: 'a', type: 'open_tunnel', args: { shellPort: 49120, webPort: 49121 } }];
+  await client.pollOnce();
+  assert.deepEqual(tun.assigned, []);
+  assert.equal(portal.state.results[0].result.error, 'tunnel_not_permitted');
+});
+
+test('Kopplungsdatei mit Geräteschlüssel ist nur für DVhub lesbar (0600)', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  const client = createInstallerPortalClient(ctxFor(dir), { fetchImpl: portal.fetchImpl });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  assert.equal(fs.statSync(path.join(dir, SIDECAR_NAME)).mode & 0o777, 0o600);
+});

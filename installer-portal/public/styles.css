@@ -196,6 +196,9 @@ input::placeholder { color:var(--text-dim); }
 .appliance { display:flex; flex-direction:column; gap:12px; }
 .ap-head { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
 .ap-meta { color:var(--text-dim); font-size:11px; font-family:var(--f-mono); margin-top:3px; word-break:break-all; }
+.ap-runtime { font-size:12px; margin-top:4px; color:var(--text-dim); }
+.ap-runtime.rt-container { color:var(--accent, #4fb3ff); font-weight:600; }
+.ap-support { font-size:12px; margin:6px 0; color:var(--text-dim); }
 .ap-customer { color:var(--text-2); font-size:13px; margin-top:2px; }
 
 .paircode { font-size:13px; display:flex; gap:10px; align-items:center; margin-bottom:6px; }

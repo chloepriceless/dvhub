@@ -3144,6 +3144,7 @@ async function loadSystemInfo() {
     const info = await r.json();
     if (!info.ok) { banner.textContent = 'Systeminfo nicht verfügbar'; return; }
     let html = `<strong>${escapeHtml(info.hostname)}</strong>`;
+    if (info.runtime?.label) html += ` | ${escapeHtml(info.runtime.label)}`;
     html += ` | Kernel: ${escapeHtml(info.kernel)}`;
     html += ` | Node: ${escapeHtml(info.nodeVersion)}`;
     html += ` | Uptime: ${escapeHtml(info.uptime)}`;

@@ -27,7 +27,8 @@ import { AUDIT_ERROR_SQL } from './log-retention.js';
 import path from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
-import { readApplianceId } from './support-tunnel.js';
+import { readApplianceId, validateRelayPorts } from './support-tunnel.js';
+import { runtimeInfo } from '../runtime-info.js';
 import { buildVictronAlarmsPayload } from '../victron-alarms.js';
 
 export const SIDECAR_NAME = 'installer-portal-client.json';
@@ -83,6 +84,39 @@ export function buildLicenseInfo(ctx) {
     maxKwp: kwp(s.max_kwp),
     systemKwp: kwp(s.system_kwp),
     capacityOk: s.capacity_ok !== false,
+  };
+}
+
+// Worauf läuft die Anlage (Container oder Betriebssystem) und welche Version?
+// Fürs Portal: ein Container wird durch ein neues Image ersetzt, nicht per Update.
+export function buildRuntimeInfo(ctx) {
+  const rt = runtimeInfo();
+  let version = null;
+  try { version = ctx.getAppVersion?.()?.versionLabel || null; } catch { /* ohne Version */ }
+  return { kind: rt.kind, label: rt.label, os: rt.os, arch: rt.arch, version };
+}
+
+// Fern-Support fürs Portal: öffentlicher Relay-Schlüssel (damit das Portal die
+// Box beim Relay eintragen kann), Zustand des Tunnels und ob der Kunde dem
+// Portal das Öffnen erlaubt hat. Nie der private Schlüssel.
+export function buildSupportInfo(ctx) {
+  const tun = ctx.supportTunnel;
+  if (!tun || typeof tun.status !== 'function') return null;
+  let st;
+  try { st = tun.status(); } catch { return null; }
+  const key = typeof tun.publicKey === 'function' ? tun.publicKey() : null;
+  return {
+    allowTunnel: (ctx.getCfg?.() || {}).installerPortal?.allowTunnel === true,
+    pubkey: key?.pubkey || null,
+    fingerprint: key?.fingerprint || null,
+    provisioned: st.provisioned === true,
+    capable: st.capable !== false,
+    shellPort: st.relay?.shellPort || null,
+    webPort: st.relay?.webPort || null,
+    open: st.open === true,
+    expiresAt: st.expiresAt || null,
+    mode: st.mode || null,
+    lastError: st.open ? null : (st.lastError ? String(st.lastError).slice(0, 300) : null),
   };
 }
 
@@ -292,10 +326,12 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
       return (o && typeof o === 'object' && o.portalUrl) ? o : null;
     } catch { return null; }
   }
+  // Enthält den Geräteschlüssel fürs Portal — nur für DVhub selbst lesbar.
   function saveSidecar(o) {
     const p = sidecarPath();
     const tmp = `${p}.tmp`;
-    fsImpl.writeFileSync(tmp, JSON.stringify(o, null, 2));
+    fsImpl.writeFileSync(tmp, JSON.stringify(o, null, 2), { mode: 0o600 });
+    try { fsImpl.chmodSync?.(tmp, 0o600); } catch { /* best effort */ }
     fsImpl.renameSync(tmp, p);
   }
   function clearSidecar() {
@@ -425,6 +461,8 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
         body: {
           applianceId,
           license: buildLicenseInfo(ctx),
+          runtime: buildRuntimeInfo(ctx),
+          support: buildSupportInfo(ctx),
           status: pro ? buildCompactStatus(ctx, now()) : null,
           ...(dayReport ? { dayReport } : {}),
           ...(errBatch.errors.length ? { errors: errBatch.errors } : {}),
@@ -462,6 +500,19 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
           results.push({ id: cmd.id, ok: false, status: 403, result: { ok: false, error: 'tunnel_not_permitted' } });
           pushLog('installer_portal_command_denied', { type: cmd.type });
           continue;
+        }
+        // Portal hat die Box beim Relay eingetragen und schickt die Ports mit:
+        // erst übernehmen (nur gültige Relay-Ports), dann öffnen. Ohne Ports
+        // bleibt es beim bisherigen Weg.
+        if (cmd.type === 'open_tunnel' && (cmd.args?.shellPort !== undefined || cmd.args?.webPort !== undefined)) {
+          const ports = validateRelayPorts(cmd.args);
+          const saved = ports ? ctx.supportTunnel?.assignRelayPorts?.(ports, { via: 'installer_portal' }) : null;
+          if (!ports || !saved || !saved.ok) {
+            const error = !ports ? 'invalid_ports' : (saved?.error || 'ports_not_saved');
+            results.push({ id: cmd.id, ok: false, status: 400, result: { ok: false, error } });
+            pushLog('installer_portal_command_denied', { type: cmd.type, reason: error });
+            continue;
+          }
         }
         let out;
         try { out = await execCommandImpl(cmd); }

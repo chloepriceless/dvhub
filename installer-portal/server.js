@@ -101,13 +101,89 @@ const readBody = (req) => new Promise((resolve, reject) => {
 const readJsonFile = (p, dflt) => {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return dflt; }
 };
+// Alle Datendateien nur für das Portal lesbar (Konten, Kopplungen, Schlüssel).
 const writeJsonFile = (p, obj) => {
   const tmp = `${p}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), { mode: 0o600 });
+  try { fs.chmodSync(tmp, 0o600); } catch { /* best effort */ }
   fs.renameSync(tmp, p);
 };
 const nowIso = () => new Date().toISOString();
+// Bestehende Datendateien beim Start auf 0600 setzen (früher 0644).
+try {
+  for (const f of fs.readdirSync(DATA_DIR)) {
+    if (/\.json$/.test(f)) { try { fs.chmodSync(path.join(DATA_DIR, f), 0o600); } catch { /* best effort */ } }
+  }
+} catch { /* DATA_DIR fehlt noch */ }
 const APPLIANCE_ID_RE = /^[a-z0-9][a-z0-9-]{0,35}$/i;
+
+// Geräteschlüssel der Anlagen (2026-10-14): gespeichert wird nur ihr
+// SHA-256-Prüfwert, verglichen in konstanter Zeit. Ältere Einträge mit
+// Klartext-Schlüssel werden beim nächsten Zugriff umgestellt.
+const tokenHash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+function tokenMatches(pr, token) {
+  if (!pr || typeof token !== 'string' || !token) return false;
+  const want = pr.applianceTokenHash || (pr.applianceToken ? tokenHash(pr.applianceToken) : null);
+  if (!want) return false;
+  const a = Buffer.from(tokenHash(token), 'hex');
+  const b = Buffer.from(String(want), 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function migrateToken(pr) {
+  if (pr && pr.applianceToken) {
+    pr.applianceTokenHash = tokenHash(pr.applianceToken);
+    delete pr.applianceToken;
+    return true;
+  }
+  return false;
+}
+
+// Fern-Support-Freischaltung beim Relay (2026-10-14). Portal und Relay laufen
+// auf demselben Server. Das Portal legt einen Auftrag (Anlage + öffentlicher
+// Schlüssel) in RELAY_REQUEST_DIR; ein root-Dienst auf dem Host
+// (support-relay/enroll-from-portal.py) prüft ihn, vergibt Ports, rendert die
+// authorized_keys des Relays und legt das Ergebnis in RELAY_RESULT_DIR (für
+// das Portal nur lesbar). Das Portal selbst hat keinen Zugriff auf die
+// Relay-Dateien. Ohne beide Variablen ist die Freischaltung aus.
+const RELAY_REQUEST_DIR = process.env.RELAY_REQUEST_DIR || '';
+const RELAY_RESULT_DIR = process.env.RELAY_RESULT_DIR || '';
+const RELAY_ENROLL_WAIT_MS = Number(process.env.RELAY_ENROLL_WAIT_MS) || 20_000;
+const RELAY_PORT_MIN = 49000, RELAY_PORT_MAX = 49999;
+const PUBKEY_RE = /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521) ([A-Za-z0-9+/]{16,2000}={0,3})$/;
+function sshFingerprint(pub) {
+  const m = PUBKEY_RE.exec(String(pub || ''));
+  if (!m) return null;
+  return 'SHA256:' + crypto.createHash('sha256').update(Buffer.from(m[2], 'base64')).digest('base64').replace(/=+$/, '');
+}
+const relayPort = (n) => Number.isInteger(Number(n)) && Number(n) >= RELAY_PORT_MIN && Number(n) <= RELAY_PORT_MAX;
+// Was die Anlage über Laufzeit und Fern-Support meldet — nur bekannte Felder,
+// begrenzt (die Anlage ist für das Portal nicht vertrauenswürdig).
+const shortStr = (v, n = 80) => (typeof v === 'string' && v ? v.replace(/[\u0000-\u001f]/g, ' ').slice(0, n) : null);
+function cleanRuntime(r) {
+  if (!r || typeof r !== 'object') return null;
+  return {
+    kind: r.kind === 'container' ? 'container' : (r.kind === 'native' ? 'native' : null),
+    label: shortStr(r.label), os: shortStr(r.os), arch: shortStr(r.arch, 16), version: shortStr(r.version, 40),
+  };
+}
+function cleanSupport(sp) {
+  if (!sp || typeof sp !== 'object') return null;
+  const pub = PUBKEY_RE.test(String(sp.pubkey || '')) ? String(sp.pubkey) : null;
+  return {
+    allowTunnel: sp.allowTunnel === true,
+    pubkey: pub,
+    fingerprint: pub ? sshFingerprint(pub) : null,
+    provisioned: sp.provisioned === true,
+    // Ältere DVhub melden das nicht → als möglich annehmen.
+    capable: sp.capable !== false,
+    shellPort: relayPort(sp.shellPort) ? Number(sp.shellPort) : null,
+    webPort: relayPort(sp.webPort) ? Number(sp.webPort) : null,
+    open: sp.open === true,
+    expiresAt: Number.isFinite(Number(sp.expiresAt)) && Number(sp.expiresAt) > 0 ? Number(sp.expiresAt) : null,
+    mode: sp.mode === 'service' || sp.mode === 'process' ? sp.mode : null,
+    lastError: shortStr(sp.lastError, 300),
+  };
+}
 // Kopplungs-Codes: 30 min gültig, nach 5 Fehlversuchen gesperrt (6 Ziffern
 // sind sonst in Minuten durchprobiert — /api/pair/claim ist unauthentisiert).
 const PAIRING_CODE_TTL_MS = 30 * 60_000;
@@ -118,8 +194,17 @@ const STALE_APPROVED_MS = 7 * 24 * 3600_000;
 
 // ── Rate-Limit (pro IP, Sliding Window 1 min) für die offenen Endpunkte ──────
 const rateBuckets = new Map();
+// Hinter Caddy (TRUST_PROXY=1) ist die Socket-Adresse immer die des Proxys —
+// dann zählt der letzte Eintrag in X-Forwarded-For (den setzt Caddy selbst).
+function clientIp(req) {
+  if (process.env.TRUST_PROXY === '1') {
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (xff.length) return xff[xff.length - 1];
+  }
+  return req.socket?.remoteAddress || '?';
+}
 function rateLimited(req, bucket, max = 20) {
-  const ip = req.socket?.remoteAddress || '?';
+  const ip = clientIp(req);
   const key = `${bucket}|${ip}`;
   const t = Date.now();
   const hits = (rateBuckets.get(key) || []).filter((x) => t - x < 60_000);
@@ -521,8 +606,9 @@ async function handleApi(req, res, url) {
     if (pr.status === 'declined') return jsonRes(res, 409, { ok: false, error: 'pairing_declined' });
     if (pr.status !== 'waiting') {
       // Re-Claim nach Anlage-Neustart: mit korrektem Token gibt's Status zurück.
-      if (b.applianceToken && b.applianceToken === pr.applianceToken) {
-        return jsonRes(res, 200, { ok: true, applianceToken: pr.applianceToken, status: pr.status });
+      if (tokenMatches(pr, b.applianceToken)) {
+        if (migrateToken(pr)) writeJsonFile(PAIRINGS_FILE, pairings);
+        return jsonRes(res, 200, { ok: true, applianceToken: b.applianceToken, status: pr.status });
       }
       return jsonRes(res, 409, { ok: false, error: 'pairing_already_claimed' });
     }
@@ -539,12 +625,14 @@ async function handleApi(req, res, url) {
       return jsonRes(res, 403, { ok: false, error: 'pairing_code_mismatch' });
     }
     pr.status = 'requested';                    // wartet auf Freigabe im Portal
-    pr.applianceToken = crypto.randomBytes(32).toString('hex');
+    const applianceToken = crypto.randomBytes(32).toString('hex');
+    pr.applianceTokenHash = tokenHash(applianceToken);   // Klartext nur einmal an die Anlage
+    delete pr.applianceToken;
     pr.applianceName = String(b.name || '').slice(0, 80) || null;
     pr.requestedAt = nowIso();
     pr.license = cleanLicense(b.license);
     writeJsonFile(PAIRINGS_FILE, pairings);
-    return jsonRes(res, 200, { ok: true, applianceToken: pr.applianceToken, status: pr.status });
+    return jsonRes(res, 200, { ok: true, applianceToken, status: pr.status });
   }
   if (p === '/api/poll' && method === 'POST') {
     const token = String(req.headers['x-appliance-token'] || '');
@@ -552,17 +640,20 @@ async function handleApi(req, res, url) {
     const aid = String(b.applianceId || '').trim().toLowerCase();
     const pairings = readJsonFile(PAIRINGS_FILE, {});
     const pr = pairings[aid];
-    if (!pr || !token || token !== pr.applianceToken) {
+    if (!tokenMatches(pr, token)) {
       return jsonRes(res, 401, { ok: false, error: 'appliance_token_invalid' });
     }
     if (pr.status === 'declined') return jsonRes(res, 410, { ok: false, error: 'pairing_declined' });
     const approved = pr.status === 'approved';
     // Status-/Kommando-Verarbeitung nur nach Freigabe; vorher bleibt die
     // Anlage am Haken und weiß immerhin, dass sie wartet.
+    migrateToken(pr);
     if (approved) {
       pr.lastSeenAt = nowIso();
       pr.lastStatus = b.status || null;   // ohne Pro-Lizenz schickt die Anlage keinen Status
       if (b.license) pr.license = cleanLicense(b.license);
+      if (b.runtime) pr.runtime = cleanRuntime(b.runtime);
+      if (b.support) pr.support = cleanSupport(b.support);
       storeDayReport(pr, b.dayReport);
       if (b.errorsReset === true) pr.errorAckId = 0;   // Anlage hat eine neue Datenbank
       storeErrors(aid, pr, b.errors);
@@ -579,7 +670,7 @@ async function handleApi(req, res, url) {
     const aid = String(b.applianceId || '').trim().toLowerCase();
     const pairings = readJsonFile(PAIRINGS_FILE, {});
     const pr = pairings[aid];
-    if (!pr || !token || token !== pr.applianceToken) {
+    if (!tokenMatches(pr, token)) {
       return jsonRes(res, 401, { ok: false, error: 'appliance_token_invalid' });
     }
     delete pairings[aid];
@@ -592,9 +683,10 @@ async function handleApi(req, res, url) {
     const aid = String(b.applianceId || '').trim().toLowerCase();
     const pairings = readJsonFile(PAIRINGS_FILE, {});
     const pr = pairings[aid];
-    if (!pr || !token || token !== pr.applianceToken) {
+    if (!tokenMatches(pr, token)) {
       return jsonRes(res, 401, { ok: false, error: 'appliance_token_invalid' });
     }
+    migrateToken(pr);
     pr.results = { ...(pr.results || {}) };
     for (const r of (Array.isArray(b.results) ? b.results : [])) {
       if (r && r.id) pr.results[r.id] = { ok: !!r.ok, status: r.status ?? null, result: r.result ?? null, at: nowIso() };
@@ -1039,6 +1131,17 @@ async function handleApi(req, res, url) {
     months: pr.months || {},
     errorCount: Number(pr.errorCount) || 0,
     lastErrorAt: pr.lastErrorAt || null,
+    // Container oder Betriebssystem + Version (Container: Update = neues Image).
+    runtime: pr.runtime || null,
+    // Fern-Support: was die Anlage meldet (ohne den Schlüssel selbst) und ob
+    // das Portal sie beim Relay eingetragen hat.
+    support: pr.support ? {
+      allowTunnel: pr.support.allowTunnel, fingerprint: pr.support.fingerprint, keyKnown: !!pr.support.pubkey,
+      provisioned: pr.support.provisioned, capable: pr.support.capable !== false, open: pr.support.open, expiresAt: pr.support.expiresAt,
+      mode: pr.support.mode, lastError: pr.support.lastError,
+    } : null,
+    relay: pr.relay ? { shellPort: pr.relay.shellPort, webPort: pr.relay.webPort, enrolledAt: pr.relay.enrolledAt || null } : null,
+    relayEnrollAvailable: !!(RELAY_REQUEST_DIR && RELAY_RESULT_DIR),
   });
   // Lizenz vorhanden (auch wenn Pro gerade gesperrt ist — „Anlage größer als
   // Lizenz“ sperrt Pro in DVhub selbst, genau dann braucht es den Hinweis).
@@ -1138,6 +1241,66 @@ async function handleApi(req, res, url) {
       pr.status = 'declined';
       writeJsonFile(PAIRINGS_FILE, pairings);
       return jsonRes(res, 200, { ok: true, pairing: pairingView(pr) });
+    }
+    // Fern-Support öffnen (2026-10-14): Anlage bei Bedarf beim Relay eintragen
+    // (Ports zuteilen), dann „Tunnel öffnen“ mit Ports und Dauer einreihen.
+    // Hinein kommt danach weiterhin nur der Support-Schlüssel auf der Anlage.
+    if (sub === '/support-open' && method === 'POST') {
+      const b = await readBody(req);
+      const ttlMin = Math.min(240, Math.max(5, Math.round(Number(b.ttlMin) || 60)));
+      const check = (cur) => {
+        if (!cur || cur.acct !== sess.acct) return [404, 'pairing_nicht_gefunden'];
+        if (cur.status !== 'approved') return [409, 'anlage_nicht_freigegeben'];
+        if (cur.license && cur.license.proActive === false) return [409, 'lizenz_erforderlich'];
+        if (!cur.support) return [409, 'anlage_meldet_keinen_fernsupport'];
+        if (cur.support.capable === false) return [409, 'fernsupport_hier_nicht_moeglich'];
+        if (!cur.support.allowTunnel) return [409, 'kunde_hat_fernsupport_nicht_erlaubt'];
+        if (!cur.support.pubkey) return [409, 'anlage_hat_keinen_relay_schluessel'];
+        return null;
+      };
+      let cur = readJsonFile(PAIRINGS_FILE, {})[aid];
+      let bad = check(cur);
+      if (bad) return jsonRes(res, bad[0], { ok: false, error: bad[1] });
+      const fp = cur.support.fingerprint;
+      let relay = cur.relay && cur.relay.fingerprint === fp && relayPort(cur.relay.shellPort) && relayPort(cur.relay.webPort) ? cur.relay : null;
+      if (!relay) {
+        if (!RELAY_REQUEST_DIR || !RELAY_RESULT_DIR) return jsonRes(res, 503, { ok: false, error: 'relay_freischaltung_nicht_eingerichtet' });
+        const requestId = crypto.randomBytes(12).toString('hex');
+        const reqFile = path.join(RELAY_REQUEST_DIR, `${aid}.json`);
+        const resFile = path.join(RELAY_RESULT_DIR, `${aid}.json`);
+        try {
+          const tmp = path.join(RELAY_REQUEST_DIR, `.${aid}.${requestId}.tmp`);
+          fs.writeFileSync(tmp, JSON.stringify({ requestId, applianceId: aid, pubkey: cur.support.pubkey, requestedAt: nowIso() }), { mode: 0o600 });
+          fs.renameSync(tmp, reqFile);
+        } catch (e) {
+          return jsonRes(res, 503, { ok: false, error: 'relay_auftrag_nicht_geschrieben', detail: String(e.message || e).slice(0, 120) });
+        }
+        let result = null;
+        const until = Date.now() + RELAY_ENROLL_WAIT_MS;
+        while (Date.now() < until) {
+          await new Promise((r) => setTimeout(r, 300));
+          const r = readJsonFile(resFile, null);
+          if (r && r.requestId === requestId) { result = r; break; }
+        }
+        if (!result) return jsonRes(res, 504, { ok: false, error: 'relay_antwortet_nicht' });
+        if (!result.ok) {
+          return jsonRes(res, 409, { ok: false, error: `relay_${String(result.error || 'fehler').replace(/[^a-z0-9_]/gi, '').slice(0, 40)}`, detail: shortStr(result.detail, 200) });
+        }
+        if (!relayPort(result.shellPort) || !relayPort(result.webPort) || result.shellPort === result.webPort) {
+          return jsonRes(res, 502, { ok: false, error: 'relay_ports_ungueltig' });
+        }
+        relay = { shellPort: Number(result.shellPort), webPort: Number(result.webPort), fingerprint: fp, enrolledAt: nowIso() };
+      }
+      // Nach dem Warten frisch lesen und ohne weiteres await schreiben (wie /command).
+      const fresh = readJsonFile(PAIRINGS_FILE, {});
+      cur = fresh[aid];
+      bad = check(cur);
+      if (bad) return jsonRes(res, bad[0], { ok: false, error: bad[1] });
+      cur.relay = relay;
+      const cmd = { id: crypto.randomBytes(8).toString('hex'), type: 'open_tunnel', args: { ttlMin, shellPort: relay.shellPort, webPort: relay.webPort }, queuedAt: nowIso() };
+      cur.commands = [...(cur.commands || []), cmd].slice(-20);
+      writeJsonFile(PAIRINGS_FILE, fresh);
+      return jsonRes(res, 200, { ok: true, commandId: cmd.id, relay: { shellPort: relay.shellPort, webPort: relay.webPort } });
     }
     if (sub === '/command' && method === 'POST') {
       const b = await readBody(req);

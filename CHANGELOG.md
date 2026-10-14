@@ -12,6 +12,16 @@ verweist hierher.
 
 ### Neu
 
+- **Fern-Support über das Portal öffnen.** Im Installateurs-Portal öffnet „Fern-Support öffnen" den
+  Tunnel zur Anlage — ohne Schlüsselaustausch per Chat, ohne Terminal beim Kunden und ohne Handarbeit
+  am Relay. Die Anlage meldet ihren öffentlichen Relay-Schlüssel ans Portal; beim ersten Öffnen trägt
+  ein Dienst auf dem Relay-Server sie ein und vergibt die Ports. Der Kunde erlaubt das einmal mit
+  einem Haken im Kopplungsdialog, wird bei jeder Öffnung benachrichtigt und kann jederzeit schließen.
+  Hinein kommt weiterhin nur der hinterlegte Support-Schlüssel.
+- **Container oder Betriebssystem neben der Version.** DVhub zeigt unter Einstellungen → System und
+  im Portal an, ob es als Docker-Container läuft (Update = neues Image) oder nativ, und auf welchem
+  Betriebssystem.
+
 - **Eine Hauptwallbox für alles.** Unter Integrationen → Wallbox steht die Wahl jetzt ganz oben:
   über evcc, OpenEVSE, go-e Charger oder Fronius Wattpilot. Diese Wallbox gilt überall —
   Leitstand und Familien-Dashboard (Zustand und Lademodus), MQTT/Home Assistant (`ev/mode`),
@@ -81,6 +91,14 @@ verweist hierher.
 
 ### Behoben
 
+- **Support-Tunnel überlebt einen Neustart von DVhub.** Er läuft jetzt als eigener Dienst
+  (`dvhub-support-tunnel.service`) statt als Kindprozess von DVhub; vorher riss jeder
+  `systemctl restart dvhub` die Verbindung des Supports ab. Im Docker-Container bleibt es beim
+  Kindprozess.
+- **Portal: Geräteschlüssel besser geschützt.** Das Portal speichert die Schlüssel der Anlagen nur
+  noch als Prüfwert, vergleicht sie in konstanter Zeit und legt seine Dateien nur für sich lesbar ab
+  (0600). Hinter dem Proxy zählt die Begrenzung der Kopplungsversuche je Absender statt für alle
+  gemeinsam. Auf der Anlage ist die Kopplungsdatei mit dem Schlüssel ebenfalls nur für DVhub lesbar.
 - **Support-Bundle ohne Token im Heimnetz.** Der Knopf unter Tools antwortete mit „unauthorized",
   weil das Bundle als eine von drei Stellen immer den API-Token verlangte — den hat im Browser kein
   Kunde. Support-Bundle, Datenbank-Wiederherstellung und TimescaleDB-Upgrade folgen jetzt der

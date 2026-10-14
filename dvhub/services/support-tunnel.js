@@ -20,7 +20,7 @@
 // connect. The supporter logs in as the local `dvhub-support` user with Christin's
 // support key (Level B) — a separate, customer-controllable opt-out.
 
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -37,6 +37,43 @@ export const TTL_MIN_CEIL = 240;
 export const TTL_MIN_DEFAULT = 60;
 
 const AUTOSSH_CANDIDATES = ['/usr/bin/autossh', '/usr/local/bin/autossh', '/bin/autossh'];
+
+// Portbereich des Relays (build-authorized-keys.sh prüft denselben).
+export const RELAY_PORT_MIN = 49000;
+export const RELAY_PORT_MAX = 49999;
+
+// Eigener systemd-Dienst für den Tunnel (2026-10-14): Als Kindprozess von
+// DVhub starb der Tunnel bei jedem `systemctl restart dvhub` — genau dann, wenn
+// der Support mitten in der Arbeit neu startete. support-provision.sh legt die
+// Unit an; sie läuft als dvhub und startet dvhub-support-tunnel.sh --service.
+// Ohne Unit (Docker-Image, Entwicklung) bleibt es beim Kindprozess.
+export const TUNNEL_UNIT = 'dvhub-support-tunnel.service';
+export const TUNNEL_UNIT_PATH = `/etc/systemd/system/${TUNNEL_UNIT}`;
+
+// Erlaubte Schlüsseltypen — wie build-authorized-keys.sh auf dem Relay.
+const PUBKEY_TYPE_RE = /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)$/;
+const PUBKEY_DATA_RE = /^[A-Za-z0-9+/]+={0,3}$/;
+
+/**
+ * Vom Portal zugeteilte Relay-Ports prüfen: ganze Zahlen im Relay-Bereich,
+ * verschieden. Liefert {shellPort, webPort} oder null.
+ */
+export function validateRelayPorts(ports) {
+  const shellPort = Number(ports?.shellPort);
+  const webPort = Number(ports?.webPort);
+  const ok = (n) => Number.isInteger(n) && n >= RELAY_PORT_MIN && n <= RELAY_PORT_MAX;
+  if (!ok(shellPort) || !ok(webPort) || shellPort === webPort) return null;
+  return { shellPort, webPort };
+}
+
+/** Öffentlicher Relay-Schlüssel als „<typ> <daten>“ (ohne Kommentar), sonst null. */
+export function normalizePublicKey(text) {
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length !== 1) return null;
+  const [type, data] = lines[0].split(/\s+/);
+  if (!PUBKEY_TYPE_RE.test(type || '') || !PUBKEY_DATA_RE.test(data || '') || data.length > 2000) return null;
+  return `${type} ${data}`;
+}
 
 // Read the persisted appliance UUID. Returns null when absent or malformed — the
 // appliance is then "not yet registered" with the relay and the tunnel can't open.
@@ -126,6 +163,16 @@ export function resolveTunnelBinary(fsImpl = fs) {
   return { binary: 'ssh', bin: 'ssh' };
 }
 
+// Gibt es auf dieser Installation überhaupt ein Tunnel-Programm? Im Docker-Image
+// fehlen ssh und autossh — dort kann kein Tunnel geöffnet werden (2026-10-14).
+const SSH_CANDIDATES = ['/usr/bin/ssh', '/bin/ssh', '/usr/local/bin/ssh'];
+export function tunnelBinaryAvailable(fsImpl = fs) {
+  for (const cand of [...AUTOSSH_CANDIDATES, ...SSH_CANDIDATES]) {
+    try { if (fsImpl.existsSync(cand)) return true; } catch { /* ignore */ }
+  }
+  return false;
+}
+
 // Factory — manages a single tunnel lifecycle. Deps are injectable for tests.
 export function createSupportTunnel(ctx, deps = {}) {
   const spawnFn = deps.spawn || nodeSpawn;
@@ -134,6 +181,18 @@ export function createSupportTunnel(ctx, deps = {}) {
   const setTimer = deps.setTimeout || setTimeout;
   const clearTimer = deps.clearTimeout || clearTimeout;
   const pushLog = (typeof ctx?.pushLog === 'function') ? ctx.pushLog : () => {};
+  const execFileFn = deps.execFile || nodeExecFile;
+  // Eigener Dienst vorhanden? (nicht im Container — dort gibt es kein systemd)
+  const unitMode = typeof deps.unitMode === 'function'
+    ? deps.unitMode
+    : () => {
+      // Bewusst das echte Dateisystem (nicht deps.fs): die Unit liegt auf dem Host.
+      if (process.env.DVHUB_RUNTIME === 'container') return false;
+      try { return fs.existsSync(TUNNEL_UNIT_PATH); } catch { return false; }
+    };
+  const isAlive = deps.isAlive || ((pid) => {
+    try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; }
+  });
 
   let child = null;
   let openedAt = null;
@@ -203,6 +262,11 @@ export function createSupportTunnel(ctx, deps = {}) {
       keyPath: path.join(supDir, 'relay_id_ed25519'),
       pubPath: path.join(supDir, 'relay_id_ed25519.pub'),
       knownHostsPath: path.join(supDir, 'known_hosts'),
+      relayJsonPath: path.join(supDir, 'relay.json'),
+      // Dienst-Modus: Auftrag (von DVhub) und Zustand (vom Tunnel-Skript).
+      requestPath: path.join(supDir, 'tunnel.json'),
+      statePath: path.join(supDir, 'tunnel-state.json'),
+      logPath: path.join(supDir, 'tunnel.log'),
     };
   }
 
@@ -255,6 +319,80 @@ export function createSupportTunnel(ctx, deps = {}) {
     try { return fsImpl.existsSync(p); } catch { return false; }
   }
 
+  function readJsonFile(p) {
+    try {
+      const o = JSON.parse(String(fsImpl.readFileSync(p, 'utf8')));
+      return (o && typeof o === 'object') ? o : null;
+    } catch { return null; }
+  }
+
+  // Atomar schreiben (tmp + rename) mit festem Dateimodus.
+  function writeFileAtomic(p, text, mode) {
+    const tmp = `${p}.tmp-${process.pid}`;
+    fsImpl.writeFileSync(tmp, text, { mode });
+    try { fsImpl.chmodSync?.(tmp, mode); } catch { /* best effort */ }
+    fsImpl.renameSync(tmp, p);
+  }
+
+  // Dienst-Modus: läuft der Tunnel? Das Tunnel-Skript schreibt beim Start
+  // tunnel-state.json (pid, Ablauf) und löscht sie beim Ende. Ein Rest nach
+  // einem harten Abbruch zählt nicht: der Prozess muss noch leben.
+  function unitState() {
+    const st = readJsonFile(supportPaths().statePath);
+    if (!st) return null;
+    const pid = Number(st.pid);
+    const expires = Number(st.expiresAt);
+    if (!Number.isInteger(pid) || pid <= 1 || !isAlive(pid)) return null;
+    if (Number.isFinite(expires) && expires < now()) return null;
+    return { openedAt: Number(st.startedAt) || null, expiresAt: Number.isFinite(expires) ? expires : null };
+  }
+
+  function unitLastError() {
+    try {
+      const tail = String(fsImpl.readFileSync(supportPaths().logPath, 'utf8')).trim().split('\n').filter(Boolean).slice(-3).join(' | ');
+      return tail ? tail.slice(-500) : null;
+    } catch { return null; }
+  }
+
+  function currentState() {
+    if (unitMode()) {
+      const us = unitState();
+      if (!us) return { open: false, openedAt: null, expiresAt: null, openedBy: null };
+      const req = readJsonFile(supportPaths().requestPath);
+      return { open: true, openedAt: us.openedAt, expiresAt: us.expiresAt, openedBy: req?.openedBy || null };
+    }
+    return { open: !!child, openedAt, expiresAt, openedBy: child ? lastOpenedBy : null };
+  }
+
+  /** Öffentlicher Relay-Schlüssel der Box (fürs Portal), sonst null. */
+  function publicKey() {
+    try {
+      const pub = normalizePublicKey(fsImpl.readFileSync(supportPaths().pubPath, 'utf8'));
+      if (!pub) return null;
+      return { pubkey: pub, fingerprint: sshKeyFingerprint(pub) };
+    } catch { return null; }
+  }
+
+  /**
+   * Vom Portal zugeteilte Relay-Ports in relay.json übernehmen. Host, Port und
+   * Benutzer bleiben, wie support-provision.sh sie gesetzt hat. Nur schreiben,
+   * wenn sich etwas ändert.
+   */
+  function assignRelayPorts(ports, actor = null) {
+    const v = validateRelayPorts(ports);
+    if (!v) return { ok: false, error: 'invalid_ports' };
+    const p = supportPaths();
+    const side = readRelaySidecar(p.supDir);
+    if (Number(side.shellPort) === v.shellPort && Number(side.webPort) === v.webPort) return { ok: true, changed: false };
+    try {
+      writeFileAtomic(p.relayJsonPath, JSON.stringify({ ...side, ...v }, null, 2) + '\n', 0o644);
+    } catch (e) {
+      return { ok: false, error: 'write_failed', detail: String(e?.message || e).slice(0, 200) };
+    }
+    pushLog('support_tunnel_ports_assigned', { shellPort: v.shellPort, webPort: v.webPort }, actor);
+    return { ok: true, changed: true };
+  }
+
   function status() {
     const rc = relayConfig();
     const p = supportPaths();
@@ -262,12 +400,13 @@ export function createSupportTunnel(ctx, deps = {}) {
     const keyPresent = exists(p.keyPath);
     const provisioned = !!applianceId && keyPresent && rc.shellPort > 0 && rc.webPort > 0;
     const t = now();
+    const cur = currentState();
     return {
-      open: !!child,
-      openedAt,
-      openedBy: child ? lastOpenedBy : null,
-      expiresAt,
-      ttlRemainingSec: (child && expiresAt) ? Math.max(0, Math.round((expiresAt - t) / 1000)) : null,
+      open: cur.open,
+      openedAt: cur.openedAt,
+      openedBy: cur.openedBy,
+      expiresAt: cur.expiresAt,
+      ttlRemainingSec: (cur.open && cur.expiresAt) ? Math.max(0, Math.round((cur.expiresAt - t) / 1000)) : null,
       provisioned,
       applianceId,
       applianceKeyFingerprint: readApplianceKeyFingerprint(p.pubPath),
@@ -280,22 +419,35 @@ export function createSupportTunnel(ctx, deps = {}) {
       },
       localUserEnabled: rc.localUserEnabled,
       autoCloseMin: rc.autoCloseMin,
-      lastError,
+      // Eigener Dienst (überlebt DVhub-Neustarts) oder Kindprozess.
+      mode: unitMode() ? 'service' : 'process',
+      // Ohne ssh/autossh (Docker-Image) ist hier kein Tunnel möglich.
+      capable: tunnelBinaryAvailable(fsImpl),
+      lastError: cur.open ? null : (unitMode() ? (unitLastError() || lastError) : lastError),
       // B7: CSRF-Nonce für POST /open — die UI schickt ihn automatisch mit.
       uiToken: issueUiToken(),
     };
   }
 
   // Leichtgewichtiger Status für den /api/status-Poll des Leitstands (3s-Takt):
-  // nur In-Memory-Felder, KEINE fs-Zugriffe (status() liest appliance-id +
-  // Key-Fingerprint von Platte) und KEIN uiToken.
+  // KEIN uiToken, keine Schlüssel-/ID-Dateien (im Dienst-Modus nur die kleine
+  // Zustandsdatei des Tunnels).
   function liteStatus() {
     const t = now();
+    const cur = currentState();
     return {
-      open: !!child,
-      expiresAt,
-      ttlRemainingSec: (child && expiresAt) ? Math.max(0, Math.round((expiresAt - t) / 1000)) : null,
+      open: cur.open,
+      expiresAt: cur.expiresAt,
+      ttlRemainingSec: (cur.open && cur.expiresAt) ? Math.max(0, Math.round((cur.expiresAt - t) / 1000)) : null,
     };
+  }
+
+  function notifyClosed(reason) {
+    notifyTunnel('Support-Tunnel geschlossen',
+      reason === 'auto_close'
+        ? 'Der Support-Tunnel wurde nach Ablauf der Zeit automatisch geschlossen.'
+        : 'Der Support-Tunnel wurde geschlossen.',
+      'info');
   }
 
   function teardown(reason, actor) {
@@ -310,38 +462,121 @@ export function createSupportTunnel(ctx, deps = {}) {
     }
     if (wasOpen) {
       pushLog('support_tunnel_closed', { reason: reason || 'manual' }, actor || lastOpenedBy);
-      notifyTunnel('Support-Tunnel geschlossen',
-        reason === 'auto_close'
-          ? 'Der Support-Tunnel wurde nach Ablauf der Zeit automatisch geschlossen.'
-          : 'Der Support-Tunnel wurde geschlossen.',
-        'info');
+      notifyClosed(reason);
     }
     lastOpenedBy = null;
   }
 
-  function open({ ttlMin } = {}, actor = null) {
+  // Gemeinsame Vorprüfung beider Modi. Liefert {rc, p, applianceId} oder einen Fehler.
+  function preflight(actor) {
+    const rc = relayConfig();
+    const p = supportPaths();
+    const applianceId = readApplianceId(p.dataDir, fsImpl);
+    const fail = (why, detail) => {
+      lastError = `not_provisioned: ${why}`;
+      pushLog('support_tunnel_error', { error: lastError }, actor);
+      return { error: { ok: false, error: 'not_provisioned', detail } };
+    };
+    if (!applianceId) return fail('appliance-id missing', 'appliance-id fehlt — Box ist nicht beim Relay registriert.');
+    if (!exists(p.keyPath)) return fail('relay key missing', 'Relay-Schlüssel fehlt — Box ist nicht beim Relay registriert.');
+    if (!(rc.shellPort > 0 && rc.webPort > 0)) return fail('relay ports unassigned', 'Relay-Ports nicht zugeteilt — Support muss die Box erst freischalten.');
+    return { rc, p, applianceId };
+  }
+
+  function announceOpened({ ttl, binary, rc, applianceId, actor }) {
+    pushLog('support_tunnel_opened', {
+      ttlMin: ttl,
+      binary,
+      relay: `${rc.user}@${rc.host}:${rc.port}`,
+      shellPort: rc.shellPort,
+      webPort: rc.webPort,
+      applianceId,
+    }, actor);
+    notifyTunnel('Support-Tunnel geöffnet',
+      `Fernzugriff für den Support ist jetzt möglich — schließt automatisch in ${ttl} min. `
+      + 'Falls du das nicht warst: Einstellungen → Freigaben → Fern-Support → Schließen.',
+      'warning');
+  }
+
+  function runSystemctl(action) {
+    return new Promise((resolve) => {
+      execFileFn('sudo', ['-n', 'systemctl', action, TUNNEL_UNIT], { timeout: 15000 }, (err, stdout, stderr) => {
+        resolve(err ? { ok: false, error: String(stderr || err.message || err).trim().slice(0, 300) } : { ok: true });
+      });
+    });
+  }
+
+  const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+
+  async function openUnit({ ttlMin } = {}, actor = null) {
+    if (unitState()) return { ok: true, alreadyOpen: true, status: status() };
+    const pre = preflight(actor);
+    if (pre.error) return pre.error;
+    const { rc, p, applianceId } = pre;
+    const ttl = clampTtlMin(ttlMin, rc.autoCloseMin);
+    const exp = now() + ttl * 60 * 1000;
+    try {
+      const openedBy = actor ? { ip: actor.ip || null, via: actor.via || actor.source || null } : null;
+      // Die wirksamen Relay-Werte mitgeben (config.support.relay geht vor
+      // relay.json) — das Tunnel-Skript nimmt sie von hier.
+      const relay = { host: rc.host, port: rc.port, user: rc.user, shellPort: rc.shellPort, webPort: rc.webPort };
+      writeFileAtomic(p.requestPath, JSON.stringify({ expiresAt: exp, ttlMin: ttl, openedBy, ...relay }) + '\n', 0o600);
+      try { fsImpl.writeFileSync(p.logPath, ''); } catch { /* neues Protokoll je Lauf */ }
+    } catch (e) {
+      lastError = `request write failed: ${e.message}`;
+      pushLog('support_tunnel_error', { error: lastError }, actor);
+      return { ok: false, error: 'spawn_failed', detail: e.message };
+    }
+    const started = await runSystemctl('start');
+    if (!started.ok) {
+      lastError = `systemctl start failed: ${started.error}`;
+      pushLog('support_tunnel_error', { error: lastError }, actor);
+      return { ok: false, error: 'spawn_failed', detail: started.error };
+    }
+    // Das Skript schreibt seinen Zustand sofort; lehnt das Relay ab
+    // (ExitOnForwardFailure), endet es in wenigen Sekunden wieder.
+    let us = null;
+    for (let i = 0; i < 8; i += 1) {
+      await sleep(500);
+      us = unitState();
+    }
+    if (!us) {
+      lastError = unitLastError() || 'tunnel_exited';
+      pushLog('support_tunnel_error', { error: lastError }, actor);
+      return { ok: false, error: 'tunnel_failed', detail: lastError };
+    }
+    lastError = null;
+    if (autoCloseTimer) clearTimer(autoCloseTimer);
+    autoCloseTimer = setTimer(() => { autoCloseTimer = null; pushLog('support_tunnel_closed', { reason: 'auto_close' }, actor); notifyClosed('auto_close'); }, ttl * 60 * 1000);
+    if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
+    announceOpened({ ttl, binary: 'service', rc, applianceId, actor });
+    return { ok: true, status: status() };
+  }
+
+  async function closeUnit(actor = null) {
+    const wasOpen = !!unitState();
+    const r = await runSystemctl('stop');
+    try { fsImpl.unlinkSync(supportPaths().requestPath); } catch { /* war nicht da */ }
+    if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
+    if (!r.ok && unitState()) {
+      lastError = `systemctl stop failed: ${r.error}`;
+      pushLog('support_tunnel_error', { error: lastError }, actor);
+      return { ok: false, error: 'close_failed', detail: r.error, status: status() };
+    }
+    if (!wasOpen) return { ok: true, alreadyClosed: true, status: status() };
+    pushLog('support_tunnel_closed', { reason: 'manual' }, actor);
+    notifyClosed('manual');
+    return { ok: true, status: status() };
+  }
+
+  function openProcess({ ttlMin } = {}, actor = null) {
     if (child) {
       // Idempotent: already open. Refresh nothing — surface current state.
       return { ok: true, alreadyOpen: true, status: status() };
     }
-    const rc = relayConfig();
-    const p = supportPaths();
-    const applianceId = readApplianceId(p.dataDir, fsImpl);
-    if (!applianceId) {
-      lastError = 'not_provisioned: appliance-id missing';
-      pushLog('support_tunnel_error', { error: lastError }, actor);
-      return { ok: false, error: 'not_provisioned', detail: 'appliance-id fehlt — Box ist nicht beim Relay registriert.' };
-    }
-    if (!exists(p.keyPath)) {
-      lastError = 'not_provisioned: relay key missing';
-      pushLog('support_tunnel_error', { error: lastError }, actor);
-      return { ok: false, error: 'not_provisioned', detail: 'Relay-Schlüssel fehlt — Box ist nicht beim Relay registriert.' };
-    }
-    if (!(rc.shellPort > 0 && rc.webPort > 0)) {
-      lastError = 'not_provisioned: relay ports unassigned';
-      pushLog('support_tunnel_error', { error: lastError }, actor);
-      return { ok: false, error: 'not_provisioned', detail: 'Relay-Ports nicht zugeteilt — Support muss die Box erst freischalten.' };
-    }
+    const pre = preflight(actor);
+    if (pre.error) return pre.error;
+    const { rc, p, applianceId } = pre;
 
     const { binary, bin } = resolveTunnelBinary(fsImpl);
     let args;
@@ -406,27 +641,24 @@ export function createSupportTunnel(ctx, deps = {}) {
     autoCloseTimer = setTimer(() => teardown('auto_close', lastOpenedBy), ttl * 60 * 1000);
     if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
 
-    pushLog('support_tunnel_opened', {
-      ttlMin: ttl,
-      binary,
-      relay: `${rc.user}@${rc.host}:${rc.port}`,
-      shellPort: rc.shellPort,
-      webPort: rc.webPort,
-      applianceId,
-    }, actor);
-    notifyTunnel('Support-Tunnel geöffnet',
-      `Fernzugriff für den Support ist jetzt möglich — schließt automatisch in ${ttl} min. `
-      + 'Falls du das nicht warst: Tools → Support-Tunnel → Schließen.',
-      'warning');
-
+    announceOpened({ ttl, binary, rc, applianceId, actor });
     return { ok: true, status: status() };
   }
 
-  function close(actor = null) {
+  function closeProcess(actor = null) {
     if (!child) return { ok: true, alreadyClosed: true, status: status() };
     teardown('manual', actor);
     return { ok: true, status: status() };
   }
 
-  return { open, close, status, liteStatus, consumeUiToken };
+  // Im Dienst-Modus liefern open/close ein Promise (systemctl), sonst sofort ein
+  // Ergebnis — Aufrufer nehmen beides mit `await`.
+  function open(opts = {}, actor = null) {
+    return unitMode() ? openUnit(opts, actor) : openProcess(opts, actor);
+  }
+  function close(actor = null) {
+    return unitMode() ? closeUnit(actor) : closeProcess(actor);
+  }
+
+  return { open, close, status, liteStatus, consumeUiToken, publicKey, assignRelayPorts };
 }

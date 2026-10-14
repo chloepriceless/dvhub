@@ -579,6 +579,10 @@ cat >"${SUDOERS_FILE}" <<SUDOERS
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart ${SERVICE_NAME}.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} is-active ${SERVICE_NAME}.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} show ${SERVICE_NAME}.service *
+# Fern-Support-Tunnel als eigener Dienst (2026-10-14): überlebt einen Neustart
+# von DVhub. Nur Start/Stopp genau dieser Unit; sie läuft selbst als ${SERVICE_USER}.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} start dvhub-support-tunnel.service
+${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} stop dvhub-support-tunnel.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${OPENVPN_PATH} --config *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} up *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} down *

@@ -44,6 +44,28 @@ Variablen:
 | `WEBAUTHN_RP_ID` | Host aus `WEBAUTHN_ORIGIN` | abweichende rpId (selten nötig) |
 | `COOKIE_SECURE` | — | `1` = Session-Cookie nur über HTTPS. **Online setzen.** |
 
+## Fern-Support über das Relay (seit 2026-10-14)
+
+Die Anlage meldet beim Poll ihren **öffentlichen** Relay-Schlüssel, ob der Kunde
+Fern-Support erlaubt hat, den Tunnel-Zustand und worauf sie läuft (Container
+oder Betriebssystem, Version). „Fern-Support öffnen" (`POST
+/api/pairings/<id>/support-open`) trägt die Anlage beim ersten Mal beim Relay
+ein und reiht „Tunnel öffnen" mit Ports und Dauer ein.
+
+Das Eintragen macht ein root-Dienst auf dem Relay-Server
+(`support-relay/enroll-from-portal.py`, siehe `support-relay/README.md`). Das
+Portal legt dafür nur einen Auftrag ab und liest das Ergebnis:
+
+| Variable | Zweck |
+|---|---|
+| `RELAY_REQUEST_DIR` | Auftragsordner (schreibbar), z. B. `/relay/requests` |
+| `RELAY_RESULT_DIR` | Ergebnisordner (nur lesbar), z. B. `/relay/results` |
+| `RELAY_ENROLL_WAIT_MS` | Wartezeit aufs Relay, Standard 20000 |
+
+Ohne beide Ordner bleibt die Freischaltung aus; schon eingetragene Anlagen
+lassen sich trotzdem öffnen. Geräteschlüssel speichert das Portal nur als
+SHA-256-Prüfwert.
+
 ## Kunden-Kontrolle auf der Anlage
 
 - **Opt-in:** `installerPortal.enabled` ist ab Werk `false`. „Kopplung starten“
