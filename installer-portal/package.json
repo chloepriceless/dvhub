@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-force-exit test/"
+    "test": "node --test --test-force-exit test/*.test.js"
   },
   "engines": {
     "node": ">=22"
