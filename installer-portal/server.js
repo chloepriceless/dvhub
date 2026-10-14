@@ -118,8 +118,21 @@ const STALE_APPROVED_MS = 7 * 24 * 3600_000;
 
 // ── Rate-Limit (pro IP, Sliding Window 1 min) für die offenen Endpunkte ──────
 const rateBuckets = new Map();
+// Hinter einem Reverse-Proxy (TRUST_PROXY=1) kommt jede Verbindung vom Proxy;
+// ohne den Header teilten sich alle Clients einen Bucket, und ein einziger
+// Angreifer sperrte Login und Kopplung für alle. Caddy verwirft vom Client
+// mitgeschickte X-Forwarded-For (keine trusted_proxies) und setzt die echte
+// Adresse — deshalb zählt nur der letzte Eintrag.
+const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const fwd = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (fwd.length) return fwd[fwd.length - 1];
+  }
+  return req.socket?.remoteAddress || '?';
+}
 function rateLimited(req, bucket, max = 20) {
-  const ip = req.socket?.remoteAddress || '?';
+  const ip = clientIp(req);
   const key = `${bucket}|${ip}`;
   const t = Date.now();
   const hits = (rateBuckets.get(key) || []).filter((x) => t - x < 60_000);

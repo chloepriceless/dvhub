@@ -364,3 +364,27 @@ test('Passkey mit langer Credential-ID (600 Byte) lässt sich registrieren UND l
   const del = await p.call(`/api/passkeys/${id}`, { method: 'DELETE', cookie: a.cookie });
   assert.equal(del.status, 200, del.text);
 });
+
+// ── Rate-Limit hinter dem Reverse-Proxy ─────────────────────────────────────
+
+test('TRUST_PROXY: Rate-Limit je Client-Adresse aus X-Forwarded-For, nicht je Proxy', async (t) => {
+  const p = await startPortal(t, { TRUST_PROXY: '1' });
+  const claim = (ip) => p.call('/api/pair/claim', {
+    method: 'POST', body: { applianceId: 'gibtsnicht', code: '000000' }, headers: { 'x-forwarded-for': ip },
+  });
+  for (let i = 0; i < 20; i++) assert.equal((await claim('203.0.113.7')).status, 404);
+  assert.equal((await claim('203.0.113.7')).status, 429);
+  // Ein anderer Kunde hinter demselben Proxy ist nicht mitgesperrt …
+  assert.equal((await claim('198.51.100.9')).status, 404);
+  // … und ein vorangestellter, gefälschter Eintrag hilft dem Gesperrten nicht.
+  assert.equal((await claim('10.9.9.9, 203.0.113.7')).status, 429);
+});
+
+test('ohne TRUST_PROXY zählt die Socket-Adresse, X-Forwarded-For wird ignoriert', async (t) => {
+  const p = await startPortal(t);
+  const claim = (ip) => p.call('/api/pair/claim', {
+    method: 'POST', body: { applianceId: 'gibtsnicht', code: '000000' }, headers: { 'x-forwarded-for': ip },
+  });
+  for (let i = 0; i < 20; i++) await claim(`203.0.113.${i}`);
+  assert.equal((await claim('198.51.100.9')).status, 429);
+});
