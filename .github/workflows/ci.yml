@@ -48,6 +48,9 @@ jobs:
   fast:
     name: fast (no database)
     runs-on: ubuntu-latest
+    # Ohne --test-force-exit (2026-10-15) darf ein hängender Test die CI nicht
+    # stundenlang blockieren; ein Lauf dauert ~2–4 min.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: dvhub
@@ -67,6 +70,9 @@ jobs:
   pg-integration:
     name: pg-integration (ephemeral postgres)
     runs-on: ubuntu-latest
+    # Ohne --test-force-exit (2026-10-15) darf ein hängender Test die CI nicht
+    # stundenlang blockieren; ein Lauf dauert ~2–4 min.
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
