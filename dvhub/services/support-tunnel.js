@@ -50,6 +50,13 @@ export const RELAY_PORT_MAX = 49999;
 export const TUNNEL_UNIT = 'dvhub-support-tunnel.service';
 export const TUNNEL_UNIT_PATH = `/etc/systemd/system/${TUNNEL_UNIT}`;
 
+// Docker-Container (2026-10-14): Dort gibt es kein System-sshd. Der Entrypoint
+// legt support/sshd_config + Hostschlüssel an; beim Öffnen startet DVhub einen
+// sshd nur auf 127.0.0.1 (als Benutzer dvhub, nur der Support-Schlüssel) und
+// schließt ihn mit dem Tunnel wieder.
+export const CONTAINER_SSHD_BIN = '/usr/sbin/sshd';
+export const CONTAINER_SSH_PORT_DEFAULT = 2222;
+
 // Erlaubte Schlüsseltypen — wie build-authorized-keys.sh auf dem Relay.
 const PUBKEY_TYPE_RE = /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)$/;
 const PUBKEY_DATA_RE = /^[A-Za-z0-9+/]+={0,3}$/;
@@ -119,6 +126,10 @@ export function clampTtlMin(value, fallback = TTL_MIN_DEFAULT) {
 // ServerAlive) — plain ssh rejects `-M 0`.
 export function buildTunnelArgs(opts = {}, { binary = 'autossh' } = {}) {
   const { host, port, user, shellPort, webPort, keyPath, knownHostsPath } = opts;
+  // Ziele auf der Anlage: nativ sshd :22 und die Weboberfläche (httpPort, Standard 80);
+  // im Docker-Container ein eigener sshd auf 127.0.0.1:2222 (siehe docker-entrypoint.sh).
+  const localShellPort = Number(opts.localShellPort) || 22;
+  const localWebPort = Number(opts.localWebPort) || 80;
   const errs = [];
   if (!host || typeof host !== 'string') errs.push('host');
   if (!Number.isInteger(Number(port)) || Number(port) <= 0) errs.push('port');
@@ -143,8 +154,8 @@ export function buildTunnelArgs(opts = {}, { binary = 'autossh' } = {}) {
   );
   if (knownHostsPath) args.push('-o', `UserKnownHostsFile=${knownHostsPath}`);
   args.push(
-    '-R', `127.0.0.1:${Number(shellPort)}:127.0.0.1:22`,
-    '-R', `127.0.0.1:${Number(webPort)}:127.0.0.1:80`,
+    '-R', `127.0.0.1:${Number(shellPort)}:127.0.0.1:${localShellPort}`,
+    '-R', `127.0.0.1:${Number(webPort)}:127.0.0.1:${localWebPort}`,
     '-p', String(Number(port)),
     '-i', keyPath,
     `${user}@${host}`
@@ -182,6 +193,8 @@ export function createSupportTunnel(ctx, deps = {}) {
   const clearTimer = deps.clearTimeout || clearTimeout;
   const pushLog = (typeof ctx?.pushLog === 'function') ? ctx.pushLog : () => {};
   const execFileFn = deps.execFile || nodeExecFile;
+  const inContainer = typeof deps.inContainer === 'boolean' ? deps.inContainer : process.env.DVHUB_RUNTIME === 'container';
+  let sshdChild = null;
   // Eigener Dienst vorhanden? (nicht im Container — dort gibt es kein systemd)
   const unitMode = typeof deps.unitMode === 'function'
     ? deps.unitMode
@@ -267,6 +280,8 @@ export function createSupportTunnel(ctx, deps = {}) {
       requestPath: path.join(supDir, 'tunnel.json'),
       statePath: path.join(supDir, 'tunnel-state.json'),
       logPath: path.join(supDir, 'tunnel.log'),
+      sshdConfigPath: path.join(supDir, 'sshd_config'),
+      supportKeysPath: path.join(supDir, 'support_authorized_keys'),
     };
   }
 
@@ -303,6 +318,8 @@ export function createSupportTunnel(ctx, deps = {}) {
       shellPort: Number(pick('shellPort', 0)) || 0,
       webPort: Number(pick('webPort', 0)) || 0,
       autoCloseMin: clampTtlMin(support.tunnel?.autoCloseMin, TTL_MIN_DEFAULT),
+      localShellPort: inContainer ? (Number(process.env.DVHUB_SUPPORT_SSH_PORT) || CONTAINER_SSH_PORT_DEFAULT) : 22,
+      localWebPort: Number(cfg.httpPort) || 80,
       localUserEnabled: support.localUser?.enabled !== false, // opt-out: default ON
     };
   }
@@ -421,8 +438,12 @@ export function createSupportTunnel(ctx, deps = {}) {
       autoCloseMin: rc.autoCloseMin,
       // Eigener Dienst (überlebt DVhub-Neustarts) oder Kindprozess.
       mode: unitMode() ? 'service' : 'process',
-      // Ohne ssh/autossh (Docker-Image) ist hier kein Tunnel möglich.
+      // Ohne ssh/autossh (älteres Docker-Image) ist hier kein Tunnel möglich.
       capable: tunnelBinaryAvailable(fsImpl),
+      // Anmeldename für den Support: nativ der eigene Benutzer dvhub-support,
+      // im Container der App-Benutzer (der sshd dort läuft ohne root).
+      loginUser: inContainer ? 'dvhub' : 'dvhub-support',
+      shellAvailable: inContainer ? (exists(p.sshdConfigPath) && exists(p.supportKeysPath)) : rc.localUserEnabled,
       lastError: cur.open ? null : (unitMode() ? (unitLastError() || lastError) : lastError),
       // B7: CSRF-Nonce für POST /open — die UI schickt ihn automatisch mit.
       uiToken: issueUiToken(),
@@ -460,6 +481,7 @@ export function createSupportTunnel(ctx, deps = {}) {
     if (proc) {
       try { proc.kill('SIGTERM'); } catch { /* already gone */ }
     }
+    stopContainerSshd();
     if (wasOpen) {
       pushLog('support_tunnel_closed', { reason: reason || 'manual' }, actor || lastOpenedBy);
       notifyClosed(reason);
@@ -519,7 +541,7 @@ export function createSupportTunnel(ctx, deps = {}) {
       const openedBy = actor ? { ip: actor.ip || null, via: actor.via || actor.source || null } : null;
       // Die wirksamen Relay-Werte mitgeben (config.support.relay geht vor
       // relay.json) — das Tunnel-Skript nimmt sie von hier.
-      const relay = { host: rc.host, port: rc.port, user: rc.user, shellPort: rc.shellPort, webPort: rc.webPort };
+      const relay = { host: rc.host, port: rc.port, user: rc.user, shellPort: rc.shellPort, webPort: rc.webPort, localShellPort: rc.localShellPort, localWebPort: rc.localWebPort };
       writeFileAtomic(p.requestPath, JSON.stringify({ expiresAt: exp, ttlMin: ttl, openedBy, ...relay }) + '\n', 0o600);
       try { fsImpl.writeFileSync(p.logPath, ''); } catch { /* neues Protokoll je Lauf */ }
     } catch (e) {
@@ -569,6 +591,26 @@ export function createSupportTunnel(ctx, deps = {}) {
     return { ok: true, status: status() };
   }
 
+  // Container: sshd nur für die Dauer des Tunnels. Ohne Support-Schlüssel
+  // (Kunde hat den Support-Login abgeschaltet) bleibt es beim Web-Zugang.
+  function startContainerSshd(p, actor) {
+    if (!inContainer || sshdChild) return;
+    if (!exists(CONTAINER_SSHD_BIN) || !exists(p.sshdConfigPath) || !exists(p.supportKeysPath)) return;
+    try {
+      const proc = spawnFn(CONTAINER_SSHD_BIN, ['-D', '-e', '-f', p.sshdConfigPath], { stdio: ['ignore', 'ignore', 'pipe'], detached: false });
+      sshdChild = proc;
+      proc.on('exit', () => { if (sshdChild === proc) sshdChild = null; });
+      proc.on('error', (e) => { pushLog('support_tunnel_error', { error: `sshd: ${e.message}` }, actor); });
+    } catch (e) {
+      pushLog('support_tunnel_error', { error: `sshd start failed: ${e.message}` }, actor);
+    }
+  }
+  function stopContainerSshd() {
+    const proc = sshdChild;
+    sshdChild = null;
+    if (proc) { try { proc.kill('SIGTERM'); } catch { /* already gone */ } }
+  }
+
   function openProcess({ ttlMin } = {}, actor = null) {
     if (child) {
       // Idempotent: already open. Refresh nothing — surface current state.
@@ -589,6 +631,8 @@ export function createSupportTunnel(ctx, deps = {}) {
         webPort: rc.webPort,
         keyPath: p.keyPath,
         knownHostsPath: exists(p.knownHostsPath) ? p.knownHostsPath : undefined,
+        localShellPort: rc.localShellPort,
+        localWebPort: rc.localWebPort,
       }, { binary });
     } catch (e) {
       lastError = e.message;
@@ -597,10 +641,12 @@ export function createSupportTunnel(ctx, deps = {}) {
     }
 
     const ttl = clampTtlMin(ttlMin, rc.autoCloseMin);
+    startContainerSshd(p, actor);
     let proc;
     try {
       proc = spawnFn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: false });
     } catch (e) {
+      stopContainerSshd();
       lastError = `spawn failed: ${e.message}`;
       pushLog('support_tunnel_error', { error: lastError, binary: bin }, actor);
       return { ok: false, error: 'spawn_failed', detail: e.message };
@@ -630,6 +676,7 @@ export function createSupportTunnel(ctx, deps = {}) {
       openedAt = null;
       expiresAt = null;
       const reason = signal ? `signal:${signal}` : `exit:${code}`;
+      stopContainerSshd();
       pushLog('support_tunnel_closed', { reason, unexpected: true, lastError }, lastOpenedBy);
       lastOpenedBy = null;
     });

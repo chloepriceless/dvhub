@@ -111,6 +111,8 @@ export function buildSupportInfo(ctx) {
     fingerprint: key?.fingerprint || null,
     provisioned: st.provisioned === true,
     capable: st.capable !== false,
+    loginUser: st.loginUser || null,
+    shellAvailable: st.shellAvailable !== false,
     shellPort: st.relay?.shellPort || null,
     webPort: st.relay?.webPort || null,
     open: st.open === true,

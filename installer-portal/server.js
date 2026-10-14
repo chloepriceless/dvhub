@@ -176,6 +176,8 @@ function cleanSupport(sp) {
     provisioned: sp.provisioned === true,
     // Ältere DVhub melden das nicht → als möglich annehmen.
     capable: sp.capable !== false,
+    loginUser: sp.loginUser === 'dvhub' || sp.loginUser === 'dvhub-support' ? sp.loginUser : null,
+    shellAvailable: sp.shellAvailable !== false,
     shellPort: relayPort(sp.shellPort) ? Number(sp.shellPort) : null,
     webPort: relayPort(sp.webPort) ? Number(sp.webPort) : null,
     open: sp.open === true,
@@ -1138,6 +1140,7 @@ async function handleApi(req, res, url) {
     support: pr.support ? {
       allowTunnel: pr.support.allowTunnel, fingerprint: pr.support.fingerprint, keyKnown: !!pr.support.pubkey,
       provisioned: pr.support.provisioned, capable: pr.support.capable !== false, open: pr.support.open, expiresAt: pr.support.expiresAt,
+      loginUser: pr.support.loginUser || null, shellAvailable: pr.support.shellAvailable !== false,
       mode: pr.support.mode, lastError: pr.support.lastError,
     } : null,
     relay: pr.relay ? { shellPort: pr.relay.shellPort, webPort: pr.relay.webPort, enrolledAt: pr.relay.enrolledAt || null } : null,

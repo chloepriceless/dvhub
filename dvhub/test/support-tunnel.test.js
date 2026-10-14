@@ -417,3 +417,94 @@ test('tunnelBinaryAvailable: ohne ssh/autossh (Docker-Image) kein Tunnel möglic
   const { ctx } = realBox();
   assert.equal(createSupportTunnel(ctx, { unitMode: () => false, fs: { ...fs, existsSync: (p) => (p.includes('ssh') && !p.includes('/support/') ? false : fs.existsSync(p)) } }).status().capable, false);
 });
+
+// --- Fern-Support im Docker-Container (2026-10-14) ---------------------------
+
+test('buildTunnelArgs: Ziele auf der Box einstellbar (Container-sshd, httpPort), sonst 22/80', () => {
+  const base = { host: 'support.dvhub.de', port: 47821, user: 'dvhub-support', shellPort: 49101, webPort: 49102, keyPath: '/k' };
+  const dflt = buildTunnelArgs(base);
+  assert.ok(dflt.includes('127.0.0.1:49101:127.0.0.1:22'));
+  assert.ok(dflt.includes('127.0.0.1:49102:127.0.0.1:80'));
+  const ct = buildTunnelArgs({ ...base, localShellPort: 2222, localWebPort: 8080 });
+  assert.ok(ct.includes('127.0.0.1:49101:127.0.0.1:2222'));
+  assert.ok(ct.includes('127.0.0.1:49102:127.0.0.1:8080'));
+});
+
+function containerBox() {
+  const box = realBox({ ports: [49101, 49102] });
+  fs.writeFileSync(path.join(box.sup, 'sshd_config'), 'ListenAddress 127.0.0.1:2222\n');
+  fs.writeFileSync(path.join(box.sup, 'support_authorized_keys'), `${PUB} dvhub-support\n`);
+  box.ctx.getCfg = () => ({ httpPort: 8080 });
+  return box;
+}
+const realExists = fs.existsSync;
+const withBinaries = { ...fs, existsSync: (p) => (p === '/usr/sbin/sshd' || p === '/usr/bin/autossh' ? true : realExists(p)) };
+
+test('Container: Öffnen startet sshd und Tunnel (Shell → 2222, Web → httpPort), Schließen beendet beide', () => {
+  const { ctx } = containerBox();
+  const spawned = [];
+  const tun = createSupportTunnel(ctx, {
+    inContainer: true, unitMode: () => false, fs: withBinaries,
+    spawn: (bin, args) => { const pr = fakeProc(); spawned.push({ bin, args, pr }); return pr; },
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+  });
+  const st0 = tun.status();
+  assert.equal(st0.loginUser, 'dvhub');
+  assert.equal(st0.shellAvailable, true);
+  const r = tun.open({ ttlMin: 30 });
+  assert.equal(r.ok, true);
+  assert.equal(spawned[0].bin, '/usr/sbin/sshd');
+  assert.deepEqual(spawned[0].args.slice(0, 3), ['-D', '-e', '-f']);
+  assert.equal(spawned[1].bin, '/usr/bin/autossh');
+  assert.ok(spawned[1].args.includes('127.0.0.1:49101:127.0.0.1:2222'));
+  assert.ok(spawned[1].args.includes('127.0.0.1:49102:127.0.0.1:8080'));
+  tun.close();
+  assert.equal(spawned[0].pr.killed, true, 'sshd beendet');
+  assert.equal(spawned[1].pr.killed, true, 'Tunnel beendet');
+});
+
+test('Container: ohne Support-Schlüssel (Kunde hat Login abgeschaltet) kein sshd, nur Web', () => {
+  const { ctx, sup } = containerBox();
+  fs.rmSync(path.join(sup, 'support_authorized_keys'));
+  const spawned = [];
+  const tun = createSupportTunnel(ctx, {
+    inContainer: true, unitMode: () => false, fs: withBinaries,
+    spawn: (bin) => { spawned.push(bin); return fakeProc(); },
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+  });
+  assert.equal(tun.status().shellAvailable, false);
+  assert.equal(tun.open({ ttlMin: 30 }).ok, true);
+  assert.deepEqual(spawned, ['/usr/bin/autossh']);
+});
+
+test('Container: bricht der Tunnel unerwartet ab, endet auch der sshd', () => {
+  const { ctx } = containerBox();
+  const spawned = [];
+  const tun = createSupportTunnel(ctx, {
+    inContainer: true, unitMode: () => false, fs: withBinaries,
+    spawn: () => { const pr = fakeProc(); spawned.push(pr); return pr; },
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+  });
+  tun.open({ ttlMin: 30 });
+  spawned[1].emit('exit', 255, null);
+  assert.equal(spawned[0].killed, true);
+  assert.equal(tun.status().open, false);
+});
+
+test('Nativ: Web-Ziel ist der httpPort der Config, Login-Benutzer dvhub-support', async () => {
+  const { sup, ctx } = realBox({ ports: [49120, 49121] });
+  ctx.getCfg = () => ({ httpPort: 8081 });
+  const tun = createSupportTunnel(ctx, {
+    inContainer: false, unitMode: () => true, sleep: async () => {}, isAlive: () => true,
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+    execFile: (bin, args, opts, cb) => {
+      fs.writeFileSync(path.join(sup, 'tunnel-state.json'), JSON.stringify({ pid: 4242, startedAt: Date.now(), expiresAt: Date.now() + 60_000 }));
+      cb(null, '', '');
+    },
+  });
+  assert.equal(tun.status().loginUser, 'dvhub-support');
+  await tun.open({ ttlMin: 5 });
+  const req = JSON.parse(fs.readFileSync(path.join(sup, 'tunnel.json'), 'utf8'));
+  assert.equal(req.localShellPort, 22);
+  assert.equal(req.localWebPort, 8081);
+});

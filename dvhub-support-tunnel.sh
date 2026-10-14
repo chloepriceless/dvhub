@@ -113,6 +113,14 @@ PORT="$(json_num port)";       PORT="${PORT:-47821}"
 RUSER="$(json_str user)";      RUSER="${RUSER:-dvhub-support}"
 SHELLP="$(json_num shellPort)"
 WEBP="$(json_num webPort)"
+# Ziele auf der Box: sshd und Weboberfläche. DVhub schreibt sie in den Auftrag
+# (httpPort aus der Config); ohne Angabe wie bisher 22 und 80.
+LOCAL_SHELL=""; LOCAL_WEB=""
+if [ "$MODE" = "service" ]; then
+  LOCAL_SHELL="$(json_num_in localShellPort "$REQ_JSON")"
+  LOCAL_WEB="$(json_num_in localWebPort "$REQ_JSON")"
+fi
+LOCAL_SHELL="${LOCAL_SHELL:-22}"; LOCAL_WEB="${LOCAL_WEB:-80}"
 APPLIANCE_ID="$(cat "$APPLIANCE_ID_FILE" 2>/dev/null || echo 'n/a')"
 
 if [ -z "$SHELLP" ] || [ -z "$WEBP" ]; then
@@ -127,8 +135,8 @@ ARGS=(
   -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=yes
   -o BatchMode=yes -o IdentitiesOnly=yes
   -o "UserKnownHostsFile=$KNOWN_HOSTS"
-  -R "127.0.0.1:${SHELLP}:127.0.0.1:22"
-  -R "127.0.0.1:${WEBP}:127.0.0.1:80"
+  -R "127.0.0.1:${SHELLP}:127.0.0.1:${LOCAL_SHELL}"
+  -R "127.0.0.1:${WEBP}:127.0.0.1:${LOCAL_WEB}"
   -p "$PORT" -i "$KEY" "${RUSER}@${HOST}"
 )
 

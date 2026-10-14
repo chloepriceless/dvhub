@@ -356,7 +356,8 @@ Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
   ist drin (sie wird von `server.js` statisch importiert), nur der Interpreter
   fehlt.
 * **EOS (Pro)** — eigenes Image aus dem unveränderten Akkudoktor-EOS.
-* **VPN:** OpenVPN und WireGuard zum Direktvermarkter laufen im DVhub-Container (Rechte `NET_ADMIN` + `/dev/net/tun`, in `compose.yml` gesetzt; WireGuard nutzt das Kernelmodul des Hosts). IPsec und der Support-Tunnel weiterhin nur nativ.
+* **VPN:** OpenVPN und WireGuard zum Direktvermarkter laufen im DVhub-Container (Rechte `NET_ADMIN` + `/dev/net/tun`, in `compose.yml` gesetzt; WireGuard nutzt das Kernelmodul des Hosts). IPsec weiterhin nur nativ.
+* **Fern-Support:** Der Support-Tunnel läuft auch im Container (seit 2026-10-14). Der Entrypoint legt Relay-Schlüssel, Hostschlüssel-Pin und einen sshd im Daten-Volume an (`/var/lib/dvhub/support`). Der sshd startet nur, solange ein Tunnel offen ist, lauscht auf `127.0.0.1:2222` (`DVHUB_SUPPORT_SSH_PORT`) und lässt nur den Support-Schlüssel als Benutzer `dvhub` herein. Geöffnet wird der Tunnel wie nativ in DVhub oder über das Installateurs-Portal.
 * **git** — im Container wird nicht per `git pull` aktualisiert, sondern das
   Image getauscht (siehe „Aktualisieren“); die Update-Knöpfe sagen das.
 * **smbclient** — SMB-Backup-Ziele im Host-OS mounten und einhängen.

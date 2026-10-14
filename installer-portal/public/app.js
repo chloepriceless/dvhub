@@ -461,8 +461,13 @@ function render() {
       if (!sp) {
         spEl.textContent = 'Fern-Support: Die Anlage meldet noch nichts dazu (DVhub-Update nötig).';
       } else if (sp.open) {
+        // Anmeldung über das Relay (nur mit dem Support-Schlüssel): Shell und Weboberfläche.
+        const user = sp.loginUser || 'dvhub-support';
         spEl.textContent = `🔓 Fern-Support offen${sp.expiresAt ? ` bis ${new Date(sp.expiresAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}` : ''}`
-          + (pr.relay ? ` · Shell-Port ${pr.relay.shellPort}, Web-Port ${pr.relay.webPort}` : '');
+          + (pr.relay
+            ? (sp.shellAvailable === false ? ' · Shell vom Kunden abgeschaltet' : ` · Shell: ssh -J root@support.dvhub.de -p ${pr.relay.shellPort} ${user}@127.0.0.1`)
+              + ` · Web: ssh -N -L 8080:127.0.0.1:${pr.relay.webPort} root@support.dvhub.de → http://localhost:8080`
+            : '');
       } else if (sp.capable === false) {
         spEl.textContent = 'Fern-Support: in dieser Installation nicht möglich (kein ssh — z. B. Docker-Container). Zugriff hier nur über das Heimnetz oder ein VPN.';
       } else if (!sp.allowTunnel) {

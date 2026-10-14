@@ -89,10 +89,15 @@ LABEL org.opencontainers.image.title="DVhub" \
 # Host-Netz entsteht tun0 wie nativ direkt auf dem Gerät.
 # EEBUS: libwebsockets/cJSON/Avahi-Client für dvhub-eebus; dbus + avahi nur,
 # falls der Host kein Avahi über D-Bus bereitstellt (docker-entrypoint.sh).
+# Fern-Support (2026-10-14): ssh + autossh für den Tunnel zum Relay, sshd für
+# den Support-Login im Container (läuft nur, solange ein Tunnel offen ist, als
+# dvhub, nur auf 127.0.0.1, nur mit dem Support-Schlüssel — docker-entrypoint.sh).
+# Der dvhub-Benutzer braucht dafür eine Shell; ein Passwort hat er nicht.
 RUN apk add --no-cache tzdata su-exec postgresql17-client openvpn wireguard-tools sudo iproute2 procps \
       libwebsockets cjson avahi-libs avahi dbus \
+      openssh-client-default openssh-keygen openssh-server autossh \
     && addgroup -g 10001 -S dvhub \
-    && adduser -u 10001 -G dvhub -S -H -s /sbin/nologin dvhub \
+    && adduser -u 10001 -G dvhub -S -H -s /bin/sh dvhub \
     && printf '%s\n' \
       'Defaults:dvhub !requiretty' \
       'dvhub ALL=(root) NOPASSWD: /usr/sbin/openvpn --config /etc/dvhub/vpn/profiles/*' \

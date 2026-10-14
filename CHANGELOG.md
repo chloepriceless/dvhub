@@ -18,6 +18,12 @@ verweist hierher.
   ein Dienst auf dem Relay-Server sie ein und vergibt die Ports. Der Kunde erlaubt das einmal mit
   einem Haken im Kopplungsdialog, wird bei jeder Öffnung benachrichtigt und kann jederzeit schließen.
   Hinein kommt weiterhin nur der hinterlegte Support-Schlüssel.
+- **Fern-Support auch im Docker-Container.** Das Image enthält jetzt ssh, autossh und einen sshd. Der
+  sshd läuft nur, solange ein Tunnel offen ist, nur auf 127.0.0.1 und lässt nur den Support-Schlüssel
+  herein (Benutzer `dvhub`); hat der Kunde den Support-Login abgeschaltet, geht nur die Weboberfläche
+  durch den Tunnel. Schlüssel, gepinnter Relay-Hostschlüssel und `relay.json` legt der Entrypoint im
+  Daten-Volume an. Der Tunnel leitet die Weboberfläche auf den eingestellten `httpPort` statt fest auf
+  Port 80.
 - **Container oder Betriebssystem neben der Version.** DVhub zeigt unter Einstellungen → System und
   im Portal an, ob es als Docker-Container läuft (Update = neues Image) oder nativ, und auf welchem
   Betriebssystem.

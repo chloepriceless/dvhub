@@ -7,7 +7,7 @@
 # die deklarativ durchgereicht werden (gesetzte Umgebung gewinnt, siehe unten).
 #
 # Bildet die Teile von install.sh nach, die der Container braucht — ohne
-# systemd, sudoers, VPN und Support-Tunnel.
+# systemd und sudoers. Fern-Support: Schritt 4b.
 set -eu
 
 CONFIG_PATH="${DV_APP_CONFIG:-/etc/dvhub/config.json}"
@@ -149,6 +149,82 @@ if [ ! -s "$APPLIANCE_ID_FILE" ]; then
     node -e 'console.log(require("crypto").randomUUID())' > "$APPLIANCE_ID_FILE"
   fi
   log "appliance-id erzeugt: $(cat "$APPLIANCE_ID_FILE")"
+fi
+
+# ---------------------------------------------------------------------------
+# 4b. Fern-Support (2026-10-14) — wie support-provision.sh bei der nativen
+#     Installation, aber ohne eigenen Login-Benutzer und ohne System-sshd:
+#   * relay_id_ed25519 — Schlüssel der Anlage fürs Relay (bleibt auf der Box)
+#   * known_hosts      — gepinnter Relay-Hostschlüssel
+#   * relay.json       — Host/Port/Benutzer; vom Portal zugeteilte Ports bleiben
+#   * sshd_config + sshd_host_ed25519 — sshd für den Support-Login; DVhub
+#     startet ihn nur, solange ein Tunnel offen ist (als dvhub, 127.0.0.1)
+#   * support_authorized_keys — NUR der Support-Schlüssel; fehlt, wenn der
+#     Kunde den Support-Login abgeschaltet hat (support.localUser.enabled=false)
+# Konstanten identisch mit support-provision.sh (Test: container-runtime.test.js).
+# ---------------------------------------------------------------------------
+RELAY_HOST="support.dvhub.de"
+RELAY_PORT="47821"
+RELAY_USER="dvhub-support"
+RELAY_HOSTKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMCBb6vi0LTevujdKl0Vz9y8YvE2uMIjJvYbPZ9WDpyT"
+SUPPORT_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAsaBYifIY6dFAGzDtF28qVa75IHaMRzEx5buoGDhWBN dvhub-support"
+SUPPORT_SSH_PORT="${DVHUB_SUPPORT_SSH_PORT:-2222}"
+SUP_DIR="$DATA_DIR/support"
+if command -v ssh-keygen >/dev/null 2>&1; then
+  mkdir -p "$SUP_DIR"
+  APPLIANCE_ID="$(tr -d '[:space:]' < "$APPLIANCE_ID_FILE")"
+  [ -f "$SUP_DIR/relay_id_ed25519" ] \
+    || ssh-keygen -q -t ed25519 -N "" -f "$SUP_DIR/relay_id_ed25519" -C "dvhub-appliance-${APPLIANCE_ID}"
+  grep -qF "$RELAY_HOSTKEY" "$SUP_DIR/known_hosts" 2>/dev/null \
+    || printf '[%s]:%s %s\n' "$RELAY_HOST" "$RELAY_PORT" "$RELAY_HOSTKEY" > "$SUP_DIR/known_hosts"
+  [ -f "$SUP_DIR/sshd_host_ed25519" ] \
+    || ssh-keygen -q -t ed25519 -N "" -f "$SUP_DIR/sshd_host_ed25519" -C "dvhub-container-sshd"
+  node -e '
+    const fs = require("fs");
+    const [p, host, port, user] = process.argv.slice(1);
+    let o = {};
+    try { o = JSON.parse(fs.readFileSync(p, "utf8")) || {}; } catch { o = {}; }
+    o.host = host; o.port = Number(port); o.user = user;
+    if (o.shellPort == null) o.shellPort = 0;
+    if (o.webPort == null) o.webPort = 0;
+    fs.writeFileSync(p, JSON.stringify(o, null, 2) + "\n");
+  ' "$SUP_DIR/relay.json" "$RELAY_HOST" "$RELAY_PORT" "$RELAY_USER"
+  LOCAL_LOGIN="$(node -e '
+    try { const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(c?.support?.localUser?.enabled === false ? "0" : "1"); }
+    catch { process.stdout.write("1"); }
+  ' "$CONFIG_PATH")"
+  if [ "$LOCAL_LOGIN" = "1" ]; then
+    printf '%s\n' "$SUPPORT_PUBKEY" > "$SUP_DIR/support_authorized_keys"
+  else
+    rm -f "$SUP_DIR/support_authorized_keys"
+  fi
+  cat > "$SUP_DIR/sshd_config" <<SSHD
+# Angelegt von docker-entrypoint.sh bei jedem Start — nicht von Hand ändern.
+ListenAddress 127.0.0.1:${SUPPORT_SSH_PORT}
+HostKey ${SUP_DIR}/sshd_host_ed25519
+PidFile none
+AuthorizedKeysFile ${SUP_DIR}/support_authorized_keys
+AllowUsers ${RUN_USER}
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PermitEmptyPasswords no
+AllowAgentForwarding no
+AllowTcpForwarding no
+X11Forwarding no
+PermitTunnel no
+GatewayPorts no
+PermitUserEnvironment no
+LogLevel INFO
+SSHD
+  # Läuft der Container ohne root, gehört das Verzeichnis schon dem Benutzer.
+  chown -R "$RUN_USER:$RUN_USER" "$SUP_DIR" 2>/dev/null || true
+  chmod 700 "$SUP_DIR"
+  chmod 600 "$SUP_DIR/relay_id_ed25519" "$SUP_DIR/sshd_host_ed25519"
+  chmod 644 "$SUP_DIR/relay_id_ed25519.pub" "$SUP_DIR/sshd_host_ed25519.pub" "$SUP_DIR/known_hosts" "$SUP_DIR/relay.json" "$SUP_DIR/sshd_config"
+  [ -f "$SUP_DIR/support_authorized_keys" ] && chmod 600 "$SUP_DIR/support_authorized_keys"
+  log "Fern-Support bereit (Relay ${RELAY_USER}@${RELAY_HOST}:${RELAY_PORT}, Support-Login $([ "$LOCAL_LOGIN" = 1 ] && echo an || echo aus))"
 fi
 
 # ---------------------------------------------------------------------------
