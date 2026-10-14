@@ -15,10 +15,14 @@ test('config-redaction: REDACTED_PATHS has >= 10 entries and is frozen', () => {
   assert.ok(Object.isFrozen(REDACTED_PATHS));
 });
 
-test('config-redaction: routes-api.js imports REDACTED_PATHS from config-redaction.js', () => {
-  const src = fs.readFileSync(ROUTES_API_PATH, 'utf8');
-  assert.match(src, /import\s*\{[^}]*REDACTED_PATHS[^}]*\}\s*from\s*['"]\.\/config-redaction\.js['"]/);
-  assert.doesNotMatch(src, /const\s+REDACTED_PATHS\s*=\s*\[/);
+// Seit 2026-10-15 liegen die Konfig-Routen in routes/config-routes.js: Dort wird
+// die gemeinsame Liste importiert; keine Datei führt eine eigene Kopie.
+test('config-redaction: Konfig-Routen nutzen die gemeinsame REDACTED_PATHS-Liste', () => {
+  const routesApi = fs.readFileSync(ROUTES_API_PATH, 'utf8');
+  const configRoutes = fs.readFileSync(new URL('../routes/config-routes.js', import.meta.url), 'utf8');
+  assert.match(routesApi, /import\s*\{[^}]*redactConfig[^}]*\}\s*from\s*['"]\.\/config-redaction\.js['"]/);
+  assert.match(configRoutes, /import\s*\{[^}]*REDACTED_PATHS[^}]*\}\s*from\s*['"]\.\.\/config-redaction\.js['"]/);
+  for (const src of [routesApi, configRoutes]) assert.doesNotMatch(src, /const\s+REDACTED_PATHS\s*=\s*\[/);
 });
 
 test('config-redaction: server.js imports from config-redaction.js', () => {
