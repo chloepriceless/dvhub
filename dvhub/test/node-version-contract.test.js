@@ -10,17 +10,23 @@ import fs from 'node:fs';
 
 const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
 
-test('engines, install.sh und CI nennen dieselbe Node-Hauptversion', () => {
+// Seit 2026-10-15 ist `.node-version` die Quelle; die CI liest sie
+// (node-version-file), das Docker-Image und install.sh müssen sie treffen.
+test('engines, install.sh, Dockerfile und CI nennen dieselbe Node-Hauptversion wie .node-version', () => {
+  const major = Number(read('../../.node-version').trim().replace(/^v/, '').split('.')[0]);
+  assert.ok(major >= 22, `.node-version ${major}`);
   const engines = JSON.parse(read('../package.json')).engines.node;
-  const major = Number(/>=\s*(\d+)/.exec(engines)?.[1]);
-  assert.ok(major >= 22, `engines ${engines}`);
+  assert.equal(Number(/>=\s*(\d+)/.exec(engines)?.[1]), major, `engines ${engines}`);
   const install = read('../../install.sh');
   const threshold = Number(/process\.versions\.node\.split\("\."\)\[0\]\) >= (\d+)/.exec(install)?.[1]);
   assert.equal(threshold, major, 'install.sh aktualisiert Node unterhalb der engines-Version');
   assert.match(install, new RegExp(`setup_${major}\\.x`), 'install.sh installiert dieselbe Hauptversion');
+  const docker = /^ARG NODE_VERSION=(\d+)/m.exec(read('../../Dockerfile'));
+  assert.equal(Number(docker?.[1]), major, 'Dockerfile ARG NODE_VERSION');
   const ci = read('../../.github/workflows/ci.yml');
-  const ciVersions = [...ci.matchAll(/node-version:\s*(\d+)/g)].map((m) => Number(m[1]));
-  assert.ok(ciVersions.length && ciVersions.every((v) => v === major), `CI: ${ciVersions}`);
+  const fixed = [...ci.matchAll(/^\s*node-version:\s*(\S+)/gm)].map((m) => m[1]);
+  assert.deepEqual(fixed, [], 'CI ohne feste node-version');
+  assert.match(ci, /node-version-file:\s*\.node-version/, 'CI liest .node-version');
   const portal = JSON.parse(read('../../installer-portal/package.json')).engines.node;
   assert.equal(Number(/>=\s*(\d+)/.exec(portal)?.[1]), major, 'Portal-engines');
 });
