@@ -1487,7 +1487,7 @@ export function createScheduleEvaluator(ctx) {
     // feedExcessDcPv: schedule-gesteuerte DC-Einspeisung (+ dontFeedExcessAcPv invers)
     if (cfg.dvControl?.enabled) {
       let dcFeedIn = false;
-      let dcSource = 'default_off';
+      let dcSource;
       // DV forcedOff und negative Preise blockieren DC-Einspeisung immer
       if (state.ctrl.forcedOff) {
         dcSource = 'dv_forced_off';

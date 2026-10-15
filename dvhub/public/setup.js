@@ -137,7 +137,7 @@ function createSetupDiscoveryState({
 } = {}) {
   const normalizedSystems = Array.isArray(systems) ? systems.filter((system) => system && typeof system === 'object') : [];
   const normalizedError = String(error || '').trim();
-  let message = '';
+  let message;
   if (loading) message = 'Suche nach Systemen läuft...';
   else if (normalizedError) message = 'Discovery fehlgeschlagen. Du kannst die Adresse weiter manuell eintragen.';
   else if (normalizedSystems.length) message = `${normalizedSystems.length} System${normalizedSystems.length === 1 ? '' : 'e'} gefunden.`;

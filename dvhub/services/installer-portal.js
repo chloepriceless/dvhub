@@ -58,7 +58,7 @@ export function parseInstallerCertificate(pem) {
   try {
     cert = new crypto.X509Certificate(s);
   } catch (e) {
-    throw new Error(`invalid_certificate: ${e.message}`);
+    throw new Error(`invalid_certificate: ${e.message}`, { cause: e });
   }
   const notBefore = Date.parse(cert.validFrom);
   const notAfter = Date.parse(cert.validTo);

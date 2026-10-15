@@ -403,7 +403,7 @@ export function createAccuracyTracker(ctx, { store }) {
     const { start, end } = dayRange(dateStr);
 
     // Pitfall A-2: UTC-only. Series: pv_total_w.
-    let actuals = [];
+    let actuals;
     try {
       const actualsResult = await store.query(`
         SELECT slot_start_utc AS ts_utc, ${ACTUAL_POWER_W_SQL} AS value_num
@@ -430,7 +430,7 @@ export function createAccuracyTracker(ctx, { store }) {
     const negPriceSet = await loadNegativePriceSlots(start, end);
 
     for (const provider of PROVIDERS) {
-      let forecast = [];
+      let forecast;
       try {
         // REVIEWS H1: target_date is the accuracy-join key
         const fcResult = await store.query(`

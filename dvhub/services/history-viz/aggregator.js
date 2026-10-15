@@ -516,7 +516,7 @@ export function createHistoryVizAggregator(ctx) {
   // setting is OFF, the battery is charged from PV only and ALL grid import
   // serves self-consumption — there is no Netzbezug→Akku-Laden flow.
   function isGridChargeAllowed() {
-    let opt = {};
+    let opt;
     try { opt = (getCfg && getCfg().optimizer) || {}; } catch (_) { opt = {}; }
     return opt.allowGridCharge === true;
   }
@@ -1240,7 +1240,7 @@ export function createHistoryVizAggregator(ctx) {
   // that the default was applied (so an operator can wire real keys later).
   let __durationThresholdsDefaultLogged = false;
   function resolveDurationThresholds() {
-    let opt = {};
+    let opt;
     try { opt = (getCfg && getCfg().optimizer) || {}; } catch (_) { opt = {}; }
     const charge = Number.isFinite(Number(opt.chargeBelowCt)) ? Number(opt.chargeBelowCt) : null;
     const sell = Number.isFinite(Number(opt.sellAboveCt)) ? Number(opt.sellAboveCt) : null;
@@ -1544,7 +1544,7 @@ export function createHistoryVizAggregator(ctx) {
   // config-model.js:858 + history-runtime.js batteryNominalCapacityKwh() uses
   // exactly this path). Fallback 10 kWh (typical home battery) when unset.
   function batteryNominalKwh() {
-    let opt = {};
+    let opt;
     try { opt = (getCfg && getCfg().optimizer) || {}; } catch (_) { opt = {}; }
     const wh = Number(opt.batteryCapacityWh);
     if (Number.isFinite(wh) && wh > 0) return wh / 1000;
@@ -1555,7 +1555,7 @@ export function createHistoryVizAggregator(ctx) {
   // `ts` galt. Ohne gepflegte Stufen fällt der Resolver auf den Einzelwert
   // zurück, also auf batteryNominalKwh() — Verhalten wie vorher.
   function batteryNominalKwhAt(ts) {
-    let opt = {};
+    let opt;
     try { opt = (getCfg && getCfg().optimizer) || {}; } catch (_) { opt = {}; }
     const wh = resolveBatteryCapacityWhForTimestamp(opt.batteryStages, ts, opt.batteryCapacityWh);
     if (Number.isFinite(wh) && wh > 0) return wh / 1000;

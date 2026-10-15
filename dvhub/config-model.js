@@ -5390,7 +5390,6 @@ export function loadConfigFile(configPath) {
   let valid = true;
   let parseError = null;
   let manufacturerProfile = null;
-  let manufacturerProfilePath = null;
   let manufacturerProfileError = null;
 
   if (exists) {
@@ -5412,7 +5411,7 @@ export function loadConfigFile(configPath) {
   scrubStoredPlaceholders(parsed);
   const normalized = normalizeConfigInput(parsed);
   const manufacturer = normalized.persistedConfig.manufacturer || 'victron';
-  manufacturerProfilePath = resolveManufacturerProfilePath(configPath, manufacturer);
+  const manufacturerProfilePath = resolveManufacturerProfilePath(configPath, manufacturer);
   let effectiveConfig = normalized.effectiveConfig;
 
   try {

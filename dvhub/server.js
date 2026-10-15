@@ -459,7 +459,7 @@ function getSunTimesCacheForPlanning({ now = new Date(), config = cfg } = {}) {
   });
   if (cachedEntry && !cacheIsStale) return cachedEntry;
 
-  let store = readSunTimesCacheStore(SUN_TIMES_CACHE_PATH);
+  const store = readSunTimesCacheStore(SUN_TIMES_CACHE_PATH);
   const cacheKey = buildSunTimesCacheKey({ latitude, longitude, year });
 
   // Lazy-populate: sunrise/sunset are deterministic per (lat,lng,year).
@@ -491,7 +491,6 @@ function getSunTimesCacheForPlanning({ now = new Date(), config = cfg } = {}) {
     } catch (e) {
       console.error('[sun-times] persist failed:', e.message);
     }
-    store = nextStore;
   }
 
   const nextEntry = {
@@ -1976,7 +1975,7 @@ const telemetryReady = (async () => {
     // exists, so the "subtract or not" decision and its evidence stay together.
     // Never let this throw into the poll path -- on any failure we simply write no
     // ex_managed sample for this cycle, which degrades to "series = raw series".
-    let managed = null;
+    let managed;
     try {
       const sepCfg = cfg.loadSeparation || {};
       managed = computeManagedLoad({

@@ -727,7 +727,7 @@ export function listManufacturerProfiles(ctx) {
     ? rawCfg.manufacturer.trim() : 'victron';
   const showBeta = channel === 'dev';
 
-  let list = [];
+  let list;
   try {
     const dir = path.join(path.dirname(ctx.getConfigPath?.() || ''), 'hersteller');
     list = fs.readdirSync(dir)
@@ -2740,7 +2740,7 @@ export function createApiRoutes(ctx) {
     // Im getrennten Web-/Runtime-Betrieb liegt der gepollte Transport im
     // anderen Prozess — ein Push hier käme nie beim Poller an.
     if (ctx.processRole === 'web') return json(res, 503, { ok: false, error: 'input_push_split_process' });
-    let fields = {};
+    let fields;
     if (req.method === 'GET') {
       fields = Object.fromEntries(url.searchParams.entries());
     } else {
@@ -4167,7 +4167,7 @@ export function createApiRoutes(ctx) {
         // Planbare Verbraucher (eigene Integration). Nur Zaehler.
         schedulable: (() => {
           const cfgNow = getCfg();
-          let list = [];
+          let list;
           try { list = loadSchedulableDevices(cfgNow).devices || []; } catch { list = []; }
           const active = list.filter((d) => d.enabled !== false);
           return {
@@ -6725,7 +6725,7 @@ export function createApiRoutes(ctx) {
       // full-hypertable scan on wide queries. Fetch limit+1 so we can detect
       // whether more rows exist beyond this page (next_cursor population).
       parts.push('ORDER BY s.ts_utc DESC');
-      parts.push(`LIMIT $${++p}`);
+      parts.push(`LIMIT $${p + 1}`);
       params.push(limit + 1);
 
       const t0 = Date.now();
@@ -6820,7 +6820,7 @@ export function createApiRoutes(ctx) {
         params.push(to);
       }
       if (cursorParam) {
-        parts.push(`AND s.ts_utc < $${++p}::timestamptz`);
+        parts.push(`AND s.ts_utc < $${p + 1}::timestamptz`);
         params.push(cursorParam);
       }
       // ORDER BY ts_utc DESC keeps TimescaleDB chunk-pruning efficient even
@@ -6991,7 +6991,7 @@ export function createApiRoutes(ctx) {
         params.push(to);
       }
       if (cursorParam) {
-        parts.push(`AND s.ts_utc < $${++p}::timestamptz`);
+        parts.push(`AND s.ts_utc < $${p + 1}::timestamptz`);
         params.push(cursorParam);
       }
       // ORDER BY ts_utc DESC keeps TimescaleDB chunk-pruning efficient even
@@ -7006,7 +7006,7 @@ export function createApiRoutes(ctx) {
 
       let dbClient = null;
       let pgCursor = null;
-      let writer = null;
+      let writer;
       let aborted = false;
       let cleaned = false;
 
@@ -7575,7 +7575,7 @@ export function createApiRoutes(ctx) {
       }
       const MAX_RESTORE_BYTES = 8 * 1024 * 1024 * 1024; // 8 GB ceiling
       const tmpFile = path.join(os.tmpdir(), `dvhub-restore-${crypto.randomUUID()}.dump`);
-      let bytes = 0;
+      let bytes;
       try {
         ({ bytes } = await saveUploadToFile(req, tmpFile, MAX_RESTORE_BYTES));
       } catch (e) {
@@ -8009,7 +8009,7 @@ export function createApiRoutes(ctx) {
             const relAppDir = path.relative(repoRoot, appDir).split(path.sep).join('/');
             const pkgGitPath = (relAppDir ? relAppDir + '/' : '') + 'package.json';
             const mainPkg = await execFileAsync('git', ['show', `origin/main:${pkgGitPath}`], { cwd: repoRoot, timeout: 5000 }).catch(() => ({ stdout: '' }));
-            let mainVersion = null;
+            let mainVersion;
             try { mainVersion = JSON.parse(mainPkg.stdout || '{}').version || null; } catch { mainVersion = null; }
             assertNoDowngrade(mainVersion, currentVersionNow, { allowDowngrade, label: 'origin/main' });
             await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
@@ -8089,7 +8089,7 @@ export function createApiRoutes(ctx) {
           await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
           await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
           if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
-          throw new Error(`Update rolled back: ${updateErr.message}`);
+          throw new Error(`Update rolled back: ${updateErr.message}`, { cause: updateErr });
         }
 
         if (hasStash) {
@@ -8166,7 +8166,7 @@ export function createApiRoutes(ctx) {
             await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
             await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
             if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
-            throw new Error(`Channel switch rolled back: ${switchErr.message}`);
+            throw new Error(`Channel switch rolled back: ${switchErr.message}`, { cause: switchErr });
           }
           if (hasStash) {
             pushLog('channel_switch_stash_discarded', { note: 'local changes were stashed before switch and not restored' });

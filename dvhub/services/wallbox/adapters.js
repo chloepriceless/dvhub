@@ -56,7 +56,7 @@ function request(urlStr, { method = 'GET', body, auth, timeoutMs = 5000 } = {}) 
       res.setEncoding('utf8');
       res.on('data', (c) => { raw += c; if (raw.length > 1_000_000) req.destroy(new Error('payload too large')); });
       res.on('end', () => {
-        let data = null;
+        let data;
         try { data = raw ? JSON.parse(raw) : null; } catch { data = raw; }
         if (res.statusCode >= 200 && res.statusCode < 300) resolve({ ok: true, status: res.statusCode, data });
         else resolve({ ok: false, status: res.statusCode, error: `HTTP ${res.statusCode}`, data });

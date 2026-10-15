@@ -163,7 +163,7 @@ export function createIntegrationsHealthTracker(ctx) {
 
   async function loadSnapshot() {
     if (!pool) return;
-    let rows = [];
+    let rows;
     try {
       const r = await pool.query(
         `SELECT system, snapshot_jsonb FROM integration_health_snapshots`

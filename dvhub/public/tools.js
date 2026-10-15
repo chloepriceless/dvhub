@@ -681,7 +681,7 @@ async function checkForUpdate() {
 function autoCheckForUpdate() {
   const cooldownMs = 10 * 60 * 1000;
   let lastCheck = 0;
-  let cached = null;
+  let cached;
   try {
     lastCheck = Number(sessionStorage.getItem('dvhub_update_check_at') || 0);
     cached = JSON.parse(sessionStorage.getItem('dvhub_update_check_result') || 'null');

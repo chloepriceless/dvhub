@@ -279,7 +279,7 @@ export function createFamilyService(ctx) {
     }
     const svc = ctx.evccIntegration;
     if (!svc || typeof svc.getLoadpoints !== 'function') return { available: false, loadpoints: [] };
-    let lps = [];
+    let lps;
     try { lps = svc.getLoadpoints() || []; } catch (err) {
       pushLog?.('family_evcc_error', { error: err.message });
       return { available: false, loadpoints: [] };
@@ -783,8 +783,8 @@ export function createFamilyService(ctx) {
       }
     }
 
-    let time = '';
-    let date = '';
+    let time;
+    let date;
     try {
       time = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
       date = new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long' }).format(now);

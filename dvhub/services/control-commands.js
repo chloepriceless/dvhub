@@ -142,7 +142,7 @@ export async function setEmergencyStop(ctx, opts) {
     state.ctrl._stopBlockLogged = {};
     ctx.persistControlState?.();
     ctx.pushLog('emergency_stop_activated', { by: state.ctrl.pausedBy }, { ...(actor || {}), severity: 'warn' });
-    let neutralize = null;
+    let neutralize;
     try {
       neutralize = await ctx.applyControlTarget('gridSetpointW', 0, 'emergency_stop');
     } catch (e) {

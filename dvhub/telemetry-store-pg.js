@@ -1835,7 +1835,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       `, [date]);
       if (result.rows.length === 0) return null;
       const snapshots = result.rows.map(row => {
-        let rules = [];
+        let rules;
         try { rules = JSON.parse(row.rules_json || '[]'); } catch (_) { rules = []; }
         return {
           id: Number(row.id),

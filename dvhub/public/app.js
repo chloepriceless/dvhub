@@ -169,8 +169,8 @@ function updateFlowDiagram(status) {
   const modeEl = document.getElementById('batMode');
   if (chip && modeEl) {
     const w = Number(status?.victron?.batteryPowerW || 0);
-    let label = 'IDLE';
-    let tone = '';
+    let label;
+    let tone;
     if (w > 50) { label = 'CHARGE'; tone = 'info'; }
     else if (w < -50) { label = 'DISCHARGE'; tone = 'ok'; }
     else { label = 'IDLE'; tone = ''; }

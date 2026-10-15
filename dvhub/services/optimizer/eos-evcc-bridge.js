@@ -310,7 +310,7 @@ export function createEosEvccBridge(deps) {
       return { ok: false, skipped: 'pro required' };
     }
 
-    let st = null;
+    let st;
     try { st = await charger.status(); } catch { st = null; }
     if (st?.ok && st.connected === true && !override.seenConnected) {
       override.seenConnected = true;

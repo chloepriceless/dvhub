@@ -96,7 +96,7 @@ export function eosFitnessCacheMaxEntries(cfg) {
  * wie bisher selbst nach.
  */
 export function eosNotifyUrl(cfg, eosUrl) {
-  let host = '';
+  let host;
   try { host = new URL(eosUrl).hostname; } catch { return null; }
   if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(host)) return null;
   const port = Number(cfg?.httpPort) > 0 ? Number(cfg.httpPort) : 8080;
@@ -611,13 +611,12 @@ export function createEosConfigSync(ctx) {
     // regelt DVhub selbst (EOS' genetic kann nur EIN EV-artiges Gerät). Ohne
     // solche Geräte bleibt es beim tragenden max=0 (siehe Kommentar oben).
     // Reihenfolge im tasks-Array: max ZUERST, dann Liste (analog EV).
-    let applianceIdMap = {};
     let homeApplianceTasks;
     {
       const sched = loadSchedulableDevices(cfg).devices.filter((d) => d.kind === 'deferrable' && d.enabled !== false);
       if (sched.length) {
         const built = buildEosHomeAppliances(sched, { timeZone: cfg?.timeZone || 'Europe/Berlin' });
-        applianceIdMap = built.idMap;
+        const applianceIdMap = built.idMap;
         homeApplianceTasks = [
           { section: 'devices/max_home_appliances', body: built.appliances.length },
           { section: 'devices/home_appliances', body: asDevices(built.appliances) },

@@ -1075,7 +1075,7 @@
     if (intgInline.active()) {
       if (!intgSelectedKey) {
         // Erste Anzeige: die Integration aus der Adresse (#eebus), sonst die erste.
-        var wanted = '';
+        var wanted;
         try { wanted = decodeURIComponent((location.hash || '').replace(/^#/, '')); } catch (_) { wanted = ''; }
         selectSystem(wanted === '__mqttTiles' || intgSystemByKey(wanted) ? wanted : SYSTEMS[0].key);
       } else {
@@ -2474,7 +2474,7 @@
   }
   async function removeVrmCreds(buttonEl) {
     if (!buttonEl || buttonEl.disabled) return;
-    var ok = false;
+    var ok;
     try {
       ok = await window.dvConfirm(
         'Damit wird der History-Import deaktiviert und der gespeicherte Token gelöscht. Du kannst die Credentials jederzeit wieder eingeben.',

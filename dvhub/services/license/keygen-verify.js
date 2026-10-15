@@ -100,7 +100,7 @@ export function verifyKeygenSignedKey(signedKey, publicKeyRaw) {
   const pub = toEd25519PublicKey(publicKeyRaw);
   if (!pub) return { valid: false, reason: 'public_key' };
 
-  let ok = false;
+  let ok;
   try {
     // algorithm = null → Ed25519 (Node treats the digest as part of the alg).
     ok = crypto.verify(null, Buffer.from(signingData, 'utf8'), pub, signature);
@@ -204,7 +204,7 @@ export function verifyKeygenMachineFile(fileContent, publicKeyRaw, opts = {}) {
   if (!pub) return { valid: false, reason: 'public_key' };
 
   const signingData = `${prefix}/${enc}`;     // Keygen signs "<type>/<enc>" verbatim
-  let ok = false;
+  let ok;
   try {
     ok = crypto.verify(null, Buffer.from(signingData, 'utf8'), pub, signature);
   } catch {

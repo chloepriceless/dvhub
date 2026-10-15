@@ -62,7 +62,7 @@ export function createInspector(ctx, deps = {}) {
     if (!store || typeof store.getLatestPvForecast !== 'function') {
       return { ok: false, error: 'store_unavailable', window: { from, to } };
     }
-    let rows = [];
+    let rows;
     try {
       rows = (await store.getLatestPvForecast({ start: from, end: to })) || [];
     } catch (e) {
@@ -197,8 +197,8 @@ export function createInspector(ctx, deps = {}) {
     if (!store || typeof store.getLatestLoadForecast !== 'function') {
       return { ok: false, error: 'store_unavailable', window: { from, to } };
     }
-    let forecastRows = [];
-    let actualRows = [];
+    let forecastRows;
+    let actualRows;
     try {
       const telemetryStore = getTelemetryStore();
       const tasks = [
@@ -274,7 +274,7 @@ export function createInspector(ctx, deps = {}) {
       return { available: false, reason: 'adapter_unavailable', window: { from, to } };
     }
 
-    let available = false;
+    let available;
     try {
       // Zentraler Monitor (server.js): kein eigener Health-Aufruf, und „rechnet
       // gerade“ (busy) gilt als erreichbar.

@@ -107,7 +107,7 @@ export function isAllowedMigrationFile(rel) {
 }
 
 function walkFiles(root, rel, fsImpl, out) {
-  let entries = [];
+  let entries;
   try { entries = fsImpl.readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { return; }
   for (const e of entries) {
     const r = `${rel}/${e.name}`;

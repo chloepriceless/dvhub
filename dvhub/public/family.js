@@ -3272,7 +3272,7 @@
   function zoomDeviceWidth() {
     var a = Number(window.screen && window.screen.width) || window.innerWidth;
     var b = Number(window.screen && window.screen.height) || window.innerHeight;
-    var landscape = false;
+    var landscape;
     try { landscape = window.matchMedia('(orientation: landscape)').matches; } catch { landscape = window.innerWidth > window.innerHeight; }
     return landscape ? Math.max(a, b) : Math.min(a, b);
   }
