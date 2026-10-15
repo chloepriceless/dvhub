@@ -37,6 +37,11 @@ const baseRules = {
     argsIgnorePattern: '^_',
     caughtErrorsIgnorePattern: '^_',
   }],
+  // Neu in ESLint 10 (recommended), 2026-10-15: 44 bzw. 3 Fundstellen in 23
+  // Dateien, darunter Lizenz- und Steuercode. Vorerst Warnung — das Aufräumen
+  // ist ein eigener Schritt, nicht Teil des Paket-Updates.
+  'no-useless-assignment': 'warn',
+  'preserve-caught-error': 'warn',
 };
 
 export default [
