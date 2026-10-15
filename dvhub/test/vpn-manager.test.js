@@ -450,3 +450,23 @@ test('VPN-Watchdog prüft ohne sudo über /sys und /proc', () => {
   assert.equal(processIsOpenvpn(44, fsImpl), false);
   assert.equal(processIsOpenvpn(null, fsImpl), null, 'PID unbekannt → Aufrufer prüft anders');
 });
+
+// 2026-10-15 (Support-Fall LUOX): lastModbusActivity blieb immer null, obwohl der
+// Direktvermarkter abfragte — der VPN-Bereich sah tot aus. Die letzte Abfrage
+// steht in state.keepalive.modbusLastQuery (modbus-server.js).
+test('getStatus: lastModbusActivity aus der letzten Modbus-Abfrage, dazu der Port', () => {
+  const ctx = makeCtx();
+  ctx.state.keepalive = { modbusLastQuery: { ts: 1760548844000, remote: '10.12.0.4', fc: 4, addr: 3, qty: 2, sample: [0, 0] } };
+  const cfg = ctx.getCfg();
+  ctx.getCfg = () => ({ ...cfg, modbusListenPort: 1502 });
+  const mgr = createVpnManager(ctx);
+  const st = mgr.getStatus();
+  assert.deepEqual(st.lastModbusActivity, { ts: 1760548844000, remote: '10.12.0.4', fc: 4, addr: 3, qty: 2 });
+  assert.equal(st.modbusListenPort, 1502);
+});
+
+test('getStatus: ohne Abfrage lastModbusActivity null', () => {
+  const ctx = makeCtx();
+  ctx.state.keepalive = { modbusLastQuery: null };
+  assert.equal(createVpnManager(ctx).getStatus().lastModbusActivity, null);
+});

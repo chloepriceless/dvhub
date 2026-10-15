@@ -854,6 +854,11 @@ async function loadVpnStatus() {
       html += ` | <span class="text-status-warn">Cert: ${escapeHtml(vpn.certDaysRemaining)}d</span>`;
     }
     if (vpn.lastError) html += ` | Fehler: ${escapeHtml(vpn.lastError)}`;
+    const mb = globalThis.DVhubSettingsVpn?.vpnModbusInfo?.(vpn);
+    if (mb) {
+      html += `<br>${escapeHtml(mb.activity)}`;
+      if (mb.portHint) html += `<br><span class="text-status-warn">${escapeHtml(mb.portHint)}</span>`;
+    }
     banner.innerHTML = html;
   } catch {
     banner.textContent = 'VPN-Status konnte nicht geladen werden.';

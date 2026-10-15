@@ -634,6 +634,31 @@ if (typeof globalThis !== 'undefined') {
   globalThis.DVhubSettingsLicense = { licenseCapacityMessage };
 }
 
+/**
+ * VPN-Bereich (Support-Fall 2026-10-15, LUOX): letzte Modbus-Abfrage und Hinweis,
+ * wenn DVhub nicht auf 502 lauscht — Direktvermarkter fragen meist 502 ab.
+ * Reiner Helper (Einstellungen und VPN-Diagnose), Text unescaped.
+ * @returns {{ activity: string, portHint: string|null }}
+ */
+function vpnModbusInfo(vpn, nowMs = Date.now()) {
+  const q = vpn && vpn.lastModbusActivity;
+  let activity = 'Letzte Modbus-Abfrage: noch keine seit dem Start';
+  if (q && Number.isFinite(Number(q.ts))) {
+    const s = Math.max(0, Math.round((nowMs - Number(q.ts)) / 1000));
+    const age = s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`;
+    activity = `Letzte Modbus-Abfrage: vor ${age}${q.remote ? ` von ${q.remote}` : ''}`;
+  }
+  const port = Number(vpn && vpn.modbusListenPort);
+  const portHint = Number.isFinite(port) && port > 0 && port !== 502
+    ? `DVhub lauscht auf Port ${port} — Direktvermarkter wie LUOX fragen meist Port 502 ab (Einstellungen → System → Modbus Listen Port).`
+    : null;
+  return { activity, portHint };
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsVpn = { vpnModbusInfo };
+}
+
 function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [], validationHtml = '' }) {
   const selectedMode = serializeMarketValueMode(marketValueMode);
   return `
@@ -3556,6 +3581,9 @@ function renderVpnUploadPanel() {
         html += ` | <span class="sa-text-warn">Zertifikat: ${vpn.certDaysRemaining} Tage</span>`;
       }
       if (vpn.lastError) html += ` | <span class="sa-text-err">${escapeHtml(vpn.lastError)}</span>`;
+      const mb = vpnModbusInfo(vpn);
+      html += `<br><span>${escapeHtml(mb.activity)}</span>`;
+      if (mb.portHint) html += `<br><span class="sa-text-warn">${escapeHtml(mb.portHint)}</span>`;
       statusDiv.innerHTML = html;
     }).catch(() => {
       statusDiv.textContent = 'VPN-Status konnte nicht abgerufen werden.';

@@ -1129,8 +1129,17 @@ export function createVpnManager(ctx) {
 
   // ── status ──
 
+  // lastModbusActivity (2026-10-15): die letzte Abfrage am Modbus-Server
+  // (state.keepalive.modbusLastQuery) — vorher blieb das Feld immer null und ein
+  // funktionierender Direktvermarkter-Zugang sah tot aus. modbusListenPort für
+  // den Hinweis „Direktvermarkter fragt 502“.
   function getStatus() {
-    return { ...state.vpn };
+    const q = state.keepalive?.modbusLastQuery;
+    return {
+      ...state.vpn,
+      lastModbusActivity: q ? { ts: q.ts, remote: q.remote, fc: q.fc, addr: q.addr, qty: q.qty } : null,
+      modbusListenPort: Number(getCfg()?.modbusListenPort) || null,
+    };
   }
 
   // ── utility ──

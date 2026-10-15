@@ -603,7 +603,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Port, auf dem DVhub als Modbus-Proxy lauscht.'
+      help: 'Port, auf dem DVhub als Modbus-Proxy lauscht. Direktvermarkter (z. B. LUOX, Plexlog-Profil) fragen meist Port 502 ab — dann hier 502 eintragen. Die native Installation darf niedrige Ports öffnen; im Docker-Container nur, wenn der Container dafür eingerichtet ist — sonst bleibt es bei 1502 und eine Weiterleitung 502 → 1502 ist nötig.'
     },
     {
       section: 'system',

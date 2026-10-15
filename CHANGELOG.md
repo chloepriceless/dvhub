@@ -105,6 +105,10 @@ verweist hierher.
   rechneten einige Stellen ohne Eintrag mit 29 kW, andere mit 10 oder 24 kW. Die kWp aus der
   MiSpeL-Pauschaloption verstellen die EOS-Planung nicht mehr. Die Null-Einspeisung rechnete
   außerdem immer mit 10 kW statt mit dem eingetragenen Wert.
+- **VPN-Bereich zeigte nie, ob der Direktvermarkter abfragt.** Das Feld für die letzte
+  Modbus-Aktivität blieb immer leer, ein funktionierender Zugang sah tot aus. Der VPN-Status in den
+  Einstellungen und in der VPN-Diagnose zeigt jetzt „Letzte Modbus-Abfrage: vor … von …“. Lauscht
+  DVhub nicht auf Port 502, weist er darauf hin, dass Direktvermarkter wie LUOX meist 502 abfragen.
 - **Open-Meteo-PV-Prognose lag auf manchen Boxen 2 Stunden zu spät.** DVhub holte die Wetterdaten
   in Ortszeit ohne Zeitzonen-Angabe. Läuft die Datenbank in UTC (z. B. Ubuntu-Server oder
   Container), wurden sie um die Zeitverschiebung zu spät gespeichert, die Prognose sagte die
