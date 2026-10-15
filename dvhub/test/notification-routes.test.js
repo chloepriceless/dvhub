@@ -74,3 +74,32 @@ describe('Pushover', () => {
     assert.deepEqual(r.body, { ok: false, error: 'missing_credentials' });
   });
 });
+
+// Gültiger Test-Versand bis zum Netzaufruf (fetch ersetzt). Fand Codex am
+// 2026-10-15: Nach dem Herauslösen zeigten die dynamischen Provider-Importe
+// noch auf './services/…' (relativ zu routes/) → 500 ERR_MODULE_NOT_FOUND.
+describe('Test-Versand mit Zugangsdaten erreicht den Provider', () => {
+  const cases = [
+    ['ntfy', { topicUrl: 'https://ntfy.example/dvhub' }, 'ntfy.example'],
+    ['telegram', { botToken: '123:abc', chatId: '42' }, 'api.telegram.org'],
+    ['pushover', { appToken: 'app', userKey: 'user' }, 'api.pushover.net'],
+  ];
+  for (const [name, body, host] of cases) {
+    it(`${name}: 200 { ok: true }, ein Aufruf an ${host}`, async () => {
+      const calls = [];
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async (url) => {
+        calls.push(new URL(String(url)).hostname);
+        return { ok: true, status: 200, json: async () => ({ ok: true, status: 1 }) };
+      };
+      try {
+        const r = await call(mockCtx(), `${BASE}/${name}/test`, { method: 'POST', body });
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.deepEqual(r.body, { ok: true });
+        assert.deepEqual(calls, [host]);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    });
+  }
+});

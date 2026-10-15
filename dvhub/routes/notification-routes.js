@@ -83,7 +83,7 @@ export function createNotificationRoutes(deps) {
       if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
 
       try {
-        const { createNtfyProvider } = await import('./services/notifications/providers/ntfy.js');
+        const { createNtfyProvider } = await import('../services/notifications/providers/ntfy.js');
         const provider = createNtfyProvider({ topicUrl, token });
         const result = await provider.notify({
           level: 'info',
@@ -168,7 +168,7 @@ export function createNotificationRoutes(deps) {
       if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
 
       try {
-        const { createTelegramProvider } = await import('./services/notifications/providers/telegram.js');
+        const { createTelegramProvider } = await import('../services/notifications/providers/telegram.js');
         const provider = createTelegramProvider({ botToken, chatId });
         const result = await provider.notify({
           level: 'info',
@@ -255,7 +255,7 @@ export function createNotificationRoutes(deps) {
       if (!rl.ok) return json(res, 429, { ok: false, error: 'rate_limited', retry_after_s: rl.retry_after_s });
 
       try {
-        const { createPushoverProvider } = await import('./services/notifications/providers/pushover.js');
+        const { createPushoverProvider } = await import('../services/notifications/providers/pushover.js');
         const provider = createPushoverProvider({ appToken, userKey });
         // T-20-03-04 escalation guard: HARD-CODED level: 'info' (priority 0).
         // pushover.js maps level === 'critical' → priority:1 (urgent, bypasses
