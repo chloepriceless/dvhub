@@ -105,6 +105,12 @@ verweist hierher.
   rechneten einige Stellen ohne Eintrag mit 29 kW, andere mit 10 oder 24 kW. Die kWp aus der
   MiSpeL-Pauschaloption verstellen die EOS-Planung nicht mehr. Die Null-Einspeisung rechnete
   außerdem immer mit 10 kW statt mit dem eingetragenen Wert.
+- **EOS durfte den Akku bis 0 % planen, wenn das Gerät keinen Mindest-Ladestand meldet.** Profile
+  ohne Live-Mindest-SoC (z. B. die Universal-MQTT-Anbindung) liefern keinen Wert; DVhub schickte EOS
+  dann 0 % statt der eingestellten „Untergrenze Sicherheit“, und der Plan entlud bis 3 %. Jetzt
+  bekommt EOS den höheren aus Live-Wert und Untergrenze, ohne beide 5 %. Gilt auch für „Mit
+  DVhub-Werten synchronisieren“. Die Hilfetexte zu Entladeleistung und Wechselrichter-Nennleistung
+  erklären, wie EOS die volle Nennleistung einspeist.
 - **Kurze Messfehler-Sprünge lösten die Lizenz-Prüfung aus.** Für den Abgleich mit dem Tarif nahm
   DVhub das rohe Tagesmaximum der PV-Leistung. Springt der PV-Wert für einige Sekunden um 20 kW (so
   bei einer Loxone-Anbindung), lag die Anlage gemessen weit über ihrem Tarif. Jetzt zählt je

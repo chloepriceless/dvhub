@@ -544,3 +544,46 @@ test('EOS-Push-Adresse und Fitness-Cache (2026-10-03)', async (t) => {
     assert.equal(eosFitnessCacheMaxEntries({ optimizer: { eosFitnessCacheMaxEntries: 20000.7 } }), 20000);
   });
 });
+
+// 2026-10-15 (Support-Fall Loxone/dvhub-mqtt): Profile ohne Live-Mindest-SoC
+// liefern victron.minSocPct = null. Number(null) = 0 galt als gültig → EOS bekam
+// min_soc_percentage 0 statt der eingestellten Untergrenze (5 %), der Plan
+// entlud bis 3 %. Jetzt: der höhere der beiden Werte, fehlende zählen nicht.
+async function batteryMinSocSent({ liveMin, hardFloor }) {
+  const bodies = {};
+  const server = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => { b += c; }); req.on('end', () => {
+      if (req.method === 'GET' && req.url === '/v1/config') { res.writeHead(200); return res.end(JSON.stringify({ optimization: { algorithm: 'GENETIC', genetic: { interval_sec: 900 } }, feedintariff: { provider: null, direct_marketing_enabled: true }, devices: { batteries: { battery1: {} }, inverters: { inverter1: {} } }, elecprice: { provider: 'ElecPriceImport' } })); }
+      if (req.method === 'GET' && req.url === '/v1/health') { res.writeHead(200); return res.end(JSON.stringify({ version: '0.4.0rc3' })); }
+      if (req.method === 'PUT') bodies[req.url] = b;
+      res.writeHead(200); res.end('{}');
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const cfg = { optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${server.address().port}` }, batteryCapacityWh: 100000, maxChargeW: 30000, hardFloorSocPct: hardFloor } };
+    const s = createEosConfigSync({ state: { victron: { minSocPct: liveMin }, optimizer: {} }, pushLog: () => {}, getCfg: () => cfg });
+    await s.sync();
+    const url = Object.keys(bodies).find((u) => u.includes('/devices/batteries'));
+    assert.ok(url, `kein Akku-PUT: ${Object.keys(bodies).join(', ')}`);
+    const parsed = JSON.parse(bodies[url]);
+    return (parsed.battery1 || parsed[0] || parsed).min_soc_percentage;
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+}
+
+test('EOS-Mindest-SoC: kein Live-Wert (null) → eingestellte Untergrenze statt 0', async () => {
+  assert.equal(await batteryMinSocSent({ liveMin: null, hardFloor: 5 }), 5);
+});
+
+test('EOS-Mindest-SoC: der höhere aus Live-Wert und Untergrenze', async () => {
+  assert.equal(await batteryMinSocSent({ liveMin: 10, hardFloor: 5 }), 10);
+  assert.equal(await batteryMinSocSent({ liveMin: 3, hardFloor: 5 }), 5);
+});
+
+test('EOS-Mindest-SoC: beides leer → 5 %', async () => {
+  assert.equal(await batteryMinSocSent({ liveMin: null, hardFloor: null }), 5);
+  assert.equal(await batteryMinSocSent({ liveMin: undefined, hardFloor: '' }), 5);
+});

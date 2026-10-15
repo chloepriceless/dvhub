@@ -2321,7 +2321,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 0,
       step: 100,
-      help: 'Maximale Entladeleistung des Batteriespeichers in Watt. Begrenzt den negativen Grid-Setpoint den der Optimizer erzeugen darf.'
+      help: 'Maximale Entladeleistung des Batteriespeichers in Watt. Begrenzt den negativen Grid-Setpoint den der Optimizer erzeugen darf. EOS rechnet diesen Wert als Akku-Leistung und zieht den Entlade-Wirkungsgrad ab (Standard etwa 6 %). Soll EOS die volle Wechselrichter-Nennleistung einspeisen, hier mindestens Nennleistung ÷ Wirkungsgrad eintragen (29900 W → ca. 31800 W) — oder was der Akku tatsächlich kann. Die Einspeisung bleibt bei der Wechselrichter-Nennleistung gekappt.'
     },
     {
       section: 'schedule',
@@ -2336,7 +2336,7 @@ function buildFieldDefinitions() {
       step: 100,
       empty: 'null',
       default: POWER_LIMIT_DEFAULTS.inverterMaxPowerW,
-      help: 'Höchste AC-Leistung des Wechselrichters in Watt (PV und Akku zusammen), laut Typenschild bzw. Datenblatt — nicht die kWp der PV-Module. EOS plant damit die größte Einspeisung, und DVhub begrenzt damit die Einspeisung im Zeitplan. Leer = Standard 10000 W. Gilt auch für EOS: Eine Änderung direkt in EOS überschreibt DVhub beim nächsten Abgleich.'
+      help: 'Höchste AC-Leistung des Wechselrichters in Watt (PV und Akku zusammen), laut Typenschild bzw. Datenblatt — nicht die kWp der PV-Module. EOS plant damit die größte Einspeisung, und DVhub begrenzt damit die Einspeisung im Zeitplan. Leer = Standard 10000 W. Gilt auch für EOS: Eine Änderung direkt in EOS überschreibt DVhub beim nächsten Abgleich. Damit EOS die volle Nennleistung ansetzt, muss die Max. Entladeleistung um den Wirkungsgrad darüber liegen (siehe dort).'
     },
     {
       section: 'schedule',

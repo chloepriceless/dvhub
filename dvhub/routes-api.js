@@ -20,6 +20,7 @@ import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredMo
 import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT, resolvePlantBattery } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
+import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
 import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
@@ -5970,7 +5971,7 @@ export function createApiRoutes(ctx) {
           // matching eos-config-sync.js. NOT sma.minSocPct (30) — that would make
           // EOS import from grid to hold 30% overnight instead of riding the
           // battery down and refilling via PV (operator request 2026-05-29).
-          min_soc_percentage: Math.round(Number.isFinite(Number(state.victron?.minSocPct)) ? Number(state.victron.minSocPct) : 5),
+          min_soc_percentage: Math.round(resolveEosMinSocPct(state.victron?.minSocPct, cfg.optimizer?.hardFloorSocPct)),
           max_soc_percentage: 100,
           initial_soc_percentage: Number.isFinite(curSoc) ? Math.round(curSoc) : 50
         };

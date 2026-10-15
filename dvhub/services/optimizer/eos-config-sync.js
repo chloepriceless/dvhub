@@ -283,6 +283,20 @@ export function eosEfficiencyCurveFields(curve, maxPowerW) {
 }
 
 /**
+ * EOS-Mindest-SoC (%): der höhere aus dem Live-Mindest-SoC des Geräts und der
+ * eingestellten Untergrenze (optimizer.hardFloorSocPct). Unter keinen der beiden
+ * entlädt DVhub; null, undefined und '' sind „nicht vorhanden“, nicht 0. Ohne
+ * beide 5 %.
+ */
+export function resolveEosMinSocPct(liveMinSocPct, hardFloorSocPct) {
+  const present = [liveMinSocPct, hardFloorSocPct]
+    .filter((v) => v !== null && v !== undefined && v !== '')
+    .map(Number)
+    .filter(Number.isFinite);
+  return present.length ? Math.max(...present) : 5;
+}
+
+/**
  * Build the EOS inverters array. max_power_w is the inverter nameplate from the
  * GUI field „Wechselrichter-Nennleistung“ (optimizer.inverterMaxPowerW, via
  * getPowerLimits), else the shared 10 kW default. AC→DC stays 1.0, DC→AC comes
@@ -537,10 +551,10 @@ export function createEosConfigSync(ctx) {
     // instead of riding down to 5% and refilling via PV.) NOTE: this flat floor
     // does NOT reserve overnight load — see the planned overnight-reserve work
     // (battery→grid arbitrage can still drain the pack and force a dawn import).
-    const liveVictronMin = Number(state?.victron?.minSocPct);
-    const configHardFloor = Number(cfg?.optimizer?.hardFloorSocPct);
-    const eosMinSocPct = Number.isFinite(liveVictronMin) ? liveVictronMin
-      : (Number.isFinite(configHardFloor) ? configHardFloor : 5);
+    // 2026-10-15: der HÖHERE aus Live-Wert und Untergrenze; fehlende Werte
+    // zählen nicht (Profile ohne Live-Mindest-SoC liefern null — Number(null)
+    // = 0 schickte EOS 0 % statt der eingestellten 5 %).
+    const eosMinSocPct = resolveEosMinSocPct(state?.victron?.minSocPct, cfg?.optimizer?.hardFloorSocPct);
 
     const batteries = buildEosBatteries(cfg, { minSocPct: eosMinSocPct });
     const inverters = buildEosInverters(cfg, {
