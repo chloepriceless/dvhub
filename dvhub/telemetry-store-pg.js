@@ -72,6 +72,36 @@ function bucketIso(ts, seconds) {
   return floorToInterval(new Date(ts), seconds).toISOString();
 }
 
+// Gemessener PV-Peak für die Under-Report-Erkennung (getRecentPvPeakW): je
+// 5-Minuten-Fenster das 75-%-Perzentil, davon das Tagesmaximum, davon das
+// Perzentil $2 über $1 Tage. Statt des Rohwerts (Support-Fall 2026-10-15,
+// Loxone: +20 kW für 10–60 s): Sprünge bis 75 s belegen höchstens ein Viertel
+// eines Fensters und heben den Wert nicht an; eine dauerhaft größere Anlage zählt
+// voll. Gegen das rohe Maximum liegt der Wert auf einer sauberen Anlage ~7 %
+// tiefer (eHive 15.10.: 20,7 statt 22,3 kW; Median wären 20,0). Fenster mit
+// weniger als 3 Werten fallen weg (ein Einzelwert wäre wieder der Rohwert).
+export const RECENT_PV_PEAK_SQL = `
+      WITH windows AS (
+        SELECT date_trunc('day', ts_utc) AS day,
+               percentile_cont(0.75) WITHIN GROUP (ORDER BY value_num) AS window_w,
+               COUNT(*) AS n
+        FROM timeseries_samples
+        WHERE series_key = 'pv_total_w'
+          AND value_num IS NOT NULL
+          AND ts_utc >= now() - ($1 * interval '1 day')
+        GROUP BY 1, floor(extract(epoch FROM ts_utc) / 300)
+      ),
+      daily AS (
+        SELECT MAX(window_w) AS day_max
+        FROM windows
+        WHERE n >= 3
+        GROUP BY day
+      )
+      SELECT percentile_cont($2) WITHIN GROUP (ORDER BY day_max) AS peak,
+             COUNT(*)::int AS day_count
+      FROM daily
+    `;
+
 export function energyKwhForSample(value, resolutionSeconds, maxSeconds = MATERIALIZED_SLOT_BUCKET_SECONDS) {
   const numeric = Number(value);
   let seconds = Number(resolutionSeconds || 0);
@@ -1480,7 +1510,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   /**
    * getRecentPvPeakW: robuster GEMESSENER PV-Peak (Watt) für die Lizenz-Under-
    * Report-Erkennung (T-LICENSE-KWP-GATING Increment 5). Bildet je Tag das
-   * Maximum der echten, ungekappten `pv_total_w` und nimmt davon das `percentile`
+   * Maximum der 5-min-Fensterwerte (P75) der echten, ungekappten `pv_total_w` (siehe
+   * RECENT_PV_PEAK_SQL) und nimmt davon das `percentile`
    * (Default P95) über die letzten `days` Tage — d.h. näherungsweise die
    * Klarhimmel-Spitze, unempfindlich gegen einzelne Ausreißertage. Unter `minDays`
    * ausgewerteten Tagen → peakW=null (zu wenig Signal, NIE flaggen; fail-open).
@@ -1494,19 +1525,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   async function getRecentPvPeakW({ days = 14, percentile = 0.95, minDays = 5 } = {}) {
     const d = Number.isFinite(days) && days > 0 ? Math.floor(days) : 14;
     const p = Number.isFinite(percentile) && percentile > 0 && percentile <= 1 ? percentile : 0.95;
-    const { rows } = await pool.query(`
-      WITH daily AS (
-        SELECT MAX(value_num) AS day_max
-        FROM timeseries_samples
-        WHERE series_key = 'pv_total_w'
-          AND value_num IS NOT NULL
-          AND ts_utc >= now() - ($1 * interval '1 day')
-        GROUP BY date_trunc('day', ts_utc)
-      )
-      SELECT percentile_cont($2) WITHIN GROUP (ORDER BY day_max) AS peak,
-             COUNT(*)::int AS day_count
-      FROM daily
-    `, [d, p]);
+    const { rows } = await pool.query(RECENT_PV_PEAK_SQL, [d, p]);
     const r = rows[0] || {};
     const dayCount = Number(r.day_count || 0);
     if (dayCount < minDays || r.peak == null) return { peakW: null, dayCount };

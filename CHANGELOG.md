@@ -105,6 +105,12 @@ verweist hierher.
   rechneten einige Stellen ohne Eintrag mit 29 kW, andere mit 10 oder 24 kW. Die kWp aus der
   MiSpeL-Pauschaloption verstellen die EOS-Planung nicht mehr. Die Null-Einspeisung rechnete
   außerdem immer mit 10 kW statt mit dem eingetragenen Wert.
+- **Kurze Messfehler-Sprünge lösten die Lizenz-Prüfung aus.** Für den Abgleich mit dem Tarif nahm
+  DVhub das rohe Tagesmaximum der PV-Leistung. Springt der PV-Wert für einige Sekunden um 20 kW (so
+  bei einer Loxone-Anbindung), lag die Anlage gemessen weit über ihrem Tarif. Jetzt zählt je
+  5-Minuten-Fenster das 75-%-Perzentil: Sprünge bis gut eine Minute fallen heraus, eine dauerhaft
+  größere Anlage zählt weiter voll. Auf einer Anlage ohne Messfehler liegt der Wert etwa 7 % unter
+  dem bisherigen.
 - **Lizenz-Hinweis bei falsch zugeordneter PV-Messung irreführend.** Misst DVhub deutlich mehr
   PV-Leistung, als eingetragen ist (über das 1,3-Fache der kWp), nennt der Hinweis in der
   Lizenz-Sektion jetzt beide möglichen Ursachen: die PV-Messung ist falsch zugeordnet (meist), oder
