@@ -204,8 +204,20 @@ if [[ -f "$APP_DIR/package.json" ]]; then
     echo "  npm install: uebersprungen (${LOCK_FILE} unveraendert)"
   else
     echo "  npm install (${LOCK_FILE} geaendert oder node_modules fehlt)..."
+    # Als Dienstbenutzer, nicht als root (2026-10-15): root mit HOME=~dvhub legte
+    # root-eigene Einträge in dessen npm-Cache an, danach scheiterte das Update
+    # über die Oberfläche (als dvhub) mit EACCES. Alte Reste reparieren.
+    SVC_HOME="$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6)"
+    for d in "${SVC_HOME:-/nonexistent}/.npm" "${SVC_HOME:-/nonexistent}/.cache/dvhub-npm" "$APP_DIR/node_modules"; do
+      [[ -e "$d" ]] && chown -R "$SERVICE_USER:$SERVICE_USER" "$d" 2>/dev/null || true
+    done
+    NPM_AS=(npm)
+    if [[ "$(id -u)" -eq 0 ]] && id "$SERVICE_USER" >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
+      chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR" "$APP_DIR/package-lock.json" 2>/dev/null || true
+      NPM_AS=(runuser -u "$SERVICE_USER" -- env HOME="${SVC_HOME:-$HOME}" npm)
+    fi
     # `if` suppresses `set -e`; no pipe so the rc is npm's own (not tail's).
-    if npm install --omit=dev; then
+    if "${NPM_AS[@]}" install --omit=dev; then
       [[ -n "$CURRENT_HASH" ]] && printf '%s\n' "$CURRENT_HASH" >"$NPM_MARKER"
       echo "  npm install: OK"
     else
