@@ -8,7 +8,7 @@ import { classifyEosSlotAction } from '../eos-zeitplan-map.js';
 test('co-export: feed-in well above PV with discharge allowed → dcExportMode + battery share', () => {
   // 12:00 prod sample: PV ~9 kW, feed-in 28.4 kW → battery share ~19.4 kW (clamped to 16 kW)
   const r = classifyEosSlotAction({
-    pvW: 9000, feedinW: 28436, dischargeAllowed: true, socPct: 52
+    pvW: 9000, feedinW: 28436, dischargeAllowed: true, socPct: 52, connectionLimitW: 29000
   });
   assert.equal(r.action, 'co_export');
   assert.equal(r.target, 'dcExportMode');
@@ -19,12 +19,19 @@ test('co-export: feed-in well above PV with discharge allowed → dcExportMode +
 
 test('co-export trims battery share to stay within the 29 kW connection cap', () => {
   const r = classifyEosSlotAction({
-    pvW: 20000, feedinW: 34000, dischargeAllowed: true, bufferW: 0
+    pvW: 20000, feedinW: 34000, dischargeAllowed: true, bufferW: 0, connectionLimitW: 29000
   });
   assert.equal(r.action, 'co_export');
   // raw share 14000; pv 20000 + 14000 = 34000 > 29000 → trim share to 9000
   assert.equal(r.batteryExportW, 9000);
   assert.equal(r.gridSetpointW, -29000);
+});
+
+// 2026-10-15: ohne Angabe gilt der gemeinsame Standard (10 kW) statt 29 kW.
+test('ohne connectionLimitW kappt der Export beim 10-kW-Standard', () => {
+  const r = classifyEosSlotAction({ pvW: 0, feedinW: 25000, dischargeAllowed: true, akkuAcLimitW: 20000 });
+  assert.equal(r.action, 'battery_export');
+  assert.equal(r.gridSetpointW, -10000);
 });
 
 test('evening no-PV sell → battery-only export via gridSetpointW (NOT dcExportMode)', () => {
@@ -38,7 +45,7 @@ test('evening no-PV sell → battery-only export via gridSetpointW (NOT dcExport
 });
 
 test('battery-only export is clamped to the 16 kW AC battery cap', () => {
-  const r = classifyEosSlotAction({ pvW: 0, feedinW: 25000, dischargeAllowed: true });
+  const r = classifyEosSlotAction({ pvW: 0, feedinW: 25000, dischargeAllowed: true, connectionLimitW: 29000 });
   assert.equal(r.action, 'battery_export');
   assert.equal(r.batteryExportW, 16000);
   assert.equal(r.gridSetpointW, -16000);

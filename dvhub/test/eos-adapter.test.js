@@ -472,7 +472,8 @@ test('preview AC cap follows maxChargeW when akkuAcLimitW/maxDischargeW unset (n
     // maxChargeW set (22 kW), maxDischargeW + akkuAcLimitW deliberately unset.
     const ctx = {
       getCfg: () => ({
-        optimizer: { eosProxy: { url: `http://127.0.0.1:${mock.port}` }, maxChargeW: 22000 },
+        // Wechselrichter 29 kW eingetragen — sonst kappt der 10-kW-Standard.
+        optimizer: { eosProxy: { url: `http://127.0.0.1:${mock.port}` }, maxChargeW: 22000, inverterMaxPowerW: 29000 },
       }),
       pushLog: () => {},
     };

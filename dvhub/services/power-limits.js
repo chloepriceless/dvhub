@@ -7,11 +7,14 @@
 // maxDischargeW positive, SMA maxDischargeW negative). That caused the
 // AC-vs-DC / 14-vs-16 kW confusion (T-0126 Codex-refute).
 //
-// This resolver is the ONE place every module will read from. It is NON-BREAKING:
-// no consumer is wired yet. Each module migrates to getPowerLimits() one at a
-// time, with a golden test proving resolved == the module's legacy value on a
-// real config. Migration order (live write paths LAST): resolver → display
-// readers → EOS sync → SMA/MILP → live control → legacy UI read-only.
+// This resolver is the ONE place every module will read from. Each module
+// migrates to getPowerLimits() one at a time, with a golden test proving
+// resolved == the module's legacy value on a real config. Migration order (live
+// write paths LAST): resolver → display readers → EOS sync → SMA/MILP → live
+// control → legacy UI read-only.
+// Stand 2026-10-15: inverterMaxPowerW lesen EOS-Sync, EOS-Vorschau, Closed-Loop-
+// Export und Null-Einspeisung (schedule-eval) sowie die Wirkungsgrad-Lastbereiche
+// über den Resolver; ein Standard (10 kW) für alle.
 //
 // CONVENTIONS (Codex-refute hard rules):
 //  - Power caps are stored/returned as POSITIVE MAGNITUDES (Watt). The sign is
@@ -49,6 +52,11 @@ function finite(v) {
 function mag(v) {
   const n = finite(v);
   return n == null ? null : Math.abs(n);
+}
+// Magnitude, but 0 / empty = not configured.
+function positiveMag(v) {
+  const n = mag(v);
+  return n > 0 ? n : null;
 }
 
 // Resolve one field: canonical (system.power.<key>) first, then the ordered list
@@ -133,12 +141,14 @@ export function getPowerLimits(cfg = {}) {
     mag,
   ));
 
-  // Inverter total AC cap (W). Legacy: optimizer.inverterMaxPowerW.
+  // Inverter total AC cap (W). Legacy: optimizer.inverterMaxPowerW (GUI-Feld
+  // „Wechselrichter-Nennleistung“). Nur > 0 zählt: ein geleertes Feld (null/'')
+  // ist sonst Number(null) = 0 W — ein Wechselrichter ohne Leistung.
   put('inverterMaxPowerW', resolveField(
     sp.inverterMaxPowerW,
-    [{ value: opt.inverterMaxPowerW, norm: mag }],
+    [{ value: opt.inverterMaxPowerW, norm: positiveMag }],
     D.inverterMaxPowerW,
-    mag,
+    positiveMag,
   ));
 
   // Grid feed-in cap (W) — NEW. Legacy: optimizer.gridExportLimitW (if present).

@@ -58,7 +58,9 @@ test('η ≈ 100 % heißt: Last aus dem Akku-DC abgeleitet → nicht messbar', (
 });
 
 test('Lastbereiche folgen der Nennleistung', () => {
-  assert.equal(nominalInverterPowerW({}), 24000);
+  // Ohne Eintrag der gemeinsame Standard aus power-limits.js (10 kW), nicht 24 kW.
+  assert.equal(nominalInverterPowerW({}), 10000);
+  assert.equal(nominalInverterPowerW({ system: { power: { inverterMaxPowerW: 29900 } } }), 29900);
   assert.equal(nominalInverterPowerW({ optimizer: { inverterMaxPowerW: 10000 } }), 10000);
   assert.deepEqual(bucketBoundsW({ optimizer: { inverterMaxPowerW: 24000 } }), {
     base: { fromW: 480, toW: 3000 },

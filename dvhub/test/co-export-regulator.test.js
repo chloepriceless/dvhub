@@ -47,7 +47,7 @@ test('at/below stopSocPct the battery share is dropped → PV-only', () => {
 });
 
 test('above stopSocPct the battery share is allowed', () => {
-  const r = computeCoExportSetpointW({ pvW: 0, batteryExportW: 12000, socPct: 40, stopSocPct: 10, bufferW: 0 });
+  const r = computeCoExportSetpointW({ pvW: 0, batteryExportW: 12000, socPct: 40, stopSocPct: 10, bufferW: 0, connectionLimitW: 29000 });
   assert.equal(r.batteryShareW, 12000);
   assert.equal(r.gridSetpointW, -12000);
 });

@@ -164,9 +164,28 @@ test('buildEosInverters: max_power_w = inverterMaxPowerW (AC grid-connection cap
   assert.equal(buildEosInverters(cfg)[0].max_power_w, 29000);
 });
 
-test('buildEosInverters: max_power_w falls back to pvKwp×1000 when inverterMaxPowerW unset', () => {
+// Support-Fall 2026-10-15 (GoodWe 29,9 kW, 36 kWp): ohne GUI-Feld landete
+// jede Anlage bei 10 kW, und die MiSpeL-kWp (Grünstrom-Grenze, fachfremd)
+// verstellten still die EOS-Planung. Jetzt: GUI-Feld → sonst 10 kW Standard.
+test('buildEosInverters: MiSpeL-kWp verstellen max_power_w nicht mehr', () => {
   const cfg = { optimizer: { ...STD_CFG.optimizer, mispel: { pvKwp: 29.7 } } };
-  assert.equal(buildEosInverters(cfg)[0].max_power_w, 29700);
+  assert.equal(buildEosInverters(cfg)[0].max_power_w, 10000);
+});
+
+test('buildEosInverters: ohne Eintrag 10000 W, PV-kWp der Prognose zählen nicht', () => {
+  assert.equal(buildEosInverters({ optimizer: {} })[0].max_power_w, 10000);
+  assert.equal(buildEosInverters({ optimizer: {}, forecast: { pv: { totalKwp: 36 } } })[0].max_power_w, 10000);
+});
+
+test('buildEosInverters: leeres Feld (null, "" oder 0) → 10000 W, nicht 0', () => {
+  for (const v of [null, '', 0]) {
+    assert.equal(buildEosInverters({ optimizer: { inverterMaxPowerW: v } })[0].max_power_w, 10000, `Wert ${JSON.stringify(v)}`);
+  }
+});
+
+test('buildEosInverters: system.power.inverterMaxPowerW geht vor optimizer.*', () => {
+  const cfg = { system: { power: { inverterMaxPowerW: 29900 } }, optimizer: { inverterMaxPowerW: 24000 } };
+  assert.equal(buildEosInverters(cfg)[0].max_power_w, 29900);
 });
 
 test('buildEosBatteries: max_charge_power_w prefers maxDischargeW (AC discharge cap) over maxChargeW', () => {

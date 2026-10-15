@@ -470,7 +470,7 @@ test('T-0121: EOS closed-loop recomputes gridSetpointW = -(B + live PV surplus)'
       state.victron.pvTotalW = 4000;
       state.victron.selfConsumptionW = 1000; // → live PV surplus 3000 W
       state.schedule.rules = [eosClosedLoopRule(16000)];
-      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true, inverterMaxPowerW: 29000 };
       cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
     }
   });
@@ -487,6 +487,25 @@ test('T-0121: EOS closed-loop recomputes gridSetpointW = -(B + live PV surplus)'
     'closed-loop leaves maxDischargeW to the operator (no automatic cap)');
 });
 
+// 2026-10-15: Ohne eingetragene Wechselrichter-Nennleistung kappt der
+// Closed-Loop beim gemeinsamen Standard (10 kW, services/power-limits.js) —
+// derselbe Wert, mit dem EOS plant. Vorher 29 kW hier, 10 kW in EOS.
+test('T-0121: ohne Wechselrichter-Nennleistung kappt der Export bei 10 kW', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 50;
+      state.victron.pvTotalW = 4000;
+      state.victron.selfConsumptionW = 1000;
+      state.schedule.rules = [eosClosedLoopRule(16000)];
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  // B 16000 + PV-Überschuss 3000 = 19000, gekappt auf 10000.
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -10000);
+});
+
 test('T-0121: a PV dip lowers the export, it does NOT drain more battery (no over-drain)', async () => {
   const { ctx, state } = makeCtx({
     mutate: ({ state, cfg }) => {
@@ -494,7 +513,7 @@ test('T-0121: a PV dip lowers the export, it does NOT drain more battery (no ove
       state.victron.pvTotalW = 0;        // sun gone
       state.victron.selfConsumptionW = 0;
       state.schedule.rules = [eosClosedLoopRule(16000)];
-      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true, inverterMaxPowerW: 29000 };
       cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
     }
   });
@@ -516,7 +535,7 @@ test('T-0122: closed-loop never writes maxDischargeW (operator/evcc owns it)', a
       state.schedule.rules = [eosClosedLoopRule(16000)];
       // operator's manual cap (prod: 20000 = full battery for house+EV) must survive
       state.schedule.lastWrite = { maxDischargeW: { value: 20000, source: 'manual', at: 1 } };
-      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true };
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true, inverterMaxPowerW: 29000 };
       cfg.controlWrite.maxDischargeW = { enabled: true, address: 2704 };
     }
   });

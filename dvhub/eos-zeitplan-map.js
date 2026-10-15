@@ -15,6 +15,7 @@
 // just means "nicht entladen, Akku lädt aus PV" (Halten).
 
 import { computeCoExportSetpointW } from './co-export-setpoint.js';
+import { POWER_LIMIT_DEFAULTS } from './services/power-limits.js';
 
 // Below this many watts a flow is treated as noise (no export / no charge).
 const EPS_W = 150;
@@ -45,7 +46,7 @@ const HOLD_SETPOINT_W = -40;
  * @param {number|null} [p.stopSocPct]    floor for the co-export preview, or null
  * @param {number} [p.bufferW]            dcExportMode buffer kept off the grid
  * @param {number} [p.akkuAcLimitW]       battery AC export cap (default 16000)
- * @param {number} [p.connectionLimitW]   grid connection cap (default 29000)
+ * @param {number} [p.connectionLimitW]   grid connection cap (default: POWER_LIMIT_DEFAULTS.inverterMaxPowerW)
  * @returns {{action:string, label:string, target:string,
  *            batteryExportW:number, gridSetpointW:number}}
  */
@@ -61,7 +62,7 @@ export function classifyEosSlotAction({
   stopSocPct = null,
   bufferW = 100,
   akkuAcLimitW = 16000,
-  connectionLimitW = 29000
+  connectionLimitW = POWER_LIMIT_DEFAULTS.inverterMaxPowerW
 } = {}) {
   const pv = Math.max(0, Number(pvW) || 0);
   const feedin = Math.max(0, Number(feedinW) || 0);

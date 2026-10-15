@@ -107,6 +107,15 @@ test('empty config -> all documented defaults, source=default', () => {
   }
 });
 
+// Ein geleertes GUI-Feld speichert null — Number(null) wäre 0 W Wechselrichter.
+test('inverterMaxPowerW: null, "" und 0 gelten als nicht eingetragen → Standard', () => {
+  for (const v of [null, '', 0]) {
+    const { limits, sources } = getPowerLimits({ optimizer: { inverterMaxPowerW: v } });
+    assert.equal(limits.inverterMaxPowerW, 10000, `Wert ${JSON.stringify(v)}`);
+    assert.equal(sources.inverterMaxPowerW, 'default');
+  }
+});
+
 test('getPowerLimits is pure / does not mutate cfg', () => {
   const cfg = JSON.parse(JSON.stringify(PROD_LIKE));
   const snapshot = JSON.stringify(cfg);

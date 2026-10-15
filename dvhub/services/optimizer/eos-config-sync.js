@@ -15,6 +15,7 @@ import { resolveEvDeparture } from './ev-departure.js';
 import { effectiveInverterCurve } from '../inverter-efficiency/calibrator.js';
 import { resolveEvSocPct, resolveEvPlugged } from './ev-soc.js';
 import { buildEosHomeAppliances } from './eos-devices.js';
+import { getPowerLimits } from '../power-limits.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
 import http from 'node:http';
 
@@ -282,28 +283,23 @@ export function eosEfficiencyCurveFields(curve, maxPowerW) {
 }
 
 /**
- * Build the EOS inverters array. DVhub doesn't yet expose AC-cap or per-
- * direction conversion efficiencies as first-class config; we derive max_power_w
- * from the PV nameplate (mispel.pvKwp × 1000) as a defensible upper bound and
- * use symmetric 1.0 conversion efficiencies (which match EOS bootstrap, so
- * no behaviour change unless DVhub later adds explicit fields).
+ * Build the EOS inverters array. max_power_w is the inverter nameplate from the
+ * GUI field „Wechselrichter-Nennleistung“ (optimizer.inverterMaxPowerW, via
+ * getPowerLimits), else the shared 10 kW default. AC→DC stays 1.0, DC→AC comes
+ * from the calibrated curve when there is one.
  *
  * @param {object} cfg
  * @returns {Array<object>}
  */
 export function buildEosInverters(cfg, { curve = null, curveSupported = false } = {}) {
   const opt = cfg?.optimizer || {};
-  const pvKwp = Number(opt?.mispel?.pvKwp);
   // max_power_w is the inverter's TOTAL AC throughput cap (PV + battery feed-in
-  // together). Prefer the operator's real AC grid-connection limit
-  // (inverterMaxPowerW, e.g. 29 kW); fall back to the PV nameplate (pvKwp×1000)
-  // as a defensible upper bound, then 10 kW. Using the connection cap keeps the
-  // battery→grid CO-EXPORT (inverter.py Case 1) from planning an unrealistically
-  // high combined feed-in.
-  const inverterMaxPowerW = Number(opt?.inverterMaxPowerW);
-  const maxPowerW = Number.isFinite(inverterMaxPowerW) && inverterMaxPowerW > 0
-    ? inverterMaxPowerW
-    : (Number.isFinite(pvKwp) && pvKwp > 0 ? pvKwp * 1000 : 10000);
+  // together); it keeps the battery→grid CO-EXPORT (inverter.py Case 1) from
+  // planning an unrealistically high combined feed-in. Support-Fall 2026-10-15:
+  // there was no GUI field, so every plant got 10 kW, and optimizer.mispel.pvKwp
+  // (MiSpeL green-power limit, unrelated — and PV kWp ≠ inverter AC power)
+  // silently shifted the plan. Now only the nameplate counts, else the default.
+  const maxPowerW = getPowerLimits(cfg).limits.inverterMaxPowerW;
   // Grid→battery (AC) charging is §14a-illegal for vanilla self-consumption
   // operators, so HARD-DISABLE it unless grid-arbitrage is licensed
   // (allowGridCharge + MisPel pauschal/abgrenzung). max_ac_charge_power_w=0

@@ -1296,7 +1296,9 @@ export function createScheduleEvaluator(ctx) {
         // A setpoint above what the Multis can deliver forces them to max power
         // (not the setpoint) and leaves a grid-import residual that confuses
         // the closed-loop cascade. Gross bound (100 kW) is far too loose here.
-        const inverterCapW = Math.max(1000, Number(cfg.optimizer?.inverterMaxPowerW) || 29000);
+        // Wechselrichter-Nennleistung aus der GUI, sonst der gemeinsame Standard
+        // (10 kW) — derselbe Wert, mit dem EOS plant (vorher hier 29 kW).
+        const inverterCapW = Math.max(1000, getPowerLimits(cfg).limits.inverterMaxPowerW);
         eff.value = B > 0
           ? -Math.round(Math.min(B + livePvSurplusW, inverterCapW)) // export slot: B + live PV, AC-capped
           : -Math.round(Math.min(plannedExportW, livePvSurplusW));  // charge slot: plan-capped, PV-limited
@@ -1654,7 +1656,7 @@ export function createScheduleEvaluator(ctx) {
       // %-Referenz: nur Regler-Gain/Startwert — der integrierende Regler
       // konvergiert auch bei ungenauer Nennleistung gegen Export ≈ 0.
       // Kanonische Quelle = Leistungs-Kette (T-0126, systemPower → legacy).
-      const refW = Number(getPowerLimits(cfg).inverterMaxPowerW) || 10000;
+      const refW = getPowerLimits(cfg).limits.inverterMaxPowerW;
 
       const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs) || 90000;
       // victronFieldAgeMs, nicht victronFieldStale: ein NIE gepollter SoC

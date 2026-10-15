@@ -41,10 +41,10 @@ function makeTransport() {
   };
 }
 
-function makeCfg({ zeroFeedInEnabled = true, resolved = true, userCfg = {} } = {}) {
+function makeCfg({ zeroFeedInEnabled = true, resolved = true, userCfg = {}, inverterMaxPowerW = 10000 } = {}) {
   const addr = (a) => (resolved ? a : null);
   return {
-    optimizer: { inverterMaxPowerW: 10000 },
+    optimizer: { inverterMaxPowerW },
     victron: { telemetryMaxAgeMs: 90000 },
     zeroFeedIn: userCfg,
     controlWrite: {
@@ -112,6 +112,15 @@ test('Enter bei SoC >= Schwelle: Akku-Freigabe + RvrtTms + Limit=Hauslast + Ena'
   ]);
   assert.equal(state.ctrl._zfi.capActive, true);
   assert.equal(logs.some((l) => l.ev === 'zero_feedin_cap_on' && l.data.trigger === 'soc'), true);
+});
+
+// 2026-10-15: Die %-Referenz las getPowerLimits(cfg).inverterMaxPowerW — die
+// Funktion liefert { limits, sources }, also immer 10000. Mit 20 kW Nennleistung
+// ist das Startlimit (1000−50)/20000 = 4,75 % (raw 475), nicht 9,5 %.
+test('Enter: %-Referenz ist die eingetragene Nennleistung (20 kW → 4,75 %)', async () => {
+  const { evaluator, transport } = makeHarness({ soc: 96, loadW: 1000 }, { inverterMaxPowerW: 20000 });
+  await tickUntilEnter(evaluator);
+  assert.deepEqual(transport.writes.find((w) => w.address === ADDR.pct), { address: ADDR.pct, value: 475 });
 });
 
 test('kein Enter im ersten blocked-Tick (Race-Schutz blockedStreak)', async () => {

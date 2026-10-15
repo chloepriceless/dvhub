@@ -97,6 +97,14 @@ verweist hierher.
 
 ### Behoben
 
+- **EOS plante mit 10 kW Wechselrichterleistung, egal wie groß die Anlage ist.** Für die
+  Wechselrichter-Nennleistung gab es kein Eingabefeld; eine Änderung direkt in EOS überschrieb DVhub
+  beim nächsten Abgleich wieder. Jetzt gibt es unter „Akku-Grenzen“ das Feld
+  „Wechselrichter-Nennleistung (W)“, leer gelten 10.000 W. Der Wert gilt überall gleich: in EOS, in
+  der EOS-Vorschau, beim Begrenzen der Einspeisung im Zeitplan und bei der Null-Einspeisung. Vorher
+  rechneten einige Stellen ohne Eintrag mit 29 kW, andere mit 10 oder 24 kW. Die kWp aus der
+  MiSpeL-Pauschaloption verstellen die EOS-Planung nicht mehr. Die Null-Einspeisung rechnete
+  außerdem immer mit 10 kW statt mit dem eingetragenen Wert.
 - **EOS-„Akku halten“ fiel jede Viertelstunde für einige Minuten aus.** Die Plan-Regeln von EOS
   standen in der Konfiguration. Beim Speichern zur Viertelstunde gingen ihre Kennzeichen verloren
   (`optimizer`, `closedLoopHold` u. a.), die Bereinigung hielt sie dann für verbotenes Netzladen und

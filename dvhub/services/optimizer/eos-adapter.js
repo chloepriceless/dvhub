@@ -5,6 +5,7 @@ import { isGridChargeLicensed } from './grid-storage.js';
 import http from 'node:http';
 import { classifyEosSlotAction } from '../../eos-zeitplan-map.js';
 import { keepOnGridSlots } from './eos-forecast-bridge.js';
+import { getPowerLimits } from '../power-limits.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -516,7 +517,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // dcExportMode (PV- / PV+Akku-Einspeisung) and gridSetpointW (Halten).
     const cfg = (typeof getCfg === 'function' ? getCfg() : null) || {};
     const bufferW = Number(cfg?.dcExportMode?.bufferW) || 100;
-    const connectionLimitW = Number(cfg?.optimizer?.inverterMaxPowerW) || 29000;
+    const connectionLimitW = getPowerLimits(cfg).limits.inverterMaxPowerW;
     // Resolve the preview AC cap along the SAME chain EOS uses for its battery
     // power (maxDischargeW || maxChargeW), then fall back to the physical
     // inverter ceiling (connectionLimitW) instead of a hardcoded 16 kW. A

@@ -4,6 +4,7 @@ import { toFiniteNumber } from './util.js';
 import { scrubStoredPlaceholders } from './config-redaction.js';
 import { sanitizeBatteryStages, resolveCurrentBatteryCapacityWh } from './battery-stages.js';
 import { localDate as fastLocalDate, localMinutesOfDay as fastLocalMinutesOfDay } from './tz-fast.js';
+import { POWER_LIMIT_DEFAULTS } from './services/power-limits.js';
 
 // Plan 09-01 (D-03): canonical minimum apiToken length floor. Re-exported here
 // (also defined in routes-api.js) so the settings-UI field descriptor and the
@@ -2321,6 +2322,21 @@ function buildFieldDefinitions() {
       min: 0,
       step: 100,
       help: 'Maximale Entladeleistung des Batteriespeichers in Watt. Begrenzt den negativen Grid-Setpoint den der Optimizer erzeugen darf.'
+    },
+    {
+      section: 'schedule',
+      group: 'batteryLimits',
+      groupLabel: 'Akku-Grenzen',
+      groupDescription: 'Kapazität, Leistung und Ladestand-Grenzen des Akkus. Gilt für alles: EOS, Kleine Börsenautomatik, Zeitplan. Die Ladestand-Grenzen von unten nach oben: (1) Mindest-Ladestand im Wechselrichter (dort eingestellt, DVhub liest ihn nur) — tiefer entlädt die Hardware nie. (2) Untergrenze Sicherheit — darunter gibt DVhub keinen Entladebefehl mehr. (3) Untergrenze bei dauerhafter Handsteuerung. (4) Reserve der Kleinen Börsenautomatik (unter Betriebsart) — nur für deren Verkauf.',
+      groupOrder: 20,
+      path: 'optimizer.inverterMaxPowerW',
+      label: 'Wechselrichter-Nennleistung (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      empty: 'null',
+      default: POWER_LIMIT_DEFAULTS.inverterMaxPowerW,
+      help: 'Höchste AC-Leistung des Wechselrichters in Watt (PV und Akku zusammen), laut Typenschild bzw. Datenblatt — nicht die kWp der PV-Module. EOS plant damit die größte Einspeisung, und DVhub begrenzt damit die Einspeisung im Zeitplan. Leer = Standard 10000 W. Gilt auch für EOS: Eine Änderung direkt in EOS überschreibt DVhub beim nächsten Abgleich.'
     },
     {
       section: 'schedule',

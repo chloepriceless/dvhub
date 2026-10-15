@@ -18,6 +18,8 @@
 // stabile Samples (Akku ±5 % zum Vorgänger, Abstand < 12 s), SoC 7–98 %,
 // PV-Anteil am DC < 10 %, plausibles η 0,4–1,02.
 
+import { getPowerLimits } from '../power-limits.js';
+
 export const EFFICIENCY_SERIES_KEYS = Object.freeze([
   'battery_power_w',
   'load_power_w',
@@ -60,7 +62,6 @@ export function bucketOfBin(bin) {
 // Unter 10 Minuten Datenbasis in einer Periode wird kein Wert angezeigt.
 export const MIN_SECONDS_FOR_VALUE = 600;
 
-const DEFAULT_NOMINAL_W = 24000;
 const DAY_MS = 86_400_000;
 
 export const DAILY_EFFICIENCY_SQL = `
@@ -153,8 +154,7 @@ ORDER BY d DESC
 LIMIT $3`;
 
 export function nominalInverterPowerW(cfg) {
-  const w = Number(cfg?.optimizer?.inverterMaxPowerW);
-  return Number.isFinite(w) && w > 0 ? w : DEFAULT_NOMINAL_W;
+  return getPowerLimits(cfg).limits.inverterMaxPowerW;
 }
 
 export function bucketBoundsW(cfg) {
