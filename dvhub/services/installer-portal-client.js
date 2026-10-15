@@ -32,6 +32,11 @@ import { runtimeInfo } from '../runtime-info.js';
 import { buildVictronAlarmsPayload } from '../victron-alarms.js';
 
 export const SIDECAR_NAME = 'installer-portal-client.json';
+// Vorgemerkte Abmeldung beim Portal (2026-10-15): war das Portal beim Trennen
+// nicht erreichbar, blieb die Anlage dort als Karteileiche „verbunden“. Die Box
+// wiederholt die Abmeldung im Poll-Takt, bis das Portal sie bestätigt.
+export const RELEASE_PENDING_NAME = 'installer-portal-release.json';
+const RELEASE_GIVE_UP_MS = 30 * 86400_000;   // danach zeigt das Portal sie ohnehin als verwaist
 export const POLL_INTERVAL_MS_DEFAULT = 30_000;
 export const PAIRING_CODE_RE = /^\d{6}$/;
 export const COMMAND_TYPES = ['open_tunnel', 'close_tunnel', 'updates_check', 'license_activate'];
@@ -341,6 +346,46 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
   function clearSidecar() {
     try { fsImpl.unlinkSync(sidecarPath()); } catch { /* war nicht da */ }
   }
+  function releasePath() { return path.join(dataDir(), RELEASE_PENDING_NAME); }
+  function loadPendingRelease() {
+    try {
+      const o = JSON.parse(fsImpl.readFileSync(releasePath(), 'utf8'));
+      return (o && o.portalUrl && o.applianceToken && o.applianceId) ? o : null;
+    } catch { return null; }
+  }
+  function clearPendingRelease() {
+    try { fsImpl.unlinkSync(releasePath()); } catch { /* war nicht da */ }
+  }
+
+  // Abmeldung senden. 200 = erledigt; 401/404 = Eintrag im Portal schon weg
+  // (Installateur hat entfernt oder neu gekoppelt) — beides beendet die
+  // Vormerkung. Netzfehler/5xx: beim nächsten Takt erneut.
+  let releaseRunning = false;
+  async function retryPendingRelease() {
+    const pr = loadPendingRelease();
+    if (!pr || releaseRunning) return { pending: !!pr };
+    if (now() - (Date.parse(pr.since) || 0) > RELEASE_GIVE_UP_MS) {
+      clearPendingRelease();
+      pushLog('installer_portal_release_given_up', {});
+      return { pending: false, givenUp: true };
+    }
+    releaseRunning = true;
+    try {
+      const r = await fetchImpl(`${pr.portalUrl}/api/pair/release`, {
+        method: 'POST', headers: { 'x-appliance-token': pr.applianceToken }, body: { applianceId: pr.applianceId },
+      });
+      if (r && (r.status === 200 || r.status === 401 || r.status === 404)) {
+        clearPendingRelease();
+        pushLog('installer_portal_release_done', { status: r.status });
+        return { pending: false, released: r.status === 200 };
+      }
+      return { pending: true, status: r?.status ?? null };
+    } catch {
+      return { pending: true };
+    } finally {
+      releaseRunning = false;
+    }
+  }
 
   // Loopback gegen die eigene HTTP-Schnittstelle — bewusster Umweg über die
   // echten Routen, damit service-actions-/Tunnel-Guards nicht dupliziert
@@ -595,9 +640,12 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
     if (timer) return;
     // Erster Poll nach 15 s (Port freiholen), dann im Takt. beides unref —
     // der Poller darf einen Test-/Shutdown-Prozess nicht am Exit hindern.
-    const first = setTimeout(() => pollOnce(), Math.min(15_000, pollIntervalMs));
+    // Jeder Takt holt auch eine vorgemerkte Abmeldung nach — unabhängig davon,
+    // ob der Portal-Zugang noch eingeschaltet ist.
+    const tick = () => { retryPendingRelease().catch(() => {}); pollOnce(); };
+    const first = setTimeout(tick, Math.min(15_000, pollIntervalMs));
     if (first.unref) first.unref();
-    timer = setInterval(() => pollOnce(), pollIntervalMs);
+    timer = setInterval(tick, pollIntervalMs);
     if (timer.unref) timer.unref();
   }
 
@@ -678,13 +726,17 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
     clearSidecar();
     // Portal best-effort informieren, damit die Anlage dort frei wird (neuer
     // Code / anderer Installateur). Lokal ist die Trennung schon wirksam.
+    // Abmeldung vormerken und gleich versuchen; klappt es nicht, wiederholt der
+    // Poll-Takt sie (retryPendingRelease).
     const applianceId = readApplianceId(dataDir(), fsImpl);
     if (sc && sc.applianceToken && applianceId) {
-      Promise.resolve()
-        .then(() => fetchImpl(`${sc.portalUrl}/api/pair/release`, {
-          method: 'POST', headers: { 'x-appliance-token': sc.applianceToken }, body: { applianceId },
-        }))
-        .catch(() => { /* Portal nicht erreichbar — egal */ });
+      try {
+        const p = releasePath();
+        fsImpl.writeFileSync(`${p}.tmp`, JSON.stringify({ portalUrl: sc.portalUrl, applianceToken: sc.applianceToken, applianceId, since: new Date(now()).toISOString() }), { mode: 0o600 });
+        try { fsImpl.chmodSync?.(`${p}.tmp`, 0o600); } catch { /* best effort */ }
+        fsImpl.renameSync(`${p}.tmp`, p);
+      } catch { /* ohne Vormerkung: nur der Sofort-Versuch unten */ }
+      retryPendingRelease().catch(() => {});
     }
     pushLog('installer_portal_client_disconnected', {});
     return { ok: true };
@@ -699,5 +751,5 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
     return Number.isFinite(v) && v > 0 ? v : null;
   }
 
-  return { claim, status, disconnect, cancelPending, pollOnce, startPolling, errorAckId, buildCompactStatus: (n) => buildCompactStatus(ctx, n) };
+  return { claim, status, disconnect, cancelPending, pollOnce, startPolling, retryPendingRelease, errorAckId, buildCompactStatus: (n) => buildCompactStatus(ctx, n) };
 }

@@ -20,6 +20,27 @@ NAT/Firewall — deshalb meldet sich die **Anlage ausgehend** beim Portal.
    führt die Anlage gegen ihre eigenen Loopback-Endpunkte aus und meldet
    das Ergebnis zurück.
 
+### Kopplung im Alltag (seit 2026-10-15)
+
+- **Updates** lassen die Kopplung stehen: Sie liegt im Datenordner der Anlage
+  (`DATA_DIR`, im Container das Volume `dvhub-data`). Ohne Volume bekommt ein
+  Container eine neue Appliance-ID und erscheint als neue Anlage.
+- **Offline / verwaist**: Die Karte zeigt „offline“, wenn sich die Anlage seit
+  5 Minuten nicht gemeldet hat, und „verwaist“ nach 30 Tagen. Verwaiste
+  Anlagen entfernt der Installateur mit „Entfernen“; das Portal löscht nichts
+  von selbst.
+- **Trennen auf der Anlage** meldet sie beim Portal ab. Ist das Portal dabei
+  nicht erreichbar, merkt sich die Anlage die Abmeldung
+  (`DATA_DIR/installer-portal-release.json`) und wiederholt sie im Poll-Takt,
+  höchstens 30 Tage lang.
+- **Neu koppeln**: Hat die Anlage ihre Kopplung verloren (Neuinstallation), kann
+  der Installateur sie mit derselben Appliance-ID neu koppeln. Das Portal
+  fragt nach; Name, Kunde, Größe und Ertragsverlauf bleiben. Die Anlage eines
+  anderen Installateurs lässt sich so nicht übernehmen.
+- **Kommandos**: Dasselbe Kommando wird nicht doppelt eingereiht; „Tunnel
+  schließen“ verwirft ein noch nicht abgeholtes „Öffnen“ und umgekehrt.
+  Schließen geht auch ohne aktive Pro-Lizenz.
+
 Kein Portforwarding, kein DNS, kein öffentlicher Endpunkt beim Kunden.
 Authentisierung Anlage→Portal: Appliance-Token (beim Claim vergeben),
 Transport: HTTPS (http:// nur für lokale Tests im LAN).

@@ -169,15 +169,20 @@ $('#addForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const msg = $('#addMsg');
   msg.textContent = 'Erzeuge Kopplungs-Code…';
-  const { j } = await api('/api/pairings', {
-    method: 'POST',
-    body: {
-      applianceId: $('#addApplianceId').value.trim(),
-      name: $('#addName').value.trim(),
-      customer: $('#addCustomer').value.trim(),
-      sizeKwp: $('#addSize')?.value.trim() || undefined,
-    },
-  });
+  const body = {
+    applianceId: $('#addApplianceId').value.trim(),
+    name: $('#addName').value.trim(),
+    customer: $('#addCustomer').value.trim(),
+    sizeKwp: $('#addSize')?.value.trim() || undefined,
+  };
+  let { j } = await api('/api/pairings', { method: 'POST', body });
+  // Eigene, schon gekoppelte Anlage (z. B. nach Neuinstallation): auf Wunsch
+  // neu koppeln. Name, Kunde und Ertragsverlauf bleiben (2026-10-15).
+  const own = (pairings || []).find((x) => x.applianceId === body.applianceId.toLowerCase());
+  if (!j.ok && j.error === 'anlage_bereits_gekoppelt' && own
+    && confirm('Diese Anlage ist schon gekoppelt. Neu koppeln? Die Anlage braucht dann den neuen Code; Name, Kunde und Ertragsverlauf bleiben erhalten.')) {
+    ({ j } = await api('/api/pairings', { method: 'POST', body: { ...body, replace: true } }));
+  }
   if (!j.ok) {
     msg.textContent = { 'anlage_bereits_gekoppelt': 'Diese Anlage ist bereits gekoppelt.',
       'anlage_bei_anderem_installateur_in_kopplung': 'Für diese Anlage läuft gerade eine Kopplung eines anderen Installateurs.',
@@ -341,7 +346,11 @@ function render() {
         + (isCt ? ' — Update durch neues Image, nicht über „Updates“' : '');
     }
     const badge = $('.badge', card);
-    const [label, cls] = STATUS[pr.status] || [pr.status, ''];
+    let [label, cls] = STATUS[pr.status] || [pr.status, ''];
+    // Gekoppelt heißt nicht erreichbar: ohne Meldung seit 5 min „offline“, nach
+    // 30 Tagen „verwaist“ (abgebaut, neu installiert, Docker ohne Volume).
+    if (pr.status === 'approved' && pr.orphaned) [label, cls] = [`verwaist · keine Meldung ${fmtAge(pr.seenAt)}`, 'err'];
+    else if (pr.status === 'approved' && pr.online === false) [label, cls] = [`offline · ${pr.seenAt ? `zuletzt ${fmtAge(pr.seenAt)}` : 'noch nie gemeldet'}`, 'warn'];
     badge.textContent = label;
     badge.classList.add(cls);
     $('.ap-waiting', card).hidden = pr.status !== 'waiting';
@@ -453,7 +462,9 @@ function render() {
       const queueCmd = async (type, args) => {
         const r = await api(`/api/pairings/${pr.applianceId}/command`, { method: 'POST', body: { type, args } });
         if (!r.j.ok) return msg(`Kommando-Fehler: ${r.j.error || r.status}`);
-        msg('Kommando eingereiht — die Anlage holt es beim nächsten Poll ab (≤ 30 s)…');
+        msg(r.j.alreadyQueued
+          ? 'Ist schon eingereiht — die Anlage holt es beim nächsten Melden ab (≤ 30 s).'
+          : `Kommando eingereiht — die Anlage holt es beim nächsten Melden ab (≤ 30 s)${pr.online === false ? ', sie meldet sich aber gerade nicht' : ''}…`);
       };
       // Fern-Support: Zustand, den die Anlage meldet.
       const sp = pr.support;
@@ -500,7 +511,10 @@ function render() {
         msg(`Fern-Support angefordert — die Anlage öffnet den Tunnel beim nächsten Melden (≤ 30 s). Ports ${r.j.relay.shellPort}/${r.j.relay.webPort}.`);
         setTimeout(refreshPairings, 35000);
       });
-      $('.tunnelClose', card).addEventListener('click', () => queueCmd('close_tunnel'));
+      $('.tunnelClose', card).addEventListener('click', async () => {
+        await queueCmd('close_tunnel');
+        setTimeout(refreshPairings, 35000);
+      });
       $('.licenseSet', card).addEventListener('click', async () => {
         const key = prompt(`Lizenzschlüssel für ${pr.name || pr.applianceName || pr.applianceId} einspielen:`, '');
         if (!key || !key.trim()) return;

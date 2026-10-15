@@ -105,6 +105,13 @@ verweist hierher.
   rechneten einige Stellen ohne Eintrag mit 29 kW, andere mit 10 oder 24 kW. Die kWp aus der
   MiSpeL-Pauschaloption verstellen die EOS-Planung nicht mehr. Die Null-Einspeisung rechnete
   außerdem immer mit 10 kW statt mit dem eingetragenen Wert.
+- **Installateurs-Portal: Karteileichen und „verbunden“ ohne Verbindung.** Die Karte zeigte jede
+  gekoppelte Anlage als „verbunden“, auch wenn sie sich seit Wochen nicht meldete. Jetzt steht dort
+  „offline · zuletzt vor …“ nach 5 Minuten ohne Meldung und „verwaist“ nach 30 Tagen. Trennt der
+  Kunde, während das Portal nicht erreichbar ist, holt die Anlage die Abmeldung nach, statt einen
+  Eintrag zurückzulassen. Eine eigene Anlage, die ihre Kopplung verloren hat, lässt sich neu koppeln,
+  ohne Name, Kunde und Ertragsverlauf zu verlieren. Doppelte Kommandos (Doppelklick auf „Tunnel
+  schließen“) werden zusammengefasst, und Schließen verwirft ein noch nicht abgeholtes Öffnen.
 - **Fern-Support ließ sich ohne aktive Lizenz nicht aus dem Portal schließen.** Lief die Lizenz bei
   offenem Tunnel ab, lehnte die Anlage auch „Tunnel schließen“ ab. Schließen geht jetzt immer, wie
   der Knopf auf der Box. Außerdem meldete die Anlage nach dem Schließen die Info-Zeile des Tunnels

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, buildControlsSummary, SIDECAR_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
+import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, buildControlsSummary, SIDECAR_NAME, RELEASE_PENDING_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
 
 function tmpDir(withApplianceId = true) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-ipc-'));
@@ -370,6 +370,49 @@ test('disconnect meldet die Trennung ans Portal (release)', async () => {
   client.disconnect();
   await new Promise((r) => setImmediate(r));
   assert.equal(portal.state.released, 'TOKEN-1');
+});
+
+// 2026-10-15 (Karteileichen im Portal): Ist das Portal beim Trennen nicht
+// erreichbar, blieb die Anlage dort für immer als „verbunden“ stehen. Die Box
+// merkt sich die Abmeldung und wiederholt sie, bis das Portal sie bestätigt.
+test('Trennen bei unerreichbarem Portal: Abmeldung wird nachgeholt', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  let down = false;
+  const fetchImpl = async (url, opts) => {
+    if (down && url.endsWith('/api/pair/release')) throw new Error('ECONNREFUSED');
+    return portal.fetchImpl(url, opts);
+  };
+  const client = createInstallerPortalClient(ctxFor(dir), { fetchImpl });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  down = true;
+  client.disconnect();
+  await client.retryPendingRelease();
+  assert.equal(portal.state.released, undefined);
+  assert.equal(fs.existsSync(path.join(dir, RELEASE_PENDING_NAME)), true, 'Abmeldung bleibt vorgemerkt');
+  const mode = fs.statSync(path.join(dir, RELEASE_PENDING_NAME)).mode & 0o777;
+  assert.equal(mode, 0o600, 'enthält den Geräteschlüssel');
+  down = false;
+  const r = await client.retryPendingRelease();
+  assert.equal(r.released, true);
+  assert.equal(portal.state.released, 'TOKEN-1');
+  assert.equal(fs.existsSync(path.join(dir, RELEASE_PENDING_NAME)), false);
+});
+
+test('Abmeldung: 401/404 vom Portal = Eintrag schon weg, Vormerkung gelöscht; 500 = später erneut', async () => {
+  for (const [status, kept] of [[401, false], [404, false], [500, true]]) {
+    const dir = tmpDir();
+    const portal = portalStub();
+    let releaseStatus = null;
+    const fetchImpl = async (url, opts) => (url.endsWith('/api/pair/release') && releaseStatus
+      ? { status: releaseStatus, json: { ok: false } } : portal.fetchImpl(url, opts));
+    const client = createInstallerPortalClient(ctxFor(dir), { fetchImpl });
+    await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+    releaseStatus = status;
+    client.disconnect();
+    await client.retryPendingRelease();
+    assert.equal(fs.existsSync(path.join(dir, RELEASE_PENDING_NAME)), kept, `HTTP ${status}`);
+  }
 });
 
 test('buildCompactStatus meldet Not-Halt (state.ctrl) und Freeze (victron.freeze.active)', () => {

@@ -1113,8 +1113,33 @@ async function handleApi(req, res, url) {
   // Ablauf: ID eingeben → Code erzeugen → Code in die Anlage → Anlage claimt
   // (incoming) → Anfrage erscheint hier → "Annehmen" → Poll-Verbindung aktiv.
   const PAIRABLE = ['waiting', 'requested', 'approved', 'declined'];
+  const ONLINE_WINDOW_MS = 5 * 60_000;
+  const ORPHANED_AFTER_MS = 30 * 86400_000;
+  function pairingReach(pr) {
+    if (pr.status !== 'approved') return { online: false, orphaned: false };
+    const seen = Date.parse(pr.lastSeenAt || pr.approvedAt || '') || 0;
+    const age = Date.now() - seen;
+    return { online: !!pr.lastSeenAt && age < ONLINE_WINDOW_MS, orphaned: age > ORPHANED_AFTER_MS };
+  }
+  // Kommando einreihen (2026-10-15, Support-Termin mit Doppelklicks): dasselbe
+  // Kommando nicht zweimal; Tunnel öffnen/schließen verwirft das noch nicht
+  // abgeholte Gegenstück; ein neuer Lizenzschlüssel ersetzt den alten.
+  const TUNNEL_OPPOSITE = { open_tunnel: 'close_tunnel', close_tunnel: 'open_tunnel' };
+  function enqueueCommand(cur, cmd) {
+    let queue = (cur.commands || []).filter((c) => c.type !== TUNNEL_OPPOSITE[cmd.type]);
+    if (cmd.type === 'license_activate') queue = queue.filter((c) => c.type !== 'license_activate');
+    else {
+      const same = queue.find((c) => c.type === cmd.type);
+      if (same) { cur.commands = queue; return { cmd: same, alreadyQueued: true }; }
+    }
+    cur.commands = [...queue, cmd].slice(-20);
+    return { cmd, alreadyQueued: false };
+  }
   const pairingView = (pr) => ({
     applianceId: pr.applianceId, code: pr.code, status: pr.status,
+    // Erreichbarkeit aus der letzten Meldung (Poll alle 30 s): online < 5 min,
+    // verwaist > 30 Tage — dann meist abgebaut oder neu installiert (2026-10-15).
+    ...pairingReach(pr),
     applianceName: pr.applianceName || null,
     // Installateur-Vergabe: eigener Anlagename + Kundenname (nur fürs Portal,
     // die Anlage selbst weiß davon nichts). Fallback-Anzeige im UI:
@@ -1173,7 +1198,11 @@ async function handleApi(req, res, url) {
     if (!APPLIANCE_ID_RE.test(aid)) return jsonRes(res, 400, { ok: false, error: 'appliance_id_ungültig' });
     const pairings = readJsonFile(PAIRINGS_FILE, {});
     const existing = pairings[aid];
-    if (existing && existing.status === 'approved') {
+    // Eigene Anlage ausdrücklich neu koppeln (replace: true, 2026-10-15) — z. B.
+    // nach Neuinstallation, wenn die Box ihre Kopplung verloren hat. Name, Kunde,
+    // Größe und Ertragsverlauf bleiben; die alte Kopplung der Box wird ungültig.
+    const ownReplace = existing && existing.acct === sess.acct && b.replace === true;
+    if (existing && existing.status === 'approved' && !ownReplace) {
       const lastSeen = Date.parse(existing.lastSeenAt || existing.approvedAt || 0) || 0;
       const stale = Date.now() - lastSeen > STALE_APPROVED_MS;
       if (existing.acct === sess.acct || !stale) {
@@ -1192,11 +1221,13 @@ async function handleApi(req, res, url) {
       status: 'waiting', applianceName: null, applianceToken: null, failedAttempts: 0,
       // Name/Kunde darf der Installateur schon bei der Anlage angeben — oder
       // später jederzeit über /rename ändern.
-      name: String(b.name || '').trim().slice(0, 80) || null,
-      customer: String(b.customer || '').trim().slice(0, 80) || null,
-      sizeKwp: Number.isFinite(Number(b.sizeKwp)) && Number(b.sizeKwp) > 0 ? Math.round(Number(b.sizeKwp) * 10) / 10 : null,
+      name: String(b.name || '').trim().slice(0, 80) || (ownReplace ? existing.name || null : null),
+      customer: String(b.customer || '').trim().slice(0, 80) || (ownReplace ? existing.customer || null : null),
+      sizeKwp: Number.isFinite(Number(b.sizeKwp)) && Number(b.sizeKwp) > 0 ? Math.round(Number(b.sizeKwp) * 10) / 10
+        : (ownReplace ? existing.sizeKwp || null : null),
       createdAt: nowIso(), requestedAt: null, lastSeenAt: null,
       lastStatus: null, commands: [], results: {},
+      ...(ownReplace ? { days: existing.days || {}, months: existing.months || {}, errorCount: existing.errorCount || 0, lastErrorAt: existing.lastErrorAt || null, ...(existing.relay ? { relay: existing.relay } : {}) } : {}),
     };
     pairings[aid] = pr;
     writeJsonFile(PAIRINGS_FILE, pairings);
@@ -1300,10 +1331,9 @@ async function handleApi(req, res, url) {
       bad = check(cur);
       if (bad) return jsonRes(res, bad[0], { ok: false, error: bad[1] });
       cur.relay = relay;
-      const cmd = { id: crypto.randomBytes(8).toString('hex'), type: 'open_tunnel', args: { ttlMin, shellPort: relay.shellPort, webPort: relay.webPort }, queuedAt: nowIso() };
-      cur.commands = [...(cur.commands || []), cmd].slice(-20);
+      const q = enqueueCommand(cur, { id: crypto.randomBytes(8).toString('hex'), type: 'open_tunnel', args: { ttlMin, shellPort: relay.shellPort, webPort: relay.webPort }, queuedAt: nowIso() });
       writeJsonFile(PAIRINGS_FILE, fresh);
-      return jsonRes(res, 200, { ok: true, commandId: cmd.id, relay: { shellPort: relay.shellPort, webPort: relay.webPort } });
+      return jsonRes(res, 200, { ok: true, commandId: q.cmd.id, alreadyQueued: q.alreadyQueued, relay: { shellPort: relay.shellPort, webPort: relay.webPort } });
     }
     if (sub === '/command' && method === 'POST') {
       const b = await readBody(req);
@@ -1320,7 +1350,8 @@ async function handleApi(req, res, url) {
       }
       // Ohne aktive Pro-Lizenz nur „Lizenz einspielen“ (DVhub prüft es selbst
       // noch einmal). Ältere Anlagen melden keine Lizenz → nicht blockieren.
-      if (type !== 'license_activate' && cur.license && cur.license.proActive === false) {
+      // Tunnel schließen geht immer — der Kill-Switch hängt nie an der Lizenz.
+      if (type !== 'license_activate' && type !== 'close_tunnel' && cur.license && cur.license.proActive === false) {
         return jsonRes(res, 409, { ok: false, error: 'lizenz_erforderlich' });
       }
       let args = {};
@@ -1334,10 +1365,9 @@ async function handleApi(req, res, url) {
         if (!/^[\x21-\x7e]{8,512}$/.test(key)) return jsonRes(res, 400, { ok: false, error: 'lizenzschluessel_ungueltig' });
         args = { key };
       }
-      const cmd = { id: crypto.randomBytes(8).toString('hex'), type, args, queuedAt: nowIso() };
-      cur.commands = [...(cur.commands || []), cmd].slice(-20);
+      const q = enqueueCommand(cur, { id: crypto.randomBytes(8).toString('hex'), type, args, queuedAt: nowIso() });
       writeJsonFile(PAIRINGS_FILE, fresh);
-      return jsonRes(res, 200, { ok: true, commandId: cmd.id });
+      return jsonRes(res, 200, { ok: true, commandId: q.cmd.id, alreadyQueued: q.alreadyQueued });
     }
     if (sub === '' && method === 'DELETE') {
       delete pairings[aid];
