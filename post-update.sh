@@ -500,5 +500,40 @@ PKGTIMER
   systemctl enable --now dvhub-pkg-maintain.timer >/dev/null 2>&1 || true
 fi
 
+# ── 13. Stack-Update bei Versionswechsel (entkoppelt, 2026-10-15) ──
+# Christin: ein Update auf eine neue DVhub-Version soll alles auf den neuesten
+# Stand bringen. npm (Schritt 6), Python (11) und EOS (10) laufen schon
+# versionsgesteuert; stack-update.sh hebt zusätzlich TimescaleDB-Pakete, die
+# System-Pakete des Stacks (innerhalb ihrer Hauptversion) und die
+# TimescaleDB-Erweiterung in der Datenbank an und startet DVhub bei Bedarf neu.
+# Nur einmal je Version: der Marker wird VOR dem Start geschrieben — ein
+# DVhub-Neustart aus stack-update.sh löst es nicht erneut aus. NON-FATAL.
+if [[ -f "$INSTALL_DIR/stack-update.sh" ]]; then
+  STACK_VER="$(grep -m1 '"version"' "$APP_DIR/package.json" 2>/dev/null | sed -E 's/.*"version" *: *"([^"]+)".*/\1/')"
+  STACK_REV="$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+  STACK_WANT="${STACK_VER:-unbekannt}@${STACK_REV}"
+  STACK_MARKER="$DATA_DIR/.stack-updated-version"
+  if [[ "$(cat "$STACK_MARKER" 2>/dev/null)" == "$STACK_WANT" ]]; then
+    echo "  Stack-Update: OK (${STACK_WANT})"
+  elif systemctl is-active --quiet dvhub-stack-update.service 2>/dev/null; then
+    echo "  Stack-Update: laeuft bereits"
+  else
+    echo "$STACK_WANT" > "$STACK_MARKER" 2>/dev/null || true
+    echo "  Stack-Update: neue Version ${STACK_WANT} — starte entkoppelt (Pakete, TimescaleDB)"
+    if command -v systemd-run >/dev/null 2>&1; then
+      systemd-run --collect --quiet --unit "dvhub-stack-update" \
+        --description "DVhub Stack-Update (Pakete, TimescaleDB) nach Versions-Update" \
+        --setenv=INSTALL_DIR="$INSTALL_DIR" --setenv=DATA_DIR="$DATA_DIR" \
+        --setenv=SERVICE_NAME="$SERVICE_NAME" --setenv=DB_NAME=dvhub \
+        --setenv=STACK_UPDATE_VERSION="$STACK_WANT" \
+        bash "$INSTALL_DIR/stack-update.sh" 2>/dev/null \
+        || echo "  WARN: Stack-Update konnte nicht gestartet werden (non-fatal)." >&2
+    else
+      INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" SERVICE_NAME="$SERVICE_NAME" DB_NAME=dvhub STACK_UPDATE_VERSION="$STACK_WANT" \
+        setsid bash "$INSTALL_DIR/stack-update.sh" </dev/null >>"$DATA_DIR/stack-update.log" 2>&1 &
+    fi
+  fi
+fi
+
 echo ""
 echo "Post-Update abgeschlossen. Neustart mit: systemctl restart ${SERVICE_NAME}"
