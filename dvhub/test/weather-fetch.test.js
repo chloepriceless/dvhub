@@ -39,13 +39,15 @@ test('buildOpenMeteoUrl builds correct URL with lat/lon and required variables',
   assert.ok(url.includes('visibility'), 'should include visibility');
   assert.ok(url.includes('relative_humidity_2m'), 'should include humidity');
   assert.ok(url.includes('forecast_days=4'), 'should request 4 days');
-  assert.ok(url.includes('timezone=Europe'), 'should include timezone');
+  // 2026-10-15: Unix-Zeit (UTC) statt Ortszeit-Text — siehe Test unten.
+  assert.ok(url.includes('timeformat=unixtime'), 'should request unixtime');
+  assert.ok(!url.includes('timezone='), 'no local-time timezone param');
 });
 
 test('parseOpenMeteoResponse maps hourly data to weather_forecasts rows', () => {
   const mockResponse = {
     hourly: {
-      time: ['2026-04-03T00:00', '2026-04-03T01:00'],
+      time: [1775167200, 1775170800], // 2026-04-02T22:00Z, 23:00Z
       shortwave_radiation: [0, 120.5],
       direct_normal_irradiance: [0, 85.3],
       diffuse_radiation: [0, 35.2],
@@ -62,7 +64,8 @@ test('parseOpenMeteoResponse maps hourly data to weather_forecasts rows', () => 
 
   // Check first row
   assert.equal(rows[0].provider, 'open_meteo');
-  assert.equal(rows[0].ts_utc, '2026-04-03T00:00');
+  assert.equal(rows[0].ts_utc, '2026-04-02T22:00:00.000Z');
+  assert.equal(rows[1].ts_utc, '2026-04-02T23:00:00.000Z');
   assert.equal(rows[0].ghi_wm2, 0);
   assert.equal(rows[0].dni_wm2, 0);
   assert.equal(rows[0].dhi_wm2, 0);
@@ -86,7 +89,7 @@ test('parseOpenMeteoResponse handles empty response gracefully', () => {
 test('parseOpenMeteoResponse handles missing fields with null', () => {
   const mockResponse = {
     hourly: {
-      time: ['2026-04-03T00:00'],
+      time: [1775167200],
       shortwave_radiation: [100],
       // All other fields missing
     }
@@ -101,4 +104,27 @@ test('parseOpenMeteoResponse handles missing fields with null', () => {
   assert.equal(rows[0].cloud_cover_pct, null);
   assert.equal(rows[0].visibility_m, null);
   assert.equal(rows[0].humidity_pct, null);
+});
+
+// 2026-10-15 (Support-Fall, Ubuntu-Box mit DB in UTC): Mit timezone=Europe/Berlin
+// lieferte Open-Meteo Ortszeit ohne Offset ('2026-04-03T00:00'). PostgreSQL
+// deutet so einen Text in der Zeitzone der Sitzung — auf einer UTC-Datenbank lag
+// die Prognose 2 h zu spät. Der gespeicherte Zeitpunkt darf nicht von der
+// Sitzungs-Zeitzone abhängen. Gegen echte PostgreSQL, nur mit DVHUB_TEST_PG_URL.
+test('gespeicherter Zeitpunkt ist in UTC- und Berlin-Sitzung derselbe', {
+  skip: process.env.DVHUB_TEST_PG_URL ? false : 'DVHUB_TEST_PG_URL nicht gesetzt'
+}, async () => {
+  const { default: pg } = await import('pg');
+  const [row] = parseOpenMeteoResponse({ hourly: { time: [1775167200], shortwave_radiation: [500] } });
+  const epochs = [];
+  for (const tz of ['UTC', 'Europe/Berlin']) {
+    const client = new pg.Client({ connectionString: process.env.DVHUB_TEST_PG_URL });
+    await client.connect();
+    try {
+      await client.query(`SET TIME ZONE '${tz}'`);
+      const { rows } = await client.query('SELECT extract(epoch FROM $1::timestamptz)::bigint AS e', [row.ts_utc]);
+      epochs.push(Number(rows[0].e));
+    } finally { await client.end(); }
+  }
+  assert.deepEqual(epochs, [1775167200, 1775167200]);
 });

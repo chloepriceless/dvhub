@@ -26,8 +26,12 @@ const HOURLY_VARS = [
  * @param {number} lon - Longitude
  * @returns {string} Full URL
  */
+// timeformat=unixtime (2026-10-15): eindeutige UTC-Zeitpunkte. Vorher
+// timezone=Europe/Berlin → Ortszeit ohne Offset ('2026-10-15T12:00'), die
+// PostgreSQL in der Sitzungs-Zeitzone deutet — auf einer Datenbank in UTC lag die
+// Prognose 2 h zu spät (wie open-meteo-archive.js).
 export function buildOpenMeteoUrl(lat, lon) {
-  return `${OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}&hourly=${HOURLY_VARS}&forecast_days=4&timezone=Europe/Berlin`;
+  return `${OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}&hourly=${HOURLY_VARS}&forecast_days=4&timeformat=unixtime`;
 }
 
 /**
@@ -45,7 +49,7 @@ export function parseOpenMeteoResponse(data) {
   for (let i = 0; i < times.length; i++) {
     rows.push({
       provider: 'open_meteo',
-      ts_utc: times[i],
+      ts_utc: new Date(Number(times[i]) * 1000).toISOString(),
       ghi_wm2: hourly.shortwave_radiation?.[i] ?? null,
       dni_wm2: hourly.direct_normal_irradiance?.[i] ?? null,
       dhi_wm2: hourly.diffuse_radiation?.[i] ?? null,

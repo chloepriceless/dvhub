@@ -105,6 +105,12 @@ verweist hierher.
   rechneten einige Stellen ohne Eintrag mit 29 kW, andere mit 10 oder 24 kW. Die kWp aus der
   MiSpeL-Pauschaloption verstellen die EOS-Planung nicht mehr. Die Null-Einspeisung rechnete
   außerdem immer mit 10 kW statt mit dem eingetragenen Wert.
+- **Open-Meteo-PV-Prognose lag auf manchen Boxen 2 Stunden zu spät.** DVhub holte die Wetterdaten
+  in Ortszeit ohne Zeitzonen-Angabe. Läuft die Datenbank in UTC (z. B. Ubuntu-Server oder
+  Container), wurden sie um die Zeitverschiebung zu spät gespeichert, die Prognose sagte die
+  Erzeugung bis nach Sonnenuntergang voraus und zog die Mischprognose mit. Jetzt holt DVhub
+  eindeutige UTC-Zeitpunkte. Künftige Stunden korrigiert der nächste Abruf, ältere Werte bleiben
+  verschoben.
 - **EOS durfte den Akku bis 0 % planen, wenn das Gerät keinen Mindest-Ladestand meldet.** Profile
   ohne Live-Mindest-SoC (z. B. die Universal-MQTT-Anbindung) liefern keinen Wert; DVhub schickte EOS
   dann 0 % statt der eingestellten „Untergrenze Sicherheit“, und der Plan entlud bis 3 %. Jetzt
