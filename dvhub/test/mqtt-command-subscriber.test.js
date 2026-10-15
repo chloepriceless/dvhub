@@ -217,3 +217,28 @@ describe('cmd/ev/stop — „Laden stoppen“ (2026-10-15)', () => {
     assert.deepEqual(b.bridgeCalls, []);
   });
 });
+
+describe('cmd/ev/* ohne Pro (2026-10-15)', () => {
+  it('Steuerbefehle abgelehnt, Beenden eines Stopps geht', async () => {
+    let override = { kind: 'stop' };
+    const bridgeCalls = [];
+    const { ctx, calls } = makeCtx({
+      licenseService: { isProActive: () => false },
+      eosEvccBridge: {
+        getOverride: () => override,
+        setOverride: async (o) => { bridgeCalls.push(['set', o]); return { ok: true }; },
+        clearOverride: async () => { bridgeCalls.push(['clear']); override = null; return { ok: true }; },
+      },
+    });
+    const sub = createMqttCommandSubscriber(noopHub, ctx);
+    for (const [cmd, payload] of [['ev/optimize', 'ON'], ['ev/only_when_plugged', 'OFF'], ['ev/target_soc_pct', '80'], ['ev/mode', 'now'], ['ev/stop', 'ON']]) {
+      await sub._handleMessage(`dvhub/cmd/${cmd}`, payload);
+      assert.ok(calls.logs.some((l) => l.event === 'mqtt_command_rejected' && l.data.cmd === cmd && l.data.error === 'pro_required'), cmd);
+    }
+    assert.deepEqual(calls.ev, []);
+    assert.deepEqual(calls.evMode, []);
+    assert.deepEqual(bridgeCalls, []);
+    await sub._handleMessage('dvhub/cmd/ev/stop', 'OFF');
+    assert.deepEqual(bridgeCalls, [['clear']]);
+  });
+});

@@ -80,7 +80,18 @@ export function createMqttCommandSubscriber(hub, ctx) {
     return getCfg().mqtt?.haDiscovery?.enabled === true && !isReadOnlyMode();
   }
 
+  // Wallbox-Steuerung und E-Auto-Planung bauen auf EOS auf → Pro (eos), wie
+  // /api/ev und /api/ev/override (2026-10-15). Beenden eines laufenden
+  // „Laden stoppen“ geht immer — sonst bliebe die Wallbox nach Ablauf gesperrt.
+  function evNeedsPro(cmd, payload) {
+    if (!cmd.startsWith('ev/')) return false;
+    if (cmd === 'ev/stop' && parseBool(payload) === false) return false;
+    return ctx.licenseService?.isProActive?.() === false;
+  }
+
   async function route(cmd, payload) {
+    if (evNeedsPro(cmd, payload)) return { ok: false, error: 'pro_required' };
+
     // Numerische Akku-Sollwerte
     if (cmd in NUMERIC_TARGETS) {
       const target = NUMERIC_TARGETS[cmd];

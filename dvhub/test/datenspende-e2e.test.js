@@ -140,10 +140,21 @@ test('Datenspende E2E: Einwilligung → Einrichtung → Shelly-Werte beim Projek
   assert.equal(m.energy[0], 5, 'aenergy.total 5000 Wh → 5 kWh');
   assert.match(batch.t0, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
 
-  // Passwort nirgends im Datenverzeichnis.
+  // Passwort nirgends im Datenverzeichnis. Der Server läuft weiter und schreibt
+  // atomar (x.tmp → x): eine .tmp kann zwischen Auflisten und Lesen verschwinden
+  // — ihr Inhalt steht dann in der Zieldatei, die ebenfalls geprüft wird
+  // (vorher: ENOENT bei stat auf datenspende-queue.json.tmp, 2026-10-15).
   for (const f of fs.readdirSync(path.join(rig, 'data'))) {
     const full = path.join(rig, 'data', f);
-    if (fs.statSync(full).isFile()) assert.doesNotMatch(fs.readFileSync(full, 'utf8'), /Sehr-Geheim-42/, `Passwort in ${f}`);
+    let text;
+    try {
+      if (!fs.statSync(full).isFile()) continue;
+      text = fs.readFileSync(full, 'utf8');
+    } catch (e) {
+      if (e.code === 'ENOENT') continue;
+      throw e;
+    }
+    assert.doesNotMatch(text, /Sehr-Geheim-42/, `Passwort in ${f}`);
   }
   const st1 = await call('/api/datenspende/status');
   assert.ok(st1.j.donated > 0);

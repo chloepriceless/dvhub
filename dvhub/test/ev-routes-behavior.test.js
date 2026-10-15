@@ -185,3 +185,13 @@ describe('/api/ev/override „Laden stoppen“', () => {
     assert.ok(o.untilMs >= t0 + 3_600_000 && o.untilMs <= Date.now() + 3_600_000);
   });
 });
+
+describe('Pro (eos): Wallbox-Steuerung und E-Auto-Planung (2026-10-15)', () => {
+  it('POST /api/ev ohne Pro → 403, nichts gespeichert', async () => {
+    const ctx = makeCtx({ pro: false });
+    const r = await call(ctx, 'POST', '/api/ev', { optimizeEv: true });
+    assert.equal(r.status, 403);
+    assert.equal(r.body.feature, 'eos');
+    assert.equal(ctx.saved.length, 0);
+  });
+});

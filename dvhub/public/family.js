@@ -994,8 +994,9 @@
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ loadpoint: loadpoint, mode: mode })
     }).then(function (r) { return r.json(); }).then(function (out) {
+      if (out && out.error === 'emergency_stop_active') throw new Error('Not-Halt aktiv — „Aus“ bleibt bis zum Aufheben');
       if (!out || out.ok !== true) throw new Error((out && out.error) || 'fehlgeschlagen');
-      if (msg) msg.textContent = 'Gesetzt ✓';
+      if (msg) msg.textContent = out.stop ? 'Laden gestoppt ✓' : 'Gesetzt ✓';
       if (lastStatus && lastStatus.evcc && Array.isArray(lastStatus.evcc.loadpoints)) {
         var l = lastStatus.evcc.loadpoints.filter(function (x) { return x.id === loadpoint; })[0];
         if (l) l.mode = mode;

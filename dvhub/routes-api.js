@@ -3207,6 +3207,20 @@ export function createApiRoutes(ctx) {
       }
       const loadpoint = Number(body && body.loadpoint);
       const mode = String((body && body.mode) || '');
+      // „Aus“ = „Laden stoppen“ (Override der EOS→Wallbox-Brücke, 2026-10-15):
+      // ein bloßer Moduswechsel hielt nicht gegen den EOS-Plan. Ein anderer
+      // Modus beendet einen laufenden Stopp zuerst (im Not-Halt abgelehnt).
+      const bridge = ctx.eosEvccBridge;
+      if (mode === 'off' && bridge?.setOverride) {
+        const out = await bridge.setOverride({ kind: 'stop' });
+        if (!out?.ok) return json(res, 400, out || { ok: false, error: 'stop failed' });
+        pushLog('family_evcc_mode', { loadpoint, mode, via: 'ev_stop' }, actorContext(req));
+        return json(res, 200, { ok: true, mode: 'off', stop: true, override: out.override || null, result: out.result || null });
+      }
+      if (bridge?.getOverride?.()?.kind === 'stop') {
+        const ended = await bridge.clearOverride();
+        if (!ended?.ok) return json(res, 409, ended || { ok: false, error: 'stop not cleared' });
+      }
       // Hauptwallbox (main-wallbox.js): evcc oder die direkt angebundene Box.
       let result;
       if (ctx.mainWallbox) result = await ctx.mainWallbox.setMode(mode, loadpoint);
@@ -5522,6 +5536,8 @@ export function createApiRoutes(ctx) {
     }
     if (url.pathname === '/api/ev' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
+      // E-Auto-Planung baut auf EOS auf → Pro (2026-10-15).
+      if (!requirePro(req, res, 'eos')) return;
       let body;
       try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
       if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'object required' });

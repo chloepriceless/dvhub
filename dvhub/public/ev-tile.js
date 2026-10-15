@@ -384,6 +384,7 @@
       const res = await apiFetch('/api/ev/override', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       let body = {};
       try { body = await res.json(); } catch (_) { /* leer */ }
+      if (body.error === 'pro_required') { msg('Wallbox-Steuerung braucht DVhub Pro.', true); return; }
       if (!res.ok || !body.ok) { msg('Nicht gestartet: ' + (body.error || ('HTTP ' + res.status)), true); return; }
       boostTouched = false;
       const r = body.result || {};
@@ -409,6 +410,7 @@
       const res = await apiFetch('/api/ev/override', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       let body = {};
       try { body = await res.json(); } catch (_) { /* leer */ }
+      if (body.error === 'pro_required') { msg('Wallbox-Steuerung braucht DVhub Pro.', true); return; }
       if (!res.ok || !body.ok) { msg('Nicht gestoppt: ' + (body.error || ('HTTP ' + res.status)), true); return; }
       const r = body.result || {};
       if (r.skipped === 'pro required') msg('Gespeichert, aber ohne Pro-Lizenz steuert DVhub die Wallbox nicht.', true);
@@ -491,6 +493,7 @@
       const res = await apiFetch('/api/ev', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       let body = {};
       try { body = await res.json(); } catch (_) { /* leer */ }
+      if (body.error === 'pro_required') { msg('Nicht gespeichert: E-Auto-Planung und Wallbox-Steuerung brauchen DVhub Pro.', true); return false; }
       if (!res.ok || !body.ok) { msg('Nicht gespeichert: ' + (body.error || ('HTTP ' + res.status)), true); return false; }
       msg(okText);
       setTimeout(function () { msg(''); }, 4000);
