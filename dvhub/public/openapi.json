@@ -199,7 +199,7 @@
         "description": "Schreibt Grid Setpoint, Charge Current oder Min SOC direkt auf die Anlage.",
         "tags": ["Schedule / Steuerung"],
         "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "gridSetpointW": { "type": "number" }, "chargeCurrentA": { "type": "number" }, "minSocPct": { "type": "number" } } } } } },
-        "responses": { "200": { "description": "Write-Ergebnis" } }
+        "responses": { "200": { "description": "Write-Ergebnis" }, "400": { "description": "Ungültiger Wert" }, "403": { "description": "Vom Freigabe-Gate abgelehnt (Netzladen/-entladen, DV-Steuerung aus)" }, "409": { "description": "Not-Halt aktiv, Lese-Modus oder Ziel nicht freigegeben" }, "502": { "description": "Gerät hat den Schreibbefehl nicht angenommen" }, "503": { "description": "Adresse am Gerät noch nicht aufgelöst" } }
       }
     },
     "/api/meter/scan": {
@@ -270,7 +270,7 @@
         "description": "Wendet EOS-Optimierungsergebnisse als Schedule-Regeln an.",
         "tags": ["Integrationen"],
         "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } },
-        "responses": { "200": { "description": "Angewandt" } }
+        "responses": { "200": { "description": "Alles angewandt" }, "400": { "description": "Ungültiger Wert (erster Fehler; results enthält jedes Einzelergebnis)" }, "403": { "description": "Vom Freigabe-Gate abgelehnt (Netzladen/-entladen, DV-Steuerung aus)" }, "409": { "description": "Not-Halt aktiv, Lese-Modus oder Ziel nicht freigegeben" }, "502": { "description": "Gerät hat den Schreibbefehl nicht angenommen" }, "503": { "description": "Adresse am Gerät noch nicht aufgelöst" } }
       }
     },
     "/api/integration/emhass": {
@@ -287,7 +287,7 @@
         "description": "Wendet EMHASS-Optimierungsergebnisse als Schedule-Regeln an.",
         "tags": ["Integrationen"],
         "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } },
-        "responses": { "200": { "description": "Angewandt" } }
+        "responses": { "200": { "description": "Alles angewandt" }, "400": { "description": "Ungültiger Wert (erster Fehler; results enthält jedes Einzelergebnis)" }, "403": { "description": "Vom Freigabe-Gate abgelehnt (Netzladen/-entladen, DV-Steuerung aus)" }, "409": { "description": "Not-Halt aktiv, Lese-Modus oder Ziel nicht freigegeben" }, "502": { "description": "Gerät hat den Schreibbefehl nicht angenommen" }, "503": { "description": "Adresse am Gerät noch nicht aufgelöst" } }
       }
     },
     "/api/keepalive/modbus": {

@@ -228,3 +228,58 @@ describe('Ausnahme im Engpass', () => {
     assert.equal(state.schedule.manualOverride.gridSetpointW, undefined);
   });
 });
+
+describe('Statuscodes: Ablehnung ist kein Serverfehler (2026-10-15)', () => {
+  it('EEG/§14a-Verbot → 403', async () => {
+    const { ctx } = setup({ allowGridCharge: false });
+    assert.equal((await post(ctx, '/api/control/write', { target: 'gridSetpointW', value: 2000 })).status, 403);
+    const d = setup({ allowGridDischarge: false });
+    assert.equal((await post(d.ctx, '/api/control/write', { target: 'gridSetpointW', value: -1500 })).status, 403);
+  });
+
+  it('Not-Halt aktiv → 409', async () => {
+    const { ctx } = setup({ paused: true });
+    assert.equal((await post(ctx, '/api/control/write', { target: 'gridSetpointW', value: -1500 })).status, 409);
+  });
+
+  it('Ziel nicht freigegeben → 409', async () => {
+    const { ctx } = setup();
+    const r = await post(ctx, '/api/control/write', { target: 'chargeCurrentA', value: 10 });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.error, 'write target not enabled in config');
+  });
+
+  it('Gerät nimmt nicht an → 502; Lese-Modus → 409; SunSpec ausstehend → 503', async () => {
+    for (const [error, status] of [
+      ['modbus exception 2', 502],
+      ['Schreibzugriff im Lese-Modus abgelehnt (Modbus fc=6)', 409],
+      ['sunspec address not resolved yet (device scan pending)', 503],
+      ['value_out_of_range', 400],
+    ]) {
+      const { ctx } = setup();
+      ctx.applyControlTarget = async () => ({ ok: false, error });
+      const r = await post(ctx, '/api/control/write', { target: 'gridSetpointW', value: -100 });
+      assert.equal(r.status, status, error);
+    }
+  });
+});
+
+describe('EOS/EMHASS-Übernahme: ok nur, wenn alles geschrieben wurde', () => {
+  for (const path of ['/api/integration/eos/apply', '/api/integration/emhass/apply']) {
+    it(`${path}: alles ok → 200`, async () => {
+      const { ctx, writes } = setup();
+      const r = await post(ctx, path, { gridSetpointW: -1500 });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal(r.body.ok, true);
+      assert.deepEqual(writes, [{ target: 'gridSetpointW', value: -1500 }]);
+    });
+    it(`${path}: im Not-Halt abgelehnt → 409, ok false, Einzelergebnisse dabei`, async () => {
+      const { ctx, writes } = setup({ paused: true });
+      const r = await post(ctx, path, { gridSetpointW: -1500 });
+      assert.equal(r.status, 409);
+      assert.equal(r.body.ok, false);
+      assert.equal(r.body.results[0].error, 'emergency_stop_active');
+      assert.deepEqual(writes, []);
+    });
+  }
+});

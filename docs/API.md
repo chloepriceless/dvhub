@@ -202,6 +202,20 @@ Spalte **Zugang** in den Tabellen:
 | POST | `/api/control/stop` | Token | **Not-Halt**: alle freiwilligen Schreibvorgänge pausieren (Pflicht-Schutz läuft weiter) |
 | POST | `/api/control/resume` | Token | Not-Halt aufheben |
 
+Abgelehnte Steuerbefehle (`/api/control/write`, `/api/integration/eos/apply`, `/api/integration/emhass/apply`)
+antworten nicht mehr mit 200, sondern mit `ok: false` und einem passenden Status:
+
+| Status | Bedeutung |
+|---|---|
+| 400 | Wert ungültig oder außerhalb des Bereichs |
+| 403 | Freigabe fehlt: Netzladen/-entladen nicht erlaubt, DV-Steuerung aus |
+| 409 | Zustand verhindert das Schreiben: Not-Halt aktiv, Lese-Modus, Ziel in der Konfiguration nicht freigegeben |
+| 502 | Das Gerät hat den Schreibbefehl nicht angenommen |
+| 503 | Adresse am Gerät noch nicht aufgelöst (SunSpec), später erneut versuchen |
+
+Die beiden `apply`-Routen schreiben mehrere Ziele. Sie melden den Status des ersten Fehlers, `results` enthält
+jedes Einzelergebnis.
+
 ### 3.13 E-Auto
 
 | Methode | Pfad | Zugang | Beschreibung |

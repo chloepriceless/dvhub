@@ -26,6 +26,26 @@ export const VALID_CONTROL_TARGETS = Object.freeze(new Set([
 ]));
 
 /**
+ * HTTP-Status für einen abgelehnten oder gescheiterten Schreibvorgang
+ * (2026-10-15): eine Ablehnung durch Regel oder Zustand ist kein Serverfehler.
+ *   409  passt nicht zum Zustand/zur Konfiguration (Not-Halt, Lese-Modus,
+ *        Ziel nicht freigegeben, Adresse 0)
+ *   403  durch Einstellung verboten (EEG/§14a-Gate, Steuerung abgeschaltet)
+ *   400  Wert außerhalb der Grenzen (Engpass-Prüfung)
+ *   503  noch nicht bereit (SunSpec-Adresse vor dem Geräte-Scan)
+ *   502  das Gerät hat den Schreibbefehl nicht angenommen
+ */
+export function controlFailureStatus(result) {
+  const e = String(result?.error || '');
+  if (result?.blocked === true || e === 'emergency_stop_active') return 409;
+  if (e.startsWith('Schreibzugriff im Lese-Modus') || e === 'write target not enabled in config' || e.startsWith('unsafe address 0')) return 409;
+  if (e === 'grid_charge_not_allowed' || e === 'grid_discharge_not_allowed' || e === 'dv_control_disabled') return 403;
+  if (/^(value_|charge_current_|max_discharge_|feed_excess_|minsoc_)/.test(e)) return 400;
+  if (e.startsWith('sunspec address not resolved')) return 503;
+  return 502;
+}
+
+/**
  * Manuellen Sollwert schreiben (oder Override löschen). Spiegelt POST
  * /api/control/write. `assertValidRuntimeCommand` wirft bei ungültigem Kommando
  * (statusCode 400) — bewusst wie bisher; die Route fängt es im Top-Level-Handler,
@@ -93,7 +113,7 @@ export async function applyManualControlWrite(ctx, opts) {
       reason,
     }).catch((err) => ctx.pushLog('manual_override_persist_error', { error: err?.message ?? String(err) }, actor || undefined));
   }
-  return { ...result, status: result.ok ? 200 : 500 };
+  return { ...result, status: result.ok ? 200 : controlFailureStatus(result) };
 }
 
 /**

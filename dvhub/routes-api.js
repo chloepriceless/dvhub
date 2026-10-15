@@ -24,7 +24,7 @@ import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, gridLimitSnapshotFlat } from './services/control-snapshot.js';
-import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch } from './services/control-commands.js';
+import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
@@ -8211,7 +8211,10 @@ export function createApiRoutes(ctx) {
         body,
         source: 'eos_apply'
       })));
-      return json(res, 200, { ok: true, results });
+      // ok nur, wenn alles geschrieben wurde; sonst der Status des ersten
+      // Fehlers (Not-Halt 409, EEG-Gate 403, Gerät 502 …), 2026-10-15.
+      const failed = results.find((r) => !r?.ok);
+      return json(res, failed ? controlFailureStatus(failed) : 200, { ok: !failed, results });
     }
 
     // --- EMHASS Apply ---
@@ -8234,7 +8237,10 @@ export function createApiRoutes(ctx) {
         body,
         source: 'emhass_apply'
       })));
-      return json(res, 200, { ok: true, results });
+      // ok nur, wenn alles geschrieben wurde; sonst der Status des ersten
+      // Fehlers (Not-Halt 409, EEG-Gate 403, Gerät 502 …), 2026-10-15.
+      const failed = results.find((r) => !r?.ok);
+      return json(res, failed ? controlFailureStatus(failed) : 200, { ok: !failed, results });
     }
 
     // --- History Import ---
