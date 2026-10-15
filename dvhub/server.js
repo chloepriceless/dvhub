@@ -18,6 +18,7 @@ import {
 } from './config-model.js';
 import { resolveCurrentBatteryCapacityWh } from './battery-stages.js';
 import { createTelemetryStorePg, ensurePgSchema, runPendingMigrations } from './telemetry-store-pg.js';
+import { upgradeTimescaleIfPending } from './services/timescale-ext-auto.js';
 import { createPool, connectWithRetry } from './db-client.js';
 import {
   buildLiveTelemetrySamples
@@ -702,6 +703,19 @@ async function createTelemetryStoreIfEnabled() {
     // Gleichzeitige DB-Verbindungen nach Speicherprofil (db-tuning.js), außer
     // telemetry.database.pool.max ist ausdrücklich gesetzt.
     const poolMax = Number(dbConfig.pool?.max) > 0 ? Number(dbConfig.pool.max) : dbPoolMax(dbBudgetMb({ totalMemBytes: os.totalmem() }));
+    // Container: nach einem DB-Image-Update die TimescaleDB-Erweiterung selbst
+    // anheben — VOR dem eigenen Pool, damit das ALTER der erste Befehl einer
+    // frischen Sitzung ist (services/timescale-ext-auto.js, 2026-10-15).
+    if (IS_RUNTIME_PROCESS && process.env.DVHUB_RUNTIME === 'container') {
+      state.timescaleAutoUpgrade = await upgradeTimescaleIfPending({
+        createPool,
+        dbConfig,
+        adminUser: process.env.DVHUB_DB_ADMIN_USER,
+        adminPassword: process.env.DVHUB_DB_ADMIN_PASSWORD,
+        pushLog,
+        connect: (p) => connectWithRetry(p, { onRetry: (info) => pushLog('telemetry_store_connect_retry', info, 'warn') }),
+      });
+    }
     const pool = createPool({ ...dbConfig, pool: { ...(dbConfig.pool || {}), min: Math.min(2, poolMax), max: poolMax } });
     // Connectivity check + schema init. Mehrere Versuche: auf kleinen Geräten
     // läuft der erste beim Hochfahren leicht in die Zeitüberschreitung.

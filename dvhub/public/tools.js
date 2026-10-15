@@ -647,7 +647,7 @@ async function renderAppRuntimeLine() {
     const rt = j.runtime || {};
     const version = j.app?.versionLabel || '';
     let text = `Läuft als: ${rt.label || '—'}${version ? ` · ${version}` : ''}`;
-    if (rt.kind === 'container') text += ' — Updates per neuem Image (docker compose pull && docker compose up -d)';
+    if (rt.kind === 'container') text += ' — Updates mit dem Installer: curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash -s -- --dir <installationsordner>';
     el.textContent = text;
   } catch { /* Anzeige ist optional */ }
 }

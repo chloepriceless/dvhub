@@ -2934,7 +2934,7 @@ export function createApiRoutes(ctx) {
       return json(res, 409, {
         ok: false,
         code: 'container_runtime',
-        error: 'Im Container nicht möglich — DVhub wird durch ein neues Image aktualisiert bzw. neu gestartet (docker compose pull && docker compose up -d).',
+        error: 'Im Container nicht möglich — aktualisiert wird mit dem Installer (holt Images, compose.yml und die passenden EOS-/Datenbank-Versionen): curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash -s -- --dir <installationsordner>',
       });
     }
 

@@ -108,9 +108,11 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/in
 Config und Daten bleiben in den Volumes. Die Knöpfe „Update“, „System-Updates“,
 „Neustart“, „Reboot“ und „TimescaleDB aktualisieren“ antworten im Container mit
 genau diesem Hinweis (HTTP 409, `code: container_runtime`) statt git/apt/systemd
-aufzurufen. Die TimescaleDB-Version hebt man über `TIMESCALE_TAG` in `.env`
-(gleiche PostgreSQL-Hauptversion; danach einmal
-`docker compose exec db psql -U postgres -d dvhub -c 'ALTER EXTENSION timescaledb UPDATE'`).
+aufzurufen. Der Installer zieht beim erneuten Lauf auch `EOS_TAG` und
+`TIMESCALE_TAG` in `.env` auf die Vorgabe nach (TimescaleDB nur aufwärts und
+bei gleicher PostgreSQL-Hauptversion; eigene Stände mit `DVHUB_PIN_VERSIONS=1`).
+Die Erweiterung in der Datenbank (`ALTER EXTENSION timescaledb UPDATE`) hebt
+DVhub nach einem neuen DB-Image beim Start selbst an (2026-10-15).
 
 ## Bestandsdaten übernehmen (native Installation → Container)
 
@@ -176,7 +178,7 @@ Hinweise:
 
 * **Versionen:** Der Dump sollte von derselben oder einer älteren
   TimescaleDB-Version stammen als der DB-Container (Appliances: PostgreSQL 17 +
-  TimescaleDB 2.28.x = `TIMESCALE_TAG=2.28.2-pg17`). Eine ältere Quelle wird
+  TimescaleDB 2.30.x = `TIMESCALE_TAG=2.30.2-pg17`). Eine ältere Quelle wird
   beim Restore hochgezogen; eine neuere geht nicht.
 * **Größe:** Der Upload wird im Container unter `/tmp` zwischengespeichert
   (bis 8 GB). Ein 7-GB-Bestand ergibt einen deutlich kleineren Dump, braucht

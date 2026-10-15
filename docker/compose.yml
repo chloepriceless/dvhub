@@ -11,7 +11,7 @@
 #     Die Trennung ist nötig: der Restore sperrt die App per CONNECTION LIMIT 0
 #     aus — das wirkt nur auf Nicht-Superuser.
 #   * TimescaleDB-Version wie auf den Appliances (PostgreSQL 17, TimescaleDB
-#     2.28.x) — damit lässt sich ein Backup einer bestehenden Anlage 1:1
+#     2.30.x) — damit lässt sich ein Backup einer bestehenden Anlage 1:1
 #     einspielen (docker/README.md → „Bestandsdaten übernehmen“).
 #   * Der pg-Client im DVhub-Image ist Version 17 — pg_dump muss mindestens so
 #     neu sein wie der Server. Bei einem Wechsel auf PostgreSQL 18 beides anheben.
@@ -30,7 +30,7 @@ name: dvhub
 
 services:
   db:
-    image: timescale/timescaledb:${TIMESCALE_TAG:-2.28.2-pg17}
+    image: timescale/timescaledb:${TIMESCALE_TAG:-2.30.2-pg17}
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -137,9 +137,9 @@ services:
     # Vorab-Stände (rc) veröffentlicht Akkudoktor nicht als Image, deshalb
     # dvhub-eos:<Git-Tag> aus unserer CI. Für ein EOS-Release das offizielle:
     # EOS_IMAGE=docker.io/akkudoktor/eos, EOS_IMAGE_TAG=<Version ohne „v“>.
-    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_IMAGE_TAG:-${EOS_TAG:-v0.4.0rc2}}
+    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_IMAGE_TAG:-${EOS_TAG:-v0.4.0rc3}}
     build:
-      context: ${EOS_REPO:-https://github.com/Akkudoktor-EOS/EOS.git}#${EOS_TAG:-v0.4.0rc2}
+      context: ${EOS_REPO:-https://github.com/Akkudoktor-EOS/EOS.git}#${EOS_TAG:-v0.4.0rc3}
     profiles: [eos]
     restart: unless-stopped
     # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).

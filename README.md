@@ -161,8 +161,10 @@ Installation per Einzeiler (siehe oben):
 curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash
 ```
 
-Aktualisieren: `cd dvhub && docker compose pull && docker compose up -d` (oder
-den Einzeiler erneut ausführen — `.env` und Daten bleiben). Von Hand geht es
+Aktualisieren: den Einzeiler erneut ausführen — er holt Images und
+`compose.yml` und zieht die EOS- und TimescaleDB-Version nach; `.env`
+(Passwörter) und Daten bleiben. Die TimescaleDB-Erweiterung hebt DVhub beim
+Start selbst an. Eigene Versionen festhalten: `DVHUB_PIN_VERSIONS=1` in `.env`. Von Hand geht es
 auch: `compose.yml` und `.env.example` (als `.env`, Passwörter setzen) aus
 [`docker/`](docker/) in einen Ordner legen und `docker compose up -d`.
 

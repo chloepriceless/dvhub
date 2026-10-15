@@ -71,6 +71,33 @@ else
   setenv DVHUB_DB_PASSWORD "$(rand)"
   chmod 600 .env
 fi
+# Update (2026-10-15): die Versionen, die DVhub vorgibt, mit der neuen
+# .env.example abgleichen — die .env bleibt sonst auf den Ständen der
+# Erstinstallation stehen. EOS folgt der Vorgabe (DVhub bestimmt, welches EOS
+# passt); TimescaleDB nur aufwärts und nur bei gleicher PostgreSQL-Hauptversion
+# (eine neuere Datenbank lässt sich nicht zurückstufen; die Erweiterung hebt
+# DVhub beim Start selbst an). Eigene Stände: DVHUB_PIN_VERSIONS=1 in .env.
+if [ -f .env ] && [ "$(grep '^DVHUB_PIN_VERSIONS=' .env | cut -d= -f2)" != 1 ] \
+  && curl -fsSL -o .env.example.new "$REPO_RAW/docker/.env.example" 2>/dev/null; then
+  exv() { grep "^$1=" .env.example.new | head -1 | cut -d= -f2-; }
+  cur() { grep "^$1=" .env | head -1 | cut -d= -f2-; }
+  NEW_EOS="$(exv EOS_TAG)"; OLD_EOS="$(cur EOS_TAG)"
+  if [ -n "$NEW_EOS" ] && [ -n "$OLD_EOS" ] && [ "$OLD_EOS" != "$NEW_EOS" ]; then
+    say "EOS: $OLD_EOS → $NEW_EOS"
+    setenv EOS_TAG "$NEW_EOS"
+  fi
+  NEW_TS="$(exv TIMESCALE_TAG)"; OLD_TS="$(cur TIMESCALE_TAG)"
+  if [ -n "$NEW_TS" ] && [ -n "$OLD_TS" ] && [ "$OLD_TS" != "$NEW_TS" ]; then
+    if [ "${OLD_TS#*-}" = "${NEW_TS#*-}" ] \
+      && [ "$(printf '%s\n%s\n' "${OLD_TS%%-*}" "${NEW_TS%%-*}" | sort -V | tail -1)" = "${NEW_TS%%-*}" ]; then
+      say "TimescaleDB: $OLD_TS → $NEW_TS"
+      setenv TIMESCALE_TAG "$NEW_TS"
+    else
+      say "TimescaleDB: $OLD_TS bleibt (Vorgabe $NEW_TS ist älter oder eine andere PostgreSQL-Hauptversion)"
+    fi
+  fi
+  rm -f .env.example.new
+fi
 [ -n "$TAG" ] && setenv DVHUB_TAG "$TAG"
 [ -n "$PORT" ] && setenv DVHUB_HTTP_PORT "$PORT"
 [ "$NO_EOS" = 1 ] && setenv COMPOSE_PROFILES ""
@@ -93,5 +120,6 @@ done
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 say "Fertig. DVhub läuft: http://${IP:-<host>}:${HTTP_PORT:-8080}"
-say "Aktualisieren:  cd $(pwd) && docker compose pull && docker compose up -d"
+say "Aktualisieren:  diesen Befehl erneut ausführen (holt compose.yml, Images und Versionen):"
+say "  curl -fsSL $REPO_RAW/docker/install.sh | bash -s -- --dir $(pwd)"
 say "API-Token:      docker compose -f $(pwd)/compose.yml exec dvhub node -p 'require(\"/etc/dvhub/config.json\").apiToken'"

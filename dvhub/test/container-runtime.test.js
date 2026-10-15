@@ -106,7 +106,7 @@ describe('Container-Laufzeit', () => {
       const r = await call(p, { method });
       assert.equal(r.status, 409);
       assert.equal(r.body.code, 'container_runtime');
-      assert.match(r.body.error, /docker compose pull/);
+      assert.match(r.body.error, /docker\/install\.sh \| bash/, 'Hinweis auf den Installer (holt auch EOS-/DB-Versionen)');
     });
   }
   it('nativ unverändert: Update-Check bleibt beim Service-Actions-Gate (403)', async () => {
