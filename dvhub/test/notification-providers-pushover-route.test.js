@@ -20,12 +20,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readRouteSources } from './helpers/route-sources.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROUTES_API_PATH = path.resolve(__dirname, '..', 'routes-api.js');
 
+// routes-api.js + routes/*.js (Bereichs-Module, 2026-10-15).
+// Blockende-Regexe: `  }` (routes-api.js) oder `  };` (routes/*.js) → `\n {2}\};?\n`.
 function readRoutes() {
-  return fs.readFileSync(ROUTES_API_PATH, 'utf8');
+  return readRouteSources();
 }
 
 describe('Plan 20-03: Pushover dedicated endpoints (static)', () => {
@@ -97,7 +99,7 @@ describe('Plan 20-03: Pushover dedicated endpoints (static)', () => {
 
   it('test endpoint reuses stored creds when body fields are empty (Pitfall 2)', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/pushover\/test['"][\s\S]*?\n {2}\}\n/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/pushover\/test['"][\s\S]*?\n {2}\};?\n/);
     assert.ok(m);
     assert.match(m[0], /body\?\.appToken[\s\S]{0,80}stored\.appToken/);
     assert.match(m[0], /body\?\.userKey[\s\S]{0,80}stored\.userKey/);
@@ -106,7 +108,7 @@ describe('Plan 20-03: Pushover dedicated endpoints (static)', () => {
 
   it('test endpoint sends a real pushover notify() call with iso-timestamped body', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/pushover\/test['"][\s\S]*?\n {2}\}\n/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/pushover\/test['"][\s\S]*?\n {2}\};?\n/);
     assert.ok(m);
     assert.match(m[0], /createPushoverProvider\(\s*\{\s*appToken,\s*userKey\s*\}\s*\)/);
     assert.match(m[0], /provider\.notify\(/);
@@ -117,7 +119,7 @@ describe('Plan 20-03: Pushover dedicated endpoints (static)', () => {
 
   it("test endpoint hard-codes level: 'info' (T-20-03-04 — operator cannot bypass Pushover quiet hours)", () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/pushover\/test['"][\s\S]*?\n {2}\}\n/);
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/pushover\/test['"][\s\S]*?\n {2}\};?\n/);
     assert.ok(m, 'pushover /test handler must exist');
     // Backend MUST emit `level: 'info'` as a string literal — never read from body.
     // pushover.js maps level:'critical' → priority:1; everything else → priority:0.

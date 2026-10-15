@@ -23,16 +23,16 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { readRouteSources } from './helpers/route-sources.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROUTES_API_PATH = path.resolve(__dirname, '..', 'routes-api.js');
 
+// routes-api.js + routes/*.js (Bereichs-Module, 2026-10-15).
 function readRoutes() {
-  return fs.readFileSync(ROUTES_API_PATH, 'utf8');
+  return readRouteSources();
 }
 
 describe('Plan 20-01: ntfy.sh dedicated endpoints (static)', () => {
@@ -109,7 +109,8 @@ describe('Plan 20-01: ntfy.sh dedicated endpoints (static)', () => {
 
   it('test endpoint reuses stored creds when body fields are empty (Pitfall 2)', () => {
     const src = readRoutes();
-    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/ntfy\/test['"][\s\S]*?\n {2}\}\n/);
+    // Ende des umschließenden Handlers: `  }` (routes-api.js) oder `  };` (routes/*.js).
+    const m = src.match(/url\.pathname\s*===\s*['"]\/api\/notifications\/providers\/ntfy\/test['"][\s\S]*?\n {2}\};?\n/);
     assert.ok(m);
     // topicUrl/token fallback to stored value when body field is falsy or '***'.
     assert.match(m[0], /body\?\.topicUrl[\s\S]{0,80}stored\.topicUrl/);
