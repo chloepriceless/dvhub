@@ -318,3 +318,21 @@ describe('buildForecastResponse — Lizenz-kWp-Cap', () => {
     assert.equal(res.pv.slots[0].powerW, 12000);
   });
 });
+
+// 2026-10-15: /api/forecast meldet den Kaltstart der Lastprognose in meta.
+describe('meta.loadColdStart', () => {
+  it('null, solange die Lastprognose nicht gelaufen ist', async () => {
+    const service = createForecastService(createMockCtx());
+    const { meta } = await service.buildForecastResponse();
+    assert.equal(meta.loadColdStart, null);
+  });
+
+  it('nach einem Lauf ohne Verbrauchsdaten { defaultPowerW, hoursWithData }', async () => {
+    // Ohne Datenbank scheitert die Abfrage → Konstante, hoursWithData null.
+    // Die Stundenzahl selbst prüft test/load-forecast.test.js.
+    const service = createForecastService(createMockCtx());
+    await service.loadForecast.runForecast();
+    const { meta } = await service.buildForecastResponse();
+    assert.deepEqual(meta.loadColdStart, { defaultPowerW: 800, hoursWithData: null });
+  });
+});

@@ -923,6 +923,27 @@
   // ---------------------------------------------------------------------------
   // Forecast Summary Cards (PV-Tagesprognose, Verbrauch, Überschuss)
   // ---------------------------------------------------------------------------
+  // Hinweis für die Kachel „Erwarteter Verbrauch“ (Support-Fall 2026-10-15):
+  // meta.loadColdStart kommt vom Server, solange die Lastprognose mangels
+  // Messwerten (< 7 Stunden) eine Konstante liefert. Rückfall für ältere
+  // Server: alle Werte des Tages gleich. → { text, detail } oder null.
+  var LOAD_MIN_HOURS = 7;
+  function loadForecastHint(meta, loadSlots) {
+    var cs = meta && meta.loadColdStart;
+    if (cs) {
+      var detail = cs.hoursWithData == null
+        ? 'Gemessener Hausverbrauch ist gerade nicht lesbar.'
+        : cs.hoursWithData + ' von ' + LOAD_MIN_HOURS + ' nötigen Stunden mit Hausverbrauch gemessen. '
+          + 'Bleibt das länger als einen Tag so, kommt kein Verbrauchswert an – Zuordnung prüfen.';
+      return { text: '⚠ Lernt noch – vorläufig konstant ' + cs.defaultPowerW + ' W', detail: detail };
+    }
+    var slots = loadSlots || [];
+    var allSame = slots.length > 1 && slots.every(function (s) { return s.powerW === slots[0].powerW; });
+    if (allSame) return { text: '⚠ Konstant ' + (slots[0].powerW || 0) + ' W – keine echte Prognose', detail: '' };
+    return null;
+  }
+  window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, { loadForecastHint: loadForecastHint });
+
   function updateForecastSummary(forecastData, statusData) {
     var pvEl = document.getElementById('pv-daily-kwh');
     var detailEl = document.getElementById('pv-daily-detail');
@@ -1027,10 +1048,21 @@
     // Load detail: warn if flat baseload
     if (loadDetailEl) {
       var hasTotalsLoad = !!(totals && totals.today && totals.today.loadKwh > 0);
-      var allSame = loadSlots.length > 1 && loadSlots.every(function (s) { return s.powerW === loadSlots[0].powerW; });
-      if (allSame) {
-        loadDetailEl.innerHTML = '<span class="leitstand-forecast-detail">\u26a0 Flat ' + (loadSlots[0]?.powerW || 0) + 'W (kein echtes Forecast)</span>';
-        loadDetailEl.firstChild.style.color = _dangerColor;
+      var loadHint = loadForecastHint(forecastData.meta, loadSlots);
+      if (loadHint) {
+        loadDetailEl.textContent = '';
+        var hintEl = document.createElement('span');
+        hintEl.className = 'leitstand-forecast-detail';
+        hintEl.textContent = loadHint.text;
+        hintEl.style.color = _dangerColor;
+        loadDetailEl.appendChild(hintEl);
+        if (loadHint.detail) {
+          var hintDetailEl = document.createElement('div');
+          hintDetailEl.className = 'leitstand-forecast-detail';
+          hintDetailEl.textContent = loadHint.detail;
+          hintDetailEl.style.color = _dimColor;
+          loadDetailEl.appendChild(hintDetailEl);
+        }
       } else if (!loadSlots.length && !hasTotalsLoad) {
         loadDetailEl.innerHTML = '<span class="leitstand-forecast-detail">⚠ Kein Load-Forecast für heute</span>';
         loadDetailEl.firstChild.style.color = _dangerColor;

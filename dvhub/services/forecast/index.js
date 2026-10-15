@@ -492,6 +492,9 @@ export function createForecastService(ctx) {
           if (liveSource && liveSource !== 'unknown') return liveSource;
           return cfg.forecast?.load?.model || 'sql_weekday';
         })(),
+        // Lastprognose lernt noch (zu wenig gemessener Verbrauch) → Konstante.
+        // { defaultPowerW, hoursWithData } oder null; Leitstand zeigt den Hinweis.
+        loadColdStart: loadForecast.getState?.()?.coldStart ?? null,
         // Phase 07 Plan 07-04: ensembleWeights from inverse-MAE merge (REVIEWS H2 + D-C3).
         // Dashboard debug-overlay renders these per forecast cycle.
         ensembleWeights: state.forecast.pv.ensembleWeights ?? null
@@ -528,6 +531,7 @@ export function createForecastService(ctx) {
     // T-CURTAIL: manual trigger + diagnostics for the observed-GHI backfill.
     runGhiBackfill: runOpportunisticGhiBackfill,
     buildForecastResponse,
+    loadForecast,
     get forecastVersion() { return forecastVersion; }
   };
 }

@@ -4279,7 +4279,7 @@ function renderLoadInspector(payload) {
       LOAD_INSPECTOR_MODEL_COLUMNS.forEach(function (m) {
         var v = slot[m];
         if (m === 'sql_weekday' && slot.isColdStart) {
-          html += '<td class="data-row--warning" title="Kaltstart-Fallback (zu wenig History &lt; 4 Wochen, Konstante 800 W). Siehe Phase 18-01k.">' +
+          html += '<td class="data-row--warning" title="Kaltstart: weniger als 7 Stunden mit gemessenem Hausverbrauch — Konstante (Standard 800 W).">' +
             escHtmlForecastInspector(formatPowerForecastInspector(v)) + ' ⚠</td>';
         } else {
           html += '<td>' + escHtmlForecastInspector(formatPowerForecastInspector(v)) + '</td>';

@@ -287,3 +287,42 @@ test('18-01k: runForecast persists model=sql_weekday for real rollup (24 distinc
     `expected every row model=sql_weekday, got: ${[...new Set(h.persisted.map(r => r.model))]}`
   );
 });
+
+// --- 2026-10-15: Kaltstart sichtbar machen (Support-Fall Loxone) ---
+// Unter 7 Stunden mit gemessenem Verbrauch rechnet die Prognose konstant mit
+// defaultPowerW. Der Zustand trägt das mit, damit der Leitstand „Lernt noch“
+// zeigen kann — vorher sah der Kunde nur 200 Wh je Viertelstunde.
+
+test('Kaltstart: getState().coldStart nennt Standardwert und Stunden mit Daten', async () => {
+  const h = makeRunForecastHarness({
+    sqlRows: [
+      { hour_of_day: 0, avg_power_w: 500, sample_count: '3' },
+      { hour_of_day: 1, avg_power_w: 400, sample_count: '2' }
+    ],
+    defaultPowerW: 650
+  });
+  await h.lf.runForecast();
+  assert.equal(h.lf.getState().source, 'naive_constant');
+  assert.deepEqual(h.lf.getState().coldStart, { defaultPowerW: 650, hoursWithData: 2 });
+});
+
+test('Kaltstart: ohne Messwerte hoursWithData 0, Abfragefehler null', async () => {
+  const h = makeRunForecastHarness({ sqlRows: [] });
+  await h.lf.runForecast();
+  assert.deepEqual(h.lf.getState().coldStart, { defaultPowerW: 800, hoursWithData: 0 });
+
+  const failing = makeRunForecastHarness({ sqlRows: [] });
+  failing.ctx.db.query = async () => { throw new Error('db down'); };
+  await failing.lf.runForecast();
+  assert.equal(failing.lf.getState().source, 'naive_constant');
+  assert.deepEqual(failing.lf.getState().coldStart, { defaultPowerW: 800, hoursWithData: null });
+});
+
+test('echte Prognose aus 24 Stunden: coldStart null', async () => {
+  const sqlRows = [];
+  for (let hr = 0; hr < 24; hr++) sqlRows.push({ hour_of_day: hr, avg_power_w: 500, sample_count: '20' });
+  const h = makeRunForecastHarness({ sqlRows });
+  await h.lf.runForecast();
+  assert.equal(h.lf.getState().source, 'sql_rollup');
+  assert.equal(h.lf.getState().coldStart, null);
+});

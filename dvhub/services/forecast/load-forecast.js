@@ -231,16 +231,21 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
   // Sources: 'statsforecast' | 'sql_rollup' | 'vrm_fallback' | 'naive_constant' | 'unknown'
   // Status: 'ok' | 'degraded' | 'failed'
   // degraded = 2+ consecutive non-SF runs; failed = 4+ consecutive non-SF runs.
+  // coldStart (2026-10-15, Support-Fall Loxone): bei naive_constant
+  // { defaultPowerW, hoursWithData } — die Oberfläche zeigt damit „Lernt noch“.
+  // hoursWithData = Stunden des Tages mit gemessenem Verbrauch (28 Tage), null
+  // wenn die Abfrage scheiterte. Sonst null.
   let loadForecastState = {
     source: 'unknown',
     status: 'ok',
     consecutiveNonSfRuns: 0,
-    lastUpdatedAt: null
+    lastUpdatedAt: null,
+    coldStart: null
   };
 
   /** Mutate module-scope state via pure `nextLoadForecastState` + structured log. */
-  function setLoadForecastState(source) {
-    loadForecastState = nextLoadForecastState(loadForecastState, source);
+  function setLoadForecastState(source, coldStart = null) {
+    loadForecastState = { ...nextLoadForecastState(loadForecastState, source), coldStart };
     pushLog('load_forecast_state', loadForecastState);
   }
 
@@ -336,6 +341,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
     const slots = formatLoadSlots(sqlRows, defaultPowerW, now);
     const confidence = slots.length > 0 ? slots[0].confidence : 0.3;
     const sqlColdStart = confidence === 0.3 || sqlRows.length < 7;
+    const hoursWithData = sqlRows.length;
     const persistModel = sqlColdStart ? 'sql_weekday_fallback' : 'sql_weekday';
     for (const slot of slots) {
       await store.insertLoadForecast({
@@ -345,7 +351,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
         confidence: slot.confidence
       });
     }
-    return { slots, confidence, sqlColdStart, persistModel };
+    return { slots, confidence, sqlColdStart, hoursWithData, persistModel };
   }
 
   /**
@@ -403,10 +409,12 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
     // sqlSucceeded — same semantics as the pre-19.1-05 version.
     let sqlSucceeded = false;
     let sqlColdStart = false;
+    let hoursWithData = null;
     try {
       const r = await computeAndPersistSqlWeekday(defaultPowerW);
       sqlSucceeded = true;
       sqlColdStart = r.sqlColdStart;
+      hoursWithData = r.hoursWithData;
 
       // Update state with SQL slots as the active forecast.
       state.forecast.load.data = r.slots;
@@ -470,7 +478,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       setLoadForecastState('sql_rollup');
     } else {
       // Either SQL threw, or cold-start defaultPowerW was served.
-      setLoadForecastState('naive_constant');
+      setLoadForecastState('naive_constant', { defaultPowerW, hoursWithData });
     }
   }
 

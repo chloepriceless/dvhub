@@ -105,6 +105,12 @@ verweist hierher.
   rechneten einige Stellen ohne Eintrag mit 29 kW, andere mit 10 oder 24 kW. Die kWp aus der
   MiSpeL-Pauschaloption verstellen die EOS-Planung nicht mehr. Die Null-Einspeisung rechnete
   außerdem immer mit 10 kW statt mit dem eingetragenen Wert.
+- **Lastprognose im Kaltstart war nicht zu erkennen.** Solange weniger als 7 Stunden mit gemessenem
+  Hausverbrauch vorliegen, rechnet die Prognose mit einer Konstanten (Standard 800 W), in EOS also
+  200 Wh je Viertelstunde. Die Kachel „Erwarteter Verbrauch“ im Leitstand zeigt jetzt „Lernt noch –
+  vorläufig konstant 800 W“ und wie viele Stunden schon gemessen sind. Bleibt das länger als einen
+  Tag so, kommt kein Verbrauchswert an, und die Kachel sagt das. Der alte Hinweis „Flat 800W“
+  verschwand, sobald die Nachtkorrektur einzelne Werte änderte.
 - **EOS-„Akku halten“ fiel jede Viertelstunde für einige Minuten aus.** Die Plan-Regeln von EOS
   standen in der Konfiguration. Beim Speichern zur Viertelstunde gingen ihre Kennzeichen verloren
   (`optimizer`, `closedLoopHold` u. a.), die Bereinigung hielt sie dann für verbotenes Netzladen und
