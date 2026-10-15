@@ -153,6 +153,18 @@ function fingerprint(key) {
  * @param {number} [o.tolerancePct]  Toleranz in Prozent (Default 18)
  * @returns {boolean}
  */
+// Gemessener PV-Peak über diesem Vielfachen der EINGETRAGENEN kWp gilt als
+// unplausibel (Support-Fall 2026-10-15: 52,4 kW bei 36 kWp, PV aus Loxone falsch
+// zugeordnet). Nur ein Hinweis in der Oberfläche — die Kulanzfrist läuft weiter,
+// denn eine zu niedrig eingetragene Anlage sähe genauso aus (Christin: „Nur Meldung“).
+const PV_PEAK_IMPLAUSIBLE_FACTOR = 1.3;
+
+function pvPeakImplausible({ observedPeakW, systemKwp }) {
+  if (!(Number.isFinite(observedPeakW) && observedPeakW > 0)) return false;
+  if (!(Number.isFinite(systemKwp) && systemKwp > 0)) return false;
+  return observedPeakW > systemKwp * 1000 * PV_PEAK_IMPLAUSIBLE_FACTOR;
+}
+
 function plantExceedsLicenseVerdict({ observedPeakW, maxKwp, tolerancePct = UNDER_REPORT_TOLERANCE_PCT }) {
   if (!(Number.isFinite(maxKwp) && maxKwp > 0)) return false;
   if (!(Number.isFinite(observedPeakW) && observedPeakW > 0)) return false;
@@ -871,6 +883,7 @@ export function createLicenseService(ctx) {
     // UI-Felder (Gate-Status + Grace-Deadline für den Countdown) hier ergänzt.
     s.plant_gate_active = plantGateActive();            // true = Frist abgelaufen → Pro-Gate zu
     s.plant_exceeds_grace_until = plantExceedsGraceUntilIso(); // ISO-Deadline oder null
+    s.pv_peak_implausible = pvPeakImplausible({ observedPeakW: Number(s.observed_peak_w), systemKwp: s.system_kwp });
     // max_kwp + license_kind ride along via the {...state.license} spread above.
     return s;
   }

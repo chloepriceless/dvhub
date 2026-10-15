@@ -603,6 +603,19 @@ function licenseCapacityMessage(state) {
     return `Eingetragene PV-Leistung (${sysLabel}) übersteigt Ihren Tarif (${maxKwp} kWp). `
       + `Pro-Funktionen (EOS/Steuerung) sind deaktiviert — bitte auf ein größeres Pro-Tarif upgraden.`;
   }
+  if (state.plant_exceeds_license && state.pv_peak_implausible === true) {
+    // Gemessener Peak passt nicht zur eingetragenen kWp (> 1,3×): meist falsch
+    // zugeordnete PV-Messung. Beide Ursachen nennen; die Frist läuft trotzdem.
+    const peakKw = Math.round(Number(state.observed_peak_w) / 100) / 10;
+    const base = `Gemessen werden bis ${peakKw} kW PV, eingetragen sind ${Number(state.system_kwp)} kWp — das passt nicht zusammen. `
+      + 'Meist ist die PV-Messung falsch zugeordnet (z. B. doppelt gezählt): bitte die PV-Werte im Herstellerprofil prüfen. '
+      + `Stimmt die Messung, ist die eingetragene Leistung zu niedrig, und Ihr Tarif (${maxKwp} kWp) reicht nicht.`;
+    if (state.plant_gate_active === true) {
+      return `${base} Die Kulanzfrist ist abgelaufen, Pro-Funktionen sind deaktiviert.`;
+    }
+    const until = state.plant_exceeds_grace_until ? String(state.plant_exceeds_grace_until).slice(0, 10) : null;
+    return `${base} Ohne Korrektur werden Pro-Funktionen nach der Kulanzfrist${until ? ` (bis ${until})` : ''} deaktiviert.`;
+  }
   if (state.plant_exceeds_license) {
     const peakW = Number(state.observed_peak_w);
     const peakLabel = Number.isFinite(peakW) && peakW > 0 ? `bis ${Math.round(peakW / 100) / 10} kW` : 'mehr';

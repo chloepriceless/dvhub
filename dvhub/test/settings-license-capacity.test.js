@@ -76,3 +76,28 @@ test('capacity message: MEASURED over-tier after grace (gate active) → deactiv
   assert.match(msg, /abgelaufen/i);
   assert.match(msg, /deaktiviert/i);
 });
+
+// 2026-10-15: Passt der gemessene Peak nicht zur eingetragenen kWp, nennt der
+// Hinweis beide Ursachen — falsche PV-Zuordnung oder zu niedrige kWp — statt
+// nur „mehr als Ihr Tarif“. Die Kulanzfrist steht weiter drin.
+test('capacity message: MEASURED + unplausibel → Zuordnung prüfen oder kWp zu niedrig, mit Frist', () => {
+  const msg = licenseCapacityMessage({
+    status: 'active', max_kwp: 40, system_kwp: 36, capacity_ok: true,
+    plant_exceeds_license: true, plant_gate_active: false, observed_peak_w: 52400,
+    plant_exceeds_grace_until: '2026-10-29T10:00:00.000Z', pv_peak_implausible: true
+  });
+  assert.equal(msg,
+    'Gemessen werden bis 52.4 kW PV, eingetragen sind 36 kWp — das passt nicht zusammen. '
+    + 'Meist ist die PV-Messung falsch zugeordnet (z. B. doppelt gezählt): bitte die PV-Werte im Herstellerprofil prüfen. '
+    + 'Stimmt die Messung, ist die eingetragene Leistung zu niedrig, und Ihr Tarif (40 kWp) reicht nicht. '
+    + 'Ohne Korrektur werden Pro-Funktionen nach der Kulanzfrist (bis 2026-10-29) deaktiviert.');
+});
+
+test('capacity message: unplausibel und Frist abgelaufen → deaktiviert-Hinweis mit Zuordnung', () => {
+  const msg = licenseCapacityMessage({
+    status: 'active', max_kwp: 40, system_kwp: 36, capacity_ok: true,
+    plant_exceeds_license: true, plant_gate_active: true, observed_peak_w: 52400, pv_peak_implausible: true
+  });
+  assert.match(msg, /passt nicht zusammen/);
+  assert.match(msg, /Kulanzfrist ist abgelaufen, Pro-Funktionen sind deaktiviert/);
+});

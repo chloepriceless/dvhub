@@ -1475,3 +1475,29 @@ test('AUTOBIND-Backfill: bei Fehlschlag nur EIN Versuch pro Prozesslauf', async 
     }
   );
 });
+
+// 2026-10-15 (Support-Fall Loxone, 52,4 kW gemessen bei 36 kWp): getState()
+// meldet, wenn der gemessene Peak nicht zur eingetragenen kWp passt. Nur ein
+// Hinweis — die Kulanzfrist läuft wie bisher (Christin: „Nur Meldung“), sonst
+// würde jede zu niedrig eingetragene Anlage nie gesperrt.
+test('under-report: Peak > 1,3 × eingetragene kWp → pv_peak_implausible, Frist läuft trotzdem', () => {
+  const svc = activeProSvc([36], 40);         // Ceiling 47200 W, Grenze unplausibel 46800 W
+  svc.updatePlantExceedsLicense(52400);
+  const st = svc.getState();
+  assert.equal(st.pv_peak_implausible, true);
+  assert.equal(st.plant_exceeds_license, true, 'Flag bleibt');
+  assert.ok(st.plant_exceeds_grace_until, 'Kulanzfrist läuft');
+});
+
+test('under-report: Peak bis 1,3 × kWp gilt als plausibel', () => {
+  const svc = activeProSvc([36], 40);
+  svc.updatePlantExceedsLicense(46800);       // genau 1,3 × 36 kWp
+  assert.equal(svc.getState().pv_peak_implausible, false);
+});
+
+test('under-report: ohne Messung oder ohne eingetragene kWp kein Plausibilitäts-Urteil', () => {
+  assert.equal(activeProSvc([36], 40).getState().pv_peak_implausible, false);
+  const svc = activeProSvc([], 40);
+  svc.updatePlantExceedsLicense(52400);
+  assert.equal(svc.getState().pv_peak_implausible, false);
+});

@@ -105,6 +105,12 @@ verweist hierher.
   rechneten einige Stellen ohne Eintrag mit 29 kW, andere mit 10 oder 24 kW. Die kWp aus der
   MiSpeL-Pauschaloption verstellen die EOS-Planung nicht mehr. Die Null-Einspeisung rechnete
   außerdem immer mit 10 kW statt mit dem eingetragenen Wert.
+- **Lizenz-Hinweis bei falsch zugeordneter PV-Messung irreführend.** Misst DVhub deutlich mehr
+  PV-Leistung, als eingetragen ist (über das 1,3-Fache der kWp), nennt der Hinweis in der
+  Lizenz-Sektion jetzt beide möglichen Ursachen: die PV-Messung ist falsch zugeordnet (meist), oder
+  die eingetragene Leistung ist zu niedrig. Vorher stand dort nur „mehr als Ihr Tarif abdeckt“. Die
+  Kulanzfrist läuft unverändert, denn eine zu niedrig eingetragene Anlage sieht in den Messwerten
+  genauso aus.
 - **Lastprognose im Kaltstart war nicht zu erkennen.** Solange weniger als 7 Stunden mit gemessenem
   Hausverbrauch vorliegen, rechnet die Prognose mit einer Konstanten (Standard 800 W), in EOS also
   200 Wh je Viertelstunde. Die Kachel „Erwarteter Verbrauch“ im Leitstand zeigt jetzt „Lernt noch –
