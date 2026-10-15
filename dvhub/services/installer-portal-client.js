@@ -35,6 +35,8 @@ export const SIDECAR_NAME = 'installer-portal-client.json';
 export const POLL_INTERVAL_MS_DEFAULT = 30_000;
 export const PAIRING_CODE_RE = /^\d{6}$/;
 export const COMMAND_TYPES = ['open_tunnel', 'close_tunnel', 'updates_check', 'license_activate'];
+// Ohne Pro-Lizenz erlaubt: Lizenz einspielen und Tunnel schließen.
+const LICENSE_FREE_COMMANDS = new Set(['license_activate', 'close_tunnel']);
 
 // URL-Validierung für die Portal-Adresse (SSRF-Bremse beim Pairing):
 //   https:// ist überall erlaubt (Portal ist online),
@@ -493,7 +495,9 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
         // Ohne aktive Pro-Lizenz ist das Portal auf „Lizenz einspielen“
         // beschränkt (je Kommando neu geprüft — ein vorheriges license_activate
         // im selben Durchlauf kann die Lizenz gerade aktiviert haben).
-        if (cmd.type !== 'license_activate' && !proActive(ctx)) {
+        // Tunnel schließen geht immer: der Kill-Switch hängt nie an der Lizenz
+        // (2026-10-15), wie die lokale Route /api/support/tunnel/close.
+        if (!LICENSE_FREE_COMMANDS.has(cmd.type) && !proActive(ctx)) {
           results.push({ id: cmd.id, ok: false, status: 403, result: { ok: false, error: 'license_required' } });
           pushLog('installer_portal_command_denied', { type: cmd.type, reason: 'license_required' });
           continue;

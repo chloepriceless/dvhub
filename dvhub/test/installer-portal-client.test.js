@@ -468,6 +468,26 @@ test('Ohne Pro-Lizenz: Poll meldet nur die Lizenz (kein Status); Tunnel verweige
   assert.equal(portal.state.results.find((r) => r.id === 'c1').result.error, 'license_required');
 });
 
+// 2026-10-15 (Support-Handover): Der Kill-Switch darf nie an der Lizenz hängen.
+// Läuft die Lizenz bei offenem Tunnel ab, muss das Portal ihn trotzdem schließen
+// können (die lokale Route /api/support/tunnel/close ist bewusst nonce-frei).
+test('Ohne Pro-Lizenz: Tunnel schließen läuft trotzdem', async () => {
+  const dir = tmpDir();
+  const portal = portalStub();
+  portal.state.status = 'approved';
+  const executed = [];
+  const ctx = { ...ctxFor(dir), licenseService: proLicense({ pro: false }) };
+  const client = createInstallerPortalClient(ctx, {
+    fetchImpl: portal.fetchImpl,
+    execCommand: async (cmd) => { executed.push(cmd.type); return { status: 200, json: { ok: true } }; },
+  });
+  await client.claim({ portalUrl: 'https://portal.example.de', pairingCode: '123456' });
+  portal.state.commands = [{ id: 'k', type: 'close_tunnel' }, { id: 'u', type: 'updates_check' }];
+  await client.pollOnce();
+  assert.deepEqual(executed, ['close_tunnel'], 'Schließen ja, andere Kommandos weiter nur mit Lizenz');
+  assert.equal(portal.state.results.find((r) => r.id === 'u').result.error, 'license_required');
+});
+
 test('Lizenz im selben Durchlauf aktiviert → folgende Kommandos laufen', async () => {
   const dir = tmpDir();
   const portal = portalStub();

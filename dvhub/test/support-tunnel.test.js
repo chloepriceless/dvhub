@@ -384,6 +384,25 @@ test('Dienst-Modus: lehnt das Relay ab, meldet open den Fehler aus dem Protokoll
   assert.match(tun.status().lastError, /remote port forwarding failed/);
 });
 
+// 2026-10-15 (Support-Fall): Nach dem Schließen meldete status().lastError die
+// Info-Zeile des Tunnel-Skripts („Tunnel: Relay …, Ports …, 3600 s“) als Fehler
+// ans Portal. Nur echte Fehlerzeilen zählen.
+test('Dienst-Modus: Info-Zeilen des Tunnel-Skripts sind kein lastError', () => {
+  const { sup, ctx } = realBox({ ports: [49000, 49001] });
+  const tun = createSupportTunnel(ctx, { unitMode: () => true, isAlive: () => false });
+  fs.writeFileSync(path.join(sup, 'tunnel.log'), 'Tunnel: Relay dvhub-support@support.dvhub.de:47821, Ports 49000/49001, 3600 s\n');
+  assert.equal(tun.status().lastError, null);
+  fs.writeFileSync(path.join(sup, 'tunnel.log'), 'Tunnel: Relay dvhub-support@support.dvhub.de:47821, Ports 49000/49001, 3600 s\nTunnel nach Ablauf geschlossen.\n');
+  assert.equal(tun.status().lastError, null);
+});
+
+test('Dienst-Modus: neben Info-Zeilen bleibt nur die Fehlerzeile', () => {
+  const { sup, ctx } = realBox({ ports: [49000, 49001] });
+  const tun = createSupportTunnel(ctx, { unitMode: () => true, isAlive: () => false });
+  fs.writeFileSync(path.join(sup, 'tunnel.log'), 'Tunnel: Relay dvhub-support@support.dvhub.de:47821, Ports 49000/49001, 3600 s\nError: remote port forwarding failed for listen port 49000\n');
+  assert.equal(tun.status().lastError, 'Error: remote port forwarding failed for listen port 49000');
+});
+
 test('Dienst-Modus: Zustandsdatei eines toten oder abgelaufenen Tunnels zählt nicht', () => {
   const { sup, ctx } = realBox({ ports: [49120, 49121] });
   const nowMs = 1_800_000_000_000;

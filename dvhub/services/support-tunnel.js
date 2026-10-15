@@ -368,9 +368,14 @@ export function createSupportTunnel(ctx, deps = {}) {
     return { openedAt: Number(st.startedAt) || null, expiresAt: Number.isFinite(expires) ? expires : null };
   }
 
+  // Info-Zeilen von dvhub-support-tunnel.sh (Dienst-Modus) — kein Fehler. Vorher
+  // meldete status() nach dem Schließen „Tunnel: Relay …“ als lastError ans Portal.
+  const TUNNEL_INFO_LINE = /^(Tunnel: Relay |Tunnel nach Ablauf geschlossen|Auftrag abgelaufen)/;
+
   function unitLastError() {
     try {
-      const tail = String(fsImpl.readFileSync(supportPaths().logPath, 'utf8')).trim().split('\n').filter(Boolean).slice(-3).join(' | ');
+      const tail = String(fsImpl.readFileSync(supportPaths().logPath, 'utf8')).trim().split('\n')
+        .filter((l) => l && !TUNNEL_INFO_LINE.test(l)).slice(-3).join(' | ');
       return tail ? tail.slice(-500) : null;
     } catch { return null; }
   }
