@@ -132,7 +132,8 @@ describe('Plan 09-02 admin-service-gate: /api/admin/system/info honours getServi
     // a UI change. (Same assertion against the source as the integration
     // tests use — see test/integration-endpoints.test.js for the pattern.)
     const fs = await import('node:fs');
-    const src = fs.readFileSync(new URL('../routes-api.js', import.meta.url), 'utf8');
+    // Seit 2026-10-15 in routes/admin-routes.js (aus routes-api.js herausgelöst).
+    const src = fs.readFileSync(new URL('../routes/admin-routes.js', import.meta.url), 'utf8');
     // Locate the system/info handler block (line range chosen by anchoring
     // on the unique handler signature) and inspect the first 200 chars.
     const idx = src.indexOf("url.pathname === '/api/admin/system/info'");

@@ -62,7 +62,12 @@ export default [
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',
-      globals: globals.node,
+      // Das globale `crypto` ist WebCrypto (ohne randomBytes, createHash …).
+      // Im Backend ist immer node:crypto gemeint — ohne Import soll no-undef
+      // anschlagen, statt erst zur Laufzeit zu scheitern (2026-10-15: beim
+      // Herauslösen von routes/admin-routes.js fiel der Import weg, und ESLint
+      // schwieg, weil `crypto` global bekannt war).
+      globals: { ...globals.node, crypto: 'off' },
     },
     rules: baseRules,
   },
