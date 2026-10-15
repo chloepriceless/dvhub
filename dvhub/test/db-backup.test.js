@@ -131,6 +131,96 @@ test('nonzero exit MID-stream destroys the connection (no truncated "backup")', 
   assert.equal(res.destroyed, true);
 });
 
+// Client bricht den Download ab (Browser zu, Netz weg): res schließt, pipe()
+// hängt sich ab, und pg_dump blockierte für immer an der vollen Pipe — mit
+// offenem Lese-Snapshot auf der Datenbank (eHive 2026-10-15, 1:39 min stehen
+// geblieben, bis er von Hand beendet wurde).
+function closableRes() {
+  const res = Object.assign(new EventEmitter(), fakeRes());
+  res.writableFinished = false;
+  return res;
+}
+function killableChild() {
+  const child = fakeChild();
+  child.kills = [];
+  child.kill = (sig) => { child.kills.push(sig); return true; };
+  return child;
+}
+
+test('Download abgebrochen → pg_dump wird beendet, als abgebrochen protokolliert', () => {
+  const res = closableRes();
+  const child = killableChild();
+  const logs = [];
+  streamPgDump({ scope: 'energy15m', database: {}, res, stamp: 's', spawnFn: () => child, pushLog: (e, d) => logs.push([e, d]) });
+  child.stdout.emit('data', Buffer.from('PGDMP-teil'));
+  res.emit('close');
+  assert.deepEqual(child.kills, ['SIGTERM']);
+  child.emit('close', null, 'SIGTERM');
+  assert.deepEqual(logs.map((l) => l[0]), ['db_backup_aborted']);
+  assert.deepEqual(logs[0][1], { scope: 'energy15m' });
+});
+
+test('Abbruch noch vor dem ersten Byte → pg_dump wird ebenfalls beendet', () => {
+  const res = closableRes();
+  const child = killableChild();
+  streamPgDump({ scope: 'full', database: {}, res, spawnFn: () => child });
+  res.emit('close');
+  assert.deepEqual(child.kills, ['SIGTERM']);
+});
+
+test('fertig übertragen → res-close beendet nichts, Erfolg wird protokolliert', () => {
+  const res = closableRes();
+  const child = killableChild();
+  const logs = [];
+  streamPgDump({ scope: 'full', database: {}, res, stamp: 's', spawnFn: () => child, pushLog: (e) => logs.push(e) });
+  child.stdout.emit('data', Buffer.from('PGDMP'));
+  res.writableFinished = true;
+  res.emit('close');
+  child.emit('close', 0);
+  assert.deepEqual(child.kills, []);
+  assert.deepEqual(logs, ['db_backup_ok']);
+});
+
+test('pg_dump schon beendet → späteres res-close beendet nichts', () => {
+  const res = closableRes();
+  const child = killableChild();
+  streamPgDump({ scope: 'full', database: {}, res, stamp: 's', spawnFn: () => child });
+  child.stdout.emit('data', Buffer.from('PGDMP'));
+  child.emit('close', 0);
+  res.emit('close');
+  assert.deepEqual(child.kills, []);
+});
+
+test('echte Grenze: Client bricht ab → der echte Kindprozess endet', async () => {
+  const http = await import('node:http');
+  const { spawn } = await import('node:child_process');
+  let child;
+  const exited = new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      streamPgDump({
+        scope: 'full', database: {}, res, stamp: 's',
+        runtime: { direct: true, binDir: '/x', adminPassword: 'x' },
+        // Ersatz für pg_dump: schreibt endlos, wie ein großer Dump
+        spawnFn: () => {
+          child = spawn(process.execPath, ['-e', 'const b=Buffer.alloc(65536,65);(function w(){while(process.stdout.write(b));process.stdout.once("drain",w)})()']);
+          child.on('exit', (code, signal) => { server.close(); resolve({ code, signal }); });
+          return child;
+        },
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const req = http.get({ host: '127.0.0.1', port: server.address().port, path: '/' }, (r) => {
+        r.once('data', () => req.destroy()); // erstes Stück da, dann abbrechen
+      });
+      req.on('error', () => {});
+    });
+  });
+  const timer = setTimeout(() => { try { child?.kill('SIGKILL'); } catch { /* */ } }, 10000);
+  const out = await exited;
+  clearTimeout(timer);
+  assert.equal(out.signal, 'SIGTERM', 'beendet durch den Abbruch, nicht erst durch die Notbremse');
+});
+
 // --- backup/restore run as the postgres superuser (sudo) --------------------
 
 test('buildPgDumpArgs superuser: connect as postgres, keep ownership + grants', () => {

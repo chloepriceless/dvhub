@@ -156,9 +156,22 @@ export function streamPgDump({ scope, database = {}, res, securityHeaders = {}, 
 
   let headersSent = false;
   let stderr = '';
+  let childDone = false;
+  let aborted = false;
   if (child.stderr) {
     child.stderr.on('data', (d) => { if (stderr.length < 4000) stderr += d.toString(); });
   }
+
+  // Bricht der Client den Download ab (Browser zu, Netz weg), schließt res und
+  // pipe() hängt sich ab. pg_dump blockierte dann für immer an der vollen Pipe
+  // und hielt einen Lese-Snapshot auf der Datenbank (eHive 2026-10-15). Nach
+  // vollständiger Übertragung (writableFinished) bleibt er in Ruhe.
+  res.on?.('close', () => {
+    if (childDone || res.writableFinished) return;
+    aborted = true;
+    try { child.kill('SIGTERM'); } catch { /* schon beendet */ }
+    if (pushLog) pushLog('db_backup_aborted', { scope });
+  });
 
   child.on('error', (err) => {
     if (!headersSent && !res.headersSent) {
@@ -187,6 +200,8 @@ export function streamPgDump({ scope, database = {}, res, securityHeaders = {}, 
   });
 
   child.on('close', (code) => {
+    childDone = true;
+    if (aborted) return;
     if (code !== 0) {
       if (!headersSent && !res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json' });
