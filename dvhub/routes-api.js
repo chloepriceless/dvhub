@@ -4975,10 +4975,12 @@ export function createApiRoutes(ctx) {
       if (!st.canRestart) return json(res, 409, { ok: false, error: st.reason, restart: st });
       if (st.restarting) return json(res, 202, { ok: true, accepted: true, alreadyRunning: true, restart: st });
       const pending = ctx.eosRestarter.restart({ via: 'ui', actor: actorContext(req) });
-      // Sofort abgewiesene Aufrufe (zu kurz hintereinander) direkt melden.
+      // Sofort abgewiesene oder gescheiterte Aufrufe (zu kurz hintereinander,
+      // sudo verweigert) direkt melden statt „angestoßen“.
       const early = await Promise.race([pending, new Promise((r) => setTimeout(() => r(null), 50))]);
-      if (early && early.ok === false && early.error === 'too_soon') {
-        return json(res, 429, { ok: false, error: 'too_soon', restart: ctx.eosRestarter.status() });
+      if (early && early.ok === false) {
+        const code = early.error === 'too_soon' ? 429 : 502;
+        return json(res, code, { ok: false, error: early.error, detail: early.detail || null, restart: ctx.eosRestarter.status() });
       }
       return json(res, 202, { ok: true, accepted: true, restart: ctx.eosRestarter.status() });
     }

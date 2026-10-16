@@ -201,6 +201,18 @@ test('POST /api/eos/restart — zu schnell hintereinander: 429', async () => {
   assert.equal(captured.status, 429);
 });
 
+// Fehlt die sudoers-Regel, scheitert `sudo -n` sofort — dann darf die Route
+// nicht „angestoßen“ melden (lokal beobachtet 2026-10-17: 202 trotz Fehler).
+test('POST /api/eos/restart — sofort gescheitert (sudo verweigert): 502 mit Fehlertext', async () => {
+  const ctx = mockCtx({ eosMonitor: monitorStub() });
+  ctx.eosRestarter = restarterStub({ result: { ok: false, error: 'restart_failed', detail: 'sudo: a password is required' } });
+  const captured = await dispatch(ctx, makeReq('/api/eos/restart', { method: 'POST', ip: LAN_IP }));
+  assert.equal(captured.status, 502, `body=${captured.body}`);
+  const body = JSON.parse(captured.body);
+  assert.equal(body.error, 'restart_failed');
+  assert.match(body.detail, /password is required/);
+});
+
 test('GET /api/eos/status — enthält den Neustart-Zustand', async () => {
   const ctx = mockCtx({ eosMonitor: monitorStub() });
   ctx.eosRestarter = restarterStub();

@@ -4443,7 +4443,7 @@ function appendEosRestartControlForecastInspector(banner, rs) {
       var r = await apiFetch('/api/eos/restart', { method: 'POST' });
       var j = await r.json().catch(function () { return {}; });
       if (r.status === 429) result.textContent = ' Gerade erst neu gestartet — bitte einen Moment warten.';
-      else if (!r.ok) result.textContent = ' Neustart nicht möglich: ' + (j.error || r.status);
+      else if (!r.ok) result.textContent = ' Neustart nicht möglich: ' + (j.detail || j.error || r.status);
       else result.textContent = ' Neustart angestoßen. Der neue Plan erscheint nach dem nächsten Lauf (einige Minuten).';
     } catch (e) {
       result.textContent = ' Neustart fehlgeschlagen: ' + (e && e.message ? e.message : e);

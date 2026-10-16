@@ -67,4 +67,43 @@ describe('GET /api/integration/loxone — dvhub_control_* Zeilen', () => {
     assert.equal(lines.dvhub_control_paused, 'false');
     assert.equal(Object.keys(lines).some(k => /feed_excess/i.test(k)), false);
   });
+
+  // Feldfall 2026-10-16: userEnergyPricing (41 KB JSON) stand vor den
+  // Steuerzeilen; Loxone bekam sie erst ab Byte ~42 400.
+  it('Reihenfolge: timestamp, dann dvhub_control_*, dann einfache Werte, JSON-Blöcke zuletzt', async () => {
+    const { srv, baseUrl } = await startHandler(makeCtx());
+    after(() => new Promise((r) => srv.close(r)));
+    const res = await fetch(baseUrl + '/api/integration/loxone', { headers: { 'Authorization': 'Bearer ' + TEST_TOKEN } });
+    const rows = (await res.text()).split('\n').filter(Boolean).map((l) => {
+      const i = l.indexOf('=');
+      return { key: l.slice(0, i), block: /^[[{]/.test(l.slice(i + 1)) };
+    });
+    const nControl = rows.filter(r => r.key.startsWith('dvhub_control_')).length;
+    const firstBlock = rows.findIndex(r => r.block);
+    assert.equal(rows[0].key, 'timestamp');
+    assert.ok(nControl > 0);
+    assert.equal(rows.slice(1, 1 + nControl).every(r => r.key.startsWith('dvhub_control_')), true,
+      `Steuerzeilen direkt nach timestamp: ${rows.slice(0, 12).map(r => r.key).join(', ')}`);
+    assert.ok(firstBlock > nControl + 1, 'mindestens ein JSON-Block, und zwar hinter den einfachen Werten');
+    assert.equal(rows.slice(firstBlock).every(r => r.block), true, 'nach dem ersten JSON-Block nur noch JSON-Blöcke');
+  });
+});
+
+describe('GET /api/integrations/dataflow — Datenfluss-Übersicht', () => {
+  it('Loxone-Kanal: Byte-Position der Sollwerte stimmt mit der echten Loxone-Antwort überein', async () => {
+    const { srv, baseUrl } = await startHandler(makeCtx());
+    after(() => new Promise((r) => srv.close(r)));
+    const auth = { headers: { 'Authorization': 'Bearer ' + TEST_TOKEN } };
+    const res = await fetch(baseUrl + '/api/integrations/dataflow', auth);
+    const df = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(df).slice(0, 300));
+    const lox = df.out.channels.find(c => c.kind === 'loxone_http');
+    const body = Buffer.from(await (await fetch(baseUrl + '/api/integration/loxone', auth)).text());
+    assert.equal(lox.bytes, body.length);
+    assert.equal(lox.lines, body.toString().split('\n').length);
+    assert.equal(lox.controlByteOffset, body.indexOf('dvhub_control_'));
+    assert.equal(df.out.control.source, 'eos');
+    assert.equal(df.out.control.rows.find(r => r.key === 'gridSetpointW').value, -3000);
+    assert.equal(df.out.dvSignal.value, 1);
+  });
 });

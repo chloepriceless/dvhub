@@ -309,6 +309,22 @@ describe('legal-gate flip detection — gate the ENABLE transition only (covers 
     assert.equal(JSON.parse(captured.body).error, 'legal_gate_flip_requires_confirmation');
   });
 
+  // 2026-10-16: „Netzladen auch ohne Pauschal-/Abgrenzungsoption“ ist ein
+  // eigener rechtlicher Schalter und braucht dieselbe Bestätigung.
+  it('gridChargeWithoutMispel: Einschalten ohne Header → 403, mit Header → 200 + protokolliert', async () => {
+    const pushSpy = [];
+    const ctx = mockCtx({ optimizerOverrides: { allowGridCharge: true }, pushLogSpy: pushSpy });
+    const routes = createApiRoutes(ctx);
+    const body = { config: { apiToken: API_TOKEN, optimizer: { enabled: false, allowGridCharge: true, gridChargeWithoutMispel: true } } };
+    const rejected = await dispatch(routes, makeReq('/api/config', { method: 'POST', body }));
+    assert.equal(rejected.status, 403, `body=${rejected.body}`);
+    assert.deepEqual(JSON.parse(rejected.body).paths, ['optimizer.gridChargeWithoutMispel']);
+
+    const accepted = await dispatch(routes, makeReq('/api/config', { method: 'POST', body, extraHeaders: { 'x-confirm-legal-gate': 'true' } }));
+    assert.equal(accepted.status, 200, `body=${accepted.body}`);
+    assert.deepEqual(pushSpy.find(e => e.event === 'legal_gate_flipped').details.paths, ['optimizer.gridChargeWithoutMispel']);
+  });
+
   it('POST body that omits the legal-gate keys entirely does NOT trigger the gate (after === undefined)', async () => {
     // Partial settings POSTs that don't touch the legal-gate paths at all
     // must pass without the header. The gate filter requires `after !==
