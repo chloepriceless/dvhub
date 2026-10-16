@@ -1748,3 +1748,26 @@
 /* Planbare Verbraucher · my-PV direkt: Port und Unit nebeneinander, Live-Zeile */
 .scheddev-pair { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; }
 .scheddev-row-main .dv-warn { color:var(--yellow); }
+
+/* Datenfluss-Übersicht (2026-10-16): rein / so versteht DVhub / raus. */
+.dv-df-h { margin: 18px 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.dv-df-h code, .dv-df-table code { font-size: 11px; }
+.dv-df-table small { color: var(--text-2); }
+.dv-df-dot {
+  display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%;
+  background: var(--text-2); vertical-align: middle;
+}
+.dv-df-table tr.is-fresh .dv-df-dot { background: var(--green); }
+.dv-df-table tr.is-stale .dv-df-dot { background: var(--warn); }
+.dv-df-table tr.is-missing .dv-df-dot { background: var(--danger); }
+.dv-df-table tr.is-missing td { color: var(--text-2); }
+.dv-df-table tr.is-optional td { color: var(--text-2); }
+.dv-df-err { color: var(--danger); }
+.dv-df-checks { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; }
+.dv-df-check {
+  padding: 8px 10px; border-radius: var(--r-sm, 8px); font-size: 12px;
+  border: 1px solid var(--glass-brd); background: var(--glass-2);
+}
+.dv-df-check.is-warn { border-color: var(--warn); }
+.dv-df-check.is-error { border-color: var(--danger); }
+.dv-df-foot { margin-top: 12px; font-size: 11px; color: var(--text-2); }

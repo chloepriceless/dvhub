@@ -106,6 +106,10 @@
         <span class="intg-extra-logo" aria-hidden="true">&#9638;</span>
         <span class="intg-extra-text"><strong>MQTT-Kacheln</strong><small>Family-Dashboard</small></span>
       </button>
+      <button type="button" class="intg-extra" id="intg-extra-dataflow" data-intg-extra="dataflow">
+        <span class="intg-extra-logo" aria-hidden="true">&#8644;</span>
+        <span class="intg-extra-text"><strong>Datenfluss</strong><small>Was kommt rein, was geht raus</small></span>
+      </button>
       </div>
       <section class="intg-detail" id="intg-detail" aria-label="Gew&auml;hlte Integration">
         <div class="intg-detail-card" id="intg-detail-card"></div>
@@ -1099,6 +1103,7 @@
             </p>
             <div class="dv-code-actions">
               <button type="button" class="btn sm ghost" id="ha-rest-copy">&#128203; Kopieren</button>
+              <button type="button" class="btn sm ghost" data-open-dataflow>&#8644; Datenfluss ansehen</button>
             </div>
             <pre class="dv-code" id="ha-rest-yaml">&mdash;</pre>
           </details>
@@ -1109,6 +1114,48 @@
       <!-- Loxone Virtual HTTP Input drawer (operator request 2026-06-13: same
            copy-paste convenience as the HA card, but a Loxone Config import
            template). Data source: /api/integration/loxone (key=value text). -->
+      <!-- Datenfluss-Übersicht (2026-10-16): was DVhub empfängt, wie es die Werte
+           versteht und was über welchen Kanal hinausgeht. Datenquelle:
+           GET /api/integrations/dataflow (services/dataflow.js). -->
+      <div class="dv-drawer-backdrop" id="dv-drawer-dataflow-backdrop" hidden></div>
+      <aside class="dv-drawer" id="dv-drawer-dataflow" role="dialog" aria-modal="true"
+             aria-labelledby="dv-drawer-dataflow-title" hidden>
+        <header class="dv-drawer-head">
+          <h2 id="dv-drawer-dataflow-title">Datenfluss &mdash; was kommt rein, was geht raus</h2>
+          <div class="dv-drawer-head-actions">
+            <button type="button" class="btn sm ghost dv-drawer-close"
+                    id="dv-drawer-dataflow-close" aria-label="Schlie&szlig;en">&times;</button>
+          </div>
+        </header>
+        <div class="dv-drawer-body" id="dv-drawer-dataflow-body">
+          <p class="dv-drawer-intro">
+            Hier siehst du, welche Werte DVhub gerade <strong>empf&auml;ngt</strong>, wie DVhub sie
+            <strong>versteht</strong> und welche Sollwerte es <strong>hinausgibt</strong>. Stimmt etwas
+            nicht mit deiner Anlage &uuml;berein (Loxone, Home Assistant, Skript), liegt es meist an der
+            Zuordnung, der Einheit (kW statt W) oder am Vorzeichen.
+          </p>
+          <div class="dv-df-checks" id="df-checks" hidden></div>
+          <h3 class="dv-df-h">Rein &mdash; <span id="df-source">&mdash;</span></h3>
+          <table class="dv-sessions-table dv-df-table">
+            <thead><tr><th>Wert</th><th>Feld / Topic</th><th class="num">Empfangen</th><th class="num">Alter</th></tr></thead>
+            <tbody id="df-in"><tr><td colspan="4">&mdash;</td></tr></tbody>
+          </table>
+          <h3 class="dv-df-h">So versteht DVhub die Werte</h3>
+          <table class="dv-sessions-table dv-df-table">
+            <thead><tr><th>Gr&ouml;&szlig;e</th><th class="num">Wert</th><th>Hinweis</th></tr></thead>
+            <tbody id="df-seen"><tr><td colspan="3">&mdash;</td></tr></tbody>
+          </table>
+          <h3 class="dv-df-h">Raus &mdash; Sollwerte <span id="df-control-source"></span></h3>
+          <table class="dv-sessions-table dv-df-table">
+            <thead><tr><th>Sollwert</th><th class="num">Wert</th><th>Quelle</th><th class="num">Seit</th></tr></thead>
+            <tbody id="df-out"><tr><td colspan="4">&mdash;</td></tr></tbody>
+          </table>
+          <h3 class="dv-df-h">Raus &mdash; Kan&auml;le</h3>
+          <div class="dv-info-box" id="df-channels">&mdash;</div>
+          <p class="dv-df-foot">Aktualisiert sich alle 5&nbsp;s, solange diese Ansicht offen ist &middot; Stand <span id="df-stand">&mdash;</span></p>
+        </div>
+      </aside>
+
       <div class="dv-drawer-backdrop" id="dv-drawer-loxone-backdrop" hidden></div>
       <aside class="dv-drawer" id="dv-drawer-loxone" role="dialog" aria-modal="true"
              aria-labelledby="dv-drawer-loxone-title" hidden>
@@ -1148,6 +1195,7 @@
           </div>
           <div class="dv-code-actions">
             <button type="button" class="btn sm ghost" id="lox-copy">&#128203; Vorlage kopieren</button>
+            <button type="button" class="btn sm ghost" data-open-dataflow>&#8644; Datenfluss ansehen</button>
           </div>
           <pre class="dv-code" id="lox-template">&mdash;</pre>
         </div>

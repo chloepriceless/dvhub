@@ -25,6 +25,7 @@ import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
 import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, gridLimitSnapshotFlat } from './services/control-snapshot.js';
+import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
@@ -1236,6 +1237,8 @@ export function createApiRoutes(ctx) {
     // 'strict' weiterhin ein Token (POST ist nie LAN-sicher).
     '/api/datenspende/status',
     '/api/input/status',
+    // Datenfluss-Übersicht (rein/raus) — reiner Lesezugriff wie /api/input/status.
+    '/api/integrations/dataflow',
     '/api/ortsnetz/status',
     '/api/eos/status',
     '/api/inverter-efficiency/curve',
@@ -1278,7 +1281,8 @@ export function createApiRoutes(ctx) {
     ['/api/integration/eos', 'integrations'], ['/api/integration/emhass', 'integrations'],
     ['/api/integration/evcc', 'integrations'], ['/api/integration/evcc/eos', 'integrations'],
     ['/api/integrations/health', 'integrations'], ['/api/datenspende/status', 'integrations'],
-    ['/api/input/status', 'integrations'], ['/api/ortsnetz/status', 'integrations'],
+    ['/api/input/status', 'integrations'], ['/api/integrations/dataflow', 'integrations'],
+    ['/api/ortsnetz/status', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -1869,6 +1873,23 @@ export function createApiRoutes(ctx) {
       pulseTimestamp: slotTs,
       now
     };
+  }
+
+  // Loxone (Virtueller HTTP Eingang) liest key=value-Zeilen von oben. Feldfall
+  // 2026-10-16: userEnergyPricing allein war 41 KB lang, die Steuerzeilen
+  // standen erst ab Byte ~42 400. Deshalb: Zeitstempel und dvhub_control_*
+  // zuerst, dann einfache Werte, JSON-Blöcke ans Ende. Alle Schlüssel bleiben.
+  function loxoneLines(s) {
+    const entries = Object.entries(s);
+    const isBlock = ([, v]) => v !== null && typeof v === 'object';
+    const isControl = ([k]) => k.startsWith('dvhub_control_');
+    const ordered = [
+      ...entries.filter(([k]) => k === 'timestamp'),
+      ...entries.filter(isControl),
+      ...entries.filter((e) => e[0] !== 'timestamp' && !isControl(e) && !isBlock(e)),
+      ...entries.filter((e) => !isControl(e) && isBlock(e)),
+    ];
+    return ordered.map(([k, v]) => `${k}=${isBlock([k, v]) ? JSON.stringify(v) : v}`);
   }
 
   async function integrationState() {
@@ -3015,8 +3036,7 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname === '/api/integration/loxone' && req.method === 'GET') {
       const s = await integrationState();
-      const lines = Object.entries(s).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`);
-      return text(res, 200, lines.join('\n'));
+      return text(res, 200, loxoneLines(s).join('\n'));
     }
 
     // Optimizer status endpoint
@@ -4598,6 +4618,42 @@ export function createApiRoutes(ctx) {
     // model only; the EOS engine config lives in EOSdash. (Operator request
     // 2026-06-13: a dedicated card for her DV-EOS fork, not the stock EOS.)
     // ── Eingang HA/Loxone: Status + Push-Schlüssel ─────────────────────────
+    // Datenfluss-Übersicht (services/dataflow.js): was DVhub empfängt, wie es die
+    // Werte versteht und was über welchen Kanal hinausgeht — zum Prüfen für
+    // Loxone-, Home-Assistant- und andere HTTP-/MQTT-Anbindungen.
+    if (url.pathname === '/api/integrations/dataflow' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const cfg = getCfg();
+      const lox = loxoneLines(await integrationState());
+      const firstControl = lox.findIndex((l) => l.startsWith('dvhub_control_'));
+      const hub = ctx.mqttHub?.getStatus?.() || null;
+      const prefix = cfg.mqtt?.topicPrefix || 'dvhub';
+      const channels = [
+        {
+          kind: 'loxone_http', label: 'Loxone (Virtueller HTTP Eingang)', url: '/api/integration/loxone', method: 'GET',
+          lines: lox.length,
+          bytes: Buffer.byteLength(lox.join('\n')),
+          controlByteOffset: firstControl < 0 ? null : Buffer.byteLength(lox.slice(0, firstControl).join('\n')) + (firstControl > 0 ? 1 : 0),
+        },
+        { kind: 'home_assistant', label: 'Home Assistant (REST, JSON)', url: '/api/integration/home-assistant', method: 'GET' },
+        {
+          kind: 'mqtt', label: 'MQTT', enabled: hub?.enabled === true, connected: hub?.connected === true,
+          topics: hub?.enabled ? [`${prefix}/control/grid_setpoint_w`, `${prefix}/control/charge_current_a`, `${prefix}/control/min_soc_pct`, `${prefix}/control/max_discharge_w`, `${prefix}/control/source`] : [],
+        },
+        {
+          kind: 'dv_modbus', label: `Direktvermarkter (Modbus, ${cfg.dvInterface?.profile || 'plexlog'})`,
+          port: cfg.modbusListenPort ?? null, lastQuery: state.keepalive?.modbusLastQuery || null,
+        },
+      ];
+      return json(res, 200, buildDataflow({
+        cfg, state, transport: ctx.transport,
+        controlSnapshot: buildControlSnapshot(state),
+        gridLimit: buildGridLimitSnapshot(state),
+        channels,
+        dvControlValue: typeof ctx.controlValue === 'function' ? ctx.controlValue() : null,
+        now: Date.now(),
+      }));
+    }
     if (url.pathname === '/api/input/status' && req.method === 'GET') {
       const t = ctx.transport;
       const active = t?.type === 'mqtt' && t?.schema === 'dvhub';

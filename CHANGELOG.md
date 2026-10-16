@@ -20,6 +20,17 @@ verweist hierher.
   starten“ an (`POST /api/eos/restart`). Neue sudoers-Regel nur für `systemctl restart eos.service` (ohne Wildcard,
   auch mit sudo-rs gültig); sie kommt mit dem nächsten Update automatisch auf die Box. Gilt für das EOS auf derselben
   Box, nicht im Container und nicht für ein entferntes EOS.
+- **Datenfluss-Übersicht: was kommt rein, was geht raus.** Unter Integrationen → „Datenfluss“ (und aus den
+  Bereichen Loxone und Home Assistant) zeigt DVhub, welche Werte gerade ankommen (Feld/Topic, Wert, Alter, frisch
+  oder veraltet), wie DVhub sie versteht (Netz, PV, Akku, Ladestand, Hausverbrauch) und welche Sollwerte über
+  welchen Kanal hinausgehen (Loxone-HTTP mit Größe und Position der Sollwerte, Home Assistant, MQTT,
+  Direktvermarkter-Modbus mit letzter Abfrage). Prüfhinweise melden typische Zuordnungsfehler: PV über 120 % der
+  eingetragenen kWp, Ladestand außerhalb 0–100 %, Akku-Leistung weit über der Grenze, Energiebilanz geht nicht auf
+  (Vorzeichen, doppelt gezählte Werte), veraltete oder fehlende Pflichtwerte. `GET /api/integrations/dataflow`.
+- **Netzladen auch ohne Pauschal-/Abgrenzungsoption.** Neuer rechtlicher Schalter: Wer den Speicher bewusst mit
+  Netzstrom laden will (z. B. im Winter mit dynamischem Tarif oder §14a Modul 3), kann die MiSpeL-Sperre aufheben,
+  solange die Optionen noch nicht verfügbar sind. Bestätigung wie bei den anderen rechtlichen Schaltern; wirkt nur
+  zusammen mit „Netzladen erlaubt“. Hinweis auf das EEG-Risiko für eingespeiste Mischmengen im Hilfetext.
 - **Fern-Support über das Portal öffnen.** Im Installateurs-Portal öffnet „Fern-Support öffnen" den
   Tunnel zur Anlage — ohne Schlüsselaustausch per Chat, ohne Terminal beim Kunden und ohne Handarbeit
   am Relay. Die Anlage meldet ihren öffentlichen Relay-Schlüssel ans Portal; beim ersten Öffnen trägt
@@ -105,6 +116,9 @@ verweist hierher.
 
 ### Behoben
 
+- **Loxone: Sollwerte stehen jetzt oben in der Antwort.** `GET /api/integration/loxone` gibt Zeitstempel und
+  `dvhub_control_*` zuerst aus, JSON-Blöcke am Ende. Vorher stand allein `userEnergyPricing` mit über 40 KB vor den
+  Sollwerten — Loxone liest große Antworten womöglich nicht bis dorthin. Alle Schlüssel bleiben erhalten.
 - **EOS plante mit 10 kW Wechselrichterleistung, egal wie groß die Anlage ist.** Für die
   Wechselrichter-Nennleistung gab es kein Eingabefeld; eine Änderung direkt in EOS überschrieb DVhub
   beim nächsten Abgleich wieder. Jetzt gibt es unter „Akku-Grenzen“ das Feld

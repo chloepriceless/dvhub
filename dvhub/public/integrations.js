@@ -299,6 +299,8 @@
     }
     var extra = document.getElementById('intg-extra-mqtt-tiles');
     if (extra) extra.classList.toggle('is-selected', intgSelectedKey === '__mqttTiles');
+    var dfExtra = document.getElementById('intg-extra-dataflow');
+    if (dfExtra) dfExtra.classList.toggle('is-selected', intgSelectedKey === 'dataflow');
     var empty = document.getElementById('intg-detail-empty');
     if (empty) empty.hidden = !!intgSelectedKey;
   }
@@ -1897,6 +1899,11 @@
       if (inst) { inst.open(); setTimeout(loadDveosDrawer, 0); }
       return true;
     }
+    if (key === 'dataflow') {
+      inst = getOrCreateDrawer('dataflow');
+      if (inst) { inst.open(); setTimeout(startDataflow, 0); }
+      return true;
+    }
     if (key === 'loxone') {
       inst = getOrCreateDrawer('loxone');
       if (inst) { inst.open(); setTimeout(loadLoxoneDrawer, 0); }
@@ -1981,6 +1988,12 @@
     if (e.target.closest('a')) return;
 
     // Card → drawer routing by data-system (single shared path with "Konfig.").
+    var dfBtn = e.target.closest('[data-intg-extra="dataflow"], [data-open-dataflow]');
+    if (dfBtn) {
+      e.preventDefault();
+      if (!selectSystem('dataflow')) openDrawerForSystem('dataflow');
+      return;
+    }
     var extraBtn = e.target.closest('[data-intg-extra="mqttTiles"]');
     if (extraBtn) {
       if (selectSystem('__mqttTiles')) { e.preventDefault(); return; }
@@ -3486,6 +3499,112 @@
     lines.push('</VirtualInHttp>');
     return lines.join('\n');
   }
+  // Datenfluss-Übersicht (2026-10-16): GET /api/integrations/dataflow, alle 5 s,
+  // solange die Seitenleiste offen ist.
+  var dataflowTimer = null;
+  function dataflowOpen() {
+    var root = document.getElementById('dv-drawer-dataflow');
+    return !!(root && root.classList.contains('is-open'));
+  }
+  function startDataflow() {
+    if (dataflowTimer) clearInterval(dataflowTimer);
+    loadDataflow();
+    dataflowTimer = setInterval(function () {
+      if (!dataflowOpen()) { clearInterval(dataflowTimer); dataflowTimer = null; return; }
+      loadDataflow();
+    }, 5000);
+  }
+  function dfNum(v, unit) {
+    if (v === null || v === undefined || v === '') return '—';
+    var n = Number(v);
+    if (!isFinite(n)) return esc(String(v));
+    var txt = Math.abs(n) >= 1000 ? Math.round(n).toLocaleString('de-DE') : (Math.round(n * 10) / 10).toLocaleString('de-DE');
+    return txt + (unit ? '&nbsp;' + esc(unit) : '');
+  }
+  function dfAge(ms) {
+    if (ms === null || ms === undefined) return '—';
+    var s = Math.round(ms / 1000);
+    if (s < 90) return s + '&nbsp;s';
+    var m = Math.round(s / 60);
+    return m < 90 ? m + '&nbsp;min' : Math.round(m / 60) + '&nbsp;h';
+  }
+  function dfSince(at) {
+    var t = typeof at === 'number' ? at : Date.parse(at || '');
+    return isFinite(t) && t > 0 ? dfAge(Date.now() - t) : '—';
+  }
+  function loadDataflow() {
+    apiFetch('/api/integrations/dataflow').then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.ok) return;
+      var src = document.getElementById('df-source');
+      if (src) {
+        var s = d.in && d.in.source ? d.in.source : {};
+        src.innerHTML = esc(s.label || '—') + (s.endpoint ? ' <code>' + esc(s.endpoint) + '</code>' : '');
+      }
+      var checks = document.getElementById('df-checks');
+      if (checks) {
+        var list = d.checks || [];
+        checks.hidden = !list.length;
+        checks.innerHTML = list.map(function (c) {
+          return '<div class="dv-df-check is-' + esc(c.level) + '">' + (c.level === 'error' ? '&#10006; ' : '&#9888; ') + esc(c.text) + '</div>';
+        }).join('');
+      }
+      var tin = document.getElementById('df-in');
+      if (tin) {
+        var rows = (d.in && d.in.inputs) || [];
+        tin.innerHTML = rows.length ? rows.map(function (i) {
+          var cls = !i.received ? (i.optional ? 'is-optional' : 'is-missing') : (i.fresh ? 'is-fresh' : 'is-stale');
+          var field = i.pushField ? '<code>' + esc(i.pushField) + '</code>' : '';
+          if (i.topic) field += (field ? '<br>' : '') + '<small>' + esc(i.topic) + '</small>';
+          if (i.error) field += (field ? '<br>' : '') + '<small class="dv-df-err">' + esc(i.error) + '</small>';
+          return '<tr class="' + cls + '"><td><span class="dv-df-dot" aria-hidden="true"></span>' + esc(i.label) + '</td><td>' + (field || '—') +
+            '</td><td class="num">' + (i.received ? dfNum(i.value, i.unit) : (i.optional ? 'nicht geliefert (optional)' : 'kommt nicht an')) + '</td><td class="num">' + dfAge(i.ageMs) + '</td></tr>';
+        }).join('') : '<tr><td colspan="4">Keine Eingänge.</td></tr>';
+      }
+      var tseen = document.getElementById('df-seen');
+      if (tseen) {
+        tseen.innerHTML = (d.seen || []).map(function (r) {
+          return '<tr><td>' + esc(r.label) + '</td><td class="num">' + dfNum(r.value, r.unit) + '</td><td>' + esc(r.note || '') + '</td></tr>';
+        }).join('');
+      }
+      var out = d.out || {};
+      var ctl = out.control || {};
+      var cs = document.getElementById('df-control-source');
+      if (cs) cs.textContent = ctl.source ? '(Quelle: ' + ctl.source + (ctl.rule ? ', Regel ' + ctl.rule : '') + (ctl.paused ? ', Not-Halt aktiv' : '') + ')' : '';
+      var tout = document.getElementById('df-out');
+      if (tout) {
+        var crow = (ctl.rows || []).map(function (r) {
+          return '<tr><td>' + esc(r.label) + '</td><td class="num">' + dfNum(r.value, r.unit) + '</td><td>' + esc(r.source || (r.origin === 'readback' ? 'Rücklesung' : '—')) +
+            '</td><td class="num">' + dfSince(r.at) + '</td></tr>';
+        });
+        var dv = out.dvSignal || {};
+        crow.push('<tr><td>Direktvermarkter-Signal</td><td class="num">' + (dv.value === null || dv.value === undefined ? '—' : esc(String(dv.value))) +
+          '</td><td>' + (dv.forcedOff ? 'Abregelung aktiv' : 'Einspeisung erlaubt') + '</td><td class="num">—</td></tr>');
+        tout.innerHTML = crow.join('');
+      }
+      var ch = document.getElementById('df-channels');
+      if (ch) {
+        var base = (window.location && window.location.origin) ? window.location.origin : '';
+        ch.innerHTML = (out.channels || []).map(function (c) {
+          var detail = '';
+          if (c.kind === 'loxone_http') {
+            detail = '<code>' + esc(base + c.url) + '</code> · ' + c.lines + ' Zeilen, ' + dfNum(c.bytes, 'Byte') +
+              (c.controlByteOffset !== null && c.controlByteOffset !== undefined ? ' · Sollwerte ab Byte ' + dfNum(c.controlByteOffset) : '');
+          } else if (c.kind === 'home_assistant') {
+            detail = '<code>' + esc(base + c.url) + '</code>';
+          } else if (c.kind === 'mqtt') {
+            detail = !c.enabled ? 'aus' : (c.connected ? 'verbunden' : 'nicht verbunden') + (c.topics && c.topics.length ? ' · <code>' + esc(c.topics[0].replace(/\/[^/]+$/, '/…')) + '</code>' : '');
+          } else if (c.kind === 'dv_modbus') {
+            var q = c.lastQuery;
+            detail = 'Port ' + esc(String(c.port)) + ' · ' + (q && q.ts ? 'letzte Abfrage vor ' + dfSince(q.ts) + ' von ' + esc(String(q.remote || '?')) : 'noch keine Abfrage seit dem Start');
+          }
+          return '<div class="dv-info-row"><span class="dv-info-label">' + esc(c.label) + '</span><span class="dv-info-value">' + detail + '</span></div>';
+        }).join('');
+      }
+      var stand = document.getElementById('df-stand');
+      if (stand) stand.textContent = new Date(d.generatedAt).toLocaleTimeString('de-DE');
+    }).catch(function () { /* nächster Takt versucht es erneut */ });
+  }
+
   function loadLoxoneDrawer() {
     var base = (window.location && window.location.origin) ? window.location.origin : 'http://DVHUB-IP';
     var urlEl = document.getElementById('lox-url');

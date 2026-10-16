@@ -262,6 +262,7 @@ Nur aktiv mit dem Hersteller-Profil „Universal (DVhub-MQTT-Schema: HA/Loxone)�
 |---|---|---|---|
 | GET / POST | `/api/input/push` | Push-Key | Messwerte senden: `grid_w` (Bezug +), `pv_w`, `battery_w` (Laden +), `soc_pct`, `load_w`, je Phase `grid_l1_w`…`grid_l3_w`, `load_l1_w`…`load_l3_w`. GET mit Parametern oder POST mit JSON. Antwort `{ ok, accepted, errors }`; `401` Schlüssel falsch, `409` Profil nicht aktiv, `400` keine gültigen Werte |
 | GET | `/api/input/status` | LAN·integrations | Eingänge mit Wert/Alter/veraltet, Broker, Push-URL, Push-Schlüssel gesetzt?, `uiToken` |
+| GET | `/api/integrations/dataflow` | LAN·integrations | Datenfluss-Übersicht: `in` (Quelle + Eingänge mit Feld/Topic, Wert, Alter, frisch), `seen` (wie DVhub die Werte versteht), `checks` (Plausibilitätshinweise), `out` (Sollwerte mit Quelle, letzte Schreibvorgänge, Kanäle Loxone/HA/MQTT/Direktvermarkter) |
 | POST | `/api/input/push-key` | Token+Nonce | Neuen Push-Schlüssel erzeugen — wird **einmal** zurückgegeben, der alte wird ungültig |
 
 ### 3.17 Datenspende
