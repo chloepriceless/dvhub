@@ -97,6 +97,24 @@ test('Geräteprofil (Modbus): Zähler + aktive Punkte mit Fehlertext', () => {
   assert.equal(df.in.inputs.find((i) => i.key === 'meter').ageMs, 2000);
 });
 
+// Codex-Befund 2026-10-17: Die Einfrier-Wache setzt fieldUpdatedAt.soc zurück,
+// ohne einen Fehler einzutragen; die Steuerung hält den Wert dann für veraltet
+// (victronFieldStale gegen victron.telemetryMaxAgeMs, Standard 90 s).
+test('Geräteprofil: Punkt ohne Fehler, aber älter als telemetryMaxAgeMs → veraltet + Hinweis', () => {
+  const build = (cfgVictron) => buildDataflow({
+    cfg: { victron: { host: '10.0.0.2', ...cfgVictron }, points: { soc: { enabled: true }, pvPowerW: { enabled: true } } },
+    state: { victron: { soc: 42, pvPowerW: 1200, fieldUpdatedAt: { soc: NOW - 120_000, pvPowerW: NOW - 1000 } }, meter: {} },
+    transport: { type: 'modbus' },
+    now: NOW,
+  });
+  const df = build({});
+  const byKey = Object.fromEntries(df.in.inputs.map((i) => [i.key, i]));
+  assert.equal(byKey.soc.fresh, false);
+  assert.equal(byKey.pvPowerW.fresh, true);
+  assert.ok(df.checks.some((c) => c.key === 'soc' && /veraltet \(120 s\)/.test(c.text)));
+  assert.equal(Object.fromEntries(build({ telemetryMaxAgeMs: 180_000 }).in.inputs.map((i) => [i.key, i])).soc.fresh, true);
+});
+
 test('Raus: Sollwerte mit Quelle, letzte Schreibvorgänge und Kanäle werden durchgereicht', () => {
   const df = buildDataflow({
     cfg: cfgLoxone,
@@ -125,6 +143,18 @@ test('Feldfall BIGGE: Profil „berechnen“, aber Loxone schickt den Hausverbra
   const bal = plausibilityChecks({ cfg: cfgLoxone, state, inputs }).find((c) => c.key === 'balance');
   assert.equal(bal.level, 'warn');
   assert.match(bal.text, /21754 W|21\.754|21754/);
+});
+
+// eHive 2026-10-17: „Netz −1605 W“ ohne Hinweis neben „Netzbezug 1605 W“ —
+// totalDir steht nur im Status-Schnappschuss, nicht in state.meter.
+test('So versteht DVhub: Netz nennt Richtung und Vorzeichenregel', () => {
+  const seen = (gridPositiveMeans, w) => buildDataflow({
+    cfg: { gridPositiveMeans }, state: { victron: {}, meter: { grid_total_w: w } }, now: NOW,
+  }).seen.find((r) => r.key === 'grid').note;
+  assert.equal(seen('feed_in', -1605), 'Netzbezug (Vorzeichen: + = Einspeisung)');
+  assert.equal(seen(undefined, 900), 'Einspeisung (Vorzeichen: + = Einspeisung)');
+  assert.equal(seen('grid_import', 900), 'Netzbezug (Vorzeichen: + = Bezug)');
+  assert.equal(seen('grid_import', 0), 'neutral (Vorzeichen: + = Bezug)');
 });
 
 test('Optionale Eingänge (Phasen) ohne Wert sind kein Fehler, Pflichtwerte schon', () => {

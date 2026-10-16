@@ -12,6 +12,7 @@
 // die Zutaten ein.
 
 import { PUSH_FIELDS } from './input-push.js';
+import { gridDirection } from '../server-utils.js';
 
 // Ohne diese beiden kann DVhub nicht steuern; alles andere ist optional.
 const REQUIRED_INPUTS = new Set(['grid_total', 'battery_soc']);
@@ -58,20 +59,26 @@ function inputRows({ cfg, state, transport, now }) {
   const errors = v.errors || {};
   const fieldAt = v.fieldUpdatedAt || {};
   const points = cfg?.points || {};
+  // Dieselbe Grenze wie die Steuerung (victronFieldStale in schedule-eval.js);
+  // die Einfrier-Wache setzt fieldUpdatedAt zurück, ohne einen Fehler einzutragen.
+  const maxAgeMs = Number(cfg?.victron?.telemetryMaxAgeMs ?? 90000);
   const rows = Object.entries(points)
     .filter(([, p]) => p && p.enabled !== false)
-    .map(([key]) => ({
-      key,
-      label: key,
-      pushField: null,
-      topic: null,
-      value: num(v[key]),
-      unit: key === 'soc' || key.endsWith('Pct') ? '%' : 'W',
-      ageMs: ageMs(fieldAt[key] ?? v.updatedAt, now),
-      fresh: !errors[key] && num(v[key]) !== null,
-      received: num(v[key]) !== null,
-      error: errors[key] || null,
-    }));
+    .map(([key]) => {
+      const age = ageMs(fieldAt[key] ?? v.updatedAt, now);
+      return {
+        key,
+        label: key,
+        pushField: null,
+        topic: null,
+        value: num(v[key]),
+        unit: key === 'soc' || key.endsWith('Pct') ? '%' : 'W',
+        ageMs: age,
+        fresh: !errors[key] && num(v[key]) !== null && !(age !== null && Number.isFinite(maxAgeMs) && age > maxAgeMs),
+        received: num(v[key]) !== null,
+        error: errors[key] || null,
+      };
+    });
   const m = state?.meter || {};
   rows.unshift({
     key: 'meter', label: 'Netzzähler', pushField: null, topic: null,
@@ -86,9 +93,12 @@ function seenRows(cfg, state, now, inputs) {
   const v = state?.victron || {};
   const m = state?.meter || {};
   const loadDerived = loadIsDerived(cfg, inputs);
+  const grid = num(m.grid_total_w);
+  const signRule = cfg?.gridPositiveMeans === 'grid_import' ? '+ = Bezug' : '+ = Einspeisung';
   const rows = [
-    { key: 'grid', label: 'Netz', value: num(m.grid_total_w), unit: 'W',
-      note: m.totalDir?.label || null, ageMs: ageMs(m.updatedAt, now) },
+    { key: 'grid', label: 'Netz', value: grid, unit: 'W',
+      note: grid === null ? null : `${gridDirection(grid, cfg?.gridPositiveMeans).label} (Vorzeichen: ${signRule})`,
+      ageMs: ageMs(m.updatedAt, now) },
     { key: 'gridImportW', label: 'Netzbezug', value: num(v.gridImportW), unit: 'W' },
     { key: 'gridExportW', label: 'Einspeisung', value: num(v.gridExportW), unit: 'W' },
     { key: 'pvTotalW', label: 'PV gesamt', value: num(v.pvTotalW), unit: 'W' },
