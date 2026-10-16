@@ -50,3 +50,13 @@ test('Reihen für EOS: PV 0 je Viertelstunde, Ruhebedarf je Stunde, über den Pr
   assert.equal(loadSlots.every((s) => s.powerW === 120), true);
   assert.deepEqual(buildGridStorageSeries([], 120, now), { pvSlots: [], loadSlots: [] });
 });
+
+test('Netzladen bewusst ohne MiSpeL-Option (Christin 2026-10-16): nur zusammen mit allowGridCharge', async () => {
+  const { isGridChargeLicensed, isMispelReleased, isGridChargeWithoutMispel } = await import('../services/optimizer/grid-storage.js');
+  assert.equal(isGridChargeLicensed({ optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true } }), true);
+  assert.equal(isGridChargeLicensed({ optimizer: { allowGridCharge: false, gridChargeWithoutMispel: true } }), false);
+  assert.equal(isGridChargeLicensed({ optimizer: { allowGridCharge: true, gridChargeWithoutMispel: false } }), false);
+  assert.equal(isMispelReleased({ optimizer: { gridChargeWithoutMispel: true } }), true);
+  assert.equal(isMispelReleased({ optimizer: { mispel: { mode: 'none' } } }), false);
+  assert.equal(isGridChargeWithoutMispel({ optimizer: { gridChargeWithoutMispel: 'true' } }), false, 'nur echtes true zählt');
+});

@@ -230,7 +230,7 @@ export function createConfigRoutes(deps) {
         (a, k) => (a != null && Object.prototype.hasOwnProperty.call(a, k)) ? a[k] : undefined,
         obj
       );
-      const LEGAL_GATE_PATHS = ['optimizer.allowGridCharge', 'optimizer.allowGridDischarge'];
+      const LEGAL_GATE_PATHS = ['optimizer.allowGridCharge', 'optimizer.allowGridDischarge', 'optimizer.gridChargeWithoutMispel'];
       const currentCfgForGate = getCfg();
       // Plan 08-06 Task 2 Step 2: setup wizard one-shot bootstrap.
       // If apiToken is currently empty AND this request is trying to set it, the

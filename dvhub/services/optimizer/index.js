@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { isGridStorageOnly } from './grid-storage.js';
+import { isMispelReleased } from './grid-storage.js';
 import { applyConfidenceGating } from './confidence-gate.js';
 import { normalizeForecast, averageSlotConfidence, aggregateTo1h } from './forecast-normalizer.js';
 import { buildHeuristicSchedule } from './heuristic-optimizer.js';
@@ -494,7 +494,8 @@ export function createOptimizerService(ctx) {
       const rawGridCharge = cfg.optimizer.allowGridCharge ?? false;
       const rawGridDischarge = cfg.optimizer.allowGridDischarge ?? false;
       // Nur Netzspeicher (grid-storage.js): ohne PV gibt es nichts zu vermischen.
-      const mispelActive = ['pauschal', 'abgrenzung'].includes(cfg.optimizer?.mispel?.mode) || isGridStorageOnly(cfg);
+      // „Netzladen auch ohne Pauschal-/Abgrenzungsoption“: bewusst freigegeben.
+      const mispelActive = isMispelReleased(cfg);
 
       let allowGridCharge = rawGridCharge;
       const allowGridDischarge = rawGridDischarge;
@@ -504,7 +505,7 @@ export function createOptimizerService(ctx) {
         // Prefer discharge (DV/Einspeisung is the more common use case)
         allowGridCharge = false;
         pushLog('optimizer_grid_guard', {
-          reason: 'allowGridCharge + allowGridDischarge ohne Pauschaloption/Abgrenzung nicht erlaubt. Netzladen deaktiviert.',
+          reason: 'allowGridCharge + allowGridDischarge ohne Pauschaloption/Abgrenzung nicht erlaubt. Netzladen deaktiviert. Bewusst freigeben: „Netzladen auch ohne Pauschal-/Abgrenzungsoption“.',
           mispelMode: cfg.optimizer?.mispel?.mode ?? 'none'
         });
       }

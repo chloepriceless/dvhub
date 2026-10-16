@@ -32,14 +32,29 @@ export function isGridStorageOnly(cfg) {
 }
 
 /**
+ * Netzladen trotz PV ohne MiSpeL-Option — bewusste Entscheidung des Betreibers
+ * (eigener rechtlicher Schalter, Bestätigung wie allowGridCharge). Für den
+ * Winterbetrieb mit dynamischem Tarif / §14a Modul 3, solange Pauschal- und
+ * Abgrenzungsoption noch nicht verfügbar sind (Christin 2026-10-16).
+ */
+export function isGridChargeWithoutMispel(cfg) {
+  return cfg?.optimizer?.gridChargeWithoutMispel === true;
+}
+
+/** Gilt eine MiSpeL-Freigabe für Graustrom im Akku (Option, Netzspeicher oder bewusst ohne)? */
+export function isMispelReleased(cfg) {
+  if (isGridStorageOnly(cfg) || isGridChargeWithoutMispel(cfg)) return true;
+  const mode = cfg?.optimizer?.mispel?.mode;
+  return mode === 'pauschal' || mode === 'abgrenzung';
+}
+
+/**
  * Darf EOS Netzladen planen und DVhub es ausführen?
- * PV-Anlage: Schalter + MiSpeL-Modus. Nur Netzspeicher: der Schalter allein.
+ * PV-Anlage: Schalter + MiSpeL-Modus (oder bewusst ohne). Nur Netzspeicher: der Schalter allein.
  */
 export function isGridChargeLicensed(cfg) {
   if (cfg?.optimizer?.allowGridCharge !== true) return false;
-  if (isGridStorageOnly(cfg)) return true;
-  const mode = cfg?.optimizer?.mispel?.mode;
-  return mode === 'pauschal' || mode === 'abgrenzung';
+  return isMispelReleased(cfg);
 }
 
 /** Netzbezug in Watt (positiv = Bezug) aus dem Zählerwert und seiner Vorzeichenregel. */

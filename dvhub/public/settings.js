@@ -3101,7 +3101,8 @@ function applyFieldDiscoverySelection(fieldPath, selectedSystemId) {
 // instead of a hidden one-time setup step.
 const LEGAL_GATE_FIELDS = [
   { path: 'optimizer.allowGridCharge', label: 'Netzladen (Netz → Akku)' },
-  { path: 'optimizer.allowGridDischarge', label: 'Netzentladung aus Speicher (Akku → Netz)' }
+  { path: 'optimizer.allowGridDischarge', label: 'Netzentladung aus Speicher (Akku → Netz)' },
+  { path: 'optimizer.gridChargeWithoutMispel', label: 'Netzladen auch ohne Pauschal-/Abgrenzungsoption — Netzstrom im Akku kann die EEG-Förderung der eingespeisten Menge gefährden' }
 ];
 
 function legalGatesFlippedOn(nextConfig, baseConfig = currentRawConfig) {

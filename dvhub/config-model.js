@@ -2047,7 +2047,18 @@ function buildFieldDefinitions() {
       path: 'optimizer.allowGridCharge',
       label: '\u26a0\ufe0f Netzladen erlaubt (Netz \u2192 Akku)',
       type: 'boolean',
-      help: 'Erlaubt dem Optimizer, den Akku aus dem Stromnetz zu laden. Mit PV-Anlage plant und stellt DVhub Netzladen nur, wenn zus\u00e4tzlich die MiSpeL-Pauschal- oder Abgrenzungsoption gilt \u2014 sonst vermischen sich Gr\u00fcnstrom und Graustrom (Risiko F\u00f6rderungsverlust). In der Betriebsart \u201eNur Netzspeicher\u201c reicht dieser Schalter. Eine \u00a714a-Begrenzung des Netzbetreibers gilt in jedem Fall.'
+      help: 'Erlaubt dem Optimizer, den Akku aus dem Stromnetz zu laden. Mit PV-Anlage plant und stellt DVhub Netzladen nur, wenn zus\u00e4tzlich die MiSpeL-Pauschal- oder Abgrenzungsoption gilt \u2014 oder wenn du \u201eNetzladen auch ohne Pauschal-/Abgrenzungsoption\u201c bewusst einschaltest. Sonst vermischen sich Gr\u00fcnstrom und Graustrom (Risiko F\u00f6rderungsverlust). In der Betriebsart \u201eNur Netzspeicher\u201c reicht dieser Schalter. Eine \u00a714a-Begrenzung des Netzbetreibers gilt in jedem Fall.'
+    },
+    {
+      section: 'schedule',
+      group: 'legalSwitches',
+      groupLabel: '⚠️ Rechtliche Schalter',
+      groupDescription: 'Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG). Nur aktivieren, wenn rechtlich abgesichert.',
+      groupOrder: 40,
+      path: 'optimizer.gridChargeWithoutMispel',
+      label: '⚠️ Netzladen auch ohne Pauschal-/Abgrenzungsoption (eigene Verantwortung)',
+      type: 'boolean',
+      help: 'Mit PV-Anlage lädt DVhub den Akku sonst nur dann aus dem Netz, wenn die MiSpeL-Pauschal- oder Abgrenzungsoption gilt. Dieser Schalter hebt die Sperre bewusst auf — z. B. um den Speicher im Winter mit günstigem Netzstrom (dynamischer Tarif, §14a Modul 3) zu nutzen, solange die Optionen noch nicht verfügbar sind. Risiko: Netzstrom im Akku vermischt sich mit PV-Strom; wird gemischter Strom eingespeist, kann für diese Menge die EEG-Förderung bzw. Marktprämie gefährdet sein. Wirkt nur zusammen mit „Netzladen erlaubt“.'
     },
     {
       section: 'schedule',
