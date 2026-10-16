@@ -12,6 +12,14 @@ verweist hierher.
 
 ### Neu
 
+- **EOS hängt nicht mehr still — Wache und Knopf „EOS neu starten“.** Feldfall: EOS antwortete, rechnete aber
+  seit dem Vorabend nicht mehr (ein Rechenprozess hing, jeder weitere Lauf wartete bis zum Timeout von 3 h); die
+  Oberfläche zeigte „online“ und den alten Plan, ein Neustart von DVhub half nicht. Jetzt startet DVhub EOS selbst
+  neu, wenn ein Lauf länger als 90 min rechnet (`optimizer.eosStallRestartMin`, 0 = aus; höchstens alle 2 h). Unter
+  Prognose → EOS weist die Karte auf einen veralteten Plan (> 2 h) oder hängenden Lauf hin und bietet „EOS neu
+  starten“ an (`POST /api/eos/restart`). Neue sudoers-Regel nur für `systemctl restart eos.service` (ohne Wildcard,
+  auch mit sudo-rs gültig); sie kommt mit dem nächsten Update automatisch auf die Box. Gilt für das EOS auf derselben
+  Box, nicht im Container und nicht für ein entferntes EOS.
 - **Fern-Support über das Portal öffnen.** Im Installateurs-Portal öffnet „Fern-Support öffnen" den
   Tunnel zur Anlage — ohne Schlüsselaustausch per Chat, ohne Terminal beim Kunden und ohne Handarbeit
   am Relay. Die Anlage meldet ihren öffentlichen Relay-Schlüssel ans Portal; beim ersten Öffnen trägt

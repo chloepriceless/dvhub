@@ -152,6 +152,7 @@ import { createEosDeviceBridge } from './services/optimizer/eos-device-bridge.js
 import { createEvChargingProbe } from './services/wallbox/ev-charging.js';
 import { createChargerStatusPoller } from './services/wallbox/charger-status.js';
 import { createEosMonitor } from './services/optimizer/eos-monitor.js';
+import { createEosRestarter } from './services/optimizer/eos-restarter.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
@@ -1455,6 +1456,27 @@ ctx.eosMonitor = createEosMonitor({
   fetchSolution: (rows) => eosAdapterMonitor.getOptimizationSolution(rows),
 });
 ctx.eosMonitor.start();
+// EOS neu starten — Knopf in der Oberfläche (POST /api/eos/restart) und Wache
+// für hängende Läufe (eos-restarter.js). systemctl restart wartet, bis EOS
+// beendet ist; ein hängender Rechenprozess braucht dafür bis zu TimeoutStopSec.
+ctx.eosRestarter = createEosRestarter({
+  getCfg: () => ctx.getCfg(),
+  state,
+  exec: async (args) => {
+    const parts = serviceCommandParts(args);
+    try {
+      await execFileAsync(parts.command, parts.args, { timeout: 150_000 });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error.stderr || error.stdout || error.message || 'command failed').trim() };
+    }
+  },
+  serviceName: process.env.DV_EOS_SERVICE_NAME || 'eos.service',
+  inContainer: process.env.DVHUB_RUNTIME === 'container',
+  pushLog,
+});
+// Die Wache liest state.optimizer.eosRun — der liegt dort, wo die Läufe angestoßen werden.
+if (IS_RUNTIME_PROCESS) ctx.eosRestarter.start();
 // EOS → evcc: reicht EOS' E-Auto-Plan (Laden/Stopp + Ladestrom) an den
 // gewaehlten evcc-Ladepunkt weiter. Liest die Loesung ueber den Inspector-
 // Adapter (kurzes Timeout — ein haengendes EOS blockiert den Takt nicht lange).

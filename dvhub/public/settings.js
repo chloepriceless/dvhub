@@ -4382,6 +4382,79 @@ function renderEosReserveCard(reserve) {
   '</div>';
 }
 
+// EOS antwortet, rechnet aber nicht mehr (Feldfall 2026-10-15): „online“ und ein
+// Plan vom Vorabend. Ab 2 h Planalter oder einem hängenden Lauf zeigt die Karte
+// einen Hinweis mit Knopf „EOS neu starten“ (POST /api/eos/restart).
+var EOS_PLAN_STALE_MS = 2 * 3600 * 1000;
+
+function eosStaleInfoForecastInspector(payload) {
+  var run = payload.run || {};
+  var rs = payload.restart || null;
+  var gen = payload.output && payload.output.generatedAt ? Date.parse(payload.output.generatedAt) : NaN;
+  var done = run.lastDoneAt ? Date.parse(run.lastDoneAt) : NaN;
+  var newest = Math.max(isFinite(gen) ? gen : 0, isFinite(done) ? done : 0);
+  var ageMs = newest ? Date.now() - newest : null;
+  var stalledMin = rs && typeof rs.stalledForMin === 'number' ? rs.stalledForMin : null;
+  return {
+    stale: (ageMs !== null && ageMs > EOS_PLAN_STALE_MS) || stalledMin !== null,
+    ageMs: ageMs,
+    stalledMin: stalledMin,
+    lastError: run.lastError || null,
+    restart: rs
+  };
+}
+
+function eosRestartHintForecastInspector(rs) {
+  if (!rs) return '';
+  if (rs.restarting) return 'EOS wird gerade neu gestartet …';
+  if (!rs.canRestart) {
+    if (rs.reason === 'container') return 'EOS läuft als eigener Container — bitte dort neu starten.';
+    if (rs.reason === 'remote') return 'EOS läuft auf einem anderen Gerät — bitte dort neu starten.';
+    return '';
+  }
+  var last = rs.lastRestart;
+  if (last && last.ok === false && last.error) return 'Letzter Neustart fehlgeschlagen: ' + last.error;
+  return rs.stallRestartMin > 0
+    ? 'DVhub startet EOS automatisch neu, wenn ein Lauf länger als ' + rs.stallRestartMin + ' min dauert.'
+    : '';
+}
+
+function appendEosRestartControlForecastInspector(banner, rs) {
+  if (!banner || !rs) return;
+  var hint = eosRestartHintForecastInspector(rs);
+  if (hint) {
+    var p = document.createElement('div');
+    p.className = 'eos-restart-hint';
+    p.textContent = hint;
+    banner.appendChild(p);
+  }
+  if (!rs.canRestart || rs.restarting) return;
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-small';
+  btn.textContent = 'EOS neu starten';
+  var result = document.createElement('span');
+  result.className = 'eos-restart-result';
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    result.textContent = ' EOS wird neu gestartet …';
+    try {
+      var r = await apiFetch('/api/eos/restart', { method: 'POST' });
+      var j = await r.json().catch(function () { return {}; });
+      if (r.status === 429) result.textContent = ' Gerade erst neu gestartet — bitte einen Moment warten.';
+      else if (!r.ok) result.textContent = ' Neustart nicht möglich: ' + (j.error || r.status);
+      else result.textContent = ' Neustart angestoßen. Der neue Plan erscheint nach dem nächsten Lauf (einige Minuten).';
+    } catch (e) {
+      result.textContent = ' Neustart fehlgeschlagen: ' + (e && e.message ? e.message : e);
+    }
+  });
+  var row = document.createElement('div');
+  row.className = 'eos-restart-row';
+  row.appendChild(btn);
+  row.appendChild(result);
+  banner.appendChild(row);
+}
+
 function renderEosInspector(payload) {
   if (!payload) return;
 
@@ -4408,6 +4481,7 @@ function renderEosInspector(payload) {
         : (payload.reason === 'eos_off')
           ? 'EOS ist ausgeschaltet. Einschalten unter Einstellungen → Betriebsart (Stellung „EOS“).'
           : 'EOS-Daten nicht verfügbar.';
+      if (payload.reason === 'eos_not_answering') appendEosRestartControlForecastInspector(banner, payload.restart);
     }
     if (tbody) tbody.innerHTML = '<tr><td colspan="4" class="dv-log-empty">' + (payload.reason === 'eos_not_answering' ? 'EOS antwortet gerade nicht.' : 'EOS aus.') + '</td></tr>';
     if (meta) meta.textContent = '--';
@@ -4434,6 +4508,19 @@ function renderEosInspector(payload) {
     banner.textContent = '';
   }
 
+  var staleInfo = eosStaleInfoForecastInspector(payload);
+  if (staleInfo.stale && banner && payload.reason !== 'eos_not_configured') {
+    banner.classList.remove('u-hidden');
+    banner.classList.remove('error');
+    banner.classList.add('warn');
+    var ageH = staleInfo.ageMs !== null ? Math.floor(staleInfo.ageMs / 3600000) : null;
+    banner.textContent = staleInfo.stalledMin !== null
+      ? ('EOS rechnet seit ' + staleInfo.stalledMin + ' min an einem Lauf, der sonst wenige Minuten dauert — vermutlich hängt EOS. Bis dahin gilt der letzte Plan.')
+      : ('Der EOS-Plan ist ' + (ageH !== null ? ageH + ' h' : 'lange') + ' alt — EOS antwortet, rechnet aber keinen neuen Plan.' +
+         (staleInfo.lastError ? ' Letzter Fehler: ' + staleInfo.lastError + '.' : ''));
+    appendEosRestartControlForecastInspector(banner, staleInfo.restart);
+  }
+
   var push = payload.push || {};
   var pull = payload.pull || {};
   var slots = (pull && Array.isArray(pull.slots)) ? pull.slots : [];
@@ -4453,7 +4540,9 @@ function renderEosInspector(payload) {
       return d && !isNaN(d.getTime()) ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : null;
     };
     var eosStatus = payload.eos && payload.eos.status;
-    var eosStateLabel = eosStatus === 'busy' ? 'rechnet' : eosStatus === 'down' ? 'antwortet nicht' : 'online';
+    var eosStateLabel = staleInfo.stalledMin !== null ? 'hängt'
+      : eosStatus === 'busy' ? 'rechnet' : eosStatus === 'down' ? 'antwortet nicht'
+      : staleInfo.stale ? 'online, Plan veraltet' : 'online';
     var planStand = hhmm(pull.at) ? ('Plan von ' + hhmm(pull.at)) : 'noch kein Plan';
     if (hhmm(push.at)) pushDelta += (pushDelta ? ' · ' : '') + hhmm(push.at);
     summary.innerHTML =

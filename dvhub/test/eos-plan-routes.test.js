@@ -166,3 +166,47 @@ test('GET /api/eos/plan — ohne Pro-Lizenz 403', async () => {
   const captured = await dispatch(mockCtx({ licenseActive: false, eosMonitor: monitorStub() }), makeReq('/api/eos/plan'));
   assert.equal(captured.status, 403);
 });
+
+// EOS neu starten aus der Oberfläche (2026-10-16, Feldfall: EOS antwortete, rechnete aber nicht).
+function restarterStub({ canRestart = true, reason = null, result = { ok: true } } = {}) {
+  const r = { calls: [] };
+  r.status = () => ({ canRestart, reason, restarting: false, stallRestartMin: 90, stalledForMin: null, restarts: r.calls.length, lastRestart: null });
+  r.restart = (opts) => { r.calls.push(opts); return Promise.resolve(result); };
+  return r;
+}
+
+test('POST /api/eos/restart — lokal möglich: 202, Neustart über den Restarter (via ui)', async () => {
+  const ctx = mockCtx({ eosMonitor: monitorStub() });
+  ctx.eosRestarter = restarterStub();
+  const captured = await dispatch(ctx, makeReq('/api/eos/restart', { method: 'POST', ip: LAN_IP }));
+  assert.equal(captured.status, 202, `body=${captured.body}`);
+  assert.equal(JSON.parse(captured.body).accepted, true);
+  assert.equal(ctx.eosRestarter.calls.length, 1);
+  assert.equal(ctx.eosRestarter.calls[0].via, 'ui');
+});
+
+test('POST /api/eos/restart — EOS im Container/entfernt: 409 mit Grund, kein Neustart', async () => {
+  const ctx = mockCtx({ eosMonitor: monitorStub() });
+  ctx.eosRestarter = restarterStub({ canRestart: false, reason: 'remote' });
+  const captured = await dispatch(ctx, makeReq('/api/eos/restart', { method: 'POST', ip: LAN_IP }));
+  assert.equal(captured.status, 409);
+  assert.equal(JSON.parse(captured.body).error, 'remote');
+  assert.equal(ctx.eosRestarter.calls.length, 0);
+});
+
+test('POST /api/eos/restart — zu schnell hintereinander: 429', async () => {
+  const ctx = mockCtx({ eosMonitor: monitorStub() });
+  ctx.eosRestarter = restarterStub({ result: { ok: false, error: 'too_soon' } });
+  const captured = await dispatch(ctx, makeReq('/api/eos/restart', { method: 'POST', ip: LAN_IP }));
+  assert.equal(captured.status, 429);
+});
+
+test('GET /api/eos/status — enthält den Neustart-Zustand', async () => {
+  const ctx = mockCtx({ eosMonitor: monitorStub() });
+  ctx.eosRestarter = restarterStub();
+  const captured = await dispatch(ctx, makeReq('/api/eos/status', { ip: LAN_IP }));
+  assert.equal(captured.status, 200);
+  const body = JSON.parse(captured.body);
+  assert.equal(body.restart.canRestart, true);
+  assert.equal(body.restart.stallRestartMin, 90);
+});

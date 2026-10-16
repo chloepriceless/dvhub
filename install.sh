@@ -583,6 +583,9 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} show ${SERVICE_NAME}.serv
 # von DVhub. Nur Start/Stopp genau dieser Unit; sie läuft selbst als ${SERVICE_USER}.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} start dvhub-support-tunnel.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} stop dvhub-support-tunnel.service
+# EOS neu starten (2026-10-16): Knopf in der Oberfläche und Wache für hängende
+# Läufe. Nur restart genau dieser Unit.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart eos.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${OPENVPN_PATH} --config *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} up *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} down *

@@ -269,6 +269,21 @@ export function createInspector(ctx, deps = {}) {
   // String values pass through escHtmlForecastInspector in settings.js (T-19-22).
   const isoOrNull = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 
+  function eosRunSummary(run) {
+    const r = run || {};
+    return {
+      inFlight: r.inFlight === true,
+      startedAt: isoOrNull(r.startedAt),
+      lastDoneAt: isoOrNull(r.lastDoneAt),
+      lastError: r.lastError || null,
+      lastErrorAt: isoOrNull(r.lastErrorAt),
+      nextAt: isoOrNull(r.nextAt),
+    };
+  }
+  function eosRestartSummary() {
+    try { return ctx?.eosRestarter?.status?.() || null; } catch { return null; }
+  }
+
   async function getEos({ from, to } = {}) {
     if (!eosAdapter || typeof eosAdapter.isAvailable !== 'function') {
       return { available: false, reason: 'adapter_unavailable', window: { from, to } };
@@ -313,7 +328,7 @@ export function createInspector(ctx, deps = {}) {
       const enabled = monitorStatus?.enabled === true;
       if (!enabled) return { available: false, reason: 'eos_off', window: { from, to } };
       if (!storedPlan && !shownSolution) {
-        return { available: false, reason: 'eos_not_answering', window: { from, to } };
+        return { available: false, reason: 'eos_not_answering', window: { from, to }, restart: eosRestartSummary() };
       }
     }
 
@@ -476,6 +491,10 @@ export function createInspector(ctx, deps = {}) {
       pull: { ok: pullOk, slots: pullSlots, error: pullError, at: isoOrNull(storedPlan && storedPlan.at) },
       // Zustand laut zentralem Monitor (up / busy = rechnet / down / unknown).
       eos: { status: monitorStatus ? monitorStatus.status : null, solutionAt: isoOrNull(shownSolution && shownSolution.at) },
+      // Laufzustand und Neustart (eos-restarter.js): „online“ heißt nur, dass
+      // EOS antwortet — ob es noch rechnet, zeigt erst der letzte fertige Lauf.
+      run: eosRunSummary(optState.eosRun),
+      restart: eosRestartSummary(),
       // EOS OUTPUT — the optimizer's predicted trajectory (SoC/grid/costs per
       // 15-min slot) + KPI totals. null when EOS hasn't produced a solution yet.
       output: solutionResult || null,

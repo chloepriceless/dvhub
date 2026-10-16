@@ -4905,8 +4905,26 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname === '/api/eos/status' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
-      if (!ctx.eosMonitor) return json(res, 200, { ok: true, status: 'disabled', enabled: false });
-      return json(res, 200, { ok: true, ...ctx.eosMonitor.status() });
+      const restart = ctx.eosRestarter?.status?.() || null;
+      if (!ctx.eosMonitor) return json(res, 200, { ok: true, status: 'disabled', enabled: false, restart });
+      return json(res, 200, { ok: true, ...ctx.eosMonitor.status(), restart });
+    }
+
+    // EOS neu starten (Knopf in der Oberfläche). Antwortet sofort; der Neustart
+    // läuft im Hintergrund, der EOS-Monitor meldet den neuen Prozess.
+    if (url.pathname === '/api/eos/restart' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.eosRestarter) return json(res, 503, { ok: false, error: 'eos_restart_unavailable' });
+      const st = ctx.eosRestarter.status();
+      if (!st.canRestart) return json(res, 409, { ok: false, error: st.reason, restart: st });
+      if (st.restarting) return json(res, 202, { ok: true, accepted: true, alreadyRunning: true, restart: st });
+      const pending = ctx.eosRestarter.restart({ via: 'ui', actor: actorContext(req) });
+      // Sofort abgewiesene Aufrufe (zu kurz hintereinander) direkt melden.
+      const early = await Promise.race([pending, new Promise((r) => setTimeout(() => r(null), 50))]);
+      if (early && early.ok === false && early.error === 'too_soon') {
+        return json(res, 429, { ok: false, error: 'too_soon', restart: ctx.eosRestarter.status() });
+      }
+      return json(res, 202, { ok: true, accepted: true, restart: ctx.eosRestarter.status() });
     }
 
     // Editable EOS endpoint (2026-07-17): the drawer may point DVhub at ANY
