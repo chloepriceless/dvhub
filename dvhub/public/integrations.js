@@ -599,6 +599,8 @@
   }
 
   function getSystemStatus(key, data) {
+    // MQTT ausgeschaltet (z. B. reiner HTTP-Push-Eingang) ist kein Fehler.
+    if (key === 'mqtt' && data && data.enabled === false) return 'disabled';
     // Phase 09.2 D-17 revised: when the health-tracker sets `status`, that is
     // the authoritative card state. Map ok|warn|err → online|stale|offline so
     // existing CSS (.conn-card.status-* + .conn-status-chip colour rules)
@@ -3212,6 +3214,17 @@
         manSel.value = d.manufacturer || 'victron';
       }
       if (el('victron-host')) el('victron-host').value = d.host || '';
+      // Universal HA/Loxone (dvhub-mqtt) hat keine Geräteverbindung — die
+      // Anlagenadresse wirkt dort nicht (Feldfall BIGGE 2026-10-16).
+      var syncHostField = function () {
+        var f = el('victron-host-field');
+        if (f) f.hidden = !!(manSel && manSel.value === 'dvhub-mqtt');
+      };
+      syncHostField();
+      if (manSel && !manSel.dataset.hostSync) {
+        manSel.dataset.hostSync = '1';
+        manSel.addEventListener('change', syncHostField);
+      }
       if (el('victron-pvcoupling')) el('victron-pvcoupling').value = ['ac_dc', 'ac', 'dc'].indexOf(d.pvCoupling) >= 0 ? d.pvCoupling : 'ac_dc';
       if (el('victron-transport')) {
         var tr = d.transport === 'mqtt'

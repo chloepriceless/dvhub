@@ -952,8 +952,11 @@ export function createScheduleEvaluator(ctx) {
       let encoded, words, fc;
       if (transport.type === 'mqtt') {
         // MQTT: Engineering-Wert direkt schreiben (kein Register-Encoding)
-        await transport.mqttWrite(target, value);
-        encoded = { raw: value, scaled: value, writeType: 'mqtt', wordOrder: 'n/a' };
+        const mqttRes = await transport.mqttWrite(target, value);
+        // Ohne Broker (HTTP-Push-Eingang, z. B. Loxone) geht nichts über MQTT:
+        // der Sollwert liegt im Zustand und wird per GET /api/integration/loxone
+        // abgeholt. Das Steuer-Log nannte trotzdem „mqtt“ (Feldfall BIGGE 2026-10-16).
+        encoded = { raw: value, scaled: value, writeType: mqttRes?.pushOnly ? 'http_pickup' : 'mqtt', wordOrder: 'n/a' };
         words = [value];
         fc = 0;
       } else {

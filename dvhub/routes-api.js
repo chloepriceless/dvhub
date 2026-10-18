@@ -3979,6 +3979,7 @@ export function createApiRoutes(ctx) {
       const payload = {
         timestamp: Date.now(),
         mqtt: {
+          enabled: !!mqttCfg.enabled,
           connected: ctx.mqttHub?.connected ?? false,
           // Plan 08-03 Task 2: strip user:pass from the broker URL before emit.
           // Previously this field leaked the full `mqtt://user:secret@host:1883` to
@@ -4325,6 +4326,9 @@ export function createApiRoutes(ctx) {
           victronEssMode: state.meter?.essMode ?? state.essMode ?? null,
         };
         const payload = { ...trackerSnap, featured };
+        // MQTT aus: alte Proben (aus der Sicherung beim Neustart geladen) nicht
+        // als Gesundheit ausgeben — die Kachel zeigt dann „Inaktiv“.
+        if (!getCfg().mqtt?.enabled) delete payload.mqtt;
         healthCacheEntry = { payload, expiresAt: now + HEALTH_CACHE_TTL_MS };
         return json(res, 200, payload);
       } catch (e) {

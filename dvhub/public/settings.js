@@ -1105,7 +1105,51 @@ function isFieldVisible(field) {
   return true;
 }
 
+// Laufzeit-Hinweise an einzelnen Feldern (Feldfall BIGGE 2026-10-16: Netzladen
+// stand auf „an“, wirkte aber nicht — EOS bekam max_ac_charge_power_w = 0).
+// Spiegelt grid-storage.js isMispelReleased()/isGridChargeLicensed().
+const FIELD_NOTE_PATHS = ['optimizer.allowGridCharge', 'optimizer.gridChargeWithoutMispel', 'optimizer.gridStorageOnly', 'optimizer.mispel.mode'];
+function fieldRuntimeNote(path) {
+  const v = (p) => getVisibilityValue(p);
+  const optionOn = v('optimizer.mispel.mode') === 'pauschal' || v('optimizer.mispel.mode') === 'abgrenzung';
+  const released = v('optimizer.gridStorageOnly') === true || v('optimizer.gridChargeWithoutMispel') === true || optionOn;
+  if (path === 'optimizer.allowGridCharge' && v(path) === true && !released) {
+    return 'Wirkt gerade nicht: Mit PV-Anlage lädt DVhub erst aus dem Netz, wenn eine MiSpeL-Option gewählt ist '
+      + 'oder „Netzladen auch ohne Pauschal-/Abgrenzungsoption“ eingeschaltet ist. Bis dahin plant EOS kein Netzladen.';
+  }
+  if (path === 'optimizer.gridChargeWithoutMispel' && v(path) === true && v('optimizer.allowGridCharge') !== true) {
+    return 'Wirkt erst zusammen mit „Netzladen erlaubt“.';
+  }
+  if (path === 'optimizer.mispel.mode' && optionOn && v('optimizer.allowGridCharge') !== true) {
+    return 'Netzladen bleibt aus, bis „Netzladen erlaubt“ eingeschaltet ist.';
+  }
+  return '';
+}
+
+// Grundtarif und Preis-Zeiträume haben je eigene Bestandteile (Feldfall BIGGE:
+// 4/8,9/3,9 ct oben, 0/8,5/3 ct im Zeitraum „Dynamisch Sommer“ — welcher gilt?).
+// Es gilt der Zeitraum, der den Tag enthält, zusammengeführt mit dem Grundtarif:
+// was er nicht selbst setzt, erbt er (config-model.js cachedEffectivePricingForTimestamp,
+// deepMerge). Das sagen wir hier.
+function pricingPeriodNote(periods, timezone, now = new Date()) {
+  const list = Array.isArray(periods) ? periods.filter((p) => p && p.startDate && p.endDate) : [];
+  if (!list.length) return '';
+  let today;
+  try {
+    today = new Intl.DateTimeFormat('en-CA', { timeZone: timezone || 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  } catch { today = now.toISOString().slice(0, 10); }
+  const fmt = (d) => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
+  const active = list.find((p) => p.startDate <= today && p.endDate >= today);
+  if (active) {
+    return `Heute gilt der Zeitraum „${active.label || active.id}“ (${fmt(active.startDate)}–${fmt(active.endDate)}): was er selbst festlegt, gilt statt der Werte hier; `
+      + 'alles andere (z. B. §14a Modul 3) übernimmt er vom Standard-Tarif.';
+  }
+  const next = list.filter((p) => p.startDate > today).sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+  return 'Heute gilt dieser Grundtarif.' + (next ? ` Ab ${fmt(next.startDate)} gilt der Zeitraum „${next.label || next.id}“ mit eigenen Werten.` : '');
+}
+
 function fieldAffectsVisibility(path) {
+  if (FIELD_NOTE_PATHS.includes(path)) return true;
   return (definition?.fields || []).some((field) => (
     field.visibleWhenPath?.path === path
     || (Array.isArray(field.visibleWhenAny) && field.visibleWhenAny.some((rule) => rule.path === path))
@@ -1416,6 +1460,21 @@ function validateForecastStrings(strings = []) {
   return { valid: messages.length === 0, messages };
 }
 
+// Hinweis über der Dachflächen-Liste: ohne Fläche rechnen alle Prognosen mit
+// 35° Neigung nach Süden (180°) für die ganze kWp; Flächen, die in der Config
+// stehen, aber nicht gelten (configLevel ≠ detailed), werden ebenfalls genannt.
+function forecastStringsNote(strings = forecastStringsDraft) {
+  if (!strings.length) {
+    return 'Noch keine Dachfläche eingetragen: Die PV-Prognose rechnet dann mit einer einzigen Fläche '
+      + '(35° Neigung, Süd 180°) für die gesamte kWp. Bei Ost/West-Dächern oder mehreren Flächen liegt sie daneben — '
+      + 'trag jede Fläche mit Neigung und Richtung ein (0° = Nord, 90° = Ost, 180° = Süd, 270° = West).';
+  }
+  if ((getVisibilityValue('forecast.pv.configLevel') || 'simple') !== 'detailed') {
+    return 'Diese Dachflächen gelten noch nicht für die Prognose — einmal speichern, dann rechnet sie damit.';
+  }
+  return '';
+}
+
 function renderForecastStringEditor() {
   // Entwurf aus der Config übernehmen. Ohne Strings bleibt die Liste leer —
   // früher stand hier ein Beispiel „String 1, 5 kWp“, das beim Speichern als
@@ -1433,7 +1492,7 @@ function renderForecastStringEditor() {
 
   const kicker = document.createElement('div');
   kicker.className = 'config-group-kicker';
-  kicker.textContent = 'PV-Strings (Detailliert)';
+  kicker.textContent = 'Dachflächen (PV-Strings)';
   section.appendChild(kicker);
 
   const desc = document.createElement('p');
@@ -1451,10 +1510,11 @@ function renderForecastStringEditor() {
     }
     section.appendChild(banner);
   }
-  if (!forecastStringsDraft.length) {
+  const stringsNote = forecastStringsNote();
+  if (stringsNote) {
     const empty = document.createElement('p');
-    empty.className = 'sa-help';
-    empty.textContent = 'Noch kein String angelegt — mit „+ String hinzufuegen“ die erste Dachflaeche eintragen.';
+    empty.className = 'sa-field-note warn';
+    empty.textContent = stringsNote;
     section.appendChild(empty);
   }
 
@@ -1478,7 +1538,7 @@ function renderForecastStringEditor() {
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
   addBtn.className = 'btn btn-ghost btn-small';
-  addBtn.textContent = '+ String hinzufuegen';
+  addBtn.textContent = '+ Dachfläche hinzufügen';
   addBtn.addEventListener('click', () => {
     forecastStringsDraft.push({
       label: `String ${forecastStringsDraft.length + 1}`,
@@ -1584,6 +1644,9 @@ function syncForecastStringsToDraft() {
   if (!currentDraftConfig.forecast) currentDraftConfig.forecast = {};
   if (!currentDraftConfig.forecast.pv) currentDraftConfig.forecast.pv = {};
   currentDraftConfig.forecast.pv.strings = forecastStringsDraft.map(s => ({ ...s }));
+  // Erst mit 'detailed' rechnen die Prognosen mit den Flächen (pv-forecast.js,
+  // open-meteo-solar.js, pvnode-client.js) — wer eine Fläche anlegt, meint das.
+  if (forecastStringsDraft.length) currentDraftConfig.forecast.pv.configLevel = 'detailed';
 }
 
 // getActiveSettingsDestination, buildSectionMeta, renderSidebarNavigation removed — replaced by renderDestinationGrid
@@ -1866,6 +1929,13 @@ function renderGroupedCardsOb(mount, destination, destinationId) {
         row.dataset.path = field.path;
         row.dataset.search = `${field.label} ${grp.label} ${field.help || ''} ${field.path}`.toLowerCase();
         body.appendChild(row);
+        const note = fieldRuntimeNote(field.path);
+        if (note) {
+          const noteEl = document.createElement('p');
+          noteEl.className = 'sa-field-note warn';
+          noteEl.textContent = note;
+          row.appendChild(noteEl);
+        }
         if (model.discovery && model.discovery.visible) {
           const discoveryRow = document.createElement('div');
           discoveryRow.className = 'sa-discovery-row';
@@ -1935,11 +2005,11 @@ function renderGroupedCardsOb(mount, destination, destinationId) {
     if (section.id === 'schedule') {
       mount.appendChild(renderBatteryStagesEditor());
     }
+    // Dachflächen immer anbieten (2026-10-18): der Editor hing an
+    // forecast.pv.configLevel = 'detailed', für das es kein Feld gibt — ohne
+    // Handeintrag in der config.json kam niemand an die Eingabe (Feldfall BIGGE).
     if (section.id === 'forecast') {
-      const configLevel = getVisibilityValue('forecast.pv.configLevel') || 'simple';
-      if (configLevel === 'detailed') {
-        mount.appendChild(renderForecastStringEditor());
-      }
+      mount.appendChild(renderForecastStringEditor());
     }
   }
 
@@ -1965,9 +2035,7 @@ function renderAreaEditor(name) {
   if (name === 'pvPlants') return renderPvPlantsEditor();
   if (name === 'pricingPeriods') return renderPricingPeriodsEditor();
   if (name === 'batteryStages') return renderBatteryStagesEditor();
-  if (name === 'forecastStrings') {
-    return (getVisibilityValue('forecast.pv.configLevel') || 'simple') === 'detailed' ? renderForecastStringEditor() : null;
-  }
+  if (name === 'forecastStrings') return renderForecastStringEditor();
   if (name === 'historyImport') return renderHistoryImportPanel('services');
   return null;
 }
@@ -2558,8 +2626,9 @@ function renderPricingPeriodsEditor() {
   `;
 
   section.innerHTML = `
-    <div class="config-group-kicker" data-accent="yellow">Standard-Tarif (immer gültig)</div>
-    <div class="svc-meta">Basis-Bezugspreis für alle Zeiträume ohne eigene Abweichung.</div>
+    <div class="config-group-kicker" data-accent="yellow">Standard-Tarif (gilt an Tagen ohne eigenen Zeitraum)</div>
+    <div class="svc-meta">Basis-Bezugspreis für alle Tage, die in keinem der Zeiträume unten liegen. Ein Zeitraum übernimmt von hier alles, was er nicht selbst festlegt (z. B. §14a Modul 3).</div>
+    ${(() => { const n = pricingPeriodNote(uep.periods, getVisibilityValue('schedule.timezone')); return n ? `<p class="sa-field-note warn">${escapeHtml(n)}</p>` : ''; })()}
     <div class="config-row-grid">
       <div class="config-row">
         <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.mode', 'Preislogik')}</span>
@@ -3102,15 +3171,22 @@ function applyFieldDiscoverySelection(fieldPath, selectedSystemId) {
 const LEGAL_GATE_FIELDS = [
   { path: 'optimizer.allowGridCharge', label: 'Netzladen (Netz → Akku)' },
   { path: 'optimizer.allowGridDischarge', label: 'Netzentladung aus Speicher (Akku → Netz)' },
-  { path: 'optimizer.gridChargeWithoutMispel', label: 'Netzladen auch ohne Pauschal-/Abgrenzungsoption — Netzstrom im Akku kann die EEG-Förderung der eingespeisten Menge gefährden' }
+  { path: 'optimizer.gridChargeWithoutMispel', label: 'Netzladen auch ohne Pauschal-/Abgrenzungsoption — Netzstrom im Akku kann die EEG-Förderung der eingespeisten Menge gefährden' },
+  { path: 'optimizer.mispel.mode', label: 'MiSpeL-Option (Pauschal / Abgrenzung) — gibt Netzladen trotz PV-Anlage frei; nur wählen, wenn die Option für deine Anlage gilt' }
 ];
+
+// „An“ = true, bei der MiSpeL-Option eine gewählte Option (wie der Server).
+function legalGateOn(path, value) {
+  if (path === 'optimizer.mispel.mode') return value === 'pauschal' || value === 'abgrenzung';
+  return value === true;
+}
 
 function legalGatesFlippedOn(nextConfig, baseConfig = currentRawConfig) {
   return LEGAL_GATE_FIELDS.filter(({ path }) => {
     const before = getPath(baseConfig, path);
     const after = getPath(nextConfig, path);
     // mirror the server: only the ENABLE transition is gated (undefined/false → true)
-    return after === true && before !== true;
+    return legalGateOn(path, after) && !legalGateOn(path, before);
   });
 }
 
@@ -3151,7 +3227,9 @@ async function confirmLegalGatesBeforeSave(nextConfig) {
   if (flipped.length === 0) return { proceed: true, confirmLegalGate: false };
   const accepted = await confirmLegalGateDialog(flipped);
   if (!accepted) {
-    for (const f of flipped) setPath(currentDraftConfig, f.path, false);
+    // Schalter zurück auf aus; die MiSpeL-Option (Auswahlfeld) zurück auf „Keine“ —
+    // false ist dort kein gültiger Wert (Codex 2026-10-18).
+    for (const f of flipped) setPath(currentDraftConfig, f.path, f.path === 'optimizer.mispel.mode' ? 'none' : false);
     renderSettingsShell();
     setBanner('Aktivierung abgebrochen — Betriebsweise nicht beim Netzbetreiber gemeldet.', 'info');
     return { proceed: false, confirmLegalGate: false };

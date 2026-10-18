@@ -154,3 +154,23 @@ describe('createMqttPublisher', () => {
     assert.equal(pub._getIntervalMs(), 10000);
   });
 });
+
+// Feldfall BIGGE 2026-10-16: MQTT ganz aus (nur HTTP-Push) — der Publisher-Takt
+// zählte trotzdem jeden Durchlauf als Fehler (17 242/24 h, Kachel „Instabil“).
+describe('Gesundheitsprobe des Publishers', () => {
+  it('MQTT aus: keine Probe; MQTT an, Hub getrennt: Fehler; verbunden: ok', async () => {
+    const { createIntegrationsHealthTracker } = await import('../services/integrations-health-tracker.js');
+    const run = (mqtt, connected) => {
+      const healthTracker = createIntegrationsHealthTracker({});
+      const hub = { publish() {}, get connected() { return connected; } };
+      const pub = createMqttPublisher(hub, { state: makeMockState(), getCfg: () => ({ mqtt }), pushLog: () => {}, healthTracker });
+      pub._publishOnce();
+      pub._publishOnce();
+      return healthTracker.snapshot().mqtt;
+    };
+    assert.equal(run({ enabled: false }, false), undefined);
+    assert.equal(run({}, false), undefined, 'enabled fehlt = aus (wie der Hub)');
+    assert.equal(run({ enabled: true }, false).errors24h, 2);
+    assert.equal(run({ enabled: true }, true).errors24h, 0);
+  });
+});

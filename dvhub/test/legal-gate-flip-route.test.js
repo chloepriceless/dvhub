@@ -325,6 +325,28 @@ describe('legal-gate flip detection — gate the ENABLE transition only (covers 
     assert.deepEqual(pushSpy.find(e => e.event === 'legal_gate_flipped').details.paths, ['optimizer.gridChargeWithoutMispel']);
   });
 
+  // 2026-10-18: die MiSpeL-Option ist ein Auswahlfeld; eine gewählte Option
+  // gibt Netzladen mit PV-Anlage frei → Bestätigung wie bei den Schaltern.
+  it('mispel.mode: none → pauschal braucht den Header, none bleibt frei, pauschal → abgrenzung auch', async () => {
+    const pushSpy = [];
+    const ctx = mockCtx({ optimizerOverrides: { allowGridCharge: true }, pushLogSpy: pushSpy });
+    const routes = createApiRoutes(ctx);
+    const post = (mode, headers) => dispatch(routes, makeReq('/api/config', {
+      method: 'POST',
+      body: { config: { apiToken: API_TOKEN, optimizer: { enabled: false, allowGridCharge: true, mispel: { mode } } } },
+      extraHeaders: headers,
+    }));
+    assert.equal((await post('none')).status, 200, 'Standard „Keine“ ohne Bestätigung');
+    const rejected = await post('pauschal');
+    assert.equal(rejected.status, 403, `body=${rejected.body}`);
+    assert.deepEqual(JSON.parse(rejected.body).paths, ['optimizer.mispel.mode']);
+    const accepted = await post('pauschal', { 'x-confirm-legal-gate': 'true' });
+    assert.equal(accepted.status, 200, `body=${accepted.body}`);
+    assert.deepEqual(pushSpy.find(e => e.event === 'legal_gate_flipped').details.paths, ['optimizer.mispel.mode']);
+    // Wechsel zwischen zwei Optionen ist kein neues Einschalten.
+    assert.equal((await post('abgrenzung')).status, 200);
+  });
+
   it('POST body that omits the legal-gate keys entirely does NOT trigger the gate (after === undefined)', async () => {
     // Partial settings POSTs that don't touch the legal-gate paths at all
     // must pass without the header. The gate filter requires `after !==

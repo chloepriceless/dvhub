@@ -230,7 +230,10 @@ export function createConfigRoutes(deps) {
         (a, k) => (a != null && Object.prototype.hasOwnProperty.call(a, k)) ? a[k] : undefined,
         obj
       );
-      const LEGAL_GATE_PATHS = ['optimizer.allowGridCharge', 'optimizer.allowGridDischarge', 'optimizer.gridChargeWithoutMispel'];
+      const LEGAL_GATE_PATHS = ['optimizer.allowGridCharge', 'optimizer.allowGridDischarge', 'optimizer.gridChargeWithoutMispel', 'optimizer.mispel.mode'];
+      // „An“ heißt bei den Schaltern true, bei der MiSpeL-Option eine gewählte
+      // Option (gibt Netzladen mit PV-Anlage frei, grid-storage.js isMispelReleased).
+      const legalGateOn = (p, v) => (p === 'optimizer.mispel.mode' ? (v === 'pauschal' || v === 'abgrenzung') : v === true);
       const currentCfgForGate = getCfg();
       // Plan 08-06 Task 2 Step 2: setup wizard one-shot bootstrap.
       // If apiToken is currently empty AND this request is trying to set it, the
@@ -260,7 +263,7 @@ export function createConfigRoutes(deps) {
         // Gate strictly on the ENABLE transition: the new value turns the gate
         // ON and it wasn't ON before. undefined/false → false (fresh-install
         // materialisation) and true → false (disable) are safe → not gated.
-        return after === true && before !== true;
+        return legalGateOn(p, after) && !legalGateOn(p, before);
       });
       if (flippedLegalGates.length > 0 && req.headers['x-confirm-legal-gate'] !== 'true') {
         // Plan 08-09 Task 2 Step 6: actor context (ip + ua + session) so we

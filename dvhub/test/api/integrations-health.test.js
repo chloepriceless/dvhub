@@ -84,7 +84,8 @@ function mockCtx({ snapshotFn = makeTrackerSnapshot, essMode = 'active' } = {}) 
     allowedHosts: [],
     notifications: { enabled: false, providers: {} },
     integrations: { tesla: { enabled: false } },
-    mqtt: {},
+    // MQTT an: nur dann gehören die Publisher-Proben zur Gesundheit (2026-10-18).
+    mqtt: { enabled: true },
   };
   return {
     state: {
@@ -156,6 +157,16 @@ describe('GET /api/integrations/health', () => {
     assert.equal(captured.status, 200, `expected 200, got ${captured.status} body=${captured.body}`);
     const ct = captured.headers['content-type'] || '';
     assert.match(ct, /application\/json/, `expected JSON content-type, got "${ct}"`);
+  });
+
+  // Feldfall BIGGE 2026-10-16: MQTT aus → gespeicherte Publisher-Proben (17 242
+  // „Fehler“) dürfen die Kachel nicht auf „Instabil“ setzen.
+  it('MQTT aus: kein mqtt-Eintrag, die übrigen Systeme bleiben', async () => {
+    const ctx = mockCtx();
+    ctx.getCfg().mqtt = { enabled: false };
+    const body = JSON.parse((await dispatch(ctx, makeReq('/api/integrations/health'))).body);
+    assert.equal(body.mqtt, undefined);
+    assert.ok(body.victron);
   });
 
   it('per-system shape includes all expected fields', async () => {

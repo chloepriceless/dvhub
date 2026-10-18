@@ -602,7 +602,7 @@ function renderDvSignalLog() {
     if (detail.source) parts.push(`Quelle: ${detail.source}`);
     if (detail.raw !== undefined) parts.push(`Raw: ${detail.raw}`);
     if (detail.scaled !== undefined) parts.push(`Skaliert: ${detail.scaled}`);
-    if (detail.writeType) parts.push(`Typ: ${detail.writeType}`);
+    if (detail.writeType) parts.push(`Typ: ${detail.writeType === 'http_pickup' ? 'HTTP-Abholung (kein MQTT)' : detail.writeType}`);
     if (detail.fc !== undefined) parts.push(`FC: ${detail.fc}`);
     if (detail.slots !== undefined) parts.push(`Slots: ${detail.slots}`);
     if (detail.energyKwh !== undefined) parts.push(`Energie: ${detail.energyKwh} kWh`);

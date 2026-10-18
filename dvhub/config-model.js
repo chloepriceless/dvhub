@@ -1398,6 +1398,10 @@ function buildFieldDefinitions() {
       path: 'victron.host',
       label: 'Anlagenadresse',
       type: 'text',
+      // Universal HA/Loxone: Werte kommen per Push (HTTP/MQTT-Schema dvhub), es
+      // gibt keine Geräteverbindung — das Feld war wirkungslos und lud zu
+      // Tippfehlern ein (Feldfall BIGGE 2026-10-16: 192.158.… statt 192.168.…).
+      visibleWhenPath: { path: 'manufacturer', notEquals: 'dvhub-mqtt' },
       discovery: {
         manufacturerPath: 'manufacturer',
         actionLabel: 'Find System IP'
@@ -2059,6 +2063,24 @@ function buildFieldDefinitions() {
       label: '⚠️ Netzladen auch ohne Pauschal-/Abgrenzungsoption (eigene Verantwortung)',
       type: 'boolean',
       help: 'Mit PV-Anlage lädt DVhub den Akku sonst nur dann aus dem Netz, wenn die MiSpeL-Pauschal- oder Abgrenzungsoption gilt. Dieser Schalter hebt die Sperre bewusst auf — z. B. um den Speicher im Winter mit günstigem Netzstrom (dynamischer Tarif, §14a Modul 3) zu nutzen, solange die Optionen noch nicht verfügbar sind. Risiko: Netzstrom im Akku vermischt sich mit PV-Strom; wird gemischter Strom eingespeist, kann für diese Menge die EEG-Förderung bzw. Marktprämie gefährdet sein. Wirkt nur zusammen mit „Netzladen erlaubt“.'
+    },
+    {
+      section: 'schedule',
+      group: 'legalSwitches',
+      groupLabel: '⚠️ Rechtliche Schalter',
+      groupDescription: 'Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG). Nur aktivieren, wenn rechtlich abgesichert.',
+      groupOrder: 40,
+      // Bis 2026-10-18 gab es dafür kein Feld — nur ein Handeintrag in der
+      // config.json gab Netzladen mit PV-Anlage frei (UEBERGABE BIGGE §5.8).
+      path: 'optimizer.mispel.mode',
+      label: '⚠️ MiSpeL-Option für den Speicher',
+      type: 'select',
+      options: [
+        { value: 'none', label: 'Keine (Standard)' },
+        { value: 'pauschal', label: 'Pauschaloption' },
+        { value: 'abgrenzung', label: 'Abgrenzungsoption (Messung)' }
+      ],
+      help: 'Nur wählen, wenn die Option für deine Anlage beim Netzbetreiber bzw. Messstellenbetreiber gilt. Mit Pauschal- oder Abgrenzungsoption darf ein Speicher an einer EEG-geförderten PV-Anlage Netzstrom laden, ohne die Förderung zu gefährden — DVhub gibt Netzladen dann zusammen mit „Netzladen erlaubt“ frei. Die Auswahl muss bestätigt werden.'
     },
     {
       section: 'schedule',

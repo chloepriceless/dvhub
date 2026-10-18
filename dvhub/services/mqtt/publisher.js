@@ -211,6 +211,10 @@ export function createMqttPublisher(hub, ctx) {
     // Healthy = hub is connected; per-topic samples would flood the ring-buffer.
     // Optional chaining guards the boot-race window before the
     // telemetryReady IIFE in server.js wires ctx.healthTracker.
+    // MQTT ganz aus (mqtt.enabled=false, z. B. reiner HTTP-Push-Eingang): der
+    // Hub verbindet nie — ein Fehler je Takt ergab 17 242 „Fehler“/24 h und
+    // „Instabil“ (Feldfall BIGGE 2026-10-16). Dann keine Probe.
+    if (!getCfg().mqtt?.enabled) return;
     ctx.healthTracker?.recordSample('mqtt', {
       latencyMs: Date.now() - __t0,
       success: hub.connected

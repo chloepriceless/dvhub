@@ -96,8 +96,10 @@ export function createMispelTracker(state, getCfg, pushLog) {
    * @returns {{ profitable: boolean, reason: string, adjustedImportCtKwh: number }}
    */
   function isGridChargeProfitable(importCtKwh) {
-    // Mode check (D-24)
-    if (mispel.mode === 'none') {
+    // Mode check (D-24). Live aus der Config: seit 2026-10-18 stellt man die
+    // Option in der Oberfläche um, ohne Neustart.
+    mispel.mode = getCfg().optimizer?.mispel?.mode ?? 'none';
+    if (mispel.mode !== 'pauschal' && mispel.mode !== 'abgrenzung') {
       return {
         profitable: false,
         reason: 'mispel_disabled',

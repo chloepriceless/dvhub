@@ -599,3 +599,22 @@ test('25-01: echte erzwungene Netzentladung (-5000, eos_optimization) bleibt bei
     'der Reject wird einmal als control_write_rejected geloggt'
   );
 });
+
+// Feldfall BIGGE 2026-10-16: HTTP-Push-Eingang ohne Broker — Loxone holt den
+// Sollwert per GET /api/integration/loxone ab. Das Steuer-Log nannte „mqtt“.
+test('Push-Modus ohne Broker: Schreibvorgang heißt http_pickup, mit Broker weiter mqtt', async () => {
+  const { createMqttTransport } = await import('../transport-mqtt.js');
+  const pushOnly = createMqttTransport({ host: '', mqtt: { schema: 'dvhub', topicPrefix: 'dvhub' } }, { connectFn: () => { throw new Error('kein Broker'); } });
+  await pushOnly.init();
+  assert.equal(pushOnly.brokerMode, 'push-only');
+  const { evaluator, state, logs } = makeCtx({ mutate: ({ ctx }) => { ctx.transport = pushOnly; } });
+  const r = await evaluator.applyControlTarget('gridSetpointW', -9880, 'rule:eos-1');
+  assert.equal(r.ok, true);
+  assert.equal(r.writeType, 'http_pickup');
+  assert.equal(state.schedule.lastWrite.gridSetpointW.writeType, 'http_pickup');
+  assert.equal(logs.find((l) => l.event === 'control_write').payload.writeType, 'http_pickup');
+
+  const viaBroker = makeCtx();   // Ersatz-Transport ohne pushOnly-Antwort = Broker-Weg
+  const r2 = await viaBroker.evaluator.applyControlTarget('gridSetpointW', -500, 'test');
+  assert.equal(r2.writeType, 'mqtt');
+});

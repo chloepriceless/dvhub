@@ -12,6 +12,11 @@ verweist hierher.
 
 ### Neu
 
+- **Feld für die MiSpeL-Option (Pauschal- oder Abgrenzungsoption).** Unter Rechtliche Schalter lässt sich jetzt
+  wählen, ob für den Speicher die Pauschal- oder die Abgrenzungsoption gilt (`optimizer.mispel.mode`). Vorher ging
+  das nur per Handeintrag in der `config.json`. Die Wahl einer Option gibt Netzladen mit PV-Anlage frei und muss
+  deshalb bestätigt werden wie die anderen rechtlichen Schalter.
+
 - **EOS hängt nicht mehr still — Wache und Knopf „EOS neu starten“.** Feldfall: EOS antwortete, rechnete aber
   seit dem Vorabend nicht mehr (ein Rechenprozess hing, jeder weitere Lauf wartete bis zum Timeout von 3 h); die
   Oberfläche zeigte „online“ und den alten Plan, ein Neustart von DVhub half nicht. Jetzt startet DVhub EOS selbst
@@ -115,6 +120,32 @@ verweist hierher.
   alte Verhalten zurück.
 
 ### Behoben
+
+- **IPsec-VPN auf Ubuntu 26.04 (sudo-rs).** sudo-rs lehnt Platzhalter mitten im Argument ab und übersprang deshalb
+  die vier sudoers-Regeln, mit denen DVhub die IPsec-Profile nach `/etc/ipsec.d` verlinkt — IPsec ging auf solchen
+  Boxen nicht, und die Warnung landete in fremden Fehlermeldungen. Das übernimmt jetzt das root-eigene Hilfsskript
+  `/usr/local/libexec/dvhub-ipsec-link` (prüft Profilnamen und lehnt `leftupdown`/`include` ab). Die sudoers-Datei
+  wird vor dem Einspielen mit `visudo -c` geprüft; schlägt das fehl, bleiben die bisherigen Regeln aktiv. Kommt mit
+  dem nächsten Update von selbst auf die Box. Mit sudo-rs 0.2.13 auf Ubuntu 26.04 geprüft.
+- **MQTT-Kachel „Instabil“ mit tausenden Fehlern, obwohl MQTT aus ist.** Der MQTT-Publisher zählte bei
+  ausgeschaltetem MQTT jeden 5-s-Takt als Fehler (Feldfall: 17 242 in 24 h bei reinem HTTP-Push). Jetzt keine
+  Gesundheitsprobe, wenn MQTT aus ist; die Kachel zeigt „Inaktiv“.
+- **Steuer-Log nennt die HTTP-Abholung.** Ohne Broker (Loxone holt die Sollwerte per HTTP ab) stand im Steuer-Log
+  `writeType: mqtt`; jetzt `http_pickup` („HTTP-Abholung“).
+- **Netzladen-Schalter sagt, wenn er nicht wirkt.** Mit PV-Anlage braucht Netzladen zusätzlich eine MiSpeL-Option
+  oder „Netzladen auch ohne Pauschal-/Abgrenzungsoption“; der Schalter stand sonst auf „an“ ohne Wirkung. Ein
+  Hinweis am Schalter nennt jetzt den Grund (und umgekehrt an den Freigaben, wenn der Hauptschalter fehlt).
+- **Dachflächen lassen sich wieder eintragen.** Die Eingabe der PV-Dachflächen erschien nur bei
+  `forecast.pv.configLevel = detailed`, für das es kein Feld gab. Sie steht jetzt immer unter Meine Anlage und
+  weist darauf hin, dass ohne Fläche alle Prognosen mit 35° nach Süden rechnen; wer eine Fläche anlegt, schaltet
+  die Prognose damit auf die Flächen um.
+- **Strompreis: welcher Satz gilt heute?** Der Standard-Tarif hieß „immer gültig“, obwohl ein Preis-Zeitraum ihn
+  vollständig ersetzt. Die Überschrift sagt jetzt „gilt an Tagen ohne eigenen Zeitraum“, und ein Hinweis nennt den
+  heute gültigen Zeitraum bzw. den nächsten.
+- **Anlagenadresse bei Universal (HA/Loxone) ausgeblendet.** Das Profil hat keine Geräteverbindung; das Feld war
+  wirkungslos und lud zu Tippfehlern ein.
+- **MiSpeL-Wirtschaftlichkeit folgt der Option ohne Neustart.** Die Umstellung der Option wirkte im Planer erst
+  nach einem Neustart.
 
 - **Loxone: Sollwerte stehen jetzt oben in der Antwort.** `GET /api/integration/loxone` gibt Zeitstempel und
   `dvhub_control_*` zuerst aus, JSON-Blöcke am Ende. Vorher stand allein `userEnergyPricing` mit über 40 KB vor den

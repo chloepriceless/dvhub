@@ -215,3 +215,19 @@ test('research example: pvKwp=10, feedIn=8000, withdrawal=4000', () => {
   assert.equal(result.profitable, false);
   assert.equal(result.reason, 'saldierung_exhausted');
 });
+
+// 2026-10-18: die Option ist jetzt ein Feld in der Oberfläche — eine Änderung
+// muss ohne Neustart greifen (vorher beim Start eingefroren).
+test('isGridChargeProfitable folgt einer Umstellung der Option ohne Neustart', () => {
+  const state = makeState();
+  const cfg = { optimizer: { mispel: { mode: 'none', pvKwp: 10 } } };
+  const tracker = createMispelTracker(state, () => cfg, makeLog());
+  tracker.update(8_000_000, 0);   // 8000 kWh bei 10 kWp: 5000 grün, 3000 saldierungsfähig
+  assert.equal(tracker.isGridChargeProfitable(30).reason, 'mispel_disabled');
+  cfg.optimizer.mispel.mode = 'pauschal';
+  const on = tracker.isGridChargeProfitable(30);
+  assert.equal(on.reason, 'saldierung_available');
+  assert.equal(on.adjustedImportCtKwh, 30 - REFUNDABLE_UMLAGEN_CT_KWH);
+  cfg.optimizer.mispel.mode = 'none';
+  assert.equal(tracker.isGridChargeProfitable(30).reason, 'mispel_disabled');
+});

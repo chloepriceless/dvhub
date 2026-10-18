@@ -86,6 +86,17 @@
   color: var(--text-dim);
 }
 
+/* Laufzeit-Hinweis unter einem Feld (z. B. Netzladen an, wirkt aber nicht). */
+.sa-field-note {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.sa-field-note.warn {
+  color: var(--yellow);
+}
+
 /* ── Felder (entspricht .ob-field / .ob-label / .ob-input) ───────────────── */
 :is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys, #areaGrid-shares) .config-row {
   display: block;
