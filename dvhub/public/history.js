@@ -2417,6 +2417,7 @@ async function loadHistorySummary() {
       return;
     }
     renderSummary(payload);
+    loadMispelOverview();
   } catch (error) {
     if (error?.name === 'AbortError' || isStale()) return;
     setBanner(`Historie konnte nicht geladen werden: ${error.message}`, 'error');
@@ -2443,6 +2444,9 @@ async function triggerBackfill() {
       setBanner(`Preis-Backfill fehlgeschlagen: ${payload.error || response.status}`, 'error');
       return;
     }
+    // Neue Preise ändern die MiSpeL-Summen (negativer Preis, fehlender Preis) —
+    // die Übersicht mit der Historie neu laden (Codex 2026-10-18).
+    mispelLoadedYear = null;
     await loadHistorySummary();
     if (payload.partial) {
       setBanner(`Preis-Backfill teilweise abgeschlossen: ${payload.importedRows} Preise importiert, offen: ${(payload.openDays || []).join(', ') || '-'}.`, 'warn');
@@ -2597,6 +2601,76 @@ function bindHistoryControls() {
 // T-0004: §51a lifetime Förder-Verlängerung seit Inbetriebnahme. View-
 // independent — fetched once per page load; the row lives on the
 // Abregelungs-KPI card next to the per-view §51 counter.
+// ── MiSpeL-Übersicht (2026-10-18) ────────────────────────────────────────────
+// Je (Rumpf-)Jahr die Pauschalgrenzen und die gemessenen Mengen, bei der
+// Abgrenzungsoption zusätzlich Formelsatz A1 je Monat. Lädt nur bei einem
+// Jahreswechsel neu (die Rechnung geht über das ganze Jahr).
+let mispelLoadedYear = null;
+let mispelGeneration = 0;
+function fmtDateDe(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : String(iso || '');
+}
+function mispelKwh(value) {
+  return Number.isFinite(Number(value)) ? `${Math.round(Number(value)).toLocaleString('de-DE')} kWh` : '–';
+}
+function renderMispelOverview(data) {
+  const card = byId('historyMispelCard');
+  const body = byId('historyMispelBody');
+  if (!card || !body) return;
+  if (!data?.ok || data.mode === 'none' || !Array.isArray(data.perioden) || !data.perioden.length) {
+    card.hidden = true;
+    return;
+  }
+  const modeLabel = data.mode === 'abgrenzung' ? 'Abgrenzungsoption' : 'Pauschaloption';
+  setText('historyMispelSub', `${modeLabel} ${data.year} · ${data.festlegung} · aus den Messwerten dieser Anlage (keine Abrechnung)`);
+  const rows = data.perioden.map((p) => {
+    const g = p.grenzen || {};
+    const w = p.werte || {};
+    const name = `${fmtDateDe(p.von)} – ${fmtDateDe(p.bis)}${p.rumpf ? ' (Rumpfjahr)' : ''}${p.laufend ? ' · läuft' : ''}${p.zukunft ? ' · noch nicht begonnen' : ''}`;
+    const change = p.change?.label ? `<br><small>endet mit: ${escapeHtml(p.change.label)}</small>` : '';
+    return `<tr><td>${escapeHtml(name)}${change}</td>`
+      + `<td>${mispelKwh(g.P1)}</td><td>${mispelKwh(g.P4)}</td>`
+      + `<td>${p.zukunft ? '–' : mispelKwh(w.P7)}</td><td>${p.zukunft ? '–' : mispelKwh(w.P15)}</td>`
+      + `<td>${p.zukunft ? '–' : mispelKwh(w.P9)}</td><td>${p.zukunft ? '–' : mispelKwh(w.P10)}</td><td>${p.zukunft ? '–' : mispelKwh(w.P11)}</td></tr>`;
+  }).join('');
+  let html = `<table class="history-summary-table"><thead><tr><th>Zeitraum</th><th>förderfähig bis (P1)</th><th>Erstattung ab (P4)</th>`
+    + `<th>Einspeisung (P7)</th><th>förderfähig (P15)</th><th>Netzbezug (P9)</th><th>saldiert (P10)</th><th>voll belastet (P11)</th></tr></thead><tbody>${rows}</tbody></table>`;
+  const a = data.abgrenzung;
+  if (data.mode === 'abgrenzung' && a && Array.isArray(a.monate) && a.monate.length) {
+    const mrows = a.monate.map((m) => `<tr><td>${escapeHtml(m.monat)}</td><td>${mispelKwh(m.f3)}</td><td>${mispelKwh(m.f4)}</td>`
+      + `<td>${mispelKwh(m.f5)} / ${mispelKwh(m.f6)}</td><td>${Number.isFinite(m.f14) ? (m.f14 * 100).toFixed(0) + ' %' : '–'}</td>`
+      + `<td>${mispelKwh(m.f16)}</td><td>${mispelKwh(m.f20)}</td><td>${mispelKwh(m.f32)}</td></tr>`).join('');
+    html += `<p class="card-sub">Abgrenzungsoption, Formelsatz A1 je Monat — Speicherzähler genähert aus der Akku-Leistung.</p>`
+      + `<table class="history-summary-table"><thead><tr><th>Monat</th><th>Netzbezug (3)</th><th>Einspeisung (4)</th><th>Speicher lädt / gibt ab</th>`
+      + `<th>Wirkungsgrad (14)</th><th>saldierbar (16)</th><th>umlagereduziert (20)</th><th>förderfähig (32)</th></tr></thead><tbody>${mrows}`
+      + `<tr><td>Jahr</td><td>${mispelKwh(a.jahr.f3)}</td><td>${mispelKwh(a.jahr.f4)}</td><td>${mispelKwh(a.jahr.f5)} / ${mispelKwh(a.jahr.f6)}</td><td></td>`
+      + `<td>${mispelKwh(a.jahr.f16)}</td><td>${mispelKwh(a.jahr.f20)}</td><td>${mispelKwh(a.jahr.f33)}</td></tr></tbody></table>`;
+  }
+  const notes = [...(data.hinweise || [])];
+  const ohnePreis = data.perioden.reduce((n, p) => n + (p.ohnePreis || 0), 0);
+  if (ohnePreis > 0) notes.push(`${ohnePreis} Viertelstunden ohne Börsenpreis — dort zählt die Einspeisung wie bei positivem Preis („Preise nachladen“ hilft).`);
+  if (notes.length) html += notes.map((n) => `<p class="card-sub">${escapeHtml(n)}</p>`).join('');
+  body.innerHTML = html;
+  card.hidden = false;
+}
+async function loadMispelOverview(force = false) {
+  const date = byId('historyDate')?.value || currentDateValue();
+  const year = Number(String(date).slice(0, 4));
+  if (!force && year === mispelLoadedYear) return;
+  mispelLoadedYear = year;
+  // Schneller Jahreswechsel: nur die Antwort der letzten Anfrage zeichnen.
+  const generation = ++mispelGeneration;
+  try {
+    const r = await apiFetch(`/api/history/mispel?year=${year}`);
+    const data = r.ok ? await r.json() : null;
+    if (generation !== mispelGeneration) return;
+    renderMispelOverview(data);
+  } catch (_) {
+    if (generation === mispelGeneration) renderMispelOverview(null);
+  }
+}
+
 async function loadEegLifetimeExtension() {
   const row = byId('historyKpiEegLifetimeRow');
   const valueEl = byId('historyKpiEegLifetime');

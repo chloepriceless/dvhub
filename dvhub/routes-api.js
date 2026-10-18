@@ -1177,6 +1177,8 @@ export function createApiRoutes(ctx) {
     '/api/schedule',
     '/api/history/import/status',
     '/api/history/summary',
+    // MiSpeL-Übersicht der Historie (2026-10-18) — gleiche Haltung wie summary.
+    '/api/history/mispel',
     // §51a lifetime Förder-Verlängerung (T-0004) — read-only aggregate for the
     // history page; same appliance-trust pattern as /api/history/summary.
     '/api/eeg/extension',
@@ -1262,6 +1264,7 @@ export function createApiRoutes(ctx) {
     ['/api/family/tile-history', 'dashboard'], ['/api/family/tesla-history', 'dashboard'],
     // history — telemetry/history reads + exports + DB backup
     ['/api/history/import/status', 'history'], ['/api/history/summary', 'history'],
+    ['/api/history/mispel', 'history'],
     ['/api/eeg/extension', 'history'],
     ['/api/telemetry/series', 'history'], ['/api/history/raw', 'history'],
     ['/api/history/raw/export.csv', 'history'], ['/api/history/raw/export.parquet', 'history'],
@@ -7235,6 +7238,19 @@ export function createApiRoutes(ctx) {
 
     if (url.pathname === '/api/history/import/status' && req.method === 'GET') {
       return json(res, 200, buildApiHistoryImportStatusResponse());
+    }
+
+    // MiSpeL-Übersicht: Pauschaloption je (Rumpf-)Jahr, Abgrenzung je Monat,
+    // aus den gemessenen Viertelstunden (services/mispel/mispel-calc.js).
+    if (url.pathname === '/api/history/mispel' && req.method === 'GET') {
+      if (!ctx.historyApi || typeof ctx.historyApi.getMispel !== 'function') {
+        return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      }
+      const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, () => ctx.historyApi.getMispel({
+        year: url.searchParams.get('year')
+      }));
+      if (result === HEAVY_SKIPPED) return;
+      return json(res, result.status, result.body);
     }
 
     if (url.pathname === '/api/history/summary' && req.method === 'GET') {

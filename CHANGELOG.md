@@ -12,6 +12,16 @@ verweist hierher.
 
 ### Neu
 
+- **MiSpeL-Übersicht in der Historie, Rumpfjahre in den Einstellungen.** Ist eine MiSpeL-Option gewählt, rechnet
+  DVhub aus den eigenen Messwerten nach der Festlegung der BNetzA (Beschluss 618-25-02 vom 01.10.2026) mit:
+  Pauschaloption je Kalender- bzw. Rumpfjahr (förderfähige Menge P1, Erstattungsschwelle P4, Einspeisung P7,
+  saldierte Menge P10, voll belasteter Netzbezug P11, förderfähige Einspeisung P15), bei der Abgrenzungsoption
+  zusätzlich Formelsatz A1 je Monat. Die Historie zeigt das als Karte für das gewählte Jahr
+  (`GET /api/history/mispel?year=`). In den Einstellungen (Netz → Rechtliche Schalter) erscheinen mit der Option:
+  „MiSpeL-Option gilt seit“ (im ersten Jahr ein Rumpfjahr ab diesem Tag), PV-Leistung und installierte
+  Speicherkapazität für MiSpeL und die Liste der Rumpfjahre — jede Änderung an Speicher, Solaranlage, Ladepunkt,
+  Messkonzept oder Zuordnung teilt das Jahr; Akku-Ausbaustufen werden als Rumpfjahr vorgeschlagen. Die Werte sind
+  eine Auswertung der Anlage, keine Abrechnung; den Speicherzähler nähert DVhub aus der Akku-Leistung.
 - **Feld für die MiSpeL-Option (Pauschal- oder Abgrenzungsoption).** Unter Rechtliche Schalter lässt sich jetzt
   wählen, ob für den Speicher die Pauschal- oder die Abgrenzungsoption gilt (`optimizer.mispel.mode`). Vorher ging
   das nur per Handeintrag in der `config.json`. Die Wahl einer Option gibt Netzladen mit PV-Anlage frei und muss

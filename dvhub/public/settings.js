@@ -21,6 +21,9 @@ let pvPlantsValidation = [];
 let batteryStagesDraft = [];
 let batteryStagesValidation = [];
 let forecastStringsValidation = [];
+// MiSpeL-Rumpfjahre (2026-10-18): Änderungen an der Anlage, die das Jahr teilen.
+let mispelChangesDraft = [];
+let mispelChangesValidation = [];
 let settingsShellState = createSettingsShellState();
 let settingsDiscoveryStates = {};
 let forecastStringsDraft = [];
@@ -126,7 +129,7 @@ function createConfigInput(field, value, inherited) {
     }
   } else {
     input = document.createElement('input');
-    input.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : 'text');
+    input.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : (field.type === 'date' ? 'date' : 'text'));
     input.className = 'config-input';
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
@@ -2036,6 +2039,7 @@ function renderAreaEditor(name) {
   if (name === 'pricingPeriods') return renderPricingPeriodsEditor();
   if (name === 'batteryStages') return renderBatteryStagesEditor();
   if (name === 'forecastStrings') return renderForecastStringEditor();
+  if (name === 'mispelChanges') return renderMispelChangesEditor();
   if (name === 'historyImport') return renderHistoryImportPanel('services');
   return null;
 }
@@ -2440,6 +2444,119 @@ function updateBatteryStageField(stageId, path, value) {
     setPath(next, path, value);
     return next;
   });
+}
+
+// ── MiSpeL-Rumpfjahre ────────────────────────────────────────────────────────
+// Jede bestimmungsrelevante Änderung teilt das Kalenderjahr (Anlage 2,
+// Abschnitt 9); der Tag der Änderung zählt zum Rumpfjahr davor. kWp/Speicher
+// gelten NACH der Änderung (leer = unverändert bzw. aus den Akku-Ausbaustufen).
+function mispelOptionOn() {
+  const mode = getVisibilityValue('optimizer.mispel.mode');
+  return mode === 'pauschal' || mode === 'abgrenzung';
+}
+
+function serializeMispelChanges(list = []) {
+  const num = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
+  return list.map((c) => ({ date: String(c.date || ''), label: String(c.label || ''), kwp: num(c.kwp), storageKwh: num(c.storageKwh) }));
+}
+
+function validateMispelChanges(list = []) {
+  const messages = [];
+  const seen = new Set();
+  list.forEach((c, i) => {
+    const name = `Rumpfjahr ${i + 1}`;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(c?.date || ''))) messages.push(`${name}: Datum der Änderung fehlt.`);
+    else if (seen.has(c.date)) messages.push(`${name}: Am ${c.date} steht schon eine Änderung.`);
+    seen.add(c?.date);
+    for (const [key, label] of [['kwp', 'kWp'], ['storageKwh', 'Speicher']]) {
+      const v = c?.[key];
+      if (v !== '' && v !== null && v !== undefined && !(Number(v) > 0)) messages.push(`${name}: ${label} muss größer als 0 sein oder leer bleiben.`);
+    }
+  });
+  return { valid: messages.length === 0, messages };
+}
+
+// Akku-Ausbaustufen ab dem Start der Option, die noch nicht als Änderung
+// eingetragen sind — eine Speichererweiterung ist bestimmungsrelevant. Der Tag
+// VOR der neuen Stufe ist der letzte Tag des alten Rumpfjahres.
+function mispelStageSuggestions(stages = batteryStagesDraft, changes = mispelChangesDraft, startDate = getVisibilityValue('optimizer.mispel.startDate')) {
+  const have = new Set(changes.map((c) => c.date));
+  return (stages || [])
+    .filter((st) => st && /^\d{4}-\d{2}-\d{2}$/.test(String(st.startDate || '')))
+    .map((st) => {
+      const d = new Date(`${st.startDate}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - 1);
+      return { date: d.toISOString().slice(0, 10), stage: st };
+    })
+    .filter((x) => (!startDate || x.date >= startDate) && !have.has(x.date));
+}
+
+function renderMispelChangesEditor() {
+  if (!mispelOptionOn()) return null;
+  const section = document.createElement('section');
+  section.className = 'config-group config-group--full';
+  section.dataset.accent = 'yellow';
+  const validation = mispelChangesValidation.length
+    ? `<div class="config-banner error">${mispelChangesValidation.map((m) => `<div>${escapeHtml(m)}</div>`).join('')}</div>`
+    : '';
+  const suggestions = mispelStageSuggestions();
+  const kwhOf = (st) => Number(st?.capacityKwh ?? (Number(st?.capacityWh) / 1000));
+  section.innerHTML = `
+    <div class="config-group-kicker" data-accent="yellow">MiSpeL — Rumpfjahre</div>
+    <div class="svc-meta">Jede Änderung an Speicher, Solaranlage, Ladepunkt, Messkonzept oder Zuordnung teilt das Kalenderjahr in Rumpfjahre mit eigenen Grenzen. Der Tag der Änderung zählt zum Rumpfjahr davor. Im ersten Jahr beginnt das Rumpfjahr mit „MiSpeL-Option gilt seit“. Die Auswertung steht in der Historie.</div>
+    ${validation}
+    ${suggestions.length ? `<div class="config-banner info">${suggestions.map((x) => `<div>Akku-Ausbaustufe ab ${escapeHtml(x.stage.startDate)}${Number.isFinite(kwhOf(x.stage)) ? ` (${escapeHtml(String(kwhOf(x.stage)))} kWh)` : ''} ist noch kein Rumpfjahr. <button type="button" class="btn btn-ghost btn-small" data-mispel-adopt="${escapeHtml(x.date)}" data-mispel-adopt-kwh="${escapeHtml(String(kwhOf(x.stage) || ''))}">Als Änderung am ${escapeHtml(x.date)} übernehmen</button></div>`).join('')}</div>` : ''}
+    ${mispelChangesDraft.map((c, i) => `
+      <div class="sa-divider-top">
+        <div class="config-row-grid">
+          <div class="config-row"><span class="config-row-label">Datum der Änderung</span>
+            <input class="config-input sa-w-date" type="date" data-mispel-index="${i}" data-mispel-path="date" value="${escapeHtml(c.date || '')}" /></div>
+          <div class="config-row"><span class="config-row-label">Was wurde geändert?</span>
+            <input class="config-input sa-w-label" type="text" maxlength="80" data-mispel-index="${i}" data-mispel-path="label" value="${escapeHtml(c.label || '')}" placeholder="z. B. Speicher erweitert" /></div>
+        </div>
+        <div class="config-row-grid">
+          <div class="config-row"><span class="config-row-label">PV danach (kWp, leer = gleich)</span>
+            <input class="config-input sa-w-num" type="number" min="0" step="0.01" data-mispel-index="${i}" data-mispel-path="kwp" value="${escapeHtml(c.kwp ?? '')}" /></div>
+          <div class="config-row"><span class="config-row-label">Speicher danach (kWh, leer = aus Ausbaustufen)</span>
+            <input class="config-input sa-w-num" type="number" min="0" step="0.1" data-mispel-index="${i}" data-mispel-path="storageKwh" value="${escapeHtml(c.storageKwh ?? '')}" /></div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-small" data-mispel-remove="${i}">Entfernen</button>
+      </div>`).join('')}
+    <div class="sa-pad"><button type="button" id="addMispelChangeBtn" class="btn btn-ghost btn-small">+ Rumpfjahr (Änderung) anlegen</button></div>
+  `;
+  // Liste in den Entwurf spiegeln, damit die Speichern-Leiste die Änderung
+  // anzeigt (updateSaveBar vergleicht currentDraftConfig, Codex 2026-10-18).
+  const rerender = () => {
+    mispelChangesValidation = [];
+    currentDraftConfig.optimizer = currentDraftConfig.optimizer || {};
+    currentDraftConfig.optimizer.mispel = currentDraftConfig.optimizer.mispel || {};
+    currentDraftConfig.optimizer.mispel.changes = serializeMispelChanges(mispelChangesDraft);
+    renderSettingsShell();
+    updateSaveBar();
+  };
+  section.querySelector('#addMispelChangeBtn')?.addEventListener('click', () => {
+    mispelChangesDraft = [...mispelChangesDraft, { date: '', label: '', kwp: null, storageKwh: null }];
+    rerender();
+  });
+  section.querySelectorAll('[data-mispel-remove]').forEach((b) => b.addEventListener('click', () => {
+    mispelChangesDraft = mispelChangesDraft.filter((_, i) => i !== Number(b.dataset.mispelRemove));
+    rerender();
+  }));
+  section.querySelectorAll('[data-mispel-adopt]').forEach((b) => b.addEventListener('click', () => {
+    // Speicher leer lassen: der Rechner nimmt dann die Ausbaustufe (nutzbare kWh);
+    // wer die installierte Kapazität kennt, trägt sie ein.
+    mispelChangesDraft = [...mispelChangesDraft, { date: b.dataset.mispelAdopt, label: 'Speicher geändert', kwp: null, storageKwh: null }]
+      .sort((a, c) => String(a.date).localeCompare(String(c.date)));
+    rerender();
+  }));
+  section.querySelectorAll('[data-mispel-index][data-mispel-path]').forEach((input) => {
+    onDraftFieldCommit(input, () => {
+      const i = Number(input.dataset.mispelIndex);
+      mispelChangesDraft = mispelChangesDraft.map((c, k) => (k === i ? { ...c, [input.dataset.mispelPath]: input.value } : c));
+      rerender();
+    });
+  });
+  return section;
 }
 
 function renderBatteryStagesEditor() {
@@ -2866,6 +2983,8 @@ function countChangedFields() {
     const saved = getPath(currentRawConfig, field.path);
     if (JSON.stringify(draft) !== JSON.stringify(saved)) count++;
   }
+  // MiSpeL-Rumpfjahre: eigene Liste ohne Eingabefeld je Pfad — zählt als eine Änderung.
+  if (JSON.stringify(serializeMispelChanges(mispelChangesDraft)) !== JSON.stringify(currentRawConfig?.optimizer?.mispel?.changes || [])) count++;
   // Der Betriebsart-Schalter hat keine eigenen Eingabefelder — er zählt als eine Änderung.
   const modePaths = ['optimizer.enabled', 'schedule.smallMarketAutomation.enabled', 'optimizer.primarySource', 'optimizer.eosProxy.enabled'];
   if (modePaths.some((path) => !document.getElementById(fieldId(path))
@@ -2917,6 +3036,12 @@ function collectConfigFromForm() {
   next.userEnergyPricing.pvPlants = serializePvPlants(pvPlantsDraft);
   next.optimizer = next.optimizer || {};
   next.optimizer.batteryStages = serializeBatteryStages(batteryStagesDraft);
+  // Nur schreiben, wenn es Einträge gibt oder schon einmal welche gab — sonst
+  // meldete der Settings-Diff eine Änderung, die niemand gemacht hat.
+  if (mispelChangesDraft.length || Array.isArray(currentRawConfig?.optimizer?.mispel?.changes)) {
+    next.optimizer.mispel = next.optimizer.mispel || {};
+    next.optimizer.mispel.changes = serializeMispelChanges(mispelChangesDraft);
+  }
   return next;
 }
 
@@ -2933,6 +3058,8 @@ function loadConfigPayloadState(payload) {
   marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
   pvPlantsDraft = deserializePvPlants(currentRawConfig?.userEnergyPricing?.pvPlants);
   batteryStagesDraft = deserializeBatteryStages(currentRawConfig?.optimizer?.batteryStages);
+  mispelChangesDraft = clone(currentRawConfig?.optimizer?.mispel?.changes || []);
+  mispelChangesValidation = [];
   pricingPeriodsValidation = [];
   pvPlantsValidation = [];
   batteryStagesValidation = [];
@@ -3251,12 +3378,15 @@ async function saveCurrentForm() {
   pvPlantsValidation = pvValidation.messages;
   batteryStagesValidation = batteryValidation.messages;
   forecastStringsValidation = stringsValidation.messages;
-  if (!pricingValidation.valid || !pvValidation.valid || !batteryValidation.valid || !stringsValidation.valid) {
+  const mispelValidation = validateMispelChanges(mispelChangesDraft);
+  mispelChangesValidation = mispelValidation.messages;
+  if (!pricingValidation.valid || !pvValidation.valid || !batteryValidation.valid || !stringsValidation.valid || !mispelValidation.valid) {
     renderSettingsShell();
     const firstMessage = pricingValidation.messages[0]
       || pvValidation.messages[0]
       || batteryValidation.messages[0]
-      || stringsValidation.messages[0];
+      || stringsValidation.messages[0]
+      || mispelValidation.messages[0];
     setBanner(`Speichern blockiert: ${firstMessage}`, 'error');
     return;
   }
@@ -3880,6 +4010,8 @@ function initSettingsPage() {
     marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
     pvPlantsDraft = deserializePvPlants(currentRawConfig?.userEnergyPricing?.pvPlants);
     batteryStagesDraft = deserializeBatteryStages(currentRawConfig?.optimizer?.batteryStages);
+    mispelChangesDraft = clone(currentRawConfig?.optimizer?.mispel?.changes || []);
+    mispelChangesValidation = [];
     pricingPeriodsValidation = [];
     pvPlantsValidation = [];
     batteryStagesValidation = [];

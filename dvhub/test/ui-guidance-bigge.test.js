@@ -132,3 +132,49 @@ test('Abbruch der Bestätigung: MiSpeL-Option zurück auf „none“, Schalter a
   assert.equal(draft.optimizer.mispel.mode, 'none');
   assert.equal(draft.optimizer.allowGridCharge, false);
 });
+
+test('MiSpeL: Startdatum, kWp, Speicher und Rumpfjahre erst sichtbar, wenn eine Option gewählt ist', () => {
+  const { sandbox, withConfig } = settingsSandbox();
+  for (const p of ['optimizer.mispel.startDate', 'optimizer.mispel.pvKwp', 'optimizer.mispel.storageKwh']) {
+    const f = field(p);
+    assert.ok(f, p);
+    withConfig({ optimizer: { mispel: { mode: 'none' } } });
+    assert.equal(sandbox.isFieldVisible(f), false, `${p} bei „Keine“`);
+    withConfig({ optimizer: {} });
+    assert.equal(sandbox.isFieldVisible(f), false, `${p} ohne Eintrag`);
+    for (const mode of ['pauschal', 'abgrenzung']) {
+      withConfig({ optimizer: { mispel: { mode } } });
+      assert.equal(sandbox.isFieldVisible(f), true, `${p} bei ${mode}`);
+    }
+  }
+  assert.equal(field('optimizer.mispel.startDate').type, 'date');
+  withConfig({ optimizer: { mispel: { mode: 'none' } } });
+  assert.equal(sandbox.renderMispelChangesEditor(), null, 'Liste ohne Option nicht da');
+  const grid = getConfigDefinition().areas.find((a) => a.id === 'grid');
+  assert.ok(grid.editors.includes('mispelChanges'));
+});
+
+test('MiSpeL-Rumpfjahre: Akku-Ausbaustufe als Vorschlag (Tag davor), Prüfung beim Speichern', () => {
+  const { sandbox } = settingsSandbox();
+  const stages = [{ startDate: '2026-05-17', capacityKwh: 15 }, { startDate: '2025-01-01', capacityKwh: 10 }];
+  const sug = JSON.parse(JSON.stringify(sandbox.mispelStageSuggestions(stages, [], '2026-01-01')));
+  assert.deepEqual(sug.map((x) => x.date), ['2026-05-16'], 'Stufe vor dem Start fällt weg; Änderungstag = Tag vor der neuen Stufe');
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.mispelStageSuggestions(stages, [{ date: '2026-05-16' }], '2026-01-01'))), []);
+  const v = (list) => JSON.parse(JSON.stringify(sandbox.validateMispelChanges(list)));
+  assert.equal(v([{ date: '2026-05-16', kwp: '', storageKwh: '15' }]).valid, true);
+  assert.deepEqual(v([{ date: '' }]).messages, ['Rumpfjahr 1: Datum der Änderung fehlt.']);
+  assert.deepEqual(v([{ date: '2026-05-16' }, { date: '2026-05-16' }]).messages, ['Rumpfjahr 2: Am 2026-05-16 steht schon eine Änderung.']);
+  assert.deepEqual(v([{ date: '2026-05-16', storageKwh: '-3' }]).messages, ['Rumpfjahr 1: Speicher muss größer als 0 sein oder leer bleiben.']);
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.serializeMispelChanges([{ date: '2026-05-16', label: 'Speicher', kwp: '', storageKwh: '15' }]))),
+    [{ date: '2026-05-16', label: 'Speicher', kwp: null, storageKwh: 15 }]);
+});
+
+// Codex 2026-10-18: Änderungen nur an der Rumpfjahr-Liste zeigten keine Speichern-Leiste.
+test('MiSpeL-Rumpfjahre: geänderte Liste zählt als Änderung', () => {
+  const { sandbox } = settingsSandbox();
+  vm.runInContext(`currentRawConfig = { optimizer: { mispel: { mode: 'pauschal', changes: [] } } };
+    mispelChangesDraft = [{ date: '2026-05-16', label: '', kwp: '', storageKwh: '15' }];`, sandbox);
+  assert.equal(sandbox.countChangedFields(), 1);
+  vm.runInContext(`mispelChangesDraft = [];`, sandbox);
+  assert.equal(sandbox.countChangedFields(), 0);
+});

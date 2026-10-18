@@ -2088,6 +2088,63 @@ function buildFieldDefinitions() {
       groupLabel: '⚠️ Rechtliche Schalter',
       groupDescription: 'Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG). Nur aktivieren, wenn rechtlich abgesichert.',
       groupOrder: 40,
+      visibleWhenPath: { path: 'optimizer.mispel.mode', oneOf: ['pauschal', 'abgrenzung'] },
+      // Abrechnungszeiträume (Christin 2026-10-18): Start der Option = im ersten
+      // Jahr ein Rumpfjahr ab diesem Tag (Anlage 2, Abschnitt 9).
+      path: 'optimizer.mispel.startDate',
+      label: 'MiSpeL-Option gilt seit',
+      type: 'date',
+      empty: 'null',
+      help: 'Tag, ab dem die Option für deine Anlage gilt (laut Netzbetreiber bzw. Messstellenbetreiber). Im ersten Jahr rechnet DVhub ab diesem Tag ein Rumpfjahr. Leer = ab 1. Januar.'
+    },
+    {
+      section: 'schedule',
+      group: 'legalSwitches',
+      groupLabel: '⚠️ Rechtliche Schalter',
+      groupDescription: 'Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG). Nur aktivieren, wenn rechtlich abgesichert.',
+      groupOrder: 40,
+      visibleWhenPath: { path: 'optimizer.mispel.mode', oneOf: ['pauschal', 'abgrenzung'] },
+      path: 'optimizer.mispel.pvKwp',
+      label: 'PV-Leistung für MiSpeL (kWp)',
+      type: 'number',
+      min: 0,
+      step: 0.01,
+      empty: 'null',
+      help: 'Installierte Leistung der Solaranlage hinter dem Netzanschluss. Daraus folgt die förderfähige Menge der Pauschaloption (500 kWh je kWp und Jahr). Leer = Gesamt-kWp aus der PV-Prognose. Über 30 kWp gibt es die Pauschaloption nicht.'
+    },
+    {
+      section: 'schedule',
+      group: 'legalSwitches',
+      groupLabel: '⚠️ Rechtliche Schalter',
+      groupDescription: 'Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG). Nur aktivieren, wenn rechtlich abgesichert.',
+      groupOrder: 40,
+      visibleWhenPath: { path: 'optimizer.mispel.mode', oneOf: ['pauschal', 'abgrenzung'] },
+      path: 'optimizer.mispel.storageKwh',
+      label: 'Installierte Speicherkapazität für MiSpeL (kWh)',
+      type: 'number',
+      min: 0,
+      step: 0.1,
+      empty: 'null',
+      help: 'Installierte (nicht nutzbare) Kapazität des Speichers — sie bestimmt den Indifferenzbereich der Pauschaloption. Leer = Kapazität aus den Akku-Grenzen bzw. der damals gültigen Ausbaustufe.'
+    },
+    {
+      section: 'schedule',
+      group: 'legalSwitches',
+      groupLabel: '⚠️ Rechtliche Schalter',
+      groupDescription: 'Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG). Nur aktivieren, wenn rechtlich abgesichert.',
+      groupOrder: 40,
+      visibleWhenPath: { path: 'optimizer.mispel.mode', oneOf: ['pauschal', 'abgrenzung'] },
+      path: 'optimizer.mispel.changes',
+      label: 'Rumpfjahre (Änderungen an der Anlage)',
+      type: 'array',
+      help: 'Jede bestimmungsrelevante Änderung (Speicher, Solaranlage, Ladepunkt, Messkonzept, Zuordnung) teilt das Kalenderjahr in Rumpfjahre; der Tag der Änderung zählt zum Rumpfjahr davor. Gepflegt in der Liste unter den rechtlichen Schaltern.'
+    },
+    {
+      section: 'schedule',
+      group: 'legalSwitches',
+      groupLabel: '⚠️ Rechtliche Schalter',
+      groupDescription: 'Netzladen und Netzentladung haben rechtliche Implikationen (EEG, §14a EnWG). Nur aktivieren, wenn rechtlich abgesichert.',
+      groupOrder: 40,
       path: 'optimizer.gridStorageOnly',
       label: 'Nur Netzspeicher (Graustrom-Arbitrage)',
       type: 'boolean',
@@ -5117,6 +5174,16 @@ function sanitizeRawConfig(rawInput) {
   if (hasPath(raw, 'optimizer.batteryStages')) {
     raw.optimizer.batteryStages = sanitizeBatteryStages(raw.optimizer.batteryStages, warnings);
   }
+  if (hasPath(raw, 'optimizer.mispel.changes')) {
+    raw.optimizer.mispel.changes = sanitizeMispelChanges(raw.optimizer.mispel.changes, warnings);
+  }
+  if (hasPath(raw, 'optimizer.mispel.startDate')) {
+    const d = raw.optimizer.mispel.startDate;
+    if (d !== null && !(typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(`${d}T00:00:00Z`)))) {
+      warnings.push('optimizer.mispel.startDate: must use YYYY-MM-DD — ignored');
+      raw.optimizer.mispel.startDate = null;
+    }
+  }
   if (hasPath(raw, 'schedule.smallMarketAutomation')) {
     raw.schedule.smallMarketAutomation = sanitizeSmallMarketAutomation(raw.schedule.smallMarketAutomation, warnings);
   }
@@ -5600,7 +5667,7 @@ const SETTINGS_AREAS = [
     description: 'Was am Netzanschluss erlaubt und vorgeschrieben ist: Netzladen und Netzentladung, §14a, Abregelung.',
     groups: ['legalSwitches', 'paragraph14a', 'module3', 'eebus'],
     advanced: ['zeroFeedIn'],
-    editors: []
+    editors: ['mispelChanges']
   },
   {
     id: 'prognosis',
@@ -5638,6 +5705,30 @@ const SETTINGS_GROUP_LINKS = {
   eebus: { href: '/integrations#eebus', label: 'Steuerbox koppeln, Geräte und Zustand: Integrationen → EEBUS' },
   paragraph14a: { href: '/integrations#p14a', label: 'Geräte und aktuelle Begrenzung: Integrationen → §14a' }
 };
+
+// Änderungen für die MiSpeL-Rumpfjahre: { date: 'YYYY-MM-DD', label, kwp?, storageKwh? },
+// nach Datum sortiert, ein Eintrag je Tag (2026-10-18).
+export function sanitizeMispelChanges(value, warnings = []) {
+  if (!Array.isArray(value)) return [];
+  const byDate = new Map();
+  value.forEach((entry, index) => {
+    const date = String(entry?.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+      warnings.push(`optimizer.mispel.changes.${index}: date must use YYYY-MM-DD — entry ignored`);
+      return;
+    }
+    const pos = (v) => (v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : undefined));
+    const kwp = pos(entry.kwp), storageKwh = pos(entry.storageKwh);
+    if (kwp === undefined || storageKwh === undefined) warnings.push(`optimizer.mispel.changes.${index}: kwp/storageKwh must be > 0 — value ignored`);
+    byDate.set(date, {
+      date,
+      label: String(entry?.label || '').slice(0, 80),
+      kwp: kwp ?? null,
+      storageKwh: storageKwh ?? null
+    });
+  });
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
 
 export function getConfigDefinition() {
   return {

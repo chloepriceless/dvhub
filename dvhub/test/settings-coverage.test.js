@@ -163,7 +163,11 @@ test('jedes neue Feld hat einen brauchbaren Typ', () => {
   // createConfigInput()/parseFieldInput() in public/settings.js, sonst rendert
   // das Feld leer bzw. wird beim Speichern verschluckt.
   const allowed = new Set([
-    'number', 'boolean', 'text', 'select', 'dynamicSelect', 'password', 'time', 'array', 'stringList'
+    'number', 'boolean', 'text', 'select', 'dynamicSelect', 'password', 'time', 'array', 'stringList',
+    // 2026-10-18 (MiSpeL „gilt seit“): createConfigInput → <input type="date">,
+    // parseInputElement → Text 'YYYY-MM-DD', sanitizeRawConfig → String-Zweig +
+    // eigene Datumsprüfung für optimizer.mispel.startDate.
+    'date'
   ]);
   for (const field of getConfigDefinition().fields) {
     if (!field.path) continue;

@@ -72,7 +72,8 @@ export function createMispelTracker(state, getCfg, pushLog) {
     mispel.yearlyGridWithdrawalKwh += gridWithdrawalWh / 1000;
 
     // Recalculate derived fields (D-25)
-    const pvKwp = getCfg().optimizer?.mispel?.pvKwp ?? 10;
+    // Feld in den Einstellungen (2026-10-18), sonst Gesamt-kWp der Prognose.
+    const pvKwp = getCfg().optimizer?.mispel?.pvKwp ?? getCfg().forecast?.pv?.totalKwp ?? 10;
     const gruenstromLimit = 500 * pvKwp;
     mispel.gruenstromKwh = Math.min(mispel.yearlyFeedInKwh, gruenstromLimit);
     mispel.graustromKwh = Math.max(0, mispel.yearlyFeedInKwh - gruenstromLimit);

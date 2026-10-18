@@ -2,7 +2,10 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
-import { resolveBatteryCapacityWhForTimestamp } from './battery-stages.js';
+import { resolveBatteryCapacityWhForTimestamp, resolveBatteryCapacityWhForDate } from './battery-stages.js';
+import {
+  periodsForYear, plantForPeriod, pauschalLimits, sumPauschalSlots, pauschalYearEnd, abgrenzungMonths, FESTLEGUNG
+} from './services/mispel/mispel-calc.js';
 import { getEegNegativePriceRule, getFeedInCompensationCtKwh, isNegativePriceSlotAffected } from './eeg-rules.js';
 import { vollastViertelstunden, extensionFromVollast } from './eeg-extension.js';
 // Sweep package 6: shared 2-decimal rounding helper (was a local round2 duplicate).
@@ -1378,7 +1381,9 @@ export function createHistoryRuntime({
   // T-LICENSE-KWP-GATING Increment 3: Lizenz-kWp-Cap für die PV-KPI-Summen.
   // Liefert den lizenzierten kWp-Deckel (Pro S/M/L, Abo-Sitze) oder null (Community/Legacy/
   // Legacy = kein Cap). Lazy gelesen, damit es zur Request-Zeit verdrahtet ist.
-  getCapKwp = () => null
+  getCapKwp = () => null,
+  // MiSpeL-Übersicht (2026-10-18): PV-Gesamtleistung aus der Prognose als Rückfall.
+  getForecastConfig = () => ({})
 }) {
   function batteryNominalCapacityKwh() {
     const cfg = getOptimizerConfig() || {};
@@ -2422,8 +2427,132 @@ export function createHistoryRuntime({
     };
   }
 
+  // ── MiSpeL-Übersicht (Christin 2026-10-18) ──────────────────────────────────
+  // Pauschaloption je (Rumpf-)Jahr aus den gemessenen Viertelstunden, bei der
+  // Abgrenzungsoption zusätzlich Formelsatz A1 je Monat. Rechenkern:
+  // services/mispel/mispel-calc.js. Geladen wird Monat für Monat wie bei der
+  // Jahresansicht, damit der Speicher nicht mit dem Zeitraum wächst.
+  // §51 EEG je Anlage wie in getSummary(): bei Stundenregeln zählt die Folge
+  // negativer Stunden (in zeitlicher Reihenfolge, über Monatsgrenzen hinweg;
+  // je Abrechnungszeitraum beginnt sie neu).
+  function mispelNegPriceRule() {
+    const plants = getPricingConfig()?.pvPlants;
+    const dates = (Array.isArray(plants) ? plants : []).map((p) => (typeof p?.commissionedAt === 'string' ? p.commissionedAt : '')).filter(Boolean).sort();
+    return getEegNegativePriceRule({ commissionedAt: dates[0], kwp: summarizeConfiguredPvCapacity(plants) });
+  }
+
+  function markAwZero(slots, rule, streak) {
+    if (rule.rule === 'none') { for (const s of slots) s.awZero = false; return; }
+    if (rule.rule === '15min') {
+      for (const s of slots) s.awZero = Number.isFinite(Number(s.priceCtKwh)) && s.priceCtKwh !== null && Number(s.priceCtKwh) < 0;
+      return;
+    }
+    const byHour = new Map();
+    for (const s of slots) {
+      const key = String(s.ts).slice(0, 13);
+      if (!byHour.has(key)) byHour.set(key, []);
+      byHour.get(key).push(s);
+    }
+    for (const key of [...byHour.keys()].sort()) {
+      const prices = byHour.get(key).map((s) => s.priceCtKwh).filter((p) => p !== null && Number.isFinite(Number(p)));
+      const neg = prices.length > 0 && prices.reduce((a, b) => a + Number(b), 0) / prices.length < 0;
+      streak.hours = neg ? streak.hours + 1 : 0;
+      const affected = isNegativePriceSlotAffected({ rule: rule.rule, consecutiveNegativeHours: streak.hours, year: Number(key.slice(0, 4)), tiers: rule.tiers });
+      for (const s of byHour.get(key)) s.awZero = affected;
+    }
+  }
+
+  async function loadMispelSlots(von, bisInclusive, today) {
+    const out = [];
+    const negRule = mispelNegPriceRule();
+    const streak = { hours: 0 };
+    let cursor = von;
+    const last = bisInclusive < today ? bisInclusive : today;
+    while (cursor <= last) {
+      const monthEnd = addDays(startOfMonth(addDays(startOfMonth(cursor), 32)), -1);
+      const chunkEnd = monthEnd < last ? monthEnd : last;
+      const start = localDateTimeToUtcIso(cursor, 0, 0);
+      const end = localDateTimeToUtcIso(addDays(chunkEnd, 1), 0, 0);
+      const [energy, prices] = await Promise.all([
+        listEnergySlotsForRange({ start, end }),
+        typeof store.listPriceSlots === 'function' ? store.listPriceSlots({ start, end }) : []
+      ]);
+      const priceByTs = new Map((prices || []).map((row) => [bucketTimestamp(row.ts), row.priceCtKwh]));
+      const chunk = [];
+      for (const slot of [...(energy || [])].sort((a, b) => String(a.ts).localeCompare(String(b.ts)))) {
+        const ts = bucketTimestamp(slot.ts);
+        chunk.push({
+          ts,
+          month: localMonthString(slot.ts),
+          importKwh: slot.importKwh, exportKwh: slot.exportKwh,
+          batteryChargeKwh: slot.batteryChargeKwh, batteryDischargeKwh: slot.batteryDischargeKwh,
+          priceCtKwh: priceByTs.has(ts) ? priceByTs.get(ts) : (slot.priceCtKwh ?? null)
+        });
+      }
+      markAwZero(chunk, negRule, streak);
+      out.push(...chunk);
+      await yieldToEventLoop();
+      cursor = addDays(chunkEnd, 1);
+    }
+    return out;
+  }
+
+  function mispelKwp(mispel) {
+    const own = Number(mispel?.pvKwp);
+    if (Number.isFinite(own) && own > 0) return own;
+    const fc = Number(getForecastConfig()?.pv?.totalKwp);
+    if (Number.isFinite(fc) && fc > 0) return fc;
+    const plants = getPricingConfig()?.pvPlants;
+    const sum = Array.isArray(plants) ? plants.reduce((a, p) => a + (Number(p?.kwp) || 0), 0) : 0;
+    return sum > 0 ? sum : null;
+  }
+
+  async function getMispelOverview({ year }) {
+    const opt = getOptimizerConfig() || {};
+    const mispel = opt.mispel || {};
+    const mode = mispel.mode === 'pauschal' || mispel.mode === 'abgrenzung' ? mispel.mode : 'none';
+    const changes = Array.isArray(mispel.changes) ? mispel.changes : [];
+    const kwp = mispelKwp(mispel);
+    const today = getCurrentDate();
+    const storageKwhAt = (date) => {
+      const own = Number(mispel.storageKwh);
+      if (Number.isFinite(own) && own > 0) return own;
+      const wh = resolveBatteryCapacityWhForDate(opt.batteryStages, date, opt.batteryCapacityWh);
+      return Number.isFinite(wh) && wh > 0 ? wh / 1000 : null;
+    };
+    const base = { ok: true, festlegung: FESTLEGUNG, mode, year, startDate: mispel.startDate || null, kwp, changes };
+    if (mode === 'none') return { ...base, perioden: [] };
+    const hinweise = [];
+    if (!kwp) hinweise.push('PV-Leistung (kWp) fehlt — unter Einstellungen → Netz → MiSpeL eintragen.');
+    if (!mispel.startDate) hinweise.push('Kein Startdatum der Option eingetragen — gerechnet wird ab dem 01.01.');
+    const perioden = [];
+    const yearSlots = [];
+    for (const period of periodsForYear(year, { startDate: mispel.startDate, changes })) {
+      const plant = plantForPeriod(period, { kwp, storageKwhAt, changes });
+      const grenzen = plant.kwp ? pauschalLimits({ ...plant, ...period }) : null;
+      const slots = period.von <= today ? await loadMispelSlots(period.von, period.bis, today) : [];
+      if (mode === 'abgrenzung') yearSlots.push(...slots);
+      const sums = sumPauschalSlots(slots);
+      perioden.push({
+        von: period.von, bis: period.bis, tr: period.tr, trs: period.trs, rumpf: period.rumpf,
+        change: period.change, plant, grenzen,
+        werte: grenzen ? pauschalYearEnd(grenzen, sums) : null,
+        slots: sums.slots, ohnePreis: sums.ohnePreis,
+        laufend: period.von <= today && today <= period.bis,
+        zukunft: period.von > today
+      });
+    }
+    if (perioden.some((p) => p.grenzen && !p.grenzen.anwendbar)) {
+      hinweise.push('Über 30 kWp gibt es die Pauschaloption nicht — die Werte dienen nur zum Vergleich.');
+    }
+    const result = { ...base, perioden, hinweise };
+    if (mode === 'abgrenzung') result.abgrenzung = abgrenzungMonths(yearSlots);
+    return result;
+  }
+
   return {
-    getSummary
+    getSummary,
+    getMispelOverview
   };
 }
 
@@ -2436,6 +2565,16 @@ export function createHistoryApiHandlers({
   getSolarMarketValueSummary = null
 }) {
   return {
+    async getMispel(query = {}) {
+      if (!telemetryEnabled || !historyRuntime) {
+        return { status: 503, body: { ok: false, error: 'internal telemetry store disabled' } };
+      }
+      const year = Number(query.year);
+      if (!Number.isInteger(year) || year < 2026 || year > 2100) {
+        return { status: 400, body: { ok: false, error: 'year must be an integer from 2026' } };
+      }
+      return { status: 200, body: await historyRuntime.getMispelOverview({ year }) };
+    },
     async getSummary(query = {}) {
       if (!telemetryEnabled || !historyRuntime) {
         return { status: 503, body: { ok: false, error: 'internal telemetry store disabled' } };

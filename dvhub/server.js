@@ -2060,7 +2060,8 @@ const telemetryReady = (async () => {
     getCurtailmentService: () => ctx.curtailmentService,
     // T-LICENSE-KWP-GATING Increment 3: Lizenz-kWp-Cap für die PV-KPI-Summen
     // (Pro-Tier-Enforcement). Lazy gelesen; null (Community/Legacy) = kein Cap.
-    getCapKwp: () => ctx.licenseService?.getCapKwp?.() ?? null
+    getCapKwp: () => ctx.licenseService?.getCapKwp?.() ?? null,
+    getForecastConfig: () => cfg.forecast || {}
   }) : null;
   historyApi = createHistoryApiHandlers({
     historyRuntime,
