@@ -524,26 +524,33 @@ export function createScheduleEvaluator(ctx) {
   // Flag default OFF (schedule.controlWriteVerify.enabled) — Opt-in pro Anlage.
   // Sequenz-Dialekte (B-1112) sind v1 außen vor (eigener Aktuator, eigenes Log).
   const VERIFY_FAIL_ESCALATE = 3;
+  // Die Timer liegen NICHT im gemeinsamen Zustand: ein Timeout-Objekt in
+  // state.schedule._verify ließ jedes JSON.stringify(state) scheitern — u. a.
+  // die Benachrichtigungsprüfung (eHive 17./18.10.: ~1 600 Fehler/h).
+  const verifyTimers = new Map();   // target → Timeout
 
   function maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive }) {
     const vc = resolveControlWriteVerify(cfg);
     if (!vc.enabled || isKeepalive) return;
     if (typeof transport?.readPointSince !== 'function' && transport?.type === 'mqtt') return;
     const all = (state.schedule._verify || (state.schedule._verify = {}));
-    const v = (all[target] || (all[target] = { timer: null, lastRunAt: 0, mismatches: 0, lastOkAt: null }));
+    const v = (all[target] || (all[target] = { pending: false, lastRunAt: 0, mismatches: 0, lastOkAt: null }));
     // Ein Verify pro Target in flight: es prüft beim Feuern den NEUESTEN
     // lastWrite — schnell aufeinanderfolgende Writes (5-s-Recompute) erzeugen
     // so höchstens einen Read pro minIntervalMs statt einen pro Write.
-    if (v.timer) return;
+    if (verifyTimers.has(target)) return;
     const wait = Math.max(vc.delayMs, (v.lastRunAt + vc.minIntervalMs) - Date.now());
-    v.timer = setTimeout(() => {
-      v.timer = null;
+    const timer = setTimeout(() => {
+      verifyTimers.delete(target);
+      v.pending = false;
       v.lastRunAt = Date.now();
       runWriteVerify(target, conf).catch((e) => {
         pushLog('control_write_verify_error', { target, error: e?.message || String(e) }, 'warn');
       });
     }, wait);
-    if (typeof v.timer.unref === 'function') v.timer.unref();
+    if (typeof timer.unref === 'function') timer.unref();
+    verifyTimers.set(target, timer);
+    v.pending = true;
   }
 
   async function runWriteVerify(target, confAtWrite) {

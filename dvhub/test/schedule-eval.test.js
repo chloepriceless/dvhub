@@ -1151,3 +1151,17 @@ test('Netzlade-Sperre bleibt fuer andere positive Sollwerte bestehen', async () 
   assert.ok(findLog(logs, 'control_write_rejected').some((l) => l.payload.reason === 'grid_charge_not_allowed'));
   assert.notEqual(Number(state.schedule.active.gridSetpointW?.value), 3000);
 });
+
+// eHive 17./18.10.: der Verify-Timer lag in state.schedule._verify — jedes
+// JSON.stringify(state) (Benachrichtigungen, ~1 600 Fehler/h) scheiterte an
+// „Converting circular structure to JSON … Timeout“, solange ein Verify anstand.
+test('T-VERIFY: Zustand bleibt in JSON umwandelbar, während ein Verify ansteht', async () => {
+  const { ctx, state } = makeVerifyCtx({ readBack: async () => ({ mqttValue: -3000, ts: Date.now() }) });
+  const evaluator = createScheduleEvaluator(ctx);
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'test');
+  assert.equal(state.schedule._verify.gridSetpointW.pending, true, 'Verify steht an');
+  assert.doesNotThrow(() => JSON.stringify(state));
+  await sleep(80);
+  assert.equal(state.schedule._verify.gridSetpointW.pending, false);
+  assert.equal(ctx._readCalls.length, 1, 'trotzdem genau ein Verify-Read');
+});

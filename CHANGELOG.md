@@ -131,6 +131,11 @@ verweist hierher.
 
 ### Behoben
 
+- **Benachrichtigungen fielen bei eingeschalteter Schreib-Rücklesung aus.** Der Timer der Rücklesung
+  (`schedule.controlWriteVerify`) lag im gemeinsamen Zustand; solange eine Rücklesung anstand, scheiterte jede
+  Benachrichtigungsprüfung mit „Converting circular structure to JSON“ (eHive: rund 1 600-mal je Stunde). Der
+  Timer liegt jetzt außerhalb des Zustands.
+
 - **VPN-Profile: Hooks in jeder Schreibweise blockiert, Prüfung auch beim Geräte-Tausch und vor jedem Start.**
   WireGuard-Hooks (`PreUp`, `PostUp`, …) wurden nur in genau dieser Schreibweise abgelehnt; `wg-quick` führt sie
   auch als `preup` aus. Ein Geräte-Tausch-Paket konnte VPN-Profile ohne Inhaltsprüfung einspielen. Jetzt prüft
