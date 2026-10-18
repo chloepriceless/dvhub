@@ -119,11 +119,14 @@ services:
       DVHUB_DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}
       # EOS-Container (Profil eos). Einschalten in DVhub: Einstellungen → EOS.
       DVHUB_EOS_URL: http://127.0.0.1:${EOS_PORT:-8503}
+      DVHUB_SHARED_DIR: /run/dvhub-shared
     volumes:
       # Beide Pflicht: Config + Datenverzeichnis (appliance-id = Lizenzbindung,
       # Push-Schlüssel, Datenspende-Zugang, Sitzungsschlüssel …).
       - dvhub-config:/etc/dvhub
       - dvhub-data:/var/lib/dvhub
+      # Tatsächliche Adresse von DVhub für den EOS-Wächter (dvhub-url).
+      - dvhub-shared:/run/dvhub-shared
       # Optional: Ziel für das geplante DB-Backup (Einstellungen → DB-Backup →
       # Zielverzeichnis /backups), z. B. ein ins Host-OS gemounteter NAS-Share.
       # - /srv/dvhub-backups:/backups
@@ -144,10 +147,22 @@ services:
     restart: unless-stopped
     # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).
     network_mode: host
-    command: ["python", "-m", "akkudoktoreos.server.eos",
+    # Wächter (configs: dvhub-eos-watch, unten) startet EOS als Kindprozess und
+    # beendet es, wenn DVhub einen Neustart anfordert (hängender Lauf oder Knopf
+    # „EOS neu starten“) — dann startet Docker den Container neu (restart:).
+    configs:
+      - source: dvhub-eos-watch
+        target: /dvhub-eos-watch.py
+    command: ["python", "/dvhub-eos-watch.py", "--",
+              "python", "-m", "akkudoktoreos.server.eos",
               "--host", "127.0.0.1", "--port", "${EOS_PORT:-8503}", "--run_as_user", "eos"]
     environment:
       TZ: ${TZ:-Europe/Berlin}
+      # DVhub im selben Host-Netz. Maßgeblich ist die Adresse, die DVhub beim
+      # Start nach /run/dvhub-shared/dvhub-url schreibt (Port aus der Oberfläche);
+      # DVHUB_URL gilt nur, solange die Datei fehlt.
+      DVHUB_URL: http://127.0.0.1:${DVHUB_HTTP_PORT:-8080}
+      DVHUB_URL_FILE: /run/dvhub-shared/dvhub-url
       # EOSdash aus: DVhub hat eine eigene Oberfläche, spart ~190 MB.
       EOS_SERVER__STARTUP_EOSDASH: "false"
       MALLOC_ARENA_MAX: "2"
@@ -165,6 +180,8 @@ services:
         required: false
     volumes:
       - dvhub-eos:/data
+      # Adresse von DVhub für den Wächter (nur lesen).
+      - dvhub-shared:/run/dvhub-shared:ro
     # Eigener Speicher frisch ~205 MB, nach Tagen Dauerbetrieb ~290 MB
     # (Appliance, 15-min-Optimierung); Spitze dort 352 MB inkl. Page-Cache.
     # rc1.8 mit 2 Rechenprozessen (eHive, 300×200): Spitze 224 MB, danach 128 MB
@@ -184,6 +201,54 @@ services:
 # sperrt die App per CONNECTION LIMIT 0 aus; das wirkt nur auf Nicht-Superuser).
 # $$ = ein wörtliches $ (Compose ersetzt sonst Variablen im Inhalt).
 configs:
+  # EOS-Wächter (2026-10-18): Docker hat kein systemd, DVhub kann EOS nicht selbst
+  # neu starten. Der Wächter fragt DVhub jede Minute (GET /api/eos/restart-request,
+  # nur Loopback). Liegt eine Anforderung vor, die jünger ist als sein eigener
+  # Start, beendet er EOS (SIGTERM, nach 30 s SIGKILL) und endet selbst — Docker
+  # startet den Container neu, der neue Wächter meldet DVhub den Neustart.
+  # DVhub nicht erreichbar: nichts passiert, EOS läuft weiter.
+  dvhub-eos-watch:
+    content: |
+      import json, os, signal, subprocess, sys, time, urllib.request
+      boot = int(time.time() * 1000)
+      def dvhub_url():
+          try:
+              with open(os.environ.get("DVHUB_URL_FILE", "/run/dvhub-shared/dvhub-url")) as f:
+                  url = f.read().strip()
+              if url.startswith("http://127.0.0.1:"):
+                  return url
+          except Exception:
+              pass
+          return os.environ.get("DVHUB_URL", "http://127.0.0.1:8080").rstrip("/")
+      every = max(1, int(os.environ.get("DVHUB_EOS_WATCH_SEC", "60")))
+      cmd = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
+      child = subprocess.Popen(cmd)
+      def forward(sig, _frame):
+          try:
+              child.send_signal(sig)
+          except Exception:
+              pass
+      for s in (signal.SIGTERM, signal.SIGINT):
+          signal.signal(s, forward)
+      while True:
+          try:
+              sys.exit(child.wait(timeout=every))
+          except subprocess.TimeoutExpired:
+              pass
+          try:
+              with urllib.request.urlopen(dvhub_url() + "/api/eos/restart-request?boot=" + str(boot), timeout=5) as r:
+                  at = json.load(r).get("requestedAt")
+          except Exception:
+              continue
+          if isinstance(at, (int, float)) and at > boot:
+              print("dvhub-eos-watch: DVhub fordert einen Neustart an - EOS wird beendet", flush=True)
+              child.terminate()
+              try:
+                  child.wait(timeout=30)
+              except subprocess.TimeoutExpired:
+                  child.kill()
+                  child.wait()
+              sys.exit(75)
   dvhub-db-init:
     content: |
       #!/bin/sh
@@ -205,3 +270,4 @@ volumes:
   dvhub-data:
   dvhub-db:
   dvhub-eos:
+  dvhub-shared:

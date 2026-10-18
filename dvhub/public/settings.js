@@ -4619,7 +4619,9 @@ function eosRestartHintForecastInspector(rs) {
   if (!rs) return '';
   if (rs.restarting) return 'EOS wird gerade neu gestartet …';
   if (!rs.canRestart) {
-    if (rs.reason === 'container') return 'EOS läuft als eigener Container — bitte dort neu starten.';
+    // Docker ohne Wächter (ältere docker/compose.yml): Container von Hand neu starten
+    // oder die Compose-Datei aktualisieren, dann kann DVhub es selbst (2026-10-18).
+    if (rs.reason === 'container') return 'EOS läuft als eigener Container ohne Wächter — bitte dort neu starten (docker compose restart eos) oder docker/compose.yml aktualisieren, dann startet DVhub EOS selbst neu.';
     if (rs.reason === 'remote') return 'EOS läuft auf einem anderen Gerät — bitte dort neu starten.';
     return '';
   }

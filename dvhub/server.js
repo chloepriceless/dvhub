@@ -153,6 +153,7 @@ import { createEvChargingProbe } from './services/wallbox/ev-charging.js';
 import { createChargerStatusPoller } from './services/wallbox/charger-status.js';
 import { createEosMonitor } from './services/optimizer/eos-monitor.js';
 import { createEosRestarter } from './services/optimizer/eos-restarter.js';
+import { writeSharedDvhubUrl } from './services/container-shared.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
@@ -2182,6 +2183,8 @@ if (IS_WEB_PROCESS && RUNTIME_WORKER_ENABLED) {
 if (IS_WEB_PROCESS) {
   web.listen(cfg.httpPort, () => {
     console.log(`Web server listening on :${cfg.httpPort}`);
+    // Docker: tatsächliche Adresse für den EOS-Wächter (services/container-shared.js).
+    if (process.env.DVHUB_SHARED_DIR) writeSharedDvhubUrl(process.env.DVHUB_SHARED_DIR, cfg.httpPort);
   });
 
   // HTTPS with self-signed cert (optional)

@@ -357,6 +357,10 @@ fi
 # und per su-exec wechseln, damit die Anwendung selbst nie als root läuft.
 # ---------------------------------------------------------------------------
 if [ "$(id -u)" = "0" ]; then
+  # Gemeinsames Volume für den EOS-Wächter (DVhub schreibt dort seine Adresse).
+  if [ -n "${DVHUB_SHARED_DIR:-}" ]; then
+    mkdir -p "$DVHUB_SHARED_DIR" && chown "$RUN_USER:$RUN_USER" "$DVHUB_SHARED_DIR" && chmod 755 "$DVHUB_SHARED_DIR" || true
+  fi
   chown -R "$RUN_USER:$RUN_USER" "$CONFIG_DIR" "$DATA_DIR" 2>/dev/null || true
   chmod 750 "$CONFIG_DIR" "$DATA_DIR" 2>/dev/null || true
   log "starte als $RUN_USER: $*"

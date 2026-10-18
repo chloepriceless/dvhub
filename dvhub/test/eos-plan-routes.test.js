@@ -222,3 +222,31 @@ test('GET /api/eos/status — enthält den Neustart-Zustand', async () => {
   assert.equal(body.restart.canRestart, true);
   assert.equal(body.restart.stallRestartMin, 90);
 });
+
+// Wächter im EOS-Container (2026-10-18): nur von der Box selbst, ohne Token.
+test('GET /api/eos/restart-request — Loopback ohne Token: 200 mit requestedAt; aus dem LAN: 403', async () => {
+  const ctx = mockCtx({ eosMonitor: monitorStub() });
+  const polls = [];
+  ctx.eosRestarter = { ...restarterStub(), helperPoll: (q) => { polls.push(q); return { requestedAt: 1234 }; } };
+  const ok = await dispatch(ctx, makeReq('/api/eos/restart-request?boot=999', { token: null, ip: '127.0.0.1' }));
+  assert.equal(ok.status, 200);
+  assert.equal(JSON.parse(ok.body).requestedAt, 1234);
+  assert.deepEqual(polls, [{ boot: '999' }]);
+  const lan = await dispatch(ctx, makeReq('/api/eos/restart-request?boot=1', { ip: LAN_IP }));
+  assert.equal(lan.status, 403);
+  assert.equal(polls.length, 1);
+});
+
+// Codex 2026-10-18: mit gesetzter Host-Allowlist kam der Wächter (Host 127.0.0.1:8080)
+// nicht durch das Host-Tor. Ausnahme nur für Box-interne Aufrufe von Loopback mit Loopback-Host.
+test('Host-Allowlist: Wächter von 127.0.0.1 kommt durch, fremder Host oder andere Route nicht', async () => {
+  const ctx = mockCtx({ eosMonitor: monitorStub() });
+  ctx.getCfg().allowedHosts = ['dvhub.example.org'];
+  ctx.eosRestarter = { ...restarterStub(), helperPoll: () => ({ requestedAt: null }) };
+  const req = (path, host, ip = '127.0.0.1') => ({ ...makeReq(path, { token: null, ip }), headers: { host } });
+  assert.equal((await dispatch(ctx, req('/api/eos/restart-request?boot=1', '127.0.0.1:8080'))).status, 200);
+  assert.equal((await dispatch(ctx, req('/api/eos/restart-request?boot=1', 'localhost:8081'))).status, 200);
+  assert.equal((await dispatch(ctx, req('/api/eos/restart-request?boot=1', 'rebind.attacker.example'))).status, 400, 'fremder Host bleibt gesperrt');
+  assert.equal((await dispatch(ctx, req('/api/eos/restart-request?boot=1', '127.0.0.1:8080', LAN_IP))).status, 400, 'nicht von Loopback');
+  assert.equal((await dispatch(ctx, req('/api/eos/status', '127.0.0.1:8080'))).status, 400, 'andere Routen unverändert');
+});

@@ -143,3 +143,60 @@ test('status: meldet hängenden Lauf in Minuten', () => {
   assert.equal(st.canRestart, true);
   assert.equal(st.serviceName, 'eos.service');
 });
+
+// ── Docker (2026-10-18): Neustart über den Wächter im EOS-Container ──────────
+import { EOS_CONTAINER_HELPER_FRESH_MS, EOS_CONTAINER_RESTART_TIMEOUT_MS } from '../services/optimizer/eos-restarter.js';
+
+test('Container: ohne Wächter nicht möglich, mit Wächter Anforderung statt systemctl; Neustart erledigt, wenn der Wächter danach startet', async () => {
+  const box = setup({ inContainer: true });
+  assert.equal(box.restarter.status().reason, 'container', 'kein Wächter gemeldet');
+  // Wächter meldet sich (gestartet vor einer Minute), keine Anforderung offen
+  assert.deepEqual(box.restarter.helperPoll({ boot: box.at() - MIN }), { requestedAt: null });
+  assert.equal(box.restarter.status().canRestart, true);
+  assert.equal(box.restarter.status().mode, 'container');
+  const requestAt = box.at();
+  assert.deepEqual(await box.restarter.restart({ via: 'ui' }), { ok: true, pending: true });
+  assert.equal(box.calls.length, 0, 'kein systemctl im Container');
+  assert.equal(box.restarter.status().restarting, true);
+  // derselbe Wächter fragt wieder: Anforderung ist jünger als sein Start → requestedAt
+  box.advance(MIN);
+  assert.deepEqual(box.restarter.helperPoll({ boot: requestAt - MIN }), { requestedAt: requestAt });
+  // neuer Wächter nach dem Container-Neustart → erledigt
+  box.advance(30_000);
+  assert.deepEqual(box.restarter.helperPoll({ boot: box.at() - 5_000 }), { requestedAt: null });
+  const st = box.restarter.status();
+  assert.equal(st.restarting, false);
+  assert.equal(st.restarts, 1);
+  assert.equal(st.lastRestart.ok, true);
+  assert.ok(box.logs.some((l) => l.type === 'eos_restarted' && l.data.service === 'container'));
+  // Wächter verstummt → wieder „container“ (kein Knopf ohne Wirkung)
+  box.advance(EOS_CONTAINER_HELPER_FRESH_MS + 1);
+  assert.equal(box.restarter.status().reason, 'container');
+});
+
+test('Container: Wache fordert bei hängendem Lauf an; ohne Rückmeldung nach 10 min gilt der Neustart als gescheitert', async () => {
+  const box = setup({ inContainer: true, eosRun: { inFlight: true, startedAt: T0 - 100 * MIN } });
+  box.restarter.helperPoll({ boot: T0 - 60 * MIN });
+  const r = await box.restarter.watchdogTick();
+  assert.equal(r.action, 'restart');
+  assert.equal(r.ok, true);
+  assert.equal(box.restarter.status().restarting, true);
+  assert.deepEqual(await box.restarter.restart({ via: 'ui' }), { ok: true, pending: true }, 'zweite Anforderung teilt die erste');
+  box.advance(EOS_CONTAINER_RESTART_TIMEOUT_MS + 1);
+  box.restarter.helperPoll({ boot: T0 - 60 * MIN });   // Wächter lebt, startet aber nicht neu
+  await box.restarter.watchdogTick();
+  const st = box.restarter.status();
+  assert.equal(st.restarting, false);
+  assert.equal(st.lastRestart.ok, false);
+  assert.ok(box.logs.some((l) => l.type === 'eos_restart_failed' && l.data.service === 'container'));
+});
+
+test('Container: offene Anforderung läuft auch ohne Wache ab (getrennter Runtime-Prozess)', async () => {
+  const box = setup({ inContainer: true });
+  box.restarter.helperPoll({ boot: box.at() - MIN });
+  await box.restarter.restart({ via: 'ui' });
+  box.advance(EOS_CONTAINER_RESTART_TIMEOUT_MS + 1);
+  const st = box.restarter.status();          // kein watchdogTick
+  assert.equal(st.restarting, false);
+  assert.equal(st.lastRestart.ok, false);
+});

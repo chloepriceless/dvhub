@@ -185,7 +185,8 @@ Spalte **Zugang** in den Tabellen:
 | POST | `/api/eos/sync-from-dvhub` | Token | EOS-Einstellungen aus DVhub übernehmen (Batterie, Standort, …) |
 | GET / POST | `/api/integrations/dveos` | Token | Verbindung zur EOS-Instanz lesen / setzen |
 | GET | `/api/eos/status` | LAN·status | Zentraler EOS-Zustand: `status` (`up` / `busy` = rechnet gerade / `down` / `disabled` / `unknown`), `pid`, `version`, `lastOkAt`, `lastError`, Neustarts, Zeit des letzten Plans, `restart` (`canRestart`, `reason`, `stalledForMin`, `lastRestart`). Momentaufnahme, fragt EOS nicht selbst |
-| POST | `/api/eos/restart` | LAN | EOS neu starten (`sudo systemctl restart eos.service`). `202` angenommen (läuft im Hintergrund), `409` nicht möglich (`container` / `remote` / `eos_off`), `429` zu kurz nach dem letzten Neustart |
+| POST | `/api/eos/restart` | LAN | EOS neu starten (nativ `sudo systemctl restart eos.service`, Docker über den Wächter im EOS-Container). `202` angenommen (läuft im Hintergrund), `409` nicht möglich (`container` = Docker ohne Wächter / `remote` / `eos_off`), `429` zu kurz nach dem letzten Neustart |
+| GET | `/api/eos/restart-request` | nur Loopback | Für den Wächter im EOS-Container (`?boot=<ms>` = dessen Start): `{ requestedAt }` einer offenen Neustart-Anforderung oder `null`. Startete der Wächter nach der Anforderung, gilt sie als erledigt |
 | GET | `/api/integration/emhass` | LAN·integrations | Messwerte + Preisreihen für EMHASS |
 | POST | `/api/integration/emhass/apply` | Token | EMHASS-Ergebnis übernehmen |
 

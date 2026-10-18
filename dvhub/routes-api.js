@@ -2828,7 +2828,13 @@ export function createApiRoutes(ctx) {
     // allowedHosts = LAN-dev permissive (returns true unconditionally).
     const cfgForHost = getCfg();
     const hostVal = getRequestHost(req, cfgForHost);
-    if (!isHostAllowed(hostVal, cfgForHost)) {
+    // Ausnahme nur für Aufrufe der Box an sich selbst (EOS-Wächter, EOS-Push):
+    // Socket UND Host-Header auf Loopback — ein DNS-Rebinding trägt den Namen
+    // des Angreifers im Host, nicht 127.0.0.1 (Codex 2026-10-18).
+    const boxInternal = (url.pathname === '/api/eos/restart-request' || url.pathname === '/api/eos/solution-ready')
+      && isLoopbackRequest(req)
+      && /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(String(req.headers?.host || ''));
+    if (!boxInternal && !isHostAllowed(hostVal, cfgForHost)) {
       pushLog('host_header_rejected', {
         host: hostVal,
         forwarded: !!req.headers['x-forwarded-host'],
@@ -5977,6 +5983,15 @@ export function createApiRoutes(ctx) {
 
     // EOS (Akkudoktor) -- Messwerte + Preise abrufen
     if (url.pathname === '/api/integration/eos' && req.method === 'GET') return json(res, 200, eosState());
+
+    // Wächter im EOS-Container (docker/compose.yml, configs dvhub-eos-watch):
+    // fragt jede Minute, ob DVhub einen Neustart will; boot = sein Startzeitpunkt
+    // (ms). Nur von der Box selbst — EOS läuft im Host-Netz (2026-10-18).
+    if (url.pathname === '/api/eos/restart-request' && req.method === 'GET') {
+      if (!isLoopbackRequest(req)) return json(res, 403, { ok: false, error: 'loopback_only' });
+      if (!ctx.eosRestarter?.helperPoll) return json(res, 200, { ok: true, requestedAt: null });
+      return json(res, 200, { ok: true, ...ctx.eosRestarter.helperPoll({ boot: url.searchParams.get('boot') }) });
+    }
 
     // Push von EOS (DV-EOS ab rc1.9, ems.notify_url): ein Lauf ist fertig.
     // Nur von der Box selbst — EOS läuft im Host-Netz bzw. nativ daneben.

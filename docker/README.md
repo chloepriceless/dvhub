@@ -10,6 +10,7 @@ Inhalt dieses Verzeichnisses:
 | `../Dockerfile`, `docker-entrypoint.sh` | Image + idempotenter Start (Config, appliance-id, Profile, DB-Warten, Heap) |
 | `install.sh` | Einzeiler-Installation: Ordner, `compose.yml`, `.env` mit Zufallspasswörtern, Images, Start |
 | `compose.yml`, `.env.example` | DVhub + TimescaleDB (PostgreSQL 17) + EOS; die DB-Ersteinrichtung (Rolle `dvhub`, DB `dvhub`, Extension `timescaledb`) steckt als `configs` darin |
+| `configs: dvhub-eos-watch` (in `compose.yml`) | Wächter im EOS-Container: startet EOS und beendet es, wenn DVhub einen Neustart anfordert (hängender Lauf länger als `optimizer.eosStallRestartMin`, Standard 90 min, oder Knopf „EOS neu starten“); Docker startet den Container dann neu. Fragt DVhub jede Minute über `127.0.0.1:${DVHUB_HTTP_PORT}` (`GET /api/eos/restart-request`, nur Loopback). Ältere `compose.yml` ohne Wächter: DVhub zeigt keinen Knopf, `docker compose restart eos` von Hand |
 | `../.github/workflows/container.yml` | Smoke-Test mit Compose, dann Build amd64+arm64 → Docker Hub `bikinibottomcapital/dvhub` + `…/dvhub-eos` (gespiegelt nach GHCR) |
 
 ## Schnellstart

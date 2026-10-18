@@ -12,6 +12,12 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Wache auch im Docker-Betrieb.** Hängt ein EOS-Lauf (Standard: länger als 90 min) oder drückt man „EOS neu
+  starten“, startet DVhub jetzt auch den EOS-Container neu. Dafür läuft im EOS-Container ein kleiner Wächter
+  (`docker/compose.yml`, `configs: dvhub-eos-watch`), der DVhub jede Minute über `127.0.0.1` fragt und EOS bei einer
+  Anforderung beendet; Docker startet den Container dann neu. Mit einer älteren `compose.yml` ohne Wächter bleibt es
+  beim Hinweis, den Container von Hand neu zu starten. Startet EOS 10 min nach der Anforderung nicht neu, meldet
+  DVhub den Neustart als gescheitert.
 - **MiSpeL-Übersicht in der Historie, Rumpfjahre in den Einstellungen.** Ist eine MiSpeL-Option gewählt, rechnet
   DVhub aus den eigenen Messwerten nach der Festlegung der BNetzA (Beschluss 618-25-02 vom 01.10.2026) mit:
   Pauschaloption je Kalender- bzw. Rumpfjahr (förderfähige Menge P1, Erstattungsschwelle P4, Einspeisung P7,
