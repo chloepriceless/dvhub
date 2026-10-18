@@ -568,13 +568,22 @@ OPENVPN_PATH="$(command -v openvpn || echo /usr/sbin/openvpn)"
 WG_QUICK_PATH="$(command -v wg-quick || echo /usr/bin/wg-quick)"
 WG_PATH="$(command -v wg || echo /usr/bin/wg)"
 IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
-LN_PATH="$(command -v ln || echo /usr/bin/ln)"
-RM_PATH="$(command -v rm || echo /usr/bin/rm)"
+# IPsec-Hilfsskript (2026-10-18): root-eigene Kopie außerhalb des App-Ordners
+# (der gehört dem Dienstbenutzer); die sudoers-Regel zeigt nur auf diese Kopie.
+IPSEC_LINK_PATH="/usr/local/libexec/dvhub-ipsec-link"
+if [[ -f "$INSTALL_DIR/dvhub-ipsec-link.sh" ]]; then
+  install -d -o root -g root -m 0755 "$(dirname "$IPSEC_LINK_PATH")"
+  install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-ipsec-link.sh" "$IPSEC_LINK_PATH"
+fi
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
 PKILL_PATH="$(command -v pkill || echo /usr/bin/pkill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
 
-cat >"${SUDOERS_FILE}" <<SUDOERS
+# Erst in eine Nebendatei schreiben und mit visudo -c prüfen (2026-10-18):
+# eine ungültige Datei in /etc/sudoers.d legt bei klassischem sudo ALLE
+# sudo-Aufrufe lahm, sudo-rs überspringt ungültige Regeln still.
+SUDOERS_NEW="$(mktemp /etc/dvhub-sudoers.XXXXXX)"
+cat >"${SUDOERS_NEW}" <<SUDOERS
 # BEGIN DVHUB SUDOERS — keep this block byte-identical with install.sh.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart ${SERVICE_NAME}.service
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} is-active ${SERVICE_NAME}.service
@@ -594,15 +603,12 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} up *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} down *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} status *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} reload
-# Narrowed ln/rm rules — only permit operations rooted at dvhub VPN paths.
-# profileName regex: [A-Za-z0-9_-]+ (enforced in vpn-manager.js sanitizeProfileName).
-# Note: sudoers wildcard * in argument slots matches any string including
-# slashes; the anchored path prefix + bounded character class provide
-# defence-in-depth behind the application-layer sanitizeProfileName() check.
-${SERVICE_USER} ALL=(root) NOPASSWD: ${LN_PATH} -sf /etc/dvhub/vpn/profiles/*/ipsec.conf /etc/ipsec.d/dvhub-*.conf
-${SERVICE_USER} ALL=(root) NOPASSWD: ${LN_PATH} -sf /etc/dvhub/vpn/profiles/*/ipsec.secrets /etc/ipsec.d/dvhub-*.secrets
-${SERVICE_USER} ALL=(root) NOPASSWD: ${RM_PATH} -f /etc/ipsec.d/dvhub-[A-Za-z0-9_-]*.conf
-${SERVICE_USER} ALL=(root) NOPASSWD: ${RM_PATH} -f /etc/ipsec.d/dvhub-[A-Za-z0-9_-]*.secrets
+# IPsec-Verweise in /etc/ipsec.d (2026-10-18): nur über das root-eigene
+# Hilfsskript (Kopie von dvhub-ipsec-link.sh, prüft den Profilnamen selbst).
+# sudo-rs (Ubuntu 26.04) überspringt Regeln mit * oder ? mitten im Argument;
+# erlaubt ist nur ein alleinstehendes * am Ende (test/sudoers-sudo-rs.test.js).
+${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_LINK_PATH} link *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_LINK_PATH} unlink *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} link show *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
 # Process control — pkill by exact process name, not generic kill PID.
@@ -636,7 +642,14 @@ ${SERVICE_USER} ALL=(postgres) NOPASSWD: /usr/bin/pg_restore
 ${SERVICE_USER} ALL=(postgres) NOPASSWD: /usr/bin/psql
 # END DVHUB SUDOERS
 SUDOERS
-chmod 440 "${SUDOERS_FILE}"
+chmod 440 "${SUDOERS_NEW}"
+if command -v visudo >/dev/null 2>&1 && ! VISUDO_OUT="$(visudo -cf "${SUDOERS_NEW}" 2>&1)"; then
+  echo "  Sudoers: Prüfung fehlgeschlagen — bisherige Regeln bleiben aktiv:" >&2
+  echo "${VISUDO_OUT}" | sed 's/^/    /' >&2
+  rm -f "${SUDOERS_NEW}"
+else
+  mv -f "${SUDOERS_NEW}" "${SUDOERS_FILE}"
+fi
 
 cat >/etc/systemd/system/${SERVICE_NAME}.service <<SERVICE
 [Unit]

@@ -12,7 +12,13 @@ import path from 'node:path';
 // eslint-disable-next-line no-unused-vars
 import { info as logInfo, warn as logWarn, error as logError, debug as logDebug } from './services/log.js';
 
-const execFileAsync = promisify(execFile);
+const defaultExecFileAsync = promisify(execFile);
+
+// IPsec-Verweise in /etc/ipsec.d legt das root-eigene Hilfsskript an
+// (dvhub-ipsec-link.sh, von post-update.sh installiert). sudo-rs lehnt die
+// früheren Regeln `ln -sf …/profiles/*/ipsec.conf …` ab (Platzhalter mitten
+// im Argument), IPsec war damit auf Ubuntu 26.04 kaputt (2026-10-18).
+export const IPSEC_LINK_HELPER = '/usr/local/libexec/dvhub-ipsec-link';
 
 // Status-Prüfungen OHNE sudo (2026-10-01): der Watchdog lief alle 10 s mit
 // `sudo pkill -0` + `sudo ip link show` — jede sudo-Sitzung schreibt mehrere
@@ -61,6 +67,17 @@ const IPSEC_DANGEROUS_KEYS = new Set(['leftupdown', 'rightupdown', 'include']);
 // Tight character class for anything that ends up in a sudo ln/rm argument.
 // Mirrors profileDir() below and the narrowed sudoers rules in install.sh /
 // post-update.sh. Exported for tests + reuse from callers.
+// Profilordner, aus dem eine ipsec.conf stammt — nur PROFILES_DIR/<name>/ipsec.conf,
+// sonst null (das Hilfsskript verlinkt nichts außerhalb der Profile).
+export function ipsecSourceProfile(cfgPath, profilesDir = PROFILES_DIR) {
+  const resolved = path.resolve(String(cfgPath || ''));
+  if (path.basename(resolved) !== 'ipsec.conf') return null;
+  const dir = path.dirname(resolved);
+  if (path.dirname(dir) !== path.resolve(profilesDir)) return null;
+  const name = path.basename(dir);
+  return /^[A-Za-z0-9_-]{1,64}$/.test(name) ? name : null;
+}
+
 export function sanitizeProfileName(name) {
   return String(name || 'direktvermarkter').replace(/[^a-zA-Z0-9_-]/g, '');
 }
@@ -199,6 +216,9 @@ export function validateIPSecConfig(content) {
 
 export function createVpnManager(ctx) {
   const { state, getCfg, pushLog } = ctx;
+  // Tests reichen einen Ersatz durch; im Betrieb das echte execFile.
+  const execFileAsync = ctx.execFileAsync || defaultExecFileAsync;
+  const ipsecProfilesDir = ctx.profilesDir || PROFILES_DIR;   // Tests: eigenes Verzeichnis
 
   // -- state initialisation --
   state.vpn = {
@@ -642,30 +662,25 @@ export function createVpnManager(ctx) {
       return;
     }
 
-    const dir = path.dirname(cfgPath);
-    const secretsPath = path.join(dir, 'ipsec.secrets');
-
     // Load profile config into StrongSwan
     try {
-      // Include profile config in StrongSwan — symlink to /etc/ipsec.d/.
+      // Include profile config in StrongSwan — the helper symlinks the
+      // profile's ipsec.conf (+ ipsec.secrets, if present) into /etc/ipsec.d.
       // Re-sanitise defensively: startTunnel should have already stored a
-      // safe value in state.vpn.profileName, but if a future caller ever sets
-      // it from outside this module we want the sudo interpolation below to
-      // still be safe, and we want the narrowed sudoers regex
-      // ([A-Za-z0-9_-]+) to match byte-for-byte.
+      // safe value in state.vpn.profileName; the helper checks the same
+      // character class again as root.
       const safeProfile = sanitizeProfileName(state.vpn.profileName);
       if (!/^[a-zA-Z0-9_-]+$/.test(safeProfile)) {
         throw new Error('invalid profileName (empty after sanitation)');
       }
-      const ipsecDConf = `/etc/ipsec.d/dvhub-${safeProfile}.conf`;
-      const ipsecDSecrets = `/etc/ipsec.d/dvhub-${safeProfile}.secrets`;
-
-      // Create symlinks so StrongSwan picks up our config
-      await execFileAsync('sudo', ['ln', '-sf', cfgPath, ipsecDConf]);
-      try {
-        await fsPromises.access(secretsPath);
-        await execFileAsync('sudo', ['ln', '-sf', secretsPath, ipsecDSecrets]);
-      } catch { /* no secrets file — PSK might be inline or cert-based */ }
+      // vpn.configPath darf auf ein anderes Profil zeigen (wie früher die Regel
+      // `ln -sf …/profiles/*/ipsec.conf`) — dann verlinkt das Skript dessen Dateien.
+      const sourceProfile = ipsecSourceProfile(cfgPath, ipsecProfilesDir);
+      if (!sourceProfile) {
+        throw new Error(`IPsec-Profil muss unter ${ipsecProfilesDir}/<Profil>/ipsec.conf liegen (ist: ${cfgPath})`);
+      }
+      const linkArgs = sourceProfile === safeProfile ? [safeProfile] : [safeProfile, sourceProfile];
+      await execFileAsync('sudo', ['-n', IPSEC_LINK_HELPER, 'link', ...linkArgs]);
 
       // Reload StrongSwan config
       await execFileAsync('sudo', ['ipsec', 'reload']);
@@ -818,8 +833,7 @@ export function createVpnManager(ctx) {
     // escape the narrowed sudoers rule. Local name is `safeProfile` so the
     // "raw profileName interpolation" audit grep stays at zero matches.
     const safeProfile = sanitizeProfileName(state.vpn.profileName || vpnCfg().profileName);
-    try { await execFileAsync('sudo', ['rm', '-f', `/etc/ipsec.d/dvhub-${safeProfile}.conf`]); } catch { /* ignore */ }
-    try { await execFileAsync('sudo', ['rm', '-f', `/etc/ipsec.d/dvhub-${safeProfile}.secrets`]); } catch { /* ignore */ }
+    try { await execFileAsync('sudo', ['-n', IPSEC_LINK_HELPER, 'unlink', safeProfile]); } catch { /* ignore */ }
     try { await execFileAsync('sudo', ['ipsec', 'reload']); } catch { /* ignore */ }
   }
 
