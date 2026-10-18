@@ -333,6 +333,31 @@ Der Entrypoint ist idempotent: Config wird nur angelegt, nie überschrieben;
 der Config bleiben stehen. Läuft der Container bereits unter einer
 unprivilegierten UID (`--user`), überspringt er den `chown` und startet direkt.
 
+## Schlanke Images für schwache Geräte (SPiNE EnergyLink)
+
+Für Geräte mit wenig Speicher (EnergyLink: ~2,3 GB) gibt es zwei schlanke
+Varianten. Grundlage sind jeweils die offiziellen Images; entfernt wird nur,
+was DVhub nicht braucht, und alles liegt in einer Schicht.
+
+| Image | Grundlage | entpackt | Download (arm64) | weggelassen |
+|---|---|---|---|---|
+| `bikinibottomcapital/timescaledb-slim:<TIMESCALE_TAG>` | `timescale/timescaledb:<TIMESCALE_TAG>` | ~200 MB statt ~1,55 GB | ~79 MB statt ~535 MB | alte TimescaleDB-Versionen (nur die ausgelieferte + Update-Weg von der vorherigen), LLVM-JIT, pgvector, Header |
+| `bikinibottomcapital/dvhub-eos-slim:<EOS_TAG>` | `dvhub-eos:<EOS_TAG>` (unverändertes EOS) | ~700 MB statt ~930 MB | ~220 MB statt ~285 MB | EOSdash (bokeh, fasthtml, monsterui), matplotlib, Testordner der Bibliotheken |
+
+Einsetzen in `docker/.env`:
+
+```bash
+TIMESCALE_IMAGE=docker.io/bikinibottomcapital/timescaledb-slim
+EOS_IMAGE=docker.io/bikinibottomcapital/dvhub-eos-slim
+```
+
+Geprüft am 19.10.2026:
+- Eine Datenbank, die mit dem offiziellen 2.28.2 angelegt wurde, startet im schlanken 2.30.2-Image und lässt sich mit `ALTER EXTENSION timescaledb UPDATE` aktualisieren. Daten und Aggregate bleiben identisch, Komprimierung und Jobs laufen weiter. DVhub erledigt das Update nach einem Image-Tausch selbst.
+- Auf einer frischen schlanken Datenbank laufen alle 22 Migrationen von DVhub durch.
+- EOS schlank und offiziell liefern mit denselben Eingaben (Prognosen und Konfiguration vom Prod-A7S) und festem Startwert dieselbe Lösung: alle Felder gleich, auch die 92 Plan-Gene.
+
+Ein PostgreSQL-Major-Wechsel geht auch mit dem schlanken Image nie per Tausch (pg_dump/pg_upgrade). Die CI baut beide Images (`container-dev.yml`, Job `publish-slim`), sobald das Image zum Pin fehlt oder sich sein Dockerfile ändert.
+
 ## Datenhaltung: gestufte Retention (Messung an Produktivdaten)
 
 Der EnergyLink hat ~2,3 GB Disk — die aktuelle „keep forever"-Policy passt dort

@@ -140,3 +140,94 @@ jobs:
             BUILD_VERSION=${{ steps.eos.outputs.tag }}
           cache-from: type=gha,scope=eos
           cache-to: type=gha,mode=max,scope=eos
+
+  # Schlanke Images für schwache Geräte (SPiNE EnergyLink, 2026-10-19):
+  #   bikinibottomcapital/timescaledb-slim:<TIMESCALE_TAG>   (docker/timescaledb-slim)
+  #   bikinibottomcapital/dvhub-eos-slim:<EOS_TAG>           (docker/eos-slim)
+  # Gebaut wird nur, wenn das Image zum Pin fehlt oder sich sein Dockerfile in
+  # diesem Commit geändert hat. Grundlage: das offizielle TimescaleDB-Image zum
+  # Pin bzw. das EOS-Image zum Pin (deshalb nach publish-eos).
+  publish-slim:
+    name: schlanke Images (TimescaleDB, EOS)
+    needs: publish-eos
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+
+      - name: EOS-Image zum Pin
+        id: eos
+        run: scripts/eos-image-plan.sh
+
+      - name: Was ist zu bauen?
+        id: plan
+        run: |
+          set -euo pipefail
+          val() { { grep -E "^$1=" docker/.env.example || true; } | tail -n 1 | cut -d= -f2-; }
+          ts_tag="$(val TIMESCALE_TAG)"; ts_version="${ts_tag%%-pg*}"
+          [ -n "$ts_tag" ] && [ "$ts_version" != "$ts_tag" ] || { echo "::error::TIMESCALE_TAG fehlt oder ohne -pgNN: '$ts_tag'"; exit 1; }
+          changed="$(git diff --name-only HEAD~1 HEAD 2>/dev/null || true)"
+          need() { # need IMAGE ORDNER
+            if ! docker manifest inspect "$1" >/dev/null 2>&1; then echo true; return; fi
+            if printf '%s\n' "$changed" | grep -q "^$2/"; then echo true; return; fi
+            echo false
+          }
+          {
+            echo "ts_tag=$ts_tag"; echo "ts_version=$ts_version"
+            echo "ts_build=$(need "docker.io/bikinibottomcapital/timescaledb-slim:$ts_tag" docker/timescaledb-slim)"
+            echo "eos_build=$(need "docker.io/bikinibottomcapital/dvhub-eos-slim:${{ steps.eos.outputs.tag }}" docker/eos-slim)"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v4
+        if: steps.plan.outputs.ts_build == 'true' || steps.plan.outputs.eos_build == 'true'
+      - uses: docker/setup-buildx-action@v4
+        if: steps.plan.outputs.ts_build == 'true' || steps.plan.outputs.eos_build == 'true'
+
+      - uses: docker/login-action@v4
+        if: steps.plan.outputs.ts_build == 'true' || steps.plan.outputs.eos_build == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@v4
+        if: steps.plan.outputs.ts_build == 'true' || steps.plan.outputs.eos_build == 'true'
+        with:
+          username: bikinibottomcapital
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
+
+      - uses: docker/build-push-action@v7
+        if: steps.plan.outputs.ts_build == 'true'
+        with:
+          context: docker/timescaledb-slim
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            docker.io/bikinibottomcapital/timescaledb-slim:${{ steps.plan.outputs.ts_tag }}
+            ghcr.io/${{ github.repository_owner }}/timescaledb-slim:${{ steps.plan.outputs.ts_tag }}
+          build-args: |
+            TS_IMAGE=timescale/timescaledb:${{ steps.plan.outputs.ts_tag }}
+            TS_VERSION=${{ steps.plan.outputs.ts_version }}
+
+      - uses: docker/build-push-action@v7
+        if: steps.plan.outputs.eos_build == 'true'
+        with:
+          context: docker/eos-slim
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            docker.io/bikinibottomcapital/dvhub-eos-slim:${{ steps.eos.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/dvhub-eos-slim:${{ steps.eos.outputs.tag }}
+          build-args: |
+            EOS_IMAGE=${{ steps.eos.outputs.image }}
+            EOS_TAG=${{ steps.eos.outputs.image_tag }}

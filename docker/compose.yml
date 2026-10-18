@@ -30,7 +30,9 @@ name: dvhub
 
 services:
   db:
-    image: timescale/timescaledb:${TIMESCALE_TAG:-2.30.2-pg17}
+    # Offizielles Image; schwache Geräte (SPiNE EnergyLink) nehmen das schlanke
+    # TIMESCALE_IMAGE=docker.io/bikinibottomcapital/timescaledb-slim (docker/timescaledb-slim).
+    image: ${TIMESCALE_IMAGE:-timescale/timescaledb}:${TIMESCALE_TAG:-2.30.2-pg17}
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
