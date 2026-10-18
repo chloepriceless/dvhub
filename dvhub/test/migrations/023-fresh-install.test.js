@@ -74,8 +74,13 @@ describe('Phase 23-01 — Frischinstall-Migrationslauf (timescaledb:false skippt
     // Lazy imports — load-safe ohne node_modules. Hier ist RUN_PG_TESTS true,
     // also sind die deps erwartbar verfügbar.
     const pg = (await import('pg')).default;
-    ({ runPendingMigrations } = await import('../../telemetry-store-pg.js'));
+    let ensurePgSchema;
+    ({ runPendingMigrations, ensurePgSchema } = await import('../../telemetry-store-pg.js'));
     pool = new pg.Pool({ connectionString: DATABASE_URL });
+    // Wie der echte Start (server.js): erst das Grundschema samt schema_migrations,
+    // dann die Migrationen. Ohne das lief der Test nur, wenn ein anderer Test die
+    // Tabelle zufällig schon angelegt hatte (Codex-Review Q1, 2026-10-18).
+    await ensurePgSchema(pool);
   });
 
   after(async () => {
@@ -84,10 +89,15 @@ describe('Phase 23-01 — Frischinstall-Migrationslauf (timescaledb:false skippt
   });
 
   it('runPendingMigrations(pool, {timescaledb:false}) wirft nicht und überspringt 014', async () => {
+    let result;
     await assert.doesNotReject(
-      () => runPendingMigrations(pool, { telemetry: { database: { timescaledb: false } } }),
+      async () => { result = await runPendingMigrations(pool, { telemetry: { database: { timescaledb: false } } }); },
       'Migrationskette muss mit timescaledb:false sauber durchlaufen (014 skip statt CREATE-EXTENSION-Crash)'
     );
+    // Frischinstall auf reinem PostgreSQL: nichts gescheitert, nichts fehlt (R1-Status bleibt „ok“).
+    assert.deepEqual(result.failed, []);
+    assert.deepEqual(result.missing, []);
+    assert.deepEqual(result.skipped, ['014-timescaledb.sql']);
 
     // 014 darf nicht angewendet worden sein → kein schema_migrations-Eintrag für version 14.
     const { rows } = await pool.query(

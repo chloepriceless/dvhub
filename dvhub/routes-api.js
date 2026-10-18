@@ -939,7 +939,23 @@ export function createApiRoutes(ctx) {
           latencyMs: 0,
           lastSuccessAt: state.telemetry.ok ? toIso(state.telemetry.lastWriteAt) : null,
           lastErrorAt: state.telemetry.lastError ? toIso(state.telemetry.lastWriteAt || Date.now()) : null
-        }
+        },
+        // Datenbank-Stand (Codex-Review R1): eine gescheiterte Migration lief bisher
+        // nur ins Journal, der Status sagte trotzdem „ok“.
+        ...(state.telemetry?.migrations ? [{
+          id: 'migrations',
+          label: 'Datenbank-Stand',
+          ok: state.telemetry.migrations.ok,
+          detail: state.telemetry.migrations.ok
+            ? 'alle Migrationen angewendet'
+            : `unvollständig: ${[
+              ...(state.telemetry.migrations.failed || []).map((x) => `${x.file} fehlgeschlagen`),
+              ...(state.telemetry.migrations.missing || []).filter((f) => !(state.telemetry.migrations.failed || []).some((x) => x.file === f)).map((f) => `${f} fehlt`)
+            ].join(', ')}`,
+          latencyMs: 0,
+          lastSuccessAt: null,
+          lastErrorAt: null
+        }] : [])
       ]
     };
   }
@@ -2867,7 +2883,8 @@ export function createApiRoutes(ctx) {
         telemetry: {
           configured: telemetryConfigured,
           ok: telemetryOk,
-          lastError: state.telemetry?.lastError || null
+          lastError: state.telemetry?.lastError || null,
+          migrationsOk: state.telemetry?.migrations ? state.telemetry.migrations.ok : null
         }
       });
     }

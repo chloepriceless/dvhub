@@ -728,7 +728,17 @@ async function createTelemetryStoreIfEnabled() {
     // directly after ensurePgSchema so schema is always brought up to date before
     // the rest of startup (market-value backfill, forecast services, etc.) runs.
     // This is the single canonical call site for runPendingMigrations.
-    await runPendingMigrations(pool, cfg);
+    const migrations = await runPendingMigrations(pool, cfg);
+    // Sichtbar statt nur im Journal (Codex-Review R1): Status + Log-Eintrag.
+    state.telemetry.migrations = migrations ? {
+      failed: migrations.failed, missing: migrations.missing, applied: migrations.applied.length,
+      ok: !(migrations.failed.length || (migrations.missing || []).length)
+    } : null;
+    if (state.telemetry.migrations && !state.telemetry.migrations.ok) {
+      pushLog('telemetry_migrations_incomplete', {
+        failed: migrations.failed.map((x) => x.file), missing: migrations.missing
+      }, 'warn');
+    }
     const store = createTelemetryStorePg(pool, {
       rawRetentionDays: Number(cfg.telemetry.rawRetentionDays || 45)
     });

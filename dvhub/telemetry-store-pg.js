@@ -434,9 +434,13 @@ export async function ensurePgSchema(pool) {
  * Wired from server.js startup, immediately after ensurePgSchema(pool) —
  * that is the single canonical call site so ordering is deterministic.
  */
+// Ergebnis (Codex-Review R1, 2026-10-18): applied/failed/skipped und am Ende
+// `missing` = Versionen, die danach nicht in schema_migrations stehen. Der Lauf
+// bleibt best-effort (kein throw); server.js legt das Ergebnis in den Status.
 export async function runPendingMigrations(pool, cfg = {}) {
+  const result = { applied: [], failed: [], skipped: [], missing: [] };
   const migDir = path.join(__dirname, 'db', 'migrations');
-  if (!fs.existsSync(migDir)) return;
+  if (!fs.existsSync(migDir)) return result;
   const files = fs.readdirSync(migDir)
     .filter(f => /^\d{3}-.+\.sql$/.test(f))
     .sort();
@@ -445,6 +449,7 @@ export async function runPendingMigrations(pool, cfg = {}) {
     if (f === '014-timescaledb.sql' && cfg?.telemetry?.database?.timescaledb !== true) {
       // eslint-disable-next-line no-console
       console.log(`[migration] skipping 014-timescaledb.sql (cfg.telemetry.database.timescaledb !== true)`);
+      result.skipped.push(f);
       continue;
     }
     const version = parseInt(f.slice(0, 3), 10);
@@ -462,11 +467,24 @@ export async function runPendingMigrations(pool, cfg = {}) {
     // Sichtbarkeit kommt über die Diagnose-Zeile + 23-04 (deploy-test Versionsprüfung).
     try {
       await pool.query(sql);
+      result.applied.push(f);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(`[migration] FAILED ${f} (v${version}): ${err.code || ''} ${err.message}`);
+      result.failed.push({ file: f, version, code: err.code || null, error: String(err.message || err).slice(0, 300) });
     }
   }
+  try {
+    const { rows } = await pool.query('SELECT version FROM schema_migrations');
+    const have = new Set((rows || []).map((r) => Number(r.version)));
+    result.missing = files
+      .filter((f) => !result.skipped.includes(f))
+      .filter((f) => !have.has(parseInt(f.slice(0, 3), 10)));
+  } catch (err) {
+    result.missing = null;   // Stand nicht lesbar — nicht als „alles fehlt“ melden
+    result.checkError = String(err.message || err).slice(0, 300);
+  }
+  return result;
 }
 
 // Zeilen je INSERT beim Messwert-Schreiben (Parameter sind Arrays, die Zahl

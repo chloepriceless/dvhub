@@ -44,8 +44,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Volle Testsuite (ci.yml) für genau diesen Tag-Commit — vorher prüfte der
+  # Release nur seinen eigenen Smoke-Test (Codex-Review Q2, 2026-10-18).
+  tests:
+    name: volle Tests (ci.yml)
+    uses: ./.github/workflows/ci.yml
+
   smoke:
     name: smoke (amd64 + TimescaleDB)
+    needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

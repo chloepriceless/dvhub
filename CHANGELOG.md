@@ -131,6 +131,12 @@ verweist hierher.
 
 ### Behoben
 
+- **Unvollständige Datenbank-Migrationen werden angezeigt.** Eine gescheiterte Migration stand bisher nur im
+  Journal, der Status meldete trotzdem „ok“. Jetzt erscheint unter System-Gesundheit „Datenbank-Stand“ mit den
+  betroffenen Dateien, `/health` meldet `telemetry.migrationsOk`, und das Log bekommt einen Warneintrag.
+- **Release nur mit grünen Tests desselben Commits.** Der Container-Release ruft jetzt die volle Testsuite für
+  genau den Tag-Commit auf, bevor gebaut wird.
+
 - **Benachrichtigungen fielen bei eingeschalteter Schreib-Rücklesung aus.** Der Timer der Rücklesung
   (`schedule.controlWriteVerify`) lag im gemeinsamen Zustand; solange eine Rücklesung anstand, scheiterte jede
   Benachrichtigungsprüfung mit „Converting circular structure to JSON“ (eHive: rund 1 600-mal je Stunde). Der

@@ -123,3 +123,39 @@ test('runPendingMigrations: ohne Fehler keine FAILED-Diagnose, alle Migrationen 
   );
   assert.ok(ranAnyMigration, 'mindestens eine Migration sollte ausgeführt worden sein');
 });
+
+// Codex-Review 2026-10-18 R1: das Ergebnis macht Fehler sichtbar (vorher: undefined).
+test('runPendingMigrations: Ergebnis nennt gescheiterte, übersprungene und fehlende Migrationen', async () => {
+  const { fakePool } = makeMockPool(/Migration 001:/);
+  const origError = console.error;
+  // eslint-disable-next-line no-console
+  console.error = () => {};
+  let r;
+  try { r = await runPendingMigrations(fakePool, CFG); } finally {
+    // eslint-disable-next-line no-console
+    console.error = origError;
+  }
+  assert.deepEqual(r.failed.map((x) => [x.file, x.version, x.code]), [['001-vrm-forecasts-unique.sql', 1, '42883']]);
+  assert.deepEqual(r.skipped, ['014-timescaledb.sql']);
+  // Der Ersatz-Pool trägt nichts in schema_migrations ein → alles außer 014 fehlt danach.
+  assert.equal(r.missing.includes('014-timescaledb.sql'), false);
+  assert.ok(r.missing.includes('001-vrm-forecasts-unique.sql'));
+  assert.equal(r.applied.length + r.failed.length + r.skipped.length, r.missing.length + r.skipped.length);
+});
+
+test('runPendingMigrations: alles eingetragen → failed/missing leer', async () => {
+  const applied = new Set();
+  const fakePool = {
+    query: async (sql, params) => {
+      if (/SELECT 1 FROM schema_migrations WHERE version/.test(sql)) return { rows: applied.has(params[0]) ? [{}] : [] };
+      if (/SELECT version FROM schema_migrations/.test(sql)) return { rows: [...applied].map((version) => ({ version })) };
+      // Wie die echten Dateien: jede trägt sich per INSERT INTO schema_migrations selbst ein.
+      const m = /INSERT INTO schema_migrations[^;]*?VALUES\s*\(\s*(\d+)/i.exec(sql);
+      if (m) applied.add(Number(m[1]));
+      return { rows: [] };
+    }
+  };
+  const r = await runPendingMigrations(fakePool, CFG);
+  assert.deepEqual(r.failed, []);
+  assert.deepEqual(r.missing, [], `fehlend: ${JSON.stringify(r.missing)}`);
+});

@@ -25,6 +25,9 @@ on:
     branches:
       - main
       - v1.0-dev
+  # Release (container.yml) ruft die volle Suite für genau den Tag-Commit auf
+  # (Codex-Review Q2, 2026-10-18) — kein Image ohne grüne Tests desselben SHA.
+  workflow_call:
 
 # Least-privilege: CI only needs to read the repo for checkout.
 permissions:
