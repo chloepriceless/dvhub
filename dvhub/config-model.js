@@ -1326,6 +1326,20 @@ function buildFieldDefinitions() {
     },
     {
       section: 'telemetry',
+      group: 'logRetention',
+      groupLabel: 'Datenvorhaltung',
+      groupDescription: 'Wie lange DVhub Einzelwerte von Protokollen und Optimierer-Läufen aufhebt. Messwerte und die 15-Minuten-Historie bleiben immer.',
+      path: 'telemetry.logRetention.mode',
+      label: 'Datenvorhaltung',
+      type: 'select',
+      options: [
+        { value: 'standard', label: 'Standard (14 Tage Einzelwerte)' },
+        { value: 'full', label: 'Vollständig (alles behalten)' }
+      ],
+      help: 'Standard: Sollwert-Schreibvorgänge und Statusmeldungen bleiben 14 Tage einzeln, danach als 15-Minuten-Werte bzw. Tageszähler für immer; Fehler 60 Tage einzeln, danach als Episoden. Von den Optimierer-Läufen bleibt nach 14 Tagen je Tag der Day-Ahead-Plan vom Vortag (die Vorhersage, mit der der Tag geplant war). Abregelungen, Einstellungsänderungen und andere seltene Ereignisse bleiben immer. „Vollständig“ behält alles — nur für Entwicklungs- und Testgeräte, die Datenbank wächst dann um etwa 15–20 MB am Tag.'
+    },
+    {
+      section: 'telemetry',
       group: 'historyImport',
       groupLabel: 'History Import',
       groupDescription: 'Optionale Nachfüllung aus VRM für Historie und Datenlücken.',
@@ -4256,6 +4270,11 @@ export function createDefaultConfig() {
         password: ''
       },
       rawRetentionDays: 45,
+      // Datenvorhaltung (services/log-retention.js): 'standard' = 14 Tage
+      // Einzelwerte, 'full' = alles behalten (Entwicklungsgeräte).
+      logRetention: {
+        mode: 'standard'
+      },
       historyImport: {
         enabled: false,
         provider: 'vrm',
@@ -5688,7 +5707,7 @@ const SETTINGS_AREAS = [
     label: 'System',
     icon: '◆',
     description: 'Zeitzone, Datenbank und Sicherung, Zugang und Fernwartung.',
-    groups: ['scheduleTech', 'dbBackup', 'security'],
+    groups: ['scheduleTech', 'dbBackup', 'logRetention', 'security'],
     advanced: ['historyImport', 'database', 'general', 'accessControl', 'monitoring', 'scan'],
     editors: ['historyImport']
   },

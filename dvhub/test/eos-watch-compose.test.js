@@ -81,8 +81,14 @@ test('docker stop (SIGTERM) wird an EOS weitergegeben', { skip: !PY }, async () 
   const dv = await fakeDvhub(() => null);
   try {
     const { p, done } = runWatcher(watcherScript(), dv.url,
-      'import signal, sys, time\nsignal.signal(signal.SIGTERM, lambda *a: sys.exit(42))\ntime.sleep(60)');
-    await new Promise((r) => setTimeout(r, 800));
+      'import signal, sys, time\nsignal.signal(signal.SIGTERM, lambda *a: sys.exit(42))\nprint("bereit", flush=True)\ntime.sleep(60)');
+    // Erst senden, wenn das Kind seinen Handler hat — feste 800 ms reichten
+    // unter Last (volle Testsuite) nicht immer.
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('Kind meldet sich nicht')), 15_000);
+      const check = (d) => { if (String(d).includes('bereit')) { clearTimeout(t); p.stdout.off('data', check); resolve(); } };
+      p.stdout.on('data', check);
+    });
     p.kill('SIGTERM');
     const r = await done;
     assert.equal(r.code, 42, 'Kind hat SIGTERM bekommen und sich mit 42 beendet');

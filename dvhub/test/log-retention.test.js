@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLogRetention, AUDIT_ERROR_SQL, AUDIT_NOISE_SQL } from '../services/log-retention.js';
+import { createLogRetention, AUDIT_ERROR_SQL, AUDIT_NOISE_SQL, LOG_DETAIL_DAYS, LOG_ERROR_DETAIL_DAYS } from '../services/log-retention.js';
 
 function fakeDb({ oldest = {} } = {}) {
   const calls = [];
@@ -58,7 +58,7 @@ test('Mit Portal-Quittung: 24 h, Bündeln + Löschen in einer Transaktion, nur b
   assert.equal(drop.params[0], new Date(NOW - 7 * 86_400_000).toISOString());
 });
 
-test('Verdichtet tageweise bis zum 60-Tage-Stichtag', async () => {
+test('Verdichtet tageweise bis zum 14-Tage-Stichtag', async () => {
   const db = fakeDb({ oldest: { control: ['2026-03-10', '2026-03-11'], audit: ['2026-05-11'] } });
   const r = await createLogRetention({ getDb: () => db, getCfg: cfg, now: () => NOW }).runOnce();
   assert.equal(r.controlDays, 2);
@@ -78,4 +78,35 @@ test('Bleibt ein Tag stehen, bricht der Job ab statt zu kreisen', async () => {
   await createLogRetention({ getDb: () => db, getCfg: cfg, now: () => NOW, pushLog: (e) => logs.push(e) }).runOnce();
   assert.ok(db.calls < 30, `nur wenige Abfragen (${db.calls})`);
   assert.ok(logs.includes('log_retention_stuck'));
+});
+
+// Christin 2026-10-18: bei Kunden 14 Tage Einzelwerte (vorher 60), Fehler
+// bleiben 60 Tage voll; auf unseren Geräten „Vollständig“ = nichts verdichten.
+test('Standard: 14 Tage Einzelwerte, Fehler 60 Tage', async () => {
+  assert.equal(LOG_DETAIL_DAYS, 14);
+  assert.equal(LOG_ERROR_DETAIL_DAYS, 60);
+  const db = fakeDb();
+  await createLogRetention({ getDb: () => db, getCfg: cfg, now: () => NOW }).runOnce();
+  const cut = (days) => new Date(NOW - days * 86_400_000).toISOString();
+  const oldestControl = db.calls.find((c) => /control_events WHERE event_type = 'control_write' AND ts_utc < \$2/.test(c.sql));
+  assert.equal(oldestControl.params[1], cut(14));
+  const oldestError = db.calls.find((c) => c.sql.includes('SELECT (min(ts_utc)') && c.sql.includes('_error') && !c.sql.includes('NOT ('));
+  assert.equal(oldestError.params[1], cut(60));
+  const oldestNoise = db.calls.find((c) => c.sql.includes('SELECT (min(ts_utc)') && c.sql.includes('NOT ('));
+  assert.equal(oldestNoise.params[1], cut(14));
+});
+
+test('Vollständig: nichts wird verdichtet oder gelöscht', async () => {
+  const db = fakeDb({ oldest: { control: ['2026-03-10'], audit: ['2026-05-11'] } });
+  const full = () => ({ timeZone: 'Europe/Berlin', telemetry: { logRetention: { mode: 'full' } } });
+  const r = await createLogRetention({ getDb: () => db, getCfg: full, now: () => NOW, getErrorAckId: () => 4711 }).runOnce();
+  assert.equal(r.skipped, 'full');
+  assert.equal(db.calls.length, 0);
+});
+
+test('Laufreihen: je Tag bleibt ein Plan (Day-Ahead vom Vortag), nicht der letzte Lauf', async () => {
+  const db = fakeDb();
+  await createLogRetention({ getDb: () => db, getCfg: cfg, now: () => NOW }).runOnce();
+  assert.ok(!db.calls.some((c) => /row_number\(\) OVER/.test(c.sql)), 'kein „letzter Lauf je Tag“ mehr');
+  assert.ok(db.calls.some((c) => /count\(DISTINCT optimizer_run_id\) > 1/.test(c.sql)), 'sucht Tage mit mehreren Läufen');
 });

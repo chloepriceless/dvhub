@@ -20,13 +20,21 @@
 //     ohne Portal — 60 Tage voll, dann Episoden in audit_error_episodes
 //       (Beginn, Ende, Anzahl, erste Meldung; < 15 min Abstand = eine Episode),
 //       für immer.
-//   optimizer_run_series  nach 60 Tagen nur der letzte Lauf je Tag, nach 2 Jahren weg.
+//   optimizer_run_series  nach 14 Tagen bleibt je Tag die Vorhersage, mit der
+//                   der Tag geplant war: der Day-Ahead-Plan vom Vortag (erster
+//                   Lauf ≥ 30 min nach Eingang der Day-Ahead-Preise), nur mit
+//                   den Slots dieses Tages; nach 2 Jahren weg.
+//
+// Christin 2026-10-18: Einzelwerte bei Kunden 14 statt 60 Tage (control_write
+// allein ~9 MB/Tag), Fehler weiter 60 Tage voll. Auf unseren eigenen Geräten
+// telemetry.logRetention.mode = 'full': nichts verdichten oder löschen.
 //
 // Tag für Tag (verdichten, dann löschen), idempotent (ON CONFLICT DO NOTHING
 // bzw. Verdichten+Löschen in einer Transaktion). Je Lauf höchstens
 // TIME_BUDGET_MS — die erste Runde einer alten Box verteilt sich auf Nächte.
 
-export const LOG_DETAIL_DAYS = 60;
+export const LOG_DETAIL_DAYS = 14;
+export const LOG_ERROR_DETAIL_DAYS = 60;   // Fehler → Episoden erst nach 60 Tagen
 export const LOG_AGGREGATE_DAYS = 730;      // nur optimizer_run_series
 export const PORTAL_ERROR_RAW_HOURS = 24;
 export const PORTAL_ERROR_BUCKET_DAYS = 7;
@@ -97,19 +105,6 @@ const sql = {
      WHERE ${AUDIT_NOISE_SQL}
        AND ts_utc >= ($1::date::timestamp AT TIME ZONE $2) AND ts_utc < (($1::date + 1)::timestamp AT TIME ZONE $2)`,
 
-  // Läufe vor dem Stichtag, die NICHT der letzte ihres (lokalen) Tages sind.
-  thinOptimizerRuns: `WITH runs AS (
-      SELECT id, row_number() OVER (
-               PARTITION BY (run_started_at AT TIME ZONE $1)::date
-               ORDER BY run_started_at DESC, id DESC) AS rn
-        FROM optimizer_runs
-       WHERE run_started_at < $2
-    ), doomed AS (
-      SELECT id FROM runs WHERE rn > 1
-       AND EXISTS (SELECT 1 FROM optimizer_run_series s WHERE s.optimizer_run_id = runs.id)
-       LIMIT 500
-    )
-    DELETE FROM optimizer_run_series WHERE optimizer_run_id IN (SELECT id FROM doomed)`,
 
   // Portal hat quittiert: älter als 24 h → 15-min-Bündel (Transaktion mit dem Löschen).
   bucketAckedErrors: `INSERT INTO audit_error_15m (bucket, event_type, severity, n, first_ts, last_ts, sample_payload)
@@ -126,6 +121,45 @@ const sql = {
   dropOptimizerSeries: `DELETE FROM optimizer_run_series WHERE optimizer_run_id IN (
       SELECT id FROM optimizer_runs WHERE run_started_at < $1)`,
 };
+
+// Laufreihen tageweise: ein Tag ist fertig, wenn nur noch EIN Lauf Werte
+// für ihn hat. Exportiert für den PostgreSQL-Test.
+export const SERIES_RETENTION_SQL = Object.freeze({
+  // $1 Zeitzone, $2 Stichtag
+  oldestMultiRunDay: `SELECT day::text AS day FROM (
+      SELECT (ts_utc AT TIME ZONE $1)::date AS day
+        FROM optimizer_run_series WHERE ts_utc < $2
+       GROUP BY 1 HAVING count(DISTINCT optimizer_run_id) > 1
+    ) x ORDER BY day LIMIT 1`,
+  // $1 Tag (YYYY-MM-DD), $2 Zeitzone. Ein „Lauf“ ist ein Durchgang der
+  // Optimierer-Schleife (alle paar Minuten, Reihen meist stündlich über ~48 h —
+  // auch ohne Preise für den Tag, deshalb taugt die Abdeckung nicht).
+  // Bleibt: der erste Lauf, der mindestens 30 min nach Eingang der Day-Ahead-
+  // Preise für diesen Tag startete (audit_log epex_dayahead_arrived, Datum im
+  // payload; bis dahin hat EOS mit den neuen Preisen gerechnet). Fehlt der
+  // Eintrag: 14:30 Uhr am Vortag. Kein Lauf danach: der früheste mit Werten
+  // des Tages. Alle anderen Werte dieses Tages gehen.
+  thinSeriesDay: `WITH d AS (
+      SELECT ($1::date::timestamp AT TIME ZONE $2) AS d0, (($1::date + 1)::timestamp AT TIME ZONE $2) AS d1
+    ), anchor AS (
+      SELECT coalesce(
+        (SELECT min(ts_utc) FROM audit_log
+          WHERE event_type = 'epex_dayahead_arrived' AND payload->>'date' = to_char($1::date, 'YYYY-MM-DD')) + interval '30 minutes',
+        (($1::date - 1)::timestamp + time '14:30') AT TIME ZONE $2) AS a
+    ), cand AS (
+      SELECT s.optimizer_run_id AS id, min(r.run_started_at) AS started
+        FROM optimizer_run_series s JOIN optimizer_runs r ON r.id = s.optimizer_run_id, d
+       WHERE s.ts_utc >= d.d0 AND s.ts_utc < d.d1
+       GROUP BY s.optimizer_run_id
+    ), keep AS (
+      SELECT cand.id FROM cand, anchor
+       ORDER BY (cand.started >= anchor.a) DESC, cand.started ASC, cand.id ASC
+       LIMIT 1
+    )
+    DELETE FROM optimizer_run_series s USING d
+     WHERE s.ts_utc >= d.d0 AND s.ts_utc < d.d1
+       AND s.optimizer_run_id <> (SELECT id FROM keep)`,
+});
 
 /** Stichtage: Beginn des lokalen Tages vor `days` Tagen (als ISO-Zeitpunkt). */
 function cutoffs(nowMs, detailDays, aggregateDays) {
@@ -151,11 +185,15 @@ export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () 
     if (!db || typeof db.query !== 'function') return { skipped: 'no database' };
     const cfg = getCfg?.() || {};
     const r = cfg.telemetry?.logRetention || {};
+    // Unsere eigenen Geräte: alles behalten (Einstellungen → Datenbank).
+    if (r.mode === 'full') return { skipped: 'full' };
     const detailDays = Number(r.detailDays) > 0 ? Number(r.detailDays) : LOG_DETAIL_DAYS;
+    const errorDetailDays = Math.max(detailDays, Number(r.errorDetailDays) > 0 ? Number(r.errorDetailDays) : LOG_ERROR_DETAIL_DAYS);
     const aggregateDays = Math.max(detailDays, Number(r.aggregateDays) > 0 ? Number(r.aggregateDays) : LOG_AGGREGATE_DAYS);
     const tz = cfg.timeZone || 'Europe/Berlin';
     const t0 = now();
     const { detail, aggregate } = cutoffs(t0, detailDays, aggregateDays);
+    const errorDetail = cutoffs(t0, errorDetailDays, aggregateDays).detail;
     const out = { portalErrors: 0, controlDays: 0, errorDays: 0, auditDays: 0, optimizerRows: 0, deleted: 0, done: true };
     const budgetLeft = () => now() - t0 < TIME_BUDGET_MS;
     running = true;
@@ -181,19 +219,21 @@ export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () 
         const bucketCut = new Date(t0 - (Number(r.portalErrorBucketDays) > 0 ? Number(r.portalErrorBucketDays) : PORTAL_ERROR_BUCKET_DAYS) * 86_400_000).toISOString();
         out.deleted += (await db.query(sql.dropErrorBuckets, [bucketCut])).rowCount || 0;
       }
-      // Älteste noch rohe Tage vor dem 60-Tage-Stichtag verdichten — aber nur
-      // ganze Tage, die komplett vor dem Stichtag liegen.
-      const detailDay = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(detail));
+      // Älteste noch rohe Tage vor dem Stichtag verdichten — aber nur ganze
+      // Tage, die komplett vor dem Stichtag liegen.
+      const localDay = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(iso));
       const plans = {
-        control: [sql.oldestControlWriteDay, sql.aggregateControlDay, sql.deleteControlDay, 'controlDays'],
-        error: [sql.oldestAuditErrorDay, sql.aggregateErrorDay, sql.deleteErrorDay, 'errorDays'],
-        audit: [sql.oldestAuditNoiseDay, sql.aggregateAuditDay, sql.deleteAuditDay, 'auditDays'],
+        control: [sql.oldestControlWriteDay, sql.aggregateControlDay, sql.deleteControlDay, 'controlDays', detail],
+        error: [sql.oldestAuditErrorDay, sql.aggregateErrorDay, sql.deleteErrorDay, 'errorDays', errorDetail],
+        audit: [sql.oldestAuditNoiseDay, sql.aggregateAuditDay, sql.deleteAuditDay, 'auditDays', detail],
       };
       for (const q of Object.values(plans)) {
         let previous = null;
+        const cut = q[4];
+        const cutDay = localDay(cut);
         while (budgetLeft()) {
-          const oldest = (await db.query(q[0], [tz, detail])).rows?.[0]?.day;
-          if (!oldest || oldest >= detailDay) break;
+          const oldest = (await db.query(q[0], [tz, cut])).rows?.[0]?.day;
+          if (!oldest || oldest >= cutDay) break;
           // Schutz: derselbe Tag noch einmal = Löschen hat ihn nicht geleert
           // (z. B. Zeitzonen-Grenzfall) — nicht endlos auf der DB kreisen.
           if (oldest === previous) { log('log_retention_stuck', { day: oldest }); break; }
@@ -204,11 +244,17 @@ export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () 
           out[q[3]] += 1;
         }
       }
+      // Laufreihen: je Tag nur der Plan, mit dem der Tag geplant war.
+      const detailDay = localDay(detail);
+      let previousSeriesDay = null;
       while (budgetLeft()) {
-        const del = await db.query(sql.thinOptimizerRuns, [tz, detail]);
-        if (!del.rowCount) break;
-        out.optimizerRows += del.rowCount;
-        out.deleted += del.rowCount;
+        const day = (await db.query(SERIES_RETENTION_SQL.oldestMultiRunDay, [tz, detail])).rows?.[0]?.day;
+        if (!day || day >= detailDay) break;
+        if (day === previousSeriesDay) { log('log_retention_stuck', { day, table: 'optimizer_run_series' }); break; }
+        previousSeriesDay = day;
+        const del = await db.query(SERIES_RETENTION_SQL.thinSeriesDay, [day, tz]);
+        out.optimizerRows += del.rowCount || 0;
+        out.deleted += del.rowCount || 0;
       }
       // Optimierer-Reihen nach 2 Jahren weg; Ereignisse und Verdichtetes bleiben.
       if (budgetLeft()) out.deleted += (await db.query(sql.dropOptimizerSeries, [aggregate])).rowCount || 0;
