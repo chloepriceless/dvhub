@@ -15,6 +15,7 @@ import { buildScheduleRules, insertOptimizerRules, optimizerSlotsToGridSetpoints
 import { createEosAdapter, resolveEosProxy } from './eos-adapter.js';
 import { createEosFirstPlanWatch, isFreshEosSolution } from './eos-first-plan.js';
 import { createEosRunTrigger, dvhubTriggersEosRuns } from './eos-run-trigger.js';
+import { socDriftReplan, sparseEosCadence } from './eos-replan-triggers.js';
 import { buildEosOptimization, pickEmsIntervalSec } from './eos-config-sync.js';
 import { enrichPriceSlotsWithCosts } from './cost-model.js';
 import { createMispelTracker } from './mispel-tracker.js';
@@ -288,15 +289,17 @@ export function createOptimizerService(ctx) {
   // Ladestand im Aufruf (eos-run-trigger.js). Die Erstplan-Wache oben wird nur
   // noch gebraucht, wenn EOS nach eigenem Takt rechnet
   // (optimizer.eosStartAfterPreviousRun).
+  // Wirksamer Takt der EOS-Läufe („Automatisch“ = 0 → je nach Slot z. B. 1 h).
+  const eosIntervalSec = () => {
+    const cfg = getCfg();
+    return pickEmsIntervalSec(buildEosOptimization(cfg).interval, cfg.optimizer?.eosEmsIntervalSec);
+  };
   const eosRunTrigger = createEosRunTrigger({
     isActive: () => {
       const cfg = getCfg();
       return resolveEosProxy(cfg).enabled && dvhubTriggersEosRuns(cfg) && state.optimizer?.eos?.supported === true;
     },
-    getIntervalSec: () => {
-      const cfg = getCfg();
-      return pickEmsIntervalSec(buildEosOptimization(cfg).interval, cfg.optimizer?.eosEmsIntervalSec);
-    },
+    getIntervalSec: eosIntervalSec,
     getSlotSec: () => buildEosOptimization(getCfg()).interval,
     getHorizonHours: () => state.optimizer?.eosControlHorizonH ?? null,
     collectSoc: async () => (ctx.eosForecastBridge?.socForRun
@@ -408,6 +411,16 @@ export function createOptimizerService(ctx) {
     pushLog('eos_replan_requested', { reason: reason || null });
     eosRunTrigger.kick(`replan:${reason || 'unknown'}`);
     kickOptimization();
+  }
+
+  /**
+   * Neuplan nur bei seltenem Takt (über 15 min, eos-replan-triggers.js) — z. B.
+   * neue Day-Ahead-Preise: mit 15 min rechnet EOS ohnehin gleich neu.
+   */
+  function requestEosReplanIfSparse(reason) {
+    if (!sparseEosCadence(eosIntervalSec())) return false;
+    requestEosReplan(reason);
+    return true;
   }
 
   /**
@@ -602,6 +615,18 @@ export function createOptimizerService(ctx) {
           // meldet der Monitor den neueren Plan und es wird nachgezogen.
           const eosSolution = await eosAdapter.getOptimizationSolution(8 * 24 * 4).catch(() => null);
           if (eosSolution) ctx.eosMonitor?.ingest?.(eosSolution);
+          // Seltener Takt: läuft der Ladestand dem Plan davon (Wolken, Last),
+          // außer der Reihe neu rechnen (eos-replan-triggers.js). kick() hält
+          // ohnehin 2 min Abstand; ein frischer Plan beginnt beim echten SoC.
+          if (dvhubTriggersEosRuns(cfg) && !eosRunTrigger.isRunning()) {
+            const drift = socDriftReplan({
+              solution: eosSolution, liveSocPct: Number(state.victron?.soc), nowMs: Date.now(), intervalSec: eosIntervalSec(),
+            });
+            if (drift.replan) {
+              pushLog('eos_soc_drift', { expectedPct: drift.expectedPct, livePct: drift.livePct, deltaPct: drift.deltaPct });
+              requestEosReplan('soc_drift');
+            }
+          }
           const solStamp = eosSolution?.generatedAt || null;
           eosSchedule = await eosAdapter.pullSchedule({ solution: eosSolution });
           eosGridSetpoints = await eosAdapter.pullGridSetpoints(undefined, { solution: eosSolution });
@@ -980,6 +1005,7 @@ export function createOptimizerService(ctx) {
     close,
     notifyEosRestart,
     requestEosReplan,
+    requestEosReplanIfSparse,
     getSchedule: () => state.optimizer.lastSchedule,
     getStatus: () => ({ ...state.optimizer, mispel: state.optimizer.mispel })
   };

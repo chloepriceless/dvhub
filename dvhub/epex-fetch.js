@@ -120,9 +120,15 @@ export function createEpexFetcher(ctx) {
       const hasTomorrowNow = data.some((r) => r.day === day2);
       if (hasTomorrowNow && !hadTomorrowBefore && ctx.eosForecastBridge) {
         pushLog('epex_dayahead_arrived', { date: day2, triggering: 'eos_bridge_push' });
-        Promise.resolve(ctx.eosForecastBridge.push()).catch((err) => {
-          try { pushLog('eos_forecast_bridge_error', { phase: 'dayahead_arrived', error: err?.message || String(err) }); } catch { /* ignore */ }
-        });
+        Promise.resolve(ctx.eosForecastBridge.push())
+          .then(() => {
+            // Seltener Takt (2026-10-18, eos-replan-triggers.js): mit den neuen
+            // Preisen sofort rechnen statt bis zu 2 h auf den nächsten Takt.
+            ctx.optimizerService?.requestEosReplanIfSparse?.('dayahead');
+          })
+          .catch((err) => {
+            try { pushLog('eos_forecast_bridge_error', { phase: 'dayahead_arrived', error: err?.message || String(err) }); } catch { /* ignore */ }
+          });
       }
       // Phase 09.2 D-04: record a successful EPEX fetch sample. Optional
       // chaining for the same boot-race reason as polling.js — initial
