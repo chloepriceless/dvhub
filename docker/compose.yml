@@ -16,7 +16,7 @@
 #   * Der pg-Client im DVhub-Image ist Version 17 — pg_dump muss mindestens so
 #     neu sein wie der Server. Bei einem Wechsel auf PostgreSQL 18 beides anheben.
 #
-# DVhub läuft im Host-Netz: Modbus-TCP zur Anlage, der DV-Modbus-Server (:1502)
+# DVhub läuft im Host-Netz: Modbus-TCP zur Anlage, der DV-Modbus-Server (:502)
 # und mDNS-Discovery (Victron, Shelly) brauchen das echte LAN; im Bridge-Netz
 # funktioniert Multicast nicht. Die DB ist nur auf 127.0.0.1 veröffentlicht.
 #

@@ -5,7 +5,7 @@ VPN_IP="IP-Deiner-VLAN-SEITE"
 LAN_HOST="DVHUBHosts"
 TUN_IF="tunovpnc1"
 SRC_PORT="502"
-DST_PORT="1502"
+DST_PORT="502"   # = Modbus Listen Port von DVhub
 
 LAN_IF="$(ip route get "$LAN_HOST" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
 [ -n "$LAN_IF" ] || LAN_IF="br0"
@@ -26,7 +26,7 @@ iptables -N DV502_FWD 2>/dev/null || true
 iptables -t nat -F DV502_DNAT
 iptables -F DV502_FWD
 
-# DNAT TCP+UDP von VPN:502 auf LAN:1502
+# DNAT TCP+UDP von VPN:502 auf LAN:DST_PORT
 iptables -t nat -A DV502_DNAT -i "$TUN_IF" -d "$VPN_IP" -p tcp --dport "$SRC_PORT" -j DNAT --to-destination "$LAN_HOST":"$DST_PORT"
 iptables -t nat -A DV502_DNAT -i "$TUN_IF" -d "$VPN_IP" -p udp --dport "$SRC_PORT" -j DNAT --to-destination "$LAN_HOST":"$DST_PORT"
 

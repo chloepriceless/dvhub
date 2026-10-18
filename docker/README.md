@@ -33,10 +33,17 @@ docker compose -f docker/compose.yml --env-file docker/.env up -d
 ```
 
 Danach `http://<host>:8080`. DVhub läuft im Host-Netz (Modbus zur Anlage,
-DV-Modbus-Server :1502, mDNS-Discovery); die DB ist nur auf `127.0.0.1:5433`
+DV-Modbus-Server :502, mDNS-Discovery); die DB ist nur auf `127.0.0.1:5433`
 erreichbar. Beim ersten Start legt die DB die App-Rolle `dvhub` an (kein
 Superuser) und aktiviert TimescaleDB; DVhub wartet auf die DB und spielt seine
 Migrationen ein.
+
+DVhub läuft im Container als Benutzer `dvhub`, behält aber das Recht für Ports
+unter 1024 (`CAP_NET_BIND_SERVICE`, wie nativ über systemd). Den Modbus-Port für
+den Direktvermarkter (Standard 502) stellt man deshalb einfach in der Oberfläche
+ein; eine Weiterleitung auf dem Host ist nicht nötig. Entzieht man dem Container
+das Recht (`cap_drop`), startet DVhub ohne es, und die Oberfläche zeigt unter
+Integrationen → Datenfluss, warum der Port nicht offen ist.
 
 Den API-Token (für Skripte und den DB-Restore) zeigt:
 
@@ -142,7 +149,7 @@ sudo tar czf dvhub-state.tgz -C / etc/dvhub var/lib/dvhub
 
 Danach den nativen Dienst stoppen (`sudo systemctl disable --now dvhub`),
 wenn der Container auf **demselben** Host laufen soll — beide wollen dieselben
-Ports (Web, Modbus :1502).
+Ports (Web, Modbus :502).
 
 **2. Config + Datenverzeichnis in die Volumes legen** (vor dem ersten Start):
 

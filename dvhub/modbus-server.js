@@ -15,7 +15,7 @@ export function createModbusServer(ctx) {
 
   // Plan 08-06 Task 2 Step 1: LAN-only gate for Modbus TCP clients.
   // Modbus FC6/FC16 writes to register 0/3 toggle the device-wide forcedOff flag,
-  // which is safety-critical for grid assets. The previous 0.0.0.0:1502 listener
+  // which is safety-critical for grid assets. The previous 0.0.0.0 listener
   // accepted writes from anywhere on the network. This gate accepts:
   //   - explicit allowlist when cfg.modbusAllowedClients is non-empty (CIDR-free, exact strings)
   //   - otherwise: loopback + RFC1918 only (10/8, 172.16/12, 192.168/16)
@@ -259,8 +259,27 @@ export function createModbusServer(ctx) {
       socket.on('error', () => {});
     });
 
-    mbServer.listen(cfg.modbusListenPort, cfg.modbusListenHost, () => {
-      console.log(`Modbus server listening on ${cfg.modbusListenHost}:${cfg.modbusListenPort}`);
+    // Port nicht zu öffnen (belegt, oder < 1024 ohne CAP_NET_BIND_SERVICE): nicht
+    // abstürzen — ohne Handler beendete das 'error' den Prozess und der Container
+    // startete in einer Schleife neu. Melden und den Server freigeben, damit ein
+    // späterer start() es erneut versuchen kann.
+    const srv = mbServer;
+    const port = cfg.modbusListenPort;
+    srv.on('error', (err) => {
+      const hint = err?.code === 'EACCES'
+        ? 'Ports unter 1024 brauchen das Recht CAP_NET_BIND_SERVICE (nativ: systemd AmbientCapabilities, Container: DVhub-Image ab dieser Version) — oder einen Port ab 1024 wählen.'
+        : err?.code === 'EADDRINUSE'
+          ? 'Der Port ist schon belegt — anderen Port wählen oder das andere Programm beenden.'
+          : null;
+      state.modbusListen = { ok: false, port, code: err?.code || null, error: err?.message || String(err), hint, at: Date.now() };
+      console.error(`Modbus server: Port ${port} nicht zu öffnen (${err?.code || err?.message})${hint ? ` — ${hint}` : ''}`);
+      pushLog('modbus_listen_failed', { port, code: err?.code || null, error: err?.message || String(err), hint });
+      if (mbServer === srv) mbServer = null;
+      try { srv.close(); } catch { /* lauscht nicht */ }
+    });
+    srv.listen(port, cfg.modbusListenHost, () => {
+      state.modbusListen = { ok: true, port, code: null, error: null, hint: null, at: Date.now() };
+      console.log(`Modbus server listening on ${cfg.modbusListenHost}:${port}`);
     });
   }
 

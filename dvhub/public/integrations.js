@@ -3608,7 +3608,10 @@
             detail = !c.enabled ? 'aus' : (c.connected ? 'verbunden' : 'nicht verbunden') + (c.topics && c.topics.length ? ' · <code>' + esc(c.topics[0].replace(/\/[^/]+$/, '/…')) + '</code>' : '');
           } else if (c.kind === 'dv_modbus') {
             var q = c.lastQuery;
-            detail = 'Port ' + esc(String(c.port)) + ' · ' + (q && q.ts ? 'letzte Abfrage vor ' + dfSince(q.ts) + ' von ' + esc(String(q.remote || '?')) : 'noch keine Abfrage seit dem Start');
+            var l = c.listen;
+            detail = l && l.ok === false
+              ? '<strong>Port ' + esc(String(l.port)) + ' nicht offen</strong> (' + esc(String(l.code || l.error || '?')) + ')' + (l.hint ? ' · ' + esc(l.hint) : '')
+              : 'Port ' + esc(String(c.port)) + ' · ' + (q && q.ts ? 'letzte Abfrage vor ' + dfSince(q.ts) + ' von ' + esc(String(q.remote || '?')) : 'noch keine Abfrage seit dem Start');
           }
           return '<div class="dv-info-row"><span class="dv-info-label">' + esc(c.label) + '</span><span class="dv-info-value">' + detail + '</span></div>';
         }).join('');

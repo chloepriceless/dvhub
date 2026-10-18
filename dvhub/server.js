@@ -2228,7 +2228,7 @@ if (IS_RUNTIME_PROCESS) {
   // persisted license status (no race window where requirePro returns 403 on
   // a paid customer just because the file hadn't been read yet).
   licenseService.loadStateFromDisk();
-  // Pro-Gating (Task #10): the DV-Schnittstelle (Modbus SERVER, Port 1502) is a
+  // Pro-Gating (Task #10): the DV-Schnittstelle (Modbus SERVER, modbusListenPort) is a
   // Pro feature. Without an active licence it stays fully closed — the listener
   // never binds, so a Direktvermarkter cannot connect or toggle forcedOff. The
   // Victron Modbus CLIENT (transport-modbus.js) and every other integration are

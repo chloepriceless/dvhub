@@ -363,7 +363,18 @@ if [ "$(id -u)" = "0" ]; then
   fi
   chown -R "$RUN_USER:$RUN_USER" "$CONFIG_DIR" "$DATA_DIR" 2>/dev/null || true
   chmod 750 "$CONFIG_DIR" "$DATA_DIR" 2>/dev/null || true
-  log "starte als $RUN_USER: $*"
+  # Ports unter 1024 (Modbus 502 für den Direktvermarkter, in der Oberfläche
+  # einstellbar) brauchen CAP_NET_BIND_SERVICE. setpriv gibt der Anwendung nur
+  # dieses eine Recht mit (Ambient), wie nativ systemd AmbientCapabilities.
+  # Fehlt es dem Container (cap_drop), bleibt es bei su-exec ohne Rechte.
+  if command -v setpriv >/dev/null 2>&1 \
+      && setpriv --reuid="$RUN_USER" --regid="$RUN_USER" --init-groups \
+           --inh-caps=-all,+net_bind_service --ambient-caps=-all,+net_bind_service -- true 2>/dev/null; then
+    log "starte als $RUN_USER (Recht für Ports < 1024): $*"
+    exec setpriv --reuid="$RUN_USER" --regid="$RUN_USER" --init-groups \
+      --inh-caps=-all,+net_bind_service --ambient-caps=-all,+net_bind_service -- "$@"
+  fi
+  log "starte als $RUN_USER (ohne Recht für Ports < 1024): $*"
   exec su-exec "$RUN_USER" "$@"
 fi
 

@@ -216,7 +216,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 
 ### Direktvermarktung &amp; Steuerung
 
-- **DV-Modbus-Server** auf Port `1502` (Default `modbusListenPort`) mit FC3/FC4 Read und FC6/FC16 Write — Registerbelegung umschaltbar (`dvInterface.profile`): **PLEXLOG-kompatibel** (Standard) oder **LUOX/Lumenaza** (Belegung 06/2026: Einspeisung, Produktion, Referenzleistung, Vorgabe 0–100 % inkl. Teilvorgaben über die Victron-Einspeisegrenze, 15-min-Watchdog) *(DVhub Pro — die DV-Schnittstelle; ohne Lizenz startet der Server nicht. Der Victron-Modbus-CLIENT + Steuerpfad unten bleiben frei.)*
+- **DV-Modbus-Server** auf Port `502` (Default `modbusListenPort`) mit FC3/FC4 Read und FC6/FC16 Write — Registerbelegung umschaltbar (`dvInterface.profile`): **PLEXLOG-kompatibel** (Standard) oder **LUOX/Lumenaza** (Belegung 06/2026: Einspeisung, Produktion, Referenzleistung, Vorgabe 0–100 % inkl. Teilvorgaben über die Victron-Einspeisegrenze, 15-min-Watchdog) *(DVhub Pro — die DV-Schnittstelle; ohne Lizenz startet der Server nicht. Der Victron-Modbus-CLIENT + Steuerpfad unten bleiben frei.)*
 - **EEBUS** — §14a-Steuerbox des Netzbetreibers (Bezugs-/Einspeisegrenzen inkl. Failsafe, Netzanschlusspunkt) und EEBUS-Wärmepumpen/-Wallboxen (Grenzen, Leistung, verschiebbare Verdichterläufe), über den Hilfsprozess dvhub-eebus auf Basis von openeebus — [EEBUS.md](docs/EEBUS.md)
 - **LAN-only-Zugriffsschutz** für den Modbus-Server: nur Loopback + RFC1918 (oder eine explizite `modbusAllowedClients`-Allowlist); fremde Clients werden sofort getrennt und protokolliert
 - **DV-Signalerkennung** mit Lease-Logik (`offLeaseMs`) und automatischer, sicherer Rückkehr in Freigabe nach Ablauf
@@ -303,7 +303,7 @@ Live-Dienste) und die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich:
 
 | Feature (intern) | Oberfläche / Funktion | Ohne Lizenz |
 |---|---|---|
-| `dv-interface` | **DV-Schnittstelle** = Modbus-SERVER (Port 1502) für den Direktvermarkter + HTTP-Read `/dv/control-value` | Server **startet nicht / bleibt komplett geschlossen**; der Victron-Modbus-**CLIENT** und alle anderen Anlagen-Integrationen laufen unverändert weiter |
+| `dv-interface` | **DV-Schnittstelle** = Modbus-SERVER (Port 502) für den Direktvermarkter + HTTP-Read `/dv/control-value` | Server **startet nicht / bleibt komplett geschlossen**; der Victron-Modbus-**CLIENT** und alle anderen Anlagen-Integrationen laufen unverändert weiter |
 | `eos` | **EOS / DV-EOS** Arbitrage-Optimizer-Dispatch (`services/optimizer`, `primarySource=eos`) | EOS **aktuiert nicht** → automatischer Fallback auf die freie kleine Börsenautomatik (Stufe 1/2); Prognosewerte bleiben sichtbar |
 | `family-dashboard` | Familien-Dashboard (`/family` + alle `/api/family/*`-Routen) | `403 pro_required` + 🔒-Badge in der Top-Nav, Klick öffnet das Pro-Modal |
 | `vpn-manager` | Einstellungen → VPN (`/api/vpn/*` — Status, Profil-Upload, Start/Stop/Restart) | `403 pro_required`; Tab zeigt Pro-Hinweis mit Lizenz-Link |
@@ -619,10 +619,14 @@ Für LUOX brauchst du in der Praxis:
 
 1. Meldung, dass eine PLEXLOG-kompatible DV-Schnittstelle vorhanden ist
 2. VPN-Tunnel zu LUOX (OpenVPN, WireGuard oder IPsec — verwaltbar im VPN-Manager)
-3. Portforwarding von Port `502` aus dem Tunnel auf Port `1502` von DVhub
+3. DVhub lauscht auf Port `502` (Standard, Einstellungen → System → Modbus Listen Port).
+   Läuft der Tunnel im VPN-Manager von DVhub, fragt LUOX DVhub direkt ab — keine
+   Weiterleitung nötig, nativ wie im Docker-Container.
 
-**Unifi-Hinweis:** Falls die GUI das Tunnel-Portforwarding nicht sauber abbildet,
-hilft das Skript [`20-dv-modbus.sh`](20-dv-modbus.sh) für die iptables-Regeln.
+**Tunnel auf dem Router (z. B. Unifi):** Endet der Tunnel nicht bei DVhub, muss der
+Router Port `502` aus dem Tunnel an DVhub weiterleiten. Falls die GUI das nicht
+sauber abbildet, hilft das Skript [`20-dv-modbus.sh`](20-dv-modbus.sh) für die
+iptables-Regeln (`DST_PORT` = Modbus Listen Port von DVhub).
 
 ---
 
@@ -862,7 +866,7 @@ Schlüssel strikt ab — jedes neue Feld muss in `ALLOWED_CONFIG_ROOTS`.
 |---------|--------------|
 | `manufacturer` / `updateChannel` | Aktives Herstellerprofil (`victron`, `fronius`, `deye-lv`, `bridge-mqtt` = Universal-MQTT-Bridge, `dvhub-mqtt` = Universal HA/Loxone) und Update-Channel (`stable`/`dev`) |
 | `httpPort` / `httpsPort` / `tlsCertPath` / `tlsKeyPath` | Webserver-Ports und TLS (Installer: 80 / 443; Code-Default `httpPort` 8080) |
-| `modbusListenHost` / `modbusListenPort` / `modbusAllowedClients` | DV-Modbus-Server-Bind (Default `0.0.0.0:1502`) und Client-Allowlist |
+| `modbusListenHost` / `modbusListenPort` / `modbusAllowedClients` | DV-Modbus-Server-Bind (Default `0.0.0.0:502`) und Client-Allowlist |
 | `victron` | Anlagenadresse, Transport (Modbus/MQTT), Timeouts, `victron.alarms` |
 | `meterSource` | Operator-wählbare Netz-Zähler-Quelle (profile/modbus/mqtt/http) |
 | `dvControl` | DV-Steuerung, PV-Export-Flags und Negativpreis-Schutz |

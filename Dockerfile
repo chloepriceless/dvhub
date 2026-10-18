@@ -76,6 +76,10 @@ LABEL org.opencontainers.image.title="DVhub" \
 # Zeitzonenrechnung auf UTC zurück — für Preisfenster, Zeitpläne und die
 # 15-Minuten-Slots wäre das ein stiller Datenfehler, kein Schönheitsfehler.
 # su-exec (~10 kB) lässt den Entrypoint nach dem Setup die Rechte ablegen.
+# setpriv (util-linux, ~50 kB) tut dasselbe, behält aber CAP_NET_BIND_SERVICE
+# als Ambient-Recht — wie nativ systemd AmbientCapabilities. Damit lässt sich in
+# der Oberfläche ein Port unter 1024 einstellen (Modbus 502 für den
+# Direktvermarkter), ohne Weiterleitung auf dem Host (docker-entrypoint.sh).
 # postgresql17-client: pg_dump/pg_restore/psql für DB-Backup und -Restore aus
 # der Oberfläche (services/db-backup.js, Container-Modus). Version passend zum
 # DB-Container (docker/compose.yml: TimescaleDB auf PostgreSQL 17) — pg_dump
@@ -93,7 +97,7 @@ LABEL org.opencontainers.image.title="DVhub" \
 # den Support-Login im Container (läuft nur, solange ein Tunnel offen ist, als
 # dvhub, nur auf 127.0.0.1, nur mit dem Support-Schlüssel — docker-entrypoint.sh).
 # Der dvhub-Benutzer braucht dafür eine Shell; ein Passwort hat er nicht.
-RUN apk add --no-cache tzdata su-exec postgresql17-client openvpn wireguard-tools sudo iproute2 procps \
+RUN apk add --no-cache tzdata su-exec setpriv postgresql17-client openvpn wireguard-tools sudo iproute2 procps \
       libwebsockets cjson avahi-libs avahi dbus \
       openssh-client-default openssh-keygen openssh-server autossh \
     && addgroup -g 10001 -S dvhub \

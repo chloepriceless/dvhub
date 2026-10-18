@@ -549,7 +549,7 @@ function buildFieldDefinitions() {
       path: 'modbusAllowedClients',
       label: 'Modbus-Zugriff nur von diesen Adressen',
       type: 'stringList',
-      help: 'Wer den eingebauten Modbus-Zugang von DVhub (Port 1502) benutzen darf — exakte Adressen, keine Netzbereiche. Über diesen Weg lässt sich die Anlage STEUERN, deshalb ist er enger gefasst als die Weboberfläche. Leer = die Anlage selbst und die üblichen privaten Heimnetze. Abgewiesene Verbindungen werden sofort getrennt und protokolliert.'
+      help: 'Wer den eingebauten Modbus-Zugang von DVhub (Modbus Listen Port, Standard 502) benutzen darf — exakte Adressen, keine Netzbereiche. Über diesen Weg lässt sich die Anlage STEUERN, deshalb ist er enger gefasst als die Weboberfläche. Leer = die Anlage selbst und die üblichen privaten Heimnetze. Abgewiesene Verbindungen werden sofort getrennt und protokolliert.'
     },
     {
       section: 'system',
@@ -603,7 +603,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Port, auf dem DVhub als Modbus-Proxy lauscht. Direktvermarkter (z. B. LUOX, Plexlog-Profil) fragen meist Port 502 ab — dann hier 502 eintragen. Die native Installation darf niedrige Ports öffnen; im Docker-Container nur, wenn der Container dafür eingerichtet ist — sonst bleibt es bei 1502 und eine Weiterleitung 502 → 1502 ist nötig.'
+      help: 'Port, auf dem DVhub als Modbus-Proxy lauscht. Standard ist 502 — diesen Port fragen Direktvermarkter (z. B. LUOX, Plexlog-Profil) über den VPN-Tunnel ab; eine Weiterleitung ist dann nicht nötig. DVhub darf Ports unter 1024 nativ und im Docker-Container öffnen. Lässt sich der Port nicht öffnen, steht die Ursache unter Integrationen → Datenfluss.'
     },
     {
       section: 'system',
@@ -3880,7 +3880,11 @@ export function createDefaultConfig() {
     // user/account phase; not consumed by Phase 9 code.
     apiTokenSessionTtlMs: null,
     modbusListenHost: '0.0.0.0',
-    modbusListenPort: 1502,
+    // 502 = Modbus-Standardport, den Direktvermarkter abfragen. Nativ öffnet
+    // DVhub ihn über systemd AmbientCapabilities, im Container über setpriv
+    // (docker-entrypoint.sh). Bestehende Installationen behalten ihren Port —
+    // gespeicherte Configs enthalten ihn ausdrücklich.
+    modbusListenPort: 502,
     // Plan 08-06 Task 2 Step 1: optional allowlist of remote IPs permitted to talk
     // to the Modbus TCP listener. Empty = LAN/loopback default (RFC1918 + 127.0.0.1).
     // Non-empty = exact-string allowlist (no CIDR).

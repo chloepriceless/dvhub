@@ -114,6 +114,9 @@ jobs:
           # id -u` wäre die UID der exec-Shell (root), nicht die der App
           uid=$(docker exec dvhub-dvhub-1 awk '/^Uid:/{print $2}' /proc/1/status)
           echo "PID 1 uid=$uid"; test -n "$uid" && test "$uid" != 0
+          # … behält aber CAP_NET_BIND_SERVICE (Bit 10) für Modbus 502 aus der Oberfläche
+          amb=$(docker exec dvhub-dvhub-1 awk '/^CapAmb:/{print $2}' /proc/1/status)
+          echo "PID 1 CapAmb=$amb"; test $(( 0x$amb & 0x400 )) -ne 0
 
       - name: Logs bei Fehler
         if: failure()

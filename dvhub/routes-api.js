@@ -4673,6 +4673,8 @@ export function createApiRoutes(ctx) {
         {
           kind: 'dv_modbus', label: `Direktvermarkter (Modbus, ${cfg.dvInterface?.profile || 'plexlog'})`,
           port: cfg.modbusListenPort ?? null, lastQuery: state.keepalive?.modbusLastQuery || null,
+          // Port offen? Bei Fehler steht Ursache + Hinweis hier (modbus-server.js).
+          listen: state.modbusListen || null,
         },
       ];
       return json(res, 200, buildDataflow({
