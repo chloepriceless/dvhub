@@ -131,6 +131,18 @@ verweist hierher.
 
 ### Behoben
 
+- **VPN-Profile: Hooks in jeder Schreibweise blockiert, Prüfung auch beim Geräte-Tausch und vor jedem Start.**
+  WireGuard-Hooks (`PreUp`, `PostUp`, …) wurden nur in genau dieser Schreibweise abgelehnt; `wg-quick` führt sie
+  auch als `preup` aus. Ein Geräte-Tausch-Paket konnte VPN-Profile ohne Inhaltsprüfung einspielen. Jetzt prüft
+  DVhub Upload, Import und jeden Start gleich; ein Paket mit gefährlichem Profil wird ganz abgelehnt, bevor etwas
+  gespeichert ist. Bestehende Profile (auch OpenVPN mit DVhubs `script-security 0`) laufen unverändert weiter.
+- **Import von Sicherungen: Rechenaufwand begrenzt.** Ein präpariertes Paket konnte über die Schlüsselableitung den
+  ganzen Dienst (auch die Steuerung) minutenlang blockieren. Werte außerhalb 100 000–1 000 000 Iterationen werden
+  sofort abgelehnt; alle echten Exporte nutzen 210 000.
+- **Modbus: Schreibbestätigung wird mit dem Auftrag verglichen.** Bestätigt ein Gerät eine andere Adresse oder
+  Registeranzahl, gilt der Schreibvorgang als fehlgeschlagen. Ein abweichender zurückgemeldeter Wert wird nur
+  protokolliert, damit Geräte, die Bits maskieren, weiter funktionieren.
+
 - **IPsec-VPN auf Ubuntu 26.04 (sudo-rs).** sudo-rs lehnt Platzhalter mitten im Argument ab und übersprang deshalb
   die vier sudoers-Regeln, mit denen DVhub die IPsec-Profile nach `/etc/ipsec.d` verlinkt — IPsec ging auf solchen
   Boxen nicht, und die Warnung landete in fremden Fehlermeldungen. Das übernimmt jetzt das root-eigene Hilfsskript

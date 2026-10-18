@@ -113,9 +113,12 @@ describe('24-01 regression: vpn-manager dangerous-directive blocklists (static)'
     const match = src.match(/const\s+WG_DANGEROUS_DIRECTIVES\s*=\s*new Set\(\[([\s\S]*?)\]\s*\)/);
     assert.ok(match, 'WG_DANGEROUS_DIRECTIVES declaration must exist');
     const body = match[1];
-    for (const directive of ['PostUp', 'PreUp', 'PostDown', 'PreDown']) {
+    // 2026-10-18 (Codex-Review S1): kleingeschrieben gespeichert, verglichen
+    // wird toLowerCase() — wg-quick liest die Schlüssel ohne Groß-/Kleinschreibung.
+    for (const directive of ['postup', 'preup', 'postdown', 'predown']) {
       assert.match(body, new RegExp(`'${directive}'`), `WG blocklist must include ${directive}`);
     }
+    assert.match(src, /WG_DANGEROUS_DIRECTIVES\.has\(kvMatch\[1\]\.toLowerCase\(\)\)/, 'Vergleich ohne Groß-/Kleinschreibung');
   });
 
   it('IPSEC_DANGEROUS_KEYS exists and carries leftupdown/rightupdown/include', () => {

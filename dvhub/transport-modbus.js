@@ -250,7 +250,17 @@ export function createModbusTransport(opts = {}) {
       if (pid !== 0 || unit !== unitId || rTid !== tid) throw new Error('invalid write ack');
       if ((fc & 0x80) === 0x80) throw new Error(`modbus exception ${frame.readUInt8(8)}`);
       if (fc !== 6) throw new Error('invalid write ack');
-      return { addr: frame.readUInt16BE(8), value: frame.readUInt16BE(10) };
+      // Echo-Prüfung (Codex-Review R3): FC6 antwortet mit Adresse und Wert des
+      // Auftrags. Falsche Adresse = falsches Register bestätigt → Fehler. Ein
+      // abweichender Wert wird nur gemeldet: manche Geräte maskieren Bits oder
+      // runden, und ein harter Fehler stoppte dort die Steuerung.
+      if (frame.length < 12) throw new Error('invalid write ack (short frame)');
+      const ackAddr = frame.readUInt16BE(8);
+      const ackValue = frame.readUInt16BE(10);
+      if (ackAddr !== (Number(address) & 0xffff)) throw new Error(`invalid write ack (address ${ackAddr} ≠ ${address})`);
+      const echoMismatch = ackValue !== (value & 0xffff);
+      if (echoMismatch) logWarn('modbus write ack value differs', { host, unitId, address, sent: value & 0xffff, ack: ackValue });
+      return { addr: ackAddr, value: ackValue, echoMismatch };
     });
   }
 
@@ -282,7 +292,13 @@ export function createModbusTransport(opts = {}) {
       if (pid !== 0 || unit !== unitId || rTid !== tid) throw new Error('invalid write ack');
       if ((fc & 0x80) === 0x80) throw new Error(`modbus exception ${frame.readUInt8(8)}`);
       if (fc !== 16) throw new Error('invalid write ack');
-      return { addr: frame.readUInt16BE(8), quantity: frame.readUInt16BE(10) };
+      // FC16 bestätigt Startadresse und Registeranzahl (Codex-Review R3).
+      if (frame.length < 12) throw new Error('invalid write ack (short frame)');
+      const ackAddr = frame.readUInt16BE(8);
+      const ackQty = frame.readUInt16BE(10);
+      if (ackAddr !== (Number(address) & 0xffff)) throw new Error(`invalid write ack (address ${ackAddr} ≠ ${address})`);
+      if (ackQty !== qty) throw new Error(`invalid write ack (quantity ${ackQty} ≠ ${qty})`);
+      return { addr: ackAddr, quantity: ackQty };
     });
   }
 

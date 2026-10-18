@@ -144,3 +144,55 @@ test('mbWriteSingle still succeeds against a live server with connect timeout se
     await server.close();
   }
 });
+
+// Codex-Review 2026-10-18 R3: die Bestätigung muss zum Auftrag passen.
+function ackServer(mutate) {
+  return startModbusServer((request) => {
+    const response = Buffer.alloc(12);
+    request.copy(response, 0, 0, 12);
+    response.writeUInt16BE(6, 4);
+    mutate(response, request);
+    return response;
+  });
+}
+
+test('FC6: falsche Adresse in der Bestätigung → Fehler; abweichender Wert → Erfolg mit echoMismatch', async () => {
+  const transport = createModbusTransport({ connectTimeoutMs: 5000 });
+  const wrongAddr = await ackServer((r) => r.writeUInt16BE(999, 8));
+  const wrongVal = await ackServer((r) => r.writeUInt16BE(999, 10));
+  const short = await startModbusServer((request) => { const r = Buffer.alloc(10); request.copy(r, 0, 0, 10); r.writeUInt16BE(4, 4); return r; });
+  try {
+    const w = (port) => transport.mbWriteSingle({ host: '127.0.0.1', port, unitId: 100, address: 100, value: 42, timeoutMs: 1000 });
+    await assert.rejects(w(wrongAddr.port), /invalid write ack \(address 999/);
+    const ack = await w(wrongVal.port);
+    assert.equal(ack.echoMismatch, true);
+    assert.equal(ack.value, 999);
+    await assert.rejects(w(short.port), /invalid write ack|timeout|short/i);
+  } finally {
+    await transport.destroy();
+    await wrongAddr.close(); await wrongVal.close(); await short.close();
+  }
+});
+
+test('FC16: falsche Adresse oder Registeranzahl → Fehler, korrektes Echo → Erfolg', async () => {
+  const fc16 = (mutate) => startModbusServer((request) => {
+    const response = Buffer.alloc(12);
+    request.copy(response, 0, 0, 12);   // Kopf + Adresse + Anzahl wie im Auftrag
+    response.writeUInt16BE(6, 4);
+    mutate(response);
+    return response;
+  });
+  const ok = await fc16(() => {});
+  const badAddr = await fc16((r) => r.writeUInt16BE(1, 8));
+  const badQty = await fc16((r) => r.writeUInt16BE(5, 10));
+  const transport = createModbusTransport({ connectTimeoutMs: 5000 });
+  try {
+    const w = (port) => transport.mbWriteMultiple({ host: '127.0.0.1', port, unitId: 100, address: 2700, values: [1, 2], timeoutMs: 1000 });
+    assert.deepEqual(await w(ok.port), { addr: 2700, quantity: 2 });
+    await assert.rejects(w(badAddr.port), /address 1/);
+    await assert.rejects(w(badQty.port), /quantity 5/);
+  } finally {
+    await transport.destroy();
+    await ok.close(); await badAddr.close(); await badQty.close();
+  }
+});

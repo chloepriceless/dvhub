@@ -24,6 +24,8 @@ import { REDACTED_PATHS } from '../config-redaction.js';
 const VERSION = 1;
 // PBKDF2-HMAC-SHA256 work factor. 210k matches the OWASP 2023 recommendation.
 const KDF_ITERATIONS = 210000;
+const KDF_MIN_ITERATIONS = 100000;
+const KDF_MAX_ITERATIONS = 1000000;
 const SALT_LEN = 16;
 const IV_LEN = 12; // 96-bit nonce — the standard size for AES-GCM
 const KEY_LEN = 32; // AES-256
@@ -213,7 +215,13 @@ export function decryptSecrets(blob, password) {
   } catch {
     throw new Error('unsupported_secrets_format');
   }
-  const iterations = Number.isInteger(blob.iter) && blob.iter > 0 ? blob.iter : KDF_ITERATIONS;
+  // Kosten aus der Datei nur in engen Grenzen übernehmen (Codex-Review S5): ein
+  // präpariertes iter=2^31 hielte pbkdf2Sync — und mit ihm Steuerung und Polling
+  // im selben Prozess — beliebig lange fest. Alle Exporte bisher: 210 000.
+  if (blob.iter !== undefined && !(Number.isInteger(blob.iter) && blob.iter >= KDF_MIN_ITERATIONS && blob.iter <= KDF_MAX_ITERATIONS)) {
+    throw new Error('unsupported_secrets_format');
+  }
+  const iterations = blob.iter ?? KDF_ITERATIONS;
   const key = crypto.pbkdf2Sync(Buffer.from(password, 'utf8'), salt, iterations, KEY_LEN, 'sha256');
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(tag);

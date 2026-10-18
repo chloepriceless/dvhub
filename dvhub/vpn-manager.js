@@ -58,7 +58,9 @@ DANGEROUS_DIRECTIVES.add('management-client-group');
 // WireGuard/IPSec dangerous-directive blocklists — mirror the OpenVPN pattern.
 // WG PostUp/PreUp/PostDown/PreDown run arbitrary shell commands as root when
 // wg-quick brings the tunnel up/down (RepoLens security/input-sanitization/019).
-const WG_DANGEROUS_DIRECTIVES = new Set(['PostUp', 'PreUp', 'PostDown', 'PreDown']);
+// wg-quick vergleicht die Schlüssel ohne Groß-/Kleinschreibung (linux.bash:
+// `case "${key,,}"`) — `preup` läuft genauso wie `PreUp` (Codex-Review S1).
+const WG_DANGEROUS_DIRECTIVES = new Set(['postup', 'preup', 'postdown', 'predown']);
 // strongSwan leftupdown/rightupdown run scripts as root on SA up/down;
 // `include` pulls additional config files and can bypass any per-file scan
 // (RepoLens security/input-sanitization/020).
@@ -118,7 +120,7 @@ export function validateWireGuardConfig(content) {
     }
 
     const kvMatch = line.match(/^(\w+)\s*=/);
-    if (kvMatch && WG_DANGEROUS_DIRECTIVES.has(kvMatch[1])) {
+    if (kvMatch && WG_DANGEROUS_DIRECTIVES.has(kvMatch[1].toLowerCase())) {
       errors.push(`Blocked dangerous WireGuard directive: ${kvMatch[1]}`);
       continue;
     }
@@ -212,6 +214,133 @@ export function validateIPSecConfig(content) {
   }
 
   return { valid: errors.length === 0, errors, connections };
+}
+
+// ── .ovpn config validation ──
+
+export function validateOvpnConfig(content) {
+  const lines = content.split(/\r?\n/);
+  const errors = [];
+  const directives = new Set();
+
+  // Only cert/key block bodies should be skipped. <connection> blocks
+  // contain regular directives and used to fully bypass the dangerous-
+  // directive scan when we blanket-skipped every line starting with "<".
+  const CERT_BLOCK_TAGS = new Set([
+    'ca', 'cert', 'key', 'tls-auth', 'tls-crypt', 'dh', 'extra-certs', 'pkcs12'
+  ]);
+  let inCertBlock = null; // lowercase tag name when inside a cert block, else null
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+
+    const openMatch = line.match(/^<([a-z0-9-]+)>$/i);
+    const closeMatch = line.match(/^<\/([a-z0-9-]+)>$/i);
+    if (openMatch && CERT_BLOCK_TAGS.has(openMatch[1].toLowerCase())) {
+      inCertBlock = openMatch[1].toLowerCase();
+      continue;
+    }
+    if (closeMatch && inCertBlock === closeMatch[1].toLowerCase()) {
+      inCertBlock = null;
+      continue;
+    }
+    if (inCertBlock) continue;
+
+    // <connection> … </connection> wrappers are structural only; the
+    // directives nested inside them fall through to the scan below.
+    if (openMatch && openMatch[1].toLowerCase() === 'connection') continue;
+    if (closeMatch && closeMatch[1].toLowerCase() === 'connection') continue;
+
+    // Any other <tag> line that reaches here is unknown/unsupported — treat
+    // it as a regular directive line for safety (directive will be the `<…>`
+    // literal, which never matches DANGEROUS_DIRECTIVES but is tracked).
+    const directive = line.split(/\s+/)[0].toLowerCase();
+    directives.add(directive);
+
+    if (DANGEROUS_DIRECTIVES.has(directive)) {
+      errors.push(`Blocked dangerous directive: ${directive}`);
+    }
+  }
+
+  for (const req of REQUIRED_DIRECTIVES) {
+    if (!directives.has(req)) {
+      errors.push(`Missing required directive: ${req}`);
+    }
+  }
+
+  // cert/key can be inline (<ca>, <cert>, <key>) or file references
+  const hasInlineCa = content.includes('<ca>');
+  const hasInlineCert = content.includes('<cert>');
+  const hasCaRef = directives.has('ca');
+  const hasCertRef = directives.has('cert');
+  // Kein Key-Pflicht-Check: OpenVPN-Configs mit reiner auth-user-pass-Auth
+  // haben legitim keinen Client-Key — <key>/key darf fehlen.
+
+  if (!hasInlineCa && !hasCaRef) errors.push('Missing CA certificate (inline <ca> or ca directive)');
+  if (!hasInlineCert && !hasCertRef && !directives.has('pkcs12') && !directives.has('auth-user-pass')) {
+    // cert might not be needed with auth-user-pass or pkcs12
+  }
+
+  return { valid: errors.length === 0, errors, directives: [...directives] };
+}
+
+// Ein Profil nach Dateiname prüfen (2026-10-18, Codex-Review S1/S2): Upload,
+// Geräte-Tausch-Import und jeder Start laufen über dieselbe Inhaltsprüfung.
+// Andere Dateien im Profilordner (Zertifikate, Schlüssel, secrets) sind keine
+// Konfiguration und werden nicht ausgeführt.
+export function buildSecureConfig(originalContent) {
+  const content = originalContent;
+
+  // strip any existing dangerous directives
+  const lines = content.split(/\r?\n/);
+  const filtered = lines.filter(line => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';') || trimmed.startsWith('<')) return true;
+    const directive = trimmed.split(/\s+/)[0].toLowerCase();
+    return !DANGEROUS_DIRECTIVES.has(directive);
+  });
+
+  // append forced directives
+  filtered.push('');
+  filtered.push('# -- DVhub forced directives --');
+  for (const d of FORCED_DIRECTIVES) {
+    filtered.push(d);
+  }
+
+  return filtered.join('\n');
+}
+
+// Gespeicherte OpenVPN-Profile tragen DVhubs erzwungene Zeile `script-security 0`
+// (FORCED_DIRECTIVES) — das ist die sichere Einstellung und kein Grund zur
+// Ablehnung. Jeder andere script-security-Wert bleibt verboten.
+function validateStoredOvpn(text) {
+  return validateOvpnConfig(text.split(/\r?\n/).filter((l) => !/^\s*script-security\s+0\s*$/.test(l)).join('\n'));
+}
+
+// dangerousOnly: beim Start und beim Geräte-Tausch-Import nur das blockieren, was
+// Code mit Root-Rechten ausführen kann (Hooks, gefährliche Direktiven, include).
+// Fehlende Pflichtangaben (z. B. CA) prüft der Upload; ein Profil, das eine ältere
+// Version angenommen hat, soll nach dem Update nicht plötzlich scheitern.
+function onlyDangerous(result) {
+  const errors = result.errors.filter((e) => /^Blocked dangerous/.test(e));
+  return { ...result, valid: errors.length === 0, errors };
+}
+
+export function validateVpnProfileByProtocol(protocol, content, { dangerousOnly = false } = {}) {
+  const text = String(content ?? '');
+  const result = protocol === 'wireguard' ? validateWireGuardConfig(text)
+    : protocol === 'ipsec' ? validateIPSecConfig(text)
+      : validateStoredOvpn(text);
+  return dangerousOnly ? onlyDangerous(result) : result;
+}
+
+export function validateVpnProfileFile(fileName, content, opts = {}) {
+  const name = String(fileName || '').toLowerCase();
+  if (name.endsWith('.ovpn')) return validateVpnProfileByProtocol('openvpn', content, opts);
+  if (name === 'ipsec.conf') return validateVpnProfileByProtocol('ipsec', content, opts);
+  if (name.endsWith('.conf')) return validateVpnProfileByProtocol('wireguard', content, opts);
+  return { valid: true, errors: [] };
 }
 
 export function createVpnManager(ctx) {
@@ -308,96 +437,7 @@ export function createVpnManager(ctx) {
     }
   }
 
-  // ── .ovpn config validation ──
 
-  function validateOvpnConfig(content) {
-    const lines = content.split(/\r?\n/);
-    const errors = [];
-    const directives = new Set();
-
-    // Only cert/key block bodies should be skipped. <connection> blocks
-    // contain regular directives and used to fully bypass the dangerous-
-    // directive scan when we blanket-skipped every line starting with "<".
-    const CERT_BLOCK_TAGS = new Set([
-      'ca', 'cert', 'key', 'tls-auth', 'tls-crypt', 'dh', 'extra-certs', 'pkcs12'
-    ]);
-    let inCertBlock = null; // lowercase tag name when inside a cert block, else null
-
-    for (const raw of lines) {
-      const line = raw.trim();
-      if (!line || line.startsWith('#') || line.startsWith(';')) continue;
-
-      const openMatch = line.match(/^<([a-z0-9-]+)>$/i);
-      const closeMatch = line.match(/^<\/([a-z0-9-]+)>$/i);
-      if (openMatch && CERT_BLOCK_TAGS.has(openMatch[1].toLowerCase())) {
-        inCertBlock = openMatch[1].toLowerCase();
-        continue;
-      }
-      if (closeMatch && inCertBlock === closeMatch[1].toLowerCase()) {
-        inCertBlock = null;
-        continue;
-      }
-      if (inCertBlock) continue;
-
-      // <connection> … </connection> wrappers are structural only; the
-      // directives nested inside them fall through to the scan below.
-      if (openMatch && openMatch[1].toLowerCase() === 'connection') continue;
-      if (closeMatch && closeMatch[1].toLowerCase() === 'connection') continue;
-
-      // Any other <tag> line that reaches here is unknown/unsupported — treat
-      // it as a regular directive line for safety (directive will be the `<…>`
-      // literal, which never matches DANGEROUS_DIRECTIVES but is tracked).
-      const directive = line.split(/\s+/)[0].toLowerCase();
-      directives.add(directive);
-
-      if (DANGEROUS_DIRECTIVES.has(directive)) {
-        errors.push(`Blocked dangerous directive: ${directive}`);
-      }
-    }
-
-    for (const req of REQUIRED_DIRECTIVES) {
-      if (!directives.has(req)) {
-        errors.push(`Missing required directive: ${req}`);
-      }
-    }
-
-    // cert/key can be inline (<ca>, <cert>, <key>) or file references
-    const hasInlineCa = content.includes('<ca>');
-    const hasInlineCert = content.includes('<cert>');
-    const hasCaRef = directives.has('ca');
-    const hasCertRef = directives.has('cert');
-    // Kein Key-Pflicht-Check: OpenVPN-Configs mit reiner auth-user-pass-Auth
-    // haben legitim keinen Client-Key — <key>/key darf fehlen.
-
-    if (!hasInlineCa && !hasCaRef) errors.push('Missing CA certificate (inline <ca> or ca directive)');
-    if (!hasInlineCert && !hasCertRef && !directives.has('pkcs12') && !directives.has('auth-user-pass')) {
-      // cert might not be needed with auth-user-pass or pkcs12
-    }
-
-    return { valid: errors.length === 0, errors, directives: [...directives] };
-  }
-
-  function buildSecureConfig(originalContent) {
-    const content = originalContent;
-
-    // strip any existing dangerous directives
-    const lines = content.split(/\r?\n/);
-    const filtered = lines.filter(line => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';') || trimmed.startsWith('<')) return true;
-      const directive = trimmed.split(/\s+/)[0].toLowerCase();
-      return !DANGEROUS_DIRECTIVES.has(directive);
-    });
-
-    // append forced directives
-    filtered.push('');
-    filtered.push('# -- DVhub forced directives --');
-    for (const d of FORCED_DIRECTIVES) {
-      filtered.push(d);
-    }
-
-    return filtered.join('\n');
-  }
 
   // ── config import ──
 
@@ -542,6 +582,24 @@ export function createVpnManager(ctx) {
         state.vpn.status = 'error';
         state.vpn.lastError = err;
         pushLog('vpn_start_error', { error: err });
+        return;
+      }
+
+      // Unmittelbar vor dem Start mit Root-Rechten erneut prüfen: das Profil
+      // kann über den Geräte-Tausch-Import oder von Hand gekommen sein.
+      try {
+        const content = await fsPromises.readFile(cfgPath, 'utf8');
+        const check = validateVpnProfileByProtocol(proto, content, { dangerousOnly: true });
+        if (!check.valid) {
+          state.vpn.status = 'error';
+          state.vpn.lastError = `VPN-Profil abgelehnt: ${check.errors.join('; ')}`;
+          pushLog('vpn_start_error', { error: state.vpn.lastError, protocol: proto });
+          return;
+        }
+      } catch (e) {
+        state.vpn.status = 'error';
+        state.vpn.lastError = `VPN-Profil nicht lesbar: ${e.message}`;
+        pushLog('vpn_start_error', { error: state.vpn.lastError, protocol: proto });
         return;
       }
 

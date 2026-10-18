@@ -165,3 +165,17 @@ test('Geräte-Tausch: nur erlaubte Pfade, kein Ausbruch aus den Ordnern', () => 
   assert.equal(fsx.existsSync(pathx.join(b.root, 'evil')), false);
   fsx.rmSync(b.root, { recursive: true, force: true });
 });
+
+// Codex-Review 2026-10-18 S5: Extremwerte für die KDF-Kosten werden VOR pbkdf2 abgelehnt.
+test('decrypt: iter außerhalb 100 000…1 000 000 → unsupported_secrets_format, ohne KDF-Rechnung', () => {
+  const blob = encryptSecrets({ forecast: { solcast: { apiKey: 'k' } } }, 'pw');
+  assert.equal(blob.iter, 210000);
+  for (const iter of [2147483647, 1000001, 99999, 0, -1, 1.5, '210000']) {
+    const t0 = Date.now();
+    assert.throws(() => decryptSecrets({ ...blob, iter }, 'pw'), /unsupported_secrets_format/, String(iter));
+    assert.ok(Date.now() - t0 < 200, `${iter}: sofort abgelehnt`);
+  }
+  assert.ok(decryptSecrets(blob, 'pw'), 'gültiger Export bleibt lesbar');
+  const { iter: _drop, ...ohneIter } = blob;
+  assert.ok(decryptSecrets(ohneIter, 'pw'), 'ohne iter: Standardkosten');
+});

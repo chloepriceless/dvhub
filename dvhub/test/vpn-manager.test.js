@@ -470,3 +470,47 @@ test('getStatus: ohne Abfrage lastModbusActivity null', () => {
   ctx.state.keepalive = { modbusLastQuery: null };
   assert.equal(createVpnManager(ctx).getStatus().lastModbusActivity, null);
 });
+
+// ── Codex-Review 2026-10-18 S1/S2: Hooks in jeder Schreibweise, Prüfung vor jedem Start ──
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import nodePath from 'node:path';
+import { validateWireGuardConfig, validateVpnProfileByProtocol, validateVpnProfileFile, buildSecureConfig } from '../vpn-manager.js';
+
+const WG_OK = '[Interface]\nPrivateKey = abc\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = def\nEndpoint = vpn.example.com:51820\nAllowedIPs = 10.0.0.0/24\n';
+
+test('WireGuard: alle vier Hooks in jeder Schreibweise abgelehnt, gültiges Profil bleibt gültig', () => {
+  assert.equal(validateWireGuardConfig(WG_OK).valid, true);
+  for (const hook of ['PreUp', 'preup', 'PREUP', 'PostUp', 'postUP', 'PreDown', 'predown', 'PostDown', 'POSTDOWN']) {
+    const r = validateWireGuardConfig(WG_OK.replace('Address = 10.0.0.2/32\n', `Address = 10.0.0.2/32\n${hook} = true\n`));
+    assert.equal(r.valid, false, hook);
+  }
+});
+
+test('Gespeichertes OpenVPN-Profil mit DVhubs „script-security 0“ besteht die Startprüfung, andere Werte nicht', () => {
+  const original = 'client\nremote vpn.example.com 1194\ndev tun\n<ca>\nX\n</ca>\n';
+  assert.equal(validateVpnProfileByProtocol('openvpn', buildSecureConfig(original)).valid, true);
+  assert.equal(validateVpnProfileByProtocol('openvpn', `${original}script-security 2\n`).valid, false);
+  assert.equal(validateVpnProfileByProtocol('openvpn', `${original}up /tmp/x.sh\n`).valid, false);
+  assert.equal(validateVpnProfileFile('client.ovpn', buildSecureConfig(original)).valid, true);
+  assert.equal(validateVpnProfileFile('wg0.conf', WG_OK.replace('[Peer]', 'preup = id\n[Peer]')).valid, false);
+  assert.equal(validateVpnProfileFile('ca.crt', 'beliebig').valid, true);
+});
+
+test('Start: ein Profil mit Hook (z. B. über den Import gekommen) wird vor sudo abgelehnt', async () => {
+  const dir = mkdtempSync(nodePath.join(tmpdir(), 'dvhub-wg-start-'));
+  const cfgPath = nodePath.join(dir, 'wg0.conf');
+  writeFileSync(cfgPath, WG_OK.replace('[Peer]', 'preup = id\n[Peer]'));
+  const calls = [];
+  const state = {};
+  const mgr = createVpnManager({
+    state, pushLog: () => {},
+    execFileAsync: async (cmd, args) => { calls.push([cmd, ...args]); return { stdout: '', stderr: '' }; },
+    getCfg: () => ({ vpn: { enabled: true, protocol: 'wireguard', profileName: 'p', configPath: cfgPath } }),
+  });
+  await mgr.start();
+  assert.equal(state.vpn.status, 'error');
+  assert.match(state.vpn.lastError, /VPN-Profil abgelehnt/);
+  assert.equal(calls.length, 0, 'kein sudo-Aufruf');
+  await mgr.close();
+});

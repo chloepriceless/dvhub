@@ -371,3 +371,41 @@ describe('legal-gate flip detection — gate the ENABLE transition only (covers 
     assert.equal(pushSpy.find(e => e.event === 'legal_gate_flip_rejected'), undefined);
   });
 });
+
+// Codex-Review 2026-10-18 S2: ein Geräte-Tausch-Paket mit gefährlichem VPN-Profil
+// wird ganz verworfen, BEVOR irgendetwas gespeichert wird.
+import { encryptSecrets } from '../services/config-secrets-crypto.js';
+import { rejectedMigrationVpnFiles } from '../routes/config-routes.js';
+
+describe('Geräte-Tausch-Import: VPN-Profile werden vor dem Speichern geprüft', () => {
+  const WG = '[Interface]\nPrivateKey = a\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = b\nEndpoint = h:1\n';
+  const b64 = (t) => Buffer.from(t).toString('base64');
+
+  it('Hook im Profil → 400, keine Speicherung', async () => {
+    const saved = [];
+    const ctx = mockCtx({ optimizerOverrides: null, saveAndApplyConfigSpy: saved });
+    const routes = createApiRoutes(ctx);
+    const blob = encryptSecrets({}, 'pw-geraetetausch', { files: { 'config/vpn/profiles/dv/wg0.conf': b64(WG.replace('[Peer]', 'preup = id\n[Peer]')) } });
+    const res = await dispatch(routes, makeReq('/api/config', {
+      method: 'POST',
+      body: { config: { apiToken: API_TOKEN, optimizer: { enabled: false }, _encryptedSecrets: blob }, password: 'pw-geraetetausch', migrate: true },
+    }));
+    assert.equal(res.status, 400, res.body);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error, 'migration_vpn_profile_rejected');
+    assert.equal(body.files[0].file, 'config/vpn/profiles/dv/wg0.conf');
+    assert.equal(saved.length, 0, 'nichts gespeichert');
+  });
+
+  it('Prüfung je Datei: Hooks, gefährliche Direktiven, include; Zertifikate und saubere Profile frei', () => {
+    const rej = (files) => rejectedMigrationVpnFiles(files).map((r) => r.file);
+    assert.deepEqual(rej({
+      'config/vpn/profiles/a/wg0.conf': b64(WG),
+      'config/vpn/profiles/a/ca.crt': b64('-----BEGIN CERTIFICATE-----'),
+      'config/vpn/profiles/b/client.ovpn': b64('client\nremote h 1194\nup /tmp/x\n'),
+      'config/vpn/profiles/c/ipsec.conf': b64('include /etc/shadow\nconn x\n right=h\n'),
+      'config/vpn/profiles/d/client.ovpn': b64('client\nremote h 1194\nscript-security 0\n'),
+      'data/appliance-id': b64('x'),
+    }).sort(), ['config/vpn/profiles/b/client.ovpn', 'config/vpn/profiles/c/ipsec.conf']);
+  });
+});

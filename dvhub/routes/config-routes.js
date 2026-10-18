@@ -10,6 +10,20 @@ import { REDACTED_PATHS, REDACTED, redactConfig, isRedactedPath } from '../confi
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from '../services/config-secrets-crypto.js';
 import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS } from '../services/config-protected-keys.js';
 import { mergeAgainstBaseWithConflicts } from '../services/config-base-merge.js';
+import { validateVpnProfileFile } from '../vpn-manager.js';
+
+// VPN-Profile eines Geräte-Tausch-Pakets (config/vpn/profiles/<name>/<datei>):
+// nur gefährliche Inhalte blockieren — siehe validateVpnProfileByProtocol.
+export function rejectedMigrationVpnFiles(files) {
+  const out = [];
+  for (const [key, b64] of Object.entries(files || {})) {
+    if (!key.startsWith('config/vpn/profiles/') || typeof b64 !== 'string') continue;
+    const name = key.split('/').pop();
+    const check = validateVpnProfileFile(name, Buffer.from(b64, 'base64').toString('utf8'), { dangerousOnly: true });
+    if (!check.valid) out.push({ file: key, errors: check.errors });
+  }
+  return out;
+}
 
 export function createConfigRoutes(deps) {
   const {
@@ -135,6 +149,15 @@ export function createConfigRoutes(deps) {
           if (body.migrate === true) {
             if (typeof secrets.__apiToken === 'string' && secrets.__apiToken) body.config.apiToken = secrets.__apiToken;
             migrationFiles = secrets.__files && typeof secrets.__files === 'object' ? secrets.__files : null;
+            // VPN-Profile im Paket durch dieselbe Inhaltsprüfung wie Upload und
+            // Start, BEVOR irgendetwas gespeichert wird — sonst käme ein Profil
+            // mit Hook (Root-Code beim Start) am Upload vorbei (Codex-Review S2).
+            // Das Passwort belegt nur, wer das Paket gepackt hat, nicht wer es gebaut hat.
+            const rejected = rejectedMigrationVpnFiles(migrationFiles);
+            if (rejected.length) {
+              pushLog('config_import_vpn_rejected', { files: rejected.map((r) => r.file) }, actorContext(req));
+              return json(res, 400, { ok: false, error: 'migration_vpn_profile_rejected', files: rejected });
+            }
             const carried = applyCarriedKeys(body.config, carriedKeys);
             if (carried.length) pushLog('config_import_switches_carried', { keys: carried }, actorContext(req));
           }
