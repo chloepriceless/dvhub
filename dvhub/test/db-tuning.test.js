@@ -52,7 +52,7 @@ test('Anwenden: nur Abweichendes, Kommandozeile bleibt, Neustart-Bedarf gemeldet
 
 test('Schreibwerte auch ohne Speicherprofil', () => {
   const { settings } = desiredSettings({ includeMemory: false });
-  assert.deepEqual(Object.keys(settings).sort(), ['checkpoint_timeout', 'synchronous_commit', 'wal_compression', 'wal_writer_delay']);
+  assert.deepEqual(Object.keys(settings).sort(), ['checkpoint_timeout', 'min_wal_size', 'synchronous_commit', 'wal_compression', 'wal_writer_delay']);
 });
 
 import { tuneTimescale } from '../services/db-tuning.js';
@@ -87,4 +87,19 @@ test('DB-Verbindungen nach Profil begrenzt', () => {
   assert.equal(dbPoolMax(160), 3);
   assert.equal(dbPoolMax(512), 5);
   assert.equal(dbPoolMax(4096), 5);
+});
+
+// 2026-10-18: timescaledb-tune setzt min_wal_size = 512MB — der Schreibpuffer
+// belegte damit auf jeder Box dauerhaft 512 MB (A7S: pg_wal 512 MB). 64 MB
+// reichen bei schreibarmem Betrieb (checkpoint_timeout 15 min).
+test('Schreibpuffer: min_wal_size 512MB aus timescaledb-tune wird auf 64MB gesetzt', async () => {
+  const pg = fakePg([
+    { name: 'min_wal_size', setting: '512', unit: 'MB', source: 'configuration file' },
+    { name: 'synchronous_commit', setting: 'off', unit: null, source: 'configuration file' },
+  ]);
+  const r = await applyDbTuning((q, p) => pg.query(q, p), { includeMemory: false });
+  assert.deepEqual(r.changed, ['min_wal_size']);
+  assert.ok(pg.calls.includes("ALTER SYSTEM SET min_wal_size = '64MB'"));
+  const again = fakePg([{ name: 'min_wal_size', setting: '64', unit: 'MB', source: 'configuration file' }]);
+  assert.deepEqual((await applyDbTuning((q, p) => again.query(q, p), { includeMemory: false })).changed, [], 'idempotent');
 });

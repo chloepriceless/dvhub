@@ -13,6 +13,8 @@
 #   wal_writer_delay = 1s
 #   checkpoint_timeout = 15min    seltener Checkpoints → weniger Full-Page-Writes
 #   wal_compression = on          Full-Page-Writes komprimiert
+#   min_wal_size = 64MB           statt 512MB aus timescaledb-tune: weniger
+#                                 dauerhaft belegter Schreibpuffer (pg_wal)
 #
 # Dazu ein KLEINER Speicher-Footprint für jede Box (Christin 2026-10-01: auch
 # große Boxen nicht hochskalieren) — gleiche Werte wie services/db-tuning.js:
@@ -43,6 +45,7 @@ synchronous_commit = off
 wal_writer_delay = 1s
 checkpoint_timeout = 15min
 wal_compression = on
+min_wal_size = 64MB
 shared_buffers = $SB
 work_mem = $WM
 maintenance_work_mem = 16MB

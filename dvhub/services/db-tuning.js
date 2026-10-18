@@ -10,7 +10,8 @@
 // Zwei Gruppen:
 //   schreibarm (für jede Box, per Reload sofort wirksam)
 //     synchronous_commit=off, wal_writer_delay=1s, checkpoint_timeout=15min,
-//     wal_compression=on — siehe pg-write-tuning.sh (nativ dieselben Werte).
+//     wal_compression=on, min_wal_size=64MB — siehe pg-write-tuning.sh
+//     (nativ dieselben Werte).
 //   Speicher nach RAM-Profil
 //     reloadbar: work_mem, maintenance_work_mem, effective_cache_size,
 //       max_parallel_workers_per_gather, max_parallel_maintenance_workers
@@ -28,6 +29,11 @@ export const WRITE_SETTINGS = Object.freeze({
   wal_writer_delay: '1s',
   checkpoint_timeout: '15min',
   wal_compression: 'on',
+  // timescaledb-tune setzt 512MB — so viel Schreibpuffer (pg_wal) hält
+  // PostgreSQL dann dauerhaft vor, auch wenn kaum geschrieben wird (A7S
+  // 2026-10-18: 512 MB). 64 MB reichen; max_wal_size bleibt, damit unter
+  // Last nicht öfter Checkpoints geschrieben werden.
+  min_wal_size: '64MB',
 });
 
 /**
