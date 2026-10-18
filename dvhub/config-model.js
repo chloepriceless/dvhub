@@ -603,7 +603,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 1,
       max: 65535,
-      help: 'Port, auf dem DVhub als Modbus-Proxy lauscht. Standard ist 502 — diesen Port fragen Direktvermarkter (z. B. LUOX, Plexlog-Profil) über den VPN-Tunnel ab; eine Weiterleitung ist dann nicht nötig. DVhub darf Ports unter 1024 nativ und im Docker-Container öffnen. Lässt sich der Port nicht öffnen, steht die Ursache unter Integrationen → Datenfluss.'
+      help: 'Port, auf dem DVhub als Modbus-Proxy lauscht. Standard ist 502 — diesen Port fragen Direktvermarkter (z. B. LUOX, Plexlog-Profil) über den VPN-Tunnel ab; eine Weiterleitung ist dann nicht nötig. DVhub darf Ports unter 1024 nativ und im Docker-Container öffnen. Ist der Port auf dem Gerät belegt, weicht DVhub selbst auf 1502 aus und leitet am VPN-Tunnel 502 → 1502 um (Integrationen → Datenfluss zeigt den Ersatzweg).'
     },
     {
       section: 'system',

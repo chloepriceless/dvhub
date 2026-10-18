@@ -11,6 +11,8 @@
 !scripts/reconcile-vendor-profiles.mjs
 !docker/docker-entrypoint.sh
 !docker/dvhub-healthcheck.sh
+# Ersatzweg Modbus-Port (root-eigenes Hilfsskript, sudo).
+!dvhub-modbus-redirect.sh
 
 # Lizenztexte gehören ins Image — package.json verweist auf ../LICENSE.md.
 !LICENSE.md

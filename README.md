@@ -621,7 +621,10 @@ Für LUOX brauchst du in der Praxis:
 2. VPN-Tunnel zu LUOX (OpenVPN, WireGuard oder IPsec — verwaltbar im VPN-Manager)
 3. DVhub lauscht auf Port `502` (Standard, Einstellungen → System → Modbus Listen Port).
    Läuft der Tunnel im VPN-Manager von DVhub, fragt LUOX DVhub direkt ab — keine
-   Weiterleitung nötig, nativ wie im Docker-Container.
+   Weiterleitung nötig, nativ wie im Docker-Container. Ist 502 auf dem Gerät
+   belegt, weicht DVhub selbst auf 1502 aus und leitet nur am Tunnel-Interface
+   502 → 1502 um (`dvhub-modbus-redirect.sh`, Anzeige unter Integrationen →
+   Datenfluss).
 
 **Tunnel auf dem Router (z. B. Unifi):** Endet der Tunnel nicht bei DVhub, muss der
 Router Port `502` aus dem Tunnel an DVhub weiterleiten. Falls die GUI das nicht

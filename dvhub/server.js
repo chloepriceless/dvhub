@@ -1264,6 +1264,13 @@ const ctx = {
 const modbus = createModbusServer(ctx);
 const vpnManager = createVpnManager(ctx);
 ctx.vpnManager = vpnManager;
+// Ersatzweg Modbus-Port (2026-10-18): lauscht der Modbus-Server auf dem
+// Ersatzport, leitet der VPN-Manager den Port am Tunnel dorthin um; lauscht er
+// auf dem eigentlichen Port, nimmt er die Umleitung (auch eine alte) heraus.
+ctx.onModbusListen = ({ requestedPort, port, fallback }) => {
+  Promise.resolve(vpnManager.setModbusRedirect(fallback ? { fromPort: requestedPort, toPort: port } : null))
+    .catch((e) => pushLog('vpn_modbus_redirect_failed', { error: e?.message || String(e) }));
+};
 const epex = createEpexFetcher(ctx);
 ctx.epexNowNext = epex.epexNowNext;
 ctx.energyPath = ENERGY_PATH;

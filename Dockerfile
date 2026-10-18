@@ -80,6 +80,9 @@ LABEL org.opencontainers.image.title="DVhub" \
 # als Ambient-Recht — wie nativ systemd AmbientCapabilities. Damit lässt sich in
 # der Oberfläche ein Port unter 1024 einstellen (Modbus 502 für den
 # Direktvermarkter), ohne Weiterleitung auf dem Host (docker-entrypoint.sh).
+# nftables (~1 MB): Ersatzweg, wenn 502 trotzdem nicht zu öffnen ist — DVhub
+# lauscht auf 1502 und leitet nur am eigenen Tunnel-Interface 502 → 1502 um
+# (dvhub-modbus-redirect.sh über sudo; braucht NET_ADMIN wie das VPN).
 # postgresql17-client: pg_dump/pg_restore/psql für DB-Backup und -Restore aus
 # der Oberfläche (services/db-backup.js, Container-Modus). Version passend zum
 # DB-Container (docker/compose.yml: TimescaleDB auf PostgreSQL 17) — pg_dump
@@ -97,7 +100,7 @@ LABEL org.opencontainers.image.title="DVhub" \
 # den Support-Login im Container (läuft nur, solange ein Tunnel offen ist, als
 # dvhub, nur auf 127.0.0.1, nur mit dem Support-Schlüssel — docker-entrypoint.sh).
 # Der dvhub-Benutzer braucht dafür eine Shell; ein Passwort hat er nicht.
-RUN apk add --no-cache tzdata su-exec setpriv postgresql17-client openvpn wireguard-tools sudo iproute2 procps \
+RUN apk add --no-cache tzdata su-exec setpriv postgresql17-client openvpn wireguard-tools sudo iproute2 procps nftables \
       libwebsockets cjson avahi-libs avahi dbus \
       openssh-client-default openssh-keygen openssh-server autossh \
     && addgroup -g 10001 -S dvhub \
@@ -111,6 +114,8 @@ RUN apk add --no-cache tzdata su-exec setpriv postgresql17-client openvpn wiregu
       'dvhub ALL=(root) NOPASSWD: /usr/bin/wg-quick up /etc/dvhub/vpn/profiles/*' \
       'dvhub ALL=(root) NOPASSWD: /usr/bin/wg-quick down /etc/dvhub/vpn/profiles/*' \
       'dvhub ALL=(root) NOPASSWD: /usr/bin/wg show *' \
+      'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-modbus-redirect add *' \
+      'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-modbus-redirect del' \
       > /etc/sudoers.d/dvhub-vpn \
     && chmod 0440 /etc/sudoers.d/dvhub-vpn
 
@@ -147,6 +152,8 @@ COPY --chown=dvhub:dvhub scripts/reconcile-vendor-profiles.mjs /opt/dvhub/script
 # package.json verweist mit "SEE LICENSE IN ../LICENSE.md" hierauf.
 COPY --chown=dvhub:dvhub LICENSE.md THIRD-PARTY-LICENSES.md /opt/dvhub/
 COPY --chmod=0755 docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# Ersatzweg Modbus-Port: root-eigen (nicht dvhub), die sudoers-Regel zeigt nur hierauf.
+COPY --chmod=0755 dvhub-modbus-redirect.sh /usr/local/libexec/dvhub-modbus-redirect
 COPY --from=eebus /out/dvhub-eebus /usr/local/bin/dvhub-eebus
 
 RUN mkdir -p /etc/dvhub /var/lib/dvhub \

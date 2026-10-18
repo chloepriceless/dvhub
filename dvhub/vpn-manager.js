@@ -19,6 +19,10 @@ const defaultExecFileAsync = promisify(execFile);
 // früheren Regeln `ln -sf …/profiles/*/ipsec.conf …` ab (Platzhalter mitten
 // im Argument), IPsec war damit auf Ubuntu 26.04 kaputt (2026-10-18).
 export const IPSEC_LINK_HELPER = '/usr/local/libexec/dvhub-ipsec-link';
+// Ersatzweg Modbus-Port: leitet am Tunnel-Interface 502 → Ersatzport um
+// (dvhub-modbus-redirect.sh, root-eigene Kopie; nativ install.sh/post-update.sh,
+// im Container das Dockerfile).
+export const MODBUS_REDIRECT_HELPER = '/usr/local/libexec/dvhub-modbus-redirect';
 
 // Status-Prüfungen OHNE sudo (2026-10-01): der Watchdog lief alle 10 s mit
 // `sudo pkill -0` + `sudo ip link show` — jede sudo-Sitzung schreibt mehrere
@@ -348,6 +352,7 @@ export function createVpnManager(ctx) {
   // Tests reichen einen Ersatz durch; im Betrieb das echte execFile.
   const execFileAsync = ctx.execFileAsync || defaultExecFileAsync;
   const ipsecProfilesDir = ctx.profilesDir || PROFILES_DIR;   // Tests: eigenes Verzeichnis
+  const ifaceExists = ctx.interfaceExists || interfaceExists; // Tests: ohne /sys/class/net
 
   // -- state initialisation --
   state.vpn = {
@@ -378,6 +383,11 @@ export function createVpnManager(ctx) {
   let failCount = 0;
   let starting = false; // mutex against double-start
   let certCheckInterval = null;
+  // Ersatzweg Modbus-Port: gewünscht ({ fromPort, toPort } oder null) und gesetzt.
+  let modbusRedirectWanted = null;
+  let modbusRedirectApplied = null;   // { iface, fromPort, toPort }
+  let modbusRedirectCleared = false;  // liegengebliebene Regel einmal entfernt
+  let modbusRedirectError = null;
 
   // ── helpers ──
 
@@ -815,12 +825,85 @@ export function createVpnManager(ctx) {
     if (state.vpn.protocol !== 'wireguard') {
       await checkCertExpiry();
     }
+
+    await applyModbusRedirect();
+  }
+
+  // ── Ersatzweg Modbus-Port ──
+  //
+  // Kann der Modbus-Server modbusListenPort (502) nicht öffnen, lauscht er auf
+  // dem Ersatzport und meldet das hierher (server.js: onModbusListen). Dann
+  // leitet der Kernel NUR am Tunnel-Interface fromPort → toPort um; wer den
+  // Port sonst auf dem Gerät belegt, spielt keine Rolle. Die Regel steht nur,
+  // solange der Tunnel steht und der Ersatzweg gebraucht wird.
+  const validPort = (p) => Number.isInteger(p) && p >= 1 && p <= 65535;
+
+  async function removeModbusRedirect() {
+    try {
+      await execFileAsync('sudo', ['-n', MODBUS_REDIRECT_HELPER, 'del']);
+    } catch (e) {
+      pushLog('vpn_modbus_redirect_del_failed', { error: String(e?.stderr || e?.message || e).slice(0, 200) });
+    }
+    if (modbusRedirectApplied) pushLog('vpn_modbus_redirect_removed', { ...modbusRedirectApplied });
+    modbusRedirectApplied = null;
+    modbusRedirectCleared = true;
+  }
+
+  async function applyModbusRedirect() {
+    const want = modbusRedirectWanted;
+    if (!want) {
+      // Auch eine Regel aus einem früheren Lauf (DVhub neu gestartet, Port
+      // inzwischen frei) muss weg — sonst landete 502 am leeren Ersatzport.
+      if (modbusRedirectApplied || !modbusRedirectCleared) await removeModbusRedirect();
+      modbusRedirectError = null;
+      return;
+    }
+    if (state.vpn.status !== 'connected') return;
+    if ((state.vpn.protocol || vpnCfg().protocol) === 'ipsec') {
+      // IPsec hat kein eigenes Interface (xfrm) — hier keine Umleitung möglich.
+      modbusRedirectError = 'IPsec: kein Tunnel-Interface für die Umleitung';
+      return;
+    }
+    const iface = tunInterfaceName();
+    const { fromPort, toPort } = want;
+    if (modbusRedirectApplied && modbusRedirectApplied.iface === iface
+        && modbusRedirectApplied.fromPort === fromPort && modbusRedirectApplied.toPort === toPort) return;
+    try {
+      await execFileAsync('sudo', ['-n', MODBUS_REDIRECT_HELPER, 'add', iface, String(fromPort), String(toPort)]);
+      modbusRedirectApplied = { iface, fromPort, toPort };
+      modbusRedirectCleared = false;
+      modbusRedirectError = null;
+      pushLog('vpn_modbus_redirect_set', { iface, fromPort, toPort });
+    } catch (e) {
+      modbusRedirectApplied = null;
+      modbusRedirectError = String(e?.stderr || e?.message || e).trim().slice(0, 200);
+      pushLog('vpn_modbus_redirect_failed', { iface, fromPort, toPort, error: modbusRedirectError });
+    }
+  }
+
+  async function setModbusRedirect(want) {
+    const next = want && validPort(want.fromPort) && validPort(want.toPort) && want.fromPort !== want.toPort
+      ? { fromPort: want.fromPort, toPort: want.toPort } : null;
+    if (want && !next) pushLog('vpn_modbus_redirect_invalid', { fromPort: String(want.fromPort), toPort: String(want.toPort) });
+    modbusRedirectWanted = next;
+    await applyModbusRedirect();
+  }
+
+  function modbusRedirectStatus() {
+    const a = modbusRedirectApplied;
+    return {
+      active: Boolean(a),
+      iface: a?.iface ?? null,
+      fromPort: a?.fromPort ?? modbusRedirectWanted?.fromPort ?? null,
+      toPort: a?.toPort ?? modbusRedirectWanted?.toPort ?? null,
+      error: modbusRedirectError,
+    };
   }
 
   async function waitForInterface(iface, timeoutMs) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      if (interfaceExists(iface)) return true;
+      if (ifaceExists(iface)) return true;
       await sleep(1000);
     }
     return false;
@@ -844,6 +927,8 @@ export function createVpnManager(ctx) {
     state.vpn.tunIp = null;
     state.vpn.upSince = null;
     state.vpn.watchdogOk = false;
+    // Ohne Tunnel keine Umleitung; der Wunsch bleibt für den nächsten Aufbau.
+    if (modbusRedirectApplied) await removeModbusRedirect();
     pushLog('vpn_stopped', { protocol: proto });
   }
 
@@ -968,7 +1053,7 @@ export function createVpnManager(ctx) {
     }
 
     // 2. interface exists
-    if (!interfaceExists(iface)) {
+    if (!ifaceExists(iface)) {
       pushLog('vpn_watchdog_tun_missing', { interface: iface });
       scheduleReconnect();
       return;
@@ -1211,6 +1296,7 @@ export function createVpnManager(ctx) {
       ...state.vpn,
       lastModbusActivity: q ? { ts: q.ts, remote: q.remote, fc: q.fc, addr: q.addr, qty: q.qty } : null,
       modbusListenPort: Number(getCfg()?.modbusListenPort) || null,
+      modbusRedirect: modbusRedirectStatus(),
     };
   }
 
@@ -1234,6 +1320,7 @@ export function createVpnManager(ctx) {
       return validateOvpnConfig(content);
     },
     getStatus,
+    setModbusRedirect,
     getConfigDetails,
     checkCertExpiry,
     close: async () => {

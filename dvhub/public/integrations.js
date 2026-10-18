@@ -3609,9 +3609,18 @@
           } else if (c.kind === 'dv_modbus') {
             var q = c.lastQuery;
             var l = c.listen;
-            detail = l && l.ok === false
-              ? '<strong>Port ' + esc(String(l.port)) + ' nicht offen</strong> (' + esc(String(l.code || l.error || '?')) + ')' + (l.hint ? ' · ' + esc(l.hint) : '')
-              : 'Port ' + esc(String(c.port)) + ' · ' + (q && q.ts ? 'letzte Abfrage vor ' + dfSince(q.ts) + ' von ' + esc(String(q.remote || '?')) : 'noch keine Abfrage seit dem Start');
+            var r = c.redirect;
+            var abfrage = q && q.ts ? 'letzte Abfrage vor ' + dfSince(q.ts) + ' von ' + esc(String(q.remote || '?')) : 'noch keine Abfrage seit dem Start';
+            if (l && l.ok === false) {
+              detail = '<strong>Port ' + esc(String(l.port)) + ' nicht offen</strong> (' + esc(String(l.code || l.error || '?')) + ')' + (l.hint ? ' · ' + esc(l.hint) : '');
+            } else if (l && l.fallback) {
+              // Ersatzweg: lauscht auf dem Ersatzport, der Tunnel leitet den Port dorthin um.
+              detail = 'Port ' + esc(String(l.requestedPort)) + ' über Ersatzweg (lauscht auf ' + esc(String(l.port)) + ', ' + esc(String(l.code || '')) + ') · ' +
+                (r && r.active ? 'Umleitung im Tunnel ' + esc(String(r.iface)) + ' aktiv' : '<strong>Umleitung im Tunnel fehlt</strong>' + (r && r.error ? ' (' + esc(r.error) + ')' : ' (VPN nicht verbunden?)')) +
+                ' · ' + abfrage;
+            } else {
+              detail = 'Port ' + esc(String(c.port)) + ' · ' + abfrage;
+            }
           }
           return '<div class="dv-info-row"><span class="dv-info-label">' + esc(c.label) + '</span><span class="dv-info-value">' + detail + '</span></div>';
         }).join('');

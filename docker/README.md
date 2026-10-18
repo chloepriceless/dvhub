@@ -41,9 +41,16 @@ Migrationen ein.
 DVhub läuft im Container als Benutzer `dvhub`, behält aber das Recht für Ports
 unter 1024 (`CAP_NET_BIND_SERVICE`, wie nativ über systemd). Den Modbus-Port für
 den Direktvermarkter (Standard 502) stellt man deshalb einfach in der Oberfläche
-ein; eine Weiterleitung auf dem Host ist nicht nötig. Entzieht man dem Container
-das Recht (`cap_drop`), startet DVhub ohne es, und die Oberfläche zeigt unter
-Integrationen → Datenfluss, warum der Port nicht offen ist.
+ein; eine Weiterleitung auf dem Host ist nicht nötig.
+
+**Ersatzweg:** Ist der Port trotzdem nicht zu öffnen (ein anderes Programm auf
+dem Gerät belegt ihn, oder dem Container fehlt das Recht), lauscht DVhub auf
+1502 und leitet nur am eigenen VPN-Interface (`tun0`/`wg0`) 502 → 1502 um —
+über das root-eigene Hilfsskript `/usr/local/libexec/dvhub-modbus-redirect`
+(sudo, braucht `NET_ADMIN` wie das VPN). Der Direktvermarkter fragt weiter 502
+ab; Integrationen → Datenfluss zeigt „über Ersatzweg … Umleitung im Tunnel
+aktiv“. Wird 502 wieder frei, nimmt DVhub die Umleitung beim nächsten Start
+heraus.
 
 Den API-Token (für Skripte und den DB-Restore) zeigt:
 

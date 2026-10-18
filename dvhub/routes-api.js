@@ -4675,6 +4675,8 @@ export function createApiRoutes(ctx) {
           port: cfg.modbusListenPort ?? null, lastQuery: state.keepalive?.modbusLastQuery || null,
           // Port offen? Bei Fehler steht Ursache + Hinweis hier (modbus-server.js).
           listen: state.modbusListen || null,
+          // Ersatzweg: Umleitung am Tunnel (vpn-manager.js setModbusRedirect).
+          redirect: ctx.vpnManager?.getStatus?.()?.modbusRedirect || null,
         },
       ];
       return json(res, 200, buildDataflow({

@@ -8,6 +8,9 @@ import {
   dvInterfaceProfile, luoxInputRegisters, luoxHoldingRegisters, readWindow, luoxApplyWrite,
 } from './dv-interface-luox.js';
 
+// Ersatzport, wenn modbusListenPort nicht zu öffnen ist (siehe start()).
+export const MODBUS_FALLBACK_PORT = 1502;
+
 export function createModbusServer(ctx) {
   const { state, getCfg, pushLog } = ctx;
 
@@ -227,60 +230,93 @@ export function createModbusServer(ctx) {
     return fc === 6 ? frame.subarray(0, 12) : writeAck(tid, unit, 16, addr, values.length);
   }
 
+  function handleConnection(socket) {
+    // Plan 08-06 Task 2 Step 1: enforce LAN-only / allowlist on every accepted socket.
+    if (!isAllowedModbusClient(socket, getCfg())) {
+      pushLog('modbus_unauthorized_client', { remote: socket.remoteAddress });
+      socket.destroy();
+      return;
+    }
+    const remote = `${socket.remoteAddress}:${socket.remotePort}`;
+    let buffer = Buffer.alloc(0);
+
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (buffer.length >= 7) {
+        const len = buffer.readUInt16BE(4);
+        const total = 6 + len;
+        if (buffer.length < total) break;
+
+        const frame = buffer.subarray(0, total);
+        buffer = buffer.subarray(total);
+        const resp = processModbusFrame(frame, remote);
+        if (resp) socket.write(resp);
+      }
+    });
+    socket.on('error', () => {});
+  }
+
+  function listenHint(code) {
+    if (code === 'EACCES') return 'Ports unter 1024 brauchen das Recht CAP_NET_BIND_SERVICE (nativ: systemd AmbientCapabilities, Container: DVhub-Image ab 18.10.2026).';
+    if (code === 'EADDRINUSE') return 'Ein anderes Programm auf dem Gerät belegt den Port.';
+    return null;
+  }
+
   function start() {
     // Idempotency guard (Pro-Gating): start() is invoked both at boot and from
     // the licence active<->inactive transition hook. A second listener would leak
     // a socket server, so a no-op when one is already bound.
     if (mbServer) return;
     const cfg = getCfg();
-    mbServer = net.createServer((socket) => {
-      // Plan 08-06 Task 2 Step 1: enforce LAN-only / allowlist on every accepted socket.
-      if (!isAllowedModbusClient(socket, getCfg())) {
-        pushLog('modbus_unauthorized_client', { remote: socket.remoteAddress });
-        socket.destroy();
-        return;
-      }
-      const remote = `${socket.remoteAddress}:${socket.remotePort}`;
-      let buffer = Buffer.alloc(0);
-
-      socket.on('data', (chunk) => {
-        buffer = Buffer.concat([buffer, chunk]);
-        while (buffer.length >= 7) {
-          const len = buffer.readUInt16BE(4);
-          const total = 6 + len;
-          if (buffer.length < total) break;
-
-          const frame = buffer.subarray(0, total);
-          buffer = buffer.subarray(total);
-          const resp = processModbusFrame(frame, remote);
-          if (resp) socket.write(resp);
-        }
-      });
-      socket.on('error', () => {});
-    });
+    const requestedPort = cfg.modbusListenPort;
+    const fallbackPort = ctx.fallbackPort ?? MODBUS_FALLBACK_PORT;
+    listenOn(requestedPort, null);
 
     // Port nicht zu öffnen (belegt, oder < 1024 ohne CAP_NET_BIND_SERVICE): nicht
     // abstürzen — ohne Handler beendete das 'error' den Prozess und der Container
-    // startete in einer Schleife neu. Melden und den Server freigeben, damit ein
-    // späterer start() es erneut versuchen kann.
-    const srv = mbServer;
-    const port = cfg.modbusListenPort;
-    srv.on('error', (err) => {
-      const hint = err?.code === 'EACCES'
-        ? 'Ports unter 1024 brauchen das Recht CAP_NET_BIND_SERVICE (nativ: systemd AmbientCapabilities, Container: DVhub-Image ab dieser Version) — oder einen Port ab 1024 wählen.'
-        : err?.code === 'EADDRINUSE'
-          ? 'Der Port ist schon belegt — anderen Port wählen oder das andere Programm beenden.'
-          : null;
-      state.modbusListen = { ok: false, port, code: err?.code || null, error: err?.message || String(err), hint, at: Date.now() };
-      console.error(`Modbus server: Port ${port} nicht zu öffnen (${err?.code || err?.message})${hint ? ` — ${hint}` : ''}`);
-      pushLog('modbus_listen_failed', { port, code: err?.code || null, error: err?.message || String(err), hint });
-      if (mbServer === srv) mbServer = null;
-      try { srv.close(); } catch { /* lauscht nicht */ }
-    });
-    srv.listen(port, cfg.modbusListenHost, () => {
-      state.modbusListen = { ok: true, port, code: null, error: null, hint: null, at: Date.now() };
-      console.log(`Modbus server listening on ${cfg.modbusListenHost}:${port}`);
-    });
+    // startete in einer Schleife neu. Stattdessen auf den Ersatzport ausweichen;
+    // der VPN-Manager leitet den Port am Tunnel dorthin um (onModbusListen →
+    // setModbusRedirect). Geht auch der nicht, melden und den Server freigeben,
+    // damit ein späterer start() es erneut versucht.
+    function listenOn(port, firstError) {
+      const srv = net.createServer(handleConnection);
+      mbServer = srv;
+      srv.on('error', (err) => {
+        if (mbServer === srv) mbServer = null;
+        try { srv.close(); } catch { /* lauscht nicht */ }
+        const code = err?.code || null;
+        if (!firstError && (code === 'EACCES' || code === 'EADDRINUSE') && fallbackPort && fallbackPort !== port) {
+          console.error(`Modbus server: Port ${port} nicht zu öffnen (${code}) — Ersatzport ${fallbackPort}`);
+          return listenOn(fallbackPort, err);
+        }
+        const cause = firstError || err;
+        const causeCode = cause?.code || null;
+        const hint = listenHint(causeCode);
+        state.modbusListen = {
+          ok: false, port: requestedPort, requestedPort, fallback: false, code: causeCode,
+          error: cause?.message || String(cause), hint, at: Date.now(),
+        };
+        console.error(`Modbus server: Port ${requestedPort} nicht zu öffnen (${causeCode || cause?.message})${firstError ? `, Ersatzport ${port} auch nicht (${code})` : ''}${hint ? ` — ${hint}` : ''}`);
+        pushLog('modbus_listen_failed', {
+          port: requestedPort, code: causeCode, error: cause?.message || String(cause), hint,
+          ...(firstError ? { fallbackPort: port, fallbackCode: code } : {}),
+        });
+      });
+      srv.listen(port, cfg.modbusListenHost, () => {
+        const fallback = Boolean(firstError);
+        const code = firstError?.code || null;
+        const hint = fallback ? listenHint(code) : null;
+        state.modbusListen = {
+          ok: true, port, requestedPort, fallback, code,
+          error: fallback ? (firstError.message || String(firstError)) : null, hint, at: Date.now(),
+        };
+        console.log(`Modbus server listening on ${cfg.modbusListenHost}:${port}${fallback ? ` (Ersatz für ${requestedPort}: ${code})` : ''}`);
+        if (fallback) pushLog('modbus_listen_fallback', { requestedPort, port, code, hint });
+        try { ctx.onModbusListen?.({ requestedPort, port, fallback }); } catch (e) {
+          pushLog('modbus_listen_hook_error', { error: e?.message || String(e) });
+        }
+      });
+    }
   }
 
   function close() {

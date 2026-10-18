@@ -575,6 +575,13 @@ if [[ -f "$INSTALL_DIR/dvhub-ipsec-link.sh" ]]; then
   install -d -o root -g root -m 0755 "$(dirname "$IPSEC_LINK_PATH")"
   install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-ipsec-link.sh" "$IPSEC_LINK_PATH"
 fi
+# Ersatzweg Modbus-Port (2026-10-18): Umleitung 502 → Ersatzport nur am
+# Tunnel-Interface, über eine root-eigene Kopie wie beim IPsec-Hilfsskript.
+MODBUS_REDIRECT_PATH="/usr/local/libexec/dvhub-modbus-redirect"
+if [[ -f "$INSTALL_DIR/dvhub-modbus-redirect.sh" ]]; then
+  install -d -o root -g root -m 0755 "$(dirname "$MODBUS_REDIRECT_PATH")"
+  install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-modbus-redirect.sh" "$MODBUS_REDIRECT_PATH"
+fi
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
 PKILL_PATH="$(command -v pkill || echo /usr/bin/pkill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
@@ -609,6 +616,10 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} reload
 # erlaubt ist nur ein alleinstehendes * am Ende (test/sudoers-sudo-rs.test.js).
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_LINK_PATH} link *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_LINK_PATH} unlink *
+# Ersatzweg Modbus-Port (2026-10-18): Umleitung am Tunnel-Interface nur über
+# das root-eigene Hilfsskript (prüft Interface und Ports selbst).
+${SERVICE_USER} ALL=(root) NOPASSWD: ${MODBUS_REDIRECT_PATH} add *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${MODBUS_REDIRECT_PATH} del
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} link show *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
 # Process control — pkill by exact process name, not generic kill PID.
