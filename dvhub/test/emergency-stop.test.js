@@ -369,3 +369,19 @@ describe('POST /api/control/stop + /resume (T-0099 NOT-HALT)', () => {
     assert.ok(out.body.emergencyStop.pausedAt > 0);
   });
 });
+
+// Systemhinweise (Christin 2026-10-20): state.systemWarnings (Einspeisegrenze
+// nicht angegeben, unbekannter DV-Befehl, Speicherplatz …) wurden nirgends
+// ausgegeben. Jetzt im Status — der Leitstand zeigt sie als Hinweisleiste.
+describe('/api/status: Systemhinweise', () => {
+  it('liefert state.systemWarnings als { id, message }', async () => {
+    const ctx = mockRouteCtx();
+    ctx.state.systemWarnings = [{ id: 'feed_in_cap_unset', message: 'Einspeisegrenze nicht angegeben', extra: 1 }];
+    const out = await call(ctx, 'GET', '/api/status');
+    assert.deepEqual(out.body.systemWarnings, [{ id: 'feed_in_cap_unset', message: 'Einspeisegrenze nicht angegeben' }]);
+  });
+  it('ohne Hinweise: leere Liste', async () => {
+    const out = await call(mockRouteCtx(), 'GET', '/api/status');
+    assert.deepEqual(out.body.systemWarnings, []);
+  });
+});

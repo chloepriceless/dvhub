@@ -81,6 +81,7 @@ import { atomicWriteControlState } from './control-state-io.js';
 import { createModbusServer } from './modbus-server.js';
 import { createDvLimitController } from './dv-interface-luox.js';
 import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
+import { createFeedInCap } from './services/feed-in-cap/index.js';
 import { createEebusService } from './services/eebus/index.js';
 import { createParagraph14aService } from './services/paragraph14a/index.js';
 import { createClockCheck } from './services/clock-check.js';
@@ -125,6 +126,7 @@ import { createInstallerPortalClient } from './services/installer-portal-client.
 // an das Forschungsprojekt — ausgehend, ab Werk aus.
 import { createDatenspende } from './services/datenspende/index.js';
 import { createOrtsnetz } from './services/ortsnetz/index.js';
+import { createVictronGxDevices } from './services/victron-gx/devices.js';
 // Messwert-Eingang HA/Loxone per HTTP-Push (Push-Schlüssel in DATA_DIR).
 import { createInputPush } from './services/input-push.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
@@ -157,7 +159,7 @@ import { writeSharedDvhubUrl } from './services/container-shared.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
-import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
+import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter, createVictronEvcsAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
 import { createMypvRegulator } from './services/devices/mypv-regulator.js';
 import { createMainWallbox } from './services/wallbox/main-wallbox.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
@@ -1312,6 +1314,15 @@ ctx.feedInLimit = createFeedInLimitArbiter({
   applyLimit: (limitW) => scheduler.applyDvFeedInLimit(limitW),
   pushLog,
 });
+// Feste Einspeisegrenze (60/70 %/eigener Wert/keine — ab Werk nicht angegeben):
+// Quelle 'fixed' im Begrenzer, Regelschleife für SunSpec-Geräte, Überwachung.
+const setSystemWarning = (id, message) => {
+  const i = state.systemWarnings.findIndex((w) => w.id === id);
+  if (message == null) { if (i >= 0) state.systemWarnings.splice(i, 1); return; }
+  if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
+};
+ctx.feedInCap = createFeedInCap(ctx, { getTransport: () => transport, setWarning: setSystemWarning });
+if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();
 ctx.applyControlTarget = scheduler.applyControlTarget;
 // Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
 // MQTT-Command-Subscriber gehen durch denselben geprüften Pfad.
@@ -1415,6 +1426,10 @@ if (IS_RUNTIME_PROCESS) ctx.datenspende.start();
 // Frequenz des Netzzählers alle 5 min (nur lesend, eigener Takt).
 ctx.ortsnetz = createOrtsnetz(ctx, { getTransport: () => transport });
 if (IS_RUNTIME_PROCESS) ctx.ortsnetz.start();
+// Geräte am Victron GX (Venus OS 3.80: EEBUS-Wärmepumpen/-Wallboxen, Victron-
+// Wallbox, AC-Lasten) — per Modbus des GX gesucht und nur gelesen.
+ctx.victronGx = createVictronGxDevices(ctx, { getTransport: () => transport });
+if (IS_RUNTIME_PROCESS) ctx.victronGx.start();
 // T-CROSSCHECK: unbedingt konstruiert (routes-api liest getStatus), gestartet nur
 // im Runtime-Prozess und nur wenn konfiguriert (siehe IS_RUNTIME_PROCESS-Block).
 const mqttCrossCheck = createMqttCrossCheck(ctx);
@@ -1503,8 +1518,14 @@ function directWallboxAdapter(type) {
   if (type === 'openevse') return createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse);
   if (type === 'goe') return createGoeAdapter(() => ctx.getCfg()?.wallbox?.goe);
   if (type === 'wattpilot') return createWattpilotAdapter(() => ctx.getCfg()?.wallbox?.wattpilot);
+  if (type === 'victron') return createVictronEvcsAdapter(() => ctx.getCfg()?.wallbox?.victron, {
+    getVictron: () => ctx.getCfg()?.victron, getTransport: () => transport,
+    findUnit: (kind) => ctx.victronGx?.findUnit?.(kind) ?? null
+  });
   return null;
 }
+// Auch für die Einstellungsseite (Live-Zustand der Victron-Wallbox, routes-api.js).
+ctx.directWallboxAdapter = directWallboxAdapter;
 
 const eosEvccBridge = createEosEvccBridge({
   getCfg: () => ctx.getCfg(),
@@ -2663,6 +2684,8 @@ async function gracefulShutdown(signal) {
   safeSync('clockCheck.stop', () => clockCheck.stop());
   safeSync('datenspende.stop', () => ctx.datenspende?.stop?.());
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
+  safeSync('victronGx.stop', () => ctx.victronGx?.stop?.());
+  safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
   safeSync('mypvRegulator.stop', () => { mypvRegulator.stop?.().catch?.(() => {}); });

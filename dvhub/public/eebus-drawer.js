@@ -182,7 +182,51 @@
     box.innerHTML = html;
   }
 
+  let victronToken = null;
+  function fmtKwh(v) { return v == null ? '' : String(Math.round(v * 10) / 10).replace('.', ',') + ' kWh'; }
+  function renderVictron(st) {
+    const box = el('eebus-victron-content');
+    if (!box) return;
+    victronToken = st.uiToken || null;
+    if (!st.supported) {
+      box.innerHTML = '<p class="muted">Nur mit Victron als Hersteller über Modbus TCP (Einstellungen → Hersteller).</p>';
+      return;
+    }
+    const devs = st.devices || [];
+    let html = '';
+    if (!devs.length) {
+      html += '<p class="muted">' + (st.scannedAt ? 'Keine Wärmepumpe, Wallbox oder AC-Last am GX gefunden.' : (st.scanning ? 'Suche läuft …' : 'Noch nicht gesucht.')) + '</p>';
+    } else {
+      html += '<ul class="eebus-list">' + devs.map(function (d) {
+        const parts = [];
+        if (d.powerW != null) parts.push(fmtW(d.powerW));
+        if (d.kind === 'evcharger' && d.statusText) parts.push(d.statusText);
+        if (d.kind === 'heatpump' && d.stateText) parts.push(d.stateText);
+        if (d.kind === 'heatpump' && d.temperatureC != null) parts.push(String(d.temperatureC).replace('.', ',') + ' °C' + (d.targetTemperatureC != null ? ' (Ziel ' + String(d.targetTemperatureC).replace('.', ',') + ' °C)' : ''));
+        if (d.energyKwh != null) parts.push(fmtKwh(d.energyKwh) + ' gesamt');
+        return '<li><strong>' + esc(d.name || d.label) + '</strong> <span class="muted">' + esc(d.label) + ' · Unit ' + esc(d.unitId) + '</span><br>'
+          + esc(parts.join(' · ') || '—') + (d.error ? '<br><span class="eebus-error">' + esc(d.error) + '</span>' : '') + '</li>';
+      }).join('') + '</ul>';
+    }
+    html += '<p class="muted">' + (st.scannedAt ? 'Zuletzt gesucht: ' + esc(new Date(st.scannedAt).toLocaleString('de-DE')) : '')
+      + (st.scanError ? ' · <span class="eebus-error">' + esc(st.scanError) + '</span>' : '') + '</p>'
+      + '<button type="button" class="btn sm" id="eebus-victron-scan"' + (st.scanning ? ' disabled' : '') + '>Neu suchen</button>';
+    box.innerHTML = html;
+  }
+  async function loadVictron() {
+    try {
+      const res = await apiFetch('/api/victron/devices');
+      const st = await json(res);
+      if (!res.ok) throw new Error(st.error || ('HTTP ' + res.status));
+      renderVictron(st);
+    } catch (e) {
+      const box = el('eebus-victron-content');
+      if (box) box.innerHTML = '<p class="eebus-error">Geräte am GX nicht abrufbar: ' + esc(e.message) + '</p>';
+    }
+  }
+
   async function load() {
+    loadVictron();
     try {
       const res = await apiFetch('/api/eebus/status');
       const st = await json(res);
@@ -220,6 +264,12 @@
 
   document.addEventListener('click', async function (e) {
     if (!e.target.closest('#dv-drawer-eebus')) return;
+    if (e.target.closest('#eebus-victron-scan')) {
+      e.target.disabled = true;
+      toast('Suche am GX läuft (bis zu einer Minute) …');
+      try { renderVictron(await post('/api/victron/devices/scan', { uiToken: victronToken })); toast('Suche fertig.'); } catch (err) { toast('Suche fehlgeschlagen: ' + err.message); loadVictron(); }
+      return;
+    }
     const copy = e.target.closest('[data-copy]');
     if (copy) {
       try { await navigator.clipboard.writeText(copy.getAttribute('data-copy')); toast('SKI kopiert.'); } catch (_) { toast('Kopieren nicht möglich.'); }

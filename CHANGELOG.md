@@ -12,6 +12,29 @@ verweist hierher.
 
 ### Neu
 
+- **Einspeisegrenze der Anlage (60 %, 70 %, eigener Wert oder keine).** Neu unter Einstellungen → Netz & Recht.
+  Ab Werk ist nichts gesetzt: bis der Betreiber gewählt hat (auch „keine Grenze“), zeigt DVhub einen Hinweis.
+  Victron: DVhub setzt die Grenze im GX (Reg. 2706, gilt auch ohne DVhub) und prüft sie alle 10 min nach;
+  Direktvermarkter und Steuerbox können nur tiefer begrenzen, danach gilt wieder diese Grenze. Fronius/SunSpec:
+  DVhub regelt den Wechselrichter im 5-s-Takt so, dass die Einspeisung knapp unter der Grenze bleibt (die Grenze
+  muss zusätzlich im Wechselrichter stehen). Liegt die Einspeisung länger als 60 s darüber, meldet DVhub das.
+  `GET /api/feed-in-cap/status`.
+- **Victron EV Charging Station als Wallbox.** Über den Modbus-TCP-Server des GX: Laden (Modus Manuell, Strom,
+  Start), Stopp, „Automatisch“ gibt an Victrons Automatik zurück. Die Unit-ID sucht DVhub selbst.
+- **Geräte am Victron GX.** Seit Venus OS 3.80 koppelt der GX EEBUS-Wärmepumpen und -Wallboxen selbst. DVhub
+  findet sie (dazu Victron-Wallbox und AC-Lasten) über den Modbus des GX und zeigt sie im EEBUS-Fenster —
+  nur lesend. `GET /api/victron/devices`, `POST /api/victron/devices/scan`.
+- **Warnung bei unbekannten Befehlen des Direktvermarkters.** Schickt der Direktvermarkter etwas, das nicht zum
+  gewählten Profil passt (z. B. einen Zwischenwert im Plexlog-Profil), meldet DVhub das im Protokoll
+  (`dv_unknown_command`) und als Systemwarnung, statt es still zu ignorieren.
+
+### Geändert (Direktvermarkter)
+
+- **Plexlog-Profil liest nach der offiziellen LUOX/Lumenaza-Tabelle (02.06.2026).** Input-Register FC4: Einspeisung
+  (volles i32, auch über 32,7 kW richtig), Produktion, Netzbetreiber-Vorgabe 100 %, Referenzleistung. Steuern
+  bleibt wie bisher. Bei „Positiv bedeutet Netzbezug“ gilt jetzt das offizielle Vorzeichen (+ = Einspeisung).
+  Freigabe über Adresse 0 = 255, 255 (so schaltet LUOX tatsächlich frei) wirkt jetzt auch.
+
 - **EOS-Wache auch im Docker-Betrieb.** Hängt ein EOS-Lauf (Standard: länger als 90 min) oder drückt man „EOS neu
   starten“, startet DVhub jetzt auch den EOS-Container neu. Dafür läuft im EOS-Container ein kleiner Wächter
   (`docker/compose.yml`, `configs: dvhub-eos-watch`), der DVhub jede Minute über `127.0.0.1` fragt und EOS bei einer

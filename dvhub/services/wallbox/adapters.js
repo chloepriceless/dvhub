@@ -238,6 +238,92 @@ export function createWattpilotAdapter(getSettings, deps) {
 }
 
 /**
+ * Victron EV Charging Station über den Modbus-TCP-Server des GX
+ * (com.victronenergy.evcharger, CCGX-Modbus-TCP-register-list):
+ *   3814 Maximalstrom · 3815 Modus (0 Manuell, 1 Automatisch, 2 Zeitplan)
+ *   3825 Ladestrom und 3826 Start/Stopp — beide nur im Modus Manuell wirksam.
+ * Laden/Stopp schalten deshalb auf Manuell; „Vorgabe zurücknehmen“ gibt die Box
+ * an ihren Automatik-Modus zurück (PV-Überschuss nach Victron-Einstellung).
+ * Die Unit-ID findet services/victron-gx/devices.js (dynamisch vergeben) oder
+ * steht fest in wallbox.victron.unitId. Host/Port sind die des GX (cfg.victron).
+ */
+const EVCS = Object.freeze({ block: 3814, mode: 3815, setCurrent: 3825, startStop: 3826 });
+const EVCS_MANUAL = 0;
+const EVCS_AUTO = 1;
+
+export function createVictronEvcsAdapter(getSettings, deps = {}) {
+  function target() {
+    const transport = deps.getTransport?.() || null;
+    const v = deps.getVictron?.() || {};
+    if (!v.host || !transport || transport.type === 'mqtt' || typeof transport.mbRequest !== 'function') return null;
+    const fixed = Number(getSettings()?.unitId);
+    const unitId = Number.isInteger(fixed) && fixed >= 1 && fixed <= 247 ? fixed : deps.findUnit?.('evcharger');
+    if (!unitId) return null;
+    return { transport, base: { host: v.host, port: v.port || 502, unitId, timeoutMs: Number(v.timeoutMs) || 2000 } };
+  }
+  const missing = () => ({ ok: false, error: 'keine Victron-Wallbox am GX gefunden (Modbus TCP am GX an?)' });
+
+  async function readBlock(t) {
+    const r = await t.transport.mbRequest({ ...t.base, fc: 3, address: EVCS.block, quantity: 13 });
+    const regs = Array.isArray(r) ? r : r?.values;
+    if (!Array.isArray(regs) || regs.length < 13) throw new Error('Victron-Wallbox: kurze Antwort');
+    return { maxCurrentA: regs[0], mode: regs[1], powerW: regs[7], currentA: regs[9], status: regs[10], setCurrentA: regs[11], startStop: regs[12] };
+  }
+  async function write(t, address, value) {
+    if (typeof t.transport.mbWriteSingle !== 'function') throw new Error('Modbus-Schreiben nicht verfügbar');
+    await t.transport.mbWriteSingle({ ...t.base, address, value });
+  }
+  async function toManual(t, cur) {
+    if (cur.mode !== EVCS_MANUAL) await write(t, EVCS.mode, EVCS_MANUAL);
+  }
+  async function guarded(fn) {
+    const t = target();
+    if (!t) return missing();
+    try { return await fn(t); } catch (e) { return { ok: false, error: e?.message || String(e) }; }
+  }
+
+  return guardWrites({
+    type: 'victron',
+    isConfigured: () => Boolean(target()),
+    charge: (currentA) => guarded(async (t) => {
+      const cur = await readBlock(t);
+      const max = Number(cur.maxCurrentA);
+      const amps = Number.isFinite(max) && max >= 6 && max !== 0xffff ? Math.min(wholeAmps(currentA), max) : wholeAmps(currentA);
+      await toManual(t, cur);
+      await write(t, EVCS.setCurrent, amps);
+      await write(t, EVCS.startStop, 1);
+      return { ok: true };
+    }),
+    stop: () => guarded(async (t) => {
+      await toManual(t, await readBlock(t));
+      await write(t, EVCS.startStop, 0);
+      return { ok: true };
+    }),
+    release: () => guarded(async (t) => {
+      await write(t, EVCS.mode, EVCS_AUTO);
+      return { ok: true };
+    }),
+    status: () => guarded(async (t) => {
+      const d = await readBlock(t);
+      const s = d.status;
+      const error = s >= 8 && s <= 14;
+      // DVhub-Lademodus wie bei go-e (frc): Automatik → pv, Manuell+Start → now, Manuell+Stopp → off.
+      const mode = d.mode === EVCS_AUTO || d.mode === 2 ? 'pv' : d.mode === EVCS_MANUAL ? (d.startStop === 1 ? 'now' : 'off') : null;
+      return {
+        ok: true,
+        connected: error ? null : s !== 0,
+        charging: [2, 21, 22, 23].includes(s),
+        carState: error ? 'error' : s === 3 ? 'complete' : [4, 5, 6, 7].includes(s) ? 'waiting' : s === 2 ? 'charging' : null,
+        powerW: d.powerW === 0xffff ? null : d.powerW,
+        currentA: d.currentA === 0xffff ? null : d.currentA,
+        vehicleSocPct: null,
+        raw: { mode, evcsMode: d.mode, status: s, startStop: d.startStop, setCurrentA: d.setCurrentA, maxCurrentA: d.maxCurrentA, unitId: t.base.unitId }
+      };
+    })
+  });
+}
+
+/**
  * evcc als Adapter — dieselbe Schnittstelle ueber die bestehende Anbindung.
  * Stopp-Modus bleibt evcc-spezifisch (off / pv / minpv).
  */

@@ -9,7 +9,7 @@
 
 export const CHARGER_STATUS_INTERVAL_MS = 15_000;
 export const CHARGER_STATUS_MAX_AGE_MS = 90_000;
-export const DIRECT_CHARGERS = Object.freeze(['openevse', 'goe', 'wattpilot']);
+export const DIRECT_CHARGERS = Object.freeze(['openevse', 'goe', 'wattpilot', 'victron']);
 
 /**
  * @param {object} deps

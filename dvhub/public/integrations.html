@@ -25,7 +25,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/integrations.css?v=20261007-scheddev" />
+  <link rel="stylesheet" href="/integrations.css?v=20261020-victron" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -505,6 +505,17 @@
           </p>
           <p class="dv-drawer-intro dv-drawer-crosslink"><a href="/settings.html#grid">Leistungsgrenzen am Netzanschluss und Failsafe-Werte: Einstellungen &rarr; Netz &amp; Recht</a></p>
           <div id="eebus-content"><p class="muted">Lade &hellip;</p></div>
+          <!-- Geräte am Victron GX (Venus OS 3.80: der GX koppelt EEBUS-Geräte
+               selbst; DVhub liest sie über den Modbus des GX). -->
+          <h3 class="eebus-subhead">Ger&auml;te am Victron GX</h3>
+          <p class="dv-drawer-intro">
+            Ist eine W&auml;rmepumpe oder Wallbox per EEBUS am <strong>Victron GX</strong> gekoppelt
+            (Venus OS ab 3.80: Einstellungen &rarr; Integrationen &rarr; EEBUS), liest DVhub sie
+            &uuml;ber den Modbus-TCP-Server des GX mit &mdash; ebenso Victrons eigene Wallbox und
+            Z&auml;hler in der Rolle &bdquo;AC-Last&ldquo;. Nur lesend; die Victron-Wallbox steuert
+            DVhub, wenn sie unter <em>Wallbox</em> gew&auml;hlt ist.
+          </p>
+          <div id="eebus-victron-content"><p class="muted">Lade &hellip;</p></div>
         </div>
         <div class="dv-drawer-toast" id="dv-drawer-eebus-toast" role="status" aria-live="polite" hidden>&mdash;</div>
       </aside>
@@ -607,6 +618,7 @@
               <option value="openevse">OpenEVSE</option>
               <option value="goe">go-e Charger</option>
               <option value="wattpilot">Fronius Wattpilot</option>
+              <option value="victron">Victron EV Charging Station (&uuml;ber den GX)</option>
             </select>
           </label>
           <div class="evcc-wallbox-fields" id="wallbox-openevse-fields" hidden>
@@ -645,6 +657,13 @@
               </label>
             </div>
             <span class="field-hint">Das Passwort aus der Wattpilot-App. DVhub spricht die Box &uuml;ber dieselbe lokale Schnittstelle an wie die App.</span>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-victron-fields" hidden>
+            <label class="dv-field">
+              <span class="field-label">Unit-ID am GX</span>
+              <input type="number" class="input mono" id="wallbox-victron-unit" min="0" max="247" step="1" placeholder="0 = selbst suchen">
+              <span class="field-hint" id="wallbox-victron-hint">DVhub spricht die Wallbox &uuml;ber den Modbus-TCP-Server des GX an (Adresse wie unter Hersteller &rarr; Victron). Am GX: Einstellungen &rarr; Integrationen &rarr; Modbus TCP-Server an. 0 = DVhub sucht die Unit-ID selbst. Zum Laden stellt DVhub die Box auf &bdquo;Manuell&ldquo;, &bdquo;Automatisch&ldquo; gibt sie an Victrons Automatik zur&uuml;ck.</span>
+            </label>
           </div>
           <div class="evcc-eos-state" id="wallbox-live" hidden>&mdash;</div>
           <div class="evcc-wallbox-fields" data-wallbox-only="evcc">
@@ -1528,8 +1547,8 @@
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/pv-strings-drawer.js?v=20261005"></script>
-  <script src="/eebus-drawer.js?v=20261002"></script>
+  <script src="/eebus-drawer.js?v=20261020-victron"></script>
   <script src="/p14a-drawer.js?v=20261002"></script>
-  <script src="/integrations.js?v=20261007-scheddev"></script>
+  <script src="/integrations.js?v=20261020-victron"></script>
 </body>
 </html>

@@ -1258,6 +1258,8 @@ export function createApiRoutes(ctx) {
     // Datenfluss-Übersicht (rein/raus) — reiner Lesezugriff wie /api/input/status.
     '/api/integrations/dataflow',
     '/api/ortsnetz/status',
+    '/api/victron/devices',
+    '/api/feed-in-cap/status',
     '/api/eos/status',
     '/api/inverter-efficiency/curve',
     '/api/storage/status',
@@ -1301,7 +1303,8 @@ export function createApiRoutes(ctx) {
     ['/api/integration/evcc', 'integrations'], ['/api/integration/evcc/eos', 'integrations'],
     ['/api/integrations/health', 'integrations'], ['/api/datenspende/status', 'integrations'],
     ['/api/input/status', 'integrations'], ['/api/integrations/dataflow', 'integrations'],
-    ['/api/ortsnetz/status', 'integrations'],
+    ['/api/ortsnetz/status', 'integrations'], ['/api/victron/devices', 'integrations'],
+    ['/api/victron/devices/scan', 'integrations'], ['/api/feed-in-cap/status', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -2281,6 +2284,11 @@ export function createApiRoutes(ctx) {
     // (payload.victron.freeze), nicht das Web-Prozess-`state` — sonst bliebe das
     // Banner im Split-Prozess-Betrieb dauerhaft leer.
     payload.telemetryFreeze = payload.victron?.freeze || null;
+    // Systemhinweise (Einspeisegrenze, unbekannter DV-Befehl, Speicherplatz …):
+    // Leitstand zeigt sie als Hinweisleiste (app.js renderSystemWarnings).
+    payload.systemWarnings = Array.isArray(state.systemWarnings)
+      ? state.systemWarnings.map((w) => ({ id: String(w.id || ''), message: String(w.message || '') }))
+      : [];
     // T-CROSSCHECK (2026-07-25): Widerspruch der beiden Datenwege — gleiche
     // Snapshot-Quelle wie oben (Poller-Prozess), nicht das Web-state.
     payload.telemetrySourceMismatch = payload.victron?.sourceMismatch || null;
@@ -4768,6 +4776,28 @@ export function createApiRoutes(ctx) {
       return json(res, 404, { ok: false, error: 'not_found' });
     }
 
+    // ── Feste Einspeisegrenze (services/feed-in-cap) — nur lesen ──────────
+    if (url.pathname === '/api/feed-in-cap/status' && req.method === 'GET') {
+      if (!ctx.feedInCap) return json(res, 503, { ok: false, error: 'feed_in_cap_unavailable' });
+      return json(res, 200, { ok: true, ...ctx.feedInCap.status() });
+    }
+
+    // ── Geräte am Victron GX (services/victron-gx/devices.js) ────────────
+    // Lesen wie die anderen Kacheln; „Neu suchen“ braucht UI-Nonce oder Bearer.
+    if (url.pathname === '/api/victron/devices' && req.method === 'GET') {
+      if (!ctx.victronGx) return json(res, 503, { ok: false, error: 'victron_gx_unavailable' });
+      return json(res, 200, { ok: true, ...ctx.victronGx.status(), uiToken: uiNonce.issue() });
+    }
+    if (url.pathname === '/api/victron/devices/scan' && req.method === 'POST') {
+      if (!ctx.victronGx) return json(res, 503, { ok: false, error: 'victron_gx_unavailable' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      if (!(installerHasValidBearer(req) || uiNonce.check(body?.uiToken))) return json(res, 403, { ok: false, error: 'ui_token_required' });
+      const result = await ctx.victronGx.scan();
+      await ctx.victronGx.refresh();
+      return json(res, 200, { ok: true, result, ...ctx.victronGx.status() });
+    }
+
     if (url.pathname.startsWith('/api/datenspende/')) {
       const ds = ctx.datenspende;
       if (!ds) return json(res, 503, { ok: false, error: 'datenspende_unavailable' });
@@ -5462,16 +5492,21 @@ export function createApiRoutes(ctx) {
         // Klartext zurueck; der Live-Zustand kommt von der Box selbst.
         wallbox: await (async () => {
           const w = raw.wallbox || {};
-          const type = ['evcc', 'openevse', 'goe', 'wattpilot'].includes(w.type) ? w.type : 'evcc';
+          const type = ['evcc', 'openevse', 'goe', 'wattpilot', 'victron'].includes(w.type) ? w.type : 'evcc';
           let live = null;
           if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
           if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
           if (type === 'wattpilot' && w.wattpilot?.host && w.wattpilot?.password) live = await createWattpilotAdapter(() => w.wattpilot).status();
+          if (type === 'victron') {
+            const a = ctx.directWallboxAdapter?.('victron');
+            live = a ? await a.status() : null;
+          }
           return {
             type,
             openevse: { url: w.openevse?.url || '', usernameSet: Boolean(w.openevse?.username), passwordSet: Boolean(w.openevse?.password) },
             goe: { url: w.goe?.url || '' },
             wattpilot: { host: w.wattpilot?.host || '', passwordSet: Boolean(w.wattpilot?.password) },
+            victron: { unitId: Number(w.victron?.unitId) || 0, gxHost: raw.victron?.host || '', foundUnitId: ctx.victronGx?.findUnit?.('evcharger') ?? null },
             live
           };
         })()
@@ -5546,7 +5581,9 @@ export function createApiRoutes(ctx) {
       if (body.wallbox != null) {
         const w = body.wallbox;
         if (typeof w !== 'object') return json(res, 400, { ok: false, error: 'wallbox must be an object' });
-        if ('type' in w && !['evcc', 'openevse', 'goe', 'wattpilot'].includes(w.type)) return json(res, 400, { ok: false, error: 'wallbox.type must be evcc|openevse|goe|wattpilot' });
+        if ('type' in w && !['evcc', 'openevse', 'goe', 'wattpilot', 'victron'].includes(w.type)) return json(res, 400, { ok: false, error: 'wallbox.type must be evcc|openevse|goe|wattpilot|victron' });
+        const vUnitRaw = w.victron?.unitId;
+        if (vUnitRaw !== undefined && vUnitRaw !== null && vUnitRaw !== '' && !(Number.isInteger(Number(vUnitRaw)) && Number(vUnitRaw) >= 0 && Number(vUnitRaw) <= 247)) return json(res, 400, { ok: false, error: 'wallbox.victron.unitId must be 0..247' });
         const urlOk = (u) => u === '' || /^https?:\/\//i.test(u);
         const oeUrl = w.openevse?.url != null ? String(w.openevse.url).trim().slice(0, 256) : null;
         const goeUrl = w.goe?.url != null ? String(w.goe.url).trim().slice(0, 256) : null;
@@ -5558,7 +5595,8 @@ export function createApiRoutes(ctx) {
         if (wpHost !== null && wpHost !== '' && !/^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(wpHost)) {
           return json(res, 400, { ok: false, error: 'wallbox.wattpilot.host must be an address or hostname' });
         }
-        wallboxPatch = { type: w.type, oeUrl, goeUrl, oeUser: w.openevse?.username, oePass: w.openevse?.password, wpHost, wpPass: w.wattpilot?.password };
+        wallboxPatch = { type: w.type, oeUrl, goeUrl, oeUser: w.openevse?.username, oePass: w.openevse?.password, wpHost, wpPass: w.wattpilot?.password,
+          vUnit: vUnitRaw === undefined || vUnitRaw === null || vUnitRaw === '' ? null : Number(vUnitRaw) };
       }
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
       if (wallboxPatch) {
@@ -5566,7 +5604,9 @@ export function createApiRoutes(ctx) {
         wb.openevse = (wb.openevse && typeof wb.openevse === 'object') ? wb.openevse : {};
         wb.goe = (wb.goe && typeof wb.goe === 'object') ? wb.goe : {};
         wb.wattpilot = (wb.wattpilot && typeof wb.wattpilot === 'object') ? wb.wattpilot : {};
+        wb.victron = (wb.victron && typeof wb.victron === 'object') ? wb.victron : {};
         if (wallboxPatch.type) wb.type = wallboxPatch.type;
+        if (wallboxPatch.vUnit !== null) wb.victron.unitId = wallboxPatch.vUnit;
         if (wallboxPatch.wpHost !== null) wb.wattpilot.host = wallboxPatch.wpHost;
         if (wallboxPatch.oeUrl !== null) wb.openevse.url = wallboxPatch.oeUrl;
         if (wallboxPatch.goeUrl !== null) wb.goe.url = wallboxPatch.goeUrl;

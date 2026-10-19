@@ -1431,6 +1431,7 @@
 .eebus-sec h3 { margin: 0 0 6px; font-size: 1rem; }
 .eebus-sec h4 { margin: 12px 0 4px; font-size: .9rem; }
 .eebus-list { list-style: none; margin: 0; padding: 0; }
+.eebus-subhead { margin: 18px 0 6px; font-size: 1rem; }
 .eebus-list li { padding: 6px 0; border-bottom: 1px solid var(--line, rgba(255,255,255,.08)); }
 .eebus-small { font-size: .82rem; }
 .eebus-ski, .eebus-qr { font-size: .8rem; word-break: break-all; }

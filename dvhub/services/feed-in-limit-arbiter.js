@@ -44,8 +44,25 @@ export function createFeedInLimitArbiter({ applyLimit, pushLog = () => {} }) {
     return run;
   }
 
+  /**
+   * Wirksame Grenze erneut schreiben, auch ohne Änderung — wenn das Gerät
+   * etwas anderes zeigt (am GX verstellt, GX getauscht). Ohne Grenze nichts.
+   */
+  function reapply() {
+    const target = effective();
+    if (target === null) return chain;
+    const run = chain.catch(() => {}).then(async () => {
+      await applyLimit(target);
+      pushLog('feed_in_limit', { limitW: target, sources: Object.fromEntries(sources), reapply: true });
+      applied = target;
+    });
+    chain = run;
+    return run;
+  }
+
   return {
     set,
+    reapply,
     effective,
     sources: () => Object.fromEntries(sources),
   };

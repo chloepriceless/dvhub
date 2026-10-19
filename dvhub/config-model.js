@@ -835,7 +835,7 @@ function buildFieldDefinitions() {
         { value: 'plexlog', label: 'Plexlog (bisher)' },
         { value: 'luox', label: 'LUOX / Lumenaza (Belegung 06/2026)' }
       ],
-      help: 'Registerbelegung, die der Direktvermarkter per Modbus liest und schreibt. LUOX: Einspeisung, Produktion, Referenzleistung, Vorgabe 0–100 % mit 15-min-Watchdog. Wirkt sofort, ohne Neustart.'
+      help: 'Wie der Direktvermarkter per Modbus steuert. Lesen ist in beiden gleich und folgt der LUOX/Lumenaza-Tabelle (Input-Register: Einspeisung, Produktion, Netzbetreiber-Vorgabe, Referenzleistung). Plexlog: Aus/An über Register 0 und 3 (so steuert LUOX heute Anlagen mit Plexlog-Treiber). LUOX: Vorgabe 0–100 % über Holding-Register 2 mit 15-min-Watchdog — erst umstellen, wenn der Direktvermarkter seinen Treiber für die Anlage ebenfalls umgestellt hat, sonst wirkt sein Abschalten nicht. Wirkt sofort, ohne Neustart.'
     },
     {
       section: 'system',
@@ -843,12 +843,11 @@ function buildFieldDefinitions() {
       groupLabel: 'Grundsystem',
       groupDescription: 'Webserver, Modbus-Proxy und globale Laufzeit.',
       path: 'dvInterface.luox.referencePowerW',
-      label: 'LUOX: Referenzleistung (Wp)',
+      label: 'Referenzleistung für den Direktvermarkter (Wp)',
       type: 'number',
       min: 0,
       max: 10000000,
-      visibleWhenPath: { path: 'dvInterface.profile', equals: 'luox' },
-      help: 'Leistung der Anlage ohne Abregelung, Grundlage für Teilvorgaben. 0 = Summe der PV-Anlagen aus den Strompreis-Einstellungen.'
+      help: 'Leistung der Anlage ohne Abregelung (Input-Register 5–6), Grundlage für Teilvorgaben. 0 = Summe der PV-Anlagen aus den Strompreis-Einstellungen.'
     },
     {
       section: 'system',
@@ -1017,6 +1016,52 @@ function buildFieldDefinitions() {
       min: 1,
       max: 6,
       help: 'Wie viele Stunden vor der Lade-Deadline der DC-Export abgeschaltet wird, falls der Ziel-SOC noch nicht erreicht wurde. Standard: 2 Stunden.'
+    },
+
+    // Feste Einspeisegrenze (Christin 2026-10-20): keine Vorgabe ab Werk.
+    {
+      section: 'system',
+      group: 'feedInCap',
+      groupLabel: 'Einspeisegrenze',
+      groupDescription: 'Höchste Einspeisung am Netzanschlusspunkt, die für deine Anlage dauerhaft gilt — z. B. 60 % der installierten Leistung (Solarspitzengesetz, neue Anlagen ohne Smart Meter mit Steuerbox), 70 % (ältere kleine Anlagen) oder ein Wert des Netzbetreibers. Begrenzt wird die Einspeisung, nicht die Erzeugung: Haus und Akku nutzen weiter die ganze PV. Direktvermarkter und Steuerbox können nur noch tiefer begrenzen.',
+      path: 'feedInCap.mode',
+      label: 'Einspeisegrenze der Anlage',
+      type: 'select',
+      options: [
+        { value: '', label: '— bitte wählen —' },
+        { value: 'none', label: 'Keine Grenze' },
+        { value: 'pct60', label: '60 % der installierten Leistung' },
+        { value: 'pct70', label: '70 % der installierten Leistung' },
+        { value: 'pct', label: 'Eigener Wert in %' },
+        { value: 'watts', label: 'Eigener Wert in Watt' }
+      ],
+      help: 'Welche Grenze gilt, steht in der Zusage des Netzbetreibers bzw. ergibt sich aus Größe und Inbetriebnahme der Anlage. Prozent beziehen sich auf die installierte PV-Leistung (Summe der kWp unter Tarife & PV-Anlagen). Victron: DVhub setzt die Grenze im GX (ESS → Einspeisung begrenzen); sie gilt dort auch, wenn DVhub nicht läuft. Fronius/SunSpec: DVhub regelt den Wechselrichter nach — stell die Grenze zusätzlich im Wechselrichter ein, denn ohne DVhub fällt er nach wenigen Minuten auf volle Leistung zurück. Überschreitet die gemessene Einspeisung die Grenze länger als eine Minute, meldet DVhub das.'
+    },
+    {
+      section: 'system',
+      group: 'feedInCap',
+      groupLabel: 'Einspeisegrenze',
+      path: 'feedInCap.percent',
+      empty: 'null',
+      label: 'Einspeisegrenze (%)',
+      type: 'number',
+      min: 1,
+      max: 100,
+      visibleWhenPath: { path: 'feedInCap.mode', equals: 'pct' },
+      help: 'Prozent der installierten PV-Leistung (kWp).'
+    },
+    {
+      section: 'system',
+      group: 'feedInCap',
+      groupLabel: 'Einspeisegrenze',
+      path: 'feedInCap.watts',
+      empty: 'null',
+      label: 'Einspeisegrenze (W)',
+      type: 'number',
+      min: 0,
+      max: 10000000,
+      visibleWhenPath: { path: 'feedInCap.mode', equals: 'watts' },
+      help: 'Höchste Einspeisung in Watt. 0 = Nulleinspeisung.'
     },
 
     // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
@@ -3989,6 +4034,9 @@ export function createDefaultConfig() {
       deadbandW: 50,
       revertTimeoutS: 300
     },
+    // Feste Einspeisegrenze (services/feed-in-cap): ab Werk NICHT angegeben —
+    // der Betreiber wählt, welche Grenze für die Anlage gilt, oder „keine“.
+    feedInCap: { mode: '', percent: null, watts: null },
     victron: {
       transport: 'modbus',
       // T-0080: generic product default — operator configures their own Victron
@@ -4410,13 +4458,15 @@ export function createDefaultConfig() {
     },
     // Wallbox fuer die EOS-Bruecke (eos-evcc-bridge.js): 'evcc' (Standard) oder
     // direkt 'openevse' (Claims-API) / 'goe' (API v2) / 'wattpilot' (Fronius,
-    // WebSocket mit Passwort). Bedienung im EVCC-Panel der Integrationsseite.
+    // WebSocket mit Passwort) / 'victron' (EV Charging Station über den Modbus
+    // des GX; unitId 0 = selbst suchen). Bedienung im EVCC-Panel der Integrationsseite.
     // Passwort/Nutzer: config-redaction.js.
     wallbox: {
       type: 'evcc',
       openevse: { url: '', username: '', password: '' },
       goe: { url: '' },
-      wattpilot: { host: '', password: '' }
+      wattpilot: { host: '', password: '' },
+      victron: { unitId: 0 }
     },
     // PV-Strings / Solar-Logger (services/pv-strings): Erzeugung je String bzw.
     // Tracker erfassen und als CSV fuer die pvnode-Kalibrierung aufbereiten.
@@ -5689,7 +5739,7 @@ const SETTINGS_AREAS = [
     label: 'Netz & Recht',
     icon: '§',
     description: 'Was am Netzanschluss erlaubt und vorgeschrieben ist: Netzladen und Netzentladung, §14a, Abregelung.',
-    groups: ['legalSwitches', 'paragraph14a', 'module3', 'eebus'],
+    groups: ['legalSwitches', 'feedInCap', 'paragraph14a', 'module3', 'eebus'],
     advanced: ['zeroFeedIn'],
     editors: ['mispelChanges']
   },

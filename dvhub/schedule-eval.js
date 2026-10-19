@@ -19,6 +19,7 @@ import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automati
 import { safeInterval } from './services/safe-async.js';
 import { encodeSunspecFloat32 } from './services/inverter/sunspec.js';
 import { getPowerLimits } from './services/power-limits.js';
+import { capLoopStep } from './services/feed-in-cap/index.js';
 import { betaGateOpen } from './beta-features.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
@@ -1774,6 +1775,76 @@ export function createScheduleEvaluator(ctx) {
   }
 
   // ---------------------------------------------------------------------------
+  // Feste Einspeisegrenze auf Geräten ohne Einspeisebegrenzer (2026-10-20,
+  // services/feed-in-cap): nur Erzeugungsgrenze SunSpec WMaxLimPct (Fronius).
+  // Regelt die Erzeugung so, dass die gemessene Einspeisung knapp unter der
+  // Grenze bleibt (capLoopStep). Während einer Sperre (DV/Negativpreis) regelt
+  // zeroFeedInTick allein; danach übernimmt diese Schleife wieder. Rückfall:
+  // WMaxLimPct_RvrtTms — die gesetzliche Grenze muss zusätzlich im Gerät stehen.
+  // ---------------------------------------------------------------------------
+  let ficBusy = false;
+  async function feedInCapTick() {
+    if (ficBusy || stopping) return;
+    ficBusy = true;
+    const fic = (state.ctrl._fic ??= { capActive: false, limitPct: null, below: 0, lastErrLogAt: 0 });
+    try {
+      const cfg = getCfg();
+      const limitW = ctx.feedInCap?.limitForLoop?.() ?? null;
+      const pctConf = cfg.controlWrite?.wMaxLimPct;
+      const enaConf = cfg.controlWrite?.wMaxLimEna;
+      const rvrtConf = cfg.controlWrite?.wMaxLimPctRvrtTms;
+      const blocked = state.ctrl._lastDvFeedIn === false || state.ctrl._zfi?.capActive === true;
+      if (limitW == null || blocked || transport.type !== 'modbus') {
+        // Keine Grenze mehr: eigene Drosselung abräumen. Bei Sperre übernimmt
+        // zeroFeedInTick die Register — hier nur den eigenen Zustand vergessen.
+        if (fic.capActive && limitW == null && !blocked && enaConf?.address != null) await zfiWrite(enaConf, 0);
+        if (fic.capActive) pushLog('feed_in_cap_loop_off', { reason: blocked ? 'blocked' : 'no_limit' });
+        fic.capActive = false; fic.limitPct = null; fic.below = 0;
+        return;
+      }
+      const meterFresh = state.meter?.ok === true && (Date.now() - Number(state.meter.updatedAt || 0)) < 15000;
+      const act = capLoopStep(fic, {
+        exportW: state.victron?.gridExportW, importW: state.victron?.gridImportW, limitW,
+        refW: getPowerLimits(cfg).limits.inverterMaxPowerW, pvW: state.victron?.pvTotalW, meterFresh
+      });
+      if (!act.write) return;
+      if (act.ena === 0) {
+        await zfiWrite(enaConf, 0);
+        pushLog('feed_in_cap_loop_off', { reason: 'below_limit', limitW });
+        return;
+      }
+      try {
+        // Rückfallzeit zuerst: ohne sie bliebe die Drosselung nach einem
+        // DVhub-Ausfall unbegrenzt stehen.
+        if (act.enter && rvrtConf?.enabled && rvrtConf.address != null) {
+          await zfiWrite(rvrtConf, Number(cfg.zeroFeedIn?.revertTimeoutS ?? 300));
+        }
+        await zfiWrite(pctConf, act.limitPct);
+        await zfiWrite(enaConf, 1);
+      } catch (e) {
+        // Einstieg nicht vollständig geschrieben → beim nächsten Takt neu einsteigen
+        // (mit Rückfallzeit), statt ohne sie weiterzuregeln.
+        if (act.enter) { fic.capActive = false; fic.limitPct = null; fic.below = 0; }
+        throw e;
+      }
+      if (act.enter) {
+        pushLog('feed_in_cap_loop_on', { limitW, limitPct: Number(act.limitPct.toFixed(2)), exportW: state.victron?.gridExportW });
+        telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+          eventType: 'feed_in_cap_loop_on', target: 'wMaxLimPct', valueNum: Number(act.limitPct.toFixed(2)),
+          reason: 'feed_in_cap', source: 'runtime', meta: { limitW }
+        }));
+      }
+    } catch (e) {
+      if (Date.now() - fic.lastErrLogAt >= ZFI_ERRLOG_MS) {
+        fic.lastErrLogAt = Date.now();
+        pushLog('feed_in_cap_loop_error', { error: e?.message || String(e) }, 'warn');
+      }
+    } finally {
+      ficBusy = false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Timer lifecycle (modeled on polling.js)
   // ---------------------------------------------------------------------------
 
@@ -1794,7 +1865,11 @@ export function createScheduleEvaluator(ctx) {
     // Setpoint-Pfad). Der Tick guarded sich selbst heraus, wenn das Profil das
     // Feature nicht deklariert — auf Victron-Anlagen bleibt er ein No-op.
     zfiInterval = safeInterval('schedule-eval.zero-feedin',
-      () => { zeroFeedInTick().catch(() => { /* zfi loggt selbst (throttled) */ }); },
+      () => {
+        // Erst die Sperre (zfi), dann die feste Einspeisegrenze — nie gleichzeitig.
+        zeroFeedInTick().catch(() => { /* zfi loggt selbst (throttled) */ })
+          .then(() => feedInCapTick()).catch(() => {});
+      },
       ZFI_TICK_MS);
   }
 
@@ -1806,5 +1881,5 @@ export function createScheduleEvaluator(ctx) {
     // aktiver Deckel am Gerät verfällt über WMaxLimPct_RvrtTms von selbst.
   }
 
-  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, applyDvFeedInLimit, zeroFeedInTick, start, stop };
+  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, applyDvFeedInLimit, zeroFeedInTick, feedInCapTick, start, stop };
 }

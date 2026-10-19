@@ -1900,6 +1900,28 @@ function renderVictronAlarms(va) {
   if (span) span.textContent = text;
 }
 
+// Systemhinweise (2026-10-20). Quelle: /api/status.systemWarnings — z. B.
+// „Einspeisegrenze nicht angegeben“, unbekannter Befehl des Direktvermarkters,
+// Speicherplatz. Gelb wie Victron-Warnungen, nur Hinweis (keine Aktion).
+function renderSystemWarnings(list) {
+  const id = 'systemWarningsBanner';
+  const existing = document.getElementById(id);
+  const items = Array.isArray(list) ? list.filter((w) => w && w.message) : [];
+  if (!items.length) { if (existing) existing.remove(); return; }
+  let banner = existing;
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = id;
+    banner.className = 'victron-alarm-banner warn';
+    document.body.prepend(banner);
+  }
+  banner.replaceChildren(...items.map((w) => {
+    const line = document.createElement('div');
+    line.textContent = '⚠️ ' + w.message;
+    return line;
+  }));
+}
+
 // T-FREEZE Einfrier-Wächter-Banner (2026-07-24, GX-Modbus-Zwischenfall). Quelle:
 // /api/status.telemetryFreeze. Der Zwischenfall lief 2,5 h STILL — die Werte sahen
 // frisch aus, waren aber eingefroren. Das Banner ist die sichtbare Hälfte des
@@ -2017,6 +2039,7 @@ function renderDashboardStatus(status) {
 
   safeRender('dashboard.victron-alarms', () => {
     renderVictronAlarms(status.victronAlarms);
+    renderSystemWarnings(status.systemWarnings);
   });
 
   safeRender('dashboard.telemetry-freeze', () => {

@@ -13,12 +13,13 @@
 
 import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
 
-export const WALLBOX_TYPES = Object.freeze(['evcc', 'openevse', 'goe', 'wattpilot']);
+export const WALLBOX_TYPES = Object.freeze(['evcc', 'openevse', 'goe', 'wattpilot', 'victron']);
 export const WALLBOX_LABELS = Object.freeze({
   evcc: 'evcc',
   openevse: 'OpenEVSE',
   goe: 'go-e Charger',
-  wattpilot: 'Fronius Wattpilot'
+  wattpilot: 'Fronius Wattpilot',
+  victron: 'Victron EV Charging Station'
 });
 
 // Lademodi. evcc kennt vier; eine direkt angebundene Box drei — „PV“ heißt
@@ -40,8 +41,9 @@ export function wallboxType(cfg) {
   return WALLBOX_TYPES.includes(t) ? t : 'evcc';
 }
 
-/** Lademodus einer direkten Box aus ihrem Rohzustand (go-e/Wattpilot: frc). */
+/** Lademodus einer direkten Box aus ihrem Rohzustand (go-e/Wattpilot: frc; Victron: mode). */
 export function directModeFromRaw(raw) {
+  if (['off', 'pv', 'now'].includes(raw?.mode)) return raw.mode;
   const frc = Number(raw?.frc);
   if (frc === 1) return 'off';
   if (frc === 2) return 'now';

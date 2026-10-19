@@ -7,6 +7,7 @@ import { u16 } from './server-utils.js';
 import {
   dvInterfaceProfile, luoxInputRegisters, luoxHoldingRegisters, readWindow, luoxApplyWrite,
 } from './dv-interface-luox.js';
+import { classifyDvRequest } from './dv-profile-check.js';
 
 // Ersatzport, wenn modbusListenPort nicht zu öffnen ist (siehe start()).
 export const MODBUS_FALLBACK_PORT = 1502;
@@ -73,6 +74,8 @@ export function createModbusServer(ctx) {
     if (addr === 0 && values.length >= 2) {
       if (values[0] === 0 && values[1] === 0) return ctx.setForcedOff('fc16_addr0_0000');
       if (values[0] === 0xffff && values[1] === 0xffff) return ctx.clearForcedOff('fc16_addr0_ffff');
+      // So schaltet LUOX tatsächlich frei (Audit Mai–Okt 2026, zusammen mit Adresse 3 = 0).
+      if (values[0] === 0x00ff && values[1] === 0x00ff) return ctx.clearForcedOff('fc16_addr0_00ff');
     }
     if (addr === 3 && values.length >= 1) {
       if (values[0] === 1) return ctx.setForcedOff('fc16_addr3_0001');
@@ -91,6 +94,47 @@ export function createModbusServer(ctx) {
     };
   }
 
+  // Was nicht zum Profil passt, melden (dv-profile-check.js): Protokoll je
+  // Muster höchstens stündlich, Systemwarnung bis 24 h nach dem letzten Mal.
+  const DV_UNKNOWN_LOG_MS = 60 * 60 * 1000;
+  const DV_UNKNOWN_WARN_MS = 24 * 60 * 60 * 1000;
+  const PROFILE_LABEL = { plexlog: 'Plexlog', luox: 'LUOX / Lumenaza' };
+  function setWarning(id, message) {
+    const list = state.systemWarnings;
+    if (!Array.isArray(list)) return;
+    const i = list.findIndex((w) => w.id === id);
+    if (message == null) { if (i >= 0) list.splice(i, 1); return; }
+    if (i >= 0) list[i] = { id, message }; else list.push({ id, message });
+  }
+  function checkDvRequest(profile, req, remote) {
+    const now = Date.now();
+    const st = (state.dvUnknown ??= { count: 0, seen: {}, last: null });
+    if (st.last && now - st.last.at > DV_UNKNOWN_WARN_MS) setWarning('dv_unknown_command', null);
+    const reason = classifyDvRequest(profile, req);
+    if (!reason) return;
+    st.count += 1;
+    st.last = { at: now, reason, remote, profile };
+    if (now - (st.seen[reason] || 0) >= DV_UNKNOWN_LOG_MS) {
+      st.seen[reason] = now;
+      pushLog('dv_unknown_command', { profile, remote, reason, fc: req.fc, addr: req.addr, values: req.values }, 'warn');
+    }
+    const time = new Date(now).toLocaleString('de-DE', { timeZone: getCfg()?.timeZone || 'Europe/Berlin' });
+    setWarning('dv_unknown_command', `Direktvermarkter hat etwas gesendet, das nicht zum Profil „${PROFILE_LABEL[profile] || profile}“ passt: ${reason} (${time}). DVhub hat es nicht umgesetzt — bitte mit dem Direktvermarkter klären.`);
+  }
+
+  function parseForCheck(frame, fc, len) {
+    if ((fc === 3 || fc === 4) && len >= 6) return { fc, addr: frame.readUInt16BE(8), qty: frame.readUInt16BE(10) };
+    if (fc === 6 && len >= 6) return { fc, addr: frame.readUInt16BE(8), values: [frame.readUInt16BE(10)] };
+    if (fc === 16 && len >= 7) {
+      const qty = frame.readUInt16BE(10);
+      const bc = frame.readUInt8(12);
+      if (bc !== qty * 2 || 13 + bc > 6 + len) return null;
+      return { fc, addr: frame.readUInt16BE(8), values: Array.from({ length: qty }, (_, i) => frame.readUInt16BE(13 + i * 2)) };
+    }
+    if (fc === 3 || fc === 4 || fc === 6 || fc === 16) return null; // kaputter Rahmen → Ausnahme wie bisher
+    return { fc };
+  }
+
   function processModbusFrame(frame, remote) {
     if (frame.length < 8) return null;
     const tid = frame.readUInt16BE(0);
@@ -102,6 +146,9 @@ export function createModbusServer(ctx) {
 
     ctx.expireLeaseIfNeeded();
 
+    const req = parseForCheck(frame, fc, len);
+    if (req) checkDvRequest(dvInterfaceProfile(getCfg()), req, remote);
+
     if (dvInterfaceProfile(getCfg()) === 'luox') return processLuoxFrame(frame, remote, { tid, unit, fc, len });
 
     if (fc === 3 || fc === 4) {
@@ -109,6 +156,15 @@ export function createModbusServer(ctx) {
       const addr = frame.readUInt16BE(8);
       const qty = frame.readUInt16BE(10);
       if (qty < 1 || qty > 125) return buildException(tid, unit, fc, 3);
+      // FC4 (Input) nach der offiziellen LUOX/Lumenaza-Tabelle (02.06.2026):
+      // die Plexlog-Leseregister waren nur abgeschaut — Reg 0–1 Einspeisung
+      // (jetzt volles i32), 2–3 Produktion, 4 Netzbetreiber-%, 5–6 Referenz.
+      // FC3 und das Schreiben bleiben im gemeinsamen Plexlog-Bereich.
+      if (fc === 4) {
+        const regs = readWindow(luoxInputRegisters(state, getCfg()), addr, qty);
+        rememberModbusQuery({ remote, fc, addr, qty, sample: regs.slice(0, 8) });
+        return regsResponse(tid, unit, fc, regs);
+      }
       const { out, regs } = buildReadResp(tid, unit, fc, addr, qty);
       rememberModbusQuery({ remote, fc, addr, qty, sample: regs.slice(0, 8) });
       return out;
