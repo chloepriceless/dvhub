@@ -24,7 +24,7 @@ function fakeBox({ pro = false, state = 2, mode = 1 } = {}) {
       },
       mbWriteMultiple: async ({ address, values, unitId }) => {
         units.add(unitId);
-        if (pro && (address === 87 || address === 89)) throw new Error('Modbus exception 2');
+        if (pro && (address === 87 || address === 89)) throw new Error('modbus exception 2');
         writes.push([address, ...values]); reg[address] = values[0]; return {};
       },
     },
@@ -65,4 +65,20 @@ test('Eigene Unit-ID und Fehlertexte mit Herstellernamen', async () => {
   assert.deepEqual([...b.units], [7]);
   const none = createDaheimladenAdapter(() => ({ host: '' }), { getTransport: () => b.transport });
   assert.match((await none.charge(10)).error, /^DaheimLaden:/);
+});
+
+test('Zeitüberschreitung beim Rückfall ist kein PRO: Fehler melden, beim nächsten Mal wieder schreiben', async () => {
+  const b = fakeBox();
+  let fail = true;
+  const write = b.transport.mbWriteMultiple;
+  b.transport.mbWriteMultiple = async (req) => {
+    if (fail && req.address === 87) throw new Error('Modbus timeout');
+    return write(req);
+  };
+  const a = dl(b);
+  assert.equal((await a.charge(10)).ok, false);
+  fail = false;
+  assert.equal((await a.charge(10)).ok, true);
+  assert.deepEqual(b.writes.slice(0, 2), [[87, 60], [89, 600]]);
+  assert.notEqual((await a.status()).raw.fallback, false);
 });

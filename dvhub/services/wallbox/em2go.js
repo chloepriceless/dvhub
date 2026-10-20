@@ -61,13 +61,16 @@ export function createEm2goAdapter(getSettings, deps = {}, variant = {}) {
     if (typeof x.t.mbWriteMultiple !== 'function') return { ok: false, error: `${name}: Modbus-Schreiben (FC16) nicht verfügbar` };
     try { await fn(x); return { ok: true }; } catch (e) { return { ok: false, error: `${name}: ${e?.message || e}` }; }
   }
-  async function putFallback(x, da) {
+  // Nur eine echte Ablehnung durch die Box (Modbus-Ausnahme, z. B. 2 = Adresse unbekannt)
+  // heißt „kein Rückfall“ (DaheimLaden PRO); Zeitüberschreitung o. Ä. wird gemeldet.
+  const unsupported = (e) => fallbackOptional && /modbus exception/i.test(String(e?.message || e));
+  async function putFallback(x, da, { timeout = true } = {}) {
     if (!fallback) return;
     try {
       await put(x, 87, da);
-      await put(x, 89, TIMEOUT_S);
+      if (timeout) await put(x, 89, TIMEOUT_S);
     } catch (e) {
-      if (!fallbackOptional) throw e;
+      if (!unsupported(e)) throw e;
       fallback = false;
     }
   }
@@ -95,7 +98,7 @@ export function createEm2goAdapter(getSettings, deps = {}, variant = {}) {
     }),
     release: () => guarded(async (x) => {
       const max = await maxDa(x);
-      if (fallback) { try { await put(x, 87, max); } catch (e) { if (!fallbackOptional) throw e; fallback = false; } }
+      await putFallback(x, max, { timeout: false });
       await put(x, 91, max);
       if (switchedMode) { await put(x, 93, 0, { force: true }); switchedMode = false; }
       else if (stopped) await put(x, 95, 1, { force: true });
