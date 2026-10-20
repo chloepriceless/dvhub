@@ -4491,6 +4491,8 @@ export function createDefaultConfig() {
       peblar: { host: '' },
       // NRGkick Gen2: lokale JSON-API (SmartModule ≥ 4.0), BasicAuth optional.
       nrgkick: { host: '', username: '', password: '' },
+      // ABL eM4 Single/Twin: Outlet 1 = links/einzeln, 2 = rechts.
+      abl: { host: '', outlet: 1 },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },

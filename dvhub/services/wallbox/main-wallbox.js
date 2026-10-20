@@ -32,7 +32,8 @@ export const WALLBOX_LABELS = Object.freeze({
   bender: 'Bender / Mennekes Professional / SMA EV Charger Business',
   salia: 'Hardy Barth Salia',
   peblar: 'Peblar',
-  nrgkick: 'NRGkick'
+  nrgkick: 'NRGkick',
+  abl: 'ABL eM4'
 });
 
 // Lademodi. evcc kennt vier; eine direkt angebundene Box drei — „PV“ heißt

@@ -70,6 +70,8 @@ const INTENTIONAL = new Map([
   ['wallbox.nrgkick.host', 'EVCC-Schublade auf der Integrationsseite (NRGkick)'],
   ['wallbox.nrgkick.username', 'EVCC-Schublade auf der Integrationsseite (NRGkick)'],
   ['wallbox.nrgkick.password', 'EVCC-Schublade auf der Integrationsseite (NRGkick)'],
+  ['wallbox.abl.host', 'EVCC-Schublade auf der Integrationsseite (ABL)'],
+  ['wallbox.abl.outlet', 'EVCC-Schublade auf der Integrationsseite (ABL)'],
   ['wallbox.bender.variant', 'EVCC-Schublade auf der Integrationsseite (Bender)'],
   ['wallbox.ocpp.chargePointId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],
   ['wallbox.ocpp.connectorId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],

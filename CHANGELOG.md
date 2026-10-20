@@ -12,6 +12,9 @@ verweist hierher.
 
 ### Neu
 
+- **ABL eM4 Single/Twin als Wallbox** (Modbus TCP nach ABL-Beschreibung R01, 12/2023): EMS-Vorgabe Icmax (0,1 A, 0 = aus,
+  höchstens Idefault), Status, Leistung, Energie, Ströme; Twin: Ladepunkt links/rechts. Kein Watchdog dokumentiert.
+
 - **NRGkick Gen2 als Wallbox** (lokale JSON-API, SmartModule ≥ 4.0): `current_set`, `charge_pause`, Status/Leistung/Energie
   aus `/values`; BasicAuth optional (geschwärzt). Kein Watchdog.
 
