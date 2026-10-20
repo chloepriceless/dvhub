@@ -299,6 +299,7 @@ separater Prozess / Betriebssystemdienst betrieben. Sie wird vom Installer
 | Ollama (Tier 3, optional) | MIT | permissiv | per `install.sh` mit gepinnter SHA-256 nachgeladen |
 | TinyLlama (LLM-Modell, Tier 3) | Apache-2.0 | permissiv | kommerzielle Nutzung erlaubt |
 | Akkudoktor-EOS v0.3.0 (Tier 3, optional) | Apache-2.0 | permissiv | eigener systemd-Dienst auf 127.0.0.1:8503 |
+| evcc 0.317.2 (optional, Fahrzeugtreiber) — Copyright (c) evcc.io (andig, naltatis, premultiply) | MIT; ausgenommen die „sponsor-required components“ (Wallbox-Treiber mit Sponsor-Pflicht, Fahrzeugtreiber Tronity, `util/sponsor`), siehe `LICENSES/exclusions.md` im evcc-Repository | permissiv | wird **nicht** mit DVhub ausgeliefert: erst wenn der Betreiber „Ladestand vom Auto (evcc-Fahrzeugtreiber)“ einschaltet, lädt das Gerät das offizielle Release von github.com/evcc-io/evcc (gepinnte SHA-256 in `dvhub/services/vehicle-evcc/index.js`) und startet es als separaten Prozess (`evcc vehicle`). DVhub nutzt nur MIT-lizenzierte Fahrzeugtreiber; Tronity und Sponsor-Funktionen sind ausgeschlossen. |
 
 **Kernaussage zum Copyleft:** OpenVPN, WireGuard und strongSwan sind die
 einzigen Copyleft-Komponenten. Da DVhub sie ausschließlich als getrennte

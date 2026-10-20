@@ -785,6 +785,44 @@
             <div class="evcc-eos-state" id="evcc-eos-state">&mdash;</div>
           </div>
 
+          <!-- Ladestand vom Auto über evccs Fahrzeug-Treiber (services/vehicle-evcc).
+               Inhalt rendert integrations.js (loadVehicleEvcc). -->
+          <div class="evcc-wallbox-fields" id="vev-section">
+            <h3 class="eebus-subhead">Ladestand vom Auto (evcc-Fahrzeugtreiber)</h3>
+            <p class="dv-drawer-intro">
+              DVhub fragt den Ladestand direkt beim Hersteller ab &mdash; mit den Fahrzeug-Treibern von
+              <a href="https://evcc.io" target="_blank" rel="noopener">evcc</a> (MIT-Lizenz, ohne evcc-Lizenz).
+              evcc muss dafür nicht installiert sein: DVhub lädt das Programm beim ersten Einschalten selbst
+              (ca. 30&nbsp;MB) und fragt damit nur das Auto ab. Nicht dabei sind Marken, die eine Anmeldung im
+              Browser brauchen (z.&nbsp;B. BMW, Ford, Porsche, Volvo).
+            </p>
+            <p class="field-hint">
+              evcc &copy; evcc.io (andig, naltatis, premultiply), MIT-Lizenz &mdash;
+              <a href="https://github.com/evcc-io/evcc/blob/master/LICENSE" target="_blank" rel="noopener">Lizenztext</a> ·
+              <a href="https://github.com/chloepriceless/dvhub/blob/main/THIRD-PARTY-LICENSES.md" target="_blank" rel="noopener">Lizenzhinweise von DVhub</a>
+            </p>
+            <label class="dv-field dv-field-inline">
+              <input type="checkbox" id="vev-enabled">
+              <span class="field-label">Ladestand über evcc-Treiber abfragen</span>
+            </label>
+            <label class="dv-field">
+              <span class="field-label">Fahrzeug / Dienst</span>
+              <select class="input" id="vev-product"><option value="">— Marke wählen —</option></select>
+            </label>
+            <p class="field-hint" id="vev-note" hidden></p>
+            <div id="vev-params"></div>
+            <label class="dv-field">
+              <span class="field-label">Abfrage alle (Minuten)</span>
+              <input type="number" class="input mono" id="vev-interval" min="5" max="240" step="1">
+              <span class="field-hint">Solange das Auto steckt; sonst höchstens stündlich. Manche Hersteller liefern nur alle 15&nbsp;min neue Werte.</span>
+            </label>
+            <div class="evcc-eos-state" id="vev-state">&mdash;</div>
+            <div class="dv-drawer-actions">
+              <button type="button" class="btn sm ghost" id="vev-refresh">Jetzt abfragen</button>
+              <button type="button" class="btn sm primary" id="vev-save">Fahrzeug speichern</button>
+            </div>
+          </div>
+
           <div class="dv-field-validation" id="evcc-banner" hidden></div>
           <div class="dv-drawer-actions">
             <button type="button" class="btn sm ghost" id="evcc-refresh">Status aktualisieren</button>
@@ -1549,6 +1587,6 @@
   <script src="/pv-strings-drawer.js?v=20261005"></script>
   <script src="/eebus-drawer.js?v=20261020-victron"></script>
   <script src="/p14a-drawer.js?v=20261002"></script>
-  <script src="/integrations.js?v=20261020-victron"></script>
+  <script src="/integrations.js?v=20261020-vev"></script>
 </body>
 </html>

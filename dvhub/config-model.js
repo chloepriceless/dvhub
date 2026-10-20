@@ -2732,11 +2732,12 @@ function buildFieldDefinitions() {
       type: 'select',
       default: 'auto',
       options: [
-        { value: 'auto', label: 'automatisch (TeslaMate, sonst Wallbox, sonst MQTT)' },
+        { value: 'auto', label: 'automatisch (TeslaMate, sonst Wallbox, sonst Fahrzeug über evcc-Treiber, sonst MQTT)' },
         { value: 'teslamate', label: 'TeslaMate' },
         // Wert bleibt 'evcc' (Bestandsconfigs); gemeint ist die Hauptwallbox —
         // evcc oder eine direkt angebundene Box, die den Ladestand meldet (OpenEVSE).
         { value: 'evcc', label: 'Wallbox (evcc oder direkt angebunden)' },
+        { value: 'evccvehicle', label: 'Fahrzeug über evcc-Treiber (Integrationen → Wallbox)' },
         { value: 'mqtt', label: 'MQTT-Topic (z. B. Home Assistant)' }
       ],
       help: 'Woher DVhub den Ladestand des Autos nimmt, das EOS mitplant. \u201eMQTT-Topic\u201c funktioniert mit jeder Marke: Home Assistant (oder eine andere Quelle) ver\u00f6ffentlicht den Ladestand per MQTT, DVhub liest ihn von dem Topic unten. Liefern mehrere Quellen Werte, legt diese Auswahl fest, welches Auto gemeint ist.'
@@ -4037,6 +4038,9 @@ export function createDefaultConfig() {
     // Feste Einspeisegrenze (services/feed-in-cap): ab Werk NICHT angegeben —
     // der Betreiber wählt, welche Grenze für die Anlage gilt, oder „keine“.
     feedInCap: { mode: '', percent: null, watts: null },
+    // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
+    // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.
+    vehicleEvcc: { enabled: false, template: '', params: {}, intervalMin: 15 },
     victron: {
       transport: 'modbus',
       // T-0080: generic product default — operator configures their own Victron

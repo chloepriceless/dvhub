@@ -2578,6 +2578,7 @@
     } catch (e) {
       showDrawerToast('evcc', 'err', '✗ EVCC laden fehlgeschlagen: ' + e.message);
     }
+    loadVehicleEvcc();
   }
   var evccLoadpointsCache = [];
   function fillEvccEos(eos, lps) {
@@ -2852,13 +2853,132 @@
       buttonEl.textContent = origText;
     }
   }
+  // === evcc-Fahrzeugtreiber (services/vehicle-evcc, 2026-10-20) ===
+  var vevData = null;
+  function vevTemplate(name) {
+    var list = (vevData && vevData.catalog && vevData.catalog.templates) || [];
+    for (var i = 0; i < list.length; i++) if (list[i].template === name) return list[i];
+    return null;
+  }
+  function vevRenderParams(templateName, values, secretsSet) {
+    var box = document.getElementById('vev-params');
+    var note = document.getElementById('vev-note');
+    if (!box) return;
+    box.textContent = '';
+    var t = vevTemplate(templateName);
+    if (note) { note.hidden = !(t && t.note); note.textContent = t && t.note ? t.note : ''; }
+    if (!t) return;
+    t.params.forEach(function (p) {
+      var lab = document.createElement('label');
+      lab.className = 'dv-field';
+      var span = document.createElement('span');
+      span.className = 'field-label';
+      span.textContent = p.label + (p.required ? ' *' : '') + (p.unit ? ' (' + p.unit + ')' : '');
+      lab.appendChild(span);
+      var inp;
+      if (Array.isArray(p.choice) && p.choice.length) {
+        inp = document.createElement('select');
+        inp.className = 'input';
+        var empty = document.createElement('option'); empty.value = ''; empty.textContent = '—'; inp.appendChild(empty);
+        p.choice.forEach(function (c) { var o = document.createElement('option'); o.value = c; o.textContent = c; inp.appendChild(o); });
+      } else {
+        inp = document.createElement('input');
+        inp.className = 'input mono';
+        inp.type = p.secret ? 'password' : 'text';
+        inp.autocomplete = p.secret ? 'new-password' : 'off';
+        inp.spellcheck = false;
+        if (p.example) inp.placeholder = p.example;
+      }
+      inp.setAttribute('data-vev-param', p.name);
+      var v = values && values[p.name] != null ? String(values[p.name]) : '';
+      if (p.secret) { inp.value = ''; if (secretsSet && secretsSet[p.name]) inp.placeholder = 'gespeichert'; }
+      else inp.value = v || (p.default != null ? String(p.default) : '');
+      lab.appendChild(inp);
+      if (p.help) { var h = document.createElement('span'); h.className = 'field-hint'; h.textContent = p.help; lab.appendChild(h); }
+      box.appendChild(lab);
+    });
+  }
+  function vevRenderState(st) {
+    var box = document.getElementById('vev-state');
+    if (!box) return;
+    if (!st) { box.textContent = '—'; return; }
+    var parts = [];
+    if (st.install && st.install.state === 'downloading') parts.push('evcc wird geladen …');
+    if (st.install && st.install.state === 'error') parts.push('evcc konnte nicht geladen werden: ' + st.install.error);
+    if (st.running) parts.push('Abfrage läuft …');
+    if (st.socPct != null) {
+      parts.push('Ladestand ' + st.socPct + ' %' + (st.rangeKm != null ? ' · ' + st.rangeKm + ' km' : '')
+        + (st.at ? ' · ' + new Date(st.at).toLocaleString('de-DE') : ''));
+    }
+    if (st.error) parts.push('✗ ' + st.error);
+    box.className = 'evcc-eos-state ' + (st.error ? 'is-warn' : (st.socPct != null ? 'is-ok' : ''));
+    box.textContent = parts.join('\n') || 'Noch keine Abfrage.';
+  }
+  async function loadVehicleEvcc() {
+    var el = function (id) { return document.getElementById(id); };
+    try {
+      var res = await apiFetch('/api/vehicle-evcc');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      vevData = await res.json();
+      var s = vevData.settings || {};
+      var sel = el('vev-product');
+      if (sel) {
+        sel.textContent = '';
+        var o0 = document.createElement('option'); o0.value = ''; o0.textContent = '— Marke wählen —'; sel.appendChild(o0);
+        (vevData.catalog.products || []).forEach(function (p) {
+          var o = document.createElement('option'); o.value = p.template; o.textContent = p.name; sel.appendChild(o);
+        });
+        sel.value = s.template || '';
+      }
+      if (el('vev-enabled')) el('vev-enabled').checked = s.enabled === true;
+      if (el('vev-interval')) el('vev-interval').value = s.intervalMin || 15;
+      vevRenderParams(s.template || '', s.params || {}, s.secretsSet || {});
+      vevRenderState(vevData.state);
+    } catch (e) {
+      vevRenderState({ error: 'Fahrzeugtreiber nicht abrufbar: ' + e.message });
+    }
+  }
+  async function saveVehicleEvcc(btn) {
+    var el = function (id) { return document.getElementById(id); };
+    var params = {};
+    document.querySelectorAll('#vev-params [data-vev-param]').forEach(function (inp) { params[inp.getAttribute('data-vev-param')] = inp.value; });
+    var body = { enabled: !!(el('vev-enabled') && el('vev-enabled').checked), template: (el('vev-product') || {}).value || '',
+      params: params, intervalMin: Number((el('vev-interval') || {}).value) || 15 };
+    btn.disabled = true;
+    try {
+      var res = await apiFetch('/api/vehicle-evcc/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok || !data.ok) throw new Error((data.errors && data.errors.join('; ')) || data.error || ('HTTP ' + res.status));
+      showDrawerToast('evcc', 'ok', body.enabled ? '✓ Gespeichert — erste Abfrage läuft (beim ersten Mal wird evcc geladen).' : '✓ Gespeichert.');
+      setTimeout(loadVehicleEvcc, 1500);
+    } catch (e) {
+      showDrawerToast('evcc', 'err', '✗ ' + e.message);
+    } finally { btn.disabled = false; }
+  }
+  async function refreshVehicleEvcc(btn) {
+    btn.disabled = true;
+    vevRenderState({ running: true });
+    try {
+      var res = await apiFetch('/api/vehicle-evcc/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      var data = await res.json().catch(function () { return {}; });
+      vevRenderState(data.state || { error: data.error || ('HTTP ' + res.status) });
+    } catch (e) {
+      vevRenderState({ error: e.message });
+    } finally { btn.disabled = false; }
+  }
+
   document.addEventListener('change', function (e) {
+    if (e.target && e.target.id === 'vev-product') vevRenderParams(e.target.value, {}, {});
     if (e.target && e.target.id === 'evcc-dep-mode') syncEvccDepModeUi();
     if (e.target && e.target.id === 'wallbox-type') syncWallboxTypeUi();
   });
   document.addEventListener('click', function (e) {
     var evccSave = e.target.closest('#evcc-save');
     if (evccSave) { saveEvccDrawer(evccSave); return; }
+    var vevSave = e.target.closest('#vev-save');
+    if (vevSave) { saveVehicleEvcc(vevSave); return; }
+    var vevRefresh = e.target.closest('#vev-refresh');
+    if (vevRefresh) { refreshVehicleEvcc(vevRefresh); return; }
     var evccRefresh = e.target.closest('#evcc-refresh');
     if (evccRefresh) { loadEvccDrawer(); return; }
     if (e.target.closest('#evcc-eos-fromevcc')) { evccEosFromEvcc(); return; }

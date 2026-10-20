@@ -1,0 +1,1661 @@
+{
+ "evccVersion": "0.317.2",
+ "generatedAt": "2026-10-19",
+ "templates": [
+  {
+   "template": "aiways",
+   "brands": [
+    "Aiways"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "required": true,
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "myalpine",
+   "brands": [
+    "Alpine"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "audi",
+   "brands": [
+    "Audi"
+   ],
+   "note": "Nutzt die im Rahmen des EU Data Act bereitgestellten Fahrzeugdaten über das\nVW-Konzern-Portal (https://eu-data-act.drivesomethinggreater.com). Die Anmeldung\nerfolgt mit den Zugangsdaten der myAudi-App.\nVoraussetzung (einmalig im Browser): im Portal anmelden, die Einwilligung\nbestätigen, das Fahrzeug verknüpfen und eine fortlaufende Datenanfrage\n(alle 15 Minuten) aktivieren. Ohne diese Aktivierung liefert das Portal\nkeine Daten. Die Daten werden ca. alle 15 Minuten im Portal bereitgestellt.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "WAUZZZ..."
+    }
+   ]
+  },
+  {
+   "template": "carwings",
+   "brands": [
+    "Nissan"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "citroen",
+   "brands": [
+    "Citroën"
+   ],
+   "note": "Benötigt `access` und `refresh` Tokens. Diese können über den Befehl `evcc token [name]` generiert werden.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "accessToken",
+     "label": "Access token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "refreshToken",
+     "label": "Refresh token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "V..."
+    }
+   ]
+  },
+  {
+   "template": "connected-cars",
+   "brands": [],
+   "params": [
+    {
+     "name": "deviceToken",
+     "label": "Gerätetoken",
+     "help": "Die Daten wurden über die Geräteregistrierung von Connected Cars bezogen. Skripte zur Geräteregistrierung finden Sie unter https://github.com/brettch/evcc-connected-cars.",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "domain",
+     "label": "API-Domäne",
+     "help": "Die für Connected Cars zu verwendende API-Domäne. Jedes Land hat in der Regel eine eigene Domäne. Diese finden Sie, indem Sie sich im Connected Cars GraphiQL-Tool (https://api.connectedcars.io/graphql/graphiql/) anmelden, das entsprechende Land auswählen und die verwendete Domäne (ohne das vorangestellte „api.“) anzeigen.",
+     "default": "au1.connectedcars.io"
+    },
+    {
+     "name": "namespace",
+     "label": "Namespace der Organisation",
+     "help": "Der Namespace dient zur Identifizierung der Organisation innerhalb von Connected Cars. Er kann ermittelt werden, indem man sich beim Connected Cars GraphiQL-Tool (https://api.connectedcars.io/graphql/graphiql/) anmeldet, das entsprechende Land auswählt und den automatisch festgelegten Header „X-Organization-Namespace“ anzeigt.",
+     "default": "vwaustralia:app"
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "dacia",
+   "brands": [
+    "Dacia"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "ds",
+   "brands": [
+    "DS"
+   ],
+   "note": "Benötigt `access` und `refresh` Tokens. Diese können über den Befehl `evcc token [name]` generiert werden.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "accessToken",
+     "label": "Access token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "refreshToken",
+     "label": "Refresh token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "V..."
+    }
+   ]
+  },
+  {
+   "template": "evnotify",
+   "brands": [],
+   "params": [
+    {
+     "name": "akey",
+     "label": "API Key",
+     "required": true
+    },
+    {
+     "name": "token",
+     "label": "Token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "apiversion",
+     "label": "API-Version",
+     "type": "choice",
+     "default": "2",
+     "choice": [
+      "2",
+      "3"
+     ]
+    }
+   ]
+  },
+  {
+   "template": "fiat",
+   "brands": [
+    "Fiat",
+    "Jeep"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "ZFAE..."
+    },
+    {
+     "name": "pin",
+     "label": "PIN",
+     "help": "Benötigt um das Fahrzeug zum Laden aufzuwecken and zur Aktualisierung des Ladestands während der Ladung. Bei Nutzung mit TWC3 kann der Ladevorgang mittels PIN gestartet und gestoppt werden.",
+     "secret": true
+    }
+   ]
+  },
+  {
+   "template": "flobz",
+   "brands": [],
+   "note": "Remote Control of PSA car github.com/flobz/psa_car_controller (https://github.com/flobz/psa_car_controller)",
+   "params": [
+    {
+     "name": "url",
+     "label": "URL",
+     "required": true,
+     "example": "http://192.0.2.2"
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "required": true,
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "genesis",
+   "brands": [
+    "Genesis"
+   ],
+   "note": "In das Passwort-Feld kann entweder das Passwort deines Kontos oder ein `refresh_token` (Anleitung (https://github.com/evcc-io/evcc/wiki/Hyundai-Kia:-Refresh-Token)) eingetragen werden.\nHinweis: Seit Kia/Hyundai/Genesis im August 2026 den alten Login-Flow gesperrt haben, können externe Tools keinen *neuen* `refresh_token` mehr erzeugen — nur ein bereits vorher erzeugter funktioniert noch. Falls du noch keinen hast, nutze stattdessen das Passwort deines Kontos.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    },
+    {
+     "name": "language",
+     "label": "Sprache",
+     "type": "choice",
+     "default": "en",
+     "choice": [
+      "en",
+      "de"
+     ]
+    }
+   ]
+  },
+  {
+   "template": "hyundai-us",
+   "brands": [
+    "Hyundai"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "pin",
+     "label": "PIN",
+     "help": "Wird von Bluelink (US) benötigt, um Fernkommandos zu autorisieren.",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "hyundai",
+   "brands": [
+    "Hyundai"
+   ],
+   "note": "In das Passwort-Feld kann entweder ein `refresh_token` (Anleitung (https://github.com/evcc-io/evcc/wiki/Hyundai-Kia:-Refresh-Token)) oder, für die Region Europa, das Passwort deines Kontos eingetragen werden.\nHinweis: Seit Kia/Hyundai im August 2026 den alten Login-Flow gesperrt haben, können externe Tools keinen *neuen* `refresh_token` mehr erzeugen — nur ein bereits vorher erzeugter funktioniert noch. Falls du noch keinen hast, nutze stattdessen das Passwort deines Kontos (nur Region Europa — Australien/Neuseeland benötigen weiterhin einen `refresh_token`).\nManche Modelle (z.B. Kona) schalte",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    },
+    {
+     "name": "language",
+     "label": "Sprache",
+     "type": "choice",
+     "default": "en",
+     "choice": [
+      "en",
+      "de"
+     ]
+    },
+    {
+     "name": "region",
+     "label": "Region, in der dein Bluelink-Konto registriert ist",
+     "default": "Europe",
+     "choice": [
+      "Europe",
+      "Australia",
+      "New Zealand"
+     ]
+    }
+   ]
+  },
+  {
+   "template": "ioBroker.bmw",
+   "brands": [],
+   "note": "ioBroker BMW Adapter. Benötigt ioBroker.bmw und ioBroker.simple-api",
+   "params": [
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "BMW Fahrzeugidentifikationsnummer",
+     "required": true,
+     "example": "WBA8E9G50GM091234"
+    },
+    {
+     "name": "uri",
+     "label": "ioBroker URL",
+     "help": "einschliesslich ioBroker.simple-api Port",
+     "required": true
+    }
+   ]
+  },
+  {
+   "template": "kia",
+   "brands": [
+    "Kia"
+   ],
+   "note": "In das Passwort-Feld kann entweder das Passwort deines Kontos oder ein `refresh_token` (Anleitung (https://github.com/evcc-io/evcc/wiki/Hyundai-Kia:-Refresh-Token)) eingetragen werden.\nHinweis: Seit Kia/Hyundai im August 2026 den alten Login-Flow gesperrt haben, können externe Tools keinen *neuen* `refresh_token` mehr erzeugen — nur ein bereits vorher erzeugter funktioniert noch. Falls du noch keinen hast, nutze stattdessen das Passwort deines Kontos.\nManche Modelle (z.B. Niro EV) schalten bei geringen Ladeströmen (< 8A) intern auf 2 Phasen um. In den Fällen, in denen die Wallbox auch die Phas",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    },
+    {
+     "name": "language",
+     "label": "Sprache",
+     "type": "choice",
+     "default": "en",
+     "choice": [
+      "en",
+      "de"
+     ]
+    }
+   ]
+  },
+  {
+   "template": "lexus",
+   "brands": [
+    "Lexus"
+   ],
+   "note": "Benötigt Lexus Link+ Connected Services Account.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "JT..."
+    }
+   ]
+  },
+  {
+   "template": "livewire",
+   "brands": [
+    "LiveWire"
+   ],
+   "note": "evcc liest den Ladezustand über die Cloud-API der LiveWire App. Diese antwortet nur Geräten, die einmalig mit dem Motorrad gekoppelt wurden.\nDie Kopplung übernimmt das Skript livewire-pair.py (https://github.com/j4velin/livewire-pairing) (Python 3, keine weiteren Pakete). Es fragt Zugangsdaten und den Code ab, den das Motorrad dabei auf dem Display anzeigt, und gibt am Ende die Geräte-UUID aus, die hier eingetragen wird.\nDu musst dafür einmal mit eingeschalteter Zündung am Motorrad stehen.\nDas Motorrad meldet \"angesteckt\" erst, wenn das Ladegerät mit Strom versorgt wird. Die automatische Fahrz",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "deviceuuid",
+     "label": "Geräte-UUID",
+     "help": "Ausgabe des Kopplungsskripts von github.com/j4velin/livewire-pairing (https://github.com/j4velin/livewire-pairing). Eine andere UUID muss erneut am Motorrad gekoppelt werden.",
+     "required": true,
+     "secret": true,
+     "example": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "mercedes",
+   "brands": [
+    "Mercedes-Benz"
+   ],
+   "note": "Benötigt `access` und `refresh` Tokens. Anleitung zur Generierung hier: https://tinyurl.com/mbapi2020helptoken.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "region",
+     "label": "Region",
+     "required": true,
+     "type": "choice",
+     "default": "EMEA",
+     "choice": [
+      "EMEA",
+      "APAC",
+      "NORAM"
+     ]
+    },
+    {
+     "name": "accessToken",
+     "label": "Access token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "refreshToken",
+     "label": "Refresh token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "V..."
+    }
+   ]
+  },
+  {
+   "template": "mg",
+   "brands": [
+    "MG"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "required": true,
+     "example": "W..."
+    },
+    {
+     "name": "region",
+     "label": "Region",
+     "required": true,
+     "type": "choice",
+     "default": "EU",
+     "choice": [
+      "EU",
+      "AU"
+     ]
+    }
+   ]
+  },
+  {
+   "template": "mg2mqtt",
+   "brands": [],
+   "note": "Voraussetzung ist ein konfigurierter MQTT Broker und ein SAIC/MQTT Gateway (github.com/SAIC-iSmart-API/saic-python-mqtt-gateway (https://github.com/SAIC-iSmart-API/saic-python-mqtt-gateway) oder github.com/SAIC-iSmart-API/saic-java-client (https://github.com/SAIC-iSmart-API/saic-java-client))",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "required": true,
+     "example": "W..."
+    },
+    {
+     "name": "timeout",
+     "label": "Zeitüberschreitung",
+     "type": "duration",
+     "example": "10s",
+     "default": "1h"
+    }
+   ]
+  },
+  {
+   "template": "myskoda",
+   "brands": [
+    "Škoda"
+   ],
+   "note": "API-Schlüssel unter go.skoda.eu/api-keys (https://go.skoda.eu/api-keys) anfordern.",
+   "params": [
+    {
+     "name": "apikey",
+     "label": "API Key",
+     "help": "API-Schlüssel unter go.skoda.eu/api-keys (https://go.skoda.eu/api-keys) anfordern.",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "required": true,
+     "example": "W..."
+    },
+    {
+     "name": "timeout",
+     "label": "Zeitüberschreitung",
+     "type": "duration",
+     "example": "10s"
+    }
+   ]
+  },
+  {
+   "template": "nissan-ariya",
+   "brands": [
+    "Nissan"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "nissan",
+   "brands": [
+    "Nissan"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "niu-e-scooter",
+   "brands": [
+    "NIU"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "serial",
+     "label": "Scooter Seriennummer, wie in der NIU app angegeben",
+     "required": true
+    }
+   ]
+  },
+  {
+   "template": "octopus-de",
+   "brands": [
+    "Octopus Energy"
+   ],
+   "note": "Liest Fahrzeugdaten (Ladestand, Zielladestand) über die Octopus Energy Germany Kraken API.\nDas Fahrzeug bzw. die Wallbox muss im Octopus-Konto (Intelligent Octopus) verbunden sein.",
+   "params": [
+    {
+     "name": "email",
+     "label": "E-Mail-Adresse",
+     "required": true,
+     "example": "user@example.com"
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "accountnumber",
+     "label": "Kundennummer",
+     "help": "Konto, wenn mehrere verknüpft sind (z.B. A-12345678).",
+     "example": "A-12345678"
+    },
+    {
+     "name": "device",
+     "label": "Fahrzeug",
+     "help": "Fahrzeug, wenn das Konto mehrere besitzt."
+    }
+   ]
+  },
+  {
+   "template": "octopus-it",
+   "brands": [
+    "Octopus Energy"
+   ],
+   "note": "Liest Fahrzeugdaten (Ladestand, Zielladestand) über die Octopus Energy Italy Kraken API.\nDas Fahrzeug bzw. die Wallbox muss im Octopus-Konto (Intelligent Octopus) verbunden sein.",
+   "params": [
+    {
+     "name": "email",
+     "label": "E-Mail-Adresse",
+     "required": true,
+     "example": "user@example.com"
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "accountnumber",
+     "label": "Kundennummer",
+     "help": "Konto, wenn mehrere verknüpft sind (z.B. A-12345678).",
+     "example": "A-12345678"
+    },
+    {
+     "name": "device",
+     "label": "Fahrzeug",
+     "help": "Fahrzeug, wenn das Konto mehrere besitzt."
+    }
+   ]
+  },
+  {
+   "template": "opel",
+   "brands": [
+    "Opel"
+   ],
+   "note": "Benötigt `access` und `refresh` Tokens. Diese können über den Befehl `evcc token [name]` generiert werden.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "accessToken",
+     "label": "Access token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "refreshToken",
+     "label": "Refresh token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "V..."
+    }
+   ]
+  },
+  {
+   "template": "ovms",
+   "brands": [],
+   "note": "Unterstützung für alle Fahrzeuge via ODB2 Adapter im Fahrzeug. Mehr Infos bei api.openvehicles.com (http://api.openvehicles.com/).",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vehicleid",
+     "label": "Vehicle ID",
+     "required": true
+    },
+    {
+     "name": "server",
+     "label": "Server URL",
+     "required": true,
+     "default": "dexters-web.de"
+    }
+   ]
+  },
+  {
+   "template": "peugeot",
+   "brands": [
+    "Peugeot"
+   ],
+   "note": "Benötigt `access` und `refresh` Tokens. Diese können über den Befehl `evcc token [name]` generiert werden.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "accessToken",
+     "label": "Access token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "refreshToken",
+     "label": "Refresh token",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "V..."
+    }
+   ]
+  },
+  {
+   "template": "pleos",
+   "brands": [
+    "Hyundai",
+    "Kia",
+    "Genesis"
+   ],
+   "note": "Nutzt die im Rahmen des EU Data Act bereitgestellten Fahrzeugdaten über die Pleos Vehicle Data API (https://document.pleos.ai/en/api-reference/vehicle-data-api/intro) (nur Europa).\nRegistrierung im Pleos Playground (https://pleos.ai/playground), dort unter \"My Vehicle Data API\" den Hersteller wählen und mit dem Bluelink-/Kia Connect-/Genesis Connected-Konto anmelden, um Client ID und Client Secret zu erhalten (Anleitung (https://document.pleos.ai/en/api-reference/vehicle-data-api/getting-started/for-private-users/request-my-vehicle-api-key)).\nDie API liefert die zuletzt vom Fahrzeug an die Her",
+   "params": [
+    {
+     "name": "clientid",
+     "label": "Client ID",
+     "required": true
+    },
+    {
+     "name": "clientsecret",
+     "label": "Client Secret",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "KMHK..."
+    }
+   ]
+  },
+  {
+   "template": "polestar-data-portal",
+   "brands": [
+    "Polestar"
+   ],
+   "note": "Benötigt Client-Zugangsdaten aus dem Polestar Data Portal (https://data-portal.polestar.com/) Entwicklerkonto (EU Data Act). Registrierung im Polestar Data Portal (https://data-portal.polestar.com/) für Client ID, Client Secret und Account ID.",
+   "params": [
+    {
+     "name": "clientid",
+     "label": "Client ID",
+     "required": true
+    },
+    {
+     "name": "clientsecret",
+     "label": "Client Secret",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "accountid",
+     "label": "Account ID",
+     "help": "Account ID, wird als x-client-id Header gesendet.",
+     "required": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "LPSVS..."
+    }
+   ]
+  },
+  {
+   "template": "renault",
+   "brands": [
+    "Renault"
+   ],
+   "note": "Renault Zoe and Twingo Electric benötigen bei 3p einen minimalen Ladestrom von 8A (ältere Modelle sogar 10A).",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "WREN..."
+    }
+   ]
+  },
+  {
+   "template": "cupra",
+   "brands": [
+    "Cupra"
+   ],
+   "note": "Nutzt die im Rahmen des EU Data Act bereitgestellten Fahrzeugdaten über das\nVW-Konzern-Portal (https://eu-data-act.drivesomethinggreater.com). Die Anmeldung\nerfolgt mit den Zugangsdaten der My CUPRA App.\nVoraussetzung (einmalig im Browser): im Portal anmelden, die Einwilligung\nbestätigen, das Fahrzeug verknüpfen und eine fortlaufende Datenanfrage\n(alle 15 Minuten) aktivieren. Ohne diese Aktivierung liefert das Portal\nkeine Daten. Die Daten werden ca. alle 15 Minuten im Portal bereitgestellt.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "seat",
+   "brands": [
+    "Seat"
+   ],
+   "note": "Nutzt die im Rahmen des EU Data Act bereitgestellten Fahrzeugdaten über das\nVW-Konzern-Portal (https://eu-data-act.drivesomethinggreater.com). Die Anmeldung\nerfolgt mit den Zugangsdaten der My SEAT App.\nVoraussetzung (einmalig im Browser): im Portal anmelden, die Einwilligung\nbestätigen, das Fahrzeug verknüpfen und eine fortlaufende Datenanfrage\n(alle 15 Minuten) aktivieren. Ohne diese Aktivierung liefert das Portal\nkeine Daten. Die Daten werden ca. alle 15 Minuten im Portal bereitgestellt.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "skoda",
+   "brands": [
+    "Škoda"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    },
+    {
+     "name": "timeout",
+     "label": "Zeitüberschreitung",
+     "type": "duration",
+     "example": "10s"
+    }
+   ]
+  },
+  {
+   "template": "smart-hello",
+   "brands": [
+    "Smart"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "subaru",
+   "brands": [
+    "Subaru"
+   ],
+   "note": "Benötigt Subaru Connected Services Account",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "JF..."
+    }
+   ]
+  },
+  {
+   "template": "tesla-ble",
+   "brands": [],
+   "note": "Open Source Tesla BLE HTTP Proxy github.com/wimaha/TeslaBleHttpProxy (https://github.com/wimaha/TeslaBleHttpProxy)",
+   "params": [
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Erforderlich für BLE-Verbindung",
+     "required": true,
+     "example": "W..."
+    },
+    {
+     "name": "url",
+     "label": "URL",
+     "help": "URL des Tesla BLE HTTP Proxy",
+     "required": true,
+     "example": "http://192.168.178.27"
+    },
+    {
+     "name": "port",
+     "label": "Port",
+     "help": "Port des Tesla BLE HTTP Proxy",
+     "type": "int",
+     "example": "8080",
+     "default": "8080"
+    },
+    {
+     "name": "timeout",
+     "label": "Zeitüberschreitung",
+     "type": "duration",
+     "example": "10s",
+     "default": "30s"
+    }
+   ]
+  },
+  {
+   "template": "tesla",
+   "brands": [
+    "Tesla"
+   ],
+   "note": "Tesla bietet eine offizielle, aber kostenpflichtige Fahrzeug-API an.\nFür private Nutzung kannst du dir einen Tesla Developer Account auf developer.tesla.com (https://developer.tesla.com/) erstellen und erhältst ein monatliches API-Guthaben von 10 €.\nDas ist für die gängigen evcc-Anwendungsfälle in der Regel ausreichend.\nDie Anleitung von myteslamate.com (https://www.myteslamate.com/tesla-api-application-registration/) erklärt den Prozess und generiert dir kostenfrei die für evcc benötigten Access- und Refresh-Token.\nMit diesem Tokenpaar und deiner im Tesla Developer Account erstellten Client I",
+   "params": [
+    {
+     "name": "clientId",
+     "label": "Client ID",
+     "help": "von developer.tesla.com (https://developer.tesla.com/dashboard).",
+     "required": true
+    },
+    {
+     "name": "accessToken",
+     "label": "Access token",
+     "help": "von myteslamate.com (https://app.myteslamate.com/).",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "refreshToken",
+     "label": "Refresh token",
+     "help": "von myteslamate.com (https://app.myteslamate.com/).",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  },
+  {
+   "template": "teslafi",
+   "brands": [],
+   "note": "Verbinden Sie Ihr Tesla-Fahrzeug über die TeslaFi-API. TeslaFi ist ein Tesla-Datenlogger-Service, der HTTP-API-Zugriff auf Fahrzeugdaten bietet. Holen Sie sich Ihren API-Schlüssel aus den TeslaFi-Kontoeinstellungen.",
+   "params": [
+    {
+     "name": "apikey",
+     "label": "API Key",
+     "required": true,
+     "secret": true
+    }
+   ]
+  },
+  {
+   "template": "teslalogger",
+   "brands": [],
+   "note": "Open Source Tesla Datenlogger github.com/bassmaster187/TeslaLogger (https://github.com/bassmaster187/TeslaLogger)",
+   "params": [
+    {
+     "name": "url",
+     "label": "URL",
+     "required": true,
+     "example": "http://192.0.2.2"
+    },
+    {
+     "name": "id",
+     "label": "TeslaLogger CarID",
+     "default": "1"
+    },
+    {
+     "name": "port",
+     "label": "Port",
+     "type": "int",
+     "default": "5000"
+    }
+   ]
+  },
+  {
+   "template": "tessie",
+   "brands": [],
+   "note": "Verbinden Sie Ihr Tesla-Fahrzeug über die Tessie-API. Dies wird das Fahrzeug niemals aufwecken; das Polling kann auf \"always\" und interval \"1M\" eingestellt werden. Wenn das Fahrzeug wach ist, sind die Daten normalerweise weniger als 15 Sekunden alt. Wenn das Fahrzeug schläft, stammen die Daten aus dem Zeitpunkt, zu dem es eingeschlafen ist. Holen Sie sich Ihr Token unter dash.tessie.com (https://dash.tessie.com/settings/api)",
+   "params": [
+    {
+     "name": "vin",
+     "label": "Fahrzeug-VIN",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "required": true,
+     "example": "W..."
+    },
+    {
+     "name": "token",
+     "label": "Tessie API Token",
+     "required": true,
+     "secret": true
+    }
+   ]
+  },
+  {
+   "template": "toyota",
+   "brands": [
+    "Toyota"
+   ],
+   "note": "Benötigt Toyota Connected Services Account.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "JT..."
+    }
+   ]
+  },
+  {
+   "template": "vw",
+   "brands": [
+    "Volkswagen"
+   ],
+   "note": "e-Golf, e-Up, ID Familie\nNutzt die im Rahmen des EU Data Act bereitgestellten Fahrzeugdaten über das\nVW-Konzern-Portal (https://eu-data-act.drivesomethinggreater.com). Die Anmeldung\nerfolgt mit den Zugangsdaten der Volkswagen-App / We Connect.\nVoraussetzung (einmalig im Browser): im Portal anmelden, die Einwilligung\nbestätigen, das Fahrzeug verknüpfen und eine fortlaufende Datenanfrage\n(alle 15 Minuten) aktivieren. Ohne diese Aktivierung liefert das Portal\nkeine Daten. Die Daten werden ca. alle 15 Minuten im Portal bereitgestellt.",
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "WVWZZZ..."
+    }
+   ]
+  },
+  {
+   "template": "zero",
+   "brands": [
+    "Zero Motorcycles"
+   ],
+   "params": [
+    {
+     "name": "user",
+     "label": "Benutzerkonto",
+     "help": "bspw. E-Mail Adresse, User Id, etc.",
+     "required": true
+    },
+    {
+     "name": "password",
+     "label": "Passwort",
+     "help": "Zugangspasswort des Dienstes",
+     "required": true,
+     "secret": true
+    },
+    {
+     "name": "vin",
+     "label": "Fahrzeugidentifikationsnummer",
+     "help": "Wenn mehrere Fahrzeuge eines Herstellers vorhanden sind",
+     "example": "W..."
+    }
+   ]
+  }
+ ],
+ "excluded": [
+  {
+   "template": "cardata",
+   "brands": [
+    "BMW",
+    "Mini"
+   ],
+   "reason": "Anmeldung im Browser (nur in evccs eigener Oberfläche)"
+  },
+  {
+   "template": "ford-connect-query",
+   "brands": [
+    "Ford"
+   ],
+   "reason": "Anmeldung im Browser (nur in evccs eigener Oberfläche)"
+  },
+  {
+   "template": "homeassistant",
+   "brands": [
+    "Home Assistant"
+   ],
+   "reason": "ohne Nutzen für DVhub"
+  },
+  {
+   "template": "iso15118",
+   "brands": [],
+   "reason": "ohne Nutzen für DVhub"
+  },
+  {
+   "template": "offline",
+   "brands": [],
+   "reason": "ohne Nutzen für DVhub"
+  },
+  {
+   "template": "outlanderphev",
+   "brands": [],
+   "reason": "ohne Nutzen für DVhub"
+  },
+  {
+   "template": "porsche",
+   "brands": [
+    "Porsche"
+   ],
+   "reason": "Anmeldung im Browser (nur in evccs eigener Oberfläche)"
+  },
+  {
+   "template": "teslamate",
+   "brands": [],
+   "reason": "ohne Nutzen für DVhub"
+  },
+  {
+   "template": "tibber",
+   "brands": [
+    "Tibber"
+   ],
+   "reason": "Anmeldung im Browser (nur in evccs eigener Oberfläche)"
+  },
+  {
+   "template": "tronity",
+   "brands": [],
+   "reason": "braucht evcc-Sponsor-Lizenz"
+  },
+  {
+   "template": "volvo-connected",
+   "brands": [
+    "Volvo"
+   ],
+   "reason": "Anmeldung im Browser (nur in evccs eigener Oberfläche)"
+  }
+ ],
+ "products": [
+  {
+   "name": "Aiways",
+   "template": "aiways"
+  },
+  {
+   "name": "Alpine",
+   "template": "myalpine"
+  },
+  {
+   "name": "Audi EU Data Act",
+   "template": "audi"
+  },
+  {
+   "name": "Citroën",
+   "template": "citroen"
+  },
+  {
+   "name": "Connected Cars (Volkswagen Australia)",
+   "template": "connected-cars"
+  },
+  {
+   "name": "Cupra EU Data Act",
+   "template": "cupra"
+  },
+  {
+   "name": "Dacia",
+   "template": "dacia"
+  },
+  {
+   "name": "DS",
+   "template": "ds"
+  },
+  {
+   "name": "evNotify",
+   "template": "evnotify"
+  },
+  {
+   "name": "Fiat",
+   "template": "fiat"
+  },
+  {
+   "name": "Genesis Bluelink",
+   "template": "genesis"
+  },
+  {
+   "name": "Genesis EU Data Act",
+   "template": "pleos"
+  },
+  {
+   "name": "Hyundai Bluelink",
+   "template": "hyundai"
+  },
+  {
+   "name": "Hyundai Bluelink (US)",
+   "template": "hyundai-us"
+  },
+  {
+   "name": "Hyundai EU Data Act",
+   "template": "pleos"
+  },
+  {
+   "name": "ioBroker.bmw",
+   "template": "ioBroker.bmw"
+  },
+  {
+   "name": "Jeep",
+   "template": "fiat"
+  },
+  {
+   "name": "Kia Bluelink",
+   "template": "kia"
+  },
+  {
+   "name": "Kia EU Data Act",
+   "template": "pleos"
+  },
+  {
+   "name": "Lexus",
+   "template": "lexus"
+  },
+  {
+   "name": "LiveWire S2",
+   "template": "livewire"
+  },
+  {
+   "name": "Mercedes-Benz",
+   "template": "mercedes"
+  },
+  {
+   "name": "MG",
+   "template": "mg"
+  },
+  {
+   "name": "mg2mqtt",
+   "template": "mg2mqtt"
+  },
+  {
+   "name": "Nissan Ariya",
+   "template": "nissan-ariya"
+  },
+  {
+   "name": "Nissan Leaf",
+   "template": "nissan"
+  },
+  {
+   "name": "Nissan Leaf (pre 2019)",
+   "template": "carwings"
+  },
+  {
+   "name": "Nissan Micra",
+   "template": "nissan-ariya"
+  },
+  {
+   "name": "NIU E-Scooter",
+   "template": "niu-e-scooter"
+  },
+  {
+   "name": "Octopus Energy Deutschland",
+   "template": "octopus-de"
+  },
+  {
+   "name": "Octopus Energy Italien",
+   "template": "octopus-it"
+  },
+  {
+   "name": "Opel",
+   "template": "opel"
+  },
+  {
+   "name": "Open Vehicle Monitoring System",
+   "template": "ovms"
+  },
+  {
+   "name": "Peugeot",
+   "template": "peugeot"
+  },
+  {
+   "name": "Polestar",
+   "template": "polestar-data-portal"
+  },
+  {
+   "name": "PSA Car Controller",
+   "template": "flobz"
+  },
+  {
+   "name": "Renault",
+   "template": "renault"
+  },
+  {
+   "name": "Seat CupraConnect Gen3 (Ateca, Leon, Formentor, Tarraco)",
+   "template": "seat"
+  },
+  {
+   "name": "Škoda MyŠkoda",
+   "template": "skoda"
+  },
+  {
+   "name": "Škoda MyŠkoda (Public API)",
+   "template": "myskoda"
+  },
+  {
+   "name": "Smart #1",
+   "template": "smart-hello"
+  },
+  {
+   "name": "Subaru",
+   "template": "subaru"
+  },
+  {
+   "name": "Tesla",
+   "template": "tesla"
+  },
+  {
+   "name": "Tesla BLE",
+   "template": "tesla-ble"
+  },
+  {
+   "name": "TeslaFi",
+   "template": "teslafi"
+  },
+  {
+   "name": "TeslaLogger",
+   "template": "teslalogger"
+  },
+  {
+   "name": "Tessie",
+   "template": "tessie"
+  },
+  {
+   "name": "Toyota",
+   "template": "toyota"
+  },
+  {
+   "name": "Volkswagen EU Data Act",
+   "template": "vw"
+  },
+  {
+   "name": "Zero Motorcycles",
+   "template": "zero"
+  }
+ ]
+}

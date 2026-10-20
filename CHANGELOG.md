@@ -12,6 +12,14 @@ verweist hierher.
 
 ### Neu
 
+- **Ladestand vom Auto über evccs Fahrzeug-Treiber.** Integrationen → Wallbox → „Ladestand vom Auto“: Marke
+  wählen (46 Vorlagen aus evcc 0.317.2, z. B. VW, Kia, Hyundai, Renault, Mercedes, Škoda, Tesla mit Tokens),
+  Zugangsdaten der Hersteller-App eintragen. DVhub lädt das offizielle evcc-Programm erst beim Einschalten
+  (gepinnte Version und SHA-256, nicht im Image) und fragt damit nur das Auto ab (`evcc vehicle`), alle 15 min
+  solange es steckt, sonst stündlich. Neue Ladestand-Quelle „Fahrzeug über evcc-Treiber“. Zugangsdaten werden
+  nie zurückgegeben und in Fehlermeldungen geschwärzt. Nicht dabei: Marken mit Browser-Anmeldung (BMW, Ford,
+  Porsche, Volvo) und Tronity (evcc-Sponsor-Pflicht). evcc: MIT, Hinweis in THIRD-PARTY-LICENSES.md.
+
 - **Einspeisegrenze der Anlage (60 %, 70 %, eigener Wert oder keine).** Neu unter Einstellungen → Netz & Recht.
   Ab Werk ist nichts gesetzt: bis der Betreiber gewählt hat (auch „keine Grenze“), zeigt DVhub einen Hinweis.
   Victron: DVhub setzt die Grenze im GX (Reg. 2706, gilt auch ohne DVhub) und prüft sie alle 10 min nach;

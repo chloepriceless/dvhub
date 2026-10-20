@@ -31,6 +31,7 @@ import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice,
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
+import { loadCatalog as loadEvccVehicleCatalog, maskVehicleSettings, mergeVehicleSettings, validateVehicleSettings } from './services/vehicle-evcc/index.js';
 import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
@@ -1305,6 +1306,7 @@ export function createApiRoutes(ctx) {
     ['/api/input/status', 'integrations'], ['/api/integrations/dataflow', 'integrations'],
     ['/api/ortsnetz/status', 'integrations'], ['/api/victron/devices', 'integrations'],
     ['/api/victron/devices/scan', 'integrations'], ['/api/feed-in-cap/status', 'integrations'],
+    ['/api/vehicle-evcc', 'integrations'], ['/api/vehicle-evcc/settings', 'integrations'], ['/api/vehicle-evcc/refresh', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -4774,6 +4776,44 @@ export function createApiRoutes(ctx) {
         return json(res, 200, { ok: true, result: r, ...on.status() });
       }
       return json(res, 404, { ok: false, error: 'not_found' });
+    }
+
+    // ── evcc-Fahrzeugtreiber (services/vehicle-evcc) ───────────────────────
+    // Zugangsdaten beim Hersteller: Geheimnisse gehen nie zurück (maskVehicleSettings).
+    if (url.pathname === '/api/vehicle-evcc' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      const catalog = loadEvccVehicleCatalog();
+      return json(res, 200, {
+        ok: true,
+        settings: maskVehicleSettings(getCfg().vehicleEvcc || {}, catalog),
+        state: ctx.vehicleEvcc?.getState?.() ?? null,
+        catalog: { evccVersion: catalog.evccVersion, products: catalog.products, templates: catalog.templates, excluded: catalog.excluded },
+      });
+    }
+    if (url.pathname === '/api/vehicle-evcc/settings' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const catalog = loadEvccVehicleCatalog();
+      const raw = ctx.getRawCfg() || {};
+      const merged = mergeVehicleSettings(raw.vehicleEvcc || {}, body || {}, catalog);
+      if (merged.enabled) {
+        const v = validateVehicleSettings(merged, catalog);
+        if (!v.ok) return json(res, 400, { ok: false, error: 'invalid', errors: v.errors });
+      }
+      const next = JSON.parse(JSON.stringify(raw));
+      next.vehicleEvcc = merged;
+      ctx.saveAndApplyConfig(next);
+      pushLog('vehicle_evcc_settings', { enabled: merged.enabled, template: merged.template, intervalMin: merged.intervalMin }, actorContext(req));
+      // Gleich abfragen (lädt beim ersten Mal das evcc-Programm), Antwort wartet nicht darauf.
+      if (merged.enabled) Promise.resolve().then(() => ctx.vehicleEvcc?.refresh?.('settings')).catch(() => {});
+      return json(res, 200, { ok: true, settings: maskVehicleSettings(merged, catalog) });
+    }
+    if (url.pathname === '/api/vehicle-evcc/refresh' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.vehicleEvcc) return json(res, 503, { ok: false, error: 'vehicle_evcc_unavailable' });
+      const result = await ctx.vehicleEvcc.refresh('manual');
+      return json(res, 200, { ok: true, result, state: ctx.vehicleEvcc.getState() });
     }
 
     // ── Feste Einspeisegrenze (services/feed-in-cap) — nur lesen ──────────

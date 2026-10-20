@@ -22,7 +22,9 @@
  *
  * @returns {{ pct: number, source: string } | null}
  */
-export const EV_SOC_SOURCES = Object.freeze(['auto', 'teslamate', 'evcc', 'mqtt']);
+export const EV_SOC_SOURCES = Object.freeze(['auto', 'teslamate', 'evcc', 'evccvehicle', 'mqtt']);
+// Ladestand über evccs Fahrzeug-Treiber (services/vehicle-evcc) gilt höchstens so lange.
+export const EVCC_VEHICLE_MAX_AGE_MS = 24 * 3600_000;
 
 export function resolveEvSocPct(ctx) {
   const num = (v) => (v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
@@ -52,6 +54,13 @@ export function resolveEvSocPct(ctx) {
     // das waere fuer EOS ein leerer Akku und ein voller Ladeplan.
     const evccPct = lp?.connected === true ? num(lp?.vehicleSocPct) : null;
     if (evccPct !== null && evccPct >= 0 && evccPct <= 100) return { pct: evccPct, source: 'evcc' };
+  }
+
+  if (use('evccvehicle')) {
+    const v = ctx?.vehicleEvcc?.getState?.();
+    const pct = num(v?.socPct);
+    const age = v?.at ? Date.now() - Date.parse(v.at) : Infinity;
+    if (pct !== null && pct >= 0 && pct <= 100 && age <= EVCC_VEHICLE_MAX_AGE_MS) return { pct, source: 'evccvehicle' };
   }
 
   if (use('mqtt')) {

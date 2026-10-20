@@ -127,6 +127,7 @@ import { createInstallerPortalClient } from './services/installer-portal-client.
 import { createDatenspende } from './services/datenspende/index.js';
 import { createOrtsnetz } from './services/ortsnetz/index.js';
 import { createVictronGxDevices } from './services/victron-gx/devices.js';
+import { createVehicleEvcc } from './services/vehicle-evcc/index.js';
 // Messwert-Eingang HA/Loxone per HTTP-Push (Push-Schlüssel in DATA_DIR).
 import { createInputPush } from './services/input-push.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
@@ -1387,6 +1388,9 @@ ctx.familyMqttTiles = familyMqttTiles;
 // Fahrzeugdaten (Ladestand, angesteckt) über frei wählbare MQTT-Topics — für
 // Marken ohne eigene Anbindung, z. B. über Home Assistant (ev-soc.js).
 ctx.vehicleMqtt = createVehicleMqtt(mqttHub, ctx);
+// Ladestand über evccs Fahrzeug-Treiber (aus, bis eingerichtet; lädt evcc erst dann).
+ctx.vehicleEvcc = createVehicleEvcc(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub', getPlugged: () => resolveEvPlugged(ctx) });
+if (IS_RUNTIME_PROCESS) ctx.vehicleEvcc.start();
 const deviceService = createDeviceService(ctx, mqttHub);
 ctx.deviceService = deviceService;
 const notificationService = createNotificationService(ctx);
@@ -2686,6 +2690,7 @@ async function gracefulShutdown(signal) {
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
   safeSync('victronGx.stop', () => ctx.victronGx?.stop?.());
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
+  safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
   safeSync('mypvRegulator.stop', () => { mypvRegulator.stop?.().catch?.(() => {}); });
