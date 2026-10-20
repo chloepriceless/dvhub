@@ -336,8 +336,8 @@ fi
 
 # ── 9b. EEBUS (dvhub-eebus) bauen/aktualisieren (entkoppelt, idempotent) ──
 # Nur wenn EEBUS aktiviert ist oder dvhub-eebus schon installiert war: dann
-# baut eebus-provision.sh den Hilfsprozess im Hintergrund (Toolchain + openeebus,
-# ~1 min auf einem Pi 4) — der Boot wird nie blockiert. NON-FATAL.
+# baut eebus-provision.sh den Hilfsprozess im Hintergrund (Go-Fassung: Go von
+# go.dev + eebus-go) — der Boot wird nie blockiert. NON-FATAL.
 if [[ -f "$INSTALL_DIR/eebus-provision.sh" && ! -f "$DATA_DIR/.no-eebus" ]]; then
   EEBUS_ON=0
   if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then

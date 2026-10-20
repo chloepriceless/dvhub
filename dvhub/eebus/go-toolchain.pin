@@ -1,0 +1,8 @@
+# Go-Werkzeugkette für dvhub-eebus (Go) auf nativen Installationen
+# (eebus-provision.sh). Offizielle Pakete von go.dev, Prüfsummen aus
+# https://go.dev/dl/?mode=json&include=all (abgerufen 20.10.2026).
+# GO_VERSION muss zu build-go.sh (Container-Bau) passen.
+GO_VERSION=1.27.2
+GO_SHA256_arm64=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8
+GO_SHA256_amd64=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
+GO_SHA256_armv6l=e25a174051d8675f87ac720aedcd25bf89ac652c4b82f26aa47919524725ed95

@@ -200,8 +200,13 @@ in `services/eebus/index.js`.
 - Gegen openeebus: `dvhub/eebus/test/interop.py` mit dem Go-Binary gegen
   openeebus' `hems` und `heat_pump` — 27/27 wie die C-Bridge (20.10.2026, im
   Container mit Avahi).
+- Nativ: `eebus-provision.sh` lädt Go von go.dev (Version und Prüfsummen in
+  `../go-toolchain.pin`, gleich wie im Container), baut mit `build-go.sh` unter
+  `/var/tmp` und ersetzt das Binary erst nach dem Selbsttest
+  (`test/eebus-provision.test.js`; echter Bau in `debian:trixie` arm64: 13 s,
+  unter 600 MB, 20.10.2026).
 - Rückweg: `docker buildx build --build-arg EEBUS_IMPL=c …` baut wieder die
-  C-Bridge; nativ baut `eebus-provision.sh` weiterhin die C-Bridge.
+  C-Bridge; nativ `touch $DATA_DIR/.eebus-impl-c` und `eebus-provision.sh`.
 
 ## 9. Ungeprüft und offene Risiken
 

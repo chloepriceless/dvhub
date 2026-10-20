@@ -1,8 +1,8 @@
 // services/eebus/index.js — EEBUS in DVhub (§14a-Steuerbox und EEBUS-Geräte).
 //
 // Das Protokoll spricht der Hilfsprozess dvhub-eebus (Go auf enbility eebus-go,
-// dvhub/eebus/go/; nativ noch C auf openeebus von NIBE, dvhub/eebus/bridge/ —
-// gleiches Protokoll). Dieser Dienst startet und überwacht ihn, hält Kopplungen und
+// dvhub/eebus/go/, im Container und nativ; Rückweg C auf openeebus von NIBE,
+// dvhub/eebus/bridge/ — gleiches Protokoll). Dieser Dienst startet und überwacht ihn, hält Kopplungen und
 // Geräte, führt die Zustandsmaschinen der Netzseite (limit-state.js) und setzt
 // die Grenzen in DVhubs bestehende Steuerpfade um:
 //

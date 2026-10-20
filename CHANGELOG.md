@@ -12,6 +12,12 @@ verweist hierher.
 
 ### Neu
 
+- **EEBUS nativ in Go.** Native Installationen (Debian/Raspberry Pi OS) bauen dvhub-eebus jetzt wie das
+  Container-Image aus der Go-Fassung (eebus-go) und kennen damit auch das E-Auto an der EEBUS-Wallbox. Der nächste
+  Neustart ersetzt eine vorhandene C-Fassung; Zertifikat und Kopplungen bleiben. Die Go-Werkzeugkette kommt von
+  go.dev mit fest eingetragener Prüfsumme und liegt nur während des Baus auf dem Gerät. Zurück zur C-Fassung mit
+  `/var/lib/dvhub/.eebus-impl-c`.
+
 - **Phoenix Contact EV Charge Control als Wallbox** (Wallbe, Compleo Pro, E3/DC Easy Connect, ESL Walli; Modbus TCP
   nach Phoenix-Handbuch 108191_de_04): Ladestrom über Holding 528, Freigabe über Coil 400 (DIP 10 an), Zustand,
   Leistung, Strom, Energie. Dafür kann der Modbus-Transport jetzt Coils schreiben (FC5).

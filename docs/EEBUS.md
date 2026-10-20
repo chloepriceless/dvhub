@@ -1,11 +1,12 @@
 # EEBUS in DVhub
 
-DVhub spricht EEBUS (SHIP/SPINE) über den Hilfsprozess **dvhub-eebus**. Im Container-Image
-ist er in Go auf [enbility eebus-go](https://github.com/enbility/eebus-go) (MIT) gebaut
-(`dvhub/eebus/go/`); nativ baut `eebus-provision.sh` weiterhin die C-Fassung auf
-[openeebus](https://github.com/NIBEGroup/openeebus) von NIBE (Apache-2.0). Beide sprechen
-dasselbe Protokoll mit DVhub ([PROTOKOLL.md](../dvhub/eebus/go/PROTOKOLL.md)); nur die
-Go-Fassung kennt das E-Auto an der Wallbox. Rollen:
+DVhub spricht EEBUS (SHIP/SPINE) über den Hilfsprozess **dvhub-eebus**, gebaut in Go auf
+[enbility eebus-go](https://github.com/enbility/eebus-go) (MIT, `dvhub/eebus/go/`) — im
+Container-Image und seit 20.10.2026 auch nativ (`eebus-provision.sh`). Die frühere C-Fassung
+auf [openeebus](https://github.com/NIBEGroup/openeebus) von NIBE (Apache-2.0) bleibt als
+Rückweg. Beide sprechen dasselbe Protokoll mit DVhub
+([PROTOKOLL.md](../dvhub/eebus/go/PROTOKOLL.md)); nur die Go-Fassung kennt das E-Auto an der
+Wallbox. Rollen:
 
 - **§14a-Steuerbox (Netzbetreiber):** DVhub ist das „Controllable System“. Die Steuerbox
   begrenzt den Bezug (LPC, §14a EnWG) und die Einspeisung (LPP) und liest den
@@ -23,8 +24,12 @@ Go-Fassung kennt das E-Auto an der Wallbox. Rollen:
 
 1. **Einstellungen → System → EEBUS → „EEBUS aktivieren“**, speichern, DVhub neu starten.
    - Nativ (Debian/Raspberry Pi OS): Der Neustart baut dvhub-eebus im Hintergrund
-     (`eebus-provision.sh`: Toolchain, libwebsockets, cJSON, Avahi, ~1 min auf einem Pi 4).
-     DVhub erkennt das fertige Programm von selbst.
+     (`eebus-provision.sh`): Go-Werkzeugkette von go.dev (Prüfsumme fest in
+     `dvhub/eebus/go-toolchain.pin`, nur während des Baus unter `/var/tmp`), Avahi, statischer
+     Bau, Selbsttest. Download ~70 MB plus Module, unter 600 MB Arbeitsspeicher. DVhub
+     erkennt das fertige Programm von selbst. Eine vorhandene C-Fassung ersetzt der nächste
+     Neustart; Zertifikat und Kopplungen bleiben. Zurück zur C-Fassung:
+     `touch /var/lib/dvhub/.eebus-impl-c`, dann `bash /opt/dvhub/eebus-provision.sh`.
    - Container: dvhub-eebus ist im Image. Für mDNS nutzt der Container das Avahi des Hosts
      (D-Bus-Socket eingebunden, balena: `io.balena.features.dbus`) oder startet ein eigenes
      (Host-Netz nötig).
@@ -128,8 +133,8 @@ enthält sie, Failsafe-Zustand und Zählerstände; nach dem Import gilt die Kopp
   C-Fassung, auf [3] zusätzlich EVCC/EVCEM/EVSOC/OPEV/OSCEV/CEVC. Gegenüberstellung C → Go,
   Abweichungen und die neuen `ev_*`-Meldungen: [PROTOKOLL.md](../dvhub/eebus/go/PROTOKOLL.md).
   Bauen: `dvhub/eebus/build-go.sh` (statisch, ohne CGO; ohne lokales Go per Docker). Rückweg
-  im Image: `--build-arg EEBUS_IMPL=c`.
-- `dvhub/eebus/bridge/` — dvhub-eebus (C, nativ): lokales SPINE-Gerät „EnergyManagementSystem“
+  im Image: `--build-arg EEBUS_IMPL=c`, nativ: `$DATA_DIR/.eebus-impl-c`.
+- `dvhub/eebus/bridge/` — dvhub-eebus (C, Rückweg; nativ auch für Architekturen ohne Go-Paket): lokales SPINE-Gerät „EnergyManagementSystem“
   mit vier Entitäten: [1] CEM/CS LPC, [2] CEM/CS LPP, [3] CEM mit EG LPC/LPP, MA MPC, CEM OHPCF,
   [4] GridConnectionPointOfPremises/GCP MGCP. Protokoll mit DVhub: eine JSON-Zeile je
   Befehl (stdin) bzw. Ereignis (stdout), siehe `main.c`.
