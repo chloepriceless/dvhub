@@ -9,6 +9,8 @@
 // Ergebnis: true | false | null (unbekannt — keine Wallbox eingerichtet, keine
 // Antwort, evcc-Daten veraltet). Der Aufrufer entscheidet, was „unbekannt“ heißt.
 
+import { DIRECT_WALLBOX_TYPES } from './types.js';
+
 export const EV_CHARGING_MIN_W = 100;
 const EVCC_STALE_MS = 3 * 60_000;
 
@@ -23,7 +25,7 @@ const EVCC_STALE_MS = 3 * 60_000;
 export function createEvChargingProbe({ getCfg, evccIntegration, getAdapter, now = () => Date.now() }) {
   return async function isEvCharging() {
     const type = getCfg()?.wallbox?.type;
-    if (type === 'openevse' || type === 'goe' || type === 'wattpilot' || type === 'victron') {
+    if (DIRECT_WALLBOX_TYPES.includes(type)) {
       const adapter = getAdapter?.(type);
       if (!adapter || adapter.isConfigured?.() === false) return null;
       let st;

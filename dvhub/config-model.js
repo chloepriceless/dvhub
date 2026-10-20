@@ -4470,7 +4470,10 @@ export function createDefaultConfig() {
       openevse: { url: '', username: '', password: '' },
       goe: { url: '' },
       wattpilot: { host: '', password: '' },
-      victron: { unitId: 0 }
+      victron: { unitId: 0 },
+      // openWB: 'pro' = openWB Pro/Satellit (HTTP connect.php), 'secondary' =
+      // series2/Duo im Modus „Nur Ladepunkt“ (MQTT, Ladepunkt 0/1).
+      openwb: { mode: 'pro', host: '', chargepoint: 0 }
     },
     // PV-Strings / Solar-Logger (services/pv-strings): Erzeugung je String bzw.
     // Tracker erfassen und als CSV fuer die pvnode-Kalibrierung aufbereiten.

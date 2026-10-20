@@ -17,6 +17,7 @@
 import { parseMqttPayload } from '../../transport-mqtt.js';
 import { gridImportPositiveW } from '../eebus/index.js';
 import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
+import { directWallboxConfigured } from '../wallbox/types.js';
 import {
   P14A_MIN_W, STEUVE_KINDS, DEFAULT_PRIORITY, computePmin14a, budgetW, allocateBudget,
 } from './rules.js';
@@ -136,9 +137,7 @@ export function createParagraph14aService(ctx, deps = {}) {
       // Eine direkt angebundene Wallbox (OpenEVSE, go-e) ist eine steuerbare
       // Verbrauchseinrichtung, sobald sie eingerichtet ist — auch wenn EOS sie
       // nicht plant. Über evcc nur, wenn DVhub evcc auch steuert.
-      const direct = (bc.charger === 'openevse' && cfg.wallbox?.openevse?.url) || (bc.charger === 'goe' && cfg.wallbox?.goe?.url)
-        || (bc.charger === 'wattpilot' && cfg.wallbox?.wattpilot?.host)
-        || (bc.charger === 'victron' && cfg.victron?.host);
+      const direct = bc.charger !== 'evcc' && directWallboxConfigured(cfg);
       if (bc.enabled || direct) {
         list.push({ id: 'wallbox', name: 'Wallbox', kind: 'ladepunkt', powerW: bc.maxChargeW, control: 'ems',
           controllable: true, currentW: wallboxPowerW(cfg), source: 'auto' });

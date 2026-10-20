@@ -12,6 +12,13 @@ verweist hierher.
 
 ### Neu
 
+- **openWB als Wallbox.** Zwei Wege: openWB Pro / series2 Satellit direkt über deren HTTP-Schnittstelle
+  (`connect.php`: Ladestrom, Stopp, Messwerte, Ladestand), oder openWB series2/Duo im Modus „Nur Ladepunkt“ —
+  DVhub steuert dann wie eine übergeordnete openWB per MQTT (Port 1883); bleibt DVhubs Lebenszeichen 80 s aus,
+  stoppt die Box selbst. Steuerung wie bei allen Wallboxen nur mit Pro-Lizenz (EOS-Weitergabe, Lademodus).
+- **Eine Liste der Wallbox-Typen** (`services/wallbox/types.js`) statt fünf Stellen — neue Wallboxen müssen nur
+  noch dort und im Adapter eingetragen werden.
+
 - **Ladestand vom Auto über evccs Fahrzeug-Treiber.** Integrationen → Wallbox → „Ladestand vom Auto“: Marke
   wählen (46 Vorlagen aus evcc 0.317.2, z. B. VW, Kia, Hyundai, Renault, Mercedes, Škoda, Tesla mit Tokens),
   Zugangsdaten der Hersteller-App eintragen. DVhub lädt das offizielle evcc-Programm erst beim Einschalten

@@ -163,6 +163,7 @@ import { loadSchedulableDevices } from './services/devices/schedulable.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter, createVictronEvcsAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
 import { createMypvRegulator } from './services/devices/mypv-regulator.js';
 import { createMainWallbox } from './services/wallbox/main-wallbox.js';
+import { createOpenWbAdapter } from './services/wallbox/openwb.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
@@ -1526,6 +1527,7 @@ function directWallboxAdapter(type) {
     getVictron: () => ctx.getCfg()?.victron, getTransport: () => transport,
     findUnit: (kind) => ctx.victronGx?.findUnit?.(kind) ?? null
   });
+  if (type === 'openwb') return createOpenWbAdapter(() => ctx.getCfg()?.wallbox?.openwb);
   return null;
 }
 // Auch für die Einstellungsseite (Live-Zustand der Victron-Wallbox, routes-api.js).

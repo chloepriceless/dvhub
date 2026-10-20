@@ -13,13 +13,16 @@
 
 import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
 
-export const WALLBOX_TYPES = Object.freeze(['evcc', 'openevse', 'goe', 'wattpilot', 'victron']);
+import { WALLBOX_TYPES } from './types.js';
+
+export { WALLBOX_TYPES };
 export const WALLBOX_LABELS = Object.freeze({
   evcc: 'evcc',
   openevse: 'OpenEVSE',
   goe: 'go-e Charger',
   wattpilot: 'Fronius Wattpilot',
-  victron: 'Victron EV Charging Station'
+  victron: 'Victron EV Charging Station',
+  openwb: 'openWB'
 });
 
 // Lademodi. evcc kennt vier; eine direkt angebundene Box drei — „PV“ heißt

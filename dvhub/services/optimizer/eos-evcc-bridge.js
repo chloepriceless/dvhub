@@ -23,10 +23,11 @@
  * DVhub-Neustart.
  */
 import { safeInterval } from '../safe-async.js';
+import { WALLBOX_TYPES } from '../wallbox/types.js';
 
 const DEFAULT_VOLTAGE_V = 230;
 const STOP_MODES = ['off', 'pv', 'minpv'];
-export const CHARGER_TYPES = ['evcc', 'openevse', 'goe', 'wattpilot', 'victron'];
+export const CHARGER_TYPES = WALLBOX_TYPES;
 
 /**
  * Nennleistungen meinen ganze Ampere: 11 kW an 3 × 230 V sind rechnerisch

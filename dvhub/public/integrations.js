@@ -2634,6 +2634,10 @@
     var wp = w.wattpilot || {};
     if (el('wallbox-wattpilot-host')) el('wallbox-wattpilot-host').value = wp.host || '';
     if (el('wallbox-wattpilot-pass')) { el('wallbox-wattpilot-pass').value = ''; el('wallbox-wattpilot-pass').placeholder = wp.passwordSet ? 'gespeichert' : ''; }
+    var ow = w.openwb || {};
+    if (el('wallbox-openwb-mode')) el('wallbox-openwb-mode').value = ow.mode || 'pro';
+    if (el('wallbox-openwb-host')) el('wallbox-openwb-host').value = ow.host || '';
+    if (el('wallbox-openwb-cp')) el('wallbox-openwb-cp').value = String(ow.chargepoint || 0);
     var vc = w.victron || {};
     if (el('wallbox-victron-unit')) el('wallbox-victron-unit').value = vc.unitId ? String(vc.unitId) : '';
     if (el('wallbox-victron-unit')) el('wallbox-victron-unit').placeholder = vc.foundUnitId ? ('0 = selbst suchen (gefunden: ' + vc.foundUnitId + ')') : '0 = selbst suchen';
@@ -2664,6 +2668,8 @@
     show('wallbox-goe-fields', t === 'goe');
     show('wallbox-wattpilot-fields', t === 'wattpilot');
     show('wallbox-victron-fields', t === 'victron');
+    show('wallbox-openwb-fields', t === 'openwb');
+    show('wallbox-openwb-cp-wrap', ((document.getElementById('wallbox-openwb-mode') || {}).value || 'pro') === 'secondary');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
     // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
     var only = document.querySelectorAll('[data-wallbox-only]');
@@ -2676,7 +2682,8 @@
       openevse: { url: v('wallbox-openevse-url'), username: v('wallbox-openevse-user'), password: (document.getElementById('wallbox-openevse-pass') || {}).value || '' },
       goe: { url: v('wallbox-goe-url') },
       wattpilot: { host: v('wallbox-wattpilot-host'), password: (document.getElementById('wallbox-wattpilot-pass') || {}).value || '' },
-      victron: { unitId: v('wallbox-victron-unit') === '' ? 0 : Number(v('wallbox-victron-unit')) }
+      victron: { unitId: v('wallbox-victron-unit') === '' ? 0 : Number(v('wallbox-victron-unit')) },
+      openwb: { mode: v('wallbox-openwb-mode') || 'pro', host: v('wallbox-openwb-host'), chargepoint: Number(v('wallbox-openwb-cp')) || 0 }
     };
   }
   function syncEvccDepModeUi() {
@@ -2970,7 +2977,7 @@
   document.addEventListener('change', function (e) {
     if (e.target && e.target.id === 'vev-product') vevRenderParams(e.target.value, {}, {});
     if (e.target && e.target.id === 'evcc-dep-mode') syncEvccDepModeUi();
-    if (e.target && e.target.id === 'wallbox-type') syncWallboxTypeUi();
+    if (e.target && (e.target.id === 'wallbox-type' || e.target.id === 'wallbox-openwb-mode')) syncWallboxTypeUi();
   });
   document.addEventListener('click', function (e) {
     var evccSave = e.target.closest('#evcc-save');

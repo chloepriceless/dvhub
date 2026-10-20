@@ -619,6 +619,7 @@
               <option value="goe">go-e Charger</option>
               <option value="wattpilot">Fronius Wattpilot</option>
               <option value="victron">Victron EV Charging Station (&uuml;ber den GX)</option>
+              <option value="openwb">openWB</option>
             </select>
           </label>
           <div class="evcc-wallbox-fields" id="wallbox-openevse-fields" hidden>
@@ -657,6 +658,26 @@
               </label>
             </div>
             <span class="field-hint">Das Passwort aus der Wattpilot-App. DVhub spricht die Box &uuml;ber dieselbe lokale Schnittstelle an wie die App.</span>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-openwb-fields" hidden>
+            <label class="dv-field">
+              <span class="field-label">Art der openWB</span>
+              <select class="input" id="wallbox-openwb-mode">
+                <option value="pro">openWB Pro / series2 Satellit (eigene Schnittstelle)</option>
+                <option value="secondary">openWB series2 / Duo im Modus &bdquo;Nur Ladepunkt&ldquo;</option>
+              </select>
+            </label>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">openWB-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-openwb-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field" id="wallbox-openwb-cp-wrap">
+                <span class="field-label">Ladepunkt (Duo)</span>
+                <select class="input" id="wallbox-openwb-cp"><option value="0">1</option><option value="1">2</option></select>
+              </label>
+            </div>
+            <span class="field-hint">Pro/Satellit: DVhub setzt den Ladestrom direkt. series2/Duo: in der openWB unter Einstellungen den Modus &bdquo;Nur Ladepunkt&ldquo; w&auml;hlen &mdash; DVhub steuert dann wie eine &uuml;bergeordnete openWB (MQTT, Port 1883). Meldet sich DVhub 80&nbsp;s nicht, stoppt die Box von selbst.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-victron-fields" hidden>
             <label class="dv-field">
@@ -1587,6 +1608,6 @@
   <script src="/pv-strings-drawer.js?v=20261005"></script>
   <script src="/eebus-drawer.js?v=20261020-victron"></script>
   <script src="/p14a-drawer.js?v=20261002"></script>
-  <script src="/integrations.js?v=20261020-vev"></script>
+  <script src="/integrations.js?v=20261020-openwb"></script>
 </body>
 </html>
