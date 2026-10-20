@@ -5545,7 +5545,7 @@ export function createApiRoutes(ctx) {
           if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
           if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
           if (type === 'wattpilot' && w.wattpilot?.host && w.wattpilot?.password) live = await createWattpilotAdapter(() => w.wattpilot).status();
-          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar'].includes(type) && w[type]?.host)) {
+          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick'].includes(type) && w[type]?.host)) {
             const a = ctx.directWallboxAdapter?.(type);
             live = a ? await a.status() : null;
           }
@@ -5564,6 +5564,7 @@ export function createApiRoutes(ctx) {
             bender: { host: w.bender?.host || '', unitId: Number(w.bender?.unitId) || 1, variant: w.bender?.variant === '4you' ? '4you' : 'omcci' },
             salia: { host: w.salia?.host || '' },
             peblar: { host: w.peblar?.host || '' },
+            nrgkick: { host: w.nrgkick?.host || '', usernameSet: Boolean(w.nrgkick?.username), passwordSet: Boolean(w.nrgkick?.password) },
             ocpp: { chargePointId: w.ocpp?.chargePointId || '', connectorId: Number(w.ocpp?.connectorId) || 1, server: { enabled: raw.ocpp?.enabled === true, port: Number(raw.ocpp?.port) || 8889, passwordSet: Boolean(raw.ocpp?.password), error: ctx.ocppServer?.status?.().error ?? null }, chargePoints: ctx.ocppServer?.list?.() || [] },
             live
           };
@@ -5655,7 +5656,7 @@ export function createApiRoutes(ctx) {
         if (ocPort != null && !(Number.isInteger(ocPort) && ocPort >= 1024 && ocPort <= 65535)) return json(res, 400, { ok: false, error: 'ocpp.port must be 1024..65535' });
         // Boxen mit nur einer Adresse (CHARX zusätzlich Ladepunkt-Nummer).
         const hostPatch = {};
-        for (const k of ['charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar']) {
+        for (const k of ['charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick']) {
           const o = w[k] && typeof w[k] === 'object' ? w[k] : null;
           if (!o) continue;
           const h = o.host != null ? String(o.host).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') : '';
@@ -5663,7 +5664,8 @@ export function createApiRoutes(ctx) {
           hostPatch[k] = k === 'charx' ? { host: h, chargePoint: Math.max(1, Math.min(99, Number(o.chargePoint) || 1)) }
             : k === 'keba' ? { host: h, model: o.model === 'p40' ? 'p40' : 'p30' }
             : k === 'bender' ? { host: h, unitId: Math.max(1, Math.min(255, Number(o.unitId) || 1)), variant: o.variant === '4you' ? '4you' : 'omcci' }
-            : k === 'heidelberg' ? { host: h, unitId: Math.max(1, Math.min(255, Number(o.unitId) || 1)) } : { host: h };
+            : k === 'heidelberg' ? { host: h, unitId: Math.max(1, Math.min(255, Number(o.unitId) || 1)) }
+            : k === 'nrgkick' ? { host: h, username: o.username, password: o.password } : { host: h };
         }
         const vUnitRaw = w.victron?.unitId;
         if (vUnitRaw !== undefined && vUnitRaw !== null && vUnitRaw !== '' && !(Number.isInteger(Number(vUnitRaw)) && Number(vUnitRaw) >= 0 && Number(vUnitRaw) <= 247)) return json(res, 400, { ok: false, error: 'wallbox.victron.unitId must be 0..247' });
@@ -5696,6 +5698,17 @@ export function createApiRoutes(ctx) {
         if (wallboxPatch.vUnit !== null) wb.victron.unitId = wallboxPatch.vUnit;
         if (wallboxPatch.owb) wb.openwb = wallboxPatch.owb;
         if (wallboxPatch.ewb) wb.eebus = wallboxPatch.ewb;
+        // Zugangsdaten: leer oder *** = unverändert (wie OpenEVSE/Wattpilot).
+        if (wallboxPatch.hostPatch?.nrgkick) {
+          const old = (wb.nrgkick && typeof wb.nrgkick === 'object') ? wb.nrgkick : {};
+          const n = wallboxPatch.hostPatch.nrgkick;
+          const keepCred = (v) => v == null || v === '' || v === '***';
+          const merged = { host: n.host };
+          for (const [field, max] of [['username', 128], ['password', 256]]) {
+            merged[field] = keepCred(n[field]) ? (old[field] || '') : String(n[field]).slice(0, max);
+          }
+          wallboxPatch.hostPatch.nrgkick = merged;
+        }
         Object.assign(wb, wallboxPatch.hostPatch || {});
         if (wallboxPatch.ocpp) wb.ocpp = wallboxPatch.ocpp;
         if (wallboxPatch.ocppServer) {

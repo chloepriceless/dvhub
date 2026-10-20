@@ -34,6 +34,8 @@ export const REDACTED_PATHS = Object.freeze([
   'wallbox.openevse.username',
   'wallbox.openevse.password',
   'wallbox.wattpilot.password',
+  'wallbox.nrgkick.username',
+  'wallbox.nrgkick.password',
   // evcc-Fahrzeugtreiber (services/vehicle-evcc): Zugangsdaten beim Hersteller,
   // Tokens, FIN — das ganze Objekt, die Felder hängen von der Vorlage ab.
   'vehicleEvcc.params',

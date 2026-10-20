@@ -626,6 +626,7 @@
               <option value="keba">KEBA KeContact P30 / P40</option>
               <option value="salia">Hardy Barth Salia (cPH2 / cP&mu;2)</option>
               <option value="peblar">Peblar Home / Home Plus</option>
+              <option value="nrgkick">NRGkick (Gen2)</option>
               <option value="bender">Bender-Laderegler (Mennekes AMTRON Professional, SMA EV Charger Business, Webasto Live, Optec …)</option>
               <option value="heidelberg">Amperfied / Heidelberg connect, Elli Gen 2 (VW/Cupra/&Scaron;koda Charger 2)</option>
               <option value="ocpp">OCPP-Wallbox (Alfen, ABL, Wallbox, Zaptec …)</option>
@@ -720,6 +721,23 @@
               <input type="text" class="input mono" id="wallbox-warp-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
               <span class="field-hint">DVhub nutzt den Ladeslot &bdquo;Externe Steuerung&ldquo; (HTTP-API). &bdquo;Automatisch&ldquo; schaltet ihn wieder aus.</span>
             </label>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-nrgkick-fields" hidden>
+            <label class="dv-field">
+              <span class="field-label">NRGkick-Adresse</span>
+              <input type="text" class="input mono" id="wallbox-nrgkick-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">Benutzer (optional)</span>
+                <input type="text" class="input mono" id="wallbox-nrgkick-user" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Passwort (optional)</span>
+                <input type="password" class="input mono" id="wallbox-nrgkick-pass" autocomplete="new-password">
+              </label>
+            </div>
+            <span class="field-hint">Lokale JSON-API in der NRGkick-App einschalten (SmartModule ab 4.0; bei NRGkick light kostenpflichtiges App-Upgrade). Kein Watchdog: f&auml;llt DVhub aus, bleibt die letzte Vorgabe stehen.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-peblar-fields" hidden>
             <label class="dv-field">

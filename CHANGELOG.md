@@ -12,6 +12,9 @@ verweist hierher.
 
 ### Neu
 
+- **NRGkick Gen2 als Wallbox** (lokale JSON-API, SmartModule ≥ 4.0): `current_set`, `charge_pause`, Status/Leistung/Energie
+  aus `/values`; BasicAuth optional (geschwärzt). Kein Watchdog.
+
 - **Peblar Home / Home Plus als Wallbox** (Modbus TCP nach Peblars offiziellem Client): Ladestrom 40000 (mA, 0 =
   Pause), Leistung, Energie, Ströme, CP-Zustand. Kein dokumentierter Watchdog.
 - **Mennekes AMTRON 4You 500 / 4Business 700** als Variante des Bender-Treibers (Strom über Register 2000).

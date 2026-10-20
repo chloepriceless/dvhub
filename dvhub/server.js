@@ -173,6 +173,7 @@ import { createHeidelbergAdapter } from './services/wallbox/heidelberg.js';
 import { createBenderAdapter } from './services/wallbox/bender.js';
 import { createSaliaAdapter } from './services/wallbox/salia.js';
 import { createPeblarAdapter } from './services/wallbox/peblar.js';
+import { createNrgkickAdapter } from './services/wallbox/nrgkick.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
@@ -1549,6 +1550,7 @@ function directWallboxAdapter(type) {
   if (type === 'eebus') return createEebusWallboxAdapter(() => ctx.getCfg()?.wallbox?.eebus, { getEebus: () => ctx.eebus });
   if (type === 'charx') return createCharxAdapter(() => ctx.getCfg()?.wallbox?.charx, { getTransport: () => transport });
   if (type === 'warp') return createWarpAdapter(() => ctx.getCfg()?.wallbox?.warp);
+  if (type === 'nrgkick') return createNrgkickAdapter(() => ctx.getCfg()?.wallbox?.nrgkick);
   if (type === 'peblar') return createPeblarAdapter(() => ctx.getCfg()?.wallbox?.peblar, { getTransport: () => transport });
   if (type === 'salia') return createSaliaAdapter(() => ctx.getCfg()?.wallbox?.salia, { getTransport: () => transport });
   if (type === 'bender') return createBenderAdapter(() => ctx.getCfg()?.wallbox?.bender, { getTransport: () => transport });

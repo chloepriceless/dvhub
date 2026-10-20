@@ -2657,6 +2657,10 @@
     }
     if (el('wallbox-salia-host')) el('wallbox-salia-host').value = (w.salia || {}).host || '';
     if (el('wallbox-peblar-host')) el('wallbox-peblar-host').value = (w.peblar || {}).host || '';
+    var nk = w.nrgkick || {};
+    if (el('wallbox-nrgkick-host')) el('wallbox-nrgkick-host').value = nk.host || '';
+    if (el('wallbox-nrgkick-user')) { el('wallbox-nrgkick-user').value = ''; el('wallbox-nrgkick-user').placeholder = nk.usernameSet ? 'gespeichert' : ''; }
+    if (el('wallbox-nrgkick-pass')) { el('wallbox-nrgkick-pass').value = ''; el('wallbox-nrgkick-pass').placeholder = nk.passwordSet ? 'gespeichert' : ''; }
     var bd = w.bender || {};
     if (el('wallbox-bender-host')) el('wallbox-bender-host').value = bd.host || '';
     if (el('wallbox-bender-unit')) el('wallbox-bender-unit').value = bd.unitId || 1;
@@ -2734,6 +2738,7 @@
     show('wallbox-bender-fields', t === 'bender');
     show('wallbox-salia-fields', t === 'salia');
     show('wallbox-peblar-fields', t === 'peblar');
+    show('wallbox-nrgkick-fields', t === 'nrgkick');
     show('wallbox-openwb-cp-wrap', ((document.getElementById('wallbox-openwb-mode') || {}).value || 'pro') === 'secondary');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
     // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
@@ -2757,6 +2762,7 @@
       bender: { host: v('wallbox-bender-host'), unitId: Number(v('wallbox-bender-unit')) || 1, variant: v('wallbox-bender-variant') || 'omcci' },
       salia: { host: v('wallbox-salia-host') },
       peblar: { host: v('wallbox-peblar-host') },
+      nrgkick: { host: v('wallbox-nrgkick-host'), username: v('wallbox-nrgkick-user'), password: (document.getElementById('wallbox-nrgkick-pass') || {}).value || '' },
       ocpp: { chargePointId: v('wallbox-ocpp-id'), connectorId: Number(v('wallbox-ocpp-connector')) || 1,
         server: { enabled: !!(document.getElementById('wallbox-ocpp-enabled') || {}).checked, port: Number(v('wallbox-ocpp-port')) || 8889,
           password: (document.getElementById('wallbox-ocpp-pass') || {}).value || '' } }
