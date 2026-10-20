@@ -5545,7 +5545,7 @@ export function createApiRoutes(ctx) {
           if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
           if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
           if (type === 'wattpilot' && w.wattpilot?.host && w.wattpilot?.password) live = await createWattpilotAdapter(() => w.wattpilot).status();
-          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl'].includes(type) && w[type]?.host)) {
+          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl', 'smartwb'].includes(type) && w[type]?.host)) {
             const a = ctx.directWallboxAdapter?.(type);
             live = a ? await a.status() : null;
           }
@@ -5565,6 +5565,7 @@ export function createApiRoutes(ctx) {
             salia: { host: w.salia?.host || '' },
             peblar: { host: w.peblar?.host || '' },
             abl: { host: w.abl?.host || '', outlet: Number(w.abl?.outlet) === 2 ? 2 : 1 },
+            smartwb: { host: w.smartwb?.host || '' },
             nrgkick: { host: w.nrgkick?.host || '', usernameSet: Boolean(w.nrgkick?.username), passwordSet: Boolean(w.nrgkick?.password) },
             ocpp: { chargePointId: w.ocpp?.chargePointId || '', connectorId: Number(w.ocpp?.connectorId) || 1, server: { enabled: raw.ocpp?.enabled === true, port: Number(raw.ocpp?.port) || 8889, passwordSet: Boolean(raw.ocpp?.password), error: ctx.ocppServer?.status?.().error ?? null }, chargePoints: ctx.ocppServer?.list?.() || [] },
             live
@@ -5657,7 +5658,7 @@ export function createApiRoutes(ctx) {
         if (ocPort != null && !(Number.isInteger(ocPort) && ocPort >= 1024 && ocPort <= 65535)) return json(res, 400, { ok: false, error: 'ocpp.port must be 1024..65535' });
         // Boxen mit nur einer Adresse (CHARX zusätzlich Ladepunkt-Nummer).
         const hostPatch = {};
-        for (const k of ['charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl']) {
+        for (const k of ['charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl', 'smartwb']) {
           const o = w[k] && typeof w[k] === 'object' ? w[k] : null;
           if (!o) continue;
           const h = o.host != null ? String(o.host).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') : '';

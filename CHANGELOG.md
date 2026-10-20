@@ -12,6 +12,9 @@ verweist hierher.
 
 ### Neu
 
+- **EVSE-WiFi / smartWB als Wallbox** (HTTP-API nach Doku vom 27.05.2022): `setCurrent`, `setStatus`; im Modus Always
+  Active Stopp über Strom 0. Kein Watchdog.
+
 - **ABL eM4 Single/Twin als Wallbox** (Modbus TCP nach ABL-Beschreibung R01, 12/2023): EMS-Vorgabe Icmax (0,1 A, 0 = aus,
   höchstens Idefault), Status, Leistung, Energie, Ströme; Twin: Ladepunkt links/rechts. Kein Watchdog dokumentiert.
 

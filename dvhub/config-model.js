@@ -4493,6 +4493,7 @@ export function createDefaultConfig() {
       nrgkick: { host: '', username: '', password: '' },
       // ABL eM4 Single/Twin: Outlet 1 = links/einzeln, 2 = rechts.
       abl: { host: '', outlet: 1 },
+      smartwb: { host: '' },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },
