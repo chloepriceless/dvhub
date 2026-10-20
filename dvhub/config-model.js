@@ -4476,7 +4476,10 @@ export function createDefaultConfig() {
       openwb: { mode: 'pro', host: '', chargepoint: 0 },
       // EEBUS-Wallbox (Elli, Porsche, Kontron …): SKI eines unter Integrationen →
       // EEBUS gekoppelten Geräts; Phasen für Strom → Leistung.
-      eebus: { ski: '', phases: 3 }
+      eebus: { ski: '', phases: 3 },
+      // Phoenix Contact CHARX (Modbus TCP, Ladepunkt-Nummer) und TinkerForge WARP (HTTP).
+      charx: { host: '', chargePoint: 1 },
+      warp: { host: '' }
     },
     // PV-Strings / Solar-Logger (services/pv-strings): Erzeugung je String bzw.
     // Tracker erfassen und als CSV fuer die pvnode-Kalibrierung aufbereiten.

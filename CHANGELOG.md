@@ -12,6 +12,12 @@ verweist hierher.
 
 ### Neu
 
+- **Phoenix Contact CHARX als Wallbox** (auch Veton, LadeFoxx): Modbus TCP nach Handbuch 109999_en_04 (Anhang B 3),
+  Ladestrom x301, Freigabe x300, Status x299, Leistung/Energie; Watchdog — meldet sich DVhub 5 min nicht, fällt die
+  Box auf 6 A zurück.
+- **TinkerForge WARP als Wallbox**: HTTP-API (docs.warp-charger.com) über den Ladeslot „Externe Steuerung“
+  (`evse/external_current` in mA), Status aus `evse/state`, Leistung aus `meter/values`.
+
 - **EEBUS-Wallbox (Elli / VW ID. Charger, Cupra, Audi, Škoda, Porsche, Kontron/Steca/ghostONE).** Unter
   Integrationen → EEBUS koppeln, dann als Wallbox wählen. DVhub steuert die Box über ihre Verbrauchsgrenze (LPC):
   Laden = Strom × 230 V × Phasen, Stopp = 0 W, Automatisch = Grenze aufheben. Die Vorgabe gilt zusammen mit einem

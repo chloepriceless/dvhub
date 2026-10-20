@@ -621,6 +621,8 @@
               <option value="victron">Victron EV Charging Station (&uuml;ber den GX)</option>
               <option value="openwb">openWB</option>
               <option value="eebus">EEBUS-Wallbox (Elli, Porsche, Kontron …)</option>
+              <option value="charx">Phoenix Contact CHARX (auch Veton, LadeFoxx)</option>
+              <option value="warp">TinkerForge WARP</option>
             </select>
           </label>
           <div class="evcc-wallbox-fields" id="wallbox-openevse-fields" hidden>
@@ -692,6 +694,26 @@
               </label>
             </div>
             <span class="field-hint">Elli / VW ID. Charger, Cupra, Audi, &Scaron;koda, Porsche, Kontron/Steca/ghostONE: zuerst unter Integrationen &rarr; EEBUS koppeln. DVhub steuert die Box &uuml;ber ihre Verbrauchsgrenze (Laden = Strom &times; 230&nbsp;V &times; Phasen, Stopp = 0&nbsp;W). Ob ein Auto steckt, erkennt DVhub nur, solange es l&auml;dt.</span>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-charx-fields" hidden>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">CHARX-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-charx-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Ladepunkt-Nummer</span>
+                <input type="number" class="input mono" id="wallbox-charx-cp" min="1" max="99" step="1" placeholder="1">
+              </label>
+            </div>
+            <span class="field-hint">Modbus TCP (Port 502). In der CHARX unter Ladepunkt &rarr; Konfiguration den Freigabemodus &bdquo;Modbus&ldquo; w&auml;hlen und den Modbus-Server starten. DVhub setzt einen Watchdog: meldet es sich 5&nbsp;min nicht, f&auml;llt die Box auf 6&nbsp;A zur&uuml;ck.</span>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-warp-fields" hidden>
+            <label class="dv-field">
+              <span class="field-label">WARP-Adresse</span>
+              <input type="text" class="input mono" id="wallbox-warp-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              <span class="field-hint">DVhub nutzt den Ladeslot &bdquo;Externe Steuerung&ldquo; (HTTP-API). &bdquo;Automatisch&ldquo; schaltet ihn wieder aus.</span>
+            </label>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-victron-fields" hidden>
             <label class="dv-field">

@@ -2634,6 +2634,10 @@
     var wp = w.wattpilot || {};
     if (el('wallbox-wattpilot-host')) el('wallbox-wattpilot-host').value = wp.host || '';
     if (el('wallbox-wattpilot-pass')) { el('wallbox-wattpilot-pass').value = ''; el('wallbox-wattpilot-pass').placeholder = wp.passwordSet ? 'gespeichert' : ''; }
+    var cx = w.charx || {};
+    if (el('wallbox-charx-host')) el('wallbox-charx-host').value = cx.host || '';
+    if (el('wallbox-charx-cp')) el('wallbox-charx-cp').value = cx.chargePoint || 1;
+    if (el('wallbox-warp-host')) el('wallbox-warp-host').value = (w.warp || {}).host || '';
     var eb = w.eebus || {};
     if (el('wallbox-eebus-phases')) el('wallbox-eebus-phases').value = String(eb.phases || 3);
     fillEebusWallboxSelect(eb.ski || '');
@@ -2689,6 +2693,8 @@
     show('wallbox-victron-fields', t === 'victron');
     show('wallbox-openwb-fields', t === 'openwb');
     show('wallbox-eebus-fields', t === 'eebus');
+    show('wallbox-charx-fields', t === 'charx');
+    show('wallbox-warp-fields', t === 'warp');
     show('wallbox-openwb-cp-wrap', ((document.getElementById('wallbox-openwb-mode') || {}).value || 'pro') === 'secondary');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
     // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
@@ -2704,7 +2710,9 @@
       wattpilot: { host: v('wallbox-wattpilot-host'), password: (document.getElementById('wallbox-wattpilot-pass') || {}).value || '' },
       victron: { unitId: v('wallbox-victron-unit') === '' ? 0 : Number(v('wallbox-victron-unit')) },
       openwb: { mode: v('wallbox-openwb-mode') || 'pro', host: v('wallbox-openwb-host'), chargepoint: Number(v('wallbox-openwb-cp')) || 0 },
-      eebus: { ski: v('wallbox-eebus-ski'), phases: Number(v('wallbox-eebus-phases')) || 3 }
+      eebus: { ski: v('wallbox-eebus-ski'), phases: Number(v('wallbox-eebus-phases')) || 3 },
+      charx: { host: v('wallbox-charx-host'), chargePoint: Number(v('wallbox-charx-cp')) || 1 },
+      warp: { host: v('wallbox-warp-host') }
     };
   }
   function syncEvccDepModeUi() {

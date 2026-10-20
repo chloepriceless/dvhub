@@ -5538,7 +5538,7 @@ export function createApiRoutes(ctx) {
           if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
           if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
           if (type === 'wattpilot' && w.wattpilot?.host && w.wattpilot?.password) live = await createWattpilotAdapter(() => w.wattpilot).status();
-          if (type === 'victron' || type === 'eebus' || (type === 'openwb' && w.openwb?.host)) {
+          if (type === 'victron' || type === 'eebus' || (['openwb', 'charx', 'warp'].includes(type) && w[type]?.host)) {
             const a = ctx.directWallboxAdapter?.(type);
             live = a ? await a.status() : null;
           }
@@ -5550,6 +5550,8 @@ export function createApiRoutes(ctx) {
             victron: { unitId: Number(w.victron?.unitId) || 0, gxHost: raw.victron?.host || '', foundUnitId: ctx.victronGx?.findUnit?.('evcharger') ?? null },
             openwb: { mode: w.openwb?.mode === 'secondary' ? 'secondary' : 'pro', host: w.openwb?.host || '', chargepoint: Number(w.openwb?.chargepoint) === 1 ? 1 : 0 },
             eebus: { ski: w.eebus?.ski || '', phases: Number(w.eebus?.phases) === 1 ? 1 : 3 },
+            charx: { host: w.charx?.host || '', chargePoint: Number(w.charx?.chargePoint) || 1 },
+            warp: { host: w.warp?.host || '' },
             live
           };
         })()
@@ -5631,6 +5633,15 @@ export function createApiRoutes(ctx) {
         const ewb = w.eebus && typeof w.eebus === 'object' ? w.eebus : null;
         const ewbSki = ewb && ewb.ski != null ? String(ewb.ski).trim().toLowerCase().replace(/[\s:]/g, '') : null;
         if (ewbSki && !/^[0-9a-f]{40}$/.test(ewbSki)) return json(res, 400, { ok: false, error: 'wallbox.eebus.ski must be 40 hex characters' });
+        // Boxen mit nur einer Adresse (CHARX zusätzlich Ladepunkt-Nummer).
+        const hostPatch = {};
+        for (const k of ['charx', 'warp']) {
+          const o = w[k] && typeof w[k] === 'object' ? w[k] : null;
+          if (!o) continue;
+          const h = o.host != null ? String(o.host).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') : '';
+          if (h && !/^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(h)) return json(res, 400, { ok: false, error: `wallbox.${k}.host must be an address or hostname` });
+          hostPatch[k] = k === 'charx' ? { host: h, chargePoint: Math.max(1, Math.min(99, Number(o.chargePoint) || 1)) } : { host: h };
+        }
         const vUnitRaw = w.victron?.unitId;
         if (vUnitRaw !== undefined && vUnitRaw !== null && vUnitRaw !== '' && !(Number.isInteger(Number(vUnitRaw)) && Number(vUnitRaw) >= 0 && Number(vUnitRaw) <= 247)) return json(res, 400, { ok: false, error: 'wallbox.victron.unitId must be 0..247' });
         const urlOk = (u) => u === '' || /^https?:\/\//i.test(u);
@@ -5647,7 +5658,7 @@ export function createApiRoutes(ctx) {
         wallboxPatch = { type: w.type, oeUrl, goeUrl, oeUser: w.openevse?.username, oePass: w.openevse?.password, wpHost, wpPass: w.wattpilot?.password,
           vUnit: vUnitRaw === undefined || vUnitRaw === null || vUnitRaw === '' ? null : Number(vUnitRaw),
           owb: owb ? { host: owbHost ?? '', mode: owb.mode === 'secondary' ? 'secondary' : 'pro', chargepoint: Number(owb.chargepoint) === 1 ? 1 : 0 } : null,
-          ewb: ewb ? { ski: ewbSki ?? '', phases: Number(ewb.phases) === 1 ? 1 : 3 } : null };
+          ewb: ewb ? { ski: ewbSki ?? '', phases: Number(ewb.phases) === 1 ? 1 : 3 } : null, hostPatch };
       }
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
       if (wallboxPatch) {
@@ -5660,6 +5671,7 @@ export function createApiRoutes(ctx) {
         if (wallboxPatch.vUnit !== null) wb.victron.unitId = wallboxPatch.vUnit;
         if (wallboxPatch.owb) wb.openwb = wallboxPatch.owb;
         if (wallboxPatch.ewb) wb.eebus = wallboxPatch.ewb;
+        Object.assign(wb, wallboxPatch.hostPatch || {});
         if (wallboxPatch.wpHost !== null) wb.wattpilot.host = wallboxPatch.wpHost;
         if (wallboxPatch.oeUrl !== null) wb.openevse.url = wallboxPatch.oeUrl;
         if (wallboxPatch.goeUrl !== null) wb.goe.url = wallboxPatch.goeUrl;
