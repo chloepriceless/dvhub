@@ -633,6 +633,7 @@
               <option value="smartevse">SmartEVSE v3</option>
               <option value="em2go">EM2GO (Home, Pro Power)</option>
               <option value="daheimladen">DaheimLaden (Smart, Touch, PRO)</option>
+              <option value="schneider">Schneider EVlink Pro AC</option>
               <option value="phoenix">Phoenix EV Charge Control (Wallbe, Compleo Pro, E3/DC Easy Connect, ESL Walli)</option>
               <option value="bender">Bender-Laderegler (Mennekes AMTRON Professional, SMA EV Charger Business, Webasto Live, Optec …)</option>
               <option value="heidelberg">Amperfied / Heidelberg connect, Elli Gen 2 (VW/Cupra/&Scaron;koda Charger 2)</option>
@@ -774,6 +775,19 @@
               </label>
             </div>
             <span class="field-hint">Modbus TCP (Port 502, LAN oder WLAN; Firmware ab Smart AC_SCE_3.21DA, Touch AC_DG3_1.24, PRO AC_M3W_3.11STP, Business PRO AC_M3W_4.03PTB). Smart und Touch fallen ohne DVhub nach 10&nbsp;min auf 6&nbsp;A zur&uuml;ck; die PRO-Modelle kennen keinen R&uuml;ckfall, dort bleibt die letzte Vorgabe stehen.</span>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-schneider-fields" hidden>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">EVlink-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-schneider-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Unit-ID</span>
+                <input type="number" class="input mono" id="wallbox-schneider-unit" min="1" max="255" step="1" placeholder="255">
+              </label>
+            </div>
+            <span class="field-hint">Modbus TCP (Port 502) in der eSetup-App einschalten. DVhub sendet ein Lebenszeichen; bleibt es aus, l&auml;dt die Box mit dem in eSetup eingestellten Ersatzstrom weiter. &bdquo;Automatisch&ldquo; gibt 32&nbsp;A frei und schaltet das Lebenszeichen ab.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-smartevse-fields" hidden>
             <label class="dv-field">

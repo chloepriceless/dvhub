@@ -179,6 +179,7 @@ import { createSmartwbAdapter } from './services/wallbox/smartwb.js';
 import { createNexblueAdapter } from './services/wallbox/nexblue.js';
 import { createSmartevseAdapter } from './services/wallbox/smartevse.js';
 import { createEm2goAdapter, createDaheimladenAdapter } from './services/wallbox/em2go.js';
+import { createSchneiderAdapter } from './services/wallbox/schneider.js';
 import { createPhoenixAdapter } from './services/wallbox/phoenix.js';
 import { createWallboxAdapterCache } from './services/wallbox/adapter-cache.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
@@ -1563,6 +1564,7 @@ function buildWallboxAdapter(type) {
   if (type === 'phoenix') return createPhoenixAdapter(() => ctx.getCfg()?.wallbox?.phoenix, { getTransport: wallboxModbus });
   if (type === 'em2go') return createEm2goAdapter(() => ctx.getCfg()?.wallbox?.em2go, { getTransport: wallboxModbus });
   if (type === 'daheimladen') return createDaheimladenAdapter(() => ctx.getCfg()?.wallbox?.daheimladen, { getTransport: wallboxModbus });
+  if (type === 'schneider') return createSchneiderAdapter(() => ctx.getCfg()?.wallbox?.schneider, { getTransport: wallboxModbus });
   if (type === 'smartevse') return createSmartevseAdapter(() => ctx.getCfg()?.wallbox?.smartevse);
   if (type === 'nexblue') return createNexblueAdapter(() => ctx.getCfg()?.wallbox?.nexblue, { getTransport: wallboxModbus });
   if (type === 'smartwb') return createSmartwbAdapter(() => ctx.getCfg()?.wallbox?.smartwb);

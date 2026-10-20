@@ -39,6 +39,7 @@ export const WALLBOX_LABELS = Object.freeze({
   smartevse: 'SmartEVSE',
   em2go: 'EM2GO',
   daheimladen: 'DaheimLaden',
+  schneider: 'Schneider EVlink Pro AC',
   phoenix: 'Phoenix EV Charge Control'
 });
 

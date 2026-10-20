@@ -4502,6 +4502,8 @@ export function createDefaultConfig() {
       em2go: { host: '', unitId: 1 },
       // DaheimLaden (Smart, Touch, PRO; Modbus TCP 502, Belegung wie EM2GO, Unit 255).
       daheimladen: { host: '', unitId: 255 },
+      // Schneider EVlink Pro AC (Modbus TCP 502, Server-ID 255).
+      schneider: { host: '', unitId: 255 },
       // Phoenix EV Charge Control (Wallbe, Compleo Pro, E3/DC Easy Connect, ESL Walli; Unit 255).
       phoenix: { host: '' },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.

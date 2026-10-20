@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **Schneider EVlink Pro AC als Wallbox** (Modbus TCP nach dem „EVlink Pro AC Modbus Connectivity Guide“
+  GEX1969300–06): Ladestrom 6–32 A, Stopp über Vorgabe 0, Lebenszeichen (Lifebit) — ohne DVhub gilt der in eSetup
+  eingestellte Ersatzstrom; Zustand, Leistung, Strom, Zählerstand. Je nach Firmware Holding- oder Input-Register.
+
 - **DaheimLaden als Wallbox** (Smart V1+V2, Touch, Smart/Touch/Business PRO; Modbus TCP nach der
   „DaheimLader Modbus/TCP-Spezifikation“ vom 28.07.2026): gleiche Belegung wie EM2GO, Unit-ID 255. Smart und Touch
   fallen ohne DVhub nach 10 min auf 6 A zurück; die PRO-Modelle kennen keinen Rückfall, DVhub lädt dort ohne.
