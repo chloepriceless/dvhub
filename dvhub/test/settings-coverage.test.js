@@ -65,6 +65,7 @@ const INTENTIONAL = new Map([
   ['wallbox.heidelberg.unitId', 'EVCC-Schublade auf der Integrationsseite (Amperfied/Elli)'],
   ['wallbox.bender.host', 'EVCC-Schublade auf der Integrationsseite (Bender)'],
   ['wallbox.bender.unitId', 'EVCC-Schublade auf der Integrationsseite (Bender)'],
+  ['wallbox.salia.host', 'EVCC-Schublade auf der Integrationsseite (Salia)'],
   ['wallbox.ocpp.chargePointId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],
   ['wallbox.ocpp.connectorId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],
   ['ocpp.enabled', 'EVCC-Schublade auf der Integrationsseite (OCPP-Zentrale)'],

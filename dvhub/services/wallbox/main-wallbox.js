@@ -29,7 +29,8 @@ export const WALLBOX_LABELS = Object.freeze({
   ocpp: 'OCPP-Wallbox',
   keba: 'KEBA KeContact',
   heidelberg: 'Amperfied / Heidelberg / Elli Gen 2',
-  bender: 'Bender / Mennekes Professional / SMA EV Charger Business'
+  bender: 'Bender / Mennekes Professional / SMA EV Charger Business',
+  salia: 'Hardy Barth Salia'
 });
 
 // Lademodi. evcc kennt vier; eine direkt angebundene Box drei — „PV“ heißt

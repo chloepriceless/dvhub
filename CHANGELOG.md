@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **Hardy Barth Salia (cPH2/cPμ2) als Wallbox** (Modbus TCP nach docs.echarge.de, MapVersion 2.1.0): Modus MANUAL,
+  Strom 201, Start/Stopp 202, Failsafe 203/205 (5 min, 6 A) mit Lebenszeichen 207 bei jeder Abfrage; Leistung und
+  Energie als Float32.
+
 - **Bender-Laderegler als Wallbox** — ein Treiber für Mennekes AMTRON Professional/AMEDIO, SMA EV Charger Business,
   Webasto Live, Optec, Ebee, CUBOS, Ensto (Modbus TCP, Registersatz OMCCI nach bender.de): HEMS-Stromgrenze 1000
   (0 = Pause), Rückfall 131/132, Zustand 122, Leistung/Energie/Ströme 212–221.

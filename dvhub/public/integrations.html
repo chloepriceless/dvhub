@@ -624,6 +624,7 @@
               <option value="charx">Phoenix Contact CHARX (auch Veton, LadeFoxx)</option>
               <option value="warp">TinkerForge WARP</option>
               <option value="keba">KEBA KeContact P30 / P40</option>
+              <option value="salia">Hardy Barth Salia (cPH2 / cP&mu;2)</option>
               <option value="bender">Bender-Laderegler (Mennekes AMTRON Professional, SMA EV Charger Business, Webasto Live, Optec …)</option>
               <option value="heidelberg">Amperfied / Heidelberg connect, Elli Gen 2 (VW/Cupra/&Scaron;koda Charger 2)</option>
               <option value="ocpp">OCPP-Wallbox (Alfen, ABL, Wallbox, Zaptec …)</option>
@@ -717,6 +718,13 @@
               <span class="field-label">WARP-Adresse</span>
               <input type="text" class="input mono" id="wallbox-warp-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
               <span class="field-hint">DVhub nutzt den Ladeslot &bdquo;Externe Steuerung&ldquo; (HTTP-API). &bdquo;Automatisch&ldquo; schaltet ihn wieder aus.</span>
+            </label>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-salia-fields" hidden>
+            <label class="dv-field">
+              <span class="field-label">Salia-Adresse</span>
+              <input type="text" class="input mono" id="wallbox-salia-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              <span class="field-hint">Modbus TCP (Port 502, Unit 1). DVhub stellt die Box auf &bdquo;Manuell&ldquo; und setzt den Failsafe (5&nbsp;min, 6&nbsp;A); &bdquo;Automatisch&ldquo; schaltet zur&uuml;ck auf &bdquo;Power&ldquo;.</span>
             </label>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-bender-fields" hidden>

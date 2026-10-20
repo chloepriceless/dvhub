@@ -4486,6 +4486,8 @@ export function createDefaultConfig() {
       heidelberg: { host: '', unitId: 1 },
       // Bender-Laderegler (Mennekes Professional, SMA EV Charger Business, Webasto Live …), Registersatz OMCCI.
       bender: { host: '', unitId: 1 },
+      // Hardy Barth Salia cPH2/cPμ2 (Modbus TCP, Unit 1).
+      salia: { host: '' },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },
