@@ -4484,6 +4484,8 @@ export function createDefaultConfig() {
       keba: { host: '', model: 'p30' },
       // Amperfied/Heidelberg connect, Elli Gen 2 (gleiches Layout); Unit-ID meist 1.
       heidelberg: { host: '', unitId: 1 },
+      // Bender-Laderegler (Mennekes Professional, SMA EV Charger Business, Webasto Live …), Registersatz OMCCI.
+      bender: { host: '', unitId: 1 },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },

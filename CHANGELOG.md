@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **Bender-Laderegler als Wallbox** — ein Treiber für Mennekes AMTRON Professional/AMEDIO, SMA EV Charger Business,
+  Webasto Live, Optec, Ebee, CUBOS, Ensto (Modbus TCP, Registersatz OMCCI nach bender.de): HEMS-Stromgrenze 1000
+  (0 = Pause), Rückfall 131/132, Zustand 122, Leistung/Energie/Ströme 212–221.
+
 - **Amperfied/Heidelberg connect und Elli Gen 2 (VW ID. Charger 2, Cupra/Škoda Charger 2) als Wallbox** — gleiches
   Modbus-TCP-Layout (Amperfied 04/2025, Elli v1.0 vom 15.10.2025): Strom 261 in 0,1 A (0 = Stopp), Watchdog 257,
   Rückfallstrom 262; Zustand, Ströme, Leistung, Energie aus den Input-Registern.

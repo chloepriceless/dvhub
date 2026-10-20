@@ -624,6 +624,7 @@
               <option value="charx">Phoenix Contact CHARX (auch Veton, LadeFoxx)</option>
               <option value="warp">TinkerForge WARP</option>
               <option value="keba">KEBA KeContact P30 / P40</option>
+              <option value="bender">Bender-Laderegler (Mennekes AMTRON Professional, SMA EV Charger Business, Webasto Live, Optec …)</option>
               <option value="heidelberg">Amperfied / Heidelberg connect, Elli Gen 2 (VW/Cupra/&Scaron;koda Charger 2)</option>
               <option value="ocpp">OCPP-Wallbox (Alfen, ABL, Wallbox, Zaptec …)</option>
             </select>
@@ -717,6 +718,19 @@
               <input type="text" class="input mono" id="wallbox-warp-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
               <span class="field-hint">DVhub nutzt den Ladeslot &bdquo;Externe Steuerung&ldquo; (HTTP-API). &bdquo;Automatisch&ldquo; schaltet ihn wieder aus.</span>
             </label>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-bender-fields" hidden>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">Wallbox-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-bender-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Unit-ID</span>
+                <input type="number" class="input mono" id="wallbox-bender-unit" min="1" max="255" step="1" placeholder="1">
+              </label>
+            </div>
+            <span class="field-hint">In der Weboberfl&auml;che der Box &bdquo;Modbus TCP Server&ldquo; einschalten und den Registersatz &bdquo;OMCCI&ldquo; w&auml;hlen (Mennekes: Software ab 5.12). DVhub setzt den R&uuml;ckfall: ohne Verbindung 5&nbsp;min l&auml;dt die Box mit 6&nbsp;A.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-heidelberg-fields" hidden>
             <div class="evcc-eos-grid">

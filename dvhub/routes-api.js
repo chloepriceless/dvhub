@@ -5545,7 +5545,7 @@ export function createApiRoutes(ctx) {
           if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
           if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
           if (type === 'wattpilot' && w.wattpilot?.host && w.wattpilot?.password) live = await createWattpilotAdapter(() => w.wattpilot).status();
-          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp', 'keba', 'heidelberg'].includes(type) && w[type]?.host)) {
+          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp', 'keba', 'heidelberg', 'bender'].includes(type) && w[type]?.host)) {
             const a = ctx.directWallboxAdapter?.(type);
             live = a ? await a.status() : null;
           }
@@ -5561,6 +5561,7 @@ export function createApiRoutes(ctx) {
             warp: { host: w.warp?.host || '' },
             keba: { host: w.keba?.host || '', model: w.keba?.model === 'p40' ? 'p40' : 'p30' },
             heidelberg: { host: w.heidelberg?.host || '', unitId: Number(w.heidelberg?.unitId) || 1 },
+            bender: { host: w.bender?.host || '', unitId: Number(w.bender?.unitId) || 1 },
             ocpp: { chargePointId: w.ocpp?.chargePointId || '', connectorId: Number(w.ocpp?.connectorId) || 1, server: { enabled: raw.ocpp?.enabled === true, port: Number(raw.ocpp?.port) || 8889, passwordSet: Boolean(raw.ocpp?.password), error: ctx.ocppServer?.status?.().error ?? null }, chargePoints: ctx.ocppServer?.list?.() || [] },
             live
           };
@@ -5652,14 +5653,14 @@ export function createApiRoutes(ctx) {
         if (ocPort != null && !(Number.isInteger(ocPort) && ocPort >= 1024 && ocPort <= 65535)) return json(res, 400, { ok: false, error: 'ocpp.port must be 1024..65535' });
         // Boxen mit nur einer Adresse (CHARX zusätzlich Ladepunkt-Nummer).
         const hostPatch = {};
-        for (const k of ['charx', 'warp', 'keba', 'heidelberg']) {
+        for (const k of ['charx', 'warp', 'keba', 'heidelberg', 'bender']) {
           const o = w[k] && typeof w[k] === 'object' ? w[k] : null;
           if (!o) continue;
           const h = o.host != null ? String(o.host).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') : '';
           if (h && !/^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(h)) return json(res, 400, { ok: false, error: `wallbox.${k}.host must be an address or hostname` });
           hostPatch[k] = k === 'charx' ? { host: h, chargePoint: Math.max(1, Math.min(99, Number(o.chargePoint) || 1)) }
             : k === 'keba' ? { host: h, model: o.model === 'p40' ? 'p40' : 'p30' }
-            : k === 'heidelberg' ? { host: h, unitId: Math.max(1, Math.min(255, Number(o.unitId) || 1)) } : { host: h };
+            : (k === 'heidelberg' || k === 'bender') ? { host: h, unitId: Math.max(1, Math.min(255, Number(o.unitId) || 1)) } : { host: h };
         }
         const vUnitRaw = w.victron?.unitId;
         if (vUnitRaw !== undefined && vUnitRaw !== null && vUnitRaw !== '' && !(Number.isInteger(Number(vUnitRaw)) && Number(vUnitRaw) >= 0 && Number(vUnitRaw) <= 247)) return json(res, 400, { ok: false, error: 'wallbox.victron.unitId must be 0..247' });
