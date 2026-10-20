@@ -2637,7 +2637,8 @@
     var oc = w.ocpp || {};
     var ocs = oc.server || {};
     if (el('wallbox-ocpp-enabled')) el('wallbox-ocpp-enabled').checked = ocs.enabled === true;
-    if (el('wallbox-ocpp-port')) el('wallbox-ocpp-port').value = ocs.port || 8887;
+    if (el('wallbox-ocpp-port')) el('wallbox-ocpp-port').value = ocs.port || 8889;
+    if (el('wallbox-ocpp-hint') && ocs.error) el('wallbox-ocpp-hint').textContent = '⚠ ' + ocs.error;
     if (el('wallbox-ocpp-pass')) { el('wallbox-ocpp-pass').value = ''; el('wallbox-ocpp-pass').placeholder = ocs.passwordSet ? 'gespeichert' : ''; }
     if (el('wallbox-ocpp-connector')) el('wallbox-ocpp-connector').value = oc.connectorId || 1;
     var ocSel = el('wallbox-ocpp-id');
@@ -2745,7 +2746,7 @@
       keba: { host: v('wallbox-keba-host'), model: v('wallbox-keba-model') || 'p30' },
       heidelberg: { host: v('wallbox-heidelberg-host'), unitId: Number(v('wallbox-heidelberg-unit')) || 1 },
       ocpp: { chargePointId: v('wallbox-ocpp-id'), connectorId: Number(v('wallbox-ocpp-connector')) || 1,
-        server: { enabled: !!(document.getElementById('wallbox-ocpp-enabled') || {}).checked, port: Number(v('wallbox-ocpp-port')) || 8887,
+        server: { enabled: !!(document.getElementById('wallbox-ocpp-enabled') || {}).checked, port: Number(v('wallbox-ocpp-port')) || 8889,
           password: (document.getElementById('wallbox-ocpp-pass') || {}).value || '' } }
     };
   }

@@ -148,3 +148,24 @@ test('Passwort (Sicherheitsprofil 1): ohne/falsch → abgelehnt, richtig → ver
     ok.ws.close();
   } finally { await srv.stop(); }
 });
+
+// A7S 2026-10-20: evcc lauscht mit seiner eigenen OCPP-Zentrale auf 8887.
+test('Port belegt → klare Meldung im Status, einmal im Protokoll, kein Absturz; Standardport 8889', async () => {
+  const net = await import('node:net');
+  const blocker = net.createServer().listen(0, '127.0.0.1');
+  await new Promise((r) => blocker.once('listening', r));
+  const port = blocker.address().port;
+  const logs = [];
+  const cfg = { ocpp: { enabled: true, port, host: '127.0.0.1' } };
+  const srv = createOcppServer({ getCfg: () => cfg, pushLog: (e, d) => logs.push([e, d]) });
+  try {
+    await srv.reconcile();
+    await srv.reconcile();
+    const st = srv.status();
+    assert.equal(st.listening, false);
+    assert.match(st.error, /belegt/);
+    assert.equal(logs.filter(([e]) => e === 'ocpp_start_error').length, 1, 'nur einmal melden');
+  } finally { blocker.close(); await srv.stop(); }
+  const { createDefaultConfig } = await import('../config-model.js');
+  assert.equal(createDefaultConfig().ocpp.port, 8889);
+});

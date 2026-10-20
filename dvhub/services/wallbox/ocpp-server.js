@@ -16,7 +16,8 @@
 // (OCPP-Sicherheitsprofil 1, HTTP Basic, Benutzer = Ladepunkt-ID).
 import { WebSocketServer } from 'ws';
 
-const DEFAULT_PORT = 8887;
+// 8887 nutzt evcc für seine eigene OCPP-Zentrale (A7S 2026-10-20) — daneben.
+const DEFAULT_PORT = 8889;
 const HEARTBEAT_S = 60;
 const METER_INTERVAL_S = 10;
 
@@ -45,6 +46,7 @@ export function createOcppServer(ctx, deps = {}) {
   const points = new Map(); // id → { id, ws, vendor, model, connectors: {n: {...}}, lastSeen, pending }
   let wss = null;
   let listeningPort = null;
+  let lastError = null;
   let msgId = 0;
   let txId = Math.floor(now() / 1000) % 1_000_000;
 
@@ -190,8 +192,21 @@ export function createOcppServer(ctx, deps = {}) {
       handleProtocols: (protocols) => (protocols.has('ocpp1.6') ? 'ocpp1.6' : false),
     });
     wss.on('connection', onConnection);
-    await new Promise((resolve, reject) => { wss.once('listening', resolve); wss.once('error', reject); });
+    try {
+      await new Promise((resolve, reject) => { wss.once('listening', resolve); wss.once('error', reject); });
+    } catch (e) {
+      try { wss.close(); } catch { /* nie gestartet */ }
+      wss = null;
+      const msg = e?.code === 'EADDRINUSE'
+        ? `Port ${port} belegt (läuft evcc mit eigener OCPP-Zentrale? Anderen Port wählen)`
+        : `OCPP-Zentrale startet nicht: ${e?.message || e}`;
+      // Nur bei neuer Ursache melden — reconcile versucht es alle 15 s erneut.
+      if (msg !== lastError) log('ocpp_start_error', { port, error: msg });
+      lastError = msg;
+      return { started: false, error: msg };
+    }
     listeningPort = port;
+    lastError = null;
     log('ocpp_listening', { port });
     return { started: true, port };
   }
@@ -208,7 +223,7 @@ export function createOcppServer(ctx, deps = {}) {
   async function reconcile() {
     const c = cfg();
     const port = Number(c.port) || DEFAULT_PORT;
-    if (c.enabled !== true) { if (wss) { await stop(); log('ocpp_stopped', {}); } return; }
+    if (c.enabled !== true) { lastError = null; if (wss) { await stop(); log('ocpp_stopped', {}); } return; }
     if (wss && listeningPort !== port) await stop();
     if (!wss) await start();
   }
@@ -223,7 +238,7 @@ export function createOcppServer(ctx, deps = {}) {
     };
   }
   function list() { return [...points.keys()].map(chargePoint); }
-  function status() { return { enabled: cfg().enabled === true, listening: Boolean(wss), port: Number(cfg().port) || DEFAULT_PORT, chargePoints: list() }; }
+  function status() { return { enabled: cfg().enabled === true, listening: Boolean(wss), port: Number(cfg().port) || DEFAULT_PORT, error: lastError, chargePoints: list() }; }
 
   return { start, stop, reconcile, callAction, chargePoint, list, status };
 }

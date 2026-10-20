@@ -5561,7 +5561,7 @@ export function createApiRoutes(ctx) {
             warp: { host: w.warp?.host || '' },
             keba: { host: w.keba?.host || '', model: w.keba?.model === 'p40' ? 'p40' : 'p30' },
             heidelberg: { host: w.heidelberg?.host || '', unitId: Number(w.heidelberg?.unitId) || 1 },
-            ocpp: { chargePointId: w.ocpp?.chargePointId || '', connectorId: Number(w.ocpp?.connectorId) || 1, server: { enabled: raw.ocpp?.enabled === true, port: Number(raw.ocpp?.port) || 8887, passwordSet: Boolean(raw.ocpp?.password) }, chargePoints: ctx.ocppServer?.list?.() || [] },
+            ocpp: { chargePointId: w.ocpp?.chargePointId || '', connectorId: Number(w.ocpp?.connectorId) || 1, server: { enabled: raw.ocpp?.enabled === true, port: Number(raw.ocpp?.port) || 8889, passwordSet: Boolean(raw.ocpp?.password), error: ctx.ocppServer?.status?.().error ?? null }, chargePoints: ctx.ocppServer?.list?.() || [] },
             live
           };
         })()
@@ -5695,7 +5695,7 @@ export function createApiRoutes(ctx) {
         Object.assign(wb, wallboxPatch.hostPatch || {});
         if (wallboxPatch.ocpp) wb.ocpp = wallboxPatch.ocpp;
         if (wallboxPatch.ocppServer) {
-          const o = (next.ocpp && typeof next.ocpp === 'object') ? next.ocpp : { enabled: false, port: 8887, password: '' };
+          const o = (next.ocpp && typeof next.ocpp === 'object') ? next.ocpp : { enabled: false, port: 8889, password: '' };
           o.enabled = wallboxPatch.ocppServer.enabled;
           if (wallboxPatch.ocppServer.port != null) o.port = wallboxPatch.ocppServer.port;
           const pw = wallboxPatch.ocppServer.password;

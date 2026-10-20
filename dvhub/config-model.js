@@ -4490,7 +4490,7 @@ export function createDefaultConfig() {
     // OCPP-1.6J-Zentrale (services/wallbox/ocpp-server.js): ab Werk aus. Wallbox
     // verbindet sich mit ws://<DVhub>:<port>/<Ladepunkt-ID>; Passwort optional
     // (Sicherheitsprofil 1). Nur Heimnetz-Adressen.
-    ocpp: { enabled: false, port: 8887, password: '' },
+    ocpp: { enabled: false, port: 8889, password: '' },
     // PV-Strings / Solar-Logger (services/pv-strings): Erzeugung je String bzw.
     // Tracker erfassen und als CSV fuer die pvnode-Kalibrierung aufbereiten.
     // sources: [{ id, label, kind: 'victron_vrm_tracker', instance, tracker, kwp }

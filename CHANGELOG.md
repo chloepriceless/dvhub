@@ -19,9 +19,9 @@ verweist hierher.
 - **KEBA KeContact P30/P40 als Wallbox** (Modbus TCP nach KEBA-Guide V1.07): Strom 5004, Freigabe 5014 (P40: Stopp
   über Strom 0), Failsafe 6 A nach 5 min ohne Verbindung; schreibt nur bei Änderung (KEBA: höchstens alle 5 s).
 
-- **OCPP-1.6J-Zentrale und OCPP-Wallbox.** DVhub kann selbst OCPP-Zentrale sein (ab Werk aus, Port 8887, nur
+- **OCPP-1.6J-Zentrale und OCPP-Wallbox.** DVhub kann selbst OCPP-Zentrale sein (ab Werk aus, Port 8889 — 8887 nutzt evcc, nur
   Heimnetz, optional Passwort nach Sicherheitsprofil 1). Wallboxen mit OCPP (z. B. Alfen, ABL, Wallbox, Zaptec,
-  Bender-basierte) verbinden sich mit `ws://<DVhub>:8887/<Ladepunkt-ID>`. Steuerung über Ladeprofile in Ampere
+  Bender-basierte) verbinden sich mit `ws://<DVhub>:8889/<Ladepunkt-ID>`. Steuerung über Ladeprofile in Ampere
   (`SetChargingProfile`), Stopp = 0 A, „Automatisch“ löscht das Profil; Fernstart, wenn das Auto steckt und kein
   Vorgang läuft. Messwerte (Leistung, Energie, Strom) und Status aus `MeterValues`/`StatusNotification`.
   An/aus und Port wirken ohne Neustart. `GET /api/ocpp/status`.
