@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **SmartEVSE v3 als Wallbox** (REST nach SmartEVSE-3-Doku und -Quellcode, MIT): Strom über `override_current`
+  in NORMAL, Stopp über OFF, „Automatisch“ stellt den vorherigen Modus wieder her; Leistung, Strom, Energie und
+  (mit Modem) SoC.
+
 - **Nexblue (Edge 2, Edge Max, Point 2, Delta) als Wallbox** (Modbus TCP nach Nexblue-Doku, 32-Bit-Werte DCBA):
   Strom 1000 als Lebenszeichen alle 15 s, Rückfall 6 A nach 5 min; Zustand, Leistung, Energie.
 

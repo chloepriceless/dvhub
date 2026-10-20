@@ -75,6 +75,7 @@ const INTENTIONAL = new Map([
   ['wallbox.smartwb.host', 'EVCC-Schublade auf der Integrationsseite (smartWB)'],
   ['wallbox.nexblue.host', 'EVCC-Schublade auf der Integrationsseite (Nexblue)'],
   ['wallbox.nexblue.unitId', 'EVCC-Schublade auf der Integrationsseite (Nexblue)'],
+  ['wallbox.smartevse.host', 'EVCC-Schublade auf der Integrationsseite (SmartEVSE)'],
   ['wallbox.bender.variant', 'EVCC-Schublade auf der Integrationsseite (Bender)'],
   ['wallbox.ocpp.chargePointId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],
   ['wallbox.ocpp.connectorId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],

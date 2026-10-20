@@ -4496,6 +4496,8 @@ export function createDefaultConfig() {
       smartwb: { host: '' },
       // Nexblue (Modbus in der App einschalten, Unit meist 200).
       nexblue: { host: '', unitId: 200 },
+      // SmartEVSE v3 (REST, ab Firmware 3.x).
+      smartevse: { host: '' },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },

@@ -7,7 +7,7 @@
 // 'evcc' = über einen evcc-Ladepunkt; alle anderen sind direkt angebunden
 // (Adapter in services/wallbox/adapters.js bzw. eigenen Dateien).
 
-export const DIRECT_WALLBOX_TYPES = Object.freeze(['openevse', 'goe', 'wattpilot', 'victron', 'openwb', 'eebus', 'charx', 'warp', 'ocpp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl', 'smartwb', 'nexblue']);
+export const DIRECT_WALLBOX_TYPES = Object.freeze(['openevse', 'goe', 'wattpilot', 'victron', 'openwb', 'eebus', 'charx', 'warp', 'ocpp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl', 'smartwb', 'nexblue', 'smartevse']);
 export const WALLBOX_TYPES = Object.freeze(['evcc', ...DIRECT_WALLBOX_TYPES]);
 
 /** Ist die gewählte direkte Wallbox eingerichtet (Adresse bzw. GX vorhanden)? */
@@ -19,6 +19,7 @@ export function directWallboxConfigured(cfg) {
     case 'wattpilot': return Boolean(w.wattpilot?.host);
     case 'victron': return Boolean(cfg?.victron?.host);
     case 'openwb': return Boolean(String(w.openwb?.host || '').trim());
+    case 'smartevse': return Boolean(String(w.smartevse?.host || '').trim());
     case 'nexblue': return Boolean(String(w.nexblue?.host || '').trim());
     case 'smartwb': return Boolean(String(w.smartwb?.host || '').trim());
     case 'abl': return Boolean(String(w.abl?.host || '').trim());
