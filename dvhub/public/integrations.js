@@ -2634,6 +2634,9 @@
     var wp = w.wattpilot || {};
     if (el('wallbox-wattpilot-host')) el('wallbox-wattpilot-host').value = wp.host || '';
     if (el('wallbox-wattpilot-pass')) { el('wallbox-wattpilot-pass').value = ''; el('wallbox-wattpilot-pass').placeholder = wp.passwordSet ? 'gespeichert' : ''; }
+    var eb = w.eebus || {};
+    if (el('wallbox-eebus-phases')) el('wallbox-eebus-phases').value = String(eb.phases || 3);
+    fillEebusWallboxSelect(eb.ski || '');
     var ow = w.openwb || {};
     if (el('wallbox-openwb-mode')) el('wallbox-openwb-mode').value = ow.mode || 'pro';
     if (el('wallbox-openwb-host')) el('wallbox-openwb-host').value = ow.host || '';
@@ -2661,6 +2664,22 @@
         + '. Solange er besteht, kann DVhub den Ladestrom nicht erhöhen — dort den Ladepunkt entfernen oder den Höchststrom anheben, oder oben „Steuern über: evcc“ wählen.';
     }
   }
+  // Gekoppelte EEBUS-Geräte (Rolle Gerät) als Auswahl für die EEBUS-Wallbox.
+  async function fillEebusWallboxSelect(current) {
+    var sel = document.getElementById('wallbox-eebus-ski');
+    if (!sel) return;
+    var list = [];
+    try {
+      var res = await apiFetch('/api/eebus/status');
+      var st = res.ok ? await res.json() : {};
+      list = (st.trusted || []).filter(function (t) { return t && t.role !== 'grid'; });
+    } catch (_) { /* ohne EEBUS bleibt die Liste leer */ }
+    sel.textContent = '';
+    var o0 = document.createElement('option'); o0.value = ''; o0.textContent = list.length ? '— Gerät wählen —' : '— erst unter EEBUS koppeln —'; sel.appendChild(o0);
+    list.forEach(function (t) { var o = document.createElement('option'); o.value = t.ski; o.textContent = (t.name || 'EEBUS-Gerät') + ' · ' + String(t.ski).slice(0, 8) + '…'; sel.appendChild(o); });
+    if (current && !list.some(function (t) { return t.ski === current; })) { var oc = document.createElement('option'); oc.value = current; oc.textContent = current.slice(0, 8) + '… (nicht mehr gekoppelt)'; sel.appendChild(oc); }
+    sel.value = current || '';
+  }
   function syncWallboxTypeUi() {
     var t = (document.getElementById('wallbox-type') || {}).value || 'evcc';
     var show = function (id, on) { var e = document.getElementById(id); if (e) e.hidden = !on; };
@@ -2669,6 +2688,7 @@
     show('wallbox-wattpilot-fields', t === 'wattpilot');
     show('wallbox-victron-fields', t === 'victron');
     show('wallbox-openwb-fields', t === 'openwb');
+    show('wallbox-eebus-fields', t === 'eebus');
     show('wallbox-openwb-cp-wrap', ((document.getElementById('wallbox-openwb-mode') || {}).value || 'pro') === 'secondary');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
     // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
@@ -2683,7 +2703,8 @@
       goe: { url: v('wallbox-goe-url') },
       wattpilot: { host: v('wallbox-wattpilot-host'), password: (document.getElementById('wallbox-wattpilot-pass') || {}).value || '' },
       victron: { unitId: v('wallbox-victron-unit') === '' ? 0 : Number(v('wallbox-victron-unit')) },
-      openwb: { mode: v('wallbox-openwb-mode') || 'pro', host: v('wallbox-openwb-host'), chargepoint: Number(v('wallbox-openwb-cp')) || 0 }
+      openwb: { mode: v('wallbox-openwb-mode') || 'pro', host: v('wallbox-openwb-host'), chargepoint: Number(v('wallbox-openwb-cp')) || 0 },
+      eebus: { ski: v('wallbox-eebus-ski'), phases: Number(v('wallbox-eebus-phases')) || 3 }
     };
   }
   function syncEvccDepModeUi() {

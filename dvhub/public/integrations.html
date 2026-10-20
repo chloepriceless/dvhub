@@ -620,6 +620,7 @@
               <option value="wattpilot">Fronius Wattpilot</option>
               <option value="victron">Victron EV Charging Station (&uuml;ber den GX)</option>
               <option value="openwb">openWB</option>
+              <option value="eebus">EEBUS-Wallbox (Elli, Porsche, Kontron …)</option>
             </select>
           </label>
           <div class="evcc-wallbox-fields" id="wallbox-openevse-fields" hidden>
@@ -678,6 +679,19 @@
               </label>
             </div>
             <span class="field-hint">Pro/Satellit: DVhub setzt den Ladestrom direkt. series2/Duo: in der openWB unter Einstellungen den Modus &bdquo;Nur Ladepunkt&ldquo; w&auml;hlen &mdash; DVhub steuert dann wie eine &uuml;bergeordnete openWB (MQTT, Port 1883). Meldet sich DVhub 80&nbsp;s nicht, stoppt die Box von selbst.</span>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-eebus-fields" hidden>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">Gekoppelte EEBUS-Wallbox</span>
+                <select class="input" id="wallbox-eebus-ski"><option value="">— erst unter EEBUS koppeln —</option></select>
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Phasen</span>
+                <select class="input" id="wallbox-eebus-phases"><option value="3">3</option><option value="1">1</option></select>
+              </label>
+            </div>
+            <span class="field-hint">Elli / VW ID. Charger, Cupra, Audi, &Scaron;koda, Porsche, Kontron/Steca/ghostONE: zuerst unter Integrationen &rarr; EEBUS koppeln. DVhub steuert die Box &uuml;ber ihre Verbrauchsgrenze (Laden = Strom &times; 230&nbsp;V &times; Phasen, Stopp = 0&nbsp;W). Ob ein Auto steckt, erkennt DVhub nur, solange es l&auml;dt.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-victron-fields" hidden>
             <label class="dv-field">

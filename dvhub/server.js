@@ -164,6 +164,7 @@ import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter, create
 import { createMypvRegulator } from './services/devices/mypv-regulator.js';
 import { createMainWallbox } from './services/wallbox/main-wallbox.js';
 import { createOpenWbAdapter } from './services/wallbox/openwb.js';
+import { createEebusWallboxAdapter } from './services/wallbox/eebus-wallbox.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
@@ -1528,6 +1529,7 @@ function directWallboxAdapter(type) {
     findUnit: (kind) => ctx.victronGx?.findUnit?.(kind) ?? null
   });
   if (type === 'openwb') return createOpenWbAdapter(() => ctx.getCfg()?.wallbox?.openwb);
+  if (type === 'eebus') return createEebusWallboxAdapter(() => ctx.getCfg()?.wallbox?.eebus, { getEebus: () => ctx.eebus });
   return null;
 }
 // Auch für die Einstellungsseite (Live-Zustand der Victron-Wallbox, routes-api.js).

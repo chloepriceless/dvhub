@@ -167,6 +167,11 @@ export function createEebusService(ctx, deps = {}) {
   let reqId = 0;
   const pending = new Map();
   const deviceLimitCache = new Map(); // entity → { w, at }
+  // Vorgabe der Wallbox-Steuerung je Gerät (EEBUS-Wallbox, services/wallbox/
+  // eebus-wallbox.js): ski → W. Gilt zusammen mit dem §14a-Anteil — der kleinere.
+  const emsLimits = new Map();
+  let lastShares = {};
+  let lastSharesUntil = null;
   let lastConfigKey = null;
   let prevConsumptionW = null;
   const energy = loadJson('energy.json') || { importWh: 0, exportWh: 0, lastDailyImportWh: null, lastDailyExportWh: null };
@@ -577,10 +582,51 @@ export function createEebusService(ctx, deps = {}) {
    * @param {number|null} untilMs  Ende der Grenze (für die Dauer am Gerät)
    */
   function applyConsumptionShares(shares, untilMs) {
+    lastShares = shares || {};
+    lastSharesUntil = untilMs ?? null;
     const list = consumptionDevices();
     const active = {};
-    for (const d of list) if (shares?.[d.id] != null) active[d.id] = shares[d.id];
+    for (const d of list) {
+      const share = shares?.[d.id] ?? null;
+      const ems = emsLimits.has(d.ski) ? emsLimits.get(d.ski) : null;
+      const w = share == null ? ems : (ems == null ? share : Math.min(share, ems));
+      if (w != null) active[d.id] = w;
+    }
     applyDeviceLimits(active, list.filter((d) => active[d.id] != null), { until: untilMs });
+  }
+
+  /** Geräteinfo für die EEBUS-Wallbox: verbunden, LPC vorhanden, Leistung, Name. */
+  function deviceInfo(ski) {
+    const d = ui.devices[ski];
+    const trusted = cfgNow().trusted.find((t) => t.ski === ski);
+    if (!d && !trusted) return null;
+    return {
+      connected: ui.peers[ski]?.connected === true,
+      hasLpc: Boolean(d?.entities?.lpc),
+      powerW: d?.powerW ?? null,
+      name: trusted?.name || null,
+    };
+  }
+
+  /**
+   * Vorgabe der Wallbox-Steuerung setzen (W) oder aufheben (null). Steht das
+   * Gerät in der §14a-Aufteilung, rechnet die Aufteilung neu (kleinerer Wert
+   * gilt); sonst geht die Grenze direkt ans Gerät.
+   */
+  async function setEmsLimit(ski, w) {
+    const d = ui.devices[ski];
+    if (!d?.entities?.lpc) return { ok: false, error: 'EEBUS-Gerät ohne Verbrauchsgrenze (LPC) oder nicht verbunden' };
+    if (w == null) emsLimits.delete(ski);
+    else emsLimits.set(ski, Math.max(0, Math.round(Number(w))));
+    if (consumptionDevices().some((x) => x.ski === ski)) {
+      // Neu schreiben erzwingen; beim Aufheben bleibt der Eintrag, damit die
+      // Aufteilung die Grenze am Gerät zurücknimmt.
+      if (w != null) deviceLimitCache.delete(d.entities.lpc);
+      applyConsumptionShares(lastShares, lastSharesUntil);
+      return { ok: true };
+    }
+    if (w == null) return send({ cmd: 'device_limit', uc: 'lpc', entity: d.entities.lpc, w: 0, duration_s: 0, active: false });
+    return send({ cmd: 'device_limit', uc: 'lpc', entity: d.entities.lpc, w: emsLimits.get(ski), duration_s: 0, active: true });
   }
 
   function apply() {
@@ -851,6 +897,8 @@ export function createEebusService(ctx, deps = {}) {
     applyConsumptionShares,
     setPairing,
     setDeviceLimit,
+    setEmsLimit,
+    deviceInfo,
     certPaths,
     // für Tests
     _handleEvent: handleEvent,

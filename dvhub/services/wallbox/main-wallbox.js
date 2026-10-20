@@ -22,7 +22,8 @@ export const WALLBOX_LABELS = Object.freeze({
   goe: 'go-e Charger',
   wattpilot: 'Fronius Wattpilot',
   victron: 'Victron EV Charging Station',
-  openwb: 'openWB'
+  openwb: 'openWB',
+  eebus: 'EEBUS-Wallbox'
 });
 
 // Lademodi. evcc kennt vier; eine direkt angebundene Box drei — „PV“ heißt

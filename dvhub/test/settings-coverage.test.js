@@ -54,6 +54,8 @@ const INTENTIONAL = new Map([
   ['wallbox.openwb.mode', 'EVCC-Schublade auf der Integrationsseite (openWB)'],
   ['wallbox.openwb.host', 'EVCC-Schublade auf der Integrationsseite (openWB)'],
   ['wallbox.openwb.chargepoint', 'EVCC-Schublade auf der Integrationsseite (openWB)'],
+  ['wallbox.eebus.ski', 'EVCC-Schublade auf der Integrationsseite (EEBUS-Wallbox)'],
+  ['wallbox.eebus.phases', 'EVCC-Schublade auf der Integrationsseite (EEBUS-Wallbox)'],
   ['vehicleEvcc.enabled', 'EVCC-Schublade: Ladestand vom Auto (evcc-Fahrzeugtreiber)'],
   ['vehicleEvcc.template', 'EVCC-Schublade: Ladestand vom Auto (evcc-Fahrzeugtreiber)'],
   ['vehicleEvcc.intervalMin', 'EVCC-Schublade: Ladestand vom Auto (evcc-Fahrzeugtreiber)'],

@@ -411,3 +411,50 @@ test('Failsafe-Vorgabe automatisch: Mindestleistung Pmin,14a aus dem §14a-Diens
   assert.equal(s.svc._machines().lpc.snapshot().failsafeW, 7560);
   assert.ok(s.child().commands.some((x) => x.cmd === 'grid_config' && x.uc === 'lpc' && x.failsafe_w === 7560));
 });
+
+// ── EEBUS-Wallbox (Christin 2026-10-20, Wallbox-Liste Punkt 2) ──
+// openeebus kennt die E-Auto-Abläufe (EVCC/OPEV/OSCEV) nicht; DVhub steuert eine
+// EEBUS-Wallbox über die Verbrauchsgrenze (LPC). Die Vorgabe der Wallbox-
+// Steuerung (EOS, Lademodus) und der §14a-Anteil gelten zusammen: der kleinere.
+const SKI_WB = 'e'.repeat(40);
+async function withWallbox() {
+  const s = setup({ eebus: { trusted: [{ ski: SKI_BOX, name: 'Steuerbox', role: 'grid' }, { ski: SKI_WB, name: 'Elli', role: 'device', kind: 'wallbox' }] } });
+  s.ctx.p14a = { update: () => {} };
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'connected', ski: SKI_WB });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:WB/1', ski: SKI_WB });
+  await settle();
+  return { s, c, limits: () => c.commands.filter((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:WB/1') };
+}
+
+test('EEBUS-Wallbox: Steuer-Grenze geht ans Gerät, §14a-Anteil kleiner gewinnt, Aufheben behält die Steuer-Grenze', async () => {
+  const { s, limits } = await withWallbox();
+  assert.equal((await s.svc.setEmsLimit(SKI_WB, 6900)).ok, true);
+  await settle();
+  assert.deepEqual([limits().at(-1).w, limits().at(-1).active], [6900, true]);
+
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_WB}`]: 4200 }, null);
+  await settle();
+  assert.deepEqual([limits().at(-1).w, limits().at(-1).active], [4200, true], '§14a kleiner');
+
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_WB}`]: null }, null);
+  await settle();
+  assert.deepEqual([limits().at(-1).w, limits().at(-1).active], [6900, true], 'nach §14a wieder die Steuer-Grenze, nicht frei');
+
+  assert.equal((await s.svc.setEmsLimit(SKI_WB, null)).ok, true);
+  await settle();
+  assert.equal(limits().at(-1).active, false, 'Freigeben hebt auf');
+});
+
+test('EEBUS-Wallbox: Geräteinfo (verbunden, LPC, Leistung) und Fehler ohne LPC', async () => {
+  const { s, c } = await withWallbox();
+  c.emitEvent({ ev: 'measurement', uc: 'mpc', ski: SKI_WB, entity: 'd:_n:WB/1', name: 'power_w', value: 3650 });
+  await settle();
+  const i = s.svc.deviceInfo(SKI_WB);
+  assert.equal(i.connected, true);
+  assert.equal(i.hasLpc, true);
+  assert.equal(i.name, 'Elli');
+  assert.equal((await s.svc.setEmsLimit('f'.repeat(40), 1000)).ok, false);
+});

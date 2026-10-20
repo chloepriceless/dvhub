@@ -12,6 +12,11 @@ verweist hierher.
 
 ### Neu
 
+- **EEBUS-Wallbox (Elli / VW ID. Charger, Cupra, Audi, Škoda, Porsche, Kontron/Steca/ghostONE).** Unter
+  Integrationen → EEBUS koppeln, dann als Wallbox wählen. DVhub steuert die Box über ihre Verbrauchsgrenze (LPC):
+  Laden = Strom × 230 V × Phasen, Stopp = 0 W, Automatisch = Grenze aufheben. Die Vorgabe gilt zusammen mit einem
+  §14a-Anteil — der kleinere. Ob ein Auto steckt, erkennt DVhub nur, solange es lädt. Ungeprüft an einer echten Box.
+
 - **openWB als Wallbox.** Zwei Wege: openWB Pro / series2 Satellit direkt über deren HTTP-Schnittstelle
   (`connect.php`: Ladestrom, Stopp, Messwerte, Ladestand), oder openWB series2/Duo im Modus „Nur Ladepunkt“ —
   DVhub steuert dann wie eine übergeordnete openWB per MQTT (Port 1883); bleibt DVhubs Lebenszeichen 80 s aus,

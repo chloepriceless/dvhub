@@ -4473,7 +4473,10 @@ export function createDefaultConfig() {
       victron: { unitId: 0 },
       // openWB: 'pro' = openWB Pro/Satellit (HTTP connect.php), 'secondary' =
       // series2/Duo im Modus „Nur Ladepunkt“ (MQTT, Ladepunkt 0/1).
-      openwb: { mode: 'pro', host: '', chargepoint: 0 }
+      openwb: { mode: 'pro', host: '', chargepoint: 0 },
+      // EEBUS-Wallbox (Elli, Porsche, Kontron …): SKI eines unter Integrationen →
+      // EEBUS gekoppelten Geräts; Phasen für Strom → Leistung.
+      eebus: { ski: '', phases: 3 }
     },
     // PV-Strings / Solar-Logger (services/pv-strings): Erzeugung je String bzw.
     // Tracker erfassen und als CSV fuer die pvnode-Kalibrierung aufbereiten.
