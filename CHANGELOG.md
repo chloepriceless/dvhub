@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **DaheimLaden als Wallbox** (Smart V1+V2, Touch, Smart/Touch/Business PRO; Modbus TCP nach der
+  „DaheimLader Modbus/TCP-Spezifikation“ vom 28.07.2026): gleiche Belegung wie EM2GO, Unit-ID 255. Smart und Touch
+  fallen ohne DVhub nach 10 min auf 6 A zurück; die PRO-Modelle kennen keinen Rückfall, DVhub lädt dort ohne.
+
 - **EEBUS nativ in Go.** Native Installationen (Debian/Raspberry Pi OS) bauen dvhub-eebus jetzt wie das
   Container-Image aus der Go-Fassung (eebus-go) und kennen damit auch das E-Auto an der EEBUS-Wallbox. Der nächste
   Neustart ersetzt eine vorhandene C-Fassung; Zertifikat und Kopplungen bleiben. Die Go-Werkzeugkette kommt von

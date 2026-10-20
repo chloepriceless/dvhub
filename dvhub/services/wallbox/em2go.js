@@ -11,6 +11,11 @@
 //   93 Lademodus (0 Plug & Charge · 1 auf Befehl) · 95 Ladebefehl (1 Start · 2 Stopp; nur bei 93 = 1)
 // Die Unit-ID nennt die Doku nicht (Standard hier 1, einstellbar). Ob schon Lesen den
 // Timeout zurücksetzt, ist nicht beschrieben — darum 600 s, länger als der Neuschreibtakt.
+//
+// DaheimLaden (Smart V1+V2, Touch, Smart/Touch/Business PRO) hat dieselbe Belegung
+// („DaheimLader Modbus/TCP-Spezifikation“ 28.07.2026, DaheimLadenModbus0726.pdf auf
+// www.daheimladen.de/post/modbus-api): Unit-ID 255; 87/89 „nicht für PRO“ — dort lehnt
+// die Box das Schreiben ab, DVhub lädt dann ohne Rückfall weiter (raw.fallback = false).
 import { isReadOnlyMode } from '../../read-only-guard.js';
 
 const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
@@ -18,20 +23,22 @@ const REWRITE_MS = 5 * 60_000;
 const TIMEOUT_S = 600;
 const FALLBACK_DA = 60;
 
-export function createEm2goAdapter(getSettings, deps = {}) {
+export function createEm2goAdapter(getSettings, deps = {}, variant = {}) {
+  const { type = 'em2go', name = 'EM2GO', defaultUnit = 1, fallbackOptional = false } = variant;
   const now = deps.now || (() => Date.now());
   const s = () => getSettings() || {};
   const written = new Map();
   let switchedMode = false; // DVhub hat Plug & Charge → Befehlsmodus umgestellt
   let stopped = false;
+  let fallback = true; // Box nimmt Rückfallstrom/Timeout (87/89) an
   function target() {
     const t = deps.getTransport?.();
     const host = String(s().host || '').trim();
     if (!host || !t || typeof t.mbRequest !== 'function') return null;
     const unit = Number(s().unitId);
-    return { t, conn: { host, port: Number(s().port) || 502, unitId: unit >= 1 && unit <= 255 ? unit : 1, timeoutMs: Number(s().timeoutMs) || 3000 } };
+    return { t, conn: { host, port: Number(s().port) || 502, unitId: unit >= 1 && unit <= 255 ? unit : defaultUnit, timeoutMs: Number(s().timeoutMs) || 3000 } };
   }
-  const missing = () => ({ ok: false, error: 'EM2GO: keine Adresse eingetragen oder Modbus nicht verfügbar' });
+  const missing = () => ({ ok: false, error: `${name}: keine Adresse eingetragen oder Modbus nicht verfügbar` });
   async function read(x, address, quantity = 1) {
     const r = await x.t.mbRequest({ ...x.conn, fc: 3, address, quantity });
     const w = Array.isArray(r) ? r : r?.values;
@@ -51,17 +58,26 @@ export function createEm2goAdapter(getSettings, deps = {}) {
     if (isReadOnlyMode()) return READ_ONLY;
     const x = target();
     if (!x) return missing();
-    if (typeof x.t.mbWriteMultiple !== 'function') return { ok: false, error: 'EM2GO: Modbus-Schreiben (FC16) nicht verfügbar' };
-    try { await fn(x); return { ok: true }; } catch (e) { return { ok: false, error: `EM2GO: ${e?.message || e}` }; }
+    if (typeof x.t.mbWriteMultiple !== 'function') return { ok: false, error: `${name}: Modbus-Schreiben (FC16) nicht verfügbar` };
+    try { await fn(x); return { ok: true }; } catch (e) { return { ok: false, error: `${name}: ${e?.message || e}` }; }
+  }
+  async function putFallback(x, da) {
+    if (!fallback) return;
+    try {
+      await put(x, 87, da);
+      await put(x, 89, TIMEOUT_S);
+    } catch (e) {
+      if (!fallbackOptional) throw e;
+      fallback = false;
+    }
   }
 
   return {
-    type: 'em2go',
+    type,
     isConfigured: () => Boolean(target()),
     charge: (currentA) => guarded(async (x) => {
       const da = Math.min(Math.max(6, Math.floor(Number(currentA))) * 10, await maxDa(x));
-      await put(x, 87, FALLBACK_DA);
-      await put(x, 89, TIMEOUT_S);
+      await putFallback(x, FALLBACK_DA);
       await put(x, 91, da);
       const [mode] = await read(x, 93);
       const [state] = await read(x, 0);
@@ -79,7 +95,7 @@ export function createEm2goAdapter(getSettings, deps = {}) {
     }),
     release: () => guarded(async (x) => {
       const max = await maxDa(x);
-      await put(x, 87, max);
+      if (fallback) { try { await put(x, 87, max); } catch (e) { if (!fallbackOptional) throw e; fallback = false; } }
       await put(x, 91, max);
       if (switchedMode) { await put(x, 93, 0, { force: true }); switchedMode = false; }
       else if (stopped) await put(x, 95, 1, { force: true });
@@ -105,11 +121,15 @@ export function createEm2goAdapter(getSettings, deps = {}) {
           powerW: p[0] * 0x10000 + p[1],
           currentA: Math.max(c12[0], c12[2], c3) / 10,
           vehicleSocPct: null,
-          raw: { state, errorCode: errCode, energyWh },
+          raw: { state, errorCode: errCode, energyWh, fallback },
         };
       } catch (e) {
-        return { ok: false, error: `EM2GO: ${e?.message || e}` };
+        return { ok: false, error: `${name}: ${e?.message || e}` };
       }
     },
   };
+}
+
+export function createDaheimladenAdapter(getSettings, deps = {}) {
+  return createEm2goAdapter(getSettings, deps, { type: 'daheimladen', name: 'DaheimLaden', defaultUnit: 255, fallbackOptional: true });
 }

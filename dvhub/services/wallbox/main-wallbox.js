@@ -38,6 +38,7 @@ export const WALLBOX_LABELS = Object.freeze({
   nexblue: 'Nexblue',
   smartevse: 'SmartEVSE',
   em2go: 'EM2GO',
+  daheimladen: 'DaheimLaden',
   phoenix: 'Phoenix EV Charge Control'
 });
 

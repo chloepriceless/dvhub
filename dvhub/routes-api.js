@@ -5545,7 +5545,7 @@ export function createApiRoutes(ctx) {
           if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
           if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
           if (type === 'wattpilot' && w.wattpilot?.host && w.wattpilot?.password) live = await createWattpilotAdapter(() => w.wattpilot).status();
-          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl', 'smartwb', 'nexblue', 'smartevse', 'em2go', 'phoenix'].includes(type) && w[type]?.host)) {
+          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl', 'smartwb', 'nexblue', 'smartevse', 'em2go', 'daheimladen', 'phoenix'].includes(type) && w[type]?.host)) {
             const a = ctx.directWallboxAdapter?.(type);
             live = a ? await a.status() : null;
           }
@@ -5569,6 +5569,7 @@ export function createApiRoutes(ctx) {
             nexblue: { host: w.nexblue?.host || '', unitId: Number(w.nexblue?.unitId) || 200 },
             smartevse: { host: w.smartevse?.host || '' },
             em2go: { host: w.em2go?.host || '', unitId: Number(w.em2go?.unitId) || 1 },
+            daheimladen: { host: w.daheimladen?.host || '', unitId: Number(w.daheimladen?.unitId) || 255 },
             phoenix: { host: w.phoenix?.host || '' },
             nrgkick: { host: w.nrgkick?.host || '', usernameSet: Boolean(w.nrgkick?.username), passwordSet: Boolean(w.nrgkick?.password) },
             ocpp: { chargePointId: w.ocpp?.chargePointId || '', connectorId: Number(w.ocpp?.connectorId) || 1, server: { enabled: raw.ocpp?.enabled === true, port: Number(raw.ocpp?.port) || 8889, passwordSet: Boolean(raw.ocpp?.password), error: ctx.ocppServer?.status?.().error ?? null }, chargePoints: ctx.ocppServer?.list?.() || [] },
@@ -5662,7 +5663,7 @@ export function createApiRoutes(ctx) {
         if (ocPort != null && !(Number.isInteger(ocPort) && ocPort >= 1024 && ocPort <= 65535)) return json(res, 400, { ok: false, error: 'ocpp.port must be 1024..65535' });
         // Boxen mit nur einer Adresse (CHARX zusätzlich Ladepunkt-Nummer).
         const hostPatch = {};
-        for (const k of ['charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl', 'smartwb', 'nexblue', 'smartevse', 'em2go', 'phoenix']) {
+        for (const k of ['charx', 'warp', 'keba', 'heidelberg', 'bender', 'salia', 'peblar', 'nrgkick', 'abl', 'smartwb', 'nexblue', 'smartevse', 'em2go', 'daheimladen', 'phoenix']) {
           const o = w[k] && typeof w[k] === 'object' ? w[k] : null;
           if (!o) continue;
           const h = o.host != null ? String(o.host).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') : '';
@@ -5674,7 +5675,8 @@ export function createApiRoutes(ctx) {
             : k === 'nrgkick' ? { host: h, username: o.username, password: o.password }
             : k === 'abl' ? { host: h, outlet: Number(o.outlet) === 2 ? 2 : 1 }
             : k === 'nexblue' ? { host: h, unitId: Math.max(1, Math.min(247, Number(o.unitId) || 200)) }
-            : k === 'em2go' ? { host: h, unitId: Math.max(1, Math.min(255, Number(o.unitId) || 1)) } : { host: h };
+            : k === 'em2go' ? { host: h, unitId: Math.max(1, Math.min(255, Number(o.unitId) || 1)) }
+            : k === 'daheimladen' ? { host: h, unitId: Math.max(1, Math.min(255, Number(o.unitId) || 255)) } : { host: h };
         }
         const vUnitRaw = w.victron?.unitId;
         if (vUnitRaw !== undefined && vUnitRaw !== null && vUnitRaw !== '' && !(Number.isInteger(Number(vUnitRaw)) && Number(vUnitRaw) >= 0 && Number(vUnitRaw) <= 247)) return json(res, 400, { ok: false, error: 'wallbox.victron.unitId must be 0..247' });
