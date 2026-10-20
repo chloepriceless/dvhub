@@ -168,6 +168,7 @@ import { createEebusWallboxAdapter } from './services/wallbox/eebus-wallbox.js';
 import { createCharxAdapter } from './services/wallbox/charx.js';
 import { createWarpAdapter } from './services/wallbox/warp.js';
 import { createOcppAdapter } from './services/wallbox/ocpp.js';
+import { createKebaAdapter } from './services/wallbox/keba.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
@@ -1544,6 +1545,7 @@ function directWallboxAdapter(type) {
   if (type === 'eebus') return createEebusWallboxAdapter(() => ctx.getCfg()?.wallbox?.eebus, { getEebus: () => ctx.eebus });
   if (type === 'charx') return createCharxAdapter(() => ctx.getCfg()?.wallbox?.charx, { getTransport: () => transport });
   if (type === 'warp') return createWarpAdapter(() => ctx.getCfg()?.wallbox?.warp);
+  if (type === 'keba') return createKebaAdapter(() => ctx.getCfg()?.wallbox?.keba, { getTransport: () => transport });
   if (type === 'ocpp') return createOcppAdapter(() => ctx.getCfg()?.wallbox?.ocpp, { getServer: () => ctx.ocppServer });
   return null;
 }

@@ -5545,7 +5545,7 @@ export function createApiRoutes(ctx) {
           if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
           if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
           if (type === 'wattpilot' && w.wattpilot?.host && w.wattpilot?.password) live = await createWattpilotAdapter(() => w.wattpilot).status();
-          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp'].includes(type) && w[type]?.host)) {
+          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp', 'keba'].includes(type) && w[type]?.host)) {
             const a = ctx.directWallboxAdapter?.(type);
             live = a ? await a.status() : null;
           }
@@ -5559,6 +5559,7 @@ export function createApiRoutes(ctx) {
             eebus: { ski: w.eebus?.ski || '', phases: Number(w.eebus?.phases) === 1 ? 1 : 3 },
             charx: { host: w.charx?.host || '', chargePoint: Number(w.charx?.chargePoint) || 1 },
             warp: { host: w.warp?.host || '' },
+            keba: { host: w.keba?.host || '', model: w.keba?.model === 'p40' ? 'p40' : 'p30' },
             ocpp: { chargePointId: w.ocpp?.chargePointId || '', connectorId: Number(w.ocpp?.connectorId) || 1, server: { enabled: raw.ocpp?.enabled === true, port: Number(raw.ocpp?.port) || 8887, passwordSet: Boolean(raw.ocpp?.password) }, chargePoints: ctx.ocppServer?.list?.() || [] },
             live
           };
@@ -5650,12 +5651,13 @@ export function createApiRoutes(ctx) {
         if (ocPort != null && !(Number.isInteger(ocPort) && ocPort >= 1024 && ocPort <= 65535)) return json(res, 400, { ok: false, error: 'ocpp.port must be 1024..65535' });
         // Boxen mit nur einer Adresse (CHARX zusätzlich Ladepunkt-Nummer).
         const hostPatch = {};
-        for (const k of ['charx', 'warp']) {
+        for (const k of ['charx', 'warp', 'keba']) {
           const o = w[k] && typeof w[k] === 'object' ? w[k] : null;
           if (!o) continue;
           const h = o.host != null ? String(o.host).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') : '';
           if (h && !/^[A-Za-z0-9.-]+(?::\d{1,5})?$/.test(h)) return json(res, 400, { ok: false, error: `wallbox.${k}.host must be an address or hostname` });
-          hostPatch[k] = k === 'charx' ? { host: h, chargePoint: Math.max(1, Math.min(99, Number(o.chargePoint) || 1)) } : { host: h };
+          hostPatch[k] = k === 'charx' ? { host: h, chargePoint: Math.max(1, Math.min(99, Number(o.chargePoint) || 1)) }
+            : k === 'keba' ? { host: h, model: o.model === 'p40' ? 'p40' : 'p30' } : { host: h };
         }
         const vUnitRaw = w.victron?.unitId;
         if (vUnitRaw !== undefined && vUnitRaw !== null && vUnitRaw !== '' && !(Number.isInteger(Number(vUnitRaw)) && Number(vUnitRaw) >= 0 && Number(vUnitRaw) <= 247)) return json(res, 400, { ok: false, error: 'wallbox.victron.unitId must be 0..247' });

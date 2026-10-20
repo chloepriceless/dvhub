@@ -4480,6 +4480,8 @@ export function createDefaultConfig() {
       // Phoenix Contact CHARX (Modbus TCP, Ladepunkt-Nummer) und TinkerForge WARP (HTTP).
       charx: { host: '', chargePoint: 1 },
       warp: { host: '' },
+      // KEBA KeContact: P30 (DIP DSW1.3 = ON) oder P40 (Modbus in der App an).
+      keba: { host: '', model: 'p30' },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },

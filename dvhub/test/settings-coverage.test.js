@@ -59,6 +59,8 @@ const INTENTIONAL = new Map([
   ['wallbox.charx.host', 'EVCC-Schublade auf der Integrationsseite (CHARX)'],
   ['wallbox.charx.chargePoint', 'EVCC-Schublade auf der Integrationsseite (CHARX)'],
   ['wallbox.warp.host', 'EVCC-Schublade auf der Integrationsseite (WARP)'],
+  ['wallbox.keba.host', 'EVCC-Schublade auf der Integrationsseite (KEBA)'],
+  ['wallbox.keba.model', 'EVCC-Schublade auf der Integrationsseite (KEBA)'],
   ['wallbox.ocpp.chargePointId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],
   ['wallbox.ocpp.connectorId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],
   ['ocpp.enabled', 'EVCC-Schublade auf der Integrationsseite (OCPP-Zentrale)'],

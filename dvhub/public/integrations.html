@@ -623,6 +623,7 @@
               <option value="eebus">EEBUS-Wallbox (Elli, Porsche, Kontron …)</option>
               <option value="charx">Phoenix Contact CHARX (auch Veton, LadeFoxx)</option>
               <option value="warp">TinkerForge WARP</option>
+              <option value="keba">KEBA KeContact P30 / P40</option>
               <option value="ocpp">OCPP-Wallbox (Alfen, ABL, Wallbox, Zaptec …)</option>
             </select>
           </label>
@@ -715,6 +716,19 @@
               <input type="text" class="input mono" id="wallbox-warp-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
               <span class="field-hint">DVhub nutzt den Ladeslot &bdquo;Externe Steuerung&ldquo; (HTTP-API). &bdquo;Automatisch&ldquo; schaltet ihn wieder aus.</span>
             </label>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-keba-fields" hidden>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">KEBA-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-keba-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Modell</span>
+                <select class="input" id="wallbox-keba-model"><option value="p30">P30 (c-/x-series)</option><option value="p40">P40 / P40 Pro</option></select>
+              </label>
+            </div>
+            <span class="field-hint">Modbus TCP. P30: DIP-Schalter DSW1.3 auf ON (Modbus statt UDP). P40: Modbus in der KEBA-App einschalten. DVhub setzt den Failsafe: bricht die Verbindung 5&nbsp;min ab, l&auml;dt die Box mit 6&nbsp;A weiter.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-ocpp-fields" hidden>
             <label class="dv-field dv-field-inline">

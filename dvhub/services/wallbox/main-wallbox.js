@@ -26,7 +26,8 @@ export const WALLBOX_LABELS = Object.freeze({
   eebus: 'EEBUS-Wallbox',
   charx: 'Phoenix Contact CHARX',
   warp: 'TinkerForge WARP',
-  ocpp: 'OCPP-Wallbox'
+  ocpp: 'OCPP-Wallbox',
+  keba: 'KEBA KeContact'
 });
 
 // Lademodi. evcc kennt vier; eine direkt angebundene Box drei — „PV“ heißt
