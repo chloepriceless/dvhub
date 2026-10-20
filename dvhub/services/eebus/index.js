@@ -709,6 +709,15 @@ export function createEebusService(ctx, deps = {}) {
       hasLpc: Boolean(d?.entities?.lpc),
       powerW: d?.powerW ?? null,
       name: trusted?.name || null,
+      // E-Auto (nur Go-Fassung): null, solange die Box nichts zum Auto gemeldet hat.
+      ev: d?.ev ? {
+        connected: d.ev.connected === true,
+        soc: d.ev.soc ?? null,
+        powerW: d.ev.powerW ?? null,
+        phasesA: d.ev.phasesA ?? null,
+        opev: Boolean(d.ev.limits?.opev),
+        maxA: (() => { const m = (d.ev.limits?.opev?.maxA || []).filter(Number.isFinite); return m.length ? Math.max(...m) : null; })(),
+      } : null,
     };
   }
 

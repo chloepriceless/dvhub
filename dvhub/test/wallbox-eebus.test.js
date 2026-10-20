@@ -44,3 +44,37 @@ test('Status: lädt ab 100 W; angesteckt nur sicher, wenn es lädt; nicht verbun
   const none = createEebusWallboxAdapter(() => ({ ski: SKI }), { getEebus: () => null });
   assert.match((await none.charge(10)).error, /EEBUS/);
 });
+
+// Go-Fassung (eebus-go, 20.10.): steckt ein Auto und meldet die Box OPEV, steuert DVhub
+// den Ladestrom je Phase direkt (OPEV). eebus-go setzt Werte unter dem Minimum auf den
+// Standardwert der Box (meist 0 = Pause; features/internal/electricalconnection.go:297).
+function fakeEebusEv(ev) {
+  const calls = [];
+  return {
+    calls,
+    deviceInfo: (ski) => (ski === SKI ? { connected: true, hasLpc: true, powerW: 7000, name: 'Elli', ev } : null),
+    setEmsLimit: async (ski, w) => { calls.push(['lpc', w]); return { ok: true }; },
+    setEvCurrentLimits: async (ski, amps) => { calls.push(['opev', amps]); return { ok: true }; },
+  };
+}
+
+test('Auto steckt + OPEV: Laden = Strom je Phase, Stopp = 0 A, Freigeben hebt OPEV und eine frühere LPC-Grenze auf', async () => {
+  const ev = { connected: false, soc: null, powerW: null, phasesA: null, opev: false, maxA: null };
+  const e = fakeEebusEv(ev);
+  const a = createEebusWallboxAdapter(() => ({ ski: SKI, phases: 3 }), { getEebus: () => e });
+  await a.stop(); // noch kein Auto → LPC 0 W
+  Object.assign(ev, { connected: true, soc: 40, powerW: 6900, phasesA: [10, 10, 10], opev: true, maxA: 16 });
+  await a.charge(10.6);
+  await a.charge(40);
+  await a.stop();
+  await a.release();
+  assert.deepEqual(e.calls, [['lpc', 0], ['lpc', null], ['opev', [10]], ['opev', [16]], ['opev', [0]], ['opev', null]]);
+});
+
+test('Status mit Auto: verbunden sicher, Ladestand vom Auto, Leistung und Strom aus den Auto-Messwerten', async () => {
+  const e = fakeEebusEv({ connected: true, soc: 63, powerW: 6900, phasesA: [10, 9.5, 10.2], opev: true, maxA: 16 });
+  const st = await createEebusWallboxAdapter(() => ({ ski: SKI, phases: 3 }), { getEebus: () => e }).status();
+  assert.deepEqual([st.ok, st.connected, st.charging, st.powerW, st.currentA, st.vehicleSocPct], [true, true, true, 6900, 10.2, 63]);
+  const off = await createEebusWallboxAdapter(() => ({ ski: SKI, phases: 3 }), { getEebus: () => fakeEebusEv({ connected: false, soc: null, powerW: null, phasesA: null, opev: false, maxA: null }) }).status();
+  assert.deepEqual([off.connected, off.vehicleSocPct], [false, null]);
+});

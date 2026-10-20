@@ -87,6 +87,9 @@ verweist hierher.
   je Wallbox unter `device.ev`. Gegenüberstellung und Abweichungen: `dvhub/eebus/go/PROTOKOLL.md`. Gegen die
   openeebus-Referenzprogramme 27/27 Prüfungen wie die C-Bridge; mit echter Steuerbox, Wärmepumpe oder
   Wallbox noch ungeprüft. Rückweg im Image: `--build-arg EEBUS_IMPL=c`.
+  Die EEBUS-Wallbox (Wallbox-Typ „EEBUS“) nutzt das: steckt ein Auto und meldet die Box OPEV, gibt DVhub den
+  Ladestrom je Phase direkt vor (Stopp = 0 A) und zeigt Ladestand, Leistung und Strom vom Auto; sonst wie bisher
+  über die Verbrauchsgrenze (LPC).
 
 - **Ladestand vom Auto über evccs Fahrzeug-Treiber.** Integrationen → Wallbox → „Ladestand vom Auto“: Marke
   wählen (46 Vorlagen aus evcc 0.317.2, z. B. VW, Kia, Hyundai, Renault, Mercedes, Škoda, Tesla mit Tokens),

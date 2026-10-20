@@ -524,3 +524,18 @@ test('EEBUS-Wallbox: Geräteinfo (verbunden, LPC, Leistung) und Fehler ohne LPC'
   assert.equal(i.name, 'Elli');
   assert.equal((await s.svc.setEmsLimit('f'.repeat(40), 1000)).ok, false);
 });
+
+test('EEBUS-Wallbox: Geräteinfo enthält das E-Auto (Go-Fassung) — verbunden, Ladestand, Leistung, OPEV vorhanden', async () => {
+  const { s, c } = await withWallbox();
+  assert.equal(s.svc.deviceInfo(SKI_WB).ev, null, 'ohne Auto-Meldungen kein ev');
+  const EV = 'd:_n:WB/1/1';
+  c.emitEvent({ ev: 'ev_connected', ski: SKI_WB, entity: EV });
+  c.emitEvent({ ev: 'ev_measurement', ski: SKI_WB, entity: EV, phases: 3, current_a: [10, 10, 10], power_total_w: 6900 });
+  c.emitEvent({ ev: 'ev_soc', ski: SKI_WB, entity: EV, soc: 55 });
+  c.emitEvent({ ev: 'ev_limits', ski: SKI_WB, entity: EV, uc: 'opev', min_a: [6, 6, 6], max_a: [16, 16, 16], default_a: [0, 0, 0], limits: [] });
+  await settle();
+  assert.deepEqual(s.svc.deviceInfo(SKI_WB).ev, { connected: true, soc: 55, powerW: 6900, phasesA: [10, 10, 10], opev: true, maxA: 16 });
+  c.emitEvent({ ev: 'ev_disconnected', ski: SKI_WB, entity: EV });
+  await settle();
+  assert.equal(s.svc.deviceInfo(SKI_WB).ev.connected, false);
+});
