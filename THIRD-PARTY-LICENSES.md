@@ -282,6 +282,41 @@ Alle MIT — Lizenztext siehe Abschnitt 5.1.
 
 ---
 
+## 3a. Go-Module im EEBUS-Knoten `dvhub-eebus`
+
+Der EEBUS-Knoten (`dvhub/eebus/go/`, Hilfsprozess `dvhub-eebus`) ist in Go
+geschrieben und enthält die folgenden Module statisch gelinkt; im Image liegt
+nur das fertige Binary (`/usr/local/bin/dvhub-eebus`). Versionen fest über
+`dvhub/eebus/go/go.mod`/`go.sum` (Stand 2026-10-20). Liste = `go version -m`
+des Binarys (nur tatsächlich gelinkte Module, keine Test-Abhängigkeiten).
+
+| Modul | Version | Lizenz | Copyright / Rechteinhaber |
+|---|---|---|---|
+| `github.com/enbility/eebus-go` | v0.7.1-0.20260930170458-8583642861c3 | MIT | Copyright (c) 2022 Andreas Linde & Timo Vogel |
+| `github.com/enbility/ship-go` | v0.6.1-0.20260518113001-134687068e3c | MIT | Copyright (c) 2022 Andreas Linde & Timo Vogel |
+| `github.com/enbility/spine-go` | v0.7.1-0.20260520153416-0104ce40c885 | MIT | Copyright (c) 2022 Andreas Linde & Timo Vogel |
+| `github.com/enbility/go-avahi` | v0.0.0-20240909195612-d5de6b280d7a | MIT | Copyright (c) 2019 Holoplot GmbH |
+| `github.com/enbility/zeroconf/v2` | v2.0.0-20240920094356-be1cae74fda6 | MIT | Copyright (c) 2016 Stefan Smarzly |
+| `github.com/golanguzb70/lrucache` | v1.2.0 | MIT | Copyright (c) 2023 Golang Uzbekistan (Azizbek Hojimurotov) |
+| `github.com/govalues/decimal` | v0.1.36 | MIT | Copyright (c) 2023 govalues |
+| `gitlab.com/c0b/go-ordered-json` | v0.0.0-20201030195603-febf46534d5a | MIT | Copyright (c) 2020 derek |
+| `github.com/godbus/dbus/v5` | v5.2.2 | BSD-2-Clause | Copyright (c) 2013, Georg Reinke, Google |
+| `github.com/gorilla/websocket` | v1.5.3 | BSD-2-Clause | Copyright (c) 2013 The Gorilla WebSocket Authors |
+| `github.com/miekg/dns` | v1.1.72 | BSD-3-Clause | Copyright (c) 2009, The Go Authors. Extensions copyright (c) 2011, Miek Gieben |
+| `github.com/rickb777/period` | v1.0.22 | BSD-3-Clause | Copyright (c) 2022, Rick Beton |
+| `github.com/rickb777/plural` | v1.4.7 | BSD-3-Clause | Copyright (c) 2016, Rick Beton |
+| `golang.org/x/net` | v0.50.0 | BSD-3-Clause | Copyright 2009 The Go Authors |
+| `golang.org/x/sys` | v0.41.0 | BSD-3-Clause | Copyright 2009 The Go Authors |
+| Go-Standardbibliothek und -Laufzeit | 1.27.2 | BSD-3-Clause | Copyright 2009 The Go Authors |
+
+Alle permissiv. Lizenztexte: MIT Abschnitt 5.1, BSD-3-Clause Abschnitt 5.3,
+BSD-2-Clause Abschnitt 5.6. Rückweg (nur mit `--build-arg EEBUS_IMPL=c` bzw.
+nativ über `eebus-provision.sh`): die frühere C-Bridge auf **openeebus** (NIBE AB,
+Apache-2.0, Abschnitt 5.5) mit libwebsockets (MIT), cJSON (MIT) und OpenSSL
+(Apache-2.0) als Systembibliotheken. Kein Code aus evcc übernommen.
+
+---
+
 ## 4. Laufzeit- und Systemsoftware
 
 Diese Software wird **nicht** in den DVhub-Code eingebunden, sondern als
@@ -315,7 +350,7 @@ löst auch deren GPL-Weitergabepflicht nicht aus.
 
 ### 5.1 MIT License
 
-Gilt für alle in Abschnitt 1.1, 2 und 3 mit "MIT" gekennzeichneten Komponenten,
+Gilt für alle in Abschnitt 1.1, 2, 3 und 3a mit "MIT" gekennzeichneten Komponenten,
 jeweils mit dem dort genannten Copyright-Hinweis.
 
 ```
@@ -588,6 +623,36 @@ TinyLlama und Akkudoktor-EOS.
       of your accepting any such warranty or additional liability.
 
    END OF TERMS AND CONDITIONS
+```
+
+### 5.6 BSD 2-Clause License
+
+Gilt für die in Abschnitt 3a mit "BSD-2-Clause" gekennzeichneten Go-Module,
+jeweils mit dem dort genannten Copyright-Hinweis.
+
+```
+BSD 2-Clause License
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 ---

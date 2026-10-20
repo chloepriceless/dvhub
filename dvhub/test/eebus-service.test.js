@@ -402,6 +402,72 @@ test('LPP ohne Begrenzer: Sperre nur, wenn die Grenze unter der Anlagenleistung 
   assert.equal(s.state.ctrl.eebusProductionBlock, true);
 });
 
+test('E-Auto an der EEBUS-Wallbox: Meldungen je Gerät, Stromgrenze an dvhub-eebus', async () => {
+  const SKI_WB = 'e'.repeat(40);
+  const EV = 'd:_n:Wallbox_1/1/1';
+  const s = setup({ eebus: { trusted: [{ ski: SKI_BOX, role: 'grid' }, { ski: SKI_WB, name: 'Wallbox', role: 'device' }] } });
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'connected', ski: SKI_WB });
+  c.emitEvent({ ev: 'ev_connected', ski: SKI_WB, entity: EV });
+  c.emitEvent({ ev: 'ev_data', ski: SKI_WB, entity: EV, charge_state: 'active', comm_standard: 'iso15118-2ed2', power_min_w: 1380, power_max_w: 11040, power_standby_w: 0, ids: [{ type: 'eui48', value: '0a1b2c3d4e5f' }], manufacturer: { brand: 'VW' }, sleep: false });
+  c.emitEvent({ ev: 'ev_measurement', ski: SKI_WB, entity: EV, phases: 3, current_a: [10, 10.5, 9.5], power_w: [2300, 2400, 2200], power_total_w: 6900, energy_wh: 1200 });
+  c.emitEvent({ ev: 'ev_soc', ski: SKI_WB, entity: EV, soc: 63.5 });
+  c.emitEvent({ ev: 'ev_limits', ski: SKI_WB, entity: EV, uc: 'opev', min_a: [6, 6, 6], max_a: [16, 16, 16], default_a: [0, 0, 0], limits: [{ phase: 'a', active: true, value_a: 10, changeable: true }] });
+  c.emitEvent({ ev: 'ev_charge_plan', ski: SKI_WB, entity: EV, strategy: 'timedcharging', demand: { min_wh: 1000, opt_wh: 20000, max_wh: 40000, start_in_s: 0, end_in_s: 7200 }, plan: [{ start_ms: 1, end_ms: 2, w: 11000, min_w: 1380, max_w: 11040 }] });
+  c.emitEvent({ ev: 'ev_soc', ski: SKI_OTHER, entity: 'd:_n:X/1/1', soc: 10 }); // nicht gekoppelt
+  await settle();
+
+  const ev = s.svc.status().trusted.find((t) => t.ski === SKI_WB).device.ev;
+  assert.equal(ev.connected, true);
+  assert.equal(ev.entity, EV);
+  assert.equal(ev.soc, 63.5);
+  assert.deepEqual(ev.phasesA, [10, 10.5, 9.5]);
+  assert.deepEqual(ev.powerPerPhaseW, [2300, 2400, 2200]);
+  assert.equal(ev.powerW, 6900);
+  assert.equal(ev.energyWh, 1200);
+  assert.equal(ev.phases, 3);
+  assert.equal(ev.chargeState, 'active');
+  assert.equal(ev.vehicle.powerMaxW, 11040);
+  assert.equal(ev.vehicle.commStandard, 'iso15118-2ed2');
+  assert.deepEqual(ev.limits.opev.maxA, [16, 16, 16]);
+  assert.equal(ev.limits.opev.limits[0].valueA, 10);
+  assert.equal(ev.plan.strategy, 'timedcharging');
+  assert.equal(ev.plan.demand.optWh, 20000);
+  assert.equal(ev.plan.slots[0].w, 11000);
+  assert.equal(s.svc.status().trusted.some((t) => t.ski === SKI_OTHER), false, 'fremde Geräte bleiben draußen');
+
+  // Stromgrenze je Phase (OPEV) und Aufheben (null)
+  let r = await s.svc.setEvCurrentLimits(SKI_WB, [10, 10, 10]);
+  assert.equal(r.ok, true);
+  let cmd = c.commands.filter((x) => x.cmd === 'ev_current_limits').at(-1);
+  assert.deepEqual({ ski: cmd.ski, entity: cmd.entity, uc: cmd.uc, amps: cmd.amps }, { ski: SKI_WB, entity: EV, uc: 'opev', amps: [10, 10, 10] });
+  r = await s.svc.setEvCurrentLimits(SKI_WB, null);
+  cmd = c.commands.filter((x) => x.cmd === 'ev_current_limits').at(-1);
+  assert.equal(r.ok, true);
+  assert.equal(cmd.amps, null, 'null hebt die Grenze auf');
+  await s.svc.setEvCurrentLimits(SKI_WB, [8], { uc: 'oscev' });
+  cmd = c.commands.filter((x) => x.cmd === 'ev_current_limits').at(-1);
+  assert.equal(cmd.uc, 'oscev');
+
+  const before = c.commands.length;
+  assert.equal((await s.svc.setEvCurrentLimits(SKI_WB, [-1])).ok, false);
+  assert.equal((await s.svc.setEvCurrentLimits(SKI_WB, [16, 16, 16, 16])).ok, false);
+  assert.equal((await s.svc.setEvCurrentLimits(SKI_WB, [16], { uc: 'lpc' })).ok, false);
+  assert.equal((await s.svc.setEvCurrentLimits(SKI_HP, [16])).ok, false, 'Gerät ohne Auto');
+  assert.equal(c.commands.length, before, 'ungültige Vorgaben gehen nicht an dvhub-eebus');
+
+  // Auto ab → verbunden false, Messwerte weg
+  c.emitEvent({ ev: 'ev_disconnected', ski: SKI_WB, entity: EV });
+  await settle();
+  const off = s.svc.status().trusted.find((t) => t.ski === SKI_WB).device.ev;
+  assert.equal(off.connected, false);
+  assert.equal(off.soc, null);
+  assert.equal(off.powerW, null);
+  assert.equal((await s.svc.setEvCurrentLimits(SKI_WB, [16])).ok, false, 'ohne Auto keine Grenze');
+});
+
 test('Failsafe-Vorgabe automatisch: Mindestleistung Pmin,14a aus dem §14a-Dienst', async () => {
   const s = setup();
   s.ctx.p14a = { pminW: () => 7560, update: () => {} };

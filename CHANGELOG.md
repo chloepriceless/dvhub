@@ -78,6 +78,15 @@ verweist hierher.
   stoppt die Box selbst. Steuerung wie bei allen Wallboxen nur mit Pro-Lizenz (EOS-Weitergabe, Lademodus).
 - **Eine Liste der Wallbox-Typen** (`services/wallbox/types.js`) statt fünf Stellen — neue Wallboxen müssen nur
   noch dort und im Adapter eingetragen werden.
+- **EEBUS-Knoten in Go (enbility eebus-go) mit E-Auto an der Wallbox.** `dvhub-eebus` gibt es neu in Go
+  (`dvhub/eebus/go/`, eebus-go/ship-go/spine-go, MIT); das Container-Image nutzt diese Fassung, nativ bleibt
+  vorerst die C-Bridge auf openeebus. Gleiches Protokoll mit DVhub, gleiche Zertifikate und SKI (Kopplungen
+  bleiben), gleiche Rollen (CS LPC/LPP zur Steuerbox, EG LPC/LPP, MA MPC, CEM OHPCF, GCP MGCP). Neu als CEM:
+  Auto an/ab und Fahrzeugdaten (EVCC), Strom/Leistung/Energie je Phase (EVCEM), Ladestand (EVSOC, falls das
+  Auto ihn sendet), Ladestrom je Phase setzen (OPEV/OSCEV, `setEvCurrentLimits`), Ladeplan lesen (CEVC); Stand
+  je Wallbox unter `device.ev`. Gegenüberstellung und Abweichungen: `dvhub/eebus/go/PROTOKOLL.md`. Gegen die
+  openeebus-Referenzprogramme 27/27 Prüfungen wie die C-Bridge; mit echter Steuerbox, Wärmepumpe oder
+  Wallbox noch ungeprüft. Rückweg im Image: `--build-arg EEBUS_IMPL=c`.
 
 - **Ladestand vom Auto über evccs Fahrzeug-Treiber.** Integrationen → Wallbox → „Ladestand vom Auto“: Marke
   wählen (46 Vorlagen aus evcc 0.317.2, z. B. VW, Kia, Hyundai, Renault, Mercedes, Škoda, Tesla mit Tokens),

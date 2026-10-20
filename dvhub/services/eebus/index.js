@@ -1,7 +1,8 @@
 // services/eebus/index.js — EEBUS in DVhub (§14a-Steuerbox und EEBUS-Geräte).
 //
-// Das Protokoll spricht der Hilfsprozess dvhub-eebus (C, openeebus von NIBE,
-// dvhub/eebus/). Dieser Dienst startet und überwacht ihn, hält Kopplungen und
+// Das Protokoll spricht der Hilfsprozess dvhub-eebus (Go auf enbility eebus-go,
+// dvhub/eebus/go/; nativ noch C auf openeebus von NIBE, dvhub/eebus/bridge/ —
+// gleiches Protokoll). Dieser Dienst startet und überwacht ihn, hält Kopplungen und
 // Geräte, führt die Zustandsmaschinen der Netzseite (limit-state.js) und setzt
 // die Grenzen in DVhubs bestehende Steuerpfade um:
 //
@@ -12,8 +13,10 @@
 //                               Victron 2706); ohne Begrenzer Einspeisesperre
 //   Netzanschlusspunkt (MGCP) → Leistung und Zählerstände an die Steuerbox
 //   Verdichter (OHPCF)        → angekündigte Läufe in den günstigsten Zeitraum
+//   E-Auto an der Wallbox     → Stand je Gerät (ui.devices[ski].ev), Ladestrom
+//                               über setEvCurrentLimits (nur Go-Fassung)
 //
-// Protokoll mit dem Hilfsprozess: siehe dvhub/eebus/bridge/main.c.
+// Protokoll mit dem Hilfsprozess: siehe dvhub/eebus/go/PROTOKOLL.md.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -407,8 +410,98 @@ export function createEebusService(ctx, deps = {}) {
   }
 
   function device(ski) {
-    ui.devices[ski] ||= { entities: {}, powerW: null, nominalW: null, limit: null, failsafe: null, ohpcf: null, measurements: {} };
+    ui.devices[ski] ||= { entities: {}, powerW: null, nominalW: null, limit: null, failsafe: null, ohpcf: null, measurements: {}, ev: null };
     return ui.devices[ski];
+  }
+
+  // E-Auto an einer EEBUS-Wallbox (EVCC/EVCEM/EVSOC/OPEV/OSCEV/CEVC, nur
+  // dvhub-eebus in Go): je Gerät der letzte Stand, solange das Auto steckt.
+  function emptyEv(entity) {
+    return {
+      connected: false, entity: entity || null, chargeState: null, soc: null, phases: null,
+      phasesA: null, powerPerPhaseW: null, powerW: null, energyWh: null,
+      vehicle: null, limits: {}, plan: null, at: now(),
+    };
+  }
+
+  function evOf(ev) {
+    if (!ev.ski || roleOf(ev.ski) !== 'device') return null;
+    const d = device(ev.ski);
+    if (!d.ev || (ev.entity && d.ev.entity && d.ev.entity !== ev.entity && !d.ev.connected)) d.ev = emptyEv(ev.entity);
+    if (ev.entity) d.ev.entity = ev.entity;
+    d.ev.at = now();
+    return d.ev;
+  }
+
+  const numOrNull = (v) => (Number.isFinite(Number(v)) && v !== null ? Number(v) : null);
+  const numList = (v) => (Array.isArray(v) ? v.map((x) => numOrNull(x)) : null);
+
+  function onEvEvent(ev) {
+    const e = evOf(ev);
+    if (!e) return;
+    switch (ev.ev) {
+      case 'ev_connected':
+        Object.assign(e, emptyEv(ev.entity), { connected: true });
+        pushLog('eebus_ev_connected', { ski: ev.ski, entity: ev.entity || null });
+        break;
+      case 'ev_disconnected':
+        Object.assign(e, emptyEv(ev.entity || e.entity));
+        pushLog('eebus_ev_disconnected', { ski: ev.ski, entity: ev.entity || null });
+        break;
+      case 'ev_data':
+        e.connected = true;
+        if (ev.charge_state != null) e.chargeState = ev.charge_state;
+        e.vehicle = {
+          ...(e.vehicle || {}),
+          ...(ev.comm_standard != null ? { commStandard: ev.comm_standard } : {}),
+          ...(ev.asymmetric != null ? { asymmetric: ev.asymmetric === true } : {}),
+          ...(Array.isArray(ev.ids) ? { ids: ev.ids } : {}),
+          ...(ev.manufacturer ? { manufacturer: ev.manufacturer } : {}),
+          ...(ev.power_min_w != null ? { powerMinW: numOrNull(ev.power_min_w) } : {}),
+          ...(ev.power_max_w != null ? { powerMaxW: numOrNull(ev.power_max_w) } : {}),
+          ...(ev.power_standby_w != null ? { powerStandbyW: numOrNull(ev.power_standby_w) } : {}),
+          ...(ev.sleep != null ? { sleep: ev.sleep === true } : {}),
+        };
+        break;
+      case 'ev_measurement':
+        e.connected = true;
+        if (ev.phases != null) e.phases = numOrNull(ev.phases);
+        if (ev.current_a) e.phasesA = numList(ev.current_a);
+        if (ev.power_w) e.powerPerPhaseW = numList(ev.power_w);
+        if (ev.power_total_w != null) e.powerW = numOrNull(ev.power_total_w);
+        if (ev.energy_wh != null) e.energyWh = numOrNull(ev.energy_wh);
+        break;
+      case 'ev_soc':
+        e.connected = true;
+        e.soc = numOrNull(ev.soc);
+        break;
+      case 'ev_limits':
+        if (ev.uc !== 'opev' && ev.uc !== 'oscev') break;
+        e.limits = {
+          ...e.limits,
+          [ev.uc]: {
+            minA: numList(ev.min_a), maxA: numList(ev.max_a), defaultA: numList(ev.default_a),
+            limits: (Array.isArray(ev.limits) ? ev.limits : []).map((l) => ({
+              phase: l.phase, active: l.active === true, valueA: numOrNull(l.value_a), changeable: l.changeable === true,
+            })),
+          },
+        };
+        break;
+      case 'ev_charge_plan':
+        e.plan = {
+          strategy: ev.strategy || null,
+          demand: ev.demand ? {
+            minWh: numOrNull(ev.demand.min_wh), optWh: numOrNull(ev.demand.opt_wh), maxWh: numOrNull(ev.demand.max_wh),
+            startInS: numOrNull(ev.demand.start_in_s), endInS: numOrNull(ev.demand.end_in_s),
+          } : null,
+          slots: (Array.isArray(ev.plan) ? ev.plan : []).map((p) => ({
+            startMs: numOrNull(p.start_ms), endMs: numOrNull(p.end_ms), w: numOrNull(p.w), minW: numOrNull(p.min_w), maxW: numOrNull(p.max_w),
+          })),
+        };
+        break;
+      default:
+        break;
+    }
   }
 
   function handleEvent(ev) {
@@ -531,6 +624,17 @@ export function createEebusService(ctx, deps = {}) {
         break;
       case 'ohpcf_clear':
         if (ev.ski && ui.devices[ev.ski]) ui.devices[ev.ski].ohpcf = null;
+        break;
+
+      // E-Auto an der Wallbox
+      case 'ev_connected':
+      case 'ev_disconnected':
+      case 'ev_data':
+      case 'ev_measurement':
+      case 'ev_soc':
+      case 'ev_limits':
+      case 'ev_charge_plan':
+        onEvEvent(ev);
         break;
       default:
         break;
@@ -887,6 +991,29 @@ export function createEebusService(ctx, deps = {}) {
     return send({ cmd: 'device_limit', uc: 'lpc', entity: d.entities.lpc, w: active ? Number(w) : 0, duration_s: Number(durationS) || 0, active });
   }
 
+  /**
+   * Ladestrom fürs Auto an einer EEBUS-Wallbox (dvhub-eebus ev_current_limits).
+   * @param {string} ski  Wallbox
+   * @param {number[]|null} ampsPerPhase  A je Phase L1–L3 (ein Wert gilt für alle
+   *   Phasen); null hebt die Grenze auf
+   * @param {{uc?: 'opev'|'oscev'}} [opts]  opev = Höchststrom (Überlastschutz, Vorgabe),
+   *   oscev = Empfehlung für Eigenverbrauch
+   */
+  async function setEvCurrentLimits(ski, ampsPerPhase, { uc = 'opev' } = {}) {
+    if (uc !== 'opev' && uc !== 'oscev') return { ok: false, error: 'uc must be opev or oscev' };
+    const ev = ui.devices[ski]?.ev;
+    if (!ev?.connected) return { ok: false, error: 'no ev connected' };
+    let amps = null;
+    if (ampsPerPhase != null) {
+      if (!Array.isArray(ampsPerPhase) || ampsPerPhase.length < 1 || ampsPerPhase.length > 3
+        || !ampsPerPhase.every((a) => Number.isFinite(Number(a)) && Number(a) >= 0)) {
+        return { ok: false, error: 'ampsPerPhase must be 1 to 3 values >= 0 or null' };
+      }
+      amps = ampsPerPhase.map(Number);
+    }
+    return send({ cmd: 'ev_current_limits', ski, ...(ev.entity ? { entity: ev.entity } : {}), uc, amps });
+  }
+
   return {
     start,
     stop,
@@ -899,6 +1026,7 @@ export function createEebusService(ctx, deps = {}) {
     setDeviceLimit,
     setEmsLimit,
     deviceInfo,
+    setEvCurrentLimits,
     certPaths,
     // für Tests
     _handleEvent: handleEvent,

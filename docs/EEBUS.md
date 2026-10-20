@@ -1,7 +1,11 @@
 # EEBUS in DVhub
 
-DVhub spricht EEBUS (SHIP/SPINE) über den Hilfsprozess **dvhub-eebus**, gebaut auf
-[openeebus](https://github.com/NIBEGroup/openeebus) von NIBE (Apache-2.0). Zwei Rollen:
+DVhub spricht EEBUS (SHIP/SPINE) über den Hilfsprozess **dvhub-eebus**. Im Container-Image
+ist er in Go auf [enbility eebus-go](https://github.com/enbility/eebus-go) (MIT) gebaut
+(`dvhub/eebus/go/`); nativ baut `eebus-provision.sh` weiterhin die C-Fassung auf
+[openeebus](https://github.com/NIBEGroup/openeebus) von NIBE (Apache-2.0). Beide sprechen
+dasselbe Protokoll mit DVhub ([PROTOKOLL.md](../dvhub/eebus/go/PROTOKOLL.md)); nur die
+Go-Fassung kennt das E-Auto an der Wallbox. Rollen:
 
 - **§14a-Steuerbox (Netzbetreiber):** DVhub ist das „Controllable System“. Die Steuerbox
   begrenzt den Bezug (LPC, §14a EnWG) und die Einspeisung (LPP) und liest den
@@ -9,6 +13,11 @@ DVhub spricht EEBUS (SHIP/SPINE) über den Hilfsprozess **dvhub-eebus**, gebaut 
 - **EEBUS-Geräte:** DVhub ist Energiemanager. Wärmepumpen und Wallboxen mit EEBUS bekommen
   Leistungsgrenzen (LPC/LPP), melden ihre Leistung (MPC), Wärmepumpen kündigen
   verschiebbare Verdichterläufe an (OHPCF), die DVhub einplant.
+- **E-Auto an der EEBUS-Wallbox** (nur Go-Fassung): DVhub ist CEM — Auto an/ab und
+  Fahrzeugdaten (EVCC), Strom/Leistung/Energie je Phase (EVCEM), Ladestand, falls das Auto
+  ihn sendet (EVSOC), Ladestrom je Phase setzen (OPEV Höchstwert, OSCEV Empfehlung),
+  Ladeplan lesen (CEVC). Stand je Wallbox unter `trusted[].device.ev`, setzen über
+  `setEvCurrentLimits()` im EEBUS-Dienst. Mit echter Wallbox noch ungeprüft.
 
 ## Einrichten
 
@@ -115,7 +124,12 @@ enthält sie, Failsafe-Zustand und Zählerstände; nach dem Import gilt die Kopp
 
 ## Technik
 
-- `dvhub/eebus/bridge/` — dvhub-eebus (C): lokales SPINE-Gerät „EnergyManagementSystem“
+- `dvhub/eebus/go/` — dvhub-eebus (Go, eebus-go; im Image): gleiche Entitäten wie die
+  C-Fassung, auf [3] zusätzlich EVCC/EVCEM/EVSOC/OPEV/OSCEV/CEVC. Gegenüberstellung C → Go,
+  Abweichungen und die neuen `ev_*`-Meldungen: [PROTOKOLL.md](../dvhub/eebus/go/PROTOKOLL.md).
+  Bauen: `dvhub/eebus/build-go.sh` (statisch, ohne CGO; ohne lokales Go per Docker). Rückweg
+  im Image: `--build-arg EEBUS_IMPL=c`.
+- `dvhub/eebus/bridge/` — dvhub-eebus (C, nativ): lokales SPINE-Gerät „EnergyManagementSystem“
   mit vier Entitäten: [1] CEM/CS LPC, [2] CEM/CS LPP, [3] CEM mit EG LPC/LPP, MA MPC, CEM OHPCF,
   [4] GridConnectionPointOfPremises/GCP MGCP. Protokoll mit DVhub: eine JSON-Zeile je
   Befehl (stdin) bzw. Ereignis (stdout), siehe `main.c`.
@@ -127,12 +141,14 @@ enthält sie, Failsafe-Zustand und Zählerstände; nach dem Import gilt die Kopp
   überlief sie und trennte die Verbindung).
 - `services/eebus/` — Dienst in DVhub (Überwachung, Zustandsmaschinen, Umsetzung),
   `services/feed-in-limit-arbiter.js` — eine Einspeisegrenze für alle Quellen.
-- Speicher: dvhub-eebus ~13 MB.
+- Speicher: dvhub-eebus (C) ~8–13 MB, (Go) ~18 MB RSS im Interop-Lauf.
 
 ## Tests
 
 - `dvhub/eebus/test/interop.py` — dvhub-eebus gegen die openeebus-Beispiele (hems als
-  Steuerbox, heat_pump als Gerät), 27 Prüfungen.
+  Steuerbox, heat_pump als Gerät), 27 Prüfungen; C- und Go-Fassung bestehen alle (Go: 20.10.2026).
+- `dvhub/eebus/go/*_test.go` — Go-Fassung: Protokoll, Abbildung mit Attrappen (auch E-Auto),
+  Prozessverhalten und zwei eebus-go-Knoten gegeneinander über echtes SHIP.
 - `dvhub/eebus/test/e2e-dvhub.py` — laufendes DVhub mit EEBUS, nur über die API: Kopplung,
   §14a-Grenze → Akku/Wärmepumpe, Einspeisegrenze, Aufhebung, Failsafe nach 120 s, 16 Prüfungen.
 - Node-Tests `test/eebus-*.test.js`.

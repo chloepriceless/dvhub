@@ -24,6 +24,10 @@
 #     -t bikinibottomcapital/dvhub:dev --push .
 
 ARG NODE_VERSION=22-alpine
+# EEBUS-Knoten: go = enbility eebus-go (Standard), c = alte C-Bridge auf openeebus
+# (Rückweg: --build-arg EEBUS_IMPL=c).
+ARG EEBUS_IMPL=go
+ARG GO_VERSION=1.27.2
 
 # ---------------------------------------------------------------------------
 # Stage 1 — Produktionsabhängigkeiten
@@ -51,16 +55,29 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
 # ---------------------------------------------------------------------------
 # Stage 2 — Laufzeit
 # ---------------------------------------------------------------------------
-# --- EEBUS-Knoten (dvhub-eebus, openeebus von NIBE) --------------------------
-# Eigene Bau-Stufe: Toolchain und Header bleiben draußen, ins Image kommt nur
-# das Binary (~0,7 MB) plus Laufzeitbibliotheken. Gleiches build.sh wie nativ.
-FROM node:${NODE_VERSION} AS eebus
+# --- EEBUS-Knoten (dvhub-eebus) -------------------------------------------------
+# Standard: Go auf enbility eebus-go (dvhub/eebus/go, PROTOKOLL.md) — statisch,
+# ohne CGO, braucht keine Laufzeitbibliotheken (mDNS über Avahi per D-Bus oder
+# Go-Zeroconf). Läuft auf der BUILD-Plattform und kompiliert für TARGETARCH quer,
+# also ohne QEMU. Ins Image kommt nur das Binary (~14 MB arm64, ~15 MB amd64).
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS eebus-go
+ARG TARGETARCH
+COPY dvhub/eebus/go /src/eebus/go
+COPY dvhub/eebus/build-go.sh /src/eebus/build-go.sh
+RUN sh /src/eebus/build-go.sh --install /out "${TARGETARCH}"
+
+# Rückweg: C-Bridge auf openeebus (NIBE), gleiches build.sh wie nativ. Wird nur
+# gebaut, wenn EEBUS_IMPL=c gesetzt ist (BuildKit überspringt ungenutzte Stufen).
+FROM node:${NODE_VERSION} AS eebus-c
 RUN apk add --no-cache bash build-base cmake ninja pkgconf curl patch \
       openssl-dev libwebsockets-dev cjson-dev avahi-dev
 COPY dvhub/eebus /src/eebus
 RUN bash /src/eebus/build.sh /out
 
+FROM eebus-${EEBUS_IMPL} AS eebus
+
 FROM node:${NODE_VERSION} AS runtime
+ARG EEBUS_IMPL
 
 ARG VCS_REF=unknown
 ARG APP_VERSION=1.0.6
@@ -94,15 +111,17 @@ LABEL org.opencontainers.image.title="DVhub" \
 # Prüfen/Beenden von openvpn, genau wie die nativen sudoers-Regeln. Der
 # Container braucht dafür NET_ADMIN + /dev/net/tun (docker/compose.yml); mit
 # Host-Netz entsteht tun0 wie nativ direkt auf dem Gerät.
-# EEBUS: libwebsockets/cJSON/Avahi-Client für dvhub-eebus; dbus + avahi nur,
-# falls der Host kein Avahi über D-Bus bereitstellt (docker-entrypoint.sh).
+# EEBUS: dvhub-eebus (Go) braucht keine Bibliotheken; dbus + avahi nur, falls
+# der Host kein Avahi über D-Bus bereitstellt (docker-entrypoint.sh). Nur die
+# C-Bridge (EEBUS_IMPL=c) braucht zusätzlich libwebsockets und cJSON.
 # Fern-Support (2026-10-14): ssh + autossh für den Tunnel zum Relay, sshd für
 # den Support-Login im Container (läuft nur, solange ein Tunnel offen ist, als
 # dvhub, nur auf 127.0.0.1, nur mit dem Support-Schlüssel — docker-entrypoint.sh).
 # Der dvhub-Benutzer braucht dafür eine Shell; ein Passwort hat er nicht.
 RUN apk add --no-cache tzdata su-exec setpriv postgresql17-client openvpn wireguard-tools sudo iproute2 procps nftables \
-      libwebsockets cjson avahi-libs avahi dbus \
+      avahi dbus \
       openssh-client-default openssh-keygen openssh-server autossh \
+    && if [ "${EEBUS_IMPL}" = "c" ]; then apk add --no-cache libwebsockets cjson avahi-libs; fi \
     && addgroup -g 10001 -S dvhub \
     && adduser -u 10001 -G dvhub -S -H -s /bin/sh dvhub \
     && printf '%s\n' \
