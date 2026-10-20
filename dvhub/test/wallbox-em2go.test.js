@@ -64,3 +64,11 @@ test('Stopp: Befehlsmodus → Ladebefehl 2; Plug & Charge → auf Befehlsmodus s
   await a.release();
   assert.deepEqual(b.writes.slice(2), [[87, 160], [91, 160], [93, 0]]);
 });
+
+test('Befehlsmodus: „Laden beendet“ (Auto voll) ohne eigenen Stopp → kein Startbefehl alle 15 s', async () => {
+  const b = fakeEm2go({ state: 6, mode: 1 });
+  const a = em(b);
+  await a.charge(10);
+  await a.charge(10);
+  assert.equal(b.writes.filter(([r]) => r === 95).length, 0);
+});

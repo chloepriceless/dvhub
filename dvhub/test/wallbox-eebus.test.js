@@ -63,7 +63,7 @@ test('Auto steckt + OPEV: Laden = Strom je Phase, Stopp = 0 A, Freigeben hebt OP
   const e = fakeEebusEv(ev);
   const a = createEebusWallboxAdapter(() => ({ ski: SKI, phases: 3 }), { getEebus: () => e });
   await a.stop(); // noch kein Auto → LPC 0 W
-  Object.assign(ev, { connected: true, soc: 40, powerW: 6900, phasesA: [10, 10, 10], opev: true, maxA: 16 });
+  Object.assign(ev, { connected: true, soc: 40, powerW: 6900, phasesA: [10, 10, 10], opev: true, opevStop: true, maxA: 16 });
   await a.charge(10.6);
   await a.charge(40);
   await a.stop();
@@ -72,9 +72,22 @@ test('Auto steckt + OPEV: Laden = Strom je Phase, Stopp = 0 A, Freigeben hebt OP
 });
 
 test('Status mit Auto: verbunden sicher, Ladestand vom Auto, Leistung und Strom aus den Auto-Messwerten', async () => {
-  const e = fakeEebusEv({ connected: true, soc: 63, powerW: 6900, phasesA: [10, 9.5, 10.2], opev: true, maxA: 16 });
+  const e = fakeEebusEv({ connected: true, soc: 63, powerW: 6900, phasesA: [10, 9.5, 10.2], opev: true, opevStop: true, maxA: 16 });
   const st = await createEebusWallboxAdapter(() => ({ ski: SKI, phases: 3 }), { getEebus: () => e }).status();
   assert.deepEqual([st.ok, st.connected, st.charging, st.powerW, st.currentA, st.vehicleSocPct], [true, true, true, 6900, 10.2, 63]);
   const off = await createEebusWallboxAdapter(() => ({ ski: SKI, phases: 3 }), { getEebus: () => fakeEebusEv({ connected: false, soc: null, powerW: null, phasesA: null, opev: false, maxA: null }) }).status();
   assert.deepEqual([off.connected, off.vehicleSocPct], [false, null]);
+});
+
+test('Standardwert > 0 (OPEV kann nicht auf 0): Stopp bleibt bei LPC 0 W, Laden hebt sie wieder auf (Codex 20.10.)', async () => {
+  const e = fakeEebusEv({ connected: true, soc: 40, powerW: 0, phasesA: [0, 0, 0], opev: true, opevStop: false, maxA: 16 });
+  const a = createEebusWallboxAdapter(() => ({ ski: SKI, phases: 3 }), { getEebus: () => e });
+  await a.stop();
+  await a.charge(8);
+  assert.deepEqual(e.calls, [['lpc', 0], ['lpc', null], ['opev', [8]]]);
+});
+
+test('Box ohne LPC, aber Auto mit OPEV → eingerichtet (Codex 20.10.)', () => {
+  const e = { deviceInfo: () => ({ connected: true, hasLpc: false, ev: { connected: true, opev: true, opevStop: true, maxA: 16 } }), setEmsLimit: async () => ({ ok: true }), setEvCurrentLimits: async () => ({ ok: true }) };
+  assert.equal(createEebusWallboxAdapter(() => ({ ski: SKI }), { getEebus: () => e }).isConfigured(), true);
 });

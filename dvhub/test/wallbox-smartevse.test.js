@@ -85,3 +85,17 @@ test('Box lehnt Vorgabe ab („Value not allowed!“, z. B. als Lastverteil-Node
     assert.match(r.error, /nicht erlaubt|not allowed/i);
   } finally { b.server.close(); }
 });
+
+test('Freigeben ohne eigenen Moduswechsel lässt SMART/SOLAR stehen; nur OFF/PAUSE werden zu NORMAL (Codex 20.10.)', async () => {
+  const smart = await fakeEvse({ modeId: 3 });
+  try {
+    const a = createSmartevseAdapter(() => ({ host: smart.host }));
+    await a.charge(10); await a.release();
+    assert.deepEqual(posts(smart), ['/settings?override_current=100', '/settings?disable_override_current=1']);
+  } finally { smart.server.close(); }
+  const off = await fakeEvse({ modeId: 0 });
+  try {
+    await createSmartevseAdapter(() => ({ host: off.host })).release();
+    assert.deepEqual(posts(off), ['/settings?disable_override_current=1&mode=1']);
+  } finally { off.server.close(); }
+});

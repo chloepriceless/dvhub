@@ -700,6 +700,20 @@ export function createEebusService(ctx, deps = {}) {
   }
 
   /** Geräteinfo für die EEBUS-Wallbox: verbunden, LPC vorhanden, Leistung, Name. */
+  // OPEV nutzbar nur mit lesbaren Grenzen (max_a) und mindestens einer änderbaren
+  // Phasengrenze — dvhub-eebus meldet ev_limits auch, wenn beide Leseversuche scheitern.
+  // Stopp per OPEV nur, wenn der Standardwert 0 ist: eebus-go setzt Werte unter dem
+  // Minimum auf den Standardwert (features/internal/electricalconnection.go:297).
+  function opevInfo(o) {
+    const maxList = (o?.maxA || []).filter(Number.isFinite);
+    const usable = maxList.length > 0 && (o?.limits || []).some((l) => l.changeable);
+    return {
+      opev: usable,
+      opevStop: usable && !(o?.defaultA || []).some((v) => Number.isFinite(v) && v > 0),
+      maxA: maxList.length ? Math.max(...maxList) : null,
+    };
+  }
+
   function deviceInfo(ski) {
     const d = ui.devices[ski];
     const trusted = cfgNow().trusted.find((t) => t.ski === ski);
@@ -715,8 +729,7 @@ export function createEebusService(ctx, deps = {}) {
         soc: d.ev.soc ?? null,
         powerW: d.ev.powerW ?? null,
         phasesA: d.ev.phasesA ?? null,
-        opev: Boolean(d.ev.limits?.opev),
-        maxA: (() => { const m = (d.ev.limits?.opev?.maxA || []).filter(Number.isFinite); return m.length ? Math.max(...m) : null; })(),
+        ...opevInfo(d.ev.limits?.opev),
       } : null,
     };
   }

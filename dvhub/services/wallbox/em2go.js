@@ -65,8 +65,10 @@ export function createEm2goAdapter(getSettings, deps = {}) {
       await put(x, 91, da);
       const [mode] = await read(x, 93);
       const [state] = await read(x, 0);
-      // Im Befehlsmodus startet die Box erst auf Befehl (Auto verbunden, aber kein Vorgang).
-      if (mode === 1 && (stopped || state === 2 || state === 6)) await put(x, 95, 1, { force: true });
+      // Im Befehlsmodus startet die Box erst auf Befehl: Auto verbunden ohne Vorgang oder
+      // nach DVhubs eigenem Stopp. „Laden beendet“ (6, z. B. Auto voll) bleibt in Ruhe —
+      // sonst ginge alle 15 s ein neuer Startbefehl raus.
+      if (mode === 1 && (stopped || state === 2)) await put(x, 95, 1, { force: true });
       stopped = false;
     }),
     stop: () => guarded(async (x) => {

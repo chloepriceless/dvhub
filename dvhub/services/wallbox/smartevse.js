@@ -79,9 +79,12 @@ export function createSmartevseAdapter(getSettings) {
       return 'mode=0';
     }),
     release: () => guarded((d) => {
-      const back = prevMode ?? 1;
+      const m = Number(d.mode_id);
+      // Zurück in den gemerkten Modus; ohne eigenen Wechsel bleibt der Modus der Box
+      // (SMART/SOLAR) — nur OFF/PAUSE würden nie laden und werden zu NORMAL.
+      const back = prevMode ?? (m === 0 || m === 4 ? 1 : m);
       prevMode = null;
-      return Number(d.mode_id) === back ? 'disable_override_current=1' : `disable_override_current=1&mode=${back}`;
+      return m === back ? 'disable_override_current=1' : `disable_override_current=1&mode=${back}`;
     }),
     async status() {
       if (!host()) return missing();

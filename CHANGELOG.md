@@ -247,6 +247,13 @@ verweist hierher.
 
 ### Behoben
 
+- **Wallbox-Adapter behalten ihren Zustand:** DVhub baute für jeden Befehl und jede Statusabfrage einen neuen
+  Adapter — Nexblue verlor das Lebenszeichen, EM2GO/SmartEVSE den gemerkten Modus, die EEBUS-Wallbox ihre
+  LPC-Grenze, die Schreib-Entprellung (KEBA, Heidelberg, …) griff nie. Jetzt ein Adapter je Typ und Einstellung.
+- **EEBUS-Wallbox:** OPEV nur mit lesbaren, änderbaren Grenzen; Stopp per OPEV nur, wenn der Standardwert der Box
+  0 A ist (sonst LPC 0 W); Box ohne LPC, aber mit OPEV-Auto gilt als eingerichtet. Go-Bridge: Entitäten-Abgleich
+  ohne gleichzeitigen Map-Zugriff. SmartEVSE: „Automatisch“ lässt SMART/SOLAR stehen. EM2GO: kein Startbefehl
+  alle 15 s, wenn das Laden beendet ist (Auto voll).
 - **Modbus-Wallboxen bei MQTT-angebundener Anlage:** KEBA, Heidelberg, Bender & Co. bekamen dort den MQTT-Transport
   und meldeten nur „Modbus nicht verfügbar“; sie nutzen jetzt eine eigene Modbus-Verbindung.
 - **Unvollständige Datenbank-Migrationen werden angezeigt.** Eine gescheiterte Migration stand bisher nur im

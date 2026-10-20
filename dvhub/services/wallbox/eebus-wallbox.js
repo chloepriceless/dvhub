@@ -3,8 +3,9 @@
 // Elli / VW ID. Charger, Cupra, Audi, Škoda, Porsche Wallbox, Kontron/Steca/
 // ghostONE sprechen EEBUS. Zwei Wege:
 //   • Auto steckt und die Box meldet OPEV (nur dvhub-eebus in Go, eebus-go):
-//       Laden(A) → Ladestrom je Phase (OPEV), Stopp → 0 A (eebus-go setzt Werte unter
-//       dem Minimum auf den Standardwert der Box, meist 0 = Pause), Freigeben → aufheben.
+//       Laden(A) → Ladestrom je Phase (OPEV), Stopp → 0 A, aber nur wenn der Standardwert
+//       der Box 0 ist (eebus-go setzt Werte unter dem Minimum auf den Standardwert) —
+//       sonst Stopp über LPC 0 W; Freigeben → aufheben.
 //       Ladestand, Leistung und Strom kommen vom Auto (EVSOC/EVCEM).
 //   • sonst über die Verbrauchsgrenze (LPC), die die Box für §14a ohnehin beherrscht:
 //       Laden(A) → Grenze A × 230 V × Phasen, Stopp → 0 W, Freigeben → aufheben.
@@ -34,11 +35,13 @@ export function createEebusWallboxAdapter(getSettings, deps = {}) {
     if (r?.ok !== false) lpcSet = w != null;
     return r;
   }
-  async function control(amps, lpcW) {
+  async function control(amps, lpcW, { stop = false } = {}) {
     if (isReadOnlyMode()) return READ_ONLY;
     const e = eebus();
     if (!e?.setEmsLimit || !ski()) return missing();
-    if (opevEv(e)) {
+    const ev = opevEv(e);
+    // Stopp per OPEV nur, wenn 0 A wirklich ankommt (Standardwert 0) — sonst LPC 0 W.
+    if (ev && (!stop || ev.opevStop)) {
       if (lpcSet) { const r = await lpc(e, null); if (r?.ok === false) return r; }
       return e.setEvCurrentLimits(ski(), amps);
     }
@@ -47,13 +50,13 @@ export function createEebusWallboxAdapter(getSettings, deps = {}) {
 
   return {
     type: 'eebus',
-    isConfigured: () => Boolean(ski() && eebus()?.deviceInfo?.(ski())?.hasLpc),
+    isConfigured: () => Boolean(ski() && (eebus()?.deviceInfo?.(ski())?.hasLpc || opevEv(eebus()))),
     charge: (currentA) => {
       const a = Math.max(6, Math.floor(Number(currentA)));
       const max = opevEv(eebus())?.maxA;
       return control([Number.isFinite(max) && max >= 6 ? Math.min(a, max) : a], a * VOLTAGE_V * phases());
     },
-    stop: () => control([0], 0),
+    stop: () => control([0], 0, { stop: true }),
     async release() {
       if (isReadOnlyMode()) return READ_ONLY;
       const e = eebus();

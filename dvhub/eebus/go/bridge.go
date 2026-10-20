@@ -340,32 +340,40 @@ func (b *Bridge) syncRemotes(tag remoteTag, base eebusapi.UseCaseBaseInterface) 
 		}
 		cur[keyOfEntity(rs.Entity)] = remoteEntry{ski: skiOfEntity(rs.Entity), entity: rs.Entity}
 	}
+	b.applyRemotes(tag, cur)
+}
+
+// applyRemotes übernimmt den neuen Stand eines Anwendungsfalls und meldet die Änderungen.
+func (b *Bridge) applyRemotes(tag remoteTag, cur map[string]remoteEntry) {
+	type change struct{ key, ski string }
+	var added, removed []change
+	// Unterschied unter dem Mutex berechnen und kopieren: cur liegt danach in b.remotes,
+	// und dropSki/rememberEV (eigene Goroutinen von spine-go) ändern die Map dort.
 	b.mu.Lock()
 	old := b.remotes[tag]
 	b.remotes[tag] = cur
-	b.mu.Unlock()
-	var added, removed []string
-	for k := range cur {
+	for k, e := range cur {
 		if _, ok := old[k]; !ok {
-			added = append(added, k)
+			added = append(added, change{k, e.ski})
 		}
 	}
-	for k := range old {
+	for k, e := range old {
 		if _, ok := cur[k]; !ok {
-			removed = append(removed, k)
+			removed = append(removed, change{k, e.ski})
 		}
 	}
-	sort.Strings(added)
-	sort.Strings(removed)
+	b.mu.Unlock()
+	sort.Slice(added, func(i, j int) bool { return added[i].key < added[j].key })
+	sort.Slice(removed, func(i, j int) bool { return removed[i].key < removed[j].key })
 	info, ok := tagEvents[tag]
 	if !ok {
 		return
 	}
-	for _, k := range removed {
-		b.out.Emit(entityEvent(info.removed, info.uc, k, old[k].ski))
+	for _, c := range removed {
+		b.out.Emit(entityEvent(info.removed, info.uc, c.key, c.ski))
 	}
-	for _, k := range added {
-		b.out.Emit(entityEvent(info.added, info.uc, k, cur[k].ski))
+	for _, c := range added {
+		b.out.Emit(entityEvent(info.added, info.uc, c.key, c.ski))
 	}
 }
 

@@ -180,6 +180,7 @@ import { createNexblueAdapter } from './services/wallbox/nexblue.js';
 import { createSmartevseAdapter } from './services/wallbox/smartevse.js';
 import { createEm2goAdapter } from './services/wallbox/em2go.js';
 import { createPhoenixAdapter } from './services/wallbox/phoenix.js';
+import { createWallboxAdapterCache } from './services/wallbox/adapter-cache.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
@@ -1547,7 +1548,7 @@ if (IS_RUNTIME_PROCESS) ctx.eosRestarter.start();
 // gewaehlten evcc-Ladepunkt weiter. Liest die Loesung ueber den Inspector-
 // Adapter (kurzes Timeout — ein haengendes EOS blockiert den Takt nicht lange).
 // Direkt angebundene Wallbox (ohne evcc) — eine Stelle für alle Aufrufer.
-function directWallboxAdapter(type) {
+function buildWallboxAdapter(type) {
   if (type === 'openevse') return createOpenEvseAdapter(() => ctx.getCfg()?.wallbox?.openevse);
   if (type === 'goe') return createGoeAdapter(() => ctx.getCfg()?.wallbox?.goe);
   if (type === 'wattpilot') return createWattpilotAdapter(() => ctx.getCfg()?.wallbox?.wattpilot);
@@ -1573,6 +1574,15 @@ function directWallboxAdapter(type) {
   if (type === 'keba') return createKebaAdapter(() => ctx.getCfg()?.wallbox?.keba, { getTransport: wallboxModbus });
   if (type === 'ocpp') return createOcppAdapter(() => ctx.getCfg()?.wallbox?.ocpp, { getServer: () => ctx.ocppServer });
   return null;
+}
+// Ein Adapter je Typ und Einstellung: Statusabfrage, Steuerung und EOS-Brücke teilen
+// sich den Zustand (Lebenszeichen, gemerkter Modus, Entprellung).
+const wallboxAdapterCache = createWallboxAdapterCache(buildWallboxAdapter, (type) => {
+  const c = ctx.getCfg() || {};
+  return type === 'ocpp' ? { wb: c.wallbox?.ocpp, ocpp: c.ocpp } : c.wallbox?.[type];
+});
+function directWallboxAdapter(type) {
+  return wallboxAdapterCache.get(type);
 }
 // Auch für die Einstellungsseite (Live-Zustand der Victron-Wallbox, routes-api.js).
 ctx.directWallboxAdapter = directWallboxAdapter;
