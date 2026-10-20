@@ -152,8 +152,19 @@ const writeMultiPdu = (addr, values) => {
 };
 const regsOf = (resp) => { const n = resp.readUInt8(8) / 2; return Array.from({ length: n }, (_, i) => resp.readUInt16BE(9 + i * 2)); };
 
+// Freien Port vom System holen statt zu würfeln: im parallelen Testlauf traf der
+// Zufallsport sonst den HTTP-Server eines anderen Tests (CI 20.10.2026: FC3 las
+// „400 Bad Request“) oder einen belegten Port (Ersatzport 1502).
+async function freePort() {
+  const probe = net.createServer();
+  await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+  const { port } = probe.address();
+  await new Promise((r) => probe.close(r));
+  return port;
+}
+
 async function withServer(profile, fn) {
-  const port = 20000 + Math.floor(Math.random() * 20000);
+  const port = await freePort();
   const events = [];
   const state = {
     systemWarnings: [],
