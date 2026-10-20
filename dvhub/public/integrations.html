@@ -625,6 +625,7 @@
               <option value="warp">TinkerForge WARP</option>
               <option value="keba">KEBA KeContact P30 / P40</option>
               <option value="salia">Hardy Barth Salia (cPH2 / cP&mu;2)</option>
+              <option value="peblar">Peblar Home / Home Plus</option>
               <option value="bender">Bender-Laderegler (Mennekes AMTRON Professional, SMA EV Charger Business, Webasto Live, Optec …)</option>
               <option value="heidelberg">Amperfied / Heidelberg connect, Elli Gen 2 (VW/Cupra/&Scaron;koda Charger 2)</option>
               <option value="ocpp">OCPP-Wallbox (Alfen, ABL, Wallbox, Zaptec …)</option>
@@ -720,6 +721,13 @@
               <span class="field-hint">DVhub nutzt den Ladeslot &bdquo;Externe Steuerung&ldquo; (HTTP-API). &bdquo;Automatisch&ldquo; schaltet ihn wieder aus.</span>
             </label>
           </div>
+          <div class="evcc-wallbox-fields" id="wallbox-peblar-fields" hidden>
+            <label class="dv-field">
+              <span class="field-label">Peblar-Adresse</span>
+              <input type="text" class="input mono" id="wallbox-peblar-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              <span class="field-hint">Modbus TCP ab Firmware 1.6: in der Peblar-Weboberfl&auml;che unter Einstellungen &rarr; Advanced auf &bdquo;ReadWrite&ldquo; stellen. Peblar erlaubt h&ouml;chstens 3 Ladepausen je 10&nbsp;min. Ohne dokumentierten Watchdog: f&auml;llt DVhub aus, bleibt die letzte Vorgabe stehen.</span>
+            </label>
+          </div>
           <div class="evcc-wallbox-fields" id="wallbox-salia-fields" hidden>
             <label class="dv-field">
               <span class="field-label">Salia-Adresse</span>
@@ -738,6 +746,10 @@
                 <input type="number" class="input mono" id="wallbox-bender-unit" min="1" max="255" step="1" placeholder="1">
               </label>
             </div>
+            <label class="dv-field">
+              <span class="field-label">Registersatz</span>
+              <select class="input" id="wallbox-bender-variant"><option value="omcci">OMCCI (Professional, AMEDIO, SMA, Webasto Live, Optec …)</option><option value="4you">Mennekes AMTRON 4You 500 / 4Business 700</option></select>
+            </label>
             <span class="field-hint">In der Weboberfl&auml;che der Box &bdquo;Modbus TCP Server&ldquo; einschalten und den Registersatz &bdquo;OMCCI&ldquo; w&auml;hlen (Mennekes: Software ab 5.12). DVhub setzt den R&uuml;ckfall: ohne Verbindung 5&nbsp;min l&auml;dt die Box mit 6&nbsp;A.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-heidelberg-fields" hidden>

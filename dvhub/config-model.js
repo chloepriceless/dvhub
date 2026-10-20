@@ -4485,9 +4485,10 @@ export function createDefaultConfig() {
       // Amperfied/Heidelberg connect, Elli Gen 2 (gleiches Layout); Unit-ID meist 1.
       heidelberg: { host: '', unitId: 1 },
       // Bender-Laderegler (Mennekes Professional, SMA EV Charger Business, Webasto Live …), Registersatz OMCCI.
-      bender: { host: '', unitId: 1 },
+      bender: { host: '', unitId: 1, variant: 'omcci' },
       // Hardy Barth Salia cPH2/cPμ2 (Modbus TCP, Unit 1).
       salia: { host: '' },
+      peblar: { host: '' },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },

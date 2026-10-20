@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **Peblar Home / Home Plus als Wallbox** (Modbus TCP nach Peblars offiziellem Client): Ladestrom 40000 (mA, 0 =
+  Pause), Leistung, Energie, Ströme, CP-Zustand. Kein dokumentierter Watchdog.
+- **Mennekes AMTRON 4You 500 / 4Business 700** als Variante des Bender-Treibers (Strom über Register 2000).
+
 - **Hardy Barth Salia (cPH2/cPμ2) als Wallbox** (Modbus TCP nach docs.echarge.de, MapVersion 2.1.0): Modus MANUAL,
   Strom 201, Start/Stopp 202, Failsafe 203/205 (5 min, 6 A) mit Lebenszeichen 207 bei jeder Abfrage; Leistung und
   Energie als Float32.

@@ -21,6 +21,9 @@ const NA = 0xffffffff;
 export function createBenderAdapter(getSettings, deps = {}) {
   const now = deps.now || (() => Date.now());
   const s = () => getSettings() || {};
+  // Mennekes AMTRON 4You 500 / 4Business 700 (Bender ICC, Register v1.5): Strom über 2000 (A),
+  // HEMS-Modus (2010) in der App auf „lesen und schreiben“; Rückfall 131/132 wie OMCCI.
+  const limitReg = () => (s().variant === '4you' ? 2000 : 1000);
   const written = new Map();
   function target() {
     const t = deps.getTransport?.();
@@ -56,13 +59,13 @@ export function createBenderAdapter(getSettings, deps = {}) {
     charge: (currentA) => guarded(async (x) => {
       await write(x, 131, SAFE_A);
       await write(x, 132, TIMEOUT_S);
-      await write(x, 1000, Math.max(6, Math.floor(Number(currentA))));
+      await write(x, limitReg(), Math.max(6, Math.floor(Number(currentA))));
     }),
-    stop: () => guarded(async (x) => { await write(x, 1000, 0); }),
+    stop: () => guarded(async (x) => { await write(x, limitReg(), 0); }),
     // Zurück zur Box: Grenze und Rückfallstrom auf 32 A (die Box begrenzt selbst auf ihre Hardware).
     release: () => guarded(async (x) => {
       await write(x, 131, RELEASE_A);
-      await write(x, 1000, RELEASE_A);
+      await write(x, limitReg(), RELEASE_A);
     }),
     async status() {
       const x = target();
