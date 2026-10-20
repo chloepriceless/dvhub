@@ -37,7 +37,8 @@ export const WALLBOX_LABELS = Object.freeze({
   smartwb: 'EVSE-WiFi / smartWB',
   nexblue: 'Nexblue',
   smartevse: 'SmartEVSE',
-  em2go: 'EM2GO'
+  em2go: 'EM2GO',
+  phoenix: 'Phoenix EV Charge Control'
 });
 
 // Lademodi. evcc kennt vier; eine direkt angebundene Box drei — „PV“ heißt

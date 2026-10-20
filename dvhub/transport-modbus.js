@@ -302,12 +302,43 @@ export function createModbusTransport(opts = {}) {
     });
   }
 
+  // FC5 Write Single Coil (Phoenix EV Charge Control: Coil 400 „Ladevorgang freigeben“).
+  // Ein = 0xFF00, aus = 0x0000; die Antwort spiegelt Adresse und Wert.
+  function mbWriteCoil({ host, port, unitId, address, value, timeoutMs }) {
+    const tid = (tidCounter++ & 0xffff) || 1;
+    const word = value ? 0xff00 : 0x0000;
+    const req = Buffer.alloc(12);
+    req.writeUInt16BE(tid, 0);
+    req.writeUInt16BE(0, 2);
+    req.writeUInt16BE(6, 4);
+    req.writeUInt8(unitId, 6);
+    req.writeUInt8(5, 7);
+    req.writeUInt16BE(address, 8);
+    req.writeUInt16BE(word, 10);
+
+    const conn = getMbConn(host, port);
+    return conn.send(req, timeoutMs).then((frame) => {
+      const rTid = frame.readUInt16BE(0);
+      const pid = frame.readUInt16BE(2);
+      const unit = frame.readUInt8(6);
+      const fc = frame.readUInt8(7);
+      if (pid !== 0 || unit !== unitId || rTid !== tid) throw new Error('invalid write ack');
+      if ((fc & 0x80) === 0x80) throw new Error(`modbus exception ${frame.readUInt8(8)}`);
+      if (fc !== 5) throw new Error('invalid write ack');
+      if (frame.length < 12) throw new Error('invalid write ack (short frame)');
+      const ackAddr = frame.readUInt16BE(8);
+      if (ackAddr !== (Number(address) & 0xffff)) throw new Error(`invalid write ack (address ${ackAddr} ≠ ${address})`);
+      return { addr: ackAddr, value: frame.readUInt16BE(10) === 0xff00 };
+    });
+  }
+
   return {
     type: 'modbus',
     async init() { /* Modbus verbindet on-demand */ },
     mbRequest,
     mbWriteSingle,
     mbWriteMultiple,
+    mbWriteCoil,
     // T-FREEZE (2026-07-24): alle gepoolten Sessions verwerfen. Der Pool baut beim
     // nächsten Request von selbst neu auf (connect on-demand) — der Aufrufer muss
     // nichts weiter tun. Anlass: der GX (dbus-modbustcp v1.0.93) räumt tote

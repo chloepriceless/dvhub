@@ -78,6 +78,7 @@ const INTENTIONAL = new Map([
   ['wallbox.smartevse.host', 'EVCC-Schublade auf der Integrationsseite (SmartEVSE)'],
   ['wallbox.em2go.host', 'EVCC-Schublade auf der Integrationsseite (EM2GO)'],
   ['wallbox.em2go.unitId', 'EVCC-Schublade auf der Integrationsseite (EM2GO)'],
+  ['wallbox.phoenix.host', 'EVCC-Schublade auf der Integrationsseite (Phoenix EV-CC)'],
   ['wallbox.bender.variant', 'EVCC-Schublade auf der Integrationsseite (Bender)'],
   ['wallbox.ocpp.chargePointId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],
   ['wallbox.ocpp.connectorId', 'EVCC-Schublade auf der Integrationsseite (OCPP)'],

@@ -179,6 +179,7 @@ import { createSmartwbAdapter } from './services/wallbox/smartwb.js';
 import { createNexblueAdapter } from './services/wallbox/nexblue.js';
 import { createSmartevseAdapter } from './services/wallbox/smartevse.js';
 import { createEm2goAdapter } from './services/wallbox/em2go.js';
+import { createPhoenixAdapter } from './services/wallbox/phoenix.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
@@ -428,6 +429,9 @@ const transport = cfg.victron?.transport === 'mqtt'
 
 // Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
 const scanTransport = createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs });
+// Modbus-Wallboxen (KEBA, Heidelberg, …) brauchen echten Modbus, auch wenn die Anlage per
+// MQTT angebunden ist — dann teilen sie sich die immer-Modbus-Instanz des Scan-Tools.
+const wallboxModbus = () => (transport.type === 'modbus' ? transport : scanTransport);
 let telemetryStore = null;
 let historyImportManager = null;
 let historyRuntime = null;
@@ -1553,19 +1557,20 @@ function directWallboxAdapter(type) {
   });
   if (type === 'openwb') return createOpenWbAdapter(() => ctx.getCfg()?.wallbox?.openwb);
   if (type === 'eebus') return createEebusWallboxAdapter(() => ctx.getCfg()?.wallbox?.eebus, { getEebus: () => ctx.eebus });
-  if (type === 'charx') return createCharxAdapter(() => ctx.getCfg()?.wallbox?.charx, { getTransport: () => transport });
+  if (type === 'charx') return createCharxAdapter(() => ctx.getCfg()?.wallbox?.charx, { getTransport: wallboxModbus });
   if (type === 'warp') return createWarpAdapter(() => ctx.getCfg()?.wallbox?.warp);
-  if (type === 'em2go') return createEm2goAdapter(() => ctx.getCfg()?.wallbox?.em2go, { getTransport: () => transport });
+  if (type === 'phoenix') return createPhoenixAdapter(() => ctx.getCfg()?.wallbox?.phoenix, { getTransport: wallboxModbus });
+  if (type === 'em2go') return createEm2goAdapter(() => ctx.getCfg()?.wallbox?.em2go, { getTransport: wallboxModbus });
   if (type === 'smartevse') return createSmartevseAdapter(() => ctx.getCfg()?.wallbox?.smartevse);
-  if (type === 'nexblue') return createNexblueAdapter(() => ctx.getCfg()?.wallbox?.nexblue, { getTransport: () => transport });
+  if (type === 'nexblue') return createNexblueAdapter(() => ctx.getCfg()?.wallbox?.nexblue, { getTransport: wallboxModbus });
   if (type === 'smartwb') return createSmartwbAdapter(() => ctx.getCfg()?.wallbox?.smartwb);
-  if (type === 'abl') return createAblAdapter(() => ctx.getCfg()?.wallbox?.abl, { getTransport: () => transport });
+  if (type === 'abl') return createAblAdapter(() => ctx.getCfg()?.wallbox?.abl, { getTransport: wallboxModbus });
   if (type === 'nrgkick') return createNrgkickAdapter(() => ctx.getCfg()?.wallbox?.nrgkick);
-  if (type === 'peblar') return createPeblarAdapter(() => ctx.getCfg()?.wallbox?.peblar, { getTransport: () => transport });
-  if (type === 'salia') return createSaliaAdapter(() => ctx.getCfg()?.wallbox?.salia, { getTransport: () => transport });
-  if (type === 'bender') return createBenderAdapter(() => ctx.getCfg()?.wallbox?.bender, { getTransport: () => transport });
-  if (type === 'heidelberg') return createHeidelbergAdapter(() => ctx.getCfg()?.wallbox?.heidelberg, { getTransport: () => transport });
-  if (type === 'keba') return createKebaAdapter(() => ctx.getCfg()?.wallbox?.keba, { getTransport: () => transport });
+  if (type === 'peblar') return createPeblarAdapter(() => ctx.getCfg()?.wallbox?.peblar, { getTransport: wallboxModbus });
+  if (type === 'salia') return createSaliaAdapter(() => ctx.getCfg()?.wallbox?.salia, { getTransport: wallboxModbus });
+  if (type === 'bender') return createBenderAdapter(() => ctx.getCfg()?.wallbox?.bender, { getTransport: wallboxModbus });
+  if (type === 'heidelberg') return createHeidelbergAdapter(() => ctx.getCfg()?.wallbox?.heidelberg, { getTransport: wallboxModbus });
+  if (type === 'keba') return createKebaAdapter(() => ctx.getCfg()?.wallbox?.keba, { getTransport: wallboxModbus });
   if (type === 'ocpp') return createOcppAdapter(() => ctx.getCfg()?.wallbox?.ocpp, { getServer: () => ctx.ocppServer });
   return null;
 }

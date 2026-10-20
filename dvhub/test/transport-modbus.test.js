@@ -196,3 +196,22 @@ test('FC16: falsche Adresse oder Registeranzahl → Fehler, korrektes Echo → E
     await ok.close(); await badAddr.close(); await badQty.close();
   }
 });
+
+// FC5 (Write Single Coil) für Phoenix EV Charge Control (Coil 400 „Ladevorgang freigeben“):
+// Wert 0xFF00 = ein, 0x0000 = aus; die Antwort spiegelt Adresse und Wert.
+test('FC5: Coil schreiben (ein = 0xFF00, aus = 0x0000), Echo geprüft, Lese-Modus sperrt', async () => {
+  const seen = [];
+  const echo = await startModbusServer((request) => { seen.push([request.readUInt8(7), request.readUInt16BE(8), request.readUInt16BE(10)]); return Buffer.from(request.subarray(0, 12)); });
+  const wrong = await startModbusServer((request) => { const r = Buffer.from(request.subarray(0, 12)); r.writeUInt16BE(1, 8); return r; });
+  const transport = createModbusTransport({ connectTimeoutMs: 5000 });
+  try {
+    const w = (port, value) => transport.mbWriteCoil({ host: '127.0.0.1', port, unitId: 255, address: 400, value, timeoutMs: 1000 });
+    assert.deepEqual(await w(echo.port, true), { addr: 400, value: true });
+    assert.deepEqual(await w(echo.port, false), { addr: 400, value: false });
+    assert.deepEqual(seen, [[5, 400, 0xff00], [5, 400, 0]]);
+    await assert.rejects(w(wrong.port, true), /address 1/);
+  } finally {
+    await transport.destroy();
+    await echo.close(); await wrong.close();
+  }
+});

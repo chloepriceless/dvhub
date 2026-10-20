@@ -4500,6 +4500,8 @@ export function createDefaultConfig() {
       smartevse: { host: '' },
       // EM2GO (EM011/EM022 OCPP/ONC, Pro Power; Modbus TCP 502).
       em2go: { host: '', unitId: 1 },
+      // Phoenix EV Charge Control (Wallbe, Compleo Pro, E3/DC Easy Connect, ESL Walli; Unit 255).
+      phoenix: { host: '' },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },

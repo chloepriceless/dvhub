@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **Phoenix Contact EV Charge Control als Wallbox** (Wallbe, Compleo Pro, E3/DC Easy Connect, ESL Walli; Modbus TCP
+  nach Phoenix-Handbuch 108191_de_04): Ladestrom über Holding 528, Freigabe über Coil 400 (DIP 10 an), Zustand,
+  Leistung, Strom, Energie. Dafür kann der Modbus-Transport jetzt Coils schreiben (FC5).
+
 - **EM2GO (EM011/EM022 OCPP/ONC, Pro Power) als Wallbox** (Modbus TCP nach EM2GO-Leitfaden V5): Strombegrenzung,
   Rückfall 6 A nach 10 min, Start/Stopp über Ladebefehl; Zustand, Leistung, Strom, Zählerstand.
 
@@ -231,6 +235,8 @@ verweist hierher.
 
 ### Behoben
 
+- **Modbus-Wallboxen bei MQTT-angebundener Anlage:** KEBA, Heidelberg, Bender & Co. bekamen dort den MQTT-Transport
+  und meldeten nur „Modbus nicht verfügbar“; sie nutzen jetzt eine eigene Modbus-Verbindung.
 - **Unvollständige Datenbank-Migrationen werden angezeigt.** Eine gescheiterte Migration stand bisher nur im
   Journal, der Status meldete trotzdem „ok“. Jetzt erscheint unter System-Gesundheit „Datenbank-Stand“ mit den
   betroffenen Dateien, `/health` meldet `telemetry.migrationsOk`, und das Log bekommt einen Warneintrag.

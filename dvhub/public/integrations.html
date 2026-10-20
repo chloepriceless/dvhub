@@ -632,6 +632,7 @@
               <option value="nexblue">Nexblue (Edge, Point, Delta)</option>
               <option value="smartevse">SmartEVSE v3</option>
               <option value="em2go">EM2GO (Home, Pro Power)</option>
+              <option value="phoenix">Phoenix EV Charge Control (Wallbe, Compleo Pro, E3/DC Easy Connect, ESL Walli)</option>
               <option value="bender">Bender-Laderegler (Mennekes AMTRON Professional, SMA EV Charger Business, Webasto Live, Optec …)</option>
               <option value="heidelberg">Amperfied / Heidelberg connect, Elli Gen 2 (VW/Cupra/&Scaron;koda Charger 2)</option>
               <option value="ocpp">OCPP-Wallbox (Alfen, ABL, Wallbox, Zaptec …)</option>
@@ -739,6 +740,13 @@
               </label>
             </div>
             <span class="field-hint">Modbus in der Nexblue-App einschalten (Edge 2/Max/Point 2 ab FW 03.09.88). DVhub schreibt den Strom alle 15&nbsp;s neu (Lebenszeichen); ohne DVhub f&auml;llt die Box nach 5&nbsp;min auf 6&nbsp;A zur&uuml;ck, nach &bdquo;Automatisch&ldquo; auf 16&nbsp;A.</span>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-phoenix-fields" hidden>
+            <label class="dv-field">
+              <span class="field-label">Adresse der Ladesteuerung</span>
+              <input type="text" class="input mono" id="wallbox-phoenix-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+            </label>
+            <span class="field-hint">Phoenix-Ladesteuerung EV-CC-AC1-M3 (Modbus TCP, Port 502). DIP-Schalter 10 muss an sein, sonst nimmt die Steuerung keine Freigabe per Modbus an. Kein Watchdog: f&auml;llt DVhub aus, bleibt die letzte Vorgabe stehen.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-em2go-fields" hidden>
             <div class="evcc-eos-grid">

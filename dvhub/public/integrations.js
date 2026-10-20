@@ -2661,6 +2661,7 @@
     if (el('wallbox-nexblue-host')) el('wallbox-nexblue-host').value = (w.nexblue || {}).host || '';
     if (el('wallbox-smartevse-host')) el('wallbox-smartevse-host').value = (w.smartevse || {}).host || '';
     if (el('wallbox-em2go-host')) el('wallbox-em2go-host').value = (w.em2go || {}).host || '';
+    if (el('wallbox-phoenix-host')) el('wallbox-phoenix-host').value = (w.phoenix || {}).host || '';
     if (el('wallbox-em2go-unit')) el('wallbox-em2go-unit').value = (w.em2go || {}).unitId || 1;
     if (el('wallbox-nexblue-unit')) el('wallbox-nexblue-unit').value = (w.nexblue || {}).unitId || 200;
     var ab = w.abl || {};
@@ -2753,6 +2754,7 @@
     show('wallbox-nexblue-fields', t === 'nexblue');
     show('wallbox-smartevse-fields', t === 'smartevse');
     show('wallbox-em2go-fields', t === 'em2go');
+    show('wallbox-phoenix-fields', t === 'phoenix');
     show('wallbox-openwb-cp-wrap', ((document.getElementById('wallbox-openwb-mode') || {}).value || 'pro') === 'secondary');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
     // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
@@ -2781,6 +2783,7 @@
       nexblue: { host: v('wallbox-nexblue-host'), unitId: Number(v('wallbox-nexblue-unit')) || 200 },
       smartevse: { host: v('wallbox-smartevse-host') },
       em2go: { host: v('wallbox-em2go-host'), unitId: Number(v('wallbox-em2go-unit')) || 1 },
+      phoenix: { host: v('wallbox-phoenix-host') },
       nrgkick: { host: v('wallbox-nrgkick-host'), username: v('wallbox-nrgkick-user'), password: (document.getElementById('wallbox-nrgkick-pass') || {}).value || '' },
       ocpp: { chargePointId: v('wallbox-ocpp-id'), connectorId: Number(v('wallbox-ocpp-connector')) || 1,
         server: { enabled: !!(document.getElementById('wallbox-ocpp-enabled') || {}).checked, port: Number(v('wallbox-ocpp-port')) || 8889,
