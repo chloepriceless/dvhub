@@ -2658,6 +2658,8 @@
     if (el('wallbox-salia-host')) el('wallbox-salia-host').value = (w.salia || {}).host || '';
     if (el('wallbox-peblar-host')) el('wallbox-peblar-host').value = (w.peblar || {}).host || '';
     if (el('wallbox-smartwb-host')) el('wallbox-smartwb-host').value = (w.smartwb || {}).host || '';
+    if (el('wallbox-nexblue-host')) el('wallbox-nexblue-host').value = (w.nexblue || {}).host || '';
+    if (el('wallbox-nexblue-unit')) el('wallbox-nexblue-unit').value = (w.nexblue || {}).unitId || 200;
     var ab = w.abl || {};
     if (el('wallbox-abl-host')) el('wallbox-abl-host').value = ab.host || '';
     if (el('wallbox-abl-outlet')) el('wallbox-abl-outlet').value = String(ab.outlet || 1);
@@ -2745,6 +2747,7 @@
     show('wallbox-nrgkick-fields', t === 'nrgkick');
     show('wallbox-abl-fields', t === 'abl');
     show('wallbox-smartwb-fields', t === 'smartwb');
+    show('wallbox-nexblue-fields', t === 'nexblue');
     show('wallbox-openwb-cp-wrap', ((document.getElementById('wallbox-openwb-mode') || {}).value || 'pro') === 'secondary');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
     // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
@@ -2770,6 +2773,7 @@
       peblar: { host: v('wallbox-peblar-host') },
       abl: { host: v('wallbox-abl-host'), outlet: Number(v('wallbox-abl-outlet')) || 1 },
       smartwb: { host: v('wallbox-smartwb-host') },
+      nexblue: { host: v('wallbox-nexblue-host'), unitId: Number(v('wallbox-nexblue-unit')) || 200 },
       nrgkick: { host: v('wallbox-nrgkick-host'), username: v('wallbox-nrgkick-user'), password: (document.getElementById('wallbox-nrgkick-pass') || {}).value || '' },
       ocpp: { chargePointId: v('wallbox-ocpp-id'), connectorId: Number(v('wallbox-ocpp-connector')) || 1,
         server: { enabled: !!(document.getElementById('wallbox-ocpp-enabled') || {}).checked, port: Number(v('wallbox-ocpp-port')) || 8889,

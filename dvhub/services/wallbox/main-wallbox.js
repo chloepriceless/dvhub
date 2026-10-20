@@ -34,7 +34,8 @@ export const WALLBOX_LABELS = Object.freeze({
   peblar: 'Peblar',
   nrgkick: 'NRGkick',
   abl: 'ABL eM4',
-  smartwb: 'EVSE-WiFi / smartWB'
+  smartwb: 'EVSE-WiFi / smartWB',
+  nexblue: 'Nexblue'
 });
 
 // Lademodi. evcc kennt vier; eine direkt angebundene Box drei — „PV“ heißt

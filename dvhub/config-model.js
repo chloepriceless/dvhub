@@ -4494,6 +4494,8 @@ export function createDefaultConfig() {
       // ABL eM4 Single/Twin: Outlet 1 = links/einzeln, 2 = rechts.
       abl: { host: '', outlet: 1 },
       smartwb: { host: '' },
+      // Nexblue (Modbus in der App einschalten, Unit meist 200).
+      nexblue: { host: '', unitId: 200 },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },

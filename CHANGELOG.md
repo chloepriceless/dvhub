@@ -12,6 +12,9 @@ verweist hierher.
 
 ### Neu
 
+- **Nexblue (Edge 2, Edge Max, Point 2, Delta) als Wallbox** (Modbus TCP nach Nexblue-Doku, 32-Bit-Werte DCBA):
+  Strom 1000 als Lebenszeichen alle 15 s, Rückfall 6 A nach 5 min; Zustand, Leistung, Energie.
+
 - **EVSE-WiFi / smartWB als Wallbox** (HTTP-API nach Doku vom 27.05.2022): `setCurrent`, `setStatus`; im Modus Always
   Active Stopp über Strom 0. Kein Watchdog.
 
