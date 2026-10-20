@@ -12,6 +12,9 @@ verweist hierher.
 
 ### Neu
 
+- **EM2GO (EM011/EM022 OCPP/ONC, Pro Power) als Wallbox** (Modbus TCP nach EM2GO-Leitfaden V5): Strombegrenzung,
+  Rückfall 6 A nach 10 min, Start/Stopp über Ladebefehl; Zustand, Leistung, Strom, Zählerstand.
+
 - **SmartEVSE v3 als Wallbox** (REST nach SmartEVSE-3-Doku und -Quellcode, MIT): Strom über `override_current`
   in NORMAL, Stopp über OFF, „Automatisch“ stellt den vorherigen Modus wieder her; Leistung, Strom, Energie und
   (mit Modem) SoC.

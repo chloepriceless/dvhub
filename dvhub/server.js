@@ -178,6 +178,7 @@ import { createAblAdapter } from './services/wallbox/abl.js';
 import { createSmartwbAdapter } from './services/wallbox/smartwb.js';
 import { createNexblueAdapter } from './services/wallbox/nexblue.js';
 import { createSmartevseAdapter } from './services/wallbox/smartevse.js';
+import { createEm2goAdapter } from './services/wallbox/em2go.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
@@ -1554,6 +1555,7 @@ function directWallboxAdapter(type) {
   if (type === 'eebus') return createEebusWallboxAdapter(() => ctx.getCfg()?.wallbox?.eebus, { getEebus: () => ctx.eebus });
   if (type === 'charx') return createCharxAdapter(() => ctx.getCfg()?.wallbox?.charx, { getTransport: () => transport });
   if (type === 'warp') return createWarpAdapter(() => ctx.getCfg()?.wallbox?.warp);
+  if (type === 'em2go') return createEm2goAdapter(() => ctx.getCfg()?.wallbox?.em2go, { getTransport: () => transport });
   if (type === 'smartevse') return createSmartevseAdapter(() => ctx.getCfg()?.wallbox?.smartevse);
   if (type === 'nexblue') return createNexblueAdapter(() => ctx.getCfg()?.wallbox?.nexblue, { getTransport: () => transport });
   if (type === 'smartwb') return createSmartwbAdapter(() => ctx.getCfg()?.wallbox?.smartwb);

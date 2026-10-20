@@ -4498,6 +4498,8 @@ export function createDefaultConfig() {
       nexblue: { host: '', unitId: 200 },
       // SmartEVSE v3 (REST, ab Firmware 3.x).
       smartevse: { host: '' },
+      // EM2GO (EM011/EM022 OCPP/ONC, Pro Power; Modbus TCP 502).
+      em2go: { host: '', unitId: 1 },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },

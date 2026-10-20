@@ -631,6 +631,7 @@
               <option value="smartwb">EVSE-WiFi / smartWB</option>
               <option value="nexblue">Nexblue (Edge, Point, Delta)</option>
               <option value="smartevse">SmartEVSE v3</option>
+              <option value="em2go">EM2GO (Home, Pro Power)</option>
               <option value="bender">Bender-Laderegler (Mennekes AMTRON Professional, SMA EV Charger Business, Webasto Live, Optec …)</option>
               <option value="heidelberg">Amperfied / Heidelberg connect, Elli Gen 2 (VW/Cupra/&Scaron;koda Charger 2)</option>
               <option value="ocpp">OCPP-Wallbox (Alfen, ABL, Wallbox, Zaptec …)</option>
@@ -738,6 +739,19 @@
               </label>
             </div>
             <span class="field-hint">Modbus in der Nexblue-App einschalten (Edge 2/Max/Point 2 ab FW 03.09.88). DVhub schreibt den Strom alle 15&nbsp;s neu (Lebenszeichen); ohne DVhub f&auml;llt die Box nach 5&nbsp;min auf 6&nbsp;A zur&uuml;ck, nach &bdquo;Automatisch&ldquo; auf 16&nbsp;A.</span>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-em2go-fields" hidden>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">EM2GO-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-em2go-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Unit-ID</span>
+                <input type="number" class="input mono" id="wallbox-em2go-unit" min="1" max="255" step="1" placeholder="1">
+              </label>
+            </div>
+            <span class="field-hint">Modbus TCP (Port 502, per LAN). Ohne DVhub f&auml;llt die Box nach 10&nbsp;min auf 6&nbsp;A zur&uuml;ck. Steht sie auf Plug &amp; Charge, schaltet DVhub zum Stoppen auf &bdquo;Laden auf Befehl&ldquo; und stellt das bei &bdquo;Automatisch&ldquo; zur&uuml;ck.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-smartevse-fields" hidden>
             <label class="dv-field">
