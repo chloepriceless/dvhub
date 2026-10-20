@@ -4479,8 +4479,14 @@ export function createDefaultConfig() {
       eebus: { ski: '', phases: 3 },
       // Phoenix Contact CHARX (Modbus TCP, Ladepunkt-Nummer) und TinkerForge WARP (HTTP).
       charx: { host: '', chargePoint: 1 },
-      warp: { host: '' }
+      warp: { host: '' },
+      // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
+      ocpp: { chargePointId: '', connectorId: 1 }
     },
+    // OCPP-1.6J-Zentrale (services/wallbox/ocpp-server.js): ab Werk aus. Wallbox
+    // verbindet sich mit ws://<DVhub>:<port>/<Ladepunkt-ID>; Passwort optional
+    // (Sicherheitsprofil 1). Nur Heimnetz-Adressen.
+    ocpp: { enabled: false, port: 8887, password: '' },
     // PV-Strings / Solar-Logger (services/pv-strings): Erzeugung je String bzw.
     // Tracker erfassen und als CSV fuer die pvnode-Kalibrierung aufbereiten.
     // sources: [{ id, label, kind: 'victron_vrm_tracker', instance, tracker, kwp }

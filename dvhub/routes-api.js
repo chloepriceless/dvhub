@@ -1307,7 +1307,7 @@ export function createApiRoutes(ctx) {
     ['/api/input/status', 'integrations'], ['/api/integrations/dataflow', 'integrations'],
     ['/api/ortsnetz/status', 'integrations'], ['/api/victron/devices', 'integrations'],
     ['/api/victron/devices/scan', 'integrations'], ['/api/feed-in-cap/status', 'integrations'],
-    ['/api/vehicle-evcc', 'integrations'], ['/api/vehicle-evcc/settings', 'integrations'], ['/api/vehicle-evcc/refresh', 'integrations'],
+    ['/api/ocpp/status', 'integrations'], ['/api/vehicle-evcc', 'integrations'], ['/api/vehicle-evcc/settings', 'integrations'], ['/api/vehicle-evcc/refresh', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -4817,6 +4817,13 @@ export function createApiRoutes(ctx) {
       return json(res, 200, { ok: true, result, state: ctx.vehicleEvcc.getState() });
     }
 
+    // ── OCPP-Zentrale (services/wallbox/ocpp-server.js) — Zustand lesen ───
+    if (url.pathname === '/api/ocpp/status' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.ocppServer) return json(res, 503, { ok: false, error: 'ocpp_unavailable' });
+      return json(res, 200, { ok: true, ...ctx.ocppServer.status() });
+    }
+
     // ── Feste Einspeisegrenze (services/feed-in-cap) — nur lesen ──────────
     if (url.pathname === '/api/feed-in-cap/status' && req.method === 'GET') {
       if (!ctx.feedInCap) return json(res, 503, { ok: false, error: 'feed_in_cap_unavailable' });
@@ -5538,7 +5545,7 @@ export function createApiRoutes(ctx) {
           if (type === 'openevse' && w.openevse?.url) live = await createOpenEvseAdapter(() => ({ ...w.openevse, timeoutMs: 3000 })).status();
           if (type === 'goe' && w.goe?.url) live = await createGoeAdapter(() => ({ ...w.goe, timeoutMs: 3000 })).status();
           if (type === 'wattpilot' && w.wattpilot?.host && w.wattpilot?.password) live = await createWattpilotAdapter(() => w.wattpilot).status();
-          if (type === 'victron' || type === 'eebus' || (['openwb', 'charx', 'warp'].includes(type) && w[type]?.host)) {
+          if (type === 'victron' || type === 'eebus' || type === 'ocpp' || (['openwb', 'charx', 'warp'].includes(type) && w[type]?.host)) {
             const a = ctx.directWallboxAdapter?.(type);
             live = a ? await a.status() : null;
           }
@@ -5552,6 +5559,7 @@ export function createApiRoutes(ctx) {
             eebus: { ski: w.eebus?.ski || '', phases: Number(w.eebus?.phases) === 1 ? 1 : 3 },
             charx: { host: w.charx?.host || '', chargePoint: Number(w.charx?.chargePoint) || 1 },
             warp: { host: w.warp?.host || '' },
+            ocpp: { chargePointId: w.ocpp?.chargePointId || '', connectorId: Number(w.ocpp?.connectorId) || 1, server: { enabled: raw.ocpp?.enabled === true, port: Number(raw.ocpp?.port) || 8887, passwordSet: Boolean(raw.ocpp?.password) }, chargePoints: ctx.ocppServer?.list?.() || [] },
             live
           };
         })()
@@ -5633,6 +5641,13 @@ export function createApiRoutes(ctx) {
         const ewb = w.eebus && typeof w.eebus === 'object' ? w.eebus : null;
         const ewbSki = ewb && ewb.ski != null ? String(ewb.ski).trim().toLowerCase().replace(/[\s:]/g, '') : null;
         if (ewbSki && !/^[0-9a-f]{40}$/.test(ewbSki)) return json(res, 400, { ok: false, error: 'wallbox.eebus.ski must be 40 hex characters' });
+        // OCPP: Ladepunkt-ID/Anschluss der Wallbox; Zentrale an/aus, Port, Passwort.
+        const oc = w.ocpp && typeof w.ocpp === 'object' ? w.ocpp : null;
+        const ocId = oc && oc.chargePointId != null ? String(oc.chargePointId).trim() : null;
+        if (ocId && !/^[A-Za-z0-9._:-]{1,64}$/.test(ocId)) return json(res, 400, { ok: false, error: 'wallbox.ocpp.chargePointId: Buchstaben, Ziffern, . _ : - (max. 64)' });
+        const ocSrv = oc?.server && typeof oc.server === 'object' ? oc.server : null;
+        const ocPort = ocSrv?.port != null && ocSrv.port !== '' ? Number(ocSrv.port) : null;
+        if (ocPort != null && !(Number.isInteger(ocPort) && ocPort >= 1024 && ocPort <= 65535)) return json(res, 400, { ok: false, error: 'ocpp.port must be 1024..65535' });
         // Boxen mit nur einer Adresse (CHARX zusätzlich Ladepunkt-Nummer).
         const hostPatch = {};
         for (const k of ['charx', 'warp']) {
@@ -5658,7 +5673,9 @@ export function createApiRoutes(ctx) {
         wallboxPatch = { type: w.type, oeUrl, goeUrl, oeUser: w.openevse?.username, oePass: w.openevse?.password, wpHost, wpPass: w.wattpilot?.password,
           vUnit: vUnitRaw === undefined || vUnitRaw === null || vUnitRaw === '' ? null : Number(vUnitRaw),
           owb: owb ? { host: owbHost ?? '', mode: owb.mode === 'secondary' ? 'secondary' : 'pro', chargepoint: Number(owb.chargepoint) === 1 ? 1 : 0 } : null,
-          ewb: ewb ? { ski: ewbSki ?? '', phases: Number(ewb.phases) === 1 ? 1 : 3 } : null, hostPatch };
+          ewb: ewb ? { ski: ewbSki ?? '', phases: Number(ewb.phases) === 1 ? 1 : 3 } : null, hostPatch,
+          ocpp: oc ? { chargePointId: ocId ?? '', connectorId: Math.max(1, Math.min(9, Number(oc.connectorId) || 1)) } : null,
+          ocppServer: ocSrv ? { enabled: ocSrv.enabled === true, port: ocPort, password: ocSrv.password } : null };
       }
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
       if (wallboxPatch) {
@@ -5672,6 +5689,15 @@ export function createApiRoutes(ctx) {
         if (wallboxPatch.owb) wb.openwb = wallboxPatch.owb;
         if (wallboxPatch.ewb) wb.eebus = wallboxPatch.ewb;
         Object.assign(wb, wallboxPatch.hostPatch || {});
+        if (wallboxPatch.ocpp) wb.ocpp = wallboxPatch.ocpp;
+        if (wallboxPatch.ocppServer) {
+          const o = (next.ocpp && typeof next.ocpp === 'object') ? next.ocpp : { enabled: false, port: 8887, password: '' };
+          o.enabled = wallboxPatch.ocppServer.enabled;
+          if (wallboxPatch.ocppServer.port != null) o.port = wallboxPatch.ocppServer.port;
+          const pw = wallboxPatch.ocppServer.password;
+          if (pw != null && pw !== '' && pw !== '***') o.password = String(pw).slice(0, 128);
+          next.ocpp = o;
+        }
         if (wallboxPatch.wpHost !== null) wb.wattpilot.host = wallboxPatch.wpHost;
         if (wallboxPatch.oeUrl !== null) wb.openevse.url = wallboxPatch.oeUrl;
         if (wallboxPatch.goeUrl !== null) wb.goe.url = wallboxPatch.goeUrl;

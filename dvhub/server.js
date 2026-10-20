@@ -167,6 +167,8 @@ import { createOpenWbAdapter } from './services/wallbox/openwb.js';
 import { createEebusWallboxAdapter } from './services/wallbox/eebus-wallbox.js';
 import { createCharxAdapter } from './services/wallbox/charx.js';
 import { createWarpAdapter } from './services/wallbox/warp.js';
+import { createOcppAdapter } from './services/wallbox/ocpp.js';
+import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
@@ -1395,6 +1397,14 @@ ctx.vehicleMqtt = createVehicleMqtt(mqttHub, ctx);
 // Ladestand über evccs Fahrzeug-Treiber (aus, bis eingerichtet; lädt evcc erst dann).
 ctx.vehicleEvcc = createVehicleEvcc(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub', getPlugged: () => resolveEvPlugged(ctx) });
 if (IS_RUNTIME_PROCESS) ctx.vehicleEvcc.start();
+// OCPP-1.6J-Zentrale für OCPP-Wallboxen (ab Werk aus; Port 8887).
+ctx.ocppServer = createOcppServer(ctx);
+if (IS_RUNTIME_PROCESS) {
+  const ocppReconcile = () => ctx.ocppServer.reconcile().catch((e) => pushLog('ocpp_start_error', { error: e?.message || String(e) }));
+  ocppReconcile();
+  // An/aus und Port wirken ohne Neustart (Einstellungen in der Wallbox-Schublade).
+  setInterval(ocppReconcile, 15_000).unref();
+}
 const deviceService = createDeviceService(ctx, mqttHub);
 ctx.deviceService = deviceService;
 const notificationService = createNotificationService(ctx);
@@ -1534,6 +1544,7 @@ function directWallboxAdapter(type) {
   if (type === 'eebus') return createEebusWallboxAdapter(() => ctx.getCfg()?.wallbox?.eebus, { getEebus: () => ctx.eebus });
   if (type === 'charx') return createCharxAdapter(() => ctx.getCfg()?.wallbox?.charx, { getTransport: () => transport });
   if (type === 'warp') return createWarpAdapter(() => ctx.getCfg()?.wallbox?.warp);
+  if (type === 'ocpp') return createOcppAdapter(() => ctx.getCfg()?.wallbox?.ocpp, { getServer: () => ctx.ocppServer });
   return null;
 }
 // Auch für die Einstellungsseite (Live-Zustand der Victron-Wallbox, routes-api.js).
@@ -2699,6 +2710,7 @@ async function gracefulShutdown(signal) {
   safeSync('victronGx.stop', () => ctx.victronGx?.stop?.());
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
+  safeSync('ocppServer.stop', () => { ctx.ocppServer?.stop?.(); });
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
   safeSync('mypvRegulator.stop', () => { mypvRegulator.stop?.().catch?.(() => {}); });

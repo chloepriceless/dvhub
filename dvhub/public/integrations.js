@@ -2634,6 +2634,26 @@
     var wp = w.wattpilot || {};
     if (el('wallbox-wattpilot-host')) el('wallbox-wattpilot-host').value = wp.host || '';
     if (el('wallbox-wattpilot-pass')) { el('wallbox-wattpilot-pass').value = ''; el('wallbox-wattpilot-pass').placeholder = wp.passwordSet ? 'gespeichert' : ''; }
+    var oc = w.ocpp || {};
+    var ocs = oc.server || {};
+    if (el('wallbox-ocpp-enabled')) el('wallbox-ocpp-enabled').checked = ocs.enabled === true;
+    if (el('wallbox-ocpp-port')) el('wallbox-ocpp-port').value = ocs.port || 8887;
+    if (el('wallbox-ocpp-pass')) { el('wallbox-ocpp-pass').value = ''; el('wallbox-ocpp-pass').placeholder = ocs.passwordSet ? 'gespeichert' : ''; }
+    if (el('wallbox-ocpp-connector')) el('wallbox-ocpp-connector').value = oc.connectorId || 1;
+    var ocSel = el('wallbox-ocpp-id');
+    if (ocSel) {
+      ocSel.textContent = '';
+      var oo = document.createElement('option'); oo.value = ''; oo.textContent = 'erster verbundener'; ocSel.appendChild(oo);
+      (oc.chargePoints || []).forEach(function (c) {
+        var o = document.createElement('option'); o.value = c.id;
+        o.textContent = c.id + (c.vendor ? ' · ' + c.vendor + (c.model ? ' ' + c.model : '') : '') + (c.connected ? '' : ' (getrennt)');
+        ocSel.appendChild(o);
+      });
+      if (oc.chargePointId && !(oc.chargePoints || []).some(function (c) { return c.id === oc.chargePointId; })) {
+        var ox = document.createElement('option'); ox.value = oc.chargePointId; ox.textContent = oc.chargePointId + ' (noch nicht verbunden)'; ocSel.appendChild(ox);
+      }
+      ocSel.value = oc.chargePointId || '';
+    }
     var cx = w.charx || {};
     if (el('wallbox-charx-host')) el('wallbox-charx-host').value = cx.host || '';
     if (el('wallbox-charx-cp')) el('wallbox-charx-cp').value = cx.chargePoint || 1;
@@ -2695,6 +2715,7 @@
     show('wallbox-eebus-fields', t === 'eebus');
     show('wallbox-charx-fields', t === 'charx');
     show('wallbox-warp-fields', t === 'warp');
+    show('wallbox-ocpp-fields', t === 'ocpp');
     show('wallbox-openwb-cp-wrap', ((document.getElementById('wallbox-openwb-mode') || {}).value || 'pro') === 'secondary');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
     // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
@@ -2712,7 +2733,10 @@
       openwb: { mode: v('wallbox-openwb-mode') || 'pro', host: v('wallbox-openwb-host'), chargepoint: Number(v('wallbox-openwb-cp')) || 0 },
       eebus: { ski: v('wallbox-eebus-ski'), phases: Number(v('wallbox-eebus-phases')) || 3 },
       charx: { host: v('wallbox-charx-host'), chargePoint: Number(v('wallbox-charx-cp')) || 1 },
-      warp: { host: v('wallbox-warp-host') }
+      warp: { host: v('wallbox-warp-host') },
+      ocpp: { chargePointId: v('wallbox-ocpp-id'), connectorId: Number(v('wallbox-ocpp-connector')) || 1,
+        server: { enabled: !!(document.getElementById('wallbox-ocpp-enabled') || {}).checked, port: Number(v('wallbox-ocpp-port')) || 8887,
+          password: (document.getElementById('wallbox-ocpp-pass') || {}).value || '' } }
     };
   }
   function syncEvccDepModeUi() {

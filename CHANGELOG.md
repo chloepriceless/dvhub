@@ -12,6 +12,13 @@ verweist hierher.
 
 ### Neu
 
+- **OCPP-1.6J-Zentrale und OCPP-Wallbox.** DVhub kann selbst OCPP-Zentrale sein (ab Werk aus, Port 8887, nur
+  Heimnetz, optional Passwort nach Sicherheitsprofil 1). Wallboxen mit OCPP (z. B. Alfen, ABL, Wallbox, Zaptec,
+  Bender-basierte) verbinden sich mit `ws://<DVhub>:8887/<Ladepunkt-ID>`. Steuerung über Ladeprofile in Ampere
+  (`SetChargingProfile`), Stopp = 0 A, „Automatisch“ löscht das Profil; Fernstart, wenn das Auto steckt und kein
+  Vorgang läuft. Messwerte (Leistung, Energie, Strom) und Status aus `MeterValues`/`StatusNotification`.
+  An/aus und Port wirken ohne Neustart. `GET /api/ocpp/status`.
+
 - **Phoenix Contact CHARX als Wallbox** (auch Veton, LadeFoxx): Modbus TCP nach Handbuch 109999_en_04 (Anhang B 3),
   Ladestrom x301, Freigabe x300, Status x299, Leistung/Energie; Watchdog — meldet sich DVhub 5 min nicht, fällt die
   Box auf 6 A zurück.

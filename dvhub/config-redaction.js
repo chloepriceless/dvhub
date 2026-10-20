@@ -36,7 +36,9 @@ export const REDACTED_PATHS = Object.freeze([
   'wallbox.wattpilot.password',
   // evcc-Fahrzeugtreiber (services/vehicle-evcc): Zugangsdaten beim Hersteller,
   // Tokens, FIN — das ganze Objekt, die Felder hängen von der Vorlage ab.
-  'vehicleEvcc.params'
+  'vehicleEvcc.params',
+  // OCPP-Zentrale: Passwort der Wallboxen (Sicherheitsprofil 1).
+  'ocpp.password'
   // Phase 09.4 gap-closure: notifications.providers.uptime-kuma removed — the
   // Uptime Kuma integration is the `monitoring` block; monitoring.pushUrl is
   // redacted below via redactUrlCreds (URL-level, not whole-field).

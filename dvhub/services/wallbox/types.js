@@ -7,7 +7,7 @@
 // 'evcc' = über einen evcc-Ladepunkt; alle anderen sind direkt angebunden
 // (Adapter in services/wallbox/adapters.js bzw. eigenen Dateien).
 
-export const DIRECT_WALLBOX_TYPES = Object.freeze(['openevse', 'goe', 'wattpilot', 'victron', 'openwb', 'eebus', 'charx', 'warp']);
+export const DIRECT_WALLBOX_TYPES = Object.freeze(['openevse', 'goe', 'wattpilot', 'victron', 'openwb', 'eebus', 'charx', 'warp', 'ocpp']);
 export const WALLBOX_TYPES = Object.freeze(['evcc', ...DIRECT_WALLBOX_TYPES]);
 
 /** Ist die gewählte direkte Wallbox eingerichtet (Adresse bzw. GX vorhanden)? */
@@ -21,6 +21,7 @@ export function directWallboxConfigured(cfg) {
     case 'openwb': return Boolean(String(w.openwb?.host || '').trim());
     case 'charx': return Boolean(String(w.charx?.host || '').trim());
     case 'warp': return Boolean(String(w.warp?.host || '').trim());
+    case 'ocpp': return cfg?.ocpp?.enabled === true;
     case 'eebus': return /^[0-9a-f]{40}$/i.test(String(w.eebus?.ski || '').trim());
     default: return false;
   }
