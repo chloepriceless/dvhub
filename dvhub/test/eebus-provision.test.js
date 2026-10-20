@@ -22,9 +22,11 @@ case "$1" in
   list) echo v0.7.1-test ;;
   build)
     out=""
+    args="$*"
     while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+    set -- $args
     printf '#!/bin/sh\\nif [ "$1" = --gen-cert ]; then : > "$2"; : > "$3"; fi\\necho go-bin\\n' > "$out"
-    echo "GOARCH=$GOARCH GOARM=$GOARM GOTOOLCHAIN=$GOTOOLCHAIN" >> "$GO_LOG" ;;
+    echo "GOARCH=$GOARCH GOARM=$GOARM GOTOOLCHAIN=$GOTOOLCHAIN GOTMPDIR=$GOTMPDIR ARGS=$*" >> "$GO_LOG" ;;
 esac
 `;
 
@@ -52,6 +54,9 @@ function rig({ arch = 'aarch64', badSum = false } = {}) {
   sh('uname', `[ "$1" = -m ] && { echo ${arch}; exit 0; }; exec /usr/bin/uname "$@"`);
   sh('curl', `out=""; url=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; http*) url="$1";; esac; shift; done; echo "$url" >> "${join(r, 'curl.log')}"; cp "${tarball}" "$out"`);
   for (const n of ['apt-get', 'dpkg', 'systemctl']) sh(n, 'exit 0');
+  // Prozesse des Rechners nie anfassen: pgrep findet einen „laufenden“ alten Stand, pkill protokolliert.
+  sh('pgrep', 'exit 0');
+  sh('pkill', `echo "$*" >> "${join(r, 'pkill.log')}"`);
   return {
     r, opt, data, src,
     run(...args) {
@@ -77,7 +82,11 @@ test('arm64: lädt Go von go.dev, prüft die Summe, baut die Go-Fassung; zweiter
   const first = g.run();
   assert.equal(first.code, 0, first.out);
   assert.deepEqual(g.read(join(g.r, 'curl.log')).trim().split('\n'), [`https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz`]);
-  assert.match(g.read(join(g.r, 'go.log')), /GOARCH=arm64 GOARM= GOTOOLCHAIN=local/);
+  const goLog = g.read(join(g.r, 'go.log'));
+  assert.match(goLog, /GOARCH=arm64 GOARM= GOTOOLCHAIN=local GOTMPDIR=\S*dvhub-eebus\.\w+\/gotmp /);
+  // Checkout gehört dem Dienstnutzer, gebaut wird als root → ohne -buildvcs=false bricht go build ab.
+  assert.match(goLog, /build -mod=readonly -buildvcs=false /);
+  assert.equal(g.read(join(g.r, 'pkill.log')).trim(), '-TERM -x dvhub-eebus');
   assert.match(g.read(join(g.opt, 'bin/dvhub-eebus')), /go-bin/);
   assert.equal(g.read(join(g.opt, 'bin/dvhub-eebus.version')).trim(), 'go+eebus-go@v0.7.1-test');
   assert.match(g.read(join(g.data, '.eebus-provisioned')), /^go\+/);

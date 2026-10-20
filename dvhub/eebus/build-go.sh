@@ -9,6 +9,8 @@
 # Ohne Go im PATH läuft der Bau im Container golang:$GO_VERSION-alpine (Docker
 # bzw. Colima; Pfade müssen dann einbindbar sein, z. B. unter /Users statt
 # /private/tmp). Abhängigkeiten sind über go.mod/go.sum fest gepinnt.
+# -buildvcs=false: nativ gehört der Checkout dem Dienstnutzer, gebaut wird als
+# root — Gits safe.directory-Sperre ließe go build sonst abbrechen.
 set -eu
 
 GO_VERSION="${GO_VERSION:-1.27.2}"
@@ -54,7 +56,7 @@ for arch in $ARCHS; do
   if [ "$MODE" = install ]; then target="$OUT/dvhub-eebus"; else target="$OUT/dvhub-eebus-linux-$arch"; fi
   echo "eebus: baue linux/$arch (eebus-go $EEBUS_GO_VERSION)"
   (cd "$SRC" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
-    go build -mod=readonly -trimpath -ldflags "-s -w -buildid=" -o "$target.new" .)
+    go build -mod=readonly -buildvcs=false -trimpath -ldflags "-s -w -buildid=" -o "$target.new" .)
   mv -f "$target.new" "$target"
   chmod 0755 "$target"
   echo "eebus: $target ($(wc -c < "$target" | tr -d ' ') Bytes)"

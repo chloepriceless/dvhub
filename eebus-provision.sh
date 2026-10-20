@@ -103,7 +103,9 @@ if [[ "$IMPL" == go ]]; then
   GOFLAGS_EXTRA=""
   mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
   (( mem_kb > 0 && mem_kb < 1500000 )) && GOFLAGS_EXTRA=" -p=1"
-  PATH="$BUILD_DIR/go/bin:$PATH" GOTOOLCHAIN=local GOARM="$GO_ARM" \
+  # Auch die Zwischenstände des Compilers (GOTMPDIR) nicht nach /tmp.
+  mkdir -p "$BUILD_DIR/gotmp"
+  PATH="$BUILD_DIR/go/bin:$PATH" GOTOOLCHAIN=local GOARM="$GO_ARM" GOTMPDIR="$BUILD_DIR/gotmp" \
     GOPATH="$BUILD_DIR/gopath" GOCACHE="$BUILD_DIR/gocache" GOFLAGS="-modcacherw$GOFLAGS_EXTRA" \
     sh "$SRC/build-go.sh" --install "$BUILD_DIR/out" "$GO_ARCH"
 else
