@@ -4482,6 +4482,8 @@ export function createDefaultConfig() {
       warp: { host: '' },
       // KEBA KeContact: P30 (DIP DSW1.3 = ON) oder P40 (Modbus in der App an).
       keba: { host: '', model: 'p30' },
+      // Amperfied/Heidelberg connect, Elli Gen 2 (gleiches Layout); Unit-ID meist 1.
+      heidelberg: { host: '', unitId: 1 },
       // OCPP-Wallbox: Ladepunkt-ID (leer = erster verbundener), Anschluss.
       ocpp: { chargePointId: '', connectorId: 1 }
     },

@@ -624,6 +624,7 @@
               <option value="charx">Phoenix Contact CHARX (auch Veton, LadeFoxx)</option>
               <option value="warp">TinkerForge WARP</option>
               <option value="keba">KEBA KeContact P30 / P40</option>
+              <option value="heidelberg">Amperfied / Heidelberg connect, Elli Gen 2 (VW/Cupra/&Scaron;koda Charger 2)</option>
               <option value="ocpp">OCPP-Wallbox (Alfen, ABL, Wallbox, Zaptec …)</option>
             </select>
           </label>
@@ -716,6 +717,19 @@
               <input type="text" class="input mono" id="wallbox-warp-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
               <span class="field-hint">DVhub nutzt den Ladeslot &bdquo;Externe Steuerung&ldquo; (HTTP-API). &bdquo;Automatisch&ldquo; schaltet ihn wieder aus.</span>
             </label>
+          </div>
+          <div class="evcc-wallbox-fields" id="wallbox-heidelberg-fields" hidden>
+            <div class="evcc-eos-grid">
+              <label class="dv-field">
+                <span class="field-label">Wallbox-Adresse</span>
+                <input type="text" class="input mono" id="wallbox-heidelberg-host" placeholder="192.168.x.x" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Unit-ID</span>
+                <input type="number" class="input mono" id="wallbox-heidelberg-unit" min="1" max="255" step="1" placeholder="1">
+              </label>
+            </div>
+            <span class="field-hint">Modbus TCP (Port 502). Elli Gen 2 ab Firmware R03.004.045.121 (Modbus in der Elli-App einschalten); Heidelberg Energy Control nur &uuml;ber ein RS485-Gateway. DVhub setzt den Watchdog: ohne Verbindung 60&nbsp;s l&auml;dt die Box mit 6&nbsp;A weiter.</span>
           </div>
           <div class="evcc-wallbox-fields" id="wallbox-keba-fields" hidden>
             <div class="evcc-eos-grid">

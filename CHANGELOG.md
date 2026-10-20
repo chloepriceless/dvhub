@@ -12,6 +12,10 @@ verweist hierher.
 
 ### Neu
 
+- **Amperfied/Heidelberg connect und Elli Gen 2 (VW ID. Charger 2, Cupra/Škoda Charger 2) als Wallbox** — gleiches
+  Modbus-TCP-Layout (Amperfied 04/2025, Elli v1.0 vom 15.10.2025): Strom 261 in 0,1 A (0 = Stopp), Watchdog 257,
+  Rückfallstrom 262; Zustand, Ströme, Leistung, Energie aus den Input-Registern.
+
 - **KEBA KeContact P30/P40 als Wallbox** (Modbus TCP nach KEBA-Guide V1.07): Strom 5004, Freigabe 5014 (P40: Stopp
   über Strom 0), Failsafe 6 A nach 5 min ohne Verbindung; schreibt nur bei Änderung (KEBA: höchstens alle 5 s).
 

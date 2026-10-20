@@ -27,7 +27,8 @@ export const WALLBOX_LABELS = Object.freeze({
   charx: 'Phoenix Contact CHARX',
   warp: 'TinkerForge WARP',
   ocpp: 'OCPP-Wallbox',
-  keba: 'KEBA KeContact'
+  keba: 'KEBA KeContact',
+  heidelberg: 'Amperfied / Heidelberg / Elli Gen 2'
 });
 
 // Lademodi. evcc kennt vier; eine direkt angebundene Box drei — „PV“ heißt

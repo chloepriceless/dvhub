@@ -2654,6 +2654,9 @@
       }
       ocSel.value = oc.chargePointId || '';
     }
+    var hd = w.heidelberg || {};
+    if (el('wallbox-heidelberg-host')) el('wallbox-heidelberg-host').value = hd.host || '';
+    if (el('wallbox-heidelberg-unit')) el('wallbox-heidelberg-unit').value = hd.unitId || 1;
     var kb = w.keba || {};
     if (el('wallbox-keba-host')) el('wallbox-keba-host').value = kb.host || '';
     if (el('wallbox-keba-model')) el('wallbox-keba-model').value = kb.model || 'p30';
@@ -2720,6 +2723,7 @@
     show('wallbox-warp-fields', t === 'warp');
     show('wallbox-ocpp-fields', t === 'ocpp');
     show('wallbox-keba-fields', t === 'keba');
+    show('wallbox-heidelberg-fields', t === 'heidelberg');
     show('wallbox-openwb-cp-wrap', ((document.getElementById('wallbox-openwb-mode') || {}).value || 'pro') === 'secondary');
     show('evcc-eos-loadpoint-wrap', t === 'evcc');
     // Felder, die es nur mit evcc gibt (Adresse, Dashboard-Ladepunkt, „Bei Stopp“).
@@ -2739,6 +2743,7 @@
       charx: { host: v('wallbox-charx-host'), chargePoint: Number(v('wallbox-charx-cp')) || 1 },
       warp: { host: v('wallbox-warp-host') },
       keba: { host: v('wallbox-keba-host'), model: v('wallbox-keba-model') || 'p30' },
+      heidelberg: { host: v('wallbox-heidelberg-host'), unitId: Number(v('wallbox-heidelberg-unit')) || 1 },
       ocpp: { chargePointId: v('wallbox-ocpp-id'), connectorId: Number(v('wallbox-ocpp-connector')) || 1,
         server: { enabled: !!(document.getElementById('wallbox-ocpp-enabled') || {}).checked, port: Number(v('wallbox-ocpp-port')) || 8887,
           password: (document.getElementById('wallbox-ocpp-pass') || {}).value || '' } }
