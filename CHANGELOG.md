@@ -10,6 +10,30 @@ verweist hierher.
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-10-21
+
+Release nach knapp zwei Wochen, 110 Commits seit 1.0.7. Überblick nach Themen — die Einzelheiten
+stehen in den Einträgen darunter:
+
+- **Wallboxen:** rund 20 neue Typen direkt angebunden (u. a. KEBA, ABL, Heidelberg/Amperfied, Elli,
+  Mennekes/Bender, Phoenix Contact, Hardy Barth, openWB, Victron EVCS, Nexblue, Peblar, NRGkick, SmartEVSE,
+  Schneider EVlink, DaheimLaden, EM2GO, TinkerForge WARP, EEBUS-Wallboxen), OCPP-1.6J-Zentrale, Ladestand
+  vom Auto über evccs Fahrzeug-Treiber, eine Hauptwallbox für alles.
+- **EEBUS in Go:** `dvhub-eebus` auf Basis von eebus-go, nativ und im Container, mit E-Auto an der Wallbox;
+  Geräte am Victron GX (Venus OS 3.80) werden angezeigt.
+- **EOS:** das offizielle Akkudoktor-EOS unverändert (v0.4.0rc3), DVhub stößt jeden Lauf selbst an;
+  EOS-Wache und „EOS neu starten“ auch im Docker-Betrieb; Planung mit der echten Wechselrichterleistung
+  und dem Mindest-Ladestand.
+- **Netz und Recht:** Einspeisegrenze der Anlage (60 %, 70 %, eigener Wert), MiSpeL-Option und
+  -Übersicht, Netzladen ohne Option, Grenzen des Netzbetreibers per MQTT, Plexlog nach der offiziellen
+  LUOX/Lumenaza-Tabelle, amtlicher Marktwert Solar von dvhub.online.
+- **Fern-Support:** aus dem Installateurs-Portal öffnen, auch im Container, überlebt einen Neustart;
+  Datenfluss-Übersicht.
+- **Datenbank:** TimescaleDB auf Ubuntu (#24), Nachrüstung Apache → Community repariert bestehende
+  Datenbanken, Kompression danach eingeschaltet.
+- **Sicherheit:** Node.js 22.23.4 (Sicherheits-Release vom Oktober 2026), Schutz gegen Befehle fremder
+  Webseiten, VPN-Hooks, Import-Rechenaufwand, Modbus-Schreibbestätigung, Geräteschlüssel im Portal.
+
 ### Neu
 
 - **Schneider EVlink Pro AC als Wallbox** (Modbus TCP nach dem „EVlink Pro AC Modbus Connectivity Guide“
@@ -240,6 +264,9 @@ verweist hierher.
 
 ### Geändert
 
+- **Node.js 22.23.4.** Das Container-Image baut auf Node 22.23.4 (Sicherheits-Release vom Oktober 2026); native
+  Installationen bekommen es mit dem nächsten DVhub-Update aus NodeSource.
+
 - **EOS ist jetzt das offizielle Akkudoktor-EOS, unverändert.** Der eigene Fork (DV-EOS) wird nicht
   mehr gebraucht: Wirkungsgradkurve, parallele Bewertung, Fertig-Meldung und die Laufzeit- und
   RAM-Verbesserungen sind dort aufgenommen. Ausgeliefert wird `v0.4.0rc2` aus
@@ -260,6 +287,24 @@ verweist hierher.
   alte Verhalten zurück.
 
 ### Behoben
+
+- **„Auf Karte wählen“ übernahm den Standort nicht.** Seit der Suche in den Einstellungen trägt auch die Zeile
+  eines Feldes dessen Pfad; der Karten-Picker traf die Zeile statt des Eingabefelds, „Übernehmen“ wirkte nicht,
+  und die Karte öffnete immer in Deutschland-Mitte. Jetzt landen die Koordinaten in Breiten- und Längengrad, die
+  Speichern-Leiste erscheint, und die Karte öffnet am eingetragenen Standort. Steht dort noch nichts (oder 0/0),
+  zeigt sie Deutschland im Überblick, und „Übernehmen“ geht erst nach einem Klick auf das Haus. Feldfall: Standort
+  0/0 ergab einen abendlichen PV-Peak in der Prognose.
+
+- **TimescaleDB nach der Nachrüstung Apache → Community.** Auf nativen Boxen, deren Erweiterung noch auf der alten
+  Apache-Version stand, fehlte nach dem Paketwechsel die passende Bibliothek: jede Datenbank-Sitzung scheiterte
+  an der ersten Anweisung, spätere Schreibvorgänge landeten unsichtbar in der Elterntabelle. Die Nachrüstung hebt
+  die Erweiterung jetzt als erste Anweisung an, holt solche Zeilen in die Hypertable zurück, protokolliert nach
+  `timescale-provision.log` im Datenverzeichnis und meldet Fehler in Einstellungen → System, statt still „aktuell“
+  zu zeigen. Danach schaltet DVhub die Kompression ein, die unter Apache nicht eingerichtet werden konnte (sonst
+  wuchs die Datenbank ungebremst); ist die Tabelle gerade belegt, beim nächsten Start.
+
+- **Historie: versteckte Rechenzeilen blieben sichtbar.** „Förderverlängerung (§51a)“ stand mit „-“ da, obwohl
+  sie ausgeblendet sein sollte.
 
 - **Marktwert Solar amtlich und deutschlandweit**: DVhub holte die Monatsmarktwerte nur von Energy-Charts, das der
   amtlichen Veröffentlichung hinterherhinkt (im Oktober fehlte der September, für Mai 2026 stand 3,163 statt

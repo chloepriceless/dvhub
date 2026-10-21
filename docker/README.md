@@ -62,7 +62,7 @@ docker compose -f docker/compose.yml exec dvhub node -p 'require("/etc/dvhub/con
 
 | Image | Tags |
 |---|---|
-| `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.7` = Releases; `dev` = Vorab-Stand: der aktuelle `main`, automatisch gebaut nach jedem Push mit grüner CI (kein Release) |
+| `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.8` = Releases; `dev` = Vorab-Stand: der aktuelle `main`, automatisch gebaut nach jedem Push mit grüner CI (kein Release) |
 | `bikinibottomcapital/dvhub-eos` | EOS-Stand, z. B. `v0.4.0rc2` (= `EOS_TAG`, gebaut aus dem unveränderten Akkudoktor-EOS), `latest` = der des letzten Releases. Nur für Vorab-Stände, die Akkudoktor nicht als Image veröffentlicht; zeigt der Pin auf ein EOS-Release, gilt das offizielle `akkudoktor/eos:<Version>` (`EOS_IMAGE`, `EOS_IMAGE_TAG`) und die CI baut kein EOS-Image (`scripts/eos-image-plan.sh`) |
 
 Beide für `linux/amd64` und `linux/arm64`, auf Docker Hub öffentlich und nach

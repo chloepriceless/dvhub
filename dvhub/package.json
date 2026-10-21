@@ -1,6 +1,6 @@
 {
   "name": "dvhub",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Direktvermarktungs-Schnittstelle für Victron ESS - Modbus-Proxy und DVhub Leitstand",
   "private": true,
   "type": "module",
