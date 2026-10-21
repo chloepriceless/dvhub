@@ -43,7 +43,9 @@ DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
 CONFIG_PATH="${CONFIG_PATH:-/etc/dvhub/config.json}"
 DB_NAME="${DB_NAME:-dvhub}"
 
-if [[ "${EUID}" -ne 0 ]]; then
+# TS_PROVISION_EUID, OS_RELEASE, REPO_LIST, KEYRING: nur fuer Tests
+# (test/timescale-provision.test.js), im Betrieb nie gesetzt.
+if [[ "${TS_PROVISION_EUID:-$EUID}" -ne 0 ]]; then
   echo "  TimescaleDB: timescale-provision.sh muss als root laufen — uebersprungen" >&2
   exit 1
 fi
@@ -72,14 +74,26 @@ if [[ -z "$PG_VER" ]]; then
   exit 0
 fi
 
-CODENAME="$( . /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-}" )"
+# packagecloud fuehrt Debian und Ubuntu unter getrennten Pfaden (…/debian/<name>,
+# …/ubuntu/<name>). Ubuntu 26.04 „resolute“ gibt es nur unter ubuntu/ (Issue #24).
+# Ableger wie Mint melden ID_LIKE=ubuntu und den Ubuntu-Namen in UBUNTU_CODENAME;
+# Raspberry Pi OS meldet ID_LIKE=debian.
+OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
+os_field() { ( . "$OS_RELEASE" 2>/dev/null && eval "echo \"\${$1:-}\"" ) || true; }
+DISTRO="debian"
+CODENAME="$(os_field VERSION_CODENAME)"
+if [[ "$(os_field ID)" == ubuntu || " $(os_field ID_LIKE) " == *" ubuntu "* ]]; then
+  DISTRO="ubuntu"
+  UBUNTU_NAME="$(os_field UBUNTU_CODENAME)"
+  [[ -n "$UBUNTU_NAME" ]] && CODENAME="$UBUNTU_NAME"
+fi
 [[ -z "$CODENAME" ]] && CODENAME="$(lsb_release -cs 2>/dev/null || true)"
 
 APACHE_PKG="postgresql-${PG_VER}-timescaledb"
 TSL_PKG="timescaledb-2-postgresql-${PG_VER}"
 TSL_LOADER="timescaledb-2-loader-postgresql-${PG_VER}"
-REPO_LIST="/etc/apt/sources.list.d/timescaledb.list"
-KEYRING="/usr/share/keyrings/timescale.gpg"
+REPO_LIST="${REPO_LIST:-/etc/apt/sources.list.d/timescaledb.list}"
+KEYRING="${KEYRING:-/usr/share/keyrings/timescale.gpg}"
 
 flip_config_true() {
   # Set cfg.telemetry.database.timescaledb = true so migration 014 (hypertable +
@@ -111,7 +125,7 @@ if [[ "$(ext_license)" == "timescale" ]]; then
   exit 0
 fi
 
-echo "  TimescaleDB: provisioniere Community-Edition (PG ${PG_VER}, ${CODENAME:-?}) ..."
+echo "  TimescaleDB: provisioniere Community-Edition (PG ${PG_VER}, ${DISTRO} ${CODENAME:-?}) ..."
 
 # --- 3. Add Timescale's apt repo + GPG key (idempotent) ----------------------
 # Defensive: a minimal box may lack gnupg/curl.
@@ -126,12 +140,26 @@ if [[ ! -s "$KEYRING" ]]; then
     rm -f "$KEYRING" 2>/dev/null || true
   fi
 fi
-if [[ -s "$KEYRING" && -n "$CODENAME" ]] && { [[ ! -f "$REPO_LIST" ]] || ! grep -q "packagecloud" "$REPO_LIST" 2>/dev/null; }; then
-  echo "deb [signed-by=${KEYRING}] https://packagecloud.io/timescale/timescaledb/debian/ ${CODENAME} main" > "$REPO_LIST"
+# Eine Quelle fuer die falsche Distribution (aeltere Versionen trugen auch auf
+# Ubuntu debian/ ein) wird ersetzt; eine passende in anderem Format bleibt.
+REPO_PATH="packagecloud.io/timescale/timescaledb/${DISTRO}/ ${CODENAME} "
+if [[ -s "$KEYRING" && -n "$CODENAME" ]] && [[ "$(cat "$REPO_LIST" 2>/dev/null) " != *"$REPO_PATH"* ]]; then
+  echo "deb [signed-by=${KEYRING}] https://${REPO_PATH}main" > "$REPO_LIST"
   NEED_APT_UPDATE=1
-  echo "  TimescaleDB: apt-Quelle (${CODENAME}) eingetragen."
+  echo "  TimescaleDB: apt-Quelle (${DISTRO} ${CODENAME}) eingetragen."
 fi
-if [[ "$NEED_APT_UPDATE" -eq 1 ]]; then apt-get update >/dev/null 2>&1 || true; fi
+if [[ "$NEED_APT_UPDATE" -eq 1 ]]; then
+  APT_OUT="$(apt-get update 2>&1 || true)"
+  # Hat packagecloud fuer diese Distribution nichts (404, kein Release), bliebe die
+  # Quelle sonst stehen und jedes `apt update` der Box meldete den Fehler → wieder
+  # entfernen, unten greift der Apache-Fallback. grep ohne -q: liest alles, kein
+  # SIGPIPE unter pipefail (siehe Hinweis bei apt-cache).
+  if printf '%s\n' "$APT_OUT" | grep -E '^(Err:[0-9]*|E:|Error:) .*packagecloud\.io/timescale' >/dev/null; then
+    echo "  WARN: packagecloud hat keine TimescaleDB-Pakete fuer ${DISTRO} ${CODENAME} — apt-Quelle wieder entfernt." >&2
+    rm -f "$REPO_LIST"
+    apt-get update >/dev/null 2>&1 || true
+  fi
+fi
 
 # --- 4. Install the Community package (Apache fallback if unavailable) --------
 PKG_CHANGED=0
