@@ -64,6 +64,8 @@ test('Timescale: Tagesblöcke + Kompression nach 2 Tagen, idempotent', async () 
     if (sql.includes('pg_extension')) return { rows: [{ 1: 1 }] };
     if (sql.includes('dimensions')) return { rows: [{ s: interval }] };
     if (sql.includes('set_chunk_time_interval')) { interval = 86400; return { rows: [] }; }
+    if (sql.includes("current_setting('timescaledb.license'")) return { rows: [{ lic: 'timescale' }] };
+    if (sql.includes('compression_enabled')) return { rows: [{ on: true }] };
     if (sql.includes("config->>'compress_after'")) return { rows: after ? [{ after }] : [] };
     if (sql.includes('remove_compression_policy')) { after = null; return { rows: [] }; }
     if (sql.includes('add_compression_policy')) { after = '2 days'; return { rows: [] }; }
@@ -102,4 +104,65 @@ test('Schreibpuffer: min_wal_size 512MB aus timescaledb-tune wird auf 64MB geset
   assert.ok(pg.calls.includes("ALTER SYSTEM SET min_wal_size = '64MB'"));
   const again = fakePg([{ name: 'min_wal_size', setting: '64', unit: 'MB', source: 'configuration file' }]);
   assert.deepEqual((await applyDbTuning((q, p) => again.query(q, p), { includeMemory: false })).changed, [], 'idempotent');
+});
+
+// 21.10.2026 (Feldbox 9753e9e5): unter Apache installiert, auf Community
+// nachgerüstet → 014 hat die Kompression nie eingeschaltet, die Regel scheiterte
+// bei jedem Start mit „columnstore not enabled on hypertable“.
+function fakeTs({ lic = 'timescale', compression = false, after = null, lockBusy = false } = {}) {
+  const st = { compression, after, calls: [] };
+  st.q = async (sql) => {
+    st.calls.push(sql);
+    if (sql.includes('pg_extension')) return { rows: [{ 1: 1 }] };
+    if (sql.includes('dimensions')) return { rows: [{ s: 86400 }] };
+    if (sql.includes("current_setting('timescaledb.license'")) return { rows: [{ lic }] };
+    if (sql.includes('compression_enabled')) return { rows: [{ on: st.compression }] };
+    if (sql.includes('timescaledb.compress,')) {
+      if (lockBusy) { const e = new Error('canceling statement due to lock timeout'); e.code = '55P03'; throw e; }
+      st.compression = true; return { rows: [] };
+    }
+    if (sql.includes("config->>'compress_after'")) return { rows: st.after ? [{ after: st.after }] : [] };
+    if (sql.includes('add_compression_policy')) {
+      if (!st.compression) throw new Error('columnstore not enabled on hypertable "timeseries_samples"');
+      st.after = '2 days'; return { rows: [] };
+    }
+    return { rows: [] };
+  };
+  return st;
+}
+
+test('Timescale: Community ohne Kompression → einschalten (wie 014), dann Regel', async () => {
+  const st = fakeTs();
+  const r = await tuneTimescale(st.q);
+  assert.deepEqual(r.changed, ['compression_enabled', 'compress_after']);
+  const iAlter = st.calls.findIndex((c) => c.includes('timescaledb.compress,'));
+  const iPolicy = st.calls.findIndex((c) => c.includes('add_compression_policy'));
+  assert.ok(iAlter >= 0 && iAlter < iPolicy, 'ALTER vor der Regel');
+  const alter = st.calls[iAlter];
+  assert.match(alter, /SET LOCAL lock_timeout = '10s';/);
+  assert.match(alter, /compress_segmentby = 'series_key,scope,source'/);
+  assert.match(alter, /compress_orderby = 'ts_utc desc'/);
+  const again = await tuneTimescale(st.q);
+  assert.deepEqual(again.changed, [], 'zweiter Lauf ändert nichts');
+});
+
+test('Timescale: Kompression schon an → kein ALTER', async () => {
+  const st = fakeTs({ compression: true, after: '2 days' });
+  const r = await tuneTimescale(st.q);
+  assert.deepEqual(r.changed, []);
+  assert.ok(!st.calls.some((c) => c.includes('timescaledb.compress,')));
+});
+
+test('Timescale: Apache → keine Kompression, keine Regel, kein Fehler', async () => {
+  const st = fakeTs({ lic: 'apache' });
+  const r = await tuneTimescale(st.q);
+  assert.equal(r.skipped, 'apache');
+  assert.ok(!st.calls.some((c) => c.includes('timescaledb.compress,') || c.includes('compression_policy')));
+});
+
+test('Timescale: Hypertable gesperrt → aufgeschoben, kein Fehler, keine Regel', async () => {
+  const st = fakeTs({ lockBusy: true });
+  const r = await tuneTimescale(st.q);
+  assert.equal(r.deferred, 'compression_lock_timeout');
+  assert.ok(!st.calls.some((c) => c.includes('add_compression_policy')));
 });

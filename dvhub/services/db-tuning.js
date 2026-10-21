@@ -152,6 +152,25 @@ function sameValue(row, want) {
 export const SAMPLES_CHUNK_INTERVAL = '1 day';
 export const SAMPLES_COMPRESS_AFTER = '2 days';
 
+// 21.10.2026: Boxen, die unter der Apache-Edition installiert und später auf
+// Community nachgerüstet wurden, haben keine Kompression: Migration 014 hat den
+// TSL-Teil übersprungen und läuft nie wieder. Die Regel unten scheiterte dann
+// bei jedem Start („columnstore not enabled on hypertable“), die Datenbank
+// wuchs ungebremst (keine Retention, T-0078), und storage-guard konnte nicht
+// komprimieren. Darum hier einschalten — mit denselben Einstellungen wie 014.
+// Nur Metadaten (komprimiert wird später im Hintergrund-Job, Chunk für Chunk),
+// aber das ALTER braucht eine Sperre auf der Hypertable: lock_timeout statt
+// DVhub-Schreibzugriffe warten zu lassen, sonst beim nächsten Start erneut.
+// SET LOCAL wirkt, weil beide Anweisungen als EIN Query (ohne Parameter) in
+// einer impliziten Transaktion laufen; die Pool-Verbindung behält nichts.
+export const SAMPLES_COMPRESS_LOCK_TIMEOUT = '10s';
+const ENABLE_COMPRESSION_SQL = `SET LOCAL lock_timeout = '${SAMPLES_COMPRESS_LOCK_TIMEOUT}';
+ALTER TABLE timeseries_samples SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'series_key,scope,source',
+  timescaledb.compress_orderby = 'ts_utc desc'
+)`;
+
 export async function tuneTimescale(query) {
   const out = { chunkInterval: null, compressAfter: null, changed: [] };
   const ext = await query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'");
@@ -166,6 +185,22 @@ export async function tuneTimescale(query) {
     out.changed.push('chunk_interval');
   }
   out.chunkInterval = curS > 86400 ? SAMPLES_CHUNK_INTERVAL : `${curS / 3600} h`;
+  // Apache kann keine Kompression — dort kein Fehler, nur nichts zu tun.
+  const lic = await query("SELECT current_setting('timescaledb.license', true) AS lic");
+  if (lic.rows?.[0]?.lic !== 'timescale') return { ...out, skipped: 'apache' };
+  const comp = await query(
+    `SELECT compression_enabled AS on FROM timescaledb_information.hypertables
+      WHERE hypertable_name = 'timeseries_samples'`);
+  if (comp.rows?.[0]?.on !== true) {
+    try {
+      await query(ENABLE_COMPRESSION_SQL);
+    } catch (e) {
+      // 55P03 lock_not_available: Hypertable gerade belegt → nächster Start.
+      if (e?.code === '55P03') return { ...out, deferred: 'compression_lock_timeout' };
+      throw e;
+    }
+    out.changed.push('compression_enabled');
+  }
   const job = await query(
     `SELECT config->>'compress_after' AS after FROM timescaledb_information.jobs
       WHERE proc_name = 'policy_compression' AND hypertable_name = 'timeseries_samples'`);

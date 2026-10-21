@@ -781,7 +781,7 @@ async function createTelemetryStoreIfEnabled() {
     // Messwerte: Tagesblöcke, Kompression nach 2 Tagen (als Eigentümer, überall).
     if (IS_RUNTIME_PROCESS) {
       tuneTimescale((q, p) => pool.query(q, p))
-        .then((r) => { state.timescaleTuning = r; if (r.changed?.length) pushLog('timescale_tuning', r); })
+        .then((r) => { state.timescaleTuning = r; if (r.changed?.length || r.deferred) pushLog('timescale_tuning', r); })
         .catch((e) => pushLog('timescale_tuning_error', { error: e.message }, 'warn'));
     }
     return store;
