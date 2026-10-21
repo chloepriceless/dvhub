@@ -128,6 +128,7 @@ import { createDatenspende } from './services/datenspende/index.js';
 import { createOrtsnetz } from './services/ortsnetz/index.js';
 import { createVictronGxDevices } from './services/victron-gx/devices.js';
 import { createVehicleEvcc } from './services/vehicle-evcc/index.js';
+import { createTariffProviderService } from './services/tariff-provider/index.js';
 // Messwert-Eingang HA/Loxone per HTTP-Push (Push-Schlüssel in DATA_DIR).
 import { createInputPush } from './services/input-push.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
@@ -1438,6 +1439,11 @@ ctx.vehicleMqtt = createVehicleMqtt(mqttHub, ctx);
 // Ladestand über evccs Fahrzeug-Treiber (aus, bis eingerichtet; lädt evcc erst dann).
 ctx.vehicleEvcc = createVehicleEvcc(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub', getPlugged: () => resolveEvPlugged(ctx) });
 if (IS_RUNTIME_PROCESS) ctx.vehicleEvcc.start();
+// Bezugspreis vom Stromanbieter (Tibber, LichtBlick) mit den Zugangsdaten des
+// Kunden — nur aktiv, wenn die Preislogik „Vom Stromanbieter“ gewählt ist.
+ctx.tariffProvider = createTariffProviderService(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub' });
+if (IS_RUNTIME_PROCESS) ctx.tariffProvider.start();
+else if (IS_WEB_PROCESS) ctx.tariffProvider.startReadOnly();
 // OCPP-1.6J-Zentrale für OCPP-Wallboxen (ab Werk aus; Port 8887).
 ctx.ocppServer = createOcppServer(ctx);
 if (IS_RUNTIME_PROCESS) {
@@ -2782,6 +2788,7 @@ async function gracefulShutdown(signal) {
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
   safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
+  safeSync('tariffProvider.stop', () => ctx.tariffProvider?.stop?.());
   safeSync('ocppServer.stop', () => { ctx.ocppServer?.stop?.(); });
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());

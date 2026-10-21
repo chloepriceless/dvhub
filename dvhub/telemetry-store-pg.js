@@ -1004,7 +1004,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
                SUM(value_num::numeric)::text AS total,
                (EXTRACT(EPOCH FROM MAX(created_at)) * 1000000)::bigint AS last_us
         FROM timeseries_samples
-        WHERE series_key IN ('price_ct_kwh', 'price_eur_mwh')
+        WHERE series_key IN ('price_ct_kwh', 'price_eur_mwh', 'tariff_import_ct_kwh')
           AND value_num IS NOT NULL
           AND ts_utc >= $2 AND ts_utc < $3
         GROUP BY 1
@@ -1044,6 +1044,28 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
        DO UPDATE SET fingerprint = EXCLUDED.fingerprint, payload = EXCLUDED.payload, updated_at = now()`,
       [String(cacheKey), String(fingerprint), payload]
     );
+  }
+
+  // Eine Reihe roh lesen (z. B. tariff_import_ct_kwh, Bezugspreis vom
+  // Stromanbieter: ~35 000 Zeilen je Jahr) — ohne Zeitgrenzen alles.
+  async function listSeriesSamples({ seriesKey, scope = null, start = null, end = null, limit = 500000 } = {}) {
+    const result = await pool.query(`
+      SELECT ts_utc, source, resolution_seconds, value_num
+      FROM timeseries_samples
+      WHERE series_key = $1
+        AND ($2::text IS NULL OR scope = $2)
+        AND ($3::timestamptz IS NULL OR ts_utc >= $3)
+        AND ($4::timestamptz IS NULL OR ts_utc < $4)
+        AND value_num IS NOT NULL
+      ORDER BY ts_utc ASC
+      LIMIT $5
+    `, [String(seriesKey), scope, start ? isoTimestamp(start) : null, end ? isoTimestamp(end) : null, Number(limit)]);
+    return result.rows.map((row) => ({
+      ts: new Date(row.ts_utc).toISOString(),
+      source: row.source,
+      resolutionSeconds: Number(row.resolution_seconds),
+      value: Number(row.value_num)
+    }));
   }
 
   async function listPriceSlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS }) {
@@ -1674,6 +1696,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     listMaterializedEnergySlotsJsPivot,
     listImportJobRanges,
     listPriceSlots,
+    listSeriesSamples,
     async upsertSolarMarketValue(entry = {}) {
       const fetchedAt = isoTimestamp(entry.fetchedAt || new Date());
       await pool.query(`

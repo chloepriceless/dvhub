@@ -40,7 +40,12 @@ export const REDACTED_PATHS = Object.freeze([
   // Tokens, FIN — das ganze Objekt, die Felder hängen von der Vorlage ab.
   'vehicleEvcc.params',
   // OCPP-Zentrale: Passwort der Wallboxen (Sicherheitsprofil 1).
-  'ocpp.password'
+  'ocpp.password',
+  // Preis vom Stromanbieter (services/tariff-provider): Tibber-Zugangsschlüssel,
+  // LichtBlick-App-Login. Die E-Mail ist zugleich Kennung des Kundenkontos.
+  'userEnergyPricing.provider.tibber.token',
+  'userEnergyPricing.provider.lichtblick.email',
+  'userEnergyPricing.provider.lichtblick.password'
   // Phase 09.4 gap-closure: notifications.providers.uptime-kuma removed — the
   // Uptime Kuma integration is the `monitoring` block; monitoring.pushUrl is
   // redacted below via redactUrlCreds (URL-level, not whole-field).

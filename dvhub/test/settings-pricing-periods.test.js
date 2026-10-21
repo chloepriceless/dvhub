@@ -155,3 +155,20 @@ test('pricing periods keep §14a module 3 and costs through save', () => {
     fixedGrossImportCtKwh: 26.9, usesParagraph14aModule3: true, module3Windows: windows, costs,
   }]);
 });
+
+test('Zeitraum „Vom Stromanbieter“: Bestandteile freiwillig, leere Felder fallen weg (2026-10-21)', () => {
+  const period = {
+    ...createEmptyPricingPeriod(0),
+    startDate: '2026-11-01',
+    endDate: '2027-10-31',
+    mode: 'provider',
+    dynamicComponents: { energyMarkupCtKwh: '', gridChargesCtKwh: '9.5', leviesAndFeesCtKwh: '', vatPct: '19' }
+  };
+  const [serialized] = serializePricingPeriods([period]);
+  assert.equal(serialized.mode, 'provider');
+  assert.equal(serialized.fixedGrossImportCtKwh, undefined);
+  assert.deepEqual({ ...serialized.dynamicComponents }, { gridChargesCtKwh: 9.5, vatPct: 19 });
+  const result = validatePricingPeriods([{ ...period, dynamicComponents: {} }]);
+  assert.equal(result.valid, true, result.messages.join('; '));
+  assert.equal(result.periods[0].dynamicComponents, undefined);
+});

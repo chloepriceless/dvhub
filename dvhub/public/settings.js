@@ -419,6 +419,14 @@ function serializePricingPeriods(periods = []) {
       next.fixedGrossImportCtKwh = period.fixedGrossImportCtKwh === '' || period.fixedGrossImportCtKwh == null
         ? null
         : Number(period.fixedGrossImportCtKwh);
+    } else if (next.mode === 'provider') {
+      // Preis vom Stromanbieter: Bestandteile freiwillig, leere Felder weglassen.
+      const dc = {};
+      for (const key of ['energyMarkupCtKwh', 'gridChargesCtKwh', 'leviesAndFeesCtKwh', 'vatPct']) {
+        const raw = period.dynamicComponents?.[key];
+        if (raw !== '' && raw != null && Number.isFinite(Number(raw))) dc[key] = Number(raw);
+      }
+      if (Object.keys(dc).length) next.dynamicComponents = dc;
     } else {
       next.dynamicComponents = {
         energyMarkupCtKwh: Number(period.dynamicComponents?.energyMarkupCtKwh || 0),
@@ -1747,6 +1755,13 @@ const HIDDEN_FIELD_PATHS = [
   'userEnergyPricing.module3Windows.window3.start',
   'userEnergyPricing.module3Windows.window3.end',
   'userEnergyPricing.module3Windows.window3.priceCtKwh',
+  // Preis vom Stromanbieter (2026-10-21): im Preis-Editor (tariffProviderBlockHtml).
+  'userEnergyPricing.provider.name',
+  'userEnergyPricing.provider.priceBasis',
+  'userEnergyPricing.provider.tibber.token',
+  'userEnergyPricing.provider.tibber.homeId',
+  'userEnergyPricing.provider.lichtblick.email',
+  'userEnergyPricing.provider.lichtblick.password',
   // #2 (Christin 2026-06-21): rein technische Schutz-Parameter, die den User nicht
   // interessieren. Ausblenden — die sinnvollen Defaults (90 s / 5 s) greifen
   // garantiert über die Runtime-Fallbacks auch bei leerem/fehlendem Feld
@@ -2686,8 +2701,13 @@ function renderPricingPeriodsEditor() {
   // currentDraftConfig.userEnergyPricing (the hidden schema fields). One canonical
   // price editor: Standard-Tarif on top, date-range "Abweichungen" below.
   const uep = (currentDraftConfig && currentDraftConfig.userEnergyPricing) || {};
-  const stdMode = uep.mode === 'dynamic' ? 'dynamic' : 'fixed';
+  const stdMode = uep.mode === 'dynamic' || uep.mode === 'provider' ? uep.mode : 'fixed';
   const stdDc = uep.dynamicComponents || {};
+  const providerInUse = stdMode === 'provider' || pricingPeriodsDraft.some((period) => period.mode === 'provider');
+  const providerBasis = uep.provider?.priceBasis === 'net_energy' ? 'net_energy' : 'gross_total';
+  const stdProviderNote = stdMode !== 'provider' ? '' : `<div class="svc-meta">${providerBasis === 'net_energy'
+    ? 'Diese Bestandteile kommen auf den Energiepreis des Anbieters, danach die MwSt.'
+    : 'Nur für die Schätzung, solange der Anbieter für einen Zeitraum noch keinen Preis geliefert hat. Nach ein paar Tagen schätzt DVhub aus den echten Anbieterpreisen.'}</div>`;
   const stdFieldsHtml = stdMode === 'fixed' ? `
     <div class="config-row-grid">
       <div class="config-row">
@@ -2776,10 +2796,13 @@ function renderPricingPeriodsEditor() {
         <select class="config-select" data-std-path="mode" data-std-rerender="1">
           <option value="fixed"${stdMode === 'fixed' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'fixed', 'Fester Bruttopreis')}</option>
           <option value="dynamic"${stdMode === 'dynamic' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'dynamic', 'Dynamisch aus EPEX + Preisbestandteilen')}</option>
+          <option value="provider"${stdMode === 'provider' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'provider', 'Vom Stromanbieter (Tibber, LichtBlick)')}</option>
         </select>
       </div>
     </div>
+    ${stdProviderNote}
     ${stdFieldsHtml}
+    ${providerInUse ? tariffProviderBlockHtml(uep) : ''}
     ${m3Html}
     <div class="sa-divider-top"></div>
     <div class="config-group-kicker" data-accent="yellow">Abweichungen nach Zeitraum (optional)</div>
@@ -2803,6 +2826,7 @@ function renderPricingPeriodsEditor() {
             <select class="config-select" data-period-id="${escapeHtml(period.id)}" data-period-path="mode">
               <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'fixed', 'Fester Bruttopreis')}</option>
               <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'dynamic', 'Dynamisch aus EPEX + Preisbestandteilen')}</option>
+              <option value="provider"${period.mode === 'provider' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'provider', 'Vom Stromanbieter (Tibber, LichtBlick)')}</option>
             </select>
           </div>
         </div>
@@ -2850,6 +2874,8 @@ function renderPricingPeriodsEditor() {
     `).join('')}
   `;
 
+  if (providerInUse) bindTariffProviderBlock(section, uep);
+
   section.querySelector('#addPricingPeriodBtn')?.addEventListener('click', () => {
     pricingPeriodsDraft = addPricingPeriod(pricingPeriodsDraft);
     pricingPeriodsValidation = [];
@@ -2884,7 +2910,7 @@ function renderPricingPeriodsEditor() {
       const rerender = input.dataset.stdRerender === '1';
       let value;
       if (input.type === 'checkbox') value = input.checked;
-      else if (path === 'mode') value = input.value === 'dynamic' ? 'dynamic' : 'fixed';
+      else if (path === 'mode') value = input.value === 'dynamic' || input.value === 'provider' ? input.value : 'fixed';
       else if (input.dataset.stdType === 'text') value = String(input.value ?? '');
       else { const raw = String(input.value ?? '').trim(); value = raw === '' ? null : Number(raw); }
       if (rerender) {
@@ -2901,6 +2927,123 @@ function renderPricingPeriodsEditor() {
   });
 
   return section;
+}
+
+// Preis vom Stromanbieter (services/tariff-provider, 2026-10-21): Anbieter,
+// Lesart des Preises, Zugangsdaten. Gespeicherte Geheimnisse kommen als '***'
+// zurück und bleiben beim Speichern erhalten (restoreRedacted).
+function tariffProviderBlockHtml(uep) {
+  const p = uep.provider || {};
+  const name = p.name === 'tibber' || p.name === 'lichtblick' ? p.name : '';
+  const basis = p.priceBasis === 'net_energy' ? 'net_energy' : 'gross_total';
+  const secretAttrs = (value) => `value="${escapeHtml(value || '')}" placeholder="${value === '***' ? 'gespeichert' : ''}" autocomplete="new-password"`;
+  const credentials = name === 'tibber' ? `
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.provider.tibber.token', 'Tibber-Zugangsschlüssel')}</span>
+        <input class="config-input" type="password" data-std-path="provider.tibber.token" data-std-type="text" ${secretAttrs(p.tibber?.token)} />
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.provider.tibber.homeId', 'Tibber-Zuhause (Home-ID, optional)')}</span>
+        <input class="config-input" type="text" data-std-path="provider.tibber.homeId" data-std-type="text" value="${escapeHtml(p.tibber?.homeId || '')}" />
+      </div>
+    </div>` : name === 'lichtblick' ? `
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.provider.lichtblick.email', 'E-Mail (LichtBlick-App)')}</span>
+        <input class="config-input" type="text" data-std-path="provider.lichtblick.email" data-std-type="text" ${secretAttrs(p.lichtblick?.email)} />
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.provider.lichtblick.password', 'Passwort (LichtBlick-App)')}</span>
+        <input class="config-input" type="password" data-std-path="provider.lichtblick.password" data-std-type="text" ${secretAttrs(p.lichtblick?.password)} />
+      </div>
+    </div>` : '';
+  return `
+    <div class="sa-divider-top"></div>
+    <div class="config-group-kicker" data-accent="yellow">Preis vom Stromanbieter</div>
+    <div class="svc-meta">DVhub holt mit deinen eigenen Zugangsdaten die Viertelstundenpreise deines Vertrags und rechnet damit Kosten, Historie und EOS-Planung. Die Zugangsdaten bleiben auf dieser Box und werden nur an deinen Anbieter geschickt.</div>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.provider.name', 'Anbieter')}</span>
+        <select class="config-select" data-std-path="provider.name" data-std-type="text" data-std-rerender="1">
+          <option value=""${name === '' ? ' selected' : ''}>— bitte wählen —</option>
+          <option value="tibber"${name === 'tibber' ? ' selected' : ''}>Tibber</option>
+          <option value="lichtblick"${name === 'lichtblick' ? ' selected' : ''}>LichtBlick ÖkoStrom Dynamic</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.provider.priceBasis', 'Der Anbieterpreis ist …')}</span>
+        <select class="config-select" data-std-path="provider.priceBasis" data-std-type="text" data-std-rerender="1">
+          <option value="gross_total"${basis === 'gross_total' ? ' selected' : ''}>der Endpreis (brutto, alles enthalten)</option>
+          <option value="net_energy"${basis === 'net_energy' ? ' selected' : ''}>nur der Energiepreis netto (Bestandteile + MwSt kommen dazu)</option>
+        </select>
+      </div>
+    </div>
+    ${credentials}
+    ${name ? `
+    <div class="sa-pad">
+      <button class="btn btn-ghost btn-small" type="button" data-tariff-provider-action="test">Verbindung testen</button>
+      <button class="btn btn-ghost btn-small" type="button" data-tariff-provider-action="refresh">Jetzt abrufen</button>
+    </div>` : ''}
+    <div class="svc-meta" data-tariff-provider-status>Stand wird geladen …</div>
+  `;
+}
+
+function formatTariffProviderSummary(summary) {
+  if (!summary) return '';
+  const ct = (v) => (Number.isFinite(Number(v)) ? `${Number(v).toFixed(2).replace('.', ',')} ct` : '–');
+  const parts = [`heute ${summary.todaySlots} Preise, morgen ${summary.tomorrowSlots}`];
+  if (summary.resolutionMinutes) parts.push(`${summary.resolutionMinutes}-min-Takt`);
+  if (summary.currentCtKwh != null) parts.push(`jetzt ${ct(summary.currentCtKwh)}/kWh`);
+  if (summary.minCtKwh != null) parts.push(`${ct(summary.minCtKwh)} bis ${ct(summary.maxCtKwh)}`);
+  return parts.join(' · ');
+}
+
+function tariffProviderStateText(state) {
+  if (!state) return 'Kein Stand verfügbar.';
+  if (!state.provider) return 'Noch kein Anbieter gespeichert.';
+  if (!state.configured) return 'Zugangsdaten fehlen (nach dem Eintragen speichern).';
+  const lines = [];
+  if (state.lastSuccessAt) lines.push(`Zuletzt abgerufen: ${new Date(state.lastSuccessAt).toLocaleString('de-DE')}${state.summary ? ` — ${formatTariffProviderSummary(state.summary)}` : ''}`);
+  if (state.account?.label) lines.push(`Vertrag: ${state.account.label}`);
+  if (state.error) lines.push(`Hinweis: ${state.error}`);
+  if (state.authBlockedUntil) lines.push(`Neuer Versuch ab ${new Date(state.authBlockedUntil).toLocaleString('de-DE')} oder nach Änderung der Zugangsdaten.`);
+  if (state.estimate) lines.push(`Schätzung für fehlende Zeiten: ${String(state.estimate.slope).replace('.', ',')} × Börsenpreis + ${String(state.estimate.interceptCtKwh).replace('.', ',')} ct (aus ${state.estimate.pairs} Viertelstunden)`);
+  if (!state.active) lines.push('Abruf ruht: Die Preislogik „Vom Stromanbieter“ gilt weder heute noch in einem künftigen Zeitraum (gespeicherter Stand).');
+  if (!lines.length) lines.push('Noch nicht abgerufen.');
+  return lines.join('\n');
+}
+
+function bindTariffProviderBlock(section, uep) {
+  const statusEl = section.querySelector('[data-tariff-provider-status]');
+  const show = (text) => { if (statusEl) { statusEl.textContent = text; statusEl.style.whiteSpace = 'pre-line'; } };
+  apiFetch('/api/tariff-provider').then((r) => r.json()).then((data) => show(tariffProviderStateText(data?.state))).catch(() => show('Stand nicht abrufbar.'));
+  section.querySelectorAll('[data-tariff-provider-action]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const action = button.dataset.tariffProviderAction;
+      button.disabled = true;
+      show(action === 'test' ? 'Verbindung wird geprüft …' : 'Preise werden abgerufen …');
+      try {
+        if (action === 'test') {
+          syncRenderedFieldsToDraft();
+          const provider = (currentDraftConfig?.userEnergyPricing || uep || {}).provider || {};
+          const res = await apiFetch('/api/tariff-provider/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(provider) });
+          const data = await res.json();
+          show(data.ok
+            ? `Verbindung in Ordnung${data.account?.label ? ` (${data.account.label})` : ''}: ${formatTariffProviderSummary(data.summary)}${data.summary?.todaySlots || data.summary?.tomorrowSlots ? '' : ` — noch keine Preise${data.account?.status && data.account.status !== 'running' ? ` (Vertragsstatus: ${data.account.status})` : ' (vor dem Lieferbeginn normal)'}.`}`
+            : `Fehlgeschlagen: ${data.error || data.code || 'unbekannt'}`);
+        } else {
+          const res = await apiFetch('/api/tariff-provider/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+          const data = await res.json();
+          show(data.ok ? tariffProviderStateText(data.state) : `Fehlgeschlagen: ${data.error || data.code || 'unbekannt'}`);
+        }
+      } catch (error) {
+        show(`Fehlgeschlagen: ${error.message}`);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
 }
 
 function bindHistoryImportControls(panel) {

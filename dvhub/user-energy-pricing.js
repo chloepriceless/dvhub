@@ -1,9 +1,11 @@
 // user-energy-pricing.js -- Pure domain pricing functions.
 // Extracted from server.js (Phase 1, Plan 02).
-// Imports only from server-utils.js and schedule-runtime.js. ZERO state/config dependencies.
+// Imports only from server-utils.js and schedule-runtime.js — plus the
+// Anbieterpreis-Speicher (services/tariff-provider), the only state it reads.
 
 import { roundCtKwh, localMinutesOfDay } from './server-utils.js';
 import { parseHHMM } from './schedule-runtime.js';
+import { providerImportPriceCtKwh } from './services/tariff-provider/provider-pricing.js';
 
 // --- Helpers ---
 
@@ -91,6 +93,9 @@ export function resolveImportPriceCtKwhForSlot(row, pricing = {}, timezone = 'Eu
     const fixed = Number(pricing?.fixedGrossImportCtKwh);
     return Number.isFinite(fixed) ? roundCtKwh(fixed) : null;
   }
+
+  // Preis vom Stromanbieter — wie resolveUserImportPriceCtKwhForSlot (config-model.js).
+  if (pricing?.mode === 'provider') return providerImportPriceCtKwh(row, pricing, activeWindow);
 
   // Dynamic tariff: the window price substitutes the Netzentgelt component
   // (issue #11 — it was wrongly returned as the absolute slot price before).

@@ -3,8 +3,12 @@
 // and Einspeisepreise (feed-in compensation), including all German electricity
 // price components per MiSpeL/StromNEV regulations (2026 defaults).
 //
-// Pure functions -- no side effects, no config reads.
+// Pure functions -- no side effects, no config reads (im Anbieter-Modus liest
+// der Bezugspreis den Anbieterpreis-Speicher, services/tariff-provider).
 // Config is passed in via enrichPriceSlotsWithCosts(slots, cfg).
+
+import { resolveUserImportPriceCtKwhForSlot, resolveActiveUserEnergyPricingForTimestamp } from '../../config-model.js';
+import { providerModeInUse } from '../tariff-provider/provider-pricing.js';
 
 /**
  * Compute import and feed-in costs for a single time slot.
@@ -141,6 +145,23 @@ export function enrichPriceSlotsWithCosts(priceSlots, cfg, options = {}) {
     enabled: uep.usesParagraph14aModule3 ?? false,
     reductionCtKwh: cfg.optimizer?.paragraph14a?.reductionCtKwh ?? 0
   };
+
+  // Preis vom Stromanbieter (Grundtarif oder Zeitraum, z. B. ab Lieferbeginn):
+  // in diesen Slots je Slot wie überall sonst (Anbieterpreis bzw. Schätzung).
+  if (providerModeInUse(uep)) {
+    const timeZone = cfg.schedule?.timezone;
+    return priceSlots.map(slot => {
+      const costs = computeSlotCosts(slot.ctKwh, tariff, paragraph14a);
+      const active = resolveActiveUserEnergyPricingForTimestamp(slot.ts, uep, { timeZone }) || uep;
+      if (active.mode !== 'provider') return { ...slot, importCtKwh: costs.importCtKwh, feedInCtKwh: costs.feedInCtKwh };
+      const importCtKwh = resolveUserImportPriceCtKwhForSlot({ ts: slot.ts, ct_kwh: slot.ctKwh }, uep, { timeZone });
+      return {
+        ...slot,
+        importCtKwh: Number.isFinite(importCtKwh) ? importCtKwh : costs.importCtKwh,
+        feedInCtKwh: costs.feedInCtKwh
+      };
+    });
+  }
 
   return priceSlots.map(slot => {
     const costs = computeSlotCosts(slot.ctKwh, tariff, paragraph14a);
