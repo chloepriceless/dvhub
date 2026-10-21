@@ -5,6 +5,10 @@
    ════════════════════════════════════════════════════════════ */
 
 :root {
+  /* Browser-eigene Bedienteile (Ausklapplisten, Bildlaufleisten, Datumswahl)
+     dunkel zeichnen, passend zum Standard-Theme (Issue #23). */
+  color-scheme:dark;
+
   /* ── brand accents (geteilt mit Web) ── */
   --blue:#1f8dff;
   --cyan:#34dbff;
@@ -72,6 +76,7 @@
 }
 
 [data-theme="light"]{
+  color-scheme:light;
   --bg-0:#f5f7fb;
   --bg-1:#eef2f8;
   --bg-2:#e2e8f3;
@@ -124,6 +129,10 @@ img, svg { display:block; max-width:100%; }
 a { color:inherit; text-decoration:none; }
 button { font-family:inherit; cursor:pointer; }
 input, select, textarea { font-family:inherit; font-size:inherit; color:inherit; }
+/* Eintraege der Ausklappliste: Viele Felder haben einen halbdurchsichtigen
+   Hintergrund (--glass-2), den die Liste nicht uebernimmt; ohne eigene Farbe
+   stand die helle Schrift auf Weiss (Issue #23). */
+select option, select optgroup { background-color:var(--bg-1); color:var(--text); }
 
 /* very subtle scanlines */
 body::before {

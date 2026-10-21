@@ -261,6 +261,13 @@ verweist hierher.
 
 ### Behoben
 
+- **TimescaleDB auf Ubuntu** ([#24](https://github.com/chloepriceless/dvhub/issues/24)): Der Installer trug auch auf
+  Ubuntu die Debian-Paketquelle von Timescale ein; auf Ubuntu 26.04 gibt es die nicht, jedes `apt update` meldete
+  einen Fehler und DVhub nahm die Apache-Fassung ohne Kompression. Jetzt die passende Quelle (auch für Ableger wie
+  Mint); eine falsche wird beim nächsten Update ersetzt, eine Quelle ohne Pakete wieder entfernt.
+- **Auswahllisten im Dark Theme** ([#23](https://github.com/chloepriceless/dvhub/issues/23)): Die aufgeklappte
+  Liste war weiß mit weißer Schrift (z. B. Integrationen → Victron Wechselrichter). Jetzt dunkel im Dark Theme,
+  hell im Light Theme.
 - **Wallbox-Adapter behalten ihren Zustand:** DVhub baute für jeden Befehl und jede Statusabfrage einen neuen
   Adapter — Nexblue verlor das Lebenszeichen, EM2GO/SmartEVSE den gemerkten Modus, die EEBUS-Wallbox ihre
   LPC-Grenze, die Schreib-Entprellung (KEBA, Heidelberg, …) griff nie. Jetzt ein Adapter je Typ und Einstellung.
