@@ -44,6 +44,15 @@ test('023-02: 018 guards remove_retention_policy with a pg_extension DO $$ block
   );
 });
 
+test('018: remove_retention_policy nur unter der Community-Lizenz (Apache kennt die Funktion nicht)', () => {
+  // 21.10.2026: unter Apache scheiterte 018 bei jedem Start (test/timescale-docker.test.js).
+  assert.match(
+    active,
+    /current_setting\(\s*'timescaledb\.license'\s*,\s*true\s*\)\s*=\s*'timescale'/i,
+    '018 muss den Aufruf zusätzlich an die Lizenz binden'
+  );
+});
+
 test('023-02: 018 preserves the T-0078 remove_retention_policy string', () => {
   assert.match(
     active,

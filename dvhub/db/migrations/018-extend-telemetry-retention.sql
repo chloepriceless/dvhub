@@ -43,9 +43,16 @@
 -- crashes the whole migration — even when the runner's timescaledb flag is off.
 -- The guard checks the REAL extension state (more robust than a flag-skip: it
 -- also covers "flag true but package missing"). No-op without the extension.
+-- 21.10.2026: auch unter der Apache-Lizenz kein Aufruf — remove_retention_policy
+-- gibt es nur in der Community-Fassung („not supported under the current apache
+-- license“). Die Datei lief als eine Transaktion, also scheiterte 018 auf jeder
+-- Apache-Box bei jedem Start samt Eintrag in schema_migrations. Unter Apache
+-- kann es keine Aufbewahrungsrichtlinie geben; nach der Nachrüstung auf
+-- Community ist 018 längst eingetragen (Lauf vorher ohne Fehler).
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb')
+     AND current_setting('timescaledb.license', true) = 'timescale' THEN
     PERFORM remove_retention_policy('timeseries_samples', if_exists => TRUE);
   END IF;
 END $$;

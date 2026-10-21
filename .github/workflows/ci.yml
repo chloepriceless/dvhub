@@ -107,6 +107,59 @@ jobs:
       # DATABASE_URL is set → the { skip: !DATABASE_URL } migration describe blocks run.
       - run: npm test
 
+  # Echte TimescaleDB (21.10.2026): pg-integration läuft gegen nacktes Postgres,
+  # die Feldfehler lagen aber in TimescaleDB selbst (Apache-Lizenz, Nachrüstung,
+  # fehlende Kompression). test/timescale-docker.test.js startet das Image der
+  # Container-Suite selbst — erst mit Apache-Lizenz, dann Community auf demselben
+  # Volume — und prüft Migrationen, tuneTimescale und Schreiben in komprimierte Chunks.
+  timescale-docker:
+    name: timescale (echte TimescaleDB, Apache → Community)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: dvhub
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+      # Dasselbe Image wie docker/compose.yml (TIMESCALE_TAG aus docker/.env.example).
+      - name: TimescaleDB-Image
+        run: |
+          tag="$(sed -n 's/^TIMESCALE_TAG=//p' ../docker/.env.example)"
+          echo "DVHUB_TS_IMAGE=timescale/timescaledb:${tag}" >> "$GITHUB_ENV"
+          docker pull -q "timescale/timescaledb:${tag}"
+      - run: node --test test/timescale-docker.test.js
+
+  # Native Nachrüstung (21.10.2026, Feldbox 9753e9e5): echtes Ubuntu 26.04 mit
+  # PostgreSQL 18, Ubuntus Apache-TimescaleDB und dem Community-Paket von
+  # packagecloud. timescale-provision.sh muss die kaputte Box (Paket gewechselt,
+  # Erweiterung alt, Zeilen in der Elterntabelle), die Apache-Box mit alter Quelle
+  # und die Neuinstallation reparieren bzw. einrichten; danach DVhub-Start mit
+  # Kompression. Braucht Netz (Ubuntu-Archiv, packagecloud).
+  timescale-native:
+    name: timescale nativ (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [broken, apache, fresh]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: dvhub/package-lock.json
+      - run: npm ci
+        working-directory: dvhub
+      - run: docker run --rm -v "$PWD:/opt/dvhub" ubuntu:26.04 bash /opt/dvhub/scripts/ci/timescale-native-e2e.sh ${{ matrix.scenario }}
+
   # ESLint (Quality-Review 2026-07-01): flat-config with a minimal, high-signal
   # ruleset (no-var, prefer-const, no-unused-vars, eqeqeq, no-empty + eslint:recommended).
   #
