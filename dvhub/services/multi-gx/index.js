@@ -166,6 +166,13 @@ export function createMultiGx(ctx, deps = {}) {
     return 0;
   }
 
+  // Leistungsgrenzen der Hauptanlage: das Kleinere aus Akku und Wechselrichter.
+  function primaryLimits(cfg) {
+    const inverterW = getPowerLimits(cfg).limits.inverterMaxPowerW;
+    const lim = (w) => (w > 0 ? Math.min(w, inverterW || w) : (inverterW || undefined));
+    return { maxDischargeW: lim(Number(cfg.optimizer?.maxDischargeW) || 0), maxChargeW: lim(Number(cfg.optimizer?.maxChargeW) || 0) };
+  }
+
   // Messwerte der Hauptanlage nur, wenn sie frisch und glaubwuerdig sind —
   // dieselben Wachen wie der Entlade-Boden in schedule-eval (T-0075, Einfrier-
   // Waechter, Kreuzprobe).
@@ -246,17 +253,22 @@ export function createMultiGx(ctx, deps = {}) {
       followerBatteryW: readOk ? side.batteryPowerW : null,
       followerAcInW: readOk ? side.acInW : null,
       unmetW: unmetW(cfg, v, pB),
-      primary: { socPct: v.soc, minSocPct: v.minSocPct, maxSocPct: cfg.optimizer?.maxSocPct ?? 100, capacityWh: cfg.optimizer?.batteryCapacityWh },
+      primary: {
+        socPct: v.soc, minSocPct: v.minSocPct, maxSocPct: cfg.optimizer?.maxSocPct ?? 100, capacityWh: cfg.optimizer?.batteryCapacityWh,
+        ...primaryLimits(cfg),
+      },
       follower: { socPct: side.socPct, minSocPct: side.minSocPct ?? c.minSocPct, maxSocPct: 100, capacityWh: c.capacityWh },
     });
 
     // Geschrieben wird nach jedem erfolgreichen Lesen — auch, wenn die Anlage
-    // gerade als nicht verfuegbar gilt, damit eine Erholung erkannt wird.
-    if (readOk) {
+    // gerade als nicht verfuegbar gilt, damit eine Erholung erkannt wird. Not-Halt
+    // schreibt seine 0 IMMER, auch wenn das Lesen gerade scheitert (Codex Runde 3).
+    const stopNow = ctrl.discretionaryWritesPaused === true;
+    if (readOk || stopNow) {
       try {
         await write(c, out.setpointW);
         writeErrors = 0;
-        setAvailable(true, c.host);
+        if (readOk) setAvailable(true, c.host);
       } catch (e) {
         writeErrors += 1;
         if (writeErrors === 1) ctx.pushLog?.('multi_gx_write_error', { error: e?.message || String(e) });

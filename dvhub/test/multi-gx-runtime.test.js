@@ -292,3 +292,16 @@ test('EOS-Abgleich: gibt nach maxRetries auf, ein neuer Wechsel ersetzt den alte
   assert.equal(timers.length, 0, 'nach 2 Wiederholungen Schluss');
   assert.equal(calls.filter((c) => c === 'replan').length, 0);
 });
+
+test('Not-Halt schreibt 0, auch wenn das Lesen gerade scheitert', async () => {
+  let readFail = false;
+  const tr = fakeTransport({ fail: (req) => readFail && req.address !== 2716 });
+  const s = setup({ transport: tr });
+  for (let i = 0; i < 6; i++) await s.tick();
+  readFail = true;
+  s.state.ctrl.discretionaryWritesPaused = true;
+  await s.tick();
+  const w = tr.calls.filter((c) => c.op === 'write');
+  assert.equal(((w.at(-1).values[0] << 16) | w.at(-1).values[1]) >> 0, 0);
+  assert.ok(w.at(-1) === tr.calls.at(-1), 'die 0 war der letzte Schreibzugriff');
+});

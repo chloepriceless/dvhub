@@ -230,3 +230,19 @@ test('ungedeckter LADE-Bedarf (Hauptanlage voll): zweite Anlage laedt', () => {
   }
   assert.ok(Math.abs(s - 4000) <= 300, `zweite Anlage laedt ${s}`);
 });
+
+// Codex-Gegenpruefung Runde 3 (21.10.)
+test('harte Leistungsgrenze gilt auch, wenn der gemessene AC-IN weit darueber liegt', () => {
+  const c = createFollowerController(cfg({ maxDischargeW: 500, maxChargeW: 500 }));
+  const o = c.tick({ nowMs: 0, primaryBatteryW: -4000, followerBatteryW: -8000, followerAcInW: -8000,
+    primary: { ...SIDE, socPct: 50 }, follower: { ...SIDE, socPct: 50 } });
+  assert.ok(o.setpointW >= -500, `Sollwert ${o.setpointW}`);
+});
+
+test('Hauptanlage an ihrer Grenze: der Rest geht ganz an die zweite Anlage, nicht nur ihr Anteil', () => {
+  const c = createFollowerController(cfg());
+  const o = c.tick({ nowMs: 0, primaryBatteryW: -5000, followerBatteryW: -1000, unmetW: 6000,
+    primary: { ...SIDE, socPct: 50, maxDischargeW: 5000 }, follower: { ...SIDE, socPct: 50 } });
+  // gesamt -12000, Hauptanlage kann hoechstens -5000 → zweite mindestens -7000
+  assert.equal(o.desiredFollowerBatteryW, -7000);
+});

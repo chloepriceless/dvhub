@@ -153,7 +153,14 @@ export function createFollowerController(config = {}) {
     if (f == null || p == null) weight = 0;               // ohne SoC kein Anteil
     else if (f + p > 0) weight = f / (f + p);
     else weight = 0;                                      // beide leer bzw. voll
-    const desired = Math.max(-maxDischargeW, Math.min(maxChargeW, totalAvg * weight));
+    // Was die Hauptanlage nicht leisten kann, geht ganz an die zweite Anlage —
+    // nicht nur ihr Anteil (Codex Runde 3). Grenzen der Hauptanlage optional.
+    let share = totalAvg * weight;
+    const pDis = finite(input.primary?.maxDischargeW) ? Number(input.primary.maxDischargeW) : null;
+    const pCh = finite(input.primary?.maxChargeW) ? Number(input.primary.maxChargeW) : null;
+    if (totalAvg < 0 && pDis != null) share = Math.min(share, totalAvg + pDis);
+    if (totalAvg > 0 && pCh != null) share = Math.max(share, totalAvg - pCh);
+    const desired = Math.max(-maxDischargeW, Math.min(maxChargeW, share));
 
     let reason = 'ok';
     const err = desired - followerW;
@@ -163,12 +170,13 @@ export function createFollowerController(config = {}) {
       setpoint += Math.max(-max, Math.min(max, err * gain));
       reason = 'follow';
     }
-    setpoint = Math.max(-maxDischargeW, Math.min(maxChargeW + localLoadW, setpoint));
-    // Leine: hoechstens LEASH_W vom gemessenen AC-IN entfernt (Anti-Windup).
+    // Leine: hoechstens LEASH_W vom gemessenen AC-IN entfernt (Anti-Windup) …
     if (acInW != null) {
       const leash = Math.max(LEASH_W, 2 * deadbandW);
       setpoint = Math.max(acInW - leash, Math.min(acInW + leash, setpoint));
     }
+    // … und die harten Grenzen ZULETZT, damit die Leine sie nie aufweitet (Codex Runde 3).
+    setpoint = Math.max(-maxDischargeW, Math.min(maxChargeW + localLoadW, setpoint));
     if (input.exportBlocked === true && setpoint < 0) { setpoint = 0; reason = 'export_blocked'; }
     else if (input.exportBlocked === true) reason = 'export_blocked';
     return out(reason, desired, weight);
