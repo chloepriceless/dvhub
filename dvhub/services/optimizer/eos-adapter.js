@@ -6,6 +6,8 @@ import http from 'node:http';
 import { classifyEosSlotAction } from '../../eos-zeitplan-map.js';
 import { keepOnGridSlots } from './eos-forecast-bridge.js';
 import { getPowerLimits } from '../power-limits.js';
+// Zweite GX am selben Anschluss: Plan-Umrechnung mit der Leistung beider Akkus.
+import { planningCfg } from '../multi-gx/planning.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -361,7 +363,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
 
     let slots;
     try {
-      slots = convertEosPlanToSlots(entries, getCfg(), planEndTs);
+      slots = convertEosPlanToSlots(entries, planningCfg(ctx, getCfg()), planEndTs);
     } catch {
       return null;
     }
@@ -515,7 +517,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // "macht EOS in der Vorhersage die richtigen Sachen?" by reading the per-slot
     // action in the EOS-Übersicht. Levers mirror the kleine Börsenautomatik:
     // dcExportMode (PV- / PV+Akku-Einspeisung) and gridSetpointW (Halten).
-    const cfg = (typeof getCfg === 'function' ? getCfg() : null) || {};
+    const cfg = planningCfg(ctx, (typeof getCfg === 'function' ? getCfg() : null) || {});
     const bufferW = Number(cfg?.dcExportMode?.bufferW) || 100;
     const connectionLimitW = getPowerLimits(cfg).limits.inverterMaxPowerW;
     // Resolve the preview AC cap along the SAME chain EOS uses for its battery

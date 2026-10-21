@@ -47,6 +47,13 @@ export const BETA_FEATURES = {
     gate: 'runtime',
     paths: ['victron.mqttCrossCheck']
   },
+  multiGx: {
+    label: 'Zweite GX-Anlage am selben Anschluss',
+    // Laufzeit-Sperre: ausserhalb des Bleeding-Edge-Kanals spricht DVhub die
+    // zweite GX nicht an, bis eine echte Doppelanlage gelaufen ist (21.10.2026).
+    gate: 'runtime',
+    paths: ['multiGx']
+  },
   controlWriteVerify: {
     label: 'Schreib-Verifikation',
     gate: 'runtime',

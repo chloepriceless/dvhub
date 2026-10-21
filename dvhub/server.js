@@ -186,6 +186,7 @@ import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
+import { createMultiGx } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules, createScheduleRuleStore, scheduleRulesPath, readScheduleRules } from './services/optimizer/rule-store.js';
@@ -1347,6 +1348,11 @@ const setSystemWarning = (id, message) => {
 };
 ctx.feedInCap = createFeedInCap(ctx, { getTransport: () => transport, setWarning: setSystemWarning });
 if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();
+// Zweite Victron-GX am selben Netzanschluss (services/multi-gx): eigener
+// Modbus-Pool, damit eine haengende zweite GX die Hauptanlage nie ausbremst.
+// Ohne multiGx.enabled keine einzige Anfrage.
+ctx.multiGx = createMultiGx(ctx, { transport: createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
+if (IS_RUNTIME_PROCESS) ctx.multiGx.start();
 ctx.applyControlTarget = scheduler.applyControlTarget;
 // Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
 // MQTT-Command-Subscriber gehen durch denselben geprüften Pfad.
@@ -2753,6 +2759,7 @@ async function gracefulShutdown(signal) {
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
   safeSync('victronGx.stop', () => ctx.victronGx?.stop?.());
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
+  safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
   safeSync('ocppServer.stop', () => { ctx.ocppServer?.stop?.(); });
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());

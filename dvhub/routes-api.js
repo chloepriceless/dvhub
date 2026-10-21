@@ -2272,6 +2272,9 @@ export function createApiRoutes(ctx) {
       active: !!state.ctrl.discretionaryWritesPaused,
       pausedAt: state.ctrl.pausedAt || null
     };
+    // Zweite GX-Anlage am selben Anschluss (services/multi-gx), nur In-Memory.
+    // Im Runtime-Worker-Betrieb steht der Zustand im Worker → hier null.
+    payload.multiGx = state.multiGx ?? null;
     // Victron device alarms (read-only display). Source is payload.victron.alarms,
     // which the POLLER (possibly a separate runtime-worker process) writes and
     // which reaches here through the runtime IPC snapshot — NOT web-process-local

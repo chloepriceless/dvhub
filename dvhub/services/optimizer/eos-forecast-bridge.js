@@ -40,6 +40,8 @@ import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
 import { reserveHeaterLoad } from '../devices/heater-load-reservation.js';
 import { localDate } from '../../tz-fast.js';
+// Zweite GX am selben Anschluss: Ladestand beider Akkus, nach Kapazitaet gewichtet.
+import { planningSocPct } from '../multi-gx/planning.js';
 
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
@@ -454,7 +456,7 @@ export function createEosForecastBridge(ctx) {
     const pushed = [];
     const errors = {};
 
-    const socPct = Number(state?.victron?.soc);
+    const socPct = Number(planningSocPct(ctx));
     if (!Number.isFinite(socPct)) {
       return { pushed, errors, skipped: 'no live battery soc in state' };
     }
@@ -557,7 +559,7 @@ export function createEosForecastBridge(ctx) {
   async function socForRun() {
     const cfg = getCfg();
     const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
-    const socPct = Number(state?.victron?.soc);
+    const socPct = Number(planningSocPct(ctx));
     if (!Number.isFinite(socPct)) return { skipped: 'no live battery soc in state' };
     const evSoc = resolveEvSocPct(ctx);
     const evLegacyPct = Number(state?.victron?.evSocPct);

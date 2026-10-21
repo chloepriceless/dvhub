@@ -1018,6 +1018,136 @@ function buildFieldDefinitions() {
       help: 'Wie viele Stunden vor der Lade-Deadline der DC-Export abgeschaltet wird, falls der Ziel-SOC noch nicht erreicht wurde. Standard: 2 Stunden.'
     },
 
+    // Zweite Victron-GX am selben Netzanschluss (Chrissi 21.10.2026,
+    // services/multi-gx). Beta, bis eine echte Doppelanlage gelaufen ist.
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      groupDescription: 'Eine zweite Victron-GX-Anlage ohne PV und ohne eigenen Zähler am selben Hausanschluss, z. B. die Anlage der anderen Haushälfte. Diese Anlage hier (mit Zähler) regelt den Anschluss wie bisher; die zweite übernimmt träge einen Teil der Akkuleistung, nach Ladestand verteilt. EOS plant beide Akkus als einen.',
+      groupOrder: 82,
+      beta: true,
+      path: 'multiGx.enabled',
+      label: 'Zweite Anlage mitsteuern',
+      type: 'boolean',
+      help: 'Aus = DVhub spricht die zweite Anlage nicht an, alles wie bisher. An = DVhub liest Ladestand und Akkuleistung der zweiten GX und schreibt ihren Netz-Sollwert. Voraussetzungen an der zweiten GX: Modbus TCP an, ESS aktiv, kein Netzzähler eingerichtet.'
+    },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.host',
+      label: 'Adresse der zweiten GX',
+      type: 'text',
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'IP-Adresse oder Name der zweiten GX im Heimnetz.'
+    },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.port',
+      label: 'Modbus-Port',
+      type: 'number',
+      min: 1,
+      max: 65535,
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'Standard 502.'
+    },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.unitId',
+      label: 'Unit-ID (System)',
+      type: 'number',
+      min: 0,
+      max: 247,
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'Standard 100 (com.victronenergy.system).'
+    },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.batteryCapacityWh',
+      label: 'Akkukapazität zweite Anlage (Wh)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'Nutzbare Kapazität. Zählt für EOS zur Kapazität dieser Anlage dazu.'
+    },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.maxChargeW',
+      label: 'Ladeleistung zweite Anlage (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'Höchste Ladeleistung. Zählt für EOS dazu und begrenzt den Sollwert der zweiten Anlage.'
+    },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.maxDischargeW',
+      label: 'Entladeleistung zweite Anlage (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'Höchste Entladeleistung. Zählt für EOS dazu und begrenzt den Sollwert der zweiten Anlage.'
+    },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.minSocPct',
+      label: 'Mindest-Ladestand zweite Anlage (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'Gilt, solange DVhub den Mindest-Ladestand nicht aus der zweiten GX lesen kann (ESS → Mindest-SoC).'
+    },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.rampWPerS',
+      label: 'Nachführung (W/s)',
+      type: 'number',
+      min: 1,
+      max: 5000,
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'Wie schnell sich der Sollwert der zweiten Anlage höchstens ändert. Standard 200 W/s.'
+    },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.deadbandW',
+      label: 'Totband (W)',
+      type: 'number',
+      min: 0,
+      max: 5000,
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'Kleinere Abweichungen vom Anteil bleiben stehen. Standard 300 W.'
+    },
+
     // Feste Einspeisegrenze (Christin 2026-10-20): keine Vorgabe ab Werk.
     {
       section: 'system',
@@ -4038,6 +4168,7 @@ export function createDefaultConfig() {
     // Feste Einspeisegrenze (services/feed-in-cap): ab Werk NICHT angegeben —
     // der Betreiber wählt, welche Grenze für die Anlage gilt, oder „keine“.
     feedInCap: { mode: '', percent: null, watts: null },
+    multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300 },
     // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
     // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.
     vehicleEvcc: { enabled: false, template: '', params: {}, intervalMin: 15 },
@@ -5736,7 +5867,7 @@ const SETTINGS_AREAS = [
     icon: '⌂',
     description: 'Wechselrichter, Akku, PV und Standort — was DVhub über deine Anlage wissen muss.',
     groups: ['connection', 'batteryLimits', 'pv', 'location'],
-    advanced: ['mqttBridge', 'deviceAlarms', 'freezeWatchdog', 'mqttCrossCheck'],
+    advanced: ['mqttBridge', 'deviceAlarms', 'freezeWatchdog', 'mqttCrossCheck', 'secondGx'],
     editors: ['batteryStages', 'forecastStrings']
   },
   {
