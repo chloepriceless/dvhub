@@ -18,7 +18,7 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'timesc
 // Was packagecloud.io/timescale/timescaledb anbietet (Stand 21.10.2026, per curl geprueft).
 const SERVED = ['debian/ bookworm', 'debian/ trixie', 'ubuntu/ noble', 'ubuntu/ resolute'];
 
-function setup(osRelease, { existingList, transient = false } = {}) {
+function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsp-'));
   const bin = join(dir, 'bin');
   execFileSync('mkdir', ['-p', bin]);
@@ -29,6 +29,7 @@ function setup(osRelease, { existingList, transient = false } = {}) {
   writeFileSync(keyring, 'key');
   writeFileSync(osFile, osRelease);
   if (existingList) writeFileSync(repoList, existingList);
+  execFileSync('mkdir', ['-p', join(dir, 'postgresql', '18', 'main', 'conf.d')]);
   const fake = (name, body = '') => {
     const p = join(bin, name);
     writeFileSync(p, `#!/usr/bin/env bash\necho "${name} $*" >> "${log}"\n${body}\n`);
@@ -68,7 +69,21 @@ if [[ "$1" == policy && "$2" == timescaledb-2-* && -f "${repoList}" ]]; then
 fi`);
   fake('dpkg', 'exit 1');
   fake('psql');
-  fake('su');
+  // su: Katalog/Lade-Proben beantworten. extHave = Version im Katalog vor dem
+  // Lauf ('' = Erweiterung fehlt); CREATE/ALTER setzen sie auf 2.31.0.
+  const extFile = join(dir, 'ext');
+  writeFileSync(extFile, extHave);
+  fake('su', `
+cmd="$3"
+case "$cmd" in
+  *"CREATE EXTENSION"*) echo -n 2.31.0 > "${extFile}" ;;
+  *"ALTER EXTENSION"*) ${alterFails ? 'echo "ERROR:  kaputt" >&2; exit 1' : `echo -n 2.31.0 > "${extFile}"`} ;;
+  *"FROM pg_extension WHERE extname"*) cat "${extFile}"; echo ;;
+  *"default_version FROM pg_available"*) echo "2.31.0" ;;
+  # Lizenz erst nach der Installation (vorher Apache) → kein Schnell-Skip.
+  *"current_setting('timescaledb.license')"*) grep -q "^apt-get install -y timescaledb-2" "${log}" && echo "timescale" || echo "apache" ;;
+esac
+exit 0`);
   fake('systemctl');
   fake('pg_lsclusters', 'echo "18  main    5432 online postgres /var/lib/postgresql/18/main"');
   fake('lsb_release', 'exit 1');
@@ -83,7 +98,8 @@ fi`);
   });
   const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []);
   const list = () => (existsSync(repoList) ? readFileSync(repoList, 'utf8').trim() : null);
-  return { run, calls, list, keyring, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  const sql = () => calls().filter((l) => l.startsWith('su ')).join('\n');
+  return { run, calls, list, keyring, sql, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 const UBUNTU_2604 = 'ID=ubuntu\nID_LIKE=debian\nVERSION_ID="26.04"\nVERSION_CODENAME=resolute\nUBUNTU_CODENAME=resolute\n';
@@ -159,5 +175,42 @@ test('packagecloud kurz nicht erreichbar (503): richtige Quelle bleibt stehen', 
   try {
     s.run();
     assert.match(s.list() || '', /timescaledb\/ubuntu\/ resolute main$/);
+  } finally { s.cleanup(); }
+});
+
+// Feldfall 21.10.2026: Erweiterung 2.25.1 (Apache) im Katalog, Community 2.31.0
+// installiert. CREATE EXTENSION scheiterte dort als erste Anweisung, das ALTER
+// kam nie. Echt in ubuntu:26.04 nachgestellt; hier nur die Reihenfolge.
+test('Erweiterung vorhanden: ALTER statt CREATE, als erste Anweisung (-X), danach Neustart', () => {
+  const s = setup(UBUNTU_2604, { extHave: '2.25.1' });
+  try {
+    s.run();
+    const c = s.calls();
+    const sqlLines = c.filter((l) => l.startsWith('su '));
+    assert.ok(!sqlLines.some((l) => l.includes('CREATE EXTENSION')), 'kein CREATE bei vorhandener Erweiterung');
+    const iAlter = c.findIndex((l) => l.includes('ALTER EXTENSION timescaledb UPDATE'));
+    assert.ok(iAlter >= 0, 'ALTER laeuft');
+    assert.match(c[iAlter], /psql -X -v ON_ERROR_STOP=1 -q -d dvhub -c 'ALTER EXTENSION timescaledb UPDATE'/);
+    assert.ok(c.slice(iAlter).some((l) => l === 'systemctl restart postgresql'), 'Postgres-Neustart nach dem ALTER');
+    assert.ok(c.some((l) => l.includes('timescaledb.disable_load=on') && l.includes('DELETE FROM ONLY') === false), 'Katalog ohne Loader gelesen');
+  } finally { s.cleanup(); }
+});
+
+test('Erweiterung fehlt: CREATE wie bisher, kein ALTER', () => {
+  const s = setup(UBUNTU_2604);
+  try {
+    s.run();
+    assert.match(s.sql(), /CREATE EXTENSION IF NOT EXISTS timescaledb/);
+    assert.doesNotMatch(s.sql(), /ALTER EXTENSION/);
+  } finally { s.cleanup(); }
+});
+
+test('ALTER scheitert: Exit 1 mit Hinweis, Fehler im Protokoll statt /dev/null', () => {
+  const s = setup(UBUNTU_2604, { extHave: '2.25.1', alterFails: true });
+  try {
+    assert.throws(() => s.run(), (e) => e.status === 1 && /FEHLER: TimescaleDB: ALTER EXTENSION/.test(e.stderr));
+    const log = readFileSync(join(s.dir, 'timescale-provision.log'), 'utf8');
+    assert.match(log, /ERROR: {2}kaputt/);
+    assert.match(log, /FEHLER: ALTER EXTENSION/);
   } finally { s.cleanup(); }
 });

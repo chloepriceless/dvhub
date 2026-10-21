@@ -42,7 +42,7 @@ if [[ "$cmd" == *"FROM pg_extension WHERE extname"* ]]; then cat ${state}.ext; e
 if [[ "$cmd" == *"pg_available_extensions"* ]]; then echo "${bin}"; exit 0; fi
 if [[ "$cmd" == *"ALTER EXTENSION"* ]]; then echo "ALTER" >> ${log}; ${alterFails ? 'exit 1' : `echo -n ${bin} > ${state}.ext; exit 0`}; fi
 exit 0`);
-  const env = { ...process.env, PATH: `${bindir}:${process.env.PATH}`, STACK_UPDATE_ALLOW_NONROOT: '1',
+  const env = { ...process.env, PATH: `${bindir}:${process.env.PATH}`, STACK_UPDATE_ALLOW_NONROOT: '1', STACK_UPDATE_PROVISION_WAIT: '0',
     INSTALL_DIR: path.join(dir, 'install'), DATA_DIR: data, SERVICE_NAME: 'dvhub', STACK_UPDATE_VERSION: '1.0.8@abc' };
   const run = () => spawnSync('bash', [SCRIPT], { env, encoding: 'utf8' });
   const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []);

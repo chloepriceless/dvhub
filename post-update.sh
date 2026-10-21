@@ -478,7 +478,11 @@ if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 
   # banner (community-scripts Proxmox LXCs — prod's platform) to the psql output,
   # so the == "timescale" check would wrongly fail and re-launch provisioning on
   # every restart.
-  [[ "$(su postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" dvhub" 2>/dev/null | tr -d '[:space:]')" == "timescale" ]] && TS_ACTIVE=1
+  # Seit 21.10.2026 entscheidet timescale-provision.sh --check: fertig erst, wenn
+  # die Bibliothek laedt, keine Parktabelle wartet und keine Hypertable Zeilen in
+  # ihrer Elterntabelle hat (Begruendung dort). Scheitert die Abfrage, weil die
+  # Bibliothek zur Katalog-Version fehlt, startet die Nachruestung und repariert.
+  [[ "$(DB_NAME=dvhub bash "$INSTALL_DIR/timescale-provision.sh" --check 2>/dev/null)" == "timescale" ]] && TS_ACTIVE=1
   if [[ "$TS_ACTIVE" -eq 1 ]]; then
     echo "  TimescaleDB: OK (Community-Edition aktiv)"
   elif systemctl is-active --quiet dvhub-timescale-provision.service 2>/dev/null; then
@@ -486,8 +490,12 @@ if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 
   else
     echo "  TimescaleDB: nicht aktiv — starte entkoppelte Hintergrund-Provisionierung..."
     if command -v systemd-run >/dev/null 2>&1; then
+      # Ausgabe in dieselbe Datei wie beim setsid-Weg unten (das Journal ist fuer
+      # den Support-Zugang nicht lesbar).
       systemd-run --collect --quiet --unit "dvhub-timescale-provision" \
         --description "DVhub TimescaleDB provisioning (retrofit)" \
+        --property=StandardOutput="append:$DATA_DIR/timescale-provision.log" \
+        --property=StandardError="append:$DATA_DIR/timescale-provision.log" \
         --setenv=SERVICE_USER="$SERVICE_USER" \
         --setenv=INSTALL_DIR="$INSTALL_DIR" \
         --setenv=DATA_DIR="$DATA_DIR" \

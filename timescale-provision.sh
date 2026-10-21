@@ -28,13 +28,20 @@
 #      still gets a working hypertable (014's license guard skips the TSL parts).
 #      An already-installed Apache package is removed first (same .so, conflicts).
 #   5. shared_preload_libraries drop-in (conf.d) + postgres restart
-#   6. CREATE EXTENSION + ALTER EXTENSION ... UPDATE (retrofit Apache->Community
-#      or a version bump; no-op when already current)
+#   6. Erweiterung anlegen (CREATE) bzw. auf die installierte Version heben
+#      (ALTER EXTENSION ... UPDATE als erste Anweisung einer frischen Sitzung),
+#      danach Postgres-Neustart
+#   6b. Zeilen, die im kaputten Zwischenzustand in der Elterntabelle einer
+#      Hypertable gelandet sind, zurueck in die Chunks
+#   6c. pruefen, dass die Bibliothek laedt; timescale-status.json neu schreiben
 #   7. flip cfg.telemetry.database.timescaledb = true so migration 014 runs
 #
 # NON-FATAL contract enforced by the CALLER (install.sh subshell / post-update.sh
 # background unit). A box where the package/extension can't be provisioned stays
 # on plain Postgres (config left false) -- graceful degradation, never a crash.
+# Ausgaben von apt und psql stehen in $DATA_DIR/timescale-provision.log, ein
+# Fehlschlag ab Schritt 6 zusaetzlich in timescale-status.json (GUI-Karte
+# „Datenbank-Engine“).
 set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
@@ -42,6 +49,7 @@ SERVICE_USER="${SERVICE_USER:-dvhub}"
 DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
 CONFIG_PATH="${CONFIG_PATH:-/etc/dvhub/config.json}"
 DB_NAME="${DB_NAME:-dvhub}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # TS_PROVISION_EUID, OS_RELEASE, REPO_LIST, KEYRING, PG_ETC: nur fuer Tests
 # (test/timescale-provision.test.js), im Betrieb nie gesetzt.
@@ -53,6 +61,29 @@ fi
 # No PostgreSQL client → nothing to provision (SQLite store or DB-less box).
 if ! command -v psql >/dev/null 2>&1; then
   echo "  TimescaleDB: kein psql — uebersprungen (kein PostgreSQL-Store)."
+  exit 0
+fi
+
+# Fertig ist die Box erst, wenn
+#   - die Community-Bibliothek laedt (Lizenz „timescale“; die Einstellung gibt es
+#     nur bei geladener Bibliothek — fehlt sie zur Katalog-Version, scheitert die
+#     Abfrage ganz),
+#   - keine Parktabelle aus Schritt 6b mehr wartet und
+#   - keine Hypertable Zeilen in ihrer Elterntabelle hat. Die sieht man nur mit
+#     abgeschaltetem Loader; query_to_xml statt PL/pgSQL, damit es eine einfache
+#     Abfrage bleibt. Faengt auch eine Box, die jemand von Hand per ALTER
+#     repariert hat: die Zeilen aus der kaputten Zeit waeren sonst fuer immer
+#     unsichtbar.
+# Ausgabe „timescale“ = fertig. post-update.sh fragt das mit --check ab.
+ts_ready() {
+  local lic roots
+  lic="$(su postgres -c "psql -X -tAqc \"SELECT current_setting('timescaledb.license') || (SELECT CASE WHEN count(*) > 0 THEN '+rescue' ELSE '' END FROM pg_class WHERE relname LIKE 'dvhub!_ts!_rescue!_%' ESCAPE '!')\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]')" || true
+  [[ "$lic" == "timescale" ]] || { echo "${lic:-unbekannt}"; return 0; }
+  roots="$(su postgres -c "PGOPTIONS='-c timescaledb.disable_load=on' psql -X -tAqc \"SELECT count(*) FROM _timescaledb_catalog.hypertable h WHERE (xpath('/row/n/text()', query_to_xml(format('SELECT EXISTS (SELECT 1 FROM ONLY %I.%I) AS n', h.schema_name, h.table_name), false, true, '')))[1]::text = 'true'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]')" || true
+  if [[ -n "$roots" && "$roots" != "0" ]]; then echo "${lic}+elterntabelle"; else echo "$lic"; fi
+}
+if [[ "${1:-}" == "--check" ]]; then
+  ts_ready
   exit 0
 fi
 
@@ -89,6 +120,17 @@ if [[ "$(os_field ID)" == ubuntu || " $(os_field ID_LIKE) " == *" ubuntu "* ]]; 
 fi
 [[ -z "$CODENAME" ]] && CODENAME="$(lsb_release -cs 2>/dev/null || true)"
 
+# Protokoll (Feldfall 21.10.2026): alles ging nach /dev/null, unter systemd-run
+# war nicht nachvollziehbar, woran die Nachruestung scheiterte. Bei einem
+# Dauerfehler laeuft das Skript bei jedem DVhub-Start → Datei klein halten.
+LOG_FILE="${DATA_DIR}/timescale-provision.log"
+mkdir -p "$DATA_DIR" 2>/dev/null || true
+if [[ "$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)" -gt 1048576 ]]; then
+  tail -c 262144 "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv -f "$LOG_FILE.tmp" "$LOG_FILE" || true
+fi
+log_line() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
+log_line "timescale-provision: Start (PG ${PG_VER})"
+
 APACHE_PKG="postgresql-${PG_VER}-timescaledb"
 TSL_PKG="timescaledb-2-postgresql-${PG_VER}"
 TSL_LOADER="timescaledb-2-loader-postgresql-${PG_VER}"
@@ -113,13 +155,38 @@ flip_config_true() {
 }
 
 ext_license() {
-  su postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'
+  su postgres -c "psql -X -tAqc \"SELECT current_setting('timescaledb.license')\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'
+}
+
+# Katalog lesen, ohne dass der Loader die versionierte Bibliothek laedt. Fehlt
+# die Bibliothek zur Katalog-Version, scheitert sonst schon die erste Anweisung
+# jeder Sitzung, auch ein SELECT auf pg_extension (am echten Fall geprueft).
+psql_noload() {
+  su postgres -c "PGOPTIONS='-c timescaledb.disable_load=on' psql -X -tAq -d ${DB_NAME} -c \"$1\"" 2>>"$LOG_FILE" | tr -d '[:space:]'
+}
+
+# timescale-status.json neu schreiben (derselbe Block wie der naechtliche Timer,
+# ohne apt). $1 = ok|failed, $2 = Fehlertext.
+write_status() {
+  [[ -f "$SCRIPT_DIR/pkg-maintain.sh" ]] || return 0
+  PKG_MAINTAIN_STATUS_ONLY=1 PROVISION_RESULT="$1" PROVISION_ERROR="${2:-}" \
+    SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" DB_NAME="$DB_NAME" \
+    bash "$SCRIPT_DIR/pkg-maintain.sh" >>"$LOG_FILE" 2>&1 || true
+}
+
+# Ab Schritt 6 ist ein Fehlschlag kein „bleibt halt reines Postgres“ mehr: die
+# Daten liegen schon in einer Hypertable. Sichtbar machen statt still exit 0.
+fail_visible() {
+  echo "  FEHLER: TimescaleDB: $1 — Details in ${LOG_FILE}" >&2
+  log_line "FEHLER: $1"
+  write_status failed "$1"
+  exit 1
 }
 
 # --- 2. Fast-skip if the Community extension is already active (prod) ---------
 # prod already runs the Community build out-of-band → this makes the script a
 # true no-op there; the config flip below still runs to keep state consistent.
-if [[ "$(ext_license)" == "timescale" ]]; then
+if [[ "$(ts_ready)" == "timescale" ]]; then
   echo "  TimescaleDB: Community-Edition bereits aktiv (PG ${PG_VER}) — nur Config abgleichen."
   flip_config_true
   exit 0
@@ -151,6 +218,7 @@ fi
 if [[ "$NEED_APT_UPDATE" -eq 1 ]]; then
   # LC_ALL=C: apt meldet sonst in der Sprache der Box („Fehl:“, „Depot“).
   APT_OUT="$(LC_ALL=C apt-get update 2>&1 || true)"
+  printf '%s\n' "$APT_OUT" >>"$LOG_FILE" 2>/dev/null || true
   # Hat packagecloud fuer diese Distribution nichts (kein Release), bliebe die
   # Quelle sonst stehen und jedes `apt update` der Box meldete den Fehler → wieder
   # entfernen, unten greift der Apache-Fallback. Nur bei genau diesem Befund:
@@ -159,7 +227,7 @@ if [[ "$NEED_APT_UPDATE" -eq 1 ]]; then
   if printf '%s\n' "$APT_OUT" | grep -E "^(E|Error): The repository '[^']*packagecloud\.io/timescale/[^']*' does not have a Release file" >/dev/null; then
     echo "  WARN: packagecloud hat keine TimescaleDB-Pakete fuer ${DISTRO} ${CODENAME} — apt-Quelle wieder entfernt." >&2
     rm -f "$REPO_LIST"
-    apt-get update >/dev/null 2>&1 || true
+    apt-get update >>"$LOG_FILE" 2>&1 || true
   fi
 fi
 
@@ -180,12 +248,12 @@ if [[ "$USE_TSL" -eq 1 ]]; then
   # the Community package — remove it first (retrofit Apache→Community).
   if dpkg -s "$APACHE_PKG" >/dev/null 2>&1; then
     echo "  TimescaleDB: entferne Apache-Paket ${APACHE_PKG} (wird durch Community ersetzt) ..."
-    DEBIAN_FRONTEND=noninteractive apt-get remove -y "$APACHE_PKG" >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get remove -y "$APACHE_PKG" >>"$LOG_FILE" 2>&1 || true
     PKG_CHANGED=1
   fi
   if dpkg -s "$TSL_PKG" >/dev/null 2>&1; then
     echo "  TimescaleDB: Community-Paket ${TSL_PKG} bereits installiert."
-  elif DEBIAN_FRONTEND=noninteractive apt-get install -y "$TSL_LOADER" "$TSL_PKG" >/dev/null 2>&1; then
+  elif DEBIAN_FRONTEND=noninteractive apt-get install -y "$TSL_LOADER" "$TSL_PKG" >>"$LOG_FILE" 2>&1; then
     echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
     PKG_CHANGED=1
   else
@@ -199,7 +267,7 @@ if [[ "$USE_TSL" -eq 0 ]]; then
   # license guard skips compression + continuous aggregates on this build. Keeps
   # a box functional where packagecloud has no build for the platform/codename.
   if ! dpkg -s "$APACHE_PKG" >/dev/null 2>&1; then
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y "$APACHE_PKG" >/dev/null 2>&1; then
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y "$APACHE_PKG" >>"$LOG_FILE" 2>&1; then
       echo "  TimescaleDB: ${APACHE_PKG} (Apache-Fallback) installiert."
       PKG_CHANGED=1
     else
@@ -210,6 +278,19 @@ if [[ "$USE_TSL" -eq 0 ]]; then
     echo "  TimescaleDB: ${APACHE_PKG} (Apache) bereits installiert."
   fi
 fi
+
+# Neustart + warten, bis Postgres antwortet. Die Probe laeuft in der Datenbank
+# postgres: dort ist TimescaleDB nicht angelegt, sie geht also auch, wenn die
+# Bibliothek zur Katalog-Version in ${DB_NAME} fehlt.
+restart_pg() {
+  systemctl restart postgresql >>"$LOG_FILE" 2>&1 || return 1
+  local _
+  for _ in $(seq 1 30); do
+    su postgres -c "psql -X -tAqc 'SELECT 1' postgres" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 1
+}
 
 # --- 5. shared_preload_libraries drop-in + restart ---------------------------
 # TimescaleDB is a preloaded extension — CREATE EXTENSION fails until the library
@@ -231,22 +312,127 @@ else
 fi
 if [[ "$NEED_RESTART" -eq 1 ]]; then
   echo "  TimescaleDB: Postgres-Neustart (neue Bibliothek/Preload) ..."
-  systemctl restart postgresql || { echo "  WARN: Postgres-Restart fehlgeschlagen." >&2; exit 0; }
-  # brief readiness wait
-  for _ in $(seq 1 10); do su postgres -c "psql -tAqc 'SELECT 1'" >/dev/null 2>&1 && break; sleep 1; done
+  restart_pg || { echo "  WARN: Postgres-Restart fehlgeschlagen." >&2; exit 0; }
 fi
 
-# --- 6. CREATE EXTENSION + ALTER UPDATE in the DVhub DB (superuser) -----------
-if su postgres -c "psql -d ${DB_NAME} -c 'CREATE EXTENSION IF NOT EXISTS timescaledb'" >/dev/null 2>&1; then
-  # Retrofit / version bump: move the extension to the installed binary's version
-  # (e.g. Apache 2.19 → Community 2.28). No-op when already current.
-  su postgres -c "psql -d ${DB_NAME} -c 'ALTER EXTENSION timescaledb UPDATE'" >/dev/null 2>&1 || true
-  EXTVER="$(su postgres -c "psql -tAqc \"SELECT extversion FROM pg_extension WHERE extname='timescaledb'\" ${DB_NAME}" 2>/dev/null)"
-  echo "  TimescaleDB: Extension in DB '${DB_NAME}' aktiv (v${EXTVER}, Lizenz $(ext_license))."
-else
-  echo "  WARN: CREATE EXTENSION timescaledb in '${DB_NAME}' fehlgeschlagen — Box bleibt auf reinem Postgres." >&2
-  exit 0
+# --- 6. Erweiterung anlegen bzw. auf die installierte Version heben ----------
+# Feldfall 21.10.2026 (Ubuntu 26.04, Apache 2.25.1 -> Community 2.31.0): Die
+# Community-Pakete bringen versionierte Bibliotheken erst ab 2.27.0 mit. Der
+# Loader laedt pro Sitzung die Bibliothek zur Version im Katalog; fehlt sie,
+# scheitert die ERSTE Anweisung jeder Sitzung („could not access file
+# "timescaledb-2.25.1"“) — auch CREATE EXTENSION IF NOT EXISTS, an dem das
+# Skript frueher haengen blieb, bevor das ALTER kam. Darum den Katalog ohne
+# Loader lesen und ALTER EXTENSION … UPDATE als erste Anweisung einer frischen
+# Sitzung schicken (-X: keine psqlrc davor); dann laedt der Loader die
+# Ziel-Bibliothek. Danach Postgres neu starten: Sitzungen, die ohne Bibliothek
+# weiterlaufen (auch die von DVhub), schreiben sonst weiter an den Chunks vorbei.
+EXT_HAVE="$(psql_noload "SELECT extversion FROM pg_extension WHERE extname='timescaledb'")"
+EXT_WANT="$(psql_noload "SELECT default_version FROM pg_available_extensions WHERE name='timescaledb'")"
+log_line "Erweiterung in ${DB_NAME}: ${EXT_HAVE:-keine}, Paket bietet ${EXT_WANT:-?}"
+if [[ -z "$EXT_HAVE" ]]; then
+  if ! su postgres -c "psql -X -v ON_ERROR_STOP=1 -q -d ${DB_NAME} -c 'CREATE EXTENSION IF NOT EXISTS timescaledb'" >>"$LOG_FILE" 2>&1; then
+    # Noch keine Hypertable → reines Postgres bleibt ein gueltiger Zustand.
+    echo "  WARN: CREATE EXTENSION timescaledb in '${DB_NAME}' fehlgeschlagen — Box bleibt auf reinem Postgres (Details in ${LOG_FILE})." >&2
+    log_line "WARN: CREATE EXTENSION fehlgeschlagen"
+    write_status failed "CREATE EXTENSION timescaledb fehlgeschlagen"
+    exit 0
+  fi
+elif [[ "$EXT_HAVE" != "$EXT_WANT" ]]; then
+  echo "  TimescaleDB: Erweiterung ${EXT_HAVE} -> ${EXT_WANT:-?} ..."
+  su postgres -c "psql -X -v ON_ERROR_STOP=1 -q -d ${DB_NAME} -c 'ALTER EXTENSION timescaledb UPDATE'" >>"$LOG_FILE" 2>&1 \
+    || fail_visible "ALTER EXTENSION timescaledb UPDATE (${EXT_HAVE} -> ${EXT_WANT:-?}) fehlgeschlagen"
+  # Katalog-Marker angleichen (wie runTimescaleExtUpgrade und der Restore).
+  su postgres -c "psql -X -q -d ${DB_NAME} -c \"UPDATE _timescaledb_catalog.metadata m SET value = e.extversion FROM pg_extension e WHERE e.extname = 'timescaledb' AND m.key = 'timescaledb_version' AND m.value <> e.extversion\"" >>"$LOG_FILE" 2>&1 || true
+  echo "  TimescaleDB: Postgres-Neustart (Sitzungen auf die neue Bibliothek) ..."
+  restart_pg || fail_visible "Postgres-Neustart nach dem Erweiterungs-Update fehlgeschlagen"
 fi
+
+# --- 6b. Zeilen aus der Elterntabelle zurueck in die Chunks ----------------------
+# Im kaputten Zwischenzustand laufen nach der ersten (gescheiterten) Anweisung
+# alle weiteren ohne TimescaleDB: INSERTs landen in der Elterntabelle der
+# Hypertable statt in einem Chunk. Mit geladener Bibliothek sind diese Zeilen
+# unsichtbar, auch fuer SELECT … FROM ONLY. Darum in drei Sitzungen:
+#   1. mit Loader: je Hypertable eine leere Parktabelle public.dvhub_ts_rescue_<id>
+#   2. OHNE Loader, nur DML: Zeilen per DELETE … RETURNING dorthin verschieben.
+#      Kein DDL in dieser Sitzung — der DDL-Ereignis-Trigger von TimescaleDB laedt
+#      die Bibliothek nach, danach ist die Elterntabelle wieder leer (am echten
+#      Fall gesehen: 0 Zeilen verschoben).
+#   3. mit Loader: zurueck in die Hypertable (Chunks) und Parktabelle loeschen;
+#      ein Upsert dieser Zeit (gleicher Schluessel wie eine Chunk-Zeile) ist der
+#      neuere Wert und gewinnt.
+# Bricht ein Lauf dazwischen ab, bleibt die Parktabelle stehen; ts_ready() meldet
+# das, der naechste DVhub-Start holt es nach.
+su postgres -c "psql -X -v ON_ERROR_STOP=1 -q -d ${DB_NAME}" >>"$LOG_FILE" 2>&1 <<'SQL' \
+  || fail_visible "Parktabellen fuer die Hypertable-Elterntabellen liessen sich nicht anlegen"
+DO $rescue$
+DECLARE h record;
+BEGIN
+  FOR h IN SELECT id, schema_name, table_name FROM _timescaledb_catalog.hypertable ORDER BY id LOOP
+    EXECUTE format('CREATE TABLE IF NOT EXISTS public.dvhub_ts_rescue_%s (LIKE %I.%I)', h.id, h.schema_name, h.table_name);
+  END LOOP;
+END
+$rescue$;
+SQL
+su postgres -c "PGOPTIONS='-c timescaledb.disable_load=on' psql -X -v ON_ERROR_STOP=1 -q -d ${DB_NAME}" >>"$LOG_FILE" 2>&1 <<'SQL' \
+  || fail_visible "Zeilen aus der Hypertable-Elterntabelle liessen sich nicht parken"
+DO $rescue$
+DECLARE h record; n bigint;
+BEGIN
+  FOR h IN SELECT id, schema_name, table_name FROM _timescaledb_catalog.hypertable ORDER BY id LOOP
+    CONTINUE WHEN to_regclass(format('public.dvhub_ts_rescue_%s', h.id)) IS NULL;
+    EXECUTE format('WITH moved AS (DELETE FROM ONLY %2$I.%3$I RETURNING *) INSERT INTO public.dvhub_ts_rescue_%1$s SELECT * FROM moved',
+      h.id, h.schema_name, h.table_name);
+    GET DIAGNOSTICS n = ROW_COUNT;
+    IF n > 0 THEN RAISE NOTICE 'dvhub-rescue: % Zeilen aus %.% geparkt', n, h.schema_name, h.table_name; END IF;
+  END LOOP;
+END
+$rescue$;
+SQL
+su postgres -c "psql -X -v ON_ERROR_STOP=1 -q -d ${DB_NAME}" >>"$LOG_FILE" 2>&1 <<'SQL' \
+  || fail_visible "geparkte Zeilen liessen sich nicht in die Hypertable zurueckschreiben (bleiben in public.dvhub_ts_rescue_*)"
+DO $rescue$
+DECLARE r record; ht regclass; rt regclass; keys text[]; cols text; sets text; n bigint;
+BEGIN
+  IF to_regclass('_timescaledb_catalog.hypertable') IS NULL THEN RETURN; END IF;
+  FOR r IN SELECT h.id, h.schema_name, h.table_name FROM _timescaledb_catalog.hypertable h
+           WHERE to_regclass(format('public.dvhub_ts_rescue_%s', h.id)) IS NOT NULL ORDER BY h.id LOOP
+    ht := format('%I.%I', r.schema_name, r.table_name)::regclass;
+    rt := format('public.dvhub_ts_rescue_%s', r.id)::regclass;
+    SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) INTO cols
+      FROM pg_attribute WHERE attrelid = rt AND attnum > 0 AND NOT attisdropped;
+    -- eindeutiger Schluessel der Hypertable (Primaerschluessel zuerst), ohne Ausdrucks-/Teilindex
+    SELECT array_agg(a.attname ORDER BY k.ord) INTO keys
+      FROM (SELECT indkey FROM pg_index WHERE indrelid = ht AND indisunique AND indexprs IS NULL AND indpred IS NULL
+            ORDER BY indisprimary DESC, indexrelid LIMIT 1) i
+      CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+      JOIN pg_attribute a ON a.attrelid = ht AND a.attnum = k.attnum;
+    IF keys IS NULL THEN
+      EXECUTE format('INSERT INTO %s (%s) SELECT %s FROM %s', ht, cols, cols, rt);
+    ELSE
+      SELECT string_agg(format('%1$I = EXCLUDED.%1$I', attname), ', ' ORDER BY attnum) INTO sets
+        FROM pg_attribute WHERE attrelid = rt AND attnum > 0 AND NOT attisdropped AND attname <> ALL (keys);
+      EXECUTE format('INSERT INTO %s (%s) SELECT %s FROM %s ON CONFLICT (%s) DO %s', ht, cols, cols, rt,
+        (SELECT string_agg(quote_ident(k), ', ') FROM unnest(keys) k),
+        CASE WHEN sets IS NULL THEN 'NOTHING' ELSE 'UPDATE SET ' || sets END);
+    END IF;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    EXECUTE format('DROP TABLE %s', rt);
+    IF n > 0 THEN RAISE NOTICE 'dvhub-rescue: % Zeilen nach % zurueckgeschrieben', n, ht; END IF;
+  END LOOP;
+END
+$rescue$;
+SQL
+
+# --- 6c. Laedt die Bibliothek? Dann Status neu schreiben ------------------------
+# Frische Sitzung, Loader an: geht nur, wenn die Bibliothek zur Katalog-Version
+# da ist. Sonst bliebe bis zur naechsten Nacht „aktuell“ in timescale-status.json.
+EXTVER="$(su postgres -c "psql -X -v ON_ERROR_STOP=1 -tAq -d ${DB_NAME} -c \"SELECT extversion FROM pg_extension WHERE extname='timescaledb'\"" 2>>"$LOG_FILE" | tr -d '[:space:]')" \
+  || fail_visible "TimescaleDB-Bibliothek laedt nicht (Erweiterung ${EXT_WANT:-?})"
+[[ -n "$EXTVER" ]] || fail_visible "TimescaleDB-Erweiterung fehlt nach der Provisionierung in '${DB_NAME}'"
+LICENSE="$(ext_license)"
+echo "  TimescaleDB: Extension in DB '${DB_NAME}' aktiv (v${EXTVER}, Lizenz ${LICENSE:-?})."
+log_line "OK: v${EXTVER}, Lizenz ${LICENSE:-?}"
+write_status ok ""
 
 # --- 7. Flip the config so migration 014 runs on next start ------------------
 flip_config_true

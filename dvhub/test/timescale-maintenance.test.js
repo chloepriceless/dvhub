@@ -52,6 +52,8 @@ function mockSpawn({ versions = [], responses = {} } = {}) {
         r = { stdout: v == null ? '' : v };
       } else if (sql === 'SELECT 1') {
         r = { stdout: '1' };
+      } else if (/timescaledb\.license/.test(sql)) {
+        r = responses.load || { stdout: 'timescale' };
       } else if (/ALTER EXTENSION/.test(sql)) {
         r = responses.alter || {};
       } else {
@@ -175,4 +177,49 @@ test('runTimescaleExtUpgrade: TimescaleDB not active → ok:false, nothing bounc
   assert.equal(out.ok, false);
   assert.equal(out.error, 'timescaledb_not_active');
   assert.ok(!spawnFn.calls.some((c) => c.kind === 'systemctl'), 'no restart');
+});
+
+// Feldfall 21.10.2026: Bibliothek zur Katalog-Version fehlt.
+const MISSING = { code: 1, stderr: 'ERROR:  could not access file "timescaledb-2.25.1": No such file or directory' };
+
+test('readTimescaleStatus: Bibliothek fehlt → loadOk:false mit Fehler, Katalog ohne Loader gelesen', async () => {
+  const spawnFn = mockSpawn({ versions: ['2.25.1|2.31.0'], responses: { load: MISSING } });
+  const readFileFn = async () => JSON.stringify({ extVersion: '2.25.1', binaryVersion: '2.25.1', updatePending: false });
+  const s = await readTimescaleStatus({ statusFile: '/x.json', database: { name: 'dvhub' }, spawnFn, readFileFn });
+  assert.equal(s.probeOk, true);
+  assert.equal(s.extVersion, '2.25.1');
+  assert.equal(s.binaryVersion, '2.31.0', 'nicht der veraltete Dateistand');
+  assert.equal(s.loadOk, false);
+  assert.match(s.loadError, /timescaledb-2\.25\.1/);
+  const probe = spawnFn.calls.find((c) => /pg_available_extensions/.test(c.sql));
+  assert.ok(probe.args.some((a) => /timescaledb\.disable_load=on/.test(a)), 'Versions-Probe ohne Loader');
+  assert.ok(probe.args.includes('-X'));
+});
+
+test('readTimescaleStatus: Probe scheitert → nicht „aktuell“, Version aus der Control-Datei', async () => {
+  const spawnFail = (cmd, args) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    setImmediate(() => { child.stderr.emit('data', Buffer.from('sudo: a password is required')); child.emit('close', 1); });
+    return child;
+  };
+  const readFileFn = async (p) => {
+    if (p === '/x.json') return JSON.stringify({ extVersion: '2.25.1', binaryVersion: '2.25.1', updatePending: false, pgMajor: '18' });
+    if (p === '/usr/share/postgresql/18/extension/timescaledb.control') return "comment = 'x'\ndefault_version = '2.31.0'\n";
+    throw new Error('ENOENT');
+  };
+  const s = await readTimescaleStatus({ statusFile: '/x.json', database: {}, spawnFn: spawnFail, readFileFn });
+  assert.equal(s.probeOk, false);
+  assert.equal(s.updatePending, null, 'unbekannt, nicht false');
+  assert.equal(s.binaryVersion, '2.31.0');
+  assert.match(s.probeError, /password is required/);
+});
+
+test('runTimescaleExtUpgrade: Bibliothek fehlt → kein ALTER, kein Neustart (Reparatur beim DVhub-Start)', async () => {
+  const spawnFn = mockSpawn({ versions: ['2.25.1|2.31.0'], responses: { load: MISSING } });
+  const out = await runTimescaleExtUpgrade({ database: {}, spawnFn, sleepFn: noSleep });
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'timescaledb_library_missing');
+  assert.ok(!spawnFn.calls.some((c) => c.kind === 'systemctl'));
+  assert.ok(!spawnFn.calls.some((c) => String(c.sql).includes('ALTER EXTENSION')));
 });

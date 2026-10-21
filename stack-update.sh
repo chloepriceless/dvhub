@@ -56,6 +56,17 @@ if command -v pg_lsclusters >/dev/null 2>&1; then
   PG_VER="$(pg_lsclusters -h 2>/dev/null | awk 'NR==1{print $1}')"
 fi
 
+# post-update.sh startet timescale-provision.sh (Paketwechsel Apache->Community,
+# ALTER, Postgres-Neustarts) im selben Start entkoppelt. Beide gleichzeitig
+# streiten um die apt-Sperre (Feldfall 21.10.2026: "errors":"apt-update") und
+# starten Postgres durcheinander neu → erst warten, bis die Nachruestung fertig ist.
+if command -v systemctl >/dev/null 2>&1; then
+  for _ in $(seq 1 "${STACK_UPDATE_PROVISION_WAIT:-600}"); do
+    systemctl is-active --quiet dvhub-timescale-provision.service 2>/dev/null || break
+    sleep 1
+  done
+fi
+
 # --- 1. TimescaleDB-Pakete ----------------------------------------------------
 if [[ -f "$INSTALL_DIR/pkg-maintain.sh" ]]; then
   INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" DB_NAME="$DB_NAME" bash "$INSTALL_DIR/pkg-maintain.sh" || add_error "pkg-maintain"

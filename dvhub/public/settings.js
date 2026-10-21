@@ -3628,7 +3628,19 @@ async function loadDbEngineStatus() {
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j || !j.available || !j.extVersion) { group.hidden = true; return; }
     group.hidden = false;
-    if (j.updatePending && j.binaryVersion) {
+    const provisionFailed = j.provision && j.provision.result === 'failed';
+    if (j.loadOk === false || provisionFailed) {
+      // 21.10.2026: Bibliothek zur Katalog-Version fehlt bzw. die Nachrüstung ist
+      // gescheitert — nie „aktuell“ zeigen. Repariert wird beim DVhub-Start.
+      const why = j.loadOk === false
+        ? `TimescaleDB ${escapeHtml(j.extVersion)} lädt nicht${j.loadError ? ': ' + escapeHtml(j.loadError) : ''}.`
+        : `Nachrüstung fehlgeschlagen${j.provision.at ? ' (' + fmtTs(j.provision.at) + ')' : ''}: ${escapeHtml(j.provision.error || 'unbekannt')}.`;
+      banner.innerHTML = `<strong class="sa-text-err">${why}</strong> Ein Neustart von DVhub startet die Reparatur; das Protokoll steht in timescale-provision.log im Datenverzeichnis.`;
+      if (actions) actions.style.display = 'none';
+    } else if (j.probeOk === false) {
+      banner.innerHTML = `<span class="sa-text-warn">TimescaleDB ${escapeHtml(j.extVersion)} — Live-Prüfung nicht möglich${j.probeError ? ' (' + escapeHtml(j.probeError) + ')' : ''}. Angezeigt ist der Stand der letzten Prüfung.</span>`;
+      if (actions) actions.style.display = 'none';
+    } else if (j.updatePending && j.binaryVersion) {
       banner.innerHTML = `<strong class="sa-text-warn">Update verfügbar: TimescaleDB ${escapeHtml(j.binaryVersion)}</strong> — installiert ist ${escapeHtml(j.extVersion)}.`;
       // .svc-actions-block hat CSS display:none (0c926128-Lektion) → explizit zeigen.
       if (actions) actions.style.display = 'flex';
@@ -3667,7 +3679,10 @@ async function upgradeTimescale() {
       // Nach kurzer Wartezeit Status neu laden (App/DB kommen wieder hoch).
       window.setTimeout(() => { loadDbEngineStatus().catch(() => {}); }, 9000);
     } else {
-      if (banner) banner.innerHTML = `<span class="sa-text-err">Aktualisierung fehlgeschlagen: ${escapeHtml(j.error || ('HTTP ' + r.status))}${j.detail ? ' — ' + escapeHtml(String(j.detail).slice(0, 200)) : ''}</span>`;
+      const hint = j.error === 'timescaledb_library_missing'
+        ? ' Die Bibliothek zur installierten Version fehlt; ein Neustart von DVhub repariert das.'
+        : '';
+      if (banner) banner.innerHTML = `<span class="sa-text-err">Aktualisierung fehlgeschlagen: ${escapeHtml(j.error || ('HTTP ' + r.status))}${j.detail ? ' — ' + escapeHtml(String(j.detail).slice(0, 200)) : ''}${hint}</span>`;
       if (btn) { btn.disabled = false; btn.textContent = 'TimescaleDB aktualisieren'; }
     }
   } catch (e) {

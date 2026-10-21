@@ -16,6 +16,10 @@
 #
 # Idempotent + NON-FATAL throughout: a box that can't reach the apt repo just
 # keeps its current package and writes whatever state it can probe. Never crashes.
+#
+# PKG_MAINTAIN_STATUS_ONLY=1: nur den Status schreiben, kein apt (Aufruf aus
+# timescale-provision.sh, mit PROVISION_RESULT/PROVISION_ERROR fuer das Feld
+# "provision" — ohne diese Angaben bleibt ein frueheres "provision" stehen).
 set -uo pipefail   # NB: no `-e` — every step is best-effort; we never abort the box.
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
@@ -24,7 +28,8 @@ DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
 DB_NAME="${DB_NAME:-dvhub}"
 STATUS_FILE="${DATA_DIR}/timescale-status.json"
 
-if [[ "${EUID}" -ne 0 ]]; then
+# PKG_MAINTAIN_EUID: nur fuer Tests.
+if [[ "${PKG_MAINTAIN_EUID:-$EUID}" -ne 0 ]]; then
   echo "  pkg-maintain: muss als root laufen — uebersprungen" >&2
   exit 0
 fi
@@ -49,9 +54,16 @@ fi
 # postgres user's MOTD (some images — e.g. community-scripts Proxmox LXCs, which is
 # prod's platform — print a multi-line banner) which gets prepended to the psql
 # output and corrupts the parsed version/license strings. Non-login su has no MOTD.
-ext_ver()  { su postgres -c "psql -tAqc \"SELECT extversion FROM pg_extension WHERE extname='timescaledb'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
-bin_ver()  { su postgres -c "psql -tAqc \"SELECT default_version FROM pg_available_extensions WHERE name='timescaledb'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
-license()  { su postgres -c "psql -tAqc \"SELECT current_setting('timescaledb.license')\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
+# Versionen aus dem Katalog mit abgeschaltetem Loader: fehlt die Bibliothek zur
+# Katalog-Version (Feldfall 21.10.2026), scheitert sonst schon die erste Anweisung
+# jeder Sitzung, und die Datei meldete leere Versionen bzw. "aktuell".
+ext_ver()  { su postgres -c "PGOPTIONS='-c timescaledb.disable_load=on' psql -X -tAqc \"SELECT extversion FROM pg_extension WHERE extname='timescaledb'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
+bin_ver()  { su postgres -c "PGOPTIONS='-c timescaledb.disable_load=on' psql -X -tAqc \"SELECT default_version FROM pg_available_extensions WHERE name='timescaledb'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
+# Geparkte Zeilen aus timescale-provision.sh Schritt 6b, die noch nicht zurueck sind.
+rescue_cnt() { su postgres -c "PGOPTIONS='-c timescaledb.disable_load=on' psql -X -tAqc \"SELECT count(*) FROM pg_class WHERE relname LIKE 'dvhub!_ts!_rescue!_%' ESCAPE '!'\" ${DB_NAME}" 2>/dev/null | tr -d '[:space:]'; }
+# Mit Loader: die Lizenz gibt es nur, wenn die Bibliothek wirklich laedt.
+# stderr kommt mit, damit ein Ladefehler in der Datei landet.
+license_or_error() { su postgres -c "psql -X -tAqc \"SELECT current_setting('timescaledb.license')\" ${DB_NAME}" 2>&1; }
 
 LAST_PKG_UPGRADE=""
 
@@ -59,7 +71,7 @@ LAST_PKG_UPGRADE=""
 # Only touch the TimescaleDB packages; OS-wide upgrades are out of scope here
 # (they are handled separately by /api/admin/system/updates). --only-upgrade means
 # we never *newly* install anything — a box without TimescaleDB stays untouched.
-if [[ -n "$PG_VER" ]] && command -v apt-get >/dev/null 2>&1; then
+if [[ -n "$PG_VER" && "${PKG_MAINTAIN_STATUS_ONLY:-}" != "1" ]] && command -v apt-get >/dev/null 2>&1; then
   TSL_PKG="timescaledb-2-postgresql-${PG_VER}"
   TSL_LOADER="timescaledb-2-loader-postgresql-${PG_VER}"
   TSL_TOOLKIT="timescaledb-toolkit-postgresql-${PG_VER}"
@@ -89,7 +101,17 @@ fi
 # --- Probe the resulting state + write the status file --------------------------
 EXT_VERSION="$(ext_ver)"
 BIN_VERSION="$(bin_ver)"
-LICENSE="$(license)"
+LICENSE=""
+LOAD_ERROR=""
+if [[ -n "$EXT_VERSION" ]]; then
+  if LIC_OUT="$(license_or_error)"; then
+    LICENSE="$(printf '%s' "$LIC_OUT" | tr -d '[:space:]')"
+  else
+    LOAD_ERROR="$(printf '%s\n' "$LIC_OUT" | grep -m1 -E 'ERROR|FATAL' || printf '%s\n' "$LIC_OUT" | head -1)"
+    LOAD_ERROR="${LOAD_ERROR#*ERROR:  }"
+  fi
+fi
+RESCUE_PENDING="$(rescue_cnt)"
 UPDATE_PENDING="false"
 if [[ -n "$EXT_VERSION" && -n "$BIN_VERSION" && "$EXT_VERSION" != "$BIN_VERSION" ]]; then
   UPDATE_PENDING="true"
@@ -100,14 +122,22 @@ NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if [[ -z "$LAST_PKG_UPGRADE" && -f "$STATUS_FILE" ]] && command -v node >/dev/null 2>&1; then
   LAST_PKG_UPGRADE="$(node -e "try{const c=require('$STATUS_FILE');process.stdout.write(String(c.lastPkgUpgrade||''))}catch{}" 2>/dev/null || true)"
 fi
+PROVISION_AT=""
+[[ -n "${PROVISION_RESULT:-}" ]] && PROVISION_AT="$NOW_UTC"
 
 mkdir -p "$DATA_DIR" 2>/dev/null || true
 # Write JSON via node for correct escaping (node is always present on a DVhub box).
 if command -v node >/dev/null 2>&1; then
   EXT_VERSION="$EXT_VERSION" BIN_VERSION="$BIN_VERSION" LICENSE="$LICENSE" \
   UPDATE_PENDING="$UPDATE_PENDING" PG_VER="$PG_VER" NOW_UTC="$NOW_UTC" LAST_PKG_UPGRADE="$LAST_PKG_UPGRADE" \
+  LOAD_ERROR="$LOAD_ERROR" PROVISION_AT="$PROVISION_AT" STATUS_FILE="$STATUS_FILE" RESCUE_PENDING="${RESCUE_PENDING:-0}" \
   node -e "
     const fs=require('fs');const e=process.env;
+    let prev=null;try{prev=JSON.parse(fs.readFileSync(e.STATUS_FILE,'utf8')).provision||null}catch{}
+    const rescue=Number(e.RESCUE_PENDING)||0;
+    // Ein frueherer Fehlschlag gilt als erledigt, sobald die Bibliothek laedt und
+    // nichts mehr geparkt ist (sonst stuende er bis zur naechsten Nachruestung).
+    if(prev&&prev.result==='failed'&&e.EXT_VERSION&&!e.LOAD_ERROR&&!rescue)prev=null;
     const o={
       extVersion: e.EXT_VERSION||null,
       binaryVersion: e.BIN_VERSION||null,
@@ -115,12 +145,18 @@ if command -v node >/dev/null 2>&1; then
       edition: e.LICENSE||null,
       pgMajor: e.PG_VER||null,
       lastChecked: e.NOW_UTC||null,
-      lastPkgUpgrade: e.LAST_PKG_UPGRADE||null
+      lastPkgUpgrade: e.LAST_PKG_UPGRADE||null,
+      loadError: e.LOAD_ERROR||null,
+      rescuePending: rescue,
+      provision: e.PROVISION_RESULT
+        ? { at: e.PROVISION_AT||null, result: e.PROVISION_RESULT, error: e.PROVISION_ERROR||null }
+        : prev
     };
-    fs.writeFileSync('$STATUS_FILE', JSON.stringify(o,null,2)+'\n');
+    fs.writeFileSync(e.STATUS_FILE+'.tmp', JSON.stringify(o,null,2)+'\n');
+    fs.renameSync(e.STATUS_FILE+'.tmp', e.STATUS_FILE);
   " 2>/dev/null || true
   chown "$SERVICE_USER:$SERVICE_USER" "$STATUS_FILE" 2>/dev/null || true
 fi
 
-echo "  pkg-maintain: Status ext=${EXT_VERSION:-?} bin=${BIN_VERSION:-?} pending=${UPDATE_PENDING} -> ${STATUS_FILE}"
+echo "  pkg-maintain: Status ext=${EXT_VERSION:-?} bin=${BIN_VERSION:-?} pending=${UPDATE_PENDING}${LOAD_ERROR:+ ladefehler=${LOAD_ERROR}} -> ${STATUS_FILE}"
 exit 0
