@@ -25,6 +25,50 @@ function floorToInterval(date, seconds) {
 
 const DEFAULT_PRICE_BUCKET_SECONDS = 900;
 const MATERIALIZED_SLOT_BUCKET_SECONDS = 900;
+// Zweite GX-Anlage: Reihe → kWh-Feld je Slot. Eine Quelle fuer alle Pfade
+// (vorberechnete Slots, JS-Pivot, Rohdaten-Ausweichpfad).
+const SECOND_BATTERY_SLOT_FIELDS = [
+  ['secondBatteryChargeKwh', 'second_battery_charge_w'],
+  ['secondBatteryDischargeKwh', 'second_battery_discharge_w'],
+  ['secondSolarToBatteryKwh', 'second_solar_to_battery_w'],
+  ['secondGridToBatteryKwh', 'second_grid_to_battery_w'],
+  ['secondBatteryToGridKwh', 'second_battery_to_grid_w'],
+  ['secondBatteryDirectUseKwh', 'second_battery_direct_use_w'],
+  // Akku→Akku-Verschiebung bei gegenlaeufigen Akkus (Codex-Gegenpruefung 21.10.2026)
+  ['batteryToSecondBatteryKwh', 'battery_to_second_battery_w'],
+  ['secondBatteryToBatteryKwh', 'second_battery_to_battery_w']
+];
+const SECOND_BATTERY_SERIES = SECOND_BATTERY_SLOT_FIELDS.map(([, seriesKey]) => seriesKey);
+// VRM kennt die zweite Anlage nicht (Codex-Gegenpruefung 21.10.2026, P2): der
+// Import verteilt die ganze gemessene Einspeisung/Ladung schon auf die Fluesse
+// der Hauptanlage. Kommt in einem Slot eine dieser Hauptreihen aus dem
+// VRM-Import, zaehlen die lokalen Akku-2-Reihen desselben Slots nicht mit —
+// sonst waeren z. B. 0,5 kWh (VRM) + 0,2 kWh (lokal Akku 2) bewertet statt 0,5.
+const PRIMARY_FLOW_SERIES = [
+  'grid_import_w', 'grid_export_w', 'pv_total_w', 'load_power_w',
+  'battery_power_w', 'battery_charge_w', 'battery_discharge_w',
+  'solar_direct_use_w', 'solar_to_battery_w', 'solar_to_grid_w',
+  'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
+];
+// dropLocal = true: Werte werden gelesen (gleiche Quellen-Buchfuehrung), aber als 0 ausgegeben.
+const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => Object.fromEntries(
+  SECOND_BATTERY_SLOT_FIELDS.map(([field, seriesKey]) => {
+    const value = energyForSeries(seriesKey);
+    return [field, dropLocal ? 0 : value];
+  })
+);
+// Bevorzugte Quelle einer Reihe im Slot, ohne Seiteneffekt (wie pickSeriesRow).
+const preferredSourceKindOf = (bySource, preferredSourceKinds) => {
+  if (!bySource) return null;
+  for (const kind of preferredSourceKinds) if (bySource.has(kind)) return kind;
+  return [...bySource.values()][0]?.source_kind ?? null;
+};
+const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
+  .some((seriesKey) => preferredSourceKindOf(bucket.get(seriesKey), preferredSourceKinds) === 'vrm_import');
+// Rohdaten-Ausweichpfad: VRM-Import landet mit scope 'history' in timeseries_samples.
+const rawBucketHasVrmFlows = (bucket) => PRIMARY_FLOW_SERIES
+  .some((seriesKey) => (bucket.get(seriesKey) || []).some((entry) => entry.scope === 'history'));
+
 const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_import_w', 'grid_export_w', 'grid_total_w',
   'pv_total_w', 'pv_ac_w',
@@ -36,10 +80,15 @@ const MATERIALIZED_ENERGY_SERIES = new Set([
   'self_consumption_w',
   'solar_direct_use_w', 'solar_to_battery_w', 'solar_to_grid_w',
   'grid_direct_use_w', 'grid_to_battery_w',
-  'battery_direct_use_w', 'battery_to_grid_w'
+  'battery_direct_use_w', 'battery_to_grid_w',
+  // Akku der zweiten GX-Anlage (21.10.2026): eigene Energie-Reihen, verdichtet
+  // wie die des Hauptakkus. Der Ladestand second_battery_soc_pct ist keine
+  // Energie und bleibt draussen (wie battery_soc_pct).
+  ...SECOND_BATTERY_SERIES
 ]);
 
-// The 23 series that become value fields on a returned slot. NOTE this is
+// The 29 series that become value fields on a returned slot (23 + the 6
+// second-battery series). NOTE this is
 // deliberately NOT all of MATERIALIZED_ENERGY_SERIES: 'load_power_w_ex_managed'
 // is stored and queried but never read out, so it must not contribute to a
 // slot's source-kind sets either (the JS pivot only ever recorded the kinds of
@@ -57,7 +106,8 @@ const MATERIALIZED_SLOT_FIELDS = [
   ['solarDirectUseKwh', 'solar_direct_use_w'], ['solarToBatteryKwh', 'solar_to_battery_w'],
   ['solarToGridKwh', 'solar_to_grid_w'], ['gridDirectUseKwh', 'grid_direct_use_w'],
   ['gridToBatteryKwh', 'grid_to_battery_w'], ['batteryDirectUseKwh', 'battery_direct_use_w'],
-  ['batteryToGridKwh', 'battery_to_grid_w']
+  ['batteryToGridKwh', 'battery_to_grid_w'],
+  ...SECOND_BATTERY_SLOT_FIELDS
 ];
 
 // Series whose estimated/incomplete meta flags are surfaced per slot.
@@ -822,13 +872,14 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       'vrm_solar_yield_w', 'vrm_site_consumption_w', 'vrm_grid_import_ref_w', 'vrm_grid_export_ref_w',
       'vrm_consumption_input_w', 'vrm_consumption_output_w', 'self_consumption_w',
       'solar_direct_use_w', 'solar_to_battery_w', 'solar_to_grid_w',
-      'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
+      'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w',
+      ...SECOND_BATTERY_SERIES
     ];
     const seriesPlaceholders = energySeries.map((_, i) => `$${params.length + i + 1}`).join(', ');
     params.push(...energySeries);
 
     const result = await pool.query(`
-      SELECT series_key, ts_utc, resolution_seconds, value_num, meta_json
+      SELECT series_key, scope, ts_utc, resolution_seconds, value_num, meta_json
       FROM timeseries_samples
       WHERE series_key IN (${seriesPlaceholders})
         AND value_num IS NOT NULL
@@ -881,6 +932,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           solarToGridKwh: energyForSeries('solar_to_grid_w'), gridDirectUseKwh: energyForSeries('grid_direct_use_w'),
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'), batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
+          ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket)),
           estimated: estimatedSeriesKeys.length > 0, incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length, incompleteSeriesCount: incompleteSeriesKeys.length,
           estimatedSeriesKeys, incompleteSeriesKeys
@@ -1050,7 +1102,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       isoTimestamp(end),
       preferredSourceKinds,
       MATERIALIZED_SLOT_FIELDS.map(([, seriesKey]) => seriesKey),
-      MATERIALIZED_TRACKED_SERIES
+      MATERIALIZED_TRACKED_SERIES,
+      PRIMARY_FLOW_SERIES
     ];
 
     const valueColumns = MATERIALIZED_SLOT_FIELDS
@@ -1077,12 +1130,16 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         -- 'sourceKind' is narrower than 'sourceKinds'. In the original the
         -- overall kind was computed BEFORE the returned object literal, so at
         -- that point only the 7 tracked series had been picked (via the
-        -- estimated/incomplete flag pass); the other 16 were picked later, while
+        -- estimated/incomplete flag pass); the other 16 (22 with the second
+        -- battery, 21.10.2026) were picked later, while
         -- the literal was being evaluated, and so never influenced it. Widening
-        -- this to all 23 read-out series would flip many slots from a concrete
+        -- this to all 29 read-out series would flip many slots from a concrete
         -- kind to 'mixed', so selected_kinds stays scoped to the tracked series
         -- ($6) while available_kinds ($5) covers all of them.
         array_agg(DISTINCT source_kind) FILTER (WHERE rn = 1 AND series_key = ANY($6::text[])) AS selected_kinds,
+        -- Akku 2 (21.10.2026): kommt eine Hauptreihe ($7) aus dem VRM-Import,
+        -- gelten die lokalen Akku-2-Reihen des Slots nicht (siehe PRIMARY_FLOW_SERIES).
+        COALESCE(bool_or(rn = 1 AND source_kind = 'vrm_import' AND series_key = ANY($7::text[])), false) AS vrm_selected,
         array_agg(series_key) FILTER (
           WHERE rn = 1 AND (meta_json::jsonb ->> 'estimated') = 'true'
         ) AS estimated_keys,
@@ -1121,6 +1178,9 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       };
       for (const [field, seriesKey] of MATERIALIZED_SLOT_FIELDS) {
         slot[field] = Number(row[seriesKey] || 0);
+      }
+      if (row.vrm_selected === true) {
+        for (const [field] of SECOND_BATTERY_SLOT_FIELDS) slot[field] = 0;
       }
       return slot;
     });
@@ -1193,6 +1253,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           solarToGridKwh: energyForSeries('solar_to_grid_w'), gridDirectUseKwh: energyForSeries('grid_direct_use_w'),
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'), batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
+          ...secondBatteryKwhFields(energyForSeries, slotFlowsFromVrm(bucket, preferredSourceKinds)),
           sourceKind: overallSourceKind, sourceKinds: [...availableSourceKinds].sort(),
           estimated: estimatedSeriesKeys.length > 0, incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length, incompleteSeriesCount: incompleteSeriesKeys.length,

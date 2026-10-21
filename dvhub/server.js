@@ -186,6 +186,7 @@ import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
+import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules, createScheduleRuleStore, scheduleRulesPath, readScheduleRules } from './services/optimizer/rule-store.js';
@@ -362,6 +363,16 @@ const state = {
     gridToBatteryW: null,
     batteryDirectUseW: null,
     batteryToGridW: null,
+    // Akku der zweiten GX-Anlage (21.10.2026): null bis polling.js sie einbezieht.
+    secondBatteryChargeW: null,
+    secondBatteryDischargeW: null,
+    secondSolarToBatteryW: null,
+    secondGridToBatteryW: null,
+    secondBatteryToGridW: null,
+    secondBatteryDirectUseW: null,
+    secondBatterySocPct: null,
+    batteryToSecondBatteryW: null,
+    secondBatteryToBatteryW: null,
     errors: {},
     // T-0075: per-field timestamp of the last SUCCESSFUL poll (set by polling.js
     // success branch only). Real freshness signal for the discharge floor / D-18.
@@ -1347,6 +1358,19 @@ const setSystemWarning = (id, message) => {
 };
 ctx.feedInCap = createFeedInCap(ctx, { getTransport: () => transport, setWarning: setSystemWarning });
 if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();
+// Zweite Victron-GX am selben Netzanschluss (services/multi-gx): eigener
+// Modbus-Pool, damit eine haengende zweite GX die Hauptanlage nie ausbremst.
+// Ohne multiGx.enabled keine einzige Anfrage.
+// Wird die zweite Anlage steuerbar oder faellt sie aus, aendert sich der Akku,
+// mit dem EOS plant (multi-gx/planning) → Akku-Modell neu an EOS, dann Neuplan,
+// damit kein Lauf mit gemischtem Modell (Kapazitaet alt, Ladestand neu) startet.
+ctx.onMultiGxAvailability = createEosResyncOnAvailability({
+  sync: async () => (ctx.eosConfigSync ? ctx.eosConfigSync.sync() : { ok: true }),
+  replan: (reason) => ctx.optimizerService?.requestEosReplan?.(reason),
+  pushLog,
+});
+ctx.multiGx = createMultiGx(ctx, { transport: createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
+if (IS_RUNTIME_PROCESS) ctx.multiGx.start();
 ctx.applyControlTarget = scheduler.applyControlTarget;
 // Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
 // MQTT-Command-Subscriber gehen durch denselben geprüften Pfad.
@@ -2167,6 +2191,9 @@ const telemetryReady = (async () => {
     // T-LICENSE-KWP-GATING Increment 3: Lizenz-kWp-Cap für die PV-KPI-Summen
     // (Pro-Tier-Enforcement). Lazy gelesen; null (Community/Legacy) = kein Cap.
     getCapKwp: () => ctx.licenseService?.getCapKwp?.() ?? null,
+    // Akku der zweiten GX-Anlage: Kapazität für die Ladestand-Korrektur des
+    // Gesamtverlusts (auch für Zeiträume, in denen sie lief).
+    getSecondBatteryCapacityKwh: () => (Number(cfg.multiGx?.batteryCapacityWh) > 0 ? Number(cfg.multiGx.batteryCapacityWh) / 1000 : null),
     getForecastConfig: () => cfg.forecast || {}
   }) : null;
   historyApi = createHistoryApiHandlers({
@@ -2753,6 +2780,7 @@ async function gracefulShutdown(signal) {
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
   safeSync('victronGx.stop', () => ctx.victronGx?.stop?.());
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
+  safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
   safeSync('ocppServer.stop', () => { ctx.ocppServer?.stop?.(); });
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());

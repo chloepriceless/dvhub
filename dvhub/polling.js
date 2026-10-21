@@ -19,6 +19,7 @@ import { info as logInfo, error as logError } from './services/log.js';
 // Plan 09-06 (D-06): meter-poll instruments. Wired in pollMeter success/error
 // branches (gauge.set on success duration, counter.inc on catch).
 import { meterPollDurationSeconds, meterPollErrorsTotal, telemetryFreezeActive } from './routes-api.js';
+import { followerBatteryForFlow } from './services/multi-gx/planning.js';
 
 /**
  * Load persisted energy state from disk into state.energy (if today's data).
@@ -790,6 +791,23 @@ export function createPoller(ctx) {
       state.victron.selfConsumptionDerived = false;
     }
 
+    // Zweite GX am selben Anschluss (multi-gx): ihr Akku haengt hinter dem
+    // Zaehler der Hauptanlage — sein Laden/Entladen ist kein Hausverbrauch.
+    // Korrigiert wird nur ein in diesem Durchlauf frisch gelesener Wert (bei
+    // Lesefehler steht noch der korrigierte alte), damit nie doppelt abgezogen wird.
+    // Einmal je Durchlauf gelesen: Hauslast-Korrektur und Fluss-Aufteilung
+    // (unten) muessen mit demselben Wert der zweiten Anlage rechnen.
+    const followerFlow = followerBatteryForFlow({ getCfg, state });
+    if (!state.victron.errors?.selfConsumptionW && state.victron.selfConsumptionW != null) {
+      const followerW = followerFlow?.batteryPowerW ?? 0;
+      if (followerW !== 0) {
+        state.victron.selfConsumptionMeasuredW = Number(state.victron.selfConsumptionW);
+        state.victron.selfConsumptionW = Number(Math.max(0, state.victron.selfConsumptionMeasuredW - followerW).toFixed(3));
+      } else {
+        delete state.victron.selfConsumptionMeasuredW;
+      }
+    }
+
     const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
     const pvTotalW = Math.max(0, Number(state.victron.pvTotalW || 0));
     const gridImportW = Math.max(0, Number(state.victron.gridImportW || 0));
@@ -797,13 +815,44 @@ export function createPoller(ctx) {
     const batteryChargeW = Math.max(0, Number(state.victron.batteryChargeW || 0));
     const batteryDischargeW = Math.max(0, Number(state.victron.batteryDischargeW || 0));
 
-    const solarToBatteryW = Math.max(0, Math.min(pvTotalW, batteryChargeW));
-    const gridToBatteryW = Math.max(0, batteryChargeW - solarToBatteryW);
-    const batteryToGridW = Math.max(0, Math.min(batteryDischargeW, gridExportW));
-    const batteryDirectUseW = Math.max(0, batteryDischargeW - batteryToGridW);
-    const gridDirectUseW = Math.max(0, gridImportW - gridToBatteryW);
-    const solarToGridW = Math.max(0, gridExportW - batteryToGridW);
-    const solarDirectUseW = Math.max(0, Math.min(pvTotalW, Math.max(0, loadW - gridDirectUseW - batteryDirectUseW)));
+    // Akku der zweiten GX-Anlage als eigene Groesse (21.10.2026, Chrissi:
+    // „kannst die Akkus dort getrennt aufzeigen“). Er haengt hinter demselben
+    // Zaehler, PV und Netz verteilen sich also auf BEIDE Akkus: die Fluesse
+    // werden fuer die Summe C = c1 + c2 (Laden) bzw. D = d1 + d2 (Entladen)
+    // gebildet und dann nach Leistungsanteil ci/C bzw. di/D auf die Akkus
+    // verteilt. Sonst ginge PV = direkt + Akku + Netz nicht auf, und Akku 2
+    // waere unsichtbar. Die bisherigen Felder sind nur der Hauptakku-Anteil.
+    // Ohne zweite Anlage ist c2 = d2 = 0, jede Summe gleich dem Hauptakku-Wert
+    // und mainShare gibt den Wert unveraendert zurueck — bitgenau wie vorher.
+    // Gegenlaeufige Akkus (Codex-Gegenpruefung 21.10.2026, P2): laedt einer,
+    // waehrend der andere entlaedt — etwa im Regelübergang —, fliesst die
+    // Leistung im Hausnetz von Akku zu Akku: T = min(Entladen des einen, Laden
+    // des anderen), je Richtung. Sie wird VOR der Aufteilung von beiden Seiten
+    // abgezogen und als eigenes Feld gefuehrt; sonst erschiene sie als Netzbezug
+    // (Laden) bzw. Hausversorgung/Einspeisung (Entladen), die es nicht gab.
+    // Je Akku gilt dann: Laden = PV + Netz + Zufluss vom anderen Akku,
+    // Entladen = Haus + Netz + Abfluss zum anderen Akku. Ohne zweite Anlage ist T = 0.
+    const secondBatteryChargeW = followerFlow ? Math.max(0, followerFlow.batteryPowerW) : 0;
+    const secondBatteryDischargeW = followerFlow ? Math.max(0, -followerFlow.batteryPowerW) : 0;
+    const batteryToSecondBatteryW = Math.min(batteryDischargeW, secondBatteryChargeW);
+    const secondBatteryToBatteryW = Math.min(secondBatteryDischargeW, batteryChargeW);
+    const mainChargeW = batteryChargeW - secondBatteryToBatteryW;
+    const mainDischargeW = batteryDischargeW - batteryToSecondBatteryW;
+    const chargeTotalW = mainChargeW + (secondBatteryChargeW - batteryToSecondBatteryW);
+    const dischargeTotalW = mainDischargeW + (secondBatteryDischargeW - secondBatteryToBatteryW);
+    const mainShare = (totalW, mineW, allW) => (mineW >= allW ? totalW : (allW > 0 ? totalW * (mineW / allW) : 0));
+
+    const solarToBatteryTotalW = Math.max(0, Math.min(pvTotalW, chargeTotalW));
+    const gridToBatteryTotalW = Math.max(0, chargeTotalW - solarToBatteryTotalW);
+    const batteryToGridTotalW = Math.max(0, Math.min(dischargeTotalW, gridExportW));
+    const batteryDirectUseTotalW = Math.max(0, dischargeTotalW - batteryToGridTotalW);
+    const solarToBatteryW = mainShare(solarToBatteryTotalW, mainChargeW, chargeTotalW);
+    const gridToBatteryW = mainShare(gridToBatteryTotalW, mainChargeW, chargeTotalW);
+    const batteryToGridW = mainShare(batteryToGridTotalW, mainDischargeW, dischargeTotalW);
+    const batteryDirectUseW = mainShare(batteryDirectUseTotalW, mainDischargeW, dischargeTotalW);
+    const gridDirectUseW = Math.max(0, gridImportW - gridToBatteryTotalW);
+    const solarToGridW = Math.max(0, gridExportW - batteryToGridTotalW);
+    const solarDirectUseW = Math.max(0, Math.min(pvTotalW, Math.max(0, loadW - gridDirectUseW - batteryDirectUseTotalW)));
 
     state.victron.solarDirectUseW = solarDirectUseW;
     state.victron.solarToBatteryW = solarToBatteryW;
@@ -812,6 +861,18 @@ export function createPoller(ctx) {
     state.victron.gridToBatteryW = gridToBatteryW;
     state.victron.batteryDirectUseW = batteryDirectUseW;
     state.victron.batteryToGridW = batteryToGridW;
+    // Akku 2: null = keine zweite Anlage einbezogen (Telemetrie schreibt dann
+    // keine Zeile), 0 = einbezogen, aber ruhig. Rest = Summe − Hauptakku-Anteil.
+    const secondPart = (totalW, mainW) => (followerFlow ? Math.max(0, totalW - mainW) : null);
+    state.victron.secondBatteryChargeW = followerFlow ? secondBatteryChargeW : null;
+    state.victron.secondBatteryDischargeW = followerFlow ? secondBatteryDischargeW : null;
+    state.victron.secondSolarToBatteryW = secondPart(solarToBatteryTotalW, solarToBatteryW);
+    state.victron.secondGridToBatteryW = secondPart(gridToBatteryTotalW, gridToBatteryW);
+    state.victron.secondBatteryToGridW = secondPart(batteryToGridTotalW, batteryToGridW);
+    state.victron.secondBatteryDirectUseW = secondPart(batteryDirectUseTotalW, batteryDirectUseW);
+    state.victron.secondBatterySocPct = followerFlow ? followerFlow.socPct : null;
+    state.victron.batteryToSecondBatteryW = followerFlow ? batteryToSecondBatteryW : null;
+    state.victron.secondBatteryToBatteryW = followerFlow ? secondBatteryToBatteryW : null;
 
     // T-FREEZE Einfrier-Wächter: NACH allen Reads/Ableitungen, VOR dem Snapshot —
     // so trägt der Powerflow-Snapshot bereits den erkannten Einfrierer und die

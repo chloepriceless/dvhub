@@ -289,7 +289,11 @@ describe('createHistoryVizAggregator factory (D-08, D-09)', () => {
 
 const ANCHOR_DATE = '2026-05-14'; // a yesterday-stable choice
 // Energie-Reihen, die die Karten über fetchBucketedEnergySlots lesen.
-const VIZ_ENERGY_KEYS = ['pv_total_w', 'grid_import_w', 'grid_export_w', 'load_power_w', 'battery_charge_w', 'battery_discharge_w'];
+// Akku der zweiten GX-Anlage (21.10.2026) als eigene Reihen — ohne Wert im
+// jeweiligen Mock liefern sie 0 W und lassen alle bisherigen Karten unberuehrt.
+const VIZ_ENERGY_KEYS = ['pv_total_w', 'grid_import_w', 'grid_export_w', 'load_power_w', 'battery_charge_w', 'battery_discharge_w',
+  'second_battery_charge_w', 'second_battery_discharge_w',
+  'battery_to_second_battery_w', 'second_battery_to_battery_w'];
 const SLOT_RES_SEC = 900;          // 15-min buckets, matches querySeries cap
 
 function makeFlatSeriesRows({ start, end, key, watts, stepSec = SLOT_RES_SEC }) {
@@ -2056,5 +2060,118 @@ describe('Plan 09.3-05 Wave 5 — Top10/CalYear/Scatter builders', () => {
     assert.ok(pushLogCalls.length >= 1, 'pushLog should be invoked on the SQL-throw path');
     const logged = JSON.stringify(pushLogCalls);
     assert.match(logged, /scatter/i, 'pushLog payload should reference the scatter aggregator');
+  });
+});
+
+// =============================================================================
+// Zweite GX-Anlage am selben Anschluss (Chrissi 21.10.2026: „kannst die Akkus
+// dort getrennt aufzeigen“): eigener Knoten „Akku 2“ im Sankey. Die Last ist
+// der Hausverbrauch OHNE Akku 2; seine Ladung/Entladung sind eigene Reihen.
+// =============================================================================
+describe('Sankey mit zweitem Akku', () => {
+  const twoBatterySeries = (map) => async ({ seriesKeys, start, end }) => {
+    const all = [];
+    for (const key of seriesKeys) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] || 0 }));
+    return all;
+  };
+
+  it('PV laedt beide Akkus: PV-Fluesse auf Akku 1 und Akku 2 verteilt, PV-Summe bleibt', async () => {
+    // PV 5000 W, Haus 1000 W, Akku 1 +2000 W, Akku 2 +1500 W → 500 W Einspeisung.
+    const ctx = mockCtxWithStores({ querySeriesFn: twoBatterySeries({
+      pv_total_w: 5000, load_power_w: 1000, grid_export_w: 500,
+      battery_charge_w: 2000, second_battery_charge_w: 1500,
+    }) });
+    const r = await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const b = r.body;
+    const flow = (from, to) => b.flows.find((f) => f.from === from && f.to === to)?.flow || 0;
+    // 24 h: PV 120 kWh, Akku 1 48 kWh, Akku 2 36 kWh, Haus 24 kWh, Netz 12 kWh.
+    assert.ok(Math.abs(flow('PV', 'Akku-Laden') - 48) < 0.05, `PV→Akku 1 ${flow('PV', 'Akku-Laden')}`);
+    assert.ok(Math.abs(flow('PV', 'Akku 2-Laden') - 36) < 0.05, `PV→Akku 2 ${flow('PV', 'Akku 2-Laden')}`);
+    assert.ok(Math.abs(flow('PV', 'Einspeisung') - 12) < 0.05);
+    const sumFromPv = b.flows.filter((f) => f.from === 'PV').reduce((s, f) => s + f.flow, 0);
+    assert.ok(Math.abs(sumFromPv - b.totals.pvKwh) <= 0.05, `PV-Summe ${sumFromPv} vs. ${b.totals.pvKwh}`);
+    assert.ok(Math.abs(b.breakdown.pvToSecondBattery - 36) < 0.05);
+    assert.ok(Math.abs(b.breakdown.pvToBattery - 48) < 0.05);
+  });
+
+  it('beide Akkus entladen: Haus und Einspeisung anteilig, Last-Summe bleibt', async () => {
+    // Haus 3000 W, Akku 1 −3000 W, Akku 2 −2000 W, keine PV → 2000 W Einspeisung.
+    const ctx = mockCtxWithStores({ querySeriesFn: twoBatterySeries({
+      load_power_w: 3000, grid_export_w: 2000,
+      battery_discharge_w: 3000, second_battery_discharge_w: 2000,
+    }) });
+    const b = (await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE })).body;
+    const flow = (from, to) => b.flows.find((f) => f.from === from && f.to === to)?.flow || 0;
+    assert.ok(Math.abs(flow('Akku-Entladen', 'Eigenverbrauch') - 43.2) < 0.05, `Akku 1→Haus ${flow('Akku-Entladen', 'Eigenverbrauch')}`);
+    assert.ok(Math.abs(flow('Akku 2-Entladen', 'Eigenverbrauch') - 28.8) < 0.05);
+    assert.ok(Math.abs(flow('Akku-Entladen', 'Einspeisung') - 28.8) < 0.05);
+    assert.ok(Math.abs(flow('Akku 2-Entladen', 'Einspeisung') - 19.2) < 0.05);
+    assert.equal(flow('Netzbezug', 'Eigenverbrauch'), 0, 'Akku 2 deckt seinen Teil — kein Netz');
+    const sumToLoad = b.flows.filter((f) => f.to === 'Eigenverbrauch').reduce((s, f) => s + f.flow, 0);
+    assert.ok(Math.abs(sumToLoad - 72) < 0.05, `Last ${sumToLoad}`);
+    assert.ok(Math.abs(b.totals.einspeisungKwh - 48) < 0.05);
+    assert.ok(Math.abs(b.breakdown.secondBatteryToLoad - 28.8) < 0.05);
+    assert.ok(Math.abs(b.breakdown.secondBatteryToExport - 19.2) < 0.05);
+  });
+
+  it('Autarkie zaehlt Akku 2 als eigene Versorgung', async () => {
+    const ctx = mockCtxWithStores({ querySeriesFn: twoBatterySeries({
+      load_power_w: 1000, battery_discharge_w: 500, second_battery_discharge_w: 500,
+    }) });
+    const r = await ctx.historyVizApi.getAutarkyCalendar({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.autarkyPct, 100);
+  });
+  // Codex-Gegenpruefung 21.10.2026 (P2): Akku 1 entlaedt in Akku 2. Ohne
+  // Verrechnung erfaende die Zerlegung 2 kW Einspeisung (bzw. Netzladung).
+  it('Akku→Akku-Verschiebung: keine erfundene Einspeisung oder Netzladung', async () => {
+    const ctx = mockCtxWithStores({ optimizer: { allowGridCharge: true }, querySeriesFn: twoBatterySeries({
+      load_power_w: 1000, battery_discharge_w: 3000, second_battery_charge_w: 2000,
+      battery_to_second_battery_w: 2000, // von polling.js aufgezeichnet
+    }) });
+    const b = (await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE })).body;
+    const flow = (from, to) => b.flows.find((f) => f.from === from && f.to === to)?.flow || 0;
+    assert.equal(b.totals.einspeisungKwh, 0, 'keine erfundene Einspeisung');
+    assert.equal(flow('Netzbezug', 'Akku 2-Laden'), 0, 'keine erfundene Netzladung');
+    assert.ok(Math.abs(flow('Akku-Entladen', 'Eigenverbrauch') - 24) < 0.05);
+    assert.ok(Math.abs(flow('Akku-Entladen', 'Akku 2-Laden') - 48) < 0.05, 'Verschiebung als eigener Fluss');
+    assert.ok(Math.abs(b.breakdown.batteryToSecondBattery - 48) < 0.05);
+    assert.equal(b.breakdown.secondBatteryToBattery, 0);
+  });
+
+  // Codex Runde 4 (21.10.2026): Laden und Entladen im selben Bucket heisst nicht
+  // Akku→Akku. Nur die aufgezeichnete Verschiebung zaehlt; hier gibt es keine:
+  // Akku 1 versorgt das Haus, Akku 2 laedt (zu anderer Zeit) aus dem Netz.
+  it('ohne aufgezeichnete Verschiebung: keine erfundene Akku→Akku-Kante', async () => {
+    const ctx = mockCtxWithStores({ optimizer: { allowGridCharge: true }, querySeriesFn: twoBatterySeries({
+      load_power_w: 1000, battery_discharge_w: 1000, second_battery_charge_w: 1000, grid_import_w: 1000,
+    }) });
+    const b = (await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE })).body;
+    const flow = (from, to) => b.flows.find((f) => f.from === from && f.to === to)?.flow || 0;
+    assert.equal(b.breakdown.batteryToSecondBattery, 0);
+    assert.ok(Math.abs(flow('Akku-Entladen', 'Eigenverbrauch') - 24) < 0.05, 'Akku 1 versorgt das Haus');
+    assert.ok(Math.abs(flow('Netzbezug', 'Akku 2-Laden') - 24) < 0.05, 'Akku 2 laedt aus dem Netz');
+  });
+
+  // Codex-Gegenpruefung 21.10.2026 (P2): VRM-Slots kennen Akku 2 nicht — die
+  // lokalen Akku-2-Reihen desselben Slots fallen weg.
+  it('VRM-Slot: lokale Akku-2-Reihen werden nicht dazugerechnet', async () => {
+    const at = new Date('2026-05-14T10:00:00Z');
+    const rows = [
+      { slot_start_utc: at, series_key: 'load_power_w', source_kind: 'vrm_import', value_num: 0.25 },
+      { slot_start_utc: at, series_key: 'grid_export_w', source_kind: 'vrm_import', value_num: 0.5 },
+      { slot_start_utc: at, series_key: 'battery_discharge_w', source_kind: 'vrm_import', value_num: 0.75 },
+      { slot_start_utc: at, series_key: 'second_battery_discharge_w', source_kind: 'local_live', value_num: 0.2 },
+    ];
+    const agg = createHistoryVizAggregator({
+      getCfg: () => ({ optimizer: {} }), pushLog() {},
+      db: { async query(sql) { return { rows: /history-viz shared energy slots/.test(sql) ? rows : [] }; } },
+      telemetryStore: null,
+    });
+    const b = (await agg.getSankey({ view: 'day', date: ANCHOR_DATE })).body;
+    assert.equal(b.breakdown.secondBatteryToLoad, 0);
+    assert.equal(b.breakdown.secondBatteryToExport, 0);
+    assert.ok(Math.abs(b.totals.einspeisungKwh - 0.5) < 0.005, `Einspeisung ${b.totals.einspeisungKwh}`);
   });
 });

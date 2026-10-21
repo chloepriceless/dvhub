@@ -792,3 +792,38 @@ test('telemetry store falls back to local live materialized slots when vrm data 
     store.close();
   }
 });
+
+// Zweite GX am selben Anschluss (21.10.2026): Akku 2 hat eigene Energie-Reihen,
+// die wie die des Hauptakkus verdichtet und je Slot ausgegeben werden.
+test('telemetry store verdichtet und liefert die Akku-2-Reihen', () => {
+  const store = createTelemetryStore({ dbPath: createTempDbPath(), rawRetentionDays: 30, rollupIntervals: [900] });
+  const fields = {
+    second_battery_charge_w: 'secondBatteryChargeKwh',
+    second_battery_discharge_w: 'secondBatteryDischargeKwh',
+    second_solar_to_battery_w: 'secondSolarToBatteryKwh',
+    second_grid_to_battery_w: 'secondGridToBatteryKwh',
+    second_battery_to_grid_w: 'secondBatteryToGridKwh',
+    second_battery_direct_use_w: 'secondBatteryDirectUseKwh',
+    battery_to_second_battery_w: 'batteryToSecondBatteryKwh',
+    second_battery_to_battery_w: 'secondBatteryToBatteryKwh'
+  };
+  try {
+    store.writeSamples([
+      ...Object.keys(fields).map((seriesKey) => ({
+        seriesKey, ts: '2026-03-09T12:00:00.000Z', value: 2000, scope: 'live', source: 'local_poll',
+        quality: 'raw', resolutionSeconds: 900, unit: 'W'
+      })),
+      { seriesKey: 'grid_import_w', ts: '2026-03-09T12:00:00.000Z', value: 400, scope: 'live', source: 'local_poll', quality: 'raw', resolutionSeconds: 900, unit: 'W' }
+    ]);
+    const range = { start: '2026-03-09T00:00:00.000Z', end: '2026-03-10T00:00:00.000Z' };
+    const [materialized] = store.listMaterializedEnergySlots(range);
+    const [aggregated] = store.listAggregatedEnergySlots({ ...range, bucketSeconds: 900 });
+    for (const field of Object.values(fields)) {
+      assert.equal(materialized[field], 0.5, `materialisiert ${field}`);
+      assert.equal(aggregated[field], 0.5, `Rohdaten ${field}`);
+    }
+    assert.equal(materialized.importKwh, 0.1);
+  } finally {
+    store.close();
+  }
+});

@@ -16,6 +16,8 @@ import { effectiveInverterCurve } from '../inverter-efficiency/calibrator.js';
 import { resolveEvSocPct, resolveEvPlugged } from './ev-soc.js';
 import { buildEosHomeAppliances } from './eos-devices.js';
 import { getPowerLimits } from '../power-limits.js';
+// Zweite GX am selben Anschluss: Planung sieht beide Akkus als einen.
+import { planningCfg, planningMinSocPct } from '../multi-gx/planning.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
 import http from 'node:http';
 
@@ -554,10 +556,12 @@ export function createEosConfigSync(ctx) {
     // 2026-10-15: der HÖHERE aus Live-Wert und Untergrenze; fehlende Werte
     // zählen nicht (Profile ohne Live-Mindest-SoC liefern null — Number(null)
     // = 0 schickte EOS 0 % statt der eingestellten 5 %).
-    const eosMinSocPct = resolveEosMinSocPct(state?.victron?.minSocPct, cfg?.optimizer?.hardFloorSocPct);
+    const eosMinSocPct = planningMinSocPct(ctx, resolveEosMinSocPct(state?.victron?.minSocPct, cfg?.optimizer?.hardFloorSocPct));
 
-    const batteries = buildEosBatteries(cfg, { minSocPct: eosMinSocPct });
-    const inverters = buildEosInverters(cfg, {
+    // Zweite GX-Anlage erreichbar → Akku und Wechselrichter beider Anlagen.
+    const planCfg = planningCfg(ctx, cfg);
+    const batteries = buildEosBatteries(planCfg, { minSocPct: eosMinSocPct });
+    const inverters = buildEosInverters(planCfg, {
       curve: effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()),
       curveSupported: caps.inverterEfficiencyCurve === true,
     });

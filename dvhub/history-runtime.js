@@ -39,10 +39,23 @@ const AGGREGATE_SUM_FIELDS = [
   'batteryToGridKwh',
   'batteryChargeKwh',
   'batteryDischargeKwh',
+  // Akku der zweiten GX-Anlage als eigene Groesse (21.10.2026, Chrissi:
+  // „kannst die Akkus dort getrennt aufzeigen“). Die Felder ohne „second“
+  // bleiben der Hauptakku.
+  'secondSolarToBatteryKwh',
+  'secondGridToBatteryKwh',
+  'secondBatteryDirectUseKwh',
+  'secondBatteryToGridKwh',
+  'secondBatteryChargeKwh',
+  'secondBatteryDischargeKwh',
+  // Akku→Akku-Verschiebung bei gegenlaeufigen Akkus (Codex-Gegenpruefung 21.10.2026).
+  'batteryToSecondBatteryKwh',
+  'secondBatteryToBatteryKwh',
   'selfConsumptionKwh',
   'gridShareKwh',
   'pvShareKwh',
   'batteryShareKwh',
+  'secondBatteryShareKwh',
   'importCostEur',
   'gridCostEur',
   'pvCostEur',
@@ -62,6 +75,10 @@ const AGGREGATE_SUM_FIELDS = [
   'exportBatteryRevenueEur',
   'exportPvValuedKwh',
   'exportBatteryValuedKwh',
+  // Börsenerlös der Einspeisung aus Akku 2 — ein Teil von exportRevenueEur
+  // (der kommt aus dem Zähler und enthält ihn schon), kein Zuschlag.
+  'exportSecondBatteryRevenueEur',
+  'exportSecondBatteryValuedKwh',
   'solarCompensationEur',
   'netEur',
   'premiumEligibleExportKwh',
@@ -84,24 +101,36 @@ function effectiveBatteryCostCtKwh(costs = {}) {
   return roundCtKwh(combinedBase * (1 + markup / 100));
 }
 
+// Akku 2 (zweite GX-Anlage, 21.10.2026) ist eine eigene Quelle: der Hausverbrauch
+// loadKwh enthält, was er ins Haus schiebt (polling.js zieht nur seine Lade-/
+// Entladeleistung ab, die Versorgung des Hauses bleibt Verbrauch). Fehlte er
+// unter den Quellen, würde seine Lieferung Netz/PV/Akku 1 zugeschlagen — bzw.
+// nachts, wenn nur er liefert, gar nicht versorgt (alle Anteile 0). Ohne zweite
+// Anlage ist secondBatteryKwh 0 und jede Rechnung bitgenau wie vorher.
 function proportionalSourceShares(slot) {
   const loadKwh = Math.max(Number(slot.loadKwh || 0), 0);
   const gridKwh = Math.max(Number(slot.importKwh || 0), 0);
   const pvKwh = Math.max(Number(slot.pvKwh || 0), 0);
-  const batteryKwh = Math.max(Number(slot.batteryDischargeKwh ?? slot.batteryKwh ?? 0), 0);
-  const totalSupplyKwh = gridKwh + pvKwh + batteryKwh;
+  // Was ein Akku in den anderen schiebt (gegenlaeufige Akkus, Codex-Gegenpruefung
+  // 21.10.2026), versorgt das Haus nicht: Entladung ohne diese Verschiebung.
+  // Ohne zweite Anlage ist die Verschiebung 0 und batteryKwh wie vorher.
+  const batteryKwh = Math.max(Number(slot.batteryDischargeKwh ?? slot.batteryKwh ?? 0) - Number(slot.batteryToSecondBatteryKwh || 0), 0);
+  const secondBatteryKwh = Math.max(Number(slot.secondBatteryDischargeKwh || 0) - Number(slot.secondBatteryToBatteryKwh || 0), 0);
+  const totalSupplyKwh = gridKwh + pvKwh + batteryKwh + secondBatteryKwh;
   const servedLoadKwh = totalSupplyKwh > 0 ? Math.min(loadKwh, totalSupplyKwh) : 0;
   if (servedLoadKwh <= 0 || totalSupplyKwh <= 0) {
     return {
       gridShareKwh: 0,
       pvShareKwh: 0,
-      batteryShareKwh: 0
+      batteryShareKwh: 0,
+      secondBatteryShareKwh: 0
     };
   }
   return {
     gridShareKwh: servedLoadKwh * (gridKwh / totalSupplyKwh),
     pvShareKwh: servedLoadKwh * (pvKwh / totalSupplyKwh),
-    batteryShareKwh: servedLoadKwh * (batteryKwh / totalSupplyKwh)
+    batteryShareKwh: servedLoadKwh * (batteryKwh / totalSupplyKwh),
+    secondBatteryShareKwh: servedLoadKwh * (secondBatteryKwh / totalSupplyKwh)
   };
 }
 
@@ -146,6 +175,7 @@ function capPvKpisForDisplay(slots, kpis, capKwp, slotHours) {
   let pvAc = 0;
   let sDirect = 0;
   let sBatt = 0;
+  let sBatt2 = 0;
   let sGrid = 0;
   for (const slot of slots) {
     const p = Number(slot?.pvKwh || 0);
@@ -154,12 +184,15 @@ function capPvKpisForDisplay(slots, kpis, capKwp, slotHours) {
     pvAc += Number(slot?.pvAcKwh || 0) * ratio;
     sDirect += Number(slot?.solarDirectUseKwh || 0) * ratio;
     sBatt += Number(slot?.solarToBatteryKwh || 0) * ratio;
+    sBatt2 += Number(slot?.secondSolarToBatteryKwh || 0) * ratio;
     sGrid += Number(slot?.solarToGridKwh || 0) * ratio;
   }
   kpis.pvKwh = round2(pv);
   kpis.pvAcKwh = round2(pvAc);
   kpis.solarDirectUseKwh = round2(sDirect);
   kpis.solarToBatteryKwh = round2(sBatt);
+  // PV → Akku 2 gehört zur PV-Zerlegung (direkt + Akku 1 + Akku 2 + Netz ≈ PV).
+  kpis.secondSolarToBatteryKwh = round2(sBatt2);
   kpis.solarToGridKwh = round2(sGrid);
   kpis.pvCapKwp = capKwp; // UI-Hinweis „auf Lizenz gekappt"
   return kpis;
@@ -308,6 +341,14 @@ function buildRowAccumulator(key, label) {
     batteryToGridKwh: 0,
     batteryChargeKwh: 0,
     batteryDischargeKwh: 0,
+    secondSolarToBatteryKwh: 0,
+    secondGridToBatteryKwh: 0,
+    secondBatteryDirectUseKwh: 0,
+    secondBatteryToGridKwh: 0,
+    secondBatteryChargeKwh: 0,
+    secondBatteryDischargeKwh: 0,
+    batteryToSecondBatteryKwh: 0,
+    secondBatteryToBatteryKwh: 0,
     // Slot-genau akkumulierte Vollzyklen (Akku-Ausbaustufen). cyclesKnown
     // unterscheidet "0 Zyklen gefahren" von "keine Kapazität hinterlegt".
     cyclesAcc: 0,
@@ -316,6 +357,7 @@ function buildRowAccumulator(key, label) {
     gridShareKwh: 0,
     pvShareKwh: 0,
     batteryShareKwh: 0,
+    secondBatteryShareKwh: 0,
     importCostEur: 0,
     gridCostEur: 0,
     pvCostEur: 0,
@@ -332,8 +374,11 @@ function buildRowAccumulator(key, label) {
     exportBatteryRevenueEur: 0,
     exportPvValuedKwh: 0,
     exportBatteryValuedKwh: 0,
+    exportSecondBatteryRevenueEur: 0,
+    exportSecondBatteryValuedKwh: 0,
     exportPvCtKwh: null,
     exportBatteryCtKwh: null,
+    exportSecondBatteryCtKwh: null,
     exportSpotCtKwh: null,
     // Zeitmittel des Börsenpreises (jede bepreiste Viertelstunde zählt gleich,
     // unabhängig von Einspeisung) — Vergleichslinie im DV-Jahreschart.
@@ -412,12 +457,20 @@ function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
       ? round2((Number(target.exportBatteryRevenueEur || 0) / Number(target.exportBatteryValuedKwh)) * 100)
       : null;
   }
+  if ('exportSecondBatteryRevenueEur' in target) {
+    target.exportSecondBatteryCtKwh = Number(target.exportSecondBatteryValuedKwh || 0) > 0
+      ? round2((Number(target.exportSecondBatteryRevenueEur || 0) / Number(target.exportSecondBatteryValuedKwh)) * 100)
+      : null;
+  }
   // Kombinierter Satz PV direkt + Speicher: gemeinsamer Börsenerlös ÷ gemeinsam
   // bewertete kWh (kein Mittel der beiden Sätze — die Mengen sind ungleich).
+  // Akku 2 (21.10.2026) gehört zur Einspeisung und damit in beide Summen.
   if ('exportSpotCtKwh' in target) {
-    const valuedKwh = Number(target.exportPvValuedKwh || 0) + Number(target.exportBatteryValuedKwh || 0);
+    const valuedKwh = Number(target.exportPvValuedKwh || 0) + Number(target.exportBatteryValuedKwh || 0)
+      + Number(target.exportSecondBatteryValuedKwh || 0);
     target.exportSpotCtKwh = valuedKwh > 0
-      ? round2(((Number(target.exportPvRevenueEur || 0) + Number(target.exportBatteryRevenueEur || 0)) / valuedKwh) * 100)
+      ? round2(((Number(target.exportPvRevenueEur || 0) + Number(target.exportBatteryRevenueEur || 0)
+        + Number(target.exportSecondBatteryRevenueEur || 0)) / valuedKwh) * 100)
       : null;
   }
   if ('spotPriceCtSum' in target) {
@@ -461,7 +514,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
       if (field === 'solarCompensationEur' || field === 'netEur') continue;
       row[field] += Number(slot[field] || 0);
     }
-    const marketWeight = Number(slot.pvShareKwh || 0) + Number(slot.batteryShareKwh || 0) + Number(slot.exportKwh || 0);
+    const marketWeight = Number(slot.pvShareKwh || 0) + Number(slot.batteryShareKwh || 0)
+      + Number(slot.secondBatteryShareKwh || 0) + Number(slot.exportKwh || 0);
     if (Number.isFinite(Number(slot.marketPriceCtKwh)) && marketWeight > 0) {
       row.marketPriceWeightKwh += marketWeight;
       row.marketPriceWeightedCtTotal += marketWeight * Number(slot.marketPriceCtKwh);
@@ -526,7 +580,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 //
 // SUMMARY_CACHE_VERSION bei JEDER Änderung an der Slot-Bewertung oder den
 // Summen erhöhen — dann wird alles einmal neu aus den Rohdaten gerechnet.
-export const SUMMARY_CACHE_VERSION = 1;
+// 2 (21.10.2026): Akku der zweiten GX-Anlage als eigene Felder und Quelle.
+export const SUMMARY_CACHE_VERSION = 2;
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 
@@ -560,6 +615,14 @@ function buildDayCharts(slots) {
       batteryKwh: round2(Math.max(Number(slot.batteryDischargeKwh ?? slot.batteryKwh ?? 0), 0)),
       batteryChargeKwh: round2(Math.max(Number(slot.batteryChargeKwh || 0), 0)),
       batteryDischargeKwh: round2(Math.max(Number(slot.batteryDischargeKwh || 0), 0)),
+      secondSolarToBatteryKwh: round2(slot.secondSolarToBatteryKwh || 0),
+      secondGridToBatteryKwh: round2(slot.secondGridToBatteryKwh || 0),
+      secondBatteryDirectUseKwh: round2(slot.secondBatteryDirectUseKwh || 0),
+      secondBatteryToGridKwh: round2(slot.secondBatteryToGridKwh || 0),
+      secondBatteryChargeKwh: round2(Math.max(Number(slot.secondBatteryChargeKwh || 0), 0)),
+      secondBatteryDischargeKwh: round2(Math.max(Number(slot.secondBatteryDischargeKwh || 0), 0)),
+      batteryToSecondBatteryKwh: round2(slot.batteryToSecondBatteryKwh || 0),
+      secondBatteryToBatteryKwh: round2(slot.secondBatteryToBatteryKwh || 0),
       exportKwh: slot.exportKwh,
       loadKwh: round2(slot.loadKwh || 0),
       estimated: Boolean(slot.estimated),
@@ -602,8 +665,10 @@ function buildPeriodCharts(rows) {
       exportRevenueEur: row.exportRevenueEur,
       exportPvRevenueEur: row.exportPvRevenueEur,
       exportBatteryRevenueEur: row.exportBatteryRevenueEur,
+      exportSecondBatteryRevenueEur: row.exportSecondBatteryRevenueEur,
       exportPvCtKwh: row.exportPvCtKwh,
       exportBatteryCtKwh: row.exportBatteryCtKwh,
+      exportSecondBatteryCtKwh: row.exportSecondBatteryCtKwh,
       gridCostEur: row.gridCostEur,
       pvCostEur: row.pvCostEur,
       batteryCostEur: row.batteryCostEur,
@@ -639,11 +704,20 @@ function buildPeriodCharts(rows) {
       batteryToGridKwh: row.batteryToGridKwh,
       batteryChargeKwh: row.batteryChargeKwh,
       batteryDischargeKwh: row.batteryDischargeKwh,
+      secondSolarToBatteryKwh: row.secondSolarToBatteryKwh,
+      secondGridToBatteryKwh: row.secondGridToBatteryKwh,
+      secondBatteryDirectUseKwh: row.secondBatteryDirectUseKwh,
+      secondBatteryToGridKwh: row.secondBatteryToGridKwh,
+      secondBatteryChargeKwh: row.secondBatteryChargeKwh,
+      secondBatteryDischargeKwh: row.secondBatteryDischargeKwh,
+      batteryToSecondBatteryKwh: row.batteryToSecondBatteryKwh,
+      secondBatteryToBatteryKwh: row.secondBatteryToBatteryKwh,
       cycles: row.cycles,
       selfConsumptionKwh: row.selfConsumptionKwh,
       gridShareKwh: row.gridShareKwh,
       pvShareKwh: row.pvShareKwh,
       batteryShareKwh: row.batteryShareKwh,
+      secondBatteryShareKwh: row.secondBatteryShareKwh,
       exportRevenueEur: row.exportRevenueEur,
       gridCostEur: row.gridCostEur,
       pvCostEur: row.pvCostEur,
@@ -673,10 +747,13 @@ function buildPeriodCharts(rows) {
       pvAcKwh: row.pvAcKwh,
       batteryChargeKwh: row.batteryChargeKwh,
       batteryDischargeKwh: row.batteryDischargeKwh,
+      secondBatteryChargeKwh: row.secondBatteryChargeKwh,
+      secondBatteryDischargeKwh: row.secondBatteryDischargeKwh,
       selfConsumptionKwh: row.selfConsumptionKwh,
       gridShareKwh: row.gridShareKwh,
       pvShareKwh: row.pvShareKwh,
       batteryShareKwh: row.batteryShareKwh,
+      secondBatteryShareKwh: row.secondBatteryShareKwh,
       estimatedSlots: row.estimatedSlots,
       incompleteSlots: row.incompleteSlots
     }))
@@ -1367,10 +1444,19 @@ function buildSummarySeries(view, slots) {
       batteryToGridKwh: roundOrZero(slot.batteryToGridKwh),
       batteryChargeKwh: roundOrZero(slot.batteryChargeKwh),
       batteryDischargeKwh: roundOrZero(slot.batteryDischargeKwh),
+      secondSolarToBatteryKwh: roundOrZero(slot.secondSolarToBatteryKwh),
+      secondGridToBatteryKwh: roundOrZero(slot.secondGridToBatteryKwh),
+      secondBatteryDirectUseKwh: roundOrZero(slot.secondBatteryDirectUseKwh),
+      secondBatteryToGridKwh: roundOrZero(slot.secondBatteryToGridKwh),
+      secondBatteryChargeKwh: roundOrZero(slot.secondBatteryChargeKwh),
+      secondBatteryDischargeKwh: roundOrZero(slot.secondBatteryDischargeKwh),
+      batteryToSecondBatteryKwh: roundOrZero(slot.batteryToSecondBatteryKwh),
+      secondBatteryToBatteryKwh: roundOrZero(slot.secondBatteryToBatteryKwh),
       selfConsumptionKwh: roundOrZero(slot.selfConsumptionKwh),
       gridShareKwh: round2(slot.gridShareKwh || 0),
       pvShareKwh: round2(slot.pvShareKwh || 0),
-      batteryShareKwh: round2(slot.batteryShareKwh || 0)
+      batteryShareKwh: round2(slot.batteryShareKwh || 0),
+      secondBatteryShareKwh: round2(slot.secondBatteryShareKwh || 0)
     })),
     prices: slots.map((slot) => ({
       ts: slot.ts,
@@ -1396,6 +1482,8 @@ export function createHistoryRuntime({
   // Liefert den lizenzierten kWp-Deckel (Pro S/M/L, Abo-Sitze) oder null (Community/Legacy/
   // Legacy = kein Cap). Lazy gelesen, damit es zur Request-Zeit verdrahtet ist.
   getCapKwp = () => null,
+  // Kapazität des Akkus der zweiten GX-Anlage in kWh (multi-gx), null = keine.
+  getSecondBatteryCapacityKwh = () => null,
   // MiSpeL-Übersicht (2026-10-18): PV-Gesamtleistung aus der Prognose als Rückfall.
   getForecastConfig = () => ({})
 }) {
@@ -1665,24 +1753,37 @@ export function createHistoryRuntime({
           gridDirectUseKwh: round2(Number(slot.gridDirectUseKwh || 0)),
           gridToBatteryKwh: round2(Number(slot.gridToBatteryKwh || 0)),
           batteryDirectUseKwh: round2(Number(slot.batteryDirectUseKwh || 0)),
-          batteryToGridKwh: round2(Number(slot.batteryToGridKwh || 0))
+          batteryToGridKwh: round2(Number(slot.batteryToGridKwh || 0)),
+          secondSolarToBatteryKwh: round2(Number(slot.secondSolarToBatteryKwh || 0)),
+          secondGridToBatteryKwh: round2(Number(slot.secondGridToBatteryKwh || 0)),
+          secondBatteryDirectUseKwh: round2(Number(slot.secondBatteryDirectUseKwh || 0)),
+          secondBatteryToGridKwh: round2(Number(slot.secondBatteryToGridKwh || 0)),
+          secondBatteryChargeKwh: round2(Number(slot.secondBatteryChargeKwh || 0)),
+          secondBatteryDischargeKwh: round2(Number(slot.secondBatteryDischargeKwh || 0)),
+          batteryToSecondBatteryKwh: round2(Number(slot.batteryToSecondBatteryKwh || 0)),
+          secondBatteryToBatteryKwh: round2(Number(slot.secondBatteryToBatteryKwh || 0))
         };
         const pvExportKwh = Math.max(Number(slot.solarToGridKwh || 0), 0);
         const batteryExportKwh = Math.max(Number(slot.batteryToGridKwh || 0), 0);
-        const localSelfConsumptionKwh = round2(Number(shares.pvShareKwh || 0) + Number(shares.batteryShareKwh || 0));
+        const secondBatteryExportKwh = Math.max(Number(slot.secondBatteryToGridKwh || 0), 0);
+        // Akku 2 zählt bei Kosten und vermiedenem Bezug als Speicher: derselbe
+        // Speicher-Kostensatz (batteryCostCtKwh) und derselbe Bezugspreis. Ohne
+        // zweite Anlage ist sein Anteil 0 und jede Summe unverändert.
+        const storageShareKwh = Number(shares.batteryShareKwh || 0) + Number(shares.secondBatteryShareKwh || 0);
+        const localSelfConsumptionKwh = round2(Number(shares.pvShareKwh || 0) + storageShareKwh);
         const selfConsumptionKwh = round2(Number(shares.gridShareKwh || 0) + localSelfConsumptionKwh);
         const missingImportPrice = Number(slot.importKwh || 0) > 0 && !Number.isFinite(userImportPriceCtKwh);
         const missingMarketPrice = slot.exportKwh > 0 && !Number.isFinite(marketPriceCtKwh);
         const gridCostEur = costForShareEur(slot.importKwh, userImportPriceCtKwh);
         const pvCostEur = costForShareEur(Number(shares.pvShareKwh || 0) + pvExportKwh, pvCostCtKwh);
-        const batteryCostEur = costForShareEur(Number(shares.batteryShareKwh || 0) + batteryExportKwh, batteryCostCtKwh);
+        const batteryCostEur = costForShareEur(storageShareKwh + batteryExportKwh + secondBatteryExportKwh, batteryCostCtKwh);
         const avoidedImportPvGrossEur = costForShareEur(shares.pvShareKwh, userImportPriceCtKwh);
-        const avoidedImportBatteryGrossEur = costForShareEur(shares.batteryShareKwh, userImportPriceCtKwh);
+        const avoidedImportBatteryGrossEur = costForShareEur(storageShareKwh, userImportPriceCtKwh);
         const avoidedImportGrossEur = round2((avoidedImportPvGrossEur || 0) + (avoidedImportBatteryGrossEur || 0));
         const importCostEur = gridCostEur;
         const opportunityCostEur = costForShareEur(localSelfConsumptionKwh, marketPriceCtKwh);
         const opportunityCostPvEur = costForShareEur(shares.pvShareKwh, marketPriceCtKwh);
-        const opportunityCostBatteryEur = costForShareEur(shares.batteryShareKwh, marketPriceCtKwh);
+        const opportunityCostBatteryEur = costForShareEur(storageShareKwh, marketPriceCtKwh);
         const selfConsumptionCostEur = round2((gridCostEur || 0) + (pvCostEur || 0) + (batteryCostEur || 0));
         const exportRevenueEur = missingMarketPrice ? null : round2((slot.exportKwh * Number(marketPriceCtKwh || 0)) / 100);
         // Derselbe Slotpreis, aufgeteilt nach Herkunft der eingespeisten kWh
@@ -1704,6 +1805,11 @@ export function createHistoryRuntime({
         const exportBatteryRevenueEur = splitPriceKnown ? round2((batteryExportKwh * marketPriceCtKwh) / 100) : null;
         const exportPvValuedKwh = splitPriceKnown ? round2(pvExportKwh) : 0;
         const exportBatteryValuedKwh = splitPriceKnown ? round2(batteryExportKwh) : 0;
+        // Einspeisung aus Akku 2: gleicher Slotpreis, eigener Teilbetrag. Er ist
+        // wie die beiden anderen ein Teil von exportRevenueEur (Zähler-kWh) —
+        // dort steckt er schon drin und wird NICHT noch einmal addiert.
+        const exportSecondBatteryRevenueEur = splitPriceKnown ? round2((secondBatteryExportKwh * marketPriceCtKwh) / 100) : null;
+        const exportSecondBatteryValuedKwh = splitPriceKnown ? round2(secondBatteryExportKwh) : 0;
         const netEur = round2((exportRevenueEur || 0) - (selfConsumptionCostEur || 0));
         const premiumEligibleExportKwh =
           Number.isFinite(marketPriceCtKwh) && marketPriceCtKwh >= 0
@@ -1757,6 +1863,8 @@ export function createHistoryRuntime({
           exportBatteryRevenueEur,
           exportPvValuedKwh,
           exportBatteryValuedKwh,
+          exportSecondBatteryRevenueEur,
+          exportSecondBatteryValuedKwh,
           netEur,
           grossReturnEur,
           premiumEligibleExportKwh,
@@ -1793,10 +1901,19 @@ export function createHistoryRuntime({
       totals.batteryToGridKwh = totals.batteryToGridKwh + Number(slot.batteryToGridKwh || 0);
       totals.batteryChargeKwh = totals.batteryChargeKwh + Number(slot.batteryChargeKwh || 0);
       totals.batteryDischargeKwh = totals.batteryDischargeKwh + Number(slot.batteryDischargeKwh || 0);
+      totals.secondSolarToBatteryKwh = totals.secondSolarToBatteryKwh + Number(slot.secondSolarToBatteryKwh || 0);
+      totals.secondGridToBatteryKwh = totals.secondGridToBatteryKwh + Number(slot.secondGridToBatteryKwh || 0);
+      totals.secondBatteryDirectUseKwh = totals.secondBatteryDirectUseKwh + Number(slot.secondBatteryDirectUseKwh || 0);
+      totals.secondBatteryToGridKwh = totals.secondBatteryToGridKwh + Number(slot.secondBatteryToGridKwh || 0);
+      totals.secondBatteryChargeKwh = totals.secondBatteryChargeKwh + Number(slot.secondBatteryChargeKwh || 0);
+      totals.secondBatteryDischargeKwh = totals.secondBatteryDischargeKwh + Number(slot.secondBatteryDischargeKwh || 0);
+      totals.batteryToSecondBatteryKwh = totals.batteryToSecondBatteryKwh + Number(slot.batteryToSecondBatteryKwh || 0);
+      totals.secondBatteryToBatteryKwh = totals.secondBatteryToBatteryKwh + Number(slot.secondBatteryToBatteryKwh || 0);
       totals.selfConsumptionKwh = totals.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0);
       totals.gridShareKwh = totals.gridShareKwh + Number(slot.gridShareKwh || 0);
       totals.pvShareKwh = totals.pvShareKwh + Number(slot.pvShareKwh || 0);
       totals.batteryShareKwh = totals.batteryShareKwh + Number(slot.batteryShareKwh || 0);
+      totals.secondBatteryShareKwh = totals.secondBatteryShareKwh + Number(slot.secondBatteryShareKwh || 0);
       totals.importCostEur = totals.importCostEur + (slot.importCostEur || 0);
       totals.gridCostEur = totals.gridCostEur + (slot.gridCostEur || 0);
       totals.pvCostEur = totals.pvCostEur + (slot.pvCostEur || 0);
@@ -1813,6 +1930,8 @@ export function createHistoryRuntime({
       totals.exportBatteryRevenueEur = totals.exportBatteryRevenueEur + (slot.exportBatteryRevenueEur || 0);
       totals.exportPvValuedKwh = totals.exportPvValuedKwh + (slot.exportPvValuedKwh || 0);
       totals.exportBatteryValuedKwh = totals.exportBatteryValuedKwh + (slot.exportBatteryValuedKwh || 0);
+      totals.exportSecondBatteryRevenueEur = totals.exportSecondBatteryRevenueEur + (slot.exportSecondBatteryRevenueEur || 0);
+      totals.exportSecondBatteryValuedKwh = totals.exportSecondBatteryValuedKwh + (slot.exportSecondBatteryValuedKwh || 0);
       totals.solarCompensationEur = 0;
       totals.netEur = totals.netEur + slot.netEur;
       totals.grossReturnEur = null;
@@ -1854,10 +1973,19 @@ export function createHistoryRuntime({
       batteryToGridKwh: 0,
       batteryChargeKwh: 0,
       batteryDischargeKwh: 0,
+      secondSolarToBatteryKwh: 0,
+      secondGridToBatteryKwh: 0,
+      secondBatteryDirectUseKwh: 0,
+      secondBatteryToGridKwh: 0,
+      secondBatteryChargeKwh: 0,
+      secondBatteryDischargeKwh: 0,
+      batteryToSecondBatteryKwh: 0,
+      secondBatteryToBatteryKwh: 0,
       selfConsumptionKwh: 0,
       gridShareKwh: 0,
       pvShareKwh: 0,
       batteryShareKwh: 0,
+      secondBatteryShareKwh: 0,
       importCostEur: 0,
       gridCostEur: 0,
       pvCostEur: 0,
@@ -1874,6 +2002,8 @@ export function createHistoryRuntime({
       exportBatteryRevenueEur: 0,
       exportPvValuedKwh: 0,
       exportBatteryValuedKwh: 0,
+      exportSecondBatteryRevenueEur: 0,
+      exportSecondBatteryValuedKwh: 0,
       solarCompensationEur: 0,
       netEur: 0,
       grossReturnEur: null,
@@ -1925,6 +2055,7 @@ export function createHistoryRuntime({
         pvAcKwh: slot.pvAcKwh,
         solarDirectUseKwh: slot.solarDirectUseKwh,
         solarToBatteryKwh: slot.solarToBatteryKwh,
+        secondSolarToBatteryKwh: slot.secondSolarToBatteryKwh,
         solarToGridKwh: slot.solarToGridKwh
       });
     }
@@ -2187,6 +2318,11 @@ export function createHistoryRuntime({
     kpis.exportBatteryCtKwh = kpis.exportBatteryValuedKwh > 0
       ? round2((kpis.exportBatteryRevenueEur / kpis.exportBatteryValuedKwh) * 100)
       : null;
+    kpis.exportSecondBatteryRevenueEur = round2(Number(kpis.exportSecondBatteryRevenueEur || 0));
+    kpis.exportSecondBatteryValuedKwh = round2(Number(kpis.exportSecondBatteryValuedKwh || 0));
+    kpis.exportSecondBatteryCtKwh = kpis.exportSecondBatteryValuedKwh > 0
+      ? round2((kpis.exportSecondBatteryRevenueEur / kpis.exportSecondBatteryValuedKwh) * 100)
+      : null;
 
     // DV comparison KPIs: week, month and year views (data exists from the
     // week view onward); null for day / all.
@@ -2401,6 +2537,29 @@ export function createHistoryRuntime({
       }
     } catch {
       // no SoC series for this window -> leave KPIs uncorrected (legacy behaviour)
+    }
+    // Akku der zweiten GX-Anlage (Codex Runde 4, 21.10.2026): er ist aus dem
+    // Hausverbrauch herausgerechnet, sein Ladestand-Übertrag muss deshalb in den
+    // GESAMTverlust (nicht in den Akku-Verlust der Hauptanlage).
+    try {
+      const cap2 = Number(getSecondBatteryCapacityKwh());
+      if (Number.isFinite(cap2) && cap2 > 0 && typeof store.getSeriesBoundaryValues === 'function'
+          && range?.startDate && range?.endDateExclusive) {
+        const soc2 = await store.getSeriesBoundaryValues({
+          seriesKey: 'second_battery_soc_pct',
+          start: localDateTimeToUtcIso(range.startDate, 0, 0),
+          end: localDateTimeToUtcIso(range.endDateExclusive, 0, 0)
+        });
+        if (soc2?.startValue != null && soc2?.endValue != null) {
+          Object.assign(periodPremiumApplied.kpis, {
+            secondBatterySocStartPct: round2(soc2.startValue),
+            secondBatterySocEndPct: round2(soc2.endValue),
+            secondBatteryStoredDeltaKwh: round2(((soc2.endValue - soc2.startValue) / 100) * cap2)
+          });
+        }
+      }
+    } catch {
+      // keine Akku-2-Ladestände für das Fenster → unkorrigiert
     }
     // T-LICENSE-KWP-GATING Increment 3: PV-KPI-Summen auf die lizenzierte kWp
     // kappen (Pro-Tier-Enforcement). Als LETZTER Schritt auf das finale
@@ -2662,6 +2821,17 @@ export function createHistoryApiHandlers({
         'Erloes_Einspeisung_EUR', 'Kosten_EUR', 'Netto_EUR', 'Brutto_Erloes_EUR'
       ];
       if (includeSolar) headers.push('Marktwert_Solar_ct_kWh', 'Solar_Ausgleich_EUR');
+      // Akku der zweiten GX-Anlage (21.10.2026): eigene Spalten, aber nur wenn
+      // der Zeitraum Werte hat — ohne zweite Anlage bleibt die Datei, wie sie war.
+      const secondBatteryCols = [
+        ['Akku2_PV_zu_Akku_kWh', 'secondSolarToBatteryKwh'], ['Akku2_Netz_zu_Akku_kWh', 'secondGridToBatteryKwh'],
+        ['Akku2_direkt_kWh', 'secondBatteryDirectUseKwh'], ['Akku2_zu_Netz_kWh', 'secondBatteryToGridKwh'],
+        ['Akku2_geladen_kWh', 'secondBatteryChargeKwh'], ['Akku2_entladen_kWh', 'secondBatteryDischargeKwh'],
+        ['Akku1_zu_Akku2_kWh', 'batteryToSecondBatteryKwh'], ['Akku2_zu_Akku1_kWh', 'secondBatteryToBatteryKwh'],
+        ['Eigenverbrauch_Akku2_kWh', 'secondBatteryShareKwh'], ['Erloes_Akku2_EUR', 'exportSecondBatteryRevenueEur']
+      ];
+      const includeSecondBattery = rows.some((row) => secondBatteryCols.some(([, key]) => Number(row?.[key] || 0) !== 0));
+      if (includeSecondBattery) headers.push(...secondBatteryCols.map(([header]) => header));
       headers.push('estimatedSlots', 'incompleteSlots', 'sourceKind');
       const lines = [headers.map(csvCell).join(';')];
       for (const row of rows) {
@@ -2685,6 +2855,7 @@ export function createHistoryApiHandlers({
         if (includeSolar) {
           cells.push(fmtNumber(row.solarMarketValueCtKwh), fmtNumber(row.solarCompensationEur));
         }
+        if (includeSecondBattery) cells.push(...secondBatteryCols.map(([, key]) => fmtNumber(row[key])));
         cells.push(
           String(row.estimatedSlots ?? ''),
           String(row.incompleteSlots ?? ''),

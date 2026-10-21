@@ -10,6 +10,18 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **Zweite Victron-Anlage am selben Hausanschluss (Beta)**: eine zweite GX-Anlage ohne PV und ohne eigenen Zähler,
+  z. B. die der anderen Haushälfte. Die Anlage mit Zähler regelt den Anschluss wie bisher; die zweite übernimmt träge
+  einen Teil der Akkuleistung, verteilt nach nutzbarer Energie, sodass sich die Ladestände angleichen. EOS plant beide
+  Akkus als einen (Kapazität und Leistung addiert, Ladestand gewichtet). Not-Halt setzt die zweite Anlage sofort auf 0,
+  bei Abregelung oder negativem Preis speist sie nicht ins Hausnetz; ist sie nicht erreichbar, rechnet EOS ohne sie.
+  Einstellungen → Meine Anlage → Erweitert; nur im Bleeding-Edge-Kanal.
+  Die Historie zeigt den Akku der zweiten Anlage getrennt („Akku 2“): eigene Zeilen in der Energiebilanz, eigene
+  Segmente in den Tagesflüssen, eigener Knoten im Sankey, eigene Spalten in Tabelle und CSV, seine Einspeisung mit
+  eigenem Börsenerlös — PV, Verbrauch und Einspeisung gehen damit wieder auf.
+
 ## [1.0.8] - 2026-10-21
 
 Release nach knapp zwei Wochen, 110 Commits seit 1.0.7. Überblick nach Themen — die Einzelheiten

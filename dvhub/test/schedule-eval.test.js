@@ -463,6 +463,26 @@ function eosClosedLoopRule(batteryShareW = 16000) {
   };
 }
 
+// Zweite GX (Codex-Gegenpruefung 21.10.): EOS plant mit beiden Wechselrichtern;
+// die AC-Grenze des Exports muss dieselbe Summe nehmen, sonst halbiert sie den Plan.
+test('T-0121: mit zweiter GX gilt die AC-Grenze beider Wechselrichter', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 50;
+      state.victron.pvTotalW = 0;
+      state.victron.selfConsumptionW = 0;
+      state.schedule.rules = [eosClosedLoopRule(16000)];
+      cfg.updateChannel = 'dev';
+      cfg.optimizer = { enabled: true, allowGridCharge: false, allowGridDischarge: true, inverterMaxPowerW: 10000 };
+      cfg.multiGx = { enabled: true, host: '10.0.0.6', batteryCapacityWh: 32000, maxChargeW: 8000, maxDischargeW: 8000 };
+      state.multiGx = { enabled: true, online: true, socPct: 60, minSocPct: 10 };
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  // B 16000, AC-Grenze 10000 + 8000 = 18000 → -16000 (nur Hauptanlage: -10000)
+  assert.equal(Number(state.schedule.active.gridSetpointW?.value), -16000);
+});
+
 test('T-0121: EOS closed-loop recomputes gridSetpointW = -(B + live PV surplus)', async () => {
   const { ctx, state } = makeCtx({
     mutate: ({ state, cfg }) => {
@@ -694,6 +714,25 @@ function makeChargeReserveCtx({
     }
   });
 }
+
+// Zweite GX am selben Anschluss (Codex-Gegenpruefung 21.10.): EOS plant den
+// Ziel-SoC fuer BEIDE Akkus; die Live-Korrektur muss denselben gemeinsamen
+// Ladestand und dieselbe Kapazitaet nehmen, sonst rechnet sie gegen die Haelfte.
+test('T-LIVESOC-RESERVE: mit zweiter GX gemeinsamer Ladestand und gemeinsame Kapazitaet', async () => {
+  const { ctx, writes } = makeChargeReserveCtx({
+    chargeReserveW: null, pvTotalW: 10000, targetSocPct: 100, liveSocPct: 98,
+    liveSocCfg: { enabled: true }, batteryCapacityWh: 60000, maxChargeW: 6000
+  });
+  const cfg = ctx.getCfg();
+  cfg.updateChannel = 'dev';
+  cfg.multiGx = { enabled: true, host: '10.0.0.6', batteryCapacityWh: 60000, maxChargeW: 6000, maxDischargeW: 6000 };
+  ctx.state.multiGx = { enabled: true, online: true, socPct: 99, minSocPct: 10 };
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  // gemeinsam 98,5 % von 120000 Wh: (100−98,5)/100 × 120000 / 0,25 h = 7200 W
+  // export = −(10000 − 7200 − 100) = −2700 (nur Hauptanlage waere −5100)
+  assert.ok(writes.some((w) => w.target === 'gridSetpointW' && w.value === -2700),
+    `expected -2700 (gemeinsame Reserve 7200), got ${JSON.stringify(writes)}`);
+});
 
 test('T-CURTAIL-CHARGE: dcExportMode subtracts chargeReserveW before exporting', async () => {
   const { ctx, logs, writes } = makeChargeReserveCtx({ chargeReserveW: 2000 });

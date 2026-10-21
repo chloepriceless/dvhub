@@ -22,6 +22,7 @@ import { resolveEosProxy } from '../services/optimizer/eos-adapter.js';
 import { resolveControlWriteVerify } from '../schedule-eval.js';
 import { resolveCrossCheckOptions } from '../services/mqtt-crosscheck.js';
 import { resolveFreezeOptions } from '../services/telemetry-freeze-watchdog.js';
+import { resolveMultiGxOptions } from '../services/multi-gx/index.js';
 
 // Pro Feature: eine Config, in der der Schalter AUSDRÜCKLICH an ist, und die
 // Funktion, die daraus das wirksame `enabled` ableitet.
@@ -37,6 +38,10 @@ const RESOLVERS = {
   controlWriteVerify: {
     resolve: resolveControlWriteVerify,
     configWithFlagOn: { schedule: { controlWriteVerify: { enabled: true } } }
+  },
+  multiGx: {
+    resolve: resolveMultiGxOptions,
+    configWithFlagOn: { multiGx: { enabled: true, host: '10.0.0.6' } }
   }
 };
 

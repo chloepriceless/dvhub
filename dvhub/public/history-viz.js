@@ -198,9 +198,11 @@
   // Forced column placement for the layered layout: sources left (0), the Akku
   // hub middle (1), sinks right (2). PV→Verbrauch / PV→Einspeisung span 0→2 and
   // pass the middle column — standard for a multi-layer Sankey.
-  const SANKEY_COLUMNS = { PV: 0, Netzbezug: 0, Akku: 1, Verbrauch: 2, Einspeisung: 2 };
+  // „Akku 2“ (zweite GX-Anlage, 21.10.2026) steht als eigener Knoten unter dem
+  // Hauptakku in der Mitte; ohne zweite Anlage hat er keine Kanten und fehlt.
+  const SANKEY_COLUMNS = { PV: 0, Netzbezug: 0, Akku: 1, 'Akku 2': 1, Verbrauch: 2, Einspeisung: 2 };
   // Vertical stacking order within each column (lower = higher up).
-  const SANKEY_PRIORITY = { PV: 0, Netzbezug: 1, Akku: 0, Verbrauch: 0, Einspeisung: 1 };
+  const SANKEY_PRIORITY = { PV: 0, Netzbezug: 1, Akku: 0, 'Akku 2': 1, Verbrauch: 0, Einspeisung: 1 };
 
   // Build the link list for a given layout from one Sankey payload.
   function sankeyLinksFor(layout, data) {
@@ -215,6 +217,10 @@
         { from: 'Netzbezug', to: 'Akku',        flow: n(b.gridToBattery) },
         { from: 'Akku',      to: 'Verbrauch',   flow: n(b.batteryToLoad) },
         { from: 'Akku',      to: 'Einspeisung', flow: n(b.batteryToExport) },
+        { from: 'PV',        to: 'Akku 2',      flow: n(b.pvToSecondBattery) },
+        { from: 'Netzbezug', to: 'Akku 2',      flow: n(b.gridToSecondBattery) },
+        { from: 'Akku 2',    to: 'Verbrauch',   flow: n(b.secondBatteryToLoad) },
+        { from: 'Akku 2',    to: 'Einspeisung', flow: n(b.secondBatteryToExport) },
       ].filter((l) => l.flow > 0.01);
     }
     return (data.flows || []).map((f) => ({ from: f.from, to: f.to, flow: f.flow }));
@@ -241,6 +247,11 @@
       'Akku-Entladen':  cssVar('--green',  '#3ee0a0'),
       'Akku-Laden':     cssVar('--green',  '#3ee0a0'),
       'Akku':           cssVar('--green',  '#3ee0a0'),
+      // Akku der zweiten GX-Anlage: eigene Farbe, damit er vom Hauptakku
+      // unterscheidbar ist (flach: Laden/Entladen, mehrlagig: ein Knoten).
+      'Akku 2-Entladen': cssVar('--blue',  '#67a5ff'),
+      'Akku 2-Laden':    cssVar('--blue',  '#67a5ff'),
+      'Akku 2':          cssVar('--blue',  '#67a5ff'),
       'Eigenverbrauch': cssVar('--cyan',   '#34dbff'),
       'Verbrauch':      cssVar('--cyan',   '#34dbff'),
       'Einspeisung':    cssVar('--violet', '#a78bfa'),
@@ -294,8 +305,9 @@
       if (layered) {
         const b = data.breakdown || {};
         const n = (v) => Number(v) || 0;
-        const akkuIn = n(b.pvToBattery) + n(b.gridToBattery);
-        const akkuOut = n(b.batteryToLoad) + n(b.batteryToExport);
+        // Beide Akkus zusammen (Akku 2 ist ohne zweite Anlage 0).
+        const akkuIn = n(b.pvToBattery) + n(b.gridToBattery) + n(b.pvToSecondBattery) + n(b.gridToSecondBattery);
+        const akkuOut = n(b.batteryToLoad) + n(b.batteryToExport) + n(b.secondBatteryToLoad) + n(b.secondBatteryToExport);
         const delta = akkuIn - akkuOut;
         sub.textContent =
           `Werte in kWh · PV→Akku→Verbrauch/Netz · `

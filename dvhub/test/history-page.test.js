@@ -423,3 +423,81 @@ test('history.css: versteckte Rechenzeilen (.calc-row-line[hidden]) bleiben unsi
   const html = readPublic('history.html');
   assert.match(html, /class="calc-row-line" id="historyKpiEegExtensionRow" hidden/);
 });
+
+// Zweite GX-Anlage am selben Anschluss (Chrissi 21.10.2026: „kannst die Akkus
+// dort getrennt aufzeigen“). Akku 2 erscheint als eigene Zeile, eigenes
+// Segment, eigener Sankey-Knoten und eigene Tabellenspalten — aber nur, wenn
+// es Werte gibt. Ohne zweite Anlage bleibt die Seite wie sie war.
+const SECOND_KPIS = {
+  pvKwh: 10, loadKwh: 8, exportKwh: 3,
+  pvShareKwh: 3, batteryShareKwh: 2, secondBatteryShareKwh: 1.5, gridShareKwh: 1.5,
+  solarToGridKwh: 1.5, batteryToGridKwh: 1, secondBatteryToGridKwh: 0.5
+};
+
+test('Energiebilanz: Akku 2 als eigene davon-Zeile, Akku-Summen enthalten ihn', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({ view: 'day', date: '2026-03-09', kpis: SECOND_KPIS, rows: [], meta: {} });
+  assert.match(elements.get('historyKpiConsBattery').textContent, /3,50/);
+  assert.match(elements.get('historyKpiConsBattery2').textContent, /1,50/);
+  assert.equal(elements.get('historyKpiConsBattery2Row').hidden, false);
+  assert.match(elements.get('historyKpiExportBattery').textContent, /1,50/);
+  assert.match(elements.get('historyKpiExportBattery2').textContent, /0,50/);
+  assert.equal(elements.get('historyKpiExportBattery2Row').hidden, false);
+});
+
+test('Energiebilanz ohne zweite Anlage: Akku-2-Zeilen versteckt, Werte wie bisher', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const kpis = { ...SECOND_KPIS, secondBatteryShareKwh: 0, secondBatteryToGridKwh: 0 };
+  helpers.renderSummary({ view: 'day', date: '2026-03-09', kpis, rows: [], meta: {} });
+  assert.match(elements.get('historyKpiConsBattery').textContent, /2,00/);
+  assert.match(elements.get('historyKpiExportBattery').textContent, /1,00/);
+  assert.equal(elements.get('historyKpiConsBattery2Row').hidden, true);
+  assert.equal(elements.get('historyKpiExportBattery2Row').hidden, true);
+});
+
+test('Tagesfluesse und Sankey: Akku 2 nur mit Werten', () => {
+  const { helpers } = loadHistoryPageHelpers();
+  const items = [
+    { solarDirectUseKwh: 1, solarToBatteryKwh: 0.5, solarToGridKwh: 0.2, batteryDirectUseKwh: 0.3, gridDirectUseKwh: 0.1,
+      secondSolarToBatteryKwh: 0.4, secondBatteryDirectUseKwh: 0.2, secondBatteryToGridKwh: 0.1, secondGridToBatteryKwh: 0.05 }
+  ];
+  const labels = helpers.dayFlowDatasets(items).map((ds) => ds.label);
+  for (const l of ['Solar zu Akku 2', 'Akku 2 ins Netz', 'Akku 2 zum Verbrauch', 'Netz zu Akku 2']) assert.ok(labels.includes(l), `${l} fehlt`);
+  const plain = items.map((i) => ({ ...i, secondSolarToBatteryKwh: 0, secondBatteryDirectUseKwh: 0, secondBatteryToGridKwh: 0, secondGridToBatteryKwh: 0 }));
+  assert.equal(helpers.dayFlowDatasets(plain).length, 7, 'ohne Akku 2: die bisherigen 7 Segmente');
+  assert.ok(!helpers.dayFlowDatasets(plain).some((ds) => /Akku 2/.test(ds.label)));
+
+  const edges = helpers.energyFlowSankeyEdges(items);
+  assert.ok(edges.some((e) => e.from === 'PV' && e.to === 'Akku2'));
+  assert.ok(edges.some((e) => e.from === 'Akku2' && e.to === 'Verbrauch'));
+  assert.ok(edges.some((e) => e.from === 'Akku2' && e.to === 'Netz'));
+  assert.ok(!helpers.energyFlowSankeyEdges(plain).some((e) => e.from === 'Akku2' || e.to === 'Akku2'));
+});
+
+test('Tabelle: Akku-2-Spalten nur, wenn eine Zeile Werte hat', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderRows({ view: 'week', rows: [
+    { label: '2026-03-09', importKwh: 1, loadKwh: 2, secondBatteryDirectUseKwh: 0.4, secondBatteryToGridKwh: 1, secondSolarToBatteryKwh: 0.5 }
+  ] });
+  assert.match(elements.get('historyRows').innerHTML, /Akku 2 direkt/);
+  assert.match(elements.get('historyRows').innerHTML, /Akku 2 → Netz/);
+  helpers.renderRows({ view: 'week', rows: [{ label: '2026-03-09', importKwh: 1, loadKwh: 2 }] });
+  assert.doesNotMatch(elements.get('historyRows').innerHTML, /Akku 2/);
+});
+
+test('Gesamtverlust zieht auch die Ladestandsaenderung von Akku 2 ab (Codex Runde 4)', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const kpis = { pvKwh: 20, importKwh: 0, loadKwh: 5, exportKwh: 4, batteryChargeKwh: 0, batteryDischargeKwh: 0,
+    batteryStoredDeltaKwh: 0, secondBatteryStoredDeltaKwh: 10 };
+  helpers.renderSummary({ view: 'day', date: '2026-03-09', kpis, rows: [], meta: {} });
+  // 20 − (5 + 4) − 10 gespeichert in Akku 2 = 1 kWh Verlust
+  assert.match(elements.get('historyKpiTotalLoss').textContent, /^1,00/);
+});
+
+test('Sankey: Akku→Akku-Verschiebung als Netto-Kante (Codex Runde 4), kein Kreis', () => {
+  const { helpers } = loadHistoryPageHelpers();
+  const only = helpers.energyFlowSankeyEdges([{ batteryToSecondBatteryKwh: 1 }]);
+  assert.equal(JSON.stringify(only.map((e) => [e.from, e.to, e.flow])), JSON.stringify([['Akku', 'Akku2', 1]]));
+  const both = helpers.energyFlowSankeyEdges([{ batteryToSecondBatteryKwh: 1 }, { secondBatteryToBatteryKwh: 1.5 }]);
+  assert.equal(JSON.stringify(both.map((e) => [e.from, e.to, e.flow])), JSON.stringify([['Akku2', 'Akku', 0.5]]));
+});

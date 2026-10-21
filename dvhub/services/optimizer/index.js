@@ -20,6 +20,8 @@ import { buildEosOptimization, pickEmsIntervalSec } from './eos-config-sync.js';
 import { enrichPriceSlotsWithCosts } from './cost-model.js';
 import { createMispelTracker } from './mispel-tracker.js';
 import { assessMultiDayHold } from './multi-day.js';
+// Zweite GX am selben Anschluss: Planung sieht beide Akkus als einen.
+import { planningCfg, planningSocPct, planningMinSocPct } from '../multi-gx/planning.js';
 
 /**
  * Letzten EOS-Plan weiterfahren, wenn EOS gerade nichts liefert (Neustart,
@@ -484,21 +486,23 @@ export function createOptimizerService(ctx) {
       //    optimizer.minSocPct knob was retired from the UI (it never governed
       //    the EOS path); honour it only if a legacy config still carries it,
       //    else fall back to the single hard floor.
+      // Zweite GX am selben Anschluss: Akku beider Anlagen (multi-gx/planning).
+      const planCfg = planningCfg(ctx, cfg);
       const batteryParams = {
-        minSocPct: cfg.optimizer.minSocPct ?? cfg.optimizer.hardFloorSocPct ?? 5,
+        minSocPct: planningMinSocPct(ctx, cfg.optimizer.minSocPct ?? cfg.optimizer.hardFloorSocPct ?? 5),
         maxSocPct: cfg.optimizer.maxSocPct ?? 100,
-        maxChargeW: cfg.optimizer.maxChargeW ?? 3000,
-        maxDischargeW: cfg.optimizer.maxDischargeW ?? 3000
+        maxChargeW: planCfg.optimizer.maxChargeW ?? 3000,
+        maxDischargeW: planCfg.optimizer.maxDischargeW ?? 3000
       };
       const gate = applyConfidenceGating(batteryParams, confidence);
 
       // 5. Battery model params
       const batteryModel = {
-        capacityWh: cfg.optimizer.batteryCapacityWh ?? 10000,
+        capacityWh: planCfg.optimizer.batteryCapacityWh ?? 10000,
         maxSocPct: batteryParams.maxSocPct,
         maxChargeW: batteryParams.maxChargeW,
         maxDischargeW: batteryParams.maxDischargeW,
-        currentSocPct: state.victron?.soc ?? 50 // D-06: anchor to reality
+        currentSocPct: planningSocPct(ctx) ?? 50 // D-06: anchor to reality
       };
 
       // 6. Grid permission flags from config
@@ -534,7 +538,7 @@ export function createOptimizerService(ctx) {
 
       const multiDayResult = assessMultiDayHold(
         pvSlots, loadSlots,
-        cfg.optimizer?.batteryCapacityWh ?? 10000,
+        planCfg.optimizer?.batteryCapacityWh ?? 10000,
         avgFeedIn, avgImport, rtEff
       );
 
@@ -620,7 +624,7 @@ export function createOptimizerService(ctx) {
           // ohnehin 2 min Abstand; ein frischer Plan beginnt beim echten SoC.
           if (dvhubTriggersEosRuns(cfg) && !eosRunTrigger.isRunning()) {
             const drift = socDriftReplan({
-              solution: eosSolution, liveSocPct: Number(state.victron?.soc), nowMs: Date.now(), intervalSec: eosIntervalSec(),
+              solution: eosSolution, liveSocPct: Number(planningSocPct(ctx)), nowMs: Date.now(), intervalSec: eosIntervalSec(),
             });
             if (drift.replan) {
               pushLog('eos_soc_drift', { expectedPct: drift.expectedPct, livePct: drift.livePct, deltaPct: drift.deltaPct });
