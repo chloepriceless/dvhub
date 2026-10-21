@@ -413,3 +413,13 @@ test('history page toggles the backfill button label and disabled state while lo
   assert.equal(elements.get('historyBackfillBtn').disabled, false);
   assert.match(elements.get('historyBackfillBtn').textContent, /nachladen/i);
 });
+
+// 21.10.2026: .calc-row-line setzt display:flex und schlug damit das
+// hidden-Attribut — „Förderverlängerung (§51a)“ stand auf Prod sichtbar mit „-“,
+// obwohl history.js sie versteckt. Jede Zeile mit hidden muss verschwinden.
+test('history.css: versteckte Rechenzeilen (.calc-row-line[hidden]) bleiben unsichtbar', () => {
+  const css = readPublic('history.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(css, /\.calc-row-line\[hidden\]\s*\{[^}]*display\s*:\s*none/);
+  const html = readPublic('history.html');
+  assert.match(html, /class="calc-row-line" id="historyKpiEegExtensionRow" hidden/);
+});
