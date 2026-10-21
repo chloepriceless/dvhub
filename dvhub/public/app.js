@@ -2327,6 +2327,11 @@ function renderDashboardStatus(status) {
     setText('maxDischargeReadback', formatMaxDischarge(vic.maxDischargeW), Number(vic.maxDischargeW) === 0 ? 'off' : null);
   });
 
+  // Zweite Victron-Anlage am selben Anschluss (second-gx-view.js).
+  safeRender('dashboard.second-gx', () => {
+    window.DVhubSecondGx?.render(status.multiGx);
+  });
+
   safeRender('dashboard.costs', () => {
     const c = status.costs || {};
     setText('costImport', c.importKwh == null ? '-' : `${c.importKwh} kWh`);

@@ -129,6 +129,20 @@
         </div>
       </div>
 
+      <!-- Zweite Victron-Anlage am selben Hausanschluss (services/multi-gx,
+           second-gx-view.js). Nur sichtbar, wenn sie eingeschaltet ist. -->
+      <div class="card rail-card" data-accent="bat" id="secondGxCard" hidden>
+        <div class="rail-card-head">
+          <span class="ttl"><span class="dot dot-bat"></span>Zweite Anlage &middot; Victron</span>
+          <span class="chip sm" id="secondGxChip"><span class="dot"></span><span id="secondGxState">&mdash;</span></span>
+        </div>
+        <div class="rail-big card-value value-bat" id="secondGxSoc">&mdash;</div>
+        <div class="battery-vis"><i class="progress-fill-init" id="secondGxSocBar"></i></div>
+        <div class="rail-row"><span class="l">Akku-Leistung</span><strong class="v" id="secondGxBatP">&mdash;</strong></div>
+        <div class="rail-row" title="Anteil der zweiten Anlage an der gesamten Akkuleistung beider Anlagen, verteilt nach nutzbarer Energie."><span class="l">Anteil</span><strong class="v" id="secondGxShare">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv" title="Netz-Sollwert, den DVhub der zweiten GX schreibt (wirkt auf ihren AC-IN, Register 2716)."><span class="l">Sollwert AC-IN</span><strong class="v" id="secondGxSetpoint">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Minimum-SOC</span><strong class="v" id="secondGxMinSoc">&mdash;</strong></div>
+      </div>
       <div class="card rail-card" data-accent="dv" data-leit="adv">
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-dv"></span>DV-Signale &middot; LUOX</span>
@@ -548,6 +562,7 @@
 <script src="/dv-modal.js"></script>
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20261006-zaehlen"></script>
+<script src="/second-gx-view.js?v=20261021"></script>
 <script src="/app.js?v=20261020-hinweise"></script>
 <script src="/leitstand-charts.js?v=20261003-eos-plan"></script>
 <script src="/ev-tile.js?v=20261015-ev-pro"></script>
