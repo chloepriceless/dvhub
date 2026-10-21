@@ -1271,10 +1271,32 @@ function formatDiscoveredSystemOption(system = {}) {
 function openLocationPicker(locationBasePath) {
   const latPath = locationBasePath + '.latitude';
   const lonPath = locationBasePath + '.longitude';
-  const latInput = document.querySelector(`[data-path="${latPath}"]`);
-  const lonInput = document.querySelector(`[data-path="${lonPath}"]`);
-  const currentLat = parseFloat(latInput?.value) || 51.0;
-  const currentLon = parseFloat(lonInput?.value) || 10.0;
+  // Über die id, nicht über [data-path=…]: das trägt seit der Suche (eac147f)
+  // auch die umschließende Zeile, und die steht im DOM vor dem Eingabefeld.
+  const latInput = document.getElementById(fieldId(latPath));
+  const lonInput = document.getElementById(fieldId(lonPath));
+  // Startpunkt: der eingetragene Standort; leer, 0/0 oder der Werkswert der
+  // Automatik (Deutschland-Mitte) heißt „nicht gesetzt“. Dann der Standort der
+  // anderen Gruppe (Anlage ↔ Kleinanlagen-Automatik), sonst Deutschland-Mitte
+  // als Übersicht zum Hineinzoomen.
+  const usable = (lat, lon) => Number.isFinite(lat) && Number.isFinite(lon) && !(lat === 0 && lon === 0)
+    && !(lat === SMA_LOCATION_DEFAULT.latitude && lon === SMA_LOCATION_DEFAULT.longitude)
+    && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+  const fromConfig = (base) => {
+    for (const cfg of [currentDraftConfig, currentEffectiveConfig]) {
+      const lat = Number(getPath(cfg, `${base}.latitude`));
+      const lon = Number(getPath(cfg, `${base}.longitude`));
+      if (usable(lat, lon)) return [lat, lon];
+    }
+    return null;
+  };
+  const typedLat = parseFloat(latInput?.value);
+  const typedLon = parseFloat(lonInput?.value);
+  const start = usable(typedLat, typedLon) ? [typedLat, typedLon]
+    : fromConfig('forecast.location') || fromConfig('schedule.smallMarketAutomation.location');
+  const currentLat = start ? start[0] : 51.0;
+  const currentLon = start ? start[1] : 10.0;
+  const startZoom = start ? 15 : 6;
 
   // Create modal overlay
   const overlay = document.createElement('div');
@@ -1287,8 +1309,8 @@ function openLocationPicker(locationBasePath) {
       </div>
       <div id="location-picker-map"></div>
       <div class="location-picker-footer">
-        <span id="location-picker-coords">${currentLat.toFixed(6)}, ${currentLon.toFixed(6)}</span>
-        <button type="button" class="btn btn-primary" id="location-picker-apply">\u00dcbernehmen</button>
+        <span id="location-picker-coords">${start ? `${currentLat.toFixed(6)}, ${currentLon.toFixed(6)}` : 'Bitte das Haus auf der Karte anklicken.'}</span>
+        <button type="button" class="btn btn-primary" id="location-picker-apply"${start ? '' : ' disabled'}>\u00dcbernehmen</button>
       </div>
     </div>
   `;
@@ -1301,7 +1323,7 @@ function openLocationPicker(locationBasePath) {
   function initLeafletMap() {
     const mapContainer = document.getElementById('location-picker-map');
     if (!mapContainer) return;
-    const map = L.map(mapContainer).setView([currentLat, currentLon], 13);
+    const map = L.map(mapContainer).setView([currentLat, currentLon], startZoom);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap',
       maxZoom: 19
@@ -1311,11 +1333,14 @@ function openLocationPicker(locationBasePath) {
 
     const marker = L.marker([currentLat, currentLon], { draggable: true }).addTo(map);
 
-    function updateCoords(lat, lon) {
+    function updateCoords(lat, rawLon) {
+      // Leaflet zählt nach einer Weltumrundung über ±180° hinaus weiter.
+      const lon = ((((rawLon + 180) % 360) + 360) % 360) - 180;
       selectedLat = lat;
       selectedLon = lon;
       document.getElementById('location-picker-coords').textContent =
         `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+      document.getElementById('location-picker-apply').disabled = false;
     }
 
     marker.on('dragend', () => {
@@ -1354,14 +1379,13 @@ function openLocationPicker(locationBasePath) {
   });
 
   // Apply
+  // Die Einstellungsseite hört auf 'change' (Entwurf + Speichern-Leiste), nicht auf 'input'.
   document.getElementById('location-picker-apply').addEventListener('click', () => {
-    if (latInput) {
-      latInput.value = selectedLat.toFixed(6);
-      latInput.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    if (lonInput) {
-      lonInput.value = selectedLon.toFixed(6);
-      lonInput.dispatchEvent(new Event('input', { bubbles: true }));
+    for (const [input, value] of [[latInput, selectedLat], [lonInput, selectedLon]]) {
+      if (!input) continue;
+      input.value = value.toFixed(6);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
     }
     overlay.remove();
   });
