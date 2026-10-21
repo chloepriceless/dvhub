@@ -18,7 +18,7 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'timesc
 // Was packagecloud.io/timescale/timescaledb anbietet (Stand 21.10.2026, per curl geprueft).
 const SERVED = ['debian/ bookworm', 'debian/ trixie', 'ubuntu/ noble', 'ubuntu/ resolute'];
 
-function setup(osRelease, { existingList } = {}) {
+function setup(osRelease, { existingList, transient = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsp-'));
   const bin = join(dir, 'bin');
   execFileSync('mkdir', ['-p', bin]);
@@ -36,15 +36,28 @@ function setup(osRelease, { existingList } = {}) {
   };
   const served = SERVED.map((s) => `*"timescaledb/${s} "*`).join('|');
   // apt-get update: Fehlerbild von apt 3 (Ubuntu 26.04) fuer einen Pfad ohne Release.
+  // Ohne LC_ALL=C antwortet apt in der Sprache der Box (hier deutsch).
+  // transient: packagecloud kurz nicht erreichbar (503) — die Quelle ist trotzdem richtig.
   fake('apt-get', `
 if [[ "$1" == update ]]; then
   [[ -f "${repoList}" ]] || exit 0
   line="$(cat "${repoList}")"
-  case "$line" in ${served}) exit 0 ;; esac
   url="$(echo "$line" | grep -oE 'https://[^ ]+') $(echo "$line" | awk '{print $(NF-1)}')"
-  echo "Err:7 $url Release"
+  err=Fehl; [[ "$LC_ALL" == C ]] && err=Err
+  if ${transient ? 'true' : 'false'}; then
+    echo "$err:7 $url InRelease"
+    echo "  503  Service Unavailable [IP: 52.52.223.74 443]"
+    echo "W: Failed to fetch $url/InRelease  503  Service Unavailable"
+    exit 100
+  fi
+  case "$line" in ${served}) exit 0 ;; esac
+  echo "$err:7 $url Release"
   echo "  404  Not Found [IP: 52.52.223.74 443]"
-  echo "Error: The repository '$url Release' does not have a Release file."
+  if [[ "$LC_ALL" == C ]]; then
+    echo "Error: The repository '$url Release' does not have a Release file."
+  else
+    echo "Fehler: Das Depot »$url Release« enthält keine Release-Datei."
+  fi
   exit 100
 fi
 exit 0`);
@@ -61,7 +74,8 @@ fi`);
   fake('lsb_release', 'exit 1');
   const run = () => execFileSync('bash', [SCRIPT], {
     env: {
-      PATH: `${bin}:${process.env.PATH}`, TS_PROVISION_EUID: '0',
+      PATH: `${bin}:${process.env.PATH}`, TS_PROVISION_EUID: '0', LANG: 'de_DE.UTF-8',
+      PG_ETC: join(dir, 'postgresql'),
       OS_RELEASE: osFile, REPO_LIST: repoList, KEYRING: keyring,
       CONFIG_PATH: join(dir, 'config.json'), DATA_DIR: dir,
     },
@@ -137,5 +151,13 @@ test('Distribution ohne Pakete bei packagecloud: Quelle wieder raus, Apache-Fall
     const c = s.calls();
     assert.equal(c.filter((l) => l === 'apt-get update').length, 2, 'nach dem Entfernen apt-Listen neu laden');
     assert.deepEqual(installed(c), ['apt-get install -y postgresql-18-timescaledb']);
+  } finally { s.cleanup(); }
+});
+
+test('packagecloud kurz nicht erreichbar (503): richtige Quelle bleibt stehen', () => {
+  const s = setup(UBUNTU_2604, { transient: true });
+  try {
+    s.run();
+    assert.match(s.list() || '', /timescaledb\/ubuntu\/ resolute main$/);
   } finally { s.cleanup(); }
 });

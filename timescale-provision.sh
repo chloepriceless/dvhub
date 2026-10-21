@@ -43,7 +43,7 @@ DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
 CONFIG_PATH="${CONFIG_PATH:-/etc/dvhub/config.json}"
 DB_NAME="${DB_NAME:-dvhub}"
 
-# TS_PROVISION_EUID, OS_RELEASE, REPO_LIST, KEYRING: nur fuer Tests
+# TS_PROVISION_EUID, OS_RELEASE, REPO_LIST, KEYRING, PG_ETC: nur fuer Tests
 # (test/timescale-provision.test.js), im Betrieb nie gesetzt.
 if [[ "${TS_PROVISION_EUID:-$EUID}" -ne 0 ]]; then
   echo "  TimescaleDB: timescale-provision.sh muss als root laufen — uebersprungen" >&2
@@ -149,12 +149,14 @@ if [[ -s "$KEYRING" && -n "$CODENAME" ]] && [[ "$(cat "$REPO_LIST" 2>/dev/null) 
   echo "  TimescaleDB: apt-Quelle (${DISTRO} ${CODENAME}) eingetragen."
 fi
 if [[ "$NEED_APT_UPDATE" -eq 1 ]]; then
-  APT_OUT="$(apt-get update 2>&1 || true)"
-  # Hat packagecloud fuer diese Distribution nichts (404, kein Release), bliebe die
+  # LC_ALL=C: apt meldet sonst in der Sprache der Box („Fehl:“, „Depot“).
+  APT_OUT="$(LC_ALL=C apt-get update 2>&1 || true)"
+  # Hat packagecloud fuer diese Distribution nichts (kein Release), bliebe die
   # Quelle sonst stehen und jedes `apt update` der Box meldete den Fehler → wieder
-  # entfernen, unten greift der Apache-Fallback. grep ohne -q: liest alles, kein
-  # SIGPIPE unter pipefail (siehe Hinweis bei apt-cache).
-  if printf '%s\n' "$APT_OUT" | grep -E '^(Err:[0-9]*|E:|Error:) .*packagecloud\.io/timescale' >/dev/null; then
+  # entfernen, unten greift der Apache-Fallback. Nur bei genau diesem Befund:
+  # DNS-Ausfall oder 503 sind voruebergehend, die Quelle ist dann trotzdem richtig.
+  # grep ohne -q: liest alles, kein SIGPIPE unter pipefail (siehe apt-cache).
+  if printf '%s\n' "$APT_OUT" | grep -E "^(E|Error): The repository '[^']*packagecloud\.io/timescale/[^']*' does not have a Release file" >/dev/null; then
     echo "  WARN: packagecloud hat keine TimescaleDB-Pakete fuer ${DISTRO} ${CODENAME} — apt-Quelle wieder entfernt." >&2
     rm -f "$REPO_LIST"
     apt-get update >/dev/null 2>&1 || true
@@ -213,7 +215,7 @@ fi
 # TimescaleDB is a preloaded extension — CREATE EXTENSION fails until the library
 # is in shared_preload_libraries and postgres has restarted. Debian's
 # postgresql.conf ships `include_dir = 'conf.d'`, so a drop-in is honoured.
-CONF_DIR="/etc/postgresql/${PG_VER}/main/conf.d"
+CONF_DIR="${PG_ETC:-/etc/postgresql}/${PG_VER}/main/conf.d"
 DROPIN="${CONF_DIR}/timescaledb.conf"
 NEED_RESTART="$PKG_CHANGED"   # a package swap needs a restart to load the new .so
 if [[ -d "$CONF_DIR" ]]; then
