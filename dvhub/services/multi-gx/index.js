@@ -23,11 +23,13 @@
 import { createFollowerController } from './follower-controller.js';
 import { safeInterval } from '../safe-async.js';
 import { betaGateOpen } from '../../beta-features.js';
+import { gridImportW } from '../optimizer/grid-storage.js';
 
 export const MULTI_GX_TICK_MS = 5000;
 const REG = { soc: 843, batteryPowerW: 842, minSocPct: 2901, setpoint: 2716 };
 const OFFLINE_AFTER_ERRORS = 3;
 const TIMEOUT_MS = 1500;
+const PRIMARY_MAX_AGE_MS = 30000;
 
 const int16 = (raw) => (raw > 0x7fff ? raw - 0x10000 : raw);
 
@@ -49,7 +51,9 @@ export function createMultiGx(ctx, deps = {}) {
   const now = deps.now || Date.now;
   let controller = null;
   let controllerKey = '';
-  let errors = 0;
+  let readErrors = 0;
+  let writeErrors = 0;
+  let running = false;
   let online = null;
   let active = false;
   let timer = null;
@@ -75,7 +79,7 @@ export function createMultiGx(ctx, deps = {}) {
   function publish(extra) {
     ctx.state.multiGx = {
       enabled: false, online: null, socPct: null, batteryPowerW: null, minSocPct: null,
-      setpointW: 0, desiredBatteryW: 0, sharePct: null, totalBatteryW: null, reason: null, errors, updatedAt: now(),
+      setpointW: 0, desiredBatteryW: 0, sharePct: null, totalBatteryW: null, reason: null, errors: readErrors + writeErrors, updatedAt: now(),
       ...extra,
     };
   }
@@ -91,14 +95,63 @@ export function createMultiGx(ctx, deps = {}) {
     await transport.mbWriteMultiple({ host: c.host, port: c.port, unitId: c.unitId, address: REG.setpoint, values: int32Words(value), timeoutMs: TIMEOUT_MS });
   }
 
+  // Ungedeckter Bedarf: Netzbezug ueber dem Sollwert der Hauptanlage, aber nur,
+  // wenn sie ihn nicht selbst decken kann (leer oder an der Leistungsgrenze)
+  // oder das Haus wirklich bezieht. Eine Einspeisegrenze haelt das Netz auch
+  // ueber dem Sollwert — dann laedt die Hauptanlage, und die zweite darf nicht
+  // in sie hinein entladen.
+  function unmetW(cfg, v, primaryBatteryW) {
+    const m = ctx.state.meter || {};
+    if (m.ok === false || primaryBatteryW == null) return 0;
+    const importW = gridImportW(m.grid_total_w, cfg.gridPositiveMeans);
+    if (importW == null || !finite(v.gridSetpointW)) return 0;
+    const excess = importW - Number(v.gridSetpointW);
+    if (excess <= 0) return 0;
+    const floor = finite(v.minSocPct) ? Number(v.minSocPct) : Number(cfg.optimizer?.hardFloorSocPct ?? 5);
+    const primaryEmpty = finite(v.soc) && Number(v.soc) <= floor + 1;
+    const maxDis = Number(cfg.optimizer?.maxDischargeW) || 0;
+    const primaryAtLimit = maxDis > 0 && -primaryBatteryW >= 0.95 * maxDis;
+    return importW > 100 || primaryEmpty || primaryAtLimit ? excess : 0;
+  }
+
+  // Messwerte der Hauptanlage nur, wenn sie frisch und glaubwuerdig sind —
+  // dieselben Wachen wie der Entlade-Boden in schedule-eval (T-0075, Einfrier-
+  // Waechter, Kreuzprobe).
+  function primaryBattery(v) {
+    if (!finite(v.batteryPowerW) || v.errors?.batteryPowerW) return null;
+    if (v.freeze?.active === true || v.sourceMismatch?.active === true) return null;
+    const at = v.fieldUpdatedAt?.batteryPowerW;
+    if (finite(at) && now() - Number(at) > PRIMARY_MAX_AGE_MS) return null;
+    return Number(v.batteryPowerW);
+  }
+
+  function setAvailable(next, host, error) {
+    if (next === online) return;
+    const was = online;
+    online = next;
+    if (next === false) ctx.pushLog?.('multi_gx_offline', { host, error: error || null });
+    if (next === true && was === false) ctx.pushLog?.('multi_gx_online', { host });
+    // EOS rechnet mit beiden Akkus nur, solange die zweite Anlage steuerbar ist →
+    // bei jedem Wechsel neu abgleichen (server.js: EOS-Sync + Neuplan).
+    try { ctx.onMultiGxAvailability?.(next === true); } catch { /* Anzeige-/Planungsfehler nie in den Regeltakt */ }
+  }
+
   async function tick() {
+    // Ein langsamer GX darf keine Takte stapeln (Codex 21.10.): laeuft einer, faellt der naechste aus.
+    if (running) return;
+    running = true;
+    try { await runTick(); } finally { running = false; }
+  }
+
+  async function runTick() {
     const c = conf();
     if (!c.enabled || !c.host) {
       if (active && c.host) {
         // Einmal neutral hinterlassen; das Register faellt ohnehin von selbst zurueck.
         try { await write(c, 0); } catch { /* best effort */ }
       }
-      active = false; controller = null; controllerKey = ''; errors = 0; online = null;
+      if (online === true) setAvailable(null);
+      active = false; controller = null; controllerKey = ''; readErrors = 0; writeErrors = 0; online = null;
       publish({ enabled: c.enabled, reason: c.enabled ? 'not_configured' : 'disabled' });
       return;
     }
@@ -110,47 +163,60 @@ export function createMultiGx(ctx, deps = {}) {
       controllerKey = key;
     }
 
+    let readOk = false;
+    let lastError = null;
     try {
       side.socPct = await read(c, 'soc', 4);
       side.batteryPowerW = await read(c, 'batteryPowerW', 4, 1, true);
       try { side.minSocPct = await read(c, 'minSocPct', 4, 0.1); } catch { side.minSocPct = null; }
       side.at = now();
-      errors = 0;
-      if (online === false) ctx.pushLog?.('multi_gx_online', { host: c.host });
-      online = true;
+      readErrors = 0;
+      readOk = true;
     } catch (e) {
-      errors += 1;
-      if (errors >= OFFLINE_AFTER_ERRORS && online !== false) {
-        online = false;
-        ctx.pushLog?.('multi_gx_offline', { host: c.host, error: e?.message || String(e) });
-      }
+      readErrors += 1;
+      lastError = e?.message || String(e);
     }
+    // Steuerbar = lesbar UND der Sollwert kommt an; drei Fehlversuche in Folge
+    // bei einem von beiden → nicht verfuegbar.
+    if (readErrors >= OFFLINE_AFTER_ERRORS || writeErrors >= OFFLINE_AFTER_ERRORS) setAvailable(false, c.host, lastError || 'write_failed');
 
     const cfg = ctx.getCfg() || {};
     const v = ctx.state.victron || {};
     const ctrl = ctx.state.ctrl || {};
-    const primaryFresh = finite(v.batteryPowerW) && !v.errors?.batteryPowerW;
+    const pB = primaryBattery(v);
     const out = controller.tick({
       nowMs: now(),
       online: online !== false,
       stop: ctrl.discretionaryWritesPaused === true,
       exportBlocked: ctrl.forcedOff === true || ctrl.negativePriceActive === true,
-      primaryBatteryW: primaryFresh ? Number(v.batteryPowerW) : null,
-      followerBatteryW: online === true ? side.batteryPowerW : null,
+      primaryBatteryW: pB,
+      followerBatteryW: readOk ? side.batteryPowerW : null,
+      unmetW: unmetW(cfg, v, pB),
       primary: { socPct: v.soc, minSocPct: v.minSocPct, maxSocPct: cfg.optimizer?.maxSocPct ?? 100, capacityWh: cfg.optimizer?.batteryCapacityWh },
       follower: { socPct: side.socPct, minSocPct: side.minSocPct ?? c.minSocPct, maxSocPct: 100, capacityWh: c.capacityWh },
     });
 
-    if (online === true) {
-      try { await write(c, out.setpointW); } catch (e) { errors += 1; ctx.pushLog?.('multi_gx_write_error', { error: e?.message || String(e) }); }
+    // Geschrieben wird nach jedem erfolgreichen Lesen — auch, wenn die Anlage
+    // gerade als nicht verfuegbar gilt, damit eine Erholung erkannt wird.
+    if (readOk) {
+      try {
+        await write(c, out.setpointW);
+        writeErrors = 0;
+        setAvailable(true, c.host);
+      } catch (e) {
+        writeErrors += 1;
+        if (writeErrors === 1) ctx.pushLog?.('multi_gx_write_error', { error: e?.message || String(e) });
+        if (writeErrors >= OFFLINE_AFTER_ERRORS) setAvailable(false, c.host, e?.message || String(e));
+      }
     }
+    const ok = online === true;
     publish({
-      enabled: true, online: online === true,
-      socPct: online === true ? side.socPct : null,
-      batteryPowerW: online === true ? side.batteryPowerW : null,
+      enabled: true, online: ok,
+      socPct: ok ? side.socPct : null,
+      batteryPowerW: ok ? side.batteryPowerW : null,
       minSocPct: side.minSocPct ?? c.minSocPct,
-      setpointW: out.setpointW, desiredBatteryW: out.desiredFollowerBatteryW, sharePct: out.followerWeightPct,
-      totalBatteryW: out.totalBatteryW, reason: out.reason,
+      setpointW: ok ? out.setpointW : 0, desiredBatteryW: out.desiredFollowerBatteryW, sharePct: out.followerWeightPct,
+      totalBatteryW: out.totalBatteryW, reason: ok || online === null ? out.reason : 'follower_offline',
     });
   }
 

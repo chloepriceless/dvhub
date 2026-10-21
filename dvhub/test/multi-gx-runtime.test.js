@@ -28,20 +28,24 @@ function fakeTransport({ soc = 60, batteryW = 0, minSocRaw = 150, fail = () => f
 function setup({ multiGx = {}, victron = {}, ctrl = {}, transport = fakeTransport() } = {}) {
   const cfg = {
     updateChannel: 'dev',
-    optimizer: { batteryCapacityWh: 64000, maxSocPct: 100 },
+    gridPositiveMeans: 'grid_import',
+    optimizer: { batteryCapacityWh: 64000, maxSocPct: 100, maxDischargeW: 10000 },
     multiGx: { enabled: true, host: '192.168.1.20', port: 502, unitId: 100, batteryCapacityWh: 64000,
       maxChargeW: 10000, maxDischargeW: 10000, minSocPct: 10, rampWPerS: 200, deadbandW: 300, ...multiGx },
   };
   const state = {
-    victron: { soc: 60, batteryPowerW: -4000, minSocPct: 10, errors: {}, ...victron },
+    victron: { soc: 60, batteryPowerW: -4000, minSocPct: 10, errors: {}, gridSetpointW: 0, ...victron },
+    meter: { ok: true, grid_total_w: 0 },
     ctrl: { forcedOff: false, discretionaryWritesPaused: false, negativePriceActive: false, ...ctrl },
   };
   const logs = [];
   let t = 0;
-  const mgx = createMultiGx({ getCfg: () => cfg, state, pushLog: (e, d) => logs.push([e, d]) },
+  const availability = [];
+  const mgx = createMultiGx({ getCfg: () => cfg, state, pushLog: (e, d) => logs.push([e, d]),
+    onMultiGxAvailability: (included) => availability.push(included) },
     { transport, now: () => t });
   const tick = async (ms = 5000) => { t += ms; await mgx.tick(); };
-  return { cfg, state, logs, transport, mgx, tick };
+  return { cfg, state, logs, transport, mgx, tick, availability, setNow: (v) => { t = v; } };
 }
 
 const writes = (tr) => tr.calls.filter((c) => c.op === 'write');
@@ -160,4 +164,67 @@ test('Einstellung geaendert: Regler startet neu bei 0 (kein Sprung mit alten Gre
   s.cfg.multiGx.maxDischargeW = 500;
   await s.tick();
   assert.ok(Math.abs(s.state.multiGx.setpointW) <= 500);
+});
+
+// Codex-Gegenpruefung 21.10.
+test('eingefrorene oder abweichende Messwerte der Hauptanlage: kein Anteil (no_data)', async () => {
+  for (const v of [{ freeze: { active: true } }, { sourceMismatch: { active: true } }]) {
+    const s = setup({ victron: v });
+    for (let i = 0; i < 4; i++) await s.tick();
+    assert.equal(s.state.multiGx.reason, 'no_data', JSON.stringify(v));
+  }
+});
+
+test('veralteter Zeitstempel der Akkuleistung (> 30 s): kein Anteil', async () => {
+  const s = setup();
+  await s.tick();
+  s.state.victron.fieldUpdatedAt = { batteryPowerW: 0 };
+  s.setNow(60000);
+  await s.tick();
+  assert.equal(s.state.multiGx.reason, 'no_data');
+});
+
+test('Lesen klappt, Schreiben scheitert dreimal: nicht steuerbar, EOS rechnet ohne sie', async () => {
+  const tr = fakeTransport({ fail: (req) => req.address === 2716 });
+  const s = setup({ transport: tr });
+  for (let i = 0; i < 5; i++) await s.tick();
+  assert.equal(s.state.multiGx.online, false);
+  assert.equal(s.logs.filter(([e]) => e === 'multi_gx_offline').length, 1);
+});
+
+test('langsame GX: Takte ueberlappen nicht', async () => {
+  let inFlight = 0; let maxInFlight = 0;
+  const tr = fakeTransport();
+  const slowRead = tr.mbRequest;
+  tr.mbRequest = async (req) => { inFlight++; maxInFlight = Math.max(maxInFlight, inFlight); await new Promise((r) => setTimeout(r, 5)); inFlight--; return slowRead(req); };
+  const s = setup({ transport: tr });
+  await Promise.all([s.mgx.tick(), s.mgx.tick(), s.mgx.tick()]);
+  assert.equal(maxInFlight, 1);
+  assert.equal(tr.calls.filter((c) => c.op === 'write').length, 1, 'nur ein Takt lief');
+});
+
+test('Erreichbarkeit wechselt: EOS wird neu abgeglichen (an/aus je einmal)', async () => {
+  let down = false;
+  const s = setup({ transport: fakeTransport({ fail: () => down }) });
+  for (let i = 0; i < 3; i++) await s.tick();
+  down = true;
+  for (let i = 0; i < 4; i++) await s.tick();
+  down = false;
+  await s.tick();
+  assert.deepEqual(s.availability, [true, false, true]);
+});
+
+test('Hauptanlage leer und Haus bezieht ueber dem Sollwert: ungedeckter Bedarf geht an die zweite Anlage', async () => {
+  const tr = fakeTransport({ soc: 80 });
+  const s = setup({ transport: tr, victron: { soc: 10, minSocPct: 10, batteryPowerW: 0 } });
+  s.state.meter.grid_total_w = 3000;
+  for (let i = 0; i < 6; i++) await s.tick();
+  assert.ok(s.state.multiGx.setpointW < -500, `Sollwert ${s.state.multiGx.setpointW}`);
+});
+
+test('Einspeisegrenze haelt das Netz ueber dem Sollwert, Hauptanlage laedt: KEIN ungedeckter Bedarf', async () => {
+  const s = setup({ victron: { soc: 50, batteryPowerW: 3000, gridSetpointW: -10000 } });
+  s.state.meter.grid_total_w = -6000; // Netz bei -6 kW gedeckelt
+  for (let i = 0; i < 6; i++) await s.tick();
+  assert.ok(s.state.multiGx.desiredBatteryW >= 0, `zweite Anlage soll nicht in die Hauptanlage entladen (${s.state.multiGx.desiredBatteryW})`);
 });

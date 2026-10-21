@@ -175,3 +175,26 @@ test('ungueltige Konfiguration wirft', () => {
   assert.throws(() => createFollowerController({ maxChargeW: -1, maxDischargeW: 1000 }), /maxChargeW/);
   assert.throws(() => createFollowerController({ maxChargeW: '', maxDischargeW: 1000 }), /maxChargeW/);
 });
+
+// Codex-Gegenpruefung 21.10.: Hauptanlage leer → gemessene Summe 0, der Bedarf
+// zeigt sich nur als Netzbezug ueber dem Sollwert. Den muss die zweite Anlage
+// uebernehmen koennen (unmetW = Netz − Sollwert der Hauptanlage, nur > 0).
+test('Hauptanlage leer: zweite Anlage deckt den ungedeckten Bedarf', () => {
+  const c = createFollowerController(cfg());
+  let s = 0;
+  for (let i = 0; i < 60; i++) {
+    const unmetW = Math.max(0, 3000 + s); // Haus 3 kW, zweite Anlage schiebt -s ins Hausnetz
+    const o = c.tick({ nowMs: i * 5000, primaryBatteryW: 0, followerBatteryW: s, unmetW,
+      primary: { ...SIDE, socPct: 10 }, follower: { ...SIDE, socPct: 70 } });
+    s = o.setpointW;
+  }
+  assert.ok(Math.abs(s - -3000) <= 300, `zweite Anlage ${s}`);
+});
+
+test('Mieter-Last 4 kW, Akku-Grenze 1,5 kW: AC-IN darf ueber 1,5 kW, Akku bleibt bei -1,5 kW', () => {
+  const c = createFollowerController(cfg({ maxChargeW: 1500, maxDischargeW: 1500 }));
+  const p = plant({ mainLoadW: 0, tenantLoadW: 4000, followerSoc: 90, primarySoc: 10 });
+  run(c, p, { ticks: 80 });
+  const fb = p.measure().followerBatteryW;
+  assert.ok(fb >= -1500 - 300 && fb <= -1500 + 300, `Akku zweite Anlage ${fb}`);
+});

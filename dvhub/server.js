@@ -1351,6 +1351,15 @@ if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();
 // Zweite Victron-GX am selben Netzanschluss (services/multi-gx): eigener
 // Modbus-Pool, damit eine haengende zweite GX die Hauptanlage nie ausbremst.
 // Ohne multiGx.enabled keine einzige Anfrage.
+// Wird die zweite Anlage steuerbar oder faellt sie aus, aendert sich der Akku,
+// mit dem EOS plant (multi-gx/planning) → Akku-Modell neu an EOS, dann Neuplan,
+// damit kein Lauf mit gemischtem Modell (Kapazitaet alt, Ladestand neu) startet.
+ctx.onMultiGxAvailability = (included) => {
+  Promise.resolve()
+    .then(() => ctx.eosConfigSync?.sync?.())
+    .then(() => ctx.optimizerService?.requestEosReplan?.(included ? 'multi_gx_online' : 'multi_gx_offline'))
+    .catch((e) => pushLog('multi_gx_eos_resync_failed', { error: e?.message || String(e) }));
+};
 ctx.multiGx = createMultiGx(ctx, { transport: createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
 if (IS_RUNTIME_PROCESS) ctx.multiGx.start();
 ctx.applyControlTarget = scheduler.applyControlTarget;

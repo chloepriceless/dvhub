@@ -21,6 +21,16 @@
  * 26.09. verteilte das Netzziel; bei „Null am Zaehler“ lag der zweite Akku dann
  * brach, waehrend sich die Hauptanlage allein leerte.)
  *
+ * Ungedeckter Bedarf (Codex-Gegenpruefung 21.10.): Ist die Hauptanlage leer oder
+ * an ihrer Leistungsgrenze, zeigt sich der Rest nicht in der Akku-Summe, sondern
+ * als Netzbezug ueber ihrem Sollwert (`unmetW`, vom Aufrufer nur in diesen
+ * Faellen gesetzt). Er zaehlt zur Summe dazu, sonst bliebe ein voller zweiter
+ * Akku untaetig, waehrend das Haus aus dem Netz bezieht.
+ *
+ * Der Sollwert wirkt auf den AC-IN, nicht auf den Akku: haengen Verbraucher an
+ * der zweiten Anlage, zieht sie deren Leistung zusaetzlich. Nach oben ist der
+ * Sollwert deshalb um die geschaetzte eigene Last weiter (Sollwert − Akku).
+ *
  * Vorzeichen wie in DVhub: + = Laden/Bezug, − = Entladen/Einspeisen. Ganze Watt,
  * kein -0. `nowMs` ist die einzige Zeitquelle.
  *
@@ -119,7 +129,10 @@ export function createFollowerController(config = {}) {
       return out('no_data');
     }
     const followerW = Number(input.followerBatteryW);
-    const totalW = Number(input.primaryBatteryW) + followerW;
+    const unmetW = finite(input.unmetW) ? Math.max(0, Number(input.unmetW)) : 0;
+    const totalW = Number(input.primaryBatteryW) + followerW - unmetW;
+    // Eigene Last der zweiten Anlage: was sie ueber den AC-IN zieht, aber nicht in den Akku geht.
+    const localLoadW = Math.max(0, setpoint - followerW);
     // Gleitender Mittelwert: kurze Lastspitzen sollen die Verteilung nicht bewegen.
     totalAvg = totalAvg == null || filterS === 0
       ? totalW
@@ -142,7 +155,7 @@ export function createFollowerController(config = {}) {
       setpoint += Math.max(-max, Math.min(max, err * gain));
       reason = 'follow';
     }
-    setpoint = Math.max(-maxDischargeW, Math.min(maxChargeW, setpoint));
+    setpoint = Math.max(-maxDischargeW, Math.min(maxChargeW + localLoadW, setpoint));
     if (input.exportBlocked === true && setpoint < 0) { setpoint = 0; reason = 'export_blocked'; }
     else if (input.exportBlocked === true) reason = 'export_blocked';
     return out(reason, desired, weight);

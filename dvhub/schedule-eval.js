@@ -19,6 +19,8 @@ import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automati
 import { safeInterval } from './services/safe-async.js';
 import { encodeSunspecFloat32 } from './services/inverter/sunspec.js';
 import { getPowerLimits } from './services/power-limits.js';
+// Zweite GX am selben Anschluss: EOS-Ziele gelten fuer beide Akkus zusammen.
+import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
 import { betaGateOpen } from './beta-features.js';
 
@@ -1196,15 +1198,18 @@ export function createScheduleEvaluator(ctx) {
         {
           const lsCfg = cfg.optimizer?.liveSocChargeReserve;
           const targetSocPct = Number(dcScheduleRule?.targetSocPct);
-          const liveSocPct = Number(state.victron.soc);
-          const capWh = Number(cfg.optimizer?.batteryCapacityWh) || 0;
+          // Zweite GX: EOS plant targetSocPct fuer beide Akkus → gemeinsamer
+          // Ladestand, gemeinsame Kapazitaet und Ladeleistung (multi-gx/planning).
+          const planCfg = planningCfg(ctx, cfg);
+          const liveSocPct = Number(planningSocPct(ctx));
+          const capWh = Number(planCfg.optimizer?.batteryCapacityWh) || 0;
           if (lsCfg?.enabled === true && Number.isFinite(targetSocPct)
               && Number.isFinite(liveSocPct) && liveSocPct >= 0 && capWh > 0) {
             const slotMs = (Number(dcScheduleRule.slotEndTs) || 0) - (Number(dcScheduleRule.slotTs) || 0);
             const slotH = slotMs > 0 ? Math.max(0.25 / 3, slotMs / 3600000) : 0.25;
             let liveReserveW = Math.round(((targetSocPct - liveSocPct) / 100) * capWh / slotH);
             if (liveReserveW < 0) liveReserveW = 0;
-            const maxChargeW = Number(cfg.optimizer?.maxChargeW) || 0;
+            const maxChargeW = Number(planCfg.optimizer?.maxChargeW) || 0;
             if (maxChargeW > 0 && liveReserveW > maxChargeW) liveReserveW = maxChargeW;
             chargeReserveW = liveReserveW;
             // Log once per slot when the live correction deviates notably from
@@ -1309,7 +1314,9 @@ export function createScheduleEvaluator(ctx) {
         // the closed-loop cascade. Gross bound (100 kW) is far too loose here.
         // Wechselrichter-Nennleistung aus der GUI, sonst der gemeinsame Standard
         // (10 kW) — derselbe Wert, mit dem EOS plant (vorher hier 29 kW).
-        const inverterCapW = Math.max(1000, getPowerLimits(cfg).limits.inverterMaxPowerW);
+        // Zweite GX: beide Wechselrichter zusammen (multi-gx/planning) — die
+        // Hauptanlage faehrt das Netzziel, die zweite traegt ihren Anteil.
+        const inverterCapW = Math.max(1000, getPowerLimits(planningCfg(ctx, cfg)).limits.inverterMaxPowerW);
         eff.value = B > 0
           ? -Math.round(Math.min(B + livePvSurplusW, inverterCapW)) // export slot: B + live PV, AC-capped
           : -Math.round(Math.min(plannedExportW, livePvSurplusW));  // charge slot: plan-capped, PV-limited
