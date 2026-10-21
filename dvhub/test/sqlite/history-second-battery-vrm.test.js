@@ -76,3 +76,19 @@ test('nach VRM-Backfill: VRM-Fluesse ohne lokale Akku-2-Werte, Teile = gemessene
     store.close();
   }
 });
+
+// Altbefund 21.10.2026: Der Rohdaten-Ausweichpfad mittelte VRM-Import und lokale
+// Werte derselben Reihe (0,5 und 0,3 kWh → 0,4). Wie die vorberechneten Slots
+// gilt je Reihe der VRM-Import, sonst die lokalen Werte.
+test('Ausweichpfad listAggregatedEnergySlots: VRM vor lokal, nicht gemittelt', () => {
+  const store = storeWithBackfill(true);
+  try {
+    const [slot] = store.listAggregatedEnergySlots({ start: '2026-03-09T00:00:00.000Z', end: '2026-03-10T00:00:00.000Z' });
+    assert.equal(slot.batteryToGridKwh, 0.5);
+    assert.equal(slot.batteryDischargeKwh, 0.5);
+    assert.equal(slot.exportKwh, 0.5);
+    assert.equal(slot.secondBatteryToGridKwh, 0, 'VRM-Slot ohne lokale Akku-2-Werte');
+  } finally {
+    store.close();
+  }
+});

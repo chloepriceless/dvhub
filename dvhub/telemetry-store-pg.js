@@ -68,6 +68,13 @@ const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
 // Rohdaten-Ausweichpfad: VRM-Import landet mit scope 'history' in timeseries_samples.
 const rawBucketHasVrmFlows = (bucket) => PRIMARY_FLOW_SERIES
   .some((seriesKey) => (bucket.get(seriesKey) || []).some((entry) => entry.scope === 'history'));
+// Je Reihe wie die vorberechneten Slots: liegt VRM-Import vor, gilt nur er,
+// sonst die lokalen Werte. Gemittelt waeren 0,5 kWh (VRM) und 0,3 kWh (lokal)
+// sonst 0,4 kWh (Altbefund 21.10.2026).
+const preferredRawEntries = (entries = []) => {
+  const vrm = entries.filter((entry) => entry.scope === 'history');
+  return vrm.length ? vrm : entries;
+};
 
 const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_import_w', 'grid_export_w', 'grid_total_w',
@@ -902,12 +909,12 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([ts, bucket]) => {
         const energyForSeries = (seriesKey) => {
-          const avgPower = weightedAverage(bucket.get(seriesKey) || []);
+          const avgPower = weightedAverage(preferredRawEntries(bucket.get(seriesKey)));
           if (!Number.isFinite(avgPower)) return 0;
           return roundKwh((avgPower * bucketSeconds) / 3600000);
         };
         const flagsForSeries = (seriesKey) => {
-          const entries = bucket.get(seriesKey) || [];
+          const entries = preferredRawEntries(bucket.get(seriesKey));
           const meta = entries.map((entry) => parseMetaJson(entry.meta_json)).filter(Boolean);
           return {
             estimated: meta.some((item) => item.provenance === 'estimated'),

@@ -154,4 +154,22 @@ describe('PG-Store: Akku 2 in den Energieslots', () => {
     assert.equal(slot.batteryToGridKwh, 0.5);
     assert.equal(slot.secondBatteryToGridKwh, 0);
   });
+
+  // Altbefund 21.10.2026: Der Ausweichpfad mittelte VRM-Import und lokale Werte
+  // derselben Reihe (0,5 und 0,3 kWh → 0,4). Wie listMaterializedEnergySlots
+  // gilt je Reihe der VRM-Import, sonst die lokalen Werte.
+  test('listAggregatedEnergySlots: VRM-Import vor lokalen Werten derselben Reihe, nicht gemittelt', async () => {
+    const at = '2026-10-21T10:00:00.000Z';
+    const pool = poolReturning((text) => (/FROM timeseries_samples/.test(text)
+      ? [
+        { series_key: 'battery_discharge_w', scope: 'history', ts_utc: at, resolution_seconds: 900, value_num: 2000, meta_json: null },
+        { series_key: 'battery_discharge_w', scope: 'live', ts_utc: at, resolution_seconds: 900, value_num: 1200, meta_json: '{"incomplete":true}' },
+        { series_key: 'grid_import_w', scope: 'live', ts_utc: at, resolution_seconds: 900, value_num: 400, meta_json: null }
+      ]
+      : []));
+    const [slot] = await createTelemetryStorePg(pool).listAggregatedEnergySlots({ start: '2026-10-21T00:00:00Z', end: '2026-10-22T00:00:00Z' });
+    assert.equal(slot.batteryDischargeKwh, 0.5, 'VRM, nicht (0,5 + 0,3) / 2');
+    assert.equal(slot.importKwh, 0.1, 'Reihe nur lokal: lokale Werte');
+    assert.equal(slot.incomplete, false, 'Kennzeichen der verworfenen lokalen Werte zaehlen nicht');
+  });
 });
