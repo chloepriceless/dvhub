@@ -103,6 +103,9 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
   pushSample(rows, 'second_battery_to_grid_w', victron.secondBatteryToGridW, 'W', base);
   pushSample(rows, 'second_battery_direct_use_w', victron.secondBatteryDirectUseW, 'W', base);
   pushSample(rows, 'second_battery_soc_pct', victron.secondBatterySocPct, '%', base);
+  // Akku→Akku-Verschiebung (gegenlaeufige Akkus), ebenfalls nur mit zweiter Anlage.
+  pushSample(rows, 'battery_to_second_battery_w', victron.batteryToSecondBatteryW, 'W', base);
+  pushSample(rows, 'second_battery_to_battery_w', victron.secondBatteryToBatteryW, 'W', base);
   pushSample(rows, 'grid_setpoint_w', victron.gridSetpointW, 'W', base);
   pushSample(rows, 'min_soc_pct', victron.minSocPct, '%', base);
 

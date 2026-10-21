@@ -382,7 +382,7 @@ export function createHistoryVizAggregator(ctx) {
       const result = await db.query(`
         /* history-viz shared energy slots */
         SELECT DISTINCT ON (slot_start_utc, series_key)
-          slot_start_utc, series_key, value_num
+          slot_start_utc, series_key, value_num, source_kind
         FROM energy_slots_15m
         WHERE unit = 'kWh'
           AND value_num IS NOT NULL
@@ -392,10 +392,20 @@ export function createHistoryVizAggregator(ctx) {
           CASE source_kind WHEN 'vrm_import' THEN 0 WHEN 'local_live' THEN 1 ELSE 2 END
       `, [start, end]);
       const bySeries = new Map(); // series → { ts: number[], kwh: number[] }
-      for (const r of (result && Array.isArray(result.rows)) ? result.rows : []) {
+      const all = (result && Array.isArray(result.rows)) ? result.rows : [];
+      const tsOf = (r) => (r.slot_start_utc instanceof Date ? r.slot_start_utc.getTime() : Date.parse(r.slot_start_utc));
+      // VRM kennt die zweite Anlage nicht (Codex-Gegenpruefung 21.10.2026, P2):
+      // in Slots, deren Hauptreihen aus dem VRM-Import kommen, fallen die
+      // lokalen Akku-2-Reihen weg — VRM hat dort schon alles der Hauptanlage
+      // zugeschlagen.
+      const vrmSlots = new Set(all
+        .filter((r) => r.source_kind === 'vrm_import' && !SECOND_BATTERY_SERIES_SET.has(r.series_key))
+        .map(tsOf));
+      for (const r of all) {
+        if (SECOND_BATTERY_SERIES_SET.has(r.series_key) && vrmSlots.has(tsOf(r))) continue;
         let e = bySeries.get(r.series_key);
         if (!e) { e = { ts: [], kwh: [] }; bySeries.set(r.series_key, e); }
-        e.ts.push(r.slot_start_utc instanceof Date ? r.slot_start_utc.getTime() : Date.parse(r.slot_start_utc));
+        e.ts.push(tsOf(r));
         e.kwh.push(Number(r.value_num) || 0);
       }
       return bySeries;
@@ -439,7 +449,7 @@ export function createHistoryVizAggregator(ctx) {
     const sql = `
       WITH dedup AS (
         SELECT DISTINCT ON (slot_start_utc, series_key)
-          slot_start_utc, series_key, value_num
+          slot_start_utc, series_key, value_num, source_kind
         FROM energy_slots_15m
         WHERE series_key = ANY($1)
           AND unit = 'kWh'
@@ -448,17 +458,24 @@ export function createHistoryVizAggregator(ctx) {
           AND slot_start_utc <  $3::timestamptz
         ORDER BY slot_start_utc, series_key,
           CASE source_kind WHEN 'vrm_import' THEN 0 WHEN 'local_live' THEN 1 ELSE 2 END
+      ),
+      -- Akku 2 (21.10.2026): Slots mit VRM-Hauptreihen ohne lokale Akku-2-Reihen ($4).
+      vrm_slots AS (
+        SELECT DISTINCT slot_start_utc FROM dedup
+        WHERE source_kind = 'vrm_import' AND NOT (series_key = ANY($4))
       )
       SELECT series_key AS key,
              time_bucket('${bucket}', slot_start_utc) AS bucket_ts,
              SUM(value_num) AS kwh
-      FROM dedup
+      FROM dedup d
+      WHERE NOT (d.series_key = ANY($4)
+        AND EXISTS (SELECT 1 FROM vrm_slots v WHERE v.slot_start_utc = d.slot_start_utc))
       GROUP BY series_key, bucket_ts
       ORDER BY bucket_ts
     `;
     let rows = [];
     if (db && typeof db.query === 'function') {
-      const result = await db.query(sql, [seriesKeys, start, end]);
+      const result = await db.query(sql, [seriesKeys, start, end, SECOND_BATTERY_SERIES]);
       rows = (result && Array.isArray(result.rows)) ? result.rows : [];
     }
     return rows.map((r) => {
@@ -607,14 +624,25 @@ export function createHistoryVizAggregator(ctx) {
     let gridToSecondBattery = 0;
     let secondBatteryToLoad = 0;
     let secondBatteryToExport = 0;
+    let batteryToSecondBattery = 0;
+    let secondBatteryToBattery = 0;
     let totalPv = 0;
     let totalLoad = 0;
     const mainShare = (total, mine, all) => (mine >= all ? total : (all > 0 ? total * (mine / all) : 0));
     for (const b of buckets.values()) {
       const { pv, load } = b;
+      // Gegenlaeufige Akkus (Codex-Gegenpruefung 21.10.2026, P2): was der eine
+      // abgibt und der andere im selben Bucket aufnimmt, geht Akku→Akku und ist
+      // weder Netzladung noch Hausversorgung/Einspeisung — vorher abziehen.
+      const t12 = Math.min(b.batteryDischarge, b.secondBatteryCharge);
+      const t21 = Math.min(b.secondBatteryDischarge, b.batteryCharge);
+      const c1 = b.batteryCharge - t21;
+      const d1 = b.batteryDischarge - t12;
+      batteryToSecondBattery += t12;
+      secondBatteryToBattery += t21;
       // Beide Akkus gemeinsam; ohne Akku 2 ist das exakt der Hauptakku.
-      const batteryCharge = b.batteryCharge + b.secondBatteryCharge;
-      const batteryDischarge = b.batteryDischarge + b.secondBatteryDischarge;
+      const batteryCharge = c1 + (b.secondBatteryCharge - t12);
+      const batteryDischarge = d1 + (b.secondBatteryDischarge - t21);
       totalPv += pv;
       totalLoad += load;
       const pvL = Math.min(pv, load);
@@ -627,10 +655,10 @@ export function createHistoryVizAggregator(ctx) {
       const loadRem2 = loadRem1 - battL;
       const battE = batteryDischarge - battL;
       const gridL = loadRem2;
-      const pvB1 = mainShare(pvB, b.batteryCharge, batteryCharge);
-      const residual1 = mainShare(residualCharge, b.batteryCharge, batteryCharge);
-      const battL1 = mainShare(battL, b.batteryDischarge, batteryDischarge);
-      const battE1 = mainShare(battE, b.batteryDischarge, batteryDischarge);
+      const pvB1 = mainShare(pvB, c1, batteryCharge);
+      const residual1 = mainShare(residualCharge, c1, batteryCharge);
+      const battL1 = mainShare(battL, d1, batteryDischarge);
+      const battE1 = mainShare(battE, d1, batteryDischarge);
       pvToLoad += pvL;
       pvToBattery += pvB1;
       pvToExport += pvE;
@@ -657,6 +685,8 @@ export function createHistoryVizAggregator(ctx) {
       gridToSecondBattery: clamp0(gridToSecondBattery),
       secondBatteryToLoad: clamp0(secondBatteryToLoad),
       secondBatteryToExport: clamp0(secondBatteryToExport),
+      batteryToSecondBattery: clamp0(batteryToSecondBattery),
+      secondBatteryToBattery: clamp0(secondBatteryToBattery),
       totalPv: clamp0(totalPv),
       totalLoad: clamp0(totalLoad),
     };
@@ -664,6 +694,8 @@ export function createHistoryVizAggregator(ctx) {
 
   // Energie-Reihen fuer Sankey und Autarkie (dieselbe Zerlegung → beide
   // stimmen ueberein). Die Akku-2-Reihen fehlen ohne zweite Anlage einfach.
+  const SECOND_BATTERY_SERIES = ['second_battery_charge_w', 'second_battery_discharge_w'];
+  const SECOND_BATTERY_SERIES_SET = new Set(SECOND_BATTERY_SERIES);
   const FLOW_SERIES_KEYS = [
     'pv_total_w', 'grid_import_w', 'grid_export_w',
     'load_power_w', 'battery_charge_w', 'battery_discharge_w',
@@ -803,6 +835,9 @@ export function createHistoryVizAggregator(ctx) {
         { from: 'Netzbezug',       to: 'Akku 2-Laden',   flow: round3(f.gridToSecondBattery) },
         { from: 'Akku 2-Entladen', to: 'Eigenverbrauch', flow: round3(f.secondBatteryToLoad) },
         { from: 'Akku 2-Entladen', to: 'Einspeisung',    flow: round3(f.secondBatteryToExport) },
+        // Akku→Akku bei gegenlaeufigen Akkus — eigener Fluss, kein Netz/Haus.
+        { from: 'Akku-Entladen',   to: 'Akku 2-Laden',   flow: round3(f.batteryToSecondBattery) },
+        { from: 'Akku 2-Entladen', to: 'Akku-Laden',     flow: round3(f.secondBatteryToBattery) },
       ].filter(fl => fl.flow > 0.01);
       // breakdown: the 7 raw decomposed flow magnitudes (kWh). The flat `flows`
       // above splits the battery into two disconnected nodes (Akku-Laden sink /
@@ -822,6 +857,8 @@ export function createHistoryVizAggregator(ctx) {
         gridToSecondBattery: round3(f.gridToSecondBattery),
         secondBatteryToLoad: round3(f.secondBatteryToLoad),
         secondBatteryToExport: round3(f.secondBatteryToExport),
+        batteryToSecondBattery: round3(f.batteryToSecondBattery),
+        secondBatteryToBattery: round3(f.secondBatteryToBattery),
       };
       const payload = {
         ok: true,

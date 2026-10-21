@@ -371,6 +371,8 @@ const state = {
     secondBatteryToGridW: null,
     secondBatteryDirectUseW: null,
     secondBatterySocPct: null,
+    batteryToSecondBatteryW: null,
+    secondBatteryToBatteryW: null,
     errors: {},
     // T-0075: per-field timestamp of the last SUCCESSFUL poll (set by polling.js
     // success branch only). Real freshness signal for the discharge floor / D-18.

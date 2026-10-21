@@ -151,3 +151,24 @@ test('CSV: Akku-2-Spalten nur, wenn Werte da sind', async () => {
   const plain = await csvFor(SLOTS.map(stripSecond));
   assert.ok(!plain.includes('Akku2'), 'ohne zweite Anlage unveraenderte Kopfzeile');
 });
+
+// Akku→Akku-Verschiebung (Codex-Gegenpruefung 21.10.2026, P2): was Akku 1 in
+// Akku 2 schiebt, ist keine Versorgung des Hauses. Die Verbrauchsanteile
+// rechnen mit der Entladung ohne Verschiebung; die Verschiebung wird summiert.
+test('Akku→Akku-Verschiebung: summiert, aber keine Hausversorgung', async () => {
+  // Haus 2 kWh: 1 kWh Netz + 1 kWh aus Akku 1; Akku 1 gibt 3 kWh ab, 2 davon in Akku 2.
+  const slots = [{
+    ...EMPTY, ts: TS_PV, importKwh: 1, loadKwh: 2, gridDirectUseKwh: 1,
+    batteryDischargeKwh: 3, batteryDirectUseKwh: 1, secondBatteryChargeKwh: 2,
+    batteryToSecondBatteryKwh: 2, secondBatteryToBatteryKwh: 0
+  }];
+  const summary = await makeRuntime(slots).getSummary({ view: 'day', date: '2026-03-09', includeSlots: true });
+  const k = summary.kpis;
+  assert.equal(k.batteryToSecondBatteryKwh, 2);
+  assert.equal(k.secondBatteryToBatteryKwh, 0);
+  // Quellen: Netz 1, Akku 1 netto 1 → je 1 kWh (ohne Abzug: 0,5 Netz / 1,5 Akku).
+  assert.equal(k.gridShareKwh, 1);
+  assert.equal(k.batteryShareKwh, 1);
+  const day = summary.series.energy[0];
+  assert.equal(day.batteryToSecondBatteryKwh, 2);
+});

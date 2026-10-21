@@ -30,12 +30,41 @@ const SECOND_BATTERY_SLOT_FIELDS = [
   ['secondSolarToBatteryKwh', 'second_solar_to_battery_w'],
   ['secondGridToBatteryKwh', 'second_grid_to_battery_w'],
   ['secondBatteryToGridKwh', 'second_battery_to_grid_w'],
-  ['secondBatteryDirectUseKwh', 'second_battery_direct_use_w']
+  ['secondBatteryDirectUseKwh', 'second_battery_direct_use_w'],
+  // Akku→Akku-Verschiebung bei gegenlaeufigen Akkus (Codex-Gegenpruefung 21.10.2026)
+  ['batteryToSecondBatteryKwh', 'battery_to_second_battery_w'],
+  ['secondBatteryToBatteryKwh', 'second_battery_to_battery_w']
 ];
 const SECOND_BATTERY_SERIES = SECOND_BATTERY_SLOT_FIELDS.map(([, seriesKey]) => seriesKey);
-const secondBatteryKwhFields = (energyForSeries) => Object.fromEntries(
-  SECOND_BATTERY_SLOT_FIELDS.map(([field, seriesKey]) => [field, energyForSeries(seriesKey)])
+// VRM kennt die zweite Anlage nicht (Codex-Gegenpruefung 21.10.2026, P2): der
+// Import verteilt die ganze gemessene Einspeisung/Ladung schon auf die Fluesse
+// der Hauptanlage. Kommt in einem Slot eine dieser Hauptreihen aus dem
+// VRM-Import, zaehlen die lokalen Akku-2-Reihen desselben Slots nicht mit —
+// sonst waeren z. B. 0,5 kWh (VRM) + 0,2 kWh (lokal Akku 2) bewertet statt 0,5.
+const PRIMARY_FLOW_SERIES = [
+  'grid_import_w', 'grid_export_w', 'pv_total_w', 'load_power_w',
+  'battery_power_w', 'battery_charge_w', 'battery_discharge_w',
+  'solar_direct_use_w', 'solar_to_battery_w', 'solar_to_grid_w',
+  'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
+];
+// dropLocal = true: Werte werden gelesen (gleiche Quellen-Buchfuehrung), aber als 0 ausgegeben.
+const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => Object.fromEntries(
+  SECOND_BATTERY_SLOT_FIELDS.map(([field, seriesKey]) => {
+    const value = energyForSeries(seriesKey);
+    return [field, dropLocal ? 0 : value];
+  })
 );
+// Bevorzugte Quelle einer Reihe im Slot, ohne Seiteneffekt (wie pickSeriesRow).
+const preferredSourceKindOf = (bySource, preferredSourceKinds) => {
+  if (!bySource) return null;
+  for (const kind of preferredSourceKinds) if (bySource.has(kind)) return kind;
+  return [...bySource.values()][0]?.source_kind ?? null;
+};
+const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
+  .some((seriesKey) => preferredSourceKindOf(bucket.get(seriesKey), preferredSourceKinds) === 'vrm_import');
+// Rohdaten-Ausweichpfad: VRM-Import landet mit scope 'history' in timeseries_samples.
+const rawBucketHasVrmFlows = (bucket) => PRIMARY_FLOW_SERIES
+  .some((seriesKey) => (bucket.get(seriesKey) || []).some((entry) => entry.scope === 'history'));
 
 const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_import_w',
@@ -601,7 +630,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       ? ` AND scope IN (${scopeList.map(() => '?').join(', ')})`
       : '';
     const rows = db.prepare(`
-      SELECT series_key, ts_utc, resolution_seconds, value_num, meta_json
+      SELECT series_key, scope, ts_utc, resolution_seconds, value_num, meta_json
       FROM timeseries_samples
       WHERE series_key IN (
         'grid_import_w',
@@ -698,7 +727,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'),
           batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
-          ...secondBatteryKwhFields(energyForSeries),
+          ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket)),
           estimated: estimatedSeriesKeys.length > 0,
           incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length,
@@ -845,7 +874,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'),
           batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
-          ...secondBatteryKwhFields(energyForSeries),
+          ...secondBatteryKwhFields(energyForSeries, slotFlowsFromVrm(bucket, preferredSourceKinds)),
           sourceKind: overallSourceKind,
           sourceKinds: [...availableSourceKinds].sort(),
           estimated: estimatedSeriesKeys.length > 0,

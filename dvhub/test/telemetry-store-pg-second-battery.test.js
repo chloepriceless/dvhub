@@ -13,7 +13,10 @@ const SECOND_FIELDS = {
   second_solar_to_battery_w: 'secondSolarToBatteryKwh',
   second_grid_to_battery_w: 'secondGridToBatteryKwh',
   second_battery_to_grid_w: 'secondBatteryToGridKwh',
-  second_battery_direct_use_w: 'secondBatteryDirectUseKwh'
+  second_battery_direct_use_w: 'secondBatteryDirectUseKwh',
+  // Akku→Akku-Verschiebung (Codex-Gegenpruefung 21.10.2026)
+  battery_to_second_battery_w: 'batteryToSecondBatteryKwh',
+  second_battery_to_battery_w: 'secondBatteryToBatteryKwh'
 };
 
 const liveRow = (seriesKey, value) => ({
@@ -53,6 +56,9 @@ describe('PG-Store: Akku 2 in den Energieslots', () => {
         second_grid_to_battery_w: 0.15,
         second_battery_to_grid_w: 0.12,
         second_battery_direct_use_w: 0.08,
+        battery_to_second_battery_w: 0.05,
+        second_battery_to_battery_w: 0.01,
+        vrm_selected: false,
         available_kinds: ['local_live'],
         selected_kinds: ['local_live'],
         estimated_keys: null,
@@ -67,6 +73,8 @@ describe('PG-Store: Akku 2 in den Energieslots', () => {
     assert.equal(slot.secondGridToBatteryKwh, 0.15);
     assert.equal(slot.secondBatteryToGridKwh, 0.12);
     assert.equal(slot.secondBatteryDirectUseKwh, 0.08);
+    assert.equal(slot.batteryToSecondBatteryKwh, 0.05);
+    assert.equal(slot.secondBatteryToBatteryKwh, 0.01);
     assert.equal(slot.batteryToGridKwh, 0.3, 'Hauptakku unveraendert');
     // Die Akku-2-Reihen werden mit abgefragt ($1), aber nicht als „verfolgte“
     // Reihen fuer geschaetzt/unvollstaendig gefuehrt ($6).
@@ -98,5 +106,52 @@ describe('PG-Store: Akku 2 in den Energieslots', () => {
     const [slot] = await createTelemetryStorePg(pool).listMaterializedEnergySlots({ start: '2026-10-21T00:00:00Z', end: '2026-10-22T00:00:00Z' });
     for (const field of Object.values(SECOND_FIELDS)) assert.equal(slot[field], 0, field);
     assert.equal(slot.importKwh, 0.5);
+  });
+  // Codex-Gegenpruefung 21.10.2026 (P2): VRM kennt die zweite Anlage nicht und
+  // verteilt die ganze gemessene Einspeisung schon auf die Hauptanlagen-Fluesse.
+  // Kommen die Fluesse eines Slots aus dem VRM-Import, zaehlen die lokalen
+  // Akku-2-Reihen nicht dazu (sonst 0,5 + 0,2 kWh statt 0,5 kWh bewertet).
+  test('listMaterializedEnergySlots: VRM-Slot ohne lokale Akku-2-Fluesse', async () => {
+    const pool = poolReturning((text) => (/GROUP BY slot_start_utc/.test(text)
+      ? [{
+        slot_start_utc: new Date('2026-10-21T10:00:00.000Z'),
+        grid_export_w: 0.5, battery_to_grid_w: 0.5, second_battery_to_grid_w: 0.2, second_battery_discharge_w: 0.2,
+        vrm_selected: true, available_kinds: ['local_live', 'vrm_import'], selected_kinds: ['vrm_import']
+      }]
+      : []));
+    const [slot] = await createTelemetryStorePg(pool).listMaterializedEnergySlots({ start: '2026-10-21T00:00:00Z', end: '2026-10-22T00:00:00Z' });
+    assert.equal(slot.batteryToGridKwh, 0.5);
+    for (const field of Object.values(SECOND_FIELDS)) assert.equal(slot[field], 0, field);
+    const call = pool.calls.find((c) => /GROUP BY slot_start_utc/.test(c.text));
+    assert.match(call.text, /vrm_selected/);
+    // $7 = die Hauptreihen, deren VRM-Herkunft den Slot zum VRM-Slot macht.
+    assert.ok(call.params[6].includes('battery_to_grid_w') && call.params[6].includes('grid_export_w'));
+    for (const k of Object.keys(SECOND_FIELDS)) assert.ok(!call.params[6].includes(k), `${k} nicht entscheidend`);
+  });
+
+  test('JS-Pivot: VRM-Slot ohne lokale Akku-2-Fluesse', async () => {
+    const at = new Date('2026-10-21T10:00:00.000Z');
+    const pool = poolReturning((text) => (/FROM energy_slots_15m/.test(text)
+      ? [
+        { slot_start_utc: at, series_key: 'battery_to_grid_w', source_kind: 'vrm_import', value_num: 0.5, meta_json: null },
+        { slot_start_utc: at, series_key: 'battery_to_grid_w', source_kind: 'local_live', value_num: 0.3, meta_json: null },
+        { slot_start_utc: at, series_key: 'second_battery_to_grid_w', source_kind: 'local_live', value_num: 0.2, meta_json: null }
+      ]
+      : []));
+    const [slot] = await createTelemetryStorePg(pool).listMaterializedEnergySlotsJsPivot({ start: '2026-10-21T00:00:00Z', end: '2026-10-22T00:00:00Z' });
+    assert.equal(slot.batteryToGridKwh, 0.5);
+    assert.equal(slot.secondBatteryToGridKwh, 0);
+  });
+
+  test('listAggregatedEnergySlots: Bucket mit VRM-Historie ohne lokale Akku-2-Fluesse', async () => {
+    const pool = poolReturning((text) => (/FROM timeseries_samples/.test(text)
+      ? [
+        { series_key: 'battery_to_grid_w', scope: 'history', ts_utc: '2026-10-21T10:00:00.000Z', resolution_seconds: 900, value_num: 2000, meta_json: null },
+        { series_key: 'second_battery_to_grid_w', scope: 'live', ts_utc: '2026-10-21T10:00:00.000Z', resolution_seconds: 900, value_num: 800, meta_json: null }
+      ]
+      : []));
+    const [slot] = await createTelemetryStorePg(pool).listAggregatedEnergySlots({ start: '2026-10-21T00:00:00Z', end: '2026-10-22T00:00:00Z' });
+    assert.equal(slot.batteryToGridKwh, 0.5);
+    assert.equal(slot.secondBatteryToGridKwh, 0);
   });
 });

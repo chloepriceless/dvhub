@@ -803,7 +803,9 @@ test('telemetry store verdichtet und liefert die Akku-2-Reihen', () => {
     second_solar_to_battery_w: 'secondSolarToBatteryKwh',
     second_grid_to_battery_w: 'secondGridToBatteryKwh',
     second_battery_to_grid_w: 'secondBatteryToGridKwh',
-    second_battery_direct_use_w: 'secondBatteryDirectUseKwh'
+    second_battery_direct_use_w: 'secondBatteryDirectUseKwh',
+    battery_to_second_battery_w: 'batteryToSecondBatteryKwh',
+    second_battery_to_battery_w: 'secondBatteryToBatteryKwh'
   };
   try {
     store.writeSamples([

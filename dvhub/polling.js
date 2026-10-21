@@ -824,24 +824,32 @@ export function createPoller(ctx) {
     // waere unsichtbar. Die bisherigen Felder sind nur der Hauptakku-Anteil.
     // Ohne zweite Anlage ist c2 = d2 = 0, jede Summe gleich dem Hauptakku-Wert
     // und mainShare gibt den Wert unveraendert zurueck — bitgenau wie vorher.
-    // Annahme: beide Akkus laufen gleichsinnig (der Regler gibt der zweiten
-    // Anlage ihren Anteil an der Gesamtleistung). Laedt einer, waehrend der
-    // andere entlaedt, wird die Verschiebung Akku→Akku nicht als eigener Fluss
-    // gefuehrt.
+    // Gegenlaeufige Akkus (Codex-Gegenpruefung 21.10.2026, P2): laedt einer,
+    // waehrend der andere entlaedt — etwa im Regelübergang —, fliesst die
+    // Leistung im Hausnetz von Akku zu Akku: T = min(Entladen des einen, Laden
+    // des anderen), je Richtung. Sie wird VOR der Aufteilung von beiden Seiten
+    // abgezogen und als eigenes Feld gefuehrt; sonst erschiene sie als Netzbezug
+    // (Laden) bzw. Hausversorgung/Einspeisung (Entladen), die es nicht gab.
+    // Je Akku gilt dann: Laden = PV + Netz + Zufluss vom anderen Akku,
+    // Entladen = Haus + Netz + Abfluss zum anderen Akku. Ohne zweite Anlage ist T = 0.
     const secondBatteryChargeW = followerFlow ? Math.max(0, followerFlow.batteryPowerW) : 0;
     const secondBatteryDischargeW = followerFlow ? Math.max(0, -followerFlow.batteryPowerW) : 0;
-    const chargeTotalW = batteryChargeW + secondBatteryChargeW;
-    const dischargeTotalW = batteryDischargeW + secondBatteryDischargeW;
+    const batteryToSecondBatteryW = Math.min(batteryDischargeW, secondBatteryChargeW);
+    const secondBatteryToBatteryW = Math.min(secondBatteryDischargeW, batteryChargeW);
+    const mainChargeW = batteryChargeW - secondBatteryToBatteryW;
+    const mainDischargeW = batteryDischargeW - batteryToSecondBatteryW;
+    const chargeTotalW = mainChargeW + (secondBatteryChargeW - batteryToSecondBatteryW);
+    const dischargeTotalW = mainDischargeW + (secondBatteryDischargeW - secondBatteryToBatteryW);
     const mainShare = (totalW, mineW, allW) => (mineW >= allW ? totalW : (allW > 0 ? totalW * (mineW / allW) : 0));
 
     const solarToBatteryTotalW = Math.max(0, Math.min(pvTotalW, chargeTotalW));
     const gridToBatteryTotalW = Math.max(0, chargeTotalW - solarToBatteryTotalW);
     const batteryToGridTotalW = Math.max(0, Math.min(dischargeTotalW, gridExportW));
     const batteryDirectUseTotalW = Math.max(0, dischargeTotalW - batteryToGridTotalW);
-    const solarToBatteryW = mainShare(solarToBatteryTotalW, batteryChargeW, chargeTotalW);
-    const gridToBatteryW = mainShare(gridToBatteryTotalW, batteryChargeW, chargeTotalW);
-    const batteryToGridW = mainShare(batteryToGridTotalW, batteryDischargeW, dischargeTotalW);
-    const batteryDirectUseW = mainShare(batteryDirectUseTotalW, batteryDischargeW, dischargeTotalW);
+    const solarToBatteryW = mainShare(solarToBatteryTotalW, mainChargeW, chargeTotalW);
+    const gridToBatteryW = mainShare(gridToBatteryTotalW, mainChargeW, chargeTotalW);
+    const batteryToGridW = mainShare(batteryToGridTotalW, mainDischargeW, dischargeTotalW);
+    const batteryDirectUseW = mainShare(batteryDirectUseTotalW, mainDischargeW, dischargeTotalW);
     const gridDirectUseW = Math.max(0, gridImportW - gridToBatteryTotalW);
     const solarToGridW = Math.max(0, gridExportW - batteryToGridTotalW);
     const solarDirectUseW = Math.max(0, Math.min(pvTotalW, Math.max(0, loadW - gridDirectUseW - batteryDirectUseTotalW)));
@@ -863,6 +871,8 @@ export function createPoller(ctx) {
     state.victron.secondBatteryToGridW = secondPart(batteryToGridTotalW, batteryToGridW);
     state.victron.secondBatteryDirectUseW = secondPart(batteryDirectUseTotalW, batteryDirectUseW);
     state.victron.secondBatterySocPct = followerFlow ? followerFlow.socPct : null;
+    state.victron.batteryToSecondBatteryW = followerFlow ? batteryToSecondBatteryW : null;
+    state.victron.secondBatteryToBatteryW = followerFlow ? secondBatteryToBatteryW : null;
 
     // T-FREEZE Einfrier-Wächter: NACH allen Reads/Ableitungen, VOR dem Snapshot —
     // so trägt der Powerflow-Snapshot bereits den erkannten Einfrierer und die

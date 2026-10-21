@@ -44,10 +44,13 @@ function assertBalanced(v, { pvW, importW, exportW, loadW, c1, d1, c2, d2 }) {
   near(v.solarDirectUseW + v.gridDirectUseW + v.batteryDirectUseW + v.secondBatteryDirectUseW, loadW, 'Last');
   near(v.gridDirectUseW + v.gridToBatteryW + v.secondGridToBatteryW, importW, 'Bezug');
   near(v.solarToGridW + v.batteryToGridW + v.secondBatteryToGridW, exportW, 'Einspeisung');
-  near(v.solarToBatteryW + v.gridToBatteryW, c1, 'Akku 1 laden');
-  near(v.batteryDirectUseW + v.batteryToGridW, d1, 'Akku 1 entladen');
-  near(v.secondSolarToBatteryW + v.secondGridToBatteryW, c2, 'Akku 2 laden');
-  near(v.secondBatteryDirectUseW + v.secondBatteryToGridW, d2, 'Akku 2 entladen');
+  // Akku→Akku-Verschiebung (Codex-Gegenpruefung 21.10.2026) ist ein interner Fluss.
+  const t12 = v.batteryToSecondBatteryW;
+  const t21 = v.secondBatteryToBatteryW;
+  near(v.solarToBatteryW + v.gridToBatteryW + t21, c1, 'Akku 1 laden');
+  near(v.batteryDirectUseW + v.batteryToGridW + t12, d1, 'Akku 1 entladen');
+  near(v.secondSolarToBatteryW + v.secondGridToBatteryW + t12, c2, 'Akku 2 laden');
+  near(v.secondBatteryDirectUseW + v.secondBatteryToGridW + t21, d2, 'Akku 2 entladen');
 }
 
 test('PV laedt beide Akkus: Aufteilung nach Ladeleistung, PV-Bilanz geht auf', async () => {
@@ -106,9 +109,11 @@ test('Netzladung beider Akkus: Bezug anteilig auf beide, Rest direkt ins Haus', 
   assertBalanced(v, { pvW: 0, importW: 4000, exportW: 0, loadW: 500, c1: 2000, d1: 0, c2: 1500, d2: 0 });
 });
 
-test('Akku 2 entlaedt ins Haus, Akku 1 laedt aus PV', async () => {
+test('Akku 2 entlaedt, Akku 1 laedt: zuerst Akku→Akku verrechnet, PV deckt den Rest', async () => {
   // Haus 2500 W, PV 3000 W, Akku 1 +2000 W, Akku 2 −1500 W → Bilanz 0 W am Zaehler.
-  // Gemessen: 2500 − 1500 = 1000 W.
+  // Gemessen: 2500 − 1500 = 1000 W. Seit der Verrechnung gegenlaeufiger Akkus
+  // (Codex-Gegenpruefung 21.10.2026): 1500 W Akku 2 → Akku 1, PV 500 W → Akku 1,
+  // PV 2500 W ins Haus.
   const { state, poller } = makePoller({
     gridW: 0, pvW: 3000, batteryW: 2000, consumptionW: 1000,
     multiGx: { enabled: true, online: true, batteryPowerW: -1500, socPct: 80 },
@@ -116,11 +121,52 @@ test('Akku 2 entlaedt ins Haus, Akku 1 laedt aus PV', async () => {
   await poller.requestPoll();
   const v = state.victron;
   assert.equal(v.selfConsumptionW, 2500);
-  near(v.solarToBatteryW, 2000, 'PV → Akku 1');
+  near(v.secondBatteryToBatteryW, 1500, 'Akku 2 → Akku 1');
+  near(v.solarToBatteryW, 500, 'PV → Akku 1');
   near(v.secondSolarToBatteryW, 0, 'PV → Akku 2');
-  near(v.secondBatteryDirectUseW, 1500, 'Akku 2 → Haus');
-  near(v.solarDirectUseW, 1000, 'PV direkt');
+  near(v.secondBatteryDirectUseW, 0, 'Akku 2 → Haus');
+  near(v.solarDirectUseW, 2500, 'PV direkt');
   assertBalanced(v, { pvW: 3000, importW: 0, exportW: 0, loadW: 2500, c1: 2000, d1: 0, c2: 0, d2: 1500 });
+});
+
+// Gegenlaeufige Akkus (Codex-Gegenpruefung 21.10.2026, P2): was der eine Akku
+// abgibt und der andere zugleich aufnimmt, fliesst im Hausnetz von Akku zu Akku.
+// Das ist weder Netzbezug noch Einspeisung noch Hausversorgung.
+test('Akku 1 entlaedt in Akku 2: kein erfundener Netzbezug, Verschiebung eigenes Feld', async () => {
+  // Keine PV, kein Netz; Akku 1 −3000 W, Akku 2 +2000 W, Haus 1000 W.
+  // Gemessen: Haus + Akku 2 = 3000 W.
+  const { state, poller } = makePoller({
+    gridW: 0, pvW: 0, batteryW: -3000, consumptionW: 3000,
+    multiGx: { enabled: true, online: true, batteryPowerW: 2000, socPct: 40 },
+  });
+  await poller.requestPoll();
+  const v = state.victron;
+  assert.equal(v.selfConsumptionW, 1000);
+  near(v.batteryToSecondBatteryW, 2000, 'Akku 1 → Akku 2');
+  near(v.secondBatteryToBatteryW, 0, 'Akku 2 → Akku 1');
+  near(v.secondGridToBatteryW, 0, 'Netz → Akku 2 (erfunden)');
+  near(v.gridToBatteryW, 0, 'Netz → Akku 1');
+  near(v.batteryDirectUseW, 1000, 'Akku 1 → Haus');
+  near(v.batteryToGridW, 0, 'Akku 1 → Netz');
+  assertBalanced(v, { pvW: 0, importW: 0, exportW: 0, loadW: 1000, c1: 0, d1: 3000, c2: 2000, d2: 0 });
+});
+
+test('Akku 2 entlaedt in Akku 1: Verschiebung in Gegenrichtung, Rest versorgt das Haus', async () => {
+  // PV 2000 W, Akku 1 +1000 W, Akku 2 −2500 W, Haus 3500 W, Zaehler 0 W.
+  // Gemessen: Haus − Akku 2 = 1000 W.
+  const { state, poller } = makePoller({
+    gridW: 0, pvW: 2000, batteryW: 1000, consumptionW: 1000,
+    multiGx: { enabled: true, online: true, batteryPowerW: -2500, socPct: 90 },
+  });
+  await poller.requestPoll();
+  const v = state.victron;
+  assert.equal(v.selfConsumptionW, 3500);
+  near(v.secondBatteryToBatteryW, 1000, 'Akku 2 → Akku 1');
+  near(v.batteryToSecondBatteryW, 0, 'Akku 1 → Akku 2');
+  near(v.solarToBatteryW, 0, 'PV → Akku 1');
+  near(v.secondBatteryDirectUseW, 1500, 'Akku 2 → Haus');
+  near(v.solarDirectUseW, 2000, 'PV direkt');
+  assertBalanced(v, { pvW: 2000, importW: 0, exportW: 0, loadW: 3500, c1: 1000, d1: 0, c2: 0, d2: 2500 });
 });
 
 // Die Formeln von vor dem 21.10.2026, unveraendert abgeschrieben.
@@ -163,7 +209,8 @@ test('ohne zweite Anlage (aus, offline, veraltet): Aufteilung bitgenau wie bishe
         assert.equal(v[k], val, `${k} ${JSON.stringify({ c, multiGx })}`);
       }
       for (const k of ['secondBatteryChargeW', 'secondBatteryDischargeW', 'secondSolarToBatteryW', 'secondGridToBatteryW',
-        'secondBatteryToGridW', 'secondBatteryDirectUseW', 'secondBatterySocPct']) {
+        'secondBatteryToGridW', 'secondBatteryDirectUseW', 'secondBatterySocPct',
+        'batteryToSecondBatteryW', 'secondBatteryToBatteryW']) {
         assert.equal(v[k], null, `${k} ${JSON.stringify({ c, multiGx })}`);
       }
     }
@@ -200,6 +247,7 @@ test('Laufzeit-Schnappschuss traegt die Akku-2-Felder zur Weboberflaeche', async
   const fields = {
     secondBatteryChargeW: 1500, secondBatteryDischargeW: 0, secondSolarToBatteryW: 1500, secondGridToBatteryW: 0,
     secondBatteryToGridW: 0, secondBatteryDirectUseW: 0, secondBatterySocPct: 70,
+    batteryToSecondBatteryW: 0, secondBatteryToBatteryW: 0,
   };
   const snap = buildVictronSnapshot({ ...fields, errors: {} });
   for (const [k, val] of Object.entries(fields)) assert.equal(snap[k], val, k);

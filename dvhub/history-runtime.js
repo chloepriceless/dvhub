@@ -48,6 +48,9 @@ const AGGREGATE_SUM_FIELDS = [
   'secondBatteryToGridKwh',
   'secondBatteryChargeKwh',
   'secondBatteryDischargeKwh',
+  // Akku→Akku-Verschiebung bei gegenlaeufigen Akkus (Codex-Gegenpruefung 21.10.2026).
+  'batteryToSecondBatteryKwh',
+  'secondBatteryToBatteryKwh',
   'selfConsumptionKwh',
   'gridShareKwh',
   'pvShareKwh',
@@ -108,8 +111,11 @@ function proportionalSourceShares(slot) {
   const loadKwh = Math.max(Number(slot.loadKwh || 0), 0);
   const gridKwh = Math.max(Number(slot.importKwh || 0), 0);
   const pvKwh = Math.max(Number(slot.pvKwh || 0), 0);
-  const batteryKwh = Math.max(Number(slot.batteryDischargeKwh ?? slot.batteryKwh ?? 0), 0);
-  const secondBatteryKwh = Math.max(Number(slot.secondBatteryDischargeKwh || 0), 0);
+  // Was ein Akku in den anderen schiebt (gegenlaeufige Akkus, Codex-Gegenpruefung
+  // 21.10.2026), versorgt das Haus nicht: Entladung ohne diese Verschiebung.
+  // Ohne zweite Anlage ist die Verschiebung 0 und batteryKwh wie vorher.
+  const batteryKwh = Math.max(Number(slot.batteryDischargeKwh ?? slot.batteryKwh ?? 0) - Number(slot.batteryToSecondBatteryKwh || 0), 0);
+  const secondBatteryKwh = Math.max(Number(slot.secondBatteryDischargeKwh || 0) - Number(slot.secondBatteryToBatteryKwh || 0), 0);
   const totalSupplyKwh = gridKwh + pvKwh + batteryKwh + secondBatteryKwh;
   const servedLoadKwh = totalSupplyKwh > 0 ? Math.min(loadKwh, totalSupplyKwh) : 0;
   if (servedLoadKwh <= 0 || totalSupplyKwh <= 0) {
@@ -341,6 +347,8 @@ function buildRowAccumulator(key, label) {
     secondBatteryToGridKwh: 0,
     secondBatteryChargeKwh: 0,
     secondBatteryDischargeKwh: 0,
+    batteryToSecondBatteryKwh: 0,
+    secondBatteryToBatteryKwh: 0,
     // Slot-genau akkumulierte Vollzyklen (Akku-Ausbaustufen). cyclesKnown
     // unterscheidet "0 Zyklen gefahren" von "keine Kapazität hinterlegt".
     cyclesAcc: 0,
@@ -613,6 +621,8 @@ function buildDayCharts(slots) {
       secondBatteryToGridKwh: round2(slot.secondBatteryToGridKwh || 0),
       secondBatteryChargeKwh: round2(Math.max(Number(slot.secondBatteryChargeKwh || 0), 0)),
       secondBatteryDischargeKwh: round2(Math.max(Number(slot.secondBatteryDischargeKwh || 0), 0)),
+      batteryToSecondBatteryKwh: round2(slot.batteryToSecondBatteryKwh || 0),
+      secondBatteryToBatteryKwh: round2(slot.secondBatteryToBatteryKwh || 0),
       exportKwh: slot.exportKwh,
       loadKwh: round2(slot.loadKwh || 0),
       estimated: Boolean(slot.estimated),
@@ -700,6 +710,8 @@ function buildPeriodCharts(rows) {
       secondBatteryToGridKwh: row.secondBatteryToGridKwh,
       secondBatteryChargeKwh: row.secondBatteryChargeKwh,
       secondBatteryDischargeKwh: row.secondBatteryDischargeKwh,
+      batteryToSecondBatteryKwh: row.batteryToSecondBatteryKwh,
+      secondBatteryToBatteryKwh: row.secondBatteryToBatteryKwh,
       cycles: row.cycles,
       selfConsumptionKwh: row.selfConsumptionKwh,
       gridShareKwh: row.gridShareKwh,
@@ -1438,6 +1450,8 @@ function buildSummarySeries(view, slots) {
       secondBatteryToGridKwh: roundOrZero(slot.secondBatteryToGridKwh),
       secondBatteryChargeKwh: roundOrZero(slot.secondBatteryChargeKwh),
       secondBatteryDischargeKwh: roundOrZero(slot.secondBatteryDischargeKwh),
+      batteryToSecondBatteryKwh: roundOrZero(slot.batteryToSecondBatteryKwh),
+      secondBatteryToBatteryKwh: roundOrZero(slot.secondBatteryToBatteryKwh),
       selfConsumptionKwh: roundOrZero(slot.selfConsumptionKwh),
       gridShareKwh: round2(slot.gridShareKwh || 0),
       pvShareKwh: round2(slot.pvShareKwh || 0),
@@ -1743,7 +1757,9 @@ export function createHistoryRuntime({
           secondBatteryDirectUseKwh: round2(Number(slot.secondBatteryDirectUseKwh || 0)),
           secondBatteryToGridKwh: round2(Number(slot.secondBatteryToGridKwh || 0)),
           secondBatteryChargeKwh: round2(Number(slot.secondBatteryChargeKwh || 0)),
-          secondBatteryDischargeKwh: round2(Number(slot.secondBatteryDischargeKwh || 0))
+          secondBatteryDischargeKwh: round2(Number(slot.secondBatteryDischargeKwh || 0)),
+          batteryToSecondBatteryKwh: round2(Number(slot.batteryToSecondBatteryKwh || 0)),
+          secondBatteryToBatteryKwh: round2(Number(slot.secondBatteryToBatteryKwh || 0))
         };
         const pvExportKwh = Math.max(Number(slot.solarToGridKwh || 0), 0);
         const batteryExportKwh = Math.max(Number(slot.batteryToGridKwh || 0), 0);
@@ -1889,6 +1905,8 @@ export function createHistoryRuntime({
       totals.secondBatteryToGridKwh = totals.secondBatteryToGridKwh + Number(slot.secondBatteryToGridKwh || 0);
       totals.secondBatteryChargeKwh = totals.secondBatteryChargeKwh + Number(slot.secondBatteryChargeKwh || 0);
       totals.secondBatteryDischargeKwh = totals.secondBatteryDischargeKwh + Number(slot.secondBatteryDischargeKwh || 0);
+      totals.batteryToSecondBatteryKwh = totals.batteryToSecondBatteryKwh + Number(slot.batteryToSecondBatteryKwh || 0);
+      totals.secondBatteryToBatteryKwh = totals.secondBatteryToBatteryKwh + Number(slot.secondBatteryToBatteryKwh || 0);
       totals.selfConsumptionKwh = totals.selfConsumptionKwh + Number(slot.selfConsumptionKwh || 0);
       totals.gridShareKwh = totals.gridShareKwh + Number(slot.gridShareKwh || 0);
       totals.pvShareKwh = totals.pvShareKwh + Number(slot.pvShareKwh || 0);
@@ -1959,6 +1977,8 @@ export function createHistoryRuntime({
       secondBatteryToGridKwh: 0,
       secondBatteryChargeKwh: 0,
       secondBatteryDischargeKwh: 0,
+      batteryToSecondBatteryKwh: 0,
+      secondBatteryToBatteryKwh: 0,
       selfConsumptionKwh: 0,
       gridShareKwh: 0,
       pvShareKwh: 0,
@@ -2782,6 +2802,7 @@ export function createHistoryApiHandlers({
         ['Akku2_PV_zu_Akku_kWh', 'secondSolarToBatteryKwh'], ['Akku2_Netz_zu_Akku_kWh', 'secondGridToBatteryKwh'],
         ['Akku2_direkt_kWh', 'secondBatteryDirectUseKwh'], ['Akku2_zu_Netz_kWh', 'secondBatteryToGridKwh'],
         ['Akku2_geladen_kWh', 'secondBatteryChargeKwh'], ['Akku2_entladen_kWh', 'secondBatteryDischargeKwh'],
+        ['Akku1_zu_Akku2_kWh', 'batteryToSecondBatteryKwh'], ['Akku2_zu_Akku1_kWh', 'secondBatteryToBatteryKwh'],
         ['Eigenverbrauch_Akku2_kWh', 'secondBatteryShareKwh'], ['Erloes_Akku2_EUR', 'exportSecondBatteryRevenueEur']
       ];
       const includeSecondBattery = rows.some((row) => secondBatteryCols.some(([, key]) => Number(row?.[key] || 0) !== 0));

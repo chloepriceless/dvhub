@@ -109,14 +109,18 @@ const SECOND_BATTERY_SERIES = {
   second_grid_to_battery_w: 'secondGridToBatteryW',
   second_battery_to_grid_w: 'secondBatteryToGridW',
   second_battery_direct_use_w: 'secondBatteryDirectUseW',
-  second_battery_soc_pct: 'secondBatterySocPct'
+  second_battery_soc_pct: 'secondBatterySocPct',
+  // Akku→Akku-Verschiebung (Codex-Gegenpruefung 21.10.2026)
+  battery_to_second_battery_w: 'batteryToSecondBatteryW',
+  second_battery_to_battery_w: 'secondBatteryToBatteryW'
 };
 
 test('buildLiveTelemetrySamples schreibt die Akku-2-Reihen, wenn die zweite Anlage einbezogen ist', () => {
   const victron = {
     selfConsumptionW: 1000,
     secondBatteryChargeW: 1500, secondBatteryDischargeW: 0, secondSolarToBatteryW: 1200,
-    secondGridToBatteryW: 300, secondBatteryToGridW: 0, secondBatteryDirectUseW: 0, secondBatterySocPct: 70
+    secondGridToBatteryW: 300, secondBatteryToGridW: 0, secondBatteryDirectUseW: 0, secondBatterySocPct: 70,
+    batteryToSecondBatteryW: 400, secondBatteryToBatteryW: 0
   };
   const rows = buildLiveTelemetrySamples({ ts: '2026-10-21T12:00:00.000Z', resolutionSeconds: 2, victron });
   const byKey = new Map(rows.map((row) => [row.seriesKey, row]));

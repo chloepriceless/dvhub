@@ -58,6 +58,9 @@ const VICTRON_FIELDS = [
   'secondBatteryToGridW',
   'secondBatteryDirectUseW',
   'secondBatterySocPct',
+  // Akku→Akku-Verschiebung bei gegenlaeufigen Akkus (Codex-Gegenpruefung 21.10.2026).
+  'batteryToSecondBatteryW',
+  'secondBatteryToBatteryW',
   'errors',
   // Victron device-alarm banner: the poller (a separate runtime-worker process)
   // writes state.victron.alarms; it MUST be whitelisted here or the IPC snapshot

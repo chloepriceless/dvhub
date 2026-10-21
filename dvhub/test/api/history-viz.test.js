@@ -2122,4 +2122,40 @@ describe('Sankey mit zweitem Akku', () => {
     assert.equal(r.status, 200);
     assert.equal(r.body.autarkyPct, 100);
   });
+  // Codex-Gegenpruefung 21.10.2026 (P2): Akku 1 entlaedt in Akku 2. Ohne
+  // Verrechnung erfaende die Zerlegung 2 kW Einspeisung (bzw. Netzladung).
+  it('Akku→Akku-Verschiebung: keine erfundene Einspeisung oder Netzladung', async () => {
+    const ctx = mockCtxWithStores({ optimizer: { allowGridCharge: true }, querySeriesFn: twoBatterySeries({
+      load_power_w: 1000, battery_discharge_w: 3000, second_battery_charge_w: 2000,
+    }) });
+    const b = (await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE })).body;
+    const flow = (from, to) => b.flows.find((f) => f.from === from && f.to === to)?.flow || 0;
+    assert.equal(b.totals.einspeisungKwh, 0, 'keine erfundene Einspeisung');
+    assert.equal(flow('Netzbezug', 'Akku 2-Laden'), 0, 'keine erfundene Netzladung');
+    assert.ok(Math.abs(flow('Akku-Entladen', 'Eigenverbrauch') - 24) < 0.05);
+    assert.ok(Math.abs(flow('Akku-Entladen', 'Akku 2-Laden') - 48) < 0.05, 'Verschiebung als eigener Fluss');
+    assert.ok(Math.abs(b.breakdown.batteryToSecondBattery - 48) < 0.05);
+    assert.equal(b.breakdown.secondBatteryToBattery, 0);
+  });
+
+  // Codex-Gegenpruefung 21.10.2026 (P2): VRM-Slots kennen Akku 2 nicht — die
+  // lokalen Akku-2-Reihen desselben Slots fallen weg.
+  it('VRM-Slot: lokale Akku-2-Reihen werden nicht dazugerechnet', async () => {
+    const at = new Date('2026-05-14T10:00:00Z');
+    const rows = [
+      { slot_start_utc: at, series_key: 'load_power_w', source_kind: 'vrm_import', value_num: 0.25 },
+      { slot_start_utc: at, series_key: 'grid_export_w', source_kind: 'vrm_import', value_num: 0.5 },
+      { slot_start_utc: at, series_key: 'battery_discharge_w', source_kind: 'vrm_import', value_num: 0.75 },
+      { slot_start_utc: at, series_key: 'second_battery_discharge_w', source_kind: 'local_live', value_num: 0.2 },
+    ];
+    const agg = createHistoryVizAggregator({
+      getCfg: () => ({ optimizer: {} }), pushLog() {},
+      db: { async query(sql) { return { rows: /history-viz shared energy slots/.test(sql) ? rows : [] }; } },
+      telemetryStore: null,
+    });
+    const b = (await agg.getSankey({ view: 'day', date: ANCHOR_DATE })).body;
+    assert.equal(b.breakdown.secondBatteryToLoad, 0);
+    assert.equal(b.breakdown.secondBatteryToExport, 0);
+    assert.ok(Math.abs(b.totals.einspeisungKwh - 0.5) < 0.005, `Einspeisung ${b.totals.einspeisungKwh}`);
+  });
 });
