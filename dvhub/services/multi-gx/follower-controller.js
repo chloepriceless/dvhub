@@ -29,7 +29,12 @@
  *
  * Der Sollwert wirkt auf den AC-IN, nicht auf den Akku: haengen Verbraucher an
  * der zweiten Anlage, zieht sie deren Leistung zusaetzlich. Nach oben ist der
- * Sollwert deshalb um die geschaetzte eigene Last weiter (Sollwert − Akku).
+ * Sollwert deshalb um die GEMESSENE eigene Last weiter (AC-IN − Akku,
+ * `followerAcInW`). Und er bleibt an der Leine des gemessenen AC-IN: drosselt
+ * das BMS, laeuft er nicht davon und springt nach der Freigabe nicht hoch
+ * (Codex-Gegenpruefung Runde 2: ohne Leine 77 kW nach sechs Minuten).
+ * `unmetW` ist vorzeichenbehaftet: − = Ladebedarf, den die Hauptanlage nicht
+ * aufnehmen kann (voll oder an der Ladegrenze).
  *
  * Vorzeichen wie in DVhub: + = Laden/Bezug, − = Entladen/Einspeisen. Ganze Watt,
  * kein -0. `nowMs` ist die einzige Zeitquelle.
@@ -41,6 +46,7 @@ export const DEFAULT_RAMP_W_PER_S = 200;
 export const DEFAULT_DEADBAND_W = 300;
 export const DEFAULT_GAIN = 0.5;
 export const DEFAULT_FILTER_S = 30;
+const LEASH_W = 1000;
 
 function power(value, name) {
   const n = typeof value === 'number' ? value : (typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN);
@@ -129,10 +135,12 @@ export function createFollowerController(config = {}) {
       return out('no_data');
     }
     const followerW = Number(input.followerBatteryW);
-    const unmetW = finite(input.unmetW) ? Math.max(0, Number(input.unmetW)) : 0;
+    const unmetW = finite(input.unmetW) ? Number(input.unmetW) : 0;
     const totalW = Number(input.primaryBatteryW) + followerW - unmetW;
-    // Eigene Last der zweiten Anlage: was sie ueber den AC-IN zieht, aber nicht in den Akku geht.
-    const localLoadW = Math.max(0, setpoint - followerW);
+    // Eigene Last der zweiten Anlage: was sie ueber den AC-IN zieht, aber nicht
+    // in den Akku geht — nur gemessen, nie aus dem eigenen Sollwert geschaetzt.
+    const acInW = finite(input.followerAcInW) ? Number(input.followerAcInW) : null;
+    const localLoadW = acInW == null ? 0 : Math.max(0, acInW - followerW);
     // Gleitender Mittelwert: kurze Lastspitzen sollen die Verteilung nicht bewegen.
     totalAvg = totalAvg == null || filterS === 0
       ? totalW
@@ -156,6 +164,11 @@ export function createFollowerController(config = {}) {
       reason = 'follow';
     }
     setpoint = Math.max(-maxDischargeW, Math.min(maxChargeW + localLoadW, setpoint));
+    // Leine: hoechstens LEASH_W vom gemessenen AC-IN entfernt (Anti-Windup).
+    if (acInW != null) {
+      const leash = Math.max(LEASH_W, 2 * deadbandW);
+      setpoint = Math.max(acInW - leash, Math.min(acInW + leash, setpoint));
+    }
     if (input.exportBlocked === true && setpoint < 0) { setpoint = 0; reason = 'export_blocked'; }
     else if (input.exportBlocked === true) reason = 'export_blocked';
     return out(reason, desired, weight);

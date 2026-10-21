@@ -15,7 +15,7 @@ function fakeTransport({ soc = 60, batteryW = 0, minSocRaw = 150, fail = () => f
     async mbRequest(req) {
       calls.push({ op: 'read', ...req });
       if (fail(req)) throw new Error('timeout');
-      return [regs[req.address]];
+      return Array.from({ length: req.quantity || 1 }, (_, i) => regs[req.address + i] ?? 0);
     },
     async mbWriteMultiple(req) {
       calls.push({ op: 'write', ...req });
@@ -227,4 +227,68 @@ test('Einspeisegrenze haelt das Netz ueber dem Sollwert, Hauptanlage laedt: KEIN
   s.state.meter.grid_total_w = -6000; // Netz bei -6 kW gedeckelt
   for (let i = 0; i < 6; i++) await s.tick();
   assert.ok(s.state.multiGx.desiredBatteryW >= 0, `zweite Anlage soll nicht in die Hauptanlage entladen (${s.state.multiGx.desiredBatteryW})`);
+});
+
+// Codex-Gegenpruefung Runde 2 (21.10.)
+test('liest den AC-IN der zweiten Anlage (820–822, ohne Zaehler = AC-IN) und meldet ihn', async () => {
+  const tr = fakeTransport();
+  Object.assign(tr.regs, { 820: 400, 821: 0x10000 - 100, 822: 300 });
+  const s = setup({ transport: tr });
+  await s.tick();
+  assert.ok(tr.calls.some((c) => c.op === 'read' && c.address === 820 && c.quantity === 3));
+  assert.equal(s.state.multiGx.acInW, 600);
+});
+
+test('Hauptanlage voll, Netz soll laden: Ladebedarf geht an die zweite Anlage', async () => {
+  const s = setup({ victron: { soc: 100, batteryPowerW: 0, gridSetpointW: 4000 } });
+  s.state.meter.grid_total_w = 0;
+  for (let i = 0; i < 6; i++) await s.tick();
+  assert.ok(s.state.multiGx.setpointW > 500, `Sollwert ${s.state.multiGx.setpointW}`);
+});
+
+test('Hauptanlage an der Wechselrichter-Grenze: Rest des Exports geht an die zweite Anlage', async () => {
+  const s = setup({ victron: { soc: 60, batteryPowerW: -5000, gridSetpointW: -12000 } });
+  s.cfg.optimizer.inverterMaxPowerW = 5000;
+  s.state.meter.grid_total_w = -5000;
+  for (let i = 0; i < 6; i++) await s.tick();
+  // normaler Anteil waere -2500 (Haelfte von -5000); mit dem fehlenden Export
+  // (7 kW) zusammen -6000
+  assert.ok(s.state.multiGx.desiredBatteryW <= -5500, `Soll-Anteil ${s.state.multiGx.desiredBatteryW}`);
+});
+
+test('EOS-Abgleich nach Wechsel: Neuplan nur nach erfolgreichem Sync, sonst erneut versuchen', async () => {
+  const { createEosResyncOnAvailability } = await import('../services/multi-gx/index.js');
+  const calls = [];
+  const timers = [];
+  let ok = false;
+  const handler = createEosResyncOnAvailability({
+    sync: async () => { calls.push('sync'); return ok ? { ok: true } : { ok: false, errors: { battery: 'HTTP 500' } }; },
+    replan: (reason) => calls.push(`replan:${reason}`),
+    pushLog: (e) => calls.push(`log:${e}`),
+    setTimer: (fn) => timers.push(fn),
+    maxRetries: 3,
+  });
+  await handler(true);
+  assert.deepEqual(calls, ['sync', 'log:multi_gx_eos_resync_failed'], 'kein Neuplan mit altem Akku-Modell');
+  ok = true;
+  await timers.shift()();
+  assert.deepEqual(calls.slice(2), ['sync', 'replan:multi_gx_online']);
+});
+
+test('EOS-Abgleich: gibt nach maxRetries auf, ein neuer Wechsel ersetzt den alten Versuch', async () => {
+  const { createEosResyncOnAvailability } = await import('../services/multi-gx/index.js');
+  const calls = [];
+  const timers = [];
+  const handler = createEosResyncOnAvailability({
+    sync: async () => { calls.push('sync'); return { ok: false }; },
+    replan: () => calls.push('replan'),
+    pushLog: () => {},
+    setTimer: (fn) => timers.push(fn),
+    maxRetries: 2,
+  });
+  await handler(false);
+  await timers.shift()();
+  await timers.shift()();
+  assert.equal(timers.length, 0, 'nach 2 Wiederholungen Schluss');
+  assert.equal(calls.filter((c) => c === 'replan').length, 0);
 });

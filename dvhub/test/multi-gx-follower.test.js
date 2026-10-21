@@ -26,6 +26,7 @@ function plant({ pvW = 0, mainLoadW = 3000, tenantLoadW = 1000, primarySoc = 50,
       return {
         primaryBatteryW: totalW - followerBatteryW,
         followerBatteryW,
+        followerAcInW: appliedS, // ohne eigenen Zaehler meldet die GX ihren AC-IN als Netz
         primary: { ...SIDE, socPct: primarySoc },
         follower: { ...SIDE, socPct: followerSoc },
       };
@@ -197,4 +198,35 @@ test('Mieter-Last 4 kW, Akku-Grenze 1,5 kW: AC-IN darf ueber 1,5 kW, Akku bleibt
   run(c, p, { ticks: 80 });
   const fb = p.measure().followerBatteryW;
   assert.ok(fb >= -1500 - 300 && fb <= -1500 + 300, `Akku zweite Anlage ${fb}`);
+});
+
+// Codex-Gegenpruefung Runde 2 (21.10.)
+test('BMS drosselt das Laden: Sollwert laeuft dem gemessenen AC-IN nicht davon (kein Aufschaukeln)', () => {
+  const c = createFollowerController(cfg({ maxChargeW: 5000 }));
+  let s = 0;
+  let capped = true;
+  const seen = [];
+  for (let i = 0; i < 120; i++) {
+    if (i === 80) capped = false; // BMS gibt wieder frei
+    const fb = capped ? Math.min(1000, s) : s;   // Akku nimmt hoechstens 1 kW
+    const acIn = fb;                              // keine eigene Last
+    const o = c.tick({ nowMs: i * 5000, primaryBatteryW: 5000, followerBatteryW: fb, followerAcInW: acIn,
+      primary: { ...SIDE, socPct: 50 }, follower: { ...SIDE, socPct: 50 } });
+    s = o.setpointW;
+    seen.push(s);
+  }
+  assert.ok(Math.max(...seen.slice(0, 80)) <= 2500, `gedrosselt: Sollwert bis ${Math.max(...seen.slice(0, 80))}`);
+  assert.ok(Math.max(...seen) <= 5000, `nach Freigabe kein Sprung ueber die Ladegrenze (${Math.max(...seen)})`);
+});
+
+test('ungedeckter LADE-Bedarf (Hauptanlage voll): zweite Anlage laedt', () => {
+  const c = createFollowerController(cfg());
+  let s = 0;
+  for (let i = 0; i < 60; i++) {
+    const unmetW = -Math.max(0, 4000 - s); // Netz soll +4 kW beziehen, Hauptanlage voll
+    const o = c.tick({ nowMs: i * 5000, primaryBatteryW: 0, followerBatteryW: s, unmetW,
+      primary: { ...SIDE, socPct: 100 }, follower: { ...SIDE, socPct: 30 } });
+    s = o.setpointW;
+  }
+  assert.ok(Math.abs(s - 4000) <= 300, `zweite Anlage laedt ${s}`);
 });

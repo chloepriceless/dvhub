@@ -186,7 +186,7 @@ import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
-import { createMultiGx } from './services/multi-gx/index.js';
+import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules, createScheduleRuleStore, scheduleRulesPath, readScheduleRules } from './services/optimizer/rule-store.js';
@@ -1354,12 +1354,11 @@ if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();
 // Wird die zweite Anlage steuerbar oder faellt sie aus, aendert sich der Akku,
 // mit dem EOS plant (multi-gx/planning) → Akku-Modell neu an EOS, dann Neuplan,
 // damit kein Lauf mit gemischtem Modell (Kapazitaet alt, Ladestand neu) startet.
-ctx.onMultiGxAvailability = (included) => {
-  Promise.resolve()
-    .then(() => ctx.eosConfigSync?.sync?.())
-    .then(() => ctx.optimizerService?.requestEosReplan?.(included ? 'multi_gx_online' : 'multi_gx_offline'))
-    .catch((e) => pushLog('multi_gx_eos_resync_failed', { error: e?.message || String(e) }));
-};
+ctx.onMultiGxAvailability = createEosResyncOnAvailability({
+  sync: async () => (ctx.eosConfigSync ? ctx.eosConfigSync.sync() : { ok: true }),
+  replan: (reason) => ctx.optimizerService?.requestEosReplan?.(reason),
+  pushLog,
+});
 ctx.multiGx = createMultiGx(ctx, { transport: createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
 if (IS_RUNTIME_PROCESS) ctx.multiGx.start();
 ctx.applyControlTarget = scheduler.applyControlTarget;

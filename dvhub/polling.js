@@ -19,6 +19,7 @@ import { info as logInfo, error as logError } from './services/log.js';
 // Plan 09-06 (D-06): meter-poll instruments. Wired in pollMeter success/error
 // branches (gauge.set on success duration, counter.inc on catch).
 import { meterPollDurationSeconds, meterPollErrorsTotal, telemetryFreezeActive } from './routes-api.js';
+import { followerBatteryForLoadW } from './services/multi-gx/planning.js';
 
 /**
  * Load persisted energy state from disk into state.energy (if today's data).
@@ -788,6 +789,20 @@ export function createPoller(ctx) {
       if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
     } else if (state.victron.selfConsumptionDerived && !state.victron.errors?.selfConsumptionW) {
       state.victron.selfConsumptionDerived = false;
+    }
+
+    // Zweite GX am selben Anschluss (multi-gx): ihr Akku haengt hinter dem
+    // Zaehler der Hauptanlage — sein Laden/Entladen ist kein Hausverbrauch.
+    // Korrigiert wird nur ein in diesem Durchlauf frisch gelesener Wert (bei
+    // Lesefehler steht noch der korrigierte alte), damit nie doppelt abgezogen wird.
+    if (!state.victron.errors?.selfConsumptionW && state.victron.selfConsumptionW != null) {
+      const followerW = followerBatteryForLoadW({ getCfg, state });
+      if (followerW !== 0) {
+        state.victron.selfConsumptionMeasuredW = Number(state.victron.selfConsumptionW);
+        state.victron.selfConsumptionW = Number(Math.max(0, state.victron.selfConsumptionMeasuredW - followerW).toFixed(3));
+      } else {
+        delete state.victron.selfConsumptionMeasuredW;
+      }
     }
 
     const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));

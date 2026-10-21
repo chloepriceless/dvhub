@@ -61,6 +61,21 @@ export function planningCfg(ctx, cfg = ctx?.getCfg?.()) {
   };
 }
 
+/**
+ * Akkuleistung der zweiten Anlage fuer die Hauslast-Korrektur (Codex Runde 2):
+ * sie haengt hinter dem Zaehler der Hauptanlage, ihr Laden/Entladen steckt im
+ * gemessenen Verbrauch. 0, wenn sie nicht einbezogen ist oder der Wert aelter
+ * als 20 s ist. Vorzeichen: + = laedt.
+ */
+export function followerBatteryForLoadW(ctx, nowMs = Date.now()) {
+  const cfg = ctx?.getCfg?.();
+  const f = follower(ctx, cfg);
+  const s = ctx?.state?.multiGx;
+  if (!f || !finite(s?.batteryPowerW)) return 0;
+  if (finite(s.updatedAt) && nowMs - Number(s.updatedAt) > 20000) return 0;
+  return Number(s.batteryPowerW);
+}
+
 /** Ladestand fuer die Planung: beide Akkus nach Kapazitaet gewichtet. */
 export function planningSocPct(ctx) {
   const cfg = ctx?.getCfg?.();
