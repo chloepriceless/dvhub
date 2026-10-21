@@ -11,12 +11,25 @@ import { createOcppServer } from '../services/wallbox/ocpp-server.js';
 import { createOcppAdapter } from '../services/wallbox/ocpp.js';
 import { WALLBOX_TYPES, directWallboxConfigured } from '../services/wallbox/types.js';
 
+// Freien Port vom System holen statt zu raten: Ein Zufallsport war in der CI
+// belegt (21.10.2026), der Server startete nicht → ECONNREFUSED. Port 0 kann
+// die Zentrale selbst nicht (0 = Standardport 8889).
+async function freePort() {
+  const net = await import('node:net');
+  const s = net.createServer();
+  await new Promise((resolve) => s.listen(0, '127.0.0.1', resolve));
+  const { port } = s.address();
+  await new Promise((resolve) => s.close(resolve));
+  return port;
+}
+
 async function start(cfgOver = {}) {
-  const port = 21000 + Math.floor(Math.random() * 20000);
+  const port = await freePort();
   const logs = [];
   const cfg = { ocpp: { enabled: true, port, host: '127.0.0.1', password: '', ...cfgOver } };
   const srv = createOcppServer({ getCfg: () => cfg, pushLog: (e, d) => logs.push([e, d]) }, { callTimeoutMs: 2000 });
-  await srv.start();
+  const r = await srv.start();
+  assert.equal(r?.started, true, `Zentrale startet nicht auf Port ${port}: ${JSON.stringify(logs.at(-1))}`);
   return { srv, port, logs, cfg };
 }
 
