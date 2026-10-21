@@ -334,6 +334,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       AND (
         (scope = 'monthly' AND key >= ? AND key < ?)
         OR (scope = 'annual' AND CAST(key AS INTEGER) <= ?)
+        OR (scope = 'running' AND key = ?)
       )
     ORDER BY scope ASC, key ASC
   `);
@@ -1061,7 +1062,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       }
       const yearPrefix = `${numericYear}-`;
       const nextYearPrefix = `${numericYear + 1}-`;
-      const rows = listSolarMarketValuesForYearStmt.all(yearPrefix, nextYearPrefix, numericYear);
+      const rows = listSolarMarketValuesForYearStmt.all(yearPrefix, nextYearPrefix, numericYear, String(numericYear));
       const summary = {
         monthlyCtKwhByMonth: {},
         annualCtKwhByYear: {}
@@ -1072,6 +1073,8 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           summary.monthlyCtKwhByMonth[entry.key] = entry.ctKwh;
         } else if (entry.scope === 'annual') {
           summary.annualCtKwhByYear[entry.key] = entry.ctKwh;
+        } else if (entry.scope === 'running') {
+          summary.runningAnnualCtKwh = entry.ctKwh;
         }
       }
       const attempt = mapSolarMarketValueAttemptRow(getSolarMarketValueAttemptStmt.get(numericYear));

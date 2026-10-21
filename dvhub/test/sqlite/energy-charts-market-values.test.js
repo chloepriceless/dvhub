@@ -144,7 +144,8 @@ test('energy charts market value service caches per year', async () => {
   const first = await service.getSolarMarketValueSummary({ year: 2026 });
   const second = await service.getSolarMarketValueSummary({ year: 2026 });
 
-  assert.equal(calls, 2);
+  // Seit 21.10.2026 drei Anfragen je Jahr: netztransparenz + Energy-Charts Monat/Jahr.
+  assert.equal(calls, 3);
   assert.deepEqual(second, first);
 });
 
@@ -161,6 +162,8 @@ test('market value service returns locally persisted values without re-fetching 
         return {
           hasAny: true,
           hasComplete: true,
+          // amtlich geholt (netztransparenz) — sonst wird ein Jahr einmal nachgeholt
+          attempt: { status: 'official' },
           summary: {
             monthlyCtKwhByMonth: {
               '2025-01': 5,
@@ -405,7 +408,8 @@ test('market value service does not retry again on the same day after a failed f
 
     assert.deepEqual(first, { monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} });
     assert.deepEqual(second, first);
-    assert.equal(calls, 2);
+    // ein Versuch = netztransparenz + Energy-Charts Monat/Jahr; der zweite Aufruf am selben Tag fragt nicht
+    assert.equal(calls, 3);
   } finally {
     store.close();
   }

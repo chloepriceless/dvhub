@@ -1643,14 +1643,16 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         WHERE status = 'ready' AND (
           (scope = 'monthly' AND key >= $1 AND key < $2)
           OR (scope = 'annual' AND CAST(key AS INTEGER) <= $3)
+          OR (scope = 'running' AND key = $4)
         ) ORDER BY scope ASC, key ASC
-      `, [yearPrefix, nextYearPrefix, numericYear]);
+      `, [yearPrefix, nextYearPrefix, numericYear, String(numericYear)]);
 
       const summary = { monthlyCtKwhByMonth: {}, annualCtKwhByYear: {} };
       for (const row of result.rows) {
         const entry = mapSolarMarketValueRow(row);
         if (entry.scope === 'monthly') summary.monthlyCtKwhByMonth[entry.key] = entry.ctKwh;
         else if (entry.scope === 'annual') summary.annualCtKwhByYear[entry.key] = entry.ctKwh;
+        else if (entry.scope === 'running') summary.runningAnnualCtKwh = entry.ctKwh;
       }
       const attemptResult = await pool.query(`SELECT * FROM solar_market_value_year_attempts WHERE year = $1`, [numericYear]);
       const attempt = mapSolarMarketValueAttemptRow(attemptResult.rows[0]);

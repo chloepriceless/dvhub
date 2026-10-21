@@ -2135,7 +2135,11 @@ const telemetryReady = (async () => {
     );
   };
   energyChartsMarketValueService = createEnergyChartsMarketValueService({
-    marketValueStore: telemetryStore
+    marketValueStore: telemetryStore,
+    // Marktwerte zentral von dvhub.online, wenn die Box dort auch ihre
+    // Börsenpreise holt (Standard); bei öffentlicher Quelle nur direkt.
+    getCentralBaseUrl: () => ((cfg.epex?.priceSource || 'dvhub') === 'dvhub'
+      ? (cfg.epex?.priceApiUrl || 'https://dvhub.online') : null)
   });
   liveTelemetryBuffer = IS_RUNTIME_PROCESS && telemetryStore ? createTelemetryWriteBuffer({
     flushIntervalMs: LIVE_TELEMETRY_FLUSH_MS,

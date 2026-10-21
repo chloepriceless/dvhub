@@ -261,6 +261,13 @@ verweist hierher.
 
 ### Behoben
 
+- **Marktwert Solar amtlich und deutschlandweit**: DVhub holte die Monatsmarktwerte nur von Energy-Charts, das der
+  amtlichen Veröffentlichung hinterherhinkt (im Oktober fehlte der September, für Mai 2026 stand 3,163 statt
+  3,296 ct/kWh). Jetzt kommen Monatswerte, Jahresmarktwert und der laufende Jahresmarktwert zentral von dvhub.online
+  (amtliche Werte der Übertragungsnetzbetreiber von netztransparenz.de), zusammen mit den Börsenpreisen. Der laufende
+  Jahresmarktwert ist der deutschlandweite (gewichtet mit der bundesweiten Solarerzeugung), nicht mehr nach der
+  eigenen Einspeisung gewichtet. Ist dvhub.online nicht erreichbar oder die Börsenpreise kommen von der öffentlichen
+  Quelle, holt DVhub die amtlichen Monatswerte direkt. Bereits gespeicherte Werte werden einmal amtlich nachgeholt.
 - **TimescaleDB auf Ubuntu** ([#24](https://github.com/chloepriceless/dvhub/issues/24)): Der Installer trug auch auf
   Ubuntu die Debian-Paketquelle von Timescale ein; auf Ubuntu 26.04 gibt es die nicht, jedes `apt update` meldete
   einen Fehler und DVhub nahm die Apache-Fassung ohne Kompression. Jetzt die passende Quelle (auch für Ableger wie

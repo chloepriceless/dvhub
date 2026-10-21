@@ -702,6 +702,20 @@ function summarizeSolarMarketValue({ year, rows, solarMarketValues }) {
     };
   }
 
+  // Laufender Jahreswert deutschlandweit von dvhub.online (amtliche Monate ×
+  // bundesweite Solarerzeugung, 21.10.2026). Nur wenn der fehlt (dvhub.online
+  // nicht erreichbar, öffentliche Preisquelle), gewichtet DVhub selbst mit der
+  // eigenen Einspeisung.
+  const running = Number(solarMarketValues?.runningAnnualCtKwh);
+  if (solarMarketValues?.runningAnnualCtKwh != null && Number.isFinite(running)) {
+    return {
+      year,
+      annualCtKwh: round2(running),
+      source: 'running_national',
+      availableMonths
+    };
+  }
+
   const weighted = rows.reduce((acc, row) => {
     const ctKwh = Number(monthlyCtKwhByMonth[row.label]);
     const exportKwh = Number(row.exportKwh || 0);
@@ -977,7 +991,7 @@ function applyAnnualMarketPremium({ view, slots, kpis, meta, pricingConfig, appl
     ? round2(Number(meta.solarMarketValue.annualCtKwh || 0))
     : null;
   const derivedRunningAnnualMarketValueCtKwh =
-    meta?.solarMarketValue?.source === 'derived_monthly_weighted'
+    ['derived_monthly_weighted', 'running_national'].includes(meta?.solarMarketValue?.source)
     && selectedYear != null
     && currentYear != null
     && selectedYear === currentYear

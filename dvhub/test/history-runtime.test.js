@@ -1106,6 +1106,27 @@ test('history runtime derives current-year solar market value from monthly value
   assert.equal(year.kpis.solarCompensationEur, 0.1);
 });
 
+// Chrissi 21.10.2026: laufender Jahresmarktwert kommt zentral von dvhub.online
+// (amtliche Monate × bundesweite Solarerzeugung) — es zählt der deutschlandweite
+// Wert, nicht die eigene Einspeisung der Anlage.
+test('history runtime nimmt den deutschlandweiten laufenden Jahresmarktwert von dvhub.online', async () => {
+  const runtime = createHistoryRuntime({
+    store: createStoreFixture(),
+    getPricingConfig: () => pricingConfig,
+    getCurrentDate: () => '2026-10-21', // laufendes Jahr
+    getSolarMarketValueSummary: () => ({
+      monthlyCtKwhByMonth: { '2026-03': 5, '2026-04': 7 },
+      annualCtKwhByYear: {},
+      runningAnnualCtKwh: 5.301
+    })
+  });
+  const year = await runtime.getSummary({ view: 'year', date: '2026-03-09' });
+  assert.deepEqual(year.meta.solarMarketValue, {
+    year: 2026, annualCtKwh: 5.3, source: 'running_national', availableMonths: 2
+  });
+  assert.equal(year.kpis.annualMarketValueCtKwh, 5.3);
+});
+
 test('history runtime uses official annual solar market value for completed years', async () => {
   const runtime = createHistoryRuntime({
     store: {

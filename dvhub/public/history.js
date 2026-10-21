@@ -591,7 +591,7 @@ function renderKpis(summary) {
     }
   }
   if (dvCardMvSource === 'year_derived') {
-    setText('historyPremiumMarketValueLabel', 'JMW (laufend, aus Monatsmarktwerten)');
+    setText('historyPremiumMarketValueLabel', 'JMW (laufend, deutschlandweit)');
   }
   setText('historyKpiAnnualMarketValue',
     hasFiniteNumber(dvCardMv) ? fmtCt(dvCardMv) : 'noch nicht verfügbar');
