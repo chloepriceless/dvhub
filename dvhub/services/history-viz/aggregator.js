@@ -590,6 +590,9 @@ export function createHistoryVizAggregator(ctx) {
       battery_discharge_w: 'batteryDischarge',
       second_battery_charge_w: 'secondBatteryCharge',
       second_battery_discharge_w: 'secondBatteryDischarge',
+      // Von polling.js aufgezeichnete Akku→Akku-Verschiebung (Codex Runde 4).
+      battery_to_second_battery_w: 'transfer12',
+      second_battery_to_battery_w: 'transfer21',
     };
     for (const r of rows) {
       const field = KEY_FIELD[r.key];
@@ -599,7 +602,7 @@ export function createHistoryVizAggregator(ctx) {
       if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
       let b = buckets.get(r.ts);
       if (!b) {
-        b = { pv: 0, load: 0, gridImport: 0, gridExport: 0, batteryCharge: 0, batteryDischarge: 0, secondBatteryCharge: 0, secondBatteryDischarge: 0 };
+        b = { pv: 0, load: 0, gridImport: 0, gridExport: 0, batteryCharge: 0, batteryDischarge: 0, secondBatteryCharge: 0, secondBatteryDischarge: 0, transfer12: 0, transfer21: 0 };
         buckets.set(r.ts, b);
       }
       b[field] += (w * dt) / 3_600_000;
@@ -632,10 +635,12 @@ export function createHistoryVizAggregator(ctx) {
     for (const b of buckets.values()) {
       const { pv, load } = b;
       // Gegenlaeufige Akkus (Codex-Gegenpruefung 21.10.2026, P2): was der eine
-      // abgibt und der andere im selben Bucket aufnimmt, geht Akku→Akku und ist
-      // weder Netzladung noch Hausversorgung/Einspeisung — vorher abziehen.
-      const t12 = Math.min(b.batteryDischarge, b.secondBatteryCharge);
-      const t21 = Math.min(b.secondBatteryDischarge, b.batteryCharge);
+      // an den anderen abgibt, ist weder Netzladung noch Hausversorgung/
+      // Einspeisung — vorher abziehen. Nur die von polling.js AUFGEZEICHNETE
+      // Verschiebung zaehlt (Runde 4): Laden und Entladen im selben Bucket
+      // koennen zeitlich nacheinander liegen.
+      const t12 = Math.min(b.transfer12, b.batteryDischarge, b.secondBatteryCharge);
+      const t21 = Math.min(b.transfer21, b.secondBatteryDischarge, b.batteryCharge);
       const c1 = b.batteryCharge - t21;
       const d1 = b.batteryDischarge - t12;
       batteryToSecondBattery += t12;
@@ -694,12 +699,13 @@ export function createHistoryVizAggregator(ctx) {
 
   // Energie-Reihen fuer Sankey und Autarkie (dieselbe Zerlegung → beide
   // stimmen ueberein). Die Akku-2-Reihen fehlen ohne zweite Anlage einfach.
-  const SECOND_BATTERY_SERIES = ['second_battery_charge_w', 'second_battery_discharge_w'];
+  const SECOND_BATTERY_SERIES = ['second_battery_charge_w', 'second_battery_discharge_w', 'battery_to_second_battery_w', 'second_battery_to_battery_w'];
   const SECOND_BATTERY_SERIES_SET = new Set(SECOND_BATTERY_SERIES);
   const FLOW_SERIES_KEYS = [
     'pv_total_w', 'grid_import_w', 'grid_export_w',
     'load_power_w', 'battery_charge_w', 'battery_discharge_w',
     'second_battery_charge_w', 'second_battery_discharge_w',
+    'battery_to_second_battery_w', 'second_battery_to_battery_w',
   ];
 
   // German short labels per view (matches mockup expectations from D-15).

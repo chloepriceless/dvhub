@@ -160,6 +160,11 @@ export function createFollowerController(config = {}) {
     const pCh = finite(input.primary?.maxChargeW) ? Number(input.primary.maxChargeW) : null;
     if (totalAvg < 0 && pDis != null) share = Math.min(share, totalAvg + pDis);
     if (totalAvg > 0 && pCh != null) share = Math.max(share, totalAvg - pCh);
+    // Ladestand-Grenzen der zweiten Anlage ZULETZT (Codex Runde 4): leer (oder
+    // Ladestand unbekannt) → kein Entladen, voll → kein Laden — auch nicht für
+    // den Rest, den die Hauptanlage nicht schafft.
+    if (share < 0 && !(f > 0)) share = 0;
+    if (share > 0 && !(f > 0)) share = 0;
     const desired = Math.max(-maxDischargeW, Math.min(maxChargeW, share));
 
     let reason = 'ok';

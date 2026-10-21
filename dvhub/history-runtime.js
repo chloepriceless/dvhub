@@ -1482,6 +1482,8 @@ export function createHistoryRuntime({
   // Liefert den lizenzierten kWp-Deckel (Pro S/M/L, Abo-Sitze) oder null (Community/Legacy/
   // Legacy = kein Cap). Lazy gelesen, damit es zur Request-Zeit verdrahtet ist.
   getCapKwp = () => null,
+  // Kapazität des Akkus der zweiten GX-Anlage in kWh (multi-gx), null = keine.
+  getSecondBatteryCapacityKwh = () => null,
   // MiSpeL-Übersicht (2026-10-18): PV-Gesamtleistung aus der Prognose als Rückfall.
   getForecastConfig = () => ({})
 }) {
@@ -2535,6 +2537,29 @@ export function createHistoryRuntime({
       }
     } catch {
       // no SoC series for this window -> leave KPIs uncorrected (legacy behaviour)
+    }
+    // Akku der zweiten GX-Anlage (Codex Runde 4, 21.10.2026): er ist aus dem
+    // Hausverbrauch herausgerechnet, sein Ladestand-Übertrag muss deshalb in den
+    // GESAMTverlust (nicht in den Akku-Verlust der Hauptanlage).
+    try {
+      const cap2 = Number(getSecondBatteryCapacityKwh());
+      if (Number.isFinite(cap2) && cap2 > 0 && typeof store.getSeriesBoundaryValues === 'function'
+          && range?.startDate && range?.endDateExclusive) {
+        const soc2 = await store.getSeriesBoundaryValues({
+          seriesKey: 'second_battery_soc_pct',
+          start: localDateTimeToUtcIso(range.startDate, 0, 0),
+          end: localDateTimeToUtcIso(range.endDateExclusive, 0, 0)
+        });
+        if (soc2?.startValue != null && soc2?.endValue != null) {
+          Object.assign(periodPremiumApplied.kpis, {
+            secondBatterySocStartPct: round2(soc2.startValue),
+            secondBatterySocEndPct: round2(soc2.endValue),
+            secondBatteryStoredDeltaKwh: round2(((soc2.endValue - soc2.startValue) / 100) * cap2)
+          });
+        }
+      }
+    } catch {
+      // keine Akku-2-Ladestände für das Fenster → unkorrigiert
     }
     // T-LICENSE-KWP-GATING Increment 3: PV-KPI-Summen auf die lizenzierte kWp
     // kappen (Pro-Tier-Enforcement). Als LETZTER Schritt auf das finale

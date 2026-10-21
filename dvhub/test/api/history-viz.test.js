@@ -292,7 +292,8 @@ const ANCHOR_DATE = '2026-05-14'; // a yesterday-stable choice
 // Akku der zweiten GX-Anlage (21.10.2026) als eigene Reihen — ohne Wert im
 // jeweiligen Mock liefern sie 0 W und lassen alle bisherigen Karten unberuehrt.
 const VIZ_ENERGY_KEYS = ['pv_total_w', 'grid_import_w', 'grid_export_w', 'load_power_w', 'battery_charge_w', 'battery_discharge_w',
-  'second_battery_charge_w', 'second_battery_discharge_w'];
+  'second_battery_charge_w', 'second_battery_discharge_w',
+  'battery_to_second_battery_w', 'second_battery_to_battery_w'];
 const SLOT_RES_SEC = 900;          // 15-min buckets, matches querySeries cap
 
 function makeFlatSeriesRows({ start, end, key, watts, stepSec = SLOT_RES_SEC }) {
@@ -2127,6 +2128,7 @@ describe('Sankey mit zweitem Akku', () => {
   it('Akku→Akku-Verschiebung: keine erfundene Einspeisung oder Netzladung', async () => {
     const ctx = mockCtxWithStores({ optimizer: { allowGridCharge: true }, querySeriesFn: twoBatterySeries({
       load_power_w: 1000, battery_discharge_w: 3000, second_battery_charge_w: 2000,
+      battery_to_second_battery_w: 2000, // von polling.js aufgezeichnet
     }) });
     const b = (await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE })).body;
     const flow = (from, to) => b.flows.find((f) => f.from === from && f.to === to)?.flow || 0;
@@ -2136,6 +2138,20 @@ describe('Sankey mit zweitem Akku', () => {
     assert.ok(Math.abs(flow('Akku-Entladen', 'Akku 2-Laden') - 48) < 0.05, 'Verschiebung als eigener Fluss');
     assert.ok(Math.abs(b.breakdown.batteryToSecondBattery - 48) < 0.05);
     assert.equal(b.breakdown.secondBatteryToBattery, 0);
+  });
+
+  // Codex Runde 4 (21.10.2026): Laden und Entladen im selben Bucket heisst nicht
+  // Akku→Akku. Nur die aufgezeichnete Verschiebung zaehlt; hier gibt es keine:
+  // Akku 1 versorgt das Haus, Akku 2 laedt (zu anderer Zeit) aus dem Netz.
+  it('ohne aufgezeichnete Verschiebung: keine erfundene Akku→Akku-Kante', async () => {
+    const ctx = mockCtxWithStores({ optimizer: { allowGridCharge: true }, querySeriesFn: twoBatterySeries({
+      load_power_w: 1000, battery_discharge_w: 1000, second_battery_charge_w: 1000, grid_import_w: 1000,
+    }) });
+    const b = (await ctx.historyVizApi.getSankey({ view: 'day', date: ANCHOR_DATE })).body;
+    const flow = (from, to) => b.flows.find((f) => f.from === from && f.to === to)?.flow || 0;
+    assert.equal(b.breakdown.batteryToSecondBattery, 0);
+    assert.ok(Math.abs(flow('Akku-Entladen', 'Eigenverbrauch') - 24) < 0.05, 'Akku 1 versorgt das Haus');
+    assert.ok(Math.abs(flow('Netzbezug', 'Akku 2-Laden') - 24) < 0.05, 'Akku 2 laedt aus dem Netz');
   });
 
   // Codex-Gegenpruefung 21.10.2026 (P2): VRM-Slots kennen Akku 2 nicht — die

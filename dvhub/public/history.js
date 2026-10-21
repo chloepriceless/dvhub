@@ -263,10 +263,14 @@ function renderKpis(summary) {
   // Wirkungsgrad über die abgeschlossenen Zyklen: entladen / (geladen − gespeichert).
   const effDenom = batChargeKwh - storedDeltaKwh;
   const batteryEff = effDenom > 0 ? round2((batDischargeKwh / effDenom) * 100) : null;
+  // Akku 2 (zweite GX-Anlage) steckt nicht im Hausverbrauch: was er im Fenster
+  // mehr gespeichert hat, ist ebenfalls kein Verlust (Codex Runde 4).
+  const secondStoredDeltaKwh = Number(kpis?.secondBatteryStoredDeltaKwh || 0);
   const totalLoss = round2(
     (Number(kpis?.pvKwh || 0) + Number(kpis?.importKwh || 0))
     - (Number(kpis?.loadKwh || 0) + Number(kpis?.exportKwh || 0))
     - storedDeltaKwh
+    - secondStoredDeltaKwh
   );
   setText('historyKpiBatteryLoss', fmtKwh(batteryLoss));
   setText('historyKpiBatteryEff', batteryEff != null ? fmtPct(batteryEff) : '-');
@@ -2026,8 +2030,16 @@ function energyFlowSankeyEdges(items) {
     { from: 'PV',       to: 'Akku2',     flow: sumOf('secondSolarToBatteryKwh'),  color: '#86efac' },
     { from: 'NetzImp',  to: 'Akku2',     flow: sumOf('secondGridToBatteryKwh'),   color: '#e9d5ff' },
     { from: 'Akku2',    to: 'Verbrauch', flow: sumOf('secondBatteryDirectUseKwh'), color: '#818cf8' },
-    { from: 'Akku2',    to: 'Netz',      flow: sumOf('secondBatteryToGridKwh'),   color: '#a5f3fc' }
-  ].filter((edge) => edge.flow > 0.01);
+    { from: 'Akku2',    to: 'Netz',      flow: sumOf('secondBatteryToGridKwh'),   color: '#a5f3fc' },
+    // Akku→Akku-Verschiebung (Codex Runde 4): netto in die überwiegende Richtung —
+    // zwei Gegenkanten wären ein Kreis, den das Sankey nicht zeichnen kann.
+    transferEdge(sumOf('batteryToSecondBatteryKwh') - sumOf('secondBatteryToBatteryKwh'))
+  ].filter((edge) => edge && edge.flow > 0.01);
+  function transferEdge(net) {
+    if (net > 0) return { from: 'Akku', to: 'Akku2', flow: round2(net), color: '#a7f3d0' };
+    if (net < 0) return { from: 'Akku2', to: 'Akku', flow: round2(-net), color: '#a7f3d0' };
+    return null;
+  }
 }
 
 function renderEnergyFlowSankey(mountId, items) {

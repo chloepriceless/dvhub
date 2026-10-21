@@ -484,3 +484,20 @@ test('Tabelle: Akku-2-Spalten nur, wenn eine Zeile Werte hat', () => {
   helpers.renderRows({ view: 'week', rows: [{ label: '2026-03-09', importKwh: 1, loadKwh: 2 }] });
   assert.doesNotMatch(elements.get('historyRows').innerHTML, /Akku 2/);
 });
+
+test('Gesamtverlust zieht auch die Ladestandsaenderung von Akku 2 ab (Codex Runde 4)', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const kpis = { pvKwh: 20, importKwh: 0, loadKwh: 5, exportKwh: 4, batteryChargeKwh: 0, batteryDischargeKwh: 0,
+    batteryStoredDeltaKwh: 0, secondBatteryStoredDeltaKwh: 10 };
+  helpers.renderSummary({ view: 'day', date: '2026-03-09', kpis, rows: [], meta: {} });
+  // 20 − (5 + 4) − 10 gespeichert in Akku 2 = 1 kWh Verlust
+  assert.match(elements.get('historyKpiTotalLoss').textContent, /^1,00/);
+});
+
+test('Sankey: Akku→Akku-Verschiebung als Netto-Kante (Codex Runde 4), kein Kreis', () => {
+  const { helpers } = loadHistoryPageHelpers();
+  const only = helpers.energyFlowSankeyEdges([{ batteryToSecondBatteryKwh: 1 }]);
+  assert.equal(JSON.stringify(only.map((e) => [e.from, e.to, e.flow])), JSON.stringify([['Akku', 'Akku2', 1]]));
+  const both = helpers.energyFlowSankeyEdges([{ batteryToSecondBatteryKwh: 1 }, { secondBatteryToBatteryKwh: 1.5 }]);
+  assert.equal(JSON.stringify(both.map((e) => [e.from, e.to, e.flow])), JSON.stringify([['Akku2', 'Akku', 0.5]]));
+});

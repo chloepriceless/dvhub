@@ -2191,6 +2191,9 @@ const telemetryReady = (async () => {
     // T-LICENSE-KWP-GATING Increment 3: Lizenz-kWp-Cap für die PV-KPI-Summen
     // (Pro-Tier-Enforcement). Lazy gelesen; null (Community/Legacy) = kein Cap.
     getCapKwp: () => ctx.licenseService?.getCapKwp?.() ?? null,
+    // Akku der zweiten GX-Anlage: Kapazität für die Ladestand-Korrektur des
+    // Gesamtverlusts (auch für Zeiträume, in denen sie lief).
+    getSecondBatteryCapacityKwh: () => (Number(cfg.multiGx?.batteryCapacityWh) > 0 ? Number(cfg.multiGx.batteryCapacityWh) / 1000 : null),
     getForecastConfig: () => cfg.forecast || {}
   }) : null;
   historyApi = createHistoryApiHandlers({

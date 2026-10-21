@@ -246,3 +246,21 @@ test('Hauptanlage an ihrer Grenze: der Rest geht ganz an die zweite Anlage, nich
   // gesamt -12000, Hauptanlage kann hoechstens -5000 → zweite mindestens -7000
   assert.equal(o.desiredFollowerBatteryW, -7000);
 });
+
+// Codex-Gegenpruefung Runde 4 (21.10.)
+test('Rest-Zuweisung bei ausgelasteter Hauptanlage achtet den Mindest-SoC der zweiten Anlage', () => {
+  const c = createFollowerController(cfg());
+  const o = c.tick({ nowMs: 0, primaryBatteryW: -5000, followerBatteryW: 0, unmetW: 3000,
+    primary: { ...SIDE, socPct: 50, maxDischargeW: 5000 }, follower: { ...SIDE, socPct: 10 } });
+  assert.equal(o.desiredFollowerBatteryW, 0, 'leere zweite Anlage entlaedt nicht');
+  const u = c.tick({ nowMs: 0, primaryBatteryW: -5000, followerBatteryW: 0, unmetW: 3000,
+    primary: { ...SIDE, socPct: 50, maxDischargeW: 5000 }, follower: { capacityWh: 64000, minSocPct: 10 } });
+  assert.equal(u.desiredFollowerBatteryW, 0, 'ohne Ladestand kein Anteil');
+});
+
+test('Rest-Zuweisung beim Laden achtet den Max-SoC der zweiten Anlage', () => {
+  const c = createFollowerController(cfg());
+  const o = c.tick({ nowMs: 0, primaryBatteryW: 5000, followerBatteryW: 0, unmetW: -3000,
+    primary: { ...SIDE, socPct: 50, maxChargeW: 5000 }, follower: { ...SIDE, socPct: 100 } });
+  assert.equal(o.desiredFollowerBatteryW, 0, 'volle zweite Anlage laedt nicht');
+});

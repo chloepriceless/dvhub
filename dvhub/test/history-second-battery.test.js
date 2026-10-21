@@ -172,3 +172,24 @@ test('Akku→Akku-Verschiebung: summiert, aber keine Hausversorgung', async () =
   const day = summary.series.energy[0];
   assert.equal(day.batteryToSecondBatteryKwh, 2);
 });
+
+// Codex Runde 4 (21.10.2026): Akku 2 ist aus dem Hausverbrauch herausgerechnet —
+// was er am Ende des Fensters mehr gespeichert hat, ist kein Verlust.
+test('Ladestandsaenderung von Akku 2 kommt als eigene KPI (fuer den Gesamtverlust)', async () => {
+  const runtime = createHistoryRuntime({
+    store: {
+      listAggregatedEnergySlots: () => SLOTS.map((s) => ({ ...s })),
+      listPriceSlots: () => [],
+      getSeriesBoundaryValues: async ({ seriesKey }) => (seriesKey === 'second_battery_soc_pct'
+        ? { startValue: 40, endValue: 60 }
+        : { startValue: null, endValue: null }),
+    },
+    getPricingConfig: () => ({}),
+    getCurrentDate: () => '2027-04-02',
+    getSecondBatteryCapacityKwh: () => 32,
+  });
+  const s = await runtime.getSummary({ view: 'day', date: '2026-03-09' });
+  assert.equal(s.kpis.secondBatteryStoredDeltaKwh, 6.4); // (60−40) % × 32 kWh
+  assert.equal(s.kpis.secondBatterySocStartPct, 40);
+  assert.equal(s.kpis.secondBatterySocEndPct, 60);
+});
