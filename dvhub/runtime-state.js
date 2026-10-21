@@ -49,6 +49,15 @@ const VICTRON_FIELDS = [
   'gridToBatteryW',
   'batteryDirectUseW',
   'batteryToGridW',
+  // Akku der zweiten GX-Anlage als eigene Groesse (21.10.2026, polling.js
+  // Fluss-Aufteilung). null = keine zweite Anlage einbezogen.
+  'secondBatteryChargeW',
+  'secondBatteryDischargeW',
+  'secondSolarToBatteryW',
+  'secondGridToBatteryW',
+  'secondBatteryToGridW',
+  'secondBatteryDirectUseW',
+  'secondBatterySocPct',
   'errors',
   // Victron device-alarm banner: the poller (a separate runtime-worker process)
   // writes state.victron.alarms; it MUST be whitelisted here or the IPC snapshot

@@ -363,6 +363,14 @@ const state = {
     gridToBatteryW: null,
     batteryDirectUseW: null,
     batteryToGridW: null,
+    // Akku der zweiten GX-Anlage (21.10.2026): null bis polling.js sie einbezieht.
+    secondBatteryChargeW: null,
+    secondBatteryDischargeW: null,
+    secondSolarToBatteryW: null,
+    secondGridToBatteryW: null,
+    secondBatteryToGridW: null,
+    secondBatteryDirectUseW: null,
+    secondBatterySocPct: null,
     errors: {},
     // T-0075: per-field timestamp of the last SUCCESSFUL poll (set by polling.js
     // success branch only). Real freshness signal for the discharge floor / D-18.

@@ -68,12 +68,23 @@ export function planningCfg(ctx, cfg = ctx?.getCfg?.()) {
  * als 20 s ist. Vorzeichen: + = laedt.
  */
 export function followerBatteryForLoadW(ctx, nowMs = Date.now()) {
+  return followerBatteryForFlow(ctx, nowMs)?.batteryPowerW ?? 0;
+}
+
+/**
+ * Akku der zweiten Anlage fuer die Energiefluss-Aufteilung (21.10.2026, Chrissi:
+ * „kannst die Akkus dort getrennt aufzeigen“): { batteryPowerW (+ = laedt), socPct }
+ * unter denselben Bedingungen wie followerBatteryForLoadW, sonst null. null heisst
+ * „keine zweite Anlage einbezogen“ — dann schreibt DVhub keine Akku-2-Werte; eine
+ * einbezogene, ruhende Anlage liefert dagegen 0 W.
+ */
+export function followerBatteryForFlow(ctx, nowMs = Date.now()) {
   const cfg = ctx?.getCfg?.();
   const f = follower(ctx, cfg);
   const s = ctx?.state?.multiGx;
-  if (!f || !finite(s?.batteryPowerW)) return 0;
-  if (finite(s.updatedAt) && nowMs - Number(s.updatedAt) > 20000) return 0;
-  return Number(s.batteryPowerW);
+  if (!f || !finite(s?.batteryPowerW)) return null;
+  if (finite(s.updatedAt) && nowMs - Number(s.updatedAt) > 20000) return null;
+  return { batteryPowerW: Number(s.batteryPowerW), socPct: f.socPct };
 }
 
 /** Ladestand fuer die Planung: beide Akkus nach Kapazitaet gewichtet. */

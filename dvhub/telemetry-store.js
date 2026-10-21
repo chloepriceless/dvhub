@@ -23,6 +23,20 @@ const DEFAULT_TELEMETRY_BACKFILL_SERIES = [
   'pv_total_w',
   'battery_power_w'
 ];
+// Zweite GX-Anlage: Reihe → kWh-Feld je Slot (gleich wie telemetry-store-pg.js).
+const SECOND_BATTERY_SLOT_FIELDS = [
+  ['secondBatteryChargeKwh', 'second_battery_charge_w'],
+  ['secondBatteryDischargeKwh', 'second_battery_discharge_w'],
+  ['secondSolarToBatteryKwh', 'second_solar_to_battery_w'],
+  ['secondGridToBatteryKwh', 'second_grid_to_battery_w'],
+  ['secondBatteryToGridKwh', 'second_battery_to_grid_w'],
+  ['secondBatteryDirectUseKwh', 'second_battery_direct_use_w']
+];
+const SECOND_BATTERY_SERIES = SECOND_BATTERY_SLOT_FIELDS.map(([, seriesKey]) => seriesKey);
+const secondBatteryKwhFields = (energyForSeries) => Object.fromEntries(
+  SECOND_BATTERY_SLOT_FIELDS.map(([field, seriesKey]) => [field, energyForSeries(seriesKey)])
+);
+
 const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_import_w',
   'grid_export_w',
@@ -47,7 +61,9 @@ const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_direct_use_w',
   'grid_to_battery_w',
   'battery_direct_use_w',
-  'battery_to_grid_w'
+  'battery_to_grid_w',
+  // Akku der zweiten GX-Anlage (21.10.2026), wie im PG-Store.
+  ...SECOND_BATTERY_SERIES
 ]);
 
 const roundKwh = round2;
@@ -610,7 +626,8 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         'grid_direct_use_w',
         'grid_to_battery_w',
         'battery_direct_use_w',
-        'battery_to_grid_w'
+        'battery_to_grid_w',
+        ${SECOND_BATTERY_SERIES.map((k) => `'${k}'`).join(', ')}
       )
         AND value_num IS NOT NULL
         AND ts_utc >= ?
@@ -681,6 +698,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'),
           batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
+          ...secondBatteryKwhFields(energyForSeries),
           estimated: estimatedSeriesKeys.length > 0,
           incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length,
@@ -827,6 +845,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'),
           batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
+          ...secondBatteryKwhFields(energyForSeries),
           sourceKind: overallSourceKind,
           sourceKinds: [...availableSourceKinds].sort(),
           estimated: estimatedSeriesKeys.length > 0,

@@ -552,8 +552,17 @@ export function createHistoryVizAggregator(ctx) {
   //
   // `rows` is the fetchBucketed output for the 6 energy series; this groups
   // them by bucket ts, integrates W×Δt → kWh per bucket, then decomposes.
+  //
+  // Zweite GX-Anlage am selben Anschluss (21.10.2026, Chrissi: „kannst die Akkus
+  // dort getrennt aufzeigen“): ihr Akku kommt als eigene Reihen
+  // second_battery_charge_w / second_battery_discharge_w. Zerlegt wird mit der
+  // SUMME beider Akkus (PV und Netz verteilen sich auf beide), danach je Bucket
+  // nach Lade- bzw. Entladeanteil auf Akku 1 und Akku 2 aufgeteilt. Ohne die
+  // Reihen ist Akku 2 = 0, mainShare gibt den Wert unveraendert zurueck und
+  // alle bisherigen Fluesse sind bitgenau wie vorher.
   function decomposeEnergyFlows(rows, gridChargeAllowed = false) {
-    // bucket ts → { pv, load, gridImport, gridExport, batteryCharge, batteryDischarge } in kWh
+    // bucket ts → { pv, load, gridImport, gridExport, batteryCharge, batteryDischarge,
+    //               secondBatteryCharge, secondBatteryDischarge } in kWh
     const buckets = new Map();
     const KEY_FIELD = {
       pv_total_w: 'pv',
@@ -562,6 +571,8 @@ export function createHistoryVizAggregator(ctx) {
       grid_export_w: 'gridExport',
       battery_charge_w: 'batteryCharge',
       battery_discharge_w: 'batteryDischarge',
+      second_battery_charge_w: 'secondBatteryCharge',
+      second_battery_discharge_w: 'secondBatteryDischarge',
     };
     for (const r of rows) {
       const field = KEY_FIELD[r.key];
@@ -571,7 +582,7 @@ export function createHistoryVizAggregator(ctx) {
       if (!Number.isFinite(w) || !Number.isFinite(dt) || dt <= 0) continue;
       let b = buckets.get(r.ts);
       if (!b) {
-        b = { pv: 0, load: 0, gridImport: 0, gridExport: 0, batteryCharge: 0, batteryDischarge: 0 };
+        b = { pv: 0, load: 0, gridImport: 0, gridExport: 0, batteryCharge: 0, batteryDischarge: 0, secondBatteryCharge: 0, secondBatteryDischarge: 0 };
         buckets.set(r.ts, b);
       }
       b[field] += (w * dt) / 3_600_000;
@@ -592,10 +603,18 @@ export function createHistoryVizAggregator(ctx) {
     let batteryToLoad = 0;
     let batteryToExport = 0;
     let gridToLoad = 0;
+    let pvToSecondBattery = 0;
+    let gridToSecondBattery = 0;
+    let secondBatteryToLoad = 0;
+    let secondBatteryToExport = 0;
     let totalPv = 0;
     let totalLoad = 0;
+    const mainShare = (total, mine, all) => (mine >= all ? total : (all > 0 ? total * (mine / all) : 0));
     for (const b of buckets.values()) {
-      const { pv, load, batteryCharge, batteryDischarge } = b;
+      const { pv, load } = b;
+      // Beide Akkus gemeinsam; ohne Akku 2 ist das exakt der Hauptakku.
+      const batteryCharge = b.batteryCharge + b.secondBatteryCharge;
+      const batteryDischarge = b.batteryDischarge + b.secondBatteryDischarge;
       totalPv += pv;
       totalLoad += load;
       const pvL = Math.min(pv, load);
@@ -608,15 +627,23 @@ export function createHistoryVizAggregator(ctx) {
       const loadRem2 = loadRem1 - battL;
       const battE = batteryDischarge - battL;
       const gridL = loadRem2;
+      const pvB1 = mainShare(pvB, b.batteryCharge, batteryCharge);
+      const residual1 = mainShare(residualCharge, b.batteryCharge, batteryCharge);
+      const battL1 = mainShare(battL, b.batteryDischarge, batteryDischarge);
+      const battE1 = mainShare(battE, b.batteryDischarge, batteryDischarge);
       pvToLoad += pvL;
-      pvToBattery += pvB;
+      pvToBattery += pvB1;
       pvToExport += pvE;
       // gridChargeAllowed toggles whether the per-bucket residual charge
       // becomes a Netzbezug→Akku-Laden flow (true) or is dropped (false).
-      if (gridChargeAllowed) gridToBattery += residualCharge;
-      batteryToLoad += battL;
-      batteryToExport += battE;
+      if (gridChargeAllowed) gridToBattery += residual1;
+      batteryToLoad += battL1;
+      batteryToExport += battE1;
       gridToLoad += gridL;
+      pvToSecondBattery += pvB - pvB1;
+      if (gridChargeAllowed) gridToSecondBattery += residualCharge - residual1;
+      secondBatteryToLoad += battL - battL1;
+      secondBatteryToExport += battE - battE1;
     }
     return {
       pvToLoad: clamp0(pvToLoad),
@@ -626,10 +653,22 @@ export function createHistoryVizAggregator(ctx) {
       batteryToLoad: clamp0(batteryToLoad),
       batteryToExport: clamp0(batteryToExport),
       gridToLoad: clamp0(gridToLoad),
+      pvToSecondBattery: clamp0(pvToSecondBattery),
+      gridToSecondBattery: clamp0(gridToSecondBattery),
+      secondBatteryToLoad: clamp0(secondBatteryToLoad),
+      secondBatteryToExport: clamp0(secondBatteryToExport),
       totalPv: clamp0(totalPv),
       totalLoad: clamp0(totalLoad),
     };
   }
+
+  // Energie-Reihen fuer Sankey und Autarkie (dieselbe Zerlegung → beide
+  // stimmen ueberein). Die Akku-2-Reihen fehlen ohne zweite Anlage einfach.
+  const FLOW_SERIES_KEYS = [
+    'pv_total_w', 'grid_import_w', 'grid_export_w',
+    'load_power_w', 'battery_charge_w', 'battery_discharge_w',
+    'second_battery_charge_w', 'second_battery_discharge_w',
+  ];
 
   // German short labels per view (matches mockup expectations from D-15).
   const DOW_DE_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -727,10 +766,7 @@ export function createHistoryVizAggregator(ctx) {
     try {
       const { start, end } = resolveRange(view, date);
       const rows = await fetchBucketedEnergySlots({
-        seriesKeys: [
-          'pv_total_w', 'grid_import_w', 'grid_export_w',
-          'load_power_w', 'battery_charge_w', 'battery_discharge_w',
-        ],
+        seriesKeys: FLOW_SERIES_KEYS,
         start, end, view,
         // decomposeEnergyFlows needs SUB-DAILY buckets to keep the day/night
         // structure — at a 1-day bucket PV "covers" the whole day's load and
@@ -749,8 +785,8 @@ export function createHistoryVizAggregator(ctx) {
       const gridChargeAllowed = isGridChargeAllowed();
       const f = decomposeEnergyFlows(rows, gridChargeAllowed);
       const pvKwh = f.totalPv;
-      const eigenverbrauchKwh = f.pvToLoad + f.batteryToLoad + f.gridToLoad;
-      const einspeisungKwh = f.pvToExport + f.batteryToExport;
+      const eigenverbrauchKwh = f.pvToLoad + f.batteryToLoad + f.secondBatteryToLoad + f.gridToLoad;
+      const einspeisungKwh = f.pvToExport + f.batteryToExport + f.secondBatteryToExport;
       // 7 flow types — conserves: sum(from PV) = totalPv,
       // sum(to Eigenverbrauch) = eigenverbrauchKwh (= totalLoad), by construction.
       const flows = [
@@ -761,6 +797,12 @@ export function createHistoryVizAggregator(ctx) {
         { from: 'Netzbezug',     to: 'Akku-Laden',     flow: round3(f.gridToBattery) },
         { from: 'Akku-Entladen', to: 'Eigenverbrauch', flow: round3(f.batteryToLoad) },
         { from: 'Akku-Entladen', to: 'Einspeisung',    flow: round3(f.batteryToExport) },
+        // Akku der zweiten GX-Anlage als eigene Knoten (nur mit Werten > 0,01 kWh,
+        // ohne zweite Anlage also nie).
+        { from: 'PV',              to: 'Akku 2-Laden',   flow: round3(f.pvToSecondBattery) },
+        { from: 'Netzbezug',       to: 'Akku 2-Laden',   flow: round3(f.gridToSecondBattery) },
+        { from: 'Akku 2-Entladen', to: 'Eigenverbrauch', flow: round3(f.secondBatteryToLoad) },
+        { from: 'Akku 2-Entladen', to: 'Einspeisung',    flow: round3(f.secondBatteryToExport) },
       ].filter(fl => fl.flow > 0.01);
       // breakdown: the 7 raw decomposed flow magnitudes (kWh). The flat `flows`
       // above splits the battery into two disconnected nodes (Akku-Laden sink /
@@ -776,6 +818,10 @@ export function createHistoryVizAggregator(ctx) {
         gridToBattery: round3(f.gridToBattery),
         batteryToLoad: round3(f.batteryToLoad),
         batteryToExport: round3(f.batteryToExport),
+        pvToSecondBattery: round3(f.pvToSecondBattery),
+        gridToSecondBattery: round3(f.gridToSecondBattery),
+        secondBatteryToLoad: round3(f.secondBatteryToLoad),
+        secondBatteryToExport: round3(f.secondBatteryToExport),
       };
       const payload = {
         ok: true,
@@ -1266,7 +1312,8 @@ export function createHistoryVizAggregator(ctx) {
   // Day-Autarky and day-Sankey agree because both run decomposeEnergyFlows.
   function autarkyDonutFromFlows(f) {
     const pvDirect = f.pvToLoad;
-    const battery = f.batteryToLoad;
+    // Beide Akkus versorgen das Haus aus Eigenerzeugung (Akku 2: 21.10.2026).
+    const battery = f.batteryToLoad + f.secondBatteryToLoad;
     const grid = f.gridToLoad;
     const totalLoad = pvDirect + battery + grid;
     const autarkyPct = totalLoad > 0
@@ -1294,10 +1341,7 @@ export function createHistoryVizAggregator(ctx) {
       // SAME decomposition as the Sankey (pvToLoad / batteryToLoad /
       // gridToLoad). Day-Autarky and day-Sankey therefore agree by construction.
       const rows = await fetchBucketedEnergySlots({
-        seriesKeys: [
-          'pv_total_w', 'grid_import_w', 'grid_export_w',
-          'load_power_w', 'battery_charge_w', 'battery_discharge_w',
-        ],
+        seriesKeys: FLOW_SERIES_KEYS,
         start, end, view,
         // Sub-daily buckets so decomposeEnergyFlows keeps the day/night
         // structure (see getSankey) — hourly for week/month/year/all.

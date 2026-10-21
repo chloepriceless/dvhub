@@ -92,6 +92,17 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
   pushSample(rows, 'grid_to_battery_w', victron.gridToBatteryW, 'W', base);
   pushSample(rows, 'battery_direct_use_w', victron.batteryDirectUseW, 'W', base);
   pushSample(rows, 'battery_to_grid_w', victron.batteryToGridW, 'W', base);
+  // Akku der zweiten GX-Anlage als eigene Reihen (21.10.2026, Chrissi: „kannst
+  // die Akkus dort getrennt aufzeigen“). polling.js setzt die Felder auf null,
+  // solange keine zweite Anlage einbezogen ist → pushSample ueberspringt sie,
+  // ohne zweite Anlage entsteht also keine einzige neue Zeile.
+  pushSample(rows, 'second_battery_charge_w', victron.secondBatteryChargeW, 'W', base);
+  pushSample(rows, 'second_battery_discharge_w', victron.secondBatteryDischargeW, 'W', base);
+  pushSample(rows, 'second_solar_to_battery_w', victron.secondSolarToBatteryW, 'W', base);
+  pushSample(rows, 'second_grid_to_battery_w', victron.secondGridToBatteryW, 'W', base);
+  pushSample(rows, 'second_battery_to_grid_w', victron.secondBatteryToGridW, 'W', base);
+  pushSample(rows, 'second_battery_direct_use_w', victron.secondBatteryDirectUseW, 'W', base);
+  pushSample(rows, 'second_battery_soc_pct', victron.secondBatterySocPct, '%', base);
   pushSample(rows, 'grid_setpoint_w', victron.gridSetpointW, 'W', base);
   pushSample(rows, 'min_soc_pct', victron.minSocPct, '%', base);
 

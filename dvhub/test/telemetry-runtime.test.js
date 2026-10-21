@@ -99,6 +99,43 @@ test('buildLiveTelemetrySamples writes load_power_w_ex_managed alongside the unt
   }
 });
 
+// Zweite GX am selben Anschluss (21.10.2026): Akku 2 bekommt eigene Reihen,
+// damit die Historie ihn getrennt zeigen kann. Ohne zweite Anlage stehen die
+// Felder auf null → keine einzige neue Zeile.
+const SECOND_BATTERY_SERIES = {
+  second_battery_charge_w: 'secondBatteryChargeW',
+  second_battery_discharge_w: 'secondBatteryDischargeW',
+  second_solar_to_battery_w: 'secondSolarToBatteryW',
+  second_grid_to_battery_w: 'secondGridToBatteryW',
+  second_battery_to_grid_w: 'secondBatteryToGridW',
+  second_battery_direct_use_w: 'secondBatteryDirectUseW',
+  second_battery_soc_pct: 'secondBatterySocPct'
+};
+
+test('buildLiveTelemetrySamples schreibt die Akku-2-Reihen, wenn die zweite Anlage einbezogen ist', () => {
+  const victron = {
+    selfConsumptionW: 1000,
+    secondBatteryChargeW: 1500, secondBatteryDischargeW: 0, secondSolarToBatteryW: 1200,
+    secondGridToBatteryW: 300, secondBatteryToGridW: 0, secondBatteryDirectUseW: 0, secondBatterySocPct: 70
+  };
+  const rows = buildLiveTelemetrySamples({ ts: '2026-10-21T12:00:00.000Z', resolutionSeconds: 2, victron });
+  const byKey = new Map(rows.map((row) => [row.seriesKey, row]));
+  for (const [seriesKey, field] of Object.entries(SECOND_BATTERY_SERIES)) {
+    assert.ok(byKey.has(seriesKey), `${seriesKey} fehlt`);
+    assert.equal(byKey.get(seriesKey).value, victron[field], seriesKey);
+    assert.equal(byKey.get(seriesKey).unit, seriesKey.endsWith('_pct') ? '%' : 'W', seriesKey);
+  }
+});
+
+test('buildLiveTelemetrySamples ohne zweite Anlage: keine Akku-2-Zeilen', () => {
+  const victron = { selfConsumptionW: 1000, batteryChargeW: 500 };
+  for (const field of Object.values(SECOND_BATTERY_SERIES)) victron[field] = null;
+  const withNull = buildLiveTelemetrySamples({ ts: '2026-10-21T12:00:00.000Z', resolutionSeconds: 2, victron });
+  const without = buildLiveTelemetrySamples({ ts: '2026-10-21T12:00:00.000Z', resolutionSeconds: 2, victron: { selfConsumptionW: 1000, batteryChargeW: 500 } });
+  assert.deepEqual(withNull, without);
+  assert.ok(!withNull.some((row) => row.seriesKey.startsWith('second_')));
+});
+
 test('buildPriceTelemetrySamples expands EPEX rows into storable series', () => {
   const rows = buildPriceTelemetrySamples([
     { ts: Date.UTC(2026, 2, 9, 12, 0, 0), eur_mwh: 50, ct_kwh: 5 }

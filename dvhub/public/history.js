@@ -225,13 +225,25 @@ function renderKpis(summary) {
   setText('historyKpiPv', fmtKwh(kpis?.pvKwh));
   setText('historyKpiConsumption', fmtKwh(kpis?.loadKwh));
   setText('historyKpiConsPv', fmtKwh(kpis?.pvShareKwh));
-  setText('historyKpiConsBattery', fmtKwh(kpis?.batteryShareKwh));
+  // Akku der zweiten GX-Anlage (21.10.2026, Chrissi: „kannst die Akkus dort
+  // getrennt aufzeigen“): „davon aus Akku“ zeigt dann beide Akkus, die Zeile
+  // „davon Akku 2“ darunter seinen Teil. Ohne Akku-2-Werte bleibt die Zeile
+  // versteckt und die Akku-Zeile genau wie bisher.
+  const secondConsKwh = Number(kpis?.secondBatteryShareKwh || 0);
+  setText('historyKpiConsBattery', fmtKwh(secondConsKwh > 0 ? round2(Number(kpis?.batteryShareKwh || 0) + secondConsKwh) : kpis?.batteryShareKwh));
+  setText('historyKpiConsBattery2', fmtKwh(secondConsKwh));
+  setHidden('historyKpiConsBattery2Row', !(secondConsKwh > 0));
   setText('historyKpiConsGrid', fmtKwh(kpis?.gridShareKwh));
   setText('historyKpiExport', fmtKwh(kpis?.exportKwh));
   // Einspeisung aufschlüsseln: PV→Netz vs Akku→Netz (Arbitrage). Akku-Export war
   // bisher in der Gesamt-Einspeisung unsichtbar (Christin 2026-06-14).
   setText('historyKpiExportPv', hasFiniteNumber(kpis?.solarToGridKwh) ? fmtKwh(kpis.solarToGridKwh) : '-');
-  setText('historyKpiExportBattery', hasFiniteNumber(kpis?.batteryToGridKwh) ? fmtKwh(kpis.batteryToGridKwh) : '-');
+  const secondExportKwh = Number(kpis?.secondBatteryToGridKwh || 0);
+  setText('historyKpiExportBattery', hasFiniteNumber(kpis?.batteryToGridKwh)
+    ? fmtKwh(secondExportKwh > 0 ? round2(Number(kpis.batteryToGridKwh) + secondExportKwh) : kpis.batteryToGridKwh)
+    : '-');
+  setText('historyKpiExportBattery2', fmtKwh(secondExportKwh));
+  setHidden('historyKpiExportBattery2Row', !(secondExportKwh > 0));
   // Energieverluste:
   //  - Akku-Verlust = geladen − entladen (Round-Trip-Verlust des Akkus)
   //  - Akku-Wirkungsgrad = entladen / geladen
@@ -919,12 +931,19 @@ function startOfWeekDateOnly(value) {
   return date.toISOString().slice(0, 10);
 }
 
+// „Eigenverbrauch Akku“ in den Zusammenfassungen = beide Akkus (Akku 2 der
+// zweiten GX-Anlage, 21.10.2026). Ohne Akku-2-Anteil genau der bisherige Wert.
+function storageShareKwh(row) {
+  const second = Number(row?.secondBatteryShareKwh || 0);
+  return second > 0 ? round2(Number(row?.batteryShareKwh || 0) + second) : (row?.batteryShareKwh ?? 0);
+}
+
 const aggregateTableColumns = [
   { key: 'pvKwh', label: 'PV-Erzeugung', formatter: fmtKwh },
   { key: 'importKwh', label: 'Import', formatter: fmtKwh },
   { key: 'loadKwh', label: 'Verbrauch', formatter: fmtKwh },
   { key: 'pvShareKwh', label: 'Eigenverbrauch PV', formatter: fmtKwh },
-  { key: 'batteryShareKwh', label: 'Eigenverbrauch Akku', formatter: fmtKwh },
+  { key: 'batteryShareKwh', derived: storageShareKwh, label: 'Eigenverbrauch Akku', formatter: fmtKwh },
   { key: 'exportKwh', label: 'Einspeisung', formatter: fmtKwh },
   { key: 'exportRevenueEur', label: 'Erlös Einspeisung', formatter: fmtEur },
   { key: 'gridCostEur', fallbackKey: 'importCostEur', label: 'Bezugskosten', formatter: fmtEur },
@@ -941,6 +960,7 @@ const aggregateMetricKeys = [
   'loadKwh',
   'pvShareKwh',
   'batteryShareKwh',
+  'secondBatteryShareKwh',
   'exportKwh',
   'exportRevenueEur',
   'gridCostEur',
@@ -990,8 +1010,13 @@ function buildAggregateSummaryRow(summary) {
     pvKwh: Number(kpis.pvKwh || 0),
     importKwh: Number(kpis.importKwh || 0),
     loadKwh: Number(kpis.loadKwh || 0),
-    pvShareKwh: Number(kpis.selfConsumptionKwh || 0) ? Number(kpis.selfConsumptionKwh || 0) - Number(kpis.importKwh || 0) - Number(kpis.batteryShareKwh || 0) : Number(kpis.pvShareKwh || 0),
-    batteryShareKwh: Number(kpis.batteryShareKwh || 0),
+    // „Eigenverbrauch Akku“ = beide Akkus (Akku 2 der zweiten GX-Anlage seit
+    // 21.10.2026; selfConsumptionKwh enthält ihn) — sonst landete sein Anteil
+    // rechnerisch bei der PV.
+    pvShareKwh: Number(kpis.selfConsumptionKwh || 0)
+      ? Number(kpis.selfConsumptionKwh || 0) - Number(kpis.importKwh || 0) - Number(kpis.batteryShareKwh || 0) - Number(kpis.secondBatteryShareKwh || 0)
+      : Number(kpis.pvShareKwh || 0),
+    batteryShareKwh: Number(kpis.batteryShareKwh || 0) + Number(kpis.secondBatteryShareKwh || 0),
     exportKwh: Number(kpis.exportKwh || 0),
     exportRevenueEur: Number(kpis.exportRevenueEur || 0),
     gridCostEur: Number(kpis.gridCostEur ?? kpis.importCostEur ?? 0),
@@ -1384,6 +1409,10 @@ function renderDvMonthlyPriceTable(mountId, rows) {
   const batKwh = sum('exportBatteryValuedKwh');
   const pvEur = sum('exportPvRevenueEur');
   const batEur = sum('exportBatteryRevenueEur');
+  // Akku 2 (zweite GX-Anlage, 21.10.2026) gehört zur Einspeisung: in „Kombiniert“
+  // mitgezählt (Backend-Satz exportSpotCtKwh rechnet ihn ebenso ein).
+  const bat2Kwh = sum('exportSecondBatteryValuedKwh');
+  const bat2Eur = sum('exportSecondBatteryRevenueEur');
   const rate = (eur, kwh) => (kwh > 0 ? (eur / kwh) * 100 : null);
   const cell = (eur, ct) => `${fmtEur(eur)}${hasFiniteNumber(ct) ? ` · ${fmtCt(ct)}` : ''}`;
   // Noch kein Wert (z.B. Monatsmarktwert des laufenden Monats) ist „–", nicht 0 ct.
@@ -1408,7 +1437,7 @@ function renderDvMonthlyPriceTable(mountId, rows) {
             <td>${ctOrDash(row.spotPriceAvgCtKwh)}</td>
             <td>${cell(row.exportPvRevenueEur, row.exportPvCtKwh)}</td>
             <td>${cell(row.exportBatteryRevenueEur, row.exportBatteryCtKwh)}</td>
-            <td>${cell((Number(row.exportPvRevenueEur) || 0) + (Number(row.exportBatteryRevenueEur) || 0), row.exportSpotCtKwh)}</td>
+            <td>${cell((Number(row.exportPvRevenueEur) || 0) + (Number(row.exportBatteryRevenueEur) || 0) + (Number(row.exportSecondBatteryRevenueEur) || 0), row.exportSpotCtKwh)}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -1419,7 +1448,7 @@ function renderDvMonthlyPriceTable(mountId, rows) {
           <td></td>
           <td>${cell(pvEur, rate(pvEur, pvKwh))}</td>
           <td>${cell(batEur, rate(batEur, batKwh))}</td>
-          <td>${cell(pvEur + batEur, rate(pvEur + batEur, pvKwh + batKwh))}</td>
+          <td>${cell(pvEur + batEur + bat2Eur, rate(pvEur + batEur + bat2Eur, pvKwh + batKwh + bat2Kwh))}</td>
         </tr>
       </tfoot>
     </table>
@@ -1738,6 +1767,39 @@ function renderMonthDailyStackedChart(mountId, items) {
   });
 }
 
+// Segmente der Tages-Flussbalken. Akku 2 (zweite GX-Anlage, 21.10.2026) bekommt
+// eigene Segmente — jedes nur, wenn es am Tag Werte hat; ohne zweite Anlage
+// bleiben es die bisherigen sieben.
+function dayFlowDatasets(items) {
+  const list = Array.isArray(items) ? items : [];
+  const pickPositive = (key) => list.map((item) => Math.max(0, Number(item?.[key] || 0)));
+  const pickNegative = (key) => list.map((item) => -Math.max(0, Number(item?.[key] || 0)));
+  const hasValues = (ds) => ds.data.some((v) => v !== 0);
+  const secondBattery = [
+    { label: 'Solar zu Akku 2',      data: pickPositive('secondSolarToBatteryKwh'), backgroundColor: '#86efac' },
+    { label: 'Akku 2 ins Netz',      data: pickPositive('secondBatteryToGridKwh'),  backgroundColor: '#a5f3fc' },
+    { label: 'Akku 2 zum Verbrauch', data: pickNegative('secondBatteryDirectUseKwh'), backgroundColor: '#818cf8' },
+    { label: 'Netz zu Akku 2',       data: pickNegative('secondGridToBatteryKwh'),  backgroundColor: '#e9d5ff' }
+  ].filter(hasValues);
+  return [
+    { label: 'Solar zum Verbrauch', data: pickPositive('solarDirectUseKwh'), backgroundColor: '#f5c451' },
+    { label: 'Solar zur Batterie',  data: pickPositive('solarToBatteryKwh'), backgroundColor: '#34d399' },
+    { label: 'Solar ins Netz',      data: pickPositive('solarToGridKwh'),    backgroundColor: '#f59e0b' },
+    { label: 'Batterie ins Netz',   data: pickPositive('batteryToGridKwh'),  backgroundColor: '#22d3ee' },
+    { label: 'Batterie zum Verbrauch', data: pickNegative('batteryDirectUseKwh'), backgroundColor: '#67a5ff' },
+    { label: 'Netz zum Verbrauch',  data: pickNegative('gridDirectUseKwh'),  backgroundColor: '#f472b6' },
+    { label: 'Netz zur Batterie',   data: pickNegative('gridToBatteryKwh'),  backgroundColor: '#c084fc' },
+    ...secondBattery
+  ].map((ds) => ({
+    type: 'bar',
+    stack: 'flows',
+    borderWidth: 0,
+    borderSkipped: false,
+    yAxisID: 'yKwh',
+    ...ds
+  }));
+}
+
 function renderDayFlowStackedBars(mountId, items) {
   const mount = byId(mountId);
   if (!mount) return;
@@ -1752,25 +1814,7 @@ function renderDayFlowStackedBars(mountId, items) {
   }
 
   const labels = items.map((item) => compactAxisLabel(item?.label || '-'));
-  const pickPositive = (key) => items.map((item) => Math.max(0, Number(item?.[key] || 0)));
-  const pickNegative = (key) => items.map((item) => -Math.max(0, Number(item?.[key] || 0)));
-
-  const datasets = [
-    { label: 'Solar zum Verbrauch', data: pickPositive('solarDirectUseKwh'), backgroundColor: '#f5c451' },
-    { label: 'Solar zur Batterie',  data: pickPositive('solarToBatteryKwh'), backgroundColor: '#34d399' },
-    { label: 'Solar ins Netz',      data: pickPositive('solarToGridKwh'),    backgroundColor: '#f59e0b' },
-    { label: 'Batterie ins Netz',   data: pickPositive('batteryToGridKwh'),  backgroundColor: '#22d3ee' },
-    { label: 'Batterie zum Verbrauch', data: pickNegative('batteryDirectUseKwh'), backgroundColor: '#67a5ff' },
-    { label: 'Netz zum Verbrauch',  data: pickNegative('gridDirectUseKwh'),  backgroundColor: '#f472b6' },
-    { label: 'Netz zur Batterie',   data: pickNegative('gridToBatteryKwh'),  backgroundColor: '#c084fc' }
-  ].map((ds) => ({
-    type: 'bar',
-    stack: 'flows',
-    borderWidth: 0,
-    borderSkipped: false,
-    yAxisID: 'yKwh',
-    ...ds
-  }));
+  const datasets = dayFlowDatasets(items);
 
   mount.innerHTML = `<div class="history-chart-mount-container"><canvas id="${mountId}Canvas"></canvas></div>`;
 
@@ -1806,8 +1850,10 @@ function renderDayFlowStackedBars(mountId, items) {
               const i = ctxs?.[0]?.dataIndex;
               if (i == null) return '';
               const item = items[i] || {};
-              const solarTotal = (Number(item.solarDirectUseKwh) || 0) + (Number(item.solarToBatteryKwh) || 0) + (Number(item.solarToGridKwh) || 0);
-              const loadTotal = (Number(item.solarDirectUseKwh) || 0) + (Number(item.batteryDirectUseKwh) || 0) + (Number(item.gridDirectUseKwh) || 0);
+              const solarTotal = (Number(item.solarDirectUseKwh) || 0) + (Number(item.solarToBatteryKwh) || 0)
+                + (Number(item.secondSolarToBatteryKwh) || 0) + (Number(item.solarToGridKwh) || 0);
+              const loadTotal = (Number(item.solarDirectUseKwh) || 0) + (Number(item.batteryDirectUseKwh) || 0)
+                + (Number(item.secondBatteryDirectUseKwh) || 0) + (Number(item.gridDirectUseKwh) || 0);
               return [`Gesamt Solar: ${fmtKwh(solarTotal)}`, `Gesamtverbrauch: ${fmtKwh(loadTotal)}`];
             }
           }
@@ -1843,11 +1889,23 @@ function renderPeriodGroupedBars(mountId, items) {
 
   const labels = items.map((it) => compactAxisLabel(it?.label || '-'));
   const consumption = items.map((it) => Math.max(0, Number(it?.loadKwh) || 0));
-  const solarSelf = items.map((it) => Math.max(0, (Number(it?.solarDirectUseKwh) || 0) + (Number(it?.solarToBatteryKwh) || 0)));
+  // PV → Akku 2 (zweite GX-Anlage, 21.10.2026) ist ebenfalls Eigenverbrauch der PV.
+  const solarSelf = items.map((it) => Math.max(0, (Number(it?.solarDirectUseKwh) || 0) + (Number(it?.solarToBatteryKwh) || 0)
+    + (Number(it?.secondSolarToBatteryKwh) || 0)));
   const solarExport = items.map((it) => Math.max(0, Number(it?.solarToGridKwh) || 0));
   const battery = items.map((it) => Math.max(0, Number(it?.batteryDischargeKwh) || 0));
+  // Akku 2: eigenes Segment im Batterie-Stapel, nur wenn er entladen hat.
+  const secondBattery = items.map((it) => Math.max(0, Number(it?.secondBatteryDischargeKwh) || 0));
+  const secondBatteryDatasets = secondBattery.some((v) => v > 0)
+    ? [{
+      type: 'bar', label: 'Akku 2',
+      data: secondBattery, yAxisID: 'yKwh', order: 2, stack: 'battery',
+      backgroundColor: '#818cf8', borderColor: '#818cf8', borderWidth: 0
+    }]
+    : [];
   const gridDirect = items.map((it) => Math.max(0, Number(it?.gridDirectUseKwh) || 0));
-  const gridToBattery = items.map((it) => Math.max(0, Number(it?.gridToBatteryKwh) || 0));
+  // Netz → Akku 2 gehört zum Netzbezug für Akkus (ohne zweite Anlage 0).
+  const gridToBattery = items.map((it) => Math.max(0, (Number(it?.gridToBatteryKwh) || 0) + (Number(it?.secondGridToBatteryKwh) || 0)));
   const autarky = items.map((it) => {
     const load = Number(it?.loadKwh) || 0;
     const grid = Number(it?.gridDirectUseKwh) || 0;
@@ -1891,6 +1949,7 @@ function renderPeriodGroupedBars(mountId, items) {
           data: battery, yAxisID: 'yKwh', order: 2, stack: 'battery',
           backgroundColor: '#67a5ff', borderColor: '#67a5ff', borderWidth: 0
         },
+        ...secondBatteryDatasets,
         {
           type: 'bar', label: 'Netzbezug (Verbrauch)',
           data: gridDirect, yAxisID: 'yKwh', order: 2, stack: 'grid',
@@ -1950,6 +2009,27 @@ function renderPeriodGroupedBars(mountId, items) {
   });
 }
 
+// Kanten des Energiefluss-Sankeys. „Akku2“ (zweite GX-Anlage, 21.10.2026) ist ein
+// eigener Knoten; seine Kanten fallen wie alle anderen unter 0,01 kWh weg, ohne
+// zweite Anlage gibt es ihn also nicht.
+function energyFlowSankeyEdges(items) {
+  const list = Array.isArray(items) ? items : [];
+  const sumOf = (key) => list.reduce((acc, it) => acc + Math.max(0, Number(it?.[key]) || 0), 0);
+  return [
+    { from: 'PV',       to: 'Verbrauch', flow: sumOf('solarDirectUseKwh'),  color: '#f5c451' },
+    { from: 'PV',       to: 'Akku',      flow: sumOf('solarToBatteryKwh'),  color: '#34d399' },
+    { from: 'PV',       to: 'Netz',      flow: sumOf('solarToGridKwh'),     color: '#f59e0b' },
+    { from: 'Akku',     to: 'Verbrauch', flow: sumOf('batteryDirectUseKwh'), color: '#67a5ff' },
+    { from: 'Akku',     to: 'Netz',      flow: sumOf('batteryToGridKwh'),   color: '#22d3ee' },
+    { from: 'NetzImp',  to: 'Verbrauch', flow: sumOf('gridDirectUseKwh'),   color: '#f472b6' },
+    { from: 'NetzImp',  to: 'Akku',      flow: sumOf('gridToBatteryKwh'),   color: '#c084fc' },
+    { from: 'PV',       to: 'Akku2',     flow: sumOf('secondSolarToBatteryKwh'),  color: '#86efac' },
+    { from: 'NetzImp',  to: 'Akku2',     flow: sumOf('secondGridToBatteryKwh'),   color: '#e9d5ff' },
+    { from: 'Akku2',    to: 'Verbrauch', flow: sumOf('secondBatteryDirectUseKwh'), color: '#818cf8' },
+    { from: 'Akku2',    to: 'Netz',      flow: sumOf('secondBatteryToGridKwh'),   color: '#a5f3fc' }
+  ].filter((edge) => edge.flow > 0.01);
+}
+
 function renderEnergyFlowSankey(mountId, items) {
   const mount = byId(mountId);
   if (!mount) return;
@@ -1963,16 +2043,7 @@ function renderEnergyFlowSankey(mountId, items) {
     return;
   }
 
-  const sumOf = (key) => items.reduce((acc, it) => acc + Math.max(0, Number(it?.[key]) || 0), 0);
-  const flows = [
-    { from: 'PV',       to: 'Verbrauch', flow: sumOf('solarDirectUseKwh'),  color: '#f5c451' },
-    { from: 'PV',       to: 'Akku',      flow: sumOf('solarToBatteryKwh'),  color: '#34d399' },
-    { from: 'PV',       to: 'Netz',      flow: sumOf('solarToGridKwh'),     color: '#f59e0b' },
-    { from: 'Akku',     to: 'Verbrauch', flow: sumOf('batteryDirectUseKwh'), color: '#67a5ff' },
-    { from: 'Akku',     to: 'Netz',      flow: sumOf('batteryToGridKwh'),   color: '#22d3ee' },
-    { from: 'NetzImp',  to: 'Verbrauch', flow: sumOf('gridDirectUseKwh'),   color: '#f472b6' },
-    { from: 'NetzImp',  to: 'Akku',      flow: sumOf('gridToBatteryKwh'),   color: '#c084fc' }
-  ].filter((edge) => edge.flow > 0.01);
+  const flows = energyFlowSankeyEdges(items);
 
   if (!flows.length) {
     mount.innerHTML = '<div class="history-chart-empty">Keine Flussdaten für diese Periode.</div>';
@@ -1982,10 +2053,10 @@ function renderEnergyFlowSankey(mountId, items) {
   const data = flows.map((edge) => ({ from: edge.from, to: edge.to, flow: Math.round(edge.flow * 100) / 100 }));
   const colors = {};
   flows.forEach((edge) => {
-    colors[edge.from] = colors[edge.from] || (edge.from === 'PV' ? '#f5c451' : edge.from === 'Akku' ? '#67a5ff' : '#f472b6');
-    colors[edge.to]   = colors[edge.to]   || (edge.to === 'Verbrauch' ? '#9ca3af' : edge.to === 'Akku' ? '#67a5ff' : '#22d3ee');
+    colors[edge.from] = colors[edge.from] || (edge.from === 'PV' ? '#f5c451' : edge.from === 'Akku' ? '#67a5ff' : edge.from === 'Akku2' ? '#818cf8' : '#f472b6');
+    colors[edge.to]   = colors[edge.to]   || (edge.to === 'Verbrauch' ? '#9ca3af' : edge.to === 'Akku' ? '#67a5ff' : edge.to === 'Akku2' ? '#818cf8' : '#22d3ee');
   });
-  const labels = { PV: 'Solar ☀', Akku: 'Akku 🔋', Netz: 'Netz ➡', NetzImp: 'Netz ⬅', Verbrauch: 'Verbrauch 🏠' };
+  const labels = { PV: 'Solar ☀', Akku: 'Akku 🔋', Akku2: 'Akku 2 🔋', Netz: 'Netz ➡', NetzImp: 'Netz ⬅', Verbrauch: 'Verbrauch 🏠' };
 
   mount.innerHTML = `<div class="history-chart-mount-container"><canvas id="${mountId}Canvas"></canvas></div>`;
 
@@ -2003,8 +2074,8 @@ function renderEnergyFlowSankey(mountId, items) {
         colorTo:   (ctx) => colors[ctx.dataset.data[ctx.dataIndex]?.to]   || '#9ca3af',
         colorMode: 'gradient',
         labels,
-        priority: { PV: 1, NetzImp: 2, Akku: 3, Verbrauch: 1, Netz: 2 },
-        column:   { PV: 0, NetzImp: 0, Akku: 1, Verbrauch: 2, Netz: 2 },
+        priority: { PV: 1, NetzImp: 2, Akku: 3, Akku2: 4, Verbrauch: 1, Netz: 2 },
+        column:   { PV: 0, NetzImp: 0, Akku: 1, Akku2: 1, Verbrauch: 2, Netz: 2 },
         size: 'max'
       }]
     },
@@ -2110,6 +2181,22 @@ function renderRows(summary) {
   if (!rowsMount) return;
   const rows = Array.isArray(summary?.rows) ? summary.rows : [];
   const includeSolar = String(summary?.view || '') === 'year';
+  // Akku der zweiten GX-Anlage (21.10.2026): eigene Spalten, nur wenn eine Zeile
+  // Werte hat — ohne zweite Anlage bleibt die Tabelle wie sie war.
+  const secondBatteryCols = [
+    ['PV → Akku 2', 'secondSolarToBatteryKwh', fmtKwh],
+    ['Netz → Akku 2', 'secondGridToBatteryKwh', fmtKwh],
+    ['Akku 2 direkt', 'secondBatteryDirectUseKwh', fmtKwh],
+    ['Akku 2 → Netz', 'secondBatteryToGridKwh', fmtKwh],
+    ['Akku 2 geladen', 'secondBatteryChargeKwh', fmtKwh],
+    ['Akku 2 entladen', 'secondBatteryDischargeKwh', fmtKwh],
+    ['Erlös Akku 2', 'exportSecondBatteryRevenueEur', fmtEur]
+  ];
+  const includeSecondBattery = rows.some((row) => secondBatteryCols.some(([, key]) => Number(row?.[key] || 0) !== 0));
+  const secondBatteryHead = includeSecondBattery ? secondBatteryCols.map(([label]) => `<th>${escapeHtml(label)}</th>`).join('') : '';
+  const secondBatteryCells = (row) => (includeSecondBattery
+    ? secondBatteryCols.map(([, key, fmt]) => `<td>${fmt(row?.[key])}</td>`).join('')
+    : '');
 
   rowsMount.innerHTML = `
     <table class="history-data-table">
@@ -2129,6 +2216,7 @@ function renderRows(summary) {
           <th>Akku → Netz</th>
           <th>Akku geladen</th>
           <th>Akku entladen</th>
+          ${secondBatteryHead}
           <th>Eigenverbrauch</th>
           <th>Eigenverbrauch Netz</th>
           <th>Eigenverbrauch PV</th>
@@ -2165,6 +2253,7 @@ function renderRows(summary) {
             <td>${fmtKwh(row.batteryToGridKwh)}</td>
             <td>${fmtKwh(row.batteryChargeKwh)}</td>
             <td>${fmtKwh(row.batteryDischargeKwh)}</td>
+            ${secondBatteryCells(row)}
             <td>${fmtKwh(row.selfConsumptionKwh)}</td>
             <td>${fmtKwh(row.gridShareKwh)}</td>
             <td>${fmtKwh(row.pvShareKwh)}</td>
@@ -2806,6 +2895,8 @@ const historyHelpers = {
   fmtCt,
   fmtEur,
   fmtKwh,
+  dayFlowDatasets,          // Akku 2 (21.10.2026): Segmente der Tages-Flussbalken (testbar)
+  energyFlowSankeyEdges,    // Akku 2 (21.10.2026): Kanten des Energiefluss-Sankeys (testbar)
   renderBackfillButtonState,
   renderRows,
   renderSummary,

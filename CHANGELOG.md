@@ -18,6 +18,9 @@ verweist hierher.
   Akkus als einen (Kapazität und Leistung addiert, Ladestand gewichtet). Not-Halt setzt die zweite Anlage sofort auf 0,
   bei Abregelung oder negativem Preis speist sie nicht ins Hausnetz; ist sie nicht erreichbar, rechnet EOS ohne sie.
   Einstellungen → Meine Anlage → Erweitert; nur im Bleeding-Edge-Kanal.
+  Die Historie zeigt den Akku der zweiten Anlage getrennt („Akku 2“): eigene Zeilen in der Energiebilanz, eigene
+  Segmente in den Tagesflüssen, eigener Knoten im Sankey, eigene Spalten in Tabelle und CSV, seine Einspeisung mit
+  eigenem Börsenerlös — PV, Verbrauch und Einspeisung gehen damit wieder auf.
 
 - **Schneider EVlink Pro AC als Wallbox** (Modbus TCP nach dem „EVlink Pro AC Modbus Connectivity Guide“
   GEX1969300–06): Ladestrom 6–32 A, Stopp über Vorgabe 0, Lebenszeichen (Lifebit) — ohne DVhub gilt der in eSetup

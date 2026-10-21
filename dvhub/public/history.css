@@ -836,6 +836,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .calc-row-line.is-sub { padding-left: 14px; }
 .calc-row-line.is-sub span { font-size: 0.78rem; opacity: 1; color: var(--text-dim); }
 .calc-row-line.is-sub strong { font-size: 0.82rem; font-weight: 500; }
+/* Akku der zweiten GX-Anlage (21.10.2026): „davon Akku 2“ unter „davon aus Akku“ eingerückt. */
+.calc-row-line.is-sub.is-sub-deep { padding-left: 26px; }
+/* display:flex der Zeile schlägt sonst das hidden-Attribut. */
+.calc-row-line.is-sub-deep[hidden] { display: none; }
 
 .chart-panel { border-radius: var(--r-lg); }
 

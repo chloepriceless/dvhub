@@ -24,7 +24,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/history.css?v=20261021-hidden" />
+  <link rel="stylesheet" href="/history.css?v=20261021-akku2" />
   <link rel="stylesheet" href="/history-viz.css?v=20260701-cachefmt" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
@@ -199,10 +199,13 @@
             <div class="calc-row-line"><span>Verbrauch</span><strong id="historyKpiConsumption">-</strong></div>
             <div class="calc-row-line is-sub"><span>davon PV direkt</span><strong id="historyKpiConsPv">-</strong></div>
             <div class="calc-row-line is-sub"><span>davon aus Akku</span><strong id="historyKpiConsBattery">-</strong></div>
+            <!-- Akku der zweiten GX-Anlage (21.10.2026): nur sichtbar, wenn er Werte hat. -->
+            <div class="calc-row-line is-sub is-sub-deep" id="historyKpiConsBattery2Row" hidden><span>davon Akku 2</span><strong id="historyKpiConsBattery2">-</strong></div>
             <div class="calc-row-line is-sub"><span>davon aus Netz</span><strong id="historyKpiConsGrid">-</strong></div>
             <div class="calc-row-line"><span>Einspeisung</span><strong id="historyKpiExport">-</strong></div>
             <div class="calc-row-line is-sub"><span>davon PV</span><strong id="historyKpiExportPv">-</strong></div>
             <div class="calc-row-line is-sub" title="Akku→Netz: Arbitrage-Entladung der Batterie ins Netz (DV-Vermarktung / EOS)."><span>davon Akku</span><strong id="historyKpiExportBattery">-</strong></div>
+            <div class="calc-row-line is-sub is-sub-deep" id="historyKpiExportBattery2Row" hidden title="Einspeisung aus dem Akku der zweiten Victron-Anlage."><span>davon Akku 2</span><strong id="historyKpiExportBattery2">-</strong></div>
             <div class="calc-row-line"><span>Gesamtverlust</span><strong id="historyKpiTotalLoss">-</strong></div>
             <div class="calc-row-line is-sub"><span>Akku-Verlust</span><strong id="historyKpiBatteryLoss">-</strong></div>
             <div class="calc-row-line is-sub"><span>Akku-Wirkungsgrad</span><strong id="historyKpiBatteryEff">-</strong></div>
@@ -686,7 +689,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20261007-dateparts2"></script>
-  <script src="/history-viz.js?v=20260927-inverter-efficiency"></script>
+  <script src="/history.js?v=20261021-akku2"></script>
+  <script src="/history-viz.js?v=20261021-akku2"></script>
 </body>
 </html>
