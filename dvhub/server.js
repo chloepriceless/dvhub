@@ -1100,6 +1100,15 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 // StorCtl_Mod/OutWRte) müssen einen Neustart WÄHREND einer aktiven Sperre
 // überleben, sonst schreibt die Freigabe nur die pauschalen restoreDefaults.
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
+// Zweite GX: gesicherte max. Entladeleistung (2704) der Hauptanlage, solange
+// DVhub Akku 1 am harten Boden sperrt (services/multi-gx/floor-handoff.js) —
+// muss einen Neustart ueberleben, sonst bliebe Akku 1 dauerhaft gesperrt.
+const MGX_HANDOFF_SAVED_PATH = path.join(DATA_DIR || __dirname, 'mgx_handoff_saved.json');
+const floorHandoffStore = {
+  load: () => (fs.existsSync(MGX_HANDOFF_SAVED_PATH) ? JSON.parse(fs.readFileSync(MGX_HANDOFF_SAVED_PATH, 'utf8')) : null),
+  save: (value) => atomicWriteControlState(MGX_HANDOFF_SAVED_PATH, value),
+  clear: () => { try { fs.unlinkSync(MGX_HANDOFF_SAVED_PATH); } catch (e) { if (e?.code !== 'ENOENT') throw e; } }
+};
 // E-Auto „Sofort laden“ (eos-evcc-bridge setOverride).
 const EV_OVERRIDE_PATH = path.join(DATA_DIR || __dirname, 'ev_override.json');
 
@@ -1280,6 +1289,7 @@ function controlValue() {
 // After each createXxx(ctx), extend ctx with the new module's public methods.
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
+  floorHandoffStore,
   state,
   getCfg: () => cfg,
   transport,

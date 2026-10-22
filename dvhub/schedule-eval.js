@@ -21,6 +21,7 @@ import { encodeSunspecFloat32 } from './services/inverter/sunspec.js';
 import { getPowerLimits } from './services/power-limits.js';
 // Zweite GX am selben Anschluss: EOS-Ziele gelten fuer beide Akkus zusammen.
 import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
+import { createFloorHandoff } from './services/multi-gx/floor-handoff.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
 import { betaGateOpen } from './beta-features.js';
 
@@ -140,6 +141,10 @@ export function isEosGridHoldRule(rule) {
 
 export function createScheduleEvaluator(ctx) {
   const { state, getCfg, transport, pushLog, telemetrySafeWrite, persistConfig } = ctx;
+  // Einspeisung aus Akku 2, wenn Akku 1 am harten Boden steht (Schalter
+  // multiGx.exportHandoffAtFloor, ab Werk aus) — siehe services/multi-gx/floor-handoff.js.
+  const floorHandoff = ctx.floorHandoff
+    || createFloorHandoff({ getCfg, state, pushLog, store: ctx.floorHandoffStore || null });
 
   let stopping = false;
   let evalTimeout = null;
@@ -881,11 +886,21 @@ export function createScheduleEvaluator(ctx) {
           : frozen ? 'telemetry_frozen'
             : mismatched ? 'source_mismatch'
               : stale ? 'soc_stale' : 'below_hard_floor';
-        pushLog('control_discharge_floor', {
-          target, requested: Number(value), soc: unknown ? null : soc,
-          ageMs: victronFieldAgeMs(state, 'soc'), floorPct, reason
-        });
-        value = safeHold;
+        // Nur bei frischem, glaubwuerdigem Ladestand am Boden darf die zweite
+        // Anlage die Einspeisung uebernehmen — Akku 1 ist dann per 2704 = 0
+        // gesperrt (floor-handoff.js); sonst haelt der Boden wie immer.
+        const handoffW = reason === 'below_hard_floor'
+          ? floorHandoff.onFloorHold({ target, requested: Number(value) })
+          : null;
+        if (handoffW != null) {
+          value = handoffW;
+        } else {
+          pushLog('control_discharge_floor', {
+            target, requested: Number(value), soc: unknown ? null : soc,
+            ageMs: victronFieldAgeMs(state, 'soc'), floorPct, reason
+          });
+          value = safeHold;
+        }
       }
     }
     // === end T-0075 discharge floor ===
@@ -1270,6 +1285,13 @@ export function createScheduleEvaluator(ctx) {
     } else if (state.ctrl._dcExportLogged) {
       pushLog('dc_export_mode_off', {});
       state.ctrl._dcExportLogged = false;
+    }
+
+    // Akku-1-Sperre fuer die Einspeisung aus Akku 2 schreiben, beenden oder
+    // zuruecknehmen — vor den Sollwerten, damit ein Ende sofort wieder den
+    // normalen Boden bekommt. Ein Fehler hier darf den Takt nie abbrechen.
+    try { await floorHandoff.maintain(applyControlTarget); } catch (e) {
+      pushLog('multi_gx_handoff_error', { error: e?.message || String(e) }, 'error');
     }
 
     for (const target of ['gridSetpointW', 'chargeCurrentA']) {
@@ -1888,5 +1910,5 @@ export function createScheduleEvaluator(ctx) {
     // aktiver Deckel am Gerät verfällt über WMaxLimPct_RvrtTms von selbst.
   }
 
-  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, applyDvFeedInLimit, zeroFeedInTick, feedInCapTick, start, stop };
+  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, applyDvFeedInLimit, zeroFeedInTick, feedInCapTick, start, stop, floorHandoff };
 }

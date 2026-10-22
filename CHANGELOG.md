@@ -21,6 +21,11 @@ verweist hierher.
   Die Historie zeigt den Akku der zweiten Anlage getrennt („Akku 2“): eigene Zeilen in der Energiebilanz, eigene
   Segmente in den Tagesflüssen, eigener Knoten im Sankey, eigene Spalten in Tabelle und CSV, seine Einspeisung mit
   eigenem Börsenerlös — PV, Verbrauch und Einspeisung gehen damit wieder auf.
+  Neuer Schalter „Einspeisen aus Akku 2, wenn Akku 1 leer ist“ (ab Werk aus): Steht der Akku der Hauptanlage am
+  harten Boden, sperrt DVhub sein Entladen (ESS „max. Entladeleistung“ 0, alter Wert wird gesichert und übersteht
+  einen Neustart) und lässt die geplante Einspeisung aus Akku 2 laufen, statt sie ganz zu streichen. Der alte Wert
+  kommt zurück, sobald Akku 1 drei Punkte über dem Boden liegt; fällt Akku 2 aus, bleibt Akku 1 gesperrt und das
+  Haus bezieht aus dem Netz. Dafür liest das Victron-Profil die max. Entladeleistung (Register 2704) jetzt mit.
 
 ## [1.0.8] - 2026-10-21
 

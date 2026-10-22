@@ -120,6 +120,18 @@
       "scale": 0.1,
       "offset": 0
     },
+    "maxDischargeW": {
+      "_comment": "Rücklesen Venus /Settings/CGwacs/MaxDischargePower (2704), gleiche Skala wie controlWrite.maxDischargeW: 10-W-Schritte (scale 10), 0 = Entladung gesperrt, raw 0xFFFF und raw 32767 = unbegrenzt (-1), beide unskaliert. Gebraucht von der Einspeisung aus Akku 2 am harten Boden (multi-gx/floor-handoff.js) und vom Wächter „Speicher entlädt nicht“.",
+      "enabled": true,
+      "fc": 4,
+      "address": 2704,
+      "quantity": 1,
+      "signed": true,
+      "scale": 10,
+      "offset": 0,
+      "rawSentinels": [-1, 0],
+      "rawSentinelMap": { "-1": 32767 }
+    },
     "selfConsumptionW": {
       "enabled": true,
       "fc": 4,

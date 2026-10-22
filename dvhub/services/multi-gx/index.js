@@ -141,7 +141,9 @@ export function createMultiGx(ctx, deps = {}) {
   // − = Ladebedarf (Netz bezieht weniger als der Sollwert, Hauptanlage voll oder
   // an ihrer Ladegrenze). Grenzen: Akku-Leistung UND Wechselrichter (das
   // Kleinere; Codex-Gegenpruefung Runde 2).
-  function unmetW(cfg, v, primaryBatteryW) {
+  // mainBlocked: DVhub hat Akku 1 am harten Boden gesperrt (2704 = 0,
+  // floor-handoff.js) — er gilt dann als leer, die zweite Anlage traegt alles.
+  function unmetW(cfg, v, primaryBatteryW, mainBlocked = false) {
     const m = ctx.state.meter || {};
     if (m.ok === false || primaryBatteryW == null) return 0;
     const importW = gridImportW(m.grid_total_w, cfg.gridPositiveMeans);
@@ -151,7 +153,7 @@ export function createMultiGx(ctx, deps = {}) {
     const limit = (w) => (w > 0 ? Math.min(w, inverterW || w) : inverterW || 0);
     if (excess > 0) {
       const floor = finite(v.minSocPct) ? Number(v.minSocPct) : Number(cfg.optimizer?.hardFloorSocPct ?? 5);
-      const primaryEmpty = finite(v.soc) && Number(v.soc) <= floor + 1;
+      const primaryEmpty = mainBlocked || (finite(v.soc) && Number(v.soc) <= floor + 1);
       const maxDis = limit(Number(cfg.optimizer?.maxDischargeW) || 0);
       const primaryAtLimit = maxDis > 0 && -primaryBatteryW >= 0.95 * maxDis;
       return importW > 100 || primaryEmpty || primaryAtLimit ? excess : 0;
@@ -244,6 +246,7 @@ export function createMultiGx(ctx, deps = {}) {
     const v = ctx.state.victron || {};
     const ctrl = ctx.state.ctrl || {};
     const pB = primaryBattery(v);
+    const mainBlocked = ctx.state.multiGxHandoff?.mainDischargeBlocked === true;
     const out = controller.tick({
       nowMs: now(),
       online: online !== false,
@@ -252,10 +255,11 @@ export function createMultiGx(ctx, deps = {}) {
       primaryBatteryW: pB,
       followerBatteryW: readOk ? side.batteryPowerW : null,
       followerAcInW: readOk ? side.acInW : null,
-      unmetW: unmetW(cfg, v, pB),
+      unmetW: unmetW(cfg, v, pB, mainBlocked),
       primary: {
         socPct: v.soc, minSocPct: v.minSocPct, maxSocPct: cfg.optimizer?.maxSocPct ?? 100, capacityWh: cfg.optimizer?.batteryCapacityWh,
         ...primaryLimits(cfg),
+        ...(mainBlocked ? { maxDischargeW: 0 } : {}),
       },
       follower: { socPct: side.socPct, minSocPct: side.minSocPct ?? c.minSocPct, maxSocPct: 100, capacityWh: c.capacityWh },
     });
@@ -284,6 +288,7 @@ export function createMultiGx(ctx, deps = {}) {
       minSocPct: side.minSocPct ?? c.minSocPct,
       setpointW: ok ? out.setpointW : 0, desiredBatteryW: out.desiredFollowerBatteryW, sharePct: out.followerWeightPct,
       totalBatteryW: out.totalBatteryW, reason: ok || online === null ? out.reason : 'follower_offline',
+      handoff: ctx.state.multiGxHandoff?.phase || 'off', mainDischargeBlocked: mainBlocked,
     });
   }
 
