@@ -127,6 +127,13 @@ vertauschter Rahmen lässt die Entschlüsselung scheitern → Verbindung neu auf
 
 Die App speichert: `boxPub`, `boxId`, `devId`, `ticket`, `mailboxKey`, `lan`, `relay`, Namen.
 
+**Grenze:** Das Kopplungs-Token geht an die Gegenstelle, bevor diese sich
+ausgewiesen hat. Wer unter einer Heimnetz-Adresse aus dem QR-Code antwortet
+(fremdes WLAN), kann es am echten Relay einmal benutzen und den QR-Code damit
+verbrauchen — mitlesen oder sich koppeln kann er nicht (dafür fehlt ihm das
+Geheimnis). Scheitert die Box-Signatur auf einem Weg, versucht das Gerät den
+nächsten; notfalls einen neuen QR-Code erzeugen.
+
 ## Nachrichten in der Sitzung
 
 Box → Gerät zuerst: `{"t":"welcome","box":{"id","name","version"},"perms":["read"|"control"],"ticket","relay","via":"lan"|"remote"}`

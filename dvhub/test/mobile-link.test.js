@@ -801,22 +801,31 @@ describe('mobile-link Ende zu Ende', () => {
   });
 
   test('gleichzeitige Anfragen je Gerät über alle Verbindungen begrenzt (Codex R2 P2)', async () => {
+    // Die Loopback-Anfragen hängen, bis alle Antworten auf die überzähligen
+    // da sind — so hängt der Test nicht an Laufzeiten.
     let running = 0;
     let peak = 0;
+    let release;
+    const gate = new Promise((r) => { release = r; });
     const ctx = await setup({ loopback: async () => {
       running++; peak = Math.max(peak, running);
-      await sleep(300);
+      await gate;
       running--;
       return { status: 200, body: {} };
     } });
     const { phone, creds } = await pairVia(ctx, null);
     const a = await connectDevice({ creds: { ...creds }, signer: phone, url: ctx.relayUrl });
     const b = await connectDevice({ creds: { ...creds }, signer: phone, url: ctx.relayUrl });
+    let rejected = 0;
     const all = [];
-    for (let i = 0; i < 4; i++) { all.push(a.request('GET', '/api/status')); all.push(b.request('GET', '/api/status')); }
+    for (let i = 0; i < 4; i++) {
+      for (const c of [a, b]) all.push(c.request('GET', '/api/status').then((r) => { if (r.status === 429) rejected++; return r; }));
+    }
+    await until(() => rejected === 4, 10_000);
+    assert.equal(peak, 4);
+    release();
     const res = await Promise.all(all);
-    assert.ok(peak <= 4, `gleichzeitig ${peak}`);
-    assert.equal(res.filter((r) => r.status === 429).length, 4);
+    assert.equal(res.filter((r) => r.status === 200).length, 4);
     a.close(); b.close();
   });
 
