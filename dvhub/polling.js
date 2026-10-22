@@ -180,9 +180,11 @@ export function createPoller(ctx) {
     // — vor der Auflösung wäre die Adresse null (Lesen von Register-Müll).
     if (conf.sunspec && conf.address == null) return;
     try {
+      let sourceAt = null;
       if (transport.type === 'mqtt') {
         const result = await transport.readPoint(name);
         state.victron[name] = result.mqttValue;
+        sourceAt = Number(result.ts) || null;
       } else {
         const regs = await transport.mbRequest(conf);
         state.victron[name] = pointFromRegs(regs, conf);
@@ -190,6 +192,10 @@ export function createPoller(ctx) {
       delete state.victron.errors[name];
       const _now = Date.now();
       state.victron.updatedAt = _now;
+      // Wann das Geraet den Wert gesendet hat: bei MQTT der Zeitstempel der
+      // Nachricht (der Cache kann aelter sein als der Poll), bei Modbus der Poll
+      // selbst. Fuer Bestaetigungen „nach dem Schreiben“ (multi-gx/floor-handoff).
+      (state.victron.fieldSourceAt ??= {})[name] = sourceAt ?? _now;
       // T-0075: per-Feld Timestamp des letzten ERFOLGS (NUR Erfolgs-Zweig).
       // updatedAt allein ist "letzter Versuch" (auch im catch gesetzt) und taugt
       // NICHT als Frische-Mass — ein eingefrorener SoC nach Comms-Ausfall behielte

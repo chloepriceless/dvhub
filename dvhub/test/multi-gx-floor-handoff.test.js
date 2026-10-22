@@ -21,7 +21,7 @@ function memoryStore(initial = null) {
   return { load: () => value, save: (v) => { value = { ...v }; }, clear: () => { value = null; }, get: () => value };
 }
 
-function makeWorld({ option = true, mainSoc = 4, mainMaxDischargeW = -1, follower = {}, ctrl = {}, store = memoryStore() } = {}) {
+function makeWorld({ option = true, mainSoc = 4, mainMaxDischargeW = -1, follower = {}, ctrl = {}, store = memoryStore(), deviceEcho = true } = {}) {
   let t = 1_000_000;
   const cfg = {
     updateChannel: 'dev',
@@ -48,6 +48,7 @@ function makeWorld({ option = true, mainSoc = 4, mainMaxDischargeW = -1, followe
     if (state.schedule.lastWrite[target] && Number(state.schedule.lastWrite[target].value) === v) return { ok: true, skipped: true };
     applied.push({ target, value: v, source });
     state.schedule.lastWrite[target] = { value: v, at: t };
+    if (target === 'maxDischargeW' && deviceEcho) state.victron.maxDischargeW = v; // GX uebernimmt, meldet beim naechsten Poll
     return { ok: true };
   }
   const advance = (ms) => {
@@ -132,6 +133,9 @@ for (const [name, patch, reason] of [
     w.state.victron.soc = 9; w.advance(5000);
     await w.handoff.maintain(w.apply);
     assert.deepEqual(w.applied.at(-1), { target: 'maxDischargeW', value: -1, source: 'multi_gx_handoff_restore' });
+    assert.equal(w.state.multiGxHandoff.phase, 'restoring', 'erst nach Rueckmeldung der GX fertig');
+    w.advance(5000);
+    await w.handoff.maintain(w.apply);
     assert.equal(w.state.multiGxHandoff.phase, 'off');
     assert.equal(w.store.get(), null);
   });
@@ -155,6 +159,8 @@ test('Neustart waehrend der Sperre: gesicherter Wert wird zurueckgeschrieben', a
   assert.equal(w.state.multiGxHandoff.phase, 'restoring');
   await w.handoff.maintain(w.apply);
   assert.deepEqual(w.applied, [{ target: 'maxDischargeW', value: 4000, source: 'multi_gx_handoff_restore' }]);
+  w.advance(5000);
+  await w.handoff.maintain(w.apply);
   assert.equal(w.state.multiGxHandoff.phase, 'off');
   assert.equal(store.get(), null);
 });
@@ -175,6 +181,8 @@ test('2704 liest schon 0: nicht als gesperrt werten — DVhub schreibt die 0 sel
   w.state.victron.soc = 20; w.advance(5000);
   await w.handoff.maintain(w.apply);
   assert.deepEqual(w.applied.at(-1), { target: 'maxDischargeW', value: -1, source: 'multi_gx_handoff_restore' });
+  w.advance(5000);
+  await w.handoff.maintain(w.apply);
   assert.equal(w.state.multiGxHandoff.phase, 'off');
 });
 
@@ -257,6 +265,53 @@ test('Codex P2: Auswertung alle 30 s — die Uebergabe startet trotzdem', async 
     request(w);
   }
   assert.equal(w.state.multiGxHandoff.phase, 'active');
+});
+
+// --- Codex-Gegenpruefung 22.10.2026, Runde 2 ---
+
+test('Codex R2 P1: MQTT-Cache von vor dem Schreiben bestaetigt die Sperre nicht', async () => {
+  const w = makeWorld({ mainMaxDischargeW: 5000, deviceEcho: false });
+  request(w);
+  await w.handoff.maintain(w.apply);
+  // Poll nach dem Schreiben, aber die Nachricht der GX ist alt (Befehl verloren, Cache 0 von frueher)
+  w.state.victron.maxDischargeW = 0;
+  w.advance(5000);
+  w.state.victron.fieldSourceAt = { maxDischargeW: w.now() - 60000 };
+  assert.equal(request(w), null, 'alte Nachricht zaehlt nicht');
+  w.state.victron.fieldSourceAt = { maxDischargeW: w.now() };
+  assert.equal(request(w), -3000);
+});
+
+test('Codex R2 P2: Zurueckschreiben ohne Rueckmeldung — Sicherung bleibt, neuer Versuch mit wachsendem Abstand', async () => {
+  const w = makeWorld({ deviceEcho: false });
+  request(w); await w.handoff.maintain(w.apply);
+  w.state.victron.maxDischargeW = 0; w.advance(5000);
+  request(w);
+  w.cfg.multiGx.exportHandoffAtFloor = false;
+  w.state.victron.soc = 20;
+  const restores = () => w.applied.filter((a) => a.source === 'multi_gx_handoff_restore').length;
+  for (let i = 0; i < 12; i++) { w.advance(5000); await w.handoff.maintain(w.apply); }  // 60 s, GX bleibt bei 0
+  assert.equal(w.state.multiGxHandoff.phase, 'restoring');
+  assert.deepEqual(w.store.get().savedMaxDischargeW, -1, 'Sicherung noch da');
+  assert.ok(restores() >= 2 && restores() <= 4, `wenige Versuche, nicht jeden Takt (${restores()})`);
+  w.state.victron.maxDischargeW = -1; w.advance(5000);           // GX meldet den alten Wert
+  await w.handoff.maintain(w.apply);
+  assert.equal(w.state.multiGxHandoff.phase, 'off');
+  assert.equal(w.store.get(), null);
+});
+
+test('Codex R2 P2: ueber MQTT bleibt eine gesetzte Sperre 0 erhalten', () => {
+  const store = memoryStore();
+  const t = 1_000_000;
+  const cfg = { updateChannel: 'dev', victron: { telemetryMaxAgeMs: 90000 }, optimizer: { hardFloorSocPct: 5 }, schedule: { evaluateMs: 5000 },
+    controlWrite: { maxDischargeW: { enabled: true } }, multiGx: { enabled: true, host: 'x', minSocPct: 10, exportHandoffAtFloor: true } };
+  const state = {
+    victron: { soc: 4, maxDischargeW: 0, fieldUpdatedAt: { soc: t, maxDischargeW: t } },
+    multiGx: { online: true, socPct: 80, minSocPct: 10, updatedAt: t }, ctrl: {}, schedule: { lastWrite: {} }
+  };
+  const h = createFloorHandoff({ getCfg: () => cfg, state, now: () => t, store, transportType: () => 'mqtt' });
+  h.onFloorHold({ target: 'gridSetpointW', requested: -3000 });
+  assert.equal(store.get().savedMaxDischargeW, 0);
 });
 
 // --- Einbindung in den Entlade-Boden (schedule-eval applyControlTarget) ---
@@ -357,4 +412,30 @@ test('zweite Anlage: Akku 1 gesperrt → sie traegt den ganzen Einspeisebedarf',
   state.multiGxHandoff = { phase: 'off', mainDischargeBlocked: false };
   for (let i = 0; i < 8; i++) { t += 5000; await mgx.tick(); }
   assert.ok(state.multiGx.desiredBatteryW > -3500, `ohne Sperre kein voller Bedarf (${state.multiGx.desiredBatteryW})`);
+});
+
+test('Poller: bei MQTT gilt der Zeitstempel der Nachricht, bei Modbus der Poll', async () => {
+  const { createPoller } = await import('../polling.js');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const msgTs = Date.now() - 120000;
+  const cfg = { pollMs: 500, epex: { timezone: 'UTC' }, userEnergyPricing: {}, victron: {}, meter: { fc: 4, address: 820, quantity: 3 },
+    points: { maxDischargeW: { enabled: true, fc: 4, address: 2704, quantity: 1, signed: true, scale: 10, rawSentinels: [-1, 0] } } };
+  const state = {
+    meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0, error: null },
+    victron: { errors: {}, updatedAt: 0, fieldUpdatedAt: {} }, dvRegs: new Array(8).fill(0),
+    energy: { day: '2026-10-22', importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0, lastTs: 0 }
+  };
+  const transport = {
+    type: 'mqtt',
+    async readPoint() { return { mqttValue: 0, ts: msgTs }; },
+    async readMeter() { return { total: 0, l1: 0, l2: 0, l3: 0, ts: msgTs }; },
+    async mbRequest() { return [0, 0, 0]; }
+  };
+  const poller = createPoller({ state, getCfg: () => cfg, transport, pushLog: () => {},
+    energyPath: path.join(os.tmpdir(), 'mgx-handoff-poll-test.json'), onPollComplete: () => {}, epexNowNext: () => ({ current: { ct_kwh: 0 } }) });
+  await poller.requestPoll();
+  assert.equal(state.victron.maxDischargeW, 0);
+  assert.equal(state.victron.fieldSourceAt.maxDischargeW, msgTs, 'Nachricht, nicht Poll');
+  assert.ok(state.victron.fieldUpdatedAt.maxDischargeW > msgTs);
 });

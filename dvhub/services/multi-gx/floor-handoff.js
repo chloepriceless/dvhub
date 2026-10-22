@@ -36,6 +36,9 @@ const FOLLOWER_MAX_AGE_MS = 15000;
 const evalMs = (cfg) => Math.max(5000, Number(cfg.schedule?.evaluateMs) || 15000);
 const requestGraceMs = (cfg) => Math.max(20000, 3 * evalMs(cfg));
 const zeroRetryMs = (cfg) => Math.max(10000, evalMs(cfg));
+// 2704 ist eine dauerhafte Einstellung (Flash der GX): Wiederholungen ohne
+// Bestaetigung werden immer seltener, hoechstens alle 10 min.
+const retryDelayMs = (cfg, attempts) => Math.min(600000, zeroRetryMs(cfg) * 2 ** Math.max(0, attempts - 1));
 // Zurueckschreiben erst 3 Prozentpunkte ueber dem Boden: sonst pendelt Akku 1 um
 // den Boden, und jede Runde schreibt 2704 zweimal (Flash der GX).
 const RESTORE_HYSTERESIS_PCT = 3;
@@ -50,7 +53,7 @@ const finite = (v) => v != null && v !== '' && Number.isFinite(Number(v));
  * @param {() => number} [deps.now]
  * @param {{load: () => any, save: (v: object) => void, clear: () => void}} [deps.store]
  */
-export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Date.now, store = null } = {}) {
+export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Date.now, store = null, transportType = () => 'modbus' } = {}) {
   let phase = 'off';
   let saved = null;
   let since = 0;
@@ -60,6 +63,10 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   let unknownLogged = false;
   let zeroWritten = false;
   let zeroWrittenAt = 0;
+  let restoreWrittenAt = 0;
+  let lastRestoreAt = 0;
+  let zeroAttempts = 0;
+  let restoreAttempts = 0;
 
   try {
     const persisted = store?.load?.();
@@ -97,12 +104,15 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   };
   const mainMaxDischargeW = (cfg) => (fieldFresh('maxDischargeW', cfg) && finite(state.victron?.maxDischargeW)
     ? Number(state.victron.maxDischargeW) : null);
+  // Wann die GX den gelesenen Wert gesendet hat (MQTT: Nachricht, nicht Poll;
+  // Codex 22.10. Runde 2, P1) — Rueckfall auf den Poll-Zeitpunkt.
+  const sentAt = () => Number(state.victron?.fieldSourceAt?.maxDischargeW ?? state.victron?.fieldUpdatedAt?.maxDischargeW) || 0;
   // Gesperrt = DVhub hat 0 geschrieben UND die GX meldet danach 0 — ein
   // Ruecklesen von vor dem Schreiben zaehlt nicht (MQTT: „ok“ heisst nur
   // veroeffentlicht; Codex 22.10., P1).
   const lockConfirmed = (cfg) => zeroWritten
     && mainMaxDischargeW(cfg) === 0
-    && Number(state.victron?.fieldUpdatedAt?.maxDischargeW) > zeroWrittenAt;
+    && sentAt() > zeroWrittenAt;
   publish();
 
   /** Warum die Uebergabe gerade nicht erlaubt ist, sonst null. */
@@ -145,7 +155,10 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       // ist ungeprueft), negative Werte heissen unbegrenzt: in beiden Faellen
       // kommt spaeter -1 (raw 32767) zurueck. Gesperrt gilt erst nach DVhubs
       // eigenem Schreiben von 0 (zeroWritten).
-      const snapshot = current > 0 ? current : -1;
+      // Ueber MQTT kommt der Wert in Watt, 0 heisst dort eindeutig gesperrt und
+      // bleibt 0 (Codex Runde 2). Ueber Modbus ist eine gelesene 0 mehrdeutig
+      // (meldet die GX „unbegrenzt“ -1 bei Skala 0,1 als 0? ungeprueft) → -1.
+      const snapshot = current > 0 || (current === 0 && transportType() === 'mqtt') ? current : -1;
       // Nur sperren, was DVhub auch zurueckschreiben kann (Grenzpruefung des
       // Schreibpfads, z. B. > 30 kW an der GX eingestellt; Codex 22.10.).
       const bounds = controlWriteBoundsError('maxDischargeW', snapshot);
@@ -160,11 +173,15 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
         saved = null;
         return null;
       }
-      lastZeroAt = 0;
+      lastZeroAt = 0; zeroAttempts = 0;
       setPhase('arming', 'floor_export_request');
       return null;
     }
-    if (phase === 'restoring') { lastZeroAt = 0; setPhase('arming', 'floor_export_request'); return null; }
+    if (phase === 'restoring') {
+      lastZeroAt = 0; zeroAttempts = 0; restoreWrittenAt = 0; lastRestoreAt = 0; restoreAttempts = 0;
+      setPhase('arming', 'floor_export_request');
+      return null;
+    }
     if (lockConfirmed(cfg)) {
       if (phase === 'arming') setPhase('active', 'main_discharge_blocked');
       return Math.round(Number(requested));
@@ -193,9 +210,10 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     if (phase === 'arming') {
       const current = mainMaxDischargeW(cfg);
       // Meldet die GX nach dem Schreiben etwas anderes als 0, gilt die Sperre nicht.
-      if (zeroWritten && current != null && current !== 0 && Number(state.victron?.fieldUpdatedAt?.maxDischargeW) > zeroWrittenAt) zeroWritten = false;
-      if (!zeroWritten && now() - lastZeroAt >= zeroRetryMs(cfg)) {
+      if (zeroWritten && current != null && current !== 0 && sentAt() > zeroWrittenAt) zeroWritten = false;
+      if (!zeroWritten && now() - lastZeroAt >= retryDelayMs(cfg, zeroAttempts)) {
         lastZeroAt = now();
+        zeroAttempts += 1;
         // Der Schreibpfad ueberspringt einen unveraenderten Wert (2704 ohne
         // Nachfuehren) — die gemerkte 0 verwerfen, damit wirklich geschrieben
         // wird (Codex 22.10., P2). Ein uebersprungener Schreibvorgang zaehlt nicht.
@@ -210,9 +228,19 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       const soc = state.victron?.soc;
       const aboveFloor = fieldFresh('soc', cfg) && finite(soc) && Number(soc) > floorPct + RESTORE_HYSTERESIS_PCT;
       if (aboveFloor) {
-        const res = await applyControlTarget('maxDischargeW', saved, 'multi_gx_handoff_restore');
-        const lw = state.schedule?.lastWrite?.maxDischargeW;
-        if (res?.ok && lw && Number(lw.value) === saved) { finish(); return; }
+        // Fertig erst, wenn die GX den alten Wert NACH dem Zurueckschreiben
+        // meldet — sonst bliebe Akku 1 bei verlorenem Befehl gesperrt und die
+        // Sicherung waere weg (Codex Runde 2, P2).
+        if (restoreWrittenAt > 0 && mainMaxDischargeW(cfg) === saved && sentAt() > restoreWrittenAt) { finish(); return; }
+        if (now() - lastRestoreAt >= retryDelayMs(cfg, restoreAttempts)) {
+          lastRestoreAt = now();
+          restoreAttempts += 1;
+          if (restoreAttempts === 4) pushLog('multi_gx_handoff_restore_unconfirmed', { savedMaxDischargeW: saved, attempts: restoreAttempts }, 'warn');
+          if (state.schedule?.lastWrite) delete state.schedule.lastWrite.maxDischargeW;
+          const res = await applyControlTarget('maxDischargeW', saved, 'multi_gx_handoff_restore');
+          const lw = state.schedule?.lastWrite?.maxDischargeW;
+          if (res?.ok && !res.skipped && lw && Number(lw.value) === saved) restoreWrittenAt = now();
+        }
       }
     }
     publish(cfg);
@@ -224,6 +252,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     saved = null;
     zeroWritten = false;
     zeroWrittenAt = 0;
+    restoreWrittenAt = 0; lastRestoreAt = 0; restoreAttempts = 0; zeroAttempts = 0;
     setPhase('off', 'restored');
     pushLog('multi_gx_handoff_restored', { maxDischargeW: restored });
   }

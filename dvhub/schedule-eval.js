@@ -144,7 +144,7 @@ export function createScheduleEvaluator(ctx) {
   // Einspeisung aus Akku 2, wenn Akku 1 am harten Boden steht (Schalter
   // multiGx.exportHandoffAtFloor, ab Werk aus) — siehe services/multi-gx/floor-handoff.js.
   const floorHandoff = ctx.floorHandoff
-    || createFloorHandoff({ getCfg, state, pushLog, store: ctx.floorHandoffStore || null });
+    || createFloorHandoff({ getCfg, state, pushLog, store: ctx.floorHandoffStore || null, transportType: () => transport?.type });
 
   let stopping = false;
   let evalTimeout = null;
