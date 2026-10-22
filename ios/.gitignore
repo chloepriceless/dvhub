@@ -1,0 +1,6 @@
+# Swift Package / Xcode
+DVhubLink/.build/
+DVhubLink/.swiftpm/
+**/xcuserdata/
+**/DerivedData/
+*.xcresult

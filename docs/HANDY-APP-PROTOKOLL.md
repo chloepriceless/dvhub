@@ -80,7 +80,9 @@ Verbindungsnummer `c`, `allow` (Freigabeliste, höchstens 32), `pair_open` (`{"h
 `mbox_put`/`mbox_clear`.
 
 Schließcodes: 4000 normal, 4001 ersetzt, 4002 Anmeldung falsch, 4003 nicht
-erlaubt (z. B. entkoppelt), 4004 Box offline, 4008 Grenze überschritten,
+erlaubt — Grund `device_not_allowed` heißt entkoppelt (endgültig), `box_not_allowed`
+im Heimnetz nur „unter dieser Adresse antwortet eine andere Box“ (dann das Relay
+versuchen), 4004 Box offline, 4008 Grenze überschritten,
 4009 Protokollfehler, 4010 Anmeldung zu spät, 4011 Relay fährt herunter.
 
 Grenzen (gezählt in Zeichen des JSON-Textes): Rahmen vom Gerät ≤ 256 KiB, von

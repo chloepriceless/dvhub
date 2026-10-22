@@ -1,0 +1,530 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00B9EE70515270300E38D346 /* SystemsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991F9D5F0708F9B5C486C79A /* SystemsView.swift */; };
+		1802728E272900089BF866BA /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86462ABB30E73D9594F14F13 /* AppModel.swift */; };
+		257F89170B64FA018863425D /* PairView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1B999E6833677D04CEB6C2 /* PairView.swift */; };
+		37555C87B5DCCB7ECC225849 /* DVhubLink in Frameworks */ = {isa = PBXBuildFile; productRef = 8F30040ED9C49179AD560377 /* DVhubLink */; };
+		5D1066386219E953F283BC9E /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E94A3B1225D71FC32B44975E /* RootView.swift */; };
+		5D89A2107742FE610DC5601E /* ControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6EBBC678DB61E25C7776D48 /* ControlView.swift */; };
+		79DCA21C4FAF956810E712B2 /* OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16F9D327FA257F29D9CD79C8 /* OverviewView.swift */; };
+		7CF410E0A969DB38969FA760 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8105DD7D1245BDE71A2B111 /* HistoryView.swift */; };
+		8F883119B3D261BBFE9A5DE3 /* SystemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56FC4DBCADF84E70A5F80AA /* SystemController.swift */; };
+		A3C171711096CFF0BFF8BAD9 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7594ACFDDAEB82F2CEF6AC /* Models.swift */; };
+		B84B115F911AEFB9BC71BC31 /* DVhubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C1447A1B3BAF774CFB0FD97 /* DVhubApp.swift */; };
+		BEF1190AC9955C44EB0EC2CF /* RotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9006D35AD69BBA8CA87C109E /* RotationTests.swift */; };
+		C67E035ABCF3F5E8C39A7771 /* PlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B202121B0C31FA6AFEDD76 /* PlanView.swift */; };
+		DC3EE19ADAD061130A1E3743 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8318441977710D0BD4E72103 /* Components.swift */; };
+		EDCF847A0409AC9D45CE80ED /* ControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF808B9006DF7EE5F4117BF8 /* ControlTests.swift */; };
+		FC61F6A8867C81F62E0CB0B5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C712DE8551A06A4E3B93087A /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		3A76F3513E4B01B23EF0DD8F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B74958F73D0A2B59E3826773 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 75F7A2BC58819BEB74D879C8;
+			remoteInfo = DVhubApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0631E27105127F3366A9E441 /* DVhubAppUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = DVhubAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		0C3F13B9D71337F03DD67786 /* App.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = App.xcconfig; sourceTree = "<group>"; };
+		16F9D327FA257F29D9CD79C8 /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
+		2F7594ACFDDAEB82F2CEF6AC /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		5C1447A1B3BAF774CFB0FD97 /* DVhubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVhubApp.swift; sourceTree = "<group>"; };
+		6C556938C1D9991CA7985DE2 /* DVhubLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = DVhubLink; path = ../DVhubLink; sourceTree = SOURCE_ROOT; };
+		8318441977710D0BD4E72103 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
+		86462ABB30E73D9594F14F13 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		9006D35AD69BBA8CA87C109E /* RotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationTests.swift; sourceTree = "<group>"; };
+		991F9D5F0708F9B5C486C79A /* SystemsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemsView.swift; sourceTree = "<group>"; };
+		AB1B999E6833677D04CEB6C2 /* PairView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairView.swift; sourceTree = "<group>"; };
+		B56FC4DBCADF84E70A5F80AA /* SystemController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemController.swift; sourceTree = "<group>"; };
+		C3B202121B0C31FA6AFEDD76 /* PlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanView.swift; sourceTree = "<group>"; };
+		C712DE8551A06A4E3B93087A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C8105DD7D1245BDE71A2B111 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		DF808B9006DF7EE5F4117BF8 /* ControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlTests.swift; sourceTree = "<group>"; };
+		E94A3B1225D71FC32B44975E /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		EDE7DF52DEC7E806D405A43B /* DVhubApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = DVhubApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F52D1434DB04842E1760E446 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		F6EBBC678DB61E25C7776D48 /* ControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		43431C8A0A18066AB25A946C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				37555C87B5DCCB7ECC225849 /* DVhubLink in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		419E23946E06BA1DC3DA683F /* DVhubAppUITests */ = {
+			isa = PBXGroup;
+			children = (
+				DF808B9006DF7EE5F4117BF8 /* ControlTests.swift */,
+				9006D35AD69BBA8CA87C109E /* RotationTests.swift */,
+			);
+			path = DVhubAppUITests;
+			sourceTree = "<group>";
+		};
+		4ED61362927F144F3AB18E2D /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				0C3F13B9D71337F03DD67786 /* App.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		5C404ACE9A78E70466827671 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				EDE7DF52DEC7E806D405A43B /* DVhubApp.app */,
+				0631E27105127F3366A9E441 /* DVhubAppUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		64F44E893A662BE53CD2968A /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				6C556938C1D9991CA7985DE2 /* DVhubLink */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		6634C8B4A889C30B6ABC4C75 = {
+			isa = PBXGroup;
+			children = (
+				4ED61362927F144F3AB18E2D /* Config */,
+				A139D2F6727537AAF2ED2ACA /* DVhubApp */,
+				419E23946E06BA1DC3DA683F /* DVhubAppUITests */,
+				64F44E893A662BE53CD2968A /* Packages */,
+				5C404ACE9A78E70466827671 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A139D2F6727537AAF2ED2ACA /* DVhubApp */ = {
+			isa = PBXGroup;
+			children = (
+				86462ABB30E73D9594F14F13 /* AppModel.swift */,
+				C712DE8551A06A4E3B93087A /* Assets.xcassets */,
+				5C1447A1B3BAF774CFB0FD97 /* DVhubApp.swift */,
+				F52D1434DB04842E1760E446 /* Info.plist */,
+				2F7594ACFDDAEB82F2CEF6AC /* Models.swift */,
+				B56FC4DBCADF84E70A5F80AA /* SystemController.swift */,
+				F0E1610AAAF48EEB39327799 /* Views */,
+			);
+			path = DVhubApp;
+			sourceTree = "<group>";
+		};
+		F0E1610AAAF48EEB39327799 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				8318441977710D0BD4E72103 /* Components.swift */,
+				F6EBBC678DB61E25C7776D48 /* ControlView.swift */,
+				C8105DD7D1245BDE71A2B111 /* HistoryView.swift */,
+				16F9D327FA257F29D9CD79C8 /* OverviewView.swift */,
+				AB1B999E6833677D04CEB6C2 /* PairView.swift */,
+				C3B202121B0C31FA6AFEDD76 /* PlanView.swift */,
+				E94A3B1225D71FC32B44975E /* RootView.swift */,
+				991F9D5F0708F9B5C486C79A /* SystemsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		6705C8598C0A264C3F0EEA53 /* DVhubAppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CB68F971CD79D66F1AF7AD1A /* Build configuration list for PBXNativeTarget "DVhubAppUITests" */;
+			buildPhases = (
+				8FB960FB16376D181EFDD3A1 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				678869414BE83BC83EEDA806 /* PBXTargetDependency */,
+			);
+			name = DVhubAppUITests;
+			packageProductDependencies = (
+			);
+			productName = DVhubAppUITests;
+			productReference = 0631E27105127F3366A9E441 /* DVhubAppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		75F7A2BC58819BEB74D879C8 /* DVhubApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B7D253080DD8EBD06E5CC02A /* Build configuration list for PBXNativeTarget "DVhubApp" */;
+			buildPhases = (
+				A8D10313DE20E79E70CE3F32 /* Sources */,
+				61B148E05C03E1F58E0D775E /* Resources */,
+				43431C8A0A18066AB25A946C /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DVhubApp;
+			packageProductDependencies = (
+				8F30040ED9C49179AD560377 /* DVhubLink */,
+			);
+			productName = DVhubApp;
+			productReference = EDE7DF52DEC7E806D405A43B /* DVhubApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B74958F73D0A2B59E3826773 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					6705C8598C0A264C3F0EEA53 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+						TestTargetID = 75F7A2BC58819BEB74D879C8;
+					};
+					75F7A2BC58819BEB74D879C8 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = F67ED8046591F5851BF5CCED /* Build configuration list for PBXProject "DVhubApp" */;
+			developmentRegion = de;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				de,
+			);
+			mainGroup = 6634C8B4A889C30B6ABC4C75;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				CD354E50A11BD3DFF2FF6583 /* XCLocalSwiftPackageReference "../DVhubLink" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 5C404ACE9A78E70466827671 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				75F7A2BC58819BEB74D879C8 /* DVhubApp */,
+				6705C8598C0A264C3F0EEA53 /* DVhubAppUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		61B148E05C03E1F58E0D775E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FC61F6A8867C81F62E0CB0B5 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		8FB960FB16376D181EFDD3A1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EDCF847A0409AC9D45CE80ED /* ControlTests.swift in Sources */,
+				BEF1190AC9955C44EB0EC2CF /* RotationTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A8D10313DE20E79E70CE3F32 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1802728E272900089BF866BA /* AppModel.swift in Sources */,
+				DC3EE19ADAD061130A1E3743 /* Components.swift in Sources */,
+				5D89A2107742FE610DC5601E /* ControlView.swift in Sources */,
+				B84B115F911AEFB9BC71BC31 /* DVhubApp.swift in Sources */,
+				7CF410E0A969DB38969FA760 /* HistoryView.swift in Sources */,
+				A3C171711096CFF0BFF8BAD9 /* Models.swift in Sources */,
+				79DCA21C4FAF956810E712B2 /* OverviewView.swift in Sources */,
+				257F89170B64FA018863425D /* PairView.swift in Sources */,
+				C67E035ABCF3F5E8C39A7771 /* PlanView.swift in Sources */,
+				5D1066386219E953F283BC9E /* RootView.swift in Sources */,
+				8F883119B3D261BBFE9A5DE3 /* SystemController.swift in Sources */,
+				00B9EE70515270300E38D346 /* SystemsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		678869414BE83BC83EEDA806 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 75F7A2BC58819BEB74D879C8 /* DVhubApp */;
+			targetProxy = 3A76F3513E4B01B23EF0DD8F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		3B441CB485D628E0220936E5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DVHUB_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = DVhubApp;
+			};
+			name = Debug;
+		};
+		5814F3AC435BB251DD6B1CDC /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 0C3F13B9D71337F03DD67786 /* App.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		8C1F2EB96CCE7CCE33AE9551 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = DVhubApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DVHUB_BUNDLE_ID)";
+				PRODUCT_NAME = DVhub;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		BCBFE352D14FD8F252CFA6AA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = DVhubApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DVHUB_BUNDLE_ID)";
+				PRODUCT_NAME = DVhub;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D530F1EF548DFB0439711EE9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DVHUB_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = DVhubApp;
+			};
+			name = Release;
+		};
+		DFDA84A850BA994F575BA0B5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 0C3F13B9D71337F03DD67786 /* App.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B7D253080DD8EBD06E5CC02A /* Build configuration list for PBXNativeTarget "DVhubApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BCBFE352D14FD8F252CFA6AA /* Debug */,
+				8C1F2EB96CCE7CCE33AE9551 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CB68F971CD79D66F1AF7AD1A /* Build configuration list for PBXNativeTarget "DVhubAppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3B441CB485D628E0220936E5 /* Debug */,
+				D530F1EF548DFB0439711EE9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F67ED8046591F5851BF5CCED /* Build configuration list for PBXProject "DVhubApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DFDA84A850BA994F575BA0B5 /* Debug */,
+				5814F3AC435BB251DD6B1CDC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		CD354E50A11BD3DFF2FF6583 /* XCLocalSwiftPackageReference "../DVhubLink" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../DVhubLink;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8F30040ED9C49179AD560377 /* DVhubLink */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DVhubLink;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = B74958F73D0A2B59E3826773 /* Project object */;
+}

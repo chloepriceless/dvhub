@@ -1,0 +1,87 @@
+name: DVhubApp
+options:
+  bundleIdPrefix: de.dvhub
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  developmentLanguage: de
+configFiles:
+  Debug: Config/App.xcconfig
+  Release: Config/App.xcconfig
+packages:
+  DVhubLink:
+    path: ../DVhubLink
+targets:
+  DVhubApp:
+    type: application
+    platform: iOS
+    sources:
+      - DVhubApp
+    dependencies:
+      - package: DVhubLink
+    info:
+      path: DVhubApp/Info.plist
+      properties:
+        CFBundleDisplayName: DVhub
+        CFBundleDevelopmentRegion: de
+        CFBundleLocalizations:
+          - de
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSCameraUsageDescription: Die Kamera liest den Kopplungs-QR-Code aus der DVhub-Oberfläche.
+        NSLocalNetworkUsageDescription: DVhub verbindet sich im Heimnetz direkt mit deiner Anlage.
+        NSFaceIDUsageDescription: Face ID bestätigt Schaltbefehle an deine Anlage.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: de.dvhub.pair
+            CFBundleURLSchemes:
+              - dvhub
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DVHUB_BUNDLE_ID)
+        PRODUCT_NAME: DVhub
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+  DVhubAppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - DVhubAppUITests
+    dependencies:
+      - target: DVhubApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DVHUB_BUNDLE_ID).uitests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+schemes:
+  DVhubApp:
+    build:
+      targets:
+        DVhubApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - DVhubAppUITests
