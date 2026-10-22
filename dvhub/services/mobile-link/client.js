@@ -84,11 +84,12 @@ export async function pairDevice({
     const hs = createPairDevice({ boxPublicRaw: p.boxPublicRaw, secret: p.secret, signer });
     ch.send({ t: 'data', d: enc(hs.hello()) });
     const p2 = dec((await nextOfType(ch, ['data'])).d);
-    const { session, p3 } = hs.onP2(p2, { name, model });
+    const { session, p3, code } = hs.onP2(p2, { name, model });
     ch.send({ t: 'data', d: session.seal(p3) });
     for (;;) {
       const m = session.open((await nextOfType(ch, ['data'], waitMs)).d);
-      if (m.t === 'p_wait') { onWait?.(m); continue; }
+      // Vergleichscode anzeigen — er muss mit dem in der DVhub-Oberfläche übereinstimmen.
+      if (m.t === 'p_wait') { onWait?.({ ...m, code }); continue; }
       if (m.t === 'p_denied') throw new Error('pairing_denied');
       if (m.t === 'p_ok') {
         return {

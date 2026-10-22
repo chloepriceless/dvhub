@@ -22,16 +22,16 @@
   "relayAuth": {
     "challenge": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
     "boxDataHex": "001364766875622d72656c61792d617574682d76310003626f7800200707070707070707070707070707070707070707070707070707070707070707",
-    "boxSig": "mWblLBJexPjIhYTgAwZEZSaxMjD2mqev16hyFoMb6GCS9Gpw9Wex9LZ2hg7TZqtnGEaSep2PTKBJwtlS_Q0Gqg",
+    "boxSig": "Xl_3vI_RXD0-6tza1-dyZYVBZ1_x4rqSvEfOv3tSyBExhoyUCHXM6d4Vl07WgTzoS_nYr3cx7Vweq5jtz0qfqg",
     "deviceDataHex": "001364766875622d72656c61792d617574682d7631000664657669636500200707070707070707070707070707070707070707070707070707070707070707",
-    "deviceSig": "6z4Xm-6pU4BcwYs1EVrA-4b4D_oKeA2yIJHCxSrwisTX8Ah8CgxzP-70HDYXzoJtnR5UDYA-A1FpngKX5xvi3g"
+    "deviceSig": "DGPM5Viqetk-F1jgxxmfSlL7B51azeERTYXg-FAzhqtdQVDKpu8HzaNJ09qfaOzhy5stoHhAypfpcSsZMZLDdQ"
   },
   "ticket": {
     "v": 1,
     "box": "BH_8mFLj_k0WCaWK6Y7mE8xl-hyX-ppJ2GcuZywa-akjRPfnPvyOkqYsNyeBe0lXDSzRL7TCxI2w8EkcAZEOWBg",
     "dev": "6guoV70tPzxK-bmybYyvWA",
     "exp": 4102444800,
-    "sig": "MbqRnnpJ7fRQnKHERblVT_jkQK2uNydT8rmWhVRLU6jK67aYo9ZDuTbx_Ky7aVLm5VjzuSXNltIzWqWpHLczGQ"
+    "sig": "Kyp235n7jeP0hGTK9tzR0VAE_Y1ZMvrCJlMxWfT4Sj-JFlCmLlAg1CvTOet2_GVy0-c_o3du1wtgTCDkUTivFg"
   },
   "pairToken": {
     "secret": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
@@ -52,27 +52,27 @@
       "t": "hs2",
       "e": "zo060cy2M-x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk",
       "n": "BAQEBAQEBAQEBAQEBAQEBA",
-      "sig": "IUsym4YYbUbPoGsZCxDru4ubfR9UKnQxB6X-hkDUoM8z7cqcSBJdHX1NQenO98BdQ_RLpBA7YRmtapS9OlDtFA"
+      "sig": "6d8eITFnYmCpAa2x1TIvSMsj8m3e3a2zXqD_4Bn-CJ2k_pGiNmrf6GBrzgi9PpW1CTXpGNNsl6QJgKCO955lZw"
     },
     "hs3": {
       "t": "hs3",
-      "sig": "_KbWSQRirT-eXywi0e7mWROw6jQeBBn36wLXhGAlNsmzCsfoInxiLeointZso5a13mzsc03X0VrPRK73Wkxi8g"
+      "sig": "1_l2oDHQnWHbt8DzeIrV7MAoV1VgGgZyTcFHpB4e3vnFJBhds4OsqhdwZ0F1mTZj4mIsQH0K22Q7UN5HvjsqBg"
     },
-    "transcriptHex": "d8d77cb9ec2998ff8afbd97041a3240c8bac3e6d36abdc7196feddba4859c040",
+    "transcriptHex": "db1b37c33c499b1e00239be22c413738129b0d9ab2211d2ac8316c8333274811",
     "deviceToBox": [
       {
         "plaintext": "{\"t\":\"sub\",\"live\":true,\"intervalMs\":2000}",
-        "d": "cAoG7OqEVbSGL-rvViQHO1hnGn1IsRj8GO5ossAf80MxbPHdMr1G1hitaEe5Nz_nqai7AZ1rizqg"
+        "d": "vhMN9DT5AVqd4XrmC0tLZ1pOGfpkp2V6q_-9ZPJjWSK0N2Yyj1F1zPD8yBRKhgtAdTyGQe7YK8Pv"
       },
       {
         "plaintext": "{\"t\":\"sub\",\"live\":true,\"intervalMs\":2000}",
-        "d": "poz6_ge0wJxGrVUEs60OMwS8LojPthV3Oav-pnHpGSD0bwdXNjw7EBWD-vd_MyQChaBs1xy8chNi"
+        "d": "hr2DKGAroI1TYnz6ytG6ywpVe0-MPtqN3TDS0eeVDJTH_j7myHaHxSGCQw6Agcx2m-4HDiofdqhB"
       }
     ],
     "boxToDevice": [
       {
         "plaintext": "{\"t\":\"welcome\",\"perms\":[\"read\"]}",
-        "d": "p74ATs1PPlyiETmX8PfK4u4ngabEhAhPg2QhqZCJgu2wE6QAULTvVLLRxLpeJXB0"
+        "d": "AHlikVGP4nhLxXarr7YHxQk6FYxSeYytQZs8icrEi165wNQH16Ud5vD1ZQagLhxZ"
       }
     ]
   },
@@ -90,22 +90,23 @@
       "t": "p2",
       "e": "9bLW5g-Ud-MQwpgtqqbJE2wQihd3xZR-RI-jfWgXRVc",
       "n": "CAgICAgICAgICAgICAgICA",
-      "sig": "lV5m5lHig06wRqGvNpxcsEPTmkkdYct86VmdvLO6d_pTSxdZoPgmQSdpIZB_WDg7Cwwt0vvczrVSwgZvPdLmqQ"
+      "sig": "Bvd4MWKNhytvE4XVbPzjPwaa8bE8ExzZpWfYFgcI_7zhOv4bn--7k_FuvNuf0Q3bFmEgdlBVQx3m3ZNGfO3NTA"
     },
-    "transcriptHex": "1dae3ee30c2ad2ab2eecf81218949e8c5f58b7e4a5f0f9af2ed86ed9a454e3f0",
+    "transcriptHex": "a1245f9a8ff5f22ad4b3583fb686c1dcf3ca99cb7a2e03d6354515d517da862d",
+    "code": "637690",
     "p3": {
       "t": "p3",
       "pub": "BPcq454i8uXdD678_AVzX-SgRN8cIaKrAWIDFzFGWvP-xlvq2tpo35OppKeQIAGT6MDoEivPnKvxgTCO0DLgaHQ",
-      "sig": "5Ycp4L9EKFay-6i1NWAwpeBV6p2NzeiPF_-g4lYYhnuGah6VzmCojyGduVwmCMDzc0bil_O6VsTLKVQFqikJuw",
+      "sig": "6HTzThGMxVst7JZ7pIPAxWf93Z2kgh_wrGjKPYfcCZsTxvjextl6OJ6DTGXnUMCgjN25dsMyGPRrkgMtHDcYkg",
       "name": "Chrissis iPhone",
       "model": "iPhone Duo"
     },
     "p3PlaintextNote": "p3 enthält eine zufällige Signatur; d entschlüsseln und prüfen",
-    "p3d": "6kiLAKtk7OMZL-IVVCI8C9FpWH0Qn5B_H3iPAG4agow6zkIvFmZd4VDGHQs7jNsmkGQ57TE7cpFEm5B2uHse-B6W-Ljllj3LXikZVCuvcg5qpaiiuKwRGjiyPIwt41s0uUJs2MOxBiWeJgdodI3_M1iVNqfYfvBGuSkl4iVyaToOBoi49OuyUT1tVQOfX0ll3TLXB9WkUhygubI3ycTl6_Du9mREJlbzFRp0i-PCNgRvbZ7Z5V3J1KmviXjf6Gons8DJsGcqCiY7-kyNBxPzwIXYQZJdJuMZLlgc5s2wJnqXuaspElFxhnbmEjxAdqVhXA124XhYg5MxP7ceztvBL1AeDARaJo8",
+    "p3d": "hfcEwYP_KpdjyhtPzVGNqyA0ubz4nf_Rbzy2gFD_Cbo3XN4a0RdSCYmdkPhpe-bCphCZSbCiKzq0GnP6QkQ8_Uacpqnt9qMKC4u_kyh9bQ4CFL853sl73XadimplQe6UBg8qYNQnh-6dDIGzD5JNedugGBz8MeKqJu4L_AaS6on7XDnB2PGW6R7aaA1tyKKaoIKq0dUi45wTu9q6uG-XrHVz4fPtuG6jmDsIzQvgjmsVduzgeesFdNsmWhE6PnUD-fqrdnVFNpOudLXtFLiZ6GjYP_BMnNIFBHzZPOlAMii2n_BMjY-n2Q-VarJCO5rlkt7-PH2VJB8-m06fiPf1lMJYoX8osPU",
     "boxToDevice": [
       {
         "plaintext": "{\"t\":\"p_wait\"}",
-        "d": "Uki77b6mGGRzawwdDovukDMU5clZvxB6gin37o-u"
+        "d": "4N3KggPp1LixR_d85QINH277odz4-xZVucc8V0gr"
       }
     ]
   },
@@ -113,7 +114,7 @@
     "key": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
     "devId": "6guoV70tPzxK-bmybYyvWA",
     "plaintext": "{\"t\":\"latest\",\"ts\":\"2026-10-22T12:00:00.000Z\",\"status\":{\"soc\":55}}",
-    "d": "UmxtrDwxaB1quBv7OVymizN8R6P5SuS-jzEbkkh0OUOSYlMfZfq5Yv8F0rg6ugz3ScQdQ9VVqAE5BZ5INNtKtGyh9EXxG_HMXBFyY_Rar201nofJbj97OMf7PScQZA"
+    "d": "qqU1kiOJFczXadmDjJjr9uz2xwcJMkVlkWva7Pa9dMovkZJktrQxwc_Q68fmjdKB0GUxc90rxvD8wWA27UH_UC_XOFPikBCpXfTnMZ2808YcUh3eSx6ncnpo_MqJqg"
   },
   "aead": {
     "key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",

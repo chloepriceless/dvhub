@@ -1476,8 +1476,8 @@ if (IS_WEB_PROCESS) ctx.installerPortalClient.startPolling();
 // im Heimnetz über den eigenen Webserver (Upgrade auf MOBILE_LINK_WS_PATH),
 // unterwegs ausgehend über das eingestellte Relay. Ab Werk aus
 // (mobileLink.enabled); nur im Web-Prozess (Loopback-API, Status-Cache).
+// Gestartet wird erst unten, wenn ctx.getDataDir steht (Schlüssel-Sidecar).
 ctx.mobileLink = createMobileLink(ctx);
-if (IS_WEB_PROCESS) ctx.mobileLink.start();
 // Datenspende: immer konstruiert (Routen für Einrichtung/Status), gesammelt und
 // gesendet wird im Runtime-Prozess — nur dort sind Geräte-/evcc-Werte live.
 // Ohne Verknüpfung und Einwilligung (datenspende.enabled) passiert nichts.
@@ -1817,6 +1817,9 @@ ctx.getAppVersion = () => APP_VERSION;
 ctx.getTransportType = () => transport.type;
 ctx.getAppDir = () => __dirname;
 ctx.getDataDir = () => DATA_DIR || __dirname;
+if (IS_WEB_PROCESS) {
+  try { ctx.mobileLink.start(); } catch (e) { pushLog('mobile_link_start_error', { error: e?.message || String(e) }); }
+}
 ctx.getRepoRoot = () => path.resolve(__dirname, '..');
 ctx.scanTransport = scanTransport;
 ctx.fetchEpexDay = () => epex.fetchEpexDay();

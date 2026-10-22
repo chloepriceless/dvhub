@@ -265,7 +265,7 @@ export function createDeviceHandshake({ boxPublicRaw, signer, eph = null, nonce 
       if (!msg || msg.t !== 'hs2') throw new Error('handshake_unexpected');
       const eB = fromB64u(msg.e, 32);
       const nB = fromB64u(msg.n, 16);
-      const th = transcript(HS_LABEL, boxPublicRaw, signer.publicRaw, e.publicRaw, n, eB, nB);
+      const th = transcript(HS_LABEL, PROTOCOL_VERSION, boxPublicRaw, signer.publicRaw, e.publicRaw, n, eB, nB);
       if (!verifySig(boxPublicRaw, th, msg.sig)) throw new Error('box_signature_invalid');
       const keys = sessionKeys(x25519Shared(e.privateKey, eB), th, HS_KEYS);
       done = true;
@@ -292,7 +292,7 @@ export function createBoxHandshake({ boxSigner, lookupDevice, eph = null, nonce 
       const nD = fromB64u(msg.n, 16);
       const e = eph || generateEphemeral();
       const n = nonce16(nonce);
-      const th = transcript(HS_LABEL, boxSigner.publicRaw, devPub, eD, nD, e.publicRaw, n);
+      const th = transcript(HS_LABEL, PROTOCOL_VERSION, boxSigner.publicRaw, devPub, eD, nD, e.publicRaw, n);
       const keys = sessionKeys(x25519Shared(e.privateKey, eD), th, HS_KEYS);
       pending = { devId: msg.dev, devPub, th, keys };
       return { t: 'hs2', e: b64u(e.publicRaw), n: b64u(n), sig: b64u(boxSigner.sign(th)) };
@@ -325,6 +325,14 @@ function pairSalt(secret, th) {
   return crypto.createHmac('sha256', secret).update(th).digest();
 }
 
+// Vergleichscode (6 Ziffern) aus dem Kopplungs-Transkript: Oberfläche und
+// Handy zeigen ihn beide an. Stimmen sie überein, hat sich niemand mit dem
+// QR-Geheimnis dazwischengedrängt (Fable-Review M3).
+export function pairCode(th) {
+  const h = sha256(framed('dvhub-pair-code-v1', th));
+  return String(h.readUInt32BE(0) % 1_000_000).padStart(6, '0');
+}
+
 export function createPairDevice({ boxPublicRaw, secret, signer, eph = null, nonce = null }) {
   const e = eph || generateEphemeral();
   const n = nonce16(nonce);
@@ -339,7 +347,7 @@ export function createPairDevice({ boxPublicRaw, secret, signer, eph = null, non
       if (!msg || msg.t !== 'p2') throw new Error('handshake_unexpected');
       const eB = fromB64u(msg.e, 32);
       const nB = fromB64u(msg.n, 16);
-      const th = transcript(PAIR_LABEL, boxPublicRaw, e.publicRaw, n, eB, nB);
+      const th = transcript(PAIR_LABEL, PROTOCOL_VERSION, boxPublicRaw, e.publicRaw, n, eB, nB);
       if (!verifySig(boxPublicRaw, th, msg.sig)) throw new Error('box_signature_invalid');
       const keys = sessionKeys(x25519Shared(e.privateKey, eB), pairSalt(secret, th), PAIR_KEYS);
       done = true;
@@ -351,7 +359,7 @@ export function createPairDevice({ boxPublicRaw, secret, signer, eph = null, non
         name: String(name).slice(0, 64),
         model: String(model).slice(0, 64),
       };
-      return { session, p3, th };
+      return { session, p3, th, code: pairCode(th) };
     },
   };
 }
@@ -367,7 +375,7 @@ export function createPairBox({ boxSigner, secret, eph = null, nonce = null }) {
       const nD = fromB64u(msg.n, 16);
       const e = eph || generateEphemeral();
       const n = nonce16(nonce);
-      const th = transcript(PAIR_LABEL, boxSigner.publicRaw, eD, nD, e.publicRaw, n);
+      const th = transcript(PAIR_LABEL, PROTOCOL_VERSION, boxSigner.publicRaw, eD, nD, e.publicRaw, n);
       const keys = sessionKeys(x25519Shared(e.privateKey, eD), pairSalt(secret, th), PAIR_KEYS);
       state = { th, session: createSession({ sendKey: keys.b2d, recvKey: keys.d2b, aad: th }) };
       return { p2: { t: 'p2', e: b64u(e.publicRaw), n: b64u(n), sig: b64u(boxSigner.sign(th)) }, session: state.session };
@@ -382,6 +390,7 @@ export function createPairBox({ boxSigner, secret, eph = null, nonce = null }) {
       return {
         devId: keyId(devPub),
         devPub,
+        code: pairCode(state.th),
         name: typeof msg.name === 'string' ? msg.name.slice(0, 64) : '',
         model: typeof msg.model === 'string' ? msg.model.slice(0, 64) : '',
       };

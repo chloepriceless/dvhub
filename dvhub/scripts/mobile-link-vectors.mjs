@@ -89,13 +89,13 @@ out.pairToken = { secret: b64u(secret), token: b64u(pairRelayToken(secret)), tok
   const b = createPairBox({ boxSigner: box, secret, eph: eB, nonce: nonce(8) });
   const p1 = d.hello();
   const { p2, session: bs } = b.onP1(p1);
-  const { session: ds, p3, th } = d.onP2(p2, { name: 'Chrissis iPhone', model: 'iPhone Duo' });
+  const { session: ds, p3, th, code } = d.onP2(p2, { name: 'Chrissis iPhone', model: 'iPhone Duo' });
   const p3d = ds.seal(p3);
   b.verifyP3(bs.open(p3d));
   const okPlain = JSON.stringify({ t: 'p_wait' });
   out.pairHandshake = {
     secret: b64u(secret), ephDeviceSeed: b64u(seed(5)), ephBoxSeed: b64u(seed(6)),
-    p1, p2, transcriptHex: th.toString('hex'),
+    p1, p2, transcriptHex: th.toString('hex'), code,
     p3, p3PlaintextNote: 'p3 enthält eine zufällige Signatur; d entschlüsseln und prüfen',
     p3d,
     boxToDevice: [{ plaintext: okPlain, d: bs.seal(JSON.parse(okPlain)) }],

@@ -49,6 +49,12 @@ const MAX_RESPONSE_CHARS = 900 * 1024;
 const MAX_FRAME_CHARS = 1024 * 1024 - 1024;
 const MAX_REQUEST_BODY_CHARS = 64 * 1024;
 const MAX_PARALLEL_REQUESTS = 4;
+// Anfragen landen als Loopback auf der eigenen API und teilen sich dort den
+// Rate-Limit-Topf von 127.0.0.1 (600/min) mit EOS-Rückmeldungen und dem
+// Installateurs-Portal. Deshalb hier deutlich darunter bleiben (Fable-Review M2).
+const REQ_PER_DEVICE_PER_MIN = 60;
+const REQ_TOTAL_PER_MIN = 240;
+const EVENT_CHECK_MS = 10_000;
 
 function isPrivateHost(h) {
   const host = h.toLowerCase().replace(/^\[|\]$/g, '');
@@ -130,26 +136,61 @@ export function createMobileLink(ctx = {}, deps = {}) {
   }
   const sidecarPath = () => path.join(dataDir(), SIDECAR_NAME);
 
+  // Nur eine FEHLENDE Datei heißt „noch nie gekoppelt“. Ist sie da, aber nicht
+  // lesbar (kaputt, Rechte, Datenträger noch nicht da), bleibt die Handy-App
+  // aus — eine neue Identität würde alle Kopplungen still entwerten
+  // (Fable-Review H2). Die Datei bleibt unangetastet.
   function loadStore() {
+    let text;
     try {
-      const o = JSON.parse(fsImpl.readFileSync(sidecarPath(), 'utf8'));
-      if (o && o.v === 1 && typeof o.boxKey === 'string' && Array.isArray(o.devices)) return o;
-    } catch { /* fehlt oder kaputt */ }
-    return null;
+      text = fsImpl.readFileSync(sidecarPath(), 'utf8');
+    } catch (e) {
+      if (e?.code === 'ENOENT') return { store: null, error: null };
+      return { store: null, error: `sidecar_unreadable:${e?.code || e?.message || 'unknown'}` };
+    }
+    try {
+      const o = JSON.parse(text);
+      if (o && o.v === 1 && typeof o.boxKey === 'string' && Array.isArray(o.devices)) {
+        return { store: o, error: null, signer: signerFromPrivateKey(o.boxKey) };
+      }
+    } catch { /* unten */ }
+    return { store: null, error: 'sidecar_corrupt' };
   }
 
   function saveStore() {
     const p = sidecarPath();
     const tmp = `${p}.tmp-${process.pid}`;
-    fsImpl.writeFileSync(tmp, JSON.stringify(store, null, 2), { mode: 0o600 });
+    const fd = fsImpl.openSync(tmp, 'w', 0o600);
+    try {
+      fsImpl.writeSync(fd, JSON.stringify(store, null, 2));
+      fsImpl.fsyncSync(fd);
+    } finally {
+      fsImpl.closeSync(fd);
+    }
     try { fsImpl.chmodSync?.(tmp, 0o600); } catch { /* best effort */ }
     fsImpl.renameSync(tmp, p);
   }
 
-  let store = loadStore();
-  let signer = store ? signerFromPrivateKey(store.boxKey) : null;
+  // Geladen wird erst in start() — dann steht DATA_DIR fest.
+  let store = null;
+  let signer = null;
+  let storeError = null;
+  let storeLoaded = false;
+
+  function ensureLoaded() {
+    if (storeLoaded) return;
+    storeLoaded = true;
+    let r;
+    try { r = loadStore(); } catch (e) { r = { store: null, error: `sidecar_unreadable:${e?.message || e}` }; }
+    store = r.store;
+    signer = r.signer || null;
+    storeError = r.error;
+    if (storeError) pushLog('mobile_link_store_error', { error: storeError, path: sidecarPath() });
+  }
 
   function ensureIdentity() {
+    ensureLoaded();
+    if (storeError) throw new Error('mobile_link_store_unreadable');
     if (signer) return signer;
     signer = generateIdentity();
     store = { v: 1, boxKey: signer.exportPem(), devices: [] };
@@ -158,7 +199,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     return signer;
   }
 
-  const devices = () => (store ? store.devices : []);
+  const devices = () => { ensureLoaded(); return store ? store.devices : []; };
   const findDevice = (id) => devices().find((d) => d.id === id) || null;
 
   // ── Einstellungen ─────────────────────────────────────────────────────────
@@ -167,7 +208,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     const c = getCfg().mobileLink || {};
     const relayRaw = c.relayUrl == null ? DEFAULT_RELAY_URL : c.relayUrl;
     return {
-      enabled: c.enabled === true,
+      enabled: c.enabled === true && !storeError,
       useRelay: c.useRelay !== false,
       relayUrl: normalizeRelayUrl(relayRaw),
       relayUrlRaw: String(relayRaw ?? ''),
@@ -211,14 +252,18 @@ export function createMobileLink(ctx = {}, deps = {}) {
       boxPublicRaw: box.publicRaw, secret, name: s.name, lan,
       relay: s.useRelay ? s.relayUrl : null, expSec: Math.floor(exp / 1000),
     });
+    const approveToken = b64u(crypto.randomBytes(18));
     pairing = {
-      secret, tokenHash: pairTokenHash(pairRelayToken(secret)), exp, qr,
-      status: 'waiting', candidate: null, peer: null,
+      secret, tokenHash: pairTokenHash(pairRelayToken(secret)), exp,
+      status: 'waiting', candidate: null, peer: null, approveToken,
     };
     pushLog('mobile_link_pairing_started', { lan: lan.length, relay: !!(s.useRelay && s.relayUrl) });
     reconcile();
     broadcastPairState();
-    return pairingStatus();
+    // QR-Inhalt und Freigabe-Token gibt es NUR hier, nicht im abfragbaren
+    // Status — sonst könnte jedes Gerät im LAN das Geheimnis mitlesen und sich
+    // vor das echte Handy drängen (Fable-Review M3).
+    return { ...pairingStatus(), qr, qrSvg: qrSvg(qr), approveToken };
   }
 
   function pairingStatus() {
@@ -227,10 +272,8 @@ export function createMobileLink(ctx = {}, deps = {}) {
     return {
       status: pairing.status,
       expiresAt: new Date(pairing.exp).toISOString(),
-      qr: pairing.status === 'waiting' ? pairing.qr : null,
-      qrSvg: pairing.status === 'waiting' ? qrSvg(pairing.qr) : null,
       candidate: pairing.candidate
-        ? { id: pairing.candidate.devId, name: pairing.candidate.name, model: pairing.candidate.model }
+        ? { id: pairing.candidate.devId, name: pairing.candidate.name, model: pairing.candidate.model, code: pairing.candidate.code }
         : null,
     };
   }
@@ -245,10 +288,14 @@ export function createMobileLink(ctx = {}, deps = {}) {
     return { ok: true };
   }
 
-  function approvePairing({ perms = ['read'], name = null } = {}) {
+  function approvePairing({ perms = ['read'], name = null, approveToken = null } = {}) {
     if (!pairingActive() || pairing.status !== 'scanned' || !pairing.candidate || !pairing.peer) {
       throw new Error('no_pairing_to_approve');
     }
+    // Freigeben darf nur, wer die Kopplung gestartet hat (Token aus pair/start).
+    const a = Buffer.from(String(approveToken ?? ''));
+    const b = Buffer.from(pairing.approveToken);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) throw new Error('approve_token_invalid');
     if (devices().length >= MAX_DEVICES) throw new Error('too_many_devices');
     const c = pairing.candidate;
     const p = normalizePerms(perms);
@@ -346,7 +393,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
       send(obj) { if (sock && link.online) { try { sock.send(JSON.stringify(obj)); } catch { /* weg */ } } },
       syncPairing() {
         if (!link.online) return;
-        if (pairingActive() && pairing.status === 'waiting') link.send({ t: 'pair_open', h: pairing.tokenHash, exp: pairing.exp });
+        if (pairingActive() && pairing.status === 'waiting') link.send({ t: 'pair_open', h: pairing.tokenHash, ttlMs: Math.max(1, pairing.exp - now()) });
         else link.send({ t: 'pair_close' });
       },
       stop() {
@@ -397,9 +444,15 @@ export function createMobileLink(ctx = {}, deps = {}) {
       try { msg = JSON.parse(text); } catch { return; }
       if (!msg || typeof msg.t !== 'string') return;
       if (msg.t === 'challenge') {
-        const box = ensureIdentity();
+        let box;
         let sig;
-        try { sig = box.sign(relayAuthData('box', msg.n)); } catch { return; }
+        try {
+          box = ensureIdentity();
+          sig = box.sign(relayAuthData('box', msg.n));
+        } catch (e) {
+          link.lastError = e?.message || String(e);
+          return;
+        }
         sock.send(JSON.stringify({ t: 'auth', role: 'box', pub: b64u(box.publicRaw), sig: b64u(sig) }));
         return;
       }
@@ -436,6 +489,24 @@ export function createMobileLink(ctx = {}, deps = {}) {
     link.forget = (cid) => peers.delete(cid);
     start();
     return link;
+  }
+
+  // Gleitende Minute je Gerät und für alle zusammen.
+  const reqLog = new Map(); // devId → Zeitstempel
+  const reqAll = [];
+  function takeRequestSlot(devId) {
+    const t = now();
+    const cut = t - 60_000;
+    while (reqAll.length && reqAll[0] <= cut) reqAll.shift();
+    const mine = (reqLog.get(devId) || []).filter((x) => x > cut);
+    if (mine.length >= REQ_PER_DEVICE_PER_MIN || reqAll.length >= REQ_TOTAL_PER_MIN) {
+      reqLog.set(devId, mine);
+      return false;
+    }
+    mine.push(t);
+    reqAll.push(t);
+    reqLog.set(devId, mine);
+    return true;
   }
 
   // Ein Handy auf einem Weg: Handshake, dann verschlüsselte Sitzung.
@@ -580,14 +651,14 @@ export function createMobileLink(ctx = {}, deps = {}) {
         const reply = (s, body) => {
           if (!peer.send({ t: 'res', id, s, b: body })) peer.send({ t: 'res', id, s: 413, b: { error: 'response_too_large' } });
         };
-        if (inflight >= MAX_PARALLEL_REQUESTS) return reply(429, { error: 'too_many_requests' });
+        if (inflight >= MAX_PARALLEL_REQUESTS || !takeRequestSlot(dev.id)) return reply(429, { error: 'too_many_requests' });
         const chk = checkRequest(dev.perms, msg.m, msg.p);
         if (!chk.ok) return reply(chk.status, { error: chk.error });
         const method = String(msg.m).toUpperCase();
         const bodyText = method === 'POST' ? JSON.stringify(msg.b ?? {}) : null;
         if (bodyText && bodyText.length > MAX_REQUEST_BODY_CHARS) return reply(413, { error: 'body_too_large' });
         inflight++;
-        loopback(method, chk.path + chk.search, bodyText)
+        loopback(method, chk.path + chk.search, bodyText, { devId: dev.id })
           .then((r) => {
             if (method === 'POST') pushLog('mobile_link_control', { dev: dev.id, name: dev.name, path: chk.path, status: r.status });
             const size = typeof r.body === 'string' ? r.body.length : JSON.stringify(r.body ?? null).length;
@@ -621,11 +692,14 @@ export function createMobileLink(ctx = {}, deps = {}) {
     saveTimer.unref?.();
   }
 
-  function defaultLoopback(method, pathWithQuery, bodyText) {
+  function defaultLoopback(method, pathWithQuery, bodyText, { devId = null } = {}) {
     const cfg = getCfg();
     const port = Number(cfg.httpPort) || 80;
     const allowed = Array.isArray(cfg.allowedHosts) ? cfg.allowedHosts.filter(Boolean) : [];
-    const headers = { accept: 'application/json', 'x-dvhub-client': 'mobile-link' };
+    // x-session-id landet über actorContext() im Audit-Log (Not-Halt, Sollwerte):
+    // so steht dort, welches Handy es war (Fable-Review N1).
+    const headers = { accept: 'application/json', 'x-dvhub-client': 'mobile-link', 'user-agent': 'DVhub-Handy-App' };
+    if (devId) headers['x-session-id'] = `mobile-link:${devId}`;
     if (allowed.length) headers.host = String(allowed[0]);
     // Bewusst ohne Bearer: Loopback passiert die Anmeldung ohnehin, und ein
     // Bearer zählt an manchen Routen als Ersatz für den UI-Nonce.
@@ -667,8 +741,16 @@ export function createMobileLink(ctx = {}, deps = {}) {
     for (const d of devices()) {
       remoteLink.send({ t: 'mbox_put', dev: d.id, slot: 'latest', d: sealMailbox(fromB64u(d.mk, 32), d.id, { t: 'latest', ts, status: st }) });
     }
-    // Ereignisse: Alarme und Not-Halt landen zusätzlich als eigener Eintrag,
-    // damit die App sie auch nach Stunden noch zeigt.
+    checkEvents(st);
+  }
+
+  // Ereignisse: Alarme und Not-Halt landen zusätzlich als eigener Eintrag,
+  // damit die App sie auch nach Stunden noch zeigt. Geprüft alle 10 s.
+  function checkEvents(stIn = null) {
+    if (!remoteLink?.online || !devices().length) return;
+    let st = stIn;
+    if (!st) { try { st = buildStatus(); } catch { return; } }
+    const ts = new Date(now()).toISOString();
     const key = `${st.alarmsActive || 0}|${st.alarmsSeverity || 0}|${st.emergencyStop ? 1 : 0}`;
     if (lastEventKey !== null && key !== lastEventKey) {
       for (const d of devices()) {
@@ -685,6 +767,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
 
   let reconcileTimer = null;
   let mailboxTimer = null;
+  let eventTimer = null;
   let started = false;
   let remoteUrl = null;
 
@@ -722,17 +805,23 @@ export function createMobileLink(ctx = {}, deps = {}) {
   function start() {
     if (started) return;
     started = true;
-    reconcile();
-    reconcileTimer = setInterval(() => { pairingActive(); reconcile(); }, RECONCILE_MS);
+    ensureLoaded();
+    try { reconcile(); } catch (e) { pushLog('mobile_link_start_error', { error: e?.message || String(e) }); }
+    reconcileTimer = setInterval(() => {
+      try { pairingActive(); reconcile(); } catch (e) { pushLog('mobile_link_reconcile_error', { error: e?.message || String(e) }); }
+    }, RECONCILE_MS);
     reconcileTimer.unref?.();
     mailboxTimer = setInterval(pushMailboxLatest, MAILBOX_LATEST_MS);
     mailboxTimer.unref?.();
+    eventTimer = setInterval(() => checkEvents(), EVENT_CHECK_MS);
+    eventTimer.unref?.();
   }
 
   function stop() {
     started = false;
     clearInterval(reconcileTimer);
     clearInterval(mailboxTimer);
+    clearInterval(eventTimer);
     clearTimeout(saveTimer);
     lanLink?.stop(); lanLink = null;
     lanRelay?.close(); lanRelay = null;
@@ -765,6 +854,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
       defaultRelayUrl: DEFAULT_RELAY_URL,
       name: s.name,
       boxId: signer ? signer.id : null,
+      storeError,
       lan: linkStatus(lanLink),
       relay: linkStatus(remoteLink),
       pairing: pairingStatus(),

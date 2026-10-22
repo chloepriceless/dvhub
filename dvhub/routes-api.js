@@ -1257,6 +1257,9 @@ export function createApiRoutes(ctx) {
     // gegen Cross-Site — die zugehörigen POSTs brauchen unter 'restricted'/
     // 'strict' weiterhin ein Token (POST ist nie LAN-sicher).
     '/api/datenspende/status',
+    // Handy-App-Kachel: Zustand ohne Geheimnisse (QR-Inhalt nur in der Antwort
+    // von POST pair/start).
+    '/api/mobile-link/status',
     '/api/input/status',
     // Datenfluss-Übersicht (rein/raus) — reiner Lesezugriff wie /api/input/status.
     '/api/integrations/dataflow',
@@ -1304,7 +1307,7 @@ export function createApiRoutes(ctx) {
     ['/api/integration/home-assistant', 'integrations'], ['/api/integration/loxone', 'integrations'],
     ['/api/integration/eos', 'integrations'], ['/api/integration/emhass', 'integrations'],
     ['/api/integration/evcc', 'integrations'], ['/api/integration/evcc/eos', 'integrations'],
-    ['/api/integrations/health', 'integrations'], ['/api/datenspende/status', 'integrations'],
+    ['/api/integrations/health', 'integrations'], ['/api/datenspende/status', 'integrations'], ['/api/mobile-link/status', 'integrations'],
     ['/api/input/status', 'integrations'], ['/api/integrations/dataflow', 'integrations'],
     ['/api/ortsnetz/status', 'integrations'], ['/api/victron/devices', 'integrations'],
     ['/api/victron/devices/scan', 'integrations'], ['/api/feed-in-cap/status', 'integrations'],
@@ -4750,7 +4753,7 @@ export function createApiRoutes(ctx) {
         const code = String(e?.message || 'internal_error').split(':')[0];
         const status = {
           mobile_link_disabled: 409, too_many_devices: 409, no_pairing_to_approve: 409,
-          device_not_found: 404,
+          device_not_found: 404, approve_token_invalid: 403, mobile_link_store_unreadable: 409,
         }[code] || fallback;
         return json(res, status, { ok: false, error: code });
       };
@@ -4797,7 +4800,7 @@ export function createApiRoutes(ctx) {
       if (url.pathname === '/api/mobile-link/pair/approve') {
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try {
-          const r = ml.approvePairing({ perms: body.perms, name: body.name });
+          const r = ml.approvePairing({ perms: body.perms, name: body.name, approveToken: body.approveToken });
           return json(res, 200, r);
         } catch (e) { return fail(e); }
       }

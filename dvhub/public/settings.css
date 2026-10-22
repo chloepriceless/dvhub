@@ -2951,3 +2951,4 @@ body.dv-modal-open {
 .mobile-link-qr { background: #fff; padding: 12px; width: 260px; max-width: 100%; border-radius: 8px; margin: 8px 14px; box-sizing: border-box; }
 .mobile-link-qr:empty { display: none; }
 .mobile-link-qr svg { display: block; width: 100%; height: auto; }
+.mobile-link-code { font-size: 1.3em; letter-spacing: 0.08em; font-variant-numeric: tabular-nums; }

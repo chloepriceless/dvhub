@@ -4,11 +4,16 @@
 (function () {
   const common = window.DVhubCommon || {};
   const apiFetch = common.apiFetch || ((p, o) => fetch(p, o));
-  const esc = common.escapeHtml || ((v) => String(v ?? ''));
+  const esc = common.escapeHtml || ((v) => String(v ?? '')
+    .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;').replaceAll("'", '&#39;'));
   const $ = (id) => document.getElementById(id);
   let uiToken = null;
   let pollTimer = null;
   let shownQr = null;
+  // QR-Bild und Freigabe-Token kommen nur aus der Antwort von pair/start
+  // (nicht aus dem Status) — nach einem Neuladen muss neu gestartet werden.
+  let started = null; // { qr, qrSvg, approveToken }
   let formLoaded = false;
 
   function setResult(text) { const el = $('mobileLinkResult'); if (el) el.textContent = text || ''; }
@@ -31,6 +36,8 @@
     too_many_devices: 'Es sind schon 10 Geräte gekoppelt — erst eines entfernen.',
     no_pairing_to_approve: 'Keine Anfrage mehr offen — Kopplung neu starten.',
     device_not_found: 'Gerät nicht gefunden.',
+    approve_token_invalid: 'Diese Kopplung wurde in einem anderen Fenster gestartet — dort freigeben oder hier neu starten.',
+    mobile_link_store_unreadable: 'Schlüsseldatei der Handy-App ist nicht lesbar — siehe Protokoll.',
   };
   const errText = (e) => ERRORS[e?.message] || e?.message || 'Fehler';
 
@@ -65,6 +72,7 @@
       box.hidden = true;
       qr.innerHTML = '';
       shownQr = null;
+      started = null;
       approve.hidden = true;
       if (cancel) cancel.hidden = true;
       return;
@@ -73,11 +81,17 @@
     if (cancel) cancel.hidden = false;
     const until = new Date(p.expiresAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
     if (p.status === 'waiting') {
-      $('mobileLinkPairHint').textContent = `Mit der DVhub-App (oder der Kamera) scannen — gültig bis ${until}, nur für ein Handy.`;
-      // Das SVG kommt von der eigenen Anlage (qrcode-generator, ohne Skript).
-      // Neu zeichnen, sobald sich der Inhalt ändert (erneut „Handy koppeln“ =
-      // neues Geheimnis, der alte Code gilt dann nicht mehr).
-      if (shownQr !== p.qr || !qr.innerHTML) { qr.innerHTML = p.qrSvg || ''; shownQr = p.qr; }
+      if (started) {
+        $('mobileLinkPairHint').textContent = `Mit der DVhub-App (oder der Kamera) scannen — gültig bis ${until}, nur für ein Handy.`;
+        // Das SVG kommt von der eigenen Anlage (qr.js, nur Zahlen, kein Skript).
+        // Neu zeichnen, sobald sich der Inhalt ändert (erneut „Handy koppeln“ =
+        // neues Geheimnis, der alte Code gilt dann nicht mehr).
+        if (shownQr !== started.qr || !qr.innerHTML) { qr.innerHTML = started.qrSvg || ''; shownQr = started.qr; }
+      } else {
+        $('mobileLinkPairHint').textContent = 'Eine Kopplung wurde in einem anderen Fenster gestartet. Hier „Handy koppeln“ drücken, um neu zu beginnen.';
+        qr.innerHTML = '';
+        shownQr = null;
+      }
       approve.hidden = true;
     } else if (p.status === 'consumed') {
       $('mobileLinkPairHint').textContent = 'Handy meldet sich…';
@@ -88,10 +102,12 @@
       $('mobileLinkPairHint').textContent = `Anfrage offen bis ${until}.`;
       qr.innerHTML = '';
       shownQr = null;
+      const code = String(p.candidate.code || '');
       $('mobileLinkCandidate').innerHTML = `Möchte sich koppeln: <strong>${esc(p.candidate.name || 'Handy')}</strong>`
         + (p.candidate.model ? ` (${esc(p.candidate.model)})` : '')
-        + ` · Gerätekennung <code>${esc(p.candidate.id)}</code>`;
-      approve.hidden = false;
+        + `<br>Vergleichscode: <strong class="mobile-link-code">${esc(code.slice(0, 3))} ${esc(code.slice(3))}</strong>`
+        + ' — muss genau so in der App stehen. Sonst ablehnen.';
+      approve.hidden = !started;
     }
   }
 
@@ -144,7 +160,8 @@
   async function startPair() {
     setResult('');
     try {
-      await post('/api/mobile-link/pair/start', { lanHost: window.location.host });
+      const r = await post('/api/mobile-link/pair/start', { lanHost: window.location.host });
+      started = { qr: r.pairing.qr, qrSvg: r.pairing.qrSvg, approveToken: r.pairing.approveToken };
       refresh();
     } catch (e) { setResult('Fehler: ' + errText(e)); }
   }
@@ -152,7 +169,8 @@
   async function approve() {
     try {
       const perms = $('mobileLinkPerms').value === 'control' ? ['read', 'control'] : ['read'];
-      const r = await post('/api/mobile-link/pair/approve', { perms });
+      const r = await post('/api/mobile-link/pair/approve', { perms, approveToken: started?.approveToken });
+      started = null;
       setResult(`✓ ${r.device?.name || 'Handy'} ist gekoppelt.`);
       refresh();
     } catch (e) { setResult('Fehler: ' + errText(e)); }
@@ -160,6 +178,7 @@
 
   async function cancel() {
     try { await post('/api/mobile-link/pair/cancel'); } catch { /* egal */ }
+    started = null;
     refresh();
   }
 

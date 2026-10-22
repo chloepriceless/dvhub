@@ -57,7 +57,7 @@ Nach dem Verbindungsaufbau sendet das Relay
 | Rolle | Nachricht | Prüfung durch das Relay |
 |---|---|---|
 | Box | `{"t":"auth","role":"box","pub":…,"sig":…}` | `sig` über `framed("dvhub-relay-auth-v1","box",n)`; Kanal = `id(pub)` |
-| Gerät | `{"t":"auth","role":"device","ticket":{…},"pub":…,"sig":…}` | Ticket gültig, `id(pub) == ticket.dev`, `sig` über `framed("dvhub-relay-auth-v1","device",n)`, Gerät in der Freigabeliste der Box (falls die Box verbunden ist) |
+| Gerät | `{"t":"auth","role":"device","ticket":{…},"pub":…,"sig":…}` | Ticket gültig, `id(pub) == ticket.dev`, `sig` über `framed("dvhub-relay-auth-v1","device",n)`, Gerät in der Freigabeliste der Box, sobald die verbundene Box eine geschickt hat (die Box schickt sie direkt nach der Anmeldung; bis dahin fängt der Handshake unbekannte Geräte ab) |
 | Kopplung | `{"t":"auth","role":"pair","box":"<boxId>","token":…}` | `token = HKDF(ikm=Geheimnis, salt=leer, info="dvhub-link-pair-token-v1", 32)`; Box hat `SHA-256(token)` angemeldet; einmal verwendbar |
 
 `framed(…)` = die Feldfolge selbst (nicht gehasht). Antwort:
@@ -76,14 +76,16 @@ Gerät/Kopplung ↔ Relay:
 - `{"t":"ping"}` → `{"t":"pong"}`
 
 Box ↔ Relay (nur zur Info für Relay-Betreiber): `open`/`data`/`close` mit
-Verbindungsnummer `c`, `allow` (Freigabeliste), `pair_open`/`pair_close`,
+Verbindungsnummer `c`, `allow` (Freigabeliste, höchstens 32), `pair_open` (`{"h":…,"ttlMs":…}` — relative Laufzeit, die Uhr der Box zählt nicht)/`pair_close`,
 `mbox_put`/`mbox_clear`.
 
 Schließcodes: 4000 normal, 4001 ersetzt, 4002 Anmeldung falsch, 4003 nicht
 erlaubt (z. B. entkoppelt), 4004 Box offline, 4008 Grenze überschritten,
 4009 Protokollfehler, 4010 Anmeldung zu spät, 4011 Relay fährt herunter.
 
-Grenzen: Rahmen vom Gerät ≤ 256 KiB, von der Box ≤ 1 MiB; je 10 s ≤ 200
+Grenzen (gezählt in Zeichen des JSON-Textes): Rahmen vom Gerät ≤ 256 KiB, von
+der Box ≤ 1 MiB; höchstens 64 Verbindungen je Quelladresse; Briefkästen nur für
+Geräte auf der Freigabeliste; je 10 s ≤ 200
 Rahmen / 1 MiB vom Gerät.
 
 ## Handshake gekoppeltes Gerät
@@ -92,7 +94,7 @@ Die ersten Nachrichten in `data.d` sind base64url(JSON) im Klartext.
 
 1. Gerät → Box: `{"t":"hs1","v":1,"dev":"<devId>","e":"<X25519 32 B>","n":"<16 B>"}`
 2. Box → Gerät: `{"t":"hs2","e":…,"n":…,"sig":…}`
-   - `th = SHA256(framed("dvhub-link-hs-v1", boxPub, devPub, eD, nD, eB, nB))`
+   - `th = SHA256(framed("dvhub-link-hs-v1", "1", boxPub, devPub, eD, nD, eB, nB))` — `"1"` ist die Protokollversion (Schutz vor Herabstufung)
    - `sig` = Box-Signatur über `th` — das Gerät prüft gegen den Schlüssel aus dem QR-Code
 3. Gerät → Box: `{"t":"hs3","sig":…}` — Gerätesignatur über `SHA256(framed(th, "client"))`
 
@@ -108,11 +110,16 @@ vertauschter Rahmen lässt die Entschlüsselung scheitern → Verbindung neu auf
 1. Gerät verbindet mit Rolle `pair` (Heimnetz-Adresse zuerst, sonst Relay).
 2. Gerät → Box (Klartext): `{"t":"p1","v":1,"e":…,"n":…}`
 3. Box → Gerät (Klartext): `{"t":"p2","e":…,"n":…,"sig":…}`
-   - `th = SHA256(framed("dvhub-link-pair-v1", boxPub, eD, nD, eB, nB))`, Box-Signatur über `th`
+   - `th = SHA256(framed("dvhub-link-pair-v1", "1", boxPub, eD, nD, eB, nB))`, Box-Signatur über `th`
    - Schlüssel: `HKDF(ikm=X25519, salt=HMAC-SHA256(Geheimnis, th), info="dvhub-link-pair-keys-v1", 64)`, Aufteilung und AAD wie oben
 4. Gerät → Box (verschlüsselt): `{"t":"p3","pub":"<devPub>","sig":…,"name":"…","model":"…"}`,
    `sig` über `SHA256(framed(th, "pair-client"))`
-5. Box → Gerät: `{"t":"p_wait"}` — die Oberfläche zeigt Name und Modell an
+5. Box → Gerät: `{"t":"p_wait","box":{"id","name"}}` — die Oberfläche zeigt Name, Modell
+   und den **Vergleichscode**; das Gerät zeigt denselben Code an:
+   `code = UInt32BE(SHA256(framed("dvhub-pair-code-v1", th))[0..4]) mod 1 000 000`,
+   sechsstellig mit führenden Nullen. Nur bei gleichem Code freigeben. Freigeben
+   kann nur das Fenster, das die Kopplung gestartet hat (Freigabe-Token aus
+   `POST /api/mobile-link/pair/start`); den QR-Inhalt gibt es nur in dieser Antwort.
 6. Box → Gerät: `{"t":"p_ok","dev","name","perms","box":{"id","name"},"ticket","mailboxKey","relay"}`
    oder `{"t":"p_denied"}`. Danach trennt die Box; das Gerät verbindet neu als `device`.
 
@@ -120,7 +127,7 @@ Die App speichert: `boxPub`, `boxId`, `devId`, `ticket`, `mailboxKey`, `lan`, `r
 
 ## Nachrichten in der Sitzung
 
-Box → Gerät zuerst: `{"t":"welcome","box":{"id","name","version"},"perms":["read"|"control"],"ticket",…}`
+Box → Gerät zuerst: `{"t":"welcome","box":{"id","name","version"},"perms":["read"|"control"],"ticket","relay","via":"lan"|"remote"}`
 (neues Ticket speichern).
 
 | Gerät → Box | Box → Gerät |
@@ -142,7 +149,7 @@ verschlüsselt nicht in einen Relay-Rahmen (1 MiB, also gut 750 KiB JSON), kommt
 ## Briefkasten
 
 Die Box legt am Relay je Gerät alle 60 s den letzten Stand ab (`slot:"latest"`)
-und bei Änderung von Alarmen/Not-Halt ein Ereignis. Inhalt:
+und, wenn sich Alarme oder Not-Halt ändern, ein Ereignis (geprüft alle 10 s). Inhalt:
 `d = base64url(Nonce 12 B ‖ ChaChaPoly(JSON))`, Schlüssel `mailboxKey`, AAD =
 `framed("dvhub-mbox-v1", devId)`. JSON: `{"t":"latest","ts","status"}` bzw.
 `{"t":"event","ts","kind":"state_change","alarmsActive","alarmsSeverity","emergencyStop"}`.
@@ -153,3 +160,17 @@ In der DVhub-Oberfläche. Die Box schließt laufende Sitzungen, schickt dem
 Relay die neue Freigabeliste und leert den Briefkasten des Geräts. Ist die Box
 gerade nicht mit dem Relay verbunden, kann ein entkoppeltes Gerät dort nur noch
 seinen (leeren) Briefkasten sehen.
+
+**Wiederholung durch das Relay:** Das Relay kann alte Briefkasten-Einträge erneut
+ausliefern (es kann sie nicht lesen, aber zurückhalten und später schicken). Die
+App vergleicht deshalb `ts` aus dem entschlüsselten Inhalt mit dem zuletzt
+gezeigten Stand und verwirft Älteres.
+
+## Mengen und Protokoll auf der Box
+
+Anfragen eines Geräts laufen als Loopback über die eigene API und teilen sich dort
+den Rate-Limit-Topf von 127.0.0.1. Die Box nimmt deshalb je Gerät höchstens 60
+Anfragen pro Minute an, von allen Geräten zusammen 240, und höchstens 4
+gleichzeitig; darüber `s: 429`. Im Audit-Log stehen Befehle mit
+`actor_session = "mobile-link:<devId>"`.
+

@@ -325,7 +325,7 @@ describe('mobile-link relay-core', () => {
     const box = generateIdentity();
     const b = await boxOnRelay(relay, box);
     const token = pairRelayToken(crypto.randomBytes(32));
-    b.send({ t: 'pair_open', h: pairTokenHash(token), exp: t + 60_000 });
+    b.send({ t: 'pair_open', h: pairTokenHash(token), ttlMs: 60_000 });
     await sleep(10);
     const wrong = memClient(relay);
     await wrong.next('challenge');
@@ -342,7 +342,7 @@ describe('mobile-link relay-core', () => {
     await until(() => p2.state.closed);
     assert.equal(p2.state.closed.reason, 'pairing_not_open');
     // Ablauf
-    b.send({ t: 'pair_open', h: pairTokenHash(token), exp: t + 1000 });
+    b.send({ t: 'pair_open', h: pairTokenHash(token), ttlMs: 1000 });
     await sleep(10);
     t += 2000;
     const p3 = memClient(relay);
@@ -360,6 +360,7 @@ describe('mobile-link relay-core', () => {
     const devA = generateIdentity();
     const devB = generateIdentity();
     const b = await boxOnRelay(relay, box);
+    b.send({ t: 'allow', devs: [devA.id, devB.id] });
     b.send({ t: 'mbox_put', dev: devA.id, slot: 'latest', d: 'AAAA' });
     b.send({ t: 'mbox_put', dev: devA.id, slot: 'latest', d: 'BBBB' });
     for (const d of ['e1', 'e2', 'e3', 'e4']) b.send({ t: 'mbox_put', dev: devA.id, d });
@@ -384,6 +385,60 @@ describe('mobile-link relay-core', () => {
     relay.close();
   });
 
+  test('Briefkasten nur für freigegebene Geräte, Anzahl begrenzt (Fable H1)', async () => {
+    const relay = createRelay({ limits: { maxMailboxes: 3 } });
+    const box = generateIdentity();
+    const b = await boxOnRelay(relay, box);
+    // Ohne Freigabeliste: nichts wird abgelegt (fremde Box-Identitäten können
+    // sonst beliebig viele Briefkästen anlegen).
+    for (let i = 0; i < 5; i++) b.send({ t: 'mbox_put', dev: `dev${i}`, d: 'A' });
+    await sleep(20);
+    assert.equal(relay.stats().mailboxes, 0);
+    b.send({ t: 'allow', devs: ['a', 'b', 'c', 'd'] });
+    for (const dev of ['a', 'b', 'c', 'd', 'x']) b.send({ t: 'mbox_put', dev, d: 'A' });
+    await sleep(20);
+    assert.equal(relay.stats().mailboxes, 3);
+    assert.equal((await b.next('error')).e, 'relay_full');
+    // Zu lange Freigabeliste wird abgelehnt.
+    b.send({ t: 'allow', devs: Array.from({ length: 100 }, (_, i) => `d${i}`) });
+    await until(() => b.state.closed);
+    assert.equal(b.state.closed.reason, 'bad_allow');
+    relay.close();
+  });
+
+  test('Verbindungen je Quelladresse begrenzt (Fable H1)', async () => {
+    const relay = createRelay({ limits: { maxConnectionsPerRemote: 2 } });
+    const open = [];
+    for (let i = 0; i < 3; i++) {
+      const [mine, theirs] = createMemorySocketPair();
+      const st = { closed: null };
+      relay.attach({ ...theirs, close: (code, reason) => { st.closed = { code, reason }; theirs.close(); } }, { remote: '203.0.113.7' });
+      open.push(st);
+      mine.onMessage(() => {});
+    }
+    await sleep(10);
+    assert.deepEqual(open.map((o) => o.closed?.reason || null), [null, null, 'too_many_connections']);
+    relay.close();
+  });
+
+  test('pair_open mit relativer Laufzeit: Uhrzeitversatz der Box stört nicht (Fable M1)', async () => {
+    const relay = createRelay({ now: () => Date.now() + 3600_000 }); // Relay-Uhr 1 h vor
+    const box = generateIdentity();
+    const b = await boxOnRelay(relay, box);
+    const token = pairRelayToken(crypto.randomBytes(32));
+    b.send({ t: 'pair_open', h: pairTokenHash(token), ttlMs: 60_000 });
+    await sleep(10);
+    const p = memClient(relay);
+    await p.next('challenge');
+    p.send({ t: 'auth', role: 'pair', box: box.id, token: b64u(token) });
+    assert.equal((await p.next('ok')).role, 'pair');
+    // Ungültige Angaben trennen die Box nicht, sondern ergeben einen Fehler.
+    b.send({ t: 'pair_open', h: pairTokenHash(token), ttlMs: -5 });
+    assert.equal((await b.next('error')).e, 'bad_pair_open');
+    assert.equal(b.state.closed, null);
+    relay.close();
+  });
+
   test('Gerät wartet bei Box offline, Box kommt → open; Box geht → box_offline', async () => {
     const relay = createRelay();
     const box = generateIdentity();
@@ -401,6 +456,9 @@ describe('mobile-link relay-core', () => {
     await until(() => b.state.closed);
     assert.equal(b.state.closed.code, CLOSE.replaced);
     assert.equal((await b2.next('open')).dev, dev.id);
+    // Geräte erfahren davon und handshaken neu (Fable N4).
+    await d.next('box_offline');
+    await d.next('box_online');
     relay.close();
   });
 
@@ -529,7 +587,7 @@ describe('mobile-link Ende zu Ende', () => {
     const phone = generateIdentity();
     const creds = await pairDevice({
       qr: p.qr, signer: phone, name: 'Testhandy', model: 'iPhone Duo', url,
-      onWait: () => ctx.agent.approvePairing({ perms }),
+      onWait: () => ctx.agent.approvePairing({ perms, approveToken: p.approveToken }),
     });
     return { phone, creds };
   }
@@ -591,7 +649,7 @@ describe('mobile-link Ende zu Ende', () => {
     const p = ctx.agent.startPairing();
     assert.equal(parsePairPayload(p.qr).relay, null);
     const phone = generateIdentity();
-    const creds = await pairDevice({ qr: p.qr, signer: phone, url: lanUrl, onWait: () => ctx.agent.approvePairing({ perms: ['read', 'control'] }) });
+    const creds = await pairDevice({ qr: p.qr, signer: phone, url: lanUrl, onWait: () => ctx.agent.approvePairing({ perms: ['read', 'control'], approveToken: p.approveToken }) });
     assert.equal(ctx.agent.status().relay, null, 'ohne Relay keine Außenverbindung');
     const s = await connectDevice({ creds, signer: phone, url: lanUrl });
     assert.equal(s.welcome().via, 'lan');
@@ -637,6 +695,74 @@ describe('mobile-link Ende zu Ende', () => {
     s.subscribe(true, 1000);
     await until(() => new Promise((res) => s.once('live', () => res(true))));
     s.close();
+  });
+
+  test('QR-Inhalt nicht im Status, Freigabe nur mit Token, Vergleichscode stimmt (Fable M3)', async () => {
+    const ctx = await setup();
+    const p = ctx.agent.startPairing();
+    assert.ok(p.qr && p.qrSvg && p.approveToken);
+    const st = JSON.stringify(ctx.agent.status());
+    assert.ok(!st.includes(parsePairPayload(p.qr).secret.toString('base64url')), 'Geheimnis im Status');
+    assert.ok(!st.includes(p.approveToken), 'Freigabe-Token im Status');
+    await until(() => ctx.agent.status().relay?.online);
+    let phoneCode = null;
+    const creds = await pairDevice({
+      qr: p.qr, signer: generateIdentity(),
+      onWait: (m) => {
+        phoneCode = m.code;
+        const cand = ctx.agent.status().pairing.candidate;
+        assert.match(cand.code, /^\d{6}$/);
+        assert.equal(cand.code, m.code, 'Vergleichscode Box ≠ Handy');
+        assert.throws(() => ctx.agent.approvePairing({ perms: ['read'] }), /approve_token_invalid/);
+        assert.throws(() => ctx.agent.approvePairing({ perms: ['read'], approveToken: 'x'.repeat(24) }), /approve_token_invalid/);
+        ctx.agent.approvePairing({ perms: ['read'], approveToken: p.approveToken });
+      },
+    });
+    assert.ok(phoneCode);
+    assert.equal(creds.perms[0], 'read');
+  });
+
+  test('Anfragen je Gerät gebremst, Gerät steht im Audit-Header (Fable M2, N1)', async () => {
+    const seen = [];
+    const ctx = await setup({ loopback: async (m, p, b, meta) => { seen.push(meta?.devId); return { status: 200, body: {} }; } });
+    const { phone, creds } = await pairVia(ctx, null);
+    const s = await connectDevice({ creds, signer: phone, url: ctx.relayUrl });
+    const codes = [];
+    for (let i = 0; i < 62; i++) codes.push((await s.request('GET', '/api/status')).status);
+    assert.equal(codes.filter((c) => c === 200).length, 60);
+    assert.equal(codes.at(-1), 429);
+    assert.equal(seen[0], creds.devId);
+    s.close();
+  });
+
+  test('kaputte Schlüsseldatei: keine neue Identität, Datei bleibt, App bleibt aus (Fable H2)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-link-'));
+    const a = makeAgent({ dir, relayUrl: 'ws://127.0.0.1:9/v1/ws' });
+    a.agent.start();
+    a.agent.startPairing();
+    const boxId = a.agent._boxId();
+    a.agent.stop();
+    const file = path.join(dir, SIDECAR_NAME);
+    const broken = fs.readFileSync(file, 'utf8').slice(0, 40);
+    fs.writeFileSync(file, broken);
+    const b = makeAgent({ dir, relayUrl: 'ws://127.0.0.1:9/v1/ws' });
+    b.agent.start();
+    const st = b.agent.status();
+    assert.equal(st.storeError, 'sidecar_corrupt');
+    assert.equal(st.enabled, false);
+    assert.throws(() => b.agent.startPairing(), /mobile_link_disabled|mobile_link_store_unreadable/);
+    assert.equal(fs.readFileSync(file, 'utf8'), broken, 'Sidecar wurde überschrieben');
+    assert.notEqual(st.boxId, 'neu');
+    assert.ok(b.logs.some(([e]) => e === 'mobile_link_store_error'));
+    b.agent.stop();
+    // Fehlende Datei ist dagegen der Normalfall: neue Identität.
+    fs.rmSync(file);
+    const c = makeAgent({ dir, relayUrl: 'ws://127.0.0.1:9/v1/ws' });
+    c.agent.start();
+    c.agent.startPairing();
+    assert.ok(c.agent._boxId() && c.agent._boxId() !== boxId);
+    c.agent.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   test('QR-Code gilt genau einmal; abgelehnte Anfrage koppelt nicht', async () => {

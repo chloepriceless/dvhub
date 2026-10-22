@@ -39,6 +39,9 @@ export const CLOSE = Object.freeze({
 export const DEFAULT_LIMITS = Object.freeze({
   authTimeoutMs: 10_000,
   maxConnections: 20_000,
+  // Je Quelladresse (hinter einem Proxy: X-Forwarded-For, RELAY_TRUST_PROXY).
+  maxConnectionsPerRemote: 64,
+  maxAllowPerBox: 32,
   maxBoxes: 10_000,
   maxDeviceConnsPerBox: 16,
   maxPairConnsPerBox: 2,
@@ -55,7 +58,14 @@ export const DEFAULT_LIMITS = Object.freeze({
   mailboxLatestBytes: 64 * 1024,
   mailboxTtlMs: 24 * 3600_000,
   mailboxTotalBytes: 256 * 1024 * 1024,
+  maxMailboxes: 50_000,
 });
+
+// Speicher je Briefkasten bzw. Eintrag über die Nutzdaten hinaus (Map-Eintrag,
+// Objekte, Strings) — zählt mit, damit viele kleine Einträge nicht unter der
+// Bytegrenze durchrutschen (Fable-Review H1: ~460 B je Briefkasten gemessen).
+const MAILBOX_OVERHEAD = 512;
+const ITEM_OVERHEAD = 128;
 
 function safeEqual(a, b) {
   const x = Buffer.from(String(a));
@@ -79,6 +89,7 @@ export function createRelay({
   let nextCid = 1;
   let closed = false;
   const conns = new Set();
+  const perRemote = new Map(); // Quelladresse → offene Verbindungen
 
   function boxEntry(boxId) {
     let e = boxes.get(boxId);
@@ -101,20 +112,27 @@ export function createRelay({
   function mbGet(boxId, devId, create) {
     const k = mbKey(boxId, devId);
     let m = mailboxes.get(k);
-    if (!m && create) { m = { latest: null, items: [], bytes: 0, nextId: 1 }; mailboxes.set(k, m); }
+    if (!m && create) {
+      if (mailboxes.size >= L.maxMailboxes || mailboxTotal + MAILBOX_OVERHEAD > L.mailboxTotalBytes) return null;
+      m = { latest: null, items: [], bytes: MAILBOX_OVERHEAD, nextId: 1 };
+      mailboxes.set(k, m);
+      mailboxTotal += MAILBOX_OVERHEAD;
+    }
     return m || null;
   }
 
+  const itemCost = (it) => it.d.length + ITEM_OVERHEAD;
+
   function mbDropItem(m, idx) {
     const [it] = m.items.splice(idx, 1);
-    m.bytes -= it.d.length;
-    mailboxTotal -= it.d.length;
+    m.bytes -= itemCost(it);
+    mailboxTotal -= itemCost(it);
   }
 
   function mbSetLatest(m, entry) {
-    if (m.latest) { m.bytes -= m.latest.d.length; mailboxTotal -= m.latest.d.length; }
+    if (m.latest) { m.bytes -= itemCost(m.latest); mailboxTotal -= itemCost(m.latest); }
     m.latest = entry;
-    if (entry) { m.bytes += entry.d.length; mailboxTotal += entry.d.length; }
+    if (entry) { m.bytes += itemCost(entry); mailboxTotal += itemCost(entry); }
   }
 
   function mbClear(boxId, devId) {
@@ -125,30 +143,38 @@ export function createRelay({
     mailboxes.delete(k);
   }
 
-  function mbPrune() {
+  // Abgelaufenes entfernen — für einen Briefkasten beim Zugriff, für alle nur
+  // im Minutentakt (nicht bei jedem Zugriff über alle: O(N²), Fable-Review H1).
+  function mbPruneOne(k, m) {
     const cutoff = now() - L.mailboxTtlMs;
-    for (const [k, m] of mailboxes) {
-      while (m.items.length && m.items[0].ts < cutoff) mbDropItem(m, 0);
-      if (m.latest && m.latest.ts < cutoff) mbSetLatest(m, null);
-      if (!m.latest && m.items.length === 0) mailboxes.delete(k);
-    }
+    while (m.items.length && m.items[0].ts < cutoff) mbDropItem(m, 0);
+    if (m.latest && m.latest.ts < cutoff) mbSetLatest(m, null);
+    if (!m.latest && m.items.length === 0) { mailboxes.delete(k); mailboxTotal -= m.bytes; m.bytes = 0; }
+  }
+
+  function mbPrune() {
+    for (const [k, m] of [...mailboxes]) mbPruneOne(k, m);
   }
 
   function mbPut(boxId, devId, d, slot) {
-    mbPrune();
     if (slot === 'latest' ? d.length > L.mailboxLatestBytes : d.length > L.mailboxBytes) return 'too_large';
-    if (mailboxTotal + d.length > L.mailboxTotalBytes) return 'relay_full';
+    const existing = mbGet(boxId, devId, false);
+    if (existing) mbPruneOne(mbKey(boxId, devId), existing);
+    if (mailboxTotal + d.length + ITEM_OVERHEAD > L.mailboxTotalBytes) return 'relay_full';
     const m = mbGet(boxId, devId, true);
+    if (!m) return 'relay_full';
     if (slot === 'latest') {
       mbSetLatest(m, { id: 'latest', ts: now(), d });
       return null;
     }
     // Älteste Ereignisse weichen, wenn der Platz nicht reicht.
-    while (m.items.length && (m.items.length >= L.mailboxItems || m.bytes + d.length > L.mailboxBytes)) mbDropItem(m, 0);
-    if (m.bytes + d.length > L.mailboxBytes) return 'too_large';
-    m.items.push({ id: String(m.nextId++), ts: now(), d });
-    m.bytes += d.length;
-    mailboxTotal += d.length;
+    const cost = d.length + ITEM_OVERHEAD;
+    while (m.items.length && (m.items.length >= L.mailboxItems || m.bytes + cost > L.mailboxBytes + MAILBOX_OVERHEAD)) mbDropItem(m, 0);
+    if (m.bytes + cost > L.mailboxBytes + MAILBOX_OVERHEAD) return 'too_large';
+    const it = { id: String(m.nextId++), ts: now(), d };
+    m.items.push(it);
+    m.bytes += cost;
+    mailboxTotal += cost;
     return null;
   }
 
@@ -186,6 +212,11 @@ export function createRelay({
   function attach(sock, { remote = null } = {}) {
     if (closed) { try { sock.close(CLOSE.shutdown, 'shutdown'); } catch { /* egal */ } return null; }
     if (conns.size >= L.maxConnections) { try { sock.close(CLOSE.limit, 'relay_full'); } catch { /* egal */ } return null; }
+    if (remote && (perRemote.get(remote) || 0) >= L.maxConnectionsPerRemote) {
+      try { sock.close(CLOSE.limit, 'too_many_connections'); } catch { /* egal */ }
+      return null;
+    }
+    if (remote) perRemote.set(remote, (perRemote.get(remote) || 0) + 1);
     const conn = {
       sock, remote, cid: String(nextCid++), role: null, boxId: null, devId: null,
       challenge: b64u(crypto.randomBytes(32)), closed: false,
@@ -205,6 +236,10 @@ export function createRelay({
     conn.closed = true;
     clearTimeout(conn.authTimer);
     conns.delete(conn);
+    if (conn.remote) {
+      const n = (perRemote.get(conn.remote) || 1) - 1;
+      if (n > 0) perRemote.set(conn.remote, n); else perRemote.delete(conn.remote);
+    }
     if (!conn.boxId) return;
     const e = boxes.get(conn.boxId);
     if (!e) return;
@@ -265,7 +300,13 @@ export function createRelay({
         for (const p of [...e.pairs]) closeConn(p, CLOSE.boxOffline, 'box_offline');
       }
       send(conn, { t: 'ok', role: 'box', box: boxId });
-      for (const d of e.devices) { openToBox(e, d); send(d, { t: 'box_online' }); }
+      // Bei einer ersetzten Verbindung erst „offline“ melden: die Geräte müssen
+      // mit der neuen Box-Verbindung neu handshaken (Fable-Review N4).
+      for (const d of e.devices) {
+        if (old) send(d, { t: 'box_offline' });
+        openToBox(e, d);
+        send(d, { t: 'box_online' });
+      }
       log('relay_box_online', { box: boxId });
       return;
     }
@@ -331,7 +372,7 @@ export function createRelay({
         return;
       }
       case 'allow': {
-        if (!Array.isArray(msg.devs) || msg.devs.length > 1000 || !msg.devs.every((d) => isStr(d, 64))) {
+        if (!Array.isArray(msg.devs) || msg.devs.length > L.maxAllowPerBox || !msg.devs.every((d) => isStr(d, 64))) {
           return closeConn(conn, CLOSE.protocol, 'bad_allow');
         }
         e.allow = new Set(msg.devs);
@@ -343,9 +384,11 @@ export function createRelay({
         return;
       }
       case 'pair_open': {
-        const exp = Math.min(Number(msg.exp) || 0, now() + L.pairTtlMaxMs);
-        if (!isStr(msg.h, 64) || !(exp > now())) return closeConn(conn, CLOSE.protocol, 'bad_pair_open');
-        e.pair = { h: msg.h, exp };
+        // Relative Laufzeit: die Uhr der Box (Pi ohne RTC vor dem NTP-Abgleich)
+        // spielt keine Rolle (Fable-Review M1). Fehler trennen die Box nicht.
+        const ttl = Number(msg.ttlMs);
+        if (!isStr(msg.h, 64) || !Number.isFinite(ttl) || ttl <= 0) return send(conn, { t: 'error', e: 'bad_pair_open' });
+        e.pair = { h: msg.h, exp: now() + Math.min(ttl, L.pairTtlMaxMs) };
         return;
       }
       case 'pair_close':
@@ -353,7 +396,8 @@ export function createRelay({
         return;
       case 'mbox_put': {
         if (!isStr(msg.dev, 64) || !isStr(msg.d, L.mailboxBytes)) return;
-        if (e.allow && !e.allow.has(msg.dev)) return;
+        // Nur für Geräte auf der Freigabeliste — ohne Liste gar nicht.
+        if (!e.allow || !e.allow.has(msg.dev)) return;
         const err = mbPut(conn.boxId, msg.dev, msg.d, msg.slot === 'latest' ? 'latest' : null);
         if (err) send(conn, { t: 'error', e: err, dev: msg.dev });
         return;
@@ -379,7 +423,8 @@ export function createRelay({
         return;
       case 'mbox_get': {
         if (conn.role !== 'device') return closeConn(conn, CLOSE.protocol, 'unknown_type');
-        mbPrune();
+        const k = mbKey(conn.boxId, conn.devId);
+        if (mailboxes.has(k)) mbPruneOne(k, mailboxes.get(k));
         const m = mbGet(conn.boxId, conn.devId, false);
         const items = m ? [...(m.latest ? [{ ...m.latest, slot: 'latest' }] : []), ...m.items] : [];
         send(conn, { t: 'mbox', items: items.map(({ id, ts, d, slot }) => ({ id, ts, d, ...(slot ? { slot } : {}) })) });
@@ -391,7 +436,7 @@ export function createRelay({
         if (!m) return;
         const ids = new Set(msg.ids.map(String));
         for (let i = m.items.length - 1; i >= 0; i--) if (ids.has(m.items[i].id)) mbDropItem(m, i);
-        if (!m.latest && !m.items.length) mailboxes.delete(mbKey(conn.boxId, conn.devId));
+        if (!m.latest && !m.items.length) mbClear(conn.boxId, conn.devId);
         return;
       }
       case 'ping':
