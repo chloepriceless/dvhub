@@ -28,6 +28,12 @@ dvhub/docs/
 # host-gebaute Artefakte einschleppen.
 dvhub/node_modules/
 
+# Laufzeit-Geheimnisse, falls ohne DV_DATA_DIR im Quellordner entstanden
+# (Handy-App: privater Schlüssel der Box).
+dvhub/mobile-link.json
+dvhub/mobile-link.json.tmp-*
+dvhub/license_state.json
+
 # ACHTUNG: services/python-bridge/ darf NICHT ausgeschlossen werden.
 # server.js importiert services/forecast/index.js statisch, das wiederum
 # ../python-bridge/index.js statisch importiert — fehlt das Verzeichnis,

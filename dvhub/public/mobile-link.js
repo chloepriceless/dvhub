@@ -111,13 +111,20 @@
     }
   }
 
+  // Jede Abfrage bekommt eine Nummer; „Handy koppeln“ zählt hoch. Eine ältere
+  // Antwort (noch ohne die neue Kopplung) darf den QR-Code nicht löschen (Codex R7).
+  let pollGen = 0;
+
   async function refresh() {
+    const gen = pollGen;
     try {
       const res = await apiFetch('/api/mobile-link/status');
+      if (gen !== pollGen) return;
       // Auch nach 429/5xx weiter nachfragen — sonst bleibt eine laufende
       // Kopplung ohne Freigabe-Knopf stehen (Codex R3).
       if (!res.ok) { schedule(started ? 3000 : 15000); return; }
       const j = await res.json();
+      if (gen !== pollGen) return;
       uiToken = j.uiToken || uiToken;
       if (!formLoaded) {
         $('mobileLinkEnabled').checked = j.enabled === true;
@@ -162,7 +169,9 @@
   async function startPair() {
     setResult('');
     try {
+      pollGen++;
       const r = await post('/api/mobile-link/pair/start', { lanHost: window.location.host });
+      pollGen++;
       started = { qr: r.pairing.qr, qrSvg: r.pairing.qrSvg, approveToken: r.pairing.approveToken };
       refresh();
     } catch (e) { setResult('Fehler: ' + errText(e)); }

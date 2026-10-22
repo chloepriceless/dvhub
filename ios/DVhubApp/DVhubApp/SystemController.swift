@@ -133,6 +133,10 @@ final class SystemController {
                 lastError = userMessage(for: error)
             }
             guard let conn else {
+                // Inzwischen gestoppt (Hintergrund, Anlagenwechsel): nichts mehr
+                // melden — sonst überschreibt ein später Fehlschlag den Zustand
+                // einer neuen, funktionierenden Verbindung (Codex R7).
+                if Task.isCancelled { return }
                 state = .offline(lastError)
                 try? await Task.sleep(nanoseconds: backoff.afterFailure() * 1_000_000_000)
                 continue
@@ -194,7 +198,7 @@ final class SystemController {
                     }
                 }
             case .closed(let err):
-                if let err { state = .offline(userMessage(for: err)) }
+                if let err, !Task.isCancelled { state = .offline(userMessage(for: err)) }
                 return
             }
         }
