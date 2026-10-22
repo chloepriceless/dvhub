@@ -152,8 +152,9 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
    * Hauptanlage wegen „below_hard_floor“ auf 0 setzen wuerde. Liefert den
    * Sollwert, der stattdessen durchgehen darf, oder null (= Boden haelt).
    */
-  function onFloorHold({ target, requested, source }) {
-    if (target !== 'gridSetpointW' || !isHandoffRequest(source, requested)) return null;
+  function onFloorHold({ target, requested, original = requested, source }) {
+    if (target !== 'gridSetpointW' || !finite(requested) || Number(requested) >= 0) return null;
+    if (!isHandoffRequest(source, original)) return null;
     const cfg = getCfg() || {};
     const why = blocker(cfg);
     if (why) return null;
@@ -252,7 +253,9 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       if (!finite(saved)) { finish(); return; }
       const floorPct = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
       const soc = state.victron?.soc;
-      const aboveFloor = fieldFresh('soc', cfg) && finite(soc) && Number(soc) > floorPct + RESTORE_HYSTERESIS_PCT;
+      // Schwelle immer zwischen Boden und 100 % (Boden bis 99 % erlaubt; Codex Runde 5).
+      const restoreAbovePct = Math.min(floorPct + RESTORE_HYSTERESIS_PCT, (floorPct + 100) / 2);
+      const aboveFloor = fieldFresh('soc', cfg) && finite(soc) && Number(soc) > restoreAbovePct;
       if (aboveFloor) {
         // Fertig erst, wenn die GX den alten Wert NACH dem Zurueckschreiben
         // meldet — sonst bliebe Akku 1 bei verlorenem Befehl gesperrt und die

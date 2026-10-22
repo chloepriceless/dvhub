@@ -780,6 +780,10 @@ export function createScheduleEvaluator(ctx) {
     // Der T-0075-Entlade-Boden weiter unten bleibt wirksam: bei unbekanntem,
     // veraltetem oder eingefrorenem SoC bzw. SoC <= hardFloor wird der negative
     // Wert auf 0 gehalten — der Boden kann den Akku also nicht leerfahren.
+    // Angefragter Wert VOR dem Einspeise-Puffer: Ob Akku 2 am harten Boden
+    // uebernehmen darf, entscheidet die geplante Einspeisung, nicht der Puffer
+    // (Codex 22.10., Runde 5).
+    const requestedBeforeBuffer = Number(value);
     if (target === 'gridSetpointW') {
       const floorW = exportBufferFloorW(cfg);
       const eligible = floorW !== null
@@ -895,7 +899,7 @@ export function createScheduleEvaluator(ctx) {
         // Anlage die Einspeisung uebernehmen — Akku 1 ist dann per 2704 = 0
         // gesperrt (floor-handoff.js); sonst haelt der Boden wie immer.
         const handoffW = reason === 'below_hard_floor'
-          ? floorHandoff.onFloorHold({ target, requested: Number(value), source })
+          ? floorHandoff.onFloorHold({ target, requested: Number(value), original: requestedBeforeBuffer, source })
           : null;
         if (handoffW != null) {
           value = handoffW;

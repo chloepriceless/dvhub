@@ -152,6 +152,10 @@ export function createMultiGx(ctx, deps = {}) {
     const inverterW = getPowerLimits(cfg).limits.inverterMaxPowerW;
     const limit = (w) => (w > 0 ? Math.min(w, inverterW || w) : inverterW || 0);
     if (excess > 0) {
+      // Akku 1 gesperrt, laedt aber: das Netz bleibt nicht wegen fehlender
+      // Leistung ueber dem Sollwert, sondern weil eine Einspeisegrenze greift —
+      // mehr aus Akku 2 ginge nur in Akku 1 (Codex Runde 5).
+      if (mainBlocked && primaryBatteryW > 100) return 0;
       const floor = finite(v.minSocPct) ? Number(v.minSocPct) : Number(cfg.optimizer?.hardFloorSocPct ?? 5);
       const primaryEmpty = mainBlocked || (finite(v.soc) && Number(v.soc) <= floor + 1);
       const maxDis = limit(Number(cfg.optimizer?.maxDischargeW) || 0);

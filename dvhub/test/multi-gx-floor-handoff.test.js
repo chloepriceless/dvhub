@@ -350,6 +350,27 @@ test('Codex R4: nur geplante Akku-Einspeisung ab 1 kW — kein DC-PV-Export, Puf
   }
 });
 
+// --- Codex-Gegenpruefung 22.10.2026, Runde 5 ---
+
+test('Codex R5: harter Boden 99 % — Zurueckschreiben bleibt erreichbar', async () => {
+  const w = makeWorld({ mainSoc: 99 });
+  w.cfg.optimizer.hardFloorSocPct = 99;
+  request(w); await w.handoff.maintain(w.apply);
+  w.state.victron.maxDischargeW = 0; w.advance(5000);
+  assert.equal(request(w), -3000);
+  w.cfg.multiGx.exportHandoffAtFloor = false;
+  w.state.victron.soc = 100; w.advance(5000);
+  await w.handoff.maintain(w.apply);
+  w.advance(5000); await w.handoff.maintain(w.apply);
+  assert.equal(w.state.multiGxHandoff.phase, 'off');
+});
+
+test('Codex R5: Puffer macht aus 0 W keine Uebergabe', () => {
+  const w = makeWorld();
+  assert.equal(w.handoff.onFloorHold({ target: 'gridSetpointW', requested: -1500, original: 0, source: 'rule:eos' }), null);
+  assert.equal(w.state.multiGxHandoff.phase, 'off');
+});
+
 // --- Einbindung in den Entlade-Boden (schedule-eval applyControlTarget) ---
 
 function evaluatorWorld({ option = true, soc = 4, socFresh = true } = {}) {
@@ -416,6 +437,15 @@ test('Codex R4: Not-Halt — Zurueckschreiben der gesicherten Entladeleistung ge
   assert.equal(other.blocked, true, 'nur maxDischargeW');
 });
 
+test('Codex R5: Einspeise-Puffer -1500 W macht aus einer 0-W-Regel keine Uebergabe (echter Evaluator)', async () => {
+  const w = evaluatorWorld();
+  w.cfg.schedule.defaultGridSetpointW = -1500;
+  await w.ev.applyControlTarget('gridSetpointW', 0, 'rule:eigenverbrauch');
+  await w.ev.floorHandoff.maintain(w.ev.applyControlTarget);
+  assert.equal(w.state.multiGxHandoff.phase, 'off');
+  assert.ok(!w.writes.some((x) => x.target === 'maxDischargeW'));
+});
+
 test('Entlade-Boden mit Schalter, aber Ladestand veraltet: Boden haelt, keine Sperre', async () => {
   const w = evaluatorWorld({ socFresh: false });
   await w.ev.applyControlTarget('gridSetpointW', -3000, 'rule:eos');
@@ -459,6 +489,29 @@ test('zweite Anlage: Akku 1 gesperrt → sie traegt den ganzen Einspeisebedarf',
   state.multiGxHandoff = { phase: 'off', mainDischargeBlocked: false };
   for (let i = 0; i < 8; i++) { t += 5000; await mgx.tick(); }
   assert.ok(state.multiGx.desiredBatteryW > -3500, `ohne Sperre kein voller Bedarf (${state.multiGx.desiredBatteryW})`);
+});
+
+test('Codex R5: Einspeisegrenze greift, Akku 1 gesperrt laedt → Akku 2 entlaedt nicht in Akku 1', async () => {
+  const regs = { 843: 80, 842: 0, 2901: 100, 820: 0, 821: 0, 822: 0 };
+  const transport = {
+    async mbRequest(req) { return Array.from({ length: req.quantity || 1 }, (_, i) => regs[req.address + i] ?? 0); },
+    async mbWriteMultiple() { return {}; }
+  };
+  const cfg = {
+    updateChannel: 'dev', gridPositiveMeans: 'grid_import',
+    optimizer: { batteryCapacityWh: 10000, maxSocPct: 100, maxDischargeW: 5000 },
+    multiGx: { enabled: true, host: 'x', port: 502, unitId: 100, batteryCapacityWh: 10000, maxChargeW: 10000, maxDischargeW: 10000, minSocPct: 10, rampWPerS: 5000, deadbandW: 0 }
+  };
+  let t = 0;
+  // Sollwert −10 kW, Netz exportiert nur 6 kW (Grenze), Akku 1 laedt 3 kW
+  const state = {
+    victron: { soc: 4, batteryPowerW: 3000, minSocPct: 0, errors: {}, gridSetpointW: -10000, fieldUpdatedAt: {} },
+    meter: { ok: true, grid_total_w: -6000 }, ctrl: {},
+    multiGxHandoff: { phase: 'active', mainDischargeBlocked: true }
+  };
+  const mgx = createMultiGx({ getCfg: () => cfg, state, pushLog: () => {} }, { transport, now: () => t });
+  for (let i = 0; i < 4; i++) { t += 5000; await mgx.tick(); }
+  assert.ok(state.multiGx.desiredBatteryW >= 0, `kein Entladen in Akku 1 (${state.multiGx.desiredBatteryW})`);
 });
 
 test('Poller: bei MQTT gilt der Zeitstempel der Nachricht, bei Modbus der Poll', async () => {
