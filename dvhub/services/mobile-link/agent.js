@@ -817,6 +817,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
   let eventTimer = null;
   let started = false;
   let remoteUrl = null;
+  let announcedRelay; // undefined = noch nichts verkündet (Start)
 
   function reconcile() {
     if (!started) return;
@@ -842,6 +843,14 @@ export function createMobileLink(ctx = {}, deps = {}) {
         return boxSide;
       }, { reconnect: true });
     }
+    // Relay-Adresse geändert oder Relay aus: verbundenen Handys die neue
+    // Adresse mitteilen, BEVOR die alte Verbindung getrennt wird — sonst warten
+    // Handys, die nur über das alte Relay hängen, dort für immer (Codex R6).
+    const announced = s.useRelay ? s.relayUrl : null;
+    if (announcedRelay !== undefined && announced !== announcedRelay) {
+      for (const peer of [...sessions]) peer.send({ t: 'relay', relay: announced });
+    }
+    announcedRelay = announced;
     const wantRemote = s.useRelay && !!s.relayUrl && (devices().length > 0 || pairingActive());
     if (!wantRemote || remoteUrl !== s.relayUrl) { remoteLink?.stop(); remoteLink = null; remoteUrl = null; }
     if (wantRemote && !remoteLink) {

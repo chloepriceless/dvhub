@@ -9,6 +9,8 @@ struct HistoryView: View {
     @State private var width: CGFloat = 0
     @State private var day: Day = .today
     @State private var points: [SeriesPoint] = []
+    /// Tag, zu dem `points` gehören — nie die Werte eines anderen Tags zeigen (Codex R6).
+    @State private var pointsDay: Day?
     @State private var loading = false
     @State private var error: String?
 
@@ -99,9 +101,12 @@ struct HistoryView: View {
 
     private func load() async {
         guard controller.isOnline else {
+            if pointsDay != day { points = []; pointsDay = nil }
             if points.isEmpty { error = "Der Verlauf braucht eine Verbindung zur Anlage." }
             return
         }
+        // Anderer Tag gewählt: alte Werte sofort weg, nicht unter dem neuen Tag zeigen.
+        if pointsDay != day { points = []; pointsDay = nil }
         loading = true
         defer { loading = false }
         let cal = Calendar.current
@@ -120,6 +125,8 @@ struct HistoryView: View {
             // weiter, auch wenn SwiftUI den Task abbricht): Antwort verwerfen.
             guard !Task.isCancelled, requested == day else { return }
             guard r.status == 200, let rows = r.body["data"]?.array else {
+                points = []
+                pointsDay = nil
                 switch r.status {
                 case 503: error = "Die Anlage hat keine Messwert-Datenbank."
                 case 413: error = "Der Verlauf ist für die Übertragung zu groß (Messwert-Datenbank ohne Zusammenfassung)."
@@ -131,9 +138,12 @@ struct HistoryView: View {
                 guard let key = row["key"]?.string, let d = ISO.parse(row["ts"]?.string), let v = row["value"]?.double else { return nil }
                 return SeriesPoint(key: key, date: d, value: v)
             }
+            pointsDay = requested
             error = points.isEmpty ? "Für diesen Tag liegen keine Messwerte vor." : nil
         } catch {
             guard !Task.isCancelled, requested == day else { return }
+            points = []
+            pointsDay = nil
             self.error = userMessage(for: error)
         }
     }

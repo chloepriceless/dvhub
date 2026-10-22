@@ -183,8 +183,16 @@ final class SystemController {
             case .boxOffline:
                 state = .boxOffline(kind)
                 await loadMailbox(conn)
-            case .message:
-                break
+            case .message(let m):
+                // Die Box hat ihre Relay-Adresse geändert (oder das Relay
+                // ausgeschaltet): übernehmen, bevor sie die alte Verbindung trennt.
+                if m["t"]?.string == "relay" {
+                    var updated = credentials
+                    if updated.apply(welcome: ["relay": m["relay"] ?? .null]) {
+                        credentials = updated
+                        onCredentialsChanged?(credentials)
+                    }
+                }
             case .closed(let err):
                 if let err { state = .offline(userMessage(for: err)) }
                 return

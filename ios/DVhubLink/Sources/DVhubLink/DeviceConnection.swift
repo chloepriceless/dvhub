@@ -40,6 +40,10 @@ public actor DeviceConnection {
     private var session: LinkSession?
     private var welcome: JSONValue?
     private var readyWaiter: CheckedContinuation<JSONValue, Error>?
+    /// Nummer des aktuellen Wartenden — ein abgelaufener Timer eines ersetzten
+    /// Handshakes bzw. Briefkasten-Abrufs trifft so nie den neuen (Codex R6).
+    private var readyGen = 0
+    private var mailboxGen = 0
     private var pending: [String: CheckedContinuation<LinkResponse, Error>] = [:]
     private var mailboxWaiter: CheckedContinuation<JSONValue, Error>?
     private var nextId = 1
@@ -175,9 +179,11 @@ public actor DeviceConnection {
         let hs = try DeviceHandshake(boxPublicRaw: boxPublicRaw, signer: signer)
         handshake = hs
         let hello: JSONValue = ["t": "data", "d": .string(Base64URL.encode(try hs.hello().encoded()))]
+        readyGen += 1
+        let gen = readyGen
         let timer = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-            await self?.failReady(LinkError.timeout)
+            do { try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)) } catch { return }
+            await self?.failReady(LinkError.timeout, gen: gen)
         }
         defer { timer.cancel() }
         // Erst warten, dann senden — sonst könnte die Begrüßung vor dem Warten ankommen.
@@ -188,7 +194,8 @@ public actor DeviceConnection {
         }
     }
 
-    private func failReady(_ e: Error) {
+    private func failReady(_ e: Error, gen: Int? = nil) {
+        if let gen, gen != readyGen { return }
         readyWaiter?.resume(throwing: e)
         readyWaiter = nil
     }
@@ -288,7 +295,7 @@ public actor DeviceConnection {
         var msg: [String: JSONValue] = ["t": "req", "id": .string(id), "m": .string(method), "p": .string(path)]
         if let body { msg["b"] = body }
         let timer = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            do { try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)) } catch { return }
             await self?.timeoutRequest(id)
         }
         defer { timer.cancel() }
@@ -308,9 +315,11 @@ public actor DeviceConnection {
 
     /// Briefkasten am Relay: letzter Stand und Ereignisse, entschlüsselt.
     public func fetchMailbox(timeout: TimeInterval = 10) async throws -> [MailboxItem] {
+        mailboxGen += 1
+        let gen = mailboxGen
         let timer = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-            await self?.failMailbox(LinkError.timeout)
+            do { try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)) } catch { return }
+            await self?.failMailbox(LinkError.timeout, gen: gen)
         }
         defer { timer.cancel() }
         let res: JSONValue = try await withCheckedThrowingContinuation { cont in
@@ -327,7 +336,8 @@ public actor DeviceConnection {
         }
     }
 
-    private func failMailbox(_ e: Error) {
+    private func failMailbox(_ e: Error, gen: Int? = nil) {
+        if let gen, gen != mailboxGen { return }
         mailboxWaiter?.resume(throwing: e)
         mailboxWaiter = nil
     }

@@ -145,6 +145,7 @@ Box → Gerät zuerst: `{"t":"welcome","box":{"id","name","version"},"perms":["r
 | `{"t":"req","id":"1","m":"GET","p":"/api/status"}` | `{"t":"res","id":"1","s":200,"b":<JSON oder Text>}` |
 | `{"t":"req","id":"2","m":"POST","p":"/api/control/stop","b":{}}` | wie oben; ohne Recht `control` → 403 |
 | `{"t":"ping","id":…}` | `{"t":"pong","id":…}` |
+| — | `{"t":"relay","relay":"wss://…"|null}` wenn in DVhub die Relay-Adresse geändert oder das Relay ausgeschaltet wurde — speichern (wie `relay` im `welcome`); danach trennt die Box die alte Relay-Verbindung |
 
 Erlaubte Pfade: `dvhub/services/mobile-link/permissions.js`. Passt eine Antwort
 verschlüsselt nicht in einen Relay-Rahmen (1 MiB, also gut 750 KiB JSON), kommt

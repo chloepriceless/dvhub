@@ -885,6 +885,19 @@ describe('mobile-link Ende zu Ende', () => {
     tgt.agent.stop();
   });
 
+  test('Relay-Adresse geändert: verbundene Handys erfahren sie vor dem Trennen (Codex R6)', async () => {
+    const ctx = await setup();
+    const { phone, creds } = await pairVia(ctx, null);
+    const s = await connectDevice({ creds, signer: phone, url: ctx.relayUrl });
+    const msgs = [];
+    s.on('message', (m) => msgs.push(m));
+    ctx.setCfg({ httpPort: 18099, mobileLink: { enabled: true, relayUrl: 'wss://relay.example.org/v1/ws' } });
+    ctx.agent.reconcile();
+    await until(() => msgs.find((m) => m.t === 'relay'));
+    assert.equal(msgs.find((m) => m.t === 'relay').relay, 'wss://relay.example.org/v1/ws');
+    s.close();
+  });
+
   test('QR-Code gilt genau einmal; abgelehnte Anfrage koppelt nicht', async () => {
     const ctx = await setup();
     const p = ctx.agent.startPairing();

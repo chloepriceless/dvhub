@@ -113,7 +113,8 @@ struct RootView: View {
                     Button { showPairing = true } label: { Label("Anlage koppeln", systemImage: "qrcode.viewfinder") }
                 }
                 SwiftUI.Section("Bereiche") {
-                    ForEach(sections.filter { $0 != .systems }) { s in
+                    // „Anlagen“ auch hier — nur dort lässt sich eine Anlage entfernen (Codex R6).
+                    ForEach(sections) { s in
                         Button { section = s } label: {
                             Label(s.title, systemImage: s.icon)
                                 .fontWeight(section == s ? .semibold : .regular)
@@ -126,7 +127,7 @@ struct RootView: View {
             }
             .navigationTitle("DVhub")
         } detail: {
-            NavigationStack { content(for: section == .systems ? .overview : section) }
+            NavigationStack { content(for: section) }
         }
     }
 
