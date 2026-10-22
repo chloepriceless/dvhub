@@ -27,6 +27,7 @@ function makeWorld({ option = true, mainSoc = 4, mainMaxDischargeW = -1, followe
     updateChannel: 'dev',
     victron: { telemetryMaxAgeMs: 90000 },
     optimizer: { hardFloorSocPct: 5 },
+    schedule: { evaluateMs: 5000 },           // Prod-Vorgabe
     controlWrite: { maxDischargeW: { enabled: true } },
     multiGx: { enabled: true, host: '192.168.1.20', minSocPct: 10, exportHandoffAtFloor: option }
   };
@@ -43,6 +44,8 @@ function makeWorld({ option = true, mainSoc = 4, mainMaxDischargeW = -1, followe
   async function apply(target, value, source) {
     let v = value;
     if (target === 'maxDischargeW' && v !== 0 && Number(state.victron.soc) <= cfg.optimizer.hardFloorSocPct) v = 0;
+    // wie der echte Schreibpfad: unveraenderter Wert ohne Nachfuehren → uebersprungen
+    if (state.schedule.lastWrite[target] && Number(state.schedule.lastWrite[target].value) === v) return { ok: true, skipped: true };
     applied.push({ target, value: v, source });
     state.schedule.lastWrite[target] = { value: v, at: t };
     return { ok: true };
@@ -208,6 +211,54 @@ test('Profil Victron: 2704 wird mit 10-W-Skala und Sonderwerten zurueckgelesen',
   assert.deepEqual(point.rawSentinelMap, write.rawSentinelMap);
 });
 
+// --- Codex-Gegenpruefung 22.10.2026 ---
+
+test('Codex P1: Ruecklesen von vor dem Schreiben bestaetigt die Sperre nicht', async () => {
+  const w = makeWorld({ mainMaxDischargeW: 0 });
+  request(w);
+  await w.handoff.maintain(w.apply);          // schreibt 0 zum Zeitpunkt t
+  assert.equal(request(w), null, 'Messwert stammt nicht von nach dem Schreiben');
+  w.advance(5000);                            // neuer Poll nach dem Schreiben
+  assert.equal(request(w), -3000);
+});
+
+test('Codex P2: Sperre an der GX geaendert → DVhub schreibt die 0 wirklich neu', async () => {
+  const w = makeWorld();
+  request(w); await w.handoff.maintain(w.apply);
+  w.state.victron.maxDischargeW = 0; w.advance(5000);
+  assert.equal(request(w), -3000);
+  // jemand stellt an der GX 5000 W ein
+  w.state.victron.maxDischargeW = 5000; w.advance(5000);
+  assert.equal(request(w), null, 'Boden haelt wieder');
+  w.advance(10000);
+  await w.handoff.maintain(w.apply);
+  assert.equal(w.applied.filter((a) => a.target === 'maxDischargeW' && a.value === 0).length, 2, 'zweites echtes Schreiben');
+  w.state.victron.maxDischargeW = 0; w.advance(5000);
+  assert.equal(request(w), -3000);
+});
+
+test('Codex P2: Wert, den DVhub nicht zurueckschreiben kann (> 30 kW), wird nicht gesperrt', async () => {
+  const w = makeWorld({ mainMaxDischargeW: 50000 });
+  assert.equal(request(w), null);
+  await w.handoff.maintain(w.apply);
+  assert.equal(w.state.multiGxHandoff.phase, 'off');
+  assert.equal(w.applied.length, 0);
+  assert.equal(w.store.get(), null);
+  assert.ok(w.logs.some(([e, d]) => e === 'multi_gx_handoff_skipped' && d.reason === 'saved_value_not_restorable'));
+});
+
+test('Codex P2: Auswertung alle 30 s — die Uebergabe startet trotzdem', async () => {
+  const w = makeWorld();
+  w.cfg.schedule = { evaluateMs: 30000 };
+  for (let i = 0; i < 3; i++) {
+    w.advance(30000);
+    await w.handoff.maintain(w.apply);        // wie evaluateSchedule: maintain vor der Anfrage
+    if (i === 1) w.state.victron.maxDischargeW = 0;
+    request(w);
+  }
+  assert.equal(w.state.multiGxHandoff.phase, 'active');
+});
+
 // --- Einbindung in den Entlade-Boden (schedule-eval applyControlTarget) ---
 
 function evaluatorWorld({ option = true, soc = 4, socFresh = true } = {}) {
@@ -258,7 +309,7 @@ test('Entlade-Boden mit Schalter: erst Sperre, dann Einspeisung aus Akku 2', asy
   await w.ev.floorHandoff.maintain(w.ev.applyControlTarget);
   assert.deepEqual(w.writes.at(-1), { target: 'maxDischargeW', value: 0 }, 'Akku 1 gesperrt');
   w.state.victron.maxDischargeW = 0;
-  w.state.victron.fieldUpdatedAt.maxDischargeW = Date.now();
+  w.state.victron.fieldUpdatedAt.maxDischargeW = Date.now() + 1000; // Poll nach dem Schreiben
   await w.ev.applyControlTarget('gridSetpointW', -3000, 'rule:eos');
   assert.deepEqual(w.writes.at(-1), { target: 'gridSetpointW', value: -3000 });
 });
