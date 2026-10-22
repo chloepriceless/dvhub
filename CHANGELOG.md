@@ -25,7 +25,9 @@ verweist hierher.
   harten Boden, sperrt DVhub sein Entladen (ESS „max. Entladeleistung“ 0, alter Wert wird gesichert und übersteht
   einen Neustart) und lässt die geplante Einspeisung aus Akku 2 laufen, statt sie ganz zu streichen. Der alte Wert
   kommt zurück, sobald Akku 1 drei Punkte über dem Boden liegt; fällt Akku 2 aus, bleibt Akku 1 gesperrt und das
-  Haus bezieht aus dem Netz. Dafür liest das Victron-Profil die max. Entladeleistung (Register 2704) jetzt mit.
+  Haus bezieht aus dem Netz. Gilt für geplante Einspeisung ab 1 kW (Zeitplan, EOS, Handvorgabe), nicht für den
+  DC-PV-Export; steht die max. Entladeleistung an der GX schon auf 0, bleibt alles wie bisher. Dafür liest das
+  Victron-Profil die max. Entladeleistung (Register 2704) jetzt mit.
 
 ## [1.0.8] - 2026-10-21
 

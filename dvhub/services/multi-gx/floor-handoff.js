@@ -45,6 +45,17 @@ const RESTORE_HYSTERESIS_PCT = 3;
 
 const finite = (v) => v != null && v !== '' && Number.isFinite(Number(v));
 
+// Nur echte, geplante Akku-Einspeisung (Codex Runde 4): Zeitplan-/EOS-Regeln und
+// Handvorgaben, ab derselben Schwelle, ab der schedule-eval eine erzwungene
+// Netzentladung erkennt (FORCED_EXPORT_THRESHOLD_W). Nicht: DC-PV-Export (soll
+// PV einspeisen, nicht Akku 2; schreibt zudem nur alle 60 s), Standard-Puffer,
+// Schutz bei negativem Preis, Mindestverkaufspreis.
+const HANDOFF_SOURCE = /^(rule:|manual_override$|manual_override_persistent$|api_manual_write$)/;
+export const HANDOFF_MIN_EXPORT_W = 1000;
+export function isHandoffRequest(source, requestedW) {
+  return HANDOFF_SOURCE.test(String(source || '')) && finite(requestedW) && Number(requestedW) <= -HANDOFF_MIN_EXPORT_W;
+}
+
 /**
  * @param {object} deps
  * @param {() => object} deps.getCfg
@@ -141,8 +152,8 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
    * Hauptanlage wegen „below_hard_floor“ auf 0 setzen wuerde. Liefert den
    * Sollwert, der stattdessen durchgehen darf, oder null (= Boden haelt).
    */
-  function onFloorHold({ target, requested }) {
-    if (target !== 'gridSetpointW' || !finite(requested) || Number(requested) >= 0) return null;
+  function onFloorHold({ target, requested, source }) {
+    if (target !== 'gridSetpointW' || !isHandoffRequest(source, requested)) return null;
     const cfg = getCfg() || {};
     const why = blocker(cfg);
     if (why) return null;
@@ -161,9 +172,15 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       // kommt spaeter -1 (raw 32767) zurueck. Gesperrt gilt erst nach DVhubs
       // eigenem Schreiben von 0 (zeroWritten).
       // Ueber MQTT kommt der Wert in Watt, 0 heisst dort eindeutig gesperrt und
-      // bleibt 0 (Codex Runde 2). Ueber Modbus ist eine gelesene 0 mehrdeutig
-      // (meldet die GX „unbegrenzt“ -1 bei Skala 0,1 als 0? ungeprueft) → -1.
-      const snapshot = current > 0 || (current === 0 && transportType() === 'mqtt') ? current : -1;
+      // bleibt 0 (Codex Runde 2). Ueber Modbus ist eine gelesene 0 mehrdeutig:
+      // bewusste Sperre oder „unbegrenzt“ (-1 bei Skala 0,1, ungeprueft). Dann
+      // keine Uebergabe — DVhub wuerde sonst womoeglich eine Sperre des Betreibers
+      // aufheben (Codex Runde 4).
+      if (current === 0 && transportType() !== 'mqtt') {
+        if (!unknownLogged) { unknownLogged = true; pushLog('multi_gx_handoff_skipped', { reason: 'max_discharge_zero_ambiguous' }, 'warn'); }
+        return null;
+      }
+      const snapshot = current >= 0 ? current : -1;
       // Nur sperren, was DVhub auch zurueckschreiben kann (Grenzpruefung des
       // Schreibpfads, z. B. > 30 kW an der GX eingestellt; Codex 22.10.).
       const bounds = controlWriteBoundsError('maxDischargeW', snapshot);

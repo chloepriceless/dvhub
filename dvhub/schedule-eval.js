@@ -668,7 +668,12 @@ export function createScheduleEvaluator(ctx) {
     // state completely untouched. Log once per (target,source) while paused
     // (eval ticks every ~15 s — unthrottled this would flood the ring buffer);
     // the throttle map is cleared on resume.
-    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source)) {
+    // Ausnahme, eng: die Einspeisung aus Akku 2 schreibt die vor der Sperre
+    // gesicherte max. Entladeleistung zurueck — das nimmt nur DVhubs eigenen
+    // Eingriff zurueck und muss auch waehrend des Not-Halts gehen, sonst bliebe
+    // Akku 1 gesperrt (Codex 22.10., Runde 4). Nur dieses Ziel, nur diese Quelle.
+    const handoffRestore = source === 'multi_gx_handoff_restore' && target === 'maxDischargeW';
+    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source) && !handoffRestore) {
       const blockKey = `${target}|${source}`;
       if (!state.ctrl._stopBlockLogged) state.ctrl._stopBlockLogged = {};
       if (!state.ctrl._stopBlockLogged[blockKey]) {
@@ -890,7 +895,7 @@ export function createScheduleEvaluator(ctx) {
         // Anlage die Einspeisung uebernehmen — Akku 1 ist dann per 2704 = 0
         // gesperrt (floor-handoff.js); sonst haelt der Boden wie immer.
         const handoffW = reason === 'below_hard_floor'
-          ? floorHandoff.onFloorHold({ target, requested: Number(value) })
+          ? floorHandoff.onFloorHold({ target, requested: Number(value), source })
           : null;
         if (handoffW != null) {
           value = handoffW;

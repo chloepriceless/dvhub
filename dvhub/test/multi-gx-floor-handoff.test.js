@@ -60,7 +60,7 @@ function makeWorld({ option = true, mainSoc = 4, mainMaxDischargeW = -1, followe
   return { cfg, state, logs, applied, handoff, apply, advance, store, now: () => t };
 }
 
-const request = (w, value = -3000) => w.handoff.onFloorHold({ target: 'gridSetpointW', requested: value });
+const request = (w, value = -3000, source = 'rule:eos') => w.handoff.onFloorHold({ target: 'gridSetpointW', requested: value, source });
 
 test('Schalter aus: der Boden haelt, nichts wird gesperrt', async () => {
   const w = makeWorld({ option: false });
@@ -165,25 +165,14 @@ test('Neustart waehrend der Sperre: gesicherter Wert wird zurueckgeschrieben', a
   assert.equal(store.get(), null);
 });
 
-test('2704 liest schon 0: nicht als gesperrt werten — DVhub schreibt die 0 selbst, zurueck kommt unbegrenzt', async () => {
-  // Ob die GX „unbegrenzt“ als 0 meldet, ist ungeprueft; eine gelesene 0 darf
-  // die Einspeisung deshalb nicht sofort freigeben.
+test('Modbus: 2704 liest 0 → mehrdeutig, keine Uebergabe (Sperre des Betreibers bleibt)', async () => {
   const w = makeWorld({ mainMaxDischargeW: 0 });
   assert.equal(request(w), null);
-  assert.equal(w.store.get().savedMaxDischargeW, -1);
-  w.advance(5000);
-  assert.equal(request(w), null, 'ohne eigenes Schreiben kein Durchlassen');
-  await w.handoff.maintain(w.apply);
-  assert.deepEqual(w.applied, [{ target: 'maxDischargeW', value: 0, source: 'multi_gx_handoff' }]);
-  w.advance(5000);
-  assert.equal(request(w), -3000);
-  w.cfg.multiGx.exportHandoffAtFloor = false;
-  w.state.victron.soc = 20; w.advance(5000);
-  await w.handoff.maintain(w.apply);
-  assert.deepEqual(w.applied.at(-1), { target: 'maxDischargeW', value: -1, source: 'multi_gx_handoff_restore' });
-  w.advance(5000);
   await w.handoff.maintain(w.apply);
   assert.equal(w.state.multiGxHandoff.phase, 'off');
+  assert.equal(w.applied.length, 0);
+  assert.equal(w.store.get(), null);
+  assert.ok(w.logs.some(([e, d]) => e === 'multi_gx_handoff_skipped' && d.reason === 'max_discharge_zero_ambiguous'));
 });
 
 test('Schreiben der Sperre scheitert: kein Durchlassen, neuer Versuch nach 10 s', async () => {
@@ -222,7 +211,7 @@ test('Profil Victron: 2704 wird mit 10-W-Skala und Sonderwerten zurueckgelesen',
 // --- Codex-Gegenpruefung 22.10.2026 ---
 
 test('Codex P1: Ruecklesen von vor dem Schreiben bestaetigt die Sperre nicht', async () => {
-  const w = makeWorld({ mainMaxDischargeW: 0 });
+  const w = makeWorld({ mainMaxDischargeW: 5000 });
   request(w);
   await w.handoff.maintain(w.apply);          // schreibt 0 zum Zeitpunkt t
   assert.equal(request(w), null, 'Messwert stammt nicht von nach dem Schreiben');
@@ -310,7 +299,7 @@ test('Codex R2 P2: ueber MQTT bleibt eine gesetzte Sperre 0 erhalten', () => {
     multiGx: { online: true, socPct: 80, minSocPct: 10, updatedAt: t }, ctrl: {}, schedule: { lastWrite: {} }
   };
   const h = createFloorHandoff({ getCfg: () => cfg, state, now: () => t, store, transportType: () => 'mqtt' });
-  h.onFloorHold({ target: 'gridSetpointW', requested: -3000 });
+  h.onFloorHold({ target: 'gridSetpointW', requested: -3000, source: 'rule:eos' });
   assert.equal(store.get().savedMaxDischargeW, 0);
 });
 
@@ -343,6 +332,22 @@ test('Codex R3 P2: nach Neustart mit gesicherter Sperre gilt Akku 1 fuer die Auf
   assert.equal(w.state.multiGxHandoff.phase, 'restoring');
   assert.equal(w.state.multiGxHandoff.mainDischargeBlocked, true);
   assert.equal(request(w), null, 'Einspeisung erst nach neuem Sperren');
+});
+
+// --- Codex-Gegenpruefung 22.10.2026, Runde 4 ---
+
+test('Codex R4: nur geplante Akku-Einspeisung ab 1 kW — kein DC-PV-Export, Puffer, Preisschutz', () => {
+  for (const [source, value] of [['dc_export_mode', -3000], ['default', -3000], ['negative_price_protection', -3000],
+    ['sell_price_floor', -3000], ['rule:eos', -300], ['manual_override_soc_floor', -3000]]) {
+    const w = makeWorld();
+    assert.equal(request(w, value, source), null, `${source} ${value}`);
+    assert.equal(w.state.multiGxHandoff.phase, 'off', `${source} ${value}`);
+  }
+  for (const source of ['rule:eos', 'manual_override', 'manual_override_persistent', 'api_manual_write']) {
+    const w = makeWorld();
+    request(w, -1000, source);
+    assert.equal(w.state.multiGxHandoff.phase, 'arming', source);
+  }
 });
 
 // --- Einbindung in den Entlade-Boden (schedule-eval applyControlTarget) ---
@@ -398,6 +403,17 @@ test('Entlade-Boden mit Schalter: erst Sperre, dann Einspeisung aus Akku 2', asy
   w.state.victron.fieldUpdatedAt.maxDischargeW = Date.now() + 1000; // Poll nach dem Schreiben
   await w.ev.applyControlTarget('gridSetpointW', -3000, 'rule:eos');
   assert.deepEqual(w.writes.at(-1), { target: 'gridSetpointW', value: -3000 });
+});
+
+test('Codex R4: Not-Halt — Zurueckschreiben der gesicherten Entladeleistung geht durch, sonst nichts', async () => {
+  const w = evaluatorWorld();
+  w.state.ctrl.discretionaryWritesPaused = true;
+  const restore = await w.ev.applyControlTarget('maxDischargeW', -1, 'multi_gx_handoff_restore');
+  assert.equal(restore.ok, true);
+  const lock = await w.ev.applyControlTarget('maxDischargeW', 0, 'multi_gx_handoff');
+  assert.equal(lock.blocked, true, 'Sperren bleibt im Not-Halt blockiert');
+  const other = await w.ev.applyControlTarget('gridSetpointW', -1, 'multi_gx_handoff_restore');
+  assert.equal(other.blocked, true, 'nur maxDischargeW');
 });
 
 test('Entlade-Boden mit Schalter, aber Ladestand veraltet: Boden haelt, keine Sperre', async () => {
