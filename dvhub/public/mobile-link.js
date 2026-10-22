@@ -114,7 +114,9 @@
   async function refresh() {
     try {
       const res = await apiFetch('/api/mobile-link/status');
-      if (!res.ok) return;
+      // Auch nach 429/5xx weiter nachfragen — sonst bleibt eine laufende
+      // Kopplung ohne Freigabe-Knopf stehen (Codex R3).
+      if (!res.ok) { schedule(started ? 3000 : 15000); return; }
       const j = await res.json();
       uiToken = j.uiToken || uiToken;
       if (!formLoaded) {

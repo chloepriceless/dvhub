@@ -130,13 +130,18 @@ struct RootView: View {
     @ViewBuilder
     private func content(for s: Section) -> some View {
         if let c = model.selected {
-            switch s {
-            case .overview: OverviewView(controller: c)
-            case .history: HistoryView(controller: c)
-            case .plan: PlanView(controller: c)
-            case .control: ControlView(controller: c)
-            case .systems: SystemsView(showPairing: $showPairing)
+            // Je Anlage eigene Ansichts-Identität: Verlauf und Plan der vorigen
+            // Anlage dürfen nach dem Wechsel nicht stehen bleiben (Codex R3).
+            Group {
+                switch s {
+                case .overview: OverviewView(controller: c)
+                case .history: HistoryView(controller: c)
+                case .plan: PlanView(controller: c)
+                case .control: ControlView(controller: c)
+                case .systems: SystemsView(showPairing: $showPairing)
+                }
             }
+            .id(c.credentials.boxId)
         } else {
             SystemsView(showPairing: $showPairing)
         }

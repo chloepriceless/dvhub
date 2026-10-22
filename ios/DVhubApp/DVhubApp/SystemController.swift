@@ -46,8 +46,19 @@ final class SystemController {
 
     var canControl: Bool { perms.contains("control") }
     var isOnline: Bool { if case .online = state { return true }; return false }
-    var displayStatus: LiveStatus? { isOnline ? (live ?? mailboxStatus) : (mailboxStatus ?? live) }
-    var displayAt: Date? { isOnline ? (liveAt ?? mailboxAt) : (mailboxAt ?? liveAt) }
+    /// Immer der neueste Stand — Live-Wert oder Briefkasten, je nachdem, was
+    /// jünger ist (nach einem Abbruch nicht auf den älteren Briefkasten zurück).
+    private var preferLive: Bool {
+        guard live != nil else { return false }
+        guard mailboxStatus != nil, let m = mailboxAt else { return true }
+        guard let l = liveAt else { return false }
+        return l >= m
+    }
+    var displayStatus: LiveStatus? { preferLive ? live : (mailboxStatus ?? live) }
+    var displayAt: Date? { preferLive ? liveAt : (mailboxAt ?? liveAt) }
+    /// Jüngstes angenommenes Briefkasten-Ereignis — ältere (vom Relay erneut
+    /// ausgelieferte) werden verworfen.
+    private var newestEventAt: Date?
 
     func start() {
         guard loop == nil else { return }
@@ -128,6 +139,9 @@ final class SystemController {
                 backoff = min(backoff * 2, 30)
                 continue
             }
+            // Während des Verbindungsaufbaus gestoppt (Hintergrund, Anlagenwechsel):
+            // die fertige Verbindung nicht liegen lassen, sondern schließen.
+            if Task.isCancelled { await conn.close(); return }
             backoff = 1
             connection = conn
             await serve(conn)
@@ -206,21 +220,42 @@ final class SystemController {
 
     private func updateFromWelcome(_ welcome: JSONValue, ticket: JSONValue?) {
         boxVersion = welcome["box"]?["version"]?.string
+        var changed = false
         if let name = welcome["box"]?["name"]?.string, name != credentials.boxName {
             credentials.boxName = name
-            onCredentialsChanged?(credentials)
+            changed = true
         }
+        // Die Box meldet ihre aktuelle Relay-Adresse (null = Relay aus). So folgt
+        // eine bestehende Kopplung, wenn das Relay später ein- oder umgestellt wird.
+        if let relayField = welcome["relay"] {
+            let relay = relayField.string
+            if relay != credentials.relay, relay == nil || relay!.hasPrefix("wss://") || relay!.hasPrefix("ws://") {
+                credentials.relay = relay
+                changed = true
+            }
+        }
+        if changed { onCredentialsChanged?(credentials) }
     }
 
     private func loadMailbox(_ conn: DeviceConnection) async {
         guard let items = try? await conn.fetchMailbox() else { return }
-        if let latest = items.first(where: { $0.slot == "latest" }), let s = LiveStatus.from(latest.message["status"] ?? .null) {
+        // Frische nur aus dem verschlüsselten `ts` (das Relay kann alte, gültige
+        // Einträge erneut ausliefern; sein eigener Zeitstempel zählt nicht).
+        if let latest = items.first(where: { $0.slot == "latest" }),
+           let at = ISO.parse(latest.message["ts"]?.string),
+           let s = LiveStatus.from(latest.message["status"] ?? .null),
+           mailboxAt.map({ at > $0 }) ?? true {
             mailboxStatus = s
-            mailboxAt = ISO.parse(latest.message["ts"]?.string) ?? latest.ts
+            mailboxAt = at
         }
         let newEvents = items.filter { $0.slot == nil }
         if !newEvents.isEmpty {
-            events = (newEvents + events).prefix(50).map { $0 }
+            let fresh = newEvents.filter { item in
+                guard let at = ISO.parse(item.message["ts"]?.string) else { return false }
+                return newestEventAt.map { at > $0 } ?? true
+            }
+            if let newest = fresh.compactMap({ ISO.parse($0.message["ts"]?.string) }).max() { newestEventAt = newest }
+            if !fresh.isEmpty { events = (fresh + events).prefix(50).map { $0 } }
             try? await conn.ackMailbox(newEvents.map(\.id))
         }
     }
