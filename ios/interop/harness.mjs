@@ -152,6 +152,9 @@ let lastPairingAt = 0;
 let approveToken = null;
 function newPairing() {
   lastPairingAt = Date.now();
+  // Testläufe koppeln oft: an der Gerätegrenze das älteste Testgerät entfernen.
+  const st = agent.status();
+  if (st.devices.length >= st.maxDevices) agent.removeDevice(st.devices[0].id);
   const p = agent.startPairing({ lanHost: null });
   approveToken = p.approveToken;
   let qr = p.qr;

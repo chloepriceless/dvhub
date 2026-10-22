@@ -742,12 +742,15 @@ export function createMobileLink(ctx = {}, deps = {}) {
 
   let lastEventKey = null;
   function pushMailboxLatest() {
-    if (!remoteLink?.online || !devices().length) return;
+    if (!links().length || !devices().length) return;
     let st;
     try { st = buildStatus(); } catch { return; }
     const ts = new Date(now()).toISOString();
     for (const d of devices()) {
-      remoteLink.send({ t: 'mbox_put', dev: d.id, slot: 'latest', d: sealMailbox(fromB64u(d.mk, 32), d.id, { t: 'latest', ts, status: st }) });
+      // An jedes verbundene Relay — auch das im Heimnetz, sonst sieht eine
+      // App ohne Relay keine Meldungen.
+      const sealed = sealMailbox(fromB64u(d.mk, 32), d.id, { t: 'latest', ts, status: st });
+      for (const l of links()) l.send({ t: 'mbox_put', dev: d.id, slot: 'latest', d: sealed });
     }
     checkEvents(st);
   }
@@ -755,17 +758,18 @@ export function createMobileLink(ctx = {}, deps = {}) {
   // Ereignisse: Alarme und Not-Halt landen zusätzlich als eigener Eintrag,
   // damit die App sie auch nach Stunden noch zeigt. Geprüft alle 10 s.
   function checkEvents(stIn = null) {
-    if (!remoteLink?.online || !devices().length) return;
+    if (!links().length || !devices().length) return;
     let st = stIn;
     if (!st) { try { st = buildStatus(); } catch { return; } }
     const ts = new Date(now()).toISOString();
     const key = `${st.alarmsActive || 0}|${st.alarmsSeverity || 0}|${st.emergencyStop ? 1 : 0}`;
     if (lastEventKey !== null && key !== lastEventKey) {
       for (const d of devices()) {
-        remoteLink.send({ t: 'mbox_put', dev: d.id, d: sealMailbox(fromB64u(d.mk, 32), d.id, {
+        const sealed = sealMailbox(fromB64u(d.mk, 32), d.id, {
           t: 'event', ts, kind: 'state_change',
           alarmsActive: st.alarmsActive || 0, alarmsSeverity: st.alarmsSeverity || 0, emergencyStop: !!st.emergencyStop,
-        }) });
+        });
+        for (const l of links()) l.send({ t: 'mbox_put', dev: d.id, d: sealed });
       }
     }
     lastEventKey = key;

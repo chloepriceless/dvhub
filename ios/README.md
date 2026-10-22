@@ -54,11 +54,20 @@ Ein bezahlter Entwickler-Account ist dafür nicht nötig.
   die App beim Öffnen über den Briefkasten am Relay.
 - Kein TestFlight, höchstens 3 eigene Apps gleichzeitig.
 
+**Exportkontrolle (Verschlüsselung):** Die App bringt eine eigene
+Ende-zu-Ende-Verschlüsselung mit. Deshalb steht `ITSAppUsesNonExemptEncryption`
+bewusst **nicht** in der Info.plist. Beim ersten Hochladen nach App Store
+Connect/TestFlight fragt Apple die Einstufung ab; die Antwort ist dann dort zu
+geben (ggf. mit Selbsteinstufung nach US-Exportrecht). Beim Aufspielen über
+Xcode spielt das keine Rolle.
+
 ## Koppeln
 
 1. DVhub-Oberfläche → Einstellungen → „Handy-App“ → „Handy koppeln“.
-2. QR-Code mit der Kamera-App oder in der App unter „Anlage koppeln“ scannen.
-   Ohne Kamera (Simulator) den Text des QR-Codes einfügen.
+2. QR-Code in der App unter „Anlage koppeln“ scannen; dann geht es sofort los.
+   Kommt der Code über die Kamera-App oder einen Link (`dvhub://…`), zeigt die
+   App erst Name, Kennung und Wege (Heimnetz, Relay) der Anlage und koppelt
+   erst nach „Koppeln“. Ohne Kamera (Simulator) den Text einfügen.
 3. Die App zeigt „Warte auf Freigabe in DVhub …“ und einen **Vergleichscode**.
    In der DVhub-Oberfläche muss derselbe Code stehen; nur dann freigeben und
    „Nur anzeigen“ oder „Anzeigen und steuern“ wählen.
@@ -74,8 +83,10 @@ Face ID oder dem Gerätecode.
 ## Bedienung
 
 - **Übersicht:** PV, Akku (+ = Laden), Netz (Bezug/Einspeisung), Haus, Ertrag
-  heute und Zustand (Alarme, Not-Halt, Abregelung). Ist die Anlage nicht
-  erreichbar, zeigt die App den letzten Stand aus dem Briefkasten mit Uhrzeit.
+  heute und Zustand (Alarme, Not-Halt, Abregelung), dazu „Meldungen“ aus dem
+  Briefkasten (Alarm-/Not-Halt-Wechsel; auf dem Handy gespeichert, erst dann am
+  Relay quittiert). Ist die Anlage nicht erreichbar, zeigt die App den letzten
+  Stand aus dem Briefkasten mit Uhrzeit.
 - **Verlauf:** heute/gestern aus `/api/telemetry/series`.
 - **Plan:** EOS-Fahrplan aus `/api/eos/plan` (braucht in DVhub Pro).
 - **Steuern:** Not-Halt auslösen/aufheben, nur mit Freigabe „Steuern“.
@@ -84,7 +95,8 @@ Face ID oder dem Gerätecode.
 
 **Verbindung:** zuerst die Heimnetz-Adressen (2,5 s), dann das Relay. Über das
 Relay prüft die App alle 30 s, ob das Heimnetz wieder erreichbar ist, und
-wechselt dann.
+wechselt dann. Bricht eine Verbindung ab (oder hält sie keine 10 s), wartet die
+App wachsend 1, 2, 4 … bis 30 s.
 
 **iPhone Duo und iPad:** Ist das Gerät zugeklappt (schmal), gibt es eine
 Tab-Leiste mit einer Spalte. Aufgeklappt (breit) gibt es eine Seitenleiste mit

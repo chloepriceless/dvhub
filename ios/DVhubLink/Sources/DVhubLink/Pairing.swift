@@ -111,23 +111,30 @@ public func pairDevice(
     var lastError: Error = LinkError.noRoute
     for target in candidates {
         let ch = RelayChannel(socket: socketFactory(target))
+        // Bis die Box sich mit dem Schlüssel aus dem QR-Code ausgewiesen hat
+        // (p2), ist jeder Fehler ein Grund, den nächsten Weg zu versuchen —
+        // im Heimnetz kann unter der Adresse auch etwas anderes antworten
+        // (Fable-Review N1). Erst danach ist der QR-Code bei der Box verbraucht.
+        let session: LinkSession
+        let code: String
         do {
-            let challenge = try await ch.next(type: "challenge", timeout: connectTimeout)
-            _ = challenge
+            _ = try await ch.next(type: "challenge", timeout: connectTimeout)
             try await ch.send(["t": "auth", "role": "pair", "box": .string(p.boxId), "token": .string(token)])
             _ = try await ch.next(type: "ok", timeout: 10)
+            let hs = try PairHandshake(boxPublicRaw: p.boxPublicRaw, secret: p.secret, signer: signer)
+            try await ch.send(["t": "data", "d": .string(Base64URL.encode(try hs.hello().encoded()))])
+            let p2msg = try await ch.next(type: "data", timeout: 15)
+            guard let p2d = p2msg["d"]?.string else { throw LinkError.protocolError("p2") }
+            let r = try hs.onP2(try JSONValue.decode(try Base64URL.decode(p2d)), name: name, model: model)
+            session = r.session
+            code = r.code
+            try await ch.send(["t": "data", "d": .string(try session.seal(r.p3))])
         } catch {
             lastError = error
             ch.close()
             continue
         }
         defer { ch.close() }
-        let hs = try PairHandshake(boxPublicRaw: p.boxPublicRaw, secret: p.secret, signer: signer)
-        try await ch.send(["t": "data", "d": .string(Base64URL.encode(try hs.hello().encoded()))])
-        let p2msg = try await ch.next(type: "data", timeout: 15)
-        guard let p2d = p2msg["d"]?.string else { throw LinkError.protocolError("p2") }
-        let (session, p3, _, code) = try hs.onP2(try JSONValue.decode(try Base64URL.decode(p2d)), name: name, model: model)
-        try await ch.send(["t": "data", "d": .string(try session.seal(p3))])
         let deadline = Date().addingTimeInterval(waitTimeout)
         while true {
             let left = deadline.timeIntervalSinceNow

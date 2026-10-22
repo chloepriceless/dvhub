@@ -17,6 +17,7 @@
 		7CF410E0A969DB38969FA760 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8105DD7D1245BDE71A2B111 /* HistoryView.swift */; };
 		8F883119B3D261BBFE9A5DE3 /* SystemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56FC4DBCADF84E70A5F80AA /* SystemController.swift */; };
 		A3C171711096CFF0BFF8BAD9 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7594ACFDDAEB82F2CEF6AC /* Models.swift */; };
+		B1CCB733D799109353CCCCB5 /* PairLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9FA19FB543D2093BB13EF32 /* PairLinkTests.swift */; };
 		B84B115F911AEFB9BC71BC31 /* DVhubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C1447A1B3BAF774CFB0FD97 /* DVhubApp.swift */; };
 		BEF1190AC9955C44EB0EC2CF /* RotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9006D35AD69BBA8CA87C109E /* RotationTests.swift */; };
 		C67E035ABCF3F5E8C39A7771 /* PlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B202121B0C31FA6AFEDD76 /* PlanView.swift */; };
@@ -56,6 +57,7 @@
 		EDE7DF52DEC7E806D405A43B /* DVhubApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = DVhubApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F52D1434DB04842E1760E446 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F6EBBC678DB61E25C7776D48 /* ControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlView.swift; sourceTree = "<group>"; };
+		F9FA19FB543D2093BB13EF32 /* PairLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairLinkTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -74,6 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				DF808B9006DF7EE5F4117BF8 /* ControlTests.swift */,
+				F9FA19FB543D2093BB13EF32 /* PairLinkTests.swift */,
 				9006D35AD69BBA8CA87C109E /* RotationTests.swift */,
 			);
 			path = DVhubAppUITests;
@@ -245,6 +248,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EDCF847A0409AC9D45CE80ED /* ControlTests.swift in Sources */,
+				B1CCB733D799109353CCCCB5 /* PairLinkTests.swift in Sources */,
 				BEF1190AC9955C44EB0EC2CF /* RotationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

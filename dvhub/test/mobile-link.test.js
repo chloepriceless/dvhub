@@ -829,6 +829,29 @@ describe('mobile-link Ende zu Ende', () => {
     a.close(); b.close();
   });
 
+  test('Briefkasten auch im Heimnetz (App ohne Relay sieht Meldungen)', async () => {
+    const ctx = await setup({ extraCfg: { useRelay: false } });
+    const srv = http.createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    srv.on('upgrade', (req, sock, head) => wss.handleUpgrade(req, sock, head, (ws) => ctx.agent.attachLan(ws)));
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    cleanups.push(() => new Promise((r) => { wss.close(); srv.close(() => r()); }));
+    const lanUrl = `ws://127.0.0.1:${srv.address().port}/api/mobile-link/ws`;
+    const p = ctx.agent.startPairing();
+    const phone = generateIdentity();
+    const creds = await pairDevice({ qr: p.qr, signer: phone, url: lanUrl, onWait: () => ctx.agent.approvePairing({ approveToken: p.approveToken }) });
+    const s = await connectDevice({ creds, signer: phone, url: lanUrl });
+    try {
+      ctx.agent._pushMailboxLatest();
+      await sleep(50);
+      const mb = await s.fetchMailbox();
+      assert.equal(mb[0]?.slot, 'latest');
+      assert.equal(mb[0].msg.status.soc, 55);
+    } finally {
+      s.close();
+    }
+  });
+
   test('QR-Code gilt genau einmal; abgelehnte Anfrage koppelt nicht', async () => {
     const ctx = await setup();
     const p = ctx.agent.startPairing();

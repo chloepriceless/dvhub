@@ -24,12 +24,14 @@ final class SystemController {
     private(set) var state: State = .idle
     private(set) var live: LiveStatus?
     private(set) var liveAt: Date?
-    /// Letzter Stand aus dem Briefkasten, wenn die Box nicht erreichbar ist.
-    private(set) var mailboxStatus: LiveStatus?
-    private(set) var mailboxAt: Date?
-    private(set) var events: [MailboxItem] = []
-    private(set) var perms: [String]
+    /// Aus dem Briefkasten übernommen (letzter Stand, Meldungen) — gespeichert,
+    /// damit nach dem Quittieren nichts verloren geht.
+    private(set) var mailbox: MailboxState
     private(set) var boxVersion: String?
+    var mailboxStatus: LiveStatus? { mailbox.latest.flatMap(LiveStatus.from) }
+    var mailboxAt: Date? { mailbox.latestAt }
+    var events: [MailboxEvent] { mailbox.events }
+    var perms: [String] { credentials.perms }
 
     var onCredentialsChanged: ((LinkCredentials) -> Void)?
 
@@ -41,7 +43,26 @@ final class SystemController {
 
     init(credentials: LinkCredentials) {
         self.credentials = credentials
-        self.perms = credentials.perms
+        self.mailbox = Self.loadMailboxState(credentials.id)
+    }
+
+    private static func mailboxKey(_ boxId: String) -> String { "mailbox.\(boxId)" }
+
+    private static func loadMailboxState(_ boxId: String) -> MailboxState {
+        guard let data = UserDefaults.standard.data(forKey: mailboxKey(boxId)),
+              let st = try? JSONDecoder().decode(MailboxState.self, from: data) else { return MailboxState() }
+        return st
+    }
+
+    private func saveMailboxState() -> Bool {
+        guard let data = try? JSONEncoder().encode(mailbox) else { return false }
+        UserDefaults.standard.set(data, forKey: Self.mailboxKey(credentials.id))
+        return true
+    }
+
+    /// Beim Entfernen der Anlage auch die gespeicherten Meldungen löschen.
+    static func forgetMailbox(_ boxId: String) {
+        UserDefaults.standard.removeObject(forKey: mailboxKey(boxId))
     }
 
     var canControl: Bool { perms.contains("control") }
@@ -56,9 +77,6 @@ final class SystemController {
     }
     var displayStatus: LiveStatus? { preferLive ? live : (mailboxStatus ?? live) }
     var displayAt: Date? { preferLive ? liveAt : (mailboxAt ?? liveAt) }
-    /// Jüngstes angenommenes Briefkasten-Ereignis — ältere (vom Relay erneut
-    /// ausgelieferte) werden verworfen.
-    private var newestEventAt: Date?
 
     func start() {
         guard loop == nil else { return }
@@ -77,32 +95,13 @@ final class SystemController {
         if case .online = state { state = .idle }
     }
 
-    /// Verständliche Meldung statt Schließcode.
-    static func explain(_ error: Error) -> String {
-        guard let e = error as? LinkError else { return error.localizedDescription }
-        switch e {
-        case .closed(let code, let reason):
-            switch (code, reason) {
-            case (_, "device_not_allowed"): return "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln."
-            case (4002, _): return "Anmeldung abgelehnt. Bitte neu koppeln."
-            case (_, "box_not_allowed"): return "Unter der gespeicherten Adresse antwortet eine andere Anlage."
-            case (_, "mobile_link_disabled"): return "Die Handy-App ist in DVhub ausgeschaltet."
-            case (4008, _): return "Das Relay hat die Verbindung begrenzt. Gleich erneut."
-            case (4011, _): return "Das Relay startet neu."
-            default: return e.description
-            }
-        case .timeout: return "Keine Antwort (Zeitüberschreitung)."
-        default: return e.description
-        }
-    }
-
     private func signer() throws -> LinkSigner {
         guard let ref = credentials.keyRef else { throw LinkError.keychain(-25300) }
         return try KeyStore.loadSigner(ref)
     }
 
     private func run() async {
-        var backoff: UInt64 = 1
+        var backoff = ReconnectBackoff()
         while !Task.isCancelled {
             state = .connecting
             var conn: DeviceConnection?
@@ -122,7 +121,7 @@ final class SystemController {
                         )
                         break
                     } catch {
-                        lastError = Self.explain(error)
+                        lastError = userMessage(for: error)
                         // In DVhub entkoppelt oder Ticket ungültig: gilt auf jedem Weg.
                         // (box_not_allowed im Heimnetz heißt nur: unter dieser Adresse
                         // antwortet eine andere Box — dann weiter zum Relay.)
@@ -131,23 +130,26 @@ final class SystemController {
                     }
                 }
             } catch {
-                lastError = Self.explain(error)
+                lastError = userMessage(for: error)
             }
             guard let conn else {
                 state = .offline(lastError)
-                try? await Task.sleep(nanoseconds: backoff * 1_000_000_000)
-                backoff = min(backoff * 2, 30)
+                try? await Task.sleep(nanoseconds: backoff.afterFailure() * 1_000_000_000)
                 continue
             }
             // Während des Verbindungsaufbaus gestoppt (Hintergrund, Anlagenwechsel):
             // die fertige Verbindung nicht liegen lassen, sondern schließen.
             if Task.isCancelled { await conn.close(); return }
-            backoff = 1
             connection = conn
+            let started = Date()
             await serve(conn)
-            connection = nil
+            // Immer schließen — auch wenn der Ereignisstrom von selbst endete.
+            await conn.close()
+            if connection === conn { connection = nil }
             if Task.isCancelled { return }
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            // Kurz nach dem Aufbau wieder weg → wachsender Abstand, nicht im Sekundentakt.
+            let wait = pendingUpgrade != nil ? 0 : backoff.afterConnection(lasted: Date().timeIntervalSince(started))
+            if wait > 0 { try? await Task.sleep(nanoseconds: wait * 1_000_000_000) }
         }
     }
 
@@ -165,13 +167,18 @@ final class SystemController {
         defer { probe?.cancel() }
         for await ev in conn.events {
             switch ev {
-            case .connected(let welcome, let ticket):
-                updateFromWelcome(welcome, ticket: ticket)
+            case .connected(let welcome, _):
+                boxVersion = welcome["box"]?["version"]?.string
+                var updated = credentials
+                if updated.apply(welcome: welcome) {
+                    credentials = updated
+                    onCredentialsChanged?(credentials)
+                }
                 await sessionReady(conn, kind: kind)
             case .live(let status, let ts):
                 if let s = LiveStatus.from(status) {
                     live = s
-                    liveAt = ISO.parse(ts) ?? Date()
+                    liveAt = parseISODate(ts) ?? Date()
                 }
             case .boxOffline:
                 state = .boxOffline(kind)
@@ -179,7 +186,7 @@ final class SystemController {
             case .message:
                 break
             case .closed(let err):
-                if let err { state = .offline(Self.explain(err)) }
+                if let err { state = .offline(userMessage(for: err)) }
                 return
             }
         }
@@ -207,57 +214,18 @@ final class SystemController {
 
     private func sessionReady(_ conn: DeviceConnection, kind: LinkRoute.Kind) async {
         state = .online(kind)
-        let p = await conn.perms
-        if !p.isEmpty { perms = p }
-        let updated = await conn.currentCredentials
-        if updated.ticket != credentials.ticket {
-            credentials.ticket = updated.ticket
-            onCredentialsChanged?(credentials)
-        }
         try? await conn.subscribe(live: true, intervalMs: 2000)
         await loadMailbox(conn)
     }
 
-    private func updateFromWelcome(_ welcome: JSONValue, ticket: JSONValue?) {
-        boxVersion = welcome["box"]?["version"]?.string
-        var changed = false
-        if let name = welcome["box"]?["name"]?.string, name != credentials.boxName {
-            credentials.boxName = name
-            changed = true
-        }
-        // Die Box meldet ihre aktuelle Relay-Adresse (null = Relay aus). So folgt
-        // eine bestehende Kopplung, wenn das Relay später ein- oder umgestellt wird.
-        if let relayField = welcome["relay"] {
-            let relay = relayField.string
-            if relay != credentials.relay, relay == nil || relay!.hasPrefix("wss://") || relay!.hasPrefix("ws://") {
-                credentials.relay = relay
-                changed = true
-            }
-        }
-        if changed { onCredentialsChanged?(credentials) }
-    }
-
     private func loadMailbox(_ conn: DeviceConnection) async {
         guard let items = try? await conn.fetchMailbox() else { return }
-        // Frische nur aus dem verschlüsselten `ts` (das Relay kann alte, gültige
-        // Einträge erneut ausliefern; sein eigener Zeitstempel zählt nicht).
-        if let latest = items.first(where: { $0.slot == "latest" }),
-           let at = ISO.parse(latest.message["ts"]?.string),
-           let s = LiveStatus.from(latest.message["status"] ?? .null),
-           mailboxAt.map({ at > $0 }) ?? true {
-            mailboxStatus = s
-            mailboxAt = at
-        }
-        let newEvents = items.filter { $0.slot == nil }
-        if !newEvents.isEmpty {
-            let fresh = newEvents.filter { item in
-                guard let at = ISO.parse(item.message["ts"]?.string) else { return false }
-                return newestEventAt.map { at > $0 } ?? true
-            }
-            if let newest = fresh.compactMap({ ISO.parse($0.message["ts"]?.string) }).max() { newestEventAt = newest }
-            if !fresh.isEmpty { events = (fresh + events).prefix(50).map { $0 } }
-            try? await conn.ackMailbox(newEvents.map(\.id))
-        }
+        var next = mailbox
+        let ack = next.merge(items)
+        if next != mailbox { mailbox = next }
+        // Erst quittieren, wenn übernommen und gespeichert ist.
+        guard !ack.isEmpty, saveMailboxState() else { return }
+        try? await conn.ackMailbox(ack)
     }
 
     /// Anfrage an die Box (nur bei bestehender Sitzung).

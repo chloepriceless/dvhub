@@ -49,7 +49,6 @@ targets:
           - CFBundleURLName: de.dvhub.pair
             CFBundleURLSchemes:
               - dvhub
-        ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(DVHUB_BUNDLE_ID)

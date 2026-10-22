@@ -3,42 +3,7 @@
 import Foundation
 import DVhubLink
 
-/// Kompakt-Status (live und im Briefkasten), siehe docs/HANDY-APP-PROTOKOLL.md.
-/// Vorzeichen wie in DVhub: Akku + = Laden, − = Entladen.
-struct LiveStatus: Decodable, Equatable {
-    var ts: String?
-    var soc: Double?
-    var batteryPowerW: Double?
-    var pvTotalW: Double?
-    var gridSetpointW: Double?
-    var gridImportW: Double?
-    var gridExportW: Double?
-    var loadW: Double?
-    var minSocPct: Double?
-    var alarmsActive: Int?
-    var alarmsSeverity: Int?
-    var alarmsStale: Bool?
-    var emergencyStop: Bool?
-    var telemetryFrozen: Bool?
-    var todayNetEur: Double?
-    var todayRevenueEur: Double?
-    var todayCostEur: Double?
-    var version: String?
-    var controls: Controls?
-
-    struct Controls: Decodable, Equatable {
-        var dv: DV?
-        var negativePrice: NegativePrice?
-        var feedInLimit: FeedInLimit?
-        var p14a: P14a?
-        struct DV: Decodable, Equatable { var curtailed: Bool?; var limitPct: Double? }
-        struct NegativePrice: Decodable, Equatable { var protection: Bool?; var active: Bool? }
-        struct FeedInLimit: Decodable, Equatable { var limitW: Double?; var blocked: Bool? }
-        struct P14a: Decodable, Equatable { var active: Bool?; var limitW: Double? }
-    }
-
-    static func from(_ v: JSONValue) -> LiveStatus? { try? v.decode(as: LiveStatus.self) }
-}
+// LiveStatus (Kompakt-Status, tolerant gelesen) liegt im Paket DVhubLink (AppLogic.swift).
 
 struct SeriesPoint: Identifiable, Equatable {
     let key: String

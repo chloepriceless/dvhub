@@ -113,7 +113,7 @@ struct HistoryView: View {
         do {
             let r = try await controller.request("GET", path)
             guard r.status == 200, let rows = r.body["data"]?.array else {
-                error = "Verlauf nicht verfügbar (\(r.body["error"]?.string ?? "HTTP \(r.status)"))."
+                error = r.status == 503 ? "Die Anlage hat keine Messwert-Datenbank." : "Verlauf nicht verfügbar (HTTP \(r.status))."
                 return
             }
             points = rows.compactMap { row in
@@ -122,7 +122,7 @@ struct HistoryView: View {
             }
             error = points.isEmpty ? "Für diesen Tag liegen keine Messwerte vor." : nil
         } catch {
-            self.error = (error as? LinkError)?.description ?? error.localizedDescription
+            self.error = userMessage(for: error)
         }
     }
 

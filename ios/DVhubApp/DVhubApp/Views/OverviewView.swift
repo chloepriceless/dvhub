@@ -1,6 +1,7 @@
 // OverviewView.swift — Live-Übersicht: PV, Akku, Netz, Haus, Ertrag, Zustand.
 
 import SwiftUI
+import DVhubLink
 
 struct OverviewView: View {
     let controller: SystemController
@@ -24,6 +25,7 @@ struct OverviewView: View {
                             VStack(spacing: 14) {
                                 moneyTile(s)
                                 stateTile(s)
+                                if !controller.events.isEmpty { eventsTile }
                             }
                             .frame(width: min(360, width * 0.36))
                         }
@@ -33,6 +35,7 @@ struct OverviewView: View {
                             moneyTile(s)
                             stateTile(s)
                         }
+                        if !controller.events.isEmpty { eventsTile }
                     }
                 } else {
                     ContentUnavailableView("Noch keine Werte", systemImage: "antenna.radiowaves.left.and.right",
@@ -113,6 +116,25 @@ struct OverviewView: View {
                 if s.telemetryFrozen == true { Label("Messwerte eingefroren", systemImage: "snowflake").foregroundStyle(.orange) }
             }
             .font(.footnote)
+        }
+    }
+
+    /// Meldungen aus dem Briefkasten (Alarme, Not-Halt), neueste zuerst.
+    private var eventsTile: some View {
+        Tile(title: "Meldungen", icon: "bell.badge", tint: .purple) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(controller.events.prefix(5)) { e in
+                    HStack(alignment: .firstTextBaseline) {
+                        Image(systemName: e.emergencyStop || e.alarmsActive > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle")
+                            .foregroundStyle(e.emergencyStop || e.alarmsActive > 0 ? Color.red : Color.green)
+                        Text(e.text)
+                        Spacer(minLength: 8)
+                        Text(Format.dateTime(e.at)).foregroundStyle(.secondary)
+                    }
+                    .font(.footnote)
+                }
+            }
+            .accessibilityIdentifier("eventsList")
         }
     }
 

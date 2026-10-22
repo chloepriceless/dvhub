@@ -103,10 +103,11 @@ struct ControlView: View {
             switch r.status {
             case 200: result = "Erledigt."
             case 403: result = "Dieses Gerät darf nicht steuern. In DVhub unter „Handy-App“ freigeben."
-            default: result = "Fehler: \(r.body["error"]?.string ?? "HTTP \(r.status)")"
+            case 429: result = "Gerade zu viele Anfragen. Bitte gleich noch einmal."
+            default: result = "Die Anlage hat abgelehnt (HTTP \(r.status))."
             }
         } catch {
-            result = (error as? LinkError)?.description ?? error.localizedDescription
+            result = userMessage(for: error)
         }
     }
 }

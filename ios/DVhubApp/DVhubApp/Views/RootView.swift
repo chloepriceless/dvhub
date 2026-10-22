@@ -41,7 +41,9 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if model.systems.isEmpty {
+            if !model.loaded {
+                ProgressView()
+            } else if model.systems.isEmpty {
                 NavigationStack { PairView(onboarding: true) }
             } else if sizeClass == .regular {
                 wideLayout
@@ -66,6 +68,7 @@ struct RootView: View {
             if let tab = d.string(forKey: "DVHUB_TAB").flatMap(Section.init(rawValue:)) { section = tab }
             if let qr = d.string(forKey: "DVHUB_PAIR"), !qr.isEmpty, model.pendingPairLink == nil,
                !model.systems.contains(where: { (try? PairPayload(qr).boxId) == $0.id }) {
+                model.pendingPairAutoStart = true
                 model.pendingPairLink = qr
             }
             #endif

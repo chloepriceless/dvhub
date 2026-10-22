@@ -68,7 +68,9 @@ struct PlanView: View {
                 rows = []
                 return
             }
-            let slotMin = r.body["output"]?["slotMinutes"]?.double ?? 15
+            // 0, negativ oder fehlend → 15 min (sonst Division durch null).
+            let slotRaw = r.body["output"]?["slotMinutes"]?.double ?? 15
+            let slotMin = slotRaw.isFinite && slotRaw > 0 ? slotRaw : 15
             let kw = { (wh: Double?) in (wh ?? 0) / (slotMin / 60) / 1000 }
             rows = (r.body["output"]?["rows"]?.array ?? []).compactMap { row in
                 guard let d = ISO.parse(row["ts_utc"]?.string) else { return nil }
@@ -77,7 +79,7 @@ struct PlanView: View {
             fetchedAt = ISO.parse(r.body["plan"]?["fetchedAt"]?.string)
             message = rows.isEmpty ? "Der Plan ist leer." : nil
         } catch {
-            message = (error as? LinkError)?.description ?? error.localizedDescription
+            message = userMessage(for: error)
         }
     }
 }

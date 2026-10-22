@@ -170,4 +170,38 @@ final class InteropTests: XCTestCase {
         XCTAssertEqual(r.status, 200)
         await conn.close()
     }
+    /// H1: Viele Anfragen gleichzeitig mit unterschiedlicher Priorität — die
+    /// Rahmen müssen in Zähler-Reihenfolge rausgehen, sonst verwirft die Box
+    /// die Sitzung (decrypt_failed).
+    func testParallelRequestsKeepOrder() async throws {
+        let (_, _, conn, _) = try await pairAndConnect(via: .relay)
+        try await conn.subscribe(live: true, intervalMs: 1000)
+        let statuses = try await withThrowingTaskGroup(of: Int.self) { group -> [Int] in
+            for i in 0..<24 {
+                let prio: TaskPriority = [.high, .low, .background, .userInitiated][i % 4]
+                group.addTask(priority: prio) {
+                    if i % 7 == 0 { try await conn.subscribe(live: true, intervalMs: 1000) }
+                    return try await conn.request("GET", "/api/status").status
+                }
+            }
+            var out: [Int] = []
+            for try await s in group { out.append(s) }
+            return out
+        }
+        XCTAssertEqual(statuses.count, 24)
+        // 429 = Parallelgrenze der Box (gewollt), alles andere wäre ein Fehler.
+        XCTAssertTrue(statuses.allSatisfy { $0 == 200 || $0 == 429 }, "\(statuses)")
+        XCTAssertTrue(statuses.contains(200))
+        // Lebt die Sitzung noch? Live-Werte kommen weiter an (eine kaputte
+        // Zähler-Reihenfolge beendet die Sitzung auf der Box sofort). Nicht über
+        // Anfragen prüfen — die zählen gegen das Minutenbudget der Box.
+        var lives = 0
+        for await ev in conn.events {
+            if case .live = ev { lives += 1 }
+            if case .closed = ev { break }
+            if lives >= 2 { break }
+        }
+        XCTAssertGreaterThanOrEqual(lives, 2, "Sitzung nach paralleler Last nicht mehr nutzbar")
+        await conn.close()
+    }
 }

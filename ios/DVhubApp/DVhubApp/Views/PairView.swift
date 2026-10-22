@@ -54,6 +54,28 @@ struct PairView: View {
                 }
             }
 
+            if let p = parsed {
+                SwiftUI.Section {
+                    LabeledContent("Anlage", value: p.name.isEmpty ? "DVhub" : p.name)
+                    LabeledContent("Kennung", value: p.boxId)
+                        .font(.footnote.monospaced())
+                    if !p.lan.isEmpty { LabeledContent("Heimnetz", value: Self.hosts(p.lan).joined(separator: ", ")) }
+                    LabeledContent("Relay", value: p.relay.flatMap { URL(string: $0)?.host } ?? "–")
+                    if p.expires < Date() {
+                        Label("Dieser Code ist abgelaufen.", systemImage: "clock.badge.xmark").foregroundStyle(.orange)
+                    }
+                } header: {
+                    Text("Diese Anlage wird gekoppelt")
+                } footer: {
+                    Text("Nur koppeln, wenn du den Code selbst in deiner DVhub-Oberfläche erzeugt hast.")
+                }
+                .accessibilityIdentifier("pairSummary")
+            }
+
+            if let err = model.storageError {
+                SwiftUI.Section { Label(err, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+            }
+
             SwiftUI.Section { status }
         }
         .navigationTitle(onboarding ? "Willkommen" : "Anlage koppeln")
@@ -71,16 +93,10 @@ struct PairView: View {
             .ignoresSafeArea()
         }
         .onAppear {
-            if let initialText, text.isEmpty {
-                text = initialText
-                start(initialText)
-            } else if let link = model.pendingPairLink, text.isEmpty {
-                text = link
-                start(link)
-            }
+            if let link = initialText ?? model.pendingPairLink, text.isEmpty { take(link) }
         }
         .onChange(of: model.pendingPairLink) { _, link in
-            if let link { text = link; start(link) }
+            if let link { take(link) }
         }
         .onChange(of: model.pairState) { _, s in
             if case .done = s, !onboarding {
@@ -89,7 +105,27 @@ struct PairView: View {
         }
     }
 
+    private var parsed: PairPayload? { try? PairPayload(text) }
+
+    static func hosts(_ urls: [String]) -> [String] {
+        urls.compactMap { URL(string: $0) }.compactMap { u -> String? in
+            guard let host = u.host else { return nil }
+            return u.port.map { "\(host):\($0)" } ?? host
+        }
+    }
+
+    /// Link von außen: nur anzeigen. Starten erst nach „Koppeln“ — außer im
+    /// Debug-Test mit Startargument.
+    private func take(_ link: String) {
+        text = link
+        if model.pendingPairAutoStart {
+            model.pendingPairAutoStart = false
+            start(link)
+        }
+    }
+
     private var busy: Bool {
+        if model.pairInFlight { return true }
         switch model.pairState {
         case .connecting, .waitingForApproval: return true
         default: return false
@@ -139,7 +175,7 @@ struct PairView: View {
         let c = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !c.isEmpty else { return }
         model.pendingPairLink = nil
-        Task { await model.pair(qr: c) }
+        model.startPairing(qr: c)
     }
 }
 
