@@ -314,6 +314,37 @@ test('Codex R2 P2: ueber MQTT bleibt eine gesetzte Sperre 0 erhalten', () => {
   assert.equal(store.get().savedMaxDischargeW, 0);
 });
 
+// --- Codex-Gegenpruefung 22.10.2026, Runde 3 ---
+
+test('Codex R3 P1: erneut am Boden waehrend des Zurueckschreibens — alte 0 gibt nichts frei', async () => {
+  const w = makeWorld({ deviceEcho: false });
+  request(w); await w.handoff.maintain(w.apply);
+  w.state.victron.maxDischargeW = 0; w.advance(5000);
+  assert.equal(request(w), -3000);
+  w.cfg.multiGx.exportHandoffAtFloor = false;
+  w.state.victron.soc = 9;
+  await w.handoff.maintain(w.apply);          // restoring
+  w.advance(5000);
+  await w.handoff.maintain(w.apply);          // schreibt -1, GX meldet noch die alte 0
+  assert.equal(w.applied.at(-1).source, 'multi_gx_handoff_restore');
+  w.cfg.multiGx.exportHandoffAtFloor = true;
+  w.state.victron.soc = 4; w.advance(1000);   // wieder am Boden, Messwert 0 aus der Zeit vor dem Zurueckschreiben
+  w.state.victron.fieldSourceAt = { maxDischargeW: w.now() - 4000 };
+  assert.equal(request(w), null, 'arming, Boden haelt');
+  assert.equal(request(w), null, 'ohne neues Sperren keine Freigabe');
+  await w.handoff.maintain(w.apply);
+  assert.deepEqual(w.applied.at(-1), { target: 'maxDischargeW', value: 0, source: 'multi_gx_handoff' }, 'neu gesperrt');
+});
+
+test('Codex R3 P2: nach Neustart mit gesicherter Sperre gilt Akku 1 fuer die Aufteilung als gesperrt', async () => {
+  const store = memoryStore({ savedMaxDischargeW: -1, at: 1 });
+  const w = makeWorld({ store, mainSoc: 6, mainMaxDischargeW: 0 });
+  await w.handoff.maintain(w.apply);
+  assert.equal(w.state.multiGxHandoff.phase, 'restoring');
+  assert.equal(w.state.multiGxHandoff.mainDischargeBlocked, true);
+  assert.equal(request(w), null, 'Einspeisung erst nach neuem Sperren');
+});
+
 // --- Einbindung in den Entlade-Boden (schedule-eval applyControlTarget) ---
 
 function evaluatorWorld({ option = true, soc = 4, socFresh = true } = {}) {

@@ -84,7 +84,12 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   // mainDischargeBlocked: Akku 1 ist von DVhub gesperrt (2704 = 0 frisch
   // gelesen) — die zweite Anlage rechnet dann ohne ihn (multi-gx/index.js).
   function publish(cfg = getCfg() || {}) {
-    const blocked = (phase === 'active' || phase === 'restoring') && lockConfirmed(cfg);
+    // restoring (auch nach Neustart): gesperrt, solange die GX nach dem letzten
+    // Zurueckschreiben frisch 0 meldet — nur fuer die Aufteilung, nie als
+    // Freigabe der Einspeisung (Codex Runde 3, P2).
+    const blocked = phase === 'active'
+      ? lockConfirmed(cfg)
+      : phase === 'restoring' && mainMaxDischargeW(cfg) === 0 && sentAt() > restoreWrittenAt;
     state.multiGxHandoff = { phase, savedMaxDischargeW: saved, since, reason: lastReason, mainDischargeBlocked: blocked };
   }
 
@@ -178,6 +183,10 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       return null;
     }
     if (phase === 'restoring') {
+      // Alte Sperr-Bestaetigung verwerfen: ein laufendes Zurueckschreiben kann
+      // Akku 1 schon freigegeben haben, waehrend die GX noch die alte 0 meldet
+      // (Codex Runde 3, P1). Also neu sperren und neu bestaetigen.
+      zeroWritten = false; zeroWrittenAt = 0;
       lastZeroAt = 0; zeroAttempts = 0; restoreWrittenAt = 0; lastRestoreAt = 0; restoreAttempts = 0;
       setPhase('arming', 'floor_export_request');
       return null;
