@@ -130,8 +130,9 @@ Box → Gerät zuerst: `{"t":"welcome","box":{"id","name","version"},"perms":["r
 | `{"t":"req","id":"2","m":"POST","p":"/api/control/stop","b":{}}` | wie oben; ohne Recht `control` → 403 |
 | `{"t":"ping","id":…}` | `{"t":"pong","id":…}` |
 
-Erlaubte Pfade: `dvhub/services/mobile-link/permissions.js`. Antworten
-> 900 KiB → 413.
+Erlaubte Pfade: `dvhub/services/mobile-link/permissions.js`. Passt eine Antwort
+verschlüsselt nicht in einen Relay-Rahmen (1 MiB, also gut 750 KiB JSON), kommt
+`s: 413` mit `{"error":"response_too_large"}`.
 
 `status` (live, Briefkasten) = Kompakt-Status wie im Installateurs-Portal:
 `soc`, `batteryPowerW`, `pvTotalW`, `gridImportW`, `gridExportW`, `loadW`,

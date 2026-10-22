@@ -432,6 +432,10 @@ export function wrapWebSocket(ws, { pingMs = 25_000 } = {}) {
   timer?.unref?.();
   ws.on('pong', () => { alive = true; });
   ws.on('close', () => clearInterval(timer));
+  // Kaputte Rahmen, zu große Nachrichten, Abbrüche: `ws` meldet sie als
+  // 'error'. Ohne Zuhörer wäre das eine unbehandelte Ausnahme und beendete den
+  // ganzen Prozess (Relay bzw. DVhub) — so wird nur diese Verbindung getrennt.
+  ws.on('error', () => { try { ws.terminate(); } catch { /* egal */ } });
   return {
     send: (text) => { if (ws.readyState === 1) ws.send(text); },
     close: (code, reason) => { try { ws.close(code, reason); } catch { /* egal */ } },

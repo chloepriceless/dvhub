@@ -8,7 +8,7 @@
   const $ = (id) => document.getElementById(id);
   let uiToken = null;
   let pollTimer = null;
-  let lastPairStatus = null;
+  let shownQr = null;
   let formLoaded = false;
 
   function setResult(text) { const el = $('mobileLinkResult'); if (el) el.textContent = text || ''; }
@@ -64,9 +64,9 @@
     if (!p) {
       box.hidden = true;
       qr.innerHTML = '';
+      shownQr = null;
       approve.hidden = true;
       if (cancel) cancel.hidden = true;
-      lastPairStatus = null;
       return;
     }
     box.hidden = false;
@@ -75,21 +75,24 @@
     if (p.status === 'waiting') {
       $('mobileLinkPairHint').textContent = `Mit der DVhub-App (oder der Kamera) scannen — gültig bis ${until}, nur für ein Handy.`;
       // Das SVG kommt von der eigenen Anlage (qrcode-generator, ohne Skript).
-      if (lastPairStatus !== 'waiting' || !qr.innerHTML) qr.innerHTML = p.qrSvg || '';
+      // Neu zeichnen, sobald sich der Inhalt ändert (erneut „Handy koppeln“ =
+      // neues Geheimnis, der alte Code gilt dann nicht mehr).
+      if (shownQr !== p.qr || !qr.innerHTML) { qr.innerHTML = p.qrSvg || ''; shownQr = p.qr; }
       approve.hidden = true;
     } else if (p.status === 'consumed') {
       $('mobileLinkPairHint').textContent = 'Handy meldet sich…';
       qr.innerHTML = '';
+      shownQr = null;
       approve.hidden = true;
     } else if (p.status === 'scanned' && p.candidate) {
       $('mobileLinkPairHint').textContent = `Anfrage offen bis ${until}.`;
       qr.innerHTML = '';
+      shownQr = null;
       $('mobileLinkCandidate').innerHTML = `Möchte sich koppeln: <strong>${esc(p.candidate.name || 'Handy')}</strong>`
         + (p.candidate.model ? ` (${esc(p.candidate.model)})` : '')
         + ` · Gerätekennung <code>${esc(p.candidate.id)}</code>`;
       approve.hidden = false;
     }
-    lastPairStatus = p.status;
   }
 
   async function refresh() {

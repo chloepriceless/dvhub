@@ -44,6 +44,9 @@ const LIVE_DEFAULT_MS = 2000;
 const MAILBOX_LATEST_MS = 60_000;
 const RECONCILE_MS = 30_000;
 const MAX_RESPONSE_CHARS = 900 * 1024;
+// Rahmengrenze des Relays für Nachrichten der Box (relay-core boxFrameBytes),
+// mit Luft für die Hülle {"t":"data","c":…,"d":…}.
+const MAX_FRAME_CHARS = 1024 * 1024 - 1024;
 const MAX_REQUEST_BODY_CHARS = 64 * 1024;
 const MAX_PARALLEL_REQUESTS = 4;
 
@@ -450,9 +453,14 @@ export function createMobileLink(ctx = {}, deps = {}) {
 
     const peer = {
       cid, role, devId: null, link,
+      // false = zu groß für einen Relay-Rahmen (nicht gesendet, Zähler unverändert).
       send(obj) {
-        if (closed || !session) return;
+        if (closed || !session) return false;
+        const bytes = Buffer.byteLength(JSON.stringify(obj), 'utf8');
+        // base64url ohne Füllung über Klartext + 16 Byte Tag, plus Hülle
+        if (Math.ceil(((bytes + 16) * 4) / 3) + 64 + cid.length > MAX_FRAME_CHARS) return false;
         link.send({ t: 'data', c: cid, d: session.seal(obj) });
+        return true;
       },
       close(reason = 'closed') {
         if (closed) return;
@@ -477,7 +485,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
         try {
           handle(d);
         } catch (e) {
-          pushLog('mobile_link_peer_error', { role, error: e?.message || String(e) });
+          logPeerError(role, e);
           peer.close('protocol_error');
         }
       },
@@ -569,14 +577,16 @@ export function createMobileLink(ctx = {}, deps = {}) {
       }
       if (msg.t === 'req') {
         const id = msg.id;
-        const reply = (s, body) => peer.send({ t: 'res', id, s, b: body });
+        const reply = (s, body) => {
+          if (!peer.send({ t: 'res', id, s, b: body })) peer.send({ t: 'res', id, s: 413, b: { error: 'response_too_large' } });
+        };
         if (inflight >= MAX_PARALLEL_REQUESTS) return reply(429, { error: 'too_many_requests' });
         const chk = checkRequest(dev.perms, msg.m, msg.p);
         if (!chk.ok) return reply(chk.status, { error: chk.error });
-        const bodyText = msg.b == null ? null : JSON.stringify(msg.b);
+        const method = String(msg.m).toUpperCase();
+        const bodyText = method === 'POST' ? JSON.stringify(msg.b ?? {}) : null;
         if (bodyText && bodyText.length > MAX_REQUEST_BODY_CHARS) return reply(413, { error: 'body_too_large' });
         inflight++;
-        const method = String(msg.m).toUpperCase();
         loopback(method, chk.path + chk.search, bodyText)
           .then((r) => {
             if (method === 'POST') pushLog('mobile_link_control', { dev: dev.id, name: dev.name, path: chk.path, status: r.status });
@@ -593,6 +603,17 @@ export function createMobileLink(ctx = {}, deps = {}) {
     return peer;
   }
 
+  // Fehlversuche (fremdes Gerät im WLAN, kaputte Nachrichten) höchstens
+  // einmal je Minute ins Protokoll — sonst ließe sich das Audit-Log fluten.
+  let peerErrorAt = 0;
+  let peerErrorsSuppressed = 0;
+  function logPeerError(role, e) {
+    if (now() - peerErrorAt < 60_000) { peerErrorsSuppressed++; return; }
+    peerErrorAt = now();
+    pushLog('mobile_link_peer_error', { role, error: e?.message || String(e), suppressed: peerErrorsSuppressed });
+    peerErrorsSuppressed = 0;
+  }
+
   let saveTimer = null;
   function throttledSave() {
     if (saveTimer) return;
@@ -606,7 +627,8 @@ export function createMobileLink(ctx = {}, deps = {}) {
     const allowed = Array.isArray(cfg.allowedHosts) ? cfg.allowedHosts.filter(Boolean) : [];
     const headers = { accept: 'application/json', 'x-dvhub-client': 'mobile-link' };
     if (allowed.length) headers.host = String(allowed[0]);
-    if (cfg.apiToken) headers.authorization = `Bearer ${cfg.apiToken}`;
+    // Bewusst ohne Bearer: Loopback passiert die Anmeldung ohnehin, und ein
+    // Bearer zählt an manchen Routen als Ersatz für den UI-Nonce.
     if (bodyText != null) {
       headers['content-type'] = 'application/json';
       headers['content-length'] = Buffer.byteLength(bodyText);
@@ -719,7 +741,11 @@ export function createMobileLink(ctx = {}, deps = {}) {
 
   // Handy im Heimnetz: WebSocket am eigenen Webserver → eingebettetes Relay.
   function attachLan(ws, { remote = null } = {}) {
-    if (!settings().enabled || !lanRelay) { try { ws.close(1013, 'mobile_link_disabled'); } catch { /* egal */ } return false; }
+    if (!settings().enabled || !lanRelay) {
+      ws.on('error', () => {}); // s. wrapWebSocket — Fehler dürfen den Prozess nicht beenden
+      try { ws.close(1013, 'mobile_link_disabled'); } catch { /* egal */ }
+      return false;
+    }
     lanRelay.attach(wrapWebSocket(ws), { remote });
     return true;
   }

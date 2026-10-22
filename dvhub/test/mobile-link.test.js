@@ -11,6 +11,8 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import net from 'node:net';
+import { spawn } from 'node:child_process';
 
 import {
   b64u, fromB64u, framed, transcript, keyId, generateIdentity, signerFromPrivateKey,
@@ -424,6 +426,38 @@ describe('mobile-link relay-core', () => {
   });
 });
 
+// ── Robustheit gegen kaputte Rahmen (Codex R1 P1) ───────────────────────────
+
+describe('mobile-link Relay-Prozess', () => {
+  test('kaputter WebSocket-Rahmen beendet den Relay-Prozess nicht', async () => {
+    const child = spawn(process.execPath, [path.join(here, '..', 'services', 'mobile-link', 'relay-server.js')], {
+      env: { ...process.env, RELAY_PORT: '0', RELAY_HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    try {
+      const port = await new Promise((resolve, reject) => {
+        let out = '';
+        child.stdout.on('data', (b) => { out += b; const m = /:(\d+)\/v1\/ws/.exec(out); if (m) resolve(Number(m[1])); });
+        child.on('exit', (c) => reject(new Error(`exit ${c}`)));
+      });
+      // Handshake von Hand, dann ein unmaskierter Rahmen (Client→Server muss maskiert sein).
+      await new Promise((resolve) => {
+        const sock = net.connect(port, '127.0.0.1', () => {
+          sock.write('GET /v1/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+            + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n');
+        });
+        sock.once('data', () => { sock.write(Buffer.from([0x81, 0x02, 0x68, 0x69])); setTimeout(() => { sock.destroy(); resolve(); }, 300); });
+        sock.on('error', () => resolve());
+      });
+      await sleep(200);
+      assert.equal(child.exitCode, null, 'Relay-Prozess ist abgestürzt');
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+      assert.equal(res.status, 200);
+    } finally {
+      child.kill();
+    }
+  });
+});
+
 // ── Rechte und Einstellungen ────────────────────────────────────────────────
 
 describe('mobile-link Rechte', () => {
@@ -517,6 +551,8 @@ describe('mobile-link Ende zu Ende', () => {
     s.on('live', (m) => lives.push(m));
     s.subscribe(true, 1000);
     assert.deepEqual(await s.request('GET', '/api/status?x=1'), { status: 200, body: { echo: ['GET', '/api/status?x=1', null] } });
+    // GET trägt nie einen Body zur eigenen API.
+    assert.deepEqual((await s.request('GET', '/api/costs', { heimlich: 1 })).body, { echo: ['GET', '/api/costs', null] });
     assert.equal((await s.request('POST', '/api/control/stop', {})).status, 403);
     assert.equal((await s.request('GET', '/api/config')).status, 403);
     await until(() => lives.length >= 1);
@@ -563,6 +599,43 @@ describe('mobile-link Ende zu Ende', () => {
     assert.equal(r.status, 200);
     assert.deepEqual(calls.at(-1), ['POST', '/api/control/stop', JSON.stringify({ reason: 'test' })]);
     assert.ok(ctx.logs.some(([e, d]) => e === 'mobile_link_control' && d.path === '/api/control/stop'));
+    s.close();
+  });
+
+  test('kaputte Handshakes fluten das Protokoll nicht', async () => {
+    const ctx = await setup();
+    const { phone, creds } = await pairVia(ctx, null);
+    const { default: WebSocket } = await import('ws');
+    for (let i = 0; i < 5; i++) {
+      const ws = new WebSocket(ctx.relayUrl);
+      await new Promise((resolve) => {
+        ws.on('message', (raw) => {
+          const m = JSON.parse(raw.toString());
+          if (m.t === 'challenge') {
+            ws.send(JSON.stringify({ t: 'auth', role: 'device', ticket: creds.ticket, pub: b64u(phone.publicRaw), sig: b64u(phone.sign(relayAuthData('device', m.n))) }));
+          } else if (m.t === 'ok') {
+            ws.send(JSON.stringify({ t: 'data', d: b64u(Buffer.from('kein json')) }));
+          }
+        });
+        ws.on('close', resolve);
+      });
+    }
+    const errors = ctx.logs.filter(([e]) => e === 'mobile_link_peer_error');
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+  });
+
+  test('zu große Antwort → 413, die Verbindung der Box zum Relay bleibt (Codex R1 P2)', async () => {
+    // 800 000 ASCII-Zeichen: unter der Zeichengrenze, verschlüsselt und base64
+    // aber über der Rahmengrenze des Relays.
+    const ctx = await setup({ loopback: async () => ({ status: 200, body: 'x'.repeat(800_000) }) });
+    const { phone, creds } = await pairVia(ctx, null);
+    const s = await connectDevice({ creds, signer: phone, url: ctx.relayUrl });
+    const r = await s.request('GET', '/api/status', null, 5000);
+    assert.equal(r.status, 413);
+    assert.equal(ctx.agent.status().relay.online, true);
+    // Die Sitzung läuft weiter (Zähler nicht verrutscht).
+    s.subscribe(true, 1000);
+    await until(() => new Promise((res) => s.once('live', () => res(true))));
     s.close();
   });
 
