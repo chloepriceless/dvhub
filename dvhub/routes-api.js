@@ -68,6 +68,7 @@ import { createNotificationRoutes } from './routes/notification-routes.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp } from './config-model.js';
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
+import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -4735,6 +4736,83 @@ export function createApiRoutes(ctx) {
     // oder einen Bearer — bei lanTrust 'open' könnte sonst eine fremde Webseite
     // im Browser des Kunden (JSON als text/plain) die Spende einschalten.
     // Ausschalten geht immer ohne Nonce.
+    // ── Handy-App (Kopplung per QR-Code, 2026-10-22) ──────────────────────
+    // Status lesbar wie die anderen Kacheln. Alles, was einen Zugang schafft
+    // oder erweitert (einschalten, Relay ändern, koppeln, freigeben, Rechte
+    // erhöhen), braucht den UI-Nonce aus GET /status oder einen Bearer — bei
+    // lanTrust 'open' könnte sonst eine fremde Webseite im Browser des Kunden
+    // ein Handy koppeln. Ausschalten, abbrechen und entkoppeln gehen immer.
+    if (url.pathname.startsWith('/api/mobile-link/')) {
+      const ml = ctx.mobileLink;
+      if (!ml) return json(res, 503, { ok: false, error: 'mobile_link_unavailable' });
+      const nonceOk = (body) => installerHasValidBearer(req) || uiNonce.check(body?.uiToken);
+      const fail = (e, fallback = 400) => {
+        const code = String(e?.message || 'internal_error').split(':')[0];
+        const status = {
+          mobile_link_disabled: 409, too_many_devices: 409, no_pairing_to_approve: 409,
+          device_not_found: 404,
+        }[code] || fallback;
+        return json(res, status, { ok: false, error: code });
+      };
+      if (url.pathname === '/api/mobile-link/status' && req.method === 'GET') {
+        return json(res, 200, { ok: true, ...ml.status(), uiToken: uiNonce.issue() });
+      }
+      if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method_not_allowed' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      if (url.pathname === '/api/mobile-link/settings') {
+        const patch = {};
+        if (body.enabled !== undefined) {
+          if (typeof body.enabled !== 'boolean') return json(res, 400, { ok: false, error: 'enabled_must_be_boolean' });
+          patch.enabled = body.enabled;
+        }
+        if (body.useRelay !== undefined) {
+          if (typeof body.useRelay !== 'boolean') return json(res, 400, { ok: false, error: 'useRelay_must_be_boolean' });
+          patch.useRelay = body.useRelay;
+        }
+        if (body.relayUrl !== undefined) {
+          const raw = String(body.relayUrl ?? '').trim();
+          const norm = raw ? normalizeRelayUrl(raw) : DEFAULT_MOBILE_RELAY_URL;
+          if (!norm) return json(res, 400, { ok: false, error: 'relay_url_invalid' });
+          patch.relayUrl = norm;
+        }
+        if (body.name !== undefined) {
+          const name = String(body.name ?? '').trim().slice(0, 40);
+          patch.name = name || 'DVhub';
+        }
+        const onlyNarrowing = Object.keys(patch).length > 0
+          && Object.keys(patch).every((k) => (k === 'enabled' && patch.enabled === false) || (k === 'useRelay' && patch.useRelay === false));
+        if (!onlyNarrowing && !nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+        next.mobileLink = { ...(next.mobileLink || {}), ...patch };
+        ctx.saveAndApplyConfig(next);
+        pushLog('mobile_link_setting_changed', patch, actorContext(req));
+        ml.reconcile();
+        return json(res, 200, { ok: true, ...ml.status() });
+      }
+      if (url.pathname === '/api/mobile-link/pair/start') {
+        if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        try { return json(res, 200, { ok: true, pairing: ml.startPairing({ lanHost: body.lanHost }) }); } catch (e) { return fail(e); }
+      }
+      if (url.pathname === '/api/mobile-link/pair/approve') {
+        if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        try {
+          const r = ml.approvePairing({ perms: body.perms, name: body.name });
+          return json(res, 200, r);
+        } catch (e) { return fail(e); }
+      }
+      if (url.pathname === '/api/mobile-link/pair/cancel') {
+        return json(res, 200, ml.cancelPairing());
+      }
+      if (url.pathname === '/api/mobile-link/devices/remove') {
+        try { return json(res, 200, ml.removeDevice(String(body.id || ''))); } catch (e) { return fail(e); }
+      }
+      if (url.pathname === '/api/mobile-link/devices/update') {
+        if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        try { return json(res, 200, ml.updateDevice(String(body.id || ''), { name: body.name, perms: body.perms })); } catch (e) { return fail(e); }
+      }
+      return json(res, 404, { ok: false, error: 'not_found' });
+    }
     // ── Ortsnetz-Auslastung (ortsnetz-auslastung.de) ─────────────────────
     // Status lesbar wie die anderen Kacheln; Einstellungen + „Jetzt senden“
     // brauchen den UI-Nonce oder einen Bearer (Opt-in schickt Standort raus).

@@ -21,6 +21,13 @@ verweist hierher.
   Die Historie zeigt den Akku der zweiten Anlage getrennt („Akku 2“): eigene Zeilen in der Energiebilanz, eigene
   Segmente in den Tagesflüssen, eigener Knoten im Sankey, eigene Spalten in Tabelle und CSV, seine Einspeisung mit
   eigenem Börsenerlös — PV, Verbrauch und Einspeisung gehen damit wieder auf.
+- **Handy-App koppeln (Beta)**: Einstellungen → Freigaben → Handy-App. Ein QR-Code koppelt die DVhub-App mit der
+  Anlage; erst nach „Freigeben“ in der Oberfläche ist das Handy eingetragen, wahlweise nur zum Anzeigen oder auch zum
+  Steuern (Not-Halt, Auto, Regeln). Die Verbindung ist Ende zu Ende verschlüsselt — die Schlüssel tauschen Anlage und
+  Handy nur über den QR-Code aus. Im Heimnetz spricht das Handy direkt mit der Anlage, unterwegs über ein Relay, das nur
+  verschlüsselte Daten weiterleitet und nichts auf der Platte speichert. Voreingestellt ist `relay.dvhub.de`, ein
+  eigenes Relay lässt sich eintragen (`relay/README.md`, Docker-Compose mit TLS). Ab Werk aus; Entkoppeln trennt
+  sofort. Protokoll: `docs/HANDY-APP-PROTOKOLL.md`.
 
 ## [1.0.8] - 2026-10-21
 

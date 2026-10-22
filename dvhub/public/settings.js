@@ -3985,7 +3985,7 @@ function initVpnTab() {
 // Skripte bleiben unverändert. Zuordnung über die Kartenüberschrift.
 const STATUS_CARD_TARGETS = {
   'areaExtra-sys': ['Zugang', 'Config', 'Software', 'Betriebssystem', 'Datenbank-Engine', 'Dienst', 'Historie', 'Support-Bundle'],
-  'areaExtra-shares': ['Installateurs-Portal', 'Fern-Support (Remote-Zugang)', 'Datenspende für die Forschung', 'Ortsnetz-Auslastung', 'Eingang für Home Assistant / Loxone']
+  'areaExtra-shares': ['Handy-App', 'Installateurs-Portal', 'Fern-Support (Remote-Zugang)', 'Datenspende für die Forschung', 'Ortsnetz-Auslastung', 'Eingang für Home Assistant / Loxone']
 };
 const STATUS_CARD_TITLES = { Config: 'Konfiguration sichern & einspielen', Software: 'Updates', Dienst: 'Neustart', Historie: 'Historie importieren', Zugang: 'Zugangstoken' };
 

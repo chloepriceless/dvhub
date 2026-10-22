@@ -4740,6 +4740,16 @@ export function createDefaultConfig() {
       allowUpdates: false,
       sessionTtlMin: 60
     },
+    // Handy-App (2026-10-22): Kopplung per QR-Code, Ende zu Ende verschlüsselt.
+    // Im Heimnetz direkt über /api/mobile-link/ws, unterwegs über das Relay
+    // (Standard relay.dvhub.de, selbst hostbar). Schlüssel und gekoppelte
+    // Geräte liegen nicht hier, sondern in DATA_DIR/mobile-link.json.
+    mobileLink: {
+      enabled: false,
+      useRelay: true,
+      relayUrl: 'wss://relay.dvhub.de/v1/ws',
+      name: 'DVhub'
+    },
     // Licensing (Phase 17 license service). keygenAccount is the Keygen CE
     // account ID on license.dvhub.de — product-wide, identical for every
     // DVhub installation (it identifies the VENDOR account, not the customer;
