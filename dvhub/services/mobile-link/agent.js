@@ -141,35 +141,42 @@ export function createMobileLink(ctx = {}, deps = {}) {
   // lesbar (kaputt, Rechte, Datenträger noch nicht da), bleibt die Handy-App
   // aus — eine neue Identität würde alle Kopplungen still entwerten
   // (Fable-Review H2). Die Datei bleibt unangetastet.
+  const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
+
   function loadStore() {
     let text;
     try {
       text = fsImpl.readFileSync(sidecarPath(), 'utf8');
     } catch (e) {
-      if (e?.code === 'ENOENT') return { store: null, error: null };
-      return { store: null, error: `sidecar_unreadable:${e?.code || e?.message || 'unknown'}` };
+      if (e?.code === 'ENOENT') return { store: null, error: null, hash: null };
+      return { store: null, error: `sidecar_unreadable:${e?.code || e?.message || 'unknown'}`, hash: undefined };
     }
     try {
       const o = JSON.parse(text);
       if (o && o.v === 1 && typeof o.boxKey === 'string' && Array.isArray(o.devices)) {
-        return { store: o, error: null, signer: signerFromPrivateKey(o.boxKey) };
+        return { store: o, error: null, signer: signerFromPrivateKey(o.boxKey), hash: digest(text) };
       }
     } catch { /* unten */ }
-    return { store: null, error: 'sidecar_corrupt' };
+    return { store: null, error: 'sidecar_corrupt', hash: digest(text) };
   }
 
   function saveStore() {
+    // Hat jemand anderes die Datei inzwischen geschrieben (Geräte-Tausch-Import
+    // ohne Neustart), wird sie übernommen statt überschrieben (Codex R5 P1).
+    if (adoptIfChangedOnDisk()) throw new Error('mobile_link_store_replaced');
     const p = sidecarPath();
     const tmp = `${p}.tmp-${process.pid}`;
+    const text = JSON.stringify(store, null, 2);
     const fd = fsImpl.openSync(tmp, 'w', 0o600);
     try {
-      fsImpl.writeSync(fd, JSON.stringify(store, null, 2));
+      fsImpl.writeSync(fd, text);
       fsImpl.fsyncSync(fd);
     } finally {
       fsImpl.closeSync(fd);
     }
     try { fsImpl.chmodSync?.(tmp, 0o600); } catch { /* best effort */ }
     fsImpl.renameSync(tmp, p);
+    diskHash = digest(text);
   }
 
   // Geladen wird erst in start() — dann steht DATA_DIR fest.
@@ -177,20 +184,48 @@ export function createMobileLink(ctx = {}, deps = {}) {
   let signer = null;
   let storeError = null;
   let storeLoaded = false;
+  let diskHash = null; // Inhalt, den wir zuletzt gelesen oder geschrieben haben
+
+  function applyLoaded(r) {
+    store = r.store;
+    signer = r.signer || null;
+    storeError = r.error;
+    diskHash = r.hash ?? null;
+    if (storeError) pushLog('mobile_link_store_error', { error: storeError, path: sidecarPath() });
+  }
+
+  function readSafe() {
+    try { return loadStore(); } catch (e) { return { store: null, error: `sidecar_unreadable:${e?.message || e}`, hash: undefined }; }
+  }
 
   function ensureLoaded() {
     if (storeLoaded) return;
     storeLoaded = true;
-    let r;
-    try { r = loadStore(); } catch (e) { r = { store: null, error: `sidecar_unreadable:${e?.message || e}` }; }
-    store = r.store;
-    signer = r.signer || null;
-    storeError = r.error;
-    if (storeError) pushLog('mobile_link_store_error', { error: storeError, path: sidecarPath() });
+    applyLoaded(readSafe());
+  }
+
+  // Liegt auf der Platte ein anderer Stand als der, den wir kennen? Dann ihn
+  // übernehmen (neue Identität/Geräte), laufende Wege neu aufbauen. true =
+  // übernommen. Eine verschwundene Datei übernehmen wir nicht (dann bleibt der
+  // Stand im Speicher und wird beim nächsten Speichern wieder geschrieben).
+  function adoptIfChangedOnDisk() {
+    if (!storeLoaded) return false;
+    const r = readSafe();
+    if (r.hash === null || r.hash === diskHash) return false;
+    const before = signer?.id || null;
+    applyLoaded(r);
+    pushLog('mobile_link_store_reloaded', { box: signer?.id || null, previous: before });
+    for (const peer of [...sessions]) peer.close('store_reloaded');
+    lanLink?.stop(); lanLink = null;
+    lanRelay?.close(); lanRelay = null;
+    remoteLink?.stop(); remoteLink = null; remoteUrl = null;
+    pairing = null;
+    return true;
   }
 
   function ensureIdentity() {
     ensureLoaded();
+    if (!signer) adoptIfChangedOnDisk(); // inzwischen wiederhergestellt?
     if (storeError) throw new Error('mobile_link_store_unreadable');
     if (signer) return signer;
     signer = generateIdentity();
@@ -785,6 +820,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
 
   function reconcile() {
     if (!started) return;
+    adoptIfChangedOnDisk();
     const s = settings();
     if (!s.enabled) {
       lanLink?.stop(); lanLink = null;

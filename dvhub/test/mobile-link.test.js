@@ -585,7 +585,7 @@ function makeAgent({ dir, relayUrl, extraCfg = {}, loopback, status = () => ({ s
       networkHosts: () => [],
     },
   );
-  return { agent, logs, setCfg: (c) => { cfg = c; } };
+  return { agent, logs, setCfg: (c) => { cfg = c; }, file: path.join(dir, SIDECAR_NAME) };
 }
 
 describe('mobile-link Ende zu Ende', () => {
@@ -850,6 +850,39 @@ describe('mobile-link Ende zu Ende', () => {
     } finally {
       s.close();
     }
+  });
+
+  test('Umzug: wiederhergestellte Schlüsseldatei wird übernommen, nie überschrieben (Codex R5 P1)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-link-'));
+    const file = path.join(dir, SIDECAR_NAME);
+    // Quelle: eine andere Box mit gekoppeltem Gerät.
+    const src = makeAgent({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-link-src-')), relayUrl: 'ws://127.0.0.1:9/v1/ws' });
+    src.agent.start();
+    src.agent.startPairing();
+    const srcId = src.agent._boxId();
+    src.agent.stop();
+    // Ziel: frische Box, Handy-App noch aus (Sidecar fehlt beim Start).
+    const tgt = makeAgent({ dir, relayUrl: 'ws://127.0.0.1:9/v1/ws', extraCfg: { enabled: false } });
+    tgt.agent.start();
+    assert.equal(tgt.agent.status().boxId, null);
+    // Import schreibt die Datei der Quelle und schaltet ein (ohne Neustart).
+    fs.copyFileSync(src.file, file);
+    const copied = fs.readFileSync(file, 'utf8');
+    tgt.setCfg({ httpPort: 18099, mobileLink: { enabled: true, relayUrl: 'ws://127.0.0.1:9/v1/ws' } });
+    tgt.agent.reconcile();
+    assert.equal(tgt.agent._boxId(), srcId, 'neue Identität statt der wiederhergestellten');
+    assert.equal(fs.readFileSync(file, 'utf8'), copied, 'wiederhergestellte Datei überschrieben');
+    // Läuft die Box schon mit eigener Identität, übernimmt sie eine von außen
+    // ersetzte Datei beim nächsten Abgleich ebenfalls.
+    const other = makeAgent({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-link-o-')), relayUrl: 'ws://127.0.0.1:9/v1/ws' });
+    other.agent.start();
+    other.agent.startPairing();
+    const otherId = other.agent._boxId();
+    other.agent.stop();
+    fs.copyFileSync(other.file, file);
+    tgt.agent.reconcile();
+    assert.equal(tgt.agent._boxId(), otherId);
+    tgt.agent.stop();
   });
 
   test('QR-Code gilt genau einmal; abgelehnte Anfrage koppelt nicht', async () => {
