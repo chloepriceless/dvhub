@@ -20,7 +20,8 @@ import {
   issueTicket, verifyTicket, relayAuthData, pairRelayToken, pairTokenHash,
   sealMailbox, openMailbox, x25519FromSeed, x25519Shared, aeadSeal, verifySig,
 } from '../services/mobile-link/crypto.js';
-import { createRelay, createMemorySocketPair, CLOSE } from '../services/mobile-link/relay-core.js';
+import { createRelay, createMemorySocketPair, CLOSE, wrapWebSocket } from '../services/mobile-link/relay-core.js';
+import { isAllowedMigrationFile } from '../services/config-secrets-crypto.js';
 import { startRelayServer } from '../services/mobile-link/relay-server.js';
 import { createMobileLink, normalizeRelayUrl, sanitizeLanHost, SIDECAR_NAME } from '../services/mobile-link/agent.js';
 import { pairDevice, connectDevice } from '../services/mobile-link/client.js';
@@ -486,6 +487,27 @@ describe('mobile-link relay-core', () => {
 
 // ── Robustheit gegen kaputte Rahmen (Codex R1 P1) ───────────────────────────
 
+describe('mobile-link Codex R2', () => {
+  test('langsamer Empfänger: Ausgangspuffer begrenzt, Verbindung wird getrennt (P1)', () => {
+    let terminated = false;
+    let sent = 0;
+    const fake = {
+      readyState: 1, bufferedAmount: 0,
+      send() { sent++; this.bufferedAmount += 1024 * 1024; },
+      terminate() { terminated = true; this.readyState = 3; },
+      ping() {}, close() {}, on() {},
+    };
+    const sock = wrapWebSocket(fake, { pingMs: 0 });
+    for (let i = 0; i < 50; i++) sock.send('x');
+    assert.ok(terminated, 'langsamer Empfänger nicht getrennt');
+    assert.ok(sent <= 9, `zu viel gepuffert: ${sent} MiB`);
+  });
+
+  test('Umzugssicherung enthält die Schlüsseldatei der Handy-App (P2)', () => {
+    assert.ok(isAllowedMigrationFile(`data/${SIDECAR_NAME}`));
+  });
+});
+
 describe('mobile-link Relay-Prozess', () => {
   test('kaputter WebSocket-Rahmen beendet den Relay-Prozess nicht', async () => {
     const child = spawn(process.execPath, [path.join(here, '..', 'services', 'mobile-link', 'relay-server.js')], {
@@ -763,6 +785,39 @@ describe('mobile-link Ende zu Ende', () => {
     assert.ok(c.agent._boxId() && c.agent._boxId() !== boxId);
     c.agent.stop();
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('Live-Intervall jenseits der Timer-Grenze flutet nicht (Codex R2 P2)', async () => {
+    const ctx = await setup();
+    const { phone, creds } = await pairVia(ctx, null);
+    const s = await connectDevice({ creds, signer: phone, url: ctx.relayUrl });
+    const lives = [];
+    s.on('live', (m) => lives.push(m));
+    s.subscribe(true, 2147483648);
+    await sleep(1200);
+    assert.ok(lives.length <= 2, `${lives.length} Live-Nachrichten in 1,2 s`);
+    assert.equal(ctx.agent.status().relay.online, true);
+    s.close();
+  });
+
+  test('gleichzeitige Anfragen je Gerät über alle Verbindungen begrenzt (Codex R2 P2)', async () => {
+    let running = 0;
+    let peak = 0;
+    const ctx = await setup({ loopback: async () => {
+      running++; peak = Math.max(peak, running);
+      await sleep(300);
+      running--;
+      return { status: 200, body: {} };
+    } });
+    const { phone, creds } = await pairVia(ctx, null);
+    const a = await connectDevice({ creds: { ...creds }, signer: phone, url: ctx.relayUrl });
+    const b = await connectDevice({ creds: { ...creds }, signer: phone, url: ctx.relayUrl });
+    const all = [];
+    for (let i = 0; i < 4; i++) { all.push(a.request('GET', '/api/status')); all.push(b.request('GET', '/api/status')); }
+    const res = await Promise.all(all);
+    assert.ok(peak <= 4, `gleichzeitig ${peak}`);
+    assert.equal(res.filter((r) => r.status === 429).length, 4);
+    a.close(); b.close();
   });
 
   test('QR-Code gilt genau einmal; abgelehnte Anfrage koppelt nicht', async () => {

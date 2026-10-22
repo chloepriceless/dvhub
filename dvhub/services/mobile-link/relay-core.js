@@ -467,7 +467,11 @@ export function createRelay({
 
 // Adapter für eine `ws`-Verbindung (Server- oder Client-Seite). Pings halten
 // NAT-Zuordnungen offen und erkennen tote Gegenstellen.
-export function wrapWebSocket(ws, { pingMs = 25_000 } = {}) {
+// Höchstens so viel darf je Verbindung unterwegs sein; wer nicht liest, wird
+// getrennt — sonst füllt ein langsamer Empfänger den Speicher (Codex R2 P1).
+export const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+
+export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_BYTES } = {}) {
   let alive = true;
   const timer = pingMs > 0 ? setInterval(() => {
     if (!alive) { try { ws.terminate(); } catch { /* egal */ } return; }
@@ -482,7 +486,11 @@ export function wrapWebSocket(ws, { pingMs = 25_000 } = {}) {
   // ganzen Prozess (Relay bzw. DVhub) — so wird nur diese Verbindung getrennt.
   ws.on('error', () => { try { ws.terminate(); } catch { /* egal */ } });
   return {
-    send: (text) => { if (ws.readyState === 1) ws.send(text); },
+    send: (text) => {
+      if (ws.readyState !== 1) return;
+      if (ws.bufferedAmount > maxBuffered) { try { ws.terminate(); } catch { /* egal */ } return; }
+      ws.send(text);
+    },
     close: (code, reason) => { try { ws.close(code, reason); } catch { /* egal */ } },
     onMessage: (fn) => ws.on('message', (data, isBinary) => fn(isBinary ? null : data.toString('utf8'))),
     onClose: (fn) => ws.on('close', fn),

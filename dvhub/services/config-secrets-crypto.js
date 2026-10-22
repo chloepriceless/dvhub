@@ -87,6 +87,9 @@ export function collectSecrets(config) {
 export const MIGRATION_DATA_FILES = Object.freeze([
   'appliance-id', 'license_state.json', 'datenspende.json',
   'installer-portal-client.json', 'installer-portal-secret', 'input-push-key',
+  // Handy-App: Schlüssel der Box + gekoppelte Geräte — ohne sie wären nach dem
+  // Umzug alle Kopplungen ungültig (Codex R2).
+  'mobile-link.json',
   'support/relay_id_ed25519', 'support/relay_id_ed25519.pub', 'support/known_hosts', 'support/relay.json',
   'eebus/cert.pem', 'eebus/key.pem', 'eebus/grid-state.json', 'eebus/energy.json',
 ]);

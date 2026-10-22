@@ -41,6 +41,7 @@ export const MAX_DEVICES = 10;
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const LIVE_MIN_MS = 1000;
 const LIVE_DEFAULT_MS = 2000;
+const LIVE_MAX_MS = 60_000; // setInterval kann höchstens 2^31−1 ms, darüber wird 1 ms daraus
 const MAILBOX_LATEST_MS = 60_000;
 const RECONCILE_MS = 30_000;
 const MAX_RESPONSE_CHARS = 900 * 1024;
@@ -491,6 +492,10 @@ export function createMobileLink(ctx = {}, deps = {}) {
     return link;
   }
 
+  // Laufende Anfragen je Gerät über alle Verbindungen hinweg — gezählt, bis die
+  // Loopback-Anfrage wirklich fertig ist, auch wenn die Verbindung schon weg ist.
+  const inflightByDev = new Map();
+
   // Gleitende Minute je Gerät und für alle zusammen.
   const reqLog = new Map(); // devId → Zeitstempel
   const reqAll = [];
@@ -518,7 +523,6 @@ export function createMobileLink(ctx = {}, deps = {}) {
     let pairBox = null;
     let stage = role === 'device' ? 'hs1' : 'p1';
     let liveTimer = null;
-    let inflight = 0;
     const timeout = setTimeout(() => { if (!session || stage !== 'ready') peer.close('handshake_timeout'); }, HANDSHAKE_TIMEOUT_MS);
     timeout.unref?.();
 
@@ -638,7 +642,8 @@ export function createMobileLink(ctx = {}, deps = {}) {
         clearInterval(liveTimer);
         liveTimer = null;
         if (msg.live === true) {
-          const every = Math.max(LIVE_MIN_MS, Number(msg.intervalMs) || LIVE_DEFAULT_MS);
+          const want = Number(msg.intervalMs);
+          const every = Number.isFinite(want) && want > 0 ? Math.min(LIVE_MAX_MS, Math.max(LIVE_MIN_MS, want)) : LIVE_DEFAULT_MS;
           const tick = () => { try { peer.send({ t: 'live', ts: new Date(now()).toISOString(), status: buildStatus() }); } catch { /* nächster Takt */ } };
           tick();
           liveTimer = setInterval(tick, every);
@@ -651,13 +656,13 @@ export function createMobileLink(ctx = {}, deps = {}) {
         const reply = (s, body) => {
           if (!peer.send({ t: 'res', id, s, b: body })) peer.send({ t: 'res', id, s: 413, b: { error: 'response_too_large' } });
         };
-        if (inflight >= MAX_PARALLEL_REQUESTS || !takeRequestSlot(dev.id)) return reply(429, { error: 'too_many_requests' });
+        if ((inflightByDev.get(dev.id) || 0) >= MAX_PARALLEL_REQUESTS || !takeRequestSlot(dev.id)) return reply(429, { error: 'too_many_requests' });
         const chk = checkRequest(dev.perms, msg.m, msg.p);
         if (!chk.ok) return reply(chk.status, { error: chk.error });
         const method = String(msg.m).toUpperCase();
         const bodyText = method === 'POST' ? JSON.stringify(msg.b ?? {}) : null;
         if (bodyText && bodyText.length > MAX_REQUEST_BODY_CHARS) return reply(413, { error: 'body_too_large' });
-        inflight++;
+        inflightByDev.set(dev.id, (inflightByDev.get(dev.id) || 0) + 1);
         loopback(method, chk.path + chk.search, bodyText, { devId: dev.id })
           .then((r) => {
             if (method === 'POST') pushLog('mobile_link_control', { dev: dev.id, name: dev.name, path: chk.path, status: r.status });
@@ -666,7 +671,10 @@ export function createMobileLink(ctx = {}, deps = {}) {
             reply(r.status, r.body);
           })
           .catch((e) => reply(502, { error: e?.message || 'loopback_failed' }))
-          .finally(() => { inflight--; });
+          .finally(() => {
+            const n = (inflightByDev.get(dev.id) || 1) - 1;
+            if (n > 0) inflightByDev.set(dev.id, n); else inflightByDev.delete(dev.id);
+          });
         return;
       }
     }
