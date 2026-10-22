@@ -222,9 +222,13 @@ final class SystemController {
         guard let items = try? await conn.fetchMailbox() else { return }
         var next = mailbox
         let ack = next.merge(items)
-        if next != mailbox { mailbox = next }
+        let changed = next != mailbox
+        if changed { mailbox = next }
+        // Jeden geänderten Stand speichern — auch einen reinen `latest` ohne
+        // Ereignisse, damit er einen Neustart ohne Verbindung übersteht (Codex R4).
+        let saved = changed ? saveMailboxState() : true
         // Erst quittieren, wenn übernommen und gespeichert ist.
-        guard !ack.isEmpty, saveMailboxState() else { return }
+        guard !ack.isEmpty, saved else { return }
         try? await conn.ackMailbox(ack)
     }
 

@@ -109,11 +109,18 @@ struct HistoryView: View {
         let start = day == .today ? today : cal.date(byAdding: .day, value: -1, to: today)!
         let end = cal.date(byAdding: .day, value: 1, to: start)!
         let keys = (Self.powerKeys + [Self.socKey]).joined(separator: ",")
-        let path = "/api/telemetry/series?keys=\(keys)&start=\(enc(ISO.string(start)))&end=\(enc(ISO.string(end)))&maxResolution=900"
+        let path = "/api/telemetry/series?keys=\(keys)&start=\(enc(ISO.string(start)))&end=\(enc(ISO.string(end)))&maxResolution=300"
         do {
+            // 300 s: Die Box fasst in 5-Minuten-Mittelwerte zusammen (rund 1 500
+            // Zeilen am Tag). Mit 900 käme jeder 5-s-Messwert und sprengte den
+            // Kanal (Codex R4).
             let r = try await controller.request("GET", path)
             guard r.status == 200, let rows = r.body["data"]?.array else {
-                error = r.status == 503 ? "Die Anlage hat keine Messwert-Datenbank." : "Verlauf nicht verfügbar (HTTP \(r.status))."
+                switch r.status {
+                case 503: error = "Die Anlage hat keine Messwert-Datenbank."
+                case 413: error = "Der Verlauf ist für die Übertragung zu groß (Messwert-Datenbank ohne Zusammenfassung)."
+                default: error = "Verlauf nicht verfügbar (HTTP \(r.status))."
+                }
                 return
             }
             points = rows.compactMap { row in

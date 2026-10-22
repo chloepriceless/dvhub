@@ -168,13 +168,23 @@ final class AppModel {
                 onWait: { [weak self] code in Task { @MainActor in self?.pairState = .waitingForApproval(name: boxName, code: code) } }
             )
             creds.keyRef = created.keyRef
-            if let old = systems.first(where: { $0.id == creds.id }) {
+            // Erst die neuen Zugangsdaten sicher speichern, dann den alten
+            // Schlüssel löschen — scheitert das Speichern, bleibt die alte
+            // Kopplung vollständig erhalten (Codex R4).
+            let old = systems.first(where: { $0.id == creds.id })
+            let previous = systems
+            if let i = systems.firstIndex(where: { $0.id == creds.id }) { systems[i] = creds } else { systems.append(creds) }
+            guard persist() else {
+                systems = previous
+                KeyStore.deleteKey(created.keyRef)
+                pairState = .failed("Die Kopplung konnte nicht im Schlüsselbund gespeichert werden. Bitte erneut versuchen.")
+                return
+            }
+            if let old {
                 // Neu gekoppelt: alte Verbindung und alten Schlüssel ersetzen.
                 controllers[old.id]?.stop()
-                if let ref = old.keyRef { KeyStore.deleteKey(ref) }
+                if let ref = old.keyRef, ref != created.keyRef { KeyStore.deleteKey(ref) }
             }
-            store(creds)
-            guard !loadFailed else { return }
             attach(creds)
             selected?.stop()
             selectedId = creds.id
