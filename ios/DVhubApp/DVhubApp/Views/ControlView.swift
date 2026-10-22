@@ -101,7 +101,17 @@ struct ControlView: View {
         do {
             let r = try await controller.request("POST", path, body: [:])
             switch r.status {
-            case 200: result = "Erledigt."
+            case 200:
+                // Not-Halt: Schreibsperre greift, aber der alte Sollwert konnte
+                // nicht zurückgesetzt werden — wie im Browser deutlich warnen (Codex R8).
+                if r.body["ok"]?.bool == false {
+                    result = "Die Anlage meldet einen Fehler: \(r.body["error"]?.string ?? "unbekannt")."
+                } else if let n = r.body["neutralize"], n["ok"]?.bool != true, n["skipped"]?.bool != true, !n.isNull {
+                    let why = r.body["neutralize"]?["error"]?.string.map { " (\($0))" } ?? ""
+                    result = "Not-Halt ist aktiv, aber der Wechselrichter konnte nicht auf 0 W gesetzt werden\(why). Der letzte Sollwert kann noch wirken — bitte an der Anlage prüfen."
+                } else {
+                    result = "Erledigt."
+                }
             case 403: result = "Dieses Gerät darf nicht steuern. In DVhub unter „Handy-App“ freigeben."
             case 429: result = "Gerade zu viele Anfragen. Bitte gleich noch einmal."
             default: result = "Die Anlage hat abgelehnt (HTTP \(r.status))."

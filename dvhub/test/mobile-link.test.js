@@ -898,6 +898,21 @@ describe('mobile-link Ende zu Ende', () => {
     s.close();
   });
 
+  test('kaputter Geräte-Eintrag in der Schlüsseldatei: App bleibt aus, kein Absturz (Codex R8)', async () => {
+    const ctx = await setup();
+    await pairVia(ctx, null);
+    ctx.agent.stop();
+    const o = JSON.parse(fs.readFileSync(ctx.file, 'utf8'));
+    o.devices[0].mk = 'kaputt';
+    fs.writeFileSync(ctx.file, JSON.stringify(o));
+    const b = makeAgent({ dir: ctx.dir, relayUrl: ctx.relayUrl });
+    b.agent.start();
+    cleanups.push(() => b.agent.stop());
+    assert.equal(b.agent.status().storeError, 'sidecar_corrupt');
+    assert.equal(b.agent.status().enabled, false);
+    assert.doesNotThrow(() => b.agent._pushMailboxLatest());
+  });
+
   test('QR-Code gilt genau einmal; abgelehnte Anfrage koppelt nicht', async () => {
     const ctx = await setup();
     const p = ctx.agent.startPairing();

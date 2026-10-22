@@ -115,19 +115,27 @@ struct HistoryView: View {
         let end = cal.date(byAdding: .day, value: 1, to: start)!
         let keys = (Self.powerKeys + [Self.socKey]).joined(separator: ",")
         let requested = day
-        let path = "/api/telemetry/series?keys=\(keys)&start=\(enc(ISO.string(start)))&end=\(enc(ISO.string(end)))&maxResolution=300"
+        let base = "/api/telemetry/series?keys=\(keys)&start=\(enc(ISO.string(start)))&end=\(enc(ISO.string(end)))&maxResolution="
         do {
             // 300 s: Die Box fasst in 5-Minuten-Mittelwerte zusammen (rund 1 500
             // Zeilen am Tag). Mit 900 käme jeder 5-s-Messwert und sprengte den
-            // Kanal (Codex R4).
-            let r = try await controller.request("GET", path)
+            // Kanal (Codex R4). Bleibt das leer, gibt es an dem Tag nur grobe
+            // Werte (z. B. VRM-Import, 15 min) — dann diese holen (Codex R8).
+            var r = try await controller.request("GET", base + "300")
+            guard !Task.isCancelled, requested == day else { return }
+            if r.status == 200, r.body["ok"]?.bool != false, (r.body["data"]?.array ?? []).isEmpty {
+                r = try await controller.request("GET", base + "900")
+            }
             // Inzwischen auf einen anderen Tag gewechselt (die alte Anfrage läuft
             // weiter, auch wenn SwiftUI den Task abbricht): Antwort verwerfen.
             guard !Task.isCancelled, requested == day else { return }
-            guard r.status == 200, let rows = r.body["data"]?.array else {
+            // Bricht die Datenbank mitten im Strom ab, bleibt es bei HTTP 200,
+            // aber ok:false — dann keine halben Kurven zeigen (Codex R8).
+            guard r.status == 200, r.body["ok"]?.bool != false, let rows = r.body["data"]?.array else {
                 points = []
                 pointsDay = nil
                 switch r.status {
+                case 200: error = "Verlauf unvollständig: \(r.body["error"]?.string ?? "Fehler in der Anlage")."
                 case 503: error = "Die Anlage hat keine Messwert-Datenbank."
                 case 413: error = "Der Verlauf ist für die Übertragung zu groß (Messwert-Datenbank ohne Zusammenfassung)."
                 default: error = "Verlauf nicht verfügbar (HTTP \(r.status))."

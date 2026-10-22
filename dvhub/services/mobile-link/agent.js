@@ -143,6 +143,20 @@ export function createMobileLink(ctx = {}, deps = {}) {
   // (Fable-Review H2). Die Datei bleibt unangetastet.
   const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
 
+  // Jeder Geräte-Eintrag muss vollständig und in sich stimmig sein — sonst
+  // bleibt die Handy-App aus, statt später beim Entschlüsseln abzustürzen (Codex R8).
+  function validDevice(d) {
+    try {
+      if (!d || typeof d.id !== 'string' || !Array.isArray(d.perms)) return false;
+      const pub = fromB64u(d.pub, 65);
+      if (keyId(pub) !== d.id) return false;
+      fromB64u(d.mk, 32);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function loadStore() {
     let text;
     try {
@@ -153,7 +167,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     }
     try {
       const o = JSON.parse(text);
-      if (o && o.v === 1 && typeof o.boxKey === 'string' && Array.isArray(o.devices)) {
+      if (o && o.v === 1 && typeof o.boxKey === 'string' && Array.isArray(o.devices) && o.devices.every(validDevice)) {
         return { store: o, error: null, signer: signerFromPrivateKey(o.boxKey), hash: digest(text) };
       }
     } catch { /* unten */ }
@@ -784,7 +798,8 @@ export function createMobileLink(ctx = {}, deps = {}) {
     for (const d of devices()) {
       // An jedes verbundene Relay — auch das im Heimnetz, sonst sieht eine
       // App ohne Relay keine Meldungen.
-      const sealed = sealMailbox(fromB64u(d.mk, 32), d.id, { t: 'latest', ts, status: st });
+      let sealed;
+      try { sealed = sealMailbox(fromB64u(d.mk, 32), d.id, { t: 'latest', ts, status: st }); } catch { continue; }
       for (const l of links()) l.send({ t: 'mbox_put', dev: d.id, slot: 'latest', d: sealed });
     }
     checkEvents(st);
@@ -800,10 +815,13 @@ export function createMobileLink(ctx = {}, deps = {}) {
     const key = `${st.alarmsActive || 0}|${st.alarmsSeverity || 0}|${st.emergencyStop ? 1 : 0}`;
     if (lastEventKey !== null && key !== lastEventKey) {
       for (const d of devices()) {
-        const sealed = sealMailbox(fromB64u(d.mk, 32), d.id, {
-          t: 'event', ts, kind: 'state_change',
-          alarmsActive: st.alarmsActive || 0, alarmsSeverity: st.alarmsSeverity || 0, emergencyStop: !!st.emergencyStop,
-        });
+        let sealed;
+        try {
+          sealed = sealMailbox(fromB64u(d.mk, 32), d.id, {
+            t: 'event', ts, kind: 'state_change',
+            alarmsActive: st.alarmsActive || 0, alarmsSeverity: st.alarmsSeverity || 0, emergencyStop: !!st.emergencyStop,
+          });
+        } catch { continue; }
         for (const l of links()) l.send({ t: 'mbox_put', dev: d.id, d: sealed });
       }
     }
