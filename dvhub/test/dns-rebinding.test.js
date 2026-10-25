@@ -254,6 +254,21 @@ describe('DNS-Rebinding: Protokoll nur bei echtem Freibrief-Verlust', () => {
     assert.equal(r.status, 401);
     assert.equal(r.refused.length, 0);
   });
+  it('restricted: freigegebene Gruppe — Heimnetz-Name durch, fremder Name protokolliert', async () => {
+    const security = { lanTrust: 'restricted', lanSafeGroups: ['status'] };
+    const ok = await run({ security }, { path: '/api/keepalive/pulse', headers: { host: 'dvhub.local' } });
+    assert.notEqual(ok.status, 401);
+    const off = await run({ security }, { path: '/api/keepalive/pulse', headers: { host: 'dvhub.meinedomain.de' } });
+    assert.equal(off.status, 401);
+    assert.equal(off.refused.length, 1);
+    assert.equal(off.body?.reason, 'host_not_trusted');
+  });
+  it('restricted: Heimnetz-Endpunkt, aber Gruppe nicht freigegeben → kein Eintrag', async () => {
+    const r = await run({ security: { lanTrust: 'restricted', lanSafeGroups: ['dashboard'] } },
+      { path: '/api/keepalive/pulse', headers: { host: 'dvhub.meinedomain.de' } });
+    assert.equal(r.status, 401);
+    assert.equal(r.refused.length, 0);
+  });
   it('Config-Export mit gültigem ?token= → kein Eintrag', async () => {
     const r = await run({}, { path: `/api/config/export?token=${API_TOKEN}`, headers: { host: 'dvhub.meinedomain.de' } });
     assert.notEqual(r.status, 401);
