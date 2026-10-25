@@ -55,7 +55,11 @@ function makeCtx(baseUrl) {
 // elecprice_marketprice_wh, feed_in_tariff_wh). The body shape is
 // PydanticDateTimeData: {start_datetime, interval, <recordKey>: [values]}.
 // Plus ?force_enable=true via url.search.
-test('pushForecast sends per-provider PUT with PydanticDateTimeData shape', async () => {
+test('pushForecast schreibt weder PV noch Last — die Forecast-Bridge ist einziger Schreiber (Review 25.10.2026)', async () => {
+  // Der Adapter PUTete die rohe Stunden-Lastprognose (60-min-Abstand) nach
+  // LoadImport und ueberschrieb bei jedem Optimierer-Lauf die Viertelstunden-
+  // reihe der Bridge mit Heizstab-Reservierung bzw. Netzspeicher-Ruhebedarf.
+  // PV hat im Nur-Netzspeicher-Betrieb dasselbe Problem (Bridge: PV = 0).
   const mock = await createMockEos((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok' }));
@@ -63,68 +67,17 @@ test('pushForecast sends per-provider PUT with PydanticDateTimeData shape', asyn
 
   try {
     const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
-
-    // Slot shape MUST match buildForecastResponse() output exactly:
-    // pv/load → { start: ISO, powerW }, price → { start: ISO, ctKwh }.
-    // (Earlier this mock used { ts, watts }, a shape the real forecast service
-    // never emits — so the test passed while production PUT a null body and EOS
-    // returned HTTP 400 for every provider.)
     const forecastResponse = {
-      pv: {
-        slots: [
-          { start: '2026-04-03T12:00:00Z', powerW: 3000 },
-          { start: '2026-04-03T13:00:00Z', powerW: 2500 }
-        ]
-      },
-      price: {
-        slots: [
-          { start: '2026-04-03T12:00:00Z', ctKwh: 15.2 },
-          { start: '2026-04-03T13:00:00Z', ctKwh: 18.5 }
-        ]
-      },
-      load: {
-        slots: [
-          { start: '2026-04-03T12:00:00Z', powerW: 800 },
-          { start: '2026-04-03T13:00:00Z', powerW: 900 }
-        ]
-      }
+      pv: { slots: [{ start: '2026-04-03T12:00:00Z', powerW: 3000 }, { start: '2026-04-03T13:00:00Z', powerW: 2500 }] },
+      price: { slots: [{ start: '2026-04-03T12:00:00Z', ctKwh: 15.2 }, { start: '2026-04-03T13:00:00Z', ctKwh: 18.5 }] },
+      load: { slots: [{ start: '2026-04-03T12:00:00Z', powerW: 800 }, { start: '2026-04-03T13:00:00Z', powerW: 900 }] }
     };
-
     const result = await adapter.pushForecast(forecastResponse);
-
     assert.equal(result.ok, true);
-    assert.ok(result.perProvider, 'Should return perProvider report');
-    assert.ok(mock.requests.length >= 2, 'Should fire pv/load PUTs (price/feed_in owned by the bridge — Phase 30 R2)');
-
-    // Find each provider call. URLs MUST include ?force_enable=true after
-    // the 2026-05-23 hotfix — without it EOS won't enable the *Import
-    // provider on the fly and returns 404.
-    const stripQs = u => (u || '').split('?')[0];
-    const pvReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/PVForecastImport');
-    const loadReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/LoadImport');
-    const priceReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/ElecPriceImport');
-    const feedInReq = mock.requests.find(r => stripQs(r.url) === '/v1/prediction/import/FeedInTariffImport');
-    assert.ok(pvReq, 'Should PUT PVForecastImport');
-    assert.ok(loadReq, 'Should PUT LoadImport');
-    // Phase 30 (P30-R2): the adapter no longer writes the price signal. The
-    // EOS-Forecast-Bridge is the canonical single-source writer for elecprice +
-    // feed_in (fixed-tariff import price + Direktvermarktung premium). The adapter
-    // pushing raw spot here used to RACE the bridge (last-writer-wins) and clobber
-    // both fixes (prod 2026-06-22: elecprice == feed_in == raw spot).
-    assert.equal(priceReq, undefined, 'Adapter must NOT PUT ElecPriceImport — bridge owns the price signal (Phase 30 R2)');
-    assert.equal(feedInReq, undefined, 'Adapter must NOT PUT FeedInTariffImport — bridge owns feed-in (Phase 30 R2)');
-    assert.equal(pvReq.method, 'PUT');
-    assert.ok((pvReq.url || '').includes('force_enable=true'), 'PV PUT must carry ?force_enable=true');
-    assert.equal(typeof pvReq.body, 'object', 'PV body must be a dict');
-    assert.ok(!Array.isArray(pvReq.body), 'PV body must be a plain dict, not array');
-    assert.ok(typeof pvReq.body.start_datetime === 'string', 'PV body has start_datetime');
-    assert.ok(typeof pvReq.body.interval === 'string', 'PV body has interval');
-    assert.ok(Array.isArray(pvReq.body.pvforecast_ac_power), 'PV body keyed by pvforecast_ac_power');
-    assert.equal(pvReq.body.pvforecast_ac_power.length, 2);
-    // Lock the actual values — guards the null-body / wrong-field-name regression.
-    assert.deepEqual(pvReq.body.pvforecast_ac_power, [3000, 2500], 'PV values from slot.powerW');
-    assert.ok(Array.isArray(loadReq.body.loadforecast_power_w), 'Load body keyed by loadforecast_power_w');
-    assert.deepEqual(loadReq.body.loadforecast_power_w, [800, 900], 'Load values from slot.powerW');
+    assert.equal(mock.requests.length, 0, 'keine einzige PUT-Anfrage');
+    for (const key of ['pv', 'load', 'price', 'feedIn']) {
+      assert.ok(result.perProvider[key]?.skipped, `${key} als von der Bridge geschrieben markiert`);
+    }
   } finally {
     await mock.close();
   }
@@ -351,13 +304,9 @@ test('httpRequest times out and returns { ok: false, error } (consistent error c
   try {
     // Use a very short timeout override for test speed
     const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`), { timeoutMs: 200 });
-    // 19.1-01: pushForecast now skips empty-slot sections, so we must supply
-    // at least one non-empty section to trigger the HTTP call that will time out.
-    const result = await adapter.pushForecast({
-      pv: { slots: [{ start: '2026-04-03T12:00:00Z', powerW: 1000 }] },
-      price: { slots: [] },
-      load: { slots: [] }
-    });
+    // pushForecast schreibt seit 25.10.2026 nichts mehr (Bridge ist einziger
+    // Schreiber); den Zeitablauf prueft eine Anfrage, die noch an EOS geht.
+    const result = await adapter.setEmsIntervalSec(900);
 
     assert.equal(result.ok, false, 'Should return ok: false on timeout');
     assert.ok(typeof result.error === 'string', 'Should have error string');
@@ -935,30 +884,9 @@ test('Halte-Regel landet mit closedLoopHold + evPlanned im Zeitplan', () => {
   assert.equal(rules[0].value, 1400);
 });
 
-test('pushForecast keeps positional PV aligned when forecast.solar adds sunrise/sunset stamps', async () => {
-  const mock = await createMockEos((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
-  });
-  try {
-    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
-    const result = await adapter.pushForecast({
-      pv: { slots: [
-        { start: '2026-10-02T05:00:00Z', powerW: 0 },
-        { start: '2026-10-02T05:15:00Z', powerW: 0 },
-        { start: '2026-10-02T05:22:57Z', powerW: 0 },
-        { start: '2026-10-02T05:30:00Z', powerW: 50 },
-      ] },
-    });
-    assert.equal(result.ok, true);
-    const pvReq = mock.requests.find((r) => r.url.startsWith('/v1/prediction/import/PVForecastImport'));
-    const body = pvReq.body;
-    assert.equal(body.interval, '15 minutes');
-    assert.deepEqual(body.pvforecast_ac_power, [0, 0, 50]);
-  } finally {
-    await mock.close();
-  }
-});
+// PV-Raster (forecast.solar-Zwischenstempel) haelt seit 25.10.2026 nur noch
+// die Forecast-Bridge ein (keepOnGridSlots, test/eos-forecast-bridge.test.js);
+// der Adapter schreibt keine Prognose mehr.
 
 // DVhub stößt jeden EOS-Lauf selbst an (eos-run-trigger.js).
 test('triggerOptimization: POST /v1/optimize mit Ladestand, wartet länger als die übliche Frist', async () => {

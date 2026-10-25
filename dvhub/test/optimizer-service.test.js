@@ -448,3 +448,34 @@ describe('Optimizer Service: DVhub stößt den EOS-Lauf an', () => {
     }
   });
 });
+
+describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 25.10.2026)', () => {
+  test('Lauf schiebt ueber die Bridge statt ueber den Adapter und meldet deren Ergebnis', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    let adapterPushes = 0;
+    let bridgePushes = 0;
+    const now = Date.now();
+    const eosAdapter = {
+      pushForecast: async () => { adapterPushes++; return { ok: true }; },
+      pullSchedule: async () => [{ ts: now, endTs: now + 900_000, powerW: -1000 }],
+      pullGridSetpoints: async () => [],
+      getOptimizationSolution: async () => ({ generatedAt: '2026-10-25T12:00:00+02:00', rows: [] }),
+      setEmsIntervalSec: async () => ({ ok: true })
+    };
+    const eosForecastBridge = {
+      push: async () => { bridgePushes++; return { ok: false, pushed: ['PVForecastImport(96)'], errors: { LoadImport: 'HTTP 500' } }; }
+    };
+    const { ctx, state } = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
+      ctx: { eosAdapter, eosForecastBridge }
+    });
+    const svc = createOptimizerService(ctx);
+    await svc.start();
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    assert.ok(bridgePushes >= 1, 'Bridge schiebt die Prognose');
+    assert.equal(adapterPushes, 0, 'Adapter schiebt nichts mehr');
+    assert.equal(state.optimizer.lastEosPush.ok, false);
+    assert.match(state.optimizer.lastEosPush.error, /LoadImport: HTTP 500/);
+    await svc.close();
+  });
+});

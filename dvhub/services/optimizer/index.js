@@ -600,14 +600,31 @@ export function createOptimizerService(ctx) {
       let eosGridSetpoints = null;
       if (resolveEosProxy(cfg).enabled) {
         try {
-          // Send enriched forecast with fully-loaded prices to EOS
-          const forecastResp = await ctx.forecastService.buildForecastResponse();
-          const enrichedForecast = {
-            ...forecastResp,
-            price: { ...forecastResp.price, slots: enrichedPriceSlots }
+          // Prognose an EOS: nur ueber die Forecast-Bridge (Review 25.10.2026).
+          // Sie ist einziger Schreiber fuer PV, Last (Viertelstunden, mit
+          // Heizstab-Reservierung / Netzspeicher-Ruhebedarf), Bezugspreis und
+          // Einspeisung. Der Adapter schrieb frueher die rohe Stundenlast und
+          // ueberschrieb damit die Reihe der Bridge. Ohne Bridge (Tests) bleibt
+          // der Adapter-Aufruf, der nichts mehr schreibt.
+          const bridge = ctx.eosForecastBridge;
+          let pushRes;
+          if (bridge && typeof bridge.push === 'function') {
+            pushRes = await bridge.push();
+          } else {
+            const forecastResp = await ctx.forecastService.buildForecastResponse();
+            pushRes = await eosAdapter.pushForecast({
+              ...forecastResp,
+              price: { ...forecastResp.price, slots: enrichedPriceSlots }
+            });
+          }
+          const pushErrors = pushRes?.errors && typeof pushRes.errors === 'object'
+            ? Object.entries(pushRes.errors).map(([key, value]) => `${key}: ${value}`).join('; ')
+            : '';
+          state.optimizer.lastEosPush = {
+            ok: pushRes?.ok === true,
+            error: pushRes?.error || pushErrors || null,
+            at: Date.now()
           };
-          const pushRes = await eosAdapter.pushForecast(enrichedForecast);
-          state.optimizer.lastEosPush = { ok: pushRes?.ok === true, error: pushRes?.error || null, at: Date.now() };
           if (eosFirstPushAt === null) eosFirstPushAt = Date.now();
           // eosSchedule = FRBC dispatch (battery power) for display/comparison.
           // eosGridSetpoints = net-grid control slots from EOS' SOLUTION (T-0118)
