@@ -245,20 +245,29 @@ fi
 
 if [[ "$USE_TSL" -eq 1 ]]; then
   # The Debian Apache package ships the same `timescaledb` .so and conflicts with
-  # the Community package — remove it first (retrofit Apache→Community).
-  if dpkg -s "$APACHE_PKG" >/dev/null 2>&1; then
-    echo "  TimescaleDB: entferne Apache-Paket ${APACHE_PKG} (wird durch Community ersetzt) ..."
-    DEBIAN_FRONTEND=noninteractive apt-get remove -y "$APACHE_PKG" >>"$LOG_FILE" 2>&1 || true
-    PKG_CHANGED=1
-  fi
+  # the Community package (retrofit Apache→Community). Review 25.10.2026: früher
+  # wurde Apache ZUERST entfernt — scheiterte danach die Community-Installation,
+  # stand die Box ohne Bibliothek zur Katalog-Version da. Jetzt: erst die Pakete
+  # herunterladen, dann in EINEM apt-Lauf tauschen (`<paket>-` entfernt im selben
+  # Lauf). Scheitert einer der Schritte, bleibt das Apache-Paket installiert.
   if dpkg -s "$TSL_PKG" >/dev/null 2>&1; then
     echo "  TimescaleDB: Community-Paket ${TSL_PKG} bereits installiert."
-  elif DEBIAN_FRONTEND=noninteractive apt-get install -y "$TSL_LOADER" "$TSL_PKG" >>"$LOG_FILE" 2>&1; then
-    echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
-    PKG_CHANGED=1
   else
-    echo "  WARN: Community-Paket nicht installierbar — Fallback auf Apache-Paket." >&2
-    USE_TSL=0
+    SWAP_ARGS=("$TSL_LOADER" "$TSL_PKG")
+    if dpkg -s "$APACHE_PKG" >/dev/null 2>&1; then
+      echo "  TimescaleDB: ersetze Apache-Paket ${APACHE_PKG} durch Community ..."
+      SWAP_ARGS+=("${APACHE_PKG}-")
+    fi
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only "$TSL_LOADER" "$TSL_PKG" >>"$LOG_FILE" 2>&1; then
+      echo "  WARN: Community-Paket nicht herunterladbar — Fallback auf Apache-Paket." >&2
+      USE_TSL=0
+    elif DEBIAN_FRONTEND=noninteractive apt-get install -y "${SWAP_ARGS[@]}" >>"$LOG_FILE" 2>&1; then
+      echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
+      PKG_CHANGED=1
+    else
+      echo "  WARN: Community-Paket nicht installierbar — Fallback auf Apache-Paket." >&2
+      USE_TSL=0
+    fi
   fi
 fi
 

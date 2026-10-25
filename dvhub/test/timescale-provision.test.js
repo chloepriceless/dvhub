@@ -18,7 +18,7 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'timesc
 // Was packagecloud.io/timescale/timescaledb anbietet (Stand 21.10.2026, per curl geprueft).
 const SERVED = ['debian/ bookworm', 'debian/ trixie', 'ubuntu/ noble', 'ubuntu/ resolute'];
 
-function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false } = {}) {
+function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsp-'));
   const bin = join(dir, 'bin');
   execFileSync('mkdir', ['-p', bin]);
@@ -61,13 +61,17 @@ if [[ "$1" == update ]]; then
   fi
   exit 100
 fi
+if [[ "$1" == install && " $* " == *" timescaledb-2-postgresql-"* ]]; then
+  if [[ " $* " == *" --download-only "* ]]; then ${downloadFails ? 'exit 100' : 'exit 0'}; fi
+  ${tslInstallFails ? 'exit 100' : 'exit 0'}
+fi
 exit 0`);
   fake('apt-cache', `
 if [[ "$1" == policy && "$2" == timescaledb-2-* && -f "${repoList}" ]]; then
   line="$(cat "${repoList}")"
   case "$line" in ${served}) echo "  Candidate: 2.31.0~ubuntu26.04" ;; *) echo "  Candidate: (none)" ;; esac
 fi`);
-  fake('dpkg', 'exit 1');
+  fake('dpkg', `[[ "$1" == -s && "$2" == postgresql-*-timescaledb ]] && ${apacheInstalled ? 'exit 0' : 'exit 1'}\nexit 1`);
   fake('psql');
   // su: Katalog/Lade-Proben beantworten. extHave = Version im Katalog vor dem
   // Lauf ('' = Erweiterung fehlt); CREATE/ALTER setzen sie auf 2.31.0.
@@ -212,5 +216,40 @@ test('ALTER scheitert: Exit 1 mit Hinweis, Fehler im Protokoll statt /dev/null',
     const log = readFileSync(join(s.dir, 'timescale-provision.log'), 'utf8');
     assert.match(log, /ERROR: {2}kaputt/);
     assert.match(log, /FEHLER: ALTER EXTENSION/);
+  } finally { s.cleanup(); }
+});
+
+// Review 25.10.2026 (P2): das Apache-Paket wurde entfernt, BEVOR feststand, dass
+// sich die Community-Edition installieren laesst. Scheiterte die Installation,
+// stand die Box ohne TimescaleDB-Bibliothek da (Katalog-Version ohne .so).
+// Jetzt: erst herunterladen, dann in EINEM apt-Lauf tauschen (pkg- entfernt).
+test('Apache→Community: Community-Installation scheitert → Apache bleibt (kein remove)', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, tslInstallFails: true });
+  try {
+    s.run();
+    const c = s.calls();
+    assert.ok(!c.some((l) => l.startsWith('apt-get remove')), `kein apt-get remove: ${c.join(' | ')}`);
+  } finally { s.cleanup(); }
+});
+
+test('Apache→Community: Download scheitert → keine Installation, kein remove', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, downloadFails: true });
+  try {
+    s.run();
+    const c = s.calls();
+    assert.ok(!c.some((l) => l.startsWith('apt-get remove')));
+    assert.ok(!c.some((l) => /^apt-get install -y (?!--download-only)\S*timescaledb-2/.test(l)), 'kein Installationsversuch');
+  } finally { s.cleanup(); }
+});
+
+test('Apache→Community: Tausch in einem apt-Lauf (Apache mit Minus), Download vorher', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true });
+  try {
+    s.run();
+    const c = s.calls();
+    const iDl = c.findIndex((l) => l.startsWith('apt-get install -y --download-only timescaledb-2-loader-postgresql-18 timescaledb-2-postgresql-18'));
+    const iSwap = c.indexOf('apt-get install -y timescaledb-2-loader-postgresql-18 timescaledb-2-postgresql-18 postgresql-18-timescaledb-');
+    assert.ok(iDl >= 0 && iSwap > iDl, c.join(' | '));
+    assert.ok(!c.some((l) => l.startsWith('apt-get remove')));
   } finally { s.cleanup(); }
 });
