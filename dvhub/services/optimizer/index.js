@@ -358,9 +358,26 @@ export function createOptimizerService(ctx) {
   let lastRunPushAt = -Infinity;          // letzter Versuch (Erfolg oder nicht)
   let runPushFailures = 0;                // Fehlschlaege in Folge
   let pendingPushTimer = null;
+  let pushTimersStopped = false; // nach close() keinen Nachschub-Timer mehr
   let runPushInFlight = null;
   const RUN_PUSH_MIN_SPACING_MS = 15 * 60_000;
   const RUN_PUSH_RETRY_MS = 2 * 60_000;
+
+  const runPushDueAt = () => lastRunPushAt + (runPushFailures === 1 ? RUN_PUSH_RETRY_MS : RUN_PUSH_MIN_SPACING_MS);
+
+  // Naechsten Versuch zum frühesten erlaubten Zeitpunkt vormerken — fuer eine
+  // im Fenster zurueckgehaltene Version und nach einem Fehlschlag, auch wenn
+  // bis dahin kein Lauf kommt.
+  function schedulePendingPush() {
+    if (pendingPushTimer || pushTimersStopped) return;
+    pendingPushTimer = setTimeout(() => {
+      pendingPushTimer = null;
+      const cfg = getCfg();
+      if (!cfg.optimizer?.enabled || !resolveEosProxy(cfg).enabled) return;
+      pushForecastIfNew().catch(() => {});
+    }, Math.max(0, runPushDueAt() - Date.now()));
+    pendingPushTimer.unref?.();
+  }
 
   function pushForecastIfNew() {
     const bridge = ctx.eosForecastBridge;
@@ -368,18 +385,8 @@ export function createOptimizerService(ctx) {
     if (runPushInFlight) return runPushInFlight;
     const forecastVersion = ctx.forecastService?.forecastVersion;
     if (forecastVersion === bridgePushedForecastVersion) return Promise.resolve();
-    const waitMs = runPushFailures === 1 ? RUN_PUSH_RETRY_MS : RUN_PUSH_MIN_SPACING_MS;
-    const dueAt = lastRunPushAt + waitMs;
-    if (Date.now() < dueAt) {
-      if (!pendingPushTimer) {
-        pendingPushTimer = setTimeout(() => {
-          pendingPushTimer = null;
-          const cfg = getCfg();
-          if (!cfg.optimizer?.enabled || !resolveEosProxy(cfg).enabled) return;
-          pushForecastIfNew().catch(() => {});
-        }, dueAt - Date.now());
-        pendingPushTimer.unref?.();
-      }
+    if (Date.now() < runPushDueAt()) {
+      schedulePendingPush();
       return Promise.resolve();
     }
     lastRunPushAt = Date.now();
@@ -392,6 +399,7 @@ export function createOptimizerService(ctx) {
         runPushFailures = 0;
       } else {
         runPushFailures += 1;
+        schedulePendingPush();
       }
     })().finally(() => { runPushInFlight = null; });
     return runPushInFlight;
@@ -1056,6 +1064,7 @@ export function createOptimizerService(ctx) {
    */
   async function start() {
     state.optimizer.enabled = getCfg().optimizer?.enabled ?? false;
+    pushTimersStopped = false;
     startTimers(); // Always start timers -- runOptimization gates on enabled
     eosRunTrigger.start(); // tut nichts, solange keine EOS-Anbindung erkannt ist
 
@@ -1073,6 +1082,7 @@ export function createOptimizerService(ctx) {
     if (unsubscribeEosPlan) { unsubscribeEosPlan(); unsubscribeEosPlan = null; }
     if (fallbackTimer) clearTimeout(fallbackTimer); // setTimeout-based since #16b
     if (pendingPushTimer) clearTimeout(pendingPushTimer);
+    pushTimersStopped = true;
     pollTimer = null;
     fallbackTimer = null;
     pendingPushTimer = null;

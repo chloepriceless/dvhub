@@ -576,6 +576,36 @@ describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 
     await svc.close();
   });
 
+  // Gegenpruefung b5e78c84 (P3): ohne weiteren Lauf kam der Wiederholversuch
+  // nach einem Fehlschlag erst mit dem naechsten Ersatz-Lauf.
+  test('Fehlschlag ohne weiteren Lauf: Wiederholversuch nach 2 min per Timer', async (t) => {
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now });
+    const results = [{ ok: false, pushed: [], errors: { PVForecastImport: 'HTTP 500' } }];
+    let bridgePushes = 0;
+    const eosAdapter = {
+      pullSchedule: async () => [{ ts: now, endTs: now + 900_000, powerW: -1000 }],
+      pullGridSetpoints: async () => [],
+      getOptimizationSolution: async () => ({ generatedAt: '2026-10-25T12:00:00+02:00', rows: [] }),
+      setEmsIntervalSec: async () => ({ ok: true })
+    };
+    const eosForecastBridge = { push: async () => { bridgePushes++; return results.shift() || { ok: true, pushed: [], errors: {} }; } };
+    const { ctx } = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' }, intervalMs: 3_600_000, morningReoptIntervalMs: 3_600_000 },
+      ctx: { eosAdapter, eosForecastBridge }
+    });
+    const svc = createOptimizerService(ctx);
+    const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+    await svc.start();
+    await flush();
+    assert.equal(bridgePushes, 1, 'erster Versuch scheitert');
+    for (let i = 0; i < 3; i += 1) { t.mock.timers.tick(60_000); await flush(); }
+    assert.equal(bridgePushes, 2, 'nach 2 min erneut, ohne neuen Lauf');
+    for (let i = 0; i < 30; i += 1) { t.mock.timers.tick(60_000); await flush(); }
+    assert.equal(bridgePushes, 2, 'angekommen: kein weiterer Push');
+    await svc.close();
+  });
+
   test('dauerhafter Teilfehler: nach dem ersten Wiederholversuch nur noch alle 15 min', async (t) => {
     const now = Date.now();
     t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now });
