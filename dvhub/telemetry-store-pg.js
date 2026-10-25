@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
-import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS } from './telemetry-runtime.js';
+import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot } from './telemetry-runtime.js';
 
 // Plan 08-01 Task 3: resolve dvhub/db/migrations/ relative to this module file
 // so the runner works regardless of where node is invoked from (systemd CWD,
@@ -169,6 +169,9 @@ export function energyKwhForSample(value, resolutionSeconds, maxSeconds = MATERI
   // over-fill the slot it buckets into — buildMaterializedEnergySlotWrites assigns
   // the whole sample to ONE 900s slot via bucketIso, so an uncapped 1h-resolution
   // sample would inflate that slot 4×. Capping bounds the per-sample contribution.
+  // Seit 25.10.2026 schreiben beide Stores die Slots ueber sampleEnergyBySlot
+  // (telemetry-runtime.js): Live-Proben bleiben so gekappt, VRM-Proben ueber
+  // mehrere Slots werden anteilig verteilt statt abgeschnitten.
   if (Number.isFinite(maxSeconds) && maxSeconds > 0 && seconds > maxSeconds) seconds = maxSeconds;
   return (numeric * seconds) / 3600000;
 }
@@ -255,18 +258,28 @@ export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true
     // total and is idempotent by construction, so it always includes every row.
     if (writeMode === 'accumulate' && !isNewSample(row, i)) continue;
 
-    const valueNum = energyKwhForSample(row.value, row.resolutionSeconds);
-    if (!Number.isFinite(valueNum)) continue;
-
-    const slotStartUtc = bucketIso(row.ts, MATERIALIZED_SLOT_BUCKET_SECONDS);
-    const key = `${slotStartUtc}\u0000${seriesKey}\u0000${sourceKind}`;
-    const existing = writes.get(key);
-    if (existing) {
-      existing.valueNum += valueNum;
-      existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
-      continue;
+    // VRM-Proben laenger als ein Slot verteilen sich anteilig auf alle Slots, die
+    // sie ueberdecken; Live-Proben bleiben auf einen Slot gekappt (T-0079).
+    // Gemeinsame Regel mit dem SQLite-Store (sampleEnergyBySlot).
+    const shares = sampleEnergyBySlot({
+      ts: row.ts,
+      value: row.value,
+      resolutionSeconds: row.resolutionSeconds,
+      spread: sourceKind === 'vrm_import',
+      slotSeconds: MATERIALIZED_SLOT_BUCKET_SECONDS
+    });
+    for (const { slotStartMs, valueNum } of shares) {
+      if (!Number.isFinite(valueNum)) continue;
+      const slotStartUtc = new Date(slotStartMs).toISOString();
+      const key = `${slotStartUtc}\u0000${seriesKey}\u0000${sourceKind}`;
+      const existing = writes.get(key);
+      if (existing) {
+        existing.valueNum += valueNum;
+        existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
+        continue;
+      }
+      writes.set(key, { slotStartUtc, seriesKey, sourceKind, quality, valueNum, unit: 'kWh', meta: mergeMaterializedMeta(null, row.meta), writeMode });
     }
-    writes.set(key, { slotStartUtc, seriesKey, sourceKind, quality, valueNum, unit: 'kWh', meta: mergeMaterializedMeta(null, row.meta), writeMode });
   }
   return [...writes.values()];
 }

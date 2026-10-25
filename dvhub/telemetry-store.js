@@ -3,7 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
-import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS } from './telemetry-runtime.js';
+import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot } from './telemetry-runtime.js';
 
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
@@ -106,13 +106,6 @@ const roundKwh = round2;
 
 function bucketIso(ts, seconds) {
   return floorToInterval(new Date(ts), seconds).toISOString();
-}
-
-function energyKwhForSample(value, resolutionSeconds) {
-  const numeric = Number(value);
-  const seconds = Number(resolutionSeconds || 0);
-  if (!Number.isFinite(numeric) || !Number.isFinite(seconds) || seconds <= 0) return null;
-  return (numeric * seconds) / 3600000;
 }
 
 function weightedAverage(entries) {
@@ -428,27 +421,37 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
 
       if (!sourceKind || !writeMode) continue;
 
-      const valueNum = energyKwhForSample(row.value, row.resolutionSeconds);
-      if (!Number.isFinite(valueNum)) continue;
-
-      const slotStartUtc = bucketIso(row.ts, MATERIALIZED_SLOT_BUCKET_SECONDS);
-      const key = `${slotStartUtc}\u0000${seriesKey}\u0000${sourceKind}`;
-      const existing = writes.get(key);
-      if (existing) {
-        existing.valueNum += valueNum;
-        existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
-        continue;
-      }
-      writes.set(key, {
-        slotStartUtc,
-        seriesKey,
-        sourceKind,
-        quality,
-        valueNum,
-        unit: 'kWh',
-        meta: mergeMaterializedMeta(null, row.meta),
-        writeMode
+      // VRM-Proben laenger als ein Slot verteilen sich anteilig auf alle Slots,
+      // die sie ueberdecken; Live-Proben bleiben auf einen Slot gekappt (T-0079).
+      // Gemeinsame Regel mit dem PG-Store (sampleEnergyBySlot).
+      const shares = sampleEnergyBySlot({
+        ts: row.ts,
+        value: row.value,
+        resolutionSeconds: row.resolutionSeconds,
+        spread: sourceKind === 'vrm_import',
+        slotSeconds: MATERIALIZED_SLOT_BUCKET_SECONDS
       });
+      for (const { slotStartMs, valueNum } of shares) {
+        if (!Number.isFinite(valueNum)) continue;
+        const slotStartUtc = new Date(slotStartMs).toISOString();
+        const key = `${slotStartUtc}\u0000${seriesKey}\u0000${sourceKind}`;
+        const existing = writes.get(key);
+        if (existing) {
+          existing.valueNum += valueNum;
+          existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
+          continue;
+        }
+        writes.set(key, {
+          slotStartUtc,
+          seriesKey,
+          sourceKind,
+          quality,
+          valueNum,
+          unit: 'kWh',
+          meta: mergeMaterializedMeta(null, row.meta),
+          writeMode
+        });
+      }
     }
     return [...writes.values()];
   }

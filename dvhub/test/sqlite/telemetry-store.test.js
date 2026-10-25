@@ -827,3 +827,53 @@ test('telemetry store verdichtet und liefert die Akku-2-Reihen', () => {
     store.close();
   }
 });
+
+// Lange Proben (VRM interval=hours/days, importSamples mit 3600 s) verteilen ihre
+// Energie anteilig auf alle 15-min-Slots, die sie ueberdecken — wie der PG-Store
+// (test/telemetry-store-pg-energy-spread.test.js, gleiche Faelle). Vorher landete
+// die ganze Stunde bzw. der ganze Tag in einem Slot.
+test('telemetry store verteilt lange VRM-Proben anteilig auf alle Slots', () => {
+  const store = createTelemetryStore({ dbPath: createTempDbPath(), rawRetentionDays: 30, rollupIntervals: [900] });
+  const vrm = (seriesKey, ts, value, resolutionSeconds) => ({
+    seriesKey, ts, value, resolutionSeconds, scope: 'history', source: 'vrm_import', quality: 'backfilled', unit: 'W'
+  });
+  try {
+    store.writeSamples([
+      // 4000 W über eine Stunde → je Viertelstunde 1 kWh
+      vrm('pv_ac_w', '2026-03-09T12:00:00.000Z', 4000, 3600),
+      // 2000 W, 30 min ab 12:05 → 10 min (0,33), 15 min (0,5), 5 min (0,17)
+      vrm('grid_import_w', '2026-03-09T12:05:00.000Z', 2000, 1800),
+      // 1000 W über einen Tag ab Berliner Mitternacht → 96 × 0,25 kWh = 24 kWh
+      vrm('pv_ac_w', '2026-03-10T23:00:00.000Z', 1000, 86400)
+    ]);
+    const hour = store.listMaterializedEnergySlots({ start: '2026-03-09T12:00:00.000Z', end: '2026-03-09T13:00:00.000Z' });
+    assert.deepEqual(hour.map((slot) => [slot.ts, slot.pvAcKwh, Math.round(slot.importKwh * 1e9) / 1e9]), [
+      ['2026-03-09T12:00:00.000Z', 1, 0.333333333],
+      ['2026-03-09T12:15:00.000Z', 1, 0.5],
+      ['2026-03-09T12:30:00.000Z', 1, 0.166666667],
+      ['2026-03-09T12:45:00.000Z', 1, 0]
+    ]);
+    const day = store.listMaterializedEnergySlots({ start: '2026-03-10T23:00:00.000Z', end: '2026-03-11T23:00:00.000Z' });
+    assert.equal(day.length, 96);
+    assert.ok(day.every((slot) => slot.pvAcKwh === 0.25));
+    assert.equal(day.reduce((total, slot) => total + slot.pvAcKwh, 0), 24);
+  } finally {
+    store.close();
+  }
+});
+
+// Live-Zeitstempel markieren das Ende der Messspanne; nach einem Ausfall darf ein
+// Wert mit grosser Aufloesung die Luecke nicht fuellen (T-0079, wie im PG-Store).
+test('telemetry store kappt Live-Proben mit Lueckenaufloesung auf einen Slot', () => {
+  const store = createTelemetryStore({ dbPath: createTempDbPath(), rawRetentionDays: 30, rollupIntervals: [900] });
+  try {
+    store.writeSamples([{
+      seriesKey: 'grid_import_w', ts: '2026-03-09T12:00:00.000Z', value: 4000, scope: 'live', source: 'local_poll',
+      quality: 'raw', resolutionSeconds: 3600, unit: 'W'
+    }]);
+    const slots = store.listMaterializedEnergySlots({ start: '2026-03-09T12:00:00.000Z', end: '2026-03-09T13:00:00.000Z' });
+    assert.deepEqual(slots.map((slot) => [slot.ts, slot.importKwh]), [['2026-03-09T12:00:00.000Z', 1]]);
+  } finally {
+    store.close();
+  }
+});

@@ -178,6 +178,40 @@ export function priceRowSpacingSeconds(rows) {
 }
 
 /**
+ * Energie einer Leistungsprobe je 15-min-Slot, fuer beide Stores (SQLite und
+ * PostgreSQL) gleich. Liefert [{ slotStartMs, valueNum (kWh) }].
+ *
+ * - spread=true (VRM-Import: ts = Beginn der Probe): eine Probe, die laenger als
+ *   ein Slot ist (interval=hours/days, importSamples mit 3600 s), verteilt ihre
+ *   Energie anteilig auf alle Slots in [ts, ts + Aufloesung).
+ * - spread=false (Live: ts = Ende der Messspanne): die Probe zaehlt im Slot ihres
+ *   Zeitstempels, hoechstens einen Slot lang (T-0079). Ein Wert nach einem
+ *   Ausfall mit grosser Aufloesung fuellt die Luecke nicht.
+ *
+ * Proben bis zu einem Slot landen in beiden Faellen ganz im Slot ihres
+ * Zeitstempels (wie bisher). Leistung null zaehlt als 0 kWh; ungueltige
+ * Aufloesung oder Leistung liefert [].
+ */
+export function sampleEnergyBySlot({ ts, value, resolutionSeconds, spread = false, slotSeconds = 900 }) {
+  const numeric = Number(value);
+  const seconds = Number(resolutionSeconds || 0);
+  const startMs = new Date(ts).getTime();
+  if (!Number.isFinite(numeric) || !Number.isFinite(seconds) || seconds <= 0 || !Number.isFinite(startMs)) return [];
+  const slotMs = slotSeconds * 1000;
+  const firstSlotMs = Math.floor(startMs / slotMs) * slotMs;
+  if (seconds <= slotSeconds || !spread) {
+    return [{ slotStartMs: firstSlotMs, valueNum: (numeric * Math.min(seconds, slotSeconds)) / 3600000 }];
+  }
+  const endMs = startMs + seconds * 1000;
+  const out = [];
+  for (let slotStartMs = firstSlotMs; slotStartMs < endMs; slotStartMs += slotMs) {
+    const overlapMs = Math.min(endMs, slotStartMs + slotMs) - Math.max(startMs, slotStartMs);
+    if (overlapMs > 0) out.push({ slotStartMs, valueNum: (numeric * overlapMs) / 3600000000 });
+  }
+  return out;
+}
+
+/**
  * Beginn des 15-min-Day-Ahead (SDAC, Lieferung ab 01.10.2025 00:00 Berlin).
  * Davor war der Day-Ahead stuendlich: 24 Zeilen je Tag.
  */
