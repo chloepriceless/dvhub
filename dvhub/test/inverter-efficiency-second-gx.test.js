@@ -25,7 +25,7 @@ test('Wirkungsgrad liest die Akku-2-Reihen mit, um die gemessene Last zurueckzur
 });
 
 // 10 min im 5-s-Takt: Haupt-Akku 2000 W DC, Haupt-WR gibt 1840 W AC ab (η 0,92).
-async function seedWindow(client, startIso, { loadW, secondChargeW, secondDischargeW }) {
+async function seedWindow(client, startIso, { loadW, secondChargeW, secondDischargeW, measuredW }) {
   const startMs = new Date(startIso).getTime();
   const values = [];
   const params = [];
@@ -38,7 +38,8 @@ async function seedWindow(client, startIso, { loadW, secondChargeW, secondDischa
       grid_export_w: 0,
       pv_dc_w: 0,
       battery_soc_pct: 50,
-      ...(secondChargeW == null ? {} : { second_battery_charge_w: secondChargeW, second_battery_discharge_w: secondDischargeW })
+      ...(secondChargeW == null ? {} : { second_battery_charge_w: secondChargeW, second_battery_discharge_w: secondDischargeW }),
+      ...(measuredW == null ? {} : { load_measured_w: measuredW })
     };
     for (const [key, value] of Object.entries(series)) {
       params.push(key, ts, value);
@@ -83,4 +84,20 @@ test('η ohne zweite GX unveraendert (keine Akku-2-Reihen)', { skip }, async () 
   assert.equal(Number(rows[0].bin), 9);
   assert.ok(Math.abs(Number(rows[0].ac_wh) - 306.667) < 0.01);
   assert.ok(Math.abs(Number(rows[0].dc_wh) - 333.333) < 0.01);
+});
+
+test('η mit zweiter GX: gekappte Last (0 W) — die gemessene Last zaehlt, nicht das Rueckrechnen', { skip }, async () => {
+  // Haupt-GX misst 1840 W, die (bis 20 s alte) Akku-2-Leistung sagt 2500 W Laden:
+  // polling.js speichert max(0, 1840 − 2500) = 0. Rueckgerechnet waeren es 2500 W.
+  const rows = await runDay([
+    { start: '2026-10-20T00:00:00.000Z', loadW: 0, secondChargeW: 2500, secondDischargeW: 0, measuredW: 1840 }
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(Number(rows[0].bin), 9);
+  assert.ok(Math.abs(Number(rows[0].ac_wh) - 306.667) < 0.01, `ac_wh ${rows[0].ac_wh}`);
+  assert.ok(Math.abs(Number(rows[0].dc_wh) - 333.333) < 0.01);
+});
+
+test('Wirkungsgrad liest die gemessene Last mit', () => {
+  assert.ok(EFFICIENCY_SERIES_KEYS.includes('load_measured_w'));
 });

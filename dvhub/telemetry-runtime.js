@@ -77,6 +77,11 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
   pushSample(rows, 'pv_ac_l3_w', victron.acPvL3W, 'W', base);
   pushSample(rows, 'pv_total_w', victron.pvTotalW, 'W', base);
   pushSample(rows, 'load_power_w', victron.selfConsumptionW, 'W', base);
+  // Von der Haupt-GX gemessene Last, nur solange polling.js sie um Akku 2 der
+  // zweiten Anlage korrigiert (sonst gleich load_power_w, Feld fehlt). Der
+  // Wirkungsgrad braucht genau diesen Wert; aus load_power_w laesst er sich nicht
+  // sicher zurueckrechnen, weil die Korrektur bei 0 kappt.
+  pushSample(rows, 'load_measured_w', victron.selfConsumptionMeasuredW, 'W', base);
   // Inc 2 (Last-Separation): house load minus positively confirmed controllable
   // load, so the forecast stops learning EV/device draw that EOS then adds again.
   // The decision AND its log event live in server.js `onPollComplete` (this builder

@@ -10,10 +10,11 @@
 // Bilanz je Sample (alle Reihen tragen denselben Poll-Zeitstempel):
 //   AC aus dem Wechselrichter = Last + Einspeisung − Netzbezug − AC-PV
 // „Last“ ist die von der Haupt-GX gemessene. Mit zweiter GX-Anlage speichert
-// polling.js load_power_w = gemessen − Akku 2 (+ = Laden); hier wird Akku 2
-// wieder dazugerechnet (second_battery_charge_w − second_battery_discharge_w),
-// sonst zaehlte seine Entladung als AC-Leistung des Haupt-Wechselrichters.
-// Ohne zweite Anlage fehlen diese Reihen → 0, Ergebnis unveraendert.
+// polling.js load_power_w = max(0, gemessen − Akku 2) (+ = Laden), sonst zaehlte
+// die Entladung von Akku 2 als AC-Leistung des Haupt-Wechselrichters. Deshalb:
+// load_measured_w (seit 25.10.2026 mitgeschrieben), fuer aeltere Samples
+// zurueckgerechnet load_power_w + Akku-2-Laden − Akku-2-Entladen. Ohne zweite
+// Anlage fehlen alle drei Reihen → Ergebnis unveraendert.
 //   DC in den Wechselrichter  = Akku-Entladung (BMS, +=Laden) + DC-PV
 // NICHT grid_total_w verwenden: Vorzeichen bzw. Phasensumme dieser Reihe hat die
 // Kalibrierung vom 21.07.2026 verfälscht (η nachts 0,77 statt real ~0,93 —
@@ -37,6 +38,7 @@ export const EFFICIENCY_SERIES_KEYS = Object.freeze([
   'battery_soc_pct',
   'second_battery_charge_w',
   'second_battery_discharge_w',
+  'load_measured_w',
 ]);
 
 // Lastbereiche relativ zur Nennleistung, damit dieselbe Definition auf jeder
@@ -75,9 +77,12 @@ export const DAILY_EFFICIENCY_SQL = `
 WITH p AS (
   SELECT ts_utc AS t,
     max(value_num) FILTER (WHERE series_key = 'battery_power_w') AS bp,
-    max(value_num) FILTER (WHERE series_key = 'load_power_w')
-      + coalesce(max(value_num) FILTER (WHERE series_key = 'second_battery_charge_w'), 0)
-      - coalesce(max(value_num) FILTER (WHERE series_key = 'second_battery_discharge_w'), 0) AS ld,
+    coalesce(
+      max(value_num) FILTER (WHERE series_key = 'load_measured_w'),
+      max(value_num) FILTER (WHERE series_key = 'load_power_w')
+        + coalesce(max(value_num) FILTER (WHERE series_key = 'second_battery_charge_w'), 0)
+        - coalesce(max(value_num) FILTER (WHERE series_key = 'second_battery_discharge_w'), 0)
+    ) AS ld,
     max(value_num) FILTER (WHERE series_key = 'grid_import_w') AS gi,
     max(value_num) FILTER (WHERE series_key = 'grid_export_w') AS ge,
     coalesce(max(value_num) FILTER (WHERE series_key = 'pv_dc_w'), 0) AS pdc,
