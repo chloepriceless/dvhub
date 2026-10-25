@@ -1353,6 +1353,19 @@ export function createScheduleEvaluator(ctx) {
               pushLog('dc_export_mode_active', { pvW, exportW, bufferW, liveLoadW, chargeReserveW, battEffSurchargeW, subtractLoad, currentPrice });
               state.ctrl._dcExportLogged = true;
             }
+          } else {
+            // Review Regelung 25.10.: Die 50-W/60-s-Drossel übersprang den
+            // Keepalive der normalen Schleife (die bei dcExport `continue`t).
+            // Reg 2716 ist flüchtig (Passthru nach 60 s) — den zuletzt
+            // geschriebenen Wert deshalb im Keepalive-Takt neu bestätigen;
+            // applyControlTarget hält ihn sonst (unchanged → kein Write). Ohne
+            // Keepalive (0) bleibt alles wie bisher: kein Aufruf.
+            const kaMs = Number(cfg.controlWrite?.gridSetpointW?.keepaliveMs
+              ?? cfg.schedule?.controlKeepaliveMs ?? 0);
+            const held = state.schedule.lastWrite?.gridSetpointW?.value;
+            if (kaMs > 0 && held != null && Number.isFinite(Number(held))) {
+              await applyControlTarget('gridSetpointW', Number(held), 'dc_export_mode');
+            }
           }
         } else {
           // Kein PV: Zurueck zum Default Setpoint
