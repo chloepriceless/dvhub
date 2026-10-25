@@ -205,3 +205,23 @@ test('Export-Deckel ohne SoC beim Einschalten: erster frischer SoC wird die Bezu
   await ev.zeroFeedInTick();
   assert.equal(state.ctrl._zfi.capActive, false);
 });
+
+// Gegenprüfung dfe8d437 (P2): Lädt der Akku während des Export-Deckels
+// (60 → 90 %), zählt der höchste SoC als Bezug — sonst entlüde er nachmittags
+// bis 55 % statt bis 85 %.
+test('Export-Deckel: Bezug ist der höchste SoC während des Deckels (60 → 90 → Exit bei 85)', async () => {
+  const { ev, state, logs } = harness({ loadW: 800, soc: 60, exportW: 2000 });
+  for (let i = 0; i < 3; i += 1) await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, true);
+  state.victron.gridExportW = 0;
+  state.victron.gridImportW = 60;
+  for (const soc of [70, 80, 90, 88, 86]) {
+    state.victron.soc = soc;
+    await ev.zeroFeedInTick();
+    assert.equal(state.ctrl._zfi.capActive, true, `bei SoC ${soc} noch an`);
+  }
+  state.victron.soc = 85;
+  await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, false, '90 − 5 = 85 % → Force-Charge');
+  assert.ok(logs.some((l) => l.e === 'zero_feedin_cap_off' && l.d.reason === 'soc_dropped' && l.d.entrySoc === 90));
+});

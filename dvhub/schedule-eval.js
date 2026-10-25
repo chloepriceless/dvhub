@@ -1914,12 +1914,15 @@ export function createScheduleEvaluator(ctx) {
       // Grenze nach unten (Gegenprüfung e3e498a3): während des Deckels darf der
       // Akku das Haus stützen; ohne Grenze liefe er bei Netz ≈ 0 über die
       // ganze Sperre leer. Ein Export-Deckel endet deshalb spätestens bei
-      // Einschalt-SoC − Hysterese (unbekannt beim Einschalten → erster frischer
-      // SoC). Danach greift wieder Force-Charge; Export schaltet neu ein.
+      // höchstem SoC seit dem Einschalten − Hysterese (unbekannt beim
+      // Einschalten → erster frischer SoC). Danach greift wieder Force-Charge;
+      // Export schaltet neu ein.
       const socOk = socFresh && Number.isFinite(soc);
       if (zfi.trigger === 'export' && socOk && soc >= thresholdPct) zfi.trigger = 'soc';
       if (zfi.trigger === 'export' && socOk) {
-        if (!Number.isFinite(zfi.entrySoc)) zfi.entrySoc = soc;
+        // Laufendes Maximum (Gegenprüfung dfe8d437): lädt der Akku während
+        // des Deckels, gilt der höchste SoC als Bezug.
+        zfi.entrySoc = Number.isFinite(zfi.entrySoc) ? Math.max(zfi.entrySoc, soc) : soc;
         if (soc <= zfi.entrySoc - hysteresisPct) {
           await capOff('soc_dropped', { soc, entrySoc: zfi.entrySoc });
           return;
