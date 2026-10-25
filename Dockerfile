@@ -162,14 +162,17 @@ ENV NODE_ENV=production \
 # unverändert funktionieren.
 WORKDIR /opt/dvhub/dvhub
 
-# --chown direkt beim Kopieren: ein nachgelagertes `chown -R` würde jede
-# berührte Datei in eine zusätzliche Layer duplizieren — bei node_modules
-# allein ~68 MB obendrauf.
-COPY --from=deps --chown=dvhub:dvhub /build/node_modules /opt/dvhub/dvhub/node_modules
-COPY --chown=dvhub:dvhub dvhub/ /opt/dvhub/dvhub/
-COPY --chown=dvhub:dvhub scripts/reconcile-vendor-profiles.mjs /opt/dvhub/scripts/
+# Programmcode gehört root und ist für dvhub nur lesbar (Review 25.10.2026,
+# P1): der Entrypoint führt beim Start als root u. a.
+# scripts/reconcile-vendor-profiles.mjs aus. Gehörte der Code dvhub, könnte die
+# Anwendung ihn ändern, und der nächste Container-Start liefe ihn als root.
+# Die Anwendung schreibt nur nach /etc/dvhub und /var/lib/dvhub (Volumes).
+# Kein nachgelagertes chown -R (das duplizierte jede Datei in eine Layer).
+COPY --from=deps /build/node_modules /opt/dvhub/dvhub/node_modules
+COPY dvhub/ /opt/dvhub/dvhub/
+COPY scripts/reconcile-vendor-profiles.mjs /opt/dvhub/scripts/
 # package.json verweist mit "SEE LICENSE IN ../LICENSE.md" hierauf.
-COPY --chown=dvhub:dvhub LICENSE.md THIRD-PARTY-LICENSES.md /opt/dvhub/
+COPY LICENSE.md THIRD-PARTY-LICENSES.md /opt/dvhub/
 COPY --chmod=0755 docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # Ersatzweg Modbus-Port: root-eigen (nicht dvhub), die sudoers-Regel zeigt nur hierauf.
 COPY --chmod=0755 dvhub-modbus-redirect.sh /usr/local/libexec/dvhub-modbus-redirect

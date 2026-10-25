@@ -128,6 +128,11 @@ fi
 rm -rf "$VENV_PROBE_DIR"
 
 mkdir -p "$(dirname "$VENV_DIR")"
+# Ein venv aus einer frueheren Version gehoerte dem Dienstbenutzer: erst root
+# zuordnen, dann pip daraus als root ausfuehren (Review 25.10.2026).
+if [[ -d "$VENV_DIR" ]]; then
+  chown -R 0:0 "$VENV_DIR" && chmod -R go-w,a+rX "$VENV_DIR" || fail venv_owner "Besitz von $VENV_DIR nicht auf root setzbar"
+fi
 if [[ ! -d "$VENV_DIR" ]]; then
   python3 -m venv "$VENV_DIR" || fail venv_failed "python3 -m venv $VENV_DIR schlug fehl (python3-venv installiert?)"
 fi
@@ -178,8 +183,9 @@ fi
 # trainierte Modelle löscht ein Update nicht ungefragt.
 rmdir "$LEGACY_ML_MODELS_DIR" 2>/dev/null || true
 
-# Ownership: the systemd user must be able to execute the venv.
-chown -R "$SERVICE_USER:$SERVICE_USER" "$VENV_DIR" 2>/dev/null || true
+# Besitz: root, fuer den Dienstbenutzer nur lesbar/ausfuehrbar (Review
+# 25.10.2026) — root fuehrt beim naechsten Lauf pip aus diesem venv aus.
+chown -R 0:0 "$VENV_DIR" 2>/dev/null && chmod -R go-w,a+rX "$VENV_DIR" 2>/dev/null || true
 
 # Mark success so the next boot's post-update.sh can fast-skip (no pip per boot).
 mkdir -p "$(dirname "$MARKER")"

@@ -14,7 +14,6 @@ import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { createAdminRoutes } from '../routes/admin-routes.js';
 import { SEMVER_TAG, GIT_SHA_REF, compareSemverTag, selectLatestSemverTag, assertNoDowngrade } from '../routes-api.js';
 
@@ -28,9 +27,9 @@ export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '
   const execFileAsync = async (cmd, args = [], opts = {}) => {
     calls.push([cmd, ...args].join(' '));
     const a = args.join(' ');
-    if (cmd === 'git' && a === 'rev-parse HEAD') return { stdout: 'a'.repeat(40) + '\n', stderr: '' };
+    if (cmd === 'git' && a.startsWith('rev-parse')) return { stdout: 'a'.repeat(40) + '\n', stderr: '' };
     if (cmd === 'git' && a.startsWith('show origin/main:')) return { stdout: JSON.stringify({ version: mainVersion }), stderr: '' };
-    if (cmd === 'git' && a.startsWith('stash')) return { stdout: 'No local changes to save\n', stderr: '' };
+    if (cmd === 'sudo' && args.includes('stash')) return { stdout: 'No local changes to save\n', stderr: '' };
     const npm = cmd === 'npm' || (cmd === 'sudo' && args.includes('npm-install'));
     if (npm && npmFails) {
       const e = new Error('npm killed (timeout)'); e.killed = true; throw e;
@@ -65,43 +64,53 @@ export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '
     await handle(req, {}, new URL(`http://x${pathname}`));
     return responses.at(-1);
   };
-  return { repoRoot, appDir, calls, post, cleanup: () => fs.rmSync(repoRoot, { recursive: true, force: true }) };
+  return { repoRoot, appDir, calls, post, handle, cleanup: () => fs.rmSync(repoRoot, { recursive: true, force: true }) };
 }
 
-describe('Self-Update: Stash und npm-Marker', () => {
-  for (const [label, pathname, body] of [
-    ['update/apply', '/api/admin/update/apply', {}],
-    ['update/channel', '/api/admin/update/channel', { channel: 'dev' }],
+const HELPER = 'sudo -n /usr/local/libexec/dvhub-update';
+// Was der Dienst NICHT mehr selbst ausführen darf: /opt/dvhub gehört root.
+const MUTATING = /^(git (fetch|checkout|pull|stash|reset|clean)|npm |sudo bash )/;
+
+describe('Self-Update über den root-eigenen Einstieg dvhub-update', () => {
+  for (const [label, pathname, body, channel] of [
+    ['update/apply dev', '/api/admin/update/apply', {}, 'dev'],
+    ['update/apply stable', '/api/admin/update/apply', {}, 'stable'],
+    ['update/apply Pin', '/api/admin/update/apply', { ref: 'a'.repeat(40) }, 'dev'],
+    ['update/channel', '/api/admin/update/channel', { channel: 'dev' }, 'dev'],
   ]) {
-    it(`${label}: kein Stash von untracked Laufzeitdateien (eos-venv, forecast-venv, bin)`, async () => {
-      const h = makeHarness();
+    it(`${label}: schreibende Schritte nur über ${HELPER}, kein Stash von untracked Dateien`, async () => {
+      const h = makeHarness({ channel });
       try {
         const r = await h.post(pathname, body);
         assert.equal(r.code, 200, JSON.stringify(r.payload));
-        assert.ok(!h.calls.some((c) => /stash.*(--include-untracked|-u\b|--all)/.test(c)), h.calls.join('\n'));
-      } finally { h.cleanup(); }
-    });
-
-    // Gegenprüfung zu 5fbdb213: nach Erfolg schreibt auch die Oberfläche den
-    // Marker — sonst installiert post-update.sh danach ein zweites Mal.
-    it(`${label}: nach erfolgreichem npm install = Lockfile-Hash (kein zweiter Lauf in post-update.sh)`, async () => {
-      const h = makeHarness();
-      try {
-        const r = await h.post(pathname, body);
-        assert.equal(r.code, 200, JSON.stringify(r.payload));
-        const want = crypto.createHash('sha256').update(fs.readFileSync(path.join(h.appDir, 'package-lock.json'))).digest('hex');
-        assert.equal(fs.readFileSync(path.join(h.repoRoot, '.npm-install-hash'), 'utf8').trim(), want);
-      } finally { h.cleanup(); }
-    });
-
-    it(`${label}: npm-Marker ist vor jedem npm install ungültig — abgebrochener Lauf wird beim nächsten Start repariert`, async () => {
-      const h = makeHarness({ npmFails: true });
-      try {
-        const r = await h.post(pathname, body);
-        assert.equal(r.code, 500, 'Update wird zurückgerollt');
-        assert.equal(fs.existsSync(path.join(h.repoRoot, '.npm-install-hash')), false,
-          'Marker gelöscht → post-update.sh installiert beim nächsten Start neu');
+        assert.deepEqual(h.calls.filter((c) => MUTATING.test(c)), [], h.calls.join('\n'));
+        assert.ok(!h.calls.some((c) => /--include-untracked|stash .*-u\b|--all/.test(c)));
+        const helperCalls = h.calls.filter((c) => c.startsWith(HELPER)).map((c) => c.slice(HELPER.length + 1));
+        assert.ok(helperCalls.includes('stash'), helperCalls.join(' | '));
+        assert.ok(helperCalls.includes('npm-install'), helperCalls.join(' | '));
+        assert.ok(helperCalls.some((c) => /^checkout-(main|tag|commit)\b/.test(c)), helperCalls.join(' | '));
+        if (pathname.endsWith('/apply')) assert.ok(helperCalls.includes('post-update'));
       } finally { h.cleanup(); }
     });
   }
+
+  it('npm install scheitert → Rückroll über den Einstieg (checkout-commit <vorher>, npm-install)', async () => {
+    const h = makeHarness({ npmFails: true });
+    try {
+      const r = await h.post('/api/admin/update/apply', {});
+      assert.equal(r.code, 500);
+      assert.ok(h.calls.includes(`${HELPER} checkout-commit ${'a'.repeat(40)}`), h.calls.join('\n'));
+      assert.deepEqual(h.calls.filter((c) => MUTATING.test(c)), []);
+    } finally { h.cleanup(); }
+  });
+
+  it('Update-Check holt Tags über den Einstieg', async () => {
+    const h = makeHarness({ channel: 'stable' });
+    try {
+      const req = Readable.from([]); req.method = 'GET'; req.headers = {};
+      await h.handle(req, {}, new URL('http://x/api/admin/update/check'));
+      assert.ok(h.calls.includes(`${HELPER} fetch`), h.calls.join('\n'));
+      assert.deepEqual(h.calls.filter((c) => MUTATING.test(c)), []);
+    } finally { h.cleanup(); }
+  });
 });

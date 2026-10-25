@@ -82,6 +82,10 @@ test('frische Installation: genau der gepinnte Tag, Marker gesetzt', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.equal(s.head(), s.tagSha('v1'));
     assert.equal(s.marker(), `file://${s.upstream}@v1`);
+    // Review 25.10.2026 (P1): Checkout und venv gehören root, nicht dem Dienst.
+    const calls = readFileSync(join(s.dir, 'calls.log'), 'utf8');
+    assert.match(calls, new RegExp(`^chown -R 0:0 ${s.eosDir}$`, 'm'));
+    assert.doesNotMatch(calls, new RegExp(`^chown -R dvhub\\S* ${s.install}/eos`, 'm'), 'EOS-Daten (EOS_HOME) dürfen dem Dienst gehören, Code nicht');
   } finally { s.cleanup(); }
 });
 

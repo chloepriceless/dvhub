@@ -295,6 +295,37 @@ fi
 
 assert_supported_layout
 
+# BEGIN DVHUB INSTALL-DIR OWNERSHIP — keep this block byte-identical in install.sh and post-update.sh.
+# DVHUB_ROOT_OWNED_INSTALL (Review 25.10.2026, P1): der Programmordner gehört
+# root und ist für den Dienstbenutzer nur lesbar. root führt daraus bei jedem
+# Dienststart post-update.sh und weitere Skripte aus; gehörte er dem
+# Dienstbenutzer, könnte der sie vorher ändern. Der Dienst schreibt nur in
+# CONFIG_DIR und DATA_DIR; Updates aus der Oberfläche laufen über
+# /usr/local/libexec/dvhub-update. Die Marke oben ist die Untergrenze, die
+# dvhub-update beim Auschecken prüft — nicht entfernen.
+# Voller Durchlauf nur, wenn sich der Stand geändert hat oder etwas nicht passt
+# (Marker .root-owned-rev, selbst root-eigen); sonst kostet der Schritt nichts.
+# safe.directory (systemweit) lässt den Dienstbenutzer im root-eigenen Repo
+# lesen (Update-Prüfung: git rev-parse/log/tag).
+dvhub_root_own_install_dir() {
+  local dir="$1" mark="$1/.root-owned-rev" want
+  [[ -d "$dir" ]] || return 0
+  want="$(git -c safe.directory="$dir" -C "$dir" rev-parse --verify -q HEAD 2>/dev/null)" || want=nogit
+  if [[ "$(cat "$mark" 2>/dev/null)" != "$want" || -z "$(find "$dir" "$mark" -maxdepth 0 -user 0 2>/dev/null | sed -n 2p)" ]]; then
+    if [[ -n "$(find "$dir" -xdev \( \( -type l \( ! -user 0 -o ! -group 0 \) \) -o \( ! -type l \( ! -user 0 -o ! -group 0 -o -perm -0020 -o -perm -0002 -o ! -perm -0004 \) \) \) -print -quit 2>/dev/null)" ]]; then
+      echo "  Rechte: $dir gehört root (Dienstbenutzer nur lesend)"
+      chown -R 0:0 "$dir"
+      chmod -R go-w,a+rX "$dir"
+    fi
+    rm -f "$mark"
+    printf '%s\n' "$want" > "$mark"
+  fi
+  if command -v git >/dev/null 2>&1 && ! git config --system --get-all safe.directory 2>/dev/null | grep -Fxq "$dir"; then
+    git config --system --add safe.directory "$dir" 2>/dev/null || true
+  fi
+}
+# END DVHUB INSTALL-DIR OWNERSHIP
+
 echo "[1/7] Pakete installieren"
 apt-get update
 # python3-venv + python3-pip: a fresh Debian/Ubuntu ships the `venv` stdlib stub
@@ -389,6 +420,11 @@ else
 fi
 
 remove_legacy_app_dir
+
+# Programmordner root-eigen, bevor irgendetwas daraus als root läuft (npm,
+# Provisionierung, Herstellerprofile) — auch bei einer Neuinstallation über
+# einen alten, dem Dienstbenutzer gehörenden Ordner (Review 25.10.2026).
+dvhub_root_own_install_dir "$INSTALL_DIR"
 
 if [[ ! -f "$APP_DIR/package.json" ]]; then
   echo "Konnte die Webapp unter $APP_DIR nicht finden." >&2
@@ -506,7 +542,9 @@ fi
 # non-fatal. Bei Erstinstallation legt er schlicht alle Profile an.
 node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs" "$CONFIG_DIR" "$APP_DIR" \
   || echo "   (Herstellerprofil-Abgleich übersprungen)"
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
+# Nur Konfiguration und Daten gehören dem Dienstbenutzer; der Programmordner
+# bleibt root (dvhub_root_own_install_dir oben, Review 25.10.2026).
+chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"
 chmod 700 "$CONFIG_DIR/vpn"
@@ -582,6 +620,16 @@ if [[ -f "$INSTALL_DIR/dvhub-modbus-redirect.sh" ]]; then
   install -d -o root -g root -m 0755 "$(dirname "$MODBUS_REDIRECT_PATH")"
   install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-modbus-redirect.sh" "$MODBUS_REDIRECT_PATH"
 fi
+# Software-Update aus der Oberfläche (Review 25.10.2026): root-eigene Kopie von
+# dvhub-update.sh mit fest eingetragenem Programmordner. Die sudoers-Regeln
+# zeigen nur auf diese Kopie; das Skript prüft seine Argumente selbst.
+UPDATE_HELPER_PATH="/usr/local/libexec/dvhub-update"
+if [[ -f "$INSTALL_DIR/dvhub-update.sh" ]]; then
+  install -d -o root -g root -m 0755 "$(dirname "$UPDATE_HELPER_PATH")"
+  UPDATE_HELPER_TMP="$(mktemp "${UPDATE_HELPER_PATH}.XXXXXX")"
+  sed "s|^INSTALL_DIR=\"@INSTALL_DIR@\"\$|INSTALL_DIR=\"${INSTALL_DIR}\"|" "$INSTALL_DIR/dvhub-update.sh" > "$UPDATE_HELPER_TMP"
+  chown root:root "$UPDATE_HELPER_TMP" && chmod 0755 "$UPDATE_HELPER_TMP" && mv -f "$UPDATE_HELPER_TMP" "$UPDATE_HELPER_PATH"
+fi
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
 PKILL_PATH="$(command -v pkill || echo /usr/bin/pkill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
@@ -631,7 +679,17 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x charon
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x starter
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x charon
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x starter
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/post-update.sh
+# Software-Update aus der Oberfläche (Review 25.10.2026): nur über den
+# root-eigenen Einstieg dvhub-update (prüft Tag/Commit/Untergrenze selbst).
+# Früher: bash ${INSTALL_DIR}/post-update.sh — eine Datei im Programmordner.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} fetch
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} stash
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} stash-pop
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-main
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-tag *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-commit *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} npm-install
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} post-update
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get update *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *

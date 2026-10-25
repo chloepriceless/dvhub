@@ -67,6 +67,17 @@ fi
 # 1 GB ab; das kostete genau den Boxen EOS, die es am ehesten brauchen. Wer es
 # nicht will, setzt weiterhin $DATA_DIR/.no-eos.
 
+# Checkout und venv root-eigen, bevor root daraus etwas ausfuehrt (frueher
+# gehoerten sie dem Dienstbenutzer — Review 25.10.2026).
+eos_root_own() {
+  local d
+  for d in "$EOS_DIR" "$EOS_VENV"; do
+    [[ -e "$d" ]] || continue
+    chown -R 0:0 "$d" && chmod -R go-w,a+rX "$d"
+  done
+}
+eos_root_own
+
 # Konnektivitaets-Vorpruefung. Kostet eine Sekunde und erspart im Fehlerfall
 # stundenlanges Raetseln: kuendigt die Box globales IPv6 an, ohne es erreichen
 # zu koennen, laeuft JEDE pip-Verbindung erst in den IPv6-Timeout -- der Download
@@ -259,8 +270,11 @@ else
   "$EOS_VENV/bin/pip" install --upgrade "starlette<1.0"
 fi
 
-# Ownership: the systemd user must be able to execute the venv.
-chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_VENV" "$EOS_DIR"
+# Besitz: root, fuer den Dienstbenutzer nur lesbar/ausfuehrbar (Review
+# 25.10.2026). root fuehrt pip/python aus dem venv und den Build aus EOS_DIR
+# aus (pip install -e); gehoerten sie dem Dienstbenutzer, koennte der sie
+# vorher aendern. eos.service laeuft weiter als Dienstbenutzer.
+eos_root_own
 if [[ -n "$EOS_HOME" ]]; then
   mkdir -p "$EOS_HOME"
   chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_HOME"

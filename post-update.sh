@@ -19,6 +19,40 @@ fi
 
 echo "DVhub post-update (idempotent)"
 
+# BEGIN DVHUB INSTALL-DIR OWNERSHIP — keep this block byte-identical in install.sh and post-update.sh.
+# DVHUB_ROOT_OWNED_INSTALL (Review 25.10.2026, P1): der Programmordner gehört
+# root und ist für den Dienstbenutzer nur lesbar. root führt daraus bei jedem
+# Dienststart post-update.sh und weitere Skripte aus; gehörte er dem
+# Dienstbenutzer, könnte der sie vorher ändern. Der Dienst schreibt nur in
+# CONFIG_DIR und DATA_DIR; Updates aus der Oberfläche laufen über
+# /usr/local/libexec/dvhub-update. Die Marke oben ist die Untergrenze, die
+# dvhub-update beim Auschecken prüft — nicht entfernen.
+# Voller Durchlauf nur, wenn sich der Stand geändert hat oder etwas nicht passt
+# (Marker .root-owned-rev, selbst root-eigen); sonst kostet der Schritt nichts.
+# safe.directory (systemweit) lässt den Dienstbenutzer im root-eigenen Repo
+# lesen (Update-Prüfung: git rev-parse/log/tag).
+dvhub_root_own_install_dir() {
+  local dir="$1" mark="$1/.root-owned-rev" want
+  [[ -d "$dir" ]] || return 0
+  want="$(git -c safe.directory="$dir" -C "$dir" rev-parse --verify -q HEAD 2>/dev/null)" || want=nogit
+  if [[ "$(cat "$mark" 2>/dev/null)" != "$want" || -z "$(find "$dir" "$mark" -maxdepth 0 -user 0 2>/dev/null | sed -n 2p)" ]]; then
+    if [[ -n "$(find "$dir" -xdev \( \( -type l \( ! -user 0 -o ! -group 0 \) \) -o \( ! -type l \( ! -user 0 -o ! -group 0 -o -perm -0020 -o -perm -0002 -o ! -perm -0004 \) \) \) -print -quit 2>/dev/null)" ]]; then
+      echo "  Rechte: $dir gehört root (Dienstbenutzer nur lesend)"
+      chown -R 0:0 "$dir"
+      chmod -R go-w,a+rX "$dir"
+    fi
+    rm -f "$mark"
+    printf '%s\n' "$want" > "$mark"
+  fi
+  if command -v git >/dev/null 2>&1 && ! git config --system --get-all safe.directory 2>/dev/null | grep -Fxq "$dir"; then
+    git config --system --add safe.directory "$dir" 2>/dev/null || true
+  fi
+}
+# END DVHUB INSTALL-DIR OWNERSHIP
+
+# ── 0. Programmordner root-eigen — VOR allem, was daraus als root läuft ──
+dvhub_root_own_install_dir "$INSTALL_DIR" || echo "  WARN: Rechte für $INSTALL_DIR nicht gesetzt" >&2
+
 # ── 1. Pakete ──
 # wireguard-tools wird GETRENNT und OHNE Recommends installiert (T-UPDATE-SHARPEN
 # 2026-07-03): sein Recommends `wireguard-modules` ist virtuell und wird nur von
@@ -135,6 +169,17 @@ if [[ -f "$INSTALL_DIR/dvhub-modbus-redirect.sh" ]]; then
   install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-modbus-redirect.sh" "$MODBUS_REDIRECT_PATH"
 fi
 
+# Software-Update aus der Oberfläche (Review 25.10.2026): root-eigene Kopie von
+# dvhub-update.sh mit fest eingetragenem Programmordner. Die sudoers-Regeln
+# zeigen nur auf diese Kopie; das Skript prüft seine Argumente selbst.
+UPDATE_HELPER_PATH="/usr/local/libexec/dvhub-update"
+if [[ -f "$INSTALL_DIR/dvhub-update.sh" ]]; then
+  install -d -o root -g root -m 0755 "$(dirname "$UPDATE_HELPER_PATH")"
+  UPDATE_HELPER_TMP="$(mktemp "${UPDATE_HELPER_PATH}.XXXXXX")"
+  sed "s|^INSTALL_DIR=\"@INSTALL_DIR@\"\$|INSTALL_DIR=\"${INSTALL_DIR}\"|" "$INSTALL_DIR/dvhub-update.sh" > "$UPDATE_HELPER_TMP"
+  chown root:root "$UPDATE_HELPER_TMP" && chmod 0755 "$UPDATE_HELPER_TMP" && mv -f "$UPDATE_HELPER_TMP" "$UPDATE_HELPER_PATH"
+fi
+
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
 # Erst in eine Nebendatei schreiben und mit visudo -c prüfen (2026-10-18):
 # eine ungültige Datei in /etc/sudoers.d legt bei klassischem sudo ALLE
@@ -181,7 +226,17 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x charon
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x starter
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x charon
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x starter
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/post-update.sh
+# Software-Update aus der Oberfläche (Review 25.10.2026): nur über den
+# root-eigenen Einstieg dvhub-update (prüft Tag/Commit/Untergrenze selbst).
+# Früher: bash ${INSTALL_DIR}/post-update.sh — eine Datei im Programmordner.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} fetch
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} stash
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} stash-pop
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-main
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-tag *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-commit *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} npm-install
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} post-update
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get update *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
@@ -231,24 +286,16 @@ if [[ -f "$APP_DIR/package.json" ]]; then
     echo "  npm install: uebersprungen (${LOCK_FILE} unveraendert)"
   else
     echo "  npm install (${LOCK_FILE} geaendert oder node_modules fehlt)..."
-    # Als Dienstbenutzer, nicht als root (2026-10-15): root mit HOME=~dvhub legte
-    # root-eigene Einträge in dessen npm-Cache an, danach scheiterte das Update
-    # über die Oberfläche (als dvhub) mit EACCES. Alte Reste reparieren.
-    SVC_HOME="$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6)"
-    for d in "${SVC_HOME:-/nonexistent}/.npm" "${SVC_HOME:-/nonexistent}/.cache/dvhub-npm" "$APP_DIR/node_modules"; do
-      [[ -e "$d" ]] && chown -R "$SERVICE_USER:$SERVICE_USER" "$d" 2>/dev/null || true
-    done
-    NPM_AS=(npm)
-    if [[ "$(id -u)" -eq 0 ]] && id "$SERVICE_USER" >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
-      chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR" "$APP_DIR/package-lock.json" 2>/dev/null || true
-      NPM_AS=(runuser -u "$SERVICE_USER" -- env HOME="${SVC_HOME:-$HOME}" npm)
-    fi
+    # Als root (Review 25.10.2026): $APP_DIR und node_modules gehören root; der
+    # Dienstbenutzer schreibt dort nichts mehr. Auch das Update aus der
+    # Oberfläche ruft npm als root auf (dvhub-update npm-install). Eigener Cache
+    # unter /root (dvhub/.npmrc: ${HOME}/.cache/dvhub-npm).
     # Marker vor dem Lauf ungueltig machen (Review 25.10.2026): bricht npm ab
     # (Timeout, Stromausfall, Abbruch aus der Oberflaeche), bleibt node_modules
     # halb zurueck — ein stehender Marker haette die Reparatur unterdrueckt.
     rm -f "$NPM_MARKER"
     # `if` suppresses `set -e`; no pipe so the rc is npm's own (not tail's).
-    if "${NPM_AS[@]}" install --omit=dev; then
+    if env HOME=/root npm install --omit=dev; then
       [[ -n "$CURRENT_HASH" ]] && printf '%s\n' "$CURRENT_HASH" >"$NPM_MARKER"
       echo "  npm install: OK"
     else
@@ -258,7 +305,9 @@ if [[ -f "$APP_DIR/package.json" ]]; then
 fi
 
 # ── 7. Berechtigungen ──
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" 2>/dev/null || true
+# Nur Konfiguration gehört dem Dienstbenutzer; der Programmordner bleibt root
+# (Schritt 0). Früher: chown -R auf $INSTALL_DIR — siehe Review 25.10.2026.
+chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" 2>/dev/null || true
 echo "  Berechtigungen: OK"
 
 # ── 8. systemd Service aktuell? ──
