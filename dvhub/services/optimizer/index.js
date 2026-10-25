@@ -563,7 +563,8 @@ export function createOptimizerService(ctx) {
       const multiDayResult = assessMultiDayHold(
         pvSlots, loadSlots,
         planCfg.optimizer?.batteryCapacityWh ?? 10000,
-        avgFeedIn, avgImport, rtEff
+        avgFeedIn, avgImport, rtEff,
+        { timeZone: cfg.schedule?.timezone || 'Europe/Berlin' }
       );
 
       let effectiveAllowGridDischarge = allowGridDischarge;

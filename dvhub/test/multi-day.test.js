@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { assessMultiDayHold } from '../services/optimizer/multi-day.js';
+import { localDate, zoneOffsetMs } from '../tz-fast.js';
 
 // --- Helpers ---
 
@@ -9,13 +10,18 @@ import { assessMultiDayHold } from '../services/optimizer/multi-day.js';
  * Create tomorrow-based slots with a given value key.
  * Uses Date.now() + 86_400_000 as base so slots fall within tomorrow's window.
  */
+// 06:00 Berlin am Berliner Tag heute + dayOffset (unabhaengig von der Zeitzone
+// des Rechners — assessMultiDayHold rechnet seit 25.10.2026 in Europe/Berlin).
+function berlinSixAm(dayOffset) {
+  const today = localDate(Date.now(), 'Europe/Berlin');
+  const [y, m, d] = today.split('-').map(Number);
+  const guess = Date.UTC(y, m - 1, d + dayOffset, 6, 0, 0);
+  return guess - zoneOffsetMs(guess - 2 * 3600000, 'Europe/Berlin');
+}
+
 function makeTomorrowSlots(count, valueKey, value, confidence = 0.8) {
-  const now = new Date();
   // Tomorrow 06:00 Berlin time (safe window for PV slots)
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(6, 0, 0, 0);
-  const base = tomorrow.getTime();
+  const base = berlinSixAm(1);
 
   return Array.from({ length: count }, (_, i) => ({
     ts: base + i * 3600000,
@@ -29,9 +35,7 @@ function makeTomorrowSlots(count, valueKey, value, confidence = 0.8) {
  * Create today-only slots (no tomorrow data).
  */
 function makeTodaySlots(count, valueKey, value, confidence = 0.8) {
-  const now = new Date();
-  now.setHours(6, 0, 0, 0);
-  const base = now.getTime();
+  const base = berlinSixAm(0);
 
   return Array.from({ length: count }, (_, i) => ({
     ts: base + i * 3600000,
@@ -152,4 +156,40 @@ test('assessMultiDayHold: empty pvSlots -> holdBattery=false (no tomorrow data)'
 
   assert.equal(result.holdBattery, false);
   assert.equal(result.reason, 'no_tomorrow_data');
+});
+
+// Review 25.10.2026 (P3): „morgen“ hing an der Mitternacht des Rechners (UTC-Box:
+// zwei Stunden daneben) und war fest 24 h lang. Jetzt Kalendertag in der
+// Anlagen-Zeitzone, auch an den Umstellungstagen (23 bzw. 25 h).
+function hourSlots(fromIso, count, powerW) {
+  const base = Date.parse(fromIso);
+  return Array.from({ length: count }, (_, i) => ({ ts: base + i * 3600000, endTs: base + (i + 1) * 3600000, powerW, confidence: 0.9 }));
+}
+
+function withTz(tz, fn) {
+  const before = process.env.TZ;
+  process.env.TZ = tz;
+  try { return fn(); } finally { if (before === undefined) delete process.env.TZ; else process.env.TZ = before; }
+}
+
+test('assessMultiDayHold: morgen = Berliner Kalendertag, auch auf einer UTC-Box', () => {
+  // 11.06. 00:30 Berlin = 10.06. 22:30Z. Morgen = 12.06. Berlin = 11.06. 22:00Z – 12.06. 22:00Z.
+  const nowMs = Date.parse('2026-06-10T22:30:00Z');
+  const pv = [
+    ...hourSlots('2026-06-11T04:00:00Z', 10, 500), // heute (Berlin): 5 kWh, zaehlt nicht
+    ...hourSlots('2026-06-12T04:00:00Z', 10, 200)  // morgen (Berlin): 2 kWh
+  ];
+  const result = withTz('UTC', () => assessMultiDayHold(pv, [], BATTERY_CAPACITY_WH, 8, 30, RT_EFFICIENCY, { nowMs, timeZone: 'Europe/Berlin' }));
+  assert.ok(Math.abs(result.tomorrowPvKwh - 2) < 1e-9, `morgen ${result.tomorrowPvKwh} kWh`);
+});
+
+test('assessMultiDayHold: Umstellungstag mit 25 h zaehlt bis zur echten Mitternacht', () => {
+  // Morgen = 25.10.2026 (Winterzeit): 24.10. 22:00Z bis 25.10. 23:00Z.
+  const nowMs = Date.parse('2026-10-24T10:00:00Z');
+  const pv = [
+    ...hourSlots('2026-10-25T08:00:00Z', 4, 250), // 1 kWh
+    ...hourSlots('2026-10-25T22:00:00Z', 1, 1000)  // 23:00–24:00 MEZ, noch der 25.10.: 1 kWh
+  ];
+  const result = assessMultiDayHold(pv, [], BATTERY_CAPACITY_WH, 8, 30, RT_EFFICIENCY, { nowMs, timeZone: 'Europe/Berlin' });
+  assert.ok(Math.abs(result.tomorrowPvKwh - 2) < 1e-9, `morgen ${result.tomorrowPvKwh} kWh`);
 });

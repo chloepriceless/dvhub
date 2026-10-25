@@ -2,6 +2,17 @@
 // Evaluates whether to hold battery energy for tomorrow based on PV forecast.
 // Decision logic per D-31 (30% threshold) and D-32 (avoided cost vs feed-in).
 
+import { localDate, zoneOffsetMs } from '../../tz-fast.js';
+
+/** Lokale Mitternacht (UTC-ms) des Tages `dayOffset` Tage nach dem lokalen Tag von `nowMs`. */
+function localMidnightMs(nowMs, timeZone, dayOffset) {
+  const [y, m, d] = localDate(nowMs, timeZone).split('-').map(Number);
+  const wallMs = Date.UTC(y, m - 1, d + dayOffset);
+  // Abstand zweimal bestimmen: an Umstellungstagen kurz vor bzw. nach Mitternacht verschieden.
+  const first = wallMs - zoneOffsetMs(wallMs, timeZone);
+  return wallMs - zoneOffsetMs(first, timeZone);
+}
+
 /**
  * Assess whether to hold battery energy for tomorrow based on PV forecast.
  * Pure function -- no side effects, no external dependencies.
@@ -23,15 +34,14 @@
  * @param {number} roundTripEfficiency - Battery round-trip efficiency (e.g. 0.92)
  * @returns {{ holdBattery: boolean, reason: string, tomorrowPvKwh: number, tomorrowDeficitKwh: number }}
  */
-export function assessMultiDayHold(pvSlots, loadSlots, batteryCapacityWh, feedInCtKwh, importCtKwh, roundTripEfficiency) {
-  // Compute tomorrow's time window using Berlin timezone for day boundaries
-  const now = new Date();
-
-  // Compute end of today and start of tomorrow in local machine time
-  const todayEnd = new Date(now);
-  todayEnd.setHours(23, 59, 59, 999);
-  const tomorrowStart = todayEnd.getTime() + 1;
-  const tomorrowEnd = tomorrowStart + 86_400_000;
+export function assessMultiDayHold(pvSlots, loadSlots, batteryCapacityWh, feedInCtKwh, importCtKwh, roundTripEfficiency, options = {}) {
+  // „Morgen“ = naechster Kalendertag in der Anlagen-Zeitzone (Review
+  // 25.10.2026): frueher die Mitternacht des Rechners (UTC-Box: zwei Stunden
+  // daneben) und fest 24 h (Umstellungstage haben 23 bzw. 25 h).
+  const timeZone = options.timeZone || 'Europe/Berlin';
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  const tomorrowStart = localMidnightMs(nowMs, timeZone, 1);
+  const tomorrowEnd = localMidnightMs(nowMs, timeZone, 2);
 
   // Filter PV slots for tomorrow
   const tomorrowPvSlots = (pvSlots || []).filter(s => s.ts >= tomorrowStart && s.ts < tomorrowEnd);
