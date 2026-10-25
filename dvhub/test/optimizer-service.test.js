@@ -450,7 +450,10 @@ describe('Optimizer Service: DVhub stößt den EOS-Lauf an', () => {
 });
 
 describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 25.10.2026)', () => {
-  test('Lauf schiebt ueber die Bridge statt ueber den Adapter und meldet deren Ergebnis', async (t) => {
+  test('Lauf schreibt selbst keine Prognose — weder Adapter noch zusaetzlicher Bridge-Push', async (t) => {
+    // Die Bridge schreibt auf ihrem eigenen Takt (und bei neuen Preisen). Ein
+    // zusaetzlicher Push je Lauf vervielfachte ihre Schreibvorgaenge in EOS
+    // (Geraete-Messwerte, die EOS nie kuerzt). lastEosPush setzt die Bridge.
     t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
     let adapterPushes = 0;
     let bridgePushes = 0;
@@ -462,20 +465,20 @@ describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 
       getOptimizationSolution: async () => ({ generatedAt: '2026-10-25T12:00:00+02:00', rows: [] }),
       setEmsIntervalSec: async () => ({ ok: true })
     };
-    const eosForecastBridge = {
-      push: async () => { bridgePushes++; return { ok: false, pushed: ['PVForecastImport(96)'], errors: { LoadImport: 'HTTP 500' } }; }
-    };
+    const eosForecastBridge = { push: async () => { bridgePushes++; return { ok: true, pushed: [], errors: {} }; } };
     const { ctx, state } = buildCtx({
       optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
       ctx: { eosAdapter, eosForecastBridge }
     });
+    state.optimizer = { ...(state.optimizer || {}) };
     const svc = createOptimizerService(ctx);
+    state.optimizer.lastEosPush = { ok: false, error: 'LoadImport: HTTP 500', at: 1 };
     await svc.start();
     for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
-    assert.ok(bridgePushes >= 1, 'Bridge schiebt die Prognose');
-    assert.equal(adapterPushes, 0, 'Adapter schiebt nichts mehr');
-    assert.equal(state.optimizer.lastEosPush.ok, false);
-    assert.match(state.optimizer.lastEosPush.error, /LoadImport: HTTP 500/);
+    assert.equal(state.optimizer.source, 'eos', 'EOS-Pfad gelaufen');
+    assert.equal(adapterPushes, 0, 'Adapter schiebt nichts');
+    assert.equal(bridgePushes, 0, 'kein zusaetzlicher Bridge-Push je Lauf');
+    assert.deepEqual(state.optimizer.lastEosPush, { ok: false, error: 'LoadImport: HTTP 500', at: 1 }, 'Bridge-Ergebnis bleibt stehen');
     await svc.close();
   });
 });

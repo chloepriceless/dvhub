@@ -962,3 +962,44 @@ test('socForRun: ohne Akku-Ladestand oder ohne Akku in EOS kein Aufruf', async (
     await mock.close();
   }
 });
+
+// Review 25.10.2026: die Bridge ist einziger Schreiber der EOS-Prognosen; ihr
+// Ergebnis steht deshalb in state.optimizer.lastEosPush (Prognose-Inspektor).
+test('push traegt das eigene Ergebnis in state.optimizer.lastEosPush ein', async () => {
+  let failLoad = true;
+  const mock = await createMockEos((req, res) => {
+    if (failLoad && req.method === 'PUT' && req.url.startsWith('/v1/prediction/import/LoadImport')) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'boom' }));
+      return;
+    }
+    okHandler(req, res);
+  });
+  try {
+    const state = { victron: { soc: 50 }, optimizer: {} };
+    const ctx = {
+      getCfg: () => ({ optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` } } }),
+      pushLog: () => {},
+      forecastService: { buildForecastResponse: async () => forecastSlots() },
+      state,
+    };
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+    assert.equal(state.optimizer.lastEosPush.ok, false);
+    assert.match(state.optimizer.lastEosPush.error, /LoadImport/);
+    assert.ok(Number.isFinite(state.optimizer.lastEosPush.at));
+    failLoad = false;
+    await bridge.push();
+    assert.equal(state.optimizer.lastEosPush.ok, true);
+    assert.equal(state.optimizer.lastEosPush.error, null);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('push ohne Prognosedienst meldet den Fehler ebenfalls in lastEosPush', async () => {
+  const state = { optimizer: {} };
+  await createEosForecastBridge({ getCfg: () => ({}), pushLog: () => {}, state }).push();
+  assert.equal(state.optimizer.lastEosPush.ok, false);
+  assert.match(state.optimizer.lastEosPush.error, /bootstrap/);
+});

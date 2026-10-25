@@ -608,6 +608,22 @@ export function createEosForecastBridge(ctx) {
    * disk-flush after each PUT doesn't race; the 15s timeout per call gives
    * plenty of headroom.
    */
+  // Ergebnis jedes Pushs fuer den Prognose-Inspektor (Review 25.10.2026): die
+  // Bridge ist einziger Schreiber der EOS-Prognosen, ihr Ergebnis ist das der
+  // „letzten echten Uebertragung“.
+  function recordPush(res) {
+    if (!state) return res;
+    state.optimizer = state.optimizer || {};
+    const errors = res?.errors && typeof res.errors === 'object' ? res.errors : {};
+    const errorText = Object.entries(errors).map(([key, value]) => `${key}: ${value}`).join('; ');
+    state.optimizer.lastEosPush = {
+      ok: res?.ok === true && !errors.horizon,
+      error: errorText || null,
+      at: Date.now(),
+    };
+    return res;
+  }
+
   async function push() {
     const cfg = getCfg();
     const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
@@ -619,7 +635,7 @@ export function createEosForecastBridge(ctx) {
     if (!forecastService?.buildForecastResponse) {
       const err = 'forecastService.buildForecastResponse unavailable — bridge inactive';
       if (pushLog) pushLog('eos_forecast_bridge_skip', { reason: err });
-      return { ok: false, pushed: [], errors: { bootstrap: err } };
+      return recordPush({ ok: false, pushed: [], errors: { bootstrap: err } });
     }
 
     let forecast;
@@ -628,7 +644,7 @@ export function createEosForecastBridge(ctx) {
     } catch (e) {
       const err = `forecastService.buildForecastResponse failed: ${e.message}`;
       if (pushLog) pushLog('eos_forecast_bridge_error', { reason: err });
-      return { ok: false, pushed: [], errors: { build: err } };
+      return recordPush({ ok: false, pushed: [], errors: { build: err } });
     }
 
     const priceSlotsCt = forecast?.price?.slots || [];
@@ -818,7 +834,7 @@ export function createEosForecastBridge(ctx) {
     if (pushLog) {
       pushLog('eos_forecast_bridge', { ok: okAll, pushed, errors, socSkipped: socRes.skipped, ...(heaterReservation ? { heaterReservedWh: heaterReservation.byDay } : {}) });
     }
-    return { ok: okAll, pushed, errors };
+    return recordPush({ ok: okAll, pushed, errors });
   }
 
   /**
