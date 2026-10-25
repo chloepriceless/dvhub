@@ -1800,6 +1800,7 @@ export function createScheduleEvaluator(ctx) {
           zfi.limitPct = null;
           zfi.trigger = null;
           zfi.clearStreak = 0;
+          zfi.entrySoc = null;
           pushLog('zero_feedin_cap_off', { reason: 'feedin_restored' });
           telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
             eventType: 'zero_feedin_cap_off', target: 'wMaxLimPct',
@@ -1871,6 +1872,7 @@ export function createScheduleEvaluator(ctx) {
           zfi.exportStreak = 0;
           zfi.trigger = trigger;
           zfi.clearStreak = 0;
+          zfi.entrySoc = socFresh && Number.isFinite(soc) ? soc : null;
           pushLog('zero_feedin_cap_on', {
             trigger, soc: Number.isFinite(soc) ? soc : null,
             limitPct: Number(zfi.limitPct.toFixed(2)), loadW: loadKnown ? loadW : null, exportW
@@ -1895,6 +1897,7 @@ export function createScheduleEvaluator(ctx) {
         zfi.limitPct = null;
         zfi.trigger = null;
         zfi.clearStreak = 0;
+        zfi.entrySoc = null;
         pushLog('zero_feedin_cap_off', { reason, ...meta });
         telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
           eventType: 'zero_feedin_cap_off', target: 'wMaxLimPct',
@@ -1908,8 +1911,21 @@ export function createScheduleEvaluator(ctx) {
       // wenn er nichts mehr begrenzt (100 % und kein Export über mehrere
       // Takte); erreicht der SoC die Schwelle, gilt er als SoC-Deckel.
       // Ohne gemerkten Auslöser (alter Zustand) bleibt es beim SoC-Exit.
-      if (zfi.trigger === 'export' && socFresh && Number.isFinite(soc) && soc >= thresholdPct) zfi.trigger = 'soc';
-      if (zfi.trigger !== 'export' && socFresh && Number.isFinite(soc) && soc <= thresholdPct - hysteresisPct) {
+      // Grenze nach unten (Gegenprüfung e3e498a3): während des Deckels darf der
+      // Akku das Haus stützen; ohne Grenze liefe er bei Netz ≈ 0 über die
+      // ganze Sperre leer. Ein Export-Deckel endet deshalb spätestens bei
+      // Einschalt-SoC − Hysterese (unbekannt beim Einschalten → erster frischer
+      // SoC). Danach greift wieder Force-Charge; Export schaltet neu ein.
+      const socOk = socFresh && Number.isFinite(soc);
+      if (zfi.trigger === 'export' && socOk && soc >= thresholdPct) zfi.trigger = 'soc';
+      if (zfi.trigger === 'export' && socOk) {
+        if (!Number.isFinite(zfi.entrySoc)) zfi.entrySoc = soc;
+        if (soc <= zfi.entrySoc - hysteresisPct) {
+          await capOff('soc_dropped', { soc, entrySoc: zfi.entrySoc });
+          return;
+        }
+      }
+      if (zfi.trigger !== 'export' && socOk && soc <= thresholdPct - hysteresisPct) {
         await capOff('soc_recovered', { soc });
         return;
       }

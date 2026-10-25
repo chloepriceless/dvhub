@@ -168,3 +168,40 @@ test('SoC-Deckel: SoC-Exit unverändert (Schwelle − Hysterese)', async () => {
   assert.equal(state.ctrl._zfi.capActive, false);
   assert.ok(logs.some((l) => l.e === 'zero_feedin_cap_off' && l.d.reason === 'soc_recovered'));
 });
+
+// Gegenprüfung e3e498a3 (P2): Ohne SoC-Exit endete ein Export-Deckel nur bei
+// 100 % ohne Export. Deckt aber der (zum Stützen freigegebene) Akku das Haus,
+// bleibt das Netz bei ~0, das Limit unter 100 % — der Akku liefe während der
+// Sperre leer. Grenze: Einschalt-SoC − Hysterese, dann zurück auf Force-Charge.
+test('Export-Deckel: Akku stützt das Haus, SoC sinkt → Exit bei Einschalt-SoC − Hysterese', async () => {
+  const { ev, state, writes, logs } = harness({ loadW: 800, soc: 85, exportW: 2000 });
+  for (let i = 0; i < 3; i += 1) await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, true);
+  state.victron.gridExportW = 0;
+  state.victron.gridImportW = 60;               // Akku deckt das Haus, Netz ~0 (im Totband)
+  for (const soc of [84, 83, 82, 81]) {
+    state.victron.soc = soc;
+    await ev.zeroFeedInTick();
+    assert.equal(state.ctrl._zfi.capActive, true, `bei SoC ${soc} noch an`);
+  }
+  state.victron.soc = 80;
+  await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, false, 'bei 85 − 5 = 80 % zurück auf Force-Charge');
+  assert.ok(logs.some((l) => l.e === 'zero_feedin_cap_off' && l.d.reason === 'soc_dropped'));
+  assert.deepEqual(writes.slice(-2), [{ address: ADDR.out, value: 55536 }, { address: ADDR.ena, value: 0 }]);
+});
+
+test('Export-Deckel ohne SoC beim Einschalten: erster frischer SoC wird die Bezugsgröße', async () => {
+  const { ev, state } = harness({ loadW: 800, soc: 70, exportW: 2000 });
+  state.victron.fieldUpdatedAt = {};            // SoC unbekannt beim Einschalten
+  for (let i = 0; i < 3; i += 1) await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, true);
+  state.victron.gridExportW = 0;
+  state.victron.gridImportW = 60;
+  state.victron.fieldUpdatedAt = { soc: Date.now() };
+  await ev.zeroFeedInTick();                     // SoC 70 wird Bezug
+  assert.equal(state.ctrl._zfi.capActive, true);
+  state.victron.soc = 65;
+  await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, false);
+});
