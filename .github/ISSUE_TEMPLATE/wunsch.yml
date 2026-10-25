@@ -1,6 +1,6 @@
 name: Funktion wünschen
 description: Idee oder Verbesserungsvorschlag
-labels: [enhancement]
+labels: []
 body:
   - type: textarea
     id: wunsch

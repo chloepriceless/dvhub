@@ -15,7 +15,8 @@ jobs:
   analyze:
     name: /analyze
     if: |
-      startsWith(github.event.comment.body, '/analyze') &&
+      !github.event.issue.pull_request &&
+      (github.event.comment.body == '/analyze' || startsWith(github.event.comment.body, '/analyze ') || startsWith(github.event.comment.body, format('/analyze{0}', fromJSON('"\n"'))) || startsWith(github.event.comment.body, format('/analyze{0}', fromJSON('"\r"')))) &&
       (github.event.comment.user.login == github.event.issue.user.login ||
        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     permissions:
@@ -35,7 +36,8 @@ jobs:
   fix:
     name: /fix
     if: |
-      startsWith(github.event.comment.body, '/fix') &&
+      !github.event.issue.pull_request &&
+      (github.event.comment.body == '/fix' || startsWith(github.event.comment.body, '/fix ') || startsWith(github.event.comment.body, format('/fix{0}', fromJSON('"\n"'))) || startsWith(github.event.comment.body, format('/fix{0}', fromJSON('"\r"')))) &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     permissions:
       contents: write # nur der PR-Job schiebt; der Agent selbst hat nur Lesezugriff
