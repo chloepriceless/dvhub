@@ -3603,6 +3603,50 @@ async function loadScheduleDash() {
   applyScheduleRowStates();
 }
 
+// Zahl aus einem optionalen Feld: leer (oder vom Browser verworfen, dann
+// value === '') → null = „nicht ändern“, wie im Slot-Editor. Number('') wäre 0.
+function readOptionalNumberInput(id) {
+  const raw = document.getElementById(id)?.value;
+  const text = raw == null ? '' : String(raw).trim();
+  if (text === '') return null;
+  const value = Number(text);
+  return Number.isFinite(value) ? value : null;
+}
+
+// Standard-Sollwerte des Zeitplans. Ein leeres Feld bleibt, wie es ist —
+// vorher wurde es als 0 gespeichert (Ladestrom 0 A, Netz 0 W, DC aus).
+function readScheduleDefaultsInputs({ includeDcFeed = false } = {}) {
+  const body = {};
+  const grid = readOptionalNumberInput('defaultGridSetpointInput');
+  if (grid !== null) body.defaultGridSetpointW = grid;
+  const charge = readOptionalNumberInput('defaultChargeCurrentInput');
+  if (charge !== null) body.defaultChargeCurrentA = charge;
+  if (includeDcFeed) {
+    const dcFeed = readOptionalNumberInput('defaultFeedExcessDcPvInput');
+    if (dcFeed === 0 || dcFeed === 1) body.defaultFeedExcessDcPv = dcFeed;
+  }
+  return body;
+}
+
+// Knopf „Defaults speichern“.
+async function saveScheduleDefaults() {
+  const configBody = readScheduleDefaultsInputs();
+  if (!Object.keys(configBody).length) { setControlMsg('Keine Werte zum Speichern.'); return; }
+  try {
+    const r = await apiFetch('/api/schedule/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(configBody)
+    });
+    const out = await r.json();
+    if (!r.ok || !out.ok) { setControlMsg(`Fehler: ${out.error || r.status}`, true); return; }
+    const gridPart = configBody.defaultGridSetpointW !== undefined ? `Grid ${configBody.defaultGridSetpointW} W` : 'Grid unverändert';
+    const chargePart = configBody.defaultChargeCurrentA !== undefined ? `Charge ${configBody.defaultChargeCurrentA} A` : 'Charge unverändert';
+    setControlMsg(`Defaults gespeichert: ${gridPart}, ${chargePart}`);
+    await loadScheduleDash();
+  } catch (e) { setControlMsg(`Fehler: ${e.message}`, true); }
+}
+
 async function saveScheduleDash() {
   const rules = collectScheduleRows();
 
@@ -3614,13 +3658,7 @@ async function saveScheduleDash() {
   const out1 = await r1.json();
   if (!r1.ok || !out1.ok) return setControlMsg(`Fehler Rules: ${out1.error || r1.status}`, true);
 
-  const configBody = {};
-  const defGridVal = Number(document.getElementById('defaultGridSetpointInput')?.value);
-  if (Number.isFinite(defGridVal)) configBody.defaultGridSetpointW = defGridVal;
-  const defChargeVal = Number(document.getElementById('defaultChargeCurrentInput')?.value);
-  if (Number.isFinite(defChargeVal)) configBody.defaultChargeCurrentA = defChargeVal;
-  const defDcFeedVal = Number(document.getElementById('defaultFeedExcessDcPvInput')?.value);
-  if (defDcFeedVal === 0 || defDcFeedVal === 1) configBody.defaultFeedExcessDcPv = defDcFeedVal;
+  const configBody = readScheduleDefaultsInputs({ includeDcFeed: true });
 
   if (Object.keys(configBody).length) {
     const r2 = await apiFetch('/api/schedule/config', {
@@ -3842,8 +3880,10 @@ async function saveAutomationConfig() {
     searchWindowStart: el('automationSearchStart')?.value || '14:00',
     searchWindowEnd: el('automationSearchEnd')?.value || '09:00',
     ...(el('automationBatteryCapacity')?.disabled ? {} : { batteryCapacityKwh: el('automationBatteryCapacity')?.value ? Number(el('automationBatteryCapacity').value) : null }),
-    ...(el('automationInverterEfficiency')?.disabled ? {} : { inverterEfficiencyPct: Number(el('automationInverterEfficiency')?.value) || 85 }),
-    ...(el('automationMaxDischargeW')?.disabled ? {} : { maxDischargeW: Number(el('automationMaxDischargeW')?.value) || -12000 }),
+    // Eine eingetippte 0 bleibt 0 — nur ein leeres Feld fällt zurück
+    // (vorher machte `Number(v) || -12000` aus 0 W wieder -12000 W).
+    ...(el('automationInverterEfficiency')?.disabled ? {} : { inverterEfficiencyPct: readOptionalNumberInput('automationInverterEfficiency') ?? 85 }),
+    ...(el('automationMaxDischargeW')?.disabled ? {} : { maxDischargeW: readOptionalNumberInput('automationMaxDischargeW') ?? -12000 }),
     // 0 ist ein gültiger Wert (keine Reserve) — nur ein leeres Feld fällt auf 30 zurück.
     minSocPct: readAutomationMinSocPct(),
     forecastAware: el('automationForecastAware')?.checked === true,
@@ -4089,25 +4129,7 @@ function initDashboard() {
   });
 
   // --- Dedicated "Defaults speichern" button ---
-  document.getElementById('saveDefaultsBtn')?.addEventListener('click', async () => {
-    const configBody = {};
-    const defGridVal = Number(document.getElementById('defaultGridSetpointInput')?.value);
-    if (Number.isFinite(defGridVal)) configBody.defaultGridSetpointW = defGridVal;
-    const defChargeVal = Number(document.getElementById('defaultChargeCurrentInput')?.value);
-    if (Number.isFinite(defChargeVal)) configBody.defaultChargeCurrentA = defChargeVal;
-    if (!Object.keys(configBody).length) { setControlMsg('Keine Werte zum Speichern.'); return; }
-    try {
-      const r = await apiFetch('/api/schedule/config', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(configBody)
-      });
-      const out = await r.json();
-      if (!r.ok || !out.ok) { setControlMsg(`Fehler: ${out.error || r.status}`, true); return; }
-      setControlMsg(`Defaults gespeichert: Grid ${defGridVal}W, Charge ${defChargeVal}A`);
-      await loadScheduleDash();
-    } catch (e) { setControlMsg(`Fehler: ${e.message}`, true); }
-  });
+  document.getElementById('saveDefaultsBtn')?.addEventListener('click', saveScheduleDefaults);
   document.getElementById('minSocSubmitBtn')?.addEventListener('click', handleMinSocSubmit);
   document.getElementById('createSelectionScheduleBtn')?.addEventListener('click', () => {
     createScheduleRowsFromChartSelection();
