@@ -440,10 +440,13 @@ export function createHistoryVizAggregator(ctx) {
     // dann an Berliner Mitternacht; bucket_ts ist der Berliner Kalendertag als
     // UTC-Mitternacht (dieselbe Datumsdarstellung wie resolveRange), damit die
     // Monats-/Jahres-/Wochentagszuordnung der Karten unveraendert stimmt.
-    // 15 min und 1 h liegen in UTC und Berlin auf denselben Grenzen.
+    // 15 min und 1 h liegen in UTC und Berlin auf denselben Grenzen. Jahr/Alle
+    // laufen auch mit Stunden-Buckets (Sankey, Autarkie) ueber das Berliner
+    // Jahr, damit alle Karten einer Ansicht denselben Zeitraum zeigen.
     const berlinDays = bucket === '1 day';
-    const start = berlinDays ? berlinDayStartIso(rangeStart) : rangeStart;
-    const end = berlinDays ? berlinDayStartIso(rangeEnd) : rangeEnd;
+    const berlinWindow = berlinDays || view === 'year' || view === 'all';
+    const start = berlinWindow ? berlinDayStartIso(rangeStart) : rangeStart;
+    const end = berlinWindow ? berlinDayStartIso(rangeEnd) : rangeEnd;
     if (view !== 'year' && view !== 'all' && db && typeof db.query === 'function') {
       const bySeries = await loadSharedEnergySlots(start, end);
       const bucketMs = bucketSeconds * 1000;
@@ -1124,11 +1127,13 @@ export function createHistoryVizAggregator(ctx) {
         start, end, view,
         intervalOverride: heatmapInterval,
       });
+      // Jahr: Preise stuendlich holen und unten je Berliner Tag mitteln wie die
+      // PV (queryBucketedSeries buendelt '1 day' in UTC, Gegenpruefung aa6a1602).
       const priceRows = await fetchBucketed({
         seriesKeys: [PRICE_SERIES_KEY],
         start, end, view,
         meanSeries: [PRICE_SERIES_KEY],
-        intervalOverride: heatmapInterval,
+        intervalOverride: view === 'year' ? '1 hour' : heatmapInterval,
       });
       const rows = pvRows.concat(priceRows);
       let xLabels;
@@ -1206,7 +1211,10 @@ export function createHistoryVizAggregator(ctx) {
       } else { // view === 'year'
         // x = month label (Jan..Dez), y = day-of-month 1..31, v = daily PV-kWh.
         // Note: cells outside actual month length stay 0; client treats as empty.
-        xLabels = bucketLabelsForView('year', start);
+        // Beschriftung ab Januar: `start` ist hier Berliner Mitternacht
+        // (31.12. 23:00 UTC), bucketLabelsForView liest den UTC-Monat und
+        // begann sonst mit „Dez“ — alle Spalten einen Monat verschoben.
+        xLabels = bucketLabelsForView('year', new Date(Date.UTC(ay, 0, 1)).toISOString());
         yLabels = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
         const cells = new Map(); // key=`${monthIdx}:${day}` → kWh
         // Plan 09.4 — per-cell mean spot price (see week/month branch).
@@ -1476,10 +1484,13 @@ export function createHistoryVizAggregator(ctx) {
         return { status: 200, body: payload, cached: false };
       }
       // --- week / month / year → per-day calendar matrix + periodTotal ---
-      // Group rows by UTC day, then decompose each day's buckets independently.
+      // Group rows by day, then decompose each day's buckets independently.
+      // Jahr/Alle: Berliner Kalendertag (der Zeitraum beginnt dort an Berliner
+      // Mitternacht, fetchBucketedEnergySlots); Woche/Monat: UTC-Tag wie ihr Zeitraum.
+      const berlinDayKeys = view === 'year' || view === 'all';
       const rowsByDay = new Map(); // YYYY-MM-DD → rows[]
       for (const r of rows) {
-        const dk = new Date(r.ts).toISOString().slice(0, 10);
+        const dk = berlinDayKeys ? berlinParts(new Date(r.ts)).date : new Date(r.ts).toISOString().slice(0, 10);
         if (!rowsByDay.has(dk)) rowsByDay.set(dk, []);
         rowsByDay.get(dk).push(r);
       }
