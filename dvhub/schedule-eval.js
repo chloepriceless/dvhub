@@ -214,6 +214,14 @@ export function createScheduleEvaluator(ctx) {
     return Number((raw * scale + offset).toFixed(6));
   }
 
+  // Steuerpunkte, die eine OBERE Grenze setzen: abwärts runden (toRawForWrite
+  // roundMode 'floor'). Ein Profil kann roundMode ausdrücklich setzen.
+  const UPPER_LIMIT_POINTS = new Set(['dvFeedInLimitW']);
+  function writeConfFor(name, conf) {
+    if (!conf || conf.roundMode != null || !UPPER_LIMIT_POINTS.has(name)) return conf;
+    return { ...conf, roundMode: 'floor' };
+  }
+
   function toRawForWrite(value, conf) {
     const scale = Number(conf.scale ?? 1);
     const offset = Number(conf.offset ?? 0);
@@ -245,7 +253,11 @@ export function createScheduleEvaluator(ctx) {
 
     const writeType = normWriteType(conf);
     const wordOrder = normWordOrder(conf);
-    const scaled = Math.round((engineeringValue - offset) / scale);
+    // Obere Grenzen (roundMode 'floor', z. B. Einspeisegrenze 2706 in 100-W-
+    // Schritten) zur sicheren Seite runden: aus 4250 W wurde sonst raw 43 =
+    // 4300 W (Review Regelung 25.10.). Epsilon gegen Float-Rauschen (12.34/0.01).
+    const exact = (engineeringValue - offset) / scale;
+    const scaled = conf.roundMode === 'floor' ? Math.floor(exact + 1e-9) : Math.round(exact);
 
     if (writeType === 'int16') {
       if (scaled < -32768 || scaled > 32767) throw new Error(`int16 range exceeded: ${scaled}`);
@@ -464,7 +476,7 @@ export function createScheduleEvaluator(ctx) {
     const cfg = getCfg();
     const saved = (state.ctrl._dvSeqSaved ??= {});
     for (const step of steps) {
-      const pconf = cfg.controlWrite?.[step.point];
+      const pconf = writeConfFor(step.point, cfg.controlWrite?.[step.point]);
       if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
       if (pconf.address == null) throw new Error(`sequence point unresolved (sunspec scan pending): ${step.point}`);
       let value = step.value;
@@ -1066,7 +1078,7 @@ export function createScheduleEvaluator(ctx) {
         fc = 0;
       } else {
         // Modbus: Wert in Register-Format kodieren
-        encoded = toRawForWrite(value, conf);
+        encoded = toRawForWrite(value, writeConfFor(target, conf));
         words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
         fc = Number(conf.fc || (words.length > 1 ? 16 : 6));
 
