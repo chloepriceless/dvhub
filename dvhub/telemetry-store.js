@@ -3,7 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
-import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot } from './telemetry-runtime.js';
+import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
@@ -401,6 +401,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
 
   function buildMaterializedEnergySlotWrites(rows) {
     const writes = new Map();
+    const nextVrmStart = vrmNextSampleStartLookup(rows);
     for (const row of rows) {
       const seriesKey = String(row.seriesKey || '').trim();
       if (!MATERIALIZED_ENERGY_SERIES.has(seriesKey)) continue;
@@ -424,12 +425,14 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       // VRM-Proben laenger als ein Slot verteilen sich anteilig auf alle Slots,
       // die sie ueberdecken; Live-Proben bleiben auf einen Slot gekappt (T-0079).
       // Gemeinsame Regel mit dem PG-Store (sampleEnergyBySlot).
+      const spread = sourceKind === 'vrm_import';
       const shares = sampleEnergyBySlot({
         ts: row.ts,
         value: row.value,
         resolutionSeconds: row.resolutionSeconds,
-        spread: sourceKind === 'vrm_import',
-        slotSeconds: MATERIALIZED_SLOT_BUCKET_SECONDS
+        spread,
+        slotSeconds: MATERIALIZED_SLOT_BUCKET_SECONDS,
+        nextStartMs: spread ? nextVrmStart(row) : null
       });
       for (const { slotStartMs, valueNum } of shares) {
         if (!Number.isFinite(valueNum)) continue;

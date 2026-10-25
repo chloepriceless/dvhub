@@ -45,6 +45,35 @@ describe('PG-Store: lange Proben ueber mehrere Slots', () => {
     close(sum(slots), 1, 'Summe');
   });
 
+  // Gegenpruefung 84da7835 (P3): Tagesproben an Umstellungstagen. VRM stempelt
+  // die Tage auf lokale Mitternacht; der 29.03. hat 23 h, der 25.10. 25 h. Die
+  // Probe reicht bis zur naechsten Probe derselben Reihe, nicht starr 24 h.
+  test('Umstellungstage: Tagesprobe reicht bis zur naechsten (23 h bzw. 25 h)', () => {
+    const spring = bySlot(buildMaterializedEnergySlotWrites([
+      vrm('pv_ac_w', '2026-03-28T23:00:00.000Z', 1000, 86400), // 29.03. Berlin, 23 h
+      vrm('pv_ac_w', '2026-03-29T22:00:00.000Z', 1000, 86400)  // 30.03. Berlin
+    ]), 'pv_ac_w');
+    close(spring['2026-03-29T22:00:00.000Z'], 0.25, '30.03. 00:00 Berlin nur aus der zweiten Probe');
+    close(spring['2026-03-29T21:45:00.000Z'], 0.25, '29.03. 23:45 Berlin');
+    close(sum(spring), 23 + 24, '23 h + 24 h');
+    const autumn = bySlot(buildMaterializedEnergySlotWrites([
+      vrm('pv_ac_w', '2026-10-24T22:00:00.000Z', 1000, 86400), // 25.10. Berlin, 25 h
+      vrm('pv_ac_w', '2026-10-25T23:00:00.000Z', 1000, 86400)  // 26.10. Berlin
+    ]), 'pv_ac_w');
+    close(autumn['2026-10-25T22:00:00.000Z'], 0.25, '25.10. 23:00 MEZ gehoert noch zum 25.10.');
+    close(autumn['2026-10-25T22:45:00.000Z'], 0.25, '25.10. 23:45 MEZ');
+    close(sum(autumn), 25 + 24, '25 h + 24 h');
+  });
+
+  test('Stundenproben mit Luecke werden nicht bis zur naechsten gestreckt', () => {
+    const slots = bySlot(buildMaterializedEnergySlotWrites([
+      vrm('pv_ac_w', '2026-03-09T12:00:00.000Z', 4000, 3600),
+      vrm('pv_ac_w', '2026-03-09T14:00:00.000Z', 4000, 3600)
+    ]), 'pv_ac_w');
+    assert.equal(slots['2026-03-09T13:00:00.000Z'], undefined, '13:00–14:00 ohne Probe bleibt leer');
+    close(sum(slots), 8, 'zwei Stunden à 4 kWh');
+  });
+
   test('15-min-Probe bleibt ein Slot mit voller Energie', () => {
     const slots = bySlot(buildMaterializedEnergySlotWrites([vrm('pv_ac_w', '2026-03-09T12:00:00.000Z', 4000, 900)]), 'pv_ac_w');
     assert.deepEqual(slots, { '2026-03-09T12:00:00.000Z': 1 });

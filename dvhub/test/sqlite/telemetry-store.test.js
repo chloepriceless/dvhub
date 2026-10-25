@@ -862,6 +862,28 @@ test('telemetry store verteilt lange VRM-Proben anteilig auf alle Slots', () => 
   }
 });
 
+// Umstellungstage (Gegenpruefung 84da7835): eine Tagesprobe reicht bis zur
+// naechsten Probe derselben Reihe (29.03.: 23 h, 25.10.: 25 h), wie im PG-Store.
+test('telemetry store verteilt Tagesproben an Umstellungstagen bis zur naechsten Probe', () => {
+  const store = createTelemetryStore({ dbPath: createTempDbPath(), rawRetentionDays: 30, rollupIntervals: [900] });
+  const vrm = (ts) => ({
+    seriesKey: 'pv_ac_w', ts, value: 1000, resolutionSeconds: 86400, scope: 'history', source: 'vrm_import', quality: 'backfilled', unit: 'W'
+  });
+  const total = (slots) => Math.round(slots.reduce((sum, slot) => sum + slot.pvAcKwh, 0) * 1e6) / 1e6;
+  try {
+    store.writeSamples([vrm('2026-03-28T23:00:00.000Z'), vrm('2026-03-29T22:00:00.000Z')]);
+    const spring = store.listMaterializedEnergySlots({ start: '2026-03-28T23:00:00.000Z', end: '2026-03-30T22:00:00.000Z' });
+    assert.equal(spring.find((slot) => slot.ts === '2026-03-29T22:00:00.000Z').pvAcKwh, 0.25);
+    assert.equal(total(spring), 47);
+    store.writeSamples([vrm('2026-10-24T22:00:00.000Z'), vrm('2026-10-25T23:00:00.000Z')]);
+    const autumn = store.listMaterializedEnergySlots({ start: '2026-10-24T22:00:00.000Z', end: '2026-10-26T23:00:00.000Z' });
+    assert.equal(autumn.find((slot) => slot.ts === '2026-10-25T22:00:00.000Z')?.pvAcKwh, 0.25);
+    assert.equal(total(autumn), 49);
+  } finally {
+    store.close();
+  }
+});
+
 // Live-Zeitstempel markieren das Ende der Messspanne; nach einem Ausfall darf ein
 // Wert mit grosser Aufloesung die Luecke nicht fuellen (T-0079, wie im PG-Store).
 test('telemetry store kappt Live-Proben mit Lueckenaufloesung auf einen Slot', () => {

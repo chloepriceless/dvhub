@@ -191,8 +191,14 @@ export function priceRowSpacingSeconds(rows) {
  * Proben bis zu einem Slot landen in beiden Faellen ganz im Slot ihres
  * Zeitstempels (wie bisher). Leistung null zaehlt als 0 kWh; ungueltige
  * Aufloesung oder Leistung liefert [].
+ *
+ * nextStartMs (Beginn der naechsten Probe derselben Reihe): Tagesproben stehen
+ * auf lokaler Mitternacht, an Umstellungstagen ist der Tag 23 bzw. 25 h lang.
+ * Liegt die naechste Probe hoechstens eine Stunde neben ts + Aufloesung, endet
+ * die Probe dort (keine Ueberlappung, keine Luecke). Nur fuer Proben ab einem
+ * Tag — kuerzere haben keine Umstellung, eine Luecke danach bleibt leer.
  */
-export function sampleEnergyBySlot({ ts, value, resolutionSeconds, spread = false, slotSeconds = 900 }) {
+export function sampleEnergyBySlot({ ts, value, resolutionSeconds, spread = false, slotSeconds = 900, nextStartMs = null }) {
   const numeric = Number(value);
   const seconds = Number(resolutionSeconds || 0);
   const startMs = new Date(ts).getTime();
@@ -202,13 +208,55 @@ export function sampleEnergyBySlot({ ts, value, resolutionSeconds, spread = fals
   if (seconds <= slotSeconds || !spread) {
     return [{ slotStartMs: firstSlotMs, valueNum: (numeric * Math.min(seconds, slotSeconds)) / 3600000 }];
   }
-  const endMs = startMs + seconds * 1000;
+  let endMs = startMs + seconds * 1000;
+  const next = nextStartMs == null ? NaN : Number(nextStartMs);
+  if (seconds >= 86400 && Number.isFinite(next) && next > startMs && Math.abs(next - endMs) <= 3_600_000) endMs = next;
   const out = [];
   for (let slotStartMs = firstSlotMs; slotStartMs < endMs; slotStartMs += slotMs) {
     const overlapMs = Math.min(endMs, slotStartMs + slotMs) - Math.max(startMs, slotStartMs);
     if (overlapMs > 0) out.push({ slotStartMs, valueNum: (numeric * overlapMs) / 3600000000 });
   }
   return out;
+}
+
+/**
+ * Beginn der naechsten Probe derselben Reihe (gleicher Schluessel aus
+ * keyOf) im selben Schreibpaket, fuer sampleEnergyBySlot({ nextStartMs }).
+ * Liefert (row) => ms | null.
+ */
+export function nextSampleStartLookup(rows, keyOf) {
+  const byKey = new Map();
+  for (const row of rows || []) {
+    const key = keyOf(row);
+    if (key == null) continue;
+    const ms = new Date(row.ts).getTime();
+    if (!Number.isFinite(ms)) continue;
+    let list = byKey.get(key);
+    if (!list) { list = []; byKey.set(key, list); }
+    list.push(ms);
+  }
+  for (const list of byKey.values()) list.sort((a, b) => a - b);
+  return (row) => {
+    const list = byKey.get(keyOf(row));
+    if (!list) return null;
+    const ms = new Date(row.ts).getTime();
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (list[mid] <= ms) lo = mid + 1; else hi = mid;
+    }
+    return lo < list.length ? list[lo] : null;
+  };
+}
+
+/** Wie nextSampleStartLookup fuer VRM-Importproben: je Reihe und Aufloesung. */
+export function vrmNextSampleStartLookup(rows) {
+  return nextSampleStartLookup(rows, (row) => (
+    (row.scope || '') === 'history' && (row.source || '') === 'vrm_import'
+      ? `${String(row.seriesKey || '').trim()}\u0000${Number(row.resolutionSeconds || 0)}`
+      : null
+  ));
 }
 
 /**

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
-import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot } from './telemetry-runtime.js';
+import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 
 // Plan 08-01 Task 3: resolve dvhub/db/migrations/ relative to this module file
 // so the runner works regardless of where node is invoked from (systemd CWD,
@@ -229,6 +229,7 @@ function assertSqlIdentifier(value, label) {
 
 export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true) {
   const writes = new Map();
+  const nextVrmStart = vrmNextSampleStartLookup(rows);
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const seriesKey = String(row.seriesKey || '').trim();
@@ -261,12 +262,14 @@ export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true
     // VRM-Proben laenger als ein Slot verteilen sich anteilig auf alle Slots, die
     // sie ueberdecken; Live-Proben bleiben auf einen Slot gekappt (T-0079).
     // Gemeinsame Regel mit dem SQLite-Store (sampleEnergyBySlot).
+    const spread = sourceKind === 'vrm_import';
     const shares = sampleEnergyBySlot({
       ts: row.ts,
       value: row.value,
       resolutionSeconds: row.resolutionSeconds,
-      spread: sourceKind === 'vrm_import',
-      slotSeconds: MATERIALIZED_SLOT_BUCKET_SECONDS
+      spread,
+      slotSeconds: MATERIALIZED_SLOT_BUCKET_SECONDS,
+      nextStartMs: spread ? nextVrmStart(row) : null
     });
     for (const { slotStartMs, valueNum } of shares) {
       if (!Number.isFinite(valueNum)) continue;
