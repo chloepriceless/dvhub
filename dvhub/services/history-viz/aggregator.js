@@ -1003,13 +1003,15 @@ export function createHistoryVizAggregator(ctx) {
         bucketLabels = bucketLabelsForView(view, start);
       }
       // Je Bucket: Verschiebung hoechstens so viel, wie der abgebende Akku entladen hat.
+      // Akku 2 einzeln ebenfalls netto (ohne seine Abgabe an Akku 1), damit
+      // secondBatteryDischargeKwh <= batteryDischargeKwh bleibt.
       const mainDischargeKwh = batteryDischargeKwh;
+      const secondNetKwh = secondBatteryDischargeKwh.map((d2, i) => Math.max(0, d2 - Math.min(transfer21Kwh[i] || 0, d2)));
       batteryDischargeKwh = mainDischargeKwh.map((d1, i) => {
-        const d2 = secondBatteryDischargeKwh[i] || 0;
         const t12 = Math.min(transfer12Kwh[i] || 0, d1);
-        const t21 = Math.min(transfer21Kwh[i] || 0, d2);
-        return round3(Math.max(0, d1 + d2 - t12 - t21));
+        return round3(Math.max(0, d1 - t12) + (secondNetKwh[i] || 0));
       });
+      secondBatteryDischargeKwh = secondNetKwh;
       const pvDirectKwh = pvKwh.map((pvB, i) => round3(Math.min(pvB, loadKwh[i] || 0)));
       const buckets = bucketLabels.length;
       const payload = {

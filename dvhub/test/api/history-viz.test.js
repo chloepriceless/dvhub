@@ -2145,6 +2145,31 @@ describe('Sankey mit zweitem Akku', () => {
     assert.ok(Math.abs(sum(r2.body.batteryDischargeKwh) - 24) < 0.05, `ohne Verschiebung ${sum(r2.body.batteryDischargeKwh)}`);
   });
 
+  it('Stack: Akku 2 einzeln netto — seine Abgabe an Akku 1 versorgt das Haus nicht', async () => {
+    // Akku 2 entlaedt 2000 W in Akku 1 (aufgezeichnet), Haus 1000 W aus dem Netz.
+    const ctx = mockCtxWithStores({ querySeriesFn: twoBatterySeries({
+      load_power_w: 1000, grid_import_w: 1000, battery_charge_w: 2000,
+      second_battery_discharge_w: 2000, second_battery_to_battery_w: 2000,
+    }) });
+    const r = await ctx.historyVizApi.getStack({ view: 'day', date: ANCHOR_DATE });
+    const sum = (a) => a.reduce((x, y) => x + y, 0);
+    assert.equal(sum(r.body.batteryDischargeKwh), 0);
+    assert.equal(sum(r.body.secondBatteryDischargeKwh), 0, 'Akku 2 einzeln <= Akku gesamt');
+  });
+
+  it('Stack ganz ohne Akku-2-Reihen unveraendert', async () => {
+    const only = (map) => async ({ seriesKeys, start, end }) => {
+      const all = [];
+      for (const key of seriesKeys) if (key in map) all.push(...makeFlatSeriesRows({ start, end, key, watts: map[key] }));
+      return all;
+    };
+    const ctx = mockCtxWithStores({ querySeriesFn: only({ load_power_w: 1000, battery_discharge_w: 500 }) });
+    const r = await ctx.historyVizApi.getStack({ view: 'day', date: ANCHOR_DATE });
+    const sum = (a) => a.reduce((x, y) => x + y, 0);
+    assert.ok(Math.abs(sum(r.body.batteryDischargeKwh) - 12) < 0.05);
+    assert.equal(sum(r.body.secondBatteryDischargeKwh), 0);
+  });
+
   it('Stack ohne zweite Anlage unveraendert', async () => {
     const ctx = mockCtxWithStores({ querySeriesFn: twoBatterySeries({ load_power_w: 1000, battery_discharge_w: 500 }) });
     const r = await ctx.historyVizApi.getStack({ view: 'day', date: ANCHOR_DATE });
