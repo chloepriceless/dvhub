@@ -26,7 +26,9 @@
 #   4. install timescaledb-2-postgresql-<ver> (Community). If packagecloud has no
 #      build for the platform, fall back to the Debian Apache package so the box
 #      still gets a working hypertable (014's license guard skips the TSL parts).
-#      An already-installed Apache package is removed first (same .so, conflicts).
+#      An installed Apache package (same .so) is swapped only after the
+#      Community packages AND the Apache package are in apt's cache; if the
+#      Community install then fails, the fallback reinstalls Apache from cache.
 #   5. shared_preload_libraries drop-in (conf.d) + postgres restart
 #   6. Erweiterung anlegen (CREATE) bzw. auf die installierte Version heben
 #      (ALTER EXTENSION ... UPDATE als erste Anweisung einer frischen Sitzung),
@@ -246,27 +248,38 @@ fi
 if [[ "$USE_TSL" -eq 1 ]]; then
   # The Debian Apache package ships the same `timescaledb` .so and conflicts with
   # the Community package (retrofit Apache→Community). Review 25.10.2026: früher
-  # wurde Apache ZUERST entfernt — scheiterte danach die Community-Installation,
-  # stand die Box ohne Bibliothek zur Katalog-Version da. Jetzt: erst die Pakete
-  # herunterladen, dann in EINEM apt-Lauf tauschen (`<paket>-` entfernt im selben
-  # Lauf). Scheitert einer der Schritte, bleibt das Apache-Paket installiert.
+  # wurde Apache entfernt, bevor feststand, dass die Community-Installation
+  # gelingt — ohne Netz stand die Box danach ohne Bibliothek zur Katalog-Version.
+  # Jetzt liegen VOR dem Entfernen die Community-Pakete UND das installierte
+  # Apache-Paket im apt-Cache. Scheitert danach die Installation, holt der
+  # Fallback unten Apache ohne Netz aus dem Cache zurück. Bewusst kein Tausch in
+  # einem einzigen apt-Lauf: der hinge an Conflicts/Replaces der Fremdpakete.
   if dpkg -s "$TSL_PKG" >/dev/null 2>&1; then
     echo "  TimescaleDB: Community-Paket ${TSL_PKG} bereits installiert."
+  elif ! DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only "$TSL_LOADER" "$TSL_PKG" >>"$LOG_FILE" 2>&1; then
+    echo "  WARN: Community-Paket nicht herunterladbar — Fallback auf Apache-Paket." >&2
+    USE_TSL=0
   else
-    SWAP_ARGS=("$TSL_LOADER" "$TSL_PKG")
+    APACHE_READY=1
     if dpkg -s "$APACHE_PKG" >/dev/null 2>&1; then
-      echo "  TimescaleDB: ersetze Apache-Paket ${APACHE_PKG} durch Community ..."
-      SWAP_ARGS+=("${APACHE_PKG}-")
+      if DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only --reinstall "$APACHE_PKG" >>"$LOG_FILE" 2>&1; then
+        echo "  TimescaleDB: entferne Apache-Paket ${APACHE_PKG} (wird durch Community ersetzt) ..."
+        DEBIAN_FRONTEND=noninteractive apt-get remove -y "$APACHE_PKG" >>"$LOG_FILE" 2>&1 || true
+        PKG_CHANGED=1
+      else
+        echo "  WARN: Apache-Paket nicht im Cache sicherbar — Tausch auf Community verschoben." >&2
+        APACHE_READY=0
+        USE_TSL=0
+      fi
     fi
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only "$TSL_LOADER" "$TSL_PKG" >>"$LOG_FILE" 2>&1; then
-      echo "  WARN: Community-Paket nicht herunterladbar — Fallback auf Apache-Paket." >&2
-      USE_TSL=0
-    elif DEBIAN_FRONTEND=noninteractive apt-get install -y "${SWAP_ARGS[@]}" >>"$LOG_FILE" 2>&1; then
-      echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
-      PKG_CHANGED=1
-    else
-      echo "  WARN: Community-Paket nicht installierbar — Fallback auf Apache-Paket." >&2
-      USE_TSL=0
+    if [[ "$APACHE_READY" -eq 1 ]]; then
+      if DEBIAN_FRONTEND=noninteractive apt-get install -y "$TSL_LOADER" "$TSL_PKG" >>"$LOG_FILE" 2>&1; then
+        echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
+        PKG_CHANGED=1
+      else
+        echo "  WARN: Community-Paket nicht installierbar — Fallback auf Apache-Paket." >&2
+        USE_TSL=0
+      fi
     fi
   fi
 fi
