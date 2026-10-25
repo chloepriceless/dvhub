@@ -51,7 +51,8 @@ EOS_HOME="${EOS_HOME:-}"
 EOS_ENV_FILE="${EOS_ENV_FILE:-/etc/dvhub/eos.env}"
 EOS_BACKUP_ROOT="${EOS_BACKUP_ROOT:-$DATA_DIR/eos-backups}"
 
-if [[ "${EUID}" -ne 0 ]]; then
+# EOS_PROVISION_EUID: nur fuer Tests (test/eos-provision-git.test.js).
+if [[ "${EOS_PROVISION_EUID:-$EUID}" -ne 0 ]]; then
   echo "  EOS: eos-provision.sh muss als root laufen — uebersprungen" >&2
   exit 1
 fi
@@ -107,13 +108,40 @@ fi
 # Branch und Commit-SHA gleichermassen, weil ueber FETCH_HEAD ausgecheckt wird.
 # Der lokale Arbeitszweig heisst immer dvhub-eos -- so bleibt der Name stabil,
 # auch wenn der Pin von einem Branch auf einen Tag wechselt.
+#
+# git als root in einem Ordner, der (noch) einem anderen Benutzer gehoert,
+# bricht mit "dubious ownership" ab (safe.directory). Unter systemd-run war
+# darum frueher jeder git-Aufruf hier wirkungslos: die Sicherung lokaler
+# Aenderungen lief ins Leere (Review 25.10.2026). safe.directory gilt nur fuer
+# genau diesen Ordner; Hooks und fsmonitor bleiben dabei aus.
+eos_git() {
+  git -c safe.directory="$EOS_DIR" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+    -c advice.detachedHead=false -C "$EOS_DIR" "$@"
+}
+
+# Frisch klonen, aber erst in einen Nachbarordner. Der bisherige Stand wird erst
+# ersetzt, wenn der neue Klon genau den Pin enthaelt (Review 25.10.2026: vorher
+# kam `rm -rf $EOS_DIR` zuerst). Ein Pin, den es upstream nicht gibt, ist ein
+# Fehler — frueher wurde still der upstream-HEAD installiert und als Pin
+# eingetragen.
 eos_clone_fresh() {
-  rm -rf "$EOS_DIR"
-  git clone --branch "$EOS_PIN" --depth 1 "$EOS_REPO_URL" "$EOS_DIR" 2>/dev/null \
-    || git clone --depth 1 "$EOS_REPO_URL" "$EOS_DIR" \
-    || { echo "  EOS: git clone ${EOS_REPO_URL}@${EOS_PIN} fehlgeschlagen" >&2; return 1; }
-  git -C "$EOS_DIR" fetch --depth 1 origin "$EOS_PIN" 2>/dev/null || true
-  git -C "$EOS_DIR" checkout -B dvhub-eos FETCH_HEAD 2>/dev/null || true
+  local parent tmp
+  parent="$(dirname "$EOS_DIR")"
+  mkdir -p "$parent"
+  tmp="$(mktemp -d "$parent/.eos-clone.XXXXXX")" || return 1
+  local g=(git -c safe.directory="$tmp/eos" -c core.hooksPath=/dev/null -c advice.detachedHead=false -C "$tmp/eos")
+  if git init -q "$tmp/eos" \
+     && "${g[@]}" remote add origin "$EOS_REPO_URL" \
+     && "${g[@]}" fetch -q --depth 1 origin "$EOS_PIN" \
+     && "${g[@]}" checkout -q -B dvhub-eos FETCH_HEAD; then
+    [[ -e "$EOS_DIR" ]] && mv "$EOS_DIR" "$tmp/old"
+    mv "$tmp/eos" "$EOS_DIR"
+    rm -rf "$tmp"
+    return 0
+  fi
+  rm -rf "$tmp"
+  echo "  EOS: ${EOS_REPO_URL}@${EOS_PIN} nicht abrufbar (Pin vorhanden? Netz?) — vorhandener Stand bleibt" >&2
+  return 1
 }
 
 # Lokale Aenderungen im EOS-Ordner (von Hand eingespielte Patches) sichern,
@@ -123,15 +151,15 @@ eos_clone_fresh() {
 # 2026-09-21: 725 Zeilen, nur per Zufall wiederhergestellt).
 eos_backup_local_changes() {
   local dirty
-  dirty="$(git -C "$EOS_DIR" status --porcelain --untracked-files=no 2>/dev/null || true)"
+  dirty="$(eos_git status --porcelain --untracked-files=no 2>/dev/null || true)"
   [[ -n "$dirty" ]] || return 0
   local dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$dest"
-  git -C "$EOS_DIR" rev-parse HEAD > "$dest/BASE_COMMIT" 2>/dev/null || true
-  git -C "$EOS_DIR" diff > "$dest/local-changes.patch"
+  eos_git rev-parse HEAD > "$dest/BASE_COMMIT" 2>/dev/null || true
+  eos_git diff > "$dest/local-changes.patch"
   # Zusaetzlich die Dateien selbst — ein Patch laesst sich auf einen anderen
   # Stand oft nicht mehr anwenden, die Dateien kann man immer vergleichen.
-  git -C "$EOS_DIR" diff --name-only | while read -r f; do
+  eos_git diff --name-only | while read -r f; do
     mkdir -p "$dest/files/$(dirname "$f")"
     cp -p "$EOS_DIR/$f" "$dest/files/$f" 2>/dev/null || true
   done
@@ -140,25 +168,26 @@ eos_backup_local_changes() {
 
 if [[ ! -d "$EOS_DIR/.git" ]]; then
   eos_clone_fresh || exit 1
-elif [[ "$EOS_PIN_CHANGED" -eq 0 && -n "$(git -C "$EOS_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+elif [[ "$EOS_PIN_CHANGED" -eq 0 && -n "$(eos_git status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
   # Gleicher Stand, aber lokal geaendert: nichts anfassen. Die Aenderungen sind
   # offensichtlich gewollt, und es gibt keinen neuen Stand, der sie ersetzt.
   echo "  EOS: lokale Aenderungen im EOS-Ordner, Stand unveraendert — Checkout bleibt wie er ist"
 else
-  eos_backup_local_changes
-  # Beim Versionswechsel kommen die alten Patches NICHT mit: sie gehoeren zum
-  # alten Stand und sind gesichert.
-  git -C "$EOS_DIR" reset --hard -q 2>/dev/null || true
   # Repo-Wechsel (Fork -> upstream) mitziehen, sonst zeigt origin ins Leere.
-  git -C "$EOS_DIR" remote set-url origin "$EOS_REPO_URL" 2>/dev/null || true
-  if git -C "$EOS_DIR" fetch --depth 1 origin "$EOS_PIN" 2>/dev/null \
-     && git -C "$EOS_DIR" checkout -B dvhub-eos FETCH_HEAD 2>/dev/null; then
-    :
+  eos_git remote set-url origin "$EOS_REPO_URL" 2>/dev/null || true
+  # Erst holen (aendert den Arbeitsbaum nicht), dann sichern und umstellen.
+  if eos_git fetch -q --depth 1 origin "$EOS_PIN" 2>/dev/null; then
+    eos_backup_local_changes
+    # Beim Versionswechsel kommen die alten Patches NICHT mit: sie gehoeren zum
+    # alten Stand und sind gesichert.
+    eos_git reset --hard -q 2>/dev/null || true
+    eos_git checkout -q -B dvhub-eos FETCH_HEAD || exit 1
   else
     # Ein flacher Klon kann einen Ref aus einer anderen Historie nicht
-    # nachziehen -- dann lieber frisch klonen als halb aktualisiert stehen
-    # bleiben. Der alte Stand geht dabei verloren, aber er ist reproduzierbar.
+    # nachziehen -- dann frisch klonen. Der alte Stand wird erst ersetzt, wenn
+    # der neue Klon steht; lokale Aenderungen sind vorher gesichert.
     echo "  EOS: Fetch auf ${EOS_PIN} nicht moeglich — klone neu"
+    eos_backup_local_changes
     eos_clone_fresh || exit 1
   fi
 fi
@@ -228,7 +257,7 @@ fi
 # auf prod treppte EOS 0.4 so bis ans MemoryMax. Zwei Arenen reichen fuer
 # Server-Loop + einen Optimierungs-Thread. Steht vor EnvironmentFile, damit der
 # Betreiber es dort ueberschreiben kann.
-EOS_UNIT_FILE="/etc/systemd/system/${EOS_SERVICE_NAME}.service"
+EOS_UNIT_FILE="${EOS_UNIT_FILE:-/etc/systemd/system/${EOS_SERVICE_NAME}.service}"
 EOS_TZ="$(timedatectl show -p Timezone --value 2>/dev/null || true)"; EOS_TZ="${EOS_TZ:-Europe/Berlin}"
 _ncpu="$(nproc 2>/dev/null || echo 1)"
 if [[ -z "${EOS_CPU_QUOTA:-}" && "$_ncpu" -ge 2 ]]; then EOS_CPU_QUOTA="$(( (_ncpu - 1) * 100 ))%"; fi
