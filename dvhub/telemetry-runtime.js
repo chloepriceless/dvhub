@@ -178,6 +178,19 @@ export function priceRowSpacingSeconds(rows) {
 }
 
 /**
+ * Ende einer Probe: ts + Aufloesung; bei Proben ab einem Tag die naechste
+ * Probe, wenn sie hoechstens eine Stunde daneben liegt (Umstellungstag mit
+ * 23/25 h, Tage auf lokaler Mitternacht). Gemeinsame Regel fuer die Slot-
+ * Verdichtung der Stores und die 15-min-Aufteilung des VRM-Imports.
+ */
+export function sampleSpanEndMs(startMs, seconds, nextStartMs = null) {
+  const endMs = startMs + seconds * 1000;
+  const next = nextStartMs == null ? NaN : Number(nextStartMs);
+  if (seconds >= 86400 && Number.isFinite(next) && next > startMs && Math.abs(next - endMs) <= 3_600_000) return next;
+  return endMs;
+}
+
+/**
  * Energie einer Leistungsprobe je 15-min-Slot, fuer beide Stores (SQLite und
  * PostgreSQL) gleich. Liefert [{ slotStartMs, valueNum (kWh) }].
  *
@@ -198,19 +211,6 @@ export function priceRowSpacingSeconds(rows) {
  * die Probe dort (keine Ueberlappung, keine Luecke). Nur fuer Proben ab einem
  * Tag — kuerzere haben keine Umstellung, eine Luecke danach bleibt leer.
  */
-/**
- * Ende einer Probe: ts + Aufloesung; bei Proben ab einem Tag die naechste
- * Probe, wenn sie hoechstens eine Stunde daneben liegt (Umstellungstag mit
- * 23/25 h, Tage auf lokaler Mitternacht). Gemeinsame Regel fuer die Slot-
- * Verdichtung der Stores und die 15-min-Aufteilung des VRM-Imports.
- */
-export function sampleSpanEndMs(startMs, seconds, nextStartMs = null) {
-  const endMs = startMs + seconds * 1000;
-  const next = nextStartMs == null ? NaN : Number(nextStartMs);
-  if (seconds >= 86400 && Number.isFinite(next) && next > startMs && Math.abs(next - endMs) <= 3_600_000) return next;
-  return endMs;
-}
-
 export function sampleEnergyBySlot({ ts, value, resolutionSeconds, spread = false, slotSeconds = 900, nextStartMs = null }) {
   const numeric = Number(value);
   const seconds = Number(resolutionSeconds || 0);
