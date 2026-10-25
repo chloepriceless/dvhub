@@ -479,3 +479,42 @@ describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 
     await svc.close();
   });
 });
+
+// Review 25.10.2026 (P3): die MiSpeL-Zaehler rechneten je Lauf pauschal 30 min,
+// obwohl alle <= 15 min (und oefter) gerechnet wird. Jetzt die echte Zeit seit
+// der letzten Erfassung, hoechstens 30 min.
+describe('Optimizer Service: MiSpeL-Zaehler mit echter Laufzeit', () => {
+  test('erster Lauf erfasst nichts, zweiter nach 10 min genau 10 min', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now: Date.parse('2026-06-10T10:00:00Z') });
+    const { ctx, state, bumpVersion } = buildCtx({
+      optimizerCfg: { mispel: { mode: 'pauschal', pvKwp: 10 } },
+      state: { victron: { soc: 50, gridPower: -600 } }
+    });
+    const svc = createOptimizerService(ctx);
+    const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r)); };
+    await svc.start();
+    await settle();
+    assert.equal(state.optimizer.runCount, 1);
+    assert.equal(state.optimizer.mispel.yearlyFeedInKwh, 0, 'ohne vorige Erfassung keine erfundene halbe Stunde');
+
+    t.mock.timers.tick(9 * 60_000); await settle();
+    bumpVersion();
+    t.mock.timers.tick(60_000); await settle();
+    assert.equal(state.optimizer.runCount, 2);
+    // 600 W × 10 min = 100 Wh = 0,1 kWh (vorher 2 × 0,3 kWh).
+    assert.ok(Math.abs(state.optimizer.mispel.yearlyFeedInKwh - 0.1) < 1e-9, `${state.optimizer.mispel.yearlyFeedInKwh}`);
+    await svc.close();
+  });
+});
+
+describe('mispelIntervalWh', () => {
+  test('echte Zeit, gedeckelt, ohne Vorlauf 0', async () => {
+    const { mispelIntervalWh } = await import('../services/optimizer/index.js');
+    assert.deepEqual(mispelIntervalWh(-600, 600_000, null), { feedInWh: 0, gridWithdrawalWh: 0 });
+    assert.deepEqual(mispelIntervalWh(-600, 600_000, 0), { feedInWh: 100, gridWithdrawalWh: 0 });
+    assert.deepEqual(mispelIntervalWh(1200, 900_000, 0), { feedInWh: 0, gridWithdrawalWh: 300 });
+    // 3 h Pause: hoechstens 30 min
+    assert.deepEqual(mispelIntervalWh(1000, 3 * 3_600_000, 0), { feedInWh: 0, gridWithdrawalWh: 500 });
+    assert.deepEqual(mispelIntervalWh(1000, 0, 600_000), { feedInWh: 0, gridWithdrawalWh: 0 }, 'Uhr rueckwaerts');
+  });
+});

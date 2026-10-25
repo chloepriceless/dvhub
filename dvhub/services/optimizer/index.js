@@ -214,6 +214,28 @@ export function eosPlanKeepMs(cfg) {
   return (Number.isFinite(h) && h >= 0 ? h : 12) * 3_600_000;
 }
 
+// MiSpeL-Zaehler: hoechstens so lange gilt eine Momentaufnahme der Netzleistung.
+export const MISPEL_MAX_GAP_MS = 30 * 60 * 1000;
+
+/**
+ * Energie seit der letzten MiSpeL-Erfassung aus der momentanen Netzleistung
+ * (+ = Bezug, − = Einspeisung): echte Zeit seit `lastMs`, hoechstens
+ * `maxGapMs`. Ohne vorige Erfassung (oder rueckwaerts laufende Uhr) 0.
+ * Frueher rechnete jeder Lauf pauschal 30 min, obwohl alle <= 15 min (und bei
+ * neuen Prognosen/Plaenen oefter) gerechnet wird (Review 25.10.2026).
+ */
+export function mispelIntervalWh(gridPowerW, nowMs, lastMs, maxGapMs = MISPEL_MAX_GAP_MS) {
+  const power = Number(gridPowerW) || 0;
+  if (!Number.isFinite(lastMs) || !Number.isFinite(nowMs) || nowMs <= lastMs) {
+    return { feedInWh: 0, gridWithdrawalWh: 0 };
+  }
+  const dtH = Math.min(nowMs - lastMs, maxGapMs) / 3_600_000;
+  return {
+    feedInWh: power < 0 ? Math.abs(power) * dtH : 0,
+    gridWithdrawalWh: power > 0 ? power * dtH : 0
+  };
+}
+
 export function getOptInterval(cfg, hourOverride) {
   const normalInterval = cfg.optimizer?.intervalMs ?? 900_000;       // 15 min default
   const morningInterval = cfg.optimizer?.morningReoptIntervalMs ?? 300_000; // 5 min default
@@ -264,6 +286,8 @@ export function createOptimizerService(ctx) {
 
   // MiSpeL tracker (created once, accumulates yearly feed-in/withdrawal)
   const mispelTracker = createMispelTracker(state, getCfg, pushLog);
+  // Zeitpunkt der letzten MiSpeL-Erfassung (mispelIntervalWh).
+  let lastMispelAccumulateMs = null;
 
   // EOS adapter (created once, used when enabled)
   // ctx.eosAdapter: Test-Naht (Minuten-Wache, Plan-Behalten).
@@ -830,11 +854,9 @@ export function createOptimizerService(ctx) {
       // 14b. Update MiSpeL yearly tracker (OPTI-08)
       if (mispelMode !== 'none' && state.victron) {
         const gridPowerW = state.victron.gridPower ?? 0; // positive = import, negative = export
-        const dtMs = 30 * 60 * 1000; // 30min between runs (approximate)
-        const dtH = dtMs / 3_600_000;
-
-        const feedInWh = gridPowerW < 0 ? Math.abs(gridPowerW) * dtH : 0;
-        const gridWithdrawalWh = gridPowerW > 0 ? gridPowerW * dtH : 0;
+        const nowMs = Date.now();
+        const { feedInWh, gridWithdrawalWh } = mispelIntervalWh(gridPowerW, nowMs, lastMispelAccumulateMs);
+        lastMispelAccumulateMs = nowMs;
         mispelTracker.update(feedInWh, gridWithdrawalWh);
       }
 
