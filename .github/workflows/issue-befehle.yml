@@ -1,0 +1,52 @@
+# Befehle für den Issue-Sekretär (Vorbild: evcc-io/evcc command-analyze.yml und
+# command-fix.yml, MIT-Lizenz).
+#
+#   /analyze  — erneute Analyse ohne Codeänderung. Dürfen der Melder und Leute mit
+#               Schreibrechten.
+#   /fix      — Behebung als Draft-PR. Nur Leute mit Schreibrechten (Owner/Collaborator).
+
+name: Issue-Befehle
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  analyze:
+    name: /analyze
+    if: |
+      startsWith(github.event.comment.body, '/analyze') &&
+      (github.event.comment.user.login == github.event.issue.user.login ||
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      id-token: write
+      actions: read
+    uses: ./.github/workflows/issue-sekretaer-run.yml
+    with:
+      issue_number: ${{ github.event.issue.number }}
+      mode: analyze
+      comment_id: ${{ github.event.comment.id }}
+      comment_node_id: ${{ github.event.comment.node_id }}
+    secrets: inherit
+
+  fix:
+    name: /fix
+    if: |
+      startsWith(github.event.comment.body, '/fix') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    permissions:
+      contents: write # nur der PR-Job schiebt; der Agent selbst hat nur Lesezugriff
+      issues: write
+      pull-requests: write
+      id-token: write
+      actions: read
+    uses: ./.github/workflows/issue-sekretaer-run.yml
+    with:
+      issue_number: ${{ github.event.issue.number }}
+      mode: fix
+      comment_id: ${{ github.event.comment.id }}
+      comment_node_id: ${{ github.event.comment.node_id }}
+    secrets: inherit
