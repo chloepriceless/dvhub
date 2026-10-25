@@ -264,3 +264,22 @@ test('Rest-Zuweisung beim Laden achtet den Max-SoC der zweiten Anlage', () => {
     primary: { ...SIDE, socPct: 50, maxChargeW: 5000 }, follower: { ...SIDE, socPct: 100 } });
   assert.equal(o.desiredFollowerBatteryW, 0, 'volle zweite Anlage laedt nicht');
 });
+
+// Review Regelung 25.10. (P3): rampWPerS = 0 liess der Regler als gueltig durch —
+// dann bewegte sich der Sollwert nie mehr, auch nicht im no_data-Pfad, der ihn
+// auf 0 zurueckfahren soll. 0 (oder negativ) gilt jetzt als „nicht gesetzt“.
+test('rampWPerS <= 0 faellt auf den Standard zurueck: no_data faehrt den Sollwert auf 0', () => {
+  for (const rampWPerS of [0, -5]) {
+    const c = createFollowerController(cfg({ rampWPerS }));
+    assert.equal(c.config.rampWPerS, 200, `rampWPerS ${rampWPerS} → Standard`);
+    // Die Leine zieht den Sollwert an den gemessenen AC-IN (5000 W) heran …
+    const first = c.tick({ nowMs: 0, primaryBatteryW: 0, followerBatteryW: 5000, followerAcInW: 5000,
+      primary: { ...SIDE, socPct: 50 }, follower: { ...SIDE, socPct: 50 } });
+    assert.ok(first.setpointW > 0, `Sollwert nach der Leine ${first.setpointW}`);
+    // … dann fallen die Messwerte weg: in 60 s muss er auf 0 zurueck sein.
+    let o;
+    for (let s = 5; s <= 60; s += 5) o = c.tick({ nowMs: s * 1000 });
+    assert.equal(o.reason, 'no_data');
+    assert.equal(o.setpointW, 0, `rampWPerS ${rampWPerS}: Sollwert eingefroren bei ${o.setpointW}`);
+  }
+});
