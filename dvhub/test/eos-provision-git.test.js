@@ -64,7 +64,7 @@ exec /bin/date "$@"
     EOS_REPO_URL: `file://${upstream}`, EOS_PIN: pin, EOS_HOME: join(dir, 'eos-home'),
     EOS_ENV_FILE: join(dir, 'eos.env'), EOS_UNIT_FILE: join(dir, 'eos.service'),
   });
-  const run = (pin) => spawnSync('bash', [SCRIPT], { env: env(pin), encoding: 'utf8' });
+  const run = (pin, extra = {}) => spawnSync('bash', [SCRIPT], { env: { ...env(pin), ...extra }, encoding: 'utf8' });
   const eosDir = join(install, 'eos');
   const head = () => execFileSync('git', ['-c', `safe.directory=${eosDir}`, '-C', eosDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const marker = () => (existsSync(join(dir, 'data', '.eos-provisioned')) ? readFileSync(join(dir, 'data', '.eos-provisioned'), 'utf8').trim() : null);
@@ -190,5 +190,56 @@ test('lokale Änderungen + unbekannter Pin: keine neue Sicherung je Versuch', ()
     const backups = join(s.dir, 'data', 'eos-backups');
     assert.deepEqual(existsSync(backups) ? readdirSync(backups) : [], []);
     assert.equal(readFileSync(join(s.eosDir, 'pyproject.toml'), 'utf8'), 'lokaler Patch\n', 'Patch bleibt stehen');
+  } finally { s.cleanup(); }
+});
+
+// Gegenprüfung zu 62dd5121.
+test('Sicherung scheitert (Ziel nicht beschreibbar) → Abbruch, Patch bleibt im Checkout', () => {
+  const s = setup();
+  try {
+    assert.equal(s.run('v1').status, 0);
+    writeFileSync(join(s.eosDir, 'pyproject.toml'), 'lokaler Patch\n');
+    const ro = join(s.dir, 'ro');
+    mkdirSync(ro); chmodSync(ro, 0o555);
+    const r = s.run('v2', { EOS_BACKUP_ROOT: join(ro, 'eos-backups') });
+    chmodSync(ro, 0o755);
+    assert.notEqual(r.status, 0, 'muss abbrechen');
+    assert.equal(readFileSync(join(s.eosDir, 'pyproject.toml'), 'utf8'), 'lokaler Patch\n');
+    assert.equal(s.head(), s.tagSha('v1'));
+  } finally { s.cleanup(); }
+});
+
+test('untracked und vorgemerkte (staged) Änderungen landen in der Sicherung', () => {
+  const s = setup();
+  try {
+    assert.equal(s.run('v1').status, 0);
+    writeFileSync(join(s.eosDir, 'eigene.py'), 'untracked\n');
+    writeFileSync(join(s.eosDir, 'pyproject.toml'), 'staged Patch\n');
+    execFileSync('git', ['-C', s.eosDir, 'add', 'pyproject.toml']);
+    assert.equal(s.run('v2').status, 0);
+    const root = join(s.dir, 'data', 'eos-backups');
+    const d = readdirSync(root).find((n) => existsSync(join(root, n, 'local-changes.patch')));
+    assert.ok(d, String(readdirSync(root)));
+    assert.match(readFileSync(join(root, d, 'local-changes.patch'), 'utf8'), /staged Patch/);
+    assert.equal(readFileSync(join(root, d, 'files', 'eigene.py'), 'utf8'), 'untracked\n');
+  } finally { s.cleanup(); }
+});
+
+test('Daten-Sicherung: abgebrochene Kopie zählt nicht; Rückweg v2→v1→v2 sichert erneut', () => {
+  const s = setup();
+  try {
+    assert.equal(s.run('v1').status, 0);
+    mkdirSync(join(s.dir, 'eos-home'), { recursive: true });
+    writeFileSync(join(s.dir, 'eos-home', 'measurements.db'), 'daten');
+    // halbe Kopie eines früheren Versuchs
+    const root = join(s.dir, 'data', 'eos-backups');
+    mkdirSync(join(root, '20261024-000000-data-before-v2.partial'), { recursive: true });
+    assert.equal(s.run('v2').status, 0);
+    assert.equal(s.run('v1').status, 0);
+    writeFileSync(join(s.dir, 'eos-home', 'measurements.db'), 'neuere daten');
+    assert.equal(s.run('v2').status, 0);
+    const done = readdirSync(root).filter((n) => !n.endsWith('.partial') && /data-before/.test(n));
+    assert.equal(done.length, 3, String(done));
+    assert.ok(done.some((n) => readFileSync(join(root, n, 'measurements.db'), 'utf8') === 'neuere daten'));
   } finally { s.cleanup(); }
 });

@@ -159,26 +159,34 @@ eos_clone_fresh() {
 # oder scheiterte — und dann loeschte eos_clone_fresh den ganzen Ordner (prod
 # 2026-09-21: 725 Zeilen, nur per Zufall wiederhergestellt).
 eos_backup_local_changes() {
-  local dirty
+  # Jeder Schritt mit eigenem `|| return 1` (Gegenpruefung 25.10.2026): die
+  # Funktion laeuft in `||`/`if`, dort wirkt `set -e` NICHT — ein volles
+  # Ziel haette sonst "gesichert" gemeldet, und reset/rm haetten die Patches
+  # danach geloescht.
+  local dirty untracked dest names f
   # Scheitert git hier, ist der Zustand UNBEKANNT, nicht "sauber": dann nichts
-  # ersetzen (Gegenpruefung 25.10.2026 — sonst gingen lokale Patches ungesichert
-  # mit dem alten Ordner weg).
-  if ! dirty="$(eos_git status --porcelain --untracked-files=no 2>/dev/null)"; then
+  # ersetzen (sonst gingen lokale Patches ungesichert mit dem alten Ordner weg).
+  if ! dirty="$(eos_git status --porcelain --untracked-files=no 2>/dev/null)" \
+     || ! untracked="$(eos_git ls-files --others --exclude-standard 2>/dev/null)"; then
     echo "  EOS: Zustand von $EOS_DIR nicht lesbar (git status) — nichts geaendert" >&2
     return 1
   fi
-  [[ -n "$dirty" ]] || return 0
-  local dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"
-  mkdir -p "$dest"
+  [[ -n "$dirty" || -n "$untracked" ]] || return 0
+  dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$dest/files" || return 1
   eos_git rev-parse HEAD > "$dest/BASE_COMMIT" 2>/dev/null || true
-  eos_git diff > "$dest/local-changes.patch"
+  # gegen HEAD: auch vorgemerkte (git add) Aenderungen
+  eos_git diff HEAD > "$dest/local-changes.patch" || return 1
   # Zusaetzlich die Dateien selbst — ein Patch laesst sich auf einen anderen
   # Stand oft nicht mehr anwenden, die Dateien kann man immer vergleichen.
-  eos_git diff --name-only | while read -r f; do
-    mkdir -p "$dest/files/$(dirname "$f")"
-    cp -p "$EOS_DIR/$f" "$dest/files/$f" 2>/dev/null || true
-  done
-  echo "  EOS: lokale Aenderungen gesichert nach $dest ($(printf '%s\n' "$dirty" | wc -l) Dateien)"
+  # Untracked Dateien gehoeren dazu: genau die stehen einem Checkout im Weg.
+  names="$(eos_git diff HEAD --name-only --diff-filter=d)" || return 1
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    mkdir -p "$dest/files/$(dirname "$f")" || return 1
+    cp -p "$EOS_DIR/$f" "$dest/files/$f" || return 1
+  done <<< "$(printf '%s\n%s\n' "$names" "$untracked")"
+  echo "  EOS: lokale Aenderungen gesichert nach $dest"
 }
 
 if [[ ! -d "$EOS_DIR/.git" ]]; then
@@ -214,17 +222,26 @@ fi
 # Versionswechsel (z. B. 0.3-Fork -> 0.4): EOS-Konfiguration und Messreihen
 # sichern, bevor der neue Stand startet. 0.4 migriert die Konfiguration beim
 # Start selbst; geht dabei etwas schief, liegt der alte Stand hier.
-# Erst NACH dem erfolgreichen Holen des neuen Stands und je Pin nur einmal
+# Erst NACH dem erfolgreichen Holen des neuen Stands und je Wechsel nur einmal
 # (Gegenpruefung 25.10.2026): ein Pin, der scheitert, scheitert bei jedem
 # Dienststart erneut — vorher kopierte jeder Versuch den ganzen, wachsenden
-# Messwertspeicher noch einmal (SD-Karte voll).
+# Messwertspeicher noch einmal (SD-Karte voll). Kopie erst in <ziel>.partial,
+# umbenannt erst nach Erfolg; der Marker nennt den Wechsel (von→nach, Ordner),
+# damit ein spaeterer Rueckweg wieder sichert.
 if [[ "$EOS_PIN_CHANGED" -eq 1 && -n "$EOS_HAVE" ]]; then
   _eos_data="${EOS_HOME:-$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6 || true)/.local/share/net.akkudoktor.eos}"
-  _suffix="data-before-${EOS_PIN//\//_}"
-  if [[ -d "$_eos_data" ]] && ! compgen -G "$EOS_BACKUP_ROOT/*-${_suffix}" >/dev/null; then
-    _dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)-${_suffix}"
-    mkdir -p "$_dest" && cp -a "$_eos_data/." "$_dest/" \
-      && echo "  EOS: Daten/Konfiguration vor dem Versionswechsel gesichert nach $_dest"
+  _transition="${EOS_HAVE} -> ${EOS_WANT} (${_eos_data})"
+  _mark="$EOS_BACKUP_ROOT/.data-backup-${EOS_SERVICE_NAME}"
+  if [[ -d "$_eos_data" && "$(cat "$_mark" 2>/dev/null)" != "$_transition" ]]; then
+    _dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)-data-before-${EOS_PIN//\//_}"
+    if mkdir -p "$_dest.partial" && cp -a "$_eos_data/." "$_dest.partial/" && mv "$_dest.partial" "$_dest"; then
+      printf '%s\n' "$_transition" > "$_mark"
+      echo "  EOS: Daten/Konfiguration vor dem Versionswechsel gesichert nach $_dest"
+    else
+      rm -rf "$_dest.partial"
+      echo "  EOS: Sicherung der Daten vor dem Versionswechsel fehlgeschlagen — Abbruch, alter Stand laeuft weiter" >&2
+      exit 1
+    fi
   fi
 fi
 
