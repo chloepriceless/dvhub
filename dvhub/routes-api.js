@@ -8395,7 +8395,28 @@ export function createApiRoutes(ctx) {
   // rate-limit and auth (caller proceeds); false means a response was already
   // written (caller MUST return). Honours the SAME security.lanTrust model as
   // every /api/ route, so eosdash inherits restricted/strict automatically.
+  //
+  // Review 2026-10-25 (P2): dazu dieselbe Host-Allowlist und dieselbe
+  // Herkunftsprüfung für schreibende Aufrufe wie bei /api/* — vorher konnte
+  // jede Webseite per Formular-POST die EOS-Konfiguration hinter EOSdash
+  // ändern. Die eingebettete EOSdash-Oberfläche schickt ihre eigene Herkunft
+  // (gleicher Name und Port wie DVhub) und kommt unverändert durch.
   function enforceRequestGate(req, res) {
+    const cfg = getCfg();
+    const hostVal = getRequestHost(req, cfg);
+    let pathname = req.url || '';
+    try { pathname = new URL(req.url, 'http://x').pathname; } catch { /* roh */ }
+    if (!isHostAllowed(hostVal, cfg)) {
+      pushLog('host_header_rejected', {
+        host: hostVal,
+        forwarded: !!req.headers?.['x-forwarded-host'],
+        trustProxy: cfg.trustProxy === true,
+        path: pathname,
+      });
+      json(res, 400, { ok: false, error: 'host_not_allowed' });
+      return false;
+    }
+    if (!checkWriteOrigin(req, res, pathname)) return false;
     if (!checkRateLimit(req, res)) return false;
     if (!checkAuth(req, res)) return false;
     return true;
