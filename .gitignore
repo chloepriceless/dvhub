@@ -17,6 +17,17 @@ control_state.json
 dvhub/control_state.json
 .no-eos
 eos-provision.log
+# Laufzeitordner im Repo-Ordner der nativen Installation (/opt/dvhub), angelegt
+# von eos-provision.sh, forecast-provision.sh, eebus-provision.sh und
+# post-update.sh. Nicht versioniert: sonst zählen sie als untracked, und ein
+# git-basiertes Update (früher `git stash --include-untracked`) räumt sie weg
+# (Review 25.10.2026).
+/eos/
+/eos-venv/
+/forecast-venv/
+/bin/
+/ml-models/
+/.npm-install-hash
 # Local diagnostic scratch files (background-flow probes, ad-hoc screenshots).
 dvhub/diag-*.mjs
 dvhub/diag-*.png

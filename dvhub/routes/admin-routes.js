@@ -47,6 +47,18 @@ function saveUploadToFile(req, filePath, maxBytes) {
   });
 }
 
+// Nur GEÄNDERTE versionierte Dateien zur Seite legen (Review 25.10.2026, P1):
+// `git stash --include-untracked` im Repo-Ordner räumte die Laufzeitordner
+// eos-venv/, forecast-venv/ und bin/ mit weg, und der Stash kam nach einem
+// erfolgreichen Update nie zurück — EOS, Prognose und EEBUS fehlten danach.
+export const STASH_TRACKED_ARGS = ['stash', 'push'];
+
+// Marker von post-update.sh (Schritt 6): Hash des Lockfiles nach dem letzten
+// ERFOLGREICHEN npm install. Vor jedem Lauf ungültig machen (Review 25.10.2026,
+// P2): bricht npm ab (Timeout, Stromausfall), bleibt node_modules halb zurück —
+// ein stehengebliebener Marker hätte die Reparatur beim nächsten Start unterdrückt.
+export const NPM_INSTALL_MARKER = '.npm-install-hash';
+
 export function createAdminRoutes(deps) {
   const {
     ctx, getCfg, pushLog,
@@ -54,6 +66,11 @@ export function createAdminRoutes(deps) {
     actorContext, deriveClientIp, tokenFingerprint,
     GIT_SHA_REF, SEMVER_TAG, compareSemverTag, selectLatestSemverTag, assertNoDowngrade, listReachableReleaseTags,
   } = deps;
+
+  async function npmInstallOmitDev(repoRoot, appDir) {
+    try { fs.rmSync(path.join(repoRoot, NPM_INSTALL_MARKER), { force: true }); } catch { /* post-update.sh prüft zusätzlich node_modules */ }
+    return execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
+  }
 
   return async function handleAdminRoute(req, res, url) {
     // --- Datenbank-Backup herunterladen (pg_dump custom, streamed) ---
@@ -534,7 +551,7 @@ export function createAdminRoutes(deps) {
         const channel = ctx.getRawCfg().updateChannel || 'stable';
         let gitOutput = '';
         const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-        const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
+        const stashResult = await execFileAsync('git', STASH_TRACKED_ARGS, { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
         const hasStash = !stashResult.stdout.includes('No local changes');
 
         try {
@@ -608,7 +625,7 @@ export function createAdminRoutes(deps) {
           }
 
           // --- npm install + syntax check ---
-          const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
+          const npmInstall = await npmInstallOmitDev(repoRoot, appDir);
           await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
 
           // --- post-update.sh (system-level migrations: sudoers, setcap, packages, tls) ---
@@ -630,7 +647,7 @@ export function createAdminRoutes(deps) {
         } catch (updateErr) {
           pushLog('update_rollback', { reason: updateErr.message, rollbackTo: rollbackRev.slice(0, 7) });
           await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
-          await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
+          await npmInstallOmitDev(repoRoot, appDir).catch(() => {});
           if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
           throw new Error(`Update rolled back: ${updateErr.message}`, { cause: updateErr });
         }
@@ -675,7 +692,7 @@ export function createAdminRoutes(deps) {
           const appDir = ctx.getAppDir();
           let gitOutput = '';
           const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-          const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
+          const stashResult = await execFileAsync('git', STASH_TRACKED_ARGS, { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
           const hasStash = !stashResult.stdout.includes('No local changes');
           try {
             // --- git fetch + checkout (inside inner try for rollback coverage) ---
@@ -702,12 +719,12 @@ export function createAdminRoutes(deps) {
             }
 
             // --- npm install + syntax check ---
-            await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
+            await npmInstallOmitDev(repoRoot, appDir);
             await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
           } catch (switchErr) {
             pushLog('channel_switch_rollback', { reason: switchErr.message, rollbackTo: rollbackRev.slice(0, 7) });
             await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
-            await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
+            await npmInstallOmitDev(repoRoot, appDir).catch(() => {});
             if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
             throw new Error(`Channel switch rolled back: ${switchErr.message}`, { cause: switchErr });
           }

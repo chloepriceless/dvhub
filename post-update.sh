@@ -243,6 +243,10 @@ if [[ -f "$APP_DIR/package.json" ]]; then
       chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR" "$APP_DIR/package-lock.json" 2>/dev/null || true
       NPM_AS=(runuser -u "$SERVICE_USER" -- env HOME="${SVC_HOME:-$HOME}" npm)
     fi
+    # Marker vor dem Lauf ungueltig machen (Review 25.10.2026): bricht npm ab
+    # (Timeout, Stromausfall, Abbruch aus der Oberflaeche), bleibt node_modules
+    # halb zurueck — ein stehender Marker haette die Reparatur unterdrueckt.
+    rm -f "$NPM_MARKER"
     # `if` suppresses `set -e`; no pipe so the rc is npm's own (not tail's).
     if "${NPM_AS[@]}" install --omit=dev; then
       [[ -n "$CURRENT_HASH" ]] && printf '%s\n' "$CURRENT_HASH" >"$NPM_MARKER"
@@ -369,6 +373,8 @@ fi
 # eos-version.env überein. KEIN RAM-Gate mehr (Christin 2026-09-20): EOS kommt
 # immer mit. Opt-out weiterhin via $DATA_DIR/.no-eos. NON-FATAL durchgängig.
 EOS_DIR="$INSTALL_DIR/eos"
+EOS_VENV="$INSTALL_DIR/eos-venv"
+EOS_UNIT_PATH="${EOS_UNIT_PATH:-/etc/systemd/system/eos.service}"
 if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   # Gewuenschter EOS-Stand aus eos-version.env gegen den zuletzt installierten
   # (Marker $DATA_DIR/.eos-provisioned) — reiner Dateivergleich, KEIN Netzzugriff,
@@ -385,7 +391,9 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   # einem nachweisbaren Stand statt auf "irgendwas von damals".
   EOS_CURRENT=0
   [[ -n "$EOS_WANT" && "$EOS_HAVE" == "$EOS_WANT" ]] && EOS_CURRENT=1
-  if [[ -d "$EOS_DIR/.git" && -f /etc/systemd/system/eos.service && "$EOS_CURRENT" -eq 1 ]]; then
+  # Ausfuehrbares venv gehoert dazu (Review 25.10.2026): ein Update, das
+  # eos-venv/ weggeraeumt hatte, meldete sonst "EOS: OK" mit totem Dienst.
+  if [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 ]]; then
     # Aktuell — nur sicherstellen, dass der Dienst läuft (schnell).
     systemctl enable eos.service >/dev/null 2>&1 || true
     systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
