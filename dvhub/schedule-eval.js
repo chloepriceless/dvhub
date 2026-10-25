@@ -1730,6 +1730,7 @@ export function createScheduleEvaluator(ctx) {
   const ZFI_EXPORT_ENTER_STREAK = 3;  // Export-Ticks in Folge bis Deckel-Enter
   const ZFI_READBACK_MS = 60000;      // Steuerprioritäten-Drift-Check (throttled)
   const ZFI_ERRLOG_MS = 60000;
+  const ZFI_MIN_PCT = 1;              // 0 % legt den WR still — nie schreiben
   let zfiInterval = null;
   let zfiBusy = false;
 
@@ -1806,7 +1807,15 @@ export function createScheduleEvaluator(ctx) {
         && (Date.now() - Number(state.meter.updatedAt || 0)) < 15000;
       const importW = Math.max(0, Number(state.victron?.gridImportW || 0));
       const exportW = Math.max(0, Number(state.victron?.gridExportW || 0));
-      const loadW = Math.max(0, Number(state.victron?.selfConsumptionW || 0));
+      const loadRaw = state.victron?.selfConsumptionW;
+      const loadW = Math.max(0, Number(loadRaw || 0));
+      // Review Regelung 25.10.: fehlt die Hauslast (null/veraltet), wäre der
+      // Startwert 0 % — und 0 % legt den Hybrid-WR still (fronius.json). Dann
+      // nicht einsteigen; der Akku-Zwang (Force-Charge) bleibt die Sperre.
+      const loadKnown = loadRaw != null && Number.isFinite(Number(loadRaw))
+        && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs);
+      // Nie unter 1 % (wie capLoopStep, feed-in-cap/index.js).
+      const clampPct = (p) => Math.min(100, Math.max(ZFI_MIN_PCT, p));
 
       if (!zfi.capActive) {
         const socEnter = socFresh && Number.isFinite(soc) && soc >= thresholdPct;
@@ -1816,8 +1825,8 @@ export function createScheduleEvaluator(ctx) {
         const exportEnter = zfi.exportStreak >= ZFI_EXPORT_ENTER_STREAK;
         // blockedStreak >= 2: nie im selben Tick einschalten, in dem die Sperre
         // gerade erst geschrieben wurde/wird (Race gegen die Freigabe-Sequenz).
-        if ((socEnter || exportEnter) && zfi.blockedStreak >= 2 && meterFresh) {
-          zfi.limitPct = Math.min(100, Math.max(0, (100 * Math.max(0, loadW - targetImportW)) / refW));
+        if ((socEnter || exportEnter) && zfi.blockedStreak >= 2 && meterFresh && loadKnown) {
+          zfi.limitPct = clampPct((100 * Math.max(0, loadW - targetImportW)) / refW);
           if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, 100);
           if (rvrtConf?.enabled && rvrtConf.address != null) await zfiWrite(rvrtConf, revertTimeoutS);
           await zfiWrite(pctConf, zfi.limitPct);
@@ -1861,7 +1870,7 @@ export function createScheduleEvaluator(ctx) {
         const signedGridW = importW - exportW;
         const err = targetImportW - signedGridW;
         if (Math.abs(err) > deadbandW) {
-          zfi.limitPct = Math.min(100, Math.max(0, zfi.limitPct - (100 * ZFI_GAIN * err) / refW));
+          zfi.limitPct = clampPct(zfi.limitPct - (100 * ZFI_GAIN * err) / refW);
         }
       }
       // Meter stale → Limit einfrieren, aber weiter schreiben: der Write
