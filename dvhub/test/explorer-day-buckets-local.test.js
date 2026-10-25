@@ -72,9 +72,13 @@ test('Tagesbündel: Beschriftung zeigt den örtlichen Tag, auch westlich von UTC
   assert.equal(localDay(buckets[0].ts), '2026-10-25');
 }));
 
-// Codex-/Claude-Review zu 024cf847: Export-Dateinamen trugen das UTC-Datum —
-// ein Export um 00:30 am 25.10. hieß dvhub-export-2026-10-24.csv.
-test('Export-Dateiname: örtliches Datum (Berlin 00:30 → 25.10.)', () => withTz('Europe/Berlin', () => {
+// Review zu 024cf847: der Ersatz-Dateiname des Exports trug das UTC-Datum.
+// ACHTUNG (Review zu 74a94e4a): Das ist nur der Ersatz. downloadServerExport
+// nimmt den Namen aus Content-Disposition, und den baut routes-api.js
+// (export.csv/export.parquet) noch aus toISOString() — der heruntergeladene
+// Name bleibt dort UTC, bis der Server ihn örtlich bildet. Dieser Test prüft
+// nur den Ersatz im Explorer.
+test('Export: Ersatz-Dateiname (ohne Server-Namen) mit örtlichem Datum (Berlin 00:30 → 25.10.)', () => withTz('Europe/Berlin', () => {
   const explorer = loadExplorer();
   assert.equal(typeof explorer.localDateStamp, 'function');
   assert.equal(explorer.localDateStamp(new Date('2026-10-24T22:30:00Z')), '2026-10-25');
