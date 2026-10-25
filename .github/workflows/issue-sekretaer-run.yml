@@ -102,7 +102,7 @@ jobs:
           claude_args: >-
             ${{ inputs.mode == 'fix'
               && format('--model claude-opus-5-5 --allowed-tools "Read,Grep,Glob,Edit(dvhub/**),Write(dvhub/**),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue comment:*),Bash(gh api repos/{0}/issues/comments/{1} --jq .body),Bash(git add dvhub/:*),Bash(git -c core.hooksPath=/dev/null commit -m:*)" --disallowed-tools "Task,WebFetch,WebSearch,Edit(.github/**),Write(.github/**),Edit(.git/**),Write(.git/**),Read(//proc/**),Read(//sys/**),Read(//run/**),Read(.git/**)"', github.repository, inputs.comment_id)
-              || format('--model claude-sonnet-5-5 --allowed-tools "Read,Grep,Glob,Bash(gh label list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue comment {2}:*),Bash(gh issue edit {2} --add-label:*),Bash(gh api repos/{0}/issues/comments/{1} --jq .body)," --disallowed-tools "Task,Edit,Write,WebFetch,WebSearch,Read(//proc/**),Read(//sys/**),Read(//run/**),Read(.git/**)"', github.repository, inputs.comment_id, inputs.issue_number) }}
+              || format('--model claude-sonnet-5-5 --allowed-tools "Read,Grep,Glob,Bash(gh label list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue comment {2}:*),Bash(gh issue edit {2} --add-label:*),Bash(gh api repos/{0}/issues/comments/{1} --jq .body)" --disallowed-tools "Task,Edit,Write,WebFetch,WebSearch,Read(//proc/**),Read(//sys/**),Read(//run/**),Read(.git/**)"', github.repository, inputs.comment_id, inputs.issue_number) }}
           prompt: |
             You are the issue secretary for the DVhub repository (energy-management software
             for PV, batteries and wallboxes; Node.js app in dvhub/, web UI in dvhub/public,
@@ -150,8 +150,11 @@ jobs:
                `path:line`). Distinguish: software defect / configuration or operating error
                (then give the concrete hint) / third-party device or hardware behaviour /
                feature request / unclear.
-               HISTORY: `${{ runner.temp }}/sekretaer-verlauf.txt` (read it with Read) lists the
+               HISTORY: `${{ runner.temp }}/sekretaer-verlauf.txt` lists the
                release tags and the main commits of the last 4 months with changed files.
+               It is long: search it with Grep for the affected paths or terms (e.g.
+               `schedule-eval.js`), and use Read with offset/limit around the hits; read the
+               first 50 lines for the tag list.
                Most changes are pushed directly to main, not via PRs. If it looks like a
                regression, find commits touching the affected paths there; only name a
                culprit when the change is in the failing code path AND the timing fits.
