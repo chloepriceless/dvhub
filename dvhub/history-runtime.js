@@ -585,7 +585,7 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // 4 (25.10.2026): VRM-Abschnitte im Zwischenstand (Akku-2-Ladestand-Uebertrag).
 export const SUMMARY_CACHE_VERSION = 4;
 
-// Hoechstens so viele VRM-Abschnitte einzeln abfragen (je zwei Abfragen).
+// Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
@@ -2578,23 +2578,31 @@ export function createHistoryRuntime({
         });
         if (soc2?.startValue != null && soc2?.endValue != null) {
           // Nur die lokalen Abschnitte (Review 25.10.2026): in VRM-Slots ist
-          // Akku 2 schon im Verbrauch enthalten. Je VRM-Abschnitt faellt die
-          // Aenderung vom letzten Ladestand davor bis zum ersten danach heraus.
+          // Akku 2 schon im Verbrauch enthalten. Summiert wird je lokalem
+          // Abschnitt (zwischen den VRM-Abschnitten) erster bis letzter
+          // Ladestand darin; die Aenderung ueber einen VRM-Abschnitt hinweg
+          // faellt heraus. Abschnitte ohne Ladestand zaehlen 0 — nie doppelt.
           let localDeltaPct = soc2.endValue - soc2.startValue;
           if (secondBatteryVrmRuns.length > 0) {
             if (secondBatteryVrmRuns.length <= MAX_SECOND_BATTERY_VRM_RUNS) {
-              const windowStart = localDateTimeToUtcIso(range.startDate, 0, 0);
-              const windowEnd = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
+              const windowStartMs = new Date(localDateTimeToUtcIso(range.startDate, 0, 0)).getTime();
+              const windowEndMs = new Date(localDateTimeToUtcIso(range.endDateExclusive, 0, 0)).getTime();
+              const localPieces = [];
+              let cursorMs = windowStartMs;
               for (const run of secondBatteryVrmRuns) {
-                const runStart = new Date(run.startMs).toISOString();
-                const runEnd = new Date(run.endMs).toISOString();
-                const before = runStart > windowStart
-                  ? (await store.getSeriesBoundaryValues({ seriesKey: 'second_battery_soc_pct', start: windowStart, end: runStart }))?.endValue
-                  : null;
-                const after = runEnd < windowEnd
-                  ? (await store.getSeriesBoundaryValues({ seriesKey: 'second_battery_soc_pct', start: runEnd, end: windowEnd }))?.startValue
-                  : null;
-                localDeltaPct -= (after ?? soc2.endValue) - (before ?? soc2.startValue);
+                if (run.startMs > cursorMs) localPieces.push([cursorMs, Math.min(run.startMs, windowEndMs)]);
+                cursorMs = Math.max(cursorMs, run.endMs);
+              }
+              if (cursorMs < windowEndMs) localPieces.push([cursorMs, windowEndMs]);
+              localDeltaPct = 0;
+              for (const [fromMs, toMs] of localPieces) {
+                if (!(toMs > fromMs)) continue;
+                const piece = await store.getSeriesBoundaryValues({
+                  seriesKey: 'second_battery_soc_pct',
+                  start: new Date(fromMs).toISOString(),
+                  end: new Date(toMs).toISOString()
+                });
+                if (piece?.startValue != null && piece?.endValue != null) localDeltaPct += piece.endValue - piece.startValue;
               }
             } else {
               // Sehr zersplittert: nach Anteil der lokalen Slots.

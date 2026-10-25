@@ -273,6 +273,27 @@ test('Akku-2-Ladestand: VRM-Abschnitt ohne lokale Ladestaende (Luecke) zaehlt eb
   assert.equal(kpis.secondBatteryStoredDeltaKwh, 6.4);
 });
 
+test('Akku-2-Ladestand: zwei VRM-Abschnitte mit lokaler Luecke ohne Ladestaende — nichts doppelt abziehen', async () => {
+  // Gegenpruefung 25.10.2026 (P2): lokal bis 06:00Z, VRM 06–08, lokal 08–09 ohne
+  // Akku-2-Werte (zweite GX nicht erreichbar), VRM 09–12, lokal bis 22:00Z.
+  const slots = [
+    ...daySlots('2026-10-19T22:00:00.000Z', '2026-10-20T06:00:00.000Z', { sourceKind: 'local_live' }),
+    ...daySlots('2026-10-20T06:00:00.000Z', '2026-10-20T08:00:00.000Z', { sourceKind: 'mixed', vrmFlows: true }),
+    ...daySlots('2026-10-20T08:00:00.000Z', '2026-10-20T09:00:00.000Z', { sourceKind: 'local_live' }),
+    ...daySlots('2026-10-20T09:00:00.000Z', '2026-10-20T12:00:00.000Z', { sourceKind: 'mixed', vrmFlows: true }),
+    ...daySlots('2026-10-20T12:00:00.000Z', '2026-10-20T22:00:00.000Z', { sourceKind: 'local_live' })
+  ];
+  const kpis = await secondDeltaFor(socTimelineStore({
+    slots,
+    socSamples: [
+      ['2026-10-19T22:00:00.000Z', 40], ['2026-10-20T05:55:00.000Z', 50],
+      ['2026-10-20T12:00:00.000Z', 80], ['2026-10-20T21:55:00.000Z', 90]
+    ]
+  }));
+  // Lokal: +10 % (bis 06:00) + 0 (08–09, keine Werte) + 10 % (ab 12:00) = 20 % × 32 kWh.
+  assert.equal(kpis.secondBatteryStoredDeltaKwh, 6.4);
+});
+
 test('Akku-2-Ladestand: ganz aus VRM -> nichts abziehen', async () => {
   const slots = daySlots('2026-10-19T22:00:00.000Z', '2026-10-20T22:00:00.000Z', { sourceKind: 'vrm_import', vrmFlows: true });
   const kpis = await secondDeltaFor(socTimelineStore({
