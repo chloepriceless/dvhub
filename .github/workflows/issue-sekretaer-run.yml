@@ -73,7 +73,7 @@ jobs:
       # Tags (direkte Pushes sind hier üblich, Releases sind nur Tags).
       - name: Verlauf für den Agenten
         run: |
-          set -euo pipefail
+          set -eu   # bewusst ohne pipefail: head beendet git vorzeitig (SIGPIPE)
           G="git -c core.hooksPath=/dev/null"
           # Für jeden main-Commit (first-parent) das erste Release, das ihn enthält:
           # alt → neu laufen, offene Commits bekommen den nächsten Tag; danach „dev“.
@@ -88,8 +88,8 @@ jobs:
             echo
             echo "# Commits auf main (first-parent), neueste zuerst."
             echo "# [in vX.Y.Z] = erstes Release, das den Commit enthält; [in dev] = noch in keinem Release."
-            $G log --first-parent --since='4 months ago' --no-ext-diff --name-only --format='%n%h %ad %s' --date=short HEAD | head -6000 \
-              | awk 'NR==FNR { r[$1]=$2; next } /^[0-9a-f]{7,} [0-9]{4}-/ { h=$1; $1=""; print h " [in " (h in r ? r[h] : "?") "]" $0; next } { print }' "$RUNNER_TEMP/rel.txt" -
+            $G log --first-parent --since='4 months ago' --no-ext-diff --name-only --format='%n%h %ad %s' --date=short --max-count=1500 HEAD \
+              | awk 'NR==FNR { r[$1]=$2; next } /^[0-9a-f]+ [0-9][0-9][0-9][0-9]-/ { h=$1; $1=""; print h " [in " (h in r ? r[h] : "?") "]" $0; next } { print }' "$RUNNER_TEMP/rel.txt" -
           } > "$RUNNER_TEMP/sekretaer-verlauf.txt"
 
       - name: Claude
