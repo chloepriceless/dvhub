@@ -541,6 +541,70 @@ describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 
     assert.equal(bridgePushes, 2, 'jetzt angekommen: kein weiterer Push');
     await svc.close();
   });
+
+  // Gegenpruefung f32de0d7 (P3): eine im 15-min-Fenster zurueckgehaltene
+  // Prognose wartete auf einen spaeteren Lauf (bis ~30 min); ein dauerhafter
+  // Teilfehler pushte alle 2 min.
+  test('zurueckgehaltene Prognose geht zum Ende des 15-min-Fensters raus, ohne weiteren Lauf', async (t) => {
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now });
+    let bridgePushes = 0;
+    const eosAdapter = {
+      pullSchedule: async () => [{ ts: now, endTs: now + 900_000, powerW: -1000 }],
+      pullGridSetpoints: async () => [],
+      getOptimizationSolution: async () => ({ generatedAt: '2026-10-25T12:00:00+02:00', rows: [] }),
+      setEmsIntervalSec: async () => ({ ok: true })
+    };
+    const eosForecastBridge = { push: async () => { bridgePushes++; return { ok: true, pushed: [], errors: {} }; } };
+    // Ersatz-Takt auf 1 h, damit kein Ersatz-Lauf zufaellig zum Fensterende kommt.
+    const { ctx, bumpVersion } = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' }, intervalMs: 3_600_000, morningReoptIntervalMs: 3_600_000 },
+      ctx: { eosAdapter, eosForecastBridge }
+    });
+    const svc = createOptimizerService(ctx);
+    const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+    const minutes = async (n) => { for (let i = 0; i < n; i += 1) { t.mock.timers.tick(60_000); await flush(); } };
+    await svc.start();
+    await flush();
+    assert.equal(bridgePushes, 1);
+    await minutes(4);
+    bumpVersion();
+    await minutes(2); // Poll-Lauf nach der neuen Version: im Fenster
+    assert.equal(bridgePushes, 1, 'im Fenster zurueckgehalten');
+    await minutes(10);
+    assert.equal(bridgePushes, 2, 'zum Fensterende (15 min) nachgeschoben');
+    await svc.close();
+  });
+
+  test('dauerhafter Teilfehler: nach dem ersten Wiederholversuch nur noch alle 15 min', async (t) => {
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now });
+    let bridgePushes = 0;
+    const eosAdapter = {
+      pullSchedule: async () => [{ ts: now, endTs: now + 900_000, powerW: -1000 }],
+      pullGridSetpoints: async () => [],
+      getOptimizationSolution: async () => ({ generatedAt: '2026-10-25T12:00:00+02:00', rows: [] }),
+      setEmsIntervalSec: async () => ({ ok: true })
+    };
+    const eosForecastBridge = { push: async () => { bridgePushes++; return { ok: false, pushed: [], errors: { LoadImport: 'no slots available — skipping' } }; } };
+    const { ctx, bumpVersion } = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' }, intervalMs: 3_600_000, morningReoptIntervalMs: 3_600_000 },
+      ctx: { eosAdapter, eosForecastBridge }
+    });
+    const svc = createOptimizerService(ctx);
+    const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+    await svc.start();
+    await flush();
+    // Version jede Minute (MQTT-Wetter), 30 min lang.
+    for (let minute = 1; minute <= 30; minute += 1) {
+      bumpVersion();
+      t.mock.timers.tick(60_000);
+      await flush();
+    }
+    // 0 min erster Versuch, 2 min Wiederholung, danach je 15 min: 17, 32 → bis 30 min drei Pushes.
+    assert.equal(bridgePushes, 3, `Pushes in 30 min: ${bridgePushes}`);
+    await svc.close();
+  });
 });
 
 // Review 25.10.2026 (P3): die MiSpeL-Zaehler rechneten je Lauf pauschal 30 min,

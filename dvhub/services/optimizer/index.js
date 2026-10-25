@@ -344,15 +344,58 @@ export function createOptimizerService(ctx) {
   // (nach einem Neustart wiederhergestellt) und zaehlt fuer die Erstplan-Wache
   // nicht als Plan.
   let eosFirstPushAt = null;
-  // forecastVersion, die der Lauf zuletzt ueber die Bridge an EOS geschickt hat
-  // (Startwert: in diesem Prozess noch keine), und wann.
+  // Neue Prognose (forecastVersion) ueber die Bridge an EOS (Review 25.10.2026,
+  // Gegenpruefungen zu 2b66d3ee, 5a3108d9, f32de0d7). Die Bridge schreibt auf
+  // ihrem Takt (Standard 1 h) und bei neuen Preisen; ohne Anstoss kam eine
+  // neue PV-Prognose bis zu einer Stunde spaeter bei EOS an, ein Push je Lauf
+  // vervielfachte dagegen die Schreibvorgaenge in EOS (Geraete-Messwerte, die
+  // EOS nie kuerzt; MQTT-Wetter hebt die Version jede Minute). Deshalb:
+  // - je neuer Version ein Push, hoechstens alle RUN_PUSH_MIN_SPACING_MS;
+  //   eine im Fenster zurueckgehaltene Version geht zum Fensterende raus;
+  // - als uebertragen zaehlt nur ein Push mit ok; nach dem ersten Fehlschlag
+  //   ein Wiederholversuch nach RUN_PUSH_RETRY_MS, danach im 15-min-Takt.
   let bridgePushedForecastVersion = Symbol('noch kein Push');
-  let lastRunPushAt = -Infinity;
-  let lastRunPushAttemptAt = -Infinity;
+  let lastRunPushAt = -Infinity;          // letzter Versuch (Erfolg oder nicht)
+  let runPushFailures = 0;                // Fehlschlaege in Folge
+  let pendingPushTimer = null;
+  let runPushInFlight = null;
   const RUN_PUSH_MIN_SPACING_MS = 15 * 60_000;
-  // Nach einem Fehlschlag (EOS rechnet, startet neu) nicht jede Minute alles
-  // neu schreiben — dauerhafte Teilfehler wuerden sonst wieder je Lauf pushen.
   const RUN_PUSH_RETRY_MS = 2 * 60_000;
+
+  function pushForecastIfNew() {
+    const bridge = ctx.eosForecastBridge;
+    if (!bridge || typeof bridge.push !== 'function') return Promise.resolve();
+    if (runPushInFlight) return runPushInFlight;
+    const forecastVersion = ctx.forecastService?.forecastVersion;
+    if (forecastVersion === bridgePushedForecastVersion) return Promise.resolve();
+    const waitMs = runPushFailures === 1 ? RUN_PUSH_RETRY_MS : RUN_PUSH_MIN_SPACING_MS;
+    const dueAt = lastRunPushAt + waitMs;
+    if (Date.now() < dueAt) {
+      if (!pendingPushTimer) {
+        pendingPushTimer = setTimeout(() => {
+          pendingPushTimer = null;
+          const cfg = getCfg();
+          if (!cfg.optimizer?.enabled || !resolveEosProxy(cfg).enabled) return;
+          pushForecastIfNew().catch(() => {});
+        }, dueAt - Date.now());
+        pendingPushTimer.unref?.();
+      }
+      return Promise.resolve();
+    }
+    lastRunPushAt = Date.now();
+    runPushInFlight = (async () => {
+      let pushRes = null;
+      // Fehler meldet die Bridge selbst (lastEosPush).
+      try { pushRes = await bridge.push(); } catch (err) { pushLog('eos_forecast_bridge_error', { phase: 'optimizer_run', error: err.message }); }
+      if (pushRes?.ok === true) {
+        bridgePushedForecastVersion = forecastVersion;
+        runPushFailures = 0;
+      } else {
+        runPushFailures += 1;
+      }
+    })().finally(() => { runPushInFlight = null; });
+    return runPushInFlight;
+  }
   // Zuletzt erfolgreich geholter EOS-Plan (keepLastEosPlan). Liegt auch als
   // Datei im Datenverzeichnis: nach einem Neustart von DVhub war der Plan
   // sonst vergessen, und solange EOS nicht antwortete (laufende Rechnung),
@@ -634,34 +677,13 @@ export function createOptimizerService(ctx) {
       let eosGridSetpoints = null;
       if (resolveEosProxy(cfg).enabled) {
         try {
-          // Prognose an EOS: schreibt allein die Forecast-Bridge, auf ihrem
-          // eigenen Takt und bei neuen Preisen (Review 25.10.2026). Sie traegt
-          // ihr Ergebnis selbst in state.optimizer.lastEosPush ein. Der Adapter
-          // ueberschrieb mit der rohen Stundenlast die Reihe der Bridge, und ein
-          // Bridge-Push je Lauf vervielfachte ihre Schreibvorgaenge in EOS
-          // (Geraete-Messwerte, die EOS nie kuerzt). Ganz ohne Push aus dem
-          // Lauf kam eine neue PV-Prognose aber erst zum naechsten Bridge-Takt
-          // (Standard 1 h) bei EOS an. Deshalb je neuer forecastVersion ein
-          // Push — auch im ersten Lauf des Prozesses, damit eosFirstPushAt
-          // wieder hinter einem echten Push liegt —, hoechstens alle
-          // RUN_PUSH_MIN_SPACING_MS (MQTT-Wetter hebt die Version jede Minute).
-          // Als uebertragen gilt eine Version erst, wenn der Push ankam; sonst
-          // versucht es der naechste Lauf wieder.
-          const bridge = ctx.eosForecastBridge;
-          const forecastVersion = ctx.forecastService?.forecastVersion;
-          if (bridge && typeof bridge.push === 'function'
-            && forecastVersion !== bridgePushedForecastVersion
-            && Date.now() - lastRunPushAt >= RUN_PUSH_MIN_SPACING_MS
-            && Date.now() - lastRunPushAttemptAt >= RUN_PUSH_RETRY_MS) {
-            // Fehler meldet die Bridge selbst (lastEosPush); der Plan wird trotzdem geholt.
-            lastRunPushAttemptAt = Date.now();
-            let pushRes = null;
-            try { pushRes = await bridge.push(); } catch (err) { pushLog('eos_forecast_bridge_error', { phase: 'optimizer_run', error: err.message }); }
-            if (pushRes?.ok === true) {
-              bridgePushedForecastVersion = forecastVersion;
-              lastRunPushAt = Date.now();
-            }
-          }
+          // Prognose an EOS: schreibt allein die Forecast-Bridge (Adapter
+          // ueberschrieb mit der rohen Stundenlast ihre Reihe). Sie traegt ihr
+          // Ergebnis selbst in state.optimizer.lastEosPush ein. Der Lauf stoesst
+          // sie nur bei neuer Prognose an (pushForecastIfNew) — im ersten Lauf
+          // des Prozesses immer, damit eosFirstPushAt hinter einem echten Push
+          // liegt. Ein Fehler beim Push haelt den Plan-Abruf nicht auf.
+          await pushForecastIfNew();
           if (eosFirstPushAt === null) eosFirstPushAt = Date.now();
           // eosSchedule = FRBC dispatch (battery power) for display/comparison.
           // eosGridSetpoints = net-grid control slots from EOS' SOLUTION (T-0118)
@@ -1050,8 +1072,10 @@ export function createOptimizerService(ctx) {
     if (pollTimer) clearInterval(pollTimer);
     if (unsubscribeEosPlan) { unsubscribeEosPlan(); unsubscribeEosPlan = null; }
     if (fallbackTimer) clearTimeout(fallbackTimer); // setTimeout-based since #16b
+    if (pendingPushTimer) clearTimeout(pendingPushTimer);
     pollTimer = null;
     fallbackTimer = null;
+    pendingPushTimer = null;
     eosFirstPlanWatch.stop();
     eosRunTrigger.stop();
   }
