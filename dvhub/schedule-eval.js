@@ -1751,6 +1751,7 @@ export function createScheduleEvaluator(ctx) {
   const ZFI_EXPORT_ENTER_STREAK = 3;  // Export-Ticks in Folge bis Deckel-Enter
   const ZFI_READBACK_MS = 60000;      // Steuerprioritäten-Drift-Check (throttled)
   const ZFI_ERRLOG_MS = 60000;
+  const ZFI_EXPORT_CLEAR_TICKS = 6;    // Export-Deckel: Takte bei 100 % ohne Export bis Exit
   const ZFI_MIN_PCT = 1;              // 0 % legt den WR still — nie schreiben
   let zfiInterval = null;
   let zfiBusy = false;
@@ -1797,6 +1798,8 @@ export function createScheduleEvaluator(ctx) {
           await zfiWrite(enaConf, 0);
           zfi.capActive = false;
           zfi.limitPct = null;
+          zfi.trigger = null;
+          zfi.clearStreak = 0;
           pushLog('zero_feedin_cap_off', { reason: 'feedin_restored' });
           telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
             eventType: 'zero_feedin_cap_off', target: 'wMaxLimPct',
@@ -1866,6 +1869,8 @@ export function createScheduleEvaluator(ctx) {
           await zfiWrite(enaConf, 1);
           zfi.capActive = true;
           zfi.exportStreak = 0;
+          zfi.trigger = trigger;
+          zfi.clearStreak = 0;
           pushLog('zero_feedin_cap_on', {
             trigger, soc: Number.isFinite(soc) ? soc : null,
             limitPct: Number(zfi.limitPct.toFixed(2)), loadW: loadKnown ? loadW : null, exportW
@@ -1881,18 +1886,31 @@ export function createScheduleEvaluator(ctx) {
       }
 
       // --- Deckel aktiv: Exit prüfen, sonst regeln + Failsafe-Fenster refreshen.
-      if (socFresh && Number.isFinite(soc) && soc <= thresholdPct - hysteresisPct) {
-        // Reihenfolge: erst Force-Charge wieder scharf, dann Deckel aus — so
-        // gibt es kein Fenster, in dem weder Akku-Zwang noch Deckel steht.
+      // Reihenfolge beim Exit: erst Force-Charge wieder scharf, dann Deckel
+      // aus — so gibt es kein Fenster, in dem weder Akku-Zwang noch Deckel steht.
+      const capOff = async (reason, meta) => {
         if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, -100);
         await zfiWrite(enaConf, 0);
         zfi.capActive = false;
         zfi.limitPct = null;
-        pushLog('zero_feedin_cap_off', { reason: 'soc_recovered', soc });
+        zfi.trigger = null;
+        zfi.clearStreak = 0;
+        pushLog('zero_feedin_cap_off', { reason, ...meta });
         telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
           eventType: 'zero_feedin_cap_off', target: 'wMaxLimPct',
-          valueNum: null, reason: 'soc_recovered', source: 'runtime', meta: { soc }
+          valueNum: null, reason, source: 'runtime', meta
         }));
+      };
+      // Gegenprüfung b0f20458 (P2): Ein über den EXPORT eingeschalteter Deckel
+      // (Akku nimmt unterhalb der Schwelle nichts mehr, BMS-Derating) fiel
+      // sonst im nächsten Takt über den SoC-Exit ab und taktete mit OutWRte
+      // ±100 — während der Pflicht-Abregelung. Er verlässt den Deckel erst,
+      // wenn er nichts mehr begrenzt (100 % und kein Export über mehrere
+      // Takte); erreicht der SoC die Schwelle, gilt er als SoC-Deckel.
+      // Ohne gemerkten Auslöser (alter Zustand) bleibt es beim SoC-Exit.
+      if (zfi.trigger === 'export' && socFresh && Number.isFinite(soc) && soc >= thresholdPct) zfi.trigger = 'soc';
+      if (zfi.trigger !== 'export' && socFresh && Number.isFinite(soc) && soc <= thresholdPct - hysteresisPct) {
+        await capOff('soc_recovered', { soc });
         return;
       }
 
@@ -1904,6 +1922,13 @@ export function createScheduleEvaluator(ctx) {
         const err = targetImportW - signedGridW;
         if (Math.abs(err) > deadbandW) {
           zfi.limitPct = clampPct(zfi.limitPct - (100 * ZFI_GAIN * err) / refW);
+        }
+      }
+      if (zfi.trigger === 'export') {
+        zfi.clearStreak = (meterFresh && zfi.limitPct >= 100 && exportW <= deadbandW) ? (zfi.clearStreak || 0) + 1 : 0;
+        if (zfi.clearStreak >= ZFI_EXPORT_CLEAR_TICKS) {
+          await capOff('export_cleared', { soc: Number.isFinite(soc) ? soc : null });
+          return;
         }
       }
       // Meter stale → Limit einfrieren, aber weiter schreiben: der Write

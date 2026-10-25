@@ -128,3 +128,43 @@ test('Hauslast unbekannt, aber Export trotz Sperre: Enter mit 1 % statt weiter e
   assert.equal(state.ctrl._zfi.capActive, true);
   assert.deepEqual(pctWrites(writes), [100]);
 });
+
+// Gegenprüfung b0f20458 (P2): Ein über den EXPORT eingeschalteter Deckel
+// (SoC unter der Schwelle, Akku nimmt trotzdem nichts — BMS-Derating) fiel im
+// nächsten Takt über den SoC-Exit (soc <= Schwelle − Hysterese) wieder ab;
+// danach speiste die Anlage drei Takte ein und der Deckel ging erneut an —
+// ein Dauer-Takten mit OutWRte ±100 während der Pflicht-Abregelung.
+test('Export-Auslöser unter der SoC-Hysterese: Deckel bleibt an, solange die Sperre gilt', async () => {
+  const { ev, state, writes } = harness({ loadW: 800, soc: 50, exportW: 2000 });
+  for (let i = 0; i < 3; i += 1) await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, true);
+  const n = writes.length;
+  state.victron.gridExportW = 300;              // Deckel wirkt, Rest-Export sinkt
+  for (let i = 0; i < 6; i += 1) await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, true, 'kein soc_recovered-Exit für einen Export-Deckel');
+  const later = writes.slice(n);
+  assert.ok(!later.some((w) => w.address === ADDR.ena && w.value === 0), `Ena nie 0: ${JSON.stringify(later)}`);
+  assert.ok(!later.some((w) => w.address === ADDR.out && w.value === 55536), 'kein Rückfall auf Force-Charge');
+});
+
+test('Export-Deckel: Limit 100 % und kein Export über 6 Takte → zurück auf Force-Charge', async () => {
+  const { ev, state, writes, logs } = harness({ loadW: 800, soc: 50, exportW: 2000 });
+  for (let i = 0; i < 3; i += 1) await ev.zeroFeedInTick();
+  state.victron.gridExportW = 0;
+  state.victron.gridImportW = 20000;            // viel Bezug → Regler fährt auf 100 %
+  for (let i = 0; i < 12 && state.ctrl._zfi.capActive; i += 1) await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, false);
+  assert.ok(logs.some((l) => l.e === 'zero_feedin_cap_off' && l.d.reason === 'export_cleared'));
+  assert.deepEqual(writes.slice(-2), [{ address: ADDR.out, value: 55536 }, { address: ADDR.ena, value: 0 }]);
+});
+
+test('SoC-Deckel: SoC-Exit unverändert (Schwelle − Hysterese)', async () => {
+  const { ev, state, logs } = harness({ loadW: 1000, soc: 97 });
+  await ev.zeroFeedInTick();
+  await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, true);
+  state.victron.soc = 89;
+  await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, false);
+  assert.ok(logs.some((l) => l.e === 'zero_feedin_cap_off' && l.d.reason === 'soc_recovered'));
+});
