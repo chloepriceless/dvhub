@@ -355,7 +355,10 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // across JSON parses). Derive the battery SoC key dynamically — the device id
     // is 'battery1' but a config-sync variant may register a different prefix; we
     // want the battery's *_soc_factor, never the EV's.
-    const tsKeys = Object.keys(data).sort();
+    // Nach Epoche, nicht lexikografisch: mit Offset-Stempeln laege sonst die
+    // doppelte Stunde der Zeitumstellung (02:xx+01:00 vor 02:xx+02:00) falsch.
+    const epochOf = (key) => { const ms = Date.parse(key); return Number.isFinite(ms) ? ms : Infinity; };
+    const tsKeys = Object.keys(data).sort((a, b) => (epochOf(a) - epochOf(b)) || (a < b ? -1 : a > b ? 1 : 0));
     let socKey = null;
     let evSocKey = null;   // nur gesetzt, wenn das E-Auto in EOS angemeldet ist
     if (tsKeys.length) {

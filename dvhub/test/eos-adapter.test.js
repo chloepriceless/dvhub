@@ -922,3 +922,35 @@ test('triggerOptimization: kein Plan (HTTP 503) → { ok: false }, wirft nicht',
     await mock.close();
   }
 });
+
+// Review 25.10.2026 (P3): Zeitstempel mit Offset lexikografisch sortiert stellt
+// die doppelte Stunde der Zeitumstellung (25.10.2026, 02:xx+02 vor 02:xx+01)
+// falsch. Sortiert wird nach Epoche.
+test('getOptimizationSolution sortiert die Zeitumstellungs-Stunde nach Epoche', async () => {
+  const row = (soc) => ({ battery1_soc_factor: soc, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 0, costs_amt: 0, revenue_amt: 0 });
+  const solution = {
+    generated_at: '2026-10-25T01:00:00+02:00',
+    solution: {
+      data: {
+        '2026-10-25T02:00:00+01:00': row(0.3),
+        '2026-10-25T02:30:00+02:00': row(0.1),
+        '2026-10-25T02:15:00+01:00': row(0.4),
+        '2026-10-25T02:45:00+02:00': row(0.2),
+      },
+    },
+  };
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(solution));
+  });
+  try {
+    const out = await createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`)).getOptimizationSolution();
+    assert.deepEqual(out.rows.map((r) => r.ts_utc), [
+      '2026-10-25T00:30:00.000Z', '2026-10-25T00:45:00.000Z', '2026-10-25T01:00:00.000Z', '2026-10-25T01:15:00.000Z'
+    ]);
+    assert.deepEqual(out.rows.map((r) => r.socPct), [10, 20, 30, 40]);
+    assert.equal(out.slotMinutes, 15);
+  } finally {
+    await mock.close();
+  }
+});
