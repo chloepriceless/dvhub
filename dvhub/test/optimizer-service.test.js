@@ -455,12 +455,13 @@ describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 
     // Preisen. Ein Push je Lauf vervielfachte ihre Schreibvorgaenge in EOS
     // (Geraete-Messwerte, die EOS nie kuerzt) — ganz ohne Push aus dem Lauf kam
     // eine neue PV-Prognose aber erst bis zu eine Stunde spaeter bei EOS an
-    // (Gegenpruefung 2b66d3ee, P2). Deshalb: je neuer forecastVersion genau ein
-    // Push. lastEosPush setzt die Bridge selbst.
-    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    // (Gegenpruefung 2b66d3ee, P2). Deshalb: je neuer forecastVersion ein Push,
+    // hoechstens alle 15 min (MQTT-Wetter hebt die Version jede Minute,
+    // Gegenpruefung 5a3108d9). lastEosPush setzt die Bridge selbst.
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now });
     let adapterPushes = 0;
     let bridgePushes = 0;
-    const now = Date.now();
     const eosAdapter = {
       pushForecast: async () => { adapterPushes++; return { ok: true }; },
       pullSchedule: async () => [{ ts: now, endTs: now + 900_000, powerW: -1000 }],
@@ -488,10 +489,56 @@ describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 
     await flush();
     assert.ok(state.optimizer.runCount > runs, 'weiterer Lauf');
     assert.equal(bridgePushes, 1, 'gleiche Prognose: kein weiterer Push');
+    // Version jede Minute (MQTT-Wetter): innerhalb von 15 min kein weiterer Push.
+    for (let minute = 1; minute < 15; minute += 1) {
+      bumpVersion();
+      t.mock.timers.tick(60_000);
+      await flush();
+    }
+    assert.equal(bridgePushes, 1, 'hoechstens ein Push je 15 min');
     bumpVersion();
     t.mock.timers.tick(60_000);
     await flush();
-    assert.equal(bridgePushes, 2, 'neue Prognose: innerhalb einer Minute an EOS');
+    assert.equal(bridgePushes, 2, 'nach 15 min geht die neue Prognose an EOS');
+    await svc.close();
+  });
+
+  test('fehlgeschlagener Push zaehlt nicht als uebertragen — der naechste Lauf versucht es wieder', async (t) => {
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now });
+    const results = [{ ok: false, pushed: [], errors: { PVForecastImport: 'HTTP 500' } }, { ok: true, pushed: [], errors: {} }];
+    let bridgePushes = 0;
+    const eosAdapter = {
+      pullSchedule: async () => [{ ts: now, endTs: now + 900_000, powerW: -1000 }],
+      pullGridSetpoints: async () => [],
+      getOptimizationSolution: async () => ({ generatedAt: '2026-10-25T12:00:00+02:00', rows: [] }),
+      setEmsIntervalSec: async () => ({ ok: true })
+    };
+    const eosForecastBridge = { push: async () => { bridgePushes++; return results.shift() || { ok: true, pushed: [], errors: {} }; } };
+    const { ctx, state } = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
+      ctx: { eosAdapter, eosForecastBridge }
+    });
+    const svc = createOptimizerService(ctx);
+    const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+    await svc.start();
+    await flush();
+    assert.equal(bridgePushes, 1, 'erster Versuch (EOS antwortet 500)');
+    svc.notifyEosRestart();
+    await flush();
+    assert.equal(bridgePushes, 1, 'nicht sofort wieder (2 min Abstand)');
+    t.mock.timers.tick(120_000);
+    await flush();
+    svc.notifyEosRestart();
+    await flush();
+    assert.equal(bridgePushes, 2, 'gleiche Version, aber noch nicht angekommen: erneut');
+    t.mock.timers.tick(120_000);
+    await flush();
+    const runs = state.optimizer.runCount;
+    svc.notifyEosRestart();
+    await flush();
+    assert.ok(state.optimizer.runCount > runs);
+    assert.equal(bridgePushes, 2, 'jetzt angekommen: kein weiterer Push');
     await svc.close();
   });
 });

@@ -345,8 +345,14 @@ export function createOptimizerService(ctx) {
   // nicht als Plan.
   let eosFirstPushAt = null;
   // forecastVersion, die der Lauf zuletzt ueber die Bridge an EOS geschickt hat
-  // (Startwert: in diesem Prozess noch keine).
+  // (Startwert: in diesem Prozess noch keine), und wann.
   let bridgePushedForecastVersion = Symbol('noch kein Push');
+  let lastRunPushAt = -Infinity;
+  let lastRunPushAttemptAt = -Infinity;
+  const RUN_PUSH_MIN_SPACING_MS = 15 * 60_000;
+  // Nach einem Fehlschlag (EOS rechnet, startet neu) nicht jede Minute alles
+  // neu schreiben — dauerhafte Teilfehler wuerden sonst wieder je Lauf pushen.
+  const RUN_PUSH_RETRY_MS = 2 * 60_000;
   // Zuletzt erfolgreich geholter EOS-Plan (keepLastEosPlan). Liegt auch als
   // Datei im Datenverzeichnis: nach einem Neustart von DVhub war der Plan
   // sonst vergessen, und solange EOS nicht antwortete (laufende Rechnung),
@@ -635,15 +641,26 @@ export function createOptimizerService(ctx) {
           // Bridge-Push je Lauf vervielfachte ihre Schreibvorgaenge in EOS
           // (Geraete-Messwerte, die EOS nie kuerzt). Ganz ohne Push aus dem
           // Lauf kam eine neue PV-Prognose aber erst zum naechsten Bridge-Takt
-          // (Standard 1 h) bei EOS an. Deshalb je neuer forecastVersion genau
-          // EIN Push — auch im ersten Lauf des Prozesses, damit eosFirstPushAt
-          // wieder hinter einem echten Push liegt.
+          // (Standard 1 h) bei EOS an. Deshalb je neuer forecastVersion ein
+          // Push — auch im ersten Lauf des Prozesses, damit eosFirstPushAt
+          // wieder hinter einem echten Push liegt —, hoechstens alle
+          // RUN_PUSH_MIN_SPACING_MS (MQTT-Wetter hebt die Version jede Minute).
+          // Als uebertragen gilt eine Version erst, wenn der Push ankam; sonst
+          // versucht es der naechste Lauf wieder.
           const bridge = ctx.eosForecastBridge;
           const forecastVersion = ctx.forecastService?.forecastVersion;
-          if (bridge && typeof bridge.push === 'function' && forecastVersion !== bridgePushedForecastVersion) {
-            bridgePushedForecastVersion = forecastVersion;
+          if (bridge && typeof bridge.push === 'function'
+            && forecastVersion !== bridgePushedForecastVersion
+            && Date.now() - lastRunPushAt >= RUN_PUSH_MIN_SPACING_MS
+            && Date.now() - lastRunPushAttemptAt >= RUN_PUSH_RETRY_MS) {
             // Fehler meldet die Bridge selbst (lastEosPush); der Plan wird trotzdem geholt.
-            try { await bridge.push(); } catch (err) { pushLog('eos_forecast_bridge_error', { phase: 'optimizer_run', error: err.message }); }
+            lastRunPushAttemptAt = Date.now();
+            let pushRes = null;
+            try { pushRes = await bridge.push(); } catch (err) { pushLog('eos_forecast_bridge_error', { phase: 'optimizer_run', error: err.message }); }
+            if (pushRes?.ok === true) {
+              bridgePushedForecastVersion = forecastVersion;
+              lastRunPushAt = Date.now();
+            }
           }
           if (eosFirstPushAt === null) eosFirstPushAt = Date.now();
           // eosSchedule = FRBC dispatch (battery power) for display/comparison.
