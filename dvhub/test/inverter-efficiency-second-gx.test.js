@@ -5,7 +5,7 @@
 // aber fuer die von der HAUPT-GX gemessene Last. Sonst zaehlt die Entladung
 // von Akku 2 als AC-Leistung des Haupt-Wechselrichters.
 //
-// SQL-Fall laeuft nur mit DVHUB_TEST_PG_URL, sonst uebersprungen.
+// SQL-Fall laeuft nur mit DVHUB_TEST_PG_URL oder DATABASE_URL, sonst uebersprungen.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import pg from 'pg';
@@ -16,8 +16,9 @@ import {
   EFFICIENCY_BIN_EDGES
 } from '../services/inverter-efficiency/daily.js';
 
-const URL = process.env.DVHUB_TEST_PG_URL;
-const skip = URL ? false : 'DVHUB_TEST_PG_URL nicht gesetzt';
+// In CI (pg-integration) ist DATABASE_URL gesetzt; die Tests legen nur TEMP-Tabellen an.
+const URL = process.env.DVHUB_TEST_PG_URL || process.env.DATABASE_URL;
+const skip = URL ? false : 'DVHUB_TEST_PG_URL/DATABASE_URL nicht gesetzt';
 
 test('Wirkungsgrad liest die Akku-2-Reihen mit, um die gemessene Last zurueckzurechnen', () => {
   assert.ok(EFFICIENCY_SERIES_KEYS.includes('second_battery_charge_w'));

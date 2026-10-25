@@ -3,7 +3,7 @@
 // ihrer Stunde, in der Slot-Suche und in der Fehlend-Erkennung des Backfills
 // (Review 25.10.2026, P2). Gegenstueck: test/sqlite/price-hourly-coverage.test.js.
 //
-// Die SQL-Faelle laufen nur mit DVHUB_TEST_PG_URL (z. B.
+// Die SQL-Faelle laufen nur mit DVHUB_TEST_PG_URL oder DATABASE_URL (z. B.
 // postgres://postgres:test@127.0.0.1:55432/postgres), sonst uebersprungen.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,8 +11,9 @@ import pg from 'pg';
 
 import { createTelemetryStorePg } from '../telemetry-store-pg.js';
 
-const URL = process.env.DVHUB_TEST_PG_URL;
-const skip = URL ? false : 'DVHUB_TEST_PG_URL nicht gesetzt';
+// In CI (pg-integration) ist DATABASE_URL gesetzt; die Tests legen nur TEMP-Tabellen an.
+const URL = process.env.DVHUB_TEST_PG_URL || process.env.DATABASE_URL;
+const skip = URL ? false : 'DVHUB_TEST_PG_URL/DATABASE_URL nicht gesetzt';
 
 const quarters = (hourIso) => [0, 15, 30, 45].map((m) => new Date(new Date(hourIso).getTime() + m * 60000).toISOString());
 

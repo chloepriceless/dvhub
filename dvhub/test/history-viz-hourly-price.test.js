@@ -3,15 +3,16 @@
 // Viertelstunden (Gegenpruefung 25.10.2026). Vorher bekam nur die :00-
 // Viertelstunde einen Preis, :15/:30/:45 zaehlten mit 0 ct.
 //
-// Laeuft nur mit DVHUB_TEST_PG_URL, sonst uebersprungen.
+// Laeuft nur mit DVHUB_TEST_PG_URL oder DATABASE_URL, sonst uebersprungen.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import pg from 'pg';
 
 import { createHistoryVizAggregator } from '../services/history-viz/aggregator.js';
 
-const URL = process.env.DVHUB_TEST_PG_URL;
-const skip = URL ? false : 'DVHUB_TEST_PG_URL nicht gesetzt';
+// In CI (pg-integration) ist DATABASE_URL gesetzt; die Tests legen nur TEMP-Tabellen an.
+const URL = process.env.DVHUB_TEST_PG_URL || process.env.DATABASE_URL;
+const skip = URL ? false : 'DVHUB_TEST_PG_URL/DATABASE_URL nicht gesetzt';
 
 test('Top-10: Viertelstunden unter einem Stundenpreis tragen dessen Preis', { skip }, async () => {
   const client = new pg.Client({ connectionString: URL });
