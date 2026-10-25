@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
+import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS } from './telemetry-runtime.js';
 
 // Plan 08-01 Task 3: resolve dvhub/db/migrations/ relative to this module file
 // so the runner works regardless of where node is invoked from (systemd CWD,
@@ -849,9 +850,28 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         UNION
         SELECT DISTINCT date_bin('${bucket}', slot_start_utc, ${origin})
           FROM energy_slots_15m WHERE series_key = ANY($1::text[]) AND ${range('slot_start_utc')}
+      ), price_ts AS (
+        -- Eine Stunde Rand fuer die Nachbarn am Bereichsrand.
+        SELECT ts_utc, MAX(resolution_seconds) AS res
+          FROM timeseries_samples
+         WHERE series_key = 'price_ct_kwh'
+           AND ($2::timestamptz IS NULL OR ts_utc >= $2::timestamptz - interval '1 hour')
+           AND ($3::timestamptz IS NULL OR ts_utc < $3::timestamptz + interval '1 hour')
+         GROUP BY ts_utc
+      ), price_spaced AS (
+        SELECT ts_utc, res,
+               EXTRACT(EPOCH FROM ts_utc - lag(ts_utc) OVER (ORDER BY ts_utc)) AS gap_prev,
+               EXTRACT(EPOCH FROM lead(ts_utc) OVER (ORDER BY ts_utc) - ts_utc) AS gap_next
+          FROM price_ts
       ), priced AS (
-        SELECT DISTINCT date_bin('${bucket}', ts_utc, ${origin}) AS b
-          FROM timeseries_samples WHERE series_key = 'price_ct_kwh' AND ${range('ts_utc')}
+        SELECT date_bin('${bucket}', ts_utc, ${origin}) AS b FROM price_spaced
+        UNION
+        -- Stundenpreis (volle Stunde, naechster Nachbar >= 1 h; ohne Nachbarn der
+        -- Stempel) deckt auch :15/:30/:45 — gleiche Regel wie expandHourlyPriceRows.
+        SELECT ts_utc + q.k * interval '${bucket}' FROM price_spaced CROSS JOIN (VALUES (1), (2), (3)) AS q(k)
+         WHERE EXTRACT(EPOCH FROM ts_utc)::bigint % 3600 = 0
+           AND CASE WHEN gap_prev IS NULL AND gap_next IS NULL THEN res >= 3600
+                    ELSE LEAST(gap_prev, gap_next) >= 3600 END
       )
       SELECT m.b FROM measured m LEFT JOIN priced p ON p.b = m.b WHERE p.b IS NULL ORDER BY m.b`, params);
     return (res.rows || []).map((r) => bucketIso(r.b, DEFAULT_PRICE_BUCKET_SECONDS));
@@ -1047,6 +1067,10 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   }
 
   async function listPriceSlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS }) {
+    // Eine Stunde Rand: Stundenpreise (vor 10/2025) brauchen ihre Nachbarn, und
+    // ein :00-Preis vor `start` deckt noch :15/:30/:45 (expandHourlyPriceRows).
+    const startMs = new Date(isoTimestamp(start)).getTime();
+    const endMs = new Date(isoTimestamp(end)).getTime();
     const result = await pool.query(`
       SELECT series_key, ts_utc, resolution_seconds, value_num
       FROM timeseries_samples
@@ -1054,10 +1078,12 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         AND value_num IS NOT NULL
         AND ts_utc >= $1 AND ts_utc < $2
       ORDER BY ts_utc ASC
-    `, [isoTimestamp(start), isoTimestamp(end)]);
+    `, [new Date(startMs - PRICE_COVERAGE_PAD_MS).toISOString(), new Date(endMs + PRICE_COVERAGE_PAD_MS).toISOString()]);
 
     const buckets = new Map();
-    for (const row of result.rows) {
+    for (const row of expandHourlyPriceRows(result.rows)) {
+      const rowMs = new Date(row.ts_utc).getTime();
+      if (!(rowMs >= startMs && rowMs < endMs)) continue;
       const ts = bucketIso(row.ts_utc, bucketSeconds);
       const bucket = buckets.get(ts) || new Map();
       const entries = bucket.get(row.series_key) || [];

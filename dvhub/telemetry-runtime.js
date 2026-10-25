@@ -117,7 +117,7 @@ export function buildPriceTelemetrySamples(rows, options = {}) {
     const ts = new Date(Number(row.ts)).toISOString();
     const base = {
       ts,
-      resolutionSeconds: Number(options.resolutionSeconds || 3600),
+      resolutionSeconds: Number(row.resolutionSeconds || options.resolutionSeconds || 3600),
       scope: options.scope || 'forecast',
       source: options.source || 'price_api',
       quality: options.quality || 'raw'
@@ -130,6 +130,9 @@ export function buildPriceTelemetrySamples(rows, options = {}) {
 }
 
 export function buildHistoricalPriceTelemetrySamples(rows, options = {}) {
+  // Zeilen duerfen ihren eigenen Stempel mitbringen (row.resolutionSeconds, aus
+  // priceRowSpacingSeconds): vor dem 01.10.2025 war der Day-Ahead stuendlich
+  // und wurde trotzdem pauschal als 900 s gestempelt.
   return buildPriceTelemetrySamples(rows, {
     resolutionSeconds: 900,
     scope: 'history',
@@ -137,6 +140,93 @@ export function buildHistoricalPriceTelemetrySamples(rows, options = {}) {
     quality: 'backfilled',
     ...options
   });
+}
+
+const PRICE_QUARTER_MS = 900 * 1000;
+const PRICE_HOUR_MS = 3600 * 1000;
+
+function priceTsMs(value) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  return new Date(value).getTime();
+}
+
+/**
+ * Stempel je Preiszeile aus dem echten Abstand zu den Nachbarzeilen: 3600 fuer
+ * Stundenpreise (volle Stunde, naechster Nachbar >= 1 h weg), sonst 900. Zeilen
+ * mit `ts` (Epoch-ms oder ISO). Ueber die VOLLSTAENDIG geholten Zeilen rechnen,
+ * nicht ueber eine ausgeduennte Auswahl.
+ */
+export function priceRowSpacingSeconds(rows) {
+  const times = rows.map((row) => priceTsMs(Number.isFinite(Number(row.ts)) ? Number(row.ts) : row.ts));
+  const sorted = [...new Set(times.filter(Number.isFinite))].sort((a, b) => a - b);
+  const position = new Map(sorted.map((ms, index) => [ms, index]));
+  return times.map((ms) => {
+    const index = position.get(ms);
+    if (index == null) return 900;
+    const gaps = [];
+    if (index > 0) gaps.push(ms - sorted[index - 1]);
+    if (index + 1 < sorted.length) gaps.push(sorted[index + 1] - ms);
+    if (!gaps.length) return 900;
+    return Math.min(...gaps) >= PRICE_HOUR_MS && ms % PRICE_HOUR_MS === 0 ? 3600 : 900;
+  });
+}
+
+/**
+ * true, wenn die Preiszeile bei `ms` ein Stundenpreis ist: volle UTC-Stunde und
+ * die naechste Nachbarzeile derselben Reihe liegt mindestens eine Stunde weg.
+ * Ohne Nachbarn entscheidet der Stempel. Der Stempel allein taugt nicht: der
+ * Preis-Backfill stempelte Stundenpreise mit 900 s, epex-fetch.js bis Maerz 2026
+ * 15-min-Preise mit 3600 s. Dieselbe Regel steht als SQL in
+ * telemetry-store-pg.js (listMissingPriceBuckets).
+ */
+function isHourlyPriceRow(ms, prevMs, nextMs, maxResolutionSeconds) {
+  if (!Number.isFinite(ms) || ms % PRICE_HOUR_MS !== 0) return false;
+  const gaps = [];
+  if (Number.isFinite(prevMs)) gaps.push(ms - prevMs);
+  if (Number.isFinite(nextMs)) gaps.push(nextMs - ms);
+  if (!gaps.length) return Number(maxResolutionSeconds) >= 3600;
+  return Math.min(...gaps) >= PRICE_HOUR_MS;
+}
+
+/** Zeitraum, den die Preisabfragen zusaetzlich lesen muessen (Stunde davor/danach). */
+export const PRICE_COVERAGE_PAD_MS = PRICE_HOUR_MS;
+
+/**
+ * Ergaenzt Stundenpreis-Zeilen um Kopien fuer :15, :30 und :45 ihrer Stunde,
+ * damit jede Viertelstunde einen Preis findet. Zeilen: { series_key, ts_utc,
+ * resolution_seconds, value_num } wie aus den Stores. Die Kopien tragen
+ * ts_utc als ISO-String; die Gewichtung (resolution_seconds) bleibt gleich.
+ * Die Zeilen sollten eine Stunde vor und nach dem gewuenschten Bereich
+ * enthalten (PRICE_COVERAGE_PAD_MS), sonst fehlen Nachbarn am Rand.
+ */
+export function expandHourlyPriceRows(rows) {
+  const bySeries = new Map();
+  for (const row of rows || []) {
+    const ms = priceTsMs(row.ts_utc);
+    if (!Number.isFinite(ms)) continue;
+    const key = row.series_key ?? '';
+    let byTs = bySeries.get(key);
+    if (!byTs) { byTs = new Map(); bySeries.set(key, byTs); }
+    const list = byTs.get(ms) || [];
+    list.push(row);
+    byTs.set(ms, list);
+  }
+  const out = [...(rows || [])];
+  for (const byTs of bySeries.values()) {
+    const times = [...byTs.keys()].sort((a, b) => a - b);
+    for (let index = 0; index < times.length; index += 1) {
+      const ms = times[index];
+      const group = byTs.get(ms);
+      const maxResolution = Math.max(...group.map((row) => Number(row.resolution_seconds) || 0));
+      if (!isHourlyPriceRow(ms, times[index - 1], times[index + 1], maxResolution)) continue;
+      for (let quarter = 1; quarter < 4; quarter += 1) {
+        const ts = new Date(ms + quarter * PRICE_QUARTER_MS).toISOString();
+        for (const row of group) out.push({ ...row, ts_utc: ts });
+      }
+    }
+  }
+  return out;
 }
 
 const OPTIMIZER_TARGET_MAP = {

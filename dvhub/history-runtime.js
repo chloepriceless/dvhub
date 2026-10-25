@@ -581,7 +581,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // SUMMARY_CACHE_VERSION bei JEDER Änderung an der Slot-Bewertung oder den
 // Summen erhöhen — dann wird alles einmal neu aus den Rohdaten gerechnet.
 // 2 (21.10.2026): Akku der zweiten GX-Anlage als eigene Felder und Quelle.
-export const SUMMARY_CACHE_VERSION = 2;
+// 3 (25.10.2026): Stundenpreise (vor 10/2025) gelten fuer alle vier Viertelstunden.
+export const SUMMARY_CACHE_VERSION = 3;
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 

@@ -23,6 +23,7 @@ const PRICE_BACKFILL_FETCH_CHUNK_DAYS = 30;
 
 import {
   buildHistoricalPriceTelemetrySamples,
+  priceRowSpacingSeconds,
   buildHistoricalTelemetrySample
 } from './telemetry-runtime.js';
 
@@ -1851,10 +1852,18 @@ export function createHistoryImportManager({
           waitImpl,
           dvhubApiBaseUrl
         });
-        for (const row of rows) {
-          if (!missingSet.has(bucketIso(row.ts))) continue;
-          matchedRows.push(row);
-        }
+        const spacing = priceRowSpacingSeconds(rows);
+        rows.forEach((row, index) => {
+          // Ein Stundenpreis deckt alle vier Viertelstunden seiner Stunde; er
+          // wird geschrieben, sobald eine davon fehlt.
+          const rowMs = new Date(Number.isFinite(Number(row.ts)) ? Number(row.ts) : row.ts).getTime();
+          const covered = Array.from(
+            { length: Math.max(1, Math.round(spacing[index] / PRICE_BUCKET_SECONDS)) },
+            (_, quarter) => bucketIso(rowMs + quarter * PRICE_BUCKET_SECONDS * 1000)
+          );
+          if (!covered.some((ts) => missingSet.has(ts))) return;
+          matchedRows.push({ ...row, resolutionSeconds: spacing[index] });
+        });
       } catch (error) {
         openDays.push(...window.days);
         errors.push(error?.message || String(error));

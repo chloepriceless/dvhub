@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
+import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS } from './telemetry-runtime.js';
 
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
@@ -608,16 +609,22 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         ${start ? 'AND ts_utc >= ?' : ''}
         ${end ? 'AND ts_utc < ?' : ''}
     `).all(...keys, ...(start ? [isoTimestamp(start)] : []), ...(end ? [isoTimestamp(end)] : []));
+    // Eine Stunde Rand, damit Stundenpreise am Bereichsrand ihre Nachbarn sehen
+    // und ein :00-Preis vor `start` seine :15/:30/:45 deckt.
     const priceRows = db.prepare(`
-      SELECT ts_utc
+      SELECT series_key, ts_utc, MAX(resolution_seconds) AS resolution_seconds
       FROM timeseries_samples
       WHERE series_key = 'price_ct_kwh'
         ${start ? 'AND ts_utc >= ?' : ''}
         ${end ? 'AND ts_utc < ?' : ''}
-    `).all(...(start ? [isoTimestamp(start)] : []), ...(end ? [isoTimestamp(end)] : []));
+      GROUP BY series_key, ts_utc
+    `).all(
+      ...(start ? [new Date(new Date(isoTimestamp(start)).getTime() - PRICE_COVERAGE_PAD_MS).toISOString()] : []),
+      ...(end ? [new Date(new Date(isoTimestamp(end)).getTime() + PRICE_COVERAGE_PAD_MS).toISOString()] : [])
+    );
 
     const telemetryBuckets = new Set(telemetryRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
-    const pricedBuckets = new Set(priceRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
+    const pricedBuckets = new Set(expandHourlyPriceRows(priceRows).map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
 
     return [...telemetryBuckets].filter((ts) => !pricedBuckets.has(ts)).sort();
   }
@@ -739,6 +746,10 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
   }
 
   function listPriceSlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS }) {
+    const startIso = isoTimestamp(start);
+    const endIso = isoTimestamp(end);
+    const startMs = new Date(startIso).getTime();
+    const endMs = new Date(endIso).getTime();
     const rows = db.prepare(`
       SELECT series_key, ts_utc, resolution_seconds, value_num
       FROM timeseries_samples
@@ -747,10 +758,12 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         AND ts_utc >= ?
         AND ts_utc < ?
       ORDER BY ts_utc ASC
-    `).all(isoTimestamp(start), isoTimestamp(end));
+    `).all(new Date(startMs - PRICE_COVERAGE_PAD_MS).toISOString(), new Date(endMs + PRICE_COVERAGE_PAD_MS).toISOString());
 
     const buckets = new Map();
-    for (const row of rows) {
+    for (const row of expandHourlyPriceRows(rows)) {
+      const rowMs = new Date(row.ts_utc).getTime();
+      if (!(rowMs >= startMs && rowMs < endMs)) continue;
       const ts = bucketIso(row.ts_utc, bucketSeconds);
       const bucket = buckets.get(ts) || new Map();
       const entries = bucket.get(row.series_key) || [];

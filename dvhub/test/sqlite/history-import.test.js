@@ -1035,6 +1035,75 @@ test('price backfill batches contiguous missing days into one Energy Charts requ
   }
 });
 
+test('price backfill stamps hourly day-ahead rows with 3600 s and stops refetching their quarters', async () => {
+  const store = createStore();
+  const calls = [];
+  const quarters = [0, 15, 30, 45].map((m) => new Date(Date.UTC(2025, 5, 10, 10, m)).toISOString());
+  store.writeSamples(quarters.map((ts) => ({
+    seriesKey: 'grid_import_w', ts, value: 800, scope: 'live', source: 'local_poll', quality: 'raw', resolutionSeconds: 900, unit: 'W'
+  })));
+  // Vor 10/2025: Energy Charts liefert 24 Stundenwerte je Tag.
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const hours = Array.from({ length: 24 }, (_, h) => Math.floor(Date.UTC(2025, 5, 9, 22 + h) / 1000));
+    return { ok: true, async json() { return { unix_seconds: hours, price: hours.map((_, h) => 40 + h) }; } };
+  };
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      waitImpl: async () => {},
+      telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: '12345', vrmToken: 'token123' } }
+    });
+    const first = await manager.backfillMissingPriceHistory({ bzn: 'DE-LU' });
+    assert.equal(first.ok, true);
+    assert.equal(calls.length, 1);
+    // Nur die 10:00-Zeile (12. Stundenwert seit 22:00 UTC = 40 + 12 = 52 EUR/MWh)
+    // deckt die gemessene Stunde; sie traegt ihren echten Abstand.
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'price_ct_kwh' AND resolution_seconds = '3600'"), 1);
+    assert.equal(store.countRows('timeseries_samples', "series_key = 'price_ct_kwh' AND resolution_seconds = '900'"), 0);
+    assert.deepEqual(store.listMissingPriceBuckets({}), []);
+    const prices = store.listPriceSlots({ start: quarters[0], end: '2025-06-10T11:00:00.000Z' });
+    assert.deepEqual(prices.map((p) => p.priceCtKwh), [5.2, 5.2, 5.2, 5.2]);
+
+    const second = await manager.backfillMissingPriceHistory({ bzn: 'DE-LU' });
+    assert.equal(second.requestedDays, 0);
+    assert.equal(calls.length, 1, 'kein erneuter Abruf fuer :15/:30/:45');
+  } finally {
+    store.close();
+  }
+});
+
+test('price backfill writes the hourly row when only a later quarter of its hour is missing', async () => {
+  const store = createStore();
+  // Altbestand: Stundenpreis 10:00 mit 900-s-Stempel, ohne Nachbarn; Messung nur um 10:30.
+  store.writeSamples([
+    { seriesKey: 'price_ct_kwh', ts: '2025-06-10T10:00:00.000Z', value: 5.2, scope: 'history', source: 'price_backfill', quality: 'backfilled', resolutionSeconds: 900, unit: 'ct/kWh' },
+    { seriesKey: 'grid_import_w', ts: '2025-06-10T10:30:00.000Z', value: 800, scope: 'live', source: 'local_poll', quality: 'raw', resolutionSeconds: 900, unit: 'W' }
+  ]);
+  assert.deepEqual(store.listMissingPriceBuckets({}), ['2025-06-10T10:30:00.000Z']);
+  const fetchImpl = async () => {
+    const hours = Array.from({ length: 24 }, (_, h) => Math.floor(Date.UTC(2025, 5, 9, 22 + h) / 1000));
+    return { ok: true, async json() { return { unix_seconds: hours, price: hours.map((_, h) => 40 + h) }; } };
+  };
+  try {
+    const manager = createHistoryImportManager({
+      store,
+      fetchImpl,
+      waitImpl: async () => {},
+      telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: '12345', vrmToken: 'token123' } }
+    });
+    const result = await manager.backfillMissingPriceHistory({ bzn: 'DE-LU' });
+    assert.equal(result.ok, true);
+    assert.equal(result.matchedBuckets, 1);
+    assert.deepEqual(store.listMissingPriceBuckets({}), []);
+    const prices = store.listPriceSlots({ start: '2025-06-10T10:30:00.000Z', end: '2025-06-10T10:45:00.000Z' });
+    assert.deepEqual(prices.map((p) => p.priceCtKwh), [5.2]);
+  } finally {
+    store.close();
+  }
+});
+
 test('price backfill is idempotent when the same bucket is imported twice', async () => {
   const store = createStore();
   const noon = Date.UTC(2026, 0, 2, 12, 0, 0);

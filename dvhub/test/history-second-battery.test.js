@@ -55,7 +55,8 @@ function makeRuntime(slots = SLOTS) {
 }
 
 test('Cache-Version erhoeht: alte Monatsstaende ohne Akku 2 werden neu gerechnet', () => {
-  assert.equal(SUMMARY_CACHE_VERSION, 2);
+  // 2 = Akku 2; spaetere Erhoehungen (3 = Stundenpreise) rechnen ebenfalls neu.
+  assert.ok(SUMMARY_CACHE_VERSION >= 2);
 });
 
 test('KPIs summieren Akku 2 getrennt und bewerten seine Einspeisung', async () => {
