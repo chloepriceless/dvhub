@@ -194,3 +194,99 @@ test('Ladestandsaenderung von Akku 2 kommt als eigene KPI (fuer den Gesamtverlus
   assert.equal(s.kpis.secondBatterySocStartPct, 40);
   assert.equal(s.kpis.secondBatterySocEndPct, 60);
 });
+
+// Review 25.10.2026 (P2): In VRM-Slots steckt Akku 2 schon im Verbrauch (VRM
+// kennt die zweite Anlage nicht, die Stores nullen dort die Akku-2-Felder). Sein
+// Ladestand-Uebertrag darf nur fuer die lokalen Abschnitte vom Gesamtverlust
+// abgezogen werden.
+function socTimelineStore({ slots, socSamples }) {
+  const sorted = socSamples.map(([ts, v]) => [new Date(ts).getTime(), v]).sort((a, b) => a[0] - b[0]);
+  return {
+    listMaterializedEnergySlots: async () => slots.map((s) => ({ ...s })),
+    listPriceSlots: async () => [],
+    getSeriesBoundaryValues: async ({ seriesKey, start, end }) => {
+      if (seriesKey !== 'second_battery_soc_pct') return { startValue: null, endValue: null };
+      const from = new Date(start).getTime();
+      const to = new Date(end).getTime();
+      const inside = sorted.filter(([t]) => t >= from && t < to);
+      return {
+        startValue: inside.length ? inside[0][1] : null,
+        endValue: inside.length ? inside[inside.length - 1][1] : null
+      };
+    }
+  };
+}
+
+function daySlots(fromIso, toIso, extra = {}) {
+  const out = [];
+  for (let t = new Date(fromIso).getTime(); t < new Date(toIso).getTime(); t += 900000) {
+    out.push({ ...EMPTY, ts: new Date(t).toISOString(), loadKwh: 0.1, importKwh: 0.1, ...extra });
+  }
+  return out;
+}
+
+async function secondDeltaFor(store) {
+  const runtime = createHistoryRuntime({
+    store,
+    getPricingConfig: () => ({}),
+    getCurrentDate: () => '2027-04-02',
+    getSecondBatteryCapacityKwh: () => 32
+  });
+  return (await runtime.getSummary({ view: 'day', date: '2026-10-20' })).kpis;
+}
+
+test('Akku-2-Ladestand: nur die lokalen Abschnitte zaehlen, nicht der VRM-Abschnitt', async () => {
+  // 20.10.2026 Berlin = 19.10. 22:00Z bis 20.10. 22:00Z. Lokal bis 06:00Z, VRM 06:00–12:00Z, dann lokal.
+  const slots = [
+    ...daySlots('2026-10-19T22:00:00.000Z', '2026-10-20T06:00:00.000Z', { sourceKind: 'local_live' }),
+    ...daySlots('2026-10-20T06:00:00.000Z', '2026-10-20T12:00:00.000Z', { sourceKind: 'mixed', vrmFlows: true }),
+    ...daySlots('2026-10-20T12:00:00.000Z', '2026-10-20T22:00:00.000Z', { sourceKind: 'local_live' })
+  ];
+  const kpis = await secondDeltaFor(socTimelineStore({
+    slots,
+    socSamples: [
+      ['2026-10-19T22:00:00.000Z', 40], ['2026-10-20T05:55:00.000Z', 50], // lokal +10 %
+      ['2026-10-20T06:05:00.000Z', 55], ['2026-10-20T11:55:00.000Z', 80], // im VRM-Abschnitt
+      ['2026-10-20T12:00:00.000Z', 80], ['2026-10-20T21:55:00.000Z', 90] // lokal +10 %
+    ]
+  }));
+  // Lokal: (50 − 40) + (90 − 80) = 20 % × 32 kWh = 6,4 kWh. Ganzes Fenster waere 50 % = 16 kWh.
+  assert.equal(kpis.secondBatteryStoredDeltaKwh, 6.4);
+  assert.equal(kpis.secondBatterySocStartPct, 40);
+  assert.equal(kpis.secondBatterySocEndPct, 90);
+});
+
+test('Akku-2-Ladestand: VRM-Abschnitt ohne lokale Ladestaende (Luecke) zaehlt ebenfalls nicht', async () => {
+  const slots = [
+    ...daySlots('2026-10-19T22:00:00.000Z', '2026-10-20T06:00:00.000Z', { sourceKind: 'local_live' }),
+    ...daySlots('2026-10-20T06:00:00.000Z', '2026-10-20T12:00:00.000Z', { sourceKind: 'vrm_import', vrmFlows: true }),
+    ...daySlots('2026-10-20T12:00:00.000Z', '2026-10-20T22:00:00.000Z', { sourceKind: 'local_live' })
+  ];
+  const kpis = await secondDeltaFor(socTimelineStore({
+    slots,
+    socSamples: [
+      ['2026-10-19T22:00:00.000Z', 40], ['2026-10-20T05:55:00.000Z', 50],
+      ['2026-10-20T12:00:00.000Z', 80], ['2026-10-20T21:55:00.000Z', 90]
+    ]
+  }));
+  // Die +30 % zwischen 05:55 und 12:00 fallen in den VRM-Abschnitt.
+  assert.equal(kpis.secondBatteryStoredDeltaKwh, 6.4);
+});
+
+test('Akku-2-Ladestand: ganz aus VRM -> nichts abziehen', async () => {
+  const slots = daySlots('2026-10-19T22:00:00.000Z', '2026-10-20T22:00:00.000Z', { sourceKind: 'vrm_import', vrmFlows: true });
+  const kpis = await secondDeltaFor(socTimelineStore({
+    slots,
+    socSamples: [['2026-10-19T22:00:00.000Z', 40], ['2026-10-20T21:55:00.000Z', 90]]
+  }));
+  assert.equal(kpis.secondBatteryStoredDeltaKwh, 0);
+});
+
+test('Akku-2-Ladestand: ohne VRM-Slots unveraendert das ganze Fenster', async () => {
+  const slots = daySlots('2026-10-19T22:00:00.000Z', '2026-10-20T22:00:00.000Z', { sourceKind: 'local_live' });
+  const kpis = await secondDeltaFor(socTimelineStore({
+    slots,
+    socSamples: [['2026-10-19T22:00:00.000Z', 40], ['2026-10-20T21:55:00.000Z', 90]]
+  }));
+  assert.equal(kpis.secondBatteryStoredDeltaKwh, 16);
+});

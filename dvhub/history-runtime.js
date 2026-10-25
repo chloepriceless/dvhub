@@ -582,7 +582,11 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // Summen erhöhen — dann wird alles einmal neu aus den Rohdaten gerechnet.
 // 2 (21.10.2026): Akku der zweiten GX-Anlage als eigene Felder und Quelle.
 // 3 (25.10.2026): Stundenpreise (vor 10/2025) gelten fuer alle vier Viertelstunden.
-export const SUMMARY_CACHE_VERSION = 3;
+// 4 (25.10.2026): VRM-Abschnitte im Zwischenstand (Akku-2-Ladestand-Uebertrag).
+export const SUMMARY_CACHE_VERSION = 4;
+
+// Hoechstens so viele VRM-Abschnitte einzeln abfragen (je zwei Abfragen).
+const MAX_SECOND_BATTERY_VRM_RUNS = 48;
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 
@@ -2031,6 +2035,11 @@ export function createHistoryRuntime({
     const rowsAcc = createRowsAccumulator(view, batteryNominalCapacityKwhAt);
     const activeExportMonths = new Set();
     const sourceSummary = { localLiveSlots: 0, vrmImportSlots: 0 };
+    // Abschnitte aufeinanderfolgender VRM-Slots (Review 25.10.2026): dort steckt
+    // Akku 2 schon im VRM-Verbrauch, sein Ladestand-Uebertrag zaehlt nicht.
+    let secondBatteryVrmRuns = [];
+    let secondBatteryVrmSlots = 0;
+    let lastSlotFromVrm = false;
     // Tag–Monat: alle bewerteten Slots (Tages-Charts, Reihen, Antwort).
     // Jahr/Alle: nur die schlanken Felder, die die Prämien-Rechnung und der
     // kWp-Deckel brauchen (ts, Preis, Einspeisung, PV-Flüsse).
@@ -2048,6 +2057,16 @@ export function createHistoryRuntime({
       const kinds = Array.isArray(slot?.sourceKinds) ? slot.sourceKinds : null;
       if (slot?.sourceKind === 'local_live' || kinds?.includes('local_live')) sourceSummary.localLiveSlots += 1;
       if (slot?.sourceKind === 'vrm_import' || kinds?.includes('vrm_import')) sourceSummary.vrmImportSlots += 1;
+      const fromVrm = slot?.vrmFlows === true || slot?.sourceKind === 'vrm_import';
+      if (fromVrm) {
+        const slotStartMs = new Date(slot.ts).getTime();
+        const slotEndMs = slotStartMs + SLOT_BUCKET_SECONDS * 1000;
+        const lastRun = secondBatteryVrmRuns[secondBatteryVrmRuns.length - 1];
+        if (lastSlotFromVrm && lastRun) lastRun.endMs = slotEndMs;
+        else secondBatteryVrmRuns.push({ startMs: slotStartMs, endMs: slotEndMs });
+        secondBatteryVrmSlots += 1;
+      }
+      lastSlotFromVrm = fromVrm;
       slots.push(keepFullSlots ? slot : {
         ts: slot.ts,
         exportKwh: slot.exportKwh,
@@ -2116,7 +2135,10 @@ export function createHistoryRuntime({
         rows: rowsAcc.exportState(),
         activeExportMonths: [...activeExportMonths],
         sourceSummary: { ...sourceSummary },
-        consecutiveNegHours
+        consecutiveNegHours,
+        secondBatteryVrmRuns: secondBatteryVrmRuns.map((run) => ({ ...run })),
+        secondBatteryVrmSlots,
+        lastSlotFromVrm
       });
       const restoreState = (state) => {
         kpiTotals = state.kpiTotals;
@@ -2131,6 +2153,9 @@ export function createHistoryRuntime({
         sourceSummary.localLiveSlots = state.sourceSummary.localLiveSlots;
         sourceSummary.vrmImportSlots = state.sourceSummary.vrmImportSlots;
         consecutiveNegHours = state.consecutiveNegHours;
+        secondBatteryVrmRuns = Array.isArray(state.secondBatteryVrmRuns) ? state.secondBatteryVrmRuns.map((run) => ({ ...run })) : [];
+        secondBatteryVrmSlots = Number(state.secondBatteryVrmSlots) || 0;
+        lastSlotFromVrm = state.lastSlotFromVrm === true;
       };
 
       // Ablage vorbereiten: Prüfwerte der abgeschlossenen Monate, letzter
@@ -2552,10 +2577,34 @@ export function createHistoryRuntime({
           end: localDateTimeToUtcIso(range.endDateExclusive, 0, 0)
         });
         if (soc2?.startValue != null && soc2?.endValue != null) {
+          // Nur die lokalen Abschnitte (Review 25.10.2026): in VRM-Slots ist
+          // Akku 2 schon im Verbrauch enthalten. Je VRM-Abschnitt faellt die
+          // Aenderung vom letzten Ladestand davor bis zum ersten danach heraus.
+          let localDeltaPct = soc2.endValue - soc2.startValue;
+          if (secondBatteryVrmRuns.length > 0) {
+            if (secondBatteryVrmRuns.length <= MAX_SECOND_BATTERY_VRM_RUNS) {
+              const windowStart = localDateTimeToUtcIso(range.startDate, 0, 0);
+              const windowEnd = localDateTimeToUtcIso(range.endDateExclusive, 0, 0);
+              for (const run of secondBatteryVrmRuns) {
+                const runStart = new Date(run.startMs).toISOString();
+                const runEnd = new Date(run.endMs).toISOString();
+                const before = runStart > windowStart
+                  ? (await store.getSeriesBoundaryValues({ seriesKey: 'second_battery_soc_pct', start: windowStart, end: runStart }))?.endValue
+                  : null;
+                const after = runEnd < windowEnd
+                  ? (await store.getSeriesBoundaryValues({ seriesKey: 'second_battery_soc_pct', start: runEnd, end: windowEnd }))?.startValue
+                  : null;
+                localDeltaPct -= (after ?? soc2.endValue) - (before ?? soc2.startValue);
+              }
+            } else {
+              // Sehr zersplittert: nach Anteil der lokalen Slots.
+              localDeltaPct *= slotCount > 0 ? Math.max(0, slotCount - secondBatteryVrmSlots) / slotCount : 0;
+            }
+          }
           Object.assign(periodPremiumApplied.kpis, {
             secondBatterySocStartPct: round2(soc2.startValue),
             secondBatterySocEndPct: round2(soc2.endValue),
-            secondBatteryStoredDeltaKwh: round2(((soc2.endValue - soc2.startValue) / 100) * cap2)
+            secondBatteryStoredDeltaKwh: round2((localDeltaPct / 100) * cap2)
           });
         }
       }

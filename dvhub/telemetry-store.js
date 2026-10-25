@@ -49,12 +49,18 @@ const PRIMARY_FLOW_SERIES = [
   'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
 ];
 // dropLocal = true: Werte werden gelesen (gleiche Quellen-Buchfuehrung), aber als 0 ausgegeben.
-const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => Object.fromEntries(
-  SECOND_BATTERY_SLOT_FIELDS.map(([field, seriesKey]) => {
-    const value = energyForSeries(seriesKey);
-    return [field, dropLocal ? 0 : value];
-  })
-);
+// Der Slot traegt dann vrmFlows: true — die Historie zieht den Ladestand-Uebertrag
+// von Akku 2 nur fuer lokale Abschnitte ab (Review 25.10.2026).
+const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => {
+  const fields = Object.fromEntries(
+    SECOND_BATTERY_SLOT_FIELDS.map(([field, seriesKey]) => {
+      const value = energyForSeries(seriesKey);
+      return [field, dropLocal ? 0 : value];
+    })
+  );
+  if (dropLocal) fields.vrmFlows = true;
+  return fields;
+};
 // Bevorzugte Quelle einer Reihe im Slot, ohne Seiteneffekt (wie pickSeriesRow).
 const preferredSourceKindOf = (bySource, preferredSourceKinds) => {
   if (!bySource) return null;

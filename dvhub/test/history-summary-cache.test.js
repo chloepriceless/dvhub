@@ -234,3 +234,46 @@ test('beschädigter Eintrag: es wird ohne Ablage richtig gerechnet', async () =>
   store.cache.set(key, { fingerprint: store.cache.get(key).fingerprint, payload: Buffer.from('kaputt') });
   assert.deepStrictEqual(await runtime.getSummary({ view: 'year', date: TODAY, solarMarketValues: MARKET }), expected);
 });
+
+// Review 25.10.2026: Die VRM-Abschnitte fuer den Akku-2-Ladestand-Uebertrag
+// gehoeren zum Zwischenstand — aus der Ablage muss dasselbe herauskommen.
+test('Jahr: Akku-2-Ladestand nur lokal, kalt = warm = ohne Ablage', async () => {
+  const HOUR = 3600_000;
+  const SOC_ORIGIN = Date.UTC(2026, 0, 1);
+  const withSecond = (store) => {
+    for (const slot of store.data.slots) {
+      const febUtc = slot.ts >= '2026-02-01T00:00:00.000Z' && slot.ts < '2026-03-01T00:00:00.000Z';
+      slot.sourceKind = febUtc ? 'vrm_import' : 'local_live';
+      slot.sourceKinds = [slot.sourceKind];
+      if (febUtc) slot.vrmFlows = true;
+    }
+    // Ladestand je Slot-Zeitpunkt: 0,01 % je Stunde seit 01.01.2026.
+    const samples = store.data.slots.map((s) => [new Date(s.ts).getTime(), (new Date(s.ts).getTime() - SOC_ORIGIN) / HOUR * 0.01]);
+    store.getSeriesBoundaryValues = async ({ seriesKey, start, end }) => {
+      if (seriesKey !== 'second_battery_soc_pct') return { startValue: null, endValue: null };
+      const inside = samples.filter(([t]) => t >= new Date(start).getTime() && t < new Date(end).getTime());
+      return { startValue: inside[0]?.[1] ?? null, endValue: inside.at(-1)?.[1] ?? null };
+    };
+    return store;
+  };
+  const runtimeFor = (store) => createHistoryRuntime({
+    store,
+    getPricingConfig: () => PRICING,
+    getOptimizerConfig: () => ({ batteryCapacityWh: 43000 }),
+    getApplicableValueSummary: () => ({ applicableValueCtKwhByMonth: {}, getApplicableValueCtKwh: () => 8.1 }),
+    getCurrentDate: () => TODAY,
+    getSecondBatteryCapacityKwh: () => 10
+  });
+  const expected = await runtimeFor(withSecond(createStore({ withCache: false }))).getSummary({ view: 'year', date: TODAY, solarMarketValues: MARKET });
+  // Fenster: erster Wert 01.01. 00:00Z, letzter 05.09. 08:00Z = 5936 h = 59,36 %.
+  // VRM-Abschnitt Februar: von 31.01. 20:00Z bis 01.03. 00:00Z = 676 h = 6,76 %.
+  // Lokal 52,6 % × 10 kWh = 5,26 kWh.
+  assert.equal(expected.kpis.secondBatteryStoredDeltaKwh, 5.26);
+
+  const store = withSecond(createStore({ withCache: true }));
+  const runtime = runtimeFor(store);
+  const cold = await runtime.getSummary({ view: 'year', date: TODAY, solarMarketValues: MARKET });
+  assert.deepStrictEqual(cold, expected);
+  const warm = await runtime.getSummary({ view: 'year', date: TODAY, solarMarketValues: MARKET });
+  assert.deepStrictEqual(warm, expected);
+});
