@@ -1282,7 +1282,9 @@ export function createApiRoutes(ctx) {
       host: host.slice(0, 200),
       path: String(pathname).slice(0, 200),
       method: req.method,
-      hint: 'Host ist kein Heimnetz-Name: Token nutzen oder den Namen in allowedHosts eintragen',
+      // Nicht einfach „in allowedHosts eintragen“: ab dem ersten Eintrag ist
+      // die Liste eine Sperrliste für alle anderen Namen (IP, .local, Kiosk).
+      hint: 'Host ist kein Heimnetz-Name: mit API-Token anmelden. allowedHosts nur nutzen, wenn dort alle genutzten Namen samt Port stehen — sonst sperrt die Liste IP, .local und Kiosk aus.',
     }, actorContext(req));
   }
 
@@ -1787,22 +1789,22 @@ export function createApiRoutes(ctx) {
     // DNS-Rebinding (Review 2026-10-25): alle Freibriefe (auch Loopback — der
     // Kiosk-Browser auf der Box) nur bei einem Host, den kein Angreifer über
     // das öffentliche DNS steuern kann. Mit Token geht es unten weiter.
-    const hostTrusted = isTrustedHostRequest(req);
-    const refusedForHost = !bearerOnly && !hostTrusted
-      && (isLoopbackRequest(req) || isLocalNetworkRequest(req)) && !hasValidBearer(req);
-    if (refusedForHost) logHostRefusal(req, 'lan_bypass_refused_host');
-    if (!bearerOnly && hostTrusted) {
+    // Erst prüfen, ob ein Freibrief griffe, dann den Host — so wird eine
+    // Verweigerung nur protokolliert, wenn sie wirklich etwas kostet.
+    let bypassEligible = false;
+    if (!bearerOnly) {
       const lanTrustRaw = getCfg().security?.lanTrust;
       const lanTrust = lanTrustRaw == null ? 'open' : String(lanTrustRaw);
-      if (isLoopbackRequest(req)) return true;                     // the box itself
-      if (lanTrust === 'open') {
-        if (isLocalNetworkRequest(req)) return true;
-      } else if (lanTrust === 'restricted') {
-        if (isLocalNetworkRequest(req) && isLanSafeRequest(req, { requireGroupEnabled: true })) return true;
+      if (isLoopbackRequest(req)) bypassEligible = true;           // the box itself
+      else if (lanTrust === 'open') bypassEligible = isLocalNetworkRequest(req);
+      else if (lanTrust === 'restricted') {
+        bypassEligible = isLocalNetworkRequest(req) && isLanSafeRequest(req, { requireGroupEnabled: true });
         // else: fall through to the Bearer check below.
       }
       // 'strict' (and any unknown explicit value) → no LAN bypass; Bearer required.
     }
+    const refusedForHost = bypassEligible && !isTrustedHostRequest(req);
+    if (bypassEligible && !refusedForHost) return true;
     // Plan 08-06 Task 2 Step 3: server-side rejection of ?token= query params.
     // syncTokenFromUrl (Plan 08-03) strips ?token= on first page load — this gate
     // refuses any direct API call with a token in the URL so it cannot leak via
@@ -1834,6 +1836,7 @@ export function createApiRoutes(ctx) {
         reason: 'token_not_configured',
         statusCode: 503,
       }, actorContext(req));
+      if (refusedForHost) logHostRefusal(req, 'lan_bypass_refused_host');
       res.writeHead(503, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'api_token_not_configured' }));
       return false;
@@ -1861,6 +1864,7 @@ export function createApiRoutes(ctx) {
       reason: auth ? 'bearer_invalid' : 'bearer_missing',
       statusCode: 401,
     }, actorContext(req));
+    if (refusedForHost) logHostRefusal(req, 'lan_bypass_refused_host');
     res.writeHead(401, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
     res.end(JSON.stringify(refusedForHost ? { error: 'unauthorized', reason: 'host_not_trusted' } : { error: 'unauthorized' }));
     return false;

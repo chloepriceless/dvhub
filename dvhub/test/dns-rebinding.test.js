@@ -233,3 +233,39 @@ describe('isTrustedBoxHost (rein)', () => {
     }
   });
 });
+
+// Review ebb962ca (P3): Verweigerung nur protokollieren/benennen, wenn der
+// Freibrief sonst gegriffen hätte — und der Hinweis darf nicht zu einer
+// allowedHosts-Liste verleiten, die alle anderen Zugänge sperrt.
+describe('DNS-Rebinding: Protokoll nur bei echtem Freibrief-Verlust', () => {
+  async function run(cfgExtra, req) {
+    const logs = [];
+    const r = await call(mockCtx(cfgExtra, logs), req);
+    return { ...r, refused: logs.filter((l) => l.event === 'lan_bypass_refused_host') };
+  }
+  it('strict: kein Freibrief ohnehin → kein Eintrag, kein host_not_trusted', async () => {
+    const r = await run({ security: { lanTrust: 'strict' } }, { path: '/api/admin/system/info', headers: { host: 'dvhub.meinedomain.de' } });
+    assert.equal(r.status, 401);
+    assert.equal(r.refused.length, 0);
+    assert.equal(r.body?.reason, undefined);
+  });
+  it('restricted: Endpunkt ohne Heimnetz-Freigabe → kein Eintrag', async () => {
+    const r = await run({ security: { lanTrust: 'restricted' } }, { path: '/api/admin/system/info', headers: { host: 'dvhub.meinedomain.de' } });
+    assert.equal(r.status, 401);
+    assert.equal(r.refused.length, 0);
+  });
+  it('Config-Export mit gültigem ?token= → kein Eintrag', async () => {
+    const r = await run({}, { path: `/api/config/export?token=${API_TOKEN}`, headers: { host: 'dvhub.meinedomain.de' } });
+    assert.notEqual(r.status, 401);
+    assert.equal(r.refused.length, 0);
+  });
+  it('open: Eintrag mit Hinweis auf Token, allowedHosts nur vollständig mit Port', async () => {
+    const r = await run({}, { path: '/api/admin/system/info', headers: { host: 'dvhub.meinedomain.de' } });
+    assert.equal(r.status, 401);
+    assert.equal(r.body?.reason, 'host_not_trusted');
+    assert.equal(r.refused.length, 1);
+    assert.match(r.refused[0].data.hint, /Token/);
+    assert.match(r.refused[0].data.hint, /Port/);
+    assert.match(r.refused[0].data.hint, /alle/);
+  });
+});
