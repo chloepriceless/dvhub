@@ -18,7 +18,7 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'timesc
 // Was packagecloud.io/timescale/timescaledb anbietet (Stand 21.10.2026, per curl geprueft).
 const SERVED = ['debian/ bookworm', 'debian/ trixie', 'ubuntu/ noble', 'ubuntu/ resolute'];
 
-function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false } = {}) {
+function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsp-'));
   const bin = join(dir, 'bin');
   execFileSync('mkdir', ['-p', bin]);
@@ -65,7 +65,11 @@ if [[ "$1" == update ]]; then
 fi
 if [[ "$1" == install && " $* " == *" timescaledb-2-postgresql-"* ]]; then
   if [[ " $* " == *" --download-only "* ]]; then ${downloadFails ? 'exit 100' : 'exit 0'}; fi
+  ${tslPartial ? `echo timescaledb-2-loader-postgresql-18 >> "${pkgDb}"; exit 100` : ''}
   ${tslInstallFails ? 'exit 100' : ':'}
+fi
+if [[ "$1" == install && " $* " != *" --download-only "* && " $* " == *" postgresql-18-timescaledb "* ]]; then
+  ${apacheReinstallFails ? 'exit 100' : ':'}
 fi
 if [[ "$1" == install && " $* " != *" --download-only "* ]]; then
   for a in "$@"; do case "$a" in install|-y|-qq|--*) ;; *-) sed -i.bak "/^\${a%-}$/d" "${pkgDb}" ;; *) echo "$a" >> "${pkgDb}" ;; esac; done
@@ -100,7 +104,7 @@ exit 0`);
   const run = () => execFileSync('bash', [SCRIPT], {
     env: {
       PATH: `${bin}:${process.env.PATH}`, TS_PROVISION_EUID: '0', LANG: 'de_DE.UTF-8',
-      PG_ETC: join(dir, 'postgresql'),
+      PG_ETC: join(dir, 'postgresql'), TS_DEB_CACHE: join(dir, 'deb-cache'),
       OS_RELEASE: osFile, REPO_LIST: repoList, KEYRING: keyring,
       CONFIG_PATH: join(dir, 'config.json'), DATA_DIR: dir,
     },
@@ -110,7 +114,8 @@ exit 0`);
   const list = () => (existsSync(repoList) ? readFileSync(repoList, 'utf8').trim() : null);
   const sql = () => calls().filter((l) => l.startsWith('su ')).join('\n');
   const pkgs = () => readFileSync(pkgDb, 'utf8').split('\n').filter((l) => l.includes('timescaledb'));
-  return { run, calls, list, keyring, sql, dir, pkgs, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  const runStatus = () => { try { run(); return 0; } catch (e) { return e.status; } };
+  return { run, runStatus, calls, list, keyring, sql, dir, pkgs, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 const UBUNTU_2604 = 'ID=ubuntu\nID_LIKE=debian\nVERSION_ID="26.04"\nVERSION_CODENAME=resolute\nUBUNTU_CODENAME=resolute\n';
@@ -267,5 +272,37 @@ test('Apache→Community: Reihenfolge Download → Entfernen → Installation', 
     const iInst = c.indexOf('apt-get install -y timescaledb-2-loader-postgresql-18 timescaledb-2-postgresql-18');
     assert.ok(iDl >= 0 && iDl < iRemove && iRemove < iInst, c.join(' | '));
     assert.deepEqual(s.pkgs().sort(), ['timescaledb-2-loader-postgresql-18', 'timescaledb-2-postgresql-18']);
+  } finally { s.cleanup(); }
+});
+
+// Gegenprüfung zu 5d51b339.
+test('Community halb installiert (Loader da, Paket nicht) → Loader weg, dann Apache zurück', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, tslPartial: true });
+  try {
+    s.runStatus();
+    const c = s.calls();
+    const iRmTsl = c.findIndex((l) => isRemove(l) && l.includes('timescaledb-2-loader-postgresql-18'));
+    const iApache = c.findIndex((l) => /^apt-get install -y (?!--download-only)\S*postgresql-18-timescaledb(_\S*\.deb)?$/.test(l));
+    assert.ok(iRmTsl >= 0 && iRmTsl < iApache, c.join(' | '));
+    assert.deepEqual(s.pkgs(), ['postgresql-18-timescaledb']);
+  } finally { s.cleanup(); }
+});
+
+test('Apache nach dem Entfernen nicht wieder installierbar → sichtbarer Fehler, Preload-Eintrag weg (Postgres startet)', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, tslInstallFails: true, apacheReinstallFails: true });
+  try {
+    const dropin = join(s.dir, 'postgresql', '18', 'main', 'conf.d', 'timescaledb.conf');
+    writeFileSync(dropin, "shared_preload_libraries = 'timescaledb'\n");
+    assert.equal(s.runStatus(), 1, 'kein stilles exit 0');
+    assert.equal(existsSync(dropin), false, 'ohne Bibliothek darf kein Preload-Eintrag bleiben');
+  } finally { s.cleanup(); }
+});
+
+test('Pakete in einen eigenen Ordner herunterladen (ein dpkg-Hook wie docker-clean leert den apt-Cache)', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true });
+  try {
+    s.run();
+    const dls = s.calls().filter(isDl);
+    assert.ok(dls.length >= 2 && dls.every((l) => l.includes(`-o Dir::Cache::archives=${join(s.dir, 'deb-cache')}`)), dls.join(' | '));
   } finally { s.cleanup(); }
 });
