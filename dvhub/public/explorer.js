@@ -387,6 +387,12 @@ async function fetchExplorerData() {
   }
 }
 
+// Örtliches Datum als YYYY-MM-DD (für Export-Dateinamen). toISOString() wäre
+// das UTC-Datum — ein Export um 00:30 trug sonst den Vortag im Namen.
+function localDateStamp(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function aggregateSlots(slots, agg) {
   if (agg === '15min') return slots;
   const buckets = new Map();
@@ -1027,7 +1033,7 @@ function initExplorer() {
     if (btn) { btn.disabled = true; btn.textContent = 'Exportiere…'; }
     try {
       const params = buildExportParams();
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localDateStamp();
       await downloadServerExport(`/api/history/raw/export.csv?${params.toString()}`, `dvhub-export-${today}.csv`);
       setStatus('CSV-Export abgeschlossen.');
     } catch (e) {
@@ -1050,7 +1056,7 @@ function initExplorer() {
     if (btn) { btn.disabled = true; btn.textContent = 'Exportiere…'; }
     try {
       const params = buildExportParams();
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localDateStamp();
       await downloadServerExport(`/api/history/raw/export.parquet?${params.toString()}`, `dvhub-export-${today}.parquet`);
       setStatus('Parquet-Export abgeschlossen.');
     } catch (e) {

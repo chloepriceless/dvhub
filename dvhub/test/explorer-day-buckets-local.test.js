@@ -71,3 +71,13 @@ test('Tagesbündel: Beschriftung zeigt den örtlichen Tag, auch westlich von UTC
   assert.equal(buckets.length, 1);
   assert.equal(localDay(buckets[0].ts), '2026-10-25');
 }));
+
+// Codex-/Claude-Review zu 024cf847: Export-Dateinamen trugen das UTC-Datum —
+// ein Export um 00:30 am 25.10. hieß dvhub-export-2026-10-24.csv.
+test('Export-Dateiname: örtliches Datum (Berlin 00:30 → 25.10.)', () => withTz('Europe/Berlin', () => {
+  const explorer = loadExplorer();
+  assert.equal(typeof explorer.localDateStamp, 'function');
+  assert.equal(explorer.localDateStamp(new Date('2026-10-24T22:30:00Z')), '2026-10-25');
+  const source = fs.readFileSync(fileURLToPath(new URL('../public/explorer.js', import.meta.url)), 'utf8');
+  assert.doesNotMatch(source, /toISOString\(\)\.slice\(0, ?10\)/, 'kein UTC-Datum mehr im Explorer');
+}));
