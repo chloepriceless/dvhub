@@ -73,13 +73,23 @@ jobs:
       # Tags (direkte Pushes sind hier üblich, Releases sind nur Tags).
       - name: Verlauf für den Agenten
         run: |
+          set -euo pipefail
+          G="git -c core.hooksPath=/dev/null"
+          # Für jeden main-Commit (first-parent) das erste Release, das ihn enthält:
+          # alt → neu laufen, offene Commits bekommen den nächsten Tag; danach „dev“.
+          $G log --first-parent --since='4 months ago' --reverse --format='%h%x09%D' HEAD | awk -F'\t' '
+            { c[NR]=$1; n=NR; t="";
+              if (match($2, /tag: v[0-9]+\.[0-9]+\.[0-9]+([,)]|$)/)) { t=substr($2, RSTART+5, RLENGTH-5); sub(/[,)]$/, "", t) }
+              if (t != "") { for (k=start+1; k<=NR; k++) rel[c[k]]=t; start=NR } }
+            END { for (k=start+1; k<=n; k++) rel[c[k]]="dev"; for (h in rel) print h, rel[h] }' > "$RUNNER_TEMP/rel.txt"
           {
             echo "# Tags (Release = vX.Y.Z), neueste zuerst: Tag Datum Commit"
-            git -c core.hooksPath=/dev/null tag -l 'v*' --sort=-creatordate --format='%(refname:short) %(creatordate:short) %(if)%(*objectname)%(then)%(*objectname:short)%(else)%(objectname:short)%(end)' | head -40
+            $G tag -l 'v*' --sort=-creatordate --format='%(refname:short) %(creatordate:short) %(if)%(*objectname)%(then)%(*objectname:short)%(else)%(objectname:short)%(end)' | head -40
             echo
-            echo "# Commits auf main (first-parent), neueste zuerst; (tag: …) markiert Releases."
-            echo "# Ein Commit ist in einem Release enthalten, wenn er UNTER dessen Tag-Zeile steht."
-            git -c core.hooksPath=/dev/null log --first-parent --since='4 months ago' --no-ext-diff --decorate=short --name-only --format='%n%h %ad%d %s' --date=short HEAD | head -6000
+            echo "# Commits auf main (first-parent), neueste zuerst."
+            echo "# [in vX.Y.Z] = erstes Release, das den Commit enthält; [in dev] = noch in keinem Release."
+            $G log --first-parent --since='4 months ago' --no-ext-diff --name-only --format='%n%h %ad %s' --date=short HEAD | head -6000 \
+              | awk 'NR==FNR { r[$1]=$2; next } /^[0-9a-f]{7,} [0-9]{4}-/ { h=$1; $1=""; print h " [in " (h in r ? r[h] : "?") "]" $0; next } { print }' "$RUNNER_TEMP/rel.txt" -
           } > "$RUNNER_TEMP/sekretaer-verlauf.txt"
 
       - name: Claude
@@ -162,9 +172,8 @@ jobs:
                `gh issue list --state all --limit 20 --search "<terms> created:>=${{ steps.window.outputs.since }}" --json number,title,state,url`
                (keep the date qualifier, do not paginate). Also check merged PRs:
                `gh pr list --state merged --limit 20 --search "<terms> merged:>=${{ steps.window.outputs.since }}" --json number,title,url`.
-               If a commit in that file already fixes it, the first release that ships it is
-               the nearest `(tag: vX.Y.Z)` line ABOVE that commit; a fix above the newest tag
-               is only in the dev channel so far.
+               If a commit in that file already fixes it, its line says `[in vX.Y.Z]`, the
+               first release that ships it, or `[in dev]` if no release has it yet.
                In analyze/fix mode with a non-empty comment id `${{ inputs.comment_id }}`, read
                the invoking comment with
                `gh api repos/${{ github.repository }}/issues/comments/${{ inputs.comment_id }} --jq .body`
