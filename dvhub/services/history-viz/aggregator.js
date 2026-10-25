@@ -37,6 +37,18 @@ function berlinMidnightUtcMs(y, m1, d) {
   const offH = berlinParts(new Date(guess)).hour; // 1 (CET) or 2 (CEST)
   return guess - offH * 3600000;
 }
+// Berliner Kalendertag eines Zeitpunkts als UTC-Mitternacht (Datumsdarstellung
+// wie resolveRange) bzw. dessen Beginn (Berliner Mitternacht) als ISO-Zeitpunkt.
+// Fuer UTC-Mitternacht und Berliner Mitternacht eines Datums gleich: beide
+// liegen in Berlin auf diesem Datum.
+function berlinDayLabelMs(ms) {
+  const b = berlinParts(new Date(ms));
+  return Date.UTC(b.year, b.month - 1, b.day);
+}
+function berlinDayStartIso(value) {
+  const b = berlinParts(new Date(value));
+  return new Date(berlinMidnightUtcMs(b.year, b.month, b.day)).toISOString();
+}
 //
 // Plan 09.3-01 Wave 1 — Phase 09.3 Aurora History-Viz Cards aggregator
 // foundation. Implements D-08 (factory under dvhub/services/history-viz),
@@ -367,9 +379,10 @@ export function createHistoryVizAggregator(ctx) {
   // Ansicht fragten energy_slots_15m für denselben Zeitraum je einzeln ab, nur
   // mit anderen Reihen — auf dem eHive (Cortex-A55) 3–15 s pro Karte, alle
   // gleichzeitig. Jetzt einmal alle Reihen (deduppt wie unten) für den
-  // Zeitraum laden, 2 min vorhalten, je Karte in JS bündeln. 15 min / 1 h /
-  // 1 Tag sind in time_bucket auf UTC ausgerichtet — Bündeln per
-  // floor(ts / Raster) ist identisch. Jahr/Alle bleiben in SQL (Datenmenge).
+  // Zeitraum laden, 2 min vorhalten, je Karte in JS bündeln. 15 min / 1 h
+  // sind in time_bucket auf UTC ausgerichtet — Bündeln per floor(ts / Raster)
+  // ist identisch; 1 Tag geht in beiden Pfaden nach Berliner Kalendertag.
+  // Jahr/Alle bleiben in SQL (Datenmenge).
   const SHARED_SLOTS_TTL_MS = 120_000;
   const SHARED_SLOTS_MAX = 3;
   const sharedSlots = new Map(); // `${start}|${end}` → { at, promise }
@@ -418,18 +431,37 @@ export function createHistoryVizAggregator(ctx) {
     return promise;
   }
 
-  async function fetchBucketedEnergySlots({ seriesKeys, start, end, view, intervalOverride = null }) {
+  async function fetchBucketedEnergySlots({ seriesKeys, start: rangeStart, end: rangeEnd, view, intervalOverride = null }) {
     const bucket = intervalOverride || bucketIntervalForView(view);
     const bucketSeconds = BUCKET_SECONDS[bucket] || 900;
+    // Tages-Buckets (Jahr/Alle) nach BERLINER Kalendertag (Review 25.10.2026):
+    // time_bucket('1 day') schnitt in UTC, die ersten 1–2 Stunden eines Tages
+    // landeten so am Monatsersten im Vormonat. Der Zeitraum beginnt und endet
+    // dann an Berliner Mitternacht; bucket_ts ist der Berliner Kalendertag als
+    // UTC-Mitternacht (dieselbe Datumsdarstellung wie resolveRange), damit die
+    // Monats-/Jahres-/Wochentagszuordnung der Karten unveraendert stimmt.
+    // 15 min und 1 h liegen in UTC und Berlin auf denselben Grenzen.
+    const berlinDays = bucket === '1 day';
+    const start = berlinDays ? berlinDayStartIso(rangeStart) : rangeStart;
+    const end = berlinDays ? berlinDayStartIso(rangeEnd) : rangeEnd;
     if (view !== 'year' && view !== 'all' && db && typeof db.query === 'function') {
       const bySeries = await loadSharedEnergySlots(start, end);
       const bucketMs = bucketSeconds * 1000;
+      const dayLabelByHour = new Map(); // UTC-Stunde → Berliner Tag (Intl ist teuer)
+      const floorBucket = berlinDays
+        ? (ms) => {
+          const hour = Math.floor(ms / 3_600_000);
+          let label = dayLabelByHour.get(hour);
+          if (label == null) { label = berlinDayLabelMs(ms); dayLabelByHour.set(hour, label); }
+          return label;
+        }
+        : (ms) => Math.floor(ms / bucketMs) * bucketMs;
       const sums = new Map(); // `${bucketMs}|${key}` → { key, t, kwh }
       for (const key of seriesKeys) {
         const e = bySeries.get(key);
         if (!e) continue;
         for (let i = 0; i < e.ts.length; i += 1) {
-          const t = Math.floor(e.ts[i] / bucketMs) * bucketMs;
+          const t = floorBucket(e.ts[i]);
           const k = `${t}|${key}`;
           const acc = sums.get(k);
           if (acc) acc.kwh += e.kwh[i];
@@ -447,6 +479,9 @@ export function createHistoryVizAggregator(ctx) {
     }
     // `bucket` is one of three fixed literals (bucketIntervalForView /
     // intervalOverride) — never user input — so it is safe to inline.
+    const bucketExpr = berlinDays
+      ? "(date_trunc('day', slot_start_utc AT TIME ZONE 'Europe/Berlin') AT TIME ZONE 'UTC')"
+      : `time_bucket('${bucket}', slot_start_utc)`;
     const sql = `
       WITH dedup AS (
         SELECT DISTINCT ON (slot_start_utc, series_key)
@@ -466,7 +501,7 @@ export function createHistoryVizAggregator(ctx) {
         WHERE source_kind = 'vrm_import' AND NOT (series_key = ANY($4))
       )
       SELECT series_key AS key,
-             time_bucket('${bucket}', slot_start_utc) AS bucket_ts,
+             ${bucketExpr} AS bucket_ts,
              SUM(value_num) AS kwh
       FROM dedup d
       WHERE NOT (d.series_key = ANY($4)
