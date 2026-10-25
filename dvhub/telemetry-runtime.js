@@ -211,10 +211,15 @@ export function sampleEnergyBySlot({ ts, value, resolutionSeconds, spread = fals
   let endMs = startMs + seconds * 1000;
   const next = nextStartMs == null ? NaN : Number(nextStartMs);
   if (seconds >= 86400 && Number.isFinite(next) && next > startMs && Math.abs(next - endMs) <= 3_600_000) endMs = next;
+  // Energie der Probe = Wert × Aufloesung (wie ueberall im Store); sie verteilt
+  // sich nach Zeitanteil auf [startMs, endMs). Bei 23/25-h-Tagen bleibt sie
+  // damit gleich, nur der Anteil je Viertelstunde aendert sich.
+  const energyKwh = (numeric * seconds) / 3600000;
+  const spanMs = endMs - startMs;
   const out = [];
   for (let slotStartMs = firstSlotMs; slotStartMs < endMs; slotStartMs += slotMs) {
     const overlapMs = Math.min(endMs, slotStartMs + slotMs) - Math.max(startMs, slotStartMs);
-    if (overlapMs > 0) out.push({ slotStartMs, valueNum: (numeric * overlapMs) / 3600000000 });
+    if (overlapMs > 0) out.push({ slotStartMs, valueNum: (energyKwh * overlapMs) / spanMs });
   }
   return out;
 }
