@@ -394,7 +394,10 @@ function aggregateSlots(slots, agg) {
     const d = new Date(slot.ts);
     let key;
     if (agg === '1h') { d.setMinutes(0, 0, 0); key = d.toISOString(); }
-    else { key = d.toISOString().slice(0, 10); }
+    // Tag = ÖRTLICHER Tag (Review 25.10.2026): der Schlüssel ist die örtliche
+    // Mitternacht als Zeitpunkt. Vorher das UTC-Datum — Berlin 00:00–02:00
+    // zählte zum Vortag, und die Beschriftung las 'YYYY-MM-DD' als UTC.
+    else { d.setHours(0, 0, 0, 0); key = d.toISOString(); }
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(slot);
   }
