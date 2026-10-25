@@ -17,7 +17,7 @@ import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automati
 // (evalTimeout); safeInterval trägt den 5-s-Zero-Feed-in-Regelkreis (B-1112
 // Stufe 2), damit ein Throw im Tick den Takt nicht stillschweigend beendet.
 import { safeInterval } from './services/safe-async.js';
-import { encodeSunspecFloat32 } from './services/inverter/sunspec.js';
+import { encodeSunspecFloat32, decodeSunspecFloat32 } from './services/inverter/sunspec.js';
 import { getPowerLimits } from './services/power-limits.js';
 // Zweite GX am selben Anschluss: EOS-Ziele gelten fuer beide Akkus zusammen.
 import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
@@ -162,6 +162,58 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
+  function normWriteType(conf) {
+    const writeTypeRaw = String(conf.writeType || (conf.signed ? 'int16' : 'uint16')).toLowerCase();
+    return writeTypeRaw === 'signed' || writeTypeRaw === 's16'
+      ? 'int16'
+      : writeTypeRaw === 'unsigned' || writeTypeRaw === 'u16'
+        ? 'uint16'
+        : writeTypeRaw;
+  }
+
+  function normWordOrder(conf) {
+    const wordOrderRaw = String(conf.wordOrder || 'be').toLowerCase();
+    return (wordOrderRaw === 'le' || wordOrderRaw === 'little' || wordOrderRaw === 'swapped' || wordOrderRaw === 'swap') ? 'le' : 'be';
+  }
+
+  // Gegenstück zu toRawForWrite für saveBefore (Review Regelung 25.10.): den
+  // gelesenen Registerwert mit DEMSELBEN Typ (Vorzeichen, 32 bit, Float) und
+  // denselben Sentinel-Regeln wie der Lesepfad (polling.js pointFromRegs) in den
+  // Engineering-Wert zurückrechnen, den toRawForWrite wieder exakt kodiert.
+  // Vorher: `regs[0] * scale + offset` vorzeichenlos — Victron 2706 ab Werk -1
+  // (0xFFFF) wurde 6 553 500 W, der restore warf „int16 range exceeded“.
+  function fromRawForSave(regs, conf) {
+    const writeType = normWriteType(conf);
+    const scale = Number(conf.scale ?? 1);
+    const offset = Number(conf.offset ?? 0);
+    const words = (Array.isArray(regs) ? regs : []).map((w) => Number(w) & 0xffff);
+    const le = normWordOrder(conf) === 'le';
+    let raw;
+    if (writeType === 'float32') {
+      const v = decodeSunspecFloat32(words, le ? 'le' : 'be');
+      if (v === null) throw new Error('saveBefore: register not implemented (float NaN)');
+      return Number((v * scale + offset).toFixed(6));
+    }
+    if (writeType === 'int32' || writeType === 'uint32') {
+      if (words.length < 2) throw new Error('saveBefore: 32-bit point needs two registers');
+      const hi = le ? words[1] : words[0];
+      const lo = le ? words[0] : words[1];
+      raw = hi * 0x10000 + lo;
+      if (writeType === 'int32' && raw > 0x7fffffff) raw -= 0x100000000;
+    } else {
+      if (!words.length) throw new Error('saveBefore: no register value');
+      raw = words[0];
+      if (writeType === 'int16' && raw >= 0x8000) raw -= 0x10000;
+    }
+    const rawSentinels = Array.isArray(conf.rawSentinels) ? conf.rawSentinels.map(Number) : [];
+    if (rawSentinels.includes(raw)) return raw;
+    if (conf.rawSentinelMap && typeof conf.rawSentinelMap === 'object') {
+      const hit = Object.entries(conf.rawSentinelMap).find(([, r]) => Number(r) === raw);
+      if (hit) return Number(hit[0]);
+    }
+    return Number((raw * scale + offset).toFixed(6));
+  }
+
   function toRawForWrite(value, conf) {
     const scale = Number(conf.scale ?? 1);
     const offset = Number(conf.offset ?? 0);
@@ -191,14 +243,8 @@ export function createScheduleEvaluator(ctx) {
       return toRawForWrite(engineeringValue, { ...conf, scale: 1, offset: 0, rawSentinels: [] });
     }
 
-    const writeTypeRaw = String(conf.writeType || (conf.signed ? 'int16' : 'uint16')).toLowerCase();
-    const writeType = writeTypeRaw === 'signed' || writeTypeRaw === 's16'
-      ? 'int16'
-      : writeTypeRaw === 'unsigned' || writeTypeRaw === 'u16'
-        ? 'uint16'
-        : writeTypeRaw;
-    const wordOrderRaw = String(conf.wordOrder || 'be').toLowerCase();
-    const wordOrder = (wordOrderRaw === 'le' || wordOrderRaw === 'little' || wordOrderRaw === 'swapped' || wordOrderRaw === 'swap') ? 'le' : 'be';
+    const writeType = normWriteType(conf);
+    const wordOrder = normWordOrder(conf);
     const scaled = Math.round((engineeringValue - offset) / scale);
 
     if (writeType === 'int16') {
@@ -379,6 +425,41 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
+  // Gesicherten Wert für den restore kodieren. Rückgabe { value, encoded };
+  // encoded null = nichts Schreibbares (Sicherung kaputt, kein restoreDefault).
+  function resolveRestoreValue(step, pconf, savedValue) {
+    try {
+      return { value: savedValue, encoded: toRawForWrite(savedValue, pconf) };
+    } catch (e) {
+      // Altbestand: bis 25.10. sicherte saveBefore `regs[0] * scale + offset`
+      // vorzeichenlos und ohne Sentinels. Ergibt die Umkehrung einen 16-bit-
+      // Rohwert, ihn so dekodieren wie der Lesepfad.
+      const scale = Number(pconf.scale ?? 1);
+      const offset = Number(pconf.offset ?? 0);
+      const legacyRaw = (Number(savedValue) - offset) / scale;
+      const rounded = Math.round(legacyRaw);
+      if (normWriteType(pconf) === 'int16' && Number.isFinite(legacyRaw)
+          && Math.abs(legacyRaw - rounded) < 1e-6 && rounded >= 0x8000 && rounded <= 0xffff) {
+        try {
+          const value = fromRawForSave([rounded], pconf);
+          const encoded = toRawForWrite(value, pconf);
+          pushLog('dv_seq_restore_legacy_decoded', { point: step.point, saved: savedValue, value, raw: encoded.raw });
+          return { value, encoded };
+        } catch { /* weiter zum restoreDefault */ }
+      }
+      const fallback = step.restoreDefault;
+      let encoded = null;
+      if (fallback != null) {
+        try { encoded = toRawForWrite(fallback, pconf); } catch { encoded = null; }
+      }
+      pushLog('dv_seq_restore_invalid', {
+        point: step.point, saved: savedValue, error: e?.message || String(e),
+        fallback: encoded ? fallback : null
+      }, 'warn');
+      return { value: fallback, encoded };
+    }
+  }
+
   async function runDvControlSequence(steps) {
     const cfg = getCfg();
     const saved = (state.ctrl._dvSeqSaved ??= {});
@@ -387,22 +468,36 @@ export function createScheduleEvaluator(ctx) {
       if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
       if (pconf.address == null) throw new Error(`sequence point unresolved (sunspec scan pending): ${step.point}`);
       let value = step.value;
+      let encoded;
       if (step.restore === true) {
         value = saved[step.point] ?? step.restoreDefault;
         if (value == null) continue; // nie geblockt und kein Default → no-op
+        if (saved[step.point] != null) {
+          // Review Regelung 25.10.: eine Sicherung, die sich nicht kodieren lässt,
+          // darf die Freigabe nicht für immer blockieren (vorher warf jeder Takt,
+          // die Sperre blieb stehen). Erst als Altbestand umdeuten (bis zum Fix
+          // vorzeichenlos gesichert: raw·scale+offset), sonst restoreDefault.
+          const restored = resolveRestoreValue(step, pconf, saved[step.point]);
+          if (restored.encoded == null) {
+            delete saved[step.point];
+            persistDvSeqSaved();
+            continue;
+          }
+          value = restored.value;
+          encoded = restored.encoded;
+        }
       } else if (step.saveBefore === true && saved[step.point] === undefined) {
+        const words = ['int32', 'uint32', 'float32'].includes(normWriteType(pconf)) ? 2 : 1;
         const regs = await transport.mbRequest({
           fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
-          address: pconf.address, quantity: 1, timeoutMs: pconf.timeoutMs
+          address: pconf.address, quantity: words, timeoutMs: pconf.timeoutMs
         });
-        // Rohwert rückwärts durch scale/offset in den Engineering-Wert, damit
-        // der restore-Write denselben toRawForWrite-Weg nehmen kann.
-        const scale = Number(pconf.scale ?? 1);
-        const offset = Number(pconf.offset ?? 0);
-        saved[step.point] = Number(regs[0]) * scale + offset;
+        // Rohwert mit Vorzeichen/Sentinels in den Engineering-Wert, damit der
+        // restore-Write denselben toRawForWrite-Weg exakt zurück nimmt.
+        saved[step.point] = fromRawForSave(regs, pconf);
         persistDvSeqSaved();
       }
-      const encoded = toRawForWrite(value, pconf);
+      encoded ??= toRawForWrite(value, pconf);
       const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
       const fc = Number(pconf.fc || (words.length > 1 ? 16 : 6));
       if (fc === 16 || words.length > 1) {
