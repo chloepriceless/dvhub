@@ -114,6 +114,19 @@ function setControlMsg(text, isErr = false) {
   el.classList.add(isErr ? 'off' : 'ok');
 }
 
+// Zahl aus einem Eingabefeld, das an den Wechselrichter geht (Review 25.10.2026).
+// Number('') ist 0 und besteht Number.isFinite — ein leer geräumtes Feld (oder
+// eines, das der Browser als ungültig verwirft: dann ist value === '') ging so
+// als 0 raus: Laden aus, Max-Entladung 0 = Halten, Netz-Sollwert 0. Leer wird
+// deshalb mit Meldung abgelehnt; eine eingetippte 0 bleibt gültig.
+function readRequiredNumberInput(rawValue, label) {
+  const text = rawValue == null ? '' : String(rawValue).trim();
+  if (text === '') return { ok: false, error: `${label}: Bitte einen Wert eingeben` };
+  const value = Number(text);
+  if (!Number.isFinite(value)) return { ok: false, error: `${label}: Ungültiger Wert` };
+  return { ok: true, value };
+}
+
 // DVhub Powerflow Constellation — handle to the mounted component.
 let powerflowInstance = null;
 
@@ -1673,10 +1686,9 @@ function applyMinSocPendingVisualState(shouldBlink) {
 }
 
 async function submitMinSocUpdate({ sliderValue, currentReadback, apiFetchImpl = apiFetch }) {
-  const value = Number(sliderValue);
-  if (!Number.isFinite(value)) {
-    return { ok: false, error: 'Min SOC: Ungültiger Wert' };
-  }
+  const parsed = readRequiredNumberInput(sliderValue, 'Min SOC');
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  const value = parsed.value;
   const request = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -1760,10 +1772,9 @@ function handleMaxDischargeRowKeydown(event) {
 }
 
 async function submitMaxDischargeUpdate({ rawValue, apiFetchImpl = apiFetch }) {
-  const value = Number(rawValue);
-  if (!Number.isFinite(value)) {
-    return { ok: false, error: 'Max Entladung: Ungültiger Wert' };
-  }
+  const parsed = readRequiredNumberInput(rawValue, 'Max Entladung');
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  const value = parsed.value;
   // Operator sanity check — mirrors manualWriteMaxDischarge: typos above the
   // inverter's typical rating get a confirm. -1 / 0 / normal caps pass silently.
   if (value > 15000 && typeof window !== 'undefined' && typeof window.confirm === 'function') {
@@ -2598,8 +2609,9 @@ const refreshEpex = withWidgetBoundary('epex', async function refreshEpex() {
 /* --- Manual Write (separate buttons) --- */
 
 async function manualWriteGrid() {
-  const value = Number(document.getElementById('manualGridValue')?.value);
-  if (!Number.isFinite(value)) return setControlMsg('Grid Setpoint: Ungültiger Wert', true);
+  const parsed = readRequiredNumberInput(document.getElementById('manualGridValue')?.value, 'Grid Setpoint');
+  if (!parsed.ok) return setControlMsg(parsed.error, true);
+  const value = parsed.value;
   const res = await apiFetch('/api/control/write', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -2612,8 +2624,9 @@ async function manualWriteGrid() {
 }
 
 async function manualWriteCharge() {
-  const value = Number(document.getElementById('manualChargeValue')?.value);
-  if (!Number.isFinite(value)) return setControlMsg('Charge Current: Ungültiger Wert', true);
+  const parsed = readRequiredNumberInput(document.getElementById('manualChargeValue')?.value, 'Charge Current');
+  if (!parsed.ok) return setControlMsg(parsed.error, true);
+  const value = parsed.value;
   const res = await apiFetch('/api/control/write', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -2626,8 +2639,9 @@ async function manualWriteCharge() {
 }
 
 async function manualWriteMaxDischarge() {
-  const value = Number(document.getElementById('manualMaxDischargeValue')?.value);
-  if (!Number.isFinite(value)) return setControlMsg('Max Discharge: Ungültiger Wert', true);
+  const parsed = readRequiredNumberInput(document.getElementById('manualMaxDischargeValue')?.value, 'Max Discharge');
+  if (!parsed.ok) return setControlMsg(parsed.error, true);
+  const value = parsed.value;
   // Operator sanity check — prevents accidentally typing 24000 when the inverter
   // is rated 18 kW. Only triggers above 15 kW; -1 / 0 / typical caps pass silently.
   if (value > 15000) {
