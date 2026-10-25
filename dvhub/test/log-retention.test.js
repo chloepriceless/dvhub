@@ -104,6 +104,34 @@ test('Vollständig: nichts wird verdichtet oder gelöscht', async () => {
   assert.equal(db.calls.length, 0);
 });
 
+// Review 25.10.2026: optimizer_runs wuchs unbegrenzt (prod 32 005 Zeilen / 32 MB,
+// je Schleifendurchgang eine Zeile mit result_json). Nach 14 Tagen gehen Läufe,
+// die keine Reihen mehr haben (nach dem Ausdünnen), in Paketen bis nichts mehr kommt.
+test('Läufe ohne Reihen gehen nach 14 Tagen, paketweise und nach dem Ausdünnen', async () => {
+  const db = fakeDb();
+  const batches = [5000, 1200, 0];
+  const query = db.query.bind(db);
+  db.query = async (sql, params) => {
+    const res = await query(sql, params);
+    return /^DELETE FROM optimizer_runs\b/.test(String(sql).trim()) ? { rows: [], rowCount: batches.shift() ?? 0 } : res;
+  };
+  const r = await createLogRetention({ getDb: () => db, getCfg: cfg, now: () => NOW }).runOnce();
+  const seq = db.calls.map((c) => c.sql);
+  const runDeletes = db.calls.filter((c) => /^DELETE FROM optimizer_runs\b/.test(c.sql));
+  assert.equal(runDeletes.length, 3, 'bis ein Paket leer bleibt');
+  assert.equal(runDeletes[0].params[0], new Date(NOW - 14 * 86_400_000).toISOString(), 'Stichtag wie die Einzelwerte');
+  assert.ok(runDeletes[0].params[1] > 0, 'Paketgröße');
+  assert.match(runDeletes[0].sql, /NOT EXISTS \(SELECT 1 FROM optimizer_run_series/, 'Läufe mit Reihen bleiben');
+  assert.match(runDeletes[0].sql, /DISTINCT ON \(optimizer\)/, 'der jüngste Lauf je Optimierer bleibt');
+  const lastSeriesStep = Math.max(
+    seq.findIndex((s) => s.startsWith('DELETE FROM optimizer_run_series WHERE optimizer_run_id IN')),
+    seq.findIndex((s) => s.includes('count(DISTINCT optimizer_run_id) > 1'))
+  );
+  assert.ok(seq.indexOf(runDeletes[0].sql) > lastSeriesStep, 'nach dem Ausdünnen der Reihen');
+  assert.equal(r.optimizerRuns, 6200);
+  assert.ok(r.deleted >= 6200);
+});
+
 test('Laufreihen: je Tag bleibt ein Plan (Day-Ahead vom Vortag), nicht der letzte Lauf', async () => {
   const db = fakeDb();
   await createLogRetention({ getDb: () => db, getCfg: cfg, now: () => NOW }).runOnce();

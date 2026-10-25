@@ -5,7 +5,7 @@
 // epex_dayahead_arrived), sonst ab 14:30 am Vortag; nur die Slots des Tages.
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { SERIES_RETENTION_SQL } from '../services/log-retention.js';
+import { OPTIMIZER_RUN_RETENTION_SQL, SERIES_RETENTION_SQL } from '../services/log-retention.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
@@ -74,6 +74,25 @@ describe('Laufreihen: Day-Ahead-Plan je Tag (PostgreSQL)', { skip: !DATABASE_URL
     assert.deepEqual(await runsOnDay('2026-09-11'), [2, 3, 4, 5, 6], 'Lauf 2 reicht bis 00:00');
     await client.query(SERIES_RETENTION_SQL.thinSeriesDay, ['2026-09-11', TZ]);
     assert.deepEqual(await runsOnDay('2026-09-11'), [6]);
+  });
+
+  it('Läufe: ohne Reihen und älter als der Stichtag weg, der jüngste je Optimierer bleibt', async () => {
+    await client.query(`CREATE TABLE lr_runs (id bigint PRIMARY KEY, optimizer text NOT NULL, run_started_at timestamptz NOT NULL);
+      CREATE TABLE lr_series (optimizer_run_id bigint NOT NULL)`);
+    await client.query(`INSERT INTO lr_runs VALUES
+      (10, 'eos', '2026-09-01T10:00:00Z'),    -- alt, ohne Reihen → weg
+      (11, 'eos', '2026-09-01T10:05:00Z'),    -- alt, behaltener Tagesplan (Reihen) → bleibt
+      (12, 'eos', '2026-09-20T10:00:00Z'),    -- nach dem Stichtag → bleibt
+      (20, 'emhass', '2026-08-01T10:00:00Z'), -- alt, ohne Reihen → weg
+      (21, 'emhass', '2026-08-02T10:00:00Z')  -- alt, aber jüngster emhass-Lauf → bleibt`);
+    await client.query('INSERT INTO lr_series VALUES (11)');
+    const text = OPTIMIZER_RUN_RETENTION_SQL.deleteRunsWithoutSeries
+      .replaceAll('optimizer_run_series', 'lr_series').replaceAll('optimizer_runs', 'lr_runs');
+    const del = await client.query(text, [at('2026-09-10T00:00:00Z'), 1000]);
+    assert.equal(del.rowCount, 2);
+    const left = (await client.query('SELECT id FROM lr_runs ORDER BY id')).rows.map((r) => Number(r.id));
+    assert.deepEqual(left, [11, 12, 21]);
+    assert.equal((await client.query(text, [at('2026-09-10T00:00:00Z'), 1000])).rowCount, 0, 'idempotent');
   });
 
   it('kein Lauf nach dem Anker: der früheste mit Werten des Tages bleibt', async () => {
