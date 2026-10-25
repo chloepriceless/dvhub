@@ -391,7 +391,7 @@ function getOrCreateVrmAggregate(bucket, type, code) {
   return aggregate;
 }
 
-function accumulateVrmAggregate(bucket, { type, code, rawValue, durationSeconds }) {
+function accumulateVrmAggregate(bucket, { type, code, rawValue, durationSeconds, energyShare = 1 }) {
   const numeric = Number(rawValue);
   if (!Number.isFinite(numeric)) return;
   const aggregate = getOrCreateVrmAggregate(bucket, type, code);
@@ -405,7 +405,11 @@ function accumulateVrmAggregate(bucket, { type, code, rawValue, durationSeconds 
     aggregate.weightedValueSeconds += numeric * seconds;
     return;
   }
-  aggregate.totalEnergyKwh += numeric;
+  // Energiewerte (consumption/kwh) gelten fuer die ganze Probe. Liegt sie ueber
+  // mehreren 15-min-Slots (interval=hours/days), bekommt jeder Slot nur seinen
+  // Zeitanteil, sonst wuerde die volle kWh-Menge in jeden Slot kopiert.
+  const share = Number.isFinite(energyShare) && energyShare >= 0 ? energyShare : 1;
+  aggregate.totalEnergyKwh += numeric * share;
 }
 
 function addVrmValuesToSlotBuckets(slotBuckets, {
@@ -428,6 +432,12 @@ function addVrmValuesToSlotBuckets(slotBuckets, {
     const boundedEndMs = [nextMs, sampleEndMs, rangeEndMs]
       .filter((value) => Number.isFinite(value))
       .reduce((min, value) => Math.min(min, value), sampleEndMs);
+    // Eigene Dauer der Probe (bis zur naechsten Probe bzw. ihrer Aufloesung). Das
+    // Bereichsende kuerzt nur, was in den Slots landet, nicht den Nenner: der Anteil
+    // jenseits des Bereichs gehoert nicht in diesen Import.
+    const sampleSpanMs = [nextMs, sampleEndMs]
+      .filter((value) => Number.isFinite(value))
+      .reduce((min, value) => Math.min(min, value), sampleEndMs) - currentMs;
     let segmentStartMs = currentMs;
     while (segmentStartMs < boundedEndMs) {
       const slotStartIso = bucketIso(segmentStartMs, slotResolutionSeconds);
@@ -440,7 +450,8 @@ function addVrmValuesToSlotBuckets(slotBuckets, {
           type,
           code,
           rawValue: item[1],
-          durationSeconds
+          durationSeconds,
+          energyShare: sampleSpanMs > 0 ? (durationSeconds * 1000) / sampleSpanMs : 1
         });
       }
       segmentStartMs = segmentEndMs;

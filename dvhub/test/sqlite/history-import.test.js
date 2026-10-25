@@ -379,6 +379,62 @@ test('configured VRM import preserves hourly interval and stores extended flow m
   }
 });
 
+async function importVrmEnergyAtInterval({ interval, start, end, gcValues }) {
+  const store = createStore();
+  const fetchImpl = async (url) => {
+    const type = new URL(url).searchParams.get('type');
+    const records = type === 'consumption' ? { Gc: gcValues } : {};
+    return { ok: true, async json() { return { records }; } };
+  };
+  const manager = createHistoryImportManager({
+    store,
+    fetchImpl,
+    waitImpl: async () => {},
+    telemetryConfig: {
+      historyImport: { enabled: true, provider: 'vrm', vrmPortalId: '12345', vrmToken: 'token123' }
+    }
+  });
+  const result = await manager.importFromConfiguredSource({ start, end, interval });
+  const slots = store.listMaterializedEnergySlots({ start, end });
+  store.close();
+  const db = new DatabaseSync(store.dbPath);
+  const gridRows = db.prepare(
+    "SELECT ts_utc AS ts, value_num AS value FROM timeseries_samples WHERE series_key = 'grid_direct_use_w' ORDER BY ts_utc"
+  ).all();
+  db.close();
+  return { result, slots, gridRows };
+}
+
+test('configured VRM import spreads hourly kWh samples over the four quarter-hour slots instead of copying them', async () => {
+  // Gc = 1 kWh for 11:00-12:00. Each quarter gets 0.25 kWh = 1000 W average.
+  const { result, slots, gridRows } = await importVrmEnergyAtInterval({
+    interval: 'hours',
+    start: '2026-03-08T11:00:00.000Z',
+    end: '2026-03-08T12:00:00.000Z',
+    gcValues: [[Date.UTC(2026, 2, 8, 11, 0, 0), 1]]
+  });
+  assert.equal(result.ok, true);
+  assert.equal(gridRows.length, 4);
+  for (const row of gridRows) assert.ok(Math.abs(Number(row.value) - 1000) < 1e-6, `slot ${row.ts}: ${row.value} W`);
+  const totalKwh = slots.reduce((sum, slot) => sum + Number(slot.gridDirectUseKwh || 0), 0);
+  assert.ok(Math.abs(totalKwh - 1) < 1e-6, `total ${totalKwh} kWh`);
+});
+
+test('configured VRM import spreads daily kWh samples over all 96 quarter-hour slots', async () => {
+  // Gc = 24 kWh for the whole UTC day. Each of the 96 quarters gets 0.25 kWh = 1000 W.
+  const { result, slots, gridRows } = await importVrmEnergyAtInterval({
+    interval: 'days',
+    start: '2026-03-02T00:00:00.000Z',
+    end: '2026-03-03T00:00:00.000Z',
+    gcValues: [[Date.UTC(2026, 2, 2), 24]]
+  });
+  assert.equal(result.ok, true);
+  assert.equal(gridRows.length, 96);
+  for (const row of gridRows) assert.ok(Math.abs(Number(row.value) - 1000) < 1e-6, `slot ${row.ts}: ${row.value} W`);
+  const totalKwh = slots.reduce((sum, slot) => sum + Number(slot.gridDirectUseKwh || 0), 0);
+  assert.ok(Math.abs(totalKwh - 24) < 1e-6, `total ${totalKwh} kWh`);
+});
+
 test('configured VRM import aligns request ranges to interval boundaries before fetching VRM data', async () => {
   const store = createStore();
   const captured = [];
