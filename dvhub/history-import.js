@@ -24,7 +24,8 @@ const PRICE_BACKFILL_FETCH_CHUNK_DAYS = 30;
 import {
   buildHistoricalPriceTelemetrySamples,
   priceRowSpacingSeconds,
-  buildHistoricalTelemetrySample
+  buildHistoricalTelemetrySample,
+  sampleSpanEndMs
 } from './telemetry-runtime.js';
 
 const CORE_SLOT_FIELDS = [
@@ -429,7 +430,9 @@ function addVrmValuesToSlotBuckets(slotBuckets, {
     const item = sorted[index];
     const currentMs = Number(item[0]);
     const nextMs = index + 1 < sorted.length ? Number(sorted[index + 1][0]) : null;
-    const sampleEndMs = currentMs + (Math.max(1, Number(sourceResolutionSeconds || slotResolutionSeconds)) * 1000);
+    // Tagesproben an Umstellungstagen (23/25 h) bis zur naechsten Probe, wie
+    // die Slot-Verdichtung der Rohreihen (sampleSpanEndMs, Gegenpruefung e18e3741).
+    const sampleEndMs = sampleSpanEndMs(currentMs, Math.max(1, Number(sourceResolutionSeconds || slotResolutionSeconds)), nextMs);
     const boundedEndMs = [nextMs, sampleEndMs, rangeEndMs]
       .filter((value) => Number.isFinite(value))
       .reduce((min, value) => Math.min(min, value), sampleEndMs);

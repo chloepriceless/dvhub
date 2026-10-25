@@ -435,6 +435,38 @@ test('configured VRM import spreads daily kWh samples over all 96 quarter-hour s
   assert.ok(Math.abs(totalKwh - 24) < 1e-6, `total ${totalKwh} kWh`);
 });
 
+// Gegenpruefung e18e3741 (P3): am 25.10. (25 h) liess die 15-min-Aufteilung die
+// letzte Stunde des Tages leer (feste 86 400 s), die Rohreihe pv_ac_w nicht —
+// PV AC und PV zeigten fuer denselben Tag verschiedene Energie. Beide reichen
+// jetzt bis zur naechsten Tagesprobe.
+test('configured VRM daily import: PV und PV AC gleich am 25-h-Tag', async () => {
+  const store = createStore();
+  const pac = [[Date.parse('2026-10-24T22:00:00Z'), 1000], [Date.parse('2026-10-25T23:00:00Z'), 1000]];
+  const fetchImpl = async (url) => {
+    const type = new URL(url).searchParams.get('type');
+    return { ok: true, async json() { return { records: type === 'venus' ? { Pac: pac } : {} }; } };
+  };
+  const manager = createHistoryImportManager({
+    store,
+    fetchImpl,
+    waitImpl: async () => {},
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: '12345', vrmToken: 'token123' } }
+  });
+  try {
+    const result = await manager.importFromConfiguredSource({ start: '2026-10-24T22:00:00.000Z', end: '2026-10-26T23:00:00.000Z', interval: 'days' });
+    assert.equal(result.ok, true);
+    const slots = store.listMaterializedEnergySlots({ start: '2026-10-24T22:00:00.000Z', end: '2026-10-26T23:00:00.000Z' });
+    const sum = (key) => Math.round(slots.reduce((total, slot) => total + Number(slot[key] || 0), 0) * 1e6) / 1e6;
+    const lastHour = slots.filter((slot) => slot.ts >= '2026-10-25T22:00:00.000Z' && slot.ts < '2026-10-25T23:00:00.000Z');
+    assert.equal(lastHour.length, 4);
+    for (const slot of lastHour) assert.ok(Math.abs(slot.pvKwh - 0.25) < 1e-9, `${slot.ts}: ${slot.pvKwh}`);
+    assert.equal(sum('pvKwh'), 49, '25 h + 24 h à 1000 W');
+    assert.equal(sum('pvAcKwh'), sum('pvKwh'));
+  } finally {
+    store.close();
+  }
+});
+
 test('configured VRM import aligns request ranges to interval boundaries before fetching VRM data', async () => {
   const store = createStore();
   const captured = [];

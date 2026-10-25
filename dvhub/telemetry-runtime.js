@@ -198,6 +198,19 @@ export function priceRowSpacingSeconds(rows) {
  * die Probe dort (keine Ueberlappung, keine Luecke). Nur fuer Proben ab einem
  * Tag — kuerzere haben keine Umstellung, eine Luecke danach bleibt leer.
  */
+/**
+ * Ende einer Probe: ts + Aufloesung; bei Proben ab einem Tag die naechste
+ * Probe, wenn sie hoechstens eine Stunde daneben liegt (Umstellungstag mit
+ * 23/25 h, Tage auf lokaler Mitternacht). Gemeinsame Regel fuer die Slot-
+ * Verdichtung der Stores und die 15-min-Aufteilung des VRM-Imports.
+ */
+export function sampleSpanEndMs(startMs, seconds, nextStartMs = null) {
+  const endMs = startMs + seconds * 1000;
+  const next = nextStartMs == null ? NaN : Number(nextStartMs);
+  if (seconds >= 86400 && Number.isFinite(next) && next > startMs && Math.abs(next - endMs) <= 3_600_000) return next;
+  return endMs;
+}
+
 export function sampleEnergyBySlot({ ts, value, resolutionSeconds, spread = false, slotSeconds = 900, nextStartMs = null }) {
   const numeric = Number(value);
   const seconds = Number(resolutionSeconds || 0);
@@ -208,9 +221,7 @@ export function sampleEnergyBySlot({ ts, value, resolutionSeconds, spread = fals
   if (seconds <= slotSeconds || !spread) {
     return [{ slotStartMs: firstSlotMs, valueNum: (numeric * Math.min(seconds, slotSeconds)) / 3600000 }];
   }
-  let endMs = startMs + seconds * 1000;
-  const next = nextStartMs == null ? NaN : Number(nextStartMs);
-  if (seconds >= 86400 && Number.isFinite(next) && next > startMs && Math.abs(next - endMs) <= 3_600_000) endMs = next;
+  const endMs = sampleSpanEndMs(startMs, seconds, nextStartMs);
   // Der Wert ist eine mittlere Leistung: jeder Slot bekommt Leistung × Ueberlappung.
   // Ein 25-h-Tag hat damit 25/24 der Energie eines 24-h-Tages. Die Tagesproben,
   // die hier ankommen, sind venus-Leistungen (pv_ac_w aus Pac, W); kWh-Reihen
