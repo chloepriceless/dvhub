@@ -2329,15 +2329,20 @@ export function createHistoryVizAggregator(ctx) {
     const hit = getCached(key);
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
-      const { start, end } = resolveRange(view, date);
+      const range = resolveRange(view, date);
+      // Berliner Jahr und Berliner Kalendertage wie die Energie-Karten der
+      // Jahresansicht (Gegenpruefung 6f8226b5): sonst landete 01.10. 00:00–02:00
+      // im 30.09. und Neujahr 00:00–01:00 im Vorjahr.
+      const start = berlinDayStartIso(range.start);
+      const end = berlinDayStartIso(range.end);
       // Per-day signed net-€ over the 12-month window. Plan 09.4-B — the
       // per-slot net € is DERIVED ((export−import)×price/100, signed: a slot
       // that nets a cost carries a negative value), so SUM per day yields a
-      // signed daily net. date_trunc to UTC day; the matrix is plotted month×day.
+      // signed daily net. The matrix is plotted month×day.
       const sql = `
         ${dispatchSlotsCte()}
         SELECT
-          to_char(date_trunc('day', ts AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+          to_char(date_trunc('day', ts AT TIME ZONE 'Europe/Berlin'), 'YYYY-MM-DD') AS d,
           SUM(net_eur) AS net_eur
         FROM slot_net
         GROUP BY 1
@@ -2410,7 +2415,13 @@ export function createHistoryVizAggregator(ctx) {
     // same as the 0-rows path below (which returns 200 weatherDataAvailable
     // false). Matches the error-envelope shape used by every other builder.
     try {
-      const { start, end } = resolveRange(view, date);
+      const range = resolveRange(view, date);
+      // Jahr: Berliner Jahr und Berliner Tage wie die Energie-Karten
+      // (Gegenpruefung 6f8226b5); Woche/Monat bleiben bei UTC wie ihr Zeitraum.
+      const berlinYear = view === 'year';
+      const start = berlinYear ? berlinDayStartIso(range.start) : range.start;
+      const end = berlinYear ? berlinDayStartIso(range.end) : range.end;
+      const dayZone = berlinYear ? 'Europe/Berlin' : 'UTC';
       // Daily net-€ (Plan 09.4-B: derived from energy_slots_15m realized flows
       // × EPEX price) JOIN daily-mean GHI (from weather_forecasts, ghi_wm2 IS
       // NOT NULL — the open_meteo_archive provider holds a full year of
@@ -2421,7 +2432,7 @@ export function createHistoryVizAggregator(ctx) {
         ${dispatchSlotsCte()},
         daily_net AS (
           SELECT
-            to_char(date_trunc('day', ts AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+            to_char(date_trunc('day', ts AT TIME ZONE '${dayZone}'), 'YYYY-MM-DD') AS d,
             SUM(net_eur) AS net_eur,
             SUM(import_kwh) AS import_kwh,
             SUM(export_kwh) AS export_kwh
@@ -2430,7 +2441,7 @@ export function createHistoryVizAggregator(ctx) {
         ),
         daily_weather AS (
           SELECT
-            to_char(date_trunc('day', ts_utc AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+            to_char(date_trunc('day', ts_utc AT TIME ZONE '${dayZone}'), 'YYYY-MM-DD') AS d,
             AVG(ghi_wm2) AS ghi
           FROM weather_forecasts
           WHERE ts_utc >= $1::timestamptz

@@ -145,6 +145,36 @@ test('Jahres-Heatmap: Preis-Mittel je Berliner Tag wie die PV', async () => {
   assert.equal(cell('Okt', '01').neg, true, '01.10. Berlin: (−40 + 22) / 24 < 0');
 });
 
+// Gegenpruefung 6f8226b5 (P2): Kalender-Jahr und Wetter-Scatter (Jahr)
+// buendelten Tage in UTC ueber das UTC-Jahr.
+function capturingDb(rows = []) {
+  const calls = [];
+  return { calls, async query(sql, params) { calls.push({ sql: String(sql), params }); return { rows }; } };
+}
+
+test('Kalender-Jahr: Berliner Jahr und Berliner Tage', async () => {
+  const db = capturingDb([{ d: '2026-10-01', net_eur: 1.5 }]);
+  const res = await api(db).getCalYear({ view: 'year', date: '2026-06-01' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const [call] = db.calls;
+  assert.deepEqual(call.params.slice(0, 2), ['2025-12-31T23:00:00.000Z', '2026-12-31T23:00:00.000Z']);
+  assert.match(call.sql, /date_trunc\('day', ts AT TIME ZONE 'Europe\/Berlin'\)/);
+  assert.doesNotMatch(call.sql, /ts AT TIME ZONE 'UTC'/);
+  assert.deepEqual(res.body.matrix, [{ x: 'Okt', y: '1', v: 1.5 }]);
+});
+
+test('Wetter-Scatter (Jahr): Berliner Jahr und Berliner Tage, Woche bleibt UTC', async () => {
+  const db = capturingDb();
+  await api(db).getScatter({ view: 'year', date: '2026-06-01' });
+  const [call] = db.calls;
+  assert.deepEqual(call.params.slice(0, 2), ['2025-12-31T23:00:00.000Z', '2026-12-31T23:00:00.000Z']);
+  assert.match(call.sql, /date_trunc\('day', ts AT TIME ZONE 'Europe\/Berlin'\)/);
+  assert.match(call.sql, /date_trunc\('day', ts_utc AT TIME ZONE 'Europe\/Berlin'\)/);
+  const week = capturingDb();
+  await api(week).getScatter({ view: 'week', date: '2026-06-10' });
+  assert.match(week.calls[0].sql, /ts AT TIME ZONE 'UTC'/, 'Woche/Monat unveraendert');
+});
+
 const URL = process.env.DVHUB_TEST_PG_URL || process.env.DATABASE_URL;
 const skip = URL ? false : 'DVHUB_TEST_PG_URL/DATABASE_URL nicht gesetzt';
 
@@ -162,6 +192,17 @@ test('Jahr gegen echtes PostgreSQL: Monatserster und Neujahr nach Berliner Tag',
     assert.deepEqual(year.body.loadKwh, [4, 0, 0, 0, 0, 2, 0, 0, 0, 8, 0, 0]);
     const all = await api(db).getStack({ view: 'all', date: '2026-06-01' });
     assert.deepEqual(all.body.loadKwh, [1, 14]);
+    // Kalender-Jahr gegen echtes SQL: 01.10. 00:00–02:00 Berlin (8 Slots
+    // Einspeisung à 1 kWh zu 10 ct) im Oktober-Feld, Neujahr 2027 nicht dabei.
+    await client.query('CREATE TEMP TABLE timeseries_samples (series_key text, ts_utc timestamptz, value_num double precision, resolution_seconds integer)');
+    for (let i = 0; i < 8; i += 1) {
+      const ts = new Date(Date.parse('2026-09-30T22:00:00Z') + i * 900_000).toISOString();
+      await client.query(`INSERT INTO energy_slots_15m VALUES ($1, 'grid_export_w', 'local_live', 'kWh', 1)`, [ts]);
+      await client.query(`INSERT INTO timeseries_samples VALUES ('price_ct_kwh', $1, 10, 900)`, [ts]);
+    }
+    const cal = await api(db).getCalYear({ view: 'year', date: '2026-06-01' });
+    assert.equal(cal.status, 200, JSON.stringify(cal.body));
+    assert.deepEqual(cal.body.matrix, [{ x: 'Okt', y: '1', v: 0.8 }]);
   } finally {
     await client.end();
   }
