@@ -303,6 +303,35 @@ export function createScheduleEvaluator(ctx) {
     throw new Error(`unsupported writeType: ${conf.writeType}`);
   }
 
+  // Pro-Gating (Task #11): fehlt isProActive, wird nie gesperrt.
+  function isProGateClosed() {
+    return typeof ctx.licenseService?.isProActive === 'function'
+      && ctx.licenseService.isProActive() === false;
+  }
+
+  // SMA rules carry absolute slot timestamps -- enforce them so a rule
+  // generated for "tomorrow 03:00" does not accidentally fire today at 03:00.
+  function ruleSlotOpen(r, now) {
+    if ((isSmallMarketAutomationRule(r) || r.source === 'forecast_optimizer') && r.slotTs != null) {
+      const slotTs = Number(r.slotTs);
+      const slotEndTs = Number(r.slotEndTs) || (slotTs + SLOT_DURATION_MS);
+      if (Number.isFinite(slotTs) && (now < slotTs || now >= slotEndTs)) return false;
+    }
+    return true;
+  }
+
+  // dcExportMode-Regeln (EOS eos_pv_export) mit derselben Prüfung wie
+  // Optimierer-Regeln in effectiveTargetValue: Optimierer an, Pro-Lizenz,
+  // Slot-Zeitstempel (Review Regelung 25.10. — vorher nur HH:MM, eine alte
+  // EOS-Regel feuerte täglich wieder, auch nach Ablauf der Lizenz).
+  function dcExportRuleActive(r, mod, now, cfg) {
+    if (r.target !== 'dcExportMode' || r.enabled === false || !scheduleMatch(r, mod)) return false;
+    if (r.source === 'forecast_optimizer') {
+      if (!(cfg.optimizer?.enabled ?? false) || isProGateClosed()) return false;
+    }
+    return ruleSlotOpen(r, now);
+  }
+
   function effectiveTargetValue(target) {
     const cfg = getCfg();
     const optimizerEnabled = cfg.optimizer?.enabled ?? false;
@@ -313,8 +342,7 @@ export function createScheduleEvaluator(ctx) {
     // lingering in state.schedule.rules — so the box falls back to Stage 1/2 (SMA
     // rules, which are unaffected). Mirrors the runOptimization() production gate.
     // Defensive: a missing isProActive never gates (prod licensed → unaffected).
-    const proGateClosed = typeof ctx.licenseService?.isProActive === 'function'
-      && ctx.licenseService.isProActive() === false;
+    const proGateClosed = isProGateClosed();
     const now = Date.now();
     const mod = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
 
@@ -339,14 +367,7 @@ export function createScheduleEvaluator(ctx) {
         }
       }
 
-      // SMA rules carry absolute slot timestamps -- enforce them so a rule
-      // generated for "tomorrow 03:00" does not accidentally fire today at 03:00.
-      if ((isSmallMarketAutomationRule(r) || r.source === 'forecast_optimizer') && r.slotTs != null) {
-        const slotTs = Number(r.slotTs);
-        const slotEndTs = Number(r.slotEndTs) || (slotTs + SLOT_DURATION_MS);
-        if (Number.isFinite(slotTs) && (now < slotTs || now >= slotEndTs)) return false;
-      }
-      return true;
+      return ruleSlotOpen(r, now);
     });
     if (hit) {
       hit._wasActive = true;
@@ -1234,7 +1255,7 @@ export function createScheduleEvaluator(ctx) {
     // dcExportMode: NUR aktiv wenn eine Schedule-Regel target='dcExportMode', value=1 matcht.
     // Config-Flags (enabled, priceThresholdCtKwh) werden nur als Parameter genutzt,
     // nicht zur Aktivierung. Ohne aktive Schedule-Regel bleibt dcExportMode AUS.
-    const dcScheduleRule = state.schedule.rules.find(r => r.target === 'dcExportMode' && r.enabled !== false && scheduleMatch(r, nowMin));
+    const dcScheduleRule = state.schedule.rules.find(r => dcExportRuleActive(r, nowMin, now, cfg));
     let dcExportActive = dcScheduleRule != null && Number(dcScheduleRule.value) === 1;
     // SOC-Sicherung: Wenn Akku unter Ziel-SOC UND weniger als X Stunden bis Abend-Peak,
     // DC-Export deaktivieren damit der Akku noch laden kann.
