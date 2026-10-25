@@ -192,17 +192,24 @@ test('Jahr gegen echtes PostgreSQL: Monatserster und Neujahr nach Berliner Tag',
     assert.deepEqual(year.body.loadKwh, [4, 0, 0, 0, 0, 2, 0, 0, 0, 8, 0, 0]);
     const all = await api(db).getStack({ view: 'all', date: '2026-06-01' });
     assert.deepEqual(all.body.loadKwh, [1, 14]);
-    // Kalender-Jahr gegen echtes SQL: 01.10. 00:00–02:00 Berlin (8 Slots
-    // Einspeisung à 1 kWh zu 10 ct) im Oktober-Feld, Neujahr 2027 nicht dabei.
+    // Kalender-Jahr gegen echtes SQL (Einspeisung à 1 kWh je Slot zu 10 ct):
+    // 01.10. 00:00–02:00 Berlin (8 Slots) im Oktober-Feld, Neujahr 2026
+    // 00:00–01:00 Berlin (4 Slots, noch 31.12. UTC) im Januar, Neujahr 2027
+    // (31.12.2026 23:00 UTC) nicht dabei.
     await client.query('CREATE TEMP TABLE timeseries_samples (series_key text, ts_utc timestamptz, value_num double precision, resolution_seconds integer)');
-    for (let i = 0; i < 8; i += 1) {
-      const ts = new Date(Date.parse('2026-09-30T22:00:00Z') + i * 900_000).toISOString();
-      await client.query(`INSERT INTO energy_slots_15m VALUES ($1, 'grid_export_w', 'local_live', 'kWh', 1)`, [ts]);
-      await client.query(`INSERT INTO timeseries_samples VALUES ('price_ct_kwh', $1, 10, 900)`, [ts]);
-    }
+    const exportSlots = async (iso, count) => {
+      for (let i = 0; i < count; i += 1) {
+        const ts = new Date(Date.parse(iso) + i * 900_000).toISOString();
+        await client.query(`INSERT INTO energy_slots_15m VALUES ($1, 'grid_export_w', 'local_live', 'kWh', 1)`, [ts]);
+        await client.query(`INSERT INTO timeseries_samples VALUES ('price_ct_kwh', $1, 10, 900)`, [ts]);
+      }
+    };
+    await exportSlots('2026-09-30T22:00:00Z', 8);
+    await exportSlots('2025-12-31T23:00:00Z', 4);
+    await exportSlots('2026-12-31T23:00:00Z', 4);
     const cal = await api(db).getCalYear({ view: 'year', date: '2026-06-01' });
     assert.equal(cal.status, 200, JSON.stringify(cal.body));
-    assert.deepEqual(cal.body.matrix, [{ x: 'Okt', y: '1', v: 0.8 }]);
+    assert.deepEqual(cal.body.matrix, [{ x: 'Jan', y: '1', v: 0.4 }, { x: 'Okt', y: '1', v: 0.8 }]);
   } finally {
     await client.end();
   }
