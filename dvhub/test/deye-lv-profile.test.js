@@ -157,16 +157,18 @@ test('curtailment saves the customer work mode and restores it on release', asyn
   assert.equal(state.ctrl._dvSeqSaved.workMode, undefined);
 });
 
-test('release without a saved mode falls back to restoreDefault (restart during curtailment)', async () => {
+// Entscheidung Chrissi 25.10.: Beim Start hebt DVhub nur eine EIGENE Sperre auf
+// (Beweis: persistierte Sicherung dv_seq_saved.json). Ohne Sicherung ist der
+// aktuelle Work-Mode der des Kunden — kein restoreDefault darüber (vorher:
+// Selling first, 0). Siehe test/dv-boot-release.test.js.
+test('start without a saved mode writes nothing (customer work mode is kept)', async () => {
   const loaded = loadDeyeEffectiveConfig();
   const cfg = loaded.effectiveConfig;
-  const transport = makeMockTransport(buildLp3Image(2)); // steht noch auf Zero-Export-to-CT
+  const transport = makeMockTransport(buildLp3Image(2)); // Kunde fährt Zero-Export-to-CT
   const { state, evaluator } = makeEvaluator(cfg, transport);
 
-  // Kein vorheriger Block in dieser Prozess-Lebenszeit (state leer) → Freigabe
-  // schreibt den dokumentierten Default (Selling first, 0).
   await evaluator.applyDvVictronControl(true);
-  assert.deepEqual(transport.writes, [{ fc: 6, address: 142, value: 0 }]);
+  assert.deepEqual(transport.writes, []);
   assert.equal(state.ctrl._lastDvFeedIn, true);
 });
 

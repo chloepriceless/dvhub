@@ -493,7 +493,7 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
-  async function runDvControlSequence(steps) {
+  async function runDvControlSequence(steps, { ownOnly = false } = {}) {
     const cfg = getCfg();
     const saved = (state.ctrl._dvSeqSaved ??= {});
     for (const step of steps) {
@@ -503,7 +503,8 @@ export function createScheduleEvaluator(ctx) {
       let value = step.value;
       let encoded;
       if (step.restore === true) {
-        value = saved[step.point] ?? step.restoreDefault;
+        // ownOnly (Freigabe nach dem Start): nur gesicherte Punkte, kein Default.
+        value = ownOnly ? saved[step.point] : (saved[step.point] ?? step.restoreDefault);
         if (value == null) continue; // nie geblockt und kein Default → no-op
         if (saved[step.point] != null) {
           // Review Regelung 25.10.: eine Sicherung, die sich nicht kodieren lässt,
@@ -557,7 +558,34 @@ export function createScheduleEvaluator(ctx) {
     pushLog('dv_feedin_limit_write', { limitW: limitW == null ? 'restore' : limitW });
   }
 
-  async function applyDvVictronControl(feedIn) {
+  // Sequenz eines dvControl-Flags ausführen. Rückgabe true = bewusst nichts
+  // geschrieben. Beim ersten Freigabe-Aufruf nach dem Start (bootRelease) gilt
+  // (Entscheidung Chrissi 25.10.): DVhub hebt nur eine Sperre auf, die es SELBST
+  // gesetzt hat. Beweis nach einem Neustart ist allein die persistierte
+  // Sicherung dv_seq_saved.json — saveBefore legt sie beim Sperren an, die
+  // Freigabe verbraucht sie (_lastDvFeedIn wird nicht persistiert,
+  // control_state.json trägt nur den Not-Halt). Ohne Sicherung für einen
+  // restore-Schritt: nichts schreiben (vorher: restoreDefault — Deye
+  // Work-Mode 0 über Kunden-Modus 1, Fronius StorCtl_Mod 0 / OutWRte +100 über
+  // die Solar.web-Werte). Mit Sicherung: genau die gesicherten Punkte
+  // zurückschreiben; restore-Schritte ohne Sicherung (Absturz mitten in der
+  // Sperre) bekommen keinen Default.
+  async function runFlagSequence(flag, steps, bootRelease) {
+    if (!bootRelease) {
+      await runDvControlSequence(steps);
+      return false;
+    }
+    const saved = state.ctrl._dvSeqSaved || {};
+    const own = steps.some((st) => st?.restore === true && saved[st.point] != null);
+    if (!own) {
+      pushLog('dv_release_skipped_no_own_block', { flag, points: steps.map((st) => st?.point) });
+      return true;
+    }
+    await runDvControlSequence(steps, { ownOnly: true });
+    return false;
+  }
+
+  async function applyDvVictronControl(feedIn, { explicit = false } = {}) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
     if (!dc) return;
@@ -572,6 +600,12 @@ export function createScheduleEvaluator(ctx) {
     if (state.ctrl._lastDvFeedIn === feedIn) return;
 
     const results = {};
+    // Erster Aufruf nach dem Start (Change-Cache leer) mit Freigabe: eine
+    // Sequenz-Freigabe darf nur eine EIGENE Sperre aufheben (Entscheidung
+    // Chrissi 25.10.) — siehe runFlagSequence. Ein ausdrücklicher Befehl
+    // (applyControlTarget, z. B. „Einspeisung freigeben“ über die API) ist
+    // keine Start-Automatik und schreibt die Freigabe wie bisher.
+    const bootRelease = !explicit && feedIn === true && state.ctrl._lastDvFeedIn === undefined;
     // T-0076 (P0-2): advance the change-detection cache ONLY after the hardware
     // write actually succeeds. The old code set _lastDvFeedIn BEFORE the await,
     // so a failed write was cached as if applied and the next cycle short-circuited
@@ -585,8 +619,9 @@ export function createScheduleEvaluator(ctx) {
     if (dc.feedExcessDcPv?.enabled) {
       const val = feedIn ? 1 : 0;
       try {
+        let skipped = false;
         if (Array.isArray(dc.feedExcessDcPv.sequence?.[String(val)])) {
-          await runDvControlSequence(dc.feedExcessDcPv.sequence[String(val)]);
+          skipped = await runFlagSequence('feedExcessDcPv', dc.feedExcessDcPv.sequence[String(val)], bootRelease);
         } else if (transport.type === 'mqtt') {
           await transport.mqttWrite('feedExcessDcPv', val);
         } else {
@@ -596,8 +631,12 @@ export function createScheduleEvaluator(ctx) {
             value: val, timeoutMs: dc.feedExcessDcPv.timeoutMs
           });
         }
-        results.feedExcessDcPv = { ok: true, value: val };
-        pushLog('dv_victron_write', { register: 'feedExcessDcPv', address: dc.feedExcessDcPv.address, value: val, feedIn });
+        if (skipped) {
+          results.feedExcessDcPv = { ok: true, value: val, skipped: 'no_own_block' };
+        } else {
+          results.feedExcessDcPv = { ok: true, value: val };
+          pushLog('dv_victron_write', { register: 'feedExcessDcPv', address: dc.feedExcessDcPv.address, value: val, feedIn });
+        }
       } catch (e) {
         results.feedExcessDcPv = { ok: false, error: e.message };
         allOk = false;
@@ -609,8 +648,9 @@ export function createScheduleEvaluator(ctx) {
     if (dc.dontFeedExcessAcPv?.enabled) {
       const val = feedIn ? 0 : 1;
       try {
+        let skipped = false;
         if (Array.isArray(dc.dontFeedExcessAcPv.sequence?.[String(val)])) {
-          await runDvControlSequence(dc.dontFeedExcessAcPv.sequence[String(val)]);
+          skipped = await runFlagSequence('dontFeedExcessAcPv', dc.dontFeedExcessAcPv.sequence[String(val)], bootRelease);
         } else if (transport.type === 'mqtt') {
           await transport.mqttWrite('dontFeedExcessAcPv', val);
         } else {
@@ -620,8 +660,12 @@ export function createScheduleEvaluator(ctx) {
             value: val, timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
           });
         }
-        results.dontFeedExcessAcPv = { ok: true, value: val };
-        pushLog('dv_victron_write', { register: 'dontFeedExcessAcPv', address: dc.dontFeedExcessAcPv.address, value: val, feedIn });
+        if (skipped) {
+          results.dontFeedExcessAcPv = { ok: true, value: val, skipped: 'no_own_block' };
+        } else {
+          results.dontFeedExcessAcPv = { ok: true, value: val };
+          pushLog('dv_victron_write', { register: 'dontFeedExcessAcPv', address: dc.dontFeedExcessAcPv.address, value: val, feedIn });
+        }
       } catch (e) {
         results.dontFeedExcessAcPv = { ok: false, error: e.message };
         allOk = false;
@@ -851,7 +895,7 @@ export function createScheduleEvaluator(ctx) {
           state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
           return { ok: true, skipped: true, reason: 'unchanged' };
         }
-        await applyDvVictronControl(feedIn);
+        await applyDvVictronControl(feedIn, { explicit: true });
         const seqResult = state.ctrl.dvControl?.feedExcessDcPv;
         if (!seqResult?.ok) {
           pushLog('control_write_error', { target, value, source, error: seqResult?.error || 'dv_sequence_failed' });
