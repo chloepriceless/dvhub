@@ -10,8 +10,12 @@ name: Issue-Sekretär (Ausführung)
 #   fix     — /fix von Christin: Behebung mit Test als ein Commit; ein eigener Job
 #             schiebt ihn auf agent/issue-<nr> und öffnet einen Draft-PR.
 # Der Agent selbst hat nur Lesezugriff auf den Code. Sein Commit verlässt den Job als
-# Patch; der PR-Job wendet ihn in einem frischen Checkout an. So kann weder Issue-Text
+# Patch; ein Job ohne Schreibrechte testet ihn, erst danach wendet der PR-Job ihn in
+# einem frischen Checkout an, ohne Code daraus auszuführen. So kann weder Issue-Text
 # noch etwas im Checkout des Agenten einen Schreib-Token steuern.
+# Restrisiko (bewusst): Im /fix-Job führt der Agent eigene Tests aus, während das
+# Claude-Token in der Umgebung liegt. /fix gibt deshalb nur Christin, nachdem sie das
+# Issue gelesen hat; die Read-Sperren auf /proc sind nur ein Zusatz, kein Schutz.
 
 on:
   workflow_call:
@@ -233,15 +237,20 @@ jobs:
           gh api graphql -f id="$NODE_ID" -f query='
             mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:RESOLVED}){minimizedComment{isMinimized}}}'
 
-  # Frischer Checkout mit Schreib-Token: nichts, was der Agent angefasst hat, läuft hier.
-  # Branch, Basis und Repository legt der Workflow fest, nicht der Agent.
-  open-pr:
-    name: Draft-PR öffnen
+  # Testsperre ohne jede Schreibberechtigung: Hier läuft vom Agenten geschriebener Code
+  # (Tests, package.json). Darum kein Token im Checkout, nur Leserechte, Zeitlimit.
+  test-gate:
+    name: Tests des Fixes
     needs: run
     if: needs.run.outputs.fix == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -252,18 +261,30 @@ jobs:
         with:
           node-version-file: .node-version
 
-      # Ein vom GITHUB_TOKEN geöffneter PR startet keine CI. Darum hier selbst prüfen:
-      # ohne grüne Suite kein PR.
-      - name: Patch anwenden und Tests als Sperre
+      - name: Patch anwenden und Suite laufen lassen
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git am "$RUNNER_TEMP/fix.patch"
+          git -c user.name=ci -c user.email=ci@localhost am "$RUNNER_TEMP/fix.patch"
           if git diff --name-only "${{ github.sha }}" HEAD | grep -q '^\.github/'; then
             echo "::error::Agent hat Workflow-Dateien geändert"
             exit 1
           fi
           cd dvhub && npm ci --no-audit --no-fund && npm test
+
+  # Frischer Checkout mit Schreib-Token: hier läuft KEIN Code aus dem Patch, nur
+  # git am, push und gh pr create. Erst nach grüner Testsperre.
+  open-pr:
+    name: Draft-PR öffnen
+    needs: [run, test-gate]
+    if: needs.run.outputs.fix == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: fix-${{ inputs.issue_number }}
+          path: ${{ runner.temp }}
 
       - name: Branch schieben und Draft-PR öffnen
         env:
@@ -271,6 +292,13 @@ jobs:
           BASE: ${{ github.sha }}
           BRANCH: agent/issue-${{ inputs.issue_number }}-${{ github.run_id }}
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git am "$RUNNER_TEMP/fix.patch"
+          if git diff --name-only "$BASE" HEAD | grep -q '^\.github/'; then
+            echo "::error::Agent hat Workflow-Dateien geändert"
+            exit 1
+          fi
           git push origin "HEAD:refs/heads/$BRANCH"
           gh pr create --draft --base main --head "$BRANCH" \
             --title "$(git log -1 --format=%s)" \
