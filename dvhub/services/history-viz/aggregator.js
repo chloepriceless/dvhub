@@ -934,8 +934,15 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
+      // Akku 2 der zweiten GX-Anlage (Review 25.10.2026): die Hauslast enthaelt
+      // seine Versorgung, also gehoert er zu den Quellen. Akku-Entladung = beide
+      // Akkus ohne die aufgezeichnete Akku→Akku-Verschiebung (die versorgt das
+      // Haus nicht), wie Sankey und Autarkie. Ohne zweite Anlage unveraendert.
       const rows = await fetchBucketedEnergySlots({
-        seriesKeys: ['pv_total_w', 'battery_discharge_w', 'grid_import_w', 'load_power_w'],
+        seriesKeys: [
+          'pv_total_w', 'battery_discharge_w', 'grid_import_w', 'load_power_w',
+          'second_battery_discharge_w', 'battery_to_second_battery_w', 'second_battery_to_battery_w',
+        ],
         start, end, view,
       });
       // RC-E fix — PV-direct ≈ min(pv, load) per TIME BUCKET, not per exact
@@ -950,6 +957,9 @@ export function createHistoryVizAggregator(ctx) {
       // within that bucket — the PV-self-consumption proxy.
       let pvKwh;
       let batteryDischargeKwh;
+      let secondBatteryDischargeKwh;
+      let transfer12Kwh;
+      let transfer21Kwh;
       let gridImportKwh;
       let loadKwh;
       let bucketLabels;
@@ -976,16 +986,30 @@ export function createHistoryVizAggregator(ctx) {
         };
         pvKwh = sumByYear('pv_total_w');
         batteryDischargeKwh = sumByYear('battery_discharge_w');
+        secondBatteryDischargeKwh = sumByYear('second_battery_discharge_w');
+        transfer12Kwh = sumByYear('battery_to_second_battery_w');
+        transfer21Kwh = sumByYear('second_battery_to_battery_w');
         gridImportKwh = sumByYear('grid_import_w');
         loadKwh = sumByYear('load_power_w');
         bucketLabels = years.map(String);
       } else {
         pvKwh = bucketSeriesKwh(rows, 'pv_total_w', view, start);
         batteryDischargeKwh = bucketSeriesKwh(rows, 'battery_discharge_w', view, start);
+        secondBatteryDischargeKwh = bucketSeriesKwh(rows, 'second_battery_discharge_w', view, start);
+        transfer12Kwh = bucketSeriesKwh(rows, 'battery_to_second_battery_w', view, start);
+        transfer21Kwh = bucketSeriesKwh(rows, 'second_battery_to_battery_w', view, start);
         gridImportKwh = bucketSeriesKwh(rows, 'grid_import_w', view, start);
         loadKwh = bucketSeriesKwh(rows, 'load_power_w', view, start);
         bucketLabels = bucketLabelsForView(view, start);
       }
+      // Je Bucket: Verschiebung hoechstens so viel, wie der abgebende Akku entladen hat.
+      const mainDischargeKwh = batteryDischargeKwh;
+      batteryDischargeKwh = mainDischargeKwh.map((d1, i) => {
+        const d2 = secondBatteryDischargeKwh[i] || 0;
+        const t12 = Math.min(transfer12Kwh[i] || 0, d1);
+        const t21 = Math.min(transfer21Kwh[i] || 0, d2);
+        return round3(Math.max(0, d1 + d2 - t12 - t21));
+      });
       const pvDirectKwh = pvKwh.map((pvB, i) => round3(Math.min(pvB, loadKwh[i] || 0)));
       const buckets = bucketLabels.length;
       const payload = {
@@ -999,6 +1023,7 @@ export function createHistoryVizAggregator(ctx) {
         bucketLabels,
         pvDirectKwh,
         batteryDischargeKwh,
+        secondBatteryDischargeKwh: secondBatteryDischargeKwh.map(round3),
         gridImportKwh,
         loadKwh,
       };

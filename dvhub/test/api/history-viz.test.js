@@ -2123,6 +2123,36 @@ describe('Sankey mit zweitem Akku', () => {
     assert.equal(r.status, 200);
     assert.equal(r.body.autarkyPct, 100);
   });
+  // Review 25.10.2026 (P3): im Stack fehlte Akku 2 als Quelle — die Hauslast
+  // enthielt seine Versorgung, die Saeulen nicht.
+  it('Stack: Akku-Entladung umfasst Akku 2 (ohne Akku→Akku), Akku 2 auch einzeln', async () => {
+    const ctx = mockCtxWithStores({ querySeriesFn: twoBatterySeries({
+      load_power_w: 1000, battery_discharge_w: 500, second_battery_discharge_w: 500,
+    }) });
+    const r = await ctx.historyVizApi.getStack({ view: 'day', date: ANCHOR_DATE });
+    assert.equal(r.status, 200);
+    const sum = (a) => a.reduce((x, y) => x + y, 0);
+    // 24 h: Haus 24 kWh = Akku 1 12 kWh + Akku 2 12 kWh.
+    assert.ok(Math.abs(sum(r.body.loadKwh) - 24) < 0.05);
+    assert.ok(Math.abs(sum(r.body.batteryDischargeKwh) - 24) < 0.05, `Akku gesamt ${sum(r.body.batteryDischargeKwh)}`);
+    assert.ok(Math.abs(sum(r.body.secondBatteryDischargeKwh) - 12) < 0.05);
+
+    // Aufgezeichnete Verschiebung Akku 1 → Akku 2 versorgt das Haus nicht.
+    const ctx2 = mockCtxWithStores({ querySeriesFn: twoBatterySeries({
+      load_power_w: 1000, battery_discharge_w: 3000, second_battery_charge_w: 2000, battery_to_second_battery_w: 2000,
+    }) });
+    const r2 = await ctx2.historyVizApi.getStack({ view: 'day', date: ANCHOR_DATE });
+    assert.ok(Math.abs(sum(r2.body.batteryDischargeKwh) - 24) < 0.05, `ohne Verschiebung ${sum(r2.body.batteryDischargeKwh)}`);
+  });
+
+  it('Stack ohne zweite Anlage unveraendert', async () => {
+    const ctx = mockCtxWithStores({ querySeriesFn: twoBatterySeries({ load_power_w: 1000, battery_discharge_w: 500 }) });
+    const r = await ctx.historyVizApi.getStack({ view: 'day', date: ANCHOR_DATE });
+    const sum = (a) => a.reduce((x, y) => x + y, 0);
+    assert.ok(Math.abs(sum(r.body.batteryDischargeKwh) - 12) < 0.05);
+    assert.equal(sum(r.body.secondBatteryDischargeKwh), 0);
+  });
+
   // Codex-Gegenpruefung 21.10.2026 (P2): Akku 1 entlaedt in Akku 2. Ohne
   // Verrechnung erfaende die Zerlegung 2 kW Einspeisung (bzw. Netzladung).
   it('Akku→Akku-Verschiebung: keine erfundene Einspeisung oder Netzladung', async () => {
