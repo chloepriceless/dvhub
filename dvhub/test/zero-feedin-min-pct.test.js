@@ -34,11 +34,11 @@ function froniusCfg() {
   return cfg;
 }
 
-function harness({ loadW, soc = 97, exportW = 0, importW = 0 }) {
+function harness({ loadW, soc = 97, exportW = 0, importW = 0, victron = {} }) {
   const cfg = froniusCfg();
   assert.equal(cfg.dvControl.zeroFeedIn.enabled, true, 'Profil liefert den Zero-Feed-in-Deckel');
   const state = {
-    victron: { soc, gridImportW: importW, gridExportW: exportW, selfConsumptionW: loadW, fieldUpdatedAt: { soc: Date.now() } },
+    victron: { soc, gridImportW: importW, gridExportW: exportW, selfConsumptionW: loadW, fieldUpdatedAt: { soc: Date.now() }, ...victron },
     meter: { ok: true, updatedAt: Date.now() },
     ctrl: { _lastDvFeedIn: false },
     schedule: { rules: [], active: {}, lastWrite: {}, manualOverride: {}, config: {}, lastEvalAt: 0 }
@@ -63,7 +63,7 @@ function harness({ loadW, soc = 97, exportW = 0, importW = 0 }) {
 
 const pctWrites = (writes) => writes.filter((w) => w.address === ADDR.pct).map((w) => w.value);
 
-test('Hauslast unbekannt (null): kein Enter, kein WMaxLimPct-Write', async () => {
+test('Hauslast unbekannt (null), SoC-Auslöser: kein Enter, kein WMaxLimPct-Write', async () => {
   const { ev, state, writes } = harness({ loadW: null });
   await ev.zeroFeedInTick();
   await ev.zeroFeedInTick();
@@ -89,4 +89,42 @@ test('Regler bei aktivem Deckel und hohem Export: bleibt bei 1 %, schreibt nie 0
   const pct = pctWrites(writes);
   assert.ok(pct.every((v) => v >= 100), `nie unter 1 %: ${JSON.stringify(pct)}`);
   assert.equal(pct.at(-1), 100);
+});
+
+// Gegenprüfung ec006d66 (P3): Auf Fronius ist die Hauslast abgeleitet
+// (pv_plus_grid, ohne eigenen Zeitstempel). Scheitert das Lesen der PV, rechnet
+// der Poller die Last aus der alten PV weiter — sie ist dann NICHT bekannt.
+test('Fronius: abgeleitete Hauslast bei PV-Lesefehler gilt als unbekannt (SoC-Auslöser: kein Enter)', async () => {
+  const { ev, state, writes } = harness({ loadW: 1500, victron: { errors: { pvPowerW: 'timeout' }, pvPowerW: 3000, pvTotalW: 3000 } });
+  await ev.zeroFeedInTick();
+  await ev.zeroFeedInTick();
+  assert.deepEqual(pctWrites(writes), []);
+  assert.equal(state.ctrl._zfi.capActive, false);
+});
+
+test('Fronius: abgeleitete Hauslast bei veralteter PV gilt als unbekannt', async () => {
+  const old = Date.now() - 10 * 60000;
+  const { ev, state, writes } = harness({ loadW: 1500, victron: { pvPowerW: 3000, pvTotalW: 3000 } });
+  state.victron.fieldUpdatedAt.pvPowerW = old;
+  await ev.zeroFeedInTick();
+  await ev.zeroFeedInTick();
+  assert.deepEqual(pctWrites(writes), []);
+});
+
+test('Fronius: frische PV → abgeleitete Hauslast bekannt, Start unverändert (1500 − 50) / 10 000', async () => {
+  const { ev, state, writes } = harness({ loadW: 1500, victron: { pvPowerW: 3000, pvTotalW: 3000 } });
+  state.victron.fieldUpdatedAt.pvPowerW = Date.now();
+  await ev.zeroFeedInTick();
+  await ev.zeroFeedInTick();
+  assert.deepEqual(pctWrites(writes), [1450]);
+});
+
+// Gegenprüfung ec006d66 (P3): Export trotz Sperre heißt, der Akku nimmt nichts
+// mehr — dann muss der Deckel auch ohne bekannte Hauslast greifen (Pflicht-
+// Abregelung), Start bei 1 %, der Regler fährt auf die Hauslast hoch.
+test('Hauslast unbekannt, aber Export trotz Sperre: Enter mit 1 % statt weiter einzuspeisen', async () => {
+  const { ev, state, writes } = harness({ loadW: null, soc: 50, exportW: 2000 });
+  for (let i = 0; i < 3; i += 1) await ev.zeroFeedInTick();
+  assert.equal(state.ctrl._zfi.capActive, true);
+  assert.deepEqual(pctWrites(writes), [100]);
 });

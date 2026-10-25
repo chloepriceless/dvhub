@@ -1830,11 +1830,16 @@ export function createScheduleEvaluator(ctx) {
       const exportW = Math.max(0, Number(state.victron?.gridExportW || 0));
       const loadRaw = state.victron?.selfConsumptionW;
       const loadW = Math.max(0, Number(loadRaw || 0));
-      // Review Regelung 25.10.: fehlt die Hauslast (null/veraltet), wäre der
-      // Startwert 0 % — und 0 % legt den Hybrid-WR still (fronius.json). Dann
-      // nicht einsteigen; der Akku-Zwang (Force-Charge) bleibt die Sperre.
-      const loadKnown = loadRaw != null && Number.isFinite(Number(loadRaw))
-        && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs);
+      // Review Regelung 25.10.: Hauslast bekannt = Zahl, ohne Lesefehler, frisch.
+      // Auf Fronius ist sie abgeleitet (pv_plus_grid, ohne eigenen Stempel) —
+      // dann zählt die PV-Messung, aus der sie gerechnet wird: bei PV-Lesefehler
+      // rechnet der Poller mit der alten PV weiter (Gegenprüfung ec006d66).
+      const vErr = state.victron?.errors || {};
+      const loadStamped = victronFieldAgeMs(state, 'selfConsumptionW') !== null;
+      const loadKnown = loadRaw != null && Number.isFinite(Number(loadRaw)) && !vErr.selfConsumptionW
+        && (loadStamped
+          ? !victronFieldStale(state, 'selfConsumptionW', maxAgeMs)
+          : !vErr.pvPowerW && !victronFieldStale(state, 'pvPowerW', maxAgeMs));
       // Nie unter 1 % (wie capLoopStep, feed-in-cap/index.js).
       const clampPct = (p) => Math.min(100, Math.max(ZFI_MIN_PCT, p));
 
@@ -1846,8 +1851,15 @@ export function createScheduleEvaluator(ctx) {
         const exportEnter = zfi.exportStreak >= ZFI_EXPORT_ENTER_STREAK;
         // blockedStreak >= 2: nie im selben Tick einschalten, in dem die Sperre
         // gerade erst geschrieben wurde/wird (Race gegen die Freigabe-Sequenz).
-        if ((socEnter || exportEnter) && zfi.blockedStreak >= 2 && meterFresh && loadKnown) {
-          zfi.limitPct = clampPct((100 * Math.max(0, loadW - targetImportW)) / refW);
+        // SoC-Auslöser nur mit bekannter Hauslast (sonst hält die Force-Charge-
+        // Sperre weiter, und Export würde den Export-Auslöser ziehen). Export
+        // trotz Sperre = der Akku nimmt nichts mehr: dann Pflicht-Abregelung
+        // auch ohne Hauslast, Start bei 1 % — der Regler fährt hoch.
+        const trigger = socEnter && loadKnown ? 'soc' : 'export';
+        if (((socEnter && loadKnown) || exportEnter) && zfi.blockedStreak >= 2 && meterFresh) {
+          zfi.limitPct = loadKnown
+            ? clampPct((100 * Math.max(0, loadW - targetImportW)) / refW)
+            : ZFI_MIN_PCT;
           if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, 100);
           if (rvrtConf?.enabled && rvrtConf.address != null) await zfiWrite(rvrtConf, revertTimeoutS);
           await zfiWrite(pctConf, zfi.limitPct);
@@ -1855,14 +1867,14 @@ export function createScheduleEvaluator(ctx) {
           zfi.capActive = true;
           zfi.exportStreak = 0;
           pushLog('zero_feedin_cap_on', {
-            trigger: socEnter ? 'soc' : 'export', soc: Number.isFinite(soc) ? soc : null,
-            limitPct: Number(zfi.limitPct.toFixed(2)), loadW, exportW
+            trigger, soc: Number.isFinite(soc) ? soc : null,
+            limitPct: Number(zfi.limitPct.toFixed(2)), loadW: loadKnown ? loadW : null, exportW
           });
           telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
             eventType: 'zero_feedin_cap_on', target: 'wMaxLimPct',
             valueNum: Number(zfi.limitPct.toFixed(2)),
-            reason: socEnter ? 'soc' : 'export', source: 'runtime',
-            meta: { soc: Number.isFinite(soc) ? soc : null, loadW, exportW }
+            reason: trigger, source: 'runtime',
+            meta: { soc: Number.isFinite(soc) ? soc : null, loadW: loadKnown ? loadW : null, exportW }
           }));
         }
         return;
