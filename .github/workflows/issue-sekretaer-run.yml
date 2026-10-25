@@ -10,12 +10,13 @@ name: Issue-Sekretär (Ausführung)
 #   fix     — /fix von Christin: Behebung mit Test als ein Commit; ein eigener Job
 #             schiebt ihn auf agent/issue-<nr> und öffnet einen Draft-PR.
 # Der Agent selbst hat nur Lesezugriff auf den Code. Sein Commit verlässt den Job als
-# Patch; ein Job ohne Schreibrechte testet ihn, erst danach wendet der PR-Job ihn in
-# einem frischen Checkout an, ohne Code daraus auszuführen. So kann weder Issue-Text
-# noch etwas im Checkout des Agenten einen Schreib-Token steuern.
-# Restrisiko (bewusst): Im /fix-Job führt der Agent eigene Tests aus, während das
-# Claude-Token in der Umgebung liegt. /fix gibt deshalb nur Christin, nachdem sie das
-# Issue gelesen hat; die Read-Sperren auf /proc sind nur ein Zusatz, kein Schutz.
+# Patch. Vom Agenten geschriebener Code läuft nur über .github/sekretaer-test.sh in einem
+# Container ohne Netz und ohne Runner-Tokens (auch nicht an den Actions-Cache). Ein Job
+# ohne Schreibrechte prüft den Patch dort (Suite grün, neuer Test vorher rot); erst
+# danach wendet der PR-Job ihn an, ohne Code daraus auszuführen. Kein Checkout speichert
+# Zugangsdaten (persist-credentials: false).
+# Restrisiko (bewusst): Der Agent selbst liest Issue-Text und hält im /fix-Job das
+# Claude-Token. /fix gibt deshalb nur Christin, nachdem sie das Issue gelesen hat.
 
 on:
   workflow_call:
@@ -60,6 +61,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Nur /fix führt Tests aus und braucht dafür Node und die Abhängigkeiten.
       - name: Node einrichten
@@ -67,10 +69,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-      - name: Abhängigkeiten
+      - name: Abhängigkeiten (ohne Install-Skripte) und Test-Container
         if: inputs.mode == 'fix'
-        working-directory: dvhub
-        run: npm ci --no-audit --no-fund
+        run: |
+          (cd dvhub && npm ci --ignore-scripts --no-audit --no-fund)
+          docker pull -q node:22-bookworm
 
       - name: Suchfenster für Doppelungen
         id: window
@@ -92,7 +95,7 @@ jobs:
           # Keine Wildcards auf gh api, kein Schließen, kein Push, kein Task.
           claude_args: >-
             ${{ inputs.mode == 'fix'
-              && format('--model claude-opus-5-5 --allowed-tools "Read,Grep,Glob,Edit,Write,Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue comment:*),Bash(gh api repos/{0}/issues/comments/{1} --jq .body),Bash(git add:*),Bash(git commit:*),Bash(git diff:*),Bash(git status),Bash(git log:*),Bash(git tag --contains:*),Bash(npm --prefix dvhub test),Bash(node --test:*)" --disallowed-tools "Task,WebFetch,WebSearch,Read(//proc/**),Read(//sys/**),Read(//run/**)"', github.repository, inputs.comment_id)
+              && format('--model claude-opus-5-5 --allowed-tools "Read,Grep,Glob,Edit,Write,Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue comment:*),Bash(gh api repos/{0}/issues/comments/{1} --jq .body),Bash(git add:*),Bash(git commit:*),Bash(git diff:*),Bash(git status),Bash(git log:*),Bash(git tag --contains:*),Bash(.github/sekretaer-test.sh npm test),Bash(.github/sekretaer-test.sh node --test:*)" --disallowed-tools "Task,WebFetch,WebSearch,Edit(.github/**),Write(.github/**),Read(//proc/**),Read(//sys/**),Read(//run/**)"', github.repository, inputs.comment_id)
               || format('--model claude-sonnet-5-5 --allowed-tools "Read,Grep,Glob,Bash(gh label list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue comment {2}:*),Bash(gh issue edit {2} --add-label:*),Bash(gh api repos/{0}/issues/comments/{1} --jq .body),Bash(git log:*),Bash(git tag --contains:*)" --disallowed-tools "Task,Edit,Write,WebFetch,WebSearch,Read(//proc/**),Read(//sys/**),Read(//run/**)"', github.repository, inputs.comment_id, inputs.issue_number) }}
           prompt: |
             You are the issue secretary for the DVhub repository (energy-management software
@@ -196,15 +199,18 @@ jobs:
                  in your comment.
                - Otherwise: first write a test in dvhub/test/ (node:test, existing style)
                  that FAILS on the current code, run it with
-                 `node --test dvhub/test/<file>.test.js` and confirm it is red; then
-                 make the minimal fix and confirm green; then run `npm --prefix dvhub test`,
-                 which must have 0 failures. Do not touch .github/ or unrelated files.
+                 `.github/sekretaer-test.sh node --test test/<file>.test.js` (it runs inside
+                 dvhub/ in an isolated container) and confirm it is red; then make the
+                 minimal fix and confirm green; then run `.github/sekretaer-test.sh npm test`,
+                 which must have 0 failures. Never run tests any other way. Do not touch .github/ or unrelated files.
                - Commit as ONE commit on the checked-out branch (do not create branches).
                  German subject in the repository style, e.g. "fix(regelung): …". The body
                  starts with "fixes #${{ inputs.issue_number }}", then explains cause, fix
                  and test. No Co-Authored-By trailer. You cannot push; the workflow opens a
-                 draft PR from your commit.
-               - Your comment says what you changed and that a draft PR follows.
+                 draft PR from your commit after an independent test gate (full suite
+                 green, your new test red without the fix).
+               - Your comment says what you changed and that a draft PR follows once the
+                 test gate passes.
 
             Do not minimize or edit the invoking comment; the workflow resolves it.
 
@@ -237,14 +243,14 @@ jobs:
           gh api graphql -f id="$NODE_ID" -f query='
             mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:RESOLVED}){minimizedComment{isMinimized}}}'
 
-  # Testsperre ohne jede Schreibberechtigung: Hier läuft vom Agenten geschriebener Code
-  # (Tests, package.json). Darum kein Token im Checkout, nur Leserechte, Zeitlimit.
+  # Testsperre ohne Schreibberechtigung. Der Code aus dem Patch läuft nur im Container
+  # (.github/sekretaer-test.sh, Fassung aus main, der Patch darf .github/ nicht ändern).
   test-gate:
-    name: Tests des Fixes
+    name: Testsperre
     needs: run
     if: needs.run.outputs.fix == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -261,21 +267,50 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Patch anwenden und Suite laufen lassen
+      - name: Patch prüfen, Suite grün, neuer Test vorher rot
+        env:
+          BASE: ${{ github.sha }}
         run: |
+          set -euo pipefail
           git -c user.name=ci -c user.email=ci@localhost am "$RUNNER_TEMP/fix.patch"
-          if git diff --name-only "${{ github.sha }}" HEAD | grep -q '^\.github/'; then
-            echo "::error::Agent hat Workflow-Dateien geändert"
-            exit 1
+          if git diff --name-only "$BASE" HEAD | grep -q '^\.github/'; then
+            echo "::error::Agent hat Workflow-Dateien geändert"; exit 1
           fi
-          cd dvhub && npm ci --no-audit --no-fund && npm test
+          tests=$(git diff --name-only --diff-filter=AM "$BASE" HEAD -- dvhub/test | grep '\.test\.js$' || true)
+          if [ -z "$tests" ]; then echo "::error::Der Fix bringt keinen Test mit"; exit 1; fi
+          .github/sekretaer-test.sh npm test
+          # Gegenprobe: nur die Testdateien behalten, den Fix zurücknehmen — dann muss es rot sein.
+          git diff "$BASE" HEAD -- . ':(exclude)dvhub/test' > "$RUNNER_TEMP/nur-fix.patch"
+          if [ -s "$RUNNER_TEMP/nur-fix.patch" ]; then git apply -R "$RUNNER_TEMP/nur-fix.patch"; fi
+          rel=$(echo "$tests" | sed 's#^dvhub/##' | tr '\n' ' ')
+          if .github/sekretaer-test.sh node --test $rel; then
+            echo "::error::Der neue Test ist auch ohne den Fix grün — er beweist nichts"; exit 1
+          fi
+          echo "Testsperre bestanden: Suite grün, neuer Test ohne Fix rot."
+
+  # Testsperre gescheitert: kurz im Issue Bescheid geben, statt stumm kein PR.
+  test-gate-meldung:
+    name: Testsperre gescheitert
+    needs: [run, test-gate]
+    if: failure() && needs.test-gate.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment ${{ inputs.issue_number }} --repo ${{ github.repository }} --body "Der Fix hat die Testsperre nicht bestanden (Suite rot, kein Test oder Test auch ohne Fix grün) — darum kein PR. Details: $RUN_URL
+
+          🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 
   # Frischer Checkout mit Schreib-Token: hier läuft KEIN Code aus dem Patch, nur
   # git am, push und gh pr create. Erst nach grüner Testsperre.
   open-pr:
     name: Draft-PR öffnen
     needs: [run, test-gate]
-    if: needs.run.outputs.fix == 'true'
+    if: needs.run.outputs.fix == 'true' && needs.test-gate.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

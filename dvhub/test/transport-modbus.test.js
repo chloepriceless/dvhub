@@ -89,7 +89,11 @@ test('mbWriteMultiple surfaces Modbus exception responses', async () => {
 // auf die nicht-routbare TEST-NET/Blackhole-Adresse 10.255.255.1, die SYN ohne
 // Antwort schluckt, und prüft, dass die Promise innerhalb einer Zeitschranke
 // rejected statt zu hängen.
-test('mbWriteSingle rejects within connect timeout against a blackhole host', async () => {
+// Im Testcontainer des Issue-Sekretärs gibt es kein Netz (DVHUB_TEST_OFFLINE=1): dort
+// scheitert der Connect sofort mit ENETUNREACH statt am Timeout — nicht aussagekräftig.
+test('mbWriteSingle rejects within connect timeout against a blackhole host', {
+  skip: process.env.DVHUB_TEST_OFFLINE === '1' && 'kein Netz im Sekretär-Testcontainer'
+}, async () => {
   const transport = createModbusTransport({ connectTimeoutMs: 300 });
   const start = Date.now();
 
