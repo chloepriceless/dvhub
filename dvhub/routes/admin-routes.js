@@ -68,8 +68,17 @@ export function createAdminRoutes(deps) {
   } = deps;
 
   async function npmInstallOmitDev(repoRoot, appDir) {
-    try { fs.rmSync(path.join(repoRoot, NPM_INSTALL_MARKER), { force: true }); } catch { /* post-update.sh prüft zusätzlich node_modules */ }
-    return execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
+    const marker = path.join(repoRoot, NPM_INSTALL_MARKER);
+    try { fs.rmSync(marker, { force: true }); } catch { /* post-update.sh prüft zusätzlich node_modules */ }
+    const result = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
+    // Nach Erfolg denselben Hash wie post-update.sh schreiben (Lockfile, sonst
+    // package.json) — sonst installiert post-update.sh gleich danach ein
+    // zweites Mal (Gegenprüfung 25.10.2026).
+    try {
+      const lock = ['package-lock.json', 'package.json'].map((f) => path.join(appDir, f)).find((f) => fs.existsSync(f));
+      if (lock) fs.writeFileSync(marker, crypto.createHash('sha256').update(fs.readFileSync(lock)).digest('hex') + '\n');
+    } catch { /* ohne Marker installiert post-update.sh beim nächsten Start erneut — harmlos */ }
+    return result;
   }
 
   return async function handleAdminRoute(req, res, url) {

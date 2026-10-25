@@ -14,6 +14,7 @@ import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { createAdminRoutes } from '../routes/admin-routes.js';
 import { SEMVER_TAG, GIT_SHA_REF, compareSemverTag, selectLatestSemverTag, assertNoDowngrade } from '../routes-api.js';
 
@@ -22,6 +23,7 @@ export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '
   const appDir = path.join(repoRoot, 'dvhub');
   fs.mkdirSync(appDir);
   fs.writeFileSync(path.join(repoRoot, '.npm-install-hash'), 'alt\n');
+  fs.writeFileSync(path.join(appDir, 'package-lock.json'), '{"lockfileVersion":3}\n');
   const calls = [];
   const execFileAsync = async (cmd, args = [], opts = {}) => {
     calls.push([cmd, ...args].join(' '));
@@ -77,6 +79,18 @@ describe('Self-Update: Stash und npm-Marker', () => {
         const r = await h.post(pathname, body);
         assert.equal(r.code, 200, JSON.stringify(r.payload));
         assert.ok(!h.calls.some((c) => /stash.*(--include-untracked|-u\b|--all)/.test(c)), h.calls.join('\n'));
+      } finally { h.cleanup(); }
+    });
+
+    // Gegenprüfung zu 5fbdb213: nach Erfolg schreibt auch die Oberfläche den
+    // Marker — sonst installiert post-update.sh danach ein zweites Mal.
+    it(`${label}: nach erfolgreichem npm install = Lockfile-Hash (kein zweiter Lauf in post-update.sh)`, async () => {
+      const h = makeHarness();
+      try {
+        const r = await h.post(pathname, body);
+        assert.equal(r.code, 200, JSON.stringify(r.payload));
+        const want = crypto.createHash('sha256').update(fs.readFileSync(path.join(h.appDir, 'package-lock.json'))).digest('hex');
+        assert.equal(fs.readFileSync(path.join(h.repoRoot, '.npm-install-hash'), 'utf8').trim(), want);
       } finally { h.cleanup(); }
     });
 
