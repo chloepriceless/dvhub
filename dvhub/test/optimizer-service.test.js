@@ -450,10 +450,13 @@ describe('Optimizer Service: DVhub stößt den EOS-Lauf an', () => {
 });
 
 describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 25.10.2026)', () => {
-  test('Lauf schreibt selbst keine Prognose — weder Adapter noch zusaetzlicher Bridge-Push', async (t) => {
-    // Die Bridge schreibt auf ihrem eigenen Takt (und bei neuen Preisen). Ein
-    // zusaetzlicher Push je Lauf vervielfachte ihre Schreibvorgaenge in EOS
-    // (Geraete-Messwerte, die EOS nie kuerzt). lastEosPush setzt die Bridge.
+  test('neue Prognose geht einmal je Version ueber die Bridge an EOS, nicht je Lauf', async (t) => {
+    // Die Bridge schreibt auf ihrem eigenen Takt (Standard 1 h) und bei neuen
+    // Preisen. Ein Push je Lauf vervielfachte ihre Schreibvorgaenge in EOS
+    // (Geraete-Messwerte, die EOS nie kuerzt) — ganz ohne Push aus dem Lauf kam
+    // eine neue PV-Prognose aber erst bis zu eine Stunde spaeter bei EOS an
+    // (Gegenpruefung 2b66d3ee, P2). Deshalb: je neuer forecastVersion genau ein
+    // Push. lastEosPush setzt die Bridge selbst.
     t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
     let adapterPushes = 0;
     let bridgePushes = 0;
@@ -466,19 +469,29 @@ describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 
       setEmsIntervalSec: async () => ({ ok: true })
     };
     const eosForecastBridge = { push: async () => { bridgePushes++; return { ok: true, pushed: [], errors: {} }; } };
-    const { ctx, state } = buildCtx({
+    const { ctx, state, bumpVersion } = buildCtx({
       optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
       ctx: { eosAdapter, eosForecastBridge }
     });
     state.optimizer = { ...(state.optimizer || {}) };
     const svc = createOptimizerService(ctx);
     state.optimizer.lastEosPush = { ok: false, error: 'LoadImport: HTTP 500', at: 1 };
+    const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
     await svc.start();
-    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    await flush();
     assert.equal(state.optimizer.source, 'eos', 'EOS-Pfad gelaufen');
     assert.equal(adapterPushes, 0, 'Adapter schiebt nichts');
-    assert.equal(bridgePushes, 0, 'kein zusaetzlicher Bridge-Push je Lauf');
-    assert.deepEqual(state.optimizer.lastEosPush, { ok: false, error: 'LoadImport: HTTP 500', at: 1 }, 'Bridge-Ergebnis bleibt stehen');
+    assert.equal(bridgePushes, 1, 'erster Lauf: Prognose dieses Prozesses einmal an EOS');
+    assert.deepEqual(state.optimizer.lastEosPush, { ok: false, error: 'LoadImport: HTTP 500', at: 1 }, 'Lauf ueberschreibt das Bridge-Ergebnis nicht');
+    const runs = state.optimizer.runCount;
+    svc.notifyEosRestart();
+    await flush();
+    assert.ok(state.optimizer.runCount > runs, 'weiterer Lauf');
+    assert.equal(bridgePushes, 1, 'gleiche Prognose: kein weiterer Push');
+    bumpVersion();
+    t.mock.timers.tick(60_000);
+    await flush();
+    assert.equal(bridgePushes, 2, 'neue Prognose: innerhalb einer Minute an EOS');
     await svc.close();
   });
 });

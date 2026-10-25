@@ -344,6 +344,9 @@ export function createOptimizerService(ctx) {
   // (nach einem Neustart wiederhergestellt) und zaehlt fuer die Erstplan-Wache
   // nicht als Plan.
   let eosFirstPushAt = null;
+  // forecastVersion, die der Lauf zuletzt ueber die Bridge an EOS geschickt hat
+  // (Startwert: in diesem Prozess noch keine).
+  let bridgePushedForecastVersion = Symbol('noch kein Push');
   // Zuletzt erfolgreich geholter EOS-Plan (keepLastEosPlan). Liegt auch als
   // Datei im Datenverzeichnis: nach einem Neustart von DVhub war der Plan
   // sonst vergessen, und solange EOS nicht antwortete (laufende Rechnung),
@@ -416,7 +419,7 @@ export function createOptimizerService(ctx) {
    * rechnet damit aber erst zum naechsten ems.interval-Tick (bis 15 min), und
    * die aus EOS' Datenbank wiederhergestellte Loesung gilt faelschlich als
    * frisch, weil eosFirstPushAt noch vom DVhub-Start stammt. Deshalb: Zeitpunkt
-   * zuruecksetzen und einen Lauf anstossen — der pusht, findet keine frische
+   * zuruecksetzen und einen Lauf anstossen — der findet keine frische
    * Loesung und macht die Erstplan-Wache scharf (Boost auf 60 s).
    */
   function notifyEosRestart() {
@@ -627,11 +630,21 @@ export function createOptimizerService(ctx) {
         try {
           // Prognose an EOS: schreibt allein die Forecast-Bridge, auf ihrem
           // eigenen Takt und bei neuen Preisen (Review 25.10.2026). Sie traegt
-          // ihr Ergebnis selbst in state.optimizer.lastEosPush ein. Der Lauf
-          // schiebt nichts mehr: der Adapter ueberschrieb mit der rohen
-          // Stundenlast die Reihe der Bridge, und ein Bridge-Push je Lauf
-          // vervielfachte ihre Schreibvorgaenge in EOS (Geraete-Messwerte, die
-          // EOS nie kuerzt).
+          // ihr Ergebnis selbst in state.optimizer.lastEosPush ein. Der Adapter
+          // ueberschrieb mit der rohen Stundenlast die Reihe der Bridge, und ein
+          // Bridge-Push je Lauf vervielfachte ihre Schreibvorgaenge in EOS
+          // (Geraete-Messwerte, die EOS nie kuerzt). Ganz ohne Push aus dem
+          // Lauf kam eine neue PV-Prognose aber erst zum naechsten Bridge-Takt
+          // (Standard 1 h) bei EOS an. Deshalb je neuer forecastVersion genau
+          // EIN Push — auch im ersten Lauf des Prozesses, damit eosFirstPushAt
+          // wieder hinter einem echten Push liegt.
+          const bridge = ctx.eosForecastBridge;
+          const forecastVersion = ctx.forecastService?.forecastVersion;
+          if (bridge && typeof bridge.push === 'function' && forecastVersion !== bridgePushedForecastVersion) {
+            bridgePushedForecastVersion = forecastVersion;
+            // Fehler meldet die Bridge selbst (lastEosPush); der Plan wird trotzdem geholt.
+            try { await bridge.push(); } catch (err) { pushLog('eos_forecast_bridge_error', { phase: 'optimizer_run', error: err.message }); }
+          }
           if (eosFirstPushAt === null) eosFirstPushAt = Date.now();
           // eosSchedule = FRBC dispatch (battery power) for display/comparison.
           // eosGridSetpoints = net-grid control slots from EOS' SOLUTION (T-0118)
