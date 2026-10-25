@@ -92,18 +92,6 @@ fi
 
 echo "  EOS: Installiere/aktualisiere EOS (${EOS_PIN}) bare-metal venv..."
 
-# Versionswechsel (z. B. 0.3-Fork -> 0.4): EOS-Konfiguration und Messreihen
-# vorher sichern. 0.4 migriert die Konfiguration beim Start selbst; geht dabei
-# etwas schief, liegt der alte Stand hier.
-if [[ "$EOS_PIN_CHANGED" -eq 1 && -n "$EOS_HAVE" ]]; then
-  _eos_data="${EOS_HOME:-$(getent passwd "$SERVICE_USER" | cut -d: -f6)/.local/share/net.akkudoktor.eos}"
-  if [[ -d "$_eos_data" ]]; then
-    _dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)-data-before-${EOS_PIN//\//_}"
-    mkdir -p "$_dest" && cp -a "$_eos_data/." "$_dest/" \
-      && echo "  EOS: Daten/Konfiguration vor dem Versionswechsel gesichert nach $_dest"
-  fi
-fi
-
 # Idempotent clone / fetch auf den gepinnten Stand. Funktioniert fuer Tag,
 # Branch und Commit-SHA gleichermassen, weil ueber FETCH_HEAD ausgecheckt wird.
 # Der lokale Arbeitszweig heisst immer dvhub-eos -- so bleibt der Name stabil,
@@ -114,9 +102,13 @@ fi
 # darum frueher jeder git-Aufruf hier wirkungslos: die Sicherung lokaler
 # Aenderungen lief ins Leere (Review 25.10.2026). safe.directory gilt nur fuer
 # genau diesen Ordner; Hooks und fsmonitor bleiben dabei aus.
+# Aeltere git-Versionen (Debian 12: 2.39) vergleichen safe.directory mit dem
+# physischen Pfad — darum zusaetzlich der aufgeloeste Pfad (Symlink, //).
 eos_git() {
-  git -c safe.directory="$EOS_DIR" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
-    -c advice.detachedHead=false -C "$EOS_DIR" "$@"
+  local phys
+  phys="$(cd "$EOS_DIR" 2>/dev/null && pwd -P || echo "$EOS_DIR")"
+  git -c safe.directory="$EOS_DIR" -c safe.directory="$phys" -c core.hooksPath=/dev/null \
+    -c core.fsmonitor=false -c advice.detachedHead=false -C "$EOS_DIR" "$@"
 }
 
 # Frisch klonen, aber erst in einen Nachbarordner. Der bisherige Stand wird erst
@@ -134,6 +126,12 @@ eos_clone_fresh() {
      && "${g[@]}" remote add origin "$EOS_REPO_URL" \
      && "${g[@]}" fetch -q --depth 1 origin "$EOS_PIN" \
      && "${g[@]}" checkout -q -B dvhub-eos FETCH_HEAD; then
+    # Lokale Aenderungen des alten Checkouts erst jetzt sichern — direkt vor
+    # dem Ersetzen, nicht bei jedem gescheiterten Versuch. Unlesbar → abbrechen.
+    if [[ -d "$EOS_DIR/.git" ]] && ! eos_backup_local_changes; then
+      rm -rf "$tmp"
+      return 1
+    fi
     [[ -e "$EOS_DIR" ]] && mv "$EOS_DIR" "$tmp/old"
     mv "$tmp/eos" "$EOS_DIR"
     rm -rf "$tmp"
@@ -151,7 +149,13 @@ eos_clone_fresh() {
 # 2026-09-21: 725 Zeilen, nur per Zufall wiederhergestellt).
 eos_backup_local_changes() {
   local dirty
-  dirty="$(eos_git status --porcelain --untracked-files=no 2>/dev/null || true)"
+  # Scheitert git hier, ist der Zustand UNBEKANNT, nicht "sauber": dann nichts
+  # ersetzen (Gegenpruefung 25.10.2026 — sonst gingen lokale Patches ungesichert
+  # mit dem alten Ordner weg).
+  if ! dirty="$(eos_git status --porcelain --untracked-files=no 2>/dev/null)"; then
+    echo "  EOS: Zustand von $EOS_DIR nicht lesbar (git status) — nichts geaendert" >&2
+    return 1
+  fi
   [[ -n "$dirty" ]] || return 0
   local dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$dest"
@@ -177,18 +181,39 @@ else
   eos_git remote set-url origin "$EOS_REPO_URL" 2>/dev/null || true
   # Erst holen (aendert den Arbeitsbaum nicht), dann sichern und umstellen.
   if eos_git fetch -q --depth 1 origin "$EOS_PIN" 2>/dev/null; then
-    eos_backup_local_changes
+    # Erst jetzt sichern (der neue Stand ist da); Zustand unlesbar → Abbruch.
+    eos_backup_local_changes || exit 1
     # Beim Versionswechsel kommen die alten Patches NICHT mit: sie gehoeren zum
     # alten Stand und sind gesichert.
     eos_git reset --hard -q 2>/dev/null || true
-    eos_git checkout -q -B dvhub-eos FETCH_HEAD || exit 1
+    if ! eos_git checkout -q -B dvhub-eos FETCH_HEAD; then
+      # z. B. eine untracked Datei im Weg: frisch klonen (ersetzt erst danach).
+      echo "  EOS: Checkout auf ${EOS_PIN} nicht moeglich — klone neu"
+      eos_clone_fresh || exit 1
+    fi
   else
     # Ein flacher Klon kann einen Ref aus einer anderen Historie nicht
     # nachziehen -- dann frisch klonen. Der alte Stand wird erst ersetzt, wenn
-    # der neue Klon steht; lokale Aenderungen sind vorher gesichert.
+    # der neue Klon steht.
     echo "  EOS: Fetch auf ${EOS_PIN} nicht moeglich — klone neu"
-    eos_backup_local_changes
     eos_clone_fresh || exit 1
+  fi
+fi
+
+# Versionswechsel (z. B. 0.3-Fork -> 0.4): EOS-Konfiguration und Messreihen
+# sichern, bevor der neue Stand startet. 0.4 migriert die Konfiguration beim
+# Start selbst; geht dabei etwas schief, liegt der alte Stand hier.
+# Erst NACH dem erfolgreichen Holen des neuen Stands und je Pin nur einmal
+# (Gegenpruefung 25.10.2026): ein Pin, der scheitert, scheitert bei jedem
+# Dienststart erneut — vorher kopierte jeder Versuch den ganzen, wachsenden
+# Messwertspeicher noch einmal (SD-Karte voll).
+if [[ "$EOS_PIN_CHANGED" -eq 1 && -n "$EOS_HAVE" ]]; then
+  _eos_data="${EOS_HOME:-$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6 || true)/.local/share/net.akkudoktor.eos}"
+  _suffix="data-before-${EOS_PIN//\//_}"
+  if [[ -d "$_eos_data" ]] && ! compgen -G "$EOS_BACKUP_ROOT/*-${_suffix}" >/dev/null; then
+    _dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)-${_suffix}"
+    mkdir -p "$_dest" && cp -a "$_eos_data/." "$_dest/" \
+      && echo "  EOS: Daten/Konfiguration vor dem Versionswechsel gesichert nach $_dest"
   fi
 fi
 
