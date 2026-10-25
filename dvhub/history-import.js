@@ -1838,6 +1838,8 @@ export function createHistoryImportManager({
     const days = [...new Set(missingBuckets.map((ts) => berlinDateString(ts)))].sort();
     const dayWindows = buildPriceBackfillDayWindows(days);
     const matchedRows = [];
+    // Fehlende Slots, die die geschriebenen Zeilen decken (eine Stundenzeile bis zu vier).
+    const coveredMissing = new Set();
     const openDays = [];
     const errors = [];
 
@@ -1861,7 +1863,9 @@ export function createHistoryImportManager({
             { length: Math.max(1, Math.round(spacing[index] / PRICE_BUCKET_SECONDS)) },
             (_, quarter) => bucketIso(rowMs + quarter * PRICE_BUCKET_SECONDS * 1000)
           );
-          if (!covered.some((ts) => missingSet.has(ts))) return;
+          const hits = covered.filter((ts) => missingSet.has(ts));
+          if (!hits.length) return;
+          for (const ts of hits) coveredMissing.add(ts);
           matchedRows.push({ ...row, resolutionSeconds: spacing[index] });
         });
       } catch (error) {
@@ -1873,7 +1877,7 @@ export function createHistoryImportManager({
     const historyRows = buildHistoricalPriceTelemetrySamples(matchedRows);
     if (historyRows.length) await store.writeSamples(historyRows);
 
-    const skippedBuckets = Math.max(0, missingBuckets.length - matchedRows.length);
+    const skippedBuckets = Math.max(0, missingBuckets.length - coveredMissing.size);
     const partial = openDays.length > 0 && historyRows.length > 0;
     const ok = openDays.length === 0 || partial;
     const jobId = await store.writeImportJob({
@@ -1891,7 +1895,7 @@ export function createHistoryImportManager({
           endDayExclusive: window.endDayExclusive,
           days: window.days
         })),
-        matchedBuckets: matchedRows.length,
+        matchedBuckets: coveredMissing.size,
         skippedBuckets,
         openDays,
         errors
@@ -1903,7 +1907,7 @@ export function createHistoryImportManager({
       partial,
       jobId,
       requestedDays: days.length,
-      matchedBuckets: matchedRows.length,
+      matchedBuckets: coveredMissing.size,
       importedRows: historyRows.length,
       skippedBuckets,
       days,

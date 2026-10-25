@@ -124,6 +124,41 @@ test('Historie: Einspeiseerloes einer Stunde mit Stundenpreis zaehlt alle vier V
   }
 });
 
+test('nach dem Wechsel auf 15-min-Day-Ahead (01.10.2025) wird ein einzelner :00-Preis nicht geviertelt', () => {
+  // Codex-/Claude-Gegenpruefung 25.10.2026: der Backfill schreibt nur fehlende
+  // Slots, nach 10/2025 kann so ein einzelner 15-min-Preis um :00 ohne Nachbarn
+  // in seiner Stunde liegen. Er gilt nur fuer seine Viertelstunde.
+  const store = createStore();
+  try {
+    store.writeSamples([
+      price('2026-01-10T08:00:00.000Z', 6),
+      price('2026-01-10T10:00:00.000Z', 7),
+      price('2026-01-10T12:00:00.000Z', 8),
+      ...quarters('2026-01-10T10:00:00.000Z').map((ts) => exportSample(ts, 0.5))
+    ]);
+    const slots = store.listPriceSlots({ start: '2026-01-10T08:00:00.000Z', end: '2026-01-10T13:00:00.000Z' });
+    assert.deepEqual(slots.map((s) => s.ts), ['2026-01-10T08:00:00.000Z', '2026-01-10T10:00:00.000Z', '2026-01-10T12:00:00.000Z']);
+    assert.deepEqual(store.listMissingPriceBuckets({ start: '2026-01-10T00:00:00.000Z', end: '2026-01-11T00:00:00.000Z' }),
+      ['2026-01-10T10:15:00.000Z', '2026-01-10T10:30:00.000Z', '2026-01-10T10:45:00.000Z']);
+  } finally {
+    store.close();
+  }
+});
+
+test('vor 10/2025 deckt auch ein einzelner Stundenpreis ohne Nachbarn (alter 900-s-Stempel) seine Stunde', () => {
+  const store = createStore();
+  try {
+    store.writeSamples([
+      price('2025-06-10T10:00:00.000Z', 5.2),
+      exportSample('2025-06-10T10:30:00.000Z', 0.5)
+    ]);
+    assert.deepEqual(store.listMissingPriceBuckets({}), []);
+    assert.deepEqual(store.listPriceSlots({ start: '2025-06-10T10:30:00.000Z', end: '2025-06-10T10:45:00.000Z' }).map((s) => s.priceCtKwh), [5.2]);
+  } finally {
+    store.close();
+  }
+});
+
 test('Cache-Version erhoeht: Monatsstaende mit fehlenden Stundenpreisen werden neu gerechnet', async () => {
   const { SUMMARY_CACHE_VERSION } = await import('../../history-runtime.js');
   assert.ok(SUMMARY_CACHE_VERSION >= 3);

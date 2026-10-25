@@ -621,6 +621,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       SELECT series_key, ts_utc, MAX(resolution_seconds) AS resolution_seconds
       FROM timeseries_samples
       WHERE series_key = 'price_ct_kwh'
+        AND value_num IS NOT NULL
         ${start ? 'AND ts_utc >= ?' : ''}
         ${end ? 'AND ts_utc < ?' : ''}
       GROUP BY series_key, ts_utc

@@ -89,7 +89,15 @@ test('PG listMissingPriceBuckets: Viertelstunden unter einem Stundenpreis gelten
       // 15-min-Zeit (auch mit falschem 3600-s-Stempel): 14:15 fehlt wirklich.
       ['price_ct_kwh', '2026-03-27T14:00:00.000Z', 1, 3600],
       ['price_ct_kwh', '2026-03-27T14:30:00.000Z', 1, 3600],
-      ['grid_export_w', '2026-03-27T14:15:00.000Z', 400]
+      ['grid_export_w', '2026-03-27T14:15:00.000Z', 400],
+      // Nach 10/2025 einzelner :00-Preis ohne Nachbarn in der Stunde: nicht vierteln.
+      ['price_ct_kwh', '2026-01-10T08:00:00.000Z', 6],
+      ['price_ct_kwh', '2026-01-10T10:00:00.000Z', 7],
+      ['price_ct_kwh', '2026-01-10T12:00:00.000Z', 8],
+      ...quarters('2026-01-10T10:00:00.000Z').map((ts) => ['grid_export_w', ts, 2000]),
+      // Vor 10/2025 einzelner Stundenpreis ohne Nachbarn (900-s-Stempel): deckt.
+      ['price_ct_kwh', '2025-07-01T10:00:00.000Z', 5],
+      ['grid_export_w', '2025-07-01T10:30:00.000Z', 2000]
     ]);
     assert.deepEqual(await store.listMissingPriceBuckets({ start: '2025-06-10T00:00:00.000Z', end: '2025-06-11T00:00:00.000Z' }), []);
     assert.deepEqual(await store.listMissingPriceBuckets({ start: '2025-06-10T10:15:00.000Z', end: '2025-06-10T11:00:00.000Z' }), []);
@@ -97,8 +105,14 @@ test('PG listMissingPriceBuckets: Viertelstunden unter einem Stundenpreis gelten
       await store.listMissingPriceBuckets({ start: '2026-03-27T00:00:00.000Z', end: '2026-03-28T00:00:00.000Z' }),
       ['2026-03-27T14:15:00.000Z']
     );
-    // Ohne Bereichsgrenzen dieselbe Antwort.
-    assert.deepEqual(await store.listMissingPriceBuckets({}), ['2026-03-27T14:15:00.000Z']);
+    assert.deepEqual(
+      await store.listMissingPriceBuckets({ start: '2026-01-10T00:00:00.000Z', end: '2026-01-11T00:00:00.000Z' }),
+      ['2026-01-10T10:15:00.000Z', '2026-01-10T10:30:00.000Z', '2026-01-10T10:45:00.000Z']
+    );
+    // Ohne Bereichsgrenzen alles zusammen; der Juli-2025-Slot ist gedeckt.
+    assert.deepEqual(await store.listMissingPriceBuckets({}), [
+      '2026-01-10T10:15:00.000Z', '2026-01-10T10:30:00.000Z', '2026-01-10T10:45:00.000Z', '2026-03-27T14:15:00.000Z'
+    ]);
   });
 });
 

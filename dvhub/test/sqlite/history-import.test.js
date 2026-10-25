@@ -1058,6 +1058,9 @@ test('price backfill stamps hourly day-ahead rows with 3600 s and stops refetchi
     const first = await manager.backfillMissingPriceHistory({ bzn: 'DE-LU' });
     assert.equal(first.ok, true);
     assert.equal(calls.length, 1);
+    // Eine Stundenzeile deckt alle vier fehlenden Viertelstunden.
+    assert.equal(first.matchedBuckets, 4);
+    assert.equal(first.skippedBuckets, 0);
     // Nur die 10:00-Zeile (12. Stundenwert seit 22:00 UTC = 40 + 12 = 52 EUR/MWh)
     // deckt die gemessene Stunde; sie traegt ihren echten Abstand.
     assert.equal(store.countRows('timeseries_samples', "series_key = 'price_ct_kwh' AND resolution_seconds = '3600'"), 1);
@@ -1076,9 +1079,8 @@ test('price backfill stamps hourly day-ahead rows with 3600 s and stops refetchi
 
 test('price backfill writes the hourly row when only a later quarter of its hour is missing', async () => {
   const store = createStore();
-  // Altbestand: Stundenpreis 10:00 mit 900-s-Stempel, ohne Nachbarn; Messung nur um 10:30.
+  // Messung nur um 10:30, noch kein Preis: der 10:00-Stundenpreis deckt sie.
   store.writeSamples([
-    { seriesKey: 'price_ct_kwh', ts: '2025-06-10T10:00:00.000Z', value: 5.2, scope: 'history', source: 'price_backfill', quality: 'backfilled', resolutionSeconds: 900, unit: 'ct/kWh' },
     { seriesKey: 'grid_import_w', ts: '2025-06-10T10:30:00.000Z', value: 800, scope: 'live', source: 'local_poll', quality: 'raw', resolutionSeconds: 900, unit: 'W' }
   ]);
   assert.deepEqual(store.listMissingPriceBuckets({}), ['2025-06-10T10:30:00.000Z']);
@@ -1096,6 +1098,7 @@ test('price backfill writes the hourly row when only a later quarter of its hour
     const result = await manager.backfillMissingPriceHistory({ bzn: 'DE-LU' });
     assert.equal(result.ok, true);
     assert.equal(result.matchedBuckets, 1);
+    assert.equal(result.skippedBuckets, 0);
     assert.deepEqual(store.listMissingPriceBuckets({}), []);
     const prices = store.listPriceSlots({ start: '2025-06-10T10:30:00.000Z', end: '2025-06-10T10:45:00.000Z' });
     assert.deepEqual(prices.map((p) => p.priceCtKwh), [5.2]);

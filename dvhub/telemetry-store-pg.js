@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
-import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS } from './telemetry-runtime.js';
+import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS } from './telemetry-runtime.js';
 
 // Plan 08-01 Task 3: resolve dvhub/db/migrations/ relative to this module file
 // so the runner works regardless of where node is invoked from (systemd CWD,
@@ -856,28 +856,13 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         UNION
         SELECT DISTINCT date_bin('${bucket}', slot_start_utc, ${origin})
           FROM energy_slots_15m WHERE series_key = ANY($1::text[]) AND ${range('slot_start_utc')}
-      ), price_ts AS (
-        -- Eine Stunde Rand fuer die Nachbarn am Bereichsrand.
-        SELECT ts_utc, MAX(resolution_seconds) AS res
-          FROM timeseries_samples
-         WHERE series_key = 'price_ct_kwh'
-           AND ($2::timestamptz IS NULL OR ts_utc >= $2::timestamptz - interval '1 hour')
-           AND ($3::timestamptz IS NULL OR ts_utc < $3::timestamptz + interval '1 hour')
-         GROUP BY ts_utc
-      ), price_spaced AS (
-        SELECT ts_utc, res,
-               EXTRACT(EPOCH FROM ts_utc - lag(ts_utc) OVER (ORDER BY ts_utc)) AS gap_prev,
-               EXTRACT(EPOCH FROM lead(ts_utc) OVER (ORDER BY ts_utc) - ts_utc) AS gap_next
-          FROM price_ts
-      ), priced AS (
-        SELECT date_bin('${bucket}', ts_utc, ${origin}) AS b FROM price_spaced
-        UNION
-        -- Stundenpreis (volle Stunde, naechster Nachbar >= 1 h; ohne Nachbarn der
-        -- Stempel) deckt auch :15/:30/:45 — gleiche Regel wie expandHourlyPriceRows.
-        SELECT ts_utc + q.k * interval '${bucket}' FROM price_spaced CROSS JOIN (VALUES (1), (2), (3)) AS q(k)
-         WHERE EXTRACT(EPOCH FROM ts_utc)::bigint % 3600 = 0
-           AND CASE WHEN gap_prev IS NULL AND gap_next IS NULL THEN res >= 3600
-                    ELSE LEAST(gap_prev, gap_next) >= 3600 END
+      ), ${hourlyPriceExpansionCteSql({
+        seriesKey: 'price_ct_kwh',
+        // Eine Stunde Rand fuer die Nachbarn am Bereichsrand.
+        rangeSql: "($2::timestamptz IS NULL OR ts_utc >= $2::timestamptz - interval '1 hour') AND ($3::timestamptz IS NULL OR ts_utc < $3::timestamptz + interval '1 hour')"
+      })}, priced AS (
+        -- Stundenpreise (vor 10/2025) decken auch :15/:30/:45 ihrer Stunde.
+        SELECT DISTINCT date_bin('${bucket}', ts, ${origin}) AS b FROM price_expanded
       )
       SELECT m.b FROM measured m LEFT JOIN priced p ON p.b = m.b WHERE p.b IS NULL ORDER BY m.b`, params);
     return (res.rows || []).map((r) => bucketIso(r.b, DEFAULT_PRICE_BUCKET_SECONDS));

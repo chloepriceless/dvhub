@@ -173,20 +173,59 @@ export function priceRowSpacingSeconds(rows) {
 }
 
 /**
- * true, wenn die Preiszeile bei `ms` ein Stundenpreis ist: volle UTC-Stunde und
- * die naechste Nachbarzeile derselben Reihe liegt mindestens eine Stunde weg.
- * Ohne Nachbarn entscheidet der Stempel. Der Stempel allein taugt nicht: der
- * Preis-Backfill stempelte Stundenpreise mit 900 s, epex-fetch.js bis Maerz 2026
- * 15-min-Preise mit 3600 s. Dieselbe Regel steht als SQL in
- * telemetry-store-pg.js (listMissingPriceBuckets).
+ * Beginn des 15-min-Day-Ahead (SDAC, Lieferung ab 01.10.2025 00:00 Berlin).
+ * Davor war der Day-Ahead stuendlich: 24 Zeilen je Tag.
  */
-function isHourlyPriceRow(ms, prevMs, nextMs, maxResolutionSeconds) {
-  if (!Number.isFinite(ms) || ms % PRICE_HOUR_MS !== 0) return false;
-  const gaps = [];
-  if (Number.isFinite(prevMs)) gaps.push(ms - prevMs);
-  if (Number.isFinite(nextMs)) gaps.push(nextMs - ms);
-  if (!gaps.length) return Number(maxResolutionSeconds) >= 3600;
-  return Math.min(...gaps) >= PRICE_HOUR_MS;
+export const QUARTER_HOUR_DAY_AHEAD_START_MS = Date.UTC(2025, 8, 30, 22, 0, 0);
+
+/**
+ * true, wenn die Preiszeile bei `ms` ein Stundenpreis ist: vor dem 15-min-Day-
+ * Ahead, volle UTC-Stunde und keine Nachbarzeile derselben Reihe naeher als eine
+ * Stunde. Der Stempel taugt dafuer nicht: der Preis-Backfill stempelte
+ * Stundenpreise mit 900 s, epex-fetch.js bis Maerz 2026 15-min-Preise mit 3600 s.
+ * Danach nie: der Backfill schreibt nur fehlende Slots, ein einzelner 15-min-
+ * Preis um :00 darf nicht fuer :15/:30/:45 gelten (Gegenpruefung 25.10.2026).
+ * Dieselbe Regel steht als SQL in hourlyPriceExpansionCteSql.
+ */
+function isHourlyPriceRow(ms, prevMs, nextMs) {
+  if (!Number.isFinite(ms) || ms >= QUARTER_HOUR_DAY_AHEAD_START_MS || ms % PRICE_HOUR_MS !== 0) return false;
+  if (Number.isFinite(prevMs) && ms - prevMs < PRICE_HOUR_MS) return false;
+  if (Number.isFinite(nextMs) && nextMs - ms < PRICE_HOUR_MS) return false;
+  return true;
+}
+
+/**
+ * SQL-Gegenstueck zu expandHourlyPriceRows fuer PostgreSQL (WITH-Teile, ohne
+ * das WITH). Liefert price_expanded(ts, value_num, resolution_seconds): alle
+ * Preiszeilen plus Kopien der Stundenpreise fuer :15/:30/:45.
+ * `rangeSql` ist eine Bedingung auf ts_utc, die eine Stunde Rand vor und nach
+ * dem gewuenschten Bereich einschliesst (PRICE_COVERAGE_PAD_MS).
+ */
+export function hourlyPriceExpansionCteSql({ seriesKey = 'price_ct_kwh', rangeSql }) {
+  if (!/^[a-z0-9_]+$/.test(seriesKey)) throw new Error(`invalid price series key: ${seriesKey}`);
+  return `price_rows AS (
+        SELECT ts_utc, value_num, resolution_seconds
+          FROM timeseries_samples
+         WHERE series_key = '${seriesKey}' AND value_num IS NOT NULL AND ${rangeSql}
+      ), price_spaced AS (
+        SELECT ts_utc,
+               EXTRACT(EPOCH FROM ts_utc - lag(ts_utc) OVER (ORDER BY ts_utc)) AS gap_prev,
+               EXTRACT(EPOCH FROM lead(ts_utc) OVER (ORDER BY ts_utc) - ts_utc) AS gap_next
+          FROM (SELECT DISTINCT ts_utc FROM price_rows) AS d
+      ), price_hourly AS (
+        SELECT ts_utc FROM price_spaced
+         WHERE ts_utc < TIMESTAMPTZ '${new Date(QUARTER_HOUR_DAY_AHEAD_START_MS).toISOString()}'
+           AND EXTRACT(EPOCH FROM ts_utc)::bigint % 3600 = 0
+           AND COALESCE(gap_prev, 3600) >= 3600
+           AND COALESCE(gap_next, 3600) >= 3600
+      ), price_expanded AS (
+        SELECT ts_utc AS ts, value_num, resolution_seconds FROM price_rows
+        UNION ALL
+        SELECT r.ts_utc + q.k * interval '900 seconds', r.value_num, r.resolution_seconds
+          FROM price_rows r
+          JOIN price_hourly h ON h.ts_utc = r.ts_utc
+         CROSS JOIN (VALUES (1), (2), (3)) AS q(k)
+      )`;
 }
 
 /** Zeitraum, den die Preisabfragen zusaetzlich lesen muessen (Stunde davor/danach). */
@@ -218,8 +257,7 @@ export function expandHourlyPriceRows(rows) {
     for (let index = 0; index < times.length; index += 1) {
       const ms = times[index];
       const group = byTs.get(ms);
-      const maxResolution = Math.max(...group.map((row) => Number(row.resolution_seconds) || 0));
-      if (!isHourlyPriceRow(ms, times[index - 1], times[index + 1], maxResolution)) continue;
+      if (!isHourlyPriceRow(ms, times[index - 1], times[index + 1])) continue;
       for (let quarter = 1; quarter < 4; quarter += 1) {
         const ts = new Date(ms + quarter * PRICE_QUARTER_MS).toISOString();
         for (const row of group) out.push({ ...row, ts_utc: ts });

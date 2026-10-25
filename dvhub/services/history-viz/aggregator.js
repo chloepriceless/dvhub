@@ -1,6 +1,7 @@
 // services/history-viz/aggregator.js
 import { resolveBatteryCapacityWhForTimestamp } from '../../battery-stages.js';
 import { bucketBoundsW, summarizeEfficiencyRows } from '../inverter-efficiency/daily.js';
+import { hourlyPriceExpansionCteSql } from '../../telemetry-runtime.js';
 
 //
 // T-09.3-19 / 2026-06-14: the PV heatmap (getHeatmap) used to bucket + LABEL its
@@ -2134,15 +2135,19 @@ export function createHistoryVizAggregator(ctx) {
         FROM slot_src
         GROUP BY slot_start_utc
       ),
+      -- Stundenpreise (vor 10/2025) gelten fuer alle vier Viertelstunden ihrer
+      -- Stunde (gleiche Regel wie listPriceSlots, telemetry-runtime.js).
+      ${hourlyPriceExpansionCteSql({
+        seriesKey: PRICE_SERIES_KEY,
+        rangeSql: "ts_utc >= $1::timestamptz - interval '1 hour' AND ts_utc < $2::timestamptz + interval '1 hour'"
+      })},
       slot_price AS (
         SELECT
-          time_bucket('15 minutes', ts_utc) AS ts,
+          date_bin('15 minutes', ts, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS ts,
           AVG(value_num) AS price_ct_kwh
-        FROM timeseries_samples
-        WHERE series_key = '${PRICE_SERIES_KEY}'
-          AND value_num IS NOT NULL
-          AND ts_utc >= $1::timestamptz
-          AND ts_utc <  $2::timestamptz
+        FROM price_expanded
+        WHERE ts >= $1::timestamptz
+          AND ts <  $2::timestamptz
         GROUP BY 1
       ),
       slot_net AS (
