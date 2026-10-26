@@ -130,6 +130,26 @@ function bucketIso(ts, seconds) {
 // voll. Gegen das rohe Maximum liegt der Wert auf einer sauberen Anlage ~7 %
 // tiefer (eHive 15.10.: 20,7 statt 22,3 kW; Median wären 20,0). Fenster mit
 // weniger als 3 Werten fallen weg (ein Einzelwert wäre wieder der Rohwert).
+// Peak Shaving (GitHub #28): höchste Viertelstunden-Bezugsleistung in [$1, $2).
+// RLM-Leistungspreis = höchster 15-min-Mittelwert; energy_slots_15m hält je
+// Viertelstunde die Bezugsenergie (kWh), der Mittelwert ist kWh × 4 000 W. Je
+// Slot zählt der eigene Messwert (local_live) vor dem VRM-Import, damit eine
+// Viertelstunde nie doppelt oder mit der schlechteren Quelle zählt.
+export const GRID_IMPORT_PEAK_SQL = `
+      WITH per_slot AS (
+        SELECT DISTINCT ON (slot_start_utc) slot_start_utc, value_num
+        FROM energy_slots_15m
+        WHERE series_key = 'grid_import_w'
+          AND source_kind IN ('local_live', 'vrm_import')
+          AND slot_start_utc >= $1 AND slot_start_utc < $2
+          AND value_num IS NOT NULL
+        ORDER BY slot_start_utc, (source_kind = 'local_live') DESC
+      )
+      SELECT slot_start_utc, value_num FROM per_slot
+      ORDER BY value_num DESC, slot_start_utc ASC
+      LIMIT 1
+    `;
+
 export const RECENT_PV_PEAK_SQL = `
       WITH windows AS (
         SELECT date_trunc('day', ts_utc) AS day,
@@ -1829,6 +1849,17 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
      * Returns [{start: ISO, powerW: number}] with kWh->W conversion (* 4000).
      * Deduplicates by slot (prefers local_live over vrm_import via ORDER BY source_kind ASC).
      */
+    /**
+     * Peak Shaving: höchste Viertelstunden-Bezugsleistung in [start, end).
+     * @returns {Promise<{slotStart: string, powerW: number, energyKwh: number}|null>}
+     */
+    async getGridImportPeak({ start, end } = {}) {
+      const result = await pool.query(GRID_IMPORT_PEAK_SQL, [isoTimestamp(start), isoTimestamp(end)]);
+      const row = result.rows?.[0];
+      if (!row || row.value_num == null || !Number.isFinite(Number(row.value_num))) return null;
+      const energyKwh = Number(row.value_num);
+      return { slotStart: new Date(row.slot_start_utc).toISOString(), powerW: Math.round(energyKwh * 4000), energyKwh };
+    },
     async listPvActualSlots({ start, end } = {}) {
       const result = await pool.query(`
         SELECT slot_start_utc, value_num, source_kind

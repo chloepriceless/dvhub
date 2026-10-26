@@ -25,6 +25,7 @@
 // oder bei anderem Hersteller ist jeder Steuerwert bitgenau wie vorher.
 
 import { betaGateOpen } from '../../beta-features.js';
+import { localParts, zoneOffsetMs } from '../../tz-fast.js';
 
 export const PEAK_SHAVING_DEFAULTS = Object.freeze({
   enabled: false,
@@ -253,4 +254,109 @@ export function dischargeStep(d, { ps, tel, known, paused, capW }) {
     return { type: 'lift', valueW: liftValueW(tel.importW + tel.batteryDischargeW - ps.targetW, capW) };
   }
   return { type: 'none' };
+}
+
+// --- Anzeige: Viertelstunden-Spitzen und Status --------------------------------
+export const PEAK_REFRESH_MS = 5 * 60_000;
+// Ein Deckel-Eintrag gilt als „greift gerade“, solange er jünger ist (der
+// Sollwert-Pfad schreibt alle 5–15 s).
+const CLAMP_FRESH_MS = 30_000;
+
+/** UTC-Zeitpunkt (ms) von lokal y-m-d 00:00 in der Zone. */
+function localMidnightUtcMs(year, month, day, timeZone) {
+  const asUtc = Date.UTC(year, month - 1, day);
+  const guess = asUtc - zoneOffsetMs(asUtc, timeZone);
+  return asUtc - zoneOffsetMs(guess, timeZone);
+}
+
+/**
+ * Abrechnungszeiträume in der Zeitzone der Anlage: laufender Monat und
+ * laufendes Kalenderjahr, je [start, end) als ISO-Zeitpunkte.
+ */
+export function peakPeriods(nowMs = Date.now(), timeZone = 'Europe/Berlin') {
+  const { year, month } = localParts(nowMs, timeZone);
+  const iso = (ms) => new Date(ms).toISOString();
+  const nextMonth = month === 12 ? [year + 1, 1] : [year, month + 1];
+  return {
+    month: { start: iso(localMidnightUtcMs(year, month, 1, timeZone)), end: iso(localMidnightUtcMs(nextMonth[0], nextMonth[1], 1, timeZone)) },
+    year: { start: iso(localMidnightUtcMs(year, 1, 1, timeZone)), end: iso(localMidnightUtcMs(year + 1, 1, 1, timeZone)) }
+  };
+}
+
+/**
+ * Status-Dienst für Leitstand und /api/status. Läuft im Laufzeit-Prozess
+ * (dort liegen Steuerzustand und Datenbank); die Spitzen kommen alle 5 min aus
+ * energy_slots_15m. Ausgeschaltet: kein Status, keine Abfrage.
+ */
+export function createPeakShaving(ctx, deps = {}) {
+  const now = deps.now || (() => Date.now());
+  let peaks = { month: null, year: null, updatedAt: null, error: null };
+  let timer = null;
+  let busy = false;
+
+  const cfg = () => ctx.getCfg?.() || {};
+
+  async function refreshPeaks(nowMs = now()) {
+    const c = cfg();
+    if (!resolvePeakShaving(c).enabled || busy) return;
+    const store = ctx.telemetryStore;
+    if (typeof store?.getGridImportPeak !== 'function') {
+      peaks = { ...peaks, error: 'no_database' };
+      return;
+    }
+    busy = true;
+    try {
+      const p = peakPeriods(nowMs, c.schedule?.timezone || 'Europe/Berlin');
+      const month = await store.getGridImportPeak(p.month);
+      const year = await store.getGridImportPeak(p.year);
+      const strip = (x) => (x ? { slotStart: x.slotStart, powerW: x.powerW } : null);
+      peaks = { month: strip(month), year: strip(year), updatedAt: new Date(nowMs).toISOString(), error: null };
+    } catch (e) {
+      peaks = { ...peaks, error: e?.message || String(e) };
+    } finally {
+      busy = false;
+    }
+  }
+
+  function summary() {
+    const c = cfg();
+    const r = resolvePeakShaving(c);
+    if (!r.enabled) return null;
+    const s = ctx.state || {};
+    const t = now();
+    const ctl = s.ctrl?._peakShaving || {};
+    const clampFresh = ctl.clamp && (t - Number(ctl.clamp.at || 0)) <= CLAMP_FRESH_MS;
+    const clamp = clampFresh
+      ? { requestedW: ctl.clamp.requestedW, valueW: ctl.clamp.valueW, mode: ctl.clamp.mode, reason: ctl.clamp.reason ?? null, source: ctl.clamp.source }
+      : null;
+    const lift = ctl.discharge?.phase === 'lifted' ? { liftedW: ctl.discharge.liftedW, since: ctl.discharge.since } : null;
+    const meterFresh = s.meter?.ok === true && (t - Number(s.meter.updatedAt || 0)) < METER_MAX_AGE_MS
+      && Number.isFinite(Number(s.victron?.gridImportW));
+    return {
+      enabled: true,
+      active: r.active,
+      supported: r.supported,
+      reason: r.reason,
+      message: peakShavingStatusText(r),
+      limitW: r.limitW,
+      targetW: r.targetW,
+      marginW: r.marginW,
+      timezone: c.schedule?.timezone || 'Europe/Berlin',
+      importW: meterFresh ? Math.max(0, Math.round(Number(s.victron.gridImportW))) : null,
+      acting: Boolean((clamp && (clamp.mode === 'target' || clamp.mode === 'net_load')) || lift),
+      clamp,
+      lift,
+      peaks: { ...peaks }
+    };
+  }
+
+  function start() {
+    if (timer) return;
+    refreshPeaks().catch(() => {});
+    timer = setInterval(() => { refreshPeaks().catch(() => {}); }, PEAK_REFRESH_MS);
+    timer.unref?.();
+  }
+  function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+  return { refreshPeaks, summary, start, stop };
 }
