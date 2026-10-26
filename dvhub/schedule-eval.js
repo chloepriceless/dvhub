@@ -23,6 +23,7 @@ import { getPowerLimits } from './services/power-limits.js';
 import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
 import { betaGateOpen } from './beta-features.js';
+import { resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint } from './services/peak-shaving/index.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -841,6 +842,46 @@ export function createScheduleEvaluator(ctx) {
       }
     }
     // === end EEG/§14a gate ===
+
+    // === Peak Shaving (GitHub #28, services/peak-shaving) =====================
+    // Ein POSITIVER gridSetpointW ist bei Victron der gewünschte Netzbezug am
+    // Zähler. Liegt er über dem Regelziel (Grenze − Abstand), wird er gedeckelt:
+    // DVhub lädt dann nie mehr aus dem Netz, als die Grenze zulässt, und bei
+    // „Akku halten" deckt der Akku den Rest der Last. Sitzt bewusst HIER:
+    //   - nach Not-Halt, Grenzwerten und dem EEG/§14a-Gate — ein dort geblockter
+    //     oder abgelehnter Write bleibt geblockt/abgelehnt, er wird nicht als
+    //     gedeckelter Wert doch noch geschrieben;
+    //   - vor T-0075, Reg-2716-Schutz und Keepalive — die sehen und
+    //     wiederholen den gedeckelten Wert.
+    // Der Deckel senkt nur, nie unter das Ziel (>= Grenze/2 > 0) und nie in
+    // Richtung Einspeisung; Pflicht-Quellen bleiben unangetastet. Braucht er den
+    // Akku, muss der Ladestand frisch und über dem Boden sein (clampGridSetpoint).
+    if (target === 'gridSetpointW' && !isMandatoryControlSource(source)) {
+      const ps = resolvePeakShaving(cfg);
+      if (ps.active) {
+        const res = clampGridSetpoint(value, ps, peakShavingTelemetry(state, cfg, ps));
+        const psState = (state.ctrl._peakShaving ??= {});
+        if (res.mode === null) {
+          psState.clamp = null;
+          psState._clampKey = null;
+        } else {
+          psState.clamp = {
+            requestedW: Math.round(Number(value)), valueW: Math.round(Number(res.value)),
+            mode: res.mode, reason: res.reason, source, at: Date.now()
+          };
+          const key = `${res.mode}|${source}|${res.reason}`;
+          if (psState._clampKey !== key) {
+            psState._clampKey = key;
+            pushLog('peak_shaving_clamp', {
+              requestedW: Math.round(Number(value)), valueW: Math.round(Number(res.value)),
+              mode: res.mode, reason: res.reason, source, limitW: ps.limitW, targetW: ps.targetW
+            });
+          }
+          value = res.clamped ? Math.round(Number(res.value)) : value;
+        }
+      }
+    }
+    // === end Peak Shaving ====================================================
 
     // === T-0075 universal discharge floor (telemetry-freshness + hard SoC floor) ===
     // Chokepoint floor: EVERY discharge-enabling hardware write (optimizer,
