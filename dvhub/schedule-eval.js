@@ -1127,7 +1127,7 @@ export function createScheduleEvaluator(ctx) {
     if (!ctx.peakShavingLiftPath) return;
     try {
       if (d?.phase === 'lifted') {
-        atomicWriteControlState(ctx.peakShavingLiftPath, { liftedW: d.liftedW, prevW: d.prevW ?? null, since: d.since, lastWriteAt: d.lastWriteAt });
+        atomicWriteControlState(ctx.peakShavingLiftPath, { liftedW: d.liftedW, since: d.since, lastWriteAt: d.lastWriteAt });
       } else {
         fs.rmSync(ctx.peakShavingLiftPath, { force: true });
       }
@@ -1142,8 +1142,8 @@ export function createScheduleEvaluator(ctx) {
       const saved = JSON.parse(fs.readFileSync(ctx.peakShavingLiftPath, 'utf8'));
       if (saved && Number(saved.liftedW) > 0) {
         (state.ctrl._peakShaving ??= {}).discharge = {
-          phase: 'lifted', liftedW: Number(saved.liftedW), prevW: saved.prevW == null ? null : Number(saved.prevW),
-          since: Number(saved.since) || Date.now(),
+          // Ohne prevW/Taktnummer: nach dem Neustart zählt nur der freigegebene Wert als eigener.
+          phase: 'lifted', liftedW: Number(saved.liftedW), prevW: null, since: Number(saved.since) || Date.now(),
           lastWriteAt: Number(saved.lastWriteAt) || 0, over: 0, under: 0
         };
         pushLog('peak_shaving_lift_restored', { liftedW: Number(saved.liftedW), since: Number(saved.since) || null }, 'warn');

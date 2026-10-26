@@ -267,7 +267,11 @@ function superseded(d, known, lastWrite) {
   } else if (known.at <= (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS) {
     return false;
   }
-  const ours = [Number(d.liftedW), Number(d.prevW)].filter((w) => Number.isFinite(w));
+  // Der Wert VOR unserem Write zählt nur in der ersten eigenen Lesung danach
+  // (Gerät hat noch nicht übernommen) — danach ist er eine Änderung von außen
+  // bzw. ein nie übernommener Write (Gegenprüfung fa328b3a, P2).
+  const prevCounts = known.from === 'own_readback' && Number(known.tick) === Number(d.lastWriteTick) + 1;
+  const ours = [Number(d.liftedW), prevCounts ? Number(d.prevW) : NaN].filter((w) => Number.isFinite(w));
   // -1 (unbegrenzt) ist eine Betriebsart, keine Zahl nahe 0: nur exakt vergleichen.
   const same = (a, w) => ((a === -1 || w === -1) ? a === w : Math.abs(a - w) <= READBACK_TOLERANCE_W);
   return !ours.some((w) => same(known.value, w));

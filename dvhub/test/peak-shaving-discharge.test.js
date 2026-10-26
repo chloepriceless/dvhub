@@ -391,3 +391,31 @@ test('[563da829 P3] nach Ausschalten und Rückkehr zur Sperre wird 2704 nicht me
   await ticks(evaluator, 3);
   assert.equal(transport.reads.filter((r) => r.address === 2704).length, before);
 });
+
+test('[fa328b3a P2] 2704 steht später wieder auf 0 (Sperre von außen): nicht ewig „freigegeben“, sondern neu freigeben', async () => {
+  const { evaluator, transport, state, logs } = await liftedHarness();
+  // Mehrere Takte später liest das Register wieder 0, der Bezug liegt über der Grenze.
+  await ticks(evaluator, 3);
+  transport.registers[2704] = 0;
+  setFlow(state, { importW: 11800, batteryDischargeW: 0 });
+  await ticks(evaluator, 1);
+  assert.ok(logs.some((l) => l.event === 'peak_shaving_lift_superseded'), 'als übernommen erkannt');
+  await ticks(evaluator, ENTER_TICKS);
+  // 11 800 − 9 700 = 2 100 W neu freigegeben
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 2100]);
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'lifted');
+});
+
+test('[fa328b3a P2] der Wert vor dem Anheben zählt nur in der ersten Lesung danach als eigener', async () => {
+  const { evaluator, transport, state, logs } = await liftedHarness();
+  setFlow(state, { importW: 10600, batteryDischargeW: 4300 });
+  await ticks(evaluator, 1);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 5200]);
+  transport.registers[2704] = 430; // GX bleibt dauerhaft auf dem alten Wert
+  setFlow(state, { importW: 9700, batteryDischargeW: 4300 });
+  await ticks(evaluator, 1);
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'lifted', 'erste Lesung: noch nicht übernommen');
+  await ticks(evaluator, 1);
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'idle', 'zweite Lesung: Wert gilt als fremd');
+  assert.ok(logs.some((l) => l.event === 'peak_shaving_lift_superseded'));
+});
