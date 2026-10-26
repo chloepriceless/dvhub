@@ -260,7 +260,8 @@ test('[P2] reine AC-Kopplung: frische AC-PV zählt, obwohl DC-PV abgeschaltet is
   // AC-PV 4 000 frisch → Netto-Last 7 000 → Boden max(9 700, 7 000) = 9 700 W.
   const cfg = loadVictronConfig({ ...PEAK_ON, ...GRID_CHARGE_ON, pvCoupling: 'ac' });
   assert.equal(cfg.points.pvPowerW.enabled, false);
-  const state = makeTelemetryState({ loadW: 11000, pvW: 4000, socAgeMs: 200000 });
+  const state = makeTelemetryState({ loadW: 11000, socAgeMs: 200000 });
+  Object.assign(state.victron, { pvPowerW: null, acPvL1W: 4000, pvTotalW: 4000 });
   delete state.victron.fieldUpdatedAt.pvPowerW;
   const { evaluator, transport } = makeEvaluator({ cfg, state });
   await evaluator.applyControlTarget('gridSetpointW', 12000, 'rule:charge');
@@ -272,4 +273,16 @@ test('[P2] eingeschalteter AC-PV-Punkt ohne frischen Wert: PV zählt nicht (Bode
   state.victron.fieldUpdatedAt.acPvL2W = Date.now() - 200000;
   await evaluator.applyControlTarget('gridSetpointW', 12000, 'rule:charge');
   assert.deepEqual(gridSetpointWrites(transport), [11000]);
+});
+
+test('[P3] abgeschalteter PV-Punkt mit altem Wert zählt nicht mit (Umstellung ohne Neustart)', async () => {
+  // Umstellung ac_dc → ac ohne Neustart: im Zustand steht noch DC-PV 5 000 W,
+  // pvTotalW enthält sie. Zählen darf nur die AC-PV (je L 1 000 = 3 000 W).
+  // Last 13 000 − 3 000 = 10 000 → Boden max(9 700, 10 000) = 10 000 W (SoC veraltet).
+  const cfg = loadVictronConfig({ ...PEAK_ON, ...GRID_CHARGE_ON, pvCoupling: 'ac' });
+  const state = makeTelemetryState({ loadW: 13000, socAgeMs: 200000 });
+  Object.assign(state.victron, { pvPowerW: 5000, acPvL1W: 1000, acPvL2W: 1000, acPvL3W: 1000, pvTotalW: 8000 });
+  const { evaluator, transport } = makeEvaluator({ cfg, state });
+  await evaluator.applyControlTarget('gridSetpointW', 15000, 'rule:charge');
+  assert.deepEqual(gridSetpointWrites(transport), [10000]);
 });

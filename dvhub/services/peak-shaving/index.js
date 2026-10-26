@@ -142,9 +142,13 @@ export function peakShavingTelemetry(state, cfg, resolved, now = Date.now()) {
   // hohe PV würde die Netto-Last zu klein und den Deckel zu tief machen.
   // Frische aus den EINGESCHALTETEN PV-Punkten — bei reiner AC-Kopplung ist
   // pvPowerW abgeschaltet und hat nie einen Zeitstempel (Codex 8b5a0a55, P2).
+  // Summiert wird NUR über diese Punkte, nicht v.pvTotalW: ein abgeschalteter
+  // Punkt behält bis zum Neustart seinen letzten Wert, und pvTotalW zählt ihn
+  // weiter mit (Gegenprüfung 6d58f509, P3).
   const pvPoints = PV_FIELDS.filter((f) => cfg?.points?.[f]?.enabled === true);
-  const pvOk = pvPoints.length > 0 && pvPoints.every((f) => fresh(f)) && Number.isFinite(Number(v.pvTotalW));
-  const pvW = pvOk ? Math.max(0, Number(v.pvTotalW)) : 0;
+  const pvOk = pvPoints.length > 0
+    && pvPoints.every((f) => fresh(f) && v[f] != null && v[f] !== '' && Number.isFinite(Number(v[f])));
+  const pvW = pvOk ? Math.max(0, pvPoints.reduce((sum, f) => sum + Number(v[f]), 0)) : 0;
 
   const meter = state?.meter || {};
   const importRaw = v.gridImportW;
