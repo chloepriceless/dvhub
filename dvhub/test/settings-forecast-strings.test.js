@@ -50,6 +50,36 @@ describe('PV-Strings-Editor', () => {
     assert.deepEqual(draft(context), [{ label: 'Süd', kwp: 9.75, tiltDeg: 22.5, azimuthDeg: null }]);
   });
 
+  // #25: welche Zahl welche Himmelsrichtung ist, stand nur im Tooltip.
+  it('Richtung°: Himmelsrichtung zum Wert, leer → Zuordnung als Hinweis', () => {
+    const { context } = pageWith({});
+    const dir = (v) => context.azimuthDirectionText(v);
+    assert.equal(dir(180), '180° = Süd');
+    assert.equal(dir(90), '90° = Ost');
+    assert.equal(dir(135), '135° = Südost');
+    assert.equal(dir(0), '0° = Nord');
+    assert.equal(dir(360), '360° = Nord');
+    assert.equal(dir(270), '270° = West');
+    assert.equal(dir(315), '315° = Nordwest');
+    assert.equal(dir(200), '200° = Süd');
+    for (const empty of [null, undefined, -10, 400]) {
+      assert.equal(dir(empty), '0 = Nord, 90 = Ost, 180 = Süd, 270 = West');
+    }
+  });
+
+  it('Richtung°: Anzeige neben dem Feld folgt der Eingabe', () => {
+    const { context } = pageWith({ forecast: { pv: { configLevel: 'detailed', strings: [{ label: 'Süd', kwp: 9, tiltDeg: 35, azimuthDeg: 180 }] } } });
+    context.renderForecastStringEditor();
+    const row = context.renderStringRow(0);
+    const az = row.children[3];
+    const hint = row.children.at(-1);
+    assert.equal(hint.textContent, 'Richtung: 180° = Süd');
+    az.value = '90'; az.fire('input');
+    assert.equal(hint.textContent, 'Richtung: 90° = Ost');
+    az.value = ''; az.fire('input');
+    assert.equal(hint.textContent, 'Richtung: 0 = Nord, 90 = Ost, 180 = Süd, 270 = West');
+  });
+
   it('leerer Editor legt keinen Beispiel-String an', () => {
     const { context } = pageWith({ forecast: { pv: { configLevel: 'detailed' } } });
     context.renderForecastStringEditor();
