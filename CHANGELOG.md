@@ -17,7 +17,9 @@ verweist hierher.
   eigene Netz-Sollwerte (Netzladen, EOS-„Akku halten“, manuelle Werte) auf Grenze minus Sicherheitsabstand, sodass der
   Akku Spitzen abdeckt; ist die Entladung gesperrt (Max Entladung = 0), gibt DVhub sie bei Bezug über der Grenze um den
   Überschuss frei und setzt die Sperre mit Rückschalt-Abstand wieder. Not-Halt, §14a, Netzlade-Verbot und
-  Mindest-Ladestand haben Vorrang; bei veralteten Messwerten greift DVhub nicht ein. Der Leitstand zeigt Grenze,
+  Mindest-Ladestand haben Vorrang. Den Akku zieht der Deckel nur bei frischem Ladestand über dem Boden heran; sonst
+  deckelt er höchstens bis zur gemessenen Netto-Last (kein Entladen), ist auch die Last unbekannt, gar nicht. Ohne
+  frischen Zähler hebt DVhub keine Sperre auf und setzt eine selbst aufgehobene wieder. Der Leitstand zeigt Grenze,
   Eingriff und die höchste Viertelstunde im Monat und im Jahr. Bisher nur Victron; andere Hersteller nur Anzeige.
   Einstellungen → Netz & Recht → Erweitert; nur im Bleeding-Edge-Kanal. EOS kennt keine Bezugsgrenze und plant ohne sie.
 
