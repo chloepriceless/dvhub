@@ -81,3 +81,26 @@ test('Anzeige: morgen noch ohne Preise, Schwelle leer', () => {
   assert.equal(v.sell, 'Verkauf ≥ 25 ct: heute 0 h · morgen ab ~13 Uhr');
   assert.equal(v.buy, 'Einkauf: Schwelle eintragen');
 });
+
+// Codex-Gegenprüfung 6576bc79 (2× P2): Lücken sind keine längeren Slots, fehlende
+// Preise sind kein 0-ct-Preis.
+test('Lücken im Tag gelten nicht als Slot-Länge', () => {
+  const { compute } = load();
+  // nur zwei Viertelstunden, zwei Stunden auseinander → 0,5 h, nicht 4 h
+  const rows = [
+    { ts: T0, day: '2026-10-27', ct_kwh: 30 },
+    { ts: T0 + 8 * Q, day: '2026-10-27', ct_kwh: 30 },
+  ];
+  const r = compute(rows, { today: '2026-10-27', tomorrow: '2026-10-28', sellCt: 25, buyCt: null });
+  assert.equal(r.today.sellHours, 0.5);
+});
+
+test('fehlende Preise (null) zählen nicht als 0 ct', () => {
+  const { compute } = load();
+  const rows = day('2026-10-27', T0, Array(96).fill(null));
+  rows[0].ct_kwh = 5;
+  const r = compute(rows, { today: '2026-10-27', tomorrow: '2026-10-28', sellCt: null, buyCt: 10 });
+  assert.equal(r.today.buyHours, 0.25);
+  const leer = compute(day('2026-10-28', T0, Array(96).fill(null)), { today: '2026-10-28', tomorrow: null, sellCt: 25, buyCt: 10 });
+  assert.equal(leer.today.available, false);
+});

@@ -18,26 +18,34 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  // Slot-Länge eines Tages aus dem kleinsten Abstand zweier Slots (15 oder 60 min).
+  // Slot-Länge eines Tages: häufigster Abstand aufeinanderfolgender Slots, aber nur
+  // 15 oder 60 Minuten. Lücken (fehlende Slots) sind keine längeren Slots — sonst
+  // würden zwei Viertelstunden im Abstand von zwei Stunden als 4 h gezählt.
+  const KNOWN_SLOT_MS = [15 * 60000, 60 * 60000];
   function slotHours(rows) {
     const ts = rows.map((r) => Number(r.ts)).filter(Number.isFinite).sort((a, b) => a - b);
-    let min = Infinity;
+    const freq = new Map();
     for (let i = 1; i < ts.length; i += 1) {
       const d = ts[i] - ts[i - 1];
-      if (d > 0 && d < min) min = d;
+      if (KNOWN_SLOT_MS.includes(d)) freq.set(d, (freq.get(d) || 0) + 1);
     }
-    return Number.isFinite(min) ? min / 3600000 : 0.25;
+    let best = KNOWN_SLOT_MS[0]; let n = 0;
+    for (const [d, c] of freq) if (c > n) { best = d; n = c; }
+    return best / 3600000;
   }
 
+  // Ein Preis zählt nur, wenn er wirklich da ist: null/'' sind fehlende Preise, kein 0 ct.
+  const priceOf = (r) => (r == null || r.ct_kwh == null || r.ct_kwh === '' ? null : Number(r.ct_kwh));
+
   function countDay(rows, sellCt, buyCt) {
-    const priced = rows.filter((r) => Number.isFinite(Number(r.ct_kwh)));
+    const priced = rows.filter((r) => Number.isFinite(priceOf(r)));
     if (!priced.length) return { available: false, sellHours: null, buyHours: null };
-    const h = slotHours(priced);
+    const h = slotHours(rows);
     const hours = (pred) => Math.round(priced.filter(pred).length * h * 100) / 100;
     return {
       available: true,
-      sellHours: sellCt == null ? null : hours((r) => Number(r.ct_kwh) >= sellCt),
-      buyHours: buyCt == null ? null : hours((r) => Number(r.ct_kwh) <= buyCt),
+      sellHours: sellCt == null ? null : hours((r) => priceOf(r) >= sellCt),
+      buyHours: buyCt == null ? null : hours((r) => priceOf(r) <= buyCt),
     };
   }
 
