@@ -419,3 +419,17 @@ test('[fa328b3a P2] der Wert vor dem Anheben zählt nur in der ersten Lesung dan
   assert.equal(state.ctrl._peakShaving.discharge.phase, 'idle', 'zweite Lesung: Wert gilt als fremd');
   assert.ok(logs.some((l) => l.event === 'peak_shaving_lift_superseded'));
 });
+
+test('[af3319df P2] Neu-Freigabe mit demselben Wert wird wirklich geschrieben (nicht als „unverändert“ übersprungen)', async () => {
+  const { evaluator, transport, state } = await liftedHarness();
+  await ticks(evaluator, 3);
+  transport.registers[2704] = 0; // Sperre von außen
+  setFlow(state, { importW: 14000, batteryDischargeW: 0 }); // wieder 14 000 − 9 700 = 4 300 W
+  await ticks(evaluator, 1 + ENTER_TICKS);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 4300]);
+  assert.equal(transport.registers[2704], 430);
+  // und die Freigabe bleibt stehen
+  await ticks(evaluator, 3);
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'lifted');
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 4300]);
+});

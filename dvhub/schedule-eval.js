@@ -1207,6 +1207,12 @@ export function createScheduleEvaluator(ctx) {
     if (act.type === 'none') return;
     if (act.type === 'superseded') {
       pushLog('peak_shaving_lift_superseded', { liftedW: d.liftedW, known: knownMaxDischargeW(state, cfg) });
+      // Steht im Gerät nicht mehr DVhubs Wert, ist der eigene lastWrite kein
+      // Abbild des Geräts mehr — sonst übersprünge eine Neu-Freigabe mit
+      // demselben Wert als „unverändert“ (Gegenprüfung af3319df, P2).
+      if (String(state.schedule.lastWrite.maxDischargeW?.source || '').startsWith('peak_shaving')) {
+        delete state.schedule.lastWrite.maxDischargeW;
+      }
       Object.assign(d, { phase: 'idle', liftedW: null, prevW: null, since: null, lastWriteAt: null, over: 0, under: 0, waiting: null });
       persistPeakShavingLift(d);
       return;
@@ -1226,7 +1232,7 @@ export function createScheduleEvaluator(ctx) {
     // lift / raise
     const r = await applyControlTarget('maxDischargeW', act.valueW, 'peak_shaving');
     const lw = state.schedule.lastWrite.maxDischargeW;
-    if (!r.ok || !lw || Number(lw.value) !== act.valueW || lw.source !== 'peak_shaving') return;
+    if (!r.ok || r.skipped || !lw || Number(lw.value) !== act.valueW || lw.source !== 'peak_shaving') return;
     const now = Date.now();
     if (act.type === 'lift') {
       Object.assign(d, { phase: 'lifted', liftedW: act.valueW, prevW: 0, since: now, lastWriteAt: now, lastWriteTick: peakShavingTickNo, over: 0, under: 0, waiting: null });
