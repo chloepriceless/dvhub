@@ -233,3 +233,43 @@ test('anderer Hersteller: Sollwert unverändert (kein Raten fremder Register)', 
   await evaluator.applyControlTarget('gridSetpointW', 12000, 'rule:charge');
   assert.deepEqual(gridSetpointWrites(transport), [12000]);
 });
+
+// --- Codex-Gegenprüfung zu 8b5a0a55 ----------------------------------------------
+
+test('[P1] zweite GX lädt: Boden ohne Entladen aus der GEMESSENEN Last (inkl. Ladung der zweiten Anlage)', async () => {
+  // polling.js zieht die Ladung der zweiten GX (2 kW) von der Hauslast ab:
+  // selfConsumptionW = 11 000, gemessen 13 000. Der Hauptakku entlädt nicht,
+  // solange Sollwert >= gemessene Last − PV = 13 000 W. SoC veraltet → Boden 13 000 W.
+  const { evaluator, transport, state } = harness({ persisted: PEAK_ON, telemetry: { loadW: 11000, socAgeMs: 200000 } });
+  state.victron.selfConsumptionMeasuredW = 13000;
+  await evaluator.applyControlTarget('gridSetpointW', 15000, 'rule:charge');
+  assert.deepEqual(gridSetpointWrites(transport), [13000]);
+});
+
+test('[P1] zweite GX entlädt: gemessene Last kleiner → Boden entsprechend tiefer', async () => {
+  // Zweite GX entlädt 2 kW ins Hausnetz: gemessen 9 000, korrigiert 11 000.
+  // Boden = max(Ziel 9 700, 9 000) = 9 700 W — der Hauptakku lädt dabei noch 700 W.
+  const { evaluator, transport, state } = harness({ persisted: PEAK_ON, telemetry: { loadW: 11000, socAgeMs: 200000 } });
+  state.victron.selfConsumptionMeasuredW = 9000;
+  await evaluator.applyControlTarget('gridSetpointW', 15000, 'rule:charge');
+  assert.deepEqual(gridSetpointWrites(transport), [9700]);
+});
+
+test('[P2] reine AC-Kopplung: frische AC-PV zählt, obwohl DC-PV abgeschaltet ist', async () => {
+  // pvCoupling 'ac' schaltet points.pvPowerW ab (nie ein Zeitstempel). Last 11 000,
+  // AC-PV 4 000 frisch → Netto-Last 7 000 → Boden max(9 700, 7 000) = 9 700 W.
+  const cfg = loadVictronConfig({ ...PEAK_ON, ...GRID_CHARGE_ON, pvCoupling: 'ac' });
+  assert.equal(cfg.points.pvPowerW.enabled, false);
+  const state = makeTelemetryState({ loadW: 11000, pvW: 4000, socAgeMs: 200000 });
+  delete state.victron.fieldUpdatedAt.pvPowerW;
+  const { evaluator, transport } = makeEvaluator({ cfg, state });
+  await evaluator.applyControlTarget('gridSetpointW', 12000, 'rule:charge');
+  assert.deepEqual(gridSetpointWrites(transport), [9700]);
+});
+
+test('[P2] eingeschalteter AC-PV-Punkt ohne frischen Wert: PV zählt nicht (Boden = Last)', async () => {
+  const { evaluator, transport, state } = harness({ persisted: PEAK_ON, telemetry: { loadW: 11000, pvW: 4000, socAgeMs: 200000 } });
+  state.victron.fieldUpdatedAt.acPvL2W = Date.now() - 200000;
+  await evaluator.applyControlTarget('gridSetpointW', 12000, 'rule:charge');
+  assert.deepEqual(gridSetpointWrites(transport), [11000]);
+});

@@ -130,13 +130,20 @@ export function peakShavingTelemetry(state, cfg, resolved, now = Date.now()) {
       : v.sourceMismatch?.active === true ? 'source_mismatch'
         : soc <= floorPct ? 'soc_floor' : null;
 
-  const loadRaw = v.selfConsumptionW;
+  // Zweite GX (multi-gx): polling.js zieht deren Akkuleistung von der Hauslast
+  // ab und hebt die Messung in selfConsumptionMeasuredW auf. Für „entlädt der
+  // Hauptakku?“ zählt die GEMESSENE Last am Hauptzähler — Ladung der zweiten
+  // Anlage gehört dazu (Codex-Gegenprüfung 8b5a0a55, P1).
+  const loadRaw = v.selfConsumptionMeasuredW ?? v.selfConsumptionW;
   const loadKnown = loadRaw != null && loadRaw !== '' && Number.isFinite(Number(loadRaw)) && fresh('selfConsumptionW')
     && v.freeze?.active !== true && v.sourceMismatch?.active !== true;
   const loadW = loadKnown ? Math.max(0, Number(loadRaw)) : null;
   // PV mindert die Netto-Last nur, wenn sie frisch ist — eine hängengebliebene
   // hohe PV würde die Netto-Last zu klein und den Deckel zu tief machen.
-  const pvOk = fresh('pvPowerW') && PV_FIELDS.every((f) => !v.errors?.[f]) && Number.isFinite(Number(v.pvTotalW));
+  // Frische aus den EINGESCHALTETEN PV-Punkten — bei reiner AC-Kopplung ist
+  // pvPowerW abgeschaltet und hat nie einen Zeitstempel (Codex 8b5a0a55, P2).
+  const pvPoints = PV_FIELDS.filter((f) => cfg?.points?.[f]?.enabled === true);
+  const pvOk = pvPoints.length > 0 && pvPoints.every((f) => fresh(f)) && Number.isFinite(Number(v.pvTotalW));
   const pvW = pvOk ? Math.max(0, Number(v.pvTotalW)) : 0;
 
   const meter = state?.meter || {};

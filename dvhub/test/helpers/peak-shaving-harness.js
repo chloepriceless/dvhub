@@ -48,7 +48,8 @@ export function makeTelemetryState({
   const fieldUpdatedAt = {};
   if (socAgeMs != null) fieldUpdatedAt.soc = now - socAgeMs;
   if (loadAgeMs != null) fieldUpdatedAt.selfConsumptionW = now - loadAgeMs;
-  if (pvAgeMs != null) fieldUpdatedAt.pvPowerW = now - pvAgeMs;
+  // PV-Punkte des Victron-Profils (ac_dc): DC-PV + AC-PV L1–L3 werden je Takt gepollt.
+  if (pvAgeMs != null) for (const f of ['pvPowerW', 'acPvL1W', 'acPvL2W', 'acPvL3W']) fieldUpdatedAt[f] = now - pvAgeMs;
   if (maxDischargeAgeMs != null) fieldUpdatedAt.maxDischargeW = now - maxDischargeAgeMs;
   return {
     victron: {
