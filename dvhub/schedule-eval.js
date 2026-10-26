@@ -25,7 +25,7 @@ import { capLoopStep } from './services/feed-in-cap/index.js';
 import { betaGateOpen } from './beta-features.js';
 import {
   resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint, knownMaxDischargeW, dischargeStep,
-  decodeMaxDischargeRaw
+  decodeMaxDischargeRaw, DISCHARGE_RELEASE_TICKS
 } from './services/peak-shaving/index.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
@@ -1188,7 +1188,8 @@ export function createScheduleEvaluator(ctx) {
     // Aus und nichts aufgehoben → kein Zustand, kein Lesen, kein Write (bitgenau
     // wie vorher; auch nachdem eine Freigabe zurückgenommen ist — 563da829).
     if (!ps.active && state.ctrl._peakShaving?.discharge?.phase !== 'lifted') {
-      if (state.ctrl._peakShaving?.discharge) state.ctrl._peakShaving.discharge.over = 0;
+      const idle = state.ctrl._peakShaving?.discharge;
+      if (idle) Object.assign(idle, { over: 0, quiet: 0, writeIssue: null });
       return;
     }
     const d = ((state.ctrl._peakShaving ??= {}).discharge ??= {
@@ -1204,12 +1205,12 @@ export function createScheduleEvaluator(ctx) {
       ps, tel, known: knownMaxDischargeW(state, cfg), paused: state.ctrl.discretionaryWritesPaused === true, capW,
       lastWrite: state.schedule.lastWrite.maxDischargeW || null, readbackSupported
     });
-    if (act.type === 'none') {
-      // Spitze vorbei, ohne dass eine Freigabe stand: ein gescheiterter Write
-      // der nächsten Spitze wird wieder gemeldet (Gegenprüfung 8e991b49, P3).
-      if (d.phase === 'idle' && !d.over) d.writeIssue = null;
-      return;
-    }
+    // Spitze vorbei (ohne stehende Freigabe ~30 s ruhig): ein gescheiterter
+    // Write der nächsten Spitze wird wieder gemeldet. Ein einzelner ruhiger Takt
+    // mitten in der Spitze zählt nicht (Gegenprüfung 8e991b49 / f8aa9c8b).
+    d.quiet = (act.type === 'none' && d.phase === 'idle' && !d.over) ? (d.quiet || 0) + 1 : 0;
+    if (d.quiet >= DISCHARGE_RELEASE_TICKS) d.writeIssue = null;
+    if (act.type === 'none') return;
     if (act.type === 'superseded') {
       pushLog('peak_shaving_lift_superseded', { liftedW: d.liftedW, known: knownMaxDischargeW(state, cfg) });
       // Steht im Gerät nicht mehr DVhubs Wert, ist der eigene lastWrite kein

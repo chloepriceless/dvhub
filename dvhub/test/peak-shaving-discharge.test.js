@@ -454,8 +454,39 @@ test('[8e991b49 P3] Freigabe scheitert in zwei getrennten Spitzen: beide werden 
   await ticks(evaluator, ENTER_TICKS);
   assert.equal(notWritten(), 1, 'erste Spitze');
   setFlow(state, { importW: 5000 });
-  await ticks(evaluator, 2); // Spitze vorbei
+  await ticks(evaluator, RELEASE_TICKS); // Spitze vorbei (30 s ruhig)
   setFlow(state, { importW: 14000 });
   await ticks(evaluator, ENTER_TICKS);
   assert.equal(notWritten(), 2, 'zweite Spitze wird wieder gemeldet');
+});
+
+function failing2704(transport) {
+  const write = transport.mbWriteSingle.bind(transport);
+  transport.mbWriteSingle = async (req) => { if (req.address === 2704) throw new Error('timeout'); return write(req); };
+}
+
+test('[f8aa9c8b P3] aus- und während einer Spitze wieder eingeschaltet: erneutes Scheitern wird gemeldet', async () => {
+  const { evaluator, transport, cfg, logs } = await blockedHarness();
+  failing2704(transport);
+  const notWritten = () => logs.filter((l) => l.event === 'peak_shaving_lift_not_written').length;
+  await ticks(evaluator, ENTER_TICKS);
+  assert.equal(notWritten(), 1);
+  cfg.peakShaving.enabled = false;
+  await ticks(evaluator, 2);
+  cfg.peakShaving.enabled = true;
+  await ticks(evaluator, ENTER_TICKS);
+  assert.equal(notWritten(), 2);
+});
+
+test('[f8aa9c8b P3] ein einzelner ruhiger Takt mitten in der Spitze wiederholt die Meldung nicht', async () => {
+  const { evaluator, transport, state, logs } = await blockedHarness();
+  failing2704(transport);
+  const notWritten = () => logs.filter((l) => l.event === 'peak_shaving_lift_not_written').length;
+  for (let i = 0; i < 4; i += 1) {
+    setFlow(state, { importW: 14000 });
+    await ticks(evaluator, ENTER_TICKS);
+    setFlow(state, { importW: 9900 }); // ein Takt knapp unter der Grenze
+    await ticks(evaluator, 1);
+  }
+  assert.equal(notWritten(), 1);
 });
