@@ -1229,10 +1229,26 @@ export function createScheduleEvaluator(ctx) {
       }
       return;
     }
-    // lift / raise
+    // lift / raise. Zeigt die Rücklesung etwas anderes als DVhubs letzter Write
+    // (gleich welcher Quelle), bildet lastWrite das Gerät nicht mehr ab — sonst
+    // liefe ein gleicher Wert in den „unverändert“-Kurzschluss (9cb277fc, P3).
+    const knownNow = knownMaxDischargeW(state, cfg);
+    const lwBefore = state.schedule.lastWrite.maxDischargeW;
+    if (lwBefore && (knownNow?.from === 'own_readback' || knownNow?.from === 'readback')
+        && Number(lwBefore.value) !== knownNow.value) {
+      delete state.schedule.lastWrite.maxDischargeW;
+    }
     const r = await applyControlTarget('maxDischargeW', act.valueW, 'peak_shaving');
     const lw = state.schedule.lastWrite.maxDischargeW;
-    if (!r.ok || r.skipped || !lw || Number(lw.value) !== act.valueW || lw.source !== 'peak_shaving') return;
+    if (!r.ok || r.skipped || !lw || Number(lw.value) !== act.valueW || lw.source !== 'peak_shaving') {
+      const key = `${act.type}|${r.error || (r.skipped ? 'skipped' : 'not_written')}`;
+      if (d.writeIssue !== key) {
+        d.writeIssue = key;
+        pushLog('peak_shaving_lift_not_written', { type: act.type, valueW: act.valueW, error: r.error || null, skipped: !!r.skipped, blocked: !!r.blocked }, 'warn');
+      }
+      return;
+    }
+    d.writeIssue = null;
     const now = Date.now();
     if (act.type === 'lift') {
       Object.assign(d, { phase: 'lifted', liftedW: act.valueW, prevW: 0, since: now, lastWriteAt: now, lastWriteTick: peakShavingTickNo, over: 0, under: 0, waiting: null });

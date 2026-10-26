@@ -433,3 +433,15 @@ test('[af3319df P2] Neu-Freigabe mit demselben Wert wird wirklich geschrieben (n
   assert.equal(state.ctrl._peakShaving.discharge.phase, 'lifted');
   assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 4300]);
 });
+
+test('[9cb277fc P3] alter Betreiber-Write mit gleichem Wert, Gerät steht auf 0: Freigabe wird geschrieben', async () => {
+  const cfg = loadVictronConfig(PEAK_ON);
+  const state = makeTelemetryState({ soc: 60, importW: 14000 });
+  const transport = makeModbusTransport();
+  const { evaluator } = makeEvaluator({ cfg, state, transport });
+  await evaluator.applyControlTarget('maxDischargeW', 4300, 'api_manual_write');
+  transport.registers[2704] = 0; // danach am GX gesperrt
+  await ticks(evaluator, ENTER_TICKS);
+  assert.deepEqual(maxDischargeWrites(transport), [4300, 4300]);
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'lifted');
+});
