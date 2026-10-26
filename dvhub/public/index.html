@@ -310,16 +310,28 @@
           <strong id="chartComparisonSummary">Eigener Strompreis noch nicht konfiguriert</strong>
           <span id="chartComparisonDetail" data-leit="adv">Lege in den Einstellungen deinen Bruttopreis an.</span>
         </div>
-        <!-- Preis-Stunden (Issue #27, price-hours-view.js): Stunden heute/morgen über der
-             Verkaufs- bzw. unter der Einkaufsschwelle, dazu die nötige Leistung für eine Menge. -->
-        <div class="price-hours" id="priceHoursBlock">
-          <div class="price-hours-inputs">
-            <label class="ctrl-label">Verkaufen ab (ct)<input id="priceHoursSell" class="input mono" type="text" inputmode="decimal" placeholder="z. B. 25"></label>
-            <label class="ctrl-label">Einkaufen bis (ct)<input id="priceHoursBuy" class="input mono" type="text" inputmode="decimal" placeholder="z. B. 10"></label>
-            <label class="ctrl-label">Menge (kWh)<input id="priceHoursEnergy" class="input mono" type="text" inputmode="decimal" placeholder="optional"></label>
+        <!-- Laut EOS-Plan (Issue #27, eos-plan-summary.js): was EOS heute ab jetzt und
+             morgen einspeist und aus dem Netz bezieht — kWh, Stunden, höchste Leistung,
+             ab welchem Preis EOS verkauft bzw. bis zu welchem es kauft; mit
+             Spitzenkappung die Slots über der Grenze. Plan aus /api/eos/plan, den
+             leitstand-charts.js für den EOS-Fahrplan holt. -->
+        <div class="eos-plan-summary" id="eosPlanSummary">
+          <div class="eos-plan-summary-head">
+            <span class="eos-plan-summary-title">Laut EOS-Plan</span>
+            <span class="eos-plan-summary-note" id="eosPlanSummaryNote">EOS-Plan wird geladen &hellip;</span>
           </div>
-          <strong id="priceHoursSellResult">Verkauf: Schwelle eintragen</strong>
-          <strong id="priceHoursBuyResult">Einkauf: Schwelle eintragen</strong>
+          <div class="eos-plan-summary-day" id="eosPlanSummaryToday" hidden>
+            <strong id="eosPlanSummaryTodayHead"></strong>
+            <span id="eosPlanSummaryTodayExport"></span>
+            <span id="eosPlanSummaryTodayImport"></span>
+            <span class="eos-plan-summary-peak" id="eosPlanSummaryTodayPeak" hidden></span>
+          </div>
+          <div class="eos-plan-summary-day" id="eosPlanSummaryTomorrow" hidden>
+            <strong id="eosPlanSummaryTomorrowHead"></strong>
+            <span id="eosPlanSummaryTomorrowExport"></span>
+            <span id="eosPlanSummaryTomorrowImport"></span>
+            <span class="eos-plan-summary-peak" id="eosPlanSummaryTomorrowPeak" hidden></span>
+          </div>
         </div>
         <div class="meta" id="chartMeta" data-leit="adv">&mdash;</div>
       </div>
@@ -508,7 +520,8 @@
 
       <!-- DV-EOS day plan (operator request 2026-06-21): the EOS optimiser's
            Fahrplan for the full ~27h horizon — planned battery SoC trajectory
-           (right axis) + PV-Prognose + Netz-Einspeisung (left kW axis) + KPIs.
+           (right axis) + PV-Prognose, Last, Netz-Einspeisung und Netzbezug (left
+           kW axis, Lastgang seit 26.10.2026) + KPIs.
            From /api/eos/plan (output.rows, Plan aus dem EOS-Monitor), rendered by
            leitstand-charts.js#renderEosPlanChart. -->
       <div class="forecast-chart-shell" id="eosPlanCard" data-leit="adv">
@@ -516,7 +529,7 @@
           <div class="skeleton-bar"></div>
         </div>
         <div class="chart-head">
-          <span class="card-title">EOS-Fahrplan (Akku-SoC &amp; PV)</span>
+          <span class="card-title">EOS-Fahrplan (Akku, PV, Last &amp; Netz)</span>
           <span class="card-sub" id="eosPlanSubtitle">&mdash;</span>
         </div>
         <div class="forecast-chart-host forecast-chart-host-tall">
@@ -574,9 +587,9 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20261006-zaehlen"></script>
 <script src="/second-gx-view.js?v=20261021"></script>
-<script src="/price-hours-view.js?v=20261026"></script>
+<script src="/eos-plan-summary.js?v=20261026"></script>
 <script src="/app.js?v=20261020-hinweise"></script>
-<script src="/leitstand-charts.js?v=20261003-eos-plan"></script>
+<script src="/leitstand-charts.js?v=20261026-lastgang"></script>
 <script src="/ev-tile.js?v=20261015-ev-pro"></script>
 </body>
 </html>

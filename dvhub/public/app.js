@@ -2332,9 +2332,10 @@ function renderDashboardStatus(status) {
     window.DVhubSecondGx?.render(status.multiGx);
   });
 
-  // Preis-Stunden über/unter den eigenen Schwellen (price-hours-view.js, Issue #27).
-  safeRender('dashboard.price-hours', () => {
-    window.DVhubPriceHours?.render(status.epex);
+  // „Laut EOS-Plan“ (eos-plan-summary.js, Issue #27): Uhrzeit, Börsenpreise und
+  // Spitzenkappung aus dem Status; den Plan liefert leitstand-charts.js.
+  safeRender('dashboard.eos-plan-summary', () => {
+    window.DVhubEosPlanSummary?.render({ status });
   });
 
   safeRender('dashboard.costs', () => {
@@ -4055,7 +4056,6 @@ function initDashboard() {
     } catch { /* ignore */ }
   });
   document.getElementById('refreshEpex')?.addEventListener('click', refreshEpex);
-  window.DVhubPriceHours?.init();
   document.getElementById('loadScheduleBtn')?.addEventListener('click', loadScheduleDash);
   document.getElementById('saveScheduleBtn')?.addEventListener('click', saveScheduleDash);
   document.getElementById('addScheduleRowBtn')?.addEventListener('click', () => { openSlotEditor(null); });
