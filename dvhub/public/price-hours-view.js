@@ -18,20 +18,17 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  // Slot-Länge eines Tages: häufigster Abstand aufeinanderfolgender Slots, aber nur
-  // 15 oder 60 Minuten. Lücken (fehlende Slots) sind keine längeren Slots — sonst
-  // würden zwei Viertelstunden im Abstand von zwei Stunden als 4 h gezählt.
+  // Slot-Länge eines Tages: der kürzeste bekannte Abstand (15 vor 60 Minuten), der
+  // zwischen zwei aufeinanderfolgenden Slots vorkommt. Lücken (fehlende Slots) sind
+  // keine längeren Slots — zwei Viertelstunden zwei Stunden auseinander sind 0,5 h.
+  // Ohne einen bekannten Abstand gilt das heutige 15-min-Raster.
   const KNOWN_SLOT_MS = [15 * 60000, 60 * 60000];
   function slotHours(rows) {
     const ts = rows.map((r) => Number(r.ts)).filter(Number.isFinite).sort((a, b) => a - b);
-    const freq = new Map();
-    for (let i = 1; i < ts.length; i += 1) {
-      const d = ts[i] - ts[i - 1];
-      if (KNOWN_SLOT_MS.includes(d)) freq.set(d, (freq.get(d) || 0) + 1);
-    }
-    let best = KNOWN_SLOT_MS[0]; let n = 0;
-    for (const [d, c] of freq) if (c > n) { best = d; n = c; }
-    return best / 3600000;
+    const seen = new Set();
+    for (let i = 1; i < ts.length; i += 1) seen.add(ts[i] - ts[i - 1]);
+    const ms = KNOWN_SLOT_MS.find((d) => seen.has(d)) ?? KNOWN_SLOT_MS[0];
+    return ms / 3600000;
   }
 
   // Ein Preis zählt nur, wenn er wirklich da ist: null/'' sind fehlende Preise, kein 0 ct.

@@ -104,3 +104,11 @@ test('fehlende Preise (null) zählen nicht als 0 ct', () => {
   const leer = compute(day('2026-10-28', T0, Array(96).fill(null)), { today: '2026-10-28', tomorrow: null, sellCt: 25, buyCt: 10 });
   assert.equal(leer.today.available, false);
 });
+
+// Codex-Gegenprüfung 420919db (P2): Viertelstunden mit Stundenlücken bleiben Viertelstunden.
+test('lückenhafter Viertelstunden-Tag mit Stundenlücken zählt 15 min je Slot', () => {
+  const { compute } = load();
+  const rows = [0, 1, 5, 9].map((i) => ({ ts: T0 + i * Q, day: '2026-10-27', ct_kwh: 30 }));
+  const r = compute(rows, { today: '2026-10-27', tomorrow: null, sellCt: 25, buyCt: null });
+  assert.equal(r.today.sellHours, 1);
+});
