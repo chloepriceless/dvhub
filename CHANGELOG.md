@@ -12,6 +12,15 @@ verweist hierher.
 
 ### Neu
 
+- **Peak Shaving – Bezugsgrenze für Gewerbeanschlüsse (Beta, #28)**: Bei Leistungsmessung (RLM) richtet sich der
+  Leistungspreis nach der höchsten Viertelstunden-Bezugsleistung im Jahr. Mit eingetragener Grenze deckelt DVhub
+  eigene Netz-Sollwerte (Netzladen, EOS-„Akku halten“, manuelle Werte) auf Grenze minus Sicherheitsabstand, sodass der
+  Akku Spitzen abdeckt; ist die Entladung gesperrt (Max Entladung = 0), gibt DVhub sie bei Bezug über der Grenze um den
+  Überschuss frei und setzt die Sperre mit Rückschalt-Abstand wieder. Not-Halt, §14a, Netzlade-Verbot und
+  Mindest-Ladestand haben Vorrang; bei veralteten Messwerten greift DVhub nicht ein. Der Leitstand zeigt Grenze,
+  Eingriff und die höchste Viertelstunde im Monat und im Jahr. Bisher nur Victron; andere Hersteller nur Anzeige.
+  Einstellungen → Netz & Recht → Erweitert; nur im Bleeding-Edge-Kanal. EOS kennt keine Bezugsgrenze und plant ohne sie.
+
 - **Zweite Victron-Anlage am selben Hausanschluss (Beta)**: eine zweite GX-Anlage ohne PV und ohne eigenen Zähler,
   z. B. die der anderen Haushälfte. Die Anlage mit Zähler regelt den Anschluss wie bisher; die zweite übernimmt träge
   einen Teil der Akkuleistung, verteilt nach nutzbarer Energie, sodass sich die Ladestände angleichen. EOS plant beide
