@@ -2332,6 +2332,11 @@ function renderDashboardStatus(status) {
     window.DVhubSecondGx?.render(status.multiGx);
   });
 
+  // Preis-Stunden über/unter den eigenen Schwellen (price-hours-view.js, Issue #27).
+  safeRender('dashboard.price-hours', () => {
+    window.DVhubPriceHours?.render(status.epex);
+  });
+
   safeRender('dashboard.costs', () => {
     const c = status.costs || {};
     setText('costImport', c.importKwh == null ? '-' : `${c.importKwh} kWh`);
@@ -4050,6 +4055,7 @@ function initDashboard() {
     } catch { /* ignore */ }
   });
   document.getElementById('refreshEpex')?.addEventListener('click', refreshEpex);
+  window.DVhubPriceHours?.init();
   document.getElementById('loadScheduleBtn')?.addEventListener('click', loadScheduleDash);
   document.getElementById('saveScheduleBtn')?.addEventListener('click', saveScheduleDash);
   document.getElementById('addScheduleRowBtn')?.addEventListener('click', () => { openSlotEditor(null); });

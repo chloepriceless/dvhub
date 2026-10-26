@@ -382,6 +382,16 @@
   font-family:var(--f-mono); font-size:10px; color:var(--text-dim);
 }
 
+/* Preis-Stunden unter dem Preis-Chart (Issue #27) */
+.price-hours {
+  display:flex; flex-direction:column; gap:4px;
+  padding:6px 10px; margin-top:6px;
+  border-left:2px solid var(--accent);
+  border-radius:0 var(--r-sm) var(--r-sm) 0;
+}
+.price-hours-inputs { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; margin-bottom:4px; }
+.price-hours strong { font-family:var(--f-mono); font-size:11px; color:var(--text); font-weight:500; }
+
 /* ─── Schedule editor ─── */
 .schedule-flags { display:flex; gap:14px; margin:8px 0 6px; flex-wrap:wrap; }
 .schedule-flag {
