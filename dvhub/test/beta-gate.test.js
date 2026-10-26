@@ -23,6 +23,7 @@ import { resolveControlWriteVerify } from '../schedule-eval.js';
 import { resolveCrossCheckOptions } from '../services/mqtt-crosscheck.js';
 import { resolveFreezeOptions } from '../services/telemetry-freeze-watchdog.js';
 import { resolveMultiGxOptions } from '../services/multi-gx/index.js';
+import { resolvePeakShaving } from '../services/peak-shaving/index.js';
 
 // Pro Feature: eine Config, in der der Schalter AUSDRÜCKLICH an ist, und die
 // Funktion, die daraus das wirksame `enabled` ableitet.
@@ -42,6 +43,10 @@ const RESOLVERS = {
   multiGx: {
     resolve: resolveMultiGxOptions,
     configWithFlagOn: { multiGx: { enabled: true, host: '10.0.0.6' } }
+  },
+  peakShaving: {
+    resolve: resolvePeakShaving,
+    configWithFlagOn: { manufacturer: 'victron', peakShaving: { enabled: true, gridImportLimitW: 30000 } }
   }
 };
 
