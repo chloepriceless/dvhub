@@ -19,8 +19,9 @@ verweist hierher.
   Überschuss frei und setzt die Sperre mit Rückschalt-Abstand wieder. Not-Halt, §14a, Netzlade-Verbot und
   Mindest-Ladestand haben Vorrang. Den Akku zieht der Deckel nur bei frischem Ladestand über dem Boden heran; sonst
   deckelt er höchstens bis zur gemessenen Netto-Last (kein Entladen), ist auch die Last unbekannt, gar nicht. Ohne
-  frischen Zähler hebt DVhub keine Sperre auf und setzt eine selbst aufgehobene wieder. Der Leitstand zeigt Grenze,
-  Eingriff und die höchste Viertelstunde im Monat und im Jahr. Bisher nur Victron; andere Hersteller nur Anzeige.
+  frischen Zähler oder Ladestand hebt DVhub keine Sperre auf und setzt eine selbst aufgehobene wieder — sobald die
+  Rücklesung von 2704 bestätigt, dass dort noch DVhubs Freigabe steht; wurde sie am GX geändert, bleibt sie. Der
+  Leitstand zeigt Grenze, Eingriff und die höchste Viertelstunde im Monat und im Jahr. Bisher nur Victron; andere Hersteller nur Anzeige.
   Einstellungen → Netz & Recht → Erweitert; nur im Bleeding-Edge-Kanal. EOS kennt keine Bezugsgrenze und plant ohne sie.
 
 - **Zweite Victron-Anlage am selben Hausanschluss (Beta)**: eine zweite GX-Anlage ohne PV und ohne eigenen Zähler,

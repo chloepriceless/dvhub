@@ -1127,7 +1127,7 @@ export function createScheduleEvaluator(ctx) {
     if (!ctx.peakShavingLiftPath) return;
     try {
       if (d?.phase === 'lifted') {
-        atomicWriteControlState(ctx.peakShavingLiftPath, { liftedW: d.liftedW, since: d.since, lastWriteAt: d.lastWriteAt });
+        atomicWriteControlState(ctx.peakShavingLiftPath, { liftedW: d.liftedW, prevW: d.prevW ?? null, since: d.since, lastWriteAt: d.lastWriteAt });
       } else {
         fs.rmSync(ctx.peakShavingLiftPath, { force: true });
       }
@@ -1142,7 +1142,8 @@ export function createScheduleEvaluator(ctx) {
       const saved = JSON.parse(fs.readFileSync(ctx.peakShavingLiftPath, 'utf8'));
       if (saved && Number(saved.liftedW) > 0) {
         (state.ctrl._peakShaving ??= {}).discharge = {
-          phase: 'lifted', liftedW: Number(saved.liftedW), since: Number(saved.since) || Date.now(),
+          phase: 'lifted', liftedW: Number(saved.liftedW), prevW: saved.prevW == null ? null : Number(saved.prevW),
+          since: Number(saved.since) || Date.now(),
           lastWriteAt: Number(saved.lastWriteAt) || 0, over: 0, under: 0
         };
         pushLog('peak_shaving_lift_restored', { liftedW: Number(saved.liftedW), since: Number(saved.since) || null }, 'warn');
@@ -1159,6 +1160,7 @@ export function createScheduleEvaluator(ctx) {
     return typeof transport.mbRequest === 'function' && conf?.address != null;
   }
 
+  let peakShavingTickNo = 0;
   async function readMaxDischargeForPeakShaving(conf) {
     const psState = (state.ctrl._peakShaving ??= {});
     try {
@@ -1173,7 +1175,7 @@ export function createScheduleEvaluator(ctx) {
         value = decodeMaxDischargeRaw(regs?.[0], conf);
       }
       if (value == null || !Number.isFinite(value)) throw new Error('2704: kein gültiger Wert');
-      psState.readback = { value, at: Date.now(), error: null };
+      psState.readback = { value, at: Date.now(), tick: peakShavingTickNo, error: null };
     } catch (e) {
       psState.readback = { ...(psState.readback || { value: null, at: 0 }), error: e?.message || String(e) };
     }
@@ -1183,11 +1185,16 @@ export function createScheduleEvaluator(ctx) {
     const cfg = getCfg();
     if (!cfg.controlWrite?.maxDischargeW?.enabled) return;
     const ps = resolvePeakShaving(cfg);
-    // Aus und nichts aufgehoben → kein Zustand, kein Write (bitgenau wie vorher).
-    if (!ps.active && !state.ctrl._peakShaving?.discharge) return;
+    // Aus und nichts aufgehoben → kein Zustand, kein Lesen, kein Write (bitgenau
+    // wie vorher; auch nachdem eine Freigabe zurückgenommen ist — 563da829).
+    if (!ps.active && state.ctrl._peakShaving?.discharge?.phase !== 'lifted') {
+      if (state.ctrl._peakShaving?.discharge) state.ctrl._peakShaving.discharge.over = 0;
+      return;
+    }
     const d = ((state.ctrl._peakShaving ??= {}).discharge ??= {
       phase: 'idle', liftedW: null, since: null, lastWriteAt: null, over: 0, under: 0
     });
+    peakShavingTickNo += 1;
     const conf = cfg.controlWrite.maxDischargeW;
     const readbackSupported = maxDischargeReadable(conf);
     if (readbackSupported) await readMaxDischargeForPeakShaving(conf);
@@ -1200,7 +1207,7 @@ export function createScheduleEvaluator(ctx) {
     if (act.type === 'none') return;
     if (act.type === 'superseded') {
       pushLog('peak_shaving_lift_superseded', { liftedW: d.liftedW, known: knownMaxDischargeW(state, cfg) });
-      Object.assign(d, { phase: 'idle', liftedW: null, since: null, lastWriteAt: null, over: 0, under: 0 });
+      Object.assign(d, { phase: 'idle', liftedW: null, prevW: null, since: null, lastWriteAt: null, over: 0, under: 0, waiting: null });
       persistPeakShavingLift(d);
       return;
     }
@@ -1208,7 +1215,7 @@ export function createScheduleEvaluator(ctx) {
       const r = await applyControlTarget('maxDischargeW', 0, 'peak_shaving_restore');
       if (r.ok) {
         pushLog('peak_shaving_discharge_restore', { reason: act.reason, liftedW: d.liftedW, importW: tel.importW });
-        Object.assign(d, { phase: 'idle', liftedW: null, since: null, lastWriteAt: null, over: 0, under: 0, restoreError: null });
+        Object.assign(d, { phase: 'idle', liftedW: null, prevW: null, since: null, lastWriteAt: null, over: 0, under: 0, restoreError: null, waiting: null });
         persistPeakShavingLift(d);
       } else if (d.restoreError !== r.error) {
         d.restoreError = r.error;
@@ -1222,12 +1229,12 @@ export function createScheduleEvaluator(ctx) {
     if (!r.ok || !lw || Number(lw.value) !== act.valueW || lw.source !== 'peak_shaving') return;
     const now = Date.now();
     if (act.type === 'lift') {
-      Object.assign(d, { phase: 'lifted', liftedW: act.valueW, since: now, lastWriteAt: now, over: 0, under: 0 });
+      Object.assign(d, { phase: 'lifted', liftedW: act.valueW, prevW: 0, since: now, lastWriteAt: now, lastWriteTick: peakShavingTickNo, over: 0, under: 0, waiting: null });
       pushLog('peak_shaving_discharge_release', {
         liftedW: act.valueW, importW: tel.importW, limitW: ps.limitW, targetW: ps.targetW, soc: tel.soc
       });
     } else {
-      Object.assign(d, { liftedW: act.valueW, lastWriteAt: now });
+      Object.assign(d, { prevW: d.liftedW, liftedW: act.valueW, lastWriteAt: now, lastWriteTick: peakShavingTickNo });
       pushLog('peak_shaving_discharge_raise', { liftedW: act.valueW, importW: tel.importW, limitW: ps.limitW });
     }
     persistPeakShavingLift(d);

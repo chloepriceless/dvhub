@@ -219,7 +219,7 @@ export function knownMaxDischargeW(state, cfg, now = Date.now()) {
   const rb = state?.ctrl?._peakShaving?.readback;
   // Ist der letzte Leseversuch gescheitert, gilt auch der alte Wert nicht mehr.
   if (rb && !rb.error && Number.isFinite(Number(rb.value)) && Number(rb.at) > 0 && now - Number(rb.at) <= maxAgeMs) {
-    return { value: Number(rb.value), from: 'readback', at: Number(rb.at) };
+    return { value: Number(rb.value), from: 'own_readback', at: Number(rb.at), tick: rb.tick ?? null };
   }
   const lw = state?.schedule?.lastWrite?.maxDischargeW;
   if (lw && lw.value != null && Number.isFinite(Number(lw.value))) {
@@ -253,10 +253,24 @@ function superseded(d, known, lastWrite) {
   // lastWrite ist immer DVhubs JÜNGSTER Write: stammt er nicht von Peak
   // Shaving, hat jemand (API, Leitstand, MQTT) nach unserer Freigabe gesetzt.
   if (lastWrite && !String(lastWrite.source || '').startsWith('peak_shaving')) return true;
-  // Am GX/VRM geändert: die Rücklesung zeigt sicher nach unserem Write etwas anderes.
-  return known?.from === 'readback'
-    && known.at > (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS
-    && Math.abs(known.value - Number(d.liftedW)) > READBACK_TOLERANCE_W;
+  if (!known || (known.from !== 'readback' && known.from !== 'own_readback')) return false;
+  // Eigene Rücklesung (Registerlesen am Anfang des Takts): keine Karenz — jede
+  // Lesung NACH unserem Write, die weder unseren Wert noch den Wert davor zeigt
+  // (Gerät hat noch nicht übernommen), ist eine Änderung von außen (Gegenprüfung
+  // 563da829). Ein Poll-Punkt hinkt dagegen hinterher → 10 s Karenz.
+  // Reihenfolge über die Taktnummer statt der Uhr: Lesen und Schreiben können in
+  // derselben Millisekunde liegen. Nach einem Neustart (keine Taktnummer im
+  // Merker) liegt jede neue Lesung hinter dem Write.
+  if (known.from === 'own_readback') {
+    const writeTick = Number.isFinite(Number(d.lastWriteTick)) ? Number(d.lastWriteTick) : -Infinity;
+    if (!(Number(known.tick) > writeTick)) return false;
+  } else if (known.at <= (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS) {
+    return false;
+  }
+  const ours = [Number(d.liftedW), Number(d.prevW)].filter((w) => Number.isFinite(w));
+  // -1 (unbegrenzt) ist eine Betriebsart, keine Zahl nahe 0: nur exakt vergleichen.
+  const same = (a, w) => ((a === -1 || w === -1) ? a === w : Math.abs(a - w) <= READBACK_TOLERANCE_W);
+  return !ours.some((w) => same(known.value, w));
 }
 
 /**
@@ -271,7 +285,8 @@ export function dischargeStep(d, { ps, tel, known, paused, capW, lastWrite = nul
     // steht: eine Rücklesung (Abweichung wäre oben „superseded“) — oder, wo das
     // Gerät gar nicht rücklesbar ist, der eigene letzte Write. Sonst warten
     // statt blind 0 zu schreiben (Gegenprüfung eb2f1a26).
-    const confirmed = known?.from === 'readback'
+    d.waiting = null;
+    const confirmed = known?.from === 'readback' || known?.from === 'own_readback'
       || (!readbackSupported && known?.from === 'own_write');
     const restore = (why) => {
       if (confirmed) { d.waiting = null; return { type: 'restore', reason: why }; }

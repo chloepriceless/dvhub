@@ -330,3 +330,64 @@ test('Neustart: Register antwortet nicht → nichts schreiben, Merker bleibt', a
   assert.deepEqual(maxDischargeWrites(second.transport), []);
   assert.equal(fs.existsSync(liftPath), true);
 });
+
+// --- Gegenprüfung 563da829 ---------------------------------------------------------
+
+test('[563da829 P3] Wartemerker verschwindet, wenn die Freigabe als übernommen gilt', async () => {
+  const { evaluator, transport, state, cfg } = await liftedHarness();
+  delete transport.registers[2704];
+  cfg.peakShaving.enabled = false;
+  await ticks(evaluator, 1);
+  assert.equal(state.ctrl._peakShaving.discharge.waiting, 'readback');
+  transport.registers[2704] = 32767; // inzwischen am GX geändert
+  state.ctrl._peakShaving.discharge.lastWriteAt -= 15000;
+  await ticks(evaluator, 1);
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'idle');
+  assert.equal(state.ctrl._peakShaving.discharge.waiting ?? null, null);
+});
+
+test('[563da829 P3] Wartemerker verschwindet, wenn der Rückkehr-Grund entfällt', async () => {
+  const { evaluator, transport, state, cfg } = await liftedHarness();
+  delete transport.registers[2704];
+  cfg.peakShaving.enabled = false;
+  await ticks(evaluator, 1);
+  assert.equal(state.ctrl._peakShaving.discharge.waiting, 'readback');
+  cfg.peakShaving.enabled = true;
+  await ticks(evaluator, 1);
+  assert.equal(state.ctrl._peakShaving.discharge.waiting ?? null, null);
+});
+
+test('[563da829 P3] Änderung am GX kurz nach der Freigabe wird sofort erkannt (keine Karenz für die eigene Rücklesung)', async () => {
+  const { evaluator, transport, state, logs } = await liftedHarness();
+  // 2 s nach der Freigabe am GX auf „unbegrenzt“; Bezug weiter über der Grenze.
+  transport.registers[2704] = 32767;
+  setFlow(state, { importW: 10600, batteryDischargeW: 4300 });
+  await ticks(evaluator, 1);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300], 'kein Anheben über die Betreiber-Einstellung');
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'idle');
+  assert.ok(logs.some((l) => l.event === 'peak_shaving_lift_superseded'));
+});
+
+test('[563da829 P3] Rücklesung zeigt noch den Wert vor dem eigenen Write: zählt als eigener Wert', async () => {
+  // Nach dem Anheben 4 300 → 5 200 W liest das Register im nächsten Takt evtl.
+  // noch 4 300 W — das ist kein Eingriff von außen.
+  const { evaluator, transport, state } = await liftedHarness();
+  setFlow(state, { importW: 10600, batteryDischargeW: 4300 });
+  await ticks(evaluator, 1);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 5200]);
+  transport.registers[2704] = 430; // GX hat 5 200 noch nicht übernommen
+  setFlow(state, { importW: 9700, batteryDischargeW: 4300 });
+  await ticks(evaluator, 1);
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'lifted');
+  assert.equal(state.ctrl._peakShaving.discharge.liftedW, 5200);
+});
+
+test('[563da829 P3] nach Ausschalten und Rückkehr zur Sperre wird 2704 nicht mehr gelesen', async () => {
+  const { evaluator, transport, cfg } = await liftedHarness();
+  cfg.peakShaving.enabled = false;
+  await ticks(evaluator, 1);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 0]);
+  const before = transport.reads.filter((r) => r.address === 2704).length;
+  await ticks(evaluator, 3);
+  assert.equal(transport.reads.filter((r) => r.address === 2704).length, before);
+});
