@@ -179,3 +179,78 @@ export function clampGridSetpoint(value, resolved, tel) {
   }
   return { value, clamped: false, mode: 'held', reason: tel?.socReason || 'telemetry_unknown' };
 }
+
+// --- Hebel 2: Akku-Sperre (Victron 2704 MaxDischargePower = 0) aufheben -------
+export const DISCHARGE_ENTER_TICKS = 2;   // Takte über der Grenze bis zur Freigabe (Entprellung)
+export const DISCHARGE_RELEASE_TICKS = 6; // Takte unter Ziel − Hysterese bis zur Sperre (~30 s)
+const LIFT_STEP_W = 100;
+// Ein Rücklesewert zählt erst, wenn er sicher NACH dem eigenen Write gepollt wurde.
+const READBACK_GRACE_MS = 10_000;
+const READBACK_TOLERANCE_W = 50;
+
+/**
+ * Was DVhub über 2704 sicher weiß: ein frischer Rücklesewert (falls der Punkt
+ * gepollt wird) schlägt den eigenen letzten Write. Sonst null = unbekannt —
+ * dann hebt Peak Shaving keine Sperre auf (wir wüssten nicht, wohin zurück).
+ */
+export function knownMaxDischargeW(state, cfg, now = Date.now()) {
+  const v = state?.victron || {};
+  const maxAgeMs = Number(cfg?.victron?.telemetryMaxAgeMs ?? 90000);
+  const age = fieldAgeMs(state, 'maxDischargeW', now);
+  if (v.maxDischargeW != null && Number.isFinite(Number(v.maxDischargeW)) && age !== null && age <= maxAgeMs
+      && !v.errors?.maxDischargeW) {
+    return { value: Number(v.maxDischargeW), from: 'readback', at: now - age };
+  }
+  const lw = state?.schedule?.lastWrite?.maxDischargeW;
+  if (lw && lw.value != null && Number.isFinite(Number(lw.value))) {
+    return { value: Number(lw.value), from: 'own_write', at: Number(lw.at) || 0, source: lw.source };
+  }
+  return null;
+}
+
+function liftValueW(needW, capW) {
+  const stepped = Math.ceil(Math.max(0, needW) / LIFT_STEP_W) * LIFT_STEP_W;
+  return Math.max(LIFT_STEP_W, Math.min(capW, stepped));
+}
+
+function superseded(d, known) {
+  if (!known) return false;
+  // lastWrite ist immer der JÜNGSTE Write: stammt er nicht von Peak Shaving,
+  // hat jemand nach unserer Freigabe selbst gesetzt.
+  if (known.from === 'own_write') return !String(known.source || '').startsWith('peak_shaving');
+  return known.at > (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS
+    && Math.abs(known.value - Number(d.liftedW)) > READBACK_TOLERANCE_W;
+}
+
+/**
+ * Ein Takt der Entlade-Freigabe (rein; ändert nur die Zähler in d).
+ * d.phase 'idle' | 'lifted'. Rückgabe: was der Evaluator schreiben soll.
+ * @returns {{ type: 'none'|'lift'|'raise'|'restore'|'superseded', valueW?: number, reason?: string }}
+ */
+export function dischargeStep(d, { ps, tel, known, paused, capW }) {
+  if (d.phase === 'lifted') {
+    if (superseded(d, known)) return { type: 'superseded' };
+    const reason = paused ? 'emergency_stop'
+      : !ps?.active ? (ps?.reason || 'disabled')
+        : tel.socReason ? tel.socReason
+          : !tel.meterFresh ? 'meter_stale' : null;
+    if (reason) return { type: 'restore', reason };
+    const demandW = tel.importW + tel.batteryDischargeW;
+    if (tel.importW > ps.limitW) {
+      d.under = 0;
+      const next = liftValueW(demandW - ps.targetW, capW);
+      return next > Number(d.liftedW) ? { type: 'raise', valueW: next } : { type: 'none' };
+    }
+    d.under = demandW < ps.targetW - ps.releaseHysteresisW ? (d.under || 0) + 1 : 0;
+    if (d.under >= DISCHARGE_RELEASE_TICKS) return { type: 'restore', reason: 'below_limit' };
+    return { type: 'none' };
+  }
+  const blocked = known != null && known.value === 0;
+  const over = !paused && ps?.active === true && blocked && tel.socOk && tel.meterFresh && tel.importW > ps.limitW;
+  d.over = over ? (d.over || 0) + 1 : 0;
+  if (d.over >= DISCHARGE_ENTER_TICKS) {
+    d.over = 0;
+    return { type: 'lift', valueW: liftValueW(tel.importW + tel.batteryDischargeW - ps.targetW, capW) };
+  }
+  return { type: 'none' };
+}

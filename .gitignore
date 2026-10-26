@@ -15,6 +15,9 @@ license_state.json
 dvhub/license_state.json
 control_state.json
 dvhub/control_state.json
+# Peak Shaving: Merker einer aufgehobenen Akku-Sperre (gleiche DV_DATA_DIR-Gefahr).
+peak_shaving_lift.json
+dvhub/peak_shaving_lift.json
 .no-eos
 eos-provision.log
 # Local diagnostic scratch files (background-flow probes, ad-hoc screenshots).

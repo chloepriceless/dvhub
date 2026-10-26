@@ -1100,6 +1100,10 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 // StorCtl_Mod/OutWRte) müssen einen Neustart WÄHREND einer aktiven Sperre
 // überleben, sonst schreibt die Freigabe nur die pauschalen restoreDefaults.
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
+// Peak Shaving (GitHub #28): eine von DVhub aufgehobene Akku-Sperre (Victron
+// 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
+// Prozess sie zurückschreibt statt sie zu vergessen.
+const PEAK_SHAVING_LIFT_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_lift.json');
 // E-Auto „Sofort laden“ (eos-evcc-bridge setOverride).
 const EV_OVERRIDE_PATH = path.join(DATA_DIR || __dirname, 'ev_override.json');
 
@@ -1280,6 +1284,7 @@ function controlValue() {
 // After each createXxx(ctx), extend ctx with the new module's public methods.
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
+  peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
   state,
   getCfg: () => cfg,
   transport,
