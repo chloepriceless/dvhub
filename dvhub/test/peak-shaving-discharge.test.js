@@ -445,3 +445,17 @@ test('[9cb277fc P3] alter Betreiber-Write mit gleichem Wert, Gerät steht auf 0:
   assert.deepEqual(maxDischargeWrites(transport), [4300, 4300]);
   assert.equal(state.ctrl._peakShaving.discharge.phase, 'lifted');
 });
+
+test('[8e991b49 P3] Freigabe scheitert in zwei getrennten Spitzen: beide werden gemeldet', async () => {
+  const { evaluator, transport, state, logs } = await blockedHarness();
+  const write = transport.mbWriteSingle.bind(transport);
+  transport.mbWriteSingle = async (req) => { if (req.address === 2704) throw new Error('timeout'); return write(req); };
+  const notWritten = () => logs.filter((l) => l.event === 'peak_shaving_lift_not_written').length;
+  await ticks(evaluator, ENTER_TICKS);
+  assert.equal(notWritten(), 1, 'erste Spitze');
+  setFlow(state, { importW: 5000 });
+  await ticks(evaluator, 2); // Spitze vorbei
+  setFlow(state, { importW: 14000 });
+  await ticks(evaluator, ENTER_TICKS);
+  assert.equal(notWritten(), 2, 'zweite Spitze wird wieder gemeldet');
+});

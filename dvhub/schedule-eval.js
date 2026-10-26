@@ -1204,7 +1204,12 @@ export function createScheduleEvaluator(ctx) {
       ps, tel, known: knownMaxDischargeW(state, cfg), paused: state.ctrl.discretionaryWritesPaused === true, capW,
       lastWrite: state.schedule.lastWrite.maxDischargeW || null, readbackSupported
     });
-    if (act.type === 'none') return;
+    if (act.type === 'none') {
+      // Spitze vorbei, ohne dass eine Freigabe stand: ein gescheiterter Write
+      // der nächsten Spitze wird wieder gemeldet (Gegenprüfung 8e991b49, P3).
+      if (d.phase === 'idle' && !d.over) d.writeIssue = null;
+      return;
+    }
     if (act.type === 'superseded') {
       pushLog('peak_shaving_lift_superseded', { liftedW: d.liftedW, known: knownMaxDischargeW(state, cfg) });
       // Steht im Gerät nicht mehr DVhubs Wert, ist der eigene lastWrite kein
