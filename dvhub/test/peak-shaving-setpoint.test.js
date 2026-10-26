@@ -286,3 +286,11 @@ test('[P3] abgeschalteter PV-Punkt mit altem Wert zählt nicht mit (Umstellung o
   await evaluator.applyControlTarget('gridSetpointW', 15000, 'rule:charge');
   assert.deepEqual(gridSetpointWrites(transport), [10000]);
 });
+
+test('[Gegenprüfung bb80db31 P3] Pflicht-Quelle schreibt: alter Deckel-Eintrag wird verworfen', async () => {
+  const { evaluator, state } = harness({ persisted: PEAK_ON });
+  await evaluator.applyControlTarget('gridSetpointW', 12000, 'rule:charge');
+  assert.equal(state.ctrl._peakShaving.clamp.mode, 'target');
+  await evaluator.applyControlTarget('gridSetpointW', 0, 'emergency_stop');
+  assert.equal(state.ctrl._peakShaving.clamp, null);
+});

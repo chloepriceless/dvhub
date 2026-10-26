@@ -3,8 +3,8 @@
 //
 // RLM rechnet mit 15-Minuten-Mittelwerten. DVhub verdichtet den Netzbezug
 // ohnehin in energy_slots_15m (kWh je Viertelstunde) — der Mittelwert ist
-// kWh × 4 000 W. Je Slot zählt der eigene Messwert (local_live) vor dem
-// VRM-Import. Monat und Jahr laufen in der Zeitzone der Anlage.
+// kWh × 4 000 W. Je Slot zählt die größere Quelle (eigener Messwert oder
+// VRM-Import). Monat und Jahr laufen in der Zeitzone der Anlage.
 
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -57,10 +57,10 @@ test('getGridImportPeak: keine Daten → null', async () => {
   assert.equal(await store.getGridImportPeak({ start: '2026-01-01T00:00:00Z', end: '2026-02-01T00:00:00Z' }), null);
 });
 
-test('GRID_IMPORT_PEAK_SQL: nur Netzbezug, eigener Messwert vor VRM, größter Slot', () => {
+test('GRID_IMPORT_PEAK_SQL: nur Netzbezug, je Slot die größere Quelle, größter Slot', () => {
   assert.match(GRID_IMPORT_PEAK_SQL, /series_key = 'grid_import_w'/);
-  assert.match(GRID_IMPORT_PEAK_SQL, /DISTINCT ON \(slot_start_utc\)/);
-  assert.match(GRID_IMPORT_PEAK_SQL, /source_kind = 'local_live'\) DESC/);
+  assert.match(GRID_IMPORT_PEAK_SQL, /MAX\(value_num\)/);
+  assert.match(GRID_IMPORT_PEAK_SQL, /GROUP BY slot_start_utc/);
   assert.match(GRID_IMPORT_PEAK_SQL, /ORDER BY value_num DESC/);
 });
 
@@ -81,9 +81,13 @@ describe('getGridImportPeak gegen echtes PostgreSQL', { skip: !DATABASE_URL }, (
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(slot_start_utc, series_key, source_kind))`);
     const rows = [
-      // 10:00 — VRM zeigt 5 kWh, der eigene Messwert 2 kWh: der eigene gilt (8 000 W).
-      ['2026-10-14T10:00:00Z', 'grid_import_w', 'vrm_import', 5],
+      // 10:00 — eigener Messwert unvollständig (Neustart): 2 kWh, VRM 2,5 kWh →
+      // je Slot zählt die größere Quelle (10 000 W), sonst würde die Spitze unterschätzt.
+      ['2026-10-14T10:00:00Z', 'grid_import_w', 'vrm_import', 2.5],
       ['2026-10-14T10:00:00Z', 'grid_import_w', 'local_live', 2],
+      // 11:00 — eigener Messwert 2,9 kWh, VRM 1 kWh → 11 600 W (eigener größer).
+      ['2026-10-14T11:00:00Z', 'grid_import_w', 'vrm_import', 1],
+      ['2026-10-14T11:00:00Z', 'grid_import_w', 'local_live', 2.9],
       // 10:15 — nur VRM: 3 kWh = 12 000 W → Monatsspitze.
       ['2026-10-14T10:15:00Z', 'grid_import_w', 'vrm_import', 3],
       // 10:30 — Einspeisung zählt nicht.
@@ -106,6 +110,9 @@ describe('getGridImportPeak gegen echtes PostgreSQL', { skip: !DATABASE_URL }, (
     const p = peakPeriods(Date.parse('2026-10-26T10:00:00Z'), 'Europe/Berlin');
     assert.deepEqual(await store.getGridImportPeak(p.month), { slotStart: '2026-10-14T10:15:00.000Z', powerW: 12000, energyKwh: 3 });
     assert.deepEqual(await store.getGridImportPeak(p.year), { slotStart: '2026-09-10T08:00:00.000Z', powerW: 16000, energyKwh: 4 });
+    // Ein Tag: 10:00 zählt mit der größeren Quelle (VRM 2,5 kWh, nicht lokal 2 kWh).
+    assert.deepEqual(await store.getGridImportPeak({ start: '2026-10-14T09:00:00Z', end: '2026-10-14T10:15:00Z' }),
+      { slotStart: '2026-10-14T10:00:00.000Z', powerW: 10000, energyKwh: 2.5 });
   });
 });
 
@@ -206,7 +213,7 @@ test('Dienst: „greift“ aus dem Steuerzustand (Deckel frisch oder Akku freige
   state.ctrl._peakShaving.discharge = { phase: 'lifted', liftedW: 4300, since: now - 5000 };
   s = svc.summary();
   assert.equal(s.acting, true);
-  assert.deepEqual(s.lift, { liftedW: 4300, since: now - 5000 });
+  assert.deepEqual(s.lift, { liftedW: 4300, since: now - 5000, waiting: null });
   // Zähler veraltet → kein Bezugswert
   state.meter.updatedAt = now - 60000;
   assert.equal(svc.summary().importW, null);
@@ -220,4 +227,14 @@ test('server.js: Dienst im Laufzeit-Prozess, Status in /api/status, Merker-Pfad 
   assert.match(src, /peakShaving: ctx\.peakShaving\?\.summary\?\.\(\) \?\? null,/);
   assert.match(src, /peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,/);
   assert.match(src, /safeSync\('peakShaving\.stop'/);
+});
+
+test('decodeMaxDischargeRaw: Victron-2704-Rohwerte wie beim Schreiben', async () => {
+  const { decodeMaxDischargeRaw } = await import('../services/peak-shaving/index.js');
+  const conf = { scale: 10, offset: 0, rawSentinels: [0], rawSentinelMap: { '-1': 32767 } };
+  assert.equal(decodeMaxDischargeRaw(0, conf), 0);
+  assert.equal(decodeMaxDischargeRaw(430, conf), 4300);
+  assert.equal(decodeMaxDischargeRaw(32767, conf), -1);
+  assert.equal(decodeMaxDischargeRaw(0xffff, conf), -1);
+  assert.equal(decodeMaxDischargeRaw('x', conf), null);
 });

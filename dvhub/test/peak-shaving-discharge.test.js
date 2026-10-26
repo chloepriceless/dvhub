@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
-  loadVictronConfig, PEAK_ON, makeTelemetryState, makeEvaluator, maxDischargeWrites
+  loadVictronConfig, PEAK_ON, makeTelemetryState, makeEvaluator, maxDischargeWrites, makeModbusTransport
 } from './helpers/peak-shaving-harness.js';
 
 const ENTER_TICKS = 2;
@@ -70,17 +70,25 @@ test('Freigabe nie über der Wechselrichter-Leistung (10 kW Standard)', async ()
   assert.deepEqual(maxDischargeWrites(transport), [0, 10000]);
 });
 
-test('frisch zurückgelesene Sperre (2704 = 0) genügt, auch ohne eigenen Write', async () => {
+test('Sperre im GX (2704 liest 0) genügt, auch ohne eigenen Write — z. B. nach Neustart', async () => {
+  // Gegenprüfung eb2f1a26 (P2): das ausgelieferte Profil pollt 2704 nicht. Peak
+  // Shaving liest das Register deshalb selbst (fc 3), solange es aktiv ist.
   const cfg = loadVictronConfig(PEAK_ON);
-  const state = makeTelemetryState({ soc: 60, importW: 14000, maxDischargeW: 0, maxDischargeAgeMs: 1000 });
-  const { evaluator, transport } = makeEvaluator({ cfg, state });
+  const state = makeTelemetryState({ soc: 60, importW: 14000 });
+  const transport = makeModbusTransport({ 2704: 0 });
+  const { evaluator } = makeEvaluator({ cfg, state, transport });
   await ticks(evaluator, ENTER_TICKS);
   assert.deepEqual(maxDischargeWrites(transport), [4300]);
+  assert.ok(transport.reads.some((r) => r.address === 2704 && r.fc === 3));
 });
 
-// --- kein Einstieg ------------------------------------------------------------
+test('ausgeliefertes Victron-Profil pollt 2704 nicht — die eigene Rücklesung ist nötig', () => {
+  const cfg = loadVictronConfig(PEAK_ON);
+  assert.equal(cfg.points.maxDischargeW, undefined);
+  assert.equal(cfg.controlWrite.maxDischargeW.address, 2704);
+});
 
-test('Sperre unbekannt (kein Write, kein Rücklesewert): nichts', async () => {
+test('Sperre unbekannt (kein Write, Register antwortet nicht): nichts', async () => {
   const cfg = loadVictronConfig(PEAK_ON);
   const state = makeTelemetryState({ soc: 60, importW: 14000 });
   const { evaluator, transport } = makeEvaluator({ cfg, state });
@@ -88,7 +96,16 @@ test('Sperre unbekannt (kein Write, kein Rücklesewert): nichts', async () => {
   assert.deepEqual(maxDischargeWrites(transport), []);
 });
 
-test('Rücklesewert veraltet: zählt nicht als Sperre', async () => {
+test('Peak Shaving aus: 2704 wird gar nicht gelesen', async () => {
+  const cfg = loadVictronConfig({});
+  const state = makeTelemetryState({ soc: 60, importW: 14000 });
+  const transport = makeModbusTransport({ 2704: 0 });
+  const { evaluator } = makeEvaluator({ cfg, state, transport });
+  await ticks(evaluator, 3);
+  assert.deepEqual(transport.reads.filter((r) => r.address === 2704), []);
+});
+
+test('von Hand erweitertes Profil (Poll-Punkt 2704) veraltet: zählt nicht als Sperre', async () => {
   const cfg = loadVictronConfig(PEAK_ON);
   const state = makeTelemetryState({ soc: 60, importW: 14000, maxDischargeW: 0, maxDischargeAgeMs: 200000 });
   const { evaluator, transport } = makeEvaluator({ cfg, state });
@@ -96,10 +113,9 @@ test('Rücklesewert veraltet: zählt nicht als Sperre', async () => {
   assert.deepEqual(maxDischargeWrites(transport), []);
 });
 
-test('frischer Rücklesewert schlägt den alten eigenen Write (am GX wieder freigegeben)', async () => {
-  const { evaluator, transport, state } = await blockedHarness();
-  state.victron.maxDischargeW = 20000;
-  state.victron.fieldUpdatedAt.maxDischargeW = Date.now();
+test('im GX wieder freigegeben (Register 2 000 = 20 000 W) schlägt den alten eigenen Write 0', async () => {
+  const { evaluator, transport } = await blockedHarness();
+  transport.registers[2704] = 2000;
   await ticks(evaluator, 4);
   assert.deepEqual(maxDischargeWrites(transport), [0]);
 });
@@ -250,19 +266,67 @@ test('Betreiber schreibt 2704 selbst während der Freigabe: DVhub schreibt nicht
   assert.ok(logs.some((l) => l.event === 'peak_shaving_lift_superseded'));
 });
 
-test('Neustart während der Freigabe: Merker in der Datei, erster Takt ohne Bedarf schreibt 0', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-peak-lift-'));
-  const liftPath = path.join(dir, 'peak_shaving_lift.json');
-  const first = await liftedHarness({ extraCtx: { peakShavingLiftPath: liftPath } });
-  const saved = JSON.parse(fs.readFileSync(liftPath, 'utf8'));
-  assert.equal(saved.liftedW, 4300);
+test('Betreiber ändert 2704 am GX während der Freigabe: DVhub schreibt nicht zurück (Gegenprüfung eb2f1a26)', async () => {
+  const { evaluator, transport, state, logs } = await liftedHarness();
+  transport.registers[2704] = 32767; // am GX auf „unbegrenzt“ gestellt
+  state.ctrl._peakShaving.discharge.lastWriteAt -= 15000; // Rücklesung sicher nach dem eigenen Write
+  setFlow(state, { importW: 1000, batteryDischargeW: 0 });
+  await ticks(evaluator, RELEASE_TICKS + 2);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300]);
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'idle');
+  assert.ok(logs.some((l) => l.event === 'peak_shaving_lift_superseded'));
+});
 
+test('Rücklesung fällt aus: keine blinde Rückkehr zur Sperre, Freigabe bleibt gemerkt', async () => {
+  const { evaluator, transport, state, cfg } = await liftedHarness();
+  delete transport.registers[2704];
+  cfg.peakShaving.enabled = false;
+  await ticks(evaluator, 3);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300]);
+  assert.equal(state.ctrl._peakShaving.discharge.phase, 'lifted');
+  assert.equal(state.ctrl._peakShaving.discharge.waiting, 'readback');
+  transport.registers[2704] = 430;
+  await ticks(evaluator, 1);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 0]);
+});
+
+function restartHarness(liftPath, registers) {
   // Neuer Prozess: Zustand weg, Merker da, Peak Shaving inzwischen aus.
   const cfg = loadVictronConfig({ ...PEAK_ON, peakShaving: { ...PEAK_ON.peakShaving, enabled: false } });
   const state = makeTelemetryState({ soc: 60, importW: 1000 });
-  const second = makeEvaluator({ cfg, state, extraCtx: { peakShavingLiftPath: liftPath } });
+  return makeEvaluator({ cfg, state, transport: makeModbusTransport(registers), extraCtx: { peakShavingLiftPath: liftPath } });
+}
+
+test('Neustart während der Freigabe: GX zeigt noch DVhubs Wert → erster Takt schreibt 0, Merker weg', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-peak-lift-'));
+  const liftPath = path.join(dir, 'peak_shaving_lift.json');
+  await liftedHarness({ extraCtx: { peakShavingLiftPath: liftPath } });
+  assert.equal(JSON.parse(fs.readFileSync(liftPath, 'utf8')).liftedW, 4300);
+  const second = restartHarness(liftPath, { 2704: 430 });
   await ticks(second.evaluator, 1);
   assert.deepEqual(maxDischargeWrites(second.transport), [0]);
-  assert.equal(fs.existsSync(liftPath) ? JSON.parse(fs.readFileSync(liftPath, 'utf8')) : null, null);
-  void first;
+  assert.equal(fs.existsSync(liftPath), false);
+});
+
+test('Neustart: GX zeigt etwas anderes (am GX geändert) → nicht zurückschreiben, Merker weg', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-peak-lift-'));
+  const liftPath = path.join(dir, 'peak_shaving_lift.json');
+  await liftedHarness({ extraCtx: { peakShavingLiftPath: liftPath } });
+  const saved = JSON.parse(fs.readFileSync(liftPath, 'utf8'));
+  saved.lastWriteAt -= 60000;
+  fs.writeFileSync(liftPath, JSON.stringify(saved));
+  const second = restartHarness(liftPath, { 2704: 32767 });
+  await ticks(second.evaluator, 1);
+  assert.deepEqual(maxDischargeWrites(second.transport), []);
+  assert.equal(fs.existsSync(liftPath), false);
+});
+
+test('Neustart: Register antwortet nicht → nichts schreiben, Merker bleibt', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-peak-lift-'));
+  const liftPath = path.join(dir, 'peak_shaving_lift.json');
+  await liftedHarness({ extraCtx: { peakShavingLiftPath: liftPath } });
+  const second = restartHarness(liftPath, {});
+  await ticks(second.evaluator, 2);
+  assert.deepEqual(maxDischargeWrites(second.transport), []);
+  assert.equal(fs.existsSync(liftPath), true);
 });

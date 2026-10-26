@@ -29,21 +29,41 @@
     }
   }
 
+  // Warum DVhub nicht (ganz) deckeln konnte: leerer Akku ist kein Messfehler.
+  const MEASUREMENT_REASONS = ['soc_unknown', 'telemetry_frozen', 'source_mismatch', 'telemetry_unknown'];
+  const REASON_TEXT = {
+    soc_floor: 'Akku am Mindest-Ladestand',
+    soc_unknown: 'Ladestand unbekannt',
+    telemetry_frozen: 'Messwerte eingefroren',
+    source_mismatch: 'Messquellen widersprechen sich',
+    telemetry_unknown: 'Ladestand/Last unbekannt'
+  };
+
   function state(s) {
     if (s.reason === 'manufacturer_unsupported') return ['Nur Anzeige', 'info'];
     if (s.reason === 'limit_missing') return ['Grenze fehlt', 'warn'];
     if (s.active !== true) return [DASH, ''];
     if (s.acting) return ['Greift', 'warn'];
-    if (s.clamp && s.clamp.mode === 'held') return ['Messwerte fehlen', 'danger'];
+    if (s.clamp && s.clamp.mode === 'held') {
+      return s.clamp.reason === 'soc_floor' ? ['Akku am Boden', 'warn']
+        : MEASUREMENT_REASONS.includes(s.clamp.reason) || !s.clamp.reason ? ['Messwerte fehlen', 'danger']
+          : ['Kann nicht greifen', 'warn'];
+    }
     return ['Bereit', 'ok'];
   }
 
   function detail(s) {
-    if (s.lift && num(s.lift.liftedW)) return `Akku freigegeben: ${kw(s.lift.liftedW)}`;
-    if (s.clamp && (s.clamp.mode === 'target' || s.clamp.mode === 'net_load')) {
-      return `Sollwert ${kw(s.clamp.requestedW)} → ${kw(s.clamp.valueW)}`;
+    if (s.lift && num(s.lift.liftedW)) {
+      return s.lift.waiting === 'readback'
+        ? `Akku freigegeben: ${kw(s.lift.liftedW)} — Sperre wird gesetzt, sobald 2704 lesbar ist`
+        : `Akku freigegeben: ${kw(s.lift.liftedW)}`;
     }
-    if (s.clamp && s.clamp.mode === 'held') return 'Ladestand/Last unbekannt — DVhub greift nicht ein';
+    const why = s.clamp && REASON_TEXT[s.clamp.reason];
+    if (s.clamp && (s.clamp.mode === 'target' || s.clamp.mode === 'net_load')) {
+      const base = `Sollwert ${kw(s.clamp.requestedW)} → ${kw(s.clamp.valueW)}`;
+      return s.clamp.mode === 'net_load' && why ? `${base} (${why}: Akku entlädt nicht)` : base;
+    }
+    if (s.clamp && s.clamp.mode === 'held') return `${why || 'Ladestand/Last unbekannt'} — DVhub greift nicht ein`;
     return s.message || '';
   }
 

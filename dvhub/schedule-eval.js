@@ -24,7 +24,8 @@ import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
 import { betaGateOpen } from './beta-features.js';
 import {
-  resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint, knownMaxDischargeW, dischargeStep
+  resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint, knownMaxDischargeW, dischargeStep,
+  decodeMaxDischargeRaw
 } from './services/peak-shaving/index.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
@@ -864,6 +865,12 @@ export function createScheduleEvaluator(ctx) {
     // Der Deckel senkt nur, nie unter das Ziel (>= Grenze/2 > 0) und nie in
     // Richtung Einspeisung; Pflicht-Quellen bleiben unangetastet. Braucht er den
     // Akku, muss der Ladestand frisch und über dem Boden sein (clampGridSetpoint).
+    if (target === 'gridSetpointW' && isMandatoryControlSource(source) && state.ctrl._peakShaving?.clamp) {
+      // Eine Pflicht-Quelle schreibt den Sollwert — ein älterer Deckel-Eintrag
+      // gilt nicht mehr (sonst zeigte der Leitstand bis zu 30 s „greift“).
+      state.ctrl._peakShaving.clamp = null;
+      state.ctrl._peakShaving._clampKey = null;
+    }
     if (target === 'gridSetpointW' && !isMandatoryControlSource(source)) {
       const ps = resolvePeakShaving(cfg);
       if (ps.active) {
@@ -1143,6 +1150,35 @@ export function createScheduleEvaluator(ctx) {
     } catch { /* kein Merker → nichts aufgehoben */ }
   }
 
+  // 2704 selbst zurücklesen: das ausgelieferte Victron-Profil pollt den Wert
+  // nicht, ohne Rücklesung bliebe eine Sperre nach einem Neustart unbemerkt
+  // und eine Änderung am GX würde überschrieben (Gegenprüfung eb2f1a26).
+  // Nur, solange Peak Shaving aktiv ist oder eine Freigabe steht.
+  function maxDischargeReadable(conf) {
+    if (transport.type === 'mqtt') return typeof transport.readPoint === 'function';
+    return typeof transport.mbRequest === 'function' && conf?.address != null;
+  }
+
+  async function readMaxDischargeForPeakShaving(conf) {
+    const psState = (state.ctrl._peakShaving ??= {});
+    try {
+      let value;
+      if (transport.type === 'mqtt') {
+        value = Number((await transport.readPoint('maxDischargeW'))?.mqttValue);
+      } else {
+        const regs = await transport.mbRequest({
+          fc: 3, host: conf.host, port: conf.port, unitId: conf.unitId,
+          address: conf.address, quantity: 1, timeoutMs: conf.timeoutMs
+        });
+        value = decodeMaxDischargeRaw(regs?.[0], conf);
+      }
+      if (value == null || !Number.isFinite(value)) throw new Error('2704: kein gültiger Wert');
+      psState.readback = { value, at: Date.now(), error: null };
+    } catch (e) {
+      psState.readback = { ...(psState.readback || { value: null, at: 0 }), error: e?.message || String(e) };
+    }
+  }
+
   async function peakShavingDischargeTick() {
     const cfg = getCfg();
     if (!cfg.controlWrite?.maxDischargeW?.enabled) return;
@@ -1152,10 +1188,14 @@ export function createScheduleEvaluator(ctx) {
     const d = ((state.ctrl._peakShaving ??= {}).discharge ??= {
       phase: 'idle', liftedW: null, since: null, lastWriteAt: null, over: 0, under: 0
     });
+    const conf = cfg.controlWrite.maxDischargeW;
+    const readbackSupported = maxDischargeReadable(conf);
+    if (readbackSupported) await readMaxDischargeForPeakShaving(conf);
     const tel = peakShavingTelemetry(state, cfg, ps);
     const capW = Math.min(MAX_BATTERY_DISCHARGE_W, Math.max(1000, getPowerLimits(cfg).limits.inverterMaxPowerW));
     const act = dischargeStep(d, {
-      ps, tel, known: knownMaxDischargeW(state, cfg), paused: state.ctrl.discretionaryWritesPaused === true, capW
+      ps, tel, known: knownMaxDischargeW(state, cfg), paused: state.ctrl.discretionaryWritesPaused === true, capW,
+      lastWrite: state.schedule.lastWrite.maxDischargeW || null, readbackSupported
     });
     if (act.type === 'none') return;
     if (act.type === 'superseded') {

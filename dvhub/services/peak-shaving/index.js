@@ -201,9 +201,12 @@ const READBACK_GRACE_MS = 10_000;
 const READBACK_TOLERANCE_W = 50;
 
 /**
- * Was DVhub über 2704 sicher weiß: ein frischer Rücklesewert (falls der Punkt
- * gepollt wird) schlägt den eigenen letzten Write. Sonst null = unbekannt —
- * dann hebt Peak Shaving keine Sperre auf (wir wüssten nicht, wohin zurück).
+ * Was DVhub über 2704 sicher weiß, in dieser Reihenfolge:
+ *   1. Poll-Punkt points.maxDischargeW (nur in von Hand erweiterten Profilen),
+ *   2. die eigene Rücklesung von Peak Shaving (state.ctrl._peakShaving.readback;
+ *      das ausgelieferte Victron-Profil pollt 2704 nicht — Gegenprüfung eb2f1a26),
+ *   3. der eigene letzte Write.
+ * Sonst null = unbekannt — dann hebt Peak Shaving keine Sperre auf.
  */
 export function knownMaxDischargeW(state, cfg, now = Date.now()) {
   const v = state?.victron || {};
@@ -213,6 +216,11 @@ export function knownMaxDischargeW(state, cfg, now = Date.now()) {
       && !v.errors?.maxDischargeW) {
     return { value: Number(v.maxDischargeW), from: 'readback', at: now - age };
   }
+  const rb = state?.ctrl?._peakShaving?.readback;
+  // Ist der letzte Leseversuch gescheitert, gilt auch der alte Wert nicht mehr.
+  if (rb && !rb.error && Number.isFinite(Number(rb.value)) && Number(rb.at) > 0 && now - Number(rb.at) <= maxAgeMs) {
+    return { value: Number(rb.value), from: 'readback', at: Number(rb.at) };
+  }
   const lw = state?.schedule?.lastWrite?.maxDischargeW;
   if (lw && lw.value != null && Number.isFinite(Number(lw.value))) {
     return { value: Number(lw.value), from: 'own_write', at: Number(lw.at) || 0, source: lw.source };
@@ -220,17 +228,34 @@ export function knownMaxDischargeW(state, cfg, now = Date.now()) {
   return null;
 }
 
+/**
+ * Rohwert von 2704 (int16, Victron: 10-W-Schritte) → Watt. Sentinels wie beim
+ * Schreiben: rawSentinels unskaliert (0 = gesperrt), rawSentinelMap rückwärts
+ * (32767 → -1 = unbegrenzt); 0xFFFF (-1) gilt ebenfalls als unbegrenzt.
+ */
+export function decodeMaxDischargeRaw(raw, conf = {}) {
+  let r = Number(raw);
+  if (!Number.isFinite(r)) return null;
+  if (r > 0x7fff) r -= 0x10000;
+  const map = conf.rawSentinelMap && typeof conf.rawSentinelMap === 'object' ? conf.rawSentinelMap : {};
+  for (const [eng, mapped] of Object.entries(map)) if (Number(mapped) === r) return Number(eng);
+  if ((Array.isArray(conf.rawSentinels) ? conf.rawSentinels.map(Number) : []).includes(r)) return r;
+  if (r === -1) return -1;
+  return r * Number(conf.scale ?? 1) + Number(conf.offset ?? 0);
+}
+
 function liftValueW(needW, capW) {
   const stepped = Math.ceil(Math.max(0, needW) / LIFT_STEP_W) * LIFT_STEP_W;
   return Math.max(LIFT_STEP_W, Math.min(capW, stepped));
 }
 
-function superseded(d, known) {
-  if (!known) return false;
-  // lastWrite ist immer der JÜNGSTE Write: stammt er nicht von Peak Shaving,
-  // hat jemand nach unserer Freigabe selbst gesetzt.
-  if (known.from === 'own_write') return !String(known.source || '').startsWith('peak_shaving');
-  return known.at > (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS
+function superseded(d, known, lastWrite) {
+  // lastWrite ist immer DVhubs JÜNGSTER Write: stammt er nicht von Peak
+  // Shaving, hat jemand (API, Leitstand, MQTT) nach unserer Freigabe gesetzt.
+  if (lastWrite && !String(lastWrite.source || '').startsWith('peak_shaving')) return true;
+  // Am GX/VRM geändert: die Rücklesung zeigt sicher nach unserem Write etwas anderes.
+  return known?.from === 'readback'
+    && known.at > (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS
     && Math.abs(known.value - Number(d.liftedW)) > READBACK_TOLERANCE_W;
 }
 
@@ -239,14 +264,25 @@ function superseded(d, known) {
  * d.phase 'idle' | 'lifted'. Rückgabe: was der Evaluator schreiben soll.
  * @returns {{ type: 'none'|'lift'|'raise'|'restore'|'superseded', valueW?: number, reason?: string }}
  */
-export function dischargeStep(d, { ps, tel, known, paused, capW }) {
+export function dischargeStep(d, { ps, tel, known, paused, capW, lastWrite = null, readbackSupported = false }) {
   if (d.phase === 'lifted') {
-    if (superseded(d, known)) return { type: 'superseded' };
+    if (superseded(d, known, lastWrite)) return { type: 'superseded' };
+    // Zurück zur Sperre nur, wenn sicher ist, dass im GX noch DVhubs Freigabe
+    // steht: eine Rücklesung (Abweichung wäre oben „superseded“) — oder, wo das
+    // Gerät gar nicht rücklesbar ist, der eigene letzte Write. Sonst warten
+    // statt blind 0 zu schreiben (Gegenprüfung eb2f1a26).
+    const confirmed = known?.from === 'readback'
+      || (!readbackSupported && known?.from === 'own_write');
+    const restore = (why) => {
+      if (confirmed) { d.waiting = null; return { type: 'restore', reason: why }; }
+      d.waiting = 'readback';
+      return { type: 'none' };
+    };
     const reason = paused ? 'emergency_stop'
       : !ps?.active ? (ps?.reason || 'disabled')
         : tel.socReason ? tel.socReason
           : !tel.meterFresh ? 'meter_stale' : null;
-    if (reason) return { type: 'restore', reason };
+    if (reason) return restore(reason);
     const demandW = tel.importW + tel.batteryDischargeW;
     if (tel.importW > ps.limitW) {
       d.under = 0;
@@ -254,7 +290,7 @@ export function dischargeStep(d, { ps, tel, known, paused, capW }) {
       return next > Number(d.liftedW) ? { type: 'raise', valueW: next } : { type: 'none' };
     }
     d.under = demandW < ps.targetW - ps.releaseHysteresisW ? (d.under || 0) + 1 : 0;
-    if (d.under >= DISCHARGE_RELEASE_TICKS) return { type: 'restore', reason: 'below_limit' };
+    if (d.under >= DISCHARGE_RELEASE_TICKS) return restore('below_limit');
     return { type: 'none' };
   }
   const blocked = known != null && known.value === 0;
@@ -340,7 +376,8 @@ export function createPeakShaving(ctx, deps = {}) {
     const clamp = clampFresh
       ? { requestedW: ctl.clamp.requestedW, valueW: ctl.clamp.valueW, mode: ctl.clamp.mode, reason: ctl.clamp.reason ?? null, source: ctl.clamp.source }
       : null;
-    const lift = ctl.discharge?.phase === 'lifted' ? { liftedW: ctl.discharge.liftedW, since: ctl.discharge.since } : null;
+    const lift = ctl.discharge?.phase === 'lifted'
+      ? { liftedW: ctl.discharge.liftedW, since: ctl.discharge.since, waiting: ctl.discharge.waiting || null } : null;
     const meterFresh = s.meter?.ok === true && (t - Number(s.meter.updatedAt || 0)) < METER_MAX_AGE_MS
       && Number.isFinite(Number(s.victron?.gridImportW));
     return {

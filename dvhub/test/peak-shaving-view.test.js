@@ -95,3 +95,23 @@ test('render: setzt Texte, Ton und Hervorhebung in einer Attrappe', () => {
   render(null, doc);
   assert.equal(els.peakShavingCard.hidden, true);
 });
+
+test('[Gegenprüfung bb80db31 P2] Akku am Boden ist kein Messfehler', () => {
+  const { view } = load();
+  const floor = view({ ...base, clamp: { requestedW: 12000, valueW: 12000, mode: 'held', reason: 'soc_floor' } });
+  assert.deepEqual([floor.state, floor.tone], ['Akku am Boden', 'warn']);
+  assert.match(floor.detail, /Mindest-Ladestand/);
+  for (const reason of ['soc_unknown', 'telemetry_frozen', 'source_mismatch', 'telemetry_unknown']) {
+    const v = view({ ...base, clamp: { requestedW: 12000, valueW: 12000, mode: 'held', reason } });
+    assert.deepEqual([v.state, v.tone], ['Messwerte fehlen', 'danger'], reason);
+  }
+  // Teil-Deckel bis zur Netto-Last wegen leerem Akku: greift, Detail nennt den Grund
+  const part = view({ ...base, acting: true, clamp: { requestedW: 15000, valueW: 12000, mode: 'net_load', reason: 'soc_floor' } });
+  assert.deepEqual([part.state, part.tone], ['Greift', 'warn']);
+  assert.match(part.detail, /15,0 kW → 12,0 kW.*Akku am Mindest-Ladestand/);
+});
+
+test('Freigabe wartet auf Rücklesung: Hinweis im Detail', () => {
+  const v = load().view({ ...base, acting: true, lift: { liftedW: 4300, since: Date.now(), waiting: 'readback' } });
+  assert.match(v.detail, /sobald 2704 lesbar ist/);
+});

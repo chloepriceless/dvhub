@@ -78,13 +78,32 @@ export function makeTelemetryState({
   };
 }
 
-export function makeModbusTransport() {
+/**
+ * Modbus-Attrappe mit Registerspeicher wie ein GX: Writes landen im Speicher,
+ * Reads liefern ihn zurück. Ein nie belegtes Register antwortet nicht (wirft) —
+ * so ist „Rücklesewert unbekannt“ der Normalfall, bis ein Test ihn setzt.
+ */
+export function makeModbusTransport(registers = {}) {
   return {
     type: 'modbus',
     writes: [],
-    async mbRequest() { return [0]; },
-    async mbWriteSingle({ address, value }) { this.writes.push({ fc: 6, address, value }); },
-    async mbWriteMultiple({ address, values }) { this.writes.push({ fc: 16, address, values }); }
+    reads: [],
+    registers: { ...registers },
+    async mbRequest({ address, quantity = 1, fc }) {
+      this.reads.push({ fc, address, quantity });
+      const out = [];
+      for (let i = 0; i < quantity; i += 1) {
+        const v = this.registers[Number(address) + i];
+        if (v === undefined) throw new Error(`no response for register ${Number(address) + i}`);
+        out.push(v);
+      }
+      return out;
+    },
+    async mbWriteSingle({ address, value }) { this.writes.push({ fc: 6, address, value }); this.registers[address] = value; },
+    async mbWriteMultiple({ address, values }) {
+      this.writes.push({ fc: 16, address, values });
+      values.forEach((v, i) => { this.registers[address + i] = v; });
+    }
   };
 }
 
