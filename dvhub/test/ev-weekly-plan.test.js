@@ -267,3 +267,14 @@ describe('Codex-Befunde Runde 1 (Wochenplan)', () => {
     assert.equal(r.arrivalAt, null);
   });
 });
+
+describe('Codex-Befunde Runde 2 (einmalige Abfahrt)', () => {
+  test('vorgezogene Abfahrt (Fr 17:00 statt Sa 09:00, Fr mittags gesetzt) gehoert zum Fr-Fenster, nicht zur erledigten Fr-05:00-Fahrt', () => {
+    // jetzt Fr 25.09. 12:00 CEST = 10:00Z; einmalig Fr 17:00 CEST = 15:00Z
+    const r = resolveEvDeparture(cfg({ evDepartureOnce: '2026-09-25T15:00:00.000Z' }), at('2026-09-25T10:00:00Z'));
+    assert.equal(r.departureAt, '2026-09-25T15:00:00.000Z');
+    assert.equal(r.arrivalAt, '2026-09-25T13:00:00.000Z');
+    assert.equal(r.targetSocPct, 100);
+    assert.equal(r.tripStartAt, '2026-09-25T03:00:00.000Z', 'die Fr-05:00-Fahrt hat stattgefunden');
+  });
+});

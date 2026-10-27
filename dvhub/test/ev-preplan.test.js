@@ -335,3 +335,27 @@ describe('Minuten-Wache (ev-watch.js)', () => {
     assert.equal(seen[0].pct, 70);
   });
 });
+
+describe('Codex-Befunde Runde 2 (Minuten-Wache)', () => {
+  it('kurzes „nicht angesteckt“ (evcc wackelt) loest keinen Abgleich und keinen Neuplan aus', async () => {
+    const now = Date.now();
+    let connected = true;
+    const ctx = ctxFor(1, { opt: { evWeeklyPlan: planAround(now, 2 * HOUR, 10 * HOUR) }, teslaPct: null });
+    ctx.evccIntegration = { getLoadpoints: () => [{ id: 1, connected, vehicleSocPct: connected ? 55 : 0 }] };
+    ctx.state.optimizer.eos = { supported: true, evChargeStart: true };
+    const calls = [];
+    const replans = [];
+    const watch = createEvWatch({
+      ctx, requestReplan: (w) => replans.push(w), pushLog: () => {},
+      eosConfigSync: { sync: async () => { calls.push('sync'); return { ok: true }; }, syncEv: async () => { calls.push('syncEv'); return { ok: true }; } },
+    });
+    await watch.tick(now);
+    calls.length = 0;
+    connected = false;                     // eine Abfrage lang weg
+    await watch.tick(now + 60_000);
+    connected = true;
+    await watch.tick(now + 120_000);
+    assert.deepEqual(calls.filter((c) => c === 'sync'), []);
+    assert.deepEqual(replans, []);
+  });
+});

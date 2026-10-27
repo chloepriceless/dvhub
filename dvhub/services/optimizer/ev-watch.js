@@ -43,7 +43,10 @@ export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () 
       plugged: plugTracker.stable,
       nowMs,
     });
-    const regKey = `${reg.register}|${reg.mode === 'preplan'}`;
+    // Nur Beginn/Ende der Vorplanung — An-/Abmelden wegen Stecker oder
+    // fehlendem Ladestand regeln die (entprellte) Steck-Wache und der
+    // 15-min-Abgleich; ein einzelner Wackler loeste sonst zwei Neuplaene aus.
+    const regKey = String(reg.mode === 'preplan');
     if (lastRegKey !== null && regKey !== lastRegKey && syncPending === 0) {
       pushLog('ev_preplan_change', { mode: reg.mode, register: reg.register, arrivalAt: reg.arrivalAt, preplanBlocked: reg.preplanBlocked });
       syncPending = 5;

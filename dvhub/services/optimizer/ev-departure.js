@@ -208,15 +208,23 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
   const onceDep = Date.parse(opt.evDepartureOnce || '');
   const onceArr = Date.parse(opt.evArrivalOnce || '');
   const onceActive = Number.isFinite(onceDep) && !gone(onceDep);
-  // Die einmalige Abfahrt verschiebt meist die naechstgelegene regulaere
-  // (± 24 h): dieses Fenster behaelt Ankunft, Ziel und Heimweg, und seine
-  // eigene Abfahrt zaehlt nicht als Fahrt — auch nachdem sie verstrichen ist.
+  // Die einmalige Abfahrt ersetzt die Abfahrt EINES regulaeren Fensters
+  // (hoechstens 24 h entfernt): dieses behaelt Ankunft, Ziel und Heimweg, und
+  // seine eigene Abfahrt zaehlt nicht als Fahrt — auch nachdem sie verstrichen
+  // ist. Welches Fenster:
+  //   1. das naechste noch kommende, wenn das Auto dann schon da ist
+  //      (Ankunft vor der einmaligen Abfahrt) — vorgezogen oder verschoben;
+  //   2. sonst das zuletzt verstrichene, dessen Abfahrt bis zu 24 h vor der
+  //      einmaligen liegt — die verschobene Fahrt hat nie stattgefunden.
   let superseded = null;
   if (onceActive) {
-    for (const w of windows) {
-      const diff = Math.abs(w.departureMs - onceDep);
-      if (diff >= 24 * 3600_000 || (w.arrivalMs !== null && w.arrivalMs >= onceDep)) continue;
-      if (!superseded || diff < Math.abs(superseded.departureMs - onceDep)) superseded = w;
+    const DAY = 24 * 3600_000;
+    const arrivedBefore = (w) => w.arrivalMs === null || w.arrivalMs < onceDep;
+    const next = windows.find((w) => !gone(w.departureMs));
+    if (next && arrivedBefore(next) && Math.abs(next.departureMs - onceDep) < DAY) superseded = next;
+    else {
+      const delayed = windows.filter((w) => gone(w.departureMs) && w.departureMs < onceDep && onceDep - w.departureMs < DAY && arrivedBefore(w));
+      superseded = delayed.length ? delayed[delayed.length - 1] : null;
     }
   }
   const past = windows.filter((w) => w !== superseded && gone(w.departureMs)).map((w) => w.departureMs);
