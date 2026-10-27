@@ -295,3 +295,17 @@ describe('Vorplanung im GET /api/ev', () => {
     assert.equal(r2.body.vehicle.chargeStartAt, '2026-10-27T19:00:00.000Z');
   });
 });
+
+describe('GET /api/ev ohne evcc', () => {
+  it('„angesteckt“ aus MQTT/HTTP/Home Assistant, wenn weder Wallbox noch evcc es melden', async () => {
+    const ctx = makeCtx();
+    ctx.vehiclePull = { getState: (k) => (k === 'homeassistant' ? { configured: true, socPct: 61, socAt: Date.now() - 60_000, plugged: true } : { configured: false, socPct: null, plugged: null }) };
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.vehicle.plugged, true);
+    assert.equal(r.body.vehicle.connected, true);
+    assert.equal(r.body.vehicle.socPct, 61);
+    assert.equal(r.body.vehicle.socSource, 'homeassistant');
+    assert.equal(r.body.vehicle.source, 'homeassistant');
+  });
+});

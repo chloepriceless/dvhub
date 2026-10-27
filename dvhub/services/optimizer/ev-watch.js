@@ -15,8 +15,7 @@
  *      spaet: ein vergangener Termin heisst fuer EOS „sofort laden“.
  */
 import { resolveEvDeparture } from './ev-departure.js';
-import { readEvSocReading } from './ev-arrival.js';
-import { createEvPlugTracker, resolveEvPlugged } from './ev-soc.js';
+import { createEvPlugTracker, resolveEvPlugged, resolveEvSocReading } from './ev-soc.js';
 import { computeEvRegistration } from './ev-registration.js';
 
 export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () => {}, stableTicks = 2 }) {
@@ -27,7 +26,7 @@ export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () 
   let pendingReason = null;
 
   async function tick(nowMs = Date.now()) {
-    ctx.evSocMemory?.observe?.(readEvSocReading(ctx, nowMs));
+    ctx.evSocMemory?.observe?.(resolveEvSocReading(ctx, nowMs));
     const cfg = ctx.getCfg();
     const opt = cfg?.optimizer || {};
     if (opt.eosOptimizeEv !== true || !opt.eosProxy?.enabled) { lastKey = null; lastRegKey = null; return { action: 'off' }; }

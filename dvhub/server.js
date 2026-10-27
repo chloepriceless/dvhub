@@ -183,9 +183,9 @@ import { createSchneiderAdapter } from './services/wallbox/schneider.js';
 import { createPhoenixAdapter } from './services/wallbox/phoenix.js';
 import { createWallboxAdapterCache } from './services/wallbox/adapter-cache.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
-import { createEvSocMemory } from './services/optimizer/ev-arrival.js';
 import { createEvWatch } from './services/optimizer/ev-watch.js';
-import { resolveEvPlugged } from './services/optimizer/ev-soc.js';
+import { createVehiclePull } from './services/vehicle-pull/index.js';
+import { resolveEvPlugged, createEvSocMemory } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
@@ -1439,6 +1439,10 @@ ctx.vehicleMqtt = createVehicleMqtt(mqttHub, ctx);
 // Ladestand über evccs Fahrzeug-Treiber (aus, bis eingerichtet; lädt evcc erst dann).
 ctx.vehicleEvcc = createVehicleEvcc(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub', getPlugged: () => resolveEvPlugged(ctx) });
 if (IS_RUNTIME_PROCESS) ctx.vehicleEvcc.start();
+// Ladestand/„angesteckt“ per HTTP-Endpunkt oder Home Assistant REST — fuer jede
+// Marke ohne evcc und ohne Broker (services/vehicle-pull, ev-soc.js).
+ctx.vehiclePull = createVehiclePull(ctx);
+if (IS_RUNTIME_PROCESS) ctx.vehiclePull.start();
 // OCPP-1.6J-Zentrale für OCPP-Wallboxen (ab Werk aus; Port 8887).
 ctx.ocppServer = createOcppServer(ctx);
 if (IS_RUNTIME_PROCESS) {
@@ -2754,6 +2758,7 @@ async function gracefulShutdown(signal) {
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
   safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
+  safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());
   safeSync('ocppServer.stop', () => { ctx.ocppServer?.stop?.(); });
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());

@@ -81,7 +81,7 @@ export function computeEvRegistration(ctx, cfg, { chargeStartSupported = false, 
     return { ...out, reason: isPlugged === false ? 'nicht angesteckt' : 'Steckzustand unbekannt (Wallbox/evcc nicht erreichbar)' };
   }
   if (!soc) {
-    return { ...out, reason: 'kein Ladestand des Autos (TeslaMate/evcc) — EOS 0.4 wuerde sonst gar nicht rechnen' };
+    return { ...out, reason: 'keine Quelle meldet den Ladestand des Autos — EOS 0.4 wuerde sonst gar nicht rechnen' };
   }
   return { ...out, register: true, mode: isPlugged === true ? 'plugged' : 'always' };
 }

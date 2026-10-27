@@ -5434,12 +5434,20 @@ export function createApiRoutes(ctx) {
             if (w && w.type !== 'evcc') return { connected: w.connected, charging: w.charging, chargePowerW: w.powerW, source: w.type };
             const d = ctx.chargerStatus?.fresh?.();
             if (d) return { connected: d.connected, charging: d.charging, chargePowerW: d.powerW, source: d.type };
-            return {
-              connected: lp ? lp.connected === true : null,
-              charging: lp ? lp.charging === true : null,
-              chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
-              source: lp ? 'evcc' : null,
-            };
+            if (lp) {
+              return {
+                connected: lp.connected === true,
+                charging: lp.charging === true,
+                chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
+                source: 'evcc',
+              };
+            }
+            // Ohne Wallbox-Anbindung und ohne evcc: „angesteckt“ aus den
+            // Fahrzeug-Quellen (MQTT, HTTP-Abruf, Home Assistant; ev-soc.js).
+            const viaVehicle = typeof plugged !== 'boolean' ? null
+              : (typeof ctx.vehicleMqtt?.getState?.()?.plugged === 'boolean' ? 'mqtt'
+                : ['http', 'homeassistant'].find((k) => typeof ctx.vehiclePull?.getState?.(k)?.plugged === 'boolean') || null);
+            return { connected: typeof plugged === 'boolean' ? plugged : null, charging: null, chargePowerW: null, source: viaVehicle };
           })(),
           // Dieselbe Quelle wie fuer EOS (ev-soc.js): TeslaMate, sonst evcc bei
           // angestecktem Auto.

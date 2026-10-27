@@ -40,7 +40,10 @@ export const REDACTED_PATHS = Object.freeze([
   // Tokens, FIN — das ganze Objekt, die Felder hängen von der Vorlage ab.
   'vehicleEvcc.params',
   // OCPP-Zentrale: Passwort der Wallboxen (Sicherheitsprofil 1).
-  'ocpp.password'
+  'ocpp.password',
+  // E-Auto-Ladestand per HTTP-Abruf / Home Assistant (services/vehicle-pull).
+  'optimizer.evHttpToken',
+  'optimizer.evHaToken'
   // Phase 09.4 gap-closure: notifications.providers.uptime-kuma removed — the
   // Uptime Kuma integration is the `monitoring` block; monitoring.pushUrl is
   // redacted below via redactUrlCreds (URL-level, not whole-field).

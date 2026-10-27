@@ -7,8 +7,9 @@
  *
  *   1. angesteckt — der echte Ladestand (ev-soc.js resolveEvSocPct) gewinnt
  *      immer;
- *   2. live vom Auto — eine Fahrzeug-Schnittstelle (TeslaMate, evcc-
- *      Fahrzeugtreiber, MQTT) hat NACH der letzten Abfahrt einen Wert
+ *   2. live vom Fahrzeug — eine Fahrzeug-Quelle (ev-soc.js
+ *      VEHICLE_SOC_SOURCES: TeslaMate, evcc-Fahrzeugtreiber, MQTT, HTTP-
+ *      Endpunkt, Home Assistant) hat NACH der letzten Abfahrt einen Wert
  *      geliefert, hoechstens EV_LIVE_MAX_AGE_MS alt: davon geht noch einmal
  *      der Heimweg ab;
  *   3. geschaetzt — sonst der letzte bekannte Wert (auch der beim Abstecken
@@ -20,15 +21,16 @@
  * Position) — abgezogen wird deshalb immer der ganze Heimweg. Das schaetzt
  * eher zu niedrig: EOS plant dann eher etwas mehr Ladung ein, nie zu wenig.
  */
-import fs from 'node:fs';
 import { resolveEvDeparture } from './ev-departure.js';
-import { resolveEvSocPct, EV_SOC_SOURCES } from './ev-soc.js';
+// Alle Ladestand-Quellen laufen ueber EINEN Aufloeser (ev-soc.js) — markenneutral.
+import { resolveEvSocPct, resolveEvSocReading, createEvSocMemory, VEHICLE_SOC_SOURCES } from './ev-soc.js';
+
+// Fuer bestehende Aufrufer: Gedaechtnis und Lesung leben in ev-soc.js.
+export { createEvSocMemory };
+export const readEvSocReading = resolveEvSocReading;
 
 export const EV_LIVE_MAX_AGE_MS = 12 * 3600_000;
 export const EV_LAST_KNOWN_MAX_AGE_MS = 7 * 24 * 3600_000;
-// Quellen, die den Ladestand auch liefern, wenn das Auto nicht steckt.
-const CAR_API_SOURCES = new Set(['teslamate', 'evccvehicle', 'mqtt']);
-const CHECKPOINT_MS = 3600_000;
 
 const num = (v) => (v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
 const validPct = (v) => { const n = num(v); return n !== null && n >= 0 && n <= 100 ? n : null; };
@@ -64,7 +66,7 @@ export function estimateArrivalSoc({
   if (base === null) return none;
   const atMs = toMs(reading.atMs);
   if (atMs !== null && nowMs - atMs > EV_LAST_KNOWN_MAX_AGE_MS) return none;
-  const carApi = CAR_API_SOURCES.has(reading.source);
+  const carApi = VEHICLE_SOC_SOURCES.has(reading.source);
   // Nach der letzten Abfahrt gemessen → das Auto ist schon unterwegs, es fehlt
   // nur noch der Rueckweg. Ohne bekannte Abfahrt zaehlt ein Wert der
   // Fahrzeug-Schnittstelle als unterwegs gemessen.
@@ -81,99 +83,6 @@ export function estimateArrivalSoc({
 }
 
 /**
- * Juengster bekannter Ladestand mit Zeitpunkt: { pct, source, atMs } oder null.
- * optimizer.evSocSource wie in ev-soc.js: 'auto' nimmt den juengsten Wert
- * aller Quellen, sonst nur die gewaehlte. Dazu der gemerkte Wert
- * (ctx.evSocMemory), damit ein evcc-Wert das Abstecken uebersteht.
- */
-export function readEvSocReading(ctx, nowMs = Date.now()) {
-  const opt = ctx?.getCfg?.()?.optimizer || {};
-  const wanted = EV_SOC_SOURCES.includes(opt.evSocSource) ? opt.evSocSource : 'auto';
-  const use = (source) => wanted === 'auto' || wanted === source;
-  const out = [];
-
-  if (use('teslamate') && ctx?.teslamateService?.getState) {
-    const pct = validPct(ctx.teslamateService.getState()?.batteryLevel);
-    if (pct !== null) {
-      const stamps = ctx.teslamateService.getFieldUpdatedAt?.() || {};
-      const atMs = toMs(stamps.batteryLevel) ?? toMs(ctx.teslamateService.lastUpdateAt);
-      out.push({ pct, source: 'teslamate', atMs });
-    }
-  }
-  // Wallbox / evcc-Ladepunkt: nur angesteckt — dann ist der Wert von jetzt.
-  const wallbox = ctx?.mainWallbox?.state?.();
-  if (wallbox && wallbox.type !== 'evcc') {
-    if (use('evcc') || use(wallbox.type)) {
-      const pct = wallbox.connected === true ? validPct(wallbox.vehicleSocPct) : null;
-      if (pct !== null) out.push({ pct, source: wallbox.type, atMs: nowMs });
-    }
-  } else if (use('evcc')) {
-    const lpId = Number(opt.evEvccLoadpoint) || 1;
-    const lp = (ctx?.evccIntegration?.getLoadpoints?.() || []).find((l) => l.id === lpId);
-    const pct = lp?.connected === true ? validPct(lp.vehicleSocPct) : null;
-    // Zeitpunkt der letzten erfolgreichen Abfrage: faellt evcc aus, bleibt die
-    // Liste stehen — „jetzt“ machte einen alten Wert immer wieder frisch.
-    const polled = toMs(ctx?.evccIntegration?.getStatus?.()?.lastPolledAt);
-    if (pct !== null) out.push({ pct, source: 'evcc', atMs: polled && polled > 0 ? polled : nowMs });
-  }
-  if (use('evccvehicle')) {
-    const v = ctx?.vehicleEvcc?.getState?.();
-    const pct = validPct(v?.socPct);
-    if (pct !== null) out.push({ pct, source: 'evccvehicle', atMs: toMs(v.at) });
-  }
-  if (use('mqtt')) {
-    const m = ctx?.vehicleMqtt?.getState?.();
-    const pct = validPct(m?.socPct);
-    if (pct !== null) out.push({ pct, source: 'mqtt', atMs: toMs(m.socAt) });
-  }
-  const mem = ctx?.evSocMemory?.get?.();
-  // Gewaehlt „evcc“ heisst „die Wallbox“ — auch eine direkt angebundene
-  // (Quelle dann openevse, goe …).
-  const memMatches = (src) => wanted === 'auto' || src === wanted || (wanted === 'evcc' && !CAR_API_SOURCES.has(src));
-  if (mem && validPct(mem.pct) !== null && memMatches(mem.source)) out.push(mem);
-
-  if (!out.length) return null;
-  // Juengster zuerst; ohne Zeitpunkt ganz hinten.
-  out.sort((a, b) => (b.atMs ?? -Infinity) - (a.atMs ?? -Infinity));
-  const best = out[0];
-  return { pct: best.pct, source: best.source, atMs: best.atMs ?? null };
-}
-
-/**
- * Merkt sich den juengsten Ladestand (die Minuten-Wache ruft observe()), damit
- * der letzte Wallbox-Wert nach dem Abstecken als Schaetzbasis bleibt. Mit
- * filePath ueberlebt er einen Neustart; geschrieben wird nur bei geaendertem
- * Wert oder Quelle (keine Schreiblast im Minutentakt).
- */
-export function createEvSocMemory({ filePath = null } = {}) {
-  let last = null;
-  let writtenAtMs = null;
-  if (filePath) {
-    try {
-      const j = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-      if (validPct(j?.pct) !== null && typeof j.source === 'string') last = { pct: Number(j.pct), source: j.source, atMs: toMs(j.atMs) };
-      writtenAtMs = last?.atMs ?? null;
-    } catch { /* noch keine Datei */ }
-  }
-  return {
-    observe(reading) {
-      if (!reading || validPct(reading.pct) === null) return;
-      const atMs = toMs(reading.atMs);
-      if (last && last.atMs !== null && (atMs === null || atMs < last.atMs)) return;
-      const changed = !last || last.pct !== reading.pct || last.source !== reading.source;
-      last = { pct: Number(reading.pct), source: String(reading.source || ''), atMs };
-      // Gleicher Wert: den Zeitpunkt hoechstens stuendlich sichern — sonst
-      // kaeme nach einem Neustart ein zu alter Zeitpunkt zurueck.
-      const checkpoint = atMs !== null && (writtenAtMs === null || atMs - writtenAtMs >= CHECKPOINT_MS);
-      if ((changed || checkpoint) && filePath) {
-        try { fs.writeFileSync(filePath, JSON.stringify(last)); writtenAtMs = atMs; } catch { /* Anzeige-Hilfe, kein Fehlerfall */ }
-      }
-    },
-    get() { return last ? { ...last } : null; }
-  };
-}
-
-/**
  * Erwarteter Ladestand fuer das naechste Fenster aus Config und Fahrzeug.
  * `plugged` vom Aufrufer (entprellt bzw. resolveEvPlugged).
  */
@@ -184,7 +93,7 @@ export function resolveEvArrival(ctx, cfg, { plugged = null, nowMs = Date.now(),
   const r = estimateArrivalSoc({
     plugged,
     pluggedSoc: plugged === true ? resolveEvSocPct(ctx) : null,
-    reading: readEvSocReading(ctx, nowMs),
+    reading: resolveEvSocReading(ctx, nowMs),
     tripStartMs,
     commuteKm: dep.commuteKm,
     consumptionKwhPer100km: Number(opt.evConsumptionKwhPer100km) || 18,
