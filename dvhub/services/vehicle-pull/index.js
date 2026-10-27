@@ -45,9 +45,10 @@ const HA_ENTITY_RE = /^[a-z_]+\.[a-z0-9_]+$/;
 // „unavailable“): erst nach so langer Dauer verwerfen — HA meldet Entitaeten
 // beim Neustart kurz als unbekannt, bis die Integration geladen ist.
 const UNKNOWN_GRACE_MS = 5 * 60_000;
-// Diese Statuscodes heissen „gibt es nicht / darfst du nicht“ — 408/429/5xx
-// sind voruebergehend und lassen den letzten Wert stehen.
-const ANSWERED_STATUS = new Set([400, 401, 403, 404, 410]);
+// Voruebergehend (letzter Wert bleibt): 408, 425, 429 und 5xx. Jedes andere
+// 4xx heisst „gibt es nicht / darfst du nicht / verstehe ich nicht“ — der
+// Wert ist dann unbekannt (nach UNKNOWN_GRACE_MS verworfen).
+const isAnsweredStatus = (status) => status >= 400 && status < 500 && ![408, 425, 429].includes(status);
 const sigOf = (s) => JSON.stringify([s.url, s.token, s.socPath, s.pluggedPath, s.timePath, s.socEntity, s.pluggedEntity]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
@@ -169,9 +170,10 @@ export function createVehiclePull(ctx, deps = {}) {
       if (res.status >= 300 && res.status < 400) throw new Error(`Weiterleitung (HTTP ${res.status}) wird nicht verfolgt`);
       if (!res.ok) {
         const e = new Error(`HTTP ${res.status}`);
-        // 4xx: die Gegenstelle hat geantwortet (Entitaet unbekannt, Token
-        // falsch) — der Wert ist dann unbekannt, nicht „noch der alte“.
-        e.answered = ANSWERED_STATUS.has(res.status);
+        // Dauerhaftes 4xx (Entitaet unbekannt, Token falsch …): die
+        // Gegenstelle hat geantwortet — der Wert gilt als unbekannt (mit
+        // Kulanz, siehe UNKNOWN_GRACE_MS). 408/425/429/5xx: voruebergehend.
+        e.answered = isAnsweredStatus(res.status);
         throw e;
       }
       // Groesse beim Lesen begrenzen, nicht erst danach: eine falsche Adresse
@@ -254,9 +256,9 @@ export function createVehiclePull(ctx, deps = {}) {
     // Beide Entitaeten unabhaengig: viele Fahrzeug-Integrationen melden den
     // Ladestand „unavailable“, sobald das Auto weg ist — „angesteckt“ muss
     // trotzdem neu gelesen werden, sonst bliebe ein altes „on“ stehen.
-    // HA antwortet mit „unavailable“/unlesbar, 4xx (Entitaet unbekannt, Token
-    // falsch) → Wert unbekannt (null). HA nicht erreichbar / 5xx / Zeitlimit
-    // → letzter Wert bleibt (altert ueber den
+    // HA antwortet mit „unavailable“/unlesbar oder dauerhaftem 4xx (Entitaet
+    // unbekannt, Token falsch) → Wert unbekannt, verworfen nach 5 min Kulanz.
+    // HA nicht erreichbar / 408/429/5xx / Zeitlimit → letzter Wert bleibt (altert ueber den
     // Zeitpunkt aus), nur der Fehler wird gemeldet — ein HA-Neustart soll das
     // Auto nicht abmelden.
     try {
@@ -297,8 +299,9 @@ export function createVehiclePull(ctx, deps = {}) {
       if (kind === 'http') await refreshHttp(s, out);
       else await refreshHa(s, out);
     } catch (e) {
-      // Nicht erreichbar / 5xx / Zeitlimit: letzter Wert bleibt (er altert
-      // ueber socAt aus). 4xx: die Gegenstelle kennt den Wert nicht → weg.
+      // Nicht erreichbar / 408/429/5xx / Zeitlimit: letzter Wert bleibt (er
+      // altert ueber socAt aus). Dauerhaftes 4xx: Wert unbekannt → nach
+      // 5 min Kulanz verworfen.
       out.error = String(e?.message || e);
       if (e?.answered) { unknownSoc(out); unknownPlug(out); }
     } finally {

@@ -298,25 +298,6 @@ describe('Claude-Befunde Runde 4 (Home Assistant faellt aus)', () => {
 });
 
 describe('Claude-Befunde Runde 5 (Abruf-Quellen)', () => {
-  it('HA antwortet 404 (Entitaet vertippt): alte Werte verfallen sofort', async () => {
-    const { base } = await stub((req) => {
-      if (req.url === '/api/states/sensor.soc') return { body: { state: '60', last_reported: '2026-10-27T10:00:00Z' } };
-      if (req.url === '/api/states/binary_sensor.plug') return { body: { state: 'on', last_updated: '2026-10-27T10:00:00Z' } };
-      return { status: 404, body: { message: 'Entity not found.' } };
-    });
-    const opt = { evHaUrl: base, evHaToken: 't', evHaSocEntity: 'sensor.soc', evHaPluggedEntity: 'binary_sensor.plug' };
-    const ctx = pullCtx(opt);
-    const pull = createVehiclePull(ctx, { now: () => Date.parse('2026-10-27T10:05:00Z') });
-    await pull.refresh('homeassistant');
-    assert.equal(pull.getState('homeassistant').plugged, true);
-    // gleiche Einstellungen, aber HA meldet die Entitaeten jetzt nicht mehr (404)
-    ctx.getCfg().optimizer.evHaPluggedEntity = 'binary_sensor.plug';
-    const stub404 = createVehiclePull(pullCtx({ ...opt, evHaSocEntity: 'sensor.weg', evHaPluggedEntity: 'binary_sensor.plgu' }), { now: () => Date.parse('2026-10-27T10:05:00Z') });
-    await stub404.refresh('homeassistant');
-    assert.equal(stub404.getState('homeassistant').socPct, null);
-    assert.equal(stub404.getState('homeassistant').plugged, null);
-  });
-
   it('Einstellung geaendert (andere Entitaet): Zustand der alten Entitaet wird verworfen', async () => {
     const { base } = await stub((req) => {
       if (req.url === '/api/states/sensor.soc') return { body: { state: '60', last_reported: '2026-10-27T10:00:00Z' } };
@@ -379,6 +360,19 @@ describe('Claude-Befunde Runde 6 (Abruf-Quellen, gleiche Instanz)', () => {
     t += 60_000; await pull.refresh('homeassistant');
     assert.equal(pull.getState('homeassistant').socPct, 60);
     assert.equal(pull.getState('homeassistant').plugged, true);
+    t += 5 * 60_000; await pull.refresh('homeassistant');
+    assert.equal(pull.getState('homeassistant').socPct, null);
+    assert.equal(pull.getState('homeassistant').plugged, null);
+  });
+
+  it('422 (z. B. falsche Fahrzeug-ID) gilt wie 404: nach 5 min Werte weg', async () => {
+    const state = { code: 200 };
+    const { base } = await stub(haStub(state));
+    let t = Date.parse('2026-10-27T10:05:00Z');
+    const pull = createVehiclePull(pullCtx({ evHaUrl: base, evHaToken: 't', evHaSocEntity: 'sensor.soc', evHaPluggedEntity: 'binary_sensor.plug' }), { now: () => t });
+    await pull.refresh('homeassistant');
+    state.code = 422;
+    t += 60_000; await pull.refresh('homeassistant');
     t += 5 * 60_000; await pull.refresh('homeassistant');
     assert.equal(pull.getState('homeassistant').socPct, null);
     assert.equal(pull.getState('homeassistant').plugged, null);
