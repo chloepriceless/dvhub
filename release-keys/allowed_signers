@@ -1,0 +1,15 @@
+# Vertrauensanker für DVhub-Release-Pakete (docs/release-pakete.md).
+#
+# Format: ssh-keygen ALLOWED SIGNERS, Prinzipal "dvhub-release", Namensräume
+# dvhub-release (Pakete) und dvhub-release-index (Kanal-Index):
+#
+#   dvhub-release namespaces="dvhub-release,dvhub-release-index" ssh-ed25519 AAAA… dvhub-release-2026
+#
+# Rotation: einen neuen Schlüssel als zusätzliche Zeile eintragen und dieses
+# Paket noch mit dem alten Schlüssel signieren. Boxen übernehmen die Datei nur
+# aus einem Paket, das gegen ihre bisherige Datei geprüft wurde. Den alten
+# Schlüssel erst entfernen, wenn ein mit dem neuen signiertes Paket draußen ist
+# (optional vorher valid-before="JJJJMMTT" setzen).
+#
+# Solange hier kein Schlüssel steht, lehnt jede Box jedes Paket ab und die
+# Umstellung von git auf Pakete startet nicht.

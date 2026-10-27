@@ -4,6 +4,26 @@
 # Safe to run multiple times — only applies changes that are missing.
 set -euo pipefail
 
+# BEGIN DVHUB RELEASE LAYOUT — Paket-Box (docs/release-pakete.md)
+# Liegt dieses Skript (auch über einen Verweis wie /opt/dvhub/post-update.sh
+# oder /opt/dvhub/current/…) in einem Release-Paket — neben ihm
+# .dvhub-release.json —, ist der Programmordner der Box zwei Ebenen über dem
+# Release (/opt/dvhub/releases/<v> → /opt/dvhub). Dort bleiben venvs, bin/ und
+# Marker; Programmdateien kommen über /opt/dvhub/current. node_modules liegt
+# im Paket: kein npm install (Schritt 6), die Unit zeigt durch current.
+PU_RELEASE_DIR=""
+PU_CODE_DIR=""
+PU_RELEASE_REV=""
+_pu_self="$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")"
+if [[ -f "$_pu_self/.dvhub-release.json" ]]; then
+  PU_RELEASE_DIR="$_pu_self"
+  INSTALL_DIR="${INSTALL_DIR:-$(dirname "$(dirname "$_pu_self")")}"
+  PU_CODE_DIR="$INSTALL_DIR/current"
+  APP_DIR="${APP_DIR:-$PU_CODE_DIR/dvhub}"
+  PU_RELEASE_REV="$(sed -n 's/^  "git_sha": "\([0-9a-f]\{7\}\).*/\1/p' "$_pu_self/.dvhub-release.json" | head -1)"
+fi
+# END DVHUB RELEASE LAYOUT
+
 # Programmordner: wo dieses Skript liegt, wenn niemand ihn nennt
 # (Gegenprüfung a2ff2a85): install.sh --dir /srv/app trägt /srv/app in die Unit
 # ein, setzt aber kein INSTALL_DIR — mit /opt/dvhub als Rückfall schrieb dieser
@@ -277,6 +297,22 @@ dvhub_install_helpers() {
 }
 # END DVHUB HELPERS
 dvhub_install_helpers || echo "  WARN: nicht alle Hilfsskripte installiert — betroffene Funktionen bis zum nächsten Start eingeschränkt" >&2
+# BEGIN DVHUB RELEASE HELPER — keep this block byte-identical in install.sh and post-update.sh.
+# Release-Pakete (docs/release-pakete.md): root-eigener Einstieg dvhub-release
+# (Node, Platzhalter wie oben fest eingetragen) und der Vertrauensanker für die
+# Paketsignaturen. Der Anker gehört root (/etc/dvhub gehört dem Dienst) und wird
+# hier nur angelegt, solange er fehlt oder noch keinen Schlüssel hat — danach
+# übernimmt ihn dvhub-release nur aus Paketen, die gegen ihn geprüft wurden.
+RELEASE_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-release"
+RELEASE_TRUST="${DVHUB_RELEASE_TRUST:-/etc/dvhub-release/allowed_signers}"
+dvhub_install_helper dvhub-release.cjs "$RELEASE_HELPER_PATH" || echo "  WARN: dvhub-release nicht installiert" >&2
+if [[ -f "$INSTALL_DIR/release-keys/allowed_signers" ]] \
+   && ! grep -qE '^[^#]*(ssh-ed25519|ssh-rsa|ecdsa-sha2-)' "$RELEASE_TRUST" 2>/dev/null; then
+  install -d -o root -g root -m 0755 "$(dirname "$RELEASE_TRUST")" \
+    && install -o root -g root -m 0644 "$INSTALL_DIR/release-keys/allowed_signers" "$RELEASE_TRUST" \
+    || echo "  WARN: Vertrauensanker $RELEASE_TRUST nicht angelegt" >&2
+fi
+# END DVHUB RELEASE HELPER
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
 # Erst in eine Nebendatei schreiben und mit visudo -c prüfen (2026-10-18):
 # eine ungültige Datei in /etc/sudoers.d legt bei klassischem sudo ALLE
@@ -339,6 +375,13 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-tag *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-commit *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} npm-install
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} post-update
+# Release-Pakete (docs/release-pakete.md): nur über den root-eigenen Einstieg
+# dvhub-release; er prüft Kanal und Version selbst, startet Installation und
+# Rückweg als eigene Unit und lädt nur signierte Pakete.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RELEASE_HELPER_PATH} check *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RELEASE_HELPER_PATH} install *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RELEASE_HELPER_PATH} rollback
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RELEASE_HELPER_PATH} status
 # Paketpflege aus der Oberfläche (Gegenprüfung 25.10.2026, P2): nur feste
 # Aktionen über dvhub-apt bzw. dvhub-setcap. Früher apt-get update/upgrade *,
 # apt list *, fuser *, setcap * — mit -o APT::Update::Pre-Invoke::=… oder einer
@@ -389,7 +432,10 @@ if [[ -f "$APP_DIR/package.json" ]]; then
   NPM_MARKER="$INSTALL_DIR/.npm-install-hash"
   CURRENT_HASH="$(sha256sum "$APP_DIR/$LOCK_FILE" 2>/dev/null | awk '{print $1}')"
   STORED_HASH="$(cat "$NPM_MARKER" 2>/dev/null || echo "")"
-  if [[ -d "$APP_DIR/node_modules" && -n "$CURRENT_HASH" && "$CURRENT_HASH" == "$STORED_HASH" ]]; then
+  if [[ -n "${PU_RELEASE_DIR:-}" ]]; then
+    # Paket-Box: node_modules kommt fertig und geprüft im Release (read-only).
+    echo "  npm install: entfällt (Release-Paket bringt node_modules mit)"
+  elif [[ -d "$APP_DIR/node_modules" && -n "$CURRENT_HASH" && "$CURRENT_HASH" == "$STORED_HASH" ]]; then
     echo "  npm install: uebersprungen (${LOCK_FILE} unveraendert)"
   else
     echo "  npm install (${LOCK_FILE} geaendert oder node_modules fehlt)..."
@@ -483,7 +529,7 @@ fi
 # the old fatal form ('+', no '-'); migrate it in place so a failed/offline
 # post-update can never block the service start. Idempotent: insert if absent,
 # rewrite only if the present line differs from the expected non-fatal form.
-EXPECTED_EXECSTARTPRE="ExecStartPre=-+/usr/bin/bash ${INSTALL_DIR}/post-update.sh"
+EXPECTED_EXECSTARTPRE="ExecStartPre=-+/usr/bin/bash ${PU_CODE_DIR:-$INSTALL_DIR}/post-update.sh"
 if [[ -f "$SERVICE_FILE" ]]; then
   CURRENT_EXECSTARTPRE="$(grep -E '^ExecStartPre=.*post-update\.sh' "$SERVICE_FILE" | head -1 || echo "")"
   if [[ -z "$CURRENT_EXECSTARTPRE" ]]; then
@@ -775,7 +821,7 @@ fi
 # DVhub-Neustart aus stack-update.sh löst es nicht erneut aus. NON-FATAL.
 if [[ -f "$INSTALL_DIR/stack-update.sh" ]]; then
   STACK_VER="$(grep -m1 '"version"' "$APP_DIR/package.json" 2>/dev/null | sed -E 's/.*"version" *: *"([^"]+)".*/\1/')"
-  STACK_REV="$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+  STACK_REV="${PU_RELEASE_REV:-$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo nogit)}"
   STACK_WANT="${STACK_VER:-unbekannt}@${STACK_REV}"
   STACK_MARKER="$DATA_DIR/.stack-updated-version"
   if [[ "$(cat "$STACK_MARKER" 2>/dev/null)" == "$STACK_WANT" ]]; then
@@ -799,6 +845,16 @@ if [[ -f "$INSTALL_DIR/stack-update.sh" ]]; then
     fi
   fi
 fi
+
+# BEGIN DVHUB RELEASE BOOT HOOK — Release-Pakete (docs/release-pakete.md)
+# Paket-Box: einen durch Stromausfall unterbrochenen Auftrag fortsetzen.
+# git-Box: die einmalige Umstellung auf Pakete planen (als Zeitgeber-Unit, nach
+# dem Neustart der Oberfläche; nur offizielles Repo, sauberer Checkout,
+# Schlüssel vorhanden, höchstens alle 24 h). NON-FATAL.
+if [[ -x "${RELEASE_HELPER_PATH:-}" ]]; then
+  pu_bounded 20 "$RELEASE_HELPER_PATH" boot-hook || echo "  WARN: dvhub-release boot-hook fehlgeschlagen (non-fatal)" >&2
+fi
+# END DVHUB RELEASE BOOT HOOK
 
 echo ""
 echo "Post-Update abgeschlossen. Neustart mit: systemctl restart ${SERVICE_NAME}"

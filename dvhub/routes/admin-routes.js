@@ -16,6 +16,7 @@ import { parseBody } from '../server-utils.js';
 import { runtimeInfo } from '../runtime-info.js';
 import { streamPgDump, runDbRestore } from '../services/db-backup.js';
 import { readTimescaleStatus, runTimescaleExtUpgrade } from '../services/timescale-maintenance.js';
+import { readReleaseInfo } from '../release-info.js';
 
 // GUI DB-Restore (POST /api/db/restore): stream a raw request body straight to
 // a file on disk with a hard byte ceiling and proper backpressure, so a
@@ -61,6 +62,12 @@ export const UPDATE_HELPER = '/usr/local/libexec/dvhub-update';
 // über root-eigene Hilfsskripte (dvhub-apt.sh, dvhub-setcap.sh). Früher sudo
 // apt-get/apt/fuser/setcap mit beliebigen Argumenten.
 export const APT_HELPER = '/usr/local/libexec/dvhub-apt';
+// Release-Pakete (docs/release-pakete.md): auf einer Paket-Box ersetzt der
+// root-eigene Einstieg dvhub-release das git-Update. Er lädt nur signierte
+// Pakete, startet Installation und Rückweg als eigene Unit (überlebt den
+// Neustart von DVhub) und meldet den Fortschritt über `status`.
+export const RELEASE_HELPER = '/usr/local/libexec/dvhub-release';
+const RELEASE_VERSION = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 export const SETCAP_HELPER = '/usr/local/libexec/dvhub-setcap';
 // npm install auf einem langsamen Board braucht oft mehr als eine Minute; ein
 // Abbruch per Timeout ließ früher node_modules halb zurück.
@@ -85,6 +92,29 @@ export function createAdminRoutes(deps) {
     return { stdout: 'No local changes' };
   });
   const aptHelper = (action, timeout) => execFileAsync('sudo', ['-n', APT_HELPER, action], { timeout });
+
+  // ── Paket-Box ──
+  const releaseInfo = () => readReleaseInfo(ctx.getAppDir());
+  const releaseHelper = async (args, timeout = 60000) => {
+    const r = await execFileAsync('sudo', ['-n', RELEASE_HELPER, ...args], { timeout });
+    try { return JSON.parse(String(r.stdout || '').trim().split('\n').at(-1) || '{}'); } catch { return { ok: true }; }
+  };
+  // Exit 4 = läuft bereits, 3 = abgelehnt (Vorbedingung) → 409; sonst 500.
+  const releaseError = (res, e, event) => {
+    const msg = String(e?.stderr || e?.message || 'Fehler').trim().split('\n').at(-1).replace(/^dvhub-release:\s*/, '');
+    pushLog(event, { error: msg });
+    return json(res, e?.code === 4 || e?.code === 3 ? 409 : 500, { ok: false, mode: 'package', error: msg });
+  };
+  const startReleaseJob = async (res, args, event, extra = {}) => {
+    try {
+      const out = await releaseHelper(args, 30000);
+      pushLog(event, { args: args.join(' '), ...extra });
+      return json(res, 200, { ok: true, mode: 'package', job: args[0], started: out.started !== false, ...extra,
+        message: 'Auftrag gestartet — Fortschritt unter /api/admin/update/status' });
+    } catch (e) {
+      return releaseError(res, e, `${event}_error`);
+    }
+  };
 
   return async function handleAdminRoute(req, res, url) {
     // --- Datenbank-Backup herunterladen (pg_dump custom, streamed) ---
@@ -443,6 +473,24 @@ export function createAdminRoutes(deps) {
     // --- Software Update Check ---
     if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      if (releaseInfo()) {
+        const channel = ctx.getRawCfg().updateChannel === 'dev' ? 'dev' : 'stable';
+        try {
+          const c = await releaseHelper(['check', channel]);
+          const tag = (v) => (v ? `v${v}` : null);
+          return json(res, 200, {
+            ok: true, mode: 'package', channel,
+            current: { version: ctx.getAppVersion().versionLabel, tag: tag(c.current?.version), revision: (c.current?.git_sha || '').slice(0, 7) || null, release: c.current?.version || null },
+            latest: { tag: tag(c.latest?.version), revision: (c.latest?.git_sha || '').slice(0, 7) || null, release: c.latest?.version || null, date: c.latest?.date || null },
+            previous: c.previous || null,
+            updateAvailable: c.updateAvailable === true,
+            availableVersions: (c.availableVersions || []).map(tag),
+            changelog: Array.isArray(c.changelog) ? c.changelog : [],
+          });
+        } catch (e) {
+          return releaseError(res, e, 'update_check_error');
+        }
+      }
       try {
         const repoRoot = ctx.getRepoRoot();
         const channel = ctx.getRawCfg().updateChannel || 'stable';
@@ -515,6 +563,23 @@ export function createAdminRoutes(deps) {
     // --- Software Update Apply ---
     if (url.pathname === '/api/admin/update/apply' && req.method === 'POST') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      if (releaseInfo()) {
+        // Paket-Box: Version (optional) prüfen, Auftrag an dvhub-release; der
+        // Helfer startet neu, prüft /health und geht bei Fehlern selbst zurück.
+        const body = await parseBody(req).catch(() => ({}));
+        const channel = ctx.getRawCfg().updateChannel === 'dev' ? 'dev' : 'stable';
+        if (body?.ref) return json(res, 400, { ok: false, mode: 'package', error: 'ref_not_supported', detail: 'Gezielte Commits gibt es nur bei git-Installationen' });
+        let target = 'latest';
+        if (body?.version !== undefined && body?.version !== null && body?.version !== '') {
+          const m = RELEASE_VERSION.exec(String(body.version).trim());
+          if (!m || String(body.version).length > 64) {
+            pushLog('update_apply_rejected', { reason: 'invalid_version', got: String(body.version).slice(0, 64) });
+            return json(res, 400, { ok: false, mode: 'package', error: 'invalid_version' });
+          }
+          target = m[1];
+        }
+        return startReleaseJob(res, ['install', target, channel], 'update_package_started', { channel, target });
+      }
       try {
         const body = await parseBody(req).catch(() => ({}));
         // Plan 08-04 Task 1 Step 4: semver validation + downgrade guard.
@@ -671,6 +736,25 @@ export function createAdminRoutes(deps) {
       }
     }
 
+    // --- Update-Fortschritt (Paket-Box) ---
+    if (url.pathname === '/api/admin/update/status' && req.method === 'GET') {
+      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      if (!releaseInfo()) return json(res, 200, { ok: true, mode: 'git' });
+      try {
+        return json(res, 200, { ...(await releaseHelper(['status'], 15000)), mode: 'package' });
+      } catch (e) {
+        return releaseError(res, e, 'update_status_error');
+      }
+    }
+
+    // --- Rückweg auf die vorige Version (Paket-Box, ohne Download) ---
+    if (url.pathname === '/api/admin/update/rollback' && req.method === 'POST') {
+      if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
+      if (!checkAuth(req, res)) return;
+      if (!releaseInfo()) return json(res, 409, { ok: false, mode: 'git', error: 'Rückweg gibt es nur bei Paket-Installationen' });
+      return startReleaseJob(res, ['rollback'], 'update_rollback_started');
+    }
+
     // --- Update Channel ---
     if (url.pathname === '/api/admin/update/channel' && req.method === 'POST') {
       // M-6 (Plan 16-03): gate parity — the sibling /api/admin/update/check
@@ -687,6 +771,13 @@ export function createAdminRoutes(deps) {
         const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
         next.updateChannel = channel;
         ctx.saveAndApplyConfig(next);
+
+        if (releaseInfo()) {
+          // Paket-Box: das Neueste des Zielkanals installieren (bewusst ohne
+          // Downgrade-Sperre — dev-Versionen sortieren vor dem gleichnamigen Release).
+          pushLog('update_channel_changed', { channel, mode: 'package' });
+          return startReleaseJob(res, ['install', 'latest', channel], 'update_package_started', { channel, target: 'latest' });
+        }
 
         if (ctx.getServiceActionsEnabled()) {
           const repoRoot = ctx.getRepoRoot();

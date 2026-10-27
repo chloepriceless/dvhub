@@ -666,6 +666,22 @@ dvhub_install_helpers() {
 }
 # END DVHUB HELPERS
 dvhub_install_helpers || echo "  WARN: nicht alle Hilfsskripte installiert — betroffene Funktionen bis zum nächsten Start eingeschränkt" >&2
+# BEGIN DVHUB RELEASE HELPER — keep this block byte-identical in install.sh and post-update.sh.
+# Release-Pakete (docs/release-pakete.md): root-eigener Einstieg dvhub-release
+# (Node, Platzhalter wie oben fest eingetragen) und der Vertrauensanker für die
+# Paketsignaturen. Der Anker gehört root (/etc/dvhub gehört dem Dienst) und wird
+# hier nur angelegt, solange er fehlt oder noch keinen Schlüssel hat — danach
+# übernimmt ihn dvhub-release nur aus Paketen, die gegen ihn geprüft wurden.
+RELEASE_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-release"
+RELEASE_TRUST="${DVHUB_RELEASE_TRUST:-/etc/dvhub-release/allowed_signers}"
+dvhub_install_helper dvhub-release.cjs "$RELEASE_HELPER_PATH" || echo "  WARN: dvhub-release nicht installiert" >&2
+if [[ -f "$INSTALL_DIR/release-keys/allowed_signers" ]] \
+   && ! grep -qE '^[^#]*(ssh-ed25519|ssh-rsa|ecdsa-sha2-)' "$RELEASE_TRUST" 2>/dev/null; then
+  install -d -o root -g root -m 0755 "$(dirname "$RELEASE_TRUST")" \
+    && install -o root -g root -m 0644 "$INSTALL_DIR/release-keys/allowed_signers" "$RELEASE_TRUST" \
+    || echo "  WARN: Vertrauensanker $RELEASE_TRUST nicht angelegt" >&2
+fi
+# END DVHUB RELEASE HELPER
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
 PKILL_PATH="$(command -v pkill || echo /usr/bin/pkill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
@@ -731,6 +747,13 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-tag *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-commit *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} npm-install
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} post-update
+# Release-Pakete (docs/release-pakete.md): nur über den root-eigenen Einstieg
+# dvhub-release; er prüft Kanal und Version selbst, startet Installation und
+# Rückweg als eigene Unit und lädt nur signierte Pakete.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RELEASE_HELPER_PATH} check *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RELEASE_HELPER_PATH} install *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RELEASE_HELPER_PATH} rollback
+${SERVICE_USER} ALL=(root) NOPASSWD: ${RELEASE_HELPER_PATH} status
 # Paketpflege aus der Oberfläche (Gegenprüfung 25.10.2026, P2): nur feste
 # Aktionen über dvhub-apt bzw. dvhub-setcap. Früher apt-get update/upgrade *,
 # apt list *, fuser *, setcap * — mit -o APT::Update::Pre-Invoke::=… oder einer

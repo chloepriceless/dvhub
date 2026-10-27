@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { readReleaseInfo } from './release-info.js';
 
 function readJson(filePath) {
   try {
@@ -49,7 +50,20 @@ export function readAppVersionInfo({ appDir }) {
   const envRevision = /^[0-9a-f]{7,40}$/i.test(String(process.env.DVHUB_REVISION || ''))
     ? String(process.env.DVHUB_REVISION).slice(0, 7)
     : null;
-  const revision = readGitRevision(path.resolve(appDir, '..')) || envRevision;
+  // Release-Paket (docs/release-pakete.md): kein .git — Version und Commit
+  // stehen im Manifest. Dev-Pakete tragen den Commit schon in der Version.
+  const release = readReleaseInfo(appDir);
+  const revision = readGitRevision(path.resolve(appDir, '..')) || release?.gitSha?.slice(0, 7) || envRevision;
+  if (release) {
+    return {
+      name,
+      version,
+      revision,
+      releaseVersion: release.version,
+      releaseChannel: release.channel,
+      versionLabel: release.channel === 'dev' || !revision ? `v${release.version}` : `v${release.version}+${revision}`
+    };
+  }
 
   return {
     name,
