@@ -51,6 +51,7 @@ exit 0`);
   // Zeitstempel-Ordner: jeder Aufruf eine neue Sekunde (sonst fielen zwei
   // Versuche in denselben Ordner).
   writeFileSync(join(bin, 'date'), `#!/usr/bin/env bash
+if [[ "$1" == "+%Y%m%d-%H%M%S" && -n "\${DATE_FIXED:-}" ]]; then echo "$DATE_FIXED"; exit 0; fi
 if [[ "$1" == "+%Y%m%d-%H%M%S" ]]; then n=$(( $(cat "${dir}/date-n" 2>/dev/null || echo 0) + 1 )); echo $n > "${dir}/date-n"; printf '20261025-%06d\\n' $n; exit 0; fi
 exec /bin/date "$@"
 `);
@@ -241,5 +242,60 @@ test('Daten-Sicherung: abgebrochene Kopie zählt nicht; Rückweg v2→v1→v2 si
     const done = readdirSync(root).filter((n) => !n.endsWith('.partial') && /data-before/.test(n));
     assert.equal(done.length, 3, String(done));
     assert.ok(done.some((n) => readFileSync(join(root, n, 'measurements.db'), 'utf8') === 'neuere daten'));
+    // Gegenprüfung 3c860448 (P3): die halbe Kopie eines abgebrochenen Laufs bleibt nicht liegen.
+    assert.deepEqual(readdirSync(root).filter((n) => n.endsWith('.partial')), []);
+  } finally { s.cleanup(); }
+});
+
+// ── Gegenprüfung 3c860448 ──
+// P2: die Daten-Sicherung lief erst NACH dem Umstellen des Checkouts. Scheiterte
+// sie (SD-Karte voll), endete das Skript mit „alter Stand läuft weiter“ — der
+// Checkout war aber schon neu, das venv alt; der nächste Start lief mit neuem
+// Code und ohne Sicherung in die Migration.
+test('Daten-Sicherung scheitert → Checkout bleibt auf dem alten Stand', () => {
+  const s = setup();
+  try {
+    assert.equal(s.run('v1').status, 0);
+    mkdirSync(join(s.dir, 'eos-home'), { recursive: true });
+    writeFileSync(join(s.dir, 'eos-home', 'measurements.db'), 'daten');
+    const ro = join(s.dir, 'ro');
+    mkdirSync(ro); chmodSync(ro, 0o555);
+    const r = s.run('v2', { EOS_BACKUP_ROOT: join(ro, 'eos-backups') });
+    chmodSync(ro, 0o755);
+    assert.notEqual(r.status, 0);
+    assert.equal(s.head(), s.tagSha('v1'), 'Checkout nicht umgestellt');
+    assert.equal(s.marker(), `file://${s.upstream}@v1`);
+  } finally { s.cleanup(); }
+});
+
+// P3: Dateinamen mit Umlauten (git quotet sie) ließen jede spätere Sicherung scheitern.
+test('untracked Datei mit Umlaut im Namen wird gesichert, Update läuft durch', () => {
+  const s = setup();
+  try {
+    assert.equal(s.run('v1').status, 0);
+    writeFileSync(join(s.eosDir, 'größe.py'), 'x\n');
+    const r = s.run('v2');
+    assert.equal(r.status, 0, r.stderr);
+    const root = join(s.dir, 'data', 'eos-backups');
+    const d = readdirSync(root).find((n) => existsSync(join(root, n, 'files')));
+    assert.ok(d && existsSync(join(root, d, 'files', 'größe.py')), String(readdirSync(root)));
+  } finally { s.cleanup(); }
+});
+
+// P3: Untracked Datei blockiert den Checkout → Neu-Klon → zweite Sicherung in
+// derselben Sekunde überschrieb den Patch mit einem leeren.
+test('zweite Sicherung im selben Lauf überschreibt den Patch nicht', () => {
+  const s = setup();
+  try {
+    assert.equal(s.run('v1').status, 0);
+    writeFileSync(join(s.upstream, 'neu.py'), 'upstream\n');
+    git(s.upstream, 'add', 'neu.py'); git(s.upstream, 'commit', '-qm', 'neu'); git(s.upstream, 'tag', 'v4');
+    writeFileSync(join(s.eosDir, 'pyproject.toml'), 'lokaler Patch\n');
+    writeFileSync(join(s.eosDir, 'neu.py'), 'lokal, im Weg\n');
+    const r = s.run('v4', { DATE_FIXED: '20261025-120000' });
+    assert.equal(r.status, 0, r.stderr);
+    const patch = readFileSync(join(s.dir, 'data', 'eos-backups', '20261025-120000', 'local-changes.patch'), 'utf8');
+    assert.match(patch, /lokaler Patch/);
+    assert.equal(readFileSync(join(s.dir, 'data', 'eos-backups', '20261025-120000', 'files', 'neu.py'), 'utf8'), 'lokal, im Weg\n');
   } finally { s.cleanup(); }
 });

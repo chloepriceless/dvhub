@@ -137,9 +137,14 @@ eos_clone_fresh() {
      && "${g[@]}" remote add origin "$EOS_REPO_URL" \
      && "${g[@]}" fetch -q --depth 1 origin "$EOS_PIN" \
      && "${g[@]}" checkout -q -B dvhub-eos FETCH_HEAD; then
-    # Lokale Aenderungen des alten Checkouts erst jetzt sichern — direkt vor
-    # dem Ersetzen, nicht bei jedem gescheiterten Versuch. Unlesbar → abbrechen.
+    # Lokale Aenderungen und Daten des alten Stands erst jetzt sichern —
+    # direkt vor dem Ersetzen, nicht bei jedem gescheiterten Versuch.
+    # Unlesbar oder Sicherung gescheitert → abbrechen, alter Stand bleibt.
     if [[ -d "$EOS_DIR/.git" ]] && ! eos_backup_local_changes; then
+      rm -rf "$tmp"
+      return 1
+    fi
+    if ! eos_backup_data; then
       rm -rf "$tmp"
       return 1
     fi
@@ -163,7 +168,12 @@ eos_backup_local_changes() {
   # Funktion laeuft in `||`/`if`, dort wirkt `set -e` NICHT — ein volles
   # Ziel haette sonst "gesichert" gemeldet, und reset/rm haetten die Patches
   # danach geloescht.
-  local dirty untracked dest names f
+  local dirty untracked dest f
+  # Je Lauf nur einmal (Gegenpruefung 3c860448): scheitert nach der ersten
+  # Sicherung der Checkout und es wird neu geklont, ist der Baum nach dem
+  # reset sauber — eine zweite Sicherung in derselben Sekunde ueberschrieb den
+  # Patch mit einem leeren.
+  [[ "${EOS_LOCAL_BACKED_UP:-0}" -eq 1 ]] && return 0
   # Scheitert git hier, ist der Zustand UNBEKANNT, nicht "sauber": dann nichts
   # ersetzen (sonst gingen lokale Patches ungesichert mit dem alten Ordner weg).
   if ! dirty="$(eos_git status --porcelain --untracked-files=no 2>/dev/null)" \
@@ -180,13 +190,49 @@ eos_backup_local_changes() {
   # Zusaetzlich die Dateien selbst — ein Patch laesst sich auf einen anderen
   # Stand oft nicht mehr anwenden, die Dateien kann man immer vergleichen.
   # Untracked Dateien gehoeren dazu: genau die stehen einem Checkout im Weg.
-  names="$(eos_git diff HEAD --name-only --diff-filter=d)" || return 1
-  while IFS= read -r f; do
+  # NUL-getrennt (Gegenpruefung 3c860448): sonst quotet git Namen mit
+  # Umlauten ("\303\244.py"), cp scheitert, und jede Sicherung danach auch.
+  { eos_git diff HEAD -z --name-only --diff-filter=d && eos_git ls-files -z --others --exclude-standard; } > "$dest/.names" || return 1
+  while IFS= read -r -d '' f; do
     [[ -n "$f" ]] || continue
     mkdir -p "$dest/files/$(dirname "$f")" || return 1
     cp -p "$EOS_DIR/$f" "$dest/files/$f" || return 1
-  done <<< "$(printf '%s\n%s\n' "$names" "$untracked")"
+  done < "$dest/.names"
+  rm -f "$dest/.names"
+  EOS_LOCAL_BACKED_UP=1
   echo "  EOS: lokale Aenderungen gesichert nach $dest"
+}
+
+# Versionswechsel (z. B. 0.3-Fork -> 0.4): EOS-Konfiguration und Messreihen
+# sichern, bevor der neue Stand startet. 0.4 migriert die Konfiguration beim
+# Start selbst; geht dabei etwas schief, liegt der alte Stand hier.
+# Erst NACH dem erfolgreichen Holen des neuen Stands und je Wechsel nur einmal
+# (Gegenpruefung 25.10.2026): ein Pin, der scheitert, scheitert bei jedem
+# Dienststart erneut — vorher kopierte jeder Versuch den ganzen, wachsenden
+# Messwertspeicher noch einmal (SD-Karte voll). Kopie erst in <ziel>.partial,
+# umbenannt erst nach Erfolg; der Marker nennt den Wechsel (von→nach, Ordner),
+# damit ein spaeterer Rueckweg wieder sichert.
+# Und VOR dem Umstellen des Checkouts (Gegenpruefung 3c860448): scheitert die
+# Sicherung, bleibt der alte Stand vollstaendig (Checkout + venv) stehen —
+# vorher war der Checkout schon neu, das venv alt, und der naechste Start lief
+# ohne Sicherung in die Migration. Halbe Kopien abgebrochener Laeufe weg.
+eos_backup_data() {
+  local _eos_data _transition _mark _dest
+  [[ "$EOS_PIN_CHANGED" -eq 1 && -n "$EOS_HAVE" ]] || return 0
+  _eos_data="${EOS_HOME:-$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6 || true)/.local/share/net.akkudoktor.eos}"
+  _transition="${EOS_HAVE} -> ${EOS_WANT} (${_eos_data})"
+  _mark="$EOS_BACKUP_ROOT/.data-backup-${EOS_SERVICE_NAME}"
+  [[ -d "$_eos_data" && "$(cat "$_mark" 2>/dev/null)" != "$_transition" ]] || return 0
+  rm -rf "$EOS_BACKUP_ROOT"/*-data-before-*.partial 2>/dev/null || true
+  _dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)-data-before-${EOS_PIN//\//_}"
+  if mkdir -p "$_dest.partial" && cp -a "$_eos_data/." "$_dest.partial/" && mv "$_dest.partial" "$_dest"; then
+    printf '%s\n' "$_transition" > "$_mark" || return 1
+    echo "  EOS: Daten/Konfiguration vor dem Versionswechsel gesichert nach $_dest"
+    return 0
+  fi
+  rm -rf "$_dest.partial"
+  echo "  EOS: Sicherung der Daten vor dem Versionswechsel fehlgeschlagen — Abbruch, alter Stand bleibt" >&2
+  return 1
 }
 
 if [[ ! -d "$EOS_DIR/.git" ]]; then
@@ -200,8 +246,10 @@ else
   eos_git remote set-url origin "$EOS_REPO_URL" 2>/dev/null || true
   # Erst holen (aendert den Arbeitsbaum nicht), dann sichern und umstellen.
   if eos_git fetch -q --depth 1 origin "$EOS_PIN" 2>/dev/null; then
-    # Erst jetzt sichern (der neue Stand ist da); Zustand unlesbar → Abbruch.
+    # Erst jetzt sichern (der neue Stand ist da); Zustand unlesbar oder
+    # Sicherung gescheitert → Abbruch, Checkout unveraendert.
     eos_backup_local_changes || exit 1
+    eos_backup_data || exit 1
     # Beim Versionswechsel kommen die alten Patches NICHT mit: sie gehoeren zum
     # alten Stand und sind gesichert.
     eos_git reset --hard -q 2>/dev/null || true
@@ -216,32 +264,6 @@ else
     # der neue Klon steht.
     echo "  EOS: Fetch auf ${EOS_PIN} nicht moeglich — klone neu"
     eos_clone_fresh || exit 1
-  fi
-fi
-
-# Versionswechsel (z. B. 0.3-Fork -> 0.4): EOS-Konfiguration und Messreihen
-# sichern, bevor der neue Stand startet. 0.4 migriert die Konfiguration beim
-# Start selbst; geht dabei etwas schief, liegt der alte Stand hier.
-# Erst NACH dem erfolgreichen Holen des neuen Stands und je Wechsel nur einmal
-# (Gegenpruefung 25.10.2026): ein Pin, der scheitert, scheitert bei jedem
-# Dienststart erneut — vorher kopierte jeder Versuch den ganzen, wachsenden
-# Messwertspeicher noch einmal (SD-Karte voll). Kopie erst in <ziel>.partial,
-# umbenannt erst nach Erfolg; der Marker nennt den Wechsel (von→nach, Ordner),
-# damit ein spaeterer Rueckweg wieder sichert.
-if [[ "$EOS_PIN_CHANGED" -eq 1 && -n "$EOS_HAVE" ]]; then
-  _eos_data="${EOS_HOME:-$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6 || true)/.local/share/net.akkudoktor.eos}"
-  _transition="${EOS_HAVE} -> ${EOS_WANT} (${_eos_data})"
-  _mark="$EOS_BACKUP_ROOT/.data-backup-${EOS_SERVICE_NAME}"
-  if [[ -d "$_eos_data" && "$(cat "$_mark" 2>/dev/null)" != "$_transition" ]]; then
-    _dest="$EOS_BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)-data-before-${EOS_PIN//\//_}"
-    if mkdir -p "$_dest.partial" && cp -a "$_eos_data/." "$_dest.partial/" && mv "$_dest.partial" "$_dest"; then
-      printf '%s\n' "$_transition" > "$_mark"
-      echo "  EOS: Daten/Konfiguration vor dem Versionswechsel gesichert nach $_dest"
-    else
-      rm -rf "$_dest.partial"
-      echo "  EOS: Sicherung der Daten vor dem Versionswechsel fehlgeschlagen — Abbruch, alter Stand laeuft weiter" >&2
-      exit 1
-    fi
   fi
 fi
 
