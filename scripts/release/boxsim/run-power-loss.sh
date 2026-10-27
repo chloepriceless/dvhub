@@ -53,17 +53,20 @@ cat /etc/systemd/system/dvhub.service.d/05-dvhub-release-recover.conf
 systemctl show dvhub -p ExecStartPre --value | tr ";" "\n" | grep -o "path=[^ ]*"
 sync'
 echo "-- Stromausfall: Container neu starten"
+T_RESTART="$(docker exec "$NAME" date -u '+%Y-%m-%d %H:%M:%S')"
 docker restart "$NAME" > /dev/null
 boot
+S server
 S wait-health 1.0.9 180
-X 'echo "== Start-Reihenfolge"; journalctl -b -u dvhub --no-pager | grep -nE "recover|DVhub post-update|Post-Update abgeschlossen|Web server listening|vanished" | head -20
+X 'echo "== Start-Reihenfolge"; journalctl --since "'"$T_RESTART"' UTC" -u dvhub --no-pager | grep -nE "recover|DVhub post-update|Post-Update abgeschlossen|Web server listening|vanished" | head -20
 ls -la /opt/dvhub | grep -E " dvhub| post-update.sh| current|legacy"
 test -d /opt/dvhub/dvhub -a ! -L /opt/dvhub/dvhub && echo "dvhub: Ordner (git)"; test -f /opt/dvhub/post-update.sh -a ! -L /opt/dvhub/post-update.sh && echo "post-update.sh: Datei (git)"
 test -e /opt/dvhub/current || echo "current: weg"
 git -c safe.directory=/opt/dvhub -C /opt/dvhub status --porcelain --untracked-files=no | head -5; echo "git status Ende"'
-R1="$(docker exec "$NAME" bash -c 'journalctl -b -u dvhub --no-pager | grep -n "recover:" | head -1 | cut -d: -f1')"
-R2="$(docker exec "$NAME" bash -c 'journalctl -b -u dvhub --no-pager | grep -n "DVhub post-update" | head -1 | cut -d: -f1')"
-echo "RESULT order recover_line=${R1:-none} post_update_line=${R2:-none}" | tee -a "$OUT/results.txt"
+R1="$(docker exec "$NAME" bash -c "journalctl --since '$T_RESTART UTC' -u dvhub --no-pager | grep -n 'recover:' | head -1 | cut -d: -f1")"
+R2="$(docker exec "$NAME" bash -c "journalctl --since '$T_RESTART UTC' -u dvhub --no-pager | grep -n 'DVhub post-update' | head -1 | cut -d: -f1")"
+ok=0; [[ -n "${R1:-}" && -n "${R2:-}" && "$R1" -lt "$R2" ]] && ok=1
+echo "RESULT order=$ok recover_line=${R1:-none} post_update_line=${R2:-none}" | tee -a "$OUT/results.txt"
 sleep 40
 X 'echo "== nach 40 s"; ls /etc/systemd/system/dvhub.service.d/; systemctl show dvhub -p DropInPaths --value; journalctl --no-pager -u dvhub-release-reload | tail -3; cat /var/lib/dvhub-release/state.json'
 S check after-power-loss

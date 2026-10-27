@@ -49,7 +49,13 @@ S sizes "git-$TAG"
 S check installed
 S facts installed
 S publish pub-1 v1.0.9
-S gui-git-update
+if [[ "${GIT_UPDATE_MODE:-gui}" == installer ]]; then
+  # Unter Emulation (armv7/QEMU) reißt npm die 60-s-Grenze der alten
+  # Oberfläche — dort der dokumentierte Weg über den Installer.
+  S install v1.0.9 "$CH"
+else
+  S gui-git-update
+fi
 if [[ "$TAG" == v0.4.* ]]; then
   # v0.4.x: Die alte Oberfläche holt v1.0.9 per git, ruft aber kein
   # post-update.sh als root auf (Unit ohne ExecStartPre, keine sudo-Regel),

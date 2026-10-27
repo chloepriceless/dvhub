@@ -637,6 +637,9 @@ test('Umstellung: Stromausfall mitten im Verschieben → recover stellt den git-
     assert.equal(after.migration, null);
     assert.equal(after.history.at(-1).version, '1.0.1');
     assert.equal(after.history.at(-1).result, 'migration_interrupted');
+    // Kein Reload mitten im Start (ExecStartPre) — sonst fiele post-update.sh aus der Liste.
+    assert.doesNotMatch(fs.existsSync(r.sysLog) ? fs.readFileSync(r.sysLog, 'utf8') : '', /daemon-reload/);
+    assert.match(fs.readFileSync(r.runLog, 'utf8'), /--on-active=30s .*systemctl daemon-reload/);
   } finally { r.close(); }
 });
 

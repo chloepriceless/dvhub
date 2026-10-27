@@ -55,9 +55,15 @@ case "$step" in
     printf '[global]\nindex-url = http://127.0.0.1:9/simple\ntimeout = 2\nretries = 0\n' > /etc/pip.conf
     grep -q packagecloud /etc/hosts || echo '127.0.0.1 packagecloud.io' >> /etc/hosts
     ln -sfn /mnt/rt/pub-1 /srv/pub
+    bash "$0" server >/dev/null
+    result "setup=ok tags=$(g tag | wc -l) main=$(g rev-parse --short main)"
+    ;;
+
+  server) # Testserver (neu) starten — überlebt keinen Neustart des Containers
+    systemctl stop release-testserver 2>/dev/null
     systemd-run --unit release-testserver --property=StandardOutput=append:/mnt/out/testserver.log \
       --property=StandardError=append:/mnt/out/testserver.log node /mnt/harness/testserver.mjs 8088 /srv/pub /srv/ctl >/dev/null
-    result "setup=ok tags=$(g tag | wc -l) main=$(g rev-parse --short main)"
+    result "server=started"
     ;;
 
   install) # <tag> <channel> — install.sh dieses Stands, wie beim Kunden
