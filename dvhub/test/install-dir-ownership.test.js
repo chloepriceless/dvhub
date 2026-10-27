@@ -97,3 +97,36 @@ test('Rechte-Block: fremder Besitz → chown/chmod nur der falschen Einträge, M
     assert.equal(readFileSync(join(dir, 'gitconfig-system'), 'utf8').split('directory =').length - 1, 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Gegenprüfung 948b0e6a (P3): install.sh erneut auf einer alten Box (Ordner und
+// .git gehören noch dem Dienstbenutzer) führte git fetch/checkout als root aus —
+// ohne core.hooksPath=/dev/null, vor der Umstellung auf root. Ein vom
+// Dienstbenutzer abgelegter Hook (post-checkout) oder core.fsmonitor lief als root.
+test('install.sh: Programmordner root-eigen VOR dem ersten git-Aufruf; git als root ohne Hooks/fsmonitor', () => {
+  const i = read('install.sh');
+  const step = i.slice(i.indexOf('echo "[4/7] Repository bereitstellen"'), i.indexOf('remove_legacy_app_dir\n'));
+  const own = step.indexOf('dvhub_root_own_install_dir "$INSTALL_DIR"');
+  const firstGit = step.search(/\bigit |git -C "\$INSTALL_DIR"/);
+  assert.ok(own > 0 && own < firstGit, `Rechte vor git: ${own} < ${firstGit}`);
+  assert.doesNotMatch(step, /git -C "\$INSTALL_DIR"/, 'alle git-Aufrufe im Programmordner über igit');
+  const def = i.match(/igit\(\) \{[^}]*\}/);
+  assert.ok(def && def[0].includes('core.hooksPath=/dev/null') && def[0].includes('core.fsmonitor=false'), def && def[0]);
+});
+
+test('install.sh igit: ein Hook im Repo läuft beim Checkout nicht', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dvhub-igit-'));
+  try {
+    const inst = join(dir, 'opt');
+    execFileSync('git', ['init', '-q', '-b', 'main', inst]);
+    const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+    writeFileSync(join(inst, 'a'), '1');
+    execFileSync('git', ['-C', inst, 'add', '.'], { env });
+    execFileSync('git', ['-C', inst, 'commit', '-qm', 'x'], { env });
+    writeFileSync(join(inst, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch "${dir}/hook-ran"\n`);
+    chmodSync(join(inst, '.git', 'hooks', 'post-checkout'), 0o755);
+    const def = read('install.sh').match(/igit\(\) \{[^}]*\}/)[0];
+    const r = spawnSync('bash', ['-c', `INSTALL_DIR='${inst}'\n${def}\nigit checkout -q -B other`], { encoding: 'utf8', env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(existsSync(join(dir, 'hook-ran')), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -375,18 +375,25 @@ echo "[4/7] Repository bereitstellen"
 mkdir -p "$(dirname "$INSTALL_DIR")"
 migrate_legacy_config_files
 migrate_legacy_data_files
+# git als root im Programmordner: ohne Hooks und fsmonitor (Gegenprüfung
+# 948b0e6a, wie g() in dvhub-update.sh). Auf einer alten Box gehören Ordner und
+# .git noch dem Dienstbenutzer — ein dort abgelegter Hook liefe sonst als root.
+igit() {
+  git -c safe.directory="$INSTALL_DIR" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+    -c advice.detachedHead=false -C "$INSTALL_DIR" "$@"
+}
 if [[ -d "$INSTALL_DIR/.git" ]]; then
-  if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$INSTALL_DIR"; then
-    git config --global --add safe.directory "$INSTALL_DIR"
-  fi
-  git -C "$INSTALL_DIR" fetch --tags origin
+  # Erst root zuordnen, dann git (Neuinstallation über einen alten, dem
+  # Dienstbenutzer gehörenden Ordner).
+  dvhub_root_own_install_dir "$INSTALL_DIR"
+  igit fetch --tags origin
 elif [[ -d "$INSTALL_DIR" && -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]]; then
   echo "Zielverzeichnis $INSTALL_DIR ist nicht leer und kein Git-Repository." >&2
   exit 1
 else
   rm -rf "$INSTALL_DIR"
   git clone --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR"
-  git -C "$INSTALL_DIR" fetch --tags origin
+  igit fetch --tags origin
 fi
 
 # Channel-aware checkout
@@ -396,16 +403,16 @@ if [[ -n "$REPO_REF" ]]; then
   # einen Channel-Stand aus und löst den Pin damit auf. Der Erreichbarkeits-
   # Anker (--merged origin/$REPO_BRANCH bzw. Vorfahren-Check) verhindert, dass
   # verwaiste Alt-Historie oder fremde Refs installiert werden (T-UPDATE-ANCHOR).
-  if ! REF_SHA="$(git -C "$INSTALL_DIR" rev-parse --verify --quiet "${REPO_REF}^{commit}")"; then
+  if ! REF_SHA="$(igit rev-parse --verify --quiet "${REPO_REF}^{commit}")"; then
     echo "Angegebene --ref '$REPO_REF' existiert nicht im Repository." >&2
     exit 1
   fi
-  if ! git -C "$INSTALL_DIR" merge-base --is-ancestor "$REF_SHA" "origin/$REPO_BRANCH"; then
+  if ! igit merge-base --is-ancestor "$REF_SHA" "origin/$REPO_BRANCH"; then
     echo "Angegebene --ref '$REPO_REF' ist nicht von origin/$REPO_BRANCH erreichbar (falscher Branch? --branch mit angeben)." >&2
     exit 1
   fi
   echo "   Ref-Pin: checkout $REPO_REF ($REF_SHA)"
-  git -C "$INSTALL_DIR" checkout --detach "$REF_SHA"
+  igit checkout --detach "$REF_SHA"
 elif [[ "$UPDATE_CHANNEL" == "stable" ]]; then
   # W5.1: semver-filter so a stray non-release tag (CI/build/bare-numeric) can never
   # win; kept in spirit with the JS SEMVER_TAG export in dvhub/routes-api.js. The
@@ -418,17 +425,17 @@ elif [[ "$UPDATE_CHANNEL" == "stable" ]]; then
   # provision scripts → no EOS/Forecast/TimescaleDB) while update/check reported
   # "no update". The `|| true` is LOAD-BEARING: under `set -euo pipefail` a
   # no-match grep (exit 1) would otherwise abort the whole installer.
-  LATEST_TAG="$(git -C "$INSTALL_DIR" tag --merged "origin/$REPO_BRANCH" --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1 || true)"
+  LATEST_TAG="$(igit tag --merged "origin/$REPO_BRANCH" --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1 || true)"
   if [[ -n "$LATEST_TAG" ]]; then
     echo "   Channel: stable — checkout $LATEST_TAG"
-    git -C "$INSTALL_DIR" checkout "$LATEST_TAG"
+    igit checkout "$LATEST_TAG"
   else
     echo "   Keine Release-Tags gefunden, verwende $REPO_BRANCH"
-    git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
+    igit checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
   fi
 else
   echo "   Channel: dev — checkout origin/$REPO_BRANCH"
-  git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
+  igit checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
 fi
 
 remove_legacy_app_dir
