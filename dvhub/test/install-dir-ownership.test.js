@@ -130,3 +130,27 @@ test('install.sh igit: ein Hook im Repo läuft beim Checkout nicht', () => {
     assert.equal(existsSync(join(dir, 'hook-ran')), false);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Gegenprüfung a75c2cea: die Sicherungen der bereinigten git-Konfiguration
+// (.git/config.dvhub-bak-*, .git/info/attributes.dvhub-bak-*) bleiben 0600 —
+// der Rechte-Schritt machte sie mit a+rX wieder für alle lesbar (E2E 27.10.2026).
+test('Rechte-Block: Sicherungen *.dvhub-bak-* bekommen root, bleiben aber 0600', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dvhub-own-'));
+  try {
+    const inst = join(dir, 'opt');
+    mkdirSync(join(inst, 'dvhub'), { recursive: true });
+    execFileSync('git', ['init', '-q', inst]);
+    const bak = join(inst, '.git', 'config.dvhub-bak-20261027-120000');
+    const attrBak = join(inst, '.git', 'info', 'attributes.dvhub-bak-20261027-120000');
+    writeFileSync(bak, '[core]\n'); chmodSync(bak, 0o600);
+    writeFileSync(attrBak, '*.txt filter=x\n'); chmodSync(attrBak, 0o600);
+    writeFileSync(join(inst, 'post-update.sh'), '#\n'); chmodSync(join(inst, 'post-update.sh'), 0o600);
+    const { r, calls } = runBlock(dir);
+    assert.equal(r.status, 0, r.stderr);
+    const ch = calls.find((l) => l.startsWith('chown -h 0:0 ')) || '';
+    const cm = calls.find((l) => l.startsWith('chmod go-w,a+rX ')) || '';
+    assert.ok(ch.includes(bak) && ch.includes(attrBak), 'Sicherungen gehören root');
+    assert.ok(cm.includes(join(inst, 'post-update.sh')), cm);
+    assert.ok(!cm.includes('dvhub-bak'), `kein a+r auf Sicherungen: ${cm}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

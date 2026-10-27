@@ -45,11 +45,18 @@ const block = (relPath, name) => {
 // Dritter Block (Gegenprüfung 25.10.2026, P2): welche root-eigenen
 // Hilfsskripte nach /usr/local/libexec kommen — die sudoers-Regeln zeigen nur
 // auf sie; fehlte eines, liefe die Regel ins Leere.
-for (const name of ['SUDOERS', 'INSTALL-DIR OWNERSHIP', 'HELPERS']) {
+for (const name of ['SUDOERS', 'INSTALL-DIR OWNERSHIP', 'HELPERS', 'GIT CONFIG']) {
   if (block('install.sh', name) !== block('post-update.sh', name)) {
     console.error(`sudoers-drift: FAIL — BEGIN/END DVHUB ${name} block diverged between install.sh and post-update.sh`);
     process.exit(1);
   }
 }
-console.log('sudoers-drift: OK (install.sh <-> post-update.sh: SUDOERS + INSTALL-DIR OWNERSHIP + HELPERS blocks identical)');
+// Vierter Block (Gegenprüfung a75c2cea): die Bereinigung der git-Konfiguration
+// steht zusätzlich im root-eigenen Update-Einstieg dvhub-update.sh — er läuft
+// als Kopie unter /usr/local/libexec und kann nichts aus dem Programmordner laden.
+if (block('dvhub-update.sh', 'GIT CONFIG') !== block('post-update.sh', 'GIT CONFIG')) {
+  console.error('sudoers-drift: FAIL — BEGIN/END DVHUB GIT CONFIG block diverged between dvhub-update.sh and post-update.sh');
+  process.exit(1);
+}
+console.log('sudoers-drift: OK (install.sh <-> post-update.sh: SUDOERS + INSTALL-DIR OWNERSHIP + HELPERS + GIT CONFIG blocks identical; GIT CONFIG also in dvhub-update.sh)');
 process.exit(0);
