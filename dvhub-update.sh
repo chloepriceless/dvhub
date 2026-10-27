@@ -99,8 +99,11 @@ g() {
 # Die Quelle (remote.*.url) bleibt, wie sie ist — auch Forks und Spiegel. Hat
 # sie eine unzulässige Form (ext::, fd::, unbekannter Transport, „-“ am Anfang),
 # wird nichts umgeschrieben: Rückgabe 2, nichts geändert, das Update hält an.
-# Ein unveränderter Klon bleibt Byte für Byte, wie er ist (keine Sicherung,
-# keine Ausgabe). Liest die Datei mit git config --file --no-includes, nie über
+# Ebenso abgelehnt: ein Fernstellenname oder branch.*.remote/
+# extensions.partialclone mit „-“ am Anfang (Teil-Klon reicht ihn als Option an
+# git fetch). Ein unveränderter Klon bleibt Byte für Byte, wie er ist (keine
+# Sicherung, keine Ausgabe); war eine Datei fremd oder für andere schreibbar,
+# kommt derselbe Inhalt als neue Datei zurück (kein offener Schreibzugriff). Liest die Datei mit git config --file --no-includes, nie über
 # das Repo selbst.
 # Rückgabe: 0 sauber oder bereinigt, 1 Fehler, 2 abgelehnt.
 dvhub_git_key_allowed() {  # <schlüssel, wie git config --list ihn schreibt>
@@ -189,19 +192,37 @@ dvhub_git_clean_file() {  # <datei> <schnappschuss> <schlüssel, zeilenweise> <s
   done <<< "$keys"
   echo "  git-Konfiguration: Original gesichert in $bak"
 }
+dvhub_git_secure() {  # <pfad> <uid> <gid> — 0 schon sicher, 3 umgestellt, 1 Fehler
+  [[ -n "$(find "$1" -maxdepth 0 \( ! -user "$2" -o -perm -0020 -o -perm -0002 \) -print 2>/dev/null)" ]] || return 0
+  { chown -h "$2:$3" "$1" && chmod go-w "$1"; } 2>/dev/null || return 1
+  return 3
+}
+dvhub_git_republish() {  # <schnappschuss> <datei> — geprüften Inhalt als neue Inode einsetzen
+  chmod 0644 "$1" && mv -f "$1" "$2"
+}
 dvhub_sanitize_git_config() {  # <programmordner>
-  local dir gd p f uid gid snap list origin entry key val why bad="" keys stamp re rc
-  local snap_cfg="" keys_cfg="" snap_wt="" keys_wt=""
+  local dir gd p f uid gid snap list origin entry key val why bad="" keys stamp re rc name line
+  local snap_cfg="" keys_cfg="" snap_wt="" keys_wt="" fresh_cfg=0 fresh_wt=0 fresh_attr=0
   dir="$(cd "$1" 2>/dev/null && pwd -P)" || return 0
   gd="$dir/.git"
   [[ -e "$gd" || -L "$gd" ]] || return 0
-  # Verweise oder ein umgelenktes Repo (commondir) ließen root fremde Dateien
-  # lesen oder schreiben — kommt in einem Klon nicht vor: ablehnen.
+  uid="$(id -u)"; gid="$(id -g)"
+  # Von außen nach innen: erst einen Ordner sichern (gehört dem Aufrufer, für
+  # andere nicht schreibbar), dann prüfen, was darin liegt — sonst legt der
+  # Dienstbenutzer zwischen Prüfen und Sichern noch etwas an (Gegenprüfung
+  # b2274d8b). Verweise oder ein umgelenktes Repo (commondir) ließen root fremde
+  # Dateien lesen oder schreiben — kommt in einem Klon nicht vor: ablehnen.
+  # Auf einer root-eigenen Box ändert das Sichern nichts.
+  rc=0; dvhub_git_secure "$dir" "$uid" "$gid" || rc=$?
+  [[ "$rc" -ne 1 ]] || { echo "  git-Konfiguration: Besitz/Rechte von $dir nicht zu setzen — nichts geändert" >&2; return 1; }
   for p in "$gd" "$gd/info"; do
     if [[ -L "$p" ]] || { [[ -e "$p" ]] && [[ ! -d "$p" ]]; }; then
       echo "  git-Konfiguration abgelehnt: $p ist kein Ordner (Verweis oder Datei) — nichts geändert, Update angehalten; bitte prüfen" >&2
       return 2
     fi
+    [[ -e "$p" ]] || continue
+    rc=0; dvhub_git_secure "$p" "$uid" "$gid" || rc=$?
+    [[ "$rc" -ne 1 ]] || { echo "  git-Konfiguration: Besitz/Rechte von $p nicht zu setzen — nichts geändert" >&2; return 1; }
   done
   for p in "$gd/config" "$gd/config.worktree" "$gd/info/attributes" "$gd/commondir"; do
     if [[ -L "$p" ]] || { [[ -e "$p" ]] && [[ ! -f "$p" || "$p" == "$gd/commondir" ]]; }; then
@@ -210,17 +231,16 @@ dvhub_sanitize_git_config() {  # <programmordner>
     fi
   done
   [[ -f "$gd/config" ]] || return 0
-  # Erst den Weg sichern (Ordner, .git, Dateien gehören dem Aufrufer, für andere
-  # nicht schreibbar), sonst könnte der Dienstbenutzer Dateien zwischen Prüfen
-  # und Schreiben austauschen. Auf einer root-eigenen Box ändert das nichts.
-  uid="$(id -u)"; gid="$(id -g)"
-  for p in "$dir" "$gd" "$gd/info" "$gd/config" "$gd/config.worktree" "$gd/info/attributes"; do
-    [[ -e "$p" ]] || continue
-    if [[ -n "$(find "$p" -maxdepth 0 \( ! -user "$uid" -o -perm -0020 -o -perm -0002 \) -print 2>/dev/null)" ]]; then
-      if ! { chown -h "$uid:$gid" "$p" && chmod go-w "$p"; } 2>/dev/null; then
-        echo "  git-Konfiguration: Besitz/Rechte von $p nicht zu setzen — nichts geändert" >&2
-        return 1
-      fi
+  # Dateien sichern. War eine fremd oder für andere schreibbar, kann der
+  # Dienstbenutzer noch einen offenen Schreib-Deskriptor halten — chown/chmod
+  # nehmen ihn nicht weg. Solche Dateien ersetzt der geprüfte Schnappschuss als
+  # neue Inode, auch wenn nichts zu entfernen war (Gegenprüfung b2274d8b).
+  for p in config config.worktree info/attributes; do
+    [[ -e "$gd/$p" ]] || continue
+    rc=0; dvhub_git_secure "$gd/$p" "$uid" "$gid" || rc=$?
+    [[ "$rc" -ne 1 ]] || { echo "  git-Konfiguration: Besitz/Rechte von $gd/$p nicht zu setzen — nichts geändert" >&2; return 1; }
+    if [[ "$rc" -eq 3 ]]; then
+      case "$p" in config) fresh_cfg=1 ;; config.worktree) fresh_wt=1 ;; *) fresh_attr=1 ;; esac
     fi
   done
   # Lesen: Schnappschuss (danach ändert niemand mehr, was geprüft wurde).
@@ -241,8 +261,24 @@ dvhub_sanitize_git_config() {  # <programmordner>
       key="${entry%%$'\n'*}"
       val=""
       [[ "$entry" == *$'\n'* ]] && val="${entry#*$'\n'}"
+      line=""
       if [[ "$key" == remote.*.url ]] && why="$(dvhub_git_url_problem "$val")"; then
-        bad="$bad  git-Konfiguration abgelehnt: $(dvhub_git_mask "$key") in .git/$f — $why"$'\n'
+        line="  git-Konfiguration abgelehnt: $(dvhub_git_mask "$key") in .git/$f — $why"
+      fi
+      # Ein Fernstellenname mit „-“ am Anfang wird beim Nachladen eines
+      # Teil-Klons als Option an git fetch gereicht (Gegenprüfung b2274d8b).
+      # Den Namen selbst nicht ausgeben (er trägt die Option).
+      case "$key" in
+        remote.*.*)
+          name="${key#remote.}"; name="${name%.*}"
+          [[ "$name" == -* ]] && line="  git-Konfiguration abgelehnt: Fernstelle remote.<…> in .git/$f — Fernstellenname beginnt mit „-“ (würde als Option gelesen)"
+          ;;
+        branch.*.remote|branch.*.pushremote|extensions.partialclone)
+          [[ "$val" == -* ]] && line="  git-Konfiguration abgelehnt: $(dvhub_git_mask "$key") in .git/$f — Fernstellenname beginnt mit „-“ (würde als Option gelesen)"
+          ;;
+      esac
+      if [[ -n "$line" ]]; then
+        case $'\n'"$bad" in *$'\n'"$line"$'\n'*) ;; *) bad="$bad$line"$'\n' ;; esac
       fi
       dvhub_git_key_allowed "$key" && continue
       case $'\n'"$keys" in *$'\n'"$key"$'\n'*) continue ;; esac
@@ -257,40 +293,50 @@ dvhub_sanitize_git_config() {  # <programmordner>
   done
   if [[ -n "$bad" ]]; then
     printf '%s' "$bad" >&2
-    echo "  git-Konfiguration: Quelle nicht umgeschrieben, nichts geändert — Update angehalten; bitte remote-URL in $gd/config prüfen" >&2
+    echo "  git-Konfiguration: Quelle nicht umgeschrieben, nichts geändert — Update angehalten; bitte remote-Einträge in $gd/config prüfen" >&2
     dvhub_git_rm "$snap_cfg" "$snap_wt"
     return 2
   fi
   stamp="$(date +%Y%m%d-%H%M%S)"
   rc=0
-  if [[ -n "$keys_cfg" ]]; then dvhub_git_clean_file "$gd/config" "$snap_cfg" "$keys_cfg" "$stamp" || rc=1; fi
-  if [[ -n "$keys_wt" && "$rc" -eq 0 ]]; then dvhub_git_clean_file "$gd/config.worktree" "$snap_wt" "$keys_wt" "$stamp" || rc=1; fi
+  if [[ -n "$keys_cfg" ]]; then dvhub_git_clean_file "$gd/config" "$snap_cfg" "$keys_cfg" "$stamp" || rc=1
+  elif [[ "$fresh_cfg" -eq 1 ]]; then dvhub_git_republish "$snap_cfg" "$gd/config" || rc=1; fi
+  if [[ "$rc" -eq 0 && -n "$snap_wt" ]]; then
+    if [[ -n "$keys_wt" ]]; then dvhub_git_clean_file "$gd/config.worktree" "$snap_wt" "$keys_wt" "$stamp" || rc=1
+    elif [[ "$fresh_wt" -eq 1 ]]; then dvhub_git_republish "$snap_wt" "$gd/config.worktree" || rc=1; fi
+  fi
   dvhub_git_rm "$snap_cfg" "$snap_wt"
-  [[ "$rc" -eq 0 ]] || return 1
+  [[ "$rc" -eq 0 ]] || { echo "  git-Konfiguration: nicht zu schreiben" >&2; return 1; }
   # .git/info/attributes: Zeilen, die Dateien einem filter-, diff- oder
   # merge-Treiber zuordnen (Kommentare bleiben).
   f="$gd/info/attributes"
   re='^[[:space:]]*[^#[:space:]].*[[:space:]](filter|diff|merge)='
-  if [[ -f "$f" ]] && grep -Eq "$re" "$f" 2>/dev/null; then
-    snap="$(mktemp "$f.dvhub-snap.XXXXXX")" || return 1
-    list="$(mktemp "$f.dvhub-new.XXXXXX")" || { rm -f "$snap"; return 1; }
+  [[ -f "$f" ]] || return 0
+  snap="$(mktemp "$f.dvhub-snap.XXXXXX")" || return 1
+  if ! cat "$f" > "$snap"; then rm -f "$snap"; echo "  git-Attribute: $f nicht lesbar" >&2; return 1; fi
+  if ! grep -Eq "$re" "$snap" 2>/dev/null; then
     rc=0
-    cat "$f" > "$snap" || rc=1
-    if [[ "$rc" -eq 0 ]]; then grep -Ev "$re" "$snap" > "$list" || [[ $? -eq 1 ]] || rc=1; fi
-    [[ "$rc" -eq 0 ]] && { chmod 0644 "$list" || rc=1; }
-    if [[ "$rc" -eq 0 ]]; then
-      p="$(dvhub_git_backup_name "$f" "$stamp")"
-      mv -f "$snap" "$p" && mv -f "$list" "$f" || rc=1
-    fi
-    if [[ "$rc" -ne 0 ]]; then
-      echo "  git-Attribute: $f nicht zu bereinigen" >&2
-      rm -f "$snap" "$list"; return 1
-    fi
-    grep -E "$re" "$p" | while IFS= read -r entry; do
-      echo "  git-Attribute: Zeile entfernt (.git/info/attributes): ${entry:0:120}"
-    done
-    echo "  git-Attribute: Original gesichert in $p"
+    if [[ "$fresh_attr" -eq 1 ]]; then dvhub_git_republish "$snap" "$f" || rc=1; fi
+    rm -f "$snap"
+    [[ "$rc" -eq 0 ]] || { echo "  git-Attribute: $f nicht zu schreiben" >&2; return 1; }
+    return 0
   fi
+  list="$(mktemp "$f.dvhub-new.XXXXXX")" || { rm -f "$snap"; return 1; }
+  rc=0
+  grep -Ev "$re" "$snap" > "$list" || [[ $? -eq 1 ]] || rc=1
+  [[ "$rc" -eq 0 ]] && { chmod 0644 "$list" || rc=1; }
+  if [[ "$rc" -eq 0 ]]; then
+    p="$(dvhub_git_backup_name "$f" "$stamp")"
+    mv -f "$snap" "$p" && mv -f "$list" "$f" || rc=1
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    echo "  git-Attribute: $f nicht zu bereinigen" >&2
+    rm -f "$snap" "$list"; return 1
+  fi
+  grep -E "$re" "$p" | while IFS= read -r entry; do
+    echo "  git-Attribute: Zeile entfernt (.git/info/attributes): ${entry:0:120}"
+  done
+  echo "  git-Attribute: Original gesichert in $p"
   return 0
 }
 # END DVHUB GIT CONFIG

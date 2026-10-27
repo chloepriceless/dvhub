@@ -414,3 +414,149 @@ test('Aufrufe: vor dem ersten git als root (install.sh, post-update.sh, dvhub-up
   assert.equal(sanitizerBlock('install.sh'), sanitizerBlock('post-update.sh'));
   assert.equal(sanitizerBlock('dvhub-update.sh'), sanitizerBlock('post-update.sh'));
 });
+
+// ── Gegenprüfung b2274d8b (3× P1) ──
+// P1: ein Fernstellenname wie „--upload-pack=<nutzlast>“ mit promisor=true —
+// beim Nachladen fehlender Objekte (Teil-Klon) reicht git den Namen an ein
+// inneres `git fetch` weiter, das ihn als Option liest: Nutzlast als root.
+function partialCloneRig() {
+  const dir = mkdtempSync(join(tmpdir(), 'dvhub-gitcfg-pc-'));
+  writeFileSync(join(dir, 'gitconfig-global'), '');
+  const env = baseEnv(dir);
+  const git = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', env }).trim();
+  const up = join(dir, 'up');
+  git(dir, 'init', '-q', '-b', 'main', up);
+  writeFileSync(join(up, 'post-update.sh'), '#!/bin/bash\n# DVHUB_ROOT_OWNED_INSTALL\n');
+  writeFileSync(join(up, 'a.txt'), 'a\n');
+  git(up, 'add', '.'); git(up, 'commit', '-qm', '1'); git(up, 'tag', 'v1.0.0');
+  writeFileSync(join(up, 'a.txt'), 'b\n'); writeFileSync(join(up, 'c.txt'), 'c\n');
+  git(up, 'add', '.'); git(up, 'commit', '-qm', '2'); git(up, 'tag', 'v1.1.0');
+  const origin = join(dir, 'origin.git');
+  git(dir, 'clone', '-q', '--bare', up, origin);
+  git(origin, 'config', 'uploadpack.allowFilter', 'true');
+  git(origin, 'config', 'uploadpack.allowAnySHA1InWant', 'true');
+  const inst = join(dir, 'opt');
+  git(dir, 'clone', '-q', '--filter=blob:none', '--no-checkout', `file://${origin}`, inst);
+  git(inst, 'checkout', '-q', '--detach', 'v1.0.0');
+  const marker = join(dir, 'MARK');
+  const pay = join(dir, 'pay.sh');
+  writeFileSync(pay, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
+  chmodSync(pay, 0o755);
+  const cfg = join(inst, '.git', 'config');
+  writeFileSync(cfg, readFileSync(cfg, 'utf8').replace('[remote "origin"]', `[remote "--upload-pack=${pay}"]`));
+  return { dir, env, git, inst, marker, cfg, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test('Gegenprobe: Fernstellenname als Option (promisor) führt beim Auschecken die Nutzlast aus — auch mit den -c-Schaltern', () => {
+  const r = partialCloneRig();
+  try {
+    spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-C', r.inst, 'checkout', '-q', '--detach', 'v1.1.0'], { encoding: 'utf8', env: r.env, timeout: 20000 });
+    assert.ok(existsSync(r.marker), 'ohne Bereinigung läuft die Nutzlast — sonst beweist der nächste Test nichts');
+  } finally { r.cleanup(); }
+});
+
+test('Fernstellenname, branch.*.remote oder extensions.partialclone mit „-“ am Anfang: abgelehnt, nichts geändert, keine Nutzlast', () => {
+  const r = partialCloneRig();
+  try {
+    const before = readFileSync(r.cfg, 'utf8');
+    const s = spawnSync('bash', ['-c', `set -euo pipefail\n${sanitizerBlock()}\ndvhub_sanitize_git_config "$1"`, 'x', r.inst], { encoding: 'utf8', env: r.env });
+    assert.equal(s.status, 2, s.stderr);
+    assert.match(s.stderr, /abgelehnt/);
+    assert.match(s.stderr, /Fernstellenname|Fernstelle/);
+    assert.doesNotMatch(s.stderr, /pay\.sh/, 'Name nicht im Log');
+    assert.equal(readFileSync(r.cfg, 'utf8'), before);
+    const h = spawnSync('bash', [UPDATE_SCRIPT, 'checkout-tag', 'v1.1.0'], {
+      encoding: 'utf8', timeout: 30000,
+      env: { ...r.env, DVHUB_UPDATE_TEST_INSTALL_DIR: r.inst, DVHUB_UPDATE_TEST_EUID: '0', DVHUB_UPDATE_TEST_LOCK: join(r.dir, 'l'), DVHUB_UPDATE_TEST_RESTART_FLAG: join(r.dir, 'f') },
+    });
+    assert.equal(h.status, 5, h.stderr);
+    assert.equal(existsSync(r.marker), false);
+  } finally { r.cleanup(); }
+  for (const [key, value] of [['branch.main.remote', '--upload-pack=/x'], ['extensions.partialclone', '-x']]) {
+    const s = setup();
+    try {
+      s.set(key, value);
+      const before = s.cfg();
+      const out = s.runSanitizer();
+      assert.equal(out.status, 2, `${key}: ${out.stderr}`);
+      assert.match(out.stderr, new RegExp(key.replace(/\./g, '\\.'), 'i'));
+      assert.equal(s.cfg(), before);
+    } finally { s.cleanup(); }
+  }
+});
+
+test('ein unveränderter Teil-Klon (--filter=blob:none) bleibt Byte für Byte gleich und lässt sich aktualisieren', () => {
+  const r = partialCloneRig();
+  try {
+    // Name zurück auf origin: ein gewöhnlicher Teil-Klon.
+    writeFileSync(r.cfg, readFileSync(r.cfg, 'utf8').replace(/\[remote "--upload-pack=[^"]*"\]/, '[remote "origin"]'));
+    const before = readFileSync(r.cfg, 'utf8');
+    const s = spawnSync('bash', ['-c', `set -euo pipefail\n${sanitizerBlock()}\ndvhub_sanitize_git_config "$1"`, 'x', r.inst], { encoding: 'utf8', env: r.env });
+    assert.equal(s.status, 0, s.stderr);
+    assert.equal(s.stdout + s.stderr, '');
+    assert.equal(readFileSync(r.cfg, 'utf8'), before);
+    const h = spawnSync('bash', [UPDATE_SCRIPT, 'checkout-tag', 'v1.1.0'], {
+      encoding: 'utf8', timeout: 30000,
+      env: { ...r.env, DVHUB_UPDATE_TEST_INSTALL_DIR: r.inst, DVHUB_UPDATE_TEST_EUID: '0', DVHUB_UPDATE_TEST_LOCK: join(r.dir, 'l'), DVHUB_UPDATE_TEST_RESTART_FLAG: join(r.dir, 'f') },
+    });
+    assert.equal(h.status, 0, h.stderr);
+    assert.equal(readFileSync(join(r.inst, 'c.txt'), 'utf8'), 'c\n');
+  } finally { r.cleanup(); }
+});
+
+// P1: auf einer Altbox kann der Dienstbenutzer einen schreibbaren Deskriptor auf
+// .git/config offen halten; chown/chmod nehmen ihn ihm nicht. Darum geht der
+// geprüfte Schnappschuss als neue Datei (neue Inode) an seinen Platz, auch wenn
+// nichts zu entfernen war — Inhalt Byte für Byte gleich, keine Sicherung.
+test('Datei war fremd/gruppen-schreibbar: geprüfter Inhalt kommt als neue Inode, Byte für Byte gleich, ohne Sicherung', () => {
+  const s = setup();
+  try {
+    const attr = join(s.inst, '.git', 'info', 'attributes');
+    writeFileSync(attr, '*.bin -diff\n');
+    s.git(s.inst, 'config', 'core.repositoryformatversion', '1');
+    s.git(s.inst, 'config', 'extensions.worktreeConfig', 'true');
+    const wt = join(s.inst, '.git', 'config.worktree');
+    writeFileSync(wt, '[core]\n\tfilemode = true\n'); // nur Erlaubtes: keine Sicherung
+    s.set('core.sparseCheckout', 'false'); // wird aus config entfernt → dort eine Sicherung
+    for (const f of [s.cfgPath, attr]) chmodSync(f, 0o664);
+    chmodSync(wt, 0o664);
+    const ino = (f) => statSync(f).ino;
+    const before = { cfg: ino(s.cfgPath), attr: ino(attr), wt: ino(wt), attrText: readFileSync(attr, 'utf8') };
+    const r = s.runSanitizer();
+    assert.equal(r.status, 0, r.stderr);
+    assert.notEqual(ino(attr), before.attr, 'attributes: neue Inode');
+    assert.equal(readFileSync(attr, 'utf8'), before.attrText);
+    assert.notEqual(ino(wt), before.wt, 'config.worktree: neue Inode');
+    assert.notEqual(ino(s.cfgPath), before.cfg, 'config: neue Inode');
+    for (const f of [s.cfgPath, attr, wt]) assert.equal(statSync(f).mode & 0o777, 0o644, f);
+    // Sicherung nur für config (dort wurde ein Schlüssel entfernt).
+    assert.deepEqual(s.backups().map((n) => n.replace(/-\d{8}-\d{6}.*/, '')), ['config.dvhub-bak']);
+    assert.deepEqual(s.leftovers(), []);
+    // Root-eigene, nur für den Eigentümer schreibbare Dateien bleiben, wo sie sind.
+    const again = { cfg: ino(s.cfgPath), attr: ino(attr), wt: ino(wt) };
+    assert.equal(s.runSanitizer().status, 0);
+    assert.deepEqual({ cfg: ino(s.cfgPath), attr: ino(attr), wt: ino(wt) }, again);
+  } finally { s.cleanup(); }
+});
+
+// P1: Prüfungen (commondir, Verweise) erst, nachdem der Elternordner gesichert
+// ist — sonst legt der Dienstbenutzer .git/commondir zwischen Prüfen und
+// Sichern an. Nachgestellt mit einer chmod-Attrappe, die genau dann zuschlägt,
+// wenn .git umgestellt wird (letzter Moment, in dem er noch schreiben darf).
+test('commondir, das während des Sicherns von .git entsteht, wird erkannt (Prüfen nach dem Sichern)', () => {
+  const s = setup();
+  try {
+    const bin = join(s.dir, 'bin');
+    mkdirSync(bin);
+    const gd = join(s.inst, '.git');
+    const realChmod = execFileSync('bash', ['-c', 'command -v chmod'], { encoding: 'utf8' }).trim();
+    writeFileSync(join(bin, 'chmod'), `#!/bin/bash\nfor a in "$@"; do [[ "$a" == */.git ]] && echo "${s.dir}/elsewhere" > "$a/commondir"; done\nexec ${realChmod} "$@"\n`);
+    chmodSync(join(bin, 'chmod'), 0o755);
+    chmodSync(gd, 0o775); // gruppen-schreibbar → wird gesichert
+    const r = spawnSync('bash', ['-c', `set -euo pipefail\n${sanitizerBlock()}\ndvhub_sanitize_git_config "$1"`, 'x', s.inst],
+      { encoding: 'utf8', env: { ...s.env, PATH: `${bin}:${process.env.PATH}` } });
+    assert.ok(existsSync(join(gd, 'commondir')), 'Attrappe hat zugeschlagen');
+    assert.equal(r.status, 2, `${r.status} ${r.stderr}`);
+    assert.match(r.stderr, /commondir/);
+  } finally { s.cleanup(); }
+});
