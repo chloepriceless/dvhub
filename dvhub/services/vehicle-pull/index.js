@@ -132,6 +132,7 @@ export function createVehiclePull(ctx, deps = {}) {
   const now = deps.now || Date.now;
   const blank = () => ({ socPct: null, socAt: null, plugged: null, pluggedAt: null, error: null, warning: null, lastAttemptAt: null, lastOkAt: null, running: false });
   const st = { http: blank(), homeassistant: blank() };
+  const sig = { http: null, homeassistant: null };
   let timer = null;
 
   async function getJson(url, token, timeoutMs) {
@@ -149,7 +150,13 @@ export function createVehiclePull(ctx, deps = {}) {
         throw new Error(`nicht erreichbar: ${e?.cause?.code || e?.message || e}`, { cause: e });
       }
       if (res.status >= 300 && res.status < 400) throw new Error(`Weiterleitung (HTTP ${res.status}) wird nicht verfolgt`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const e = new Error(`HTTP ${res.status}`);
+        // 4xx: die Gegenstelle hat geantwortet (Entitaet unbekannt, Token
+        // falsch) — der Wert ist dann unbekannt, nicht „noch der alte“.
+        e.answered = res.status >= 400 && res.status < 500;
+        throw e;
+      }
       // Groesse beim Lesen begrenzen, nicht erst danach: eine falsche Adresse
       // (grosse Datei, endloser Strom) soll den Speicher nicht fuellen.
       if (Number(res.headers?.get?.('content-length')) > MAX_BODY) { ac.abort(); throw new Error('Antwort zu groß (über 256 KB)'); }
@@ -212,14 +219,14 @@ export function createVehiclePull(ctx, deps = {}) {
   }
 
   async function haEntity(s, entity) {
-    if (!HA_ENTITY_RE.test(entity)) throw new Error(`Entität „${entity}“ ungültig (Form: sensor.name)`);
+    if (!HA_ENTITY_RE.test(entity)) { const e = new Error(`Entität „${entity}“ ungültig (Form: sensor.name)`); e.answered = true; throw e; }
     const doc = await getJson(`${s.url}/api/states/${entity}`, s.token, s.timeoutMs);
     const state = doc?.state;
     if (state === undefined || state === null || state === 'unavailable' || state === 'unknown') {
       // HA hat geantwortet, kennt den Wert aber nicht → Wert ist unbekannt
       // (anders als „HA nicht erreichbar“, dann bleibt der letzte Wert).
       const e = new Error(`Entität „${entity}“ ist „${state ?? 'leer'}“`);
-      e.haAnswered = true;
+      e.answered = true;
       throw e;
     }
     const at = parseTime(doc.last_reported) ?? parseTime(doc.last_updated) ?? now();
@@ -230,8 +237,9 @@ export function createVehiclePull(ctx, deps = {}) {
     // Beide Entitaeten unabhaengig: viele Fahrzeug-Integrationen melden den
     // Ladestand „unavailable“, sobald das Auto weg ist — „angesteckt“ muss
     // trotzdem neu gelesen werden, sonst bliebe ein altes „on“ stehen.
-    // HA antwortet mit „unavailable“/unlesbar → Wert unbekannt (null). HA
-    // nicht erreichbar / HTTP-Fehler → letzter Wert bleibt (altert ueber den
+    // HA antwortet mit „unavailable“/unlesbar, 4xx (Entitaet unbekannt, Token
+    // falsch) → Wert unbekannt (null). HA nicht erreichbar / 5xx / Zeitlimit
+    // → letzter Wert bleibt (altert ueber den
     // Zeitpunkt aus), nur der Fehler wird gemeldet — ein HA-Neustart soll das
     // Auto nicht abmelden.
     try {
@@ -241,7 +249,7 @@ export function createVehiclePull(ctx, deps = {}) {
       else Object.assign(out, { socPct: pct, socAt: soc.at, error: null, lastOkAt: now() });
     } catch (e) {
       out.error = String(e?.message || e);
-      if (e?.haAnswered) Object.assign(out, { socPct: null, socAt: null });
+      if (e?.answered) Object.assign(out, { socPct: null, socAt: null });
     }
     if (s.pluggedEntity) {
       try {
@@ -250,7 +258,7 @@ export function createVehiclePull(ctx, deps = {}) {
         Object.assign(out, { plugged, pluggedAt: plugged === null ? null : p.at });
       } catch (e) {
         out.warning = e.message;
-        if (e?.haAnswered) Object.assign(out, { plugged: null, pluggedAt: null });
+        if (e?.answered) Object.assign(out, { plugged: null, pluggedAt: null });
       }
     } else Object.assign(out, { plugged: null, pluggedAt: null });
   }
@@ -259,8 +267,11 @@ export function createVehiclePull(ctx, deps = {}) {
   async function refresh(kind) {
     if (!VEHICLE_PULL_KINDS.includes(kind)) return;
     const s = settings(ctx.getCfg?.(), kind);
+    if (!s.configured) { st[kind] = blank(); sig[kind] = null; return; }
+    // Andere Adresse/Entitaet/Pfade: Werte der alten Einstellung verwerfen.
+    const now_sig = JSON.stringify([s.url, s.token, s.socPath, s.pluggedPath, s.timePath, s.socEntity, s.pluggedEntity]);
+    if (sig[kind] !== now_sig) { st[kind] = blank(); sig[kind] = now_sig; }
     const out = st[kind];
-    if (!s.configured) { st[kind] = blank(); return; }
     if (out.running) return;
     out.running = true;
     out.lastAttemptAt = now();
@@ -269,8 +280,10 @@ export function createVehiclePull(ctx, deps = {}) {
       if (kind === 'http') await refreshHttp(s, out);
       else await refreshHa(s, out);
     } catch (e) {
-      // Abruf gescheitert: letzter Wert bleibt (er altert ueber socAt aus).
+      // Nicht erreichbar / 5xx / Zeitlimit: letzter Wert bleibt (er altert
+      // ueber socAt aus). 4xx: die Gegenstelle kennt den Wert nicht → weg.
       out.error = String(e?.message || e);
+      if (e?.answered) Object.assign(out, { socPct: null, socAt: null, plugged: null, pluggedAt: null });
     } finally {
       out.running = false;
     }

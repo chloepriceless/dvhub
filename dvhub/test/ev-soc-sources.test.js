@@ -296,3 +296,63 @@ describe('Claude-Befunde Runde 4 (Home Assistant faellt aus)', () => {
     assert.match(st.error, /nicht erreichbar/);
   });
 });
+
+describe('Claude-Befunde Runde 5 (Abruf-Quellen)', () => {
+  it('HA antwortet 404 (Entitaet vertippt): alte Werte verfallen sofort', async () => {
+    const { base } = await stub((req) => {
+      if (req.url === '/api/states/sensor.soc') return { body: { state: '60', last_reported: '2026-10-27T10:00:00Z' } };
+      if (req.url === '/api/states/binary_sensor.plug') return { body: { state: 'on', last_updated: '2026-10-27T10:00:00Z' } };
+      return { status: 404, body: { message: 'Entity not found.' } };
+    });
+    const opt = { evHaUrl: base, evHaToken: 't', evHaSocEntity: 'sensor.soc', evHaPluggedEntity: 'binary_sensor.plug' };
+    const ctx = pullCtx(opt);
+    const pull = createVehiclePull(ctx, { now: () => Date.parse('2026-10-27T10:05:00Z') });
+    await pull.refresh('homeassistant');
+    assert.equal(pull.getState('homeassistant').plugged, true);
+    // gleiche Einstellungen, aber HA meldet die Entitaeten jetzt nicht mehr (404)
+    ctx.getCfg().optimizer.evHaPluggedEntity = 'binary_sensor.plug';
+    const stub404 = createVehiclePull(pullCtx({ ...opt, evHaSocEntity: 'sensor.weg', evHaPluggedEntity: 'binary_sensor.plgu' }), { now: () => Date.parse('2026-10-27T10:05:00Z') });
+    await stub404.refresh('homeassistant');
+    assert.equal(stub404.getState('homeassistant').socPct, null);
+    assert.equal(stub404.getState('homeassistant').plugged, null);
+  });
+
+  it('Einstellung geaendert (andere Entitaet): Zustand der alten Entitaet wird verworfen', async () => {
+    const { base } = await stub((req) => {
+      if (req.url === '/api/states/sensor.soc') return { body: { state: '60', last_reported: '2026-10-27T10:00:00Z' } };
+      if (req.url === '/api/states/binary_sensor.plug') return { body: { state: 'on', last_updated: '2026-10-27T10:00:00Z' } };
+      return { status: 404, body: { message: 'Entity not found.' } };
+    });
+    const ctx = pullCtx({ evHaUrl: base, evHaToken: 't', evHaSocEntity: 'sensor.soc', evHaPluggedEntity: 'binary_sensor.plug' });
+    const pull = createVehiclePull(ctx, { now: () => Date.parse('2026-10-27T10:05:00Z') });
+    await pull.refresh('homeassistant');
+    assert.equal(pull.getState('homeassistant').plugged, true);
+    ctx.getCfg().optimizer.evHaPluggedEntity = 'binary_sensor.plgu';   // Tippfehler
+    ctx.getCfg().optimizer.evHaSocEntity = 'sensor.sco';
+    await pull.refresh('homeassistant');
+    assert.equal(pull.getState('homeassistant').plugged, null);
+    assert.equal(pull.getState('homeassistant').socPct, null);
+    assert.match(pull.getState('homeassistant').error, /HTTP 404/);
+  });
+});
+
+describe('HTTP-Abruf: 4xx verwirft, Netzfehler behaelt', () => {
+  it('erst 63 %, dann 404 → kein Wert; erst 63 %, dann nicht erreichbar → 63 % bleibt', async () => {
+    let status = 200;
+    const { base } = await stub(() => (status === 200 ? { body: { soc: 63, plugged: true } } : { status, body: {} }));
+    const pull = createVehiclePull(pullCtx({ evHttpUrl: `${base}/car`, evHttpSocPath: 'soc', evHttpPluggedPath: 'plugged' }));
+    await pull.refresh('http');
+    status = 404;
+    await pull.refresh('http');
+    assert.equal(pull.getState('http').socPct, null);
+    assert.equal(pull.getState('http').plugged, null);
+    status = 200;
+    await pull.refresh('http');
+    assert.equal(pull.getState('http').socPct, 63);
+    await new Promise((r) => server.close(r)); server = null;
+    await pull.refresh('http');
+    assert.equal(pull.getState('http').socPct, 63);
+    assert.equal(pull.getState('http').plugged, true);
+    assert.match(pull.getState('http').error, /nicht erreichbar/);
+  });
+});
