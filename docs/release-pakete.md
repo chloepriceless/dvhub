@@ -218,6 +218,29 @@ v0.4.x-Boxen: Ihre Oberfläche ruft nach dem git-Update kein `post-update.sh` al
   v0.4.2 mit ihrem eigenen `install.sh` installiert, dann Update über die alte Oberfläche, Umstellung auf das Paket,
   weiteres Paket-Update und Rückweg; Negativfälle. Ergebnisse und Protokolle unter `~/Projects/release-tests/`.
 
+## Ergebnisse (27.10.2026, Prüfstand Debian bookworm arm64, systemd)
+
+Pakete aus diesem Branch (Test-Releases 1.0.9/1.0.10/1.0.11, Wegwerf-Schlüssel), Protokolle unter
+`~/Projects/release-tests/runs/`. Jede Version mit ihrem eigenen `install.sh` installiert, über die *alte*
+Oberfläche per git auf die Brücke 1.0.9, automatische Umstellung, Paket-Update auf 1.0.10 über die neue Oberfläche,
+Rückweg auf 1.0.9; Marker in Config, Daten, Datenbank und Box-Zustand, Kanal und Config-Schlüssel geprüft.
+
+- v1.0.0 … v1.0.8 (stable), v1.0.0 und v1.0.8 (dev), v0.4.2: alle umgestellt, aktualisiert, zurückgerollt, Daten und
+  Kanal erhalten. Umstellung ~9 s, Paket-Update ~9 s, Rückweg ~8 s (ohne Downloadzeit über das Netz; lokal 24 MB).
+- v0.4.2: braucht wie beim Sprung 0.4 → 1.0 einmal den Installer (die alte Oberfläche ruft kein `post-update.sh`
+  als root auf, und der neue Stand startet ohne `apiToken` nicht) — danach normal.
+- Negativfälle (v1.0.8): verändertes Paket, fremde Signatur, Download bricht immer ab, Platte voll → abgelehnt,
+  Box unverändert; Download bricht einmal ab → setzt fort; neue Version startet nicht → nach ~20 s zurück.
+- armv7 (Debian bookworm armhf unter QEMU, v1.0.8 → 1.0.9 per Installer → Paket → 1.0.10 → zurück): ok; unter
+  Emulation Umstellung 38 s, Update 30 s, Rückweg 25 s. NodeSource baut für armhf nicht mehr — `install.sh` kann dort
+  Node 22 nicht selbst holen (Prüfstand nimmt das Archiv von nodejs.org).
+- Stromausfall mitten im Verschieben (echter Container-Neustart): `recover` läuft vor `post-update.sh`, git-Stand
+  gesund, danach normale Umstellung.
+- Altfehler gesehen (nicht durch die Pakete): Die Oberfläche bis v1.0.8 räumt beim git-Update `forecast-venv/` per
+  `git stash --include-untracked` weg (`.gitignore` kannte es nicht); behoben seit 25.10. auf main.
+- Größe: git-Installation 164 MB / ~7000 Dateien (davon `.git` 56 MB, `node_modules` 64 MB) → je Release 93 MB
+  entpackt / 6860 Dateien (≈420 eigene, Rest `node_modules`, dazu 14 MB EEBUS-Binary), Download 24–25 MB.
+
 ## Einmalig für die Eigentümerin
 
 1. **Schlüssel anlegen** (nur auf dem Mac, nie in ein Repo):
