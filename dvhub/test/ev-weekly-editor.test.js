@@ -28,5 +28,7 @@ describe('Wochenplan-Editor', () => {
     assert.match(W.validate([{ day: 3, arrival: '20:00', departure: '' }]), /Mittwoch/);
     assert.match(W.validate([{ day: 1, arrival: '', departure: '' }], { enabled: true }), /mindestens eine Abfahrt/i);
     assert.equal(W.validate([{ day: 1, arrival: '20:00', departure: '05:00' }], { enabled: true }), null);
+    // nur eine einmalige Abfahrt, Wochenplan leer: erlaubt (der Server kennt das)
+    assert.equal(W.validate([{ day: 1, arrival: '', departure: '' }], { enabled: true, hasOnce: true }), null);
   });
 });

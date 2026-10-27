@@ -278,3 +278,21 @@ describe('Claude-Befunde Runde 3 (Abruf-Quellen)', () => {
     assert.equal(pull.getState('http').socPct, null);
   });
 });
+
+describe('Claude-Befunde Runde 4 (Home Assistant faellt aus)', () => {
+  it('HA nicht erreichbar: letzter Ladestand und „angesteckt“ bleiben, Fehler sichtbar', async () => {
+    const { base } = await stub((req) => {
+      if (req.url === '/api/states/sensor.soc') return { body: { state: '60', last_reported: '2026-10-27T10:00:00Z' } };
+      if (req.url === '/api/states/binary_sensor.plug') return { body: { state: 'on', last_updated: '2026-10-27T10:00:00Z' } };
+      return { status: 404, body: {} };
+    });
+    const pull = createVehiclePull(pullCtx({ evHaUrl: base, evHaToken: 't', evHaSocEntity: 'sensor.soc', evHaPluggedEntity: 'binary_sensor.plug' }), { now: () => Date.parse('2026-10-27T10:05:00Z') });
+    await pull.refresh('homeassistant');
+    await new Promise((r) => server.close(r)); server = null;   // HA startet neu
+    await pull.refresh('homeassistant');
+    const st = pull.getState('homeassistant');
+    assert.equal(st.socPct, 60);
+    assert.equal(st.plugged, true);
+    assert.match(st.error, /nicht erreichbar/);
+  });
+});

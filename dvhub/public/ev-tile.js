@@ -618,7 +618,7 @@
     const tv = Number(el('evTarget').value);
     if (!isFinite(tv) || tv < 0 || (mode === 'percent' && tv > 100)) { msg('Ziel: ' + (mode === 'percent' ? '0–100 %' : 'Zahl ≥ 0'), true); return; }
     const plan = window.DVhubEvWeekly ? window.DVhubEvWeekly.read(el('evWeeklyGrid')) : draft.weeklyPlan;
-    const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(plan, { enabled: draft.enabled }) : null;
+    const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(plan, { enabled: draft.enabled, hasOnce: !!el('evDepOnce').value }) : null;
     if (err) { msg(err, true); return; }
     const km = el('evCommuteKm').value === '' ? 0 : Number(el('evCommuteKm').value);
     if (!isFinite(km) || km < 0 || km > 1000) { msg('Heimweg: 0–1000 km', true); return; }

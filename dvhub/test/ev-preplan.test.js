@@ -18,6 +18,7 @@ import { createEosConfigSync, buildEosElectricVehicles } from '../services/optim
 import { computeEvRegistration, evSocForEos, PREPLAN_GRACE_MS } from '../services/optimizer/ev-registration.js';
 import { createEvWatch } from '../services/optimizer/ev-watch.js';
 import { createEosForecastBridge } from '../services/optimizer/eos-forecast-bridge.js';
+import { createEvSocMemory } from '../services/optimizer/ev-soc.js';
 
 const TZ = 'Europe/Berlin';
 const HOUR = 3600_000;
@@ -402,4 +403,30 @@ describe('Claude-Befunde Runde 3 (Minuten-Wache)', () => {
     assert.ok(calls.includes('sync'));
     assert.deepEqual(replans, ['ev_registration']);
   });
+});
+
+describe('Claude-Befunde Runde 4 (Minuten-Wache)', () => {
+  for (const onlyWhenPlugged of [true, false]) {
+    it(`Anstecken (nur angesteckt planen = ${onlyWhenPlugged}): genau EIN Abgleich + Neuplan ueber fuenf Minuten`, async () => {
+      const now = Date.now();
+      let connected = false;
+      const ctx = ctxFor(1, { opt: { evWeeklyPlan: planAround(now, 2 * HOUR, 10 * HOUR), evPlanOnlyWhenPlugged: onlyWhenPlugged }, teslaPct: null });
+      ctx.evccIntegration = { getLoadpoints: () => [{ id: 1, connected, vehicleSocPct: connected ? 55 : 0 }] };
+      ctx.evSocMemory = createEvSocMemory();
+      ctx.evSocMemory.observe({ pct: 70, source: 'evcc', atMs: now - 15 * HOUR });
+      ctx.state.optimizer.eos = { supported: true, evChargeStart: true };
+      const syncs = []; const replans = [];
+      const watch = createEvWatch({
+        ctx, requestReplan: (w) => replans.push(w), pushLog: () => {},
+        eosConfigSync: { sync: async () => { syncs.push('sync'); return { ok: true }; }, syncEv: async () => ({ ok: true }) },
+      });
+      await watch.tick(now);
+      await watch.tick(now + 60_000);
+      assert.deepEqual(replans, []);
+      connected = true;
+      for (let i = 2; i <= 6; i += 1) await watch.tick(now + i * 60_000);
+      assert.equal(replans.length, 1, JSON.stringify(replans));
+      assert.equal(syncs.length, 1);
+    });
+  }
 });

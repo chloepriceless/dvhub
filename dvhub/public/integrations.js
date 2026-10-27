@@ -2987,7 +2987,7 @@
       wallbox: wallboxBody()
     };
     // Wochenplan vor dem Senden pruefen (deutsche Meldung statt Server-Fehler).
-    var depErr = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(body.eos.departure.weeklyPlan || [], { enabled: body.eos.departure.enabled }) : null;
+    var depErr = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(body.eos.departure.weeklyPlan || [], { enabled: body.eos.departure.enabled, hasOnce: !!body.eos.departure.once }) : null;
     if (depErr) {
       if (banner) { banner.textContent = 'Wochenplan: ' + depErr; banner.hidden = false; }
       return;

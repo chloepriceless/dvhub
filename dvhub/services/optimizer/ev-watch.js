@@ -36,20 +36,27 @@ export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () 
     if (opt.eosOptimizeEv !== true || !opt.eosProxy?.enabled) { lastKey = null; regTracker = createEvPlugTracker({ stableTicks }); return { action: 'off' }; }
 
     const plug = plugTracker.update(resolveEvPlugged(ctx));
-    if (opt.evPlanOnlyWhenPlugged !== false && plug.changed) {
-      pushLog('ev_plug_change', { from: plug.from, plugged: plug.stable });
-      syncPending = 5;
-      pendingReason = plug.stable ? 'ev_plugged' : 'ev_unplugged';
-    }
 
     const reg = computeEvRegistration(ctx, cfg, {
       chargeStartSupported: ctx.state?.optimizer?.eos?.evChargeStart === true,
       plugged: plugTracker.stable,
       nowMs,
     });
+    const regKey = `${reg.register}|${reg.mode === 'preplan'}`;
     const regPrev = regTracker.stable;
-    const regChange = regTracker.update(`${reg.register}|${reg.mode === 'preplan'}`);
-    if (regChange.changed && syncPending === 0) {
+    if (plug.changed) {
+      // Steckwechsel (schon entprellt): EIN Abgleich + Neuplan — mit „nur
+      // angesteckt planen“ immer, sonst nur, wenn sich die Anmeldung aendert.
+      // Die Anmeldungs-Wache bekommt den neuen Stand gleich mit, sonst feuerte
+      // sie denselben Wechsel eine Minute spaeter ein zweites Mal.
+      if (opt.evPlanOnlyWhenPlugged !== false || (regPrev !== undefined && regPrev !== regKey)) {
+        pushLog('ev_plug_change', { from: plug.from, plugged: plug.stable });
+        syncPending = 5;
+        pendingReason = plug.stable ? 'ev_plugged' : 'ev_unplugged';
+      }
+      regTracker = createEvPlugTracker({ stableTicks });
+      regTracker.update(regKey);
+    } else if (regTracker.update(regKey).changed && syncPending === 0) {
       const wasPreplan = String(regPrev).endsWith('|true');
       const isPreplan = reg.mode === 'preplan';
       pushLog('ev_registration_change', { mode: reg.mode, register: reg.register, arrivalAt: reg.arrivalAt, preplanBlocked: reg.preplanBlocked, reason: reg.reason });

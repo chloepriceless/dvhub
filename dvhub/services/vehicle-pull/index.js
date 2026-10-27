@@ -216,7 +216,11 @@ export function createVehiclePull(ctx, deps = {}) {
     const doc = await getJson(`${s.url}/api/states/${entity}`, s.token, s.timeoutMs);
     const state = doc?.state;
     if (state === undefined || state === null || state === 'unavailable' || state === 'unknown') {
-      throw new Error(`Entität „${entity}“ ist „${state ?? 'leer'}“`);
+      // HA hat geantwortet, kennt den Wert aber nicht → Wert ist unbekannt
+      // (anders als „HA nicht erreichbar“, dann bleibt der letzte Wert).
+      const e = new Error(`Entität „${entity}“ ist „${state ?? 'leer'}“`);
+      e.haAnswered = true;
+      throw e;
     }
     const at = parseTime(doc.last_reported) ?? parseTime(doc.last_updated) ?? now();
     return { state, at };
@@ -226,23 +230,27 @@ export function createVehiclePull(ctx, deps = {}) {
     // Beide Entitaeten unabhaengig: viele Fahrzeug-Integrationen melden den
     // Ladestand „unavailable“, sobald das Auto weg ist — „angesteckt“ muss
     // trotzdem neu gelesen werden, sonst bliebe ein altes „on“ stehen.
-    let socError = null;
+    // HA antwortet mit „unavailable“/unlesbar → Wert unbekannt (null). HA
+    // nicht erreichbar / HTTP-Fehler → letzter Wert bleibt (altert ueber den
+    // Zeitpunkt aus), nur der Fehler wird gemeldet — ein HA-Neustart soll das
+    // Auto nicht abmelden.
     try {
       const soc = await haEntity(s, s.socEntity);
       const pct = parseSocPct(soc.state);
-      if (pct === null) socError = `Entität „${s.socEntity}“ meldet „${soc.state}“ — kein Ladestand 0–100 %`;
+      if (pct === null) Object.assign(out, { socPct: null, socAt: null, error: `Entität „${s.socEntity}“ meldet „${soc.state}“ — kein Ladestand 0–100 %` });
       else Object.assign(out, { socPct: pct, socAt: soc.at, error: null, lastOkAt: now() });
     } catch (e) {
-      socError = String(e?.message || e);
+      out.error = String(e?.message || e);
+      if (e?.haAnswered) Object.assign(out, { socPct: null, socAt: null });
     }
-    if (socError) Object.assign(out, { socPct: null, socAt: null, error: socError });
     if (s.pluggedEntity) {
       try {
         const p = await haEntity(s, s.pluggedEntity);
         const plugged = parsePlugged(p.state);
         Object.assign(out, { plugged, pluggedAt: plugged === null ? null : p.at });
       } catch (e) {
-        Object.assign(out, { plugged: null, pluggedAt: null, warning: e.message });
+        out.warning = e.message;
+        if (e?.haAnswered) Object.assign(out, { plugged: null, pluggedAt: null });
       }
     } else Object.assign(out, { plugged: null, pluggedAt: null });
   }

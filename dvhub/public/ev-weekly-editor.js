@@ -131,13 +131,14 @@
     return finish();
   }
 
-  /** Fehlertext oder null. opts.enabled: eingeschalteter Plan braucht eine Abfahrt. */
+  /** Fehlertext oder null. opts.enabled: eingeschalteter Plan braucht eine Abfahrt (oder opts.hasOnce). */
   function validate(plan, opts) {
     for (let i = 0; i < plan.length; i += 1) {
       const e = plan[i];
       if (e.arrival && !e.departure) return DAY_NAMES[e.day - 1] + ': Ankunft ohne Abfahrt — bitte eine Abfahrt eintragen.';
     }
-    if (opts && opts.enabled && !plan.some(function (e) { return e.departure; })) return 'Mindestens eine Abfahrt eintragen.';
+    // Eine einmalige Abfahrt allein genuegt (der Server rechnet damit).
+    if (opts && opts.enabled && !opts.hasOnce && !plan.some(function (e) { return e.departure; })) return 'Mindestens eine Abfahrt eintragen.';
     return null;
   }
 
