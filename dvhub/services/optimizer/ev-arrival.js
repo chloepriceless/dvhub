@@ -28,6 +28,7 @@ export const EV_LIVE_MAX_AGE_MS = 12 * 3600_000;
 export const EV_LAST_KNOWN_MAX_AGE_MS = 7 * 24 * 3600_000;
 // Quellen, die den Ladestand auch liefern, wenn das Auto nicht steckt.
 const CAR_API_SOURCES = new Set(['teslamate', 'evccvehicle', 'mqtt']);
+const CHECKPOINT_MS = 3600_000;
 
 const num = (v) => (v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
 const validPct = (v) => { const n = num(v); return n !== null && n >= 0 && n <= 100 ? n : null; };
@@ -110,7 +111,10 @@ export function readEvSocReading(ctx, nowMs = Date.now()) {
     const lpId = Number(opt.evEvccLoadpoint) || 1;
     const lp = (ctx?.evccIntegration?.getLoadpoints?.() || []).find((l) => l.id === lpId);
     const pct = lp?.connected === true ? validPct(lp.vehicleSocPct) : null;
-    if (pct !== null) out.push({ pct, source: 'evcc', atMs: nowMs });
+    // Zeitpunkt der letzten erfolgreichen Abfrage: faellt evcc aus, bleibt die
+    // Liste stehen — „jetzt“ machte einen alten Wert immer wieder frisch.
+    const polled = toMs(ctx?.evccIntegration?.getStatus?.()?.lastPolledAt);
+    if (pct !== null) out.push({ pct, source: 'evcc', atMs: polled && polled > 0 ? polled : nowMs });
   }
   if (use('evccvehicle')) {
     const v = ctx?.vehicleEvcc?.getState?.();
@@ -123,7 +127,10 @@ export function readEvSocReading(ctx, nowMs = Date.now()) {
     if (pct !== null) out.push({ pct, source: 'mqtt', atMs: toMs(m.socAt) });
   }
   const mem = ctx?.evSocMemory?.get?.();
-  if (mem && validPct(mem.pct) !== null && (wanted === 'auto' || mem.source === wanted)) out.push(mem);
+  // Gewaehlt „evcc“ heisst „die Wallbox“ — auch eine direkt angebundene
+  // (Quelle dann openevse, goe …).
+  const memMatches = (src) => wanted === 'auto' || src === wanted || (wanted === 'evcc' && !CAR_API_SOURCES.has(src));
+  if (mem && validPct(mem.pct) !== null && memMatches(mem.source)) out.push(mem);
 
   if (!out.length) return null;
   // Juengster zuerst; ohne Zeitpunkt ganz hinten.
@@ -140,10 +147,12 @@ export function readEvSocReading(ctx, nowMs = Date.now()) {
  */
 export function createEvSocMemory({ filePath = null } = {}) {
   let last = null;
+  let writtenAtMs = null;
   if (filePath) {
     try {
       const j = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       if (validPct(j?.pct) !== null && typeof j.source === 'string') last = { pct: Number(j.pct), source: j.source, atMs: toMs(j.atMs) };
+      writtenAtMs = last?.atMs ?? null;
     } catch { /* noch keine Datei */ }
   }
   return {
@@ -153,8 +162,11 @@ export function createEvSocMemory({ filePath = null } = {}) {
       if (last && last.atMs !== null && (atMs === null || atMs < last.atMs)) return;
       const changed = !last || last.pct !== reading.pct || last.source !== reading.source;
       last = { pct: Number(reading.pct), source: String(reading.source || ''), atMs };
-      if (changed && filePath) {
-        try { fs.writeFileSync(filePath, JSON.stringify(last)); } catch { /* Anzeige-Hilfe, kein Fehlerfall */ }
+      // Gleicher Wert: den Zeitpunkt hoechstens stuendlich sichern — sonst
+      // kaeme nach einem Neustart ein zu alter Zeitpunkt zurueck.
+      const checkpoint = atMs !== null && (writtenAtMs === null || atMs - writtenAtMs >= CHECKPOINT_MS);
+      if ((changed || checkpoint) && filePath) {
+        try { fs.writeFileSync(filePath, JSON.stringify(last)); writtenAtMs = atMs; } catch { /* Anzeige-Hilfe, kein Fehlerfall */ }
       }
     },
     get() { return last ? { ...last } : null; }

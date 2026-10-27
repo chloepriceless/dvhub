@@ -239,3 +239,31 @@ describe('Wochenplan: Eingaben pruefen', () => {
     assert.equal(both.patch.evWeeklyPlan.length, 7, 'mit Plan gewinnt der Plan');
   });
 });
+
+describe('Codex-Befunde Runde 1 (Wochenplan)', () => {
+  test('verschobene Abfahrt behaelt ihr Fenster: Fr 15:00 → Sa 10:00 statt 09:00, Ziel 100 % bleibt nach 08:50', () => {
+    // einmalig Sa 26.09. 10:00 CEST = 08:00Z; jetzt Sa 08:51 CEST = 06:51Z
+    const r = resolveEvDeparture(cfg({ evDepartureOnce: '2026-09-26T08:00:00.000Z' }), at('2026-09-26T06:51:00Z'));
+    assert.equal(r.source, 'once');
+    assert.equal(r.departureAt, '2026-09-26T08:00:00.000Z');
+    assert.equal(r.arrivalAt, '2026-09-25T13:00:00.000Z');
+    assert.equal(r.targetSocPct, 100);
+    assert.equal(r.tripStartAt, '2026-09-25T03:00:00.000Z', 'die ersetzte Sa-09:00-Abfahrt ist keine Fahrt');
+  });
+
+  test('Zeitzone oestlich von UTC+12 (Pacific/Auckland): Mo 20:00 → Di 05:00, nicht Mi', () => {
+    // NZDT = UTC+13. Mo 26.10.2026 20:00 = 07:00Z; Di 27.10. 05:00 = Mo 16:00Z; jetzt Mo 10:00 NZDT = So 21:00Z
+    const c = cfg({ evWeeklyPlan: [{ day: 1, arrival: '20:00', departure: '05:00' }] });
+    c.schedule.timezone = 'Pacific/Auckland';
+    const r = resolveEvDeparture(c, at('2026-10-25T21:00:00Z'));
+    assert.equal(r.arrivalAt, '2026-10-26T07:00:00.000Z');
+    assert.equal(r.departureAt, '2026-10-26T16:00:00.000Z');
+  });
+
+  test('Ankunft in der Luecke der Zeitumstellung (So 29.03. 02:30): keine Ankunft nach der Abfahrt', () => {
+    const plan = [{ day: 7, arrival: '02:30', departure: '03:00' }];
+    const r = resolveEvDeparture(cfg({ evWeeklyPlan: plan }), at('2026-03-28T12:00:00Z'));
+    assert.equal(r.departureAt, '2026-03-29T01:00:00.000Z');
+    assert.equal(r.arrivalAt, null);
+  });
+});

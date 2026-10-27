@@ -99,8 +99,7 @@ export function nextWeeklyDeparture({ time, days, timeZone, nowMs, leadMs = DEPA
   const today = zonedDate(nowMs, timeZone);
   // Bis zu 8 Tage voraus: heute (falls noch nicht vorbei) plus eine volle Woche.
   for (let i = 0; i <= 7; i += 1) {
-    const noonUtc = Date.UTC(today.year, today.month - 1, today.day + i, 12);
-    const d = zonedDate(noonUtc, timeZone);
+    const d = shiftDay(today, i);
     if (!wanted.includes(d.isoWeekday)) continue;
     const at = zonedToUtcMs(d.year, d.month, d.day, t.h, t.min, timeZone);
     if (at - leadMs > nowMs) return at;
@@ -150,9 +149,14 @@ export function effectiveWeeklyPlan(opt = {}) {
   return WEEK_DAYS.map((d) => ({ ...empty(d), departure: time && days.includes(d) ? time : '' }));
 }
 
-/** Kalendertag + Offset → { year, month, day } (ueber Monats-/Jahresgrenzen). */
-function shiftDay(d, offset, timeZone) {
-  return zonedDate(Date.UTC(d.year, d.month - 1, d.day + offset, 12), timeZone);
+/**
+ * Kalendertag + Offset → { year, month, day, isoWeekday } (ueber Monats-/
+ * Jahresgrenzen). Reine Kalenderrechnung, OHNE Zeitzone: ueber 12:00 UTC
+ * zurueckzurechnen ergaebe oestlich von UTC+12 schon den Folgetag.
+ */
+function shiftDay(d, offset) {
+  const t = new Date(Date.UTC(d.year, d.month - 1, d.day + offset));
+  return { year: t.getUTCFullYear(), month: t.getUTCMonth() + 1, day: t.getUTCDate(), isoWeekday: ((t.getUTCDay() + 6) % 7) + 1 };
 }
 
 /**
@@ -163,7 +167,7 @@ function planWindows(plan, timeZone, nowMs) {
   const today = zonedDate(nowMs, timeZone);
   const out = [];
   for (let i = -8; i <= 8; i += 1) {
-    const d = shiftDay(today, i, timeZone);
+    const d = shiftDay(today, i);
     const e = plan[d.isoWeekday - 1];
     const dep = parseTime(e?.departure);
     if (!dep) continue;
@@ -173,9 +177,13 @@ function planWindows(plan, timeZone, nowMs) {
     if (arr) {
       arrivalMs = zonedToUtcMs(d.year, d.month, d.day, arr.h, arr.min, timeZone);
       // Abfahrt nicht nach der Ankunft → am Folgetag (20:00 → 05:00).
-      if (dep.h * 60 + dep.min <= arr.h * 60 + arr.min) depDay = shiftDay(d, 1, timeZone);
+      if (dep.h * 60 + dep.min <= arr.h * 60 + arr.min) depDay = shiftDay(d, 1);
     }
     const departureMs = zonedToUtcMs(depDay.year, depDay.month, depDay.day, dep.h, dep.min, timeZone);
+    // Ankunft in der Luecke der Zeitumstellung (So 02:30 gibt es im Maerz
+    // nicht, sie rutscht auf 03:30) kann hinter die Abfahrt fallen — dann
+    // ohne Ankunft.
+    if (arrivalMs !== null && arrivalMs >= departureMs) arrivalMs = null;
     out.push({ day: d.isoWeekday, arrivalMs, departureMs, targetValue: e.targetValue, commuteKm: e.commuteKm });
   }
   return out.sort((a, b) => a.departureMs - b.departureMs);
@@ -199,17 +207,34 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
   const windows = planWindows(effectiveWeeklyPlan(opt), timeZone, nowMs);
   const onceDep = Date.parse(opt.evDepartureOnce || '');
   const onceArr = Date.parse(opt.evArrivalOnce || '');
-  const past = windows.filter((w) => gone(w.departureMs)).map((w) => w.departureMs);
+  const onceActive = Number.isFinite(onceDep) && !gone(onceDep);
+  // Die einmalige Abfahrt verschiebt meist die naechstgelegene regulaere
+  // (± 24 h): dieses Fenster behaelt Ankunft, Ziel und Heimweg, und seine
+  // eigene Abfahrt zaehlt nicht als Fahrt — auch nachdem sie verstrichen ist.
+  let superseded = null;
+  if (onceActive) {
+    for (const w of windows) {
+      const diff = Math.abs(w.departureMs - onceDep);
+      if (diff >= 24 * 3600_000 || (w.arrivalMs !== null && w.arrivalMs >= onceDep)) continue;
+      if (!superseded || diff < Math.abs(superseded.departureMs - onceDep)) superseded = w;
+    }
+  }
+  const past = windows.filter((w) => w !== superseded && gone(w.departureMs)).map((w) => w.departureMs);
   if (Number.isFinite(onceDep) && gone(onceDep)) past.push(onceDep);
   const tripStartMs = past.length ? Math.max(...past) : null;
   const afterTripStart = (ms) => tripStartMs === null || ms > tripStartMs;
   const nextWeekly = windows.find((w) => !gone(w.departureMs)) || null;
 
   let win = null;
-  if (Number.isFinite(onceDep) && !gone(onceDep)) {
+  if (onceActive) {
     win = { day: null, arrivalMs: null, departureMs: onceDep, targetValue: null, commuteKm: null, source: 'once', arrivalSource: null };
-    if (nextWeekly && nextWeekly.arrivalMs !== null && afterTripStart(nextWeekly.arrivalMs) && nextWeekly.arrivalMs < onceDep) {
-      Object.assign(win, { day: nextWeekly.day, arrivalMs: nextWeekly.arrivalMs, arrivalSource: 'weekly', targetValue: nextWeekly.targetValue, commuteKm: nextWeekly.commuteKm });
+    const inGap = (w) => w && w.arrivalMs !== null && afterTripStart(w.arrivalMs) && w.arrivalMs < onceDep;
+    const base = superseded || (inGap(nextWeekly) ? nextWeekly : null);
+    if (base) {
+      Object.assign(win, { day: base.day, targetValue: base.targetValue, commuteKm: base.commuteKm });
+      if (base.arrivalMs !== null && afterTripStart(base.arrivalMs) && base.arrivalMs < onceDep) {
+        Object.assign(win, { arrivalMs: base.arrivalMs, arrivalSource: 'weekly' });
+      }
     }
   } else if (nextWeekly) {
     win = { ...nextWeekly, source: 'weekly', arrivalSource: nextWeekly.arrivalMs !== null ? 'weekly' : null };

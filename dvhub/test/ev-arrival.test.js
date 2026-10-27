@@ -172,3 +172,32 @@ describe('resolveEvArrival (Config + Fahrzeug)', () => {
     assert.equal(r.pct, 60);
   });
 });
+
+describe('Codex-Befunde Runde 1 (Ladestand-Gedaechtnis)', () => {
+  test('Wallbox direkt (OpenEVSE) mit Quelle „evcc/Wallbox“: gemerkter Wert bleibt nach dem Abstecken', () => {
+    const memory = createEvSocMemory();
+    memory.observe({ pct: 80, source: 'openevse', atMs: at('2026-09-22T02:50:00Z') });
+    const ctx = ctxWith({ source: 'evcc', memory });
+    ctx.mainWallbox = { state: () => ({ type: 'openevse', connected: false, available: true }) };
+    assert.deepEqual(readEvSocReading(ctx, NOW), { pct: 80, source: 'openevse', atMs: at('2026-09-22T02:50:00Z') });
+  });
+
+  test('unveraenderter Wert: Zeitpunkt wird mindestens stuendlich in die Datei geschrieben', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev-soc-mem-'));
+    const filePath = path.join(dir, 'ev-soc-last.json');
+    const a = createEvSocMemory({ filePath });
+    a.observe({ pct: 80, source: 'evcc', atMs: 0 });
+    a.observe({ pct: 80, source: 'evcc', atMs: 30 * 60_000 });      // < 1 h: nicht schreiben
+    assert.equal(createEvSocMemory({ filePath }).get().atMs, 0);
+    a.observe({ pct: 80, source: 'evcc', atMs: 2 * 3600_000 });     // ≥ 1 h: Zeitpunkt sichern
+    assert.equal(createEvSocMemory({ filePath }).get().atMs, 2 * 3600_000);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('evcc-Ladepunkt: Zeitpunkt der letzten erfolgreichen Abfrage, nicht „jetzt“', () => {
+    const polled = NOW - 20 * 60_000;
+    const ctx = ctxWith({ loadpoint: { connected: true, vehicleSocPct: 55 } });
+    ctx.evccIntegration.getStatus = () => ({ lastPolledAt: polled });
+    assert.equal(readEvSocReading(ctx, NOW).atMs, polled);
+  });
+});

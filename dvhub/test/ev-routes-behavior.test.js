@@ -236,11 +236,17 @@ describe('Wochenplan über /api/ev (2026-10-27)', () => {
 });
 
 describe('Erwarteter Ladestand bei Ankunft über GET /api/ev', () => {
-  // Heute 20:00 Ankunft, morgen 05:00 Abfahrt — an jedem Tag, damit der Test
-  // unabhängig vom Wochentag läuft. 60 kWh, 18 kWh/100 km, Heimweg 20 km = 6 %.
-  const plan = [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival: '20:00', departure: '05:00' }));
+  // Jeden Tag gleich: Ankunft in 2 h, Abfahrt in 10 h (Ortszeit Berlin) —
+  // so liegt die letzte Abfahrt immer 14 h zurück und der Test hängt weder vom
+  // Wochentag noch von der Uhrzeit ab (Codex-Befund: feste 20:00/05:00 fielen
+  // zwischen 04:50 und 05:01 um). 60 kWh, 18 kWh/100 km, Heimweg 20 km = 6 %.
+  const hhmm = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+  const planNow = () => {
+    const now = Date.now();
+    return [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival: hhmm(now + 2 * 3600_000), departure: hhmm(now + 10 * 3600_000) }));
+  };
   const setup = (ctx) => Object.assign(ctx.getRawCfg().optimizer, {
-    evDepartureEnabled: true, evWeeklyPlan: plan, evCapacityWh: 60000, evConsumptionKwhPer100km: 18, evCommuteKm: 20,
+    evDepartureEnabled: true, evWeeklyPlan: planNow(), evCapacityWh: 60000, evConsumptionKwhPer100km: 18, evCommuteKm: 20,
     evTargetMode: 'percent', evTargetValue: 80,
   });
 
