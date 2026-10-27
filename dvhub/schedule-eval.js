@@ -461,8 +461,14 @@ export function createScheduleEvaluator(ctx) {
     } catch (e) {
       // Merken und bei jedem weiteren Sequenz-Aufruf nachholen (Gegenprüfung
       // c942db52): sonst bliebe eine Sicherung ohne Sperr-Pflicht nur im Speicher.
+      // Nur beim Wechsel auf „offen“ und danach höchstens stündlich protokollieren —
+      // sonst flutet der Nachholversuch jedes Takts das Log (Gegenprüfung 3659bf4a).
+      const nowMs = Date.now();
+      if (!state.ctrl._dvSeqSavedPending || nowMs - (state.ctrl._dvSeqSavedErrLogAt || 0) >= 3600_000) {
+        pushLog('dv_seq_saved_persist_error', { error: e?.message || String(e) });
+        state.ctrl._dvSeqSavedErrLogAt = nowMs;
+      }
       state.ctrl._dvSeqSavedPending = true;
-      pushLog('dv_seq_saved_persist_error', { error: e?.message || String(e) });
       return false;
     }
   }

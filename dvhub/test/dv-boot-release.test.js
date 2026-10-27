@@ -266,3 +266,15 @@ test('gleichbleibende Einspeisegrenze: Sicherung wird im regulären Takt nachgeh
   await ev.evaluateSchedule();
   assert.deepEqual(readSaved(p.savedPath), { dvFeedInLimitW: 5000 });
 });
+
+test('dauerhaft scheiterndes Speichern flutet das Protokoll nicht', async () => {
+  const prof = loadProfile('victron');
+  const dir = path.join(path.dirname(prof.savedPath), 'daten');
+  fs.writeFileSync(dir, 'x');
+  const p = { ...prof, savedPath: path.join(dir, 'dv_seq_saved.json') };
+  const { ev, state, logs } = boot(p, { 2706: 50 });
+  await ev.applyDvFeedInLimit(6000);
+  state.schedule.config = { defaultFeedExcessDcPv: 1 };
+  for (let i = 0; i < 5; i += 1) await ev.evaluateSchedule();
+  assert.equal(logs.filter((l) => l.e === 'dv_seq_saved_persist_error').length, 1);
+});
