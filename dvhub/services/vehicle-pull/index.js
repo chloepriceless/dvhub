@@ -41,6 +41,14 @@ const MAX_BODY = 256 * 1024;
 const DEFAULT_INTERVAL_SEC = 60;
 const DEFAULT_TIMEOUT_MS = 5000;
 const HA_ENTITY_RE = /^[a-z_]+\.[a-z0-9_]+$/;
+// Gegenstelle antwortet, kennt den Wert aber nicht (404/401/… oder HA
+// „unavailable“): erst nach so langer Dauer verwerfen — HA meldet Entitaeten
+// beim Neustart kurz als unbekannt, bis die Integration geladen ist.
+const UNKNOWN_GRACE_MS = 5 * 60_000;
+// Diese Statuscodes heissen „gibt es nicht / darfst du nicht“ — 408/429/5xx
+// sind voruebergehend und lassen den letzten Wert stehen.
+const ANSWERED_STATUS = new Set([400, 401, 403, 404, 410]);
+const sigOf = (s) => JSON.stringify([s.url, s.token, s.socPath, s.pluggedPath, s.timePath, s.socEntity, s.pluggedEntity]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 function ipv4(host) {
@@ -130,7 +138,16 @@ function settings(cfg, kind) {
 export function createVehiclePull(ctx, deps = {}) {
   const fetchImpl = deps.fetch || globalThis.fetch;
   const now = deps.now || Date.now;
-  const blank = () => ({ socPct: null, socAt: null, plugged: null, pluggedAt: null, error: null, warning: null, lastAttemptAt: null, lastOkAt: null, running: false });
+  const blank = () => ({ socPct: null, socAt: null, plugged: null, pluggedAt: null, error: null, warning: null, lastAttemptAt: null, lastOkAt: null, running: false, socUnknownSince: null, plugUnknownSince: null });
+  // Wert ist laut Gegenstelle unbekannt: nach UNKNOWN_GRACE_MS verwerfen.
+  function unknownSoc(out) {
+    if (out.socUnknownSince === null) out.socUnknownSince = now();
+    if (now() - out.socUnknownSince >= UNKNOWN_GRACE_MS) Object.assign(out, { socPct: null, socAt: null });
+  }
+  function unknownPlug(out) {
+    if (out.plugUnknownSince === null) out.plugUnknownSince = now();
+    if (now() - out.plugUnknownSince >= UNKNOWN_GRACE_MS) Object.assign(out, { plugged: null, pluggedAt: null });
+  }
   const st = { http: blank(), homeassistant: blank() };
   const sig = { http: null, homeassistant: null };
   let timer = null;
@@ -154,7 +171,7 @@ export function createVehiclePull(ctx, deps = {}) {
         const e = new Error(`HTTP ${res.status}`);
         // 4xx: die Gegenstelle hat geantwortet (Entitaet unbekannt, Token
         // falsch) — der Wert ist dann unbekannt, nicht „noch der alte“.
-        e.answered = res.status >= 400 && res.status < 500;
+        e.answered = ANSWERED_STATUS.has(res.status);
         throw e;
       }
       // Groesse beim Lesen begrenzen, nicht erst danach: eine falsche Adresse
@@ -207,13 +224,13 @@ export function createVehiclePull(ctx, deps = {}) {
           if (ms === null) out.warning = `Zeit-Pfad „${s.timePath}“ nicht lesbar — Abrufzeit verwendet`;
           else socAt = ms;
         }
-        Object.assign(out, { socPct: pct, socAt, error: null, lastOkAt: at });
+        Object.assign(out, { socPct: pct, socAt, error: null, lastOkAt: at, socUnknownSince: null });
       }
     }
     if (s.pluggedPath) {
       const pv = readJsonPath(doc, s.pluggedPath);
       const plugged = pv.found ? parsePlugged(pv.value) : null;
-      Object.assign(out, { plugged, pluggedAt: plugged === null ? null : at });
+      Object.assign(out, { plugged, pluggedAt: plugged === null ? null : at, plugUnknownSince: null });
       if (plugged === null && !out.error) out.warning = `Pfad „${s.pluggedPath}“ (angesteckt) nicht lesbar`;
     } else Object.assign(out, { plugged: null, pluggedAt: null });
   }
@@ -246,19 +263,19 @@ export function createVehiclePull(ctx, deps = {}) {
       const soc = await haEntity(s, s.socEntity);
       const pct = parseSocPct(soc.state);
       if (pct === null) Object.assign(out, { socPct: null, socAt: null, error: `Entität „${s.socEntity}“ meldet „${soc.state}“ — kein Ladestand 0–100 %` });
-      else Object.assign(out, { socPct: pct, socAt: soc.at, error: null, lastOkAt: now() });
+      else Object.assign(out, { socPct: pct, socAt: soc.at, error: null, lastOkAt: now(), socUnknownSince: null });
     } catch (e) {
       out.error = String(e?.message || e);
-      if (e?.answered) Object.assign(out, { socPct: null, socAt: null });
+      if (e?.answered) unknownSoc(out);
     }
     if (s.pluggedEntity) {
       try {
         const p = await haEntity(s, s.pluggedEntity);
         const plugged = parsePlugged(p.state);
-        Object.assign(out, { plugged, pluggedAt: plugged === null ? null : p.at });
+        Object.assign(out, { plugged, pluggedAt: plugged === null ? null : p.at, plugUnknownSince: null });
       } catch (e) {
         out.warning = e.message;
-        if (e?.answered) Object.assign(out, { plugged: null, pluggedAt: null });
+        if (e?.answered) unknownPlug(out);
       }
     } else Object.assign(out, { plugged: null, pluggedAt: null });
   }
@@ -269,8 +286,8 @@ export function createVehiclePull(ctx, deps = {}) {
     const s = settings(ctx.getCfg?.(), kind);
     if (!s.configured) { st[kind] = blank(); sig[kind] = null; return; }
     // Andere Adresse/Entitaet/Pfade: Werte der alten Einstellung verwerfen.
-    const now_sig = JSON.stringify([s.url, s.token, s.socPath, s.pluggedPath, s.timePath, s.socEntity, s.pluggedEntity]);
-    if (sig[kind] !== now_sig) { st[kind] = blank(); sig[kind] = now_sig; }
+    const nowSig = sigOf(s);
+    if (sig[kind] !== nowSig) { st[kind] = blank(); sig[kind] = nowSig; }
     const out = st[kind];
     if (out.running) return;
     out.running = true;
@@ -283,7 +300,7 @@ export function createVehiclePull(ctx, deps = {}) {
       // Nicht erreichbar / 5xx / Zeitlimit: letzter Wert bleibt (er altert
       // ueber socAt aus). 4xx: die Gegenstelle kennt den Wert nicht → weg.
       out.error = String(e?.message || e);
-      if (e?.answered) Object.assign(out, { socPct: null, socAt: null, plugged: null, pluggedAt: null });
+      if (e?.answered) { unknownSoc(out); unknownPlug(out); }
     } finally {
       out.running = false;
     }
@@ -297,7 +314,9 @@ export function createVehiclePull(ctx, deps = {}) {
    */
   function getState(kind) {
     const s = settings(ctx.getCfg?.(), kind);
-    const cur = st[kind] || blank();
+    // Einstellung geaendert, aber noch nicht neu abgefragt: nichts von der
+    // alten Adresse/Entitaet zeigen.
+    const cur = sig[kind] === sigOf(s) ? (st[kind] || blank()) : blank();
     const t = now();
     const socStale = cur.socAt !== null && t - cur.socAt > s.maxAgeMs;
     const plugStale = cur.pluggedAt !== null && t - cur.pluggedAt > s.maxAgeMs;
@@ -321,7 +340,8 @@ export function createVehiclePull(ctx, deps = {}) {
       const s = settings(cfg, kind);
       if (!s.configured) { if (st[kind].lastAttemptAt !== null) st[kind] = blank(); continue; }
       const last = st[kind].lastAttemptAt;
-      if (last === null || now() - last >= s.intervalMs) refresh(kind);
+      // Neue Einstellung: sofort abfragen, nicht erst nach dem Intervall.
+      if (last === null || sig[kind] !== sigOf(s) || now() - last >= s.intervalMs) refresh(kind);
     }
   }
 

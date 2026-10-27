@@ -337,12 +337,16 @@ describe('Claude-Befunde Runde 5 (Abruf-Quellen)', () => {
 });
 
 describe('HTTP-Abruf: 4xx verwirft, Netzfehler behaelt', () => {
-  it('erst 63 %, dann 404 → kein Wert; erst 63 %, dann nicht erreichbar → 63 % bleibt', async () => {
+  it('erst 63 %, dann 404 (laenger als 5 min) → kein Wert; erst 63 %, dann nicht erreichbar → 63 % bleibt', async () => {
     let status = 200;
     const { base } = await stub(() => (status === 200 ? { body: { soc: 63, plugged: true } } : { status, body: {} }));
-    const pull = createVehiclePull(pullCtx({ evHttpUrl: `${base}/car`, evHttpSocPath: 'soc', evHttpPluggedPath: 'plugged' }));
+    let t = Date.now();
+    const pull = createVehiclePull(pullCtx({ evHttpUrl: `${base}/car`, evHttpSocPath: 'soc', evHttpPluggedPath: 'plugged' }), { now: () => t });
     await pull.refresh('http');
     status = 404;
+    await pull.refresh('http');
+    assert.equal(pull.getState('http').socPct, 63, '404 gerade erst: noch Kulanz');
+    t += 6 * 60_000;
     await pull.refresh('http');
     assert.equal(pull.getState('http').socPct, null);
     assert.equal(pull.getState('http').plugged, null);
@@ -354,5 +358,53 @@ describe('HTTP-Abruf: 4xx verwirft, Netzfehler behaelt', () => {
     assert.equal(pull.getState('http').socPct, 63);
     assert.equal(pull.getState('http').plugged, true);
     assert.match(pull.getState('http').error, /nicht erreichbar/);
+  });
+});
+
+describe('Claude-Befunde Runde 6 (Abruf-Quellen, gleiche Instanz)', () => {
+  const haStub = (state) => (req) => {
+    if (state.code !== 200) return { status: state.code, body: {} };
+    if (req.url === '/api/states/sensor.soc') return { body: { state: '60', last_reported: '2026-10-27T10:00:00Z' } };
+    if (req.url === '/api/states/binary_sensor.plug') return { body: { state: 'on', last_updated: '2026-10-27T10:00:00Z' } };
+    return { status: 404, body: {} };
+  };
+
+  it('404 kurz (HA startet, Integration laedt): Werte bleiben; 404 laenger als 5 min: Werte weg', async () => {
+    const state = { code: 200 };
+    const { base } = await stub(haStub(state));
+    let t = Date.parse('2026-10-27T10:05:00Z');
+    const pull = createVehiclePull(pullCtx({ evHaUrl: base, evHaToken: 't', evHaSocEntity: 'sensor.soc', evHaPluggedEntity: 'binary_sensor.plug' }), { now: () => t });
+    await pull.refresh('homeassistant');
+    state.code = 404;
+    t += 60_000; await pull.refresh('homeassistant');
+    assert.equal(pull.getState('homeassistant').socPct, 60);
+    assert.equal(pull.getState('homeassistant').plugged, true);
+    t += 5 * 60_000; await pull.refresh('homeassistant');
+    assert.equal(pull.getState('homeassistant').socPct, null);
+    assert.equal(pull.getState('homeassistant').plugged, null);
+  });
+
+  it('429 (zu viele Anfragen) und 408 sind voruebergehend: Werte bleiben', async () => {
+    const state = { code: 200 };
+    const { base } = await stub(haStub(state));
+    let t = Date.parse('2026-10-27T10:05:00Z');
+    const pull = createVehiclePull(pullCtx({ evHaUrl: base, evHaToken: 't', evHaSocEntity: 'sensor.soc', evHaPluggedEntity: 'binary_sensor.plug' }), { now: () => t });
+    await pull.refresh('homeassistant');
+    for (const code of [429, 408]) {
+      state.code = code;
+      t += 10 * 60_000; await pull.refresh('homeassistant');
+      assert.equal(pull.getState('homeassistant').socPct, 60, `HTTP ${code}`);
+    }
+  });
+
+  it('geaenderte Einstellung gilt sofort: getState zeigt nichts von der alten Entitaet', async () => {
+    const state = { code: 200 };
+    const { base } = await stub(haStub(state));
+    const ctx = pullCtx({ evHaUrl: base, evHaToken: 't', evHaSocEntity: 'sensor.soc', evHaPluggedEntity: 'binary_sensor.plug' });
+    const pull = createVehiclePull(ctx, { now: () => Date.parse('2026-10-27T10:05:00Z') });
+    await pull.refresh('homeassistant');
+    ctx.getCfg().optimizer.evHaPluggedEntity = 'binary_sensor.plgu';
+    assert.equal(pull.getState('homeassistant').plugged, null, 'noch vor dem naechsten Abruf');
+    assert.equal(pull.getState('homeassistant').socPct, null);
   });
 });
