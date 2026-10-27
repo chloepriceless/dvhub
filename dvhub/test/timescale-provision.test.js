@@ -18,11 +18,13 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'timesc
 // Was packagecloud.io/timescale/timescaledb anbietet (Stand 21.10.2026, per curl geprueft).
 const SERVED = ['debian/ bookworm', 'debian/ trixie', 'ubuntu/ noble', 'ubuntu/ resolute'];
 
-function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false } = {}) {
+function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false, offlineAfterDownload = false, staleDeb = false, leftoverApacheDeb = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsp-'));
   const bin = join(dir, 'bin');
   execFileSync('mkdir', ['-p', bin]);
   const log = join(dir, 'calls.log');
+  const pkgDb = join(dir, 'installed-packages');
+  writeFileSync(pkgDb, apacheInstalled ? 'postgresql-18-timescaledb\n' : '');
   const repoList = join(dir, 'timescaledb.list');
   const keyring = join(dir, 'timescale.gpg');
   const osFile = join(dir, 'os-release');
@@ -30,6 +32,17 @@ function setup(osRelease, { existingList, transient = false, extHave = '', alter
   writeFileSync(osFile, osRelease);
   if (existingList) writeFileSync(repoList, existingList);
   execFileSync('mkdir', ['-p', join(dir, 'postgresql', '18', 'main', 'conf.d')]);
+  const debCache = join(dir, 'deb-cache');
+  if (staleDeb) {
+    // Rest eines gescheiterten Laufs: ältere Fassung im eigenen Download-Ordner.
+    execFileSync('mkdir', ['-p', debCache]);
+    writeFileSync(join(debCache, 'timescaledb-2-postgresql-18_2.30.0~ubuntu26.04_arm64.deb'), '');
+  }
+  if (leftoverApacheDeb) {
+    // Abgebrochener Lauf: Apache war schon gesichert und entfernt.
+    execFileSync('mkdir', ['-p', debCache]);
+    writeFileSync(join(debCache, 'postgresql-18-timescaledb_2.31.0_arm64.deb'), '');
+  }
   const fake = (name, body = '') => {
     const p = join(bin, name);
     writeFileSync(p, `#!/usr/bin/env bash\necho "${name} $*" >> "${log}"\n${body}\n`);
@@ -61,13 +74,45 @@ if [[ "$1" == update ]]; then
   fi
   exit 100
 fi
+# -o Dir::Cache::archives=<ordner> → Paketordner dieses Aufrufs.
+arch=/var/cache/apt/archives; prev=
+for a in "$@"; do [[ "$prev" == -o && "$a" == Dir::Cache::archives=* ]] && arch="\${a#*=}"; prev="$a"; done
+pkgs_of() { local p= a; for a in "$@"; do if [[ "$p" == -o ]]; then p=; continue; fi; p="$a"; case "$a" in install|-y|-qq|-o|--*) ;; *) echo "$a" ;; esac; done; }
+if [[ "$1" == install && " $* " == *" --download-only "* ]]; then
+  ls "$arch" 2>/dev/null | grep '[.]deb$' | sed 's/^/vorher-im-ordner /' >> "${log}"
+fi
+if [[ "$1" == install && " $* " == *" --download-only "* && " $* " != *" timescaledb-2-postgresql-"* ]]; then
+  for p in $(pkgs_of "$@"); do : > "$arch/\${p}_2.31.0_arm64.deb"; done
+fi
+if [[ "$1" == install && " $* " == *" timescaledb-2-postgresql-"* ]]; then
+  if [[ " $* " == *" --download-only "* ]]; then
+    ${downloadFails ? 'exit 100' : ''}
+    # apt legt alles ab, was es auflöst — auch Abhängigkeiten (timescaledb-tools).
+    for p in $(pkgs_of "$@") timescaledb-tools; do : > "$arch/\${p}_2.31.0_arm64.deb"; done
+    exit 0
+  fi
+  ${tslPartial ? `echo timescaledb-2-loader-postgresql-18 >> "${pkgDb}"; exit 100` : ''}
+  ${tslInstallFails ? 'exit 100' : ':'}
+fi
+if [[ "$1" == install && " $* " != *" --download-only "* && " $* " == *" postgresql-18-timescaledb "* ]]; then
+  ${apacheReinstallFails ? 'exit 100' : ':'}
+fi
+# Netz weg nach den Downloads: installierbar nur, was samt Abhängigkeit im Paketordner liegt.
+if ${offlineAfterDownload ? 'true' : 'false'} && [[ "$1" == install && " $* " != *" --download-only "* ]]; then
+  need="$(pkgs_of "$@")"; [[ "$need" == *timescaledb-2-* ]] && need="$need timescaledb-tools"
+  for p in $need; do ls "$arch/\${p}"_*.deb >/dev/null 2>&1 || { echo "E: Fehlschlag beim Holen von $p (offline)"; exit 100; }; done
+fi
+if [[ "$1" == install && " $* " != *" --download-only "* ]]; then
+  for a in $(pkgs_of "$@"); do case "$a" in *-) sed -i.bak "/^\${a%-}$/d" "${pkgDb}" ;; *) echo "$a" >> "${pkgDb}" ;; esac; done
+fi
+if [[ "$1" == remove ]]; then for a in "$@"; do sed -i.bak "/^$a$/d" "${pkgDb}"; done; fi
 exit 0`);
   fake('apt-cache', `
 if [[ "$1" == policy && "$2" == timescaledb-2-* && -f "${repoList}" ]]; then
   line="$(cat "${repoList}")"
   case "$line" in ${served}) echo "  Candidate: 2.31.0~ubuntu26.04" ;; *) echo "  Candidate: (none)" ;; esac
 fi`);
-  fake('dpkg', 'exit 1');
+  fake('dpkg', `[[ "$1" == -s ]] && grep -qx "$2" "${pkgDb}" && exit 0\nexit 1`);
   fake('psql');
   // su: Katalog/Lade-Proben beantworten. extHave = Version im Katalog vor dem
   // Lauf ('' = Erweiterung fehlt); CREATE/ALTER setzen sie auf 2.31.0.
@@ -81,7 +126,7 @@ case "$cmd" in
   *"FROM pg_extension WHERE extname"*) cat "${extFile}"; echo ;;
   *"default_version FROM pg_available"*) echo "2.31.0" ;;
   # Lizenz erst nach der Installation (vorher Apache) → kein Schnell-Skip.
-  *"current_setting('timescaledb.license')"*) grep -q "^apt-get install -y timescaledb-2" "${log}" && echo "timescale" || echo "apache" ;;
+  *"current_setting('timescaledb.license')"*) grep -Eq "^apt-get install -y (-o Dir::Cache::archives=[^ ]+ )?timescaledb-2" "${log}" && echo "timescale" || echo "apache" ;;
 esac
 exit 0`);
   fake('systemctl');
@@ -90,7 +135,7 @@ exit 0`);
   const run = () => execFileSync('bash', [SCRIPT], {
     env: {
       PATH: `${bin}:${process.env.PATH}`, TS_PROVISION_EUID: '0', LANG: 'de_DE.UTF-8',
-      PG_ETC: join(dir, 'postgresql'),
+      PG_ETC: join(dir, 'postgresql'), TS_DEB_CACHE: join(dir, 'deb-cache'),
       OS_RELEASE: osFile, REPO_LIST: repoList, KEYRING: keyring,
       CONFIG_PATH: join(dir, 'config.json'), DATA_DIR: dir,
     },
@@ -99,7 +144,9 @@ exit 0`);
   const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []);
   const list = () => (existsSync(repoList) ? readFileSync(repoList, 'utf8').trim() : null);
   const sql = () => calls().filter((l) => l.startsWith('su ')).join('\n');
-  return { run, calls, list, keyring, sql, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  const pkgs = () => readFileSync(pkgDb, 'utf8').split('\n').filter((l) => l.includes('timescaledb'));
+  const runStatus = () => { try { run(); return 0; } catch (e) { return e.status; } };
+  return { run, runStatus, calls, list, keyring, sql, dir, pkgs, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 const UBUNTU_2604 = 'ID=ubuntu\nID_LIKE=debian\nVERSION_ID="26.04"\nVERSION_CODENAME=resolute\nUBUNTU_CODENAME=resolute\n';
@@ -108,7 +155,9 @@ const MINT_22 = 'ID=linuxmint\nID_LIKE="ubuntu debian"\nVERSION_CODENAME=xia\nUB
 const RASPI_OS = 'ID=raspbian\nID_LIKE=debian\nVERSION_CODENAME=bookworm\n';
 const DEBIAN_FORKY = 'ID=debian\nVERSION_CODENAME=forky\n';
 
-const installed = (calls) => calls.filter((l) => l.startsWith('apt-get install -y timescaledb-2') || l.startsWith('apt-get install -y postgresql-'));
+// Installationsaufrufe ohne die Paketordner-Option (die prüft ein eigener Test).
+const stripArch = (l) => l.replace(/ -o Dir::Cache::archives=\S+/, '');
+const installed = (calls) => calls.map(stripArch).filter((l) => l.startsWith('apt-get install -y timescaledb-2') || l.startsWith('apt-get install -y postgresql-'));
 
 test('Ubuntu 26.04: Quelle unter ubuntu/ resolute, Community-Paket fuer PG 18', () => {
   const s = setup(UBUNTU_2604);
@@ -212,5 +261,126 @@ test('ALTER scheitert: Exit 1 mit Hinweis, Fehler im Protokoll statt /dev/null',
     const log = readFileSync(join(s.dir, 'timescale-provision.log'), 'utf8');
     assert.match(log, /ERROR: {2}kaputt/);
     assert.match(log, /FEHLER: ALTER EXTENSION/);
+  } finally { s.cleanup(); }
+});
+
+// Review 25.10.2026 (P2): das Apache-Paket wurde entfernt, BEVOR feststand, dass
+// sich die Community-Edition installieren laesst (Netz weg → Box ohne Bibliothek
+// zur Katalog-Version). Jetzt: erst Community UND das installierte Apache-Paket
+// herunterladen, dann tauschen; scheitert die Installation, kommt Apache aus dem
+// Paket-Cache zurueck. Kein Verlass auf Conflicts/Replaces der Fremdpakete.
+const isRemove = (l) => l.startsWith('apt-get remove');
+const isDl = (l) => l.startsWith('apt-get install -y --download-only');
+
+test('Apache→Community: Download scheitert → nichts entfernt, nichts installiert', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, downloadFails: true });
+  try {
+    s.run();
+    const c = s.calls();
+    assert.ok(!c.some(isRemove), c.join(' | '));
+    assert.ok(!c.some((l) => /^apt-get install -y (?!--download-only)\S*timescaledb-2/.test(l)), 'kein Installationsversuch');
+    assert.deepEqual(s.pkgs(), ['postgresql-18-timescaledb']);
+  } finally { s.cleanup(); }
+});
+
+test('Apache→Community: Installation scheitert nach dem Entfernen → Apache wieder da', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, tslInstallFails: true });
+  try {
+    s.run();
+    const c = s.calls();
+    const iDlApache = c.findIndex((l) => isDl(l) && l.includes('postgresql-18-timescaledb') && l.includes('--reinstall'));
+    const iRemove = c.findIndex(isRemove);
+    assert.ok(iDlApache >= 0 && iDlApache < iRemove, `Apache vor dem Entfernen im Cache: ${c.join(' | ')}`);
+    assert.ok(s.pkgs().includes('postgresql-18-timescaledb'), `Apache wieder installiert: ${s.pkgs()}`);
+  } finally { s.cleanup(); }
+});
+
+test('Apache→Community: Reihenfolge Download → Entfernen → Installation', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true });
+  try {
+    s.run();
+    const c = s.calls();
+    const iDl = c.findIndex((l) => isDl(l) && l.includes('timescaledb-2-postgresql-18'));
+    const iRemove = c.findIndex(isRemove);
+    const iInst = c.map(stripArch).indexOf('apt-get install -y timescaledb-2-loader-postgresql-18 timescaledb-2-postgresql-18');
+    assert.ok(iDl >= 0 && iDl < iRemove && iRemove < iInst, c.join(' | '));
+    assert.deepEqual(s.pkgs().sort(), ['timescaledb-2-loader-postgresql-18', 'timescaledb-2-postgresql-18']);
+  } finally { s.cleanup(); }
+});
+
+// Gegenprüfung zu 5d51b339.
+test('Community halb installiert (Loader da, Paket nicht) → Loader weg, dann Apache zurück', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, tslPartial: true });
+  try {
+    s.runStatus();
+    const c = s.calls();
+    const iRmTsl = c.findIndex((l) => isRemove(l) && l.includes('timescaledb-2-loader-postgresql-18'));
+    const iApache = c.map(stripArch).findIndex((l) => /^apt-get install -y (?!--download-only)\S*postgresql-18-timescaledb(_\S*\.deb)?$/.test(l));
+    assert.ok(iRmTsl >= 0 && iRmTsl < iApache, c.join(' | '));
+    assert.deepEqual(s.pkgs(), ['postgresql-18-timescaledb']);
+  } finally { s.cleanup(); }
+});
+
+test('Apache nach dem Entfernen nicht wieder installierbar → sichtbarer Fehler, Preload-Eintrag weg (Postgres startet)', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, tslInstallFails: true, apacheReinstallFails: true });
+  try {
+    const dropin = join(s.dir, 'postgresql', '18', 'main', 'conf.d', 'timescaledb.conf');
+    writeFileSync(dropin, "shared_preload_libraries = 'timescaledb'\n");
+    assert.equal(s.runStatus(), 1, 'kein stilles exit 0');
+    assert.equal(existsSync(dropin), false, 'ohne Bibliothek darf kein Preload-Eintrag bleiben');
+  } finally { s.cleanup(); }
+});
+
+test('Pakete in einen eigenen Ordner herunterladen (ein dpkg-Hook wie docker-clean leert den apt-Cache)', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true });
+  try {
+    s.run();
+    const dls = s.calls().filter(isDl);
+    assert.ok(dls.length >= 2 && dls.every((l) => l.includes(`-o Dir::Cache::archives=${join(s.dir, 'deb-cache')}`)), dls.join(' | '));
+  } finally { s.cleanup(); }
+});
+
+// Gegenprüfung 7c1761b8 (P2): die Installation fand die geladenen Pakete nicht —
+// apt legte beim Download ALLES (auch Abhängigkeiten) in den eigenen Ordner,
+// die Installation suchte aber im Standard-Cache. Ohne Netz scheiterte sie und
+// fiel auf Apache zurück, obwohl alles da war.
+test('Apache→Community ohne Netz nach dem Download: Installation aus dem eigenen Paketordner', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, offlineAfterDownload: true });
+  try {
+    s.run();
+    const inst = s.calls().filter((l) => l.startsWith('apt-get install -y') && !l.includes('--download-only') && l.includes('timescaledb'));
+    assert.ok(inst.length >= 1 && inst.every((l) => l.includes(`-o Dir::Cache::archives=${join(s.dir, 'deb-cache')}`)), inst.join(' | '));
+    assert.deepEqual(s.pkgs().sort(), ['timescaledb-2-loader-postgresql-18', 'timescaledb-2-postgresql-18'], 'Community installiert, nicht zurück auf Apache');
+  } finally { s.cleanup(); }
+});
+
+// Gegenprüfung 7c1761b8 (P3): Reste eines gescheiterten Laufs im Paketordner
+// konnten eine ältere Fassung installieren (geratener Dateiname). Jetzt wird
+// per Paketname installiert; apt nimmt aus dem Ordner nur die Kandidaten-Fassung.
+test('Reste eines früheren Laufs im Paketordner: Installation per Paketname, nie per Datei', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, staleDeb: true });
+  try {
+    s.run();
+    const inst = s.calls().filter((l) => l.startsWith('apt-get install') && !l.includes('--download-only'));
+    assert.ok(inst.length >= 1 && inst.every((l) => !/\.deb\b/.test(l)), inst.join(' | '));
+  } finally { s.cleanup(); }
+});
+
+// Gegenprüfung d867a370 (P3): das Leeren des Paketordners zu Beginn nahm einem
+// abgebrochenen Lauf (Apache schon entfernt) den Rückweg ohne Netz.
+test('Abgebrochener Lauf, Apache entfernt, jetzt ohne Netz: Apache aus dem Paketordner zurück', () => {
+  const s = setup(UBUNTU_2604, { downloadFails: true, offlineAfterDownload: true, leftoverApacheDeb: true });
+  try {
+    s.runStatus();
+    assert.ok(s.pkgs().includes('postgresql-18-timescaledb'), `Apache wieder da: ${s.pkgs()}`);
+  } finally { s.cleanup(); }
+});
+
+test('Attrappe: Lizenzprobe sieht die Community-Installation (mit Paketordner-Option)', () => {
+  const s = setup(UBUNTU_2604);
+  try {
+    s.run();
+    assert.match(s.sql(), /timescaledb\.license/);
+    assert.ok(s.calls().some((l) => /^apt-get install -y -o Dir::Cache::archives=\S+ timescaledb-2/.test(l)));
   } finally { s.cleanup(); }
 });

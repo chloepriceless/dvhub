@@ -4,13 +4,42 @@
 # Safe to run multiple times — only applies changes that are missing.
 set -euo pipefail
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
+# Programmordner: wo dieses Skript liegt, wenn niemand ihn nennt
+# (Gegenprüfung a2ff2a85): install.sh --dir /srv/app trägt /srv/app in die Unit
+# ein, setzt aber kein INSTALL_DIR — mit /opt/dvhub als Rückfall schrieb dieser
+# Lauf ExecStart/ExecStartPre auf einen leeren Ordner um.
+INSTALL_DIR="${INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"
 APP_DIR="${APP_DIR:-$INSTALL_DIR/dvhub}"
 SERVICE_USER="${SERVICE_USER:-dvhub}"
+# Dienstname: als ExecStartPre nur über DV_SERVICE_NAME der Unit bekannt
+# (z. B. dvhub2.service; Gegenprüfung 963dd115) — sonst trüge jeder Start
+# „dvhub“ in dvhub-update und die sudoers-Regeln ein.
+SERVICE_NAME="${SERVICE_NAME:-${DV_SERVICE_NAME:+${DV_SERVICE_NAME%.service}}}"
 SERVICE_NAME="${SERVICE_NAME:-dvhub}"
+# Konfigurations- und Datenordner wie die Unit (Gegenprüfung 25.10.2026):
+# install.sh --config /pfad/config.json trägt den Ordner in die Unit
+# (DV_APP_CONFIG, DV_DATA_DIR) und in dvhub-vpn ein. Als ExecStartPre stehen
+# die Werte in der Umgebung; über sudo (Update aus der Oberfläche) nicht —
+# dann aus der Unit-Datei. Sonst trüge dieser Lauf /etc/dvhub in dvhub-vpn
+# ein, und das VPN fände sein Profil nicht mehr.
+PU_UNIT_FILE="${PU_UNIT_FILE:-/etc/systemd/system/${SERVICE_NAME}.service}"
+# Erst systemctl show (führt Drop-ins zusammen), dann die Unit-Datei selbst.
+pu_unit_env() {
+  local v=""
+  if command -v systemctl >/dev/null 2>&1; then
+    v="$(systemctl show -p Environment --value "${SERVICE_NAME}.service" 2>/dev/null | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1)" || v=""
+  fi
+  [[ -n "$v" ]] || v="$(sed -n "s/^Environment=$1=//p" "$PU_UNIT_FILE" 2>/dev/null | head -1)" || v=""
+  printf '%s' "$v"
+}
+if [[ -z "${CONFIG_DIR:-}" && -z "${CONFIG_PATH:-}" ]]; then
+  CONFIG_PATH="${DV_APP_CONFIG:-$(pu_unit_env DV_APP_CONFIG)}"
+  [[ -n "$CONFIG_PATH" ]] && CONFIG_DIR="$(dirname "$CONFIG_PATH")"
+fi
 CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
 CONFIG_PATH="${CONFIG_PATH:-$CONFIG_DIR/config.json}"
-DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
+DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-$(pu_unit_env DV_DATA_DIR)}}"
+DATA_DIR="${DATA_DIR:-/var/lib/dvhub}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Dieses Skript muss als root ausgeführt werden." >&2
@@ -18,6 +47,82 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 echo "DVhub post-update (idempotent)"
+
+# ── Startzeit-Budget ──
+# Dieses Skript läuft als ExecStartPre bei JEDEM Dienststart; die Unit hat
+# TimeoutStartSec=120. Läuft es länger, scheitert der Start trotz '-', und
+# Restart=always wiederholt dieselbe langsame Arbeit (Gegenprüfung 25.10.2026).
+# Darum laufen langsame Schritte entkoppelt (systemd-run: Pakete, npm, EOS,
+# Forecast, TimescaleDB, Stack-Update) oder mit Zeitgrenze aus einem
+# gemeinsamen Budget. Was nicht fertig wird, setzt der nächste Start fort —
+# jeder Marker steht erst nach Erfolg.
+PU_BUDGET_S="${DVHUB_START_BUDGET_S:-90}"
+pu_left() { echo $(( PU_BUDGET_S - SECONDS )); }
+pu_bounded() {  # <höchstens sekunden> <befehl…> — 124, wenn die Zeit fehlt oder abläuft
+  local max="$1" left
+  shift
+  left="$(pu_left)"
+  (( left < max )) && max="$left"
+  if (( max < 3 )); then
+    echo "  WARN: Startzeit aufgebraucht — übersprungen bis zum nächsten Start: $*" >&2
+    return 124
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 5 "$max" "$@"
+  else
+    "$@"
+  fi
+}
+# ── Ende Startzeit-Budget ──
+
+# BEGIN DVHUB INSTALL-DIR OWNERSHIP — keep this block byte-identical in install.sh and post-update.sh.
+# DVHUB_ROOT_OWNED_INSTALL (Review 25.10.2026, P1): der Programmordner gehört
+# root und ist für den Dienstbenutzer nur lesbar. root führt daraus bei jedem
+# Dienststart post-update.sh und weitere Skripte aus; gehörte er dem
+# Dienstbenutzer, könnte der sie vorher ändern. Der Dienst schreibt nur in
+# CONFIG_DIR und DATA_DIR; Updates aus der Oberfläche laufen über
+# /usr/local/libexec/dvhub-update. Die Marke oben ist die Untergrenze, die
+# dvhub-update beim Auschecken prüft — nicht entfernen.
+# Voller Durchlauf nur, wenn sich der Stand geändert hat oder etwas nicht passt
+# (Marker .root-owned-rev, selbst root-eigen); sonst kostet der Schritt nichts.
+# Geändert wird nur, was nicht passt (Gegenprüfung 25.10.2026: früher chown -R
+# über alles, auch die großen venvs). Optional mit Zeitgrenze (post-update.sh,
+# Dienststart): reicht sie nicht, bleibt der Marker alt und der nächste Lauf
+# macht dort weiter, wo noch etwas falsch ist.
+# safe.directory (systemweit) lässt den Dienstbenutzer im root-eigenen Repo
+# lesen (Update-Prüfung: git rev-parse/log/tag).
+dvhub_root_own_install_dir() {  # <ordner> [<höchstens sekunden je Schritt>]
+  local dir="$1" mark="$1/.root-owned-rev" want lim=() rc=0 wrong
+  [[ -d "$dir" ]] || return 0
+  [[ -n "${2:-}" ]] && command -v timeout >/dev/null 2>&1 && lim=(timeout -k 5 "$2")
+  want="$(git -c safe.directory="$dir" -c core.fsmonitor=false -C "$dir" rev-parse --verify -q HEAD 2>/dev/null)" || want=nogit
+  if [[ "$(cat "$mark" 2>/dev/null)" != "$want" || -z "$(find "$dir" "$mark" -maxdepth 0 -user 0 2>/dev/null | sed -n 2p)" ]]; then
+    wrong="$(${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -o \( ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) \) \) -print -quit 2>/dev/null)" || rc=$?
+    if [[ -n "$wrong" && "$rc" -ne 124 && "$rc" -ne 137 ]]; then
+      echo "  Rechte: $dir gehört root (Dienstbenutzer nur lesend)"
+      # Ein Durchgang für Besitz und Rechte (Gegenprüfung c784e6a1).
+      rc=0
+      ${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -exec chown -h 0:0 {} + -o -true \) \
+        ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) -exec chmod go-w,a+rX {} + 2>/dev/null || rc=$?
+    fi
+    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+      echo "  Rechte: Zeitgrenze erreicht — der nächste Start setzt fort" >&2
+      return 1
+    fi
+    rm -f "$mark"
+    printf '%s\n' "$want" > "$mark"
+  fi
+  if command -v git >/dev/null 2>&1 && ! git config --system --get-all safe.directory 2>/dev/null | grep -Fxq "$dir"; then
+    git config --system --add safe.directory "$dir" 2>/dev/null || true
+  fi
+}
+# END DVHUB INSTALL-DIR OWNERSHIP
+
+# ── 0. Programmordner root-eigen — VOR allem, was daraus als root läuft ──
+# Zeitgrenze je Durchgang: der erste Start nach der Umstellung geht einmal über
+# den ganzen Ordner; reicht die Zeit nicht, macht der nächste Start weiter.
+OWN_LIMIT="$(pu_left)"; (( OWN_LIMIT > 45 )) && OWN_LIMIT=45
+dvhub_root_own_install_dir "$INSTALL_DIR" "$OWN_LIMIT" || echo "  WARN: Rechte für $INSTALL_DIR nicht (vollständig) gesetzt" >&2
 
 # ── 1. Pakete ──
 # wireguard-tools wird GETRENNT und OHNE Recommends installiert (T-UPDATE-SHARPEN
@@ -40,24 +145,30 @@ if ! dpkg -s wireguard-tools >/dev/null 2>&1; then
   NEED_WG="wireguard-tools"
 fi
 if [[ -n "$NEEDED_PKGS" || -n "$NEED_WG" ]]; then
-  echo "  Installiere fehlende Pakete:$NEEDED_PKGS ${NEED_WG}"
-  # T-0077: NON-FATAL. This script runs as ExecStartPre on EVERY service start.
-  # apt hits the network; under `set -e` a failed apt (no network at an offline
-  # boot) would abort the whole hook. The packages are VPN tools (openvpn/wg/
-  # strongswan), not required for the core app to boot — best-effort, retry next run.
-  # The `if` condition suppresses `set -e` for these commands.
-  APT_OK=1
-  apt-get update -qq || APT_OK=0
-  if [[ "$APT_OK" -eq 1 && -n "$NEEDED_PKGS" ]]; then
-    apt-get install -y $NEEDED_PKGS || APT_OK=0
-  fi
-  if [[ "$APT_OK" -eq 1 && -n "$NEED_WG" ]]; then
-    apt-get install -y --no-install-recommends "$NEED_WG" || APT_OK=0
-  fi
-  if [[ "$APT_OK" -eq 1 ]]; then
-    echo "  Pakete: installiert"
+  # T-0077: NON-FATAL. The packages are VPN tools (openvpn/wg/strongswan), not
+  # required for the core app to boot — best-effort, retry next run.
+  # Entkoppelt (Gegenprüfung 25.10.2026): apt-get update + install brauchen auf
+  # einem langsamen Board mit schlechtem Netz leicht mehr als TimeoutStartSec.
+  # Eine eigene transiente Unit läuft weiter, auch wenn DVhub neu startet; der
+  # nächste Start prüft wieder mit dpkg -s und stößt nur an, was noch fehlt.
+  # DPkg::Lock::Timeout: wartet auf andere apt-Läufe (TimescaleDB, Stack-Update),
+  # statt sofort zu scheitern.
+  PKG_SCRIPT='apt-get -o DPkg::Lock::Timeout=300 update -qq || exit 1
+if [ -n "$1" ]; then DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y $1 || exit 1; fi
+if [ -n "$2" ]; then DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends "$2" || exit 1; fi
+echo "Pakete installiert:$1 $2"'
+  if systemctl is-active --quiet dvhub-vpn-packages.service 2>/dev/null; then
+    echo "  Pakete:$NEEDED_PKGS ${NEED_WG} — Installation läuft bereits im Hintergrund"
+  elif command -v systemd-run >/dev/null 2>&1 \
+      && systemd-run --collect --quiet --unit "dvhub-vpn-packages" \
+           --description "DVhub fehlende Pakete (VPN, Fern-Support)" \
+           --property=StandardOutput="append:$DATA_DIR/vpn-packages.log" \
+           --property=StandardError="append:$DATA_DIR/vpn-packages.log" \
+           bash -c "$PKG_SCRIPT" dvhub-vpn-packages "${NEEDED_PKGS# }" "$NEED_WG" 2>/dev/null; then
+    echo "  Pakete:$NEEDED_PKGS ${NEED_WG} — Installation im Hintergrund gestartet (Log: $DATA_DIR/vpn-packages.log)"
   else
-    echo "  WARN: Paket-Installation fehlgeschlagen (non-fatal, Netz?). VPN-Features ggf. bis zum naechsten erfolgreichen Lauf eingeschraenkt." >&2
+    setsid bash -c "$PKG_SCRIPT" dvhub-vpn-packages "${NEEDED_PKGS# }" "$NEED_WG" </dev/null >>"$DATA_DIR/vpn-packages.log" 2>&1 &
+    echo "  Pakete:$NEEDED_PKGS ${NEED_WG} — Installation im Hintergrund gestartet (ohne systemd-run)"
   fi
 else
   echo "  Pakete: OK"
@@ -69,7 +180,7 @@ fi
 # Fehlt das Skript (Teil-Deploy), bleibt es beim alten setcap.
 NODE_BIN="$(command -v node)"
 if [[ -f "$INSTALL_DIR/node-runtime-provision.sh" ]]; then
-  SERVICE_NAME="$SERVICE_NAME" DATA_DIR="$DATA_DIR" NODE_BIN="$NODE_BIN" \
+  pu_bounded 20 env SERVICE_NAME="$SERVICE_NAME" DATA_DIR="$DATA_DIR" NODE_BIN="$NODE_BIN" \
     bash "$INSTALL_DIR/node-runtime-provision.sh" || true
 elif [[ -n "$NODE_BIN" ]]; then
   setcap cap_net_bind_service=+ep "$NODE_BIN" 2>/dev/null || true
@@ -92,8 +203,8 @@ echo "  Verzeichnisse: OK"
 # transport=mqtt umgestellt) bleibt stehen — die neue Version landet als
 # <name>.dist daneben. Node-Helper (unit-getestet), non-fatal.
 if [[ -d "$APP_DIR/hersteller" ]]; then
-  node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs" "$CONFIG_DIR" "$APP_DIR" \
-    || echo "  (Herstellerprofil-Abgleich übersprungen — Node-Helper nicht ausführbar)"
+  pu_bounded 20 node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs" "$CONFIG_DIR" "$APP_DIR" \
+    || echo "  (Herstellerprofil-Abgleich übersprungen — Node-Helper nicht ausführbar oder Zeit aufgebraucht)"
   chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/hersteller" 2>/dev/null || true
 fi
 
@@ -102,39 +213,70 @@ if [[ ! -f "$CONFIG_DIR/tls/cert.pem" ]]; then
   echo "  Generiere Self-Signed TLS Zertifikat..."
   # Plan 08-05 Task 1: 397 days (≤ 398) keeps the cert browser-compatible
   # (Apple/Chrome/Mozilla hard-limit since Sep 2020). Was 3650 (10y).
-  openssl req -x509 -newkey rsa:2048 -nodes \
+  if pu_bounded 30 openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout "$CONFIG_DIR/tls/key.pem" \
     -out "$CONFIG_DIR/tls/cert.pem" \
-    -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null
-  chmod 600 "$CONFIG_DIR/tls/key.pem"
-  chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/tls/"* 2>/dev/null || true
+    -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null; then
+    chmod 600 "$CONFIG_DIR/tls/key.pem"
+    chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/tls/"* 2>/dev/null || true
+  else
+    # Halbes Paar weg, damit der nächste Start neu erzeugt.
+    rm -f "$CONFIG_DIR/tls/cert.pem" "$CONFIG_DIR/tls/key.pem"
+    echo "  WARN: TLS-Zertifikat nicht erzeugt — nächster Start" >&2
+  fi
 else
   echo "  TLS Zertifikat: OK"
 fi
 
 # ── 5. Sudoers (vollstaendig, idempotent) ──
-OPENVPN_PATH="$(command -v openvpn || echo /usr/sbin/openvpn)"
-WG_QUICK_PATH="$(command -v wg-quick || echo /usr/bin/wg-quick)"
-WG_PATH="$(command -v wg || echo /usr/bin/wg)"
 IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
 PKILL_PATH="$(command -v pkill || echo /usr/bin/pkill)"
 SYSTEMCTL_PATH="$(command -v systemctl)"
-# IPsec-Hilfsskript (2026-10-18): root-eigene Kopie außerhalb des App-Ordners
-# (der gehört dem Dienstbenutzer); die sudoers-Regel zeigt nur auf diese Kopie.
-IPSEC_LINK_PATH="/usr/local/libexec/dvhub-ipsec-link"
-if [[ -f "$INSTALL_DIR/dvhub-ipsec-link.sh" ]]; then
-  install -d -o root -g root -m 0755 "$(dirname "$IPSEC_LINK_PATH")"
-  install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-ipsec-link.sh" "$IPSEC_LINK_PATH"
-fi
-# Ersatzweg Modbus-Port (2026-10-18): Umleitung 502 → Ersatzport nur am
-# Tunnel-Interface, über eine root-eigene Kopie wie beim IPsec-Hilfsskript.
-MODBUS_REDIRECT_PATH="/usr/local/libexec/dvhub-modbus-redirect"
-if [[ -f "$INSTALL_DIR/dvhub-modbus-redirect.sh" ]]; then
-  install -d -o root -g root -m 0755 "$(dirname "$MODBUS_REDIRECT_PATH")"
-  install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-modbus-redirect.sh" "$MODBUS_REDIRECT_PATH"
-fi
-
+# BEGIN DVHUB HELPERS — keep this block byte-identical in install.sh and post-update.sh.
+# Root-eigene Hilfsskripte (Review/Gegenprüfung 25.10.2026): die sudoers-Regeln
+# zeigen nur auf diese Kopien unter /usr/local/libexec, nie auf eine Datei im
+# Programmordner und nie auf apt-get/setcap/openvpn/wg-quick mit beliebigen
+# Argumenten. Jedes Skript prüft seine Argumente selbst. Die Kopie entsteht aus
+# dem (root-eigenen) Programmordner, Platzhalter werden fest eingetragen
+# (INSTALL_DIR, CONFIG_DIR, SERVICE_USER, SERVICE_NAME, INSTALLED=1 — ohne das letzte liefe
+# ein Skript im Testbetrieb), und sie ersetzt die alte erst, wenn sie fertig ist.
+DVHUB_LIBEXEC="${DVHUB_LIBEXEC:-/usr/local/libexec}"
+IPSEC_LINK_PATH="$DVHUB_LIBEXEC/dvhub-ipsec-link"
+MODBUS_REDIRECT_PATH="$DVHUB_LIBEXEC/dvhub-modbus-redirect"
+UPDATE_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-update"
+APT_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-apt"
+SETCAP_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-setcap"
+VPN_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-vpn"
+dvhub_install_helper() {  # <datei im Programmordner> <ziel>
+  local src="$INSTALL_DIR/$1" dest="$2" tmp
+  [[ -f "$src" ]] || return 0
+  install -d -o root -g root -m 0755 "$(dirname "$dest")" || return 1
+  tmp="$(mktemp "${dest}.XXXXXX")" || return 1
+  if sed -e "s|^INSTALL_DIR=\"@INSTALL_DIR@\"\$|INSTALL_DIR=\"${INSTALL_DIR}\"|" \
+         -e "s|^CONFIG_DIR=\"@CONFIG_DIR@\"\$|CONFIG_DIR=\"${CONFIG_DIR}\"|" \
+         -e "s|^SERVICE_USER=\"@SERVICE_USER@\"\$|SERVICE_USER=\"${SERVICE_USER}\"|" \
+         -e "s|^SERVICE_NAME=\"@SERVICE_NAME@\"\$|SERVICE_NAME=\"${SERVICE_NAME}\"|" \
+         -e "s|^INSTALLED=\"@INSTALLED@\"\$|INSTALLED=\"1\"|" "$src" > "$tmp" \
+     && chown root:root "$tmp" && chmod 0755 "$tmp" && mv -f "$tmp" "$dest"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  echo "  WARN: Hilfsskript $dest nicht installiert" >&2
+  return 1
+}
+dvhub_install_helpers() {
+  local rc=0
+  dvhub_install_helper dvhub-ipsec-link.sh "$IPSEC_LINK_PATH" || rc=1
+  dvhub_install_helper dvhub-modbus-redirect.sh "$MODBUS_REDIRECT_PATH" || rc=1
+  dvhub_install_helper dvhub-update.sh "$UPDATE_HELPER_PATH" || rc=1
+  dvhub_install_helper dvhub-apt.sh "$APT_HELPER_PATH" || rc=1
+  dvhub_install_helper dvhub-setcap.sh "$SETCAP_HELPER_PATH" || rc=1
+  dvhub_install_helper dvhub-vpn.sh "$VPN_HELPER_PATH" || rc=1
+  return "$rc"
+}
+# END DVHUB HELPERS
+dvhub_install_helpers || echo "  WARN: nicht alle Hilfsskripte installiert — betroffene Funktionen bis zum nächsten Start eingeschränkt" >&2
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
 # Erst in eine Nebendatei schreiben und mit visudo -c prüfen (2026-10-18):
 # eine ungültige Datei in /etc/sudoers.d legt bei klassischem sudo ALLE
@@ -152,10 +294,18 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} stop dvhub-support-tunnel
 # EOS neu starten (2026-10-16): Knopf in der Oberfläche und Wache für hängende
 # Läufe. Nur restart genau dieser Unit.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart eos.service
-${SERVICE_USER} ALL=(root) NOPASSWD: ${OPENVPN_PATH} --config *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} up *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} down *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_PATH} show *
+# OpenVPN und WireGuard (Gegenprüfung 25.10.2026, P2): nur über das
+# root-eigene Hilfsskript dvhub-vpn. Es nimmt einen Profilnamen (keine Pfade,
+# keine Optionen), liest das Profil als ${SERVICE_USER}, prüft die Kopie
+# (OpenVPN: erlaubte Direktiven, --script-security 0; WireGuard: keine
+# Pre/Post-Up/Down, kein SaveConfig) und startet nur sie. Früher:
+# openvpn --config *, wg-quick up|down *, wg show * — beliebige Argumente als root.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} openvpn up *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} openvpn down
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} openvpn status
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} wireguard up *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} wireguard down *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} wireguard status
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} up *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} down *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} status *
@@ -173,21 +323,33 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${MODBUS_REDIRECT_PATH} del
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} link show *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
 # Process control — pkill by exact process name, not generic kill PID.
-# OpenVPN daemon (stopTunnel/healthCheck), strongSwan charon/starter.
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -0 -x openvpn
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x openvpn
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x openvpn
+# strongSwan charon/starter (OpenVPN beendet/prüft jetzt dvhub-vpn).
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x charon
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x starter
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x charon
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x starter
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/post-update.sh
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get update *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
+# Software-Update aus der Oberfläche (Review 25.10.2026): nur über den
+# root-eigenen Einstieg dvhub-update (prüft Tag/Commit/Untergrenze selbst).
+# Früher: bash ${INSTALL_DIR}/post-update.sh — eine Datei im Programmordner.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} fetch
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} stash
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} stash-pop
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-main
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-tag *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-commit *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} npm-install
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} post-update
+# Paketpflege aus der Oberfläche (Gegenprüfung 25.10.2026, P2): nur feste
+# Aktionen über dvhub-apt bzw. dvhub-setcap. Früher apt-get update/upgrade *,
+# apt list *, fuser *, setcap * — mit -o APT::Update::Pre-Invoke::=… oder einer
+# Capability auf einer beliebigen Datei wurde der Dienstbenutzer root.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} refresh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} list-upgradable
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} upgrade-all
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} upgrade-security
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} lock-held
+${SERVICE_USER} ALL=(root) NOPASSWD: ${SETCAP_HELPER_PATH} node
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/reboot
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/fuser *
 # T-PKGUPDATE (Christin 2026-07-02): the GUI TimescaleDB extension upgrade
 # ("Jetzt aktualisieren") bounces PostgreSQL twice around ALTER EXTENSION … UPDATE
 # — a fresh backend must load the new .so. Scoped to a restart of the postgresql
@@ -231,30 +393,76 @@ if [[ -f "$APP_DIR/package.json" ]]; then
     echo "  npm install: uebersprungen (${LOCK_FILE} unveraendert)"
   else
     echo "  npm install (${LOCK_FILE} geaendert oder node_modules fehlt)..."
-    # Als Dienstbenutzer, nicht als root (2026-10-15): root mit HOME=~dvhub legte
-    # root-eigene Einträge in dessen npm-Cache an, danach scheiterte das Update
-    # über die Oberfläche (als dvhub) mit EACCES. Alte Reste reparieren.
-    SVC_HOME="$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6)"
-    for d in "${SVC_HOME:-/nonexistent}/.npm" "${SVC_HOME:-/nonexistent}/.cache/dvhub-npm" "$APP_DIR/node_modules"; do
-      [[ -e "$d" ]] && chown -R "$SERVICE_USER:$SERVICE_USER" "$d" 2>/dev/null || true
-    done
-    NPM_AS=(npm)
-    if [[ "$(id -u)" -eq 0 ]] && id "$SERVICE_USER" >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
-      chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR" "$APP_DIR/package-lock.json" 2>/dev/null || true
-      NPM_AS=(runuser -u "$SERVICE_USER" -- env HOME="${SVC_HOME:-$HOME}" npm)
+    # Als root (Review 25.10.2026): $APP_DIR und node_modules gehören root; der
+    # Dienstbenutzer schreibt dort nichts mehr. Auch das Update aus der
+    # Oberfläche ruft npm als root auf (dvhub-update npm-install). Eigener Cache
+    # unter /root (dvhub/.npmrc: ${HOME}/.cache/dvhub-npm).
+    # Marker vor dem Lauf ungueltig machen (Review 25.10.2026): bricht npm ab
+    # (Timeout, Stromausfall, Abbruch aus der Oberflaeche), bleibt node_modules
+    # halb zurueck — ein stehender Marker haette die Reparatur unterdrueckt.
+    rm -f "$NPM_MARKER"
+    # Entkoppelt (Gegenprüfung 25.10.2026): npm install braucht auf einem
+    # langsamen Board leicht länger als TimeoutStartSec. Eine eigene transiente
+    # Unit führt es aus (Marker erst nach Erfolg; dieselbe Sperre wie
+    # dvhub-update npm-install aus der Oberfläche). Der Start wartet eine
+    # Weile; ist npm bis dahin fertig, startet DVhub gleich mit vollständigen
+    # Modulen. Sonst läuft die Unit weiter und startet DVhub nach Erfolg selbst
+    # neu (Merker NPM_RESTART_FLAG); scheitert sie, versucht es der nächste Start.
+    NPM_UNIT=dvhub-npm-install
+    # Merker und Sperre teilt die Unit mit dvhub-update (Update aus der
+    # Oberfläche): das nimmt den Merker weg und wartet auf die Sperre.
+    NPM_RESTART_FLAG="${NPM_RESTART_FLAG:-/run/dvhub-npm-restart}"
+    NPM_LOCK="${NPM_LOCK:-/run/lock/dvhub-update.lock}"
+    NPM_SCRIPT='cd "$1" || exit 1
+if command -v flock >/dev/null 2>&1; then exec 9>"$5" && flock -w 600 9 || exit 1; fi
+rm -f "$3"
+HOME=/root npm install --omit=dev || exit 1
+[ -n "$2" ] && printf "%s\n" "$2" > "$3"
+echo "npm install: OK"
+if [ -e "$4" ]; then rm -f "$4"; systemctl restart --no-block "$6"; fi'
+    rm -f "$NPM_RESTART_FLAG"
+    NPM_DETACHED=0
+    if systemctl is-active --quiet "$NPM_UNIT.service" 2>/dev/null; then
+      NPM_DETACHED=1
+    elif command -v systemd-run >/dev/null 2>&1 \
+        && systemd-run --collect --quiet --unit "$NPM_UNIT" \
+             --description "DVhub npm install (Abhaengigkeiten nach Update)" \
+             --property=StandardOutput="append:$DATA_DIR/npm-install.log" \
+             --property=StandardError="append:$DATA_DIR/npm-install.log" \
+             bash -c "$NPM_SCRIPT" "$NPM_UNIT" "$APP_DIR" "$CURRENT_HASH" "$NPM_MARKER" "$NPM_RESTART_FLAG" "$NPM_LOCK" "${SERVICE_NAME}.service" 2>/dev/null; then
+      NPM_DETACHED=1
     fi
+    if [[ "$NPM_DETACHED" -eq 1 ]]; then
+      NPM_WAIT_MAX=$(( $(pu_left) - 25 ))
+      (( NPM_WAIT_MAX > 75 )) && NPM_WAIT_MAX=75
+      NPM_WAITED=0
+      while (( NPM_WAITED < NPM_WAIT_MAX )) && systemctl is-active --quiet "$NPM_UNIT.service" 2>/dev/null; do
+        sleep 2
+        NPM_WAITED=$(( NPM_WAITED + 2 ))
+      done
+      if systemctl is-active --quiet "$NPM_UNIT.service" 2>/dev/null; then
+        touch "$NPM_RESTART_FLAG"
+        echo "  npm install: laeuft im Hintergrund weiter (Log: $DATA_DIR/npm-install.log) — DVhub startet danach neu"
+      elif [[ -n "$CURRENT_HASH" && "$(cat "$NPM_MARKER" 2>/dev/null)" == "$CURRENT_HASH" ]]; then
+        echo "  npm install: OK"
+      else
+        echo "  WARN: npm install fehlgeschlagen (non-fatal, Netz?). Marker NICHT aktualisiert -> Retry beim naechsten Lauf (Log: $DATA_DIR/npm-install.log)." >&2
+      fi
+    # Ohne systemd-run (oder es startet keine Unit): im Vordergrund, mit Zeitgrenze.
     # `if` suppresses `set -e`; no pipe so the rc is npm's own (not tail's).
-    if "${NPM_AS[@]}" install --omit=dev; then
+    elif pu_bounded 75 env HOME=/root npm install --omit=dev; then
       [[ -n "$CURRENT_HASH" ]] && printf '%s\n' "$CURRENT_HASH" >"$NPM_MARKER"
       echo "  npm install: OK"
     else
-      echo "  WARN: npm install fehlgeschlagen (non-fatal, Netz?). Marker NICHT aktualisiert -> Retry beim naechsten Lauf." >&2
+      echo "  WARN: npm install fehlgeschlagen oder Zeit aufgebraucht (non-fatal). Marker NICHT aktualisiert -> Retry beim naechsten Lauf." >&2
     fi
   fi
 fi
 
 # ── 7. Berechtigungen ──
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" 2>/dev/null || true
+# Nur Konfiguration gehört dem Dienstbenutzer; der Programmordner bleibt root
+# (Schritt 0). Früher: chown -R auf $INSTALL_DIR — siehe Review 25.10.2026.
+chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" 2>/dev/null || true
 echo "  Berechtigungen: OK"
 
 # ── 8. systemd Service aktuell? ──
@@ -326,8 +534,8 @@ echo "  systemd Service: OK"
 # ExecStartPre with '+'). NON-FATAL — a provisioning hiccup must never block boot.
 if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
   echo "  Support-Provisioning (T-0113)..."
-  if ( SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" \
-         bash "$INSTALL_DIR/support-provision.sh" ); then
+  if pu_bounded 30 env SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" \
+         bash "$INSTALL_DIR/support-provision.sh"; then
     echo "  Support-Provisioning: OK"
   else
     echo "  WARN: Support-Provisioning fehlgeschlagen (non-fatal). Fern-Support ggf. bis zum nächsten Lauf eingeschränkt." >&2
@@ -369,6 +577,8 @@ fi
 # eos-version.env überein. KEIN RAM-Gate mehr (Christin 2026-09-20): EOS kommt
 # immer mit. Opt-out weiterhin via $DATA_DIR/.no-eos. NON-FATAL durchgängig.
 EOS_DIR="$INSTALL_DIR/eos"
+EOS_VENV="$INSTALL_DIR/eos-venv"
+EOS_UNIT_PATH="${EOS_UNIT_PATH:-/etc/systemd/system/eos.service}"
 if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   # Gewuenschter EOS-Stand aus eos-version.env gegen den zuletzt installierten
   # (Marker $DATA_DIR/.eos-provisioned) — reiner Dateivergleich, KEIN Netzzugriff,
@@ -385,7 +595,9 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   # einem nachweisbaren Stand statt auf "irgendwas von damals".
   EOS_CURRENT=0
   [[ -n "$EOS_WANT" && "$EOS_HAVE" == "$EOS_WANT" ]] && EOS_CURRENT=1
-  if [[ -d "$EOS_DIR/.git" && -f /etc/systemd/system/eos.service && "$EOS_CURRENT" -eq 1 ]]; then
+  # Ausfuehrbares venv gehoert dazu (Review 25.10.2026): ein Update, das
+  # eos-venv/ weggeraeumt hatte, meldete sonst "EOS: OK" mit totem Dienst.
+  if [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 ]]; then
     # Aktuell — nur sicherstellen, dass der Dienst läuft (schnell).
     systemctl enable eos.service >/dev/null 2>&1 || true
     systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
@@ -470,7 +682,7 @@ fi
 # hochzieht (ALTER EXTENSION UPDATE). NON-FATAL durchgängig.
 # PostgreSQL schreibarm (2026-10-01, SD-Karte): idempotent, nur Reload.
 if [[ -f "$INSTALL_DIR/pg-write-tuning.sh" ]] && command -v psql >/dev/null 2>&1; then
-  bash "$INSTALL_DIR/pg-write-tuning.sh" || true
+  pu_bounded 30 bash "$INSTALL_DIR/pg-write-tuning.sh" || true
 fi
 if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 2>&1; then
   TS_ACTIVE=0
@@ -482,9 +694,15 @@ if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 
   # die Bibliothek laedt, keine Parktabelle wartet und keine Hypertable Zeilen in
   # ihrer Elterntabelle hat (Begruendung dort). Scheitert die Abfrage, weil die
   # Bibliothek zur Katalog-Version fehlt, startet die Nachruestung und repariert.
-  [[ "$(DB_NAME=dvhub bash "$INSTALL_DIR/timescale-provision.sh" --check 2>/dev/null)" == "timescale" ]] && TS_ACTIVE=1
+  # Zeitgrenze: haengt PostgreSQL (z. B. noch im Recovery), entscheidet der
+  # naechste Start; die Nachruestung startet dann nicht unnoetig.
+  TS_RC=0
+  TS_CHECK="$(pu_bounded 20 env DB_NAME=dvhub bash "$INSTALL_DIR/timescale-provision.sh" --check 2>/dev/null)" || TS_RC=$?
+  [[ "$TS_CHECK" == "timescale" ]] && TS_ACTIVE=1
   if [[ "$TS_ACTIVE" -eq 1 ]]; then
     echo "  TimescaleDB: OK (Community-Edition aktiv)"
+  elif [[ "$TS_RC" -eq 124 || "$TS_RC" -eq 137 ]]; then
+    echo "  TimescaleDB: Pruefung ueber der Zeitgrenze — entscheidet der naechste Start" >&2
   elif systemctl is-active --quiet dvhub-timescale-provision.service 2>/dev/null; then
     echo "  TimescaleDB: Hintergrund-Provisionierung laeuft bereits"
   else

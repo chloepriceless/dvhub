@@ -23,6 +23,19 @@ export const IPSEC_LINK_HELPER = '/usr/local/libexec/dvhub-ipsec-link';
 // (dvhub-modbus-redirect.sh, root-eigene Kopie; nativ install.sh/post-update.sh,
 // im Container das Dockerfile).
 export const MODBUS_REDIRECT_HELPER = '/usr/local/libexec/dvhub-modbus-redirect';
+// OpenVPN und WireGuard (Gegenprüfung 25.10.2026, P2): nur über das root-eigene
+// Hilfsskript dvhub-vpn.sh. Es bekommt einen Profilnamen (und ggf. den
+// Dateinamen im Profil), nie einen Pfad oder Optionen; es liest das Profil als
+// Dienstbenutzer, prüft es selbst (OpenVPN: erlaubte Direktiven,
+// --script-security 0; WireGuard: keine Hooks, kein SaveConfig) und startet nur
+// die geprüfte Kopie. Früher: sudo openvpn --config <pfad> / wg-quick up <pfad>
+// mit beliebigen Argumenten.
+export const VPN_HELPER = '/usr/local/libexec/dvhub-vpn';
+// PID-Datei des openvpn, das dvhub-vpn startet: root-eigener Ordner unter /run
+// (früher /tmp/dvhub-openvpn.pid — dort hätte jeder Benutzer einen Verweis
+// anlegen können, den openvpn als root beschreibt).
+export const OPENVPN_PID_FILE = '/run/dvhub-vpn/openvpn.pid';
+const DEFAULT_PROFILE_FILE = { openvpn: 'client.ovpn', wireguard: 'wg0.conf' };
 
 // Status-Prüfungen OHNE sudo (2026-10-01): der Watchdog lief alle 10 s mit
 // `sudo pkill -0` + `sudo ip link show` — jede sudo-Sitzung schreibt mehrere
@@ -82,6 +95,29 @@ export function ipsecSourceProfile(cfgPath, profilesDir = PROFILES_DIR) {
   if (path.dirname(dir) !== path.resolve(profilesDir)) return null;
   const name = path.basename(dir);
   return /^[A-Za-z0-9_-]{1,64}$/.test(name) ? name : null;
+}
+
+// Profil und Datei für dvhub-vpn aus dem Konfigurationspfad: nur
+// <profiles>/<profil>/<datei>, sonst null (das Hilfsskript sucht nur dort).
+export function vpnProfileRef(cfgPath, profilesDir = PROFILES_DIR) {
+  const resolved = path.resolve(String(cfgPath || ''));
+  const dir = path.dirname(resolved);
+  if (path.dirname(dir) !== path.resolve(profilesDir)) return null;
+  const profile = path.basename(dir);
+  const file = path.basename(resolved);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(profile)) return null;
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/.test(file)) return null;
+  return { profile, file };
+}
+
+// Argumente für `dvhub-vpn <proto> <aktion>`: Profil, Datei nur wenn nicht Standard.
+function vpnHelperArgs(proto, action, ref) {
+  const args = ['-n', VPN_HELPER, proto, action];
+  if (ref) {
+    args.push(ref.profile);
+    if (ref.file !== DEFAULT_PROFILE_FILE[proto]) args.push(ref.file);
+  }
+  return args;
 }
 
 export function sanitizeProfileName(name) {
@@ -351,7 +387,8 @@ export function createVpnManager(ctx) {
   const { state, getCfg, pushLog } = ctx;
   // Tests reichen einen Ersatz durch; im Betrieb das echte execFile.
   const execFileAsync = ctx.execFileAsync || defaultExecFileAsync;
-  const ipsecProfilesDir = ctx.profilesDir || PROFILES_DIR;   // Tests: eigenes Verzeichnis
+  const spawnProcess = ctx.spawn || spawn;
+  const profilesDir = ctx.profilesDir || PROFILES_DIR;   // Tests: eigenes Verzeichnis (IPsec, OpenVPN, WireGuard)
   const ifaceExists = ctx.interfaceExists || interfaceExists; // Tests: ohne /sys/class/net
 
   // -- state initialisation --
@@ -613,6 +650,18 @@ export function createVpnManager(ctx) {
         return;
       }
 
+      // Das Hilfsskript nimmt nur Profile im Profilordner (Name statt Pfad).
+      let ref = null;
+      if (proto !== 'ipsec') {
+        ref = vpnProfileRef(cfgPath, profilesDir);
+        if (!ref || !(proto === 'wireguard' ? /\.conf$/ : /\.ovpn$/).test(ref.file)) {
+          state.vpn.status = 'error';
+          state.vpn.lastError = `VPN-Profil muss im Profilordner liegen: ${profilesDir}/<Profil>/${DEFAULT_PROFILE_FILE[proto]} (ist: ${cfgPath})`;
+          pushLog('vpn_start_error', { error: state.vpn.lastError, protocol: proto });
+          return;
+        }
+      }
+
       state.vpn.status = 'connecting';
       state.vpn.enabled = true;
       state.vpn.protocol = proto;
@@ -624,20 +673,20 @@ export function createVpnManager(ctx) {
       pushLog('vpn_connecting', { profile: state.vpn.profileName, protocol: proto });
 
       if (proto === 'wireguard') {
-        await startWireGuard(cfgPath, vc);
+        await startWireGuard(ref, vc);
       } else if (proto === 'ipsec') {
         await startIPSec(cfgPath, vc);
       } else {
-        await startOpenVpn(cfgPath, vc);
+        await startOpenVpn(ref, vc);
       }
     } finally {
       starting = false;
     }
   }
 
-  async function startOpenVpn(cfgPath, vc) {
-    const args = ['openvpn', '--config', cfgPath, '--writepid', '/tmp/dvhub-openvpn.pid'];
-    const child = spawn('sudo', args, {
+  async function startOpenVpn(ref, vc) {
+    // dvhub-vpn startet openvpn im Vordergrund (exec): stdout/Exit wie bisher.
+    const child = spawnProcess('sudo', vpnHelperArgs('openvpn', 'up', ref), {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false
     });
@@ -651,9 +700,13 @@ export function createVpnManager(ctx) {
       }
     });
 
+    let lastStderr = '';
     child.stderr.on('data', (data) => {
       const line = data.toString().trim();
-      if (line) pushLog('vpn_stderr', { message: line.slice(0, 200) });
+      if (line) {
+        lastStderr = line.split('\n').at(-1).slice(0, 300);
+        pushLog('vpn_stderr', { message: line.slice(0, 200) });
+      }
     });
 
     child.on('error', (err) => {
@@ -671,6 +724,8 @@ export function createVpnManager(ctx) {
       }
       openvpnProcess = null;
       openvpnPid = null;
+      // Abgelehntes Profil o. Ä. (dvhub-vpn: Exit 2/3 mit Meldung): Grund zeigen.
+      if (!wasConnected && code && lastStderr) state.vpn.lastError = lastStderr;
       pushLog('vpn_process_exit', { code, signal });
 
       if (wasConnected && vpnCfg().watchdog?.enabled) {
@@ -695,12 +750,12 @@ export function createVpnManager(ctx) {
     startCertCheck();
   }
 
-  async function startWireGuard(cfgPath, vc) {
+  async function startWireGuard(ref, vc) {
     try {
-      await execFileAsync('sudo', ['wg-quick', 'up', cfgPath]);
+      await execFileAsync('sudo', vpnHelperArgs('wireguard', 'up', ref));
     } catch (e) {
       state.vpn.status = 'error';
-      state.vpn.lastError = e.message || e.stderr || 'wg-quick up failed';
+      state.vpn.lastError = String(e.stderr || '').trim().split('\n').at(-1) || e.message || 'wg-quick up failed';
       pushLog('vpn_start_error', { error: state.vpn.lastError, protocol: 'wireguard' });
       return;
     }
@@ -743,9 +798,9 @@ export function createVpnManager(ctx) {
       }
       // vpn.configPath darf auf ein anderes Profil zeigen (wie früher die Regel
       // `ln -sf …/profiles/*/ipsec.conf`) — dann verlinkt das Skript dessen Dateien.
-      const sourceProfile = ipsecSourceProfile(cfgPath, ipsecProfilesDir);
+      const sourceProfile = ipsecSourceProfile(cfgPath, profilesDir);
       if (!sourceProfile) {
-        throw new Error(`IPsec-Profil muss unter ${ipsecProfilesDir}/<Profil>/ipsec.conf liegen (ist: ${cfgPath})`);
+        throw new Error(`IPsec-Profil muss unter ${profilesDir}/<Profil>/ipsec.conf liegen (ist: ${cfgPath})`);
       }
       const linkArgs = sourceProfile === safeProfile ? [safeProfile] : [safeProfile, sourceProfile];
       await execFileAsync('sudo', ['-n', IPSEC_LINK_HELPER, 'link', ...linkArgs]);
@@ -810,7 +865,7 @@ export function createVpnManager(ctx) {
     // read PID (OpenVPN only)
     if (state.vpn.protocol === 'openvpn') {
       try {
-        const pidStr = await fsPromises.readFile('/tmp/dvhub-openvpn.pid', 'utf8');
+        const pidStr = await fsPromises.readFile(OPENVPN_PID_FILE, 'utf8');
         openvpnPid = parseInt(pidStr.trim(), 10) || null;
       } catch { /* ignore */ }
     }
@@ -933,13 +988,12 @@ export function createVpnManager(ctx) {
   }
 
   async function stopOpenVpn() {
-    if (openvpnPid) {
+    if (openvpnPid || openvpnProcess) {
       try {
-        // pkill -x openvpn matches the narrowed sudoers rule (install.sh /
-        // post-update.sh only allow `pkill -15 -x openvpn`, not generic
-        // `kill -15 *`). The name match is fine because we only ever spawn
-        // one openvpn daemon per dvhub service.
-        await execFileAsync('sudo', ['pkill', '-15', '-x', 'openvpn']);
+        // dvhub-vpn beendet genau den openvpn aus seiner PID-Datei (sonst
+        // pkill -x openvpn wie früher). Zusätzlich unten SIGTERM an sudo, das
+        // ihn an openvpn weiterreicht.
+        await execFileAsync('sudo', vpnHelperArgs('openvpn', 'down'));
       } catch { /* already dead or no matching process */ }
     }
 
@@ -958,8 +1012,12 @@ export function createVpnManager(ctx) {
   async function stopWireGuard() {
     const vc = vpnCfg();
     const cfgPath = vc.configPath || configPath(vc.profileName);
+    // Fährt mit der Kopie vom Start herunter; das Profil braucht dvhub-vpn nur,
+    // wenn die fehlt (sudoers: `wireguard down *` verlangt ein Argument).
+    const ref = vpnProfileRef(cfgPath, profilesDir)
+      || { profile: sanitizeProfileName(state.vpn.profileName || vc.profileName), file: DEFAULT_PROFILE_FILE.wireguard };
     try {
-      await execFileAsync('sudo', ['wg-quick', 'down', cfgPath]);
+      await execFileAsync('sudo', vpnHelperArgs('wireguard', 'down', ref));
     } catch { /* interface might already be down */ }
   }
 
@@ -1043,7 +1101,7 @@ export function createVpnManager(ctx) {
     if (state.vpn.protocol === 'openvpn' && openvpnPid) {
       let alive = processIsOpenvpn(openvpnPid);
       if (alive === null) {
-        try { await execFileAsync('sudo', ['pkill', '-0', '-x', 'openvpn']); alive = true; } catch { alive = false; }
+        try { await execFileAsync('sudo', vpnHelperArgs('openvpn', 'status')); alive = true; } catch { alive = false; }
       }
       if (!alive) {
         pushLog('vpn_watchdog_pid_dead', {});
@@ -1062,7 +1120,8 @@ export function createVpnManager(ctx) {
     // 3. WireGuard-specific: check latest handshake isn't stale (>3 min)
     if (state.vpn.protocol === 'wireguard') {
       try {
-        const { stdout } = await execFileAsync('sudo', ['wg', 'show', iface, 'latest-handshakes']);
+        // dvhub-vpn: `wg show wg0 latest-handshakes` (Interface fest).
+        const { stdout } = await execFileAsync('sudo', vpnHelperArgs('wireguard', 'status'));
         const match = stdout.match(/\t(\d+)/);
         if (match) {
           const lastHandshake = parseInt(match[1], 10);

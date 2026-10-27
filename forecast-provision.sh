@@ -67,7 +67,8 @@ fail() {  # reason detail
   exit 1
 }
 
-if [[ "${EUID}" -ne 0 ]]; then
+# FORECAST_PROVISION_EUID: nur fuer Tests (test/forecast-provision-probe.test.js).
+if [[ "${FORECAST_PROVISION_EUID:-$EUID}" -ne 0 ]]; then
   echo "  Forecast: forecast-provision.sh muss als root laufen — uebersprungen" >&2
   exit 1
 fi
@@ -117,13 +118,21 @@ echo "  Forecast: richte Python-venv ein/aktualisiere ($VENV_DIR) ..."
 
 # Ensure python3-venv ACTUALLY works (T-0118 probe): `venv --help` succeeds even
 # without ensurepip, so probe with a real throwaway venv creation.
-if ! python3 -m venv /tmp/_dvhub_fc_venvtest >/dev/null 2>&1; then
+# Eigener frischer Ordner (mktemp -d) statt eines festen Namens in /tmp
+# (Review 25.10.2026): den hätte ein anderer Benutzer vorab belegen können.
+VENV_PROBE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dvhub-fc-venvtest.XXXXXX")"
+if ! python3 -m venv "$VENV_PROBE_DIR/venv" >/dev/null 2>&1; then
   echo "  Forecast: installiere python3-venv/pip ..."
   apt-get install -y python3-venv python3-pip >/dev/null 2>&1 || true
 fi
-rm -rf /tmp/_dvhub_fc_venvtest
+rm -rf "$VENV_PROBE_DIR"
 
 mkdir -p "$(dirname "$VENV_DIR")"
+# Ein venv aus einer frueheren Version gehoerte dem Dienstbenutzer: erst root
+# zuordnen, dann pip daraus als root ausfuehren (Review 25.10.2026).
+if [[ -d "$VENV_DIR" ]]; then
+  chown -R 0:0 "$VENV_DIR" && chmod -R go-w,a+rX "$VENV_DIR" || fail venv_owner "Besitz von $VENV_DIR nicht auf root setzbar"
+fi
 if [[ ! -d "$VENV_DIR" ]]; then
   python3 -m venv "$VENV_DIR" || fail venv_failed "python3 -m venv $VENV_DIR schlug fehl (python3-venv installiert?)"
 fi
@@ -174,8 +183,9 @@ fi
 # trainierte Modelle löscht ein Update nicht ungefragt.
 rmdir "$LEGACY_ML_MODELS_DIR" 2>/dev/null || true
 
-# Ownership: the systemd user must be able to execute the venv.
-chown -R "$SERVICE_USER:$SERVICE_USER" "$VENV_DIR" 2>/dev/null || true
+# Besitz: root, fuer den Dienstbenutzer nur lesbar/ausfuehrbar (Review
+# 25.10.2026) — root fuehrt beim naechsten Lauf pip aus diesem venv aus.
+chown -R 0:0 "$VENV_DIR" 2>/dev/null && chmod -R go-w,a+rX "$VENV_DIR" 2>/dev/null || true
 
 # Mark success so the next boot's post-update.sh can fast-skip (no pip per boot).
 mkdir -p "$(dirname "$MARKER")"
