@@ -4546,9 +4546,20 @@ export function createDefaultConfig() {
       // Neuplan aus. false = immer mitplanen (altes Verhalten).
       evPlanOnlyWhenPlugged: true,
       evDepartureEnabled: false,
+      // Wochenplan (ev-departure.js effectiveWeeklyPlan): 7 Eintraege
+      // { day 1..7, arrival 'HH:MM'|'', departure 'HH:MM'|'', targetValue, commuteKm }.
+      // null = noch nie gespeichert → aus evDepartureTime + evDepartureDays
+      // abgeleitet (gleiche Abfahrt an diesen Tagen, keine Ankunft). Die beiden
+      // alten Felder bleiben dafuer stehen.
+      evWeeklyPlan: null,
       evDepartureTime: '07:00',
       evDepartureDays: [1, 2, 3, 4, 5],
       evDepartureOnce: '',
+      // Einmalige Ankunft (ISO) fuer das Fenster, in dessen Luecke sie faellt.
+      evArrivalOnce: '',
+      // Heimweg in km (ev-arrival.js): so viel faehrt das Auto noch, bevor es
+      // ansteckt; im Wochenplan je Tag ueberschreibbar. 0 = nichts abziehen.
+      evCommuteKm: 0,
       evTargetMode: 'percent',
       evTargetValue: 80,
       evConsumptionKwhPer100km: 18,

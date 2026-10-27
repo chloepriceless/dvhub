@@ -28,7 +28,7 @@ import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, grid
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
-import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
+import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
 import { WALLBOX_TYPES } from './services/wallbox/types.js';
@@ -5408,6 +5408,11 @@ export function createApiRoutes(ctx) {
           time: opt.evDepartureTime || '07:00',
           days: Array.isArray(opt.evDepartureDays) ? opt.evDepartureDays : [1, 2, 3, 4, 5],
           once: opt.evDepartureOnce || '',
+          // Wochenplan (immer 7 Tage; alte Config: aus time + days abgeleitet).
+          weeklyPlan: effectiveWeeklyPlan(opt),
+          arrivalOnce: opt.evArrivalOnce || '',
+          commuteKm: Number(opt.evCommuteKm) || 0,
+          consumptionKwhPer100km: opt.evConsumptionKwhPer100km ?? 18,
           targetMode: opt.evTargetMode || 'percent',
           targetValue: opt.evTargetValue ?? 80,
           resolved,
@@ -5531,6 +5536,9 @@ export function createApiRoutes(ctx) {
             time: raw.optimizer?.evDepartureTime || '07:00',
             days: Array.isArray(raw.optimizer?.evDepartureDays) ? raw.optimizer.evDepartureDays : [1, 2, 3, 4, 5],
             once: raw.optimizer?.evDepartureOnce || '',
+            weeklyPlan: effectiveWeeklyPlan(raw.optimizer || {}),
+            arrivalOnce: raw.optimizer?.evArrivalOnce || '',
+            commuteKm: Number(raw.optimizer?.evCommuteKm) || 0,
             targetMode: raw.optimizer?.evTargetMode || 'percent',
             targetValue: raw.optimizer?.evTargetValue ?? 80,
             consumptionKwhPer100km: raw.optimizer?.evConsumptionKwhPer100km ?? 18,

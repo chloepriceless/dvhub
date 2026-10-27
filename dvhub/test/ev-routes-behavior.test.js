@@ -96,7 +96,7 @@ describe('POST /api/ev', () => {
     const r = await call(ctx, 'POST', '/api/ev', { departure: { enabled: true, time: '7:30', days: [5, 1, 1, 9], targetMode: 'percent', targetValue: 80 } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     // „7:30“ → „07:30“, Tage entdoppelt + sortiert, 9 verworfen.
-    assert.deepEqual(r.body.patch, { evDepartureEnabled: true, evDepartureTime: '07:30', evDepartureDays: [1, 5], evTargetMode: 'percent', evTargetValue: 80 });
+    assert.deepEqual(r.body.patch, { evDepartureEnabled: true, evDepartureTime: '07:30', evDepartureDays: [1, 5], evWeeklyPlan: null, evTargetMode: 'percent', evTargetValue: 80 });
     assert.deepEqual(ctx.replans, []);
   });
 
@@ -192,6 +192,45 @@ describe('Pro (eos): Wallbox-Steuerung und E-Auto-Planung (2026-10-15)', () => {
     const r = await call(ctx, 'POST', '/api/ev', { optimizeEv: true });
     assert.equal(r.status, 403);
     assert.equal(r.body.feature, 'eos');
+    assert.equal(ctx.saved.length, 0);
+  });
+});
+
+describe('Wochenplan über /api/ev (2026-10-27)', () => {
+  it('GET liefert den abgeleiteten Wochenplan einer alten Config (Mo–Fr 07:00, keine Ankunft)', async () => {
+    const ctx = makeCtx();
+    Object.assign(ctx.getRawCfg().optimizer, { evDepartureEnabled: true, evDepartureTime: '07:00', evDepartureDays: [1, 2, 3, 4, 5] });
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const wp = r.body.departure.weeklyPlan;
+    assert.equal(wp.length, 7);
+    assert.deepEqual(wp.map((e) => e.departure), ['07:00', '07:00', '07:00', '07:00', '07:00', '', '']);
+    assert.deepEqual(wp.map((e) => e.arrival), ['', '', '', '', '', '', '']);
+    assert.equal(r.body.departure.arrivalOnce, '');
+    assert.equal(r.body.departure.commuteKm, 0);
+  });
+
+  it('POST mit Wochenplan + einmaliger Ankunft + Heimweg → normalisiert gespeichert', async () => {
+    const ctx = makeCtx();
+    const r = await call(ctx, 'POST', '/api/ev', { departure: {
+      enabled: true, commuteKm: 25, arrivalOnce: '2026-10-27T21:30:00+01:00',
+      weeklyPlan: [{ day: 1, arrival: '20:00', departure: '5:00' }, { day: 5, arrival: '15:00', departure: '09:00', targetValue: 100 }],
+    } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const opt = ctx.saved.at(-1).optimizer;
+    assert.equal(opt.evWeeklyPlan.length, 7);
+    assert.deepEqual(opt.evWeeklyPlan[0], { day: 1, arrival: '20:00', departure: '05:00', targetValue: null, commuteKm: null });
+    assert.equal(opt.evWeeklyPlan[4].targetValue, 100);
+    assert.equal(opt.evArrivalOnce, '2026-10-27T20:30:00.000Z');
+    assert.equal(opt.evCommuteKm, 25);
+    assert.deepEqual(ctx.replans, [], 'Planänderung allein stößt keinen Sofort-Lauf an (die Minuten-Wache übernimmt)');
+  });
+
+  it('POST Ankunft ohne Abfahrt → 400, nichts gespeichert', async () => {
+    const ctx = makeCtx();
+    const r = await call(ctx, 'POST', '/api/ev', { departure: { weeklyPlan: [{ day: 2, arrival: '20:00' }] } });
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error, 'departure.weeklyPlan[0].departure is required with an arrival');
     assert.equal(ctx.saved.length, 0);
   });
 });
