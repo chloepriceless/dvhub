@@ -87,6 +87,7 @@ test('EOS-Schnellweg: alles vorhanden → OK, keine Provisionierung', () => {
 });
 
 const NPM_BLOCK = block('if [[ -f "$APP_DIR/package.json" ]]; then\n  cd "$APP_DIR"', '# ── 7.');
+const BUDGET_BLOCK = block('# ── Startzeit-Budget ──', '# ── Ende Startzeit-Budget ──');
 
 function npmCase({ npmOk, marker }) {
   const s = sandbox();
@@ -100,7 +101,9 @@ function npmCase({ npmOk, marker }) {
   s.fake('npm', `[[ -e "${join(inst, '.npm-install-hash')}" ]] && echo "MARKER_DURING_INSTALL" >> "${join(s.dir, 'calls.log')}"\n${npmOk ? 'exit 0' : 'exit 1'}`);
   s.fake('chown'); s.fake('runuser', 'shift 2; exec "$@"'); s.fake('getent', `echo "dvhub:x:1:1::${s.dir}:/bin/sh"`);
   s.fake('id', 'exit 0');
-  const r = s.run(`INSTALL_DIR='${inst}'\nAPP_DIR='${app}'\nSERVICE_USER=dvhub\n${NPM_BLOCK}`);
+  // Ohne startbare Unit (systemd-run scheitert): npm im Vordergrund, begrenzt.
+  s.fake('systemd-run', 'exit 1'); s.fake('systemctl', 'exit 3');
+  const r = s.run(`${BUDGET_BLOCK}\nINSTALL_DIR='${inst}'\nAPP_DIR='${app}'\nDATA_DIR='${s.dir}'\nSERVICE_NAME=dvhub\nNPM_RESTART_FLAG='${join(s.dir, 'flag')}'\nSERVICE_USER=dvhub\n${NPM_BLOCK}`);
   const markerNow = existsSync(join(inst, '.npm-install-hash')) ? readFileSync(join(inst, '.npm-install-hash'), 'utf8').trim() : null;
   const hash = execFileSync('sha256sum', [join(app, 'package-lock.json')], { encoding: 'utf8' }).split(' ')[0];
   return { s, r, markerNow, hash };

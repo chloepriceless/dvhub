@@ -73,17 +73,21 @@ function runBlock(dir, extra = {}) {
   return { r, calls: existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [], inst };
 }
 
-test('Rechte-Block: fremder Besitz → chown -R 0:0 + chmod go-w,a+rX, Marker, systemweites safe.directory', () => {
+test('Rechte-Block: fremder Besitz → chown/chmod nur der falschen Einträge, Marker, systemweites safe.directory', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-own-'));
   try {
     const inst = join(dir, 'opt');
     mkdirSync(join(inst, 'dvhub'), { recursive: true });
     execFileSync('git', ['init', '-q', inst]);
     writeFileSync(join(inst, 'post-update.sh'), '#\n');
+    chmodSync(join(inst, 'post-update.sh'), 0o600);   // für dvhub nicht lesbar → chmod
     const { r, calls } = runBlock(dir);
     assert.equal(r.status, 0, r.stderr);
-    // Der Testlauf gehört nicht root → der Block muss umstellen.
-    assert.deepEqual(calls, [`chown -R 0:0 ${inst}`, `chmod -R go-w,a+rX ${inst}`]);
+    // Der Testlauf gehört nicht root → der Block muss umstellen — Eintrag für
+    // Eintrag über find -exec (Gegenprüfung 25.10.2026: kein chown -R mehr).
+    assert.equal(calls.length, 2, calls.join('\n'));
+    assert.ok(calls[0].startsWith(`chown -h 0:0 ${inst}`) && calls[0].includes(join(inst, 'post-update.sh')), calls[0]);
+    assert.ok(calls[1].startsWith('chmod go-w,a+rX ') && calls[1].includes(join(inst, 'post-update.sh')), calls[1]);
     assert.equal(readFileSync(join(inst, '.root-owned-rev'), 'utf8').trim(), 'nogit');
     assert.match(readFileSync(join(dir, 'gitconfig-system'), 'utf8'), new RegExp(`directory = ${inst.replace(/[/.]/g, '\\$&')}`));
     // Zweiter Lauf: safe.directory nicht doppelt.

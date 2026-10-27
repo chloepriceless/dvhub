@@ -305,17 +305,31 @@ assert_supported_layout
 # dvhub-update beim Auschecken prüft — nicht entfernen.
 # Voller Durchlauf nur, wenn sich der Stand geändert hat oder etwas nicht passt
 # (Marker .root-owned-rev, selbst root-eigen); sonst kostet der Schritt nichts.
+# Geändert wird nur, was nicht passt (Gegenprüfung 25.10.2026: früher chown -R
+# über alles, auch die großen venvs). Optional mit Zeitgrenze (post-update.sh,
+# Dienststart): reicht sie nicht, bleibt der Marker alt und der nächste Lauf
+# macht dort weiter, wo noch etwas falsch ist.
 # safe.directory (systemweit) lässt den Dienstbenutzer im root-eigenen Repo
 # lesen (Update-Prüfung: git rev-parse/log/tag).
-dvhub_root_own_install_dir() {
-  local dir="$1" mark="$1/.root-owned-rev" want
+dvhub_root_own_install_dir() {  # <ordner> [<höchstens sekunden je Schritt>]
+  local dir="$1" mark="$1/.root-owned-rev" want lim=() rc=0 wrong
   [[ -d "$dir" ]] || return 0
-  want="$(git -c safe.directory="$dir" -C "$dir" rev-parse --verify -q HEAD 2>/dev/null)" || want=nogit
+  [[ -n "${2:-}" ]] && command -v timeout >/dev/null 2>&1 && lim=(timeout -k 5 "$2")
+  want="$(git -c safe.directory="$dir" -c core.fsmonitor=false -C "$dir" rev-parse --verify -q HEAD 2>/dev/null)" || want=nogit
   if [[ "$(cat "$mark" 2>/dev/null)" != "$want" || -z "$(find "$dir" "$mark" -maxdepth 0 -user 0 2>/dev/null | sed -n 2p)" ]]; then
-    if [[ -n "$(find "$dir" -xdev \( \( -type l \( ! -user 0 -o ! -group 0 \) \) -o \( ! -type l \( ! -user 0 -o ! -group 0 -o -perm -0020 -o -perm -0002 -o ! -perm -0004 \) \) \) -print -quit 2>/dev/null)" ]]; then
+    wrong="$(${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -o \( ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) \) \) -print -quit 2>/dev/null)" || rc=$?
+    if [[ -n "$wrong" && "$rc" -ne 124 && "$rc" -ne 137 ]]; then
       echo "  Rechte: $dir gehört root (Dienstbenutzer nur lesend)"
-      chown -R 0:0 "$dir"
-      chmod -R go-w,a+rX "$dir"
+      rc=0
+      ${lim[@]+"${lim[@]}"} find "$dir" -xdev \( ! -user 0 -o ! -group 0 \) -exec chown -h 0:0 {} + 2>/dev/null || rc=$?
+      if [[ "$rc" -ne 124 && "$rc" -ne 137 ]]; then
+        rc=0
+        ${lim[@]+"${lim[@]}"} find "$dir" -xdev ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) -exec chmod go-w,a+rX {} + 2>/dev/null || rc=$?
+      fi
+    fi
+    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+      echo "  Rechte: Zeitgrenze erreicht — der nächste Start setzt fort" >&2
+      return 1
     fi
     rm -f "$mark"
     printf '%s\n' "$want" > "$mark"

@@ -19,6 +19,33 @@ fi
 
 echo "DVhub post-update (idempotent)"
 
+# ── Startzeit-Budget ──
+# Dieses Skript läuft als ExecStartPre bei JEDEM Dienststart; die Unit hat
+# TimeoutStartSec=120. Läuft es länger, scheitert der Start trotz '-', und
+# Restart=always wiederholt dieselbe langsame Arbeit (Gegenprüfung 25.10.2026).
+# Darum laufen langsame Schritte entkoppelt (systemd-run: Pakete, npm, EOS,
+# Forecast, TimescaleDB, Stack-Update) oder mit Zeitgrenze aus einem
+# gemeinsamen Budget. Was nicht fertig wird, setzt der nächste Start fort —
+# jeder Marker steht erst nach Erfolg.
+PU_BUDGET_S="${DVHUB_START_BUDGET_S:-90}"
+pu_left() { echo $(( PU_BUDGET_S - SECONDS )); }
+pu_bounded() {  # <höchstens sekunden> <befehl…> — 124, wenn die Zeit fehlt oder abläuft
+  local max="$1" left
+  shift
+  left="$(pu_left)"
+  (( left < max )) && max="$left"
+  if (( max < 3 )); then
+    echo "  WARN: Startzeit aufgebraucht — übersprungen bis zum nächsten Start: $*" >&2
+    return 124
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 5 "$max" "$@"
+  else
+    "$@"
+  fi
+}
+# ── Ende Startzeit-Budget ──
+
 # BEGIN DVHUB INSTALL-DIR OWNERSHIP — keep this block byte-identical in install.sh and post-update.sh.
 # DVHUB_ROOT_OWNED_INSTALL (Review 25.10.2026, P1): der Programmordner gehört
 # root und ist für den Dienstbenutzer nur lesbar. root führt daraus bei jedem
@@ -29,17 +56,31 @@ echo "DVhub post-update (idempotent)"
 # dvhub-update beim Auschecken prüft — nicht entfernen.
 # Voller Durchlauf nur, wenn sich der Stand geändert hat oder etwas nicht passt
 # (Marker .root-owned-rev, selbst root-eigen); sonst kostet der Schritt nichts.
+# Geändert wird nur, was nicht passt (Gegenprüfung 25.10.2026: früher chown -R
+# über alles, auch die großen venvs). Optional mit Zeitgrenze (post-update.sh,
+# Dienststart): reicht sie nicht, bleibt der Marker alt und der nächste Lauf
+# macht dort weiter, wo noch etwas falsch ist.
 # safe.directory (systemweit) lässt den Dienstbenutzer im root-eigenen Repo
 # lesen (Update-Prüfung: git rev-parse/log/tag).
-dvhub_root_own_install_dir() {
-  local dir="$1" mark="$1/.root-owned-rev" want
+dvhub_root_own_install_dir() {  # <ordner> [<höchstens sekunden je Schritt>]
+  local dir="$1" mark="$1/.root-owned-rev" want lim=() rc=0 wrong
   [[ -d "$dir" ]] || return 0
-  want="$(git -c safe.directory="$dir" -C "$dir" rev-parse --verify -q HEAD 2>/dev/null)" || want=nogit
+  [[ -n "${2:-}" ]] && command -v timeout >/dev/null 2>&1 && lim=(timeout -k 5 "$2")
+  want="$(git -c safe.directory="$dir" -c core.fsmonitor=false -C "$dir" rev-parse --verify -q HEAD 2>/dev/null)" || want=nogit
   if [[ "$(cat "$mark" 2>/dev/null)" != "$want" || -z "$(find "$dir" "$mark" -maxdepth 0 -user 0 2>/dev/null | sed -n 2p)" ]]; then
-    if [[ -n "$(find "$dir" -xdev \( \( -type l \( ! -user 0 -o ! -group 0 \) \) -o \( ! -type l \( ! -user 0 -o ! -group 0 -o -perm -0020 -o -perm -0002 -o ! -perm -0004 \) \) \) -print -quit 2>/dev/null)" ]]; then
+    wrong="$(${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -o \( ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) \) \) -print -quit 2>/dev/null)" || rc=$?
+    if [[ -n "$wrong" && "$rc" -ne 124 && "$rc" -ne 137 ]]; then
       echo "  Rechte: $dir gehört root (Dienstbenutzer nur lesend)"
-      chown -R 0:0 "$dir"
-      chmod -R go-w,a+rX "$dir"
+      rc=0
+      ${lim[@]+"${lim[@]}"} find "$dir" -xdev \( ! -user 0 -o ! -group 0 \) -exec chown -h 0:0 {} + 2>/dev/null || rc=$?
+      if [[ "$rc" -ne 124 && "$rc" -ne 137 ]]; then
+        rc=0
+        ${lim[@]+"${lim[@]}"} find "$dir" -xdev ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) -exec chmod go-w,a+rX {} + 2>/dev/null || rc=$?
+      fi
+    fi
+    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+      echo "  Rechte: Zeitgrenze erreicht — der nächste Start setzt fort" >&2
+      return 1
     fi
     rm -f "$mark"
     printf '%s\n' "$want" > "$mark"
@@ -51,7 +92,9 @@ dvhub_root_own_install_dir() {
 # END DVHUB INSTALL-DIR OWNERSHIP
 
 # ── 0. Programmordner root-eigen — VOR allem, was daraus als root läuft ──
-dvhub_root_own_install_dir "$INSTALL_DIR" || echo "  WARN: Rechte für $INSTALL_DIR nicht gesetzt" >&2
+# Zeitgrenze je Durchgang: der erste Start nach der Umstellung geht einmal über
+# den ganzen Ordner; reicht die Zeit nicht, macht der nächste Start weiter.
+dvhub_root_own_install_dir "$INSTALL_DIR" 30 || echo "  WARN: Rechte für $INSTALL_DIR nicht (vollständig) gesetzt" >&2
 
 # ── 1. Pakete ──
 # wireguard-tools wird GETRENNT und OHNE Recommends installiert (T-UPDATE-SHARPEN
@@ -74,24 +117,30 @@ if ! dpkg -s wireguard-tools >/dev/null 2>&1; then
   NEED_WG="wireguard-tools"
 fi
 if [[ -n "$NEEDED_PKGS" || -n "$NEED_WG" ]]; then
-  echo "  Installiere fehlende Pakete:$NEEDED_PKGS ${NEED_WG}"
-  # T-0077: NON-FATAL. This script runs as ExecStartPre on EVERY service start.
-  # apt hits the network; under `set -e` a failed apt (no network at an offline
-  # boot) would abort the whole hook. The packages are VPN tools (openvpn/wg/
-  # strongswan), not required for the core app to boot — best-effort, retry next run.
-  # The `if` condition suppresses `set -e` for these commands.
-  APT_OK=1
-  apt-get update -qq || APT_OK=0
-  if [[ "$APT_OK" -eq 1 && -n "$NEEDED_PKGS" ]]; then
-    apt-get install -y $NEEDED_PKGS || APT_OK=0
-  fi
-  if [[ "$APT_OK" -eq 1 && -n "$NEED_WG" ]]; then
-    apt-get install -y --no-install-recommends "$NEED_WG" || APT_OK=0
-  fi
-  if [[ "$APT_OK" -eq 1 ]]; then
-    echo "  Pakete: installiert"
+  # T-0077: NON-FATAL. The packages are VPN tools (openvpn/wg/strongswan), not
+  # required for the core app to boot — best-effort, retry next run.
+  # Entkoppelt (Gegenprüfung 25.10.2026): apt-get update + install brauchen auf
+  # einem langsamen Board mit schlechtem Netz leicht mehr als TimeoutStartSec.
+  # Eine eigene transiente Unit läuft weiter, auch wenn DVhub neu startet; der
+  # nächste Start prüft wieder mit dpkg -s und stößt nur an, was noch fehlt.
+  # DPkg::Lock::Timeout: wartet auf andere apt-Läufe (TimescaleDB, Stack-Update),
+  # statt sofort zu scheitern.
+  PKG_SCRIPT='apt-get -o DPkg::Lock::Timeout=300 update -qq || exit 1
+if [ -n "$1" ]; then DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y $1 || exit 1; fi
+if [ -n "$2" ]; then DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends "$2" || exit 1; fi
+echo "Pakete installiert:$1 $2"'
+  if systemctl is-active --quiet dvhub-vpn-packages.service 2>/dev/null; then
+    echo "  Pakete:$NEEDED_PKGS ${NEED_WG} — Installation läuft bereits im Hintergrund"
+  elif command -v systemd-run >/dev/null 2>&1 \
+      && systemd-run --collect --quiet --unit "dvhub-vpn-packages" \
+           --description "DVhub fehlende Pakete (VPN, Fern-Support)" \
+           --property=StandardOutput="append:$DATA_DIR/vpn-packages.log" \
+           --property=StandardError="append:$DATA_DIR/vpn-packages.log" \
+           bash -c "$PKG_SCRIPT" dvhub-vpn-packages "${NEEDED_PKGS# }" "$NEED_WG" 2>/dev/null; then
+    echo "  Pakete:$NEEDED_PKGS ${NEED_WG} — Installation im Hintergrund gestartet (Log: $DATA_DIR/vpn-packages.log)"
   else
-    echo "  WARN: Paket-Installation fehlgeschlagen (non-fatal, Netz?). VPN-Features ggf. bis zum naechsten erfolgreichen Lauf eingeschraenkt." >&2
+    setsid bash -c "$PKG_SCRIPT" dvhub-vpn-packages "${NEEDED_PKGS# }" "$NEED_WG" </dev/null >>"$DATA_DIR/vpn-packages.log" 2>&1 &
+    echo "  Pakete:$NEEDED_PKGS ${NEED_WG} — Installation im Hintergrund gestartet (ohne systemd-run)"
   fi
 else
   echo "  Pakete: OK"
@@ -103,7 +152,7 @@ fi
 # Fehlt das Skript (Teil-Deploy), bleibt es beim alten setcap.
 NODE_BIN="$(command -v node)"
 if [[ -f "$INSTALL_DIR/node-runtime-provision.sh" ]]; then
-  SERVICE_NAME="$SERVICE_NAME" DATA_DIR="$DATA_DIR" NODE_BIN="$NODE_BIN" \
+  pu_bounded 20 env SERVICE_NAME="$SERVICE_NAME" DATA_DIR="$DATA_DIR" NODE_BIN="$NODE_BIN" \
     bash "$INSTALL_DIR/node-runtime-provision.sh" || true
 elif [[ -n "$NODE_BIN" ]]; then
   setcap cap_net_bind_service=+ep "$NODE_BIN" 2>/dev/null || true
@@ -126,8 +175,8 @@ echo "  Verzeichnisse: OK"
 # transport=mqtt umgestellt) bleibt stehen — die neue Version landet als
 # <name>.dist daneben. Node-Helper (unit-getestet), non-fatal.
 if [[ -d "$APP_DIR/hersteller" ]]; then
-  node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs" "$CONFIG_DIR" "$APP_DIR" \
-    || echo "  (Herstellerprofil-Abgleich übersprungen — Node-Helper nicht ausführbar)"
+  pu_bounded 20 node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs" "$CONFIG_DIR" "$APP_DIR" \
+    || echo "  (Herstellerprofil-Abgleich übersprungen — Node-Helper nicht ausführbar oder Zeit aufgebraucht)"
   chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/hersteller" 2>/dev/null || true
 fi
 
@@ -136,12 +185,17 @@ if [[ ! -f "$CONFIG_DIR/tls/cert.pem" ]]; then
   echo "  Generiere Self-Signed TLS Zertifikat..."
   # Plan 08-05 Task 1: 397 days (≤ 398) keeps the cert browser-compatible
   # (Apple/Chrome/Mozilla hard-limit since Sep 2020). Was 3650 (10y).
-  openssl req -x509 -newkey rsa:2048 -nodes \
+  if pu_bounded 30 openssl req -x509 -newkey rsa:2048 -nodes \
     -keyout "$CONFIG_DIR/tls/key.pem" \
     -out "$CONFIG_DIR/tls/cert.pem" \
-    -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null
-  chmod 600 "$CONFIG_DIR/tls/key.pem"
-  chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/tls/"* 2>/dev/null || true
+    -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null; then
+    chmod 600 "$CONFIG_DIR/tls/key.pem"
+    chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/tls/"* 2>/dev/null || true
+  else
+    # Halbes Paar weg, damit der nächste Start neu erzeugt.
+    rm -f "$CONFIG_DIR/tls/cert.pem" "$CONFIG_DIR/tls/key.pem"
+    echo "  WARN: TLS-Zertifikat nicht erzeugt — nächster Start" >&2
+  fi
 else
   echo "  TLS Zertifikat: OK"
 fi
@@ -318,12 +372,58 @@ if [[ -f "$APP_DIR/package.json" ]]; then
     # (Timeout, Stromausfall, Abbruch aus der Oberflaeche), bleibt node_modules
     # halb zurueck — ein stehender Marker haette die Reparatur unterdrueckt.
     rm -f "$NPM_MARKER"
+    # Entkoppelt (Gegenprüfung 25.10.2026): npm install braucht auf einem
+    # langsamen Board leicht länger als TimeoutStartSec. Eine eigene transiente
+    # Unit führt es aus (Marker erst nach Erfolg; dieselbe Sperre wie
+    # dvhub-update npm-install aus der Oberfläche). Der Start wartet eine
+    # Weile; ist npm bis dahin fertig, startet DVhub gleich mit vollständigen
+    # Modulen. Sonst läuft die Unit weiter und startet DVhub nach Erfolg selbst
+    # neu (Merker NPM_RESTART_FLAG); scheitert sie, versucht es der nächste Start.
+    NPM_UNIT=dvhub-npm-install
+    NPM_RESTART_FLAG="${NPM_RESTART_FLAG:-/run/${SERVICE_NAME}-npm-restart}"
+    NPM_LOCK="${NPM_LOCK:-/run/lock/dvhub-update.lock}"
+    NPM_SCRIPT='cd "$1" || exit 1
+if command -v flock >/dev/null 2>&1; then exec 9>"$5" && flock -w 600 9 || exit 1; fi
+rm -f "$3"
+HOME=/root npm install --omit=dev || exit 1
+[ -n "$2" ] && printf "%s\n" "$2" > "$3"
+echo "npm install: OK"
+if [ -e "$4" ]; then rm -f "$4"; systemctl restart --no-block "$6"; fi'
+    rm -f "$NPM_RESTART_FLAG"
+    NPM_DETACHED=0
+    if systemctl is-active --quiet "$NPM_UNIT.service" 2>/dev/null; then
+      NPM_DETACHED=1
+    elif command -v systemd-run >/dev/null 2>&1 \
+        && systemd-run --collect --quiet --unit "$NPM_UNIT" \
+             --description "DVhub npm install (Abhaengigkeiten nach Update)" \
+             --property=StandardOutput="append:$DATA_DIR/npm-install.log" \
+             --property=StandardError="append:$DATA_DIR/npm-install.log" \
+             bash -c "$NPM_SCRIPT" "$NPM_UNIT" "$APP_DIR" "$CURRENT_HASH" "$NPM_MARKER" "$NPM_RESTART_FLAG" "$NPM_LOCK" "${SERVICE_NAME}.service" 2>/dev/null; then
+      NPM_DETACHED=1
+    fi
+    if [[ "$NPM_DETACHED" -eq 1 ]]; then
+      NPM_WAIT_MAX=$(( $(pu_left) - 25 ))
+      (( NPM_WAIT_MAX > 75 )) && NPM_WAIT_MAX=75
+      NPM_WAITED=0
+      while (( NPM_WAITED < NPM_WAIT_MAX )) && systemctl is-active --quiet "$NPM_UNIT.service" 2>/dev/null; do
+        sleep 2
+        NPM_WAITED=$(( NPM_WAITED + 2 ))
+      done
+      if systemctl is-active --quiet "$NPM_UNIT.service" 2>/dev/null; then
+        touch "$NPM_RESTART_FLAG"
+        echo "  npm install: laeuft im Hintergrund weiter (Log: $DATA_DIR/npm-install.log) — DVhub startet danach neu"
+      elif [[ -n "$CURRENT_HASH" && "$(cat "$NPM_MARKER" 2>/dev/null)" == "$CURRENT_HASH" ]]; then
+        echo "  npm install: OK"
+      else
+        echo "  WARN: npm install fehlgeschlagen (non-fatal, Netz?). Marker NICHT aktualisiert -> Retry beim naechsten Lauf (Log: $DATA_DIR/npm-install.log)." >&2
+      fi
+    # Ohne systemd-run (oder es startet keine Unit): im Vordergrund, mit Zeitgrenze.
     # `if` suppresses `set -e`; no pipe so the rc is npm's own (not tail's).
-    if env HOME=/root npm install --omit=dev; then
+    elif pu_bounded 75 env HOME=/root npm install --omit=dev; then
       [[ -n "$CURRENT_HASH" ]] && printf '%s\n' "$CURRENT_HASH" >"$NPM_MARKER"
       echo "  npm install: OK"
     else
-      echo "  WARN: npm install fehlgeschlagen (non-fatal, Netz?). Marker NICHT aktualisiert -> Retry beim naechsten Lauf." >&2
+      echo "  WARN: npm install fehlgeschlagen oder Zeit aufgebraucht (non-fatal). Marker NICHT aktualisiert -> Retry beim naechsten Lauf." >&2
     fi
   fi
 fi
@@ -403,8 +503,8 @@ echo "  systemd Service: OK"
 # ExecStartPre with '+'). NON-FATAL — a provisioning hiccup must never block boot.
 if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
   echo "  Support-Provisioning (T-0113)..."
-  if ( SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" \
-         bash "$INSTALL_DIR/support-provision.sh" ); then
+  if pu_bounded 30 env SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" \
+         bash "$INSTALL_DIR/support-provision.sh"; then
     echo "  Support-Provisioning: OK"
   else
     echo "  WARN: Support-Provisioning fehlgeschlagen (non-fatal). Fern-Support ggf. bis zum nächsten Lauf eingeschränkt." >&2
@@ -551,7 +651,7 @@ fi
 # hochzieht (ALTER EXTENSION UPDATE). NON-FATAL durchgängig.
 # PostgreSQL schreibarm (2026-10-01, SD-Karte): idempotent, nur Reload.
 if [[ -f "$INSTALL_DIR/pg-write-tuning.sh" ]] && command -v psql >/dev/null 2>&1; then
-  bash "$INSTALL_DIR/pg-write-tuning.sh" || true
+  pu_bounded 30 bash "$INSTALL_DIR/pg-write-tuning.sh" || true
 fi
 if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 2>&1; then
   TS_ACTIVE=0
@@ -563,9 +663,15 @@ if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 
   # die Bibliothek laedt, keine Parktabelle wartet und keine Hypertable Zeilen in
   # ihrer Elterntabelle hat (Begruendung dort). Scheitert die Abfrage, weil die
   # Bibliothek zur Katalog-Version fehlt, startet die Nachruestung und repariert.
-  [[ "$(DB_NAME=dvhub bash "$INSTALL_DIR/timescale-provision.sh" --check 2>/dev/null)" == "timescale" ]] && TS_ACTIVE=1
+  # Zeitgrenze: haengt PostgreSQL (z. B. noch im Recovery), entscheidet der
+  # naechste Start; die Nachruestung startet dann nicht unnoetig.
+  TS_RC=0
+  TS_CHECK="$(pu_bounded 20 env DB_NAME=dvhub bash "$INSTALL_DIR/timescale-provision.sh" --check 2>/dev/null)" || TS_RC=$?
+  [[ "$TS_CHECK" == "timescale" ]] && TS_ACTIVE=1
   if [[ "$TS_ACTIVE" -eq 1 ]]; then
     echo "  TimescaleDB: OK (Community-Edition aktiv)"
+  elif [[ "$TS_RC" -eq 124 || "$TS_RC" -eq 137 ]]; then
+    echo "  TimescaleDB: Pruefung ueber der Zeitgrenze — entscheidet der naechste Start" >&2
   elif systemctl is-active --quiet dvhub-timescale-provision.service 2>/dev/null; then
     echo "  TimescaleDB: Hintergrund-Provisionierung laeuft bereits"
   else

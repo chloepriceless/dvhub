@@ -17,7 +17,10 @@ test('dvhub/.npmrc lenkt npm auf einen eigenen Cache (gilt auch für älteren Up
 
 test('post-update.sh: npm als root mit HOME=/root, kein chown von APP_DIR/node_modules an den Dienstbenutzer', () => {
   const s = read('../../post-update.sh');
-  assert.match(s, /if env HOME=\/root npm install --omit=dev; then/);
+  // Entkoppelt in eigener Unit, ohne systemd-run im Vordergrund mit Zeitgrenze
+  // (Gegenprüfung 25.10.2026) — beide als root mit HOME=/root.
+  assert.match(s, /\nHOME=\/root npm install --omit=dev \|\| exit 1\n/);
+  assert.match(s, /elif pu_bounded 75 env HOME=\/root npm install --omit=dev; then/);
   assert.doesNotMatch(s, /runuser -u "\$SERVICE_USER" -- env HOME=.*npm/);
   assert.doesNotMatch(s, /chown[^\n]*"\$SERVICE_USER:\$SERVICE_USER"[^\n]*(APP_DIR|node_modules)/);
 });
