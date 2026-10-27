@@ -320,12 +320,10 @@ dvhub_root_own_install_dir() {  # <ordner> [<höchstens sekunden je Schritt>]
     wrong="$(${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -o \( ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) \) \) -print -quit 2>/dev/null)" || rc=$?
     if [[ -n "$wrong" && "$rc" -ne 124 && "$rc" -ne 137 ]]; then
       echo "  Rechte: $dir gehört root (Dienstbenutzer nur lesend)"
+      # Ein Durchgang für Besitz und Rechte (Gegenprüfung c784e6a1).
       rc=0
-      ${lim[@]+"${lim[@]}"} find "$dir" -xdev \( ! -user 0 -o ! -group 0 \) -exec chown -h 0:0 {} + 2>/dev/null || rc=$?
-      if [[ "$rc" -ne 124 && "$rc" -ne 137 ]]; then
-        rc=0
-        ${lim[@]+"${lim[@]}"} find "$dir" -xdev ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) -exec chmod go-w,a+rX {} + 2>/dev/null || rc=$?
-      fi
+      ${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -exec chown -h 0:0 {} + -o -true \) \
+        ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) -exec chmod go-w,a+rX {} + 2>/dev/null || rc=$?
     fi
     if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
       echo "  Rechte: Zeitgrenze erreicht — der nächste Start setzt fort" >&2

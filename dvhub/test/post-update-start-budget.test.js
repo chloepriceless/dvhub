@@ -188,7 +188,8 @@ test('Langsame Teilschritte im Start laufen mit Zeitgrenze', () => {
     'pu_bounded 30 env SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" \\\n         bash "$INSTALL_DIR/support-provision.sh"',
     'pu_bounded 30 bash "$INSTALL_DIR/pg-write-tuning.sh"',
     'pu_bounded 20 env DB_NAME=dvhub bash "$INSTALL_DIR/timescale-provision.sh" --check',
-    'dvhub_root_own_install_dir "$INSTALL_DIR" 30',
+    'OWN_LIMIT="$(pu_left)"; (( OWN_LIMIT > 45 )) && OWN_LIMIT=45',
+    'dvhub_root_own_install_dir "$INSTALL_DIR" "$OWN_LIMIT"',
   ]) assert.ok(SCRIPT.includes(needle), needle);
   // Kein apt-get und kein npm install mehr direkt im Start (nur in den Units bzw. begrenzt).
   const start = SCRIPT.slice(0, SCRIPT.indexOf('# ── 7.'));
@@ -228,4 +229,34 @@ test('Rechte-Block: Zeitgrenze erreicht → kein Marker; nächster Lauf setzt fo
     assert.ok(c.every((l) => !/ -R /.test(l)), `kein chown/chmod -R: ${c.join('\n')}`);
     assert.ok(c.some((l) => l.startsWith('chown -h 0:0 ') && l.includes(join(inst, 'eos-venv', 'lib', 'x.py'))), c.join('\n'));
   } finally { s.cleanup(); }
+});
+
+// Gegenprüfung c784e6a1 (P3): drei Durchgänge (prüfen, chown, chmod) mit je
+// eigener Zeitgrenze — lief der chmod-Durchgang ab, ging jeder spätere Start
+// den chown-Durchgang erneut ganz durch und kam nie zum chmod. Jetzt: ein
+// Durchgang für beides.
+test('Rechte-Block: höchstens ein ändernder Durchgang (Besitz und Rechte zusammen)', () => {
+  const s = sandbox();
+  try {
+    const inst = join(s.dir, 'opt');
+    mkdirSync(join(inst, 'dvhub'), { recursive: true });
+    writeFileSync(join(inst, 'post-update.sh'), '#\n');
+    chmodSync(join(inst, 'post-update.sh'), 0o600);
+    s.fake('chown'); s.fake('chmod');
+    s.fake('find', 'exec /usr/bin/find "$@"');
+    const r = s.run(`${ownBlock()}\ndvhub_root_own_install_dir '${inst}'`, { GIT_CONFIG_SYSTEM: join(s.dir, 'gitconfig') });
+    assert.equal(r.status, 0, r.stderr);
+    const walks = s.calls().filter((l) => l.startsWith(`find ${inst} -xdev`));
+    assert.equal(walks.length, 2, `prüfen + ein ändernder Durchgang: ${walks.join('\n')}`);
+    const c = s.calls();
+    assert.ok(c.some((l) => l.startsWith('chown -h 0:0 ')) && c.some((l) => l.startsWith('chmod go-w,a+rX ') && l.includes('post-update.sh')), c.join('\n'));
+  } finally { s.cleanup(); }
+});
+
+test('npm im Hintergrund und Update aus der Oberfläche teilen Sperre und Neustart-Merker', () => {
+  const upd = readFileSync(join(ROOT, 'dvhub-update.sh'), 'utf8');
+  assert.ok(SCRIPT.includes('NPM_LOCK="${NPM_LOCK:-/run/lock/dvhub-update.lock}"'));
+  assert.ok(upd.includes('LOCK_FILE=/run/lock/dvhub-update.lock'));
+  assert.ok(SCRIPT.includes('NPM_RESTART_FLAG="${NPM_RESTART_FLAG:-/run/dvhub-npm-restart}"'));
+  assert.ok(upd.includes('NPM_RESTART_FLAG=/run/dvhub-npm-restart'));
 });

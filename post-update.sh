@@ -84,12 +84,10 @@ dvhub_root_own_install_dir() {  # <ordner> [<höchstens sekunden je Schritt>]
     wrong="$(${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -o \( ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) \) \) -print -quit 2>/dev/null)" || rc=$?
     if [[ -n "$wrong" && "$rc" -ne 124 && "$rc" -ne 137 ]]; then
       echo "  Rechte: $dir gehört root (Dienstbenutzer nur lesend)"
+      # Ein Durchgang für Besitz und Rechte (Gegenprüfung c784e6a1).
       rc=0
-      ${lim[@]+"${lim[@]}"} find "$dir" -xdev \( ! -user 0 -o ! -group 0 \) -exec chown -h 0:0 {} + 2>/dev/null || rc=$?
-      if [[ "$rc" -ne 124 && "$rc" -ne 137 ]]; then
-        rc=0
-        ${lim[@]+"${lim[@]}"} find "$dir" -xdev ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) -exec chmod go-w,a+rX {} + 2>/dev/null || rc=$?
-      fi
+      ${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -exec chown -h 0:0 {} + -o -true \) \
+        ! -type l \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) -exec chmod go-w,a+rX {} + 2>/dev/null || rc=$?
     fi
     if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
       echo "  Rechte: Zeitgrenze erreicht — der nächste Start setzt fort" >&2
@@ -107,7 +105,8 @@ dvhub_root_own_install_dir() {  # <ordner> [<höchstens sekunden je Schritt>]
 # ── 0. Programmordner root-eigen — VOR allem, was daraus als root läuft ──
 # Zeitgrenze je Durchgang: der erste Start nach der Umstellung geht einmal über
 # den ganzen Ordner; reicht die Zeit nicht, macht der nächste Start weiter.
-dvhub_root_own_install_dir "$INSTALL_DIR" 30 || echo "  WARN: Rechte für $INSTALL_DIR nicht (vollständig) gesetzt" >&2
+OWN_LIMIT="$(pu_left)"; (( OWN_LIMIT > 45 )) && OWN_LIMIT=45
+dvhub_root_own_install_dir "$INSTALL_DIR" "$OWN_LIMIT" || echo "  WARN: Rechte für $INSTALL_DIR nicht (vollständig) gesetzt" >&2
 
 # ── 1. Pakete ──
 # wireguard-tools wird GETRENNT und OHNE Recommends installiert (T-UPDATE-SHARPEN
@@ -393,7 +392,9 @@ if [[ -f "$APP_DIR/package.json" ]]; then
     # Modulen. Sonst läuft die Unit weiter und startet DVhub nach Erfolg selbst
     # neu (Merker NPM_RESTART_FLAG); scheitert sie, versucht es der nächste Start.
     NPM_UNIT=dvhub-npm-install
-    NPM_RESTART_FLAG="${NPM_RESTART_FLAG:-/run/${SERVICE_NAME}-npm-restart}"
+    # Merker und Sperre teilt die Unit mit dvhub-update (Update aus der
+    # Oberfläche): das nimmt den Merker weg und wartet auf die Sperre.
+    NPM_RESTART_FLAG="${NPM_RESTART_FLAG:-/run/dvhub-npm-restart}"
     NPM_LOCK="${NPM_LOCK:-/run/lock/dvhub-update.lock}"
     NPM_SCRIPT='cd "$1" || exit 1
 if command -v flock >/dev/null 2>&1; then exec 9>"$5" && flock -w 600 9 || exit 1; fi

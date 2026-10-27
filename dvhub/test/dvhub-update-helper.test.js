@@ -39,7 +39,11 @@ function setup() {
     encoding: 'utf8',
     env: { PATH: `${bin}:${process.env.PATH}`, ...GIT_ENV, DVHUB_UPDATE_TEST_INSTALL_DIR: inst, DVHUB_UPDATE_TEST_EUID: '0', DVHUB_UPDATE_TEST_HOME: dir },
   });
-  return { dir, up, inst, oldSha, newSha, run, head: () => git(inst, 'rev-parse', 'HEAD'), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  const runEnv = (extra, ...args) => spawnSync('bash', [SCRIPT, ...args], {
+    encoding: 'utf8',
+    env: { PATH: `${bin}:${process.env.PATH}`, ...GIT_ENV, DVHUB_UPDATE_TEST_INSTALL_DIR: inst, DVHUB_UPDATE_TEST_EUID: '0', DVHUB_UPDATE_TEST_HOME: dir, ...extra },
+  });
+  return { dir, up, inst, oldSha, newSha, run, runEnv, head: () => git(inst, 'rev-parse', 'HEAD'), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test('ohne root: Abbruch', () => {
@@ -130,5 +134,79 @@ test('npm-install: Marker vorher weg, nach Erfolg = Lockfile-Hash, HOME von root
     const want = execFileSync('sha256sum', [join(s.inst, 'dvhub', 'package-lock.json')], { encoding: 'utf8' }).split(' ')[0];
     assert.equal(readFileSync(marker, 'utf8').trim(), want);
     assert.match(readFileSync(join(s.dir, 'npm.log'), 'utf8'), /^npm install --omit=dev HOME=/m);
+  } finally { s.cleanup(); }
+});
+
+// ── Gegenprüfung 948b0e6a (P3) / c784e6a1 (P2) ──
+// Der execFile-Timeout der Oberfläche beendete nur sudo; npm lief weiter und
+// stieß mit dem Rückweg (checkout-commit + zweites npm-install) zusammen. Und
+// die Hintergrund-Unit dvhub-npm-install aus post-update.sh konnte parallel zu
+// einem Update aus der Oberfläche npm ausführen. Jetzt: npm mit eigener
+// Zeitgrenze, TERM an den Einstieg beendet npm mit, und eine gemeinsame Sperre
+// (flock) für alle ändernden Schritte.
+function lockRig(s, { busy = false } = {}) {
+  const bin = join(s.dir, 'bin');
+  // flock-Attrappe: belegt, solange die Datei "busy" existiert.
+  writeFileSync(join(bin, 'flock'), `#!/usr/bin/env bash\necho "flock $*" >> "${s.dir}/flock.log"\n[[ -e "${s.dir}/busy" ]] && exit 1\nexit 0\n`);
+  chmodSync(join(bin, 'flock'), 0o755);
+  writeFileSync(join(bin, 'timeout'), `#!/usr/bin/env bash\necho "timeout $*" >> "${s.dir}/timeout.log"\nshift 3\nexec "$@"\n`);
+  chmodSync(join(bin, 'timeout'), 0o755);
+  if (busy) writeFileSync(join(s.dir, 'busy'), '');
+  const env = { DVHUB_UPDATE_TEST_LOCK: join(s.dir, 'update.lock'), DVHUB_UPDATE_TEST_RESTART_FLAG: join(s.dir, 'npm-restart') };
+  return env;
+}
+
+test('Sperre belegt (npm im Hintergrund): ändernde Schritte → Exit 4, nichts geändert; Neustart-Merker der Hintergrund-Unit weg', () => {
+  const s = setup();
+  try {
+    const env = lockRig(s, { busy: true });
+    writeFileSync(env.DVHUB_UPDATE_TEST_RESTART_FLAG, '');
+    for (const args of [['npm-install'], ['checkout-tag', 'v1.1.0'], ['checkout-commit', s.newSha], ['checkout-main'], ['fetch'], ['stash'], ['stash-pop']]) {
+      const r = s.runEnv(env, ...args);
+      assert.equal(r.status, 4, `${args.join(' ')} → ${r.status} ${r.stderr}`);
+      assert.match(r.stderr, /läuft bereits/);
+    }
+    assert.equal(existsSync(join(s.dir, 'npm.log')), false, 'npm nicht gestartet');
+    assert.equal(existsSync(env.DVHUB_UPDATE_TEST_RESTART_FLAG), false, 'Hintergrund-Unit startet DVhub nicht mitten im Update neu');
+    assert.match(readFileSync(join(s.dir, 'flock.log'), 'utf8'), /-w \d+ 9/);
+  } finally { s.cleanup(); }
+});
+
+test('npm-install: eigene Zeitgrenze unter der der Oberfläche (10 min)', () => {
+  const s = setup();
+  try {
+    const env = lockRig(s);
+    assert.equal(s.runEnv(env, 'npm-install').status, 0);
+    const t = readFileSync(join(s.dir, 'timeout.log'), 'utf8').trim();
+    const m = t.match(/^timeout -k (\d+) (\d+) env HOME=\S+ npm install --omit=dev$/);
+    assert.ok(m, t);
+    assert.ok(Number(m[1]) + Number(m[2]) + 120 < 600, 'Sperr-Wartezeit + npm + Nachlauf < 10 min');
+  } finally { s.cleanup(); }
+});
+
+test('TERM an den Einstieg (Timeout der Oberfläche) beendet npm mit', async () => {
+  const s = setup();
+  try {
+    const env = lockRig(s);
+    const bin = join(s.dir, 'bin');
+    writeFileSync(join(bin, 'npm'), `#!/usr/bin/env bash\necho $$ > "${s.dir}/npm.pid"\nexec sleep 30\n`);
+    chmodSync(join(bin, 'npm'), 0o755);
+    const { spawn } = await import('node:child_process');
+    const child = spawn('bash', [SCRIPT, 'npm-install'], {
+      env: { PATH: `${bin}:${process.env.PATH}`, ...GIT_ENV, DVHUB_UPDATE_TEST_INSTALL_DIR: s.inst, DVHUB_UPDATE_TEST_EUID: '0', DVHUB_UPDATE_TEST_HOME: s.dir, ...env },
+      stdio: 'ignore',
+    });
+    const pidFile = join(s.dir, 'npm.pid');
+    for (let i = 0; i < 50 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 100));
+    const npmPid = Number(readFileSync(pidFile, 'utf8'));
+    child.kill('SIGTERM');
+    await new Promise((r) => child.on('exit', r));
+    let alive = true;
+    for (let i = 0; i < 30 && alive; i++) {
+      try { process.kill(npmPid, 0); await new Promise((r) => setTimeout(r, 100)); } catch { alive = false; }
+    }
+    if (alive) process.kill(npmPid, 'SIGKILL');
+    assert.equal(alive, false, 'npm läuft nach dem Abbruch nicht weiter');
+    assert.equal(existsSync(join(s.inst, '.npm-install-hash')), false, 'kein Marker');
   } finally { s.cleanup(); }
 });

@@ -86,8 +86,10 @@ test('Rechte-Block: fremder Besitz → chown/chmod nur der falschen Einträge, M
     // Der Testlauf gehört nicht root → der Block muss umstellen — Eintrag für
     // Eintrag über find -exec (Gegenprüfung 25.10.2026: kein chown -R mehr).
     assert.equal(calls.length, 2, calls.join('\n'));
-    assert.ok(calls[0].startsWith(`chown -h 0:0 ${inst}`) && calls[0].includes(join(inst, 'post-update.sh')), calls[0]);
-    assert.ok(calls[1].startsWith('chmod go-w,a+rX ') && calls[1].includes(join(inst, 'post-update.sh')), calls[1]);
+    const ch = calls.find((l) => l.startsWith('chown -h 0:0 '));
+    const cm = calls.find((l) => l.startsWith('chmod go-w,a+rX '));
+    assert.ok(ch && ch.includes(` ${inst} `) && ch.includes(join(inst, 'post-update.sh')), calls.join('\n'));
+    assert.ok(cm && cm.includes(join(inst, 'post-update.sh')), calls.join('\n'));
     assert.equal(readFileSync(join(inst, '.root-owned-rev'), 'utf8').trim(), 'nogit');
     assert.match(readFileSync(join(dir, 'gitconfig-system'), 'utf8'), new RegExp(`directory = ${inst.replace(/[/.]/g, '\\$&')}`));
     // Zweiter Lauf: safe.directory nicht doppelt.

@@ -23,6 +23,15 @@
 #   dvhub-update npm-install            # npm install --omit=dev (+ Marker)
 #   dvhub-update post-update            # post-update.sh
 #
+# Sperre (Gegenprüfung 25.10.2026): alle ändernden Schritte nehmen dieselbe
+# Sperre wie die Hintergrund-Unit dvhub-npm-install aus post-update.sh
+# (/run/lock/dvhub-update.lock). Ist sie belegt, Exit 4 („läuft bereits“) statt
+# zwei npm-Läufen auf einem node_modules oder einem Checkout unter laufendem npm.
+# npm-install hat eine eigene Zeitgrenze unter der der Oberfläche (10 min), und
+# TERM an dieses Skript (Timeout der Oberfläche beendet sudo, sudo reicht TERM
+# weiter) beendet npm mit — früher lief es weiter und stieß mit dem Rückweg
+# zusammen.
+#
 # Untergrenze: ausgecheckt wird nur ein Stand, dessen post-update.sh die Marke
 # DVHUB_ROOT_OWNED_INSTALL trägt. Ältere Stände gäben /opt/dvhub wieder dem
 # Dienstbenutzer (chown -R) und brächten die alten sudoers-Regeln zurück —
@@ -33,11 +42,18 @@ export LC_ALL=C
 
 INSTALL_DIR="@INSTALL_DIR@"
 EFFECTIVE_UID="$EUID"
+LOCK_FILE=/run/lock/dvhub-update.lock
+# Merker der Hintergrund-Unit dvhub-npm-install (post-update.sh): „nach npm
+# DVhub neu starten“. Ein Update aus der Oberfläche startet selbst neu.
+NPM_RESTART_FLAG=/run/dvhub-npm-restart
 if [[ "$INSTALL_DIR" == "@INSTALL_DIR@" ]]; then
   # Nicht installierte Kopie: nur für Tests (test/dvhub-update-helper.test.js).
   INSTALL_DIR="${DVHUB_UPDATE_TEST_INSTALL_DIR:-}"
   EFFECTIVE_UID="${DVHUB_UPDATE_TEST_EUID:-$EUID}"
+  LOCK_FILE="${DVHUB_UPDATE_TEST_LOCK:-$INSTALL_DIR/.update.lock}"
+  NPM_RESTART_FLAG="${DVHUB_UPDATE_TEST_RESTART_FLAG:-$INSTALL_DIR/.npm-restart}"
 fi
+NPM_TIMEOUT_S=420
 APP_DIR="$INSTALL_DIR/dvhub"
 NPM_MARKER="$INSTALL_DIR/.npm-install-hash"
 FLOOR_MARK="DVHUB_ROOT_OWNED_INSTALL"
@@ -72,6 +88,29 @@ case "$action" in
   checkout-tag|checkout-commit) [[ $# -eq 2 ]] || usage ;;
   *) usage ;;
 esac
+
+# Sperre für alle ändernden Schritte (nicht post-update: das startet
+# Hintergrund-Units, die den Deskriptor sonst erben würden).
+if [[ "$action" != post-update ]]; then
+  rm -f "$NPM_RESTART_FLAG"
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK_FILE" || die "Sperre $LOCK_FILE nicht anlegbar"
+    if [[ "$action" == npm-install ]]; then lock_wait=120; else lock_wait=20; fi
+    flock -w "$lock_wait" 9 || die "ein anderer Update- oder npm-Lauf läuft bereits (z. B. npm im Hintergrund nach einem Neustart) — bitte in ein paar Minuten erneut versuchen" 4
+  fi
+fi
+
+# <befehl…> im Hintergrund; TERM/INT/HUP an dieses Skript beenden ihn mit.
+# Mit `timeout` (eigene Prozessgruppe) trifft das auch die Kindprozesse von npm.
+run_killable() {
+  local pid rc=0
+  "$@" &
+  pid=$!
+  trap 'kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; exit 143' TERM INT HUP
+  wait "$pid" || rc=$?
+  trap - TERM INT HUP
+  return "$rc"
+}
 
 case "$action" in
   fetch)
@@ -108,7 +147,12 @@ case "$action" in
     # Marker vor dem Lauf ungültig, erst nach Erfolg neu (wie post-update.sh):
     # ein abgebrochener Lauf wird beim nächsten Start repariert.
     rm -f "$NPM_MARKER"
-    (cd "$APP_DIR" && env HOME="${DVHUB_UPDATE_TEST_HOME:-/root}" npm install --omit=dev)
+    cd "$APP_DIR"
+    if command -v timeout >/dev/null 2>&1; then
+      run_killable timeout -k 15 "$NPM_TIMEOUT_S" env HOME="${DVHUB_UPDATE_TEST_HOME:-/root}" npm install --omit=dev
+    else
+      run_killable env HOME="${DVHUB_UPDATE_TEST_HOME:-/root}" npm install --omit=dev
+    fi
     sha256sum "$lock" | awk '{print $1}' > "$NPM_MARKER"
     ;;
   post-update)
