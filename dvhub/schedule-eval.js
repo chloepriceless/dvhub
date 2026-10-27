@@ -1266,6 +1266,10 @@ export function createScheduleEvaluator(ctx) {
   async function evaluateSchedule() {
     const cfg = getCfg();
     const now = Date.now();
+    // Gescheitertes Speichern der saveBefore-Sicherung im regulären Takt nachholen:
+    // bei gleichbleibender Grenze/Sperre kommt sonst kein weiterer Sequenz-Aufruf
+    // (Gegenprüfung 50e9df84).
+    if (state.ctrl._dvSeqSavedPending) persistDvSeqSaved();
     const nowMin = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
 
     // Purge optimizer rules that violate current config.

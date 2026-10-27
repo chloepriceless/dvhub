@@ -251,3 +251,18 @@ test('nicht gespeicherte Sicherung der Einspeisegrenze wird beim nächsten Aufru
   await ev.applyDvFeedInLimit(4000);
   assert.deepEqual(readSaved(p.savedPath), { dvFeedInLimitW: 5000 }, 'Installateurswert 5000 W gesichert');
 });
+
+// Gegenprüfung 50e9df84 (P2): bei gleichbleibender Grenze kommt kein weiterer
+// Sequenz-Aufruf — die Sicherung muss im regulären Takt nachgeholt werden.
+test('gleichbleibende Einspeisegrenze: Sicherung wird im regulären Takt nachgeholt', async () => {
+  const prof = loadProfile('victron');
+  const dir = path.join(path.dirname(prof.savedPath), 'daten');
+  fs.writeFileSync(dir, 'x');
+  const p = { ...prof, savedPath: path.join(dir, 'dv_seq_saved.json') };
+  const { ev, state } = boot(p, { 2706: 50 });
+  await ev.applyDvFeedInLimit(6000);
+  fs.rmSync(dir); fs.mkdirSync(dir);
+  state.schedule.config = { defaultFeedExcessDcPv: 1 };
+  await ev.evaluateSchedule();
+  assert.deepEqual(readSaved(p.savedPath), { dvFeedInLimitW: 5000 });
+});
