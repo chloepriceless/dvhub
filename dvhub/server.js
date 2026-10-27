@@ -2045,6 +2045,8 @@ const web = http.createServer(async (req, res) => {
     // the canonical gate explicitly here — it honours the SAME security.lanTrust
     // model as every /api/ route (LAN-bypass under 'open', Bearer under
     // 'restricted'/'strict' because eosdash is in the 'control' endpoint group).
+    // Seit 2026-10-25 prüft das Tor auch Host-Allowlist und Herkunft
+    // schreibender Aufrufe (fremde Webseiten, DNS-Rebinding) wie bei /api/*.
     if (isEosdashRequest(url.pathname)) {
       if (!routes.enforceRequestGate(req, res)) return;
       eosdashProxy(req, res);

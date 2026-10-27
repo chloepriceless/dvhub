@@ -10,6 +10,7 @@ import { once } from 'node:events';
 import { STREAM_BUCKET_SECONDS } from './telemetry-store-pg.js';
 import http from 'node:http';
 import os from 'node:os';
+import { isIP } from 'node:net';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
 import { PUSH_HEADER as INPUT_PUSH_HEADER, PUSH_FIELDS as INPUT_PUSH_FIELDS, parsePushFields as parseInputPushFields } from './services/input-push.js';
@@ -387,6 +388,13 @@ export function isOwnOrigin(originHeader, req) {
     .some((h) => h === originHost || bare(h) === bare(originHost));
 }
 
+// Datum für Export-Dateinamen im Ortsdatum der Anlage (YYYY-MM-DD), nicht in UTC:
+// zwischen 00:00 und 02:00 Berliner Zeit trug die Datei sonst das Vortagsdatum.
+export function exportDateStamp(timeZone, nowMs = Date.now()) {
+  const fmt = (tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(nowMs));
+  try { return fmt(timeZone || 'Europe/Berlin'); } catch { return fmt('Europe/Berlin'); }
+}
+
 // Host allowlist check. Empty array = permissive (LAN-dev default). Operators
 // on public / reverse-proxy deployments MUST populate cfg.allowedHosts with
 // their real FQDN(s) before exposing the service.
@@ -395,6 +403,91 @@ export function isHostAllowed(hostVal, cfg) {
   if (list.length === 0) return true;
   const normalized = String(hostVal || '').toLowerCase();
   return list.map((h) => String(h).toLowerCase()).includes(normalized);
+}
+
+// ── DNS-Rebinding (Review 2026-10-25) ────────────────────────────────────
+// Eine fremde Webseite kann ihren eigenen Namen (attacker.example) auf die IP
+// der Box zeigen lassen. Der Browser schickt dann Host = Origin =
+// attacker.example — die Seite gilt als „gleiche Herkunft“ und bekäme den
+// Heimnetz-Freibrief. Deshalb zählen Freibrief und gleiche Herkunft nur, wenn
+// der Host die Box so nennt, wie es kein Angreifer über das öffentliche DNS
+// steuern kann:
+//   · IP-Adressen (v4/v6, mit/ohne Port) — dahinter steckt keine Namensauflösung
+//   · Namen ohne Punkt (dvhub, venus) — nur der eigene Router löst sie auf
+//   · Endungen, die es im öffentlichen DNS nicht gibt (siehe unten)
+//   · der eigene Rechnername der Box (os.hostname()) und alles aus allowedHosts
+// Alles andere (öffentlich klingende Namen) braucht einen Token — ein Reverse-
+// Proxy-Nutzer mit Token merkt davon nichts.
+//
+// Endungen und warum sie sicher sind:
+//   localhost, test       RFC 6761 — werden nie im öffentlichen DNS vergeben
+//   local                 RFC 6762 — mDNS (Bonjour/Avahi), nur im lokalen Netz
+//   home.arpa             RFC 8375 — offiziell für Heimnetze
+//   internal              ICANN 2024 — für private Netze reserviert
+//   home, corp            ICANN: wegen Namenskollisionen dauerhaft nicht vergeben
+//   lan, localdomain      keine TLDs; Standard bei OpenWrt, pfSense, UniFi, Linux
+//   fritz.box             AVM FRITZ!Box (der Router beantwortet die Zone selbst)
+//   speedport.ip          Telekom Speedport (.ip ist keine TLD)
+const LOCAL_HOST_SUFFIXES = [
+  'localhost', 'test', 'local', 'home.arpa', 'internal', 'home', 'corp',
+  'lan', 'localdomain', 'fritz.box', 'speedport.ip',
+];
+
+// "name:port" / "[v6]:port" → { name, ok }. ok=false bei kaputter Form.
+function splitHostHeader(hostport) {
+  const h = String(hostport || '').trim().toLowerCase();
+  if (h.startsWith('[')) {
+    const end = h.indexOf(']');
+    if (end < 0) return { name: '', ok: false };
+    const rest = h.slice(end + 1);
+    if (rest && !/^:\d{1,5}$/.test(rest)) return { name: '', ok: false };
+    return { name: h.slice(1, end), ok: true, v6: true };
+  }
+  const colons = (h.match(/:/g) || []).length;
+  if (colons === 1) {
+    const [name, port] = h.split(':');
+    if (!/^\d{1,5}$/.test(port)) return { name: '', ok: false };
+    return { name, ok: true };
+  }
+  if (colons > 1) return { name: h, ok: true, v6: true }; // nackte IPv6 (ungewöhnlich)
+  return { name: h, ok: true };
+}
+
+// Nennt dieser Host-Wert die Box auf eine Art, die ein Rebinding-Angreifer
+// nicht steuern kann? opts.hostname: Rechnername (Tests), Standard os.hostname().
+export function isTrustedBoxHost(hostport, cfg, opts = {}) {
+  const raw = String(hostport || '').trim().toLowerCase();
+  // Ohne Host kein Name, auf den sich ein Rebinding stützen könnte — jeder
+  // Browser schickt einen Host.
+  if (!raw) return true;
+  const { name: parsed, ok, v6 } = splitHostHeader(raw);
+  if (!ok || !parsed) return false;
+  const allowed = Array.isArray(cfg?.allowedHosts) ? cfg.allowedHosts.map((x) => String(x).trim().toLowerCase()) : [];
+  if (allowed.includes(raw) || allowed.includes(parsed)) return true;
+  if (v6) return isIP(parsed.split('%')[0]) === 6;
+  const name = parsed.endsWith('.') ? parsed.slice(0, -1) : parsed;
+  if (!name || name.includes('..')) return false;
+  if (isIP(name)) return true;
+  if (!name.includes('.')) return true;
+  if (LOCAL_HOST_SUFFIXES.some((s) => name === s || name.endsWith(`.${s}`))) return true;
+  let own = '';
+  try { own = String((opts.hostname || os.hostname)() || '').trim().toLowerCase().replace(/\.$/, ''); } catch { /* kein Name */ }
+  if (own && name === own) return true;
+  return false;
+}
+
+// Alle Namen, unter denen der Aufruf die Box anspricht: der Host-Header und —
+// nur bei trustProxy — jeder Eintrag aus X-Forwarded-Host. Alle müssen
+// vertrauenswürdig sein (ein weiterer Name kann nur Vertrauen kosten).
+export function requestHostNames(req, cfg) {
+  const out = [String(req?.headers?.host || '').trim().toLowerCase()];
+  if (cfg && cfg.trustProxy === true && req?.headers?.['x-forwarded-host']) {
+    for (const h of String(req.headers['x-forwarded-host']).split(',')) {
+      const v = h.trim().toLowerCase();
+      if (v) out.push(v);
+    }
+  }
+  return out;
 }
 
 // CORS origin resolver. Returns the matching allowlist entry (verbatim, to
@@ -1163,6 +1256,87 @@ export function createApiRoutes(ctx) {
     return true;
   }
 
+  // DNS-Rebinding (Review 2026-10-25): der Heimnetz-Freibrief (und der für die
+  // Box selbst) gilt nur, wenn der Aufruf die Box unter einem Namen anspricht,
+  // den kein Angreifer steuern kann — siehe isTrustedBoxHost oben.
+  function isTrustedHostRequest(req) {
+    const cfg = getCfg();
+    return requestHostNames(req, cfg).every((h) => isTrustedBoxHost(h, cfg, { hostname: ctx.hostname }));
+  }
+
+  // Abgelehnte Freibriefe protokollieren — gedrosselt je Host, damit eine
+  // Rebinding-Seite mit Dauerfeuer weder Log noch audit_log flutet.
+  const HOST_REFUSAL_LOG_MS = 10 * 60_000;
+  const HOST_REFUSAL_LOG_MAX = 256;
+  const hostRefusalLoggedAt = new Map();
+  function logHostRefusal(req, reason) {
+    const cfg = getCfg();
+    const names = requestHostNames(req, cfg);
+    const host = names.find((h) => !isTrustedBoxHost(h, cfg, { hostname: ctx.hostname })) || names[0] || '';
+    const key = `${reason}|${host}`;
+    const now = Date.now();
+    const last = hostRefusalLoggedAt.get(key);
+    if (last && now - last < HOST_REFUSAL_LOG_MS) return;
+    if (hostRefusalLoggedAt.size >= HOST_REFUSAL_LOG_MAX) {
+      const first = hostRefusalLoggedAt.keys().next().value;
+      if (first !== undefined) hostRefusalLoggedAt.delete(first);
+    }
+    hostRefusalLoggedAt.delete(key);
+    hostRefusalLoggedAt.set(key, now);
+    let pathname = req.url || '';
+    try { pathname = new URL(req.url, 'http://x').pathname; } catch { /* roh */ }
+    pushLog(reason, {
+      host: host.slice(0, 200),
+      path: String(pathname).slice(0, 200),
+      method: req.method,
+      // Nicht einfach „in allowedHosts eintragen“: ab dem ersten Eintrag ist
+      // die Liste eine Sperrliste für alle anderen Namen (IP, .local, Kiosk).
+      hint: 'Host ist kein Heimnetz-Name: mit API-Token anmelden. allowedHosts nur nutzen, wenn dort alle genutzten Namen samt Port stehen — sonst sperrt die Liste IP, .local und Kiosk aus.',
+    }, actorContext(req));
+  }
+
+  // Gültiger Bearer-Token im Aufruf? (zeitkonstant; ohne Token in der
+  // Konfiguration nie gültig)
+  function hasValidBearer(req) {
+    const tokenCfg = getCfg().apiToken;
+    if (!tokenCfg || typeof tokenCfg !== 'string') return false;
+    const auth = String(req.headers?.authorization || '');
+    if (!auth.startsWith('Bearer ')) return false;
+    const expected = Buffer.from(tokenCfg);
+    const token = Buffer.from(auth.slice(7));
+    return token.length === expected.length && crypto.timingSafeEqual(token, expected);
+  }
+
+  // Herkunftsprüfung für schreibende Aufrufe (2026-10-13, Rebinding-fest seit
+  // 2026-10-25). Gibt false zurück, wenn schon geantwortet wurde.
+  //   · Origin fehlt (Skripte, Home Assistant, curl) → keine Prüfung.
+  //   · Origin in corsAllowedOrigins → durch.
+  //   · Origin = eigener Name/Port UND dieser Name ist ein Heimnetz-Name → durch.
+  //   · Origin = eigener, aber öffentlicher Name (Reverse-Proxy oder
+  //     Rebinding) → nur mit gültigem Token; sonst 401, damit die Oberfläche
+  //     ihren Token-Hinweis zeigt.
+  //   · sonst 403 cors_origin_not_allowed.
+  function checkWriteOrigin(req, res, pathname) {
+    const method = req.method || 'GET';
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
+    const originHeader = String(req.headers?.origin || '');
+    if (!originHeader) return true;
+    const cfg = getCfg();
+    if (resolveCorsAllowedOrigin(originHeader, cfg)) return true;
+    if (!isOwnOrigin(originHeader, req)) {
+      pushLog('cors_origin_rejected', { origin: originHeader, path: pathname, method });
+      json(res, 403, { ok: false, error: 'cors_origin_not_allowed' });
+      return false;
+    }
+    let originHost = '';
+    try { originHost = new URL(originHeader).host.toLowerCase(); } catch { /* oben schon geprüft */ }
+    if (isTrustedBoxHost(originHost, cfg, { hostname: ctx.hostname }) && isTrustedHostRequest(req)) return true;
+    if (hasValidBearer(req)) return true;
+    logHostRefusal(req, 'same_origin_refused_host');
+    json(res, 401, { ok: false, error: 'unauthorized', reason: 'host_not_trusted' });
+    return false;
+  }
+
   // LAN-safe endpoints: read-only, no secrets, no admin surface, no internal paths/errors.
   // Any endpoint leaking credentials, topology, or server errors MUST require Bearer auth.
   // Plan 08-03: removed /api/log (error bodies/paths), /api/vpn/config (topology+key fingerprints),
@@ -1620,18 +1794,25 @@ export function createApiRoutes(ctx) {
     // unknown value fails safe to 'open' only when the field is absent (so an
     // un-migrated config keeps working); an explicit unknown string is treated
     // as 'strict' (fail-closed).
+    // DNS-Rebinding (Review 2026-10-25): alle Freibriefe (auch Loopback — der
+    // Kiosk-Browser auf der Box) nur bei einem Host, den kein Angreifer über
+    // das öffentliche DNS steuern kann. Mit Token geht es unten weiter.
+    // Erst prüfen, ob ein Freibrief griffe, dann den Host — so wird eine
+    // Verweigerung nur protokolliert, wenn sie wirklich etwas kostet.
+    let bypassEligible = false;
     if (!bearerOnly) {
       const lanTrustRaw = getCfg().security?.lanTrust;
       const lanTrust = lanTrustRaw == null ? 'open' : String(lanTrustRaw);
-      if (isLoopbackRequest(req)) return true;                     // the box itself
-      if (lanTrust === 'open') {
-        if (isLocalNetworkRequest(req)) return true;
-      } else if (lanTrust === 'restricted') {
-        if (isLocalNetworkRequest(req) && isLanSafeRequest(req, { requireGroupEnabled: true })) return true;
+      if (isLoopbackRequest(req)) bypassEligible = true;           // the box itself
+      else if (lanTrust === 'open') bypassEligible = isLocalNetworkRequest(req);
+      else if (lanTrust === 'restricted') {
+        bypassEligible = isLocalNetworkRequest(req) && isLanSafeRequest(req, { requireGroupEnabled: true });
         // else: fall through to the Bearer check below.
       }
       // 'strict' (and any unknown explicit value) → no LAN bypass; Bearer required.
     }
+    const refusedForHost = bypassEligible && !isTrustedHostRequest(req);
+    if (bypassEligible && !refusedForHost) return true;
     // Plan 08-06 Task 2 Step 3: server-side rejection of ?token= query params.
     // syncTokenFromUrl (Plan 08-03) strips ?token= on first page load — this gate
     // refuses any direct API call with a token in the URL so it cannot leak via
@@ -1663,6 +1844,7 @@ export function createApiRoutes(ctx) {
         reason: 'token_not_configured',
         statusCode: 503,
       }, actorContext(req));
+      if (refusedForHost) logHostRefusal(req, 'lan_bypass_refused_host');
       res.writeHead(503, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'api_token_not_configured' }));
       return false;
@@ -1690,8 +1872,9 @@ export function createApiRoutes(ctx) {
       reason: auth ? 'bearer_invalid' : 'bearer_missing',
       statusCode: 401,
     }, actorContext(req));
+    if (refusedForHost) logHostRefusal(req, 'lan_bypass_refused_host');
     res.writeHead(401, { ...SECURITY_HEADERS, 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: 'unauthorized' }));
+    res.end(JSON.stringify(refusedForHost ? { error: 'unauthorized', reason: 'host_not_trusted' } : { error: 'unauthorized' }));
     return false;
   }
 
@@ -2868,17 +3051,15 @@ export function createApiRoutes(ctx) {
     // curl) wird nichts geprüft; GET/HEAD auch nicht. Für den Kunden unsichtbar.
     // Vorher griff die Prüfung nur bei gefüllter corsAllowedOrigins-Liste —
     // mit leerer Liste (Standard) kam jede fremde Seite durch.
+    // Seit 2026-10-25 Rebinding-fest (checkWriteOrigin): „gleiche Herkunft“
+    // zählt nur unter einem Heimnetz-Namen der Box, sonst nur mit Token.
     if (
       url.pathname.startsWith('/api/')
       && req.method !== 'GET'
       && req.method !== 'HEAD'
       && req.method !== 'OPTIONS'
     ) {
-      const originHeader = String(req.headers.origin || '');
-      if (originHeader && !isOwnOrigin(originHeader, req) && !resolveCorsAllowedOrigin(originHeader, cfgForHost)) {
-        pushLog('cors_origin_rejected', { origin: originHeader, path: url.pathname, method: req.method });
-        return json(res, 403, { ok: false, error: 'cors_origin_not_allowed' });
-      }
+      if (!checkWriteOrigin(req, res, url.pathname)) return;
     }
 
     if (url.pathname === '/' && req.method === 'GET') {
@@ -2928,7 +3109,9 @@ export function createApiRoutes(ctx) {
     //     profile to the existing bootstrap-token first-caller-wins window.
     if (url.pathname === '/api/setup/state' || url.pathname === '/api/setup/complete') {
       if (!checkRateLimit(req, res)) return;
-      if (!isLoopbackRequest(req) && !isLocalNetworkRequest(req)) {
+      // Rebinding-fest: das Fenster gibt den Token heraus — nur unter einem
+      // Heimnetz-Namen der Box (IP, .local, …), nie unter einem fremden.
+      if ((!isLoopbackRequest(req) && !isLocalNetworkRequest(req)) || !isTrustedHostRequest(req)) {
         pushLog('setup_window_denied_non_lan', { path: url.pathname }, actorContext(req));
         return json(res, 403, { ok: false, error: 'setup_window_lan_only' });
       }
@@ -6862,7 +7045,7 @@ export function createApiRoutes(ctx) {
       // Server-derived filename — NEVER echo client input (V12 ASVS / T-09.2-
       // FILENAME-INJ). The `?filename=...` query param is intentionally not
       // read anywhere in this handler.
-      const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.csv`;
+      const filename = `dvhub-export-${exportDateStamp(ctx.getCfg?.()?.schedule?.timezone)}.csv`;
 
       let dbClient = null;
       let pgCursor = null;
@@ -7033,7 +7216,7 @@ export function createApiRoutes(ctx) {
       // Server-derived filename — NEVER echo client input (V12 ASVS / T-09.2-
       // FILENAME-INJ). The `?filename=...` query param is intentionally not
       // read anywhere in this handler.
-      const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.parquet`;
+      const filename = `dvhub-export-${exportDateStamp(ctx.getCfg?.()?.schedule?.timezone)}.parquet`;
 
       let dbClient = null;
       let pgCursor = null;
@@ -8246,7 +8429,28 @@ export function createApiRoutes(ctx) {
   // rate-limit and auth (caller proceeds); false means a response was already
   // written (caller MUST return). Honours the SAME security.lanTrust model as
   // every /api/ route, so eosdash inherits restricted/strict automatically.
+  //
+  // Review 2026-10-25 (P2): dazu dieselbe Host-Allowlist und dieselbe
+  // Herkunftsprüfung für schreibende Aufrufe wie bei /api/* — vorher konnte
+  // jede Webseite per Formular-POST die EOS-Konfiguration hinter EOSdash
+  // ändern. Die eingebettete EOSdash-Oberfläche schickt ihre eigene Herkunft
+  // (gleicher Name und Port wie DVhub) und kommt unverändert durch.
   function enforceRequestGate(req, res) {
+    const cfg = getCfg();
+    const hostVal = getRequestHost(req, cfg);
+    let pathname = req.url || '';
+    try { pathname = new URL(req.url, 'http://x').pathname; } catch { /* roh */ }
+    if (!isHostAllowed(hostVal, cfg)) {
+      pushLog('host_header_rejected', {
+        host: hostVal,
+        forwarded: !!req.headers?.['x-forwarded-host'],
+        trustProxy: cfg.trustProxy === true,
+        path: pathname,
+      });
+      json(res, 400, { ok: false, error: 'host_not_allowed' });
+      return false;
+    }
+    if (!checkWriteOrigin(req, res, pathname)) return false;
     if (!checkRateLimit(req, res)) return false;
     if (!checkAuth(req, res)) return false;
     return true;

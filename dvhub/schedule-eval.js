@@ -17,7 +17,7 @@ import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automati
 // (evalTimeout); safeInterval trägt den 5-s-Zero-Feed-in-Regelkreis (B-1112
 // Stufe 2), damit ein Throw im Tick den Takt nicht stillschweigend beendet.
 import { safeInterval } from './services/safe-async.js';
-import { encodeSunspecFloat32 } from './services/inverter/sunspec.js';
+import { encodeSunspecFloat32, decodeSunspecFloat32 } from './services/inverter/sunspec.js';
 import { getPowerLimits } from './services/power-limits.js';
 // Zweite GX am selben Anschluss: EOS-Ziele gelten fuer beide Akkus zusammen.
 import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
@@ -162,6 +162,66 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
+  function normWriteType(conf) {
+    const writeTypeRaw = String(conf.writeType || (conf.signed ? 'int16' : 'uint16')).toLowerCase();
+    return writeTypeRaw === 'signed' || writeTypeRaw === 's16'
+      ? 'int16'
+      : writeTypeRaw === 'unsigned' || writeTypeRaw === 'u16'
+        ? 'uint16'
+        : writeTypeRaw;
+  }
+
+  function normWordOrder(conf) {
+    const wordOrderRaw = String(conf.wordOrder || 'be').toLowerCase();
+    return (wordOrderRaw === 'le' || wordOrderRaw === 'little' || wordOrderRaw === 'swapped' || wordOrderRaw === 'swap') ? 'le' : 'be';
+  }
+
+  // Gegenstück zu toRawForWrite für saveBefore (Review Regelung 25.10.): den
+  // gelesenen Registerwert mit DEMSELBEN Typ (Vorzeichen, 32 bit, Float) und
+  // denselben Sentinel-Regeln wie der Lesepfad (polling.js pointFromRegs) in den
+  // Engineering-Wert zurückrechnen, den toRawForWrite wieder exakt kodiert.
+  // Vorher: `regs[0] * scale + offset` vorzeichenlos — Victron 2706 ab Werk -1
+  // (0xFFFF) wurde 6 553 500 W, der restore warf „int16 range exceeded“.
+  function fromRawForSave(regs, conf) {
+    const writeType = normWriteType(conf);
+    const scale = Number(conf.scale ?? 1);
+    const offset = Number(conf.offset ?? 0);
+    const words = (Array.isArray(regs) ? regs : []).map((w) => Number(w) & 0xffff);
+    const le = normWordOrder(conf) === 'le';
+    let raw;
+    if (writeType === 'float32') {
+      const v = decodeSunspecFloat32(words, le ? 'le' : 'be');
+      if (v === null) throw new Error('saveBefore: register not implemented (float NaN)');
+      return Number((v * scale + offset).toFixed(6));
+    }
+    if (writeType === 'int32' || writeType === 'uint32') {
+      if (words.length < 2) throw new Error('saveBefore: 32-bit point needs two registers');
+      const hi = le ? words[1] : words[0];
+      const lo = le ? words[0] : words[1];
+      raw = hi * 0x10000 + lo;
+      if (writeType === 'int32' && raw > 0x7fffffff) raw -= 0x100000000;
+    } else {
+      if (!words.length) throw new Error('saveBefore: no register value');
+      raw = words[0];
+      if (writeType === 'int16' && raw >= 0x8000) raw -= 0x10000;
+    }
+    const rawSentinels = Array.isArray(conf.rawSentinels) ? conf.rawSentinels.map(Number) : [];
+    if (rawSentinels.includes(raw)) return raw;
+    if (conf.rawSentinelMap && typeof conf.rawSentinelMap === 'object') {
+      const hit = Object.entries(conf.rawSentinelMap).find(([, r]) => Number(r) === raw);
+      if (hit) return Number(hit[0]);
+    }
+    return Number((raw * scale + offset).toFixed(6));
+  }
+
+  // Steuerpunkte, die eine OBERE Grenze setzen: abwärts runden (toRawForWrite
+  // roundMode 'floor'). Ein Profil kann roundMode ausdrücklich setzen.
+  const UPPER_LIMIT_POINTS = new Set(['dvFeedInLimitW']);
+  function writeConfFor(name, conf) {
+    if (!conf || conf.roundMode != null || !UPPER_LIMIT_POINTS.has(name)) return conf;
+    return { ...conf, roundMode: 'floor' };
+  }
+
   function toRawForWrite(value, conf) {
     const scale = Number(conf.scale ?? 1);
     const offset = Number(conf.offset ?? 0);
@@ -191,15 +251,13 @@ export function createScheduleEvaluator(ctx) {
       return toRawForWrite(engineeringValue, { ...conf, scale: 1, offset: 0, rawSentinels: [] });
     }
 
-    const writeTypeRaw = String(conf.writeType || (conf.signed ? 'int16' : 'uint16')).toLowerCase();
-    const writeType = writeTypeRaw === 'signed' || writeTypeRaw === 's16'
-      ? 'int16'
-      : writeTypeRaw === 'unsigned' || writeTypeRaw === 'u16'
-        ? 'uint16'
-        : writeTypeRaw;
-    const wordOrderRaw = String(conf.wordOrder || 'be').toLowerCase();
-    const wordOrder = (wordOrderRaw === 'le' || wordOrderRaw === 'little' || wordOrderRaw === 'swapped' || wordOrderRaw === 'swap') ? 'le' : 'be';
-    const scaled = Math.round((engineeringValue - offset) / scale);
+    const writeType = normWriteType(conf);
+    const wordOrder = normWordOrder(conf);
+    // Obere Grenzen (roundMode 'floor', z. B. Einspeisegrenze 2706 in 100-W-
+    // Schritten) zur sicheren Seite runden: aus 4250 W wurde sonst raw 43 =
+    // 4300 W (Review Regelung 25.10.). Epsilon gegen Float-Rauschen (12.34/0.01).
+    const exact = (engineeringValue - offset) / scale;
+    const scaled = conf.roundMode === 'floor' ? Math.floor(exact + 1e-9) : Math.round(exact);
 
     if (writeType === 'int16') {
       if (scaled < -32768 || scaled > 32767) throw new Error(`int16 range exceeded: ${scaled}`);
@@ -245,6 +303,35 @@ export function createScheduleEvaluator(ctx) {
     throw new Error(`unsupported writeType: ${conf.writeType}`);
   }
 
+  // Pro-Gating (Task #11): fehlt isProActive, wird nie gesperrt.
+  function isProGateClosed() {
+    return typeof ctx.licenseService?.isProActive === 'function'
+      && ctx.licenseService.isProActive() === false;
+  }
+
+  // SMA rules carry absolute slot timestamps -- enforce them so a rule
+  // generated for "tomorrow 03:00" does not accidentally fire today at 03:00.
+  function ruleSlotOpen(r, now) {
+    if ((isSmallMarketAutomationRule(r) || r.source === 'forecast_optimizer') && r.slotTs != null) {
+      const slotTs = Number(r.slotTs);
+      const slotEndTs = Number(r.slotEndTs) || (slotTs + SLOT_DURATION_MS);
+      if (Number.isFinite(slotTs) && (now < slotTs || now >= slotEndTs)) return false;
+    }
+    return true;
+  }
+
+  // dcExportMode-Regeln (EOS eos_pv_export) mit derselben Prüfung wie
+  // Optimierer-Regeln in effectiveTargetValue: Optimierer an, Pro-Lizenz,
+  // Slot-Zeitstempel (Review Regelung 25.10. — vorher nur HH:MM, eine alte
+  // EOS-Regel feuerte täglich wieder, auch nach Ablauf der Lizenz).
+  function dcExportRuleActive(r, mod, now, cfg) {
+    if (r.target !== 'dcExportMode' || r.enabled === false || !scheduleMatch(r, mod)) return false;
+    if (r.source === 'forecast_optimizer') {
+      if (!(cfg.optimizer?.enabled ?? false) || isProGateClosed()) return false;
+    }
+    return ruleSlotOpen(r, now);
+  }
+
   function effectiveTargetValue(target) {
     const cfg = getCfg();
     const optimizerEnabled = cfg.optimizer?.enabled ?? false;
@@ -255,8 +342,7 @@ export function createScheduleEvaluator(ctx) {
     // lingering in state.schedule.rules — so the box falls back to Stage 1/2 (SMA
     // rules, which are unaffected). Mirrors the runOptimization() production gate.
     // Defensive: a missing isProActive never gates (prod licensed → unaffected).
-    const proGateClosed = typeof ctx.licenseService?.isProActive === 'function'
-      && ctx.licenseService.isProActive() === false;
+    const proGateClosed = isProGateClosed();
     const now = Date.now();
     const mod = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
 
@@ -281,14 +367,7 @@ export function createScheduleEvaluator(ctx) {
         }
       }
 
-      // SMA rules carry absolute slot timestamps -- enforce them so a rule
-      // generated for "tomorrow 03:00" does not accidentally fire today at 03:00.
-      if ((isSmallMarketAutomationRule(r) || r.source === 'forecast_optimizer') && r.slotTs != null) {
-        const slotTs = Number(r.slotTs);
-        const slotEndTs = Number(r.slotEndTs) || (slotTs + SLOT_DURATION_MS);
-        if (Number.isFinite(slotTs) && (now < slotTs || now >= slotEndTs)) return false;
-      }
-      return true;
+      return ruleSlotOpen(r, now);
     });
     if (hit) {
       hit._wasActive = true;
@@ -353,9 +432,11 @@ export function createScheduleEvaluator(ctx) {
   //     Deye-Fall: der Kunde fährt ggf. regulär Zero-Export — ein fixer
   //     Release-Wert würde seine Betriebsart zerstören.
   //   { point, restore: true, restoreDefault? } — den gesicherten Wert
-  //     zurückschreiben; ohne Sicherung (z. B. Neustart während der Sperre —
-  //     der Speicher ist in-memory) greift restoreDefault, sonst wird der
-  //     Schritt übersprungen.
+  //     zurückschreiben (Sicherung liegt in dv_seq_saved.json und übersteht einen
+  //     Neustart). Ohne Sicherung: Die automatische Freigabe nach dem Start
+  //     schreibt NICHTS (keine eigene Sperre → Kundenwerte bleiben, Chrissi
+  //     25.10.); restoreDefault gilt nur bei einer ausdrücklichen Freigabe per
+  //     API/MQTT oder wenn sich eine Sicherung nicht kodieren lässt.
   // B-1112 restore-Speicher restart-fest (Christin 2026-07-19): Der saveBefore/
   // restore-Store lebte nur in-memory — ein Neustart WÄHREND einer aktiven
   // Sperre verlor die gesicherten Kundenwerte (Fronius-Feldtest: StorCtl_Mod=1
@@ -370,39 +451,126 @@ export function createScheduleEvaluator(ctx) {
     } catch { /* keine/korrupte Datei → leerer Store (Erstlauf) */ }
   }
 
+  // true = gespeichert (oder ohne Pfad rein in-memory), false = Schreiben scheiterte.
   function persistDvSeqSaved() {
-    if (!ctx.dvSeqSavedPath) return;
+    if (!ctx.dvSeqSavedPath) return true;
     try {
       atomicWriteControlState(ctx.dvSeqSavedPath, state.ctrl._dvSeqSaved ?? {});
+      state.ctrl._dvSeqSavedPending = false;
+      return true;
     } catch (e) {
-      pushLog('dv_seq_saved_persist_error', { error: e?.message || String(e) });
+      // Merken und bei jedem weiteren Sequenz-Aufruf nachholen (Gegenprüfung
+      // c942db52): sonst bliebe eine Sicherung ohne Sperr-Pflicht nur im Speicher.
+      // Nur beim Wechsel auf „offen“ und danach höchstens stündlich protokollieren —
+      // sonst flutet der Nachholversuch jedes Takts das Log (Gegenprüfung 3659bf4a).
+      const nowMs = Date.now();
+      if (!state.ctrl._dvSeqSavedPending || nowMs - (state.ctrl._dvSeqSavedErrLogAt || 0) >= 3600_000) {
+        pushLog('dv_seq_saved_persist_error', { error: e?.message || String(e) });
+        state.ctrl._dvSeqSavedErrLogAt = nowMs;
+      }
+      state.ctrl._dvSeqSavedPending = true;
+      return false;
     }
   }
 
-  async function runDvControlSequence(steps) {
+  // Gesicherten Wert für den restore kodieren. Rückgabe { value, encoded };
+  // encoded null = nichts Schreibbares (Sicherung kaputt, kein restoreDefault).
+  function resolveRestoreValue(step, pconf, savedValue) {
+    try {
+      return { value: savedValue, encoded: toRawForWrite(savedValue, pconf) };
+    } catch (e) {
+      // Altbestand: bis 25.10. sicherte saveBefore `regs[0] * scale + offset`
+      // vorzeichenlos und ohne Sentinels. Ergibt die Umkehrung einen 16-bit-
+      // Rohwert, ihn so dekodieren wie der Lesepfad.
+      const scale = Number(pconf.scale ?? 1);
+      const offset = Number(pconf.offset ?? 0);
+      const legacyRaw = (Number(savedValue) - offset) / scale;
+      const rounded = Math.round(legacyRaw);
+      if (normWriteType(pconf) === 'int16' && Number.isFinite(legacyRaw)
+          && Math.abs(legacyRaw - rounded) < 1e-6 && rounded >= 0x8000 && rounded <= 0xffff) {
+        try {
+          const value = fromRawForSave([rounded], pconf);
+          const encoded = toRawForWrite(value, pconf);
+          pushLog('dv_seq_restore_legacy_decoded', { point: step.point, saved: savedValue, value, raw: encoded.raw });
+          return { value, encoded };
+        } catch { /* weiter zum restoreDefault */ }
+      }
+      const fallback = step.restoreDefault;
+      let encoded = null;
+      if (fallback != null) {
+        try { encoded = toRawForWrite(fallback, pconf); } catch { encoded = null; }
+      }
+      pushLog('dv_seq_restore_invalid', {
+        point: step.point, saved: savedValue, error: e?.message || String(e),
+        fallback: encoded ? fallback : null
+      }, 'warn');
+      return { value: fallback, encoded };
+    }
+  }
+
+  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false } = {}) {
     const cfg = getCfg();
     const saved = (state.ctrl._dvSeqSaved ??= {});
+    if (state.ctrl._dvSeqSavedPending) persistDvSeqSaved();
+    // Review e9b64f0d (P2): Erst alle zu sichernden Werte lesen und gemeinsam
+    // persistieren, dann schreiben. Für Sperr-Sequenzen (requirePersist) gibt es
+    // eine Sperre nur, wenn ihre Sicherung auf der Platte liegt — nur so erkennt
+    // der Start nach einem Neustart die eigene Sperre und hebt sie wieder auf;
+    // scheitert das Speichern, wird nichts geschrieben (nächster Takt, T-0076).
+    // Andere Sequenzen (Einspeisegrenze 2706) schreiben trotzdem: dort würde aus
+    // einer Teilgrenze sonst ein Totalstopp (Gegenprüfung 396b3d46).
+    // Ein Lesefehler mittendrin hinterlässt keine halbe Sicherung im Speicher.
+    const freshlySaved = [];
+    try {
     for (const step of steps) {
-      const pconf = cfg.controlWrite?.[step.point];
+      if (step.saveBefore !== true || saved[step.point] !== undefined) continue;
+      const pconf = writeConfFor(step.point, cfg.controlWrite?.[step.point]);
+      if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
+      if (pconf.address == null) throw new Error(`sequence point unresolved (sunspec scan pending): ${step.point}`);
+      const words = ['int32', 'uint32', 'float32'].includes(normWriteType(pconf)) ? 2 : 1;
+      const regs = await transport.mbRequest({
+        fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
+        address: pconf.address, quantity: words, timeoutMs: pconf.timeoutMs
+      });
+      // Rohwert mit Vorzeichen/Sentinels in den Engineering-Wert, damit der
+      // restore-Write denselben toRawForWrite-Weg exakt zurück nimmt.
+      saved[step.point] = fromRawForSave(regs, pconf);
+      freshlySaved.push(step.point);
+    }
+    } catch (e) {
+      for (const point of freshlySaved) delete saved[point];
+      throw e;
+    }
+    if (freshlySaved.length && !persistDvSeqSaved() && requirePersist) {
+      for (const point of freshlySaved) delete saved[point];
+      throw new Error('dv_seq_saved konnte nicht gespeichert werden — Sperre nicht geschrieben');
+    }
+    for (const step of steps) {
+      const pconf = writeConfFor(step.point, cfg.controlWrite?.[step.point]);
       if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
       if (pconf.address == null) throw new Error(`sequence point unresolved (sunspec scan pending): ${step.point}`);
       let value = step.value;
+      let encoded;
       if (step.restore === true) {
-        value = saved[step.point] ?? step.restoreDefault;
+        // ownOnly (Freigabe nach dem Start): nur gesicherte Punkte, kein Default.
+        value = ownOnly ? saved[step.point] : (saved[step.point] ?? step.restoreDefault);
         if (value == null) continue; // nie geblockt und kein Default → no-op
-      } else if (step.saveBefore === true && saved[step.point] === undefined) {
-        const regs = await transport.mbRequest({
-          fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
-          address: pconf.address, quantity: 1, timeoutMs: pconf.timeoutMs
-        });
-        // Rohwert rückwärts durch scale/offset in den Engineering-Wert, damit
-        // der restore-Write denselben toRawForWrite-Weg nehmen kann.
-        const scale = Number(pconf.scale ?? 1);
-        const offset = Number(pconf.offset ?? 0);
-        saved[step.point] = Number(regs[0]) * scale + offset;
-        persistDvSeqSaved();
+        if (saved[step.point] != null) {
+          // Review Regelung 25.10.: eine Sicherung, die sich nicht kodieren lässt,
+          // darf die Freigabe nicht für immer blockieren (vorher warf jeder Takt,
+          // die Sperre blieb stehen). Erst als Altbestand umdeuten (bis zum Fix
+          // vorzeichenlos gesichert: raw·scale+offset), sonst restoreDefault.
+          const restored = resolveRestoreValue(step, pconf, saved[step.point]);
+          if (restored.encoded == null) {
+            delete saved[step.point];
+            persistDvSeqSaved();
+            continue;
+          }
+          value = restored.value;
+          encoded = restored.encoded;
+        }
       }
-      const encoded = toRawForWrite(value, pconf);
+      encoded ??= toRawForWrite(value, pconf);
       const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
       const fc = Number(pconf.fc || (words.length > 1 ? 16 : 6));
       if (fc === 16 || words.length > 1) {
@@ -429,7 +597,34 @@ export function createScheduleEvaluator(ctx) {
     pushLog('dv_feedin_limit_write', { limitW: limitW == null ? 'restore' : limitW });
   }
 
-  async function applyDvVictronControl(feedIn) {
+  // Sequenz eines dvControl-Flags ausführen. Rückgabe true = bewusst nichts
+  // geschrieben. Beim ersten Freigabe-Aufruf nach dem Start (bootRelease) gilt
+  // (Entscheidung Chrissi 25.10.): DVhub hebt nur eine Sperre auf, die es SELBST
+  // gesetzt hat. Beweis nach einem Neustart ist allein die persistierte
+  // Sicherung dv_seq_saved.json — saveBefore legt sie beim Sperren an, die
+  // Freigabe verbraucht sie (_lastDvFeedIn wird nicht persistiert,
+  // control_state.json trägt nur den Not-Halt). Ohne Sicherung für einen
+  // restore-Schritt: nichts schreiben (vorher: restoreDefault — Deye
+  // Work-Mode 0 über Kunden-Modus 1, Fronius StorCtl_Mod 0 / OutWRte +100 über
+  // die Solar.web-Werte). Mit Sicherung: genau die gesicherten Punkte
+  // zurückschreiben; restore-Schritte ohne Sicherung (Absturz mitten in der
+  // Sperre) bekommen keinen Default.
+  async function runFlagSequence(flag, steps, bootRelease) {
+    if (!bootRelease) {
+      await runDvControlSequence(steps, { requirePersist: true });
+      return false;
+    }
+    const saved = state.ctrl._dvSeqSaved || {};
+    const own = steps.some((st) => st?.restore === true && saved[st.point] != null);
+    if (!own) {
+      pushLog('dv_release_skipped_no_own_block', { flag, points: steps.map((st) => st?.point) });
+      return true;
+    }
+    await runDvControlSequence(steps, { ownOnly: true });
+    return false;
+  }
+
+  async function applyDvVictronControl(feedIn, { explicit = false } = {}) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
     if (!dc) return;
@@ -444,6 +639,12 @@ export function createScheduleEvaluator(ctx) {
     if (state.ctrl._lastDvFeedIn === feedIn) return;
 
     const results = {};
+    // Erster Aufruf nach dem Start (Change-Cache leer) mit Freigabe: eine
+    // Sequenz-Freigabe darf nur eine EIGENE Sperre aufheben (Entscheidung
+    // Chrissi 25.10.) — siehe runFlagSequence. Ein ausdrücklicher Befehl
+    // (applyControlTarget, z. B. „Einspeisung freigeben“ über die API) ist
+    // keine Start-Automatik und schreibt die Freigabe wie bisher.
+    const bootRelease = !explicit && feedIn === true && state.ctrl._lastDvFeedIn === undefined;
     // T-0076 (P0-2): advance the change-detection cache ONLY after the hardware
     // write actually succeeds. The old code set _lastDvFeedIn BEFORE the await,
     // so a failed write was cached as if applied and the next cycle short-circuited
@@ -457,8 +658,9 @@ export function createScheduleEvaluator(ctx) {
     if (dc.feedExcessDcPv?.enabled) {
       const val = feedIn ? 1 : 0;
       try {
+        let skipped = false;
         if (Array.isArray(dc.feedExcessDcPv.sequence?.[String(val)])) {
-          await runDvControlSequence(dc.feedExcessDcPv.sequence[String(val)]);
+          skipped = await runFlagSequence('feedExcessDcPv', dc.feedExcessDcPv.sequence[String(val)], bootRelease);
         } else if (transport.type === 'mqtt') {
           await transport.mqttWrite('feedExcessDcPv', val);
         } else {
@@ -468,8 +670,12 @@ export function createScheduleEvaluator(ctx) {
             value: val, timeoutMs: dc.feedExcessDcPv.timeoutMs
           });
         }
-        results.feedExcessDcPv = { ok: true, value: val };
-        pushLog('dv_victron_write', { register: 'feedExcessDcPv', address: dc.feedExcessDcPv.address, value: val, feedIn });
+        if (skipped) {
+          results.feedExcessDcPv = { ok: true, value: val, skipped: 'no_own_block' };
+        } else {
+          results.feedExcessDcPv = { ok: true, value: val };
+          pushLog('dv_victron_write', { register: 'feedExcessDcPv', address: dc.feedExcessDcPv.address, value: val, feedIn });
+        }
       } catch (e) {
         results.feedExcessDcPv = { ok: false, error: e.message };
         allOk = false;
@@ -481,8 +687,9 @@ export function createScheduleEvaluator(ctx) {
     if (dc.dontFeedExcessAcPv?.enabled) {
       const val = feedIn ? 0 : 1;
       try {
+        let skipped = false;
         if (Array.isArray(dc.dontFeedExcessAcPv.sequence?.[String(val)])) {
-          await runDvControlSequence(dc.dontFeedExcessAcPv.sequence[String(val)]);
+          skipped = await runFlagSequence('dontFeedExcessAcPv', dc.dontFeedExcessAcPv.sequence[String(val)], bootRelease);
         } else if (transport.type === 'mqtt') {
           await transport.mqttWrite('dontFeedExcessAcPv', val);
         } else {
@@ -492,8 +699,12 @@ export function createScheduleEvaluator(ctx) {
             value: val, timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
           });
         }
-        results.dontFeedExcessAcPv = { ok: true, value: val };
-        pushLog('dv_victron_write', { register: 'dontFeedExcessAcPv', address: dc.dontFeedExcessAcPv.address, value: val, feedIn });
+        if (skipped) {
+          results.dontFeedExcessAcPv = { ok: true, value: val, skipped: 'no_own_block' };
+        } else {
+          results.dontFeedExcessAcPv = { ok: true, value: val };
+          pushLog('dv_victron_write', { register: 'dontFeedExcessAcPv', address: dc.dontFeedExcessAcPv.address, value: val, feedIn });
+        }
       } catch (e) {
         results.dontFeedExcessAcPv = { ok: false, error: e.message };
         allOk = false;
@@ -723,7 +934,7 @@ export function createScheduleEvaluator(ctx) {
           state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
           return { ok: true, skipped: true, reason: 'unchanged' };
         }
-        await applyDvVictronControl(feedIn);
+        await applyDvVictronControl(feedIn, { explicit: true });
         const seqResult = state.ctrl.dvControl?.feedExcessDcPv;
         if (!seqResult?.ok) {
           pushLog('control_write_error', { target, value, source, error: seqResult?.error || 'dv_sequence_failed' });
@@ -971,7 +1182,7 @@ export function createScheduleEvaluator(ctx) {
         fc = 0;
       } else {
         // Modbus: Wert in Register-Format kodieren
-        encoded = toRawForWrite(value, conf);
+        encoded = toRawForWrite(value, writeConfFor(target, conf));
         words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
         fc = Number(conf.fc || (words.length > 1 ? 16 : 6));
 
@@ -1061,6 +1272,10 @@ export function createScheduleEvaluator(ctx) {
   async function evaluateSchedule() {
     const cfg = getCfg();
     const now = Date.now();
+    // Gescheitertes Speichern der saveBefore-Sicherung im regulären Takt nachholen:
+    // bei gleichbleibender Grenze/Sperre kommt sonst kein weiterer Sequenz-Aufruf
+    // (Gegenprüfung 50e9df84).
+    if (state.ctrl._dvSeqSavedPending) persistDvSeqSaved();
     const nowMin = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
 
     // Purge optimizer rules that violate current config.
@@ -1127,7 +1342,7 @@ export function createScheduleEvaluator(ctx) {
     // dcExportMode: NUR aktiv wenn eine Schedule-Regel target='dcExportMode', value=1 matcht.
     // Config-Flags (enabled, priceThresholdCtKwh) werden nur als Parameter genutzt,
     // nicht zur Aktivierung. Ohne aktive Schedule-Regel bleibt dcExportMode AUS.
-    const dcScheduleRule = state.schedule.rules.find(r => r.target === 'dcExportMode' && r.enabled !== false && scheduleMatch(r, nowMin));
+    const dcScheduleRule = state.schedule.rules.find(r => dcExportRuleActive(r, nowMin, now, cfg));
     let dcExportActive = dcScheduleRule != null && Number(dcScheduleRule.value) === 1;
     // SOC-Sicherung: Wenn Akku unter Ziel-SOC UND weniger als X Stunden bis Abend-Peak,
     // DC-Export deaktivieren damit der Akku noch laden kann.
@@ -1257,6 +1472,19 @@ export function createScheduleEvaluator(ctx) {
             if (!state.ctrl._dcExportLogged) {
               pushLog('dc_export_mode_active', { pvW, exportW, bufferW, liveLoadW, chargeReserveW, battEffSurchargeW, subtractLoad, currentPrice });
               state.ctrl._dcExportLogged = true;
+            }
+          } else {
+            // Review Regelung 25.10.: Die 50-W/60-s-Drossel übersprang den
+            // Keepalive der normalen Schleife (die bei dcExport `continue`t).
+            // Reg 2716 ist flüchtig (Passthru nach 60 s) — den zuletzt
+            // geschriebenen Wert deshalb im Keepalive-Takt neu bestätigen;
+            // applyControlTarget hält ihn sonst (unchanged → kein Write). Ohne
+            // Keepalive (0) bleibt alles wie bisher: kein Aufruf.
+            const kaMs = Number(cfg.controlWrite?.gridSetpointW?.keepaliveMs
+              ?? cfg.schedule?.controlKeepaliveMs ?? 0);
+            const held = state.schedule.lastWrite?.gridSetpointW?.value;
+            if (kaMs > 0 && held != null && Number.isFinite(Number(held))) {
+              await applyControlTarget('gridSetpointW', Number(held), 'dc_export_mode');
             }
           }
         } else {
@@ -1610,6 +1838,8 @@ export function createScheduleEvaluator(ctx) {
   const ZFI_EXPORT_ENTER_STREAK = 3;  // Export-Ticks in Folge bis Deckel-Enter
   const ZFI_READBACK_MS = 60000;      // Steuerprioritäten-Drift-Check (throttled)
   const ZFI_ERRLOG_MS = 60000;
+  const ZFI_EXPORT_CLEAR_TICKS = 6;    // Export-Deckel: Takte bei 100 % ohne Export bis Exit
+  const ZFI_MIN_PCT = 1;              // 0 % legt den WR still — nie schreiben
   let zfiInterval = null;
   let zfiBusy = false;
 
@@ -1655,6 +1885,9 @@ export function createScheduleEvaluator(ctx) {
           await zfiWrite(enaConf, 0);
           zfi.capActive = false;
           zfi.limitPct = null;
+          zfi.trigger = null;
+          zfi.clearStreak = 0;
+          zfi.entrySoc = null;
           pushLog('zero_feedin_cap_off', { reason: 'feedin_restored' });
           telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
             eventType: 'zero_feedin_cap_off', target: 'wMaxLimPct',
@@ -1686,7 +1919,20 @@ export function createScheduleEvaluator(ctx) {
         && (Date.now() - Number(state.meter.updatedAt || 0)) < 15000;
       const importW = Math.max(0, Number(state.victron?.gridImportW || 0));
       const exportW = Math.max(0, Number(state.victron?.gridExportW || 0));
-      const loadW = Math.max(0, Number(state.victron?.selfConsumptionW || 0));
+      const loadRaw = state.victron?.selfConsumptionW;
+      const loadW = Math.max(0, Number(loadRaw || 0));
+      // Review Regelung 25.10.: Hauslast bekannt = Zahl, ohne Lesefehler, frisch.
+      // Auf Fronius ist sie abgeleitet (pv_plus_grid, ohne eigenen Stempel) —
+      // dann zählt die PV-Messung, aus der sie gerechnet wird: bei PV-Lesefehler
+      // rechnet der Poller mit der alten PV weiter (Gegenprüfung ec006d66).
+      const vErr = state.victron?.errors || {};
+      const loadStamped = victronFieldAgeMs(state, 'selfConsumptionW') !== null;
+      const loadKnown = loadRaw != null && Number.isFinite(Number(loadRaw)) && !vErr.selfConsumptionW
+        && (loadStamped
+          ? !victronFieldStale(state, 'selfConsumptionW', maxAgeMs)
+          : !vErr.pvPowerW && !victronFieldStale(state, 'pvPowerW', maxAgeMs));
+      // Nie unter 1 % (wie capLoopStep, feed-in-cap/index.js).
+      const clampPct = (p) => Math.min(100, Math.max(ZFI_MIN_PCT, p));
 
       if (!zfi.capActive) {
         const socEnter = socFresh && Number.isFinite(soc) && soc >= thresholdPct;
@@ -1696,41 +1942,81 @@ export function createScheduleEvaluator(ctx) {
         const exportEnter = zfi.exportStreak >= ZFI_EXPORT_ENTER_STREAK;
         // blockedStreak >= 2: nie im selben Tick einschalten, in dem die Sperre
         // gerade erst geschrieben wurde/wird (Race gegen die Freigabe-Sequenz).
-        if ((socEnter || exportEnter) && zfi.blockedStreak >= 2 && meterFresh) {
-          zfi.limitPct = Math.min(100, Math.max(0, (100 * Math.max(0, loadW - targetImportW)) / refW));
+        // SoC-Auslöser nur mit bekannter Hauslast (sonst hält die Force-Charge-
+        // Sperre weiter, und Export würde den Export-Auslöser ziehen). Export
+        // trotz Sperre = der Akku nimmt nichts mehr: dann Pflicht-Abregelung
+        // auch ohne Hauslast, Start bei 1 % — der Regler fährt hoch.
+        const trigger = socEnter && loadKnown ? 'soc' : 'export';
+        if (((socEnter && loadKnown) || exportEnter) && zfi.blockedStreak >= 2 && meterFresh) {
+          zfi.limitPct = loadKnown
+            ? clampPct((100 * Math.max(0, loadW - targetImportW)) / refW)
+            : ZFI_MIN_PCT;
           if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, 100);
           if (rvrtConf?.enabled && rvrtConf.address != null) await zfiWrite(rvrtConf, revertTimeoutS);
           await zfiWrite(pctConf, zfi.limitPct);
           await zfiWrite(enaConf, 1);
           zfi.capActive = true;
           zfi.exportStreak = 0;
+          zfi.trigger = trigger;
+          zfi.clearStreak = 0;
+          zfi.entrySoc = socFresh && Number.isFinite(soc) ? soc : null;
           pushLog('zero_feedin_cap_on', {
-            trigger: socEnter ? 'soc' : 'export', soc: Number.isFinite(soc) ? soc : null,
-            limitPct: Number(zfi.limitPct.toFixed(2)), loadW, exportW
+            trigger, soc: Number.isFinite(soc) ? soc : null,
+            limitPct: Number(zfi.limitPct.toFixed(2)), loadW: loadKnown ? loadW : null, exportW
           });
           telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
             eventType: 'zero_feedin_cap_on', target: 'wMaxLimPct',
             valueNum: Number(zfi.limitPct.toFixed(2)),
-            reason: socEnter ? 'soc' : 'export', source: 'runtime',
-            meta: { soc: Number.isFinite(soc) ? soc : null, loadW, exportW }
+            reason: trigger, source: 'runtime',
+            meta: { soc: Number.isFinite(soc) ? soc : null, loadW: loadKnown ? loadW : null, exportW }
           }));
         }
         return;
       }
 
       // --- Deckel aktiv: Exit prüfen, sonst regeln + Failsafe-Fenster refreshen.
-      if (socFresh && Number.isFinite(soc) && soc <= thresholdPct - hysteresisPct) {
-        // Reihenfolge: erst Force-Charge wieder scharf, dann Deckel aus — so
-        // gibt es kein Fenster, in dem weder Akku-Zwang noch Deckel steht.
+      // Reihenfolge beim Exit: erst Force-Charge wieder scharf, dann Deckel
+      // aus — so gibt es kein Fenster, in dem weder Akku-Zwang noch Deckel steht.
+      const capOff = async (reason, meta) => {
         if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, -100);
         await zfiWrite(enaConf, 0);
         zfi.capActive = false;
         zfi.limitPct = null;
-        pushLog('zero_feedin_cap_off', { reason: 'soc_recovered', soc });
+        zfi.trigger = null;
+        zfi.clearStreak = 0;
+        zfi.entrySoc = null;
+        pushLog('zero_feedin_cap_off', { reason, ...meta });
         telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
           eventType: 'zero_feedin_cap_off', target: 'wMaxLimPct',
-          valueNum: null, reason: 'soc_recovered', source: 'runtime', meta: { soc }
+          valueNum: null, reason, source: 'runtime', meta
         }));
+      };
+      // Gegenprüfung b0f20458 (P2): Ein über den EXPORT eingeschalteter Deckel
+      // (Akku nimmt unterhalb der Schwelle nichts mehr, BMS-Derating) fiel
+      // sonst im nächsten Takt über den SoC-Exit ab und taktete mit OutWRte
+      // ±100 — während der Pflicht-Abregelung. Er verlässt den Deckel erst,
+      // wenn er nichts mehr begrenzt (100 % und kein Export über mehrere
+      // Takte); erreicht der SoC die Schwelle, gilt er als SoC-Deckel.
+      // Ohne gemerkten Auslöser (alter Zustand) bleibt es beim SoC-Exit.
+      // Grenze nach unten (Gegenprüfung e3e498a3): während des Deckels darf der
+      // Akku das Haus stützen; ohne Grenze liefe er bei Netz ≈ 0 über die
+      // ganze Sperre leer. Ein Export-Deckel endet deshalb spätestens bei
+      // höchstem SoC seit dem Einschalten − Hysterese (unbekannt beim
+      // Einschalten → erster frischer SoC). Danach greift wieder Force-Charge;
+      // Export schaltet neu ein.
+      const socOk = socFresh && Number.isFinite(soc);
+      if (zfi.trigger === 'export' && socOk && soc >= thresholdPct) zfi.trigger = 'soc';
+      if (zfi.trigger === 'export' && socOk) {
+        // Laufendes Maximum (Gegenprüfung dfe8d437): lädt der Akku während
+        // des Deckels, gilt der höchste SoC als Bezug.
+        zfi.entrySoc = Number.isFinite(zfi.entrySoc) ? Math.max(zfi.entrySoc, soc) : soc;
+        if (soc <= zfi.entrySoc - hysteresisPct) {
+          await capOff('soc_dropped', { soc, entrySoc: zfi.entrySoc });
+          return;
+        }
+      }
+      if (zfi.trigger !== 'export' && socOk && soc <= thresholdPct - hysteresisPct) {
+        await capOff('soc_recovered', { soc });
         return;
       }
 
@@ -1741,7 +2027,14 @@ export function createScheduleEvaluator(ctx) {
         const signedGridW = importW - exportW;
         const err = targetImportW - signedGridW;
         if (Math.abs(err) > deadbandW) {
-          zfi.limitPct = Math.min(100, Math.max(0, zfi.limitPct - (100 * ZFI_GAIN * err) / refW));
+          zfi.limitPct = clampPct(zfi.limitPct - (100 * ZFI_GAIN * err) / refW);
+        }
+      }
+      if (zfi.trigger === 'export') {
+        zfi.clearStreak = (meterFresh && zfi.limitPct >= 100 && exportW <= deadbandW) ? (zfi.clearStreak || 0) + 1 : 0;
+        if (zfi.clearStreak >= ZFI_EXPORT_CLEAR_TICKS) {
+          await capOff('export_cleared', { soc: Number.isFinite(soc) ? soc : null });
+          return;
         }
       }
       // Meter stale → Limit einfrieren, aber weiter schreiben: der Write

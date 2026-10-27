@@ -1,6 +1,7 @@
 // services/history-viz/aggregator.js
 import { resolveBatteryCapacityWhForTimestamp } from '../../battery-stages.js';
 import { bucketBoundsW, summarizeEfficiencyRows } from '../inverter-efficiency/daily.js';
+import { hourlyPriceExpansionCteSql } from '../../telemetry-runtime.js';
 
 //
 // T-09.3-19 / 2026-06-14: the PV heatmap (getHeatmap) used to bucket + LABEL its
@@ -35,6 +36,18 @@ function berlinMidnightUtcMs(y, m1, d) {
   const guess = Date.UTC(y, m1 - 1, d, 0, 0, 0);
   const offH = berlinParts(new Date(guess)).hour; // 1 (CET) or 2 (CEST)
   return guess - offH * 3600000;
+}
+// Berliner Kalendertag eines Zeitpunkts als UTC-Mitternacht (Datumsdarstellung
+// wie resolveRange) bzw. dessen Beginn (Berliner Mitternacht) als ISO-Zeitpunkt.
+// Fuer UTC-Mitternacht und Berliner Mitternacht eines Datums gleich: beide
+// liegen in Berlin auf diesem Datum.
+function berlinDayLabelMs(ms) {
+  const b = berlinParts(new Date(ms));
+  return Date.UTC(b.year, b.month - 1, b.day);
+}
+function berlinDayStartIso(value) {
+  const b = berlinParts(new Date(value));
+  return new Date(berlinMidnightUtcMs(b.year, b.month, b.day)).toISOString();
 }
 //
 // Plan 09.3-01 Wave 1 — Phase 09.3 Aurora History-Viz Cards aggregator
@@ -366,9 +379,10 @@ export function createHistoryVizAggregator(ctx) {
   // Ansicht fragten energy_slots_15m für denselben Zeitraum je einzeln ab, nur
   // mit anderen Reihen — auf dem eHive (Cortex-A55) 3–15 s pro Karte, alle
   // gleichzeitig. Jetzt einmal alle Reihen (deduppt wie unten) für den
-  // Zeitraum laden, 2 min vorhalten, je Karte in JS bündeln. 15 min / 1 h /
-  // 1 Tag sind in time_bucket auf UTC ausgerichtet — Bündeln per
-  // floor(ts / Raster) ist identisch. Jahr/Alle bleiben in SQL (Datenmenge).
+  // Zeitraum laden, 2 min vorhalten, je Karte in JS bündeln. 15 min / 1 h
+  // sind in time_bucket auf UTC ausgerichtet — Bündeln per floor(ts / Raster)
+  // ist identisch; 1 Tag geht in beiden Pfaden nach Berliner Kalendertag.
+  // Jahr/Alle bleiben in SQL (Datenmenge).
   const SHARED_SLOTS_TTL_MS = 120_000;
   const SHARED_SLOTS_MAX = 3;
   const sharedSlots = new Map(); // `${start}|${end}` → { at, promise }
@@ -417,18 +431,40 @@ export function createHistoryVizAggregator(ctx) {
     return promise;
   }
 
-  async function fetchBucketedEnergySlots({ seriesKeys, start, end, view, intervalOverride = null }) {
+  async function fetchBucketedEnergySlots({ seriesKeys, start: rangeStart, end: rangeEnd, view, intervalOverride = null }) {
     const bucket = intervalOverride || bucketIntervalForView(view);
     const bucketSeconds = BUCKET_SECONDS[bucket] || 900;
+    // Tages-Buckets (Jahr/Alle) nach BERLINER Kalendertag (Review 25.10.2026):
+    // time_bucket('1 day') schnitt in UTC, die ersten 1–2 Stunden eines Tages
+    // landeten so am Monatsersten im Vormonat. Der Zeitraum beginnt und endet
+    // dann an Berliner Mitternacht; bucket_ts ist der Berliner Kalendertag als
+    // UTC-Mitternacht (dieselbe Datumsdarstellung wie resolveRange), damit die
+    // Monats-/Jahres-/Wochentagszuordnung der Karten unveraendert stimmt.
+    // 15 min und 1 h liegen in UTC und Berlin auf denselben Grenzen. Jahr/Alle
+    // laufen auch mit Stunden-Buckets (Sankey, Autarkie) ueber das Berliner
+    // Jahr, damit alle Karten einer Ansicht denselben Zeitraum zeigen.
+    const berlinDays = bucket === '1 day';
+    const berlinWindow = berlinDays || view === 'year' || view === 'all';
+    const start = berlinWindow ? berlinDayStartIso(rangeStart) : rangeStart;
+    const end = berlinWindow ? berlinDayStartIso(rangeEnd) : rangeEnd;
     if (view !== 'year' && view !== 'all' && db && typeof db.query === 'function') {
       const bySeries = await loadSharedEnergySlots(start, end);
       const bucketMs = bucketSeconds * 1000;
+      const dayLabelByHour = new Map(); // UTC-Stunde → Berliner Tag (Intl ist teuer)
+      const floorBucket = berlinDays
+        ? (ms) => {
+          const hour = Math.floor(ms / 3_600_000);
+          let label = dayLabelByHour.get(hour);
+          if (label == null) { label = berlinDayLabelMs(ms); dayLabelByHour.set(hour, label); }
+          return label;
+        }
+        : (ms) => Math.floor(ms / bucketMs) * bucketMs;
       const sums = new Map(); // `${bucketMs}|${key}` → { key, t, kwh }
       for (const key of seriesKeys) {
         const e = bySeries.get(key);
         if (!e) continue;
         for (let i = 0; i < e.ts.length; i += 1) {
-          const t = Math.floor(e.ts[i] / bucketMs) * bucketMs;
+          const t = floorBucket(e.ts[i]);
           const k = `${t}|${key}`;
           const acc = sums.get(k);
           if (acc) acc.kwh += e.kwh[i];
@@ -446,6 +482,9 @@ export function createHistoryVizAggregator(ctx) {
     }
     // `bucket` is one of three fixed literals (bucketIntervalForView /
     // intervalOverride) — never user input — so it is safe to inline.
+    const bucketExpr = berlinDays
+      ? "(date_trunc('day', slot_start_utc AT TIME ZONE 'Europe/Berlin') AT TIME ZONE 'UTC')"
+      : `time_bucket('${bucket}', slot_start_utc)`;
     const sql = `
       WITH dedup AS (
         SELECT DISTINCT ON (slot_start_utc, series_key)
@@ -465,7 +504,7 @@ export function createHistoryVizAggregator(ctx) {
         WHERE source_kind = 'vrm_import' AND NOT (series_key = ANY($4))
       )
       SELECT series_key AS key,
-             time_bucket('${bucket}', slot_start_utc) AS bucket_ts,
+             ${bucketExpr} AS bucket_ts,
              SUM(value_num) AS kwh
       FROM dedup d
       WHERE NOT (d.series_key = ANY($4)
@@ -933,8 +972,15 @@ export function createHistoryVizAggregator(ctx) {
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
       const { start, end } = resolveRange(view, date);
+      // Akku 2 der zweiten GX-Anlage (Review 25.10.2026): die Hauslast enthaelt
+      // seine Versorgung, also gehoert er zu den Quellen. Akku-Entladung = beide
+      // Akkus ohne die aufgezeichnete Akku→Akku-Verschiebung (die versorgt das
+      // Haus nicht), wie Sankey und Autarkie. Ohne zweite Anlage unveraendert.
       const rows = await fetchBucketedEnergySlots({
-        seriesKeys: ['pv_total_w', 'battery_discharge_w', 'grid_import_w', 'load_power_w'],
+        seriesKeys: [
+          'pv_total_w', 'battery_discharge_w', 'grid_import_w', 'load_power_w',
+          'second_battery_discharge_w', 'battery_to_second_battery_w', 'second_battery_to_battery_w',
+        ],
         start, end, view,
       });
       // RC-E fix — PV-direct ≈ min(pv, load) per TIME BUCKET, not per exact
@@ -949,6 +995,9 @@ export function createHistoryVizAggregator(ctx) {
       // within that bucket — the PV-self-consumption proxy.
       let pvKwh;
       let batteryDischargeKwh;
+      let secondBatteryDischargeKwh;
+      let transfer12Kwh;
+      let transfer21Kwh;
       let gridImportKwh;
       let loadKwh;
       let bucketLabels;
@@ -975,16 +1024,32 @@ export function createHistoryVizAggregator(ctx) {
         };
         pvKwh = sumByYear('pv_total_w');
         batteryDischargeKwh = sumByYear('battery_discharge_w');
+        secondBatteryDischargeKwh = sumByYear('second_battery_discharge_w');
+        transfer12Kwh = sumByYear('battery_to_second_battery_w');
+        transfer21Kwh = sumByYear('second_battery_to_battery_w');
         gridImportKwh = sumByYear('grid_import_w');
         loadKwh = sumByYear('load_power_w');
         bucketLabels = years.map(String);
       } else {
         pvKwh = bucketSeriesKwh(rows, 'pv_total_w', view, start);
         batteryDischargeKwh = bucketSeriesKwh(rows, 'battery_discharge_w', view, start);
+        secondBatteryDischargeKwh = bucketSeriesKwh(rows, 'second_battery_discharge_w', view, start);
+        transfer12Kwh = bucketSeriesKwh(rows, 'battery_to_second_battery_w', view, start);
+        transfer21Kwh = bucketSeriesKwh(rows, 'second_battery_to_battery_w', view, start);
         gridImportKwh = bucketSeriesKwh(rows, 'grid_import_w', view, start);
         loadKwh = bucketSeriesKwh(rows, 'load_power_w', view, start);
         bucketLabels = bucketLabelsForView(view, start);
       }
+      // Je Bucket: Verschiebung hoechstens so viel, wie der abgebende Akku entladen hat.
+      // Akku 2 einzeln ebenfalls netto (ohne seine Abgabe an Akku 1), damit
+      // secondBatteryDischargeKwh <= batteryDischargeKwh bleibt.
+      const mainDischargeKwh = batteryDischargeKwh;
+      const secondNetKwh = secondBatteryDischargeKwh.map((d2, i) => Math.max(0, d2 - Math.min(transfer21Kwh[i] || 0, d2)));
+      batteryDischargeKwh = mainDischargeKwh.map((d1, i) => {
+        const t12 = Math.min(transfer12Kwh[i] || 0, d1);
+        return round3(Math.max(0, d1 - t12) + (secondNetKwh[i] || 0));
+      });
+      secondBatteryDischargeKwh = secondNetKwh;
       const pvDirectKwh = pvKwh.map((pvB, i) => round3(Math.min(pvB, loadKwh[i] || 0)));
       const buckets = bucketLabels.length;
       const payload = {
@@ -998,6 +1063,7 @@ export function createHistoryVizAggregator(ctx) {
         bucketLabels,
         pvDirectKwh,
         batteryDischargeKwh,
+        secondBatteryDischargeKwh: secondBatteryDischargeKwh.map(round3),
         gridImportKwh,
         loadKwh,
       };
@@ -1061,11 +1127,13 @@ export function createHistoryVizAggregator(ctx) {
         start, end, view,
         intervalOverride: heatmapInterval,
       });
+      // Jahr: Preise stuendlich holen und unten je Berliner Tag mitteln wie die
+      // PV (queryBucketedSeries buendelt '1 day' in UTC, Gegenpruefung aa6a1602).
       const priceRows = await fetchBucketed({
         seriesKeys: [PRICE_SERIES_KEY],
         start, end, view,
         meanSeries: [PRICE_SERIES_KEY],
-        intervalOverride: heatmapInterval,
+        intervalOverride: view === 'year' ? '1 hour' : heatmapInterval,
       });
       const rows = pvRows.concat(priceRows);
       let xLabels;
@@ -1143,7 +1211,10 @@ export function createHistoryVizAggregator(ctx) {
       } else { // view === 'year'
         // x = month label (Jan..Dez), y = day-of-month 1..31, v = daily PV-kWh.
         // Note: cells outside actual month length stay 0; client treats as empty.
-        xLabels = bucketLabelsForView('year', start);
+        // Beschriftung ab Januar: `start` ist hier Berliner Mitternacht
+        // (31.12. 23:00 UTC), bucketLabelsForView liest den UTC-Monat und
+        // begann sonst mit „Dez“ — alle Spalten einen Monat verschoben.
+        xLabels = bucketLabelsForView('year', new Date(Date.UTC(ay, 0, 1)).toISOString());
         yLabels = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
         const cells = new Map(); // key=`${monthIdx}:${day}` → kWh
         // Plan 09.4 — per-cell mean spot price (see week/month branch).
@@ -1413,10 +1484,13 @@ export function createHistoryVizAggregator(ctx) {
         return { status: 200, body: payload, cached: false };
       }
       // --- week / month / year → per-day calendar matrix + periodTotal ---
-      // Group rows by UTC day, then decompose each day's buckets independently.
+      // Group rows by day, then decompose each day's buckets independently.
+      // Jahr/Alle: Berliner Kalendertag (der Zeitraum beginnt dort an Berliner
+      // Mitternacht, fetchBucketedEnergySlots); Woche/Monat: UTC-Tag wie ihr Zeitraum.
+      const berlinDayKeys = view === 'year' || view === 'all';
       const rowsByDay = new Map(); // YYYY-MM-DD → rows[]
       for (const r of rows) {
-        const dk = new Date(r.ts).toISOString().slice(0, 10);
+        const dk = berlinDayKeys ? berlinParts(new Date(r.ts)).date : new Date(r.ts).toISOString().slice(0, 10);
         if (!rowsByDay.has(dk)) rowsByDay.set(dk, []);
         rowsByDay.get(dk).push(r);
       }
@@ -2134,15 +2208,19 @@ export function createHistoryVizAggregator(ctx) {
         FROM slot_src
         GROUP BY slot_start_utc
       ),
+      -- Stundenpreise (vor 10/2025) gelten fuer alle vier Viertelstunden ihrer
+      -- Stunde (gleiche Regel wie listPriceSlots, telemetry-runtime.js).
+      ${hourlyPriceExpansionCteSql({
+        seriesKey: PRICE_SERIES_KEY,
+        rangeSql: "ts_utc >= $1::timestamptz - interval '1 hour' AND ts_utc < $2::timestamptz + interval '1 hour'"
+      })},
       slot_price AS (
         SELECT
-          time_bucket('15 minutes', ts_utc) AS ts,
+          date_bin('15 minutes', ts, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS ts,
           AVG(value_num) AS price_ct_kwh
-        FROM timeseries_samples
-        WHERE series_key = '${PRICE_SERIES_KEY}'
-          AND value_num IS NOT NULL
-          AND ts_utc >= $1::timestamptz
-          AND ts_utc <  $2::timestamptz
+        FROM price_expanded
+        WHERE ts >= $1::timestamptz
+          AND ts <  $2::timestamptz
         GROUP BY 1
       ),
       slot_net AS (
@@ -2251,15 +2329,20 @@ export function createHistoryVizAggregator(ctx) {
     const hit = getCached(key);
     if (hit) return { status: 200, body: { ...hit, cached: true }, cached: true };
     try {
-      const { start, end } = resolveRange(view, date);
+      const range = resolveRange(view, date);
+      // Berliner Jahr und Berliner Kalendertage wie die Energie-Karten der
+      // Jahresansicht (Gegenpruefung 6f8226b5): sonst landete 01.10. 00:00–02:00
+      // im 30.09. und Neujahr 00:00–01:00 im Vorjahr.
+      const start = berlinDayStartIso(range.start);
+      const end = berlinDayStartIso(range.end);
       // Per-day signed net-€ over the 12-month window. Plan 09.4-B — the
       // per-slot net € is DERIVED ((export−import)×price/100, signed: a slot
       // that nets a cost carries a negative value), so SUM per day yields a
-      // signed daily net. date_trunc to UTC day; the matrix is plotted month×day.
+      // signed daily net. The matrix is plotted month×day.
       const sql = `
         ${dispatchSlotsCte()}
         SELECT
-          to_char(date_trunc('day', ts AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+          to_char(date_trunc('day', ts AT TIME ZONE 'Europe/Berlin'), 'YYYY-MM-DD') AS d,
           SUM(net_eur) AS net_eur
         FROM slot_net
         GROUP BY 1
@@ -2332,7 +2415,13 @@ export function createHistoryVizAggregator(ctx) {
     // same as the 0-rows path below (which returns 200 weatherDataAvailable
     // false). Matches the error-envelope shape used by every other builder.
     try {
-      const { start, end } = resolveRange(view, date);
+      const range = resolveRange(view, date);
+      // Jahr: Berliner Jahr und Berliner Tage wie die Energie-Karten
+      // (Gegenpruefung 6f8226b5); Woche/Monat bleiben bei UTC wie ihr Zeitraum.
+      const berlinYear = view === 'year';
+      const start = berlinYear ? berlinDayStartIso(range.start) : range.start;
+      const end = berlinYear ? berlinDayStartIso(range.end) : range.end;
+      const dayZone = berlinYear ? 'Europe/Berlin' : 'UTC';
       // Daily net-€ (Plan 09.4-B: derived from energy_slots_15m realized flows
       // × EPEX price) JOIN daily-mean GHI (from weather_forecasts, ghi_wm2 IS
       // NOT NULL — the open_meteo_archive provider holds a full year of
@@ -2343,7 +2432,7 @@ export function createHistoryVizAggregator(ctx) {
         ${dispatchSlotsCte()},
         daily_net AS (
           SELECT
-            to_char(date_trunc('day', ts AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+            to_char(date_trunc('day', ts AT TIME ZONE '${dayZone}'), 'YYYY-MM-DD') AS d,
             SUM(net_eur) AS net_eur,
             SUM(import_kwh) AS import_kwh,
             SUM(export_kwh) AS export_kwh
@@ -2352,7 +2441,7 @@ export function createHistoryVizAggregator(ctx) {
         ),
         daily_weather AS (
           SELECT
-            to_char(date_trunc('day', ts_utc AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS d,
+            to_char(date_trunc('day', ts_utc AT TIME ZONE '${dayZone}'), 'YYYY-MM-DD') AS d,
             AVG(ghi_wm2) AS ghi
           FROM weather_forecasts
           WHERE ts_utc >= $1::timestamptz

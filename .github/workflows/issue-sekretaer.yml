@@ -1,0 +1,86 @@
+# Issue-Sekretär: erste Einschätzung neuer Issues durch Claude (nach dem Vorbild von
+# evcc-io/evcc, .github/workflows/claude-issue-agent.yml, MIT-Lizenz).
+#
+# Ablauf
+#   - Neues Issue (oder vom Melder wieder geöffnet): Triage. Fragt fehlende Angaben nach,
+#     sucht Doppelungen, prüft am Code, ob etwas dran ist, setzt Labels. Ändert KEINEN
+#     Code und schließt nichts.
+#   - Antwortet der Melder auf eine Rückfrage (Label „wartet auf Rückmeldung“): erneute
+#     Analyse, solange sich noch kein Mensch außer dem Melder eingeschaltet hat.
+#   - /analyze und /fix: siehe issue-befehle.yml.
+# Die Ausführung liegt in issue-sekretaer-run.yml.
+
+name: Issue-Sekretär
+
+on:
+  issues:
+    types: [opened, reopened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  triage:
+    name: Ersteinschätzung
+    # Ein Wiederöffnen löst nur dann eine neue Triage aus, wenn der Melder es selbst tut.
+    if: |
+      github.event_name == 'issues' &&
+      (github.event.action == 'opened' || github.event.sender.login == github.event.issue.user.login)
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write # die wiederverwendbare Ausführung fordert es an
+      id-token: write
+      actions: read
+    uses: ./.github/workflows/issue-sekretaer-run.yml
+    with:
+      issue_number: ${{ github.event.issue.number }}
+      mode: triage
+    secrets: inherit
+
+  # Antwortet der Melder auf eine Rückfrage, kommt das Label weg und der Sekretär schaut
+  # noch einmal hin — aber nur, solange sich kein anderer Mensch eingeschaltet hat.
+  rueckmeldung-pruefen:
+    name: Rückmeldung des Melders
+    if: |
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.event.issue.user.login &&
+      !startsWith(github.event.comment.body, '/') &&
+      contains(github.event.issue.labels.*.name, 'wartet auf Rückmeldung')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        id: check
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue.number;
+            try {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number, name: 'wartet auf Rückmeldung' });
+            } catch (err) {
+              if (err.status !== 404) throw err;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const others = comments.filter((c) =>
+              c.user.login !== 'github-actions[bot]' && c.user.login !== context.payload.issue.user.login);
+            core.setOutput('run', String(others.length === 0));
+
+  nachanalyse:
+    name: Erneute Analyse nach Rückmeldung
+    needs: rueckmeldung-pruefen
+    if: needs.rueckmeldung-pruefen.outputs.run == 'true'
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      id-token: write
+      actions: read
+    uses: ./.github/workflows/issue-sekretaer-run.yml
+    with:
+      issue_number: ${{ github.event.issue.number }}
+      mode: analyze
+    secrets: inherit

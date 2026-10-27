@@ -5,7 +5,7 @@
 // die Regel entfernt, auch eine von einem früheren Lauf liegengebliebene.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -15,7 +15,9 @@ const WG_OK = '[Interface]\nPrivateKey = abc\nAddress = 10.0.0.2/32\n\n[Peer]\nP
 
 function setup({ protocol = 'wireguard', failHelper = false } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'dvhub-vpn-redirect-'));
-  const cfgPath = path.join(dir, protocol === 'wireguard' ? 'wg0.conf' : 'client.ovpn');
+  // Profil im Profilordner: dvhub-vpn nimmt nur <profiles>/<profil>/<datei>.
+  mkdirSync(path.join(dir, 'p'));
+  const cfgPath = path.join(dir, 'p', protocol === 'wireguard' ? 'wg0.conf' : 'client.ovpn');
   writeFileSync(cfgPath, WG_OK);
   const calls = [];
   const logs = [];
@@ -31,6 +33,7 @@ function setup({ protocol = 'wireguard', failHelper = false } = {}) {
       return { stdout: '', stderr: '' };
     },
     interfaceExists: () => true,
+    profilesDir: dir,
     getCfg: () => ({ vpn: { enabled: true, protocol, profileName: 'p', configPath: cfgPath } }),
   });
   const helperCalls = () => calls.filter((c) => c.includes(MODBUS_REDIRECT_HELPER)).map((c) => c.slice(c.indexOf(MODBUS_REDIRECT_HELPER) + 1));

@@ -1483,6 +1483,16 @@ function parseStringNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Himmelsrichtung zum Wert im Feld „Richtung°“ (Kompass: 0 = Nord, im
+// Uhrzeigersinn), auf 45° gerundet. Leer oder außerhalb 0–360 → Zuordnung als Hinweis.
+const AZIMUTH_DIRECTIONS = ['Nord', 'Nordost', 'Ost', 'Südost', 'Süd', 'Südwest', 'West', 'Nordwest'];
+function azimuthDirectionText(value) {
+  if (!(typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 360)) {
+    return '0 = Nord, 90 = Ost, 180 = Süd, 270 = West';
+  }
+  return `${value}° = ${AZIMUTH_DIRECTIONS[Math.round(value / 45) % 8]}`;
+}
+
 function validateForecastStrings(strings = []) {
   const messages = [];
   const inRange = (v, min, max) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
@@ -1650,8 +1660,14 @@ function renderStringRow(index) {
   azInput.value = s.azimuthDeg ?? '';
   azInput.style.textAlign = 'right';
   azInput.title = 'Himmelsrichtung (0=Nord, 90=Ost, 180=Sued, 270=West)';
+  // Himmelsrichtung sichtbar unter der Zeile, nicht nur im Tooltip (#25).
+  const azHint = document.createElement('div');
+  azHint.className = 'sa-field-note';
+  azHint.style.gridColumn = '1 / -1';
+  azHint.textContent = `Richtung: ${azimuthDirectionText(s.azimuthDeg)}`;
   azInput.addEventListener('input', () => {
     forecastStringsDraft[index].azimuthDeg = parseStringNumber(azInput.value);
+    azHint.textContent = `Richtung: ${azimuthDirectionText(forecastStringsDraft[index].azimuthDeg)}`;
     syncForecastStringsToDraft();
     updateSaveBar();
   });
@@ -1668,6 +1684,7 @@ function renderStringRow(index) {
     updateSaveBar();
   });
   row.appendChild(removeBtn);
+  row.appendChild(azHint);
 
   return row;
 }
@@ -3179,6 +3196,10 @@ function parseInputElement(field, input) {
     // erwartet — und jede Prüfung „Liste leer? dann alles erlauben" liefe
     // plötzlich in den falschen Zweig.
     if (field.type === 'stringList') return [];
+    // Ein leergeräumtes Zahlenfeld heißt „zurück auf den Standard“, den der
+    // Platzhalter zeigt — also den gespeicherten Wert löschen. Ein '' machte
+    // der Server früher zu einer gespeicherten 0 (Review 25.10.2026).
+    if (field.type === 'number') return { action: 'delete' };
     return '';
   }
 

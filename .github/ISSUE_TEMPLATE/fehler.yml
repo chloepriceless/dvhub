@@ -1,0 +1,71 @@
+name: Fehler melden
+description: Etwas funktioniert nicht wie erwartet
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für deine Meldung! Ein automatischer Issue-Sekretär schaut sich das zuerst an und fragt nach, falls etwas fehlt — Christin schaut danach drüber.
+
+        **Bitte keine Passwörter, Tokens, VRM-Zugangsdaten oder Lizenzschlüssel posten.** Schwärze sie in Logs und Konfiguration.
+        Sicherheitslücken bitte **nicht** hier melden, sondern privat über „Security“ → „Report a vulnerability“.
+  - type: input
+    id: version
+    attributes:
+      label: DVhub-Version
+      placeholder: z. B. 1.0.8 oder dev-Kanal vom 25.10.
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation
+      options:
+        - Docker
+        - Nativ (Raspberry Pi)
+        - Nativ (anderes Board)
+        - weiß nicht
+    validations:
+      required: true
+  - type: input
+    id: hersteller
+    attributes:
+      label: Hersteller / Geräte
+      description: Wechselrichter-Profil (Victron, Fronius, Deye, …) und beteiligte Geräte (Wallbox, Zähler, E-Auto)
+    validations:
+      required: true
+  - type: dropdown
+    id: eos
+    attributes:
+      label: Optimierung (EOS) aktiv?
+      options:
+        - ja
+        - nein
+        - weiß nicht
+  - type: textarea
+    id: beschreibung
+    attributes:
+      label: Was ist passiert?
+    validations:
+      required: true
+  - type: textarea
+    id: erwartet
+    attributes:
+      label: Was hättest du erwartet?
+    validations:
+      required: true
+  - type: input
+    id: zeitpunkt
+    attributes:
+      label: Wann ist es passiert?
+      placeholder: Datum und Uhrzeit
+  - type: textarea
+    id: log
+    attributes:
+      label: Log-Auszug
+      description: Die Zeilen rund um den Zeitpunkt. Wird automatisch als Code formatiert.
+      render: text
+  - type: textarea
+    id: zusatz
+    attributes:
+      label: Weitere Hinweise oder Screenshots

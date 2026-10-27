@@ -24,6 +24,8 @@
 //                   der Tag geplant war: der Day-Ahead-Plan vom Vortag (erster
 //                   Lauf ≥ 30 min nach Eingang der Day-Ahead-Preise), nur mit
 //                   den Slots dieses Tages; nach 2 Jahren weg.
+//   optimizer_runs  (25.10.2026) nach 14 Tagen gehen Läufe ohne Reihen; der
+//                   jüngste Lauf je Optimierer bleibt immer.
 //
 // Christin 2026-10-18: Einzelwerte bei Kunden 14 statt 60 Tage (control_write
 // allein ~9 MB/Tag), Fehler weiter 60 Tage voll. Auf unseren eigenen Geräten
@@ -161,6 +163,29 @@ export const SERIES_RETENTION_SQL = Object.freeze({
        AND s.optimizer_run_id <> (SELECT id FROM keep)`,
 });
 
+// Optimierer-Läufe (Review 25.10.2026): je Schleifendurchgang eine Zeile mit
+// result_json, vorher nie gelöscht (prod 32 005 Zeilen / 32 MB). Nach dem
+// Stichtag der Einzelwerte geht jeder Lauf, der keine Reihen mehr hat — das
+// Ausdünnen oben lässt je Tag nur den Day-Ahead-Plan stehen, nach 2 Jahren
+// auch den nicht. Es bleibt also, was gelesen wird: Läufe mit Reihen (Tagesplan,
+// Ausdünnen braucht run_started_at) und der jüngste Lauf je Optimierer
+// (getLatestOptimizerRun → /api/optimizer/runs/latest für die Leitstand-Kurve,
+// Prognose-Inspektor; wahlweise je Optimierer gefiltert), auch
+// wenn er älter ist. Paketweise ($2 Zeilen), damit eine alte Box nicht in
+// einem Rutsch löscht. Exportiert für den PostgreSQL-Test.
+export const OPTIMIZER_RUN_BATCH = 5000;
+export const OPTIMIZER_RUN_RETENTION_SQL = Object.freeze({
+  // $1 Stichtag, $2 Paketgröße
+  deleteRunsWithoutSeries: `DELETE FROM optimizer_runs WHERE id IN (
+      SELECT r.id FROM optimizer_runs r
+       WHERE r.run_started_at < $1
+         AND NOT EXISTS (SELECT 1 FROM optimizer_run_series s WHERE s.optimizer_run_id = r.id)
+         AND r.id NOT IN (SELECT DISTINCT ON (optimizer) id FROM optimizer_runs
+                           ORDER BY optimizer, run_started_at DESC, id DESC)
+       ORDER BY r.run_started_at
+       LIMIT $2)`,
+});
+
 /** Stichtage: Beginn des lokalen Tages vor `days` Tagen (als ISO-Zeitpunkt). */
 function cutoffs(nowMs, detailDays, aggregateDays) {
   const day = 86_400_000;
@@ -194,7 +219,7 @@ export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () 
     const t0 = now();
     const { detail, aggregate } = cutoffs(t0, detailDays, aggregateDays);
     const errorDetail = cutoffs(t0, errorDetailDays, aggregateDays).detail;
-    const out = { portalErrors: 0, controlDays: 0, errorDays: 0, auditDays: 0, optimizerRows: 0, deleted: 0, done: true };
+    const out = { portalErrors: 0, controlDays: 0, errorDays: 0, auditDays: 0, optimizerRows: 0, optimizerRuns: 0, deleted: 0, done: true };
     const budgetLeft = () => now() - t0 < TIME_BUDGET_MS;
     running = true;
     try {
@@ -258,6 +283,13 @@ export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () 
       }
       // Optimierer-Reihen nach 2 Jahren weg; Ereignisse und Verdichtetes bleiben.
       if (budgetLeft()) out.deleted += (await db.query(sql.dropOptimizerSeries, [aggregate])).rowCount || 0;
+      // Läufe ohne Reihen nach dem Stichtag (siehe OPTIMIZER_RUN_RETENTION_SQL).
+      while (budgetLeft()) {
+        const n = (await db.query(OPTIMIZER_RUN_RETENTION_SQL.deleteRunsWithoutSeries, [detail, OPTIMIZER_RUN_BATCH])).rowCount || 0;
+        out.optimizerRuns += n;
+        out.deleted += n;
+        if (n === 0) break;
+      }
       out.done = budgetLeft();
       if (out.deleted) log('log_retention', out);
       return out;

@@ -26,7 +26,10 @@
 #   4. install timescaledb-2-postgresql-<ver> (Community). If packagecloud has no
 #      build for the platform, fall back to the Debian Apache package so the box
 #      still gets a working hypertable (014's license guard skips the TSL parts).
-#      An already-installed Apache package is removed first (same .so, conflicts).
+#      An installed Apache package (same .so) is swapped only after the
+#      Community packages AND the Apache package are downloaded into DVhub's own
+#      package folder; installs read from that folder (no network needed), and
+#      if the Community install fails, the fallback reinstalls Apache from it.
 #   5. shared_preload_libraries drop-in (conf.d) + postgres restart
 #   6. Erweiterung anlegen (CREATE) bzw. auf die installierte Version heben
 #      (ALTER EXTENSION ... UPDATE als erste Anweisung einer frischen Sitzung),
@@ -243,22 +246,67 @@ if [[ -s "$KEYRING" && -f "$REPO_LIST" && "$TSL_POLICY" =~ Candidate:\ [0-9] ]];
   USE_TSL=1
 fi
 
+# Eigener Download-Ordner (Gegenpruefung 25.10.2026): ein dpkg-Hook wie
+# docker-clean (Debian/Ubuntu-Container-Abbilder) leert nach JEDEM dpkg-Lauf
+# /var/cache/apt/archives — nach dem Entfernen von Apache waeren die eben
+# geladenen Pakete weg. Bewusst nicht /tmp (Debian 13: RAM-Dateisystem).
+DEB_DIR="${TS_DEB_CACHE:-/var/cache/dvhub-timescale}"
+# Gegenpruefung 7c1761b8: Download UND Installation lesen denselben Ordner —
+# apt legt beim Download alles ab, was es aufloest (auch Abhaengigkeiten wie
+# timescaledb-tools), und findet es bei der Installation dort wieder; ohne Netz
+# geht die Installation so trotzdem. Installiert wird per Paketname (apt nimmt
+# aus dem Ordner nur die Kandidaten-Version, aeltere Reste stoeren nicht), nie
+# per geratenem Dateinamen. Der Ordner wird erst nach Erfolg geleert: ein
+# abgebrochener Lauf (Apache schon entfernt) findet das Apache-Paket dort beim
+# naechsten Mal auch ohne Netz (Gegenpruefung d867a370).
+apt_dl() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only -o Dir::Cache::archives="$DEB_DIR" "$@" >>"$LOG_FILE" 2>&1; }
+apt_inst() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dir::Cache::archives="$DEB_DIR" "$@" >>"$LOG_FILE" 2>&1; }
+APACHE_REMOVED=0
+
 if [[ "$USE_TSL" -eq 1 ]]; then
   # The Debian Apache package ships the same `timescaledb` .so and conflicts with
-  # the Community package — remove it first (retrofit Apache→Community).
-  if dpkg -s "$APACHE_PKG" >/dev/null 2>&1; then
-    echo "  TimescaleDB: entferne Apache-Paket ${APACHE_PKG} (wird durch Community ersetzt) ..."
-    DEBIAN_FRONTEND=noninteractive apt-get remove -y "$APACHE_PKG" >>"$LOG_FILE" 2>&1 || true
-    PKG_CHANGED=1
-  fi
+  # the Community package (retrofit Apache→Community). Review 25.10.2026: früher
+  # wurde Apache entfernt, bevor feststand, dass die Community-Installation
+  # gelingt — ohne Netz stand die Box danach ohne Bibliothek zur Katalog-Version.
+  # Jetzt liegen VOR dem Entfernen die Community-Pakete UND das installierte
+  # Apache-Paket im eigenen Download-Ordner. Scheitert danach die Installation,
+  # holt der Fallback unten Apache ohne Netz zurück. Bewusst kein Tausch in
+  # einem einzigen apt-Lauf: der hinge an Conflicts/Replaces der Fremdpakete.
   if dpkg -s "$TSL_PKG" >/dev/null 2>&1; then
     echo "  TimescaleDB: Community-Paket ${TSL_PKG} bereits installiert."
-  elif DEBIAN_FRONTEND=noninteractive apt-get install -y "$TSL_LOADER" "$TSL_PKG" >>"$LOG_FILE" 2>&1; then
-    echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
-    PKG_CHANGED=1
-  else
-    echo "  WARN: Community-Paket nicht installierbar — Fallback auf Apache-Paket." >&2
+  elif ! apt_dl "$TSL_LOADER" "$TSL_PKG"; then
+    echo "  WARN: Community-Paket nicht herunterladbar — Fallback auf Apache-Paket." >&2
     USE_TSL=0
+  else
+    APACHE_READY=1
+    if dpkg -s "$APACHE_PKG" >/dev/null 2>&1; then
+      if apt_dl --reinstall "$APACHE_PKG"; then
+        echo "  TimescaleDB: entferne Apache-Paket ${APACHE_PKG} (wird durch Community ersetzt) ..."
+        DEBIAN_FRONTEND=noninteractive apt-get remove -y "$APACHE_PKG" >>"$LOG_FILE" 2>&1 || true
+        APACHE_REMOVED=1
+        PKG_CHANGED=1
+      else
+        echo "  WARN: Apache-Paket nicht sicherbar — Tausch auf Community verschoben." >&2
+        APACHE_READY=0
+        USE_TSL=0
+      fi
+    fi
+    if [[ "$APACHE_READY" -eq 1 ]]; then
+      if apt_inst "$TSL_LOADER" "$TSL_PKG"; then
+        echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
+        PKG_CHANGED=1
+      else
+        echo "  WARN: Community-Paket nicht installierbar — Fallback auf Apache-Paket." >&2
+        USE_TSL=0
+        # Halb installierte Community-Pakete (z. B. nur der Loader) teilen sich
+        # die .so mit Apache und stuenden der Rueckkehr im Weg.
+        for _p in "$TSL_PKG" "$TSL_LOADER"; do
+          if dpkg -s "$_p" >/dev/null 2>&1; then
+            DEBIAN_FRONTEND=noninteractive apt-get remove -y "$_p" >>"$LOG_FILE" 2>&1 || true
+          fi
+        done
+      fi
+    fi
   fi
 fi
 
@@ -267,9 +315,16 @@ if [[ "$USE_TSL" -eq 0 ]]; then
   # license guard skips compression + continuous aggregates on this build. Keeps
   # a box functional where packagecloud has no build for the platform/codename.
   if ! dpkg -s "$APACHE_PKG" >/dev/null 2>&1; then
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y "$APACHE_PKG" >>"$LOG_FILE" 2>&1; then
+    if apt_inst "$APACHE_PKG"; then
       echo "  TimescaleDB: ${APACHE_PKG} (Apache-Fallback) installiert."
       PKG_CHANGED=1
+    elif [[ "$APACHE_REMOVED" -eq 1 ]]; then
+      # Diese Box HATTE TimescaleDB (Katalog, Preload-Eintrag). Ohne Bibliothek
+      # startet PostgreSQL mit shared_preload_libraries='timescaledb' nicht
+      # mehr — den Eintrag darum entfernen und den Zustand melden, nicht still
+      # weiterlaufen (Gegenpruefung 25.10.2026). Der naechste Lauf versucht es neu.
+      rm -f "${PG_ETC:-/etc/postgresql}/${PG_VER}/main/conf.d/timescaledb.conf"
+      fail_visible "Paketwechsel Apache→Community gescheitert, ${APACHE_PKG} nicht wieder installierbar — TimescaleDB-Bibliothek fehlt (Preload-Eintrag entfernt, damit PostgreSQL startet)"
     else
       echo "  WARN: ${APACHE_PKG} nicht installierbar (Netz/Repo?) — Box bleibt auf reinem Postgres." >&2
       exit 0
@@ -278,6 +333,7 @@ if [[ "$USE_TSL" -eq 0 ]]; then
     echo "  TimescaleDB: ${APACHE_PKG} (Apache) bereits installiert."
   fi
 fi
+rm -rf "$DEB_DIR"
 
 # Neustart + warten, bis Postgres antwortet. Die Probe laeuft in der Datenbank
 # postgres: dort ist TimescaleDB nicht angelegt, sie geht also auch, wenn die

@@ -3,12 +3,10 @@
 // and Einspeisepreise (feed-in compensation), including all German electricity
 // price components per MiSpeL/StromNEV regulations (2026 defaults).
 //
-// Pure functions -- no side effects, no config reads (im Anbieter-Modus liest
-// der Bezugspreis den Anbieterpreis-Speicher, services/tariff-provider).
+// Pure functions -- no side effects, no config reads.
 // Config is passed in via enrichPriceSlotsWithCosts(slots, cfg).
 
-import { resolveUserImportPriceCtKwhForSlot, resolveActiveUserEnergyPricingForTimestamp } from '../../config-model.js';
-import { providerModeInUse } from '../tariff-provider/provider-pricing.js';
+import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
 
 /**
  * Compute import and feed-in costs for a single time slot.
@@ -100,13 +98,18 @@ export function computeSlotCosts(spotCtKwh, tariff, paragraph14a) {
 
 /**
  * Enrich an array of normalized price slots with import and feed-in costs.
- * Reads ALL pricing data from existing userEnergyPricing config — no duplicate fields.
  *
- * Sources:
- * - Tariff type + surcharges: userEnergyPricing.mode + dynamicComponents
- * - Fixed price: userEnergyPricing.fixedGrossImportCtKwh
- * - §14a: userEnergyPricing.usesParagraph14aModule3 + module3Windows
- * - Feed-in tariff: from pvPlants anzulegender Wert (or default 7.78)
+ * Bezugspreis (Review 25.10.2026): aus resolveUserImportPriceCtKwhForSlot
+ * (config-model.js) — derselben Quelle wie EOS-Bridge (eos-forecast-bridge.js)
+ * und Oberflaeche. Damit gelten auch dynamicComponents.leviesAndFeesCtKwh,
+ * Tarif-Zeitraeume (userEnergyPricing.periods) und §14a-Modul-3-Fenster. Frueher
+ * rechnete der interne Optimierer mit fest verdrahteten Umlagen. Liefert die
+ * Quelle keinen Preis (Festpreis ohne Betrag), gilt wie in der Bridge der
+ * Spotpreis.
+ *
+ * Einspeisung: Modus wie Bridge und eos-config-sync.js — nur
+ * optimizer.tariff.feedInMode ('spot', Gross-/Kleinschreibung egal), sonst fest
+ * (Anzulegender Wert bzw. optimizer.tariff.feedInCtKwh, Standard 7,78).
  *
  * @param {Array<{ts: number, endTs: number, ctKwh: number, confidence: number}>} priceSlots
  * @param {object} cfg - Full config object
@@ -115,60 +118,25 @@ export function computeSlotCosts(spotCtKwh, tariff, paragraph14a) {
  * @returns {Array<{ts: number, endTs: number, ctKwh: number, confidence: number, importCtKwh: number, feedInCtKwh: number}>}
  */
 export function enrichPriceSlotsWithCosts(priceSlots, cfg, options = {}) {
-  const uep = cfg.userEnergyPricing ?? {};
-  const dc = uep.dynamicComponents ?? {};
-
-  // Build tariff from userEnergyPricing (single source of truth)
-  const tariff = {
-    type: uep.mode ?? 'dynamic',
-    netzentgeltCtKwh: dc.gridChargesCtKwh ?? 9.26,
-    kwkCtKwh: dc.kwkCtKwh ?? 0.446,
-    offshoreCtKwh: dc.offshoreCtKwh ?? 0.941,
-    stromnevCtKwh: dc.stromnevCtKwh ?? 1.559,
-    stromsteuerCtKwh: dc.stromsteuerCtKwh ?? 2.05,
-    konzessionsabgabeCtKwh: dc.konzessionsabgabeCtKwh ?? 1.66,
-    vertriebsaufschlagCtKwh: dc.energyMarkupCtKwh ?? 0,
-    vatPct: dc.vatPct ?? 19,
-    fixedCtKwh: uep.fixedGrossImportCtKwh ?? 30,
-    minCtKwh: 20,
-    // Feed-in: explicit optimizer.tariff.feedInMode takes precedence,
-    // then infer from marketValueMode (monthly/annual both mean DV = spot),
-    // fallback to 'fixed' only if no DV indicators present.
-    feedInMode: cfg.optimizer?.tariff?.feedInMode
-      ?? (uep.dvCostMonthlyEur > 0 || uep.marketValueMode ? 'spot' : 'fixed'),
-    feedInCtKwh: options.applicableValueCtKwh ?? cfg.optimizer?.tariff?.feedInCtKwh ?? 7.78,
-    feedInSpotFactor: cfg.optimizer?.tariff?.feedInSpotFactor ?? 1.0
+  const pricing = cfg?.userEnergyPricing ?? {};
+  const timeZone = cfg?.optimizer?.timezone || 'Europe/Berlin';
+  const tariffCfg = cfg?.optimizer?.tariff ?? {};
+  const feedInTariff = {
+    type: 'fixed',
+    feedInMode: String(tariffCfg.feedInMode || 'fixed').toLowerCase() === 'spot' ? 'spot' : 'fixed',
+    feedInCtKwh: options.applicableValueCtKwh ?? tariffCfg.feedInCtKwh ?? 7.78,
+    feedInSpotFactor: tariffCfg.feedInSpotFactor ?? 1.0
   };
+  const noParagraph14a = { enabled: false, reductionCtKwh: 0 };
 
-  // §14a from existing userEnergyPricing (not duplicate optimizer fields)
-  const paragraph14a = {
-    enabled: uep.usesParagraph14aModule3 ?? false,
-    reductionCtKwh: cfg.optimizer?.paragraph14a?.reductionCtKwh ?? 0
-  };
-
-  // Preis vom Stromanbieter (Grundtarif oder Zeitraum, z. B. ab Lieferbeginn):
-  // in diesen Slots je Slot wie überall sonst (Anbieterpreis bzw. Schätzung).
-  if (providerModeInUse(uep)) {
-    const timeZone = cfg.schedule?.timezone;
-    return priceSlots.map(slot => {
-      const costs = computeSlotCosts(slot.ctKwh, tariff, paragraph14a);
-      const active = resolveActiveUserEnergyPricingForTimestamp(slot.ts, uep, { timeZone }) || uep;
-      if (active.mode !== 'provider') return { ...slot, importCtKwh: costs.importCtKwh, feedInCtKwh: costs.feedInCtKwh };
-      const importCtKwh = resolveUserImportPriceCtKwhForSlot({ ts: slot.ts, ct_kwh: slot.ctKwh }, uep, { timeZone });
-      return {
-        ...slot,
-        importCtKwh: Number.isFinite(importCtKwh) ? importCtKwh : costs.importCtKwh,
-        feedInCtKwh: costs.feedInCtKwh
-      };
-    });
-  }
-
-  return priceSlots.map(slot => {
-    const costs = computeSlotCosts(slot.ctKwh, tariff, paragraph14a);
+  return priceSlots.map((slot) => {
+    let importCtKwh = resolveUserImportPriceCtKwhForSlot({ ts: slot.ts, ct_kwh: slot.ctKwh }, pricing, { timeZone });
+    if (!Number.isFinite(importCtKwh)) importCtKwh = Number(slot.ctKwh);
+    const { feedInCtKwh } = computeSlotCosts(slot.ctKwh, feedInTariff, noParagraph14a);
     return {
       ...slot,
-      importCtKwh: costs.importCtKwh,
-      feedInCtKwh: costs.feedInCtKwh
+      importCtKwh,
+      feedInCtKwh
     };
   });
 }

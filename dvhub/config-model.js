@@ -5478,6 +5478,15 @@ function sanitizeRawConfig(rawInput) {
     }
 
     if (field.type === 'number') {
+      // Leer geräumtes Zahlenfeld (''/null/nur Leerzeichen) = zurück auf den
+      // Standard (Review 25.10.2026). Vorher machte Number('') === 0 daraus
+      // eine gespeicherte 0, obwohl das Feld „Standard: X“ versprach (z. B.
+      // hardFloorSocPct 5 → 0). Wie der Zweig „ungültig“, aber ohne Warnung —
+      // leer ist eine gewollte Eingabe. Eine 0 bleibt 0.
+      if (currentValue == null || (typeof currentValue === 'string' && currentValue.trim() === '')) {
+        deletePath(raw, field.path);
+        continue;
+      }
       const num = Number(currentValue);
       if (!Number.isFinite(num)) {
         warnings.push(`${field.path}: invalid number, field was reset to default`);

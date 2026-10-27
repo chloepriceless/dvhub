@@ -1,0 +1,19 @@
+name: Funktion wünschen
+description: Idee oder Verbesserungsvorschlag
+labels: []
+body:
+  - type: textarea
+    id: wunsch
+    attributes:
+      label: Was wünschst du dir?
+    validations:
+      required: true
+  - type: textarea
+    id: wozu
+    attributes:
+      label: Wofür brauchst du es?
+      description: Deine Anlage und die Situation, in der dir das fehlt
+  - type: input
+    id: hersteller
+    attributes:
+      label: Hersteller / Geräte (falls relevant)

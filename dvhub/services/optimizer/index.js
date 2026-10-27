@@ -214,6 +214,28 @@ export function eosPlanKeepMs(cfg) {
   return (Number.isFinite(h) && h >= 0 ? h : 12) * 3_600_000;
 }
 
+// MiSpeL-Zaehler: hoechstens so lange gilt eine Momentaufnahme der Netzleistung.
+export const MISPEL_MAX_GAP_MS = 30 * 60 * 1000;
+
+/**
+ * Energie seit der letzten MiSpeL-Erfassung aus der momentanen Netzleistung
+ * (+ = Bezug, − = Einspeisung): echte Zeit seit `lastMs`, hoechstens
+ * `maxGapMs`. Ohne vorige Erfassung (oder rueckwaerts laufende Uhr) 0.
+ * Frueher rechnete jeder Lauf pauschal 30 min, obwohl alle <= 15 min (und bei
+ * neuen Prognosen/Plaenen oefter) gerechnet wird (Review 25.10.2026).
+ */
+export function mispelIntervalWh(gridPowerW, nowMs, lastMs, maxGapMs = MISPEL_MAX_GAP_MS) {
+  const power = Number(gridPowerW) || 0;
+  if (!Number.isFinite(lastMs) || !Number.isFinite(nowMs) || nowMs <= lastMs) {
+    return { feedInWh: 0, gridWithdrawalWh: 0 };
+  }
+  const dtH = Math.min(nowMs - lastMs, maxGapMs) / 3_600_000;
+  return {
+    feedInWh: power < 0 ? Math.abs(power) * dtH : 0,
+    gridWithdrawalWh: power > 0 ? power * dtH : 0
+  };
+}
+
 export function getOptInterval(cfg, hourOverride) {
   const normalInterval = cfg.optimizer?.intervalMs ?? 900_000;       // 15 min default
   const morningInterval = cfg.optimizer?.morningReoptIntervalMs ?? 300_000; // 5 min default
@@ -264,6 +286,8 @@ export function createOptimizerService(ctx) {
 
   // MiSpeL tracker (created once, accumulates yearly feed-in/withdrawal)
   const mispelTracker = createMispelTracker(state, getCfg, pushLog);
+  // Zeitpunkt der letzten MiSpeL-Erfassung (mispelIntervalWh).
+  let lastMispelAccumulateMs = null;
 
   // EOS adapter (created once, used when enabled)
   // ctx.eosAdapter: Test-Naht (Minuten-Wache, Plan-Behalten).
@@ -320,6 +344,66 @@ export function createOptimizerService(ctx) {
   // (nach einem Neustart wiederhergestellt) und zaehlt fuer die Erstplan-Wache
   // nicht als Plan.
   let eosFirstPushAt = null;
+  // Neue Prognose (forecastVersion) ueber die Bridge an EOS (Review 25.10.2026,
+  // Gegenpruefungen zu 2b66d3ee, 5a3108d9, f32de0d7). Die Bridge schreibt auf
+  // ihrem Takt (Standard 1 h) und bei neuen Preisen; ohne Anstoss kam eine
+  // neue PV-Prognose bis zu einer Stunde spaeter bei EOS an, ein Push je Lauf
+  // vervielfachte dagegen die Schreibvorgaenge in EOS (Geraete-Messwerte, die
+  // EOS nie kuerzt; MQTT-Wetter hebt die Version jede Minute). Deshalb:
+  // - je neuer Version ein Push, hoechstens alle RUN_PUSH_MIN_SPACING_MS;
+  //   eine im Fenster zurueckgehaltene Version geht zum Fensterende raus;
+  // - als uebertragen zaehlt nur ein Push mit ok; nach dem ersten Fehlschlag
+  //   ein Wiederholversuch nach RUN_PUSH_RETRY_MS, danach im 15-min-Takt.
+  let bridgePushedForecastVersion = Symbol('noch kein Push');
+  let lastRunPushAt = -Infinity;          // letzter Versuch (Erfolg oder nicht)
+  let runPushFailures = 0;                // Fehlschlaege in Folge
+  let pendingPushTimer = null;
+  let pushTimersStopped = false; // nach close() keinen Nachschub-Timer mehr
+  let runPushInFlight = null;
+  const RUN_PUSH_MIN_SPACING_MS = 15 * 60_000;
+  const RUN_PUSH_RETRY_MS = 2 * 60_000;
+
+  const runPushDueAt = () => lastRunPushAt + (runPushFailures === 1 ? RUN_PUSH_RETRY_MS : RUN_PUSH_MIN_SPACING_MS);
+
+  // Naechsten Versuch zum frühesten erlaubten Zeitpunkt vormerken — fuer eine
+  // im Fenster zurueckgehaltene Version und nach einem Fehlschlag, auch wenn
+  // bis dahin kein Lauf kommt.
+  function schedulePendingPush() {
+    if (pendingPushTimer || pushTimersStopped) return;
+    pendingPushTimer = setTimeout(() => {
+      pendingPushTimer = null;
+      const cfg = getCfg();
+      if (!cfg.optimizer?.enabled || !resolveEosProxy(cfg).enabled) return;
+      pushForecastIfNew().catch(() => {});
+    }, Math.max(0, runPushDueAt() - Date.now()));
+    pendingPushTimer.unref?.();
+  }
+
+  function pushForecastIfNew() {
+    const bridge = ctx.eosForecastBridge;
+    if (!bridge || typeof bridge.push !== 'function') return Promise.resolve();
+    if (runPushInFlight) return runPushInFlight;
+    const forecastVersion = ctx.forecastService?.forecastVersion;
+    if (forecastVersion === bridgePushedForecastVersion) return Promise.resolve();
+    if (Date.now() < runPushDueAt()) {
+      schedulePendingPush();
+      return Promise.resolve();
+    }
+    lastRunPushAt = Date.now();
+    runPushInFlight = (async () => {
+      let pushRes = null;
+      // Fehler meldet die Bridge selbst (lastEosPush).
+      try { pushRes = await bridge.push(); } catch (err) { pushLog('eos_forecast_bridge_error', { phase: 'optimizer_run', error: err.message }); }
+      if (pushRes?.ok === true) {
+        bridgePushedForecastVersion = forecastVersion;
+        runPushFailures = 0;
+      } else {
+        runPushFailures += 1;
+        schedulePendingPush();
+      }
+    })().finally(() => { runPushInFlight = null; });
+    return runPushInFlight;
+  }
   // Zuletzt erfolgreich geholter EOS-Plan (keepLastEosPlan). Liegt auch als
   // Datei im Datenverzeichnis: nach einem Neustart von DVhub war der Plan
   // sonst vergessen, und solange EOS nicht antwortete (laufende Rechnung),
@@ -392,7 +476,7 @@ export function createOptimizerService(ctx) {
    * rechnet damit aber erst zum naechsten ems.interval-Tick (bis 15 min), und
    * die aus EOS' Datenbank wiederhergestellte Loesung gilt faelschlich als
    * frisch, weil eosFirstPushAt noch vom DVhub-Start stammt. Deshalb: Zeitpunkt
-   * zuruecksetzen und einen Lauf anstossen — der pusht, findet keine frische
+   * zuruecksetzen und einen Lauf anstossen — der findet keine frische
    * Loesung und macht die Erstplan-Wache scharf (Boost auf 60 s).
    */
   function notifyEosRestart() {
@@ -539,7 +623,8 @@ export function createOptimizerService(ctx) {
       const multiDayResult = assessMultiDayHold(
         pvSlots, loadSlots,
         planCfg.optimizer?.batteryCapacityWh ?? 10000,
-        avgFeedIn, avgImport, rtEff
+        avgFeedIn, avgImport, rtEff,
+        { timeZone: cfg.schedule?.timezone || 'Europe/Berlin' }
       );
 
       let effectiveAllowGridDischarge = allowGridDischarge;
@@ -600,14 +685,13 @@ export function createOptimizerService(ctx) {
       let eosGridSetpoints = null;
       if (resolveEosProxy(cfg).enabled) {
         try {
-          // Send enriched forecast with fully-loaded prices to EOS
-          const forecastResp = await ctx.forecastService.buildForecastResponse();
-          const enrichedForecast = {
-            ...forecastResp,
-            price: { ...forecastResp.price, slots: enrichedPriceSlots }
-          };
-          const pushRes = await eosAdapter.pushForecast(enrichedForecast);
-          state.optimizer.lastEosPush = { ok: pushRes?.ok === true, error: pushRes?.error || null, at: Date.now() };
+          // Prognose an EOS: schreibt allein die Forecast-Bridge (Adapter
+          // ueberschrieb mit der rohen Stundenlast ihre Reihe). Sie traegt ihr
+          // Ergebnis selbst in state.optimizer.lastEosPush ein. Der Lauf stoesst
+          // sie nur bei neuer Prognose an (pushForecastIfNew) — im ersten Lauf
+          // des Prozesses immer, damit eosFirstPushAt hinter einem echten Push
+          // liegt. Ein Fehler beim Push haelt den Plan-Abruf nicht auf.
+          await pushForecastIfNew();
           if (eosFirstPushAt === null) eosFirstPushAt = Date.now();
           // eosSchedule = FRBC dispatch (battery power) for display/comparison.
           // eosGridSetpoints = net-grid control slots from EOS' SOLUTION (T-0118)
@@ -813,11 +897,9 @@ export function createOptimizerService(ctx) {
       // 14b. Update MiSpeL yearly tracker (OPTI-08)
       if (mispelMode !== 'none' && state.victron) {
         const gridPowerW = state.victron.gridPower ?? 0; // positive = import, negative = export
-        const dtMs = 30 * 60 * 1000; // 30min between runs (approximate)
-        const dtH = dtMs / 3_600_000;
-
-        const feedInWh = gridPowerW < 0 ? Math.abs(gridPowerW) * dtH : 0;
-        const gridWithdrawalWh = gridPowerW > 0 ? gridPowerW * dtH : 0;
+        const nowMs = Date.now();
+        const { feedInWh, gridWithdrawalWh } = mispelIntervalWh(gridPowerW, nowMs, lastMispelAccumulateMs);
+        lastMispelAccumulateMs = nowMs;
         mispelTracker.update(feedInWh, gridWithdrawalWh);
       }
 
@@ -982,6 +1064,7 @@ export function createOptimizerService(ctx) {
    */
   async function start() {
     state.optimizer.enabled = getCfg().optimizer?.enabled ?? false;
+    pushTimersStopped = false;
     startTimers(); // Always start timers -- runOptimization gates on enabled
     eosRunTrigger.start(); // tut nichts, solange keine EOS-Anbindung erkannt ist
 
@@ -998,8 +1081,11 @@ export function createOptimizerService(ctx) {
     if (pollTimer) clearInterval(pollTimer);
     if (unsubscribeEosPlan) { unsubscribeEosPlan(); unsubscribeEosPlan = null; }
     if (fallbackTimer) clearTimeout(fallbackTimer); // setTimeout-based since #16b
+    if (pendingPushTimer) clearTimeout(pendingPushTimer);
+    pushTimersStopped = true;
     pollTimer = null;
     fallbackTimer = null;
+    pendingPushTimer = null;
     eosFirstPlanWatch.stop();
     eosRunTrigger.stop();
   }

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
+import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
@@ -48,12 +49,18 @@ const PRIMARY_FLOW_SERIES = [
   'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
 ];
 // dropLocal = true: Werte werden gelesen (gleiche Quellen-Buchfuehrung), aber als 0 ausgegeben.
-const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => Object.fromEntries(
-  SECOND_BATTERY_SLOT_FIELDS.map(([field, seriesKey]) => {
-    const value = energyForSeries(seriesKey);
-    return [field, dropLocal ? 0 : value];
-  })
-);
+// Der Slot traegt dann vrmFlows: true — die Historie zieht den Ladestand-Uebertrag
+// von Akku 2 nur fuer lokale Abschnitte ab (Review 25.10.2026).
+const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => {
+  const fields = Object.fromEntries(
+    SECOND_BATTERY_SLOT_FIELDS.map(([field, seriesKey]) => {
+      const value = energyForSeries(seriesKey);
+      return [field, dropLocal ? 0 : value];
+    })
+  );
+  if (dropLocal) fields.vrmFlows = true;
+  return fields;
+};
 // Bevorzugte Quelle einer Reihe im Slot, ohne Seiteneffekt (wie pickSeriesRow).
 const preferredSourceKindOf = (bySource, preferredSourceKinds) => {
   if (!bySource) return null;
@@ -99,13 +106,6 @@ const roundKwh = round2;
 
 function bucketIso(ts, seconds) {
   return floorToInterval(new Date(ts), seconds).toISOString();
-}
-
-function energyKwhForSample(value, resolutionSeconds) {
-  const numeric = Number(value);
-  const seconds = Number(resolutionSeconds || 0);
-  if (!Number.isFinite(numeric) || !Number.isFinite(seconds) || seconds <= 0) return null;
-  return (numeric * seconds) / 3600000;
 }
 
 function weightedAverage(entries) {
@@ -401,6 +401,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
 
   function buildMaterializedEnergySlotWrites(rows) {
     const writes = new Map();
+    const nextVrmStart = vrmNextSampleStartLookup(rows);
     for (const row of rows) {
       const seriesKey = String(row.seriesKey || '').trim();
       if (!MATERIALIZED_ENERGY_SERIES.has(seriesKey)) continue;
@@ -421,27 +422,39 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
 
       if (!sourceKind || !writeMode) continue;
 
-      const valueNum = energyKwhForSample(row.value, row.resolutionSeconds);
-      if (!Number.isFinite(valueNum)) continue;
-
-      const slotStartUtc = bucketIso(row.ts, MATERIALIZED_SLOT_BUCKET_SECONDS);
-      const key = `${slotStartUtc}\u0000${seriesKey}\u0000${sourceKind}`;
-      const existing = writes.get(key);
-      if (existing) {
-        existing.valueNum += valueNum;
-        existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
-        continue;
-      }
-      writes.set(key, {
-        slotStartUtc,
-        seriesKey,
-        sourceKind,
-        quality,
-        valueNum,
-        unit: 'kWh',
-        meta: mergeMaterializedMeta(null, row.meta),
-        writeMode
+      // VRM-Proben laenger als ein Slot verteilen sich anteilig auf alle Slots,
+      // die sie ueberdecken; Live-Proben bleiben auf einen Slot gekappt (T-0079).
+      // Gemeinsame Regel mit dem PG-Store (sampleEnergyBySlot).
+      const spread = sourceKind === 'vrm_import';
+      const shares = sampleEnergyBySlot({
+        ts: row.ts,
+        value: row.value,
+        resolutionSeconds: row.resolutionSeconds,
+        spread,
+        slotSeconds: MATERIALIZED_SLOT_BUCKET_SECONDS,
+        nextStartMs: spread ? nextVrmStart(row) : null
       });
+      for (const { slotStartMs, valueNum } of shares) {
+        if (!Number.isFinite(valueNum)) continue;
+        const slotStartUtc = new Date(slotStartMs).toISOString();
+        const key = `${slotStartUtc}\u0000${seriesKey}\u0000${sourceKind}`;
+        const existing = writes.get(key);
+        if (existing) {
+          existing.valueNum += valueNum;
+          existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
+          continue;
+        }
+        writes.set(key, {
+          slotStartUtc,
+          seriesKey,
+          sourceKind,
+          quality,
+          valueNum,
+          unit: 'kWh',
+          meta: mergeMaterializedMeta(null, row.meta),
+          writeMode
+        });
+      }
     }
     return [...writes.values()];
   }
@@ -608,16 +621,23 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         ${start ? 'AND ts_utc >= ?' : ''}
         ${end ? 'AND ts_utc < ?' : ''}
     `).all(...keys, ...(start ? [isoTimestamp(start)] : []), ...(end ? [isoTimestamp(end)] : []));
+    // Eine Stunde Rand, damit Stundenpreise am Bereichsrand ihre Nachbarn sehen
+    // und ein :00-Preis vor `start` seine :15/:30/:45 deckt.
     const priceRows = db.prepare(`
-      SELECT ts_utc
+      SELECT series_key, ts_utc, MAX(resolution_seconds) AS resolution_seconds
       FROM timeseries_samples
       WHERE series_key = 'price_ct_kwh'
+        AND value_num IS NOT NULL
         ${start ? 'AND ts_utc >= ?' : ''}
         ${end ? 'AND ts_utc < ?' : ''}
-    `).all(...(start ? [isoTimestamp(start)] : []), ...(end ? [isoTimestamp(end)] : []));
+      GROUP BY series_key, ts_utc
+    `).all(
+      ...(start ? [new Date(new Date(isoTimestamp(start)).getTime() - PRICE_COVERAGE_PAD_MS).toISOString()] : []),
+      ...(end ? [new Date(new Date(isoTimestamp(end)).getTime() + PRICE_COVERAGE_PAD_MS).toISOString()] : [])
+    );
 
     const telemetryBuckets = new Set(telemetryRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
-    const pricedBuckets = new Set(priceRows.map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
+    const pricedBuckets = new Set(expandHourlyPriceRows(priceRows).map((row) => bucketIso(row.ts_utc, DEFAULT_PRICE_BUCKET_SECONDS)));
 
     return [...telemetryBuckets].filter((ts) => !pricedBuckets.has(ts)).sort();
   }
@@ -739,6 +759,10 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
   }
 
   function listPriceSlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS }) {
+    const startIso = isoTimestamp(start);
+    const endIso = isoTimestamp(end);
+    const startMs = new Date(startIso).getTime();
+    const endMs = new Date(endIso).getTime();
     const rows = db.prepare(`
       SELECT series_key, ts_utc, resolution_seconds, value_num
       FROM timeseries_samples
@@ -747,10 +771,12 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         AND ts_utc >= ?
         AND ts_utc < ?
       ORDER BY ts_utc ASC
-    `).all(isoTimestamp(start), isoTimestamp(end));
+    `).all(new Date(startMs - PRICE_COVERAGE_PAD_MS).toISOString(), new Date(endMs + PRICE_COVERAGE_PAD_MS).toISOString());
 
     const buckets = new Map();
-    for (const row of rows) {
+    for (const row of expandHourlyPriceRows(rows)) {
+      const rowMs = new Date(row.ts_utc).getTime();
+      if (!(rowMs >= startMs && rowMs < endMs)) continue;
       const ts = bucketIso(row.ts_utc, bucketSeconds);
       const bucket = buckets.get(ts) || new Map();
       const entries = bucket.get(row.series_key) || [];

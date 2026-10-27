@@ -26,7 +26,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import parquet from '@dsnp/parquetjs';
-import { createApiRoutes } from '../../routes-api.js';
+import { createApiRoutes, exportDateStamp } from '../../routes-api.js';
 
 const REMOTE_IP = '203.0.113.5';     // TEST-NET-3 — never resolves to LAN
 const LAN_IP = '192.168.1.66';      // RFC 1918 — would bypass auth IF endpoint were LAN-safe
@@ -349,7 +349,7 @@ describe('GET /api/history/raw/export.parquet', () => {
     const res = await dispatch(ctx, req);
     await waitForClose(res);
 
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const today = exportDateStamp(ctx.getCfg?.()?.schedule?.timezone); // Ortsdatum wie der Server
     const hdrs = {};
     for (const [k, v] of Object.entries(res._captured.headers)) hdrs[k.toLowerCase()] = v;
     const cd = String(hdrs['content-disposition'] || '');

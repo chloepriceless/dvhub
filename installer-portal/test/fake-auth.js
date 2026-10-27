@@ -19,7 +19,9 @@ const b64u = (b) => Buffer.from(b).toString('base64url');
 
 // opts.uv=false: Authenticator ohne Nutzer-Verifikation (z. B. Key ohne PIN).
 // opts.credIdBytes: Länge der Credential-ID (Default 16).
-export function makeAuthenticator(rpId = 'localhost', { uv = true, credIdBytes = 16 } = {}) {
+// opts.zeroCounter: meldet immer Zähler 0 (z. B. Apple-/synchronisierte Passkeys).
+// setCounter(n): nächster Aufruf meldet n+1 — simuliert einen geklonten Key.
+export function makeAuthenticator(rpId = 'localhost', { uv = true, credIdBytes = 16, zeroCounter = false } = {}) {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const jwk = publicKey.export({ format: 'jwk' });
   const cose = new Map([
@@ -31,12 +33,14 @@ export function makeAuthenticator(rpId = 'localhost', { uv = true, credIdBytes =
   let counter = 0;
   const authData = (withCred) => {
     const flags = 0x01 | (uv ? 0x04 : 0) | (withCred ? 0x40 : 0);
-    const base = Buffer.concat([rpIdHash, Buffer.from([flags]), Buffer.from([0, 0, 0, ++counter])]);
+    const cnt = Buffer.alloc(4); cnt.writeUInt32BE(zeroCounter ? 0 : ++counter);
+    const base = Buffer.concat([rpIdHash, Buffer.from([flags]), cnt]);
     if (!withCred) return base;
     const cidLen = Buffer.alloc(2); cidLen.writeUInt16BE(credId.length);
     return Buffer.concat([base, Buffer.alloc(16), cidLen, credId, enc(cose)]);
   };
   return {
+    setCounter(n) { counter = n; },
     create(origin, challenge) {
       const cd = Buffer.from(JSON.stringify({ type: 'webauthn.create', challenge, origin }), 'utf8');
       const attObj = enc(new Map([['fmt', 'none'], ['attStmt', new Map()], ['authData', authData(true)]]));

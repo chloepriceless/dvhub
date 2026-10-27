@@ -295,6 +295,312 @@ fi
 
 assert_supported_layout
 
+# BEGIN DVHUB GIT CONFIG — keep this block byte-identical in install.sh, post-update.sh and dvhub-update.sh.
+# git-Konfiguration des Programmordners bereinigen (Gegenprüfung a75c2cea).
+# Bis zur Rechte-Härtung vom 25.10.2026 gehörte .git dem Dienstbenutzer. Wer ihn
+# kontrollierte, konnte in .git/config Befehle ablegen, die root bei git
+# fetch/checkout ausführt: core.fsmonitor/sshCommand/pager, filter.*, diff.*,
+# merge.*, remote.*.uploadpack, url.*.insteadOf (lenkt z. B. auf ssh mit eigenem
+# core.sshCommand um), include.path, alias.*, credential.helper … — und in
+# .git/info/attributes Dateien einem solchen Treiber zuordnen. Die -c-Schalter
+# der root-Aufrufe decken nur Hooks und fsmonitor ab.
+# Darum vor dem ersten git-Aufruf als root: in .git/config (und
+# .git/config.worktree) bleiben nur die Schlüssel, die ein DVhub-Klon braucht
+# (dvhub_git_key_allowed); alles andere wird entfernt — eine Zeile je Schlüssel
+# im Log, ohne Wert —, das Original vorher gesichert (config.dvhub-bak-<zeit>,
+# 0600). Ebenso Zeilen mit filter=, diff= oder merge= in .git/info/attributes.
+# Kein neuer Klon (Download, Ausfall auf schwachen Boards, Forks und Spiegel).
+# Die Quelle (remote.*.url) bleibt, wie sie ist — auch Forks und Spiegel. Hat
+# sie eine unzulässige Form (ext::, fd::, unbekannter Transport, „-“ am Anfang),
+# wird nichts umgeschrieben: Rückgabe 2, nichts geändert, das Update hält an.
+# Ebenso abgelehnt: ein Fernstellenname oder branch.*.remote/
+# extensions.partialclone mit „-“ am Anfang (Teil-Klon reicht ihn als Option an
+# git fetch). Ein unveränderter Klon bleibt Byte für Byte, wie er ist (keine
+# Sicherung, keine Ausgabe); war eine Datei fremd oder für andere schreibbar,
+# kommt derselbe Inhalt als neue Datei zurück (kein offener Schreibzugriff). Liest die Datei mit git config --file --no-includes, nie über
+# das Repo selbst.
+# Rückgabe: 0 sauber oder bereinigt, 1 Fehler, 2 abgelehnt.
+dvhub_git_key_allowed() {  # <schlüssel, wie git config --list ihn schreibt>
+  case "$1" in
+    core.repositoryformatversion|core.filemode|core.bare|core.logallrefupdates) return 0 ;;
+    core.ignorecase|core.precomposeunicode|core.symlinks) return 0 ;;
+    # Repository-Format: ohne seine Erweiterung ist ein Repo unlesbar; keine
+    # nennt einen Befehl, unbekannte lehnt git selbst ab. config.worktree
+    # (extensions.worktreeConfig) wird mit bereinigt.
+    extensions.*) return 0 ;;
+    remote.*.url|remote.*.fetch|remote.*.tagopt|remote.*.prune) return 0 ;;
+    # Teil-Klon (--filter): ohne diese fehlen beim Auschecken Objekte.
+    remote.*.promisor|remote.*.partialclonefilter) return 0 ;;
+    branch.*.remote|branch.*.merge|branch.*.rebase) return 0 ;;
+    gc.auto|fetch.prune|pull.rebase|pull.ff|user.name|user.email|advice.*) return 0 ;;
+  esac
+  return 1
+}
+dvhub_git_url_problem() {  # <url> — gibt den Grund aus (Rückgabe 0), wenn die Form unzulässig ist
+  local u="$1" re scheme rest
+  case "$u" in
+    '') echo "leer"; return 0 ;;
+    -*) echo "beginnt mit „-“ (würde als Option gelesen)"; return 0 ;;
+    *[[:cntrl:]]*) echo "enthält Steuerzeichen"; return 0 ;;
+  esac
+  # <name>::… startet das Programm git-remote-<name> (ext:: führt Befehle aus).
+  re='^([A-Za-z0-9+.-]+)::'
+  if [[ "$u" =~ $re ]]; then echo "Fremdtransport ${BASH_REMATCH[1]}::"; return 0; fi
+  re='^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$'
+  if [[ "$u" =~ $re ]]; then
+    scheme="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
+    case "$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')" in
+      https|http|ssh|git+ssh|ssh+git|git|file) ;;
+      *) echo "unbekannter Transport ${scheme}://"; return 0 ;;
+    esac
+    re='^([^/@]*@)?-'
+    if [[ "$rest" =~ $re ]]; then echo "Rechnername beginnt mit „-“"; return 0; fi
+    return 1
+  fi
+  [[ "$u" == /* ]] && return 1   # lokaler Pfad
+  # scp-Form [benutzer@]rechner:pfad (git@github.com:…)
+  re='^([A-Za-z0-9._~%+-]+@)?([A-Za-z0-9][A-Za-z0-9._-]*|\[[0-9A-Fa-f:.]+\]):'
+  [[ "$u" =~ $re ]] && return 1
+  echo "unbekannte Form (erlaubt: https://, ssh://, git@rechner:pfad, git://, file://, absoluter Pfad)"
+  return 0
+}
+dvhub_git_mask() {  # <schlüssel> — Zugangsdaten in einer URL im Abschnittsnamen ausblenden
+  local re='^(.*://)[^/@]*@(.*)$'
+  if [[ "$1" =~ $re ]]; then printf '%s***@%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; else printf '%s' "$1"; fi
+}
+dvhub_git_rm() { local x; for x in "$@"; do [[ -z "$x" ]] || rm -f "$x"; done; return 0; }
+dvhub_git_backup_name() {  # <datei> <stempel>
+  local bak="$1.dvhub-bak-$2" n=0
+  while [[ -e "$bak" || -L "$bak" ]]; do n=$((n + 1)); bak="$1.dvhub-bak-$2-$n"; done
+  printf '%s' "$bak"
+}
+dvhub_git_clean_file() {  # <datei> <schnappschuss> <schlüssel, zeilenweise> <stempel>
+  local f="$1" snap="$2" keys="$3" tmp key sec left k bak
+  tmp="$(mktemp "$f.dvhub-new.XXXXXX")" || return 1
+  if ! cat "$snap" > "$tmp"; then rm -f "$tmp"; return 1; fi
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    if ! (cd / && git config --file "$tmp" --unset-all "$key"); then
+      echo "  git-Konfiguration: $(dvhub_git_mask "$key") in $f nicht entfernbar — nichts geändert" >&2
+      rm -f "$tmp"; return 1
+    fi
+  done <<< "$keys"
+  if ! left="$(cd / && git config --file "$tmp" --no-includes --name-only --list)"; then rm -f "$tmp"; return 1; fi
+  while IFS= read -r k; do
+    [[ -z "$k" ]] || dvhub_git_key_allowed "$k" || { echo "  git-Konfiguration: $f nach dem Bereinigen nicht sauber — nichts geändert" >&2; rm -f "$tmp"; return 1; }
+  done <<< "$left"
+  # Abschnitte ohne verbliebenen Schlüssel ganz entfernen ([filter "x"] …).
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    sec="${key%.*}"
+    case $'\n'"$left" in *$'\n'"$sec".*) continue ;; esac
+    (cd / && git config --file "$tmp" --remove-section "$sec") 2>/dev/null || true
+  done <<< "$keys"
+  chmod 0644 "$tmp" || { rm -f "$tmp"; return 1; }
+  bak="$(dvhub_git_backup_name "$f" "$4")"
+  # Schnappschuss = Original, root-eigen 0600 (mktemp); dann atomar ersetzen.
+  if ! mv -f "$snap" "$bak"; then rm -f "$tmp"; return 1; fi
+  if ! mv -f "$tmp" "$f"; then rm -f "$tmp"; return 1; fi
+  while IFS= read -r key; do
+    [[ -n "$key" ]] && echo "  git-Konfiguration: $(dvhub_git_mask "$key") entfernt (.git/${f##*/.git/})"
+  done <<< "$keys"
+  echo "  git-Konfiguration: Original gesichert in $bak"
+}
+dvhub_git_secure() {  # <pfad> <uid> <gid> — 0 schon sicher, 3 umgestellt, 1 Fehler
+  [[ -n "$(find "$1" -maxdepth 0 \( ! -user "$2" -o -perm -0020 -o -perm -0002 \) -print 2>/dev/null)" ]] || return 0
+  { chown -h "$2:$3" "$1" && chmod go-w "$1"; } 2>/dev/null || return 1
+  return 3
+}
+dvhub_git_republish() {  # <schnappschuss> <datei> — geprüften Inhalt als neue Inode einsetzen
+  chmod 0644 "$1" && mv -f "$1" "$2"
+}
+dvhub_sanitize_git_config() {  # <programmordner>
+  local dir gd p f uid gid snap list origin entry key val why bad="" keys stamp re rc name line
+  local snap_cfg="" keys_cfg="" snap_wt="" keys_wt="" fresh_cfg=0 fresh_wt=0 fresh_attr=0
+  dir="$(cd "$1" 2>/dev/null && pwd -P)" || return 0
+  gd="$dir/.git"
+  [[ -e "$gd" || -L "$gd" ]] || return 0
+  uid="$(id -u)"; gid="$(id -g)"
+  # Von außen nach innen: erst einen Ordner sichern (gehört dem Aufrufer, für
+  # andere nicht schreibbar), dann prüfen, was darin liegt — sonst legt der
+  # Dienstbenutzer zwischen Prüfen und Sichern noch etwas an (Gegenprüfung
+  # b2274d8b). Verweise oder ein umgelenktes Repo (commondir) ließen root fremde
+  # Dateien lesen oder schreiben — kommt in einem Klon nicht vor: ablehnen.
+  # Auf einer root-eigenen Box ändert das Sichern nichts.
+  rc=0; dvhub_git_secure "$dir" "$uid" "$gid" || rc=$?
+  [[ "$rc" -ne 1 ]] || { echo "  git-Konfiguration: Besitz/Rechte von $dir nicht zu setzen — nichts geändert" >&2; return 1; }
+  for p in "$gd" "$gd/info"; do
+    if [[ -L "$p" ]] || { [[ -e "$p" ]] && [[ ! -d "$p" ]]; }; then
+      echo "  git-Konfiguration abgelehnt: $p ist kein Ordner (Verweis oder Datei) — nichts geändert, Update angehalten; bitte prüfen" >&2
+      return 2
+    fi
+    [[ -e "$p" ]] || continue
+    rc=0; dvhub_git_secure "$p" "$uid" "$gid" || rc=$?
+    [[ "$rc" -ne 1 ]] || { echo "  git-Konfiguration: Besitz/Rechte von $p nicht zu setzen — nichts geändert" >&2; return 1; }
+  done
+  for p in "$gd/config" "$gd/config.worktree" "$gd/info/attributes" "$gd/commondir"; do
+    if [[ -L "$p" ]] || { [[ -e "$p" ]] && [[ ! -f "$p" || "$p" == "$gd/commondir" ]]; }; then
+      echo "  git-Konfiguration abgelehnt: $p ist ein Verweis oder lenkt git um — nichts geändert, Update angehalten; bitte prüfen" >&2
+      return 2
+    fi
+  done
+  [[ -f "$gd/config" ]] || return 0
+  # Dateien sichern. War eine fremd oder für andere schreibbar, kann der
+  # Dienstbenutzer noch einen offenen Schreib-Deskriptor halten — chown/chmod
+  # nehmen ihn nicht weg. Solche Dateien ersetzt der geprüfte Schnappschuss als
+  # neue Inode, auch wenn nichts zu entfernen war (Gegenprüfung b2274d8b).
+  for p in config config.worktree info/attributes; do
+    [[ -e "$gd/$p" ]] || continue
+    rc=0; dvhub_git_secure "$gd/$p" "$uid" "$gid" || rc=$?
+    [[ "$rc" -ne 1 ]] || { echo "  git-Konfiguration: Besitz/Rechte von $gd/$p nicht zu setzen — nichts geändert" >&2; return 1; }
+    if [[ "$rc" -eq 3 ]]; then
+      case "$p" in config) fresh_cfg=1 ;; config.worktree) fresh_wt=1 ;; *) fresh_attr=1 ;; esac
+    fi
+  done
+  # Lesen: Schnappschuss (danach ändert niemand mehr, was geprüft wurde).
+  for f in config config.worktree; do
+    [[ -f "$gd/$f" ]] || continue
+    snap="$(mktemp "$gd/$f.dvhub-snap.XXXXXX")" || { dvhub_git_rm "$snap_cfg"; return 1; }
+    list="$(mktemp "$gd/$f.dvhub-list.XXXXXX")" || { dvhub_git_rm "$snap" "$snap_cfg"; return 1; }
+    rc=0
+    cat "$gd/$f" > "$snap" || rc=1
+    [[ "$rc" -eq 0 ]] && { (cd / && git config --file "$snap" --no-includes --show-origin --list -z) > "$list" || rc=1; }
+    if [[ "$rc" -ne 0 ]]; then
+      echo "  git-Konfiguration: $gd/$f nicht lesbar — nichts geändert" >&2
+      dvhub_git_rm "$snap" "$list" "$snap_cfg"; return 1
+    fi
+    keys=""
+    while IFS= read -r -d '' origin && IFS= read -r -d '' entry; do
+      if [[ "$origin" != "file:$snap" ]]; then rc=1; break; fi
+      key="${entry%%$'\n'*}"
+      val=""
+      [[ "$entry" == *$'\n'* ]] && val="${entry#*$'\n'}"
+      line=""
+      if [[ "$key" == remote.*.url ]] && why="$(dvhub_git_url_problem "$val")"; then
+        line="  git-Konfiguration abgelehnt: $(dvhub_git_mask "$key") in .git/$f — $why"
+      fi
+      # Ein Fernstellenname mit „-“ am Anfang wird beim Nachladen eines
+      # Teil-Klons als Option an git fetch gereicht (Gegenprüfung b2274d8b).
+      # Den Namen selbst nicht ausgeben (er trägt die Option).
+      case "$key" in
+        remote.*.*)
+          name="${key#remote.}"; name="${name%.*}"
+          [[ "$name" == -* ]] && line="  git-Konfiguration abgelehnt: Fernstelle remote.<…> in .git/$f — Fernstellenname beginnt mit „-“ (würde als Option gelesen)"
+          ;;
+        branch.*.remote|branch.*.pushremote|extensions.partialclone)
+          [[ "$val" == -* ]] && line="  git-Konfiguration abgelehnt: $(dvhub_git_mask "$key") in .git/$f — Fernstellenname beginnt mit „-“ (würde als Option gelesen)"
+          ;;
+      esac
+      if [[ -n "$line" ]]; then
+        case $'\n'"$bad" in *$'\n'"$line"$'\n'*) ;; *) bad="$bad$line"$'\n' ;; esac
+      fi
+      dvhub_git_key_allowed "$key" && continue
+      case $'\n'"$keys" in *$'\n'"$key"$'\n'*) continue ;; esac
+      keys="$keys$key"$'\n'
+    done < "$list"
+    rm -f "$list"
+    if [[ "$rc" -ne 0 ]]; then
+      echo "  git-Konfiguration: $gd/$f unerwartet gelesen — nichts geändert" >&2
+      dvhub_git_rm "$snap" "$snap_cfg"; return 1
+    fi
+    if [[ "$f" == config ]]; then snap_cfg="$snap"; keys_cfg="$keys"; else snap_wt="$snap"; keys_wt="$keys"; fi
+  done
+  if [[ -n "$bad" ]]; then
+    printf '%s' "$bad" >&2
+    echo "  git-Konfiguration: Quelle nicht umgeschrieben, nichts geändert — Update angehalten; bitte remote-Einträge in $gd/config prüfen" >&2
+    dvhub_git_rm "$snap_cfg" "$snap_wt"
+    return 2
+  fi
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  rc=0
+  if [[ -n "$keys_cfg" ]]; then dvhub_git_clean_file "$gd/config" "$snap_cfg" "$keys_cfg" "$stamp" || rc=1
+  elif [[ "$fresh_cfg" -eq 1 ]]; then dvhub_git_republish "$snap_cfg" "$gd/config" || rc=1; fi
+  if [[ "$rc" -eq 0 && -n "$snap_wt" ]]; then
+    if [[ -n "$keys_wt" ]]; then dvhub_git_clean_file "$gd/config.worktree" "$snap_wt" "$keys_wt" "$stamp" || rc=1
+    elif [[ "$fresh_wt" -eq 1 ]]; then dvhub_git_republish "$snap_wt" "$gd/config.worktree" || rc=1; fi
+  fi
+  dvhub_git_rm "$snap_cfg" "$snap_wt"
+  [[ "$rc" -eq 0 ]] || { echo "  git-Konfiguration: nicht zu schreiben" >&2; return 1; }
+  # .git/info/attributes: Zeilen, die Dateien einem filter-, diff- oder
+  # merge-Treiber zuordnen (Kommentare bleiben).
+  f="$gd/info/attributes"
+  re='^[[:space:]]*[^#[:space:]].*[[:space:]](filter|diff|merge)='
+  [[ -f "$f" ]] || return 0
+  snap="$(mktemp "$f.dvhub-snap.XXXXXX")" || return 1
+  if ! cat "$f" > "$snap"; then rm -f "$snap"; echo "  git-Attribute: $f nicht lesbar" >&2; return 1; fi
+  if ! grep -Eq "$re" "$snap" 2>/dev/null; then
+    rc=0
+    if [[ "$fresh_attr" -eq 1 ]]; then dvhub_git_republish "$snap" "$f" || rc=1; fi
+    rm -f "$snap"
+    [[ "$rc" -eq 0 ]] || { echo "  git-Attribute: $f nicht zu schreiben" >&2; return 1; }
+    return 0
+  fi
+  list="$(mktemp "$f.dvhub-new.XXXXXX")" || { rm -f "$snap"; return 1; }
+  rc=0
+  grep -Ev "$re" "$snap" > "$list" || [[ $? -eq 1 ]] || rc=1
+  [[ "$rc" -eq 0 ]] && { chmod 0644 "$list" || rc=1; }
+  if [[ "$rc" -eq 0 ]]; then
+    p="$(dvhub_git_backup_name "$f" "$stamp")"
+    mv -f "$snap" "$p" && mv -f "$list" "$f" || rc=1
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    echo "  git-Attribute: $f nicht zu bereinigen" >&2
+    rm -f "$snap" "$list"; return 1
+  fi
+  grep -E "$re" "$p" | while IFS= read -r entry; do
+    echo "  git-Attribute: Zeile entfernt (.git/info/attributes): ${entry:0:120}"
+  done
+  echo "  git-Attribute: Original gesichert in $p"
+  return 0
+}
+# END DVHUB GIT CONFIG
+
+# BEGIN DVHUB INSTALL-DIR OWNERSHIP — keep this block byte-identical in install.sh and post-update.sh.
+# DVHUB_ROOT_OWNED_INSTALL (Review 25.10.2026, P1): der Programmordner gehört
+# root und ist für den Dienstbenutzer nur lesbar. root führt daraus bei jedem
+# Dienststart post-update.sh und weitere Skripte aus; gehörte er dem
+# Dienstbenutzer, könnte der sie vorher ändern. Der Dienst schreibt nur in
+# CONFIG_DIR und DATA_DIR; Updates aus der Oberfläche laufen über
+# /usr/local/libexec/dvhub-update. Die Marke oben ist die Untergrenze, die
+# dvhub-update beim Auschecken prüft — nicht entfernen.
+# Voller Durchlauf nur, wenn sich der Stand geändert hat oder etwas nicht passt
+# (Marker .root-owned-rev, selbst root-eigen); sonst kostet der Schritt nichts.
+# Geändert wird nur, was nicht passt (Gegenprüfung 25.10.2026: früher chown -R
+# über alles, auch die großen venvs). Optional mit Zeitgrenze (post-update.sh,
+# Dienststart): reicht sie nicht, bleibt der Marker alt und der nächste Lauf
+# macht dort weiter, wo noch etwas falsch ist.
+# safe.directory (systemweit) lässt den Dienstbenutzer im root-eigenen Repo
+# lesen (Update-Prüfung: git rev-parse/log/tag).
+# Ausnahme .git/…dvhub-bak-*: Sicherungen der bereinigten git-Konfiguration
+# (Block DVHUB GIT CONFIG) gehören root und bleiben 0600 — kein a+r (nur
+# gewöhnliche Dateien, die für niemanden sonst schreibbar sind).
+dvhub_root_own_install_dir() {  # <ordner> [<höchstens sekunden je Schritt>]
+  local dir="$1" mark="$1/.root-owned-rev" want lim=() rc=0 wrong
+  [[ -d "$dir" ]] || return 0
+  [[ -n "${2:-}" ]] && command -v timeout >/dev/null 2>&1 && lim=(timeout -k 5 "$2")
+  want="$(git -c safe.directory="$dir" -c core.fsmonitor=false -C "$dir" rev-parse --verify -q HEAD 2>/dev/null)" || want=nogit
+  if [[ "$(cat "$mark" 2>/dev/null)" != "$want" || -z "$(find "$dir" "$mark" -maxdepth 0 -user 0 2>/dev/null | sed -n 2p)" ]]; then
+    wrong="$(${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -o \( ! -type l ! \( -type f -path "$dir/.git/*" -name '*.dvhub-bak-*' ! -perm -0020 ! -perm -0002 \) \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) \) \) -print -quit 2>/dev/null)" || rc=$?
+    if [[ -n "$wrong" && "$rc" -ne 124 && "$rc" -ne 137 ]]; then
+      echo "  Rechte: $dir gehört root (Dienstbenutzer nur lesend)"
+      # Ein Durchgang für Besitz und Rechte (Gegenprüfung c784e6a1).
+      rc=0
+      ${lim[@]+"${lim[@]}"} find "$dir" -xdev \( \( ! -user 0 -o ! -group 0 \) -exec chown -h 0:0 {} + -o -true \) \
+        ! -type l ! \( -type f -path "$dir/.git/*" -name '*.dvhub-bak-*' ! -perm -0020 ! -perm -0002 \) \( -perm -0020 -o -perm -0002 -o ! -perm -0004 -o \( -type d ! -perm -0001 \) \) -exec chmod go-w,a+rX {} + 2>/dev/null || rc=$?
+    fi
+    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+      echo "  Rechte: Zeitgrenze erreicht — der nächste Start setzt fort" >&2
+      return 1
+    fi
+    rm -f "$mark"
+    printf '%s\n' "$want" > "$mark"
+  fi
+  if command -v git >/dev/null 2>&1 && ! git config --system --get-all safe.directory 2>/dev/null | grep -Fxq "$dir"; then
+    git config --system --add safe.directory "$dir" 2>/dev/null || true
+  fi
+}
+# END DVHUB INSTALL-DIR OWNERSHIP
+
 echo "[1/7] Pakete installieren"
 apt-get update
 # python3-venv + python3-pip: a fresh Debian/Ubuntu ships the `venv` stdlib stub
@@ -332,18 +638,31 @@ echo "[4/7] Repository bereitstellen"
 mkdir -p "$(dirname "$INSTALL_DIR")"
 migrate_legacy_config_files
 migrate_legacy_data_files
+# git als root im Programmordner: ohne Hooks und fsmonitor (Gegenprüfung
+# 948b0e6a, wie g() in dvhub-update.sh). Auf einer alten Box gehören Ordner und
+# .git noch dem Dienstbenutzer — ein dort abgelegter Hook liefe sonst als root.
+igit() {
+  git -c safe.directory="$INSTALL_DIR" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+    -c advice.detachedHead=false -C "$INSTALL_DIR" "$@"
+}
 if [[ -d "$INSTALL_DIR/.git" ]]; then
-  if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$INSTALL_DIR"; then
-    git config --global --add safe.directory "$INSTALL_DIR"
+  # Erst die git-Konfiguration bereinigen (Gegenprüfung a75c2cea): der
+  # Rechte-Schritt liest HEAD schon mit git.
+  if ! dvhub_sanitize_git_config "$INSTALL_DIR"; then
+    echo "git-Konfiguration in $INSTALL_DIR abgelehnt oder nicht zu bereinigen (Meldung oben) — Installation abgebrochen." >&2
+    exit 1
   fi
-  git -C "$INSTALL_DIR" fetch --tags origin
+  # Erst root zuordnen, dann git (Neuinstallation über einen alten, dem
+  # Dienstbenutzer gehörenden Ordner).
+  dvhub_root_own_install_dir "$INSTALL_DIR"
+  igit fetch --tags origin
 elif [[ -d "$INSTALL_DIR" && -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]]; then
   echo "Zielverzeichnis $INSTALL_DIR ist nicht leer und kein Git-Repository." >&2
   exit 1
 else
   rm -rf "$INSTALL_DIR"
   git clone --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR"
-  git -C "$INSTALL_DIR" fetch --tags origin
+  igit fetch --tags origin
 fi
 
 # Channel-aware checkout
@@ -353,16 +672,16 @@ if [[ -n "$REPO_REF" ]]; then
   # einen Channel-Stand aus und löst den Pin damit auf. Der Erreichbarkeits-
   # Anker (--merged origin/$REPO_BRANCH bzw. Vorfahren-Check) verhindert, dass
   # verwaiste Alt-Historie oder fremde Refs installiert werden (T-UPDATE-ANCHOR).
-  if ! REF_SHA="$(git -C "$INSTALL_DIR" rev-parse --verify --quiet "${REPO_REF}^{commit}")"; then
+  if ! REF_SHA="$(igit rev-parse --verify --quiet "${REPO_REF}^{commit}")"; then
     echo "Angegebene --ref '$REPO_REF' existiert nicht im Repository." >&2
     exit 1
   fi
-  if ! git -C "$INSTALL_DIR" merge-base --is-ancestor "$REF_SHA" "origin/$REPO_BRANCH"; then
+  if ! igit merge-base --is-ancestor "$REF_SHA" "origin/$REPO_BRANCH"; then
     echo "Angegebene --ref '$REPO_REF' ist nicht von origin/$REPO_BRANCH erreichbar (falscher Branch? --branch mit angeben)." >&2
     exit 1
   fi
   echo "   Ref-Pin: checkout $REPO_REF ($REF_SHA)"
-  git -C "$INSTALL_DIR" checkout --detach "$REF_SHA"
+  igit checkout --detach "$REF_SHA"
 elif [[ "$UPDATE_CHANNEL" == "stable" ]]; then
   # W5.1: semver-filter so a stray non-release tag (CI/build/bare-numeric) can never
   # win; kept in spirit with the JS SEMVER_TAG export in dvhub/routes-api.js. The
@@ -375,20 +694,25 @@ elif [[ "$UPDATE_CHANNEL" == "stable" ]]; then
   # provision scripts → no EOS/Forecast/TimescaleDB) while update/check reported
   # "no update". The `|| true` is LOAD-BEARING: under `set -euo pipefail` a
   # no-match grep (exit 1) would otherwise abort the whole installer.
-  LATEST_TAG="$(git -C "$INSTALL_DIR" tag --merged "origin/$REPO_BRANCH" --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1 || true)"
+  LATEST_TAG="$(igit tag --merged "origin/$REPO_BRANCH" --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1 || true)"
   if [[ -n "$LATEST_TAG" ]]; then
     echo "   Channel: stable — checkout $LATEST_TAG"
-    git -C "$INSTALL_DIR" checkout "$LATEST_TAG"
+    igit checkout "$LATEST_TAG"
   else
     echo "   Keine Release-Tags gefunden, verwende $REPO_BRANCH"
-    git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
+    igit checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
   fi
 else
   echo "   Channel: dev — checkout origin/$REPO_BRANCH"
-  git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
+  igit checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
 fi
 
 remove_legacy_app_dir
+
+# Programmordner root-eigen, bevor irgendetwas daraus als root läuft (npm,
+# Provisionierung, Herstellerprofile) — auch bei einer Neuinstallation über
+# einen alten, dem Dienstbenutzer gehörenden Ordner (Review 25.10.2026).
+dvhub_root_own_install_dir "$INSTALL_DIR"
 
 if [[ ! -f "$APP_DIR/package.json" ]]; then
   echo "Konnte die Webapp unter $APP_DIR nicht finden." >&2
@@ -506,7 +830,9 @@ fi
 # non-fatal. Bei Erstinstallation legt er schlicht alle Profile an.
 node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs" "$CONFIG_DIR" "$APP_DIR" \
   || echo "   (Herstellerprofil-Abgleich übersprungen)"
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR"
+# Nur Konfiguration und Daten gehören dem Dienstbenutzer; der Programmordner
+# bleibt root (dvhub_root_own_install_dir oben, Review 25.10.2026).
+chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"
 chmod 700 "$CONFIG_DIR/vpn"
@@ -564,24 +890,51 @@ fi
 
 echo "[7/7] systemd Service einrichten"
 SYSTEMCTL_PATH="$(command -v systemctl)"
-OPENVPN_PATH="$(command -v openvpn || echo /usr/sbin/openvpn)"
-WG_QUICK_PATH="$(command -v wg-quick || echo /usr/bin/wg-quick)"
-WG_PATH="$(command -v wg || echo /usr/bin/wg)"
 IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
-# IPsec-Hilfsskript (2026-10-18): root-eigene Kopie außerhalb des App-Ordners
-# (der gehört dem Dienstbenutzer); die sudoers-Regel zeigt nur auf diese Kopie.
-IPSEC_LINK_PATH="/usr/local/libexec/dvhub-ipsec-link"
-if [[ -f "$INSTALL_DIR/dvhub-ipsec-link.sh" ]]; then
-  install -d -o root -g root -m 0755 "$(dirname "$IPSEC_LINK_PATH")"
-  install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-ipsec-link.sh" "$IPSEC_LINK_PATH"
-fi
-# Ersatzweg Modbus-Port (2026-10-18): Umleitung 502 → Ersatzport nur am
-# Tunnel-Interface, über eine root-eigene Kopie wie beim IPsec-Hilfsskript.
-MODBUS_REDIRECT_PATH="/usr/local/libexec/dvhub-modbus-redirect"
-if [[ -f "$INSTALL_DIR/dvhub-modbus-redirect.sh" ]]; then
-  install -d -o root -g root -m 0755 "$(dirname "$MODBUS_REDIRECT_PATH")"
-  install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-modbus-redirect.sh" "$MODBUS_REDIRECT_PATH"
-fi
+# BEGIN DVHUB HELPERS — keep this block byte-identical in install.sh and post-update.sh.
+# Root-eigene Hilfsskripte (Review/Gegenprüfung 25.10.2026): die sudoers-Regeln
+# zeigen nur auf diese Kopien unter /usr/local/libexec, nie auf eine Datei im
+# Programmordner und nie auf apt-get/setcap/openvpn/wg-quick mit beliebigen
+# Argumenten. Jedes Skript prüft seine Argumente selbst. Die Kopie entsteht aus
+# dem (root-eigenen) Programmordner, Platzhalter werden fest eingetragen
+# (INSTALL_DIR, CONFIG_DIR, SERVICE_USER, SERVICE_NAME, INSTALLED=1 — ohne das letzte liefe
+# ein Skript im Testbetrieb), und sie ersetzt die alte erst, wenn sie fertig ist.
+DVHUB_LIBEXEC="${DVHUB_LIBEXEC:-/usr/local/libexec}"
+IPSEC_LINK_PATH="$DVHUB_LIBEXEC/dvhub-ipsec-link"
+MODBUS_REDIRECT_PATH="$DVHUB_LIBEXEC/dvhub-modbus-redirect"
+UPDATE_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-update"
+APT_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-apt"
+SETCAP_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-setcap"
+VPN_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-vpn"
+dvhub_install_helper() {  # <datei im Programmordner> <ziel>
+  local src="$INSTALL_DIR/$1" dest="$2" tmp
+  [[ -f "$src" ]] || return 0
+  install -d -o root -g root -m 0755 "$(dirname "$dest")" || return 1
+  tmp="$(mktemp "${dest}.XXXXXX")" || return 1
+  if sed -e "s|^INSTALL_DIR=\"@INSTALL_DIR@\"\$|INSTALL_DIR=\"${INSTALL_DIR}\"|" \
+         -e "s|^CONFIG_DIR=\"@CONFIG_DIR@\"\$|CONFIG_DIR=\"${CONFIG_DIR}\"|" \
+         -e "s|^SERVICE_USER=\"@SERVICE_USER@\"\$|SERVICE_USER=\"${SERVICE_USER}\"|" \
+         -e "s|^SERVICE_NAME=\"@SERVICE_NAME@\"\$|SERVICE_NAME=\"${SERVICE_NAME}\"|" \
+         -e "s|^INSTALLED=\"@INSTALLED@\"\$|INSTALLED=\"1\"|" "$src" > "$tmp" \
+     && chown root:root "$tmp" && chmod 0755 "$tmp" && mv -f "$tmp" "$dest"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  echo "  WARN: Hilfsskript $dest nicht installiert" >&2
+  return 1
+}
+dvhub_install_helpers() {
+  local rc=0
+  dvhub_install_helper dvhub-ipsec-link.sh "$IPSEC_LINK_PATH" || rc=1
+  dvhub_install_helper dvhub-modbus-redirect.sh "$MODBUS_REDIRECT_PATH" || rc=1
+  dvhub_install_helper dvhub-update.sh "$UPDATE_HELPER_PATH" || rc=1
+  dvhub_install_helper dvhub-apt.sh "$APT_HELPER_PATH" || rc=1
+  dvhub_install_helper dvhub-setcap.sh "$SETCAP_HELPER_PATH" || rc=1
+  dvhub_install_helper dvhub-vpn.sh "$VPN_HELPER_PATH" || rc=1
+  return "$rc"
+}
+# END DVHUB HELPERS
+dvhub_install_helpers || echo "  WARN: nicht alle Hilfsskripte installiert — betroffene Funktionen bis zum nächsten Start eingeschränkt" >&2
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
 PKILL_PATH="$(command -v pkill || echo /usr/bin/pkill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
@@ -602,10 +955,18 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} stop dvhub-support-tunnel
 # EOS neu starten (2026-10-16): Knopf in der Oberfläche und Wache für hängende
 # Läufe. Nur restart genau dieser Unit.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart eos.service
-${SERVICE_USER} ALL=(root) NOPASSWD: ${OPENVPN_PATH} --config *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} up *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} down *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_PATH} show *
+# OpenVPN und WireGuard (Gegenprüfung 25.10.2026, P2): nur über das
+# root-eigene Hilfsskript dvhub-vpn. Es nimmt einen Profilnamen (keine Pfade,
+# keine Optionen), liest das Profil als ${SERVICE_USER}, prüft die Kopie
+# (OpenVPN: erlaubte Direktiven, --script-security 0; WireGuard: keine
+# Pre/Post-Up/Down, kein SaveConfig) und startet nur sie. Früher:
+# openvpn --config *, wg-quick up|down *, wg show * — beliebige Argumente als root.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} openvpn up *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} openvpn down
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} openvpn status
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} wireguard up *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} wireguard down *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} wireguard status
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} up *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} down *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} status *
@@ -623,21 +984,33 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${MODBUS_REDIRECT_PATH} del
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} link show *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
 # Process control — pkill by exact process name, not generic kill PID.
-# OpenVPN daemon (stopTunnel/healthCheck), strongSwan charon/starter.
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -0 -x openvpn
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x openvpn
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x openvpn
+# strongSwan charon/starter (OpenVPN beendet/prüft jetzt dvhub-vpn).
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x charon
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x starter
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x charon
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x starter
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/post-update.sh
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get update *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
+# Software-Update aus der Oberfläche (Review 25.10.2026): nur über den
+# root-eigenen Einstieg dvhub-update (prüft Tag/Commit/Untergrenze selbst).
+# Früher: bash ${INSTALL_DIR}/post-update.sh — eine Datei im Programmordner.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} fetch
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} stash
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} stash-pop
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-main
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-tag *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-commit *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} npm-install
+${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} post-update
+# Paketpflege aus der Oberfläche (Gegenprüfung 25.10.2026, P2): nur feste
+# Aktionen über dvhub-apt bzw. dvhub-setcap. Früher apt-get update/upgrade *,
+# apt list *, fuser *, setcap * — mit -o APT::Update::Pre-Invoke::=… oder einer
+# Capability auf einer beliebigen Datei wurde der Dienstbenutzer root.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} refresh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} list-upgradable
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} upgrade-all
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} upgrade-security
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} lock-held
+${SERVICE_USER} ALL=(root) NOPASSWD: ${SETCAP_HELPER_PATH} node
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/reboot
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/fuser *
 # T-PKGUPDATE (Christin 2026-07-02): the GUI TimescaleDB extension upgrade
 # ("Jetzt aktualisieren") bounces PostgreSQL twice around ALTER EXTENSION … UPDATE
 # — a fresh backend must load the new .so. Scoped to a restart of the postgresql

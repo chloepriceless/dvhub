@@ -1624,9 +1624,17 @@
   //       next ~9 frames instead of slamming the rate-limiter (T-09.3-26).
   //
   // Wave-6 note on first render: if #historyDate is empty on initial load the
-  // date falls back to today's date in YYYY-MM-DD via
-  // `new Date().toISOString().slice(0,10)` — keeping the memo key well-formed
-  // and matching the date history.js's loadHistorySummary defaults to.
+  // date falls back to today's LOCAL date in YYYY-MM-DD (localTodayValue) —
+  // keeping the memo key well-formed and matching the date history.js's
+  // loadHistorySummary defaults to (currentDateValue, ebenfalls örtlich).
+  // Review 25.10.2026: vorher toISOString().slice(0,10) = UTC-Datum — beim
+  // Leeren des Datumsfelds luden die Karten zwischen 00:00 und 02:00 den Vortag.
+
+  // Heute als örtliches YYYY-MM-DD, wie history.js currentDateValue.
+  function localTodayValue() {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
 
   let currentView = 'day';
   let vizObserver = null;
@@ -1635,7 +1643,7 @@
     const viewSel = document.getElementById('historyView');
     const dateInp = document.getElementById('historyDate');
     currentView = view || (viewSel ? viewSel.value : null) || 'day';
-    const d = date || (dateInp ? dateInp.value : '') || new Date().toISOString().slice(0, 10);
+    const d = date || (dateInp ? dateInp.value : '') || localTodayValue();
     if (vizAbort) vizAbort.abort();
     vizAbort = typeof AbortController === 'function' ? new AbortController() : null;
     const generation = ++vizGeneration;
@@ -1788,7 +1796,7 @@
     // YYYY-MM-DD so the memo key is well-formed (applyView itself also coalesces).
     applyView(
       viewSel ? viewSel.value : 'day',
-      (dateInp && dateInp.value) || new Date().toISOString().slice(0, 10)
+      (dateInp && dateInp.value) || localTodayValue()
     );
 
     // --- Resize hook (RESEARCH §Pitfall 1): Chart.js 4 ResizeObserver throttles
