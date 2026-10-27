@@ -251,3 +251,12 @@ test('WireGuard: Hooks und SaveConfig in jeder Schreibweise → Exit 3', () => {
     assert.deepEqual(s.started(), []);
   } finally { s.cleanup(); }
 });
+
+test('OpenVPN: eingebetteter <peer-fingerprint>-Block ist erlaubt (Daten, Gegenprüfung 71dbf940)', () => {
+  const s = setup();
+  try {
+    s.profile('dv', { 'client.ovpn': 'client\nremote h 1194\n<peer-fingerprint>\nAB:CD:EF\n</peer-fingerprint>\n' });
+    const r = s.runH(['openvpn', 'check', 'dv']);
+    assert.equal(r.status, 0, r.stderr);
+  } finally { s.cleanup(); }
+});

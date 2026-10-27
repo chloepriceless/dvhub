@@ -8,9 +8,22 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
 APP_DIR="${APP_DIR:-$INSTALL_DIR/dvhub}"
 SERVICE_USER="${SERVICE_USER:-dvhub}"
 SERVICE_NAME="${SERVICE_NAME:-dvhub}"
+# Konfigurations- und Datenordner wie die Unit (Gegenprüfung 25.10.2026):
+# install.sh --config /pfad/config.json trägt den Ordner in die Unit
+# (DV_APP_CONFIG, DV_DATA_DIR) und in dvhub-vpn ein. Als ExecStartPre stehen
+# die Werte in der Umgebung; über sudo (Update aus der Oberfläche) nicht —
+# dann aus der Unit-Datei. Sonst trüge dieser Lauf /etc/dvhub in dvhub-vpn
+# ein, und das VPN fände sein Profil nicht mehr.
+PU_UNIT_FILE="${PU_UNIT_FILE:-/etc/systemd/system/${SERVICE_NAME}.service}"
+pu_unit_env() { sed -n "s/^Environment=$1=//p" "$PU_UNIT_FILE" 2>/dev/null | head -1 || true; }
+if [[ -z "${CONFIG_DIR:-}" && -z "${CONFIG_PATH:-}" ]]; then
+  CONFIG_PATH="${DV_APP_CONFIG:-$(pu_unit_env DV_APP_CONFIG)}"
+  [[ -n "$CONFIG_PATH" ]] && CONFIG_DIR="$(dirname "$CONFIG_PATH")"
+fi
 CONFIG_DIR="${CONFIG_DIR:-/etc/dvhub}"
 CONFIG_PATH="${CONFIG_PATH:-$CONFIG_DIR/config.json}"
-DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
+DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-$(pu_unit_env DV_DATA_DIR)}}"
+DATA_DIR="${DATA_DIR:-/var/lib/dvhub}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Dieses Skript muss als root ausgeführt werden." >&2
