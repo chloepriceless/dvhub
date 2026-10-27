@@ -12,6 +12,19 @@ verweist hierher.
 
 ### Neu
 
+- **Bezugspreis vom Stromanbieter (Tibber, LichtBlick)**: neue Preislogik „Vom Stromanbieter“ unter Einstellungen →
+  Strompreise, auch je Zeitraum (z. B. ab Lieferbeginn). DVhub holt mit den eigenen Zugangsdaten des Kunden die
+  Viertelstundenpreise des eigenen Vertrags — Tibber über die offizielle Schnittstelle (persönlicher
+  Zugangsschlüssel), LichtBlick „ÖkoStrom Dynamic“ über das Backend der LichtBlick-App (inoffiziell, nach
+  github.com/chloepriceless/Lichtblick-Lokal-Preis). Live-Kosten, Preisvergleich, Historie, interner Optimierer und
+  EOS rechnen dann mit dem Preis, den der Kunde bezahlt. Abruf stündlich und ab Veröffentlichung der Preise für morgen
+  (Tibber ~13 Uhr, LichtBlick ~15:20 Uhr) alle 15 min; kommen sie an, plant EOS sofort neu. Die Preise liegen in der
+  Datenbank (`tariff_import_ct_kwh`) und sind nach einem Neustart wieder da. Fehlt ein Slot, schätzt DVhub aus einer
+  Ausgleichsgeraden Anbieterpreis ↔ Börsenpreis der letzten sieben Tage. Wahlweise ist der Anbieterpreis der Endpreis
+  oder nur der Energiepreis (dann kommen Netzentgelt, Umlagen, MwSt und §14a Modul 3 wie beim dynamischen Tarif
+  dazu). Zugangsdaten gehen nie zurück und stehen in keinem Log; abgelehnte Zugangsdaten sperren den Abruf 6 h,
+  damit der Anbieter das Konto nicht sperrt. Ungeprüft bis zum ersten LichtBlick-Liefertag: Schrittweite und ob der
+  App-Preis brutto mit Netzentgelt ist.
 - **Zweite Victron-Anlage am selben Hausanschluss (Beta)**: eine zweite GX-Anlage ohne PV und ohne eigenen Zähler,
   z. B. die der anderen Haushälfte. Die Anlage mit Zähler regelt den Anschluss wie bisher; die zweite übernimmt träge
   einen Teil der Akkuleistung, verteilt nach nutzbarer Energie, sodass sich die Ladestände angleichen. EOS plant beide

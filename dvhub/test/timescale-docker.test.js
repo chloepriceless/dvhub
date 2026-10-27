@@ -182,4 +182,33 @@ describe('TimescaleDB echt (Docker)', { skip: !IMAGE && 'DVHUB_TS_IMAGE nicht ge
     assert.equal(await compressionOn(srv.pool), true);
     await stopServer(srv);
   }));
+
+  it('Anbieterpreise (tariff_import_ct_kwh): schreiben, roh zurücklesen, Historien-Prüfwert ändert sich', { timeout: 300_000 }, () => onFreshVolume('tariff', async () => {
+    const srv = await startServer({});
+    await migrate(srv.pool);
+    const store = createTelemetryStorePg(srv.pool);
+    const start = Date.parse('2026-11-01T00:00:00Z');
+    const bounds = ['2026-11-01T00:00:00Z', '2026-11-02T00:00:00Z'];
+    const fp0 = (await store.historySectionFingerprints({ boundaries: bounds }))[0].fp;
+    const rows = (value) => Array.from({ length: 8 }, (_, i) => ({
+      seriesKey: 'tariff_import_ct_kwh', scope: 'tariff', source: 'lichtblick', quality: 'raw',
+      ts: new Date(start + i * 900_000).toISOString(), resolutionSeconds: 900, value: value + i, unit: 'ct/kWh'
+    }));
+    await store.writeSamples(rows(25));
+    await store.writeSamples([{ ...rows(0)[0], source: 'tibber', value: 99 }, { ...rows(0)[0], scope: 'live', value: 1 }]);
+    const all = await store.listSeriesSamples({ seriesKey: 'tariff_import_ct_kwh', scope: 'tariff' });
+    assert.equal(all.length, 9, 'Bereich tariff, beide Anbieter, live nicht');
+    assert.deepEqual(all.filter((r) => r.source === 'lichtblick').slice(0, 2).map((r) => [r.ts, r.value, r.resolutionSeconds]),
+      [['2026-11-01T00:00:00.000Z', 25, 900], ['2026-11-01T00:15:00.000Z', 26, 900]]);
+    const ranged = await store.listSeriesSamples({ seriesKey: 'tariff_import_ct_kwh', scope: 'tariff', start: '2026-11-01T01:00:00Z', end: '2026-11-01T01:30:00Z' });
+    assert.deepEqual(ranged.map((r) => r.value), [29, 30]);
+    // Neu abgeholt (Upsert): gleicher Schlüssel, neuer Wert, keine Doppelzeile
+    await store.writeSamples(rows(40));
+    const again = await store.listSeriesSamples({ seriesKey: 'tariff_import_ct_kwh', scope: 'tariff' });
+    assert.equal(again.length, 9);
+    assert.equal(again.find((r) => r.source === 'lichtblick').value, 40);
+    const fp1 = (await store.historySectionFingerprints({ boundaries: bounds }))[0].fp;
+    assert.notEqual(fp1, fp0, 'Anbieterpreise gehen in den Prüfwert der Historien-Ablage ein');
+    await stopServer(srv);
+  }));
 });

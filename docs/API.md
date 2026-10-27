@@ -153,6 +153,9 @@ Spalte **Zugang** in den Tabellen:
 | GET | `/api/epex/zones` | LAN·integrations | Preiszonen mit Abdeckung (dvhub.online) |
 | GET | `/api/epex/gaps` | LAN·integrations | Fehlende Preisdaten (`?zone=DE-LU`) |
 | POST | `/api/epex/backfill` | Token | Fehlende Preise nachladen |
+| GET | `/api/tariff-provider` | LAN·integrations | Bezugspreis vom Stromanbieter (Tibber, LichtBlick): Anbieter, letzter Abruf, Preise heute/morgen, Fehler, Schätzung für fehlende Zeiten — ohne Zugangsdaten |
+| POST | `/api/tariff-provider/test` | Token | Zugangsdaten prüfen, ohne zu speichern (`{"name":"tibber","tibber":{"token":"…"}}`; `***` oder leer = gespeicherter Wert) |
+| POST | `/api/tariff-provider/refresh` | Token | Anbieterpreise sofort abrufen (gespeicherte Einstellungen; nach abgelehnten Zugangsdaten 6 h gesperrt) |
 
 ### 3.9 Prognose
 

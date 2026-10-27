@@ -5,6 +5,7 @@ import { scrubStoredPlaceholders } from './config-redaction.js';
 import { sanitizeBatteryStages, resolveCurrentBatteryCapacityWh } from './battery-stages.js';
 import { localDate as fastLocalDate, localMinutesOfDay as fastLocalMinutesOfDay } from './tz-fast.js';
 import { POWER_LIMIT_DEFAULTS } from './services/power-limits.js';
+import { providerImportPriceCtKwh, PROVIDER_NAMES, PRICE_BASES } from './services/tariff-provider/provider-pricing.js';
 
 // Plan 09-01 (D-03): canonical minimum apiToken length floor. Re-exported here
 // (also defined in routes-api.js) so the settings-UI field descriptor and the
@@ -3438,9 +3439,10 @@ function buildFieldDefinitions() {
       type: 'select',
       options: [
         { value: 'fixed', label: 'Fester Bruttopreis' },
-        { value: 'dynamic', label: 'Dynamisch aus EPEX + Preisbestandteilen' }
+        { value: 'dynamic', label: 'Dynamisch aus EPEX + Preisbestandteilen' },
+        { value: 'provider', label: 'Vom Stromanbieter (Tibber, LichtBlick)' }
       ],
-      help: 'Fester Preis bedeutet ein kompletter Endkundenpreis. Dynamisch berechnet DVhub den Bruttopreis pro Slot aus EPEX und deinen Zuschlägen.'
+      help: 'Fester Preis bedeutet ein kompletter Endkundenpreis. Dynamisch berechnet DVhub den Bruttopreis pro Slot aus EPEX und deinen Zuschlägen. Vom Stromanbieter holt DVhub mit deinen Zugangsdaten die Viertelstundenpreise deines eigenen Vertrags.'
     },
     {
       section: 'pricing',
@@ -3515,6 +3517,75 @@ function buildFieldDefinitions() {
       min: 0,
       visibleWhenPath: { path: 'userEnergyPricing.mode', equals: 'fixed' },
       help: 'Bitte den vollständigen Arbeitspreis inklusive MwSt, Netzentgelten, Umlagen, Abgaben und Steuern eintragen.'
+    },
+    {
+      section: 'pricing',
+      group: 'provider',
+      groupLabel: 'Preis vom Stromanbieter',
+      groupDescription: 'Viertelstundenpreise des eigenen Vertrags, abgeholt mit den eigenen Zugangsdaten.',
+      path: 'userEnergyPricing.provider.name',
+      label: 'Anbieter',
+      type: 'select',
+      options: [
+        { value: '', label: '— bitte wählen —' },
+        { value: 'tibber', label: 'Tibber' },
+        { value: 'lichtblick', label: 'LichtBlick ÖkoStrom Dynamic' }
+      ],
+      help: 'Tibber über die offizielle Schnittstelle (Zugangsschlüssel von developer.tibber.com), LichtBlick über das Backend der LichtBlick-App (inoffiziell).'
+    },
+    {
+      section: 'pricing',
+      group: 'provider',
+      groupLabel: 'Preis vom Stromanbieter',
+      groupDescription: 'Viertelstundenpreise des eigenen Vertrags, abgeholt mit den eigenen Zugangsdaten.',
+      path: 'userEnergyPricing.provider.priceBasis',
+      label: 'Der Anbieterpreis ist …',
+      type: 'select',
+      options: [
+        { value: 'gross_total', label: 'der Endpreis (brutto, alles enthalten)' },
+        { value: 'net_energy', label: 'nur der Energiepreis netto' }
+      ],
+      help: 'Endpreis: DVhub nimmt den Anbieterpreis, wie er ist (auch kein §14a Modul 3). Nur Energiepreis: DVhub rechnet wie beim dynamischen Tarif, mit dem Anbieterpreis statt des Börsenpreises.'
+    },
+    {
+      section: 'pricing',
+      group: 'provider',
+      groupLabel: 'Preis vom Stromanbieter',
+      groupDescription: 'Viertelstundenpreise des eigenen Vertrags, abgeholt mit den eigenen Zugangsdaten.',
+      path: 'userEnergyPricing.provider.tibber.token',
+      label: 'Tibber-Zugangsschlüssel',
+      type: 'password',
+      help: 'Persönlicher Zugangsschlüssel von developer.tibber.com (mit dem Tibber-Konto anmelden).'
+    },
+    {
+      section: 'pricing',
+      group: 'provider',
+      groupLabel: 'Preis vom Stromanbieter',
+      groupDescription: 'Viertelstundenpreise des eigenen Vertrags, abgeholt mit den eigenen Zugangsdaten.',
+      path: 'userEnergyPricing.provider.tibber.homeId',
+      label: 'Tibber-Zuhause (Home-ID, optional)',
+      type: 'text',
+      help: 'Nur nötig, wenn das Tibber-Konto mehrere Zuhause hat.'
+    },
+    {
+      section: 'pricing',
+      group: 'provider',
+      groupLabel: 'Preis vom Stromanbieter',
+      groupDescription: 'Viertelstundenpreise des eigenen Vertrags, abgeholt mit den eigenen Zugangsdaten.',
+      path: 'userEnergyPricing.provider.lichtblick.email',
+      label: 'E-Mail (LichtBlick-App)',
+      type: 'password',
+      help: 'Anmeldung wie in der LichtBlick-App.'
+    },
+    {
+      section: 'pricing',
+      group: 'provider',
+      groupLabel: 'Preis vom Stromanbieter',
+      groupDescription: 'Viertelstundenpreise des eigenen Vertrags, abgeholt mit den eigenen Zugangsdaten.',
+      path: 'userEnergyPricing.provider.lichtblick.password',
+      label: 'Passwort (LichtBlick-App)',
+      type: 'password',
+      help: 'Passwort der LichtBlick-App. Bleibt auf dieser Box.'
     },
     {
       section: 'pricing',
@@ -4586,6 +4657,12 @@ export function createDefaultConfig() {
         leviesAndFeesCtKwh: 3,
         vatPct: 19
       },
+      provider: {
+        name: '',
+        priceBasis: 'gross_total',
+        tibber: { token: '', homeId: '' },
+        lichtblick: { email: '', password: '', contractId: null }
+      },
       usesParagraph14aModule3: false,
       module3Windows: {
         window1: { enabled: false, label: '', start: '', end: '', priceCtKwh: null },
@@ -5296,8 +5373,8 @@ function sanitizeUserEnergyPricingPeriods(value, warnings) {
         warnings.push(`userEnergyPricing.periods.${next.id}: startDate must be on or before endDate`);
         return null;
       }
-      if (!['fixed', 'dynamic'].includes(next.mode)) {
-        warnings.push(`userEnergyPricing.periods.${next.id}: mode must be fixed or dynamic`);
+      if (!['fixed', 'dynamic', 'provider'].includes(next.mode)) {
+        warnings.push(`userEnergyPricing.periods.${next.id}: mode must be fixed, dynamic or provider`);
         return null;
       }
 
@@ -5309,6 +5386,16 @@ function sanitizeUserEnergyPricingPeriods(value, warnings) {
           warnings.push(`userEnergyPricing.periods.${next.id}.fixedGrossImportCtKwh: required numeric value for fixed mode`);
           return null;
         }
+      }
+
+      // Anbieterpreis: Bestandteile freiwillig (Zuschläge bei „nur Energiepreis“,
+      // sonst nur für die Schätzung fehlender Slots).
+      if (next.mode === 'provider' && entry.dynamicComponents != null) {
+        next.dynamicComponents = sanitizeDynamicComponents(
+          entry.dynamicComponents,
+          warnings,
+          `userEnergyPricing.periods.${next.id}.dynamicComponents`
+        );
       }
 
       if (next.mode === 'dynamic') {
@@ -5459,7 +5546,30 @@ function sanitizeUserEnergyPricing(value, warnings) {
   next.dynamicComponents = sanitizeDynamicComponents(next.dynamicComponents, warnings);
   next.module3Windows = sanitizeUserEnergyPricingWindows(next.module3Windows, warnings);
   next.costs = sanitizePricingCosts(next.costs, warnings);
+  next.provider = sanitizeTariffProvider(next.provider);
   return next;
+}
+
+// Preis vom Stromanbieter (services/tariff-provider): Anbieter, Lesart des
+// Preises und Zugangsdaten. Die Geheimnisse stehen in REDACTED_PATHS.
+function sanitizeTariffProvider(value) {
+  const src = isPlainObject(value) ? value : {};
+  const str = (v) => (v == null ? '' : String(v).trim());
+  const contractId = Number(src.lichtblick?.contractId);
+  return {
+    name: PROVIDER_NAMES.includes(src.name) ? src.name : '',
+    priceBasis: PRICE_BASES.includes(src.priceBasis) ? src.priceBasis : 'gross_total',
+    tibber: {
+      token: str(src.tibber?.token),
+      homeId: str(src.tibber?.homeId)
+    },
+    lichtblick: {
+      email: str(src.lichtblick?.email),
+      // Passwort nicht trimmen: Leerzeichen am Rand können dazugehören.
+      password: src.lichtblick?.password == null ? '' : String(src.lichtblick.password),
+      contractId: Number.isInteger(contractId) && contractId > 0 ? contractId : null
+    }
+  };
 }
 
 function isLegacyPlaceholderRegisterEntry(entry) {
@@ -5823,6 +5933,8 @@ export function normalizeConfigInput(rawInput) {
 function buildEffectiveUserEnergyPricing(pricing = {}) {
   return {
     mode: pricing?.mode || 'fixed',
+    // Nur die Lesart des Anbieterpreises — Zugangsdaten bleiben draußen.
+    provider: { priceBasis: pricing?.provider?.priceBasis === 'net_energy' ? 'net_energy' : 'gross_total' },
     fixedGrossImportCtKwh: pricing?.fixedGrossImportCtKwh ?? null,
     dynamicComponents: clone(pricing?.dynamicComponents || {}),
     usesParagraph14aModule3: pricing?.usesParagraph14aModule3 === true,
@@ -5942,6 +6054,12 @@ export function resolveUserImportPriceCtKwhForSlot(row, pricing = {}, options = 
     if (effectivePricing.fixedGrossImportCtKwh == null || effectivePricing.fixedGrossImportCtKwh === '') return null;
     const fixed = Number(effectivePricing.fixedGrossImportCtKwh);
     return Number.isFinite(fixed) ? roundCtKwh(fixed) : null;
+  }
+
+  // Preis vom Stromanbieter (Tibber, LichtBlick): je Slot abgeholt und
+  // gespeichert, fehlende Slots geschätzt (services/tariff-provider).
+  if (effectivePricing.mode === 'provider') {
+    return providerImportPriceCtKwh(row, effectivePricing, activeWindow);
   }
 
   // Dynamic tariff: substitute the Netzentgelt component (issue #11).
@@ -6077,7 +6195,7 @@ const SETTINGS_AREAS = [
     label: 'Strompreise',
     icon: '€',
     description: 'Was du für Strom bezahlst und was du für Einspeisung bekommst. Damit rechnen Planung und Auswertung.',
-    groups: ['mode', 'dynamic', 'feedinTariff', 'marketPremium', 'market'],
+    groups: ['mode', 'dynamic', 'provider', 'feedinTariff', 'marketPremium', 'market'],
     advanced: ['costs'],
     editors: ['pricingPeriods', 'pvPlants']
   },

@@ -1483,6 +1483,7 @@ export function createApiRoutes(ctx) {
     ['/api/ortsnetz/status', 'integrations'], ['/api/victron/devices', 'integrations'],
     ['/api/victron/devices/scan', 'integrations'], ['/api/feed-in-cap/status', 'integrations'],
     ['/api/ocpp/status', 'integrations'], ['/api/vehicle-evcc', 'integrations'], ['/api/vehicle-evcc/settings', 'integrations'], ['/api/vehicle-evcc/refresh', 'integrations'],
+    ['/api/tariff-provider', 'integrations'], ['/api/tariff-provider/test', 'integrations'], ['/api/tariff-provider/refresh', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -2008,7 +2009,7 @@ export function createApiRoutes(ctx) {
     const current = slots.find((row) => row?.ts === currentTs) || null;
     const configured =
       (pricing.mode === 'fixed' && Number.isFinite(Number(pricing.fixedGrossImportCtKwh)))
-      || pricing.mode === 'dynamic';
+      || pricing.mode === 'dynamic' || pricing.mode === 'provider';
 
     return {
       configured,
@@ -5002,6 +5003,28 @@ export function createApiRoutes(ctx) {
       if (!ctx.vehicleEvcc) return json(res, 503, { ok: false, error: 'vehicle_evcc_unavailable' });
       const result = await ctx.vehicleEvcc.refresh('manual');
       return json(res, 200, { ok: true, result, state: ctx.vehicleEvcc.getState() });
+    }
+
+    // ── Bezugspreis vom Stromanbieter (services/tariff-provider) ───────────
+    // Zugangsdaten stehen in der Konfiguration (REDACTED_PATHS) und gehen nie zurück.
+    if (url.pathname === '/api/tariff-provider' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      return json(res, 200, { ok: true, state: ctx.tariffProvider?.getState?.() ?? null });
+    }
+    if (url.pathname === '/api/tariff-provider/test' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.tariffProvider) return json(res, 503, { ok: false, error: 'tariff_provider_unavailable' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const result = await ctx.tariffProvider.test(body || {});
+      pushLog('tariff_provider_test', { provider: result.provider || null, ok: result.ok, code: result.code || null }, actorContext(req));
+      return json(res, 200, result);
+    }
+    if (url.pathname === '/api/tariff-provider/refresh' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.tariffProvider) return json(res, 503, { ok: false, error: 'tariff_provider_unavailable' });
+      const result = await ctx.tariffProvider.refresh('manual');
+      return json(res, 200, { ...result, state: ctx.tariffProvider.getState() });
     }
 
     // ── OCPP-Zentrale (services/wallbox/ocpp-server.js) — Zustand lesen ───

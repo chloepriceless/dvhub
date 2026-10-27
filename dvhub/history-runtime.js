@@ -2,6 +2,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
+import { providerModeInUse } from './services/tariff-provider/provider-pricing.js';
+import { whenProviderPricesLoaded } from './services/tariff-provider/price-store.js';
 import { resolveBatteryCapacityWhForTimestamp, resolveBatteryCapacityWhForDate } from './battery-stages.js';
 import {
   periodsForYear, plantForPeriod, pauschalLimits, sumPauschalSlots, pauschalYearEnd, abgrenzungMonths, FESTLEGUNG
@@ -1592,6 +1594,9 @@ export function createHistoryRuntime({
     // Jahr/Alle werden Monat für Monat geladen UND bewertet (processByMonth
     // unten) — der Speicherbedarf folgt dem größten Monat, nicht dem Zeitraum.
     const pricingConfig = getPricingConfig() || {};
+    // Bezugspreis vom Stromanbieter: erst rechnen, wenn die gespeicherten Preise
+    // nach dem Start geladen sind — sonst landeten Schätzwerte in der Ablage.
+    if (providerModeInUse(pricingConfig)) await whenProviderPricesLoaded();
     const applicableValueSummary = getApplicableValueSummary({
       year: parseDateOnly(startOfYear(date))?.year ?? parseDateOnly(currentBerlinDate())?.year,
       pvPlants: pricingConfig?.pvPlants || []
