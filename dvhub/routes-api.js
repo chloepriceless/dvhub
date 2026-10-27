@@ -376,13 +376,6 @@ export function getRequestHost(req, cfg) {
 // denselben Namen und Port zeigen wie der Aufruf selbst (Host). Hinter einem
 // Proxy zählt auch der weitergereichte Name — eine fremde Webseite kann
 // X-Forwarded-Host nicht setzen, ohne dass der Browser vorher nachfragt.
-// Datum für Export-Dateinamen im Ortsdatum der Anlage (YYYY-MM-DD), nicht in UTC:
-// zwischen 00:00 und 02:00 Berliner Zeit trug die Datei sonst das Vortagsdatum.
-export function exportDateStamp(timeZone, nowMs = Date.now()) {
-  const fmt = (tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(nowMs));
-  try { return fmt(timeZone || 'Europe/Berlin'); } catch { return fmt('Europe/Berlin'); }
-}
-
 export function isOwnOrigin(originHeader, req) {
   let originHost;
   try { originHost = new URL(String(originHeader)).host.toLowerCase(); } catch { return false; }
@@ -393,6 +386,13 @@ export function isOwnOrigin(originHeader, req) {
   return [first(req.headers?.host), first(req.headers?.['x-forwarded-host'])]
     .filter(Boolean)
     .some((h) => h === originHost || bare(h) === bare(originHost));
+}
+
+// Datum für Export-Dateinamen im Ortsdatum der Anlage (YYYY-MM-DD), nicht in UTC:
+// zwischen 00:00 und 02:00 Berliner Zeit trug die Datei sonst das Vortagsdatum.
+export function exportDateStamp(timeZone, nowMs = Date.now()) {
+  const fmt = (tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(nowMs));
+  try { return fmt(timeZone || 'Europe/Berlin'); } catch { return fmt('Europe/Berlin'); }
 }
 
 // Host allowlist check. Empty array = permissive (LAN-dev default). Operators
