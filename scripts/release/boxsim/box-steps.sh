@@ -60,10 +60,10 @@ case "$step" in
     ;;
 
   server) # Testserver (neu) starten — überlebt keinen Neustart des Containers
-    systemctl stop release-testserver 2>/dev/null
-    systemd-run --unit release-testserver --property=StandardOutput=append:/mnt/out/testserver.log \
+    systemctl stop release-testserver 2>/dev/null; systemctl reset-failed release-testserver 2>/dev/null
+    systemd-run --collect --unit release-testserver --property=StandardOutput=append:/mnt/out/testserver.log \
       --property=StandardError=append:/mnt/out/testserver.log node /mnt/harness/testserver.mjs 8088 /srv/pub /srv/ctl >/dev/null
-    result "server=started"
+    result "server=$?"
     ;;
 
   install) # <tag> <channel> — install.sh dieses Stands, wie beim Kunden

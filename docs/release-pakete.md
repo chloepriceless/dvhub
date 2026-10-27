@@ -148,7 +148,11 @@ sudoers nur mit festen Aktionen:
 | `rollback` | ja | auf die vorige Version umschalten (ohne Download), als eigene Unit |
 | `status` | ja | Fortschritt/Ergebnis des letzten Auftrags (JSON) |
 | `migrate [--force]` | nein (root, Zeitgeber) | einmalige Umstellung git → Paket |
-| `resume` | nein | nach Stromausfall mitten im Auftrag: Gesundheit prüfen, bestätigen oder zurück |
+| `boot-hook` | nein (aus `post-update.sh`) | Umstellung planen bzw. unterbrochenen Auftrag fortsetzen lassen |
+| `recover` | nein (Notfall-Drop-in der Unit) | im Verschieben abgebrochene Umstellung sofort zurücknehmen |
+
+Intern (nicht von Hand): `_job install|rollback|migrate|resume` — der eigentliche Auftrag als eigene Unit; `resume`
+prüft nach einem Stromausfall mitten im Update die Gesundheit und bestätigt oder geht zurück.
 
 Ablauf `install`:
 1. Sperre (`/run/dvhub-release.lock`), Platz prüfen (Staging und `/opt/dvhub` brauchen je ~3× Paketgröße).
@@ -205,9 +209,11 @@ Nicht automatisch umgestellt (bleiben auf git-Updates, Protokolleintrag und Hinw
   `.legacy-git/`.
 - **`.no-release-packages`** in `/var/lib/dvhub` (Opt-out) und Boxen ohne Schlüssel in `allowed_signers`.
 
-v0.4.x-Boxen: Ihre Oberfläche ruft nach dem git-Update kein `post-update.sh` als root auf (Unit ohne
-`ExecStartPre`, keine sudo-Regel). Sie brauchen wie bisher beim Sprung auf 1.0 einmal von Hand
-`sudo bash /opt/dvhub/post-update.sh` (oder `install.sh` erneut); danach läuft die Umstellung wie oben.
+v0.4.x-Boxen: Ihre Oberfläche holt den neuen Stand per git, ruft aber kein `post-update.sh` als root auf (Unit
+ohne `ExecStartPre`, keine sudo-Regel), und der neue Stand startet ohne `apiToken` nicht (den erzeugt nur
+`install.sh`). Sie brauchen wie beim Sprung auf 1.0 einmal den Installer erneut
+(`curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh | sudo bash`; `post-update.sh`
+allein reicht nicht); danach läuft die Umstellung wie oben.
 
 ## 6. Tests
 

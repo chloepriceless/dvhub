@@ -19,6 +19,7 @@ for (const d of fs.readdirSync(run).sort()) {
   const all = (pred) => lines.filter(pred);
   const install = find((l) => l.step === 'install');
   const git = find((l) => l.step === 'gui-git-update');
+  const viaInstaller = find((l) => l.git_update_mode).git_update_mode === 'installer';
   const jobs = all((l) => l.job);
   const mig = jobs.find((j) => j.job === 'migrate') || {};
   const upd = jobs.find((j) => j.job === 'install') || {};
@@ -45,7 +46,7 @@ for (const d of fs.readdirSync(run).sort()) {
   rows.push({
     fall: d,
     install: install.install === '0' ? `ok (${install.time_s} s)` : `rc=${install.install ?? '?'}`,
-    git: git.gui_git_update === 'true' ? `ok (${git.time_s} s)` : (git.gui_git_update ?? '—'),
+    git: viaInstaller ? 'per Installer (Emulation)' : (git.gui_git_update === 'true' ? `ok (${git.time_s} s)` : (git.gui_git_update ?? '—')),
     migration: mig.state ? `${mig.state} (${mig.time_s} s)` : '—',
     update: upd.state ? `${upd.state} (${upd.time_s} s)` : '—',
     rollback: rb.state ? `${rb.state} (${rb.time_s} s)` : '—',
