@@ -27,8 +27,9 @@
 #      build for the platform, fall back to the Debian Apache package so the box
 #      still gets a working hypertable (014's license guard skips the TSL parts).
 #      An installed Apache package (same .so) is swapped only after the
-#      Community packages AND the Apache package are in apt's cache; if the
-#      Community install then fails, the fallback reinstalls Apache from cache.
+#      Community packages AND the Apache package are downloaded into DVhub's own
+#      package folder; installs read from that folder (no network needed), and
+#      if the Community install fails, the fallback reinstalls Apache from it.
 #   5. shared_preload_libraries drop-in (conf.d) + postgres restart
 #   6. Erweiterung anlegen (CREATE) bzw. auf die installierte Version heben
 #      (ALTER EXTENSION ... UPDATE als erste Anweisung einer frischen Sitzung),
@@ -250,13 +251,15 @@ fi
 # /var/cache/apt/archives — nach dem Entfernen von Apache waeren die eben
 # geladenen Pakete weg. Bewusst nicht /tmp (Debian 13: RAM-Dateisystem).
 DEB_DIR="${TS_DEB_CACHE:-/var/cache/dvhub-timescale}"
+# Gegenpruefung 7c1761b8: Download UND Installation lesen denselben Ordner —
+# apt legt beim Download alles ab, was es aufloest (auch Abhaengigkeiten wie
+# timescaledb-tools), und findet es bei der Installation dort wieder; ohne Netz
+# geht die Installation so trotzdem. Installiert wird per Paketname (apt nimmt
+# die Kandidaten-Version aus dem Ordner), nie per geratenem Dateinamen. Reste
+# eines frueheren, gescheiterten Laufs (aeltere Fassung) vorher weg.
+rm -rf "$DEB_DIR"
 apt_dl() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only -o Dir::Cache::archives="$DEB_DIR" "$@" >>"$LOG_FILE" 2>&1; }
-# Geladenes .deb eines Pakets, sonst der Paketname (dann holt apt es aus dem Netz).
-deb_or_name() {
-  local f
-  for f in "$DEB_DIR/$1"_*.deb; do [[ -f "$f" ]] && { echo "$f"; return; }; done
-  echo "$1"
-}
+apt_inst() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dir::Cache::archives="$DEB_DIR" "$@" >>"$LOG_FILE" 2>&1; }
 APACHE_REMOVED=0
 
 if [[ "$USE_TSL" -eq 1 ]]; then
@@ -288,7 +291,7 @@ if [[ "$USE_TSL" -eq 1 ]]; then
       fi
     fi
     if [[ "$APACHE_READY" -eq 1 ]]; then
-      if DEBIAN_FRONTEND=noninteractive apt-get install -y "$(deb_or_name "$TSL_LOADER")" "$(deb_or_name "$TSL_PKG")" >>"$LOG_FILE" 2>&1; then
+      if apt_inst "$TSL_LOADER" "$TSL_PKG"; then
         echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
         PKG_CHANGED=1
       else
@@ -311,7 +314,7 @@ if [[ "$USE_TSL" -eq 0 ]]; then
   # license guard skips compression + continuous aggregates on this build. Keeps
   # a box functional where packagecloud has no build for the platform/codename.
   if ! dpkg -s "$APACHE_PKG" >/dev/null 2>&1; then
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y "$(deb_or_name "$APACHE_PKG")" >>"$LOG_FILE" 2>&1; then
+    if apt_inst "$APACHE_PKG"; then
       echo "  TimescaleDB: ${APACHE_PKG} (Apache-Fallback) installiert."
       PKG_CHANGED=1
     elif [[ "$APACHE_REMOVED" -eq 1 ]]; then
