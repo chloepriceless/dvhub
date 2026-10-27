@@ -83,8 +83,11 @@ test('lehnt fremde Interfaces, Pfad-Tricks und ungültige Ports ab — ohne nft-
 for (const file of ['install.sh', 'post-update.sh']) {
   test(`${file}: Hilfsskript installiert, sudoers nur add */del`, () => {
     const src = readFileSync(path.join(repoRoot, file), 'utf8');
-    assert.match(src, new RegExp(`MODBUS_REDIRECT_PATH="${MODBUS_REDIRECT_HELPER}"`));
-    assert.match(src, /install -o root -g root -m 0755 "\$INSTALL_DIR\/dvhub-modbus-redirect\.sh" "\$MODBUS_REDIRECT_PATH"/);
+    // Installiert über den gemeinsamen HELPERS-Block (Gegenprüfung 25.10.2026).
+    assert.equal(MODBUS_REDIRECT_HELPER, '/usr/local/libexec/dvhub-modbus-redirect');
+    assert.ok(src.includes('DVHUB_LIBEXEC="${DVHUB_LIBEXEC:-/usr/local/libexec}"'));
+    assert.ok(src.includes('MODBUS_REDIRECT_PATH="$DVHUB_LIBEXEC/dvhub-modbus-redirect"'));
+    assert.ok(src.includes('dvhub_install_helper dvhub-modbus-redirect.sh "$MODBUS_REDIRECT_PATH"'));
     assert.ok(src.includes('${SERVICE_USER} ALL=(root) NOPASSWD: ${MODBUS_REDIRECT_PATH} add *\n'));
     assert.ok(src.includes('${SERVICE_USER} ALL=(root) NOPASSWD: ${MODBUS_REDIRECT_PATH} del\n'));
   });

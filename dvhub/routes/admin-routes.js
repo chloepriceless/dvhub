@@ -57,6 +57,11 @@ function saveUploadToFile(req, filePath, maxBytes) {
 //  - npm-install: Lockfile-Marker vorher ungültig, nach Erfolg neu.
 //  - checkout-*: nur Stände ab dieser Härtung (Untergrenze im Skript).
 export const UPDATE_HELPER = '/usr/local/libexec/dvhub-update';
+// Paketpflege und Port-Recht (Gegenprüfung 25.10.2026, P2): nur feste Aktionen
+// über root-eigene Hilfsskripte (dvhub-apt.sh, dvhub-setcap.sh). Früher sudo
+// apt-get/apt/fuser/setcap mit beliebigen Argumenten.
+export const APT_HELPER = '/usr/local/libexec/dvhub-apt';
+export const SETCAP_HELPER = '/usr/local/libexec/dvhub-setcap';
 // npm install auf einem langsamen Board braucht oft mehr als eine Minute; ein
 // Abbruch per Timeout ließ früher node_modules halb zurück.
 const NPM_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -72,6 +77,7 @@ export function createAdminRoutes(deps) {
 
   const updateHelper = (args, timeout = 30000) => execFileAsync('sudo', ['-n', UPDATE_HELPER, ...args], { timeout });
   const npmInstallOmitDev = () => updateHelper(['npm-install'], NPM_INSTALL_TIMEOUT_MS);
+  const aptHelper = (action, timeout) => execFileAsync('sudo', ['-n', APT_HELPER, action], { timeout });
 
   return async function handleAdminRoute(req, res, url) {
     // --- Datenbank-Backup herunterladen (pg_dump custom, streamed) ---
@@ -255,8 +261,8 @@ export function createAdminRoutes(deps) {
     if (url.pathname === '/api/admin/system/updates/check' && req.method === 'GET') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       try {
-        await execFileAsync('sudo', ['apt-get', 'update', '-qq'], { timeout: 30000 });
-        const { stdout } = await execFileAsync('sudo', ['apt', 'list', '--upgradable'], { timeout: 15000 });
+        await aptHelper('refresh', 30000);
+        const { stdout } = await aptHelper('list-upgradable', 15000);
         const lines = stdout.split('\n').filter(l => l.includes('/'));
         const packages = lines.map(l => {
           const match = l.match(/^([^\s/]+)\/\S+\s+(\S+)\s+\S+\s+\[upgradable from: ([^\]]+)\]/);
@@ -285,23 +291,14 @@ export function createAdminRoutes(deps) {
         // Wait for any running apt/dpkg lock (max 60s)
         for (let i = 0; i < 12; i++) {
           try {
-            await execFileAsync('sudo', ['fuser', '/var/lib/dpkg/lock-frontend'], { timeout: 3000 });
+            await aptHelper('lock-held', 3000);
             await new Promise(r => setTimeout(r, 5000)); // lock held, wait 5s
           } catch { break; } // fuser exits non-zero = no lock
         }
         // Plan 08-01 Task 2: honour securityOnly by switching to the security-only
-        // apt invocation (reads only /etc/apt/security.sources.list.d/*).
-        const aptCmd = securityOnly
-          ? ['apt-get', '-y',
-             '-o', 'Dir::Etc::SourceList=/etc/apt/sources.list',
-             '-o', 'Dir::Etc::SourceParts=/etc/apt/security.sources.list.d',
-             '-o', 'Dpkg::Options::=--force-confdef',
-             '-o', 'Dpkg::Options::=--force-confold',
-             'upgrade']
-          : ['apt-get', 'upgrade', '-y',
-             '-o', 'Dpkg::Options::=--force-confdef',
-             '-o', 'Dpkg::Options::=--force-confold'];
-        const result = await execFileAsync('sudo', aptCmd, { timeout: 300000 });
+        // apt invocation (reads only /etc/apt/security.sources.list.d/*). Die
+        // genauen apt-get-Aufrufe stehen jetzt fest in dvhub-apt.sh.
+        const result = await aptHelper(securityOnly ? 'upgrade-security' : 'upgrade-all', 300000);
         // Ein node-Update loescht die Datei-Capability. Nur Boxen, deren Dienst
         // das Port-Recht noch NICHT ueber systemd bekommt (vor
         // node-runtime-provision.sh), brauchen setcap zurueck — sonst bliebe
@@ -309,8 +306,8 @@ export function createAdminRoutes(deps) {
         const unitAmbient = (await execFileAsync('systemctl', ['show', process.env.DV_SERVICE_NAME || 'dvhub.service', '-p', 'AmbientCapabilities', '--value'], { timeout: 5000 })
           .catch(() => ({ stdout: '' }))).stdout;
         if (!/cap_net_bind_service/.test(unitAmbient)) {
-          const nodeBin = (await execFileAsync('which', ['node'], { timeout: 5000 }).catch(() => ({ stdout: '/usr/bin/node' }))).stdout.trim();
-          await execFileAsync('sudo', ['setcap', 'cap_net_bind_service=+ep', nodeBin], { timeout: 5000 }).catch(() => {});
+          // dvhub-setcap löst die node-Datei selbst auf (/usr/bin/node wie ExecStart).
+          await execFileAsync('sudo', ['-n', SETCAP_HELPER, 'node'], { timeout: 5000 }).catch(() => {});
         }
 
         const outputLines = (result.stdout || '').split('\n');

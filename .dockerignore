@@ -13,6 +13,8 @@
 !docker/dvhub-healthcheck.sh
 # Ersatzweg Modbus-Port (root-eigenes Hilfsskript, sudo).
 !dvhub-modbus-redirect.sh
+# OpenVPN/WireGuard nur über dieses root-eigene Hilfsskript (sudo).
+!dvhub-vpn.sh
 
 # Lizenztexte gehören ins Image — package.json verweist auf ../LICENSE.md.
 !LICENSE.md

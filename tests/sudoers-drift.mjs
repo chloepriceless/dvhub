@@ -42,11 +42,14 @@ const block = (relPath, name) => {
 // Zweiter Block (Review 25.10.2026): wer den Programmordner besitzt, muss in
 // install.sh und post-update.sh gleich geregelt sein — sonst gibt der eine
 // zurück, was der andere root zugeordnet hat.
-for (const name of ['SUDOERS', 'INSTALL-DIR OWNERSHIP']) {
+// Dritter Block (Gegenprüfung 25.10.2026, P2): welche root-eigenen
+// Hilfsskripte nach /usr/local/libexec kommen — die sudoers-Regeln zeigen nur
+// auf sie; fehlte eines, liefe die Regel ins Leere.
+for (const name of ['SUDOERS', 'INSTALL-DIR OWNERSHIP', 'HELPERS']) {
   if (block('install.sh', name) !== block('post-update.sh', name)) {
     console.error(`sudoers-drift: FAIL — BEGIN/END DVHUB ${name} block diverged between install.sh and post-update.sh`);
     process.exit(1);
   }
 }
-console.log('sudoers-drift: OK (install.sh <-> post-update.sh: SUDOERS + INSTALL-DIR OWNERSHIP blocks identical)');
+console.log('sudoers-drift: OK (install.sh <-> post-update.sh: SUDOERS + INSTALL-DIR OWNERSHIP + HELPERS blocks identical)');
 process.exit(0);

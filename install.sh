@@ -602,34 +602,50 @@ fi
 
 echo "[7/7] systemd Service einrichten"
 SYSTEMCTL_PATH="$(command -v systemctl)"
-OPENVPN_PATH="$(command -v openvpn || echo /usr/sbin/openvpn)"
-WG_QUICK_PATH="$(command -v wg-quick || echo /usr/bin/wg-quick)"
-WG_PATH="$(command -v wg || echo /usr/bin/wg)"
 IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
-# IPsec-Hilfsskript (2026-10-18): root-eigene Kopie außerhalb des App-Ordners
-# (der gehört dem Dienstbenutzer); die sudoers-Regel zeigt nur auf diese Kopie.
-IPSEC_LINK_PATH="/usr/local/libexec/dvhub-ipsec-link"
-if [[ -f "$INSTALL_DIR/dvhub-ipsec-link.sh" ]]; then
-  install -d -o root -g root -m 0755 "$(dirname "$IPSEC_LINK_PATH")"
-  install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-ipsec-link.sh" "$IPSEC_LINK_PATH"
-fi
-# Ersatzweg Modbus-Port (2026-10-18): Umleitung 502 → Ersatzport nur am
-# Tunnel-Interface, über eine root-eigene Kopie wie beim IPsec-Hilfsskript.
-MODBUS_REDIRECT_PATH="/usr/local/libexec/dvhub-modbus-redirect"
-if [[ -f "$INSTALL_DIR/dvhub-modbus-redirect.sh" ]]; then
-  install -d -o root -g root -m 0755 "$(dirname "$MODBUS_REDIRECT_PATH")"
-  install -o root -g root -m 0755 "$INSTALL_DIR/dvhub-modbus-redirect.sh" "$MODBUS_REDIRECT_PATH"
-fi
-# Software-Update aus der Oberfläche (Review 25.10.2026): root-eigene Kopie von
-# dvhub-update.sh mit fest eingetragenem Programmordner. Die sudoers-Regeln
-# zeigen nur auf diese Kopie; das Skript prüft seine Argumente selbst.
-UPDATE_HELPER_PATH="/usr/local/libexec/dvhub-update"
-if [[ -f "$INSTALL_DIR/dvhub-update.sh" ]]; then
-  install -d -o root -g root -m 0755 "$(dirname "$UPDATE_HELPER_PATH")"
-  UPDATE_HELPER_TMP="$(mktemp "${UPDATE_HELPER_PATH}.XXXXXX")"
-  sed "s|^INSTALL_DIR=\"@INSTALL_DIR@\"\$|INSTALL_DIR=\"${INSTALL_DIR}\"|" "$INSTALL_DIR/dvhub-update.sh" > "$UPDATE_HELPER_TMP"
-  chown root:root "$UPDATE_HELPER_TMP" && chmod 0755 "$UPDATE_HELPER_TMP" && mv -f "$UPDATE_HELPER_TMP" "$UPDATE_HELPER_PATH"
-fi
+# BEGIN DVHUB HELPERS — keep this block byte-identical in install.sh and post-update.sh.
+# Root-eigene Hilfsskripte (Review/Gegenprüfung 25.10.2026): die sudoers-Regeln
+# zeigen nur auf diese Kopien unter /usr/local/libexec, nie auf eine Datei im
+# Programmordner und nie auf apt-get/setcap/openvpn/wg-quick mit beliebigen
+# Argumenten. Jedes Skript prüft seine Argumente selbst. Die Kopie entsteht aus
+# dem (root-eigenen) Programmordner, Platzhalter werden fest eingetragen
+# (INSTALL_DIR, CONFIG_DIR, SERVICE_USER, INSTALLED=1 — ohne das letzte liefe
+# ein Skript im Testbetrieb), und sie ersetzt die alte erst, wenn sie fertig ist.
+DVHUB_LIBEXEC="${DVHUB_LIBEXEC:-/usr/local/libexec}"
+IPSEC_LINK_PATH="$DVHUB_LIBEXEC/dvhub-ipsec-link"
+MODBUS_REDIRECT_PATH="$DVHUB_LIBEXEC/dvhub-modbus-redirect"
+UPDATE_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-update"
+APT_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-apt"
+SETCAP_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-setcap"
+VPN_HELPER_PATH="$DVHUB_LIBEXEC/dvhub-vpn"
+dvhub_install_helper() {  # <datei im Programmordner> <ziel>
+  local src="$INSTALL_DIR/$1" dest="$2" tmp
+  [[ -f "$src" ]] || return 0
+  install -d -o root -g root -m 0755 "$(dirname "$dest")" || return 1
+  tmp="$(mktemp "${dest}.XXXXXX")" || return 1
+  if sed -e "s|^INSTALL_DIR=\"@INSTALL_DIR@\"\$|INSTALL_DIR=\"${INSTALL_DIR}\"|" \
+         -e "s|^CONFIG_DIR=\"@CONFIG_DIR@\"\$|CONFIG_DIR=\"${CONFIG_DIR}\"|" \
+         -e "s|^SERVICE_USER=\"@SERVICE_USER@\"\$|SERVICE_USER=\"${SERVICE_USER}\"|" \
+         -e "s|^INSTALLED=\"@INSTALLED@\"\$|INSTALLED=\"1\"|" "$src" > "$tmp" \
+     && chown root:root "$tmp" && chmod 0755 "$tmp" && mv -f "$tmp" "$dest"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  echo "  WARN: Hilfsskript $dest nicht installiert" >&2
+  return 1
+}
+dvhub_install_helpers() {
+  local rc=0
+  dvhub_install_helper dvhub-ipsec-link.sh "$IPSEC_LINK_PATH" || rc=1
+  dvhub_install_helper dvhub-modbus-redirect.sh "$MODBUS_REDIRECT_PATH" || rc=1
+  dvhub_install_helper dvhub-update.sh "$UPDATE_HELPER_PATH" || rc=1
+  dvhub_install_helper dvhub-apt.sh "$APT_HELPER_PATH" || rc=1
+  dvhub_install_helper dvhub-setcap.sh "$SETCAP_HELPER_PATH" || rc=1
+  dvhub_install_helper dvhub-vpn.sh "$VPN_HELPER_PATH" || rc=1
+  return "$rc"
+}
+# END DVHUB HELPERS
+dvhub_install_helpers || echo "  WARN: nicht alle Hilfsskripte installiert — betroffene Funktionen bis zum nächsten Start eingeschränkt" >&2
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
 PKILL_PATH="$(command -v pkill || echo /usr/bin/pkill)"
 SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}-service-actions"
@@ -650,10 +666,18 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} stop dvhub-support-tunnel
 # EOS neu starten (2026-10-16): Knopf in der Oberfläche und Wache für hängende
 # Läufe. Nur restart genau dieser Unit.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_PATH} restart eos.service
-${SERVICE_USER} ALL=(root) NOPASSWD: ${OPENVPN_PATH} --config *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} up *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_QUICK_PATH} down *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WG_PATH} show *
+# OpenVPN und WireGuard (Gegenprüfung 25.10.2026, P2): nur über das
+# root-eigene Hilfsskript dvhub-vpn. Es nimmt einen Profilnamen (keine Pfade,
+# keine Optionen), liest das Profil als ${SERVICE_USER}, prüft die Kopie
+# (OpenVPN: erlaubte Direktiven, --script-security 0; WireGuard: keine
+# Pre/Post-Up/Down, kein SaveConfig) und startet nur sie. Früher:
+# openvpn --config *, wg-quick up|down *, wg show * — beliebige Argumente als root.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} openvpn up *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} openvpn down
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} openvpn status
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} wireguard up *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} wireguard down *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${VPN_HELPER_PATH} wireguard status
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} up *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} down *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_PATH} status *
@@ -671,10 +695,7 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${MODBUS_REDIRECT_PATH} del
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} link show *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${IP_PATH} addr show *
 # Process control — pkill by exact process name, not generic kill PID.
-# OpenVPN daemon (stopTunnel/healthCheck), strongSwan charon/starter.
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -0 -x openvpn
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x openvpn
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x openvpn
+# strongSwan charon/starter (OpenVPN beendet/prüft jetzt dvhub-vpn).
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x charon
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -15 -x starter
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PKILL_PATH} -9 -x charon
@@ -690,12 +711,17 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-tag *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} checkout-commit *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} npm-install
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${UPDATE_HELPER_PATH} post-update
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get update *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt-get upgrade *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/apt list *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/setcap *
+# Paketpflege aus der Oberfläche (Gegenprüfung 25.10.2026, P2): nur feste
+# Aktionen über dvhub-apt bzw. dvhub-setcap. Früher apt-get update/upgrade *,
+# apt list *, fuser *, setcap * — mit -o APT::Update::Pre-Invoke::=… oder einer
+# Capability auf einer beliebigen Datei wurde der Dienstbenutzer root.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} refresh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} list-upgradable
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} upgrade-all
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} upgrade-security
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APT_HELPER_PATH} lock-held
+${SERVICE_USER} ALL=(root) NOPASSWD: ${SETCAP_HELPER_PATH} node
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/sbin/reboot
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/fuser *
 # T-PKGUPDATE (Christin 2026-07-02): the GUI TimescaleDB extension upgrade
 # ("Jetzt aktualisieren") bounces PostgreSQL twice around ALTER EXTENSION … UPDATE
 # — a fresh backend must load the new .so. Scoped to a restart of the postgresql
