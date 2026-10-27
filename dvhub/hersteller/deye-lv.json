@@ -115,7 +115,7 @@
   },
 
   "dvControl": {
-    "_comment": "DV-Abregelung: Sperren = Work-Mode auf Zero-Export-to-CT (2) — vorher wird der aktuelle Modus gelesen und gesichert (saveBefore). Freigeben = gesicherten Modus zurückschreiben (restore); Fallback nach Neustart während einer Sperre: Selling first (0).",
+    "_comment": "DV-Abregelung: Sperren = Work-Mode auf Zero-Export-to-CT (2) — vorher wird der aktuelle Modus gelesen und gesichert (saveBefore). Freigeben = gesicherten Modus zurückschreiben (restore); Die Sicherung übersteht Neustarts; ohne Sicherung schreibt die Freigabe nach dem Start nichts. Selling first (0) nur bei ausdrücklicher Freigabe per API/MQTT oder unlesbarer Sicherung.",
     "enabled": true,
     "feedExcessDcPv": { "enabled": false },
     "dontFeedExcessAcPv": {
