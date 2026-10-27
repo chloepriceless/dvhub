@@ -78,8 +78,12 @@ g() {
 }
 
 checkout_guarded() {  # <commit> <checkout-Argumente…>
-  local sha="$1"; shift
-  if ! g show "${sha}:post-update.sh" 2>/dev/null | grep -q "$FLOOR_MARK"; then
+  local sha="$1" pu; shift
+  # Ganz einlesen statt `g show … | grep -q` (E2E 27.10.2026): unter pipefail
+  # endet grep beim ersten Treffer, git stirbt beim Weiterschreiben an SIGPIPE,
+  # und ein gültiger Stand galt als „älter als die Härtung“.
+  pu="$(g show "${sha}:post-update.sh" 2>/dev/null)" || pu=""
+  if [[ "$pu" != *"$FLOOR_MARK"* ]]; then
     die "Zielstand ${sha:0:7} ist älter als die Rechte-Härtung vom 25.10.2026 — über die Oberfläche nicht installierbar (von Hand als root: git checkout + post-update.sh)" 3
   fi
   g checkout "$@"

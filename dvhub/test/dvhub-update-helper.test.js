@@ -224,3 +224,22 @@ test('TERM an den Einstieg (Timeout der Oberfläche) beendet npm mit', async () 
     assert.equal(existsSync(join(s.inst, '.npm-install-hash')), false, 'kein Marker');
   } finally { s.cleanup(); }
 });
+
+// E2E 27.10.2026 (Debian bookworm, arm64): `git show <stand>:post-update.sh |
+// grep -q MARKE` unter pipefail — grep endet beim ersten Treffer, git schreibt
+// weiter und stirbt an SIGPIPE; die Untergrenze hielt einen gültigen Stand für
+// „älter als die Härtung“ (Exit 3). Das echte post-update.sh ist ~58 KB groß.
+test('Untergrenze: großes post-update.sh mit der Marke oben wird ausgecheckt (kein SIGPIPE-Fehlschlag)', () => {
+  const s = setup();
+  try {
+    const pad = `# ${'x'.repeat(78)}\n`.repeat(4000); // ~320 KB, größer als ein Pipe-Puffer
+    writeFileSync(join(s.up, 'post-update.sh'), `#!/bin/bash\n# DVHUB_ROOT_OWNED_INSTALL\n${pad}`);
+    git(s.up, 'commit', '-qam', 'gross'); git(s.up, 'tag', 'v1.3.0');
+    assert.equal(s.run('fetch').status, 0);
+    for (let i = 0; i < 5; i++) {
+      const r = s.run('checkout-tag', 'v1.3.0');
+      assert.equal(r.status, 0, `Lauf ${i}: ${r.stderr}`);
+    }
+    assert.equal(s.head(), git(s.up, 'rev-parse', 'v1.3.0'));
+  } finally { s.cleanup(); }
+});
