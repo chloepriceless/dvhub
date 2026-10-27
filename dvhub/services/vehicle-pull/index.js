@@ -25,7 +25,15 @@
 // Weiterleitungen, Zeitlimit, Antwort hoechstens 256 KB. Geprueft beim
 // Speichern (routes/config-routes.js) UND vor jedem Abruf.
 
-import { parseSocPct, parsePlugged } from '../mqtt/vehicle-mqtt.js';
+import { parseSocPct as parseSocPctLoose, parsePlugged } from '../mqtt/vehicle-mqtt.js';
+
+// Nur Zahlen oder Zahl-Texte: '' / '  ' / [] / {} sind KEIN Ladestand
+// (Number('') ist 0 — ein leerer Wert waere sonst ein leerer Akku).
+function parseSocPct(v) {
+  if (typeof v === 'number') return parseSocPctLoose(v);
+  if (typeof v === 'string' && v.trim() !== '') return parseSocPctLoose(v);
+  return null;
+}
 
 export const VEHICLE_PULL_KINDS = Object.freeze(['http', 'homeassistant']);
 const TICK_MS = 15_000;
@@ -142,12 +150,32 @@ export function createVehiclePull(ctx, deps = {}) {
       }
       if (res.status >= 300 && res.status < 400) throw new Error(`Weiterleitung (HTTP ${res.status}) wird nicht verfolgt`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      let text;
-      try { text = await res.text(); } catch (e) {
+      // Groesse beim Lesen begrenzen, nicht erst danach: eine falsche Adresse
+      // (grosse Datei, endloser Strom) soll den Speicher nicht fuellen.
+      if (Number(res.headers?.get?.('content-length')) > MAX_BODY) { ac.abort(); throw new Error('Antwort zu groß (über 256 KB)'); }
+      let text = '';
+      try {
+        if (res.body && typeof res.body.getReader === 'function') {
+          const reader = res.body.getReader();
+          const chunks = [];
+          let bytes = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            bytes += value.byteLength;
+            if (bytes > MAX_BODY) { ac.abort(); reader.cancel?.().catch?.(() => {}); throw new Error('Antwort zu groß (über 256 KB)'); }
+            chunks.push(value);
+          }
+          text = Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8');
+        } else {
+          text = await res.text();
+          if (Buffer.byteLength(text) > MAX_BODY) throw new Error('Antwort zu groß (über 256 KB)');
+        }
+      } catch (e) {
+        if (/zu groß/.test(e?.message)) throw e;
         if (ac.signal.aborted) throw new Error(`Zeitüberschreitung nach ${timeoutMs} ms`, { cause: e });
         throw e;
       }
-      if (text.length > MAX_BODY) throw new Error('Antwort zu groß (über 256 KB)');
       try { return JSON.parse(text); } catch (e) { throw new Error('Antwort ist kein JSON', { cause: e }); }
     } finally {
       clearTimeout(t);
@@ -195,10 +223,19 @@ export function createVehiclePull(ctx, deps = {}) {
   }
 
   async function refreshHa(s, out) {
-    const soc = await haEntity(s, s.socEntity);
-    const pct = parseSocPct(soc.state);
-    if (pct === null) Object.assign(out, { socPct: null, socAt: null, error: `Entität „${s.socEntity}“ meldet „${soc.state}“ — kein Ladestand 0–100 %` });
-    else Object.assign(out, { socPct: pct, socAt: soc.at, error: null, lastOkAt: now() });
+    // Beide Entitaeten unabhaengig: viele Fahrzeug-Integrationen melden den
+    // Ladestand „unavailable“, sobald das Auto weg ist — „angesteckt“ muss
+    // trotzdem neu gelesen werden, sonst bliebe ein altes „on“ stehen.
+    let socError = null;
+    try {
+      const soc = await haEntity(s, s.socEntity);
+      const pct = parseSocPct(soc.state);
+      if (pct === null) socError = `Entität „${s.socEntity}“ meldet „${soc.state}“ — kein Ladestand 0–100 %`;
+      else Object.assign(out, { socPct: pct, socAt: soc.at, error: null, lastOkAt: now() });
+    } catch (e) {
+      socError = String(e?.message || e);
+    }
+    if (socError) Object.assign(out, { socPct: null, socAt: null, error: socError });
     if (s.pluggedEntity) {
       try {
         const p = await haEntity(s, s.pluggedEntity);

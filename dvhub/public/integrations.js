@@ -2986,6 +2986,12 @@
       eos: evccEosBody(),
       wallbox: wallboxBody()
     };
+    // Wochenplan vor dem Senden pruefen (deutsche Meldung statt Server-Fehler).
+    var depErr = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(body.eos.departure.weeklyPlan || [], { enabled: body.eos.departure.enabled }) : null;
+    if (depErr) {
+      if (banner) { banner.textContent = 'Wochenplan: ' + depErr; banner.hidden = false; }
+      return;
+    }
     buttonEl.disabled = true;
     var origText = buttonEl.textContent;
     buttonEl.textContent = 'Wird gespeichert …';

@@ -560,7 +560,9 @@
     renderTimeline();
     renderSteps();
     renderSummary();
-    if (!dirty) { draft = draftFromData(); renderForm(); }
+    // Nicht neu aufbauen, solange jemand im Wochenplan tippt (eine halbe
+    // Uhrzeit loest noch kein input-Ereignis aus).
+    if (!dirty && !(window.DVhubEvWeekly && window.DVhubEvWeekly.isEditing(el('evWeekly')))) { draft = draftFromData(); renderForm(); }
   }
 
   // ---------------------------------------------------------------- Daten
@@ -616,9 +618,8 @@
     const tv = Number(el('evTarget').value);
     if (!isFinite(tv) || tv < 0 || (mode === 'percent' && tv > 100)) { msg('Ziel: ' + (mode === 'percent' ? '0–100 %' : 'Zahl ≥ 0'), true); return; }
     const plan = window.DVhubEvWeekly ? window.DVhubEvWeekly.read(el('evWeeklyGrid')) : draft.weeklyPlan;
-    const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(plan) : null;
+    const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(plan, { enabled: draft.enabled }) : null;
     if (err) { msg(err, true); return; }
-    if (draft.enabled && !plan.some(function (e) { return e.departure; })) { msg('Mindestens eine Abfahrt eintragen.', true); return; }
     const km = el('evCommuteKm').value === '' ? 0 : Number(el('evCommuteKm').value);
     if (!isFinite(km) || km < 0 || km > 1000) { msg('Heimweg: 0–1000 km', true); return; }
     const ok = await post({ departure: {

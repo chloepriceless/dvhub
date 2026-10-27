@@ -212,19 +212,25 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
   // (hoechstens 24 h entfernt): dieses behaelt Ankunft, Ziel und Heimweg, und
   // seine eigene Abfahrt zaehlt nicht als Fahrt — auch nachdem sie verstrichen
   // ist. Welches Fenster:
-  //   1. das naechste noch kommende, wenn das Auto dann schon da ist
-  //      (Ankunft vor der einmaligen Abfahrt) — vorgezogen oder verschoben;
-  //   2. sonst das zuletzt verstrichene, dessen Abfahrt bis zu 24 h vor der
-  //      einmaligen liegt — die verschobene Fahrt hat nie stattgefunden.
+  //   1. das naechste noch kommende, wenn es eine Ankunft VOR der einmaligen
+  //      Abfahrt hat — das Auto ist dann da, die Abfahrt wird vorgezogen
+  //      oder verschoben (Fr mittags: „heute 17:00 statt Sa 09:00“);
+  //   2. sonst das naechstgelegene (Abfahrt bis 24 h entfernt, Ankunft —
+  //      falls eingetragen — vor der einmaligen Abfahrt). Ohne Ankunftszeiten
+  //      (alte Config, reiner Abfahrtsplan) ist das die verschobene Fahrt von
+  //      eben, nicht die von morgen.
   let superseded = null;
   if (onceActive) {
     const DAY = 24 * 3600_000;
     const arrivedBefore = (w) => w.arrivalMs === null || w.arrivalMs < onceDep;
     const next = windows.find((w) => !gone(w.departureMs));
-    if (next && arrivedBefore(next) && Math.abs(next.departureMs - onceDep) < DAY) superseded = next;
+    if (next && next.arrivalMs !== null && next.arrivalMs < onceDep && Math.abs(next.departureMs - onceDep) < DAY) superseded = next;
     else {
-      const delayed = windows.filter((w) => gone(w.departureMs) && w.departureMs < onceDep && onceDep - w.departureMs < DAY && arrivedBefore(w));
-      superseded = delayed.length ? delayed[delayed.length - 1] : null;
+      for (const w of windows) {
+        const diff = Math.abs(w.departureMs - onceDep);
+        if (diff >= DAY || !arrivedBefore(w)) continue;
+        if (!superseded || diff < Math.abs(superseded.departureMs - onceDep)) superseded = w;
+      }
     }
   }
   const past = windows.filter((w) => w !== superseded && gone(w.departureMs)).map((w) => w.departureMs);
@@ -416,11 +422,12 @@ export function summarizeEvPlan(rows, { maxChargeW, slotMinutes = 15, nowMs = Da
   const slots = (Array.isArray(rows) ? rows : [])
     .map((r) => {
       const ts = Date.parse(r.ts_utc);
-      const f = Number(r.evChargeFactor);
+      // null = EOS plant kein Auto (nicht angemeldet) — nicht als 0 W lesen.
+      const f = r.evChargeFactor === null || r.evChargeFactor === undefined ? NaN : Number(r.evChargeFactor);
       return {
         ts,
         powerW: Number.isFinite(f) ? Math.max(0, Math.round(f * (Number(maxChargeW) || 0))) : null,
-        socPct: Number.isFinite(Number(r.evSocPct)) ? Number(r.evSocPct) : null
+        socPct: r.evSocPct !== null && r.evSocPct !== undefined && Number.isFinite(Number(r.evSocPct)) ? Number(r.evSocPct) : null
       };
     })
     .filter((s) => Number.isFinite(s.ts) && s.ts + slotMs > nowMs && s.ts < endMs)

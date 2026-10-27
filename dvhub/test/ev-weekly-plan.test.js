@@ -7,7 +7,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  resolveEvDeparture, effectiveWeeklyPlan, parseEvDeparturePatch, DEPARTURE_LEAD_MS
+  resolveEvDeparture, effectiveWeeklyPlan, parseEvDeparturePatch, DEPARTURE_LEAD_MS, summarizeEvPlan
 } from '../services/optimizer/ev-departure.js';
 
 const TZ = 'Europe/Berlin';
@@ -276,5 +276,25 @@ describe('Codex-Befunde Runde 2 (einmalige Abfahrt)', () => {
     assert.equal(r.arrivalAt, '2026-09-25T13:00:00.000Z');
     assert.equal(r.targetSocPct, 100);
     assert.equal(r.tripStartAt, '2026-09-25T03:00:00.000Z', 'die Fr-05:00-Fahrt hat stattgefunden');
+  });
+});
+
+describe('Claude-Befunde Runde 3 (einmalige Abfahrt ohne Ankunftszeiten)', () => {
+  test('verschobene Abfahrt in einem Plan ohne Ankunft: das eigene Fenster (Mo 80 %), nicht das von morgen (Di 50 %)', () => {
+    // Mo 07:00 (80 %), Di 07:00 (50 %), keine Ankunft. Jetzt Mo 28.09. 06:55 CEST = 04:55Z,
+    // einmalig Mo 09:00 CEST = 07:00Z.
+    const c = cfg({ evWeeklyPlan: [{ day: 1, departure: '07:00' }, { day: 2, departure: '07:00', targetValue: 50 }], evDepartureOnce: '2026-09-28T07:00:00.000Z' });
+    const r = resolveEvDeparture(c, at('2026-09-28T04:55:00Z'));
+    assert.equal(r.departureAt, '2026-09-28T07:00:00.000Z');
+    assert.equal(r.targetSocPct, 80);
+    assert.notEqual(r.tripStartAt, '2026-09-28T05:00:00.000Z', 'die verschobene Mo-07:00-Fahrt hat nicht stattgefunden');
+  });
+});
+
+describe('E-Auto-Plan ohne angemeldetes Auto', () => {
+  test('evChargeFactor null (EOS plant kein Auto) ist kein 0-W-Plan', () => {
+    const p = summarizeEvPlan([{ ts_utc: '2026-09-23T15:00:00Z', evChargeFactor: null, evSocPct: null }], { maxChargeW: 11000, nowMs: Date.parse('2026-09-23T15:05:00Z') });
+    assert.equal(p.hasEv, false);
+    assert.equal(p.slots[0].powerW, null);
   });
 });

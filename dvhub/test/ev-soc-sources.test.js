@@ -242,3 +242,39 @@ describe('Einstellungen + Geheimnisse', () => {
     assert.ok(src.includes('http') && src.includes('homeassistant'));
   });
 });
+
+describe('Claude-Befunde Runde 3 (Abruf-Quellen)', () => {
+  it('Home Assistant: SoC-Entitaet „unavailable“ — „angesteckt“ wird trotzdem neu gelesen', async () => {
+    let plug = 'on';
+    const { base } = await stub((req) => {
+      if (req.url === '/api/states/sensor.soc') return { body: { state: plug === 'on' ? '60' : 'unavailable', last_updated: '2026-10-27T10:00:00Z' } };
+      if (req.url === '/api/states/binary_sensor.plug') return { body: { state: plug, last_updated: '2026-10-27T10:00:00Z' } };
+      return { status: 404, body: {} };
+    });
+    const pull = createVehiclePull(pullCtx({ evHaUrl: base, evHaToken: 't', evHaSocEntity: 'sensor.soc', evHaPluggedEntity: 'binary_sensor.plug' }), { now: () => Date.parse('2026-10-27T10:05:00Z') });
+    await pull.refresh('homeassistant');
+    assert.equal(pull.getState('homeassistant').plugged, true);
+    plug = 'off';                              // Auto weg: SoC unavailable, Stecker off
+    await pull.refresh('homeassistant');
+    assert.equal(pull.getState('homeassistant').plugged, false);
+    assert.match(pull.getState('homeassistant').error, /unavailable/);
+  });
+
+  it('leerer Text, Leerzeichen, Liste, Objekt sind kein Ladestand (nicht 0 %)', async () => {
+    for (const v of ['', '  ', [], {}, null]) {
+      const { base } = await stub(() => ({ body: { soc: v } }));
+      const pull = createVehiclePull(pullCtx({ evHttpUrl: `${base}/car`, evHttpSocPath: 'soc' }));
+      await pull.refresh('http');
+      assert.equal(pull.getState('http').socPct, null, `soc=${JSON.stringify(v)}`);
+      await new Promise((r) => server.close(r)); server = null;
+    }
+  });
+
+  it('Antwort ueber 256 KB wird beim Lesen abgebrochen (auch ohne Content-Length)', async () => {
+    const { base } = await stub(() => ({ body: JSON.stringify({ soc: 50, pad: 'x'.repeat(400 * 1024) }) }));
+    const pull = createVehiclePull(pullCtx({ evHttpUrl: `${base}/car`, evHttpSocPath: 'soc' }));
+    await pull.refresh('http');
+    assert.match(pull.getState('http').error, /zu groß/);
+    assert.equal(pull.getState('http').socPct, null);
+  });
+});

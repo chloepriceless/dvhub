@@ -20,8 +20,12 @@ import { computeEvRegistration } from './ev-registration.js';
 
 export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () => {}, stableTicks = 2 }) {
   const plugTracker = createEvPlugTracker({ stableTicks });
+  // Anmeldung (angemeldet? vorgeplant?) ebenso entprellt: erst wenn sie zwei
+  // Minuten gleich anders ist, voller Abgleich + Neuplan. Ein einzelner
+  // Wackler (Ladestand kurz weg) loest so nichts aus, ein bleibender Wechsel
+  // (Ladestand kommt nach dem Anstecken, Vorplanung beginnt) schon.
+  let regTracker = createEvPlugTracker({ stableTicks });
   let lastKey = null;
-  let lastRegKey = null;
   let syncPending = 0;
   let pendingReason = null;
 
@@ -29,7 +33,7 @@ export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () 
     ctx.evSocMemory?.observe?.(resolveEvSocReading(ctx, nowMs));
     const cfg = ctx.getCfg();
     const opt = cfg?.optimizer || {};
-    if (opt.eosOptimizeEv !== true || !opt.eosProxy?.enabled) { lastKey = null; lastRegKey = null; return { action: 'off' }; }
+    if (opt.eosOptimizeEv !== true || !opt.eosProxy?.enabled) { lastKey = null; regTracker = createEvPlugTracker({ stableTicks }); return { action: 'off' }; }
 
     const plug = plugTracker.update(resolveEvPlugged(ctx));
     if (opt.evPlanOnlyWhenPlugged !== false && plug.changed) {
@@ -43,16 +47,15 @@ export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () 
       plugged: plugTracker.stable,
       nowMs,
     });
-    // Nur Beginn/Ende der Vorplanung — An-/Abmelden wegen Stecker oder
-    // fehlendem Ladestand regeln die (entprellte) Steck-Wache und der
-    // 15-min-Abgleich; ein einzelner Wackler loeste sonst zwei Neuplaene aus.
-    const regKey = String(reg.mode === 'preplan');
-    if (lastRegKey !== null && regKey !== lastRegKey && syncPending === 0) {
-      pushLog('ev_preplan_change', { mode: reg.mode, register: reg.register, arrivalAt: reg.arrivalAt, preplanBlocked: reg.preplanBlocked });
+    const regPrev = regTracker.stable;
+    const regChange = regTracker.update(`${reg.register}|${reg.mode === 'preplan'}`);
+    if (regChange.changed && syncPending === 0) {
+      const wasPreplan = String(regPrev).endsWith('|true');
+      const isPreplan = reg.mode === 'preplan';
+      pushLog('ev_registration_change', { mode: reg.mode, register: reg.register, arrivalAt: reg.arrivalAt, preplanBlocked: reg.preplanBlocked, reason: reg.reason });
       syncPending = 5;
-      pendingReason = reg.mode === 'preplan' ? 'ev_preplan' : 'ev_preplan_end';
+      pendingReason = isPreplan && !wasPreplan ? 'ev_preplan' : (!isPreplan && wasPreplan ? 'ev_preplan_end' : 'ev_registration');
     }
-    lastRegKey = regKey;
 
     // Scheitert der Abgleich (EOS gerade weg), naechste Minute erneut —
     // hoechstens 5x, dann trotzdem neu planen (ein dauerhafter Teilfehler

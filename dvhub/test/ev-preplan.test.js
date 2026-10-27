@@ -303,9 +303,12 @@ describe('Minuten-Wache (ev-watch.js)', () => {
     const watch = createEvWatch({ ctx, eosConfigSync: eos, requestReplan: (why) => replans.push(why), pushLog: () => {} });
     await watch.tick(now);
     assert.deepEqual(replans, [], 'erste Beobachtung setzt nur den Ausgangszustand');
-    // EOS kann jetzt Ladestart (Update) → Vorplanung wird moeglich.
+    // EOS kann jetzt Ladestart (Update) → Vorplanung wird moeglich; zaehlt
+    // nach zwei gleichen Minuten (entprellt).
     ctx.state.optimizer.eos.evChargeStart = true;
     await watch.tick(now + 60_000);
+    assert.deepEqual(replans, []);
+    await watch.tick(now + 120_000);
     assert.ok(eos.calls.includes('sync'));
     assert.deepEqual(replans, ['ev_preplan']);
   });
@@ -376,5 +379,27 @@ describe('Ladestart-Faehigkeit: genau die Form von EOS feat/ev-available-from (2
     const [ev] = buildEosElectricVehicles(cfg, { supportsDeadline: true, supportsChargeStart: true, chargeStartAt: new Date(Date.now() + 2 * HOUR).toISOString() });
     assert.match(ev.charge_start_datetime, /(Z|[+-]\d\d:\d\d)$/);
     assert.match(ev.min_soc_deadline_datetime, /(Z|[+-]\d\d:\d\d)$/);
+  });
+});
+
+describe('Claude-Befunde Runde 3 (Minuten-Wache)', () => {
+  it('Ladestand kommt nach dem Anstecken spaeter an: nach zwei gleichen Minuten Abgleich + Neuplan', async () => {
+    const now = Date.now();
+    let soc = null;
+    const ctx = ctxFor(1, { opt: { evWeeklyPlan: planAround(now, 2 * HOUR, 10 * HOUR) }, teslaPct: null });
+    ctx.evccIntegration = { getLoadpoints: () => [{ id: 1, connected: true, vehicleSocPct: soc }] };
+    ctx.state.optimizer.eos = { supported: true, evChargeStart: true };
+    const calls = []; const replans = [];
+    const watch = createEvWatch({
+      ctx, requestReplan: (w) => replans.push(w), pushLog: () => {},
+      eosConfigSync: { sync: async () => { calls.push('sync'); return { ok: true }; }, syncEv: async () => { calls.push('syncEv'); return { ok: true }; } },
+    });
+    await watch.tick(now);                    // angesteckt, noch kein Ladestand → nicht angemeldet
+    soc = 55;                                  // Ladestand da → anmelden
+    await watch.tick(now + 60_000);
+    assert.deepEqual(replans, [], 'eine Minute reicht nicht (Wackler)');
+    await watch.tick(now + 120_000);
+    assert.ok(calls.includes('sync'));
+    assert.deepEqual(replans, ['ev_registration']);
   });
 });

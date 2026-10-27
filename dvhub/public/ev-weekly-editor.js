@@ -53,6 +53,7 @@
   function render(host, plan, opts) {
     if (!host) return;
     opts = opts || {};
+    host._evwPlan = Array.isArray(plan) ? plan : [];
     const o = { unit: opts.unit || '%', defaultTarget: opts.defaultTarget, defaultKm: opts.defaultKm, showKm: opts.showKm === true };
     host.classList.add('evw');
     host.classList.toggle('evw-with-km', o.showKm);
@@ -94,10 +95,24 @@
     });
   }
 
+  /**
+   * Felder, die der Editor nicht zeigt, aus dem dargestellten Plan behalten:
+   * ohne Heimweg-Spalte (Kachel) bleiben die je Tag eingetragenen km stehen —
+   * sonst loeschte ein Speichern in der Kachel die Werte der Integrationsseite.
+   */
+  function keepHidden(readPlan, renderedPlan, opts) {
+    if (opts && opts.showKm) return readPlan;
+    return readPlan.map(function (e) {
+      const orig = entryFor(renderedPlan, e.day);
+      return { day: e.day, arrival: e.arrival, departure: e.departure, targetValue: e.targetValue, commuteKm: orig.commuteKm == null ? null : orig.commuteKm };
+    });
+  }
+
   /** Plan aus dem Editor: 7 Eintraege, leere Felder → '' bzw. null. */
   function read(host) {
     const out = [];
     if (!host) return out;
+    const finish = function () { return keepHidden(out, host._evwPlan || [], host._evwOpts || {}); };
     host.querySelectorAll('.evw-row').forEach(function (row) {
       const num = function (sel) {
         const el = row.querySelector(sel);
@@ -113,17 +128,23 @@
         commuteKm: num('.evw-km')
       });
     });
-    return out;
+    return finish();
   }
 
-  /** Fehlertext oder null. */
-  function validate(plan) {
+  /** Fehlertext oder null. opts.enabled: eingeschalteter Plan braucht eine Abfahrt. */
+  function validate(plan, opts) {
     for (let i = 0; i < plan.length; i += 1) {
       const e = plan[i];
       if (e.arrival && !e.departure) return DAY_NAMES[e.day - 1] + ': Ankunft ohne Abfahrt — bitte eine Abfahrt eintragen.';
     }
+    if (opts && opts.enabled && !plan.some(function (e) { return e.departure; })) return 'Mindestens eine Abfahrt eintragen.';
     return null;
   }
 
-  window.DVhubEvWeekly = { render: render, read: read, validate: validate, DAYS: DAYS };
+  /** Wird gerade im Editor getippt? (Neuaufbau beim Abfragetakt unterlassen) */
+  function isEditing(host) {
+    return !!(host && typeof document !== 'undefined' && document.activeElement && host.contains(document.activeElement));
+  }
+
+  window.DVhubEvWeekly = { render: render, read: read, validate: validate, keepHidden: keepHidden, isEditing: isEditing, DAYS: DAYS };
 })();
