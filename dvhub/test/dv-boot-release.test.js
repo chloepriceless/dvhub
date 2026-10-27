@@ -177,3 +177,26 @@ test('Fronius: erster evaluateSchedule nach dem Start schreibt ohne Sicherung ni
   assert.deepEqual(writes.filter(([a]) => a === 40191 || a === 40198), []);
   assert.equal(state.ctrl._lastDvFeedIn, true);
 });
+
+// ── Review e9b64f0d (P2): eine Sperre gibt es nur mit gesicherter Datei ─────
+// Scheitert das Schreiben von dv_seq_saved.json, darf die Sperre nicht aufs Gerät:
+// sonst fände der Start nach einem Neustart keine eigene Sperre und ließe sie
+// (Fronius Zwangsladen −100 %, Deye Zero-Export) tagelang stehen.
+test('Sicherung nicht speicherbar: Sperre wird nicht geschrieben und im nächsten Takt wiederholt', async () => {
+  const prof = loadProfile('fronius');
+  const blocker = path.join(path.dirname(prof.savedPath), 'datei-statt-ordner');
+  fs.writeFileSync(blocker, 'x');
+  const unwritable = { ...prof, savedPath: path.join(blocker, 'dv_seq_saved.json') };
+  const regs = { 40191: 1, 40198: 0xec78 };
+  const { ev, state, writes, logs } = boot(unwritable, regs);
+  await ev.applyDvVictronControl(false);
+  assert.deepEqual(writes, [], 'ohne gespeicherte Sicherung keine Sperre aufs Gerät');
+  assert.equal(state.ctrl._lastDvFeedIn, undefined, 'Fehlschlag → nächster Takt versucht es erneut');
+  assert.ok(logs.some((l) => l.e === 'dv_seq_saved_persist_error'));
+  assert.deepEqual(state.ctrl._dvSeqSaved || {}, {}, 'keine halbe Sicherung im Speicher');
+  // Datenverzeichnis wieder schreibbar: derselbe Evaluator sperrt jetzt mit Sicherung.
+  fs.rmSync(blocker); fs.mkdirSync(blocker);
+  await ev.applyDvVictronControl(false);
+  assert.deepEqual(writes, [[40191, 2], [40198, 55536]]);
+  assert.deepEqual(readSaved(unwritable.savedPath), { storCtlMod: 1, outWRte: -50 });
+});

@@ -432,9 +432,11 @@ export function createScheduleEvaluator(ctx) {
   //     Deye-Fall: der Kunde fährt ggf. regulär Zero-Export — ein fixer
   //     Release-Wert würde seine Betriebsart zerstören.
   //   { point, restore: true, restoreDefault? } — den gesicherten Wert
-  //     zurückschreiben; ohne Sicherung (z. B. Neustart während der Sperre —
-  //     der Speicher ist in-memory) greift restoreDefault, sonst wird der
-  //     Schritt übersprungen.
+  //     zurückschreiben (Sicherung liegt in dv_seq_saved.json und übersteht einen
+  //     Neustart). Ohne Sicherung: Die automatische Freigabe nach dem Start
+  //     schreibt NICHTS (keine eigene Sperre → Kundenwerte bleiben, Chrissi
+  //     25.10.); restoreDefault gilt nur bei einer ausdrücklichen Freigabe per
+  //     API/MQTT oder wenn sich eine Sicherung nicht kodieren lässt.
   // B-1112 restore-Speicher restart-fest (Christin 2026-07-19): Der saveBefore/
   // restore-Store lebte nur in-memory — ein Neustart WÄHREND einer aktiven
   // Sperre verlor die gesicherten Kundenwerte (Fronius-Feldtest: StorCtl_Mod=1
@@ -449,12 +451,15 @@ export function createScheduleEvaluator(ctx) {
     } catch { /* keine/korrupte Datei → leerer Store (Erstlauf) */ }
   }
 
+  // true = gespeichert (oder ohne Pfad rein in-memory), false = Schreiben scheiterte.
   function persistDvSeqSaved() {
-    if (!ctx.dvSeqSavedPath) return;
+    if (!ctx.dvSeqSavedPath) return true;
     try {
       atomicWriteControlState(ctx.dvSeqSavedPath, state.ctrl._dvSeqSaved ?? {});
+      return true;
     } catch (e) {
       pushLog('dv_seq_saved_persist_error', { error: e?.message || String(e) });
+      return false;
     }
   }
 
@@ -496,6 +501,31 @@ export function createScheduleEvaluator(ctx) {
   async function runDvControlSequence(steps, { ownOnly = false } = {}) {
     const cfg = getCfg();
     const saved = (state.ctrl._dvSeqSaved ??= {});
+    // Review e9b64f0d (P2): Eine Sperre gibt es nur, wenn ihre Sicherung auf der
+    // Platte liegt — nur so erkennt der Start nach einem Neustart die eigene Sperre
+    // und hebt sie wieder auf. Deshalb erst alle zu sichernden Werte lesen und
+    // gemeinsam persistieren; scheitert das, wird nichts geschrieben (der Aufrufer
+    // wiederholt im nächsten Takt, T-0076) und keine halbe Sicherung bleibt stehen.
+    const freshlySaved = [];
+    for (const step of steps) {
+      if (step.saveBefore !== true || saved[step.point] !== undefined) continue;
+      const pconf = writeConfFor(step.point, cfg.controlWrite?.[step.point]);
+      if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
+      if (pconf.address == null) throw new Error(`sequence point unresolved (sunspec scan pending): ${step.point}`);
+      const words = ['int32', 'uint32', 'float32'].includes(normWriteType(pconf)) ? 2 : 1;
+      const regs = await transport.mbRequest({
+        fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
+        address: pconf.address, quantity: words, timeoutMs: pconf.timeoutMs
+      });
+      // Rohwert mit Vorzeichen/Sentinels in den Engineering-Wert, damit der
+      // restore-Write denselben toRawForWrite-Weg exakt zurück nimmt.
+      saved[step.point] = fromRawForSave(regs, pconf);
+      freshlySaved.push(step.point);
+    }
+    if (freshlySaved.length && !persistDvSeqSaved()) {
+      for (const point of freshlySaved) delete saved[point];
+      throw new Error('dv_seq_saved konnte nicht gespeichert werden — Sperre nicht geschrieben');
+    }
     for (const step of steps) {
       const pconf = writeConfFor(step.point, cfg.controlWrite?.[step.point]);
       if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
@@ -520,16 +550,6 @@ export function createScheduleEvaluator(ctx) {
           value = restored.value;
           encoded = restored.encoded;
         }
-      } else if (step.saveBefore === true && saved[step.point] === undefined) {
-        const words = ['int32', 'uint32', 'float32'].includes(normWriteType(pconf)) ? 2 : 1;
-        const regs = await transport.mbRequest({
-          fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
-          address: pconf.address, quantity: words, timeoutMs: pconf.timeoutMs
-        });
-        // Rohwert mit Vorzeichen/Sentinels in den Engineering-Wert, damit der
-        // restore-Write denselben toRawForWrite-Weg exakt zurück nimmt.
-        saved[step.point] = fromRawForSave(regs, pconf);
-        persistDvSeqSaved();
       }
       encoded ??= toRawForWrite(value, pconf);
       const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
