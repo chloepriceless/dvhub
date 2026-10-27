@@ -234,3 +234,37 @@ describe('Wochenplan über /api/ev (2026-10-27)', () => {
     assert.equal(ctx.saved.length, 0);
   });
 });
+
+describe('Erwarteter Ladestand bei Ankunft über GET /api/ev', () => {
+  // Heute 20:00 Ankunft, morgen 05:00 Abfahrt — an jedem Tag, damit der Test
+  // unabhängig vom Wochentag läuft. 60 kWh, 18 kWh/100 km, Heimweg 20 km = 6 %.
+  const plan = [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival: '20:00', departure: '05:00' }));
+  const setup = (ctx) => Object.assign(ctx.getRawCfg().optimizer, {
+    evDepartureEnabled: true, evWeeklyPlan: plan, evCapacityWh: 60000, evConsumptionKwhPer100km: 18, evCommuteKm: 20,
+    evTargetMode: 'percent', evTargetValue: 80,
+  });
+
+  it('TeslaMate meldet unterwegs 70 % (vor 1 min) → erwartet 64 %, Quelle live', async () => {
+    const ctx = makeCtx();
+    setup(ctx);
+    ctx.teslamateService = { getState: () => ({ batteryLevel: 70 }), getFieldUpdatedAt: () => ({ batteryLevel: new Date(Date.now() - 60_000) }) };
+    ctx.evccIntegration = { getLoadpoints: () => [{ id: 1, connected: false }], getStatus: () => ({ loadpoints: [{ id: 1, connected: false }] }) };
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.arrival.expectedSocPct, 64);
+    assert.equal(r.body.arrival.source, 'live');
+    assert.equal(r.body.arrival.basePct, 70);
+    assert.equal(r.body.arrival.deductKm, 20);
+    assert.ok(r.body.departure.resolved.arrivalAt, 'nächste Ankunft mitgeliefert');
+  });
+
+  it('angesteckt: der echte Ladestand gilt (evcc 55 %), nichts abgezogen', async () => {
+    const ctx = makeCtx();
+    setup(ctx);
+    ctx.teslamateService = { getState: () => ({ batteryLevel: null }) };
+    ctx.evccIntegration = { getLoadpoints: () => [{ id: 1, connected: true, vehicleSocPct: 55 }], getStatus: () => ({ loadpoints: [{ id: 1, connected: true, vehicleSocPct: 55 }] }) };
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.body.arrival.expectedSocPct, 55);
+    assert.equal(r.body.arrival.source, 'plugged');
+  });
+});

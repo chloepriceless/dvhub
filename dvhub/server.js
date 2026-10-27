@@ -184,6 +184,7 @@ import { createPhoenixAdapter } from './services/wallbox/phoenix.js';
 import { createWallboxAdapterCache } from './services/wallbox/adapter-cache.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
+import { createEvSocMemory, readEvSocReading } from './services/optimizer/ev-arrival.js';
 import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
@@ -1743,8 +1744,12 @@ ctx.eosConfigSync = eosConfigSync;
 let evDepartureLastKey = null;
 const evPlugTracker = createEvPlugTracker({ stableTicks: 2 });
 let evPlugSyncPending = 0;
+// Letzter bekannter Ladestand (ev-arrival.js): Schaetzbasis fuer den
+// erwarteten Ladestand bei Ankunft, auch nach dem Abstecken und Neustart.
+ctx.evSocMemory = createEvSocMemory({ filePath: path.join(DATA_DIR || __dirname, 'ev-soc-last.json') });
 const evDepartureTimer = safeInterval('ev-departure.watch', async () => {
   const cfg = ctx.getCfg();
+  ctx.evSocMemory.observe(readEvSocReading(ctx));
   if (cfg?.optimizer?.eosOptimizeEv !== true || !cfg?.optimizer?.eosProxy?.enabled) { evDepartureLastKey = null; return; }
   if (cfg?.optimizer?.evPlanOnlyWhenPlugged !== false) {
     const plug = evPlugTracker.update(resolveEvPlugged(ctx));

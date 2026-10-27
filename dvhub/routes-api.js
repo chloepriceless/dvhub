@@ -30,6 +30,7 @@ import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlF
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
+import { resolveEvArrival } from './services/optimizer/ev-arrival.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
 import { WALLBOX_TYPES } from './services/wallbox/types.js';
 import { loadCatalog as loadEvccVehicleCatalog, maskVehicleSettings, mergeVehicleSettings, validateVehicleSettings } from './services/vehicle-evcc/index.js';
@@ -5367,6 +5368,10 @@ export function createApiRoutes(ctx) {
       const lp = lps.find((l) => Number(l.id) === lpId) || lps[0] || null;
       const reg = ctx.state?.optimizer?.eosEv || null;
       const evSoc = resolveEvSocPct(ctx);
+      const plugged = resolveEvPlugged(ctx);
+      // Erwarteter Ladestand bei Ankunft (ev-arrival.js): angesteckt der echte,
+      // sonst live vom Auto oder geschaetzt — jeweils minus Heimweg.
+      const arrival = resolveEvArrival(ctx, getCfg(), { plugged, nowMs, departure: resolved });
       let plan = null;
       let planError = null;
       if (opt.eosOptimizeEv === true && ctx.inspector?.getEos) {
@@ -5440,7 +5445,18 @@ export function createApiRoutes(ctx) {
           rangeKm: !ctx.mainWallbox?.isDirect?.() && Number.isFinite(Number(lp?.vehicleRangeKm)) ? Math.round(Number(lp.vehicleRangeKm)) : null,
           registered: reg ? reg.register === true : null,
           registrationReason: reg?.reason || null,
-          plugged: resolveEvPlugged(ctx)
+          plugged
+        },
+        arrival: {
+          at: arrival.arrivalAt,
+          expectedSocPct: arrival.pct,
+          source: arrival.source,
+          basePct: arrival.basePct,
+          baseSource: arrival.baseSource,
+          baseAt: arrival.baseAt,
+          legs: arrival.legs,
+          deductKm: arrival.deductKm,
+          commuteKm: arrival.commuteKm
         },
         plan,
         planError,
