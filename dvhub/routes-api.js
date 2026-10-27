@@ -376,6 +376,13 @@ export function getRequestHost(req, cfg) {
 // denselben Namen und Port zeigen wie der Aufruf selbst (Host). Hinter einem
 // Proxy zählt auch der weitergereichte Name — eine fremde Webseite kann
 // X-Forwarded-Host nicht setzen, ohne dass der Browser vorher nachfragt.
+// Datum für Export-Dateinamen im Ortsdatum der Anlage (YYYY-MM-DD), nicht in UTC:
+// zwischen 00:00 und 02:00 Berliner Zeit trug die Datei sonst das Vortagsdatum.
+export function exportDateStamp(timeZone, nowMs = Date.now()) {
+  const fmt = (tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(nowMs));
+  try { return fmt(timeZone || 'Europe/Berlin'); } catch { return fmt('Europe/Berlin'); }
+}
+
 export function isOwnOrigin(originHeader, req) {
   let originHost;
   try { originHost = new URL(String(originHeader)).host.toLowerCase(); } catch { return false; }
@@ -7015,7 +7022,7 @@ export function createApiRoutes(ctx) {
       // Server-derived filename — NEVER echo client input (V12 ASVS / T-09.2-
       // FILENAME-INJ). The `?filename=...` query param is intentionally not
       // read anywhere in this handler.
-      const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.csv`;
+      const filename = `dvhub-export-${exportDateStamp(ctx.getCfg?.()?.schedule?.timezone)}.csv`;
 
       let dbClient = null;
       let pgCursor = null;
@@ -7186,7 +7193,7 @@ export function createApiRoutes(ctx) {
       // Server-derived filename — NEVER echo client input (V12 ASVS / T-09.2-
       // FILENAME-INJ). The `?filename=...` query param is intentionally not
       // read anywhere in this handler.
-      const filename = `dvhub-export-${new Date().toISOString().slice(0, 10)}.parquet`;
+      const filename = `dvhub-export-${exportDateStamp(ctx.getCfg?.()?.schedule?.timezone)}.parquet`;
 
       let dbClient = null;
       let pgCursor = null;
