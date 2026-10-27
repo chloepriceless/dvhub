@@ -17,7 +17,7 @@ import path from 'node:path';
 import { createAdminRoutes } from '../routes/admin-routes.js';
 import { SEMVER_TAG, GIT_SHA_REF, compareSemverTag, selectLatestSemverTag, assertNoDowngrade } from '../routes-api.js';
 
-export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '9.9.9', tags = 'v9.9.9' } = {}) {
+export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '9.9.9', tags = 'v9.9.9', stashBusy = false } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-selfupdate-'));
   const appDir = path.join(repoRoot, 'dvhub');
   fs.mkdirSync(appDir);
@@ -29,6 +29,9 @@ export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '
     const a = args.join(' ');
     if (cmd === 'git' && a.startsWith('rev-parse')) return { stdout: 'a'.repeat(40) + '\n', stderr: '' };
     if (cmd === 'git' && a.startsWith('show origin/main:')) return { stdout: JSON.stringify({ version: mainVersion }), stderr: '' };
+    if (cmd === 'sudo' && args.includes('stash') && stashBusy) {
+      const e = new Error('dvhub-update: ein anderer Update- oder npm-Lauf läuft bereits'); e.code = 4; throw e;
+    }
     if (cmd === 'sudo' && args.includes('stash')) return { stdout: 'No local changes to save\n', stderr: '' };
     const npm = cmd === 'npm' || (cmd === 'sudo' && args.includes('npm-install'));
     if (npm && npmFails) {
@@ -111,6 +114,21 @@ describe('Self-Update über den root-eigenen Einstieg dvhub-update', () => {
       await h.handle(req, {}, new URL('http://x/api/admin/update/check'));
       assert.ok(h.calls.includes(`${HELPER} fetch`), h.calls.join('\n'));
       assert.deepEqual(h.calls.filter((c) => MUTATING.test(c)), []);
+    } finally { h.cleanup(); }
+  });
+});
+
+// Gegenprüfung 6e7f6bfb (P3): stash mit Exit 4 (Sperre belegt, npm im
+// Hintergrund) galt als „keine lokalen Änderungen“ — danach liefen fetch und
+// checkout über ungesicherte Änderungen. Jetzt bricht das Update vorher ab.
+describe('stash: Sperre belegt (Exit 4) → Update bricht vor jedem Checkout ab', () => {
+  it('update/apply', async () => {
+    const h = makeHarness({ stashBusy: true });
+    try {
+      const r = await h.post('/api/admin/update/apply', {});
+      assert.notEqual(r.code, 200);
+      assert.match(String(r.payload.error), /läuft bereits/);
+      assert.deepEqual(h.calls.filter((c) => /checkout|npm-install/.test(c)), []);
     } finally { h.cleanup(); }
   });
 });

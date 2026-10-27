@@ -86,3 +86,18 @@ test('Unit-Werte: systemctl show (mit Drop-ins) vor der Unit-Datei', () => {
     assert.equal(r.stdout.trim(), '/drop/in|/drop/data');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Gegenprüfung 963dd115 (P2): als ExecStartPre kennt post-update.sh den Dienst
+// nur aus DV_SERVICE_NAME (z. B. dvhub2.service); mit „dvhub“ als Rückfall trug
+// jeder Start den falschen Namen in dvhub-update und die sudoers-Regeln ein.
+test('Dienstname aus DV_SERVICE_NAME der Unit', () => {
+  const r = spawnSync('bash', ['-c', `set -euo pipefail\n${HEAD}\necho "$SERVICE_NAME"`], {
+    encoding: 'utf8', env: { PATH: process.env.PATH, DV_SERVICE_NAME: 'dvhub2.service', PU_UNIT_FILE: '/nonexistent' },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), 'dvhub2');
+  const r2 = spawnSync('bash', ['-c', `set -euo pipefail\n${HEAD}\necho "$SERVICE_NAME"`], {
+    encoding: 'utf8', env: { PATH: process.env.PATH, PU_UNIT_FILE: '/nonexistent' },
+  });
+  assert.equal(r2.stdout.trim(), 'dvhub');
+});

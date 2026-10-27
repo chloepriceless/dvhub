@@ -156,7 +156,7 @@ function lockRig(s, { busy = false } = {}) {
   return env;
 }
 
-test('Sperre belegt (npm im Hintergrund): ändernde Schritte → Exit 4, nichts geändert; Neustart-Merker der Hintergrund-Unit weg', () => {
+test('Sperre belegt (npm im Hintergrund): ändernde Schritte → Exit 4, nichts geändert, Neustart-Merker der Hintergrund-Unit bleibt', () => {
   const s = setup();
   try {
     const env = lockRig(s, { busy: true });
@@ -165,10 +165,24 @@ test('Sperre belegt (npm im Hintergrund): ändernde Schritte → Exit 4, nichts 
       const r = s.runEnv(env, ...args);
       assert.equal(r.status, 4, `${args.join(' ')} → ${r.status} ${r.stderr}`);
       assert.match(r.stderr, /läuft bereits/);
+      // Gegenprüfung 6e7f6bfb (P2): kam das Update nicht zum Zug, muss die
+      // Hintergrund-Unit DVhub nach npm weiterhin neu starten.
+      assert.ok(existsSync(env.DVHUB_UPDATE_TEST_RESTART_FLAG), `${args.join(' ')}: Merker bleibt`);
     }
     assert.equal(existsSync(join(s.dir, 'npm.log')), false, 'npm nicht gestartet');
-    assert.equal(existsSync(env.DVHUB_UPDATE_TEST_RESTART_FLAG), false, 'Hintergrund-Unit startet DVhub nicht mitten im Update neu');
     assert.match(readFileSync(join(s.dir, 'flock.log'), 'utf8'), /-w \d+ 9/);
+  } finally { s.cleanup(); }
+});
+
+test('Sperre frei: ein Update-Schritt übernimmt den Neustart (Merker weg), fetch (nur Prüfen) lässt ihn stehen', () => {
+  const s = setup();
+  try {
+    const env = lockRig(s);
+    writeFileSync(env.DVHUB_UPDATE_TEST_RESTART_FLAG, '');
+    assert.equal(s.runEnv(env, 'fetch').status, 0);
+    assert.ok(existsSync(env.DVHUB_UPDATE_TEST_RESTART_FLAG), 'fetch (Update-Prüfung) nimmt den Merker nicht weg');
+    assert.equal(s.runEnv(env, 'stash').status, 0);
+    assert.equal(existsSync(env.DVHUB_UPDATE_TEST_RESTART_FLAG), false, 'das Update startet selbst neu');
   } finally { s.cleanup(); }
 });
 

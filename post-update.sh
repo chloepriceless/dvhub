@@ -11,6 +11,10 @@ set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"
 APP_DIR="${APP_DIR:-$INSTALL_DIR/dvhub}"
 SERVICE_USER="${SERVICE_USER:-dvhub}"
+# Dienstname: als ExecStartPre nur über DV_SERVICE_NAME der Unit bekannt
+# (z. B. dvhub2.service; Gegenprüfung 963dd115) — sonst trüge jeder Start
+# „dvhub“ in dvhub-update und die sudoers-Regeln ein.
+SERVICE_NAME="${SERVICE_NAME:-${DV_SERVICE_NAME:+${DV_SERVICE_NAME%.service}}}"
 SERVICE_NAME="${SERVICE_NAME:-dvhub}"
 # Konfigurations- und Datenordner wie die Unit (Gegenprüfung 25.10.2026):
 # install.sh --config /pfad/config.json trägt den Ordner in die Unit

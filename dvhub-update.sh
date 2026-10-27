@@ -94,12 +94,24 @@ esac
 
 # Sperre für alle ändernden Schritte (nicht post-update: das startet
 # Hintergrund-Units, die den Deskriptor sonst erben würden).
+# Neustart-Merker der Hintergrund-Unit (Gegenprüfung 6e7f6bfb): ein Schritt
+# eines echten Updates nimmt ihn weg — die Unit soll DVhub nicht mitten im
+# Update neu starten, das Update startet am Ende selbst neu. fetch (auch die
+# bloße Update-Prüfung) lässt ihn stehen. Kommt der Schritt nicht an die
+# Sperre (Exit 4), läuft kein Update: dann bekommt die Unit ihn zurück.
 if [[ "$action" != post-update ]]; then
-  rm -f "$NPM_RESTART_FLAG"
+  had_flag=0
+  if [[ "$action" != fetch && -e "$NPM_RESTART_FLAG" ]]; then
+    had_flag=1
+    rm -f "$NPM_RESTART_FLAG"
+  fi
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$LOCK_FILE" || die "Sperre $LOCK_FILE nicht anlegbar"
     if [[ "$action" == npm-install ]]; then lock_wait=120; else lock_wait=20; fi
-    flock -w "$lock_wait" 9 || die "ein anderer Update- oder npm-Lauf läuft bereits (z. B. npm im Hintergrund nach einem Neustart) — bitte in ein paar Minuten erneut versuchen" 4
+    if ! flock -w "$lock_wait" 9; then
+      [[ "$had_flag" -eq 1 ]] && touch "$NPM_RESTART_FLAG"
+      die "ein anderer Update- oder npm-Lauf läuft bereits (z. B. npm im Hintergrund nach einem Neustart) — bitte in ein paar Minuten erneut versuchen" 4
+    fi
   fi
 fi
 

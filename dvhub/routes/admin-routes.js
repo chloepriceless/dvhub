@@ -77,6 +77,13 @@ export function createAdminRoutes(deps) {
 
   const updateHelper = (args, timeout = 30000) => execFileAsync('sudo', ['-n', UPDATE_HELPER, ...args], { timeout });
   const npmInstallOmitDev = () => updateHelper(['npm-install'], NPM_INSTALL_TIMEOUT_MS);
+  // stash: nur „nichts zu sichern“ darf weiterlaufen. Exit 4 (Sperre belegt,
+  // npm im Hintergrund) bricht das Update ab, bevor etwas ausgecheckt wird
+  // (Gegenprüfung 6e7f6bfb) — sonst liefe der Checkout über ungesicherte Änderungen.
+  const stashForUpdate = () => updateHelper(['stash']).catch((e) => {
+    if (e?.code === 4) throw new Error(String(e.stderr || e.message || 'Update läuft bereits').trim().split('\n').at(-1));
+    return { stdout: 'No local changes' };
+  });
   const aptHelper = (action, timeout) => execFileAsync('sudo', ['-n', APT_HELPER, action], { timeout });
 
   return async function handleAdminRoute(req, res, url) {
@@ -549,7 +556,7 @@ export function createAdminRoutes(deps) {
         const channel = ctx.getRawCfg().updateChannel || 'stable';
         let gitOutput = '';
         const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-        const stashResult = await updateHelper(['stash']).catch(() => ({ stdout: 'No local changes' }));
+        const stashResult = await stashForUpdate();
         const hasStash = !stashResult.stdout.includes('No local changes');
 
         try {
@@ -686,7 +693,7 @@ export function createAdminRoutes(deps) {
           const appDir = ctx.getAppDir();
           let gitOutput = '';
           const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-          const stashResult = await updateHelper(['stash']).catch(() => ({ stdout: 'No local changes' }));
+          const stashResult = await stashForUpdate();
           const hasStash = !stashResult.stdout.includes('No local changes');
           try {
             // --- git fetch + checkout (inside inner try for rollback coverage) ---
