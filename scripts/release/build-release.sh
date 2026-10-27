@@ -55,7 +55,9 @@ for a in ${ARCHS//,/ }; do
 done
 if [[ "$SIGN" -eq 1 ]]; then
   [[ -f "$KEY" ]] || die "Signaturschlüssel $KEY fehlt (--key PFAD oder --no-sign)"
-  perm="$(stat -f '%Lp' "$KEY" 2>/dev/null || stat -c '%a' "$KEY")"
+  # GNU-stat (Linux) zuerst: dort heißt -f „Dateisystem“ und schreibt trotz
+  # Fehler auf stdout — die BSD-Form nur, wenn -c nicht geht (macOS).
+  if perm="$(stat -c '%a' "$KEY" 2>/dev/null)"; then :; else perm="$(stat -f '%Lp' "$KEY")"; fi
   [[ "$perm" == 600 || "$perm" == 400 ]] || die "Schlüssel $KEY muss 0600 sein (ist $perm)"
 fi
 

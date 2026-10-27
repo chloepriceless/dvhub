@@ -15,6 +15,9 @@
 //   dvhub-release migrate [--force]               einmalige Umstellung git → Paket
 //   dvhub-release boot-hook                       aus post-update.sh: Umstellung
 //                                                 planen bzw. unterbrochenen Auftrag fortsetzen
+//   dvhub-release recover                         aus dem Notfall-Drop-in der Unit: eine
+//                                                 mitten im Verschieben abgebrochene
+//                                                 Umstellung sofort zurücknehmen
 //   dvhub-release _job install|rollback|migrate|resume …   der eigentliche Auftrag
 //                                                 (läuft als eigene systemd-Unit)
 //
@@ -28,6 +31,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 
 // Fest eingetragen beim Installieren (dvhub_install_helper in install.sh und
@@ -80,6 +84,7 @@ function settings(env = process.env) {
     stateDir: pick('DVHUB_RELEASE_TEST_STATE_DIR', '/var/lib/dvhub-release'),
     etcDir: pick('DVHUB_RELEASE_TEST_ETC_DIR', '/etc/dvhub-release'),
     unitFile: test ? (env.DVHUB_RELEASE_TEST_UNIT_FILE || '') : `/etc/systemd/system/${serviceName}.service`,
+    dropinDir: test ? (env.DVHUB_RELEASE_TEST_DROPIN_DIR || '') : `/etc/systemd/system/${serviceName}.service.d`,
     lockDir: test ? path.join(env.DVHUB_RELEASE_TEST_STATE_DIR || '/nonexistent', 'lock') : '/run/dvhub-release.lock',
     euid: test ? Number(env.DVHUB_RELEASE_TEST_EUID ?? process.geteuid()) : process.geteuid(),
     systemctl: test ? (env.DVHUB_RELEASE_TEST_SYSTEMCTL || '') : 'systemctl',
@@ -191,7 +196,7 @@ function versionFromLabel(label) {
 
 function parseArgs(argv) {
   const [action, ...rest] = argv;
-  const usage = () => new Exit(2, 'Aufruf: dvhub-release check <stable|dev> | install <version|latest> <stable|dev> | rollback | status | migrate [--force] | boot-hook');
+  const usage = () => new Exit(2, 'Aufruf: dvhub-release check <stable|dev> | install <version|latest> <stable|dev> | rollback | status | migrate [--force] | boot-hook | recover');
   const channel = (c) => { if (!CHANNELS.includes(c)) throw new Exit(2, `ungültiger Kanal: ${String(c).slice(0, 20)}`); return c; };
   const version = (v) => {
     if (v === 'latest') return v;
@@ -208,6 +213,7 @@ function parseArgs(argv) {
     case 'rollback':
     case 'status':
     case 'boot-hook':
+    case 'recover':
       if (rest.length) throw usage();
       return { action };
     case 'migrate':
@@ -428,18 +434,22 @@ function validateIndex(idx, channel) {
   return idx;
 }
 
+// Jeder Abruf in einem eigenen Ordner: `check` läuft ohne Sperre und darf
+// einem gleichzeitigen Auftrag die Dateien nicht wegnehmen (Gegenprüfung 67ade305).
 async function fetchIndex(s, channel) {
-  const dir = stagingDir(s);
+  const dir = fs.mkdtempSync(path.join(stagingDir(s), `index-${channel}-`));
   const url = indexUrl(s, channel);
   const file = path.join(dir, `index-${channel}.json`);
   const sig = `${file}.sig`;
-  fs.rmSync(file, { force: true });
-  fs.rmSync(sig, { force: true });
-  await download(url, file, { maxBytes: MAX_INDEX_BYTES, attempts: 2 });
-  await download(`${url}.sig`, sig, { maxBytes: 64 * 1024, attempts: 2 });
-  verifySignature(s, file, sig, NS_INDEX);
-  const idx = validateIndex(readJson(file), channel);
-  return { idx, url };
+  try {
+    await download(url, file, { maxBytes: MAX_INDEX_BYTES, attempts: 2 });
+    await download(`${url}.sig`, sig, { maxBytes: 64 * 1024, attempts: 2 });
+    verifySignature(s, file, sig, NS_INDEX);
+    const idx = validateIndex(readJson(file), channel);
+    return { idx, url };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function pickRelease(idx, version) {
@@ -617,19 +627,38 @@ function healthUrl(s) {
   return `http://127.0.0.1:${port}/health`;
 }
 
+// Host-Kopf für die Probe: DVhub prüft den Host vor allem anderen (auch vor
+// /health). Ist allowedHosts gesetzt, wird 127.0.0.1 abgewiesen — dann den
+// ersten erlaubten Namen schicken, verbunden wird trotzdem lokal
+// (Gegenprüfung 67ade305).
+function healthHost(s, url) {
+  const allowed = readJson(configPath(s), {})?.allowedHosts;
+  if (Array.isArray(allowed) && allowed.length && typeof allowed[0] === 'string' && /^[A-Za-z0-9.:[\]-]+$/.test(allowed[0])) return allowed[0];
+  return new URL(url).host;
+}
+
+function httpGet(url, headers, timeoutMs) {
+  return new Promise((resolve) => {
+    const req = http.get(url, { headers, timeout: timeoutMs }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => { if (chunks.length < 64) chunks.push(c); });
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      res.on('error', (e) => resolve({ status: 0, error: e.message }));
+    });
+    req.on('timeout', () => req.destroy(new Error('Zeitüberschreitung')));
+    req.on('error', (e) => resolve({ status: 0, error: e.message }));
+  });
+}
+
 async function healthOnce(s, expect) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 5000);
-  try {
-    const res = await fetch(healthUrl(s), { signal: ctrl.signal });
-    if (res.status !== 200) return { ok: false, why: `HTTP ${res.status}` };
-    const j = await res.json();
-    if (j?.ok !== true) return { ok: false, why: 'ok != true' };
-    if (expect && versionFromLabel(j.version) !== expect) return { ok: false, why: `läuft ${j.version}, erwartet ${expect}` };
-    return { ok: true, label: j.version };
-  } catch (e) {
-    return { ok: false, why: e.name === 'AbortError' ? 'Zeitüberschreitung' : e.message };
-  } finally { clearTimeout(t); }
+  const url = healthUrl(s);
+  const r = await httpGet(url, { Host: healthHost(s, url) }, 5000);
+  if (r.status !== 200) return { ok: false, why: r.error || `HTTP ${r.status}` };
+  let j = null;
+  try { j = JSON.parse(r.body); } catch { return { ok: false, why: 'keine JSON-Antwort' }; }
+  if (j?.ok !== true) return { ok: false, why: 'ok != true' };
+  if (expect && versionFromLabel(j.version) !== expect) return { ok: false, why: `läuft ${j.version}, erwartet ${expect}` };
+  return { ok: true, label: j.version };
 }
 
 // Gesund = zweimal im Abstand von 5 s ok mit der erwarteten Version und die
@@ -776,6 +805,14 @@ async function switchAndVerify(s, st, job, { to, from, op }) {
   return false;
 }
 
+// Abschluss eines erfolgreichen Updates: Vertrauen, alter Checkout, Aufräumen.
+function finalizeInstall(s, st, version, job) {
+  updateTrust(s, st, version, job);
+  removeLegacy(s, st, job);
+  pruneReleases(s, st, job);
+  saveState(s, st);
+}
+
 async function jobInstall(s, job, { version, channel }) {
   const st = loadState(s);
   const from = currentVersion(s);
@@ -792,10 +829,7 @@ async function jobInstall(s, job, { version, channel }) {
   }
   const { manifest } = await fetchAndUnpack(s, job, { channel, version: target, index });
   if (await switchAndVerify(s, st, job, { to: manifest.version, from, op: 'install' })) {
-    updateTrust(s, st, manifest.version, job);
-    removeLegacy(s, st, job);
-    pruneReleases(s, st, job);
-    saveState(s, st);
+    finalizeInstall(s, st, manifest.version, job);
     job.finish('ok', `${manifest.version} installiert und gesund`, { result: 'ok', version: manifest.version, from });
   } else {
     fs.rmSync(path.join(releasesDir(s), manifest.version), { recursive: true, force: true });
@@ -852,6 +886,15 @@ function revertMigration(s, st, job) {
   const m = st.migration;
   if (!m) return;
   job.log('Umstellung zurücknehmen');
+  // Eintrag, dessen Verschieben ein Abbruch unterbrochen hat (Journal: moving).
+  if (m.moving && !(m.moved || []).includes(m.moving)) {
+    const from = path.join(m.legacy, m.moving);
+    const to = path.join(s.installDir, m.moving);
+    if (fs.existsSync(from) || isLink(from)) {
+      try { if (isLink(to)) fs.unlinkSync(to); } catch { /* */ }
+      if (!fs.existsSync(to)) fs.renameSync(from, to);
+    }
+  }
   for (const n of [...(m.linked || [])].reverse()) {
     const p = path.join(s.installDir, n);
     try { if (fs.lstatSync(p).isSymbolicLink()) fs.unlinkSync(p); } catch { /* */ }
@@ -864,7 +907,8 @@ function revertMigration(s, st, job) {
   }
   try { fs.rmdirSync(m.legacy); } catch { /* nicht leer: bleibt zur Diagnose */ }
   try { fs.unlinkSync(currentLink(s)); } catch { /* */ }
-  if (m.unit_backup && fs.existsSync(m.unit_backup)) fs.copyFileSync(m.unit_backup, s.unitFile);
+  if (m.unit_backup && fs.existsSync(m.unit_backup)) writeFileAtomic(s.unitFile, fs.readFileSync(m.unit_backup));
+  removeDropin(s, job, { reload: false });
   systemctl(s, 'daemon-reload');
   if (m.version) fs.rmSync(path.join(releasesDir(s), m.version), { recursive: true, force: true });
   st.migration = null;
@@ -872,6 +916,37 @@ function revertMigration(s, st, job) {
 }
 
 function isLink(p) { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } }
+
+function writeFileAtomic(file, data) {
+  const tmp = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, data, { mode: 0o644 });
+  fs.renameSync(tmp, file);
+}
+
+// Notfall-Drop-in für die Zeit des Verschiebens (Gegenprüfung 67ade305): fällt
+// der Strom, während der Checkout halb verschoben ist, fehlen der Unit evtl.
+// post-update.sh und der Arbeitsordner. Das Drop-in hängt einen Vorlauf an,
+// der nicht im Programmordner liegt (dvhub-release recover), und duldet einen
+// fehlenden Arbeitsordner — recover stellt den git-Stand her, bevor ExecStart
+// den Pfad braucht.
+const DROPIN_NAME = '05-dvhub-release-recover.conf';
+function writeDropin(s, job) {
+  if (!s.dropinDir) return;
+  fs.mkdirSync(s.dropinDir, { recursive: true, mode: 0o755 });
+  writeFileAtomic(path.join(s.dropinDir, DROPIN_NAME),
+    `# Von dvhub-release während der Umstellung git → Paket angelegt; danach wieder entfernt.\n[Service]\nWorkingDirectory=-${s.installDir}/dvhub\nExecStartPre=-+${s.self} recover\n`);
+  systemctl(s, 'daemon-reload');
+  job.log('Notfall-Drop-in für die Unit angelegt');
+}
+function removeDropin(s, job, { reload = true } = {}) {
+  if (!s.dropinDir) return;
+  const f = path.join(s.dropinDir, DROPIN_NAME);
+  if (!fs.existsSync(f)) return;
+  fs.rmSync(f, { force: true });
+  try { fs.rmdirSync(s.dropinDir); } catch { /* andere Drop-ins bleiben */ }
+  if (reload) systemctl(s, 'daemon-reload');
+  job?.log?.('Notfall-Drop-in entfernt');
+}
 
 async function jobMigrate(s, job, { force }) {
   const st = loadState(s);
@@ -895,6 +970,14 @@ async function jobMigrate(s, job, { force }) {
   if (!force && chk.gitVersion && baseVersion(target) && compareVersions(baseVersion(target), baseVersion(chk.gitVersion)) < 0) {
     throw new Exit(3, `Paket ${target} ist älter als der git-Stand ${chk.gitVersion}`);
   }
+  // Gleiche package.json-Version heißt nicht gleicher Stand (dev: main ist
+  // weiter als das letzte Paket). Commit-Zeit des Pakets gegen den Checkout
+  // (Gegenprüfung 67ade305) — sonst nähme die Umstellung ein Update zurück.
+  const headTime = Number((git(s, 'log', '-1', '--format=%ct', 'HEAD').stdout || '').trim());
+  const relDate = Date.parse(index.idx.releases.find((r) => r.version === target)?.date || '') / 1000;
+  if (!force && Number.isFinite(headTime) && headTime > 0 && Number.isFinite(relDate) && relDate < headTime) {
+    throw new Exit(3, `Paket ${target} (Stand ${new Date(relDate * 1000).toISOString()}) ist älter als der git-Checkout (${new Date(headTime * 1000).toISOString()}) — Umstellung wartet auf ein neueres Paket`);
+  }
   const { manifest } = await fetchAndUnpack(s, job, { channel: chk.channel, version: target, index });
   const version = manifest.version;
 
@@ -906,6 +989,7 @@ async function jobMigrate(s, job, { force }) {
   saveState(s, st);
   try {
     job.phase('switch', `alten Checkout nach .legacy-git, current → ${version}`);
+    writeDropin(s, job);
     fs.rmSync(legacy, { recursive: true, force: true });
     fs.mkdirSync(legacy, { mode: 0o755 });
     switchCurrent(s, version);
@@ -915,12 +999,14 @@ async function jobMigrate(s, job, { force }) {
     for (const n of fs.readdirSync(s.installDir)) {
       if (STATE_ENTRIES.has(n) || n.startsWith('.current.tmp')) continue;
       if (!tracked.has(n) && !relTop.has(n)) continue;
+      // Erst das Vorhaben ins Journal, dann verschieben (Gegenprüfung 67ade305).
+      st.migration.moving = n;
+      saveState(s, st);
       fs.renameSync(path.join(s.installDir, n), path.join(legacy, n));
+      if (relTop.has(n)) fs.symlinkSync(`current/${n}`, path.join(s.installDir, n));
       st.migration.moved.push(n);
-      if (relTop.has(n)) {
-        fs.symlinkSync(`current/${n}`, path.join(s.installDir, n));
-        st.migration.linked.push(n);
-      }
+      if (relTop.has(n)) st.migration.linked.push(n);
+      delete st.migration.moving;
       saveState(s, st);
     }
     for (const n of relTop) {
@@ -931,7 +1017,8 @@ async function jobMigrate(s, job, { force }) {
     st.migration.phase = 'unit';
     saveState(s, st);
     job.phase('unit', 'systemd-Unit auf current umstellen');
-    fs.writeFileSync(s.unitFile, rewriteUnit(s, fs.readFileSync(s.unitFile, 'utf8')));
+    writeFileAtomic(s.unitFile, rewriteUnit(s, fs.readFileSync(s.unitFile, 'utf8')));
+    removeDropin(s, job, { reload: false });
     systemctl(s, 'daemon-reload');
     st.migration.phase = 'provision';
     saveState(s, st);
@@ -976,6 +1063,8 @@ async function jobResume(s, job) {
       st.legacy = { dir: st.migration.legacy, git_sha: st.migration.git_sha, version: st.migration.git_version, at: new Date().toISOString() };
       st.migration = null;
       record(st, v, 'migrated');
+      updateTrust(s, st, v, job);
+      removeDropin(s, job);
       saveState(s, st);
       job.finish('ok', `Umstellung auf ${v} abgeschlossen (nach Unterbrechung)`, { result: 'ok', version: v });
       return;
@@ -991,10 +1080,12 @@ async function jobResume(s, job) {
     job.phase('health', `unterbrochener Auftrag (${to}): Gesundheitsprüfung`);
     const cur = currentVersion(s);
     if (cur === to && await waitHealthy(s, to, job)) {
+      const op = st.pending.op;
       st.previous = from;
       st.current = to;
       st.pending = null;
       record(st, to, 'ok');
+      if (op === 'install') finalizeInstall(s, st, to, job);
       saveState(s, st);
       job.finish('ok', `${to} läuft gesund (nach Unterbrechung bestätigt)`, { result: 'ok', version: to });
       return;
@@ -1099,6 +1190,8 @@ async function main(argv, s = settings()) {
       return runJob(s, { action: '_job', job: 'migrate', force: a.force });
     case 'boot-hook':
       return bootHook(s);
+    case 'recover':
+      return recover(s);
     case '_job':
       return runJob(s, a);
     default:
@@ -1132,6 +1225,23 @@ function bootHook(s) {
   if (m.last_attempt && now - m.last_attempt < MIGRATE_RETRY_S) { s.write('dvhub-release: nächster Umstellungsversuch nach 24 h\n'); return 0; }
   spawnJob(s, MIGRATE_UNIT, ['migrate'], { delayS: s.migrateDelayS });
   s.write(`dvhub-release: Umstellung auf Pakete in ${s.migrateDelayS} s geplant\n`);
+  return 0;
+}
+
+// Synchron aus dem Notfall-Drop-in (ExecStartPre): nur eine im Verschieben
+// abgebrochene Umstellung; alles Spätere entscheidet resume per Gesundheit.
+function recover(s) {
+  const st = loadState(s);
+  const log = { log: (l) => s.write(`dvhub-release recover: ${l}\n`) };
+  if (lockHeld(s)) return 0;
+  if (st.migration && st.migration.phase === 'moving') {
+    revertMigration(s, st, log);
+    record(st, st.migration?.version || '-', 'migration_interrupted');
+    saveState(s, st);
+    log.log('abgebrochene Umstellung zurückgenommen — git-Stand wiederhergestellt');
+    return 0;
+  }
+  if (!st.migration) removeDropin(s, log);
   return 0;
 }
 

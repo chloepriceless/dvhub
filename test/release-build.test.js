@@ -294,3 +294,27 @@ test('build-release.sh: Ref ohne Tag → dev-Version; ohne Schlüssel nur mit --
     fs.rmSync(work, { recursive: true, force: true });
   }
 });
+
+test('build-release.sh: Schlüsselrechte mit GNU-stat (Linux/CI) richtig gelesen', { timeout: 120000 }, () => {
+  const { dir } = fixtureRepo();
+  const work = tmp('dvhub-build-out-');
+  try {
+    const { key } = keypair(work, 'k');
+    // GNU stat: "-f" heißt Dateisystem — '%Lp' wird als Dateiname gelesen,
+    // die Ausgabe zum echten Pfad landet trotzdem auf stdout, Exit 1.
+    const bin = path.join(work, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'stat'), `#!/bin/sh
+if [ "$1" = "-f" ]; then echo "  File: \\"$3\\""; echo "    ID: 0 Namelen: 255 Type: apfs"; echo "stat: cannot read file system information for '$2'" >&2; exit 1; fi
+if [ "$1" = "-c" ]; then /usr/bin/stat -f '%Lp' "$3" 2>/dev/null || /usr/bin/stat -c '%a' "$3"; exit 0; fi
+exit 2
+`, { mode: 0o755 });
+    const r = spawnSync('bash', [BUILD, 'v1.2.3', '--key', key, '--repo', dir, '--out', path.join(work, 'o'), '--arch', 'arm64', '--no-eebus'], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, DVHUB_RELEASE_NPM_CACHE: path.join(work, 'npm-cache') },
+    });
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});

@@ -127,6 +127,9 @@ function makeRig() {
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/health') {
+      const cfgFile = path.join(root, 'config.json');
+      const allowed = fs.existsSync(cfgFile) ? (JSON.parse(fs.readFileSync(cfgFile, 'utf8')).allowedHosts || []) : [];
+      if (allowed.length && !allowed.includes(req.headers.host)) { res.writeHead(400); res.end('{"ok":false,"error":"host_not_allowed"}'); return; }
       let v = null;
       try { v = fs.readlinkSync(path.join(box, 'current')).replace(/^releases\//, ''); } catch { v = 'git'; }
       if (bad.has(v)) { res.writeHead(500); res.end('kaputt'); return; }
@@ -157,6 +160,7 @@ function makeRig() {
       DVHUB_RELEASE_TEST_EUID: '0', DVHUB_RELEASE_TEST_ARCH: 'arm64', DVHUB_RELEASE_TEST_UNIT_FILE: unitFile,
       DVHUB_RELEASE_TEST_SYSTEMCTL: path.join(fakeBin, 'systemctl'), DVHUB_RELEASE_TEST_SYSTEMD_RUN: path.join(fakeBin, 'systemd-run'),
       DVHUB_RELEASE_TEST_HEALTH_URL: `http://127.0.0.1:${port}/health`, DVHUB_RELEASE_TEST_FAST: '1', DVHUB_RELEASE_TEST_HEALTH_TIMEOUT_S: '2',
+      DVHUB_RELEASE_TEST_CONFIG_DIR: root, DVHUB_RELEASE_TEST_DROPIN_DIR: path.join(root, 'dvhub.service.d'),
     };
     const settings = () => H.settings(env);
     const trust = (...lines) => fs.writeFileSync(path.join(etc, 'allowed_signers'), `${lines.join('\n')}\n`);
@@ -385,7 +389,7 @@ function gitBox(r, { origin = 'https://github.com/chloepriceless/dvhub.git' } = 
   w('install.sh', '#!/usr/bin/env bash\n', 0o755);
   w('docs/x.md', 'doku\n');
   w('.gitignore', '/eos-venv/\n/bin/\n/dvhub/node_modules/\n');
-  const g = (...a) => { const x = spawnSync('git', a, { cwd: r.box, encoding: 'utf8' }); assert.equal(x.status, 0, x.stderr); return x.stdout.trim(); };
+  const g = (...a) => { const x = spawnSync('git', a, { cwd: r.box, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_DATE: '2026-10-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-10-01T00:00:00Z' } }); assert.equal(x.status, 0, x.stderr); return x.stdout.trim(); };
   g('init', '-q');
   g('add', '-A');
   g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'git-stand');
@@ -523,6 +527,115 @@ test('resume: unterbrochenes Update — gesund wird bestätigt, sonst zurück', 
     assert.equal((await r.run('_job', 'resume')).code, 1);
     assert.equal(r.current(), 'releases/1.0.1');
     assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).pending, null);
+  } finally { r.close(); }
+});
+
+// ── Befunde der Codex-Gegenprüfung 67ade305 ─────────────────────────────────
+
+test('Gesundheitsprüfung schickt einen erlaubten Host (allowedHosts gesetzt)', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    fs.writeFileSync(path.join(r.root, 'config.json'), JSON.stringify({ httpPort: 8080, allowedHosts: ['dvhub.example.org:8080'] }));
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1' });
+    const res = await r.run('install', 'latest', 'stable');
+    assert.equal(res.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.current(), 'releases/1.0.1');
+  } finally { r.close(); }
+});
+
+test('gleichzeitige Prüfungen teilen sich keine Index-Dateien', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1' });
+    const all = await Promise.all(Array.from({ length: 6 }, () => r.run('check', 'stable')));
+    for (const x of all) assert.equal(x.code, 0, x.out);
+    assert.deepEqual(fs.readdirSync(path.join(r.state, 'staging')), [], 'nichts liegen geblieben');
+  } finally { r.close(); }
+});
+
+test('resume bestätigt ein unterbrochenes Update vollständig (Vertrauensdatei übernommen)', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    const p = r.publish({ version: '1.0.1', trustLines: [r.k1.line, r.k2.line] });
+    const dest = path.join(r.box, 'releases', '1.0.1');
+    fs.mkdirSync(dest);
+    assert.equal(spawnSync('tar', ['-xzf', p.file, '-C', dest]).status, 0);
+    H.switchCurrent(r.settings(), '1.0.1');
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    st.pending = { op: 'install', version: '1.0.1', previous: '1.0.0', boot_id: 'x' };
+    fs.writeFileSync(path.join(r.state, 'state.json'), JSON.stringify(st));
+    assert.equal((await r.run('_job', 'resume')).code, 0, JSON.stringify(r.status()));
+    assert.ok(fs.readFileSync(path.join(r.etc, 'allowed_signers'), 'utf8').includes(r.k2.line), 'neuer Schlüssel übernommen');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).trust_version, '1.0.1');
+  } finally { r.close(); }
+});
+
+test('Umstellung: Commit des Pakets älter als der Checkout → nicht ohne --force', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    gitBox(r);
+    // publish() datiert das Paket auf 2026-10-27; der Checkout ist neuer.
+    const g = (...a) => spawnSync('git', a, { cwd: r.box, encoding: 'utf8', env: { ...process.env, GIT_COMMITTER_DATE: '2026-12-01T00:00:00Z', GIT_AUTHOR_DATE: '2026-12-01T00:00:00Z' } });
+    assert.equal(g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'neuer').status, 0);
+    r.publish({ version: '1.0.1' });
+    let res = await r.run('migrate');
+    assert.equal(res.code, 3, JSON.stringify(r.status()));
+    assert.match(r.status().message, /älter/);
+    assert.equal(r.current(), null);
+    res = await r.run('migrate', '--force');
+    assert.equal(res.code, 0, JSON.stringify(r.status()));
+  } finally { r.close(); }
+});
+
+test('Umstellung: Stromausfall mitten im Verschieben → recover stellt den git-Stand her', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    const { unit, g } = gitBox(r);
+    const before = g('ls-files').split('\n').sort();
+    r.publish({ version: '1.0.1' });
+    // Zustand wie nach einem Abbruch: Release entpackt, current gesetzt,
+    // dvhub schon verschoben und verlinkt, post-update.sh verschoben, aber
+    // noch ohne Verweis — und vor dem Journal-Eintrag „erledigt“.
+    const dest = path.join(r.box, 'releases', '1.0.1');
+    fs.mkdirSync(dest, { recursive: true });
+    assert.equal(spawnSync('tar', ['-xzf', path.join(r.pub, 'v1.0.1', 'dvhub-1.0.1-arm64.tar.gz'), '-C', dest]).status, 0);
+    fs.symlinkSync('releases/1.0.1', path.join(r.box, 'current'));
+    const legacy = path.join(r.box, '.legacy-git');
+    fs.mkdirSync(legacy);
+    fs.renameSync(path.join(r.box, 'dvhub'), path.join(legacy, 'dvhub'));
+    fs.symlinkSync('current/dvhub', path.join(r.box, 'dvhub'));
+    fs.renameSync(path.join(r.box, 'post-update.sh'), path.join(legacy, 'post-update.sh'));
+    fs.writeFileSync(path.join(r.state, 'state.json'), JSON.stringify({ format: 1, migration: {
+      phase: 'moving', version: '1.0.1', legacy, moved: ['dvhub'], linked: ['dvhub'], moving: 'post-update.sh',
+      unit_backup: path.join(r.state, 'dvhub.service.git-backup'), boot_id: 'anderer-start' } }));
+    fs.writeFileSync(path.join(r.state, 'dvhub.service.git-backup'), unit);
+    fs.mkdirSync(path.join(r.root, 'dvhub.service.d'), { recursive: true });
+    fs.writeFileSync(path.join(r.root, 'dvhub.service.d', '05-dvhub-release-recover.conf'), 'x');
+    const res = await r.run('recover');
+    assert.equal(res.code, 0, res.out);
+    assert.equal(r.current(), null);
+    assert.ok(fs.statSync(path.join(r.box, 'dvhub')).isDirectory() && !isLink(path.join(r.box, 'dvhub')));
+    assert.ok(fs.existsSync(path.join(r.box, 'post-update.sh')) && !isLink(path.join(r.box, 'post-update.sh')));
+    assert.deepEqual(g('ls-files').split('\n').sort(), before);
+    assert.equal(g('status', '--porcelain', '--untracked-files=no'), '');
+    assert.ok(!fs.existsSync(path.join(r.root, 'dvhub.service.d', '05-dvhub-release-recover.conf')), 'Notfall-Drop-in weg');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).migration, null);
+  } finally { r.close(); }
+});
+
+test('Umstellung: während des Verschiebens sichert ein Drop-in den Start ab, danach ist es weg', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    gitBox(r);
+    r.publish({ version: '1.0.1' });
+    assert.equal((await r.run('migrate')).code, 0, JSON.stringify(r.status()));
+    assert.ok(!fs.existsSync(path.join(r.root, 'dvhub.service.d', '05-dvhub-release-recover.conf')));
+    assert.match(fs.readFileSync(r.sysLog, 'utf8'), /daemon-reload/);
+    assert.ok(r.status().log.some((l) => /Notfall-Drop-in/.test(l)), r.status().log.join('\n'));
+    assert.equal(H.parseArgs(['recover']).action, 'recover');
   } finally { r.close(); }
 });
 
