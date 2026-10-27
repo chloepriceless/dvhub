@@ -27,6 +27,12 @@ export const EOS_FLAVOR = Object.freeze({
 
 export const EOS_UNSUPPORTED_REASON = 'EOS-Version wird nicht mehr unterstützt — DVhub braucht EOS 0.4';
 
+// Frühester Ladestart am Fahrzeug (Gegenstück zu min_soc_deadline_datetime):
+// vorher plant EOS keine Ladung. Nur damit darf DVhub das Auto schon vor dem
+// Anstecken anmelden (ev-registration.js). Der Name steht NUR hier — kommt
+// das Feld in EOS unter anderem Namen, genügt diese eine Zeile.
+export const EOS_EV_CHARGE_START_FIELD = 'charge_start_datetime';
+
 // Die Abschnitte, in denen EOS Geräte führt. #1330 hat sie von Listen auf
 // Abbildungen nach device_id umgestellt — an genau einer davon lässt sich die
 // Fassung ablesen, ohne dass ein Gerät konfiguriert sein muss.
@@ -80,6 +86,12 @@ export function detectEosCapabilities(config, health = {}) {
   const solutionNotify = hasKey(ems, 'notify_url');
   // Läufe zur vollen Viertelstunde starten (rc1.11).
   const startOnBoundary = hasKey(ems, 'start_on_interval_boundary');
+  // Frühester Ladestart fürs Auto: Akku und Auto teilen in EOS dasselbe
+  // Modell (BatteriesCommonSettings), das Feld steht also auch an battery1 —
+  // erkennbar, ohne dass ein Auto angemeldet ist.
+  const evDevices = ['batteries', 'electric_vehicles']
+    .flatMap((k) => (devices && isObj(devices[k]) ? Object.values(devices[k]) : []));
+  const evChargeStart = evDevices.some((d) => hasKey(d, EOS_EV_CHARGE_START_FIELD));
 
   const reachable = !!cfg;
   const supported = reachable ? (flavor === EOS_FLAVOR.UPSTREAM_GENETIC && deviceMap) : null;
@@ -96,6 +108,7 @@ export function detectEosCapabilities(config, health = {}) {
     selfConsumptionInterpolator,
     solutionNotify,
     startOnBoundary,
+    evChargeStart,
     detectedAt: Date.now(),
   };
 }

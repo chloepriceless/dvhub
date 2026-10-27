@@ -5421,7 +5421,10 @@ export function createApiRoutes(ctx) {
           targetMode: opt.evTargetMode || 'percent',
           targetValue: opt.evTargetValue ?? 80,
           resolved,
-          deadlineSupported: ctx.state?.optimizer?.eos?.supported === true
+          deadlineSupported: ctx.state?.optimizer?.eos?.supported === true,
+          // EOS kennt einen fruehesten Ladestart → Vorplanung vor der Ankunft
+          // moeglich (ev-registration.js).
+          chargeStartSupported: ctx.state?.optimizer?.eos?.evChargeStart === true
         },
         vehicle: {
           title: (ctx.mainWallbox?.isDirect?.() ? ctx.mainWallbox.label() : null) || lp?.vehicleTitle || lp?.title || null,
@@ -5445,6 +5448,10 @@ export function createApiRoutes(ctx) {
           rangeKm: !ctx.mainWallbox?.isDirect?.() && Number.isFinite(Number(lp?.vehicleRangeKm)) ? Math.round(Number(lp.vehicleRangeKm)) : null,
           registered: reg ? reg.register === true : null,
           registrationReason: reg?.reason || null,
+          // 'preplan' (vor der Ankunft, erwarteter Ladestand) | 'plugged' | 'always'
+          registrationMode: reg?.mode ?? null,
+          chargeStartAt: reg?.chargeStartAt ?? null,
+          preplanBlocked: reg?.preplanBlocked ?? null,
           plugged
         },
         arrival: {
@@ -5560,6 +5567,7 @@ export function createApiRoutes(ctx) {
             consumptionKwhPer100km: raw.optimizer?.evConsumptionKwhPer100km ?? 18,
             resolved: resolveEvDeparture(getCfg()),
             deadlineSupported: ctx.state?.optimizer?.eos?.supported === true,
+            chargeStartSupported: ctx.state?.optimizer?.eos?.evChargeStart === true,
             eosFlavor: ctx.state?.optimizer?.eos?.flavor || null
           }
         },

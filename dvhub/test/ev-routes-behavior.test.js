@@ -268,3 +268,24 @@ describe('Erwarteter Ladestand bei Ankunft über GET /api/ev', () => {
     assert.equal(r.body.arrival.source, 'plugged');
   });
 });
+
+describe('Vorplanung im GET /api/ev', () => {
+  it('meldet Ladestart-Fähigkeit, Modus, Ladestart und den Grund einer blockierten Vorplanung', async () => {
+    const ctx = makeCtx();
+    ctx.state.optimizer = {
+      eos: { supported: true, evChargeStart: false },
+      eosEv: { wanted: true, register: false, reason: 'nicht angesteckt', mode: null, chargeStartAt: null, preplanBlocked: 'Vorplanung braucht EOS mit Ladestart' },
+    };
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.body.departure.chargeStartSupported, false);
+    assert.equal(r.body.vehicle.registrationMode, null);
+    assert.equal(r.body.vehicle.preplanBlocked, 'Vorplanung braucht EOS mit Ladestart');
+
+    ctx.state.optimizer.eos.evChargeStart = true;
+    ctx.state.optimizer.eosEv = { wanted: true, register: true, mode: 'preplan', chargeStartAt: '2026-10-27T19:00:00.000Z', preplanBlocked: null };
+    const r2 = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r2.body.departure.chargeStartSupported, true);
+    assert.equal(r2.body.vehicle.registrationMode, 'preplan');
+    assert.equal(r2.body.vehicle.chargeStartAt, '2026-10-27T19:00:00.000Z');
+  });
+});
