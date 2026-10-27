@@ -2608,17 +2608,30 @@
     var p = function (n) { return String(n).padStart(2, '0'); };
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
+  var evccDepWeeklyPlan = [];
+  function renderEvccDepWeekly() {
+    var host = document.getElementById('evcc-dep-weekly');
+    if (!host || !window.DVhubEvWeekly) return;
+    var mode = (document.getElementById('evcc-dep-mode') || {}).value || 'percent';
+    window.DVhubEvWeekly.render(host, evccDepWeeklyPlan, {
+      unit: mode === 'kwh' ? 'kWh' : (mode === 'km' ? 'km' : '%'),
+      defaultTarget: (document.getElementById('evcc-dep-value') || {}).value,
+      defaultKm: (document.getElementById('evcc-dep-commute') || {}).value,
+      showKm: true,
+      onChange: function () { evccDepWeeklyPlan = window.DVhubEvWeekly.read(host); }
+    });
+  }
   function fillEvccDeparture(dep, capacityWh) {
     var el = function (id) { return document.getElementById(id); };
     if (el('evcc-dep-enabled')) el('evcc-dep-enabled').checked = !!dep.enabled;
-    if (el('evcc-dep-time')) el('evcc-dep-time').value = dep.time || '07:00';
     if (el('evcc-dep-capacity')) el('evcc-dep-capacity').value = capacityWh ? Math.round(capacityWh / 100) / 10 : 50;
-    var days = Array.isArray(dep.days) ? dep.days.map(Number) : [];
-    document.querySelectorAll('#evcc-dep-days input').forEach(function (cb) { cb.checked = days.indexOf(Number(cb.value)) >= 0; });
+    if (el('evcc-dep-commute')) el('evcc-dep-commute').value = dep.commuteKm != null ? dep.commuteKm : 0;
     if (el('evcc-dep-mode')) el('evcc-dep-mode').value = dep.targetMode || 'percent';
     if (el('evcc-dep-value')) el('evcc-dep-value').value = dep.targetValue != null ? dep.targetValue : 80;
     if (el('evcc-dep-consumption')) el('evcc-dep-consumption').value = dep.consumptionKwhPer100km != null ? dep.consumptionKwhPer100km : 18;
     if (el('evcc-dep-once')) el('evcc-dep-once').value = toLocalInput(dep.once);
+    if (el('evcc-dep-arr-once')) el('evcc-dep-arr-once').value = toLocalInput(dep.arrivalOnce);
+    evccDepWeeklyPlan = Array.isArray(dep.weeklyPlan) ? dep.weeklyPlan : [];
     syncEvccDepModeUi();
     renderEvccDepState(dep, capacityWh);
   }
@@ -2802,8 +2815,8 @@
     var mode = (document.getElementById('evcc-dep-mode') || {}).value || 'percent';
     var label = document.getElementById('evcc-dep-value-label');
     if (label) label.textContent = mode === 'kwh' ? 'kWh im Auto' : (mode === 'km' ? 'km Reichweite' : '% Ladestand');
-    var wrap = document.getElementById('evcc-dep-consumption-wrap');
-    if (wrap) wrap.hidden = mode !== 'km';
+    // Der Verbrauch zaehlt immer: er rechnet den Heimweg in Ladestand um.
+    renderEvccDepWeekly();
   }
   function renderEvccDepState(dep, capacityWh) {
     var box = document.getElementById('evcc-dep-state');
@@ -2819,10 +2832,35 @@
       lines.push('Nächste Abfahrt: ' + d.toLocaleString('de-DE', { timeZone: r.timeZone || 'Europe/Berlin', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
         + (r.source === 'once' ? ' (einmalig)' : ''));
     } else lines.push('Keine Abfahrt geplant' + (r.reason ? ' (' + r.reason + ')' : '') + '.');
+    if (r.arrivalAt) {
+      lines.push('Ankunft davor: ' + new Date(r.arrivalAt).toLocaleString('de-DE', { timeZone: r.timeZone || 'Europe/Berlin', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        + (r.arrivalSource === 'once' ? ' (einmalig)' : ''));
+    }
     if (r.targetSocPct != null) {
       var kwh = capacityWh ? Math.round(capacityWh * r.targetSocPct / 100 / 100) / 10 : null;
       lines.push('Ziel an EOS: ' + r.targetSocPct + ' %' + (kwh != null ? ' ≈ ' + String(kwh).replace('.', ',') + ' kWh' : ''));
     }
+    var a = dep.arrival || {};
+    if (a.expectedSocPct != null) {
+      lines.push((a.source === 'plugged' ? 'Ladestand jetzt (angesteckt): ' : 'Erwartet bei Ankunft: ') + a.expectedSocPct + ' %'
+        + (a.source === 'live' ? ' (live vom Fahrzeug' : (a.source === 'estimate' ? ' (geschätzt' : ''))
+        + (a.source !== 'plugged' && a.basePct != null ? ': ' + a.basePct + ' %' + (a.deductKm > 0 ? ' − ' + a.deductKm + ' km' : '') + ')' : (a.source === 'plugged' ? '' : ')')));
+    } else if (r.arrivalAt) {
+      lines.push('Ladestand bei Ankunft unbekannt — keine Quelle meldet das Fahrzeug (Einstellungen → EOS → E-Auto).');
+    }
+    if (r.arrivalAt) {
+      lines.push(dep.chargeStartSupported
+        ? 'EOS kennt den Ladestart — DVhub plant das Auto schon vor der Ankunft ein.'
+        : 'Vorplanung braucht EOS mit Ladestart — bis dahin plant EOS das Auto erst ab dem Anstecken.');
+    }
+    var src = dep.vehicleSources || {};
+    [['http', 'HTTP-Abruf'], ['homeassistant', 'Home Assistant']].forEach(function (k) {
+      var st = src[k[0]];
+      if (!st || !st.configured) return;
+      if (st.error) lines.push(k[1] + ': ' + st.error);
+      else if (st.socPct != null) lines.push(k[1] + ': ' + st.socPct + ' %' + (st.socAt ? ' (' + new Date(st.socAt).toLocaleString('de-DE', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) + ')' : '') + (st.plugged === true ? ', angesteckt' : (st.plugged === false ? ', nicht angesteckt' : '')));
+      else if (st.socStale) lines.push(k[1] + ': Wert zu alt');
+    });
     if (dep.deadlineSupported) box.className += ' is-ok';
     else {
       box.className += ' is-warn';
@@ -2832,15 +2870,16 @@
   }
   function evccDepartureBody() {
     var el = function (id) { return document.getElementById(id); };
-    var days = [];
-    document.querySelectorAll('#evcc-dep-days input').forEach(function (cb) { if (cb.checked) days.push(Number(cb.value)); });
     var onceRaw = (el('evcc-dep-once') && el('evcc-dep-once').value) || '';
+    var arrRaw = (el('evcc-dep-arr-once') && el('evcc-dep-arr-once').value) || '';
+    var host = el('evcc-dep-weekly');
     return {
       enabled: !!(el('evcc-dep-enabled') && el('evcc-dep-enabled').checked),
-      time: (el('evcc-dep-time') && el('evcc-dep-time').value) || '07:00',
-      days: days,
+      weeklyPlan: host && window.DVhubEvWeekly ? window.DVhubEvWeekly.read(host) : evccDepWeeklyPlan,
+      commuteKm: Number((el('evcc-dep-commute') && el('evcc-dep-commute').value) || 0),
       // datetime-local ist Ortszeit des Browsers → als ISO mit Zeitzone senden.
       once: onceRaw ? new Date(onceRaw).toISOString() : '',
+      arrivalOnce: arrRaw ? new Date(arrRaw).toISOString() : '',
       targetMode: (el('evcc-dep-mode') && el('evcc-dep-mode').value) || 'percent',
       targetValue: Number((el('evcc-dep-value') && el('evcc-dep-value').value) || 0),
       consumptionKwhPer100km: Number((el('evcc-dep-consumption') && el('evcc-dep-consumption').value) || 18)

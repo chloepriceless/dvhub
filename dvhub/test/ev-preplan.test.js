@@ -359,3 +359,22 @@ describe('Codex-Befunde Runde 2 (Minuten-Wache)', () => {
     assert.deepEqual(replans, []);
   });
 });
+
+describe('Ladestart-Faehigkeit: genau die Form von EOS feat/ev-available-from (244cf32)', () => {
+  it('GET /v1/config: "charge_start_datetime": null am angemeldeten Auto → erkannt', () => {
+    const cfg = EOS_CFG(false);
+    cfg.devices.electric_vehicles = { ev11: { device_id: 'ev11', min_soc_deadline_datetime: null, charge_start_datetime: null } };
+    assert.equal(detectEosCapabilities(cfg).evChargeStart, true);
+  });
+  it('noch kein Auto angemeldet (electric_vehicles leer): am Hausakku erkennbar (gleiches Modell)', () => {
+    const cfg = EOS_CFG(false);
+    cfg.devices.batteries.battery1.charge_start_datetime = null;
+    assert.equal(detectEosCapabilities(cfg).evChargeStart, true);
+  });
+  it('Zeitpunkte gehen immer MIT Zeitzone hinaus (ohne waere es EOS-Ortszeit)', () => {
+    const cfg = { schedule: { timezone: TZ }, optimizer: { evDepartureEnabled: true, evTargetMode: 'percent', evTargetValue: 80, evWeeklyPlan: planAround(Date.now(), 2 * HOUR, 10 * HOUR) } };
+    const [ev] = buildEosElectricVehicles(cfg, { supportsDeadline: true, supportsChargeStart: true, chargeStartAt: new Date(Date.now() + 2 * HOUR).toISOString() });
+    assert.match(ev.charge_start_datetime, /(Z|[+-]\d\d:\d\d)$/);
+    assert.match(ev.min_soc_deadline_datetime, /(Z|[+-]\d\d:\d\d)$/);
+  });
+});

@@ -1,0 +1,23 @@
+/* ev-weekly-editor.css -- Wochenplan-Editor E-Auto (ev-weekly-editor.js).
+   Leitstand-Kachel, Family-Panel und Integrationsseite. Passt bis 320 px. */
+.evw { display:flex; flex-direction:column; gap:4px; }
+.evw-head, .evw-row { display:grid; grid-template-columns:2.4em minmax(0,1fr) minmax(0,1.15fr) minmax(3.4em,4.2em); gap:4px; align-items:center; }
+.evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:2.4em minmax(0,1fr) minmax(0,1.15fr) minmax(3.4em,4.2em) minmax(3.4em,5em); }
+.evw-head { font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0; }
+.evw-day { font-family:var(--f-mono); font-size:11px; color:var(--text-2); }
+.evw-row input { width:100%; min-width:0; padding:3px 4px; font-size:12px; box-sizing:border-box; }
+.evw-row .evw-tgt, .evw-row .evw-km { text-align:right; }
+.evw-row.is-empty .evw-day { color:var(--text-dim); }
+.evw-depwrap { position:relative; display:flex; align-items:center; min-width:0; }
+.evw-next { position:absolute; right:2px; top:-7px; font-family:var(--f-mono); font-size:9px; color:var(--yellow); background:var(--bg-0); padding:0 2px; border-radius:3px; pointer-events:none; }
+.evw-tools { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
+.evw-hint { font-size:10.5px; color:var(--text-dim); margin:2px 0 0; line-height:1.35; }
+.evw-head span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Schmal (Telefon) mit Heimweg-Spalte: Ziel und Heimweg in einer zweiten Zeile
+   unter Ankunft/Abfahrt — die Uhrzeiten bleiben lesbar. Kopf bricht gleich um. */
+@media (max-width: 560px) {
+  .evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:2.4em minmax(0,1fr) minmax(0,1fr); row-gap:3px; }
+  .evw-with-km .evw-head span:nth-child(4), .evw-with-km .evw-row .evw-tgt { grid-column:2; }
+  .evw-with-km .evw-head span:nth-child(5), .evw-with-km .evw-row .evw-km { grid-column:3; }
+  .evw-with-km .evw-row { padding-bottom:4px; border-bottom:1px solid var(--hairline); }
+}

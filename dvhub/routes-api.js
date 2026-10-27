@@ -5574,6 +5574,17 @@ export function createApiRoutes(ctx) {
             targetValue: raw.optimizer?.evTargetValue ?? 80,
             consumptionKwhPer100km: raw.optimizer?.evConsumptionKwhPer100km ?? 18,
             resolved: resolveEvDeparture(getCfg()),
+            // Erwarteter Ladestand bei Ankunft (ev-arrival.js) und der Zustand
+            // der Abruf-Quellen (HTTP/Home Assistant, ohne Token) — damit man
+            // beim Einrichten sieht, ob der Ladestand ankommt.
+            arrival: (() => {
+              const a = resolveEvArrival(ctx, getCfg(), { plugged: resolveEvPlugged(ctx) });
+              return { at: a.arrivalAt, expectedSocPct: a.pct, source: a.source, basePct: a.basePct, baseSource: a.baseSource, baseAt: a.baseAt, legs: a.legs, deductKm: a.deductKm };
+            })(),
+            vehicleSources: Object.fromEntries(['http', 'homeassistant'].map((k) => {
+              const st = ctx.vehiclePull?.getState?.(k) || { configured: false };
+              return [k, { configured: st.configured === true, socPct: st.socPct ?? null, socAt: st.socAt ?? null, socStale: st.socStale === true, plugged: st.plugged ?? null, error: st.error || null, warning: st.warning || null }];
+            })),
             deadlineSupported: ctx.state?.optimizer?.eos?.supported === true,
             chargeStartSupported: ctx.state?.optimizer?.eos?.evChargeStart === true,
             eosFlavor: ctx.state?.optimizer?.eos?.flavor || null

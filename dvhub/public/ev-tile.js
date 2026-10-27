@@ -1,16 +1,19 @@
 // ev-tile.js -- Leitstand-Kachel "E-Auto": plant das Auto bei EOS mit (an/aus),
-// Abfahrt (Uhrzeit + Wochentage) und Ziel bei Abfahrt, dazu der EOS-Ladeplan
-// bis zur Abfahrt als Mini-Zeitleiste. Daten: GET /api/ev, Speichern: POST
-// /api/ev (fasst nur optimizer.eosOptimizeEv + die Abfahrtsfelder an).
+// Wochenplan (Ankunft + Abfahrt je Tag, ev-weekly-editor.js), Ziel bei
+// Abfahrt, das naechste Fenster mit dem erwarteten Ladestand bei Ankunft und
+// der EOS-Ladeplan im Fenster als Mini-Zeitleiste. Daten: GET /api/ev,
+// Speichern: POST /api/ev (fasst nur optimizer.eosOptimizeEv + die
+// Abfahrtsfelder an). Markenneutral — der Ladestand kommt aus der Quelle, die
+// unter Einstellungen gewaehlt ist.
 (function () {
   'use strict';
 
-  const DAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
   const UNITS = { percent: '%', kwh: 'kWh', km: 'km' };
   const POLL_MS = 60000;
 
   let data = null;      // letzte Antwort von GET /api/ev
-  let draft = null;     // Bearbeitungsstand { enabled, time, days[], targetValue }
+  let draft = null;     // Bearbeitungsstand { enabled, weeklyPlan[], targetValue, commuteKm, arrivalOnce, once }
+  let weekOpen = false; // Wochenplan-Editor aufgeklappt
   let dirty = false;
   let timer = null;
   let boostTouched = false;  // kW-Feld von Hand geändert — Takt überschreibt es nicht
@@ -26,6 +29,7 @@
     "  </div>",
     "  <div class=\"rail-big card-value value-ev\"><span id=\"evSocNow\">&mdash;</span><span class=\"ev-soc-arrow\">&rarr;</span><span id=\"evSocTarget\">&mdash;</span></div>",
     "  <div class=\"ev-state\" id=\"evState\">&mdash;</div>",
+    "  <div class=\"ev-window\" id=\"evWindow\" hidden>&mdash;</div>",
     "  <div class=\"ev-boost\" id=\"evBoost\" hidden title=\"Jetzt laden, egal was EOS plant &mdash; auch wenn EOS nicht l&auml;uft. Endet zur gew&auml;hlten Zeit, beim Abstecken oder mit Beenden; danach gilt wieder der EOS-Plan.\">",
     "    <div class=\"ev-boost-idle\" id=\"evBoostIdle\">",
     "      <span class=\"l\">Sofort laden</span>",
@@ -52,14 +56,21 @@
     "    <span class=\"l\">Nur angesteckt planen</span>",
     "    <span class=\"switch switch-sm\"><input type=\"checkbox\" id=\"evOnlyPlugged\" aria-label=\"Nur angesteckt planen\"><span class=\"track\"></span><span class=\"thumb\"></span></span>",
     "  </div>",
-    "  <div class=\"rail-row ev-edit-row\">",
-    "    <span class=\"l\">Abfahrt</span>",
+    "  <div class=\"rail-row ev-edit-row\" title=\"Je Wochentag Ankunft (Anstecken), Abfahrt und Ziel. Mit Ankunft kann EOS das Laden schon vorher einplanen, wenn EOS einen Ladestart kennt.\">",
+    "    <span class=\"l\">Wochenplan</span>",
     "    <span class=\"ev-inline\">",
-    "      <span class=\"switch switch-sm\"><input type=\"checkbox\" id=\"evDepEnabled\" aria-label=\"Abfahrtszeit ber&uuml;cksichtigen\"><span class=\"track\"></span><span class=\"thumb\"></span></span>",
-    "      <input type=\"time\" class=\"input mono ev-time\" id=\"evDepTime\" step=\"300\" aria-label=\"Abfahrt um\">",
+    "      <span class=\"switch switch-sm\"><input type=\"checkbox\" id=\"evDepEnabled\" aria-label=\"Wochenplan ber&uuml;cksichtigen\"><span class=\"track\"></span><span class=\"thumb\"></span></span>",
+    "      <button type=\"button\" class=\"btn sm ghost\" id=\"evWeekToggle\" aria-expanded=\"false\" aria-controls=\"evWeekly\">Bearbeiten</button>",
     "    </span>",
     "  </div>",
-    "  <div class=\"ev-days\" id=\"evDays\" role=\"group\" aria-label=\"Wochentage\"></div>",
+    "  <div class=\"ev-weekly\" id=\"evWeekly\" hidden>",
+    "    <div id=\"evWeeklyGrid\"></div>",
+    "    <div class=\"ev-weekly-extra\">",
+    "      <label class=\"ev-field\"><span>Heimweg (km)</span><input type=\"number\" class=\"input mono\" id=\"evCommuteKm\" min=\"0\" max=\"1000\" step=\"1\" title=\"So weit f&auml;hrt das Auto noch, bevor es ansteckt &mdash; davon h&auml;ngt der erwartete Ladestand bei Ankunft ab.\"></label>",
+    "      <label class=\"ev-field\"><span>Nur n&auml;chste Ankunft</span><input type=\"datetime-local\" class=\"input mono\" id=\"evArrOnce\"></label>",
+    "      <label class=\"ev-field\"><span>Nur n&auml;chste Abfahrt</span><input type=\"datetime-local\" class=\"input mono\" id=\"evDepOnce\"></label>",
+    "    </div>",
+    "  </div>",
     "  <div class=\"rail-row ev-edit-row\">",
     "    <span class=\"l\">Ziel bei Abfahrt</span>",
     "    <span class=\"ev-inline\">",
@@ -94,6 +105,25 @@
     const d = new Date(iso);
     return d.toLocaleDateString('de-DE', { timeZone: tz(), weekday: 'short' }) + ' ' + fmtTime(iso);
   }
+  // „heute 20:00“, „morgen 05:00“, sonst „Sa 09:00“ — in DVhubs Zeitzone.
+  function fmtRelDay(iso) {
+    const opts = { timeZone: tz(), year: 'numeric', month: '2-digit', day: '2-digit' };
+    const day = new Date(iso).toLocaleDateString('de-DE', opts);
+    const now = Date.now();
+    if (day === new Date(now).toLocaleDateString('de-DE', opts)) return 'heute ' + fmtTime(iso);
+    if (day === new Date(now + 86400000).toLocaleDateString('de-DE', opts)) return 'morgen ' + fmtTime(iso);
+    return fmtDayTime(iso);
+  }
+  // datetime-local (Ortszeit des Browsers) <-> ISO
+  function toLocalInput(iso) {
+    const d = new Date(iso || '');
+    if (!iso || isNaN(d)) return '';
+    const p = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function fromLocalInput(v) { return v ? new Date(v).toISOString() : ''; }
+  const SOURCE_NAMES = { teslamate: 'TeslaMate', evcc: 'evcc', evccvehicle: 'Fahrzeugtreiber', mqtt: 'MQTT', http: 'HTTP-Abruf', homeassistant: 'Home Assistant' };
+  function sourceName(src) { return SOURCE_NAMES[src] || (src ? 'Wallbox' : '—'); }
   function fmtKw(w) { return (w / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' kW'; }
   function fmtNum(v, digits) { return Number(v).toLocaleString('de-DE', { maximumFractionDigits: digits || 0 }); }
 
@@ -109,9 +139,11 @@
     const d = data.departure || {};
     return {
       enabled: d.enabled === true,
-      time: d.time || '07:00',
-      days: Array.isArray(d.days) ? d.days.slice() : [1, 2, 3, 4, 5],
-      targetValue: d.targetValue
+      weeklyPlan: Array.isArray(d.weeklyPlan) ? d.weeklyPlan : [],
+      targetValue: d.targetValue,
+      commuteKm: d.commuteKm != null ? d.commuteKm : 0,
+      arrivalOnce: d.arrivalOnce || '',
+      once: d.once || ''
     };
   }
 
@@ -196,6 +228,16 @@
     const nowMs = Date.now();
     if (nowMs >= v0 && nowMs <= v1) parts.push('<line class="ev-now" x1="' + x(nowMs).toFixed(1) + '" y1="0" x2="' + x(nowMs).toFixed(1) + '" y2="' + H + '"><title>jetzt</title></line>');
     const depMs = res && res.departureAt ? Date.parse(res.departureAt) : NaN;
+    const arrMs = res && res.arrivalAt ? Date.parse(res.arrivalAt) : NaN;
+    // Das Fenster Ankunft → Abfahrt hinterlegt; davor steht das Auto nicht da.
+    if (isFinite(depMs) && depMs > v0) {
+      const wx0 = Math.max(0, x(isFinite(arrMs) ? arrMs : v0));
+      const wx1 = Math.min(W, x(depMs));
+      if (wx1 > wx0) parts.unshift('<rect class="ev-win" x="' + wx0.toFixed(1) + '" y="0" width="' + (wx1 - wx0).toFixed(1) + '" height="' + H + '"/>');
+    }
+    if (isFinite(arrMs) && arrMs >= v0 && arrMs <= v1) {
+      parts.push('<line class="ev-arr" x1="' + x(arrMs).toFixed(1) + '" y1="0" x2="' + x(arrMs).toFixed(1) + '" y2="' + H + '"><title>Ankunft ' + esc(fmtDayTime(res.arrivalAt)) + '</title></line>');
+    }
     if (isFinite(depMs) && depMs >= v0 && depMs <= v1) {
       parts.push('<line class="ev-dep" x1="' + x(depMs).toFixed(1) + '" y1="0" x2="' + x(depMs).toFixed(1) + '" y2="' + H + '"><title>Abfahrt ' + esc(fmtDayTime(res.departureAt)) + '</title></line>');
     }
@@ -286,6 +328,15 @@
     const res = data.departure && data.departure.resolved;
     if (!data.optimizeEv) { out.textContent = 'EOS plant das Auto nicht'; out.classList.add('dim'); return; }
     if (data.vehicle && data.vehicle.registered === false) {
+      if (data.vehicle.preplanBlocked) {
+        // Ankunft steht an, aber vorplanen geht (noch) nicht.
+        out.textContent = data.vehicle.preplanBlocked;
+        out.title = data.departure && data.departure.chargeStartSupported === false
+          ? 'Dieses EOS kennt keinen fr\u00fchesten Ladestart \u2014 es w\u00fcrde schon Ladung einplanen, bevor das Auto da ist. DVhub meldet das Auto deshalb erst beim Anstecken an.'
+          : 'Ohne erwarteten Ladestand kann EOS nicht vorplanen \u2014 eine Quelle, die das Fahrzeug auch unterwegs meldet, oder ein letzter bekannter Wert fehlt.';
+        out.classList.add('warn');
+        return;
+      }
       if (data.onlyWhenPlugged && data.vehicle.plugged !== true) {
         // Gewollt: ohne Auto an der Wallbox plant EOS ohne Auto.
         out.textContent = 'wartet aufs Anstecken';
@@ -310,6 +361,7 @@
         out.classList.add('warn');
       }
     }
+    if (data.vehicle && data.vehicle.registrationMode === 'preplan') parts.push('vorgeplant' + (data.vehicle.chargeStartAt ? ' ab ' + fmtTime(data.vehicle.chargeStartAt) : ''));
     out.textContent = parts.join(' · ');
     const w = (plan.windows || []).map(function (x) { return fmtTime(x.start) + '–' + fmtTime(x.end) + ' ' + fmtKw(x.maxW) + ' (' + fmtNum(x.kwh, 1) + ' kWh)'; });
     out.title = w.length ? 'Ladefenster bis zur Abfahrt:\n' + w.join('\n') : 'Bis zur Abfahrt plant EOS keine Ladung.';
@@ -321,28 +373,68 @@
     const parts = [];
     if (v.connected === true) parts.push(v.charging ? ('lädt' + (v.chargePowerW ? ' mit ' + fmtKw(v.chargePowerW) : '')) : 'angesteckt');
     else if (v.connected === false) parts.push('nicht angesteckt');
-    const res = data.departure && data.departure.resolved;
-    if (res && res.departureAt) parts.push('Abfahrt ' + fmtDayTime(res.departureAt) + (res.source === 'once' ? ' (einmalig)' : ''));
-    else if (data.departure && data.departure.enabled === false) parts.push('ohne Abfahrtszeit');
+    if (data.departure && data.departure.enabled === false) parts.push('ohne Wochenplan');
     if (data.departure && data.departure.enabled && data.departure.deadlineSupported === false) parts.push('EOS kennt die Uhrzeit erst ab 0.4');
     st.textContent = parts.join(' · ') || '—';
     st.classList.toggle('is-charging', v.charging === true);
   }
 
+  // Naechstes Fenster: „Ankunft heute 20:00 · Abfahrt morgen 05:00 · Ziel 80 %
+  // · erwartet bei Ankunft 42 % (geschätzt)“.
+  function renderWindow() {
+    const box = el('evWindow');
+    if (!box) return;
+    const res = data.departure && data.departure.resolved;
+    if (!res || !res.enabled || !res.departureAt) { box.hidden = true; return; }
+    const a = data.arrival || {};
+    const parts = [];
+    if (res.arrivalAt) parts.push('Ankunft ' + fmtRelDay(res.arrivalAt) + (res.arrivalSource === 'once' ? ' (einmalig)' : ''));
+    parts.push('Abfahrt ' + fmtRelDay(res.departureAt) + (res.source === 'once' ? ' (einmalig)' : ''));
+    if (res.targetSocPct != null) parts.push('Ziel ' + res.targetSocPct + ' %');
+    let title = '';
+    if (a.expectedSocPct != null) {
+      const how = a.source === 'plugged' ? 'angesteckt' : (a.source === 'live' ? 'live vom Fahrzeug' : 'geschätzt');
+      parts.push((a.source === 'plugged' ? 'jetzt ' : 'erwartet bei Ankunft ') + a.expectedSocPct + ' % (' + how + ')');
+      if (a.source !== 'plugged' && a.basePct != null) {
+        title = 'Basis: ' + fmtNum(a.basePct) + ' % von ' + sourceName(a.baseSource) + (a.baseAt ? ', ' + fmtDayTime(a.baseAt) : '')
+          + (a.deductKm > 0 ? ' − ' + (a.legs === 2 ? 'Hin- und Rückweg 2 × ' + fmtNum(a.commuteKm) : 'Heimweg ' + fmtNum(a.commuteKm)) + ' km' : '');
+      }
+    } else if (res.arrivalAt && data.vehicle && data.vehicle.plugged !== true) {
+      parts.push('Ladestand bei Ankunft unbekannt');
+      title = 'Keine Quelle meldet den Ladestand des Fahrzeugs, und es ist kein letzter Wert bekannt.';
+    }
+    // Fenster kürzer als eine Viertelstunde: EOS kann darin nicht laden.
+    const arrMs = res.arrivalAt ? Date.parse(res.arrivalAt) : NaN;
+    const short = isFinite(arrMs) && Date.parse(res.departureAt) - Math.max(arrMs, Date.now()) < 15 * 60000;
+    if (short) parts.push('Fenster zu kurz zum Laden');
+    let hint = '';
+    if (data.vehicle && data.vehicle.registrationMode === 'preplan') hint = 'EOS plant ab Ankunft vor';
+    else if (data.vehicle && data.vehicle.preplanBlocked) hint = data.vehicle.preplanBlocked;
+    box.textContent = parts.join(' · ') + (hint ? ' · ' + hint : '');
+    box.title = title;
+    box.classList.toggle('is-warn', short || (!!data.vehicle && !!data.vehicle.preplanBlocked));
+    box.hidden = false;
+  }
+
   function renderForm() {
     const mode = (data.departure && data.departure.targetMode) || 'percent';
     el('evDepEnabled').checked = !!draft.enabled;
-    el('evDepTime').value = draft.time;
-    el('evDepTime').disabled = !draft.enabled;
     el('evTarget').value = draft.targetValue != null ? draft.targetValue : '';
     el('evTarget').max = mode === 'percent' ? 100 : 2000;
     el('evTarget').step = mode === 'percent' ? 5 : 1;
     el('evTargetUnit').textContent = UNITS[mode] || '%';
-    el('evDays').innerHTML = DAY_LABELS.map(function (lbl, i) {
-      const day = i + 1;
-      const on = draft.days.indexOf(day) >= 0;
-      return '<button type="button" class="ev-day" data-day="' + day + '" aria-pressed="' + on + '"' + (draft.enabled ? '' : ' disabled') + '>' + lbl + '</button>';
-    }).join('');
+    el('evCommuteKm').value = draft.commuteKm != null ? draft.commuteKm : '';
+    el('evArrOnce').value = toLocalInput(draft.arrivalOnce);
+    el('evDepOnce').value = toLocalInput(draft.once);
+    el('evWeekly').hidden = !weekOpen;
+    el('evWeekToggle').setAttribute('aria-expanded', String(weekOpen));
+    el('evWeekToggle').textContent = weekOpen ? 'Zuklappen' : 'Bearbeiten';
+    if (window.DVhubEvWeekly) {
+      window.DVhubEvWeekly.render(el('evWeeklyGrid'), draft.weeklyPlan, {
+        unit: UNITS[mode] || '%', defaultTarget: draft.targetValue, showKm: false,
+        onChange: function () { setDirty(true); }
+      });
+    }
   }
 
   // „Sofort laden“: laden mit X kW, egal was EOS plant (POST/DELETE /api/ev/override).
@@ -463,6 +555,7 @@
     el('evSocTarget').textContent = tgt;
     el('evSocNow').title = v.socSource ? 'Quelle: ' + v.socSource + (v.rangeKm > 0 ? ' · ' + v.rangeKm + ' km' : '') : '';
     renderState();
+    renderWindow();
     renderBoost();
     renderTimeline();
     renderSteps();
@@ -522,9 +615,16 @@
     const mode = (data.departure && data.departure.targetMode) || 'percent';
     const tv = Number(el('evTarget').value);
     if (!isFinite(tv) || tv < 0 || (mode === 'percent' && tv > 100)) { msg('Ziel: ' + (mode === 'percent' ? '0–100 %' : 'Zahl ≥ 0'), true); return; }
-    if (draft.enabled && !draft.days.length) { msg('Mindestens einen Wochentag wählen.', true); return; }
-    const ok = await post({ departure: { enabled: draft.enabled, time: el('evDepTime').value || draft.time, days: draft.days, targetValue: tv } },
-      'Übernommen — EOS rechnet mit der neuen Abfahrt.');
+    const plan = window.DVhubEvWeekly ? window.DVhubEvWeekly.read(el('evWeeklyGrid')) : draft.weeklyPlan;
+    const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(plan) : null;
+    if (err) { msg(err, true); return; }
+    if (draft.enabled && !plan.some(function (e) { return e.departure; })) { msg('Mindestens eine Abfahrt eintragen.', true); return; }
+    const km = el('evCommuteKm').value === '' ? 0 : Number(el('evCommuteKm').value);
+    if (!isFinite(km) || km < 0 || km > 1000) { msg('Heimweg: 0–1000 km', true); return; }
+    const ok = await post({ departure: {
+      enabled: draft.enabled, weeklyPlan: plan, targetValue: tv, commuteKm: km,
+      arrivalOnce: fromLocalInput(el('evArrOnce').value), once: fromLocalInput(el('evDepOnce').value)
+    } }, 'Übernommen — EOS rechnet mit dem neuen Wochenplan.');
     if (ok) { setDirty(false); load(); }
   }
 
@@ -534,25 +634,22 @@
     if (!data) return;
     if (e.target.id === 'evOptimize') { toggleOptimize(e.target.checked); return; }
     if (e.target.id === 'evOnlyPlugged') { toggleOnlyPlugged(e.target.checked); return; }
-    if (e.target.id === 'evDepEnabled') { draft.enabled = e.target.checked; renderForm(); setDirty(true); return; }
-    if (e.target.id === 'evDepTime') { draft.time = e.target.value; setDirty(true); return; }
-    if (e.target.id === 'evTarget') { draft.targetValue = e.target.value; setDirty(true); }
+    if (e.target.id === 'evDepEnabled') { draft.enabled = e.target.checked; setDirty(true); return; }
+    if (e.target.id === 'evTarget') { draft.targetValue = e.target.value; setDirty(true); return; }
+    if (e.target.id === 'evCommuteKm' || e.target.id === 'evArrOnce' || e.target.id === 'evDepOnce') setDirty(true);
   });
   document.addEventListener('input', function (e) {
     if (!data) return;
-    if (e.target.id === 'evTarget' || e.target.id === 'evDepTime') setDirty(true);
+    if (e.target.id === 'evTarget' || e.target.id === 'evCommuteKm') setDirty(true);
     if (e.target.id === 'evBoostKw') boostTouched = true;
   });
   document.addEventListener('click', function (e) {
     if (!data) return;
-    const dayBtn = e.target.closest && e.target.closest('.ev-day');
-    if (dayBtn && !dayBtn.disabled) {
-      const day = Number(dayBtn.getAttribute('data-day'));
-      const i = draft.days.indexOf(day);
-      if (i >= 0) draft.days.splice(i, 1); else draft.days.push(day);
-      draft.days.sort();
-      dayBtn.setAttribute('aria-pressed', String(i < 0));
-      setDirty(true);
+    if (e.target.id === 'evWeekToggle') {
+      weekOpen = !weekOpen;
+      el('evWeekly').hidden = !weekOpen;
+      e.target.setAttribute('aria-expanded', String(weekOpen));
+      e.target.textContent = weekOpen ? 'Zuklappen' : 'Bearbeiten';
       return;
     }
     if (e.target.id === 'evStepsToggle') { stepsOpen = !stepsOpen; renderSteps(); return; }

@@ -309,3 +309,21 @@ describe('GET /api/ev ohne evcc', () => {
     assert.equal(r.body.vehicle.source, 'homeassistant');
   });
 });
+
+describe('GET /api/integrations/evcc: Wochenplan-Zustand für die Schublade', () => {
+  it('liefert erwarteten Ladestand und den Zustand von HTTP/Home Assistant — ohne Token', async () => {
+    const ctx = makeCtx();
+    ctx.evccIntegration = { getStatus: () => ({}), getLoadpoints: () => [] };
+    ctx.vehiclePull = { getState: (k) => (k === 'http'
+      ? { configured: true, socPct: null, socAt: null, socStale: false, plugged: null, error: 'Pfad „data.soc“ nicht in der Antwort gefunden' }
+      : { configured: false, socPct: null, plugged: null }) };
+    ctx.getRawCfg().optimizer.evHttpToken = 'geheim';
+    const r = await call(ctx, 'GET', '/api/integrations/evcc');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const dep = r.body.eos.departure;
+    assert.ok('arrival' in dep);
+    assert.equal(dep.vehicleSources.http.error, 'Pfad „data.soc“ nicht in der Antwort gefunden');
+    assert.equal(dep.vehicleSources.homeassistant.configured, false);
+    assert.doesNotMatch(JSON.stringify(r.body), /geheim/);
+  });
+});
