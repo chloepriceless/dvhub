@@ -582,9 +582,14 @@ test('Umstellung: Commit des Pakets älter als der Checkout → nicht ohne --for
     assert.equal(g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'neuer').status, 0);
     r.publish({ version: '1.0.1' });
     let res = await r.run('migrate');
-    assert.equal(res.code, 3, JSON.stringify(r.status()));
+    assert.equal(res.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.status().state, 'skipped');
+    assert.equal(r.status().reason, 'package_older');
     assert.match(r.status().message, /älter/);
     assert.equal(r.current(), null);
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migrate.attempts || 0, 0, 'Warten ist kein Fehlversuch');
+    assert.match((await r.run('boot-hook')).out, /nächste Prüfung in 6 h/);
     res = await r.run('migrate', '--force');
     assert.equal(res.code, 0, JSON.stringify(r.status()));
   } finally { r.close(); }
@@ -622,8 +627,23 @@ test('Umstellung: Stromausfall mitten im Verschieben → recover stellt den git-
     assert.deepEqual(g('ls-files').split('\n').sort(), before);
     assert.equal(g('status', '--porcelain', '--untracked-files=no'), '');
     assert.ok(!fs.existsSync(path.join(r.root, 'dvhub.service.d', '05-dvhub-release-recover.conf')), 'Notfall-Drop-in weg');
-    assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).migration, null);
+    const after = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(after.migration, null);
+    assert.equal(after.history.at(-1).version, '1.0.1');
+    assert.equal(after.history.at(-1).result, 'migration_interrupted');
   } finally { r.close(); }
+});
+
+test('Notfall-Drop-in: recover läuft VOR post-update.sh (Liste zurückgesetzt)', () => {
+  const unit = '[Service]\nWorkingDirectory=/opt/dvhub/dvhub\nExecStartPre=-+/usr/bin/bash /opt/dvhub/post-update.sh\nExecStart=/usr/bin/node /opt/dvhub/dvhub/server.js\n';
+  const c = H.dropinContent({ installDir: '/opt/dvhub', self: '/usr/local/libexec/dvhub-release' }, unit);
+  const lines = c.split('\n').filter((l) => l.startsWith('ExecStartPre=') || l.startsWith('WorkingDirectory='));
+  assert.deepEqual(lines, [
+    'WorkingDirectory=-/opt/dvhub/dvhub',
+    'ExecStartPre=',
+    'ExecStartPre=-+/usr/local/libexec/dvhub-release recover',
+    'ExecStartPre=-+/usr/bin/bash /opt/dvhub/post-update.sh',
+  ]);
 });
 
 test('Umstellung: während des Verschiebens sichert ein Drop-in den Start ab, danach ist es weg', { timeout: 60000 }, async () => {

@@ -944,11 +944,18 @@ function writeFileAtomic(file, data) {
 // fehlenden Arbeitsordner — recover stellt den git-Stand her, bevor ExecStart
 // den Pfad braucht.
 const DROPIN_NAME = '05-dvhub-release-recover.conf';
+// Drop-ins hängen ExecStartPre= hinten an. Darum erst die Liste leeren, dann
+// recover, dann die Vorläufe der Unit — sonst liefe post-update.sh noch auf dem
+// halb verschobenen Stand (Gegenprüfung 68409be5).
+function dropinContent(s, unitText) {
+  const pre = String(unitText).split('\n').filter((l) => /^ExecStartPre=./.test(l));
+  return ['# Von dvhub-release während der Umstellung git → Paket angelegt; danach wieder entfernt.', '[Service]',
+    `WorkingDirectory=-${s.installDir}/dvhub`, 'ExecStartPre=', `ExecStartPre=-+${s.self} recover`, ...pre, ''].join('\n');
+}
 function writeDropin(s, job) {
   if (!s.dropinDir) return;
   fs.mkdirSync(s.dropinDir, { recursive: true, mode: 0o755 });
-  writeFileAtomic(path.join(s.dropinDir, DROPIN_NAME),
-    `# Von dvhub-release während der Umstellung git → Paket angelegt; danach wieder entfernt.\n[Service]\nWorkingDirectory=-${s.installDir}/dvhub\nExecStartPre=-+${s.self} recover\n`);
+  writeFileAtomic(path.join(s.dropinDir, DROPIN_NAME), dropinContent(s, fs.readFileSync(s.unitFile, 'utf8')));
   systemctl(s, 'daemon-reload');
   job.log('Notfall-Drop-in für die Unit angelegt');
 }
@@ -972,26 +979,34 @@ async function jobMigrate(s, job, { force }) {
     job.finish('skipped', `Umstellung nicht ausgeführt: ${chk.reason}${chk.origin ? ` (${chk.origin})` : ''}`, { result: 'skipped', reason: chk.reason });
     return;
   }
-  st.migrate.attempts += 1;
-  st.migrate.last_attempt = Math.floor(Date.now() / 1000);
-  delete st.migrate.skipped;
-  saveState(s, st);
   const gitSha = (git(s, 'rev-parse', 'HEAD').stdout || '').trim();
   job.log(`git-Stand ${chk.gitVersion} (${gitSha.slice(0, 7)}), Kanal ${chk.channel}`);
   job.phase('index', `Kanal-Index ${chk.channel} laden`);
   const index = await fetchIndex(s, chk.channel);
   const target = index.idx.latest;
-  if (!force && chk.gitVersion && baseVersion(target) && compareVersions(baseVersion(target), baseVersion(chk.gitVersion)) < 0) {
-    throw new Exit(3, `Paket ${target} ist älter als der git-Stand ${chk.gitVersion}`);
-  }
+  // Älteres Paket als der Checkout: warten, nicht zurücknehmen — und kein
+  // Fehlversuch (sonst gäbe die Box nach fünf Tagen auf; Gegenprüfung 68409be5).
   // Gleiche package.json-Version heißt nicht gleicher Stand (dev: main ist
-  // weiter als das letzte Paket). Commit-Zeit des Pakets gegen den Checkout
-  // (Gegenprüfung 67ade305) — sonst nähme die Umstellung ein Update zurück.
+  // weiter als das letzte Paket) — darum auch die Commit-Zeit (67ade305).
   const headTime = Number((git(s, 'log', '-1', '--format=%ct', 'HEAD').stdout || '').trim());
   const relDate = Date.parse(index.idx.releases.find((r) => r.version === target)?.date || '') / 1000;
-  if (!force && Number.isFinite(headTime) && headTime > 0 && Number.isFinite(relDate) && relDate < headTime) {
-    throw new Exit(3, `Paket ${target} (Stand ${new Date(relDate * 1000).toISOString()}) ist älter als der git-Checkout (${new Date(headTime * 1000).toISOString()}) — Umstellung wartet auf ein neueres Paket`);
+  let older = '';
+  if (chk.gitVersion && baseVersion(target) && compareVersions(baseVersion(target), baseVersion(chk.gitVersion)) < 0) {
+    older = `Paket ${target} ist älter als der git-Stand ${chk.gitVersion}`;
+  } else if (Number.isFinite(headTime) && headTime > 0 && Number.isFinite(relDate) && relDate < headTime) {
+    older = `Paket ${target} (Stand ${new Date(relDate * 1000).toISOString()}) ist älter als der git-Checkout (${new Date(headTime * 1000).toISOString()})`;
   }
+  if (older && !force) {
+    st.migrate.skipped = 'package_older';
+    st.migrate.last_check = Math.floor(Date.now() / 1000);
+    saveState(s, st);
+    job.finish('skipped', `${older} — Umstellung wartet auf ein neueres Paket`, { result: 'skipped', reason: 'package_older' });
+    return;
+  }
+  st.migrate.attempts += 1;
+  st.migrate.last_attempt = Math.floor(Date.now() / 1000);
+  delete st.migrate.skipped;
+  saveState(s, st);
   const { manifest } = await fetchAndUnpack(s, job, { channel: chk.channel, version: target, index });
   const version = manifest.version;
 
@@ -1237,6 +1252,7 @@ function bootHook(s) {
   const now = Math.floor(Date.now() / 1000);
   if ((m.attempts || 0) >= MIGRATE_MAX_ATTEMPTS) { s.write('dvhub-release: Umstellung nach 5 Fehlversuchen nur noch von Hand (dvhub-release migrate)\n'); return 0; }
   if (m.last_attempt && now - m.last_attempt < MIGRATE_RETRY_S) { s.write('dvhub-release: nächster Umstellungsversuch nach 24 h\n'); return 0; }
+  if (m.skipped === 'package_older' && m.last_check && now - m.last_check < 6 * 3600) { s.write('dvhub-release: Paket älter als der Checkout — nächste Prüfung in 6 h\n'); return 0; }
   spawnJob(s, MIGRATE_UNIT, ['migrate'], { delayS: s.migrateDelayS });
   s.write(`dvhub-release: Umstellung auf Pakete in ${s.migrateDelayS} s geplant\n`);
   return 0;
@@ -1249,8 +1265,9 @@ function recover(s) {
   const log = { log: (l) => s.write(`dvhub-release recover: ${l}\n`) };
   if (lockHeld(s)) return 0;
   if (st.migration && st.migration.phase === 'moving') {
+    const version = st.migration.version || '-';
     revertMigration(s, st, log);
-    record(st, st.migration?.version || '-', 'migration_interrupted');
+    record(st, version, 'migration_interrupted');
     saveState(s, st);
     log.log('abgebrochene Umstellung zurückgenommen — git-Stand wiederhergestellt');
     return 0;
@@ -1278,7 +1295,7 @@ async function runJob(s, a) {
 
 module.exports = {
   parseArgs, compareVersions, parseVersion, satisfiesEngine, versionFromLabel, debArch, readConf, settings,
-  validateIndex, verifyTree, reconcileLinks, switchCurrent, currentVersion, rewriteUnit, migrationCheck,
+  validateIndex, verifyTree, reconcileLinks, dropinContent, switchCurrent, currentVersion, rewriteUnit, migrationCheck,
   OFFICIAL_REPO_RE, main, Exit, trustedKeyCount, verifySignature, download, unpack, readStatus, actionCheck,
 };
 

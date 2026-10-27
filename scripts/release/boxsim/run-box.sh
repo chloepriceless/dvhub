@@ -10,7 +10,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 R="${R:-$HOME/Projects/release-tests}"
 TAG="$1"; CH="$2"; OUT="$3"; shift 3
-NEG=0; PLATFORM=""; IMAGE="dvhub-boxsim:bookworm-1"; ARCH=arm64
+NEG=0; PLATFORM=""; IMAGE="dvhub-boxsim:bookworm-2"; ARCH=arm64
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --negative) NEG=1; shift ;;

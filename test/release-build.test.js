@@ -306,7 +306,7 @@ test('build-release.sh: Schlüsselrechte mit GNU-stat (Linux/CI) richtig gelesen
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'stat'), `#!/bin/sh
 if [ "$1" = "-f" ]; then echo "  File: \\"$3\\""; echo "    ID: 0 Namelen: 255 Type: apfs"; echo "stat: cannot read file system information for '$2'" >&2; exit 1; fi
-if [ "$1" = "-c" ]; then /usr/bin/stat -f '%Lp' "$3" 2>/dev/null || /usr/bin/stat -c '%a' "$3"; exit 0; fi
+if [ "$1" = "-c" ]; then node -e 'process.stdout.write((require("fs").statSync(process.argv[1]).mode & 0o777).toString(8) + "\\n")' "$3"; exit 0; fi
 exit 2
 `, { mode: 0o755 });
     const r = spawnSync('bash', [BUILD, 'v1.2.3', '--key', key, '--repo', dir, '--out', path.join(work, 'o'), '--arch', 'arm64', '--no-eebus'], {
