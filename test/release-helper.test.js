@@ -639,6 +639,34 @@ test('Umstellung: während des Verschiebens sichert ein Drop-in den Start ab, da
   } finally { r.close(); }
 });
 
+test('Absturzschleife der neuen Version: Rückweg ohne die volle Wartezeit', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1' });
+    r.bad.add('1.0.1');
+    // systemd zählt Neustarts der Unit hoch, solange 1.0.1 abstürzt.
+    const n = path.join(r.root, 'nrestarts');
+    fs.writeFileSync(n, '0');
+    fs.writeFileSync(path.join(r.root, 'bin', 'systemctl'), `#!/bin/sh
+echo "$*" >> '${r.sysLog}'
+case "$*" in
+  *"is-active --quiet dvhub.service"*) exit 0;;
+  is-active*) exit 3;;
+  *"show -p NRestarts --value dvhub.service"*) c=$(cat '${n}'); if readlink '${r.box}/current' | grep -q 1.0.1; then c=$((c+1)); echo $c > '${n}'; fi; echo $c; exit 0;;
+esac
+exit 0
+`, { mode: 0o755 });
+    const env = { ...r.settings() };
+    const t0 = Date.now();
+    const res = await H.main(['install', 'latest', 'stable'], { ...env, healthTimeoutS: 60, write: () => true }).catch((e) => e.exitCode);
+    assert.equal(res, 1);
+    assert.ok(Date.now() - t0 < 20000, `zu langsam: ${Date.now() - t0} ms`);
+    assert.equal(r.current(), 'releases/1.0.0');
+    assert.ok(r.status().log.some((l) => /Neustarts/.test(l)), r.status().log.join('\n'));
+  } finally { r.close(); }
+});
+
 function isLink(p) { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } }
 
 // Damit eslint die importierten Bauteile nicht als unbenutzt meldet.

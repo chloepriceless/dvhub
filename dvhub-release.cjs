@@ -663,10 +663,24 @@ async function healthOnce(s, expect) {
 
 // Gesund = zweimal im Abstand von 5 s ok mit der erwarteten Version und die
 // Unit aktiv (fängt Absturzschleifen ab).
+// Neustarts der Unit laut systemd (Restart=always): eine Absturzschleife
+// erkennt die Prüfung daran, statt die volle Wartezeit abzusitzen.
+function nRestarts(s) {
+  if (!s.systemctl) return null;
+  const out = String(systemctl(s, 'show', '-p', 'NRestarts', '--value', `${s.serviceName}.service`).stdout || '').trim();
+  return /^\d+$/.test(out) ? Number(out) : null;
+}
+
 async function waitHealthy(s, expect, job) {
   const deadline = Date.now() + s.healthTimeoutS * 1000;
+  const base = nRestarts(s);
   let last = '';
   while (Date.now() < deadline) {
+    const n = nRestarts(s);
+    if (base !== null && n !== null && n - base >= 3) {
+      job?.log(`Gesundheitsprüfung abgebrochen: ${n - base} Neustarts des Dienstes (Absturzschleife)`);
+      return false;
+    }
     const h = await healthOnce(s, expect);
     if (h.ok) {
       await sleep(s.stableMs);
