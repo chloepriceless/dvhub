@@ -18,7 +18,7 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'timesc
 // Was packagecloud.io/timescale/timescaledb anbietet (Stand 21.10.2026, per curl geprueft).
 const SERVED = ['debian/ bookworm', 'debian/ trixie', 'ubuntu/ noble', 'ubuntu/ resolute'];
 
-function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false, offlineAfterDownload = false, staleDeb = false } = {}) {
+function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false, offlineAfterDownload = false, staleDeb = false, leftoverApacheDeb = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsp-'));
   const bin = join(dir, 'bin');
   execFileSync('mkdir', ['-p', bin]);
@@ -37,6 +37,11 @@ function setup(osRelease, { existingList, transient = false, extHave = '', alter
     // Rest eines gescheiterten Laufs: ältere Fassung im eigenen Download-Ordner.
     execFileSync('mkdir', ['-p', debCache]);
     writeFileSync(join(debCache, 'timescaledb-2-postgresql-18_2.30.0~ubuntu26.04_arm64.deb'), '');
+  }
+  if (leftoverApacheDeb) {
+    // Abgebrochener Lauf: Apache war schon gesichert und entfernt.
+    execFileSync('mkdir', ['-p', debCache]);
+    writeFileSync(join(debCache, 'postgresql-18-timescaledb_2.31.0_arm64.deb'), '');
   }
   const fake = (name, body = '') => {
     const p = join(bin, name);
@@ -121,7 +126,7 @@ case "$cmd" in
   *"FROM pg_extension WHERE extname"*) cat "${extFile}"; echo ;;
   *"default_version FROM pg_available"*) echo "2.31.0" ;;
   # Lizenz erst nach der Installation (vorher Apache) → kein Schnell-Skip.
-  *"current_setting('timescaledb.license')"*) grep -q "^apt-get install -y timescaledb-2" "${log}" && echo "timescale" || echo "apache" ;;
+  *"current_setting('timescaledb.license')"*) grep -Eq "^apt-get install -y (-o Dir::Cache::archives=[^ ]+ )?timescaledb-2" "${log}" && echo "timescale" || echo "apache" ;;
 esac
 exit 0`);
   fake('systemctl');
@@ -350,11 +355,32 @@ test('Apache→Community ohne Netz nach dem Download: Installation aus dem eigen
 });
 
 // Gegenprüfung 7c1761b8 (P3): Reste eines gescheiterten Laufs im Paketordner
-// konnten eine ältere Fassung installieren. Der Ordner ist vor dem Download leer.
-test('Reste eines früheren Laufs im Paketordner: vor dem Download weg', () => {
+// konnten eine ältere Fassung installieren (geratener Dateiname). Jetzt wird
+// per Paketname installiert; apt nimmt aus dem Ordner nur die Kandidaten-Fassung.
+test('Reste eines früheren Laufs im Paketordner: Installation per Paketname, nie per Datei', () => {
   const s = setup(UBUNTU_2604, { apacheInstalled: true, staleDeb: true });
   try {
     s.run();
-    assert.deepEqual(s.calls().filter((l) => l.startsWith('vorher-im-ordner ') && l.includes('2.30.0')), []);
+    const inst = s.calls().filter((l) => l.startsWith('apt-get install') && !l.includes('--download-only'));
+    assert.ok(inst.length >= 1 && inst.every((l) => !/\.deb\b/.test(l)), inst.join(' | '));
+  } finally { s.cleanup(); }
+});
+
+// Gegenprüfung d867a370 (P3): das Leeren des Paketordners zu Beginn nahm einem
+// abgebrochenen Lauf (Apache schon entfernt) den Rückweg ohne Netz.
+test('Abgebrochener Lauf, Apache entfernt, jetzt ohne Netz: Apache aus dem Paketordner zurück', () => {
+  const s = setup(UBUNTU_2604, { downloadFails: true, offlineAfterDownload: true, leftoverApacheDeb: true });
+  try {
+    s.runStatus();
+    assert.ok(s.pkgs().includes('postgresql-18-timescaledb'), `Apache wieder da: ${s.pkgs()}`);
+  } finally { s.cleanup(); }
+});
+
+test('Attrappe: Lizenzprobe sieht die Community-Installation (mit Paketordner-Option)', () => {
+  const s = setup(UBUNTU_2604);
+  try {
+    s.run();
+    assert.match(s.sql(), /timescaledb\.license/);
+    assert.ok(s.calls().some((l) => /^apt-get install -y -o Dir::Cache::archives=\S+ timescaledb-2/.test(l)));
   } finally { s.cleanup(); }
 });

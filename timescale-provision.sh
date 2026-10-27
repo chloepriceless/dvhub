@@ -255,9 +255,10 @@ DEB_DIR="${TS_DEB_CACHE:-/var/cache/dvhub-timescale}"
 # apt legt beim Download alles ab, was es aufloest (auch Abhaengigkeiten wie
 # timescaledb-tools), und findet es bei der Installation dort wieder; ohne Netz
 # geht die Installation so trotzdem. Installiert wird per Paketname (apt nimmt
-# die Kandidaten-Version aus dem Ordner), nie per geratenem Dateinamen. Reste
-# eines frueheren, gescheiterten Laufs (aeltere Fassung) vorher weg.
-rm -rf "$DEB_DIR"
+# aus dem Ordner nur die Kandidaten-Version, aeltere Reste stoeren nicht), nie
+# per geratenem Dateinamen. Der Ordner wird erst nach Erfolg geleert: ein
+# abgebrochener Lauf (Apache schon entfernt) findet das Apache-Paket dort beim
+# naechsten Mal auch ohne Netz (Gegenpruefung d867a370).
 apt_dl() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only -o Dir::Cache::archives="$DEB_DIR" "$@" >>"$LOG_FILE" 2>&1; }
 apt_inst() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dir::Cache::archives="$DEB_DIR" "$@" >>"$LOG_FILE" 2>&1; }
 APACHE_REMOVED=0
