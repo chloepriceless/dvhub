@@ -200,3 +200,38 @@ test('Sicherung nicht speicherbar: Sperre wird nicht geschrieben und im nächste
   assert.deepEqual(writes, [[40191, 2], [40198, 55536]]);
   assert.deepEqual(readSaved(unwritable.savedPath), { storCtlMod: 1, outWRte: -50 });
 });
+
+// Gegenprüfung 396b3d46: die Regel „keine Sperre ohne gespeicherte Sicherung“ gilt
+// nur für die Sperr-Sequenzen. Die Einspeisegrenze des Direktvermarkters (2706)
+// wird auch bei kaputter Platte geschrieben — sonst würde aus 60 % ein Totalstopp.
+test('Einspeisegrenze 2706 wird trotz nicht speicherbarer Sicherung geschrieben', async () => {
+  const prof = loadProfile('victron');
+  const blocker = path.join(path.dirname(prof.savedPath), 'datei-statt-ordner');
+  fs.writeFileSync(blocker, 'x');
+  const unwritable = { ...prof, savedPath: path.join(blocker, 'dv_seq_saved.json') };
+  const { ev, writes } = boot(unwritable, { 2706: 0xffff });
+  await ev.applyDvFeedInLimit(6000);
+  assert.deepEqual(writes, [[2706, 60]]);
+});
+
+test('Lesefehler mitten im Vorab-Lesen hinterlässt keine halbe Sicherung', async () => {
+  const prof = loadProfile('fronius');
+  const state = { victron: { soc: 50 }, ctrl: {}, schedule: { rules: [], active: {}, lastWrite: {}, manualOverride: {}, config: {}, lastEvalAt: 0 } };
+  const writes = [];
+  let failOutWRte = true;
+  const transport = {
+    type: 'modbus',
+    async mbRequest({ address }) { if (address === 40198 && failOutWRte) throw new Error('timeout'); return [address === 40191 ? 1 : 0xec78]; },
+    async mbWriteSingle({ address, value }) { writes.push([address, value]); }
+  };
+  const ev = createScheduleEvaluator({
+    state, getCfg: () => prof.cfg, transport, dvSeqSavedPath: prof.savedPath,
+    pushLog: () => {}, telemetrySafeWrite: () => {}, persistConfig: async () => {}, epexNowNext: () => null
+  });
+  await ev.applyDvVictronControl(false);
+  assert.deepEqual(writes, []);
+  assert.deepEqual(state.ctrl._dvSeqSaved || {}, {}, 'StorCtl_Mod nicht halb gesichert');
+  failOutWRte = false;
+  await ev.applyDvVictronControl(false);
+  assert.deepEqual(readSaved(prof.savedPath), { storCtlMod: 1, outWRte: -50 });
+});

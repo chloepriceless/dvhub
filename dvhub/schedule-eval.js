@@ -498,15 +498,19 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
-  async function runDvControlSequence(steps, { ownOnly = false } = {}) {
+  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false } = {}) {
     const cfg = getCfg();
     const saved = (state.ctrl._dvSeqSaved ??= {});
-    // Review e9b64f0d (P2): Eine Sperre gibt es nur, wenn ihre Sicherung auf der
-    // Platte liegt — nur so erkennt der Start nach einem Neustart die eigene Sperre
-    // und hebt sie wieder auf. Deshalb erst alle zu sichernden Werte lesen und
-    // gemeinsam persistieren; scheitert das, wird nichts geschrieben (der Aufrufer
-    // wiederholt im nächsten Takt, T-0076) und keine halbe Sicherung bleibt stehen.
+    // Review e9b64f0d (P2): Erst alle zu sichernden Werte lesen und gemeinsam
+    // persistieren, dann schreiben. Für Sperr-Sequenzen (requirePersist) gibt es
+    // eine Sperre nur, wenn ihre Sicherung auf der Platte liegt — nur so erkennt
+    // der Start nach einem Neustart die eigene Sperre und hebt sie wieder auf;
+    // scheitert das Speichern, wird nichts geschrieben (nächster Takt, T-0076).
+    // Andere Sequenzen (Einspeisegrenze 2706) schreiben trotzdem: dort würde aus
+    // einer Teilgrenze sonst ein Totalstopp (Gegenprüfung 396b3d46).
+    // Ein Lesefehler mittendrin hinterlässt keine halbe Sicherung im Speicher.
     const freshlySaved = [];
+    try {
     for (const step of steps) {
       if (step.saveBefore !== true || saved[step.point] !== undefined) continue;
       const pconf = writeConfFor(step.point, cfg.controlWrite?.[step.point]);
@@ -522,7 +526,11 @@ export function createScheduleEvaluator(ctx) {
       saved[step.point] = fromRawForSave(regs, pconf);
       freshlySaved.push(step.point);
     }
-    if (freshlySaved.length && !persistDvSeqSaved()) {
+    } catch (e) {
+      for (const point of freshlySaved) delete saved[point];
+      throw e;
+    }
+    if (freshlySaved.length && !persistDvSeqSaved() && requirePersist) {
       for (const point of freshlySaved) delete saved[point];
       throw new Error('dv_seq_saved konnte nicht gespeichert werden — Sperre nicht geschrieben');
     }
@@ -592,7 +600,7 @@ export function createScheduleEvaluator(ctx) {
   // Sperre) bekommen keinen Default.
   async function runFlagSequence(flag, steps, bootRelease) {
     if (!bootRelease) {
-      await runDvControlSequence(steps);
+      await runDvControlSequence(steps, { requirePersist: true });
       return false;
     }
     const saved = state.ctrl._dvSeqSaved || {};
