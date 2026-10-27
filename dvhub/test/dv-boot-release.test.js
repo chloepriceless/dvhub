@@ -235,3 +235,19 @@ test('Lesefehler mitten im Vorab-Lesen hinterlässt keine halbe Sicherung', asyn
   await ev.applyDvVictronControl(false);
   assert.deepEqual(readSaved(prof.savedPath), { storCtlMod: 1, outWRte: -50 });
 });
+
+// Gegenprüfung c942db52 (P3): eine nicht gespeicherte Sicherung wird nachgeholt,
+// sobald die Platte wieder schreibbar ist — sonst ginge der Installateurswert der
+// Einspeisegrenze bei einem Neustart verloren.
+test('nicht gespeicherte Sicherung der Einspeisegrenze wird beim nächsten Aufruf nachgeholt', async () => {
+  const prof = loadProfile('victron');
+  const dir = path.join(path.dirname(prof.savedPath), 'daten');
+  fs.writeFileSync(dir, 'x');
+  const p = { ...prof, savedPath: path.join(dir, 'dv_seq_saved.json') };
+  const { ev, writes } = boot(p, { 2706: 50 });
+  await ev.applyDvFeedInLimit(6000);
+  assert.deepEqual(writes, [[2706, 60]]);
+  fs.rmSync(dir); fs.mkdirSync(dir);
+  await ev.applyDvFeedInLimit(4000);
+  assert.deepEqual(readSaved(p.savedPath), { dvFeedInLimitW: 5000 }, 'Installateurswert 5000 W gesichert');
+});

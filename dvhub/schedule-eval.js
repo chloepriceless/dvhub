@@ -456,8 +456,12 @@ export function createScheduleEvaluator(ctx) {
     if (!ctx.dvSeqSavedPath) return true;
     try {
       atomicWriteControlState(ctx.dvSeqSavedPath, state.ctrl._dvSeqSaved ?? {});
+      state.ctrl._dvSeqSavedPending = false;
       return true;
     } catch (e) {
+      // Merken und bei jedem weiteren Sequenz-Aufruf nachholen (Gegenprüfung
+      // c942db52): sonst bliebe eine Sicherung ohne Sperr-Pflicht nur im Speicher.
+      state.ctrl._dvSeqSavedPending = true;
       pushLog('dv_seq_saved_persist_error', { error: e?.message || String(e) });
       return false;
     }
@@ -501,6 +505,7 @@ export function createScheduleEvaluator(ctx) {
   async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false } = {}) {
     const cfg = getCfg();
     const saved = (state.ctrl._dvSeqSaved ??= {});
+    if (state.ctrl._dvSeqSavedPending) persistDvSeqSaved();
     // Review e9b64f0d (P2): Erst alle zu sichernden Werte lesen und gemeinsam
     // persistieren, dann schreiben. Für Sperr-Sequenzen (requirePersist) gibt es
     // eine Sperre nur, wenn ihre Sicherung auf der Platte liegt — nur so erkennt
