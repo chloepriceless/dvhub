@@ -161,3 +161,81 @@ test('toEosStrompreisArray: 8 quarter-hour slots (2 hours) produce 2 entries sor
   // Hour 2: avg 30, Euro/Wh = 0.0003
   assert.strictEqual(result[1], 0.0003);
 });
+
+// --- Review 25.10.2026 (P2): Bezugspreis des internen Optimierers aus derselben
+// Quelle wie EOS-Bridge und Oberflaeche (resolveUserImportPriceCtKwhForSlot):
+// leviesAndFeesCtKwh, Zeitraeume (periods) und §14a-Modul-3-Fenster.
+import { resolveUserImportPriceCtKwhForSlot } from '../config-model.js';
+
+const DYNAMIC_UEP = {
+  mode: 'dynamic',
+  dynamicComponents: { energyMarkupCtKwh: 2, gridChargesCtKwh: 8, leviesAndFeesCtKwh: 3, vatPct: 19 }
+};
+
+test('enrichPriceSlotsWithCosts: dynamischer Bezugspreis mit Umlagen aus leviesAndFeesCtKwh', () => {
+  const ts = Date.parse('2026-08-10T10:00:00Z'); // 12:00 Berlin
+  const [slot] = enrichPriceSlotsWithCosts([{ ts, ctKwh: 10 }], { userEnergyPricing: DYNAMIC_UEP });
+  // (10 + 2 + 8 + 3) × 1,19 = 27,37 ct/kWh (vorher fest verdrahtete Umlagen: 31,721)
+  assert.equal(slot.importCtKwh, 27.37);
+});
+
+test('enrichPriceSlotsWithCosts: Tarif-Zeitraum (periods) gilt fuer seine Tage', () => {
+  const uep = {
+    ...DYNAMIC_UEP,
+    periods: [{ startDate: '2026-07-01', endDate: '2026-12-31', mode: 'fixed', fixedGrossImportCtKwh: 35 }]
+  };
+  const inPeriod = Date.parse('2026-08-10T10:00:00Z');
+  const before = Date.parse('2026-06-10T10:00:00Z');
+  const [a, b] = enrichPriceSlotsWithCosts([{ ts: inPeriod, ctKwh: 10 }, { ts: before, ctKwh: 10 }], { userEnergyPricing: uep });
+  assert.equal(a.importCtKwh, 35);
+  assert.equal(b.importCtKwh, 27.37);
+});
+
+test('enrichPriceSlotsWithCosts: §14a-Modul-3-Fenster ersetzt das Netzentgelt', () => {
+  const uep = {
+    ...DYNAMIC_UEP,
+    usesParagraph14aModule3: true,
+    module3Windows: { nt: { enabled: true, start: '00:00', end: '06:00', priceCtKwh: 2.5 } }
+  };
+  const night = Date.parse('2026-08-10T00:00:00Z'); // 02:00 Berlin
+  const noon = Date.parse('2026-08-10T10:00:00Z');
+  const [n, d] = enrichPriceSlotsWithCosts([{ ts: night, ctKwh: 10 }, { ts: noon, ctKwh: 10 }], { userEnergyPricing: uep });
+  // Nacht: (10 + 2 + 3) × 1,19 + 2,5 = 20,35; Mittag ohne Fenster 27,37.
+  assert.equal(n.importCtKwh, 20.35);
+  assert.equal(d.importCtKwh, 27.37);
+});
+
+test('enrichPriceSlotsWithCosts: Bezugspreis = resolveUserImportPriceCtKwhForSlot fuer jeden Slot', () => {
+  const uep = {
+    ...DYNAMIC_UEP,
+    usesParagraph14aModule3: true,
+    module3Windows: { nt: { enabled: true, start: '22:00', end: '06:00', priceCtKwh: 3.1 } },
+    periods: [{ startDate: '2026-10-26', endDate: '2026-10-31', dynamicComponents: { energyMarkupCtKwh: 4 } }]
+  };
+  const slots = Array.from({ length: 192 }, (_, i) => ({ ts: Date.parse('2026-10-25T00:00:00Z') + i * 900000, ctKwh: (i % 17) - 4 }));
+  const enriched = enrichPriceSlotsWithCosts(slots, { userEnergyPricing: uep });
+  for (const slot of enriched) {
+    assert.equal(slot.importCtKwh, resolveUserImportPriceCtKwhForSlot({ ts: slot.ts, ct_kwh: slot.ctKwh }, uep, { timeZone: 'Europe/Berlin' }));
+  }
+});
+
+test('enrichPriceSlotsWithCosts: Festpreis ohne Betrag faellt wie die EOS-Bridge auf den Spotpreis zurueck', () => {
+  const [slot] = enrichPriceSlotsWithCosts([{ ts: Date.parse('2026-08-10T10:00:00Z'), ctKwh: 12.5 }], { userEnergyPricing: { mode: 'fixed' } });
+  assert.equal(slot.importCtKwh, 12.5);
+});
+
+test('enrichPriceSlotsWithCosts: Einspeise-Modus wie EOS-Bridge/Config-Sync (nur optimizer.tariff.feedInMode)', () => {
+  const ts = Date.parse('2026-08-10T10:00:00Z');
+  // Direktvermarktungs-Hinweise allein machen noch keinen Spot-Modus (Bridge: feedInMode || 'fixed').
+  const [dv] = enrichPriceSlotsWithCosts([{ ts, ctKwh: 10 }], {
+    userEnergyPricing: { ...DYNAMIC_UEP, marketValueMode: 'monthly', dvCostMonthlyEur: 5 },
+    optimizer: { tariff: { feedInCtKwh: 7.1 } }
+  });
+  assert.equal(dv.feedInCtKwh, 7.1);
+  // Gross-/Kleinschreibung wie in der Bridge egal.
+  const [spot] = enrichPriceSlotsWithCosts([{ ts, ctKwh: 10 }], {
+    userEnergyPricing: DYNAMIC_UEP,
+    optimizer: { tariff: { feedInMode: 'SPOT', feedInSpotFactor: 0.9 } }
+  });
+  assert.equal(spot.feedInCtKwh, 9);
+});

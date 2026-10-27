@@ -4,7 +4,6 @@
 import { isGridChargeLicensed } from './grid-storage.js';
 import http from 'node:http';
 import { classifyEosSlotAction } from '../../eos-zeitplan-map.js';
-import { keepOnGridSlots } from './eos-forecast-bridge.js';
 import { getPowerLimits } from '../power-limits.js';
 // Zweite GX am selben Anschluss: Plan-Umrechnung mit der Leistung beider Akkus.
 import { planningCfg } from '../multi-gx/planning.js';
@@ -133,118 +132,34 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   }
 
   /**
-   * Convert DVhub forecast response to EOS prediction format and send via PUT.
-   * Accepts output of buildForecastResponse() from Phase 01.
+   * Frueher: Prognose per PUT /v1/prediction/import/{provider} an EOS. Seit
+   * 25.10.2026 schreibt nur noch die Forecast-Bridge (siehe unten).
    *
-   * Phase 19.1-01: EOS v0.3.0 replaced PUT /v1/prediction/list with
-   * PUT /v1/prediction/import/{provider_id} (per-provider import). We now
-   * push three providers separately:
-   *   - PVForecastImport       (PV power, W)
-   *   - LoadImport             (load power, W)
-   *   - ElecPriceImport        (electricity price, €/Wh)
-   *
-   * @param {object} forecastResponse - { pv: { slots }, price: { slots }, load: { slots } }
    * @returns {Promise<{ ok: boolean, error?: string, perProvider?: object }>}
    */
-  async function pushForecast(forecastResponse) {
-    const perProvider = {};
-    const errors = [];
-
-    // Phase 21 (2026-05-23 rewrite): the {ISO_TS: value} dict shape returned
-    // HTTP 200 but data NEVER reached the provider — EOS' import_from_json
-    // tries dataframe → datetimedata → simple-dict-with-record-keys in turn,
-    // and our ts-keyed dict matched none (no record key matched a prefix in
-    // the simple-dict branch), so each PUT no-op'd silently. Verified empty:
-    //   curl /v1/prediction/series?key=pvforecast_ac_power → 0 entries
-    // after 200-OK pushes.
-    //
-    // Correct shape per EOS dataabc.py:1670 example + PydanticDateTimeData:
-    //   { start_datetime: ISO, interval: "15 minutes",
-    //     "<provider_record_key>": [value, value, …] }
-    //
-    // Per-provider record key:
-    //   PVForecastImport      → pvforecast_ac_power     (W)
-    //   LoadImport            → loadforecast_power_w    (W)
-    //   ElecPriceImport       → elecprice_marketprice_kwh (€/kWh)
-    //   FeedInTariffImport    → feed_in_tariff_kwh      (€/kWh)
-    // buildForecastResponse() slots are keyed { start: ISO, powerW: W } for
-    // pv/load and { start: ISO, ctKwh } for price (services/forecast/index.js:
-    // 195/199/217/221/173). Earlier this code read s.ts / s.watts, which don't
-    // exist on those slots — every filter dropped 100% of slots, buildDateTimeData
-    // returned null, and httpRequest then PUT a `null` body → EOS replied
-    // HTTP 400 "Invalid JSON string 'null'" for every provider. Read the real
-    // field names (start, powerW, ctKwh) so the body is populated.
-    function buildDateTimeData(slots, recordKey, valueFn) {
-      // Nur Rasterpunkte: forecast.solar liefert zusätzlich Sonnenauf-/
-      // -untergangsstempel (07:22:57 …). Dieses Format ordnet Werte nach
-      // Position zu (start + i·interval) — ein Zwischenpunkt verschöbe alle
-      // folgenden Werte um einen Slot. Siehe keepOnGridSlots im Bridge.
-      const validSlots = keepOnGridSlots(slots.filter(s => s && !Number.isNaN(new Date(s.start).getTime())));
-      if (!validSlots.length) return null;
-      // Positionsformat geht nur bei gleichmäßigem Abstand; sonst nichts senden
-      // — der Forecast-Bridge liefert dieselben Daten mit Zeitstempeln.
-      const stepMs = validSlots.length >= 2
-        ? new Date(validSlots[1].start).getTime() - new Date(validSlots[0].start).getTime()
-        : 0;
-      for (let i = 2; i < validSlots.length; i += 1) {
-        if (new Date(validSlots[i].start).getTime() - new Date(validSlots[i - 1].start).getTime() !== stepMs) return null;
+  async function pushForecast() {
+    // Review 25.10.2026: der Adapter schreibt KEINE Prognosereihe mehr. Die
+    // EOS-Forecast-Bridge (eos-forecast-bridge.js) ist einziger Schreiber fuer
+    // PV, Last, Bezugspreis und Einspeisung:
+    //  - Last: die Bridge schiebt die Viertelstundenreihe mit Heizstab-
+    //    Reservierung bzw. dem Netzspeicher-Ruhebedarf. Der Adapter PUTete die
+    //    rohe Stundenlast im 60-min-Abstand und ueberschrieb damit bei jedem
+    //    Optimierer-Lauf die :00-Werte der Bridge.
+    //  - PV: im Nur-Netzspeicher-Betrieb schiebt die Bridge PV = 0, der Adapter
+    //    die echte PV-Prognose — dasselbe Wettrennen.
+    //  - Preis/Einspeisung: seit Phase 30 R2 (2026-06-22) nur die Bridge.
+    // Der Optimierer-Lauf ruft deshalb die Bridge (services/optimizer/index.js);
+    // diese Funktion bleibt als Rueckfall ohne Bridge und meldet nur „uebersprungen“.
+    const skipped = 'bridge owns the EOS forecast series (Review 25.10.2026)';
+    return {
+      ok: true,
+      perProvider: {
+        pv: { ok: true, skipped },
+        load: { ok: true, skipped },
+        price: { ok: true, skipped: 'bridge owns elecprice (Phase 30 R2)' },
+        feedIn: { ok: true, skipped: 'bridge owns feed_in (Phase 30 R2)' }
       }
-      const values = validSlots.map(valueFn);
-      const start = new Date(validSlots[0].start).toISOString();
-      // Derive interval from the first two slot timestamps. Default to
-      // 15 minutes when only one slot exists.
-      let intervalLabel = '15 minutes';
-      if (validSlots.length >= 2) {
-        const delta = new Date(validSlots[1].start).getTime() - new Date(validSlots[0].start).getTime();
-        const minutes = Math.max(1, Math.round(delta / 60000));
-        intervalLabel = minutes + ' minutes';
-      }
-      return { start_datetime: start, interval: intervalLabel, [recordKey]: values };
-    }
-
-    // PV
-    if (forecastResponse.pv?.slots?.length) {
-      const body = buildDateTimeData(forecastResponse.pv.slots, 'pvforecast_ac_power', s => Number(s.powerW) || 0);
-      const res = body
-        ? await httpRequest('PUT', '/v1/prediction/import/PVForecastImport?force_enable=true', body)
-        : { ok: true, skipped: 'uneven_slots' };
-      perProvider.pv = { ok: res.ok, error: res.error || null };
-      if (!res.ok) errors.push(`PV: ${res.error}`);
-    }
-
-    // Load
-    if (forecastResponse.load?.slots?.length) {
-      const body = buildDateTimeData(forecastResponse.load.slots, 'loadforecast_power_w', s => Number(s.powerW) || 0);
-      const res = body
-        ? await httpRequest('PUT', '/v1/prediction/import/LoadImport?force_enable=true', body)
-        : { ok: true, skipped: 'uneven_slots' };
-      perProvider.load = { ok: res.ok, error: res.error || null };
-      if (!res.ok) errors.push(`Load: ${res.error}`);
-    }
-
-    // Price (elecprice_marketprice_wh) + Feed-in (feed_in_tariff_wh): deliberately
-    // NOT pushed here. The EOS-Forecast-Bridge (services/optimizer/eos-forecast-
-    // bridge.js, own scheduled push) is the canonical SINGLE-SOURCE writer for the
-    // price signal — it applies the fixed-tariff import price (flat gross ct/kWh in
-    // fixed mode, 2026-05-30) AND the Direktvermarktung market premium on feed-in
-    // (§51-aware, 2026-06-21).
-    //
-    // Phase 30 (P30-R2, 2026-06-22): this adapter previously PUT raw spot to BOTH
-    // providers (importCtKwh ?? ctKwh, feed-in ×factor without premium). Once the
-    // Phase-22.1 bridge made /v1/prediction/import actually land, the adapter's
-    // per-optimizer-run push RACED the bridge's timer push (last-writer-wins) and
-    // clobbered both fixes: on prod the GA read a spot elecprice (~6 ct midday)
-    // instead of the flat 26.9 ct Endkundenpreis, and feed-in lost its market
-    // premium (elecprice == feed_in == raw spot, verified read-only 2026-06-22).
-    // The fix is to stop writing the price signal here — the bridge owns it. The
-    // pv/load pushes above stay (identical between both writers, harmless).
-    perProvider.price = { ok: true, skipped: 'bridge owns elecprice (Phase 30 R2)' };
-    perProvider.feedIn = { ok: true, skipped: 'bridge owns feed_in (Phase 30 R2)' };
-
-    if (errors.length > 0) {
-      return { ok: false, error: errors.join('; '), perProvider };
-    }
-    return { ok: true, perProvider };
+    };
   }
 
   /**
@@ -440,7 +355,10 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // across JSON parses). Derive the battery SoC key dynamically — the device id
     // is 'battery1' but a config-sync variant may register a different prefix; we
     // want the battery's *_soc_factor, never the EV's.
-    const tsKeys = Object.keys(data).sort();
+    // Nach Epoche, nicht lexikografisch: mit Offset-Stempeln laege sonst die
+    // doppelte Stunde der Zeitumstellung (02:xx+01:00 vor 02:xx+02:00) falsch.
+    const epochOf = (key) => { const ms = Date.parse(key); return Number.isFinite(ms) ? ms : Infinity; };
+    const tsKeys = Object.keys(data).sort((a, b) => (epochOf(a) - epochOf(b)) || (a < b ? -1 : a > b ? 1 : 0));
     let socKey = null;
     let evSocKey = null;   // nur gesetzt, wenn das E-Auto in EOS angemeldet ist
     if (tsKeys.length) {

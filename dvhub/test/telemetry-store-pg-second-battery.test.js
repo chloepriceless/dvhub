@@ -106,6 +106,7 @@ describe('PG-Store: Akku 2 in den Energieslots', () => {
     const [slot] = await createTelemetryStorePg(pool).listMaterializedEnergySlots({ start: '2026-10-21T00:00:00Z', end: '2026-10-22T00:00:00Z' });
     for (const field of Object.values(SECOND_FIELDS)) assert.equal(slot[field], 0, field);
     assert.equal(slot.importKwh, 0.5);
+    assert.equal(slot.vrmFlows, undefined, 'lokaler Slot ohne Kennzeichen');
   });
   // Codex-Gegenpruefung 21.10.2026 (P2): VRM kennt die zweite Anlage nicht und
   // verteilt die ganze gemessene Einspeisung schon auf die Hauptanlagen-Fluesse.
@@ -122,6 +123,8 @@ describe('PG-Store: Akku 2 in den Energieslots', () => {
     const [slot] = await createTelemetryStorePg(pool).listMaterializedEnergySlots({ start: '2026-10-21T00:00:00Z', end: '2026-10-22T00:00:00Z' });
     assert.equal(slot.batteryToGridKwh, 0.5);
     for (const field of Object.values(SECOND_FIELDS)) assert.equal(slot[field], 0, field);
+    // Kennzeichen fuer die Historie (Akku-2-Ladestand nur lokal, Review 25.10.2026).
+    assert.equal(slot.vrmFlows, true);
     const call = pool.calls.find((c) => /GROUP BY slot_start_utc/.test(c.text));
     assert.match(call.text, /vrm_selected/);
     // $7 = die Hauptreihen, deren VRM-Herkunft den Slot zum VRM-Slot macht.
@@ -141,6 +144,7 @@ describe('PG-Store: Akku 2 in den Energieslots', () => {
     const [slot] = await createTelemetryStorePg(pool).listMaterializedEnergySlotsJsPivot({ start: '2026-10-21T00:00:00Z', end: '2026-10-22T00:00:00Z' });
     assert.equal(slot.batteryToGridKwh, 0.5);
     assert.equal(slot.secondBatteryToGridKwh, 0);
+    assert.equal(slot.vrmFlows, true);
   });
 
   test('listAggregatedEnergySlots: Bucket mit VRM-Historie ohne lokale Akku-2-Fluesse', async () => {
@@ -153,5 +157,6 @@ describe('PG-Store: Akku 2 in den Energieslots', () => {
     const [slot] = await createTelemetryStorePg(pool).listAggregatedEnergySlots({ start: '2026-10-21T00:00:00Z', end: '2026-10-22T00:00:00Z' });
     assert.equal(slot.batteryToGridKwh, 0.5);
     assert.equal(slot.secondBatteryToGridKwh, 0);
+    assert.equal(slot.vrmFlows, true);
   });
 });

@@ -140,6 +140,22 @@ test('buildLiveTelemetrySamples ohne zweite Anlage: keine Akku-2-Zeilen', () => 
   assert.ok(!withNull.some((row) => row.seriesKey.startsWith('second_')));
 });
 
+// Gegenpruefung 25.10.2026: der Wirkungsgrad braucht die von der Haupt-GX
+// GEMESSENE Last. polling.js kappt die korrigierte Last bei 0, Rueckrechnen aus
+// load_power_w + Akku 2 waere dann falsch — deshalb eine eigene Reihe.
+test('buildLiveTelemetrySamples schreibt die gemessene Last, solange die Akku-2-Korrektur greift', () => {
+  const corrected = buildLiveTelemetrySamples({
+    ts: '2026-10-21T12:00:00.000Z', resolutionSeconds: 2,
+    victron: { selfConsumptionW: 0, selfConsumptionMeasuredW: 800, secondBatteryChargeW: 1200, secondBatteryDischargeW: 0 }
+  });
+  const measured = corrected.find((row) => row.seriesKey === 'load_measured_w');
+  assert.ok(measured, 'load_measured_w fehlt');
+  assert.equal(measured.value, 800);
+  assert.equal(measured.unit, 'W');
+  const plain = buildLiveTelemetrySamples({ ts: '2026-10-21T12:00:00.000Z', resolutionSeconds: 2, victron: { selfConsumptionW: 1000 } });
+  assert.ok(!plain.some((row) => row.seriesKey === 'load_measured_w'), 'ohne Korrektur keine Zusatzzeile');
+});
+
 test('buildPriceTelemetrySamples expands EPEX rows into storable series', () => {
   const rows = buildPriceTelemetrySamples([
     { ts: Date.UTC(2026, 2, 9, 12, 0, 0), eur_mwh: 50, ct_kwh: 5 }
