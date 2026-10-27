@@ -155,10 +155,16 @@ export function verifyRegistration({ attestationObject, clientDataJSON, expected
   };
 }
 
-// Assertion verifizieren (§7.2). cred: {publicKey (b64-COSE)}.
+// Assertion verifizieren (§7.2). cred: {publicKey (b64-COSE), counter?}.
 // requireUV: beim passwortlosen Login ist der Passkey der EINZIGE Faktor —
 // dann muss der Authenticator den Nutzer verifiziert haben (PIN/Biometrie),
 // bloße Anwesenheit (UP) eines Keys ohne PIN reicht nicht.
+// Signaturzähler (§7.2 Schritt 21, Review 2026-10-25): melden gespeicherter
+// UND neuer Zähler einen Wert ≠ 0, muss der neue größer sein — sonst ist es
+// ein geklonter Authenticator oder eine Wiederholung. Passkeys, die immer 0
+// melden (Apple, synchronisierte Passkeys), bleiben unberührt. Die Prüfung
+// liegt NACH der Signatur, damit ein Fremder ohne Schlüssel nichts über den
+// gespeicherten Stand erfährt.
 export function verifyAssertion({ authenticatorData, clientDataJSON, signature, expectedChallenge, expectedOrigin, expectedRpIdHash, credential, requireUV = false }) {
   const raw = checkClientData(clientDataJSON, { expectedType: 'webauthn.get', expectedChallenge, expectedOrigin });
   const ad = parseAuthData(b64urlBuf(authenticatorData));
@@ -170,5 +176,7 @@ export function verifyAssertion({ authenticatorData, clientDataJSON, signature, 
   const signed = Buffer.concat([b64urlBuf(authenticatorData), crypto.createHash('sha256').update(raw).digest()]);
   const ok = crypto.verify('sha256', signed, key, sigToDer(b64urlBuf(signature)));
   if (!ok) throw new Error('signatur_ungueltig');
+  const stored = Number(credential.counter) || 0;
+  if (stored > 0 && ad.counter > 0 && ad.counter <= stored) throw new Error('signcount_rueckschritt');
   return { counter: ad.counter, flags: ad.flags };
 }

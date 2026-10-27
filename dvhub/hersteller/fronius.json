@@ -210,7 +210,7 @@
     "_comment": "Abregelung über Model-124-Akkusteuerung (wie evcc). DVhub steuert NICHT die Wirkleistung (WMaxLimPct = ganzer WR, legt Hybrid lahm — der alte, falsche Weg), sondern den Akku: 'keine Einspeisung' zwingt den Überschuss in den Speicher (Force-Charge), das Haus bleibt aus PV+Akku versorgt. Wirksam über feedExcessDcPv (DC-gekoppelte GEN24-PV). Der Signalpfad ist binär: feedIn=true → Normalbetrieb (sequence '1'), feedIn=false → abregeln (sequence '0'). Ausgelöst durch DV-forcedOff, §51-Negativpreis (negativePriceProtection) oder Schedule-Regel. GRENZE: bei vollem Akku speist der WR wieder ein — garantierte Nulleinspeisung braucht zusätzlich das geräteseitige Fronius Export-Limit.",
     "enabled": true,
     "feedExcessDcPv": {
-      "_comment": "save/restore (Feldtest 554bbdfd): Sperren sichert vorher die Kunden-Registerwerte (StorCtl_Mod-Bits, OutWRte aus WebUI/Solar.web), Freigeben stellt SIE wieder her statt pauschal 0/+100 zu schreiben. restoreDefault greift nur ohne Sicherung (Erstlauf/Datei fehlt).",
+      "_comment": "save/restore (Feldtest 554bbdfd): Sperren sichert vorher die Kunden-Registerwerte (StorCtl_Mod-Bits, OutWRte aus WebUI/Solar.web), Freigeben stellt SIE wieder her statt pauschal 0/+100 zu schreiben. Die Sicherung liegt in dv_seq_saved.json und übersteht Neustarts; ohne Sicherung schreibt die automatische Freigabe nach dem Start nichts (Kundenwerte bleiben). restoreDefault gilt nur bei ausdrücklicher Freigabe per API/MQTT oder unlesbarer Sicherung.",
       "enabled": true,
       "sequence": {
         "0": [

@@ -47,6 +47,26 @@ function saveUploadToFile(req, filePath, maxBytes) {
   });
 }
 
+// Software-Update aus der Oberfläche (Review 25.10.2026, P1): /opt/dvhub gehört
+// root, der Dienst kann dort nichts schreiben. git fetch/stash/checkout,
+// npm install und post-update.sh laufen darum über den root-eigenen Einstieg
+// dvhub-update (Kopie von dvhub-update.sh, prüft seine Argumente selbst).
+// Lesende git-Aufrufe (rev-parse, log, describe, tag …) bleiben beim Dienst.
+//  - stash: nur geänderte versionierte Dateien — `git stash --include-untracked`
+//    räumte früher eos-venv/, forecast-venv/ und bin/ mit weg.
+//  - npm-install: Lockfile-Marker vorher ungültig, nach Erfolg neu.
+//  - checkout-*: nur Stände ab dieser Härtung (Untergrenze im Skript).
+export const UPDATE_HELPER = '/usr/local/libexec/dvhub-update';
+// Paketpflege und Port-Recht (Gegenprüfung 25.10.2026, P2): nur feste Aktionen
+// über root-eigene Hilfsskripte (dvhub-apt.sh, dvhub-setcap.sh). Früher sudo
+// apt-get/apt/fuser/setcap mit beliebigen Argumenten.
+export const APT_HELPER = '/usr/local/libexec/dvhub-apt';
+export const SETCAP_HELPER = '/usr/local/libexec/dvhub-setcap';
+// npm install auf einem langsamen Board braucht oft mehr als eine Minute; ein
+// Abbruch per Timeout ließ früher node_modules halb zurück.
+const NPM_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+const POST_UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
+
 export function createAdminRoutes(deps) {
   const {
     ctx, getCfg, pushLog,
@@ -54,6 +74,17 @@ export function createAdminRoutes(deps) {
     actorContext, deriveClientIp, tokenFingerprint,
     GIT_SHA_REF, SEMVER_TAG, compareSemverTag, selectLatestSemverTag, assertNoDowngrade, listReachableReleaseTags,
   } = deps;
+
+  const updateHelper = (args, timeout = 30000) => execFileAsync('sudo', ['-n', UPDATE_HELPER, ...args], { timeout });
+  const npmInstallOmitDev = () => updateHelper(['npm-install'], NPM_INSTALL_TIMEOUT_MS);
+  // stash: nur „nichts zu sichern“ darf weiterlaufen. Exit 4 (Sperre belegt,
+  // npm im Hintergrund) bricht das Update ab, bevor etwas ausgecheckt wird
+  // (Gegenprüfung 6e7f6bfb) — sonst liefe der Checkout über ungesicherte Änderungen.
+  const stashForUpdate = () => updateHelper(['stash']).catch((e) => {
+    if (e?.code === 4) throw new Error(String(e.stderr || e.message || 'Update läuft bereits').trim().split('\n').at(-1));
+    return { stdout: 'No local changes' };
+  });
+  const aptHelper = (action, timeout) => execFileAsync('sudo', ['-n', APT_HELPER, action], { timeout });
 
   return async function handleAdminRoute(req, res, url) {
     // --- Datenbank-Backup herunterladen (pg_dump custom, streamed) ---
@@ -237,8 +268,8 @@ export function createAdminRoutes(deps) {
     if (url.pathname === '/api/admin/system/updates/check' && req.method === 'GET') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       try {
-        await execFileAsync('sudo', ['apt-get', 'update', '-qq'], { timeout: 30000 });
-        const { stdout } = await execFileAsync('sudo', ['apt', 'list', '--upgradable'], { timeout: 15000 });
+        await aptHelper('refresh', 30000);
+        const { stdout } = await aptHelper('list-upgradable', 15000);
         const lines = stdout.split('\n').filter(l => l.includes('/'));
         const packages = lines.map(l => {
           const match = l.match(/^([^\s/]+)\/\S+\s+(\S+)\s+\S+\s+\[upgradable from: ([^\]]+)\]/);
@@ -267,23 +298,14 @@ export function createAdminRoutes(deps) {
         // Wait for any running apt/dpkg lock (max 60s)
         for (let i = 0; i < 12; i++) {
           try {
-            await execFileAsync('sudo', ['fuser', '/var/lib/dpkg/lock-frontend'], { timeout: 3000 });
+            await aptHelper('lock-held', 3000);
             await new Promise(r => setTimeout(r, 5000)); // lock held, wait 5s
           } catch { break; } // fuser exits non-zero = no lock
         }
         // Plan 08-01 Task 2: honour securityOnly by switching to the security-only
-        // apt invocation (reads only /etc/apt/security.sources.list.d/*).
-        const aptCmd = securityOnly
-          ? ['apt-get', '-y',
-             '-o', 'Dir::Etc::SourceList=/etc/apt/sources.list',
-             '-o', 'Dir::Etc::SourceParts=/etc/apt/security.sources.list.d',
-             '-o', 'Dpkg::Options::=--force-confdef',
-             '-o', 'Dpkg::Options::=--force-confold',
-             'upgrade']
-          : ['apt-get', 'upgrade', '-y',
-             '-o', 'Dpkg::Options::=--force-confdef',
-             '-o', 'Dpkg::Options::=--force-confold'];
-        const result = await execFileAsync('sudo', aptCmd, { timeout: 300000 });
+        // apt invocation (reads only /etc/apt/security.sources.list.d/*). Die
+        // genauen apt-get-Aufrufe stehen jetzt fest in dvhub-apt.sh.
+        const result = await aptHelper(securityOnly ? 'upgrade-security' : 'upgrade-all', 300000);
         // Ein node-Update loescht die Datei-Capability. Nur Boxen, deren Dienst
         // das Port-Recht noch NICHT ueber systemd bekommt (vor
         // node-runtime-provision.sh), brauchen setcap zurueck — sonst bliebe
@@ -291,8 +313,8 @@ export function createAdminRoutes(deps) {
         const unitAmbient = (await execFileAsync('systemctl', ['show', process.env.DV_SERVICE_NAME || 'dvhub.service', '-p', 'AmbientCapabilities', '--value'], { timeout: 5000 })
           .catch(() => ({ stdout: '' }))).stdout;
         if (!/cap_net_bind_service/.test(unitAmbient)) {
-          const nodeBin = (await execFileAsync('which', ['node'], { timeout: 5000 }).catch(() => ({ stdout: '/usr/bin/node' }))).stdout.trim();
-          await execFileAsync('sudo', ['setcap', 'cap_net_bind_service=+ep', nodeBin], { timeout: 5000 }).catch(() => {});
+          // dvhub-setcap löst die node-Datei selbst auf (/usr/bin/node wie ExecStart).
+          await execFileAsync('sudo', ['-n', SETCAP_HELPER, 'node'], { timeout: 5000 }).catch(() => {});
         }
 
         const outputLines = (result.stdout || '').split('\n');
@@ -424,7 +446,7 @@ export function createAdminRoutes(deps) {
       try {
         const repoRoot = ctx.getRepoRoot();
         const channel = ctx.getRawCfg().updateChannel || 'stable';
-        await execFileAsync('git', ['fetch', '--tags', '--quiet', 'origin'], { cwd: repoRoot, timeout: 15000 });
+        await updateHelper(['fetch']);
         const localRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
 
         // Shared branch-drift report (dev channel + stable pre-release fallback):
@@ -534,7 +556,7 @@ export function createAdminRoutes(deps) {
         const channel = ctx.getRawCfg().updateChannel || 'stable';
         let gitOutput = '';
         const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-        const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
+        const stashResult = await stashForUpdate();
         const hasStash = !stashResult.stdout.includes('No local changes');
 
         try {
@@ -555,15 +577,14 @@ export function createAdminRoutes(deps) {
             let mainVersion;
             try { mainVersion = JSON.parse(mainPkg.stdout || '{}').version || null; } catch { mainVersion = null; }
             assertNoDowngrade(mainVersion, currentVersionNow, { allowDowngrade, label: 'origin/main' });
-            await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
-            const pull = await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: repoRoot, timeout: 30000 });
+            await updateHelper(['checkout-main']);
             // Operator-facing gitOutput: the checkout -B above already moved HEAD to
             // origin/main, so the pull is a no-op and prints "Already up to date." even
             // when the update jumped revisions (observed live: rollbackRev 477f3fd →
             // c9f7ce3 reported "Already up to date."). Report the real movement.
             const newRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
             return newRev.slice(0, 7) === rollbackRev.slice(0, 7)
-              ? pull.stdout.trim()
+              ? 'Already up to date.'
               : `Updated ${rollbackRev.slice(0, 7)} → ${newRev.slice(0, 7)}`;
           };
           if (pinRef) {
@@ -572,7 +593,7 @@ export function createAdminRoutes(deps) {
             // erreichbar sein (kein verwaister/fremder Commit). Detached HEAD ist
             // beabsichtigt — das nächste normale Channel-Update löst den Pin wieder
             // auf. KEIN Downgrade-Guard (der Operator pinnt bewusst, wie --ref).
-            await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            await updateHelper(['fetch']);
             let refSha = '';
             try {
               refSha = (await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `${pinRef}^{commit}`], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
@@ -581,18 +602,18 @@ export function createAdminRoutes(deps) {
             try {
               await execFileAsync('git', ['merge-base', '--is-ancestor', refSha, 'origin/main'], { cwd: repoRoot, timeout: 5000 });
             } catch { const e = new Error(`ref_not_reachable: ${pinRef} ist nicht von origin/main erreichbar`); e.code = 'ref_not_reachable'; throw e; }
-            await execFileAsync('git', ['checkout', '--detach', refSha], { cwd: repoRoot, timeout: 15000 });
+            await updateHelper(['checkout-commit', refSha]);
             pushLog('update_pinned_ref', { ref: pinRef, sha: refSha.slice(0, 7), from: rollbackRev.slice(0, 7) });
             gitOutput = `Pinned ${rollbackRev.slice(0, 7)} → ${refSha.slice(0, 7)} (ref ${pinRef})`;
           } else if (channel === 'stable') {
-            await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            await updateHelper(['fetch']);
             // T-UPDATE-ANCHOR: only tags reachable from origin/main are release
             // anchors — an orphaned pre-cleanup tag (v0.4.2) must never be selected.
             const selectedTag = targetVersion || selectLatestSemverTag(await listReachableReleaseTags(repoRoot));
             if (selectedTag) {
               // Explicit targetVersion was already downgrade-checked; guard an auto-selected tag.
               if (!targetVersion) assertNoDowngrade(selectedTag, currentVersionNow, { allowDowngrade, label: 'latest release tag' });
-              const checkout = await execFileAsync('git', ['checkout', selectedTag], { cwd: repoRoot, timeout: 15000 });
+              const checkout = await updateHelper(['checkout-tag', selectedTag]);
               gitOutput = `Checked out ${selectedTag}: ${checkout.stderr.trim()}`;
             } else {
               // Pre-release phase: no release tag reachable from origin/main yet.
@@ -603,24 +624,21 @@ export function createAdminRoutes(deps) {
               gitOutput = `[pre-release] ${await followOriginMain()}`;
             }
           } else {
-            await execFileAsync('git', ['fetch', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            await updateHelper(['fetch']);
             gitOutput = await followOriginMain();
           }
 
           // --- npm install + syntax check ---
-          const npmInstall = await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
+          const npmInstall = await npmInstallOmitDev();
           await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
 
-          // --- post-update.sh (system-level migrations: sudoers, setcap, packages, tls) ---
-          const postUpdateScript = path.join(repoRoot, 'post-update.sh');
+          // --- post-update.sh (system-level migrations: sudoers, Rechte, Pakete, tls) ---
           try {
-            const fs = await import('node:fs');
-            fs.default.accessSync(postUpdateScript, fs.default.constants.X_OK);
-            const postResult = await execFileAsync('sudo', ['bash', postUpdateScript], { cwd: repoRoot, timeout: 120000 });
+            const postResult = await updateHelper(['post-update'], POST_UPDATE_TIMEOUT_MS);
             pushLog('post_update_applied', { output: (postResult.stdout || '').trim().split('\n').slice(-5).join('\n') });
           } catch (postErr) {
             pushLog('post_update_warning', { error: postErr.message });
-            // Don't fail the update if post-update fails — config migrations still run on restart
+            // Don't fail the update if post-update fails — it runs again on restart (ExecStartPre)
           }
           pushLog('update_applied', {
             channel,
@@ -629,9 +647,9 @@ export function createAdminRoutes(deps) {
           });
         } catch (updateErr) {
           pushLog('update_rollback', { reason: updateErr.message, rollbackTo: rollbackRev.slice(0, 7) });
-          await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
-          await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
-          if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+          await updateHelper(['checkout-commit', rollbackRev]);
+          await npmInstallOmitDev().catch(() => {});
+          if (hasStash) await updateHelper(['stash-pop']).catch(() => {});
           throw new Error(`Update rolled back: ${updateErr.message}`, { cause: updateErr });
         }
 
@@ -675,17 +693,17 @@ export function createAdminRoutes(deps) {
           const appDir = ctx.getAppDir();
           let gitOutput = '';
           const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-          const stashResult = await execFileAsync('git', ['stash', '--include-untracked'], { cwd: repoRoot, timeout: 10000 }).catch(() => ({ stdout: 'No local changes' }));
+          const stashResult = await stashForUpdate();
           const hasStash = !stashResult.stdout.includes('No local changes');
           try {
             // --- git fetch + checkout (inside inner try for rollback coverage) ---
-            await execFileAsync('git', ['fetch', '--tags', 'origin'], { cwd: repoRoot, timeout: 15000 });
+            await updateHelper(['fetch']);
 
             if (channel === 'stable') {
               // T-UPDATE-ANCHOR: only tags reachable from origin/main are release anchors.
               const latestTag = selectLatestSemverTag(await listReachableReleaseTags(repoRoot));
               if (latestTag) {
-                await execFileAsync('git', ['checkout', latestTag], { cwd: repoRoot, timeout: 15000 });
+                await updateHelper(['checkout-tag', latestTag]);
                 gitOutput = `Switched to stable: ${latestTag}`;
               } else {
                 // Pre-release phase: no release tag reachable yet — save the channel
@@ -693,22 +711,22 @@ export function createAdminRoutes(deps) {
                 // tag re-anchors on the next update. Hard-failing here (old behaviour:
                 // throw 'No release tags found' → 500 + rollback) made the stable
                 // channel unselectable before the first release.
-                await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+                await updateHelper(['checkout-main']);
                 gitOutput = 'Switched to stable: no release tag yet — following origin/main (pre-release)';
               }
             } else {
-              await execFileAsync('git', ['checkout', '-B', 'main', 'origin/main'], { cwd: repoRoot, timeout: 15000 });
+              await updateHelper(['checkout-main']);
               gitOutput = 'Switched to dev: origin/main';
             }
 
             // --- npm install + syntax check ---
-            await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 });
+            await npmInstallOmitDev();
             await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
           } catch (switchErr) {
             pushLog('channel_switch_rollback', { reason: switchErr.message, rollbackTo: rollbackRev.slice(0, 7) });
-            await execFileAsync('git', ['checkout', rollbackRev], { cwd: repoRoot, timeout: 15000 });
-            await execFileAsync('npm', ['install', '--omit=dev'], { cwd: appDir, timeout: 60000 }).catch(() => {});
-            if (hasStash) await execFileAsync('git', ['stash', 'pop'], { cwd: repoRoot, timeout: 10000 }).catch(() => {});
+            await updateHelper(['checkout-commit', rollbackRev]);
+            await npmInstallOmitDev().catch(() => {});
+            if (hasStash) await updateHelper(['stash-pop']).catch(() => {});
             throw new Error(`Channel switch rolled back: ${switchErr.message}`, { cause: switchErr });
           }
           if (hasStash) {

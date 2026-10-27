@@ -23,7 +23,9 @@ const PRICE_BACKFILL_FETCH_CHUNK_DAYS = 30;
 
 import {
   buildHistoricalPriceTelemetrySamples,
-  buildHistoricalTelemetrySample
+  priceRowSpacingSeconds,
+  buildHistoricalTelemetrySample,
+  sampleSpanEndMs
 } from './telemetry-runtime.js';
 
 const CORE_SLOT_FIELDS = [
@@ -391,7 +393,7 @@ function getOrCreateVrmAggregate(bucket, type, code) {
   return aggregate;
 }
 
-function accumulateVrmAggregate(bucket, { type, code, rawValue, durationSeconds }) {
+function accumulateVrmAggregate(bucket, { type, code, rawValue, durationSeconds, energyShare = 1 }) {
   const numeric = Number(rawValue);
   if (!Number.isFinite(numeric)) return;
   const aggregate = getOrCreateVrmAggregate(bucket, type, code);
@@ -405,7 +407,11 @@ function accumulateVrmAggregate(bucket, { type, code, rawValue, durationSeconds 
     aggregate.weightedValueSeconds += numeric * seconds;
     return;
   }
-  aggregate.totalEnergyKwh += numeric;
+  // Energiewerte (consumption/kwh) gelten fuer die ganze Probe. Liegt sie ueber
+  // mehreren 15-min-Slots (interval=hours/days), bekommt jeder Slot nur seinen
+  // Zeitanteil, sonst wuerde die volle kWh-Menge in jeden Slot kopiert.
+  const share = Number.isFinite(energyShare) && energyShare >= 0 ? energyShare : 1;
+  aggregate.totalEnergyKwh += numeric * share;
 }
 
 function addVrmValuesToSlotBuckets(slotBuckets, {
@@ -424,10 +430,18 @@ function addVrmValuesToSlotBuckets(slotBuckets, {
     const item = sorted[index];
     const currentMs = Number(item[0]);
     const nextMs = index + 1 < sorted.length ? Number(sorted[index + 1][0]) : null;
-    const sampleEndMs = currentMs + (Math.max(1, Number(sourceResolutionSeconds || slotResolutionSeconds)) * 1000);
+    // Tagesproben an Umstellungstagen (23/25 h) bis zur naechsten Probe, wie
+    // die Slot-Verdichtung der Rohreihen (sampleSpanEndMs, Gegenpruefung e18e3741).
+    const sampleEndMs = sampleSpanEndMs(currentMs, Math.max(1, Number(sourceResolutionSeconds || slotResolutionSeconds)), nextMs);
     const boundedEndMs = [nextMs, sampleEndMs, rangeEndMs]
       .filter((value) => Number.isFinite(value))
       .reduce((min, value) => Math.min(min, value), sampleEndMs);
+    // Eigene Dauer der Probe (bis zur naechsten Probe bzw. ihrer Aufloesung). Das
+    // Bereichsende kuerzt nur, was in den Slots landet, nicht den Nenner: der Anteil
+    // jenseits des Bereichs gehoert nicht in diesen Import.
+    const sampleSpanMs = [nextMs, sampleEndMs]
+      .filter((value) => Number.isFinite(value))
+      .reduce((min, value) => Math.min(min, value), sampleEndMs) - currentMs;
     let segmentStartMs = currentMs;
     while (segmentStartMs < boundedEndMs) {
       const slotStartIso = bucketIso(segmentStartMs, slotResolutionSeconds);
@@ -440,7 +454,8 @@ function addVrmValuesToSlotBuckets(slotBuckets, {
           type,
           code,
           rawValue: item[1],
-          durationSeconds
+          durationSeconds,
+          energyShare: sampleSpanMs > 0 ? (durationSeconds * 1000) / sampleSpanMs : 1
         });
       }
       segmentStartMs = segmentEndMs;
@@ -1826,6 +1841,8 @@ export function createHistoryImportManager({
     const days = [...new Set(missingBuckets.map((ts) => berlinDateString(ts)))].sort();
     const dayWindows = buildPriceBackfillDayWindows(days);
     const matchedRows = [];
+    // Fehlende Slots, die die geschriebenen Zeilen decken (eine Stundenzeile bis zu vier).
+    const coveredMissing = new Set();
     const openDays = [];
     const errors = [];
 
@@ -1840,10 +1857,20 @@ export function createHistoryImportManager({
           waitImpl,
           dvhubApiBaseUrl
         });
-        for (const row of rows) {
-          if (!missingSet.has(bucketIso(row.ts))) continue;
-          matchedRows.push(row);
-        }
+        const spacing = priceRowSpacingSeconds(rows);
+        rows.forEach((row, index) => {
+          // Ein Stundenpreis deckt alle vier Viertelstunden seiner Stunde; er
+          // wird geschrieben, sobald eine davon fehlt.
+          const rowMs = new Date(Number.isFinite(Number(row.ts)) ? Number(row.ts) : row.ts).getTime();
+          const covered = Array.from(
+            { length: Math.max(1, Math.round(spacing[index] / PRICE_BUCKET_SECONDS)) },
+            (_, quarter) => bucketIso(rowMs + quarter * PRICE_BUCKET_SECONDS * 1000)
+          );
+          const hits = covered.filter((ts) => missingSet.has(ts));
+          if (!hits.length) return;
+          for (const ts of hits) coveredMissing.add(ts);
+          matchedRows.push({ ...row, resolutionSeconds: spacing[index] });
+        });
       } catch (error) {
         openDays.push(...window.days);
         errors.push(error?.message || String(error));
@@ -1853,7 +1880,7 @@ export function createHistoryImportManager({
     const historyRows = buildHistoricalPriceTelemetrySamples(matchedRows);
     if (historyRows.length) await store.writeSamples(historyRows);
 
-    const skippedBuckets = Math.max(0, missingBuckets.length - matchedRows.length);
+    const skippedBuckets = Math.max(0, missingBuckets.length - coveredMissing.size);
     const partial = openDays.length > 0 && historyRows.length > 0;
     const ok = openDays.length === 0 || partial;
     const jobId = await store.writeImportJob({
@@ -1871,7 +1898,7 @@ export function createHistoryImportManager({
           endDayExclusive: window.endDayExclusive,
           days: window.days
         })),
-        matchedBuckets: matchedRows.length,
+        matchedBuckets: coveredMissing.size,
         skippedBuckets,
         openDays,
         errors
@@ -1883,7 +1910,7 @@ export function createHistoryImportManager({
       partial,
       jobId,
       requestedDays: days.length,
-      matchedBuckets: matchedRows.length,
+      matchedBuckets: coveredMissing.size,
       importedRows: historyRows.length,
       skippedBuckets,
       days,

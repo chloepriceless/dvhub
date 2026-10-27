@@ -148,8 +148,8 @@ test('Race: Löschen während /rename-Body unterwegs ist → Kopplung bleibt gel
 // ── 6. Passkey-Login verlangt User-Verification ──────────────────────────────
 
 // Passkey über die echte API registrieren; liefert den Authenticator zurück.
-async function registerPasskey(p, cookie, { uv = true, credIdBytes = 16 } = {}) {
-  const auth = makeAuthenticator('127.0.0.1', { uv, credIdBytes });
+async function registerPasskey(p, cookie, { uv = true, credIdBytes = 16, zeroCounter = false } = {}) {
+  const auth = makeAuthenticator('127.0.0.1', { uv, credIdBytes, zeroCounter });
   const origin = p.url;
   const b = await p.call('/api/passkey/register-begin', { method: 'POST', cookie, headers: { origin } });
   assert.equal(b.status, 200, b.text);
@@ -181,6 +181,28 @@ test('Passkey-Login: ohne User-Verification abgelehnt, mit UV erfolgreich', asyn
   const r2 = await passkeyLogin(p, ACCT.name, withUv);
   assert.equal(r2.status, 200, r2.text);
   assert.ok(r2.cookie, 'Session-Cookie gesetzt');
+});
+
+// Review 2026-10-25 (P3): der gespeicherte Signaturzähler wird beim Login
+// geprüft — ein geklonter Key (Zähler geht zurück) kommt nicht mehr rein.
+test('Passkey-Login: zurückgehender Signaturzähler wird abgelehnt, Zähler 0 geht', async (t) => {
+  const p = await startPortal(t);
+  const acct = await p.call('/api/account', { method: 'POST', body: ACCT });
+  const auth = await registerPasskey(p, acct.cookie);
+  assert.equal((await passkeyLogin(p, ACCT.name, auth)).status, 200, 'erster Login');
+  auth.setCounter(10);
+  assert.equal((await passkeyLogin(p, ACCT.name, auth)).status, 200, 'Zähler 11');
+  auth.setCounter(3); // Klon mit älterem Stand meldet 4
+  const clone = await passkeyLogin(p, ACCT.name, auth);
+  assert.equal(clone.status, 401, clone.text);
+  assert.match(clone.j.detail || '', /signcount_rueckschritt/);
+  auth.setCounter(-1); // meldet 0 → kein Vergleich (Owner-Regel: nur wenn beide ≠ 0)
+  assert.equal((await passkeyLogin(p, ACCT.name, auth)).status, 200, 'Zähler 0');
+  auth.setCounter(5); // meldet 6 < gespeicherte 11: der 0-Login darf den Stand nicht senken
+  assert.equal((await passkeyLogin(p, ACCT.name, auth)).status, 401, 'Zähler 6 nach 0-Login');
+
+  const zero = await registerPasskey(p, acct.cookie, { zeroCounter: true });
+  for (let i = 0; i < 3; i++) assert.equal((await passkeyLogin(p, ACCT.name, zero)).status, 200, `Zähler-0-Passkey Login ${i + 1}`);
 });
 
 // ── 7. TOTP: Replay-Schutz + Sperre pro Konto ────────────────────────────────

@@ -57,7 +57,11 @@ test('IPsec-Regeln zeigen nur auf das Hilfsskript (link/unlink), nicht auf ln/rm
   assert.ok(rules.includes('${SERVICE_USER} ALL=(root) NOPASSWD: ${IPSEC_LINK_PATH} unlink *'));
   assert.equal(rules.some((r) => /NOPASSWD: \$\{(LN|RM)_PATH\}/.test(r)), false);
   const install = readFileSync(path.join(repoRoot, 'install.sh'), 'utf8');
-  assert.match(install, new RegExp(`IPSEC_LINK_PATH="${IPSEC_LINK_HELPER}"`));
+  // Installiert über den gemeinsamen HELPERS-Block (Gegenprüfung 25.10.2026).
+  assert.ok(install.includes('DVHUB_LIBEXEC="${DVHUB_LIBEXEC:-/usr/local/libexec}"'));
+  assert.equal(IPSEC_LINK_HELPER, '/usr/local/libexec/dvhub-ipsec-link');
+  assert.ok(install.includes('IPSEC_LINK_PATH="$DVHUB_LIBEXEC/dvhub-ipsec-link"'));
+  assert.ok(install.includes('dvhub_install_helper dvhub-ipsec-link.sh "$IPSEC_LINK_PATH"'));
 });
 
 // ── Hilfsskript: echte Datei, nur die beiden Pfade auf ein Testverzeichnis umgebogen ──

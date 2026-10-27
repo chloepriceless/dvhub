@@ -89,7 +89,10 @@ function usableWh(side, charging) {
 export function createFollowerController(config = {}) {
   const maxChargeW = power(config.maxChargeW, 'maxChargeW');
   const maxDischargeW = power(config.maxDischargeW, 'maxDischargeW');
-  const rampWPerS = nonNeg(config.rampWPerS, DEFAULT_RAMP_W_PER_S);
+  // Rampe 0 hiesse „Sollwert nie bewegen“ — auch nicht im no_data-Pfad, der ihn
+  // auf 0 zurueckfahren soll (Review Regelung 25.10.). <= 0 gilt als nicht gesetzt.
+  const rampRaw = nonNeg(config.rampWPerS, DEFAULT_RAMP_W_PER_S);
+  const rampWPerS = rampRaw > 0 ? rampRaw : DEFAULT_RAMP_W_PER_S;
   const deadbandW = nonNeg(config.deadbandW, DEFAULT_DEADBAND_W);
   const gainRaw = nonNeg(config.gain, DEFAULT_GAIN);
   const gain = gainRaw > 0 && gainRaw <= 1 ? gainRaw : DEFAULT_GAIN;

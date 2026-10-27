@@ -65,24 +65,25 @@ test('installer runs legacy migration before validating the renamed app director
 });
 
 test('installer registers the repo directory as a git safe.directory before updating an existing checkout', () => {
-  const safeDirectoryLine = 'git config --global --add safe.directory "$INSTALL_DIR"';
-  const safeIndex = source.indexOf(safeDirectoryLine);
-  const fetchIndex = source.indexOf('git -C "$INSTALL_DIR" fetch --tags origin');
-
-  assert.notEqual(safeIndex, -1, 'install.sh must register $INSTALL_DIR as a safe.directory');
+  // Seit der Gegenprüfung 948b0e6a: git als root nur über igit() — safe.directory
+  // pro Aufruf, ohne Hooks/fsmonitor —, und der Ordner gehört vorher root.
+  const igit = source.match(/igit\(\) \{[^}]*\}/);
+  assert.ok(igit, 'install.sh must define igit()');
+  assert.ok(igit[0].includes('-c safe.directory="$INSTALL_DIR"'), 'igit must pass safe.directory for $INSTALL_DIR');
+  const fetchIndex = source.indexOf('igit fetch --tags origin');
   assert.notEqual(fetchIndex, -1, 'install.sh must update existing repositories via git fetch');
-  assert.ok(safeIndex < fetchIndex, 'safe.directory must be configured before fetch/checkouts run');
+  assert.ok(source.indexOf('igit() {') < fetchIndex, 'igit must be defined before fetch/checkouts run');
 });
 
 test('installer force-syncs an existing checkout to the requested remote branch instead of using ff-only pull', () => {
   assert.match(
     source,
-    /git -C "\$INSTALL_DIR" checkout -B "\$REPO_BRANCH" "origin\/\$REPO_BRANCH"/,
+    /igit checkout -B "\$REPO_BRANCH" "origin\/\$REPO_BRANCH"/,
     'install.sh must align the local branch with origin/$REPO_BRANCH for managed deploy checkouts'
   );
   assert.doesNotMatch(
     source,
-    /git -C "\$INSTALL_DIR" pull --ff-only origin "\$REPO_BRANCH"/,
+    /(git -C "\$INSTALL_DIR"|igit) pull --ff-only origin "\$REPO_BRANCH"/,
     'install.sh must not rely on ff-only pull for existing managed installs'
   );
 });

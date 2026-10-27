@@ -264,7 +264,9 @@ function renderKpis(summary) {
   const effDenom = batChargeKwh - storedDeltaKwh;
   const batteryEff = effDenom > 0 ? round2((batDischargeKwh / effDenom) * 100) : null;
   // Akku 2 (zweite GX-Anlage) steckt nicht im Hausverbrauch: was er im Fenster
-  // mehr gespeichert hat, ist ebenfalls kein Verlust (Codex Runde 4).
+  // mehr gespeichert hat, ist ebenfalls kein Verlust (Codex Runde 4). Das
+  // Backend liefert nur den Anteil der lokalen Abschnitte: in VRM-Slots steckt
+  // Akku 2 schon im Verbrauch (Review 25.10.2026).
   const secondStoredDeltaKwh = Number(kpis?.secondBatteryStoredDeltaKwh || 0);
   const totalLoss = round2(
     (Number(kpis?.pvKwh || 0) + Number(kpis?.importKwh || 0))

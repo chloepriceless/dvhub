@@ -76,3 +76,17 @@ test('nach VRM-Backfill: VRM-Fluesse ohne lokale Akku-2-Werte, Teile = gemessene
     store.close();
   }
 });
+
+test('Slots tragen das VRM-Kennzeichen nur, wenn ihre Fluesse aus dem VRM-Import kommen', () => {
+  const local = storeWithBackfill(false);
+  const vrm = storeWithBackfill(true);
+  try {
+    const range = { start: '2026-03-09T00:00:00.000Z', end: '2026-03-10T00:00:00.000Z' };
+    assert.equal(local.listMaterializedEnergySlots(range)[0].vrmFlows, undefined);
+    assert.equal(vrm.listMaterializedEnergySlots(range)[0].vrmFlows, true);
+    assert.equal(vrm.listAggregatedEnergySlots({ ...range, bucketSeconds: 900 })[0].vrmFlows, true);
+  } finally {
+    local.close();
+    vrm.close();
+  }
+});

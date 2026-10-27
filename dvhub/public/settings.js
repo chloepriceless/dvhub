@@ -3053,6 +3053,10 @@ function parseInputElement(field, input) {
     // erwartet — und jede Prüfung „Liste leer? dann alles erlauben" liefe
     // plötzlich in den falschen Zweig.
     if (field.type === 'stringList') return [];
+    // Ein leergeräumtes Zahlenfeld heißt „zurück auf den Standard“, den der
+    // Platzhalter zeigt — also den gespeicherten Wert löschen. Ein '' machte
+    // der Server früher zu einer gespeicherten 0 (Review 25.10.2026).
+    if (field.type === 'number') return { action: 'delete' };
     return '';
   }
 

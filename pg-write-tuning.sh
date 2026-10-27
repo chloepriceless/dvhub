@@ -28,8 +28,9 @@
 # und post-update.sh, als root. Abschalten: DVHUB_PG_WRITE_TUNING=0.
 set -euo pipefail
 [[ "${DVHUB_PG_WRITE_TUNING:-1}" == "0" ]] && { echo "  PostgreSQL: Schreib-Tuning abgeschaltet"; exit 0; }
-[[ "${EUID}" -eq 0 ]] || { echo "  PostgreSQL: pg-write-tuning.sh braucht root — übersprungen" >&2; exit 0; }
-CONF_DIR="$(find /etc/postgresql -mindepth 3 -maxdepth 3 -type d -name conf.d 2>/dev/null | sort -V | tail -1)"
+# PG_TUNING_EUID, PG_ETC: nur fuer Tests (test/pg-write-tuning.test.js).
+[[ "${PG_TUNING_EUID:-$EUID}" -eq 0 ]] || { echo "  PostgreSQL: pg-write-tuning.sh braucht root — übersprungen" >&2; exit 0; }
+CONF_DIR="$(find "${PG_ETC:-/etc/postgresql}" -mindepth 3 -maxdepth 3 -type d -name conf.d 2>/dev/null | sort -V | tail -1)"
 [[ -n "$CONF_DIR" ]] || { echo "  PostgreSQL: kein conf.d gefunden — übersprungen"; exit 0; }
 DROPIN="$CONF_DIR/dvhub-writes.conf"
 MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
@@ -55,21 +56,28 @@ max_worker_processes = $MWP
 autovacuum_max_workers = $AVW
 max_parallel_workers_per_gather = 0
 max_parallel_maintenance_workers = 0
-timescaledb.max_background_workers = $TSW
 "
+# timescaledb.* ist ohne geladene Extension ein unbekannter Schlüssel — dann
+# weglassen. Die Entscheidung fällt VOR dem Vergleich (Review 25.10.2026): früher
+# wurde die Zeile erst nach dem Schreiben entfernt, die Datei glich nie dem Soll,
+# und jeder DVhub-Start startete PostgreSQL neu.
+if grep -qs "timescaledb" "$CONF_DIR/timescaledb.conf" 2>/dev/null; then
+  WANT="${WANT}timescaledb.max_background_workers = $TSW
+"
+fi
 if [[ -f "$DROPIN" ]] && [[ "$(cat "$DROPIN")" == "$(printf '%s' "$WANT")" ]]; then
   echo "  PostgreSQL: Schreib-Tuning aktuell"
   exit 0
 fi
 restart_keys='^(shared_buffers|max_connections|max_worker_processes|autovacuum_max_workers|timescaledb.max_background_workers) '
 old_restart="$(grep -E "$restart_keys" "$DROPIN" 2>/dev/null || true)"
-printf '%s' "$WANT" > "$DROPIN"
-chmod 644 "$DROPIN"
-new_restart="$(grep -E "$restart_keys" "$DROPIN")"
-# timescaledb.* ist ohne geladene Extension ein unbekannter Schlüssel — dann weglassen.
-if ! grep -rqs "timescaledb" "$CONF_DIR"/timescaledb.conf 2>/dev/null; then
-  sed -i '/^timescaledb\./d' "$DROPIN"
-fi
+new_restart="$(printf '%s' "$WANT" | grep -E "$restart_keys" || true)"
+# Neben der Zieldatei schreiben und umbenennen: nie eine halbe Datei, und ein
+# Verweis an der Stelle der Datei wird ersetzt statt verfolgt.
+tmp_dropin="$(mktemp "$CONF_DIR/.dvhub-writes.XXXXXX")"
+printf '%s' "$WANT" > "$tmp_dropin"
+chmod 644 "$tmp_dropin"
+mv -f "$tmp_dropin" "$DROPIN"
 if [[ "$old_restart" != "$new_restart" ]]; then
   systemctl restart postgresql 2>/dev/null || true
   echo "  PostgreSQL: Profil $PROFILE gesetzt, neu gestartet ($DROPIN)"

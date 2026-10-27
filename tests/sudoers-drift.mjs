@@ -28,20 +28,35 @@ import { dirname, join } from 'node:path';
 // repo root AND from dvhub/ (the cwd `npm test` uses).
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-const block = (relPath) => {
+const block = (relPath, name) => {
   const lines = readFileSync(join(repoRoot, relPath), 'utf8').split('\n');
-  const a = lines.findIndex(l => l.includes('BEGIN DVHUB SUDOERS'));
-  const b = lines.findIndex(l => l.includes('END DVHUB SUDOERS'));
+  const a = lines.findIndex(l => l.includes(`BEGIN DVHUB ${name}`));
+  const b = lines.findIndex(l => l.includes(`END DVHUB ${name}`));
   if (a === -1 || b === -1 || b < a) {
-    console.error('sudoers-drift: FAIL — BEGIN/END DVHUB SUDOERS markers missing in ' + relPath);
+    console.error(`sudoers-drift: FAIL — BEGIN/END DVHUB ${name} markers missing in ${relPath}`);
     process.exit(1);
   }
   return lines.slice(a, b + 1).join('\n');
 };
 
-if (block('install.sh') !== block('post-update.sh')) {
-  console.error('sudoers-drift: FAIL — BEGIN/END DVHUB SUDOERS block diverged between install.sh and post-update.sh');
+// Zweiter Block (Review 25.10.2026): wer den Programmordner besitzt, muss in
+// install.sh und post-update.sh gleich geregelt sein — sonst gibt der eine
+// zurück, was der andere root zugeordnet hat.
+// Dritter Block (Gegenprüfung 25.10.2026, P2): welche root-eigenen
+// Hilfsskripte nach /usr/local/libexec kommen — die sudoers-Regeln zeigen nur
+// auf sie; fehlte eines, liefe die Regel ins Leere.
+for (const name of ['SUDOERS', 'INSTALL-DIR OWNERSHIP', 'HELPERS', 'GIT CONFIG']) {
+  if (block('install.sh', name) !== block('post-update.sh', name)) {
+    console.error(`sudoers-drift: FAIL — BEGIN/END DVHUB ${name} block diverged between install.sh and post-update.sh`);
+    process.exit(1);
+  }
+}
+// Vierter Block (Gegenprüfung a75c2cea): die Bereinigung der git-Konfiguration
+// steht zusätzlich im root-eigenen Update-Einstieg dvhub-update.sh — er läuft
+// als Kopie unter /usr/local/libexec und kann nichts aus dem Programmordner laden.
+if (block('dvhub-update.sh', 'GIT CONFIG') !== block('post-update.sh', 'GIT CONFIG')) {
+  console.error('sudoers-drift: FAIL — BEGIN/END DVHUB GIT CONFIG block diverged between dvhub-update.sh and post-update.sh');
   process.exit(1);
 }
-console.log('sudoers-drift: OK (install.sh <-> post-update.sh BEGIN/END blocks identical)');
+console.log('sudoers-drift: OK (install.sh <-> post-update.sh: SUDOERS + INSTALL-DIR OWNERSHIP + HELPERS + GIT CONFIG blocks identical; GIT CONFIG also in dvhub-update.sh)');
 process.exit(0);

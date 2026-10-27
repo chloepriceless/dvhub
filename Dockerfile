@@ -106,9 +106,12 @@ LABEL org.opencontainers.image.title="DVhub" \
 # muss mindestens so neu sein wie der Server. Die Binaries liegen unter
 # /usr/libexec/postgresql17, nicht im PATH (→ DVHUB_PG_BIN_DIR).
 # openvpn + wireguard-tools + sudo + iproute2 (2026-10-02): das VPN zum Direktvermarkter läuft
-# IM DVhub-Container — gleicher Code wie nativ (vpn-manager.js startet
-# `sudo openvpn --config …`). sudo darf NUR openvpn mit DVhub-Profilen und das
-# Prüfen/Beenden von openvpn, genau wie die nativen sudoers-Regeln. Der
+# IM DVhub-Container — gleicher Code wie nativ. sudo darf NUR das root-eigene
+# Hilfsskript dvhub-vpn (Gegenprüfung 25.10.2026, P2; früher
+# `openvpn --config …/profiles/*` und `wg-quick up|down …/profiles/*`: der
+# Rest der Befehlszeile war frei, z. B. --script-security 2 --up …). Es nimmt
+# einen Profilnamen, liest das Profil als dvhub, prüft es und startet nur die
+# geprüfte Kopie (dvhub-vpn.sh). bash braucht es (und wg-quick). Der
 # Container braucht dafür NET_ADMIN + /dev/net/tun (docker/compose.yml); mit
 # Host-Netz entsteht tun0 wie nativ direkt auf dem Gerät.
 # EEBUS: dvhub-eebus (Go) braucht keine Bibliotheken; dbus + avahi nur, falls
@@ -118,7 +121,7 @@ LABEL org.opencontainers.image.title="DVhub" \
 # den Support-Login im Container (läuft nur, solange ein Tunnel offen ist, als
 # dvhub, nur auf 127.0.0.1, nur mit dem Support-Schlüssel — docker-entrypoint.sh).
 # Der dvhub-Benutzer braucht dafür eine Shell; ein Passwort hat er nicht.
-RUN apk add --no-cache tzdata su-exec setpriv postgresql17-client openvpn wireguard-tools sudo iproute2 procps nftables \
+RUN apk add --no-cache bash tzdata su-exec setpriv postgresql17-client openvpn wireguard-tools sudo iproute2 procps nftables \
       avahi dbus \
       openssh-client-default openssh-keygen openssh-server autossh \
     && if [ "${EEBUS_IMPL}" = "c" ]; then apk add --no-cache libwebsockets cjson avahi-libs; fi \
@@ -126,13 +129,12 @@ RUN apk add --no-cache tzdata su-exec setpriv postgresql17-client openvpn wiregu
     && adduser -u 10001 -G dvhub -S -H -s /bin/sh dvhub \
     && printf '%s\n' \
       'Defaults:dvhub !requiretty' \
-      'dvhub ALL=(root) NOPASSWD: /usr/sbin/openvpn --config /etc/dvhub/vpn/profiles/*' \
-      'dvhub ALL=(root) NOPASSWD: /usr/bin/pkill -0 -x openvpn' \
-      'dvhub ALL=(root) NOPASSWD: /usr/bin/pkill -15 -x openvpn' \
-      'dvhub ALL=(root) NOPASSWD: /usr/bin/pkill -9 -x openvpn' \
-      'dvhub ALL=(root) NOPASSWD: /usr/bin/wg-quick up /etc/dvhub/vpn/profiles/*' \
-      'dvhub ALL=(root) NOPASSWD: /usr/bin/wg-quick down /etc/dvhub/vpn/profiles/*' \
-      'dvhub ALL=(root) NOPASSWD: /usr/bin/wg show *' \
+      'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-vpn openvpn up *' \
+      'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-vpn openvpn down' \
+      'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-vpn openvpn status' \
+      'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-vpn wireguard up *' \
+      'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-vpn wireguard down *' \
+      'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-vpn wireguard status' \
       'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-modbus-redirect add *' \
       'dvhub ALL=(root) NOPASSWD: /usr/local/libexec/dvhub-modbus-redirect del' \
       > /etc/sudoers.d/dvhub-vpn \
@@ -162,17 +164,30 @@ ENV NODE_ENV=production \
 # unverändert funktionieren.
 WORKDIR /opt/dvhub/dvhub
 
-# --chown direkt beim Kopieren: ein nachgelagertes `chown -R` würde jede
-# berührte Datei in eine zusätzliche Layer duplizieren — bei node_modules
-# allein ~68 MB obendrauf.
-COPY --from=deps --chown=dvhub:dvhub /build/node_modules /opt/dvhub/dvhub/node_modules
-COPY --chown=dvhub:dvhub dvhub/ /opt/dvhub/dvhub/
-COPY --chown=dvhub:dvhub scripts/reconcile-vendor-profiles.mjs /opt/dvhub/scripts/
+# Programmcode gehört root und ist für dvhub nur lesbar (Review 25.10.2026,
+# P1): der Entrypoint führt beim Start als root u. a.
+# scripts/reconcile-vendor-profiles.mjs aus. Gehörte der Code dvhub, könnte die
+# Anwendung ihn ändern, und der nächste Container-Start liefe ihn als root.
+# Die Anwendung schreibt nur nach /etc/dvhub und /var/lib/dvhub (Volumes).
+# Kein nachgelagertes chown -R (das duplizierte jede Datei in eine Layer).
+COPY --from=deps /build/node_modules /opt/dvhub/dvhub/node_modules
+COPY dvhub/ /opt/dvhub/dvhub/
+COPY scripts/reconcile-vendor-profiles.mjs /opt/dvhub/scripts/
 # package.json verweist mit "SEE LICENSE IN ../LICENSE.md" hierauf.
-COPY --chown=dvhub:dvhub LICENSE.md THIRD-PARTY-LICENSES.md /opt/dvhub/
+COPY LICENSE.md THIRD-PARTY-LICENSES.md /opt/dvhub/
 COPY --chmod=0755 docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # Ersatzweg Modbus-Port: root-eigen (nicht dvhub), die sudoers-Regel zeigt nur hierauf.
 COPY --chmod=0755 dvhub-modbus-redirect.sh /usr/local/libexec/dvhub-modbus-redirect
+# VPN-Einstieg: root-eigen, Werte fest eingetragen wie nativ (HELPERS-Block in
+# install.sh/post-update.sh). Ohne INSTALLED="1" liefe er im Testbetrieb —
+# darum bricht der Bau ab, wenn die Ersetzung nicht greift.
+COPY --chmod=0755 dvhub-vpn.sh /usr/local/libexec/dvhub-vpn
+RUN sed -i -e 's|^CONFIG_DIR="@CONFIG_DIR@"$|CONFIG_DIR="/etc/dvhub"|' \
+      -e 's|^SERVICE_USER="@SERVICE_USER@"$|SERVICE_USER="dvhub"|' \
+      -e 's|^INSTALLED="@INSTALLED@"$|INSTALLED="1"|' \
+      /usr/local/libexec/dvhub-vpn \
+    && grep -qx 'INSTALLED="1"' /usr/local/libexec/dvhub-vpn \
+    && grep -qx 'CONFIG_DIR="/etc/dvhub"' /usr/local/libexec/dvhub-vpn
 COPY --from=eebus /out/dvhub-eebus /usr/local/bin/dvhub-eebus
 
 RUN mkdir -p /etc/dvhub /var/lib/dvhub \
