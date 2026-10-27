@@ -152,7 +152,7 @@ const REFUSED = {
   'management-client-auth': 'management-client-auth', 'management-client-user': 'management-client-user root',
   'management-client-group': 'management-client-group root',
   // zusätzlich
-  config: 'config /tmp/other.conf', log: 'log /etc/cron.d/x', 'log-append': 'log-append /etc/x', status: 'status /etc/x',
+  config: 'config /tmp/other.conf',
   writepid: 'writepid /etc/x', cd: 'cd /', chroot: 'chroot /', daemon: 'daemon', 'tmp-dir': 'tmp-dir /etc',
   'tls-export-cert': 'tls-export-cert /etc', engine: 'engine dynamic', providers: 'providers legacy', 'dev-node': 'dev-node /dev/sda',
   'pkcs11-providers': 'pkcs11-providers /tmp/x.so', 'replay-persist': 'replay-persist /etc/x',
@@ -258,5 +258,25 @@ test('OpenVPN: eingebetteter <peer-fingerprint>-Block ist erlaubt (Daten, Gegenp
     s.profile('dv', { 'client.ovpn': 'client\nremote h 1194\n<peer-fingerprint>\nAB:CD:EF\n</peer-fingerprint>\n' });
     const r = s.runH(['openvpn', 'check', 'dv']);
     assert.equal(r.status, 0, r.stderr);
+  } finally { s.cleanup(); }
+});
+
+// Realtest auf Prod .60 (27.10.): das Profil des Direktvermarkters enthält
+// `log-append /var/log/openvpn.log` und wurde abgelehnt — die DV-Verbindung wäre
+// ausgefallen. Protokoll-Direktiven werden in der geprüften Kopie weggelassen
+// (OpenVPN als root soll keine Datei an einem Profilpfad schreiben), statt das
+// ganze Profil abzulehnen; das Protokoll läuft über DVhub wie bisher.
+test('OpenVPN: log/log-append/status werden weggelassen, Profil läuft weiter', () => {
+  const s = setup();
+  try {
+    s.profile('dv', { 'client.ovpn': 'client\ndev tun\nproto udp\nremote h 1194\nlog-append /var/log/openvpn.log\nlog /etc/cron.d/x\nstatus /etc/x 10\nscript-security 0\nverb 3\n<ca>\nCA\n</ca>\n' });
+    const chk = s.runH(['openvpn', 'check', 'dv']);
+    assert.equal(chk.status, 0, chk.stderr);
+    assert.match(chk.stderr, /log-append/, 'Hinweis nennt die weggelassene Direktive');
+    const r = s.runH(['openvpn', 'up', 'dv']);
+    assert.equal(r.status, 0, r.stderr);
+    const conf = readFileSync(join(s.dir, 'started.conf'), 'utf8');
+    assert.doesNotMatch(conf, /^(log|log-append|status)\b/m);
+    assert.match(conf, /^remote h 1194$/m);
   } finally { s.cleanup(); }
 });

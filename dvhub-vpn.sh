@@ -190,6 +190,15 @@ ovpn_directive() {
     printf '%s\n' "$t"
     return
   fi
+  # Protokoll-Direktiven: OpenVPN liefe als root und schriebe an einen Pfad aus
+  # dem Profil. Statt das Profil abzulehnen (Direktvermarkter-Profile bringen oft
+  # `log-append` mit — Realtest .60, 27.10.), die Zeile in der Kopie weglassen;
+  # das Protokoll läuft über DVhub (stdout) wie bisher.
+  case "$d" in
+    log|log-append|status|status-version)
+      printf 'dvhub-vpn: Zeile %s: Direktive %s wird ignoriert (Protokoll über DVhub)\n' "$OVPN_LINE" "$d" >&2
+      return ;;
+  esac
   in_list "$d" "$OVPN_ALLOWED" || ovpn_refuse "Direktive '$d' nicht erlaubt"
   n=${#w[@]}
   local plain='^[A-Za-z0-9_.:@=+-]+$'
