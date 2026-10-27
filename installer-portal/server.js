@@ -827,11 +827,13 @@ async function handleApi(req, res, url) {
         expectedChallenge: stored,
         expectedOrigin: expectedOriginFor(req),
         expectedRpIdHash: rpIdHashFor(req),
-        credential: { publicKey: cred.publicKey },
+        credential: { publicKey: cred.publicKey, counter: cred.counter },
         requireUV: true, // Passkey ist hier der einzige Faktor
       });
       cred.lastUsed = nowIso();
-      if (typeof res2.counter === 'number') cred.counter = res2.counter;
+      // Nie senken: meldet der Key einmal 0, darf ein Klon mit älterem Stand
+      // danach nicht wieder durchkommen (Review 2026-10-25).
+      if (typeof res2.counter === 'number') cred.counter = Math.max(Number(cred.counter) || 0, res2.counter);
       writeJsonFile(ACCOUNTS_FILE, accounts);
     } catch (e) {
       return jsonRes(res, 401, { ok: false, error: 'passkey_verifikation_fehlgeschlagen', detail: String(e.message).slice(0, 80) });

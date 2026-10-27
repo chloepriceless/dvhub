@@ -322,9 +322,16 @@ describe('Schreibende Aufrufe: nur von der eigenen Oberfläche', () => {
     const r = await errorFor({ origin: 'https://portal.example' }, { cfgExtra: { corsAllowedOrigins: ['https://portal.example'] } });
     assert.notEqual(r.error, 'cors_origin_not_allowed');
   });
-  it('hinter einem Proxy zählt der weitergereichte Name', async () => {
-    const r = await errorFor({ origin: 'https://dvhub.example', host: '127.0.0.1:8080', 'x-forwarded-host': 'dvhub.example' });
-    assert.notEqual(r.error, 'cors_origin_not_allowed');
+  it('hinter einem Proxy zählt der weitergereichte Name — öffentlicher Name nur mit Token (Rebinding, 2026-10-25)', async () => {
+    const proxied = { origin: 'https://dvhub.example', host: '127.0.0.1:8080', 'x-forwarded-host': 'dvhub.example' };
+    const withToken = await errorFor({ ...proxied, authorization: `Bearer ${API_TOKEN}` });
+    assert.notEqual(withToken.error, 'cors_origin_not_allowed');
+    assert.notEqual(withToken.status, 401);
+    const noToken = await errorFor(proxied);
+    assert.equal(noToken.status, 401, 'ohne Token: 401, damit die Oberfläche nach dem Token fragt');
+    const local = await errorFor({ origin: 'http://dvhub.local', host: '127.0.0.1:8080', 'x-forwarded-host': 'dvhub.local' });
+    assert.notEqual(local.error, 'cors_origin_not_allowed');
+    assert.notEqual(local.status, 401, 'Heimnetz-Name hinter einem Proxy bleibt ohne Token');
   });
   it('lesende Aufrufe werden nicht geprüft', async () => {
     assert.notEqual((await errorFor({ origin: 'https://boese.example' }, { method: 'GET' })).error, 'cors_origin_not_allowed');

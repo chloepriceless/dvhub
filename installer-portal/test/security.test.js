@@ -222,3 +222,55 @@ test('WebAuthn: Credential-ID über 1023 Byte wird bei der Registrierung abgeleh
   assert.throws(() => verifyRegistration({ attestationObject: tooLong.response.attestationObject, clientDataJSON: tooLong.response.clientDataJSON,
     expectedChallenge: 'c', expectedOrigin: origin, expectedRpIdHash: RP_HASH }), /credid_laenge/);
 });
+
+// Review 2026-10-25 (P3): Signaturzähler (§7.2 Schritt 21). Ein Zähler, der
+// nicht steigt, deutet auf einen geklonten Authenticator oder eine Wiederholung.
+// Passkeys, die immer 0 melden (Apple, synchronisierte Passkeys), gehen weiter.
+test('WebAuthn: Signaturzähler darf nicht zurückgehen', () => {
+  const origin = 'http://localhost:8700';
+  const auth = makeFakeAuthenticator('localhost');
+  const c = auth.create(origin, 'reg');
+  const reg = verifyRegistration({
+    attestationObject: c.response.attestationObject, clientDataJSON: c.response.clientDataJSON,
+    expectedChallenge: 'reg', expectedOrigin: origin, expectedRpIdHash: RP_HASH,
+  });
+  const assertion = (ch, storedCounter) => {
+    const a = auth.get(origin, ch);
+    return () => verifyAssertion({
+      authenticatorData: a.response.authenticatorData, clientDataJSON: a.response.clientDataJSON,
+      signature: a.response.signature, expectedChallenge: ch, expectedOrigin: origin,
+      expectedRpIdHash: RP_HASH, credential: { publicKey: reg.publicKey, counter: storedCounter },
+    });
+  };
+  auth.setCounter(4); // nächste Assertion meldet 5
+  assert.equal(assertion('a', 4)().counter, 5, 'steigender Zähler geht');
+  auth.setCounter(4);
+  assert.throws(assertion('b', 5), /signcount_rueckschritt/, 'gleicher Zähler (Wiederholung/Klon)');
+  auth.setCounter(2);
+  assert.throws(assertion('c', 5), /signcount_rueckschritt/, 'kleinerer Zähler (Klon)');
+  auth.setCounter(-1); // meldet 0
+  assert.equal(assertion('d', 5)().counter, 0, 'Authenticator meldet 0 → kein Zählervergleich');
+  auth.setCounter(6);
+  assert.equal(assertion('e', 0)().counter, 7, 'gespeicherter Zähler 0 → kein Vergleich');
+  auth.setCounter(6);
+  assert.equal(assertion('f', undefined)().counter, 7, 'ohne gespeicherten Zähler (Altbestand) → kein Vergleich');
+});
+
+test('WebAuthn: Passkeys mit Zähler 0 funktionieren dauerhaft', () => {
+  const origin = 'http://localhost:8700';
+  const auth = makeFakeAuthenticator('localhost', { zeroCounter: true });
+  const c = auth.create(origin, 'reg');
+  const reg = verifyRegistration({
+    attestationObject: c.response.attestationObject, clientDataJSON: c.response.clientDataJSON,
+    expectedChallenge: 'reg', expectedOrigin: origin, expectedRpIdHash: RP_HASH,
+  });
+  for (const ch of ['x1', 'x2', 'x3']) {
+    const a = auth.get(origin, ch);
+    const r = verifyAssertion({
+      authenticatorData: a.response.authenticatorData, clientDataJSON: a.response.clientDataJSON,
+      signature: a.response.signature, expectedChallenge: ch, expectedOrigin: origin,
+      expectedRpIdHash: RP_HASH, credential: { publicKey: reg.publicKey, counter: 0 },
+    });
+    assert.equal(r.counter, 0);
+  }
+});
