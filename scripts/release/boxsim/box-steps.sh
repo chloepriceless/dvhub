@@ -23,7 +23,13 @@ cfg() { node -e 'try{const c=JSON.parse(require("fs").readFileSync("/etc/dvhub/c
 port() { local p; p="$(cfg httpPort)"; echo "${p:-8080}"; }
 token() { cfg apiToken; }
 health() { curl -s -m 5 "http://127.0.0.1:$(port)/health" || true; }
-hver() { health | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).version||""))}catch{}})'; }
+# Version aus /health. v0.4 hat kein /health: dann zählt "/" mit HTTP 200 als "ok".
+hver() {
+  local v
+  v="$(health | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.version||(j.ok===true?"ok":"")))}catch{}})')"
+  if [[ -z "$v" && "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$(port)/")" == 200 ]]; then v=ok; fi
+  printf '%s' "$v"
+}
 api() {  # <METHOD> <pfad> [json]
   local t; t="$(token)"
   curl -s -m 900 -X "$1" -H 'content-type: application/json' ${t:+-H "Authorization: Bearer $t"} \
@@ -60,7 +66,7 @@ case "$step" in
     flags=(--channel "$ch")
     grep -q -- '--no-eos)' /root/install.sh && flags+=(--no-eos)
     t0="$(now)"
-    bash /root/install.sh "${flags[@]}" > "$OUT/install.log" 2>&1
+    bash /root/install.sh "${flags[@]}" > "$OUT/install-$tag.log" 2>&1
     rc=$?
     t1="$(now)"
     result "install=$rc flags='${flags[*]}' time_s=$(dur "$t0" "$t1")"
@@ -95,7 +101,13 @@ case "$step" in
       rm -f "/root/state-$d"
       [[ -d "/opt/dvhub/$d" ]] && echo "$m" > "/opt/dvhub/$d/release-test-marker"
     done
-    result "reseed_state=ok lost_by_old_git_update='${lost[*]-}'"
+    # Neue Basis für den Config-Vergleich: das Versions-Update selbst darf die
+    # Config migrieren (neue Schlüssel); die Umstellung auf Pakete nicht.
+    upd="$(node -e '
+      const fs=require("fs");const a=JSON.parse(fs.readFileSync("/root/config.seed.json","utf8"));const b=JSON.parse(fs.readFileSync("/etc/dvhub/config.json","utf8"));
+      const keys=[...new Set([...Object.keys(a),...Object.keys(b)])].filter(k=>JSON.stringify(a[k])!==JSON.stringify(b[k]));process.stdout.write(keys.join(",")||"-")')"
+    cp /etc/dvhub/config.json /root/config.seed.json
+    result "reseed_state=ok lost_by_old_git_update='${lost[*]-}' config_migrated_by_version_update=$upd"
     ;;
 
   check) # <name> — Marker, Config, Kanal, Dienst

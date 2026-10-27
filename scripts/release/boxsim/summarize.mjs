@@ -29,12 +29,17 @@ for (const d of fs.readdirSync(run).sort()) {
   const changed = [...new Set(main.map((c) => c.config_changed_keys).filter((k) => k && k !== '-'))];
   const sizes = all((l) => l.step === 'sizes');
   const sz = (n) => sizes.find((x) => x.sizes === n) || {};
-  const lost = find((l) => l.step === 'reseed-state').lost_by_old_git_update;
+  const reseed = find((l) => l.step === 'reseed-state');
+  const lost = reseed.lost_by_old_git_update;
+  const migratedKeys = reseed.config_migrated_by_version_update;
   const total = find((l) => l.total_s).total_s;
   const migratedOk = mig.state === 'ok' && main.find((c) => c.check === 'after-migration')?.ok === '1';
   const notes = [];
   if (lost) notes.push(`alte git-Oberfläche hat ${lost} weggeräumt (Altfehler, vor der Umstellung)`);
-  if (changed.length) notes.push(`Config-Schlüssel geändert: ${changed.join(', ')}`);
+  if (migratedKeys && migratedKeys !== '-') notes.push(`Config beim Versions-Update (git) migriert: ${migratedKeys}`);
+  const changedAfter = [...new Set(main.filter((c) => c.check !== 'installed' && c.check !== 'after-git-update').map((c) => c.config_changed_keys).filter((k) => k && k !== '-'))];
+  if (changedAfter.length) notes.push(`Config nach der Umstellung geändert: ${changedAfter.join(', ')}`);
+  void changed;
   if (bad.length) notes.push(`Prüfungen: ${bad.join('; ')}`);
   if (mig.state && mig.state !== 'ok') notes.push(`Umstellung: ${mig.msg}`);
   rows.push({

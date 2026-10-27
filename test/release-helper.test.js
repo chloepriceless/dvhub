@@ -367,15 +367,21 @@ test('Schlüsselrotation: neuer Schlüssel kommt mit einem Paket des alten, alte
   } finally { r.close(); }
 });
 
-test('Aufräumen: höchstens drei Releases bleiben, aktuelles und voriges immer', { timeout: 60000 }, async () => {
+test('Aufräumen: Vorgabe zwei Releases (aktuell + vorig), keep_releases in release.conf', { timeout: 60000 }, async () => {
   const r = await makeRig();
   try {
     r.seed('1.0.0');
-    for (const v of ['1.0.1', '1.0.2', '1.0.3', '1.0.4']) {
+    for (const v of ['1.0.1', '1.0.2', '1.0.3']) {
       r.publish({ version: v });
       assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
     }
-    assert.deepEqual(fs.readdirSync(path.join(r.box, 'releases')).sort(), ['1.0.2', '1.0.3', '1.0.4']);
+    assert.deepEqual(fs.readdirSync(path.join(r.box, 'releases')).sort(), ['1.0.2', '1.0.3']);
+    fs.appendFileSync(path.join(r.etc, 'release.conf'), 'keep_releases=3\n');
+    for (const v of ['1.0.4', '1.0.5']) {
+      r.publish({ version: v });
+      assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
+    }
+    assert.deepEqual(fs.readdirSync(path.join(r.box, 'releases')).sort(), ['1.0.3', '1.0.4', '1.0.5']);
   } finally { r.close(); }
 });
 
@@ -684,6 +690,20 @@ exit 0
     assert.ok(Date.now() - t0 < 20000, `zu langsam: ${Date.now() - t0} ms`);
     assert.equal(r.current(), 'releases/1.0.0');
     assert.ok(r.status().log.some((l) => /Neustarts/.test(l)), r.status().log.join('\n'));
+  } finally { r.close(); }
+});
+
+test('Umstellung: Index nicht ladbar zählt als Fehlversuch (24-h-Pause, Obergrenze)', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    gitBox(r);
+    // kein Index veröffentlicht → 404
+    const res = await r.run('migrate');
+    assert.equal(res.code, 1);
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migrate.attempts, 1);
+    assert.ok(st.migrate.last_attempt > 0);
+    assert.match((await r.run('boot-hook')).out, /nach 24 h/);
   } finally { r.close(); }
 });
 

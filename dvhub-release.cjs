@@ -52,7 +52,9 @@ const NS_PACKAGE = 'dvhub-release';
 const NS_INDEX = 'dvhub-release-index';
 const PRINCIPAL = 'dvhub-release';
 const MANIFEST = '.dvhub-release.json';
-const KEEP_RELEASES = 3;
+// Entpackt ~90 MB je Release (node_modules, EEBUS-Binary). Vorgabe: aktuelles
+// und voriges (Rückweg ohne Download); release.conf keep_releases=2…5.
+const KEEP_RELEASES = 2;
 const MAX_INDEX_BYTES = 1024 * 1024;
 const MAX_PACKAGE_BYTES = 300 * 1024 * 1024;
 // Box-Zustand im Programmordner: wird nie verlinkt, verschoben oder gelöscht.
@@ -104,6 +106,7 @@ function settings(env = process.env) {
   s.pollMs = test && env.DVHUB_RELEASE_TEST_FAST ? 100 : 2000;
   s.migrateDelayS = clampInt(s.conf.migrate_delay_s, 120, 1, 86400);
   s.postUpdateTimeoutS = clampInt(s.conf.post_update_timeout_s, 300, 30, 3600);
+  s.keepReleases = clampInt(s.conf.keep_releases, KEEP_RELEASES, 2, 5);
   return s;
 }
 
@@ -124,7 +127,7 @@ function readConf(file) {
     if (eq < 1) continue;
     const k = line.slice(0, eq).trim();
     const v = line.slice(eq + 1).trim();
-    if (['base_url', 'health_timeout_s', 'migrate_delay_s', 'post_update_timeout_s', 'migrate_custom_repo'].includes(k)) out[k] = v;
+    if (['base_url', 'health_timeout_s', 'migrate_delay_s', 'post_update_timeout_s', 'migrate_custom_repo', 'keep_releases'].includes(k)) out[k] = v;
   }
   if (out.base_url && !/^https?:\/\/[^\s]+$/.test(out.base_url)) delete out.base_url;
   return out;
@@ -736,7 +739,7 @@ function pruneReleases(s, st, job) {
   const keep = new Set([st.current, st.previous].filter(Boolean));
   const order = [...st.history].reverse().map((h) => h.version);
   for (const v of order) {
-    if (keep.size >= KEEP_RELEASES) break;
+    if (keep.size >= s.keepReleases) break;
     if (fs.existsSync(path.join(releasesDir(s), v))) keep.add(v);
   }
   let names = [];
@@ -896,7 +899,7 @@ function rewriteUnit(s, text) {
     .replace(/^ExecStart=\/usr\/bin\/node .*server\.js[ \t]*$/m, `ExecStart=/usr/bin/node ${cur}/dvhub/server.js`);
 }
 
-function revertMigration(s, st, job) {
+function revertMigration(s, st, job, { reload = true } = {}) {
   const m = st.migration;
   if (!m) return;
   job.log('Umstellung zurücknehmen');
@@ -923,7 +926,7 @@ function revertMigration(s, st, job) {
   try { fs.unlinkSync(currentLink(s)); } catch { /* */ }
   if (m.unit_backup && fs.existsSync(m.unit_backup)) writeFileAtomic(s.unitFile, fs.readFileSync(m.unit_backup));
   removeDropin(s, job, { reload: false });
-  systemctl(s, 'daemon-reload');
+  if (reload) systemctl(s, 'daemon-reload');
   if (m.version) fs.rmSync(path.join(releasesDir(s), m.version), { recursive: true, force: true });
   st.migration = null;
   saveState(s, st);
@@ -979,6 +982,14 @@ async function jobMigrate(s, job, { force }) {
     job.finish('skipped', `Umstellung nicht ausgeführt: ${chk.reason}${chk.origin ? ` (${chk.origin})` : ''}`, { result: 'skipped', reason: chk.reason });
     return;
   }
+  // Versuch zählen, bevor etwas schiefgehen kann (Index offline, Signatur):
+  // sonst versuchte es die Box bei jedem Start erneut (Gegenprüfung da65a346).
+  // Nur „Paket älter als der Checkout“ nimmt den Zähler unten zurück.
+  const before = { attempts: st.migrate.attempts, last_attempt: st.migrate.last_attempt };
+  st.migrate.attempts += 1;
+  st.migrate.last_attempt = Math.floor(Date.now() / 1000);
+  delete st.migrate.skipped;
+  saveState(s, st);
   const gitSha = (git(s, 'rev-parse', 'HEAD').stdout || '').trim();
   job.log(`git-Stand ${chk.gitVersion} (${gitSha.slice(0, 7)}), Kanal ${chk.channel}`);
   job.phase('index', `Kanal-Index ${chk.channel} laden`);
@@ -997,16 +1008,13 @@ async function jobMigrate(s, job, { force }) {
     older = `Paket ${target} (Stand ${new Date(relDate * 1000).toISOString()}) ist älter als der git-Checkout (${new Date(headTime * 1000).toISOString()})`;
   }
   if (older && !force) {
+    Object.assign(st.migrate, before);
     st.migrate.skipped = 'package_older';
     st.migrate.last_check = Math.floor(Date.now() / 1000);
     saveState(s, st);
     job.finish('skipped', `${older} — Umstellung wartet auf ein neueres Paket`, { result: 'skipped', reason: 'package_older' });
     return;
   }
-  st.migrate.attempts += 1;
-  st.migrate.last_attempt = Math.floor(Date.now() / 1000);
-  delete st.migrate.skipped;
-  saveState(s, st);
   const { manifest } = await fetchAndUnpack(s, job, { channel: chk.channel, version: target, index });
   const version = manifest.version;
 
@@ -1266,7 +1274,11 @@ function recover(s) {
   if (lockHeld(s)) return 0;
   if (st.migration && st.migration.phase === 'moving') {
     const version = st.migration.version || '-';
-    revertMigration(s, st, log);
+    // Kein daemon-reload mitten im Start (ExecStartPre): systemd verlöre den
+    // laufenden Befehl aus der Liste und übersprünge post-update.sh
+    // (Gegenprüfung da65a346). Der Reload folgt 30 s später als eigene Unit.
+    revertMigration(s, st, log, { reload: false });
+    run(s.systemdRun, ['--collect', '--quiet', '--on-active=30s', '--unit=dvhub-release-reload', 'systemctl', 'daemon-reload'], { timeout: 30000 });
     record(st, version, 'migration_interrupted');
     saveState(s, st);
     log.log('abgebrochene Umstellung zurückgenommen — git-Stand wiederhergestellt');

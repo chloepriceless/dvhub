@@ -51,11 +51,12 @@ S facts installed
 S publish pub-1 v1.0.9
 S gui-git-update
 if [[ "$TAG" == v0.4.* ]]; then
-  # v0.4.x ruft nach dem git-Update kein post-update.sh als root auf
-  # (Unit ohne ExecStartPre, keine sudo-Regel): dokumentierter Handgriff.
-  S wait-health 1.0.9 300
-  S manual-post-update
-  docker exec "$NAME" systemctl restart dvhub
+  # v0.4.x: Die alte Oberfläche holt v1.0.9 per git, ruft aber kein
+  # post-update.sh als root auf (Unit ohne ExecStartPre, keine sudo-Regel),
+  # und der neue Stand startet ohne apiToken nicht (Altbestand, nicht Teil
+  # der Pakete). Handgriff wie beim Sprung 0.4 → 1.0: Installer erneut.
+  S wait-health 1.0.9 60
+  S install v1.0.9 "$CH"
 fi
 S wait-health 1.0.9 300
 S sizes git-1.0.9

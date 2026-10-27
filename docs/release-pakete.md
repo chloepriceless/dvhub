@@ -161,9 +161,10 @@ Ablauf `install`:
 5. `post-update.sh` des neuen Releases (Provisionierung, Hilfsskripte, sudoers, Unit; 5 min).
 6. `systemctl restart`, Gesundheitsprüfung: `/health` auf `httpPort` (aus der Config) antwortet `ok` mit der neuen
    Version (bis 180 s).
-7. Gut → bestätigen, Vertrauensdatei ggf. übernehmen, alte Releases aufräumen (behalten: aktuell, vorig, eine
-   weitere). Schlecht → `current` zurück, Neustart (ExecStartPre bringt Hilfsskripte/sudoers des alten Stands
-   zurück), Gesundheit prüfen, Ergebnis `rolled_back`.
+   Startet die neue Version gar nicht (Absturzschleife, ≥ 3 Neustarts laut systemd), bricht die Prüfung sofort ab.
+7. Gut → bestätigen, Vertrauensdatei ggf. übernehmen, alte Releases aufräumen (Vorgabe: aktuelles und voriges,
+   `keep_releases=2…5` in `release.conf`; entpackt ~93 MB je Release). Schlecht → `current` zurück, Neustart
+   (ExecStartPre bringt Hilfsskripte/sudoers des alten Stands zurück), Gesundheit prüfen, Ergebnis `rolled_back`.
 
 `/etc/dvhub` und `/var/lib/dvhub` fasst der Helfer nicht an.
 
@@ -216,6 +217,31 @@ v0.4.x-Boxen: Ihre Oberfläche ruft nach dem git-Update kein `post-update.sh` al
 - Docker-Matrix (`scripts/release/boxsim/`): Debian bookworm mit systemd als PID 1; jede Version v1.0.0…v1.0.8 und
   v0.4.2 mit ihrem eigenen `install.sh` installiert, dann Update über die alte Oberfläche, Umstellung auf das Paket,
   weiteres Paket-Update und Rückweg; Negativfälle. Ergebnisse und Protokolle unter `~/Projects/release-tests/`.
+
+## Einmalig für die Eigentümerin
+
+1. **Schlüssel anlegen** (nur auf dem Mac, nie in ein Repo):
+   ```bash
+   install -d -m 0700 ~/.config/dvhub-release
+   ssh-keygen -t ed25519 -C dvhub-release-2026 -f ~/.config/dvhub-release/release_ed25519   # mit Passphrase
+   chmod 600 ~/.config/dvhub-release/release_ed25519
+   ```
+   Mit Passphrase fragt `ssh-keygen -Y sign` beim Bau danach (oder einmal `ssh-add` in den Agenten).
+2. **Sichern:** privaten Schlüssel samt Passphrase in 1Password (Dokument), zusätzlich offline (verschlüsselter
+   USB-Stick). Geht er verloren, gibt es keinen Weg zu neuen Paketen außer einem git-Update mit neuer
+   `allowed_signers` — Boxen auf Paketen bekommen dann nichts mehr. Wird er kompromittiert: neuen Schlüssel per
+   Rotation einführen (mit dem alten signiertes Paket, dann alten entfernen) und `valid-before` setzen.
+3. **Öffentlichen Schlüssel eintragen:** Zeile
+   `dvhub-release namespaces="dvhub-release,dvhub-release-index" <Inhalt von release_ed25519.pub>` in
+   `release-keys/allowed_signers`, committen. Erst ab diesem Commit nehmen Boxen Pakete an.
+4. **Erste Veröffentlichung** (Reihenfolge wichtig, sonst finden umstellungsbereite Boxen kein Paket):
+   ```bash
+   scripts/release/build-release.sh v1.0.9          # baut arm64, armhf, amd64 und signiert
+   scripts/release/publish-release.sh ~/Projects/dvhub-release-out/1.0.9 --dry-run --dest /tmp/pub   # ansehen
+   scripts/release/publish-release.sh ~/Projects/dvhub-release-out/1.0.9                               # GitHub
+   scripts/release/build-release.sh main && scripts/release/publish-release.sh ~/Projects/dvhub-release-out/<dev-version>
+   ```
+   Danach den Tag wie gewohnt ausrollen: git-Boxen holen v1.0.9 per git und stellen sich nach ~2 min selbst um.
 
 ## Offene Entscheidungen
 
