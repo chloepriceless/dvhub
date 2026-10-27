@@ -78,7 +78,7 @@ test('HELPERS-Block: installiert alle Hilfsskripte root-eigen mit eingetragenen 
     writeFileSync(join(bin, 'chown'), `#!/usr/bin/env bash\necho "chown $*" >> "${log}"\n`);
     writeFileSync(join(bin, 'install'), `#!/usr/bin/env bash\nfor a; do d="$a"; done; mkdir -p "$d"\n`);
     chmodSync(join(bin, 'chown'), 0o755); chmodSync(join(bin, 'install'), 0o755);
-    const sh = `set -euo pipefail\nINSTALL_DIR='${inst}' CONFIG_DIR=/etc/dvhub-x SERVICE_USER=svc\n${block('post-update.sh', 'HELPERS')}\ndvhub_install_helpers\n`;
+    const sh = `set -euo pipefail\nINSTALL_DIR='${inst}' CONFIG_DIR=/etc/dvhub-x SERVICE_USER=svc SERVICE_NAME=dvhub2\n${block('post-update.sh', 'HELPERS')}\ndvhub_install_helpers\n`;
     const r = spawnSync('bash', ['-c', sh], { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}`, DVHUB_LIBEXEC: libexec } });
     assert.equal(r.status, 0, r.stderr);
     for (const h of ['dvhub-ipsec-link', 'dvhub-modbus-redirect', 'dvhub-update', 'dvhub-apt', 'dvhub-setcap', 'dvhub-vpn']) {
@@ -92,6 +92,7 @@ test('HELPERS-Block: installiert alle Hilfsskripte root-eigen mit eingetragenen 
     assert.match(readFileSync(join(libexec, 'dvhub-apt'), 'utf8'), /^INSTALLED="1"$/m);
     assert.match(readFileSync(join(libexec, 'dvhub-setcap'), 'utf8'), /^INSTALLED="1"$/m);
     assert.match(readFileSync(join(libexec, 'dvhub-update'), 'utf8'), new RegExp(`^INSTALL_DIR="${inst.replace(/[/.]/g, '\\$&')}"$`, 'm'));
+    assert.match(readFileSync(join(libexec, 'dvhub-update'), 'utf8'), /^SERVICE_NAME="dvhub2"$/m);
     assert.equal(read('dvhub-ipsec-link.sh'), readFileSync(join(libexec, 'dvhub-ipsec-link'), 'utf8'), 'ohne Platzhalter unverändert');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

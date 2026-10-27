@@ -621,7 +621,7 @@ IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
 # Programmordner und nie auf apt-get/setcap/openvpn/wg-quick mit beliebigen
 # Argumenten. Jedes Skript prüft seine Argumente selbst. Die Kopie entsteht aus
 # dem (root-eigenen) Programmordner, Platzhalter werden fest eingetragen
-# (INSTALL_DIR, CONFIG_DIR, SERVICE_USER, INSTALLED=1 — ohne das letzte liefe
+# (INSTALL_DIR, CONFIG_DIR, SERVICE_USER, SERVICE_NAME, INSTALLED=1 — ohne das letzte liefe
 # ein Skript im Testbetrieb), und sie ersetzt die alte erst, wenn sie fertig ist.
 DVHUB_LIBEXEC="${DVHUB_LIBEXEC:-/usr/local/libexec}"
 IPSEC_LINK_PATH="$DVHUB_LIBEXEC/dvhub-ipsec-link"
@@ -638,6 +638,7 @@ dvhub_install_helper() {  # <datei im Programmordner> <ziel>
   if sed -e "s|^INSTALL_DIR=\"@INSTALL_DIR@\"\$|INSTALL_DIR=\"${INSTALL_DIR}\"|" \
          -e "s|^CONFIG_DIR=\"@CONFIG_DIR@\"\$|CONFIG_DIR=\"${CONFIG_DIR}\"|" \
          -e "s|^SERVICE_USER=\"@SERVICE_USER@\"\$|SERVICE_USER=\"${SERVICE_USER}\"|" \
+         -e "s|^SERVICE_NAME=\"@SERVICE_NAME@\"\$|SERVICE_NAME=\"${SERVICE_NAME}\"|" \
          -e "s|^INSTALLED=\"@INSTALLED@\"\$|INSTALLED=\"1\"|" "$src" > "$tmp" \
      && chown root:root "$tmp" && chmod 0755 "$tmp" && mv -f "$tmp" "$dest"; then
     return 0

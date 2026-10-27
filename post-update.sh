@@ -4,7 +4,11 @@
 # Safe to run multiple times — only applies changes that are missing.
 set -euo pipefail
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/dvhub}"
+# Programmordner: wo dieses Skript liegt, wenn niemand ihn nennt
+# (Gegenprüfung a2ff2a85): install.sh --dir /srv/app trägt /srv/app in die Unit
+# ein, setzt aber kein INSTALL_DIR — mit /opt/dvhub als Rückfall schrieb dieser
+# Lauf ExecStart/ExecStartPre auf einen leeren Ordner um.
+INSTALL_DIR="${INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"
 APP_DIR="${APP_DIR:-$INSTALL_DIR/dvhub}"
 SERVICE_USER="${SERVICE_USER:-dvhub}"
 SERVICE_NAME="${SERVICE_NAME:-dvhub}"
@@ -15,7 +19,15 @@ SERVICE_NAME="${SERVICE_NAME:-dvhub}"
 # dann aus der Unit-Datei. Sonst trüge dieser Lauf /etc/dvhub in dvhub-vpn
 # ein, und das VPN fände sein Profil nicht mehr.
 PU_UNIT_FILE="${PU_UNIT_FILE:-/etc/systemd/system/${SERVICE_NAME}.service}"
-pu_unit_env() { sed -n "s/^Environment=$1=//p" "$PU_UNIT_FILE" 2>/dev/null | head -1 || true; }
+# Erst systemctl show (führt Drop-ins zusammen), dann die Unit-Datei selbst.
+pu_unit_env() {
+  local v=""
+  if command -v systemctl >/dev/null 2>&1; then
+    v="$(systemctl show -p Environment --value "${SERVICE_NAME}.service" 2>/dev/null | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1)" || v=""
+  fi
+  [[ -n "$v" ]] || v="$(sed -n "s/^Environment=$1=//p" "$PU_UNIT_FILE" 2>/dev/null | head -1)" || v=""
+  printf '%s' "$v"
+}
 if [[ -z "${CONFIG_DIR:-}" && -z "${CONFIG_PATH:-}" ]]; then
   CONFIG_PATH="${DV_APP_CONFIG:-$(pu_unit_env DV_APP_CONFIG)}"
   [[ -n "$CONFIG_PATH" ]] && CONFIG_DIR="$(dirname "$CONFIG_PATH")"
@@ -223,7 +235,7 @@ SYSTEMCTL_PATH="$(command -v systemctl)"
 # Programmordner und nie auf apt-get/setcap/openvpn/wg-quick mit beliebigen
 # Argumenten. Jedes Skript prüft seine Argumente selbst. Die Kopie entsteht aus
 # dem (root-eigenen) Programmordner, Platzhalter werden fest eingetragen
-# (INSTALL_DIR, CONFIG_DIR, SERVICE_USER, INSTALLED=1 — ohne das letzte liefe
+# (INSTALL_DIR, CONFIG_DIR, SERVICE_USER, SERVICE_NAME, INSTALLED=1 — ohne das letzte liefe
 # ein Skript im Testbetrieb), und sie ersetzt die alte erst, wenn sie fertig ist.
 DVHUB_LIBEXEC="${DVHUB_LIBEXEC:-/usr/local/libexec}"
 IPSEC_LINK_PATH="$DVHUB_LIBEXEC/dvhub-ipsec-link"
@@ -240,6 +252,7 @@ dvhub_install_helper() {  # <datei im Programmordner> <ziel>
   if sed -e "s|^INSTALL_DIR=\"@INSTALL_DIR@\"\$|INSTALL_DIR=\"${INSTALL_DIR}\"|" \
          -e "s|^CONFIG_DIR=\"@CONFIG_DIR@\"\$|CONFIG_DIR=\"${CONFIG_DIR}\"|" \
          -e "s|^SERVICE_USER=\"@SERVICE_USER@\"\$|SERVICE_USER=\"${SERVICE_USER}\"|" \
+         -e "s|^SERVICE_NAME=\"@SERVICE_NAME@\"\$|SERVICE_NAME=\"${SERVICE_NAME}\"|" \
          -e "s|^INSTALLED=\"@INSTALLED@\"\$|INSTALLED=\"1\"|" "$src" > "$tmp" \
      && chown root:root "$tmp" && chmod 0755 "$tmp" && mv -f "$tmp" "$dest"; then
     return 0

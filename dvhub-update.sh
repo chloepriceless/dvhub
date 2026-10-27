@@ -41,6 +41,9 @@ set -euo pipefail
 export LC_ALL=C
 
 INSTALL_DIR="@INSTALL_DIR@"
+# Dienstname für post-update.sh (sudo leert die Umgebung; Gegenprüfung a2ff2a85).
+SERVICE_NAME="@SERVICE_NAME@"
+[[ "$SERVICE_NAME" == "@SERVICE_NAME@" ]] && SERVICE_NAME=dvhub
 EFFECTIVE_UID="$EUID"
 LOCK_FILE=/run/lock/dvhub-update.lock
 # Merker der Hintergrund-Unit dvhub-npm-install (post-update.sh): „nach npm
@@ -156,6 +159,7 @@ case "$action" in
     sha256sum "$lock" | awk '{print $1}' > "$NPM_MARKER"
     ;;
   post-update)
-    exec bash "$INSTALL_DIR/post-update.sh"
+    # Programmordner und Dienstname mitgeben: unter sudo fehlen sie sonst.
+    exec env INSTALL_DIR="$INSTALL_DIR" SERVICE_NAME="$SERVICE_NAME" bash "$INSTALL_DIR/post-update.sh"
     ;;
 esac
