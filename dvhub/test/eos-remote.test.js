@@ -430,3 +430,36 @@ describe('Fernbetrieb: Gegenprüfung Runde 1', () => {
     assert.equal(opt.timeoutMs, 10_000, 'eigenes Budget = jobTimeoutMs, nicht die Restzeit');
   });
 });
+
+describe('Fernbetrieb: Gegenprüfung Runde 2', () => {
+  it('Rückfall-Budget passt in die Restzeit des Lauf-Anstoßes (3 h minus Rand)', async () => {
+    const { EOS_RUN_TIMEOUT_MS } = await import('../services/optimizer/eos-run-trigger.js');
+    let clock = Date.now();
+    const calls = [];
+    const localRequest = async (base, method, p, body, timeoutMs) => {
+      calls.push({ p: p.split('?')[0], timeoutMs });
+      return { status: 200, data: p === '/v1/optimize' ? { start_solution: [1] } : {} };
+    };
+    // Fernlauf „verbraucht“ fast die ganze Zeit des Lauf-Anstoßes, dann ist der Dienst weg.
+    const fetchImpl = async () => { clock += EOS_RUN_TIMEOUT_MS - 20 * 60_000; throw new TypeError('fetch failed'); };
+    const cfg = makeCfg('https://eos.example.invalid', { token: 'dves_x', localFallback: true, jobTimeoutMs: 90 * 60_000 });
+    const { url } = await startFacade(cfg, { localRequest, fetchImpl, now: () => clock });
+    const r = await req(url, 'POST', '/v1/optimize', {});
+    assert.equal(r.status, 200);
+    const opt = calls.find((c) => c.p === '/v1/optimize');
+    assert.ok(opt.timeoutMs <= 20 * 60_000 - 5 * 60_000, `Budget ${opt.timeoutMs} ms passt nicht in die Restzeit`);
+  });
+
+  it('kein Rückfall, wenn die Restzeit des Lauf-Anstoßes nicht mehr reicht', async () => {
+    const { EOS_RUN_TIMEOUT_MS } = await import('../services/optimizer/eos-run-trigger.js');
+    let clock = Date.now();
+    let local = 0;
+    const localRequest = async () => { local += 1; return { status: 200, data: {} }; };
+    const fetchImpl = async () => { clock += EOS_RUN_TIMEOUT_MS - 60_000; throw new TypeError('fetch failed'); };
+    const cfg = makeCfg('https://eos.example.invalid', { token: 'dves_x', localFallback: true });
+    const { url, state } = await startFacade(cfg, { localRequest, fetchImpl, now: () => clock });
+    assert.equal((await req(url, 'POST', '/v1/optimize', {})).status, 503);
+    assert.equal(local, 0);
+    assert.equal(state.optimizer.eosRemote.lastError.code, 'service_unreachable');
+  });
+});

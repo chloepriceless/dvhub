@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { EOS_REMOTE_PROFILE, EOS_REMOTE_DEVICE_TEMPLATES } from './eos-remote-profile.js';
+import { EOS_RUN_TIMEOUT_MS } from './eos-run-trigger.js';
 
 // Die Pfade, die der Dienst annimmt — in der Reihenfolge, in der EOS sie
 // braucht. Alles andere (ems/interval, ems/mode, measurement/historic_hours,
@@ -66,6 +67,9 @@ export const EOS_REMOTE_FACADE_PORT = 8513;
 export const DEFAULT_REMOTE_JOB_TIMEOUT_MS = 20 * 60_000;
 export const MAX_REMOTE_JOB_TIMEOUT_MS = 90 * 60_000;
 const MAX_ODD_POLLS = 10;
+// Rand zur Wartezeit des Lauf-Anstoßes (PUTs/GETs des Rückfalls, Abfragen).
+const TRIGGER_MARGIN_MS = 5 * 60_000;
+const MIN_LOCAL_BUDGET_MS = 60_000;
 const POLL_WAIT_S = 25;
 const PRED_PAST_MS = 6 * 3600_000;
 const PRED_FUTURE_MS = 8 * 24 * 3600_000;
@@ -438,10 +442,10 @@ export function createEosRemoteFacade({
     }
   }
 
-  // Der Rückfall hat ein EIGENES Budget (jobTimeoutMs): Scheitert der Fernlauf
-  // erst an der Frist, bliebe sonst nichts für das lokale EOS. Zweimal die
-  // höchste Wartezeit (90 min) passt in die 3 h des Lauf-Anstoßes.
-  async function runLocal(body, cfg, rs) {
+  // Der Rückfall hat ein EIGENES Budget (jobTimeoutMs, gekappt auf die
+  // Restzeit des Lauf-Anstoßes): Scheitert der Fernlauf erst an der Frist,
+  // bliebe sonst nichts für das lokale EOS.
+  async function runLocal(body, cfg, budgetMs) {
     const base = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
     const t = 15_000;
     const ordered = [
@@ -458,7 +462,7 @@ export function createEosRemoteFacade({
     for (const m of measurementsForJob()) {
       await must('PUT', `/v1/measurement/value?datetime=${encodeURIComponent(m.datetime)}&key=${encodeURIComponent(m.key)}&value=${m.value}`);
     }
-    const optimize = await must('POST', '/v1/optimize', isObj(body) ? body : {}, rs.jobTimeoutMs);
+    const optimize = await must('POST', '/v1/optimize', isObj(body) ? body : {}, budgetMs);
     const plan = await must('GET', '/v1/energy-management/plan');
     const solution = await must('GET', '/v1/energy-management/optimization/solution');
     return { optimize, plan, solution, runMs: null, jobId: null, diagnostics: null };
@@ -477,9 +481,12 @@ export function createEosRemoteFacade({
     } catch (e) {
       error = e instanceof RemoteError ? e : new RemoteError('client_error', String(e?.message || e));
     }
-    if (!result && error.fallbackOk && rs.localFallback) {
+    // Budget des Rückfalls: eigene Wartezeit, aber nie über die Restzeit des
+    // Lauf-Anstoßes hinaus (sonst bräche dieser ab, während lokal noch gerechnet wird).
+    const localBudget = Math.min(rs.jobTimeoutMs, t0 + EOS_RUN_TIMEOUT_MS - TRIGGER_MARGIN_MS - now());
+    if (!result && error.fallbackOk && rs.localFallback && localBudget >= Math.min(MIN_LOCAL_BUDGET_MS, rs.jobTimeoutMs)) {
       try {
-        result = await runLocal(body, cfg, rs);
+        result = await runLocal(body, cfg, localBudget);
         fallback = 'local';
         log('eos_remote_local_fallback', { reason: error.code });
       } catch (e) {
