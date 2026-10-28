@@ -64,6 +64,8 @@ const PROVIDER_COLUMNS = Object.freeze({
 export const DEFAULT_REMOTE_EOS_VERSION = 'v0.4.0rc3';
 export const EOS_REMOTE_FACADE_PORT = 8513;
 export const DEFAULT_REMOTE_JOB_TIMEOUT_MS = 20 * 60_000;
+export const MAX_REMOTE_JOB_TIMEOUT_MS = 90 * 60_000;
+const MAX_ODD_POLLS = 10;
 const POLL_WAIT_S = 25;
 const PRED_PAST_MS = 6 * 3600_000;
 const PRED_FUTURE_MS = 8 * 24 * 3600_000;
@@ -83,7 +85,12 @@ export function remoteSettings(cfg) {
   return {
     endpoint: String(r.endpoint || '').trim().replace(/\/+$/, ''),
     token: typeof r.token === 'string' ? r.token.trim() : '',
-    jobTimeoutMs: Number.isFinite(t) && t > 0 ? Math.min(3 * 3600_000, Math.max(10_000, t)) : DEFAULT_REMOTE_JOB_TIMEOUT_MS,
+    // Für welche Adresse das Token ausgegeben wurde. Andere Adresse → neu
+    // einschreiben, das alte Token geht nie an einen anderen Dienst.
+    tokenEndpoint: String(r.tokenEndpoint || '').trim().replace(/\/+$/, ''),
+    // Höchstens die Hälfte der Wartezeit des Lauf-Anstoßes (EOS_RUN_TIMEOUT_MS,
+    // 3 h): Fernlauf und ggf. lokaler Rückfall teilen sich EINE Frist.
+    jobTimeoutMs: Number.isFinite(t) && t > 0 ? Math.min(MAX_REMOTE_JOB_TIMEOUT_MS, Math.max(10_000, t)) : DEFAULT_REMOTE_JOB_TIMEOUT_MS,
     localFallback: r.localFallback === true,
     // Opt-in: der Dienst legt je Auftrag ein Diagnosepaket für den Support an.
     debugBundle: r.debugBundle === true,
@@ -184,7 +191,7 @@ function localEos(baseUrl, method, pathname, body, timeoutMs) {
  * @param {object} deps
  * @param {()=>object} deps.getCfg
  * @param {()=>({licenseKey:string, machineFile:string}|null)} deps.getLicenceProof
- * @param {(token:string)=>Promise<void>} deps.saveToken
+ * @param {(token:string, endpoint:string)=>Promise<void>} deps.saveToken
  * @param {object} [deps.state]
  * @param {Function} [deps.pushLog]
  * @param {string} [deps.eosVersion]
@@ -345,7 +352,7 @@ export function createEosRemoteFacade({
       const code = r.json?.error?.code || `http_${r.status}`;
       throw new RemoteError(r.status >= 500 ? 'service_error' : 'enroll_rejected', `Einschreiben abgelehnt (${code})`, true);
     }
-    await saveToken(r.json.token);
+    await saveToken(r.json.token, rs.endpoint);
     setStatus({ enrolled: true });
     log('eos_remote_enrolled', { boxId: r.json.boxId || null });
     return r.json.token;
@@ -360,11 +367,10 @@ export function createEosRemoteFacade({
     return new RemoteError('service_error', `Unerwartete Antwort (${code})`);
   }
 
-  async function runRemote(body, cfg, rs) {
+  async function runRemote(body, cfg, rs, deadlineAt) {
     if (!rs.endpoint) throw new RemoteError('no_endpoint', 'Keine Adresse des Rechendienstes eingestellt');
     const proof = getLicenceProof?.() || null;
     if (!proof?.licenseKey || !proof?.machineFile) throw new RemoteError('licence_missing', 'Keine aktive Pro-Lizenz mit Machine-File auf dieser Box');
-    const deadlineAt = now() + rs.jobTimeoutMs;
     const job = {
       clientJobId: crypto.randomUUID(),
       eosVersion,
@@ -376,7 +382,8 @@ export function createEosRemoteFacade({
       optimize: isObj(body) ? body : {},
       ...(rs.debugBundle ? { debug: true } : {}),
     };
-    let token = rs.token || await enroll(rs, proof);
+    const tokenFits = rs.token && (!rs.tokenEndpoint || rs.tokenEndpoint === rs.endpoint);
+    let token = tokenFits ? rs.token : await enroll(rs, proof);
     setStatus({ phase: 'submitting' });
     let r = await call(rs, 'POST', '/v1/jobs', { token, body: job });
     if (r.status === 401) {
@@ -388,6 +395,7 @@ export function createEosRemoteFacade({
     setStatus({ phase: 'queued', lastJobId: id, lastSubmitAt: new Date(now()).toISOString(), queuePosition: null });
     log('eos_remote_submitted', { jobId: id, superseded: (r.json.superseded || []).length });
 
+    let oddPolls = 0;
     for (;;) {
       const left = deadlineAt - now();
       if (left <= 0) throw new RemoteError('service_timeout', 'Kein Ergebnis innerhalb der Frist');
@@ -403,6 +411,14 @@ export function createEosRemoteFacade({
       }
       if (p.status !== 200) throw submitError(p);
       const s = p.json?.status;
+      if (!['queued', 'running', 'done', 'failed', 'expired', 'superseded'].includes(s)) {
+        // Unbekannte Antwort (Proxy-Seite, neuer Status): nicht im Dauerfeuer
+        // weiterfragen, nach wenigen Versuchen aufgeben.
+        oddPolls += 1;
+        if (oddPolls >= MAX_ODD_POLLS) throw new RemoteError('service_error', 'Unerwartete Antworten des Rechendienstes');
+        await new Promise((res) => { const tm = setTimeout(res, 2000); tm.unref?.(); });
+        continue;
+      }
       setStatus({ phase: s === 'running' ? 'running' : (s === 'queued' ? 'queued' : 'receiving'), queuePosition: p.json?.queuePosition ?? null });
       if (s === 'done') {
         const res = p.json.result;
@@ -421,9 +437,8 @@ export function createEosRemoteFacade({
     }
   }
 
-  async function runLocal(body, cfg) {
+  async function runLocal(body, cfg, deadlineAt) {
     const base = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
-    const rs = remoteSettings(cfg);
     const t = 15_000;
     const ordered = [
       ...REMOTE_FORWARD_PATHS.filter((p) => config.has(p)),
@@ -439,7 +454,7 @@ export function createEosRemoteFacade({
     for (const m of measurementsForJob()) {
       await must('PUT', `/v1/measurement/value?datetime=${encodeURIComponent(m.datetime)}&key=${encodeURIComponent(m.key)}&value=${m.value}`);
     }
-    const optimize = await must('POST', '/v1/optimize', isObj(body) ? body : {}, rs.jobTimeoutMs);
+    const optimize = await must('POST', '/v1/optimize', isObj(body) ? body : {}, Math.max(30_000, deadlineAt - now()));
     const plan = await must('GET', '/v1/energy-management/plan');
     const solution = await must('GET', '/v1/energy-management/optimization/solution');
     return { optimize, plan, solution, runMs: null, jobId: null, diagnostics: null };
@@ -449,17 +464,18 @@ export function createEosRemoteFacade({
     const cfg = getCfg();
     const rs = remoteSettings(cfg);
     const t0 = now();
+    const deadlineAt = t0 + rs.jobTimeoutMs;
     let result = null;
     let fallback = null;
     let error = null;
     try {
-      result = await runRemote(body, cfg, rs);
+      result = await runRemote(body, cfg, rs, deadlineAt);
     } catch (e) {
       error = e instanceof RemoteError ? e : new RemoteError('client_error', String(e?.message || e));
     }
     if (!result && error.fallbackOk && rs.localFallback) {
       try {
-        result = await runLocal(body, cfg);
+        result = await runLocal(body, cfg, deadlineAt);
         fallback = 'local';
         log('eos_remote_local_fallback', { reason: error.code });
       } catch (e) {

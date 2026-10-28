@@ -1809,7 +1809,10 @@ ctx.eosForecastBridge = eosForecastBridge;
 // EOS-Fassade auf 127.0.0.1 nimmt alles an, was die EOS-Module sonst an ein
 // lokales EOS schicken, und rechnet jeden Lauf beim DVhub-Rechendienst.
 // Läuft im Prozess, der auch die Läufe anstößt (runtime/monolith); ein reiner
-// Web-Prozess zeigt auf denselben festen Port.
+// Web-Prozess zeigt auf denselben festen Port. Grenze im getrennten Betrieb
+// (DVHUB_ENABLE_RUNTIME_WORKER=1, von keinem Installer genutzt): Zustand und
+// Diagnosepaket der Fassade liegen nur im Runtime-Prozess, die Oberfläche des
+// Web-Prozesses zeigt dann nur „startet“.
 const EOS_REMOTE_PORT = Number(process.env.DVHUB_EOS_REMOTE_PORT) || EOS_REMOTE_FACADE_PORT;
 let eosRemoteFacade = null;
 let eosRemoteReconciling = null;
@@ -1827,12 +1830,13 @@ function reconcileEosRemote() {
         getLicenceProof: () => licenseService.getRemoteProof(),
         // Token aus dem Einschreiben in die Config (geschwärzt wie andere Tokens).
         // Direkt gespeichert, ohne den EOS-Abgleich des ctx-Wrappers.
-        saveToken: async (token) => {
+        saveToken: async (token, endpoint) => {
           const next = JSON.parse(JSON.stringify(rawCfg || {}));
           next.optimizer = next.optimizer || {};
           next.optimizer.eosProxy = next.optimizer.eosProxy || {};
           next.optimizer.eosProxy.remote = next.optimizer.eosProxy.remote || {};
           next.optimizer.eosProxy.remote.token = token;
+          next.optimizer.eosProxy.remote.tokenEndpoint = endpoint;
           saveAndApplyConfig(next);
         },
         state,

@@ -2477,9 +2477,9 @@ function buildFieldDefinitions() {
       type: 'number',
       default: 1200000,
       min: 60000,
-      max: 10800000,
+      max: 5400000,
       step: 60000,
-      help: 'So lange wartet DVhub auf das Ergebnis eines Laufs im Rechendienst. Danach gilt der Lauf als gescheitert und der letzte Plan bleibt aktiv. Standard: 20 Minuten.'
+      help: 'So lange wartet DVhub auf das Ergebnis eines Laufs im Rechendienst (bei Ausfall samt lokalem Rückfall). Danach gilt der Lauf als gescheitert und der letzte Plan bleibt aktiv. Standard: 20 Minuten, höchstens 90.'
     },
     {
       section: 'schedule',
@@ -4672,7 +4672,8 @@ export function createDefaultConfig() {
         enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000,
         // Fernbetrieb (services/optimizer/eos-remote.js): 'local' | 'remote'.
         mode: 'local',
-        remote: { endpoint: '', token: '', jobTimeoutMs: 1200000, localFallback: false, debugBundle: false },
+        // tokenEndpoint: Adresse, für die das Token ausgegeben wurde (intern).
+        remote: { endpoint: '', token: '', tokenEndpoint: '', jobTimeoutMs: 1200000, localFallback: false, debugBundle: false },
       },
       // T-LIVESOC-RESERVE (Variante B): re-derive the EOS charge reserve from the
       // LIVE battery SoC instead of the plan trajectory (self-correcting). OFF by

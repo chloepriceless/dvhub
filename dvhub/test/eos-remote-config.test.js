@@ -25,7 +25,7 @@ test('Felder mit deutschen Beschriftungen, Standard: aus / lokal', () => {
   const d = createDefaultConfig().optimizer.eosProxy;
   assert.equal(d.enabled, false);
   assert.equal(d.mode, 'local');
-  assert.deepEqual(d.remote, { endpoint: '', token: '', jobTimeoutMs: 1_200_000, localFallback: false, debugBundle: false });
+  assert.deepEqual(d.remote, { endpoint: '', token: '', tokenEndpoint: '', jobTimeoutMs: 1_200_000, localFallback: false, debugBundle: false });
 });
 
 test('Betriebsart remote bleibt beim Normalisieren erhalten', () => {

@@ -98,7 +98,7 @@ async function startFacade(cfg, over = {}) {
   const facade = createEosRemoteFacade({
     getCfg: () => cfg,
     getLicenceProof: () => ({ licenseKey: 'key/abc.sig', machineFile: '-----BEGIN MACHINE FILE-----\nx\n-----END MACHINE FILE-----' }),
-    saveToken: async (t) => { saved.push(t); cfg.optimizer.eosProxy.remote.token = t; },
+    saveToken: async (t, endpoint) => { saved.push(t); cfg.optimizer.eosProxy.remote.token = t; cfg.optimizer.eosProxy.remote.tokenEndpoint = endpoint; },
     state,
     pushLog: () => {},
     eosVersion: 'v0.4.0rc3',
@@ -369,5 +369,41 @@ describe('Fernbetrieb: DVhubs EOS-Module sprechen unverändert mit der Fassade',
     assert.ok(sol && Array.isArray(sol.rows));
     const sched = await adapter.pullSchedule({ solution: sol });
     assert.ok(Array.isArray(sched) && sched.length > 0);
+  });
+});
+
+describe('Fernbetrieb: Gegenprüfung Runde 1', () => {
+  it('unbekannte Antwort beim Abfragen: kein Dauerfeuer, nach wenigen Versuchen Fehler', async () => {
+    let polls = 0;
+    const url = await listen(async (rq, rs) => {
+      await readBody(rq);
+      if (rq.method === 'POST') { rs.writeHead(202, { 'Content-Type': 'application/json' }); rs.end(JSON.stringify({ id: 'job_abc' })); return; }
+      polls += 1;
+      rs.writeHead(200, { 'Content-Type': 'text/html' });
+      rs.end('<html>proxy</html>');
+    });
+    const { url: f, state } = await startFacade(makeCfg(url, { token: 'dves_x' }));
+    const t0 = Date.now();
+    const r = await req(f, 'POST', '/v1/optimize', {});
+    assert.equal(r.status, 503);
+    assert.equal(state.optimizer.eosRemote.lastError.code, 'service_error');
+    assert.ok(polls <= 10, `höchstens 10 Abfragen, waren ${polls}`);
+    assert.ok(Date.now() - t0 >= 1500, 'mit Pause zwischen den Abfragen');
+  });
+
+  it('Token gehört zu seiner Dienst-Adresse: neue Adresse → neu einschreiben, altes Token nicht senden', async () => {
+    const seen = [];
+    const svc = await fakeService({ tokenOk: (t) => { seen.push(t); return t === 'dves_neu'; } });
+    const cfg = makeCfg(svc.url, { token: 'dves_vom_alten_dienst', tokenEndpoint: 'https://alt.example.invalid' });
+    const { url, saved } = await startFacade(cfg);
+    assert.equal((await req(url, 'POST', '/v1/optimize', {})).status, 200);
+    assert.equal(seen.includes('dves_vom_alten_dienst'), false);
+    assert.deepEqual(saved, ['dves_neu']);
+    assert.equal(cfg.optimizer.eosProxy.remote.tokenEndpoint, svc.url);
+  });
+
+  it('lokaler Rückfall bekommt nur die Restzeit derselben Frist', async () => {
+    const { remoteSettings } = await import('../services/optimizer/eos-remote.js');
+    assert.equal(remoteSettings({ optimizer: { eosProxy: { remote: { jobTimeoutMs: 3 * 3600_000 } } } }).jobTimeoutMs, 90 * 60_000);
   });
 });
