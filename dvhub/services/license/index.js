@@ -1070,6 +1070,18 @@ export function createLicenseService(ctx) {
   }
 
   /**
+   * getRemoteProof: Lizenznachweis für den EOS-Rechendienst (eos-remote.js).
+   * NUR intern — nie über HTTP oder getState(). Nur bei aktiver Lizenz mit
+   * Machine-File (node-lock); der Dienst prüft beides selbst noch einmal.
+   * @returns {{licenseKey: string, machineFile: string} | null}
+   */
+  function getRemoteProof() {
+    const l = state.license || {};
+    if (l.status !== 'active' || !l.license_key || !l.machine_file) return null;
+    return { licenseKey: l.license_key, machineFile: l.machine_file };
+  }
+
+  /**
    * onProActiveChange: register a callback fired on every active <-> non-active
    * transition with the new boolean. Used by server.js to start/stop the
    * DV-Modbus server + EOS dispatch live on a license change.
@@ -1260,6 +1272,7 @@ export function createLicenseService(ctx) {
     getState,
     getStatus,
     isProActive,
+    getRemoteProof,
     getCapKwp,
     updatePlantExceedsLicense,
     plantGateActive,

@@ -45,7 +45,10 @@ export const REDACTED_PATHS = Object.freeze([
   // LichtBlick-App-Login. Die E-Mail ist zugleich Kennung des Kundenkontos.
   'userEnergyPricing.provider.tibber.token',
   'userEnergyPricing.provider.lichtblick.email',
-  'userEnergyPricing.provider.lichtblick.password'
+  'userEnergyPricing.provider.lichtblick.password',
+  // EOS-Rechendienst (Fernbetrieb): Zugangsschlüssel der Box, beim
+  // Einschreiben mit der Lizenz ausgegeben.
+  'optimizer.eosProxy.remote.token'
   // Phase 09.4 gap-closure: notifications.providers.uptime-kuma removed — the
   // Uptime Kuma integration is the `monitoring` block; monitoring.pushUrl is
   // redacted below via redactUrlCreds (URL-level, not whole-field).

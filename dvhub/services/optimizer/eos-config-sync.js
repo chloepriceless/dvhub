@@ -23,6 +23,7 @@ import http from 'node:http';
 
 import { createEosCapabilityProbe } from './eos-capabilities.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
+import { resolveEosProxy } from './eos-adapter.js';
 
 const TIMEOUT_MS = 8_000;
 const BATTERY_DEVICE_ID = 'battery1';   // EOS default — mirrors what EOS bootstraps.
@@ -513,7 +514,7 @@ export function createEosConfigSync(ctx) {
 
   async function sync() {
     const cfg = getCfg();
-    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
 
     // No-op when the operator has explicitly disabled the EOS bridge — avoids
     // log spam when EOS isn't running and the operator doesn't intend it to.
@@ -849,7 +850,7 @@ export function createEosConfigSync(ctx) {
    */
   async function persist() {
     const cfg = getCfg();
-    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
     if (!cfg?.optimizer?.eosProxy?.enabled) {
       return { ok: true, skipped: 'eosProxy.enabled=false' };
     }
@@ -876,7 +877,7 @@ export function createEosConfigSync(ctx) {
    */
   async function syncEv() {
     const cfg = getCfg();
-    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
     if (!cfg?.optimizer?.eosProxy?.enabled) return { ok: true, skipped: 'eosProxy.enabled=false' };
     if (cfg?.optimizer?.eosOptimizeEv !== true) return { ok: true, skipped: 'eosOptimizeEv=false' };
     const caps = await capabilityProbe.get(baseUrl);

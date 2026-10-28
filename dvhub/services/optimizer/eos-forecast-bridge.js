@@ -34,6 +34,7 @@
 import { isGridStorageOnly, createStandbyEstimator, resolveStandbyW, buildGridStorageSeries, gridImportW } from './grid-storage.js';
 import { resolveEvSocPct } from './ev-soc.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
+import { resolveEosProxy } from './eos-adapter.js';
 import http from 'node:http';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
 import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
@@ -544,7 +545,7 @@ export function createEosForecastBridge(ctx) {
     if (dvhubTriggersEosRuns(cfg)) return { skipped: 'soc travels with the run request' };
     // Erst wenn der Abgleich ein EOS 0.4 erkannt hat (state.optimizer.eos).
     if (state?.optimizer?.eos?.supported !== true) return { skipped: 'eos not supported' };
-    const baseUrl = cfg.optimizer.eosProxy.url || 'http://127.0.0.1:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
     return pushSoc(baseUrl, { freshOnly: true });
   }
 
@@ -558,7 +559,7 @@ export function createEosForecastBridge(ctx) {
    */
   async function socForRun() {
     const cfg = getCfg();
-    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
     const socPct = Number(planningSocPct(ctx));
     if (!Number.isFinite(socPct)) return { skipped: 'no live battery soc in state' };
     const evSoc = resolveEvSocPct(ctx);
@@ -626,7 +627,7 @@ export function createEosForecastBridge(ctx) {
 
   async function push() {
     const cfg = getCfg();
-    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
 
     if (cfg?.optimizer?.eosProxy?.enabled === false) {
       return { ok: true, pushed: [], errors: {}, skipped: 'eosProxy.enabled=false' };
@@ -914,7 +915,7 @@ export function createEosForecastBridge(ctx) {
     const watchdog = async () => {
       const cfg = getCfg();
       if (cfg?.optimizer?.eosProxy?.enabled === false) return;
-      const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+      const baseUrl = resolveEosProxy(cfg).url;
       // Neustart-Zähler des zentralen EOS-Monitors (erkennt auch Neustarts im
       // Container, wo die Prozessnummer immer 1 ist — siehe eos-monitor.js);
       // ohne Monitor die Prozessnummer selbst erfragen.

@@ -2423,6 +2423,88 @@ function buildFieldDefinitions() {
       step: 1000,
       help: 'So lange wartet DVhub auf eine Antwort des Optimierers. Ein vollständiger Rechenlauf dauert mehrere Minuten, die einzelnen Abfragen hier sind aber kurz. Zu knapp = der Fahrplan kommt nie an, DVhub fällt auf die eingebaute Planung zurück. Standard: 30 Sekunden.'
     },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.mode',
+      label: 'Wo rechnet EOS?',
+      type: 'select',
+      options: [
+        { value: 'local', label: 'Auf dieser Box bzw. unter der Adresse oben (Standard)' },
+        { value: 'remote', label: 'Im DVhub-Rechendienst (für schwache Hardware, Pro-Lizenz)' }
+      ],
+      help: 'Im Rechendienst schickt DVhub zu jedem Lauf Einstellungen, Prognosen und Ladestand verschlüsselt an den Dienst und übernimmt dessen Plan genau so wie von einem lokalen EOS. Ein lokales EOS ist dann nicht nötig, EOSdash gibt es dabei nicht — stattdessen zeigt DVhub Laufzeit, Status und Warnungen des Dienstes. Ist der Dienst nicht erreichbar, bleibt der letzte Plan aktiv.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.remote.endpoint',
+      label: 'Adresse des Rechendienstes',
+      type: 'text',
+      empty: 'blank',
+      help: 'Die Adresse bekommst du mit der Freischaltung. Nur https (http nur im eigenen Netz).'
+    },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.remote.token',
+      label: 'Zugangsschlüssel der Box',
+      type: 'password',
+      empty: 'blank',
+      help: 'Holt DVhub beim ersten Lauf selbst mit deiner Lizenz. Leeren, um die Box neu anzumelden.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.remote.jobTimeoutMs',
+      label: 'Höchstens auf einen Plan warten (ms)',
+      type: 'number',
+      default: 1200000,
+      min: 60000,
+      max: 10800000,
+      step: 60000,
+      help: 'So lange wartet DVhub auf das Ergebnis eines Laufs im Rechendienst. Danach gilt der Lauf als gescheitert und der letzte Plan bleibt aktiv. Standard: 20 Minuten.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.remote.localFallback',
+      label: 'Bei Ausfall lokal rechnen',
+      type: 'boolean',
+      help: 'Nur wenn auf dieser Box ein EOS installiert ist: Ist der Rechendienst nicht erreichbar, rechnet das lokale EOS unter der Adresse oben. Standard AUS.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.remote.debugBundle',
+      label: 'Diagnosepaket für den Support anlegen',
+      type: 'boolean',
+      help: 'Der Dienst legt zu jedem Lauf zusätzlich ein Paket mit EOS-Konfiguration und EOS-Protokoll an, das du für den Support herunterladen kannst. Es wird nach 24 Stunden gelöscht. Standard AUS.'
+    },
 
     {
       section: 'schedule',
@@ -4586,7 +4668,12 @@ export function createDefaultConfig() {
       // batteryCapacityWh gilt wie bisher; ist die Liste gefüllt, wird
       // batteryCapacityWh in applyVictronDefaults() daraus abgeleitet.
       batteryStages: [],
-      eosProxy: { enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000 },
+      eosProxy: {
+        enabled: false, url: 'http://127.0.0.1:8503', timeoutMs: 30000,
+        // Fernbetrieb (services/optimizer/eos-remote.js): 'local' | 'remote'.
+        mode: 'local',
+        remote: { endpoint: '', token: '', jobTimeoutMs: 1200000, localFallback: false, debugBundle: false },
+      },
       // T-LIVESOC-RESERVE (Variante B): re-derive the EOS charge reserve from the
       // LIVE battery SoC instead of the plan trajectory (self-correcting). OFF by
       // default — field-tested on the operator install first (2026-07-22).

@@ -158,7 +158,7 @@ import { createChargerStatusPoller } from './services/wallbox/charger-status.js'
 import { createEosMonitor } from './services/optimizer/eos-monitor.js';
 import { createEosRestarter } from './services/optimizer/eos-restarter.js';
 import { writeSharedDvhubUrl } from './services/container-shared.js';
-import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
+import { resolveEosProxy, setEosRemoteFacadeUrl } from './services/optimizer/eos-adapter.js';
 import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter, createVictronEvcsAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
@@ -189,6 +189,7 @@ import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-s
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
+import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules, createScheduleRuleStore, scheduleRulesPath, readScheduleRules } from './services/optimizer/rule-store.js';
 import { createFamilyService } from './services/family/index.js';
@@ -1804,6 +1805,68 @@ const eosForecastBridge = createEosForecastBridge(ctx);
 const eosFreshSocTimer = safeInterval('eos-fresh-soc', () => eosForecastBridge.pushFreshSoc(), 60_000);
 ctx.eosForecastBridge = eosForecastBridge;
 
+// EOS im Fernbetrieb (optimizer.eosProxy.mode = 'remote', eos-remote.js): eine
+// EOS-Fassade auf 127.0.0.1 nimmt alles an, was die EOS-Module sonst an ein
+// lokales EOS schicken, und rechnet jeden Lauf beim DVhub-Rechendienst.
+// Läuft im Prozess, der auch die Läufe anstößt (runtime/monolith); ein reiner
+// Web-Prozess zeigt auf denselben festen Port.
+const EOS_REMOTE_PORT = Number(process.env.DVHUB_EOS_REMOTE_PORT) || EOS_REMOTE_FACADE_PORT;
+let eosRemoteFacade = null;
+let eosRemoteReconciling = null;
+function reconcileEosRemote() {
+  if (eosRemoteReconciling) return eosRemoteReconciling;
+  eosRemoteReconciling = (async () => {
+    const want = eosRemoteActive(ctx.getCfg());
+    if (!IS_RUNTIME_PROCESS) {
+      setEosRemoteFacadeUrl(want ? `http://127.0.0.1:${EOS_REMOTE_PORT}` : null);
+      return;
+    }
+    if (want && !eosRemoteFacade) {
+      const facade = createEosRemoteFacade({
+        getCfg: () => ctx.getCfg(),
+        getLicenceProof: () => licenseService.getRemoteProof(),
+        // Token aus dem Einschreiben in die Config (geschwärzt wie andere Tokens).
+        // Direkt gespeichert, ohne den EOS-Abgleich des ctx-Wrappers.
+        saveToken: async (token) => {
+          const next = JSON.parse(JSON.stringify(rawCfg || {}));
+          next.optimizer = next.optimizer || {};
+          next.optimizer.eosProxy = next.optimizer.eosProxy || {};
+          next.optimizer.eosProxy.remote = next.optimizer.eosProxy.remote || {};
+          next.optimizer.eosProxy.remote.token = token;
+          saveAndApplyConfig(next);
+        },
+        state,
+        pushLog,
+        eosVersion: readEosPin(__dirname),
+      });
+      let url;
+      try {
+        url = await facade.start({ port: EOS_REMOTE_PORT });
+      } catch (err) {
+        if (PROCESS_ROLE !== 'monolith') throw err;
+        url = await facade.start({ port: 0 });
+        pushLog('eos_remote_port_fallback', { port: EOS_REMOTE_PORT, error: err.message });
+      }
+      eosRemoteFacade = facade;
+      ctx.eosRemote = facade;
+      setEosRemoteFacadeUrl(url);
+      pushLog('eos_remote_started', { url });
+    } else if (!want && eosRemoteFacade) {
+      const facade = eosRemoteFacade;
+      eosRemoteFacade = null;
+      ctx.eosRemote = null;
+      setEosRemoteFacadeUrl(null);
+      await facade.stop();
+      if (state.optimizer) state.optimizer.eosRemote = null;
+      pushLog('eos_remote_stopped', {});
+    }
+  })()
+    .catch((err) => pushLog('eos_remote_error', { error: err?.message || String(err) }))
+    .finally(() => { eosRemoteReconciling = null; });
+  return eosRemoteReconciling;
+}
+reconcileEosRemote();
+
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
 ctx.needsSetup = () => loadedConfig.needsSetup;
@@ -1827,6 +1890,8 @@ ctx.buildSystemDiscoveryPayload = buildSystemDiscoveryPayload;
 // -- ctx extensions for admin/mutation routes (Plan 2) ---
 ctx.saveAndApplyConfig = (incomingConfig) => {
   const result = saveAndApplyConfig(restoreRedacted(incomingConfig, rawCfg));
+  // Fernbetrieb an/aus: Fassade starten oder beenden, bevor der EOS-Abgleich unten läuft.
+  const eosRemoteReady = reconcileEosRemote();
   // WS3: recompute the PVGIS expected-production cache when the user changes
   // their string geometry (forecast.pv.strings) or location — so a changed
   // orientation immediately yields a new curtailment baseline. refresh() is a
@@ -1846,6 +1911,7 @@ ctx.saveAndApplyConfig = (incomingConfig) => {
     // at them. Without this ordering EOS would briefly see empty series
     // and bail out of the next genetic run.
     (async () => {
+      await eosRemoteReady;
       try { if (eosForecastBridge) await eosForecastBridge.push(); }
       catch (e) {
         try { pushLog('eos_forecast_bridge_error', { phase: 'after_save', error: e?.message || String(e) }); }
