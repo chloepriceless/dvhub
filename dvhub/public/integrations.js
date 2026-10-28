@@ -274,7 +274,10 @@
       cards[i].classList.toggle('intg-search-miss', !!q && name.toLowerCase().indexOf(q) === -1);
     }
   }
-  document.addEventListener('input', function (e) { if (e.target && e.target.id === 'intg-search') applyIntgSearch(); });
+  document.addEventListener('input', function (e) {
+    if (e.target && e.target.id === 'intg-search') applyIntgSearch();
+    if (e.target && (e.target.id === 'evcc-dep-value' || e.target.id === 'evcc-dep-capacity' || e.target.id === 'evcc-dep-consumption')) evccDepPreviewSoon();
+  });
 
   // Statusmeldungen der Einstellungen: „✓ …“ grün, alles andere wie gehabt.
   // Die Meldungen kommen aus vielen Stellen; statt jede anzufassen, liest ein
@@ -2599,7 +2602,7 @@
     if (el('evcc-eos-maxchargew')) el('evcc-eos-maxchargew').value = eos.maxChargeW != null ? eos.maxChargeW : 5000;
     if (el('evcc-eos-stopmode')) el('evcc-eos-stopmode').value = eos.stopMode || 'off';
     renderEvccEosState(eos);
-    fillEvccDeparture(eos.departure || {}, eos.capacityWh);
+    fillEvccDeparture(eos.departure || {}, eos.capacityWh, eos);
   }
   function toLocalInput(iso) {
     if (!iso) return '';
@@ -2618,10 +2621,35 @@
       defaultTarget: (document.getElementById('evcc-dep-value') || {}).value,
       defaultKm: (document.getElementById('evcc-dep-commute') || {}).value,
       showKm: true,
-      onChange: function () { evccDepWeeklyPlan = window.DVhubEvWeekly.read(host); }
+      onChange: function () { evccDepWeeklyPlan = window.DVhubEvWeekly.read(host); },
+      // Vorschau beim Bearbeiten (POST /api/ev/preview): dieselben Felder wie beim Speichern.
+      previewBody: function () {
+        var cap = Number((document.getElementById('evcc-dep-capacity') || {}).value);
+        return { departure: evccDepartureBody(), capacityWh: isFinite(cap) && cap > 0 ? Math.round(cap * 1000) : undefined };
+      }
     });
   }
-  function fillEvccDeparture(dep, capacityWh) {
+  // Zusammenfassung ueber dem Wochenplan (ev-weekly-editor.js summaryLines):
+  // naechste Abfahrt mit Quelle und was davon gerade an EOS geht.
+  function setEvccDepSummary(dep, capacityWh, eos) {
+    var host = document.getElementById('evcc-dep-weekly');
+    if (!host || !window.DVhubEvWeekly) return;
+    var reg = (eos && eos.registration) || {};
+    window.DVhubEvWeekly.setSummary(host, {
+      resolved: dep.resolved || null,
+      capacityWh: capacityWh,
+      eos: {
+        optimizeEv: !!(eos && eos.optimizeEv), registered: eos && eos.registration ? reg.register === true : null,
+        reason: reg.reason || null, preplanBlocked: reg.preplanBlocked || null, mode: reg.mode || null, chargeStartAt: reg.chargeStartAt || null,
+        deadlineSupported: dep.deadlineSupported === true, chargeStartSupported: dep.chargeStartSupported === true
+      }
+    });
+  }
+  function evccDepPreviewSoon() {
+    var host = document.getElementById('evcc-dep-weekly');
+    if (host && window.DVhubEvWeekly) window.DVhubEvWeekly.refreshPreview(host);
+  }
+  function fillEvccDeparture(dep, capacityWh, eos) {
     var el = function (id) { return document.getElementById(id); };
     if (el('evcc-dep-enabled')) el('evcc-dep-enabled').checked = !!dep.enabled;
     if (el('evcc-dep-capacity')) el('evcc-dep-capacity').value = capacityWh ? Math.round(capacityWh / 100) / 10 : 50;
@@ -2633,7 +2661,8 @@
     if (el('evcc-dep-arr-once')) el('evcc-dep-arr-once').value = toLocalInput(dep.arrivalOnce);
     evccDepWeeklyPlan = Array.isArray(dep.weeklyPlan) ? dep.weeklyPlan : [];
     syncEvccDepModeUi();
-    renderEvccDepState(dep, capacityWh);
+    setEvccDepSummary(dep, capacityWh, eos);
+    renderEvccDepState(dep);
   }
   function fillWallbox(w) {
     var el = function (id) { return document.getElementById(id); };
@@ -2818,28 +2847,16 @@
     // Der Verbrauch zaehlt immer: er rechnet den Heimweg in Ladestand um.
     renderEvccDepWeekly();
   }
-  function renderEvccDepState(dep, capacityWh) {
+  function renderEvccDepState(dep) {
     var box = document.getElementById('evcc-dep-state');
     if (!box) return;
     var r = dep.resolved || {};
     var lines = [];
     box.className = 'evcc-eos-state';
+    box.hidden = false;
     if (!dep.enabled) { box.textContent = 'Aus — EOS nutzt den allgemeinen Ziel-SoC am Ende des Planungszeitraums.'; return; }
-    if (r.departureAt) {
-      var d = new Date(r.departureAt);
-      // In DVhubs Zeitzone anzeigen, nicht in der des Browsers — „07:00" ist
-      // die Ortszeit der Anlage.
-      lines.push('Nächste Abfahrt: ' + d.toLocaleString('de-DE', { timeZone: r.timeZone || 'Europe/Berlin', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-        + (r.source === 'once' ? ' (einmalig)' : ''));
-    } else lines.push('Keine Abfahrt geplant' + (r.reason ? ' (' + r.reason + ')' : '') + '.');
-    if (r.arrivalAt) {
-      lines.push('Ankunft davor: ' + new Date(r.arrivalAt).toLocaleString('de-DE', { timeZone: r.timeZone || 'Europe/Berlin', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-        + (r.arrivalSource === 'once' ? ' (einmalig)' : ''));
-    }
-    if (r.targetSocPct != null) {
-      var kwh = capacityWh ? Math.round(capacityWh * r.targetSocPct / 100 / 100) / 10 : null;
-      lines.push('Ziel an EOS: ' + r.targetSocPct + ' %' + (kwh != null ? ' ≈ ' + String(kwh).replace('.', ',') + ' kWh' : ''));
-    }
+    // Naechste Abfahrt (oder dass keine geplant ist), Ankunft davor und Ziel
+    // an EOS stehen in der Zusammenfassung ueber dem Wochenplan (setEvccDepSummary).
     var a = dep.arrival || {};
     if (a.expectedSocPct != null) {
       lines.push((a.source === 'plugged' ? 'Ladestand jetzt (angesteckt): ' : 'Erwartet bei Ankunft: ') + a.expectedSocPct + ' %'
@@ -2867,6 +2884,7 @@
       lines.push('Kein EOS 0.4 erkannt' + (dep.eosFlavor ? ' (' + dep.eosFlavor + ')' : '') + ' — DVhub schreibt Ziel und Abfahrt erst, wenn EOS 0.4 antwortet.');
     }
     box.textContent = lines.join('\n');
+    box.hidden = !lines.length;
   }
   function evccDepartureBody() {
     var el = function (id) { return document.getElementById(id); };
@@ -3134,6 +3152,9 @@
   document.addEventListener('change', function (e) {
     if (e.target && e.target.id === 'vev-product') vevRenderParams(e.target.value, {}, {});
     if (e.target && e.target.id === 'evcc-dep-mode') syncEvccDepModeUi();
+    // Vorschau der naechsten Abfahrt, sobald ein Feld der Abfahrt sich aendert
+    // (der Wochenplan selbst meldet sich ueber ev-weekly-editor.js).
+    if (e.target && e.target.id && e.target.id.indexOf('evcc-dep-') === 0) evccDepPreviewSoon();
     if (e.target && (e.target.id === 'wallbox-type' || e.target.id === 'wallbox-openwb-mode')) syncWallboxTypeUi();
   });
   document.addEventListener('click', function (e) {

@@ -432,9 +432,41 @@
     if (window.DVhubEvWeekly) {
       window.DVhubEvWeekly.render(el('evWeeklyGrid'), draft.weeklyPlan, {
         unit: UNITS[mode] || '%', defaultTarget: draft.targetValue, showKm: false,
-        onChange: function () { setDirty(true); }
+        onChange: function () { setDirty(true); },
+        // Vorschau beim Bearbeiten (POST /api/ev/preview): derselbe Body wie beim Speichern.
+        previewBody: function () { return { departure: formDeparture() }; }
       });
+      window.DVhubEvWeekly.setSummary(el('evWeeklyGrid'), savedSummary());
     }
+  }
+
+  // Gespeicherter Stand fuer die Zusammenfassung ueber dem Wochenplan: naechste
+  // Abfahrt (resolveEvDeparture) und was davon gerade an EOS geht.
+  function savedSummary() {
+    const d = data.departure || {};
+    const v = data.vehicle || {};
+    return {
+      resolved: d.resolved || null,
+      capacityWh: data.capacityWh,
+      eos: {
+        optimizeEv: !!data.optimizeEv, registered: v.registered, reason: v.registrationReason,
+        preplanBlocked: v.preplanBlocked, mode: v.registrationMode, chargeStartAt: v.chargeStartAt,
+        deadlineSupported: d.deadlineSupported === true, chargeStartSupported: d.chargeStartSupported === true
+      }
+    };
+  }
+
+  // Abfahrtsfelder aus dem Formular (Speichern und Vorschau), ohne Pruefung.
+  function formDeparture() {
+    const plan = window.DVhubEvWeekly ? window.DVhubEvWeekly.read(el('evWeeklyGrid')) : draft.weeklyPlan;
+    return {
+      enabled: draft.enabled, weeklyPlan: plan, targetValue: Number(el('evTarget').value),
+      commuteKm: el('evCommuteKm').value === '' ? 0 : Number(el('evCommuteKm').value),
+      arrivalOnce: fromLocalInput(el('evArrOnce').value), once: fromLocalInput(el('evDepOnce').value)
+    };
+  }
+  function previewSoon() {
+    if (window.DVhubEvWeekly) window.DVhubEvWeekly.refreshPreview(el('evWeeklyGrid'));
   }
 
   // „Sofort laden“: laden mit X kW, egal was EOS plant (POST/DELETE /api/ev/override).
@@ -617,15 +649,13 @@
     const mode = (data.departure && data.departure.targetMode) || 'percent';
     const tv = Number(el('evTarget').value);
     if (!isFinite(tv) || tv < 0 || (mode === 'percent' && tv > 100)) { msg('Ziel: ' + (mode === 'percent' ? '0–100 %' : 'Zahl ≥ 0'), true); return; }
-    const plan = window.DVhubEvWeekly ? window.DVhubEvWeekly.read(el('evWeeklyGrid')) : draft.weeklyPlan;
-    const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(plan, { enabled: draft.enabled, hasOnce: !!el('evDepOnce').value }) : null;
+    const dep = formDeparture();
+    const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(dep.weeklyPlan, { enabled: draft.enabled, hasOnce: !!el('evDepOnce').value }) : null;
     if (err) { msg(err, true); return; }
-    const km = el('evCommuteKm').value === '' ? 0 : Number(el('evCommuteKm').value);
+    const km = dep.commuteKm;
     if (!isFinite(km) || km < 0 || km > 1000) { msg('Heimweg: 0–1000 km', true); return; }
-    const ok = await post({ departure: {
-      enabled: draft.enabled, weeklyPlan: plan, targetValue: tv, commuteKm: km,
-      arrivalOnce: fromLocalInput(el('evArrOnce').value), once: fromLocalInput(el('evDepOnce').value)
-    } }, 'Übernommen — EOS rechnet mit dem neuen Wochenplan.');
+    dep.targetValue = tv;
+    const ok = await post({ departure: dep }, 'Übernommen — EOS rechnet mit dem neuen Wochenplan.');
     if (ok) { setDirty(false); load(); }
   }
 
@@ -635,13 +665,13 @@
     if (!data) return;
     if (e.target.id === 'evOptimize') { toggleOptimize(e.target.checked); return; }
     if (e.target.id === 'evOnlyPlugged') { toggleOnlyPlugged(e.target.checked); return; }
-    if (e.target.id === 'evDepEnabled') { draft.enabled = e.target.checked; setDirty(true); return; }
-    if (e.target.id === 'evTarget') { draft.targetValue = e.target.value; setDirty(true); return; }
-    if (e.target.id === 'evCommuteKm' || e.target.id === 'evArrOnce' || e.target.id === 'evDepOnce') setDirty(true);
+    if (e.target.id === 'evDepEnabled') { draft.enabled = e.target.checked; setDirty(true); previewSoon(); return; }
+    if (e.target.id === 'evTarget') { draft.targetValue = e.target.value; setDirty(true); previewSoon(); return; }
+    if (e.target.id === 'evCommuteKm' || e.target.id === 'evArrOnce' || e.target.id === 'evDepOnce') { setDirty(true); previewSoon(); }
   });
   document.addEventListener('input', function (e) {
     if (!data) return;
-    if (e.target.id === 'evTarget' || e.target.id === 'evCommuteKm') setDirty(true);
+    if (e.target.id === 'evTarget' || e.target.id === 'evCommuteKm') { setDirty(true); previewSoon(); }
     if (e.target.id === 'evBoostKw') boostTouched = true;
   });
   document.addEventListener('click', function (e) {

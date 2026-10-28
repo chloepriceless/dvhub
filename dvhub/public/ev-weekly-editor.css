@@ -21,3 +21,15 @@
   .evw-with-km .evw-head span:nth-child(5), .evw-with-km .evw-row .evw-km { grid-column:3; }
   .evw-with-km .evw-row { padding-bottom:4px; border-bottom:1px solid var(--hairline); }
 }
+/* Aufgeloeste Abfahrt je Zeile, Hinweis bei frueher Abfahrt ohne Ankunft und
+   die Zusammenfassung oben (2026-10-29). Volle Zeilenbreite unter den Feldern. */
+.evw-res, .evw-warn { grid-column:1 / -1; font-size:10.5px; line-height:1.35; }
+.evw-res { color:var(--text-2); font-family:var(--f-mono); padding-left:2.6em; margin-top:-1px; }
+.evw-res.is-warn { color:var(--yellow); }
+.evw-warn { color:var(--yellow); border-left:2px solid var(--yellow); padding:2px 0 2px 6px; margin:1px 0 3px 2.6em; }
+.evw-summary { display:flex; flex-direction:column; gap:2px; font-size:11.5px; line-height:1.4; color:var(--text-2); padding:6px 8px; margin-bottom:4px; border:1px solid var(--hairline); border-radius:6px; }
+.evw-summary.is-preview { border-style:dashed; border-color:var(--yellow); }
+.evw-sum-line.is-next { color:var(--text); font-weight:600; }
+.evw-sum-line.is-dim { color:var(--text-dim); }
+.evw-sum-line.is-warn { color:var(--yellow); }
+.evw-summary[hidden], .evw-res[hidden], .evw-warn[hidden] { display:none; }

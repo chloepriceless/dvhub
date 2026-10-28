@@ -143,6 +143,7 @@
     "POST /api/epex/backfill",
     "POST /api/epex/refresh",
     "POST /api/ev",
+    "POST /api/ev/preview",
     "POST /api/family/device-output",
     "POST /api/family/evcc/mode",
     "POST /api/family/mqtt-config",

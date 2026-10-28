@@ -29,7 +29,7 @@ import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, grid
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
-import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan } from './services/optimizer/ev-departure.js';
+import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, previewEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
 import { resolveEvArrival } from './services/optimizer/ev-arrival.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
@@ -5700,6 +5700,19 @@ export function createApiRoutes(ctx) {
       // mit der MQTT-Steuerung (cmd/ev/*).
       const { status, ...payload } = applyEvConfigPatch(ctx, { body, actor: actorContext(req) });
       return json(res, status, payload);
+    }
+    // Vorschau des Wochenplans beim Bearbeiten (2026-10-29): was DVhub aus dem
+    // Entwurf machte — naechste Abfahrt, aus welcher Zeile, Ziel. Gleiche
+    // Pruefung und Aufloesung wie beim Speichern (ev-departure.js
+    // previewEvDeparture), speichert nichts und braucht deshalb kein Pro.
+    // Body { departure: <wie POST /api/ev>, capacityWh? }.
+    if (url.pathname === '/api/ev/preview' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'object required' });
+      const out = previewEvDeparture(getCfg(), body.departure, { capacityWh: body.capacityWh });
+      return json(res, out.ok ? 200 : 400, out);
     }
 
     // „Sofort laden“: jetzt mit X kW laden, egal was EOS plant — auch wenn EOS

@@ -160,6 +160,37 @@ function shiftDay(d, offset) {
 }
 
 /**
+ * Rutscht die Abfahrt dieser Zeile auf den Folgetag? Nur mit Ankunft und
+ * wenn die Abfahrt nicht nach ihr liegt (20:00 → 05:00). Ohne Ankunft gilt
+ * die Abfahrt am Tag der Zeile. Die Oberflaeche (public/ev-weekly-editor.js
+ * rowInfo) zeigt dieselbe Regel; test/ev-plan-visibility.test.js haelt beide
+ * gleich.
+ */
+export function departsNextDay(entry) {
+  const dep = parseTime(entry?.departure);
+  const arr = parseTime(entry?.arrival);
+  return !!(dep && arr && dep.h * 60 + dep.min <= arr.h * 60 + arr.min);
+}
+
+/**
+ * Falle im Wochenplan (Prod 29.10.2026): „Mittwoch, Abfahrt 02:00“ ohne
+ * Ankunft gilt Mittwoch 02:00 — gemeint ist oft die Nacht danach. Bei einer
+ * Abfahrt vor EARLY_DEPARTURE_HINT_BEFORE ohne Ankunft zeigt die Oberflaeche
+ * deshalb, welcher Tag gilt und wie man die Nacht danach eintraegt. Nur ein
+ * Hinweis: an der Bedeutung bestehender Plaene aendert sich nichts.
+ *
+ * Warum 06:00: Bis dahin ist es fuer viele noch „die Nacht“ des Vortags;
+ * die uebliche Abfahrt zur Arbeit (alter Standard Mo–Fr 07:00) liegt danach
+ * und bekommt keinen Hinweis.
+ */
+export const EARLY_DEPARTURE_HINT_BEFORE = '06:00';
+export function earlyDepartureWithoutArrival(entry) {
+  const dep = parseTime(entry?.departure);
+  const limit = parseTime(EARLY_DEPARTURE_HINT_BEFORE);
+  return !!(dep && !parseTime(entry?.arrival) && dep.h * 60 + dep.min < limit.h * 60 + limit.min);
+}
+
+/**
  * Alle Fenster des Plans rund um `nowMs` (8 Tage zurueck, 8 voraus), nach
  * Abfahrt sortiert: { day, arrivalMs|null, departureMs, targetValue, commuteKm }.
  */
@@ -177,7 +208,7 @@ function planWindows(plan, timeZone, nowMs) {
     if (arr) {
       arrivalMs = zonedToUtcMs(d.year, d.month, d.day, arr.h, arr.min, timeZone);
       // Abfahrt nicht nach der Ankunft → am Folgetag (20:00 → 05:00).
-      if (dep.h * 60 + dep.min <= arr.h * 60 + arr.min) depDay = shiftDay(d, 1);
+      if (departsNextDay(e)) depDay = shiftDay(d, 1);
     }
     const departureMs = zonedToUtcMs(depDay.year, depDay.month, depDay.day, dep.h, dep.min, timeZone);
     // Ankunft in der Luecke der Zeitumstellung (So 02:30 gibt es im Maerz
@@ -407,6 +438,27 @@ export function parseEvDeparturePatch(d, prefix = 'departure') {
     patch.evConsumptionKwhPer100km = v;
   }
   return { ok: true, patch };
+}
+
+/**
+ * Vorschau: was DVhub aus einem noch nicht gespeicherten Entwurf machte
+ * (Integrationsseite und Leitstand-Kachel, POST /api/ev/preview). Dieselbe
+ * Pruefung wie beim Speichern (parseEvDeparturePatch) und dieselbe Aufloesung
+ * (resolveEvDeparture) — die Config bleibt unberuehrt.
+ *
+ * @param {object} cfg  aktuelle Config
+ * @param {object} departure  Eingabe wie `departure` bei POST /api/ev
+ * @param {{ nowMs?: number, capacityWh?: number }} [opts]  capacityWh: Wert
+ *   aus dem Formular (Ziel in kWh/km haengt davon ab)
+ * @returns {{ ok: true, resolved: object } | { ok: false, error: string }}
+ */
+export function previewEvDeparture(cfg, departure, { nowMs = Date.now(), capacityWh } = {}) {
+  const parsed = parseEvDeparturePatch(departure, 'departure');
+  if (!parsed.ok) return parsed;
+  const optimizer = { ...(cfg?.optimizer || {}), ...parsed.patch };
+  const cap = Number(capacityWh);
+  if (Number.isFinite(cap) && cap > 0) optimizer.evCapacityWh = cap;
+  return { ok: true, resolved: resolveEvDeparture({ ...cfg, optimizer }, nowMs) };
 }
 
 /**
