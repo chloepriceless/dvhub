@@ -94,7 +94,7 @@ publish-release.sh (gh)
 - **Solange `release-keys/allowed_signers` keinen Schlüssel enthält**, lehnt die Box jedes Paket ab und die
   Umstellung startet nicht. Seit 28.10.2026 steht dort `dvhub-release-2026`
   (`SHA256:ElDpOZLh+Zbish5io+jSOmJmx+TQfWWzG10BMGCbJXY`); ein Test hält die Datei auf bekannte Fingerabdrücke fest.
-  Darum vor dem Merge nach main zuerst veröffentlichen (Schritt 4 unten), sonst zählen git-Boxen Fehlversuche.
+  Darum vor dem Merge nach main zuerst veröffentlichen (Schritt 4 unter „Einmalig für die Eigentümerin“), sonst zählen git-Boxen Fehlversuche.
 
 ## 3. Kanäle und Verteilung
 

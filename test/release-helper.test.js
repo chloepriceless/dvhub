@@ -737,23 +737,54 @@ const RELEASE_KEY_FINGERPRINTS = new Set([
   'SHA256:ElDpOZLh+Zbish5io+jSOmJmx+TQfWWzG10BMGCbJXY' // dvhub-release-2026, angelegt 28.10.2026
 ]);
 
-test('release-keys/allowed_signers: nur bekannte Release-Schlüssel mit beiden Namensräumen', () => {
+// Jede Zeile wird so geprüft, wie die Box sie liest: Schlüssel gegen einen
+// Wegwerfschlüssel getauscht (Prinzipal und Optionen bleiben), damit signiert
+// und mit `ssh-keygen -Y verify` gegen genau diese Zeile geprüft — so fallen
+// auch Tippfehler in valid-before/-after oder Namensräumen auf.
+function sshVerify(dir, allowed, ns, extra = []) {
+  const msg = path.join(dir, 'msg');
+  const r = spawnSync('ssh-keygen', ['-Y', 'verify', '-f', allowed, '-I', 'dvhub-release', '-n', ns, '-s', `${msg}.${ns}.sig`, ...extra],
+    { input: fs.readFileSync(msg), encoding: 'utf8' });
+  return r.status === 0;
+}
+
+test('release-keys/allowed_signers: nur bekannte Release-Schlüssel, Zeilen so gültig wie auf der Box', () => {
   const lines = fs.readFileSync(path.join(repoRoot, 'release-keys/allowed_signers'), 'utf8')
     .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
   assert.ok(lines.length >= 1, 'mindestens ein Schlüssel');
-  for (const line of lines) {
-    const m = line.match(/^dvhub-release namespaces="dvhub-release,dvhub-release-index"(?:,valid-(?:before|after)="\d{8,14}")* (ssh-ed25519 [A-Za-z0-9+/=]+)(?: \S+)?$/);
-    assert.ok(m, `Zeilenformat: ${line.slice(0, 60)}`);
-    const dir = tmp('dvhub-anchor-');
-    try {
-      fs.writeFileSync(path.join(dir, 'k.pub'), `${m[1]}\n`);
+  const dir = tmp('dvhub-anchor-');
+  try {
+    const tk = path.join(dir, 'tk');
+    assert.equal(spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'wegwerf', '-f', tk]).status, 0);
+    const throwaway = fs.readFileSync(`${tk}.pub`, 'utf8').trim();
+    fs.writeFileSync(path.join(dir, 'msg'), 'dvhub-anchor-check\n');
+    for (const ns of ['dvhub-release', 'dvhub-release-index', 'file']) {
+      assert.equal(spawnSync('ssh-keygen', ['-q', '-Y', 'sign', '-f', tk, '-n', ns, path.join(dir, 'msg')]).status, 0);
+      fs.renameSync(path.join(dir, 'msg.sig'), path.join(dir, `msg.${ns}.sig`));
+    }
+    let validNow = 0;
+    for (const [i, line] of lines.entries()) {
+      const m = line.match(/^(dvhub-release(?:\s+\S+)?)\s+(ssh-ed25519\s+[A-Za-z0-9+/=]+)(?:\s+\S+)?$/);
+      assert.ok(m, `Zeilenformat: ${line.slice(0, 60)}`);
+      fs.writeFileSync(path.join(dir, 'k.pub'), `${m[2]}\n`);
       const r = spawnSync('ssh-keygen', ['-l', '-f', path.join(dir, 'k.pub')], { encoding: 'utf8' });
       assert.equal(r.status, 0, `ssh-keygen liest den Schlüssel: ${r.stderr}`);
-      assert.match(r.stdout, /\(ED25519\)/);
       const fp = r.stdout.split(/\s+/)[1];
       assert.ok(RELEASE_KEY_FINGERPRINTS.has(fp), `unbekannter Schlüssel ${fp}`);
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  }
+
+      const allowed = path.join(dir, `allowed.${i}`);
+      fs.writeFileSync(allowed, `${m[1]} ${throwaway}\n`);
+      // Innerhalb des Gültigkeitsfensters (Beginn bzw. weit vor einem Ende):
+      const after = line.match(/valid-after="(\d{8}(?:\d{4}(?:\d{2})?)?)Z?"/);
+      const at = ['-Overify-time=' + (after ? after[1] : '20000101')];
+      for (const ns of ['dvhub-release', 'dvhub-release-index']) {
+        assert.ok(sshVerify(dir, allowed, ns, at), `Zeile ${i + 1}: ssh-keygen nimmt sie für ${ns} nicht an`);
+      }
+      assert.ok(!sshVerify(dir, allowed, 'file', at), `Zeile ${i + 1}: Namensräume nicht auf dvhub-release eingeschränkt`);
+      if (sshVerify(dir, allowed, 'dvhub-release') && sshVerify(dir, allowed, 'dvhub-release-index')) validNow += 1;
+    }
+    assert.ok(validNow >= 1, 'mindestens ein Schlüssel muss heute gültig sein');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 function isLink(p) { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } }
