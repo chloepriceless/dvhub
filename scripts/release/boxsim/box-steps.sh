@@ -13,7 +13,8 @@
 #  - Python-Prognose: /etc/pip.conf zeigt auf einen toten Index (pip scheitert
 #    schnell, nicht fatal); TimescaleDB: packagecloud.io → 127.0.0.1.
 #  - Ports < 1024: sysctl ip_unprivileged_port_start=0 statt Capabilities.
-#  - Vor install.sh wartet der Prüfstand, bis kein apt/dpkg mehr läuft.
+#  - apt wartet bis 600 s auf die dpkg-Sperre (install.sh tut das selbst nicht),
+#    zusätzlich wartet der Prüfstand vor install.sh, bis kein apt/dpkg mehr läuft.
 set -uo pipefail
 export LC_ALL=C.UTF-8
 OUT=/mnt/out
@@ -58,6 +59,9 @@ case "$step" in
     git config --system url."file:///srv/git/dvhub.git".insteadOf https://github.com/chloepriceless/dvhub.git
     git config --system --add safe.directory /srv/git/dvhub.git
     printf '[global]\nindex-url = http://127.0.0.1:9/simple\ntimeout = 2\nretries = 0\n' > /etc/pip.conf
+    # install.sh wartet nicht auf die dpkg-Sperre; die Hintergrund-Provisionierung
+    # ruft apt mehrfach mit Pausen dazwischen. apt selbst warten lassen (Stub).
+    echo 'DPkg::Lock::Timeout "600";' > /etc/apt/apt.conf.d/90-release-test-lock
     grep -q packagecloud /etc/hosts || echo '127.0.0.1 packagecloud.io' >> /etc/hosts
     ln -sfn /mnt/rt/pub-1 /srv/pub
     bash "$0" server >/dev/null

@@ -224,28 +224,38 @@ allein reicht nicht); danach läuft die Umstellung wie oben.
   v0.4.2 mit ihrem eigenen `install.sh` installiert, dann Update über die alte Oberfläche, Umstellung auf das Paket,
   weiteres Paket-Update und Rückweg; Negativfälle. Ergebnisse und Protokolle unter `~/Projects/release-tests/`.
 
-## Ergebnisse (27.10.2026, Prüfstand Debian bookworm arm64, systemd)
+## Ergebnisse (28.10.2026, Prüfstand Debian bookworm arm64, systemd)
 
-Pakete aus diesem Branch (Test-Releases 1.0.9/1.0.10/1.0.11, Wegwerf-Schlüssel), Protokolle unter
-`~/Projects/release-tests/runs/`. Jede Version mit ihrem eigenen `install.sh` installiert, über die *alte*
-Oberfläche per git auf die Brücke 1.0.9, automatische Umstellung, Paket-Update auf 1.0.10 über die neue Oberfläche,
-Rückweg auf 1.0.9; Marker in Config, Daten, Datenbank und Box-Zustand, Kanal und Config-Schlüssel geprüft.
+Pakete aus diesem Branch (Test-Releases 1.0.9/1.0.10/1.0.11, Wegwerf-Schlüssel), Protokolle und Tabelle unter
+`~/Projects/release-tests/` (`RESULTS.md`, `runs/`). Jede Version mit ihrem eigenen `install.sh` installiert, über die
+*alte* Oberfläche per git auf die Brücke 1.0.9, automatische Umstellung, Paket-Update auf 1.0.10 über die neue
+Oberfläche, Rückweg auf 1.0.9. In jedem Fall fünf Prüfungen (nach Installation, git-Update, Umstellung, Update,
+Rückweg) von Markern in Config, Daten, **Datenbank** (gesät → muss wiedergefunden werden) und Box-Zustand, Kanal und
+wichtigen Config-Schlüsseln.
 
-- v1.0.0 … v1.0.8 (stable), v1.0.0 und v1.0.8 (dev), v0.4.2: alle umgestellt, aktualisiert, zurückgerollt, Daten und
-  Kanal erhalten. Umstellung ~9 s, Paket-Update ~9 s, Rückweg ~8 s (ohne Downloadzeit über das Netz; lokal 24 MB).
+- v1.0.0 … v1.0.8 (stable), v1.0.0 und v1.0.8 (dev), v0.4.2: alle umgestellt, aktualisiert, zurückgerollt; Datenbank-
+  Marker in allen 60 Prüfungen vorhanden, Kanal und Config erhalten. Umstellung ~9–10 s, Paket-Update ~9 s,
+  Rückweg ~8 s (lokaler Server; Downloadzeit übers Netz kommt hinzu).
 - v0.4.2: braucht wie beim Sprung 0.4 → 1.0 einmal den Installer (die alte Oberfläche ruft kein `post-update.sh`
   als root auf, und der neue Stand startet ohne `apiToken` nicht) — danach normal.
-- Negativfälle (v1.0.8): verändertes Paket, fremde Signatur, Download bricht immer ab, Platte voll → abgelehnt,
-  Box unverändert; Download bricht einmal ab → setzt fort; neue Version startet nicht → nach ~20 s zurück.
-- armv7 (Debian bookworm armhf unter QEMU, v1.0.8 → 1.0.9 per Installer → Paket → 1.0.10 → zurück): ok; unter
-  Emulation Umstellung 38 s, Update 30 s, Rückweg 25 s. NodeSource baut für armhf nicht mehr — `install.sh` kann dort
-  Node 22 nicht selbst holen (Prüfstand nimmt das Archiv von nodejs.org).
+- Negativfälle (v1.0.8), jeweils gegen Zustand, Meldung, aktiven Dienst, erwartetes Release und Marker geprüft:
+  verändertes Paket, fremde Signatur, Download bricht immer ab, Vorabprüfung Platz (8-MB-Staging), **Platte läuft
+  während des Downloads voll** (echtes ENOSPC: Teil-Download entfernt) → abgelehnt, Box unverändert; Download bricht
+  einmal ab → setzt fort; neue Version startet nicht → nach ~20 s zurück.
 - Stromausfall mitten im Verschieben (echter Container-Neustart): `recover` läuft vor `post-update.sh`, git-Stand
-  gesund, danach normale Umstellung.
-- Altfehler gesehen (nicht durch die Pakete): Die Oberfläche bis v1.0.8 räumt beim git-Update `forecast-venv/` per
-  `git stash --include-untracked` weg (`.gitignore` kannte es nicht); behoben seit 25.10. auf main.
-- Größe: git-Installation 164 MB / ~7000 Dateien (davon `.git` 56 MB, `node_modules` 64 MB) → je Release 93 MB
-  entpackt / 6860 Dateien (≈420 eigene, Rest `node_modules`, dazu 14 MB EEBUS-Binary), Download 24–25 MB.
+  gesund, Datenbank erhalten, danach normale Umstellung.
+- armv7 (Debian bookworm armhf unter QEMU, v1.0.8 → 1.0.9 per Installer → Paket → 1.0.10 → zurück): ok; unter
+  Emulation Umstellung 30 s, Update 30 s, Rückweg 25 s.
+- Größe (gleich gemessen, Summe der Dateiblöcke): git-Checkout 1.0.9 164 MB / 8266 Dateien (davon `.git` 55 MB,
+  `node_modules` 58 MB) → Release 1.0.9 88 MB / 6858 Dateien (≈420 eigene, Rest `node_modules`, dazu das
+  EEBUS-Binary), Download 24–25 MB.
+
+Funde außerhalb der Pakete:
+- NodeSource baut für armhf nicht mehr — `install.sh` kann auf armv7 Node 22 nicht selbst holen.
+- `install.sh` wartet nicht auf die dpkg-Sperre (`post-update.sh` schon): ein Installer-Neulauf, während die
+  Hintergrund-Provisionierung noch apt nutzt, bricht ab (unter QEMU beobachtet).
+- Die Oberfläche bis v1.0.8 räumt beim git-Update `forecast-venv/` per `git stash --include-untracked` weg
+  (`.gitignore` kannte es nicht); behoben seit 25.10. auf main.
 
 ## Einmalig für die Eigentümerin
 
