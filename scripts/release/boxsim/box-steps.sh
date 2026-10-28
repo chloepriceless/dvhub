@@ -99,12 +99,13 @@ case "$step" in
       if [[ "$busy" -eq 0 ]]; then quiet=$((quiet + 1)); [[ "$quiet" -ge 2 ]] && break; else quiet=0; fi
       sleep 2; waited=$((waited + 2))
     done
-    echo "apt frei nach ${waited} s" >> "$OUT/install-wait.log"
+    if [[ "$quiet" -ge 2 ]]; then wt=0; echo "$tag: apt frei nach ${waited} s" >> "$OUT/install-wait.log"
+    else wt=1; echo "$tag: apt NICHT frei nach ${waited} s (Zeitgrenze)" >> "$OUT/install-wait.log"; fi
     t0="$(now)"
     bash /root/install.sh "${flags[@]}" > "$OUT/install-$tag.log" 2>&1
     rc=$?
     t1="$(now)"
-    result "install=$rc flags='${flags[*]}' time_s=$(dur "$t0" "$t1")"
+    result "install=$rc flags='${flags[*]}' time_s=$(dur "$t0" "$t1") apt_wait_s=$waited apt_wait_timeout=$wt"
     ;;
 
   wait-health) # [erwartete Version (Präfix)] [timeout]
