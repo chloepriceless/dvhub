@@ -729,14 +729,20 @@ test('Neue Version krank UND Rückweg krank → Ergebnis failed, nicht „läuft
 // ── Ausgelieferter Vertrauensanker ──────────────────────────────────────────
 
 // Ohne gültigen Schlüssel in release-keys/allowed_signers lehnt jede Box jedes
-// Paket ab — ein versehentlich geleerter oder verstümmelter Anker darf nicht
-// unbemerkt ausgeliefert werden.
-test('release-keys/allowed_signers: gültiger Ed25519-Schlüssel mit beiden Namensräumen', () => {
+// Paket ab — ein versehentlich geleerter, verstümmelter oder durch einen
+// Testschlüssel ersetzter Anker darf nicht unbemerkt ausgeliefert werden.
+// Bei einer Rotation den neuen Fingerabdruck hier ergänzen; valid-before/
+// valid-after an einer Zeile sind erlaubt (docs/release-pakete.md, Rotation).
+const RELEASE_KEY_FINGERPRINTS = new Set([
+  'SHA256:ElDpOZLh+Zbish5io+jSOmJmx+TQfWWzG10BMGCbJXY' // dvhub-release-2026, angelegt 28.10.2026
+]);
+
+test('release-keys/allowed_signers: nur bekannte Release-Schlüssel mit beiden Namensräumen', () => {
   const lines = fs.readFileSync(path.join(repoRoot, 'release-keys/allowed_signers'), 'utf8')
     .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
   assert.ok(lines.length >= 1, 'mindestens ein Schlüssel');
   for (const line of lines) {
-    const m = line.match(/^dvhub-release namespaces="dvhub-release,dvhub-release-index" (ssh-ed25519 [A-Za-z0-9+/=]+)(?: \S+)?$/);
+    const m = line.match(/^dvhub-release namespaces="dvhub-release,dvhub-release-index"(?:,valid-(?:before|after)="\d{8,14}")* (ssh-ed25519 [A-Za-z0-9+/=]+)(?: \S+)?$/);
     assert.ok(m, `Zeilenformat: ${line.slice(0, 60)}`);
     const dir = tmp('dvhub-anchor-');
     try {
@@ -744,6 +750,8 @@ test('release-keys/allowed_signers: gültiger Ed25519-Schlüssel mit beiden Name
       const r = spawnSync('ssh-keygen', ['-l', '-f', path.join(dir, 'k.pub')], { encoding: 'utf8' });
       assert.equal(r.status, 0, `ssh-keygen liest den Schlüssel: ${r.stderr}`);
       assert.match(r.stdout, /\(ED25519\)/);
+      const fp = r.stdout.split(/\s+/)[1];
+      assert.ok(RELEASE_KEY_FINGERPRINTS.has(fp), `unbekannter Schlüssel ${fp}`);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
 });

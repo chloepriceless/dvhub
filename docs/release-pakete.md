@@ -91,8 +91,10 @@ publish-release.sh (gh)
   wurde, und nur, wenn seine Version neuer ist als die, aus der die Datei zuletzt kam (ein Rückweg auf ein altes Paket
   ändert das Vertrauen nicht). Spätere Pakete mit dem neuen Schlüssel gelten; ein Paket mit neuem Schlüssel liefert
   später die Datei ohne den alten aus.
-- **Solange `release-keys/allowed_signers` keinen Schlüssel enthält** (heute), lehnt die Box jedes Paket ab und die
-  Umstellung startet nicht — der Code kann also vor dem ersten Schlüssel ausgeliefert werden.
+- **Solange `release-keys/allowed_signers` keinen Schlüssel enthält**, lehnt die Box jedes Paket ab und die
+  Umstellung startet nicht. Seit 28.10.2026 steht dort `dvhub-release-2026`
+  (`SHA256:ElDpOZLh+Zbish5io+jSOmJmx+TQfWWzG10BMGCbJXY`); ein Test hält die Datei auf bekannte Fingerabdrücke fest.
+  Darum vor dem Merge nach main zuerst veröffentlichen (Schritt 4 unten), sonst zählen git-Boxen Fehlversuche.
 
 ## 3. Kanäle und Verteilung
 
