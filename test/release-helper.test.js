@@ -710,6 +710,22 @@ test('Umstellung: Index nicht ladbar zählt als Fehlversuch (24-h-Pause, Obergre
   } finally { r.close(); }
 });
 
+test('Neue Version krank UND Rückweg krank → Ergebnis failed, nicht „läuft wieder“', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1' });
+    r.bad.add('1.0.1');
+    r.bad.add('1.0.0');
+    const res = await r.run('install', 'latest', 'stable');
+    assert.equal(res.code, 1);
+    assert.equal(r.status().state, 'failed');
+    assert.doesNotMatch(r.status().message, /läuft wieder/);
+    assert.match(r.status().message, /nicht gesund/);
+    assert.equal(r.current(), 'releases/1.0.0', 'zurückgeschaltet ist trotzdem');
+  } finally { r.close(); }
+});
+
 function isLink(p) { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } }
 
 // Damit eslint die importierten Bauteile nicht als unbenutzt meldet.

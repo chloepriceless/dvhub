@@ -76,7 +76,9 @@ for (const d of fs.readdirSync(run).sort()) {
     const check = checks.find((c) => c.check === j.label);
     let expected = st ? (j.state === st && re.test(String(j.msg))) : null;
     if (j.label === 'neg-enospc' && fill.filled !== '1') expected = false;
-    if (check && (check.ok !== '1' || check.db !== 'ok')) expected = false;
+    // Box danach aktiv und auf dem erwarteten Stand (Gegenprüfung 61228be9).
+    const wantCurrent = ['neg-tampered', 'neg-badsig'].includes(j.label) ? 'releases/1.0.9' : 'releases/1.0.10';
+    if (!check || check.ok !== '1' || check.db !== 'ok' || check.active !== 'active' || check.current !== wantCurrent) expected = false;
     negs.push({ fall: d, name: NEG_NAMES[j.label] || j.label, state: j.state, msg: j.msg, check, expected,
       extra: j.label === 'neg-enospc' ? `Füller ${fill.filled === '1' ? `${fill.filler_mb} MB` : 'NICHT aktiv'}` : '' });
   }

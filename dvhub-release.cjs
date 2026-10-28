@@ -790,7 +790,8 @@ function record(st, version, result) {
 }
 
 // Gemeinsamer Teil von install/rollback: umschalten, einrichten, neu starten,
-// prüfen; bei Misserfolg zurück auf from.
+// prüfen; bei Misserfolg zurück auf from. Ergebnis: 'ok' | 'rolled_back' (from
+// läuft wieder gesund) | 'failed' (auch from meldet sich nicht gesund).
 async function switchAndVerify(s, st, job, { to, from, op }) {
   st.pending = { op, version: to, previous: from, boot_id: bootId(), at: new Date().toISOString() };
   saveState(s, st);
@@ -807,7 +808,7 @@ async function switchAndVerify(s, st, job, { to, from, op }) {
     st.pending = null;
     record(st, to, 'ok');
     saveState(s, st);
-    return true;
+    return 'ok';
   }
   job.phase('rollback', `nicht gesund — zurück auf ${from}`);
   switchCurrent(s, from);
@@ -819,7 +820,7 @@ async function switchAndVerify(s, st, job, { to, from, op }) {
   record(st, to, back ? 'rolled_back' : 'failed');
   saveState(s, st);
   job.log(back ? `${from} läuft wieder` : `Achtung: auch ${from} meldet sich nicht gesund`);
-  return false;
+  return back ? 'rolled_back' : 'failed';
 }
 
 // Abschluss eines erfolgreichen Updates: Vertrauen, alter Checkout, Aufräumen.
@@ -845,12 +846,17 @@ async function jobInstall(s, job, { version, channel }) {
     throw new Exit(3, `${target} ist älter als ${from} — dafür gibt es „rollback“`);
   }
   const { manifest } = await fetchAndUnpack(s, job, { channel, version: target, index });
-  if (await switchAndVerify(s, st, job, { to: manifest.version, from, op: 'install' })) {
+  const outcome = await switchAndVerify(s, st, job, { to: manifest.version, from, op: 'install' });
+  if (outcome === 'ok') {
     finalizeInstall(s, st, manifest.version, job);
     job.finish('ok', `${manifest.version} installiert und gesund`, { result: 'ok', version: manifest.version, from });
   } else {
     fs.rmSync(path.join(releasesDir(s), manifest.version), { recursive: true, force: true });
-    job.finish('rolled_back', `${manifest.version} war nicht gesund — ${from} läuft wieder`, { result: 'rolled_back', version: manifest.version, from });
+    if (outcome === 'rolled_back') {
+      job.finish('rolled_back', `${manifest.version} war nicht gesund — ${from} läuft wieder`, { result: 'rolled_back', version: manifest.version, from });
+    } else {
+      job.finish('failed', `${manifest.version} war nicht gesund, zurück auf ${from} — aber auch ${from} meldet sich nicht gesund (Dienst prüfen)`, { result: 'failed', version: manifest.version, from });
+    }
   }
 }
 
@@ -861,10 +867,13 @@ async function jobRollback(s, job) {
   const to = st.previous;
   if (!to || to === from || !fs.existsSync(path.join(releasesDir(s), to, MANIFEST))) throw new Exit(3, 'keine vorige Version vorhanden');
   job.status.version = to;
-  if (await switchAndVerify(s, st, job, { to, from, op: 'rollback' })) {
+  const outcome = await switchAndVerify(s, st, job, { to, from, op: 'rollback' });
+  if (outcome === 'ok') {
     job.finish('ok', `zurück auf ${to}`, { result: 'ok', version: to, from });
-  } else {
+  } else if (outcome === 'rolled_back') {
     job.finish('failed', `Rückweg auf ${to} nicht gesund — ${from} läuft wieder`, { result: 'failed', version: to, from });
+  } else {
+    job.finish('failed', `Rückweg auf ${to} nicht gesund, und auch ${from} meldet sich nicht gesund (Dienst prüfen)`, { result: 'failed', version: to, from });
   }
 }
 

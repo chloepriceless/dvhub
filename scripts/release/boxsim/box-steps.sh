@@ -13,6 +13,7 @@
 #  - Python-Prognose: /etc/pip.conf zeigt auf einen toten Index (pip scheitert
 #    schnell, nicht fatal); TimescaleDB: packagecloud.io → 127.0.0.1.
 #  - Ports < 1024: sysctl ip_unprivileged_port_start=0 statt Capabilities.
+#  - Vor install.sh wartet der Prüfstand, bis kein apt/dpkg mehr läuft.
 set -uo pipefail
 export LC_ALL=C.UTF-8
 OUT=/mnt/out
@@ -75,6 +76,10 @@ case "$step" in
     git -C /srv/git/dvhub.git show "$tag:install.sh" > /root/install.sh
     flags=(--channel "$ch")
     grep -q -- '--no-eos)' /root/install.sh && flags+=(--no-eos)
+    # install.sh wartet nicht auf die dpkg-Sperre (anders als post-update.sh):
+    # läuft noch ein apt aus der Hintergrund-Provisionierung (unter QEMU
+    # minutenlang), bräche es ab. Der Prüfstand wartet darum vorher, bis apt frei ist.
+    for _ in $(seq 1 900); do pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null || break; sleep 2; done
     t0="$(now)"
     bash /root/install.sh "${flags[@]}" > "$OUT/install-$tag.log" 2>&1
     rc=$?
@@ -202,10 +207,17 @@ case "$step" in
     # Wettlauf mit dem laufenden Download (Gegenprüfung 44061192).
     rm -f /mnt/out/fill-staging.log
     systemctl reset-failed release-filler 2>/dev/null
+    # Nur auf dem eigenen tmpfs und nur, wenn der Download wirklich begonnen
+    # hat; dd begrenzt auf den freien Platz (sonst füllte ein Fehlschlag vor
+    # dem Download die Platte des Containers bzw. der VM; Gegenprüfung 61228be9).
     systemd-run --collect --quiet --unit release-filler bash -c '
-      for _ in $(seq 1 1200); do ls /var/lib/dvhub-release/staging/dvhub-*.tar.gz >/dev/null 2>&1 && break; sleep 0.05; done
-      dd if=/dev/zero of=/var/lib/dvhub-release/staging/.filler bs=1M 2>/dev/null
-      truncate -s "-$1M" /var/lib/dvhub-release/staging/.filler
+      st=/var/lib/dvhub-release/staging; seen=0
+      for _ in $(seq 1 1200); do ls $st/dvhub-*.tar.gz >/dev/null 2>&1 && { seen=1; break; }; sleep 0.05; done
+      [ "$seen" = 1 ] || { echo "filled=0 reason=no-download" > /mnt/out/fill-staging.log; exit 0; }
+      mountpoint -q $st || { echo "filled=0 reason=not-tmpfs" > /mnt/out/fill-staging.log; exit 0; }
+      cap=$(( $(df -m --output=avail $st | tail -1 | tr -d " ") + 1 ))
+      dd if=/dev/zero of=$st/.filler bs=1M count=$cap 2>/dev/null
+      truncate -s "-$1M" $st/.filler
       echo "filled=1 filler_mb=$(du -sm /var/lib/dvhub-release/staging/.filler | cut -f1) free_kb=$(df -k --output=avail /var/lib/dvhub-release/staging | tail -1 | tr -d " ")" > /mnt/out/fill-staging.log
     ' fill "$1"
     result "fill_staging=$? reserve_mb=$1"

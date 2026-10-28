@@ -115,7 +115,7 @@ if [[ "$NEG" -eq 1 && "$CH" == stable ]]; then
   docker exec "$NAME" bash -c "mount -t tmpfs -o size=${SZ}m tmpfs /var/lib/dvhub-release/staging"
   S ctl "slow-dvhub-1.0.11-$ARCH.tar.gz" on; S fill-staging 1; S gui-pkg-update; S wait-job install 300 neg-enospc
   S fill-report; S ctl "slow-dvhub-1.0.11-$ARCH.tar.gz" off
-  docker exec "$NAME" bash -c 'ls -la /var/lib/dvhub-release/staging; umount /var/lib/dvhub-release/staging' >> "$OUT/steps.log" 2>&1
+  docker exec "$NAME" bash -c 'systemctl stop release-filler 2>/dev/null; ls -la /var/lib/dvhub-release/staging; umount /var/lib/dvhub-release/staging' >> "$OUT/steps.log" 2>&1
   S wait-health 1.0.10 60; S check neg-enospc
   echo "-- Negativ: neue Version startet nicht → automatischer Rückweg"
   S gui-pkg-update; S wait-job install 900 neg-health
