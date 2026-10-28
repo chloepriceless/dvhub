@@ -89,7 +89,7 @@ export function remoteSettings(cfg) {
     // einschreiben, das alte Token geht nie an einen anderen Dienst.
     tokenEndpoint: String(r.tokenEndpoint || '').trim().replace(/\/+$/, ''),
     // Höchstens die Hälfte der Wartezeit des Lauf-Anstoßes (EOS_RUN_TIMEOUT_MS,
-    // 3 h): Fernlauf und ggf. lokaler Rückfall teilen sich EINE Frist.
+    // 3 h): Fernlauf und ggf. lokaler Rückfall haben je dieses Budget.
     jobTimeoutMs: Number.isFinite(t) && t > 0 ? Math.min(MAX_REMOTE_JOB_TIMEOUT_MS, Math.max(10_000, t)) : DEFAULT_REMOTE_JOB_TIMEOUT_MS,
     localFallback: r.localFallback === true,
     // Opt-in: der Dienst legt je Auftrag ein Diagnosepaket für den Support an.
@@ -200,6 +200,7 @@ function localEos(baseUrl, method, pathname, body, timeoutMs) {
 export function createEosRemoteFacade({
   getCfg, getLicenceProof, saveToken, state, pushLog = () => {},
   eosVersion = DEFAULT_REMOTE_EOS_VERSION, fetchImpl = fetch, now = () => Date.now(),
+  localRequest = localEos,
 }) {
   const startedAt = new Date().toISOString();
   const config = new Map();       // Pfad → Wert (Reihenfolge des ersten Eintreffens)
@@ -437,7 +438,10 @@ export function createEosRemoteFacade({
     }
   }
 
-  async function runLocal(body, cfg, deadlineAt) {
+  // Der Rückfall hat ein EIGENES Budget (jobTimeoutMs): Scheitert der Fernlauf
+  // erst an der Frist, bliebe sonst nichts für das lokale EOS. Zweimal die
+  // höchste Wartezeit (90 min) passt in die 3 h des Lauf-Anstoßes.
+  async function runLocal(body, cfg, rs) {
     const base = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
     const t = 15_000;
     const ordered = [
@@ -445,7 +449,7 @@ export function createEosRemoteFacade({
       ...[...config.keys()].filter((p) => !REMOTE_FORWARD_PATHS.includes(p)),
     ];
     const must = async (method, p, b, timeoutMs = t) => {
-      const r = await localEos(base, method, p, b, timeoutMs);
+      const r = await localRequest(base, method, p, b, timeoutMs);
       if (r.status < 200 || r.status >= 300) throw new Error(`${method} ${p.split('?')[0]}: HTTP ${r.status}`);
       return r.data;
     };
@@ -454,7 +458,7 @@ export function createEosRemoteFacade({
     for (const m of measurementsForJob()) {
       await must('PUT', `/v1/measurement/value?datetime=${encodeURIComponent(m.datetime)}&key=${encodeURIComponent(m.key)}&value=${m.value}`);
     }
-    const optimize = await must('POST', '/v1/optimize', isObj(body) ? body : {}, Math.max(30_000, deadlineAt - now()));
+    const optimize = await must('POST', '/v1/optimize', isObj(body) ? body : {}, rs.jobTimeoutMs);
     const plan = await must('GET', '/v1/energy-management/plan');
     const solution = await must('GET', '/v1/energy-management/optimization/solution');
     return { optimize, plan, solution, runMs: null, jobId: null, diagnostics: null };
@@ -475,7 +479,7 @@ export function createEosRemoteFacade({
     }
     if (!result && error.fallbackOk && rs.localFallback) {
       try {
-        result = await runLocal(body, cfg, deadlineAt);
+        result = await runLocal(body, cfg, rs);
         fallback = 'local';
         log('eos_remote_local_fallback', { reason: error.code });
       } catch (e) {

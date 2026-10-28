@@ -2479,7 +2479,7 @@ function buildFieldDefinitions() {
       min: 60000,
       max: 5400000,
       step: 60000,
-      help: 'So lange wartet DVhub auf das Ergebnis eines Laufs im Rechendienst (bei Ausfall samt lokalem Rückfall). Danach gilt der Lauf als gescheitert und der letzte Plan bleibt aktiv. Standard: 20 Minuten, höchstens 90.'
+      help: 'So lange wartet DVhub auf das Ergebnis eines Laufs im Rechendienst (ein lokaler Rückfall bekommt dieselbe Zeit noch einmal). Danach gilt der Lauf als gescheitert und der letzte Plan bleibt aktiv. Standard: 20 Minuten, höchstens 90.'
     },
     {
       section: 'schedule',

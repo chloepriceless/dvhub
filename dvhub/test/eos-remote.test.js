@@ -402,8 +402,31 @@ describe('Fernbetrieb: Gegenprüfung Runde 1', () => {
     assert.equal(cfg.optimizer.eosProxy.remote.tokenEndpoint, svc.url);
   });
 
-  it('lokaler Rückfall bekommt nur die Restzeit derselben Frist', async () => {
+  it('Wartezeit höchstens 90 min (zweimal passt in die 3 h des Lauf-Anstoßes)', async () => {
     const { remoteSettings } = await import('../services/optimizer/eos-remote.js');
     assert.equal(remoteSettings({ optimizer: { eosProxy: { remote: { jobTimeoutMs: 3 * 3600_000 } } } }).jobTimeoutMs, 90 * 60_000);
+  });
+
+  it('lokaler Rückfall bekommt die volle eigene Wartezeit, auch nach einem Fernlauf bis zur Frist', async () => {
+    const calls = [];
+    const localRequest = async (base, method, p, body, timeoutMs) => {
+      calls.push({ method, p: p.split('?')[0], timeoutMs });
+      if (p === '/v1/optimize') return { status: 200, data: { start_solution: [1] } };
+      if (p.startsWith('/v1/energy-management')) return { status: 200, data: { ok: true } };
+      return { status: 200, data: {} };
+    };
+    // Dienst nimmt an, meldet dann nur noch „queued“ — bis die Frist abläuft.
+    const url = await listen(async (rq, rs) => {
+      await readBody(rq);
+      rs.writeHead(rq.method === 'POST' ? 202 : 200, { 'Content-Type': 'application/json' });
+      rs.end(JSON.stringify(rq.method === 'POST' ? { id: 'job_abc' } : { id: 'job_abc', status: 'queued' }));
+    });
+    const cfg = makeCfg(url, { token: 'dves_x', localFallback: true, jobTimeoutMs: 10_000 });
+    const { url: f, state } = await startFacade(cfg, { localRequest });
+    const r = await req(f, 'POST', '/v1/optimize', {});
+    assert.equal(r.status, 200);
+    assert.equal(state.optimizer.eosRemote.fallback, 'local');
+    const opt = calls.find((c) => c.p === '/v1/optimize');
+    assert.equal(opt.timeoutMs, 10_000, 'eigenes Budget = jobTimeoutMs, nicht die Restzeit');
   });
 });
