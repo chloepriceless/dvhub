@@ -13,3 +13,4 @@
 #
 # Solange hier kein Schlüssel steht, lehnt jede Box jedes Paket ab und die
 # Umstellung von git auf Pakete startet nicht.
+dvhub-release namespaces="dvhub-release,dvhub-release-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGTN1RenLe3V58zyOq+B7KvrXeFksdIpG82u5U5CV7j6 dvhub-release-2026

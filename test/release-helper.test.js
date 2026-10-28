@@ -726,6 +726,28 @@ test('Neue Version krank UND Rückweg krank → Ergebnis failed, nicht „läuft
   } finally { r.close(); }
 });
 
+// ── Ausgelieferter Vertrauensanker ──────────────────────────────────────────
+
+// Ohne gültigen Schlüssel in release-keys/allowed_signers lehnt jede Box jedes
+// Paket ab — ein versehentlich geleerter oder verstümmelter Anker darf nicht
+// unbemerkt ausgeliefert werden.
+test('release-keys/allowed_signers: gültiger Ed25519-Schlüssel mit beiden Namensräumen', () => {
+  const lines = fs.readFileSync(path.join(repoRoot, 'release-keys/allowed_signers'), 'utf8')
+    .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  assert.ok(lines.length >= 1, 'mindestens ein Schlüssel');
+  for (const line of lines) {
+    const m = line.match(/^dvhub-release namespaces="dvhub-release,dvhub-release-index" (ssh-ed25519 [A-Za-z0-9+/=]+)(?: \S+)?$/);
+    assert.ok(m, `Zeilenformat: ${line.slice(0, 60)}`);
+    const dir = tmp('dvhub-anchor-');
+    try {
+      fs.writeFileSync(path.join(dir, 'k.pub'), `${m[1]}\n`);
+      const r = spawnSync('ssh-keygen', ['-l', '-f', path.join(dir, 'k.pub')], { encoding: 'utf8' });
+      assert.equal(r.status, 0, `ssh-keygen liest den Schlüssel: ${r.stderr}`);
+      assert.match(r.stdout, /\(ED25519\)/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
 function isLink(p) { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } }
 
 // Damit eslint die importierten Bauteile nicht als unbenutzt meldet.
