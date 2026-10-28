@@ -775,7 +775,7 @@ test('release-keys/allowed_signers: nur bekannte Release-Schlüssel, Zeilen so g
       const allowed = path.join(dir, `allowed.${i}`);
       fs.writeFileSync(allowed, `${m[1]} ${throwaway}\n`);
       // Innerhalb des Gültigkeitsfensters (Beginn bzw. weit vor einem Ende):
-      const after = line.match(/valid-after="(\d{8}(?:\d{4}(?:\d{2})?)?)Z?"/);
+      const after = line.match(/valid-after="(\d{8}(?:\d{4}(?:\d{2})?)?(?:Z|UTC)?)"/i);
       const at = ['-Overify-time=' + (after ? after[1] : '20000101')];
       for (const ns of ['dvhub-release', 'dvhub-release-index']) {
         assert.ok(sshVerify(dir, allowed, ns, at), `Zeile ${i + 1}: ssh-keygen nimmt sie für ${ns} nicht an`);
