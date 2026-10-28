@@ -197,15 +197,22 @@ case "$step" in
     fi
     ;;
 
-  fill-staging) # <reserve-mb> — sobald der Download beginnt, das Staging bis auf <reserve> MB füllen
+  fill-staging) # <reserve-mb> — sobald der Download beginnt, das Staging füllen (bis ENOSPC, dann <reserve> MB frei)
+    # dd bis die Platte voll ist und danach die Reserve zurückgeben: kein
+    # Wettlauf mit dem laufenden Download (Gegenprüfung 44061192).
+    rm -f /mnt/out/fill-staging.log
     systemctl reset-failed release-filler 2>/dev/null
     systemd-run --collect --quiet --unit release-filler bash -c '
       for _ in $(seq 1 1200); do ls /var/lib/dvhub-release/staging/dvhub-*.tar.gz >/dev/null 2>&1 && break; sleep 0.05; done
-      free_kb="$(df -k --output=avail /var/lib/dvhub-release/staging | tail -1 | tr -d " ")"
-      fallocate -l "$(( (free_kb - $1 * 1024) * 1024 ))" /var/lib/dvhub-release/staging/.filler
-      echo "frei vorher ${free_kb} KB, Füller $(du -sk /var/lib/dvhub-release/staging/.filler | cut -f1) KB" >> /mnt/out/fill-staging.log
+      dd if=/dev/zero of=/var/lib/dvhub-release/staging/.filler bs=1M 2>/dev/null
+      truncate -s "-$1M" /var/lib/dvhub-release/staging/.filler
+      echo "filled=1 filler_mb=$(du -sm /var/lib/dvhub-release/staging/.filler | cut -f1) free_kb=$(df -k --output=avail /var/lib/dvhub-release/staging | tail -1 | tr -d " ")" > /mnt/out/fill-staging.log
     ' fill "$1"
     result "fill_staging=$? reserve_mb=$1"
+    ;;
+
+  fill-report) # Hat der Füller gegriffen?
+    result "fill_report $(cat /mnt/out/fill-staging.log 2>/dev/null || echo filled=0)"
     ;;
 
   gui-pkg-update) # [version] — Paket-Update über die NEUE Oberfläche
@@ -238,17 +245,20 @@ case "$step" in
     result "ctl=$1:$2"
     ;;
 
-  sizes) # <name> — Plattenbedarf des Programmordners (ohne Box-Zustand und alten Checkout)
-    # Ein find für Größe und Dateizahl, gleiche Ausnahmen (nur oberste Ebene;
-    # du --exclude=bin schloss auch jedes bin/ unter node_modules aus).
+  sizes) # <name> — Plattenbedarf, alle Werte gleich gemessen (Summe der Dateiblöcke, find -H)
+    # Programmordner ohne Box-Zustand und alten Checkout; Ausnahmen nur auf der
+    # obersten Ebene (du --exclude=bin ließ auch bin/ unter node_modules weg).
+    fsz() { find -H "$@" -type f -printf '%k\n' 2>/dev/null | awk '{k+=$1} END {printf "%d", k/1024}'; }
     read -r a n <<< "$(find /opt/dvhub -xdev \( -path /opt/dvhub/eos -o -path /opt/dvhub/eos-venv -o -path /opt/dvhub/forecast-venv \
       -o -path /opt/dvhub/bin -o -path /opt/dvhub/ml-models -o -path /opt/dvhub/.legacy-git \) -prune -o -type f -printf '%k\n' \
       | awk '{k+=$1; n++} END {printf "%d %d", k/1024, n}')"
-    g="$(du -sm /opt/dvhub/.git 2>/dev/null | cut -f1)"
-    rel="$(du -sm /opt/dvhub/releases 2>/dev/null | cut -f1)"; leg="$(du -sm /opt/dvhub/.legacy-git 2>/dev/null | cut -f1)"
-    cur="$(du -sm "$(readlink -f /opt/dvhub/current 2>/dev/null || echo /nonexistent)" 2>/dev/null | cut -f1)"
-    nm="$(du -sm /opt/dvhub/dvhub/node_modules/ 2>/dev/null | cut -f1)"
-    result "sizes=$1 program_mb=$a git_mb=${g:-0} files=$n releases_mb=${rel:-0} current_release_mb=${cur:-0} legacy_mb=${leg:-0} node_modules_mb=${nm:-0}"
+    g="$( [[ -d /opt/dvhub/.git ]] && fsz /opt/dvhub/.git || echo 0)"
+    rel="$( [[ -d /opt/dvhub/releases ]] && fsz /opt/dvhub/releases || echo 0)"
+    leg="$( [[ -d /opt/dvhub/.legacy-git ]] && fsz /opt/dvhub/.legacy-git || echo 0)"
+    cur="$( [[ -e /opt/dvhub/current ]] && fsz "$(readlink -f /opt/dvhub/current)" || echo 0)"
+    curn="$( [[ -e /opt/dvhub/current ]] && find -H "$(readlink -f /opt/dvhub/current)" -type f | wc -l || echo 0)"
+    nm="$(fsz /opt/dvhub/dvhub/node_modules)"
+    result "sizes=$1 program_mb=$a files=$n git_mb=$g releases_mb=$rel current_release_mb=$cur current_release_files=$curn legacy_mb=$leg node_modules_mb=$nm"
     ;;
 
   facts) # <name> — Momentaufnahme für das Protokoll

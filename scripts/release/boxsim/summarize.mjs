@@ -54,7 +54,7 @@ for (const d of fs.readdirSync(run).sort()) {
     rollback: rb.state ? `${rb.state} (${rb.time_s} s)` : '—',
     daten: bad.length ? 'NEIN' : (main.length ? 'ja' : '—'),
     db: main.length ? (main.every((c) => c.db === 'ok') ? `ok (${main.length}×)` : main.map((c) => `${c.check}:${c.db}`).join(' ')) : '—',
-    groesse: `${sz(`git-${d.split('-')[0]}`).program_mb ?? '?'} MB / ${sz(`git-${d.split('-')[0]}`).files ?? '?'} → Release ${sz('package-after-update').current_release_mb ?? sz('package').current_release_mb ?? '?'} MB`,
+    groesse: `${sz('git-1.0.9').program_mb ?? '?'} MB / ${sz('git-1.0.9').files ?? '?'} Dateien → Release ${sz('package').current_release_mb ?? '?'} MB / ${sz('package').current_release_files ?? '?'}`,
     gesamt: migratedOk && upd.state === 'ok' && rb.state === 'ok' && !bad.length && main.every((c) => c.db === 'ok') ? 'OK' : 'FEHLER',
     zeit: total ? `${total} s` : '?',
     notes: notes.join(' · ') || '—',
@@ -64,19 +64,32 @@ for (const d of fs.readdirSync(run).sort()) {
     'neg-interrupt-always': 'Download bricht immer ab', 'neg-precheck': 'Vorabprüfung Platz (8-MB-Staging)',
     'neg-enospc': 'Platte läuft während des Downloads voll (ENOSPC)', 'neg-health': 'neue Version startet nicht',
   };
+  // Erwartetes Ergebnis je Negativfall (Zustand und Meldung), nicht nur „irgendwie gescheitert“.
+  const NEG_EXPECT = {
+    'neg-tampered': ['failed', /Prüfsumme/], 'neg-badsig': ['failed', /Signatur ungültig/], 'neg-interrupt-once': ['ok', /installiert und gesund/],
+    'neg-interrupt-always': ['failed', /Download/], 'neg-precheck': ['failed', /zu wenig Speicher/],
+    'neg-enospc': ['failed', /Speicher voll beim Download/], 'neg-health': ['rolled_back', /nicht gesund/],
+  };
+  const fill = find((l) => l.step === 'fill-report');
   for (const j of jobs.filter((x) => String(x.label).startsWith('neg-'))) {
-    negs.push({ fall: d, name: NEG_NAMES[j.label] || j.label, state: j.state, msg: j.msg, check: checks.find((c) => c.check === j.label) });
+    const [st, re] = NEG_EXPECT[j.label] || [];
+    const check = checks.find((c) => c.check === j.label);
+    let expected = st ? (j.state === st && re.test(String(j.msg))) : null;
+    if (j.label === 'neg-enospc' && fill.filled !== '1') expected = false;
+    if (check && (check.ok !== '1' || check.db !== 'ok')) expected = false;
+    negs.push({ fall: d, name: NEG_NAMES[j.label] || j.label, state: j.state, msg: j.msg, check, expected,
+      extra: j.label === 'neg-enospc' ? `Füller ${fill.filled === '1' ? `${fill.filler_mb} MB` : 'NICHT aktiv'}` : '' });
   }
 }
 
-const head = ['Fall', 'Gesamt', 'install.sh', 'git-Update (alte Oberfläche)', 'Umstellung', 'Paket-Update', 'Rückweg', 'Daten/Config/Kanal', 'Datenbank-Marker', 'Programmordner git → Release', 'Laufzeit', 'Notizen'];
+const head = ['Fall', 'Gesamt', 'install.sh', 'git-Update (alte Oberfläche)', 'Umstellung', 'Paket-Update', 'Rückweg', 'Daten/Config/Kanal', 'Datenbank-Marker', 'git-Checkout 1.0.9 → Release 1.0.9 (MB / Dateien)', 'Laufzeit', 'Notizen'];
 console.log(`# Release-Paket-Matrix ${path.basename(run)}\n`);
 console.log(`| ${head.join(' | ')} |`);
 console.log(`|${head.map(() => '---').join('|')}|`);
 for (const r of rows) console.log(`| ${[r.fall, r.gesamt, r.install, r.git, r.migration, r.update, r.rollback, r.daten, r.db, r.groesse, r.zeit, r.notes].join(' | ')} |`);
 if (negs.length) {
   console.log('\n## Negativfälle\n');
-  console.log('| Fall | Fall | Ergebnis | Meldung | Box danach |');
-  console.log('|---|---|---|---|---|');
-  for (const n of negs) console.log(`| ${n.fall} | ${n.name} | ${n.state} | ${n.msg} | ${n.check ? `${n.check.current}, Marker ${n.check.ok === '1' ? 'ok' : n.check.bad}, DB ${n.check.db}` : '—'} |`);
+  console.log('| Box | Fall | wie erwartet | Ergebnis | Meldung | Box danach |');
+  console.log('|---|---|---|---|---|---|');
+  for (const n of negs) console.log(`| ${n.fall} | ${n.name} | ${n.expected ? 'ja' : 'NEIN'} | ${n.state} | ${n.msg}${n.extra ? ` (${n.extra})` : ''} | ${n.check ? `${n.check.current}, Marker ${n.check.ok === '1' ? 'ok' : n.check.bad}, DB ${n.check.db}` : '—'} |`);
 }

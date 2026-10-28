@@ -109,12 +109,12 @@ if [[ "$NEG" -eq 1 && "$CH" == stable ]]; then
   docker exec "$NAME" umount /var/lib/dvhub-release/staging
   S wait-health 1.0.10 60; S check neg-precheck
   echo "-- Negativ: Platte läuft während des Downloads voll (ENOSPC)"
-  # tmpfs knapp über der Vorabprüfung (Paket + 16 MB + 4 MB), langsamer Download,
-  # sobald er beginnt wird das Staging bis auf 1 MB aufgefüllt.
+  # tmpfs knapp über der Vorabprüfung (Paket + 16 MB + 4 MB), langsamer Download;
+  # sobald er beginnt, füllt dd das Staging bis ENOSPC und gibt 1 MB zurück.
   SZ="$(node -e 'const i=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const r=i.releases.find(x=>x.version===i.latest);console.log(Math.ceil(r.artifacts[process.argv[2]].size/1048576)+20)' "$R/pub-3/channels/index-stable.json" "$ARCH")"
   docker exec "$NAME" bash -c "mount -t tmpfs -o size=${SZ}m tmpfs /var/lib/dvhub-release/staging"
   S ctl "slow-dvhub-1.0.11-$ARCH.tar.gz" on; S fill-staging 1; S gui-pkg-update; S wait-job install 300 neg-enospc
-  S ctl "slow-dvhub-1.0.11-$ARCH.tar.gz" off
+  S fill-report; S ctl "slow-dvhub-1.0.11-$ARCH.tar.gz" off
   docker exec "$NAME" bash -c 'ls -la /var/lib/dvhub-release/staging; umount /var/lib/dvhub-release/staging' >> "$OUT/steps.log" 2>&1
   S wait-health 1.0.10 60; S check neg-enospc
   echo "-- Negativ: neue Version startet nicht → automatischer Rückweg"
