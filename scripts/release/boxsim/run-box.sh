@@ -70,7 +70,7 @@ S sizes git-1.0.9
 S reseed-state
 S check after-git-update
 S facts after-git-update
-S wait-job migrate 900
+S wait-job migrate 900 migrate
 S wait-health "$V1" 300
 S sizes package
 S check after-migration
@@ -78,11 +78,11 @@ S facts after-migration
 S pub pub-2
 S gui-check
 S gui-pkg-update
-S wait-job install 900
+S wait-job install 900 package-update
 S wait-health "$V2" 120
 S check after-package-update
 S gui-rollback
-S wait-job rollback 600
+S wait-job rollback 600 rollback
 S wait-health "$V1" 120
 S check after-rollback
 S sizes package-after-update
@@ -91,25 +91,34 @@ S facts after-rollback
 if [[ "$NEG" -eq 1 && "$CH" == stable ]]; then
   A="dvhub-1.0.10-$ARCH.tar.gz"
   echo "-- Negativ: verändertes Paket"
-  S ctl "corrupt-$A" on; S gui-pkg-update; S wait-job install 600; S ctl "corrupt-$A" off
+  S ctl "corrupt-$A" on; S gui-pkg-update; S wait-job install 600 neg-tampered; S ctl "corrupt-$A" off
   S wait-health 1.0.9 60; S check neg-tampered
   echo "-- Negativ: fremde Signatur"
-  S pub pub-badsig; S gui-pkg-update; S wait-job install 600; S pub pub-2
+  S pub pub-badsig; S gui-pkg-update; S wait-job install 600 neg-badsig; S pub pub-2
   S wait-health 1.0.9 60; S check neg-badsig
   echo "-- Negativ: Download bricht einmal ab (setzt fort)"
-  S ctl "interrupt-once-$A" on; S gui-pkg-update; S wait-job install 900
+  S ctl "interrupt-once-$A" on; S gui-pkg-update; S wait-job install 900 neg-interrupt-once
   S wait-health 1.0.10 120; S check neg-interrupt-once
   echo "-- Negativ: Download bricht immer ab"
-  S pub pub-3; S ctl "interrupt-always-dvhub-1.0.11-$ARCH.tar.gz" on; S gui-pkg-update; S wait-job install 900
+  S pub pub-3; S ctl "interrupt-always-dvhub-1.0.11-$ARCH.tar.gz" on; S gui-pkg-update; S wait-job install 900 neg-interrupt-always
   S ctl "interrupt-always-dvhub-1.0.11-$ARCH.tar.gz" off
   S wait-health 1.0.10 60; S check neg-interrupt-always
-  echo "-- Negativ: Platte voll (Staging 8 MB)"
+  echo "-- Negativ: Vorabprüfung Platz (Staging 8 MB)"
   docker exec "$NAME" bash -c 'mkdir -p /var/lib/dvhub-release/staging && mount -t tmpfs -o size=8m tmpfs /var/lib/dvhub-release/staging'
-  S gui-pkg-update; S wait-job install 300
+  S gui-pkg-update; S wait-job install 300 neg-precheck
   docker exec "$NAME" umount /var/lib/dvhub-release/staging
-  S wait-health 1.0.10 60; S check neg-disk-full
+  S wait-health 1.0.10 60; S check neg-precheck
+  echo "-- Negativ: Platte läuft während des Downloads voll (ENOSPC)"
+  # tmpfs knapp über der Vorabprüfung (Paket + 16 MB + 4 MB), langsamer Download,
+  # sobald er beginnt wird das Staging bis auf 1 MB aufgefüllt.
+  SZ="$(node -e 'const i=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const r=i.releases.find(x=>x.version===i.latest);console.log(Math.ceil(r.artifacts[process.argv[2]].size/1048576)+20)' "$R/pub-3/channels/index-stable.json" "$ARCH")"
+  docker exec "$NAME" bash -c "mount -t tmpfs -o size=${SZ}m tmpfs /var/lib/dvhub-release/staging"
+  S ctl "slow-dvhub-1.0.11-$ARCH.tar.gz" on; S fill-staging 1; S gui-pkg-update; S wait-job install 300 neg-enospc
+  S ctl "slow-dvhub-1.0.11-$ARCH.tar.gz" off
+  docker exec "$NAME" bash -c 'ls -la /var/lib/dvhub-release/staging; umount /var/lib/dvhub-release/staging' >> "$OUT/steps.log" 2>&1
+  S wait-health 1.0.10 60; S check neg-enospc
   echo "-- Negativ: neue Version startet nicht → automatischer Rückweg"
-  S gui-pkg-update; S wait-job install 900
+  S gui-pkg-update; S wait-job install 900 neg-health
   S wait-health 1.0.10 120; S check neg-health
   S facts after-negative
 fi

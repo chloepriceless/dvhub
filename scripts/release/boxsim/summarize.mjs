@@ -21,9 +21,11 @@ for (const d of fs.readdirSync(run).sort()) {
   const git = find((l) => l.step === 'gui-git-update');
   const viaInstaller = find((l) => l.git_update_mode).git_update_mode === 'installer';
   const jobs = all((l) => l.job);
-  const mig = jobs.find((j) => j.job === 'migrate') || {};
-  const upd = jobs.find((j) => j.job === 'install') || {};
-  const rb = jobs.find((j) => j.job === 'rollback') || {};
+  // Zuordnung über die Kennung des Schritts, nicht über die Reihenfolge (Gegenprüfung ff8530d0).
+  const byLabel = (label) => jobs.find((j) => j.label === label) || {};
+  const mig = byLabel('migrate');
+  const upd = byLabel('package-update');
+  const rb = byLabel('rollback');
   const checks = all((l) => l.step === 'check');
   const main = checks.filter((c) => !String(c.check).startsWith('neg-'));
   const bad = main.filter((c) => c.ok !== '1').map((c) => `${c.check}: ${c.bad}`);
@@ -51,27 +53,30 @@ for (const d of fs.readdirSync(run).sort()) {
     update: upd.state ? `${upd.state} (${upd.time_s} s)` : '—',
     rollback: rb.state ? `${rb.state} (${rb.time_s} s)` : '—',
     daten: bad.length ? 'NEIN' : (main.length ? 'ja' : '—'),
+    db: main.length ? (main.every((c) => c.db === 'ok') ? `ok (${main.length}×)` : main.map((c) => `${c.check}:${c.db}`).join(' ')) : '—',
     groesse: `${sz(`git-${d.split('-')[0]}`).program_mb ?? '?'} MB / ${sz(`git-${d.split('-')[0]}`).files ?? '?'} → Release ${sz('package-after-update').current_release_mb ?? sz('package').current_release_mb ?? '?'} MB`,
-    gesamt: migratedOk && upd.state === 'ok' && rb.state === 'ok' && !bad.length ? 'OK' : 'FEHLER',
+    gesamt: migratedOk && upd.state === 'ok' && rb.state === 'ok' && !bad.length && main.every((c) => c.db === 'ok') ? 'OK' : 'FEHLER',
     zeit: total ? `${total} s` : '?',
     notes: notes.join(' · ') || '—',
   });
-  const negSteps = jobs.filter((j) => j.job === 'install').slice(1);
-  if (negSteps.length) {
-    const names = ['verändertes Paket', 'fremde Signatur', 'Download bricht einmal ab', 'Download bricht immer ab', 'Platte voll', 'neue Version startet nicht'];
-    const negChecks = checks.filter((c) => String(c.check).startsWith('neg-'));
-    negSteps.forEach((j, i) => negs.push({ fall: d, name: names[i] || `#${i}`, state: j.state, msg: j.msg, check: negChecks[i] }));
+  const NEG_NAMES = {
+    'neg-tampered': 'verändertes Paket', 'neg-badsig': 'fremde Signatur', 'neg-interrupt-once': 'Download bricht einmal ab',
+    'neg-interrupt-always': 'Download bricht immer ab', 'neg-precheck': 'Vorabprüfung Platz (8-MB-Staging)',
+    'neg-enospc': 'Platte läuft während des Downloads voll (ENOSPC)', 'neg-health': 'neue Version startet nicht',
+  };
+  for (const j of jobs.filter((x) => String(x.label).startsWith('neg-'))) {
+    negs.push({ fall: d, name: NEG_NAMES[j.label] || j.label, state: j.state, msg: j.msg, check: checks.find((c) => c.check === j.label) });
   }
 }
 
-const head = ['Fall', 'Gesamt', 'install.sh', 'git-Update (alte Oberfläche)', 'Umstellung', 'Paket-Update', 'Rückweg', 'Daten/Config/Kanal', 'Programmordner git → Release', 'Laufzeit', 'Notizen'];
+const head = ['Fall', 'Gesamt', 'install.sh', 'git-Update (alte Oberfläche)', 'Umstellung', 'Paket-Update', 'Rückweg', 'Daten/Config/Kanal', 'Datenbank-Marker', 'Programmordner git → Release', 'Laufzeit', 'Notizen'];
 console.log(`# Release-Paket-Matrix ${path.basename(run)}\n`);
 console.log(`| ${head.join(' | ')} |`);
 console.log(`|${head.map(() => '---').join('|')}|`);
-for (const r of rows) console.log(`| ${[r.fall, r.gesamt, r.install, r.git, r.migration, r.update, r.rollback, r.daten, r.groesse, r.zeit, r.notes].join(' | ')} |`);
+for (const r of rows) console.log(`| ${[r.fall, r.gesamt, r.install, r.git, r.migration, r.update, r.rollback, r.daten, r.db, r.groesse, r.zeit, r.notes].join(' | ')} |`);
 if (negs.length) {
   console.log('\n## Negativfälle\n');
   console.log('| Fall | Fall | Ergebnis | Meldung | Box danach |');
   console.log('|---|---|---|---|---|');
-  for (const n of negs) console.log(`| ${n.fall} | ${n.name} | ${n.state} | ${n.msg} | ${n.check ? `${n.check.current}, Marker ${n.check.ok === '1' ? 'ok' : n.check.bad}` : '—'} |`);
+  for (const n of negs) console.log(`| ${n.fall} | ${n.name} | ${n.state} | ${n.msg} | ${n.check ? `${n.check.current}, Marker ${n.check.ok === '1' ? 'ok' : n.check.bad}, DB ${n.check.db}` : '—'} |`);
 }

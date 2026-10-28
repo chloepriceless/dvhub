@@ -664,8 +664,6 @@ async function healthOnce(s, expect) {
   return { ok: true, label: j.version };
 }
 
-// Gesund = zweimal im Abstand von 5 s ok mit der erwarteten Version und die
-// Unit aktiv (fängt Absturzschleifen ab).
 // Neustarts der Unit laut systemd (Restart=always): eine Absturzschleife
 // erkennt die Prüfung daran, statt die volle Wartezeit abzusitzen.
 function nRestarts(s) {
@@ -674,6 +672,8 @@ function nRestarts(s) {
   return /^\d+$/.test(out) ? Number(out) : null;
 }
 
+// Gesund = zweimal im Abstand von 5 s ok mit der erwarteten Version und die
+// Unit aktiv (fängt Absturzschleifen ab); ab drei Neustarts sofort „nicht gesund“.
 async function waitHealthy(s, expect, job) {
   const deadline = Date.now() + s.healthTimeoutS * 1000;
   const base = nRestarts(s);

@@ -4,6 +4,7 @@
 //   /srv/ctl/interrupt-once-<asset>    erste Übertragung bricht in der Mitte ab
 //   /srv/ctl/interrupt-always-<asset>  jede Übertragung bricht ab
 //   /srv/ctl/corrupt-<asset>           ein Byte gekippt (Prüfsumme falsch)
+//   /srv/ctl/slow-<asset>              langsam (256 KB je 50 ms), z. B. um die Platte während des Downloads zu füllen
 //   node testserver.mjs <port> <root> <ctl>
 import fs from 'node:fs';
 import http from 'node:http';
@@ -35,5 +36,17 @@ http.createServer((req, res) => {
     return;
   }
   log(`${range ? 206 : 200} ${u.pathname} ${body.length} Bytes${range ? ` ab ${range[1]}` : ''}`);
+  if (fs.existsSync(path.join(ctl, `slow-${name}`))) {
+    let off = 0;
+    const tick = () => {
+      if (res.destroyed) return;
+      if (off >= body.length) { res.end(); return; }
+      res.write(body.subarray(off, off + 256 * 1024));
+      off += 256 * 1024;
+      setTimeout(tick, 50);
+    };
+    tick();
+    return;
+  }
   res.end(body);
 }).listen(Number(port), '127.0.0.1', () => log(`bereit auf ${port}, ${root}`));

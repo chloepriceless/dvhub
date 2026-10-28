@@ -36,6 +36,10 @@ api() {  # <METHOD> <pfad> [json]
     ${3:+-d "$3"} "http://127.0.0.1:$(port)$2"
 }
 now() { date +%s.%N; }
+# Startzeit des letzten dvhub-release-Auftrags; wait-job wartet auf einen NEUEREN
+# (sonst meldete es das Ergebnis des vorigen Auftrags; Gegenprüfung ff8530d0).
+job_started() { node -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync("/var/lib/dvhub-release/status.json","utf8")).started||""))}catch{}'; }
+mark_job() { job_started > /root/job-mark; }
 dur() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", b-a}'; }
 
 case "$step" in
@@ -94,6 +98,9 @@ case "$step" in
     echo "$m" > /etc/dvhub/release-test-marker; chown dvhub:dvhub /etc/dvhub/release-test-marker
     echo "$m" > /var/lib/dvhub/release-test-marker; chown dvhub:dvhub /var/lib/dvhub/release-test-marker
     su postgres -c "psql -q -d dvhub -c \"create table if not exists release_test(v text); insert into release_test values ('$m');\"" >/dev/null 2>&1 && db=1 || db=0
+    # Gesät → muss später gefunden werden (sonst zählte eine verlorene Datenbank
+    # oder ein gestopptes PostgreSQL als „ok“; Gegenprüfung ff8530d0).
+    rm -f /root/db-seeded; [[ "$db" == 1 ]] && touch /root/db-seeded
     for d in forecast-venv eos-venv bin; do [[ -d "/opt/dvhub/$d" ]] && echo "$m" > "/opt/dvhub/$d/release-test-marker"; done
     cp /etc/dvhub/config.json /root/config.seed.json
     echo "$m" > /root/marker
@@ -120,8 +127,9 @@ case "$step" in
     m="$(cat /root/marker)"; bad=()
     [[ "$(cat /etc/dvhub/release-test-marker 2>/dev/null)" == "$m" ]] || bad+=(config-marker)
     [[ "$(cat /var/lib/dvhub/release-test-marker 2>/dev/null)" == "$m" ]] || bad+=(data-marker)
-    if su postgres -c "psql -tA -d dvhub -c 'select 1 from pg_tables where tablename=\$\$release_test\$\$'" 2>/dev/null | grep -q 1; then
-      su postgres -c "psql -tA -d dvhub -c 'select v from release_test'" 2>/dev/null | grep -q "$m" || bad+=(db-marker)
+    db=-
+    if [[ -f /root/db-seeded ]]; then
+      if su postgres -c "psql -tA -d dvhub -c 'select v from release_test'" 2>/dev/null | grep -qx "$m"; then db=ok; else db=LOST; bad+=(db-marker); fi
     fi
     for d in forecast-venv eos-venv bin; do
       [[ -f "/root/state-$d" || -f "/opt/dvhub/$d/release-test-marker" ]] || continue
@@ -132,7 +140,7 @@ case "$step" in
       const fs=require("fs");const a=JSON.parse(fs.readFileSync("/root/config.seed.json","utf8"));const b=JSON.parse(fs.readFileSync("/etc/dvhub/config.json","utf8"));
       const keys=[...new Set([...Object.keys(a),...Object.keys(b)])].filter(k=>JSON.stringify(a[k])!==JSON.stringify(b[k]));process.stdout.write(keys.join(",")||"-")')"
     for k in updateChannel apiToken httpPort manufacturer; do [[ ",$diffkeys," == *",$k,"* ]] && bad+=("config-$k"); done
-    result "check=$1 ok=$([[ ${#bad[@]} -eq 0 ]] && echo 1 || echo 0) bad='${bad[*]-}' config_changed_keys=$diffkeys channel=$(cfg updateChannel) current=$(readlink /opt/dvhub/current 2>/dev/null || echo -) active=$(systemctl is-active dvhub)"
+    result "check=$1 ok=$([[ ${#bad[@]} -eq 0 ]] && echo 1 || echo 0) bad='${bad[*]-}' db=$db config_changed_keys=$diffkeys channel=$(cfg updateChannel) current=$(readlink /opt/dvhub/current 2>/dev/null || echo -) active=$(systemctl is-active dvhub)"
     ;;
 
   publish) # <pub-stand> [<main-tag>] — neue Version erscheint (Spiegel + Pakete)
@@ -144,6 +152,7 @@ case "$step" in
     done
     g update-ref refs/heads/main "$(g rev-parse "$maintag^{commit}")"
     ln -sfn "/mnt/rt/$pubst" /srv/pub
+    mark_job
     install -d -m 0755 /etc/dvhub-release
     printf 'base_url=http://127.0.0.1:8088\nmigrate_delay_s=15\n' > /etc/dvhub-release/release.conf
     result "publish=$pubst main=$(g rev-parse --short main)"
@@ -167,28 +176,48 @@ case "$step" in
     result "manual_post_update=$?"
     ;;
 
-  wait-job) # <job> [timeout] — wartet auf das Ende eines dvhub-release-Auftrags
-    job="$1"; to="${2:-900}"; st=""
+  wait-job) # <job> [timeout] [kennung] — Ende des Auftrags, der NACH mark_job begann
+    job="$1"; to="${2:-900}"; label="${3:-$1}"; mark="$(cat /root/job-mark 2>/dev/null)"; done=0
     for _ in $(seq 1 "$to"); do
-      st="$(node -e 'try{const s=JSON.parse(require("fs").readFileSync("/var/lib/dvhub-release/status.json","utf8"));process.stdout.write(s.job+" "+s.state)}catch{}')"
-      case "$st" in "$job ok"|"$job rolled_back"|"$job failed"|"$job skipped") break ;; esac
+      st="$(node -e 'try{const s=JSON.parse(require("fs").readFileSync("/var/lib/dvhub-release/status.json","utf8"));process.stdout.write(s.job+" "+s.state+" "+s.started)}catch{}')"
+      read -r j state started <<< "$st"
+      if [[ "$j" == "$job" && -n "$started" && "$started" > "$mark" ]]; then
+        case "$state" in ok|rolled_back|failed|skipped) done=1; break ;; esac
+      fi
       sleep 1
     done
-    node -e '
-      const s=JSON.parse(require("fs").readFileSync("/var/lib/dvhub-release/status.json","utf8"));
-      const d=(Date.parse(s.finished)-Date.parse(s.started))/1000;
-      console.log(`RESULT job=${s.job} state=${s.state} version=${s.version||"-"} time_s=${isFinite(d)?d.toFixed(1):"-"} msg="${String(s.message).replace(/"/g,"")}"`);
-    ' | tee -a "$OUT/results.txt"
+    if [[ "$done" -eq 1 ]]; then
+      L="$label" node -e '
+        const s=JSON.parse(require("fs").readFileSync("/var/lib/dvhub-release/status.json","utf8"));
+        const d=(Date.parse(s.finished)-Date.parse(s.started))/1000;
+        console.log(`RESULT label=${process.env.L} job=${s.job} state=${s.state} version=${s.version||"-"} time_s=${isFinite(d)?d.toFixed(1):"-"} msg="${String(s.message).replace(/"/g,"")}"`);
+      ' | tee -a "$OUT/results.txt"
+    else
+      echo "RESULT label=$label job=$job state=timeout version=- time_s=$to msg=\"kein neuer Auftrag beendet (zuletzt: ${st:-nichts})\"" | tee -a "$OUT/results.txt"
+    fi
+    ;;
+
+  fill-staging) # <reserve-mb> — sobald der Download beginnt, das Staging bis auf <reserve> MB füllen
+    systemctl reset-failed release-filler 2>/dev/null
+    systemd-run --collect --quiet --unit release-filler bash -c '
+      for _ in $(seq 1 1200); do ls /var/lib/dvhub-release/staging/dvhub-*.tar.gz >/dev/null 2>&1 && break; sleep 0.05; done
+      free_kb="$(df -k --output=avail /var/lib/dvhub-release/staging | tail -1 | tr -d " ")"
+      fallocate -l "$(( (free_kb - $1 * 1024) * 1024 ))" /var/lib/dvhub-release/staging/.filler
+      echo "frei vorher ${free_kb} KB, Füller $(du -sk /var/lib/dvhub-release/staging/.filler | cut -f1) KB" >> /mnt/out/fill-staging.log
+    ' fill "$1"
+    result "fill_staging=$? reserve_mb=$1"
     ;;
 
   gui-pkg-update) # [version] — Paket-Update über die NEUE Oberfläche
     body='{}'; [[ -n "${1:-}" ]] && body="{\"version\":\"$1\"}"
+    mark_job
     r="$(api POST /api/admin/update/apply "$body")"
     echo "$r" >> "$OUT/gui-pkg.json"
     result "gui_pkg_apply='$(echo "$r" | head -c 200)'"
     ;;
 
   gui-rollback)
+    mark_job
     r="$(api POST /api/admin/update/rollback)"
     result "gui_rollback='$(echo "$r" | head -c 200)'"
     ;;
@@ -209,13 +238,16 @@ case "$step" in
     result "ctl=$1:$2"
     ;;
 
-  sizes) # <name> — Plattenbedarf des Programmordners
-    a="$(du -sm --exclude=eos --exclude=eos-venv --exclude=forecast-venv --exclude=bin --exclude=ml-models /opt/dvhub 2>/dev/null | cut -f1)"
+  sizes) # <name> — Plattenbedarf des Programmordners (ohne Box-Zustand und alten Checkout)
+    # Ein find für Größe und Dateizahl, gleiche Ausnahmen (nur oberste Ebene;
+    # du --exclude=bin schloss auch jedes bin/ unter node_modules aus).
+    read -r a n <<< "$(find /opt/dvhub -xdev \( -path /opt/dvhub/eos -o -path /opt/dvhub/eos-venv -o -path /opt/dvhub/forecast-venv \
+      -o -path /opt/dvhub/bin -o -path /opt/dvhub/ml-models -o -path /opt/dvhub/.legacy-git \) -prune -o -type f -printf '%k\n' \
+      | awk '{k+=$1; n++} END {printf "%d %d", k/1024, n}')"
     g="$(du -sm /opt/dvhub/.git 2>/dev/null | cut -f1)"
-    n="$(find /opt/dvhub -xdev \( -path /opt/dvhub/eos -o -path /opt/dvhub/eos-venv -o -path /opt/dvhub/forecast-venv -o -path /opt/dvhub/.legacy-git \) -prune -o -type f -print | wc -l)"
     rel="$(du -sm /opt/dvhub/releases 2>/dev/null | cut -f1)"; leg="$(du -sm /opt/dvhub/.legacy-git 2>/dev/null | cut -f1)"
     cur="$(du -sm "$(readlink -f /opt/dvhub/current 2>/dev/null || echo /nonexistent)" 2>/dev/null | cut -f1)"
-    nm="$(du -sm /opt/dvhub/dvhub/node_modules 2>/dev/null | cut -f1)"
+    nm="$(du -sm /opt/dvhub/dvhub/node_modules/ 2>/dev/null | cut -f1)"
     result "sizes=$1 program_mb=$a git_mb=${g:-0} files=$n releases_mb=${rel:-0} current_release_mb=${cur:-0} legacy_mb=${leg:-0} node_modules_mb=${nm:-0}"
     ;;
 
