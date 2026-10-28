@@ -246,8 +246,8 @@ wichtigen Config-Schlüsseln.
   gesund, Datenbank erhalten, danach normale Umstellung.
 - armv7 (Debian bookworm armhf unter QEMU, v1.0.8 → 1.0.9 per Installer → Paket → 1.0.10 → zurück): ok; unter
   Emulation Umstellung 30 s, Update 30 s, Rückweg 25 s.
-- Größe (gleich gemessen, Summe der Dateiblöcke): git-Checkout 1.0.9 164 MB / 8266 Dateien (davon `.git` 55 MB,
-  `node_modules` 58 MB) → Release 1.0.9 88 MB / 6858 Dateien (≈420 eigene, Rest `node_modules`, dazu das
+- Größe (gleich gemessen, Summe der Dateiblöcke): git-Checkout 1.0.9 164 MB / 8266–8280 Dateien je nach
+  Ausgangsversion (v0.4.2: 159 MB / 7502; davon `.git` ~55 MB, `node_modules` ~58 MB) → Release 1.0.9 88 MB / 6858 Dateien (≈420 eigene, Rest `node_modules`, dazu das
   EEBUS-Binary), Download 24–25 MB.
 
 Funde außerhalb der Pakete:

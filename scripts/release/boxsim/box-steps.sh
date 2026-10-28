@@ -13,8 +13,9 @@
 #  - Python-Prognose: /etc/pip.conf zeigt auf einen toten Index (pip scheitert
 #    schnell, nicht fatal); TimescaleDB: packagecloud.io → 127.0.0.1.
 #  - Ports < 1024: sysctl ip_unprivileged_port_start=0 statt Capabilities.
-#  - apt wartet bis 600 s auf die dpkg-Sperre (install.sh tut das selbst nicht),
-#    zusätzlich wartet der Prüfstand vor install.sh, bis kein apt/dpkg mehr läuft.
+#  - Vor install.sh wartet der Prüfstand, bis die Hintergrund-Provisionierung
+#    fertig ist und kein apt/dpkg läuft (install.sh wartet selbst nicht auf die
+#    Sperren); zusätzlich DPkg::Lock::Timeout 600 s für install/remove.
 set -uo pipefail
 export LC_ALL=C.UTF-8
 OUT=/mnt/out
@@ -59,8 +60,9 @@ case "$step" in
     git config --system url."file:///srv/git/dvhub.git".insteadOf https://github.com/chloepriceless/dvhub.git
     git config --system --add safe.directory /srv/git/dvhub.git
     printf '[global]\nindex-url = http://127.0.0.1:9/simple\ntimeout = 2\nretries = 0\n' > /etc/pip.conf
-    # install.sh wartet nicht auf die dpkg-Sperre; die Hintergrund-Provisionierung
-    # ruft apt mehrfach mit Pausen dazwischen. apt selbst warten lassen (Stub).
+    # install.sh wartet nicht auf die dpkg-Sperre; zusätzlich zum Warten vor
+    # install.sh (Schritt install) darf dpkg selbst warten (deckt nur
+    # install/remove ab, nicht apt-get update — Stub).
     echo 'DPkg::Lock::Timeout "600";' > /etc/apt/apt.conf.d/90-release-test-lock
     grep -q packagecloud /etc/hosts || echo '127.0.0.1 packagecloud.io' >> /etc/hosts
     ln -sfn /mnt/rt/pub-1 /srv/pub
@@ -83,7 +85,21 @@ case "$step" in
     # install.sh wartet nicht auf die dpkg-Sperre (anders als post-update.sh):
     # läuft noch ein apt aus der Hintergrund-Provisionierung (unter QEMU
     # minutenlang), bräche es ab. Der Prüfstand wartet darum vorher, bis apt frei ist.
-    for _ in $(seq 1 900); do pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null || break; sleep 2; done
+    # Erst die Hintergrund-Units der Provisionierung abwarten (sie rufen apt
+    # mehrfach mit Pausen dazwischen; apt-get update nimmt die Listen-Sperre,
+    # die DPkg::Lock::Timeout nicht abdeckt — Gegenprüfung ade8b74c), dann
+    # zweimal hintereinander kein apt/dpkg.
+    waited=0; quiet=0
+    for _ in $(seq 1 900); do
+      busy=0
+      for u in dvhub-vpn-packages dvhub-timescale-provision dvhub-eos-provision dvhub-forecast-provision dvhub-stack-update dvhub-eebus-provision; do
+        systemctl is-active --quiet "$u.service" && busy=1
+      done
+      pgrep -x apt-get >/dev/null || pgrep -x apt >/dev/null || pgrep -x dpkg >/dev/null || pgrep -f unattended-upgr >/dev/null && busy=1
+      if [[ "$busy" -eq 0 ]]; then quiet=$((quiet + 1)); [[ "$quiet" -ge 2 ]] && break; else quiet=0; fi
+      sleep 2; waited=$((waited + 2))
+    done
+    echo "apt frei nach ${waited} s" >> "$OUT/install-wait.log"
     t0="$(now)"
     bash /root/install.sh "${flags[@]}" > "$OUT/install-$tag.log" 2>&1
     rc=$?
