@@ -38,6 +38,28 @@ verweist hierher.
   Leitstand zeigt Grenze, Eingriff und die höchste Viertelstunde im Monat und im Jahr. Bisher nur Victron; andere Hersteller nur Anzeige.
   Einstellungen → Netz & Recht → Erweitert; nur im Bleeding-Edge-Kanal. EOS kennt keine Bezugsgrenze und plant ohne sie.
 
+- **E-Auto: Wochenplan mit Ankunft und Abfahrt**: je Wochentag Ankunft, Abfahrt, eigenes Ziel und Heimweg statt
+  einer Abfahrtszeit für ausgewählte Tage (bestehende Einstellungen werden übernommen, die Anlage rechnet wie bisher).
+  DVhub schätzt den Ladestand bei Ankunft — live vom Auto oder aus dem letzten Wert minus Heimweg — und meldet das
+  Auto bei EOS schon vor der Ankunft an, wenn EOS den Ladestart kennt. Ladestand von jeder Marke: neben TeslaMate,
+  Wallbox, evcc und MQTT jetzt auch per HTTP-Abruf (JSON-Pfad, optional Token) und Home Assistant; http nur im eigenen
+  Netz, Tokens geschwärzt. Der Editor in Kachel und Wallbox-Schublade zeigt, welche Abfahrt DVhub daraus macht
+  („Ankunft Mi 20:00 → Abfahrt Do 05:00“) und was an EOS geht; Vorschau beim Bearbeiten über `POST /api/ev/preview`.
+
+- **„Laut EOS-Plan“ im Leitstand (#27)**: unter dem Day-Ahead-Chart für heute ab jetzt und morgen, was EOS plant —
+  Einspeisung und Netzbezug in kWh, Stunden, höchster Leistung und dem Preis, ab dem EOS verkauft bzw. bis zu dem es
+  kauft; mit Bezugsgrenze die Slots darüber. Der EOS-Fahrplan zeigt zusätzlich geplante Last und Netzbezug.
+
+- **Hinweis, wenn der Strompreis-Zeitraum ohne Nachfolger endet**: 14 Tage vor dem Ende des heute gültigen Zeitraums
+  erscheint oben im Leitstand eine gelbe Warnung, wenn am Folgetag kein anderer beginnt — sonst rechnet DVhub danach
+  still mit dem Grundtarif (z. B. bei neuen Netzentgelten zum Jahreswechsel). Ein neu gespeicherter Zeitraum nimmt
+  den Hinweis sofort weg.
+
+- **EOS im Fernbetrieb (Client-Modus)**: Einstellung `optimizer.eosProxy.mode` = `remote` lässt den EOS-Plan von einem
+  Rechendienst rechnen, für Boxen mit schwacher Hardware (Pro-Lizenz). DVhub startet dafür eine EOS-Fassade auf
+  127.0.0.1, das Regelverhalten bleibt gleich; fällt der Dienst aus, bleibt der letzte Plan, optional rechnet das
+  lokale EOS. Ab Werk `local` (unverändert).
+
 - **Zweite Victron-Anlage am selben Hausanschluss (Beta)**: eine zweite GX-Anlage ohne PV und ohne eigenen Zähler,
   z. B. die der anderen Haushälfte. Die Anlage mit Zähler regelt den Anschluss wie bisher; die zweite übernimmt träge
   einen Teil der Akkuleistung, verteilt nach nutzbarer Energie, sodass sich die Ladestände angleichen. EOS plant beide
