@@ -25,6 +25,19 @@ verweist hierher.
   dazu). Zugangsdaten gehen nie zurück und stehen in keinem Log; abgelehnte Zugangsdaten sperren den Abruf 6 h,
   damit der Anbieter das Konto nicht sperrt. Ungeprüft bis zum ersten LichtBlick-Liefertag: Schrittweite und ob der
   App-Preis brutto mit Netzentgelt ist.
+
+- **Peak Shaving – Bezugsgrenze für Gewerbeanschlüsse (Beta, #28)**: Bei Leistungsmessung (RLM) richtet sich der
+  Leistungspreis nach der höchsten Viertelstunden-Bezugsleistung im Jahr. Mit eingetragener Grenze deckelt DVhub
+  eigene Netz-Sollwerte (Netzladen, EOS-„Akku halten“, manuelle Werte) auf Grenze minus Sicherheitsabstand, sodass der
+  Akku Spitzen abdeckt; ist die Entladung gesperrt (Max Entladung = 0), gibt DVhub sie bei Bezug über der Grenze um den
+  Überschuss frei und setzt die Sperre mit Rückschalt-Abstand wieder. Not-Halt, §14a, Netzlade-Verbot und
+  Mindest-Ladestand haben Vorrang. Den Akku zieht der Deckel nur bei frischem Ladestand über dem Boden heran; sonst
+  deckelt er höchstens bis zur gemessenen Netto-Last (kein Entladen), ist auch die Last unbekannt, gar nicht. Ohne
+  frischen Zähler oder Ladestand hebt DVhub keine Sperre auf und setzt eine selbst aufgehobene wieder — sobald die
+  Rücklesung von 2704 bestätigt, dass dort noch DVhubs Freigabe steht; wurde sie am GX geändert, bleibt sie. Der
+  Leitstand zeigt Grenze, Eingriff und die höchste Viertelstunde im Monat und im Jahr. Bisher nur Victron; andere Hersteller nur Anzeige.
+  Einstellungen → Netz & Recht → Erweitert; nur im Bleeding-Edge-Kanal. EOS kennt keine Bezugsgrenze und plant ohne sie.
+
 - **Zweite Victron-Anlage am selben Hausanschluss (Beta)**: eine zweite GX-Anlage ohne PV und ohne eigenen Zähler,
   z. B. die der anderen Haushälfte. Die Anlage mit Zähler regelt den Anschluss wie bisher; die zweite übernimmt träge
   einen Teil der Akkuleistung, verteilt nach nutzbarer Energie, sodass sich die Ladestände angleichen. EOS plant beide

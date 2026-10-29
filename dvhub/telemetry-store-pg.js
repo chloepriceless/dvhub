@@ -129,6 +129,27 @@ function bucketIso(ts, seconds) {
   return floorToInterval(new Date(ts), seconds).toISOString();
 }
 
+// Peak Shaving (GitHub #28): höchste Viertelstunden-Bezugsleistung in [$1, $2).
+// RLM-Leistungspreis = höchster 15-min-Mittelwert; energy_slots_15m hält je
+// Viertelstunde die Bezugsenergie (kWh), der Mittelwert ist kWh × 4 000 W. Je
+// Slot zählt die GRÖSSERE der beiden Quellen: der eigene Messwert (local_live)
+// wird Probe für Probe aufaddiert und ist nach einem Neustart mitten in der
+// Viertelstunde unvollständig — eine Spitzenanzeige darf nicht unterschätzen.
+export const GRID_IMPORT_PEAK_SQL = `
+      WITH per_slot AS (
+        SELECT slot_start_utc, MAX(value_num) AS value_num
+        FROM energy_slots_15m
+        WHERE series_key = 'grid_import_w'
+          AND source_kind IN ('local_live', 'vrm_import')
+          AND slot_start_utc >= $1 AND slot_start_utc < $2
+          AND value_num IS NOT NULL
+        GROUP BY slot_start_utc
+      )
+      SELECT slot_start_utc, value_num FROM per_slot
+      ORDER BY value_num DESC, slot_start_utc ASC
+      LIMIT 1
+    `;
+
 // Gemessener PV-Peak für die Under-Report-Erkennung (getRecentPvPeakW): je
 // 5-Minuten-Fenster das 75-%-Perzentil, davon das Tagesmaximum, davon das
 // Perzentil $2 über $1 Tage. Statt des Rohwerts (Support-Fall 2026-10-15,
@@ -1879,6 +1900,17 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         forecastForDate: r.forecast_for_date,
         source: r.source
       }));
+    },
+    /**
+     * Peak Shaving: höchste Viertelstunden-Bezugsleistung in [start, end).
+     * @returns {Promise<{slotStart: string, powerW: number, energyKwh: number}|null>}
+     */
+    async getGridImportPeak({ start, end } = {}) {
+      const result = await pool.query(GRID_IMPORT_PEAK_SQL, [isoTimestamp(start), isoTimestamp(end)]);
+      const row = result.rows?.[0];
+      if (!row || row.value_num == null || !Number.isFinite(Number(row.value_num))) return null;
+      const energyKwh = Number(row.value_num);
+      return { slotStart: new Date(row.slot_start_utc).toISOString(), powerW: Math.round(energyKwh * 4000), energyKwh };
     },
     /**
      * List measured PV actual values from energy_slots_15m for a time range.

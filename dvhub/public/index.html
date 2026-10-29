@@ -144,6 +144,19 @@
         <div class="rail-row" data-leit="adv" title="Netz-Sollwert, den DVhub der zweiten GX schreibt (wirkt auf ihren AC-IN, Register 2716)."><span class="l">Sollwert AC-IN</span><strong class="v" id="secondGxSetpoint">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Minimum-SOC</span><strong class="v" id="secondGxMinSoc">&mdash;</strong></div>
       </div>
+      <!-- Peak Shaving: Bezugsgrenze für RLM-Anschlüsse (GitHub #28,
+           services/peak-shaving, peak-shaving-view.js). Nur sichtbar, wenn eingeschaltet. -->
+      <div class="card rail-card" data-accent="ctrl" id="peakShavingCard" hidden>
+        <div class="rail-card-head">
+          <span class="ttl"><span class="dot dot-ctrl"></span>Peak Shaving &middot; Bezugsgrenze</span>
+          <span class="chip sm" id="peakShavingChip"><span class="dot"></span><span id="peakShavingState">&mdash;</span></span>
+        </div>
+        <div class="rail-big card-value" id="peakShavingImport" title="Aktueller Netzbezug am Zähler der Anlage.">&mdash;</div>
+        <div class="rail-row"><span class="l">Grenze</span><strong class="v" id="peakShavingLimit">&mdash;</strong></div>
+        <div class="rail-row" title="Höchster Viertelstunden-Mittelwert des Netzbezugs im laufenden Monat, aus DVhubs Messwerten. Maßgeblich für die Abrechnung ist der Zähler des Netzbetreibers."><span class="l">Spitze Monat (15 min)</span><strong class="v" id="peakShavingMonth">&mdash;</strong></div>
+        <div class="rail-row" title="Höchster Viertelstunden-Mittelwert des Netzbezugs im laufenden Kalenderjahr — danach richtet sich der Leistungspreis (RLM)."><span class="l">Spitze Jahr (15 min)</span><strong class="v" id="peakShavingYear">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Eingriff</span><strong class="v" id="peakShavingDetail">&mdash;</strong></div>
+      </div>
       <div class="card rail-card" data-accent="dv" data-leit="adv">
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-dv"></span>DV-Signale &middot; LUOX</span>
@@ -598,6 +611,7 @@
 <script src="/dvhub-powerflow.js?v=20261006-zaehlen"></script>
 <script src="/second-gx-view.js?v=20261021"></script>
 <script src="/eos-plan-summary.js?v=20261026"></script>
+<script src="/peak-shaving-view.js?v=20261026"></script>
 <script src="/app.js?v=20261020-hinweise"></script>
 <script src="/leitstand-charts.js?v=20261029-lastgang-eosremote"></script>
 <script src="/ev-weekly-editor.js?v=20261027"></script>

@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 
 import { atomicWriteControlState } from './control-state-io.js';
-import { localMinutesOfDay, victronFieldAgeMs, victronFieldStale, controlWriteBoundsError, clampMinSoc } from './server-utils.js';
+import { localMinutesOfDay, victronFieldAgeMs, victronFieldStale, controlWriteBoundsError, clampMinSoc, MAX_BATTERY_DISCHARGE_W } from './server-utils.js';
 import {
   autoDisableStopSocScheduleRules,
   autoDisableExpiredScheduleRules,
@@ -23,6 +23,10 @@ import { getPowerLimits } from './services/power-limits.js';
 import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
 import { betaGateOpen } from './beta-features.js';
+import {
+  resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint, knownMaxDischargeW, dischargeStep,
+  decodeMaxDischargeRaw, DISCHARGE_RELEASE_TICKS
+} from './services/peak-shaving/index.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -874,7 +878,13 @@ export function createScheduleEvaluator(ctx) {
     // state completely untouched. Log once per (target,source) while paused
     // (eval ticks every ~15 s — unthrottled this would flood the ring buffer);
     // the throttle map is cleared on resume.
-    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source)) {
+    // Einzige Ausnahme (Peak Shaving, GitHub #28): DVhub darf eine von IHM
+    // aufgehobene Akku-Sperre wieder setzen — genau 2704 := 0, der sichere
+    // „keine Entladung"-Wert, den der Betreiber vorher selbst gesetzt hatte.
+    // Sonst bliebe der Akku während des Not-Halts auf DVhubs Freigabe stehen.
+    const peakShavingRestore = source === 'peak_shaving_restore'
+      && target === 'maxDischargeW' && Number(value) === 0;
+    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source) && !peakShavingRestore) {
       const blockKey = `${target}|${source}`;
       if (!state.ctrl._stopBlockLogged) state.ctrl._stopBlockLogged = {};
       if (!state.ctrl._stopBlockLogged[blockKey]) {
@@ -1052,6 +1062,52 @@ export function createScheduleEvaluator(ctx) {
       }
     }
     // === end EEG/§14a gate ===
+
+    // === Peak Shaving (GitHub #28, services/peak-shaving) =====================
+    // Ein POSITIVER gridSetpointW ist bei Victron der gewünschte Netzbezug am
+    // Zähler. Liegt er über dem Regelziel (Grenze − Abstand), wird er gedeckelt:
+    // DVhub lädt dann nie mehr aus dem Netz, als die Grenze zulässt, und bei
+    // „Akku halten" deckt der Akku den Rest der Last. Sitzt bewusst HIER:
+    //   - nach Not-Halt, Grenzwerten und dem EEG/§14a-Gate — ein dort geblockter
+    //     oder abgelehnter Write bleibt geblockt/abgelehnt, er wird nicht als
+    //     gedeckelter Wert doch noch geschrieben;
+    //   - vor T-0075, Reg-2716-Schutz und Keepalive — die sehen und
+    //     wiederholen den gedeckelten Wert.
+    // Der Deckel senkt nur, nie unter das Ziel (>= Grenze/2 > 0) und nie in
+    // Richtung Einspeisung; Pflicht-Quellen bleiben unangetastet. Braucht er den
+    // Akku, muss der Ladestand frisch und über dem Boden sein (clampGridSetpoint).
+    if (target === 'gridSetpointW' && isMandatoryControlSource(source) && state.ctrl._peakShaving?.clamp) {
+      // Eine Pflicht-Quelle schreibt den Sollwert — ein älterer Deckel-Eintrag
+      // gilt nicht mehr (sonst zeigte der Leitstand bis zu 30 s „greift“).
+      state.ctrl._peakShaving.clamp = null;
+      state.ctrl._peakShaving._clampKey = null;
+    }
+    if (target === 'gridSetpointW' && !isMandatoryControlSource(source)) {
+      const ps = resolvePeakShaving(cfg);
+      if (ps.active) {
+        const res = clampGridSetpoint(value, ps, peakShavingTelemetry(state, cfg, ps));
+        const psState = (state.ctrl._peakShaving ??= {});
+        if (res.mode === null) {
+          psState.clamp = null;
+          psState._clampKey = null;
+        } else {
+          psState.clamp = {
+            requestedW: Math.round(Number(value)), valueW: Math.round(Number(res.value)),
+            mode: res.mode, reason: res.reason, source, at: Date.now()
+          };
+          const key = `${res.mode}|${source}|${res.reason}`;
+          if (psState._clampKey !== key) {
+            psState._clampKey = key;
+            pushLog('peak_shaving_clamp', {
+              requestedW: Math.round(Number(value)), valueW: Math.round(Number(res.value)),
+              mode: res.mode, reason: res.reason, source, limitW: ps.limitW, targetW: ps.targetW
+            });
+          }
+          value = res.clamped ? Math.round(Number(res.value)) : value;
+        }
+      }
+    }
+    // === end Peak Shaving ====================================================
 
     // === T-0075 universal discharge floor (telemetry-freshness + hard SoC floor) ===
     // Chokepoint floor: EVERY discharge-enabling hardware write (optimizer,
@@ -1268,6 +1324,161 @@ export function createScheduleEvaluator(ctx) {
       return { ok: false, error: e.message };
     }
   }
+
+  // === Peak Shaving, Hebel 2: Akku-Sperre bei Bezugsspitze aufheben ==========
+  // (GitHub #28, services/peak-shaving dischargeStep). Steht die Entladung auf 0
+  // (Victron 2704) und liegt der gemessene Bezug über der Grenze, gibt DVhub den
+  // Überschuss frei; fällt der Bedarf mit Hysterese, wird die Sperre (0)
+  // zurückgeschrieben. Alle Writes gehen durch applyControlTarget — Not-Halt,
+  // Grenzwerte und der T-0075-Boden gelten also auch hier.
+  // Die Freigabe überlebt einen Neustart im GX (2704 ist ein gespeicherter Wert)
+  // — deshalb ein Merker auf der Platte (ctx.peakShavingLiftPath), damit der
+  // nächste Prozess die Sperre zurückschreibt statt sie zu vergessen.
+  function persistPeakShavingLift(d) {
+    if (!ctx.peakShavingLiftPath) return;
+    try {
+      if (d?.phase === 'lifted') {
+        atomicWriteControlState(ctx.peakShavingLiftPath, { liftedW: d.liftedW, since: d.since, lastWriteAt: d.lastWriteAt });
+      } else {
+        fs.rmSync(ctx.peakShavingLiftPath, { force: true });
+      }
+    } catch (e) {
+      pushLog('peak_shaving_persist_error', { error: e?.message || String(e) }, 'warn');
+    }
+  }
+
+  // Merker eines früheren Prozesses einmal beim Start laden (wie _dvSeqSaved).
+  if (ctx.peakShavingLiftPath && state.ctrl && !state.ctrl._peakShaving?.discharge) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(ctx.peakShavingLiftPath, 'utf8'));
+      if (saved && Number(saved.liftedW) > 0) {
+        (state.ctrl._peakShaving ??= {}).discharge = {
+          // Ohne prevW/Taktnummer: nach dem Neustart zählt nur der freigegebene Wert als eigener.
+          phase: 'lifted', liftedW: Number(saved.liftedW), prevW: null, since: Number(saved.since) || Date.now(),
+          lastWriteAt: Number(saved.lastWriteAt) || 0, over: 0, under: 0
+        };
+        pushLog('peak_shaving_lift_restored', { liftedW: Number(saved.liftedW), since: Number(saved.since) || null }, 'warn');
+      }
+    } catch { /* kein Merker → nichts aufgehoben */ }
+  }
+
+  // 2704 selbst zurücklesen: das ausgelieferte Victron-Profil pollt den Wert
+  // nicht, ohne Rücklesung bliebe eine Sperre nach einem Neustart unbemerkt
+  // und eine Änderung am GX würde überschrieben (Gegenprüfung eb2f1a26).
+  // Nur, solange Peak Shaving aktiv ist oder eine Freigabe steht.
+  function maxDischargeReadable(conf) {
+    if (transport.type === 'mqtt') return typeof transport.readPoint === 'function';
+    return typeof transport.mbRequest === 'function' && conf?.address != null;
+  }
+
+  let peakShavingTickNo = 0;
+  async function readMaxDischargeForPeakShaving(conf) {
+    const psState = (state.ctrl._peakShaving ??= {});
+    try {
+      let value;
+      if (transport.type === 'mqtt') {
+        value = Number((await transport.readPoint('maxDischargeW'))?.mqttValue);
+      } else {
+        const regs = await transport.mbRequest({
+          fc: 3, host: conf.host, port: conf.port, unitId: conf.unitId,
+          address: conf.address, quantity: 1, timeoutMs: conf.timeoutMs
+        });
+        value = decodeMaxDischargeRaw(regs?.[0], conf);
+      }
+      if (value == null || !Number.isFinite(value)) throw new Error('2704: kein gültiger Wert');
+      psState.readback = { value, at: Date.now(), tick: peakShavingTickNo, error: null };
+    } catch (e) {
+      psState.readback = { ...(psState.readback || { value: null, at: 0 }), error: e?.message || String(e) };
+    }
+  }
+
+  async function peakShavingDischargeTick() {
+    const cfg = getCfg();
+    if (!cfg.controlWrite?.maxDischargeW?.enabled) return;
+    const ps = resolvePeakShaving(cfg);
+    // Aus und nichts aufgehoben → kein Zustand, kein Lesen, kein Write (bitgenau
+    // wie vorher; auch nachdem eine Freigabe zurückgenommen ist — 563da829).
+    if (!ps.active && state.ctrl._peakShaving?.discharge?.phase !== 'lifted') {
+      const idle = state.ctrl._peakShaving?.discharge;
+      if (idle) Object.assign(idle, { over: 0, quiet: 0, writeIssue: null });
+      return;
+    }
+    const d = ((state.ctrl._peakShaving ??= {}).discharge ??= {
+      phase: 'idle', liftedW: null, since: null, lastWriteAt: null, over: 0, under: 0
+    });
+    peakShavingTickNo += 1;
+    const conf = cfg.controlWrite.maxDischargeW;
+    const readbackSupported = maxDischargeReadable(conf);
+    if (readbackSupported) await readMaxDischargeForPeakShaving(conf);
+    const tel = peakShavingTelemetry(state, cfg, ps);
+    const capW = Math.min(MAX_BATTERY_DISCHARGE_W, Math.max(1000, getPowerLimits(cfg).limits.inverterMaxPowerW));
+    const act = dischargeStep(d, {
+      ps, tel, known: knownMaxDischargeW(state, cfg), paused: state.ctrl.discretionaryWritesPaused === true, capW,
+      lastWrite: state.schedule.lastWrite.maxDischargeW || null, readbackSupported
+    });
+    // Spitze vorbei (ohne stehende Freigabe ~30 s ruhig): ein gescheiterter
+    // Write der nächsten Spitze wird wieder gemeldet. Ein einzelner ruhiger Takt
+    // mitten in der Spitze zählt nicht (Gegenprüfung 8e991b49 / f8aa9c8b).
+    d.quiet = (act.type === 'none' && d.phase === 'idle' && !d.over) ? (d.quiet || 0) + 1 : 0;
+    if (d.quiet >= DISCHARGE_RELEASE_TICKS) d.writeIssue = null;
+    if (act.type === 'none') return;
+    if (act.type === 'superseded') {
+      pushLog('peak_shaving_lift_superseded', { liftedW: d.liftedW, known: knownMaxDischargeW(state, cfg) });
+      // Steht im Gerät nicht mehr DVhubs Wert, ist der eigene lastWrite kein
+      // Abbild des Geräts mehr — sonst übersprünge eine Neu-Freigabe mit
+      // demselben Wert als „unverändert“ (Gegenprüfung af3319df, P2).
+      if (String(state.schedule.lastWrite.maxDischargeW?.source || '').startsWith('peak_shaving')) {
+        delete state.schedule.lastWrite.maxDischargeW;
+      }
+      Object.assign(d, { phase: 'idle', liftedW: null, prevW: null, since: null, lastWriteAt: null, over: 0, under: 0, waiting: null });
+      persistPeakShavingLift(d);
+      return;
+    }
+    if (act.type === 'restore') {
+      const r = await applyControlTarget('maxDischargeW', 0, 'peak_shaving_restore');
+      if (r.ok) {
+        pushLog('peak_shaving_discharge_restore', { reason: act.reason, liftedW: d.liftedW, importW: tel.importW });
+        Object.assign(d, { phase: 'idle', liftedW: null, prevW: null, since: null, lastWriteAt: null, over: 0, under: 0, restoreError: null, waiting: null });
+        persistPeakShavingLift(d);
+      } else if (d.restoreError !== r.error) {
+        d.restoreError = r.error;
+        pushLog('peak_shaving_restore_failed', { reason: act.reason, error: r.error }, 'warn');
+      }
+      return;
+    }
+    // lift / raise. Zeigt die Rücklesung etwas anderes als DVhubs letzter Write
+    // (gleich welcher Quelle), bildet lastWrite das Gerät nicht mehr ab — sonst
+    // liefe ein gleicher Wert in den „unverändert“-Kurzschluss (9cb277fc, P3).
+    const knownNow = knownMaxDischargeW(state, cfg);
+    const lwBefore = state.schedule.lastWrite.maxDischargeW;
+    if (lwBefore && (knownNow?.from === 'own_readback' || knownNow?.from === 'readback')
+        && Number(lwBefore.value) !== knownNow.value) {
+      delete state.schedule.lastWrite.maxDischargeW;
+    }
+    const r = await applyControlTarget('maxDischargeW', act.valueW, 'peak_shaving');
+    const lw = state.schedule.lastWrite.maxDischargeW;
+    if (!r.ok || r.skipped || !lw || Number(lw.value) !== act.valueW || lw.source !== 'peak_shaving') {
+      const key = `${act.type}|${r.error || (r.skipped ? 'skipped' : 'not_written')}`;
+      if (d.writeIssue !== key) {
+        d.writeIssue = key;
+        pushLog('peak_shaving_lift_not_written', { type: act.type, valueW: act.valueW, error: r.error || null, skipped: !!r.skipped, blocked: !!r.blocked }, 'warn');
+      }
+      return;
+    }
+    d.writeIssue = null;
+    const now = Date.now();
+    if (act.type === 'lift') {
+      Object.assign(d, { phase: 'lifted', liftedW: act.valueW, prevW: 0, since: now, lastWriteAt: now, lastWriteTick: peakShavingTickNo, over: 0, under: 0, waiting: null });
+      pushLog('peak_shaving_discharge_release', {
+        liftedW: act.valueW, importW: tel.importW, limitW: ps.limitW, targetW: ps.targetW, soc: tel.soc
+      });
+    } else {
+      Object.assign(d, { prevW: d.liftedW, liftedW: act.valueW, lastWriteAt: now, lastWriteTick: peakShavingTickNo });
+      pushLog('peak_shaving_discharge_raise', { liftedW: act.valueW, importW: tel.importW, limitW: ps.limitW });
+    }
+    persistPeakShavingLift(d);
+  }
+  // === end Peak Shaving Hebel 2 ===============================================
 
   async function evaluateSchedule() {
     const cfg = getCfg();
@@ -1730,6 +1941,15 @@ export function createScheduleEvaluator(ctx) {
       }
 
       await applyControlTarget(target, eff.value, eff.source);
+    }
+
+    // Peak Shaving Hebel 2 (Akku-Sperre bei Bezugsspitze). Läuft auch bei
+    // ausgeschaltetem Feature: eine noch stehende Freigabe wird dann
+    // zurückgenommen; ohne Freigabe schreibt der Takt nichts.
+    try {
+      await peakShavingDischargeTick();
+    } catch (e) {
+      pushLog('peak_shaving_error', { error: e?.message || String(e) }, 'warn');
     }
 
     // feedExcessDcPv: schedule-gesteuerte DC-Einspeisung (+ dontFeedExcessAcPv invers)

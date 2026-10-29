@@ -1195,6 +1195,78 @@ function buildFieldDefinitions() {
       help: 'Höchste Einspeisung in Watt. 0 = Nulleinspeisung.'
     },
 
+    // Peak Shaving (GitHub #28, services/peak-shaving): Bezugsgrenze für
+    // Gewerbeanschlüsse mit Leistungsmessung. Beta, bis die Regelung an einer
+    // echten Victron-Anlage gelaufen ist.
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      groupDescription: 'Für Gewerbeanschlüsse mit Leistungsmessung (RLM): Der Leistungspreis richtet sich nach der höchsten Viertelstunden-Bezugsleistung im Jahr. DVhub lädt dann nie mehr aus dem Netz, als die Grenze zulässt, und lässt den Akku Spitzen abdecken, wenn er sonst gehalten oder gesperrt wäre. Not-Halt, §14a, Netzlade-Verbot und Mindest-Ladestand haben immer Vorrang. Wirkt bisher nur bei Victron.',
+      beta: true,
+      path: 'peakShaving.enabled',
+      label: 'Bezugsgrenze einhalten',
+      type: 'boolean',
+      help: 'Aus = DVhub verhält sich wie bisher. An = DVhub deckelt eigene Netz-Sollwerte auf die Grenze und gibt einen gesperrten Akku frei, solange der gemessene Bezug darüber liegt. Der Leitstand zeigt die höchste Viertelstunden-Bezugsleistung im Monat und im Jahr.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.gridImportLimitW',
+      empty: 'null',
+      label: 'Bezugsgrenze am Netzanschluss (W)',
+      type: 'number',
+      min: 1000,
+      max: 10000000,
+      step: 100,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Höchster Netzbezug in Watt, den die Anlage nicht überschreiten soll — z. B. die bisherige Jahresspitze oder der mit dem Netzbetreiber vereinbarte Wert. Ohne Eintrag regelt DVhub nicht.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.marginW',
+      label: 'Sicherheitsabstand (W)',
+      type: 'number',
+      min: 0,
+      max: 5000,
+      step: 50,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'DVhub regelt auf Grenze minus diesen Abstand, damit Lastsprünge und Regelverzug die Grenze nicht reißen. Höchstens die Hälfte der Grenze. Standard: 300 W.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.releaseHysteresisW',
+      label: 'Rückschalt-Abstand (W)',
+      type: 'number',
+      min: 0,
+      max: 10000,
+      step: 50,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Eine von DVhub aufgehobene Akku-Sperre wird erst wieder gesetzt, wenn der Bedarf mindestens so weit unter dem Regelziel liegt (30 s lang). Verhindert Hin- und Herschalten. Standard: 500 W.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.minSocPct',
+      empty: 'null',
+      label: 'Akku nur bis Ladestand (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Unter diesem Ladestand deckt der Akku keine Spitzen mehr ab. Leer = der harte Mindest-Ladestand (Optimierer → harter SoC-Boden) gilt. Der höhere der beiden Werte zählt.'
+    },
+
     // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
     // Wirkt nur auf Profilen, die dvControl.zeroFeedIn deklarieren (Fronius);
     // die Zahlen sind Betreiber-einstellbar und liegen deshalb HIER (dvControl
@@ -4488,6 +4560,8 @@ export function createDefaultConfig() {
     // Feste Einspeisegrenze (services/feed-in-cap): ab Werk NICHT angegeben —
     // der Betreiber wählt, welche Grenze für die Anlage gilt, oder „keine“.
     feedInCap: { mode: '', percent: null, watts: null },
+    // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
+    peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null },
     multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300 },
     // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
     // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.
@@ -6324,7 +6398,7 @@ const SETTINGS_AREAS = [
     icon: '§',
     description: 'Was am Netzanschluss erlaubt und vorgeschrieben ist: Netzladen und Netzentladung, §14a, Abregelung.',
     groups: ['legalSwitches', 'feedInCap', 'paragraph14a', 'module3', 'eebus'],
-    advanced: ['zeroFeedIn'],
+    advanced: ['zeroFeedIn', 'peakShaving'],
     editors: ['mispelChanges']
   },
   {

@@ -2349,6 +2349,11 @@ function renderDashboardStatus(status) {
     window.DVhubEosPlanSummary?.render({ status });
   });
 
+  // Peak Shaving: Bezugsgrenze und Viertelstunden-Spitzen (peak-shaving-view.js).
+  safeRender('dashboard.peak-shaving', () => {
+    window.DVhubPeakShaving?.render(status.peakShaving);
+  });
+
   safeRender('dashboard.costs', () => {
     const c = status.costs || {};
     setText('costImport', c.importKwh == null ? '-' : `${c.importKwh} kWh`);

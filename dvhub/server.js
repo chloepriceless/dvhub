@@ -83,6 +83,7 @@ import { createDvLimitController } from './dv-interface-luox.js';
 import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
 import { createFeedInCap } from './services/feed-in-cap/index.js';
 import { pricingPeriodEndWarning } from './services/pricing-period-warning.js';
+import { createPeakShaving } from './services/peak-shaving/index.js';
 import { createEebusService } from './services/eebus/index.js';
 import { createParagraph14aService } from './services/paragraph14a/index.js';
 import { createClockCheck } from './services/clock-check.js';
@@ -864,6 +865,8 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     epex: { ...state.epex, summary: epex.epexNowNext() },
     eebus: ctx.eebus?.summary?.() ?? null,
     p14a: ctx.p14a?.summary?.() ?? null,
+    // Peak Shaving (GitHub #28): null, solange ausgeschaltet.
+    peakShaving: ctx.peakShaving?.summary?.() ?? null,
     clock: state.clock ?? null,
     // Heizstab: Vorhaltung in der EOS-Lastprognose und heute gelieferte Energie.
     heater: {
@@ -1104,6 +1107,10 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 // StorCtl_Mod/OutWRte) müssen einen Neustart WÄHREND einer aktiven Sperre
 // überleben, sonst schreibt die Freigabe nur die pauschalen restoreDefaults.
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
+// Peak Shaving (GitHub #28): eine von DVhub aufgehobene Akku-Sperre (Victron
+// 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
+// Prozess sie zurückschreibt statt sie zu vergessen.
+const PEAK_SHAVING_LIFT_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_lift.json');
 // E-Auto „Sofort laden“ (eos-evcc-bridge setOverride).
 const EV_OVERRIDE_PATH = path.join(DATA_DIR || __dirname, 'ev_override.json');
 
@@ -1284,6 +1291,7 @@ function controlValue() {
 // After each createXxx(ctx), extend ctx with the new module's public methods.
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
+  peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
   state,
   getCfg: () => cfg,
   transport,
@@ -1375,6 +1383,11 @@ refreshPricingPeriodWarning();
 const pricingPeriodWarningTimer = setInterval(refreshPricingPeriodWarning, 10 * 60_000);
 pricingPeriodWarningTimer.unref?.();
 if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();
+// Peak Shaving (GitHub #28): Status + Viertelstunden-Spitzen für den Leitstand.
+// Die Regelung selbst sitzt im Steuerpfad (schedule-eval.js); ausgeschaltet
+// fragt der Dienst nichts ab und liefert keinen Status.
+ctx.peakShaving = createPeakShaving(ctx);
+if (IS_RUNTIME_PROCESS) ctx.peakShaving.start();
 // Zweite Victron-GX am selben Netzanschluss (services/multi-gx): eigener
 // Modbus-Pool, damit eine haengende zweite GX die Hauptanlage nie ausbremst.
 // Ohne multiGx.enabled keine einzige Anfrage.
@@ -2138,6 +2151,8 @@ const web = http.createServer(async (req, res) => {
 const telemetryReady = (async () => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
+  // Peak Shaving: die Spitzen nicht erst nach dem nächsten 5-min-Takt zeigen.
+  if (IS_RUNTIME_PROCESS) ctx.peakShaving?.refreshPeaks?.().catch(() => {});
   // dbPool already set inside createTelemetryStoreIfEnabled() — ctx.db getter reads it
 
   // Sweep package 6: service-start health summary. A concise, grouped report of
@@ -2848,6 +2863,7 @@ async function gracefulShutdown(signal) {
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
   safeSync('victronGx.stop', () => ctx.victronGx?.stop?.());
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
+  safeSync('peakShaving.stop', () => ctx.peakShaving?.stop?.());
   safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
   safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());
