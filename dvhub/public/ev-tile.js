@@ -595,6 +595,8 @@
     // Nicht neu aufbauen, solange jemand im Wochenplan tippt (eine halbe
     // Uhrzeit loest noch kein input-Ereignis aus).
     if (!dirty && !(window.DVhubEvWeekly && window.DVhubEvWeekly.isEditing(el('evWeekly')))) { draft = draftFromData(); renderForm(); }
+    // Sonst nur den gespeicherten Stand der Zusammenfassung auffrischen (EOS-Zeile).
+    else if (window.DVhubEvWeekly) window.DVhubEvWeekly.updateSaved(el('evWeeklyGrid'), savedSummary());
   }
 
   // ---------------------------------------------------------------- Daten

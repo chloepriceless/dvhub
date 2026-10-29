@@ -15,7 +15,8 @@
 // eigenen Aufloesung (POST /api/ev/preview) — keine zweite Logik im Browser.
 //
 // window.DVhubEvWeekly = { render(host, plan, opts), read(host), validate(plan),
-//   rowInfo(entry), summaryLines(info), setSummary(host, info), refreshPreview(host) }
+//   rowInfo(entry), summaryLines(info), setSummary(host, info), updateSaved(host, info),
+//   refreshPreview(host) }
 (function () {
   'use strict';
 
@@ -203,11 +204,45 @@
   function setSummary(host, info) {
     if (!host) return;
     host._evwSaved = info || null;
+    host._evwDraft = null;
     host._evwShown = info || null;
     host._evwBaseline = previewKey(host);
     host._evwSeq = (host._evwSeq || 0) + 1;
     clearTimeout(host._evwTimer);
     paintSummary(host);
+  }
+
+  // Angezeigt wird der gespeicherte Stand, bei einem Entwurf dessen Vorschau
+  // (Abfahrt, Ziel, Kapazitaet fuer „≈ kWh“) — die EOS-Zeile kommt immer aus
+  // dem gespeicherten Stand.
+  function showDraft(host) {
+    const saved = host._evwSaved || {};
+    const d = host._evwDraft;
+    if (!d) host._evwShown = host._evwSaved;
+    else if (d.previewError) host._evwShown = Object.assign({}, saved, { previewError: d.previewError });
+    else {
+      host._evwShown = Object.assign({}, saved, {
+        resolved: d.resolved, preview: true,
+        capacityWh: d.capacityWh != null ? d.capacityWh : saved.capacityWh,
+        eos: saved.eos ? Object.assign({}, saved.eos, { resolved: saved.eos.resolved || saved.resolved }) : null
+      });
+    }
+    paintSummary(host);
+  }
+  function sentCapacity(key) {
+    try { const b = JSON.parse(key); return b && Number(b.capacityWh) > 0 ? Number(b.capacityWh) : null; } catch (_) { return null; }
+  }
+
+  /**
+   * Gespeicherten Stand auffrischen (Abfragetakt), ohne den Entwurf oder
+   * dessen Vergleichsstand zu verwerfen — sonst bliebe waehrend des
+   * Bearbeitens eine veraltete EOS-Zeile stehen.
+   */
+  function updateSaved(host, info) {
+    if (!host) return;
+    if (!host._evwSaved) { setSummary(host, info); return; }
+    host._evwSaved = info || null;
+    showDraft(host);
   }
 
   function apiFetch(p, o) {
@@ -224,21 +259,20 @@
       const seq = (host._evwSeq || 0) + 1;
       host._evwSeq = seq;
       if (key === null) return;
-      if (key === host._evwBaseline) { host._evwShown = host._evwSaved; paintSummary(host); return; }
+      if (key === host._evwBaseline) { host._evwDraft = null; showDraft(host); return; }
       apiFetch('/api/ev/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: key })
         .then(function (res) { return res.json().catch(function () { return { ok: false, error: 'HTTP ' + res.status }; }); })
         .then(function (body) {
           if (seq !== host._evwSeq) return;
-          const saved = host._evwSaved || {};
-          host._evwShown = body && body.ok
-            ? Object.assign({}, saved, { resolved: body.resolved, preview: true, eos: saved.eos ? Object.assign({}, saved.eos, { resolved: saved.eos.resolved || saved.resolved }) : null })
-            : Object.assign({}, saved, { previewError: (body && body.error) || 'unbekannter Fehler' });
-          paintSummary(host);
+          host._evwDraft = body && body.ok
+            ? { resolved: body.resolved, capacityWh: sentCapacity(key) }
+            : { previewError: (body && body.error) || 'unbekannter Fehler' };
+          showDraft(host);
         })
         .catch(function (err) {
           if (seq !== host._evwSeq) return;
-          host._evwShown = Object.assign({}, host._evwSaved || {}, { previewError: err && err.message ? err.message : 'keine Verbindung' });
-          paintSummary(host);
+          host._evwDraft = { previewError: err && err.message ? err.message : 'keine Verbindung' };
+          showDraft(host);
         });
     }, 350);
   }
@@ -348,6 +382,6 @@
 
   window.DVhubEvWeekly = {
     render: render, read: read, validate: validate, keepHidden: keepHidden, isEditing: isEditing, DAYS: DAYS,
-    rowInfo: rowInfo, summaryLines: summaryLines, setSummary: setSummary, refreshPreview: refreshPreview
+    rowInfo: rowInfo, summaryLines: summaryLines, setSummary: setSummary, updateSaved: updateSaved, refreshPreview: refreshPreview
   };
 })();

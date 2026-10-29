@@ -237,3 +237,53 @@ describe('Editor im Browser: Zusammenfassung', () => {
     assert.equal(W.summaryLines({ resolved: { enabled: true, departureAt: null, reason: 'keine Abfahrt geplant', targetSocPct: 80 }, eos: null })[0].text, 'Keine Abfahrt geplant.');
   });
 });
+
+describe('Codex-Befunde Runde 1 (Vorschau)', () => {
+  function load(fetchImpl) {
+    const sb = { window: {}, setTimeout, clearTimeout, fetch: fetchImpl, JSON, Intl, Date };
+    vm.runInNewContext(src, sb);
+    return sb.window.DVhubEvWeekly;
+  }
+  const fakeHost = (body) => ({ querySelector: () => null, _evwOpts: { previewBody: () => body.current } });
+  const saved = { resolved: { enabled: true, departureAt: '2026-10-29T22:59:00.000Z', day: 4, targetSocPct: 80, timeZone: 'Europe/Berlin' }, capacityWh: 75000, eos: { optimizeEv: true, registered: true, mode: 'plugged', deadlineSupported: true } };
+
+  it('Vorschau rechnet „≈ kWh“ mit der Kapazitaet aus dem Entwurf', async () => {
+    const Wx = load(async () => ({ json: async () => ({ ok: true, resolved: { ...saved.resolved, targetSocPct: 50 } }) }));
+    const body = { current: { departure: { targetValue: 30 }, capacityWh: 75000 } };
+    const host = fakeHost(body);
+    Wx.setSummary(host, saved);
+    body.current = { departure: { targetValue: 30 }, capacityWh: 60000 };
+    Wx.refreshPreview(host);
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(host._evwShown.preview, true);
+    assert.equal(host._evwShown.capacityWh, 60000);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+  });
+
+  it('gespeicherter EOS-Stand laesst sich waehrend der Vorschau auffrischen, Entwurf bleibt', async () => {
+    const Wx = load(async () => ({ json: async () => ({ ok: true, resolved: { ...saved.resolved, targetSocPct: 30 } }) }));
+    const body = { current: { departure: { targetValue: 80 } } };
+    const host = fakeHost(body);
+    Wx.setSummary(host, saved);
+    body.current = { departure: { targetValue: 30 } };
+    Wx.refreshPreview(host);
+    await new Promise((r) => setTimeout(r, 500));
+    Wx.updateSaved(host, { ...saved, eos: { ...saved.eos, optimizeEv: false } });
+    const lines = Wx.summaryLines(host._evwShown);
+    assert.match(lines[0].text, /^Vorschau .*Ziel 30 %/);
+    assert.equal(lines.at(-1).text, 'An EOS (gespeicherter Plan): nichts — EOS plant das Auto nicht mit');
+    // Baseline bleibt: zurueck auf den gespeicherten Formularstand → keine Vorschau
+    body.current = { departure: { targetValue: 80 } };
+    Wx.refreshPreview(host);
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(host._evwShown.preview, undefined);
+    assert.equal(host._evwShown.eos.optimizeEv, false);
+  });
+
+  it('Integrationsseite: Vorschau nimmt bei leerer Kapazitaet denselben Standard wie das Speichern', () => {
+    const js = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'public', 'integrations.js'), 'utf8');
+    assert.match(js, /function evccDepCapacityWh\(\) \{[^}]*\|\| 50\) \* 1000\)/);
+    assert.match(js, /previewBody: function \(\) \{\s*return \{ departure: evccDepartureBody\(\), capacityWh: evccDepCapacityWh\(\) \};/);
+    assert.match(js, /capacityWh: evccDepCapacityWh\(\),\s*departure: evccDepartureBody\(\)/);
+  });
+});

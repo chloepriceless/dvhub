@@ -2624,8 +2624,7 @@
       onChange: function () { evccDepWeeklyPlan = window.DVhubEvWeekly.read(host); },
       // Vorschau beim Bearbeiten (POST /api/ev/preview): dieselben Felder wie beim Speichern.
       previewBody: function () {
-        var cap = Number((document.getElementById('evcc-dep-capacity') || {}).value);
-        return { departure: evccDepartureBody(), capacityWh: isFinite(cap) && cap > 0 ? Math.round(cap * 1000) : undefined };
+        return { departure: evccDepartureBody(), capacityWh: evccDepCapacityWh() };
       }
     });
   }
@@ -2886,6 +2885,12 @@
     box.textContent = lines.join('\n');
     box.hidden = !lines.length;
   }
+  // Akku des Autos in Wh — Speichern und Vorschau nehmen denselben Wert
+  // (leeres Feld = 50 kWh).
+  function evccDepCapacityWh() {
+    var f = document.getElementById('evcc-dep-capacity');
+    return Math.round(Number((f && f.value) || 50) * 1000);
+  }
   function evccDepartureBody() {
     var el = function (id) { return document.getElementById(id); };
     var onceRaw = (el('evcc-dep-once') && el('evcc-dep-once').value) || '';
@@ -2956,7 +2961,7 @@
       minCurrentA: Number((el('evcc-eos-mincurrent') && el('evcc-eos-mincurrent').value) || 6),
       maxChargeW: Number((el('evcc-eos-maxchargew') && el('evcc-eos-maxchargew').value) || 5000),
       stopMode: (el('evcc-eos-stopmode') && el('evcc-eos-stopmode').value) || 'off',
-      capacityWh: Math.round(Number((el('evcc-dep-capacity') && el('evcc-dep-capacity').value) || 50) * 1000),
+      capacityWh: evccDepCapacityWh(),
       departure: evccDepartureBody()
     };
   }
