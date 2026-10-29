@@ -56,7 +56,7 @@ function plan15() {
 }
 const EPEX = [{ ts: Date.UTC(2026, 9, 27, 1, 0), day: '2026-10-27', ct_kwh: 12.3 }];
 
-test('15-min-Plan: heute ab jetzt bis Tagesende, morgen bis 10:00, Börse als Ersatzpreis', () => {
+test('15-min-Plan: heute ab jetzt bis Tagesende, morgen bis 10:00, Plan-Preis vor Börsenpreis', () => {
   const { summarize } = load();
   const s = summarize({ available: true, output: plan15() }, { now: NOW, epex: EPEX, peakLimitW: 5000 });
   assert.equal(s.available, true);
@@ -84,7 +84,10 @@ test('15-min-Plan: heute ab jetzt bis Tagesende, morgen bis 10:00, Börse als Er
   assert.equal(m.import.kwh, 3);
   assert.equal(m.import.hours, 0.5);
   assert.equal(m.import.peakKw, 8);
-  assert.equal(m.import.maxCt, 12.3);         // Börse für den Slot ohne EOS-Preis
+  // Gegenprüfung 14e131b4 (P3): der Plan-Preis ist EOS' Endkundenpreis, der
+  // Börsenpreis ein anderer Preis — kein Maximum über beide.
+  assert.equal(m.import.maxCt, 11);
+  assert.equal(m.import.maxSpotCt, null);
   assert.equal(m.peak.slots, 1); // nur der 8-kW-Slot liegt über 5 kW
 });
 
@@ -98,7 +101,7 @@ test('Anzeige zum 15-min-Plan', () => {
   assert.equal(v.today.peak, 'Spitzenkappung 5 kW: 1 Slot darüber (0,25 h, bis 6 kW)');
   assert.equal(v.tomorrow.head, 'Morgen bis 10:00');
   assert.equal(v.tomorrow.export, 'Einspeisung: keine geplant');
-  assert.equal(v.tomorrow.import, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · EOS kauft bis 12,3 ct');
+  assert.equal(v.tomorrow.import, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · EOS kauft bis 11 ct');
   assert.equal(v.tomorrow.peak, 'Spitzenkappung 5 kW: 1 Slot darüber (0,25 h, bis 8 kW)');
 });
 
@@ -196,10 +199,62 @@ test('render: erst „wird geladen“, dann Plan + Status zusammen; ohne Plan Ta
   render({ plan: { available: true, output: plan15() } }, doc); // Status vom letzten Aufruf bleibt
   assert.equal(els.eosPlanSummaryNote.hidden, true);
   assert.equal(els.eosPlanSummaryTodayExport.textContent, 'Einspeisung 7,5 kWh in 1 h · bis 12 kW · EOS verkauft ab 19,9 ct');
-  assert.equal(els.eosPlanSummaryTomorrowImport.textContent, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · EOS kauft bis 12,3 ct');
+  assert.equal(els.eosPlanSummaryTomorrowImport.textContent, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · EOS kauft bis 11 ct');
   assert.equal(els.eosPlanSummaryTodayPeak.hidden, false);
   render({ plan: null }, doc);
   assert.equal(els.eosPlanSummaryNote.textContent, 'Kein EOS-Plan');
   assert.equal(els.eosPlanSummaryToday.hidden, true);
   assert.equal(els.eosPlanSummaryTomorrow.hidden, true);
+});
+
+test('Plan ohne eigene Preise: Börsenpreis nur als solcher benannt (Gegenprüfung 14e131b4, P3)', () => {
+  const { summarize, view } = load();
+  const T = Date.UTC(2026, 9, 27, 1, 0);
+  const rows = [blank(T), blank(T + Q)];
+  Object.assign(rows[0], { gridConsumptionWh: 2000, priceCtKwh: null });
+  Object.assign(rows[1], { gridFeedinWh: 1000, feedInCtKwh: null });
+  const s = summarize({ available: true, output: { slotMinutes: 15, rows } }, { now: T, epex: EPEX });
+  assert.equal(s.today.import.maxCt, null);
+  assert.equal(s.today.import.maxSpotCt, 12.3);
+  assert.equal(s.today.export.minCt, null);
+  assert.equal(s.today.export.minSpotCt, 12.3);
+  const v = view(s);
+  assert.equal(v.today.import, 'Netzbezug 2 kWh in 0,25 h · Spitze 8 kW um 02:00 · Börse bis 12,3 ct');
+  assert.equal(v.today.export, 'Einspeisung 1 kWh in 0,25 h · bis 4 kW · Börse ab 12,3 ct');
+});
+
+test('nur Slots unter 300 W: Energie wird gezeigt, nicht „keine geplant“ (Gegenprüfung 14e131b4, P3)', () => {
+  const { summarize, view } = load();
+  const rows = Array.from({ length: 16 }, (_, i) => blank(P0 + i * Q));
+  for (const r of rows) Object.assign(r, { gridFeedinWh: 50, gridConsumptionWh: 40 }); // 200 W bzw. 160 W
+  const v = view(summarize({ available: true, output: { slotMinutes: 15, rows } }, { now: NOW }));
+  assert.equal(v.today.export, 'Einspeisung 0,8 kWh · bis 0,2 kW');
+  assert.equal(v.today.import, 'Netzbezug 0,6 kWh · Spitze 0,2 kW um 14:00');
+  // Rundungsreste der EOS-Lösung bleiben „keine“
+  const tiny = [blank(P0)];
+  Object.assign(tiny[0], { gridFeedinWh: 0.003, gridConsumptionWh: 0.003 });
+  const t = view(summarize({ available: true, output: { slotMinutes: 15, rows: tiny } }, { now: NOW }));
+  assert.equal(t.today.export, 'Einspeisung: keine geplant');
+  assert.equal(t.today.import, 'Netzbezug: keiner geplant');
+});
+
+test('render nimmt die eingestellte Zeitzone aus status.timeZone (Gegenprüfung 14e131b4, P3)', () => {
+  const { render } = load();
+  const els = {};
+  const ids = ['eosPlanSummary', 'eosPlanSummaryNote'];
+  for (const p of ['eosPlanSummaryToday', 'eosPlanSummaryTomorrow']) ids.push(p, `${p}Head`, `${p}Export`, `${p}Import`, `${p}Peak`);
+  for (const id of ids) els[id] = { textContent: '', hidden: false };
+  const doc = { getElementById: (id) => els[id] || null };
+  const now = Date.UTC(2026, 9, 26, 13, 30);
+  render({ plan: { available: true, output: plan60(60) }, status: { now, timeZone: 'Europe/London' } }, doc);
+  assert.equal(els.eosPlanSummaryTodayHead.textContent, 'Heute ab jetzt bis 18:00'); // London = UTC am 26.10.
+  render({ plan: { available: true, output: plan60(60) }, status: { now } }, doc);
+  assert.equal(els.eosPlanSummaryTodayHead.textContent, 'Heute ab jetzt bis 19:00'); // ohne Angabe Berlin
+});
+
+test('Status-Payload liefert die eingestellte Zeitzone (timeZone)', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../server.js', import.meta.url)), 'utf8');
+  const start = src.indexOf('function buildCurrentStatusPayload(');
+  const body = src.slice(start, src.indexOf('\n}\n', start));
+  assert.match(body, /timeZone: cfg\.schedule\?\.timezone \|\| 'Europe\/Berlin'/);
 });

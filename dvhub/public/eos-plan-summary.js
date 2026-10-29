@@ -11,8 +11,10 @@
 //   geplante Bezug über der Grenze liegt.
 // Quelle sind die Zeilen aus /api/eos/plan (output.rows, Wh je Slot), die
 // leitstand-charts.js für den EOS-Fahrplan ohnehin alle 30 s holt — kein eigener
-// Abruf. Preise: feedInCtKwh / priceCtKwh aus dem Plan (das, womit EOS rechnet);
-// fehlt einer, gilt der Börsenpreis aus /api/status (epex.data) für den Slot.
+// Abruf. Preise: feedInCtKwh / priceCtKwh aus dem Plan (das, womit EOS rechnet,
+// beim Bezug der Endkundenpreis). Der Börsenpreis aus /api/status (epex.data) ist
+// ein anderer Preis: er erscheint nur, wenn kein Slot einen Plan-Preis hat, und
+// heißt dann „Börse …“ (Gegenprüfung 14e131b4).
 // summarize()/view() sind reine Logik (test/eos-plan-summary.test.js), render()
 // füllt den Block in index.html. Nur Anzeige, keine Steuerung.
 (function () {
@@ -66,7 +68,8 @@
   }
 
   function side(rows, slotH, whKey, priceKey, spot, pickMin) {
-    let wh = 0; let slots = 0; let peakW = 0; let peakAt = null; let ct = null;
+    let wh = 0; let slots = 0; let peakW = 0; let peakAt = null; let ct = null; let spotCt = null;
+    const better = (p, cur) => p !== null && (cur === null || (pickMin ? p < cur : p > cur));
     for (const r of rows) {
       const e = num(r[whKey]);
       if (e === null || e <= 0) continue;
@@ -75,11 +78,15 @@
       if (w > peakW) { peakW = w; peakAt = r.ts; }
       if (w < BAND_W) continue;
       slots += 1;
-      const p = num(r[priceKey]) ?? spot(r.ts);
-      if (p !== null && (ct === null || (pickMin ? p < ct : p > ct))) ct = p;
+      const p = num(r[priceKey]);
+      if (better(p, ct)) ct = p;
+      const sp = spot(r.ts);
+      if (better(sp, spotCt)) spotCt = sp;
     }
     const out = { kwh: round(wh / 1000, 3), hours: round(slots * slotH, 2), peakKw: round(peakW / 1000, 3), peakAt };
     out[pickMin ? 'minCt' : 'maxCt'] = ct;
+    // Börsenpreis nur, wenn der Plan keinen eigenen Preis hat.
+    out[pickMin ? 'minSpotCt' : 'maxSpotCt'] = ct === null ? spotCt : null;
     return out;
   }
 
@@ -145,15 +152,24 @@
 
   const de = (n, d) => String(round(n, d)).replace('.', ',');
 
+  // „keine“ nur, wenn auch die Energie (auf 0,1 kWh) null ist — sonst zeigt die
+  // Zeile die Energie, bei Slots unter 300 W ohne Stunden (Gegenprüfung 14e131b4).
+  const none = (x) => round(x.kwh, 1) === 0;
+  const inHours = (x) => (x.hours ? ` in ${de(x.hours, 2)} h` : '');
+  function priceText(planCt, spotCt, planWord, spotWord) {
+    if (planCt !== null && planCt !== undefined) return ` · ${planWord} ${de(planCt, 1)} ct`;
+    if (spotCt !== null && spotCt !== undefined) return ` · ${spotWord} ${de(spotCt, 1)} ct`;
+    return '';
+  }
   function exportLine(e) {
-    if (!e.hours) return 'Einspeisung: keine geplant';
-    const ct = e.minCt === null ? '' : ` · EOS verkauft ab ${de(e.minCt, 1)} ct`;
-    return `Einspeisung ${de(e.kwh, 1)} kWh in ${de(e.hours, 2)} h · bis ${de(e.peakKw, 1)} kW${ct}`;
+    if (none(e)) return 'Einspeisung: keine geplant';
+    const ct = priceText(e.minCt, e.minSpotCt, 'EOS verkauft ab', 'Börse ab');
+    return `Einspeisung ${de(e.kwh, 1)} kWh${inHours(e)} · bis ${de(e.peakKw, 1)} kW${ct}`;
   }
   function importLine(i, time) {
-    if (!i.hours) return 'Netzbezug: keiner geplant';
-    const ct = i.maxCt === null ? '' : ` · EOS kauft bis ${de(i.maxCt, 1)} ct`;
-    return `Netzbezug ${de(i.kwh, 1)} kWh in ${de(i.hours, 2)} h · Spitze ${de(i.peakKw, 1)} kW um ${time(i.peakAt)}${ct}`;
+    if (none(i)) return 'Netzbezug: keiner geplant';
+    const ct = priceText(i.maxCt, i.maxSpotCt, 'EOS kauft bis', 'Börse bis');
+    return `Netzbezug ${de(i.kwh, 1)} kWh${inHours(i)} · Spitze ${de(i.peakKw, 1)} kW um ${time(i.peakAt)}${ct}`;
   }
   function peakLine(pk) {
     if (!pk) return null;
@@ -216,7 +232,8 @@
       now: Number(st.now) || Date.now(),
       epex: st.epex && st.epex.data,
       peakLimitW: peakLimitOf(st),
-      timeZone: (st.schedule && st.schedule.config && st.schedule.config.timezone) || DEFAULT_TZ,
+      // Eingestellte Zeitzone (schedule.timezone) kommt als status.timeZone.
+      timeZone: st.timeZone || DEFAULT_TZ,
     }));
     set('eosPlanSummaryNote', v.note);
     for (const [key, prefix] of [['today', 'eosPlanSummaryToday'], ['tomorrow', 'eosPlanSummaryTomorrow']]) {

@@ -854,6 +854,9 @@ function buildCurrentRuntimeSnapshot() {
 function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCurrentRuntimeSnapshot() } = {}) {
   return {
     now: Number(now),
+    // Eingestellte Zeitzone (schedule.timezone) für Tagesgrenzen und Uhrzeiten
+    // im Browser, z. B. „Laut EOS-Plan“ (eos-plan-summary.js).
+    timeZone: cfg.schedule?.timezone || 'Europe/Berlin',
     dvControlValue: controlValue(),
     dcExportMode: { enabled: cfg.dcExportMode?.enabled === true, priceThresholdCtKwh: cfg.dcExportMode?.priceThresholdCtKwh ?? null, pvTotalW: Number(state.victron.pvTotalW || 0), pvDcW: Number(state.victron.pvPowerW || 0) },
     dvRegs: state.dvRegs,
