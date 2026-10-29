@@ -382,6 +382,22 @@
   font-family:var(--f-mono); font-size:10px; color:var(--text-dim);
 }
 
+/* „Laut EOS-Plan“ unter dem Preis-Chart (Issue #27, eos-plan-summary.js) */
+.eos-plan-summary {
+  display:flex; flex-direction:column; gap:6px;
+  padding:6px 10px; margin-top:6px;
+  border-left:2px solid var(--accent);
+  border-radius:0 var(--r-sm) var(--r-sm) 0;
+}
+.eos-plan-summary-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; }
+.eos-plan-summary-title { font-size:11px; font-weight:600; color:var(--text); letter-spacing:.04em; text-transform:uppercase; }
+.eos-plan-summary-note { font-family:var(--f-mono); font-size:10px; color:var(--text-dim); }
+.eos-plan-summary-day { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.eos-plan-summary-day strong { font-size:11px; color:var(--text); font-weight:600; }
+.eos-plan-summary-day span { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); overflow-wrap:anywhere; }
+.eos-plan-summary-day .eos-plan-summary-peak { color:var(--yellow); }
+.eos-plan-summary [hidden] { display:none; }
+
 /* ─── Schedule editor ─── */
 .schedule-flags { display:flex; gap:14px; margin:8px 0 6px; flex-wrap:wrap; }
 .schedule-flag {

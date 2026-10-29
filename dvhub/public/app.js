@@ -2343,6 +2343,12 @@ function renderDashboardStatus(status) {
     window.DVhubSecondGx?.render(status.multiGx);
   });
 
+  // „Laut EOS-Plan“ (eos-plan-summary.js, Issue #27): Uhrzeit, Börsenpreise und
+  // Spitzenkappung aus dem Status; den Plan liefert leitstand-charts.js.
+  safeRender('dashboard.eos-plan-summary', () => {
+    window.DVhubEosPlanSummary?.render({ status });
+  });
+
   safeRender('dashboard.costs', () => {
     const c = status.costs || {};
     setText('costImport', c.importKwh == null ? '-' : `${c.importKwh} kWh`);
