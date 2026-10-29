@@ -286,4 +286,22 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     assert.match(js, /previewBody: function \(\) \{\s*return \{ departure: evccDepartureBody\(\), capacityWh: evccDepCapacityWh\(\) \};/);
     assert.match(js, /capacityWh: evccDepCapacityWh\(\),\s*departure: evccDepartureBody\(\)/);
   });
+
+  it('Runde 2: Kapazitaet anderswo geaendert → Vorschau neu, Ziel-% und kWh passen zusammen', async () => {
+    let calls = 0;
+    const Wx = load(async () => { calls += 1; return { json: async () => ({ ok: true, resolved: { ...saved.resolved, targetSocPct: calls === 1 ? 40 : 50 } }) }; });
+    const body = { current: { departure: { targetValue: 80 } } };
+    const host = fakeHost(body);
+    Wx.setSummary(host, saved);
+    body.current = { departure: { targetValue: 30 } };
+    Wx.refreshPreview(host);
+    await new Promise((r) => setTimeout(r, 500));
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 40 % ≈ 30 kWh/);
+    Wx.updateSaved(host, { ...saved, capacityWh: 60000 });
+    // bis die neue Vorschau da ist: altes % mit alter Kapazitaet, nie gemischt
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 40 % ≈ 30 kWh/);
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(calls, 2);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+  });
 });

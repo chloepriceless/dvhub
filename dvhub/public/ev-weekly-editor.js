@@ -241,8 +241,13 @@
   function updateSaved(host, info) {
     if (!host) return;
     if (!host._evwSaved) { setSummary(host, info); return; }
+    const before = host._evwSaved.capacityWh;
     host._evwSaved = info || null;
     showDraft(host);
+    // Kapazitaet anderswo geaendert, Entwurf rechnete mit der gespeicherten:
+    // Vorschau neu holen, damit Ziel-% und „≈ kWh“ zusammenpassen.
+    const d = host._evwDraft;
+    if (d && d.capacityFromSaved && info && info.capacityWh !== before) refreshPreview(host);
   }
 
   function apiFetch(p, o) {
@@ -260,12 +265,15 @@
       host._evwSeq = seq;
       if (key === null) return;
       if (key === host._evwBaseline) { host._evwDraft = null; showDraft(host); return; }
+      // Kapazitaet, mit der der Server das Ziel-% rechnet: aus dem Entwurf,
+      // sonst die gespeicherte — fest zum Ergebnis gemerkt.
+      const cap = sentCapacity(key) != null ? sentCapacity(key) : (host._evwSaved || {}).capacityWh;
       apiFetch('/api/ev/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: key })
         .then(function (res) { return res.json().catch(function () { return { ok: false, error: 'HTTP ' + res.status }; }); })
         .then(function (body) {
           if (seq !== host._evwSeq) return;
           host._evwDraft = body && body.ok
-            ? { resolved: body.resolved, capacityWh: sentCapacity(key) }
+            ? { resolved: body.resolved, capacityWh: cap, capacityFromSaved: sentCapacity(key) == null }
             : { previewError: (body && body.error) || 'unbekannter Fehler' };
           showDraft(host);
         })
