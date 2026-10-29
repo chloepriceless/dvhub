@@ -333,4 +333,17 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     assert.equal(out.capacityWh, 75000);
     assert.equal(previewEvDeparture(cfg(), { weeklyPlan: CHRISTIN_PLAN }, { nowMs: WED_2300, capacityWh: 60000 }).capacityWh, 60000);
   });
+
+  it('Runde 4: Server kennt schon eine neuere Kapazitaet als der Abfragetakt → keine Schleife', async () => {
+    let calls = 0;
+    const Wx = load(async () => { calls += 1; return { json: async () => ({ ok: true, resolved: { ...saved.resolved, targetSocPct: 50 }, capacityWh: 60000 }) }; });
+    const body = { current: { departure: { targetValue: 80 } } };
+    const host = fakeHost(body);
+    Wx.setSummary(host, saved);
+    body.current = { departure: { targetValue: 30 } };
+    Wx.refreshPreview(host);
+    await new Promise((r) => setTimeout(r, 1300));
+    assert.equal(calls, 1);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+  });
 });

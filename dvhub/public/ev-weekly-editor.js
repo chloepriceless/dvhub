@@ -266,7 +266,8 @@
       if (key === null) return;
       if (key === host._evwBaseline) { host._evwDraft = null; showDraft(host); return; }
       // Ersatz, falls die Antwort keine Kapazitaet nennt: die beim Senden gueltige.
-      const capAtSend = sentCapacity(key) != null ? sentCapacity(key) : (host._evwSaved || {}).capacityWh;
+      const savedCapAtSend = (host._evwSaved || {}).capacityWh;
+      const capAtSend = sentCapacity(key) != null ? sentCapacity(key) : savedCapAtSend;
       apiFetch('/api/ev/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: key })
         .then(function (res) { return res.json().catch(function () { return { ok: false, error: 'HTTP ' + res.status }; }); })
         .then(function (body) {
@@ -276,10 +277,13 @@
             ? { resolved: body.resolved, capacityWh: Number(body.capacityWh) > 0 ? Number(body.capacityWh) : capAtSend, capacityFromSaved: sentCapacity(key) == null }
             : { previewError: (body && body.error) || 'unbekannter Fehler' };
           showDraft(host);
-          // Gespeicherte Kapazitaet hat sich unterwegs geaendert: neu holen.
+          // Gespeicherte Kapazitaet hat sich WAEHREND der Anfrage geaendert und
+          // die Antwort passt nicht dazu: einmal neu holen. (Nur der Vergleich
+          // mit dem Stand beim Senden — haengt der Abfragetakt hinter dem Server
+          // her, bliebe sonst die Anfrage in einer Schleife.)
           const d = host._evwDraft;
           const now = (host._evwSaved || {}).capacityWh;
-          if (d.capacityFromSaved && d.capacityWh && Number(now) > 0 && Number(now) !== d.capacityWh) refreshPreview(host);
+          if (d.capacityFromSaved && now !== savedCapAtSend && Number(now) !== d.capacityWh) refreshPreview(host);
         })
         .catch(function (err) {
           if (seq !== host._evwSeq) return;
