@@ -10,6 +10,7 @@ import { REDACTED_PATHS, REDACTED, redactConfig, isRedactedPath } from '../confi
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from '../services/config-secrets-crypto.js';
 import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS } from '../services/config-protected-keys.js';
 import { mergeAgainstBaseWithConflicts } from '../services/config-base-merge.js';
+import { isInternalHost } from '../services/host-address.js';
 import { validateVpnProfileFile } from '../vpn-manager.js';
 
 // VPN-Profile eines Geräte-Tausch-Pakets (config/vpn/profiles/<name>/<datei>):
@@ -206,12 +207,13 @@ export function createConfigRoutes(deps) {
       // otherwise point it at an internal host (RFC1918/loopback) and proxy
       // that host's response back to the caller, or downgrade to plain http.
       // Reject at save time: scheme must be https, host must not be private.
-      // Reuse the existing isRfc1918OrLoopback matcher — no new private-IP code.
+      // Gemeinsame Prüfung services/host-address.js (auch IPv6-Schreibweisen,
+      // 127/8, 0.0.0.0 und link-local, Strix-Fund 29.10.2026).
       const candidatePriceApiUrl = body.config?.epex?.priceApiUrl;
       if (candidatePriceApiUrl) {
         let u;
         try { u = new URL(candidatePriceApiUrl); } catch { /* u stays undefined → reject below */ }
-        if (!u || u.protocol !== 'https:' || isRfc1918OrLoopback(u.hostname)) {
+        if (!u || u.protocol !== 'https:' || isInternalHost(u.hostname)) {
           return json(res, 400, { ok: false, error: 'invalid_epex_price_api_url' });
         }
       }

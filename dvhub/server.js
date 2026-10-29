@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { applySystemTimeZone } from './services/system-timezone.js';
 import http from 'node:http';
+import { isInternalHost } from './services/host-address.js';
 import https from 'node:https';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -2633,16 +2634,7 @@ if (IS_RUNTIME_PROCESS) {
     try {
       const u = new URL(String(raw || ''));
       if (u.protocol !== 'https:') return false;
-      const host = u.hostname.toLowerCase();
-      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
-      const parts = host.split('.').map(Number);
-      if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
-        if (parts[0] === 10) return false;                                      // 10.0.0.0/8
-        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false; // 172.16.0.0/12
-        if (parts[0] === 192 && parts[1] === 168) return false;                 // 192.168.0.0/16
-        if (parts[0] === 169 && parts[1] === 254) return false;                 // 169.254.0.0/16 (link-local)
-      }
-      return true;
+      return !isInternalHost(u.hostname);
     } catch { return false; }
   }
   function startMonitoringHeartbeat() {

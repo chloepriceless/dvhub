@@ -677,6 +677,28 @@ describe('H-3: EPEX priceApiUrl SSRF guard', () => {
     assert.equal(body.error, 'invalid_epex_price_api_url');
   });
 
+  // Strix-Fund 29.10.2026: die Prüfung kannte nur IPv4 in Punktschreibweise.
+  // new URL() liefert IPv6 in Klammern ("[::1]") und IPv4-gemappt als Hex
+  // ("[::ffff:7f00:1]") — beides galt als öffentlich, ebenso 127.x außer
+  // 127.0.0.1, 0.0.0.0 und 169.254/16 (Metadaten-Dienst in Clouds).
+  for (const target of [
+    'https://[::1]/x', 'https://[::ffff:127.0.0.1]/x', 'https://127.0.0.2/x',
+    'https://0.0.0.0/x', 'https://169.254.169.254/latest', 'https://[fe80::1]/x',
+    'https://[fd00::5]/x', 'https://[::ffff:192.168.1.5]/x', 'https://[::]/x',
+  ]) {
+    it(`internal priceApiUrl in other notation (${target}) → 400 invalid_epex_price_api_url`, async () => {
+      const routes = createApiRoutes(mockCtx());
+      const res = mockRes();
+      await routes.handleRequest(
+        makeReq('POST', '/api/config', { config: { epex: { priceApiUrl: target } } }),
+        res,
+        new URL('http://localhost/api/config')
+      );
+      assert.equal(res._captured.status, 400, `${target} must be rejected`);
+      assert.equal(JSON.parse(res._captured.body).error, 'invalid_epex_price_api_url');
+    });
+  }
+
   it('valid public https priceApiUrl is accepted (not 400)', async () => {
     const ctx = mockCtx();
     const routes = createApiRoutes(ctx);
@@ -689,6 +711,35 @@ describe('H-3: EPEX priceApiUrl SSRF guard', () => {
     assert.notEqual(res._captured.status, 400,
       'a valid public https priceApiUrl must pass the SSRF guard');
   });
+});
+
+// Gegenstück zum EPEX-Guard: optimizer.eosProxy.url darf per http nur auf die
+// Box selbst oder ins Heimnetz zeigen. IPv6 in Klammern („[::1]“, ULA) wurde
+// bisher abgelehnt, obwohl EOS daneben läuft; link-local bleibt verboten.
+describe('EOS proxy URL guard: address notations', () => {
+  async function saveEosUrl(url) {
+    const routes = createApiRoutes(mockCtx());
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/config', { config: { optimizer: { eosProxy: { url } } } }),
+      res,
+      new URL('http://localhost/api/config')
+    );
+    return { status: res._captured.status, error: (() => { try { return JSON.parse(res._captured.body).error; } catch { return null; } })() };
+  }
+  for (const ok of ['http://[::1]:8503', 'http://[fd00::5]:8503', 'http://[::ffff:192.168.1.60]:8503', 'http://127.0.0.1:8503', 'http://192.168.1.60:8503']) {
+    it(`http to the box or the home network (${ok}) is accepted`, async () => {
+      const r = await saveEosUrl(ok);
+      assert.notEqual(r.error, 'invalid_eos_proxy_url', `${ok} must pass`);
+    });
+  }
+  for (const bad of ['http://169.254.169.254/', 'http://[fe80::1]:8503', 'http://0.0.0.0:8503', 'http://8.8.8.8:8503']) {
+    it(`http to ${bad} → 400 invalid_eos_proxy_url`, async () => {
+      const r = await saveEosUrl(bad);
+      assert.equal(r.status, 400);
+      assert.equal(r.error, 'invalid_eos_proxy_url');
+    });
+  }
 });
 
 describe('H-4: EPEX upstream response byte-cap', () => {

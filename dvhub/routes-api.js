@@ -11,6 +11,7 @@ import { STREAM_BUCKET_SECONDS } from './telemetry-store-pg.js';
 import http from 'node:http';
 import os from 'node:os';
 import { isIP } from 'node:net';
+import { isInternalHost, isPrivateOrLoopbackHost } from './services/host-address.js';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
 import { PUSH_HEADER as INPUT_PUSH_HEADER, PUSH_FIELDS as INPUT_PUSH_FIELDS, parsePushFields as parseInputPushFields } from './services/input-push.js';
@@ -1616,16 +1617,7 @@ export function createApiRoutes(ctx) {
     try {
       const u = new URL(String(raw || ''));
       if (u.protocol !== 'https:') return false;
-      const host = u.hostname.toLowerCase();
-      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
-      const parts = host.split('.').map(Number);
-      if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
-        if (parts[0] === 10) return false;                                      // 10.0.0.0/8
-        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false; // 172.16/12
-        if (parts[0] === 192 && parts[1] === 168) return false;                 // 192.168/16
-        if (parts[0] === 169 && parts[1] === 254) return false;                 // 169.254/16 link-local
-      }
-      return true;
+      return !isInternalHost(u.hostname);
     } catch { return false; }
   }
 
@@ -1959,15 +1951,11 @@ export function createApiRoutes(ctx) {
   // Plan 08-04 Task 1 Step 8 & Task 2 Step 3: RFC1918 + loopback check —
   // used by /api/meter/scan to refuse SSRF to internet hosts and by the
   // heartbeat guard (via isAllowedHeartbeatUrl) to refuse internal pivots.
+  // Freigabe-Prüfung „Box selbst oder Heimnetz“ (EOS-Proxy, DVEOS, Zähler-
+  // Scan). Seit dem Strix-Fund 29.10.2026 über services/host-address.js, das
+  // auch IPv6 in Klammern, IPv4-gemappte Adressen und ganz 127/8 kennt.
   function isRfc1918OrLoopback(host) {
-    const h = String(host || '').toLowerCase();
-    if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return true;
-    const parts = h.split('.').map(Number);
-    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-    if (parts[0] === 10) return true;                                      // 10.0.0.0/8
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // 172.16.0.0/12
-    if (parts[0] === 192 && parts[1] === 168) return true;                 // 192.168.0.0/16
-    return false;
+    return isPrivateOrLoopbackHost(host);
   }
 
   // ── Response builders ────────────────────────────────────────────────

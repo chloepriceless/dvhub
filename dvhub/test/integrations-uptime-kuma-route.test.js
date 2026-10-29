@@ -34,13 +34,22 @@ describe('Plan 20-04: Uptime-Kuma dedicated endpoints (static)', () => {
     const src = readRoutes();
     assert.match(src, /function isAllowedHeartbeatUrl\s*\(/,
       'must define isAllowedHeartbeatUrl (copied verbatim from server.js:1426-1441)');
-    // The guard MUST reject http: (https-only) and the four RFC1918 prefixes.
-    assert.match(src, /u\.protocol\s*!==\s*['"]https:['"]/, 'must reject non-https');
-    assert.match(src, /localhost|127\.0\.0\.1|::1/, 'must reject loopback');
-    assert.match(src, /parts\[0\]\s*===\s*10/, 'must reject 10.0.0.0/8');
-    assert.match(src, /parts\[0\]\s*===\s*172\s*&&\s*parts\[1\]\s*>=\s*16/, 'must reject 172.16/12');
-    assert.match(src, /parts\[0\]\s*===\s*192\s*&&\s*parts\[1\]\s*===\s*168/, 'must reject 192.168/16');
-    assert.match(src, /parts\[0\]\s*===\s*169\s*&&\s*parts\[1\]\s*===\s*254/, 'must reject 169.254/16 link-local');
+    // The guard MUST reject http: (https-only) and every internal destination.
+    // Seit 29.10.2026 über die gemeinsame Prüfung isInternalHost
+    // (services/host-address.js, Verhalten in test/host-address.test.js):
+    // Loopback (auch [::1], 127/8), RFC1918, ULA, link-local, 0.0.0.0.
+    const m = src.match(/function isAllowedHeartbeatUrl\s*\([\s\S]*?\n {2}\}\n/);
+    assert.ok(m, 'isAllowedHeartbeatUrl must close');
+    assert.match(m[0], /u\.protocol\s*!==\s*['"]https:['"]/, 'must reject non-https');
+    assert.match(m[0], /!isInternalHost\(\s*u\.hostname\s*\)/, 'must reject internal hosts via the shared matcher');
+  });
+
+  it('server.js heartbeat guard uses the same shared matcher', async () => {
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+    const m = src.match(/function isAllowedHeartbeatUrl\s*\([\s\S]*?\n {2}\}\n/);
+    assert.ok(m, 'server.js must define isAllowedHeartbeatUrl');
+    assert.match(m[0], /!isInternalHost\(\s*u\.hostname\s*\)/);
   });
 
   it('kumaPushOnce helper is defined and uses HMAC-signed fetch (T-20-04-04)', () => {

@@ -30,6 +30,7 @@ import https from 'node:https';
 import { readApplianceId, validateRelayPorts } from './support-tunnel.js';
 import { runtimeInfo } from '../runtime-info.js';
 import { buildVictronAlarmsPayload } from '../victron-alarms.js';
+import { isPrivateOrLoopbackHost } from './host-address.js';
 
 export const SIDECAR_NAME = 'installer-portal-client.json';
 // Vorgemerkte Abmeldung beim Portal (2026-10-15): war das Portal beim Trennen
@@ -45,21 +46,14 @@ const LICENSE_FREE_COMMANDS = new Set(['license_activate', 'close_tunnel']);
 
 // URL-Validierung für die Portal-Adresse (SSRF-Bremse beim Pairing):
 //   https:// ist überall erlaubt (Portal ist online),
-//   http://  nur zu Loopback/RFC1918 — für lokale Tests & LAN-Portal-Bau.
+//   http://  nur zur Box selbst oder ins Heimnetz (services/host-address.js)
+//            — für lokale Tests & LAN-Portal-Bau.
 export function isAllowedPortalUrl(raw) {
   try {
     const u = new URL(String(raw || ''));
     if (u.protocol === 'https:') return true;
     if (u.protocol !== 'http:') return false;
-    const h = u.hostname.toLowerCase();
-    if (h === 'localhost' || h === '::1' || h === '[::1]') return true;
-    const parts = h.split('.').map(Number);
-    if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
-      if (parts[0] === 127 || parts[0] === 10) return true;
-      if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-      if (parts[0] === 192 && parts[1] === 168) return true;
-    }
-    return false;
+    return isPrivateOrLoopbackHost(u.hostname);
   } catch {
     return false;
   }
