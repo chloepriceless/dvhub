@@ -569,6 +569,7 @@ function applyLoadedConfig(nextLoadedConfig) {
   // an identifier that never exists in THIS scope (block-scoped function
   // declaration) and made the whole branch a silent no-op since its inception.
   if (typeof monitoringHeartbeatRestart === 'function') monitoringHeartbeatRestart();
+  if (typeof pricingPeriodWarningRefresh === 'function') pricingPeriodWarningRefresh();
 }
 
 // Akku-Ausbaustufen (Christin 2026-08-07): zieht den abgeleiteten Jetzt-Wert
@@ -979,6 +980,10 @@ let monitoringTimerId = null;
 // Der Block hebt die Funktions-Referenz beim Boot hierher; bleibt null in
 // Prozess-Rollen ohne Runtime-Teil (dort gibt es keinen Heartbeat zu re-armen).
 let monitoringHeartbeatRestart = null;
+// Warnung „Preis-Zeitraum endet bald“ nach jedem Übernehmen der Config neu
+// rechnen (Gegenprüfung 7c47107f). Erst gesetzt, wenn setSystemWarning
+// existiert — die einmalige Regel-Übernahme unten speichert schon vorher.
+let pricingPeriodWarningRefresh = null;
 
 // Nach der Übernahme in schedule-rules.json die Regeln aus config.json nehmen
 // (einmalig; die letzte Config-Sicherung behält sie).
@@ -1382,6 +1387,7 @@ const refreshPricingPeriodWarning = () => {
   }
 };
 refreshPricingPeriodWarning();
+pricingPeriodWarningRefresh = refreshPricingPeriodWarning;
 const pricingPeriodWarningTimer = setInterval(refreshPricingPeriodWarning, 10 * 60_000);
 pricingPeriodWarningTimer.unref?.();
 if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();

@@ -56,11 +56,12 @@ export function pricingPeriodEndWarning(pricing = {}, nowMs = Date.now(), option
   const following = nextDay(active.endDate);
   if (periods.some((p) => p !== active && p.startDate <= following && p.endDate >= following)) return null;
 
-  const name = active.label ? `„${active.label}“` : 'Dein Strompreis-Zeitraum';
+  // Neue Zeiträume haben anfangs keinen Namen (label '').
+  const subject = active.label ? `Strompreis-Zeitraum „${active.label}“` : 'Dein Strompreis-Zeitraum';
   const later = periods
     .filter((p) => p.startDate > following)
     .sort((a, b) => (a.startDate < b.startDate ? -1 : 1))[0];
-  const until = later ? ` bis zum Beginn von ${later.label ? `„${later.label}“` : 'des nächsten Zeitraums'} am ${de(later.startDate)}` : '';
-  return `Strompreis-Zeitraum ${name} endet am ${de(active.endDate)}. Danach gilt${until} der Grundtarif (${baseTariffText(pricing)}). `
+  const until = later ? ` bis zum Beginn ${later.label ? `von „${later.label}“` : 'des nächsten Zeitraums'} am ${de(later.startDate)}` : '';
+  return `${subject} endet am ${de(active.endDate)}. Danach gilt${until} der Grundtarif (${baseTariffText(pricing)}). `
     + `Bitte unter Einstellungen → Strompreis einen neuen Zeitraum ab ${de(following)} anlegen (z. B. mit neuen Netzentgelten und Umlagen).`;
 }
