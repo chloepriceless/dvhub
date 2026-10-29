@@ -39,3 +39,14 @@ test('isPrivateOrLoopbackHost (allowlist): box and home network only — not lin
     assert.equal(isPrivateOrLoopbackHost(h), false, h);
   }
 });
+
+// Gleiches für das allgemeine Speichern der Config (restoreRedacted): neue
+// ntfy-Adresse auf anderem Server + '***' darf den Token nicht mitnehmen.
+test('restoreRedacted: ntfy token "***" is only restored for the same server', async () => {
+  const { restoreRedacted } = await import('../config-redaction.js');
+  const current = { notifications: { providers: { ntfy: { topicUrl: 'https://ntfy.example.org/a', token: 'tk' } } } };
+  const foreign = restoreRedacted({ notifications: { providers: { ntfy: { topicUrl: 'https://attacker.example.net/a', token: '***' } } } }, current);
+  assert.equal(foreign.notifications.providers.ntfy.token, '');
+  const same = restoreRedacted({ notifications: { providers: { ntfy: { topicUrl: 'https://ntfy.example.org/b', token: '***' } } } }, current);
+  assert.equal(same.notifications.providers.ntfy.token, 'tk');
+});

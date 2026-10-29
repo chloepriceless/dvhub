@@ -1,6 +1,8 @@
 // SEC-01: Single source of truth for redacted config field paths.
 // Imported by routes-api.js (redactConfig) and server.js (restoreRedacted)
 
+import { sameOrigin } from './services/host-address.js';
+
 export const REDACTED_PATHS = Object.freeze([
   'apiToken',
   'telemetry.historyImport.vrmToken',
@@ -244,6 +246,7 @@ function looksUrlRedacted(raw) {
 
 export function restoreRedacted(incoming, current) {
   const copy = JSON.parse(JSON.stringify(incoming));
+  const ntfyTokenKept = copy?.notifications?.providers?.ntfy?.token === REDACTED;
   for (const dotPath of REDACTED_PATHS) {
     const parts = dotPath.split('.');
     let target = copy;
@@ -260,6 +263,14 @@ export function restoreRedacted(incoming, current) {
       const original = source && typeof source === 'object' && key in source ? source[key] : '';
       target[key] = original === REDACTED ? '' : original;
     }
+  }
+  // ntfy: der gespeicherte Token folgt einer neuen Adresse nur auf denselben
+  // Server (Strix-Fund 29.10.2026) — sonst ginge er mit der nächsten
+  // Benachrichtigung an einen Server, den ein Gerät im WLAN eingetragen hat.
+  if (ntfyTokenKept) {
+    const ntfy = copy.notifications.providers.ntfy;
+    const curUrl = current?.notifications?.providers?.ntfy?.topicUrl;
+    if (!sameOrigin(ntfy.topicUrl ?? curUrl, curUrl)) ntfy.token = '';
   }
   // URL-level restoration for fields redacted via redactUrlCreds (Plan 08-03).
   if (copy?.mqtt && typeof copy.mqtt.brokerUrl === 'string' && looksUrlRedacted(copy.mqtt.brokerUrl)

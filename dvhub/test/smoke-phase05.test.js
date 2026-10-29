@@ -1033,3 +1033,90 @@ describe('Phase 17 R-6: Free endpoints unaffected by license gate', () => {
     }
   }
 });
+
+// Strix-Fund 29.10.2026 (am Code bestätigt): der ntfy-Testknopf nahm die
+// Adresse aus der Anfrage und hängte den GESPEICHERTEN Token an — ein Gerät im
+// WLAN konnte sich den Token an einen eigenen Server schicken lassen. Gleiches
+// beim Speichern: neue Adresse + '***' behielt den Token. Der gespeicherte
+// Token gilt jetzt nur für den gespeicherten Server (gleiche Origin).
+describe('ntfy: stored token stays bound to the stored server', () => {
+  const STORED = { topicUrl: 'https://ntfy.example.org/dvhub-alarm', token: 'tk_stored_secret' };
+  function ctxWith(saved) {
+    const raw = { notifications: { providers: { ntfy: { enabled: true, ...STORED } } } };
+    return mockCtx({ getRawCfg: () => raw, saveAndApplyConfig: (next) => { saved.push(next); } });
+  }
+  async function withFetch(fn) {
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => { calls.push({ url: String(url), auth: opts.headers?.Authorization || null }); return { ok: true, status: 200 }; };
+    try { await fn(calls); } finally { globalThis.fetch = realFetch; }
+  }
+  async function post(ctx, path, body) {
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', path, body), res, new URL(`http://localhost${path}`));
+    return { status: res._captured.status, body: (() => { try { return JSON.parse(res._captured.body); } catch { return null; } })() };
+  }
+
+  it('test button with a foreign server does not send the stored token', async () => {
+    await withFetch(async (calls) => {
+      await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: 'https://attacker.example.net/x', token: '***' });
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].auth, null, 'stored token must not go to another server');
+    });
+  });
+
+  it('test button on the same server (other topic) still uses the stored token', async () => {
+    await withFetch(async (calls) => {
+      await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: 'https://ntfy.example.org/anderes-topic', token: '***' });
+      assert.equal(calls[0]?.auth, 'Bearer tk_stored_secret');
+    });
+  });
+
+  it('test button with an explicitly typed token sends that token', async () => {
+    await withFetch(async (calls) => {
+      await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: 'https://other.example.net/x', token: 'tk_typed' });
+      assert.equal(calls[0]?.auth, 'Bearer tk_typed');
+    });
+  });
+
+  for (const bad of ['http://127.0.0.1:8503/v1/config', 'http://[::1]:1883/', 'http://169.254.169.254/latest', 'file:///etc/passwd', 'gopher://x/']) {
+    it(`test button refuses ${bad} (400 invalid_topicurl, no request)`, async () => {
+      await withFetch(async (calls) => {
+        const r = await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: bad });
+        assert.equal(r.status, 400);
+        assert.equal(r.body?.error, 'invalid_topicurl');
+        assert.equal(calls.length, 0);
+      });
+    });
+  }
+
+  it('self-hosted ntfy in the home network stays allowed', async () => {
+    await withFetch(async (calls) => {
+      const r = await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: 'http://192.168.1.10:8080/dvhub', token: 'tk_lan' });
+      assert.notEqual(r.body?.error, 'invalid_topicurl');
+      assert.equal(calls.length, 1);
+    });
+  });
+
+  it('saving a foreign server with token "***" drops the stored token', async () => {
+    const saved = [];
+    await post(ctxWith(saved), '/api/notifications/providers/ntfy', { enabled: true, topicUrl: 'https://attacker.example.net/x', token: '***' });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].notifications.providers.ntfy.token, undefined, 'token must not follow the URL to another server');
+  });
+
+  it('saving the same server with token "***" keeps the stored token', async () => {
+    const saved = [];
+    await post(ctxWith(saved), '/api/notifications/providers/ntfy', { enabled: true, topicUrl: 'https://ntfy.example.org/neues-topic', token: '***' });
+    assert.equal(saved[0].notifications.providers.ntfy.token, 'tk_stored_secret');
+  });
+
+  it('saving refuses an internal topicUrl (400 invalid_topicurl)', async () => {
+    const saved = [];
+    const r = await post(ctxWith(saved), '/api/notifications/providers/ntfy', { enabled: true, topicUrl: 'http://127.0.0.1:8503/', token: '***' });
+    assert.equal(r.status, 400);
+    assert.equal(r.body?.error, 'invalid_topicurl');
+    assert.equal(saved.length, 0);
+  });
+});

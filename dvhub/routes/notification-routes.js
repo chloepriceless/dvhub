@@ -7,6 +7,7 @@
 // `deps`. Gibt `false` zurück, wenn die Anfrage keine dieser Routen ist.
 
 import { parseBody } from '../server-utils.js';
+import { isAllowedOutboundUrl, sameOrigin } from '../services/host-address.js';
 
 export function createNotificationRoutes(deps) {
   const { ctx, pushLog, json, checkAuth, actorContext, checkProviderRateLimit } = deps;
@@ -43,11 +44,16 @@ export function createNotificationRoutes(deps) {
       next.notifications.providers = (next.notifications.providers && typeof next.notifications.providers === 'object')
         ? next.notifications.providers : {};
       const prev = next.notifications.providers.ntfy || {};
-      // D-13 '***' sentinel: keep existing token.
-      const token = (body.token === '***') ? (prev.token || '') : clip(body.token, 256);
+      const topicUrl = clip(body.topicUrl, 512);
+      if (topicUrl && !isAllowedOutboundUrl(topicUrl)) return json(res, 400, { ok: false, error: 'invalid_topicurl' });
+      // D-13 '***' sentinel: keep existing token — aber nur für denselben
+      // Server (Strix-Fund 29.10.2026); bei neuem Server fällt er weg.
+      const token = (body.token === '***')
+        ? (sameOrigin(topicUrl, prev.topicUrl) ? (prev.token || '') : '')
+        : clip(body.token, 256);
       next.notifications.providers.ntfy = {
         enabled: !!body.enabled,
-        topicUrl: clip(body.topicUrl, 512),
+        topicUrl,
         ...(token ? { token: token } : {})
       };
       try {
@@ -74,8 +80,14 @@ export function createNotificationRoutes(deps) {
       // semantics applied to the TEST path.
       const stored = ctx.getRawCfg?.().notifications?.providers?.ntfy || {};
       const topicUrl = (body?.topicUrl && body.topicUrl !== '***') ? body.topicUrl : (stored.topicUrl || '');
-      const token = (body?.token && body.token !== '***') ? body.token : (stored.token || '');
       if (!topicUrl) return json(res, 400, { ok: false, error: 'missing_topicurl' });
+      if (!isAllowedOutboundUrl(topicUrl)) return json(res, 400, { ok: false, error: 'invalid_topicurl' });
+      // Strix-Fund 29.10.2026: der gespeicherte Token gilt nur für den
+      // gespeicherten Server — sonst schickt der Testknopf ihn an eine Adresse,
+      // die ein beliebiges Gerät im WLAN in die Anfrage schreibt.
+      const token = (body?.token && body.token !== '***')
+        ? body.token
+        : (sameOrigin(topicUrl, stored.topicUrl) ? (stored.token || '') : '');
 
       // 5/min per (provider, token-hash). When no token, hash the URL so the
       // bucket key is still stable per-config.

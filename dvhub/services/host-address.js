@@ -97,3 +97,20 @@ export function requestHostname(hostname) {
   const h = String(hostname ?? '');
   return h.startsWith('[') && h.endsWith(']') ? h.slice(1, -1) : h;
 }
+
+/** Gleicher Server (Schema, Host, Port)? Ungültige Adressen sind nie gleich. */
+export function sameOrigin(a, b) {
+  try { return new URL(String(a)).origin === new URL(String(b)).origin; } catch { return false; }
+}
+
+/**
+ * Ziel für einen ausgehenden Dienst, den der Nutzer selbst betreiben darf
+ * (z. B. ntfy im Heimnetz): http/https, Heimnetz und Internet erlaubt, die
+ * Box selbst, link-local, 0-Adresse und Unklares nicht.
+ */
+export function isAllowedOutboundUrl(raw) {
+  let u;
+  try { u = new URL(String(raw || '')); } catch { return false; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  return ['private', 'public', 'name'].includes(classifyHost(u.hostname));
+}
