@@ -82,6 +82,7 @@ import { createModbusServer } from './modbus-server.js';
 import { createDvLimitController } from './dv-interface-luox.js';
 import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
 import { createFeedInCap } from './services/feed-in-cap/index.js';
+import { pricingPeriodEndWarning } from './services/pricing-period-warning.js';
 import { createEebusService } from './services/eebus/index.js';
 import { createParagraph14aService } from './services/paragraph14a/index.js';
 import { createClockCheck } from './services/clock-check.js';
@@ -1359,6 +1360,19 @@ const setSystemWarning = (id, message) => {
   if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
 };
 ctx.feedInCap = createFeedInCap(ctx, { getTransport: () => transport, setWarning: setSystemWarning });
+// Strompreis-Zeitraum endet bald ohne Nachfolger (Chrissi 28.10.2026): gelber
+// Hinweis 14 Tage vorher — sonst gilt danach still der Grundtarif.
+const refreshPricingPeriodWarning = () => {
+  try {
+    const current = ctx.getCfg();
+    setSystemWarning('pricing_period_ending', pricingPeriodEndWarning(current?.userEnergyPricing, Date.now(), { timeZone: current?.schedule?.timezone }));
+  } catch (e) {
+    pushLog('pricing_period_warning_error', { error: e?.message || String(e) }, 'warn');
+  }
+};
+refreshPricingPeriodWarning();
+const pricingPeriodWarningTimer = setInterval(refreshPricingPeriodWarning, 10 * 60_000);
+pricingPeriodWarningTimer.unref?.();
 if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();
 // Zweite Victron-GX am selben Netzanschluss (services/multi-gx): eigener
 // Modbus-Pool, damit eine haengende zweite GX die Hauptanlage nie ausbremst.
