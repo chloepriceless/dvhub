@@ -13,7 +13,7 @@
 import { isGridChargeLicensed } from './grid-storage.js';
 import { resolveEvDeparture } from './ev-departure.js';
 import { effectiveInverterCurve } from '../inverter-efficiency/calibrator.js';
-import { resolveEvSocPct, resolveEvPlugged } from './ev-soc.js';
+import { computeEvRegistration } from './ev-registration.js';
 import { buildEosHomeAppliances } from './eos-devices.js';
 import { getPowerLimits } from '../power-limits.js';
 // Zweite GX am selben Anschluss: Planung sieht beide Akkus als einen.
@@ -21,7 +21,7 @@ import { planningCfg, planningMinSocPct } from '../multi-gx/planning.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
 import http from 'node:http';
 
-import { createEosCapabilityProbe } from './eos-capabilities.js';
+import { createEosCapabilityProbe, EOS_EV_CHARGE_START_FIELD } from './eos-capabilities.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
 
 const TIMEOUT_MS = 8_000;
@@ -156,7 +156,7 @@ export function buildEosBatteries(cfg, opts = {}) {
  * @param {object} cfg
  * @returns {Array<object>}
  */
-export function buildEosElectricVehicles(cfg, { supportsDeadline = false, nowMs = Date.now() } = {}) {
+export function buildEosElectricVehicles(cfg, { supportsDeadline = false, supportsChargeStart = false, chargeStartAt = null, nowMs = Date.now() } = {}) {
   const opt = cfg?.optimizer || {};
   // Abfahrt + Ziel (ev-departure.js). Ist sie an, ersetzt ihr Ziel den
   // allgemeinen Ziel-SoC. Die Uhrzeit (min_soc_deadline_datetime, EOS 0.4)
@@ -177,6 +177,9 @@ export function buildEosElectricVehicles(cfg, { supportsDeadline = false, nowMs 
   // Immer mitsenden, wo EOS das Feld kennt — auch null: sonst bliebe eine
   // abgeschaltete oder vergangene Abfahrt in EOS stehen.
   if (supportsDeadline) ev.min_soc_deadline_datetime = departure.enabled ? departure.departureAt : null;
+  // Fruehester Ladestart (Vorplanung, ev-registration.js): nur wo EOS das Feld
+  // kennt — dort immer, auch null, damit kein alter Ladestart stehen bleibt.
+  if (supportsChargeStart) ev[EOS_EV_CHARGE_START_FIELD] = chargeStartAt || null;
   return [ev];
 }
 
@@ -459,6 +462,7 @@ export function createEosConfigSync(ctx) {
         selfConsumptionInterpolator: caps.selfConsumptionInterpolator === true,
         solutionNotify: caps.solutionNotify === true,
         startOnBoundary: caps.startOnBoundary === true,
+        evChargeStart: caps.evChargeStart === true,
       };
     }
     if (!caps.reachable) return;
@@ -479,37 +483,30 @@ export function createEosConfigSync(ctx) {
   };
 
   // Fahrzeug bei EOS anmelden? Nur, wenn es mitoptimiert werden soll UND
-  // DVhub einen frischen SoC hat. Sonst bricht 0.4 den ganzen Lauf ab ("Fresh
+  // DVhub einen Ladestand hat. Sonst bricht 0.4 den ganzen Lauf ab ("Fresh
   // SoC missing for ev11", prod 2026-09-23) und auch der Hausakku bleibt ohne Plan.
+  // Nur angesteckt (Standard) — ausser zur Vorplanung vor einer Ankunft, wenn
+  // EOS einen Ladestart kennt (ev-registration.js).
   // Ergebnis steht in state.optimizer.eosEv (Panel + /api/optimizer/status).
-  function decideEvRegistration(cfg) {
-    const wanted = cfg?.optimizer?.eosOptimizeEv === true;
-    const soc = wanted ? resolveEvSocPct(ctx) : null;
-    // Nur angesteckt planen (Standard): ohne Auto an der Wallbox wuerde EOS
-    // Energie fuers Auto einplanen und den Hausakku danach ausrichten (halten,
-    // aufsparen) — fuer ein Auto, das gar nicht laden kann. Beim Anstecken
-    // meldet die Steck-Wache (server.js) das Auto an und stoesst einen
-    // Neuplan an.
-    const onlyWhenPlugged = cfg?.optimizer?.evPlanOnlyWhenPlugged !== false;
-    const plugged = wanted ? resolveEvPlugged(ctx) : null;
-    let register = wanted;
-    let reason = wanted ? null : 'eosOptimizeEv=false';
-    if (wanted && onlyWhenPlugged && plugged !== true) {
-      register = false;
-      reason = plugged === false ? 'nicht angesteckt' : 'Steckzustand unbekannt (Wallbox/evcc nicht erreichbar)';
-    } else if (wanted && !soc) {
-      register = false;
-      reason = 'kein Ladestand des Autos (TeslaMate/evcc) — EOS 0.4 wuerde sonst gar nicht rechnen';
-    }
-    const decision = { wanted, register, reason, onlyWhenPlugged, plugged, socPct: soc?.pct ?? null, socSource: soc?.source ?? null };
+  function decideEvRegistration(cfg, caps) {
+    const decision = computeEvRegistration(ctx, cfg, { chargeStartSupported: caps?.evChargeStart === true });
     if (state) {
       state.optimizer = state.optimizer || {};
       const prev = state.optimizer.eosEv;
       state.optimizer.eosEv = decision;
-      if (pushLog && wanted && !register && (!prev || prev.register !== false)) pushLog(plugged === true || !onlyWhenPlugged ? 'eos_ev_no_soc' : 'eos_ev_not_plugged', { reason });
+      const { wanted, register, plugged, onlyWhenPlugged, reason } = decision;
+      if (pushLog && wanted && !register && (!prev || prev.register !== false)) pushLog(plugged === true || !onlyWhenPlugged ? 'eos_ev_no_soc' : 'eos_ev_not_plugged', { reason, preplanBlocked: decision.preplanBlocked });
+      if (pushLog && decision.mode === 'preplan' && prev?.mode !== 'preplan') {
+        pushLog('eos_ev_preplan', { arrivalAt: decision.arrivalAt, chargeStartAt: decision.chargeStartAt, socPct: decision.socPct, socSource: decision.socSource });
+      }
     }
     return decision;
   }
+  const evDevices = (cfg, caps, decision) => buildEosElectricVehicles(cfg, {
+    supportsDeadline: true,
+    supportsChargeStart: caps?.evChargeStart === true,
+    chargeStartAt: decision.chargeStartAt,
+  });
 
   async function sync() {
     const cfg = getCfg();
@@ -593,12 +590,12 @@ export function createEosConfigSync(ctx) {
     // charging from the grid overnight — the operator charges the EV from PV
     // during the day, and that load is already captured by the LoadImport
     // forecast. When ON, EOS models the EV as a separately-optimised device.
-    const evDecision = decideEvRegistration(cfg);
+    const evDecision = decideEvRegistration(cfg, caps);
     const optimizeEv = evDecision.register;
     const evTasks = optimizeEv
       ? [
           { section: 'devices/max_electric_vehicles', body: 1 },
-          { section: 'devices/electric_vehicles', body: asDevices(buildEosElectricVehicles(cfg, { supportsDeadline: true })) },
+          { section: 'devices/electric_vehicles', body: asDevices(evDevices(cfg, caps, evDecision)) },
         ]
       : [
           { section: 'devices/max_electric_vehicles', body: 0 },
@@ -888,10 +885,13 @@ export function createEosConfigSync(ctx) {
       publishCaps(caps);
       return { ok: false, skipped: 'eos_unsupported', reason: caps.reason };
     }
-    // Kein SoC: Fahrzeug nicht anfassen — der volle Abgleich hat es bereits
-    // abgemeldet, und ein Anmelden hier legte EOS lahm.
-    if (!decideEvRegistration(cfg).register) return { ok: true, skipped: 'no ev soc' };
-    const list = buildEosElectricVehicles(cfg, { supportsDeadline: true });
+    // Nicht angemeldet (kein SoC, nicht angesteckt): Fahrzeug nicht anfassen —
+    // der volle Abgleich hat es bereits abgemeldet, und ein Anmelden hier
+    // legte EOS lahm.
+    publishCaps(caps);
+    const decision = decideEvRegistration(cfg, caps);
+    if (!decision.register) return { ok: true, skipped: 'no ev soc' };
+    const list = evDevices(cfg, caps, decision);
     const body = devicesAsMap(list);
     const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/electric_vehicles', body);
     if (pushLog) {
@@ -900,6 +900,8 @@ export function createEosConfigSync(ctx) {
         minSocPct: list[0].min_soc_percentage,
         deadline: list[0].min_soc_deadline_datetime ?? null,
         deadlineSupported: true,
+        chargeStart: list[0][EOS_EV_CHARGE_START_FIELD] ?? null,
+        mode: decision.mode,
       });
     }
     return { ok: res.ok, error: res.error, ev: list[0] };

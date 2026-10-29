@@ -29,8 +29,9 @@ import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, grid
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
-import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
+import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, previewEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
+import { resolveEvArrival } from './services/optimizer/ev-arrival.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
 import { WALLBOX_TYPES } from './services/wallbox/types.js';
 import { loadCatalog as loadEvccVehicleCatalog, maskVehicleSettings, mergeVehicleSettings, validateVehicleSettings } from './services/vehicle-evcc/index.js';
@@ -5573,6 +5574,10 @@ export function createApiRoutes(ctx) {
       const lp = lps.find((l) => Number(l.id) === lpId) || lps[0] || null;
       const reg = ctx.state?.optimizer?.eosEv || null;
       const evSoc = resolveEvSocPct(ctx);
+      const plugged = resolveEvPlugged(ctx);
+      // Erwarteter Ladestand bei Ankunft (ev-arrival.js): angesteckt der echte,
+      // sonst live vom Auto oder geschaetzt — jeweils minus Heimweg.
+      const arrival = resolveEvArrival(ctx, getCfg(), { plugged, nowMs, departure: resolved });
       let plan = null;
       let planError = null;
       if (opt.eosOptimizeEv === true && ctx.inspector?.getEos) {
@@ -5614,10 +5619,18 @@ export function createApiRoutes(ctx) {
           time: opt.evDepartureTime || '07:00',
           days: Array.isArray(opt.evDepartureDays) ? opt.evDepartureDays : [1, 2, 3, 4, 5],
           once: opt.evDepartureOnce || '',
+          // Wochenplan (immer 7 Tage; alte Config: aus time + days abgeleitet).
+          weeklyPlan: effectiveWeeklyPlan(opt),
+          arrivalOnce: opt.evArrivalOnce || '',
+          commuteKm: Number(opt.evCommuteKm) || 0,
+          consumptionKwhPer100km: opt.evConsumptionKwhPer100km ?? 18,
           targetMode: opt.evTargetMode || 'percent',
           targetValue: opt.evTargetValue ?? 80,
           resolved,
-          deadlineSupported: ctx.state?.optimizer?.eos?.supported === true
+          deadlineSupported: ctx.state?.optimizer?.eos?.supported === true,
+          // EOS kennt einen fruehesten Ladestart → Vorplanung vor der Ankunft
+          // moeglich (ev-registration.js).
+          chargeStartSupported: ctx.state?.optimizer?.eos?.evChargeStart === true
         },
         vehicle: {
           title: (ctx.mainWallbox?.isDirect?.() ? ctx.mainWallbox.label() : null) || lp?.vehicleTitle || lp?.title || null,
@@ -5627,12 +5640,20 @@ export function createApiRoutes(ctx) {
             if (w && w.type !== 'evcc') return { connected: w.connected, charging: w.charging, chargePowerW: w.powerW, source: w.type };
             const d = ctx.chargerStatus?.fresh?.();
             if (d) return { connected: d.connected, charging: d.charging, chargePowerW: d.powerW, source: d.type };
-            return {
-              connected: lp ? lp.connected === true : null,
-              charging: lp ? lp.charging === true : null,
-              chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
-              source: lp ? 'evcc' : null,
-            };
+            if (lp) {
+              return {
+                connected: lp.connected === true,
+                charging: lp.charging === true,
+                chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
+                source: 'evcc',
+              };
+            }
+            // Ohne Wallbox-Anbindung und ohne evcc: „angesteckt“ aus den
+            // Fahrzeug-Quellen (MQTT, HTTP-Abruf, Home Assistant; ev-soc.js).
+            const viaVehicle = typeof plugged !== 'boolean' ? null
+              : (typeof ctx.vehicleMqtt?.getState?.()?.plugged === 'boolean' ? 'mqtt'
+                : ['http', 'homeassistant'].find((k) => typeof ctx.vehiclePull?.getState?.(k)?.plugged === 'boolean') || null);
+            return { connected: typeof plugged === 'boolean' ? plugged : null, charging: null, chargePowerW: null, source: viaVehicle };
           })(),
           // Dieselbe Quelle wie fuer EOS (ev-soc.js): TeslaMate, sonst evcc bei
           // angestecktem Auto.
@@ -5641,7 +5662,22 @@ export function createApiRoutes(ctx) {
           rangeKm: !ctx.mainWallbox?.isDirect?.() && Number.isFinite(Number(lp?.vehicleRangeKm)) ? Math.round(Number(lp.vehicleRangeKm)) : null,
           registered: reg ? reg.register === true : null,
           registrationReason: reg?.reason || null,
-          plugged: resolveEvPlugged(ctx)
+          // 'preplan' (vor der Ankunft, erwarteter Ladestand) | 'plugged' | 'always'
+          registrationMode: reg?.mode ?? null,
+          chargeStartAt: reg?.chargeStartAt ?? null,
+          preplanBlocked: reg?.preplanBlocked ?? null,
+          plugged
+        },
+        arrival: {
+          at: arrival.arrivalAt,
+          expectedSocPct: arrival.pct,
+          source: arrival.source,
+          basePct: arrival.basePct,
+          baseSource: arrival.baseSource,
+          baseAt: arrival.baseAt,
+          legs: arrival.legs,
+          deductKm: arrival.deductKm,
+          commuteKm: arrival.commuteKm
         },
         plan,
         planError,
@@ -5664,6 +5700,19 @@ export function createApiRoutes(ctx) {
       // mit der MQTT-Steuerung (cmd/ev/*).
       const { status, ...payload } = applyEvConfigPatch(ctx, { body, actor: actorContext(req) });
       return json(res, status, payload);
+    }
+    // Vorschau des Wochenplans beim Bearbeiten (2026-10-29): was DVhub aus dem
+    // Entwurf machte — naechste Abfahrt, aus welcher Zeile, Ziel. Gleiche
+    // Pruefung und Aufloesung wie beim Speichern (ev-departure.js
+    // previewEvDeparture), speichert nichts und braucht deshalb kein Pro.
+    // Body { departure: <wie POST /api/ev>, capacityWh? }.
+    if (url.pathname === '/api/ev/preview' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'object required' });
+      const out = previewEvDeparture(getCfg(), body.departure, { capacityWh: body.capacityWh });
+      return json(res, out.ok ? 200 : 400, out);
     }
 
     // „Sofort laden“: jetzt mit X kW laden, egal was EOS plant — auch wenn EOS
@@ -5737,11 +5786,26 @@ export function createApiRoutes(ctx) {
             time: raw.optimizer?.evDepartureTime || '07:00',
             days: Array.isArray(raw.optimizer?.evDepartureDays) ? raw.optimizer.evDepartureDays : [1, 2, 3, 4, 5],
             once: raw.optimizer?.evDepartureOnce || '',
+            weeklyPlan: effectiveWeeklyPlan(raw.optimizer || {}),
+            arrivalOnce: raw.optimizer?.evArrivalOnce || '',
+            commuteKm: Number(raw.optimizer?.evCommuteKm) || 0,
             targetMode: raw.optimizer?.evTargetMode || 'percent',
             targetValue: raw.optimizer?.evTargetValue ?? 80,
             consumptionKwhPer100km: raw.optimizer?.evConsumptionKwhPer100km ?? 18,
             resolved: resolveEvDeparture(getCfg()),
+            // Erwarteter Ladestand bei Ankunft (ev-arrival.js) und der Zustand
+            // der Abruf-Quellen (HTTP/Home Assistant, ohne Token) — damit man
+            // beim Einrichten sieht, ob der Ladestand ankommt.
+            arrival: (() => {
+              const a = resolveEvArrival(ctx, getCfg(), { plugged: resolveEvPlugged(ctx) });
+              return { at: a.arrivalAt, expectedSocPct: a.pct, source: a.source, basePct: a.basePct, baseSource: a.baseSource, baseAt: a.baseAt, legs: a.legs, deductKm: a.deductKm };
+            })(),
+            vehicleSources: Object.fromEntries(['http', 'homeassistant'].map((k) => {
+              const st = ctx.vehiclePull?.getState?.(k) || { configured: false };
+              return [k, { configured: st.configured === true, socPct: st.socPct ?? null, socAt: st.socAt ?? null, socStale: st.socStale === true, plugged: st.plugged ?? null, error: st.error || null, warning: st.warning || null }];
+            })),
             deadlineSupported: ctx.state?.optimizer?.eos?.supported === true,
+            chargeStartSupported: ctx.state?.optimizer?.eos?.evChargeStart === true,
             eosFlavor: ctx.state?.optimizer?.eos?.flavor || null
           }
         },

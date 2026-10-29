@@ -41,6 +41,9 @@ export const REDACTED_PATHS = Object.freeze([
   'vehicleEvcc.params',
   // OCPP-Zentrale: Passwort der Wallboxen (Sicherheitsprofil 1).
   'ocpp.password',
+  // E-Auto-Ladestand per HTTP-Abruf / Home Assistant (services/vehicle-pull).
+  'optimizer.evHttpToken',
+  'optimizer.evHaToken',
   // Preis vom Stromanbieter (services/tariff-provider): Tibber-Zugangsschlüssel,
   // LichtBlick-App-Login. Die E-Mail ist zugleich Kennung des Kundenkontos.
   'userEnergyPricing.provider.tibber.token',

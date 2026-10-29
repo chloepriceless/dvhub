@@ -982,3 +982,34 @@ describe('Phase 17 R-6: Free endpoints unaffected by license gate', () => {
     }
   }
 });
+
+// E-Auto-Ladestand per HTTP-Abruf / Home Assistant (2026-10-27): DVhub holt
+// die URL serverseitig ab. Im LAN per http erlaubt (HA steht dort), ins
+// Internet nur https; Link-Local (Cloud-Metadaten), 0.0.0.0, Zugangsdaten in
+// der URL und fremde Schemata nie.
+describe('E-Auto-Quellen: URL-Pruefung beim Speichern', () => {
+  for (const [field, url, status, error] of [
+    ['evHttpUrl', 'http://api.example.com/car', 400, 'invalid_ev_http_url'],
+    ['evHttpUrl', 'http://169.254.169.254/latest', 400, 'invalid_ev_http_url'],
+    ['evHaUrl', 'https://user:pw@ha.example.com', 400, 'invalid_ev_ha_url'],
+    ['evHaUrl', 'http://192.168.1.20:8123', 200, null],
+    ['evHttpUrl', 'https://api.example.com/car', 200, null],
+  ]) {
+    it(`${field} = ${url} → ${status}`, async () => {
+      const ctx = mockCtx();
+      const routes = createApiRoutes(ctx);
+      const res = mockRes();
+      await routes.handleRequest(
+        makeReq('POST', '/api/config', { config: { optimizer: { [field]: url } } }),
+        res,
+        new URL('http://localhost/api/config')
+      );
+      if (error) {
+        assert.equal(res._captured.status, 400);
+        assert.equal(JSON.parse(res._captured.body).error, error);
+      } else {
+        assert.notEqual(res._captured.status, 400, res._captured.body);
+      }
+    });
+  }
+});

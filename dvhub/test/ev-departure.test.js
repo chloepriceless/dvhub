@@ -113,7 +113,9 @@ describe('buildEosElectricVehicles mit Abfahrt', () => {
 describe('Eingaben pruefen (Integrationsseite + Leitstand-Kachel)', () => {
   test('nur uebergebene Felder landen im Patch', () => {
     const r = parseEvDeparturePatch({ time: '7:05', days: [5, 1, 1, 9, 3], targetValue: 80 });
-    assert.deepEqual(r, { ok: true, patch: { evDepartureTime: '07:05', evDepartureDays: [1, 3, 5], evTargetValue: 80 } });
+    // Alte Felder setzen den Wochenplan zurueck (evWeeklyPlan null) — dann
+    // gelten Uhrzeit + Tage wieder (ev-weekly-plan.test.js).
+    assert.deepEqual(r, { ok: true, patch: { evDepartureTime: '07:05', evDepartureDays: [1, 3, 5], evWeeklyPlan: null, evTargetValue: 80 } });
   });
   test('Fehler mit Praefix', () => {
     assert.equal(parseEvDeparturePatch({ time: '25:00' }, 'eos.departure').error, 'eos.departure.time must be HH:MM');

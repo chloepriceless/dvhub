@@ -184,8 +184,9 @@ import { createSchneiderAdapter } from './services/wallbox/schneider.js';
 import { createPhoenixAdapter } from './services/wallbox/phoenix.js';
 import { createWallboxAdapterCache } from './services/wallbox/adapter-cache.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
-import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
-import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
+import { createEvWatch } from './services/optimizer/ev-watch.js';
+import { createVehiclePull } from './services/vehicle-pull/index.js';
+import { resolveEvPlugged, createEvSocMemory } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
@@ -1439,6 +1440,10 @@ ctx.vehicleMqtt = createVehicleMqtt(mqttHub, ctx);
 // Ladestand über evccs Fahrzeug-Treiber (aus, bis eingerichtet; lädt evcc erst dann).
 ctx.vehicleEvcc = createVehicleEvcc(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub', getPlugged: () => resolveEvPlugged(ctx) });
 if (IS_RUNTIME_PROCESS) ctx.vehicleEvcc.start();
+// Ladestand/„angesteckt“ per HTTP-Endpunkt oder Home Assistant REST — fuer jede
+// Marke ohne evcc und ohne Broker (services/vehicle-pull, ev-soc.js).
+ctx.vehiclePull = createVehiclePull(ctx);
+if (IS_RUNTIME_PROCESS) ctx.vehiclePull.start();
 // Bezugspreis vom Stromanbieter (Tibber, LichtBlick) mit den Zugangsdaten des
 // Kunden — nur aktiv, wenn die Preislogik „Vom Stromanbieter“ gewählt ist.
 ctx.tariffProvider = createTariffProviderService(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub' });
@@ -1735,49 +1740,20 @@ ctx.inverterCurve = createInverterCurveCalibrator({
 const eosConfigSync = createEosConfigSync(ctx);
 ctx.eosConfigSync = eosConfigSync;
 
-// E-Auto-Abfahrt (ev-departure.js): minuetlich pruefen, ob sich Abfahrt oder
-// Ziel geaendert haben (Termin rueckt naeher und wird weitergeschoben, Config
-// gespeichert), und dann nur das Fahrzeug an EOS schicken. Der volle Abgleich
-// alle 15 min waere zu spaet: ein vergangener Termin heisst fuer EOS
+// E-Auto (ev-watch.js): minuetlich Ladestand merken, Steck-Wache,
+// Vorplanung vor einer Ankunft und Abfahrt/Ziel/Ladestart an EOS. Der volle
+// Abgleich alle 15 min waere zu spaet: ein vergangener Termin heisst fuer EOS
 // "sofort mit voller Leistung laden".
-//
-// Dazu die Steck-Wache (optimizer.evPlanOnlyWhenPlugged, Standard an): EOS
-// plant das Auto nur, solange es an der Wallbox steckt. Aendert sich der
-// (entprellte) Steck-Zustand, meldet der volle Abgleich das Auto an bzw. ab
-// und EOS rechnet sofort neu, statt bis zum naechsten Takt mit/ohne Auto
-// weiterzuplanen.
-let evDepartureLastKey = null;
-const evPlugTracker = createEvPlugTracker({ stableTicks: 2 });
-let evPlugSyncPending = 0;
-const evDepartureTimer = safeInterval('ev-departure.watch', async () => {
-  const cfg = ctx.getCfg();
-  if (cfg?.optimizer?.eosOptimizeEv !== true || !cfg?.optimizer?.eosProxy?.enabled) { evDepartureLastKey = null; return; }
-  if (cfg?.optimizer?.evPlanOnlyWhenPlugged !== false) {
-    const plug = evPlugTracker.update(resolveEvPlugged(ctx));
-    if (plug.changed) {
-      pushLog('ev_plug_change', { from: plug.from, plugged: plug.stable });
-      evPlugSyncPending = 5;
-    }
-    // Scheitert der Abgleich (EOS gerade weg), naechste Minute erneut —
-    // hoechstens 5x, dann trotzdem neu planen (ein dauerhafter Teilfehler
-    // darf den Neuplan nicht blockieren).
-    if (evPlugSyncPending > 0) {
-      const res = await eosConfigSync.sync();
-      evPlugSyncPending -= 1;
-      if (res?.ok === false && evPlugSyncPending > 0) return;
-      if (res?.ok === false) pushLog('ev_plug_sync_failed', { errors: res?.errors || null });
-      evPlugSyncPending = 0;
-      optimizer.requestEosReplan(evPlugTracker.stable ? 'ev_plugged' : 'ev_unplugged');
-      evDepartureLastKey = null;
-      return;
-    }
-  }
-  const d = resolveEvDeparture(cfg);
-  const key = `${d.enabled}|${d.departureAt}|${d.targetSocPct}`;
-  if (key === evDepartureLastKey) return;
-  const res = await eosConfigSync.syncEv();
-  if (res?.ok) evDepartureLastKey = key; // bei Fehler naechste Minute erneut
-}, 60_000);
+// Letzter bekannter Ladestand (ev-arrival.js): Schaetzbasis fuer den
+// erwarteten Ladestand bei Ankunft, auch nach dem Abstecken und Neustart.
+ctx.evSocMemory = createEvSocMemory({ filePath: path.join(DATA_DIR || __dirname, 'ev-soc-last.json') });
+const evWatch = createEvWatch({
+  ctx,
+  eosConfigSync,
+  requestReplan: (why) => optimizer.requestEosReplan(why),
+  pushLog,
+});
+const evDepartureTimer = safeInterval('ev-departure.watch', () => evWatch.tick(), 60_000);
 // Phase 22.1 (2026-05-24): bridges DVhub's 15-min ensemble PV forecast,
 // EnergyCharts spot cache and hour-of-day load model into EOS via the
 // *Import providers. ctx.eosConfigSync switches EOS to those providers; this
@@ -2790,6 +2766,7 @@ async function gracefulShutdown(signal) {
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
   safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
+  safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());
   safeSync('tariffProvider.stop', () => ctx.tariffProvider?.stop?.());
   safeSync('ocppServer.stop', () => { ctx.ocppServer?.stop?.(); });
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
