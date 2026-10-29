@@ -304,4 +304,33 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     assert.equal(calls, 2);
     assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
   });
+
+  it('Runde 3: Kapazitaet aendert sich, waehrend die Vorschau unterwegs ist → kWh passt zum %', async () => {
+    let calls = 0;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    // Erste Antwort: Server rechnete schon mit 60 kWh (50 %); sie kommt erst nach dem Takt an.
+    const Wx = load(async () => {
+      calls += 1;
+      if (calls === 1) await gate;
+      return { json: async () => ({ ok: true, resolved: { ...saved.resolved, targetSocPct: 50 }, capacityWh: 60000 }) };
+    });
+    const body = { current: { departure: { targetValue: 80 } } };
+    const host = fakeHost(body);
+    Wx.setSummary(host, saved);
+    body.current = { departure: { targetValue: 30 } };
+    Wx.refreshPreview(host);
+    await new Promise((r) => setTimeout(r, 400));
+    Wx.updateSaved(host, { ...saved, capacityWh: 60000 });
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+    assert.equal(calls, 1, 'Antwort passt zur gespeicherten Kapazitaet — kein erneuter Abruf');
+  });
+
+  it('Runde 3: Server meldet die Kapazitaet, mit der er gerechnet hat', () => {
+    const out = previewEvDeparture(cfg(), { weeklyPlan: CHRISTIN_PLAN }, { nowMs: WED_2300 });
+    assert.equal(out.capacityWh, 75000);
+    assert.equal(previewEvDeparture(cfg(), { weeklyPlan: CHRISTIN_PLAN }, { nowMs: WED_2300, capacityWh: 60000 }).capacityWh, 60000);
+  });
 });

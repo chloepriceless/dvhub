@@ -265,17 +265,21 @@
       host._evwSeq = seq;
       if (key === null) return;
       if (key === host._evwBaseline) { host._evwDraft = null; showDraft(host); return; }
-      // Kapazitaet, mit der der Server das Ziel-% rechnet: aus dem Entwurf,
-      // sonst die gespeicherte — fest zum Ergebnis gemerkt.
-      const cap = sentCapacity(key) != null ? sentCapacity(key) : (host._evwSaved || {}).capacityWh;
+      // Ersatz, falls die Antwort keine Kapazitaet nennt: die beim Senden gueltige.
+      const capAtSend = sentCapacity(key) != null ? sentCapacity(key) : (host._evwSaved || {}).capacityWh;
       apiFetch('/api/ev/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: key })
         .then(function (res) { return res.json().catch(function () { return { ok: false, error: 'HTTP ' + res.status }; }); })
         .then(function (body) {
           if (seq !== host._evwSeq) return;
           host._evwDraft = body && body.ok
-            ? { resolved: body.resolved, capacityWh: cap, capacityFromSaved: sentCapacity(key) == null }
+            // Kapazitaet, mit der der Server das Ziel-% gerechnet hat (aus der Antwort).
+            ? { resolved: body.resolved, capacityWh: Number(body.capacityWh) > 0 ? Number(body.capacityWh) : capAtSend, capacityFromSaved: sentCapacity(key) == null }
             : { previewError: (body && body.error) || 'unbekannter Fehler' };
           showDraft(host);
+          // Gespeicherte Kapazitaet hat sich unterwegs geaendert: neu holen.
+          const d = host._evwDraft;
+          const now = (host._evwSaved || {}).capacityWh;
+          if (d.capacityFromSaved && d.capacityWh && Number(now) > 0 && Number(now) !== d.capacityWh) refreshPreview(host);
         })
         .catch(function (err) {
           if (seq !== host._evwSeq) return;

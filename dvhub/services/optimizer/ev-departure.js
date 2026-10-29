@@ -450,7 +450,7 @@ export function parseEvDeparturePatch(d, prefix = 'departure') {
  * @param {object} departure  Eingabe wie `departure` bei POST /api/ev
  * @param {{ nowMs?: number, capacityWh?: number }} [opts]  capacityWh: Wert
  *   aus dem Formular (Ziel in kWh/km haengt davon ab)
- * @returns {{ ok: true, resolved: object } | { ok: false, error: string }}
+ * @returns {{ ok: true, resolved: object, capacityWh: number } | { ok: false, error: string }}
  */
 export function previewEvDeparture(cfg, departure, { nowMs = Date.now(), capacityWh } = {}) {
   const parsed = parseEvDeparturePatch(departure, 'departure');
@@ -458,7 +458,9 @@ export function previewEvDeparture(cfg, departure, { nowMs = Date.now(), capacit
   const optimizer = { ...(cfg?.optimizer || {}), ...parsed.patch };
   const cap = Number(capacityWh);
   if (Number.isFinite(cap) && cap > 0) optimizer.evCapacityWh = cap;
-  return { ok: true, resolved: resolveEvDeparture({ ...cfg, optimizer }, nowMs) };
+  // capacityWh: womit das Ziel-% gerechnet ist — die Oberflaeche zeigt „≈ kWh“
+  // genau damit, nicht mit einem inzwischen anderen Wert.
+  return { ok: true, resolved: resolveEvDeparture({ ...cfg, optimizer }, nowMs), capacityWh: Number(optimizer.evCapacityWh) || 50000 };
 }
 
 /**
