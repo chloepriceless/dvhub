@@ -13,6 +13,9 @@ dvhub/energy_state.json
 # must survive a `git checkout`-based self-update — keep all of it out of git.
 license_state.json
 dvhub/license_state.json
+# Handy-App: privater Schlüssel der Box + Briefkasten-Schlüssel der Geräte
+mobile-link.json
+mobile-link.json.tmp-*
 control_state.json
 dvhub/control_state.json
 # Peak Shaving: Merker einer aufgehobenen Akku-Sperre (gleiche DV_DATA_DIR-Gefahr).

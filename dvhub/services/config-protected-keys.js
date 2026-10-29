@@ -1,7 +1,8 @@
 // services/config-protected-keys.js — Einstellungen, die nicht über das
 // allgemeine Speichern der Konfiguration geändert werden.
 //
-// installerPortal.* (Fernzugang + Freigaben), datenspende.* (Einwilligung) und
+// installerPortal.* (Fernzugang + Freigaben), datenspende.* (Einwilligung),
+// mobileLink.* (Handy-App, an die Schlüsseldatei der Box gebunden) und
 // ortsnetz.* (Einwilligung) haben eigene Wege (/api/installer/settings,
 // /api/datenspende/*, /api/ortsnetz/settings). Die Einstellungsseite schickt
 // beim Speichern ihren beim Laden geklonten Entwurf der ganzen Konfiguration —
@@ -19,7 +20,7 @@
 //                                      (eHive-Umzug 2026-10-03: Datenspende
 //                                      und Ortsnetz standen danach auf aus)
 
-export const BOX_BOUND_KEYS = Object.freeze(['installerPortal', 'datenspende']);
+export const BOX_BOUND_KEYS = Object.freeze(['installerPortal', 'datenspende', 'mobileLink']);
 export const OWN_ROUTE_KEYS = Object.freeze([...BOX_BOUND_KEYS, 'ortsnetz']);
 
 const clone = (v) => JSON.parse(JSON.stringify(v));

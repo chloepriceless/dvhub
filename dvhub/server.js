@@ -124,6 +124,8 @@ import { createInstallerPortal } from './services/installer-portal.js';
 // pollt das Online-Portal, Kommandos (Tunnel/Updates) kommen über denselben
 // Strang zurück.
 import { createInstallerPortalClient } from './services/installer-portal-client.js';
+import { createMobileLink, LAN_WS_PATH as MOBILE_LINK_WS_PATH } from './services/mobile-link/agent.js';
+import { WebSocketServer as MobileLinkWss } from 'ws';
 // Datenspende (COMSYS, RWTH Aachen): Opt-in-Spende von Leistungs-Zeitreihen
 // an das Forschungsprojekt — ausgehend, ab Werk aus.
 import { createDatenspende } from './services/datenspende/index.js';
@@ -1509,6 +1511,12 @@ ctx.installerPortalClient = createInstallerPortalClient(ctx, {
   pollIntervalMs: Number(process.env.DV_INSTALLER_POLL_MS) || undefined,
 });
 if (IS_WEB_PROCESS) ctx.installerPortalClient.startPolling();
+// Handy-App (2026-10-22): Kopplung per QR-Code, Ende zu Ende verschlüsselt —
+// im Heimnetz über den eigenen Webserver (Upgrade auf MOBILE_LINK_WS_PATH),
+// unterwegs ausgehend über das eingestellte Relay. Ab Werk aus
+// (mobileLink.enabled); nur im Web-Prozess (Loopback-API, Status-Cache).
+// Gestartet wird erst unten, wenn ctx.getDataDir steht (Schlüssel-Sidecar).
+ctx.mobileLink = createMobileLink(ctx);
 // Datenspende: immer konstruiert (Routen für Einrichtung/Status), gesammelt und
 // gesendet wird im Runtime-Prozess — nur dort sind Geräte-/evcc-Werte live.
 // Ohne Verknüpfung und Einwilligung (datenspende.enabled) passiert nichts.
@@ -1885,6 +1893,9 @@ ctx.getAppVersion = () => APP_VERSION;
 ctx.getTransportType = () => transport.type;
 ctx.getAppDir = () => __dirname;
 ctx.getDataDir = () => DATA_DIR || __dirname;
+if (IS_WEB_PROCESS) {
+  try { ctx.mobileLink.start(); } catch (e) { pushLog('mobile_link_start_error', { error: e?.message || String(e) }); }
+}
 ctx.getRepoRoot = () => path.resolve(__dirname, '..');
 ctx.scanTransport = scanTransport;
 ctx.fetchEpexDay = () => epex.fetchEpexDay();
@@ -2385,6 +2396,23 @@ if (IS_WEB_PROCESS && RUNTIME_WORKER_ENABLED) {
   runtimeWorker = startDedicatedRuntimeWorker();
 }
 
+// WebSocket der Handy-App im Heimnetz. Kein Token nötig: Wer hier etwas
+// bekommt, entscheidet allein die Kryptografie (Ticket + Signatur bzw.
+// Kopplungs-Token aus dem QR-Code, siehe services/mobile-link/relay-core.js).
+const mobileLinkWss = new MobileLinkWss({ noServer: true, maxPayload: 512 * 1024 });
+function onMobileLinkUpgrade(req, socket, head) {
+  let pathname = '';
+  try { pathname = new URL(req.url, 'http://upgrade.invalid').pathname; } catch { /* kaputte URL */ }
+  if (pathname !== MOBILE_LINK_WS_PATH || !ctx.mobileLink?.isEnabled?.()) {
+    socket.destroy();
+    return;
+  }
+  mobileLinkWss.handleUpgrade(req, socket, head, (ws) => {
+    ctx.mobileLink.attachLan(ws, { remote: req.socket.remoteAddress || null });
+  });
+}
+web.on('upgrade', onMobileLinkUpgrade);
+
 if (IS_WEB_PROCESS) {
   web.listen(cfg.httpPort, () => {
     console.log(`Web server listening on :${cfg.httpPort}`);
@@ -2411,6 +2439,7 @@ if (IS_WEB_PROCESS) {
         ciphers: TLS_ALLOWED_CIPHERS,
         honorCipherOrder: true
       }, web.listeners('request')[0]);
+      webTls.on('upgrade', onMobileLinkUpgrade);
       webTls.listen(httpsPort, () => {
         console.log(`HTTPS server listening on :${httpsPort}`);
       });
@@ -2869,6 +2898,7 @@ async function gracefulShutdown(signal) {
   safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());
   safeSync('tariffProvider.stop', () => ctx.tariffProvider?.stop?.());
   safeSync('ocppServer.stop', () => { ctx.ocppServer?.stop?.(); });
+  safeSync('mobileLink.stop', () => { ctx.mobileLink?.stop?.(); mobileLinkWss.close(); });
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
   safeSync('mypvRegulator.stop', () => { mypvRegulator.stop?.().catch?.(() => {}); });

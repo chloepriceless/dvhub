@@ -12,7 +12,7 @@
   <meta name="theme-color" content="#030610">
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
-  <link rel="stylesheet" href="/settings.css?v=20260629-install-btn-conditional">
+  <link rel="stylesheet" href="/settings.css?v=20261022-handy2">
   <link rel="stylesheet" href="/settings-redesign.css?v=20261006-links">
   <script src="/theme.js"></script>
 </head>
@@ -420,6 +420,68 @@
               </div>
               <p class="svc-meta" id="supportTunnelResult"></p>
               <p class="svc-meta"><strong>Notfall:</strong> Startet DVhub selbst nicht mehr, kann der Tunnel direkt an der Box ge&ouml;ffnet werden &mdash; per SSH/Konsole anmelden und ausf&uuml;hren: <code>sudo bash /opt/dvhub/dvhub-support-tunnel.sh</code> (Anleitung: <code>docs/NOTFALL-FERNZUGANG.md</code>).</p>
+            </div>
+
+            <!-- Handy-App (Kopplung per QR-Code, 2026-10-22) -->
+            <div class="config-group" data-accent="teal">
+              <div class="config-group-kicker">Handy-App</div>
+              <p class="svc-meta">Koppelt die DVhub-App auf deinem iPhone mit dieser Anlage. Die Verbindung ist <strong>Ende zu Ende verschl&uuml;sselt</strong>: Die Schl&uuml;ssel tauschen Anlage und Handy nur &uuml;ber den QR-Code aus. Im Heimnetz spricht das Handy direkt mit der Anlage, unterwegs &uuml;ber das Relay &mdash; das leitet nur verschl&uuml;sselte Daten weiter und kann sie nicht lesen. Kein Portforwarding n&ouml;tig.</p>
+              <div class="config-row">
+                <span class="config-row-label">Handy-App erlauben</span>
+                <div class="config-row-stack">
+                  <input id="mobileLinkEnabled" type="checkbox" />
+                  <small class="config-row-stack-small">Ab Werk aus. Ausschalten trennt alle Handys sofort; die Kopplungen bleiben gespeichert.</small>
+                </div>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Name der Anlage in der App</span>
+                <input id="mobileLinkName" class="config-input" maxlength="40" placeholder="DVhub" autocomplete="off" />
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Unterwegs &uuml;ber Relay</span>
+                <div class="config-row-stack">
+                  <input id="mobileLinkUseRelay" type="checkbox" />
+                  <small class="config-row-stack-small">Ohne Relay funktioniert die App nur im Heimnetz.</small>
+                </div>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Relay-Adresse</span>
+                <div class="config-row-stack">
+                  <input id="mobileLinkRelayUrl" class="config-input" placeholder="relay.dvhub.de" autocomplete="url" spellcheck="false" />
+                  <small class="config-row-stack-small">Voreingestellt ist <code>relay.dvhub.de</code>. Ein eigenes Relay (Anleitung: <code>relay/README.md</code>) einfach als Adresse eintragen, z.&nbsp;B. <code>relay.example.org</code>. Leer = Voreinstellung.</small>
+                </div>
+              </div>
+              <div class="svc-actions-row">
+                <button id="mobileLinkSaveBtn" class="btn btn-ghost btn-small" type="button">Einstellungen speichern</button>
+              </div>
+              <div class="config-row">
+                <span class="config-row-label">Verbindung</span>
+                <span class="config-row-value api-row-value" id="mobileLinkState">&mdash;</span>
+              </div>
+              <div class="svc-actions-row">
+                <button id="mobileLinkPairBtn" class="btn btn-primary btn-small" type="button">Handy koppeln</button>
+                <button id="mobileLinkCancelBtn" class="btn btn-ghost btn-small" type="button" hidden>Kopplung abbrechen</button>
+              </div>
+              <div id="mobileLinkPairBox" class="mobile-link-pair" hidden>
+                <p class="svc-meta" id="mobileLinkPairHint"></p>
+                <div id="mobileLinkQr" class="mobile-link-qr" role="img" aria-label="QR-Code zum Koppeln"></div>
+                <div id="mobileLinkApproveBox" hidden>
+                  <p class="svc-meta" id="mobileLinkCandidate"></p>
+                  <div class="config-row">
+                    <span class="config-row-label">Darf das Handy</span>
+                    <select id="mobileLinkPerms" class="config-select">
+                      <option value="read" selected>nur anzeigen</option>
+                      <option value="control">anzeigen und steuern (Not-Halt, Sollwerte und Grenzen des Speichers, Auto-Laden, Regeln)</option>
+                    </select>
+                  </div>
+                  <div class="svc-actions-row">
+                    <button id="mobileLinkApproveBtn" class="btn btn-primary btn-small" type="button">Freigeben</button>
+                    <button id="mobileLinkDenyBtn" class="btn btn-danger btn-small" type="button">Ablehnen</button>
+                  </div>
+                </div>
+              </div>
+              <div id="mobileLinkDevices" class="installer-portal-list"></div>
+              <p class="svc-meta" id="mobileLinkResult"></p>
             </div>
 
             <!-- Installateurs-Portal (T-INSTALLER-PORTAL) -->
@@ -957,8 +1019,9 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/settings.js?v=20261014-dreiwege"></script>
+  <script src="/settings.js?v=20261022-handy"></script>
   <script src="/tools.js?v=20261014-fernsupport"></script>
+  <script src="/mobile-link.js?v=20261022-handy2"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>
 </html>

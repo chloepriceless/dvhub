@@ -55,3 +55,18 @@ test('Geräte-Tausch: was die Datei nicht enthält, bleibt wie auf der Box', () 
   assert.deepEqual(applyCarriedKeys(incoming, carried), []);
   assert.deepEqual(incoming.datenspende, { enabled: false });
 });
+
+// Handy-App (Codex R5): Schalter und Relay hängen an der Schlüsseldatei dieser
+// Box — normales Speichern und „nur Einstellungen“ lassen sie, wie die Box sie hat.
+test('mobileLink bleibt beim Speichern und beim Import „nur Einstellungen“', () => {
+  const cur = { mobileLink: { enabled: true, relayUrl: 'wss://relay.dvhub.de/v1/ws' } };
+  const save = { mobileLink: { enabled: false } };
+  protectOwnRouteKeys(save, cur);
+  assert.deepEqual(save.mobileLink, cur.mobileLink);
+  const imp = { mobileLink: { enabled: false, relayUrl: 'wss://alt.example.org/v1/ws' } };
+  const carried = protectOwnRouteKeys(imp, cur, { isImport: true });
+  assert.deepEqual(imp.mobileLink, cur.mobileLink);
+  // Geräte-Tausch: die Werte der Datei ziehen mit um.
+  applyCarriedKeys(imp, carried);
+  assert.equal(imp.mobileLink.relayUrl, 'wss://alt.example.org/v1/ws');
+});
