@@ -1960,6 +1960,16 @@ export function createApiRoutes(ctx) {
   // Plan 08-04 Task 1 Step 8 & Task 2 Step 3: RFC1918 + loopback check —
   // used by /api/meter/scan to refuse SSRF to internet hosts and by the
   // heartbeat guard (via isAllowedHeartbeatUrl) to refuse internal pivots.
+  /**
+   * Zustand des EOS-Rechendienstes (Fernbetrieb) für die Oberfläche — ohne
+   * Token und Lizenz (state.optimizer.eosRemote enthält beides nie). null im
+   * lokalen Betrieb.
+   */
+  function eosRemoteSummary() {
+    if (resolveEosProxy(getCfg()).mode !== 'remote') return null;
+    return state.optimizer?.eosRemote || { mode: 'remote', phase: 'starting' };
+  }
+
   function isRfc1918OrLoopback(host) {
     const h = String(host || '').toLowerCase();
     if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return true;
@@ -5186,6 +5196,8 @@ export function createApiRoutes(ctx) {
         primarySource,
         active: enabled && (primarySource === 'eos' || primarySource === 'best'),
         url: (opt.eosProxy && opt.eosProxy.url) || '',
+        mode: resolveEosProxy(getCfg()).mode,
+        remote: eosRemoteSummary(),
         reachable,
         monitor: ctx.eosMonitor?.status?.() ?? null,
         eosdashUrl: '/eosdash/'
@@ -6282,7 +6294,7 @@ export function createApiRoutes(ctx) {
     // config writes; the EOS provider is configured INSIDE EOSdash.
     if (url.pathname === '/api/forecast/providers/eos-akkudoktor/probe' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
-      const eosUrl = ctx.getRawCfg?.()?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+      const eosUrl = resolveEosProxy(getCfg()).url;
       try {
         const reqUrl2 = new URL('/v1/prediction/series?key=pvforecast_ac_power', eosUrl);
         const fetchRes = await fetch(reqUrl2.toString(), { signal: AbortSignal.timeout(8000) });
@@ -6459,7 +6471,7 @@ export function createApiRoutes(ctx) {
         // Eingeschaltet, aber gerade keine Antwort (rechnet, überlastet, startet
         // neu) ist etwas anderes als „aus“ — die Anzeige sagte bisher „EOS
         // deaktiviert“, obwohl EOS lief (eHive 2026-10-06, gedrosselter Prozessor).
-        return json(res, 200, { ok: true, available: status.reachable, reason: status.reachable ? null : 'eos_not_answering', output: null, eos: { status: status.status } });
+        return json(res, 200, { ok: true, available: status.reachable, reason: status.reachable ? null : 'eos_not_answering', output: null, eos: { status: status.status }, remote: eosRemoteSummary() });
       }
       const maxRows = Math.min(Math.max(Number(url.searchParams.get('rows')) || 300, 1), 8 * 24 * 4);
       const rows = Array.isArray(plan.data.rows) ? plan.data.rows : [];
@@ -6471,7 +6483,29 @@ export function createApiRoutes(ctx) {
         output,
         plan: { fetchedAt: new Date(plan.at).toISOString(), current: plan.current },
         eos: { status: status.status, push: status.push },
+        remote: eosRemoteSummary(),
       });
+    }
+
+    // EOS-Rechendienst (Fernbetrieb): Diagnosepaket des letzten Laufs für den
+    // Support herunterladen (nur wenn remote.debugBundle an war; der Dienst
+    // löscht es nach 24 h).
+    if (url.pathname === '/api/eos/remote/debug' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.eosRemote?.fetchDebugBundle) return json(res, 404, { ok: false, error: 'eos_remote_off' });
+      let b;
+      try { b = await ctx.eosRemote.fetchDebugBundle(); } catch { b = null; }
+      if (!b) return json(res, 404, { ok: false, error: 'no_debug_bundle' });
+      const body = JSON.stringify(b, null, 2);
+      const safeId = String(b.jobId).replace(/[^A-Za-z0-9_-]/g, '');
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': `attachment; filename="eos-diagnose-${safeId}.json"`,
+        'Cache-Control': 'no-store',
+        'Content-Length': Buffer.byteLength(body),
+      });
+      res.end(body);
+      return;
     }
 
     // Phase 21 (operator request 2026-05-23): EOS Konfigurations-Sync.
@@ -6480,6 +6514,9 @@ export function createApiRoutes(ctx) {
     // Operator die meisten EOS-Parameter nicht doppelt pflegen.
     if (url.pathname === '/api/eos/sync-from-dvhub' && req.method === 'POST') {
       const cfg = getCfg();
+      // Fernbetrieb: es gibt kein EOS zum Beschreiben; der Abgleich
+      // (eos-config-sync) geht ohnehin mit jedem Auftrag mit.
+      if (resolveEosProxy(cfg).mode === 'remote') return json(res, 409, { ok: false, error: 'eos_remote_mode' });
       const sma = cfg.schedule?.smallMarketAutomation || {};
       const battCapKwh = resolvePlantBattery(cfg).capacityKwh ?? (Number(sma.batteryCapacityKwh) || null);
       // NB: sma.minSocPct is deliberately NOT used here — EOS min_soc uses the

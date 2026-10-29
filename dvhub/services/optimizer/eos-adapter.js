@@ -36,11 +36,26 @@ const QUARTER_HOUR_MS = 15 * 60_000;
 export function resolveEosProxy(cfg = {}) {
   const p = cfg?.optimizer?.eosProxy || {};
   const timeoutMs = Number(p.timeoutMs);
+  const localUrl = p.url || 'http://127.0.0.1:8503';
+  // Fernbetrieb (eos-remote.js): alle EOS-Module sprechen mit der lokalen
+  // Fassade. Läuft sie (noch) nicht, zeigt die Adresse ins Leere — nie auf das
+  // lokale EOS, sonst gingen Abgleich und Prognosen an die falsche Stelle.
+  const mode = p.mode === 'remote' ? 'remote' : 'local';
   return {
     enabled: p.enabled === true,
-    url: p.url || 'http://127.0.0.1:8503',
+    mode,
+    url: mode === 'remote' ? (remoteFacadeUrl || EOS_REMOTE_FACADE_UNAVAILABLE) : localUrl,
+    localUrl,
     timeoutMs: timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS
   };
+}
+
+// Port 9 (discard): verbindet nie — EOS gilt dann als nicht erreichbar.
+export const EOS_REMOTE_FACADE_UNAVAILABLE = 'http://127.0.0.1:9';
+let remoteFacadeUrl = null;
+/** Adresse der laufenden EOS-Fassade (Fernbetrieb) setzen oder löschen. */
+export function setEosRemoteFacadeUrl(url) {
+  remoteFacadeUrl = url || null;
 }
 
 /**

@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css?v=20260708-daylight">
-  <link rel="stylesheet" href="/index.css?v=20261006-fc">
+  <link rel="stylesheet" href="/index.css?v=20261028-eosremote">
   <link rel="stylesheet" href="/ev-tile.css?v=20261027-wochenplan">
   <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261027">
   <script src="/theme.js"></script>
@@ -513,6 +513,15 @@
           <canvas id="eosPlanChart"></canvas>
         </div>
         <div class="chart-day-summary" id="eosPlanKpis"></div>
+        <!-- EOS-Rechendienst (Fernbetrieb, optimizer.eosProxy.mode=remote): kein
+             EOSdash — stattdessen letzter Lauf, Status und EOS-Hinweise aus der
+             Diagnose des Dienstes. Gefüllt von leitstand-charts.js#renderEosRemoteInfo. -->
+        <div class="eos-remote-info" id="eosRemoteInfo" hidden>
+          <div class="eos-remote-title">EOS-Rechendienst</div>
+          <div class="eos-remote-status" id="eosRemoteStatus"></div>
+          <div class="eos-remote-run" id="eosRemoteRun"></div>
+          <ul class="eos-remote-warnings" id="eosRemoteWarnings"></ul>
+        </div>
       </div>
 
       <!-- Optimizer plan chart -->

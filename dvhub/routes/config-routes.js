@@ -7,6 +7,7 @@
 // `false` zurück, wenn die Anfrage keine dieser Routen ist.
 
 import { isAllowedVehicleUrl } from '../services/vehicle-pull/index.js';
+import { isAllowedRemoteEndpoint } from '../services/optimizer/eos-remote.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, isRedactedPath } from '../config-redaction.js';
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from '../services/config-secrets-crypto.js';
 import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS } from '../services/config-protected-keys.js';
@@ -241,6 +242,13 @@ export function createConfigRoutes(deps) {
       for (const [key, error] of [['evHttpUrl', 'invalid_ev_http_url'], ['evHaUrl', 'invalid_ev_ha_url']]) {
         const candidate = body.config?.optimizer?.[key];
         if (candidate && !isAllowedVehicleUrl(candidate)) return json(res, 400, { ok: false, error });
+      }
+      // EOS-Rechendienst (Fernbetrieb): DVhub schickt dorthin Lizenzschlüssel
+      // und Prognosen — https zu jedem Host, http nur im eigenen Netz, keine
+      // Zugangsdaten in der URL (eos-remote.js isAllowedRemoteEndpoint).
+      const candidateRemoteEndpoint = body.config?.optimizer?.eosProxy?.remote?.endpoint;
+      if (candidateRemoteEndpoint && !isAllowedRemoteEndpoint(candidateRemoteEndpoint)) {
+        return json(res, 400, { ok: false, error: 'invalid_eos_remote_endpoint' });
       }
       // Plan 08-06 Task 1 Step 3: legal-gate flip detection.
       // allowGridCharge / allowGridDischarge are EEG/§14a-relevant. ENABLING

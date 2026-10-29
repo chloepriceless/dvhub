@@ -925,6 +925,16 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   font-family:var(--f-mono); font-size:10px; color:var(--text-2);
   display:flex; gap:14px; flex-wrap:wrap;
 }
+/* EOS-Rechendienst (Fernbetrieb) unter dem EOS-Fahrplan */
+.eos-remote-info {
+  margin-top:8px; padding-top:6px; border-top:1px solid var(--hairline);
+  font-family:var(--f-mono); font-size:10px; color:var(--text-2);
+}
+.eos-remote-title { font-weight:600; color:var(--text); margin-bottom:2px; }
+.eos-remote-status.is-warn { color:var(--warn); }
+.eos-remote-status.is-error { color:var(--danger); }
+.eos-remote-warnings { margin:4px 0 0; padding-left:14px; color:var(--text-dim); }
+.eos-remote-warnings:empty { display:none; }
 
 /* PV forecast card (restored — pre-existing regression) */
 #pv-forecast-card { min-height:200px; }

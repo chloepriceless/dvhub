@@ -44,6 +44,8 @@ const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 export function eosRestartability(cfg, { inContainer = false, containerHelper = false } = {}) {
   const proxy = resolveEosProxy(cfg);
   if (!proxy.enabled) return { ok: false, reason: 'eos_off' };
+  // Fernbetrieb: die Fassade läuft im DVhub-Prozess, das EOS beim Dienst.
+  if (proxy.mode === 'remote') return { ok: false, reason: 'remote' };
   if (inContainer && !containerHelper) return { ok: false, reason: 'container' };
   let host = '';
   try { host = new URL(proxy.url).hostname.toLowerCase(); } catch { /* ungültige URL → nicht lokal */ }

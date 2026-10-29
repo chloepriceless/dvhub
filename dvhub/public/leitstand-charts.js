@@ -1234,7 +1234,72 @@
       return (res && res.ok) ? await res.json() : null;
     } catch { return null; }
   }
+  // EOS-Rechendienst (Fernbetrieb): Status, letzter Lauf und EOS-Hinweise aus
+  // eos.remote (/api/eos/plan). Nur textContent — Texte stammen vom Dienst.
+  var EOS_REMOTE_ERRORS = {
+    service_unreachable: 'Rechendienst nicht erreichbar',
+    service_timeout: 'kein Ergebnis innerhalb der Wartezeit',
+    service_error: 'Fehler beim Rechendienst',
+    quota_exceeded: 'Kontingent für diese Stunde erschöpft',
+    licence_missing: 'keine aktive, an diese Box gebundene Pro-Lizenz',
+    licence_rejected: 'Lizenz vom Rechendienst abgelehnt',
+    enroll_rejected: 'Anmeldung beim Rechendienst abgelehnt',
+    no_endpoint: 'keine Adresse des Rechendienstes eingestellt',
+    no_solution: 'EOS fand keine Lösung',
+    invalid_payload: 'Auftrag vom Rechendienst abgelehnt',
+    deadline_passed: 'Auftrag kam nicht rechtzeitig an die Reihe'
+  };
+  var EOS_REMOTE_PHASES = {
+    idle: 'bereit', starting: 'startet', enrolling: 'meldet sich an', submitting: 'sendet Auftrag',
+    queued: 'Auftrag wartet', running: 'rechnet', receiving: 'holt Ergebnis'
+  };
+  function eosRemoteTime(iso) {
+    var d = iso ? new Date(iso) : null;
+    return d && !isNaN(d.getTime()) ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '—';
+  }
+  function renderEosRemoteInfo(remote) {
+    var box = document.getElementById('eosRemoteInfo');
+    if (!box) return;
+    if (!remote) { box.hidden = true; return; }
+    box.hidden = false;
+    var statusEl = document.getElementById('eosRemoteStatus');
+    var runEl = document.getElementById('eosRemoteRun');
+    var warnEl = document.getElementById('eosRemoteWarnings');
+    var err = remote.lastError;
+    var status = 'Status: ' + (EOS_REMOTE_PHASES[remote.phase] || remote.phase || '—');
+    if (remote.phase === 'queued' && remote.queuePosition) status += ' (Platz ' + remote.queuePosition + ')';
+    var cls = '';
+    if (err && remote.fallback === 'local') {
+      status = 'Rechendienst: ' + (EOS_REMOTE_ERRORS[err.code] || err.code) + ' — diesmal lokal gerechnet';
+      cls = 'is-warn';
+    } else if (err) {
+      status = '⚠ ' + (EOS_REMOTE_ERRORS[err.code] || err.code) + ' (' + eosRemoteTime(err.at) + ')'
+        + (remote.usingLastPlan ? ' — letzter Plan bleibt aktiv' : ' — noch kein Plan');
+      cls = remote.usingLastPlan ? 'is-warn' : 'is-error';
+    }
+    if (statusEl) { statusEl.textContent = status; statusEl.className = 'eos-remote-status' + (cls ? ' ' + cls : ''); }
+    var d = remote.diagnostics || {};
+    var parts = ['Letzter Lauf: ' + eosRemoteTime(remote.lastOkAt)];
+    var ms = Number(d.runMs || remote.lastRunMs);
+    if (ms > 0) parts.push(Math.round(ms / 1000) + ' s');
+    if (d.workers) parts.push(d.workers + ' Rechenprozesse');
+    if (d.eosVersion || remote.eosVersion) parts.push('EOS ' + (d.eosVersion || remote.eosVersion));
+    var net = d.costs && typeof d.costs.netAmt === 'number' ? d.costs.netAmt : null;
+    if (net !== null) parts.push('Saldo ' + net.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €');
+    if (runEl) runEl.textContent = parts.join(' · ');
+    if (warnEl) {
+      while (warnEl.firstChild) warnEl.removeChild(warnEl.firstChild);
+      var ws = Array.isArray(d.warnings) ? d.warnings.slice(0, 5) : [];
+      for (var i = 0; i < ws.length; i++) {
+        var li = document.createElement('li');
+        li.textContent = 'EOS: ' + String(ws[i]);
+        warnEl.appendChild(li);
+      }
+    }
+  }
+
   function renderEosPlanChart(eos) {
+    renderEosRemoteInfo(eos && eos.remote ? eos.remote : null);
     var canvas = document.getElementById('eosPlanChart');
     var skeleton = document.getElementById('eosPlanSkeleton');
     var subtitle = document.getElementById('eosPlanSubtitle');
