@@ -23,6 +23,7 @@ import http from 'node:http';
 
 import { createEosCapabilityProbe } from './eos-capabilities.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
+import { requestHostname } from '../host-address.js';
 
 const TIMEOUT_MS = 8_000;
 const BATTERY_DEVICE_ID = 'battery1';   // EOS default — mirrors what EOS bootstraps.
@@ -386,7 +387,7 @@ function eosHttpRequest(baseUrl, method, path, body) {
       const headers = {};
       if (body !== undefined) headers['Content-Type'] = 'application/json';
       const req = http.request({
-        hostname: url.hostname,
+        hostname: requestHostname(url.hostname),
         port: url.port || 8503,
         path: url.pathname,
         method,

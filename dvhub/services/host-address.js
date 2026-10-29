@@ -87,3 +87,13 @@ export function isInternalHost(host) {
 export function isPrivateOrLoopbackHost(host) {
   return ['loopback', 'private'].includes(classifyHost(host));
 }
+
+/**
+ * Hostname für http.request(): URL.hostname liefert IPv6 in Klammern
+ * („[::1]“), http.request() erwartet die Adresse ohne — mit Klammern sucht es
+ * einen DNS-Namen (ENOTFOUND).
+ */
+export function requestHostname(hostname) {
+  const h = String(hostname ?? '');
+  return h.startsWith('[') && h.endsWith(']') ? h.slice(1, -1) : h;
+}

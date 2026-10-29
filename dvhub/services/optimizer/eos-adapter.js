@@ -7,6 +7,7 @@ import { classifyEosSlotAction } from '../../eos-zeitplan-map.js';
 import { getPowerLimits } from '../power-limits.js';
 // Zweite GX am selben Anschluss: Plan-Umrechnung mit der Leistung beider Akkus.
 import { planningCfg } from '../multi-gx/planning.js';
+import { requestHostname } from '../host-address.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -76,7 +77,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         }
 
         const req = http.request({
-          hostname: url.hostname,
+          hostname: requestHostname(url.hostname),
           port: url.port || 8503,
           // Phase 21 hotfix (2026-05-23): include url.search so
           // `?force_enable=true` reaches EOS. Without this the import
