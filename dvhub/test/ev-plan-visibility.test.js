@@ -346,4 +346,26 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     assert.equal(calls, 1);
     assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
   });
+
+  it('Runde 5: Antwort mit alter Kapazitaet, waehrend der Takt die neue brachte → einmal neu holen', async () => {
+    let calls = 0;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const Wx = load(async () => {
+      calls += 1;
+      if (calls === 1) { await gate; return { json: async () => ({ ok: true, resolved: { ...saved.resolved, targetSocPct: 40 }, capacityWh: 75000 }) }; }
+      return { json: async () => ({ ok: true, resolved: { ...saved.resolved, targetSocPct: 50 }, capacityWh: 60000 }) };
+    });
+    const body = { current: { departure: { targetValue: 80 } } };
+    const host = fakeHost(body);
+    Wx.setSummary(host, saved);
+    body.current = { departure: { targetValue: 30 } };
+    Wx.refreshPreview(host);
+    await new Promise((r) => setTimeout(r, 400));
+    Wx.updateSaved(host, { ...saved, capacityWh: 60000 });
+    release();
+    await new Promise((r) => setTimeout(r, 600));
+    assert.equal(calls, 2);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+  });
 });
