@@ -55,10 +55,11 @@ verweist hierher.
   still mit dem Grundtarif (z. B. bei neuen Netzentgelten zum Jahreswechsel). Ein neu gespeicherter Zeitraum nimmt
   den Hinweis sofort weg.
 
-- **EOS im Fernbetrieb (Client-Modus)**: Einstellung `optimizer.eosProxy.mode` = `remote` lässt den EOS-Plan von einem
-  Rechendienst rechnen, für Boxen mit schwacher Hardware (Pro-Lizenz). DVhub startet dafür eine EOS-Fassade auf
-  127.0.0.1, das Regelverhalten bleibt gleich; fällt der Dienst aus, bleibt der letzte Plan, optional rechnet das
-  lokale EOS. Ab Werk `local` (unverändert).
+- **EOS im Fernbetrieb (Beta, Client-Modus)**: „Wo rechnet EOS?“ = „Im DVhub-Rechendienst“
+  (`optimizer.eosProxy.mode` = `remote`, bei eingeschaltetem EOS) lässt den EOS-Plan von einem Rechendienst rechnen,
+  für Boxen mit schwacher Hardware (Pro-Lizenz). DVhub startet dafür eine EOS-Fassade auf 127.0.0.1, das
+  Regelverhalten bleibt gleich; fällt der Dienst aus, bleibt der letzte Plan, optional rechnet das lokale EOS. Ab Werk
+  `local` (unverändert). Einstellungen → Betriebsart → EOS; nur im Bleeding-Edge-Kanal.
 
 - **Zweite Victron-Anlage am selben Hausanschluss (Beta)**: eine zweite GX-Anlage ohne PV und ohne eigenen Zähler,
   z. B. die der anderen Haushälfte. Die Anlage mit Zähler regelt den Anschluss wie bisher; die zweite übernimmt träge
