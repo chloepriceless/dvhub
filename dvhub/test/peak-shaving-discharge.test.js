@@ -490,3 +490,16 @@ test('[f8aa9c8b P3] ein einzelner ruhiger Takt mitten in der Spitze wiederholt d
   }
   assert.equal(notWritten(), 1);
 });
+
+test('[8364e407 P3] Schreibziel 2704 aus- und während einer Spitze wieder eingeschaltet: erneutes Scheitern wird gemeldet', async () => {
+  const { evaluator, transport, cfg, logs } = await blockedHarness();
+  failing2704(transport);
+  const notWritten = () => logs.filter((l) => l.event === 'peak_shaving_lift_not_written').length;
+  await ticks(evaluator, ENTER_TICKS);
+  assert.equal(notWritten(), 1);
+  cfg.controlWrite.maxDischargeW.enabled = false;
+  await ticks(evaluator, 2);
+  cfg.controlWrite.maxDischargeW.enabled = true;
+  await ticks(evaluator, ENTER_TICKS);
+  assert.equal(notWritten(), 2);
+});

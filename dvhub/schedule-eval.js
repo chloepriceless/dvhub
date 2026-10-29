@@ -1394,7 +1394,13 @@ export function createScheduleEvaluator(ctx) {
 
   async function peakShavingDischargeTick() {
     const cfg = getCfg();
-    if (!cfg.controlWrite?.maxDischargeW?.enabled) return;
+    // Schreibziel 2704 aus ist ein zweiter Aus-Schalter: auch hier gilt eine
+    // gemeldete gescheiterte Freigabe als erledigt (Gegenprüfung 8364e407, P3).
+    if (!cfg.controlWrite?.maxDischargeW?.enabled) {
+      const idle = state.ctrl._peakShaving?.discharge;
+      if (idle) Object.assign(idle, { over: 0, quiet: 0, writeIssue: null });
+      return;
+    }
     const ps = resolvePeakShaving(cfg);
     // Aus und nichts aufgehoben → kein Zustand, kein Lesen, kein Write (bitgenau
     // wie vorher; auch nachdem eine Freigabe zurückgenommen ist — 563da829).
