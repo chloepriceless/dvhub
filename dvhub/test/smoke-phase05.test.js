@@ -982,3 +982,28 @@ describe('Phase 17 R-6: Free endpoints unaffected by license gate', () => {
     }
   }
 });
+
+// Strix-Fund W1 (30.10.2026): GET auf ein Verzeichnis unter public/ (z. B.
+// /assets) bestand die existsSync-Prüfung, das Lesen scheiterte dann
+// verzögert mit EISDIR — uncaughtException → process.exit(1). Ein einziger
+// Aufruf ohne Token beendete DVhub. Verzeichnisse und Unlesbares → 404.
+describe('W1: static file serving never crashes on directories', () => {
+  it('GET on a directory below public/ answers 404 instead of streaming it', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const app = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-w1-'));
+    fs.mkdirSync(path.join(app, 'public', 'assets', 'pf-sky'), { recursive: true });
+    fs.writeFileSync(path.join(app, 'public', 'index.html'), '<!doctype html>');
+    try {
+      const routes = createApiRoutes(mockCtx({ getAppDir: () => app }));
+      for (const p of ['/assets', '/assets/', '/%61ssets', '/assets/pf-sky']) {
+        const res = mockRes();
+        await routes.serveStatic(makeReq('GET', p), res);
+        assert.equal(res._captured.status, 404, `${p} must answer 404`);
+      }
+    } finally {
+      fs.rmSync(app, { recursive: true, force: true });
+    }
+  });
+});
