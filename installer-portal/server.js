@@ -1504,7 +1504,9 @@ async function handleApi(req, res, url) {
         // Wie DVhub (normalizeKey): Leerzeichen/Zeilenumbrüche aus kopierten
         // Mails entfernen, dann prüfen — druckbar, begrenzte Länge.
         const key = String(b.args?.key || '').replace(/\s+/g, '');
-        if (!/^[\x21-\x7e]{8,512}$/.test(key)) return jsonRes(res, 400, { ok: false, error: 'lizenzschluessel_ungueltig' });
+        // Signierte Keygen-Schlüssel (key/<base64>.<signatur>) sind ~530 Zeichen lang —
+        // die alte Grenze von 512 lehnte damit jede echte Lizenz ab (2026-10-21).
+        if (!/^[\x21-\x7e]{8,4096}$/.test(key)) return jsonRes(res, 400, { ok: false, error: 'lizenzschluessel_ungueltig' });
         args = { key };
       }
       const q = enqueueCommand(cur, { id: crypto.randomBytes(8).toString('hex'), type, args, queuedAt: nowIso() });

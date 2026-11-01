@@ -235,7 +235,25 @@ $('#addForm').addEventListener('submit', async (e) => {
   refreshPairings();
 });
 
+// Live-Anzeige (2026-10-21): Altersangaben ticken jede Sekunde; nach einem
+// Kommando eine Minute lang alle 3 s nachfragen — die Anlage holt Kommandos
+// beim nächsten Melden (≤ 30 s), das Ergebnis soll ohne Neuladen erscheinen.
+let fastUntil = 0;
+let lastRefreshAt = 0;
+function refreshSoon() {
+  fastUntil = Date.now() + 60_000;
+  setTimeout(refreshPairings, 3000);
+}
+function tickAges() {
+  for (const el of document.querySelectorAll('[data-age-iso]')) {
+    el.textContent = (el.dataset.agePrefix || '') + fmtAge(el.dataset.ageIso || null);
+  }
+  if (Date.now() < fastUntil && Date.now() - lastRefreshAt >= 3000 && !$('#mainView').hidden) refreshPairings();
+}
+setInterval(tickAges, 1000);
+
 async function refreshPairings() {
+  lastRefreshAt = Date.now();
   const { status, j } = await api('/api/pairings');
   if (status === 401) { localStorage.removeItem('dvportal-name'); setView(); return; }
   pairings = j.pairings || [];
@@ -361,11 +379,32 @@ async function toggleErrors(aid, box, type = '') {
 
 function render() {
   const list = $('#pairingList');
+  // Offene Fehlerprotokolle überleben das Neuzeichnen (alle 10 s bzw. 3 s nach
+  // einem Kommando) — sonst klappt das Panel beim Lesen zu.
+  const openErrors = new Map();
+  for (const box of list.querySelectorAll('.appliance[data-aid] .ap-errors')) {
+    if (!box.hidden) openErrors.set(box.closest('.appliance').dataset.aid, box);
+  }
   list.replaceChildren();
   const tpl = $('#pairTpl');
   for (const pr of pairings) {
+    // Eine fehlerhafte Karte darf die übrigen (und die Aktualisierung) nicht anhalten.
+    try { renderCard(list, tpl, pr, openErrors); } catch (e) {
+      console.error('Karte', pr.applianceId, e);
+      const p = document.createElement('p');
+      p.className = 'sub';
+      p.textContent = `Anlage ${pr.applianceId}: Anzeige fehlgeschlagen (${e.message}).`;
+      list.appendChild(p);
+    }
+  }
+  renderEmptyAndAdd(list);
+}
+
+function renderCard(list, tpl, pr, openErrors) {
+  {
     const node = tpl.content.cloneNode(true);
     const card = node.querySelector('.appliance');
+    card.dataset.aid = pr.applianceId;
     // Anzeige: Installateur-Vergabe hat Vorrang, dann Anlagen-Reportierung.
     $('.ap-name', card).textContent = pr.name || pr.applianceName || 'Anlage';
     const custEl = $('.ap-customer', card);
@@ -496,7 +535,10 @@ function render() {
       if (s.supportTunnelOpen) flags.push('🔓 Support-Tunnel offen');
       if (s.version) flags.push(`Stand ${s.version}`);
       $('.flags', card).textContent = flags.join('  ·  ');
-      $('.seen', card).textContent = `Zuletzt gehört: ${fmtAge(pr.seenAt)}`;
+      const seenEl = $('.seen', card);
+      seenEl.dataset.ageIso = pr.seenAt || '';
+      seenEl.dataset.agePrefix = 'Zuletzt gehört: ';
+      seenEl.textContent = `Zuletzt gehört: ${fmtAge(pr.seenAt)}`;
 
       const queueCmd = async (type, args) => {
         const r = await api(`/api/pairings/${pr.applianceId}/command`, { method: 'POST', body: { type, args } });
@@ -548,17 +590,17 @@ function render() {
           return msg(`Fern-Support: ${hints[r.j.error] || r.j.error || r.status}${r.j.detail ? ` (${r.j.detail})` : ''}`);
         }
         msg(`Fern-Support angefordert — die Anlage öffnet den Tunnel beim nächsten Melden (≤ 30 s). Ports ${r.j.relay.shellPort}/${r.j.relay.webPort}.`);
-        setTimeout(refreshPairings, 35000);
+        refreshSoon();
       });
       $('.tunnelClose', card).addEventListener('click', async () => {
         await queueCmd('close_tunnel');
-        setTimeout(refreshPairings, 35000);
+        refreshSoon();
       });
       $('.licenseSet', card).addEventListener('click', async () => {
         const key = prompt(`Lizenzschlüssel für ${pr.name || pr.applianceName || pr.applianceId} einspielen:`, '');
         if (!key || !key.trim()) return;
         await queueCmd('license_activate', { key: key.trim() });
-        setTimeout(refreshPairings, 35000);
+        refreshSoon();
       });
       // Fehlerprotokoll: die Anlage meldet ihre Fehler mit jedem Poll, das
       // Portal hebt sie dauerhaft auf (lokal behält DVhub dann nur 24 h / 7 Tage).
@@ -569,7 +611,7 @@ function render() {
       $('.loadUpdates', card).addEventListener('click', async () => {
         await queueCmd('updates_check');
         // Ergebnis erscheint, sobald die Anlage es geliefert hat.
-        setTimeout(refreshPairings, 35000);
+        refreshSoon();
       });
       const pre = $('.ap-detail', card);
       const done = Object.values(pr.results || {});
@@ -578,8 +620,14 @@ function render() {
         pre.textContent = done.map((r) => `${r.at} · ${r.ok ? 'OK' : 'FEHLER'}:\n${JSON.stringify(r.result, null, 2)}`).join('\n\n');
       }
     }
+    const keep = openErrors.get(pr.applianceId);
+    const fresh = $('.ap-errors', card);
+    if (keep && fresh) fresh.replaceWith(keep);
     list.appendChild(node);
   }
+}
+
+function renderEmptyAndAdd(list) {
   if (!pairings.length) {
     const p = document.createElement('p');
     p.className = 'sub empty';

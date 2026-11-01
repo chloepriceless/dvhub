@@ -142,3 +142,12 @@ test('Fehler: gespeichert, quittiert, keine Doppelten, Übersicht je Art', async
   const other = await p.call('/api/account', { method: 'POST', body: { name: 'Andere GmbH', password: 'geheim12345' } });
   assert.equal((await p.call(`/api/pairings/${AID}/errors`, { cookie: other.cookie })).status, 404);
 });
+
+// Server-Stand 21.10.2026: signierte Keygen-Schlüssel sind ~530 Zeichen lang.
+test('Lizenzschlüssel: echte signierte Länge (~530 Zeichen) geht, über 4096 nicht', async (t) => {
+  const { cmd } = await pairedAppliance(t);
+  const signed = 'key/' + 'A'.repeat(440) + '.' + 'B'.repeat(86);
+  const ok = await cmd('license_activate', { key: signed });
+  assert.equal(ok.status, 200, ok.text);
+  assert.equal((await cmd('license_activate', { key: 'k'.repeat(4097) })).status, 400);
+});
