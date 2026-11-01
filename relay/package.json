@@ -1,0 +1,17 @@
+{
+  "name": "dvhub-relay",
+  "version": "1.0.0",
+  "description": "Blindes Relay für die DVhub-Handy-App — leitet nur Ende-zu-Ende-verschlüsselte Nachrichten weiter, speichert nichts auf der Platte",
+  "private": true,
+  "type": "module",
+  "license": "SEE LICENSE IN ../LICENSE.md",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node relay-server.js"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  }
+}

@@ -20,16 +20,16 @@ WireGuard, strongSwan) und zur Timescale License siehe Abschnitt 4.
 
 | Lizenz | Pakete | Eigenschaft |
 |---|---|---|
-| MIT | 113 | permissiv |
+| MIT | 114 | permissiv |
 | Apache-2.0 | 54 | permissiv (+ Patentgewährung, NOTICE) |
 | ISC | 9 | permissiv |
 | BSD-3-Clause | 2 | permissiv |
 | 0BSD | 1 | permissiv (ohne Attributionspflicht) |
-| **Summe** | **179** | (direkte + transitive Abhängigkeiten, dedupliziert nach Paket@Version) |
+| **Summe** | **180** | (direkte + transitive Abhängigkeiten, dedupliziert nach Paket@Version) |
 
-Davon sind 10 direkte Produktiv-Abhängigkeiten (`@dsnp/parquetjs`, `aedes`,
+Davon sind 11 direkte Produktiv-Abhängigkeiten (`@dsnp/parquetjs`, `aedes`,
 `franc`, `highs`, `mqtt`, `multicast-dns`, `p-retry`, `pg`, `pg-cursor`,
-`prom-client`); der Rest sind transitive Abhängigkeiten. Diese Liste enthält
+`prom-client`, `qrcode-generator`); der Rest sind transitive Abhängigkeiten. Diese Liste enthält
 ausschließlich Produktiv-Abhängigkeiten (`npx license-checker --production`);
 reine devDependencies (z. B. `@playwright/test`) werden **nicht** mit dem
 Produkt ausgeliefert und sind hier folgerichtig **nicht** gelistet.
@@ -120,6 +120,7 @@ Produkt ausgeliefert und sind hier folgerichtig **nicht** gelistet.
 | `q` | 1.5.1 | Copyright 2009–2017 Kristopher Michael Kowal. All rights reserved. |
 | `qlobber` | 7.0.1 | Copyright (c) 2016 David Halls <https://github.com/davedoesdev/> |
 | `qlobber` | 8.0.1 | Copyright (c) 2016 David Halls <https://github.com/davedoesdev/> |
+| `qrcode-generator` | 2.0.4 | Copyright (c) 2011 Kazuhiko Arase |
 | `readable-stream` | 3.6.2 | Copyright Node.js contributors. All rights reserved.; Copyright Joyent, Inc. and other Node contributors. All rights reserved. |
 | `readable-stream` | 4.7.0 | Copyright Node.js contributors. All rights reserved.; Copyright Joyent, Inc. and other Node contributors. All rights reserved. |
 | `retimer` | 4.0.0 | Copyright (c) 2015 Matteo Collina |

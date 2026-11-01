@@ -13,8 +13,9 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css?v=20260708-daylight">
-  <link rel="stylesheet" href="/index.css?v=20261006-fc">
-  <link rel="stylesheet" href="/ev-tile.css?v=20261015-ev-stop">
+  <link rel="stylesheet" href="/index.css?v=20261028-eosremote">
+  <link rel="stylesheet" href="/ev-tile.css?v=20261027-wochenplan">
+  <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261027">
   <script src="/theme.js"></script>
   <script src="/leit-view.js?v=20261009"></script>
 </head>
@@ -142,6 +143,19 @@
         <div class="rail-row" title="Anteil der zweiten Anlage an der gesamten Akkuleistung beider Anlagen, verteilt nach nutzbarer Energie."><span class="l">Anteil</span><strong class="v" id="secondGxShare">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv" title="Netz-Sollwert, den DVhub der zweiten GX schreibt (wirkt auf ihren AC-IN, Register 2716)."><span class="l">Sollwert AC-IN</span><strong class="v" id="secondGxSetpoint">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Minimum-SOC</span><strong class="v" id="secondGxMinSoc">&mdash;</strong></div>
+      </div>
+      <!-- Peak Shaving: Bezugsgrenze für RLM-Anschlüsse (GitHub #28,
+           services/peak-shaving, peak-shaving-view.js). Nur sichtbar, wenn eingeschaltet. -->
+      <div class="card rail-card" data-accent="ctrl" id="peakShavingCard" hidden>
+        <div class="rail-card-head">
+          <span class="ttl"><span class="dot dot-ctrl"></span>Peak Shaving &middot; Bezugsgrenze</span>
+          <span class="chip sm" id="peakShavingChip"><span class="dot"></span><span id="peakShavingState">&mdash;</span></span>
+        </div>
+        <div class="rail-big card-value" id="peakShavingImport" title="Aktueller Netzbezug am Zähler der Anlage.">&mdash;</div>
+        <div class="rail-row"><span class="l">Grenze</span><strong class="v" id="peakShavingLimit">&mdash;</strong></div>
+        <div class="rail-row" title="Höchster Viertelstunden-Mittelwert des Netzbezugs im laufenden Monat, aus DVhubs Messwerten. Maßgeblich für die Abrechnung ist der Zähler des Netzbetreibers."><span class="l">Spitze Monat (15 min)</span><strong class="v" id="peakShavingMonth">&mdash;</strong></div>
+        <div class="rail-row" title="Höchster Viertelstunden-Mittelwert des Netzbezugs im laufenden Kalenderjahr — danach richtet sich der Leistungspreis (RLM)."><span class="l">Spitze Jahr (15 min)</span><strong class="v" id="peakShavingYear">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Eingriff</span><strong class="v" id="peakShavingDetail">&mdash;</strong></div>
       </div>
       <div class="card rail-card" data-accent="dv" data-leit="adv">
         <div class="rail-card-head">
@@ -309,6 +323,29 @@
         <div class="chart-comparison-summary">
           <strong id="chartComparisonSummary">Eigener Strompreis noch nicht konfiguriert</strong>
           <span id="chartComparisonDetail" data-leit="adv">Lege in den Einstellungen deinen Bruttopreis an.</span>
+        </div>
+        <!-- Laut EOS-Plan (Issue #27, eos-plan-summary.js): was EOS heute ab jetzt und
+             morgen einspeist und aus dem Netz bezieht — kWh, Stunden, höchste Leistung,
+             ab welchem Preis EOS verkauft bzw. bis zu welchem es kauft; mit
+             Spitzenkappung die Slots über der Grenze. Plan aus /api/eos/plan, den
+             leitstand-charts.js für den EOS-Fahrplan holt. -->
+        <div class="eos-plan-summary" id="eosPlanSummary">
+          <div class="eos-plan-summary-head">
+            <span class="eos-plan-summary-title">Laut EOS-Plan</span>
+            <span class="eos-plan-summary-note" id="eosPlanSummaryNote">EOS-Plan wird geladen &hellip;</span>
+          </div>
+          <div class="eos-plan-summary-day" id="eosPlanSummaryToday" hidden>
+            <strong id="eosPlanSummaryTodayHead"></strong>
+            <span id="eosPlanSummaryTodayExport"></span>
+            <span id="eosPlanSummaryTodayImport"></span>
+            <span class="eos-plan-summary-peak" id="eosPlanSummaryTodayPeak" hidden></span>
+          </div>
+          <div class="eos-plan-summary-day" id="eosPlanSummaryTomorrow" hidden>
+            <strong id="eosPlanSummaryTomorrowHead"></strong>
+            <span id="eosPlanSummaryTomorrowExport"></span>
+            <span id="eosPlanSummaryTomorrowImport"></span>
+            <span class="eos-plan-summary-peak" id="eosPlanSummaryTomorrowPeak" hidden></span>
+          </div>
         </div>
         <div class="meta" id="chartMeta" data-leit="adv">&mdash;</div>
       </div>
@@ -497,7 +534,8 @@
 
       <!-- DV-EOS day plan (operator request 2026-06-21): the EOS optimiser's
            Fahrplan for the full ~27h horizon — planned battery SoC trajectory
-           (right axis) + PV-Prognose + Netz-Einspeisung (left kW axis) + KPIs.
+           (right axis) + PV-Prognose, Last, Netz-Einspeisung und Netzbezug (left
+           kW axis, Lastgang seit 26.10.2026) + KPIs.
            From /api/eos/plan (output.rows, Plan aus dem EOS-Monitor), rendered by
            leitstand-charts.js#renderEosPlanChart. -->
       <div class="forecast-chart-shell" id="eosPlanCard" data-leit="adv">
@@ -505,13 +543,22 @@
           <div class="skeleton-bar"></div>
         </div>
         <div class="chart-head">
-          <span class="card-title">EOS-Fahrplan (Akku-SoC &amp; PV)</span>
+          <span class="card-title">EOS-Fahrplan (Akku, PV, Last &amp; Netz)</span>
           <span class="card-sub" id="eosPlanSubtitle">&mdash;</span>
         </div>
         <div class="forecast-chart-host forecast-chart-host-tall">
           <canvas id="eosPlanChart"></canvas>
         </div>
         <div class="chart-day-summary" id="eosPlanKpis"></div>
+        <!-- EOS-Rechendienst (Fernbetrieb, optimizer.eosProxy.mode=remote): kein
+             EOSdash — stattdessen letzter Lauf, Status und EOS-Hinweise aus der
+             Diagnose des Dienstes. Gefüllt von leitstand-charts.js#renderEosRemoteInfo. -->
+        <div class="eos-remote-info" id="eosRemoteInfo" hidden>
+          <div class="eos-remote-title">EOS-Rechendienst</div>
+          <div class="eos-remote-status" id="eosRemoteStatus"></div>
+          <div class="eos-remote-run" id="eosRemoteRun"></div>
+          <ul class="eos-remote-warnings" id="eosRemoteWarnings"></ul>
+        </div>
       </div>
 
       <!-- Optimizer plan chart -->
@@ -563,8 +610,11 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20261006-zaehlen"></script>
 <script src="/second-gx-view.js?v=20261021"></script>
-<script src="/app.js?v=20261020-hinweise"></script>
-<script src="/leitstand-charts.js?v=20261003-eos-plan"></script>
-<script src="/ev-tile.js?v=20261015-ev-pro"></script>
+<script src="/eos-plan-summary.js?v=20261029"></script>
+<script src="/peak-shaving-view.js?v=20261026"></script>
+<script src="/app.js?v=20261029-integration"></script>
+<script src="/leitstand-charts.js?v=20261029-lastgang-eosremote"></script>
+<script src="/ev-weekly-editor.js?v=20261027"></script>
+<script src="/ev-tile.js?v=20261027-wochenplan"></script>
 </body>
 </html>

@@ -83,6 +83,8 @@ import { createModbusServer } from './modbus-server.js';
 import { createDvLimitController } from './dv-interface-luox.js';
 import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
 import { createFeedInCap } from './services/feed-in-cap/index.js';
+import { pricingPeriodEndWarning } from './services/pricing-period-warning.js';
+import { createPeakShaving } from './services/peak-shaving/index.js';
 import { createEebusService } from './services/eebus/index.js';
 import { createParagraph14aService } from './services/paragraph14a/index.js';
 import { createClockCheck } from './services/clock-check.js';
@@ -123,6 +125,8 @@ import { createInstallerPortal } from './services/installer-portal.js';
 // pollt das Online-Portal, Kommandos (Tunnel/Updates) kommen über denselben
 // Strang zurück.
 import { createInstallerPortalClient } from './services/installer-portal-client.js';
+import { createMobileLink, LAN_WS_PATH as MOBILE_LINK_WS_PATH } from './services/mobile-link/agent.js';
+import { WebSocketServer as MobileLinkWss } from 'ws';
 // Datenspende (COMSYS, RWTH Aachen): Opt-in-Spende von Leistungs-Zeitreihen
 // an das Forschungsprojekt — ausgehend, ab Werk aus.
 import { createDatenspende } from './services/datenspende/index.js';
@@ -159,7 +163,7 @@ import { createChargerStatusPoller } from './services/wallbox/charger-status.js'
 import { createEosMonitor } from './services/optimizer/eos-monitor.js';
 import { createEosRestarter } from './services/optimizer/eos-restarter.js';
 import { writeSharedDvhubUrl } from './services/container-shared.js';
-import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
+import { resolveEosProxy, setEosRemoteFacadeUrl } from './services/optimizer/eos-adapter.js';
 import { createDeviceActuator } from './services/devices/actuator.js';
 import { loadSchedulableDevices } from './services/devices/schedulable.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter, createVictronEvcsAdapter, createEvccAdapter } from './services/wallbox/adapters.js';
@@ -185,11 +189,13 @@ import { createSchneiderAdapter } from './services/wallbox/schneider.js';
 import { createPhoenixAdapter } from './services/wallbox/phoenix.js';
 import { createWallboxAdapterCache } from './services/wallbox/adapter-cache.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
-import { resolveEvDeparture } from './services/optimizer/ev-departure.js';
-import { resolveEvPlugged, createEvPlugTracker } from './services/optimizer/ev-soc.js';
+import { createEvWatch } from './services/optimizer/ev-watch.js';
+import { createVehiclePull } from './services/vehicle-pull/index.js';
+import { resolveEvPlugged, createEvSocMemory } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
+import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules, createScheduleRuleStore, scheduleRulesPath, readScheduleRules } from './services/optimizer/rule-store.js';
 import { createFamilyService } from './services/family/index.js';
@@ -564,6 +570,7 @@ function applyLoadedConfig(nextLoadedConfig) {
   // an identifier that never exists in THIS scope (block-scoped function
   // declaration) and made the whole branch a silent no-op since its inception.
   if (typeof monitoringHeartbeatRestart === 'function') monitoringHeartbeatRestart();
+  if (typeof pricingPeriodWarningRefresh === 'function') pricingPeriodWarningRefresh();
 }
 
 // Akku-Ausbaustufen (Christin 2026-08-07): zieht den abgeleiteten Jetzt-Wert
@@ -848,6 +855,9 @@ function buildCurrentRuntimeSnapshot() {
 function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCurrentRuntimeSnapshot() } = {}) {
   return {
     now: Number(now),
+    // Eingestellte Zeitzone (schedule.timezone) für Tagesgrenzen und Uhrzeiten
+    // im Browser, z. B. „Laut EOS-Plan“ (eos-plan-summary.js).
+    timeZone: cfg.schedule?.timezone || 'Europe/Berlin',
     dvControlValue: controlValue(),
     dcExportMode: { enabled: cfg.dcExportMode?.enabled === true, priceThresholdCtKwh: cfg.dcExportMode?.priceThresholdCtKwh ?? null, pvTotalW: Number(state.victron.pvTotalW || 0), pvDcW: Number(state.victron.pvPowerW || 0) },
     dvRegs: state.dvRegs,
@@ -862,6 +872,8 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     epex: { ...state.epex, summary: epex.epexNowNext() },
     eebus: ctx.eebus?.summary?.() ?? null,
     p14a: ctx.p14a?.summary?.() ?? null,
+    // Peak Shaving (GitHub #28): null, solange ausgeschaltet.
+    peakShaving: ctx.peakShaving?.summary?.() ?? null,
     clock: state.clock ?? null,
     // Heizstab: Vorhaltung in der EOS-Lastprognose und heute gelieferte Energie.
     heater: {
@@ -972,6 +984,10 @@ let monitoringTimerId = null;
 // Der Block hebt die Funktions-Referenz beim Boot hierher; bleibt null in
 // Prozess-Rollen ohne Runtime-Teil (dort gibt es keinen Heartbeat zu re-armen).
 let monitoringHeartbeatRestart = null;
+// Warnung „Preis-Zeitraum endet bald“ nach jedem Übernehmen der Config neu
+// rechnen (Gegenprüfung 7c47107f). Erst gesetzt, wenn setSystemWarning
+// existiert — die einmalige Regel-Übernahme unten speichert schon vorher.
+let pricingPeriodWarningRefresh = null;
 
 // Nach der Übernahme in schedule-rules.json die Regeln aus config.json nehmen
 // (einmalig; die letzte Config-Sicherung behält sie).
@@ -1102,6 +1118,10 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 // StorCtl_Mod/OutWRte) müssen einen Neustart WÄHREND einer aktiven Sperre
 // überleben, sonst schreibt die Freigabe nur die pauschalen restoreDefaults.
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
+// Peak Shaving (GitHub #28): eine von DVhub aufgehobene Akku-Sperre (Victron
+// 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
+// Prozess sie zurückschreibt statt sie zu vergessen.
+const PEAK_SHAVING_LIFT_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_lift.json');
 // E-Auto „Sofort laden“ (eos-evcc-bridge setOverride).
 const EV_OVERRIDE_PATH = path.join(DATA_DIR || __dirname, 'ev_override.json');
 
@@ -1282,6 +1302,7 @@ function controlValue() {
 // After each createXxx(ctx), extend ctx with the new module's public methods.
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
+  peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
   state,
   getCfg: () => cfg,
   transport,
@@ -1359,7 +1380,26 @@ const setSystemWarning = (id, message) => {
   if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
 };
 ctx.feedInCap = createFeedInCap(ctx, { getTransport: () => transport, setWarning: setSystemWarning });
+// Strompreis-Zeitraum endet bald ohne Nachfolger (Chrissi 28.10.2026): gelber
+// Hinweis 14 Tage vorher — sonst gilt danach still der Grundtarif.
+const refreshPricingPeriodWarning = () => {
+  try {
+    const current = ctx.getCfg();
+    setSystemWarning('pricing_period_ending', pricingPeriodEndWarning(current?.userEnergyPricing, Date.now(), { timeZone: current?.schedule?.timezone }));
+  } catch (e) {
+    pushLog('pricing_period_warning_error', { error: e?.message || String(e) }, 'warn');
+  }
+};
+refreshPricingPeriodWarning();
+pricingPeriodWarningRefresh = refreshPricingPeriodWarning;
+const pricingPeriodWarningTimer = setInterval(refreshPricingPeriodWarning, 10 * 60_000);
+pricingPeriodWarningTimer.unref?.();
 if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();
+// Peak Shaving (GitHub #28): Status + Viertelstunden-Spitzen für den Leitstand.
+// Die Regelung selbst sitzt im Steuerpfad (schedule-eval.js); ausgeschaltet
+// fragt der Dienst nichts ab und liefert keinen Status.
+ctx.peakShaving = createPeakShaving(ctx);
+if (IS_RUNTIME_PROCESS) ctx.peakShaving.start();
 // Zweite Victron-GX am selben Netzanschluss (services/multi-gx): eigener
 // Modbus-Pool, damit eine haengende zweite GX die Hauptanlage nie ausbremst.
 // Ohne multiGx.enabled keine einzige Anfrage.
@@ -1440,6 +1480,10 @@ ctx.vehicleMqtt = createVehicleMqtt(mqttHub, ctx);
 // Ladestand über evccs Fahrzeug-Treiber (aus, bis eingerichtet; lädt evcc erst dann).
 ctx.vehicleEvcc = createVehicleEvcc(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub', getPlugged: () => resolveEvPlugged(ctx) });
 if (IS_RUNTIME_PROCESS) ctx.vehicleEvcc.start();
+// Ladestand/„angesteckt“ per HTTP-Endpunkt oder Home Assistant REST — fuer jede
+// Marke ohne evcc und ohne Broker (services/vehicle-pull, ev-soc.js).
+ctx.vehiclePull = createVehiclePull(ctx);
+if (IS_RUNTIME_PROCESS) ctx.vehiclePull.start();
 // Bezugspreis vom Stromanbieter (Tibber, LichtBlick) mit den Zugangsdaten des
 // Kunden — nur aktiv, wenn die Preislogik „Vom Stromanbieter“ gewählt ist.
 ctx.tariffProvider = createTariffProviderService(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub' });
@@ -1477,6 +1521,12 @@ ctx.installerPortalClient = createInstallerPortalClient(ctx, {
   pollIntervalMs: Number(process.env.DV_INSTALLER_POLL_MS) || undefined,
 });
 if (IS_WEB_PROCESS) ctx.installerPortalClient.startPolling();
+// Handy-App (2026-10-22): Kopplung per QR-Code, Ende zu Ende verschlüsselt —
+// im Heimnetz über den eigenen Webserver (Upgrade auf MOBILE_LINK_WS_PATH),
+// unterwegs ausgehend über das eingestellte Relay. Ab Werk aus
+// (mobileLink.enabled); nur im Web-Prozess (Loopback-API, Status-Cache).
+// Gestartet wird erst unten, wenn ctx.getDataDir steht (Schlüssel-Sidecar).
+ctx.mobileLink = createMobileLink(ctx);
 // Datenspende: immer konstruiert (Routen für Einrichtung/Status), gesammelt und
 // gesendet wird im Runtime-Prozess — nur dort sind Geräte-/evcc-Werte live.
 // Ohne Verknüpfung und Einwilligung (datenspende.enabled) passiert nichts.
@@ -1736,49 +1786,20 @@ ctx.inverterCurve = createInverterCurveCalibrator({
 const eosConfigSync = createEosConfigSync(ctx);
 ctx.eosConfigSync = eosConfigSync;
 
-// E-Auto-Abfahrt (ev-departure.js): minuetlich pruefen, ob sich Abfahrt oder
-// Ziel geaendert haben (Termin rueckt naeher und wird weitergeschoben, Config
-// gespeichert), und dann nur das Fahrzeug an EOS schicken. Der volle Abgleich
-// alle 15 min waere zu spaet: ein vergangener Termin heisst fuer EOS
+// E-Auto (ev-watch.js): minuetlich Ladestand merken, Steck-Wache,
+// Vorplanung vor einer Ankunft und Abfahrt/Ziel/Ladestart an EOS. Der volle
+// Abgleich alle 15 min waere zu spaet: ein vergangener Termin heisst fuer EOS
 // "sofort mit voller Leistung laden".
-//
-// Dazu die Steck-Wache (optimizer.evPlanOnlyWhenPlugged, Standard an): EOS
-// plant das Auto nur, solange es an der Wallbox steckt. Aendert sich der
-// (entprellte) Steck-Zustand, meldet der volle Abgleich das Auto an bzw. ab
-// und EOS rechnet sofort neu, statt bis zum naechsten Takt mit/ohne Auto
-// weiterzuplanen.
-let evDepartureLastKey = null;
-const evPlugTracker = createEvPlugTracker({ stableTicks: 2 });
-let evPlugSyncPending = 0;
-const evDepartureTimer = safeInterval('ev-departure.watch', async () => {
-  const cfg = ctx.getCfg();
-  if (cfg?.optimizer?.eosOptimizeEv !== true || !cfg?.optimizer?.eosProxy?.enabled) { evDepartureLastKey = null; return; }
-  if (cfg?.optimizer?.evPlanOnlyWhenPlugged !== false) {
-    const plug = evPlugTracker.update(resolveEvPlugged(ctx));
-    if (plug.changed) {
-      pushLog('ev_plug_change', { from: plug.from, plugged: plug.stable });
-      evPlugSyncPending = 5;
-    }
-    // Scheitert der Abgleich (EOS gerade weg), naechste Minute erneut —
-    // hoechstens 5x, dann trotzdem neu planen (ein dauerhafter Teilfehler
-    // darf den Neuplan nicht blockieren).
-    if (evPlugSyncPending > 0) {
-      const res = await eosConfigSync.sync();
-      evPlugSyncPending -= 1;
-      if (res?.ok === false && evPlugSyncPending > 0) return;
-      if (res?.ok === false) pushLog('ev_plug_sync_failed', { errors: res?.errors || null });
-      evPlugSyncPending = 0;
-      optimizer.requestEosReplan(evPlugTracker.stable ? 'ev_plugged' : 'ev_unplugged');
-      evDepartureLastKey = null;
-      return;
-    }
-  }
-  const d = resolveEvDeparture(cfg);
-  const key = `${d.enabled}|${d.departureAt}|${d.targetSocPct}`;
-  if (key === evDepartureLastKey) return;
-  const res = await eosConfigSync.syncEv();
-  if (res?.ok) evDepartureLastKey = key; // bei Fehler naechste Minute erneut
-}, 60_000);
+// Letzter bekannter Ladestand (ev-arrival.js): Schaetzbasis fuer den
+// erwarteten Ladestand bei Ankunft, auch nach dem Abstecken und Neustart.
+ctx.evSocMemory = createEvSocMemory({ filePath: path.join(DATA_DIR || __dirname, 'ev-soc-last.json') });
+const evWatch = createEvWatch({
+  ctx,
+  eosConfigSync,
+  requestReplan: (why) => optimizer.requestEosReplan(why),
+  pushLog,
+});
+const evDepartureTimer = safeInterval('ev-departure.watch', () => evWatch.tick(), 60_000);
 // Phase 22.1 (2026-05-24): bridges DVhub's 15-min ensemble PV forecast,
 // EnergyCharts spot cache and hour-of-day load model into EOS via the
 // *Import providers. ctx.eosConfigSync switches EOS to those providers; this
@@ -1805,6 +1826,72 @@ const eosForecastBridge = createEosForecastBridge(ctx);
 const eosFreshSocTimer = safeInterval('eos-fresh-soc', () => eosForecastBridge.pushFreshSoc(), 60_000);
 ctx.eosForecastBridge = eosForecastBridge;
 
+// EOS im Fernbetrieb (optimizer.eosProxy.mode = 'remote', eos-remote.js): eine
+// EOS-Fassade auf 127.0.0.1 nimmt alles an, was die EOS-Module sonst an ein
+// lokales EOS schicken, und rechnet jeden Lauf beim DVhub-Rechendienst.
+// Läuft im Prozess, der auch die Läufe anstößt (runtime/monolith); ein reiner
+// Web-Prozess zeigt auf denselben festen Port. Grenze im getrennten Betrieb
+// (DVHUB_ENABLE_RUNTIME_WORKER=1, von keinem Installer genutzt): Zustand und
+// Diagnosepaket der Fassade liegen nur im Runtime-Prozess, die Oberfläche des
+// Web-Prozesses zeigt dann nur „startet“.
+const EOS_REMOTE_PORT = Number(process.env.DVHUB_EOS_REMOTE_PORT) || EOS_REMOTE_FACADE_PORT;
+let eosRemoteFacade = null;
+let eosRemoteReconciling = null;
+function reconcileEosRemote() {
+  if (eosRemoteReconciling) return eosRemoteReconciling;
+  eosRemoteReconciling = (async () => {
+    const want = eosRemoteActive(ctx.getCfg());
+    if (!IS_RUNTIME_PROCESS) {
+      setEosRemoteFacadeUrl(want ? `http://127.0.0.1:${EOS_REMOTE_PORT}` : null);
+      return;
+    }
+    if (want && !eosRemoteFacade) {
+      const facade = createEosRemoteFacade({
+        getCfg: () => ctx.getCfg(),
+        getLicenceProof: () => licenseService.getRemoteProof(),
+        // Token aus dem Einschreiben in die Config (geschwärzt wie andere Tokens).
+        // Direkt gespeichert, ohne den EOS-Abgleich des ctx-Wrappers.
+        saveToken: async (token, endpoint) => {
+          const next = JSON.parse(JSON.stringify(rawCfg || {}));
+          next.optimizer = next.optimizer || {};
+          next.optimizer.eosProxy = next.optimizer.eosProxy || {};
+          next.optimizer.eosProxy.remote = next.optimizer.eosProxy.remote || {};
+          next.optimizer.eosProxy.remote.token = token;
+          next.optimizer.eosProxy.remote.tokenEndpoint = endpoint;
+          saveAndApplyConfig(next);
+        },
+        state,
+        pushLog,
+        eosVersion: readEosPin(__dirname),
+      });
+      let url;
+      try {
+        url = await facade.start({ port: EOS_REMOTE_PORT });
+      } catch (err) {
+        if (PROCESS_ROLE !== 'monolith') throw err;
+        url = await facade.start({ port: 0 });
+        pushLog('eos_remote_port_fallback', { port: EOS_REMOTE_PORT, error: err.message });
+      }
+      eosRemoteFacade = facade;
+      ctx.eosRemote = facade;
+      setEosRemoteFacadeUrl(url);
+      pushLog('eos_remote_started', { url });
+    } else if (!want && eosRemoteFacade) {
+      const facade = eosRemoteFacade;
+      eosRemoteFacade = null;
+      ctx.eosRemote = null;
+      setEosRemoteFacadeUrl(null);
+      await facade.stop();
+      if (state.optimizer) state.optimizer.eosRemote = null;
+      pushLog('eos_remote_stopped', {});
+    }
+  })()
+    .catch((err) => pushLog('eos_remote_error', { error: err?.message || String(err) }))
+    .finally(() => { eosRemoteReconciling = null; });
+  return eosRemoteReconciling;
+}
+reconcileEosRemote();
+
 // -- ctx extensions for routes-api.js ---
 ctx.controlValue = controlValue;
 ctx.needsSetup = () => loadedConfig.needsSetup;
@@ -1816,6 +1903,9 @@ ctx.getAppVersion = () => APP_VERSION;
 ctx.getTransportType = () => transport.type;
 ctx.getAppDir = () => __dirname;
 ctx.getDataDir = () => DATA_DIR || __dirname;
+if (IS_WEB_PROCESS) {
+  try { ctx.mobileLink.start(); } catch (e) { pushLog('mobile_link_start_error', { error: e?.message || String(e) }); }
+}
 ctx.getRepoRoot = () => path.resolve(__dirname, '..');
 ctx.scanTransport = scanTransport;
 ctx.fetchEpexDay = () => epex.fetchEpexDay();
@@ -1828,6 +1918,8 @@ ctx.buildSystemDiscoveryPayload = buildSystemDiscoveryPayload;
 // -- ctx extensions for admin/mutation routes (Plan 2) ---
 ctx.saveAndApplyConfig = (incomingConfig) => {
   const result = saveAndApplyConfig(restoreRedacted(incomingConfig, rawCfg));
+  // Fernbetrieb an/aus: Fassade starten oder beenden, bevor der EOS-Abgleich unten läuft.
+  const eosRemoteReady = reconcileEosRemote();
   // WS3: recompute the PVGIS expected-production cache when the user changes
   // their string geometry (forecast.pv.strings) or location — so a changed
   // orientation immediately yields a new curtailment baseline. refresh() is a
@@ -1847,6 +1939,7 @@ ctx.saveAndApplyConfig = (incomingConfig) => {
     // at them. Without this ordering EOS would briefly see empty series
     // and bail out of the next genetic run.
     (async () => {
+      await eosRemoteReady;
       try { if (eosForecastBridge) await eosForecastBridge.push(); }
       catch (e) {
         try { pushLog('eos_forecast_bridge_error', { phase: 'after_save', error: e?.message || String(e) }); }
@@ -2079,6 +2172,8 @@ const web = http.createServer(async (req, res) => {
 const telemetryReady = (async () => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
+  // Peak Shaving: die Spitzen nicht erst nach dem nächsten 5-min-Takt zeigen.
+  if (IS_RUNTIME_PROCESS) ctx.peakShaving?.refreshPeaks?.().catch(() => {});
   // dbPool already set inside createTelemetryStoreIfEnabled() — ctx.db getter reads it
 
   // Sweep package 6: service-start health summary. A concise, grouped report of
@@ -2311,6 +2406,23 @@ if (IS_WEB_PROCESS && RUNTIME_WORKER_ENABLED) {
   runtimeWorker = startDedicatedRuntimeWorker();
 }
 
+// WebSocket der Handy-App im Heimnetz. Kein Token nötig: Wer hier etwas
+// bekommt, entscheidet allein die Kryptografie (Ticket + Signatur bzw.
+// Kopplungs-Token aus dem QR-Code, siehe services/mobile-link/relay-core.js).
+const mobileLinkWss = new MobileLinkWss({ noServer: true, maxPayload: 512 * 1024 });
+function onMobileLinkUpgrade(req, socket, head) {
+  let pathname = '';
+  try { pathname = new URL(req.url, 'http://upgrade.invalid').pathname; } catch { /* kaputte URL */ }
+  if (pathname !== MOBILE_LINK_WS_PATH || !ctx.mobileLink?.isEnabled?.()) {
+    socket.destroy();
+    return;
+  }
+  mobileLinkWss.handleUpgrade(req, socket, head, (ws) => {
+    ctx.mobileLink.attachLan(ws, { remote: req.socket.remoteAddress || null });
+  });
+}
+web.on('upgrade', onMobileLinkUpgrade);
+
 if (IS_WEB_PROCESS) {
   web.listen(cfg.httpPort, () => {
     console.log(`Web server listening on :${cfg.httpPort}`);
@@ -2337,6 +2449,7 @@ if (IS_WEB_PROCESS) {
         ciphers: TLS_ALLOWED_CIPHERS,
         honorCipherOrder: true
       }, web.listeners('request')[0]);
+      webTls.on('upgrade', onMobileLinkUpgrade);
       webTls.listen(httpsPort, () => {
         console.log(`HTTPS server listening on :${httpsPort}`);
       });
@@ -2780,10 +2893,13 @@ async function gracefulShutdown(signal) {
   safeSync('ortsnetz.stop', () => ctx.ortsnetz?.stop?.());
   safeSync('victronGx.stop', () => ctx.victronGx?.stop?.());
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
+  safeSync('peakShaving.stop', () => ctx.peakShaving?.stop?.());
   safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
+  safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());
   safeSync('tariffProvider.stop', () => ctx.tariffProvider?.stop?.());
   safeSync('ocppServer.stop', () => { ctx.ocppServer?.stop?.(); });
+  safeSync('mobileLink.stop', () => { ctx.mobileLink?.stop?.(); mobileLinkWss.close(); });
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());
   safeSync('eosDeviceBridge.stop', () => eosDeviceBridge.stop?.());
   safeSync('mypvRegulator.stop', () => { mypvRegulator.stop?.().catch?.(() => {}); });

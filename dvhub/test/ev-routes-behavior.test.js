@@ -96,7 +96,7 @@ describe('POST /api/ev', () => {
     const r = await call(ctx, 'POST', '/api/ev', { departure: { enabled: true, time: '7:30', days: [5, 1, 1, 9], targetMode: 'percent', targetValue: 80 } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     // „7:30“ → „07:30“, Tage entdoppelt + sortiert, 9 verworfen.
-    assert.deepEqual(r.body.patch, { evDepartureEnabled: true, evDepartureTime: '07:30', evDepartureDays: [1, 5], evTargetMode: 'percent', evTargetValue: 80 });
+    assert.deepEqual(r.body.patch, { evDepartureEnabled: true, evDepartureTime: '07:30', evDepartureDays: [1, 5], evWeeklyPlan: null, evTargetMode: 'percent', evTargetValue: 80 });
     assert.deepEqual(ctx.replans, []);
   });
 
@@ -193,5 +193,137 @@ describe('Pro (eos): Wallbox-Steuerung und E-Auto-Planung (2026-10-15)', () => {
     assert.equal(r.status, 403);
     assert.equal(r.body.feature, 'eos');
     assert.equal(ctx.saved.length, 0);
+  });
+});
+
+describe('Wochenplan über /api/ev (2026-10-27)', () => {
+  it('GET liefert den abgeleiteten Wochenplan einer alten Config (Mo–Fr 07:00, keine Ankunft)', async () => {
+    const ctx = makeCtx();
+    Object.assign(ctx.getRawCfg().optimizer, { evDepartureEnabled: true, evDepartureTime: '07:00', evDepartureDays: [1, 2, 3, 4, 5] });
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const wp = r.body.departure.weeklyPlan;
+    assert.equal(wp.length, 7);
+    assert.deepEqual(wp.map((e) => e.departure), ['07:00', '07:00', '07:00', '07:00', '07:00', '', '']);
+    assert.deepEqual(wp.map((e) => e.arrival), ['', '', '', '', '', '', '']);
+    assert.equal(r.body.departure.arrivalOnce, '');
+    assert.equal(r.body.departure.commuteKm, 0);
+  });
+
+  it('POST mit Wochenplan + einmaliger Ankunft + Heimweg → normalisiert gespeichert', async () => {
+    const ctx = makeCtx();
+    const r = await call(ctx, 'POST', '/api/ev', { departure: {
+      enabled: true, commuteKm: 25, arrivalOnce: '2026-10-27T21:30:00+01:00',
+      weeklyPlan: [{ day: 1, arrival: '20:00', departure: '5:00' }, { day: 5, arrival: '15:00', departure: '09:00', targetValue: 100 }],
+    } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const opt = ctx.saved.at(-1).optimizer;
+    assert.equal(opt.evWeeklyPlan.length, 7);
+    assert.deepEqual(opt.evWeeklyPlan[0], { day: 1, arrival: '20:00', departure: '05:00', targetValue: null, commuteKm: null });
+    assert.equal(opt.evWeeklyPlan[4].targetValue, 100);
+    assert.equal(opt.evArrivalOnce, '2026-10-27T20:30:00.000Z');
+    assert.equal(opt.evCommuteKm, 25);
+    assert.deepEqual(ctx.replans, [], 'Planänderung allein stößt keinen Sofort-Lauf an (die Minuten-Wache übernimmt)');
+  });
+
+  it('POST Ankunft ohne Abfahrt → 400, nichts gespeichert', async () => {
+    const ctx = makeCtx();
+    const r = await call(ctx, 'POST', '/api/ev', { departure: { weeklyPlan: [{ day: 2, arrival: '20:00' }] } });
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error, 'departure.weeklyPlan[0].departure is required with an arrival');
+    assert.equal(ctx.saved.length, 0);
+  });
+});
+
+describe('Erwarteter Ladestand bei Ankunft über GET /api/ev', () => {
+  // Jeden Tag gleich: Ankunft in 2 h, Abfahrt in 10 h (Ortszeit Berlin) —
+  // so liegt die letzte Abfahrt immer 14 h zurück und der Test hängt weder vom
+  // Wochentag noch von der Uhrzeit ab (Codex-Befund: feste 20:00/05:00 fielen
+  // zwischen 04:50 und 05:01 um). 60 kWh, 18 kWh/100 km, Heimweg 20 km = 6 %.
+  const hhmm = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+  const planNow = () => {
+    const now = Date.now();
+    return [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival: hhmm(now + 2 * 3600_000), departure: hhmm(now + 10 * 3600_000) }));
+  };
+  const setup = (ctx) => Object.assign(ctx.getRawCfg().optimizer, {
+    evDepartureEnabled: true, evWeeklyPlan: planNow(), evCapacityWh: 60000, evConsumptionKwhPer100km: 18, evCommuteKm: 20,
+    evTargetMode: 'percent', evTargetValue: 80,
+  });
+
+  it('TeslaMate meldet unterwegs 70 % (vor 1 min) → erwartet 64 %, Quelle live', async () => {
+    const ctx = makeCtx();
+    setup(ctx);
+    ctx.teslamateService = { getState: () => ({ batteryLevel: 70 }), getFieldUpdatedAt: () => ({ batteryLevel: new Date(Date.now() - 60_000) }) };
+    ctx.evccIntegration = { getLoadpoints: () => [{ id: 1, connected: false }], getStatus: () => ({ loadpoints: [{ id: 1, connected: false }] }) };
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.arrival.expectedSocPct, 64);
+    assert.equal(r.body.arrival.source, 'live');
+    assert.equal(r.body.arrival.basePct, 70);
+    assert.equal(r.body.arrival.deductKm, 20);
+    assert.ok(r.body.departure.resolved.arrivalAt, 'nächste Ankunft mitgeliefert');
+  });
+
+  it('angesteckt: der echte Ladestand gilt (evcc 55 %), nichts abgezogen', async () => {
+    const ctx = makeCtx();
+    setup(ctx);
+    ctx.teslamateService = { getState: () => ({ batteryLevel: null }) };
+    ctx.evccIntegration = { getLoadpoints: () => [{ id: 1, connected: true, vehicleSocPct: 55 }], getStatus: () => ({ loadpoints: [{ id: 1, connected: true, vehicleSocPct: 55 }] }) };
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.body.arrival.expectedSocPct, 55);
+    assert.equal(r.body.arrival.source, 'plugged');
+  });
+});
+
+describe('Vorplanung im GET /api/ev', () => {
+  it('meldet Ladestart-Fähigkeit, Modus, Ladestart und den Grund einer blockierten Vorplanung', async () => {
+    const ctx = makeCtx();
+    ctx.state.optimizer = {
+      eos: { supported: true, evChargeStart: false },
+      eosEv: { wanted: true, register: false, reason: 'nicht angesteckt', mode: null, chargeStartAt: null, preplanBlocked: 'Vorplanung braucht EOS mit Ladestart' },
+    };
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.body.departure.chargeStartSupported, false);
+    assert.equal(r.body.vehicle.registrationMode, null);
+    assert.equal(r.body.vehicle.preplanBlocked, 'Vorplanung braucht EOS mit Ladestart');
+
+    ctx.state.optimizer.eos.evChargeStart = true;
+    ctx.state.optimizer.eosEv = { wanted: true, register: true, mode: 'preplan', chargeStartAt: '2026-10-27T19:00:00.000Z', preplanBlocked: null };
+    const r2 = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r2.body.departure.chargeStartSupported, true);
+    assert.equal(r2.body.vehicle.registrationMode, 'preplan');
+    assert.equal(r2.body.vehicle.chargeStartAt, '2026-10-27T19:00:00.000Z');
+  });
+});
+
+describe('GET /api/ev ohne evcc', () => {
+  it('„angesteckt“ aus MQTT/HTTP/Home Assistant, wenn weder Wallbox noch evcc es melden', async () => {
+    const ctx = makeCtx();
+    ctx.vehiclePull = { getState: (k) => (k === 'homeassistant' ? { configured: true, socPct: 61, socAt: Date.now() - 60_000, plugged: true } : { configured: false, socPct: null, plugged: null }) };
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.vehicle.plugged, true);
+    assert.equal(r.body.vehicle.connected, true);
+    assert.equal(r.body.vehicle.socPct, 61);
+    assert.equal(r.body.vehicle.socSource, 'homeassistant');
+    assert.equal(r.body.vehicle.source, 'homeassistant');
+  });
+});
+
+describe('GET /api/integrations/evcc: Wochenplan-Zustand für die Schublade', () => {
+  it('liefert erwarteten Ladestand und den Zustand von HTTP/Home Assistant — ohne Token', async () => {
+    const ctx = makeCtx();
+    ctx.evccIntegration = { getStatus: () => ({}), getLoadpoints: () => [] };
+    ctx.vehiclePull = { getState: (k) => (k === 'http'
+      ? { configured: true, socPct: null, socAt: null, socStale: false, plugged: null, error: 'Pfad „data.soc“ nicht in der Antwort gefunden' }
+      : { configured: false, socPct: null, plugged: null }) };
+    ctx.getRawCfg().optimizer.evHttpToken = 'geheim';
+    const r = await call(ctx, 'GET', '/api/integrations/evcc');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const dep = r.body.eos.departure;
+    assert.ok('arrival' in dep);
+    assert.equal(dep.vehicleSources.http.error, 'Pfad „data.soc“ nicht in der Antwort gefunden');
+    assert.equal(dep.vehicleSources.homeassistant.configured, false);
+    assert.doesNotMatch(JSON.stringify(r.body), /geheim/);
   });
 });

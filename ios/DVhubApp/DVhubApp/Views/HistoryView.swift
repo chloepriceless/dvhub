@@ -1,0 +1,162 @@
+// HistoryView.swift — Tagesverlauf aus /api/telemetry/series (nur lesend).
+
+import SwiftUI
+import Charts
+import DVhubLink
+
+struct HistoryView: View {
+    let controller: SystemController
+    @State private var width: CGFloat = 0
+    @State private var day: Day = .today
+    @State private var points: [SeriesPoint] = []
+    /// Tag, zu dem `points` gehören — nie die Werte eines anderen Tags zeigen (Codex R6).
+    @State private var pointsDay: Day?
+    @State private var loading = false
+    @State private var error: String?
+
+    enum Day: String, CaseIterable, Identifiable {
+        case today = "Heute", yesterday = "Gestern"
+        var id: String { rawValue }
+    }
+
+    static let powerKeys = ["pv_total_w", "load_power_w", "self_consumption_w", "grid_import_w", "grid_export_w", "battery_power_w"]
+    static let socKey = "battery_soc_pct"
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Picker("Tag", selection: $day) {
+                    ForEach(Day.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+
+                if let error {
+                    StaleBanner(text: error)
+                }
+                if width >= 760 {
+                    HStack(alignment: .top, spacing: 16) {
+                        powerChart.frame(maxWidth: .infinity)
+                        socChart.frame(maxWidth: .infinity)
+                    }
+                } else {
+                    powerChart
+                    socChart
+                }
+            }
+            .padding()
+            .background(GeometryReader { g in
+                Color.clear
+                    .onAppear { width = g.size.width }
+                    .onChange(of: g.size.width) { _, w in width = w }
+            })
+        }
+        .overlay { if loading && points.isEmpty { ProgressView() } }
+        .navigationTitle("Verlauf")
+        .refreshable { await load() }
+        .task(id: TaskKey(day: day, online: controller.isOnline)) { await load() }
+    }
+
+    struct TaskKey: Equatable { let day: Day; let online: Bool }
+
+    private var powerSeries: [(String, String, Color)] {
+        let load = points.contains { $0.key == "load_power_w" } ? "load_power_w" : "self_consumption_w"
+        return [("pv_total_w", "PV", .yellow), (load, "Haus", .orange), ("grid_import_w", "Bezug", .red),
+                ("grid_export_w", "Einspeisung", .blue)]
+    }
+
+    private var powerChart: some View {
+        Tile(title: "Leistung", icon: "bolt.fill", tint: .yellow) {
+            Chart {
+                ForEach(powerSeries, id: \.0) { key, label, _ in
+                    ForEach(points.filter { $0.key == key }) { p in
+                        LineMark(x: .value("Zeit", p.date), y: .value("kW", p.value / 1000))
+                            .foregroundStyle(by: .value("Reihe", label))
+                            .interpolationMethod(.monotone)
+                    }
+                }
+            }
+            .chartForegroundStyleScale(domain: powerSeries.map(\.1), range: powerSeries.map(\.2))
+            .chartYAxisLabel("kW")
+            .chartXAxis { HourAxis.marks }
+            .frame(height: 220)
+        }
+    }
+
+    private var socChart: some View {
+        Tile(title: "Akku-Ladestand", icon: "battery.75percent", tint: .green) {
+            Chart(points.filter { $0.key == Self.socKey }) { p in
+                AreaMark(x: .value("Zeit", p.date), y: .value("%", p.value))
+                    .foregroundStyle(.green.opacity(0.25))
+                    .interpolationMethod(.monotone)
+                LineMark(x: .value("Zeit", p.date), y: .value("%", p.value))
+                    .foregroundStyle(.green)
+                    .interpolationMethod(.monotone)
+            }
+            .chartYScale(domain: 0...100)
+            .chartYAxisLabel("%")
+            .chartXAxis { HourAxis.marks }
+            .frame(height: 220)
+        }
+    }
+
+    private func load() async {
+        guard controller.isOnline else {
+            if pointsDay != day { points = []; pointsDay = nil }
+            if points.isEmpty { error = "Der Verlauf braucht eine Verbindung zur Anlage." }
+            return
+        }
+        // Anderer Tag gewählt: alte Werte sofort weg, nicht unter dem neuen Tag zeigen.
+        if pointsDay != day { points = []; pointsDay = nil }
+        loading = true
+        defer { loading = false }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let start = day == .today ? today : cal.date(byAdding: .day, value: -1, to: today)!
+        let end = cal.date(byAdding: .day, value: 1, to: start)!
+        let keys = (Self.powerKeys + [Self.socKey]).joined(separator: ",")
+        let requested = day
+        let base = "/api/telemetry/series?keys=\(keys)&start=\(enc(ISO.string(start)))&end=\(enc(ISO.string(end)))&maxResolution="
+        do {
+            // 300 s: Die Box fasst in 5-Minuten-Mittelwerte zusammen (rund 1 500
+            // Zeilen am Tag). Mit 900 käme jeder 5-s-Messwert und sprengte den
+            // Kanal (Codex R4). Bleibt das leer, gibt es an dem Tag nur grobe
+            // Werte (z. B. VRM-Import, 15 min) — dann diese holen (Codex R8).
+            var r = try await controller.request("GET", base + "300")
+            guard !Task.isCancelled, requested == day else { return }
+            if r.status == 200, r.body["ok"]?.bool != false, (r.body["data"]?.array ?? []).isEmpty {
+                r = try await controller.request("GET", base + "900")
+            }
+            // Inzwischen auf einen anderen Tag gewechselt (die alte Anfrage läuft
+            // weiter, auch wenn SwiftUI den Task abbricht): Antwort verwerfen.
+            guard !Task.isCancelled, requested == day else { return }
+            // Bricht die Datenbank mitten im Strom ab, bleibt es bei HTTP 200,
+            // aber ok:false — dann keine halben Kurven zeigen (Codex R8).
+            guard r.status == 200, r.body["ok"]?.bool != false, let rows = r.body["data"]?.array else {
+                points = []
+                pointsDay = nil
+                switch r.status {
+                case 200: error = "Verlauf unvollständig: \(r.body["error"]?.string ?? "Fehler in der Anlage")."
+                case 503: error = "Die Anlage hat keine Messwert-Datenbank."
+                case 413: error = "Der Verlauf ist für die Übertragung zu groß (Messwert-Datenbank ohne Zusammenfassung)."
+                default: error = "Verlauf nicht verfügbar (HTTP \(r.status))."
+                }
+                return
+            }
+            points = rows.compactMap { row in
+                guard let key = row["key"]?.string, let d = ISO.parse(row["ts"]?.string), let v = row["value"]?.double else { return nil }
+                return SeriesPoint(key: key, date: d, value: v)
+            }
+            pointsDay = requested
+            error = points.isEmpty ? "Für diesen Tag liegen keine Messwerte vor." : nil
+        } catch {
+            guard !Task.isCancelled, requested == day else { return }
+            points = []
+            pointsDay = nil
+            self.error = userMessage(for: error)
+        }
+    }
+
+    private func enc(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? s
+    }
+}

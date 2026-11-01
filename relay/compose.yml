@@ -1,0 +1,37 @@
+# DVhub-Relay mit Caddy davor (automatisches Let's-Encrypt-Zertifikat).
+# 1. DNS: A/AAAA-Eintrag für RELAY_DOMAIN auf diesen Server.
+# 2. RELAY_DOMAIN=relay.example.org docker compose up -d --build
+#    (aus dem Ordner relay/; gebaut wird aus dem Repo-Wurzelordner)
+# 3. In DVhub unter Einstellungen → Handy-App die Adresse eintragen.
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: relay/Dockerfile
+    restart: unless-stopped
+    environment:
+      RELAY_NAME: ${RELAY_NAME:-dvhub-relay}
+      RELAY_TRUST_PROXY: "1"
+    # Nur intern erreichbar — nach außen geht es über Caddy.
+    expose:
+      - "8787"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+
+  caddy:
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:?RELAY_DOMAIN setzen, z. B. relay.example.org}
+    command: caddy reverse-proxy --from ${RELAY_DOMAIN} --to relay:8787
+    volumes:
+      - caddy-data:/data
+    depends_on: [relay]
+
+volumes:
+  caddy-data:

@@ -2343,6 +2343,17 @@ function renderDashboardStatus(status) {
     window.DVhubSecondGx?.render(status.multiGx);
   });
 
+  // „Laut EOS-Plan“ (eos-plan-summary.js, Issue #27): Uhrzeit, Börsenpreise und
+  // Spitzenkappung aus dem Status; den Plan liefert leitstand-charts.js.
+  safeRender('dashboard.eos-plan-summary', () => {
+    window.DVhubEosPlanSummary?.render({ status });
+  });
+
+  // Peak Shaving: Bezugsgrenze und Viertelstunden-Spitzen (peak-shaving-view.js).
+  safeRender('dashboard.peak-shaving', () => {
+    window.DVhubPeakShaving?.render(status.peakShaving);
+  });
+
   safeRender('dashboard.costs', () => {
     const c = status.costs || {};
     setText('costImport', c.importKwh == null ? '-' : `${c.importKwh} kWh`);

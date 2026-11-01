@@ -25,6 +25,42 @@ verweist hierher.
   dazu). Zugangsdaten gehen nie zurück und stehen in keinem Log; abgelehnte Zugangsdaten sperren den Abruf 6 h,
   damit der Anbieter das Konto nicht sperrt. Ungeprüft bis zum ersten LichtBlick-Liefertag: Schrittweite und ob der
   App-Preis brutto mit Netzentgelt ist.
+
+- **Peak Shaving – Bezugsgrenze für Gewerbeanschlüsse (Beta, #28)**: Bei Leistungsmessung (RLM) richtet sich der
+  Leistungspreis nach der höchsten Viertelstunden-Bezugsleistung im Jahr. Mit eingetragener Grenze deckelt DVhub
+  eigene Netz-Sollwerte (Netzladen, EOS-„Akku halten“, manuelle Werte) auf Grenze minus Sicherheitsabstand, sodass der
+  Akku Spitzen abdeckt; ist die Entladung gesperrt (Max Entladung = 0), gibt DVhub sie bei Bezug über der Grenze um den
+  Überschuss frei und setzt die Sperre mit Rückschalt-Abstand wieder. Not-Halt, §14a, Netzlade-Verbot und
+  Mindest-Ladestand haben Vorrang. Den Akku zieht der Deckel nur bei frischem Ladestand über dem Boden heran; sonst
+  deckelt er höchstens bis zur gemessenen Netto-Last (kein Entladen), ist auch die Last unbekannt, gar nicht. Ohne
+  frischen Zähler oder Ladestand hebt DVhub keine Sperre auf und setzt eine selbst aufgehobene wieder — sobald die
+  Rücklesung von 2704 bestätigt, dass dort noch DVhubs Freigabe steht; wurde sie am GX geändert, bleibt sie. Der
+  Leitstand zeigt Grenze, Eingriff und die höchste Viertelstunde im Monat und im Jahr. Bisher nur Victron; andere Hersteller nur Anzeige.
+  Einstellungen → Netz & Recht → Erweitert; nur im Bleeding-Edge-Kanal. EOS kennt keine Bezugsgrenze und plant ohne sie.
+
+- **E-Auto: Wochenplan mit Ankunft und Abfahrt**: je Wochentag Ankunft, Abfahrt, eigenes Ziel und Heimweg statt
+  einer Abfahrtszeit für ausgewählte Tage (bestehende Einstellungen werden übernommen, die Anlage rechnet wie bisher).
+  DVhub schätzt den Ladestand bei Ankunft — live vom Auto oder aus dem letzten Wert minus Heimweg — und meldet das
+  Auto bei EOS schon vor der Ankunft an, wenn EOS den Ladestart kennt. Ladestand von jeder Marke: neben TeslaMate,
+  Wallbox, evcc und MQTT jetzt auch per HTTP-Abruf (JSON-Pfad, optional Token) und Home Assistant; http nur im eigenen
+  Netz, Tokens geschwärzt. Der Editor in Kachel und Wallbox-Schublade zeigt, welche Abfahrt DVhub daraus macht
+  („Ankunft Mi 20:00 → Abfahrt Do 05:00“) und was an EOS geht; Vorschau beim Bearbeiten über `POST /api/ev/preview`.
+
+- **„Laut EOS-Plan“ im Leitstand (#27)**: unter dem Day-Ahead-Chart für heute ab jetzt und morgen, was EOS plant —
+  Einspeisung und Netzbezug in kWh, Stunden, höchster Leistung und dem Preis, ab dem EOS verkauft bzw. bis zu dem es
+  kauft; mit Bezugsgrenze die Slots darüber. Der EOS-Fahrplan zeigt zusätzlich geplante Last und Netzbezug.
+
+- **Hinweis, wenn der Strompreis-Zeitraum ohne Nachfolger endet**: 14 Tage vor dem Ende des heute gültigen Zeitraums
+  erscheint oben im Leitstand eine gelbe Warnung, wenn am Folgetag kein anderer beginnt — sonst rechnet DVhub danach
+  still mit dem Grundtarif (z. B. bei neuen Netzentgelten zum Jahreswechsel). Ein neu gespeicherter Zeitraum nimmt
+  den Hinweis sofort weg.
+
+- **EOS im Fernbetrieb (Beta, Client-Modus)**: „Wo rechnet EOS?“ = „Im DVhub-Rechendienst“
+  (`optimizer.eosProxy.mode` = `remote`, bei eingeschaltetem EOS) lässt den EOS-Plan von einem Rechendienst rechnen,
+  für Boxen mit schwacher Hardware (Pro-Lizenz). DVhub startet dafür eine EOS-Fassade auf 127.0.0.1, das
+  Regelverhalten bleibt gleich; fällt der Dienst aus, bleibt der letzte Plan, optional rechnet das lokale EOS. Ab Werk
+  `local` (unverändert). Einstellungen → Betriebsart → EOS; nur im Bleeding-Edge-Kanal.
+
 - **Zweite Victron-Anlage am selben Hausanschluss (Beta)**: eine zweite GX-Anlage ohne PV und ohne eigenen Zähler,
   z. B. die der anderen Haushälfte. Die Anlage mit Zähler regelt den Anschluss wie bisher; die zweite übernimmt träge
   einen Teil der Akkuleistung, verteilt nach nutzbarer Energie, sodass sich die Ladestände angleichen. EOS plant beide
@@ -34,6 +70,13 @@ verweist hierher.
   Die Historie zeigt den Akku der zweiten Anlage getrennt („Akku 2“): eigene Zeilen in der Energiebilanz, eigene
   Segmente in den Tagesflüssen, eigener Knoten im Sankey, eigene Spalten in Tabelle und CSV, seine Einspeisung mit
   eigenem Börsenerlös — PV, Verbrauch und Einspeisung gehen damit wieder auf.
+- **Handy-App koppeln (Beta)**: Einstellungen → Freigaben → Handy-App. Ein QR-Code koppelt die DVhub-App mit der
+  Anlage; erst nach „Freigeben“ in der Oberfläche ist das Handy eingetragen, wahlweise nur zum Anzeigen oder auch zum
+  Steuern (Not-Halt, Auto, Regeln). Die Verbindung ist Ende zu Ende verschlüsselt — die Schlüssel tauschen Anlage und
+  Handy nur über den QR-Code aus. Im Heimnetz spricht das Handy direkt mit der Anlage, unterwegs über ein Relay, das nur
+  verschlüsselte Daten weiterleitet und nichts auf der Platte speichert. Voreingestellt ist `relay.dvhub.de`, ein
+  eigenes Relay lässt sich eintragen (`relay/README.md`, Docker-Compose mit TLS). Ab Werk aus; Entkoppeln trennt
+  sofort. Protokoll: `docs/HANDY-APP-PROTOKOLL.md`.
 
 ## [1.0.8] - 2026-10-21
 

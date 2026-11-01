@@ -54,6 +54,14 @@ export const BETA_FEATURES = {
     gate: 'runtime',
     paths: ['multiGx']
   },
+  peakShaving: {
+    label: 'Peak Shaving (Bezugsgrenze)',
+    // Laufzeit-Sperre (GitHub #28): DVhub deckelt den Netzbezug erst, wenn die
+    // Regelung an einer echten Victron-Anlage gelaufen ist. Bis dahin wirkt ein
+    // `enabled: true` nur im Bleeding-Edge-Kanal (services/peak-shaving).
+    gate: 'runtime',
+    paths: ['peakShaving']
+  },
   controlWriteVerify: {
     label: 'Schreib-Verifikation',
     gate: 'runtime',

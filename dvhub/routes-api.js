@@ -30,8 +30,9 @@ import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, grid
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
-import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan } from './services/optimizer/ev-departure.js';
+import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, previewEvDeparture } from './services/optimizer/ev-departure.js';
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
+import { resolveEvArrival } from './services/optimizer/ev-arrival.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
 import { WALLBOX_TYPES } from './services/wallbox/types.js';
 import { loadCatalog as loadEvccVehicleCatalog, maskVehicleSettings, mergeVehicleSettings, validateVehicleSettings } from './services/vehicle-evcc/index.js';
@@ -70,6 +71,7 @@ import { createNotificationRoutes } from './routes/notification-routes.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp } from './config-model.js';
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
+import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -1431,6 +1433,9 @@ export function createApiRoutes(ctx) {
     // gegen Cross-Site — die zugehörigen POSTs brauchen unter 'restricted'/
     // 'strict' weiterhin ein Token (POST ist nie LAN-sicher).
     '/api/datenspende/status',
+    // Handy-App-Kachel: Zustand ohne Geheimnisse (QR-Inhalt nur in der Antwort
+    // von POST pair/start).
+    '/api/mobile-link/status',
     '/api/input/status',
     // Datenfluss-Übersicht (rein/raus) — reiner Lesezugriff wie /api/input/status.
     '/api/integrations/dataflow',
@@ -1478,7 +1483,7 @@ export function createApiRoutes(ctx) {
     ['/api/integration/home-assistant', 'integrations'], ['/api/integration/loxone', 'integrations'],
     ['/api/integration/eos', 'integrations'], ['/api/integration/emhass', 'integrations'],
     ['/api/integration/evcc', 'integrations'], ['/api/integration/evcc/eos', 'integrations'],
-    ['/api/integrations/health', 'integrations'], ['/api/datenspende/status', 'integrations'],
+    ['/api/integrations/health', 'integrations'], ['/api/datenspende/status', 'integrations'], ['/api/mobile-link/status', 'integrations'],
     ['/api/input/status', 'integrations'], ['/api/integrations/dataflow', 'integrations'],
     ['/api/ortsnetz/status', 'integrations'], ['/api/victron/devices', 'integrations'],
     ['/api/victron/devices/scan', 'integrations'], ['/api/feed-in-cap/status', 'integrations'],
@@ -1946,6 +1951,16 @@ export function createApiRoutes(ctx) {
   function consumeBootstrapToken() {
     const tokenPath = getBootstrapTokenPath();
     try { fs.unlinkSync(tokenPath); } catch (_) { /* idempotent */ }
+  }
+
+  /**
+   * Zustand des EOS-Rechendienstes (Fernbetrieb) für die Oberfläche — ohne
+   * Token und Lizenz (state.optimizer.eosRemote enthält beides nie). null im
+   * lokalen Betrieb.
+   */
+  function eosRemoteSummary() {
+    if (resolveEosProxy(getCfg()).mode !== 'remote') return null;
+    return state.optimizer?.eosRemote || { mode: 'remote', phase: 'starting' };
   }
 
   // Plan 08-04 Task 1 Step 8 & Task 2 Step 3: RFC1918 + loopback check —
@@ -4907,6 +4922,83 @@ export function createApiRoutes(ctx) {
     // oder einen Bearer — bei lanTrust 'open' könnte sonst eine fremde Webseite
     // im Browser des Kunden (JSON als text/plain) die Spende einschalten.
     // Ausschalten geht immer ohne Nonce.
+    // ── Handy-App (Kopplung per QR-Code, 2026-10-22) ──────────────────────
+    // Status lesbar wie die anderen Kacheln. Alles, was einen Zugang schafft
+    // oder erweitert (einschalten, Relay ändern, koppeln, freigeben, Rechte
+    // erhöhen), braucht den UI-Nonce aus GET /status oder einen Bearer — bei
+    // lanTrust 'open' könnte sonst eine fremde Webseite im Browser des Kunden
+    // ein Handy koppeln. Ausschalten, abbrechen und entkoppeln gehen immer.
+    if (url.pathname.startsWith('/api/mobile-link/')) {
+      const ml = ctx.mobileLink;
+      if (!ml) return json(res, 503, { ok: false, error: 'mobile_link_unavailable' });
+      const nonceOk = (body) => installerHasValidBearer(req) || uiNonce.check(body?.uiToken);
+      const fail = (e, fallback = 400) => {
+        const code = String(e?.message || 'internal_error').split(':')[0];
+        const status = {
+          mobile_link_disabled: 409, too_many_devices: 409, no_pairing_to_approve: 409,
+          device_not_found: 404, approve_token_invalid: 403, mobile_link_store_unreadable: 409,
+        }[code] || fallback;
+        return json(res, status, { ok: false, error: code });
+      };
+      if (url.pathname === '/api/mobile-link/status' && req.method === 'GET') {
+        return json(res, 200, { ok: true, ...ml.status(), uiToken: uiNonce.issue() });
+      }
+      if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method_not_allowed' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      if (url.pathname === '/api/mobile-link/settings') {
+        const patch = {};
+        if (body.enabled !== undefined) {
+          if (typeof body.enabled !== 'boolean') return json(res, 400, { ok: false, error: 'enabled_must_be_boolean' });
+          patch.enabled = body.enabled;
+        }
+        if (body.useRelay !== undefined) {
+          if (typeof body.useRelay !== 'boolean') return json(res, 400, { ok: false, error: 'useRelay_must_be_boolean' });
+          patch.useRelay = body.useRelay;
+        }
+        if (body.relayUrl !== undefined) {
+          const raw = String(body.relayUrl ?? '').trim();
+          const norm = raw ? normalizeRelayUrl(raw) : DEFAULT_MOBILE_RELAY_URL;
+          if (!norm) return json(res, 400, { ok: false, error: 'relay_url_invalid' });
+          patch.relayUrl = norm;
+        }
+        if (body.name !== undefined) {
+          const name = String(body.name ?? '').trim().slice(0, 40);
+          patch.name = name || 'DVhub';
+        }
+        const onlyNarrowing = Object.keys(patch).length > 0
+          && Object.keys(patch).every((k) => (k === 'enabled' && patch.enabled === false) || (k === 'useRelay' && patch.useRelay === false));
+        if (!onlyNarrowing && !nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+        next.mobileLink = { ...(next.mobileLink || {}), ...patch };
+        ctx.saveAndApplyConfig(next);
+        pushLog('mobile_link_setting_changed', patch, actorContext(req));
+        ml.reconcile();
+        return json(res, 200, { ok: true, ...ml.status() });
+      }
+      if (url.pathname === '/api/mobile-link/pair/start') {
+        if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        try { return json(res, 200, { ok: true, pairing: ml.startPairing({ lanHost: body.lanHost }) }); } catch (e) { return fail(e); }
+      }
+      if (url.pathname === '/api/mobile-link/pair/approve') {
+        if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        try {
+          const r = ml.approvePairing({ perms: body.perms, name: body.name, approveToken: body.approveToken });
+          return json(res, 200, r);
+        } catch (e) { return fail(e); }
+      }
+      if (url.pathname === '/api/mobile-link/pair/cancel') {
+        return json(res, 200, ml.cancelPairing());
+      }
+      if (url.pathname === '/api/mobile-link/devices/remove') {
+        try { return json(res, 200, ml.removeDevice(String(body.id || ''))); } catch (e) { return fail(e); }
+      }
+      if (url.pathname === '/api/mobile-link/devices/update') {
+        if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
+        try { return json(res, 200, ml.updateDevice(String(body.id || ''), { name: body.name, perms: body.perms })); } catch (e) { return fail(e); }
+      }
+      return json(res, 404, { ok: false, error: 'not_found' });
+    }
     // ── Ortsnetz-Auslastung (ortsnetz-auslastung.de) ─────────────────────
     // Status lesbar wie die anderen Kacheln; Einstellungen + „Jetzt senden“
     // brauchen den UI-Nonce oder einen Bearer (Opt-in schickt Standort raus).
@@ -5173,6 +5265,8 @@ export function createApiRoutes(ctx) {
         primarySource,
         active: enabled && (primarySource === 'eos' || primarySource === 'best'),
         url: (opt.eosProxy && opt.eosProxy.url) || '',
+        mode: resolveEosProxy(getCfg()).mode,
+        remote: eosRemoteSummary(),
         reachable,
         monitor: ctx.eosMonitor?.status?.() ?? null,
         eosdashUrl: '/eosdash/'
@@ -5561,6 +5655,10 @@ export function createApiRoutes(ctx) {
       const lp = lps.find((l) => Number(l.id) === lpId) || lps[0] || null;
       const reg = ctx.state?.optimizer?.eosEv || null;
       const evSoc = resolveEvSocPct(ctx);
+      const plugged = resolveEvPlugged(ctx);
+      // Erwarteter Ladestand bei Ankunft (ev-arrival.js): angesteckt der echte,
+      // sonst live vom Auto oder geschaetzt — jeweils minus Heimweg.
+      const arrival = resolveEvArrival(ctx, getCfg(), { plugged, nowMs, departure: resolved });
       let plan = null;
       let planError = null;
       if (opt.eosOptimizeEv === true && ctx.inspector?.getEos) {
@@ -5602,10 +5700,18 @@ export function createApiRoutes(ctx) {
           time: opt.evDepartureTime || '07:00',
           days: Array.isArray(opt.evDepartureDays) ? opt.evDepartureDays : [1, 2, 3, 4, 5],
           once: opt.evDepartureOnce || '',
+          // Wochenplan (immer 7 Tage; alte Config: aus time + days abgeleitet).
+          weeklyPlan: effectiveWeeklyPlan(opt),
+          arrivalOnce: opt.evArrivalOnce || '',
+          commuteKm: Number(opt.evCommuteKm) || 0,
+          consumptionKwhPer100km: opt.evConsumptionKwhPer100km ?? 18,
           targetMode: opt.evTargetMode || 'percent',
           targetValue: opt.evTargetValue ?? 80,
           resolved,
-          deadlineSupported: ctx.state?.optimizer?.eos?.supported === true
+          deadlineSupported: ctx.state?.optimizer?.eos?.supported === true,
+          // EOS kennt einen fruehesten Ladestart → Vorplanung vor der Ankunft
+          // moeglich (ev-registration.js).
+          chargeStartSupported: ctx.state?.optimizer?.eos?.evChargeStart === true
         },
         vehicle: {
           title: (ctx.mainWallbox?.isDirect?.() ? ctx.mainWallbox.label() : null) || lp?.vehicleTitle || lp?.title || null,
@@ -5615,12 +5721,20 @@ export function createApiRoutes(ctx) {
             if (w && w.type !== 'evcc') return { connected: w.connected, charging: w.charging, chargePowerW: w.powerW, source: w.type };
             const d = ctx.chargerStatus?.fresh?.();
             if (d) return { connected: d.connected, charging: d.charging, chargePowerW: d.powerW, source: d.type };
-            return {
-              connected: lp ? lp.connected === true : null,
-              charging: lp ? lp.charging === true : null,
-              chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
-              source: lp ? 'evcc' : null,
-            };
+            if (lp) {
+              return {
+                connected: lp.connected === true,
+                charging: lp.charging === true,
+                chargePowerW: Number.isFinite(Number(lp?.chargePowerW)) ? Math.round(Number(lp.chargePowerW)) : null,
+                source: 'evcc',
+              };
+            }
+            // Ohne Wallbox-Anbindung und ohne evcc: „angesteckt“ aus den
+            // Fahrzeug-Quellen (MQTT, HTTP-Abruf, Home Assistant; ev-soc.js).
+            const viaVehicle = typeof plugged !== 'boolean' ? null
+              : (typeof ctx.vehicleMqtt?.getState?.()?.plugged === 'boolean' ? 'mqtt'
+                : ['http', 'homeassistant'].find((k) => typeof ctx.vehiclePull?.getState?.(k)?.plugged === 'boolean') || null);
+            return { connected: typeof plugged === 'boolean' ? plugged : null, charging: null, chargePowerW: null, source: viaVehicle };
           })(),
           // Dieselbe Quelle wie fuer EOS (ev-soc.js): TeslaMate, sonst evcc bei
           // angestecktem Auto.
@@ -5629,7 +5743,22 @@ export function createApiRoutes(ctx) {
           rangeKm: !ctx.mainWallbox?.isDirect?.() && Number.isFinite(Number(lp?.vehicleRangeKm)) ? Math.round(Number(lp.vehicleRangeKm)) : null,
           registered: reg ? reg.register === true : null,
           registrationReason: reg?.reason || null,
-          plugged: resolveEvPlugged(ctx)
+          // 'preplan' (vor der Ankunft, erwarteter Ladestand) | 'plugged' | 'always'
+          registrationMode: reg?.mode ?? null,
+          chargeStartAt: reg?.chargeStartAt ?? null,
+          preplanBlocked: reg?.preplanBlocked ?? null,
+          plugged
+        },
+        arrival: {
+          at: arrival.arrivalAt,
+          expectedSocPct: arrival.pct,
+          source: arrival.source,
+          basePct: arrival.basePct,
+          baseSource: arrival.baseSource,
+          baseAt: arrival.baseAt,
+          legs: arrival.legs,
+          deductKm: arrival.deductKm,
+          commuteKm: arrival.commuteKm
         },
         plan,
         planError,
@@ -5652,6 +5781,19 @@ export function createApiRoutes(ctx) {
       // mit der MQTT-Steuerung (cmd/ev/*).
       const { status, ...payload } = applyEvConfigPatch(ctx, { body, actor: actorContext(req) });
       return json(res, status, payload);
+    }
+    // Vorschau des Wochenplans beim Bearbeiten (2026-10-29): was DVhub aus dem
+    // Entwurf machte — naechste Abfahrt, aus welcher Zeile, Ziel. Gleiche
+    // Pruefung und Aufloesung wie beim Speichern (ev-departure.js
+    // previewEvDeparture), speichert nichts und braucht deshalb kein Pro.
+    // Body { departure: <wie POST /api/ev>, capacityWh? }.
+    if (url.pathname === '/api/ev/preview' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+      if (!body || typeof body !== 'object') return json(res, 400, { ok: false, error: 'object required' });
+      const out = previewEvDeparture(getCfg(), body.departure, { capacityWh: body.capacityWh });
+      return json(res, out.ok ? 200 : 400, out);
     }
 
     // „Sofort laden“: jetzt mit X kW laden, egal was EOS plant — auch wenn EOS
@@ -5725,11 +5867,26 @@ export function createApiRoutes(ctx) {
             time: raw.optimizer?.evDepartureTime || '07:00',
             days: Array.isArray(raw.optimizer?.evDepartureDays) ? raw.optimizer.evDepartureDays : [1, 2, 3, 4, 5],
             once: raw.optimizer?.evDepartureOnce || '',
+            weeklyPlan: effectiveWeeklyPlan(raw.optimizer || {}),
+            arrivalOnce: raw.optimizer?.evArrivalOnce || '',
+            commuteKm: Number(raw.optimizer?.evCommuteKm) || 0,
             targetMode: raw.optimizer?.evTargetMode || 'percent',
             targetValue: raw.optimizer?.evTargetValue ?? 80,
             consumptionKwhPer100km: raw.optimizer?.evConsumptionKwhPer100km ?? 18,
             resolved: resolveEvDeparture(getCfg()),
+            // Erwarteter Ladestand bei Ankunft (ev-arrival.js) und der Zustand
+            // der Abruf-Quellen (HTTP/Home Assistant, ohne Token) — damit man
+            // beim Einrichten sieht, ob der Ladestand ankommt.
+            arrival: (() => {
+              const a = resolveEvArrival(ctx, getCfg(), { plugged: resolveEvPlugged(ctx) });
+              return { at: a.arrivalAt, expectedSocPct: a.pct, source: a.source, basePct: a.basePct, baseSource: a.baseSource, baseAt: a.baseAt, legs: a.legs, deductKm: a.deductKm };
+            })(),
+            vehicleSources: Object.fromEntries(['http', 'homeassistant'].map((k) => {
+              const st = ctx.vehiclePull?.getState?.(k) || { configured: false };
+              return [k, { configured: st.configured === true, socPct: st.socPct ?? null, socAt: st.socAt ?? null, socStale: st.socStale === true, plugged: st.plugged ?? null, error: st.error || null, warning: st.warning || null }];
+            })),
             deadlineSupported: ctx.state?.optimizer?.eos?.supported === true,
+            chargeStartSupported: ctx.state?.optimizer?.eos?.evChargeStart === true,
             eosFlavor: ctx.state?.optimizer?.eos?.flavor || null
           }
         },
@@ -6206,7 +6363,7 @@ export function createApiRoutes(ctx) {
     // config writes; the EOS provider is configured INSIDE EOSdash.
     if (url.pathname === '/api/forecast/providers/eos-akkudoktor/probe' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
-      const eosUrl = ctx.getRawCfg?.()?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+      const eosUrl = resolveEosProxy(getCfg()).url;
       try {
         const reqUrl2 = new URL('/v1/prediction/series?key=pvforecast_ac_power', eosUrl);
         const fetchRes = await fetch(reqUrl2.toString(), { signal: AbortSignal.timeout(8000) });
@@ -6383,7 +6540,7 @@ export function createApiRoutes(ctx) {
         // Eingeschaltet, aber gerade keine Antwort (rechnet, überlastet, startet
         // neu) ist etwas anderes als „aus“ — die Anzeige sagte bisher „EOS
         // deaktiviert“, obwohl EOS lief (eHive 2026-10-06, gedrosselter Prozessor).
-        return json(res, 200, { ok: true, available: status.reachable, reason: status.reachable ? null : 'eos_not_answering', output: null, eos: { status: status.status } });
+        return json(res, 200, { ok: true, available: status.reachable, reason: status.reachable ? null : 'eos_not_answering', output: null, eos: { status: status.status }, remote: eosRemoteSummary() });
       }
       const maxRows = Math.min(Math.max(Number(url.searchParams.get('rows')) || 300, 1), 8 * 24 * 4);
       const rows = Array.isArray(plan.data.rows) ? plan.data.rows : [];
@@ -6395,7 +6552,29 @@ export function createApiRoutes(ctx) {
         output,
         plan: { fetchedAt: new Date(plan.at).toISOString(), current: plan.current },
         eos: { status: status.status, push: status.push },
+        remote: eosRemoteSummary(),
       });
+    }
+
+    // EOS-Rechendienst (Fernbetrieb): Diagnosepaket des letzten Laufs für den
+    // Support herunterladen (nur wenn remote.debugBundle an war; der Dienst
+    // löscht es nach 24 h).
+    if (url.pathname === '/api/eos/remote/debug' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.eosRemote?.fetchDebugBundle) return json(res, 404, { ok: false, error: 'eos_remote_off' });
+      let b;
+      try { b = await ctx.eosRemote.fetchDebugBundle(); } catch { b = null; }
+      if (!b) return json(res, 404, { ok: false, error: 'no_debug_bundle' });
+      const body = JSON.stringify(b, null, 2);
+      const safeId = String(b.jobId).replace(/[^A-Za-z0-9_-]/g, '');
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': `attachment; filename="eos-diagnose-${safeId}.json"`,
+        'Cache-Control': 'no-store',
+        'Content-Length': Buffer.byteLength(body),
+      });
+      res.end(body);
+      return;
     }
 
     // Phase 21 (operator request 2026-05-23): EOS Konfigurations-Sync.
@@ -6404,6 +6583,9 @@ export function createApiRoutes(ctx) {
     // Operator die meisten EOS-Parameter nicht doppelt pflegen.
     if (url.pathname === '/api/eos/sync-from-dvhub' && req.method === 'POST') {
       const cfg = getCfg();
+      // Fernbetrieb: es gibt kein EOS zum Beschreiben; der Abgleich
+      // (eos-config-sync) geht ohnehin mit jedem Auftrag mit.
+      if (resolveEosProxy(cfg).mode === 'remote') return json(res, 409, { ok: false, error: 'eos_remote_mode' });
       const sma = cfg.schedule?.smallMarketAutomation || {};
       const battCapKwh = resolvePlantBattery(cfg).capacityKwh ?? (Number(sma.batteryCapacityKwh) || null);
       // NB: sma.minSocPct is deliberately NOT used here — EOS min_soc uses the

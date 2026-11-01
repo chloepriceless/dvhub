@@ -942,7 +942,7 @@
     if (allSame) return { text: '⚠ Konstant ' + (slots[0].powerW || 0) + ' W – keine echte Prognose', detail: '' };
     return null;
   }
-  window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, { loadForecastHint: loadForecastHint });
+  window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, { loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries });
 
   function updateForecastSummary(forecastData, statusData) {
     var pvEl = document.getElementById('pv-daily-kwh');
@@ -1228,13 +1228,102 @@
   // DVhub /api/optimizer run.
   // ---------------------------------------------------------------------------
   var eosPlanChart = null;
+
+  // Plan-Zeilen → Chart-Punkte. Wh je Slot → mittlere kW des Slots:
+  // Wh / (slotMin/60 h) / 1000. Ein fehlender Wert (null) bleibt eine Lücke statt
+  // 0 kW bzw. 0 % (spanGaps:false). Netzbezug und Last (Issue #27, 26.10.2026)
+  // zeigen den geplanten Lastgang neben PV, Einspeisung und Akku-SoC.
+  function eosPlanSeries(output) {
+    var rows = (output && Array.isArray(output.rows)) ? output.rows : [];
+    var slotMin = Number(output && output.slotMinutes) || 15;
+    function n(v) { return (v === null || v === undefined || v === '' || !isFinite(Number(v))) ? null : Number(v); }
+    function kw(wh) { var v = n(wh); return v === null ? null : v / (slotMin / 60) / 1000; }
+    var out = { soc: [], pv: [], feed: [], import: [], load: [] };
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var x = new Date(r.ts_utc).getTime();
+      if (!isFinite(x)) continue;
+      out.soc.push({ x: x, y: n(r.socPct) });
+      out.pv.push({ x: x, y: kw(r.pvWh) });
+      out.feed.push({ x: x, y: kw(r.gridFeedinWh) });
+      out.import.push({ x: x, y: kw(r.gridConsumptionWh) });
+      out.load.push({ x: x, y: kw(r.loadWh) });
+    }
+    return out;
+  }
+
   async function fetchEosPlan() {
     try {
       var res = await apiFetch('/api/eos/plan');
       return (res && res.ok) ? await res.json() : null;
     } catch { return null; }
   }
+  // EOS-Rechendienst (Fernbetrieb): Status, letzter Lauf und EOS-Hinweise aus
+  // eos.remote (/api/eos/plan). Nur textContent — Texte stammen vom Dienst.
+  var EOS_REMOTE_ERRORS = {
+    service_unreachable: 'Rechendienst nicht erreichbar',
+    service_timeout: 'kein Ergebnis innerhalb der Wartezeit',
+    service_error: 'Fehler beim Rechendienst',
+    quota_exceeded: 'Kontingent für diese Stunde erschöpft',
+    licence_missing: 'keine aktive, an diese Box gebundene Pro-Lizenz',
+    licence_rejected: 'Lizenz vom Rechendienst abgelehnt',
+    enroll_rejected: 'Anmeldung beim Rechendienst abgelehnt',
+    no_endpoint: 'keine Adresse des Rechendienstes eingestellt',
+    no_solution: 'EOS fand keine Lösung',
+    invalid_payload: 'Auftrag vom Rechendienst abgelehnt',
+    deadline_passed: 'Auftrag kam nicht rechtzeitig an die Reihe'
+  };
+  var EOS_REMOTE_PHASES = {
+    idle: 'bereit', starting: 'startet', enrolling: 'meldet sich an', submitting: 'sendet Auftrag',
+    queued: 'Auftrag wartet', running: 'rechnet', receiving: 'holt Ergebnis'
+  };
+  function eosRemoteTime(iso) {
+    var d = iso ? new Date(iso) : null;
+    return d && !isNaN(d.getTime()) ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '—';
+  }
+  function renderEosRemoteInfo(remote) {
+    var box = document.getElementById('eosRemoteInfo');
+    if (!box) return;
+    if (!remote) { box.hidden = true; return; }
+    box.hidden = false;
+    var statusEl = document.getElementById('eosRemoteStatus');
+    var runEl = document.getElementById('eosRemoteRun');
+    var warnEl = document.getElementById('eosRemoteWarnings');
+    var err = remote.lastError;
+    var status = 'Status: ' + (EOS_REMOTE_PHASES[remote.phase] || remote.phase || '—');
+    if (remote.phase === 'queued' && remote.queuePosition) status += ' (Platz ' + remote.queuePosition + ')';
+    var cls = '';
+    if (err && remote.fallback === 'local') {
+      status = 'Rechendienst: ' + (EOS_REMOTE_ERRORS[err.code] || err.code) + ' — diesmal lokal gerechnet';
+      cls = 'is-warn';
+    } else if (err) {
+      status = '⚠ ' + (EOS_REMOTE_ERRORS[err.code] || err.code) + ' (' + eosRemoteTime(err.at) + ')'
+        + (remote.usingLastPlan ? ' — letzter Plan bleibt aktiv' : ' — noch kein Plan');
+      cls = remote.usingLastPlan ? 'is-warn' : 'is-error';
+    }
+    if (statusEl) { statusEl.textContent = status; statusEl.className = 'eos-remote-status' + (cls ? ' ' + cls : ''); }
+    var d = remote.diagnostics || {};
+    var parts = ['Letzter Lauf: ' + eosRemoteTime(remote.lastOkAt)];
+    var ms = Number(d.runMs || remote.lastRunMs);
+    if (ms > 0) parts.push(Math.round(ms / 1000) + ' s');
+    if (d.workers) parts.push(d.workers + ' Rechenprozesse');
+    if (d.eosVersion || remote.eosVersion) parts.push('EOS ' + (d.eosVersion || remote.eosVersion));
+    var net = d.costs && typeof d.costs.netAmt === 'number' ? d.costs.netAmt : null;
+    if (net !== null) parts.push('Saldo ' + net.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €');
+    if (runEl) runEl.textContent = parts.join(' · ');
+    if (warnEl) {
+      while (warnEl.firstChild) warnEl.removeChild(warnEl.firstChild);
+      var ws = Array.isArray(d.warnings) ? d.warnings.slice(0, 5) : [];
+      for (var i = 0; i < ws.length; i++) {
+        var li = document.createElement('li');
+        li.textContent = 'EOS: ' + String(ws[i]);
+        warnEl.appendChild(li);
+      }
+    }
+  }
+
   function renderEosPlanChart(eos) {
+    renderEosRemoteInfo(eos && eos.remote ? eos.remote : null);
     var canvas = document.getElementById('eosPlanChart');
     var skeleton = document.getElementById('eosPlanSkeleton');
     var subtitle = document.getElementById('eosPlanSubtitle');
@@ -1267,27 +1356,22 @@
     }
     if (skeleton) skeleton.style.display = 'none';
 
-    // 15-min slot energy (Wh) → average power (kW): Wh / (slotMin/60 h) / 1000.
-    var slotMin = Number(output.slotMinutes) || 15;
-    function whToKw(wh) { return (Number(wh) || 0) / (slotMin / 60) / 1000; }
-
-    var socPts = [], pvPts = [], feedPts = [];
-    for (var i = 0; i < rows.length; i++) {
-      var r = rows[i];
-      var x = new Date(r.ts_utc).getTime();
-      if (!isFinite(x)) continue;
-      socPts.push({ x: x, y: Number(r.socPct) });
-      pvPts.push({ x: x, y: whToKw(r.pvWh) });
-      feedPts.push({ x: x, y: whToKw(r.gridFeedinWh) });
-    }
+    var series = eosPlanSeries(output);
+    var socPts = series.soc;
 
     var datasets = [
-      { label: 'PV-Prognose', data: pvPts, yAxisID: 'kw',
+      { label: 'PV-Prognose', data: series.pv, yAxisID: 'kw',
         borderColor: _aur('--yellow', '#e3b341'), backgroundColor: _aurA('--yellow', 0.12, 'rgba(227,179,65,.12)'),
         borderWidth: 1.2, pointRadius: 0, tension: 0, fill: true, spanGaps: false },
-      { label: 'Netz-Einspeisung', data: feedPts, yAxisID: 'kw',
+      { label: 'Last (geplant)', data: series.load, yAxisID: 'kw',
+        borderColor: _aur('--blue', '#58a6ff'), backgroundColor: 'transparent',
+        borderWidth: 1.4, borderDash: [4, 3], pointRadius: 0, tension: 0, fill: false, spanGaps: false },
+      { label: 'Netz-Einspeisung', data: series.feed, yAxisID: 'kw',
         borderColor: _aur('--pink', '#ff7ac6'), backgroundColor: 'transparent',
         borderWidth: 1.2, borderDash: [3, 3], pointRadius: 0, tension: 0, fill: false, spanGaps: false },
+      { label: 'Netzbezug', data: series.import, yAxisID: 'kw',
+        borderColor: _aur('--red', '#ff5d5d'), backgroundColor: _aurA('--red', 0.10, 'rgba(255,93,93,.10)'),
+        borderWidth: 1.4, pointRadius: 0, tension: 0, fill: true, spanGaps: false },
       { label: 'Akku-SoC', data: socPts, yAxisID: 'soc',
         borderColor: _aur('--green', '#39E06F'), backgroundColor: 'transparent',
         borderWidth: 2.4, pointRadius: 0, tension: 0.1, fill: false, spanGaps: false }
@@ -1393,6 +1477,11 @@
     sr('leitstand.forecast-summary', function () { updateForecastSummary(forecastData, statusData); });
     sr('leitstand.forecast-providers', function () { renderForecastProviders(); });
     sr('leitstand.eos-plan', function () { renderEosPlanChart(eosPlan); });
+    // „Laut EOS-Plan“ unter dem Preis-Chart (eos-plan-summary.js) nutzt denselben
+    // Plan — kein zweiter Abruf; null = nicht abrufbar → „Kein EOS-Plan“.
+    sr('leitstand.eos-plan-summary', function () {
+      if (window.DVhubEosPlanSummary) window.DVhubEosPlanSummary.render({ plan: eosPlan });
+    });
     // PV-Prognose vs. Ist Chart: merged into the Forecast-Vergleich chart below
     // (Ist + Last-Prognose are now both there) — keeping the call would draw
     // duplicate datasets in a removed canvas anyway.

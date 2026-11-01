@@ -32,8 +32,11 @@
 // contract — { ok, pushed: string[], errors: object } per call.
 
 import { isGridStorageOnly, createStandbyEstimator, resolveStandbyW, buildGridStorageSeries, gridImportW } from './grid-storage.js';
-import { resolveEvSocPct } from './ev-soc.js';
+// Ladestand des Autos fuer EOS: angesteckt der echte, in der Vorplanung der
+// erwartete bei Ankunft (ev-registration.js).
+import { evSocForEos } from './ev-registration.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
+import { resolveEosProxy } from './eos-adapter.js';
 import http from 'node:http';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
 import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
@@ -466,7 +469,7 @@ export function createEosForecastBridge(ctx) {
     // EV-SoC aus TeslaMate / evcc (ev-soc.js). Fehlt er, wird der EV-Kanal
     // uebersprungen. EOS 0.4 wuerde den Lauf sonst abbrechen — deshalb meldet
     // eos-config-sync das Fahrzeug gar nicht erst an, solange es keinen SoC gibt.
-    const evSoc = resolveEvSocPct(ctx);
+    const evSoc = evSocForEos(ctx);
     const evLegacyPct = Number(state?.victron?.evSocPct);
     const evPct = evSoc ? evSoc.pct : evLegacyPct;
     const evFactor = Number.isFinite(evPct) ? Math.max(0, Math.min(1, evPct / 100)) : null;
@@ -545,7 +548,7 @@ export function createEosForecastBridge(ctx) {
     if (dvhubTriggersEosRuns(cfg)) return { skipped: 'soc travels with the run request' };
     // Erst wenn der Abgleich ein EOS 0.4 erkannt hat (state.optimizer.eos).
     if (state?.optimizer?.eos?.supported !== true) return { skipped: 'eos not supported' };
-    const baseUrl = cfg.optimizer.eosProxy.url || 'http://127.0.0.1:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
     return pushSoc(baseUrl, { freshOnly: true });
   }
 
@@ -559,10 +562,10 @@ export function createEosForecastBridge(ctx) {
    */
   async function socForRun() {
     const cfg = getCfg();
-    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
     const socPct = Number(planningSocPct(ctx));
     if (!Number.isFinite(socPct)) return { skipped: 'no live battery soc in state' };
-    const evSoc = resolveEvSocPct(ctx);
+    const evSoc = evSocForEos(ctx);
     const evLegacyPct = Number(state?.victron?.evSocPct);
     const evPct = evSoc ? evSoc.pct : evLegacyPct;
     const keysRes = await eosHttpRequest(baseUrl, 'GET', '/v1/measurement/keys');
@@ -627,7 +630,7 @@ export function createEosForecastBridge(ctx) {
 
   async function push() {
     const cfg = getCfg();
-    const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+    const baseUrl = resolveEosProxy(cfg).url;
 
     if (cfg?.optimizer?.eosProxy?.enabled === false) {
       return { ok: true, pushed: [], errors: {}, skipped: 'eosProxy.enabled=false' };
@@ -915,7 +918,7 @@ export function createEosForecastBridge(ctx) {
     const watchdog = async () => {
       const cfg = getCfg();
       if (cfg?.optimizer?.eosProxy?.enabled === false) return;
-      const baseUrl = cfg?.optimizer?.eosProxy?.url || 'http://127.0.0.1:8503';
+      const baseUrl = resolveEosProxy(cfg).url;
       // Neustart-Zähler des zentralen EOS-Monitors (erkennt auch Neustarts im
       // Container, wo die Prozessnummer immer 1 ist — siehe eos-monitor.js);
       // ohne Monitor die Prozessnummer selbst erfragen.

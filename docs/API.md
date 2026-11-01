@@ -228,6 +228,7 @@ jedes Einzelergebnis.
 |---|---|---|---|
 | GET | `/api/ev` | LAN·status | Auto-Planung: Abfahrt, Ziel, Fahrzeugzustand, EOS-Plan bis zur Abfahrt |
 | POST | `/api/ev` | Token | Abfahrt/Ziel setzen |
+| POST | `/api/ev/preview` | Token | Vorschau beim Bearbeiten: `{ departure, capacityWh? }` wie bei `POST /api/ev` → `resolved` (nächste Abfahrt, Quelle/Zeile, Ziel); speichert nichts |
 | POST | `/api/ev/override` | Token, *Pro* | „Sofort laden“: `{ powerW, untilMs? \| durationMin? }` — lädt unabhängig vom EOS-Plan |
 | DELETE | `/api/ev/override` | Token, *Pro* | „Sofort laden“ beenden |
 | GET | `/api/integration/evcc` | LAN·integrations | evcc-Zustand |

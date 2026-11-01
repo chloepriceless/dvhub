@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "note": "Erzeugt von scripts/mobile-link-vectors.mjs — nicht von Hand ändern.",
+  "keys": {
+    "boxPrivateRaw": "KV3lK00U_3gNpjRF60QttJ_Eo73KmZD88c9dCGIJB3o",
+    "devPrivateRaw": "TK-KpOtNALdNDBH9rLr8cUdYHLgoDPZ-h_luP2x0IpE",
+    "boxPub": "BH_8mFLj_k0WCaWK6Y7mE8xl-hyX-ppJ2GcuZywa-akjRPfnPvyOkqYsNyeBe0lXDSzRL7TCxI2w8EkcAZEOWBg",
+    "boxId": "gO8UshCyzmwPYhXcGhaYNw",
+    "devPub": "BPcq454i8uXdD678_AVzX-SgRN8cIaKrAWIDFzFGWvP-xlvq2tpo35OppKeQIAGT6MDoEivPnKvxgTCO0DLgaHQ",
+    "devId": "6guoV70tPzxK-bmybYyvWA"
+  },
+  "framed": {
+    "input": [
+      "abc",
+      "",
+      "Grüße",
+      1792674389
+    ],
+    "framedHex": "0003616263000000074772c3bcc39f65000a31373932363734333839",
+    "transcriptHex": "7d2d3591c75a16b116718e730ea564dee5c2d5bf270b53a788805cce44779249"
+  },
+  "relayAuth": {
+    "challenge": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+    "boxDataHex": "001364766875622d72656c61792d617574682d76310003626f7800200707070707070707070707070707070707070707070707070707070707070707",
+    "boxSig": "Xl_3vI_RXD0-6tza1-dyZYVBZ1_x4rqSvEfOv3tSyBExhoyUCHXM6d4Vl07WgTzoS_nYr3cx7Vweq5jtz0qfqg",
+    "deviceDataHex": "001364766875622d72656c61792d617574682d7631000664657669636500200707070707070707070707070707070707070707070707070707070707070707",
+    "deviceSig": "DGPM5Viqetk-F1jgxxmfSlL7B51azeERTYXg-FAzhqtdQVDKpu8HzaNJ09qfaOzhy5stoHhAypfpcSsZMZLDdQ"
+  },
+  "ticket": {
+    "v": 1,
+    "box": "BH_8mFLj_k0WCaWK6Y7mE8xl-hyX-ppJ2GcuZywa-akjRPfnPvyOkqYsNyeBe0lXDSzRL7TCxI2w8EkcAZEOWBg",
+    "dev": "6guoV70tPzxK-bmybYyvWA",
+    "exp": 4102444800,
+    "sig": "Kyp235n7jeP0hGTK9tzR0VAE_Y1ZMvrCJlMxWfT4Sj-JFlCmLlAg1CvTOet2_GVy0-c_o3du1wtgTCDkUTivFg"
+  },
+  "pairToken": {
+    "secret": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+    "token": "g9VCaZ9pXEtFe8rMKQDvDU3s1Bo5UzGunYTHBLPIw9M",
+    "tokenHash": "-oBcyXfgQsF6YZJt_Zu88tKRgGD-pfCo1h9bMYKNtmE"
+  },
+  "deviceHandshake": {
+    "ephDeviceSeed": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "ephBoxSeed": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+    "hs1": {
+      "t": "hs1",
+      "v": 1,
+      "dev": "6guoV70tPzxK-bmybYyvWA",
+      "e": "pOCSkrZRwni5dyxWn1-puxPZBrRqtoyd-dwrRAn4ogk",
+      "n": "AwMDAwMDAwMDAwMDAwMDAw"
+    },
+    "hs2": {
+      "t": "hs2",
+      "e": "zo060cy2M-x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk",
+      "n": "BAQEBAQEBAQEBAQEBAQEBA",
+      "sig": "6d8eITFnYmCpAa2x1TIvSMsj8m3e3a2zXqD_4Bn-CJ2k_pGiNmrf6GBrzgi9PpW1CTXpGNNsl6QJgKCO955lZw"
+    },
+    "hs3": {
+      "t": "hs3",
+      "sig": "1_l2oDHQnWHbt8DzeIrV7MAoV1VgGgZyTcFHpB4e3vnFJBhds4OsqhdwZ0F1mTZj4mIsQH0K22Q7UN5HvjsqBg"
+    },
+    "transcriptHex": "db1b37c33c499b1e00239be22c413738129b0d9ab2211d2ac8316c8333274811",
+    "deviceToBox": [
+      {
+        "plaintext": "{\"t\":\"sub\",\"live\":true,\"intervalMs\":2000}",
+        "d": "vhMN9DT5AVqd4XrmC0tLZ1pOGfpkp2V6q_-9ZPJjWSK0N2Yyj1F1zPD8yBRKhgtAdTyGQe7YK8Pv"
+      },
+      {
+        "plaintext": "{\"t\":\"sub\",\"live\":true,\"intervalMs\":2000}",
+        "d": "hr2DKGAroI1TYnz6ytG6ywpVe0-MPtqN3TDS0eeVDJTH_j7myHaHxSGCQw6Agcx2m-4HDiofdqhB"
+      }
+    ],
+    "boxToDevice": [
+      {
+        "plaintext": "{\"t\":\"welcome\",\"perms\":[\"read\"]}",
+        "d": "AHlikVGP4nhLxXarr7YHxQk6FYxSeYytQZs8icrEi165wNQH16Ud5vD1ZQagLhxZ"
+      }
+    ]
+  },
+  "pairHandshake": {
+    "secret": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+    "ephDeviceSeed": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+    "ephBoxSeed": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY",
+    "p1": {
+      "t": "p1",
+      "v": 1,
+      "e": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0",
+      "n": "BwcHBwcHBwcHBwcHBwcHBw"
+    },
+    "p2": {
+      "t": "p2",
+      "e": "9bLW5g-Ud-MQwpgtqqbJE2wQihd3xZR-RI-jfWgXRVc",
+      "n": "CAgICAgICAgICAgICAgICA",
+      "sig": "Bvd4MWKNhytvE4XVbPzjPwaa8bE8ExzZpWfYFgcI_7zhOv4bn--7k_FuvNuf0Q3bFmEgdlBVQx3m3ZNGfO3NTA"
+    },
+    "transcriptHex": "a1245f9a8ff5f22ad4b3583fb686c1dcf3ca99cb7a2e03d6354515d517da862d",
+    "code": "637690",
+    "p3": {
+      "t": "p3",
+      "pub": "BPcq454i8uXdD678_AVzX-SgRN8cIaKrAWIDFzFGWvP-xlvq2tpo35OppKeQIAGT6MDoEivPnKvxgTCO0DLgaHQ",
+      "sig": "6HTzThGMxVst7JZ7pIPAxWf93Z2kgh_wrGjKPYfcCZsTxvjextl6OJ6DTGXnUMCgjN25dsMyGPRrkgMtHDcYkg",
+      "name": "Chrissis iPhone",
+      "model": "iPhone Duo"
+    },
+    "p3PlaintextNote": "p3 enthält eine zufällige Signatur; d entschlüsseln und prüfen",
+    "p3d": "hfcEwYP_KpdjyhtPzVGNqyA0ubz4nf_Rbzy2gFD_Cbo3XN4a0RdSCYmdkPhpe-bCphCZSbCiKzq0GnP6QkQ8_Uacpqnt9qMKC4u_kyh9bQ4CFL853sl73XadimplQe6UBg8qYNQnh-6dDIGzD5JNedugGBz8MeKqJu4L_AaS6on7XDnB2PGW6R7aaA1tyKKaoIKq0dUi45wTu9q6uG-XrHVz4fPtuG6jmDsIzQvgjmsVduzgeesFdNsmWhE6PnUD-fqrdnVFNpOudLXtFLiZ6GjYP_BMnNIFBHzZPOlAMii2n_BMjY-n2Q-VarJCO5rlkt7-PH2VJB8-m06fiPf1lMJYoX8osPU",
+    "boxToDevice": [
+      {
+        "plaintext": "{\"t\":\"p_wait\"}",
+        "d": "4N3KggPp1LixR_d85QINH277odz4-xZVucc8V0gr"
+      }
+    ]
+  },
+  "mailbox": {
+    "key": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+    "devId": "6guoV70tPzxK-bmybYyvWA",
+    "plaintext": "{\"t\":\"latest\",\"ts\":\"2026-10-22T12:00:00.000Z\",\"status\":{\"soc\":55}}",
+    "d": "qqU1kiOJFczXadmDjJjr9uz2xwcJMkVlkWva7Pa9dMovkZJktrQxwc_Q68fmjdKB0GUxc90rxvD8wWA27UH_UC_XOFPikBCpXfTnMZ2808YcUh3eSx6ncnpo_MqJqg"
+  },
+  "aead": {
+    "key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "nonceHex": "000000000000000000000000",
+    "aadHex": "616164",
+    "plaintext": "hallo",
+    "sealedHex": "694621bd8129c0da49e873209908a28d70c2ef7971"
+  },
+  "qrExample": "dvhub://pair?v=1&b=BH_8mFLj_k0WCaWK6Y7mE8xl-hyX-ppJ2GcuZywa-akjRPfnPvyOkqYsNyeBe0lXDSzRL7TCxI2w8EkcAZEOWBg&s=WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo&e=4102444800&n=DVhub+Test&l=192.168.1.60%3A8080%2Cdvhub.local&r=wss%3A%2F%2Frelay.dvhub.de%2Fv1%2Fws",
+  "qrExampleParsed": {
+    "box": "BH_8mFLj_k0WCaWK6Y7mE8xl-hyX-ppJ2GcuZywa-akjRPfnPvyOkqYsNyeBe0lXDSzRL7TCxI2w8EkcAZEOWBg",
+    "secret": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+    "name": "DVhub Test",
+    "lan": [
+      "ws://192.168.1.60:8080/api/mobile-link/ws",
+      "ws://dvhub.local/api/mobile-link/ws"
+    ],
+    "relay": "wss://relay.dvhub.de/v1/ws",
+    "exp": 4102444800
+  }
+}

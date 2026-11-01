@@ -1,0 +1,7 @@
+// App.xcconfig — hier die eigene Bundle-ID eintragen (kostenloses Apple-Konto:
+// muss weltweit eindeutig sein, z. B. de.<deinname>.dvhub).
+DVHUB_BUNDLE_ID = de.dvhub.app
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+// Team leer lassen; in Xcode unter Signing & Capabilities das „Personal Team“ wählen.
+DEVELOPMENT_TEAM =

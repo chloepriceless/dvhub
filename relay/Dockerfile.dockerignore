@@ -1,0 +1,7 @@
+# Build-Kontext nur für das Relay-Image (BuildKit nimmt diese Datei statt der
+# .dockerignore im Wurzelordner, die nur das DVhub-Image bedient).
+*
+!relay/package.json
+!dvhub/services/mobile-link/crypto.js
+!dvhub/services/mobile-link/relay-core.js
+!dvhub/services/mobile-link/relay-server.js

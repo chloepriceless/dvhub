@@ -2944,3 +2944,11 @@ body.dv-modal-open {
 .installer-portal-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; background: rgba(255,255,255,0.02); }
 .installer-portal-name { font-weight: 600; }
 .installer-portal-meta { font-family: var(--f-mono); font-size: 11px; opacity: 0.7; flex: 1 1 220px; }
+
+/* Handy-App: QR-Code zum Koppeln (2026-10-22) — immer weiß hinterlegt, damit
+   Kameras ihn auch im dunklen Design lesen. */
+.mobile-link-pair { margin: 8px 0; }
+.mobile-link-qr { background: #fff; padding: 12px; width: 260px; max-width: 100%; border-radius: 8px; margin: 8px 14px; box-sizing: border-box; }
+.mobile-link-qr:empty { display: none; }
+.mobile-link-qr svg { display: block; width: 100%; height: auto; }
+.mobile-link-code { font-size: 1.3em; letter-spacing: 0.08em; font-variant-numeric: tabular-nums; }
