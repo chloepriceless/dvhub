@@ -98,12 +98,18 @@ export function createRelay({
   const L = { ...DEFAULT_LIMITS, ...limitOverrides };
   const boxes = new Map();      // boxId → { conn, allow:Set|null, pair, devices:Set<conn> }
   // Briefkästen je Box (Strix H-0002/H-0005): boxId → { bytes, devs: Map<devId, m> },
-  // m = { latest, items, bytes, nextId }, Eintrag = { id, ts, d, cost, seq, boxId, devId }.
+  // m = { latest, items, bytes }, Eintrag = { id, ts, d, cost, seq, boxId, devId, prev, next }.
   // bytes zählen Nutzdaten und Verwaltung (Box, Briefkasten, Eintrag) mit.
   const mbBoxes = new Map();
-  // Alle Einträge in Ablagereihenfolge, ältester zuerst: für „ältestes zuerst
-  // verwerfen“ und das Aufräumen nach Ablauf ohne Rundlauf über alle.
-  const mbOrder = new Set();
+  // Alle Einträge in Ablagereihenfolge, ältester zuerst (doppelt verkettet,
+  // O(1) vorn entnehmen und mittendrin austragen): für „ältestes zuerst
+  // verwerfen“ und das Aufräumen nach Ablauf ohne Rundlauf über alle. Kein Set —
+  // dessen Iterator müsste nach jedem Löschen vorn die Lücken neu überspringen
+  // (Codex 4597a2f8 P2).
+  let mbHead = null;
+  let mbTail = null;
+  // Relay-weit eindeutige Laufnummer = Ereignis-ID: eine verspätete Quittung
+  // trifft nie ein Ereignis aus einem neu angelegten Briefkasten (Codex P2).
   let mbSeq = 0;
   let mailboxCount = 0;
   let mailboxTotal = 0;
@@ -133,8 +139,22 @@ export function createRelay({
 
   function mbFind(boxId, devId) { return mbBoxes.get(boxId)?.devs.get(devId) || null; }
 
+  function orderAdd(it) {
+    it.prev = mbTail;
+    it.next = null;
+    if (mbTail) mbTail.next = it; else mbHead = it;
+    mbTail = it;
+  }
+
+  function orderRemove(it) {
+    if (it.prev) it.prev.next = it.next; else if (mbHead === it) mbHead = it.next;
+    if (it.next) it.next.prev = it.prev; else if (mbTail === it) mbTail = it.prev;
+    it.prev = null;
+    it.next = null;
+  }
+
   function mbRemoveEntry(it) {
-    mbOrder.delete(it);
+    orderRemove(it);
     const b = mbBoxes.get(it.boxId);
     const m = b?.devs.get(it.devId);
     if (!m) return;
@@ -192,10 +212,7 @@ export function createRelay({
 
   function mbPrune() {
     const cutoff = now() - L.mailboxTtlMs;
-    for (const it of mbOrder) {
-      if (it.ts >= cutoff) break;
-      mbEvict(it);
-    }
+    while (mbHead && mbHead.ts < cutoff) mbEvict(mbHead);
   }
 
   function mbOldestOfBox(b) {
@@ -230,7 +247,7 @@ export function createRelay({
         continue;
       }
       if (mailboxTotal + need > L.mailboxTotalBytes || (!m && mailboxCount >= L.maxMailboxes)) {
-        const old = mbOrder.values().next().value;
+        const old = mbHead;
         if (!old) { mbTidy(boxId, devId); return 'relay_full'; }
         mbEvict(old);
         continue;
@@ -244,15 +261,16 @@ export function createRelay({
       mailboxTotal += BOX_OVERHEAD;
     }
     if (!m) {
-      m = { latest: null, items: [], bytes: MAILBOX_OVERHEAD, nextId: 1 };
+      m = { latest: null, items: [], bytes: MAILBOX_OVERHEAD };
       b.devs.set(devId, m);
       mailboxCount += 1;
       b.bytes += MAILBOX_OVERHEAD;
       mailboxTotal += MAILBOX_OVERHEAD;
     }
-    const it = { id: slot === 'latest' ? 'latest' : String(m.nextId++), ts: now(), d, cost, seq: ++mbSeq, boxId, devId };
+    const seq = ++mbSeq;
+    const it = { id: slot === 'latest' ? 'latest' : String(seq), ts: now(), d, cost, seq, boxId, devId, prev: null, next: null };
     if (slot === 'latest') m.latest = it; else m.items.push(it);
-    mbOrder.add(it);
+    orderAdd(it);
     m.bytes += cost;
     b.bytes += cost;
     mailboxTotal += cost;
@@ -559,7 +577,8 @@ export function createRelay({
       clearInterval(pruneTimer);
       for (const c of [...conns]) closeConn(c, CLOSE.shutdown, 'shutdown');
       mbBoxes.clear();
-      mbOrder.clear();
+      mbHead = null;
+      mbTail = null;
       revoked.clear();
       mailboxCount = 0;
       mailboxTotal = 0;

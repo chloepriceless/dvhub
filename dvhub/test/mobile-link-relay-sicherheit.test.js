@@ -288,3 +288,62 @@ describe('Relay-Sicherheit H-0005: allow ohne Rundlauf über alle Briefkästen',
     relay.close();
   });
 });
+
+// ── Codex-Gegenprüfung 4597a2f8 ────────────────────────────────────────────
+
+// Box direkt am Relay (synchron, ohne Microtasks) — für Mengen-Tests.
+function syncBox(relay) {
+  let recv;
+  let challenge;
+  const inbox = [];
+  relay.attach({ send: (s) => { const m = JSON.parse(s); if (m.t === 'challenge') challenge = m.n; else inbox.push(m); }, close() {}, onMessage: (f) => { recv = f; }, onClose() {} });
+  const id = generateIdentity();
+  const send = (o) => recv(JSON.stringify(o));
+  send({ t: 'auth', role: 'box', pub: b64u(id.publicRaw), sig: b64u(id.sign(relayAuthData('box', challenge))) });
+  return { send, inbox, id };
+}
+
+describe('Relay-Sicherheit: Codex-Gegenprüfung', () => {
+  test('Ereignis-IDs bleiben eindeutig, auch wenn ein Briefkasten verdrängt und neu angelegt wird (P2)', async () => {
+    const relay = createRelay({ limits: { mailboxBytesPerBox: 24 * 1024, boxFramesPerWindow: 1e6, boxBytesPerWindow: 1e9 } });
+    const box = generateIdentity();
+    const dev = generateIdentity();
+    const b = await boxOnRelay(relay, box);
+    b.send({ t: 'allow', devs: [dev.id, 'anderes'] });
+    b.send({ t: 'mbox_put', dev: dev.id, d: b64(100, 'E') });
+    await flush(b);
+    const d = await deviceOnRelay(relay, box, dev);
+    await d.next('ok');
+    d.send({ t: 'mbox_get' });
+    const first = (await d.next('mbox')).items;
+    assert.equal(first.length, 1);
+    // Druck in derselben Box verdrängt den Briefkasten des Geräts …
+    for (let i = 0; i < 3; i++) b.send({ t: 'mbox_put', dev: 'anderes', d: b64(8000, 'X') });
+    // … dann kommt ein neues Ereignis, das das Gerät noch nicht gesehen hat.
+    b.send({ t: 'mbox_put', dev: dev.id, d: b64(100, 'N') });
+    await flush(b);
+    d.send({ t: 'mbox_ack', ids: first.map((i) => i.id) });
+    d.send({ t: 'mbox_get' });
+    const now = (await d.next('mbox')).items;
+    assert.deepEqual(now.map((i) => i.d[0]), ['N'], 'ungesehenes Ereignis durch alte Quittung gelöscht');
+    relay.close();
+  });
+
+  test('Verdrängen unter Speicherdruck bleibt linear (kein Neustart des Iterators, P2)', () => {
+    const relay = createRelay({ limits: { mailboxTotalBytes: 16 * 1024 * 1024, boxFramesPerWindow: 1e9, boxBytesPerWindow: 1e12 } });
+    const devs = Array.from({ length: 32 }, (_, i) => `dev${i}`);
+    const boxes = [];
+    for (let i = 0; i < 40; i++) {
+      const b = syncBox(relay);
+      b.send({ t: 'allow', devs });
+      for (const dev of devs) for (let j = 0; j < 64; j++) b.send({ t: 'mbox_put', dev, d: 'A' });
+      boxes.push(b);
+    }
+    const t0 = performance.now();
+    for (const b of boxes) b.send({ t: 'mbox_put', dev: devs[0], d: 'A'.repeat(500_000) });
+    const ms = performance.now() - t0;
+    assert.ok(relay.stats().mailboxBytes <= 16 * 1024 * 1024);
+    assert.ok(ms < 300, `40 große Ablagen unter Druck dauerten ${ms.toFixed(0)} ms`);
+    relay.close();
+  });
+});
