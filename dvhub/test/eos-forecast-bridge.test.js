@@ -1199,3 +1199,56 @@ test('Preise auffüllen: bei Stundenpreisen kommt die Schätzung ebenfalls stün
     assert.equal(env.state.optimizer.lastEosPush.priceEstimate.from, new Date(h0 + 10 * H).toISOString());
   } finally { await mock.close(); }
 });
+
+// Codex-Gegenprüfung Branch (P2): schlägt das Löschen fehl, ist der Push nicht ok
+// (sonst gilt die Prognose als zugestellt und der Wiederholversuch entfällt).
+test('Preise auffüllen: Löschen fehlgeschlagen → Push nicht ok', async () => {
+  const mock = await createMockEos((req, res) => {
+    if (req.method === 'DELETE') { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return; }
+    okHandler(req, res);
+  });
+  try {
+    const env = estimateCtx(mock);
+    const fc = await env.ctx.forecastService.buildForecastResponse();
+    const stale = [];
+    for (let ms = env.q0 - 26 * 3_600_000; ms < env.q0 - 3_600_000; ms += Q) stale.push({ start: new Date(ms).toISOString(), ctKwh: 10 });
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, price: { slots: stale } }) };
+    const res = await createEosForecastBridge(env.ctx).push();
+    assert.equal(res.ok, false);
+    assert.equal(env.state.optimizer.lastEosPush.ok, false);
+    assert.match(env.state.optimizer.lastEosPush.error, /priceEstimateClear/);
+  } finally { await mock.close(); }
+});
+
+// Codex-Gegenprüfung f442800b (P2): zwei Pushes gleichzeitig (Takt + neuer
+// Day-Ahead) — ein alter Stand darf nicht nach dem neuen löschen. Pushes laufen
+// nacheinander.
+test('Preise auffüllen: gleichzeitige Pushes laufen nacheinander', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const bridge = createEosForecastBridge(env.ctx);
+    await Promise.all([bridge.push(), bridge.push()]);
+    const marks = mock.requests.map((r, i) => ({ i, url: r.url, method: r.method }));
+    const pv = marks.filter((m) => m.url.startsWith('/v1/prediction/import/PVForecastImport'));
+    const hz = marks.filter((m) => m.url.startsWith('/v1/config/optimization/genetic/horizon_hours'));
+    assert.equal(pv.length, 2);
+    assert.ok(hz[0].i < pv[1].i, 'der zweite Push beginnt erst nach dem ersten');
+  } finally { await mock.close(); }
+});
+
+test('Preise auffüllen: echte Preise enden in weniger als 1 h 15 min → keine Schätzung, Rest wird gelöscht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc = await env.ctx.forecastService.buildForecastResponse();
+    const shortEnd = env.q0 + 60 * 60_000; // jetzt + höchstens 1 h
+    const real = fc.price.slots.filter((s) => Date.parse(s.start) < shortEnd);
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, price: { slots: real } }) };
+    await createEosForecastBridge(env.ctx).push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
+    const del = deletes(mock);
+    assert.equal(del.length, 2);
+    assert.equal(del[0].start, shortEnd);
+  } finally { await mock.close(); }
+});

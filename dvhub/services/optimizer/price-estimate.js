@@ -30,6 +30,12 @@ export const HISTORY_DAYS = 28;
 /** Unter zwei Tagen Historie wird nicht geschätzt. */
 export const MIN_HISTORY_SLOTS = 2 * DAY_SLOTS;
 export const OUTLIER_SIGMA = 2;
+/**
+ * So weit müssen echte Preise mindestens voraus reichen, damit geschätzt wird:
+ * EOS' Steuerzeitraum ist mindestens 1 h (computeControlHorizonHours), dazu
+ * 15 min Puffer — sonst lägen Schätzwerte im Steuerzeitraum.
+ */
+export const MIN_REAL_AHEAD_MS = 75 * 60 * 1000;
 
 const ALPHAS = [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5];
 const GAMMAS = [0, 0.02, 0.05, 0.1, 0.2, 0.3];
@@ -178,9 +184,10 @@ export function realPriceCoverage(priceSlots) {
  * bekannten Slot bis `untilMs` mit geschätzten Börsenpreisen verlängern.
  * Echte Slots bleiben unverändert; neue tragen `estimated: true`.
  *
- * Geschätzt wird nur hinter echten Preisen, die bis über `nowMs` reichen —
- * fehlen schon die Preise für jetzt (Abruf gestört), bliebe EOS sonst ganz
- * auf Schätzwerten stehen. Dann bleibt alles wie bisher.
+ * Geschätzt wird nur hinter echten Preisen, die mindestens bis jetzt + 1 h
+ * 15 min reichen (MIN_REAL_AHEAD_MS) — sonst lägen Schätzwerte im
+ * Steuerzeitraum, und fehlen schon die Preise für jetzt (Abruf gestört),
+ * bliebe EOS ganz auf Schätzwerten stehen. Dann bleibt alles wie bisher.
  *
  * @param {Array<{start:string, ctKwh:number}>} priceSlots echte Slots
  * @param {object} opts
@@ -194,7 +201,7 @@ export function fillPriceSlots(priceSlots, { history = [], untilMs, nowMs = Date
     .filter((s) => s && s.start && Number.isFinite(Number(s.ctKwh)) && Number.isFinite(Date.parse(s.start)));
   const unchanged = { slots: Array.isArray(priceSlots) ? priceSlots : [], estimate: null };
   const { end: fromMs, stepMs } = realPriceCoverage(real);
-  if (!real.length || !Number.isFinite(untilMs) || fromMs <= nowMs) return unchanged;
+  if (!real.length || !Number.isFinite(untilMs) || fromMs < nowMs + MIN_REAL_AHEAD_MS) return unchanged;
   // Geschätzt wird in der Slot-Länge der echten Preise: eine Reihe mit
   // gemischter Kadenz (Stundenpreise + 15-min-Schätzung) liest EOS
   // (bounded_forecast_array) mit Lücken und bricht ab (Gegenprüfung 8c050aae).

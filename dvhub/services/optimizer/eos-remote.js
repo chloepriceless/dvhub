@@ -209,6 +209,7 @@ export function createEosRemoteFacade({
   const startedAt = new Date().toISOString();
   const config = new Map();       // Pfad → Wert (Reihenfolge des ersten Eintreffens)
   const predictions = new Map();  // Provider → { column, tz, rows: Map<ms, Wert> }
+  const deletedRanges = [];       // per DELETE /v1/prediction/range entfernt, für runLocal
   const measurements = new Map(); // Schlüssel → { datetime, value }
   let last = null;                // { optimize, plan, solution, at, source }
   let chain = Promise.resolve();
@@ -458,6 +459,14 @@ export function createEosRemoteFacade({
       return r.data;
     };
     for (const p of ordered) await must('PUT', `/v1/config/${p}`, config.get(p));
+    // Gelöschte Bereiche (alte Preis-Schätzwerte) auch im lokalen EOS löschen —
+    // es hat sie evtl. aus einem früheren Rückfall, und Importe löschen nichts.
+    for (const d of [...deletedRanges]) {
+      const qs = `key=${encodeURIComponent(d.key)}${Number.isFinite(d.from) ? `&start_datetime=${encodeURIComponent(isoZ(d.from))}` : ''}${Number.isFinite(d.to) ? `&end_datetime=${encodeURIComponent(isoZ(d.to))}` : ''}`;
+      const r = await localRequest(base, 'DELETE', `/v1/prediction/range?${qs}`, undefined, t);
+      if (r.status !== 404 && (r.status < 200 || r.status >= 300)) throw new Error(`DELETE /v1/prediction/range: HTTP ${r.status}`);
+      deletedRanges.splice(deletedRanges.indexOf(d), 1);
+    }
     for (const [prov, df] of Object.entries(predictionsForJob())) await must('PUT', `/v1/prediction/import/${prov}?force_enable=true`, df);
     for (const m of measurementsForJob()) {
       await must('PUT', `/v1/measurement/value?datetime=${encodeURIComponent(m.datetime)}&key=${encodeURIComponent(m.key)}&value=${m.value}`);
@@ -564,6 +573,9 @@ export function createEosRemoteFacade({
         const to = url.searchParams.get('end_datetime') ? Date.parse(url.searchParams.get('end_datetime')) : Infinity;
         if (Number.isNaN(from) || Number.isNaN(to)) return send(res, 400, { detail: 'invalid datetime' });
         for (const ms of [...entry.rows.keys()]) if (ms >= from && ms < to) entry.rows.delete(ms);
+        // Für den lokalen Rückfall merken (höchstens 50, älteste fallen weg).
+        deletedRanges.push({ key, from, to });
+        if (deletedRanges.length > 50) deletedRanges.splice(0, deletedRanges.length - 50);
         return send(res, 200, { data: Object.fromEntries([...entry.rows.entries()].sort((a, b) => a[0] - b[0]).map(([ms, v]) => [isoZ(ms), v])) });
       }
       if (req.method === 'GET' && p === '/v1/prediction/series') {

@@ -46,7 +46,7 @@ import { localDate } from '../../tz-fast.js';
 // Zweite GX am selben Anschluss: Ladestand beider Akkus, nach Kapazitaet gewichtet.
 import { planningSocPct } from '../multi-gx/planning.js';
 // Preise hinter den bekannten Day-Ahead-Preisen schätzen (01.11.2026).
-import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
+import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, MIN_REAL_AHEAD_MS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
 
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
@@ -416,7 +416,8 @@ export function createEosForecastBridge(ctx) {
    * 8c050aae, P2). Gelöscht wird
    *   - was der letzte Push an Schätzwerten über das jetzt Geschickte hinaus
    *     geschickt hat, und
-   *   - wenn die echten Preise jetzt nicht abdecken, alles hinter ihrem Ende
+   *   - wenn die echten Preise nicht über den Mindest-Steuerzeitraum reichen
+   *     (jetzt + 1 h 15 min), alles hinter ihrem Ende
    *     bis zum größtmöglichen Schätzbereich (auch nach einem DVhub-Neustart,
    *     der den letzten Bereich nicht mehr kennt).
    */
@@ -427,7 +428,7 @@ export function createEosForecastBridge(ctx) {
       start = Math.max(sentEndMs, lastEstimateRange.fromMs);
       end = lastEstimateRange.untilMs;
     }
-    if (!(realEndMs > nowMs)) {
+    if (!(realEndMs >= nowMs + MIN_REAL_AHEAD_MS)) {
       start = Math.min(start, Number.isFinite(realEndMs) ? realEndMs : nowMs);
       end = Math.max(end, nowMs + PRICE_FILL_MAX_MS + 3_600_000);
     }
@@ -446,7 +447,7 @@ export function createEosForecastBridge(ctx) {
   async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs) {
     const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs);
     const { end } = realPriceCoverage(realSlots);
-    if (end <= nowMs || end >= untilMs) return { slots: realSlots, estimate: null };
+    if (end < nowMs + MIN_REAL_AHEAD_MS || end >= untilMs) return { slots: realSlots, estimate: null };
     const history = await loadPriceHistory(nowMs);
     return fillPriceSlots(realSlots, { history, untilMs, nowMs });
   }
@@ -739,7 +740,17 @@ export function createEosForecastBridge(ctx) {
     return res;
   }
 
-  async function push() {
+  // Pushes laufen nacheinander (Takt, neue Day-Ahead-Preise, Konfiguration):
+  // sonst könnte ein älterer Stand nach einem neueren dessen echte Preise in
+  // EOS wieder löschen (Codex-Gegenprüfung f442800b).
+  let pushChain = Promise.resolve();
+  function push() {
+    const run = pushChain.then(pushOnce, pushOnce);
+    pushChain = run.catch(() => {});
+    return run;
+  }
+
+  async function pushOnce() {
     const cfg = getCfg();
     const baseUrl = resolveEosProxy(cfg).url;
 
@@ -971,8 +982,12 @@ export function createEosForecastBridge(ctx) {
     for (const p of socRes.pushed) pushed.push(p);
     Object.assign(errors, socRes.errors);
 
+    // Auch ein fehlgeschlagenes Löschen alter Schätzwerte macht den Push
+    // „nicht ok“ — sonst gilt die Prognose als zugestellt und der
+    // Wiederholversuch entfällt (Codex-Gegenprüfung).
     const okAll = pushed.length === tasks.length + socRes.pushed.length
-      && Object.keys(socRes.errors).length === 0;
+      && Object.keys(socRes.errors).length === 0
+      && !errors.priceEstimateClear;
     if (pushLog) {
       pushLog('eos_forecast_bridge', {
         ok: okAll, pushed, errors, socSkipped: socRes.skipped,

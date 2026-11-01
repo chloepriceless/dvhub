@@ -479,3 +479,36 @@ describe('Fernbetrieb: Prognosebereich löschen (Preis-Schätzung)', () => {
     assert.ok(facade);
   });
 });
+
+describe('Fernbetrieb: gelöschte Prognosebereiche im lokalen Rückfall', () => {
+  it('der lokale Rückfall löscht dieselben Bereiche, bevor er importiert', async () => {
+    const seen = [];
+    const local = await listen(async (rq, res) => {
+      const send = (s, o) => { res.writeHead(s, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+      await readBody(rq);
+      seen.push(`${rq.method} ${rq.url.split('?')[0]}${rq.method === 'DELETE' ? '?' + rq.url.split('?')[1] : ''}`);
+      if (rq.method === 'POST' && rq.url === '/v1/optimize') return send(200, { start_solution: [9] });
+      if (rq.url === '/v1/energy-management/plan') return send(200, { id: 'local-plan', instructions: [] });
+      if (rq.url === '/v1/energy-management/optimization/solution') return send(200, { solution: { data: {} } });
+      return send(200, {});
+    });
+    const cfg = makeCfg('http://127.0.0.1:9', { token: 'dves_x', localFallback: true });
+    cfg.optimizer.eosProxy.url = local;
+    const { url } = await startFacade(cfg);
+    const t0 = Math.floor(Date.now() / 900_000) * 900_000;
+    const iso = (i) => new Date(t0 + i * 900_000).toISOString().replace('.000Z', 'Z');
+    const body = { data: Object.fromEntries([0, 1, 2, 3].map((i) => [iso(i), { elecprice_marketprice_wh: 0.0003 }])), dtypes: {}, tz: 'Europe/Berlin', datetime_columns: [] };
+    await req(url, 'PUT', '/v1/prediction/import/ElecPriceImport?force_enable=true', body);
+    await req(url, 'DELETE', `/v1/prediction/range?key=elecprice_marketprice_wh&start_datetime=${encodeURIComponent(iso(2))}&end_datetime=${encodeURIComponent(iso(10))}`);
+    assert.equal((await req(url, 'POST', '/v1/optimize', { soc: { battery1: 40 } })).status, 200);
+    const del = seen.findIndex((l) => l.startsWith('DELETE /v1/prediction/range?key=elecprice_marketprice_wh'));
+    const imp = seen.findIndex((l) => l.startsWith('PUT /v1/prediction/import/ElecPriceImport'));
+    assert.ok(del >= 0, 'lokal gelöscht');
+    assert.ok(del < imp, 'vor dem Import');
+    assert.match(seen[del], new RegExp(encodeURIComponent(iso(2)).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    // Beim nächsten Rückfall nicht noch einmal.
+    seen.length = 0;
+    await req(url, 'POST', '/v1/optimize', { soc: { battery1: 40 } });
+    assert.ok(!seen.some((l) => l.startsWith('DELETE')));
+  });
+});
