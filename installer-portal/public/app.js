@@ -186,8 +186,10 @@ const SEC_EVENT_TEXT = { passkey_added: 'Neuer Passkey angelegt', totp_enabled: 
 function renderSecNotice(me) {
   const box = $('#secNotice');
   if (!box) return;
+  // Pro Konto merken — sonst blendet „Gesehen“ an Konto A die Hinweise von Konto B aus.
+  const seenKey = `dvportal-sec-seen:${String(me.name || '').toLowerCase()}`;
   let seen = '';
-  try { seen = localStorage.getItem('dvportal-sec-seen') || ''; } catch { /* egal */ }
+  try { seen = localStorage.getItem(seenKey) || ''; } catch { /* egal */ }
   const recent = (me.securityEvents || []).filter((e) => e.type === 'passkey_added'
     && Date.parse(e.at) > Date.now() - 14 * 86400_000 && String(e.at) > seen);
   box.replaceChildren();
@@ -199,7 +201,7 @@ function renderSecNotice(me) {
     + 'Warst du das nicht? Unter „Konto“ den Passkey entfernen, „Überall abmelden“ und das Passwort ändern.';
   const ok = document.createElement('button');
   ok.type = 'button'; ok.className = 'btn tiny'; ok.textContent = 'Gesehen';
-  ok.addEventListener('click', () => { try { localStorage.setItem('dvportal-sec-seen', String(last.at)); } catch { /* egal */ } box.hidden = true; });
+  ok.addEventListener('click', () => { try { localStorage.setItem(seenKey, String(last.at)); } catch { /* egal */ } box.hidden = true; });
   box.append(t, ok);
 }
 

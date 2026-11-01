@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { totp } from '../totp.js';
 import { makeAuthenticator } from './fake-auth.js';
@@ -177,6 +178,32 @@ test('F2: Abmelden beendet genau diese Sitzung serverseitig, andere Geräte blei
   assert.equal((await p.call('/api/me', { cookie: handy })).status, 200, 'anderes Gerät bleibt angemeldet');
 });
 
+test('F2: Request, dessen Body erst nach dem Abmelden ankommt, bekommt kein neues Cookie', async (t) => {
+  const p = await startPortal(t);
+  const a = await account(p);
+  const b = await p.call('/api/passkey/register-begin', { method: 'POST', cookie: a.cookie, body: { password: PW } });
+  assert.equal(b.status, 200, b.text);
+  const c = makeAuthenticator('127.0.0.1').create(p.url, b.j.challenge);
+  const body = JSON.stringify({ label: 'spät', attestationObject: c.response.attestationObject, clientDataJSON: c.response.clientDataJSON });
+  const u = new URL(p.url + '/api/passkey/register-finish');
+  const slow = new Promise((resolve, reject) => {
+    const req = http.request({ host: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: {
+      'content-type': 'application/json', 'content-length': Buffer.byteLength(body), cookie: a.cookie, origin: p.url } }, (res) => {
+      let d = ''; res.on('data', (x) => { d += x; }); res.on('end', () => resolve({ status: res.statusCode, setCookie: res.headers['set-cookie'] || null, text: d }));
+    });
+    req.on('error', reject);
+    req.flushHeaders();
+    setTimeout(() => req.end(body), 400);
+  });
+  await sleep(100);
+  assert.equal((await p.call('/api/logout', { method: 'POST', cookie: a.cookie })).status, 200);
+  const r = await slow;
+  assert.equal(r.status, 401, r.text);
+  assert.equal(r.setCookie, null, 'kein neues Cookie');
+  const again = await login(p, a.name);
+  assert.equal((await p.call('/api/me', { cookie: again.cookie })).j.passkeys.length, 0);
+});
+
 test('F2: Abmeldung überlebt einen Neustart des Portals', async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-strix-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
@@ -288,7 +315,8 @@ test('F3: Anfragen mit falschem Token verbrauchen nicht das Kontingent der echte
   const p = await startPortal(t);
   const a = await account(p);
   const box = await pair(p, a.cookie);
-  for (let i = 0; i < 40; i++) {
+  // Auch Dauerfeuer von derselben IP (CGNAT) sperrt die gültige Box nicht.
+  for (let i = 0; i < 320; i++) {
     await p.call('/api/poll', { method: 'POST', headers: { 'x-appliance-token': 'f'.repeat(64) }, body: { applianceId: AID } });
   }
   assert.equal((await box.poll()).status, 200);

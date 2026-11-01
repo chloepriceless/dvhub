@@ -229,9 +229,6 @@ function rateLimited(req, bucket, max = 20) {
 // IP — hinter CGNAT/DS-Lite teilen sich viele Boxen eine Adresse. Die Box
 // pollt alle 30 s (2/min) und meldet Ergebnisse höchstens einmal pro Poll.
 const APPLIANCE_RATE_PER_MIN = Number(process.env.APPLIANCE_RATE_PER_MIN) || 30;
-// Falsche Geräteschlüssel zählen pro IP — großzügig, damit Boxen hinter einer
-// gemeinsamen Adresse nicht leiden; bremst nur Dauerfeuer ohne gültigen Schlüssel.
-const BAD_TOKEN_PER_MIN = 300;
 // Gespeicherter Anlagen-Status und einzelne Befehlsergebnisse: Größengrenze.
 // Der echte Kompakt-Status liegt bei wenigen KB.
 const STATUS_MAX_BYTES = 64 * 1024;
@@ -446,8 +443,11 @@ function setSessionCookie(res, acctKey, acct) {
 }
 // Signatur+Ablauf prüft readSession; hier zusätzlich: Konto existiert und
 // die Session ist nicht durch eine Sicherheitsänderung überholt.
+// Auch die Sperrliste erneut prüfen: ein Request, dessen Body erst nach dem
+// Abmelden ankommt, darf kein neues Cookie mehr bekommen (Codex f69c9708).
 function sessionMatches(sess, acct) {
-  return !!(sess && acct && (sess.sv || 0) === (acct.sessionVersion || 0));
+  return !!(sess && acct && (sess.sv || 0) === (acct.sessionVersion || 0)
+    && !(typeof sess.sid === 'string' && revokedSessions.has(sess.sid)));
 }
 // Sicherheitsrelevante Kontoänderung: alle anderen Sessions beenden, die
 // aktuelle bekommt ein frisches Cookie (sonst sperrt man sich selbst aus).
@@ -655,11 +655,9 @@ async function handleApi(req, res, url) {
     return { errors: sel, summary: [...byType.values()].sort((a, b) => (a.last < b.last ? 1 : -1)) };
   }
 
-  const badTokenFlood = (r) => rateOver(`badtoken|${clientIp(r)}`, BAD_TOKEN_PER_MIN);
-  function badToken(r, out) {
-    rateHit(`badtoken|${clientIp(r)}`, BAD_TOKEN_PER_MIN);
-    return jsonRes(out, 401, { ok: false, error: 'appliance_token_invalid' });
-  }
+  // Keine IP-Sperre für falsche Schlüssel: hinter CGNAT würde sie gültige
+  // Boxen derselben Adresse mitsperren (Codex f69c9708).
+  const badToken = (_r, out) => jsonRes(out, 401, { ok: false, error: 'appliance_token_invalid' });
 
   const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
   const MONTH_RE = /^\d{4}-\d{2}$/;
@@ -728,7 +726,6 @@ async function handleApi(req, res, url) {
     return jsonRes(res, 200, { ok: true, applianceToken, status: pr.status });
   }
   if (p === '/api/poll' && method === 'POST') {
-    if (badTokenFlood(req)) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
     const token = String(req.headers['x-appliance-token'] || '');
     const b = await readBody(req);
     const aid = String(b.applianceId || '').trim().toLowerCase();
@@ -761,7 +758,6 @@ async function handleApi(req, res, url) {
   // Anlage trennt sich (Kunde hat „Portal-Kopplung trennen“ gedrückt):
   // Kopplung hier löschen, damit die Anlage frei für einen neuen Code ist.
   if (p === '/api/pair/release' && method === 'POST') {
-    if (badTokenFlood(req)) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
     const token = String(req.headers['x-appliance-token'] || '');
     const b = await readBody(req);
     const aid = String(b.applianceId || '').trim().toLowerCase();
@@ -774,7 +770,6 @@ async function handleApi(req, res, url) {
     return jsonRes(res, 200, { ok: true });
   }
   if (p === '/api/command-result' && method === 'POST') {
-    if (badTokenFlood(req)) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
     const token = String(req.headers['x-appliance-token'] || '');
     const b = await readBody(req);
     const aid = String(b.applianceId || '').trim().toLowerCase();
