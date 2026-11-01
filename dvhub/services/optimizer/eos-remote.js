@@ -554,6 +554,18 @@ export function createEosRemoteFacade({
         mergePrediction(provider, body);
         return send(res, 200);
       }
+      // Wie EOS: Werte eines Schlüssels im Bereich löschen (die Bridge räumt
+      // so nicht mehr geltende Preis-Schätzwerte ab).
+      if (req.method === 'DELETE' && p === '/v1/prediction/range') {
+        const key = url.searchParams.get('key');
+        const entry = [...predictions.values()].find((e) => e.column === key);
+        if (!entry) return send(res, 404, { detail: `Key '${key}' not found in predictions` });
+        const from = url.searchParams.get('start_datetime') ? Date.parse(url.searchParams.get('start_datetime')) : -Infinity;
+        const to = url.searchParams.get('end_datetime') ? Date.parse(url.searchParams.get('end_datetime')) : Infinity;
+        if (Number.isNaN(from) || Number.isNaN(to)) return send(res, 400, { detail: 'invalid datetime' });
+        for (const ms of [...entry.rows.keys()]) if (ms >= from && ms < to) entry.rows.delete(ms);
+        return send(res, 200, { data: Object.fromEntries([...entry.rows.entries()].sort((a, b) => a[0] - b[0]).map(([ms, v]) => [isoZ(ms), v])) });
+      }
       if (req.method === 'GET' && p === '/v1/prediction/series') {
         const key = url.searchParams.get('key');
         const entry = [...predictions.values()].find((e) => e.column === key);

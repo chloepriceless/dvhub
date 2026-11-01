@@ -195,8 +195,12 @@ export function fillPriceSlots(priceSlots, { history = [], untilMs, nowMs = Date
   const unchanged = { slots: Array.isArray(priceSlots) ? priceSlots : [], estimate: null };
   const { end: fromMs, stepMs } = realPriceCoverage(real);
   if (!real.length || !Number.isFinite(untilMs) || fromMs <= nowMs) return unchanged;
-  const steps = Math.ceil((untilMs - fromMs) / SLOT_MS);
-  if (steps <= 0) return unchanged;
+  // Geschätzt wird in der Slot-Länge der echten Preise: eine Reihe mit
+  // gemischter Kadenz (Stundenpreise + 15-min-Schätzung) liest EOS
+  // (bounded_forecast_array) mit Lücken und bricht ab (Gegenprüfung 8c050aae).
+  const perSlot = Math.max(1, Math.round(stepMs / SLOT_MS));
+  const slotCount = Math.ceil((untilMs - fromMs) / stepMs);
+  if (slotCount <= 0) return unchanged;
 
   // Die echten Slots gehören zur Historie (heute/morgen stehen evtl. noch
   // nicht in der Datenbank) und gehen der gespeicherten Reihe vor; Stunden-
@@ -204,27 +208,29 @@ export function fillPriceSlots(priceSlots, { history = [], untilMs, nowMs = Date
   const points = Array.isArray(history) ? history.slice() : [];
   for (const s of real) {
     const ms = Date.parse(s.start);
-    for (let k = 0; k * SLOT_MS < stepMs; k += 1) points.push({ ms: ms + k * SLOT_MS, ct: Number(s.ctKwh) });
+    for (let k = 0; k < perSlot; k += 1) points.push({ ms: ms + k * SLOT_MS, ct: Number(s.ctKwh) });
   }
-  const fc = forecastSpotPrices(points, fromMs - SLOT_MS, steps);
+  const fc = forecastSpotPrices(points, fromMs - SLOT_MS, slotCount * perSlot);
   if (!fc) return unchanged;
 
-  const added = fc.values.map((ct, i) => {
-    const start = fromMs + i * SLOT_MS;
-    return {
+  const added = [];
+  for (let i = 0; i < slotCount; i += 1) {
+    const start = fromMs + i * stepMs;
+    const quarters = fc.values.slice(i * perSlot, (i + 1) * perSlot);
+    added.push({
       start: new Date(start).toISOString(),
-      end: new Date(start + SLOT_MS).toISOString(),
-      ctKwh: round2(ct),
+      end: new Date(start + stepMs).toISOString(),
+      ctKwh: round2(quarters.reduce((a, v) => a + v, 0) / quarters.length),
       confidence: 0.5,
       estimated: true,
-    };
-  });
+    });
+  }
   return {
     slots: [...unchanged.slots, ...added],
     estimate: {
       estimatedSlots: added.length,
       from: added[0].start,
-      until: new Date(fromMs + added.length * SLOT_MS).toISOString(),
+      until: new Date(fromMs + added.length * stepMs).toISOString(),
       method: fc.method,
       historySlots: fc.historySlots,
     },

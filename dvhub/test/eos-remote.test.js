@@ -463,3 +463,19 @@ describe('Fernbetrieb: Gegenprüfung Runde 2', () => {
     assert.equal(state.optimizer.eosRemote.lastError.code, 'service_unreachable');
   });
 });
+
+describe('Fernbetrieb: Prognosebereich löschen (Preis-Schätzung)', () => {
+  it('DELETE /v1/prediction/range entfernt die Werte eines Schlüssels im Bereich', async () => {
+    const { url, facade } = await startFacade(makeCfg('https://x.invalid'));
+    const t0 = Math.floor(Date.now() / 900_000) * 900_000;
+    const iso = (i) => new Date(t0 + i * 900_000).toISOString().replace('.000Z', 'Z');
+    const body = { data: Object.fromEntries([0, 1, 2, 3].map((i) => [iso(i), { elecprice_marketprice_wh: 0.0003 + i * 1e-5 }])), dtypes: {}, tz: 'Europe/Berlin', datetime_columns: [] };
+    await req(url, 'PUT', '/v1/prediction/import/ElecPriceImport?force_enable=true', body);
+    const r = await req(url, 'DELETE', `/v1/prediction/range?key=elecprice_marketprice_wh&start_datetime=${encodeURIComponent(iso(2))}&end_datetime=${encodeURIComponent(iso(10))}`);
+    assert.equal(r.status, 200);
+    const s = await req(url, 'GET', '/v1/prediction/series?key=elecprice_marketprice_wh');
+    assert.deepEqual(Object.keys(s.json.data), [iso(0), iso(1)]);
+    assert.equal((await req(url, 'DELETE', '/v1/prediction/range?key=unbekannt')).status, 404);
+    assert.ok(facade);
+  });
+});

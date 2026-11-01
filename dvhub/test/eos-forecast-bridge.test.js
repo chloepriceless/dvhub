@@ -1116,3 +1116,86 @@ test('Preise auffüllen: ohne gespeicherte Historie bleibt alles wie bisher', as
     assert.equal(state.optimizer.eosPriceEstimate, null);
   } finally { await mock.close(); }
 });
+
+// Gegenprüfung 8c050aae (P2): EOS speichert Importe nur dazu und löscht nichts.
+// Fehlen nach einem Preisausfall die echten Preise für jetzt, lägen sonst die
+// früher geschickten Schätzwerte im Steuerzeitraum und EOS plante darauf.
+function deletes(mock) {
+  return mock.requests
+    .filter((r) => r.method === 'DELETE' && r.url.startsWith('/v1/prediction/range'))
+    .map((r) => {
+      const u = new URL(r.url, 'http://x');
+      return { key: u.searchParams.get('key'), start: Date.parse(u.searchParams.get('start_datetime')), end: Date.parse(u.searchParams.get('end_datetime')) };
+    });
+}
+
+test('Preise auffüllen: nach Preisausfall werden die früher geschickten Schätzwerte in EOS gelöscht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const env = estimateCtx(mock, { logs });
+    // Die Bridge hält das Prognose-Objekt fest — die Antwort darüber umschalten.
+    const fs0 = env.ctx.forecastService;
+    const orig = fs0.buildForecastResponse;
+    let override = null;
+    fs0.buildForecastResponse = async () => override || orig();
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    const first = env.state.optimizer.lastEosPush.priceEstimate;
+    assert.ok(first && first.estimatedSlots > 0);
+    assert.deepEqual(deletes(mock), [], 'solange echte Preise jetzt abdecken, wird nichts gelöscht');
+    // Abruf gestört: die Prognose liefert nur noch Preise, die vor jetzt enden.
+    const stale = [];
+    for (let ms = env.q0 - 26 * 3_600_000; ms < env.q0 - 3_600_000; ms += Q) stale.push({ start: new Date(ms).toISOString(), ctKwh: 10 });
+    override = { ...(await orig()), price: { slots: stale } };
+    await bridge.push();
+    const del = deletes(mock);
+    assert.deepEqual(del.map((d) => d.key).sort(), ['elecprice_marketprice_wh', 'feed_in_tariff_wh']);
+    for (const d of del) {
+      assert.ok(d.start <= Date.parse(first.from), 'ab dem ersten Schätzwert');
+      assert.ok(d.end >= Date.parse(first.until), 'bis zum letzten Schätzwert');
+    }
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
+    assert.ok(logs.some((l) => l.event === 'eos_price_estimate_cleared'));
+  } finally { await mock.close(); }
+});
+
+test('Preise auffüllen: auch nach DVhub-Neustart — echte Preise decken jetzt nicht ab → Bereich dahinter löschen', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc = await env.ctx.forecastService.buildForecastResponse();
+    const stale = [];
+    for (let ms = env.q0 - 26 * 3_600_000; ms < env.q0 - 3_600_000; ms += Q) stale.push({ start: new Date(ms).toISOString(), ctKwh: 10 });
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, price: { slots: stale } }) };
+    await createEosForecastBridge(env.ctx).push();
+    const del = deletes(mock);
+    assert.equal(del.length, 2);
+    for (const d of del) {
+      assert.equal(d.start, env.q0 - 3_600_000, 'ab dem Ende der echten Preise');
+      assert.ok(d.end >= Date.now() + 72 * 3_600_000, 'über den ganzen möglichen Schätzbereich');
+    }
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 8c050aae (P2): Stundenpreise + 15-min-Schätzungen ergäben eine
+// gemischte Kadenz, EOS (bounded_forecast_array) liest dann Lücken.
+test('Preise auffüllen: bei Stundenpreisen kommt die Schätzung ebenfalls stündlich', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const H = 3_600_000;
+    const h0 = env.q0 - (env.q0 % H);
+    const hourly = [];
+    for (let ms = h0 - 2 * H; ms < h0 + 10 * H; ms += H) hourly.push({ start: new Date(ms).toISOString(), ctKwh: env.pattern(ms) });
+    const fc = await env.ctx.forecastService.buildForecastResponse();
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, price: { slots: hourly } }) };
+    await createEosForecastBridge(env.ctx).push();
+    for (const [provider, key] of [['ElecPriceImport', 'elecprice_marketprice_wh'], ['FeedInTariffImport', 'feed_in_tariff_wh']]) {
+      const ts = [...seriesOf(mock, provider, key).keys()].sort((a, b) => a - b);
+      assert.ok(ts.length > hourly.length, `${provider}: geschätzt wurde`);
+      for (let i = 1; i < ts.length; i += 1) assert.equal(ts[i] - ts[i - 1], H, `${provider}: gleichmäßig stündlich`);
+    }
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate.from, new Date(h0 + 10 * H).toISOString());
+  } finally { await mock.close(); }
+});
