@@ -67,13 +67,16 @@ Ohne TLS (`ws://`) nimmt DVhub ein Relay nur im eigenen Netz an.
 | `RELAY_NAME` | Name in der Begrüßung | `dvhub-relay` |
 | `RELAY_BOX_ALLOWLIST` | Datei mit erlaubten Anlagen-Kennungen (eine je Zeile, `#` = Kommentar). Ohne Datei darf jede Anlage das Relay nutzen. Änderungen wirken ohne Neustart. | – |
 | `RELAY_MAX_BOXES` | höchstens so viele Anlagen gleichzeitig | `10000` |
-| `RELAY_TRUST_PROXY` | `1` = Client-Adresse aus `X-Forwarded-For` (nur fürs Log) | – |
+| `RELAY_TRUST_PROXY` | Anzahl Reverse-Proxys vor dem Relay (`1` = ein Caddy/nginx). Die Quelladresse für die Grenze je Quelle ist dann der Eintrag, den der äußerste Proxy in `X-Forwarded-For` angehängt hat (von rechts gezählt), nie ein vom Client gesetzter. Wird nur von Gegenstellen mit privater Adresse (Docker-Netz, localhost) angenommen; IPv6 zählt je /64. | – |
 
 Die Kennung einer Anlage steht in DVhub in der Kachel „Handy-App“ (`boxId`) bzw.
 in `GET /api/mobile-link/status`.
 
 Grenzen je Verbindung (Rahmengröße, Rahmen und Bytes je 10 s, Geräte je Anlage,
-Briefkasten-Größe) stehen in `DEFAULT_LIMITS` in `relay-core.js`.
+Briefkasten-Größe) stehen in `DEFAULT_LIMITS` in `relay-core.js`. Sie sind auf
+einen Container mit 256 MiB ausgelegt: höchstens 4000 Verbindungen, Briefkästen
+zusammen 64 MiB (2 MiB je Anlage, gezählt mit Verwaltungsaufwand). Ist ein
+Budget voll, weichen die ältesten Einträge — zuerst die der eigenen Anlage.
 
 ## Überwachung
 
