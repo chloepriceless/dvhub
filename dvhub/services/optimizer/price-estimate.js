@@ -157,35 +157,56 @@ function round2(v) {
 }
 
 /**
+ * Ende der echten Preise (ms, exklusiv) und ihre Slot-Länge. Die Länge kommt
+ * aus den Daten (kleinster Abstand), damit Stundenpreise nicht als
+ * Viertelstunden gelten. Ohne gültige Slots: end = -Infinity.
+ */
+export function realPriceCoverage(priceSlots) {
+  const starts = [...new Set((Array.isArray(priceSlots) ? priceSlots : [])
+    .filter((s) => s && Number.isFinite(Number(s.ctKwh)))
+    .map((s) => Date.parse(s.start))
+    .filter(Number.isFinite))].sort((a, b) => a - b);
+  if (!starts.length) return { end: -Infinity, stepMs: SLOT_MS };
+  let stepMs = Infinity;
+  for (let i = 1; i < starts.length; i += 1) stepMs = Math.min(stepMs, starts[i] - starts[i - 1]);
+  if (!Number.isFinite(stepMs) || stepMs <= 0) stepMs = SLOT_MS;
+  return { end: starts[starts.length - 1] + stepMs, stepMs };
+}
+
+/**
  * Preis-Slots (forecast.price.slots: {start, end, ctKwh}) hinter dem letzten
  * bekannten Slot bis `untilMs` mit geschätzten Börsenpreisen verlängern.
  * Echte Slots bleiben unverändert; neue tragen `estimated: true`.
+ *
+ * Geschätzt wird nur hinter echten Preisen, die bis über `nowMs` reichen —
+ * fehlen schon die Preise für jetzt (Abruf gestört), bliebe EOS sonst ganz
+ * auf Schätzwerten stehen. Dann bleibt alles wie bisher.
  *
  * @param {Array<{start:string, ctKwh:number}>} priceSlots echte Slots
  * @param {object} opts
  * @param {Array<{ms:number, ct:number}>} opts.history  gespeicherte Day-Ahead-Historie
  * @param {number} opts.untilMs  bis wohin (exklusiv) die Reihe reichen soll
+ * @param {number} [opts.nowMs]  jetzt (Standard: Date.now())
  * @returns {{slots:Array, estimate:null|{estimatedSlots:number, from:string, until:string, method:string, historySlots:number}}}
  */
-export function fillPriceSlots(priceSlots, { history = [], untilMs } = {}) {
+export function fillPriceSlots(priceSlots, { history = [], untilMs, nowMs = Date.now() } = {}) {
   const real = (Array.isArray(priceSlots) ? priceSlots : [])
     .filter((s) => s && s.start && Number.isFinite(Number(s.ctKwh)) && Number.isFinite(Date.parse(s.start)));
   const unchanged = { slots: Array.isArray(priceSlots) ? priceSlots : [], estimate: null };
-  if (!real.length || !Number.isFinite(untilMs)) return unchanged;
-  let lastMs = -Infinity;
-  for (const s of real) lastMs = Math.max(lastMs, Date.parse(s.start));
-  lastMs -= lastMs % SLOT_MS;
-  const fromMs = lastMs + SLOT_MS;
+  const { end: fromMs, stepMs } = realPriceCoverage(real);
+  if (!real.length || !Number.isFinite(untilMs) || fromMs <= nowMs) return unchanged;
   const steps = Math.ceil((untilMs - fromMs) / SLOT_MS);
   if (steps <= 0) return unchanged;
 
   // Die echten Slots gehören zur Historie (heute/morgen stehen evtl. noch
-  // nicht in der Datenbank) und gehen der gespeicherten Reihe vor.
-  const points = [
-    ...(Array.isArray(history) ? history : []),
-    ...real.map((s) => ({ ms: Date.parse(s.start), ct: Number(s.ctKwh) })),
-  ];
-  const fc = forecastSpotPrices(points, lastMs, steps);
+  // nicht in der Datenbank) und gehen der gespeicherten Reihe vor; Stunden-
+  // preise gelten für jede ihrer Viertelstunden.
+  const points = Array.isArray(history) ? history.slice() : [];
+  for (const s of real) {
+    const ms = Date.parse(s.start);
+    for (let k = 0; k * SLOT_MS < stepMs; k += 1) points.push({ ms: ms + k * SLOT_MS, ct: Number(s.ctKwh) });
+  }
+  const fc = forecastSpotPrices(points, fromMs - SLOT_MS, steps);
   if (!fc) return unchanged;
 
   const added = fc.values.map((ct, i) => {

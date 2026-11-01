@@ -86,7 +86,7 @@ test('fillPriceSlots verlängert hinter dem letzten echten Slot bis untilMs, ech
   const hist = history(20);
   const real = slotsFrom(20 * DAY, DAY);
   const untilMs = T0 + (23 * DAY + 7) * SLOT_MS;
-  const { slots, estimate } = fillPriceSlots(real, { history: hist, untilMs });
+  const { slots, estimate } = fillPriceSlots(real, { history: hist, untilMs, nowMs: T0 + 20 * DAY * SLOT_MS });
   assert.deepEqual(slots.slice(0, DAY), real);
   const added = slots.slice(DAY);
   assert.equal(added.length, 2 * DAY + 7);
@@ -100,17 +100,35 @@ test('fillPriceSlots verlängert hinter dem letzten echten Slot bis untilMs, ech
 
 test('fillPriceSlots: echte Slots reichen schon bis untilMs → unverändert', () => {
   const real = slotsFrom(20 * DAY, DAY);
-  const r = fillPriceSlots(real, { history: history(20), untilMs: T0 + 21 * DAY * SLOT_MS });
+  const r = fillPriceSlots(real, { history: history(20), untilMs: T0 + 21 * DAY * SLOT_MS, nowMs: T0 + 20 * DAY * SLOT_MS });
   assert.equal(r.slots, real);
   assert.equal(r.estimate, null);
 });
 
 test('fillPriceSlots: zu wenig Historie oder gar keine echten Preise → unverändert', () => {
   const real = slotsFrom(0, DAY);
-  const r = fillPriceSlots(real, { history: [], untilMs: T0 + 3 * DAY * SLOT_MS });
+  const r = fillPriceSlots(real, { history: [], untilMs: T0 + 3 * DAY * SLOT_MS, nowMs: T0 });
   assert.equal(r.slots, real);
   assert.equal(r.estimate, null);
   const none = fillPriceSlots([], { history: history(20), untilMs: T0 + 30 * DAY * SLOT_MS });
   assert.deepEqual(none.slots, []);
   assert.equal(none.estimate, null);
+});
+
+test('fillPriceSlots: echte Preise decken „jetzt“ nicht ab → keine Schätzung (EOS nicht ganz auf Schätzwerten)', () => {
+  const real = slotsFrom(20 * DAY, DAY);
+  const nowMs = T0 + (21 * DAY + 4) * SLOT_MS; // nach dem letzten echten Slot
+  const r = fillPriceSlots(real, { history: history(20), untilMs: T0 + 23 * DAY * SLOT_MS, nowMs });
+  assert.equal(r.slots, real);
+  assert.equal(r.estimate, null);
+});
+
+test('fillPriceSlots: Stundenpreise — geschätzt wird erst hinter der letzten vollen Stunde', () => {
+  const real = Array.from({ length: 24 }, (_, h) => {
+    const i = 20 * DAY + h * 4;
+    return { start: new Date(T0 + i * SLOT_MS).toISOString(), ctKwh: priceAt(i) };
+  });
+  const { slots, estimate } = fillPriceSlots(real, { history: history(20), untilMs: T0 + 22 * DAY * SLOT_MS, nowMs: T0 + 20 * DAY * SLOT_MS });
+  assert.equal(estimate.from, new Date(T0 + 21 * DAY * SLOT_MS).toISOString());
+  assert.equal(slots.length, 24 + DAY);
 });

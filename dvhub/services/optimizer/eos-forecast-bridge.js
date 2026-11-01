@@ -46,7 +46,7 @@ import { localDate } from '../../tz-fast.js';
 // Zweite GX am selben Anschluss: Ladestand beider Akkus, nach Kapazitaet gewichtet.
 import { planningSocPct } from '../multi-gx/planning.js';
 // Preise hinter den bekannten Day-Ahead-Preisen schätzen (01.11.2026).
-import { fillPriceSlots, HISTORY_DAYS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
+import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
 
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
@@ -337,15 +337,6 @@ export function priceFillUntilMs(pvSlots, loadSlots, nowMs) {
   return Math.min(end, nowMs + PRICE_FILL_MAX_MS);
 }
 
-function lastPriceSlotEndMs(priceSlots) {
-  let end = -Infinity;
-  for (const s of Array.isArray(priceSlots) ? priceSlots : []) {
-    const ms = Date.parse(s?.start);
-    if (Number.isFinite(ms) && Number.isFinite(Number(s?.ctKwh))) end = Math.max(end, ms + PRICE_SLOT_MS);
-  }
-  return end;
-}
-
 export function createEosForecastBridge(ctx) {
   const {
     getCfg,
@@ -415,10 +406,10 @@ export function createEosForecastBridge(ctx) {
    */
   async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs) {
     const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs);
-    const lastEnd = lastPriceSlotEndMs(realSlots);
-    if (!Number.isFinite(lastEnd) || lastEnd >= untilMs) return { slots: realSlots, estimate: null };
+    const { end } = realPriceCoverage(realSlots);
+    if (end <= nowMs || end >= untilMs) return { slots: realSlots, estimate: null };
     const history = await loadPriceHistory(nowMs);
-    return fillPriceSlots(realSlots, { history, untilMs });
+    return fillPriceSlots(realSlots, { history, untilMs, nowMs });
   }
 
   /**

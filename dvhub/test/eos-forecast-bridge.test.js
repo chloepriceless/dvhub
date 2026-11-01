@@ -1036,7 +1036,9 @@ function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotF
     state,
     ...(withHistory ? { telemetryStore: { querySeries: async () => history } } : {}),
   };
-  return { ctx, state, q0, realEnd, pvEnd, pattern };
+  // Ende der Reihen: die längere von PV (15 min) und Last (stündlich).
+  const fillEnd = Math.max(pvEnd, Date.parse(load[load.length - 1].start) + 3_600_000);
+  return { ctx, state, q0, realEnd, fillEnd, pattern };
 }
 
 function seriesOf(mock, provider, key) {
@@ -1049,12 +1051,12 @@ test('Preise auffüllen: Bezug (fest) und Einspeisung (Börse) bis zum Ende der 
   const mock = await createMockEos(okHandler);
   try {
     const logs = [];
-    const { ctx, state, q0, realEnd, pvEnd, pattern } = estimateCtx(mock, { logs });
+    const { ctx, state, q0, realEnd, fillEnd, pattern } = estimateCtx(mock, { logs });
     await createEosForecastBridge(ctx).push();
     const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
     const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
-    assert.equal(Math.max(...elec.keys()), pvEnd - Q, 'Bezugspreis reicht bis zum Ende der PV-Prognose');
-    assert.equal(Math.max(...feed.keys()), pvEnd - Q, 'Einspeisewert reicht bis zum Ende der PV-Prognose');
+    assert.equal(Math.max(...elec.keys()), fillEnd - Q, 'Bezugspreis reicht bis zum Ende der PV-/Lastprognose');
+    assert.equal(Math.max(...feed.keys()), fillEnd - Q, 'Einspeisewert reicht bis zum Ende der PV-/Lastprognose');
     // Fester Tarif: auch der geschätzte Slot kostet 30 ct.
     closeTo(elec.get(realEnd + 5 * 3_600_000), 30 / 100 / 1000);
     // Einspeisung = geschätzter Börsenpreis, folgt dem Tagesmuster.
@@ -1065,7 +1067,7 @@ test('Preise auffüllen: Bezug (fest) und Einspeisung (Börse) bis zum Ende der 
     assert.equal(hz.body, Math.floor((realEnd - Date.now() - Q) / 3_600_000));
     // Kennzeichnung für Oberfläche und Log.
     const est = state.optimizer.lastEosPush.priceEstimate;
-    assert.equal(est.estimatedSlots, (pvEnd - realEnd) / Q);
+    assert.equal(est.estimatedSlots, (fillEnd - realEnd) / Q);
     assert.equal(est.from, new Date(realEnd).toISOString());
     assert.equal(state.optimizer.eosPriceEstimate.estimatedSlots, est.estimatedSlots);
     const log = logs.find((l) => l.event === 'eos_forecast_bridge');
