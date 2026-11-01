@@ -1116,3 +1116,13 @@ test('Preise auffüllen: ohne gespeicherte Historie bleibt alles wie bisher', as
     assert.equal(state.optimizer.eosPriceEstimate, null);
   } finally { await mock.close(); }
 });
+
+// Leitstand „Laut EOS-Plan“ (Christin 02.11.2026): die Anzeige nennt, womit EOS
+// die eingespeiste kWh bewertet — dieselbe Regel wie push().
+test('eosFeedInBasis: fest, Börse, Börse + Marktprämie', async () => {
+  const { eosFeedInBasis } = await import('../services/optimizer/eos-forecast-bridge.js');
+  assert.equal(eosFeedInBasis(undefined), 'fixed');
+  assert.equal(eosFeedInBasis({ optimizer: { tariff: { feedInMode: 'fixed', feedInIncludeMarketPremium: true } } }), 'fixed');
+  assert.equal(eosFeedInBasis({ optimizer: { tariff: { feedInMode: 'spot' } } }), 'spot');
+  assert.equal(eosFeedInBasis({ optimizer: { tariff: { feedInMode: 'SPOT', feedInIncludeMarketPremium: true } } }), 'spot_premium');
+});

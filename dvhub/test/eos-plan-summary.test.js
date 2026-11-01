@@ -1,8 +1,9 @@
 // test/eos-plan-summary.test.js -- „Laut EOS-Plan“ unter dem Day-Ahead-Chart
 // (Issue #27, Richtungswechsel 26.10.2026): statt eigener Schwellen zeigt der
 // Leitstand, was EOS für heute (ab jetzt) und morgen plant — Einspeisung und
-// Netzbezug in kWh, Stunden, höchster Leistung und dem Preis, ab dem EOS verkauft
-// bzw. bis zu dem EOS kauft; mit Spitzenkappung die Slots über der Grenze.
+// Netzbezug in kWh, Stunden, höchster Leistung und dem niedrigsten Einspeisewert
+// bzw. höchsten Bezugspreis der geplanten Slots (keine Schwellen, Christin
+// 02.11.2026); mit Spitzenkappung die Slots über der Grenze.
 // Reine Logik aus public/eos-plan-summary.js, geladen wie im Browser. Alle
 // erwarteten Zahlen sind von Hand gerechnet (Kommentare an den Fixtures).
 import test from 'node:test';
@@ -96,12 +97,12 @@ test('Anzeige zum 15-min-Plan', () => {
   const v = view(summarize({ available: true, output: plan15() }, { now: NOW, epex: EPEX, peakLimitW: 5000 }));
   assert.equal(v.note, '');
   assert.equal(v.today.head, 'Heute ab jetzt');
-  assert.equal(v.today.export, 'Einspeisung 7,5 kWh in 1 h · bis 12 kW · EOS verkauft ab 19,9 ct');
-  assert.equal(v.today.import, 'Netzbezug 1,9 kWh in 0,75 h · Spitze 6 kW um 23:00 · EOS kauft bis 30,5 ct');
+  assert.equal(v.today.export, 'Einspeisung 7,5 kWh in 1 h · bis 12 kW · niedrigster Einspeisewert 19,9 ct');
+  assert.equal(v.today.import, 'Netzbezug 1,9 kWh in 0,75 h · Spitze 6 kW um 23:00 · höchster Bezugspreis 30,5 ct');
   assert.equal(v.today.peak, 'Spitzenkappung 5 kW: 1 Slot darüber (0,25 h, bis 6 kW)');
   assert.equal(v.tomorrow.head, 'Morgen bis 10:00');
   assert.equal(v.tomorrow.export, 'Einspeisung: keine geplant');
-  assert.equal(v.tomorrow.import, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · EOS kauft bis 11 ct');
+  assert.equal(v.tomorrow.import, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · höchster Bezugspreis 11 ct');
   assert.equal(v.tomorrow.peak, 'Spitzenkappung 5 kW: 1 Slot darüber (0,25 h, bis 8 kW)');
 });
 
@@ -133,8 +134,8 @@ test('60-min-Slots: Wh je Stunde = W, Plan endet vor Mitternacht, morgen fehlt',
     assert.equal(s.tomorrow, null);
     const v = view(s);
     assert.equal(v.today.head, 'Heute ab jetzt bis 19:00');
-    assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · EOS verkauft ab 20 ct');
-    assert.equal(v.today.import, 'Netzbezug 2,3 kWh in 1 h · Spitze 2 kW um 17:00 · EOS kauft bis 28 ct');
+    assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 20 ct');
+    assert.equal(v.today.import, 'Netzbezug 2,3 kWh in 1 h · Spitze 2 kW um 17:00 · höchster Bezugspreis 28 ct');
     assert.equal(v.today.peak, null);
     assert.equal(v.tomorrow.head, 'Morgen: noch nicht im Plan');
     assert.equal(v.tomorrow.export, null);
@@ -198,8 +199,8 @@ test('render: erst „wird geladen“, dann Plan + Status zusammen; ohne Plan Ta
   assert.equal(els.eosPlanSummaryNote.textContent, 'EOS-Plan wird geladen …');
   render({ plan: { available: true, output: plan15() } }, doc); // Status vom letzten Aufruf bleibt
   assert.equal(els.eosPlanSummaryNote.hidden, true);
-  assert.equal(els.eosPlanSummaryTodayExport.textContent, 'Einspeisung 7,5 kWh in 1 h · bis 12 kW · EOS verkauft ab 19,9 ct');
-  assert.equal(els.eosPlanSummaryTomorrowImport.textContent, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · EOS kauft bis 11 ct');
+  assert.equal(els.eosPlanSummaryTodayExport.textContent, 'Einspeisung 7,5 kWh in 1 h · bis 12 kW · niedrigster Einspeisewert 19,9 ct');
+  assert.equal(els.eosPlanSummaryTomorrowImport.textContent, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · höchster Bezugspreis 11 ct');
   assert.equal(els.eosPlanSummaryTodayPeak.hidden, false);
   render({ plan: null }, doc);
   assert.equal(els.eosPlanSummaryNote.textContent, 'Kein EOS-Plan');
@@ -219,8 +220,8 @@ test('Plan ohne eigene Preise: Börsenpreis nur als solcher benannt (Gegenprüfu
   assert.equal(s.today.export.minCt, null);
   assert.equal(s.today.export.minSpotCt, 12.3);
   const v = view(s);
-  assert.equal(v.today.import, 'Netzbezug 2 kWh in 0,25 h · Spitze 8 kW um 02:00 · Börse bis 12,3 ct');
-  assert.equal(v.today.export, 'Einspeisung 1 kWh in 0,25 h · bis 4 kW · Börse ab 12,3 ct');
+  assert.equal(v.today.import, 'Netzbezug 2 kWh in 0,25 h · Spitze 8 kW um 02:00 · höchster Börsenpreis 12,3 ct');
+  assert.equal(v.today.export, 'Einspeisung 1 kWh in 0,25 h · bis 4 kW · niedrigster Börsenpreis 12,3 ct');
 });
 
 test('nur Slots unter 300 W: Energie wird gezeigt, nicht „keine geplant“ (Gegenprüfung 14e131b4, P3)', () => {
@@ -257,4 +258,63 @@ test('Status-Payload liefert die eingestellte Zeitzone (timeZone)', () => {
   const start = src.indexOf('function buildCurrentStatusPayload(');
   const body = src.slice(start, src.indexOf('\n}\n', start));
   assert.match(body, /timeZone: cfg\.schedule\?\.timezone \|\| 'Europe\/Berlin'/);
+});
+
+// Christin 02.11.2026: „EOS verkauft ab X ct“ las sich wie eine Schwelle. Es ist
+// der niedrigste Einspeisewert der geplanten Einspeise-Slots (womit EOS die kWh
+// bewertet, z. B. Börse + Marktprämie) bzw. der höchste Bezugspreis der
+// geplanten Bezugs-Slots. Grundlage aus /api/eos/plan (priceBasis.feedIn).
+test('Einspeisewert nennt seine Grundlage aus dem Plan (priceBasis.feedIn)', () => {
+  const { summarize, view } = load();
+  const cases = [
+    ['spot_premium', ' (Börse + Marktprämie)'],
+    ['spot', ' (Börse)'],
+    ['fixed', ' (feste Vergütung)'],
+    [undefined, ''],
+    ['unbekannt', ''],
+  ];
+  for (const [feedIn, suffix] of cases) {
+    const resp = { available: true, output: plan60(60), ...(feedIn ? { priceBasis: { feedIn } } : {}) };
+    const v = view(summarize(resp, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+    assert.equal(v.today.export, `Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 20 ct${suffix}`, String(feedIn));
+    // Der Bezugspreis bleibt ohne Zusatz — er ist immer der Endkundenpreis.
+    assert.equal(v.today.import, 'Netzbezug 2,3 kWh in 1 h · Spitze 2 kW um 17:00 · höchster Bezugspreis 28 ct');
+  }
+});
+
+test('Erklärhilfe: Tooltip-Texte für Einspeise- und Bezugszeile und den Block', () => {
+  const { summarize, view, HELP } = load();
+  const v = view(summarize({ available: true, output: plan60(60), priceBasis: { feedIn: 'spot_premium' } }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.match(v.today.exportTitle, /niedrigste Einspeisewert/);
+  assert.match(v.today.exportTitle, /keine Schwelle/);
+  assert.match(v.today.exportTitle, /Börse \+ Marktprämie/);
+  assert.match(v.today.importTitle, /höchste Bezugspreis/);
+  assert.match(v.today.importTitle, /keine Schwelle/);
+  assert.equal(typeof HELP, 'string');
+  assert.match(HELP, /keine Schwellen/);
+  // ohne Einspeisung/Bezug keine Erklärung nötig
+  const leer = view(summarize({ available: true, output: { slotMinutes: 15, rows: [blank(P0)] } }, { now: NOW }));
+  assert.equal(leer.today.exportTitle, '');
+  assert.equal(leer.today.importTitle, '');
+});
+
+test('render setzt die Erklärhilfe als title an Zeilen und Info-Zeichen', () => {
+  const { render, HELP } = load();
+  const els = {};
+  const ids = ['eosPlanSummary', 'eosPlanSummaryNote', 'eosPlanSummaryInfo'];
+  for (const p of ['eosPlanSummaryToday', 'eosPlanSummaryTomorrow']) ids.push(p, `${p}Head`, `${p}Export`, `${p}Import`, `${p}Peak`);
+  for (const id of ids) els[id] = { textContent: '', hidden: false, title: '' };
+  const doc = { getElementById: (id) => els[id] || null };
+  render({ plan: { available: true, output: plan15(), priceBasis: { feedIn: 'fixed' } }, status: { now: NOW, epex: { data: EPEX } } }, doc);
+  assert.equal(els.eosPlanSummaryInfo.title, HELP);
+  assert.match(els.eosPlanSummaryTodayExport.title, /feste Vergütung/);
+  assert.match(els.eosPlanSummaryTodayImport.title, /höchste Bezugspreis/);
+  assert.equal(els.eosPlanSummaryTomorrowExport.title, ''); // morgen keine Einspeisung
+});
+
+test('/api/eos/plan liefert die Grundlage des Einspeisewerts (priceBasis)', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../routes-api.js', import.meta.url)), 'utf8');
+  const start = src.indexOf("url.pathname === '/api/eos/plan'");
+  const body = src.slice(start, src.indexOf('\n    }\n', start));
+  assert.match(body, /priceBasis: \{ feedIn: eosFeedInBasis\(getCfg\(\)\) \}/);
 });

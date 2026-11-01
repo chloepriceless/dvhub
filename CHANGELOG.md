@@ -58,8 +58,10 @@ verweist hierher.
   („Ankunft Mi 20:00 → Abfahrt Do 05:00“) und was an EOS geht; Vorschau beim Bearbeiten über `POST /api/ev/preview`.
 
 - **„Laut EOS-Plan“ im Leitstand (#27)**: unter dem Day-Ahead-Chart für heute ab jetzt und morgen, was EOS plant —
-  Einspeisung und Netzbezug in kWh, Stunden, höchster Leistung und dem Preis, ab dem EOS verkauft bzw. bis zu dem es
-  kauft; mit Bezugsgrenze die Slots darüber. Der EOS-Fahrplan zeigt zusätzlich geplante Last und Netzbezug.
+  Einspeisung und Netzbezug in kWh, Stunden, höchster Leistung, dem niedrigsten Einspeisewert der geplanten
+  Einspeise-Slots (mit Grundlage, z. B. „Börse + Marktprämie“) und dem höchsten Bezugspreis der geplanten Bezugs-Slots —
+  beides keine Schwellen, die Erklärung steht am Info-Zeichen und an den Zeilen; mit Bezugsgrenze die Slots darüber.
+  Der EOS-Fahrplan zeigt zusätzlich geplante Last und Netzbezug.
 
 - **Hinweis, wenn der Strompreis-Zeitraum ohne Nachfolger endet**: 14 Tage vor dem Ende des heute gültigen Zeitraums
   erscheint oben im Leitstand eine gelbe Warnung, wenn am Folgetag kein anderer beginnt — sonst rechnet DVhub danach

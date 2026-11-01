@@ -198,6 +198,20 @@ export function fixedFeedInSlots(priceSlotsCt, tariff = {}) {
 }
 
 /**
+ * Womit EOS die eingespeiste kWh bewertet — dieselbe Regel wie push() unten:
+ * Einspeise-Modus „spot“ mit eingeschalteter Marktprämie → 'spot_premium',
+ * „spot“ ohne → 'spot', sonst die feste Vergütung → 'fixed'. Für die Anzeige
+ * „niedrigster Einspeisewert … (Börse + Marktprämie)“ im Leitstand
+ * (eos-plan-summary.js, Christin 02.11.2026). Fehlen anzulegender Wert oder
+ * Marktwert, rechnet push() ohne Prämie; die Anzeige folgt der Einstellung.
+ */
+export function eosFeedInBasis(cfg) {
+  const tariff = cfg?.optimizer?.tariff || {};
+  if (String(tariff.feedInMode || 'fixed').toLowerCase() !== 'spot') return 'fixed';
+  return tariff.feedInIncludeMarketPremium === true ? 'spot_premium' : 'spot';
+}
+
+/**
  * Nur Stempel auf dem Slot-Raster an EOS geben.
  *
  * forecast.solar liefert neben den Rasterwerten Punkte zu Sonnenauf- und

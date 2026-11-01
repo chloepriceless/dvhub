@@ -22,6 +22,7 @@ import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT, resolvePlant
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
+import { eosFeedInBasis } from './services/optimizer/eos-forecast-bridge.js';
 import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
@@ -6563,6 +6564,9 @@ export function createApiRoutes(ctx) {
         reason: null,
         output,
         plan: { fetchedAt: new Date(plan.at).toISOString(), current: plan.current },
+        // Grundlage des Einspeisewerts im Plan („niedrigster Einspeisewert …
+        // (Börse + Marktprämie)“, eos-plan-summary.js).
+        priceBasis: { feedIn: eosFeedInBasis(getCfg()) },
         eos: { status: status.status, push: status.push },
         remote: eosRemoteSummary(),
       });
