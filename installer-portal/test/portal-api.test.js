@@ -147,17 +147,21 @@ test('Race: Löschen während /rename-Body unterwegs ist → Kopplung bleibt gel
 
 // ── 6. Passkey-Login verlangt User-Verification ──────────────────────────────
 
-// Passkey über die echte API registrieren; liefert den Authenticator zurück.
-async function registerPasskey(p, cookie, { uv = true, credIdBytes = 16, zeroCounter = false } = {}) {
+// Passkey über die echte API registrieren (mit Passwort-Bestätigung); liefert
+// den Authenticator zurück. Das Anlegen beendet andere Sitzungen — sess.cookie
+// wird deshalb auf das neue Cookie umgestellt.
+async function registerPasskey(p, sess, { uv = true, credIdBytes = 16, zeroCounter = false } = {}) {
   const auth = makeAuthenticator('127.0.0.1', { uv, credIdBytes, zeroCounter });
   const origin = p.url;
-  const b = await p.call('/api/passkey/register-begin', { method: 'POST', cookie, headers: { origin } });
+  const b = await p.call('/api/passkey/register-begin', { method: 'POST', cookie: sess.cookie, headers: { origin }, body: { password: ACCT.password } });
   assert.equal(b.status, 200, b.text);
   const c = auth.create(origin, b.j.challenge);
-  const f = await p.call('/api/passkey/register-finish', { method: 'POST', cookie, headers: { origin }, body: {
+  const f = await p.call('/api/passkey/register-finish', { method: 'POST', cookie: sess.cookie, headers: { origin }, body: {
     label: 'Test', attestationObject: c.response.attestationObject, clientDataJSON: c.response.clientDataJSON,
   } });
   assert.equal(f.status, 201, f.text);
+  assert.ok(f.cookie, 'neues Cookie nach dem Anlegen');
+  sess.cookie = f.cookie;
   return auth;
 }
 async function passkeyLogin(p, name, auth) {
@@ -173,8 +177,8 @@ async function passkeyLogin(p, name, auth) {
 test('Passkey-Login: ohne User-Verification abgelehnt, mit UV erfolgreich', async (t) => {
   const p = await startPortal(t);
   const acct = await p.call('/api/account', { method: 'POST', body: ACCT });
-  const noUv = await registerPasskey(p, acct.cookie, { uv: false });
-  const withUv = await registerPasskey(p, acct.cookie, { uv: true });
+  const noUv = await registerPasskey(p, acct, { uv: false });
+  const withUv = await registerPasskey(p, acct, { uv: true });
   const r1 = await passkeyLogin(p, ACCT.name, noUv);
   assert.equal(r1.status, 401, r1.text);
   assert.match(r1.j.detail || '', /uv_fehlt/);
@@ -188,7 +192,7 @@ test('Passkey-Login: ohne User-Verification abgelehnt, mit UV erfolgreich', asyn
 test('Passkey-Login: zurückgehender Signaturzähler wird abgelehnt, Zähler 0 geht', async (t) => {
   const p = await startPortal(t);
   const acct = await p.call('/api/account', { method: 'POST', body: ACCT });
-  const auth = await registerPasskey(p, acct.cookie);
+  const auth = await registerPasskey(p, acct);
   assert.equal((await passkeyLogin(p, ACCT.name, auth)).status, 200, 'erster Login');
   auth.setCounter(10);
   assert.equal((await passkeyLogin(p, ACCT.name, auth)).status, 200, 'Zähler 11');
@@ -201,7 +205,7 @@ test('Passkey-Login: zurückgehender Signaturzähler wird abgelehnt, Zähler 0 g
   auth.setCounter(5); // meldet 6 < gespeicherte 11: der 0-Login darf den Stand nicht senken
   assert.equal((await passkeyLogin(p, ACCT.name, auth)).status, 401, 'Zähler 6 nach 0-Login');
 
-  const zero = await registerPasskey(p, acct.cookie, { zeroCounter: true });
+  const zero = await registerPasskey(p, acct, { zeroCounter: true });
   for (let i = 0; i < 3; i++) assert.equal((await passkeyLogin(p, ACCT.name, zero)).status, 200, `Zähler-0-Passkey Login ${i + 1}`);
 });
 
@@ -209,7 +213,7 @@ test('Passkey-Login: zurückgehender Signaturzähler wird abgelehnt, Zähler 0 g
 
 async function accountWithTotp(p) {
   const acct = await p.call('/api/account', { method: 'POST', body: ACCT });
-  const setup = await p.call('/api/totp/setup', { method: 'POST', cookie: acct.cookie });
+  const setup = await p.call('/api/totp/setup', { method: 'POST', cookie: acct.cookie, body: { password: ACCT.password } });
   const secret = setup.j.secret;
   const en = await p.call('/api/totp/enable', { method: 'POST', cookie: acct.cookie, body: { code: totp(secret) } });
   assert.equal(en.status, 200, en.text);
@@ -253,7 +257,7 @@ test('WEBAUTHN_ORIGIN: rpId/Origin kommen aus der Konfiguration, nicht aus Heade
   assert.doesNotMatch(p.log(), /WEBAUTHN_ORIGIN nicht gesetzt/);
   const acct = await p.call('/api/account', { method: 'POST', body: ACCT });
   const tryRegister = async (origin) => {
-    const b = await p.call('/api/passkey/register-begin', { method: 'POST', cookie: acct.cookie, headers: { origin } });
+    const b = await p.call('/api/passkey/register-begin', { method: 'POST', cookie: acct.cookie, headers: { origin }, body: { password: ACCT.password } });
     assert.equal(b.j.rpId, 'portal.test', 'rpId aus WEBAUTHN_ORIGIN, nicht aus Host 127.0.0.1');
     const c = makeAuthenticator('portal.test').create(origin, b.j.challenge);
     return p.call('/api/passkey/register-finish', { method: 'POST', cookie: acct.cookie, headers: { origin }, body: {
@@ -318,7 +322,7 @@ test('2FA aktivieren beendet andere Sessions; die eigene bekommt ein neues Cooki
   const a = await p.call('/api/account', { method: 'POST', body: ACCT });
   const other = await p.call('/api/login', { method: 'POST', body: ACCT }); // zweites Gerät
   assert.equal((await p.call('/api/me', { cookie: other.cookie })).status, 200);
-  const setup = await p.call('/api/totp/setup', { method: 'POST', cookie: a.cookie });
+  const setup = await p.call('/api/totp/setup', { method: 'POST', cookie: a.cookie, body: { password: ACCT.password } });
   const en = await p.call('/api/totp/enable', { method: 'POST', cookie: a.cookie, body: { code: totp(setup.j.secret) } });
   assert.equal(en.status, 200, en.text);
   assert.ok(en.cookie, 'neues Cookie für die aktuelle Session');
@@ -330,8 +334,8 @@ test('2FA aktivieren beendet andere Sessions; die eigene bekommt ein neues Cooki
 test('Passkey löschen beendet andere Sessions', async (t) => {
   const p = await startPortal(t);
   const a = await p.call('/api/account', { method: 'POST', body: ACCT });
+  const auth = await registerPasskey(p, a);
   const other = await p.call('/api/login', { method: 'POST', body: ACCT });
-  const auth = await registerPasskey(p, a.cookie);
   const del = await p.call(`/api/passkeys/${auth.get(p.url, 'x').id}`, { method: 'DELETE', cookie: a.cookie });
   assert.equal(del.status, 200, del.text);
   assert.equal((await p.call('/api/me', { cookie: other.cookie })).status, 401);
@@ -343,9 +347,9 @@ test('Passkey löschen beendet andere Sessions', async (t) => {
 test('Race: Passkey-Löschung (Gerät B) wird von langsamem Request (Gerät A) nicht zurückgedreht', async (t) => {
   const p = await startPortal(t);
   const a = await p.call('/api/account', { method: 'POST', body: ACCT });
-  const auth = await registerPasskey(p, a.cookie);
+  const auth = await registerPasskey(p, a);
   const b = await p.call('/api/login', { method: 'POST', body: ACCT });
-  const setup = await p.call('/api/totp/setup', { method: 'POST', cookie: a.cookie });
+  const setup = await p.call('/api/totp/setup', { method: 'POST', cookie: a.cookie, body: { password: ACCT.password } });
   const slow = slowPost(p.port, '/api/totp/enable', { code: totp(setup.j.secret) }, a.cookie, 400);
   await sleep(100); // A hat Konten schon (alt) gelesen und wartet auf den Body
   const del = await p.call(`/api/passkeys/${auth.get(p.url, 'x').id}`, { method: 'DELETE', cookie: b.cookie });
@@ -361,7 +365,7 @@ test('Race: Passkey-Löschung (Gerät B) wird von langsamem Request (Gerät A) n
 test('TOTP deaktivieren: nach 5 falschen Codes gesperrt (gestohlene Session kann nicht raten)', async (t) => {
   const p = await startPortal(t);
   const acct = await p.call('/api/account', { method: 'POST', body: ACCT });
-  const setup = await p.call('/api/totp/setup', { method: 'POST', cookie: acct.cookie });
+  const setup = await p.call('/api/totp/setup', { method: 'POST', cookie: acct.cookie, body: { password: ACCT.password } });
   const en = await p.call('/api/totp/enable', { method: 'POST', cookie: acct.cookie, body: { code: totp(setup.j.secret) } });
   const cookie = en.cookie;
   const good = totp(setup.j.secret, Date.now() + 30_000);
@@ -380,9 +384,23 @@ test('TOTP deaktivieren: nach 5 falschen Codes gesperrt (gestohlene Session kann
 test('Passkey mit langer Credential-ID (600 Byte) lässt sich registrieren UND löschen', async (t) => {
   const p = await startPortal(t);
   const a = await p.call('/api/account', { method: 'POST', body: ACCT });
-  const auth = await registerPasskey(p, a.cookie, { credIdBytes: 600 });
+  const auth = await registerPasskey(p, a, { credIdBytes: 600 });
   const id = auth.get(p.url, 'x').id;
   assert.ok(id.length > 128);
   const del = await p.call(`/api/passkeys/${id}`, { method: 'DELETE', cookie: a.cookie });
   assert.equal(del.status, 200, del.text);
+});
+
+test('Passkey doppelt registrieren (gleiche Credential) → 409', async (t) => {
+  const p = await startPortal(t);
+  const a = await p.call('/api/account', { method: 'POST', body: ACCT });
+  const auth = await registerPasskey(p, a);
+  const origin = p.url;
+  const b = await p.call('/api/passkey/register-begin', { method: 'POST', cookie: a.cookie, headers: { origin }, body: { password: ACCT.password } });
+  assert.equal(b.status, 200, b.text);
+  const c = auth.create(origin, b.j.challenge);
+  const f = await p.call('/api/passkey/register-finish', { method: 'POST', cookie: a.cookie, headers: { origin }, body: {
+    attestationObject: c.response.attestationObject, clientDataJSON: c.response.clientDataJSON,
+  } });
+  assert.equal(f.status, 409, f.text);
 });

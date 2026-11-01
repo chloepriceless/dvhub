@@ -64,6 +64,7 @@ Variablen:
 | `WEBAUTHN_ORIGIN` | — | z. B. `https://portal.example.de` — fest erwartete Origin + rpId für Passkeys. **Online setzen.** |
 | `WEBAUTHN_RP_ID` | Host aus `WEBAUTHN_ORIGIN` | abweichende rpId (selten nötig) |
 | `COOKIE_SECURE` | — | `1` = Session-Cookie nur über HTTPS. **Online setzen.** |
+| `APPLIANCE_RATE_PER_MIN` | 30 | Drossel je Anlage für `/api/poll` und `/api/command-result` (die Box pollt alle 30 s) |
 
 ## Fern-Support über das Relay (seit 2026-10-14)
 
@@ -152,6 +153,14 @@ anonymes `http://portal.example.de` wird abgewiesen (SSRF-Bremse).
   (`webauthn.js`): clientDataJSON (Typ/Challenge/Origin) + rpIdHash +
   ECDSA-P-256-Signatur. Attestation „none“ — die Sicherheitsaussage kommt
   aus der Signatur, nicht vom Attest-Zertifikat.
+- **Zweite Bestätigung** (seit 2026-11-01): Passkey anlegen und 2FA einrichten
+  verlangen das Passwort, bei aktiver 2FA einen frischen 2FA-Code (gleiche
+  Sperre und gleicher Replay-Schutz wie beim Login). Nach dem Anlegen eines
+  Passkeys sind alle anderen Sitzungen beendet; Konto-Seite und Anlagen-Ansicht
+  zeigen „Neuer Passkey angelegt“, das Server-Log schreibt `[sicherheit] …`.
+- **Abmelden** beendet die Sitzung serverseitig (Sitzungskennung auf einer
+  Sperrliste in `DATA_DIR/revoked-sessions.json`); „Überall abmelden“ auf der
+  Konto-Seite beendet alle Sitzungen des Kontos.
 - **Backup:** TOTP-Secret und Passkeys hängen am Konto — der Admin-Export
   nimmt alles mit, ein wiederhergestelltes Portal hat 2FA/Passkeys sofort
   wieder aktiv.

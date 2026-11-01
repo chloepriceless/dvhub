@@ -205,17 +205,43 @@ function clientIp(req) {
   }
   return req.socket?.remoteAddress || '?';
 }
-function rateLimited(req, bucket, max = 20) {
-  const ip = clientIp(req);
-  const key = `${bucket}|${ip}`;
+// Zählt einen Treffer unter key; true = mehr als max im Fenster.
+const RATE_WINDOW_MAX_MS = 15 * 60_000;
+function rateHit(key, max, windowMs = 60_000) {
   const t = Date.now();
-  const hits = (rateBuckets.get(key) || []).filter((x) => t - x < 60_000);
+  const hits = (rateBuckets.get(key) || []).filter((x) => t - x < windowMs);
   hits.push(t);
   rateBuckets.set(key, hits);
   if (rateBuckets.size > 5000) {
-    for (const [k, v] of rateBuckets) if (!v.some((x) => t - x < 60_000)) rateBuckets.delete(k);
+    for (const [k, v] of rateBuckets) if (!v.some((x) => t - x < RATE_WINDOW_MAX_MS)) rateBuckets.delete(k);
   }
   return hits.length > max;
+}
+// Nur nachsehen, ohne zu zählen.
+function rateOver(key, max, windowMs = 60_000) {
+  const t = Date.now();
+  return (rateBuckets.get(key) || []).filter((x) => t - x < windowMs).length >= max;
+}
+function rateLimited(req, bucket, max = 20) {
+  return rateHit(`${bucket}|${clientIp(req)}`, max);
+}
+// Anlagen-Endpunkte (Strix-Fund 3, 2026-11-01): Drossel PRO ANLAGE, nicht pro
+// IP — hinter CGNAT/DS-Lite teilen sich viele Boxen eine Adresse. Die Box
+// pollt alle 30 s (2/min) und meldet Ergebnisse höchstens einmal pro Poll.
+const APPLIANCE_RATE_PER_MIN = Number(process.env.APPLIANCE_RATE_PER_MIN) || 30;
+// Falsche Geräteschlüssel zählen pro IP — großzügig, damit Boxen hinter einer
+// gemeinsamen Adresse nicht leiden; bremst nur Dauerfeuer ohne gültigen Schlüssel.
+const BAD_TOKEN_PER_MIN = 300;
+// Gespeicherter Anlagen-Status und einzelne Befehlsergebnisse: Größengrenze.
+// Der echte Kompakt-Status liegt bei wenigen KB.
+const STATUS_MAX_BYTES = 64 * 1024;
+const RESULT_MAX_BYTES = 16 * 1024;
+const RESULTS_KEEP = 50;
+function capJson(v, max) {
+  if (v === undefined || v === null) return null;
+  let bytes;
+  try { bytes = Buffer.byteLength(JSON.stringify(v)); } catch { return { truncated: true, bytes: null }; }
+  return bytes > max ? { truncated: true, bytes } : v;
 }
 
 // Schlüsselverzeichnis eines Kontos. Neue Konten: zufällige ID (nie der
@@ -339,6 +365,21 @@ const expectedOriginFor = (req) => WEBAUTHN_ORIGIN
   || String(req.headers.origin || `http://${req.headers.host || 'localhost'}`);
 
 // ── Browser-Sessions ─────────────────────────────────────────────────────────
+// Jede Sitzung hat eine zufällige Kennung (sid). Abmelden setzt die sid bis zu
+// ihrem Ablauf auf eine Sperrliste (Datei + Speicher) — eine Kopie des Cookies
+// ist danach wertlos, andere Geräte bleiben angemeldet (Strix-Fund 2).
+// Cookies ohne sid (vor 2026-11-01 ausgestellt) gelten nicht mehr.
+const REVOKED_FILE = path.join(DATA_DIR, 'revoked-sessions.json');
+const revokedSessions = new Map(Object.entries(readJsonFile(REVOKED_FILE, {}))
+  .filter(([, exp]) => Number(exp) > Date.now()).map(([k, exp]) => [k, Number(exp)]));
+function revokeSession(sess) {
+  if (!sess || typeof sess.sid !== 'string') return;
+  const now = Date.now();
+  for (const [k, exp] of revokedSessions) if (exp < now) revokedSessions.delete(k);
+  revokedSessions.set(sess.sid, Number(sess.exp) || now + SESSION_TTL_MS);
+  writeJsonFile(REVOKED_FILE, Object.fromEntries(revokedSessions));
+}
+const clearCookie = (res) => res.setHeader('set-cookie', `portal_session=; ${cookieAttrs}; Max-Age=0`);
 function signSession(payload) {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const mac = crypto.createHmac('sha256', portalSecret()).update(body).digest('base64url');
@@ -358,6 +399,7 @@ function readSession(req) {
   try {
     const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (!p.exp || p.exp < Date.now()) return null;
+    if (typeof p.sid !== 'string' || !p.sid || revokedSessions.has(p.sid)) return null;
     return p;
   } catch { return null; }
 }
@@ -396,7 +438,10 @@ const cookieAttrs = `HttpOnly; SameSite=Lax; Path=/${COOKIE_SECURE ? '; Secure' 
 // Session für ein Konto ausstellen. sv = sessionVersion des Kontos: wird die
 // hochgezählt (2FA/Passkeys geändert), sind alle älteren Sessions ungültig.
 function setSessionCookie(res, acctKey, acct) {
-  const token = signSession({ acct: acctKey, sv: (acct && acct.sessionVersion) || 0, exp: Date.now() + SESSION_TTL_MS });
+  const token = signSession({
+    acct: acctKey, sv: (acct && acct.sessionVersion) || 0,
+    sid: crypto.randomBytes(16).toString('base64url'), exp: Date.now() + SESSION_TTL_MS,
+  });
   res.setHeader('set-cookie', `portal_session=${token}; ${cookieAttrs}`);
 }
 // Signatur+Ablauf prüft readSession; hier zusätzlich: Konto existiert und
@@ -409,6 +454,40 @@ function sessionMatches(sess, acct) {
 function rotateSessions(res, acctKey, acct) {
   acct.sessionVersion = (acct.sessionVersion || 0) + 1;
   setSessionCookie(res, acctKey, acct);
+}
+// Sicherheitsereignisse am Konto (die letzten 20) — das Portal verschickt
+// keine Mails, deshalb zeigt die Oberfläche sie an, und das Server-Log hält sie fest.
+function addSecurityEvent(acct, type, req, extra = {}) {
+  const ev = { type, at: nowIso(), ip: clientIp(req), ...extra };
+  acct.securityEvents = [...(Array.isArray(acct.securityEvents) ? acct.securityEvents : []), ev].slice(-20);
+  console.log(`[sicherheit] ${type} konto=${JSON.stringify(acct.name)}${extra.label ? ` label=${JSON.stringify(extra.label)}` : ''} ip=${ev.ip}`);
+}
+// Zweite Bestätigung für sicherheitsrelevante Änderungen (Strix-Fund 1):
+// mit aktiver 2FA der Code (Sperre + Replay-Schutz wie beim Login), sonst das
+// Passwort. Ein gestohlenes Session-Cookie allein reicht so nicht mehr.
+// Verändert acct (TOTP-Zähler); der Aufrufer speichert.
+const STEPUP_MAX_FAILS = 5;
+const STEPUP_WINDOW_MS = 15 * 60_000;
+function stepUp(req, acctKey, acct, b) {
+  const need = acct.totpEnabled ? 'code' : 'password';
+  const lockKey = `stepup|${acctKey}`;
+  if (rateOver(lockKey, STEPUP_MAX_FAILS, STEPUP_WINDOW_MS) || rateOver(`stepupip|${clientIp(req)}`, 20)) {
+    return { ok: false, status: 429, error: 'zu_viele_versuche', need };
+  }
+  const fail = (status, error) => {
+    rateHit(lockKey, STEPUP_MAX_FAILS, STEPUP_WINDOW_MS);
+    rateHit(`stepupip|${clientIp(req)}`, 20);
+    return { ok: false, status, error, need };
+  };
+  if (need === 'code') {
+    if (!b || !b.code) return { ok: false, status: 403, error: 'bestaetigung_noetig', need };
+    const t = totpAttempt(acct, String(b.code));
+    if (!t.ok) return t.status === 429 ? { ok: false, status: 429, error: t.error, need } : fail(403, t.error);
+    return { ok: true, need };
+  }
+  if (!b || typeof b.password !== 'string' || !b.password) return { ok: false, status: 403, error: 'bestaetigung_noetig', need };
+  if (!verifyPassword(b.password, acct.passHash)) return fail(403, 'passwort_falsch');
+  return { ok: true, need };
 }
 
 // ── DVhub-Gegenstelle (ausgehend) ───────────────────────────────────────────
@@ -554,6 +633,12 @@ async function handleApi(req, res, url) {
     pr.lastErrorAt = rows[rows.length - 1].ts;
     return pr.errorAckId;
   }
+  // Fehlerprotokoll löschen (Strix-Fund 4): beim Entfernen der Kopplung, beim
+  // Trennen durch den Kunden und wenn die Anlage an ein anderes Konto geht.
+  function removeErrors(aid) {
+    if (!APPLIANCE_ID_RE.test(aid)) return;
+    try { fs.rmSync(path.join(ERRORS_DIR, `${aid}.jsonl`), { force: true }); } catch { /* best effort */ }
+  }
   function readErrors(aid, { limit = 200, type = '' } = {}) {
     const file = path.join(ERRORS_DIR, `${aid}.jsonl`);
     if (!fs.existsSync(file)) return { errors: [], summary: [] };
@@ -568,6 +653,12 @@ async function handleApi(req, res, url) {
     }
     const sel = (type ? all.filter((e) => e.type === type) : all).slice(-limit).reverse();
     return { errors: sel, summary: [...byType.values()].sort((a, b) => (a.last < b.last ? 1 : -1)) };
+  }
+
+  const badTokenFlood = (r) => rateOver(`badtoken|${clientIp(r)}`, BAD_TOKEN_PER_MIN);
+  function badToken(r, out) {
+    rateHit(`badtoken|${clientIp(r)}`, BAD_TOKEN_PER_MIN);
+    return jsonRes(out, 401, { ok: false, error: 'appliance_token_invalid' });
   }
 
   const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -637,14 +728,14 @@ async function handleApi(req, res, url) {
     return jsonRes(res, 200, { ok: true, applianceToken, status: pr.status });
   }
   if (p === '/api/poll' && method === 'POST') {
+    if (badTokenFlood(req)) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
     const token = String(req.headers['x-appliance-token'] || '');
     const b = await readBody(req);
     const aid = String(b.applianceId || '').trim().toLowerCase();
     const pairings = readJsonFile(PAIRINGS_FILE, {});
     const pr = pairings[aid];
-    if (!tokenMatches(pr, token)) {
-      return jsonRes(res, 401, { ok: false, error: 'appliance_token_invalid' });
-    }
+    if (!tokenMatches(pr, token)) return badToken(req, res);
+    if (rateHit(`poll|${aid}`, APPLIANCE_RATE_PER_MIN)) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
     if (pr.status === 'declined') return jsonRes(res, 410, { ok: false, error: 'pairing_declined' });
     const approved = pr.status === 'approved';
     // Status-/Kommando-Verarbeitung nur nach Freigabe; vorher bleibt die
@@ -652,7 +743,8 @@ async function handleApi(req, res, url) {
     migrateToken(pr);
     if (approved) {
       pr.lastSeenAt = nowIso();
-      pr.lastStatus = b.status || null;   // ohne Pro-Lizenz schickt die Anlage keinen Status
+      // Ohne Pro-Lizenz schickt die Anlage keinen Status; zu groß → nur ein Vermerk.
+      pr.lastStatus = capJson(b.status || null, STATUS_MAX_BYTES);
       if (b.license) pr.license = cleanLicense(b.license);
       if (b.runtime) pr.runtime = cleanRuntime(b.runtime);
       if (b.support) pr.support = cleanSupport(b.support);
@@ -661,38 +753,48 @@ async function handleApi(req, res, url) {
       storeErrors(aid, pr, b.errors);
     }
     const commands = approved ? (pr.commands || []).splice(0, 5) : [];
+    // Ausgegebene Befehls-IDs merken: nur dafür nimmt /api/command-result Ergebnisse an.
+    if (commands.length) pr.issued = [...(Array.isArray(pr.issued) ? pr.issued : []), ...commands.map((c) => c.id)].slice(-RESULTS_KEEP);
     writeJsonFile(PAIRINGS_FILE, pairings);
     return jsonRes(res, 200, { ok: true, approved, commands, ...(approved ? { errorsAck: Number(pr.errorAckId) || 0 } : {}) });
   }
   // Anlage trennt sich (Kunde hat „Portal-Kopplung trennen“ gedrückt):
   // Kopplung hier löschen, damit die Anlage frei für einen neuen Code ist.
   if (p === '/api/pair/release' && method === 'POST') {
+    if (badTokenFlood(req)) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
     const token = String(req.headers['x-appliance-token'] || '');
     const b = await readBody(req);
     const aid = String(b.applianceId || '').trim().toLowerCase();
     const pairings = readJsonFile(PAIRINGS_FILE, {});
     const pr = pairings[aid];
-    if (!tokenMatches(pr, token)) {
-      return jsonRes(res, 401, { ok: false, error: 'appliance_token_invalid' });
-    }
+    if (!tokenMatches(pr, token)) return badToken(req, res);
     delete pairings[aid];
     writeJsonFile(PAIRINGS_FILE, pairings);
+    removeErrors(aid);   // Kunde hat getrennt: Fehlerprotokoll gehört niemandem mehr
     return jsonRes(res, 200, { ok: true });
   }
   if (p === '/api/command-result' && method === 'POST') {
+    if (badTokenFlood(req)) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
     const token = String(req.headers['x-appliance-token'] || '');
     const b = await readBody(req);
     const aid = String(b.applianceId || '').trim().toLowerCase();
     const pairings = readJsonFile(PAIRINGS_FILE, {});
     const pr = pairings[aid];
-    if (!tokenMatches(pr, token)) {
-      return jsonRes(res, 401, { ok: false, error: 'appliance_token_invalid' });
-    }
+    if (!tokenMatches(pr, token)) return badToken(req, res);
+    if (rateHit(`result|${aid}`, APPLIANCE_RATE_PER_MIN)) return jsonRes(res, 429, { ok: false, error: 'rate_limited' });
     migrateToken(pr);
-    pr.results = { ...(pr.results || {}) };
-    for (const r of (Array.isArray(b.results) ? b.results : [])) {
-      if (r && r.id) pr.results[r.id] = { ok: !!r.ok, status: r.status ?? null, result: r.result ?? null, at: nowIso() };
+    // Nur Ergebnisse zu Befehlen, die das Portal dieser Anlage ausgegeben hat;
+    // davon die neuesten RESULTS_KEEP (Strix-Fund 3).
+    const issued = new Set(Array.isArray(pr.issued) ? pr.issued : []);
+    const results = Object.entries(pr.results || {});
+    for (const r of (Array.isArray(b.results) ? b.results : []).slice(0, 2 * RESULTS_KEEP)) {
+      if (!r || typeof r.id !== 'string' || !issued.has(r.id)) continue;
+      const idx = results.findIndex(([k]) => k === r.id);
+      if (idx >= 0) results.splice(idx, 1);
+      const status = Number.isInteger(r.status) ? r.status : null;
+      results.push([r.id, { ok: !!r.ok, status, result: capJson(r.result ?? null, RESULT_MAX_BYTES), at: nowIso() }]);
     }
+    pr.results = Object.fromEntries(results.slice(-RESULTS_KEEP));
     writeJsonFile(PAIRINGS_FILE, pairings);
     return jsonRes(res, 200, { ok: true });
   }
@@ -842,7 +944,9 @@ async function handleApi(req, res, url) {
     return jsonRes(res, 200, { ok: true, name: acct.name });
   }
   if (p === '/api/logout' && method === 'POST') {
-    res.setHeader('set-cookie', `portal_session=; ${cookieAttrs}; Max-Age=0`);
+    // Serverseitig beenden: diese Sitzung (sid) kommt auf die Sperrliste.
+    revokeSession(readSession(req));
+    clearCookie(res);
     return jsonRes(res, 200, { ok: true });
   }
 
@@ -879,7 +983,17 @@ async function handleApi(req, res, url) {
     writeJsonFile(ACCOUNTS_FILE, fresh);
     return jsonRes(res, 200, { ok: true });
   }
-  // Solange das Startpasswort nicht geaendert ist, geht nur /api/me, /api/password, /api/logout
+  // Notbremse: alle Sitzungen des Kontos beenden (auch diese).
+  if (p === '/api/logout-all' && method === 'POST') {
+    const ctx = await bodyWithFreshAccount(); if (!ctx) return;
+    ctx.acct.sessionVersion = (ctx.acct.sessionVersion || 0) + 1;
+    addSecurityEvent(ctx.acct, 'logout_all', req);
+    writeJsonFile(ACCOUNTS_FILE, ctx.accounts);
+    revokeSession(sess);
+    clearCookie(res);
+    return jsonRes(res, 200, { ok: true });
+  }
+  // Solange das Startpasswort nicht geaendert ist, geht nur /api/me, /api/password, /api/logout(-all)
   if (acct.mustChangePassword && p !== '/api/me') {
     return jsonRes(res, 403, { ok: false, error: 'passwort_aendern' });
   }
@@ -891,12 +1005,19 @@ async function handleApi(req, res, url) {
       mustChangePassword: !!acct.mustChangePassword,
       totpEnabled: !!acct.totpEnabled,
       passkeys: (acct.passkeys || []).map((k) => ({ id: k.id, label: k.label || 'Passkey', addedAt: k.addedAt, lastUsed: k.lastUsed || null })),
+      securityEvents: (Array.isArray(acct.securityEvents) ? acct.securityEvents : [])
+        .map((e) => ({ type: e.type, at: e.at, label: e.label || null })),
     });
   }
 
   // ── Sicherheit: TOTP einrichten / Passkeys verwalten (eingeloggt) ────────
   if (p === '/api/totp/setup' && method === 'POST') {
+    const f = await bodyWithFreshAccount();
+    if (!f) return;
+    const { b, accounts, acct } = f;
     if (acct.totpEnabled) return jsonRes(res, 409, { ok: false, error: 'totp_bereits_aktiv' });
+    const su = stepUp(req, sess.acct, acct, b);
+    if (!su.ok) return jsonRes(res, su.status, { ok: false, error: su.error, need: su.need });
     acct.totpPending = randomSecret();
     writeJsonFile(ACCOUNTS_FILE, accounts);
     return jsonRes(res, 200, { ok: true, secret: acct.totpPending, otpauth: otpauthUri({ secret: acct.totpPending, accountName: acct.name }) });
@@ -914,6 +1035,7 @@ async function handleApi(req, res, url) {
     acct.totpLastStep = enableStep;
     delete acct.totpPending;
     rotateSessions(res, sess.acct, acct);
+    addSecurityEvent(acct, 'totp_enabled', req);
     writeJsonFile(ACCOUNTS_FILE, accounts);
     return jsonRes(res, 200, { ok: true });
   }
@@ -933,11 +1055,19 @@ async function handleApi(req, res, url) {
     delete acct.totpSecret; delete acct.totpEnabled; delete acct.totpPending;
     delete acct.totpLastStep; delete acct.totpFails; delete acct.totpLockedUntil;
     rotateSessions(res, sess.acct, acct);
+    addSecurityEvent(acct, 'totp_disabled', req);
     writeJsonFile(ACCOUNTS_FILE, accounts);
     return jsonRes(res, 200, { ok: true });
   }
+  // Passkey anlegen nur nach zweiter Bestätigung (Strix-Fund 1): ohne sie gibt
+  // es keine Challenge, ohne Challenge kein register-finish.
   if (p === '/api/passkey/register-begin' && method === 'POST') {
-    return jsonRes(res, 200, { ok: true, challenge: putChallenge('pkreg', sess.acct), rpId: rpIdFor(req), userId: `${acct.id}` });
+    const f = await bodyWithFreshAccount();
+    if (!f) return;
+    const su = stepUp(req, sess.acct, f.acct, f.b);
+    if (su.need === 'code') writeJsonFile(ACCOUNTS_FILE, f.accounts);   // TOTP-Zähler/Schritt
+    if (!su.ok) return jsonRes(res, su.status, { ok: false, error: su.error, need: su.need });
+    return jsonRes(res, 200, { ok: true, challenge: putChallenge('pkreg', sess.acct), rpId: rpIdFor(req), userId: `${f.acct.id}` });
   }
   if (p === '/api/passkey/register-finish' && method === 'POST') {
     const f = await bodyWithFreshAccount();
@@ -965,6 +1095,9 @@ async function handleApi(req, res, url) {
       label: String(b.label || '').trim().slice(0, 40) || 'Passkey',
       addedAt: nowIso(), counter: reg.counter || 0,
     });
+    // Andere Sitzungen beenden (falls doch jemand mitliest) und festhalten.
+    rotateSessions(res, sess.acct, acct);
+    addSecurityEvent(acct, 'passkey_added', req, { label: acct.passkeys[acct.passkeys.length - 1].label });
     writeJsonFile(ACCOUNTS_FILE, accounts);
     return jsonRes(res, 201, { ok: true, id: reg.id });
   }
@@ -976,6 +1109,7 @@ async function handleApi(req, res, url) {
     acct.passkeys = (acct.passkeys || []).filter((k) => k.id !== pkMatch[1]);
     if (acct.passkeys.length === before) return jsonRes(res, 404, { ok: false, error: 'passkey_nicht_gefunden' });
     rotateSessions(res, sess.acct, acct);
+    addSecurityEvent(acct, 'passkey_removed', req);
     writeJsonFile(ACCOUNTS_FILE, accounts);
     return jsonRes(res, 200, { ok: true });
   }
@@ -1233,6 +1367,10 @@ async function handleApi(req, res, url) {
     };
     pairings[aid] = pr;
     writeJsonFile(PAIRINGS_FILE, pairings);
+    // Geht die Anlage an ein anderes Konto (oder liegt noch eine Datei ohne
+    // Kopplung herum), startet das Fehlerprotokoll leer. Beim eigenen
+    // Neu-Koppeln bleibt es (Strix-Fund 4).
+    if (!existing || existing.acct !== sess.acct) removeErrors(aid);
     return jsonRes(res, 201, { ok: true, pairing: pairingView(pr) });
   }
   const pairMatch = /^\/api\/pairings\/([a-z0-9-]{1,36})(\/[a-z-]+)?$/i.exec(p);
@@ -1245,6 +1383,8 @@ async function handleApi(req, res, url) {
     if (sub === '' && method === 'GET') return jsonRes(res, 200, { ok: true, pairing: pairingView(pr) });
     // Fehlerprotokoll der Anlage (neueste zuerst) + Übersicht je Fehlerart.
     if (sub === '/errors' && method === 'GET') {
+      // Erst nach der Freigabe zeigen (Strix-Fund 4).
+      if (pr.status !== 'approved') return jsonRes(res, 200, { ok: true, errors: [], summary: [], notApproved: true });
       const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
       const type = String(url.searchParams.get('type') || '').slice(0, 200);
       return jsonRes(res, 200, { ok: true, ...readErrors(aid, { limit, type }) });
@@ -1374,6 +1514,7 @@ async function handleApi(req, res, url) {
     if (sub === '' && method === 'DELETE') {
       delete pairings[aid];
       writeJsonFile(PAIRINGS_FILE, pairings);
+      removeErrors(aid);
       return jsonRes(res, 200, { ok: true });
     }
   }

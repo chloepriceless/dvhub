@@ -164,6 +164,45 @@ $('#logoutBtn').addEventListener('click', async () => {
   setView();
 });
 
+// Zweite Bestätigung (Passwort bzw. 2FA-Code) für Passkey anlegen / 2FA einrichten.
+const CONFIRM_ERR = {
+  bestaetigung_noetig: 'Bitte zuerst bestätigen.', passwort_falsch: 'Passwort falsch.', totp_falsch: '2FA-Code falsch.',
+  totp_bereits_benutzt: 'Dieser 2FA-Code ist schon benutzt — bitte den nächsten Code abwarten (höchstens 30 s).',
+  zu_viele_versuche: 'Zu viele Fehlversuche — bitte 15 Minuten warten.', totp_gesperrt: '2FA vorübergehend gesperrt (zu viele falsche Codes).',
+  rate_limited: 'Zu viele Versuche — eine Minute warten.',
+};
+function confirmInput(totpEnabled) {
+  const i = document.createElement('input');
+  i.style.maxWidth = '200px';
+  if (totpEnabled) { i.placeholder = '2FA-Code zur Bestätigung'; i.inputMode = 'numeric'; i.maxLength = 6; i.autocomplete = 'one-time-code'; }
+  else { i.type = 'password'; i.placeholder = 'Passwort zur Bestätigung'; i.autocomplete = 'current-password'; }
+  return i;
+}
+const confirmBody = (totpEnabled, input) => (totpEnabled ? { code: input.value.trim() } : { password: input.value });
+
+// Hinweis auf neue Passkeys der letzten 14 Tage (bis „Gesehen“ geklickt).
+const SEC_EVENT_TEXT = { passkey_added: 'Neuer Passkey angelegt', totp_enabled: '2FA eingeschaltet', totp_disabled: '2FA ausgeschaltet',
+  passkey_removed: 'Passkey entfernt', logout_all: 'Überall abgemeldet' };
+function renderSecNotice(me) {
+  const box = $('#secNotice');
+  if (!box) return;
+  let seen = '';
+  try { seen = localStorage.getItem('dvportal-sec-seen') || ''; } catch { /* egal */ }
+  const recent = (me.securityEvents || []).filter((e) => e.type === 'passkey_added'
+    && Date.parse(e.at) > Date.now() - 14 * 86400_000 && String(e.at) > seen);
+  box.replaceChildren();
+  box.hidden = !recent.length;
+  if (!recent.length) return;
+  const last = recent[recent.length - 1];
+  const t = document.createElement('span');
+  t.textContent = `🔑 Neuer Passkey „${last.label || 'Passkey'}“ angelegt am ${new Date(last.at).toLocaleString('de-DE')}. `
+    + 'Warst du das nicht? Unter „Konto“ den Passkey entfernen, „Überall abmelden“ und das Passwort ändern.';
+  const ok = document.createElement('button');
+  ok.type = 'button'; ok.className = 'btn tiny'; ok.textContent = 'Gesehen';
+  ok.addEventListener('click', () => { try { localStorage.setItem('dvportal-sec-seen', String(last.at)); } catch { /* egal */ } box.hidden = true; });
+  box.append(t, ok);
+}
+
 // ── Pairings ─────────────────────────────────────────────────────────────────
 $('#addForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -575,6 +614,7 @@ async function refreshMe() {
   isAdminUser = j.role === 'admin';
   mustChangePassword = !!j.mustChangePassword;
   renderSecurity(j);
+  renderSecNotice(j);
 }
 (async () => {
   // Frisches Portal? Import-Hinweis auf der Login-Karte zeigen.
@@ -652,9 +692,11 @@ function renderSecurity(me) {
       }));
     } else {
       totpBox.appendChild(mk('span', 'badge warn', 'aus'));
+      const pwConfirm = confirmInput(false);
+      totpBox.appendChild(pwConfirm);
       totpBox.appendChild(btn('Einrichten', 'primary', async () => {
-        const { j } = await api('/api/totp/setup', { method: 'POST' });
-        if (!j.ok) return alert(`Fehler: ${j.error}`);
+        const { j } = await api('/api/totp/setup', { method: 'POST', body: confirmBody(false, pwConfirm) });
+        if (!j.ok) return alert(CONFIRM_ERR[j.error] || `Fehler: ${j.error}`);
         totpBox.replaceChildren();
         totpBox.appendChild(mk('b', null, '1 · Secret in der App anlegen'));
         totpBox.appendChild(document.createElement('br'));
@@ -692,10 +734,12 @@ function renderSecurity(me) {
       }));
       pkBox.appendChild(row);
     }
+    const pkConfirm = confirmInput(!!me.totpEnabled);
+    pkBox.appendChild(pkConfirm);
     pkBox.appendChild(btn('➕ Passkey hinzufügen', 'primary', async () => {
       try {
-        const { j } = await api('/api/passkey/register-begin', { method: 'POST' });
-        if (!j.ok) return alert(`Fehler: ${j.error}`);
+        const { j } = await api('/api/passkey/register-begin', { method: 'POST', body: confirmBody(!!me.totpEnabled, pkConfirm) });
+        if (!j.ok) return alert(CONFIRM_ERR[j.error] || `Fehler: ${j.error}`);
         const label = prompt('Name für den Passkey (z. B. „MacBook Touch-ID“):', '') || 'Passkey';
         const cred = await navigator.credentials.create({ publicKey: {
           challenge: b64ToBuf(j.challenge),
@@ -711,11 +755,34 @@ function renderSecurity(me) {
           clientDataJSON: bufToB64(cred.response.clientDataJSON),
         } });
         if (!r.j.ok) alert(`Registrierung abgelehnt: ${r.j.error || r.status}`);
-        else renderSecurity(await (await api('/api/me')).j);
+        else {
+          alert('Passkey angelegt. Andere Geräte sind jetzt abgemeldet und müssen sich neu anmelden.');
+          renderSecurity(await (await api('/api/me')).j);
+        }
       } catch (e) {
         if (e.name !== 'NotAllowedError') alert(`Passkey-Fehler: ${e.message}`);
       }
     }));
+  }
+
+  // ── Sitzungen: Notbremse + letzte Ereignisse ──
+  const sessBox = $('#sessionBox');
+  if (sessBox) {
+    sessBox.replaceChildren();
+    sessBox.appendChild(mk('b', null, 'Sitzungen'));
+    sessBox.appendChild(mk('span', 'admin-sub', '„Abmelden“ oben beendet nur dieses Gerät. Hier meldest du alle Geräte ab (z. B. Laptop verloren).'));
+    sessBox.appendChild(btn('Überall abmelden', '', async () => {
+      if (!confirm('Alle Geräte abmelden, auch dieses?')) return;
+      await api('/api/logout-all', { method: 'POST' });
+      localStorage.removeItem('dvportal-name');
+      setView();
+    }));
+    const evs = (me.securityEvents || []).slice(-5).reverse();
+    if (evs.length) {
+      const list = mk('div', 'admin-sub');
+      list.textContent = 'Zuletzt: ' + evs.map((e) => `${SEC_EVENT_TEXT[e.type] || e.type}${e.label ? ` („${e.label}“)` : ''} ${new Date(e.at).toLocaleString('de-DE')}`).join(' · ');
+      sessBox.appendChild(list);
+    }
   }
 }
 

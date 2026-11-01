@@ -242,10 +242,14 @@ test('E2E Pull-Modell: Code → Claim → Freigabe → Poll → Tunnel-Kommando 
   assert.equal(impAnon.status, 403);
 
   // 9b) 2FA + Passkeys am Installateur-Konto (Solar Meier, Cookie vorhanden)
-  const sec = await call(pv('/api/totp/setup'), { method: 'POST', cookie });
+  // 2FA einrichten nur mit Passwort (Strix-Fund 1)
+  assert.equal((await call(pv('/api/totp/setup'), { method: 'POST', cookie })).j.error, 'bestaetigung_noetig');
+  const sec = await call(pv('/api/totp/setup'), { method: 'POST', cookie, body: { password: 'test1234ab' } });
   assert.ok(sec.j.secret, 'TOTP-Setup liefert Secret');
   assert.equal((await call(pv('/api/totp/enable'), { method: 'POST', cookie, body: { code: '000000' } })).j.error, 'code_falsch', 'falscher Code wird abgewiesen');
-  const enabled = await call(pv('/api/totp/enable'), { method: 'POST', cookie, body: { code: totp(sec.j.secret) } });
+  // Aktivieren mit dem Code des vorigen Zeitschritts: der aktuelle bleibt für
+  // den Login-Test, der nächste für die Passkey-Bestätigung frei.
+  const enabled = await call(pv('/api/totp/enable'), { method: 'POST', cookie, body: { code: totp(sec.j.secret, Date.now() - 30_000) } });
   assert.equal(enabled.status, 200);
   assert.equal((await call(pv('/api/me'), { cookie })).status, 401, 'alte Session ist nach 2FA-Aktivierung ungültig');
   cookie = enabled.cookie;
@@ -255,14 +259,17 @@ test('E2E Pull-Modell: Code → Claim → Freigabe → Poll → Tunnel-Kommando 
   assert.equal(noTotp.j.error, 'totp_ausstaendig');
   assert.equal((await call(pv('/api/login'), { method: 'POST', body: { name: 'Solar Meier', password: 'test1234ab', totp: '111111' } })).j.error, 'totp_falsch');
   // Der Aktivierungs-Code ist verbraucht (Replay-Schutz) — Login mit dem
-  // Code des nächsten Zeitschritts (liegt noch im ±1-Fenster).
-  assert.equal((await call(pv('/api/login'), { method: 'POST', body: { name: 'Solar Meier', password: 'test1234ab', totp: totp(sec.j.secret, Date.now() + 30_000) } })).status, 200);
+  // aktuellen Code (der Aktivierungs-Code war der des vorigen Schritts).
+  assert.equal((await call(pv('/api/login'), { method: 'POST', body: { name: 'Solar Meier', password: 'test1234ab', totp: totp(sec.j.secret, Date.now() - 30_000) } })).j.error, 'totp_bereits_benutzt');
+  assert.equal((await call(pv('/api/login'), { method: 'POST', body: { name: 'Solar Meier', password: 'test1234ab', totp: totp(sec.j.secret) } })).status, 200);
 
   // Passkey registrieren (simulierter Authenticator, rpId = 127.0.0.1)
   const origin = `http://127.0.0.1:${portalPort}`;
   const fakeKey = makeAuthenticator('127.0.0.1');
-  const rb = await call(pv('/api/passkey/register-begin'), { method: 'POST', cookie });
-  assert.ok(rb.j.challenge && rb.j.rpId === '127.0.0.1');
+  // Bei aktiver 2FA nur mit 2FA-Code (Strix-Fund 1)
+  assert.equal((await call(pv('/api/passkey/register-begin'), { method: 'POST', cookie, body: { password: 'test1234ab' } })).j.need, 'code');
+  const rb = await call(pv('/api/passkey/register-begin'), { method: 'POST', cookie, body: { code: totp(sec.j.secret, Date.now() + 30_000) } });
+  assert.ok(rb.j.challenge && rb.j.rpId === '127.0.0.1', JSON.stringify(rb.j));
   const cred = fakeKey.create(origin, rb.j.challenge);
   const rf = await call(pv('/api/passkey/register-finish'), { method: 'POST', cookie, body: {
     label: 'E2E-Sicherheitsschlüssel',
@@ -270,15 +277,12 @@ test('E2E Pull-Modell: Code → Claim → Freigabe → Poll → Tunnel-Kommando 
     clientDataJSON: cred.response.clientDataJSON,
   } });
   assert.equal(rf.status, 201, 'Passkey registriert');
+  cookie = rf.cookie;   // Anlegen beendet andere Sitzungen, die eigene bekommt ein neues Cookie
   const mePk = await call(pv('/api/me'), { cookie });
   assert.equal(mePk.j.passkeys.length, 1);
   assert.equal(mePk.j.passkeys[0].label, 'E2E-Sicherheitsschlüssel');
-  // Doppelt registrieren (gleiche Credential) → 409
-  const rb2 = await call(pv('/api/passkey/register-begin'), { method: 'POST', cookie });
-  const cred2 = fakeKey.create(origin, rb2.j.challenge);
-  assert.equal((await call(pv('/api/passkey/register-finish'), { method: 'POST', cookie, body: {
-    attestationObject: cred2.response.attestationObject, clientDataJSON: cred2.response.clientDataJSON,
-  } })).status, 409);
+  // Doppelt registrieren (gleiche Credential) → 409: in portal-api.test.js
+  // (braucht hier sonst einen dritten 2FA-Code im selben Zeitfenster).
 
   // Passkey-Login: Logout → ohne Passwort/2FA nur mit Challenge+Signatur
   await call(pv('/api/logout'), { method: 'POST', cookie });

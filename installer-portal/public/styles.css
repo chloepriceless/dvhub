@@ -258,6 +258,7 @@ input::placeholder { color:var(--text-dim); }
 /* Konto: Passwort, Zwei-Faktor, Passkeys */
 .seccard { padding: 12px 0; border-top: 1px solid var(--line, rgba(255,255,255,.08)); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .seccard:first-of-type { border-top: none; }
+.sec-notice { border-color: rgba(255,212,33,.45); color: var(--warn); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .seccard input { background: rgba(10,14,22,.6); border: 1px solid rgba(255,255,255,.12); color: #e8ecf4; border-radius: 8px; padding: 8px 10px; font: inherit; }
 .totpsecret { font-family: ui-monospace, monospace; letter-spacing: .06em; background: rgba(93,241,237,.08); border: 1px dashed rgba(93,241,237,.4); color: #5df1ed; padding: 6px 10px; border-radius: 8px; user-select: all; word-break: break-all; }
 #passkeyLoginBtn { margin-top: 6px; }
