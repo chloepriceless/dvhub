@@ -331,8 +331,8 @@ export function createOptimizerService(ctx) {
     collectSoc: async () => (ctx.eosForecastBridge?.socForRun
       ? ctx.eosForecastBridge.socForRun()
       : { skipped: 'forecast bridge not ready' }),
-    // Geschätzte Preise nie im Steuerzeitraum: vor jedem Lauf prüft die Bridge
-    // die Abdeckung und pusht/löscht neu (Gegenprüfung a6dbbd1d).
+    // Geschätzte Preise nie im Steuerzeitraum: vor jedem Lauf pusht die Bridge
+    // im Prozess, der den Lauf anstößt, frisch (Gegenprüfung a6dbbd1d).
     prepareRun: async () => (ctx.eosForecastBridge?.prepareRun
       ? ctx.eosForecastBridge.prepareRun()
       : { ok: true, pushed: false }),
