@@ -162,6 +162,9 @@ export function createTariffProviderService(ctx, deps = {}) {
   const fetchImpl = deps.fetch || globalThis.fetch;
   const dataDir = deps.dataDir || '/var/lib/dvhub';
   const dbWaitMs = deps.dbWaitMs || DB_WAIT_MS;
+  // So lange wartet die Historie höchstens auf das Laden beim Start (inkl. bis
+  // zu 120 s auf die Datenbank) — hängt es, rechnet sie danach ohne zu warten.
+  const loadMarkMs = deps.loadMarkMs || 150_000;
   const cacheFile = path.join(dataDir, 'tariff-provider', 'lichtblick-token.json');
   const clients = {
     tibber: deps.fetchTibber || ((s) => fetchTibberPrices({ token: s.tibber.token, homeId: s.tibber.homeId, fetchImpl })),
@@ -188,7 +191,6 @@ export function createTariffProviderService(ctx, deps = {}) {
   let inFlight = null;
   let dbLoading = null;
   let loadTimeoutLogged = null;   // je hängendem Lesen nur eine Warnung
-  let loadFailed = false;         // Laden aus der Datenbank gescheitert (Web-Prozess holt nach)
   let lastTestMs = 0;
   let identity = null;
   let reloadTimer = null;
@@ -262,7 +264,6 @@ export function createTariffProviderService(ctx, deps = {}) {
         st.dbLoaded = true;
         await refreshEstimate();
       } catch (error) {
-        loadFailed = true;
         log('tariff_provider_db_load_error', { error: error.message }, 'warn');
       } finally {
         dbLoading = null;
@@ -274,7 +275,8 @@ export function createTariffProviderService(ctx, deps = {}) {
   // Laden mit Zeitgrenze (Takt und Abruf): Takt und Abruf warten höchstens
   // dbWaitMs. Das Lesen selbst läuft weiter (kein zweites daneben, das Pool-
   // Verbindungen bände) und wird übernommen, sobald es fertig ist; bis dahin
-  // wird nicht geschrieben (writeSamples), getState().logging = 'pending'.
+  // wird nicht geschrieben (writeSamples), getState().logging = 'pending'; die
+  // Historie wartet höchstens loadMarkMs darauf.
   // Scheitert es, stellt der nächste Takt es neu. Kommt es nie zurück (halb
   // offene TCP-Verbindung zu einer entfernten Datenbank; über den Unix-Socket
   // nicht möglich), bleibt es bis zum Neustart 'pending' — sichtbar in den
@@ -516,7 +518,7 @@ export function createTariffProviderService(ctx, deps = {}) {
 
   function start() {
     if (timer) return;
-    markProviderPricesLoading(loadWhenStoreReady());
+    markProviderPricesLoading(waitAtMost(loadWhenStoreReady(), loadMarkMs));
     timer = setInterval(() => { tick().catch((e) => log('tariff_provider_error', { phase: 'tick', error: e.message }, 'warn')); }, deps.tickMs || TICK_MS);
     timer.unref?.();
     setTimeout(() => { tick().catch(() => {}); }, 2000).unref?.();
@@ -530,8 +532,8 @@ export function createTariffProviderService(ctx, deps = {}) {
     if (typeof store?.listSeriesSamples !== 'function') return;
     // Ist das Laden beim Start gescheitert, hier alles nachholen (sonst fehlten
     // dem Web-Prozess die Preise älter als zwei Tage bis zum Neustart).
-    if (!st.dbLoaded && loadFailed) {
-      await loadFromDb();
+    if (!st.dbLoaded) {
+      await loadFromDbBounded();
       if (st.dbLoaded) return;
     }
     const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE, start: new Date(now() - 2 * 86_400_000).toISOString() });
@@ -542,7 +544,7 @@ export function createTariffProviderService(ctx, deps = {}) {
   }
 
   function startReadOnly() {
-    markProviderPricesLoading(loadWhenStoreReady());
+    markProviderPricesLoading(waitAtMost(loadWhenStoreReady(), loadMarkMs));
     if (reloadTimer) return;
     reloadTimer = setInterval(() => { reloadRecent().catch(() => {}); }, 15 * 60_000);
     reloadTimer.unref?.();

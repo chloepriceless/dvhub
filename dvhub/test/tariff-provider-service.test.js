@@ -234,7 +234,9 @@ test('Anbieterwechsel: künftige Preise und Schätzung des alten verfallen, Verg
 test('getrennter Web-Prozess liest neue Preise aus der Datenbank nach (Codex 22.10.)', async () => {
   const { ctx } = makeCtx();
   let calls = 0;
+  let loaded = false;   // Start: einmal alles (loadFromDb), danach nur Fenster
   ctx.telemetryStore.listSeriesSamples = async ({ start }) => {
+    if (!loaded) { loaded = true; return []; }
     calls += 1;
     assert.ok(start, 'nur ein Fenster, nicht alles');
     return [
@@ -243,6 +245,7 @@ test('getrennter Web-Prozess liest neue Preise aus der Datenbank nach (Codex 22.
     ];
   };
   const svc = createTariffProviderService(ctx, { now: () => Date.parse('2026-11-01T15:00:00Z') });
+  await svc.loadFromDb();
   await svc.reloadRecent();
   assert.equal(calls, 1);
   assert.equal(providerSlotAt(Date.parse('2026-11-02T00:05:00Z')).ctKwh, 22);
@@ -553,4 +556,51 @@ test('Web-Prozess: gescheitertes Laden beim Start wird beim Nachlesen vollständ
   assert.equal(queries.at(-1).start, undefined, 'vollständig, nicht nur zwei Tage');
   assert.equal(providerSlotAt(Date.parse('2026-10-20T10:05:00Z')).ctKwh, 31, 'alter Preis da');
   assert.equal(svc.getState().dbLoaded, true);
+});
+
+// Gegenprüfung 09d619c9 (3× P3): Web-Prozess holt auch nach, wenn die Datenbank
+// erst spät kam (nie geladen), ein hängendes Nachholen hält das Fenster-Nachlesen
+// nicht auf, und ein hängendes Laden beim Start bremst die Historie nicht dauerhaft.
+test('Web-Prozess: nie geladen → vollständig nachholen; hängt das, trotzdem das Zwei-Tage-Fenster', { timeout: 5000 }, async () => {
+  const { ctx } = makeCtx();
+  const queries = [];
+  let mode = 'ok';
+  ctx.telemetryStore.listSeriesSamples = (q) => {
+    queries.push(q);
+    if (mode === 'hang' && !q.start) return new Promise(() => {});
+    return Promise.resolve([{ ts: q.start ? '2026-11-02T00:00:00.000Z' : '2026-10-20T10:00:00.000Z', source: 'lichtblick', resolutionSeconds: 900, value: q.start ? 22 : 31 }]);
+  };
+  const keepAlive = setTimeout(() => {}, 3000);
+  try {
+    const svc = createTariffProviderService(ctx, { now: () => Date.parse('2026-11-01T15:00:00Z'), dbWaitMs: 10 });
+    await svc.reloadRecent();   // Store kam erst nach dem Start-Laden: nie geladen
+    assert.equal(queries[0].start, undefined, 'vollständig');
+    assert.equal(providerSlotAt(Date.parse('2026-10-20T10:05:00Z')).ctKwh, 31);
+
+    clearProviderPrices();
+    queries.length = 0; mode = 'hang';
+    const svc2 = createTariffProviderService(ctx, { now: () => Date.parse('2026-11-01T15:00:00Z'), dbWaitMs: 10 });
+    await svc2.reloadRecent();
+    assert.ok(queries.some((q) => q.start), 'Fenster trotzdem gelesen');
+    assert.equal(providerSlotAt(Date.parse('2026-11-02T00:05:00Z')).ctKwh, 22);
+  } finally {
+    clearTimeout(keepAlive);
+  }
+});
+
+test('Start: hängendes Laden bremst die Historie nur bis zur Zeitgrenze', { timeout: 5000 }, async () => {
+  const { ctx } = makeCtx();
+  ctx.telemetryStore.listSeriesSamples = () => new Promise(() => {});
+  const svc = createTariffProviderService(ctx, { now: () => Date.now(), loadMarkMs: 30, tickMs: 3_600_000 });
+  const keepAlive = setTimeout(() => {}, 3000);
+  try {
+    svc.start();
+    await new Promise((r) => setTimeout(r, 60));
+    const t0 = Date.now();
+    await whenProviderPricesLoaded(2000);
+    assert.ok(Date.now() - t0 < 500, `Historie wartet nicht mehr (${Date.now() - t0} ms)`);
+  } finally {
+    svc.stop();
+    clearTimeout(keepAlive);
+  }
 });
