@@ -195,6 +195,7 @@ import { createEvWatch } from './services/optimizer/ev-watch.js';
 import { createVehiclePull } from './services/vehicle-pull/index.js';
 import { resolveEvPlugged, createEvSocMemory } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
+import { setpointFollowHeartbeat } from './services/setpoint-follow-watchdog.js';
 import { energyBalanceBattery } from './services/energy-balance-battery.js';
 import { createGridShareTracker } from './services/optimizer/grid-share.js';
 import { planningCfg as gridSharePlanningCfg, planningSocPct as gridSharePlanningSocPct, secondGxMissing } from './services/multi-gx/planning.js';
@@ -2890,8 +2891,15 @@ if (IS_RUNTIME_PROCESS) {
     };
     // Arm the alert-push hook — ctx.monitoringAlertPush() now routes here.
     monitoringHeartbeatSend = sendHeartbeat;
-    monitoringTimerId = setInterval(() => sendHeartbeat('DVhub OK | SOC ' + (state.victron?.soc ?? '?') + '%'), intervalMs);
-    setTimeout(() => sendHeartbeat('DVhub started'), 5000);
+    // Solange der Entlade-Wächter Alarm hat, bleibt der Monitor auf „down“ —
+    // sonst überschrieb der nächste Puls die Störung nach höchstens einem
+    // Intervall (Gegenprüfung d3420a0c, P2).
+    const heartbeat = (okMsg) => {
+      const hb = setpointFollowHeartbeat(state, okMsg);
+      return sendHeartbeat(hb.msg, hb.status);
+    };
+    monitoringTimerId = setInterval(() => heartbeat('DVhub OK | SOC ' + (state.victron?.soc ?? '?') + '%'), intervalMs);
+    setTimeout(() => heartbeat('DVhub started'), 5000);
     // Plan 08-03 Task 2: run through redactUrlCreds before any logging/exposure so that
     // `https://user:token@push.example/uk` never appears in journalctl or systemd logs.
     const safePushUrl = redactUrlCreds(pushUrl);

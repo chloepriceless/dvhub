@@ -640,3 +640,16 @@ export function createSetpointFollowWatchdog(ctx) {
 
   return { tick, _state: () => wstate };
 }
+
+/**
+ * Regelmäßiger Uptime-Kuma-Puls: solange der Wächter Alarm hat, „down“ mit
+ * Alarmtext statt „up“ — sonst überschrieb der nächste Puls die Störung nach
+ * höchstens einem Intervall (Gegenprüfung d3420a0c, P2).
+ */
+export function setpointFollowHeartbeat(state, okMsg) {
+  const sf = state?.victron?.setpointFollow;
+  if (sf?.active) {
+    return { status: 'down', msg: `DVhub: Speicher entlädt nicht (seit ${sf.since || '?'}) | SOC ${state?.victron?.soc ?? '?'}%` };
+  }
+  return { status: 'up', msg: okMsg };
+}

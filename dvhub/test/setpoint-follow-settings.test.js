@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createDefaultConfig, getConfigDefinition, loadConfigFile, saveConfigFile } from '../config-model.js';
-import { resolveSetpointFollowOptions, SETPOINT_FOLLOW_DEFAULTS } from '../services/setpoint-follow-watchdog.js';
+import { resolveSetpointFollowOptions, SETPOINT_FOLLOW_DEFAULTS, setpointFollowHeartbeat } from '../services/setpoint-follow-watchdog.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROFILES = path.join(HERE, '..', 'hersteller');
@@ -149,4 +149,11 @@ test('Rückfall: wer den Wächter direkt mit altem Pfad aufruft, wird weiter bed
   });
   assert.equal(both.enabled, true);
   assert.equal(both.holdMs, 7 * 60000);
+});
+
+test('Uptime-Kuma-Puls bleibt während eines Wächter-Alarms auf down (Gegenprüfung d3420a0c)', () => {
+  assert.deepEqual(setpointFollowHeartbeat({ victron: { soc: 50, setpointFollow: null } }, 'DVhub OK'), { status: 'up', msg: 'DVhub OK' });
+  const hb = setpointFollowHeartbeat({ victron: { soc: 50, setpointFollow: { active: true, since: '2026-11-02T10:00:00.000Z' } } }, 'DVhub OK');
+  assert.equal(hb.status, 'down');
+  assert.match(hb.msg, /entlädt nicht/);
 });
