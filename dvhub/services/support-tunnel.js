@@ -700,8 +700,10 @@ export function createSupportTunnel(ctx, deps = {}) {
     // The relay-rejection / process death path. autossh normally self-heals, so
     // an exit here means a fatal condition (ExitOnForwardFailure, killed, etc).
     proc.on('exit', (code, signal) => {
-      removeProcessState();
+      // Erst nach der Prüfung: ein alter Prozess, der nach einem neuen open()
+      // endet, löschte sonst die PID-Datei des neuen (Gegenprüfung 98bfcb68).
       if (child !== proc) return; // already torn down by close()/auto-close
+      removeProcessState();
       if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
       child = null;
       openedAt = null;

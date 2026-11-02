@@ -98,7 +98,10 @@ PROCESS_STATE="$SUP_DIR/tunnel-process.json"   # App ohne Tunnel-Unit (startet a
 pid_args() { ps -o args= -p "$1" 2>/dev/null || true; }
 pid_uid() { ps -o uid= -p "$1" 2>/dev/null | tr -d ' ' || true; }
 pid_ppid() { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ' || true; }
-KEY_UID="$(ls -ln "$KEY" 2>/dev/null | awk '{print $3}')"   # Dienstbenutzer (Eigentümer des Schlüssels)
+# Dienstbenutzer (Eigentümer des Schlüssels). `|| KEY_UID=""`: fehlt der
+# Schlüssel oder ist support/ nicht lesbar, beendete pipefail sonst still das
+# Skript, bevor es die Fehlermeldung zeigen konnte (Gegenprüfung 98bfcb68).
+KEY_UID="$(ls -ln "$KEY" 2>/dev/null | awk '{print $3}')" || KEY_UID=""
 # <pid> <muster>: lebt der Prozess und trägt er das Muster in der Befehlszeile?
 pid_is() { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 1 )) && kill -0 "$1" 2>/dev/null && [[ "$(pid_args "$1")" == *"$2"* ]]; }
 # Dateien aus support/ gehören dem Dienstbenutzer: nur reguläre Dateien lesen

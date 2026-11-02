@@ -551,3 +551,21 @@ test('Prozess-Modus: PID-Datei für das Notfall-Skript, weg nach Schließen und 
   spawned[1].emit('exit', 255, null);
   assert.equal(fs.existsSync(file), false);
 });
+
+// Gegenprüfung 98bfcb68 (P3): close() → open() → altes exit darf die PID-Datei
+// des neuen Tunnels nicht löschen.
+test('Prozess-Modus: spätes exit des alten Tunnels lässt die PID-Datei des neuen stehen', () => {
+  const { sup, ctx } = realBox({ ports: [49132, 49133] });
+  const spawned = [];
+  const tun = createSupportTunnel(ctx, {
+    inContainer: false, unitMode: () => false, fs: withBinaries,
+    spawn: () => { const pr = fakeProc(); pr.pid = 5000 + spawned.length; spawned.push(pr); return pr; },
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+  });
+  const file = path.join(sup, 'tunnel-process.json');
+  tun.open({ ttlMin: 30 });
+  tun.close();
+  tun.open({ ttlMin: 30 });
+  spawned[0].emit('exit', null, 'SIGTERM');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { pid: 5001 });
+});

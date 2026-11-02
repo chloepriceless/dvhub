@@ -142,3 +142,18 @@ test('PID-Datei als FIFO lässt --close nicht hängen', () => {
     assert.match(r.stdout, /Kein laufender Support-Tunnel/);
   } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
 });
+
+// Gegenprüfung 98bfcb68 (P2): ohne lesbaren Schlüssel endete das Skript still
+// (pipefail in der KEY_UID-Zeile), statt die Einrichtungs-Meldung zu zeigen.
+test('ohne Schlüssel: Öffnen meldet FEHLER, --close sagt „kein Tunnel“', () => {
+  const t = setup();
+  try {
+    fs.rmSync(t.key);
+    const open = spawnSync('bash', [SCRIPT, '--ttl', '5'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
+    assert.equal(open.status, 1);
+    assert.match(open.stderr, /FEHLER: Support nicht eingerichtet/);
+    const close = spawnSync('bash', [SCRIPT, '--close'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
+    assert.equal(close.status, 0, close.stderr);
+    assert.match(close.stdout, /Kein laufender Support-Tunnel/);
+  } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
+});
