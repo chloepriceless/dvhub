@@ -123,3 +123,25 @@ test('stehender Client wird nach der Leerlauf-Grenze getrennt, Deskriptor frei',
     server.closeAllConnections?.(); server.close(); fs.rmSync(app, { recursive: true, force: true });
   }
 });
+
+// Gegenprüfung f1a2d515 (P2): viele Anfragen hintereinander auf EINER
+// Verbindung (HTTP-Pipelining), Client liest nicht und trennt dann — jede
+// wartende Antwort hatte ihre Datei schon geöffnet und bekam nie ein close.
+test('Pipelining: wartende Antworten halten nach dem Trennen keine Dateien offen', { skip: openFds() === null ? 'kein /dev/fd' : false }, async () => {
+  const net = await import('node:net');
+  const app = setupApp();
+  const { server, port } = await serve(app, { staticIdleTimeoutMs: 300 });
+  try {
+    await get(port, '/index.html');
+    const before = openFds();
+    const sock = net.connect(port, '127.0.0.1');
+    await new Promise((r) => sock.once('connect', r));
+    sock.pause();
+    sock.write('GET /assets/big.png HTTP/1.1\r\nHost: x\r\n\r\n'.repeat(40));
+    await new Promise((r) => setTimeout(r, 800));
+    sock.destroy();
+    await new Promise((r) => setTimeout(r, 800));
+    const after = openFds();
+    assert.ok(after - before <= 1, `offene Deskriptoren vorher ${before}, nachher ${after}`);
+  } finally { server.closeAllConnections?.(); server.close(); fs.rmSync(app, { recursive: true, force: true }); }
+});

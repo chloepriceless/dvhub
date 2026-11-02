@@ -2536,6 +2536,20 @@ export function createApiRoutes(ctx) {
   // wird der Lese-Stream zerstört (pipe ließ den Dateideskriptor offen —
   // ohne Token wiederholbar bis EMFILE).
   function pipeFile(res, file, headers) {
+    // Gegenprüfung f1a2d515 (P2): bei HTTP-Pipelining warten spätere Antworten
+    // auf ihre Verbindung; öffneten sie die Datei sofort, blieb sie nach einem
+    // Verbindungsabbruch für immer offen (wartende Antworten bekommen kein
+    // close). Darum erst öffnen, wenn die Antwort an der Reihe ist.
+    if (!res.socket && typeof res.once === 'function' && res.req?.socket) {
+      const start = () => pipeFileNow(res, file, headers);
+      res.once('socket', start);
+      res.req.socket.once?.('close', () => res.removeListener?.('socket', start));
+      return;
+    }
+    pipeFileNow(res, file, headers);
+  }
+
+  function pipeFileNow(res, file, headers) {
     const stream = fs.createReadStream(file);
     stream.once('error', () => {
       if (!res.headersSent) text(res, 404, 'not found');
@@ -2548,8 +2562,9 @@ export function createApiRoutes(ctx) {
     res.once?.('close', () => { if (!stream.destroyed) stream.destroy(); });
     // Gegenprüfung zu 1bc645ab (P2): ein Client, der nicht liest, aber
     // verbunden bleibt, hielt Deskriptor und Socket sonst unbegrenzt (der
-    // Server setzt kein Timeout). Leerlauf = nichts gesendet; ein langsamer,
-    // aber lesender Client ist nicht betroffen.
+    // Server setzt kein Timeout). Die Grenze misst Schreibfortschritt: ein
+    // Client, der so langsam liest, dass 30 s lang kein Block abfließt, wird
+    // ebenfalls getrennt (Gegenprüfung f1a2d515, P3 — der Browser lädt neu).
     res.setTimeout?.(Number(ctx.staticIdleTimeoutMs) > 0 ? Number(ctx.staticIdleTimeoutMs) : 30_000, () => {
       if (!stream.destroyed) stream.destroy();
       res.destroy?.();
