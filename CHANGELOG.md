@@ -86,8 +86,9 @@ verweist hierher.
   Mindestgrenze 2901) und wenn kurze Laststöße (Wallbox schaltet) sich zu „zehn Minuten“ summierten. Der Wächter
   liest jetzt die aktive SoC-Grenze mit, wertet ein Halten durch DVhub und eine Entlade-Sperre als gewollt und
   meldet nur, wenn die Störung ein ganzes Zehn-Minuten-Fenster prägt (mindestens 80 % der Messpunkte, auch im
-  Mittel Netzbezug über dem Sollwert) und gerade anliegt. Während eines gewollten Haltens gibt es keine falsche
-  Entwarnung mehr; das Protokoll nennt Anteil und Mittelwerte. Neuer Schalter
+  Mittel Netzbezug über dem Sollwert) und gerade anliegt. Bei Verdacht liest er die Entlade-Sperre (Register 2704)
+  selbst nach, auch nach einem Neustart. Während eines gewollten Haltens gibt es keine falsche Entwarnung mehr; „entlädt
+  wieder“ meldet er nur, wenn der Akku wirklich entladen hat. Das Protokoll nennt Anteil und Mittelwerte. Neuer Schalter
   `victron.setpointWatchdog.minSuspectShare` (Standard 0,8).
 
 ## [1.0.8] - 2026-10-21

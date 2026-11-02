@@ -45,7 +45,7 @@
 // zählen jetzt (a) eine aktive Halteregel der eigenen Steuerung und (b) die
 // aktive SoC-Grenze wie eine gesetzte Entlade-Sperre.
 
-import { knownMaxDischargeW } from './peak-shaving/index.js';
+import { knownMaxDischargeW, decodeMaxDischargeRaw } from './peak-shaving/index.js';
 
 // So alt darf das Halte-Signal der Auswertung (state.ctrl.eosGridHold) bzw.
 // DVhubs eigener 2704-Schreibwert höchstens sein — mindestens, bei langsamerem
@@ -144,16 +144,26 @@ export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}) {
   return 'eos_grid_hold';
 }
 
+// Eigene Rücklesung von 2704: höchstens so oft, und so lange gilt ein Wert.
+export const CAP_READ_EVERY_MS = 30000;
+function capReadMaxAgeMs(cfg) {
+  const pollMs = Number(cfg?.meterPollMs);
+  return Math.max(90000, Number.isFinite(pollMs) && pollMs > 0 ? 3 * pollMs : 0);
+}
+
 /**
- * Entlade-Sperre 2704 in W, soweit belastbar bekannt: Rücklesung (Victron-
- * Profil, sonst Peak-Shaving-Rücklesung); DVhubs eigener Schreibwert nur
- * befristet — an der GX kann die Sperre längst wieder aufgehoben sein.
+ * Entlade-Sperre 2704 in W, soweit belastbar bekannt, in dieser Reihenfolge:
+ * Rücklesung (Poll-Punkt bzw. Peak Shaving), die eigene Rücklesung des
+ * Wächters (ownRead), DVhubs eigener Schreibwert — Letzterer nur befristet, an
+ * der GX kann die Sperre längst wieder aufgehoben sein.
  */
-export function knownDischargeCapW(state, cfg, nowMs = Date.now()) {
+export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = null) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
-  if (!known) return null;
-  if (known.from === 'own_write' && !isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return null;
-  return known.value;
+  if (known && known.from !== 'own_write') return known.value;
+  if (ownRead && !ownRead.error && Number.isFinite(Number(ownRead.value))
+      && isFresh(ownRead.at, nowMs, capReadMaxAgeMs(cfg))) return Number(ownRead.value);
+  if (known && isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return known.value;
+  return null;
 }
 
 /**
@@ -275,16 +285,22 @@ export function evaluateSetpointFollow(state, sample, opts) {
     state.recoveredSince = null;
   }
   const recovering = isRecoveryPoint(sample, refusing, opts);
+  const discharging = recovering && Number(sample.batteryW) <= -opts.idleW;
   state.window.push({
-    t: now, refusing, recovering,
+    t: now, refusing, recovering, discharging,
     netImportW: Number(sample.netImportW), setpointW: Number(sample.setpointW)
   });
   // Älteres als holdMs fällt heraus; der jüngste herausgefallene Punkt bleibt Anker.
   while (state.window.length && state.window[0].t < now - opts.holdMs) state.anchor = state.window.shift();
 
   // okSince: seit wann JEDER Punkt belegt, dass der Speicher folgt.
-  if (!recovering) state.okSince = null;
-  else if (state.okSince == null) state.okSince = now;
+  if (!recovering) {
+    state.okSince = null;
+    state.okDischarged = false;
+  } else {
+    if (state.okSince == null) state.okSince = now;
+    if (discharging) state.okDischarged = true;
+  }
   if (refusing) {
     state.last = {
       setpointW: Number(sample.setpointW), netImportW: Number(sample.netImportW),
@@ -326,9 +342,15 @@ export function evaluateSetpointFollow(state, sample, opts) {
   const recoveredLong = state.recoveredSince != null && (now - state.recoveredSince) >= opts.clearMs;
   if (okLong || recoveredLong) {
     transition = 'clear';
+    // Hat der Akku dabei wirklich entladen? Sonst ist nur die Auffälligkeit
+    // vorbei (z. B. PV lädt), nicht belegt, dass er wieder entlädt (11f597d3).
+    const discharged = okLong
+      ? state.okDischarged === true
+      : (state.window.some((p) => p.discharging) || state.anchor?.discharging === true);
     // Neues Fenster; letzter auffälliger Punkt und Fensterwerte bleiben fürs Protokoll.
     Object.assign(state, createSetpointFollowState(), {
-      last: state.last, share: state.share, avgImportW: state.avgImportW, avgShortfallW: state.avgShortfallW
+      last: state.last, share: state.share, avgImportW: state.avgImportW, avgShortfallW: state.avgShortfallW,
+      clearedWithDischarge: discharged
     });
   }
   return { state, transition };
@@ -352,6 +374,44 @@ export function describeSetpoint(setpointW) {
 export function createSetpointFollowWatchdog(ctx) {
   const { state, getCfg, pushLog } = ctx;
   let wstate = createSetpointFollowState();
+  // Eigene Rücklesung der Entlade-Sperre 2704 (Gegenprüfung 01f4558b/11f597d3):
+  // nur bei Verdacht, aktivem Alarm oder zuletzt gelesener Sperre, gedrosselt.
+  let capRead = null;          // { value, at, error }
+  let capReadStartedAt = 0;
+  let capReadPending = false;
+
+  function capReadable(cfg) {
+    const conf = cfg?.controlWrite?.maxDischargeW;
+    const t = ctx.transport;
+    if (!conf?.enabled || !t) return null;
+    if (t.type === 'mqtt') return typeof t.readPoint === 'function' ? conf : null;
+    return typeof t.mbRequest === 'function' && conf.address != null ? conf : null;
+  }
+
+  function maybeReadCap(cfg, nowMs, opts) {
+    const conf = capReadable(cfg);
+    if (!conf || capReadPending || nowMs - capReadStartedAt < CAP_READ_EVERY_MS) return;
+    const suspicious = wstate.active || wstate.window.some((p) => p.refusing) || wstate.anchor?.refusing === true;
+    const capBlock = capRead && !capRead.error && Number(capRead.value) >= 0 && Number(capRead.value) < opts.minShortfallW;
+    if (!suspicious && !capBlock) return;
+    capReadPending = true;
+    capReadStartedAt = nowMs;
+    const v = cfg.victron || {};
+    Promise.resolve().then(async () => {
+      if (ctx.transport.type === 'mqtt') return Number((await ctx.transport.readPoint('maxDischargeW'))?.mqttValue);
+      const regs = await ctx.transport.mbRequest({
+        fc: 3, host: conf.host || v.host, port: conf.port || v.port, unitId: conf.unitId ?? v.unitId,
+        address: conf.address, quantity: 1, timeoutMs: conf.timeoutMs || v.timeoutMs
+      });
+      return decodeMaxDischargeRaw(regs?.[0], conf);
+    }).then((value) => {
+      capRead = value == null || !Number.isFinite(value)
+        ? { value: null, at: nowMs, error: '2704: kein gültiger Wert' }
+        : { value, at: nowMs, error: null };
+    }, (e) => {
+      capRead = { value: null, at: nowMs, error: e?.message || String(e) };
+    }).finally(() => { capReadPending = false; });
+  }
 
   function send(msg) {
     try {
@@ -400,8 +460,9 @@ export function createSetpointFollowWatchdog(ctx) {
       holdReason: activeDischargeHold(state, nowMs, cfg),
       // Entlade-Sperre (Reg. 2704): Rücklesung, sonst DVhubs eigener letzter
       // Schreibwert, dieser nur befristet.
-      maxDischargeW: knownDischargeCapW(state, cfg, nowMs)
+      maxDischargeW: knownDischargeCapW(state, cfg, nowMs, capRead)
     }, opts);
+    try { maybeReadCap(cfg, nowMs, opts); } catch { /* Lesen darf den Wächter nie stören */ }
 
     const last = wstate.last || {};
     const detail = {
@@ -431,17 +492,26 @@ export function createSetpointFollowWatchdog(ctx) {
       } catch { /* noop */ }
     }
     if (transition === 'clear') {
-      pushLog('setpoint_followed_again', detail, 'info');
-      send({
-        event: 'setpoint_followed_again', level: 'info',
-        title: 'DVhub: Speicher entlädt wieder',
-        body: 'Der Wechselrichter folgt dem Sollwert wieder. Die Steuerung arbeitet normal weiter.'
-      });
+      const discharged = wstate.clearedWithDischarge === true;
+      pushLog('setpoint_followed_again', { ...detail, discharged }, 'info');
+      // Nur wenn der Akku wirklich entladen hat, heißt es „entlädt wieder“; sonst
+      // ist nur die Auffälligkeit vorbei (Gegenprüfung 11f597d3).
+      send(discharged
+        ? {
+          event: 'setpoint_followed_again', level: 'info',
+          title: 'DVhub: Speicher entlädt wieder',
+          body: 'Der Wechselrichter folgt dem Sollwert wieder. Die Steuerung arbeitet normal weiter.'
+        }
+        : {
+          event: 'setpoint_followed_again', level: 'info',
+          title: 'DVhub: Speicher wieder unauffällig',
+          body: 'Netzbezug und Sollwert passen wieder zusammen; der Akku musste dabei nicht entladen (er lädt oder steht). Ob er wieder entlädt, zeigt sich, sobald Entladen gefragt ist — bleibt es aus, meldet DVhub erneut.'
+        });
       try {
-        Promise.resolve(ctx.monitoringAlertPush?.('up', 'DVhub: Speicher entlädt wieder')).catch(() => { /* noop */ });
+        Promise.resolve(ctx.monitoringAlertPush?.('up', discharged ? 'DVhub: Speicher entlädt wieder' : 'DVhub: Speicher wieder unauffällig'))
+          .catch(() => { /* noop */ });
       } catch { /* noop */ }
     }
-
     if (state.victron) {
       state.victron.setpointFollow = wstate.active
         ? { active: true, since: new Date(wstate.suspectSince || nowMs).toISOString(), ...detail }

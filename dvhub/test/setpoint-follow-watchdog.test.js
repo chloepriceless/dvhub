@@ -589,3 +589,24 @@ test('tick(): meterPollMs 60 s — Lückengrenze aus der Konfiguration, Alarm ko
   }
   assert.equal(sent.length, 1);
 });
+
+// --- Gegenprüfung 11f597d3: Entwarntext nur bei echter Entladung -------------
+test('Entwarnung nach reinem Laden: neutraler Text, kein „entlädt wieder“', () => {
+  const sent = [];
+  const state = {
+    meter: { ok: true },
+    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5 }
+  };
+  const watchdog = createSetpointFollowWatchdog({
+    state, getCfg: () => ({}), pushLog: () => {},
+    notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
+  });
+  const stamp = (t) => { state.victron.fieldUpdatedAt = { gridSetpointW: t, batteryPowerW: t, soc: t }; };
+  for (let t = 0; t <= OPTS.holdMs; t += 5000) { stamp(T0 + t); watchdog.tick(T0 + t); }
+  // Morgens: PV lädt den Akku, kaum Bezug — das zeigt nicht, dass er wieder entlädt.
+  Object.assign(state.victron, { gridImportW: 50, gridExportW: 0, batteryPowerW: 2500 });
+  for (let t = OPTS.holdMs + 5000; t <= OPTS.holdMs + OPTS.clearMs + 10000; t += 5000) { stamp(T0 + t); watchdog.tick(T0 + t); }
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].event, 'setpoint_followed_again');
+  assert.doesNotMatch(sent[1].title + sent[1].body, /entlädt wieder|folgt dem Sollwert wieder/);
+});

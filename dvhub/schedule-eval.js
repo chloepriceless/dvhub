@@ -1967,29 +1967,11 @@ export function createScheduleEvaluator(ctx) {
     // Peak Shaving Hebel 2 (Akku-Sperre bei Bezugsspitze). Läuft auch bei
     // ausgeschaltetem Feature: eine noch stehende Freigabe wird dann
     // zurückgenommen; ohne Freigabe schreibt der Takt nichts.
-    const readbackBefore = state.ctrl._peakShaving?.readback;
     try {
       await peakShavingDischargeTick();
     } catch (e) {
       pushLog('peak_shaving_error', { error: e?.message || String(e) }, 'warn');
     }
-    // Entlade-Wächter (Gegenprüfung 01f4558b): Steht DVhubs eigener letzter
-    // 2704-Schreibwert auf 0 (Entladung sperren), 2704 zurücklesen — das
-    // Victron-Profil pollt das Register bewusst nicht. Sonst gälte die gewollte
-    // Sperre nach kurzer Zeit als Fehler, bzw. eine an der GX aufgehobene als
-    // Sperre. Nur wenn Peak Shaving in diesem Takt nicht schon gelesen hat, und
-    // nicht für Peak-Shavings eigene Rückgabe der Sperre (peak_shaving_restore):
-    // nach dem Ausschalten liest Peak Shaving 2704 bewusst nicht mehr (563da829).
-    try {
-      const mdConf = cfg.controlWrite?.maxDischargeW;
-      const ownWrite = state.schedule.lastWrite?.maxDischargeW;
-      if (mdConf?.enabled && maxDischargeReadable(mdConf)
-          && Number(ownWrite?.value) === 0
-          && !String(ownWrite?.source || '').startsWith('peak_shaving')
-          && state.ctrl._peakShaving?.readback === readbackBefore) {
-        await readMaxDischargeForPeakShaving(mdConf);
-      }
-    } catch { /* nur Rücklesung — darf den Takt nie stören */ }
 
     // feedExcessDcPv: schedule-gesteuerte DC-Einspeisung (+ dontFeedExcessAcPv invers)
     if (cfg.dvControl?.enabled) {
