@@ -673,6 +673,11 @@ describe('mobile-link Ende zu Ende', () => {
       assert.equal(events().length, 3);
       b.agent._pushMailboxLatest();
       assert.equal(events().length, 3 + 8, 'Warteschlange nicht auf 8 begrenzt');
+      // Herausgefallen sind die ältesten (das abgelehnte `last` und die zwei
+      // ersten neuen) — die acht neuesten kommen.
+      const replay = events().slice(3);
+      assert.ok(!replay.some((m) => m.d === last.d), 'ältestes Ereignis statt neuestem behalten');
+      assert.equal(new Set(replay.map((m) => m.d)).size, 8);
     } finally {
       b.agent.stop();
     }
