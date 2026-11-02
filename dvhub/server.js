@@ -197,7 +197,7 @@ import { resolveEvPlugged, createEvSocMemory } from './services/optimizer/ev-soc
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { energyBalanceBattery } from './services/energy-balance-battery.js';
 import { createGridShareTracker } from './services/optimizer/grid-share.js';
-import { planningCfg as gridSharePlanningCfg, planningSocPct as gridSharePlanningSocPct } from './services/multi-gx/planning.js';
+import { planningCfg as gridSharePlanningCfg, planningSocPct as gridSharePlanningSocPct, secondGxMissing } from './services/multi-gx/planning.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
@@ -2301,7 +2301,7 @@ const telemetryReady = (async () => {
       // Ladestand wären nur die der Hauptanlage → Akku-Inhalt unbekannt, damit
       // die Kappung keinen Netzstrom abschreibt (Gegenprüfung 8465a540, P2).
       // Ohne eingestellte Kapazität derselbe Rückfall wie bei EOS (8000 Wh).
-      const followerMissing = cfg.multiGx?.enabled === true && state.multiGx?.online !== true;
+      const followerMissing = secondGxMissing(ctx, cfg);
       const gs = ctx.gridShare?.tick?.({
         nowMs: Date.now(),
         victron,

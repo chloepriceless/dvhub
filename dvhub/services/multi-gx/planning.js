@@ -36,6 +36,21 @@ function follower(ctx, cfg) {
 }
 
 const primaryCapacityWh = (cfg) => Number(cfg?.optimizer?.batteryCapacityWh) || 8000;
+
+/**
+ * Zweite Anlage wirksam eingerichtet (Schalter + Beta-Freigabe + Adresse +
+ * Kapazität), aber gerade nicht in der Planung (nicht erreichbar, kein
+ * Ladestand)? Dann wären Kapazität und Ladestand nur die der Hauptanlage —
+ * der Netzstrom-Zähler behandelt den Akku-Inhalt dann als unbekannt. Ohne
+ * wirksame zweite Anlage (aus, Beta zu, keine Adresse) gilt die Hauptanlage
+ * allein (Gegenprüfung 6555bdcf, P2: sonst blieb die Sperre dauerhaft).
+ */
+export function secondGxMissing(ctx, cfg = ctx?.getCfg?.()) {
+  const c = cfg?.multiGx || {};
+  if (c.enabled !== true || !betaGateOpen(cfg, 'multiGx') || !String(c.host || '').trim()) return false;
+  if (!(Number(c.batteryCapacityWh) > 0)) return false;
+  return follower(ctx, cfg) == null;
+}
 const weighted = (a, capA, b, capB) => Number(((a * capA + b * capB) / (capA + capB)).toFixed(1));
 
 /** Config fuer EOS/Plan-Umrechnung: Akku- und Wechselrichterwerte beider Anlagen. */

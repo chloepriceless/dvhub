@@ -115,6 +115,24 @@ test('ohne „Netzladen erlaubt“ zählt der Zähler keinen Zufluss (keine Sper
   }
 });
 
+test('„Netzladen erlaubt“ an, aber ohne MiSpeL-Freigabe: echter Netzstrom (z. B. manueller Sollwert) zählt und sperrt', () => {
+  // Gegenprüfung 6555bdcf (P2): schedule-eval lässt positive Sollwerte schon mit
+  // dem Schalter allein durch — der Zähler darf diesen Netzstrom nicht übersehen.
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: false, mispel: { mode: 'none' } }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 77_000 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 5_000, gridImportW: 5_000 }, socPct: 50, capacityWh: 77_000 });
+    near(t.summary().gridWh, 83.33, 0.05);
+    t.tick({ nowMs: t0 + 120_000, victron: { gridToBatteryW: 5_000, gridImportW: 5_000 }, socPct: 50, capacityWh: 77_000 });
+    assert.equal(t.isLocked(), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Kappung am Ladestand erst, wenn er 60 s lang zu niedrig ist (einzelner Fehlwert kostet nichts)', () => {
   const dir = mkDir();
   try {
@@ -174,6 +192,10 @@ test('Zurücksetzen nur ausdrücklich, mit Protokollzeile', () => {
     const reset = lines.find((l) => l.event === 'reset');
     assert.ok(reset);
     near(reset.gridKwh, 0.2, 0.001);
+    // Nachweis für den Direktvermarkter: Grund und Auslöser stehen auch im CSV.
+    const csv = t.protocolCsv().split('\n');
+    assert.match(csv[0], /;Sperre gilt;Grund;Ausgelöst von$/);
+    assert.ok(csv.some((l) => l.includes(';reset;') && l.endsWith(';Test;test')), csv.join('\n'));
     const ro = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir, readOnly: true });
     assert.equal(ro.reset({}).ok, false, 'nur der zählende Prozess setzt zurück');
   } finally {

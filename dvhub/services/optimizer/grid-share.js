@@ -10,7 +10,7 @@
 //   Netz→Akku          erhöht den Netzstrom-Anteil G um die geladene Energie —
 //                      höchstens um den gemessenen Netzbezug (bei Fronius ist
 //                      die PV-Leistung die AC-Leistung NACH dem Laden) und nur,
-//                      solange „Netzladen erlaubt“ gilt (isGridChargeLicensed).
+//                      solange „Netzladen erlaubt“ eingeschaltet ist.
 //                      Ohne Netzladen bleibt der Zähler stehen: kleine
 //                      Regelabweichungen sollen eine Anlage ohne Netzladen
 //                      nicht sperren (Gegenprüfung 8465a540, P2).
@@ -291,8 +291,12 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     const dtMs = lastTickMs == null ? 0 : Math.min(GRID_SHARE_MAX_STEP_MS, Math.max(0, nowMs - lastTickMs));
     lastTickMs = nowMs;
     const v = victron || {};
-    // Zufluss nur bei erlaubtem Netzladen und höchstens der echte Netzbezug.
-    const inflowW = isGridChargeLicensed(cfg)
+    // Zufluss nur bei eingeschaltetem „Netzladen erlaubt“ und höchstens der
+    // echte Netzbezug. Bewusst der Schalter allein, nicht die MiSpeL-Freigabe:
+    // auch ohne Freigabe lassen manuelle Sollwerte und eigene Regeln Netzladen
+    // zu (schedule-eval prüft nur den Schalter) — dieser Netzstrom muss zählen
+    // (Gegenprüfung 6555bdcf, P2).
+    const inflowW = cfg?.optimizer?.allowGridCharge === true
       ? Math.min(pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW), pos(v.gridImportW))
       : 0;
     const flows = {
@@ -396,11 +400,14 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     ['batteryToGridFromGridKwh', 'Akku→Netz aus Netzstrom kWh'], ['lossFromGridKwh', 'Verlust Netzstrom kWh'],
     ['maxGridKwh', 'Netzstrom max kWh'], ['endGridKwh', 'Netzstrom Tagesende kWh'], ['endSharePct', 'Anteil Tagesende %'],
     ['lockedMinutes', 'Sperre min'], ['gridKwh', 'Netzstrom kWh'], ['sharePct', 'Anteil %'], ['thresholdKwh', 'Schwelle kWh'],
+    ['lockApplies', 'Sperre gilt'], ['reason', 'Grund'], ['actor', 'Ausgelöst von'],
   ];
   function protocolCsv() {
     const cell = (v) => {
       if (v == null) return '';
       if (typeof v === 'number') return String(v).replace('.', ',');
+      if (typeof v === 'boolean') return v ? 'ja' : 'nein';
+      if (typeof v === 'object') return cell(v.actor || v.ip || v.source || JSON.stringify(v));
       const s = String(v);
       return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };

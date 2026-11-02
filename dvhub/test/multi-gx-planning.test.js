@@ -4,7 +4,7 @@
 // (gleiches Objekt, keine Kopie).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planningCfg, planningSocPct, planningMinSocPct } from '../services/multi-gx/planning.js';
+import { planningCfg, planningSocPct, planningMinSocPct, secondGxMissing } from '../services/multi-gx/planning.js';
 import { buildEosBatteries, buildEosInverters } from '../services/optimizer/eos-config-sync.js';
 
 function ctxWith({ follower = { online: true, socPct: 80 }, enabled = true } = {}) {
@@ -51,4 +51,19 @@ test('ohne Dienst (aeltere Aufrufer, Tests): Hauptanlage', () => {
   assert.equal(planningSocPct(ctx), 42);
   const cfg = ctx.getCfg();
   assert.equal(planningCfg(ctx, cfg), cfg);
+});
+
+test('secondGxMissing: nur wirksam eingerichtete, aber nicht einbezogene zweite Anlage zählt als fehlend', () => {
+  // Gegenprüfung 6555bdcf (P2): ohne Beta-Freigabe oder Adresse ist die zweite
+  // Anlage aus — der Netzstrom-Zähler rechnet dann mit der Hauptanlage allein.
+  assert.equal(secondGxMissing(ctxWith()), false, 'erreichbar');
+  assert.equal(secondGxMissing(ctxWith({ follower: { online: false, socPct: null } })), true, 'offline');
+  assert.equal(secondGxMissing(ctxWith({ follower: { online: true, socPct: null } })), true, 'ohne Ladestand');
+  assert.equal(secondGxMissing(ctxWith({ enabled: false })), false, 'aus');
+  const stable = ctxWith({ follower: { online: null, socPct: null } });
+  stable.cfg.updateChannel = 'stable';
+  assert.equal(secondGxMissing(stable), false, 'Beta zu');
+  const noHost = ctxWith({ follower: { online: null, socPct: null } });
+  noHost.cfg.multiGx.host = '  ';
+  assert.equal(secondGxMissing(noHost), false, 'keine Adresse');
 });
