@@ -528,3 +528,26 @@ test('Nativ: Web-Ziel ist der Support-Listener (nicht der httpPort), Login-Benut
   assert.equal(req.localShellPort, 22);
   assert.equal(req.localWebPort, 47822);
 });
+
+// Gegenprüfung 2e784304 (P2): ohne Tunnel-Unit startet die App autossh selbst —
+// das Notfall-Skript fand ihn ohne pgrep -f nicht mehr. Jetzt schreibt die App
+// die PID nach support/tunnel-process.json und räumt sie beim Ende weg.
+test('Prozess-Modus: PID-Datei für das Notfall-Skript, weg nach Schließen und nach unerwartetem Ende', () => {
+  const { sup, ctx } = realBox({ ports: [49130, 49131] });
+  const spawned = [];
+  const tun = createSupportTunnel(ctx, {
+    inContainer: false, unitMode: () => false, fs: withBinaries,
+    spawn: () => { const pr = fakeProc(); pr.pid = 4321 + spawned.length; spawned.push(pr); return pr; },
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+  });
+  const file = path.join(sup, 'tunnel-process.json');
+  assert.equal(tun.open({ ttlMin: 30 }).ok, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { pid: 4321 });
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  tun.close();
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(tun.open({ ttlMin: 30 }).ok, true);
+  assert.ok(fs.existsSync(file));
+  spawned[1].emit('exit', 255, null);
+  assert.equal(fs.existsSync(file), false);
+});

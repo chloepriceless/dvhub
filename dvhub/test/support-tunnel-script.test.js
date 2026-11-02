@@ -41,12 +41,12 @@ test('T-0002: --ttl nur 0 oder 5–240, sonst Abbruch mit Meldung', () => {
   const t = setup();
   try {
     for (const bad of ['abc', '-1', '1e3', '43200', '3', '241', '', '08x']) {
-      const r = spawnSync('bash', [SCRIPT, '--ttl', bad, '--print'], { encoding: 'utf8', env: t.env });
+      const r = spawnSync('bash', [SCRIPT, '--ttl', bad, '--print'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
       assert.equal(r.status, 2, `--ttl ${JSON.stringify(bad)}: ${r.stdout}${r.stderr}`);
       assert.match(r.stderr, /--ttl/);
     }
     for (const good of ['0', '5', '60', '240', '08']) {
-      const r = spawnSync('bash', [SCRIPT, '--ttl', good, '--print'], { encoding: 'utf8', env: t.env });
+      const r = spawnSync('bash', [SCRIPT, '--ttl', good, '--print'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
       assert.equal(r.status, 0, `--ttl ${good}: ${r.stderr}`);
     }
   } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
@@ -55,7 +55,7 @@ test('T-0002: --ttl nur 0 oder 5–240, sonst Abbruch mit Meldung', () => {
 test('T-0004: fremder Prozess mit dem Schlüsselpfad blockiert nicht und wird von --close nicht beendet', async () => {
   const t = setup();
   // Köder: Befehlszeile enthält den Schlüsselpfad (wie `less …/relay_id_ed25519`).
-  const decoy = spawn('bash', ['-c', 'sleep 300', t.key], { stdio: 'ignore', detached: true });
+  const decoy = spawn('bash', ['-c', 'sleep 300; :', t.key], { stdio: 'ignore', detached: true });
   let tunnel;
   try {
     await sleep(200);
@@ -69,11 +69,11 @@ test('T-0004: fremder Prozess mit dem Schlüsselpfad blockiert nicht und wird vo
     assert.ok(fs.existsSync(pidFile), 'PID-Datei geschrieben');
 
     // Zweites Öffnen: läuft schon (über die PID-Datei erkannt).
-    const second = spawnSync('bash', [SCRIPT, '--ttl', '5'], { encoding: 'utf8', env: t.env });
+    const second = spawnSync('bash', [SCRIPT, '--ttl', '5'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
     assert.equal(second.status, 1);
     assert.match(second.stderr, /läuft bereits/);
 
-    const close = spawnSync('bash', [SCRIPT, '--close'], { encoding: 'utf8', env: t.env });
+    const close = spawnSync('bash', [SCRIPT, '--close'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
     assert.equal(close.status, 0, close.stderr);
     assert.match(close.stdout, /beendet/);
     for (let i = 0; i < 30 && tunnel.exitCode === null; i += 1) await sleep(100);
@@ -81,7 +81,7 @@ test('T-0004: fremder Prozess mit dem Schlüsselpfad blockiert nicht und wird vo
     assert.ok(alive(decoy.pid), 'Köder lebt noch');
     assert.ok(!fs.existsSync(pidFile), 'PID-Datei weg');
 
-    const again = spawnSync('bash', [SCRIPT, '--close'], { encoding: 'utf8', env: t.env });
+    const again = spawnSync('bash', [SCRIPT, '--close'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
     assert.match(again.stdout, /Kein laufender Support-Tunnel/);
     assert.ok(alive(decoy.pid), 'Köder lebt auch nach zweitem --close');
   } finally {
@@ -89,4 +89,56 @@ test('T-0004: fremder Prozess mit dem Schlüsselpfad blockiert nicht und wird vo
     if (tunnel) { try { process.kill(-tunnel.pid, 'SIGKILL'); } catch { /* weg */ } }
     fs.rmSync(t.dir, { recursive: true, force: true });
   }
+});
+
+// Gegenprüfung 2e784304 (P1): nach Ablauf der Zeit beendete ein schon
+// abgelaufenes sleep das Aufräumen unter set -e (Exit 1, PID-Datei blieb).
+test('Auto-Close nach Ablauf: Exit 0, aufgeräumt, keine rohen Shell-Fehler', async () => {
+  const t = setup();
+  try {
+    const r = await new Promise((resolve) => {
+      const p = spawn('bash', [SCRIPT, '--ttl', '5'], { env: { ...t.env, DVHUB_TUNNEL_TEST_TTL_S: '2' }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = ''; let err = '';
+      p.stdout.on('data', (d) => { out += d; });
+      p.stderr.on('data', (d) => { err += d; });
+      p.on('exit', (code) => resolve({ code, out, err }));
+    });
+    assert.equal(r.code, 0, r.out + r.err);
+    assert.match(r.out, /Support-Tunnel geschlossen/);
+    assert.ok(!fs.existsSync(path.join(t.sup, 'tunnel-manual.pid')), 'PID-Datei weg');
+    assert.doesNotMatch(r.err, /No such file|Datei oder Verzeichnis nicht gefunden/, r.err);
+  } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
+});
+
+// Gegenprüfung 2e784304 (P2): App-Tunnel ohne Unit (tunnel-process.json).
+test('--close beendet den von der App selbst gestarteten Tunnel, nicht den Köder', async () => {
+  const t = setup();
+  const appTunnel = spawn('bash', ['-c', 'sleep 300; :', '-i', t.key], { stdio: 'ignore', detached: true });
+  const decoy = spawn('bash', ['-c', 'sleep 300; :', t.key], { stdio: 'ignore', detached: true });
+  try {
+    await sleep(200);
+    fs.writeFileSync(path.join(t.sup, 'tunnel-process.json'), JSON.stringify({ pid: appTunnel.pid }));
+    const busy = spawnSync('bash', [SCRIPT, '--ttl', '5'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
+    assert.equal(busy.status, 1);
+    assert.match(busy.stderr, /läuft bereits/);
+    const close = spawnSync('bash', [SCRIPT, '--close'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
+    assert.match(close.stdout, /beendet/);
+    for (let i = 0; i < 20 && alive(appTunnel.pid); i += 1) await sleep(100);
+    assert.ok(!alive(appTunnel.pid), 'App-Tunnel beendet');
+    assert.ok(alive(decoy.pid), 'Köder lebt');
+    assert.equal(close.stderr, '', close.stderr);
+  } finally {
+    for (const p of [appTunnel, decoy]) { try { process.kill(-p.pid, 'SIGKILL'); } catch { /* weg */ } }
+    fs.rmSync(t.dir, { recursive: true, force: true });
+  }
+});
+
+test('PID-Datei als FIFO lässt --close nicht hängen', () => {
+  const t = setup();
+  try {
+    spawnSync('mkfifo', [path.join(t.sup, 'tunnel-manual.pid')]);
+    const r = spawnSync('bash', [SCRIPT, '--close'], { encoding: 'utf8', env: t.env, timeout: 15_000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Kein laufender Support-Tunnel/);
+  } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
 });

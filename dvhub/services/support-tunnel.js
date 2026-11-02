@@ -294,6 +294,9 @@ export function createSupportTunnel(ctx, deps = {}) {
       // Dienst-Modus: Auftrag (von DVhub) und Zustand (vom Tunnel-Skript).
       requestPath: path.join(supDir, 'tunnel.json'),
       statePath: path.join(supDir, 'tunnel-state.json'),
+      // Ohne Tunnel-Unit (kein systemd, Container): PID des selbst gestarteten
+      // autossh/ssh — damit dvhub-support-tunnel.sh --close ihn findet (T-0004).
+      processStatePath: path.join(supDir, 'tunnel-process.json'),
       logPath: path.join(supDir, 'tunnel.log'),
       sshdConfigPath: path.join(supDir, 'sshd_config'),
       supportKeysPath: path.join(supDir, 'support_authorized_keys'),
@@ -491,6 +494,10 @@ export function createSupportTunnel(ctx, deps = {}) {
       'info');
   }
 
+  function removeProcessState() {
+    try { fsImpl.unlinkSync(supportPaths().processStatePath); } catch { /* war nicht da */ }
+  }
+
   function teardown(reason, actor) {
     if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
     const wasOpen = !!child;
@@ -501,6 +508,7 @@ export function createSupportTunnel(ctx, deps = {}) {
     if (proc) {
       try { proc.kill('SIGTERM'); } catch { /* already gone */ }
     }
+    removeProcessState();
     stopContainerSshd();
     if (wasOpen) {
       pushLog('support_tunnel_closed', { reason: reason || 'manual' }, actor || lastOpenedBy);
@@ -674,6 +682,8 @@ export function createSupportTunnel(ctx, deps = {}) {
 
     child = proc;
     openedAt = now();
+    try { if (Number.isInteger(proc.pid)) writeFileAtomic(p.processStatePath, JSON.stringify({ pid: proc.pid }) + '\n', 0o600); }
+    catch { /* nur für das Notfall-Skript */ }
     expiresAt = openedAt + ttl * 60 * 1000;
     lastError = null;
     lastOpenedBy = actor;
@@ -690,6 +700,7 @@ export function createSupportTunnel(ctx, deps = {}) {
     // The relay-rejection / process death path. autossh normally self-heals, so
     // an exit here means a fatal condition (ExitOnForwardFailure, killed, etc).
     proc.on('exit', (code, signal) => {
+      removeProcessState();
       if (child !== proc) return; // already torn down by close()/auto-close
       if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
       child = null;

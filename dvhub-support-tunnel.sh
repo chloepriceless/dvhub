@@ -94,15 +94,37 @@ MANUAL_PID_ROOT="${DVHUB_TUNNEL_PID_FILE:-/run/dvhub-support-tunnel.pid}"
 MANUAL_PID_USER="$SUP_DIR/tunnel-manual.pid"
 if [ "$(id -u)" -eq 0 ]; then MANUAL_PID_FILE="$MANUAL_PID_ROOT"; else MANUAL_PID_FILE="$MANUAL_PID_USER"; fi
 SERVICE_STATE="$SUP_DIR/tunnel-state.json"     # vom Dienst-Modus (--service)
+PROCESS_STATE="$SUP_DIR/tunnel-process.json"   # App ohne Tunnel-Unit (startet autossh selbst)
 pid_args() { ps -o args= -p "$1" 2>/dev/null || true; }
+pid_uid() { ps -o uid= -p "$1" 2>/dev/null | tr -d ' ' || true; }
+pid_ppid() { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ' || true; }
+KEY_UID="$(ls -ln "$KEY" 2>/dev/null | awk '{print $3}')"   # Dienstbenutzer (Eigentümer des Schlüssels)
 # <pid> <muster>: lebt der Prozess und trägt er das Muster in der Befehlszeile?
 pid_is() { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 1 )) && kill -0 "$1" 2>/dev/null && [[ "$(pid_args "$1")" == *"$2"* ]]; }
+# Dateien aus support/ gehören dem Dienstbenutzer: nur reguläre Dateien lesen
+# (kein Verweis, keine FIFO — die ließe --close hängen), höchstens 200 Byte.
+read_small() {
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  if command -v timeout >/dev/null 2>&1; then timeout 2 head -c 200 -- "$1" 2>/dev/null; else head -c 200 -- "$1" 2>/dev/null; fi
+}
+# Ein Prozess aus einer dvhub-eigenen Datei zählt für root nur, wenn er dem
+# Dienstbenutzer gehört — sonst könnte die Datei root fremde Prozesse beenden lassen.
+owned_by_service() {
+  [ "$(id -u)" -ne 0 ] && return 0
+  [ -n "$KEY_UID" ] && [ "$(pid_uid "$1")" = "$KEY_UID" ]
+}
+json_pid() { grep -oE '"pid"[[:space:]]*:[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || true; }
 manual_pids() {  # gibt "<skript> <autossh>" aus, wenn ein Vordergrund-Tunnel läuft
-  local f sp ap
+  local f line sp ap
   for f in "$MANUAL_PID_ROOT" "$MANUAL_PID_USER"; do
+    line="$(read_small "$f")" || continue
     sp=""; ap=""
-    read -r sp ap < "$f" 2>/dev/null || continue
+    read -r sp ap <<< "$line" || true
     pid_is "$sp" dvhub-support-tunnel || continue
+    if [ "$f" = "$MANUAL_PID_USER" ] && [ "$(id -u)" -eq 0 ]; then
+      owned_by_service "$sp" || continue
+      [ -n "$ap" ] && [ "$(pid_ppid "$ap")" != "$sp" ] && ap=""
+    fi
     echo "$sp ${ap:-}"
     return 0
   done
@@ -110,8 +132,13 @@ manual_pids() {  # gibt "<skript> <autossh>" aus, wenn ein Vordergrund-Tunnel l�
 }
 service_pid() {  # PID des Dienst-Tunnels aus tunnel-state.json
   local pid
-  pid="$(grep -oE '"pid"[[:space:]]*:[[:space:]]*[0-9]+' "$SERVICE_STATE" 2>/dev/null | grep -oE '[0-9]+$' || true)"
-  pid_is "$pid" dvhub-support-tunnel && echo "$pid"
+  pid="$(read_small "$SERVICE_STATE" | json_pid)"
+  pid_is "$pid" dvhub-support-tunnel && owned_by_service "$pid" && echo "$pid"
+}
+process_pid() {  # autossh/ssh, das die App ohne Tunnel-Unit selbst gestartet hat
+  local pid
+  pid="$(read_small "$PROCESS_STATE" | json_pid)"
+  pid_is "$pid" "$KEY" && owned_by_service "$pid" && echo "$pid"
 }
 
 # --- Beenden ---
@@ -121,6 +148,11 @@ if [ "$MODE" = "close" ]; then
     FOUND=1
     if pid_is "${APID:-}" "$KEY"; then pkill -TERM -P "$APID" 2>/dev/null || true; kill "$APID" 2>/dev/null || true; fi
     kill "$SPID" 2>/dev/null || true
+  fi
+  if APP_PID="$(process_pid)"; then
+    FOUND=1
+    pkill -TERM -P "$APP_PID" 2>/dev/null || true
+    kill "$APP_PID" 2>/dev/null || true
   fi
   if SVC_PID="$(service_pid)"; then
     FOUND=1
@@ -239,7 +271,7 @@ if [ "$MODE" = "service" ]; then
 fi
 
 # --- Konflikt-Schutz: läuft schon ein Tunnel (z. B. aus der App)? ---
-if manual_pids >/dev/null || service_pid >/dev/null; then
+if manual_pids >/dev/null || service_pid >/dev/null || process_pid >/dev/null; then
   echo "HINWEIS: Es läuft bereits ein Support-Tunnel (vermutlich aus der DVhub-App)." >&2
   echo "         Erst beenden mit:  sudo bash $0 --close" >&2
   exit 1
@@ -253,7 +285,9 @@ cleanup() {
     pkill -TERM -P "$AUTOSSH_PID" 2>/dev/null || true
     kill "$AUTOSSH_PID" 2>/dev/null || true
   fi
-  [ -n "${SLEEP_PID:-}" ] && kill "$SLEEP_PID" 2>/dev/null
+  # `if` statt `&&`: unter set -e beendete ein schon abgelaufenes sleep (kill
+  # scheitert) sonst das Aufräumen mit Exit 1 — PID-Datei blieb liegen.
+  if [ -n "${SLEEP_PID:-}" ]; then kill "$SLEEP_PID" 2>/dev/null || true; fi
   rm -f "$MANUAL_PID_FILE"
   echo ""
   echo "Support-Tunnel geschlossen."
@@ -276,7 +310,10 @@ echo "Tunnel OFFEN. Der Support kann sich jetzt verbinden."
 if [ "${TTL_MIN}" -gt 0 ] 2>/dev/null; then
   echo "Auto-Close in ${TTL_MIN} Min. Sofort beenden: Strg-C (oder in einem anderen Terminal: sudo bash $0 --close)."
   # Im Hintergrund + wait: so greift --close (TERM) sofort, nicht erst nach Ablauf.
-  sleep "$(( TTL_MIN * 60 ))" & SLEEP_PID=$!
+  TTL_SECONDS=$(( TTL_MIN * 60 ))
+  # Nur für Tests (kürzere Laufzeit); sudo leert die Umgebung ohnehin.
+  [[ "${DVHUB_TUNNEL_TEST_TTL_S:-}" =~ ^[0-9]{1,3}$ ]] && TTL_SECONDS="$DVHUB_TUNNEL_TEST_TTL_S"
+  sleep "$TTL_SECONDS" & SLEEP_PID=$!
   wait "$SLEEP_PID" || true
 else
   echo "Kein Auto-Close (--ttl 0). Beenden mit Strg-C."
