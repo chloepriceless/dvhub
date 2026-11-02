@@ -131,6 +131,9 @@ test('Wächter im Poll-Pfad: Push bei Alarm und bei Entwarnung, Status im Live-S
   assert.equal(sent.length, 2);
   assert.equal(sent[1].event, 'setpoint_followed_again');
   assert.equal(state.victron.setpointFollow, null);
+  // Das Entwarn-Protokoll trägt den letzten auffälligen Punkt.
+  const cleared = logs.find(([event]) => event === 'setpoint_followed_again');
+  assert.equal(cleared[1].netImportW, 1800);
 });
 
 test('abgeschaltet oder eingefrorene Live-Daten: keine Meldung', () => {
@@ -318,4 +321,57 @@ test('Halte-Signal: Frischegrenze wächst mit einem langsamen Auswertungstakt', 
   // Andere Quelle: nie ein Halten.
   const other = { schedule: { active: { gridSetpointW: { value: -100, source: 'default', at: T0 } } } };
   assert.equal(activeDischargeHold(other, T0), null);
+});
+
+// --- Vorfall 02.11.2026 10:50:24 UTC: Fehlalarm durch kurze Spitzen ---------
+//
+// Prod A7S (Image netzstrom-test-2), Quelle „default“, evcc schaltet die
+// Wallbox mehrfach um: setpoint_not_followed {sinceMs 605267, setpointW −100,
+// netImportW 1057, batteryW +4410, soc 42}. 5-min-Mittel 11:30–11:50 MEZ:
+// Bezug 29–124 W, Akku lädt — der Wechselrichter folgte im Mittel. Kurze
+// Laststöße mit < 2 min Pause hielten suspectSince wach, bis „10 min durchgehend“
+// erreicht war.
+const SPIKE_0211 = { setpointW: -100, netImportW: 1057, batteryW: 4410, soc: 42, minSocPct: 5 };
+const CALM_0211 = { setpointW: -100, netImportW: 40, batteryW: 4300, soc: 42, minSocPct: 5 };
+
+test('Vorfall 02.11.: kurze Spitzen alle 90 s summieren sich nicht zu einem Alarm', () => {
+  const state = createSetpointFollowState();
+  const transitions = feed(state, {
+    toMs: OPTS.holdMs * 3, stepMs: 5000,
+    sample: (t) => ((t % 90000) < 20000 ? SPIKE_0211 : CALM_0211)
+  });
+  assert.deepEqual(transitions, []);
+});
+
+test('Fenster: Fehler überwiegt (≥ 80 %), aber der mittlere Netzbezug bleibt unter der Schwelle → kein Alarm', () => {
+  const state = createSetpointFollowState();
+  const bad = { setpointW: -100, netImportW: 450, batteryW: 0, soc: 60, minSocPct: 5 };
+  const export_ = { setpointW: -100, netImportW: -4000, batteryW: -5000, soc: 60, minSocPct: 5 };
+  // 85 % auffällig, 15 % kräftige Einspeisung: Mittel ≈ −220 W Bezug.
+  const transitions = feed(state, {
+    toMs: OPTS.holdMs * 2, stepMs: 5000,
+    sample: (t) => ((t % 100000) < 85000 ? bad : export_)
+  });
+  assert.deepEqual(transitions, []);
+});
+
+test('Fenster: echter, nur leicht gestörter Dauerfehler (90 % auffällig) meldet weiter', () => {
+  const state = createSetpointFollowState();
+  const transitions = feed(state, {
+    toMs: OPTS.holdMs + 60000, stepMs: 5000,
+    // alle 100 s ein 10-s-Entlade-Zacken — wie ein Regler, der kurz anspringt
+    sample: (t) => ((t % 100000) < 10000 && t > 0 ? { ...STUCK, batteryW: -900, netImportW: 900 } : STUCK)
+  });
+  assert.deepEqual(transitions.map(([name]) => name), ['alarm']);
+  assert.ok(transitions[0][1] >= OPTS.holdMs);
+});
+
+test('Fenster: nach einer Lücke ohne Messwerte zählt die alte Vorgeschichte nicht', () => {
+  const state = createSetpointFollowState();
+  feed(state, { toMs: 30000, stepMs: 5000, sample: STUCK });
+  // 20 min nicht beurteilbar (z. B. Akku-Wert fehlt) …
+  feed(state, { fromMs: 35000, toMs: 35000 + 20 * 60000, stepMs: 5000, sample: { ...STUCK, batteryW: null } });
+  // … danach 30 s auffällig: das ist kein 10-min-Bild.
+  const start = 40000 + 20 * 60000;
+  assert.deepEqual(feed(state, { fromMs: start, toMs: start + 30000, stepMs: 5000, sample: STUCK }), []);
 });

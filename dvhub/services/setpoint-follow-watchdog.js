@@ -16,7 +16,15 @@
 //     Mindestgrenze (Reg. 2901) und aktiver SoC-Grenze des Victron (Reg. 2903),
 //   • keine Entlade-Sperre ist gesetzt (maxDischargeW) und DVhub hält den Akku
 //     nicht selbst gewollt fest (EOS „Akku halten“),
-//   • und das hält ≥ holdMs durchgehend an.
+//   • und das überwiegt ein ganzes Fenster von holdMs: mindestens minSuspectShare
+//     (80 %) der Messpunkte sind auffällig UND im Mittel des Fensters erreichen
+//     Netzbezug und Fehlbetrag (Bezug − Sollwert) die Schwellen.
+//
+// FEHLALARM 02.11.2026 10:50 UTC: Sollwert −100 W, im 5-min-Mittel 29–124 W
+// Bezug, Akku lädt — der Wechselrichter folgte. Kurze Laststöße (evcc schaltet
+// die Wallbox) mit < 2 min Pause hielten den alten Zähler „seit wann auffällig“
+// wach, bis 10 min erreicht waren. Darum zählt jetzt das Fenster, nicht der
+// erste auffällige Punkt.
 // Ein Wechselrichter an seiner Leistungsgrenze fällt nicht darunter (dann
 // entlädt der Akku ja), ein gewolltes Halten des Akkus auch nicht (dann liegt
 // der Sollwert beim Verbrauch, die Abweichung ist null).
@@ -53,6 +61,7 @@ export const SETPOINT_FOLLOW_DEFAULTS = {
   minImportW: 300,         // echter Netzbezug
   minShortfallW: 500,      // Netzbezug über dem Sollwert
   idleW: 150,              // Akku gilt als „entlädt nicht" oberhalb von −idleW
+  minSuspectShare: 0.8,    // Anteil auffälliger Messpunkte im Fenster (holdMs)
   socMarginPct: 3,         // Abstand zur Entlade-Untergrenze
   fallbackMinSocPct: 5,    // falls die Anlage keine Untergrenze meldet
   reminderMs: 3 * 3600000, // Erinnerung, solange es anhält
@@ -74,6 +83,7 @@ export function resolveSetpointFollowOptions(cfg = {}) {
     minImportW: numOr(w.minImportW, d.minImportW, 0),
     minShortfallW: numOr(w.minShortfallW, d.minShortfallW, 50),
     idleW: numOr(w.idleW, d.idleW, 0),
+    minSuspectShare: Math.min(1, numOr(w.minSuspectShare, d.minSuspectShare, 0.5)),
     socMarginPct: numOr(w.socMarginPct, d.socMarginPct, 0),
     fallbackMinSocPct: numOr(w.fallbackMinSocPct, d.fallbackMinSocPct, 0),
     reminderMs: numOr(w.reminderMs, d.reminderMs, 600000),
@@ -82,7 +92,12 @@ export function resolveSetpointFollowOptions(cfg = {}) {
 }
 
 export function createSetpointFollowState() {
-  return { suspectSince: null, okSince: null, active: false, lastAlarmAt: null, last: null };
+  return {
+    suspectSince: null, okSince: null, active: false, lastAlarmAt: null, last: null,
+    // Fenster der beurteilbaren Messpunkte (holdMs) und der letzte Punkt davor
+    // als Anker, damit die Abdeckung genau holdMs erreichen kann.
+    window: [], anchor: null, failingSince: null, share: null, avgImportW: null, avgShortfallW: null
+  };
 }
 
 function pct(value) {
@@ -139,6 +154,29 @@ export function isRefusingDischarge(sample, opts) {
 }
 
 /**
+ * Fenster-Bild: Anteil auffälliger Punkte und Mittelwerte über holdMs.
+ * @returns {{covered: boolean, share: number, avgImportW: number, avgShortfallW: number, failing: boolean}}
+ */
+function windowVerdict(state, now, opts) {
+  const pts = state.anchor ? [state.anchor, ...state.window] : state.window;
+  if (!pts.length) return { covered: false, share: 0, avgImportW: 0, avgShortfallW: 0, failing: false };
+  let bad = 0, imp = 0, short = 0;
+  for (const p of pts) {
+    if (p.refusing) bad += 1;
+    imp += p.netImportW;
+    short += p.netImportW - p.setpointW;
+  }
+  const n = pts.length;
+  const share = bad / n;
+  const avgImportW = imp / n;
+  const avgShortfallW = short / n;
+  const covered = (now - pts[0].t) >= opts.holdMs;
+  const failing = covered && share >= opts.minSuspectShare
+    && avgImportW >= opts.minImportW && avgShortfallW >= opts.minShortfallW;
+  return { covered, share, avgImportW, avgShortfallW, failing };
+}
+
+/**
  * Einen Poll-Zyklus bewerten. Mutiert `state`.
  * @returns {{ state: object, transition: 'alarm'|'reminder'|'clear'|null }}
  */
@@ -146,8 +184,28 @@ export function evaluateSetpointFollow(state, sample, opts) {
   const now = numOr(sample?.nowMs, Date.now());
   const refusing = isRefusingDischarge(sample, opts);
   let transition = null;
+  // refusing === null: Werte fehlen — Zustand unverändert lassen.
+  if (refusing === null) return { state, transition };
 
-  if (refusing === true) {
+  state.window ??= [];
+  // Lücke (länger als maxAgeMs ohne beurteilbaren Punkt, z. B. Wächter ruhte
+  // bei eingefrorenen Werten): die Vorgeschichte gilt nicht mehr.
+  const prev = state.window.length ? state.window[state.window.length - 1] : state.anchor;
+  if (prev && now - prev.t > opts.maxAgeMs) {
+    state.window = [];
+    state.anchor = null;
+    state.suspectSince = null;
+    state.okSince = null;
+    state.failingSince = null;
+  }
+  state.window.push({
+    t: now, refusing,
+    netImportW: Number(sample.netImportW), setpointW: Number(sample.setpointW)
+  });
+  // Älteres als holdMs fällt heraus; der jüngste herausgefallene Punkt bleibt Anker.
+  while (state.window.length && state.window[0].t < now - opts.holdMs) state.anchor = state.window.shift();
+
+  if (refusing) {
     state.okSince = null;
     if (state.suspectSince == null) state.suspectSince = now;
     state.last = {
@@ -155,26 +213,44 @@ export function evaluateSetpointFollow(state, sample, opts) {
       batteryW: Number(sample.batteryW), soc: Number(sample.soc),
       floorPct: dischargeFloorPct(sample, opts)
     };
-    if (!state.active && (now - state.suspectSince) >= opts.holdMs) {
+  } else if (state.okSince == null) {
+    state.okSince = now;
+  }
+
+  const verdict = windowVerdict(state, now, opts);
+  state.share = verdict.share;
+  state.avgImportW = verdict.avgImportW;
+  state.avgShortfallW = verdict.avgShortfallW;
+  // „Trägt nicht mehr“ zählt nur bei voll abgedecktem Fenster — eine frische
+  // Lücke ist kein Beleg, dass der Speicher wieder folgt.
+  if (verdict.failing || !verdict.covered) state.failingSince = null;
+  else if (state.failingSince == null) state.failingSince = now;
+
+  if (!state.active) {
+    if (verdict.failing) {
       state.active = true;
       state.lastAlarmAt = now;
       transition = 'alarm';
-    } else if (state.active && (now - state.lastAlarmAt) >= opts.reminderMs) {
+    } else if (!state.window.some((p) => p.refusing) && !state.anchor?.refusing) {
+      // Kein auffälliger Punkt mehr im Fenster: „seit wann“ zurücksetzen.
+      state.suspectSince = null;
+    }
+  } else if (verdict.failing) {
+    if ((now - state.lastAlarmAt) >= opts.reminderMs) {
       state.lastAlarmAt = now;
       transition = 'reminder';
     }
-  } else if (refusing === false) {
-    // Kurze Ausreißer (ein einzelner Entlade-Zacken) setzen nichts zurück —
-    // erst wenn das Bild clearMs lang weg ist.
-    if (state.okSince == null) state.okSince = now;
-    if ((now - state.okSince) >= opts.clearMs) {
-      if (state.active) transition = 'clear';
-      state.active = false;
-      state.suspectSince = null;
-      state.lastAlarmAt = null;
+  } else {
+    // Entwarnung: clearMs ohne jeden auffälligen Punkt, oder das Fenster-Bild
+    // trägt clearMs lang nicht mehr (kurze Zacken halten keinen Alarm offen).
+    const okLong = state.okSince != null && (now - state.okSince) >= opts.clearMs;
+    const notFailingLong = state.failingSince != null && (now - state.failingSince) >= opts.clearMs;
+    if (okLong || notFailingLong) {
+      transition = 'clear';
+      // Neues Fenster; der letzte auffällige Punkt bleibt fürs Protokoll stehen.
+      Object.assign(state, createSetpointFollowState(), { last: state.last });
     }
   }
-  // refusing === null: Werte fehlen — Zustand unverändert lassen.
   return { state, transition };
 }
 
@@ -250,7 +326,11 @@ export function createSetpointFollowWatchdog(ctx) {
       netImportW: last.netImportW ?? null,
       batteryW: last.batteryW ?? null,
       soc: last.soc ?? null,
-      floorPct: last.floorPct ?? null
+      floorPct: last.floorPct ?? null,
+      // Fenster-Bild (02.11.2026): Anteil auffälliger Punkte und Mittel über holdMs.
+      sharePct: wstate.share != null ? Math.round(wstate.share * 100) : null,
+      avgImportW: wstate.avgImportW != null ? Math.round(wstate.avgImportW) : null,
+      avgShortfallW: wstate.avgShortfallW != null ? Math.round(wstate.avgShortfallW) : null
     };
 
     if (transition === 'alarm' || transition === 'reminder') {
