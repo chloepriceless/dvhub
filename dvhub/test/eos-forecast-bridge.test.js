@@ -1011,7 +1011,7 @@ test('push ohne Prognosedienst meldet den Fehler ebenfalls in lastEosPush', asyn
 // Prognose mit geschätzten Börsenpreisen; der Steuerzeitraum bleibt bei den
 // echten Preisen.
 const Q = 15 * 60 * 1000;
-function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotFactor: 1 }, withHistory = true, logs = [] } = {}) {
+function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotFactor: 1 }, withHistory = true, logs = [], optimizer = {} } = {}) {
   const now = Date.now();
   const q0 = now - (now % Q);
   const realEnd = q0 + 10 * 3_600_000; // echte Preise bis jetzt + 10 h
@@ -1028,7 +1028,7 @@ function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotF
   const state = { victron: { soc: 50 }, optimizer: { eos: { supported: true } } };
   const ctx = {
     getCfg: () => ({
-      optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff, timezone: 'Europe/Berlin', eosOptimizationIntervalSec: 900 },
+      optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff, timezone: 'Europe/Berlin', eosOptimizationIntervalSec: 900, ...optimizer },
       userEnergyPricing: pricing || { mode: 'fixed', fixedGrossImportCtKwh: 30 },
     }),
     pushLog: (event, data) => logs.push({ event, data }),
@@ -1621,4 +1621,111 @@ test('Laufstart: Stunden-Slots — Laufbeginn auf die volle Stunde gerundet', as
       assert.equal(res.ok, ok, `interval ${intervalSec}: ${res.error || ''}`);
     } finally { await mock.close(); t.mock.timers.reset(); }
   }
+});
+
+// Koordinator 02.11. abends, Punkt 3 (P2 aus der Gegenprüfung c0fdcbef):
+// Startet DVhub neu, während der Preisabruf gestört ist, sind keine Preise im
+// Speicher — jeder Lauf fiel aus, obwohl EOS noch echte Preise hielt. Jetzt
+// nimmt die Bridge dann die gespeicherten echten Preise (price_ct_kwh, nur
+// Day-Ahead) aus der Datenbank: sie überschreiben in EOS, was dort liegt, und
+// der Lauf geht wie gewohnt, wenn sie den Steuerzeitraum decken.
+function storedPrices(env, endMs) {
+  const rows = [];
+  for (let ms = env.q0 - 20 * 86_400_000; ms < endMs; ms += Q) rows.push({ key: 'price_ct_kwh', ts: new Date(ms).toISOString(), value: env.pattern(ms), resolution: 900 });
+  return rows;
+}
+test('Laufstart: Neustart im Preisausfall → gespeicherte echte Preise aus der Datenbank, Lauf geht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...(await fc0()), price: { slots: [] } }) };
+    const rows = storedPrices(env, env.realEnd);
+    env.ctx.telemetryStore = { querySeries: async ({ start, end }) => rows.filter((r) => r.ts >= new Date(start).toISOString() && r.ts < new Date(end).toISOString()) };
+    assert.deepEqual(await createEosForecastBridge(env.ctx).prepareRun(), { ok: true, pushed: true });
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    assert.ok(elec.has(env.realEnd - Q), 'echte Preise aus der Datenbank an EOS');
+    assert.equal(env.state.optimizer.eosControlHorizonH, Math.floor((env.realEnd - Date.now() - Q) / 3_600_000));
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: Neustart im Preisausfall, auch die Datenbank deckt jetzt nicht → kein Lauf, nichts gelöscht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...(await fc0()), price: { slots: [] } }) };
+    const rows = storedPrices(env, env.q0 - 3_600_000); // nur Vergangenheit
+    env.ctx.telemetryStore = { querySeries: async ({ start, end }) => rows.filter((r) => r.ts >= new Date(start).toISOString() && r.ts < new Date(end).toISOString()) };
+    const res = await createEosForecastBridge(env.ctx).prepareRun();
+    assert.equal(res.ok, false);
+    assert.deepEqual(deletes(mock).filter((d) => d.start < env.q0), [], 'nichts ab jetzt pauschal gelöscht');
+  } finally { await mock.close(); }
+});
+
+// Punkt 1 (P3): EOS 0.4 kennt nur 900 und 3600 s (geneticsettings.py,
+// v0.4.0rc3). Bei 1800 lehnt EOS ab und behält seinen alten Wert — welchen,
+// weiß DVhub nicht: spätester Laufbeginn dann mit 15 min gerechnet.
+test('Laufstart: Slot 1800 s (kennt EOS nicht) → vorsichtig mit 15 min gerechnet', async (t) => {
+  const H = 3_600_000;
+  const hourStart = Math.floor(Date.now() / H) * H;
+  t.mock.timers.enable({ apis: ['Date'], now: hourStart + 20 * 60_000 });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock, { optimizer: { eosOptimizationIntervalSec: 1800 } });
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = {
+      buildForecastResponse: async () => {
+        const fc = await fc0();
+        return { ...fc, price: { slots: fc.price.slots.filter((s) => Date.parse(s.start) < hourStart + H) } };
+      },
+    };
+    const res = await createEosForecastBridge(env.ctx).prepareRun();
+    assert.equal(res.ok, false, 'EOS könnte um :15 beginnen und bräuchte Preise bis eine Stunde später');
+  } finally { await mock.close(); }
+});
+
+// Punkt 2 (P3): Bei Stunden-Slots beginnt EOS' Fenster an der vollen Stunde —
+// die lückenlose Abdeckung muss dort beginnen, nicht bei „jetzt“.
+test('Laufstart: Stunden-Slots — Lücke zwischen voller Stunde und jetzt → kein Lauf', async (t) => {
+  const H = 3_600_000;
+  const hourStart = Math.floor(Date.now() / H) * H;
+  t.mock.timers.enable({ apis: ['Date'], now: hourStart + 20 * 60_000 });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock, { optimizer: { eosOptimizationIntervalSec: 3600 } });
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = {
+      buildForecastResponse: async () => {
+        const fc = await fc0();
+        // Slot ab der vollen Stunde fehlt, ab :15 lückenlos
+        return { ...fc, price: { slots: fc.price.slots.filter((s) => { const ms = Date.parse(s.start); return ms < hourStart || ms >= hourStart + Q; }) } };
+      },
+    };
+    const res = await createEosForecastBridge(env.ctx).prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /über die echten Preise/);
+  } finally { await mock.close(); }
+});
+
+// Punkt 4: Die Sperrmeldung nennt die Reihe, die jetzt nicht abdeckt — nicht
+// pauschal „no prices“, wenn PV oder Last fehlen.
+test('Laufstart: PV deckt jetzt nicht (nur Vergangenheit) → Meldung nennt PV', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = {
+      buildForecastResponse: async () => {
+        const fc = await fc0();
+        const pv = [];
+        for (let ms = env.q0 - 5 * 3_600_000; ms < env.q0 - 3_600_000; ms += Q) pv.push({ start: new Date(ms).toISOString(), powerW: 500 });
+        return { ...fc, pv: { slots: pv } };
+      },
+    };
+    const res = await createEosForecastBridge(env.ctx).prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /PV/);
+    assert.doesNotMatch(res.error, /no prices/);
+  } finally { await mock.close(); }
 });
