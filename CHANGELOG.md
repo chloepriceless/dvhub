@@ -168,7 +168,8 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   Prognosehorizont; hinter dem Steuerzeitraum bleiben immer mindestens 12 h Schwanz, sonst wird der Steuerzeitraum
   gekürzt. DVhub sendet beide Werte bei jedem Prognose-Push (beim Senken erst den Steuerzeitraum); nach dem Speichern
   rechnet EOS erst neu, wenn der Abgleich durch ist. Im Fernbetrieb nimmt der Rechendienst den Prognosehorizont noch
-  nicht an (nur lokal und im lokalen Rückfall).
+  nicht an und rechnet mit 48 h; DVhub plant dort mit 48 h und höchstens 36 h Steuerzeitraum, damit der Schwanz
+  bleibt.
 
 - **Leitstand, Kachel „Überschuss / Defizit“**: Die Hauptzahl ist jetzt der Rest heute (erwartete PV ab jetzt bis
   Mitternacht minus erwarteter Verbrauch im selben Zeitraum), darunter klein der ganze Tag; „Verfügbar“ = Rest heute +

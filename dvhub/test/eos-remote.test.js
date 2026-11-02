@@ -193,6 +193,9 @@ describe('Fernbetrieb: EOS-Fassade', () => {
       ['ems/interval', 900], ['ems/mode', 'DISABLED'], ['measurement/historic_hours', 48],
       ['database/autosave_interval_sec', null], ['ems/notify_url', 'http://127.0.0.1:8080/api/eos/solution-ready'],
       ['optimization/genetic/horizon_hours', 12], ['pvforecast/provider', 'PVForecastImport'],
+      // Nimmt die Fassade an, der Dienst nicht (Allowlist) — der Runner rechnet
+      // mit REMOTE_EOS_PREDICTION_HOURS, die Bridge plant danach.
+      ['prediction/hours', 48],
     ]) assert.equal((await req(url, 'PUT', `/v1/config/${p}`, v)).status, 200);
     // wie eos-forecast-bridge: zwei Pushes, der zweite überschreibt nur seine Zeitpunkte
     const df = (vals) => ({ data: Object.fromEntries(vals.map(([i, v]) => [slot(i), { pvforecast_ac_power: v }])), dtypes: { pvforecast_ac_power: 'float64' }, tz: 'Europe/Berlin', datetime_columns: [] });
@@ -217,6 +220,7 @@ describe('Fernbetrieb: EOS-Fassade', () => {
       'optimization/genetic/horizon_hours', 'pvforecast/provider',
     ]);
     for (const k of Object.keys(job.config)) assert.ok(REMOTE_FORWARD_PATHS.includes(k));
+    assert.equal(job.config['prediction/hours'], undefined, 'prediction/hours geht nicht an den Dienst');
     assert.deepEqual(Object.values(job.predictions.PVForecastImport.data).map((x) => x.pvforecast_ac_power), [100, 250, 300]);
     assert.deepEqual(job.measurements.map((m) => [m.key, m.value]), [['appl_dw.cycles_completed', 1]]);
     assert.deepEqual(job.optimize, { soc: { battery1: 57 }, start_solution: [0, 1], start_solution_datetime: slot(0) });

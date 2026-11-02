@@ -1169,6 +1169,24 @@ test('resolveEosPredictionHours / resolveControlHorizonMaxHours', async () => {
   assert.equal(resolveControlHorizonMaxHours(c({ eosPredictionHours: 24 })), 12, 'auch ein per API gesetzter kurzer Wert behält 12 h Schwanz');
 });
 
+// Fernbetrieb: Der Rechendienst nimmt prediction/hours nicht an (Allowlist),
+// der EOS-Runner rechnet mit dem EOS-Standard 48 h. DVhub muss damit planen —
+// sonst schickt es 48 h Steuerzeitraum und EOS kürzt den Schwanz auf 0
+// (Gegenprüfung Release 1.0.9, Verdacht Codex).
+test('Fernbetrieb: Prognosehorizont = EOS-Standard des Rechendiensts, Steuerzeitraum behält 12 h Schwanz', async () => {
+  const { resolveEosPredictionHours, resolveControlHorizonMaxHours } = await import('../services/optimizer/eos-forecast-bridge.js');
+  const { REMOTE_EOS_PREDICTION_HOURS } = await import('../services/optimizer/eos-remote.js');
+  assert.equal(REMOTE_EOS_PREDICTION_HOURS, 48);
+  const remote = (o = {}) => ({ optimizer: { eosProxy: { enabled: true, mode: 'remote' }, ...o } });
+  assert.equal(resolveEosPredictionHours(remote()), 48);
+  assert.equal(resolveEosPredictionHours(remote({ eosPredictionHours: 72 })), 48, 'feste Einstellung erreicht den Dienst nicht');
+  assert.equal(resolveControlHorizonMaxHours(remote()), 36);
+  assert.equal(resolveControlHorizonMaxHours(remote({ eosControlHorizonMaxHours: 24 })), 24);
+  // Lokal bzw. Fernbetrieb aus: unverändert.
+  assert.equal(resolveEosPredictionHours({ optimizer: { eosProxy: { enabled: false, mode: 'remote' } } }), 72);
+  assert.equal(resolveControlHorizonMaxHours({ optimizer: { eosProxy: { enabled: true, mode: 'local' } } }), 48);
+});
+
 test('priceFillUntilMs: höchstens bis maxMs (Prognosehorizont)', async () => {
   const { priceFillUntilMs } = await import('../services/optimizer/eos-forecast-bridge.js');
   const now = Date.parse('2026-11-02T09:00:00Z');

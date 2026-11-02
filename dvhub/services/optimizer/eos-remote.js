@@ -56,6 +56,16 @@ export const REMOTE_FORWARD_PATHS = Object.freeze([
   'feedintariff/direct_marketing_enabled',
 ]);
 
+/**
+ * Prognosehorizont des Rechendiensts: prediction/hours steht nicht in seiner
+ * Allowlist (ein Auftrag damit würde abgelehnt), der Runner rechnet mit dem
+ * EOS-Standard 48 h. eos-forecast-bridge plant im Fernbetrieb damit — sonst
+ * kürzte EOS den Schwanz hinter dem Steuerzeitraum auf 0 (Gegenprüfung
+ * Release 1.0.9). Erst wenn der Dienst den Pfad annimmt: hier und in
+ * REMOTE_FORWARD_PATHS nachziehen.
+ */
+export const REMOTE_EOS_PREDICTION_HOURS = 48;
+
 const PROVIDER_COLUMNS = Object.freeze({
   PVForecastImport: 'pvforecast_ac_power',
   LoadImport: 'loadforecast_power_w',

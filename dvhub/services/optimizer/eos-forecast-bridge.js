@@ -49,6 +49,7 @@ import { planningSocPct } from '../multi-gx/planning.js';
 // Preise hinter den bekannten Day-Ahead-Preisen schätzen (01.11.2026).
 import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, MIN_REAL_AHEAD_MS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
 import { requestHostname } from '../host-address.js';
+import { eosRemoteActive, REMOTE_EOS_PREDICTION_HOURS } from './eos-remote.js';
 
 /**
  * Frist der Wache je Push (siehe push()): jede EOS-Anfrage hat 15 s, ein Push
@@ -416,8 +417,12 @@ const positiveInt = (v) => {
  * 72 h); sonst automatisch: Steuerzeitraum-Grenze + 48 h Schwanz, höchstens
  * 72 h — ohne Grenze also 72 h. Der Schwanz wird je Lauf nur einmal rückwärts
  * gelöst (EOS tailvalue.build_tail_value_curve) und kostet kaum Rechenzeit.
+ * Fernbetrieb: der Rechendienst nimmt prediction.hours nicht an und rechnet mit
+ * dem EOS-Standard (REMOTE_EOS_PREDICTION_HOURS) — damit planen, damit der
+ * Steuerzeitraum seinen Schwanz behält (Gegenprüfung Release 1.0.9).
  */
 export function resolveEosPredictionHours(cfg) {
+  if (eosRemoteActive(cfg)) return REMOTE_EOS_PREDICTION_HOURS;
   const fixed = positiveInt(cfg?.optimizer?.eosPredictionHours);
   if (fixed !== null) return Math.min(fixed, EOS_PREDICTION_HOURS_MAX);
   const ctrl = Math.min(positiveInt(cfg?.optimizer?.eosControlHorizonMaxHours) ?? CONTROL_HORIZON_ABS_MAX_H, CONTROL_HORIZON_ABS_MAX_H);

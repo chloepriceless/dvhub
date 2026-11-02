@@ -2661,7 +2661,7 @@ function buildFieldDefinitions() {
         { value: 60, label: '60 Stunden' },
         { value: 72, label: '72 Stunden' }
       ],
-      help: 'Wie weit EOS Prognosen und Preise liest (EOS prediction.hours, bisher fest 48 h): Steuerzeitraum plus Schwanz, in dem EOS den Wert der Restladung abschätzt. So weit schreibt DVhub auch die Börsenpreise fort. Hinter dem Steuerzeitraum bleiben immer mindestens 12 h Schwanz — reicht der Prognosehorizont dafür nicht, kürzt DVhub den Steuerzeitraum. Ein kurzer Schwanz lässt EOS die Restladung im Akku nur zum Einspeisewert bewerten. Kostet wenig Rechenzeit — den Schwanz rechnet EOS je Lauf nur einmal durch; das meiste kostet der Steuerzeitraum.'
+      help: 'Wie weit EOS Prognosen und Preise liest (EOS prediction.hours, bisher fest 48 h): Steuerzeitraum plus Schwanz, in dem EOS den Wert der Restladung abschätzt. So weit schreibt DVhub auch die Börsenpreise fort. Hinter dem Steuerzeitraum bleiben immer mindestens 12 h Schwanz — reicht der Prognosehorizont dafür nicht, kürzt DVhub den Steuerzeitraum. Ein kurzer Schwanz lässt EOS die Restladung im Akku nur zum Einspeisewert bewerten. Kostet wenig Rechenzeit — den Schwanz rechnet EOS je Lauf nur einmal durch; das meiste kostet der Steuerzeitraum. Im Fernbetrieb (Rechendienst) gilt fest 48 h, der Steuerzeitraum dann höchstens 36 h.'
     },
     {
       section: 'schedule',
