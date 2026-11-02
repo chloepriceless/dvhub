@@ -38,6 +38,8 @@ import { evSocForEos } from './ev-registration.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
 import { resolveEosProxy } from './eos-adapter.js';
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
 import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
@@ -416,10 +418,20 @@ export function createEosForecastBridge(ctx) {
   //   geführt, damit ein Löschfehler weit hinten keinen Lauf sperrt;
   // - clearedOnce: der erste Push dieses Prozesses löscht einmal alles hinter
   //   dem Geschickten — nach einem DVhub-Neustart ist nichts gemerkt;
-  // - eosPricesKnown: erst nach dem ersten angekommenen Preis-Import dieses
-  //   Prozesses ist bekannt, was in EOS liegt (alte Schätzwerte des vorigen
-  //   Prozesses sind dann überschrieben oder gelöscht). Bis dahin gilt der
-  //   Stand vor einem Lauf als unbekannt (Gegenprüfung 2ed313de).
+  // - eosPricesKnown: ist bekannt, was in EOS liegt? (Gegenprüfung 2ed313de)
+  //
+  // Die Bereiche überdauern einen DVhub-Neustart in eos-price-estimates.json
+  // im Datenverzeichnis (Gegenprüfung c7ccf04f): ohne sie wusste ein neuer
+  // Prozess nichts von den Schätzwerten des alten — löschte im Preisausfall
+  // pauschal ab jetzt (auch echte Preise, die EOS noch hielt) und sperrte
+  // jeden Lauf. Der Bereich eines Imports wird VOR dem Import vorgemerkt,
+  // damit auch ein Absturz mittendrin nichts vergessen lässt.
+  //   - Datei gelesen → Stand bekannt;
+  //   - keine Datei (neu, Update von 1.0.8 — schätzte nie) → nichts geschätzt;
+  //     zur Sicherheit löscht der erste Push trotzdem einmal hinter dem
+  //     Geschickten;
+  //   - Datei unlesbar, oder kein Datenverzeichnis (Tests) → unbekannt bis
+  //     zum ersten angekommenen Preis-Import.
   let lastEstimateRange = null;
   let staleRange = null;
   let clearedOnce = false;
@@ -428,6 +440,37 @@ export function createEosForecastBridge(ctx) {
   const unionRange = (...ranges) => ranges.filter(Boolean).reduce((acc, r) => (acc
     ? { fromMs: Math.min(acc.fromMs, r.fromMs), untilMs: Math.max(acc.untilMs, r.untilMs) }
     : { fromMs: r.fromMs, untilMs: r.untilMs }), null);
+  const estimatesDir = ctx.dataDir ?? process.env.DV_DATA_DIR;
+  const estimatesFile = estimatesDir ? path.join(estimatesDir, 'eos-price-estimates.json') : null;
+  const validRange = (r) => (r && Number.isFinite(r.fromMs) && Number.isFinite(r.untilMs) && r.untilMs > r.fromMs
+    ? { fromMs: r.fromMs, untilMs: r.untilMs } : null);
+  if (estimatesFile) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(estimatesFile, 'utf8'));
+      if (!saved || typeof saved !== 'object') throw new Error('kein Objekt');
+      lastEstimateRange = validRange(saved.lastEstimateRange);
+      staleRange = validRange(saved.staleRange);
+      eosPricesKnown = true;
+      clearedOnce = true;
+    } catch (e) {
+      if (e?.code === 'ENOENT') eosPricesKnown = true;
+      else if (pushLog) pushLog('eos_price_estimate_error', { error: `eos-price-estimates.json: ${e?.message || e}` });
+    }
+  }
+  let savedEstimates = null;
+  function saveEstimates() {
+    if (!estimatesFile) return;
+    const text = JSON.stringify({ lastEstimateRange, staleRange });
+    if (text === savedEstimates) return;
+    try {
+      const tmp = `${estimatesFile}.tmp`;
+      fs.writeFileSync(tmp, text);
+      fs.renameSync(tmp, estimatesFile);
+      savedEstimates = text;
+    } catch (e) {
+      if (pushLog) pushLog('eos_price_estimate_error', { error: `eos-price-estimates.json: ${e?.message || e}` });
+    }
+  }
 
   /**
    * Schätzwerte, die nicht mehr gelten, in EOS löschen. EOS speichert Importe
@@ -441,9 +484,8 @@ export function createEosForecastBridge(ctx) {
    *     liegen können (staleRange), soweit hinter dem jetzt Geschickten,
    *   - beim ersten Push des Prozesses alles hinter dem Geschickten, und
    *   - wenn die echten Preise nicht über den Mindest-Steuerzeitraum reichen
-   *     (jetzt + 1 h 15 min), alles hinter ihrem Ende
-   *     bis zum größtmöglichen Schätzbereich (auch nach einem DVhub-Neustart,
-   *     der den letzten Bereich nicht mehr kennt).
+   *     (jetzt + 1 h 15 min), alles hinter ihrem Ende bis zum größtmöglichen
+   *     Schätzbereich — nur wenn ihr Ende bekannt ist.
    * Liefert den Löschbereich mit, damit die Buchführung ihn kennt.
    */
   async function clearStaleEstimates(baseUrl, { sentEndMs, realEndMs, nowMs }) {
@@ -460,8 +502,11 @@ export function createEosForecastBridge(ctx) {
       start = Math.min(start, sentEndMs);
       end = Math.max(end, farEnd);
     }
-    if (!(realEndMs >= nowMs + MIN_REAL_AHEAD_MS)) {
-      start = Math.min(start, Number.isFinite(realEndMs) ? realEndMs : nowMs);
+    // Ohne bekannte echte Preise (z. B. Neustart im Preisausfall) nicht
+    // pauschal ab jetzt löschen — EOS hält evtl. noch echte Preise; dann nur
+    // die gemerkten Schätzbereiche oben (Gegenprüfung c7ccf04f).
+    if (Number.isFinite(realEndMs) && realEndMs < nowMs + MIN_REAL_AHEAD_MS) {
+      start = Math.min(start, realEndMs);
       end = Math.max(end, farEnd);
     }
     if (!(end > start)) return { cleared: false, range: null };
@@ -850,6 +895,11 @@ export function createEosForecastBridge(ctx) {
    * @returns {Promise<{ok:boolean, pushed:boolean, error?:string}>}
    */
   async function prepareRun({ nowMs = Date.now() } = {}) {
+    // Läuft gerade ein Push, erst auf ihn warten — sonst prüfte die Abfrage
+    // mit altem Bereich und altem Steuerzeitraum (Gegenprüfung c7ccf04f).
+    // Die Wache (guardedPush) begrenzt die Wartezeit.
+    await pushChain;
+    nowMs = Math.max(nowMs, Date.now());
     if (!estimatesInControlHorizon(nowMs)) return { ok: true, pushed: false };
     if (pushLog) {
       const from = Math.min(lastEstimateRange?.fromMs ?? Infinity, staleRange?.fromMs ?? Infinity);
@@ -1047,6 +1097,13 @@ export function createEosForecastBridge(ctx) {
       });
     }
 
+    // Vor dem Import vormerken: was jetzt geschätzt an EOS geht, kann ab
+    // sofort dort liegen — auch wenn danach etwas scheitert oder DVhub stirbt.
+    if (priceEstimate) {
+      staleRange = unionRange(staleRange, { fromMs: Date.parse(priceEstimate.from), untilMs: Date.parse(priceEstimate.until) });
+      saveEstimates();
+    }
+
     const pushed = [];
     const errors = {};
     for (const t of tasks) {
@@ -1120,6 +1177,7 @@ export function createEosForecastBridge(ctx) {
         lastEstimateRange = null;
         staleRange = stale;
       }
+      saveEstimates();
     }
 
     const horizon = await syncControlHorizon(
