@@ -48,6 +48,11 @@ import { planningSocPct } from '../multi-gx/planning.js';
 // Preise hinter den bekannten Day-Ahead-Preisen schätzen (01.11.2026).
 import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, MIN_REAL_AHEAD_MS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
 
+/**
+ * Frist der Wache je Push (siehe push()): jede EOS-Anfrage hat 15 s, ein Push
+ * macht höchstens gut ein Dutzend davon — 5 min lassen reichlich Luft.
+ */
+export const PUSH_TIMEOUT_MS = 5 * 60_000;
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
 
@@ -740,17 +745,85 @@ export function createEosForecastBridge(ctx) {
     return res;
   }
 
-  // Pushes laufen nacheinander (Takt, neue Day-Ahead-Preise, Konfiguration):
-  // sonst könnte ein älterer Stand nach einem neueren dessen echte Preise in
-  // EOS wieder löschen (Codex-Gegenprüfung f442800b).
+  // Pushes laufen nacheinander (Takt, neue Day-Ahead-Preise, Konfiguration,
+  // Laufstart): sonst könnte ein älterer Stand nach einem neueren dessen echte
+  // Preise in EOS wieder löschen (Codex-Gegenprüfung f442800b).
+  //
+  // Wache je Schritt (Gegenprüfung a6dbbd1d): Datenbankabfragen haben kein
+  // Zeitlimit. Hinge ein Push, warteten alle folgenden — und mit prepareRun
+  // auch jeder EOS-Lauf. Nach der Frist gilt der Push als gescheitert, die
+  // Kette geht weiter; der aufgegebene Push schreibt danach nichts mehr an EOS
+  // (Prüfung vor jedem Schreiben), damit er keinen neueren Stand überschreibt.
   let pushChain = Promise.resolve();
   function push() {
-    const run = pushChain.then(pushOnce, pushOnce);
+    const job = { abandoned: false };
+    const step = () => guardedPush(job);
+    const run = pushChain.then(step, step);
     pushChain = run.catch(() => {});
     return run;
   }
 
-  async function pushOnce() {
+  function guardedPush(job) {
+    const timeoutMs = Number(ctx.pushTimeoutMs) > 0 ? Number(ctx.pushTimeoutMs) : PUSH_TIMEOUT_MS;
+    let timer = null;
+    const watchdog = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        job.abandoned = true;
+        const err = `push did not finish within ${timeoutMs} ms — abandoned`;
+        if (pushLog) pushLog('eos_forecast_bridge_error', { reason: err });
+        resolve(recordPush({ ok: false, pushed: [], errors: { timeout: err } }));
+      }, timeoutMs);
+      timer.unref?.();
+    });
+    return Promise.race([pushOnce(job), watchdog]).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * Liegen an EOS geschickte Schätzpreise im Steuerzeitraum eines Laufs, der
+   * jetzt (nowMs) beginnt? EOS rundet den Laufbeginn auf den Slot ab
+   * (eos-run-trigger.js); abgerundet wird auf 15 min — bei Stunden-Slots
+   * beginnt EOS früher, die Prüfung bleibt also auf der sicheren Seite.
+   * Steuerzeitraum = zuletzt gesetzte Stunden; ohne bekannten Wert der
+   * größtmögliche (24 h).
+   */
+  function estimatesInControlHorizon(nowMs) {
+    if (!lastEstimateRange) return false;
+    const h = Number(state?.optimizer?.eosControlHorizonH);
+    const hours = Number.isFinite(h) && h > 0 ? h : 24;
+    const runStartMs = Math.floor(nowMs / PRICE_SLOT_MS) * PRICE_SLOT_MS;
+    return lastEstimateRange.fromMs < runStartMs + hours * 3_600_000;
+  }
+
+  /**
+   * Vor jedem EOS-Lauf (eos-run-trigger.js, Gegenprüfung a6dbbd1d): beim Push
+   * ist geprüft, dass echte Preise den Steuerzeitraum decken — ein Lauf an
+   * der Grenze oder per kick kommt aber ohne Push. Reicht der Steuerzeitraum
+   * jetzt in die Schätzwerte, erst neu pushen: der Push schätzt nur hinter
+   * echten Preisen, die jetzt + 1 h 15 min decken, löscht sonst den Bereich
+   * und setzt den Steuerzeitraum neu. Liegen danach noch Schätzwerte darin
+   * (Löschen gescheitert), keinen Lauf — vor der Schätzung brach EOS an der
+   * Stelle ohnehin ab („Missing or invalid prices“).
+   *
+   * @param {{nowMs?:number}} [opts]
+   * @returns {Promise<{ok:boolean, pushed:boolean, error?:string}>}
+   */
+  async function prepareRun({ nowMs = Date.now() } = {}) {
+    if (!estimatesInControlHorizon(nowMs)) return { ok: true, pushed: false };
+    if (pushLog) {
+      pushLog('eos_price_estimate_run_push', {
+        estimateFrom: new Date(lastEstimateRange.fromMs).toISOString(),
+        horizonHours: state?.optimizer?.eosControlHorizonH ?? null,
+      });
+    }
+    await push();
+    if (!estimatesInControlHorizon(Math.max(nowMs, Date.now()))) return { ok: true, pushed: true };
+    return { ok: false, pushed: true, error: 'Schätzpreise im Steuerzeitraum konnten nicht gelöscht werden' };
+  }
+
+  async function pushOnce(job = null) {
+    // Von der Wache aufgegeben: nichts mehr an EOS schreiben, nichts eintragen.
+    const gone = () => job?.abandoned === true;
+    const abandoned = () => ({ ok: false, pushed: [], errors: { timeout: 'abandoned' } });
     const cfg = getCfg();
     const baseUrl = resolveEosProxy(cfg).url;
 
@@ -768,10 +841,12 @@ export function createEosForecastBridge(ctx) {
     try {
       forecast = await forecastService.buildForecastResponse();
     } catch (e) {
+      if (gone()) return abandoned();
       const err = `forecastService.buildForecastResponse failed: ${e.message}`;
       if (pushLog) pushLog('eos_forecast_bridge_error', { reason: err });
       return recordPush({ ok: false, pushed: [], errors: { build: err } });
     }
+    if (gone()) return abandoned();
 
     let pvSlots = keepOnGridSlots(forecast?.pv?.slots || []);
     let loadSlots = padSlotsBackToNow(forecast?.load?.slots || [], Date.now());
@@ -781,6 +856,7 @@ export function createEosForecastBridge(ctx) {
     // zu speichern (Prod 01.11.2026). Deshalb dahinter Schätzwerte; der
     // Steuerzeitraum richtet sich weiter nur nach den echten Preisen.
     const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now());
+    if (gone()) return abandoned();
     const priceSlotsCt = priceFill.slots;
     const priceEstimate = priceFill.estimate;
     if (state) { state.optimizer = state.optimizer || {}; state.optimizer.eosPriceEstimate = priceEstimate; }
@@ -844,6 +920,7 @@ export function createEosForecastBridge(ctx) {
     // spot. 0 when the gate is OFF (default) → the else-branch below reproduces
     // the exact original expression → byte-identical push. 2026-06-21.
     const premiumCt = await resolveFeedInMarketPremiumCtKwh(cfg);
+    if (gone()) return abandoned();
     const feedInSlots = feedInSpot
       ? priceSlotsCt
           .filter((s) => s && s.start && Number.isFinite(Number(s.ctKwh)))
@@ -923,6 +1000,7 @@ export function createEosForecastBridge(ctx) {
     const pushed = [];
     const errors = {};
     for (const t of tasks) {
+      if (gone()) return abandoned();
       if (t.rows === 0) {
         errors[t.provider] = 'no slots available — skipping';
         continue;
@@ -957,11 +1035,13 @@ export function createEosForecastBridge(ctx) {
     // (nie kürzer, Christin 03.10.), die Schätzung wirkt nur im Schwanz.
     const realOnly = (list) => list.filter((s) => !s.estimated);
     // Nicht mehr geltende Schätzwerte aus EOS entfernen (vor dem Lauf).
+    if (gone()) return abandoned();
     {
       const nowMs = Date.now();
       const realEndMs = realPriceCoverage(forecast?.price?.slots || []).end;
       const sentEndMs = priceEstimate ? Date.parse(priceEstimate.until) : realEndMs;
       const clear = await clearStaleEstimates(baseUrl, { sentEndMs, realEndMs, nowMs });
+      if (gone()) return abandoned();
       if (clear.errors?.length) errors.priceEstimateClear = clear.errors.join('; ');
       // Bei Fehlern den alten Bereich behalten, damit der nächste Push erneut löscht.
       const next = priceEstimate ? { fromMs: Date.parse(priceEstimate.from), untilMs: Date.parse(priceEstimate.until) } : null;
@@ -975,10 +1055,12 @@ export function createEosForecastBridge(ctx) {
       baseUrl, realOnly(elecpriceSlots), feedInSlots.length ? realOnly(feedInSlots) : null, pvSlots, expandHourlyToQuarterHourly(loadSlotsForEos),
     );
     if (horizon.error) errors.horizon = horizon.error;
+    if (gone()) return abandoned();
 
     // Forward the live battery SoC so EOS seeds its optimizer with the real
     // start state (not 0). Folded into the same cycle/cadence as the forecasts.
     const socRes = await pushSoc(baseUrl);
+    if (gone()) return abandoned();
     for (const p of socRes.pushed) pushed.push(p);
     Object.assign(errors, socRes.errors);
 
@@ -1120,7 +1202,7 @@ export function createEosForecastBridge(ctx) {
     }
   }
 
-  return { push, pushFreshSoc, socForRun, start, stop };
+  return { push, prepareRun, pushFreshSoc, socForRun, start, stop };
 }
 
 // Exported for unit-tests.

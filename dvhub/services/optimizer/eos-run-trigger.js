@@ -104,11 +104,14 @@ export function alignStartSolution({ genes, geneStartMs, previousSlots, currentS
  * @param {(body:object, timeoutMs:number)=>Promise<{ok:boolean,data?:object,error?:string}>} deps.postOptimize
  * @param {()=>Promise<any>} [deps.onSolution]   Lauf fertig → Lösung abholen
  * @param {()=>{status:string}} [deps.eosStatus] Zustand aus dem EOS-Monitor
+ * @param {()=>Promise<{ok:boolean, error?:string, pushed?:boolean}>} [deps.prepareRun]
+ *   Vor jedem Lauf: liegen geschätzte Preise im Steuerzeitraum, pusht die
+ *   Bridge neu und löscht sie (eos-forecast-bridge.js). ok:false → kein Lauf.
  * @param {object} [deps.state]                  state.optimizer.eosRun wird hier geführt
  */
 export function createEosRunTrigger({
   isActive, getIntervalSec, getSlotSec, getHorizonHours, collectSoc, postOptimize,
-  onSolution, eosStatus, state, pushLog,
+  onSolution, eosStatus, prepareRun, state, pushLog,
   now = () => Date.now(),
   setTimer = (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
   clearTimer = (t) => clearTimeout(t),
@@ -151,6 +154,20 @@ export function createEosRunTrigger({
   async function run(reason) {
     const at = now();
     lastAttemptAt = at;
+    // Geschätzte Preise dürfen nie im Steuerzeitraum liegen. Beim Push ist das
+    // geprüft, ein Lauf an der Grenze oder per kick kommt aber ohne Push —
+    // deshalb hier vor dem Lauf (Gegenprüfung a6dbbd1d). Danach erst den
+    // Steuerzeitraum lesen: ein neuer Push kann ihn geändert haben.
+    if (typeof prepareRun === 'function') {
+      let prep;
+      try { prep = await prepareRun(); } catch (err) { prep = { ok: false, error: err?.message || String(err) }; }
+      if (prep && prep.ok === false) {
+        const error = prep.error || 'Vorbereitung des Laufs fehlgeschlagen';
+        log('eos_run_skipped', { reason, error });
+        publish({ lastError: error, lastErrorAt: at });
+        return { ok: false, skipped: error };
+      }
+    }
     const socRes = await collectSoc();
     const soc = socRes?.soc;
     if (!soc || !Object.keys(soc).length) {

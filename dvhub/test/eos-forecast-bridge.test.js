@@ -1252,3 +1252,130 @@ test('Preise auffüllen: echte Preise enden in weniger als 1 h 15 min → keine 
     assert.equal(del[0].start, shortEnd);
   } finally { await mock.close(); }
 });
+
+// Gegenprüfung a6dbbd1d (P2): Die 75-min-Prüfung galt nur beim Push. Ein Lauf
+// an der Grenze oder per kick kommt ohne Push — 50 min nach einem Push mit
+// echten Preisen bis jetzt + 75..90 min reicht der 1-h-Steuerzeitraum (ab dem
+// abgerundeten Laufbeginn) in die Schätzwerte. prepareRun prüft vor dem Lauf und pusht neu (der neue Push
+// schätzt nicht mehr und löscht den Bereich).
+function shortRealEnv(mock, handler) {
+  const env = estimateCtx(mock);
+  const fc0 = env.ctx.forecastService.buildForecastResponse;
+  const realEnd = env.q0 + 90 * 60_000; // jetzt + 75..90 min
+  env.ctx.forecastService = {
+    buildForecastResponse: async () => {
+      const fc = await fc0();
+      return { ...fc, price: { slots: fc.price.slots.filter((s) => Date.parse(s.start) < realEnd) } };
+    },
+  };
+  return { ...env, realEnd, handler };
+}
+const pvImports = (mock) => mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/prediction/import/PVForecastImport')).length;
+
+test('Laufstart: Schätzwerte im Steuerzeitraum des Laufs → vorher neu pushen und löschen', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = shortRealEnv(mock);
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate.from, new Date(env.realEnd).toISOString());
+    assert.equal(env.state.optimizer.eosControlHorizonH, 1);
+    assert.deepEqual(deletes(mock), []);
+    t.mock.timers.setTime(Date.now() + 50 * 60_000); // Lauf ohne Push
+    const before = pvImports(mock);
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, true);
+    assert.equal(res.pushed, true);
+    assert.equal(pvImports(mock), before + 1, 'neu gepusht');
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null, 'keine Schätzung mehr');
+    const del = deletes(mock);
+    assert.deepEqual(del.map((d) => d.key).sort(), ['elecprice_marketprice_wh', 'feed_in_tariff_wh']);
+    for (const d of del) assert.equal(d.start, env.realEnd, 'ab dem Ende der echten Preise');
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: kurz nach dem Push deckt der Steuerzeitraum nur echte Preise → kein zusätzlicher Push', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = shortRealEnv(mock);
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    // Laufbeginn abgerundet höchstens q0 + 15 min, Steuerzeitraum 1 h → bis
+    // q0 + 75 min, echte Preise bis q0 + 90 min.
+    t.mock.timers.setTime(Date.now() + 5 * 60_000);
+    const n = mock.requests.length;
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, true);
+    assert.equal(res.pushed, false);
+    assert.equal(mock.requests.length, n, 'keine Anfrage an EOS');
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: ohne geschickte Schätzwerte nichts zu tun', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock, { withHistory: false });
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    const n = mock.requests.length;
+    assert.deepEqual(await bridge.prepareRun(), { ok: true, pushed: false });
+    assert.equal(mock.requests.length, n);
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: Löschen schlägt fehl → Lauf nicht starten', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let failDeletes = false;
+  const mock = await createMockEos((req, res) => {
+    if (failDeletes && req.method === 'DELETE') { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return; }
+    okHandler(req, res);
+  });
+  try {
+    const env = shortRealEnv(mock);
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    failDeletes = true;
+    t.mock.timers.setTime(Date.now() + 50 * 60_000);
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /Schätz/);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung a6dbbd1d (P3): Pushes laufen nacheinander. Hängt einer (z. B.
+// eine Datenbankabfrage ohne Zeitlimit), warteten alle folgenden — und damit
+// auch der Laufstart (prepareRun). Eine Wache gibt die Kette nach einer Frist
+// frei; der hängende Push schreibt danach nichts mehr an EOS.
+test('Pushes nacheinander: ein hängender Push blockiert die Kette nicht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    let release;
+    let calls = 0;
+    env.ctx.forecastService = {
+      buildForecastResponse: () => {
+        calls += 1;
+        if (calls === 1) return new Promise((r) => { release = r; });
+        return fc0();
+      },
+    };
+    env.ctx.pushTimeoutMs = 200;
+    const bridge = createEosForecastBridge(env.ctx);
+    const both = Promise.all([bridge.push(), bridge.push()]);
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Kette hängt')), 5_000).unref());
+    const [a, b] = await Promise.race([both, timeout]);
+    assert.equal(a.ok, false);
+    assert.match(String(a.errors.timeout), /200/);
+    assert.equal(b.ok, true);
+    assert.equal(pvImports(mock), 1);
+    // Der hängende Push kommt später doch zurück: er schreibt nichts mehr.
+    const n = mock.requests.length;
+    release(await fc0());
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(mock.requests.length, n, 'der aufgegebene Push schreibt nicht an EOS');
+    assert.equal(env.state.optimizer.lastEosPush.ok, true, 'das Ergebnis des neueren Pushs bleibt stehen');
+  } finally { await mock.close(); }
+});

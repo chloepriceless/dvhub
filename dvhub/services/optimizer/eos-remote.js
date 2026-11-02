@@ -465,7 +465,10 @@ export function createEosRemoteFacade({
       const qs = `key=${encodeURIComponent(d.key)}${Number.isFinite(d.from) ? `&start_datetime=${encodeURIComponent(isoZ(d.from))}` : ''}${Number.isFinite(d.to) ? `&end_datetime=${encodeURIComponent(isoZ(d.to))}` : ''}`;
       const r = await localRequest(base, 'DELETE', `/v1/prediction/range?${qs}`, undefined, t);
       if (r.status !== 404 && (r.status < 200 || r.status >= 300)) throw new Error(`DELETE /v1/prediction/range: HTTP ${r.status}`);
-      deletedRanges.splice(deletedRanges.indexOf(d), 1);
+      // Während des Löschens kann ein neues DELETE den Eintrag verdrängt haben
+      // (höchstens 50): dann ist er schon weg — splice(-1) träfe den neuesten.
+      const i = deletedRanges.indexOf(d);
+      if (i >= 0) deletedRanges.splice(i, 1);
     }
     for (const [prov, df] of Object.entries(predictionsForJob())) await must('PUT', `/v1/prediction/import/${prov}?force_enable=true`, df);
     for (const m of measurementsForJob()) {
