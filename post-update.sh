@@ -812,6 +812,11 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" 2>/dev/null || true
 # config.json nur für den Dienstbenutzer (Strix T-0003): ältere Installationen
 # legten sie mit 0644 an; die Gruppe dvhub (Support-Login) las so die Geheimnisse.
 dvhub_cfg_secure_file "$CONFIG_PATH" "$SERVICE_USER" || echo "  WARN: Rechte von $CONFIG_PATH nicht gesetzt" >&2
+# Ihre Sicherungen enthalten dieselben Geheimnisse (Gegenprüfung d5655361).
+for CFG_BAK in "$(dirname "$CONFIG_PATH")"/config.backup-*.json "$CONFIG_PATH".tmp; do
+  [[ -e "$CFG_BAK" || -L "$CFG_BAK" ]] || continue
+  dvhub_cfg_secure_file "$CFG_BAK" "$SERVICE_USER" || true
+done
 echo "  Berechtigungen: OK"
 
 # ── 8. systemd Service aktuell? ──

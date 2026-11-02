@@ -74,6 +74,8 @@ export async function runMigrations(configPath, options = {}) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupPath = path.join(backupDir, `config.backup-${timestamp}.json`);
     fs.copyFileSync(configPath, backupPath);
+    // Geheimnisse: nur der Dienstbenutzer (Strix T-0003, Gegenprüfung d5655361).
+    fs.chmodSync(backupPath, 0o600);
     console.log(`Config backup: ${backupPath}`);
 
     // Clean old backups (keep maxBackups)
@@ -108,7 +110,8 @@ export async function runMigrations(configPath, options = {}) {
 
     // Atomic write: tmp + rename
     const tmpPath = configPath + '.tmp';
-    fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2) + '\n');
+    fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+    fs.chmodSync(tmpPath, 0o600); // vorhandene .tmp behält sonst ihren Modus
     fs.renameSync(tmpPath, configPath);
   }
 

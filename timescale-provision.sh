@@ -144,17 +144,32 @@ flip_config_true() {
   # Set cfg.telemetry.database.timescaledb = true so migration 014 (hypertable +
   # compression + continuous aggregates) runs on the next dvhub start. Only
   # touches this one key. No-op if node/config are absent.
-  if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
-    node -e "
-      const fs=require('fs');const p='$CONFIG_PATH';
-      try{const c=JSON.parse(fs.readFileSync(p,'utf8'));
-        c.telemetry=c.telemetry||{};c.telemetry.database=c.telemetry.database||{};
-        if(c.telemetry.database.timescaledb!==true){c.telemetry.database.timescaledb=true;
-          fs.writeFileSync(p,JSON.stringify(c,null,2)+'\n');}
-      }catch{}
-    " 2>/dev/null || true
-    chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_PATH" 2>/dev/null || true
-  fi
+  # Gegenprüfung d5655361 (P1): /etc/dvhub gehört dem Dienstbenutzer — root
+  # liest mit O_NOFOLLOW, schreibt eine neue Datei (O_EXCL|O_NOFOLLOW, 0600,
+  # per fchown dem Dienstbenutzer) und setzt sie per rename ein. Ein Verweis
+  # config.json wird nicht angefasst (vorher: Schreiben + chown hindurch).
+  command -v node >/dev/null 2>&1 || return 0
+  local uid gid
+  uid="$(id -u "$SERVICE_USER" 2>/dev/null)" && gid="$(id -g "$SERVICE_USER" 2>/dev/null)" || return 0
+  node -e '
+    const fs = require("fs"); const path = require("path"); const crypto = require("crypto");
+    const [p, uid, gid] = process.argv.slice(1);
+    const C = fs.constants;
+    let fd;
+    try { fd = fs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK); }
+    catch (e) { if (e.code === "ELOOP") console.error(`  WARN: ${p} ist ein Verweis — TimescaleDB-Schalter nicht gesetzt`); process.exit(0); }
+    let c;
+    try { if (!fs.fstatSync(fd).isFile()) process.exit(0); c = JSON.parse(fs.readFileSync(fd, "utf8")); }
+    catch { process.exit(0); } finally { fs.closeSync(fd); }
+    c.telemetry = c.telemetry || {}; c.telemetry.database = c.telemetry.database || {};
+    if (c.telemetry.database.timescaledb === true) process.exit(0);
+    c.telemetry.database.timescaledb = true;
+    const tmp = path.join(path.dirname(p), `.${path.basename(p)}.neu-${crypto.randomBytes(4).toString("hex")}`);
+    const w = fs.openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
+    try { fs.writeFileSync(w, JSON.stringify(c, null, 2) + "\n"); fs.fchmodSync(w, 0o600); fs.fchownSync(w, Number(uid), Number(gid)); }
+    finally { fs.closeSync(w); }
+    try { fs.renameSync(tmp, p); } catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+  ' "$CONFIG_PATH" "$uid" "$gid" || true
 }
 
 ext_license() {
