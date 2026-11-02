@@ -1003,3 +1003,116 @@ test('push ohne Prognosedienst meldet den Fehler ebenfalls in lastEosPush', asyn
   assert.equal(state.optimizer.lastEosPush.ok, false);
   assert.match(state.optimizer.lastEosPush.error, /bootstrap/);
 });
+
+// --- Preise über die bekannten hinaus schätzen (Christin 01.11.2026) ---------
+// Vormittags enden die echten Preise um Mitternacht; EOS kürzte seinen Schwanz
+// auf 0,5 h („Tail forecast shortened … limited by import price, feed-in
+// tariff“). Die Bridge verlängert die Preisreihen bis zum Ende der PV-/Last-
+// Prognose mit geschätzten Börsenpreisen; der Steuerzeitraum bleibt bei den
+// echten Preisen.
+const Q = 15 * 60 * 1000;
+function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotFactor: 1 }, withHistory = true, logs = [] } = {}) {
+  const now = Date.now();
+  const q0 = now - (now % Q);
+  const realEnd = q0 + 10 * 3_600_000; // echte Preise bis jetzt + 10 h
+  const pvEnd = q0 + 40 * 3_600_000;   // PV/Last bis jetzt + 40 h
+  const pattern = (ms) => 10 + 8 * Math.sin(((ms / Q) % 96 - 30) / 96 * 2 * Math.PI);
+  const price = [];
+  for (let ms = q0 - 2 * 3_600_000; ms < realEnd; ms += Q) price.push({ start: new Date(ms).toISOString(), ctKwh: pattern(ms) });
+  const pv = [];
+  for (let ms = q0; ms < pvEnd; ms += Q) pv.push({ start: new Date(ms).toISOString(), powerW: 1000 });
+  const load = [];
+  for (let ms = q0 - (q0 % 3_600_000); ms < pvEnd; ms += 3_600_000) load.push({ start: new Date(ms).toISOString(), powerW: 500 });
+  const history = [];
+  for (let ms = q0 - 20 * 86_400_000; ms < q0; ms += Q) history.push({ key: 'price_ct_kwh', ts: new Date(ms), value: pattern(ms), resolution: 900 });
+  const state = { victron: { soc: 50 }, optimizer: { eos: { supported: true } } };
+  const ctx = {
+    getCfg: () => ({
+      optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff, timezone: 'Europe/Berlin' },
+      userEnergyPricing: pricing || { mode: 'fixed', fixedGrossImportCtKwh: 30 },
+    }),
+    pushLog: (event, data) => logs.push({ event, data }),
+    forecastService: { buildForecastResponse: async () => ({ pv: { slots: pv }, load: { slots: load }, price: { slots: price } }) },
+    state,
+    ...(withHistory ? { telemetryStore: { querySeries: async () => history } } : {}),
+  };
+  // Ende der Reihen: die längere von PV (15 min) und Last (stündlich).
+  const fillEnd = Math.max(pvEnd, Date.parse(load[load.length - 1].start) + 3_600_000);
+  return { ctx, state, q0, realEnd, fillEnd, pattern };
+}
+
+function seriesOf(mock, provider, key) {
+  const req = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith(`/v1/prediction/import/${provider}`));
+  assert.ok(req && req.body && req.body.data, `${provider} gesendet`);
+  return new Map(Object.entries(req.body.data).map(([iso, cell]) => [Date.parse(iso), cell[key]]));
+}
+
+test('Preise auffüllen: Bezug (fest) und Einspeisung (Börse) bis zum Ende der Prognose, Steuerzeitraum nur echte', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const { ctx, state, q0, realEnd, fillEnd, pattern } = estimateCtx(mock, { logs });
+    await createEosForecastBridge(ctx).push();
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
+    assert.equal(Math.max(...elec.keys()), fillEnd - Q, 'Bezugspreis reicht bis zum Ende der PV-/Lastprognose');
+    assert.equal(Math.max(...feed.keys()), fillEnd - Q, 'Einspeisewert reicht bis zum Ende der PV-/Lastprognose');
+    // Fester Tarif: auch der geschätzte Slot kostet 30 ct.
+    closeTo(elec.get(realEnd + 5 * 3_600_000), 30 / 100 / 1000);
+    // Einspeisung = geschätzter Börsenpreis, folgt dem Tagesmuster.
+    const t = realEnd + 7 * 3_600_000;
+    assert.ok(Math.abs(feed.get(t) * 100_000 - pattern(t)) < 1, `${feed.get(t) * 100_000} vs ${pattern(t)}`);
+    // Steuerzeitraum aus den echten Preisen (10 h ab Viertelstundenbeginn).
+    const hz = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/optimization/genetic/horizon_hours'));
+    assert.equal(hz.body, Math.floor((realEnd - Date.now() - Q) / 3_600_000));
+    // Kennzeichnung für Oberfläche und Log.
+    const est = state.optimizer.lastEosPush.priceEstimate;
+    assert.equal(est.estimatedSlots, (fillEnd - realEnd) / Q);
+    assert.equal(est.from, new Date(realEnd).toISOString());
+    assert.equal(state.optimizer.eosPriceEstimate.estimatedSlots, est.estimatedSlots);
+    const log = logs.find((l) => l.event === 'eos_forecast_bridge');
+    assert.equal(log.data.estimatedPriceSlots, est.estimatedSlots);
+    assert.ok(q0 > 0);
+  } finally { await mock.close(); }
+});
+
+test('Preise auffüllen: Anbieterpreis = Ausgleichsgerade über dem geschätzten Börsenpreis', async () => {
+  const { setProviderEstimate, clearProviderPrices } = await import('../services/tariff-provider/price-store.js');
+  const mock = await createMockEos(okHandler);
+  try {
+    setProviderEstimate({ slope: 1.2257, intercept: 15.98, n: 96 });
+    const { ctx, realEnd } = estimateCtx(mock, { pricing: { mode: 'provider', provider: { name: 'lichtblick', priceBasis: 'gross_total' } } });
+    await createEosForecastBridge(ctx).push();
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
+    const t = realEnd + 3 * 3_600_000;
+    const spot = feed.get(t) * 100_000;
+    assert.ok(Math.abs(elec.get(t) * 100_000 - (1.2257 * spot + 15.98)) < 0.02);
+  } finally { clearProviderPrices(); await mock.close(); }
+});
+
+test('Preise auffüllen: dynamischer Tarif = geschätzter Börsenpreis + Bestandteile', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const components = { energyMarkupCtKwh: 2, gridChargesCtKwh: 10, leviesAndFeesCtKwh: 3, vatPct: 19 };
+    const { ctx, realEnd } = estimateCtx(mock, { pricing: { mode: 'dynamic', dynamicComponents: components } });
+    await createEosForecastBridge(ctx).push();
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
+    const t = realEnd + 4 * 3_600_000;
+    const spot = feed.get(t) * 100_000;
+    assert.ok(Math.abs(elec.get(t) * 100_000 - (spot + 15) * 1.19) < 0.05);
+  } finally { await mock.close(); }
+});
+
+test('Preise auffüllen: ohne gespeicherte Historie bleibt alles wie bisher', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const { ctx, state, realEnd } = estimateCtx(mock, { withHistory: false });
+    await createEosForecastBridge(ctx).push();
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    assert.equal(Math.max(...elec.keys()), realEnd - Q);
+    assert.equal(state.optimizer.lastEosPush.priceEstimate, null);
+    assert.equal(state.optimizer.eosPriceEstimate, null);
+  } finally { await mock.close(); }
+});

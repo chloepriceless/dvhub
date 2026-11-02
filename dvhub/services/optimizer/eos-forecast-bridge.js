@@ -45,6 +45,8 @@ import { reserveHeaterLoad } from '../devices/heater-load-reservation.js';
 import { localDate } from '../../tz-fast.js';
 // Zweite GX am selben Anschluss: Ladestand beider Akkus, nach Kapazitaet gewichtet.
 import { planningSocPct } from '../multi-gx/planning.js';
+// Preise hinter den bekannten Day-Ahead-Preisen schätzen (01.11.2026).
+import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
 
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
@@ -191,7 +193,7 @@ export function fixedFeedInSlots(priceSlotsCt, tariff = {}) {
     .map((s) => {
       const spotCt = Number(s.ctKwh);
       const ct = Number.isFinite(spotCt) && spotCt < 0 ? 0 : fixedCt;
-      return { start: s.start, powerW: ct / 100 / 1000 };
+      return s.estimated ? { start: s.start, powerW: ct / 100 / 1000, estimated: true } : { start: s.start, powerW: ct / 100 / 1000 };
     });
 }
 
@@ -315,6 +317,26 @@ export function computeControlHorizonHours(slotLists, nowMs, { slotMs = 15 * 60_
   return Math.max(1, Math.min(maxHours, hours));
 }
 
+/** Höchstens so weit (ab jetzt) werden Preise geschätzt: Steuerzeitraum 24 h + Schwanz 48 h. */
+export const PRICE_FILL_MAX_MS = 72 * 3_600_000;
+
+/**
+ * Bis wohin die Preisreihen reichen sollen: so weit wie PV- oder Lastprognose
+ * (der EOS-Schwanz endet ohnehin an der kürzesten Reihe), höchstens 72 h.
+ * Ohne beide Prognosen (z. B. Nur Netzspeicher) 48 h.
+ */
+export function priceFillUntilMs(pvSlots, loadSlots, nowMs) {
+  let end = -Infinity;
+  for (const [list, stepMs] of [[pvSlots, PRICE_SLOT_MS], [loadSlots, 3_600_000]]) {
+    for (const s of Array.isArray(list) ? list : []) {
+      const ms = Date.parse(s?.start);
+      if (Number.isFinite(ms) && Number.isFinite(Number(s?.powerW))) end = Math.max(end, ms + stepMs);
+    }
+  }
+  if (!Number.isFinite(end)) end = nowMs + 48 * 3_600_000;
+  return Math.min(end, nowMs + PRICE_FILL_MAX_MS);
+}
+
 export function createEosForecastBridge(ctx) {
   const {
     getCfg,
@@ -341,6 +363,54 @@ export function createEosForecastBridge(ctx) {
     });
   }
   let lastEosPid = null;
+
+  // Gespeicherte Day-Ahead-Historie (price_ct_kwh) für die Preis-Schätzung.
+  // Einmal je Stunde aus der Datenbank; die echten Preise von heute/morgen
+  // kommen bei jedem Push frisch aus der Prognose dazu.
+  let priceHistoryCache = null;
+  async function loadPriceHistory(nowMs) {
+    if (priceHistoryCache && nowMs - priceHistoryCache.at < 3_600_000) return priceHistoryCache.points;
+    const store = ctx.telemetryStore;
+    if (!store || typeof store.querySeries !== 'function') return [];
+    let points = [];
+    try {
+      const rows = await store.querySeries({
+        // Wie routes-api (EEG-Verlängerung): der Live-Abruf schreibt
+        // price_ct_kwh, spot_price_ct_kwh ist nur der Katalogname.
+        seriesKeys: ['price_ct_kwh', 'spot_price_ct_kwh'],
+        start: new Date(nowMs - (HISTORY_DAYS + 1) * 86_400_000).toISOString(),
+        end: new Date(nowMs + 3 * 86_400_000).toISOString(),
+        maxResolution: 3600,
+      });
+      const live = (rows || []).filter((r) => r.key === 'price_ct_kwh');
+      for (const r of live.length ? live : (rows || [])) {
+        const ms = new Date(r.ts).getTime();
+        const ct = Number(r.value);
+        if (!Number.isFinite(ms) || !Number.isFinite(ct)) continue;
+        // Stundenwerte gelten für alle vier Viertelstunden.
+        const quarters = Number(r.resolution) >= 3600 ? 4 : 1;
+        for (let k = 0; k < quarters; k += 1) points.push({ ms: ms + k * PRICE_SLOT_MS, ct });
+      }
+    } catch (e) {
+      if (pushLog) pushLog('eos_price_estimate_error', { error: e?.message || String(e) });
+      points = [];
+    }
+    priceHistoryCache = { at: nowMs, points };
+    return points;
+  }
+
+  /**
+   * Preisreihe für EOS: echte Preise, dahinter bis zum Ende der PV-/Last-
+   * Prognose geschätzte Börsenpreise (price-estimate.js). Bezugs- und
+   * Einspeisepreis werden daraus wie für echte Slots gebildet.
+   */
+  async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs) {
+    const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs);
+    const { end } = realPriceCoverage(realSlots);
+    if (end <= nowMs || end >= untilMs) return { slots: realSlots, estimate: null };
+    const history = await loadPriceHistory(nowMs);
+    return fillPriceSlots(realSlots, { history, untilMs, nowMs });
+  }
 
   /**
    * Read the EOS process pid from /v1/health. The pid changes on every EOS
@@ -623,6 +693,9 @@ export function createEosForecastBridge(ctx) {
       ok: res?.ok === true && !errors.horizon,
       error: errorText || null,
       at: Date.now(),
+      // Geschätzte Preise hinter den echten (null = keine): Anzahl Slots,
+      // erster geschätzter Slot, Ende, Verfahren — für eine spätere Anzeige.
+      priceEstimate: res?.priceEstimate || null,
     };
     return res;
   }
@@ -650,9 +723,17 @@ export function createEosForecastBridge(ctx) {
       return recordPush({ ok: false, pushed: [], errors: { build: err } });
     }
 
-    const priceSlotsCt = forecast?.price?.slots || [];
     let pvSlots = keepOnGridSlots(forecast?.pv?.slots || []);
     let loadSlots = padSlotsBackToNow(forecast?.load?.slots || [], Date.now());
+    // Echte Preise enden vormittags um Mitternacht. Ohne Preise dahinter kürzt
+    // EOS seinen Schwanz auf 0,5 h und bewertet die Restladung fast nur zum
+    // Einspeisewert — es speist mittags PV ein, statt sie für Nacht und Morgen
+    // zu speichern (Prod 01.11.2026). Deshalb dahinter Schätzwerte; der
+    // Steuerzeitraum richtet sich weiter nur nach den echten Preisen.
+    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now());
+    const priceSlotsCt = priceFill.slots;
+    const priceEstimate = priceFill.estimate;
+    if (state) { state.optimizer = state.optimizer || {}; state.optimizer.eosPriceEstimate = priceEstimate; }
     // Nur Netzspeicher: PV = 0, Verbrauch = Ruhebedarf aus dem Netzzähler
     // (grid-storage.js). Prognosen für PV und Hausverbrauch gelten dann nicht.
     let gridStorage = null;
@@ -695,7 +776,8 @@ export function createEosForecastBridge(ctx) {
           { timeZone: tz },
         );
         if (!Number.isFinite(ct)) ct = Number(s.ctKwh); // fallback: raw spot
-        return Number.isFinite(ct) ? { start: s.start, powerW: ct / 100 / 1000 } : null;
+        if (!Number.isFinite(ct)) return null;
+        return s.estimated ? { start: s.start, powerW: ct / 100 / 1000, estimated: true } : { start: s.start, powerW: ct / 100 / 1000 };
       })
       .filter(Boolean);
 
@@ -722,7 +804,7 @@ export function createEosForecastBridge(ctx) {
             const powerW = premiumCt > 0 && spotCt >= 0
               ? (spotCt * feedInFactor + premiumCt) / 100 / 1000
               : (spotCt / 100 / 1000) * feedInFactor;
-            return { start: s.start, powerW };
+            return s.estimated ? { start: s.start, powerW, estimated: true } : { start: s.start, powerW };
           })
       : fixedFeedInSlots(priceSlotsCt, tariff);
 
@@ -818,11 +900,14 @@ export function createEosForecastBridge(ctx) {
     // ("Missing or invalid prices within the control horizon", prod
     // 2026-09-23 01:51). Day-Ahead reicht nachts nur bis Mitternacht, erst
     // gegen 13 Uhr kommt der Folgetag — mit festen 24 h plant 0.4 dann bis
-    // zum Nachmittag GAR NICHT. Wir erfinden keine Preise, sondern kuerzen den Steuerzeitraum auf
-    // das, was belegt ist; danach bewertet EOS die Restladung ueber seinen
-    // Endwert.
+    // zum Nachmittag GAR NICHT. Der Steuerzeitraum endet deshalb dort, wo
+    // echte Preise belegt sind; dahinter bewertet EOS die Restladung ueber
+    // seinen Endwert — im Schwanz mit geschaetzten Preisen (01.11.2026).
+    // Geschätzte Preise zählen nicht: der Steuerzeitraum deckt die echten ab
+    // (nie kürzer, Christin 03.10.), die Schätzung wirkt nur im Schwanz.
+    const realOnly = (list) => list.filter((s) => !s.estimated);
     const horizon = await syncControlHorizon(
-      baseUrl, elecpriceSlots, feedInSlots.length ? feedInSlots : null, pvSlots, expandHourlyToQuarterHourly(loadSlotsForEos),
+      baseUrl, realOnly(elecpriceSlots), feedInSlots.length ? realOnly(feedInSlots) : null, pvSlots, expandHourlyToQuarterHourly(loadSlotsForEos),
     );
     if (horizon.error) errors.horizon = horizon.error;
 
@@ -835,9 +920,13 @@ export function createEosForecastBridge(ctx) {
     const okAll = pushed.length === tasks.length + socRes.pushed.length
       && Object.keys(socRes.errors).length === 0;
     if (pushLog) {
-      pushLog('eos_forecast_bridge', { ok: okAll, pushed, errors, socSkipped: socRes.skipped, ...(heaterReservation ? { heaterReservedWh: heaterReservation.byDay } : {}) });
+      pushLog('eos_forecast_bridge', {
+        ok: okAll, pushed, errors, socSkipped: socRes.skipped,
+        ...(heaterReservation ? { heaterReservedWh: heaterReservation.byDay } : {}),
+        ...(priceEstimate ? { estimatedPriceSlots: priceEstimate.estimatedSlots, estimatedPriceFrom: priceEstimate.from, estimatedPriceMethod: priceEstimate.method } : {}),
+      });
     }
-    return recordPush({ ok: okAll, pushed, errors });
+    return recordPush({ ok: okAll, pushed, errors, priceEstimate });
   }
 
   /**

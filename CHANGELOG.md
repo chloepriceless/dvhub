@@ -12,6 +12,17 @@ verweist hierher.
 
 ### Neu
 
+- **EOS bekommt Preise über die bekannten hinaus**: Vormittags enden die Day-Ahead-Preise um Mitternacht. EOS
+  kürzte dann seinen Prognose-Schwanz auf eine halbe Stunde („Tail forecast shortened … effective 0.5 h“) und bewertete
+  die Restladung im Akku fast nur zum Einspeisewert — mittags wurde PV für ~28 ct eingespeist statt für Nacht und
+  Morgen gespeichert. DVhub schreibt die Börsenpreise jetzt bis zum Ende der PV-/Lastprognose (höchstens 72 h) fort,
+  nach der Methode von EOS' eigenen Preisquellen: exponentielle Glättung mit Wochenmuster aus der gespeicherten
+  Day-Ahead-Historie (ab zwei Wochen, sonst Tagesmuster ab zwei Tagen; weniger Historie → keine Schätzung). Bezugspreis
+  und Einspeisewert entstehen daraus wie bei echten Preisen (fester Preis, Börse + Bestandteile, Anbieterpreis über die
+  Ausgleichsgerade, Börse + Marktprämie). Echte Preise haben Vorrang und ersetzen die Schätzung beim nächsten Push; der
+  Steuerzeitraum richtet sich weiter nur nach echten Preisen. Anzahl und Beginn der geschätzten Slots stehen im Log
+  (`eos_forecast_bridge`) und unter `state.optimizer.lastEosPush.priceEstimate`.
+
 - **Bezugspreis vom Stromanbieter (Tibber, LichtBlick)**: neue Preislogik „Vom Stromanbieter“ unter Einstellungen →
   Strompreise, auch je Zeitraum (z. B. ab Lieferbeginn). DVhub holt mit den eigenen Zugangsdaten des Kunden die
   Viertelstundenpreise des eigenen Vertrags — Tibber über die offizielle Schnittstelle (persönlicher
