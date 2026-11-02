@@ -47,13 +47,23 @@ export function withEosdashSecurityHeaders(headers = {}) {
     if (['x-frame-options', 'x-content-type-options', 'referrer-policy'].includes(k.toLowerCase())) delete out[k];
   }
   const cspKey = Object.keys(out).find((k) => k.toLowerCase() === 'content-security-policy');
-  const upstreamCsp = cspKey ? [].concat(out[cspKey]).join('; ') : '';
+  // Mehrere Richtlinien kommen komma-getrennt (Node fasst doppelte Kopfzeilen
+  // so zusammen): frame-ancestors aus JEDER entfernen, sonst gälte in einer
+  // zweiten Richtlinie z. B. `frame-ancestors *` (Gegenprüfung 68ea4b79).
+  const upstreamCsp = cspKey ? [].concat(out[cspKey]).join(', ') : '';
   if (cspKey) delete out[cspKey];
-  const kept = upstreamCsp.split(';').map((d) => d.trim()).filter((d) => d && !/^frame-ancestors\b/i.test(d));
-  out['content-security-policy'] = [...kept, FRAME_ANCESTORS].join('; ');
+  const policies = upstreamCsp.split(',')
+    .map((pol) => pol.split(';').map((d) => d.trim()).filter((d) => d && !/^frame-ancestors\b/i.test(d)).join('; '))
+    .filter(Boolean);
+  if (policies.length) policies[policies.length - 1] += `; ${FRAME_ANCESTORS}`;
+  else policies.push(FRAME_ANCESTORS);
+  out['content-security-policy'] = policies.join(', ');
   out['x-frame-options'] = 'SAMEORIGIN';
   out['x-content-type-options'] = 'nosniff';
-  out['referrer-policy'] = 'no-referrer';
+  // same-origin statt no-referrer: bei no-referrer schicken Browser auf
+  // Formular-POSTs Origin: null — das Schreibtor lehnte dann EOSdash-eigene
+  // Formulare ab (Gegenprüfung 68ea4b79). Nach außen geht weiter kein Referrer.
+  out['referrer-policy'] = 'same-origin';
   return out;
 }
 

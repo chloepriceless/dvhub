@@ -33,7 +33,7 @@ async function rig(upstreamHeaders) {
   return { get, close: () => { upstream.close(); front.close(); } };
 }
 
-test('W2: geproxte EOSdash-Seite nur von DVhub selbst einbettbar, nosniff, kein Referrer', async () => {
+test('W2: geproxte EOSdash-Seite nur von DVhub selbst einbettbar, nosniff, Referrer nur same-origin', async () => {
   const r = await rig({ 'x-frame-options': 'DENY' });
   try {
     const res = await r.get();
@@ -41,7 +41,7 @@ test('W2: geproxte EOSdash-Seite nur von DVhub selbst einbettbar, nosniff, kein 
     assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
     assert.equal(res.headers['content-security-policy'], "frame-ancestors 'self'");
     assert.equal(res.headers['x-content-type-options'], 'nosniff');
-    assert.equal(res.headers['referrer-policy'], 'no-referrer');
+    assert.equal(res.headers['referrer-policy'], 'same-origin');
   } finally { r.close(); }
 });
 
@@ -77,4 +77,16 @@ test('W2: auch die 502-Antwort (EOSdash nicht erreichbar) trägt die Kopfzeilen'
     assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
     assert.equal(res.headers['x-content-type-options'], 'nosniff');
   } finally { front.close(); }
+});
+
+// Gegenprüfung 68ea4b79 (P3): zwei CSP-Richtlinien (komma-getrennt) — eine
+// zweite mit `frame-ancestors *` hätte das Einbetten wieder erlaubt.
+test('W2: frame-ancestors wird aus jeder von mehreren Richtlinien entfernt', async () => {
+  const r = await rig({ 'content-security-policy': ["default-src 'self'", 'frame-ancestors *'] });
+  try {
+    const res = await r.get();
+    const csp = res.headers['content-security-policy'];
+    assert.doesNotMatch(csp, /frame-ancestors \*/);
+    assert.match(csp, /^default-src 'self'; frame-ancestors 'self'$/);
+  } finally { r.close(); }
 });
