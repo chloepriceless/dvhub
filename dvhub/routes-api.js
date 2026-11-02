@@ -2532,6 +2532,14 @@ export function createApiRoutes(ctx) {
       pipeline(stream, res, () => { /* Abbruch/Fehler: pipeline hat beide Seiten geschlossen */ });
     });
     res.once?.('close', () => { if (!stream.destroyed) stream.destroy(); });
+    // Gegenprüfung zu 1bc645ab (P2): ein Client, der nicht liest, aber
+    // verbunden bleibt, hielt Deskriptor und Socket sonst unbegrenzt (der
+    // Server setzt kein Timeout). Leerlauf = nichts gesendet; ein langsamer,
+    // aber lesender Client ist nicht betroffen.
+    res.setTimeout?.(Number(ctx.staticIdleTimeoutMs) > 0 ? Number(ctx.staticIdleTimeoutMs) : 30_000, () => {
+      if (!stream.destroyed) stream.destroy();
+      res.destroy?.();
+    });
   }
 
   function servePage(res, filename) {

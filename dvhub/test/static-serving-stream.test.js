@@ -14,8 +14,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { createApiRoutes } from '../routes-api.js';
 
-function ctxFor(appDir) {
+function ctxFor(appDir, extra = {}) {
   return {
+    ...extra,
     getAppDir: () => appDir,
     getCfg: () => ({}),
     getRawCfg: () => ({}),
@@ -23,8 +24,8 @@ function ctxFor(appDir) {
   };
 }
 
-async function serve(appDir) {
-  const routes = createApiRoutes(ctxFor(appDir));
+async function serve(appDir, extra) {
+  const routes = createApiRoutes(ctxFor(appDir, extra));
   const server = http.createServer((req, res) => routes.serveStatic(req, res));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   return { server, port: server.address().port };
@@ -95,4 +96,30 @@ test('abgebrochener Download gibt den Dateideskriptor frei', { skip: openFds() =
     const after = openFds();
     assert.ok(after - before <= 1, `offene Deskriptoren vorher ${before}, nachher ${after}`);
   } finally { server.closeAllConnections?.(); server.close(); fs.rmSync(app, { recursive: true, force: true }); }
+});
+
+// Gegenprüfung zu 1bc645ab (P2): ein Client, der nicht liest, aber verbunden
+// bleibt, hielt Deskriptor und Socket unbegrenzt (kein Server-Timeout).
+test('stehender Client wird nach der Leerlauf-Grenze getrennt, Deskriptor frei', { skip: openFds() === null ? 'kein /dev/fd' : false }, async () => {
+  const app = setupApp();
+  const { server, port } = await serve(app, { staticIdleTimeoutMs: 300 });
+  const reqs = [];
+  try {
+    await get(port, '/index.html');
+    const before = openFds();
+    for (let i = 0; i < 3; i += 1) {
+      await new Promise((resolve) => {
+        const req = http.get({ host: '127.0.0.1', port, path: '/assets/big.png', agent: false }, (res) => { res.pause(); resolve(); });
+        req.on('error', () => {});
+        reqs.push(req);
+      });
+    }
+    await new Promise((r) => setTimeout(r, 1200));
+    const after = openFds();
+    // Die Client-Sockets dieses Prozesses zählen mit: höchstens sie bleiben offen.
+    assert.ok(after - before <= reqs.length, `offene Deskriptoren vorher ${before}, nachher ${after}`);
+  } finally {
+    for (const r of reqs) r.destroy();
+    server.closeAllConnections?.(); server.close(); fs.rmSync(app, { recursive: true, force: true });
+  }
 });
