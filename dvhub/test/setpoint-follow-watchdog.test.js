@@ -67,7 +67,9 @@ test('fehlende Werte: nicht beurteilbar, kein Alarm und kein Zurücksetzen', () 
   const state = createSetpointFollowState();
   feed(state, { toMs: 300000, sample: STUCK });
   const since = state.suspectSince;
-  feed(state, { fromMs: 301000, toMs: 400000, sample: { ...STUCK, batteryW: null } });
+  // Kurze Lücke (30 s, unter maxAgeMs): danach geht es mit derselben Episode weiter.
+  feed(state, { fromMs: 301000, toMs: 330000, sample: { ...STUCK, batteryW: null } });
+  feed(state, { fromMs: 331000, toMs: 340000, sample: STUCK });
   assert.equal(state.suspectSince, since);
 });
 
@@ -446,4 +448,78 @@ test('tick(): langsamer Auswertungstakt (evaluateMs 300 s) hält das Halte-Signa
     watchdog.tick(now);
   }
   assert.equal(sent.length, 0);
+});
+
+// --- Gegenprüfung 39bbcd6e ----------------------------------------------------
+const OK_PT = { ...STUCK, netImportW: -90, batteryW: -1900 };
+
+test('Fenster: Alarm erst, wenn die Episode selbst holdMs dauert — nicht nach 8 min dank ok-Vorgeschichte', () => {
+  const state = createSetpointFollowState();
+  feed(state, { toMs: OPTS.holdMs, stepMs: 5000, sample: OK_PT });
+  const S = OPTS.holdMs + 5000;
+  // 9:30 min auffällig (z. B. ein Ladeblock), danach wieder ok.
+  const transitions = feed(state, {
+    fromMs: S, toMs: S + 2 * OPTS.holdMs, stepMs: 5000,
+    sample: (t) => (t < S + 570000 ? STUCK : OK_PT)
+  });
+  assert.deepEqual(transitions, []);
+});
+
+test('Fenster: kein Alarm, wenn die Störung im Moment schon vorbei ist', () => {
+  const state = createSetpointFollowState();
+  // 0–480 s auffällig, danach ok: bei t=600 wären es noch 80 % — aber jetzt folgt er.
+  const transitions = feed(state, { toMs: OPTS.holdMs + 60000, stepMs: 5000, sample: (t) => (t <= 480000 ? STUCK : OK_PT) });
+  assert.deepEqual(transitions, []);
+});
+
+test('„Seit X Minuten“ zählt ab Beginn der Episode, nicht ab einer alten Spitze', () => {
+  const state = createSetpointFollowState();
+  // 1 h Spitzen-Muster (02.11.), dann echter Dauerfehler.
+  feed(state, { toMs: 3600000, stepMs: 5000, sample: (t) => ((t % 90000) < 20000 ? SPIKE_0211 : CALM_0211) });
+  const S = 3605000;
+  const transitions = feed(state, { fromMs: S, toMs: S + OPTS.holdMs + 30000, stepMs: 5000, sample: STUCK });
+  assert.deepEqual(transitions.map(([n]) => n), ['alarm']);
+  const [, at] = transitions[0];
+  assert.ok((T0 + at) - state.suspectSince <= OPTS.holdMs + 30000, `seit ${(T0 + at - state.suspectSince) / 60000} min`);
+});
+
+test('keine Entwarnung, solange der Akku weiter nicht entlädt (Anteil 70 %, Bezug hoch)', () => {
+  const state = createSetpointFollowState();
+  assert.deepEqual(feed(state, { toMs: OPTS.holdMs, stepMs: 5000, sample: STUCK }).map(([n]) => n), ['alarm']);
+  // Danach je 100 s: 70 s 1,8 kW Bezug, 30 s 100 W (unter minImportW) — Akku steht immer.
+  const from = OPTS.holdMs + 5000;
+  const transitions = feed(state, {
+    fromMs: from, toMs: from + 3 * OPTS.holdMs, stepMs: 5000,
+    sample: (t) => (((t - from) % 100000) < 70000 ? STUCK : { ...STUCK, netImportW: 100 })
+  });
+  assert.equal(transitions.some(([n]) => n === 'clear'), false);
+  assert.equal(state.active, true);
+});
+
+test('Lückengrenze wächst mit langsamem Poll-Takt (meterPollMs 60 s)', () => {
+  const opts = { ...OPTS, gapMs: 3 * 61000 };
+  const state = createSetpointFollowState();
+  const transitions = [];
+  for (let t = 0; t <= OPTS.holdMs + 2 * 61000; t += 61000) {
+    const { transition } = evaluateSetpointFollow(state, { nowMs: T0 + t, ...STUCK }, opts);
+    if (transition) transitions.push(transition);
+  }
+  assert.deepEqual(transitions, ['alarm']);
+});
+
+test('Entwarn-Protokoll trägt die Fensterwerte', () => {
+  const logs = [];
+  const state = {
+    meter: { ok: true },
+    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5 }
+  };
+  const watchdog = createSetpointFollowWatchdog({ state, getCfg: () => ({}), pushLog: (e, d) => logs.push([e, d]) });
+  const stamp = (t) => { state.victron.fieldUpdatedAt = { gridSetpointW: t, batteryPowerW: t, soc: t }; };
+  for (let t = 0; t <= OPTS.holdMs; t += 5000) { stamp(T0 + t); watchdog.tick(T0 + t); }
+  Object.assign(state.victron, { gridImportW: 0, gridExportW: 90, batteryPowerW: -1900 });
+  for (let t = OPTS.holdMs + 5000; t <= OPTS.holdMs + OPTS.clearMs + 10000; t += 5000) { stamp(T0 + t); watchdog.tick(T0 + t); }
+  const cleared = logs.find(([e]) => e === 'setpoint_followed_again');
+  assert.ok(cleared);
+  assert.equal(typeof cleared[1].sharePct, 'number');
+  assert.equal(typeof cleared[1].avgImportW, 'number');
 });

@@ -16,9 +16,12 @@
 //     Mindestgrenze (Reg. 2901) und aktiver SoC-Grenze des Victron (Reg. 2903),
 //   • keine Entlade-Sperre ist gesetzt (maxDischargeW) und DVhub hält den Akku
 //     nicht selbst gewollt fest (EOS „Akku halten“),
-//   • und das überwiegt ein ganzes Fenster von holdMs: mindestens minSuspectShare
-//     (80 %) der Messpunkte sind auffällig UND im Mittel des Fensters erreichen
-//     Netzbezug und Fehlbetrag (Bezug − Sollwert) die Schwellen.
+//   • und das prägt ein ganzes Fenster von holdMs: die Episode reicht bis an den
+//     Fensteranfang und liegt gerade an, mindestens minSuspectShare (80 %) der
+//     Messpunkte sind auffällig UND im Mittel des Fensters erreichen Netzbezug
+//     und Fehlbetrag (Bezug − Sollwert) die Schwellen. Entwarnung nach clearMs
+//     ohne auffälligen Punkt oder clearMs deutlicher Erholung im Fenster
+//     (Anteil < 40 % oder Mittel unter den Schwellen).
 //
 // FEHLALARM 02.11.2026 10:50 UTC: Sollwert −100 W, im 5-min-Mittel 29–124 W
 // Bezug, Akku lädt — der Wechselrichter folgte. Kurze Laststöße (evcc schaltet
@@ -51,7 +54,7 @@ export const HOLD_SIGNAL_MAX_AGE_MS = 120000;
 
 export const SETPOINT_FOLLOW_DEFAULTS = {
   enabled: true,
-  holdMs: 10 * 60000,      // so lange muss das Bild durchgehend stehen
+  holdMs: 10 * 60000,      // Fenster: so lange muss die Episode dauern (≥ minSuspectShare auffällig)
   clearMs: 2 * 60000,      // so lange muss es weg sein, bevor es als behoben gilt
   minImportW: 300,         // echter Netzbezug
   minShortfallW: 500,      // Netzbezug über dem Sollwert
@@ -91,7 +94,7 @@ export function createSetpointFollowState() {
     suspectSince: null, okSince: null, active: false, lastAlarmAt: null, last: null,
     // Fenster der beurteilbaren Messpunkte (holdMs) und der letzte Punkt davor
     // als Anker, damit die Abdeckung genau holdMs erreichen kann.
-    window: [], anchor: null, failingSince: null, share: null, avgImportW: null, avgShortfallW: null
+    window: [], anchor: null, recoveredSince: null, share: null, avgImportW: null, avgShortfallW: null
   };
 }
 
@@ -184,15 +187,19 @@ export function isRefusingDischarge(sample, opts) {
 }
 
 /**
- * Fenster-Bild: Anteil auffälliger Punkte und Mittelwerte über holdMs.
- * @returns {{covered: boolean, share: number, avgImportW: number, avgShortfallW: number, failing: boolean}}
+ * Fenster-Bild über holdMs: Anteil auffälliger Punkte, Mittelwerte und ob die
+ * Episode selbst schon holdMs dauert (der Punkt am Fensteranfang ist auffällig).
  */
 function windowVerdict(state, now, opts) {
   const pts = state.anchor ? [state.anchor, ...state.window] : state.window;
-  if (!pts.length) return { covered: false, share: 0, avgImportW: 0, avgShortfallW: 0, failing: false };
-  let bad = 0, imp = 0, short = 0;
+  const empty = { covered: false, share: 0, avgImportW: 0, avgShortfallW: 0, failing: false, recovered: false, firstSuspectAt: null };
+  if (!pts.length) return empty;
+  let bad = 0, imp = 0, short = 0, firstSuspectAt = null;
   for (const p of pts) {
-    if (p.refusing) bad += 1;
+    if (p.refusing) {
+      bad += 1;
+      if (firstSuspectAt == null) firstSuspectAt = p.t;
+    }
     imp += p.netImportW;
     short += p.netImportW - p.setpointW;
   }
@@ -200,10 +207,19 @@ function windowVerdict(state, now, opts) {
   const share = bad / n;
   const avgImportW = imp / n;
   const avgShortfallW = short / n;
-  const covered = (now - pts[0].t) >= opts.holdMs;
-  const failing = covered && share >= opts.minSuspectShare
+  const start = pts[0];
+  const covered = (now - start.t) >= opts.holdMs;
+  const current = pts[n - 1];
+  // Alarm: Fenster voll, die Episode reicht bis an den Fensteranfang, sie liegt
+  // gerade an, sie überwiegt, und auch im Mittel stimmen Bezug und Fehlbetrag.
+  const failing = covered && start.refusing && current.refusing
+    && share >= opts.minSuspectShare
     && avgImportW >= opts.minImportW && avgShortfallW >= opts.minShortfallW;
-  return { covered, share, avgImportW, avgShortfallW, failing };
+  // Erholt (Hysterese zur Entwarnung): deutlich weniger auffällig ODER im
+  // Mittel unter den Schwellen — nicht schon, wenn der Anteil knapp unter 80 % fällt.
+  const recovered = covered && (share < opts.minSuspectShare / 2
+    || avgImportW < opts.minImportW || avgShortfallW < opts.minShortfallW);
+  return { covered, share, avgImportW, avgShortfallW, failing, recovered, firstSuspectAt };
 }
 
 /**
@@ -221,15 +237,16 @@ export function evaluateSetpointFollow(state, sample, opts) {
   if (refusing === null || (refusing === false && dischargeExcuse(sample, opts))) return { state, transition };
 
   state.window ??= [];
-  // Lücke (länger als maxAgeMs ohne beurteilbaren Punkt, z. B. Wächter ruhte
-  // bei eingefrorenen Werten): die Vorgeschichte gilt nicht mehr.
+  // Lücke ohne beurteilbaren Punkt (länger als gapMs, Standard maxAgeMs bzw.
+  // 3 × Poll-Takt): die Vorgeschichte gilt nicht mehr.
+  const gapMs = Number(opts.gapMs) > 0 ? Number(opts.gapMs) : opts.maxAgeMs;
   const prev = state.window.length ? state.window[state.window.length - 1] : state.anchor;
-  if (prev && now - prev.t > opts.maxAgeMs) {
+  if (prev && now - prev.t > gapMs) {
     state.window = [];
     state.anchor = null;
-    state.suspectSince = null;
+    if (!state.active) state.suspectSince = null;
     state.okSince = null;
-    state.failingSince = null;
+    state.recoveredSince = null;
   }
   state.window.push({
     t: now, refusing,
@@ -240,7 +257,6 @@ export function evaluateSetpointFollow(state, sample, opts) {
 
   if (refusing) {
     state.okSince = null;
-    if (state.suspectSince == null) state.suspectSince = now;
     state.last = {
       setpointW: Number(sample.setpointW), netImportW: Number(sample.netImportW),
       batteryW: Number(sample.batteryW), soc: Number(sample.soc),
@@ -254,35 +270,39 @@ export function evaluateSetpointFollow(state, sample, opts) {
   state.share = verdict.share;
   state.avgImportW = verdict.avgImportW;
   state.avgShortfallW = verdict.avgShortfallW;
-  // „Trägt nicht mehr“ zählt nur bei voll abgedecktem Fenster — eine frische
-  // Lücke ist kein Beleg, dass der Speicher wieder folgt.
-  if (verdict.failing || !verdict.covered) state.failingSince = null;
-  else if (state.failingSince == null) state.failingSince = now;
 
   if (!state.active) {
+    // „Seit wann“: frühester auffälliger Punkt im Fenster, nicht eine alte Spitze.
+    state.suspectSince = verdict.firstSuspectAt;
     if (verdict.failing) {
       state.active = true;
       state.lastAlarmAt = now;
+      state.recoveredSince = null;
       transition = 'alarm';
-    } else if (!state.window.some((p) => p.refusing) && !state.anchor?.refusing) {
-      // Kein auffälliger Punkt mehr im Fenster: „seit wann“ zurücksetzen.
-      state.suspectSince = null;
     }
-  } else if (verdict.failing) {
-    if ((now - state.lastAlarmAt) >= opts.reminderMs) {
-      state.lastAlarmAt = now;
-      transition = 'reminder';
-    }
+    return { state, transition };
+  }
+
+  // Alarm aktiv: suspectSince bleibt beim Beginn der Episode stehen.
+  if (verdict.failing && (now - state.lastAlarmAt) >= opts.reminderMs) {
+    state.lastAlarmAt = now;
+    transition = 'reminder';
+  }
+  if (verdict.recovered) {
+    if (state.recoveredSince == null) state.recoveredSince = now;
   } else {
-    // Entwarnung: clearMs ohne jeden auffälligen Punkt, oder das Fenster-Bild
-    // trägt clearMs lang nicht mehr (kurze Zacken halten keinen Alarm offen).
-    const okLong = state.okSince != null && (now - state.okSince) >= opts.clearMs;
-    const notFailingLong = state.failingSince != null && (now - state.failingSince) >= opts.clearMs;
-    if (okLong || notFailingLong) {
-      transition = 'clear';
-      // Neues Fenster; der letzte auffällige Punkt bleibt fürs Protokoll stehen.
-      Object.assign(state, createSetpointFollowState(), { last: state.last });
-    }
+    state.recoveredSince = null;
+  }
+  // Entwarnung: clearMs ohne jeden auffälligen Punkt, oder das volle Fenster
+  // ist clearMs lang deutlich erholt (kurze Zacken halten keinen Alarm offen).
+  const okLong = state.okSince != null && (now - state.okSince) >= opts.clearMs;
+  const recoveredLong = state.recoveredSince != null && (now - state.recoveredSince) >= opts.clearMs;
+  if (okLong || recoveredLong) {
+    transition = 'clear';
+    // Neues Fenster; letzter auffälliger Punkt und Fensterwerte bleiben fürs Protokoll.
+    Object.assign(state, createSetpointFollowState(), {
+      last: state.last, share: state.share, avgImportW: state.avgImportW, avgShortfallW: state.avgShortfallW
+    });
   }
   return { state, transition };
 }
@@ -316,6 +336,10 @@ export function createSetpointFollowWatchdog(ctx) {
   function tick(nowMs = Date.now()) {
     const cfg = getCfg() || {};
     const opts = resolveSetpointFollowOptions(cfg);
+    // Lückengrenze: bei langsamem Poll-Takt (meterPollMs bis 60 s) liegen die
+    // Punkte selbst schon um maxAgeMs auseinander (Gegenprüfung 39bbcd6e).
+    const pollMs = Number(cfg.meterPollMs);
+    opts.gapMs = Math.max(opts.maxAgeMs, Number.isFinite(pollMs) && pollMs > 0 ? 3 * pollMs : 0);
     const v = state.victron || {};
     // Nur wo DVhub selbst steuert; bei eingefrorenen Live-Daten meldet der
     // Einfrier-Wächter, die Werte hier wären dann nicht belastbar.
