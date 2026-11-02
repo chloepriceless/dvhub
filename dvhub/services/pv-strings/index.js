@@ -27,8 +27,9 @@
  * buildPvnodeCsv(); hochladen muss der Betreiber selbst (keine API).
  */
 
+import { VRM_API_BASE as VRM_BASE, resolveVrmSiteId } from '../../vrm-site.js';
+
 export const PV_STRING_SERIES_PREFIX = 'pv_string_';
-const VRM_BASE = 'https://vrmapi.victronenergy.com';
 const SLOT_S = 300;
 const DAY_S = 86400;
 const COVERAGE_TAIL_DAYS = 3;
@@ -231,7 +232,20 @@ export function buildPvnodeCsv(rows, { timeZone = 'Europe/Berlin' } = {}) {
 function vrmCreds(cfg) {
   const hi = cfg?.telemetry?.historyImport || {};
   if (!hi.vrmPortalId || !hi.vrmToken) return null;
-  return { portalId: String(hi.vrmPortalId), token: String(hi.vrmToken) };
+  return { ref: String(hi.vrmPortalId), token: String(hi.vrmToken) };
+}
+
+/**
+ * GH #32: Das Feld darf Site-ID oder Portal-ID enthalten; die VRM-Endpunkte
+ * brauchen die Site-ID. → { ok, creds: { siteId, token } } oder { ok:false, error }.
+ */
+async function resolveVrmCreds(creds, fetchImpl) {
+  try {
+    const siteId = await resolveVrmSiteId({ ref: creds.ref, token: creds.token, fetchImpl });
+    return { ok: true, creds: { siteId, token: creds.token } };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 
 /**
@@ -244,7 +258,7 @@ export async function fetchVrmTrackers({ creds, instance, trackers, startS, endS
   q.set('instance', String(instance));
   q.set('start', String(startS));
   q.set('end', String(endS));
-  const url = `${VRM_BASE}/v2/installations/${encodeURIComponent(creds.portalId)}/widgets/Graph?${q}`;
+  const url = `${VRM_BASE}/v2/installations/${encodeURIComponent(creds.siteId)}/widgets/Graph?${q}`;
   let res;
   try {
     res = await fetchImpl(url, { headers: { accept: 'application/json', 'x-authorization': `Token ${creds.token}` }, signal: AbortSignal.timeout(30000) });
@@ -358,7 +372,7 @@ export async function discoverFroniusMppts({ host, fetchImpl = fetch }) {
  * PVe<n> = aktiv). Fuer den Vorschlag in der Oberflaeche.
  */
 export async function discoverVrmTrackers({ creds, fetchImpl = fetch }) {
-  const url = `${VRM_BASE}/v2/installations/${encodeURIComponent(creds.portalId)}/diagnostics?count=1000`;
+  const url = `${VRM_BASE}/v2/installations/${encodeURIComponent(creds.siteId)}/diagnostics?count=1000`;
   const res = await fetchImpl(url, { headers: { accept: 'application/json', 'x-authorization': `Token ${creds.token}` }, signal: AbortSignal.timeout(30000) });
   if (!res.ok) return { ok: false, error: `VRM HTTP ${res.status}` };
   const body = await res.json().catch(() => null);
@@ -407,7 +421,10 @@ export function createPvStringsService(ctx) {
   }
 
   /** VRM-Tracker fuer [startS, endS). Ein Abruf je Laderegler. */
-  async function syncVrm(sources, creds, startS, endS) {
+  async function syncVrm(sources, rawCreds, startS, endS) {
+    const resolved = await resolveVrmCreds(rawCreds, fetchImpl);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    const { creds } = resolved;
     const byInstance = new Map();
     for (const s of sources) {
       if (!byInstance.has(s.instance)) byInstance.set(s.instance, []);
@@ -755,7 +772,9 @@ export function createPvStringsService(ctx) {
   async function discover() {
     const creds = vrmCreds(getCfg());
     if (!creds) return { ok: false, error: 'VRM-Zugang fehlt (Integrationen → VRM Cloud)' };
-    return discoverVrmTrackers({ creds, fetchImpl });
+    const resolved = await resolveVrmCreds(creds, fetchImpl);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    return discoverVrmTrackers({ creds: resolved.creds, fetchImpl });
   }
 
   async function discoverFronius(host) {

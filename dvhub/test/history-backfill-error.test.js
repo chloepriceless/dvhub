@@ -77,3 +77,42 @@ describe('POST /api/history/backfill/vrm — Fehler aus dem Import werden benann
     assert.equal(res.status, 200);
   });
 });
+
+// GH #32 (stefan-12): „Historie importieren“ (/api/history/import) hatte kein
+// try/catch — ein Throw aus dem Import (VRM 404, Portal-ID nicht im Konto)
+// endete als generischer 500 „internal server error“. Jetzt wie beim
+// Nachimport: 502 mit Grund + Log history_import_finished status=error.
+describe('POST /api/history/import — Fehler aus dem Import werden benannt', () => {
+  it('Import wirft → 502 mit Fehlertext, kein generischer 500', async () => {
+    const { ctx, logs } = makeCtx({ importFromConfiguredSource: async () => { throw new Error('VRM-Portal-ID „deadbeef0000“ ist in diesem VRM-Konto nicht zu finden'); } });
+    const { srv, baseUrl } = await startHandler(ctx);
+    after(() => new Promise((r) => srv.close(r)));
+    const res = await fetch(baseUrl + '/api/history/import', { method: 'POST', headers, body: JSON.stringify({ start: '2026-01-01T00:00:00Z', end: '2026-01-02T00:00:00Z' }) });
+    assert.equal(res.status, 502);
+    const body = await res.json();
+    assert.equal(body.ok, false);
+    assert.match(body.error, /deadbeef0000/);
+    const fin = logs.find(l => l.event === 'history_import_finished');
+    assert.ok(fin, 'history_import_finished geloggt');
+    assert.equal(fin.details.status, 'error');
+    assert.match(fin.details.errorMessage, /nicht zu finden/);
+  });
+
+  it('Lücken-Import (mode=backfill) wirft → 502 mit Fehlertext', async () => {
+    const { ctx } = makeCtx({ backfillHistoryFromConfiguredSource: async () => { throw new Error('VRM stats request failed for venus: HTTP 404'); } });
+    const { srv, baseUrl } = await startHandler(ctx);
+    after(() => new Promise((r) => srv.close(r)));
+    const res = await fetch(baseUrl + '/api/history/import', { method: 'POST', headers, body: JSON.stringify({ mode: 'backfill' }) });
+    assert.equal(res.status, 502);
+    assert.match((await res.json()).error, /HTTP 404/);
+  });
+
+  it('Zeilen-Import (rows) wird abgewartet → 200 mit Ergebnis', async () => {
+    const { ctx } = makeCtx({ importSamples: async () => ({ ok: true, jobId: 7, importedRows: 1 }) });
+    const { srv, baseUrl } = await startHandler(ctx);
+    after(() => new Promise((r) => srv.close(r)));
+    const res = await fetch(baseUrl + '/api/history/import', { method: 'POST', headers, body: JSON.stringify({ rows: [{ seriesKey: 'pv_w', ts: '2026-01-01T00:00:00Z', value: 1 }] }) });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).importedRows, 1);
+  });
+});

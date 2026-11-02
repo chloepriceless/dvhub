@@ -7994,6 +7994,17 @@ export function createApiRoutes(ctx) {
       const auditActor = req.headers['x-actor'] || 'admin';
       const auditActorIp = deriveClientIp(req, getCfg());
       const auditSource = String(body.provider || getCfg().telemetry?.historyImport?.provider || 'vrm');
+      const historyImportFailed = (e) => {
+        const msg = e?.message || String(e);
+        pushLog('history_import_finished', {
+          actor: auditActor,
+          rowsWritten: 0,
+          durationMs: Date.now() - importStartedAt,
+          status: 'error',
+          errorMessage: msg
+        }, { ...actorContext(req), severity: 'error' });
+        return json(res, 502, { ok: false, error: `Historien-Import fehlgeschlagen: ${msg}` });
+      };
       if (body.mode === 'backfill') {
         ctx.assertValidRuntimeCommand('history_backfill', { mode: 'gap', requestedBy: 'history_import_endpoint' });
         pushLog('history_import_started', {
@@ -8002,7 +8013,14 @@ export function createApiRoutes(ctx) {
           range: { from: body.requestedFrom ?? body.start ?? null, to: body.requestedTo ?? body.end ?? null },
           source: auditSource
         }, { ...actorContext(req), severity: 'info' });
-        const result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
+        // GH #32: wie beim VRM-Nachimport (GH #16) — ein Throw (VRM 404, Portal-ID
+        // nicht im Konto, Token ungültig) wird mit Grund gemeldet statt als 500.
+        let result;
+        try {
+          result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
+        } catch (e) {
+          return historyImportFailed(e);
+        }
         const status = result?.ok ? 'ok' : 'error';
         const completionLevel = status === 'ok' ? 'info' : 'error';
         pushLog('history_import_finished', {
@@ -8027,19 +8045,26 @@ export function createApiRoutes(ctx) {
         range: { from: body.requestedFrom ?? body.start ?? null, to: body.requestedTo ?? body.end ?? null },
         source: provider
       }, { ...actorContext(req), severity: 'info' });
-      const result = Array.isArray(body.rows) && body.rows.length
-        ? ctx.historyImportManager.importSamples({
-          provider,
-          requestedFrom: body.requestedFrom ?? null,
-          requestedTo: body.requestedTo ?? null,
-          sourceAccount: body.sourceAccount ?? null,
-          rows: body.rows
-        })
-        : await ctx.historyImportManager.importFromConfiguredSource({
-          start: body.requestedFrom ?? body.start,
-          end: body.requestedTo ?? body.end,
-          interval: body.interval || '15mins'
-        });
+      let result;
+      try {
+        // Beide Zweige abwarten — importSamples ist async; ohne await lieferte
+        // der Zeilen-Import ein leeres 400 statt seines Ergebnisses.
+        result = Array.isArray(body.rows) && body.rows.length
+          ? await ctx.historyImportManager.importSamples({
+            provider,
+            requestedFrom: body.requestedFrom ?? null,
+            requestedTo: body.requestedTo ?? null,
+            sourceAccount: body.sourceAccount ?? null,
+            rows: body.rows
+          })
+          : await ctx.historyImportManager.importFromConfiguredSource({
+            start: body.requestedFrom ?? body.start,
+            end: body.requestedTo ?? body.end,
+            interval: body.interval || '15mins'
+          });
+      } catch (e) {
+        return historyImportFailed(e);
+      }
       const status = result?.ok ? 'ok' : 'error';
       const completionLevel = status === 'ok' ? 'info' : 'error';
       pushLog('history_import_finished', {

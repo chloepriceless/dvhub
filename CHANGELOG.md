@@ -78,6 +78,18 @@ verweist hierher.
   eigenes Relay lässt sich eintragen (`relay/README.md`, Docker-Compose mit TLS). Ab Werk aus; Entkoppeln trennt
   sofort. Protokoll: `docs/HANDY-APP-PROTOKOLL.md`.
 
+### Behoben
+
+- **VRM-Nachimport mit Portal-ID scheiterte mit „HTTP 404“ (#32).** Die VRM-Schnittstelle erwartet die numerische
+  Site-ID, DVhub setzte aber den Inhalt des Feldes unverändert ein — und Oberfläche und Hilfetext verlangten genau
+  die Hex-Portal-ID, die numerische Site-ID ließ sich gar nicht speichern. Jetzt heißt das Feld „VRM-Portal-ID oder
+  Site-ID“ und nimmt beides: eine Zahl wird wie bisher direkt genutzt (bestehende Einrichtungen ändern sich nicht),
+  eine Portal-ID löst DVhub mit dem Token über das VRM-Konto in die Site-ID auf und merkt sie sich. Gilt für Historie,
+  VRM-Prognose und PV-Strings. Steht die Portal-ID nicht im Konto, sagt die Meldung das (mit Anzahl der Anlagen im
+  Konto); ein 404 nennt die Site-ID. „Historie importieren“ meldet Fehler jetzt mit Grund statt „internal server
+  error“, der Import mitgelieferter Zeilen wird wieder abgewartet, und die VRM-Prognose schreibt einen
+  abgelehnten Abruf ins Log statt ihn still zu übergehen.
+
 ## [1.0.8] - 2026-10-21
 
 Release nach knapp zwei Wochen, 110 Commits seit 1.0.7. Überblick nach Themen — die Einzelheiten

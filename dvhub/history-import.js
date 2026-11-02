@@ -1,4 +1,5 @@
-const VRM_API_BASE = 'https://vrmapi.victronenergy.com';
+import { VRM_API_BASE, resolveVrmSiteId } from './vrm-site.js';
+
 const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
 const VRM_HISTORY_INTERVAL = '15mins';
 const VRM_SUPPORTED_INTERVALS = new Set(['15mins', 'hours', '2hours', 'days']);
@@ -1242,14 +1243,14 @@ function parseVrmSeries(type, records, resolutionSeconds) {
   return rows;
 }
 
-async function fetchVrmStats({ portalId, token, type, start, end, interval, fetchImpl }) {
+async function fetchVrmStats({ siteId, token, type, start, end, interval, fetchImpl }) {
   const params = new URLSearchParams({
     type,
     start: String(toEpochSeconds(start)),
     end: String(toEpochSeconds(end)),
     interval
   });
-  const url = `${VRM_API_BASE}/v2/installations/${encodeURIComponent(portalId)}/stats?${params.toString()}`;
+  const url = `${VRM_API_BASE}/v2/installations/${encodeURIComponent(siteId)}/stats?${params.toString()}`;
   const response = await fetchImpl(url, {
     headers: {
       accept: 'application/json',
@@ -1257,7 +1258,12 @@ async function fetchVrmStats({ portalId, token, type, start, end, interval, fetc
     }
   });
   if (!response.ok) {
-    const error = new Error(`VRM stats request failed for ${type}: HTTP ${response.status}`);
+    // GH #32: ein 404 heißt hier fast immer „diese Site-ID kennt VRM (für dieses
+    // Token) nicht“ — das gehört in die Meldung, nicht nur der Statuscode.
+    const hint = Number(response.status) === 404
+      ? ` (VRM kennt die Site-ID ${siteId} für dieses Token nicht — Site-ID bzw. Portal-ID unter Integrationen → VRM Cloud prüfen)`
+      : '';
+    const error = new Error(`VRM stats request failed for ${type}: HTTP ${response.status}${hint}`);
     error.status = Number(response.status);
     error.type = type;
     error.start = toIso(start);
@@ -1268,7 +1274,7 @@ async function fetchVrmStats({ portalId, token, type, start, end, interval, fetc
 }
 
 async function fetchVrmStatsWithRetry({
-  portalId,
+  siteId,
   token,
   type,
   start,
@@ -1283,7 +1289,7 @@ async function fetchVrmStatsWithRetry({
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       return await fetchVrmStats({
-        portalId,
+        siteId,
         token,
         type,
         start,
@@ -1430,10 +1436,18 @@ export function createHistoryImportManager({
     const rangeEndMs = new Date(normalizedEnd).getTime();
     const rawRows = [];
     const slotBuckets = new Map();
+    // GH #32: Feld darf Site-ID (Zahl) oder Portal-ID (Hex) enthalten; die
+    // Statistik braucht immer die Site-ID. Wirft mit klarer Meldung, wenn die
+    // Portal-ID nicht im Konto des Tokens ist.
+    const siteId = await resolveVrmSiteId({
+      ref: importConfig.vrmPortalId,
+      token: importConfig.vrmToken,
+      fetchImpl
+    });
 
     for (const type of VRM_HISTORY_TYPES) {
       const payload = await fetchVrmStatsWithRetry({
-        portalId: importConfig.vrmPortalId,
+        siteId,
         token: importConfig.vrmToken,
         type,
         start: normalizedStart,

@@ -444,9 +444,9 @@
             <span>VRM-History-Import aktiviert</span>
           </label>
           <label class="dv-field">
-            <span class="field-label">Portal-ID</span>
-            <input type="text" class="input mono" id="vrm-portalid" placeholder="z.B. abc123def456" autocomplete="off" spellcheck="false">
-            <span class="field-hint">VRM-Portal (vrm.victronenergy.com): <strong>Installationen &rarr; deine Anlage &rarr; Einstellungen &rarr; Allgemeines &rarr; &bdquo;VRM&nbsp;Portal-ID&ldquo;</strong>. Das ist ein Hex-String (z.&nbsp;B. <code>abc123def456</code>) &mdash; NICHT die kurze numerische Site-ID (z.&nbsp;B. 123456) aus der Adresszeile.</span>
+            <span class="field-label">VRM-Portal-ID oder Site-ID</span>
+            <input type="text" class="input mono" id="vrm-portalid" placeholder="z.B. 123456 oder abc123def456" autocomplete="off" spellcheck="false">
+            <span class="field-hint">Eines von beiden gen&uuml;gt: die <strong>Site-ID</strong> (Zahl, z.&nbsp;B. <code>123456</code>) aus der Adresszeile des VRM-Portals (<code>vrm.victronenergy.com/installation/<strong>123456</strong>/&hellip;</code>) <em>oder</em> die <strong>VRM-Portal-ID</strong> (12&nbsp;Zeichen, z.&nbsp;B. <code>abc123def456</code>) unter <strong>Installationen &rarr; deine Anlage &rarr; Einstellungen &rarr; Allgemeines</strong> bzw. am GX-Ger&auml;t unter <strong>Einstellungen &rarr; VRM-Onlineportal</strong>. Eine Portal-ID l&ouml;st DVhub mit dem Token selbst in die Site-ID auf.</span>
           </label>
           <label class="dv-field">
             <span class="field-label">Access-Token</span>
@@ -1843,10 +1843,10 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/pv-strings-drawer.js?v=20261005"></script>
+  <script src="/pv-strings-drawer.js?v=20261102-vrm-site"></script>
   <script src="/eebus-drawer.js?v=20261020-victron"></script>
   <script src="/p14a-drawer.js?v=20261002"></script>
   <script src="/ev-weekly-editor.js?v=20261027"></script>
-  <script src="/integrations.js?v=20261027-wochenplan"></script>
+  <script src="/integrations.js?v=20261102-vrm-site"></script>
 </body>
 </html>

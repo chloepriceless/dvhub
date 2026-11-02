@@ -8,8 +8,7 @@ import { buildPriceTelemetrySamples } from './telemetry-runtime.js';
 // rejections from the ticker, logs via configured logger + pushLog, and the
 // next tick still fires. Stops one-bad-fetch from disabling the loop forever.
 import { safeInterval } from './services/safe-async.js';
-
-const VRM_FORECAST_API = 'https://vrmapi.victronenergy.com';
+import { VRM_API_BASE as VRM_FORECAST_API, resolveVrmSiteId } from './vrm-site.js';
 
 export function createEpexFetcher(ctx) {
   const { state, getCfg, pushLog } = ctx;
@@ -168,10 +167,19 @@ export function createEpexFetcher(ctx) {
     if (!hi?.enabled || !hi?.vrmPortalId || !hi?.vrmToken) return;
     if (!ctx.telemetryStore?.writeForecastPoints) return;
 
-    const portalId = hi.vrmPortalId;
     const token = hi.vrmToken;
+    // GH #32: Feld darf Site-ID oder Portal-ID enthalten; /stats braucht die
+    // Site-ID. Bisher lief eine Portal-ID still in HTTP 404 (continue ohne Log).
+    let siteId;
+    try {
+      siteId = await resolveVrmSiteId({ ref: hi.vrmPortalId, token });
+    } catch (e) {
+      pushLog('vrm_forecast_error', { stage: 'site_id', error: e.message });
+      return;
+    }
     const now = new Date();
     const fetchedAt = now.toISOString();
+    let httpError = null;
 
     // Fetch today, tomorrow, and day after tomorrow
     const days = [0, 1, 2];
@@ -191,12 +199,15 @@ export function createEpexFetcher(ctx) {
           start: String(Math.floor(dayStart.getTime() / 1000)),
           end: String(Math.floor(dayEnd.getTime() / 1000))
         });
-        const url = `${VRM_FORECAST_API}/v2/installations/${encodeURIComponent(portalId)}/stats?${params}`;
+        const url = `${VRM_FORECAST_API}/v2/installations/${encodeURIComponent(siteId)}/stats?${params}`;
         const response = await fetch(url, {
           headers: { accept: 'application/json', 'x-authorization': `Token ${token}` },
           signal: AbortSignal.timeout(15000)
         });
-        if (!response.ok) continue;
+        if (!response.ok) {
+          httpError = httpError || { dayOffset, status: response.status };
+          continue;
+        }
         const data = await response.json();
         if (!data.success || !data.records) continue;
 
@@ -243,6 +254,10 @@ export function createEpexFetcher(ctx) {
 
     if (totalUpserted > 0) {
       pushLog('vrm_forecast_ok', { upserted: totalUpserted });
+    }
+    if (httpError) {
+      // Einmal je Lauf statt je Tag: welcher HTTP-Status kam zurück.
+      pushLog('vrm_forecast_error', { stage: 'stats', dayOffset: httpError.dayOffset, error: `VRM HTTP ${httpError.status}` });
     }
 
     // Store in state for quick API access

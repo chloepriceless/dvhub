@@ -835,7 +835,7 @@
         ];
       case 'vrm':
         return [
-          { label: 'Portal-ID', value: data.vrmPortalId || '—' },
+          { label: 'Portal-/Site-ID', value: data.vrmPortalId || '—' },
           { label: 'Token', value: fmtBool(data.vrmTokenSet, 'Hinterlegt', 'Fehlt') },
           { label: 'Import', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },
           { label: 'Last import', value: fmtRel(data.lastImportAt) }
@@ -921,7 +921,7 @@
       case 'vrm':
         // Phase 20-05: identity-header reflects only the Portal-ID (token always redacted).
         // esc() wraps it (T-20-05-07 XSS mitigation — Portal-ID is operator-typed string).
-        return data && data.vrmPortalId ? ('Portal ID: ' + esc(String(data.vrmPortalId))) : null;
+        return data && data.vrmPortalId ? ((/^\d+$/.test(String(data.vrmPortalId).trim()) ? 'Site-ID: ' : 'Portal-ID: ') + esc(String(data.vrmPortalId))) : null;
       case 'forecast-providers': {
         // Phase 20-06: identity-header counts configured providers; never echos
         // any apiKey or siteId (T-20-06-01 — booleans only).
@@ -2447,6 +2447,13 @@
       vrmToken: typedToken ? typedToken.trim() : '***'
     };
   }
+  // GH #32: Site-ID (nur Ziffern) oder VRM-Portal-ID (12+ Zeichen, alphanumerisch).
+  // Die Portal-ID löst der Server über /v2/users/me → installations auf (vrm-site.js).
+  function vrmRefLooksValid(v) {
+    var s = String(v == null ? '' : v).trim();
+    return /^\d{1,10}$/.test(s) || /^[A-Za-z0-9]{12,64}$/.test(s);
+  }
+
   async function saveVrmDrawer(buttonEl) {
     if (!buttonEl || buttonEl.disabled) return;
     // Pre-submit validation per UI-SPEC § Form-Validation Display.
@@ -2454,7 +2461,7 @@
     var body = collectVrmBody();
     var errors = [];
     if (body.enabled) {
-      if (!/^[A-Za-z0-9]{12,}$/.test(body.vrmPortalId)) errors.push('Portal-ID ist alphanumerisch und mindestens 12 Zeichen lang.');
+      if (!vrmRefLooksValid(body.vrmPortalId)) errors.push('Bitte die Site-ID (Zahl, z. B. 123456) oder die VRM-Portal-ID (12 Zeichen, z. B. abc123def456) eintragen.');
       // vrmToken: '***' (= keep existing) OK; non-empty must be ≥ 20 chars
       if (body.vrmToken !== '***' && body.vrmToken.length < 20) errors.push('Token muss mindestens 20 Zeichen haben.');
     }
