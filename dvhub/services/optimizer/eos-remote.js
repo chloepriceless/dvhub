@@ -28,7 +28,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { EOS_REMOTE_PROFILE, EOS_REMOTE_DEVICE_TEMPLATES } from './eos-remote-profile.js';
 import { EOS_RUN_TIMEOUT_MS } from './eos-run-trigger.js';
-import { classifyHost, isPrivateOrLoopbackHost } from '../host-address.js';
+import { classifyHost, isPrivateOrLoopbackHost, requestHostname } from '../host-address.js';
 
 // Die Pfade, die der Dienst annimmt — in der Reihenfolge, in der EOS sie
 // braucht. Alles andere (ems/interval, ems/mode, measurement/historic_hours,
@@ -196,7 +196,8 @@ function localEos(baseUrl, method, pathname, body, timeoutMs) {
     const url = new URL(pathname, baseUrl);
     const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
     const r = http.request({
-      hostname: url.hostname, port: url.port || 8503, path: url.pathname + url.search, method, timeout: timeoutMs,
+      // IPv6 aus new URL() steht in Klammern; http.request() will sie ohne.
+      hostname: requestHostname(url.hostname), port: url.port || 8503, path: url.pathname + url.search, method, timeout: timeoutMs,
       headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {},
     }, (res) => {
       const chunks = [];

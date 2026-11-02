@@ -321,6 +321,35 @@ describe('Fernbetrieb: EOS-Fassade', () => {
     assert.equal((await req(url, 'GET', '/v1/energy-management/plan')).json.id, 'local-plan');
     assert.equal(state.optimizer.eosRemote.fallback, 'local');
   });
+
+  // Gegenprüfung zu edeb17db (P3): new URL() liefert IPv6 in Klammern, http.request()
+  // braucht die Adresse ohne — sonst ENOTFOUND und der Rückfall scheitert.
+  it('lokaler Rückfall erreicht ein lokales EOS unter einer IPv6-Adresse ([::1])', async (t) => {
+    let optimized = null;
+    const srv = http.createServer(async (rq, rs) => {
+      const body = await readBody(rq);
+      const send = (s, o) => { rs.writeHead(s, { 'Content-Type': 'application/json' }); rs.end(o === undefined ? '' : JSON.stringify(o)); };
+      if (rq.method === 'PUT') return send(200, {});
+      if (rq.method === 'POST' && rq.url === '/v1/optimize') { optimized = body; return send(200, { start_solution: [6] }); }
+      if (rq.url === '/v1/energy-management/plan') return send(200, { id: 'v6-plan', instructions: [] });
+      if (rq.url === '/v1/energy-management/optimization/solution') return send(200, { solution: { data: {} } });
+      return send(404, {});
+    });
+    try {
+      await new Promise((resolve, reject) => { srv.once('error', reject); srv.listen(0, '::1', resolve); });
+    } catch {
+      t.skip('kein IPv6-Loopback auf diesem Rechner');
+      return;
+    }
+    closers.push(() => new Promise((r) => { srv.closeAllConnections?.(); srv.close(r); }));
+    const cfg = makeCfg('http://127.0.0.1:9', { token: 'dves_x', localFallback: true });
+    cfg.optimizer.eosProxy.url = `http://[::1]:${srv.address().port}`;
+    const { url } = await startFacade(cfg);
+    await req(url, 'PUT', '/v1/config/devices/batteries', { battery1: { device_id: 'battery1' } });
+    const r = await req(url, 'POST', '/v1/optimize', { soc: { battery1: 41 } });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual(optimized, { soc: { battery1: 41 } });
+  });
 });
 
 describe('Fernbetrieb: DVhubs EOS-Module sprechen unverändert mit der Fassade', () => {
