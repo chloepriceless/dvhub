@@ -88,7 +88,10 @@ verweist hierher.
   VRM-Prognose und PV-Strings. Steht die Portal-ID nicht im Konto, sagt die Meldung das (mit Anzahl der Anlagen im
   Konto); ein 404 nennt die Site-ID. „Historie importieren“ meldet Fehler jetzt mit Grund statt „internal server
   error“, der Import mitgelieferter Zeilen wird wieder abgewartet, und die VRM-Prognose schreibt einen
-  abgelehnten Abruf ins Log statt ihn still zu übergehen.
+  abgelehnten Abruf ins Log statt ihn still zu übergehen. VRM-Abrufe der Historie warten bei Netz- oder
+  Serverfehlern jetzt wirklich zwischen den Versuchen (die Pausen waren wirkungslos) und haben ein Zeitlimit;
+  scheitert der automatische Nachimport beim Start (z. B. Internet noch nicht da), steht das im Log
+  (`history_auto_backfill_error`) und DVhub versucht es nach 5, 15 und 60 Minuten erneut.
 
 - **Datenspende-Einrichtung: Fehler ohne erkennbaren Schritt (#31).** Scheiterte die Einrichtung (z. B. mit
   „400 bad_request: Invalid input format: null“), stand weder im Log noch in der Oberfläche, ob Konto, Haushalt,

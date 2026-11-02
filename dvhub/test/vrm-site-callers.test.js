@@ -299,3 +299,106 @@ test('History-Import: Statistik-Abruf einmal Netzfehler → wiederholt, Import g
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(waits.length, 1);
 });
+
+// Gegenprüfung 62848274 (P2): Abbruch beim Lesen der /stats-Antwort ist ein
+// Netzfehler und wird wiederholt.
+test('History-Import: /stats-Antwort bricht beim Lesen ab → wiederholt, Import gelingt', async () => {
+  const base = fakeVrm();
+  let broke = false;
+  const fetchImpl = async (url, opts) => {
+    const res = await base.fetchImpl(url, opts);
+    if (!broke && new URL(url).pathname.endsWith('/stats')) {
+      broke = true;
+      return { ok: true, status: 200, async json() { throw Object.assign(new TypeError('terminated'), { cause: { code: 'ECONNRESET' } }); } };
+    }
+    return res;
+  };
+  const manager = createHistoryImportManager({
+    store: fakeStore(), fetchImpl, waitImpl: async () => {},
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-body-reset' } },
+  });
+  const result = await manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+});
+
+// Gegenprüfung 62848274 (P3): /stats-Abruf hat ein Zeitlimit (signal).
+test('History-Import: /stats-Abruf mit Zeitlimit (AbortSignal)', async () => {
+  const base = fakeVrm();
+  const signals = [];
+  const fetchImpl = async (url, opts = {}) => {
+    if (new URL(url).pathname.endsWith('/stats')) signals.push(opts.signal);
+    return base.fetchImpl(url, opts);
+  };
+  const manager = createHistoryImportManager({
+    store: fakeStore(), fetchImpl, waitImpl: async () => {},
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-signal' } },
+  });
+  await manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' });
+  assert.equal(signals.length, 3);
+  assert.ok(signals.every((s) => s && typeof s.aborted === 'boolean'), 'jeder /stats-Abruf hat ein signal');
+});
+
+// Gegenprüfung 62848274 (P2): scheitert der automatische Nachimport beim Start
+// (z. B. WAN noch weg), wird das geloggt und bei vorübergehendem Fehler später
+// erneut versucht (höchstens autoRetryDelaysMs.length Mal).
+function gapStore() {
+  return { ...fakeStore(), async listImportJobRanges() { return []; } };
+}
+async function flush() { for (let i = 0; i < 20; i += 1) await new Promise((r) => setImmediate(r)); }
+
+test('Auto-Nachimport: Netzfehler → geloggt und neu geplant, dann erfolgreich', async () => {
+  const base = fakeVrm();
+  let netDown = true;
+  const fetchImpl = async (url, opts) => {
+    if (netDown && new URL(url).hostname === 'vrmapi.victronenergy.com') {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+    }
+    return base.fetchImpl(url, opts);
+  };
+  const logs = [];
+  const scheduled = [];
+  const manager = createHistoryImportManager({
+    store: gapStore(), fetchImpl, waitImpl: async () => {},
+    log: (event, details) => logs.push({ event, details }),
+    scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
+    autoRetryDelaysMs: [1000, 2000],
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-auto' } },
+  });
+  const r = await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  assert.equal(r.started, true);
+  await flush();
+  const err = logs.find((l) => l.event === 'history_auto_backfill_error');
+  assert.ok(err, JSON.stringify(logs));
+  assert.match(err.details.error, /ENOTFOUND/);
+  assert.equal(err.details.retryInMs, 1000);
+  assert.equal(scheduled.length, 1);
+  netDown = false;
+  scheduled[0].fn();
+  await flush();
+  assert.equal(scheduled.length, 1, 'nach Erfolg nichts mehr geplant');
+});
+
+test('Auto-Nachimport: dauerhafter Fehler (Portal-ID nicht im Konto) → geloggt, nicht neu geplant', async () => {
+  const { fetchImpl } = fakeVrm();
+  const logs = [];
+  const scheduled = [];
+  const manager = createHistoryImportManager({
+    store: gapStore(), fetchImpl, waitImpl: async () => {},
+    log: (event, details) => logs.push({ event, details }),
+    scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: 'deadbeef0002', vrmToken: 'tok-auto-2' } },
+  });
+  await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  await flush();
+  const err = logs.find((l) => l.event === 'history_auto_backfill_error');
+  assert.ok(err);
+  assert.equal(err.details.retryInMs, null);
+  assert.equal(scheduled.length, 0);
+});
+
+test('server.js gibt dem History-Import pushLog als log mit', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const call = src.match(/createHistoryImportManager\(\{[\s\S]*?\}\)/);
+  assert.match(call[0], /log:\s*pushLog/);
+});

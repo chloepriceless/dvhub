@@ -12,6 +12,11 @@ const VRM_FULL_BACKFILL_MAX_LOOKBACK_DAYS = 365;
 const VRM_BACKFILL_DELAY_MS = 500;
 const VRM_BACKFILL_RETRY_ATTEMPTS = 3;
 const VRM_BACKFILL_RETRY_DELAY_MS = 1000;
+// Zeitlimit je /stats-Abruf (Kopf + Körper); bis zu 7 Tage Viertelstundenwerte.
+const VRM_STATS_TIMEOUT_MS = 60_000;
+// Automatischer Nachimport beim Start: bei vorübergehendem Fehler (WAN noch weg,
+// 429, 5xx) später erneut versuchen.
+const VRM_AUTO_BACKFILL_RETRY_DELAYS_MS = [5 * 60_000, 15 * 60_000, 60 * 60_000];
 const VRM_COVERAGE_JOB_TYPES = [
   'vrm_history_import',
   'vrm_history_backfill',
@@ -1251,20 +1256,27 @@ async function fetchVrmStats({ siteId, token, type, start, end, interval, fetchI
     interval
   });
   const url = `${VRM_API_BASE}/v2/installations/${encodeURIComponent(siteId)}/stats?${params.toString()}`;
+  // Netzfehler (auch Abbruch beim Lesen, Zeitlimit) kennzeichnen, damit die
+  // Wiederholung greift (isTransientVrmError); kaputtes JSON nicht.
+  const networkError = (cause) => {
+    const reason = cause?.cause?.code || (cause?.name === 'TimeoutError' ? 'ETIMEDOUT' : (cause?.message || String(cause)));
+    const error = new Error(`VRM stats request failed for ${type}: ${reason}`);
+    error.code = 'network';
+    error.type = type;
+    return error;
+  };
   let response;
   try {
     response = await fetchImpl(url, {
       headers: {
         accept: 'application/json',
         'x-authorization': `Token ${token}`
-      }
+      },
+      // Gilt auch für das Lesen der Antwort.
+      signal: AbortSignal.timeout(VRM_STATS_TIMEOUT_MS)
     });
   } catch (cause) {
-    // Netzfehler kennzeichnen, damit die Wiederholung greift (isTransientVrmError).
-    const error = new Error(`VRM stats request failed for ${type}: ${cause?.cause?.code || cause?.message || cause}`);
-    error.code = 'network';
-    error.type = type;
-    throw error;
+    throw networkError(cause);
   }
   if (!response.ok) {
     // GH #32: ein 404 heißt hier fast immer „diese Site-ID kennt VRM (für dieses
@@ -1279,7 +1291,12 @@ async function fetchVrmStats({ siteId, token, type, start, end, interval, fetchI
     error.end = toIso(end);
     throw error;
   }
-  return response.json();
+  try {
+    return await response.json();
+  } catch (cause) {
+    if (cause instanceof SyntaxError) throw cause;
+    throw networkError(cause);
+  }
 }
 
 async function fetchVrmStatsWithRetry({
@@ -1350,7 +1367,10 @@ export function createHistoryImportManager({
   telemetryConfig = {},
   getEpexConfig = () => ({}),
   fetchImpl = globalThis.fetch,
-  waitImpl = async () => {}
+  waitImpl = async () => {},
+  log = () => {},
+  scheduleImpl = (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
+  autoRetryDelaysMs = VRM_AUTO_BACKFILL_RETRY_DELAYS_MS
 }) {
   let vrmBackfillPromise = null;
 
@@ -1838,12 +1858,28 @@ export function createHistoryImportManager({
         started: false
       };
     }
+    const autoAttempt = Number(options.autoAttempt || 0);
     vrmBackfillPromise = runVrmGapBackfill({ auto: true, ...options, now: autoNow })
-      .catch((error) => ({
-        ok: false,
-        auto: true,
-        error: error?.message || String(error)
-      }))
+      .catch((error) => {
+        // Vorher still verworfen: Fehler loggen und bei vorübergehendem Fehler
+        // (WAN beim Start noch weg, 429, 5xx) später erneut versuchen.
+        const retryInMs = isTransientVrmError(error) && autoAttempt < autoRetryDelaysMs.length
+          ? autoRetryDelaysMs[autoAttempt]
+          : null;
+        log('history_auto_backfill_error', {
+          error: error?.message || String(error),
+          attempt: autoAttempt + 1,
+          retryInMs
+        }, { severity: 'warn' });
+        if (retryInMs != null) {
+          scheduleImpl(() => {
+            startAutomaticBackfill({ ...options, autoAttempt: autoAttempt + 1 }).catch((e) => {
+              log('history_auto_backfill_error', { error: e?.message || String(e), attempt: autoAttempt + 2, retryInMs: null }, { severity: 'warn' });
+            });
+          }, retryInMs);
+        }
+        return { ok: false, auto: true, error: error?.message || String(error) };
+      })
       .finally(() => {
         vrmBackfillPromise = null;
       });

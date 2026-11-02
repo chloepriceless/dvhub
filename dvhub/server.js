@@ -2283,8 +2283,10 @@ const telemetryReady = (async () => {
     // Echte Pausen (vorher No-op, Gegenprüfung 6f05ca48): bis zu 3 Versuche mit
     // 1 s/2 s Abstand bei 429/5xx/Netzfehler (VRM-Auflösung und /stats) und
     // Schonpause zwischen Nachimport-Fenstern. Längere WAN-Ausfälle beim Start
-    // überbrückt das nicht.
-    waitImpl: sleepMs
+    // überbrückt das nicht — dafür plant der Auto-Nachimport bei solchen
+    // Fehlern selbst neu (5/15/60 min) und loggt history_auto_backfill_error.
+    waitImpl: sleepMs,
+    log: pushLog
   }) : null;
   ctx.historyImportManager = historyImportManager;
   if (IS_RUNTIME_PROCESS && historyImportManager) historyImportManager.startAutomaticBackfill();
