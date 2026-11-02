@@ -78,6 +78,16 @@ verweist hierher.
   eigenes Relay lässt sich eintragen (`relay/README.md`, Docker-Compose mit TLS). Ab Werk aus; Entkoppeln trennt
   sofort. Protokoll: `docs/HANDY-APP-PROTOKOLL.md`.
 
+- **Entlade-Wächter in den Einstellungen, für alle Hersteller**: Einstellungen → Meine Anlage → „Entlade-Wächter“
+  (Standard an) schaltet die Meldung „Speicher entlädt nicht“ ein und aus; unter „Erweitert“ stehen Dauer bis zur
+  Meldung (Minuten), Mindest-Netzbezug und Mindest-Abweichung vom Sollwert (W). Der Wächter meldet nur (Protokoll,
+  Notifications, Remote-Überwachung) und steuert nichts. Die Einstellung liegt jetzt herstellerneutral unter
+  `monitoring.setpointWatchdog`; ein vorhandenes `victron.setpointWatchdog` zieht beim Laden dorthin um — vorher kam
+  es unter einem aktiven Herstellerprofil gar nicht an. Er arbeitet bei Victron und Universal MQTT (Bridge und
+  DVhub-Schema); Profile ohne Netz-Sollwert (Fronius, Deye) bleiben still. Victron-Register (aktive SoC-Grenze 2903,
+  Entladegrenze 2720) liest er nur am Victron; meldet eine MQTT-Quelle keinen Mindest-Ladestand, gilt DVhubs
+  „Untergrenze Sicherheit“.
+
 ### Behoben
 
 - **Entlade-Wächter ohne Fehlalarme bei „Akku halten“, an der SoC-Grenze und bei Laststößen.** Die Meldung
@@ -89,7 +99,7 @@ verweist hierher.
   Mittel Netzbezug über dem Sollwert) und gerade anliegt. Bei Verdacht liest er die Entlade-Sperre (Register 2704)
   selbst nach, auch nach einem Neustart. Während eines gewollten Haltens gibt es keine falsche Entwarnung mehr; „entlädt
   wieder“ meldet er nur, wenn der Akku wirklich entladen hat. Das Protokoll nennt Anteil und Mittelwerte. Neuer Schalter
-  `victron.setpointWatchdog.minSuspectShare` (Standard 0,8).
+  `monitoring.setpointWatchdog.minSuspectShare` (Standard 0,8).
 
 ## [1.0.8] - 2026-10-21
 
