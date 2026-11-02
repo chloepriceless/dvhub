@@ -698,8 +698,6 @@ export function createAdminRoutes(deps) {
           const appDir = ctx.getAppDir();
           let gitOutput = '';
           const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
-          const stashResult = await stashForUpdate();
-          const hasStash = !stashResult.stdout.includes('No local changes');
           const currentVersionNow = ctx.getAppVersion?.()?.version || ctx.getAppVersion?.()?.versionLabel || '0.0.0';
           const originMainVersion = async () => {
             const relAppDir = path.relative(repoRoot, appDir).split(path.sep).join('/');
@@ -707,24 +705,41 @@ export function createAdminRoutes(deps) {
             const mainPkg = await execFileAsync('git', ['show', `origin/main:${pkgGitPath}`], { cwd: repoRoot, timeout: 5000 }).catch(() => ({ stdout: '' }));
             try { return JSON.parse(mainPkg.stdout || '{}').version || null; } catch { return null; }
           };
+          // Gegenprüfung 9b949e21 (P2): auch bei gleicher Versionsnummer ist es
+          // ein Rückschritt, wenn der laufende Stand Commits hat, die das Ziel
+          // nicht enthält (dev-Box mit Fixes → stable-Tag derselben Version).
+          const assertTargetContainsHead = async (ref) => {
+            if (allowDowngrade) return;
+            try {
+              await execFileAsync('git', ['merge-base', '--is-ancestor', 'HEAD', ref], { cwd: repoRoot, timeout: 5000 });
+            } catch {
+              const n = await execFileAsync('git', ['rev-list', '--count', `${ref}..HEAD`], { cwd: repoRoot, timeout: 5000 })
+                .then((r) => Number(String(r.stdout).trim()) || null).catch(() => null);
+              const e = new Error(`downgrade_blocked: ${ref} enthält ${n ?? 'einige'} Commits des laufenden Stands nicht`);
+              e.code = 'downgrade_blocked';
+              throw e;
+            }
+          };
+          // --- git fetch + Ziel bestimmen + Sperre (Gegenprüfung 9b949e21, P3:
+          // vor dem Stash — ein gesperrter Wechsel lässt den Arbeitsbaum unberührt) ---
+          let latestTag = null;
           try {
-            // --- git fetch + Ziel bestimmen + Sperre (Arbeitsbaum noch unberührt) ---
             await updateHelper(['fetch']);
-            let latestTag = null;
             if (channel === 'stable') {
               // T-UPDATE-ANCHOR: only tags reachable from origin/main are release anchors.
               latestTag = selectLatestSemverTag(await listReachableReleaseTags(repoRoot));
             }
-            try {
-              if (latestTag) assertNoDowngrade(latestTag, currentVersionNow, { allowDowngrade, label: 'latest release tag' });
-              else assertNoDowngrade(await originMainVersion(), currentVersionNow, { allowDowngrade, label: 'origin/main' });
-            } catch (guardErr) {
-              if (hasStash) await updateHelper(['stash-pop']).catch(() => {});
-              pushLog('update_channel_rejected', { channel, reason: guardErr.code || guardErr.message, current: currentVersionNow, target: latestTag || 'origin/main' });
-              return json(res, 400, { ok: false, error: guardErr.code || 'update_aborted', detail: guardErr.message, current: currentVersionNow, target: latestTag || 'origin/main' });
-            }
-            ctx.saveAndApplyConfig(next);
-
+            if (latestTag) assertNoDowngrade(latestTag, currentVersionNow, { allowDowngrade, label: 'latest release tag' });
+            else assertNoDowngrade(await originMainVersion(), currentVersionNow, { allowDowngrade, label: 'origin/main' });
+            await assertTargetContainsHead(latestTag || 'origin/main');
+          } catch (guardErr) {
+            if (guardErr.code !== 'downgrade_blocked' && guardErr.code !== 'version_undeterminable') throw guardErr;
+            pushLog('update_channel_rejected', { channel, reason: guardErr.code, current: currentVersionNow, target: latestTag || 'origin/main' });
+            return json(res, 400, { ok: false, error: guardErr.code, detail: guardErr.message, current: currentVersionNow, target: latestTag || 'origin/main' });
+          }
+          const stashResult = await stashForUpdate();
+          const hasStash = !stashResult.stdout.includes('No local changes');
+          try {
             if (latestTag) {
               await updateHelper(['checkout-tag', latestTag]);
               gitOutput = `Switched to stable: ${latestTag}`;
@@ -744,6 +759,9 @@ export function createAdminRoutes(deps) {
             // --- npm install + syntax check ---
             await npmInstallOmitDev();
             await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
+            // Erst jetzt speichern (Gegenprüfung 9b949e21, P2): scheitert der
+            // Wechsel, bleibt der bisherige Kanal eingestellt.
+            ctx.saveAndApplyConfig(next);
           } catch (switchErr) {
             pushLog('channel_switch_rollback', { reason: switchErr.message, rollbackTo: rollbackRev.slice(0, 7) });
             await updateHelper(['checkout-commit', rollbackRev]);

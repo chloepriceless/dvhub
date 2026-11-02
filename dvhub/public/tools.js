@@ -811,7 +811,9 @@ async function switchUpdateChannel(newChannel) {
     if (!data.ok && data.error === 'downgrade_blocked') {
       const target = String(data.target || '').replace(/^origin\/main$/, 'main-Branch');
       if (await window.dvConfirm(
-        `Der Wechsel zu ${label} wäre ein Rückschritt: installiert ist ${data.current}, Ziel ist ${target}.\n\nTrotzdem auf die ältere Fassung wechseln?`,
+        `Der Wechsel zu ${label} wäre ein Rückschritt: installiert ist ${data.current}, Ziel ist ${target}.`
+        + (/Commits/.test(String(data.detail || '')) ? `\n${String(data.detail).replace(/^downgrade_blocked:\s*/, '')} — diese Änderungen gingen verloren.` : '')
+        + '\n\nTrotzdem auf die ältere Fassung wechseln?',
         { title: 'Ältere Fassung installieren?', okLabel: 'Zurückstufen', variant: 'danger' }
       )) {
         setBanner('updateBanner', `Wechsel zu ${label} — bitte warten...`, 'info');

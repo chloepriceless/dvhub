@@ -17,7 +17,7 @@ import path from 'node:path';
 import { createAdminRoutes } from '../routes/admin-routes.js';
 import { SEMVER_TAG, GIT_SHA_REF, compareSemverTag, selectLatestSemverTag, assertNoDowngrade } from '../routes-api.js';
 
-export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '9.9.9', tags = 'v9.9.9', stashBusy = false } = {}) {
+export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '9.9.9', tags = 'v9.9.9', stashBusy = false, notAncestor = false, checkoutFails = false } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-selfupdate-'));
   const appDir = path.join(repoRoot, 'dvhub');
   fs.mkdirSync(appDir);
@@ -29,6 +29,9 @@ export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '
     const a = args.join(' ');
     if (cmd === 'git' && a.startsWith('rev-parse')) return { stdout: 'a'.repeat(40) + '\n', stderr: '' };
     if (cmd === 'git' && a.startsWith('show origin/main:')) return { stdout: JSON.stringify({ version: mainVersion }), stderr: '' };
+    if (cmd === 'git' && a.startsWith('merge-base --is-ancestor HEAD') && notAncestor) { const e = new Error('not ancestor'); e.code = 1; throw e; }
+    if (cmd === 'git' && a.startsWith('rev-list --count')) return { stdout: '7\n', stderr: '' };
+    if (cmd === 'sudo' && checkoutFails && args.some((x) => /^checkout-(tag|main)$/.test(x))) { const e = new Error('dvhub-update: checkout abgelehnt'); e.code = 3; throw e; }
     if (cmd === 'sudo' && args.includes('stash') && stashBusy) {
       const e = new Error('dvhub-update: ein anderer Update- oder npm-Lauf läuft bereits'); e.code = 4; throw e;
     }
@@ -173,6 +176,32 @@ describe('R-0003: Kanalwechsel stuft nicht still zurück', () => {
       const r = await h.post('/api/admin/update/channel', { channel: 'stable' });
       assert.equal(r.code, 200, JSON.stringify(r.payload));
       assert.ok(h.calls.includes('<save>'));
+    } finally { h.cleanup(); }
+  });
+});
+
+// Gegenprüfung 9b949e21: (P2) gleiche Versionsnummer, aber der Wechsel ließe
+// Commits fallen (dev-Box mit Fixes → stable-Tag) — auch das ist ein
+// Rückschritt. (P2) Ein gescheiterter Wechsel ließ den neuen Kanal gespeichert.
+// (P3) Gesperrt wird vor dem Stash, der Arbeitsbaum bleibt wirklich unberührt.
+describe('Gegenprüfung 9b949e21: Kanalwechsel', () => {
+  it('gleiche Version, aber HEAD nicht im Ziel enthalten → 400 downgrade_blocked, kein Stash', async () => {
+    const h = makeHarness({ tags: 'v1.0.0', notAncestor: true });
+    try {
+      const r = await h.post('/api/admin/update/channel', { channel: 'stable' });
+      assert.equal(r.code, 400, JSON.stringify(r.payload));
+      assert.equal(r.payload.error, 'downgrade_blocked');
+      assert.match(r.payload.detail, /7 Commits/);
+      assert.ok(!h.calls.some((c) => / stash$/.test(c)), h.calls.join('\n'));
+      assert.ok(!h.calls.includes('<save>'));
+    } finally { h.cleanup(); }
+  });
+  it('gescheiterter Checkout → Kanal bleibt ungespeichert', async () => {
+    const h = makeHarness({ tags: 'v1.0.0', checkoutFails: true });
+    try {
+      const r = await h.post('/api/admin/update/channel', { channel: 'stable' });
+      assert.equal(r.code, 500, JSON.stringify(r.payload));
+      assert.ok(!h.calls.includes('<save>'), h.calls.join('\n'));
     } finally { h.cleanup(); }
   });
 });
