@@ -33,17 +33,18 @@
 // zählen jetzt (a) eine aktive Halteregel der eigenen Steuerung und (b) die
 // aktive SoC-Grenze wie eine gesetzte Entlade-Sperre.
 
+import { knownMaxDischargeW } from './peak-shaving/index.js';
+
 // So alt darf der Eintrag der Auswertung (state.schedule.active) höchstens
-// sein, damit eine Halteregel als „aktiv“ gilt. Die Auswertung frischt ihn
-// jeden Takt auf (Standard 15 s); steht sie, entschuldigt ein alter Eintrag nichts.
+// sein, damit eine Halteregel als „aktiv“ gilt — mindestens, bei langsamerem
+// Takt drei Takte (schedule.evaluateMs). Die Auswertung frischt ihn jeden Takt
+// auf (Standard 15 s); steht sie, entschuldigt ein alter Eintrag nichts.
 export const HOLD_SIGNAL_MAX_AGE_MS = 120000;
 
 // Steuerquellen, mit denen DVhub den Akku bewusst nicht entladen lässt. Nur
 // eos_grid_hold gehört dazu: die Regel deckt die Last aus dem Netz, damit der
 // Akku stehen bleibt (schedule-eval „EOS Akku halten“).
 export const DISCHARGE_HOLD_SOURCES = new Set(['eos_grid_hold']);
-
-import { knownMaxDischargeW } from './peak-shaving/index.js';
 
 export const SETPOINT_FOLLOW_DEFAULTS = {
   enabled: true,
@@ -105,11 +106,13 @@ export function dischargeFloorPct(sample, opts) {
  * Grundlage ist der Eintrag, den die Auswertung zuletzt für gridSetpointW
  * geschrieben bzw. bestätigt hat (schedule-eval: state.schedule.active).
  */
-export function activeDischargeHold(state, nowMs = Date.now()) {
+export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}) {
   const active = state?.schedule?.active?.gridSetpointW;
   if (!active || !DISCHARGE_HOLD_SOURCES.has(String(active.source))) return null;
   const at = Number(active.at);
-  if (!(at > 0) || nowMs - at > HOLD_SIGNAL_MAX_AGE_MS || at - nowMs > HOLD_SIGNAL_MAX_AGE_MS) return null;
+  const evaluateMs = Number(cfg?.schedule?.evaluateMs);
+  const maxAgeMs = Math.max(HOLD_SIGNAL_MAX_AGE_MS, Number.isFinite(evaluateMs) && evaluateMs > 0 ? 3 * evaluateMs : 0);
+  if (!(at > 0) || nowMs - at > maxAgeMs || at - nowMs > maxAgeMs) return null;
   return String(active.source);
 }
 
@@ -202,7 +205,8 @@ export function createSetpointFollowWatchdog(ctx) {
 
   /** Ein Poll-Zyklus. Wirft nie. */
   function tick(nowMs = Date.now()) {
-    const opts = resolveSetpointFollowOptions(getCfg() || {});
+    const cfg = getCfg() || {};
+    const opts = resolveSetpointFollowOptions(cfg);
     const v = state.victron || {};
     // Nur wo DVhub selbst steuert; bei eingefrorenen Live-Daten meldet der
     // Einfrier-Wächter, die Werte hier wären dann nicht belastbar.
@@ -233,10 +237,10 @@ export function createSetpointFollowWatchdog(ctx) {
       // Aktive SoC-Grenze (Reg. 2903) nur frisch: sie wandert mit BatteryLife,
       // ein alter hoher Wert würde echte Alarme verschlucken.
       activeSocLimitPct: live('activeSocLimitPct'),
-      holdReason: activeDischargeHold(state, nowMs),
+      holdReason: activeDischargeHold(state, nowMs, cfg),
       // Entlade-Sperre (Reg. 2704): Rücklesung, sonst DVhubs eigener letzter
       // Schreibwert — das Victron-Profil liest 2704 nicht in jedem Setup zurück.
-      maxDischargeW: knownMaxDischargeW(state, getCfg() || {}, nowMs)?.value ?? null
+      maxDischargeW: knownMaxDischargeW(state, cfg, nowMs)?.value ?? null
     }, opts);
 
     const last = wstate.last || {};

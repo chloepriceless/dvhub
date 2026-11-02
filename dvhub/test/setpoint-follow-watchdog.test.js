@@ -304,3 +304,18 @@ test('Entlade-Sperre ohne Rücklese-Register: DVhubs eigener Schreibwert 2704 = 
   }
   assert.equal(sent.length, 0);
 });
+
+test('Halte-Signal: Frischegrenze wächst mit einem langsamen Auswertungstakt', async () => {
+  const { activeDischargeHold, HOLD_SIGNAL_MAX_AGE_MS } = await import('../services/setpoint-follow-watchdog.js');
+  const state = { schedule: { active: { gridSetpointW: { value: 0, source: 'eos_grid_hold', at: T0 } } } };
+  // Standardtakt (15 s): 200 s alt ist zu alt.
+  assert.equal(activeDischargeHold(state, T0 + 200000), null);
+  assert.equal(activeDischargeHold(state, T0 + HOLD_SIGNAL_MAX_AGE_MS), 'eos_grid_hold');
+  // Takt 5 min: der Eintrag ist zwischen zwei Takten bis zu 5 min alt.
+  const slow = { schedule: { evaluateMs: 300000 } };
+  assert.equal(activeDischargeHold(state, T0 + 200000, slow), 'eos_grid_hold');
+  assert.equal(activeDischargeHold(state, T0 + 3 * 300000 + 1000, slow), null);
+  // Andere Quelle: nie ein Halten.
+  const other = { schedule: { active: { gridSetpointW: { value: -100, source: 'default', at: T0 } } } };
+  assert.equal(activeDischargeHold(other, T0), null);
+});
