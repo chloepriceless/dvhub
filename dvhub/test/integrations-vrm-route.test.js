@@ -244,3 +244,14 @@ describe('GH #32: VRM-Feld nimmt Portal-ID oder Site-ID', () => {
     assert.match(m[2], /Portal-ID/);
   });
 });
+
+describe('GH #32: Kopfzeile benennt Site-ID wie der Server', () => {
+  it('nur 1–10 Ziffern gelten als Site-ID (12 Ziffern = Portal-ID, wie vrm-site.js)', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '..', 'public', 'integrations.js'), 'utf8');
+    const m = src.match(/return data && data\.vrmPortalId \? \(\((\/[^/]+\/)\.test/);
+    assert.ok(m, 'Kopfzeilen-Regel gefunden');
+    const re = new Function(`return ${m[1]};`)();
+    assert.equal(re.test('123456'), true);
+    assert.equal(re.test('123456789012'), false);
+  });
+});

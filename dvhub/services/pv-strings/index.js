@@ -244,7 +244,8 @@ async function resolveVrmCreds(creds, fetchImpl) {
     const siteId = await resolveVrmSiteId({ ref: creds.ref, token: creds.token, fetchImpl });
     return { ok: true, creds: { siteId, token: creds.token } };
   } catch (e) {
-    return { ok: false, error: e.message };
+    // status (z. B. 429) mitgeben: das Nachladen wartet dann länger.
+    return { ok: false, error: e.message, status: e.status || undefined };
   }
 }
 
@@ -423,7 +424,7 @@ export function createPvStringsService(ctx) {
   /** VRM-Tracker fuer [startS, endS). Ein Abruf je Laderegler. */
   async function syncVrm(sources, rawCreds, startS, endS) {
     const resolved = await resolveVrmCreds(rawCreds, fetchImpl);
-    if (!resolved.ok) return { ok: false, error: resolved.error };
+    if (!resolved.ok) return { ok: false, error: resolved.error, status: resolved.status };
     const { creds } = resolved;
     const byInstance = new Map();
     for (const s of sources) {

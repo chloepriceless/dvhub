@@ -96,6 +96,9 @@ describe('POST /api/history/import — Fehler aus dem Import werden benannt', ()
     assert.ok(fin, 'history_import_finished geloggt');
     assert.equal(fin.details.status, 'error');
     assert.match(fin.details.errorMessage, /nicht zu finden/);
+    // Gegenprüfung c21c131f (P3): bei einem Abbruch mittendrin ist unbekannt,
+    // wie viele Zeilen schon geschrieben sind — nicht 0 behaupten.
+    assert.equal(fin.details.rowsWritten, null);
   });
 
   it('Lücken-Import (mode=backfill) wirft → 502 mit Fehlertext', async () => {

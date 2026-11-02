@@ -921,7 +921,7 @@
       case 'vrm':
         // Phase 20-05: identity-header reflects only the Portal-ID (token always redacted).
         // esc() wraps it (T-20-05-07 XSS mitigation — Portal-ID is operator-typed string).
-        return data && data.vrmPortalId ? ((/^\d+$/.test(String(data.vrmPortalId).trim()) ? 'Site-ID: ' : 'Portal-ID: ') + esc(String(data.vrmPortalId))) : null;
+        return data && data.vrmPortalId ? ((/^\d{1,10}$/.test(String(data.vrmPortalId).trim()) ? 'Site-ID: ' : 'Portal-ID: ') + esc(String(data.vrmPortalId))) : null;
       case 'forecast-providers': {
         // Phase 20-06: identity-header counts configured providers; never echos
         // any apiKey or siteId (T-20-06-01 — booleans only).

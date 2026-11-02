@@ -16,11 +16,17 @@ const SITE_ID = 123456;
 // VRM-Stub: Konto mit zwei Anlagen; alles unter /v2/installations/<idSite>/
 // antwortet nur für die numerische Site-ID, eine Portal-ID dort ergibt 404
 // (wie die echte API).
-function fakeVrm() {
+function fakeVrm({ meFailures = [], statsStatus = null } = {}) {
   const calls = [];
+  const fails = [...meFailures];
   const fetchImpl = async (url) => {
     const u = new URL(url);
     calls.push(u.pathname);
+    if (u.pathname === '/v2/users/me' && fails.length) {
+      const status = fails.shift();
+      return { ok: false, status, async json() { return { success: false }; } };
+    }
+    if (statsStatus && u.pathname.endsWith('/stats')) return { ok: false, status: statsStatus, async json() { return { success: false }; } };
     const ok = (body) => ({ ok: true, status: 200, async json() { return body; }, async text() { return JSON.stringify(body); } });
     if (u.hostname !== 'vrmapi.victronenergy.com') return ok({ unix_seconds: [], price: [] });
     if (u.pathname === '/v2/users/me') return ok({ success: true, user: { id: 42 } });
@@ -164,4 +170,72 @@ test('PV-Strings: Portal-ID nicht im Konto → Fehlertext statt Absturz', async 
   const r = await svc.discover();
   assert.equal(r.ok, false);
   assert.match(r.error, /deadbeef0000/);
+});
+
+// Gegenprüfung c21c131f (P3): die Auflösung wird bei 429/5xx wiederholt wie die
+// Statistik-Abrufe selbst — sonst verliert ein einmaliger VRM-Schluckauf beim
+// Start den automatischen Nachimport.
+test('History-Import: users/me einmal 503 → wiederholt, Import gelingt', async () => {
+  const { fetchImpl, calls } = fakeVrm({ meFailures: [503] });
+  const waits = [];
+  const manager = createHistoryImportManager({
+    store: fakeStore(),
+    fetchImpl,
+    waitImpl: async (ms) => { waits.push(ms); },
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: PORTAL_ID, vrmToken: 'tok-history-retry' } },
+  });
+  const result = await manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(calls.filter((p) => p === '/v2/users/me').length, 2);
+  assert.equal(waits.length, 1);
+});
+
+test('History-Import: Portal-ID nicht im Konto → keine Wiederholung', async () => {
+  const { fetchImpl, calls } = fakeVrm();
+  const manager = createHistoryImportManager({
+    store: fakeStore(),
+    fetchImpl,
+    waitImpl: async () => {},
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: 'deadbeef0001', vrmToken: 'tok-history-noretry' } },
+  });
+  await assert.rejects(manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' }));
+  assert.equal(calls.filter((p) => p === '/v2/users/me').length, 1);
+});
+
+test('PV-Strings: 429 bei der Auflösung → Status 429 kommt beim Nachladen an', async () => {
+  const { fetchImpl } = fakeVrm({ meFailures: [429] });
+  const svc = createPvStringsService({
+    getCfg: () => ({
+      telemetry: { historyImport: { vrmPortalId: PORTAL_ID, vrmToken: 'tok-pvs-429' } },
+      pvStrings: { enabled: true, sources: [{ id: 's1', label: 'S1', kind: 'victron_vrm_tracker', instance: 0, tracker: 0 }] },
+    }),
+    telemetryStore: { async writeSamples() {} },
+    fetchImpl,
+    sleep: async () => {},
+  });
+  const r = await svc.syncWindow(1_700_000_000, 1_700_003_600);
+  assert.equal(r.bySource.vrm.ok, false);
+  assert.equal(r.bySource.vrm.status, 429);
+});
+
+test('VRM-Prognose: abgelehnter Statistik-Abruf (404) wird mit Stufe und Status geloggt', async () => {
+  const { fetchImpl } = fakeVrm({ statsStatus: 404 });
+  const logs = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try {
+    const fetcher = createEpexFetcher({
+      state: {},
+      getCfg: () => ({ telemetry: { historyImport: { enabled: true, vrmPortalId: String(SITE_ID), vrmToken: 'tok-forecast-404' } } }),
+      pushLog: (event, details) => logs.push({ event, details }),
+      telemetryStore: { async writeForecastPoints(p) { return p.length; } },
+    });
+    await fetcher.fetchVrmForecast();
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+  const errs = logs.filter((l) => l.event === 'vrm_forecast_error');
+  assert.equal(errs.length, 1, 'einmal je Lauf, nicht je Tag');
+  assert.equal(errs[0].details.stage, 'stats');
+  assert.match(errs[0].details.error, /HTTP 404/);
 });

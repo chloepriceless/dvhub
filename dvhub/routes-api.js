@@ -8010,7 +8010,8 @@ export function createApiRoutes(ctx) {
         const msg = e?.message || String(e);
         pushLog('history_import_finished', {
           actor: auditActor,
-          rowsWritten: 0,
+          // Abbruch mittendrin: wie viele Zeilen schon stehen, ist hier unbekannt.
+          rowsWritten: null,
           durationMs: Date.now() - importStartedAt,
           status: 'error',
           errorMessage: msg

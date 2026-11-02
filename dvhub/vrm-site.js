@@ -14,14 +14,16 @@
 //     InstallationsCommand.yaml; am 02.11.2026 an einem echten Konto bestätigt:
 //     user.id ist eine Zahl, idSite eine Zahl, identifier 12 Hex-Zeichen klein.)
 //
-// Das Ergebnis bleibt im Prozess zwischengespeichert (je Portal-ID und Konto);
-// Fehlschläge werden nicht gespeichert, der nächste Lauf versucht es erneut.
+// Das Ergebnis bleibt im Prozess zwischengespeichert (je Portal-ID und Konto,
+// höchstens CACHE_TTL_MS — eine in VRM neu angelegte Anlage bekommt eine neue
+// idSite); Fehlschläge werden nicht gespeichert, der nächste Lauf versucht es erneut.
 
 import { createHash } from 'node:crypto';
 
 export const VRM_API_BASE = 'https://vrmapi.victronenergy.com';
 const RESOLVE_TIMEOUT_MS = 20_000;
 const CACHE_MAX_ENTRIES = 32;
+const CACHE_TTL_MS = 6 * 3600 * 1000;
 // Site-IDs sind heute 6-stellig; Portal-IDs (MAC-basiert) 12 Zeichen — auch
 // eine Portal-ID nur aus Ziffern bleibt damit eine Portal-ID.
 const SITE_ID_RE = /^\d{1,10}$/;
@@ -115,11 +117,13 @@ async function lookupSiteId(portalId, { token, fetchImpl }) {
 
 /**
  * Site-ID für /v2/installations/{idSite}/… ermitteln.
- * @param {{ ref: string|number, token: string, fetchImpl?: Function, cache?: Map }} args
+ * @param {{ ref: string|number, token: string, fetchImpl?: Function, cache?: Map, now?: Function, ttlMs?: number }} args
  * @returns {Promise<string>} numerische Site-ID als String
  * @throws {VrmSiteResolveError} code: missing | invalid | network | auth | http | unexpected | not_in_account | ambiguous
  */
-export async function resolveVrmSiteId({ ref, token, fetchImpl = (...a) => fetch(...a), cache = defaultCache }) {
+export async function resolveVrmSiteId({
+  ref, token, fetchImpl = (...a) => fetch(...a), cache = defaultCache, now = Date.now, ttlMs = CACHE_TTL_MS
+}) {
   const { kind, value } = classifyVrmInstallationRef(ref);
   if (kind === 'empty') throw new VrmSiteResolveError('VRM-Portal-ID oder Site-ID fehlt (Integrationen → VRM Cloud)', 'missing');
   if (kind === 'invalid') {
@@ -130,16 +134,17 @@ export async function resolveVrmSiteId({ ref, token, fetchImpl = (...a) => fetch
 
   const key = cacheKey(value, token);
   const hit = cache.get(key);
-  if (hit) return hit;
+  if (hit && (hit.pending || now() - hit.at < ttlMs)) return hit.pending || hit.siteId;
   const pending = lookupSiteId(value, { token, fetchImpl });
-  cache.set(key, pending);
+  const entry = { pending };
+  cache.set(key, entry);
   try {
     const siteId = await pending;
-    cache.set(key, siteId);
+    if (cache.get(key) === entry) cache.set(key, { siteId, at: now() });
     while (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value);
     return siteId;
   } catch (e) {
-    if (cache.get(key) === pending) cache.delete(key);
+    if (cache.get(key) === entry) cache.delete(key);
     throw e;
   }
 }

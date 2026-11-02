@@ -1308,6 +1308,31 @@ async function fetchVrmStatsWithRetry({
   throw lastError;
 }
 
+// Auflösung Portal-ID → Site-ID mit derselben Wiederholung wie die
+// Statistik-Abrufe (429/5xx); „nicht im Konto“, 401 usw. sofort durchreichen.
+async function resolveVrmSiteIdWithRetry({
+  ref,
+  token,
+  fetchImpl,
+  waitImpl,
+  maxAttempts = VRM_BACKFILL_RETRY_ATTEMPTS,
+  retryDelayMs = VRM_BACKFILL_RETRY_DELAY_MS
+}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await resolveVrmSiteId({ ref, token, fetchImpl });
+    } catch (error) {
+      lastError = error;
+      const status = Number(error?.status || 0);
+      const retryable = status === 429 || status >= 500;
+      if (!retryable || attempt >= maxAttempts) break;
+      await waitImpl(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
 export function createHistoryImportManager({
   store,
   telemetryConfig = {},
@@ -1439,10 +1464,11 @@ export function createHistoryImportManager({
     // GH #32: Feld darf Site-ID (Zahl) oder Portal-ID (Hex) enthalten; die
     // Statistik braucht immer die Site-ID. Wirft mit klarer Meldung, wenn die
     // Portal-ID nicht im Konto des Tokens ist.
-    const siteId = await resolveVrmSiteId({
+    const siteId = await resolveVrmSiteIdWithRetry({
       ref: importConfig.vrmPortalId,
       token: importConfig.vrmToken,
-      fetchImpl
+      fetchImpl,
+      waitImpl
     });
 
     for (const type of VRM_HISTORY_TYPES) {

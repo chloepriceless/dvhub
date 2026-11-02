@@ -149,3 +149,25 @@ test('Leeres Feld / fehlendes Token → klare Meldung ohne Netzaufruf', async ()
   await assert.rejects(resolveVrmSiteId({ ref: 'a1b2c3d4e5f6', token: '', fetchImpl, cache: new Map() }), (e) => e.code === 'missing');
   assert.equal(calls.length, 0);
 });
+
+// Gegenprüfung c21c131f (P3): Zuordnung Portal-ID → Site-ID verfällt, damit eine
+// in VRM neu angelegte Anlage (neue idSite) ohne Neustart gefunden wird.
+test('Zwischenspeicher verfällt nach ttlMs → neu auflösen', async () => {
+  const { fetchImpl, calls } = fakeVrm(ACCOUNT);
+  const cache = new Map();
+  let t = 1_000_000;
+  const now = () => t;
+  await resolveVrmSiteId({ ref: 'a1b2c3d4e5f6', token: 'tok-ttl', fetchImpl, cache, now, ttlMs: 60_000 });
+  t += 59_000;
+  await resolveVrmSiteId({ ref: 'a1b2c3d4e5f6', token: 'tok-ttl', fetchImpl, cache, now, ttlMs: 60_000 });
+  assert.equal(calls.length, 2, 'innerhalb der Frist aus dem Speicher');
+  t += 2_000;
+  await resolveVrmSiteId({ ref: 'a1b2c3d4e5f6', token: 'tok-ttl', fetchImpl, cache, now, ttlMs: 60_000 });
+  assert.equal(calls.length, 4, 'nach Ablauf neu aufgelöst');
+});
+
+test('HTTP-Status bleibt am Fehler (für Wiederholung bei 429/5xx)', async () => {
+  const { fetchImpl } = fakeVrm({ '/v2/users/me': { status: 429, body: {} } });
+  await assert.rejects(resolveVrmSiteId({ ref: 'a1b2c3d4e5f6', token: 'tok-429', fetchImpl, cache: new Map() }),
+    (e) => e.status === 429 && e.code === 'http');
+});
