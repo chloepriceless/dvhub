@@ -90,9 +90,10 @@ function slotsToTimeMap(slots) {
 }
 
 /**
- * Ende (ms, exklusiv) der lückenlosen Abdeckung ab jetzt: der Slot, der jetzt
- * läuft, und alle direkt anschließenden. Slots `{start, ctKwh}`, Schrittweite
- * aus den Daten. -Infinity, wenn jetzt kein Slot läuft.
+ * Ende (ms, exklusiv) der lückenlosen Abdeckung ab `nowMs`: der Slot, der zu
+ * diesem Zeitpunkt läuft, und alle direkt anschließenden. Slots
+ * `{start, ctKwh}`, Schrittweite aus den Daten. -Infinity, wenn zu diesem
+ * Zeitpunkt kein Slot läuft.
  */
 export function contiguousPriceEndMs(slots, nowMs) {
   const starts = [...new Set((Array.isArray(slots) ? slots : [])
@@ -531,6 +532,40 @@ export function createEosForecastBridge(ctx) {
   // Einmal je Stunde aus der Datenbank; die echten Preise von heute/morgen
   // kommen bei jedem Push frisch aus der Prognose dazu.
   let priceHistoryCache = null;
+  /**
+   * Gespeicherte echte Day-Ahead-Preise (price_ct_kwh, 15 min) von drei
+   * Stunden vor jetzt bis drei Tage voraus als Preis-Slots `{start, end,
+   * ctKwh}` — Rückfall, wenn der Speicher nach einem Neustart leer ist.
+   */
+  async function loadStoredRealPriceSlots(nowMs) {
+    const store = ctx.telemetryStore;
+    if (!store || typeof store.querySeries !== 'function') return [];
+    try {
+      const rows = await store.querySeries({
+        seriesKeys: ['price_ct_kwh'],
+        start: new Date(nowMs - 3 * 3_600_000).toISOString(),
+        end: new Date(nowMs + 3 * 86_400_000).toISOString(),
+        maxResolution: 900,
+      });
+      const byStart = new Map();
+      for (const r of rows || []) {
+        if (r.key !== 'price_ct_kwh' || Number(r.resolution) > 900) continue;
+        const ms = new Date(r.ts).getTime();
+        const ct = Number(r.value);
+        if (!Number.isFinite(ms) || !Number.isFinite(ct) || ms < nowMs - 3 * 3_600_000) continue;
+        byStart.set(ms, ct);
+      }
+      return [...byStart.entries()].sort((a, b) => a[0] - b[0]).map(([ms, ct]) => ({
+        start: new Date(ms).toISOString(),
+        end: new Date(ms + PRICE_SLOT_MS).toISOString(),
+        ctKwh: ct,
+      }));
+    } catch (e) {
+      if (pushLog) pushLog('eos_prices_from_store_error', { error: e?.message || String(e) });
+      return [];
+    }
+  }
+
   async function loadPriceHistory(nowMs) {
     if (priceHistoryCache && nowMs - priceHistoryCache.at < 3_600_000) return priceHistoryCache.points;
     const store = ctx.telemetryStore;
@@ -1051,6 +1086,21 @@ export function createEosForecastBridge(ctx) {
     }
     if (gone()) return abandoned();
 
+    // Echte Preise. Decken die im Speicher jetzt nicht ab (DVhub neu
+    // gestartet, während der Preisabruf gestört ist), die gespeicherten echten
+    // Day-Ahead-Preise aus der Datenbank nehmen: sie umfassen alles, was DVhub
+    // je abgerufen hat, also auch, was EOS noch hält — sonst fiele jeder Lauf
+    // aus, bis ein Abruf gelingt (Gegenprüfung c0fdcbef, P2).
+    let realPriceSlots = forecast?.price?.slots || [];
+    if (!Number.isFinite(contiguousPriceEndMs(realPriceSlots, Date.now()))) {
+      const stored = await loadStoredRealPriceSlots(Date.now());
+      if (gone()) return abandoned();
+      if (Number.isFinite(contiguousPriceEndMs(stored, Date.now()))) {
+        if (pushLog) pushLog('eos_prices_from_store', { slots: stored.length, from: stored[0].start, until: stored[stored.length - 1].end });
+        realPriceSlots = stored;
+      }
+    }
+
     let pvSlots = keepOnGridSlots(forecast?.pv?.slots || []);
     let loadSlots = padSlotsBackToNow(forecast?.load?.slots || [], Date.now());
     // Echte Preise enden vormittags um Mitternacht. Ohne Preise dahinter kürzt
@@ -1058,7 +1108,7 @@ export function createEosForecastBridge(ctx) {
     // Einspeisewert — es speist mittags PV ein, statt sie für Nacht und Morgen
     // zu speichern (Prod 01.11.2026). Deshalb dahinter Schätzwerte; der
     // Steuerzeitraum richtet sich weiter nur nach den echten Preisen.
-    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(), {
+    const priceFill = await priceSlotsForEos(realPriceSlots, pvSlots, loadSlots, Date.now(), {
       estimate: dvhubTriggersEosRuns(cfg) && state?.optimizer?.eos?.supported === true,
       maxMs: resolveEosPredictionHours(cfg) * 3_600_000,
     });
@@ -1250,7 +1300,7 @@ export function createEosForecastBridge(ctx) {
     const realOnly = (list) => list.filter((s) => !s.estimated);
     // Alles hinter dem Geschickten aus EOS entfernen (vor dem Lauf).
     if (gone()) return abandoned();
-    const realEndMs = realPriceCoverage(forecast?.price?.slots || []).end;
+    const realEndMs = realPriceCoverage(realPriceSlots).end;
     {
       const sentEndMs = priceEstimate ? Date.parse(priceEstimate.until) : realEndMs;
       const clear = await clearStaleEstimates(baseUrl, { sentEndMs, nowMs: Date.now() });
@@ -1264,10 +1314,13 @@ export function createEosForecastBridge(ctx) {
     // Stunde hält EOS aus früheren Pushes — nach einem EOS-Neustart nicht;
     // dann bricht EOS bis zur nächsten vollen Stunde mit „Missing PV“ ab, wie
     // schon vor der Preis-Schätzung (offen, Gegenprüfung 165fa8be).
-    const horizon = await syncControlHorizon(
-      baseUrl, realOnly(elecpriceSlots), feedInSlots.length ? realOnly(feedInSlots) : null,
-      padSeriesBackToNow(pvSlots, Date.now()), expandHourlyToQuarterHourly(loadSlotsForEos),
-    );
+    const horizonLists = {
+      Bezugspreis: realOnly(elecpriceSlots),
+      Einspeisewert: feedInSlots.length ? realOnly(feedInSlots) : null,
+      PV: padSeriesBackToNow(pvSlots, Date.now()),
+      Last: expandHourlyToQuarterHourly(loadSlotsForEos),
+    };
+    const horizon = await syncControlHorizon(baseUrl, ...Object.values(horizonLists));
     if (horizon.error) errors.horizon = horizon.error;
     if (gone()) return abandoned();
 
@@ -1281,15 +1334,34 @@ export function createEosForecastBridge(ctx) {
     if (!Number.isFinite(realEndMs)) runBlockedBy = 'keine echten Preise';
     else if (errors.ElecPriceImport || (feedInSlots.length && errors.FeedInTariffImport)) {
       runBlockedBy = ['ElecPriceImport', 'FeedInTariffImport'].filter((k) => errors[k]).map((k) => `${k}: ${errors[k]}`).join('; ');
-    } else if (horizon.hours === undefined) runBlockedBy = `Steuerzeitraum nicht gesetzt (${horizon.error || horizon.skipped})`;
-    else {
-      // Gegen die lückenlose Abdeckung ab jetzt (eine Lücke könnte alte
-      // Schätzwerte halten), Laufbeginn auf EOS' eigenen Slot abgerundet
-      // (bei Stunden-Slots die volle Stunde; Gegenprüfung 165fa8be).
+    } else if (horizon.hours === undefined) {
+      // Welche Reihe deckt jetzt nicht ab? (Sonst hieß es pauschal „no prices“.)
       const nowMs = Date.now();
-      const coveredEndMs = contiguousPriceEndMs(forecast?.price?.slots || [], nowMs);
-      const slotMs = buildEosOptimization(cfg).interval * 1000;
-      const latestRunStartMs = Math.floor((nowMs + RUN_START_MARGIN_MS) / slotMs) * slotMs;
+      const gaps = horizon.skipped === 'no prices'
+        ? Object.entries(horizonLists)
+          .filter(([, l]) => Array.isArray(l) && l.some((x) => Number.isFinite(Number(x?.powerW))) && computeControlHorizonHours([l], nowMs) === null)
+          .map(([name]) => name)
+        : [];
+      runBlockedBy = gaps.length
+        ? `Steuerzeitraum nicht gesetzt (${gaps.join(', ')} deckt jetzt nicht ab)`
+        : `Steuerzeitraum nicht gesetzt (${horizon.error || horizon.skipped})`;
+    } else {
+      // Gegen die lückenlose Abdeckung (eine Lücke könnte alte Schätzwerte
+      // halten). EOS rundet den Laufbeginn auf seinen Slot ab (ems.py, nur
+      // 900 oder 3600 s, v0.4.0rc3): das Fenster beginnt frühestens an der
+      // abgerundeten Grenze von jetzt und endet spätestens Steuerzeitraum nach
+      // dem abgerundeten spätesten Laufbeginn (Gegenprüfungen 165fa8be,
+      // 8d71f34d). Einen anderen Wert (1800) lehnt EOS ab und behält seinen
+      // alten — dann vorsichtig: frühester Beginn zur vollen Stunde, spätester
+      // zur Viertelstunde.
+      const nowMs = Date.now();
+      const intervalMs = buildEosOptimization(cfg).interval * 1000;
+      const known = intervalMs === 900_000 || intervalMs === 3_600_000;
+      const earliestSlotMs = known ? intervalMs : 3_600_000;
+      const latestSlotMs = known ? intervalMs : 900_000;
+      const windowStartMs = Math.floor(nowMs / earliestSlotMs) * earliestSlotMs;
+      const latestRunStartMs = Math.floor((nowMs + RUN_START_MARGIN_MS) / latestSlotMs) * latestSlotMs;
+      const coveredEndMs = contiguousPriceEndMs(realPriceSlots, windowStartMs);
       if (latestRunStartMs + horizon.hours * 3_600_000 > coveredEndMs) {
         runBlockedBy = `Steuerzeitraum (${horizon.hours} h) reicht über die echten Preise hinaus (lückenlos bis ${Number.isFinite(coveredEndMs) ? new Date(coveredEndMs).toISOString() : '—'})`;
       }

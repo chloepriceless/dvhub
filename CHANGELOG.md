@@ -62,9 +62,10 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   Ausgleichsgerade, Börse + Marktprämie). Echte Preise haben Vorrang und ersetzen die Schätzung beim nächsten Push; der
   Steuerzeitraum richtet sich weiter nur nach echten Preisen. Anzahl und Beginn der geschätzten Slots stehen im Log
   (`eos_forecast_bridge`) und unter `state.optimizer.lastEosPush.priceEstimate`. Schätzwerte liegen nie im
-  Steuerzeitraum: Vor jedem Lauf schickt DVhub die Prognose frisch und löscht in EOS alles dahinter. Der Lauf fällt aus
+  Steuerzeitraum: Vor jedem Lauf schickt DVhub die Prognose frisch und löscht in EOS alles dahinter. Fehlen nach einem
+  Neustart die Preise, weil der Abruf gestört ist, nimmt DVhub die gespeicherten echten Preise. Der Lauf fällt nur aus
   (Log `eos_run_skipped`), wenn der Preis-Import scheitert oder der Steuerzeitraum nicht ganz in echten Preisen liegt —
-  wie früher, als EOS dann ohne Preise abbrach. Mit „EOS rechnet nach eigenem Takt“ (Einstellungen → Betriebsart →
+  dann brach EOS früher ohnehin ohne Preise ab. Mit „EOS rechnet nach eigenem Takt“ (Einstellungen → Betriebsart →
   EOS-Optimierung) oder solange kein EOS 0.4 erkannt ist, wird nicht geschätzt.
 
 - **Bezugspreis vom Stromanbieter (Tibber, LichtBlick)**: neue Preislogik „Vom Stromanbieter“ unter Einstellungen →
