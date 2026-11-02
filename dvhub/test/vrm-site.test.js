@@ -171,3 +171,32 @@ test('HTTP-Status bleibt am Fehler (für Wiederholung bei 429/5xx)', async () =>
   await assert.rejects(resolveVrmSiteId({ ref: 'a1b2c3d4e5f6', token: 'tok-429', fetchImpl, cache: new Map() }),
     (e) => e.status === 429 && e.code === 'http');
 });
+
+// Gegenprüfung 6f05ca48 (P3): Nach Ablauf der Frist und vorübergehendem Fehler
+// (Netz, 429, 5xx) die bekannte Site-ID weiter nutzen statt sie zu verlieren.
+test('Abgelaufene Zuordnung + vorübergehender Fehler → bekannte Site-ID bleibt', async () => {
+  const routes = { ...ACCOUNT };
+  const { fetchImpl } = fakeVrm(routes);
+  const cache = new Map();
+  let t = 0;
+  const opts = { ref: 'a1b2c3d4e5f6', token: 'tok-stale', fetchImpl, cache, now: () => t, ttlMs: 1000 };
+  assert.equal(await resolveVrmSiteId(opts), '123456');
+  t = 5000;
+  routes['/v2/users/me'] = { status: 503, body: {} };
+  assert.equal(await resolveVrmSiteId(opts), '123456', '503 → alte Zuordnung');
+  const err = new TypeError('fetch failed'); err.cause = { code: 'ENOTFOUND' };
+  routes['/v2/users/me'] = { throw: err };
+  assert.equal(await resolveVrmSiteId(opts), '123456', 'Netzfehler → alte Zuordnung');
+});
+
+test('Abgelaufene Zuordnung + Portal-ID nicht mehr im Konto → Fehler (nicht die alte ID)', async () => {
+  const routes = { ...ACCOUNT };
+  const { fetchImpl } = fakeVrm(routes);
+  const cache = new Map();
+  let t = 0;
+  const opts = { ref: 'a1b2c3d4e5f6', token: 'tok-gone', fetchImpl, cache, now: () => t, ttlMs: 1000 };
+  await resolveVrmSiteId(opts);
+  t = 5000;
+  routes['/v2/users/4711/installations'] = { body: { success: true, records: [] } };
+  await assert.rejects(resolveVrmSiteId(opts), (e) => e.code === 'not_in_account');
+});

@@ -239,3 +239,39 @@ test('VRM-Prognose: abgelehnter Statistik-Abruf (404) wird mit Stufe und Status 
   assert.equal(errs[0].details.stage, 'stats');
   assert.match(errs[0].details.error, /HTTP 404/);
 });
+
+// Gegenprüfung 6f05ca48 (P3): Netzfehler beim Start (DNS/WAN noch nicht da)
+// werden bei der Auflösung ebenfalls wiederholt.
+test('History-Import: users/me einmal Netzfehler → wiederholt, Import gelingt', async () => {
+  const base = fakeVrm();
+  let failed = false;
+  const fetchImpl = async (url, opts) => {
+    if (!failed && new URL(url).pathname === '/v2/users/me') {
+      failed = true;
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+    }
+    return base.fetchImpl(url, opts);
+  };
+  const manager = createHistoryImportManager({
+    store: fakeStore(),
+    fetchImpl,
+    waitImpl: async () => {},
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: PORTAL_ID, vrmToken: 'tok-history-net' } },
+  });
+  const result = await manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+});
+
+// Gegenprüfung 6f05ca48 (P2): Der Dienst bekam keinen waitImpl → alle
+// Wiederholungs- und Schonpausen waren in Produktion No-ops.
+test('History-Import: server.js gibt eine echte Pause (sleepMs) mit, sleepMs wartet wirklich', async () => {
+  const fs = await import('node:fs');
+  const { sleepMs } = await import('../history-import.js');
+  const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const call = src.match(/createHistoryImportManager\(\{[\s\S]*?\}\)/);
+  assert.ok(call, 'Aufruf in server.js gefunden');
+  assert.match(call[0], /waitImpl:\s*sleepMs/);
+  const t0 = Date.now();
+  await sleepMs(40);
+  assert.ok(Date.now() - t0 >= 35);
+});

@@ -144,7 +144,22 @@ export async function resolveVrmSiteId({
     while (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value);
     return siteId;
   } catch (e) {
-    if (cache.get(key) === entry) cache.delete(key);
+    // Abgelaufene, aber bekannte Zuordnung bei vorübergehendem Fehler weiter
+    // nutzen (Eintrag bleibt abgelaufen → nächster Aufruf fragt erneut).
+    // „Nicht im Konto“, mehrdeutig, Token ungültig: Fehler durchreichen.
+    const known = hit?.siteId;
+    if (cache.get(key) === entry) {
+      if (known && isTransientVrmError(e)) cache.set(key, hit);
+      else cache.delete(key);
+    }
+    if (known && isTransientVrmError(e)) return known;
     throw e;
   }
+}
+
+/** Vorübergehend (lohnt Wiederholung): Netzfehler, 429, 5xx. */
+export function isTransientVrmError(e) {
+  if (e?.code === 'network') return true;
+  const status = Number(e?.status || 0);
+  return status === 429 || status >= 500;
 }

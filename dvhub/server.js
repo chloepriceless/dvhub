@@ -64,7 +64,7 @@ import {
   sanitizePersistedScheduleRules,
   mergeLoadedScheduleRules
 } from './schedule-runtime.js';
-import { createHistoryImportManager } from './history-import.js';
+import { createHistoryImportManager, sleepMs } from './history-import.js';
 import { createModbusTransport } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
 import { discoverSystems as discoverConfiguredSystems } from './system-discovery.js';
@@ -2279,7 +2279,10 @@ const telemetryReady = (async () => {
   historyImportManager = telemetryStore ? createHistoryImportManager({
     store: telemetryStore,
     telemetryConfig: cfg.telemetry || {},
-    getEpexConfig: () => cfg.epex || {}
+    getEpexConfig: () => cfg.epex || {},
+    // Echte Pausen: Wiederholung bei 429/5xx/Netzfehler und Schonpause
+    // zwischen Nachimport-Fenstern (vorher No-op, Gegenprüfung 6f05ca48).
+    waitImpl: sleepMs
   }) : null;
   ctx.historyImportManager = historyImportManager;
   if (IS_RUNTIME_PROCESS && historyImportManager) historyImportManager.startAutomaticBackfill();

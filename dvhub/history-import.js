@@ -1,4 +1,4 @@
-import { VRM_API_BASE, resolveVrmSiteId } from './vrm-site.js';
+import { VRM_API_BASE, resolveVrmSiteId, isTransientVrmError } from './vrm-site.js';
 
 const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
 const VRM_HISTORY_INTERVAL = '15mins';
@@ -1308,8 +1308,14 @@ async function fetchVrmStatsWithRetry({
   throw lastError;
 }
 
-// Auflösung Portal-ID → Site-ID mit derselben Wiederholung wie die
-// Statistik-Abrufe (429/5xx); „nicht im Konto“, 401 usw. sofort durchreichen.
+// Echte Pause für Wiederholungen und Schonpausen zwischen VRM-Fenstern. Der
+// Manager-Default bleibt ein No-op (Tests); server.js gibt diese mit.
+export function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+// Auflösung Portal-ID → Site-ID mit Wiederholung bei 429/5xx und Netzfehlern;
+// „nicht im Konto“, 401 usw. sofort durchreichen.
 async function resolveVrmSiteIdWithRetry({
   ref,
   token,
@@ -1324,9 +1330,8 @@ async function resolveVrmSiteIdWithRetry({
       return await resolveVrmSiteId({ ref, token, fetchImpl });
     } catch (error) {
       lastError = error;
-      const status = Number(error?.status || 0);
-      const retryable = status === 429 || status >= 500;
-      if (!retryable || attempt >= maxAttempts) break;
+      // Auch Netzfehler: beim Start ist DNS/WAN oft noch nicht da.
+      if (!isTransientVrmError(error) || attempt >= maxAttempts) break;
       await waitImpl(retryDelayMs * attempt);
     }
   }
