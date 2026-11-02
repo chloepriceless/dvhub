@@ -12,7 +12,7 @@ import { REDACTED_PATHS, REDACTED, redactConfig, isRedactedPath } from '../confi
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from '../services/config-secrets-crypto.js';
 import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS } from '../services/config-protected-keys.js';
 import { mergeAgainstBaseWithConflicts } from '../services/config-base-merge.js';
-import { isInternalHost } from '../services/host-address.js';
+import { isInternalHost, isAllowedOutboundUrl } from '../services/host-address.js';
 import { validateVpnProfileFile } from '../vpn-manager.js';
 
 // VPN-Profile eines Geräte-Tausch-Pakets (config/vpn/profiles/<name>/<datei>):
@@ -259,6 +259,15 @@ export function createConfigRoutes(deps) {
       if (candidateRemoteEndpoint && normEndpoint(candidateRemoteEndpoint) !== normEndpoint(storedRemoteEndpoint)
           && !isAllowedRemoteEndpoint(candidateRemoteEndpoint)) {
         return json(res, 400, { ok: false, error: 'invalid_eos_remote_endpoint' });
+      }
+      // ntfy-Adresse (Gegenprüfung edeb17db, P3): jede Benachrichtigung ist ein
+      // POST an diese Adresse — keine internen Ziele. Nur bei einer ÄNDERUNG
+      // prüfen, eine gespeicherte Altadresse blockiert das Speichern nicht
+      // (gesendet wird an sie trotzdem nicht, services/notifications).
+      const candidateNtfy = body.config?.notifications?.providers?.ntfy?.topicUrl;
+      const storedNtfy = ctx.getRawCfg?.()?.notifications?.providers?.ntfy?.topicUrl;
+      if (candidateNtfy && String(candidateNtfy).trim() !== String(storedNtfy ?? '').trim() && !isAllowedOutboundUrl(candidateNtfy)) {
+        return json(res, 400, { ok: false, error: 'invalid_ntfy_topic_url' });
       }
       // Plan 08-06 Task 1 Step 3: legal-gate flip detection.
       // allowGridCharge / allowGridDischarge are EEG/§14a-relevant. ENABLING

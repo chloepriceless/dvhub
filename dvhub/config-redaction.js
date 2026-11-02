@@ -1,7 +1,6 @@
 // SEC-01: Single source of truth for redacted config field paths.
 // Imported by routes-api.js (redactConfig) and server.js (restoreRedacted)
 
-import { sameOrigin } from './services/host-address.js';
 
 export const REDACTED_PATHS = Object.freeze([
   'apiToken',
@@ -60,6 +59,52 @@ export const REDACTED_PATHS = Object.freeze([
 ]);
 
 export const REDACTED = '***';
+
+// Geheimnis → Feld mit der Adresse, an die es geht. Steht das Geheimnis als
+// „***“ im Entwurf (unverändert) und hat sich die Adresse geändert, wandert
+// der gespeicherte Wert NICHT mit (Strix-Fund 29.10.2026 für ntfy; Gegenprüfung
+// edeb17db für E-Auto, EOS-Fernbetrieb, MQTT, SMB, Datenbank): sonst setzt ein
+// Gerät im WLAN eine eigene Adresse ein und bekommt den Token beim nächsten
+// Abruf geschickt. Wer die Adresse ändert, gibt das Geheimnis neu ein.
+export const SECRET_TARGET_BINDINGS = Object.freeze([
+  { target: 'notifications.providers.ntfy.topicUrl', secrets: ['notifications.providers.ntfy.token'] },
+  { target: 'optimizer.evHaUrl', secrets: ['optimizer.evHaToken'] },
+  { target: 'optimizer.evHttpUrl', secrets: ['optimizer.evHttpToken'] },
+  { target: 'optimizer.eosProxy.remote.endpoint', secrets: ['optimizer.eosProxy.remote.token'] },
+  { target: 'mqtt.brokerUrl', secrets: ['mqtt.username', 'mqtt.password'] },
+  { target: 'victron.mqtt.broker', secrets: ['victron.mqtt.username', 'victron.mqtt.password'] },
+  { target: 'victron.mqttCrossCheck.broker', secrets: ['victron.mqttCrossCheck.username', 'victron.mqttCrossCheck.password'] },
+  { target: 'forecast.weather.mqtt.brokerUrl', secrets: ['forecast.weather.mqtt.username', 'forecast.weather.mqtt.password'] },
+  { target: 'dbBackup.smb.host', secrets: ['dbBackup.smb.username', 'dbBackup.smb.password'] },
+  { target: 'telemetry.database.host', secrets: ['telemetry.database.password'] },
+]);
+
+function getPath(obj, dotPath) {
+  return dotPath.split('.').reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), obj);
+}
+function setPath(obj, dotPath, value) {
+  const parts = dotPath.split('.');
+  let o = obj;
+  for (const k of parts.slice(0, -1)) {
+    if (!o || typeof o !== 'object') return;
+    o = o[k];
+  }
+  if (o && typeof o === 'object') o[parts.at(-1)] = value;
+}
+// Gleiches Ziel? URLs nach Herkunft (Schema, Host, Port), sonst Host-Text.
+function sameTarget(a, b) {
+  const norm = (v) => String(v ?? '').trim().toLowerCase().replace(/\/+$/, '');
+  const na = norm(a); const nb = norm(b);
+  if (na === nb) return true;
+  if (na.includes('://') && nb.includes('://')) {
+    // Nicht URL.origin: für mqtt:// u. ä. ist die Herkunft immer „null“.
+    try {
+      const ua = new URL(na); const ub = new URL(nb);
+      return ua.protocol === ub.protocol && ua.hostname === ub.hostname && ua.port === ub.port;
+    } catch { return false; }
+  }
+  return false;
+}
 
 export function isRedactedPath(path) {
   return REDACTED_PATHS.includes(path);
@@ -252,7 +297,11 @@ function looksUrlRedacted(raw) {
 
 export function restoreRedacted(incoming, current) {
   const copy = JSON.parse(JSON.stringify(incoming));
-  const ntfyTokenKept = copy?.notifications?.providers?.ntfy?.token === REDACTED;
+  // Welche Geheimnisse kamen unverändert („***“)? Vor dem Zurückholen merken.
+  const keptSecrets = new Set();
+  for (const b of SECRET_TARGET_BINDINGS) {
+    for (const sp of b.secrets) if (getPath(copy, sp) === REDACTED) keptSecrets.add(sp);
+  }
   for (const dotPath of REDACTED_PATHS) {
     const parts = dotPath.split('.');
     let target = copy;
@@ -269,14 +318,6 @@ export function restoreRedacted(incoming, current) {
       const original = source && typeof source === 'object' && key in source ? source[key] : '';
       target[key] = original === REDACTED ? '' : original;
     }
-  }
-  // ntfy: der gespeicherte Token folgt einer neuen Adresse nur auf denselben
-  // Server (Strix-Fund 29.10.2026) — sonst ginge er mit der nächsten
-  // Benachrichtigung an einen Server, den ein Gerät im WLAN eingetragen hat.
-  if (ntfyTokenKept) {
-    const ntfy = copy.notifications.providers.ntfy;
-    const curUrl = current?.notifications?.providers?.ntfy?.topicUrl;
-    if (!sameOrigin(ntfy.topicUrl ?? curUrl, curUrl)) ntfy.token = '';
   }
   // URL-level restoration for fields redacted via redactUrlCreds (Plan 08-03).
   if (copy?.mqtt && typeof copy.mqtt.brokerUrl === 'string' && looksUrlRedacted(copy.mqtt.brokerUrl)
@@ -306,6 +347,22 @@ export function restoreRedacted(incoming, current) {
       && looksUrlRedacted(copy.meterSource.modbus.host)
       && current?.meterSource?.modbus && typeof current.meterSource.modbus.host === 'string') {
     copy.meterSource.modbus.host = current.meterSource.modbus.host;
+  }
+  // Geheimnisse an ihre Adresse binden (SECRET_TARGET_BINDINGS) — nach dem
+  // Zurückholen redigierter URLs, damit eine unverändert maskierte URL zählt.
+  for (const b of SECRET_TARGET_BINDINGS) {
+    const kept = b.secrets.filter((sp) => keptSecrets.has(sp));
+    if (!kept.length) continue;
+    const curTarget = getPath(current, b.target);
+    const newTarget = getPath(copy, b.target) ?? curTarget;
+    if (!sameTarget(newTarget, curTarget)) for (const sp of kept) setPath(copy, sp, '');
+  }
+  // EOS-Fernbetrieb: für welche Adresse das Token ausgegeben wurde, weiß nur
+  // die Box (eos-remote.js) — ein Entwurf setzt das nicht.
+  if (copy?.optimizer?.eosProxy?.remote && typeof copy.optimizer.eosProxy.remote === 'object') {
+    const curTe = current?.optimizer?.eosProxy?.remote?.tokenEndpoint;
+    if (curTe === undefined) delete copy.optimizer.eosProxy.remote.tokenEndpoint;
+    else copy.optimizer.eosProxy.remote.tokenEndpoint = curTe;
   }
   return copy;
 }

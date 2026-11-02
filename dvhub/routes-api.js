@@ -12,7 +12,7 @@ import { STREAM_BUCKET_SECONDS } from './telemetry-store-pg.js';
 import http from 'node:http';
 import os from 'node:os';
 import { isIP } from 'node:net';
-import { isInternalHost, isPrivateOrLoopbackHost } from './services/host-address.js';
+import { isInternalHost, isPrivateOrLoopbackHost, isAllowedOutboundUrl, sameOrigin } from './services/host-address.js';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
 import { PUSH_HEADER as INPUT_PUSH_HEADER, PUSH_FIELDS as INPUT_PUSH_FIELDS, parsePushFields as parseInputPushFields } from './services/input-push.js';
@@ -6514,13 +6514,18 @@ export function createApiRoutes(ctx) {
       const prev = next.notifications.providers;
 
       // ntfy — a real notifications.providers entry.
+      // Gegenprüfung edeb17db (P2): dieselben Regeln wie /api/notifications/
+      // providers/ntfy — Adresse geprüft (keine internen Ziele), der
+      // gespeicherte Token folgt nur auf denselben Server.
       const inNtfy = body.ntfy || {};
+      const ntfyTopicUrl = clip(inNtfy.topicUrl, 512);
+      if (ntfyTopicUrl && !isAllowedOutboundUrl(ntfyTopicUrl)) return json(res, 400, { ok: false, error: 'invalid_topicurl' });
       const ntfyToken = (inNtfy.token === '***')
-        ? (prev.ntfy && prev.ntfy.token) || ''      // keep existing — '***' means "unchanged"
+        ? (sameOrigin(ntfyTopicUrl, prev.ntfy?.topicUrl) ? (prev.ntfy?.token || '') : '')   // '***' = unverändert, aber nur für denselben Server
         : clip(inNtfy.token, 256);
       next.notifications.providers.ntfy = {
         enabled: !!inNtfy.enabled,
-        topicUrl: clip(inNtfy.topicUrl, 512),
+        topicUrl: ntfyTopicUrl,
         ...(ntfyToken ? { token: ntfyToken } : {})
       };
       // Gap 3 step 2: scrub any stale duplicate provider so it cannot resurrect

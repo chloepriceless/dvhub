@@ -14,6 +14,7 @@
 import { createTelegramProvider } from './providers/telegram.js';
 import { createPushoverProvider } from './providers/pushover.js';
 import { createNtfyProvider } from './providers/ntfy.js';
+import { isAllowedOutboundUrl } from '../host-address.js';
 
 // Phase 09.4 gap-closure: the `uptime-kuma` notification provider was removed.
 // It duplicated the pre-existing `monitoring` block (config monitoring.pushUrl
@@ -190,6 +191,12 @@ export function createNotificationService(ctx) {
       if (!pCfg.enabled) continue;
       const factory = PROVIDER_FACTORIES[name];
       if (!factory) continue;
+      // Gegenprüfung edeb17db (P3): ntfy nie an interne Adressen (Box selbst,
+      // link-local/Metadaten) — gilt auch für gespeicherte Altwerte und Importe.
+      if (name === 'ntfy' && !isAllowedOutboundUrl(pCfg.topicUrl)) {
+        pushLog('notification_provider_error', { provider: name, error: 'topic_url_not_allowed' });
+        continue;
+      }
       try {
         providers.set(name, factory(pCfg));
       } catch (err) {
