@@ -47,6 +47,50 @@ if [[ "$IMPL" == c && ! -f "$SRC/build.sh" ]]; then
   echo "  EEBUS: Quellen fehlen ($SRC)"; exit 0
 fi
 
+# BEGIN DVHUB RELEASE PREBUILT — Release-Paket mit vorgebautem Binary (docs/release-pakete.md)
+# Pakete bringen dvhub-eebus fertig mit (Go quer übersetzt, statisch, je
+# Architektur: $SRC/dist/ARCH). Passt es zur Box, wird nur noch geprüft
+# (Selbsttest) und kopiert — kein Go-Download, kein Bau. C-Fassung und fremde
+# Architekturen bauen weiter selbst (unten).
+PREBUILT="$SRC/dist/dvhub-eebus"
+if [[ "$IMPL" == go && -x "$PREBUILT" && -f "$SRC/dist/ARCH" ]]; then
+  case "$(uname -m)" in
+    aarch64|arm64) _pb_arch=arm64 ;;
+    x86_64|amd64) _pb_arch=amd64 ;;
+    armv7l|armv8l) _pb_arch=armhf ;;
+    *) _pb_arch="" ;;
+  esac
+  if [[ -n "$_pb_arch" && "$(tr -d ' \r\n' < "$SRC/dist/ARCH")" == "$_pb_arch" ]]; then
+    WANT="prebuilt+$(sha256sum "$PREBUILT" | cut -c1-16)"
+    HAVE="$(cat "$MARKER" 2>/dev/null || true)"
+    if [[ "$HAVE" == "$WANT" && -x "$BIN_DIR/dvhub-eebus" && "${1:-}" != "--force" ]]; then
+      echo "  EEBUS: OK (vorgebaut, $WANT)"
+      exit 0
+    fi
+    if command -v apt-get >/dev/null 2>&1 && ! dpkg -s avahi-daemon >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -qq
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends avahi-daemon >/dev/null
+    fi
+    systemctl enable --now avahi-daemon >/dev/null 2>&1 || true
+    mkdir -p "$BUILD_ROOT"
+    PB_DIR="$(mktemp -d "$BUILD_ROOT/dvhub-eebus.XXXXXX")"
+    trap 'rm -rf "$PB_DIR"' EXIT
+    "$PREBUILT" --gen-cert "$PB_DIR/t.crt" "$PB_DIR/t.key" selftest >/dev/null \
+      || { echo "  EEBUS: Selbsttest des vorgebauten Binarys fehlgeschlagen — vorhandenes bleibt" >&2; exit 1; }
+    mkdir -p "$BIN_DIR"
+    install -m 0755 "$PREBUILT" "$BIN_DIR/dvhub-eebus.new"
+    mv -f "$BIN_DIR/dvhub-eebus.new" "$BIN_DIR/dvhub-eebus"
+    cp -f "$SRC/dist/dvhub-eebus.version" "$BIN_DIR/dvhub-eebus.version" 2>/dev/null || true
+    echo "$WANT" > "$MARKER"
+    if pgrep -x dvhub-eebus >/dev/null 2>&1; then
+      pkill -TERM -x dvhub-eebus 2>/dev/null && echo "  EEBUS: alter Stand beendet, DVhub startet den neuen"
+    fi
+    echo "  EEBUS: fertig (vorgebaut, $(cat "$BIN_DIR/dvhub-eebus.version" 2>/dev/null || echo '?'))"
+    exit 0
+  fi
+fi
+# END DVHUB RELEASE PREBUILT
+
 pin() { grep -E "^$1=" "$SRC/$2" | tail -1 | cut -d= -f2-; }
 src_sum() { (cd "$SRC" && find "$@" -type f ! -name '*_test.go' ! -name '*.md' ! -path '*/testdata/*' -print0 \
   | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16); }

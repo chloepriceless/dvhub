@@ -1,0 +1,65 @@
+# Allowlist für die Release-Pakete (docs/release-pakete.md).
+# Grundregel wie .dockerignore: alles verboten, gezielt erlauben. Die letzte
+# passende Zeile gewinnt. "+ muster" erlaubt, "- muster" verbietet;
+# "*" ohne "/", "**" auch über "/", Muster mit "/" am Ende = alles darunter.
+# Eine neue Datei im Repo landet erst im Paket, wenn sie hier steht.
+
+# --- Anwendung -----------------------------------------------------------------
++ dvhub/
+- dvhub/test/
+- dvhub/docs/
+- dvhub/node_modules/
+- dvhub/eslint.config.js
+- dvhub/BRAND_GUIDELINES.md
+# Entwickler-Diagnose, von keinem Modul geladen
+- dvhub/scripts/
+# Python-Testsuite der Prognose (die Bridge selbst wird gebraucht)
+- dvhub/services/python-bridge/scripts/tests/
+# EEBUS: Quellen bleiben (C-Fassung und Architekturen ohne vorgebautes Binary
+# baut eebus-provision.sh auf der Box), Tests nicht
+- dvhub/eebus/test/
+- dvhub/eebus/go/*_test.go
+- dvhub/eebus/go/testdata/
+# Laufzeitdateien aus Entwicklung, nie ausliefern
+- dvhub/config.json
+- dvhub/energy_state.json
+- dvhub/license_state.json
+- dvhub/control_state.json
+- **/*.log
+- **/.env
+- **/.DS_Store
+
+# --- Root-Skripte, die install.sh/post-update.sh und die Hilfsskripte aufrufen --
++ post-update.sh
++ eos-provision.sh
++ eos-version.env
++ eos-patches/
++ forecast-provision.sh
++ timescale-provision.sh
++ support-provision.sh
++ eebus-provision.sh
++ node-runtime-provision.sh
++ pg-write-tuning.sh
++ pkg-maintain.sh
++ stack-update.sh
++ 20-dv-modbus.sh
++ dvhub-apt.sh
++ dvhub-ipsec-link.sh
++ dvhub-modbus-redirect.sh
++ dvhub-setcap.sh
++ dvhub-support-tunnel.sh
++ dvhub-update.sh
++ dvhub-vpn.sh
++ dvhub-release.cjs
++ scripts/reconcile-vendor-profiles.mjs
+# Altbestand SQLite → PostgreSQL (von Hand, README)
++ scripts/migrate-sqlite-to-pg.sh
++ db/postgres/migrations/
+
+# --- Vertrauensanker und Lizenzen ------------------------------------------------
++ release-keys/allowed_signers
++ LICENSE.md
++ THIRD-PARTY-LICENSES.md
++ COMMERCIAL_LICENSE.md
++ CHANGELOG.md
++ .node-version

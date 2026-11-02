@@ -693,7 +693,99 @@ function autoCheckForUpdate() {
   checkForUpdate().catch(() => {});
 }
 
+// Release-Paket (docs/release-pakete.md): Versionen statt Commits, Rückweg
+// auf die vorige Version ohne Download.
+function renderPackageUpdateCheck(data) {
+  const channelSelect = document.getElementById('updateChannel');
+  if (channelSelect && data.channel) channelSelect.value = data.channel;
+  updatePinRefVisibility('stable');
+  const cur = data.current?.release || data.current?.version || '?';
+  const latest = data.latest?.release || '?';
+  setText('updateMeta', `Channel: ${data.channel === 'dev' ? 'Dev' : 'Stable'} | Paket: ${cur} | Neueste: ${latest}`);
+  if (data.updateAvailable) setBanner('updateBanner', `Neue Version verfügbar: ${latest}`, 'warning');
+  else setBanner('updateBanner', `DVhub ist aktuell — ${cur}`, 'success');
+  const rb = document.getElementById('rollbackUpdateBtn');
+  if (rb) {
+    rb.hidden = !data.previous;
+    rb.textContent = data.previous ? `Vorige Version wiederherstellen (${data.previous})` : 'Vorige Version wiederherstellen';
+    rb.dataset.previous = data.previous || '';
+  }
+  const changelogDiv = document.getElementById('updateChangelog');
+  if (data.updateAvailable && data.changelog && data.changelog.length) {
+    changelogDiv.innerHTML = '<p class="tools-updates-changelog-head">Änderungen:</p>' +
+      data.changelog.map((line) => { const el = document.createElement('div'); el.className = 'config-row'; el.textContent = line; return el.outerHTML; }).join('');
+    changelogDiv.style.display = 'block';
+  }
+  if (data.updateAvailable) document.getElementById('updateActions').style.display = 'flex';
+}
+
+const RELEASE_PHASES = {
+  queued: 'Auftrag gestartet', start: 'Vorbereitung', index: 'Kanal-Index prüfen', download: 'Paket laden',
+  verify: 'Prüfsumme und Signatur prüfen', unpack: 'Entpacken', 'verify-files': 'Dateien prüfen',
+  switch: 'Umschalten', unit: 'Dienst umstellen', provision: 'Einrichten', restart: 'Neustart',
+  health: 'Gesundheitsprüfung', rollback: 'Rückweg',
+};
+
+// Auftrag des Helfers verfolgen: Fortschritt, Neustart überbrücken, Ergebnis.
+async function trackReleaseJob(label) {
+  const since = Date.now() - 30000;
+  const deadline = Date.now() + 20 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    let data;
+    try {
+      const res = await apiFetch('/api/admin/update/status');
+      data = await res.json();
+    } catch (_) {
+      setBanner('updateBanner', `${label}: DVhub startet neu …`, 'info');
+      continue;
+    }
+    const st = data && data.status;
+    if (!st || Date.parse(st.started || 0) < since) continue;
+    if (st.state === 'running' || st.state === 'queued') {
+      let text = `${label}: ${RELEASE_PHASES[st.phase] || st.phase}`;
+      if (st.phase === 'download' && st.progress && st.progress.total) {
+        text += ` (${Math.round((st.progress.bytes / st.progress.total) * 100)} %)`;
+      }
+      if (st.message) text += ` — ${st.message}`;
+      setBanner('updateBanner', text, 'info');
+      continue;
+    }
+    if (st.state === 'ok') {
+      setBanner('updateBanner', `${st.message || 'Fertig'} — Seite lädt neu …`, 'success');
+      setTimeout(() => window.location.reload(), 3000);
+    } else {
+      setBanner('updateBanner', `${label} fehlgeschlagen: ${st.message || st.state}`, 'error');
+    }
+    try { sessionStorage.removeItem('dvhub_update_check_result'); } catch (_) { /* */ }
+    return st;
+  }
+  setBanner('updateBanner', `${label}: keine Rückmeldung — bitte Seite neu laden`, 'warning');
+  return null;
+}
+
+async function rollbackUpdate() {
+  const rb = document.getElementById('rollbackUpdateBtn');
+  const prev = rb?.dataset.previous || '';
+  if (!(await window.dvConfirm(
+    `Vorige Version ${prev} wiederherstellen?\n\nDVhub schaltet ohne Download auf ${prev} zurück, startet neu und prüft danach den Zustand.`,
+    { title: 'Vorige Version', okLabel: 'Wiederherstellen', variant: 'primary' }
+  ))) return;
+  if (rb) rb.disabled = true;
+  try {
+    const res = await apiFetch('/api/admin/update/rollback', { method: 'POST' });
+    const data = await res.json();
+    if (!data.ok) { setBanner('updateBanner', `Rückweg fehlgeschlagen: ${data.error}`, 'error'); return; }
+    await trackReleaseJob('Rückweg');
+  } catch (error) {
+    setBanner('updateBanner', `Rückweg fehlgeschlagen: ${error.message}`, 'error');
+  } finally {
+    if (rb) rb.disabled = false;
+  }
+}
+
 function renderUpdateCheck(data) {
+  if (data.mode === 'package') { renderPackageUpdateCheck(data); return; }
   {
     // Sync channel dropdown with server state
     const channelSelect = document.getElementById('updateChannel');
@@ -768,7 +860,11 @@ async function applyUpdate() {
       body: JSON.stringify(pinRef ? { ref: pinRef } : {})
     });
     const data = await res.json();
-    if (data.ok) {
+    if (data.ok && data.mode === 'package') {
+      document.getElementById('updateActions').style.display = 'none';
+      const st = await trackReleaseJob('Update');
+      if (btn && (!st || st.state !== 'ok')) { btn.disabled = false; btn.textContent = 'Update installieren & neu starten'; }
+    } else if (data.ok) {
       setBanner('updateBanner', 'Update installiert! Service startet neu — Seite lädt in 10 Sekunden automatisch neu.', 'success');
       document.getElementById('updateActions').style.display = 'none';
       setTimeout(() => window.location.reload(), 10000);
@@ -806,7 +902,10 @@ async function switchUpdateChannel(newChannel) {
       body: JSON.stringify({ channel: newChannel })
     });
     const data = await res.json();
-    if (data.ok) {
+    if (data.ok && data.mode === 'package') {
+      const st = await trackReleaseJob(`Wechsel zu ${label}`);
+      if (!st || st.state !== 'ok') revertDropdown();
+    } else if (data.ok) {
       setBanner('updateBanner', `Channel gewechselt zu ${label}. Service startet neu — Seite lädt in 10 Sekunden automatisch neu.`, 'success');
       setTimeout(() => window.location.reload(), 10000);
     } else {
@@ -1664,6 +1763,7 @@ function initToolsPage() {
   loadAccessToken();
   document.getElementById('checkUpdateBtn')?.addEventListener('click', () => checkForUpdate());
   document.getElementById('applyUpdateBtn')?.addEventListener('click', () => applyUpdate());
+  document.getElementById('rollbackUpdateBtn')?.addEventListener('click', () => rollbackUpdate());
   document.getElementById('updateChannel')?.addEventListener('change', (e) => switchUpdateChannel(e.target.value));
   // Sync channel dropdown with server config on page load
   apiFetch('/api/config').then(r => r.json()).then(data => {
