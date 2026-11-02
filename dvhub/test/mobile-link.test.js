@@ -575,7 +575,7 @@ describe('mobile-link Rechte', () => {
 
 // ── Ende zu Ende über echte WebSockets ──────────────────────────────────────
 
-function makeAgent({ dir, relayUrl, extraCfg = {}, loopback, status = () => ({ soc: 55, batteryPowerW: -1200, alarmsActive: 0 }) }) {
+function makeAgent({ dir, relayUrl, extraCfg = {}, loopback, connect, status = () => ({ soc: 55, batteryPowerW: -1200, alarmsActive: 0 }) }) {
   let cfg = { httpPort: 18099, mobileLink: { enabled: true, relayUrl, ...extraCfg } };
   const logs = [];
   const agent = createMobileLink(
@@ -584,6 +584,7 @@ function makeAgent({ dir, relayUrl, extraCfg = {}, loopback, status = () => ({ s
       buildStatus: status,
       loopback: loopback || (async (m, p, b) => ({ status: 200, body: { echo: [m, p, b] } })),
       networkHosts: () => [],
+      ...(connect ? { connect } : {}),
     },
   );
   return { agent, logs, setCfg: (c) => { cfg = c; }, file: path.join(dir, SIDECAR_NAME) };
@@ -614,6 +615,98 @@ describe('mobile-link Ende zu Ende', () => {
     });
     return { phone, creds };
   }
+
+  test('vom Relay abgelehntes Ereignis (relay_busy) wird beim nächsten Lauf erneut abgelegt (Review 834d1336 P3)', async () => {
+    const ctx = await setup();
+    const { creds } = await pairVia(ctx, null);
+    ctx.agent.stop();
+    // Dieselbe Box (Sidecar) an einem nachgebauten Relay, das Fehler einspielen kann.
+    const sent = [];
+    let deliver = null;
+    const connect = () => {
+      const handlers = [];
+      deliver = (o) => { for (const f of handlers) f(JSON.stringify(o)); };
+      return {
+        send(t) {
+          const m = JSON.parse(t);
+          sent.push(m);
+          if (m.t === 'auth') queueMicrotask(() => deliver({ t: 'ok', role: 'box', box: creds.boxId }));
+        },
+        close() {},
+        onMessage(f) { handlers.push(f); queueMicrotask(() => f(JSON.stringify({ t: 'challenge', n: b64u(crypto.randomBytes(32)) }))); },
+        onClose() {},
+      };
+    };
+    let alarms = 0;
+    const b = makeAgent({ dir: ctx.dir, relayUrl: ctx.relayUrl, connect, status: () => ({ soc: 50, alarmsActive: alarms }) });
+    b.agent.start();
+    try {
+      await until(() => sent.some((m) => m.t === 'allow'));
+      const events = () => sent.filter((m) => m.t === 'mbox_put' && !m.slot);
+      alarms = 1;
+      b.agent._pushMailboxLatest();
+      assert.equal(events().length, 1);
+      const ev = events()[0];
+      assert.equal(typeof ev.ref, 'string', 'Ereignis-Ablage ohne ref');
+      // Relay gedrosselt: Ereignis A abgelehnt (mit ref). Vor dem nächsten
+      // Lauf ändert sich der Zustand (B, 10-s-Prüfung) — B wartet hinter A,
+      // A geht nicht verloren (Review d4d72b9f/736d2018 P3).
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: ev.ref });
+      alarms = 0;
+      b.agent._checkEvents();
+      assert.equal(events().length, 1, 'B nicht hinter dem abgelehnten A eingereiht');
+      b.agent._pushMailboxLatest(); // Lauf: A erneut, dann B
+      const after = events();
+      assert.equal(after.length, 3, 'abgelehntes Ereignis nicht erneut abgelegt');
+      assert.equal(after[1].d, ev.d, 'A nicht zuerst erneut');
+      assert.notEqual(after[2].d, ev.d);
+      // Nur der letzte Stand abgelehnt, oder Fehler ohne ref (älteres Relay):
+      // keine Wiederholung, keine Doppelten.
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, slot: 'latest' });
+      deliver({ t: 'error', e: 'relay_full', dev: creds.devId });
+      b.agent._pushMailboxLatest();
+      assert.equal(events().length, 3);
+      // Warteschlange je Gerät höchstens 8: älteste fallen heraus. Inhalte
+      // entschlüsselt prüfen (der Nonce macht jede Ablage verschieden).
+      const mk = fromB64u(creds.mailboxKey, 32);
+      const alarmsOf = (m) => openMailbox(mk, creds.devId, m.d).alarmsActive;
+      const last = events()[2];
+      assert.equal(alarmsOf(last), 0);
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: last.ref });
+      for (let i = 1; i <= 10; i++) { alarms = i; b.agent._checkEvents(); } // reiht 1..10 hinter `last` ein
+      assert.equal(events().length, 3);
+      b.agent._pushMailboxLatest();
+      const replay = events().slice(3);
+      assert.deepEqual(replay.map(alarmsOf), [3, 4, 5, 6, 7, 8, 9, 10], 'nicht die acht neuesten in Reihenfolge');
+      // Überlauf beim erneuten Einreihen (requeueEvent): Ablehnung von 3, dann
+      // stellen sich 11..17 an (8), dann kommt die Ablehnung von 4 → das
+      // älteste (3) fällt heraus, 4 sortiert sich vor 11 ein (Review 1f6c3d84 P3).
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: replay[0].ref });
+      for (let i = 11; i <= 17; i++) { alarms = i; b.agent._checkEvents(); }
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: replay[1].ref });
+      const n0 = events().length;
+      b.agent._pushMailboxLatest();
+      assert.deepEqual(events().slice(n0).map(alarmsOf), [4, 11, 12, 13, 14, 15, 16, 17]);
+      // Nummer bleibt beim erneuten Ablegen erhalten (Review 5a969217 P3):
+      // A und E unterwegs, A abgelehnt, C reiht sich an, Lauf legt A und C neu
+      // ab — dann lehnt das Relay E, A und C ab → Reihenfolge A, E, C.
+      const at = () => events().length;
+      alarms = 21; b.agent._checkEvents(); const evA = events()[at() - 1];
+      alarms = 22; b.agent._checkEvents(); const evE = events()[at() - 1];
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: evA.ref });
+      alarms = 23; b.agent._checkEvents();
+      const n1 = at();
+      b.agent._pushMailboxLatest();
+      const [evA2, evC2] = events().slice(n1);
+      assert.deepEqual([evA2, evC2].map(alarmsOf), [21, 23]);
+      for (const ev of [evE, evA2, evC2]) deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: ev.ref });
+      const n2 = at();
+      b.agent._pushMailboxLatest();
+      assert.deepEqual(events().slice(n2).map(alarmsOf), [21, 22, 23], 'älteres A hinter E einsortiert');
+    } finally {
+      b.agent.stop();
+    }
+  });
 
   test('koppeln über das Relay, Sitzung, Live-Werte, Rechte, Briefkasten, entkoppeln', async () => {
     const ctx = await setup();

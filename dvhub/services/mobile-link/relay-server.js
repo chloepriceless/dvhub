@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { createRelay, createSocketGuard } from './relay-core.js';
+import { createRelay, createSocketGuard, WS_SERVER_OPTIONS } from './relay-core.js';
 
 export const WS_PATH = '/v1/ws';
 
@@ -111,7 +111,7 @@ export function startRelayServer({
   });
   // maxPayload = Obergrenze (größter Box-Rahmen). Vor der Anmeldung und je
   // Rolle gilt die engere Grenze des Wächters, den Rest prüft relay-core.
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 + 4096 });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 + 4096, ...WS_SERVER_OPTIONS });
   server.on('upgrade', (req, socket, head) => {
     if (req.url !== WS_PATH) { socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => {

@@ -116,6 +116,13 @@ function defaultConnect(url) {
   return sock;
 }
 
+// Fehler des Relays, nach denen ein abgelegtes Ereignis erneut versucht wird.
+const RETRY_MBOX_ERRORS = new Set(['relay_busy', 'relay_full']);
+// Gesendete Ereignis-Ablagen, deren Fehler noch kommen kann (je Verbindung), und
+// abgelehnte Ereignisse, die je Gerät auf den nächsten Lauf warten.
+const EVENT_REFS_KEPT = 128;
+const EVENT_RETRY_PER_DEVICE = 8;
+
 function enc(obj) { return b64u(Buffer.from(JSON.stringify(obj), 'utf8')); }
 function dec(d) { return JSON.parse(fromB64u(d).toString('utf8')); }
 
@@ -390,7 +397,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     store.devices = devices().filter((d) => d.id !== id);
     saveStore();
     for (const peer of [...sessions]) if (peer.devId === id) peer.close('device_removed');
-    for (const link of links()) link.send({ t: 'mbox_clear', dev: id });
+    for (const link of links()) { link.retryQ.delete(id); link.send({ t: 'mbox_clear', dev: id }); }
     broadcastAllow();
     pushLog('mobile_link_device_removed', { dev: id, name: dev.name });
     reconcile();
@@ -442,6 +449,31 @@ export function createMobileLink(ctx = {}, deps = {}) {
     const peers = new Map();
     const link = {
       kind, online: false, state: 'connecting', lastError: null, since: null,
+      // Ereignisse, die das Relay abgelehnt hat (voll/gedrosselt), warten je
+      // Gerät in Reihenfolge auf den nächsten Briefkasten-Lauf; neuere stellen
+      // sich dahinter an (Review 834d1336/d4d72b9f P3). Das Relay nennt die
+      // abgelehnte Ablage über `ref`; ein älteres Relay ohne `ref` kann einen
+      // abgelehnten letzten Stand nicht von einem Ereignis unterscheiden —
+      // dann keine Wiederholung (sonst Doppelte, Review 736d2018 P3).
+      // Einträge { seq, d }: seq = Entstehungsreihenfolge; die Schlange bleibt
+      // danach sortiert, bei Überlauf fällt das älteste heraus (Review 1f6c3d84 P3).
+      retryQ: new Map(), sentRefs: new Map(), nextRef: 1, nextSeq: 1,
+      putEvent(dev, d, seq = link.nextSeq++) {
+        const q = link.retryQ.get(dev);
+        if (q) { link.requeueEvent(dev, d, seq); return; }
+        const ref = `e${link.nextRef++}`;
+        link.sentRefs.set(ref, { dev, d, seq });
+        if (link.sentRefs.size > EVENT_REFS_KEPT) link.sentRefs.delete(link.sentRefs.keys().next().value);
+        link.send({ t: 'mbox_put', dev, d, ref });
+      },
+      requeueEvent(dev, d, seq) {
+        const q = link.retryQ.get(dev) || [];
+        let i = q.length;
+        while (i > 0 && q[i - 1].seq > seq) i -= 1;
+        q.splice(i, 0, { seq, d });
+        if (q.length > EVENT_RETRY_PER_DEVICE) q.shift();
+        link.retryQ.set(dev, q);
+      },
       send(obj) { if (sock && link.online) { try { sock.send(JSON.stringify(obj)); } catch { /* weg */ } } },
       syncPairing() {
         if (!link.online) return;
@@ -535,7 +567,13 @@ export function createMobileLink(ctx = {}, deps = {}) {
         peers.delete(msg.c);
         return;
       }
-      if (msg.t === 'error') link.lastError = String(msg.e || 'relay_error');
+      if (msg.t === 'error') {
+        link.lastError = String(msg.e || 'relay_error');
+        if (RETRY_MBOX_ERRORS.has(msg.e) && msg.slot !== 'latest' && typeof msg.dev === 'string') {
+          const sent = typeof msg.ref === 'string' ? link.sentRefs.get(msg.ref) : null;
+          if (sent) { link.sentRefs.delete(msg.ref); link.requeueEvent(sent.dev, sent.d, sent.seq); }
+        }
+      }
     }
 
     link.forget = (cid) => peers.delete(cid);
@@ -804,6 +842,15 @@ export function createMobileLink(ctx = {}, deps = {}) {
       try { sealed = sealMailbox(fromB64u(d.mk, 32), d.id, { t: 'latest', ts, status: st }); } catch { continue; }
       for (const l of links()) l.send({ t: 'mbox_put', dev: d.id, slot: 'latest', d: sealed });
     }
+    // Abgelehnte Ereignisse erneut ablegen (Review 834d1336 P3) — nach dem
+    // letzten Stand, der den Briefkasten der Box anlegt.
+    const known = new Set(devices().map((d) => d.id));
+    for (const l of links()) {
+      for (const [dev, q] of [...l.retryQ]) {
+        l.retryQ.delete(dev);
+        if (known.has(dev)) for (const ev of q) l.putEvent(dev, ev.d, ev.seq);
+      }
+    }
     checkEvents(st);
   }
 
@@ -824,7 +871,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
             alarmsActive: st.alarmsActive || 0, alarmsSeverity: st.alarmsSeverity || 0, emergencyStop: !!st.emergencyStop,
           });
         } catch { continue; }
-        for (const l of links()) l.send({ t: 'mbox_put', dev: d.id, d: sealed });
+        for (const l of links()) l.putEvent(d.id, sealed);
       }
     }
     lastEventKey = key;
@@ -952,6 +999,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     // Für Tests
     _boxId: () => signer?.id || null,
     _pushMailboxLatest: pushMailboxLatest,
+    _checkEvents: checkEvents,
     _keyId: keyId,
   };
 }

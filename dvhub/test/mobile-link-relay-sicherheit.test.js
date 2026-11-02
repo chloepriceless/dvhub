@@ -271,24 +271,35 @@ describe('Relay-Sicherheit H-0004: Widerruf', () => {
 // ── H-0005: allow-Handler ──────────────────────────────────────────────────
 
 describe('Relay-Sicherheit H-0005: allow ohne Rundlauf über alle Briefkästen', () => {
-  test('allow-Flut einer Box kostet nicht O(alle Briefkästen)', async () => {
-    const relay = createRelay({ limits: { boxFramesPerWindow: 1e9, boxBytesPerWindow: 1e12 } });
+  test('allow-Flut einer Box kostet nicht O(alle Briefkästen)', () => {
+    // Verhältnis statt fester Wandzeit (unter Last robust): dieselbe
+    // allow-Flut bei 25 und bei 400 fremden Boxen (je 32 Briefkästen).
+    // Unabhängig von der Menge: ~1× (etwas mehr durch den größeren Heap);
+    // Rundlauf über alle: ~16×.
     const devs = Array.from({ length: 32 }, (_, i) => `dev${i}`);
-    for (let i = 0; i < 120; i++) {
-      // Je Box eine eigene Quelle (neue Boxen sind je Quelle gedrosselt).
-      const b = await boxOnRelay(relay, generateIdentity(), `198.51.100.${i}`);
-      b.send({ t: 'allow', devs });
-      for (const dev of devs) b.send({ t: 'mbox_put', dev, slot: 'latest', d: 'QUFB' });
+    function run(n) {
+      const relay = createRelay({ limits: { boxFramesPerWindow: 1e9, boxBytesPerWindow: 1e12 } });
+      for (let i = 0; i < n; i++) {
+        // Je Box eine eigene Quelle (neue Boxen sind je Quelle gedrosselt).
+        const b = syncBox(relay, `198.51.${i >> 8}.${i & 255}`);
+        b.send({ t: 'allow', devs });
+        for (const dev of devs) b.send({ t: 'mbox_put', dev, slot: 'latest', d: 'QUFB' });
+      }
+      assert.equal(relay.stats().mailboxes, n * 32);
+      const a = syncBox(relay, '203.0.113.1');
+      const t0 = process.hrtime.bigint();
+      for (let i = 0; i < 4000; i++) a.send({ t: 'allow', devs });
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+      relay.close();
+      return ms;
     }
-    await sleep(20);
-    assert.equal(relay.stats().mailboxes, 120 * 32);
-    const a = await boxOnRelay(relay, generateIdentity());
-    const t0 = process.hrtime.bigint();
-    for (let i = 0; i < 4000; i++) a.send({ t: 'allow', devs });
-    await flush(a);
-    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    assert.ok(ms < 400, `4000× allow dauerten ${ms.toFixed(0)} ms`);
-    relay.close();
+    const best = (n) => Math.min(run(n), run(n), run(n));
+    best(25); // Aufwärmen (JIT)
+    const small = best(25);
+    const large = best(400);
+    const ratio = large / Math.max(small, 0.5);
+    if (process.env.RELAY_RATIO_LOG) console.log(`allow ${ratio.toFixed(2)}`);
+    assert.ok(ratio < 6, `16× Briefkästen → ${ratio.toFixed(1)}× Zeit (${small.toFixed(1)} → ${large.toFixed(1)} ms), erwartet ~1, nicht ~16`);
   });
 });
 
@@ -333,21 +344,34 @@ describe('Relay-Sicherheit: Codex-Gegenprüfung', () => {
   });
 
   test('Verdrängen unter Speicherdruck bleibt linear (kein Neustart des Iterators, P2)', () => {
-    const relay = createRelay({ limits: { mailboxTotalBytes: 16 * 1024 * 1024, boxFramesPerWindow: 1e9, boxBytesPerWindow: 1e12 } });
+    // Verhältnis statt fester Wandzeit (unter Last robust): k Boxen unter
+    // vollem Budget, dann k große Ablagen, die je ~1900 kleine Einträge
+    // verdrängen. Linear: 8× k → ~8× Zeit; quadratisch: ~64×.
     const devs = Array.from({ length: 32 }, (_, i) => `dev${i}`);
-    const boxes = [];
-    for (let i = 0; i < 40; i++) {
-      const b = syncBox(relay, `198.51.100.${i}`);
-      b.send({ t: 'allow', devs });
-      for (const dev of devs) for (let j = 0; j < 64; j++) b.send({ t: 'mbox_put', dev, d: 'A' });
-      boxes.push(b);
+    function run(k) {
+      const relay = createRelay({ limits: { mailboxTotalBytes: k * 400 * 1024, boxFramesPerWindow: 1e9, boxBytesPerWindow: 1e12 } });
+      const boxes = [];
+      for (let i = 0; i < k; i++) {
+        const b = syncBox(relay, `198.51.${i >> 8}.${i & 255}`);
+        b.send({ t: 'allow', devs });
+        for (const dev of devs) for (let j = 0; j < 64; j++) b.send({ t: 'mbox_put', dev, d: 'A' });
+        boxes.push(b);
+      }
+      const big = 'A'.repeat(500_000);
+      const t0 = performance.now();
+      for (const b of boxes) b.send({ t: 'mbox_put', dev: devs[0], d: big });
+      const ms = performance.now() - t0;
+      assert.ok(relay.stats().mailboxBytes <= k * 400 * 1024);
+      relay.close();
+      return ms;
     }
-    const t0 = performance.now();
-    for (const b of boxes) b.send({ t: 'mbox_put', dev: devs[0], d: 'A'.repeat(500_000) });
-    const ms = performance.now() - t0;
-    assert.ok(relay.stats().mailboxBytes <= 16 * 1024 * 1024);
-    assert.ok(ms < 300, `40 große Ablagen unter Druck dauerten ${ms.toFixed(0)} ms`);
-    relay.close();
+    const best = (k) => Math.min(run(k), run(k), run(k));
+    best(16); // Aufwärmen (JIT)
+    const small = best(16);
+    const large = best(128);
+    const ratio = large / Math.max(small, 0.5);
+    if (process.env.RELAY_RATIO_LOG) console.log(`evict ${ratio.toFixed(2)}`);
+    assert.ok(ratio < 20, `8× Boxen → ${ratio.toFixed(1)}× Zeit (${small.toFixed(1)} → ${large.toFixed(1)} ms), erwartet ~8 (linear), nicht ~64`);
   });
 });
 
@@ -508,6 +532,21 @@ describe('Relay-Speicher: Ausgangspuffer', () => {
     }
   });
 
+  test('Frist wächst mit der Rahmengröße: großer Rahmen auf langsamer Leitung fliegt nicht vorschnell (Review 834d1336 P3)', async () => {
+    const guard = relayCore.createSocketGuard({ stallMs: 100, minRateBytesPerSec: 10 * 1024 });
+    try {
+      const w = fakeWs();
+      const s = guard.wrap(w, { remote: 'A', pingMs: 0 });
+      s.send('x'.repeat(5 * 1024)); // 100 ms + 500 ms
+      await sleep(300);
+      assert.equal(w.terminated, false, 'großer Rahmen nach fester Frist getrennt');
+      await until(() => w.terminated, 2000);
+      assert.equal(guard.stats().outBufferedBytes, 0);
+    } finally {
+      guard.close();
+    }
+  });
+
   test('ohne Fortschritt wird getrennt, wer abholt, bleibt', async () => {
     const guard = relayCore.createSocketGuard({ stallMs: 150 });
     try {
@@ -570,7 +609,7 @@ describe('Relay-Speicher: Rahmen vor und nach der Anmeldung', () => {
   test('angefangene Rahmen zählen gesamt: der größte weicht, Hänger fliegen nach Frist', async () => {
     const { srv, port } = await localRelay({
       limits: { boxFramesPerWindow: 1e6, boxBytesPerWindow: 1e12 },
-      socketLimits: { inTotal: 1024 * 1024, inPerRemote: 8 * 1024 * 1024, stallMs: 400 },
+      socketLimits: { inTotal: 1024 * 1024, inPerRemote: 8 * 1024 * 1024, stallMs: 400, minRateBytesPerSec: 1e9 },
     });
     try {
       const a = await wsBox(port, generateIdentity());
@@ -611,6 +650,51 @@ describe('Relay-Speicher: Rahmen vor und nach der Anmeldung', () => {
   });
 });
 
+describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', () => {
+  test('Ping-Flut ohne Lesen: Pongs zählen im Ausgangsbudget, Flut wird getrennt (P1)', async () => {
+    const { srv, port } = await localRelay();
+    try {
+      const b = await wsBox(port, generateIdentity());
+      b.ws._socket.pause(); // liest nicht mehr
+      for (let i = 0; i < 200; i++) b.ws.ping(Buffer.alloc(125, 1));
+      await until(() => srv.relay.stats().connections === 0, 3000);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  test('Ein-Byte-Fragmente mit Pong-Füllung: Fragmente begrenzt, festgehaltene Lesepuffer gezählt (P2)', async () => {
+    const { srv, port } = await localRelay();
+    try {
+      const b = await wsBox(port, generateIdentity());
+      // Unfertige Nachricht aus 1-Byte-Fragmenten, dazwischen leere Pongs.
+      const pong = Buffer.from([0x8a, 0x80, 0, 0, 0, 0]);
+      const parts = [Buffer.concat([frameHead(1, { fin: false, opcode: 0x1 }), Buffer.from('{')])];
+      for (let i = 0; i < 40; i++) parts.push(Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' ')]), pong, pong);
+      b.ws._socket.write(Buffer.concat(parts));
+      await until(() => b.state.closed, 3000);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  test('Rahmen in winzigen TCP-Stücken: Stücke zählen im Eingangsbudget (P2)', async () => {
+    const { srv, port } = await localRelay({ socketLimits: { inTotal: 64 * 1024, inPerRemote: 1024 * 1024, stallMs: 60_000 } });
+    try {
+      const b = await wsBox(port, generateIdentity());
+      b.ws._socket.setNoDelay(true);
+      b.ws._socket.write(frameHead(32 * 1024));
+      for (let i = 0; i < 400 && !b.state.closed; i++) {
+        b.ws._socket.write(Buffer.from(' '));
+        await sleep(1);
+      }
+      await until(() => b.state.closed, 3000);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 describe('Relay-Speicher: faire Verdrängung im Briefkasten', () => {
   const big = { boxFramesPerWindow: 1e9, boxBytesPerWindow: 1e12 };
 
@@ -637,6 +721,41 @@ describe('Relay-Speicher: faire Verdrängung im Briefkasten', () => {
     d.send({ t: 'mbox_get' });
     const items = (await d.next('mbox')).items;
     assert.equal(items.length, 1, 'echte Meldung wurde verdrängt');
+    relay.close();
+  });
+
+  test('Quelle mit nur noch Verwaltung (Box zog um) lenkt die Verdrängung nicht auf das Älteste überhaupt (Review 834d1336 P2)', async () => {
+    const relay = createRelay({ limits: { ...big, mailboxTotalBytes: 256 * 1024, mailboxBytesPerSource: 64 * 1024, mailboxBytesPerBox: 32 * 1024 } });
+    const good = generateIdentity();
+    const dev = generateIdentity();
+    const g = await boxOnRelay(relay, good, '203.0.113.10');
+    g.send({ t: 'allow', devs: [dev.id] });
+    g.send({ t: 'mbox_put', dev: dev.id, d: b64(1000, 'G') });
+    await flush(g);
+    // Box legt aus Quelle A 32 Briefkästen an (Verwaltung zählt bei A) …
+    const mover = generateIdentity();
+    const devs = Array.from({ length: 32 }, (_, i) => `m${i}`);
+    const a = await boxOnRelay(relay, mover, '198.51.100.200');
+    a.send({ t: 'allow', devs });
+    for (const d of devs) a.send({ t: 'mbox_put', dev: d, slot: 'latest', d: 'QUFB' });
+    await flush(a);
+    // … und befüllt sie danach aus Quelle B: A hält nur noch Verwaltung.
+    const b = await boxOnRelay(relay, mover, '198.51.100.201');
+    b.send({ t: 'allow', devs });
+    for (const d of devs) b.send({ t: 'mbox_put', dev: d, slot: 'latest', d: 'QkJC' });
+    await flush(b);
+    // Füller aus vielen Quellen, jede kleiner als A, aber größer als die echte Box.
+    for (let s = 0; s < 24; s++) {
+      const e = await boxOnRelay(relay, generateIdentity(), `192.0.2.${s}`);
+      e.send({ t: 'allow', devs: ['x'] });
+      for (let i = 0; i < 3; i++) e.send({ t: 'mbox_put', dev: 'x', d: b64(4000, 'F') });
+      await flush(e);
+    }
+    assert.ok(relay.stats().mailboxBytes <= 256 * 1024);
+    const d = await deviceOnRelay(relay, good, dev);
+    await d.next('ok');
+    d.send({ t: 'mbox_get' });
+    assert.equal((await d.next('mbox')).items.length, 1, 'echte Meldung wurde verdrängt');
     relay.close();
   });
 
@@ -676,6 +795,28 @@ describe('Relay-Speicher: faire Verdrängung im Briefkasten', () => {
     again.send({ t: 'mbox_put', dev: 'x', d: b64(100) });
     await flush(again);
     assert.equal(again.inbox.find((m) => m.t === 'error'), undefined, 'kein Nachschub nach einer Minute');
+    relay.close();
+  });
+
+  test('Fehler nennt slot (letzter Stand) und ref (Ereignis) — echtes Relay (Review d4d72b9f P3)', async () => {
+    const relay = createRelay({ limits: { ...big, newBoxesPerSource: 1, newBoxRefillMs: 3600_000 } });
+    // Erste neue Box der Quelle verbraucht den Eimer.
+    const first = await boxOnRelay(relay, generateIdentity(), '198.51.100.9');
+    first.send({ t: 'allow', devs: ['x'] });
+    first.send({ t: 'mbox_put', dev: 'x', d: b64(100) });
+    await flush(first);
+    const b = await boxOnRelay(relay, generateIdentity(), '198.51.100.9');
+    b.send({ t: 'allow', devs: ['x'] });
+    b.send({ t: 'mbox_put', dev: 'x', slot: 'latest', d: b64(100) });
+    b.send({ t: 'mbox_put', dev: 'x', d: b64(100), ref: 'e7' });
+    b.send({ t: 'mbox_put', dev: 'x', d: b64(100), ref: 'x'.repeat(40) });
+    await flush(b);
+    const errs = b.inbox.filter((m) => m.t === 'error');
+    assert.deepEqual(errs, [
+      { t: 'error', e: 'relay_busy', dev: 'x', slot: 'latest' },
+      { t: 'error', e: 'relay_busy', dev: 'x', ref: 'e7' },
+      { t: 'error', e: 'relay_busy', dev: 'x' },
+    ]);
     relay.close();
   });
 
