@@ -696,6 +696,7 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
       for (const f of h.ping || []) f(view);
       assert.ok(pongArg, 'Ping nicht beantwortet');
       assert.notEqual(pongArg.buffer, chunk.buffer, 'Pong teilt das Lesestück');
+      assert.equal(pongArg.buffer.byteLength, view.length, 'Pong liegt in einem gemeinsamen Pool');
       assert.deepEqual([...pongArg], [...view]);
     } finally {
       guard.close();
@@ -703,15 +704,20 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
   });
 
   test('Ein-Byte-Fragmente mit Pong-Füllung: höchstens 16 Fragmente (P2)', async () => {
-    // Steuerrahmen-Grenze außer Reichweite, Pin-Zählung (40 × 64 KiB) unter
-    // der Grenze je Quelle: trennen darf hier nur maxFragments.
+    // Steuerrahmen-Grenze außer Reichweite, Pin-Zählung (16 × 64 KiB) unter
+    // der Grenze je Quelle: trennen darf hier nur maxFragments — genau an der
+    // Grenze: 16 Datenrahmen bleiben offen, der 17. trennt.
     const { srv, port } = await localRelay({ socketLimits: { controlFramesPerWindow: 1e9 } });
     try {
       const b = await wsBox(port, generateIdentity());
       const pong = Buffer.from([0x8a, 0x80, 0, 0, 0, 0]);
-      const parts = [Buffer.concat([frameHead(1, { fin: false, opcode: 0x1 }), Buffer.from('{')])];
-      for (let i = 0; i < 40; i++) parts.push(Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' ')]), pong, pong);
+      const frag = () => Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' '), pong, pong]);
+      const parts = [Buffer.concat([frameHead(1, { fin: false, opcode: 0x1 }), Buffer.from('{'), pong])];
+      for (let i = 0; i < 15; i++) parts.push(frag());
       b.ws._socket.write(Buffer.concat(parts));
+      await sleep(300);
+      assert.equal(b.state.closed, null, '16 Fragmente schon getrennt');
+      b.ws._socket.write(frag());
       await until(() => b.state.closed, 3000);
     } finally {
       await srv.close();

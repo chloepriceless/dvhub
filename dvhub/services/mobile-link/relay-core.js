@@ -945,9 +945,12 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
       if (gone) return;
       if (!controlOk()) { kill(); return; }
       if (ws.readyState !== 1) return;
-      // Kopie: `data` ist eine Sicht auf das ganze Lesestück (bis 64 KiB) und
-      // hielte es fest, solange der Pong wartet (Gegenprüfung 17fede38 P2).
-      const copy = Buffer.from(data);
+      // Eigene Kopie: `data` ist eine Sicht auf das ganze Lesestück (bis
+      // 64 KiB) und hielte es fest, solange der Pong wartet (Gegenprüfung
+      // 17fede38 P2); Buffer.from nähme für kleine Größen ein Stück des
+      // gemeinsamen 8-KiB-Pools (Gegenprüfung 714b3ea7 P3).
+      const copy = Buffer.allocUnsafeSlow(data.length);
+      data.copy(copy);
       guardedWrite(copy.length + 2, (cb) => ws.pong(copy, undefined, cb));
     });
   } else if (ws._autoPong === false) {
