@@ -1820,3 +1820,61 @@ test('Laufstart: wartet auf einen laufenden Push', async () => {
     assert.equal(r.ok, true);
   } finally { await mock.close(); }
 });
+
+// Gegenprüfung e8cb7239 (P3): „unbekannt“ und „einmal gelöscht“ gehören in die
+// Datei — sonst machte schon das Speichern aus einem unbekannten Stand beim
+// nächsten Neustart einen bekannten.
+test('Buchführung: unbekannter Stand bleibt über einen weiteren Neustart unbekannt', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    env.ctx.dataDir = await tmpDataDir();
+    fs.writeFileSync(path.join(env.ctx.dataDir, 'eos-price-estimates.json'), '{kaputt');
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ pv: { slots: [] }, load: { slots: [] }, price: { slots: [] } }) };
+    await createEosForecastBridge(env.ctx).push(); // Preisausfall: kein Import
+    const res = await createEosForecastBridge(env.ctx).prepareRun(); // nächster Neustart
+    assert.equal(res.ok, false);
+    assert.match(res.error, /Preisstand in EOS unbekannt/);
+  } finally { await mock.close(); }
+});
+
+test('Buchführung: einmaliges Löschen gilt erst mit angekommenem Import als erledigt — auch über Neustarts', async () => {
+  let failPrice = true;
+  const mock = await createMockEos((req, res) => {
+    if (failPrice && req.method === 'PUT' && req.url.startsWith('/v1/prediction/import/ElecPriceImport')) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return;
+    }
+    okHandler(req, res);
+  });
+  try {
+    const env = estimateCtx(mock);
+    env.ctx.dataDir = await tmpDataDir(); // keine Datei
+    await createEosForecastBridge(env.ctx).push(); // Import scheitert
+    failPrice = false;
+    mock.requests.length = 0;
+    await createEosForecastBridge(env.ctx).push(); // Neustart, Import gelingt
+    const sentUntil = Date.parse(env.state.optimizer.lastEosPush.priceEstimate.until);
+    const del = deletes(mock);
+    assert.equal(del.length, 2, 'hinter dem Geschickten einmal gelöscht');
+    for (const d of del) assert.equal(d.start, sentUntil);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung e8cb7239 (P3): Lässt sich der Schätzbereich nicht vormerken
+// (Platte voll, Rechte), gehen nur echte Preise an EOS.
+test('Buchführung: Vormerken scheitert → keine Schätzung an EOS', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    env.ctx.dataDir = await tmpDataDir();
+    fs.mkdirSync(path.join(env.ctx.dataDir, 'eos-price-estimates.json.tmp')); // Schreiben scheitert
+    await createEosForecastBridge(env.ctx).push();
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    assert.equal(Math.max(...elec.keys()), env.realEnd - Q, 'nur echte Preise');
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
+  } finally { await mock.close(); }
+});

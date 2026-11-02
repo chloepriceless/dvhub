@@ -426,7 +426,8 @@ export function createEosForecastBridge(ctx) {
   // pauschal ab jetzt (auch echte Preise, die EOS noch hielt) und sperrte
   // jeden Lauf. Der Bereich eines Imports wird VOR dem Import vorgemerkt,
   // damit auch ein Absturz mittendrin nichts vergessen lässt.
-  //   - Datei gelesen → Stand bekannt;
+  //   - Datei gelesen → Bereiche, „bekannt“ und „einmal gelöscht“ wie
+  //     gespeichert (fehlende Felder: unbekannt / nicht gelöscht);
   //   - keine Datei (neu, Update von 1.0.8 — schätzte nie) → nichts geschätzt;
   //     zur Sicherheit löscht der erste Push trotzdem einmal hinter dem
   //     Geschickten;
@@ -450,25 +451,31 @@ export function createEosForecastBridge(ctx) {
       if (!saved || typeof saved !== 'object') throw new Error('kein Objekt');
       lastEstimateRange = validRange(saved.lastEstimateRange);
       staleRange = validRange(saved.staleRange);
-      eosPricesKnown = true;
-      clearedOnce = true;
+      // „Unbekannt“ und „noch nicht gelöscht“ überdauern einen Neustart
+      // (Gegenprüfung e8cb7239) — sonst machte schon das Speichern daraus
+      // beim nächsten Start „bekannt“.
+      eosPricesKnown = saved.known === true;
+      clearedOnce = saved.clearedOnce === true;
     } catch (e) {
       if (e?.code === 'ENOENT') eosPricesKnown = true;
       else if (pushLog) pushLog('eos_price_estimate_error', { error: `eos-price-estimates.json: ${e?.message || e}` });
     }
   }
   let savedEstimates = null;
+  /** Buchführung schreiben; false, wenn das nicht ging (ohne Datei: true). */
   function saveEstimates() {
-    if (!estimatesFile) return;
-    const text = JSON.stringify({ lastEstimateRange, staleRange });
-    if (text === savedEstimates) return;
+    if (!estimatesFile) return true;
+    const text = JSON.stringify({ known: eosPricesKnown, clearedOnce, lastEstimateRange, staleRange });
+    if (text === savedEstimates) return true;
     try {
       const tmp = `${estimatesFile}.tmp`;
       fs.writeFileSync(tmp, text);
       fs.renameSync(tmp, estimatesFile);
       savedEstimates = text;
+      return true;
     } catch (e) {
       if (pushLog) pushLog('eos_price_estimate_error', { error: `eos-price-estimates.json: ${e?.message || e}` });
+      return false;
     }
   }
 
@@ -955,8 +962,20 @@ export function createEosForecastBridge(ctx) {
     // Einspeisewert — es speist mittags PV ein, statt sie für Nacht und Morgen
     // zu speichern (Prod 01.11.2026). Deshalb dahinter Schätzwerte; der
     // Steuerzeitraum richtet sich weiter nur nach den echten Preisen.
-    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(), { estimate: dvhubTriggersEosRuns(cfg) && state?.optimizer?.eos?.supported === true });
+    let priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(), { estimate: dvhubTriggersEosRuns(cfg) && state?.optimizer?.eos?.supported === true });
     if (gone()) return abandoned();
+    // Vor dem Import vormerken: was geschätzt an EOS geht, kann ab dann dort
+    // liegen — auch wenn danach etwas scheitert oder DVhub stirbt. Lässt es
+    // sich nicht festhalten (Platte voll, Rechte), nur echte Preise schicken
+    // (Gegenprüfung e8cb7239).
+    if (priceFill.estimate) {
+      const before = staleRange;
+      staleRange = unionRange(staleRange, { fromMs: Date.parse(priceFill.estimate.from), untilMs: Date.parse(priceFill.estimate.until) });
+      if (!saveEstimates()) {
+        staleRange = before;
+        priceFill = { slots: forecast?.price?.slots || [], estimate: null };
+      }
+    }
     const priceSlotsCt = priceFill.slots;
     const priceEstimate = priceFill.estimate;
     if (state) { state.optimizer = state.optimizer || {}; state.optimizer.eosPriceEstimate = priceEstimate; }
@@ -1095,13 +1114,6 @@ export function createEosForecastBridge(ctx) {
         body: buildDataFrameBody('feed_in_tariff_wh', feedInSlots, tz),
         rows: feedInSlots.length,
       });
-    }
-
-    // Vor dem Import vormerken: was jetzt geschätzt an EOS geht, kann ab
-    // sofort dort liegen — auch wenn danach etwas scheitert oder DVhub stirbt.
-    if (priceEstimate) {
-      staleRange = unionRange(staleRange, { fromMs: Date.parse(priceEstimate.from), untilMs: Date.parse(priceEstimate.until) });
-      saveEstimates();
     }
 
     const pushed = [];
