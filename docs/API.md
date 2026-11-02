@@ -11,7 +11,7 @@ Quelle ist der Router `dvhub/routes-api.js`. Die interaktive Swagger-Oberfläche
   - [Prognose](#39-prognose) · [Optimizer & EOS](#311-optimizer--eos) · [Zeitplan & Steuerung](#312-zeitplan--steuerung)
   - [E-Auto](#313-e-auto) · [Integrationen (Datenausgabe)](#314-integrationen-datenausgabe) · [Integrationen (Einstellungen)](#315-integrationen-einstellungen)
   - [Messwert-Eingang HA / Loxone](#316-messwert-eingang-home-assistant--loxone) · [Datenspende](#317-datenspende) · [Benachrichtigungen & Monitoring](#318-benachrichtigungen--monitoring)
-  - [Geräte, PV-Strings, Zähler](#319-geräte-pv-strings-zähler) · [Familien-Dashboard](#320-familien-dashboard-dvhub-pro) · [VPN](#321-vpn-dvhub-pro) · [Lizenz](#322-lizenz) · [Installateurs-Portal](#323-installateurs-portal)
+  - [Geräte, PV-Strings, Zähler](#319-geräte-pv-strings-zähler) · [Familien-Dashboard](#320-familien-dashboard-dvhub-pro) · [VPN](#321-vpn-dvhub-pro) · [Lizenz](#322-lizenz) · [Akku-Netzstrom, Handy-App, Geräte](#323a-akku-netzstrom-handy-app-geräte-ergänzt-mit-109) · [Installateurs-Portal](#323-installateurs-portal)
 
 ---
 
@@ -99,7 +99,9 @@ Spalte **Zugang** in den Tabellen:
 | POST | `/api/admin/system/updates/apply` | Token | Betriebssystem-Updates einspielen |
 | GET | `/api/admin/update/check` | Token | DVhub-Update prüfen |
 | POST | `/api/admin/update/apply` | Token | DVhub-Update einspielen |
-| POST | `/api/admin/update/channel` | Token | Update-Kanal setzen (`stable`/`dev`) |
+| POST | `/api/admin/update/channel` | Token | Update-Kanal setzen (`stable`/`dev`); Rückstufung → `400 downgrade_blocked`, mit `allowDowngrade: true` erzwingen |
+| GET | `/api/admin/update/status` | Token | Paket-Installation: Fortschritt/Ergebnis des letzten Update-Auftrags (`mode: package`); git-Installation: `mode: git` |
+| POST | `/api/admin/update/rollback` | Token | Paket-Installation: ohne Download auf die vorige Version zurück (git-Installation: `409`) |
 | POST | `/api/admin/token/rotate` | Token | API-Token neu erzeugen |
 | POST | `/api/admin/token/revoke` | Token | API-Token widerrufen |
 
@@ -374,6 +376,27 @@ Siehe [EEBUS.md](EEBUS.md).
 | POST | `/api/license/activate-node-lock` | Token | Offline-Aktivierung mit Maschinen-Datei |
 | POST | `/api/license/revalidate` | Token | Lizenz neu prüfen |
 | POST | `/api/license/remove` | Token | Lizenz entfernen |
+
+### 3.23a Akku-Netzstrom, Handy-App, Geräte (ergänzt mit 1.0.9)
+
+| Methode | Pfad | Zugang | Beschreibung |
+|---|---|---|---|
+| GET | `/api/battery/grid-share` | LAN·`history` | Netzstrom im Akku: Stand, Anteil, Sperre, Tageswerte |
+| GET | `/api/battery/grid-share/protocol.csv` | LAN·`history` | Protokoll (Sperrwechsel, Tageszeilen, Zurücksetzen) als CSV |
+| POST | `/api/battery/grid-share/reset` | Token | Zähler auf 0 (`{ "reason": "…" }`), nur mit Header `x-confirm-legal-gate: true`; wird protokolliert |
+| GET | `/api/mobile-link/status` | LAN·`integrations` | Handy-App: Zustand, gekoppelte Geräte, liefert `uiToken` |
+| POST | `/api/mobile-link/settings` | Token+Nonce | Handy-App ein/aus, Relay, Name (Ausschalten geht ohne Nonce) |
+| POST | `/api/mobile-link/pair/start`, `/pair/approve` | Token+Nonce | Kopplung per QR-Code starten bzw. bestätigen |
+| POST | `/api/mobile-link/pair/cancel`, `/devices/remove` | Token | Kopplung abbrechen bzw. Gerät entkoppeln |
+| POST | `/api/mobile-link/devices/update` | Token+Nonce | Gekoppeltes Gerät ändern |
+| GET | `/api/tariff-provider/stats` | LAN·`integrations` | Auswertung der mitgeloggten Anbieterpreise |
+| GET | `/api/eos/remote/debug` | Token | EOS-Fernbetrieb: Diagnosepaket des letzten Laufs (Download) |
+| GET | `/api/feed-in-cap/status` | LAN·`integrations` | Einspeisegrenze der Anlage: Zustand und letzte Rücklesung |
+| GET | `/api/ocpp/status` | LAN·`integrations` | OCPP-Zentrale: verbundene Ladepunkte |
+| GET | `/api/vehicle-evcc` | LAN·`integrations` | Fahrzeug-Ladestand über evccs Fahrzeug-Treiber |
+| POST | `/api/vehicle-evcc/settings`, `/api/vehicle-evcc/refresh` | Token | Fahrzeug-Treiber einstellen bzw. sofort abfragen |
+| GET | `/api/victron/devices` | LAN·`integrations` | Am Victron GX gefundene Geräte |
+| POST | `/api/victron/devices/scan` | Token | Geräte am GX neu suchen |
 
 ### 3.23 Installateurs-Portal
 

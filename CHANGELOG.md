@@ -21,8 +21,8 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   Leitstand, EOS im Fernbetrieb (Beta).
 - **Strompreise:** Bezugspreis vom Stromanbieter (Tibber, LichtBlick) mit Protokoll und Auswertung, Hinweis vor dem
   Ende des Preiszeitraums.
-- **Netzladen und Direktvermarktung:** Netzstrom im Akku wird mitgezählt; solange welcher darin steckt, speist der
-  Akku nicht ein.
+- **Netzladen und Direktvermarktung:** Netzstrom im Akku wird mitgezählt; solange mehr als 0,1 kWh darin stecken,
+  speist der Akku nicht ins Netz ein (bis auf den Regelpuffer von höchstens 100 W).
 - **Neu (Beta):** Peak Shaving für Gewerbeanschlüsse, zweite Victron-Anlage am selben Anschluss, Handy-App,
   E-Auto-Wochenplan.
 - **Leitstand:** Energiebilanz mit dem echten Akku, klarere Beschriftungen; Entlade-Wächter ohne Fehlalarme.
@@ -34,8 +34,9 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   PV-Anlage in der Direktvermarktung aus dem Netz (dynamischer Tarif, §14a Modul 3, „Netzladen auch ohne
   Pauschal-/Abgrenzungsoption“), darf dieser Strom nie mit Marktprämie verkauft werden. DVhub führt einen
   rechnerischen Zähler: Netz → Akku erhöht den Netzstrom-Anteil (höchstens der gemessene Netzbezug), Entladung und
-  Verluste senken ihn anteilig. Ab 0,1 kWh Netzstrom ist die Einspeisung aus dem Akku gesperrt — PV-Überschuss geht
-  weiter hinaus; EOS plant dann keinen Akku-Verkauf. Leitstand „davon Netzstrom X kWh (Y %)“, Historie mit Verlauf
+  Verluste senken ihn anteilig. Über 0,1 kWh Netzstrom ist die Einspeisung aus dem Akku gesperrt (frei erst wieder
+  unter 0,05 kWh; ein Regelpuffer von höchstens 100 W bleibt) — PV-Überschuss geht weiter hinaus; EOS plant dann
+  keinen Akku-Verkauf. Leitstand „davon Netzstrom X kWh (Y %)“, Historie mit Verlauf
   und Tagesprotokoll (CSV), `/api/battery/grid-share`. Der Zähler übersteht Neustart und Update; ein ausdrückliches
   Zurücksetzen wird protokolliert.
 
