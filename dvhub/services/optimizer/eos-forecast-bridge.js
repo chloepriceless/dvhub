@@ -36,6 +36,7 @@ import { isGridStorageOnly, createStandbyEstimator, resolveStandbyW, buildGridSt
 // erwartete bei Ankunft (ev-registration.js).
 import { evSocForEos } from './ev-registration.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
+import { buildEosOptimization } from './eos-config-sync.js';
 import { resolveEosProxy } from './eos-adapter.js';
 import http from 'node:http';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
@@ -85,6 +86,29 @@ function slotsToTimeMap(slots) {
     out[iso] = v;
   }
   return out;
+}
+
+/**
+ * Ende (ms, exklusiv) der lückenlosen Abdeckung ab jetzt: der Slot, der jetzt
+ * läuft, und alle direkt anschließenden. Slots `{start, ctKwh}`, Schrittweite
+ * aus den Daten. -Infinity, wenn jetzt kein Slot läuft.
+ */
+export function contiguousPriceEndMs(slots, nowMs) {
+  const starts = [...new Set((Array.isArray(slots) ? slots : [])
+    .filter((s) => s && Number.isFinite(Number(s.ctKwh)))
+    .map((s) => Date.parse(s.start))
+    .filter(Number.isFinite))].sort((a, b) => a - b);
+  let stepMs = Infinity;
+  for (let i = 1; i < starts.length; i += 1) stepMs = Math.min(stepMs, starts[i] - starts[i - 1]);
+  if (!Number.isFinite(stepMs) || stepMs <= 0) stepMs = 15 * 60_000;
+  let end = -Infinity;
+  for (const t of starts) {
+    if (t + stepMs <= nowMs) continue;
+    if (!Number.isFinite(end)) { if (t > nowMs) break; end = t + stepMs; continue; }
+    if (t > end) break; // Lücke
+    end = Math.max(end, t + stepMs);
+  }
+  return end;
 }
 
 /**
@@ -1054,8 +1078,10 @@ export function createEosForecastBridge(ctx) {
 
     // PV wie die Last auf jetzt zurückgefüllt — nur für die Berechnung: PV
     // aus VRM beginnt nach einem Abruf erst zur nächsten vollen Stunde, der
-    // Steuerzeitraum fiele sonst aus (Gegenprüfung 7e99580c); die laufende
-    // Stunde hält EOS aus früheren Pushes.
+    // Steuerzeitraum fiele sonst aus (Gegenprüfung 7e99580c). Die laufende
+    // Stunde hält EOS aus früheren Pushes — nach einem EOS-Neustart nicht;
+    // dann bricht EOS bis zur nächsten vollen Stunde mit „Missing PV“ ab, wie
+    // schon vor der Preis-Schätzung (offen, Gegenprüfung 165fa8be).
     const horizon = await syncControlHorizon(
       baseUrl, realOnly(elecpriceSlots), feedInSlots.length ? realOnly(feedInSlots) : null,
       padSeriesBackToNow(pvSlots, Date.now()), expandHourlyToQuarterHourly(loadSlotsForEos),
@@ -1075,9 +1101,15 @@ export function createEosForecastBridge(ctx) {
       runBlockedBy = ['ElecPriceImport', 'FeedInTariffImport'].filter((k) => errors[k]).map((k) => `${k}: ${errors[k]}`).join('; ');
     } else if (horizon.hours === undefined) runBlockedBy = `Steuerzeitraum nicht gesetzt (${horizon.error || horizon.skipped})`;
     else {
-      const latestRunStartMs = Math.floor((Date.now() + RUN_START_MARGIN_MS) / PRICE_SLOT_MS) * PRICE_SLOT_MS;
-      if (latestRunStartMs + horizon.hours * 3_600_000 > realEndMs) {
-        runBlockedBy = `Steuerzeitraum (${horizon.hours} h) reicht über die echten Preise hinaus (bis ${new Date(realEndMs).toISOString()})`;
+      // Gegen die lückenlose Abdeckung ab jetzt (eine Lücke könnte alte
+      // Schätzwerte halten), Laufbeginn auf EOS' eigenen Slot abgerundet
+      // (bei Stunden-Slots die volle Stunde; Gegenprüfung 165fa8be).
+      const nowMs = Date.now();
+      const coveredEndMs = contiguousPriceEndMs(forecast?.price?.slots || [], nowMs);
+      const slotMs = buildEosOptimization(cfg).interval * 1000;
+      const latestRunStartMs = Math.floor((nowMs + RUN_START_MARGIN_MS) / slotMs) * slotMs;
+      if (latestRunStartMs + horizon.hours * 3_600_000 > coveredEndMs) {
+        runBlockedBy = `Steuerzeitraum (${horizon.hours} h) reicht über die echten Preise hinaus (lückenlos bis ${Number.isFinite(coveredEndMs) ? new Date(coveredEndMs).toISOString() : '—'})`;
       }
     }
 

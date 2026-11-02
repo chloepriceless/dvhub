@@ -1028,7 +1028,7 @@ function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotF
   const state = { victron: { soc: 50 }, optimizer: { eos: { supported: true } } };
   const ctx = {
     getCfg: () => ({
-      optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff, timezone: 'Europe/Berlin' },
+      optimizer: { eosProxy: { enabled: true, url: `http://127.0.0.1:${mock.port}` }, tariff, timezone: 'Europe/Berlin', eosOptimizationIntervalSec: 900 },
       userEnergyPricing: pricing || { mode: 'fixed', fixedGrossImportCtKwh: 30 },
     }),
     pushLog: (event, data) => logs.push({ event, data }),
@@ -1572,5 +1572,53 @@ test('Laufstart: Steuerzeitraum reicht über die echten Preise hinaus → kein L
       assert.equal(res.ok, false, `failDeletes=${failDeletes}`);
       assert.match(res.error, /über die echten Preise/);
     } finally { await mock.close(); }
+  }
+});
+
+// Gegenprüfung 165fa8be (P3): Eine Lücke in den echten Preisen zählt — der
+// Steuerzeitraum muss in der lückenlosen Abdeckung ab jetzt liegen, nicht nur
+// vor dem letzten echten Slot (in der Lücke könnten alte Schätzwerte liegen).
+test('Laufstart: Lücke in den echten Preisen im Steuerzeitraum → kein Lauf', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = {
+      buildForecastResponse: async () => {
+        const fc = await fc0();
+        const gap = (ms) => ms >= env.q0 + 30 * 60_000 && ms < env.q0 + 75 * 60_000;
+        return { ...fc, price: { slots: fc.price.slots.filter((s) => !gap(Date.parse(s.start))) } };
+      },
+    };
+    const res = await createEosForecastBridge(env.ctx).prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /über die echten Preise/);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 165fa8be (P3): EOS rundet den Laufbeginn auf SEINEN Slot ab —
+// bei Stunden-Slots auf die volle Stunde. Spät abends ohne Folgetag-Preise
+// (echte bis zur nächsten vollen Stunde, 20 min nach der vollen Stunde) passt
+// der 1-h-Zeitraum dann noch in die echten Preise.
+test('Laufstart: Stunden-Slots — Laufbeginn auf die volle Stunde gerundet', async (t) => {
+  const H = 3_600_000;
+  const hourStart = Math.floor(Date.now() / H) * H;
+  for (const [intervalSec, ok] of [[3600, true], [900, false]]) {
+    t.mock.timers.enable({ apis: ['Date'], now: hourStart + 20 * 60_000 });
+    const mock = await createMockEos(okHandler);
+    try {
+      const env = estimateCtx(mock);
+      const cfg0 = env.ctx.getCfg;
+      env.ctx.getCfg = () => { const c = cfg0(); c.optimizer.eosOptimizationIntervalSec = intervalSec; return c; };
+      const fc0 = env.ctx.forecastService.buildForecastResponse;
+      env.ctx.forecastService = {
+        buildForecastResponse: async () => {
+          const fc = await fc0();
+          return { ...fc, price: { slots: fc.price.slots.filter((s) => Date.parse(s.start) < hourStart + H) } };
+        },
+      };
+      const res = await createEosForecastBridge(env.ctx).prepareRun();
+      assert.equal(res.ok, ok, `interval ${intervalSec}: ${res.error || ''}`);
+    } finally { await mock.close(); t.mock.timers.reset(); }
   }
 });
