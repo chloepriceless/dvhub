@@ -397,7 +397,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     store.devices = devices().filter((d) => d.id !== id);
     saveStore();
     for (const peer of [...sessions]) if (peer.devId === id) peer.close('device_removed');
-    for (const link of links()) { link.lastEvent.delete(id); link.retryQ.delete(id); link.send({ t: 'mbox_clear', dev: id }); }
+    for (const link of links()) { link.retryQ.delete(id); link.send({ t: 'mbox_clear', dev: id }); }
     broadcastAllow();
     pushLog('mobile_link_device_removed', { dev: id, name: dev.name });
     reconcile();
@@ -452,21 +452,21 @@ export function createMobileLink(ctx = {}, deps = {}) {
       // Ereignisse, die das Relay abgelehnt hat (voll/gedrosselt), warten je
       // Gerät in Reihenfolge auf den nächsten Briefkasten-Lauf; neuere stellen
       // sich dahinter an (Review 834d1336/d4d72b9f P3). Das Relay nennt die
-      // abgelehnte Ablage über `ref`; ein älteres Relay ohne `ref` → das
-      // zuletzt gesendete Ereignis des Geräts (lastEvent).
-      lastEvent: new Map(), retryQ: new Map(), sentRefs: new Map(), nextRef: 1,
+      // abgelehnte Ablage über `ref`; ein älteres Relay ohne `ref` kann einen
+      // abgelehnten letzten Stand nicht von einem Ereignis unterscheiden —
+      // dann keine Wiederholung (sonst Doppelte, Review 736d2018 P3).
+      retryQ: new Map(), sentRefs: new Map(), nextRef: 1,
       putEvent(dev, d) {
         const q = link.retryQ.get(dev);
         if (q) { q.push(d); if (q.length > EVENT_RETRY_PER_DEVICE) q.shift(); return; }
         const ref = `e${link.nextRef++}`;
         link.sentRefs.set(ref, { dev, d });
         if (link.sentRefs.size > EVENT_REFS_KEPT) link.sentRefs.delete(link.sentRefs.keys().next().value);
-        link.lastEvent.set(dev, d);
         link.send({ t: 'mbox_put', dev, d, ref });
       },
       requeueEvent(dev, d) {
         const q = link.retryQ.get(dev) || [];
-        if (q[q.length - 1] !== d) q.push(d);
+        q.push(d);
         if (q.length > EVENT_RETRY_PER_DEVICE) q.shift();
         link.retryQ.set(dev, q);
       },
@@ -568,7 +568,6 @@ export function createMobileLink(ctx = {}, deps = {}) {
         if (RETRY_MBOX_ERRORS.has(msg.e) && msg.slot !== 'latest' && typeof msg.dev === 'string') {
           const sent = typeof msg.ref === 'string' ? link.sentRefs.get(msg.ref) : null;
           if (sent) { link.sentRefs.delete(msg.ref); link.requeueEvent(sent.dev, sent.d); }
-          else if (msg.ref === undefined && link.lastEvent.has(msg.dev)) link.requeueEvent(msg.dev, link.lastEvent.get(msg.dev));
         }
       }
     }
@@ -996,6 +995,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     // Für Tests
     _boxId: () => signer?.id || null,
     _pushMailboxLatest: pushMailboxLatest,
+    _checkEvents: checkEvents,
     _keyId: keyId,
   };
 }

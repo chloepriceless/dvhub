@@ -648,25 +648,31 @@ describe('mobile-link Ende zu Ende', () => {
       assert.equal(events().length, 1);
       const ev = events()[0];
       assert.equal(typeof ev.ref, 'string', 'Ereignis-Ablage ohne ref');
-      // Relay gedrosselt: Ereignis A abgelehnt (mit ref). Bevor der nächste
-      // Lauf kommt, ändert sich der Zustand wieder (B) — A darf nicht verloren
-      // gehen, und B kommt danach (Review d4d72b9f P3).
+      // Relay gedrosselt: Ereignis A abgelehnt (mit ref). Vor dem nächsten
+      // Lauf ändert sich der Zustand (B, 10-s-Prüfung) — B wartet hinter A,
+      // A geht nicht verloren (Review d4d72b9f/736d2018 P3).
       deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: ev.ref });
       alarms = 0;
-      b.agent._pushMailboxLatest(); // Lauf: A erneut, dann B (stellte sich an)
+      b.agent._checkEvents();
+      assert.equal(events().length, 1, 'B nicht hinter dem abgelehnten A eingereiht');
+      b.agent._pushMailboxLatest(); // Lauf: A erneut, dann B
       const after = events();
       assert.equal(after.length, 3, 'abgelehntes Ereignis nicht erneut abgelegt');
       assert.equal(after[1].d, ev.d, 'A nicht zuerst erneut');
       assert.notEqual(after[2].d, ev.d);
-      // Nur der letzte Stand abgelehnt → kein doppeltes Ereignis.
+      // Nur der letzte Stand abgelehnt, oder Fehler ohne ref (älteres Relay):
+      // keine Wiederholung, keine Doppelten.
       deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, slot: 'latest' });
+      deliver({ t: 'error', e: 'relay_full', dev: creds.devId });
       b.agent._pushMailboxLatest();
       assert.equal(events().length, 3);
-      // Älteres Relay ohne ref: das zuletzt gesendete Ereignis erneut.
-      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId });
+      // Warteschlange je Gerät höchstens 8: älteste fallen heraus.
+      const last = events()[2];
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: last.ref });
+      for (let i = 0; i < 10; i++) { alarms = (alarms + 1) % 2; b.agent._checkEvents(); }
+      assert.equal(events().length, 3);
       b.agent._pushMailboxLatest();
-      assert.equal(events().length, 4);
-      assert.equal(events()[3].d, after[2].d);
+      assert.equal(events().length, 3 + 8, 'Warteschlange nicht auf 8 begrenzt');
     } finally {
       b.agent.stop();
     }

@@ -98,6 +98,7 @@ Box-Briefkästen je Quelladresse sind gedrosselt (`error` `relay_busy`, bei
 eigene Kennung `ref` (≤ 32 Zeichen), die das Relay im Fehler zurückgibt;
 abgelehnte Ereignisse legt sie beim nächsten Briefkasten-Lauf (60 s) in
 Reihenfolge erneut ab (höchstens 8 je Gerät), neuere stellen sich dahinter an.
+Fehler ohne `ref` (älteres Relay) lösen keine Wiederholung aus.
 
 ## Handshake gekoppeltes Gerät
 
