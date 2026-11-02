@@ -906,14 +906,18 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
   // ganzen Prozess (Relay bzw. DVhub) — so wird nur diese Verbindung getrennt.
   ws.on('error', () => kill());
   let frameMax = guard ? guard.limits.preAuthFrameBytes : Infinity;
-  // Gezählt senden: n Bytes ins Ausgangsbudget, write(cb) schreibt.
-  function guardedWrite(n, write) {
+  // Gezählt senden: n Bytes ins Ausgangsbudget, write(cb) schreibt. Jeder
+  // wartende Rahmen zählt pauschal eine Poolgröße mit: den Rahmenkopf legt ws
+  // mit allocUnsafe an, er hält ein Stück des gemeinsamen 8-KiB-Pools fest
+  // (Gegenprüfung 2339cc36 P3).
+  function guardedWrite(payload, write) {
+    const n = payload + Buffer.poolSize;
     // Je Verbindung: ein Rahmen geht immer, darüber nur ohne Rückstau.
     if (outH.held > 0 && outH.held + n > guard.limits.outPerConn) { kill(); return; }
     const was = outH.held;
     if (!guard.out.take(outH, n)) { kill(); return; }
     if (was === 0) outH.since = Date.now();
-    pendingSizes.push(n);
+    pendingSizes.push(payload); // Frist nach Nutzdaten
     write(() => {
       if (gone) return;
       pendingSizes.shift();
@@ -947,8 +951,7 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
       if (ws.readyState !== 1) return;
       // Eigene Kopie: `data` ist eine Sicht auf das ganze Lesestück (bis
       // 64 KiB) und hielte es fest, solange der Pong wartet (Gegenprüfung
-      // 17fede38 P2); Buffer.from nähme für kleine Größen ein Stück des
-      // gemeinsamen 8-KiB-Pools (Gegenprüfung 714b3ea7 P3).
+      // 17fede38 P2). Den Pool-Anteil des Rahmenkopfs zählt guardedWrite.
       const copy = Buffer.allocUnsafeSlow(data.length);
       data.copy(copy);
       guardedWrite(copy.length + 2, (cb) => ws.pong(copy, undefined, cb));

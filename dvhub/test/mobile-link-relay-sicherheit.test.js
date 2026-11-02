@@ -547,6 +547,20 @@ describe('Relay-Speicher: Ausgangspuffer', () => {
     }
   });
 
+  test('jeder wartende Rahmen zählt den Pool-Anteil seines Kopfes mit (Gegenprüfung 2339cc36 P3)', () => {
+    const guard = relayCore.createSocketGuard({ stallMs: 1e9 });
+    try {
+      const w = fakeWs();
+      const s = guard.wrap(w, { remote: 'A', pingMs: 0 });
+      for (let i = 0; i < 10; i++) s.send('x');
+      assert.ok(guard.stats().outBufferedBytes >= 10 * (1 + Buffer.poolSize), `gezählt ${guard.stats().outBufferedBytes}`);
+      w.flush();
+      assert.equal(guard.stats().outBufferedBytes, 0);
+    } finally {
+      guard.close();
+    }
+  });
+
   test('ohne Fortschritt wird getrennt, wer abholt, bleibt', async () => {
     const guard = relayCore.createSocketGuard({ stallMs: 150 });
     try {
