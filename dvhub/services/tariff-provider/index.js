@@ -48,10 +48,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // liefern heute und morgen, ältere Slots kommen nicht wieder.
 const PERSISTED_KEEP_MS = 3 * DAY_MS;
 const DB_WAIT_MS = 10_000;
-// Längste Zeit für das Lesen der gespeicherten Preise (~35 000 Zeilen je Jahr):
-// Danach gilt es als gescheitert und wird beim nächsten Takt neu gestellt —
-// ein Lesen, das nie fertig wird, legt das Loggen sonst bis zum Neustart still.
-const LOAD_MAX_MS = 5 * 60_000;
+// Längste Zeit für das Lesen der gespeicherten Preise (~35 000 Zeilen je Jahr,
+// normal < 1 s): Danach bricht der Server die Abfrage ab (statement_timeout,
+// Verbindung kommt sauber zurück) und der nächste Takt versucht es neu. Ein
+// Lesen, das gar nicht zurückkommt (z. B. halb offene Verbindung), bleibt das
+// einzige — es wird kein zweites daneben gestellt.
+const LOAD_MAX_MS = 10 * 60_000;
 
 // Auf die Datenbank höchstens `ms` warten: Der Pool kennt keine Abfrage-
 // Zeitgrenze, ein hängender Abruf hielte sonst `inFlight` für immer.
@@ -243,11 +245,7 @@ export function createTariffProviderService(ctx, deps = {}) {
     if (dbLoading) return dbLoading;
     dbLoading = (async () => {
       try {
-        let deadline;
-        const rows = await Promise.race([
-          store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE }),
-          new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error(`Lesen dauerte über ${Math.round(loadMaxMs / 1000)} s`)), loadMaxMs); deadline.unref?.(); })
-        ]).finally(() => clearTimeout(deadline));
+        const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE, timeoutMs: loadMaxMs });
         const bySource = new Map();
         const keepFrom = now() - PERSISTED_KEEP_MS;
         for (const row of rows) {

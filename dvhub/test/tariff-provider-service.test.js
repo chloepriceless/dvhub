@@ -486,36 +486,54 @@ test('Takt: langsames Lesen der Datenbank → Zeitgrenze und Warnung, Ergebnis k
   }
 });
 
-// Gegenprüfung e5a3efa1 (P2): ein Lesen, das nie fertig wird, legt das Loggen
-// nicht bis zum Neustart still — nach der Lese-Zeitgrenze neuer Versuch, und
-// der Zustand zeigt, dass nicht geloggt wird.
-test('Lesen hängt für immer: sichtbar im Zustand, nach der Lese-Zeitgrenze neuer Versuch', { timeout: 5000 }, async () => {
+// Gegenprüfung e5a3efa1/80c6929b (P2): Das Lesen hat eine serverseitige
+// Zeitgrenze (timeoutMs); bricht der Server ab, versucht der nächste Takt es
+// neu. Ein Lesen, das nie zurückkommt, bleibt das einzige (kein Pool-Stau),
+// und der Zustand zeigt, dass nicht geloggt wird.
+test('Lesen mit Zeitgrenze: Abbruch → neuer Versuch; nie fertig → kein zweites daneben, Zustand pending', { timeout: 5000 }, async () => {
   const { ctx, written } = makeCtx();
   let calls = 0;
+  const seen = [];
   const stored = dayPrices('2026-11-01');
-  ctx.telemetryStore.listSeriesSamples = () => {
+  const rows = () => stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh }));
+  let mode = 'cancel';
+  ctx.telemetryStore.listSeriesSamples = (q) => {
     calls += 1;
-    if (calls === 1) return new Promise(() => {});
-    return Promise.resolve(stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh })));
+    seen.push(q.timeoutMs);
+    if (mode === 'cancel') { const e = new Error('canceling statement due to statement timeout'); e.code = '57014'; return Promise.reject(e); }
+    if (mode === 'hang') return new Promise(() => {});
+    return Promise.resolve(rows());
   };
   let now = Date.parse('2026-11-01T10:00:00Z');
   const svc = createTariffProviderService(ctx, {
     now: () => now,
     dbWaitMs: 10,
-    loadMaxMs: 40,
+    loadMaxMs: 1234,
     fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
   });
   const keepAlive = setTimeout(() => {}, 3000);
   try {
     await svc.refresh();
+    assert.equal(seen[0], 1234, 'Zeitgrenze geht an die Datenbank');
     assert.equal(written.length, 0);
     assert.equal(svc.getState().logging, 'pending', 'Zustand zeigt: wird nicht geloggt');
-    await new Promise((r) => setTimeout(r, 60));
+    mode = 'ok';
     now += HOUR;
     await svc.refresh();
-    assert.equal(calls, 2, 'neuer Leseversuch nach der Zeitgrenze');
+    assert.equal(calls, 2, 'neuer Versuch nach dem Abbruch');
     assert.equal(written.length, 96, 'danach geloggt (nur morgen neu)');
     assert.equal(svc.getState().logging, 'ok');
+
+    // Zweiter Dienst: Lesen kommt nie zurück → bei weiteren Abrufen kein zweites Lesen.
+    calls = 0; mode = 'hang';
+    clearProviderPrices();
+    const svc2 = createTariffProviderService(ctx, { now: () => now, dbWaitMs: 10, fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: stored }) });
+    await svc2.refresh();
+    now += HOUR;
+    await svc2.refresh();
+    await svc2.tick();
+    assert.equal(calls, 1, 'nur ein offenes Lesen');
+    assert.equal(svc2.getState().logging, 'pending');
   } finally {
     clearTimeout(keepAlive);
   }
