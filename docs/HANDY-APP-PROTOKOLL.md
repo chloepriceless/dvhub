@@ -94,8 +94,10 @@ Rückstand oder ein Rahmen nicht binnen 30 s + Größe / 16 KiB/s), wird getrenn
 die Verbindung mit dem größten Rückstand. Ist der Briefkasten-Speicher voll,
 weichen die Einträge der Quelladresse, die am meisten belegt; neue
 Box-Briefkästen je Quelladresse sind gedrosselt (`error` `relay_busy`, bei
-`slot:"latest"` nur der letzte Stand). Abgelehnte Ereignisse legt die Box beim
-nächsten Briefkasten-Lauf (60 s) erneut ab.
+`slot:"latest"` nur der letzte Stand). Die Box gibt Ereignis-Ablagen eine
+eigene Kennung `ref` (≤ 32 Zeichen), die das Relay im Fehler zurückgibt;
+abgelehnte Ereignisse legt sie beim nächsten Briefkasten-Lauf (60 s) in
+Reihenfolge erneut ab (höchstens 8 je Gerät), neuere stellen sich dahinter an.
 
 ## Handshake gekoppeltes Gerät
 

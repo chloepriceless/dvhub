@@ -647,15 +647,26 @@ describe('mobile-link Ende zu Ende', () => {
       b.agent._pushMailboxLatest();
       assert.equal(events().length, 1);
       const ev = events()[0];
-      // Relay gedrosselt: Ereignis abgelehnt → nächster Lauf legt es erneut ab.
-      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId });
-      b.agent._pushMailboxLatest();
-      assert.equal(events().length, 2, 'abgelehntes Ereignis nicht erneut abgelegt');
-      assert.equal(events()[1].d, ev.d);
+      assert.equal(typeof ev.ref, 'string', 'Ereignis-Ablage ohne ref');
+      // Relay gedrosselt: Ereignis A abgelehnt (mit ref). Bevor der nächste
+      // Lauf kommt, ändert sich der Zustand wieder (B) — A darf nicht verloren
+      // gehen, und B kommt danach (Review d4d72b9f P3).
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: ev.ref });
+      alarms = 0;
+      b.agent._pushMailboxLatest(); // Lauf: A erneut, dann B (stellte sich an)
+      const after = events();
+      assert.equal(after.length, 3, 'abgelehntes Ereignis nicht erneut abgelegt');
+      assert.equal(after[1].d, ev.d, 'A nicht zuerst erneut');
+      assert.notEqual(after[2].d, ev.d);
       // Nur der letzte Stand abgelehnt → kein doppeltes Ereignis.
       deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, slot: 'latest' });
       b.agent._pushMailboxLatest();
-      assert.equal(events().length, 2);
+      assert.equal(events().length, 3);
+      // Älteres Relay ohne ref: das zuletzt gesendete Ereignis erneut.
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId });
+      b.agent._pushMailboxLatest();
+      assert.equal(events().length, 4);
+      assert.equal(events()[3].d, after[2].d);
     } finally {
       b.agent.stop();
     }

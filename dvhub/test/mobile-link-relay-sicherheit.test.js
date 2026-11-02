@@ -753,6 +753,28 @@ describe('Relay-Speicher: faire Verdrängung im Briefkasten', () => {
     relay.close();
   });
 
+  test('Fehler nennt slot (letzter Stand) und ref (Ereignis) — echtes Relay (Review d4d72b9f P3)', async () => {
+    const relay = createRelay({ limits: { ...big, newBoxesPerSource: 1, newBoxRefillMs: 3600_000 } });
+    // Erste neue Box der Quelle verbraucht den Eimer.
+    const first = await boxOnRelay(relay, generateIdentity(), '198.51.100.9');
+    first.send({ t: 'allow', devs: ['x'] });
+    first.send({ t: 'mbox_put', dev: 'x', d: b64(100) });
+    await flush(first);
+    const b = await boxOnRelay(relay, generateIdentity(), '198.51.100.9');
+    b.send({ t: 'allow', devs: ['x'] });
+    b.send({ t: 'mbox_put', dev: 'x', slot: 'latest', d: b64(100) });
+    b.send({ t: 'mbox_put', dev: 'x', d: b64(100), ref: 'e7' });
+    b.send({ t: 'mbox_put', dev: 'x', d: b64(100), ref: 'x'.repeat(40) });
+    await flush(b);
+    const errs = b.inbox.filter((m) => m.t === 'error');
+    assert.deepEqual(errs, [
+      { t: 'error', e: 'relay_busy', dev: 'x', slot: 'latest' },
+      { t: 'error', e: 'relay_busy', dev: 'x', ref: 'e7' },
+      { t: 'error', e: 'relay_busy', dev: 'x' },
+    ]);
+    relay.close();
+  });
+
   test('Standardgrenzen: Verbindungen, Briefkästen und Puffer passen zusammen unter den Container (256 MiB)', () => {
     const S = relayCore.SOCKET_LIMITS;
     assert.ok(S, 'SOCKET_LIMITS fehlt');

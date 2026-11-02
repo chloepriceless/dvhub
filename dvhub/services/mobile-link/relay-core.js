@@ -231,8 +231,9 @@ export function createRelay({
     if (!e) {
       // Unbekannte Quelle startet mit vollem Eimer. Ist die Liste voll, gilt
       // sie weiter als unbekannt (bekäme ohnehin den vollen Eimer).
-      if (L.newBoxesPerSource > 1 && newBoxTokens.size < L.newBoxSourcesTracked) newBoxTokens.set(key, { n: L.newBoxesPerSource - 1, t });
-      return L.newBoxesPerSource >= 1;
+      if (L.newBoxesPerSource < 1) return false;
+      if (newBoxTokens.size < L.newBoxSourcesTracked) newBoxTokens.set(key, { n: L.newBoxesPerSource - 1, t });
+      return true;
     }
     e.n = Math.min(L.newBoxesPerSource, e.n + (t - e.t) / L.newBoxRefillMs);
     e.t = t;
@@ -638,7 +639,8 @@ export function createRelay({
         const err = mbPut(conn.boxId, msg.dev, msg.d, msg.slot === 'latest' ? 'latest' : null, conn.remote || NO_SOURCE);
         // `slot` sagt der Box, ob ein Ereignis abgelehnt wurde (das legt sie
         // erneut ab) oder nur der letzte Stand (kommt ohnehin alle 60 s).
-        if (err) send(conn, { t: 'error', e: err, dev: msg.dev, ...(msg.slot === 'latest' ? { slot: 'latest' } : {}) });
+        // `ref` (von der Box gewählt) nennt die abgelehnte Ablage.
+        if (err) send(conn, { t: 'error', e: err, dev: msg.dev, ...(msg.slot === 'latest' ? { slot: 'latest' } : {}), ...(isStr(msg.ref, 32) ? { ref: msg.ref } : {}) });
         return;
       }
       case 'mbox_clear':
