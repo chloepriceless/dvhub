@@ -533,32 +533,41 @@ export function createEosForecastBridge(ctx) {
   // kommen bei jedem Push frisch aus der Prognose dazu.
   let priceHistoryCache = null;
   /**
-   * Gespeicherte echte Day-Ahead-Preise (price_ct_kwh, 15 min) von drei
-   * Stunden vor jetzt bis drei Tage voraus als Preis-Slots `{start, end,
-   * ctKwh}` — Rückfall, wenn der Speicher nach einem Neustart leer ist.
+   * Gespeicherte echte Day-Ahead-Preise (price_ct_kwh) von drei Stunden vor
+   * jetzt bis drei Tage voraus als Preis-Slots `{start, end, ctKwh}` —
+   * Rückfall, wenn der Speicher nach einem Neustart leer ist. Die Slotlänge
+   * kommt aus dem tatsächlichen Abstand der Zeilen (kleinster Abstand, wie
+   * realPriceCoverage), nicht aus dem Stempel: Stundenpreise bleiben
+   * stündlich, und ein Abruf mit Lücke ist oft insgesamt falsch gestempelt
+   * (Gegenprüfung 5ba95a7b). Eine echte Mischung zeigt sich als Lücke.
    */
   async function loadStoredRealPriceSlots(nowMs) {
     const store = ctx.telemetryStore;
     if (!store || typeof store.querySeries !== 'function') return [];
+    const fromMs = nowMs - 3 * 3_600_000;
     try {
       const rows = await store.querySeries({
         seriesKeys: ['price_ct_kwh'],
-        start: new Date(nowMs - 3 * 3_600_000).toISOString(),
+        start: new Date(fromMs).toISOString(),
         end: new Date(nowMs + 3 * 86_400_000).toISOString(),
-        maxResolution: 900,
+        maxResolution: 3600,
       });
       const byStart = new Map();
       for (const r of rows || []) {
-        if (r.key !== 'price_ct_kwh' || Number(r.resolution) > 900) continue;
+        if (r.key !== 'price_ct_kwh') continue;
         const ms = new Date(r.ts).getTime();
         const ct = Number(r.value);
-        if (!Number.isFinite(ms) || !Number.isFinite(ct) || ms < nowMs - 3 * 3_600_000) continue;
+        if (!Number.isFinite(ms) || !Number.isFinite(ct) || ms < fromMs || byStart.has(ms)) continue;
         byStart.set(ms, ct);
       }
-      return [...byStart.entries()].sort((a, b) => a[0] - b[0]).map(([ms, ct]) => ({
+      const starts = [...byStart.keys()].sort((a, b) => a - b);
+      let stepMs = Infinity;
+      for (let i = 1; i < starts.length; i += 1) stepMs = Math.min(stepMs, starts[i] - starts[i - 1]);
+      if (!Number.isFinite(stepMs) || stepMs <= 0) stepMs = PRICE_SLOT_MS;
+      return starts.map((ms) => ({
         start: new Date(ms).toISOString(),
-        end: new Date(ms + PRICE_SLOT_MS).toISOString(),
-        ctKwh: ct,
+        end: new Date(ms + stepMs).toISOString(),
+        ctKwh: byStart.get(ms),
       }));
     } catch (e) {
       if (pushLog) pushLog('eos_prices_from_store_error', { error: e?.message || String(e) });

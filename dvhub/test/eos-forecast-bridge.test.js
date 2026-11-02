@@ -2079,3 +2079,28 @@ test('Laufstart: PV deckt jetzt nicht (nur Vergangenheit) → Meldung nennt PV',
     assert.doesNotMatch(res.error, /no prices/);
   } finally { await mock.close(); }
 });
+
+// Gegenprüfung 5ba95a7b (P3): Der Rückfall auf gespeicherte Preise ließ
+// Stundenpreise weg und ebenso Zeilen mit falschem Stempel (eine Lücke im
+// Abruf stempelt alle Zeilen z. B. mit 1800 s). Jetzt zählt der tatsächliche
+// Abstand der Zeilen, wie bei realPriceCoverage.
+test('Laufstart: gespeicherte Preise stündlich oder falsch gestempelt → trotzdem genutzt', async () => {
+  const H = 3_600_000;
+  for (const [stepMs, stamp] of [[H, 3600], [Q, 1800]]) {
+    const mock = await createMockEos(okHandler);
+    try {
+      const env = estimateCtx(mock);
+      const fc0 = env.ctx.forecastService.buildForecastResponse;
+      env.ctx.forecastService = { buildForecastResponse: async () => ({ ...(await fc0()), price: { slots: [] } }) };
+      const h0 = env.q0 - (env.q0 % H);
+      const rows = [];
+      for (let ms = h0 - 2 * H; ms < h0 + 10 * H; ms += stepMs) rows.push({ key: 'price_ct_kwh', ts: new Date(ms).toISOString(), value: env.pattern(ms), resolution: stamp });
+      env.ctx.telemetryStore = { querySeries: async ({ start, end, maxResolution = 900 }) => rows.filter((r) => r.resolution <= maxResolution && r.ts >= new Date(start).toISOString() && r.ts < new Date(end).toISOString()) };
+      const res = await createEosForecastBridge(env.ctx).prepareRun();
+      assert.deepEqual(res, { ok: true, pushed: true }, `Abstand ${stepMs / 60_000} min, Stempel ${stamp}: ${res.error || ''}`);
+      const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+      const ts = [...elec.keys()].filter((t) => t < h0 + 10 * H).sort((a, b) => a - b);
+      for (let i = 1; i < ts.length; i += 1) assert.equal(ts[i] - ts[i - 1], stepMs, 'eine Kadenz');
+    } finally { await mock.close(); }
+  }
+});
