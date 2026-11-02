@@ -90,6 +90,16 @@ verweist hierher.
   error“, der Import mitgelieferter Zeilen wird wieder abgewartet, und die VRM-Prognose schreibt einen
   abgelehnten Abruf ins Log statt ihn still zu übergehen.
 
+- **Datenspende-Einrichtung: Fehler ohne erkennbaren Schritt (#31).** Scheiterte die Einrichtung (z. B. mit
+  „400 bad_request: Invalid input format: null“), stand weder im Log noch in der Oberfläche, ob Konto, Haushalt,
+  Client oder API-Key betroffen war. Jetzt nennen Log (`datenspende_link_failed`) und Meldung den Schritt, den
+  HTTP-Status und die Meldung des Projekt-Servers, bei Verbindungsfehlern den Grund (z. B. `ETIMEDOUT`,
+  `ENOTFOUND`); Passwort, Anmelde-Schlüssel und API-Key werden herausgefiltert. Jede ID wird direkt nach ihrem
+  Schritt geprüft — fehlt sie, bricht die Einrichtung dort ab und protokolliert nur die Namen der Felder der Antwort,
+  statt im nächsten Schritt einen leeren Wert zu schicken. IDs werden zusätzlich aus einer Antwort der Form
+  `{household: {id}}`, `{client: {id}}` bzw. `{apiKey: {key}}` gelesen. Das Feld „Anmelde-Schlüssel“ hat eine
+  Kurzhilfe und erscheint nur noch beim Anlegen eines neuen Kontos.
+
 ## [1.0.8] - 2026-10-21
 
 Release nach knapp zwei Wochen, 110 Commits seit 1.0.7. Überblick nach Themen — die Einzelheiten

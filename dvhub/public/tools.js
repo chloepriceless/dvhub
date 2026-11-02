@@ -1595,7 +1595,9 @@ function wireDatenspende() {
       taken_email: 'E-Mail ist beim Projekt schon registriert.',
       connection_error: 'Projekt-Server nicht erreichbar — Internetverbindung prüfen.',
     };
-    setText('dsResult', r.ok ? '✓ Verbunden — die Spende läuft. Danke!' : `Fehler: ${hints[r.j.error] || r.j.detail || r.j.error || r.status}`);
+    // GH #31: welcher Einrichtungsschritt scheiterte (Konto, Haushalt, Client, API-Key).
+    const where = r.j?.stepLabel ? ` (Schritt „${r.j.stepLabel}“)` : '';
+    setText('dsResult', r.ok ? '✓ Verbunden — die Spende läuft. Danke!' : `Fehler${where}: ${hints[r.j.error] || r.j.detail || r.j.error || r.status}`);
     refreshDatenspende();
   });
   dsEl('dsEnabled')?.addEventListener('change', async (e) => {
@@ -1612,8 +1614,11 @@ function wireDatenspende() {
   dsEl('dsRefreshBtn')?.addEventListener('click', () => refreshDatenspende());
   // API-Key-Modus: nur das Key-Feld zeigen, Konto-/Haushaltsfelder ausblenden.
   const syncMode = () => {
-    const apikey = dsEl('dsMode').value === 'apikey';
-    for (const id of ['dsUsername', 'dsPassword', 'dsEmail', 'dsSecret']) dsEl(id).hidden = apikey;
+    const mode = dsEl('dsMode').value;
+    const apikey = mode === 'apikey';
+    for (const id of ['dsUsername', 'dsPassword', 'dsEmail']) dsEl(id).hidden = apikey;
+    // Anmelde-Schlüssel gilt nur beim Anlegen eines Kontos (COMSYS sign-up).
+    for (const id of ['dsSecret', 'dsSecretHelp']) { const f = dsEl(id); if (f) f.hidden = mode !== 'signup'; }
     dsEl('dsApiKey').hidden = !apikey;
   };
   dsEl('dsMode')?.addEventListener('change', syncMode);
