@@ -160,3 +160,24 @@ test('Modbus: ist der Port selbst der Ersatzport, gibt es keinen zweiten Versuch
     blocker.close();
   }
 });
+
+// Gegenprüfung zu 4fdb8763 (P2, vorbestehend): Pro aus (Widerruf, Bindungs-
+// sperre, kWp über Tarif) ruft close() — net.Server.close() beendet aber nur
+// das Lauschen. Ein schon verbundener Direktvermarkter konnte über dieselbe
+// Verbindung weiter lesen und forcedOff schalten. close() trennt jetzt alle.
+test('Modbus: close() trennt auch bestehende Verbindungen', async () => {
+  const port = await freePort();
+  const { state, ctx } = makeCtx(port);
+  const server = createModbusServer(ctx);
+  server.start();
+  await until(() => state.modbusListen?.ok === true);
+  const client = net.connect(port, '127.0.0.1');
+  await new Promise((r, j) => { client.once('connect', r); client.once('error', j); });
+  let closed = false;
+  client.on('close', () => { closed = true; });
+  client.on('error', () => {});
+  await new Promise((r) => setTimeout(r, 50));
+  server.close();
+  await until(() => closed, 2000);
+  assert.equal(closed, true);
+});

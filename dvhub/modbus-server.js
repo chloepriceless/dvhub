@@ -286,6 +286,11 @@ export function createModbusServer(ctx) {
     return fc === 6 ? frame.subarray(0, 12) : writeAck(tid, unit, 16, addr, values.length);
   }
 
+  // Offene Verbindungen — close() muss sie trennen: net.Server.close() beendet
+  // nur das Lauschen, ein verbundener Client könnte sonst nach „Pro aus“ weiter
+  // lesen und schalten (Gegenprüfung zu 4fdb8763).
+  const sockets = new Set();
+
   function handleConnection(socket) {
     // Plan 08-06 Task 2 Step 1: enforce LAN-only / allowlist on every accepted socket.
     if (!isAllowedModbusClient(socket, getCfg())) {
@@ -293,6 +298,8 @@ export function createModbusServer(ctx) {
       socket.destroy();
       return;
     }
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
     const remote = `${socket.remoteAddress}:${socket.remotePort}`;
     let buffer = Buffer.alloc(0);
 
@@ -378,6 +385,8 @@ export function createModbusServer(ctx) {
   function close() {
     if (mbServer) mbServer.close();
     mbServer = null;
+    for (const s of sockets) { try { s.destroy(); } catch { /* schon zu */ } }
+    sockets.clear();
   }
 
   return { start, close };
