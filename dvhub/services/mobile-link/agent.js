@@ -455,18 +455,22 @@ export function createMobileLink(ctx = {}, deps = {}) {
       // abgelehnte Ablage über `ref`; ein älteres Relay ohne `ref` kann einen
       // abgelehnten letzten Stand nicht von einem Ereignis unterscheiden —
       // dann keine Wiederholung (sonst Doppelte, Review 736d2018 P3).
-      retryQ: new Map(), sentRefs: new Map(), nextRef: 1,
-      putEvent(dev, d) {
+      // Einträge { seq, d }: seq = Entstehungsreihenfolge; die Schlange bleibt
+      // danach sortiert, bei Überlauf fällt das älteste heraus (Review 1f6c3d84 P3).
+      retryQ: new Map(), sentRefs: new Map(), nextRef: 1, nextSeq: 1,
+      putEvent(dev, d, seq = link.nextSeq++) {
         const q = link.retryQ.get(dev);
-        if (q) { q.push(d); if (q.length > EVENT_RETRY_PER_DEVICE) q.shift(); return; }
+        if (q) { link.requeueEvent(dev, d, seq); return; }
         const ref = `e${link.nextRef++}`;
-        link.sentRefs.set(ref, { dev, d });
+        link.sentRefs.set(ref, { dev, d, seq });
         if (link.sentRefs.size > EVENT_REFS_KEPT) link.sentRefs.delete(link.sentRefs.keys().next().value);
         link.send({ t: 'mbox_put', dev, d, ref });
       },
-      requeueEvent(dev, d) {
+      requeueEvent(dev, d, seq) {
         const q = link.retryQ.get(dev) || [];
-        q.push(d);
+        let i = q.length;
+        while (i > 0 && q[i - 1].seq > seq) i -= 1;
+        q.splice(i, 0, { seq, d });
         if (q.length > EVENT_RETRY_PER_DEVICE) q.shift();
         link.retryQ.set(dev, q);
       },
@@ -567,7 +571,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
         link.lastError = String(msg.e || 'relay_error');
         if (RETRY_MBOX_ERRORS.has(msg.e) && msg.slot !== 'latest' && typeof msg.dev === 'string') {
           const sent = typeof msg.ref === 'string' ? link.sentRefs.get(msg.ref) : null;
-          if (sent) { link.sentRefs.delete(msg.ref); link.requeueEvent(sent.dev, sent.d); }
+          if (sent) { link.sentRefs.delete(msg.ref); link.requeueEvent(sent.dev, sent.d, sent.seq); }
         }
       }
     }
@@ -844,7 +848,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     for (const l of links()) {
       for (const [dev, q] of [...l.retryQ]) {
         l.retryQ.delete(dev);
-        if (known.has(dev)) for (const ev of q) l.putEvent(dev, ev);
+        if (known.has(dev)) for (const ev of q) l.putEvent(dev, ev.d, ev.seq);
       }
     }
     checkEvents(st);

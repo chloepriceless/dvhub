@@ -680,13 +680,13 @@ describe('mobile-link Ende zu Ende', () => {
       assert.deepEqual(replay.map(alarmsOf), [3, 4, 5, 6, 7, 8, 9, 10], 'nicht die acht neuesten in Reihenfolge');
       // Überlauf beim erneuten Einreihen (requeueEvent): Ablehnung von 3, dann
       // stellen sich 11..17 an (8), dann kommt die Ablehnung von 4 → das
-      // älteste (3) fällt heraus.
+      // älteste (3) fällt heraus, 4 sortiert sich vor 11 ein (Review 1f6c3d84 P3).
       deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: replay[0].ref });
       for (let i = 11; i <= 17; i++) { alarms = i; b.agent._checkEvents(); }
       deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: replay[1].ref });
       const n0 = events().length;
       b.agent._pushMailboxLatest();
-      assert.deepEqual(events().slice(n0).map(alarmsOf), [11, 12, 13, 14, 15, 16, 17, 4]);
+      assert.deepEqual(events().slice(n0).map(alarmsOf), [4, 11, 12, 13, 14, 15, 16, 17]);
     } finally {
       b.agent.stop();
     }
