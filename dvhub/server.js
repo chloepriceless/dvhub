@@ -192,6 +192,7 @@ import { createEvWatch } from './services/optimizer/ev-watch.js';
 import { createVehiclePull } from './services/vehicle-pull/index.js';
 import { resolveEvPlugged, createEvSocMemory } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
+import { energyBalanceBattery } from './services/energy-balance-battery.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
@@ -873,6 +874,9 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     p14a: ctx.p14a?.summary?.() ?? null,
     // Peak Shaving (GitHub #28): null, solange ausgeschaltet.
     peakShaving: ctx.peakShaving?.summary?.() ?? null,
+    // Kachel „Überschuss / Defizit“: Akku wie EOS ihn sieht (Kapazität,
+    // Ladestand, Untergrenze) — vorher Ersatzwerte 43 kWh / 5 %.
+    energyBalance: { battery: energyBalanceBattery(ctx) },
     clock: state.clock ?? null,
     // Heizstab: Vorhaltung in der EOS-Lastprognose und heute gelieferte Energie.
     heater: {

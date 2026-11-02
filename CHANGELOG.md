@@ -93,6 +93,12 @@ verweist hierher.
 
 ### Geändert
 
+- **Leitstand, Kachel „Überschuss / Defizit“**: Die Hauptzahl ist jetzt der Rest heute (erwartete PV ab jetzt bis
+  Mitternacht minus erwarteter Verbrauch im selben Zeitraum), darunter klein der ganze Tag; „Verfügbar“ = Rest heute +
+  nutzbarer Akku. Akkugröße, Ladestand und Untergrenze kommen neu aus `/api/status` (`energyBalance.battery`, so wie
+  EOS den Akku sieht, mit zweiter GX-Anlage beide) — bisher griffen Ersatzwerte 43 kWh / 5 %, auf einer 77-kWh-Anlage
+  zeigte 43 % Ladestand dann 18,5 statt 33,1 kWh. „Rest heute“ zählt nur noch Slots ab jetzt (den laufenden anteilig).
+
 - **EOS bekommt den Akku-Basispreis ohne Verlustaufschlag**: Als Speicherkosten (`levelized_cost_of_storage`) geht
   nur noch „Akku-Basispreis“ an EOS, nicht mehr Basispreis × (1 + Verlustaufschlag). EOS rechnet Lade- und
   Entladeverluste über den Akku-Wirkungsgrad selbst; mit dem Aufschlag zählten sie doppelt. DVhubs Preisvergleich und

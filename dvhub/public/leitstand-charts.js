@@ -942,7 +942,73 @@
     if (allSame) return { text: '⚠ Konstant ' + (slots[0].powerW || 0) + ' W – keine echte Prognose', detail: '' };
     return null;
   }
-  window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, { loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries });
+  // Kachel „Überschuss / Defizit“ (Christin 02.11.2026): Hauptzahl ist der
+  // Rest heute (PV-Rest − Verbrauchs-Rest, ab jetzt bis Mitternacht), darunter
+  // klein der ganze Tag. Akku aus status.energyBalance.battery (so, wie EOS ihn
+  // sieht); ohne Akkugröße keine kWh — früher Ersatzwerte 43 kWh / 5 %, auf
+  // Prod (77 kWh) zeigte 43 % dann 18,5 statt 33,1 kWh. Verfügbar = Rest heute
+  // + nutzbarer Akku (Ladestand über der Untergrenze).
+  function energyBalanceSummary(input) {
+    var i = input || {};
+    var n = function (v) { return v === null || v === undefined || v === '' || !isFinite(Number(v)) ? null : Number(v); };
+    var restKwh = (n(i.pvRestKwh) || 0) - (n(i.loadRestKwh) || 0);
+    var dayKwh = (n(i.pvDayKwh) || 0) - (n(i.loadDayKwh) || 0);
+    var b = i.battery || null;
+    var soc = b ? n(b.socPct) : null;
+    var cap = b ? n(b.capacityWh) : null;
+    if (cap !== null && cap <= 0) cap = null;
+    var minSoc = b ? n(b.minSocPct) : null;
+    if (minSoc === null) minSoc = 0;
+    var battKwh = soc !== null && cap !== null ? (soc / 100) * cap / 1000 : null;
+    var usableKwh = soc !== null && cap !== null ? Math.max(0, ((soc - minSoc) / 100) * cap / 1000) : null;
+    return {
+      restKwh: restKwh,
+      dayKwh: dayKwh,
+      socPct: soc,
+      battKwh: battKwh,
+      usableKwh: usableKwh,
+      availableKwh: usableKwh !== null ? restKwh + usableKwh : null,
+    };
+  }
+  // Energie ab nowMs: vergangene Slots zählen nicht, der laufende anteilig
+  // (/api/forecast liefert die Reihe ab dem letzten Abruf, nicht ab jetzt).
+  function restKwhFrom(slots, slotH, nowMs) {
+    var slotMs = slotH * 3600000;
+    var kwh = 0;
+    (slots || []).forEach(function (s) {
+      var t = Date.parse(s && s.start);
+      if (!isFinite(t)) return;
+      var end = t + slotMs;
+      if (end <= nowMs) return;
+      var share = t >= nowMs ? 1 : (end - nowMs) / slotMs;
+      kwh += (Number(s.powerW) || 0) / 1000 * slotH * share;
+    });
+    return Math.round(kwh * 1000) / 1000;
+  }
+  var ENERGY_BALANCE_TITLE = 'Hauptzahl: Rest heute — erwartete PV ab jetzt bis Mitternacht minus erwarteter Verbrauch '
+    + 'im selben Zeitraum. „ganzer Tag“: dasselbe für den ganzen Tag (auch schon Vergangenes). '
+    + 'Verfügbar: Rest heute plus nutzbarer Akku (Ladestand über der Untergrenze, mit der EOS plant).';
+  function energyBalanceView(sum) {
+    var signed = function (x) { return (x >= 0 ? '+' : '') + x.toFixed(1) + ' kWh'; };
+    var battery = null;
+    if (sum.socPct !== null) {
+      battery = sum.battKwh !== null
+        ? '\ud83d\udd0b ' + sum.socPct + ' % = ' + sum.battKwh.toFixed(1) + ' kWh (' + sum.usableKwh.toFixed(1) + ' nutzbar)'
+        : '\ud83d\udd0b ' + sum.socPct + ' % · Akkugröße nicht eingestellt';
+    }
+    return {
+      main: signed(sum.restKwh),
+      positive: sum.restKwh >= 0,
+      day: 'Rest heute · ganzer Tag: ' + signed(sum.dayKwh),
+      battery: battery,
+      available: sum.availableKwh !== null ? 'Verfügbar: ' + signed(sum.availableKwh) : null,
+      title: ENERGY_BALANCE_TITLE,
+    };
+  }
+  window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, {
+    loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries,
+    energyBalanceSummary: energyBalanceSummary, energyBalanceView: energyBalanceView, restKwhFrom: restKwhFrom,
+  });
 
   function updateForecastSummary(forecastData, statusData) {
     var pvEl = document.getElementById('pv-daily-kwh');
@@ -997,9 +1063,11 @@
     var pvSlotsTomorrow = filterTomorrow(pvSlotsAll);
     var loadSlotsTomorrow = filterTomorrow(loadSlotsAll);
 
-    // "Rest" = future-only (slots with ts_utc >= NOW, already filtered server-side).
-    var pvKwhRest = 0; pvSlots.forEach(function (s) { pvKwhRest += (s.powerW || 0) / 1000 * pvH; });
-    var loadKwhRest = 0; loadSlots.forEach(function (s) { loadKwhRest += (s.powerW || 0) / 1000 * loadH; });
+    // "Rest" = ab jetzt: vergangene Slots nicht, den laufenden anteilig — die
+    // Reihen beginnen beim letzten Prognose-Abruf, nicht bei „jetzt“.
+    var nowMs = Date.now();
+    var pvKwhRest = restKwhFrom(pvSlots, pvH, nowMs);
+    var loadKwhRest = restKwhFrom(loadSlots, loadH, nowMs);
     var pvKwhTomorrow = 0; pvSlotsTomorrow.forEach(function (s) { pvKwhTomorrow += (s.powerW || 0) / 1000 * pvH; });
     var loadKwhTomorrow = 0; loadSlotsTomorrow.forEach(function (s) { loadKwhTomorrow += (s.powerW || 0) / 1000 * loadH; });
 
@@ -1011,25 +1079,23 @@
     if (totals?.tomorrow?.pvKwh != null && totals.tomorrow.pvKwh > 0) pvKwhTomorrow = totals.tomorrow.pvKwh;
     if (totals?.tomorrow?.loadKwh != null && totals.tomorrow.loadKwh > 0) loadKwhTomorrow = totals.tomorrow.loadKwh;
 
-    // Battery state from /api/status
-    var soc = statusData?.victron?.soc;
-    var battCapWh = statusData?.config?.optimizer?.batteryCapacityWh || 43000;
-    var minSoc = statusData?.config?.optimizer?.hardFloorSocPct ?? statusData?.config?.optimizer?.minSocPct ?? 5;
-    var battKwh = soc != null ? (soc / 100) * battCapWh / 1000 : null;
-    var usableKwh = soc != null ? Math.max(0, ((soc - minSoc) / 100) * battCapWh / 1000) : null;
-
-    // Surplus includes usable battery energy
-    var surplus = pvKwh - loadKwh;
-    var totalAvailable = surplus + (usableKwh || 0);
+    // Akku aus /api/status (status.energyBalance.battery, wie EOS ihn sieht);
+    // ältere Server ohne das Feld: nur der Ladestand, keine erfundene Größe.
+    var battery = statusData?.energyBalance?.battery
+      || (statusData?.victron?.soc != null ? { socPct: statusData.victron.soc, capacityWh: null, minSocPct: null } : null);
+    var balance = energyBalanceSummary({
+      pvRestKwh: pvKwhRest, loadRestKwh: loadKwhRest, pvDayKwh: pvKwh, loadDayKwh: loadKwh, battery: battery
+    });
+    var balanceView = energyBalanceView(balance);
 
     pvEl.textContent = pvKwh.toFixed(1) + ' kWh';
     loadEl.textContent = loadKwh.toFixed(1) + ' kWh';
 
-    // Surplus: green if positive, red if negative — via Aurora chart tokens
+    // Rest heute: green if positive, red if negative — via Aurora chart tokens
     // so the same hue maps the EPEX chart in both light and dark themes.
-    var sign = surplus >= 0 ? '+' : '';
-    surplusEl.textContent = sign + surplus.toFixed(1) + ' kWh';
-    surplusEl.style.color = surplus >= 0
+    surplusEl.textContent = balanceView.main;
+    surplusEl.title = balanceView.title;
+    surplusEl.style.color = balanceView.positive
       ? _aur('--chart-positive', '#39E06F')
       : _aur('--chart-negative', '#ff7b72');
 
@@ -1074,16 +1140,19 @@
       }
     }
 
-    // Surplus detail: battery + total
+    // Detail: ganzer Tag (klein), darunter Akku und Verfügbar
     if (surplusDetailEl) {
-      var parts = [];
-      if (battKwh != null) parts.push('\ud83d\udd0b ' + soc + '% = ' + battKwh.toFixed(1) + ' kWh (' + usableKwh.toFixed(1) + ' nutzbar)');
-      if (usableKwh != null) {
-        var totalSign = totalAvailable >= 0 ? '+' : '';
-        parts.push('Verf\u00fcgbar: ' + totalSign + totalAvailable.toFixed(1) + ' kWh');
-      }
-      surplusDetailEl.innerHTML = '<span class="leitstand-forecast-detail">' + parts.join(' · ') + '</span>';
-      surplusDetailEl.firstChild.style.color = _dimColor;
+      surplusDetailEl.textContent = '';
+      surplusDetailEl.title = balanceView.title;
+      var lines = [balanceView.day, [balanceView.battery, balanceView.available].filter(Boolean).join(' · ')];
+      lines.forEach(function (text) {
+        if (!text) return;
+        var line = document.createElement('div');
+        line.className = 'leitstand-forecast-detail';
+        line.textContent = text;
+        line.style.color = _dimColor;
+        surplusDetailEl.appendChild(line);
+      });
     }
   }
 
