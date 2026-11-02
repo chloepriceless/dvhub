@@ -421,15 +421,26 @@ dvhub_tls_selfsigned() {  # <konfigurationsordner> <dienstbenutzer> [<vorsatz>�
   shift 2
   (
     dvhub_cfg_cd "$base" tls || exit 1
+    tls_real="$(pwd -P)" || exit 1
     # Verweise fliegen raus — die App läse sonst über sie, und ein Verweis
-    # namens cert.pem täuschte ein vorhandenes Zertifikat vor.
+    # namens cert.pem täuschte ein vorhandenes Zertifikat vor. Mit Meldung:
+    # ein eigener Schlüssel als Verweis wird so durch ein neues Paar ersetzt.
+    for link in ./*.pem ./.[!.]*; do
+      [[ -L "$link" ]] || continue
+      echo "  WARN: $tls_real/${link#./} war ein Verweis — entfernt (eigene Zertifikate als Datei ablegen)" >&2
+      rm -f -- "$link"
+    done
     find . -maxdepth 1 -type l -exec rm -f -- {} + 2>/dev/null || true
-    [[ -f cert.pem ]] && exit 3
+    # Nur ein vollständiges Paar zählt — fehlt der Schlüssel, startet HTTPS
+    # sonst nie, während hier „OK“ stünde (Gegenprüfung d5655361, P3).
+    [[ -f cert.pem && -f key.pem ]] && exit 3
     stage="$(mktemp -d .neu.XXXXXX)" || exit 1
     trap 'rm -rf -- "$stage"' EXIT
     (
-      # root-eigen, 0700, leer: hier kann der Dienstbenutzer nichts vorlegen.
-      cd -P -- "$stage" && [[ -O . && -z "$(ls -A)" ]] || exit 1
+      # root-eigen, 0700, leer und wirklich der eben angelegte Ordner (kein
+      # nachträglich untergeschobener Verweis, Gegenprüfung d5655361, P3):
+      # hier kann der Dienstbenutzer nichts vorlegen.
+      cd -P -- "$stage" && [[ "$(pwd -P)" == "$tls_real/$stage" && -O . && -z "$(ls -A)" ]] || exit 1
       "$@" openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
         -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null || exit 1
       chmod 600 key.pem && chmod 644 cert.pem && chown "$user:$user" key.pem cert.pem || exit 1

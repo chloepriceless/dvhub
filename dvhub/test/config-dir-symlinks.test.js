@@ -238,3 +238,45 @@ test('T-0003: install.sh setzt config.json nach dem Schreiben auf 0600', () => {
   assert.ok(iWrite > 0, 'Schreibstelle gefunden');
   assert.ok(iSecure > iWrite, 'Rechte nach dem letzten Schreiben gesetzt');
 });
+
+// Gegenprüfung d5655361 (P3): cert.pem echt, key.pem ein Verweis → der Verweis
+// verschwand still, „TLS Zertifikat: OK“, HTTPS startete danach nie.
+test('TLS: verlinkter Schlüssel → Meldung und neues vollständiges Paar', () => {
+  const t = setup();
+  try {
+    fs.mkdirSync(path.join(t.cfg, 'tls'));
+    fs.writeFileSync(path.join(t.cfg, 'tls', 'cert.pem'), 'ALT');
+    fs.symlinkSync(path.join(t.outside, 'opfer'), path.join(t.cfg, 'tls', 'key.pem'));
+    const r = run(t);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /key\.pem war ein Verweis/);
+    assert.match(r.stdout, /neu erzeugt/);
+    assert.match(fs.readFileSync(path.join(t.cfg, 'tls', 'key.pem'), 'utf8'), /PRIVATE KEY/);
+    assert.match(fs.readFileSync(path.join(t.cfg, 'tls', 'cert.pem'), 'utf8'), /CERTIFICATE/);
+    assert.equal(fs.readFileSync(path.join(t.outside, 'opfer'), 'utf8'), 'unberuehrt\n');
+  } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
+});
+
+// Gegenprüfung d5655361 (P3): eos-provision.sh legte eos.env als root auch
+// durch einen ins Leere zeigenden Verweis an.
+test('eos.env: Verweis an seiner Stelle wird nicht beschrieben', () => {
+  const t = setup();
+  try {
+    const s = read('eos-provision.sh');
+    const a = s.indexOf('# /etc/dvhub gehört dem Dienstbenutzer (Gegenprüfung d5655361, P3)');
+    const b = s.indexOf('cat <<UNIT >"$EOS_UNIT_FILE"');
+    assert.ok(a > 0 && b > a);
+    const unit = path.join(t.dir, 'eos.service');
+    fs.writeFileSync(unit, '[Service]\nEnvironment=MEIN_WERT=1\n');
+    const env = path.join(t.cfg, 'eos.env');
+    const target = path.join(t.outside, 'neu-angelegt');
+    fs.symlinkSync(target, env);
+    let r = spawnSync('bash', ['-c', `set -euo pipefail\nEOS_SERVICE_NAME=dvhub-eos\nEOS_UNIT_FILE='${unit}'\nEOS_ENV_FILE='${env}'\n${s.slice(a, b)}`], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(fs.existsSync(target), false, 'kein Ziel angelegt');
+    fs.unlinkSync(env);
+    r = spawnSync('bash', ['-c', `set -euo pipefail\nEOS_SERVICE_NAME=dvhub-eos\nEOS_UNIT_FILE='${unit}'\nEOS_ENV_FILE='${env}'\n${s.slice(a, b)}`], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(fs.readFileSync(env, 'utf8'), /MEIN_WERT=1/);
+  } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
+});

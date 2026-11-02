@@ -341,18 +341,23 @@ _ncpu="$(nproc 2>/dev/null || echo 1)"
 if [[ -z "${EOS_CPU_QUOTA:-}" && "$_ncpu" -ge 2 ]]; then EOS_CPU_QUOTA="$(( (_ncpu - 1) * 100 ))%"; fi
 # Einmalige Uebernahme: Zusatz-Environment-Zeilen einer von Hand erweiterten
 # alten Unit wandern in die Betreiberdatei, statt beim Neuschreiben zu verschwinden.
-if [[ -f "$EOS_UNIT_FILE" && ! -f "$EOS_ENV_FILE" ]]; then
+# /etc/dvhub gehört dem Dienstbenutzer (Gegenprüfung d5655361, P3): ein
+# (auch ins Leere zeigender) Verweis an Stelle von eos.env wird nicht
+# beschrieben — `-e`/`-L` statt `-f`, und set -C legt die Datei mit O_EXCL an.
+if [[ -f "$EOS_UNIT_FILE" && ! -e "$EOS_ENV_FILE" && ! -L "$EOS_ENV_FILE" ]]; then
   _extra_env="$(grep -E '^Environment=' "$EOS_UNIT_FILE" | sed 's/^Environment=//' \
     | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX|PYTHONMALLOC|MALLOC_TRIM_THRESHOLD_|MALLOC_MMAP_THRESHOLD_|OPENBLAS_NUM_THREADS|OMP_NUM_THREADS|EOS_GENERAL__TIMEZONE_OVERRIDE)=' || true)"
   if [[ -n "$_extra_env" ]]; then
     mkdir -p "$(dirname "$EOS_ENV_FILE")"
-    {
+    if ( umask 022; set -C; {
       echo "# Aus der alten ${EOS_SERVICE_NAME}.service uebernommen ($(date -Is))."
       echo "# Wird von eos-provision.sh nie ueberschrieben."
       printf '%s\n' "$_extra_env"
-    } > "$EOS_ENV_FILE"
-    chmod 644 "$EOS_ENV_FILE"
-    echo "  EOS: $(printf '%s\n' "$_extra_env" | wc -l) Zusatz-Einstellungen nach $EOS_ENV_FILE uebernommen"
+    } > "$EOS_ENV_FILE" ) 2>/dev/null; then
+      echo "  EOS: $(printf '%s\n' "$_extra_env" | wc -l) Zusatz-Einstellungen nach $EOS_ENV_FILE uebernommen"
+    else
+      echo "  WARN: $EOS_ENV_FILE nicht angelegt (vorhanden oder Verweis) — Zusatz-Einstellungen nicht uebernommen" >&2
+    fi
   fi
 fi
 
