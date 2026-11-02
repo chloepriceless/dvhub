@@ -841,6 +841,10 @@ export function createEosForecastBridge(ctx) {
    * und setzt den Steuerzeitraum neu. Liegen danach noch Schätzwerte darin
    * (Löschen gescheitert), keinen Lauf — vor der Schätzung brach EOS an der
    * Stelle ohnehin ab („Missing or invalid prices“).
+   * Ist in diesem Prozess noch kein Preis-Import angekommen (Neustart, Import
+   * gescheitert, keine Preise), ist der Preisstand in EOS unbekannt: ebenfalls
+   * erst pushen, und kommt der Import nicht an, keinen Lauf — mit eigener
+   * Meldung (Gegenprüfung 692afdb0).
    *
    * @param {{nowMs?:number}} [opts]
    * @returns {Promise<{ok:boolean, pushed:boolean, error?:string}>}
@@ -860,7 +864,10 @@ export function createEosForecastBridge(ctx) {
     const why = res?.errors && typeof res.errors === 'object'
       ? Object.entries(res.errors).map(([k, v]) => `${k}: ${v}`).join('; ')
       : '';
-    return { ok: false, pushed: true, error: `Schätzpreise im Steuerzeitraum, Neu-Push ohne Erfolg${why ? ` (${why})` : ''}` };
+    const what = eosPricesKnown
+      ? 'Schätzpreise im Steuerzeitraum, Neu-Push ohne Erfolg'
+      : 'Preisstand in EOS unbekannt, Preis-Import nicht angekommen';
+    return { ok: false, pushed: true, error: `${what}${why ? ` (${why})` : ''}` };
   }
 
   async function pushOnce(job = null) {

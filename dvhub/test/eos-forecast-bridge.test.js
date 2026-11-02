@@ -1656,3 +1656,19 @@ test('Preise auffüllen: EOS nicht erkannt → keine Schätzung', async () => {
     assert.equal(Math.max(...elec.keys()), env.realEnd - Q);
   } finally { await mock.close(); }
 });
+
+// Gegenprüfung 692afdb0 (P3): bei unbekanntem Stand (noch kein Preis-Import
+// angekommen) sagt die Meldung das — nicht „Schätzpreise im Steuerzeitraum“.
+test('Laufstart: Stand unbekannt, Import kommt nicht an → Meldung nennt den unbekannten Preisstand', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...(await fc0()), price: { slots: [] } }) };
+    const res = await createEosForecastBridge(env.ctx).prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /Preisstand in EOS unbekannt/);
+    assert.match(res.error, /ElecPriceImport/);
+    assert.doesNotMatch(res.error, /Schätzpreise im Steuerzeitraum/);
+  } finally { await mock.close(); }
+});
