@@ -70,7 +70,10 @@ test(`E2E echter DVhub ↔ echtes Portal (${apiToken ? 'mit' : 'OHNE'} apiToken)
   fs.writeFileSync(path.join(rig, 'data', 'appliance-id'), APPLIANCE_ID);
   // Aktive Pro-Lizenz wie im e2e-Lauf von ci.yml (Dev-Bypass, Wegwerf-Verzeichnis):
   // ohne Lizenz darf das Portal nur eine Lizenz einspielen, Status/Tunnel erst mit.
-  fs.writeFileSync(path.join(rig, 'data', 'license_state.json'), JSON.stringify({ status: 'active', license_key: 'e2e-dev-bypass' }));
+  // last_check_ok_at: unsignierte Schlüssel gelten nur 14 Tage nach der letzten
+  // erfolgreichen Online-Prüfung (Strix L-0001) — ohne Zeitstempel wäre der
+  // Bypass sofort „unverified_offline“ und die Anlage schickte keinen Status.
+  fs.writeFileSync(path.join(rig, 'data', 'license_state.json'), JSON.stringify({ status: 'active', license_key: 'e2e-dev-bypass', last_check_ok_at: new Date().toISOString() }));
   fs.copyFileSync(path.join(ROOT, 'dvhub', 'hersteller', 'victron.json'), path.join(rig, 'etc', 'hersteller', 'victron.json'));
   const dvPort = await freePort();
   const portalPort = await freePort();

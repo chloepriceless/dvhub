@@ -276,7 +276,9 @@ jobs:
           # required — Hardening A rejects status:"active" with a null key
           # (see job comment point 1). Throwaway data dir — never touches the
           # real license_state.json.
-          printf '{"status":"active","license_key":"e2e-dev-bypass"}' > "$DV_DATA_DIR/license_state.json"
+          # last_check_ok_at: unsignierte Schlüssel gelten nur 14 Tage nach der
+          # letzten erfolgreichen Online-Prüfung (Strix L-0001).
+          printf '{"status":"active","license_key":"e2e-dev-bypass","last_check_ok_at":"%s"}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DV_DATA_DIR/license_state.json"
           DV_APP_CONFIG="$DV_DATA_DIR/e2e-config.json" node server.js &
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8080/ >/dev/null 2>&1; then
