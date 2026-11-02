@@ -4026,7 +4026,7 @@ function buildFieldDefinitions() {
       label: 'Akku-Basispreis (ct/kWh)',
       type: 'number',
       step: 0.01,
-      help: 'Basispreis der gespeicherten kWh ohne pauschalen Verlustaufschlag (z. B. Verschleiß je kWh). EOS rechnet mit genau diesem Wert als Speicherkosten.'
+      help: 'Basispreis der gespeicherten kWh ohne pauschalen Verlustaufschlag (z. B. Verschleiß). EOS rechnet mit genau diesem Wert als Speicherkosten je aus dem Akku gelieferter kWh.'
     },
     {
       section: 'pricing',
@@ -4038,7 +4038,7 @@ function buildFieldDefinitions() {
       type: 'number',
       step: 0.01,
       min: 0,
-      help: 'Pauschaler Effizienzaufschlag auf den Akku-Basispreis für DVhubs Kostenrechnung (Preisvergleich, Historie). EOS bekommt nur den Akku-Basispreis: Lade- und Entladeverluste rechnet EOS selbst über den Akku-Wirkungsgrad — mit dem Aufschlag zählten sie doppelt.'
+      help: 'Pauschaler Effizienzaufschlag auf PV-Kosten + Akku-Basispreis für DVhubs Kostenrechnung (Preisvergleich, Historie). EOS bekommt nur den Akku-Basispreis: Lade- und Entladeverluste rechnet EOS selbst über den Akku-Wirkungsgrad — mit dem Aufschlag zählten sie doppelt.'
     },
     // ── Forecast & PV ─────────────────────────────────────────────
     {

@@ -609,4 +609,10 @@ test('Hilfetexte: Verlustaufschlag gilt nicht für EOS, Basispreis schon', async
   assert.match(markup.help, /EOS bekommt nur den Akku-Basispreis/);
   assert.match(markup.help, /Wirkungsgrad/);
   assert.match(base.help, /EOS/);
+  // Gegenprüfung 49cc770c (P3): der Aufschlag gilt auf PV-Kosten + Akku-Basispreis
+  // (user-energy-pricing.js effectiveBatteryCostCtKwh), nicht nur auf den Basispreis.
+  assert.match(markup.help, /PV-Kosten \+ Akku-Basispreis/);
+  // EOS v0.4.0rc3: LCOS kostet je aus dem Akku gelieferter kWh (genetic.py
+  // battery_lcos_cost auf discharged_energy_wh).
+  assert.match(base.help, /je aus dem Akku gelieferter kWh/);
 });
