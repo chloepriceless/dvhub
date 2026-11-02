@@ -902,9 +902,13 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
     ctl.n += 1;
     return ctl.n <= guard.limits.controlFramesPerWindow;
   }
+  // Maske (Sicht aufs Lesestück) nach jedem fertigen Rahmen freigeben — ws
+  // setzt sie vor jedem Lesen neu (Gegenprüfung 34e9bd0c/672c1753 P3).
+  let afterFrame = () => {};
   ws.on('pong', () => {
     alive = true;
-    if (guard && !gone && !controlOk()) kill();
+    if (guard && !gone && !controlOk()) { kill(); return; }
+    afterFrame();
   });
   ws.on('close', () => {
     gone = true;
@@ -981,10 +985,13 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
     // Maske (Sicht aufs letzte Lesestück) wird nicht mehr gebraucht — ws setzt
     // sie vor jedem Lesen neu (getMask vor getData). Sonst hielte jede ruhende
     // Verbindung ihr letztes Lesestück (Gegenprüfung 34e9bd0c P3).
-    ws.on('message', () => {
-      inH.reserved = 0;
+    afterFrame = () => {
       if (rcv && '_mask' in rcv) rcv._mask = undefined;
       queueMicrotask(repin);
+    };
+    ws.on('message', () => {
+      inH.reserved = 0;
+      afterFrame();
     });
     // Pings selbst beantworten (autoPong aus): Pong durchs Ausgangsbudget,
     // Steuerrahmen begrenzt — sonst wächst der Schreibpuffer eines Nicht-Lesers
@@ -992,6 +999,7 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
     ws.on('ping', (data) => {
       if (gone) return;
       if (!controlOk()) { kill(); return; }
+      afterFrame();
       if (ws.readyState !== 1) return;
       // Eigene Kopie: `data` ist eine Sicht auf das ganze Lesestück (bis
       // 64 KiB) und hielte es fest, solange der Pong wartet (Gegenprüfung

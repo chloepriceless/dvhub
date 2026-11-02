@@ -756,7 +756,7 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
     }
   });
 
-  test('festgehaltene Lesestücke zählen in voller Größe (Rest-Byte); ruhende Verbindung hält nichts (Maske frei) (Gegenprüfung 39d4427 P2, 34e9bd0c P3)', async () => {
+  test('festgehaltene Lesestücke zählen in voller Größe (Rest-Byte); ruhende Verbindung hält nichts (Maske frei) (Gegenprüfung 39d4427 P2, 34e9bd0c/672c1753 P3)', async () => {
     const { srv, port } = await localRelay({ limits: { boxFramesPerWindow: 1e6, boxBytesPerWindow: 1e12 } });
     try {
       const text = JSON.stringify({ t: 'ping', pad: 'P'.repeat(65_000 - 30) });
@@ -775,6 +775,13 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
       await b.next('pong');
       await sleep(50);
       assert.ok(srv.socketStats().inPartialBytes - before - held < 1024, 'ruhende Verbindung hält ihr letztes Lesestück');
+      // Auch wenn ein Pong im selben Lesestück folgt (Gegenprüfung 672c1753 P3).
+      const c = await wsBox(port, generateIdentity());
+      const mid = srv.socketStats().inPartialBytes;
+      c.ws._socket.write(Buffer.concat([frame, Buffer.from([0x8a, 0x80, 0, 0, 0, 0])]));
+      await c.next('pong');
+      await sleep(50);
+      assert.ok(srv.socketStats().inPartialBytes - mid < 1024, 'Pong hinter dem Rahmen hält das Lesestück');
     } finally {
       await srv.close();
     }
