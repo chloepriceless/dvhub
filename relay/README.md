@@ -89,7 +89,10 @@ höchstens 4 MiB je Quelle, 32 MiB gesamt. Vor der Anmeldung sind nur Rahmen bis
 nicht, wird die Verbindung mit dem größten Rückstand getrennt; wer keinen
 Fortschritt macht (nichts abholt, Rahmen nicht fertig), ebenfalls — ein Rahmen
 hat 30 s plus Größe / 16 KiB/s (1 MiB: 94 s). Schließt das
-Relay eine Verbindung, hat die Gegenstelle 2 s für den Abschluss.
+Relay eine Verbindung, hat die Gegenstelle 2 s für den Abschluss. Pings
+beantwortet der Wächter selbst (Pongs zählen im Ausgangsbudget), höchstens 50
+Steuerrahmen je 10 s; je Nachricht höchstens 16 Fragmente, gepufferte
+Lesestücke und Fragmente zählen im Eingangsbudget mit.
 
 ## Überwachung
 

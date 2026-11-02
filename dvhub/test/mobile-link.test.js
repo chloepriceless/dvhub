@@ -687,6 +687,22 @@ describe('mobile-link Ende zu Ende', () => {
       const n0 = events().length;
       b.agent._pushMailboxLatest();
       assert.deepEqual(events().slice(n0).map(alarmsOf), [4, 11, 12, 13, 14, 15, 16, 17]);
+      // Nummer bleibt beim erneuten Ablegen erhalten (Review 5a969217 P3):
+      // A und E unterwegs, A abgelehnt, C reiht sich an, Lauf legt A und C neu
+      // ab — dann lehnt das Relay E, A und C ab → Reihenfolge A, E, C.
+      const at = () => events().length;
+      alarms = 21; b.agent._checkEvents(); const evA = events()[at() - 1];
+      alarms = 22; b.agent._checkEvents(); const evE = events()[at() - 1];
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: evA.ref });
+      alarms = 23; b.agent._checkEvents();
+      const n1 = at();
+      b.agent._pushMailboxLatest();
+      const [evA2, evC2] = events().slice(n1);
+      assert.deepEqual([evA2, evC2].map(alarmsOf), [21, 23]);
+      for (const ev of [evE, evA2, evC2]) deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: ev.ref });
+      const n2 = at();
+      b.agent._pushMailboxLatest();
+      assert.deepEqual(events().slice(n2).map(alarmsOf), [21, 22, 23], 'älteres A hinter E einsortiert');
     } finally {
       b.agent.stop();
     }

@@ -126,6 +126,7 @@ import { createInstallerPortal } from './services/installer-portal.js';
 import { createInstallerPortalClient } from './services/installer-portal-client.js';
 import { createMobileLink, LAN_WS_PATH as MOBILE_LINK_WS_PATH } from './services/mobile-link/agent.js';
 import { WebSocketServer as MobileLinkWss } from 'ws';
+import { WS_SERVER_OPTIONS as MOBILE_LINK_WS_OPTIONS } from './services/mobile-link/relay-core.js';
 // Datenspende (COMSYS, RWTH Aachen): Opt-in-Spende von Leistungs-Zeitreihen
 // an das Forschungsprojekt — ausgehend, ab Werk aus.
 import { createDatenspende } from './services/datenspende/index.js';
@@ -2408,7 +2409,8 @@ if (IS_WEB_PROCESS && RUNTIME_WORKER_ENABLED) {
 // WebSocket der Handy-App im Heimnetz. Kein Token nötig: Wer hier etwas
 // bekommt, entscheidet allein die Kryptografie (Ticket + Signatur bzw.
 // Kopplungs-Token aus dem QR-Code, siehe services/mobile-link/relay-core.js).
-const mobileLinkWss = new MobileLinkWss({ noServer: true, maxPayload: 512 * 1024 });
+// Pings beantwortet der Wächter des Heimnetz-Relays selbst (autoPong aus).
+const mobileLinkWss = new MobileLinkWss({ noServer: true, maxPayload: 512 * 1024, ...MOBILE_LINK_WS_OPTIONS });
 function onMobileLinkUpgrade(req, socket, head) {
   let pathname = '';
   try { pathname = new URL(req.url, 'http://upgrade.invalid').pathname; } catch { /* kaputte URL */ }

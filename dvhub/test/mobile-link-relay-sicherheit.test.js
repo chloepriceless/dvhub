@@ -650,6 +650,51 @@ describe('Relay-Speicher: Rahmen vor und nach der Anmeldung', () => {
   });
 });
 
+describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', () => {
+  test('Ping-Flut ohne Lesen: Pongs zählen im Ausgangsbudget, Flut wird getrennt (P1)', async () => {
+    const { srv, port } = await localRelay();
+    try {
+      const b = await wsBox(port, generateIdentity());
+      b.ws._socket.pause(); // liest nicht mehr
+      for (let i = 0; i < 200; i++) b.ws.ping(Buffer.alloc(125, 1));
+      await until(() => srv.relay.stats().connections === 0, 3000);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  test('Ein-Byte-Fragmente mit Pong-Füllung: Fragmente begrenzt, festgehaltene Lesepuffer gezählt (P2)', async () => {
+    const { srv, port } = await localRelay();
+    try {
+      const b = await wsBox(port, generateIdentity());
+      // Unfertige Nachricht aus 1-Byte-Fragmenten, dazwischen leere Pongs.
+      const pong = Buffer.from([0x8a, 0x80, 0, 0, 0, 0]);
+      const parts = [Buffer.concat([frameHead(1, { fin: false, opcode: 0x1 }), Buffer.from('{')])];
+      for (let i = 0; i < 40; i++) parts.push(Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' ')]), pong, pong);
+      b.ws._socket.write(Buffer.concat(parts));
+      await until(() => b.state.closed, 3000);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  test('Rahmen in winzigen TCP-Stücken: Stücke zählen im Eingangsbudget (P2)', async () => {
+    const { srv, port } = await localRelay({ socketLimits: { inTotal: 64 * 1024, inPerRemote: 1024 * 1024, stallMs: 60_000 } });
+    try {
+      const b = await wsBox(port, generateIdentity());
+      b.ws._socket.setNoDelay(true);
+      b.ws._socket.write(frameHead(32 * 1024));
+      for (let i = 0; i < 400 && !b.state.closed; i++) {
+        b.ws._socket.write(Buffer.from(' '));
+        await sleep(1);
+      }
+      await until(() => b.state.closed, 3000);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 describe('Relay-Speicher: faire Verdrängung im Briefkasten', () => {
   const big = { boxFramesPerWindow: 1e9, boxBytesPerWindow: 1e12 };
 
