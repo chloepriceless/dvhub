@@ -174,6 +174,15 @@ describe('Paket-Box: Update über dvhub-release', () => {
     } finally { h.cleanup(); }
   });
 
+  it('Kanalwechsel: lehnt der Helfer ab, bleibt der bisherige Kanal gespeichert', async () => {
+    const h = harness({ channel: 'stable', helper: { install: Object.assign(new Error('busy'), { code: 4, stderr: 'dvhub-release: läuft bereits' }) } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.equal(r.code, 409, JSON.stringify(r.payload));
+      assert.equal(h.saved.length, 0);
+    } finally { h.cleanup(); }
+  });
+
   it('git-Box: status meldet mode git ohne Helfer-Pflicht, rollback 409', async () => {
     const h = harness({ helper: { status: Object.assign(new Error('nope'), { code: 1, stderr: 'sudo: Befehl nicht erlaubt' }) } });
     fs.rmSync(path.join(h.root, '.dvhub-release.json'));

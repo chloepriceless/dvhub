@@ -105,9 +105,12 @@ export function createAdminRoutes(deps) {
     pushLog(event, { error: msg });
     return json(res, e?.code === 4 || e?.code === 3 ? 409 : 500, { ok: false, mode: 'package', error: msg });
   };
-  const startReleaseJob = async (res, args, event, extra = {}) => {
+  // onStarted läuft nur, wenn der Helfer den Auftrag angenommen hat (z. B.
+  // Kanal erst dann speichern — wie beim git-Weg, Gegenprüfung 9b949e21).
+  const startReleaseJob = async (res, args, event, extra = {}, onStarted = null) => {
     try {
       const out = await releaseHelper(args, 30000);
+      if (onStarted) onStarted(out);
       pushLog(event, { args: args.join(' '), ...extra });
       return json(res, 200, { ok: true, mode: 'package', job: args[0], started: out.started !== false, ...extra,
         message: 'Auftrag gestartet — Fortschritt unter /api/admin/update/status' });
@@ -782,8 +785,12 @@ export function createAdminRoutes(deps) {
         if (releaseInfo()) {
           // Paket-Box: das Neueste des Zielkanals installieren (bewusst ohne
           // Downgrade-Sperre — dev-Versionen sortieren vor dem gleichnamigen Release).
-          pushLog('update_channel_changed', { channel, mode: 'package' });
-          return startReleaseJob(res, ['install', 'latest', channel], 'update_package_started', { channel, target: 'latest' });
+          // Kanal erst speichern, wenn der Helfer den Auftrag angenommen hat —
+          // lehnt er ab (409/500), bleibt der bisherige Kanal eingestellt.
+          return startReleaseJob(res, ['install', 'latest', channel], 'update_package_started', { channel, target: 'latest' }, () => {
+            ctx.saveAndApplyConfig(next);
+            pushLog('update_channel_changed', { channel, mode: 'package' });
+          });
         }
 
         if (ctx.getServiceActionsEnabled()) {
