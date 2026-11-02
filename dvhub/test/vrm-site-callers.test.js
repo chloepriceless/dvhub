@@ -634,15 +634,20 @@ test('Voll-Nachimport: Rückfall auf Tageswerte nutzt denselben Konfigurationsst
   const fetchImpl = async (url) => {
     const u = new URL(url);
     calls.push(`${u.pathname}?${u.searchParams.get('interval')}`);
-    if (u.searchParams.get('interval') === 'days') current = { historyImport: { ...current.historyImport, vrmPortalId: '999999' } };
+    // Wechsel schon beim ersten 15-min-Abruf: nimmt der Rückfall einen neuen
+    // Stand statt runConfig, liest er 999999 (Gegenprüfung 8b22116d).
+    if (u.searchParams.get('interval') === '15mins') current = { historyImport: { ...current.historyImport, vrmPortalId: '999999' } };
     if (u.hostname !== 'vrmapi.victronenergy.com') return { ok: true, status: 200, async json() { return { unix_seconds: [], price: [] }; } };
     return empty;
   };
   const jobs = [];
   const store = { ...gapStore(), async writeImportJob(j) { jobs.push(j); return jobs.length; } };
   const manager = createHistoryImportManager({ store, fetchImpl, waitImpl: async () => {}, getTelemetryConfig: () => current });
-  await manager.backfillHistoryFromConfiguredSource({ mode: 'full', now: '2026-01-29T00:00:00.000Z', maxLookbackDays: 21 });
+  const r = await manager.backfillHistoryFromConfiguredSource({ mode: 'full', now: '2026-01-29T00:00:00.000Z', maxLookbackDays: 21 });
+  assert.equal(r.ok, true, JSON.stringify(r));
   assert.ok(calls.some((c) => c.endsWith('?days')), 'Rückfall auf Tageswerte lief');
   assert.ok(calls.every((c) => c.startsWith(`/v2/installations/${SITE_ID}/stats`)), calls.join(','));
+  assert.ok(jobs.length > 0, 'Job geschrieben');
+  assert.equal(jobs.at(-1).meta.interval, 'days');
   assert.ok(jobs.every((j) => j.sourceAccount === String(SITE_ID)), JSON.stringify(jobs.map((j) => j.sourceAccount)));
 });
