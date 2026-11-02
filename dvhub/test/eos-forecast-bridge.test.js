@@ -1659,7 +1659,7 @@ test('Laufstart: Neustart im Preisausfall, auch die Datenbank deckt jetzt nicht 
     env.ctx.telemetryStore = { querySeries: async ({ start, end }) => rows.filter((r) => r.ts >= new Date(start).toISOString() && r.ts < new Date(end).toISOString()) };
     const res = await createEosForecastBridge(env.ctx).prepareRun();
     assert.equal(res.ok, false);
-    assert.deepEqual(deletes(mock).filter((d) => d.start < env.q0), [], 'nichts ab jetzt pauschal gelöscht');
+    assert.deepEqual(deletes(mock), [], 'nichts gelöscht');
   } finally { await mock.close(); }
 });
 
@@ -1736,7 +1736,8 @@ test('Laufstart: PV deckt jetzt nicht (nur Vergangenheit) → Meldung nennt PV',
 // Abstand der Zeilen, wie bei realPriceCoverage.
 test('Laufstart: gespeicherte Preise stündlich oder falsch gestempelt → trotzdem genutzt', async () => {
   const H = 3_600_000;
-  for (const [stepMs, stamp] of [[H, 3600], [Q, 1800]]) {
+  // 5400: erstes Zeilenpaar des Abrufs mit 1,5 h Lücke (Gegenprüfung fac22151)
+  for (const [stepMs, stamp] of [[H, 3600], [Q, 1800], [Q, 5400]]) {
     const mock = await createMockEos(okHandler);
     try {
       const env = estimateCtx(mock);
