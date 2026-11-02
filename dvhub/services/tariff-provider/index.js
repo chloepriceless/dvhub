@@ -14,6 +14,15 @@
 // Ablage: Reihe `tariff_import_ct_kwh` (scope 'tariff', source = Anbieter) in
 // timeseries_samples, beim Start zurück in den Speicher (price-store.js), damit
 // die Historie auch nach einem Neustart den bezahlten Preis kennt.
+//
+// Mitloggen (Christin 01.11.2026): Je Viertelstunde eine Zeile (Upsert auf
+// Reihe/Anbieter/Zeit), daneben liegt der Day-Ahead-Preis (price_ct_kwh). Neu
+// geschrieben wird nur ein neuer oder geänderter Preis; meta_json hält die
+// Abrufzeit (fetchedAt), die Lesart (priceBasis) und bei einer Änderung den
+// vorigen Preis (previousCtKwh). Aufbewahrung wie die Börsenpreise: scope
+// 'tariff' ist keine 5-s-Rohreihe — weder die Log-Verdichtung (14 Tage gilt nur
+// für Protokolle) noch die Platz-Wache (nur scope 'live') entfernt sie; ~35 000
+// Zeilen je Jahr. Auswertung gegen Day-Ahead: price-stats.js, stats().
 
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -25,6 +34,7 @@ import {
   markProviderPricesLoading, dropProviderSlotsFrom
 } from './price-store.js';
 import { localDateOf, addDaysToDate, localMidnight, localMinuteOfDay } from './common.js';
+import { pairProviderWithMarket, computeProviderPriceStats, clampStatsDays } from './price-stats.js';
 
 export const SERIES_KEY = 'tariff_import_ct_kwh';
 export const SERIES_SCOPE = 'tariff';
@@ -33,6 +43,10 @@ const REFRESH_MS = 60 * 60 * 1000;
 const TOMORROW_RETRY_MS = 15 * 60 * 1000;
 const AUTH_BLOCK_MS = 6 * 60 * 60 * 1000;
 const ESTIMATE_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Wie weit zurück gemerkt wird, was schon in der Datenbank steht: Die Anbieter
+// liefern heute und morgen, ältere Slots kommen nicht wieder.
+const PERSISTED_KEEP_MS = 3 * DAY_MS;
 const TIME_ZONE = 'Europe/Berlin';
 
 // Ab wann die Preise für morgen da sein sollten (Ortszeit, Minute des Tages).
@@ -160,6 +174,8 @@ export function createTariffProviderService(ctx, deps = {}) {
   let identity = null;
   let reloadTimer = null;
   const TEST_MIN_GAP_MS = 10_000;
+  // Was sicher in der Datenbank steht: `${Anbieter}|${Slotbeginn ms}` → ct/kWh.
+  const persisted = new Map();
 
   const settings = () => ctx.getCfg?.()?.userEnergyPricing?.provider || {};
   const log = (event, data, level) => { try { ctx.pushLog?.(event, data, level); } catch { /* ignore */ } };
@@ -206,10 +222,13 @@ export function createTariffProviderService(ctx, deps = {}) {
       try {
         const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE });
         const bySource = new Map();
+        const keepFrom = now() - PERSISTED_KEEP_MS;
         for (const row of rows) {
           const list = bySource.get(row.source) || [];
           list.push({ ts: row.ts, ctKwh: row.value, durationMs: Number(row.resolutionSeconds || 900) * 1000 });
           bySource.set(row.source, list);
+          const tsMs = new Date(row.ts).getTime();
+          if (tsMs >= keepFrom) persisted.set(`${row.source}|${tsMs}`, Number(row.value));
         }
         // Der eingestellte Anbieter zuletzt: Bei doppelten Slots gilt seiner.
         const current = settings().name;
@@ -257,19 +276,42 @@ export function createTariffProviderService(ctx, deps = {}) {
     setProviderEstimate(model ? { ...model, provider: settings().name || null } : getProviderEstimate());
   }
 
-  function writeSamples(provider, slots) {
-    if (!slots.length || typeof ctx.telemetrySafeWrite !== 'function') return;
-    const rows = slots.map((s) => ({
-      seriesKey: SERIES_KEY,
-      scope: SERIES_SCOPE,
-      source: provider,
-      quality: 'raw',
-      ts: new Date(s.ts).toISOString(),
-      resolutionSeconds: Math.round(s.durationMs / 1000),
-      value: s.ctKwh,
-      unit: 'ct/kWh'
-    }));
-    ctx.telemetrySafeWrite(() => ctx.telemetryStore.writeSamples(rows));
+  // Nur neue oder geänderte Preise schreiben; gemerkt wird erst nach dem
+  // erfolgreichen Schreiben — scheitert es, folgt es beim nächsten Abruf.
+  function writeSamples(provider, slots, priceBasis) {
+    if (!slots.length || typeof ctx.telemetrySafeWrite !== 'function') return null;
+    const nowMs = now();
+    for (const key of [...persisted.keys()]) {
+      if (Number(key.slice(key.lastIndexOf('|') + 1)) < nowMs - PERSISTED_KEEP_MS) persisted.delete(key);
+    }
+    const fetchedAt = new Date(nowMs).toISOString();
+    const rows = [];
+    for (const s of slots) {
+      const tsMs = Number(s.ts);
+      const key = `${provider}|${tsMs}`;
+      const before = persisted.get(key);
+      if (before === s.ctKwh) continue;
+      const meta = { fetchedAt, priceBasis };
+      if (before !== undefined) meta.previousCtKwh = before;
+      rows.push({
+        seriesKey: SERIES_KEY,
+        scope: SERIES_SCOPE,
+        source: provider,
+        quality: 'raw',
+        ts: new Date(tsMs).toISOString(),
+        resolutionSeconds: Math.round(s.durationMs / 1000),
+        value: s.ctKwh,
+        unit: 'ct/kWh',
+        meta
+      });
+    }
+    if (!rows.length) return null;
+    return Promise.resolve(ctx.telemetrySafeWrite(async () => { await ctx.telemetryStore.writeSamples(rows); return true; }))
+      .then((ok) => {
+        if (ok !== true) return;
+        for (const r of rows) persisted.set(`${provider}|${Date.parse(r.ts)}`, r.value);
+      })
+      .catch(() => { /* telemetrySafeWrite meldet selbst */ });
   }
 
   async function runFetch(s, reason) {
@@ -282,7 +324,7 @@ export function createTariffProviderService(ctx, deps = {}) {
       const result = await clients[s.name](s);
       const slots = result.slots || [];
       putProviderSlots(s.name, slots);
-      writeSamples(s.name, slots);
+      writeSamples(s.name, slots, s.priceBasis === 'net_energy' ? 'net_energy' : 'gross_total');
       failures = 0;
       lastSuccessMs = now();
       st.lastSuccessAt = new Date(lastSuccessMs).toISOString();
@@ -361,6 +403,41 @@ export function createTariffProviderService(ctx, deps = {}) {
     }
   }
 
+  /**
+   * Kennzahlen Anbieterpreis ↔ Day-Ahead des eingestellten Anbieters über die
+   * letzten `days` Tage (plus die schon bekannten Preise für morgen).
+   */
+  async function stats({ days } = {}) {
+    const store = ctx.telemetryStore;
+    if (typeof store?.listSeriesSamples !== 'function' || typeof store?.listPriceSlots !== 'function') {
+      return { ok: false, code: 'no_store', error: 'Keine Datenbank — Auswertung nicht möglich.' };
+    }
+    const cfg = ctx.getCfg?.() || {};
+    const s = settings();
+    if (!s.name) return { ok: false, code: 'not_configured', error: 'Noch kein Anbieter gespeichert.' };
+    const d = clampStatsDays(days);
+    const nowMs = now();
+    const start = new Date(nowMs - d * DAY_MS).toISOString();
+    const end = new Date(nowMs + 2 * DAY_MS).toISOString();
+    const [providerRows, marketSlots] = await Promise.all([
+      store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE, start, end }),
+      store.listPriceSlots({ start, end, bucketSeconds: 900 })
+    ]);
+    const own = providerRows.filter((r) => r.source === s.name);
+    const vatRaw = cfg.userEnergyPricing?.dynamicComponents?.vatPct;
+    const vatPct = vatRaw == null || vatRaw === '' || !Number.isFinite(Number(vatRaw)) ? 19 : Number(vatRaw);
+    return {
+      ok: true,
+      provider: s.name,
+      providerLabel: PROVIDER_LABELS[s.name] || s.name,
+      days: d,
+      from: start,
+      to: end,
+      providerSlots: own.length,
+      ...computeProviderPriceStats(pairProviderWithMarket(own, marketSlots), { vatPct, priceBasis: s.priceBasis })
+    };
+  }
+
   function getState() {
     syncConfigState();
     const estimate = getProviderEstimate();
@@ -417,5 +494,5 @@ export function createTariffProviderService(ctx, deps = {}) {
     reloadTimer = null;
   }
 
-  return { start, startReadOnly, stop, tick, refresh, test, getState, loadFromDb, reloadRecent };
+  return { start, startReadOnly, stop, tick, refresh, test, getState, loadFromDb, reloadRecent, stats };
 }

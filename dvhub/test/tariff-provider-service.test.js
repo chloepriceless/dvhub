@@ -247,3 +247,110 @@ test('getrennter Web-Prozess liest neue Preise aus der Datenbank nach (Codex 22.
   assert.equal(calls, 1);
   assert.equal(providerSlotAt(Date.parse('2026-11-02T00:05:00Z')).ctKwh, 22);
 });
+
+// Christin 01.11.2026: Anbieterpreise dauerhaft mitloggen, neben dem Day-Ahead-Preis.
+test('Ablage: Abrufzeit und Lesart im Eintrag; derselbe Preis wird nicht erneut geschrieben, ein geänderter schon', async () => {
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const { ctx, written } = makeCtx();
+  let prices = dayPrices('2026-11-01');
+  const svc = createTariffProviderService(ctx, {
+    now: () => now,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: prices })
+  });
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96);
+  assert.deepEqual(written[0].meta, { fetchedAt: '2026-11-01T10:00:00.000Z', priceBasis: 'gross_total' });
+
+  now += HOUR;
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96, 'unveränderte Preise nicht noch einmal');
+
+  now += HOUR;
+  prices = prices.map((p, i) => (i === 50 ? { ...p, ctKwh: 33.3 } : p));
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 97, 'nur der geänderte Slot');
+  assert.equal(written[96].value, 33.3);
+  assert.deepEqual(written[96].meta, { fetchedAt: '2026-11-01T12:00:00.000Z', priceBasis: 'gross_total', previousCtKwh: 25.5 });
+});
+
+test('Ablage: fehlgeschlagenes Schreiben wird beim nächsten Abruf wiederholt', async () => {
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const { ctx, written } = makeCtx();
+  let dbDown = true;
+  // wie server.js: Fehler werden geschluckt, Ergebnis null
+  ctx.telemetrySafeWrite = async (fn) => { if (dbDown) return null; return fn(); };
+  const svc = createTariffProviderService(ctx, {
+    now: () => now,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: dayPrices('2026-11-01') })
+  });
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 0);
+  dbDown = false;
+  now += HOUR;
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96);
+});
+
+test('Ablage nach Neustart: Preise aus der Datenbank gelten als geschrieben', async () => {
+  const { ctx, written } = makeCtx();
+  const stored = dayPrices('2026-11-01');
+  ctx.telemetryStore.listSeriesSamples = async () => stored.map((s) => ({
+    ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh
+  }));
+  const svc = createTariffProviderService(ctx, {
+    now: () => Date.parse('2026-11-01T10:00:00Z'),
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
+  });
+  await svc.loadFromDb();
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96, 'nur morgen ist neu');
+  assert.ok(written.every((w) => w.ts >= '2026-11-01T23:00:00.000Z'));
+});
+
+test('Auswertung: Anbieterpreis des eingestellten Anbieters gegen Day-Ahead, Zeitraum und MwSt aus den Einstellungen', async () => {
+  const now = Date.parse('2026-11-03T12:00:00Z');
+  const { ctx } = makeCtx({ dynamicComponents: { vatPct: 19 } });
+  const calls = [];
+  const start = Date.parse('2026-11-01T23:00:00Z');
+  ctx.telemetryStore.listSeriesSamples = async (q) => {
+    calls.push({ kind: 'provider', ...q });
+    return [
+      ...Array.from({ length: 96 }, (_, i) => ({ ts: new Date(start + i * 900_000).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: (18 + 1.1 * (i / 4)) * 1.19 })),
+      { ts: new Date(start).toISOString(), source: 'tibber', resolutionSeconds: 900, value: 999 }
+    ];
+  };
+  ctx.telemetryStore.listPriceSlots = async (q) => {
+    calls.push({ kind: 'market', ...q });
+    return Array.from({ length: 96 }, (_, i) => ({ ts: new Date(start + i * 900_000).toISOString(), priceCtKwh: i / 4 }));
+  };
+  const svc = createTariffProviderService(ctx, { now: () => now });
+  const s = await svc.stats({ days: 7 });
+  assert.equal(s.ok, true);
+  assert.equal(s.provider, 'lichtblick');
+  assert.equal(s.days, 7);
+  assert.equal(s.pairs, 96, 'Tibber-Zeile zählt nicht');
+  assert.ok(Math.abs(s.formula.net.slope - 1.1) < 0.0001);
+  assert.ok(Math.abs(s.formula.net.interceptCtKwh - 18) < 0.001);
+  const p = calls.find((c) => c.kind === 'provider');
+  assert.equal(p.seriesKey, SERIES_KEY);
+  assert.equal(p.scope, 'tariff');
+  assert.equal(p.start, new Date(now - 7 * 86_400_000).toISOString());
+  assert.equal(p.end, new Date(now + 2 * 86_400_000).toISOString(), 'bekannte Preise für morgen zählen mit');
+  const m = calls.find((c) => c.kind === 'market');
+  assert.deepEqual([m.start, m.end, m.bucketSeconds], [p.start, p.end, 900]);
+
+  const tibber = createTariffProviderService({ ...ctx, getCfg: () => ({ userEnergyPricing: { mode: 'provider', provider: { name: 'tibber', tibber: { token: 't' } } } }) }, { now: () => now });
+  const t = await tibber.stats({ days: 7 });
+  assert.equal(t.provider, 'tibber', 'Tibber ebenso');
+  assert.equal(t.pairs, 1);
+  assert.equal(t.vatPct, 19, 'ohne Angabe 19 %');
+
+  const none = await createTariffProviderService({ ...ctx, telemetryStore: {} }, { now: () => now }).stats();
+  assert.deepEqual({ ok: none.ok, code: none.code }, { ok: false, code: 'no_store' });
+});

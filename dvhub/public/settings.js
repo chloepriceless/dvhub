@@ -493,7 +493,8 @@ if (typeof globalThis !== 'undefined') {
     createEmptyPricingPeriod,
     removePricingPeriod,
     serializePricingPeriods,
-    validatePricingPeriods
+    validatePricingPeriods,
+    tariffProviderStatsText
   };
 }
 
@@ -3003,7 +3004,47 @@ function tariffProviderBlockHtml(uep) {
       <button class="btn btn-ghost btn-small" type="button" data-tariff-provider-action="refresh">Jetzt abrufen</button>
     </div>` : ''}
     <div class="svc-meta" data-tariff-provider-status>Stand wird geladen …</div>
+    ${name ? `
+    <div class="config-row-grid">
+    <div class="config-row">
+      <span class="config-row-label">Auswertung gegen Day-Ahead</span>
+      <select class="config-select" data-tariff-provider-stats-days aria-label="Zeitraum der Auswertung">
+        ${['7', '30', '90', '365'].map((d) => `<option value="${d}"${d === tariffProviderStatsDays ? ' selected' : ''}>letzte ${d} Tage</option>`).join('')}
+      </select>
+    </div>
+    </div>
+    <div class="svc-meta" data-tariff-provider-stats>Auswertung wird geladen …</div>` : ''}
   `;
+}
+
+// Gewählter Zeitraum und letztes Ergebnis: Die Einstellungen zeichnen den Block
+// beim Laden mehrfach neu — nicht jedes Mal neu abfragen (eine Minute gültig).
+let tariffProviderStatsDays = '30';
+let tariffProviderStatsCache = null;   // { days, at, data }
+
+// Auswertung Anbieterpreis ↔ Day-Ahead (Christin 01.11.2026, /api/tariff-provider/stats):
+// LichtBlick rechnet IDA1 × Risikofaktor + feste Umlagen, Tibber Day-Ahead +
+// Aufschlag — die Formel netto ≈ a + b × Börsenpreis macht beides sichtbar.
+function tariffProviderStatsText(stats) {
+  if (!stats) return 'Auswertung nicht abrufbar.';
+  if (!stats.ok) return `Auswertung: ${stats.error || stats.code || 'nicht möglich'}`;
+  const num = (v, digits = 2) => Number(v).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const label = stats.providerLabel || 'Anbieter';
+  const basis = stats.priceBasis === 'net_energy' ? 'netto' : 'brutto';
+  if (!stats.pairs) return `Noch keine Viertelstunde mit Anbieter- und Day-Ahead-Preis in den letzten ${stats.days} Tagen.`;
+  const lines = [
+    `Letzte ${stats.days} Tage, ${num(stats.pairs, 0)} Viertelstunden mit beiden Preisen:`,
+    `${label} Ø ${num(stats.meanProviderCtKwh)} ct/kWh ${basis} · Day-Ahead Ø ${num(stats.meanMarketCtKwh)} ct/kWh · Abstand Ø ${num(stats.meanSpreadCtKwh)} ct`
+  ];
+  const f = stats.formula;
+  if (!f) {
+    lines.push('Für eine Formel sind es noch zu wenige Viertelstunden (oder der Börsenpreis schwankte nicht).');
+  } else {
+    lines.push(`Formel netto ≈ ${num(f.net.interceptCtKwh)} ct + ${num(f.net.slope, 3)} × Börsenpreis`
+      + (stats.priceBasis === 'net_energy' ? '' : ` (brutto: ${num(f.gross.interceptCtKwh)} ct + ${num(f.gross.slope, 3)} × Börsenpreis, MwSt ${num(stats.vatPct, 0)} %)`));
+    lines.push(`Abweichung von der Formel: Ø ${num(f.meanAbsDeviationCtKwh)} ct, höchstens ${num(f.maxAbsDeviationCtKwh)} ct (R² ${num(f.r2)})`);
+  }
+  return lines.join('\n');
 }
 
 function formatTariffProviderSummary(summary) {
@@ -3035,6 +3076,30 @@ function bindTariffProviderBlock(section, uep) {
   const statusEl = section.querySelector('[data-tariff-provider-status]');
   const show = (text) => { if (statusEl) { statusEl.textContent = text; statusEl.style.whiteSpace = 'pre-line'; } };
   apiFetch('/api/tariff-provider').then((r) => r.json()).then((data) => show(tariffProviderStateText(data?.state))).catch(() => show('Stand nicht abrufbar.'));
+  const statsEl = section.querySelector('[data-tariff-provider-stats]');
+  const statsDays = section.querySelector('[data-tariff-provider-stats-days]');
+  const loadStats = () => {
+    if (!statsEl) return;
+    const days = statsDays?.value || '30';
+    tariffProviderStatsDays = days;
+    statsEl.style.whiteSpace = 'pre-line';
+    const cached = tariffProviderStatsCache;
+    if (cached && cached.days === days && Date.now() - cached.at < 60_000) {
+      Promise.resolve(cached.data).then((data) => { statsEl.textContent = tariffProviderStatsText(data); });
+      return;
+    }
+    statsEl.textContent = 'Auswertung wird geladen …';
+    const request = apiFetch(`/api/tariff-provider/stats?days=${encodeURIComponent(days)}`)
+      .then((r) => r.json())
+      .catch(() => null);
+    tariffProviderStatsCache = { days, at: Date.now(), data: request };
+    request.then((data) => {
+      if (!data?.ok && tariffProviderStatsCache?.data === request) tariffProviderStatsCache = null;
+      statsEl.textContent = tariffProviderStatsText(data);
+    });
+  };
+  statsDays?.addEventListener('change', loadStats);
+  loadStats();
   section.querySelectorAll('[data-tariff-provider-action]').forEach((button) => {
     button.addEventListener('click', async () => {
       const action = button.dataset.tariffProviderAction;
