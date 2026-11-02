@@ -64,7 +64,11 @@ echo "Veröffentliche $VERSION (Kanal $CHANNEL) → Release $RTAG"
 # Jede Paketsignatur vor dem Hochladen gegen den Schlüssel prüfen.
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dvhub-publish.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-PUB="$(ssh-keygen -y -f "$KEY")"
+# Öffentlicher Schlüssel aus KEY.pub, wenn vorhanden: ein Schlüssel mit
+# Passphrase im ssh-agent signiert ohne Rückfrage, `ssh-keygen -y` fragt aber
+# trotzdem nach der Passphrase (Release-Probe 02.11.2026). Passt die .pub nicht
+# zum Signaturschlüssel, scheitert die Prüfung gleich darunter.
+if [[ -f "$KEY.pub" ]]; then PUB="$(awk 'NR==1{print $1" "$2}' "$KEY.pub")"; else PUB="$(ssh-keygen -y -f "$KEY")"; fi
 printf 'dvhub-release namespaces="dvhub-release,dvhub-release-index" %s\n' "$PUB" > "$WORK/allowed"
 for f in "$BUILD"/*.tar.gz; do
   [[ -f "$f.sig" ]] || die "Signatur fehlt: $f.sig"

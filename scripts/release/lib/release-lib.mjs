@@ -434,13 +434,25 @@ export function changelogSection(text, version) {
   const lines = String(text).split('\n');
   const start = lines.findIndex((l) => l.startsWith(`## [${version}]`));
   if (start === -1) return [];
-  const out = [];
+  // Ein Punkt samt eingerückter Folgezeilen (die Einträge sind umbrochen —
+  // nur die erste Zeile endete mitten im Satz, Release-Probe 02.11.2026);
+  // gekürzt an einer Wortgrenze.
+  const items = [];
   for (const l of lines.slice(start + 1)) {
     if (l.startsWith('## [')) break;
     const m = /^- (.+)$/.exec(l);
-    if (!m) continue;
-    const t = m[1].replace(/\*\*/g, '').replace(/`/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').trim();
-    out.push(t.length > 160 ? `${t.slice(0, 157)}…` : t);
+    if (m) { items.push(m[1]); continue; }
+    if (items.length && /^\s{2,}\S/.test(l)) items[items.length - 1] += ` ${l.trim()}`;
+    else if (items.length && l.trim() === '') items.push(null);
+  }
+  const out = [];
+  for (const it of items) {
+    if (it == null) continue;
+    const t = it.replace(/\*\*/g, '').replace(/`/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
+    if (t.length <= 160) { out.push(t); continue; }
+    const cut = t.slice(0, 159);
+    const sp = cut.lastIndexOf(' ');
+    out.push(`${(sp > 100 ? cut.slice(0, sp) : cut).replace(/[\s,;:–—-]+$/, '')}…`);
   }
   return out;
 }

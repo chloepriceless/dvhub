@@ -179,7 +179,11 @@ test('Kanal-Index: einfügen, absteigend, latest, Prüfung', () => {
 
 test('CHANGELOG-Abschnitt für den Index', () => {
   const text = '## [Unreleased]\n- neu\n\n## [1.0.9] - 2026-11-01\n\nText\n\n- **Fett**: mit `code` und [Link](http://x)\n  Folgezeile\n- zweiter Punkt\n\n## [1.0.8]\n- alt\n';
-  assert.deepEqual(changelogSection(text, '1.0.9'), ['Fett: mit code und Link', 'zweiter Punkt']);
+  assert.deepEqual(changelogSection(text, '1.0.9'), ['Fett: mit code und Link Folgezeile', 'zweiter Punkt']);
+  // Lange, umbrochene Punkte werden an einer Wortgrenze gekürzt, nicht mitten im Wort.
+  const long = `## [2.0.0]\n\n- **Titel**: ${'Wort '.repeat(30)}\n  ${'weiter '.repeat(20)}\n`;
+  const [one] = changelogSection(long, '2.0.0');
+  assert.ok(one.length <= 160 && one.endsWith('…') && /(Wort|weiter)…$/.test(one), one);
   assert.deepEqual(changelogSection(text, '9.9.9'), []);
 });
 
@@ -314,6 +318,36 @@ exit 2
     });
     assert.equal(r.status, 0, r.stderr);
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('publish-release.sh --dry-run: Schlüssel mit Passphrase im ssh-agent reicht (keine Rückfrage)', { timeout: 120000 }, (t) => {
+  const { dir } = fixtureRepo();
+  const work = tmp('dvhub-publish-');
+  const sock = path.join(work, 'agent.sock');
+  let agentPid = null;
+  try {
+    const { key } = keypair(work, 'k');
+    const r = build(dir, path.join(work, 'o'), ['v1.2.3', '--key', key]);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const ag = spawnSync('ssh-agent', ['-a', sock], { encoding: 'utf8' });
+    if (ag.status !== 0) { t.skip('ssh-agent nicht verfügbar'); return; }
+    agentPid = Number((ag.stdout.match(/SSH_AGENT_PID=(\d+)/) || [])[1]) || null;
+    const env = { ...process.env, SSH_AUTH_SOCK: sock };
+    assert.equal(spawnSync('ssh-add', ['-q', key], { env }).status, 0, 'Schlüssel in den Agenten');
+    // Erst danach mit Passphrase verschlüsseln: wie auf dem Mac liegt er nur im Agenten offen.
+    assert.equal(spawnSync('ssh-keygen', ['-q', '-p', '-P', '', '-N', 'geheim-passphrase', '-f', key]).status, 0);
+    const pub = path.join(work, 'pub');
+    const p = spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), path.join(work, 'o/1.2.3'), '--key', key, '--repo', dir, '--dry-run', '--dest', pub], {
+      encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.equal(p.status, 0, p.stdout + p.stderr);
+    assert.ok(fs.existsSync(path.join(pub, 'v1.2.3', 'dvhub-1.2.3-arm64.tar.gz')));
+    assert.ok(fs.existsSync(path.join(pub, 'channels', 'index-stable.json.sig')));
+  } finally {
+    if (agentPid) { try { process.kill(agentPid); } catch { /* weg */ } }
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(work, { recursive: true, force: true });
   }
