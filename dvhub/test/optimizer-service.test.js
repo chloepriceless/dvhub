@@ -425,6 +425,37 @@ describe('Optimizer Service: DVhub stößt den EOS-Lauf an', () => {
     await svc.close();
   });
 
+  // Gegenprüfung a6dbbd1d (P2): vor jedem Lauf prüft die Bridge, ob
+  // Schätzpreise im Steuerzeitraum liegen (prepareRun) — sind sie nicht zu
+  // entfernen, startet kein Lauf.
+  test('Laufstart: die Bridge bereitet den Lauf vor; ok:false → kein Lauf', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+    for (const ok of [true, false]) {
+      const { calls, eosAdapter } = eosWithoutPlan();
+      let prepared = 0;
+      const { ctx, state } = buildCtx({
+        optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
+        ctx: {
+          eosAdapter,
+          eosMonitor: { status: () => ({ status: 'up', solutionGeneratedAt: null }), onSolution: () => () => {}, ingest: () => {}, notifySolutionReady: async () => {} },
+          eosForecastBridge: {
+            socForRun: async () => ({ soc: { battery1: 50 } }),
+            prepareRun: async () => { prepared += 1; return ok ? { ok: true, pushed: false } : { ok: false, error: 'Schätzpreise im Steuerzeitraum' }; },
+          },
+          pushLog: () => {},
+        }
+      });
+      const svc = createOptimizerService(ctx);
+      state.optimizer.eos = { supported: true };
+      await svc.start();
+      await settle();
+      assert.equal(prepared, 1, `vorbereitet (ok=${ok})`);
+      assert.equal(calls.trigger.length, ok ? 1 : 0, `Lauf (ok=${ok})`);
+      if (!ok) assert.equal(state.optimizer.eosRun.lastError, 'Schätzpreise im Steuerzeitraum');
+      await svc.close();
+    }
+  });
+
   test('kein Anstoß, solange kein EOS 0.4 erkannt ist oder EOS nach eigenem Takt rechnen soll', async (t) => {
     t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
     for (const variant of ['unerkannt', 'eigenerTakt']) {

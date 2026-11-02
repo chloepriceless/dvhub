@@ -59,7 +59,11 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   und Einspeisewert entstehen daraus wie bei echten Preisen (fester Preis, Börse + Bestandteile, Anbieterpreis über die
   Ausgleichsgerade, Börse + Marktprämie). Echte Preise haben Vorrang und ersetzen die Schätzung beim nächsten Push; der
   Steuerzeitraum richtet sich weiter nur nach echten Preisen. Anzahl und Beginn der geschätzten Slots stehen im Log
-  (`eos_forecast_bridge`) und unter `state.optimizer.lastEosPush.priceEstimate`.
+  (`eos_forecast_bridge`) und unter `state.optimizer.lastEosPush.priceEstimate`. Schätzwerte liegen nie im
+  Steuerzeitraum: Vor jedem Lauf prüft DVhub das, schickt sonst die Preise neu und löscht nicht mehr geltende
+  Schätzwerte in EOS; gelingt das nicht, fällt der Lauf aus (Log `eos_run_skipped`) — wie früher, als EOS ohne Preise
+  abbrach. Mit „EOS rechnet nach eigenem Takt“ (Einstellungen → Betriebsart → EOS-Optimierung) oder solange kein
+  EOS 0.4 erkannt ist, wird nicht geschätzt.
 
 - **Bezugspreis vom Stromanbieter (Tibber, LichtBlick)**: neue Preislogik „Vom Stromanbieter“ unter Einstellungen →
   Strompreise, auch je Zeitraum (z. B. ab Lieferbeginn). DVhub holt mit den eigenen Zugangsdaten des Kunden die

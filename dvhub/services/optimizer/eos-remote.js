@@ -230,6 +230,7 @@ export function createEosRemoteFacade({
   const startedAt = new Date().toISOString();
   const config = new Map();       // Pfad → Wert (Reihenfolge des ersten Eintreffens)
   const predictions = new Map();  // Provider → { column, tz, rows: Map<ms, Wert> }
+  const deletedRanges = [];       // per DELETE /v1/prediction/range entfernt, für runLocal
   const measurements = new Map(); // Schlüssel → { datetime, value }
   let last = null;                // { optimize, plan, solution, at, source }
   let chain = Promise.resolve();
@@ -489,6 +490,17 @@ export function createEosRemoteFacade({
       return r.data;
     };
     for (const p of ordered) await must('PUT', `/v1/config/${p}`, config.get(p));
+    // Gelöschte Bereiche (alte Preis-Schätzwerte) auch im lokalen EOS löschen —
+    // es hat sie evtl. aus einem früheren Rückfall, und Importe löschen nichts.
+    for (const d of [...deletedRanges]) {
+      const qs = `key=${encodeURIComponent(d.key)}${Number.isFinite(d.from) ? `&start_datetime=${encodeURIComponent(isoZ(d.from))}` : ''}${Number.isFinite(d.to) ? `&end_datetime=${encodeURIComponent(isoZ(d.to))}` : ''}`;
+      const r = await localRequest(base, 'DELETE', `/v1/prediction/range?${qs}`, undefined, t);
+      if (r.status !== 404 && (r.status < 200 || r.status >= 300)) throw new Error(`DELETE /v1/prediction/range: HTTP ${r.status}`);
+      // Während des Löschens kann ein neues DELETE den Eintrag verdrängt haben
+      // (höchstens 50): dann ist er schon weg — splice(-1) träfe den neuesten.
+      const i = deletedRanges.indexOf(d);
+      if (i >= 0) deletedRanges.splice(i, 1);
+    }
     for (const [prov, df] of Object.entries(predictionsForJob())) await must('PUT', `/v1/prediction/import/${prov}?force_enable=true`, df);
     for (const m of measurementsForJob()) {
       await must('PUT', `/v1/measurement/value?datetime=${encodeURIComponent(m.datetime)}&key=${encodeURIComponent(m.key)}&value=${m.value}`);
@@ -584,6 +596,21 @@ export function createEosRemoteFacade({
         if (!PROVIDER_COLUMNS[provider]) return send(res, 404, { detail: `Provider '${provider}' not found.` });
         mergePrediction(provider, body);
         return send(res, 200);
+      }
+      // Wie EOS: Werte eines Schlüssels im Bereich löschen (die Bridge räumt
+      // so nicht mehr geltende Preis-Schätzwerte ab).
+      if (req.method === 'DELETE' && p === '/v1/prediction/range') {
+        const key = url.searchParams.get('key');
+        const entry = [...predictions.values()].find((e) => e.column === key);
+        if (!entry) return send(res, 404, { detail: `Key '${key}' not found in predictions` });
+        const from = url.searchParams.get('start_datetime') ? Date.parse(url.searchParams.get('start_datetime')) : -Infinity;
+        const to = url.searchParams.get('end_datetime') ? Date.parse(url.searchParams.get('end_datetime')) : Infinity;
+        if (Number.isNaN(from) || Number.isNaN(to)) return send(res, 400, { detail: 'invalid datetime' });
+        for (const ms of [...entry.rows.keys()]) if (ms >= from && ms < to) entry.rows.delete(ms);
+        // Für den lokalen Rückfall merken (höchstens 50, älteste fallen weg).
+        deletedRanges.push({ key, from, to });
+        if (deletedRanges.length > 50) deletedRanges.splice(0, deletedRanges.length - 50);
+        return send(res, 200, { data: Object.fromEntries([...entry.rows.entries()].sort((a, b) => a[0] - b[0]).map(([ms, v]) => [isoZ(ms), v])) });
       }
       if (req.method === 'GET' && p === '/v1/prediction/series') {
         const key = url.searchParams.get('key');

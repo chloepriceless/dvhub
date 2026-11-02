@@ -1466,3 +1466,582 @@ test('eosPlanFeedInBasis: unbekannte Laufdauer → 60 min angenommen', async () 
   assert.equal(eosPlanFeedInBasis({ eosFeedInBasis: B, eosFeedInBasisPrev: A }, {}, 10.5 * H, 0), null);
   assert.deepEqual({ ...eosPlanFeedInBasis({ eosFeedInBasis: B, eosFeedInBasisPrev: A }, {}, 11.5 * H, NaN) }, { feedIn: 'spot' });
 });
+
+// Gegenprüfung 8c050aae (P2): EOS speichert Importe nur dazu und löscht nichts.
+// Fehlen nach einem Preisausfall die echten Preise für jetzt, lägen sonst die
+// früher geschickten Schätzwerte im Steuerzeitraum und EOS plante darauf.
+function deletes(mock) {
+  return mock.requests
+    .filter((r) => r.method === 'DELETE' && r.url.startsWith('/v1/prediction/range'))
+    .map((r) => {
+      const u = new URL(r.url, 'http://x');
+      return { key: u.searchParams.get('key'), start: Date.parse(u.searchParams.get('start_datetime')), end: Date.parse(u.searchParams.get('end_datetime')) };
+    });
+}
+
+test('Preise auffüllen: nach Preisausfall werden die früher geschickten Schätzwerte in EOS gelöscht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const env = estimateCtx(mock, { logs });
+    // Die Bridge hält das Prognose-Objekt fest — die Antwort darüber umschalten.
+    const fs0 = env.ctx.forecastService;
+    const orig = fs0.buildForecastResponse;
+    let override = null;
+    fs0.buildForecastResponse = async () => override || orig();
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    const first = env.state.optimizer.lastEosPush.priceEstimate;
+    assert.ok(first && first.estimatedSlots > 0);
+    // Erster Push des Prozesses: nur HINTER dem Geschickten wird gelöscht
+    // (nach einem Neustart ist nichts gemerkt), nie im geschickten Bereich.
+    for (const d of deletes(mock)) assert.ok(d.start >= Date.parse(first.until), 'solange echte Preise jetzt abdecken, nichts im geschickten Bereich');
+    mock.requests.length = 0;
+    // Abruf gestört: die Prognose liefert nur noch Preise, die vor jetzt enden.
+    const stale = [];
+    for (let ms = env.q0 - 26 * 3_600_000; ms < env.q0 - 3_600_000; ms += Q) stale.push({ start: new Date(ms).toISOString(), ctKwh: 10 });
+    override = { ...(await orig()), price: { slots: stale } };
+    await bridge.push();
+    const del = deletes(mock);
+    assert.deepEqual(del.map((d) => d.key).sort(), ['elecprice_marketprice_wh', 'feed_in_tariff_wh']);
+    for (const d of del) {
+      assert.ok(d.start <= Date.parse(first.from), 'ab dem ersten Schätzwert');
+      assert.ok(d.end >= Date.parse(first.until), 'bis zum letzten Schätzwert');
+    }
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
+    assert.ok(logs.some((l) => l.event === 'eos_price_estimate_cleared'));
+  } finally { await mock.close(); }
+});
+
+test('Preise auffüllen: auch nach DVhub-Neustart — echte Preise decken jetzt nicht ab → Bereich dahinter löschen', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc = await env.ctx.forecastService.buildForecastResponse();
+    const stale = [];
+    for (let ms = env.q0 - 26 * 3_600_000; ms < env.q0 - 3_600_000; ms += Q) stale.push({ start: new Date(ms).toISOString(), ctKwh: 10 });
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, price: { slots: stale } }) };
+    await createEosForecastBridge(env.ctx).push();
+    const del = deletes(mock);
+    assert.equal(del.length, 2);
+    for (const d of del) {
+      assert.equal(d.start, env.q0 - 3_600_000, 'ab dem Ende der echten Preise');
+      assert.ok(d.end >= Date.now() + 72 * 3_600_000, 'über den ganzen möglichen Schätzbereich');
+    }
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 8c050aae (P2): Stundenpreise + 15-min-Schätzungen ergäben eine
+// gemischte Kadenz, EOS (bounded_forecast_array) liest dann Lücken.
+test('Preise auffüllen: bei Stundenpreisen kommt die Schätzung ebenfalls stündlich', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const H = 3_600_000;
+    const h0 = env.q0 - (env.q0 % H);
+    const hourly = [];
+    for (let ms = h0 - 2 * H; ms < h0 + 10 * H; ms += H) hourly.push({ start: new Date(ms).toISOString(), ctKwh: env.pattern(ms) });
+    const fc = await env.ctx.forecastService.buildForecastResponse();
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, price: { slots: hourly } }) };
+    await createEosForecastBridge(env.ctx).push();
+    for (const [provider, key] of [['ElecPriceImport', 'elecprice_marketprice_wh'], ['FeedInTariffImport', 'feed_in_tariff_wh']]) {
+      const ts = [...seriesOf(mock, provider, key).keys()].sort((a, b) => a - b);
+      assert.ok(ts.length > hourly.length, `${provider}: geschätzt wurde`);
+      for (let i = 1; i < ts.length; i += 1) assert.equal(ts[i] - ts[i - 1], H, `${provider}: gleichmäßig stündlich`);
+    }
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate.from, new Date(h0 + 10 * H).toISOString());
+  } finally { await mock.close(); }
+});
+
+// Codex-Gegenprüfung Branch (P2): schlägt das Löschen fehl, ist der Push nicht ok
+// (sonst gilt die Prognose als zugestellt und der Wiederholversuch entfällt).
+test('Preise auffüllen: Löschen fehlgeschlagen → Push nicht ok', async () => {
+  const mock = await createMockEos((req, res) => {
+    if (req.method === 'DELETE') { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return; }
+    okHandler(req, res);
+  });
+  try {
+    const env = estimateCtx(mock);
+    const fc = await env.ctx.forecastService.buildForecastResponse();
+    const stale = [];
+    for (let ms = env.q0 - 26 * 3_600_000; ms < env.q0 - 3_600_000; ms += Q) stale.push({ start: new Date(ms).toISOString(), ctKwh: 10 });
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, price: { slots: stale } }) };
+    const res = await createEosForecastBridge(env.ctx).push();
+    assert.equal(res.ok, false);
+    assert.equal(env.state.optimizer.lastEosPush.ok, false);
+    assert.match(env.state.optimizer.lastEosPush.error, /priceEstimateClear/);
+  } finally { await mock.close(); }
+});
+
+// Codex-Gegenprüfung f442800b (P2): zwei Pushes gleichzeitig (Takt + neuer
+// Day-Ahead) — ein alter Stand darf nicht nach dem neuen löschen. Pushes laufen
+// nacheinander.
+test('Preise auffüllen: gleichzeitige Pushes laufen nacheinander', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const bridge = createEosForecastBridge(env.ctx);
+    await Promise.all([bridge.push(), bridge.push()]);
+    const marks = mock.requests.map((r, i) => ({ i, url: r.url, method: r.method }));
+    const pv = marks.filter((m) => m.url.startsWith('/v1/prediction/import/PVForecastImport'));
+    const hz = marks.filter((m) => m.url.startsWith('/v1/config/optimization/genetic/horizon_hours'));
+    assert.equal(pv.length, 2);
+    assert.ok(hz[0].i < pv[1].i, 'der zweite Push beginnt erst nach dem ersten');
+  } finally { await mock.close(); }
+});
+
+test('Preise auffüllen: echte Preise enden in weniger als 1 h 15 min → keine Schätzung, Rest wird gelöscht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc = await env.ctx.forecastService.buildForecastResponse();
+    const shortEnd = env.q0 + 60 * 60_000; // jetzt + höchstens 1 h
+    const real = fc.price.slots.filter((s) => Date.parse(s.start) < shortEnd);
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, price: { slots: real } }) };
+    await createEosForecastBridge(env.ctx).push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
+    const del = deletes(mock);
+    assert.equal(del.length, 2);
+    assert.equal(del[0].start, shortEnd);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung a6dbbd1d (P2): Die 75-min-Prüfung galt nur beim Push. Ein Lauf
+// an der Grenze oder per kick kommt ohne Push — 50 min nach einem Push mit
+// echten Preisen bis jetzt + 75..90 min reicht der 1-h-Steuerzeitraum (ab dem
+// abgerundeten Laufbeginn) in die Schätzwerte. prepareRun prüft vor dem Lauf und pusht neu (der neue Push
+// schätzt nicht mehr und löscht den Bereich).
+function shortRealEnv(mock, handler) {
+  const env = estimateCtx(mock);
+  const fc0 = env.ctx.forecastService.buildForecastResponse;
+  const realEnd = env.q0 + 90 * 60_000; // jetzt + 75..90 min
+  env.ctx.forecastService = {
+    buildForecastResponse: async () => {
+      const fc = await fc0();
+      return { ...fc, price: { slots: fc.price.slots.filter((s) => Date.parse(s.start) < realEnd) } };
+    },
+  };
+  return { ...env, realEnd, handler };
+}
+const pvImports = (mock) => mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/prediction/import/PVForecastImport')).length;
+
+test('Laufstart: Schätzwerte im Steuerzeitraum des Laufs → vorher neu pushen und löschen', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = shortRealEnv(mock);
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate.from, new Date(env.realEnd).toISOString());
+    assert.equal(env.state.optimizer.eosControlHorizonH, 1);
+    const sentUntil = Date.parse(env.state.optimizer.lastEosPush.priceEstimate.until);
+    for (const d of deletes(mock)) assert.ok(d.start >= sentUntil, 'erster Push löscht nur hinter dem Geschickten');
+    mock.requests.length = 0;
+    t.mock.timers.setTime(Date.now() + 50 * 60_000); // Lauf ohne Push
+    const before = pvImports(mock);
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, true);
+    assert.equal(res.pushed, true);
+    assert.equal(pvImports(mock), before + 1, 'neu gepusht');
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null, 'keine Schätzung mehr');
+    const del = deletes(mock);
+    assert.deepEqual(del.map((d) => d.key).sort(), ['elecprice_marketprice_wh', 'feed_in_tariff_wh']);
+    for (const d of del) assert.equal(d.start, env.realEnd, 'ab dem Ende der echten Preise');
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: kurz nach dem Push deckt der Steuerzeitraum nur echte Preise → kein zusätzlicher Push', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = shortRealEnv(mock);
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    // Laufbeginn abgerundet höchstens q0 + 15 min, Steuerzeitraum 1 h → bis
+    // q0 + 75 min, echte Preise bis q0 + 90 min.
+    t.mock.timers.setTime(Date.now() + 5 * 60_000);
+    const n = mock.requests.length;
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, true);
+    assert.equal(res.pushed, false);
+    assert.equal(mock.requests.length, n, 'keine Anfrage an EOS');
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: ohne geschickte Schätzwerte nichts zu tun', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock, { withHistory: false });
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    const n = mock.requests.length;
+    assert.deepEqual(await bridge.prepareRun(), { ok: true, pushed: false });
+    assert.equal(mock.requests.length, n);
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: Löschen schlägt fehl → Lauf nicht starten', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let failDeletes = false;
+  const mock = await createMockEos((req, res) => {
+    if (failDeletes && req.method === 'DELETE') { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return; }
+    okHandler(req, res);
+  });
+  try {
+    const env = shortRealEnv(mock);
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    failDeletes = true;
+    t.mock.timers.setTime(Date.now() + 50 * 60_000);
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /Schätz/);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung a6dbbd1d (P3): Pushes laufen nacheinander. Hängt einer (z. B.
+// eine Datenbankabfrage ohne Zeitlimit), warteten alle folgenden — und damit
+// auch der Laufstart (prepareRun). Eine Wache gibt die Kette nach einer Frist
+// frei; der hängende Push schreibt danach nichts mehr an EOS.
+test('Pushes nacheinander: ein hängender Push blockiert die Kette nicht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    let release;
+    let calls = 0;
+    env.ctx.forecastService = {
+      buildForecastResponse: () => {
+        calls += 1;
+        if (calls === 1) return new Promise((r) => { release = r; });
+        return fc0();
+      },
+    };
+    env.ctx.pushTimeoutMs = 200;
+    const bridge = createEosForecastBridge(env.ctx);
+    const both = Promise.all([bridge.push(), bridge.push()]);
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Kette hängt')), 5_000).unref());
+    const [a, b] = await Promise.race([both, timeout]);
+    assert.equal(a.ok, false);
+    assert.match(String(a.errors.timeout), /200/);
+    assert.equal(b.ok, true);
+    assert.equal(pvImports(mock), 1);
+    // Der hängende Push kommt später doch zurück: er schreibt nichts mehr.
+    const n = mock.requests.length;
+    release(await fc0());
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(mock.requests.length, n, 'der aufgegebene Push schreibt nicht an EOS');
+    assert.equal(env.state.optimizer.lastEosPush.ok, true, 'das Ergebnis des neueren Pushs bleibt stehen');
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 16856110 (P2): Scheitert der Preis-Import, liegen in EOS noch
+// die alten Schätzwerte. Der gemerkte Bereich darf dann nicht auf den neuen
+// (späteren) Beginn springen — sonst übersieht prepareRun die alten Werte im
+// (nun 24 h langen) Steuerzeitraum.
+function realUntil(env, endMs) {
+  const price = [];
+  for (let ms = env.q0 - 2 * 3_600_000; ms < endMs; ms += Q) price.push({ start: new Date(ms).toISOString(), ctKwh: env.pattern(ms) });
+  return price;
+}
+
+test('Laufstart: Preis-Import gescheitert → alte Schätzwerte gelten weiter, kein Lauf darauf', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let failPrice = false;
+  const mock = await createMockEos((req, res) => {
+    if (failPrice && req.method === 'PUT' && req.url.startsWith('/v1/prediction/import/ElecPriceImport')) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return;
+    }
+    okHandler(req, res);
+  });
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    let price = null;
+    env.ctx.forecastService = { buildForecastResponse: async () => { const fc = await fc0(); return price ? { ...fc, price: { slots: price } } : fc; } };
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push(); // Schätzwerte ab jetzt + 10 h
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate.from, new Date(env.realEnd).toISOString());
+    price = realUntil(env, env.q0 + 35 * 3_600_000); // neue Day-Ahead-Preise …
+    failPrice = true; // … kommen nicht an
+    await bridge.push();
+    const res = await bridge.prepareRun();
+    assert.equal(res.pushed, true, 'alte Schätzwerte im Steuerzeitraum → neu pushen');
+    assert.equal(res.ok, false, 'Import scheitert weiter → kein Lauf');
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 16856110 (P3): Ein Anstoß kurz vor der Slotgrenze kann in EOS
+// erst im nächsten Slot beginnen (Ladestand holen, Aufruf) — die Prüfung
+// rechnet deshalb mit einem Slot Vorlauf.
+test('Laufstart: Anstoß kurz vor der Slotgrenze zählt mit dem nächsten Slot', async (t) => {
+  const base = Math.floor(Date.now() / Q) * Q;
+  t.mock.timers.enable({ apis: ['Date'], now: base + 44 * 60_000 });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock); // q0 = base + 30 min, echte Preise bis q0 + 10 h
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    assert.equal(env.state.optimizer.eosControlHorizonH, 9);
+    // Anstoß um q0 + 1 h 14:59: abgerundet q0 + 1 h, + 9 h = q0 + 10 h — ohne
+    // Vorlauf keine Schätzung im Zeitraum; beginnt EOS aber erst im Slot
+    // q0 + 1 h 15, reicht der Zeitraum 15 min in die Schätzwerte.
+    t.mock.timers.setTime(env.q0 + 75 * 60_000 - 1);
+    const res = await bridge.prepareRun();
+    assert.equal(res.pushed, true);
+    assert.equal(res.ok, true);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 16856110 (P3): Ein gescheitertes Löschen im Schwanz (weit
+// hinter dem Steuerzeitraum) darf keine Läufe sperren.
+test('Laufstart: Löschfehler nur im Schwanz → Lauf geht', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let failDeletes = false;
+  const mock = await createMockEos((req, res) => {
+    if (failDeletes && req.method === 'DELETE') { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return; }
+    okHandler(req, res);
+  });
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    let next = null;
+    env.ctx.forecastService = { buildForecastResponse: async () => next || fc0() };
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push(); // Schätzung ab + 10 h bis + 40 h
+    const fc = await fc0();
+    const cut = env.q0 + 38 * 3_600_000;
+    next = {
+      pv: { slots: fc.pv.slots.filter((s) => Date.parse(s.start) < cut) },
+      load: { slots: fc.load.slots.filter((s) => Date.parse(s.start) < cut) },
+      price: { slots: realUntil(env, env.q0 + 35 * 3_600_000) },
+    };
+    failDeletes = true;
+    const r2 = await bridge.push(); // echte bis + 35 h, Schätzung bis + 38 h, Löschen ab + 38 h scheitert
+    assert.equal(r2.ok, false);
+    // Release 1.0.9: Steuerzeitraum = ganzer bekannter Preiszeitraum (bis 48 h)
+    // — echte Preise bis + 35 h ergeben 34 h; die Schätzwerte ab + 35 h liegen
+    // dahinter.
+    assert.equal(env.state.optimizer.eosControlHorizonH, Math.floor((env.q0 + 35 * 3_600_000 - Date.now() - Q) / 3_600_000));
+    const n = mock.requests.length;
+    const res = await bridge.prepareRun();
+    assert.deepEqual(res, { ok: true, pushed: false });
+    assert.equal(mock.requests.length, n);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 16856110 (P3): Rechnet EOS nach eigenem Takt
+// (optimizer.eosStartAfterPreviousRun), gibt es keinen Laufstart, an dem DVhub
+// prüfen könnte — dann keine Schätzung; früher geschickte werden gelöscht.
+test('Preise auffüllen: EOS rechnet nach eigenem Takt → keine Schätzung, alte werden gelöscht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const cfg0 = env.ctx.getCfg;
+    let ownCadence = false;
+    env.ctx.getCfg = () => { const c = cfg0(); if (ownCadence) c.optimizer.eosStartAfterPreviousRun = true; return c; };
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    assert.ok(env.state.optimizer.lastEosPush.priceEstimate);
+    ownCadence = true;
+    mock.requests.length = 0;
+    await bridge.push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
+    const del = deletes(mock);
+    assert.equal(del.length, 2);
+    for (const d of del) assert.equal(d.start, env.realEnd);
+    // Auch nach einem DVhub-Neustart (nichts gemerkt): einmal hinter den echten Preisen löschen.
+    const fresh = createEosForecastBridge(env.ctx);
+    mock.requests.length = 0;
+    await fresh.push();
+    assert.equal(deletes(mock).length, 2);
+    mock.requests.length = 0;
+    await fresh.push();
+    assert.equal(deletes(mock).length, 0, 'danach nicht bei jedem Push');
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 16856110 (P3): Fehlertext aus dem Push, nicht pauschal „Löschen“.
+test('Laufstart: Neu-Push scheitert schon beim Aufbau → Fehler des Pushs', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = shortRealEnv(mock);
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    env.ctx.forecastService.buildForecastResponse = async () => { throw new Error('DB weg'); };
+    t.mock.timers.setTime(Date.now() + 50 * 60_000);
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /DB weg/);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 2ed313de (P2): Nach einem DVhub-Neustart kennt der neue Prozess
+// die alten Schätzwerte in EOS nicht. Scheitert sein erster Preis-Import,
+// ist der Stand unbekannt — kein Lauf, solange kein Import angekommen ist.
+test('Laufstart: nach Neustart erster Preis-Import gescheitert → Stand unbekannt, kein Lauf', async () => {
+  let failPrice = false;
+  const mock = await createMockEos((req, res) => {
+    if (failPrice && req.method === 'PUT' && req.url.startsWith('/v1/prediction/import/ElecPriceImport')) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return;
+    }
+    okHandler(req, res);
+  });
+  try {
+    const env = estimateCtx(mock);
+    await createEosForecastBridge(env.ctx).push(); // alter Prozess: Schätzung ab + 10 h
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...(await fc0()), price: { slots: realUntil(env, env.q0 + 35 * 3_600_000) } }) };
+    failPrice = true;
+    const fresh = createEosForecastBridge(env.ctx); // neuer Prozess
+    await fresh.push();
+    const res = await fresh.prepareRun();
+    assert.equal(res.pushed, true);
+    assert.equal(res.ok, false);
+    failPrice = false; // Import kommt wieder an → Stand bekannt, Lauf geht
+    const ok = await fresh.prepareRun();
+    assert.equal(ok.ok, true);
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: vor dem ersten Push des Prozesses erst pushen', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const res = await createEosForecastBridge(env.ctx).prepareRun();
+    assert.deepEqual(res, { ok: true, pushed: true });
+    assert.equal(pvImports(mock), 1);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 2ed313de (P3): die Buchführung bei gescheitertem Import.
+function failingImportMock(provider) {
+  const ctl = { fail: false, failDeletes: false };
+  return createMockEos((req, res) => {
+    if (ctl.fail && req.method === 'PUT' && req.url.startsWith(`/v1/prediction/import/${provider}`)) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return;
+    }
+    okHandler(req, res);
+  }).then((mock) => Object.assign(mock, { ctl }));
+}
+
+test('Laufstart: Import gescheitert, Löschen nimmt alle Schätzwerte weg → Lauf geht ohne Neu-Push', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await failingImportMock('ElecPriceImport');
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    let price = null;
+    env.ctx.forecastService = { buildForecastResponse: async () => { const fc = await fc0(); return price ? { ...fc, price: { slots: price } } : fc; } };
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push(); // Schätzung ab + 10 h
+    // Preisabruf gestört (echte Preise enden vor jetzt + 75 min): alles hinter
+    // ihrem Ende wird gelöscht — auch wenn der Import scheitert.
+    price = realUntil(env, env.q0 + 60 * 60_000);
+    mock.ctl.fail = true;
+    const r = await bridge.push();
+    assert.equal(r.ok, false);
+    const n = mock.requests.length;
+    assert.deepEqual(await bridge.prepareRun(), { ok: true, pushed: false });
+    assert.equal(mock.requests.length, n);
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: Import gescheitert, Löschen nur im Schwanz → vorderer Teil bleibt offen, kein Lauf', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await failingImportMock('ElecPriceImport');
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    let next = null;
+    env.ctx.forecastService = { buildForecastResponse: async () => next || fc0() };
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push(); // Schätzung + 10 h … + 40 h
+    const fc = await fc0();
+    const cut = env.q0 + 38 * 3_600_000;
+    next = {
+      pv: { slots: fc.pv.slots.filter((s) => Date.parse(s.start) < cut) },
+      load: { slots: fc.load.slots.filter((s) => Date.parse(s.start) < cut) },
+      price: { slots: realUntil(env, env.q0 + 35 * 3_600_000) },
+    };
+    mock.ctl.fail = true; // Import scheitert, Löschen ab + 38 h gelingt
+    await bridge.push();
+    const sentUntil = Date.parse(env.state.optimizer.lastEosPush.priceEstimate.until);
+    assert.ok(sentUntil < env.fillEnd && sentUntil >= cut);
+    const del = deletes(mock).filter((d) => d.start === sentUntil);
+    assert.equal(del.length, 2, 'Schwanz gelöscht');
+    const res = await bridge.prepareRun();
+    assert.equal(res.pushed, true);
+    assert.equal(res.ok, false, 'alte Schätzwerte ab + 10 h liegen noch im Steuerzeitraum');
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: nur der Einspeise-Import scheitert → ebenfalls kein Lauf auf alten Schätzwerten', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await failingImportMock('FeedInTariffImport');
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    let price = null;
+    env.ctx.forecastService = { buildForecastResponse: async () => { const fc = await fc0(); return price ? { ...fc, price: { slots: price } } : fc; } };
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    price = realUntil(env, env.q0 + 35 * 3_600_000);
+    mock.ctl.fail = true;
+    await bridge.push();
+    const res = await bridge.prepareRun();
+    assert.equal(res.pushed, true);
+    assert.equal(res.ok, false);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 2ed313de (P3): Ohne erkanntes EOS 0.4 stößt DVhub keine Läufe
+// an (kein prepareRun) und setzt keinen Steuerzeitraum — dann keine Schätzung.
+test('Preise auffüllen: EOS nicht erkannt → keine Schätzung', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    env.state.optimizer.eos.supported = false;
+    await createEosForecastBridge(env.ctx).push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    assert.equal(Math.max(...elec.keys()), env.realEnd - Q);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 692afdb0 (P3): bei unbekanntem Stand (noch kein Preis-Import
+// angekommen) sagt die Meldung das — nicht „Schätzpreise im Steuerzeitraum“.
+test('Laufstart: Stand unbekannt, Import kommt nicht an → Meldung nennt den unbekannten Preisstand', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...(await fc0()), price: { slots: [] } }) };
+    const res = await createEosForecastBridge(env.ctx).prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /Preisstand in EOS unbekannt/);
+    assert.match(res.error, /ElecPriceImport/);
+    assert.doesNotMatch(res.error, /Schätzpreise im Steuerzeitraum/);
+  } finally { await mock.close(); }
+});
+
+// Release 1.0.9: Der Steuerzeitraum reicht bis 48 h. Ist kein Wert bekannt
+// (Steuerzeitraum nie gesetzt), rechnet die Laufstart-Prüfung mit dem
+// größtmöglichen — Schätzwerte ab + 35 h liegen dann darin.
+test('Laufstart: Steuerzeitraum unbekannt → Prüfung mit 48 h', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...(await fc0()), price: { slots: realUntil(env, env.q0 + 35 * 3_600_000) } }) };
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate.from, new Date(env.q0 + 35 * 3_600_000).toISOString());
+    env.state.optimizer.eosControlHorizonH = null;
+    const res = await bridge.prepareRun();
+    assert.equal(res.pushed, true);
+    assert.equal(res.ok, true);
+  } finally { await mock.close(); }
+});

@@ -64,7 +64,7 @@ test('alignStartSolution: nicht zuordenbar → null (EOS rechnet dann ohne Warms
 });
 
 /** Auslöser mit gestellter Uhr; Timer werden gesammelt, nicht ausgeführt. */
-function harness({ active = true, horizon = 6, soc = { soc: { battery1: 55 } }, status = 'up', startAt = T0 + 60_000 } = {}) {
+function harness({ active = true, horizon = 6, soc = { soc: { battery1: 55 } }, status = 'up', startAt = T0 + 60_000, prepareRun } = {}) {
   const h = {
     nowMs: startAt, active, horizon, soc, status,
     posts: [], logs: [], timers: [], solutionCalls: 0, state: { optimizer: {} },
@@ -85,6 +85,7 @@ function harness({ active = true, horizon = 6, soc = { soc: { battery1: 55 } }, 
     eosStatus: () => ({ status: h.status }),
     state: h.state,
     pushLog: (type, data) => h.logs.push({ type, data }),
+    ...(prepareRun ? { prepareRun: () => prepareRun(h) } : {}),
     now: () => h.nowMs,
     setTimer: (fn, ms) => { const t = { fn, ms }; h.timers.push(t); return t; },
     clearTimer: (t) => { h.timers = h.timers.filter((x) => x !== t); },
@@ -290,4 +291,53 @@ test('gescheiterter Lauf behält den vorgemerkten Neuplan', async () => {
   await h.timers.shift().fn();
   assert.equal(h.posts.length, 3);
   assert.equal(h.timers.length, 0, 'der Neuplan-Lauf selbst wird nicht endlos wiederholt');
+});
+
+// Gegenprüfung a6dbbd1d (P2): Schätzpreise dürfen nie im Steuerzeitraum
+// liegen. Beim Push war das geprüft, beim Laufstart nicht — ein Lauf an der
+// Grenze oder per kick kam ohne Push. Vor jedem Lauf prüft die Bridge die
+// Abdeckung (prepareRun) und pusht/löscht neu; danach gilt der neue
+// Steuerzeitraum.
+test('Laufstart: Vorbereitung vor dem Lauf, danach gilt der neue Steuerzeitraum', async () => {
+  const order = [];
+  const h = harness({
+    horizon: 3,
+    prepareRun: async (hh) => { order.push('prepare'); hh.horizon = 1; return { ok: true, pushed: true }; },
+  });
+  h.replies.push(solution(new Array(4).fill(1), '2026-10-11T12:00:00Z'));
+  const res = await h.trigger.trigger('boundary');
+  assert.equal(res.ok, true);
+  assert.deepEqual(order, ['prepare']);
+  assert.equal(h.logs.find((l) => l.type === 'eos_run_started').data.horizonHours, 1);
+  assert.equal(h.trigger.lastStartSolution().slots, 4);
+});
+
+test('Laufstart: Schätzpreise im Steuerzeitraum nicht entfernbar → kein Lauf', async () => {
+  const h = harness({ prepareRun: async () => ({ ok: false, error: 'Schätzpreise im Steuerzeitraum' }) });
+  const res = await h.trigger.trigger('replan:ev');
+  assert.equal(res.ok, false);
+  assert.equal(res.skipped, 'Schätzpreise im Steuerzeitraum');
+  assert.equal(h.posts.length, 0);
+  assert.deepEqual(types(h), ['eos_run_skipped']);
+  assert.equal(h.state.optimizer.eosRun.lastError, 'Schätzpreise im Steuerzeitraum');
+});
+
+test('Laufstart: Vorbereitung wirft → kein Lauf, Fehler gemeldet', async () => {
+  const h = harness({ prepareRun: async () => { throw new Error('kaputt'); } });
+  const res = await h.trigger.trigger();
+  assert.equal(res.ok, false);
+  assert.equal(h.posts.length, 0);
+  assert.equal(h.state.optimizer.eosRun.lastError, 'kaputt');
+});
+
+// Gegenprüfung 16856110 (P3): Laufbeginn erst nach der Vorbereitung messen —
+// ein Neu-Push (bis zu 5 min) gehört nicht zur Rechenzeit, und die
+// Startlösung richtet sich nach dem tatsächlichen Beginn.
+test('Laufstart: Rechenzeit und Beginn ohne die Vorbereitung', async () => {
+  const h = harness({ prepareRun: async (hh) => { hh.nowMs += 120_000; return { ok: true, pushed: true }; } });
+  const start = h.nowMs;
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  await h.trigger.trigger('boundary');
+  assert.equal(h.state.optimizer.eosRun.startedAt, start + 120_000);
+  assert.equal(h.logs.find((l) => l.type === 'eos_run_done').data.durationS, 0);
 });

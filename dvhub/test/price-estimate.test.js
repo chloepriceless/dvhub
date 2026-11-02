@@ -130,5 +130,19 @@ test('fillPriceSlots: Stundenpreise — geschätzt wird erst hinter der letzten 
   });
   const { slots, estimate } = fillPriceSlots(real, { history: history(20), untilMs: T0 + 22 * DAY * SLOT_MS, nowMs: T0 + 20 * DAY * SLOT_MS });
   assert.equal(estimate.from, new Date(T0 + 21 * DAY * SLOT_MS).toISOString());
-  assert.equal(slots.length, 24 + DAY);
+  // In der Kadenz der echten Preise: stündlich (Gegenprüfung 8c050aae).
+  assert.equal(slots.length, 24 + 24);
+  assert.ok(slots.slice(24).every((x) => Date.parse(x.end) - Date.parse(x.start) === 4 * SLOT_MS));
+});
+
+// Codex-Gegenprüfung Branch (P2): EOS' Steuerzeitraum ist mindestens 1 h —
+// enden die echten Preise früher als jetzt + 1 h 15 min, lägen Schätzwerte
+// im Steuerzeitraum. Dann nicht schätzen.
+test('fillPriceSlots: echte Preise reichen nicht über den Mindest-Steuerzeitraum → keine Schätzung', () => {
+  const real = slotsFrom(20 * DAY, DAY);
+  const realEnd = T0 + 21 * DAY * SLOT_MS;
+  const r = fillPriceSlots(real, { history: history(20), untilMs: realEnd + DAY * SLOT_MS, nowMs: realEnd - 60 * 60_000 });
+  assert.equal(r.estimate, null);
+  const ok = fillPriceSlots(real, { history: history(20), untilMs: realEnd + DAY * SLOT_MS, nowMs: realEnd - 75 * 60_000 });
+  assert.ok(ok.estimate);
 });

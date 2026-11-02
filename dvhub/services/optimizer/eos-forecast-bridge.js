@@ -46,9 +46,14 @@ import { localDate } from '../../tz-fast.js';
 // Zweite GX am selben Anschluss: Ladestand beider Akkus, nach Kapazitaet gewichtet.
 import { planningSocPct } from '../multi-gx/planning.js';
 // Preise hinter den bekannten Day-Ahead-Preisen schätzen (01.11.2026).
-import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
+import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, MIN_REAL_AHEAD_MS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
 import { requestHostname } from '../host-address.js';
 
+/**
+ * Frist der Wache je Push (siehe push()): jede EOS-Anfrage hat 15 s, ein Push
+ * macht höchstens gut ein Dutzend davon — 5 min lassen reichlich Luft.
+ */
+export const PUSH_TIMEOUT_MS = 5 * 60_000;
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
 
@@ -509,10 +514,83 @@ export function createEosForecastBridge(ctx) {
    * Prognose geschätzte Börsenpreise (price-estimate.js). Bezugs- und
    * Einspeisepreis werden daraus wie für echte Slots gebildet.
    */
-  async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs, maxMs = PRICE_FILL_MAX_MS) {
+  // Buchführung der Schätzwerte in EOS (Aufräumen und Laufstart-Prüfung):
+  // - lastEstimateRange: was der letzte angekommene Preis-Import geschätzt hat;
+  // - staleRange: wo noch alte Schätzwerte liegen können, weil ein Löschen
+  //   oder ein Preis-Import scheiterte (Gegenprüfung 16856110) — getrennt
+  //   geführt, damit ein Löschfehler weit hinten keinen Lauf sperrt;
+  // - clearedOnce: der erste Push dieses Prozesses löscht einmal alles hinter
+  //   dem Geschickten — nach einem DVhub-Neustart ist nichts gemerkt;
+  // - eosPricesKnown: erst nach dem ersten angekommenen Preis-Import dieses
+  //   Prozesses ist bekannt, was in EOS liegt (alte Schätzwerte des vorigen
+  //   Prozesses sind dann überschrieben oder gelöscht). Bis dahin gilt der
+  //   Stand vor einem Lauf als unbekannt (Gegenprüfung 2ed313de).
+  let lastEstimateRange = null;
+  let staleRange = null;
+  let clearedOnce = false;
+  let eosPricesKnown = false;
+  const PRICE_KEYS = ['elecprice_marketprice_wh', 'feed_in_tariff_wh'];
+  const unionRange = (...ranges) => ranges.filter(Boolean).reduce((acc, r) => (acc
+    ? { fromMs: Math.min(acc.fromMs, r.fromMs), untilMs: Math.max(acc.untilMs, r.untilMs) }
+    : { fromMs: r.fromMs, untilMs: r.untilMs }), null);
+
+  /**
+   * Schätzwerte, die nicht mehr gelten, in EOS löschen. EOS speichert Importe
+   * nur dazu (upsert) und löscht nie — fehlen nach einem Preisausfall die
+   * echten Preise für jetzt, lägen sonst alte Schätzwerte im Steuerzeitraum
+   * und EOS plante darauf, statt wie vorgesehen abzubrechen (Gegenprüfung
+   * 8c050aae, P2). Gelöscht wird
+   *   - was der letzte Push an Schätzwerten über das jetzt Geschickte hinaus
+   *     geschickt hat, und
+   *   - wo nach einem gescheiterten Löschen/Import noch alte Schätzwerte
+   *     liegen können (staleRange), soweit hinter dem jetzt Geschickten,
+   *   - beim ersten Push des Prozesses alles hinter dem Geschickten, und
+   *   - wenn die echten Preise nicht über den Mindest-Steuerzeitraum reichen
+   *     (jetzt + 1 h 15 min), alles hinter ihrem Ende
+   *     bis zum größtmöglichen Schätzbereich (auch nach einem DVhub-Neustart,
+   *     der den letzten Bereich nicht mehr kennt).
+   * Liefert den Löschbereich mit, damit die Buchführung ihn kennt.
+   */
+  async function clearStaleEstimates(baseUrl, { sentEndMs, realEndMs, nowMs }) {
+    let start = Infinity;
+    let end = -Infinity;
+    for (const r of [lastEstimateRange, staleRange]) {
+      if (r && r.untilMs > sentEndMs) {
+        start = Math.min(start, Math.max(sentEndMs, r.fromMs));
+        end = Math.max(end, r.untilMs);
+      }
+    }
+    const farEnd = nowMs + PRICE_FILL_MAX_MS + 3_600_000;
+    if (!clearedOnce && Number.isFinite(sentEndMs)) {
+      start = Math.min(start, sentEndMs);
+      end = Math.max(end, farEnd);
+    }
+    if (!(realEndMs >= nowMs + MIN_REAL_AHEAD_MS)) {
+      start = Math.min(start, Number.isFinite(realEndMs) ? realEndMs : nowMs);
+      end = Math.max(end, farEnd);
+    }
+    if (!(end > start)) return { cleared: false, range: null };
+    const q = (ms) => encodeURIComponent(new Date(ms).toISOString());
+    const errors = [];
+    for (const key of PRICE_KEYS) {
+      const res = await eosHttpRequest(baseUrl, 'DELETE', `/v1/prediction/range?key=${key}&start_datetime=${q(start)}&end_datetime=${q(end)}`);
+      // 404 = Schlüssel in EOS (noch) unbekannt, dann gibt es nichts zu löschen.
+      if (!res.ok && !/HTTP 404/.test(String(res.error))) errors.push(`${key}: ${res.error}`);
+    }
+    if (pushLog) pushLog('eos_price_estimate_cleared', { from: new Date(start).toISOString(), until: new Date(end).toISOString(), ...(errors.length ? { errors } : {}) });
+    return { cleared: errors.length === 0, errors, range: { fromMs: start, untilMs: end } };
+  }
+
+  // Stößt DVhub die Läufe nicht an — EOS rechnet nach eigenem Takt
+  // (optimizer.eosStartAfterPreviousRun) oder ist (noch) nicht als 0.4
+  // erkannt —, gibt es keinen Laufstart, an dem prepareRun prüfen könnte, und
+  // ohne Erkennung auch keinen Steuerzeitraum: dann keine Schätzung
+  // (Gegenprüfungen 16856110, 2ed313de); alte löscht clearStaleEstimates.
+  async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs, { estimate = true, maxMs = PRICE_FILL_MAX_MS } = {}) {
+    if (!estimate) return { slots: realSlots, estimate: null };
     const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs, maxMs);
     const { end } = realPriceCoverage(realSlots);
-    if (end <= nowMs || end >= untilMs) return { slots: realSlots, estimate: null };
+    if (end < nowMs + MIN_REAL_AHEAD_MS || end >= untilMs) return { slots: realSlots, estimate: null };
     const history = await loadPriceHistory(nowMs);
     return fillPriceSlots(realSlots, { history, untilMs, nowMs });
   }
@@ -871,7 +949,102 @@ export function createEosForecastBridge(ctx) {
     return res;
   }
 
-  async function push() {
+  // Pushes laufen nacheinander (Takt, neue Day-Ahead-Preise, Konfiguration,
+  // Laufstart): sonst könnte ein älterer Stand nach einem neueren dessen echte
+  // Preise in EOS wieder löschen (Codex-Gegenprüfung f442800b).
+  //
+  // Wache je Schritt (Gegenprüfung a6dbbd1d): Datenbankabfragen haben kein
+  // Zeitlimit. Hinge ein Push, warteten alle folgenden — und mit prepareRun
+  // auch jeder EOS-Lauf. Nach der Frist gilt der Push als gescheitert, die
+  // Kette geht weiter; der aufgegebene Push schreibt danach nichts mehr an EOS
+  // (Prüfung vor jedem Schreiben), damit er keinen neueren Stand überschreibt.
+  let pushChain = Promise.resolve();
+  function push() {
+    const job = { abandoned: false };
+    const step = () => guardedPush(job);
+    const run = pushChain.then(step, step);
+    pushChain = run.catch(() => {});
+    return run;
+  }
+
+  function guardedPush(job) {
+    const timeoutMs = Number(ctx.pushTimeoutMs) > 0 ? Number(ctx.pushTimeoutMs) : PUSH_TIMEOUT_MS;
+    let timer = null;
+    const watchdog = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        job.abandoned = true;
+        const err = `push did not finish within ${timeoutMs} ms — abandoned`;
+        if (pushLog) pushLog('eos_forecast_bridge_error', { reason: err });
+        resolve(recordPush({ ok: false, pushed: [], errors: { timeout: err } }));
+      }, timeoutMs);
+      timer.unref?.();
+    });
+    return Promise.race([pushOnce(job), watchdog]).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * Liegen an EOS geschickte Schätzpreise im Steuerzeitraum eines Laufs, der
+   * jetzt (nowMs) angestoßen wird? EOS rundet den Laufbeginn auf den Slot ab
+   * (eos-run-trigger.js); gerechnet wird mit 15-min-Slots — bei Stunden-Slots
+   * beginnt EOS früher, die Prüfung bleibt also auf der sicheren Seite.
+   * Steuerzeitraum = zuletzt gesetzte Stunden; ohne bekannten Wert der
+   * größtmögliche (CONTROL_HORIZON_ABS_MAX_H, 48 h).
+   */
+  function estimatesInControlHorizon(nowMs) {
+    if (!eosPricesKnown) return true; // Stand in EOS unbekannt (Neustart, Import gescheitert)
+    const from = Math.min(lastEstimateRange?.fromMs ?? Infinity, staleRange?.fromMs ?? Infinity);
+    if (!Number.isFinite(from)) return false;
+    const h = Number(state?.optimizer?.eosControlHorizonH);
+    const hours = Number.isFinite(h) && h > 0 ? h : CONTROL_HORIZON_ABS_MAX_H;
+    // Ein Slot Vorlauf: zwischen Prüfung und Aufruf liegen Ladestand-Abfrage
+    // und Anfrage — ein Anstoß kurz vor der Grenze beginnt in EOS evtl. erst
+    // im nächsten Slot (Gegenprüfung 16856110).
+    const runStartMs = Math.floor(nowMs / PRICE_SLOT_MS) * PRICE_SLOT_MS + PRICE_SLOT_MS;
+    return from < runStartMs + hours * 3_600_000;
+  }
+
+  /**
+   * Vor jedem EOS-Lauf (eos-run-trigger.js, Gegenprüfung a6dbbd1d): beim Push
+   * ist geprüft, dass echte Preise den Steuerzeitraum decken — ein Lauf an
+   * der Grenze oder per kick kommt aber ohne Push. Reicht der Steuerzeitraum
+   * jetzt in die Schätzwerte, erst neu pushen: der Push schätzt nur hinter
+   * echten Preisen, die jetzt + 1 h 15 min decken, löscht sonst den Bereich
+   * und setzt den Steuerzeitraum neu. Liegen danach noch Schätzwerte darin
+   * (Löschen gescheitert), keinen Lauf — vor der Schätzung brach EOS an der
+   * Stelle ohnehin ab („Missing or invalid prices“).
+   * Ist in diesem Prozess noch kein Preis-Import angekommen (Neustart, Import
+   * gescheitert, keine Preise), ist der Preisstand in EOS unbekannt: ebenfalls
+   * erst pushen, und kommt der Import nicht an, keinen Lauf — mit eigener
+   * Meldung (Gegenprüfung 692afdb0).
+   *
+   * @param {{nowMs?:number}} [opts]
+   * @returns {Promise<{ok:boolean, pushed:boolean, error?:string}>}
+   */
+  async function prepareRun({ nowMs = Date.now() } = {}) {
+    if (!estimatesInControlHorizon(nowMs)) return { ok: true, pushed: false };
+    if (pushLog) {
+      const from = Math.min(lastEstimateRange?.fromMs ?? Infinity, staleRange?.fromMs ?? Infinity);
+      pushLog('eos_price_estimate_run_push', {
+        // null = Stand in EOS unbekannt (noch kein Preis-Import angekommen)
+        estimateFrom: eosPricesKnown && Number.isFinite(from) ? new Date(from).toISOString() : null,
+        horizonHours: state?.optimizer?.eosControlHorizonH ?? null,
+      });
+    }
+    const res = await push();
+    if (!estimatesInControlHorizon(Math.max(nowMs, Date.now()))) return { ok: true, pushed: true };
+    const why = res?.errors && typeof res.errors === 'object'
+      ? Object.entries(res.errors).map(([k, v]) => `${k}: ${v}`).join('; ')
+      : '';
+    const what = eosPricesKnown
+      ? 'Schätzpreise im Steuerzeitraum, Neu-Push ohne Erfolg'
+      : 'Preisstand in EOS unbekannt, Preis-Import nicht angekommen';
+    return { ok: false, pushed: true, error: `${what}${why ? ` (${why})` : ''}` };
+  }
+
+  async function pushOnce(job = null) {
+    // Von der Wache aufgegeben: nichts mehr an EOS schreiben, nichts eintragen.
+    const gone = () => job?.abandoned === true;
+    const abandoned = () => ({ ok: false, pushed: [], errors: { timeout: 'abandoned' } });
     const cfg = getCfg();
     const baseUrl = resolveEosProxy(cfg).url;
 
@@ -889,10 +1062,12 @@ export function createEosForecastBridge(ctx) {
     try {
       forecast = await forecastService.buildForecastResponse();
     } catch (e) {
+      if (gone()) return abandoned();
       const err = `forecastService.buildForecastResponse failed: ${e.message}`;
       if (pushLog) pushLog('eos_forecast_bridge_error', { reason: err });
       return recordPush({ ok: false, pushed: [], errors: { build: err } });
     }
+    if (gone()) return abandoned();
 
     let pvSlots = keepOnGridSlots(forecast?.pv?.slots || []);
     let loadSlots = padSlotsBackToNow(forecast?.load?.slots || [], Date.now());
@@ -901,8 +1076,11 @@ export function createEosForecastBridge(ctx) {
     // Einspeisewert — es speist mittags PV ein, statt sie für Nacht und Morgen
     // zu speichern (Prod 01.11.2026). Deshalb dahinter Schätzwerte; der
     // Steuerzeitraum richtet sich weiter nur nach den echten Preisen.
-    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(),
-      resolveEosPredictionHours(cfg) * 3_600_000);
+    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(), {
+      estimate: dvhubTriggersEosRuns(cfg) && state?.optimizer?.eos?.supported === true,
+      maxMs: resolveEosPredictionHours(cfg) * 3_600_000,
+    });
+    if (gone()) return abandoned();
     const priceSlotsCt = priceFill.slots;
     const priceEstimate = priceFill.estimate;
     if (state) { state.optimizer = state.optimizer || {}; state.optimizer.eosPriceEstimate = priceEstimate; }
@@ -966,6 +1144,7 @@ export function createEosForecastBridge(ctx) {
     // spot. 0 when the gate is OFF (default) → the else-branch below reproduces
     // the exact original expression → byte-identical push. 2026-06-21.
     const premiumCt = await resolveFeedInMarketPremiumCtKwh(cfg);
+    if (gone()) return abandoned();
     const feedInSlots = feedInSpot
       ? priceSlotsCt
           .filter((s) => s && s.start && Number.isFinite(Number(s.ctKwh)))
@@ -1052,6 +1231,7 @@ export function createEosForecastBridge(ctx) {
     const pushed = [];
     const errors = {};
     for (const t of tasks) {
+      if (gone()) return abandoned();
       if (t.rows === 0) {
         errors[t.provider] = 'no slots available — skipping';
         continue;
@@ -1086,19 +1266,63 @@ export function createEosForecastBridge(ctx) {
     // Geschätzte Preise zählen nicht: der Steuerzeitraum deckt die echten ab
     // (nie kürzer, Christin 03.10.), die Schätzung wirkt nur im Schwanz.
     const realOnly = (list) => list.filter((s) => !s.estimated);
+    // Nicht mehr geltende Schätzwerte aus EOS entfernen (vor dem Lauf).
+    if (gone()) return abandoned();
+    {
+      const nowMs = Date.now();
+      const realEndMs = realPriceCoverage(forecast?.price?.slots || []).end;
+      const sentEndMs = priceEstimate ? Date.parse(priceEstimate.until) : realEndMs;
+      const clear = await clearStaleEstimates(baseUrl, { sentEndMs, realEndMs, nowMs });
+      if (gone()) return abandoned();
+      const clearFailed = Boolean(clear.errors?.length);
+      if (clearFailed) errors.priceEstimateClear = clear.errors.join('; ');
+      const next = priceEstimate ? { fromMs: Date.parse(priceEstimate.from), untilMs: Date.parse(priceEstimate.until) } : null;
+      const priceImportOk = !errors.ElecPriceImport && !(feedInSlots.length && errors.FeedInTariffImport);
+      // Das einmalige Löschen hinter dem Geschickten zählt nur zusammen mit
+      // einem angekommenen Import — sonst bleibt davor Unbekanntes liegen.
+      if (!clearFailed && clear.range && priceImportOk) clearedOnce = true;
+      if (priceImportOk) eosPricesKnown = true;
+      if (priceImportOk) {
+        // In EOS: echte Preise, dahinter `next`; dahinter gelöscht — außer
+        // der Löschbereich scheiterte, dann bleibt er offen.
+        lastEstimateRange = next;
+        staleRange = clearFailed ? clear.range : null;
+      } else {
+        // Preis-Import nicht angekommen (Gegenprüfung 16856110, P2): alles,
+        // was vorher in EOS lag, kann noch da sein — samt dem, was dieser
+        // Push evtl. teilweise geschrieben hat. Nur was nachweislich gelöscht
+        // wurde, fällt heraus.
+        let stale = unionRange(lastEstimateRange, staleRange, next);
+        if (stale && clear.range && !clearFailed) {
+          if (clear.range.fromMs <= stale.fromMs && clear.range.untilMs >= stale.untilMs) stale = null;
+          else if (clear.range.fromMs > stale.fromMs && clear.range.fromMs < stale.untilMs && clear.range.untilMs >= stale.untilMs) {
+            stale = { fromMs: stale.fromMs, untilMs: clear.range.fromMs };
+          }
+        }
+        lastEstimateRange = null;
+        staleRange = stale;
+      }
+    }
+
     const horizon = await syncControlHorizon(
       baseUrl, realOnly(elecpriceSlots), feedInSlots.length ? realOnly(feedInSlots) : null, pvSlots, expandHourlyToQuarterHourly(loadSlotsForEos),
     );
     if (horizon.error) errors.horizon = horizon.error;
+    if (gone()) return abandoned();
 
     // Forward the live battery SoC so EOS seeds its optimizer with the real
     // start state (not 0). Folded into the same cycle/cadence as the forecasts.
     const socRes = await pushSoc(baseUrl);
+    if (gone()) return abandoned();
     for (const p of socRes.pushed) pushed.push(p);
     Object.assign(errors, socRes.errors);
 
+    // Auch ein fehlgeschlagenes Löschen alter Schätzwerte macht den Push
+    // „nicht ok“ — sonst gilt die Prognose als zugestellt und der
+    // Wiederholversuch entfällt (Codex-Gegenprüfung).
     const okAll = pushed.length === tasks.length + socRes.pushed.length
-      && Object.keys(socRes.errors).length === 0;
+      && Object.keys(socRes.errors).length === 0
+      && !errors.priceEstimateClear;
     if (pushLog) {
       pushLog('eos_forecast_bridge', {
         ok: okAll, pushed, errors, socSkipped: socRes.skipped,
@@ -1231,7 +1455,7 @@ export function createEosForecastBridge(ctx) {
     }
   }
 
-  return { push, pushFreshSoc, socForRun, start, stop };
+  return { push, prepareRun, pushFreshSoc, socForRun, start, stop };
 }
 
 // Exported for unit-tests.

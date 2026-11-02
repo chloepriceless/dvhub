@@ -30,6 +30,12 @@ export const HISTORY_DAYS = 28;
 /** Unter zwei Tagen Historie wird nicht geschätzt. */
 export const MIN_HISTORY_SLOTS = 2 * DAY_SLOTS;
 export const OUTLIER_SIGMA = 2;
+/**
+ * So weit müssen echte Preise mindestens voraus reichen, damit geschätzt wird:
+ * EOS' Steuerzeitraum ist mindestens 1 h (computeControlHorizonHours), dazu
+ * 15 min Puffer — sonst lägen Schätzwerte im Steuerzeitraum.
+ */
+export const MIN_REAL_AHEAD_MS = 75 * 60 * 1000;
 
 const ALPHAS = [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5];
 const GAMMAS = [0, 0.02, 0.05, 0.1, 0.2, 0.3];
@@ -178,9 +184,10 @@ export function realPriceCoverage(priceSlots) {
  * bekannten Slot bis `untilMs` mit geschätzten Börsenpreisen verlängern.
  * Echte Slots bleiben unverändert; neue tragen `estimated: true`.
  *
- * Geschätzt wird nur hinter echten Preisen, die bis über `nowMs` reichen —
- * fehlen schon die Preise für jetzt (Abruf gestört), bliebe EOS sonst ganz
- * auf Schätzwerten stehen. Dann bleibt alles wie bisher.
+ * Geschätzt wird nur hinter echten Preisen, die mindestens bis jetzt + 1 h
+ * 15 min reichen (MIN_REAL_AHEAD_MS) — sonst lägen Schätzwerte im
+ * Steuerzeitraum, und fehlen schon die Preise für jetzt (Abruf gestört),
+ * bliebe EOS ganz auf Schätzwerten stehen. Dann bleibt alles wie bisher.
  *
  * @param {Array<{start:string, ctKwh:number}>} priceSlots echte Slots
  * @param {object} opts
@@ -194,9 +201,13 @@ export function fillPriceSlots(priceSlots, { history = [], untilMs, nowMs = Date
     .filter((s) => s && s.start && Number.isFinite(Number(s.ctKwh)) && Number.isFinite(Date.parse(s.start)));
   const unchanged = { slots: Array.isArray(priceSlots) ? priceSlots : [], estimate: null };
   const { end: fromMs, stepMs } = realPriceCoverage(real);
-  if (!real.length || !Number.isFinite(untilMs) || fromMs <= nowMs) return unchanged;
-  const steps = Math.ceil((untilMs - fromMs) / SLOT_MS);
-  if (steps <= 0) return unchanged;
+  if (!real.length || !Number.isFinite(untilMs) || fromMs < nowMs + MIN_REAL_AHEAD_MS) return unchanged;
+  // Geschätzt wird in der Slot-Länge der echten Preise: eine Reihe mit
+  // gemischter Kadenz (Stundenpreise + 15-min-Schätzung) liest EOS
+  // (bounded_forecast_array) mit Lücken und bricht ab (Gegenprüfung 8c050aae).
+  const perSlot = Math.max(1, Math.round(stepMs / SLOT_MS));
+  const slotCount = Math.ceil((untilMs - fromMs) / stepMs);
+  if (slotCount <= 0) return unchanged;
 
   // Die echten Slots gehören zur Historie (heute/morgen stehen evtl. noch
   // nicht in der Datenbank) und gehen der gespeicherten Reihe vor; Stunden-
@@ -204,27 +215,29 @@ export function fillPriceSlots(priceSlots, { history = [], untilMs, nowMs = Date
   const points = Array.isArray(history) ? history.slice() : [];
   for (const s of real) {
     const ms = Date.parse(s.start);
-    for (let k = 0; k * SLOT_MS < stepMs; k += 1) points.push({ ms: ms + k * SLOT_MS, ct: Number(s.ctKwh) });
+    for (let k = 0; k < perSlot; k += 1) points.push({ ms: ms + k * SLOT_MS, ct: Number(s.ctKwh) });
   }
-  const fc = forecastSpotPrices(points, fromMs - SLOT_MS, steps);
+  const fc = forecastSpotPrices(points, fromMs - SLOT_MS, slotCount * perSlot);
   if (!fc) return unchanged;
 
-  const added = fc.values.map((ct, i) => {
-    const start = fromMs + i * SLOT_MS;
-    return {
+  const added = [];
+  for (let i = 0; i < slotCount; i += 1) {
+    const start = fromMs + i * stepMs;
+    const quarters = fc.values.slice(i * perSlot, (i + 1) * perSlot);
+    added.push({
       start: new Date(start).toISOString(),
-      end: new Date(start + SLOT_MS).toISOString(),
-      ctKwh: round2(ct),
+      end: new Date(start + stepMs).toISOString(),
+      ctKwh: round2(quarters.reduce((a, v) => a + v, 0) / quarters.length),
       confidence: 0.5,
       estimated: true,
-    };
-  });
+    });
+  }
   return {
     slots: [...unchanged.slots, ...added],
     estimate: {
       estimatedSlots: added.length,
       from: added[0].start,
-      until: new Date(fromMs + added.length * SLOT_MS).toISOString(),
+      until: new Date(fromMs + added.length * stepMs).toISOString(),
       method: fc.method,
       historySlots: fc.historySlots,
     },

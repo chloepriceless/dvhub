@@ -331,6 +331,11 @@ export function createOptimizerService(ctx) {
     collectSoc: async () => (ctx.eosForecastBridge?.socForRun
       ? ctx.eosForecastBridge.socForRun()
       : { skipped: 'forecast bridge not ready' }),
+    // Geschätzte Preise nie im Steuerzeitraum: vor jedem Lauf prüft die Bridge
+    // die Abdeckung und pusht/löscht neu (Gegenprüfung a6dbbd1d).
+    prepareRun: async () => (ctx.eosForecastBridge?.prepareRun
+      ? ctx.eosForecastBridge.prepareRun()
+      : { ok: true, pushed: false }),
     postOptimize: (body, runTimeoutMs) => eosAdapter.triggerOptimization(body, runTimeoutMs),
     // Auch ohne Meldung von EOS (ems.notify_url gibt es nur auf derselben Box).
     onSolution: () => ctx.eosMonitor?.notifySolutionReady?.(),
