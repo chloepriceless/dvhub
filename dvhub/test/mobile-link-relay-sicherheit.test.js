@@ -736,9 +736,9 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
   });
 
   test('Ein-Byte-Fragmente mit Pong-Füllung: höchstens 16 Fragmente (P2)', async () => {
-    // Steuerrahmen-Grenze außer Reichweite, Pin-Zählung (16 × 64 KiB) unter
-    // der Grenze je Quelle: trennen darf hier nur maxFragments — genau an der
-    // Grenze: 16 Datenrahmen bleiben offen, der 17. trennt.
+    // Steuerrahmen-Grenze außer Reichweite, festgehaltene Lesestücke winzig:
+    // trennen darf hier nur maxFragments — genau an der Grenze: 16
+    // Datenrahmen bleiben offen, der 17. trennt.
     const { srv, port } = await localRelay({ socketLimits: { controlFramesPerWindow: 1e9 } });
     try {
       const b = await wsBox(port, generateIdentity());
@@ -756,29 +756,70 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
     }
   });
 
-  test('festgehaltene Lesestücke zählen in voller Größe: Rest-Byte und Maske (Gegenprüfung 39d4427 P2)', async () => {
+  test('festgehaltene Lesestücke zählen in voller Größe (Rest-Byte); ruhende Verbindung hält nichts (Maske frei) (Gegenprüfung 39d4427 P2, 34e9bd0c P3)', async () => {
     const { srv, port } = await localRelay({ limits: { boxFramesPerWindow: 1e6, boxBytesPerWindow: 1e12 } });
     try {
       const text = JSON.stringify({ t: 'ping', pad: 'P'.repeat(65_000 - 30) });
       const frame = Buffer.concat([frameHead(Buffer.byteLength(text)), Buffer.from(text)]);
       // a: Rahmen + 1 Byte des nächsten Kopfes im selben Lesestück → das
-      // Rest-Byte hält das ganze Stück. b: Rahmen allein → die Maske hält es.
+      // Rest-Byte hält das ganze Stück. b: Rahmen allein → danach ruhend.
       const a = await wsBox(port, generateIdentity());
       const b = await wsBox(port, generateIdentity());
       const before = srv.socketStats().inPartialBytes;
       a.ws._socket.write(Buffer.concat([frame, Buffer.from([0x8a])]));
-      b.ws._socket.write(frame);
       await a.next('pong');
-      await b.next('pong');
       await sleep(50);
       const held = srv.socketStats().inPartialBytes - before;
-      assert.ok(held >= 2 * 60_000, `festgehaltene Lesestücke nur mit ${held} B gezählt`);
-      // Nächster kleiner Rahmen ersetzt die Maske → wieder klein.
-      const small = JSON.stringify({ t: 'ping' });
-      b.ws._socket.write(Buffer.concat([frameHead(small.length), Buffer.from(small)]));
+      assert.ok(held >= 60_000, `festgehaltenes Lesestück nur mit ${held} B gezählt`);
+      b.ws._socket.write(frame);
       await b.next('pong');
       await sleep(50);
-      assert.ok(srv.socketStats().inPartialBytes - before < held - 50_000, 'Maske gibt das Lesestück nicht frei');
+      assert.ok(srv.socketStats().inPartialBytes - before - held < 1024, 'ruhende Verbindung hält ihr letztes Lesestück');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  for (const [name, separate] of [['in einem Lesestück einmal', false], ['über getrennte Lesestücke summiert', true]]) {
+    test(`Fragmente zählen genau: ${name} (Gegenprüfung 34e9bd0c P3)`, async () => {
+      const { srv, port } = await localRelay({ socketLimits: { stallMs: 60_000 } });
+      try {
+        const b = await wsBox(port, generateIdentity());
+        b.ws._socket.setNoDelay(true);
+        await sleep(20);
+        const before = srv.socketStats().inPartialBytes;
+        const frames = [Buffer.concat([frameHead(1, { fin: false, opcode: 0x1 }), Buffer.from('{')])];
+        for (let i = 0; i < 9; i++) frames.push(Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' ')]));
+        if (separate) for (const f of frames) { b.ws._socket.write(f); await sleep(20); }
+        else b.ws._socket.write(Buffer.concat(frames));
+        await sleep(100);
+        // Unfertige Nachricht: 10 Byte zugesagt, 70 Byte Lesestücke festgehalten
+        // (einmal gezählt), 10 Fragmente + Maske je 256 B.
+        const total = frames.reduce((n, f) => n + f.length, 0);
+        assert.equal(srv.socketStats().inPartialBytes - before, Math.max(10, total) + 11 * relayCore.SOCKET_LIMITS.chunkCost);
+      } finally {
+        await srv.close();
+      }
+    });
+  }
+
+  test('großer Rahmen in vielen kleinen Lesestücken wird nicht abgewiesen (maxBufferedChunks, Gegenprüfung 34e9bd0c P3)', async () => {
+    const { srv, port } = await localRelay({ limits: { boxFramesPerWindow: 1e6, boxBytesPerWindow: 1e12 } });
+    try {
+      const b = await wsBox(port, generateIdentity());
+      b.ws._socket.setNoDelay(true);
+      const text = JSON.stringify({ t: 'ping', pad: 'P'.repeat(48 * 1024) });
+      const buf = Buffer.concat([frameHead(Buffer.byteLength(text)), Buffer.from(text)]);
+      // ~3000 Stücke (über 1024, unter 4096), einzeln mit Pause, damit TCP
+      // sie nicht zusammenfasst.
+      const step = Math.ceil(buf.length / 3000);
+      for (let i = 0; i < buf.length; i += step) {
+        b.ws._socket.write(buf.subarray(i, i + step));
+        await new Promise((r) => setImmediate(r));
+        if ((i / step) % 2 === 0) await sleep(1);
+      }
+      await b.next('pong', 10_000);
+      assert.equal(b.state.closed, null);
     } finally {
       await srv.close();
     }

@@ -756,8 +756,7 @@ export const SOCKET_LIMITS = Object.freeze({
 });
 
 // Optionen für jeden WebSocketServer, dessen Verbindungen der Wächter umhüllt.
-// maxBufferedChunks 1024: die Neuberechnung je Lesen läuft über die Stücke.
-export const WS_SERVER_OPTIONS = Object.freeze({ autoPong: false, maxFragments: 16, maxBufferedChunks: 1024 });
+export const WS_SERVER_OPTIONS = Object.freeze({ autoPong: false, maxFragments: 16, maxBufferedChunks: 4096 });
 
 // Budget mit Haltern { key, held, since, unit(), kill() }; kill() muss synchron
 // freigeben; unit() = Bytes, für die gerade die Uhr läuft.
@@ -947,8 +946,12 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
       return true;
     };
     installFrameGate(ws, { getMax: () => frameMax, inH, retarget, kill });
-    // Festgehaltene Lesestücke nach jedem Lesen neu bewerten: verschiedene
-    // ArrayBuffer hinter _buffers, _fragments und _mask.
+    // Festgehaltene Lesestücke nach jedem Lesen neu bewerten. Node gibt je
+    // Lesen einen eigenen Puffer genau der gelesenen Größe; ws hängt sie an
+    // _buffers an und verbraucht von vorn — nur _buffers[0] kann eine
+    // Teilsicht sein, alle späteren sind ganze Stücke: O(1) über
+    // _bufferedBytes. Dazu Fragmente (≤ maxFragments) und die Maske,
+    // verschiedene ArrayBuffer einmal gezählt.
     const repin = () => {
       if (gone || !rcv) return;
       const seen = new Set();
@@ -961,7 +964,12 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
         seen.add(b.buffer);
         bytes += b.buffer.byteLength;
       };
-      if (Array.isArray(rcv._buffers)) for (const b of rcv._buffers) note(b);
+      const bufs = Array.isArray(rcv._buffers) ? rcv._buffers : [];
+      if (bufs.length) {
+        note(bufs[0]);
+        bytes += Math.max(0, (rcv._bufferedBytes || 0) - bufs[0].length);
+        pieces += bufs.length - 1;
+      }
       if (Array.isArray(rcv._fragments)) for (const b of rcv._fragments) note(b);
       note(rcv._mask);
       inH.pinned = bytes;
@@ -969,8 +977,15 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
       if (!retarget()) kill();
     };
     ws._socket?.on('data', repin);
-    // Nachricht vollständig: der angefangene Rahmen ist keiner mehr.
-    ws.on('message', () => { inH.reserved = 0; queueMicrotask(repin); });
+    // Nachricht vollständig: der angefangene Rahmen ist keiner mehr, und die
+    // Maske (Sicht aufs letzte Lesestück) wird nicht mehr gebraucht — ws setzt
+    // sie vor jedem Lesen neu (getMask vor getData). Sonst hielte jede ruhende
+    // Verbindung ihr letztes Lesestück (Gegenprüfung 34e9bd0c P3).
+    ws.on('message', () => {
+      inH.reserved = 0;
+      if (rcv && '_mask' in rcv) rcv._mask = undefined;
+      queueMicrotask(repin);
+    });
     // Pings selbst beantworten (autoPong aus): Pong durchs Ausgangsbudget,
     // Steuerrahmen begrenzt — sonst wächst der Schreibpuffer eines Nicht-Lesers
     // an allen Grenzen vorbei (Gegenprüfung faf3cb0 P1).
