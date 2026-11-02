@@ -178,5 +178,7 @@ test('#31: Zahl 0 ist keine ID; getClientId filtert ebenso', async () => {
   });
   const c = createDatenspendeClient({ fetchImpl });
   await assert.rejects(c.createHousehold('TOK', { userId: 'U1' }), (e) => e.code === 'bad_response' && e.step === 'households');
-  assert.equal(await c.getClientId('KEY'), null);
+  // Gegenprüfung b2c42fbd: auch hier Schritt + Schlüsselnamen der Antwort.
+  await assert.rejects(c.getClientId('KEY'), (e) => e.code === 'bad_response' && e.step === 'api-key-check'
+    && Array.isArray(e.responseKeys) && e.responseKeys.includes('clientId'));
 });

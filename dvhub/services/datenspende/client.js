@@ -228,7 +228,9 @@ export function createDatenspendeClient({ baseUrl = DATENSPENDE_BASE_URL, fetchI
     // ── Betrieb (API-Key) ──
     async getClientId(apiKey) {
       const r = await call('GET', '/clients', { headers: keyHeaders(apiKey), ok: [201, 200], step: 'api-key-check' });
-      return usableId(r.data?.clientId);
+      const id = usableId(r.data?.clientId);
+      if (id == null) throw missingId('api-key-check', 'Client-ID', r.data);
+      return id;
     },
     async registerMeter(apiKey, clientId, { name, vendor, model }) {
       const r = await call('POST', `/clients/${encodeURIComponent(clientId)}/meters`, {

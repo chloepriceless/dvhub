@@ -207,7 +207,8 @@ test('#31 Oberfläche: Hilfe zum Anmelde-Schlüssel, Schritt in der Fehlermeldun
   assert.equal((m[1].match(/API-Key/g) || []).length, 1, 'Satz nur einmal');
   assert.doesNotMatch(m[1], /(^|[^&])(mdash|bdquo|ldquo);/, 'jede Entität mit &');
   const js = fs.readFileSync(new URL('../public/tools.js', import.meta.url), 'utf8');
-  assert.match(js, /datenspendeFailureText\(r, hints\)/);
+  // Am Aufrufort verankert (Gegenprüfung b2c42fbd): die Definition allein zählt nicht.
+  assert.match(js, /setText\('dsResult',[^\n]*datenspendeFailureText\(r, hints\)/);
   // Der Schlüssel zählt nur beim Anlegen (api.py sendet secret nur bei sign-up).
   assert.match(js, /for \(const id of \['dsSecret', 'dsSecretHelp'\]\)[^\n]*hidden = mode !== 'signup'/);
 });
