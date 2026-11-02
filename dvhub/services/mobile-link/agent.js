@@ -907,7 +907,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
       });
       // Heimnetz: wenige Handys — Ausgangspuffer und angefangene Rahmen eng
       // begrenzt, vor der Anmeldung nur kleine Rahmen (wie am Relay).
-      lanGuard = createSocketGuard({ outPerRemote: 4 * 1024 * 1024, outTotal: 16 * 1024 * 1024, inPerRemote: 2 * 1024 * 1024, inTotal: 4 * 1024 * 1024 });
+      lanGuard = createSocketGuard({ outPerRemote: 8 * 1024 * 1024, outTotal: 16 * 1024 * 1024, inPerRemote: 2 * 1024 * 1024, inTotal: 4 * 1024 * 1024 });
       lanLink = createLink('lan', () => {
         const [boxSide, relaySide] = createMemorySocketPair();
         lanRelay.attach(relaySide, { remote: 'in-process' });

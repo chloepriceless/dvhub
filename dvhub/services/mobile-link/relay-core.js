@@ -728,9 +728,11 @@ export function createRelay({
 // danach setzt relay-core die Grenze der Rolle (setFrameLimit).
 export const SOCKET_LIMITS = Object.freeze({
   preAuthFrameBytes: 8 * 1024,
-  // Zwei größte Antworten der Box (je ~1 MiB) plus Pool-Anteil ihrer Köpfe
-  // (Gegenprüfung 67ede79a P3).
-  outPerConn: 2 * 1024 * 1024 + 32 * 1024,
+  // Die Box beantwortet je Gerät bis zu 4 Anfragen gleichzeitig (agent.js
+  // MAX_PARALLEL_REQUESTS): vier größte Rahmen samt Kopf-Pool-Anteil plus
+  // Luft für Live-Werte (Gegenprüfung 67ede79a/7a5c7e49 P3). Den Speicher
+  // begrenzen die Summen je Quelle und gesamt.
+  outPerConn: 4 * (1024 * 1024 + 4096 + 8192) + 256 * 1024,
   outPerRemote: 8 * 1024 * 1024,
   outTotal: 32 * 1024 * 1024,
   inPerRemote: 4 * 1024 * 1024,
