@@ -290,13 +290,12 @@ test('veraltetes Halte-Signal oder veraltete SoC-Grenze entschuldigen nichts', (
   assert.equal(sent.length, 1);
 });
 
-test('Entlade-Sperre 2704 = 0: Rücklesung oder frischer eigener Schreibwert → kein Alarm', () => {
-  // Rücklesung (Profil mit Poll-Punkt 2704 oder Peak-Shaving-Rücklesung).
+function runReadbackZero({ ownZero }) {
   const sent = [];
   const state = {
     meter: { ok: true },
     victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5, maxDischargeW: 0, errors: {} },
-    schedule: { active: {} }
+    schedule: { active: {}, lastWrite: ownZero ? { maxDischargeW: { value: 0, source: 'api', at: T0 - 3 * 3600000 } } : {} }
   };
   const watchdog = createSetpointFollowWatchdog({
     state, getCfg: () => ({}), pushLog: () => {},
@@ -307,7 +306,15 @@ test('Entlade-Sperre 2704 = 0: Rücklesung oder frischer eigener Schreibwert →
     state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now, maxDischargeW: now };
     watchdog.tick(now);
   }
-  assert.equal(sent.length, 0);
+  return sent;
+}
+
+test('Rücklesung 2704 = 0 mit eigener Sperre → kein Alarm', () => {
+  assert.equal(runReadbackZero({ ownZero: true }).length, 0);
+});
+
+test('Rücklesung 2704 = 0 ohne eigene Sperre ist mehrdeutig (−1 liest sich als 0) → Alarm bleibt möglich', () => {
+  assert.equal(runReadbackZero({ ownZero: false }).length, 1);
 });
 
 test('knownDischargeCapW: eigener Schreibwert ohne Rücklesung nur frisch', async () => {
@@ -609,4 +616,21 @@ test('Entwarnung nach reinem Laden: neutraler Text, kein „entlädt wieder“',
   assert.equal(sent.length, 2);
   assert.equal(sent[1].event, 'setpoint_followed_again');
   assert.doesNotMatch(sent[1].title + sent[1].body, /entlädt wieder|folgt dem Sollwert wieder/);
+});
+
+test('Entwarnung über das Fenster: ein alter Entlade-Zacken vor der Erholung zählt nicht als „entlädt wieder“', () => {
+  const state = createSetpointFollowState();
+  feed(state, { toMs: OPTS.holdMs, stepMs: 5000, sample: STUCK });
+  const blip = OPTS.holdMs + 5000;
+  feed(state, { fromMs: blip, toMs: blip, sample: { ...STUCK, batteryW: -300, netImportW: 1500 } });
+  feed(state, { fromMs: blip + 5000, toMs: blip + 60000, stepMs: 5000, sample: STUCK });
+  const R = blip + 65000;
+  const charge = { ...STUCK, batteryW: 2500, netImportW: 50 };
+  const idle = { ...STUCK, batteryW: 0, netImportW: 100 };
+  const transitions = feed(state, {
+    fromMs: R, toMs: R + 2 * OPTS.holdMs, stepMs: 5000,
+    sample: (t) => (((t - R) % 90000) === 85000 ? idle : charge)
+  });
+  assert.deepEqual(transitions.map(([n]) => n), ['clear']);
+  assert.equal(state.clearedWithDischarge, false);
 });

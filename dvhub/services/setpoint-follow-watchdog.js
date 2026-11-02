@@ -144,25 +144,41 @@ export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}) {
   return 'eos_grid_hold';
 }
 
-// Eigene Rücklesung von 2704: höchstens so oft, und so lange gilt ein Wert.
+// Eigene Rücklesung der Entladegrenze: höchstens so oft, und so lange gilt ein Wert.
 export const CAP_READ_EVERY_MS = 30000;
+// com.victronenergy.settings /Settings/CGwacs/MaxDischargePower als int32 in W
+// (dbus_modbustcp attributes.csv: 2720, int32, Skala 1).
+export const MAX_DISCHARGE_INT32_ADDR = 2720;
 function capReadMaxAgeMs(cfg) {
   const pollMs = Number(cfg?.meterPollMs);
   return Math.max(90000, Number.isFinite(pollMs) && pollMs > 0 ? 3 * pollMs : 0);
 }
 
+// Reg. 2704 (int16, Skala 0,1) kann „unbegrenzt“ (−1 W) nicht darstellen:
+// Victron dbus_modbustcp rechnet round(−1 × 0,1) = 0 (mappings.cpp
+// convertFromDbus) — die Werkseinstellung liest sich wie eine Sperre. Eine aus
+// 2704 gelesene 0 gilt darum nur, wenn DVhub selbst zuletzt 0 geschrieben hat.
+// Reg. 2720 (int32, Skala 1) liefert −1 eindeutig (Gegenprüfung 7c9e01aa).
+function ownZeroWrite(state) {
+  const lw = state?.schedule?.lastWrite?.maxDischargeW;
+  return lw != null && Number(lw.value) === 0;
+}
+
 /**
- * Entlade-Sperre 2704 in W, soweit belastbar bekannt, in dieser Reihenfolge:
- * Rücklesung (Poll-Punkt bzw. Peak Shaving), die eigene Rücklesung des
- * Wächters (ownRead), DVhubs eigener Schreibwert — Letzterer nur befristet, an
- * der GX kann die Sperre längst wieder aufgehoben sein.
+ * Entlade-Sperre in W, soweit belastbar bekannt, in dieser Reihenfolge:
+ * Rücklesung (Poll-Punkt bzw. Peak Shaving, beide 2704), die eigene
+ * Rücklesung des Wächters (ownRead, bevorzugt 2720), DVhubs eigener
+ * Schreibwert — Letzterer nur befristet, an der GX kann die Sperre längst
+ * wieder aufgehoben sein. Eine mehrdeutige 0 aus 2704 zählt nur mit eigenem
+ * 0-Write.
  */
 export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = null) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
-  if (known && known.from !== 'own_write') return known.value;
+  if (known && known.from !== 'own_write' && (Number(known.value) !== 0 || ownZeroWrite(state))) return known.value;
   if (ownRead && !ownRead.error && Number.isFinite(Number(ownRead.value))
-      && isFresh(ownRead.at, nowMs, capReadMaxAgeMs(cfg))) return Number(ownRead.value);
-  if (known && isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return known.value;
+      && isFresh(ownRead.at, nowMs, capReadMaxAgeMs(cfg))
+      && !(ownRead.ambiguousZero && !ownZeroWrite(state))) return Number(ownRead.value);
+  if (known && known.from === 'own_write' && isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return known.value;
   return null;
 }
 
@@ -344,9 +360,14 @@ export function evaluateSetpointFollow(state, sample, opts) {
     transition = 'clear';
     // Hat der Akku dabei wirklich entladen? Sonst ist nur die Auffälligkeit
     // vorbei (z. B. PV lädt), nicht belegt, dass er wieder entlädt (11f597d3).
+    // Fenster-Weg: nur Entladepunkte NACH dem letzten auffälligen Punkt zählen
+    // (ein alter Zacken vor der Erholung belegt nichts, Gegenprüfung 7c9e01aa).
+    const pts = state.anchor ? [state.anchor, ...state.window] : state.window;
+    let lastBad = -1;
+    pts.forEach((p, i) => { if (p.refusing) lastBad = i; });
     const discharged = okLong
       ? state.okDischarged === true
-      : (state.window.some((p) => p.discharging) || state.anchor?.discharging === true);
+      : pts.slice(lastBad + 1).some((p) => p.discharging);
     // Neues Fenster; letzter auffälliger Punkt und Fensterwerte bleiben fürs Protokoll.
     Object.assign(state, createSetpointFollowState(), {
       last: state.last, share: state.share, avgImportW: state.avgImportW, avgShortfallW: state.avgShortfallW,
@@ -379,6 +400,7 @@ export function createSetpointFollowWatchdog(ctx) {
   let capRead = null;          // { value, at, error }
   let capReadStartedAt = 0;
   let capReadPending = false;
+  let no2720 = false;           // GX kennt Reg. 2720 nicht → 2704
 
   function capReadable(cfg) {
     const conf = cfg?.controlWrite?.maxDischargeW;
@@ -391,23 +413,39 @@ export function createSetpointFollowWatchdog(ctx) {
   function maybeReadCap(cfg, nowMs, opts) {
     const conf = capReadable(cfg);
     if (!conf || capReadPending || nowMs - capReadStartedAt < CAP_READ_EVERY_MS) return;
-    const suspicious = wstate.active || wstate.window.some((p) => p.refusing) || wstate.anchor?.refusing === true;
+    // Nur jüngere auffällige Punkte (≤ holdMs): bei einem langen Entschuldigungs-
+    // Zeitraum bleiben alte Punkte im Fenster liegen (Gegenprüfung 7c9e01aa).
+    const recent = (p) => p && p.refusing && nowMs - p.t <= opts.holdMs;
+    const suspicious = wstate.active || wstate.window.some(recent) || recent(wstate.anchor);
     const capBlock = capRead && !capRead.error && Number(capRead.value) >= 0 && Number(capRead.value) < opts.minShortfallW;
     if (!suspicious && !capBlock) return;
     capReadPending = true;
     capReadStartedAt = nowMs;
     const v = cfg.victron || {};
+    const target = { host: conf.host || v.host, port: conf.port || v.port, unitId: conf.unitId ?? v.unitId, timeoutMs: conf.timeoutMs || v.timeoutMs };
     Promise.resolve().then(async () => {
-      if (ctx.transport.type === 'mqtt') return Number((await ctx.transport.readPoint('maxDischargeW'))?.mqttValue);
-      const regs = await ctx.transport.mbRequest({
-        fc: 3, host: conf.host || v.host, port: conf.port || v.port, unitId: conf.unitId ?? v.unitId,
-        address: conf.address, quantity: 1, timeoutMs: conf.timeoutMs || v.timeoutMs
-      });
-      return decodeMaxDischargeRaw(regs?.[0], conf);
-    }).then((value) => {
+      if (ctx.transport.type === 'mqtt') {
+        // MQTT liefert den D-Bus-Wert in W, −1 eindeutig.
+        return { value: Number((await ctx.transport.readPoint('maxDischargeW'))?.mqttValue), ambiguousZero: false };
+      }
+      if (!no2720) {
+        try {
+          const regs = await ctx.transport.mbRequest({ fc: 3, ...target, address: MAX_DISCHARGE_INT32_ADDR, quantity: 2 });
+          const hi = Number(regs?.[0]) & 0xffff;
+          const lo = Number(regs?.[1]) & 0xffff;
+          const raw = ((hi << 16) | lo) | 0; // int32, big-endian
+          return { value: raw < 0 ? -1 : raw, ambiguousZero: false };
+        } catch {
+          no2720 = true; // ältere Venus-Version: 2704 als Rückfall
+        }
+      }
+      const regs = await ctx.transport.mbRequest({ fc: 3, ...target, address: conf.address, quantity: 1 });
+      const raw = Number(regs?.[0]) & 0xffff;
+      return { value: decodeMaxDischargeRaw(raw, conf), ambiguousZero: raw === 0 };
+    }).then(({ value, ambiguousZero }) => {
       capRead = value == null || !Number.isFinite(value)
-        ? { value: null, at: nowMs, error: '2704: kein gültiger Wert' }
-        : { value, at: nowMs, error: null };
+        ? { value: null, at: nowMs, error: 'Entladegrenze: kein gültiger Wert' }
+        : { value, at: nowMs, error: null, ambiguousZero };
     }, (e) => {
       capRead = { value: null, at: nowMs, error: e?.message || String(e) };
     }).finally(() => { capReadPending = false; });

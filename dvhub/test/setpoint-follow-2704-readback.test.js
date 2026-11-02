@@ -21,18 +21,25 @@ const CFG = {
   }
 };
 
-function rig(raw2704) {
+// regs: Adresse → Rohwörter (Array) oder Error (Register unbekannt). 2720 =
+// MaxDischargePower als int32 in W (−1 eindeutig), 2704 = int16 in 10-W-Schritten.
+function rig(regs, { ownWrite = null } = {}) {
   const sent = [];
   const reads = [];
   const state = {
     meter: { ok: true },
     victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5, maxDischargeW: null },
-    schedule: { active: {}, lastWrite: {} },
+    schedule: { active: {}, lastWrite: ownWrite ? { maxDischargeW: ownWrite } : {} },
     ctrl: {}
   };
   const transport = {
     type: 'modbus',
-    async mbRequest(conf) { reads.push(conf); return [raw2704.value]; }
+    async mbRequest(conf) {
+      reads.push(conf);
+      const v = regs[conf.address];
+      if (v instanceof Error || v === undefined) throw v || new Error('Modbus exception 2');
+      return v;
+    }
   };
   const watchdog = createSetpointFollowWatchdog({
     state, getCfg: () => CFG, transport, pushLog: () => {},
@@ -49,31 +56,60 @@ function rig(raw2704) {
   return { state, sent, reads, run, watchdog };
 }
 
-test('Sperre an der GX (2704 = 0), DVhub kennt keinen eigenen Write (Neustart): Wächter liest, kein Alarm', async () => {
-  const { sent, reads, run } = rig({ value: 0 });
+test('Sperre an der GX (2720 = 0), DVhub kennt keinen eigenen Write (Neustart): Wächter liest, kein Alarm', async () => {
+  const { sent, reads, run } = rig({ 2720: [0, 0], 2704: [0] });
   await run(OPTS.holdMs * 2);
   assert.equal(sent.length, 0);
-  assert.ok(reads.length >= 1 && reads.every((r) => r.address === 2704 && r.fc === 3));
+  assert.ok(reads.length >= 1 && reads.every((r) => r.address === 2720 && r.fc === 3 && r.quantity === 2));
   // gedrosselt: höchstens alle 30 s
   assert.ok(reads.length <= Math.ceil((OPTS.holdMs * 2) / 30000) + 1, `${reads.length} Lesevorgänge`);
 });
 
-test('kleiner Deckel 2704 = 100 W (raw 10): gilt als Sperre, kein Alarm', async () => {
-  const { sent, run } = rig({ value: 10 });
+test('kleiner Deckel 100 W (2720 = 100): gilt als Sperre, kein Alarm', async () => {
+  const { sent, run } = rig({ 2720: [0, 100], 2704: [10] });
   await run(OPTS.holdMs * 2);
   assert.equal(sent.length, 0);
 });
 
-test('2704 unbegrenzt (raw 32767): echter Ausfall wird gemeldet', async () => {
-  const { sent, run } = rig({ value: 32767 });
+test('unbegrenzt (2720 = 32767 W wie DVhub es schreibt): echter Ausfall wird gemeldet', async () => {
+  const { sent, run } = rig({ 2720: [0, 32767], 2704: [32767] });
   await run(OPTS.holdMs + 30000);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].event, 'setpoint_not_followed');
 });
 
 test('nichts Auffälliges: 2704 wird nicht gelesen', async () => {
-  const { state, reads, run } = rig({ value: 0 });
+  const { state, reads, run } = rig({ 2720: [0, 0], 2704: [0] });
   Object.assign(state.victron, { gridImportW: 0, gridExportW: 90, batteryPowerW: -1900 });
   await run(OPTS.holdMs);
   assert.equal(reads.length, 0);
+});
+
+// Victron dbus_modbustcp (mappings.cpp convertFromDbus): round(−1 W × 0,1) = 0 —
+// die Werkseinstellung „unbegrenzt“ (−1) liest sich auf 2704 als Rohwert 0,
+// genau wie eine Sperre. Ohne 2720 hätte der Wächter dauerhaft geschwiegen
+// (Gegenprüfung 7c9e01aa, P1).
+test('Werkseinstellung −1: 2720 liest −1, 2704 läse 0 — kein Freibrief, Alarm kommt', async () => {
+  const { sent, run } = rig({ 2720: [0xffff, 0xffff], 2704: [0] });
+  await run(OPTS.holdMs + 30000);
+  assert.equal(sent.length, 1);
+});
+
+test('alte GX ohne 2720: 2704 = 0 zählt nur, wenn DVhub selbst 0 geschrieben hat', async () => {
+  const noOwn = rig({ 2720: new Error('Modbus exception 2'), 2704: [0] });
+  await noOwn.run(OPTS.holdMs + 30000);
+  assert.equal(noOwn.sent.length, 1, 'mehrdeutig (−1 oder Sperre) → kein Freibrief');
+  const own = rig({ 2720: new Error('Modbus exception 2'), 2704: [0] }, { ownWrite: { value: 0, source: 'api', at: T0 - 3 * 3600000 } });
+  await own.run(OPTS.holdMs * 2);
+  assert.equal(own.sent.length, 0, 'eigene Sperre bestätigt');
+});
+
+test('eine einzelne Spitze, danach lange gewolltes Halten: 2704/2720 wird nicht dauernd gelesen', async () => {
+  const { state, watchdog, reads } = rig({ 2720: [0xffff, 0xffff], 2704: [0] });
+  const at = (t) => { state.victron.fieldUpdatedAt = { gridSetpointW: T0 + t, batteryPowerW: T0 + t, soc: T0 + t }; };
+  at(0); watchdog.tick(T0); await new Promise((r) => setImmediate(r));
+  // danach 2 h SoC an der Untergrenze (entschuldigt)
+  state.victron.soc = 6;
+  for (let t = 5000; t <= 2 * 3600000; t += 5000) { at(t); watchdog.tick(T0 + t); await new Promise((r) => setImmediate(r)); }
+  assert.ok(reads.length <= Math.ceil(OPTS.holdMs / 30000) + 1, `${reads.length} Lesevorgänge in 2 h`);
 });
