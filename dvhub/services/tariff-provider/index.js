@@ -51,10 +51,14 @@ const DB_WAIT_MS = 10_000;
 
 // Auf die Datenbank höchstens `ms` warten: Der Pool kennt keine Abfrage-
 // Zeitgrenze, ein hängender Abruf hielte sonst `inFlight` für immer.
+// Ergebnis: true = fertig geworden, false = Zeit abgelaufen.
 async function waitAtMost(promise, ms) {
   let timer;
   try {
-    await Promise.race([promise, new Promise((resolve) => { timer = setTimeout(resolve, ms); timer.unref?.(); })]);
+    return await Promise.race([
+      Promise.resolve(promise).then(() => true, () => true),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); timer.unref?.(); })
+    ]);
   } finally {
     clearTimeout(timer);
   }
@@ -183,6 +187,7 @@ export function createTariffProviderService(ctx, deps = {}) {
   let timer = null;
   let inFlight = null;
   let dbLoading = null;
+  let loadGen = 0;
   let lastTestMs = 0;
   let identity = null;
   let reloadTimer = null;
@@ -231,9 +236,11 @@ export function createTariffProviderService(ctx, deps = {}) {
     const store = ctx.telemetryStore;
     if (st.dbLoaded || typeof store?.listSeriesSamples !== 'function') return;
     if (dbLoading) return dbLoading;
+    const gen = ++loadGen;
     dbLoading = (async () => {
       try {
         const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE });
+        if (gen !== loadGen) return;   // nach Zeitablauf aufgegeben, ein neuerer Versuch läuft
         const bySource = new Map();
         const keepFrom = now() - PERSISTED_KEEP_MS;
         for (const row of rows) {
@@ -258,10 +265,21 @@ export function createTariffProviderService(ctx, deps = {}) {
       } catch (error) {
         log('tariff_provider_db_load_error', { error: error.message }, 'warn');
       } finally {
-        dbLoading = null;
+        if (gen === loadGen) dbLoading = null;
       }
     })();
     return dbLoading;
+  }
+
+  // Laden mit Zeitgrenze (Takt und Abruf): Hängt das Lesen, wird es nach
+  // dbWaitMs aufgegeben und beim nächsten Mal neu gestellt.
+  async function loadFromDbBounded() {
+    if (st.dbLoaded || typeof ctx.telemetryStore?.listSeriesSamples !== 'function') return;
+    if (await waitAtMost(loadFromDb(), dbWaitMs)) return;
+    if (st.dbLoaded) return;
+    loadGen += 1;
+    dbLoading = null;
+    log('tariff_provider_db_load_timeout', { waitedMs: dbWaitMs }, 'warn');
   }
 
   // Ausgleichsgerade Anbieterpreis ↔ Börsenpreis aus den letzten 7 Tagen.
@@ -344,7 +362,7 @@ export function createTariffProviderService(ctx, deps = {}) {
       // oder per Knopf vor dem Laden): sonst bekämen unveränderte Preise eine
       // neue Abrufzeit und geänderte keinen Vorwert. Vor dem Abruf, damit die
       // geladenen Preise die frischen im Speicher nicht überschreiben.
-      if (!st.dbLoaded && typeof ctx.telemetryStore?.listSeriesSamples === 'function') await waitAtMost(loadFromDb(), dbWaitMs);
+      await loadFromDbBounded();
       const result = await clients[s.name](s);
       const slots = result.slots || [];
       putProviderSlots(s.name, slots);
@@ -387,7 +405,7 @@ export function createTariffProviderService(ctx, deps = {}) {
   }
 
   async function tick() {
-    await loadFromDb();
+    await loadFromDbBounded();
     const s = syncConfigState();
     if (!st.active || inFlight) return;
     const nowMs = now();

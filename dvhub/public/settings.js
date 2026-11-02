@@ -3098,7 +3098,7 @@ function bindTariffProviderBlock(section, uep) {
   const statsProvider = uep?.provider?.name || '';
   let statsSeq = 0;   // je Block: nur die jüngste eigene Abfrage wird angezeigt
   const loadStats = ({ fresh = false } = {}) => {
-    if (!statsEl || statsEl.isConnected === false) return;
+    if (!statsEl) return;
     const days = statsDays?.value || '30';
     tariffProviderStatsDays = days;
     statsEl.style.whiteSpace = 'pre-line';

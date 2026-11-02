@@ -115,15 +115,21 @@ test('Neuzeichnen während „Jetzt abrufen“: der sichtbare Block zeigt am End
   const uep = { provider: { name: 'lichtblick' } };
   const ok = (pairs) => ({ ok: true, provider: 'lichtblick', days: 30, pairs, meanProviderCtKwh: 40, meanMarketCtKwh: 8, meanSpreadCtKwh: 32, formula: null });
 
+  // Wie im Betrieb: Der Block hängt beim Binden noch nicht im Dokument.
   const a = block();
+  a.stats.isConnected = false; a.status.isConnected = false;
   bindTariffProviderBlock(a.section, uep);
+  a.stats.isConnected = true; a.status.isConnected = true;
+  assert.ok(pending.some(isStats), 'Auswertung wird beim Zeichnen abgefragt (Gegenprüfung b83f668a, P1)');
   answer((p) => p.url === '/api/tariff-provider', { ok: true, state: null });
   answer(isStats, { ok: false, code: 'error', error: 'kurz weg' });   // nicht zwischengespeichert
   await flush();
   const clicking = a.click();                                          // POST hängt noch
   a.stats.isConnected = false; a.status.isConnected = false;           // neu gezeichnet
   const b = block();
+  b.stats.isConnected = false; b.status.isConnected = false;
   bindTariffProviderBlock(b.section, uep);
+  b.stats.isConnected = true; b.status.isConnected = true;
   answer((p) => p.url === '/api/tariff-provider', { ok: true, state: null });
   answer((p) => p.method === 'POST', { ok: true, state: null });
   await clicking;
