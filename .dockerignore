@@ -35,6 +35,13 @@ dvhub/node_modules/
 dvhub/mobile-link.json
 dvhub/mobile-link.json.tmp-*
 dvhub/license_state.json
+# Weitere Laufzeitdateien derselben Art (Gegenprüfung f4bcc3ba, P3).
+dvhub/energy_state.json
+dvhub/control_state.json
+dvhub/peak_shaving_lift.json
+dvhub/battery_grid_share.json
+dvhub/battery_grid_share.json.tmp*
+dvhub/battery_grid_share_log.jsonl
 
 # ACHTUNG: services/python-bridge/ darf NICHT ausgeschlossen werden.
 # server.js importiert services/forecast/index.js statisch, das wiederum

@@ -10,7 +10,7 @@
 //   Netz→Akku          erhöht den Netzstrom-Anteil G um die geladene Energie —
 //                      höchstens um den gemessenen Netzbezug (bei Fronius ist
 //                      die PV-Leistung die AC-Leistung NACH dem Laden) und nur,
-//                      solange „Netzladen erlaubt“ eingeschaltet ist.
+//                      solange „Netzladen erlaubt“ gilt (isGridChargeLicensed).
 //                      Ohne Netzladen bleibt der Zähler stehen: kleine
 //                      Regelabweichungen sollen eine Anlage ohne Netzladen
 //                      nicht sperren (Gegenprüfung 8465a540, P2).
@@ -291,12 +291,13 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     const dtMs = lastTickMs == null ? 0 : Math.min(GRID_SHARE_MAX_STEP_MS, Math.max(0, nowMs - lastTickMs));
     lastTickMs = nowMs;
     const v = victron || {};
-    // Zufluss nur bei eingeschaltetem „Netzladen erlaubt“ und höchstens der
-    // echte Netzbezug. Bewusst der Schalter allein, nicht die MiSpeL-Freigabe:
-    // auch ohne Freigabe lassen manuelle Sollwerte und eigene Regeln Netzladen
-    // zu (schedule-eval prüft nur den Schalter) — dieser Netzstrom muss zählen
-    // (Gegenprüfung 6555bdcf, P2).
-    const inflowW = cfg?.optimizer?.allowGridCharge === true
+    // Zufluss nur bei erlaubtem Netzladen (Schalter + MiSpeL-Freigabe bzw.
+    // „ohne Option“) und höchstens der echte Netzbezug. Nur der Schalter
+    // (Gegenprüfung 6555bdcf) sperrte Anlagen ohne Freigabe durch Regelrauschen
+    // (Gegenprüfung f4bcc3ba, P2) — zurück. Offen: manuelle positive Sollwerte
+    // laden ohne Freigabe trotzdem aus dem Netz (schedule-eval prüft nur den
+    // Schalter); ob die gesperrt werden, entscheidet Christin.
+    const inflowW = isGridChargeLicensed(cfg)
       ? Math.min(pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW), pos(v.gridImportW))
       : 0;
     const flows = {
@@ -408,8 +409,11 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       if (typeof v === 'number') return String(v).replace('.', ',');
       if (typeof v === 'boolean') return v ? 'ja' : 'nein';
       if (typeof v === 'object') return cell(v.actor || v.ip || v.source || JSON.stringify(v));
-      const s = String(v);
-      return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      // Freitext (Grund) nie als Formel deuten lassen; \r bricht Zeilen wie \n
+      // (Gegenprüfung f4bcc3ba, P3).
+      let s = String(v);
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+      return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const rows = readProtocol(PROTOCOL_MAX_LINES).map((e) => CSV_COLUMNS.map(([k]) => cell(e[k])).join(';'));
     return [CSV_COLUMNS.map(([, label]) => label).join(';'), ...rows].join('\n') + '\n';
