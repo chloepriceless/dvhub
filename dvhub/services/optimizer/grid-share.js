@@ -23,13 +23,17 @@
 //                      der Ladestand 60 s lang darunter liegt (ein Fehlwert
 //                      darf keinen Netzstrom „verschwinden“ lassen).
 //   Unsichere Akkuwerte (gridShareBatteryUncertain: Lesefehler, alter Stempel,
-//                      Einfrier-Wächter, Kreuzprobe; zweite Anlage veraltet)
-//                      buchen NIE ab: Entladung gilt als 0, der Ladestand
-//                      wird nicht benutzt (keine Kappung). polling.js behält
-//                      bei Fehlern den letzten Wert — sonst fiele die Sperre,
-//                      ohne dass jemand weiß, ob der Akku entladen hat
-//                      (Gegenprüfung Release 1.0.9, P2). Zubuchen zählt weiter
-//                      (vorsichtige Richtung). Log einmal je Episode, die
+//                      Einfrier-Wächter bzw. -Verdacht, Kreuzprobe; zweite
+//                      Anlage veraltet) buchen NIE ab: Entladung gilt als 0.
+//                      polling.js behält bei Fehlern den letzten Wert — sonst
+//                      fiele die Sperre, ohne dass jemand weiß, ob der Akku
+//                      entladen hat (Gegenprüfung Release 1.0.9, P2). Ist der
+//                      Ladestand selbst unsicher, wird er nicht benutzt (keine
+//                      Kappung). Zubuchen zählt weiter (vorsichtige Richtung:
+//                      läuft Netzladen während eines Ausfalls weiter, fehlte es
+//                      sonst), wird aber in der Tageszeile eigens ausgewiesen
+//                      und ist immer durch die Akkukapazität begrenzt
+//                      (Gegenprüfung 4cf16a5a, P2). Log einmal je Episode, die
 //                      Tageszeile nennt die Minuten ohne Abbuchung.
 // Akku-Inhalt = Ladestand × Kapazität (beide GX-Anlagen zusammen, wie EOS plant).
 //
@@ -81,6 +85,8 @@ export const GRID_SHARE_FIELD_MAX_AGE_MS = 90_000;
 export const GRID_SHARE_UNCERTAIN_CLEAR_MS = 60_000;
 /** Felder, aus denen polling.js Akkuflüsse und Akku-Inhalt rechnet. */
 const BATTERY_FIELDS = [['batteryPowerW', 'battery_power'], ['soc', 'soc']];
+/** Gründe, bei denen auch der Ladestand nicht benutzt wird (sonst nur die Akkuleistung unsicher). */
+const SOC_UNCERTAIN_REASONS = new Set(['telemetry_frozen', 'source_mismatch', 'soc_error', 'soc_stale', 'second_battery_stale']);
 export const GRID_SHARE_STATE_FILE = 'battery_grid_share.json';
 export const GRID_SHARE_PROTOCOL_FILE = 'battery_grid_share_log.jsonl';
 
@@ -105,10 +111,14 @@ const finiteOrNull = (v) => (v != null && v !== '' && Number.isFinite(Number(v))
  * Sind Akkuleistung oder Ladestand unsicher? Gibt die Gründe zurück (leer = sicher).
  *   - Einfrier-Wächter (freeze.active) oder Kreuzprobe (sourceMismatch.active):
  *     dieselben Wachen wie der Entlade-Boden in schedule-eval und multi-gx;
+ *     dazu der Einfrier-Verdacht (freezeSuspect.active) — im Stable-Kanal ist
+ *     der Wächter aus, die Erkennung läuft trotzdem (Gegenprüfung 4cf16a5a);
  *   - Lesefehler (errors.batteryPowerW / errors.soc): polling.js behält dann den alten Wert;
- *   - Stempel älter als maxAgeMs: fieldUpdatedAt (letzte erfolgreiche Abfrage)
- *     und — nur MQTT — fieldSourceAt (Empfangszeit des Werts; die Abfrage
- *     stempelt „jetzt“, auch wenn der Wert aus dem Cache kommt).
+ *   - fieldUpdatedAt (letzte erfolgreiche Abfrage) älter als maxAgeMs
+ *     (victron.telemetryMaxAgeMs, höchstens 90 s);
+ *   - nur MQTT: fieldSourceAt (Empfangszeit des Werts; die Abfrage stempelt
+ *     „jetzt“, auch wenn der Wert aus dem Cache kommt) älter als 90 s — eigene
+ *     Frist, weil Venus ruhende Werte nur per Keepalive (30 s) neu schickt.
  * Ein fehlender Stempel heißt „nie gelesen“: dann ist der Wert null und es gibt
  * ohnehin keinen Fluss bzw. keinen Ladestand (polling.js setzt Wert und Stempel
  * zusammen) — kein Grund.
@@ -116,15 +126,14 @@ const finiteOrNull = (v) => (v != null && v !== '' && Number.isFinite(Number(v))
 export function gridShareBatteryUncertain(victron, { nowMs = Date.now(), maxAgeMs } = {}) {
   const v = victron || {};
   const reasons = [];
-  if (v.freeze?.active === true) reasons.push('telemetry_frozen');
+  if (v.freeze?.active === true || v.freezeSuspect?.active === true) reasons.push('telemetry_frozen');
   if (v.sourceMismatch?.active === true) reasons.push('source_mismatch');
   const cfgMax = Number(maxAgeMs);
   const max = Number.isFinite(cfgMax) && cfgMax > 0 ? Math.min(cfgMax, GRID_SHARE_FIELD_MAX_AGE_MS) : GRID_SHARE_FIELD_MAX_AGE_MS;
   for (const [field, tag] of BATTERY_FIELDS) {
     if (v.errors?.[field]) reasons.push(`${tag}_error`);
-    const stale = [v.fieldUpdatedAt?.[field], v.fieldSourceAt?.[field]]
-      .some((at) => Number(at) > 0 && nowMs - Number(at) > max);
-    if (stale) reasons.push(`${tag}_stale`);
+    const old = (at, limit) => Number(at) > 0 && nowMs - Number(at) > limit;
+    if (old(v.fieldUpdatedAt?.[field], max) || old(v.fieldSourceAt?.[field], GRID_SHARE_FIELD_MAX_AGE_MS)) reasons.push(`${tag}_stale`);
   }
   return reasons;
 }
@@ -157,6 +166,12 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
     lossWh = g - upperWh;
     g = upperWh;
   }
+  // Nie mehr Netzstrom als der ganze Akku fasst — auch ohne Ladestand
+  // (Zubuchen aus unsicheren Werten, Gegenprüfung 4cf16a5a, P2).
+  if (cap != null && cap > 0 && g > cap) {
+    lossWh += g - cap;
+    g = cap;
+  }
   const share = !known ? null : (g <= 0 ? 0 : (storedWh > 0 ? Math.min(1, g / storedWh) : 1));
   return { gridWh: g, inWh, toHomeWh, toGridWh, lossWh, share, storedWh, overUpper };
 }
@@ -187,7 +202,7 @@ function localDate(ms, timeZone) {
 }
 
 const r3 = (v) => Math.round(Number(v) * 1000) / 1000;
-const emptyDay = (date) => ({ date, inWh: 0, toHomeWh: 0, toGridWh: 0, lossWh: 0, lockedMs: 0, maxGridWh: 0, uncertainMs: 0 });
+const emptyDay = (date) => ({ date, inWh: 0, toHomeWh: 0, toGridWh: 0, lossWh: 0, lockedMs: 0, maxGridWh: 0, uncertainMs: 0, uncertainInWh: 0 });
 
 /**
  * @param {object} opts
@@ -321,6 +336,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
         endSharePct: st.share == null ? null : Math.round(st.share * 1000) / 10,
         lockedMinutes: Math.round(d.lockedMs / 60_000),
         uncertainMinutes: Math.round((d.uncertainMs || 0) / 60_000),
+        uncertainGridToBatteryKwh: r3((d.uncertainInWh || 0) / 1000),
         lockApplies: gridShareLockApplies(cfg),
       });
     }
@@ -356,8 +372,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       ? Math.min(pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW), pos(v.gridImportW))
       : 0;
     // Unsichere Akkuwerte: nichts abbuchen — Entladung beider Akkus gilt als 0
-    // (die Aufteilung auf Akku 2 rechnet polling.js aus denselben Werten), der
-    // Ladestand wird nicht benutzt (keine Kappung).
+    // (die Aufteilung auf Akku 2 rechnet polling.js aus denselben Werten). Ist
+    // der Ladestand unsicher, wird er nicht benutzt (keine Kappung); bei nur
+    // unsicherer Akkuleistung kappt der frische Ladestand das Zubuchen.
     const reasons = gridShareBatteryUncertain(v, { nowMs, maxAgeMs: cfg?.victron?.telemetryMaxAgeMs });
     if (secondBatteryStale) reasons.push('second_battery_stale');
     const uncertain = reasons.length > 0;
@@ -372,7 +389,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       if (dtMs > 0) dirty = true;
     }
     const capAllowed = overSinceMs != null && nowMs - overSinceMs >= GRID_SHARE_CAP_CONFIRM_MS;
-    const r = stepGridShare(st.gridWh, { dtMs, ...flows, socPct: uncertain ? null : socPct, capacityWh, capAllowed });
+    const socUncertain = reasons.some((x) => SOC_UNCERTAIN_REASONS.has(x));
+    const r = stepGridShare(st.gridWh, { dtMs, ...flows, socPct: socUncertain ? null : socPct, capacityWh, capAllowed });
+    if (uncertain) st.day.uncertainInWh = (st.day.uncertainInWh || 0) + r.inWh;
     // Ladestand liegt unter dem Zählerstand: erst merken, nach 60 s kappen.
     if (!r.overUpper || r.lossWh > 0) overSinceMs = null;
     else if (overSinceMs == null) overSinceMs = nowMs;
@@ -476,6 +495,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
         batteryToHomeFromGridKwh: kwh(st.day?.toHomeWh), batteryToGridFromGridKwh: kwh(st.day?.toGridWh),
         lossFromGridKwh: kwh(st.day?.lossWh), lockedMinutes: Math.round((st.day?.lockedMs || 0) / 60_000),
         uncertainMinutes: Math.round((st.day?.uncertainMs || 0) / 60_000),
+        uncertainGridToBatteryKwh: kwh(st.day?.uncertainInWh),
       },
       totals: {
         gridToBatteryKwh: kwh(st.totals.inWh), batteryToHomeFromGridKwh: kwh(st.totals.toHomeWh),
@@ -492,7 +512,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     ['gridToBatteryKwh', 'Netz→Akku kWh'], ['batteryToHomeFromGridKwh', 'Akku→Haus aus Netzstrom kWh'],
     ['batteryToGridFromGridKwh', 'Akku→Netz aus Netzstrom kWh'], ['lossFromGridKwh', 'Verlust Netzstrom kWh'],
     ['maxGridKwh', 'Netzstrom max kWh'], ['endGridKwh', 'Netzstrom Tagesende kWh'], ['endSharePct', 'Anteil Tagesende %'],
-    ['lockedMinutes', 'Sperre min'], ['uncertainMinutes', 'Akkuwerte unsicher min (nicht abgebucht)'], ['gridKwh', 'Netzstrom kWh'], ['sharePct', 'Anteil %'], ['thresholdKwh', 'Schwelle kWh'],
+    ['lockedMinutes', 'Sperre min'], ['uncertainMinutes', 'Akkuwerte unsicher min (nicht abgebucht)'], ['uncertainGridToBatteryKwh', 'davon Netz→Akku bei unsicheren Werten kWh'], ['gridKwh', 'Netzstrom kWh'], ['sharePct', 'Anteil %'], ['thresholdKwh', 'Schwelle kWh'],
     ['lockApplies', 'Sperre gilt'], ['reason', 'Grund'], ['actor', 'Ausgelöst von'],
   ];
   function protocolCsv() {

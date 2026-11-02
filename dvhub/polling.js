@@ -718,6 +718,13 @@ export function createPoller(ctx) {
     // Ein Block-Read pro Zyklus; SunSpec not-implemented (int16 0x8000) →
     // Punkt bleibt unangetastet statt einen falschen Wert zu stempeln.
     const bpConf = cfg.points?.batteryPowerW;
+    // Ausfall nach einem gültigen Wert = Lesefehler wie in pollPoint: der alte
+    // Wert bleibt stehen, errors sagt es (Netzstrom-Zähler, Entlade-Boden;
+    // Gegenprüfung 4cf16a5a, P3). Ohne je gelesenen Wert (Anlage ohne Akku)
+    // bleibt errors leer.
+    const m160Failed = (msg) => {
+      if (Number(state.victron.fieldUpdatedAt?.batteryPowerW) > 0) (state.victron.errors ??= {}).batteryPowerW = `M160: ${msg}`;
+    };
     if (bpConf?.derive === 'm160_battery' && state.ctrl?._sunspecM160 && transport.type !== 'mqtt') {
       try {
         const m160 = state.ctrl._sunspecM160;
@@ -743,12 +750,19 @@ export function createPoller(ctx) {
             // T-0075-Frische: der Discharge-Floor keyt auf batteryPowerW —
             // ohne Stempel gälte der abgeleitete Wert sofort als stale.
             (state.victron.fieldUpdatedAt ??= {}).batteryPowerW = Date.now();
+            if (state.victron.errors) delete state.victron.errors.batteryPowerW;
+          } else {
+            m160Failed('Akku-Modul meldet keinen Wert (SunSpec not implemented)');
           }
-        } else if (Date.now() - m160DeriveLogAt > 300000) {
-          m160DeriveLogAt = Date.now();
-          pushLog('m160_battery_unavailable', { nModules, sfRaw, chargeModule, dischargeModule });
+        } else {
+          m160Failed('Akku-Module fehlen oder Skalierung unbekannt');
+          if (Date.now() - m160DeriveLogAt > 300000) {
+            m160DeriveLogAt = Date.now();
+            pushLog('m160_battery_unavailable', { nModules, sfRaw, chargeModule, dischargeModule });
+          }
         }
       } catch (e) {
+        m160Failed(e?.message || String(e));
         if (Date.now() - m160DeriveLogAt > 300000) {
           m160DeriveLogAt = Date.now();
           pushLog('m160_battery_read_error', { error: e?.message || String(e) });

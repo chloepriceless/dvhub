@@ -397,3 +397,36 @@ test('M160-Derive: zu wenige Module (n=2) → Wert bleibt unangetastet', async (
   assert.equal(state.victron.batteryPowerW, undefined, 'kein falscher Wert bei fehlenden Akku-Modulen');
   assert.equal(state.victron.fieldUpdatedAt.batteryPowerW, undefined, 'keine Frische ohne Wert');
 });
+
+// Gegenprüfung 4cf16a5a (P3): Fällt die M160-Ableitung nach einem gültigen Wert
+// aus, steht ein Lesefehler — sonst liefe der alte Wert bis zur Frische-Frist weiter.
+test('M160-Derive: Ausfall nach gültigem Wert setzt errors.batteryPowerW, Erfolg löscht ihn', async () => {
+  const loaded = loadFroniusEffectiveConfig();
+  const cfg = loaded.effectiveConfig;
+  cfg.pollMs = 500;
+  cfg.epex = { timezone: 'UTC' };
+  cfg.userEnergyPricing = {};
+  const state = {
+    meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0, error: null },
+    victron: { errors: {}, updatedAt: 0, fieldUpdatedAt: {} },
+    ctrl: {},
+    dvRegs: new Array(8).fill(0),
+    energy: { day: '2026-07-19', importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0, lastTs: 0 }
+  };
+  const image = buildGen24ImageWithM160({ chargeDcw: 0, dischargeDcw: 500 });
+  const poller = createPoller({
+    state, getCfg: () => cfg, transport: makeMockTransport(image), pushLog: () => {},
+    energyPath: path.join(os.tmpdir(), `fronius-m160-err-${Math.random().toString(36).slice(2)}.json`),
+    onPollComplete: () => {}, epexNowNext: () => ({ current: { ct_kwh: 0 } })
+  });
+  await poller.requestPoll();
+  assert.equal(state.victron.batteryPowerW, -500);
+  assert.equal(state.victron.errors.batteryPowerW, undefined);
+  for (const [k, v] of buildGen24ImageWithM160({ chargeDcw: 0x8000, dischargeDcw: 500 })) image.set(k, v);
+  await poller.requestPoll();
+  assert.ok(state.victron.errors.batteryPowerW, 'Ausfall der Ableitung ist ein Lesefehler');
+  for (const [k, v] of buildGen24ImageWithM160({ chargeDcw: 0, dischargeDcw: 400 })) image.set(k, v);
+  await poller.requestPoll();
+  assert.equal(state.victron.batteryPowerW, -400);
+  assert.equal(state.victron.errors.batteryPowerW, undefined, 'Erfolg löscht den Fehler');
+});

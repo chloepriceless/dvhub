@@ -22,7 +22,10 @@ import {
   stepGridShare,
   gridShareExportCapW,
   createGridShareTracker,
+  gridShareBatteryUncertain,
 } from '../services/optimizer/grid-share.js';
+
+const gridShareBatteryUncertainReasons = (v, nowMs, maxAgeMs) => gridShareBatteryUncertain(v, { nowMs, maxAgeMs });
 
 const mkDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-grid-share-'));
 const near = (a, b, eps = 0.01) => assert.ok(Math.abs(a - b) <= eps, `${a} ≈ ${b}`);
@@ -487,6 +490,73 @@ test('MQTT-Weg: der Poller merkt sich das Alter des MQTT-Werts, der Zähler buch
     t.tick({ nowMs: n - 1, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 10_000 });
     t.tick({ nowMs: n + 59_999, victron: { ...state.victron }, socPct: 50, capacityWh: 10_000 });
     near(t.summary().gridWh, 200, 0.01);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Gegenprüfung 4cf16a5a (Claude, Runde 1) ───────────────────────────────────
+
+test('alte Ladeleistung bei frischem Ladestand: Zubuchen wird am Ladestand gekappt und im Protokoll als unsicher ausgewiesen (P2)', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    // Akkuleistung mit Lesefehler (alter Wert +6000 W), Haus zieht 1 kW aus dem
+    // Netz, Ladestand frisch bei 50 % von 10 kWh → Obergrenze 5,1 kWh.
+    // 6 h × 1 kW = 6 kWh + 200 Wh → ohne Kappung 6,2 kWh.
+    for (let i = 1; i <= 360; i += 1) {
+      const n = t0 + i * 60_000;
+      t.tick({ nowMs: n, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 1_000, errors: { batteryPowerW: 'timeout' }, fieldUpdatedAt: { batteryPowerW: t0, soc: n } } });
+    }
+    // Obergrenze 5,1 kWh; die Kappung wartet 60 s auf Bestätigung → höchstens
+    // zwei Minuten Zufluss (je 16,7 Wh) darüber.
+    assert.ok(t.summary().gridWh >= 5_100 - 0.01 && t.summary().gridWh <= 5_100 + 34, `${t.summary().gridWh}`);
+    const s = t.summary();
+    assert.ok(s.today.uncertainGridToBatteryKwh > 0, 'Zubuchen bei unsicheren Werten ist ausgewiesen');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('der Zähler wird nie größer als die Akkukapazität, auch ohne Ladestand (P2)', () => {
+  const r = stepGridShare(9_900, { dtMs: 3_600_000, gridToBatteryW: 6_000, socPct: null, capacityWh: 10_000 });
+  near(r.gridWh, 10_000);
+  near(r.lossWh, 5_900);
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    const frozen = { freeze: { active: true } };
+    for (let i = 1; i <= 180; i += 1) t.tick({ nowMs: t0 + i * 60_000, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 6_000, ...frozen } });
+    assert.ok(t.summary().gridWh <= 10_000 + 0.01, `${t.summary().gridWh}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Einfrier-Verdacht aus dem Stable-Kanal (freezeSuspect) verhindert das Abbuchen (P2)', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    const n = t0 + 60_000;
+    t.tick({ nowMs: n, socPct: 50, capacityWh: 10_000, victron: { batteryDirectUseW: 6_000, freezeSuspect: { active: true }, fieldUpdatedAt: { batteryPowerW: n, soc: n } } });
+    near(t.summary().gridWh, 200, 0.01);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MQTT-Wertalter mit eigener Frist: kurzes telemetryMaxAgeMs macht 30 s alte Keepalive-Werte nicht unsicher (P3)', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { ...lockedCfg(), victron: { telemetryMaxAgeMs: 20_000 } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.parse('2026-11-02T08:00:00Z');
+    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 10_000 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 10_000 });
+    const n = t0 + 120_000;
+    t.tick({ nowMs: n, socPct: 50, capacityWh: 10_000, victron: { batteryDirectUseW: 6_000, fieldUpdatedAt: { batteryPowerW: n, soc: n }, fieldSourceAt: { batteryPowerW: n - 2_000, soc: n - 30_000 } } });
+    assert.ok(t.summary().gridWh < 200, `${t.summary().gridWh}`);
+    assert.equal(gridShareBatteryUncertainReasons({ fieldUpdatedAt: { soc: n - 30_000 } }, n, 20_000).includes('soc_stale'), true, 'Abfrage-Stempel folgt weiter telemetryMaxAgeMs');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

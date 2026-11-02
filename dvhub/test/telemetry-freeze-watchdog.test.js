@@ -307,3 +307,44 @@ test('Reconnect ist pro Einfrier-Episode gedeckelt (kein Verbindungs-Karussell)'
   assert.equal(h.logs.filter((l) => l.event === 'telemetry_freeze_reconnect_exhausted').length, 1);
   assert.equal(h.state.victron.freeze.active, true, 'Alarm bleibt stehen');
 });
+
+// Gegenprüfung 4cf16a5a (P2): Im Stable-Kanal ist der Wächter (Eingriffe) aus —
+// die reine Erkennung läuft trotzdem und meldet victron.freezeSuspect, damit der
+// Netzstrom-Zähler mit eingefrorenen Werten nicht abbucht. Kein Rückdatieren,
+// kein Neuaufbau, kein Alarm.
+test('Stable-Kanal: nur Erkennung (freezeSuspect), keine Eingriffe', () => {
+  const state = {
+    meter: { ok: true, updatedAt: 0, grid_total_w: -1000, error: null },
+    victron: { soc: 60, batteryPowerW: 2000, pvTotalW: 3000, fieldUpdatedAt: {} }
+  };
+  const logs = [];
+  let dropCount = 0;
+  const wd = createFreezeWatchdog({
+    state,
+    getCfg: () => ({ updateChannel: 'stable', victron: { freezeWatchdog: { freezeMs: 60000, minSamples: 10 } }, optimizer: { batteryCapacityWh: 60000 } }),
+    transport: { type: 'modbus', dropConnections: () => { dropCount += 1; return 1; } },
+    pushLog: (event, details, level) => logs.push({ event, details, level }),
+  });
+  const poll = (i, frozen) => {
+    const now = 1_000_000 + i * 1000;
+    state.meter.updatedAt = now;
+    state.meter.grid_total_w = frozen ? -1000 : -1000 - i;
+    state.victron.batteryPowerW = frozen ? 2000 : 2000 + i;
+    state.victron.pvTotalW = frozen ? 3000 : 3000 + i;
+    state.victron.fieldUpdatedAt = { soc: now, batteryPowerW: now, pvPowerW: now };
+    wd.tick(now);
+    return now;
+  };
+  for (let i = 0; i < 20; i += 1) poll(i, false);
+  let now = 0;
+  for (let i = 20; i < 200; i += 1) now = poll(i, true);
+  assert.equal(state.victron.freeze, null, 'Wächter-Flagge bleibt im Stable-Kanal aus');
+  assert.equal(state.victron.freezeSuspect?.active, true);
+  assert.equal(state.victron.fieldUpdatedAt.batteryPowerW, now, 'keine Rückdatierung');
+  assert.equal(state.meter.ok, true, 'keine Meter-Abwertung');
+  assert.equal(dropCount, 0, 'kein Neuaufbau');
+  assert.equal(logs.filter((l) => l.level === 'critical').length, 0, 'kein Alarm');
+  assert.equal(logs.filter((l) => l.event === 'telemetry_freeze_suspected').length, 1);
+  poll(200, false);
+  assert.equal(state.victron.freezeSuspect, null, 'Erholung räumt auf');
+});

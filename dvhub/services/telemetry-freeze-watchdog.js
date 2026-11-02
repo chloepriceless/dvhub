@@ -101,6 +101,10 @@ export function resolveFreezeOptions(cfg = {}) {
     // ein Feldtest. Im Stable-Kanal bleibt er AUS, unabhängig von der
     // config.json. Siehe beta-features.js.
     enabled: w.enabled !== false && betaGateOpen(cfg, 'freezeWatchdog'),
+    // Reine Erkennung ohne Eingriff auch im Stable-Kanal (victron.freezeSuspect):
+    // der Netzstrom-Zähler bucht mit eingefrorenen Werten nicht ab
+    // (Gegenprüfung 4cf16a5a, P2). Nur ein ausdrückliches enabled:false schaltet ab.
+    detect: w.enabled !== false,
     freezeMs: numOr(w.freezeMs, FREEZE_DEFAULTS.freezeMs, 30000),
     minSamples: numOr(w.minSamples, FREEZE_DEFAULTS.minSamples, 2),
     minPowerW: numOr(w.minPowerW, FREEZE_DEFAULTS.minPowerW, 0),
@@ -277,16 +281,42 @@ export function createFreezeWatchdog(ctx) {
     } catch { /* noop */ }
   }
 
+  /**
+   * Stable-Kanal (Beta-Gate zu): nur erkennen und victron.freezeSuspect setzen —
+   * kein Rückdatieren, kein Neuaufbau, kein Alarm, victron.freeze bleibt null.
+   * Liest nur der Netzstrom-Zähler (grid-share.js); ein Fehlalarm kostet dort
+   * höchstens eine ausgelassene Abbuchung.
+   */
+  function detectOnly(nowMs, opts) {
+    const stamps = { ...(state.victron?.fieldUpdatedAt || {}) };
+    const meterOk = state.meter?.ok === true;
+    const meterAt = Number(state.meter?.updatedAt || 0);
+    const { transition } = evaluateFreeze(fstate, buildSample(nowMs, stamps, meterOk, meterAt), opts);
+    prevStamps = stamps;
+    if (meterOk && meterAt > 0) prevMeterAt = meterAt;
+    if (transition === 'freeze') pushLog('telemetry_freeze_suspected', { reasons: fstate.reasons, fields: fstate.stalledFields }, 'warn');
+    if (transition === 'clear') pushLog('telemetry_freeze_suspect_cleared', {});
+    if (state.victron) {
+      state.victron.freeze = null;
+      state.victron.freezeSuspect = fstate.active
+        ? { active: true, reasons: [...fstate.reasons], since: new Date(fstate.since || nowMs).toISOString() }
+        : null;
+    }
+    return null;
+  }
+
   /** Ein Poll-Zyklus. Wirft nie. */
   function tick(nowMs = Date.now()) {
     const cfg = getCfg() || {};
     const opts = resolveFreezeOptions(cfg);
     // MQTT ist on-change (unveränderte Werte sind dort normal) → Wächter aus.
-    if (!opts.enabled || transport?.type !== 'modbus') {
+    if (!opts.detect || transport?.type !== 'modbus') {
       if (fstate.active) fstate = createFreezeState();
-      if (state.victron) state.victron.freeze = null;
+      if (state.victron) { state.victron.freeze = null; state.victron.freezeSuspect = null; }
       return null;
     }
+    if (!opts.enabled) return detectOnly(nowMs, opts);
+    if (state.victron) state.victron.freezeSuspect = null;
 
     // Stempel VOR dem eigenen Rückdatieren einfrieren (sonst hielte der Wächter
     // seine eigene Rückdatierung für einen fehlgeschlagenen Read).
