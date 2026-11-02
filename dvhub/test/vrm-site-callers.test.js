@@ -357,8 +357,10 @@ test('Auto-Nachimport: Netzfehler → geloggt und neu geplant, dann erfolgreich'
   };
   const logs = [];
   const scheduled = [];
+  const jobs = [];
+  const store = { ...gapStore(), async writeImportJob(j) { jobs.push(j); return jobs.length; } };
   const manager = createHistoryImportManager({
-    store: gapStore(), fetchImpl, waitImpl: async () => {},
+    store, fetchImpl, waitImpl: async () => {},
     log: (event, details) => logs.push({ event, details }),
     scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
     autoRetryDelaysMs: [1000, 2000],
@@ -376,6 +378,147 @@ test('Auto-Nachimport: Netzfehler → geloggt und neu geplant, dann erfolgreich'
   scheduled[0].fn();
   await flush();
   assert.equal(scheduled.length, 1, 'nach Erfolg nichts mehr geplant');
+  // Gegenprüfung 683fcb25 (P3): der Wiederholungslauf hat wirklich importiert.
+  assert.ok(jobs.length > 0, 'Import-Job nach der Wiederholung geschrieben');
+  assert.equal(logs.filter((l) => l.event === 'history_auto_backfill_error').length, 1);
+});
+
+test('Auto-Nachimport: Wiederholungen enden nach autoRetryDelaysMs', async () => {
+  const fetchImpl = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); };
+  const logs = [];
+  const scheduled = [];
+  const manager = createHistoryImportManager({
+    store: gapStore(), fetchImpl, waitImpl: async () => {},
+    log: (event, details) => logs.push({ event, details }),
+    scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
+    autoRetryDelaysMs: [1000, 2000],
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-auto-end' } },
+  });
+  await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  await flush();
+  scheduled[0].fn(); await flush();
+  scheduled[1].fn(); await flush();
+  assert.deepEqual(scheduled.map((x) => x.ms), [1000, 2000]);
+  const errs = logs.filter((l) => l.event === 'history_auto_backfill_error');
+  assert.equal(errs.length, 3);
+  assert.equal(errs[2].details.retryInMs, null, 'letzter Versuch plant nichts mehr');
+});
+
+// Gegenprüfung 683fcb25 (P2): der Dienst liest die Konfiguration bei jedem
+// Gebrauch neu (getTelemetryConfig) — sonst liefen Wiederholungen mit gelöschten
+// Zugangsdaten weiter, und eine korrigierte Portal-/Site-ID wirkte erst nach Neustart.
+test('Auto-Nachimport: Zugang inzwischen entfernt → Wiederholung ruft VRM nicht mehr', async () => {
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); };
+  const scheduled = [];
+  const cfg = { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-auto-del' } };
+  let current = cfg;
+  const manager = createHistoryImportManager({
+    store: gapStore(), fetchImpl, waitImpl: async () => {},
+    scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
+    autoRetryDelaysMs: [1000],
+    getTelemetryConfig: () => current,
+  });
+  await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  await flush();
+  assert.equal(scheduled.length, 1);
+  const before = calls;
+  current = { historyImport: { enabled: false, provider: 'vrm', vrmPortalId: '' } }; // „Credentials entfernen“ = neues Objekt
+  scheduled[0].fn(); await flush();
+  assert.equal(calls, before, 'kein VRM-Aufruf mit gelöschtem Zugang');
+});
+
+test('History-Import: geänderte Portal-/Site-ID wirkt ohne Neustart (getTelemetryConfig)', async () => {
+  const { fetchImpl, calls } = fakeVrm();
+  let current = { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: 'deadbeef0003', vrmToken: 'tok-live' } };
+  const manager = createHistoryImportManager({ store: fakeStore(), fetchImpl, waitImpl: async () => {}, getTelemetryConfig: () => current });
+  await assert.rejects(manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' }));
+  current = { historyImport: { ...current.historyImport, vrmPortalId: PORTAL_ID } };
+  const r = await manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.ok(calls.includes(`/v2/installations/${SITE_ID}/stats`));
+  assert.equal(manager.getStatus().vrmPortalId, PORTAL_ID);
+});
+
+test('server.js gibt dem History-Import einen Konfigurations-Getter', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const call = src.match(/createHistoryImportManager\(\{[\s\S]*?\}\)/);
+  assert.match(call[0], /getTelemetryConfig:\s*\(\)\s*=>\s*cfg\.telemetry/);
+});
+
+// Gegenprüfung 683fcb25 (P3): Läuft beim Wiederholungstermin gerade ein anderer
+// Nachimport, wird derselbe Versuch verschoben statt still verworfen.
+test('Auto-Nachimport: Wiederholung trifft laufenden Nachimport → verschoben, nicht verloren', async () => {
+  let netDown = true;
+  const base = fakeVrm();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let holdStats = false;
+  const fetchImpl = async (url, opts) => {
+    const u = new URL(url);
+    if (u.hostname === 'vrmapi.victronenergy.com' && netDown) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+    if (holdStats && u.pathname.endsWith('/stats')) await gate;
+    return base.fetchImpl(url, opts);
+  };
+  const logs = [];
+  const scheduled = [];
+  const manager = createHistoryImportManager({
+    store: gapStore(), fetchImpl, waitImpl: async () => {},
+    log: (event, details) => logs.push({ event, details }),
+    scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
+    autoRetryDelaysMs: [1000],
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-busy' } },
+  });
+  await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  await flush();
+  netDown = false;
+  holdStats = true;
+  const manual = manager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
+  await flush();
+  scheduled[0].fn(); await flush();
+  assert.equal(scheduled.length, 2, 'derselbe Versuch neu eingeplant');
+  assert.equal(scheduled[1].ms, 1000);
+  assert.ok(logs.some((l) => l.event === 'history_auto_backfill_deferred'));
+  release();
+  await manual;
+});
+
+// Gegenprüfung 683fcb25 (P3): Zeitlimit = wiederholbar, kaputtes JSON nicht.
+test('History-Import: Zeitlimit beim /stats-Abruf → wiederholt', async () => {
+  const base = fakeVrm();
+  let timedOut = false;
+  const fetchImpl = async (url, opts) => {
+    if (!timedOut && new URL(url).pathname.endsWith('/stats')) {
+      timedOut = true;
+      throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    }
+    return base.fetchImpl(url, opts);
+  };
+  const manager = createHistoryImportManager({
+    store: fakeStore(), fetchImpl, waitImpl: async () => {},
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-timeout' } },
+  });
+  const r = await manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+});
+
+test('History-Import: kaputtes JSON bei /stats → kein Wiederholen', async () => {
+  const base = fakeVrm();
+  let statsCalls = 0;
+  const fetchImpl = async (url, opts) => {
+    if (new URL(url).pathname.endsWith('/stats')) {
+      statsCalls += 1;
+      return { ok: true, status: 200, async json() { throw new SyntaxError('Unexpected token <'); } };
+    }
+    return base.fetchImpl(url, opts);
+  };
+  const manager = createHistoryImportManager({
+    store: fakeStore(), fetchImpl, waitImpl: async () => {},
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-json' } },
+  });
+  await assert.rejects(manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' }), SyntaxError);
+  assert.equal(statsCalls, 1);
 });
 
 test('Auto-Nachimport: dauerhafter Fehler (Portal-ID nicht im Konto) → geloggt, nicht neu geplant', async () => {

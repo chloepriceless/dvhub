@@ -2278,7 +2278,9 @@ const telemetryReady = (async () => {
   }) : null;
   historyImportManager = telemetryStore ? createHistoryImportManager({
     store: telemetryStore,
-    telemetryConfig: cfg.telemetry || {},
+    // Getter statt Schnappschuss: gespeicherte Zugangsdaten/Portal-ID wirken
+    // ohne Neustart, entfernte werden nicht weiter benutzt.
+    getTelemetryConfig: () => cfg.telemetry || {},
     getEpexConfig: () => cfg.epex || {},
     // Echte Pausen (vorher No-op, Gegenprüfung 6f05ca48): bis zu 3 Versuche mit
     // 1 s/2 s Abstand bei 429/5xx/Netzfehler (VRM-Auflösung und /stats) und

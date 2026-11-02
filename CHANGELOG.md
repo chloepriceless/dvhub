@@ -91,7 +91,9 @@ verweist hierher.
   abgelehnten Abruf ins Log statt ihn still zu übergehen. VRM-Abrufe der Historie warten bei Netz- oder
   Serverfehlern jetzt wirklich zwischen den Versuchen (die Pausen waren wirkungslos) und haben ein Zeitlimit;
   scheitert der automatische Nachimport beim Start (z. B. Internet noch nicht da), steht das im Log
-  (`history_auto_backfill_error`) und DVhub versucht es nach 5, 15 und 60 Minuten erneut.
+  (`history_auto_backfill_error`) und DVhub versucht es nach 5, 15 und 60 Minuten erneut. Eine gespeicherte
+  Portal-/Site-ID oder ein neues Token gilt für Historien-Import und Nachimport sofort, nicht erst nach einem
+  Neustart.
 
 - **Datenspende-Einrichtung: Fehler ohne erkennbaren Schritt (#31).** Scheiterte die Einrichtung (z. B. mit
   „400 bad_request: Invalid input format: null“), stand weder im Log noch in der Oberfläche, ob Konto, Haushalt,

@@ -1365,6 +1365,9 @@ async function resolveVrmSiteIdWithRetry({
 export function createHistoryImportManager({
   store,
   telemetryConfig = {},
+  // Aktuelle Konfiguration bei jedem Gebrauch lesen (server.js) — ein beim Start
+  // übergebenes Objekt veraltet beim nächsten Speichern (Gegenprüfung 683fcb25).
+  getTelemetryConfig = null,
   getEpexConfig = () => ({}),
   fetchImpl = globalThis.fetch,
   waitImpl = async () => {},
@@ -1373,9 +1376,10 @@ export function createHistoryImportManager({
   autoRetryDelaysMs = VRM_AUTO_BACKFILL_RETRY_DELAYS_MS
 }) {
   let vrmBackfillPromise = null;
+  const currentTelemetryConfig = () => (typeof getTelemetryConfig === 'function' ? getTelemetryConfig() : telemetryConfig) || {};
 
   function getStatus() {
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = currentTelemetryConfig().historyImport || {};
     const provider = 'vrm';
     const ready = Boolean(importConfig.vrmPortalId && importConfig.vrmToken);
 
@@ -1399,7 +1403,7 @@ export function createHistoryImportManager({
   }
 
   async function listCompletedCoverageRanges({ start, end }) {
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = currentTelemetryConfig().historyImport || {};
     const rows = typeof store.listImportJobRanges === 'function'
       ? await store.listImportJobRanges({
         jobTypes: VRM_COVERAGE_JOB_TYPES,
@@ -1484,7 +1488,7 @@ export function createHistoryImportManager({
   async function fetchConfiguredVrmRows({ start, end, interval = VRM_HISTORY_INTERVAL }) {
     const validation = validateConfiguredVrmImport({ start, end, requireRange: true });
     if (!validation.ok) return validation;
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = currentTelemetryConfig().historyImport || {};
     const normalizedRange = normalizeVrmRange({ start, end, interval });
     const normalizedInterval = normalizedRange.interval;
     const normalizedStart = normalizedRange.start;
@@ -1569,7 +1573,7 @@ export function createHistoryImportManager({
     }
 
     await store.writeSamples(allRows);
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = currentTelemetryConfig().historyImport || {};
     const jobId = await store.writeImportJob({
       jobType: 'vrm_history_import',
       status: 'completed',
@@ -1676,7 +1680,7 @@ export function createHistoryImportManager({
       });
     }
 
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = currentTelemetryConfig().historyImport || {};
     const jobId = await store.writeImportJob({
       jobType: 'vrm_history_full_backfill',
       status: 'completed',
@@ -1776,7 +1780,7 @@ export function createHistoryImportManager({
       }
     }
 
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = currentTelemetryConfig().historyImport || {};
     const status = emptyWindows > 0 ? 'completed_with_gaps' : 'completed';
     const jobId = await store.writeImportJob({
       jobType: 'vrm_history_gap_backfill',
@@ -1844,7 +1848,8 @@ export function createHistoryImportManager({
     if (!status.enabled || !status.ready || vrmBackfillPromise) {
       return {
         ok: false,
-        started: false
+        started: false,
+        busy: Boolean(status.enabled && status.ready && vrmBackfillPromise)
       };
     }
     const autoNow = startOfUtcDayIso(options.now || new Date());
@@ -1872,11 +1877,18 @@ export function createHistoryImportManager({
           retryInMs
         }, { severity: 'warn' });
         if (retryInMs != null) {
-          scheduleImpl(() => {
-            startAutomaticBackfill({ ...options, autoAttempt: autoAttempt + 1 }).catch((e) => {
+          const retry = () => {
+            startAutomaticBackfill({ ...options, autoAttempt: autoAttempt + 1 }).then((r) => {
+              // Läuft gerade ein anderer Nachimport: denselben Versuch verschieben.
+              if (r?.busy) {
+                log('history_auto_backfill_deferred', { attempt: autoAttempt + 2, retryInMs }, { severity: 'info' });
+                scheduleImpl(retry, retryInMs);
+              }
+            }, (e) => {
               log('history_auto_backfill_error', { error: e?.message || String(e), attempt: autoAttempt + 2, retryInMs: null }, { severity: 'warn' });
             });
-          }, retryInMs);
+          };
+          scheduleImpl(retry, retryInMs);
         }
         return { ok: false, auto: true, error: error?.message || String(error) };
       })
