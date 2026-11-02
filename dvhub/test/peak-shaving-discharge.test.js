@@ -149,13 +149,14 @@ test('Sperre unbekannt (kein Write, Register antwortet nicht): nichts', async ()
   assert.deepEqual(maxDischargeWrites(transport), []);
 });
 
-test('Peak Shaving aus: 2704 wird gar nicht gelesen', async () => {
+test('Peak Shaving aus: die Entladegrenze (2704/2720) wird gar nicht gelesen', async () => {
   const cfg = loadVictronConfig({});
   const state = makeTelemetryState({ soc: 60, importW: 14000 });
   const transport = makeModbusTransport({ 2704: 0 });
   const { evaluator } = makeEvaluator({ cfg, state, transport });
   await ticks(evaluator, 3);
-  assert.deepEqual(transport.reads.filter((r) => r.address === 2704), []);
+  // Entladegrenze steht in 2720 (int32) bzw. 2704 — keins von beiden wird gelesen.
+  assert.deepEqual(transport.reads.filter((r) => r.address === 2704 || r.address === 2720), []);
 });
 
 test('von Hand erweitertes Profil (Poll-Punkt 2704) veraltet: zählt nicht als Sperre', async () => {
@@ -435,14 +436,16 @@ test('[563da829 P3] Rücklesung zeigt noch den Wert vor dem eigenen Write: zähl
   assert.equal(state.ctrl._peakShaving.discharge.liftedW, 5200);
 });
 
-test('[563da829 P3] nach Ausschalten und Rückkehr zur Sperre wird 2704 nicht mehr gelesen', async () => {
+test('[563da829 P3] nach Ausschalten und Rückkehr zur Sperre wird die Entladegrenze nicht mehr gelesen', async () => {
   const { evaluator, transport, cfg } = await liftedHarness();
   cfg.peakShaving.enabled = false;
   await ticks(evaluator, 1);
   assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 0]);
-  const before = transport.reads.filter((r) => r.address === 2704).length;
+  const capReads = () => transport.reads.filter((r) => r.address === 2704 || r.address === 2720).length;
+  const before = capReads();
+  assert.ok(before > 0, 'vorher wurde die Entladegrenze gelesen');
   await ticks(evaluator, 3);
-  assert.equal(transport.reads.filter((r) => r.address === 2704).length, before);
+  assert.equal(capReads(), before);
 });
 
 test('[fa328b3a P2] 2704 steht später wieder auf 0 (Sperre von außen): nicht ewig „freigegeben“, sondern neu freigeben', async () => {
