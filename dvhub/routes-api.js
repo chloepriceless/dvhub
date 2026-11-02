@@ -6,7 +6,6 @@ import { effectiveInverterCurve } from './services/inverter-efficiency/calibrato
 import { createHeavyQueue, SKIPPED as HEAVY_SKIPPED } from './services/heavy-queue.js';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
-import { once } from 'node:events';
 import { pipeline } from 'node:stream';
 import { STREAM_BUCKET_SECONDS } from './telemetry-store-pg.js';
 import http from 'node:http';
@@ -867,7 +866,31 @@ export function createApiRoutes(ctx) {
   // Gestreamte Explorer-Reihen: je Strom nur ein 6-h-Fenster im Speicher,
   // trotzdem höchstens zwei gleichzeitig (DB-Last).
   const seriesQueue = createHeavyQueue({ max: 2 });
+  // Eigene Schlange für den nicht gestreamten Weg (Gegenprüfung 7d1196cc):
+  // hängende Ströme dürfen die kurze Abfrage (z. B. SoC-Linie im Explorer)
+  // nicht blockieren.
+  const seriesFlatQueue = createHeavyQueue({ max: 2 });
+  // Ein Strom-Client, der 60 s nichts abnimmt, wird getrennt.
+  const STREAM_DRAIN_TIMEOUT_MS = 60_000;
 
+  // true bei 'drain', false bei Trennen/Fehler oder nach STREAM_DRAIN_TIMEOUT_MS.
+  function waitForDrain(out, res) {
+    return new Promise((resolve) => {
+      const onDrain = () => done(true);
+      const onGone = () => done(false);
+      const timer = setTimeout(onGone, STREAM_DRAIN_TIMEOUT_MS);
+      function done(ok) {
+        clearTimeout(timer);
+        out.removeListener?.('drain', onDrain);
+        out.removeListener?.('error', onGone);
+        res.removeListener?.('close', onGone);
+        resolve(ok);
+      }
+      out.once('drain', onDrain);
+      out.once('error', onGone);
+      res.once?.('close', onGone);
+    });
+  }
   async function streamTelemetrySeries(req, res, { keys, start, end, bucketSec }) {
     const gone = () => req.destroyed || res.destroyed || req.socket?.destroyed;
     const iter = ctx.telemetryStore.iterateSeriesBuckets({ seriesKeys: keys, start, end, bucketSec });
@@ -892,7 +915,14 @@ export function createApiRoutes(ctx) {
           chunk += (total ? ',' : '') + JSON.stringify(row);
           total += 1;
         }
-        if (chunk && !out.write(chunk)) await once(out, 'drain');
+        // Gegenprüfung 7d1196cc (P1): nicht nur auf 'drain' warten — trennt der
+        // Client, kommt es nie, und der Warteschlangen-Platz blieb für immer belegt.
+        if (chunk && !out.write(chunk) && !(await waitForDrain(out, res))) {
+          await iter.return();
+          out.destroy?.();
+          if (out !== res) res.destroy?.();
+          return;
+        }
       }
       if (!out) return json(res, 200, { ok: true, keys, start, end, resolution: bucketSec, total: 0, data: [] });
       out.end(`],"total":${total}}`);
@@ -7044,7 +7074,7 @@ export function createApiRoutes(ctx) {
         return;
       }
       try {
-        const rows = await seriesQueue.run({ req, res }, () => ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes, bucketSec }));
+        const rows = await seriesFlatQueue.run({ req, res }, () => ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes, bucketSec }));
         if (rows === HEAVY_SKIPPED) return; // Client schon weg
         return json(res, 200, { ok: true, keys, start, end, total: rows.length, data: rows });
       } catch (e) {

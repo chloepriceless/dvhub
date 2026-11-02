@@ -1303,3 +1303,38 @@ describe('H-0003 Gegenprüfung: /api/telemetry/series begrenzt', () => {
     assert.equal(iterated, 1);
   });
 });
+
+// Gegenprüfung 7d1196cc (P1): ein Strom-Client, der trennt, während der Server
+// auf 'drain' wartet, hielt seinen Warteschlangen-Platz für immer — und seit
+// 7d1196cc wartete der nicht gestreamte Weg in derselben Schlange.
+describe('H-0003 Gegenprüfung: hängende Ströme blockieren nichts', () => {
+  it('Trennen während des Wartens auf drain beendet den Strom; ungestreamte Abfragen laufen trotzdem', async () => {
+    const { EventEmitter } = await import('node:events');
+    const ctx = mockCtx({ telemetryStore: {
+      querySeries: async () => [],
+      async *iterateSeriesBuckets() { yield [{ key: 'a', ts: 't', value: 1 }]; yield [{ key: 'a', ts: 't2', value: 2 }]; },
+    } });
+    const routes = createApiRoutes(ctx);
+    const stuck = () => {
+      const res = new EventEmitter();
+      Object.assign(res, { headersSent: false, writeHead() { this.headersSent = true; }, setHeader() {}, write() { return false; }, end() {}, destroy() { this.destroyed = true; } });
+      return res;
+    };
+    const sp = '/api/telemetry/series?keys=a&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=5';
+    const r1 = stuck(); const r2 = stuck();
+    const p1 = routes.handleRequest(makeReq('GET', sp), r1, new URL(`http://localhost${sp}`));
+    const p2 = routes.handleRequest(makeReq('GET', sp), r2, new URL(`http://localhost${sp}`));
+    await new Promise((r) => setTimeout(r, 50));
+    // Ungestreamt kommt trotz zweier hängender Ströme durch.
+    const flat = '/api/telemetry/series?keys=a&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=900';
+    const res = mockRes();
+    await Promise.race([
+      routes.handleRequest(makeReq('GET', flat), res, new URL(`http://localhost${flat}`)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('ungestreamte Abfrage hängt')), 2000)),
+    ]);
+    assert.equal(res._captured.status, 200);
+    // Trennen: die Ströme enden statt ewig auf drain zu warten.
+    r1.emit('close'); r2.emit('close');
+    await Promise.race([Promise.all([p1, p2]), new Promise((_, rej) => setTimeout(() => rej(new Error('Strom hängt nach close')), 2000))]);
+  });
+});
