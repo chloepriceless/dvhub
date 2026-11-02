@@ -547,21 +547,19 @@ describe('Relay-Speicher: Ausgangspuffer', () => {
     }
   });
 
-  test('so viele größte Box-Antworten, wie die Box gleichzeitig beantwortet, plus Live-Werte dürfen warten (Gegenprüfung 67ede79a/7a5c7e49 P3)', async () => {
-    const fs = await import('node:fs');
-    const agentSrc = fs.readFileSync(path.join(here, '..', 'services', 'mobile-link', 'agent.js'), 'utf8');
-    const parallel = Number(/MAX_PARALLEL_REQUESTS = (\d+)/.exec(agentSrc)?.[1]);
-    assert.ok(parallel >= 1, 'MAX_PARALLEL_REQUESTS nicht gefunden');
+  test('Rückstau je Verbindung: vier größte Antworten plus Live-Werte gehen, ein fünfter größter Rahmen trennt (Gegenprüfung 67ede79a/7a5c7e49/9237ab50 P3)', () => {
     const guard = relayCore.createSocketGuard({ stallMs: 1e9 });
     try {
       const w = fakeWs();
       const s = guard.wrap(w, { remote: 'A', pingMs: 0 });
       // Größter weitergeleiteter Rahmen: Box-Rahmen bis 1 MiB + Spielraum.
       const max = JSON.stringify({ t: 'data', d: 'A'.repeat(DEFAULT_LIMITS.boxFrameBytes + relayCore.FRAME_SLACK - 20) });
-      for (let i = 0; i < parallel; i++) s.send(max);
+      for (let i = 0; i < 4; i++) s.send(max);
       for (let i = 0; i < 10; i++) s.send(JSON.stringify({ t: 'data', d: 'L'.repeat(8 * 1024) }));
-      assert.equal(w.terminated, false, 'gesundes Handy bei voller Parallelität getrennt');
-      w.flush();
+      assert.equal(w.terminated, false, 'vier größte Antworten trennen ein gesundes Handy');
+      s.send(max);
+      assert.equal(w.terminated, true, 'fünfter größter Rahmen im Rückstau nicht getrennt');
+      assert.equal(guard.stats().outBufferedBytes, 0);
     } finally {
       guard.close();
     }

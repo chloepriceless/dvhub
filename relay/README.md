@@ -83,7 +83,7 @@ fremden Meldungen. Neue Anlagen-Briefkästen je Quelle: 16 sofort, dann einer je
 Minute.
 
 Puffer am WebSocket (`SOCKET_LIMITS`): noch nicht abgeholte Ausgaben höchstens
-gut 4 MiB je Verbindung (vier größte Rahmen samt Köpfen, so viele Anfragen beantwortet die Box gleichzeitig), 8 MiB je Quelle, 32 MiB gesamt; angefangene Rahmen
+gut 4 MiB je Verbindung (gewählter Rückstau: vier größte Rahmen samt Köpfen; ein fünfter trennt), 8 MiB je Quelle, 32 MiB gesamt; angefangene Rahmen
 höchstens 4 MiB je Quelle, 32 MiB gesamt. Vor der Anmeldung sind nur Rahmen bis
 8 KiB erlaubt, danach je Rolle (Gerät 256 KiB, Anlage 1 MiB). Reicht ein Budget
 nicht, wird die Verbindung mit dem größten Rückstand getrennt; wer keinen
