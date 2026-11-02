@@ -666,18 +666,27 @@ describe('mobile-link Ende zu Ende', () => {
       deliver({ t: 'error', e: 'relay_full', dev: creds.devId });
       b.agent._pushMailboxLatest();
       assert.equal(events().length, 3);
-      // Warteschlange je Gerät höchstens 8: älteste fallen heraus.
+      // Warteschlange je Gerät höchstens 8: älteste fallen heraus. Inhalte
+      // entschlüsselt prüfen (der Nonce macht jede Ablage verschieden).
+      const mk = fromB64u(creds.mailboxKey, 32);
+      const alarmsOf = (m) => openMailbox(mk, creds.devId, m.d).alarmsActive;
       const last = events()[2];
+      assert.equal(alarmsOf(last), 0);
       deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: last.ref });
-      for (let i = 0; i < 10; i++) { alarms = (alarms + 1) % 2; b.agent._checkEvents(); }
+      for (let i = 1; i <= 10; i++) { alarms = i; b.agent._checkEvents(); } // reiht 1..10 hinter `last` ein
       assert.equal(events().length, 3);
       b.agent._pushMailboxLatest();
-      assert.equal(events().length, 3 + 8, 'Warteschlange nicht auf 8 begrenzt');
-      // Herausgefallen sind die ältesten (das abgelehnte `last` und die zwei
-      // ersten neuen) — die acht neuesten kommen.
       const replay = events().slice(3);
-      assert.ok(!replay.some((m) => m.d === last.d), 'ältestes Ereignis statt neuestem behalten');
-      assert.equal(new Set(replay.map((m) => m.d)).size, 8);
+      assert.deepEqual(replay.map(alarmsOf), [3, 4, 5, 6, 7, 8, 9, 10], 'nicht die acht neuesten in Reihenfolge');
+      // Überlauf beim erneuten Einreihen (requeueEvent): Ablehnung von 3, dann
+      // stellen sich 11..17 an (8), dann kommt die Ablehnung von 4 → das
+      // älteste (3) fällt heraus.
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: replay[0].ref });
+      for (let i = 11; i <= 17; i++) { alarms = i; b.agent._checkEvents(); }
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, ref: replay[1].ref });
+      const n0 = events().length;
+      b.agent._pushMailboxLatest();
+      assert.deepEqual(events().slice(n0).map(alarmsOf), [11, 12, 13, 14, 15, 16, 17, 4]);
     } finally {
       b.agent.stop();
     }
