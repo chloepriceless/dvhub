@@ -238,7 +238,9 @@ test('P3: Lizenz-Meldung baut ntfy mit derselben Adressprüfung', async () => {
   assert.equal(createProviderFromConfig('ntfy', { topicUrl: 'https://ntfy.sh/x' }).type, 'ntfy');
   // Leer = nicht eingerichtet, nicht „nicht erlaubt“ (Prod-Test 02.11.2026).
   assert.throws(() => createProviderFromConfig('ntfy', { topicUrl: '' }), /requires topicUrl/);
-  assert.throws(() => createProviderFromConfig('ntfy', { topicUrl: '   ' }), /requires topicUrl/);
+  for (const topicUrl of ['   ', false, 0, null]) {
+    assert.throws(() => createProviderFromConfig('ntfy', { topicUrl }), /requires topicUrl/, String(topicUrl));
+  }
   const src = (await import('node:fs')).readFileSync(new URL('../services/license/index.js', import.meta.url), 'utf8');
   assert.match(src, /createProviderFromConfig\(name, pCfg\)/);
   assert.doesNotMatch(src, /const provider = factory\(pCfg\)/);
