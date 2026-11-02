@@ -1717,6 +1717,11 @@ export function createScheduleEvaluator(ctx) {
       state.ctrl._dcExportLogged = false;
     }
 
+    // Halte-Signal für den Entlade-Wächter (services/setpoint-follow-watchdog.js):
+    // der Halte-Zweig unten trägt sich hier ein; nach der Schleife ersetzt es das
+    // Signal des letzten Takts (null, wenn keine Halteregel lief). Eigenes Feld,
+    // weil die Quelle danach noch wechseln kann (negativer Preis → Pflichtquelle).
+    let eosGridHoldThisTick = null;
     for (const target of ['gridSetpointW', 'chargeCurrentA']) {
       const eff = effectiveTargetValue(target);
       if (eff.value == null) continue;
@@ -1794,6 +1799,7 @@ export function createScheduleEvaluator(ctx) {
         const holdW = known ? Math.max(0, Math.round(netLoadW - marginW)) : 0;
         eff.value = holdW;
         eff.source = 'eos_grid_hold';
+        eosGridHoldThisTick = { at: Date.now(), known, valueW: holdW, evPlanned: !!eff.rule.evPlanned, ruleId: eff.rule.id ?? null };
         const key = `${eff.rule.id}:${known}`;
         if (state.ctrl._eosHoldKey !== key) {
           pushLog('eos_grid_hold', { known, loadW: known ? Math.round(Number(loadRaw)) : null, pvW: known ? Math.round(Number(pvRaw) || 0) : null, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });
@@ -1948,6 +1954,7 @@ export function createScheduleEvaluator(ctx) {
 
       await applyControlTarget(target, eff.value, eff.source);
     }
+    state.ctrl.eosGridHold = eosGridHoldThisTick;
 
     // Peak Shaving Hebel 2 (Akku-Sperre bei Bezugsspitze). Läuft auch bei
     // ausgeschaltetem Feature: eine noch stehende Freigabe wird dann

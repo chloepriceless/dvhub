@@ -1178,6 +1178,48 @@ test('Akku halten: veraltete Hauslast → 0 (Eigenverbrauch), kein blinder Netzb
   assert.equal(Number(state.schedule.active.gridSetpointW.value), 0);
 });
 
+// Entlade-Wächter (Gegenprüfung 415a2f25): der Halte-Zweig meldet sich selbst
+// in state.ctrl.eosGridHold — auch wenn der Sollwert danach umgeschrieben wird
+// (negativer Preis), und mit `known`, damit der Wächter „Last unbekannt →
+// Eigenverbrauch“ nicht als Halten wertet.
+test('Akku halten: Halte-Signal für den Entlade-Wächter (known, Wert)', async () => {
+  const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const hold = state.ctrl.eosGridHold;
+  assert.ok(hold, 'Signal fehlt');
+  assert.equal(hold.known, true);
+  assert.equal(hold.valueW, 1000);
+  assert.ok(Date.now() - hold.at < 5000);
+});
+
+test('Akku halten: veraltete Hauslast → Signal mit known=false', async () => {
+  const { ctx, state } = holdCtx({ load: 3000, stale: true });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.ctrl.eosGridHold?.known, false);
+});
+
+test('Akku halten bei negativem Preis: Quelle wird negative_price_protection, das Halte-Signal bleibt', async () => {
+  const { ctx, state } = holdCtx({ load: 1500, pv: 6000 });
+  ctx.getCfg().dvControl = { enabled: false, negativePriceProtection: { enabled: true, gridSetpointW: -40 } };
+  ctx.epexNowNext = () => ({ current: { ct_kwh: -2, eur_mwh: -20 }, next: null });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.schedule.active.gridSetpointW?.source, 'negative_price_protection');
+  assert.equal(state.ctrl.eosGridHold?.known, true);
+});
+
+test('ohne Halteregel kein Halte-Signal (auch ein altes wird gelöscht)', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      state.victron.soc = 60;
+      state.schedule.rules = [{ id: 'm', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -100 }];
+      cfg.optimizer = { enabled: false, allowGridCharge: false, allowGridDischarge: true };
+    }
+  });
+  state.ctrl.eosGridHold = { at: Date.now(), known: true, valueW: 500 };
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.ctrl.eosGridHold, null);
+});
+
 test('Netzlade-Sperre bleibt fuer andere positive Sollwerte bestehen', async () => {
   const { ctx, state, logs } = makeCtx({
     mutate: ({ state, cfg }) => {

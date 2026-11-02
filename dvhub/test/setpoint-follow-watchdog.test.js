@@ -207,8 +207,9 @@ function runIncident({ holdSource, socLimitPct = null } = {}) {
   for (let t = 0; t <= OPTS.holdMs * 2; t += 5000) {
     const now = T0 + t;
     const s = INCIDENT_1031[(t / 5000) % 2];
-    // Die Auswertung (schedule-eval) frischt den aktiven Eintrag jeden Takt auf.
+    // Die Auswertung (schedule-eval) frischt Quelle und Halte-Signal jeden Takt auf.
     state.schedule.active.gridSetpointW = { value: s.setpointW, source: holdSource, at: now };
+    state.ctrl = holdSource === 'eos_grid_hold' ? { eosGridHold: { at: now, known: true, valueW: Math.max(0, s.setpointW) } } : {};
     Object.assign(state.victron, {
       gridSetpointW: s.setpointW, gridImportW: s.netImportW, batteryPowerW: s.batteryW, soc: s.soc,
       fieldUpdatedAt: { gridSetpointW: now, batteryPowerW: now, soc: now, ...(socLimitPct != null ? { activeSocLimitPct: now } : {}) }
@@ -271,7 +272,8 @@ test('veraltetes Halte-Signal oder veraltete SoC-Grenze entschuldigen nichts', (
     meter: { ok: true },
     victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5, activeSocLimitPct: 80 },
     // Letzte Halteregel liegt Stunden zurück (Auswertung steht) — kein Freibrief.
-    schedule: { active: { gridSetpointW: { value: 0, source: 'eos_grid_hold', at: T0 - 3 * 3600000 } } }
+    schedule: { active: { gridSetpointW: { value: 0, source: 'eos_grid_hold', at: T0 - 3 * 3600000 } } },
+    ctrl: { eosGridHold: { at: T0 - 3 * 3600000, known: true, valueW: 0 } }
   };
   const watchdog = createSetpointFollowWatchdog({
     state, getCfg: () => ({}), pushLog: () => {},
@@ -286,15 +288,13 @@ test('veraltetes Halte-Signal oder veraltete SoC-Grenze entschuldigen nichts', (
   assert.equal(sent.length, 1);
 });
 
-test('Entlade-Sperre ohne Rücklese-Register: DVhubs eigener Schreibwert 2704 = 0 zählt', () => {
-  // Prod-Profil liest 2704 nicht zurück (victron.maxDischargeW bleibt null);
-  // ein manuelles / geplantes „Halten“ (maxDischargeW 0) kennt DVhub dann nur
-  // aus dem eigenen Schreibvorgang.
+test('Entlade-Sperre 2704 = 0: Rücklesung oder frischer eigener Schreibwert → kein Alarm', () => {
+  // Rücklesung (Profil mit Poll-Punkt 2704 oder Peak-Shaving-Rücklesung).
   const sent = [];
   const state = {
     meter: { ok: true },
-    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5, maxDischargeW: null },
-    schedule: { active: {}, lastWrite: { maxDischargeW: { value: 0, source: 'schedule', at: T0 } } }
+    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5, maxDischargeW: 0, errors: {} },
+    schedule: { active: {} }
   };
   const watchdog = createSetpointFollowWatchdog({
     state, getCfg: () => ({}), pushLog: () => {},
@@ -302,15 +302,22 @@ test('Entlade-Sperre ohne Rücklese-Register: DVhubs eigener Schreibwert 2704 = 
   });
   for (let t = 0; t <= OPTS.holdMs * 2; t += 5000) {
     const now = T0 + t;
-    state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now };
+    state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now, maxDischargeW: now };
     watchdog.tick(now);
   }
   assert.equal(sent.length, 0);
 });
 
+test('knownDischargeCapW: eigener Schreibwert ohne Rücklesung nur frisch', async () => {
+  const { knownDischargeCapW } = await import('../services/setpoint-follow-watchdog.js');
+  const state = { victron: { maxDischargeW: null }, schedule: { lastWrite: { maxDischargeW: { value: 0, source: 'api', at: T0 } } } };
+  assert.equal(knownDischargeCapW(state, {}, T0 + 60000), 0);
+  assert.equal(knownDischargeCapW(state, {}, T0 + 3 * 3600000), null);
+});
+
 test('Halte-Signal: Frischegrenze wächst mit einem langsamen Auswertungstakt', async () => {
   const { activeDischargeHold, HOLD_SIGNAL_MAX_AGE_MS } = await import('../services/setpoint-follow-watchdog.js');
-  const state = { schedule: { active: { gridSetpointW: { value: 0, source: 'eos_grid_hold', at: T0 } } } };
+  const state = { ctrl: { eosGridHold: { at: T0, known: true, valueW: 0 } } };
   // Standardtakt (15 s): 200 s alt ist zu alt.
   assert.equal(activeDischargeHold(state, T0 + 200000), null);
   assert.equal(activeDischargeHold(state, T0 + HOLD_SIGNAL_MAX_AGE_MS), 'eos_grid_hold');
@@ -318,9 +325,19 @@ test('Halte-Signal: Frischegrenze wächst mit einem langsamen Auswertungstakt', 
   const slow = { schedule: { evaluateMs: 300000 } };
   assert.equal(activeDischargeHold(state, T0 + 200000, slow), 'eos_grid_hold');
   assert.equal(activeDischargeHold(state, T0 + 3 * 300000 + 1000, slow), null);
-  // Andere Quelle: nie ein Halten.
-  const other = { schedule: { active: { gridSetpointW: { value: -100, source: 'default', at: T0 } } } };
+  // Ohne Halte-Signal kein Halten, auch wenn die letzte Quelle eos_grid_hold hieß.
+  const other = { schedule: { active: { gridSetpointW: { value: 0, source: 'eos_grid_hold', at: T0 } } } };
   assert.equal(activeDischargeHold(other, T0), null);
+  // Last unbekannt → Eigenverbrauch, kein Halten.
+  assert.equal(activeDischargeHold({ ctrl: { eosGridHold: { at: T0, known: false, valueW: 0 } } }, T0), null);
+  // Peak Shaving hat den Halte-Wert gedeckelt: der Akku SOLL den Rest liefern.
+  const clamped = {
+    ctrl: {
+      eosGridHold: { at: T0, known: true, valueW: 14700 },
+      _peakShaving: { clamp: { requestedW: 14700, valueW: 9700, mode: 'target', source: 'eos_grid_hold', at: T0 } }
+    }
+  };
+  assert.equal(activeDischargeHold(clamped, T0), null);
 });
 
 // --- Vorfall 02.11.2026 10:50:24 UTC: Fehlalarm durch kurze Spitzen ---------
@@ -374,4 +391,59 @@ test('Fenster: nach einer Lücke ohne Messwerte zählt die alte Vorgeschichte ni
   // … danach 30 s auffällig: das ist kein 10-min-Bild.
   const start = 40000 + 20 * 60000;
   assert.deepEqual(feed(state, { fromMs: start, toMs: start + 30000, stepMs: 5000, sample: STUCK }), []);
+});
+
+test('eigener 2704-Schreibwert ohne Rücklesung zählt nur befristet (Gegenprüfung 415a2f25)', () => {
+  // 2704 = 0 über DVhub gesetzt, später an der GX wieder freigegeben; ohne
+  // Rücklesung darf der alte Schreibwert echte Alarme nicht ewig stummschalten.
+  const sent = [];
+  const state = {
+    meter: { ok: true },
+    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5, maxDischargeW: null },
+    schedule: { active: {}, lastWrite: { maxDischargeW: { value: 0, source: 'api', at: T0 - 3 * 3600000 } } }
+  };
+  const watchdog = createSetpointFollowWatchdog({
+    state, getCfg: () => ({}), pushLog: () => {},
+    notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
+  });
+  for (let t = 0; t <= OPTS.holdMs + 10000; t += 5000) {
+    const now = T0 + t;
+    state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now };
+    watchdog.tick(now);
+  }
+  assert.equal(sent.length, 1);
+});
+
+test('gewolltes Halten während eines Alarms: keine falsche Entwarnung (Gegenprüfung 415a2f25)', () => {
+  const state = createSetpointFollowState();
+  assert.deepEqual(feed(state, { toMs: OPTS.holdMs, stepMs: 5000, sample: STUCK }).map(([n]) => n), ['alarm']);
+  // 10 min „Akku halten“: der Akku steht gewollt — weder Entwarnung noch Erinnerung.
+  const from = OPTS.holdMs + 5000;
+  assert.deepEqual(feed(state, { fromMs: from, toMs: from + OPTS.holdMs, stepMs: 5000, sample: { ...STUCK, holdReason: 'eos_grid_hold' } }), []);
+  assert.equal(state.active, true);
+  // Danach entlädt er wirklich wieder → Entwarnung nach clearMs.
+  const back = from + OPTS.holdMs + 5000;
+  const ok = { ...STUCK, netImportW: -90, batteryW: -1900 };
+  assert.deepEqual(feed(state, { fromMs: back, toMs: back + OPTS.clearMs + 5000, stepMs: 5000, sample: ok }).map(([n]) => n), ['clear']);
+});
+
+test('tick(): langsamer Auswertungstakt (evaluateMs 300 s) hält das Halte-Signal gültig (Gegenprüfung 97cfa505)', () => {
+  const sent = [];
+  const state = {
+    meter: { ok: true },
+    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5 },
+    schedule: { active: {} },
+    ctrl: {}
+  };
+  const watchdog = createSetpointFollowWatchdog({
+    state, getCfg: () => ({ schedule: { evaluateMs: 300000 } }), pushLog: () => {},
+    notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
+  });
+  for (let t = 0; t <= OPTS.holdMs * 2; t += 5000) {
+    const now = T0 + t;
+    if (t % 300000 === 0) state.ctrl.eosGridHold = { at: now, known: true, valueW: 0 };
+    state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now };
+    watchdog.tick(now);
+  }
+  assert.equal(sent.length, 0);
 });

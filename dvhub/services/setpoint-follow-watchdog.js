@@ -43,16 +43,11 @@
 
 import { knownMaxDischargeW } from './peak-shaving/index.js';
 
-// So alt darf der Eintrag der Auswertung (state.schedule.active) höchstens
-// sein, damit eine Halteregel als „aktiv“ gilt — mindestens, bei langsamerem
-// Takt drei Takte (schedule.evaluateMs). Die Auswertung frischt ihn jeden Takt
-// auf (Standard 15 s); steht sie, entschuldigt ein alter Eintrag nichts.
+// So alt darf das Halte-Signal der Auswertung (state.ctrl.eosGridHold) bzw.
+// DVhubs eigener 2704-Schreibwert höchstens sein — mindestens, bei langsamerem
+// Takt drei Takte (schedule.evaluateMs). Die Auswertung erneuert das Signal
+// jeden Takt (Standard 15 s); steht sie, entschuldigt ein altes Signal nichts.
 export const HOLD_SIGNAL_MAX_AGE_MS = 120000;
-
-// Steuerquellen, mit denen DVhub den Akku bewusst nicht entladen lässt. Nur
-// eos_grid_hold gehört dazu: die Regel deckt die Last aus dem Netz, damit der
-// Akku stehen bleibt (schedule-eval „EOS Akku halten“).
-export const DISCHARGE_HOLD_SOURCES = new Set(['eos_grid_hold']);
 
 export const SETPOINT_FOLLOW_DEFAULTS = {
   enabled: true,
@@ -116,19 +111,58 @@ export function dischargeFloorPct(sample, opts) {
   return known.length ? Math.max(...known) : opts.fallbackMinSocPct;
 }
 
+function holdSignalMaxAgeMs(cfg) {
+  const evaluateMs = Number(cfg?.schedule?.evaluateMs);
+  return Math.max(HOLD_SIGNAL_MAX_AGE_MS, Number.isFinite(evaluateMs) && evaluateMs > 0 ? 3 * evaluateMs : 0);
+}
+
+function isFresh(at, nowMs, maxAgeMs) {
+  const t = Number(at);
+  return t > 0 && Math.abs(nowMs - t) <= maxAgeMs;
+}
+
 /**
- * Hält DVhub den Akku gerade selbst fest? Liefert die Steuerquelle oder null.
- * Grundlage ist der Eintrag, den die Auswertung zuletzt für gridSetpointW
- * geschrieben bzw. bestätigt hat (schedule-eval: state.schedule.active).
+ * Hält DVhub den Akku gerade selbst fest (EOS „Akku halten“)? Liefert
+ * 'eos_grid_hold' oder null. Quelle ist das Signal, das der Halte-Zweig in
+ * schedule-eval jeden Takt setzt (state.ctrl.eosGridHold) — nicht die zuletzt
+ * geschriebene Quelle, denn die wird z. B. bei negativem Preis zur Pflichtquelle.
+ * Kein Halten, wenn
+ *   • die Hauslast unbekannt war (Sollwert 0 = Eigenverbrauch, der Akku soll entladen),
+ *   • Peak Shaving den Halte-Wert gedeckelt hat (der Akku soll den Rest liefern).
  */
 export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}) {
-  const active = state?.schedule?.active?.gridSetpointW;
-  if (!active || !DISCHARGE_HOLD_SOURCES.has(String(active.source))) return null;
-  const at = Number(active.at);
-  const evaluateMs = Number(cfg?.schedule?.evaluateMs);
-  const maxAgeMs = Math.max(HOLD_SIGNAL_MAX_AGE_MS, Number.isFinite(evaluateMs) && evaluateMs > 0 ? 3 * evaluateMs : 0);
-  if (!(at > 0) || nowMs - at > maxAgeMs || at - nowMs > maxAgeMs) return null;
-  return String(active.source);
+  const hold = state?.ctrl?.eosGridHold;
+  const maxAgeMs = holdSignalMaxAgeMs(cfg);
+  if (!hold || hold.known !== true || !isFresh(hold.at, nowMs, maxAgeMs)) return null;
+  const clamp = state?.ctrl?._peakShaving?.clamp;
+  if (clamp && clamp.source === 'eos_grid_hold' && isFresh(clamp.at, nowMs, maxAgeMs)
+      && Number(clamp.valueW) < Number(clamp.requestedW)) return null;
+  return 'eos_grid_hold';
+}
+
+/**
+ * Entlade-Sperre 2704 in W, soweit belastbar bekannt: Rücklesung (Victron-
+ * Profil, sonst Peak-Shaving-Rücklesung); DVhubs eigener Schreibwert nur
+ * befristet — an der GX kann die Sperre längst wieder aufgehoben sein.
+ */
+export function knownDischargeCapW(state, cfg, nowMs = Date.now()) {
+  const known = knownMaxDischargeW(state, cfg, nowMs);
+  if (!known) return null;
+  if (known.from === 'own_write' && !isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return null;
+  return known.value;
+}
+
+/**
+ * Warum der Speicher gerade gewollt nicht entlädt — dann ist er nicht zu
+ * beurteilen. 'soc_floor' | 'hold' | 'discharge_block' | null.
+ */
+export function dischargeExcuse(sample, opts) {
+  const soc = Number(sample?.soc);
+  if (Number.isFinite(soc) && soc < dischargeFloorPct(sample, opts) + opts.socMarginPct) return 'soc_floor';
+  if (sample?.holdReason) return 'hold';
+  const maxDischargeW = sample?.maxDischargeW == null ? NaN : Number(sample.maxDischargeW);
+  if (Number.isFinite(maxDischargeW) && maxDischargeW >= 0 && maxDischargeW < opts.minShortfallW) return 'discharge_block';
+  return null;
 }
 
 /**
@@ -142,12 +176,8 @@ export function isRefusingDischarge(sample, opts) {
   const soc = Number(sample?.soc);
   if (sample?.setpointW == null || sample?.netImportW == null || sample?.batteryW == null || sample?.soc == null) return null;
   if (![setpointW, netImportW, batteryW, soc].every(Number.isFinite)) return null;
-  if (soc < dischargeFloorPct(sample, opts) + opts.socMarginPct) return false;
-  // Gewolltes Halten durch DVhub selbst (EOS „Akku halten“): kein Fehler.
-  if (sample.holdReason) return false;
-  // Eine gesetzte Entlade-Sperre ist gewollt, kein Fehler.
-  const maxDischargeW = sample.maxDischargeW == null ? NaN : Number(sample.maxDischargeW);
-  if (Number.isFinite(maxDischargeW) && maxDischargeW >= 0 && maxDischargeW < opts.minShortfallW) return false;
+  // Untergrenze erreicht, gewolltes Halten oder gesetzte Entlade-Sperre: kein Fehler.
+  if (dischargeExcuse(sample, opts)) return false;
   return netImportW >= opts.minImportW
     && (netImportW - setpointW) >= opts.minShortfallW
     && batteryW > -opts.idleW;
@@ -184,8 +214,11 @@ export function evaluateSetpointFollow(state, sample, opts) {
   const now = numOr(sample?.nowMs, Date.now());
   const refusing = isRefusingDischarge(sample, opts);
   let transition = null;
-  // refusing === null: Werte fehlen — Zustand unverändert lassen.
-  if (refusing === null) return { state, transition };
+  // refusing === null: Werte fehlen — Zustand unverändert lassen. Ebenso, wenn
+  // der Akku gewollt nicht entlädt (Untergrenze, Halten, Sperre): das ist weder
+  // ein Fehler noch ein Beleg, dass er wieder folgt — sonst käme mitten im
+  // Halten eine falsche Entwarnung (Gegenprüfung 415a2f25).
+  if (refusing === null || (refusing === false && dischargeExcuse(sample, opts))) return { state, transition };
 
   state.window ??= [];
   // Lücke (länger als maxAgeMs ohne beurteilbaren Punkt, z. B. Wächter ruhte
@@ -315,8 +348,8 @@ export function createSetpointFollowWatchdog(ctx) {
       activeSocLimitPct: live('activeSocLimitPct'),
       holdReason: activeDischargeHold(state, nowMs, cfg),
       // Entlade-Sperre (Reg. 2704): Rücklesung, sonst DVhubs eigener letzter
-      // Schreibwert — das Victron-Profil liest 2704 nicht in jedem Setup zurück.
-      maxDischargeW: knownMaxDischargeW(state, cfg, nowMs)?.value ?? null
+      // Schreibwert, dieser nur befristet.
+      maxDischargeW: knownDischargeCapW(state, cfg, nowMs)
     }, opts);
 
     const last = wstate.last || {};
