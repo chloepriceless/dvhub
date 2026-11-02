@@ -169,3 +169,74 @@ test('P3: Versand — ntfy mit interner Adresse wird nicht eingerichtet', async 
   await svc.start();
   assert.ok(logs.some((l) => l.e === 'notification_provider_error' && /topic_url_not_allowed/.test(l.d?.error || '')), JSON.stringify(logs));
 });
+
+// Gegenprüfung bca61061: (P2) Geschwister-Routen trugen den gespeicherten Wert
+// selbst weiter; (P2) Wallbox ohne Bindung; (P2) Rückfall-Ketten (Wetter-MQTT,
+// Kreuzprobe, victron.host); (P3) Lizenz-Meldung ohne ntfy-Adressprüfung.
+test('P2: /api/family/mqtt-config — neue Broker-Adresse, Passwort „***“ → nicht mitgenommen', async () => {
+  const raw = { mqtt: { brokerUrl: 'mqtt://192.168.1.10:1883', username: 'u', password: 'mqtt-geheim' } };
+  const a = routesWith(raw);
+  const r = await post(a.routes, '/api/family/mqtt-config', { brokerUrl: 'mqtt://attacker.example.net:1883', password: '***' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(a.saved.at(-1).mqtt.password, '');
+  assert.equal(a.saved.at(-1).mqtt.username, '');
+  const b = routesWith(JSON.parse(JSON.stringify(raw)));
+  await post(b.routes, '/api/family/mqtt-config', { brokerUrl: 'mqtt://192.168.1.10:1883', password: '***' });
+  assert.equal(b.saved.at(-1).mqtt.password, 'mqtt-geheim', 'gleicher Broker behält das Passwort');
+});
+
+test('P2: /api/integrations/evcc — neue Wallbox-Adresse lässt die Zugangsdaten nicht hängen', async () => {
+  const raw = { wallbox: { type: 'openevse', openevse: { url: 'http://192.168.1.30', username: 'oe', password: 'oe-geheim' }, wattpilot: { host: '192.168.1.31', password: 'wp-geheim' } } };
+  const a = routesWith(raw);
+  const r = await post(a.routes, '/api/integrations/evcc', { wallbox: { type: 'openevse', openevse: { url: 'http://attacker.example.net', password: '***' }, wattpilot: { host: '192.168.1.31', password: '***' } } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(a.saved.at(-1).wallbox.openevse.password, '');
+  assert.equal(a.saved.at(-1).wallbox.wattpilot.password, 'wp-geheim', 'unverändertes Ziel behält das Passwort');
+});
+
+test('P2: restoreRedacted — Wallbox-Zugangsdaten an ihre Adresse gebunden', () => {
+  const cur = { wallbox: { openevse: { url: 'http://192.168.1.30', username: 'oe', password: 'p' }, nrgkick: { host: '192.168.1.32', username: 'n', password: 'np' }, wattpilot: { host: '192.168.1.31', password: 'wp' } } };
+  const inc = JSON.parse(JSON.stringify(cur));
+  for (const k of ['openevse', 'nrgkick']) { inc.wallbox[k].username = '***'; inc.wallbox[k].password = '***'; }
+  inc.wallbox.wattpilot.password = '***';
+  inc.wallbox.openevse.url = 'http://attacker.example.net';
+  inc.wallbox.nrgkick.host = 'attacker.example.net';
+  inc.wallbox.wattpilot.host = 'attacker.example.net';
+  const out = restoreRedacted(inc, cur);
+  assert.equal(out.wallbox.openevse.password, '');
+  assert.equal(out.wallbox.nrgkick.password, '');
+  assert.equal(out.wallbox.wattpilot.password, '');
+});
+
+test('P2: restoreRedacted — Rückfall-Ketten: Wetter-Broker, Kreuzprobe, victron.host', () => {
+  const cur = {
+    mqtt: { brokerUrl: 'mqtt://192.168.1.10:1883', username: 'u', password: 'mqtt-geheim' },
+    forecast: { weather: { provider: 'mqtt', mqtt: { brokerUrl: '' } } },
+    victron: { host: '192.168.1.40', mqtt: { broker: '', username: 'v', password: 'gx-geheim' }, mqttCrossCheck: { broker: '' } },
+  };
+  const mask = (c) => { c.mqtt.username = '***'; c.mqtt.password = '***'; c.victron.mqtt.username = '***'; c.victron.mqtt.password = '***'; return c; };
+  let inc = mask(JSON.parse(JSON.stringify(cur)));
+  inc.forecast.weather.mqtt.brokerUrl = 'mqtt://attacker.example.net';
+  let out = restoreRedacted(inc, cur);
+  assert.equal(out.mqtt.password, '', 'Wetter nähme die allgemeinen Zugangsdaten zum neuen Broker mit');
+  inc = mask(JSON.parse(JSON.stringify(cur)));
+  inc.victron.mqttCrossCheck.broker = 'mqtts://attacker.example.net';
+  out = restoreRedacted(inc, cur);
+  assert.equal(out.victron.mqtt.password, '', 'Kreuzprobe nähme das GX-Passwort mit');
+  inc = mask(JSON.parse(JSON.stringify(cur)));
+  inc.victron.host = 'attacker.example.net';
+  out = restoreRedacted(inc, cur);
+  assert.equal(out.victron.mqtt.password, '', 'neuer victron.host = neuer Broker');
+  out = restoreRedacted(mask(JSON.parse(JSON.stringify(cur))), cur);
+  assert.equal(out.victron.mqtt.password, 'gx-geheim', 'nichts geändert → bleibt');
+  assert.equal(out.mqtt.password, 'mqtt-geheim');
+});
+
+test('P3: Lizenz-Meldung baut ntfy mit derselben Adressprüfung', async () => {
+  const { createProviderFromConfig } = await import('../services/notifications/index.js');
+  assert.throws(() => createProviderFromConfig('ntfy', { topicUrl: 'http://169.254.169.254/latest' }), /topic_url_not_allowed/);
+  assert.equal(createProviderFromConfig('ntfy', { topicUrl: 'https://ntfy.sh/x' }).type, 'ntfy');
+  const src = (await import('node:fs')).readFileSync(new URL('../services/license/index.js', import.meta.url), 'utf8');
+  assert.match(src, /createProviderFromConfig\(name, pCfg\)/);
+  assert.doesNotMatch(src, /const provider = factory\(pCfg\)/);
+});

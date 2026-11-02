@@ -27,6 +27,19 @@ export const PROVIDER_FACTORIES = {
   ntfy: createNtfyProvider
 };
 
+/**
+ * Provider aus der Konfiguration bauen — EINE Stelle für alle Versender
+ * (Benachrichtigungsdienst, Lizenz-Meldung). ntfy nie an interne Adressen
+ * (Box selbst, link-local/Metadaten), auch nicht für gespeicherte Altwerte
+ * und Importe (Gegenprüfungen edeb17db, bca61061).
+ */
+export function createProviderFromConfig(name, pCfg) {
+  const factory = PROVIDER_FACTORIES[name];
+  if (!factory) return null;
+  if (name === 'ntfy' && !isAllowedOutboundUrl(pCfg?.topicUrl)) throw new Error('topic_url_not_allowed');
+  return factory(pCfg);
+}
+
 const HYSTERESIS_BAND = 5; // SOC percentage
 
 // ---------- Pure functions (exported for testing) ----------
@@ -189,16 +202,9 @@ export function createNotificationService(ctx) {
     providers = new Map();
     for (const [name, pCfg] of Object.entries(nCfg.providers || {})) {
       if (!pCfg.enabled) continue;
-      const factory = PROVIDER_FACTORIES[name];
-      if (!factory) continue;
-      // Gegenprüfung edeb17db (P3): ntfy nie an interne Adressen (Box selbst,
-      // link-local/Metadaten) — gilt auch für gespeicherte Altwerte und Importe.
-      if (name === 'ntfy' && !isAllowedOutboundUrl(pCfg.topicUrl)) {
-        pushLog('notification_provider_error', { provider: name, error: 'topic_url_not_allowed' });
-        continue;
-      }
+      if (!PROVIDER_FACTORIES[name]) continue;
       try {
-        providers.set(name, factory(pCfg));
+        providers.set(name, createProviderFromConfig(name, pCfg));
       } catch (err) {
         pushLog('notification_provider_error', { provider: name, error: err.message });
       }

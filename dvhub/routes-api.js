@@ -65,7 +65,7 @@ import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots 
 import { buildVictronAlarmsPayload } from './victron-alarms.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capVictronPvForDisplay } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
-import { redactConfig, redactUrlCreds } from './config-redaction.js';
+import { redactConfig, redactUrlCreds, dropSecretsForChangedTargets, unchangedSecretPaths } from './config-redaction.js';
 import { createConfigRoutes } from './routes/config-routes.js';
 import { createAdminRoutes } from './routes/admin-routes.js';
 import { createNotificationRoutes } from './routes/notification-routes.js';
@@ -4119,6 +4119,10 @@ export function createApiRoutes(ctx) {
       }
       if (typeof body.rejectUnauthorized === 'boolean') patch.rejectUnauthorized = body.rejectUnauthorized;
       next.mqtt = patch;
+      // Gegenprüfung bca61061 (P2): mit neuer Broker-Adresse wandern die
+      // gespeicherten Zugangsdaten nicht mit (wie restoreRedacted für /api/config).
+      const droppedMqtt = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, unchangedSecretPaths(next, ctx.getRawCfg() || {}));
+      if (droppedMqtt.length) pushLog('config_secret_dropped_target_changed', { paths: droppedMqtt }, actorContext(req));
       let result;
       try {
         result = ctx.saveAndApplyConfig(next);
@@ -6201,6 +6205,10 @@ export function createApiRoutes(ctx) {
       delete next.evcc.releaseValueW;
       next.evcc.url = String(body.url == null ? (next.evcc.url || '') : body.url).trim().slice(0, 256);
       next.evcc.dashboardLoadpoint = lp;
+      // Gegenprüfung bca61061 (P2): neue Wallbox-Adresse → gespeicherte
+      // Zugangsdaten bleiben nicht hängen.
+      const droppedWb = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, unchangedSecretPaths(next, ctx.getRawCfg() || {}));
+      if (droppedWb.length) pushLog('config_secret_dropped_target_changed', { paths: droppedWb }, actorContext(req));
       try {
         ctx.saveAndApplyConfig(next);
       } catch (e) {

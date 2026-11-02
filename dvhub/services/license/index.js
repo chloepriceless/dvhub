@@ -47,7 +47,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { PROVIDER_FACTORIES } from '../notifications/index.js';
+import { PROVIDER_FACTORIES, createProviderFromConfig } from '../notifications/index.js';
 import { verifyKeygenSignedKey, verifyKeygenMachineFile, readApplianceId, decodeKeygenPayload } from './keygen-verify.js';
 
 const KEYGEN_BASE = 'https://license.dvhub.de';
@@ -1448,10 +1448,10 @@ export function createLicenseService(ctx) {
     const providers = cfg?.notifications?.providers || {};
     for (const [name, pCfg] of Object.entries(providers)) {
       if (!pCfg?.enabled) continue;
-      const factory = PROVIDER_FACTORIES[name];
-      if (!factory) continue;
+      if (!PROVIDER_FACTORIES[name]) continue;
       try {
-        const provider = factory(pCfg);
+        // Gegenprüfung bca61061 (P3): mit derselben Adressprüfung wie der Dienst.
+        const provider = createProviderFromConfig(name, pCfg);
         await provider.notify({
           level: 'warning',
           title: 'DVhub-Lizenz pausiert',
