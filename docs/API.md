@@ -155,10 +155,10 @@ Spalte **Zugang** in den Tabellen:
 | GET | `/api/epex/zones` | LAN·integrations | Preiszonen mit Abdeckung (dvhub.online) |
 | GET | `/api/epex/gaps` | LAN·integrations | Fehlende Preisdaten (`?zone=DE-LU`) |
 | POST | `/api/epex/backfill` | Token | Fehlende Preise nachladen |
-| GET | `/api/tariff-provider` | LAN·integrations | Bezugspreis vom Stromanbieter (Tibber, LichtBlick): Anbieter, letzter Abruf, Preise heute/morgen, Fehler, Schätzung für fehlende Zeiten — ohne Zugangsdaten |
+| GET | `/api/tariff-provider` | Token | Bezugspreis vom Stromanbieter (Tibber, LichtBlick): Anbieter, letzter Abruf, Preise heute/morgen, Fehler, Schätzung für fehlende Zeiten — ohne Zugangsdaten |
 | POST | `/api/tariff-provider/test` | Token | Zugangsdaten prüfen, ohne zu speichern (`{"name":"tibber","tibber":{"token":"…"}}`; `***` oder leer = gespeicherter Wert) |
 | POST | `/api/tariff-provider/refresh` | Token | Anbieterpreise sofort abrufen (gespeicherte Einstellungen; nach abgelehnten Zugangsdaten 6 h gesperrt) |
-| GET | `/api/tariff-provider/stats?days=30` | LAN·integrations | Auswertung Anbieterpreis ↔ Day-Ahead über 1–365 Tage (Standard 30) plus bekannte Preise für morgen: Mittelwerte, Formel brutto und netto ≈ a + b × Börsenpreis, mittlere und größte Abweichung, R² |
+| GET | `/api/tariff-provider/stats?days=30` | Token | Auswertung Anbieterpreis ↔ Day-Ahead über 1–365 Tage (Standard 30) plus bekannte Preise für morgen: Mittelwerte, Formel brutto und netto ≈ a + b × Börsenpreis, mittlere und größte Abweichung, R² |
 
 ### 3.9 Prognose
 
@@ -389,14 +389,17 @@ Siehe [EEBUS.md](EEBUS.md).
 | POST | `/api/mobile-link/pair/start`, `/pair/approve` | Token+Nonce | Kopplung per QR-Code starten bzw. bestätigen |
 | POST | `/api/mobile-link/pair/cancel`, `/devices/remove` | Token | Kopplung abbrechen bzw. Gerät entkoppeln |
 | POST | `/api/mobile-link/devices/update` | Token+Nonce | Gekoppeltes Gerät ändern |
-| GET | `/api/tariff-provider/stats` | LAN·`integrations` | Auswertung der mitgeloggten Anbieterpreise |
 | GET | `/api/eos/remote/debug` | Token | EOS-Fernbetrieb: Diagnosepaket des letzten Laufs (Download) |
 | GET | `/api/feed-in-cap/status` | LAN·`integrations` | Einspeisegrenze der Anlage: Zustand und letzte Rücklesung |
-| GET | `/api/ocpp/status` | LAN·`integrations` | OCPP-Zentrale: verbundene Ladepunkte |
-| GET | `/api/vehicle-evcc` | LAN·`integrations` | Fahrzeug-Ladestand über evccs Fahrzeug-Treiber |
+| GET | `/api/ocpp/status` | Token | OCPP-Zentrale: verbundene Ladepunkte |
+| GET | `/api/vehicle-evcc` | Token | Fahrzeug-Ladestand über evccs Fahrzeug-Treiber |
 | POST | `/api/vehicle-evcc/settings`, `/api/vehicle-evcc/refresh` | Token | Fahrzeug-Treiber einstellen bzw. sofort abfragen |
 | GET | `/api/victron/devices` | LAN·`integrations` | Am Victron GX gefundene Geräte |
-| POST | `/api/victron/devices/scan` | Token | Geräte am GX neu suchen |
+| POST | `/api/victron/devices/scan` | Token+Nonce | Geräte am GX neu suchen |
+| GET | `/api/storage/status` | LAN·`status` | Speicher-Zustand (Akku, Netzspeicher) |
+| GET | `/api/inverter-efficiency/curve` | LAN·`status` | Wirkungsgradkurve des Wechselrichters (wie an EOS geschickt) |
+| GET | `/api/eos/plan` | LAN·`status` | EOS-Plan für Leitstand („Laut EOS-Plan“), mit Preisgrundlage |
+| POST | `/api/eos/solution-ready` | nur Box selbst | Fertig-Meldung des EOS-Laufs (vom EOS-Dienst) |
 
 ### 3.23 Installateurs-Portal
 
