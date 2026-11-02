@@ -174,12 +174,22 @@ function ownZeroWrite(state) {
  */
 export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = null) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
+  const ownOk = ownRead && !ownRead.error && Number.isFinite(Number(ownRead.value))
+    && isFresh(ownRead.at, nowMs, capReadMaxAgeMs(cfg));
+  // Eindeutiger Wert (2720 bzw. MQTT) geht vor — auch vor einer 2704-0 mit
+  // alter eigener 0 (an der GX kann längst −1 stehen, Gegenprüfung 0ff2eb8d).
+  if (ownOk && !ownRead.ambiguousZero) return Number(ownRead.value);
   if (known && known.from !== 'own_write' && (Number(known.value) !== 0 || ownZeroWrite(state))) return known.value;
-  if (ownRead && !ownRead.error && Number.isFinite(Number(ownRead.value))
-      && isFresh(ownRead.at, nowMs, capReadMaxAgeMs(cfg))
-      && !(ownRead.ambiguousZero && !ownZeroWrite(state))) return Number(ownRead.value);
+  if (ownOk && ownZeroWrite(state)) return Number(ownRead.value);
   if (known && known.from === 'own_write' && isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return known.value;
   return null;
+}
+
+// Eine 0 aus einer 2704-Rücklesung (Poll-Punkt / Peak Shaving) trägt gerade
+// eine Entschuldigung — dann mit 2720 gegenprüfen.
+function reliesOnAmbiguousZero(state, cfg, nowMs) {
+  const known = knownMaxDischargeW(state, cfg, nowMs);
+  return !!known && known.from !== 'own_write' && Number(known.value) === 0;
 }
 
 /**
@@ -417,8 +427,12 @@ export function createSetpointFollowWatchdog(ctx) {
     // Zeitraum bleiben alte Punkte im Fenster liegen (Gegenprüfung 7c9e01aa).
     const recent = (p) => p && p.refusing && nowMs - p.t <= opts.holdMs;
     const suspicious = wstate.active || wstate.window.some(recent) || recent(wstate.anchor);
-    const capBlock = capRead && !capRead.error && Number(capRead.value) >= 0 && Number(capRead.value) < opts.minShortfallW;
-    if (!suspicious && !capBlock) return;
+    // Weiterlesen, solange eine gelesene Sperre gilt — eine mehrdeutige 0 aus
+    // 2704 ohne eigenen 0-Write ist keine (sonst Dauerlesen, 0ff2eb8d).
+    const capBlock = capRead && !capRead.error && Number(capRead.value) >= 0 && Number(capRead.value) < opts.minShortfallW
+      && !(capRead.ambiguousZero && !ownZeroWrite(state));
+    const crossCheck = !no2720 && ctx.transport.type !== 'mqtt' && reliesOnAmbiguousZero(state, cfg, nowMs);
+    if (!suspicious && !capBlock && !crossCheck) return;
     capReadPending = true;
     capReadStartedAt = nowMs;
     const v = cfg.victron || {};
@@ -431,16 +445,24 @@ export function createSetpointFollowWatchdog(ctx) {
       if (!no2720) {
         try {
           const regs = await ctx.transport.mbRequest({ fc: 3, ...target, address: MAX_DISCHARGE_INT32_ADDR, quantity: 2 });
-          const hi = Number(regs?.[0]) & 0xffff;
-          const lo = Number(regs?.[1]) & 0xffff;
+          if (!Array.isArray(regs) || regs.length < 2 || !regs.slice(0, 2).every((w) => Number.isFinite(Number(w)))) {
+            throw new Error('2720: unvollständige Antwort');
+          }
+          const hi = Number(regs[0]) & 0xffff;
+          const lo = Number(regs[1]) & 0xffff;
           const raw = ((hi << 16) | lo) | 0; // int32, big-endian
           return { value: raw < 0 ? -1 : raw, ambiguousZero: false };
-        } catch {
-          no2720 = true; // ältere Venus-Version: 2704 als Rückfall
+        } catch (e) {
+          // Nur „Register/Funktion unbekannt“ (Exception 1/2) heißt: ältere
+          // Venus-Version → 2704. Timeouts u. Ä. sind ein Lesefehler, beim
+          // nächsten Mal wieder 2720 (Gegenprüfung 0ff2eb8d).
+          if (/^modbus exception (1|2)\b/.test(String(e?.message))) no2720 = true;
+          else throw e;
         }
       }
       const regs = await ctx.transport.mbRequest({ fc: 3, ...target, address: conf.address, quantity: 1 });
-      const raw = Number(regs?.[0]) & 0xffff;
+      if (!Array.isArray(regs) || regs.length < 1 || !Number.isFinite(Number(regs[0]))) throw new Error('2704: unvollständige Antwort');
+      const raw = Number(regs[0]) & 0xffff;
       return { value: decodeMaxDischargeRaw(raw, conf), ambiguousZero: raw === 0 };
     }).then(({ value, ambiguousZero }) => {
       capRead = value == null || !Number.isFinite(value)
