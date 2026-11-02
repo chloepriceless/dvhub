@@ -225,3 +225,41 @@ test('kick: außer der Reihe höchstens alle 2 Minuten', async () => {
   assert.equal((await h.trigger.kick('no_plan')).ok, true);
   assert.equal(h.posts.length, 2);
 });
+
+// Gegenprüfung a25589cc (P2): Ein Neuplan nach dem Speichern, der auf einen
+// laufenden oder gerade gestarteten Lauf trifft, ging verloren. Er wird jetzt
+// nachgeholt — nach dem Lauf, frühestens 2 min nach dessen Start; startet
+// inzwischen ohnehin ein Lauf, entfällt er.
+test('Neuplan während eines Laufs wird nachgeholt', async () => {
+  const h = harness();
+  let release;
+  h.replies.push(() => new Promise((r) => { release = r; }));
+  const first = h.trigger.trigger('boundary');
+  assert.equal((await h.trigger.kick('replan:config')).skipped, 'recent');
+  assert.equal(h.timers.length, 0, 'solange der Lauf rechnet, kein Termin');
+  h.nowMs += 70_000;
+  release(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  await first;
+  assert.equal(h.timers.length, 1);
+  assert.equal(h.timers[0].ms, EOS_RUN_KICK_MIN_GAP_MS - 70_000);
+  h.nowMs += EOS_RUN_KICK_MIN_GAP_MS - 70_000;
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:15:00Z'));
+  const t = h.timers.shift();
+  await t.fn();
+  assert.equal(h.posts.length, 2);
+  assert.ok(h.logs.some((l) => l.type === 'eos_run_started' && l.data.reason === 'replan:config'));
+});
+
+test('nachgeholter Neuplan entfällt, wenn inzwischen ein Lauf startet; no_plan wird nicht nachgeholt', async () => {
+  const h = harness();
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  await h.trigger.trigger('boundary');
+  await h.trigger.kick('no_plan');
+  assert.equal(h.timers.length, 0, 'no_plan: kein Nachholen');
+  await h.trigger.kick('replan:config');
+  assert.equal(h.timers.length, 1, 'innerhalb der 2 min: Termin');
+  h.nowMs += 30_000;
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:15:00Z'));
+  await h.trigger.trigger('boundary');
+  assert.equal(h.timers.length, 0, 'neuer Lauf rechnet schon mit der neuen Einstellung');
+});

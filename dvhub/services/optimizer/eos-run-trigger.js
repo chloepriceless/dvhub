@@ -205,6 +205,7 @@ export function createEosRunTrigger({
       log('eos_run_skipped', { reason, error: 'EOS rechnet noch (Lauf vor dem DVhub-Neustart)' });
       return Promise.resolve({ ok: false, skipped: 'eos_busy' });
     }
+    clearPending(); // dieser Lauf rechnet schon mit dem aktuellen Stand
     inFlight = run(reason)
       .catch((err) => {
         const error = err?.message || String(err);
@@ -212,13 +213,38 @@ export function createEosRunTrigger({
         publish({ inFlight: false, lastError: error, lastErrorAt: now() });
         return { ok: false, error };
       })
-      .finally(() => { inFlight = null; });
+      .finally(() => { inFlight = null; armPending(); });
     return inFlight;
+  }
+
+  // Neuplan nach einer Einstellungsänderung ('replan:…'), der auf einen
+  // laufenden oder gerade gestarteten Lauf trifft: nicht verwerfen, sondern
+  // nachholen — nach dem Lauf, frühestens 2 min nach dessen Start. Startet
+  // inzwischen ohnehin ein Lauf, rechnet der schon mit der neuen Einstellung
+  // und der Nachholtermin entfällt (Gegenprüfung a25589cc).
+  let pendingReplan = null;
+  let pendingTimer = null;
+  function clearPending() {
+    pendingReplan = null;
+    if (pendingTimer) { clearTimer(pendingTimer); pendingTimer = null; }
+  }
+  function armPending() {
+    if (!pendingReplan || pendingTimer || inFlight) return;
+    const wait = Math.max(0, lastAttemptAt + EOS_RUN_KICK_MIN_GAP_MS - now());
+    pendingTimer = setTimer(() => {
+      pendingTimer = null;
+      const reason = pendingReplan;
+      pendingReplan = null;
+      return reason ? kick(reason) : undefined;
+    }, wait);
   }
 
   /** Außer der Reihe (EOS neu gestartet, noch kein Plan) — höchstens alle 2 min. */
   function kick(reason) {
-    if (inFlight || now() - lastAttemptAt < EOS_RUN_KICK_MIN_GAP_MS) return Promise.resolve({ ok: false, skipped: 'recent' });
+    if (inFlight || now() - lastAttemptAt < EOS_RUN_KICK_MIN_GAP_MS) {
+      if (String(reason || '').startsWith('replan:')) { pendingReplan = reason; armPending(); }
+      return Promise.resolve({ ok: false, skipped: 'recent' });
+    }
     return trigger(reason);
   }
 
@@ -236,7 +262,7 @@ export function createEosRunTrigger({
 
   return {
     start() { if (!running) { running = true; schedule(); } },
-    stop() { running = false; if (timer) clearTimer(timer); timer = null; },
+    stop() { running = false; if (timer) clearTimer(timer); timer = null; clearPending(); },
     trigger,
     kick,
     isActive,

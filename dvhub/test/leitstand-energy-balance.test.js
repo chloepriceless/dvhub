@@ -228,7 +228,7 @@ test('seriesCoversToday', () => {
   const start = src.indexOf('function updateForecastSummary(');
   const body = src.slice(start, src.indexOf('\n  }\n', start));
   assert.match(body, /pvRestKwh: seriesCoversToday\(pvSlotsAll, berlinTodayKey\) \? pvKwhRest : null/);
-  assert.match(body, /loadRestKwh: seriesCoversToday\(loadSlotsAll, berlinTodayKey\) \? loadKwhRest : null/);
+  // Last: strenger, seriesReachesNow (Gegenprüfung ffa322f1, eigener Test)
 });
 
 // P3: Scheitert der Prognose-Abruf, darf kein farbiges „--“ über alten Zeilen stehen.
@@ -248,4 +248,46 @@ test('energyBalanceBattery ohne Hauptkapazität: Ladestand ungewichtet', async (
   const state = { victron: { soc: 40, minSocPct: 5 }, multiGx: { online: true, socPct: 80, minSocPct: 10 } };
   const b = energyBalanceBattery({ getCfg: () => ({ updateChannel: 'dev', multiGx, optimizer: { hardFloorSocPct: 5 } }), state });
   assert.deepEqual({ ...b }, { capacityWh: null, socPct: 40, minSocPct: 5 });
+});
+
+// --- Gegenprüfung ffa322f1 ----------------------------------------------------
+// P2: Eine Lastreihe, die heute vor „jetzt“ endet, ist veraltet (Telemetrie
+// steht, SQL-Fehler) — Last braucht eine Zeile, die nach jetzt endet. PV darf
+// zum Sonnenuntergang enden.
+test('seriesReachesNow: Last muss über jetzt hinausreichen', () => {
+  const { seriesReachesNow } = loadHelpers();
+  const T = Date.UTC(2026, 11, 2, 13, 0); // 14:00
+  const load = [0, 1, 2].map((i) => ({ start: new Date(T - 3 * 3600000 + i * 3600000).toISOString(), powerW: 800 })); // bis 14:00
+  assert.equal(seriesReachesNow(load, 1, T + 3600000), false); // 15:00
+  assert.equal(seriesReachesNow(load, 1, T - 1800000), true);  // 13:30
+  const start = src.indexOf('function updateForecastSummary(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  assert.match(body, /loadRestKwh: seriesReachesNow\(loadSlotsAll, loadH, nowMs\) \? loadKwhRest : null/);
+});
+
+// P3: forecast.solar-Stundenwerte sind Wh je Stunde (forecast-solar.js); ein
+// Rasterpunkt vor einem Zwischenpunkt (Sonnenuntergang) behält seine Stunde.
+test('Rasterzeile vor einem Zwischenpunkt behält die volle Dauer', () => {
+  const { restKwhFrom } = loadHelpers();
+  const T = Date.UTC(2026, 10, 2, 14, 0); // 15:00
+  const rows = [
+    { start: new Date(T).toISOString(), powerW: 1000 },
+    { start: new Date(T + 3600000).toISOString(), powerW: 500 },
+    { start: new Date(T + 3600000 + (47 * 60 + 12) * 1000).toISOString(), powerW: 0 }, // 16:47:12
+  ];
+  assert.equal(restKwhFrom(rows, 0.25, T), 1.5);
+  const sunset = [
+    { start: new Date(T).toISOString(), powerW: 400 },
+    { start: new Date(T + 3600000).toISOString(), powerW: 400 },
+    { start: new Date(T + 3600000 + 15000).toISOString(), powerW: 0 }, // 16:00:15
+  ];
+  assert.equal(restKwhFrom(sunset, 0.25, T), 0.8);
+});
+
+// P3: Beim gescheiterten Abruf auch die Detailzeile des Verbrauchs leeren.
+test('ohne Prognose: Detailzeile Verbrauch geleert', () => {
+  const start = src.indexOf('function updateForecastSummary(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  const early = body.slice(body.indexOf('if (!forecastData) {'), body.indexOf('return;', body.indexOf('if (!forecastData) {')));
+  assert.match(early, /loadDetailEl\.textContent = ''/);
 });

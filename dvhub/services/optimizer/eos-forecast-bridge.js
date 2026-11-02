@@ -215,24 +215,32 @@ const fixedFeedInCt = (tariff) => (Number.isFinite(Number(tariff?.feedInCtKwh)) 
 
 /**
  * Grundlage des Einspeisewerts für die Anzeige zum gezeigten Plan
- * (/api/eos/plan priceBasis, Gegenprüfungen 63b36983/d22f5a4d):
+ * (/api/eos/plan priceBasis, Gegenprüfungen 63b36983/d22f5a4d/18f41bac):
  * - vor dem ersten Push aus der Einstellung (mit festem Satz);
  * - sonst die beim Push abgelegte (state.optimizer.eosFeedInBasis, `since` =
- *   Zeitpunkt des Wechsels); ist der Plan älter als der Wechsel, die davor
- *   (eosFeedInBasisPrev) — unbekannt → null, die Anzeige lässt den Zusatz weg.
+ *   ab wann sie gilt). Maßgeblich ist der Laufbeginn des Plans (generatedAt −
+ *   Laufdauer): galt die aktuelle da schon → sie; wechselte sie während des
+ *   Laufs → unbekannt; ist der Plan älter → die vorige, wenn die bei
+ *   Laufbeginn galt. Unbekannt → null, die Anzeige lässt den Zusatz weg.
  * @param {object} opt   state.optimizer
  * @param {object} cfg
  * @param {number} planGeneratedMs  generatedAt des gezeigten Plans (NaN = unbekannt)
+ * @param {number} [runMs]          Dauer des Laufs, der ihn gerechnet hat
  */
-export function eosPlanFeedInBasis(opt, cfg, planGeneratedMs) {
+export function eosPlanFeedInBasis(opt, cfg, planGeneratedMs, runMs = 0) {
   const strip = (b) => (b ? { feedIn: b.feedIn, ...(b.fixedCtKwh !== undefined ? { fixedCtKwh: b.fixedCtKwh } : {}) } : null);
   const cur = opt?.eosFeedInBasis;
   if (!cur) {
     const feedIn = eosFeedInBasis(cfg);
     return feedIn === 'fixed' ? { feedIn, fixedCtKwh: fixedFeedInCt(cfg?.optimizer?.tariff) } : { feedIn };
   }
-  if (!Number.isFinite(planGeneratedMs) || !(cur.since > 0) || planGeneratedMs >= cur.since) return strip(cur);
-  return strip(opt.eosFeedInBasisPrev);
+  if (!Number.isFinite(planGeneratedMs)) return strip(cur);
+  const planStart = planGeneratedMs - (Number(runMs) > 0 ? Number(runMs) : 0);
+  const heldAt = (b) => b && (!(b.since > 0) || b.since <= planStart);
+  if (heldAt(cur)) return strip(cur);
+  if (cur.since < planGeneratedMs) return null; // Wechsel während des Laufs
+  const prev = opt.eosFeedInBasisPrev;
+  return heldAt(prev) ? strip(prev) : null;
 }
 
 /**
@@ -748,12 +756,15 @@ export function createEosForecastBridge(ctx) {
 
   // Grundlage nur bei einem Wechsel neu stempeln (`since`): Ein Plan, der vor
   // dem Wechsel gerechnet ist, zeigt dann die vorige (Gegenprüfung d22f5a4d).
-  // Der erste Push nach dem Start gilt seit jeher (since 0).
+  // Der erste Push nach dem Start gilt erst ab Start der Bridge — ob ein Plan
+  // von vorher mit derselben Einstellung gerechnet ist, weiß DVhub nicht
+  // (Gegenprüfung 18f41bac).
+  const bridgeStartedAt = Date.now();
   function rememberFeedInBasis(next) {
     if (!state) return;
     state.optimizer = state.optimizer || {};
     const cur = state.optimizer.eosFeedInBasis;
-    if (!cur) { state.optimizer.eosFeedInBasis = { ...next, since: 0 }; return; }
+    if (!cur) { state.optimizer.eosFeedInBasis = { ...next, since: bridgeStartedAt }; return; }
     if (cur.feedIn === next.feedIn && cur.fixedCtKwh === next.fixedCtKwh) return;
     state.optimizer.eosFeedInBasisPrev = cur;
     state.optimizer.eosFeedInBasis = { ...next, since: Date.now() };
@@ -761,6 +772,8 @@ export function createEosForecastBridge(ctx) {
 
   let lastHorizonHours = null;
   let lastPredictionHours = null;
+  let loggedHorizonHours = null;
+  let loggedPredictionHours = null;
   /**
    * Steuerzeitraum = volle Stunden, die ab jetzt lueckenlos mit Preisen belegt
    * sind, minus 15 min Puffer (EOS rechnet auf eigenem 15-min-Takt; der
@@ -781,7 +794,9 @@ export function createEosForecastBridge(ctx) {
     // Reihenfolge: Wird der Prognosehorizont kürzer, erst den Steuerzeitraum
     // senken — sonst stünde kurz prediction.hours < horizon_hours, und ein Lauf
     // genau dann bräche ab. Sonst erst den Prognosehorizont.
-    const previous = { hours: lastHorizonHours, predictionHours: lastPredictionHours };
+    // Vorwerte fürs Log getrennt führen: lastHorizonHours/lastPredictionHours
+    // ändern sich je angenommenem PUT (Gegenprüfung a25589cc).
+    const previous = { hours: loggedHorizonHours, predictionHours: loggedPredictionHours };
     // Jeden angenommenen Wert sofort festhalten: scheitert danach der andere
     // PUT, muss DVhub trotzdem wissen, mit welchem Steuerzeitraum EOS rechnet
     // (Warmstart im Lauf-Anstoß, Gegenprüfung ae4e76f6).
@@ -803,17 +818,26 @@ export function createEosForecastBridge(ctx) {
     };
     const shrinking = lastPredictionHours === null || predictionHours < lastPredictionHours;
     const order = shrinking ? [putHorizon, putPrediction] : [putPrediction, putHorizon];
+    const logChange = () => {
+      const h = lastHorizonHours;
+      const p = lastPredictionHours;
+      if (pushLog && h !== null && (h !== previous.hours || (p !== null && p !== previous.predictionHours))) {
+        pushLog('eos_control_horizon', { hours: h, previous: previous.hours, predictionHours: p });
+      }
+      if (h !== null) loggedHorizonHours = h;
+      if (p !== null) loggedPredictionHours = p;
+    };
     for (const put of order) {
       const res = await put();
       if (!res.ok) {
         // Unbekannter Stand: beim nächsten Push wieder vorsichtig (erst Steuerzeitraum).
         lastPredictionHours = null;
+        // Ein angenommener Steuerzeitraum-Wechsel gehört trotzdem ins Log.
+        logChange();
         return { error: res.error };
       }
     }
-    if (pushLog && (hours !== previous.hours || predictionHours !== previous.predictionHours)) {
-      pushLog('eos_control_horizon', { hours, previous: previous.hours, predictionHours });
-    }
+    logChange();
     return { hours, predictionHours };
   }
 

@@ -986,14 +986,34 @@
     var rows = (slots || []).map(function (s) { return { t: Date.parse(s && s.start), w: Number(s && s.powerW) || 0 }; })
       .filter(function (r) { return isFinite(r.t); })
       .sort(function (a, b) { return a.t - b.t; });
-    var gaps = [];
-    for (var k = 1; k < rows.length; k += 1) { var g = rows[k].t - rows[k - 1].t; if (g > 0) gaps.push(g); }
-    gaps.sort(function (a, b) { return a - b; });
-    var typical = gaps.length ? gaps[Math.floor((gaps.length - 1) / 2)] : fallbackH * 3600000;
+    // Üblicher Abstand: unterer Median der Abstände zwischen Zeilen auf dem
+    // Viertelstundenraster — Zwischenpunkte (Sonnenauf-/-untergang) zählen
+    // nicht mit; ohne solche Paare alle Abstände, ohne Abstände die gemeldete
+    // Auflösung.
+    var Q_MS = 900000;
+    var lowerMedian = function (list) { list.sort(function (a, b) { return a - b; }); return list[Math.floor((list.length - 1) / 2)]; };
+    var grid = rows.filter(function (r) { return r.t % Q_MS === 0; });
+    var gridGaps = [], gaps = [];
+    for (var k = 1; k < grid.length; k += 1) { var gg = grid[k].t - grid[k - 1].t; if (gg > 0) gridGaps.push(gg); }
+    for (var m = 1; m < rows.length; m += 1) { var g = rows[m].t - rows[m - 1].t; if (g > 0) gaps.push(g); }
+    var typical = gridGaps.length ? lowerMedian(gridGaps) : (gaps.length ? lowerMedian(gaps) : fallbackH * 3600000);
+    // Zeilen auf dem Raster (Vielfaches des üblichen Abstands) behalten ihre
+    // volle Dauer — forecast.solar liefert Wh je Stunde, ein folgender
+    // Sonnenuntergangspunkt (16:47:12, 19:00:15) darf sie nicht kürzen
+    // (Gegenprüfung ffa322f1). Zwischenpunkte gelten bis zur nächsten Zeile.
     return rows.map(function (r, idx) {
       var next = idx + 1 < rows.length ? rows[idx + 1].t - r.t : typical;
-      return { t: r.t, ms: next > 0 ? Math.min(next, typical) : 0, w: r.w };
+      var onGrid = typical > 0 && r.t % typical === 0;
+      var ms = onGrid ? typical : (next > 0 ? Math.min(next, typical) : 0);
+      return { t: r.t, ms: ms, w: r.w };
     });
+  }
+  // Reicht die Reihe über „jetzt“ hinaus? Für die Last Pflicht: endet sie
+  // heute schon vorher, ist sie veraltet (Telemetrie steht, SQL-Fehler) und
+  // der Rest unbekannt (Gegenprüfung ffa322f1). PV darf zum Sonnenuntergang
+  // enden (seriesCoversToday).
+  function seriesReachesNow(slots, fallbackH, nowMs) {
+    return rowSpans(slots, fallbackH).some(function (r) { return r.t + r.ms > nowMs; });
   }
   function kwhOf(slots, fallbackH) {
     var kwh = 0;
@@ -1044,7 +1064,7 @@
   }
   window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, {
     loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries,
-    energyBalanceSummary: energyBalanceSummary, energyBalanceView: energyBalanceView, restKwhFrom: restKwhFrom, seriesCoversToday: seriesCoversToday,
+    energyBalanceSummary: energyBalanceSummary, energyBalanceView: energyBalanceView, restKwhFrom: restKwhFrom, seriesCoversToday: seriesCoversToday, seriesReachesNow: seriesReachesNow,
   });
 
   function updateForecastSummary(forecastData, statusData) {
@@ -1060,9 +1080,10 @@
       pvEl.textContent = '--';
       loadEl.textContent = '--';
       surplusEl.textContent = '--';
-      // Bilanz neutral, alte Detailzeilen weg (Gegenprüfung e07271be).
+      // Bilanz neutral, alte Detailzeilen weg (Gegenprüfungen e07271be, ffa322f1).
       surplusEl.style.color = '';
       if (surplusDetailEl) surplusDetailEl.textContent = '';
+      if (loadDetailEl) loadDetailEl.textContent = '';
       if (detailEl) detailEl.textContent = '';
       return;
     }
@@ -1129,7 +1150,7 @@
       || (statusData?.victron?.soc != null ? { socPct: statusData.victron.soc, capacityWh: null, minSocPct: null } : null);
     var balance = energyBalanceSummary({
       pvRestKwh: seriesCoversToday(pvSlotsAll, berlinTodayKey) ? pvKwhRest : null,
-      loadRestKwh: seriesCoversToday(loadSlotsAll, berlinTodayKey) ? loadKwhRest : null,
+      loadRestKwh: seriesReachesNow(loadSlotsAll, loadH, nowMs) ? loadKwhRest : null,
       pvDayKwh: pvDayKwh, loadDayKwh: loadDayKwh, battery: battery
     });
     var balanceView = energyBalanceView(balance);

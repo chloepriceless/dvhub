@@ -342,7 +342,7 @@ test('/api/eos/plan: Grundlage passend zum gezeigten Plan (eosPlanFeedInBasis)',
   const src = fs.readFileSync(fileURLToPath(new URL('../routes-api.js', import.meta.url)), 'utf8');
   const start = src.indexOf("url.pathname === '/api/eos/plan'");
   const body = src.slice(start, src.indexOf('\n    }\n', start));
-  assert.match(body, /priceBasis: eosPlanFeedInBasis\(state\.optimizer, getCfg\(\), Date\.parse\(plan\.data\?\.generatedAt\)\)/);
+  assert.match(body, /priceBasis: eosPlanFeedInBasis\(state\.optimizer, getCfg\(\), Date\.parse\(plan\.data\?\.generatedAt\),\s+\(Number\(state\.optimizer\?\.eosRun\?\.lastDurationS\) \|\| 0\) \* 1000\)/);
 });
 
 // Gegenprüfung d22f5a4d (P2): „negativer Börsenpreis“ nur bei ≈ 0 ct — ein
@@ -391,11 +391,12 @@ test('index.html: Info-Zeichen ist ein Knopf mit aufklappbarem Erklärtext', () 
   assert.match(html, /<p class="eos-plan-summary-help" id="eosPlanSummaryHelp" hidden><\/p>/);
 });
 
-// Gegenprüfung 00f23b55 (P3): CONTRIBUTING.md verlangt bei jeder Änderung einen
-// neuen ?v=-Schlüssel — für die in diesem Branch geänderten Dateien.
-test('Cache-Schlüssel der geänderten Leitstand-Dateien angehoben', () => {
+// Gegenprüfung 00f23b55/18f41bac: ?v= der Leitstand-Dateien im Format
+// YYYYMMDD-slug (CONTRIBUTING.md) — kein fest eingetragener Wert, der beim
+// nächsten Anheben rot würde.
+test('Cache-Schlüssel der Leitstand-Dateien im Format YYYYMMDD-slug', () => {
   const html = fs.readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
-  assert.match(html, /\/eos-plan-summary\.js\?v=20261102-beschriftungen"/);
-  assert.match(html, /\/leitstand-charts\.js\?v=20261102-energiebilanz"/);
-  assert.match(html, /\/index\.css\?v=20261102-eosplan-info"/);
+  for (const f of ['eos-plan-summary\\.js', 'leitstand-charts\\.js', 'index\\.css']) {
+    assert.match(html, new RegExp(`/${f}\\?v=20\\d{6}-[a-z0-9-]+"`), f);
+  }
 });

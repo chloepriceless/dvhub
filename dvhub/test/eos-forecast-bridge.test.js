@@ -1274,7 +1274,7 @@ test('push merkt die Grundlage des Einspeisewerts (state.optimizer.eosFeedInBasi
     await createEosForecastBridge(ctx).push();
     const b = ctx.state.optimizer.eosFeedInBasis;
     assert.deepEqual({ feedIn: b.feedIn, fixedCtKwh: b.fixedCtKwh }, { feedIn: 'fixed', fixedCtKwh: 8.2 });
-    assert.equal(b.since, 0, 'erster Push: seit jeher (Einstellung über Neustart unverändert)');
+    assert.ok(b.since > 0, 'erster Push: gilt ab Start der Bridge (Gegenprüfung 18f41bac)');
   } finally { await mock2.close(); }
 });
 
@@ -1302,9 +1302,9 @@ test('Grundlage: Wechsel mit Zeitstempel, nur nach angenommenem Einspeise-PUT', 
     const { ctx } = estimateCtx(mock, { tariff });
     const bridge = createEosForecastBridge(ctx);
     await bridge.push();
-    assert.equal(ctx.state.optimizer.eosFeedInBasis.since, 0);
+    const since0 = ctx.state.optimizer.eosFeedInBasis.since;
     await bridge.push(); // unverändert: Zeitstempel bleibt
-    assert.equal(ctx.state.optimizer.eosFeedInBasis.since, 0);
+    assert.equal(ctx.state.optimizer.eosFeedInBasis.since, since0);
     tariff.feedInCtKwh = 8.2;
     failFeed = true;
     await bridge.push();
@@ -1385,4 +1385,72 @@ test('Speichern: Server merkt den Abgleich, die Route wartet darauf', () => {
   const routes = fsMod.readFileSync(new URL('../routes/config-routes.js', import.meta.url), 'utf8');
   assert.match(routes, /requestEosReplanAfterSave\(ctx, 'config'\)/);
   assert.doesNotMatch(routes, /ctx\.optimizerService\?\.requestEosReplan\?\.\('config'\)/);
+});
+
+// Gegenprüfung a25589cc (P3): ein angenommener Steuerzeitraum-Wechsel steht im
+// Log, auch wenn danach der Prognosehorizont-PUT scheitert; „previous“ stimmt.
+test('Log: Steuerzeitraum-Wechsel trotz gescheitertem Prognosehorizont, mit richtigem Vorwert', async () => {
+  let failPred = false;
+  const mock = await createMockEos((req, res) => {
+    if (failPred && req.url.startsWith('/v1/config/prediction/hours')) { res.writeHead(500); res.end('{}'); return; }
+    okHandler(req, res);
+  });
+  try {
+    const opt = {};
+    const logs = [];
+    const { ctx } = estimateCtx(mock, { realHours: 40, pvHours: 60, optimizer: opt, logs });
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+    const h1 = logs.filter((l) => l.event === 'eos_control_horizon').pop().data.hours;
+    opt.eosPredictionHours = 48; // Steuerzeitraum → 36
+    failPred = true;
+    await bridge.push();
+    const l2 = logs.filter((l) => l.event === 'eos_control_horizon').pop().data;
+    assert.equal(l2.hours, 36);
+    assert.equal(l2.previous, h1);
+    failPred = false;
+    await bridge.push();
+    const l3 = logs.filter((l) => l.event === 'eos_control_horizon').pop().data;
+    assert.equal(l3.predictionHours, 48);
+    assert.equal(l3.previous, 36);
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 18f41bac: Grundlage zum Laufbeginn des Plans (generatedAt −
+// Laufdauer); Wechsel während des Laufs → unbekannt; die vorige nur, wenn sie
+// vor dem Laufbeginn galt; nach dem Start gilt die erste erst ab Start.
+test('eosPlanFeedInBasis: Laufbeginn, Wechsel während des Laufs, zwei Wechsel', async () => {
+  const { eosPlanFeedInBasis } = await import('../services/optimizer/eos-forecast-bridge.js');
+  const A = { feedIn: 'fixed', fixedCtKwh: 7.78, since: 0 };
+  const B = { feedIn: 'spot', since: 1000 };
+  const C = { feedIn: 'spot_premium', since: 2000 };
+  // Plan fertig 1500, Lauf 1000 ms → Start 500 < Wechsel 1000 < Ende: unbekannt
+  assert.equal(eosPlanFeedInBasis({ eosFeedInBasis: B, eosFeedInBasisPrev: A }, {}, 1500, 1000), null);
+  // Lauf startete nach dem Wechsel
+  assert.deepEqual({ ...eosPlanFeedInBasis({ eosFeedInBasis: B, eosFeedInBasisPrev: A }, {}, 2500, 1000) }, { feedIn: 'spot' });
+  // zwei Wechsel nach dem Plan: B galt bei Laufbeginn nicht → unbekannt
+  assert.equal(eosPlanFeedInBasis({ eosFeedInBasis: C, eosFeedInBasisPrev: B }, {}, 500, 0), null);
+  // vorige galt bei Laufbeginn
+  assert.deepEqual({ ...eosPlanFeedInBasis({ eosFeedInBasis: C, eosFeedInBasisPrev: B }, {}, 1500, 100) }, { feedIn: 'spot' });
+});
+
+test('erster Push nach dem Start: Grundlage gilt erst ab Start der Bridge', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const t0 = Date.now();
+    const { ctx } = estimateCtx(mock, { tariff: { feedInMode: 'fixed', feedInCtKwh: 7.78 } });
+    await createEosForecastBridge(ctx).push();
+    assert.ok(ctx.state.optimizer.eosFeedInBasis.since >= t0);
+  } finally { await mock.close(); }
+});
+
+test('Lauf-/Geräte-Neuplan nach dem Speichern wartet auf den Abgleich (EV, Geräte)', () => {
+  const fsMod = globalThis.process.getBuiltinModule('node:fs');
+  const cc = fsMod.readFileSync(new URL('../services/control-commands.js', import.meta.url), 'utf8');
+  assert.match(cc, /requestEosReplanAfterSave\(ctx, 'ev_config'\)/);
+  const api = fsMod.readFileSync(new URL('../routes-api.js', import.meta.url), 'utf8');
+  const dev = api.slice(api.indexOf("pushLog('schedulable_device_saved'"), api.indexOf('// Phase 21 (2026-05-23): MQTT-hub broker'));
+  assert.equal((dev.match(/requestEosReplanAfterSave\(ctx, 'devices'\)/g) || []).length, 2);
+  assert.doesNotMatch(dev, /ctx\.eosConfigSync\?\.sync\?\.\(\)/, 'kein zweiter, paralleler Sync');
+  assert.doesNotMatch(dev, /requestEosReplan\?\.\('devices'\)/);
 });

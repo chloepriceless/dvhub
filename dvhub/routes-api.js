@@ -23,6 +23,7 @@ import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.j
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
 import { eosPlanFeedInBasis } from './services/optimizer/eos-forecast-bridge.js';
+import { requestEosReplanAfterSave } from './services/optimizer/eos-replan-after-save.js';
 import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
@@ -850,20 +851,9 @@ export function configChangeNeedsEosReplan(changedPaths) {
     && !EOS_REPLAN_IGNORE.some((skip) => p === skip || p.startsWith(skip + '.')));
 }
 
-/**
- * Neuplan nach dem Speichern erst, wenn der Abgleich mit EOS (Prognose-Push
- * mit Steuerzeitraum, Config-Sync mit Akku) durch ist — ctx.eosAfterSave,
- * gesetzt von ctx.saveAndApplyConfig. Sonst rechnete der angestoßene Lauf mit
- * altem Steuerzeitraum bzw. Akku (Gegenprüfung ae4e76f6). Ein fehlgeschlagener
- * Abgleich hält den Neuplan nicht auf.
- */
-export function requestEosReplanAfterSave(ctx, reason = 'config') {
-  const run = () => { ctx?.optimizerService?.requestEosReplan?.(reason); };
-  const pending = ctx?.eosAfterSave;
-  if (pending && typeof pending.then === 'function') return pending.then(run, run);
-  run();
-  return Promise.resolve();
-}
+// Neuplan nach dem Speichern erst nach dem EOS-Abgleich (eigenes Modul, damit
+// auch services/control-commands.js es ohne Zyklus nutzen kann).
+export { requestEosReplanAfterSave };
 
 export function createApiRoutes(ctx) {
   // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
@@ -3958,9 +3948,9 @@ export function createApiRoutes(ctx) {
       try { result = ctx.saveAndApplyConfig(next); }
       catch (e) { pushLog('schedulable_device_save_error', { error: e.message }); return json(res, 500, { ok: false, error: 'save failed' }); }
       pushLog('schedulable_device_saved', { id: v.device.id, kind: v.device.kind, endpoint: v.device.endpoint.type }, actorContext(req));
-      // EOS neu abgleichen (deferrable → home_appliance) + neu planen + Bridge sofort.
-      ctx.eosConfigSync?.sync?.().catch(() => {});
-      ctx.optimizerService?.requestEosReplan?.('devices');
+      // EOS-Abgleich (deferrable → home_appliance) läuft in saveAndApplyConfig;
+      // neu planen erst danach (requestEosReplanAfterSave), Bridge sofort.
+      requestEosReplanAfterSave(ctx, 'devices');
       ctx.eosDeviceBridge?.apply?.();
       return json(res, 200, { ok: true, device: v.device, restartRequired: !!(result && result.restartRequired) });
     }
@@ -3978,8 +3968,8 @@ export function createApiRoutes(ctx) {
       try { ctx.saveAndApplyConfig(next); }
       catch (e) { pushLog('schedulable_device_delete_error', { error: e.message }); return json(res, 500, { ok: false, error: 'save failed' }); }
       pushLog('schedulable_device_deleted', { id }, actorContext(req));
-      ctx.eosConfigSync?.sync?.().catch(() => {});
-      ctx.optimizerService?.requestEosReplan?.('devices');
+      // Abgleich läuft in saveAndApplyConfig; neu planen erst danach.
+      requestEosReplanAfterSave(ctx, 'devices');
       return json(res, 200, { ok: true, deleted: id });
     }
 
@@ -6581,8 +6571,10 @@ export function createApiRoutes(ctx) {
         plan: { fetchedAt: new Date(plan.at).toISOString(), current: plan.current },
         // Grundlage des Einspeisewerts im Plan („niedrigster Einspeisewert …
         // (Börse + Marktprämie)“, eos-plan-summary.js): womit der Push an EOS
-        // ihn für DIESEN Plan gebildet hat (eosPlanFeedInBasis).
-        priceBasis: eosPlanFeedInBasis(state.optimizer, getCfg(), Date.parse(plan.data?.generatedAt)),
+        // ihn für DIESEN Plan gebildet hat — zum Laufbeginn (generatedAt minus
+        // Dauer des letzten Laufs, eosPlanFeedInBasis).
+        priceBasis: eosPlanFeedInBasis(state.optimizer, getCfg(), Date.parse(plan.data?.generatedAt),
+          (Number(state.optimizer?.eosRun?.lastDurationS) || 0) * 1000),
         eos: { status: status.status, push: status.push },
         remote: eosRemoteSummary(),
       });
