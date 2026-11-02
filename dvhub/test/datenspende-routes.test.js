@@ -202,8 +202,31 @@ test('#31 Oberfläche: Hilfe zum Anmelde-Schlüssel, Schritt in der Fehlermeldun
   assert.ok(m, 'Hilfe-Text direkt unter dem Feld dsSecret');
   assert.match(m[1], /neue[sn]? Konto/);
   assert.match(m[1], /leer lassen/);
+  // Gegenprüfung 9190f2f8 (P2): Text war durch ein sed-„&“ verdoppelt/zerrissen.
+  assert.equal((m[1].match(/leer lassen/g) || []).length, 1, 'Wendung nur einmal');
+  assert.equal((m[1].match(/API-Key/g) || []).length, 1, 'Satz nur einmal');
+  assert.doesNotMatch(m[1], /(^|[^&])(mdash|bdquo|ldquo);/, 'jede Entität mit &');
   const js = fs.readFileSync(new URL('../public/tools.js', import.meta.url), 'utf8');
-  assert.match(js, /r\.j\.stepLabel/);
+  assert.match(js, /datenspendeFailureText\(r, hints\)/);
   // Der Schlüssel zählt nur beim Anlegen (api.py sendet secret nur bei sign-up).
-  assert.match(js, /dsSecretHelp/);
+  assert.match(js, /for \(const id of \['dsSecret', 'dsSecretHelp'\]\)[^\n]*hidden = mode !== 'signup'/);
+});
+
+// Gegenprüfung 9190f2f8 (P3): fester Hinweis verdeckte Grund/Server-Meldung.
+test('#31 Oberfläche: fester Hinweis + Details (Grund, Server-Meldung) zusammen', async () => {
+  const fs = await import('node:fs');
+  const js = fs.readFileSync(new URL('../public/tools.js', import.meta.url), 'utf8');
+  const m = js.match(/function datenspendeFailureText\(r, hints\) \{[\s\S]*?\n\}/);
+  assert.ok(m, 'tools.js definiert datenspendeFailureText(r, hints)');
+  const fn = new Function(`${m[0]}; return datenspendeFailureText;`)();
+  const hints = { connection_error: 'Projekt-Server nicht erreichbar — Internetverbindung prüfen.' };
+  const t = fn({ status: 502, j: { error: 'connection_error', step: 'sign-in', stepLabel: 'Anmelden', detail: 'Verbindungsfehler: ENOTFOUND' } }, hints);
+  assert.match(t, /Schritt „Anmelden“/);
+  assert.match(t, /nicht erreichbar/);
+  assert.match(t, /ENOTFOUND/);
+  const u = fn({ status: 400, j: { error: 'bad_request', stepLabel: 'Haushalt anlegen', detail: '400 bad_request: Invalid input format: null' } }, hints);
+  assert.match(u, /Haushalt anlegen/);
+  assert.match(u, /Invalid input format: null/);
+  assert.equal((u.match(/Invalid input format/g) || []).length, 1, 'Detail nicht doppelt');
+  assert.match(fn({ status: 500, j: {} }, hints), /500/);
 });

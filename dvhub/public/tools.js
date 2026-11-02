@@ -1554,6 +1554,17 @@ async function refreshDatenspende() {
   } catch { /* best effort */ }
 }
 
+// GH #31: Fehlermeldung der Einrichtung — Schritt, fester Hinweis (falls es
+// einen gibt) und die Details vom Server bzw. der Verbindungsgrund.
+function datenspendeFailureText(r, hints) {
+  const j = r && r.j ? r.j : {};
+  const where = j.stepLabel ? ` (Schritt „${j.stepLabel}“)` : '';
+  const hint = hints[j.error] || '';
+  const detail = j.detail ? String(j.detail) : '';
+  const body = hint && detail ? `${hint} (${detail})` : (hint || detail || j.error || `HTTP ${r && r.status}`);
+  return `Fehler${where}: ${body}`;
+}
+
 function wireDatenspende() {
   if (!dsEl('dsState')) return;
   dsEl('dsLinkBtn')?.addEventListener('click', async () => {
@@ -1595,9 +1606,7 @@ function wireDatenspende() {
       taken_email: 'E-Mail ist beim Projekt schon registriert.',
       connection_error: 'Projekt-Server nicht erreichbar — Internetverbindung prüfen.',
     };
-    // GH #31: welcher Einrichtungsschritt scheiterte (Konto, Haushalt, Client, API-Key).
-    const where = r.j?.stepLabel ? ` (Schritt „${r.j.stepLabel}“)` : '';
-    setText('dsResult', r.ok ? '✓ Verbunden — die Spende läuft. Danke!' : `Fehler${where}: ${hints[r.j.error] || r.j.detail || r.j.error || r.status}`);
+    setText('dsResult', r.ok ? '✓ Verbunden — die Spende läuft. Danke!' : datenspendeFailureText(r, hints));
     refreshDatenspende();
   });
   dsEl('dsEnabled')?.addEventListener('change', async (e) => {

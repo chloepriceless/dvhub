@@ -426,7 +426,10 @@ export function createDatenspende(ctx = {}, deps = {}) {
     }
   }
   function requireSetupId(value, step, what) {
-    if (value === undefined || value === null || value === '') {
+    // Nur nicht-leere Strings und positive Zahlen — 0/false würde der Sidecar
+    // beim Laden verwerfen, die Oberfläche meldete trotzdem „verbunden“.
+    const ok = (typeof value === 'string' && value.trim() !== '') || (typeof value === 'number' && Number.isFinite(value) && value > 0);
+    if (!ok) {
       const err = new DatenspendeRequestError(`Server lieferte keine ${what}`, 'bad_response');
       err.step = step;
       throw err;

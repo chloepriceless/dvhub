@@ -170,3 +170,13 @@ test('#31: Verbindungsfehler nennen den Grund (ETIMEDOUT/ENOTFOUND/Zeitüberschr
   await assert.rejects(mk(Object.assign(new Error('fetch failed'), { cause: { code: 'ENOTFOUND' } })).createHousehold('T', { userId: 'U' }),
     (e) => e.reason === 'ENOTFOUND' && e.step === 'households');
 });
+
+test('#31: Zahl 0 ist keine ID; getClientId filtert ebenso', async () => {
+  const { fetchImpl } = fakeFetch({
+    'POST /api/v1/web/households': { status: 201, body: { id: 0 } },
+    'GET /api/v1/clients': { status: 200, body: { clientId: false } },
+  });
+  const c = createDatenspendeClient({ fetchImpl });
+  await assert.rejects(c.createHousehold('TOK', { userId: 'U1' }), (e) => e.code === 'bad_response' && e.step === 'households');
+  assert.equal(await c.getClientId('KEY'), null);
+});

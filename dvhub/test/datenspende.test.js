@@ -437,3 +437,26 @@ test('#31 linkApiKey: Prüfschritt wird benannt', async () => {
   const svc = createDatenspende(baseCtx({ dir, cfg: { datenspende: {} } }), { client, now: () => T0 });
   await assert.rejects(svc.linkApiKey({ apiKey: 'K'.repeat(40), consent: true }), (e) => e.step === 'api-key-check');
 });
+
+// Gegenprüfung 9190f2f8 (P3): falsy-IDs (0, false) zählen nicht als ID — sonst
+// meldete die Oberfläche „verbunden“, obwohl der Sidecar sie wieder verwirft.
+test('#31 linkApiKey: Client-ID 0/false → Fehler statt scheinbarer Verknüpfung', async () => {
+  for (const bad of [0, false]) {
+    const dir = tmp();
+    const client = fakeClient();
+    client.getClientId = async () => bad;
+    const svc = createDatenspende(baseCtx({ dir, cfg: { datenspende: {} } }), { client, now: () => T0 });
+    await assert.rejects(svc.linkApiKey({ apiKey: 'K'.repeat(40), consent: true }),
+      (e) => e.code === 'bad_response' && e.step === 'api-key-check');
+    assert.equal(fs.existsSync(path.join(dir, SIDECAR_NAME)), false);
+  }
+});
+
+test('#31 link: Haushalt-ID 0 → Abbruch im Schritt households', async () => {
+  const dir = tmp();
+  const client = fakeClient();
+  client.createHousehold = async () => 0;
+  const svc = createDatenspende(baseCtx({ dir, cfg: { datenspende: {} } }), { client, now: () => T0 });
+  await assert.rejects(svc.link({ mode: 'signin', username: 'u', password: 'p', consent: true }),
+    (e) => e.code === 'bad_response' && e.step === 'households');
+});

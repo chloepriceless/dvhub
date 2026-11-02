@@ -93,7 +93,7 @@ export function connectionReason(e) {
 // liest data["id"] bzw. data["key"]. Zusätzlich akzeptiert: die Antwort als
 // Hülle um das angelegte Objekt ({household:{id}}, {client:{id}},
 // {apiKey:{key}}) — die übliche andere REST-Form; nur nicht-leere Strings/Zahlen.
-const usableId = (v) => ((typeof v === 'string' && v.trim()) || (typeof v === 'number' && Number.isFinite(v)) ? v : null);
+const usableId = (v) => ((typeof v === 'string' && v.trim()) || (typeof v === 'number' && Number.isFinite(v) && v > 0) ? v : null);
 function pickId(data, wrapper, field = 'id') {
   if (!data || typeof data !== 'object') return null;
   return usableId(data[field]) ?? usableId(data[wrapper]?.[field]) ?? null;
@@ -228,7 +228,7 @@ export function createDatenspendeClient({ baseUrl = DATENSPENDE_BASE_URL, fetchI
     // ── Betrieb (API-Key) ──
     async getClientId(apiKey) {
       const r = await call('GET', '/clients', { headers: keyHeaders(apiKey), ok: [201, 200], step: 'api-key-check' });
-      return r.data?.clientId;
+      return usableId(r.data?.clientId);
     },
     async registerMeter(apiKey, clientId, { name, vendor, model }) {
       const r = await call('POST', `/clients/${encodeURIComponent(clientId)}/meters`, {
