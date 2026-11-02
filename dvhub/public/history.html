@@ -274,6 +274,19 @@
         <div id="historyMispelBody" class="dv-price-table"></div>
       </section>
 
+      <!-- Netzstrom im Akku (grid-share.js, 02.11.2026): nur sichtbar, wenn Netzladen erlaubt ist oder Netzstrom im Akku steckt -->
+      <section id="historyGridShareCard" class="card chart-panel" hidden>
+        <div class="card-head">
+          <div>
+            <span class="card-title"><span class="dot dot-yellow"></span>Netzstrom im Akku</span>
+            <p id="historyGridShareSub" class="card-sub">Virtueller Z&auml;hler &mdash; Nachweis: kein Netzstrom mit Marktpr&auml;mie verkauft</p>
+          </div>
+          <a class="btn sm" id="historyGridShareCsv" href="/api/battery/grid-share/protocol.csv" download>Protokoll (CSV)</a>
+        </div>
+        <div id="historyGridShareChart" class="history-chart-mount"></div>
+        <div id="historyGridShareBody" class="dv-price-table"></div>
+      </section>
+
       <!-- DV-Einspeisevergütung (nur Monat/Jahr) -->
       <section id="historyDvCard" class="card chart-panel history-dv-card-hidden">
         <div class="card-head">
@@ -689,7 +702,7 @@
   <script src="/common.js"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20261021-akku2"></script>
+  <script src="/history.js?v=20261102-netzstrom"></script>
   <script src="/history-viz.js?v=20261021-akku2"></script>
 </body>
 </html>

@@ -2521,6 +2521,7 @@ async function loadHistorySummary() {
     }
     renderSummary(payload);
     loadMispelOverview();
+    loadGridShareCard();
   } catch (error) {
     if (error?.name === 'AbortError' || isStale()) return;
     setBanner(`Historie konnte nicht geladen werden: ${error.message}`, 'error');
@@ -2772,6 +2773,118 @@ async function loadMispelOverview(force = false) {
   } catch (_) {
     if (generation === mispelGeneration) renderMispelOverview(null);
   }
+}
+
+// Netzstrom im Akku (services/optimizer/grid-share.js, 02.11.2026): Verlauf des
+// virtuellen Zählers am gewählten Tag + Tagesprotokoll (Nachweis für die
+// Direktvermarktung). Nur sichtbar, wenn Netzladen erlaubt ist oder Netzstrom
+// im Akku steckt bzw. das Protokoll Einträge hat.
+let gridShareGeneration = 0;
+const GRID_SHARE_KEYS = ['battery_grid_share_wh', 'grid_to_battery_w', 'battery_grid_share_to_home_w', 'battery_grid_share_to_grid_w'];
+function fmtGs(v, digits = 2) {
+  return Number.isFinite(Number(v)) ? Number(v).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits }) : '–';
+}
+async function loadGridShareCard() {
+  const card = byId('historyGridShareCard');
+  if (!card) return;
+  const generation = ++gridShareGeneration;
+  const date = byId('historyDate')?.value || currentDateValue();
+  try {
+    const r = await apiFetch('/api/battery/grid-share?limit=400');
+    const data = r.ok ? await r.json() : null;
+    if (generation !== gridShareGeneration) return;
+    const protocol = Array.isArray(data?.protocol) ? data.protocol : [];
+    if (!data?.ok || !(data.gridChargeEnabled || Number(data.gridKwh) > 0 || protocol.length)) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    const sub = byId('historyGridShareSub');
+    if (sub) {
+      sub.textContent = `Jetzt ${fmtGs(data.gridKwh)} kWh Netzstrom im Akku`
+        + (data.sharePct == null ? '' : ` (${fmtGs(data.sharePct, 1)} %)`)
+        + (data.locked ? ' — Akku-Einspeisung gesperrt' : ' — Akku-Einspeisung frei')
+        + ` · Schwelle ${fmtGs(data.thresholdKwh, 1)} kWh`;
+    }
+    const days = protocol.filter((e) => e.event === 'day').slice(-31).reverse();
+    const t = data.today || {};
+    const row = (d) => `<tr><td>${escapeHtml(d.date || '')}</td><td>${fmtGs(d.gridToBatteryKwh)}</td><td>${fmtGs(d.batteryToHomeFromGridKwh)}</td>`
+      + `<td>${fmtGs(d.batteryToGridFromGridKwh)}</td><td>${fmtGs(d.lossFromGridKwh)}</td><td>${fmtGs(d.endGridKwh ?? d.gridKwh)}</td><td>${Number(d.lockedMinutes) || 0}</td></tr>`;
+    const todayRow = row({ ...t, endGridKwh: data.gridKwh, date: `${t.date || ''} (läuft)` });
+    const body = byId('historyGridShareBody');
+    if (body) {
+      body.innerHTML = '<table class="history-summary-table"><thead><tr><th>Tag</th><th>Netz→Akku kWh</th><th>Akku→Haus aus Netzstrom kWh</th>'
+        + '<th>Akku→Netz aus Netzstrom kWh</th><th>Verlust kWh</th><th>Netzstrom Tagesende kWh</th><th>Sperre min</th></tr></thead>'
+        + `<tbody>${todayRow}${days.map(row).join('')}</tbody></table>`
+        + '<p class="card-sub">Netz→Akku erhöht den Netzstrom-Anteil, Entladen senkt ihn anteilig (Anteil × Entladung), Verluste anteilig. '
+        + 'Solange mehr als die Schwelle im Akku ist, speist der Akku nicht ins Netz ein; PV-Einspeisung bleibt. „Akku→Netz aus Netzstrom“ soll 0 sein '
+        + '(Rest: Regelpuffer des Standard-Sollwerts).</p>';
+    }
+    await renderGridShareChart(date, generation);
+  } catch (_) {
+    if (generation === gridShareGeneration) card.hidden = true;
+  }
+}
+async function renderGridShareChart(date, generation) {
+  const mount = byId('historyGridShareChart');
+  if (!mount || typeof Chart !== 'function') return;
+  const start = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return;
+  const end = new Date(start.getTime());
+  end.setDate(end.getDate() + 1);
+  const qs = `keys=${GRID_SHARE_KEYS.join(',')}&start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}&maxResolution=300`;
+  const r = await apiFetch(`/api/telemetry/series?${qs}`);
+  const payload = r.ok ? await r.json() : null;
+  if (generation !== gridShareGeneration) return;
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  if (historyChartInstances.historyGridShareChart) {
+    historyChartInstances.historyGridShareChart.destroy();
+    delete historyChartInstances.historyGridShareChart;
+  }
+  if (!rows.some((x) => x.key === 'battery_grid_share_wh')) {
+    mount.innerHTML = '<p class="card-sub">Für diesen Tag gibt es noch keinen Verlauf des Zählers.</p>';
+    return;
+  }
+  const byTs = new Map();
+  for (const x of rows) {
+    const ts = String(x.ts);
+    if (!byTs.has(ts)) byTs.set(ts, {});
+    byTs.get(ts)[x.key] = Number(x.value);
+  }
+  const tsList = [...byTs.keys()].sort();
+  const labels = tsList.map((ts) => new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }));
+  const pick = (key, scale) => tsList.map((ts) => {
+    const v = byTs.get(ts)[key];
+    return Number.isFinite(v) ? Math.round((v / scale) * 1000) / 1000 : null;
+  });
+  mount.innerHTML = '<div class="history-chart-mount-container"><canvas id="historyGridShareChartCanvas"></canvas></div>';
+  mount.firstElementChild.style.height = '260px';
+  const canvas = document.getElementById('historyGridShareChartCanvas');
+  if (!canvas) return;
+  historyChartInstances.historyGridShareChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Netzstrom im Akku (kWh)', data: pick('battery_grid_share_wh', 1000), yAxisID: 'yKwh', borderColor: '#f5c451', backgroundColor: '#f5c45133', fill: true, pointRadius: 0, borderWidth: 2 },
+        { label: 'Netz→Akku (kW)', data: pick('grid_to_battery_w', 1000), yAxisID: 'yKw', borderColor: '#ff6b6b', pointRadius: 0, borderWidth: 1.5 },
+        { label: 'Akku→Haus aus Netzstrom (kW)', data: pick('battery_grid_share_to_home_w', 1000), yAxisID: 'yKw', borderColor: '#67a5ff', pointRadius: 0, borderWidth: 1.5 },
+        { label: 'Akku→Netz aus Netzstrom (kW)', data: pick('battery_grid_share_to_grid_w', 1000), yAxisID: 'yKw', borderColor: '#d946ef', pointRadius: 0, borderWidth: 1.5 }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: true, position: 'bottom', labels: { color: '#9ca3af', font: { size: 10 }, usePointStyle: true, boxWidth: 10, boxHeight: 10 } } },
+      scales: {
+        x: { ticks: { color: '#9ca3af', font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 13 }, grid: { color: '#e5e7eb20' } },
+        yKwh: { position: 'left', beginAtZero: true, title: { display: true, text: 'kWh', color: '#9ca3af', font: { size: 10 } }, ticks: { color: '#9ca3af', font: { size: 9 } }, grid: { color: '#e5e7eb20' } },
+        yKw: { position: 'right', beginAtZero: true, title: { display: true, text: 'kW', color: '#9ca3af', font: { size: 10 } }, ticks: { color: '#9ca3af', font: { size: 9 } }, grid: { display: false } }
+      }
+    }
+  });
 }
 
 async function loadEegLifetimeExtension() {

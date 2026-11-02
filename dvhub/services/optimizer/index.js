@@ -637,6 +637,13 @@ export function createOptimizerService(ctx) {
         });
       }
 
+      // Netzstrom im Akku (grid-share.js): solange er über der Schwelle liegt,
+      // plant auch der eingebaute Planer keinen Akku-Verkauf.
+      if (effectiveAllowGridDischarge && ctx.gridShare?.isLocked?.() === true) {
+        effectiveAllowGridDischarge = false;
+        pushLog('optimizer_grid_share_lock', { reason: 'Netzstrom im Akku — keine Akku-Einspeisung geplant' });
+      }
+
       // 6c. MiSpeL profitability check (OPTI-08)
       const mispelMode = cfg.optimizer?.mispel?.mode ?? 'none';
       let effectivePriceSlots = enrichedPriceSlots;

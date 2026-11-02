@@ -2320,6 +2320,18 @@ function renderDashboardStatus(status) {
     const vic = status.victron || {};
     setText('soc', vic.soc == null ? '-' : `${vic.soc} %`);
     setText('batP', vic.batteryPowerW == null ? '-' : `${vic.batteryPowerW} W`);
+    // Netzstrom im Akku (services/optimizer/grid-share.js): Anteil + Sperre.
+    const gs = status.gridShare;
+    const gsRow = document.getElementById('gridShareRow');
+    if (gsRow) {
+      const showGs = !!gs && (gs.gridChargeEnabled === true || Number(gs.gridKwh) > 0 || gs.locked === true);
+      gsRow.hidden = !showGs;
+      if (showGs) {
+        const kwh = Number(gs.gridKwh || 0).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+        const pct = gs.sharePct == null ? '–' : Number(gs.sharePct).toLocaleString('de-DE', { maximumFractionDigits: 1 });
+        setText('gridShare', `${kwh} kWh (${pct} %)${gs.locked ? ' · Einspeisung gesperrt' : ''}`, gs.locked ? 'warn' : null);
+      }
+    }
     setText('pvP', vic.pvPowerW == null ? '-' : `${vic.pvPowerW} W`);
     setText('pvAc', vic.pvAcW == null ? '-' : `${vic.pvAcW} W`);
     setText('pvTotal', vic.pvTotalW == null ? '-' : `${vic.pvTotalW} W`);

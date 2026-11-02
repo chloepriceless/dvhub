@@ -1373,6 +1373,9 @@ export function createApiRoutes(ctx) {
     '/api/history/summary',
     // MiSpeL-Übersicht der Historie (2026-10-18) — gleiche Haltung wie summary.
     '/api/history/mispel',
+    // Netzstrom im Akku (grid-share.js, 02.11.2026): Zählerstand + Nachweis-Protokoll, nur lesend.
+    '/api/battery/grid-share',
+    '/api/battery/grid-share/protocol.csv',
     // §51a lifetime Förder-Verlängerung (T-0004) — read-only aggregate for the
     // history page; same appliance-trust pattern as /api/history/summary.
     '/api/eeg/extension',
@@ -1464,6 +1467,7 @@ export function createApiRoutes(ctx) {
     // history — telemetry/history reads + exports + DB backup
     ['/api/history/import/status', 'history'], ['/api/history/summary', 'history'],
     ['/api/history/mispel', 'history'],
+    ['/api/battery/grid-share', 'history'], ['/api/battery/grid-share/protocol.csv', 'history'],
     ['/api/eeg/extension', 'history'],
     ['/api/telemetry/series', 'history'], ['/api/history/raw', 'history'],
     ['/api/history/raw/export.csv', 'history'], ['/api/history/raw/export.parquet', 'history'],
@@ -7833,6 +7837,25 @@ export function createApiRoutes(ctx) {
 
     // MiSpeL-Übersicht: Pauschaloption je (Rumpf-)Jahr, Abgrenzung je Monat,
     // aus den gemessenen Viertelstunden (services/mispel/mispel-calc.js).
+    // Netzstrom im Akku (services/optimizer/grid-share.js): Stand des virtuellen
+    // Zählers, Sperre und Protokoll (Nachweis für die Direktvermarktung).
+    if (url.pathname === '/api/battery/grid-share' && req.method === 'GET') {
+      if (!ctx.gridShare) return json(res, 503, { ok: false, error: 'grid share tracker not available' });
+      const limit = Math.min(2000, Math.max(1, Number(url.searchParams.get('limit')) || 400));
+      return json(res, 200, { ok: true, ...ctx.gridShare.summary(), protocol: ctx.gridShare.protocol(limit) });
+    }
+    if (url.pathname === '/api/battery/grid-share/protocol.csv' && req.method === 'GET') {
+      if (!ctx.gridShare) return json(res, 503, { ok: false, error: 'grid share tracker not available' });
+      res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': 'attachment; filename="netzstrom-im-akku-protokoll.csv"',
+        'cache-control': 'no-store'
+      });
+      res.end('\ufeff' + ctx.gridShare.protocolCsv());
+      return;
+    }
+
     if (url.pathname === '/api/history/mispel' && req.method === 'GET') {
       if (!ctx.historyApi || typeof ctx.historyApi.getMispel !== 'function') {
         return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });

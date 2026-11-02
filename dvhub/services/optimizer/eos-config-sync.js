@@ -764,7 +764,16 @@ export function createEosConfigSync(ctx) {
     // DVhub nicht — die Bridge schickt über ElecPriceImport bereits den
     // aufgelösten Endkundenpreis (`elecpriceimport.py` ruft
     // `_store_gross_series` nicht), sonst würde doppelt gerechnet.
-    tasks.push({ section: 'feedintariff/direct_marketing_enabled', body: directMarketing });
+    //
+    // Netzstrom im Akku (grid-share.js, Christin 01./02.11.2026): In EOS hängt
+    // die Akku-Netzeinspeisung NUR an diesem Schalter (genetic.py
+    // optimize_battery_grid_export = direct_marketing_enabled; DVhubs
+    // allowGridDischarge erreicht EOS nicht). Solange Netzstrom im Akku steckt,
+    // geht er deshalb auf false: EOS plant dann keinen Akku-Verkauf (und keine
+    // DC-Lade-Optimierung). Die echte §51-Abregelung macht DVhub selbst
+    // (schedule-eval negative_price_protection), sie hängt nicht daran.
+    const gridShareLocked = ctx.gridShare?.isLocked?.() === true;
+    tasks.push({ section: 'feedintariff/direct_marketing_enabled', body: directMarketing && !gridShareLocked });
 
     const applied = [];
     const errors = {};
@@ -825,6 +834,7 @@ export function createEosConfigSync(ctx) {
         battery_max_charge_w: batteries[0]?.max_charge_power_w,
         battery_min_soc_pct: batteries[0]?.min_soc_percentage,
         inverter_max_power_w: inverters[0]?.max_power_w,
+        battery_grid_export_blocked: gridShareLocked,
       });
     }
     return { ok: okAll, applied, unchanged, errors, eos: { flavor: caps.flavor, version: caps.version, supported: true } };
