@@ -174,3 +174,31 @@ test('R-0008: hersteller/ wird mitten im Lauf gegen einen Verweis getauscht → 
     fs.rmSync(t.tmp, { recursive: true, force: true });
   }
 });
+
+// Gegenprüfung 1c0105a0 (P3): Tausch genau zwischen Prüfung und chdir — die
+// dev/ino-Prüfung im Arbeitsordner muss greifen (vorher ohne Test).
+test('R-0008: Tausch zwischen Prüfung und chdir → Abbruch, nichts im Ziel', async () => {
+  const { inRealDir } = await import('../../scripts/reconcile-vendor-profiles.mjs');
+  const t = symlinkSetup();
+  const realChdir = process.chdir;
+  let swapped = false;
+  process.chdir = function patched(d) {
+    if (!swapped && d === t.cfgH) {
+      swapped = true;
+      fs.renameSync(t.cfgH, `${t.cfgH}.alt`);
+      fs.symlinkSync(t.outside, t.cfgH);
+    }
+    return realChdir.call(process, d);
+  };
+  try {
+    fs.mkdirSync(t.cfgH);
+    let ran = false;
+    assert.throws(() => inRealDir(t.cfgH, () => { ran = true; fs.writeFileSync('a.json', 'x'); }), /ersetzt/);
+    assert.ok(swapped);
+    assert.equal(ran, false);
+    assert.deepEqual(fs.readdirSync(t.outside), ['opfer']);
+  } finally {
+    process.chdir = realChdir;
+    fs.rmSync(t.tmp, { recursive: true, force: true });
+  }
+});

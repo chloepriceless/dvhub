@@ -72,6 +72,10 @@ export function mergeAdditions(active, dist) {
 // (inode-geprüft), ohne Verweisen zu folgen (Gegenprüfung ad70a264, P3).
 if (import.meta.url === `file://${process.argv[1]}`) {
   const { inRealDir, readNoFollow, writeNoFollow } = await import('./reconcile-vendor-profiles.mjs');
+  // Schlüssel stammen aus dem Ordner des Dienstbenutzers: Steuerzeichen nicht
+  // roh ins Terminal von root (Gegenprüfung 1c0105a0, P3).
+  // eslint-disable-next-line no-control-regex
+  const shown = (p) => String(p).replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
   const args = process.argv.slice(2);
   const name = args.find((a) => !a.startsWith('--'));
   const apply = args.includes('--apply-additions');
@@ -94,11 +98,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
       console.log(`\nHerstellerprofil ${name}: aktiv  vs  ${name}.dist (neue Version)\n`);
       console.log(`  NEU in der neuen Version (sicher übernehmbar): ${added.length}`);
-      for (const x of added) console.log(`    + ${x.path} = ${JSON.stringify(x.dist)}`);
+      for (const x of added) console.log(`    + ${shown(x.path)} = ${JSON.stringify(x.dist)}`);
       console.log(`\n  DEINE Anpassung, in neuer Version anders (bleibt — du entscheidest): ${changed.length}`);
-      for (const x of changed) console.log(`    ~ ${x.path}: deins=${JSON.stringify(x.active)}  neu=${JSON.stringify(x.dist)}`);
+      for (const x of changed) console.log(`    ~ ${shown(x.path)}: deins=${JSON.stringify(x.active)}  neu=${JSON.stringify(x.dist)}`);
       console.log(`\n  NUR bei dir (in neuer Version nicht mehr vorhanden): ${removed.length}`);
-      for (const x of removed) console.log(`    - ${x.path} = ${JSON.stringify(x.active)}`);
+      for (const x of removed) console.log(`    - ${shown(x.path)} = ${JSON.stringify(x.active)}`);
 
       if (!apply) {
         console.log(`\nNur angezeigt. Zum Übernehmen der ${added.length} neuen Felder (deine Anpassungen bleiben):`);
@@ -110,10 +114,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const bak = `${name}.bak-${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}`;
       writeNoFollow(bak, bufA);
       writeNoFollow(name, JSON.stringify(merged, null, 2) + '\n');
-      console.log(`\n✓ Übernommen: ${addedTopLevel.join(', ')}`);
+      console.log(`\n✓ Übernommen: ${addedTopLevel.map(shown).join(', ')}`);
       console.log(`  Backup: ${path.join(herstellerDir, bak)}`);
       console.log(`  DVhub neu starten, damit das Profil geladen wird:  systemctl restart dvhub`);
-    });
+    }, (m) => console.error(m), { create: false });
   } catch (e) {
     console.error(`abgebrochen: ${e.message}`);
     rc = 1;

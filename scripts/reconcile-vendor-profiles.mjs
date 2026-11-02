@@ -70,18 +70,25 @@ export function ensureRealDir(dir, log = () => {}) {
  * Führt fn() mit dem echten Ordner `dir` als Arbeitsordner aus (nur relative
  * Namen benutzen!) und stellt den vorherigen Arbeitsordner wieder her.
  */
-export function inRealDir(dir, fn, log = () => {}) {
-  ensureRealDir(dir, log);
+export function inRealDir(dir, fn, log = () => {}, { create = true } = {}) {
+  // create:false (nur anzeigen): nichts anlegen und keinen Verweis ersetzen —
+  // ein Verweis oder fehlender Ordner wird abgelehnt (Gegenprüfung 1c0105a0).
+  if (create) ensureRealDir(dir, log);
   const checked = fs.lstatSync(dir);
-  if (checked.isSymbolicLink() || !checked.isDirectory()) throw new Error(`${dir} wurde während des Abgleichs ersetzt`);
-  const prev = process.cwd();
+  if (checked.isSymbolicLink() || !checked.isDirectory()) {
+    throw new Error(create ? `${dir} wurde während des Abgleichs ersetzt` : `${dir} ist kein eigener Ordner (Verweis?)`);
+  }
+  // Der Aufrufer-Ordner kann gelöscht oder unlesbar sein — dann nach / zurück,
+  // ohne das Ergebnis von fn() zu verdecken.
+  let prev = '/';
+  try { prev = process.cwd(); } catch { /* gelöscht */ }
   process.chdir(dir);
   try {
     const here = fs.statSync('.');
     if (here.dev !== checked.dev || here.ino !== checked.ino) throw new Error(`${dir} wurde während des Abgleichs ersetzt`);
     return fn();
   } finally {
-    process.chdir(prev);
+    try { process.chdir(prev); } catch { try { process.chdir('/'); } catch { /* bleibt */ } }
   }
 }
 
