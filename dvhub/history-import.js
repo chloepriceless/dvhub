@@ -1251,12 +1251,21 @@ async function fetchVrmStats({ siteId, token, type, start, end, interval, fetchI
     interval
   });
   const url = `${VRM_API_BASE}/v2/installations/${encodeURIComponent(siteId)}/stats?${params.toString()}`;
-  const response = await fetchImpl(url, {
-    headers: {
-      accept: 'application/json',
-      'x-authorization': `Token ${token}`
-    }
-  });
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      headers: {
+        accept: 'application/json',
+        'x-authorization': `Token ${token}`
+      }
+    });
+  } catch (cause) {
+    // Netzfehler kennzeichnen, damit die Wiederholung greift (isTransientVrmError).
+    const error = new Error(`VRM stats request failed for ${type}: ${cause?.cause?.code || cause?.message || cause}`);
+    error.code = 'network';
+    error.type = type;
+    throw error;
+  }
   if (!response.ok) {
     // GH #32: ein 404 heißt hier fast immer „diese Site-ID kennt VRM (für dieses
     // Token) nicht“ — das gehört in die Meldung, nicht nur der Statuscode.
@@ -1299,9 +1308,7 @@ async function fetchVrmStatsWithRetry({
       });
     } catch (error) {
       lastError = error;
-      const status = Number(error?.status || 0);
-      const retryable = status === 429 || status >= 500;
-      if (!retryable || attempt >= maxAttempts) break;
+      if (!isTransientVrmError(error) || attempt >= maxAttempts) break;
       await waitImpl(retryDelayMs * attempt);
     }
   }

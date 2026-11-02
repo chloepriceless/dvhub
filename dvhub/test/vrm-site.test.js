@@ -200,3 +200,37 @@ test('Abgelaufene Zuordnung + Portal-ID nicht mehr im Konto → Fehler (nicht di
   routes['/v2/users/4711/installations'] = { body: { success: true, records: [] } };
   await assert.rejects(resolveVrmSiteId(opts), (e) => e.code === 'not_in_account');
 });
+
+// Gegenprüfung ba005b6b (P3): Ein zweiter Aufrufer, der auf die laufende
+// Auflösung wartet, bekommt bei vorübergehendem Fehler ebenfalls die bekannte ID.
+test('Gleichzeitige Aufrufer: abgelaufene Zuordnung + 503 → beide bekommen die bekannte ID', async () => {
+  const routes = { ...ACCOUNT };
+  const { fetchImpl } = fakeVrm(routes);
+  const cache = new Map();
+  let t = 0;
+  const opts = { ref: 'a1b2c3d4e5f6', token: 'tok-conc', fetchImpl, cache, now: () => t, ttlMs: 1000 };
+  await resolveVrmSiteId(opts);
+  t = 5000;
+  routes['/v2/users/me'] = { status: 503, body: {} };
+  const [a, b] = await Promise.all([resolveVrmSiteId(opts), resolveVrmSiteId(opts)]);
+  assert.equal(a, '123456');
+  assert.equal(b, '123456');
+});
+
+// Gegenprüfung ba005b6b (P3): Abbruch beim Lesen des Antwort-Körpers ist ein
+// Netzfehler (vorübergehend), kein „unerwartet“.
+test('Abbruch beim Lesen der Antwort → code network (vorübergehend)', async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200,
+    async text() { throw Object.assign(new TypeError('terminated'), { cause: { code: 'ECONNRESET' } }); },
+    async json() { throw Object.assign(new TypeError('terminated'), { cause: { code: 'ECONNRESET' } }); },
+  });
+  await assert.rejects(resolveVrmSiteId({ ref: 'a1b2c3d4e5f6', token: 'tok-body', fetchImpl, cache: new Map() }),
+    (e) => e.code === 'network' && /ECONNRESET/.test(e.message));
+});
+
+test('Kaputtes JSON bleibt „unexpected“', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, async text() { return '<html>'; }, async json() { throw new SyntaxError('x'); } });
+  await assert.rejects(resolveVrmSiteId({ ref: 'a1b2c3d4e5f6', token: 'tok-html', fetchImpl, cache: new Map() }),
+    (e) => e.code === 'unexpected');
+});

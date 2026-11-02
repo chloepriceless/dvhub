@@ -2280,8 +2280,10 @@ const telemetryReady = (async () => {
     store: telemetryStore,
     telemetryConfig: cfg.telemetry || {},
     getEpexConfig: () => cfg.epex || {},
-    // Echte Pausen: Wiederholung bei 429/5xx/Netzfehler und Schonpause
-    // zwischen Nachimport-Fenstern (vorher No-op, Gegenprüfung 6f05ca48).
+    // Echte Pausen (vorher No-op, Gegenprüfung 6f05ca48): bis zu 3 Versuche mit
+    // 1 s/2 s Abstand bei 429/5xx/Netzfehler (VRM-Auflösung und /stats) und
+    // Schonpause zwischen Nachimport-Fenstern. Längere WAN-Ausfälle beim Start
+    // überbrückt das nicht.
     waitImpl: sleepMs
   }) : null;
   ctx.historyImportManager = historyImportManager;

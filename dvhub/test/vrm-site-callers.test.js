@@ -275,3 +275,27 @@ test('History-Import: server.js gibt eine echte Pause (sleepMs) mit, sleepMs war
   await sleepMs(40);
   assert.ok(Date.now() - t0 >= 35);
 });
+
+// Gegenprüfung ba005b6b (P2): auch die Statistik-Abrufe selbst werden bei
+// Netzfehlern wiederholt (nicht nur 429/5xx).
+test('History-Import: Statistik-Abruf einmal Netzfehler → wiederholt, Import gelingt', async () => {
+  const base = fakeVrm();
+  let failed = false;
+  const waits = [];
+  const fetchImpl = async (url, opts) => {
+    if (!failed && new URL(url).pathname.endsWith('/stats')) {
+      failed = true;
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+    }
+    return base.fetchImpl(url, opts);
+  };
+  const manager = createHistoryImportManager({
+    store: fakeStore(),
+    fetchImpl,
+    waitImpl: async (ms) => { waits.push(ms); },
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-stats-net' } },
+  });
+  const result = await manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(waits.length, 1);
+});

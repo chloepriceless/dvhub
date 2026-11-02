@@ -80,7 +80,14 @@ async function vrmGet(path, { token, fetchImpl, what }) {
   if (!res.ok) {
     throw new VrmSiteResolveError(`VRM-Abfrage fehlgeschlagen (${what}: HTTP ${res.status})`, 'http', res.status);
   }
-  const body = await res.json().catch(() => null);
+  let body;
+  try {
+    body = await res.json();
+  } catch (e) {
+    // Kaputtes JSON → unerwartet; Abbruch beim Lesen (Reset, Zeitlimit) → Netz.
+    if (e instanceof SyntaxError) body = null;
+    else throw new VrmSiteResolveError(`VRM nicht erreichbar (${what}, Antwort abgebrochen): ${networkReason(e)}`, 'network');
+  }
   if (!body || typeof body !== 'object') {
     throw new VrmSiteResolveError(`VRM lieferte keine lesbare Antwort (${what})`, 'unexpected');
   }
@@ -134,27 +141,32 @@ export async function resolveVrmSiteId({
 
   const key = cacheKey(value, token);
   const hit = cache.get(key);
-  if (hit && (hit.pending || now() - hit.at < ttlMs)) return hit.pending || hit.siteId;
-  const pending = lookupSiteId(value, { token, fetchImpl });
-  const entry = { pending };
-  cache.set(key, entry);
-  try {
-    const siteId = await pending;
-    if (cache.get(key) === entry) cache.set(key, { siteId, at: now() });
-    while (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value);
-    return siteId;
-  } catch (e) {
-    // Abgelaufene, aber bekannte Zuordnung bei vorübergehendem Fehler weiter
-    // nutzen (Eintrag bleibt abgelaufen → nächster Aufruf fragt erneut).
-    // „Nicht im Konto“, mehrdeutig, Token ungültig: Fehler durchreichen.
-    const known = hit?.siteId;
-    if (cache.get(key) === entry) {
-      if (known && isTransientVrmError(e)) cache.set(key, hit);
-      else cache.delete(key);
+  if (hit?.promise) return hit.promise;
+  if (hit && now() - hit.at < ttlMs) return hit.siteId;
+  // Abgelaufene, aber bekannte Zuordnung bei vorübergehendem Fehler (Netz,
+  // 429, 5xx) weiter nutzen — auch für Aufrufer, die gleichzeitig warten; der
+  // Eintrag bleibt abgelaufen, der nächste Aufruf fragt erneut. „Nicht im
+  // Konto“, mehrdeutig, Token ungültig: Fehler durchreichen, Eintrag weg.
+  const known = hit?.siteId || null;
+  const entry = {};
+  entry.promise = lookupSiteId(value, { token, fetchImpl }).then(
+    (siteId) => {
+      if (cache.get(key) === entry) cache.set(key, { siteId, at: now() });
+      while (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value);
+      return siteId;
+    },
+    (e) => {
+      const keep = known && isTransientVrmError(e);
+      if (cache.get(key) === entry) {
+        if (keep) cache.set(key, hit);
+        else cache.delete(key);
+      }
+      if (keep) return known;
+      throw e;
     }
-    if (known && isTransientVrmError(e)) return known;
-    throw e;
-  }
+  );
+  cache.set(key, entry);
+  return entry.promise;
 }
 
 /** Vorübergehend (lohnt Wiederholung): Netzfehler, 429, 5xx. */
