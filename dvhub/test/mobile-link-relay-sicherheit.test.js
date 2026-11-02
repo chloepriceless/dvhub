@@ -547,6 +547,36 @@ describe('Relay-Speicher: Ausgangspuffer', () => {
     }
   });
 
+  test('zwei größte Box-Antworten dürfen gleichzeitig warten (Gegenprüfung 67ede79a P3)', () => {
+    const guard = relayCore.createSocketGuard({ stallMs: 1e9 });
+    try {
+      const w = fakeWs();
+      const s = guard.wrap(w, { remote: 'A', pingMs: 0 });
+      // Größter weitergeleiteter Rahmen: Box-Rahmen bis 1 MiB, {"t":"data","d":…}.
+      const max = JSON.stringify({ t: 'data', d: 'A'.repeat(DEFAULT_LIMITS.boxFrameBytes - 64) });
+      s.send(max);
+      s.send(max);
+      assert.equal(w.terminated, false, 'zwei größte Antworten trennen ein gesundes Handy');
+      w.flush();
+    } finally {
+      guard.close();
+    }
+  });
+
+  test('jeder wartende Rahmen zählt den Pool-Anteil seines Kopfes mit (Gegenprüfung 2339cc36 P3)', () => {
+    const guard = relayCore.createSocketGuard({ stallMs: 1e9 });
+    try {
+      const w = fakeWs();
+      const s = guard.wrap(w, { remote: 'A', pingMs: 0 });
+      for (let i = 0; i < 10; i++) s.send('x');
+      assert.ok(guard.stats().outBufferedBytes >= 10 * (1 + Buffer.poolSize), `gezählt ${guard.stats().outBufferedBytes}`);
+      w.flush();
+      assert.equal(guard.stats().outBufferedBytes, 0);
+    } finally {
+      guard.close();
+    }
+  });
+
   test('ohne Fortschritt wird getrennt, wer abholt, bleibt', async () => {
     const guard = relayCore.createSocketGuard({ stallMs: 150 });
     try {
@@ -651,7 +681,7 @@ describe('Relay-Speicher: Rahmen vor und nach der Anmeldung', () => {
 });
 
 describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', () => {
-  test('Ping-Flut ohne Lesen: Pongs zählen im Ausgangsbudget, Flut wird getrennt (P1)', async () => {
+  test('Ping-Flut ohne Lesen: Steuerrahmen begrenzt (P1)', async () => {
     const { srv, port } = await localRelay();
     try {
       const b = await wsBox(port, generateIdentity());
@@ -663,14 +693,75 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
     }
   });
 
-  test('Ein-Byte-Fragmente mit Pong-Füllung: Fragmente begrenzt, festgehaltene Lesepuffer gezählt (P2)', async () => {
-    const { srv, port } = await localRelay();
+  test('Pongs zählen im Ausgangsbudget: Nicht-Leser fliegt auch unter der Steuerrahmen-Grenze (P1)', async () => {
+    const { srv, port } = await localRelay({ socketLimits: { controlFramesPerWindow: 1e9, outPerConn: 64 * 1024, stallMs: 60_000 } });
     try {
       const b = await wsBox(port, generateIdentity());
-      // Unfertige Nachricht aus 1-Byte-Fragmenten, dazwischen leere Pongs.
+      b.ws._socket.pause();
+      const ping = Buffer.from([0x89, 0x80 | 125, 0, 0, 0, 0, ...Buffer.alloc(125, 1)]);
+      for (let k = 0; k < 40 && srv.relay.stats().connections > 0; k++) {
+        b.ws._socket.write(Buffer.concat(Array.from({ length: 1000 }, () => ping)));
+        await sleep(20);
+      }
+      await until(() => srv.relay.stats().connections === 0, 3000);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  test('Pong hält das Lesestück nicht fest (Kopie der Ping-Nutzdaten, P2)', () => {
+    const guard = relayCore.createSocketGuard({ stallMs: 1e9 });
+    try {
+      const h = {};
+      let pongArg = null;
+      const ws = {
+        readyState: 1, bufferedAmount: 0,
+        send() {}, terminate() {}, close() {}, ping() {},
+        pong(data) { pongArg = data; },
+        on(ev, fn) { (h[ev] ||= []).push(fn); },
+      };
+      guard.wrap(ws, { remote: 'A', pingMs: 0 });
+      const chunk = Buffer.alloc(64 * 1024, 7);
+      const view = chunk.subarray(100, 225);
+      for (const f of h.ping || []) f(view);
+      assert.ok(pongArg, 'Ping nicht beantwortet');
+      assert.notEqual(pongArg.buffer, chunk.buffer, 'Pong teilt das Lesestück');
+      assert.equal(pongArg.buffer.byteLength, view.length, 'Pong liegt in einem gemeinsamen Pool');
+      assert.deepEqual([...pongArg], [...view]);
+    } finally {
+      guard.close();
+    }
+  });
+
+  test('Ein-Byte-Fragmente mit Pong-Füllung: höchstens 16 Fragmente (P2)', async () => {
+    // Steuerrahmen-Grenze außer Reichweite, Pin-Zählung (16 × 64 KiB) unter
+    // der Grenze je Quelle: trennen darf hier nur maxFragments — genau an der
+    // Grenze: 16 Datenrahmen bleiben offen, der 17. trennt.
+    const { srv, port } = await localRelay({ socketLimits: { controlFramesPerWindow: 1e9 } });
+    try {
+      const b = await wsBox(port, generateIdentity());
       const pong = Buffer.from([0x8a, 0x80, 0, 0, 0, 0]);
+      const frag = () => Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' '), pong, pong]);
+      const parts = [Buffer.concat([frameHead(1, { fin: false, opcode: 0x1 }), Buffer.from('{'), pong])];
+      for (let i = 0; i < 15; i++) parts.push(frag());
+      b.ws._socket.write(Buffer.concat(parts));
+      await sleep(300);
+      assert.equal(b.state.closed, null, '16 Fragmente schon getrennt');
+      b.ws._socket.write(frag());
+      await until(() => b.state.closed, 3000);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  test('festgehaltene Fragmente zählen im Eingangsbudget (P2)', async () => {
+    const { srv, port } = await localRelay({ socketLimits: { inTotal: 256 * 1024, inPerRemote: 1024 * 1024, stallMs: 60_000 } });
+    try {
+      const b = await wsBox(port, generateIdentity());
+      // 10 Fragmente (unter maxFragments), Nutzdaten winzig — nur die
+      // Pin-Zählung (64 KiB je Fragment) sprengt das Budget.
       const parts = [Buffer.concat([frameHead(1, { fin: false, opcode: 0x1 }), Buffer.from('{')])];
-      for (let i = 0; i < 40; i++) parts.push(Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' ')]), pong, pong);
+      for (let i = 0; i < 9; i++) parts.push(Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' ')]));
       b.ws._socket.write(Buffer.concat(parts));
       await until(() => b.state.closed, 3000);
     } finally {
@@ -829,7 +920,7 @@ describe('Relay-Speicher: faire Verdrängung im Briefkasten', () => {
     const worst = DEFAULT_LIMITS.maxConnections * 10 * 1024
       + DEFAULT_LIMITS.mailboxTotalBytes + S.outTotal + S.inTotal;
     assert.ok(worst <= 176 * 1024 * 1024, `Worst Case ${Math.round(worst / 1048576)} MiB`);
-    assert.ok(S.outPerConn <= 2 * 1024 * 1024 && S.outPerConn >= DEFAULT_LIMITS.boxFrameBytes + 4096);
+    assert.ok(S.outPerConn <= 2 * 1024 * 1024 + 64 * 1024 && S.outPerConn >= DEFAULT_LIMITS.boxFrameBytes + 4096);
     assert.ok(S.preAuthFrameBytes <= 16 * 1024);
     assert.ok(DEFAULT_LIMITS.mailboxBytesPerSource < DEFAULT_LIMITS.mailboxTotalBytes / 8);
   });
