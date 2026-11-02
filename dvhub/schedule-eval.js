@@ -25,7 +25,7 @@ import { capLoopStep } from './services/feed-in-cap/index.js';
 import { betaGateOpen } from './beta-features.js';
 import {
   resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint, knownMaxDischargeW, dischargeStep,
-  decodeMaxDischargeRaw, DISCHARGE_RELEASE_TICKS
+  decodeMaxDischargeRaw, DISCHARGE_RELEASE_TICKS, MAX_DISCHARGE_INT32_ADDR, MAX_DISCHARGE_INT16_ADDR
 } from './services/peak-shaving/index.js';
 // Netzstrom im Akku (Christin 01./02.11.2026): solange der Zähler sperrt, darf
 // der Akku nicht ins Netz entladen — nur der PV-Überschuss geht hinaus.
@@ -1426,21 +1426,43 @@ export function createScheduleEvaluator(ctx) {
   }
 
   let peakShavingTickNo = 0;
+  // Victron: zuerst 2720 (int32, W) — dort ist −1 (unbegrenzt) eindeutig, 2704
+  // rundet es auf 0 (wie der Entlade-Wächter). Nur „Register/Funktion
+  // unbekannt“ (Exception 1/2, Venus < 3.50) schaltet dauerhaft auf 2704 um;
+  // eine 0 von dort ist mehrdeutig (ambiguousZero).
+  let peakShavingNo2720 = false;
   async function readMaxDischargeForPeakShaving(conf) {
     const psState = (state.ctrl._peakShaving ??= {});
     try {
       let value;
+      let ambiguousZero = false;
       if (transport.type === 'mqtt') {
         value = Number((await transport.readPoint('maxDischargeW'))?.mqttValue);
       } else {
-        const regs = await transport.mbRequest({
-          fc: 3, host: conf.host, port: conf.port, unitId: conf.unitId,
-          address: conf.address, quantity: 1, timeoutMs: conf.timeoutMs
-        });
-        value = decodeMaxDischargeRaw(regs?.[0], conf);
+        const target = { fc: 3, host: conf.host, port: conf.port, unitId: conf.unitId, timeoutMs: conf.timeoutMs };
+        let done = false;
+        if (Number(conf.address) === MAX_DISCHARGE_INT16_ADDR && !peakShavingNo2720) {
+          try {
+            const regs = await transport.mbRequest({ ...target, address: MAX_DISCHARGE_INT32_ADDR, quantity: 2 });
+            if (!Array.isArray(regs) || regs.length < 2 || !regs.slice(0, 2).every((w) => Number.isFinite(Number(w)))) {
+              throw new Error('2720: unvollständige Antwort');
+            }
+            const raw = (((Number(regs[0]) & 0xffff) << 16) | (Number(regs[1]) & 0xffff)) | 0;
+            value = raw < 0 ? -1 : raw;
+            done = true;
+          } catch (e) {
+            if (/^modbus exception (1|2)\b/.test(String(e?.message))) peakShavingNo2720 = true;
+            else throw e;
+          }
+        }
+        if (!done) {
+          const regs = await transport.mbRequest({ ...target, address: conf.address, quantity: 1 });
+          value = decodeMaxDischargeRaw(regs?.[0], conf);
+          ambiguousZero = Number(conf.address) === MAX_DISCHARGE_INT16_ADDR && (Number(regs?.[0]) & 0xffff) === 0;
+        }
       }
-      if (value == null || !Number.isFinite(value)) throw new Error('2704: kein gültiger Wert');
-      psState.readback = { value, at: Date.now(), tick: peakShavingTickNo, error: null };
+      if (value == null || !Number.isFinite(value)) throw new Error('Entladegrenze: kein gültiger Wert');
+      psState.readback = { value, at: Date.now(), tick: peakShavingTickNo, error: null, ambiguousZero };
     } catch (e) {
       psState.readback = { ...(psState.readback || { value: null, at: 0 }), error: e?.message || String(e) };
     }

@@ -200,27 +200,43 @@ const LIFT_STEP_W = 100;
 const READBACK_GRACE_MS = 10_000;
 const READBACK_TOLERANCE_W = 50;
 
+// com.victronenergy.settings /Settings/CGwacs/MaxDischargePower als int32 in W
+// (dbus_modbustcp attributes.csv: 2720, int32, Skala 1; Venus ≥ 3.50). Anders
+// als 2704 (int16, Skala 0,1) zeigt 2720 die Werkseinstellung −1 (unbegrenzt)
+// eindeutig: 2704 rundet −1 × 0,1 auf 0 (mappings.cpp convertFromDbus) und
+// liest sich wie eine Sperre.
+export const MAX_DISCHARGE_INT32_ADDR = 2720;
+export const MAX_DISCHARGE_INT16_ADDR = 2704;
+
 /**
- * Was DVhub über 2704 sicher weiß, in dieser Reihenfolge:
+ * Was DVhub über die Entladegrenze sicher weiß, in dieser Reihenfolge:
  *   1. Poll-Punkt points.maxDischargeW (nur in von Hand erweiterten Profilen),
  *   2. die eigene Rücklesung von Peak Shaving (state.ctrl._peakShaving.readback;
  *      das ausgelieferte Victron-Profil pollt 2704 nicht — Gegenprüfung eb2f1a26),
  *   3. der eigene letzte Write.
  * Sonst null = unbekannt — dann hebt Peak Shaving keine Sperre auf.
+ * ambiguousZero: die 0 stammt aus 2704 und kann auch −1 (unbegrenzt) heißen.
+ * Eine mehrdeutige 0 aus dem Poll-Punkt weicht einer eindeutigen eigenen
+ * Rücklesung (2720 bzw. MQTT).
  */
 export function knownMaxDischargeW(state, cfg, now = Date.now()) {
   const v = state?.victron || {};
   const maxAgeMs = Number(cfg?.victron?.telemetryMaxAgeMs ?? 90000);
+  const rb = state?.ctrl?._peakShaving?.readback;
+  // Ist der letzte Leseversuch gescheitert, gilt auch der alte Wert nicht mehr.
+  const own = (rb && !rb.error && Number.isFinite(Number(rb.value)) && Number(rb.at) > 0 && now - Number(rb.at) <= maxAgeMs)
+    ? { value: Number(rb.value), from: 'own_readback', at: Number(rb.at), tick: rb.tick ?? null, ambiguousZero: Number(rb.value) === 0 && rb.ambiguousZero === true }
+    : null;
   const age = fieldAgeMs(state, 'maxDischargeW', now);
   if (v.maxDischargeW != null && Number.isFinite(Number(v.maxDischargeW)) && age !== null && age <= maxAgeMs
       && !v.errors?.maxDischargeW) {
-    return { value: Number(v.maxDischargeW), from: 'readback', at: now - age };
+    const value = Number(v.maxDischargeW);
+    const ambiguousZero = value === 0 && cfg?.victron?.transport !== 'mqtt'
+      && Number(cfg?.points?.maxDischargeW?.address) !== MAX_DISCHARGE_INT32_ADDR;
+    if (ambiguousZero && own && !own.ambiguousZero) return own;
+    return { value, from: 'readback', at: now - age, ambiguousZero };
   }
-  const rb = state?.ctrl?._peakShaving?.readback;
-  // Ist der letzte Leseversuch gescheitert, gilt auch der alte Wert nicht mehr.
-  if (rb && !rb.error && Number.isFinite(Number(rb.value)) && Number(rb.at) > 0 && now - Number(rb.at) <= maxAgeMs) {
-    return { value: Number(rb.value), from: 'own_readback', at: Number(rb.at), tick: rb.tick ?? null };
-  }
+  if (own) return own;
   const lw = state?.schedule?.lastWrite?.maxDischargeW;
   if (lw && lw.value != null && Number.isFinite(Number(lw.value))) {
     return { value: Number(lw.value), from: 'own_write', at: Number(lw.at) || 0, source: lw.source };
@@ -312,7 +328,12 @@ export function dischargeStep(d, { ps, tel, known, paused, capW, lastWrite = nul
     if (d.under >= DISCHARGE_RELEASE_TICKS) return restore('below_limit');
     return { type: 'none' };
   }
-  const blocked = known != null && known.value === 0;
+  // Eine 0 aus 2704 (ambiguousZero) zählt nur, wenn DVhub selbst zuletzt 0
+  // geschrieben hat — sonst kann es die Werkseinstellung −1 (unbegrenzt) sein:
+  // eine „Freigabe“ deckelte dann den Akku, und die Rückkehr schriebe eine
+  // echte Sperre (0) ins GX (Entlade-Wächter-Befund 02.11.2026).
+  const ownZero = lastWrite != null && lastWrite.value != null && Number(lastWrite.value) === 0;
+  const blocked = known != null && known.value === 0 && (known.ambiguousZero !== true || ownZero);
   const over = !paused && ps?.active === true && blocked && tel.socOk && tel.meterFresh && tel.importW > ps.limitW;
   d.over = over ? (d.over || 0) + 1 : 0;
   if (d.over >= DISCHARGE_ENTER_TICKS) {

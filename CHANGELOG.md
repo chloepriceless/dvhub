@@ -137,6 +137,13 @@ verweist hierher.
   wieder“ meldet er nur, wenn der Akku wirklich entladen hat. Das Protokoll nennt Anteil und Mittelwerte. Neuer Schalter
   `victron.setpointWatchdog.minSuspectShare` (Standard 0,8).
 
+- **Peak Shaving sperrt den Akku nicht mehr versehentlich.** Victron zeigt die Werkseinstellung „Entladung
+  unbegrenzt“ (−1 W) im Register 2704 als 0 an — genau wie eine Sperre. Peak Shaving hätte deshalb eine Sperre
+  angenommen, bei einer Bezugsspitze „freigegeben“ (und damit den Akku auf wenige kW gedeckelt) und danach 0
+  zurückgeschrieben — dann war der Akku wirklich gesperrt. Peak Shaving liest die Entladegrenze jetzt wie der
+  Entlade-Wächter aus Register 2720 (eindeutig, Venus ≥ 3.50); eine 0 aus 2704 zählt nur noch, wenn DVhub selbst
+  zuletzt 0 geschrieben hat.
+
 ## [1.0.8] - 2026-10-21
 
 Release nach knapp zwei Wochen, 110 Commits seit 1.0.7. Überblick nach Themen — die Einzelheiten

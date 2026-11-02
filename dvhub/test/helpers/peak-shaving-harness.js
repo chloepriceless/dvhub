@@ -82,24 +82,47 @@ export function makeTelemetryState({
  * Modbus-Attrappe mit Registerspeicher wie ein GX: Writes landen im Speicher,
  * Reads liefern ihn zurück. Ein nie belegtes Register antwortet nicht (wirft) —
  * so ist „Rücklesewert unbekannt“ der Normalfall, bis ein Test ihn setzt.
+ *
+ * 2720/2721 (MaxDischargePower als int32 in W, Venus ≥ 3.50) spiegelt wie am GX
+ * den Wert hinter 2704 (Rohwert × 10; 32767 = −1 unbegrenzt), solange ein Test
+ * 2720 nicht selbst belegt. Ein Write auf 2704 setzt 2720 neu (der GX rechnet
+ * beide aus demselben D-Bus-Wert). Die Werkseinstellung −1 W bildet ein Test mit
+ * { 2704: 0, 2720: 0xffff, 2721: 0xffff } ab — 2704 rundet −1 × 0,1 auf 0
+ * (dbus_modbustcp mappings.cpp). legacyGx: GX kennt 2720 nicht (modbus exception 2).
  */
-export function makeModbusTransport(registers = {}) {
+export function makeModbusTransport(registers = {}, { legacyGx = false } = {}) {
+  const explicit2720 = registers[2720] !== undefined;
   return {
     type: 'modbus',
     writes: [],
     reads: [],
     registers: { ...registers },
+    explicit2720,
+    read(addr) {
+      if ((addr === 2720 || addr === 2721) && legacyGx) throw new Error('modbus exception 2');
+      if ((addr === 2720 || addr === 2721) && !this.explicit2720 && this.registers[2704] !== undefined) {
+        let r = Number(this.registers[2704]);
+        if (r > 0x7fff) r -= 0x10000;
+        const w = r === 32767 ? -1 : r * 10;
+        const b = Buffer.alloc(4);
+        b.writeInt32BE(w, 0);
+        return addr === 2720 ? b.readUInt16BE(0) : b.readUInt16BE(2);
+      }
+      const v = this.registers[addr];
+      if (v === undefined) throw new Error(`no response for register ${addr}`);
+      return v;
+    },
     async mbRequest({ address, quantity = 1, fc }) {
       this.reads.push({ fc, address, quantity });
       const out = [];
-      for (let i = 0; i < quantity; i += 1) {
-        const v = this.registers[Number(address) + i];
-        if (v === undefined) throw new Error(`no response for register ${Number(address) + i}`);
-        out.push(v);
-      }
+      for (let i = 0; i < quantity; i += 1) out.push(this.read(Number(address) + i));
       return out;
     },
-    async mbWriteSingle({ address, value }) { this.writes.push({ fc: 6, address, value }); this.registers[address] = value; },
+    async mbWriteSingle({ address, value }) {
+      this.writes.push({ fc: 6, address, value });
+      this.registers[address] = value;
+      if (address === 2704) { this.explicit2720 = false; delete this.registers[2720]; delete this.registers[2721]; }
+    },
     async mbWriteMultiple({ address, values }) {
       this.writes.push({ fc: 16, address, values });
       values.forEach((v, i) => { this.registers[address + i] = v; });

@@ -45,7 +45,7 @@
 // zählen jetzt (a) eine aktive Halteregel der eigenen Steuerung und (b) die
 // aktive SoC-Grenze wie eine gesetzte Entlade-Sperre.
 
-import { knownMaxDischargeW, decodeMaxDischargeRaw } from './peak-shaving/index.js';
+import { knownMaxDischargeW, decodeMaxDischargeRaw, MAX_DISCHARGE_INT32_ADDR } from './peak-shaving/index.js';
 
 // So alt darf das Halte-Signal der Auswertung (state.ctrl.eosGridHold) bzw.
 // DVhubs eigener 2704-Schreibwert höchstens sein — mindestens, bei langsamerem
@@ -147,8 +147,9 @@ export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}) {
 // Eigene Rücklesung der Entladegrenze: höchstens so oft, und so lange gilt ein Wert.
 export const CAP_READ_EVERY_MS = 30000;
 // com.victronenergy.settings /Settings/CGwacs/MaxDischargePower als int32 in W
-// (dbus_modbustcp attributes.csv: 2720, int32, Skala 1).
-export const MAX_DISCHARGE_INT32_ADDR = 2720;
+// (dbus_modbustcp attributes.csv: 2720, int32, Skala 1) — gemeinsam mit Peak
+// Shaving in services/peak-shaving/index.js.
+export { MAX_DISCHARGE_INT32_ADDR };
 function capReadMaxAgeMs(cfg) {
   const pollMs = Number(cfg?.meterPollMs);
   return Math.max(90000, Number.isFinite(pollMs) && pollMs > 0 ? 3 * pollMs : 0);

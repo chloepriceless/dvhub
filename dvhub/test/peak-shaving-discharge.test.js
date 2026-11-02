@@ -70,16 +70,69 @@ test('Freigabe nie über der Wechselrichter-Leistung (10 kW Standard)', async ()
   assert.deepEqual(maxDischargeWrites(transport), [0, 10000]);
 });
 
-test('Sperre im GX (2704 liest 0) genügt, auch ohne eigenen Write — z. B. nach Neustart', async () => {
+test('Sperre im GX (2720 liest 0) genügt, auch ohne eigenen Write — z. B. nach Neustart', async () => {
   // Gegenprüfung eb2f1a26 (P2): das ausgelieferte Profil pollt 2704 nicht. Peak
-  // Shaving liest das Register deshalb selbst (fc 3), solange es aktiv ist.
+  // Shaving liest die Entladegrenze deshalb selbst (fc 3), solange es aktiv ist —
+  // als int32 aus 2720, dort ist 0 eindeutig (Entlade-Wächter, 02.11.2026).
   const cfg = loadVictronConfig(PEAK_ON);
   const state = makeTelemetryState({ soc: 60, importW: 14000 });
   const transport = makeModbusTransport({ 2704: 0 });
   const { evaluator } = makeEvaluator({ cfg, state, transport });
   await ticks(evaluator, ENTER_TICKS);
   assert.deepEqual(maxDischargeWrites(transport), [4300]);
-  assert.ok(transport.reads.some((r) => r.address === 2704 && r.fc === 3));
+  assert.ok(transport.reads.some((r) => r.address === 2720 && r.quantity === 2 && r.fc === 3));
+});
+
+// --- 2704 = 0 ist mehrdeutig (Victron rundet die Werkseinstellung −1 W auf 0) ---
+// dbus_modbustcp mappings.cpp: round(−1 × 0,1) = 0. Ohne diesen Schutz hielt
+// Peak Shaving die Werkseinstellung „unbegrenzt“ für eine Sperre, gab „frei“
+// (= deckelte von unbegrenzt auf ein paar kW) und schrieb danach 0 zurück — der
+// Akku war dann wirklich gesperrt.
+
+test('Werkseinstellung −1 W (2704 liest 0, 2720 liest −1): keine Freigabe, nie eine 0', async () => {
+  const cfg = loadVictronConfig(PEAK_ON);
+  const state = makeTelemetryState({ soc: 60, loadW: 14000, importW: 14000 });
+  const transport = makeModbusTransport({ 2704: 0, 2720: 0xffff, 2721: 0xffff });
+  const { evaluator } = makeEvaluator({ cfg, state, transport });
+  await ticks(evaluator, ENTER_TICKS + 2);
+  setFlow(state, { importW: 3000 });
+  await ticks(evaluator, RELEASE_TICKS + 2);
+  assert.deepEqual(maxDischargeWrites(transport), []);
+  assert.notEqual(state.ctrl._peakShaving?.discharge?.phase, 'lifted');
+});
+
+test('alter GX ohne 2720: 2704 = 0 ohne eigenen 0-Write zählt nicht als Sperre', async () => {
+  const cfg = loadVictronConfig(PEAK_ON);
+  const state = makeTelemetryState({ soc: 60, loadW: 14000, importW: 14000 });
+  const transport = makeModbusTransport({ 2704: 0 }, { legacyGx: true });
+  const { evaluator } = makeEvaluator({ cfg, state, transport });
+  await ticks(evaluator, ENTER_TICKS + 2);
+  assert.deepEqual(maxDischargeWrites(transport), []);
+  assert.ok(transport.reads.some((r) => r.address === 2704 && r.fc === 3), 'Rückfall auf 2704');
+  assert.equal(transport.reads.filter((r) => r.address === 2720).length, 1, '2720 nach Exception 2 nicht weiter versucht');
+});
+
+test('alter GX ohne 2720: mit eigenem 0-Write gilt 2704 = 0 als Sperre (Freigabe + Rückkehr)', async () => {
+  const cfg = loadVictronConfig(PEAK_ON);
+  const state = makeTelemetryState({ soc: 60, loadW: 14000, importW: 14000 });
+  const transport = makeModbusTransport({ 2704: 0 }, { legacyGx: true });
+  const { evaluator } = makeEvaluator({ cfg, state, transport });
+  const r = await evaluator.applyControlTarget('maxDischargeW', 0, 'api_manual_write');
+  assert.equal(r.ok, true, JSON.stringify(r));
+  await ticks(evaluator, ENTER_TICKS);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300]);
+  setFlow(state, { importW: 3000 });
+  await ticks(evaluator, RELEASE_TICKS);
+  assert.deepEqual(maxDischargeWrites(transport), [0, 4300, 0]);
+});
+
+test('Poll-Punkt 2704 = 0 (von Hand erweitertes Profil) ohne eigenen 0-Write, 2720 = −1: keine Freigabe', async () => {
+  const cfg = loadVictronConfig(PEAK_ON);
+  const state = makeTelemetryState({ soc: 60, loadW: 14000, importW: 14000, maxDischargeW: 0, maxDischargeAgeMs: 1000 });
+  const transport = makeModbusTransport({ 2704: 0, 2720: 0xffff, 2721: 0xffff });
+  const { evaluator } = makeEvaluator({ cfg, state, transport });
+  await ticks(evaluator, ENTER_TICKS + 2);
+  assert.deepEqual(maxDischargeWrites(transport), []);
 });
 
 test('ausgeliefertes Victron-Profil pollt 2704 nicht — die eigene Rücklesung ist nötig', () => {
