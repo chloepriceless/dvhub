@@ -240,3 +240,57 @@ test('P3: Lizenz-Meldung baut ntfy mit derselben Adressprüfung', async () => {
   assert.match(src, /createProviderFromConfig\(name, pCfg\)/);
   assert.doesNotMatch(src, /const provider = factory\(pCfg\)/);
 });
+
+// Gegenprüfung 4fe254c9: (P1) im selben Request eingegebene Zugangsdaten wurden
+// geleert; (P2) Reihenfolge der Prüfung ließ Rückfall-Ketten offen; (P2)
+// /api/integrations/victron ohne Bindung; (P2) TLS → Klartext behielt das
+// Geheimnis; (P3) verschiedene IPv6-Hosts galten als gleich.
+test('P1: neue Adresse + im selben Request eingegebene Zugangsdaten bleiben', async () => {
+  const raw = { mqtt: { brokerUrl: 'mqtt://192.168.1.10:1883', username: 'u', password: 'alt' } };
+  const a = routesWith(raw);
+  await post(a.routes, '/api/family/mqtt-config', { brokerUrl: 'mqtt://192.168.1.11:1883', username: 'u', password: 'alt' });
+  assert.equal(a.saved.at(-1).mqtt.username, 'u');
+  assert.equal(a.saved.at(-1).mqtt.password, 'alt');
+  const w = routesWith({ wallbox: { type: 'openevse', openevse: { url: 'http://192.168.1.30', username: 'oe', password: 'p' } } });
+  await post(w.routes, '/api/integrations/evcc', { wallbox: { type: 'openevse', openevse: { url: 'http://192.168.1.31', username: 'oe', password: 'p' } } });
+  assert.equal(w.saved.at(-1).wallbox.openevse.password, 'p');
+  assert.equal(w.saved.at(-1).wallbox.openevse.username, 'oe');
+});
+
+test('P2: Reihenfolge — eigene Wetter-/Kreuzprobe-Zugangsdaten geleert → allgemeine folgen nicht zum neuen Broker', () => {
+  const cur = {
+    mqtt: { brokerUrl: 'mqtt://192.168.1.10:1883', username: 'u', password: 'mqtt-geheim' },
+    forecast: { weather: { provider: 'mqtt', mqtt: { brokerUrl: '', username: 'wu', password: 'w-geheim' } } },
+    victron: { host: '192.168.1.40', mqtt: { broker: 'mqtt://192.168.1.40:1883', username: 'v', password: 'gx-geheim' }, mqttCrossCheck: { broker: '', username: 'c', password: 'c-geheim' } },
+  };
+  const inc = JSON.parse(JSON.stringify(cur));
+  for (const p of [inc.mqtt, inc.forecast.weather.mqtt, inc.victron.mqtt, inc.victron.mqttCrossCheck]) { p.username = '***'; p.password = '***'; }
+  inc.forecast.weather.mqtt.brokerUrl = 'mqtt://attacker.example.net';
+  inc.victron.mqttCrossCheck.broker = 'mqtts://attacker.example.net';
+  const out = restoreRedacted(inc, cur);
+  assert.equal(out.forecast.weather.mqtt.password, '');
+  assert.equal(out.mqtt.password, '', 'allgemeines Passwort ginge sonst als Rückfall zum neuen Wetter-Broker');
+  assert.equal(out.victron.mqttCrossCheck.password, '');
+  assert.equal(out.victron.mqtt.password, '', 'GX-Passwort ginge sonst als Rückfall zur neuen Kreuzprobe');
+});
+
+test('P2: /api/integrations/victron — neuer Host nimmt die gespeicherten MQTT-Zugangsdaten nicht mit', async () => {
+  const raw = { victron: { host: '192.168.1.40', mqtt: { broker: '', username: 'v', password: 'gx-geheim' } } };
+  const a = routesWith(raw);
+  const r = await post(a.routes, '/api/integrations/victron', { host: 'attacker.example.net' });
+  if (a.saved.length) assert.equal(a.saved.at(-1).victron.mqtt.password, '', JSON.stringify(r.body));
+  else assert.notEqual(r.status, 200, 'entweder abgelehnt oder ohne Passwort gespeichert');
+});
+
+test('P2/P3: TLS → Klartext leert, Klartext → TLS behält; verschiedene IPv6-Hosts sind verschieden', () => {
+  const cur = { notifications: { providers: { ntfy: { topicUrl: 'https://ntfy.sh/x', token: 't' } } }, dbBackup: { smb: { host: 'fd00::1', username: 's', password: 'p' } }, mqtt: { brokerUrl: 'mqtt://b:1883', username: 'u', password: 'm' } };
+  const inc = JSON.parse(JSON.stringify(cur));
+  inc.notifications.providers.ntfy.token = '***'; inc.dbBackup.smb.password = '***'; inc.mqtt.password = '***'; inc.mqtt.username = '***';
+  inc.notifications.providers.ntfy.topicUrl = 'http://ntfy.sh/x';
+  inc.dbBackup.smb.host = 'fd00::1234';
+  inc.mqtt.brokerUrl = 'mqtts://b:8883';
+  const out = restoreRedacted(inc, cur);
+  assert.equal(out.notifications.providers.ntfy.token, '', 'https → http');
+  assert.equal(out.dbBackup.smb.password, '', 'anderer IPv6-Host');
+  assert.equal(out.mqtt.password, 'm', 'mqtt → mqtts auf demselben Host bleibt');
+});

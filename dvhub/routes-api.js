@@ -4155,7 +4155,12 @@ export function createApiRoutes(ctx) {
       next.mqtt = patch;
       // Gegenprüfung bca61061 (P2): mit neuer Broker-Adresse wandern die
       // gespeicherten Zugangsdaten nicht mit (wie restoreRedacted für /api/config).
-      const droppedMqtt = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, unchangedSecretPaths(next, ctx.getRawCfg() || {}));
+      // Nur was der Request NICHT neu gesetzt hat (fehlt oder „***“) — eingegebene
+      // Werte bleiben auch bei neuer Adresse (Gegenprüfung 4fe254c9, P1).
+      const keptMqtt = [];
+      if (typeof body.username !== 'string') keptMqtt.push('mqtt.username');
+      if (typeof body.password !== 'string' || body.password === '***') keptMqtt.push('mqtt.password');
+      const droppedMqtt = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, keptMqtt);
       if (droppedMqtt.length) pushLog('config_secret_dropped_target_changed', { paths: droppedMqtt }, actorContext(req));
       let result;
       try {
@@ -5682,6 +5687,11 @@ export function createApiRoutes(ctx) {
         next.pvCoupling = body.pvCoupling;
       }
       try {
+        // Neuer victron.host = neues MQTT-Ziel: gespeicherte GX-Zugangsdaten
+        // wandern nicht mit (Gegenprüfung 4fe254c9, P2). Diese Route setzt keine
+        // Zugangsdaten — alle unveränderten gelten als mitgetragen.
+        const droppedVic = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, unchangedSecretPaths(next, ctx.getRawCfg() || {}));
+        if (droppedVic.length) pushLog('config_secret_dropped_target_changed', { paths: droppedVic }, actorContext(req));
         ctx.saveAndApplyConfig(next);
       } catch (e) {
         pushLog('victron_config_save_error', { error: e.message });
@@ -6241,7 +6251,19 @@ export function createApiRoutes(ctx) {
       next.evcc.dashboardLoadpoint = lp;
       // Gegenprüfung bca61061 (P2): neue Wallbox-Adresse → gespeicherte
       // Zugangsdaten bleiben nicht hängen.
-      const droppedWb = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, unchangedSecretPaths(next, ctx.getRawCfg() || {}));
+      // Nur die Zugangsdaten, die dieser Request nicht neu gesetzt hat
+      // (leer/fehlend/„***“ = behalten) — Gegenprüfung 4fe254c9, P1.
+      const keptWb = [];
+      if (wallboxPatch) {
+        const keepV = (v) => v == null || v === '' || v === '***';
+        const w = body.wallbox || {};
+        if (keepV(w.openevse?.username)) keptWb.push('wallbox.openevse.username');
+        if (keepV(w.openevse?.password)) keptWb.push('wallbox.openevse.password');
+        if (keepV(w.wattpilot?.password)) keptWb.push('wallbox.wattpilot.password');
+        if (keepV(w.nrgkick?.username)) keptWb.push('wallbox.nrgkick.username');
+        if (keepV(w.nrgkick?.password)) keptWb.push('wallbox.nrgkick.password');
+      }
+      const droppedWb = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, keptWb);
       if (droppedWb.length) pushLog('config_secret_dropped_target_changed', { paths: droppedWb }, actorContext(req));
       try {
         ctx.saveAndApplyConfig(next);

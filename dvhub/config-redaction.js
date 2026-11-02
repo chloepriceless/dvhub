@@ -111,19 +111,29 @@ for (const f of ['username', 'password']) {
 }
 export const SECRET_TARGET_PATHS = Object.freeze(Object.keys(SECRET_TARGETS));
 
-// Gleiches Ziel = gleicher Host. Schema und Port zählen nicht: der Wechsel
-// auf TLS (mqtt://b:1883 → mqtts://b:8883) behält die Zugangsdaten, und auf
-// einem fremden Host kann ein Gerät im WLAN keinen Port belegen. Nicht
-// URL.origin — für mqtt:// u. ä. ist die Herkunft immer „null“.
+// Ziel = Host plus „gesichert?“. Gleicher Host und gleiche oder bessere
+// Sicherung (mqtt → mqtts, http → https) gilt als dasselbe Ziel; ein anderer
+// Host oder TLS → Klartext gilt als neu (Gegenprüfung 4fe254c9: sonst ginge
+// das Geheimnis im Klartext). Nicht URL.origin — für mqtt:// u. ä. ist die
+// Herkunft immer „null“.
+const SECURE_SCHEMES = new Set(['https:', 'mqtts:', 'wss:', 'ssl:', 'tls:']);
 function normTarget(v) {
   const s = String(v ?? '').trim().toLowerCase().replace(/\/+$/, '');
   if (s.includes('://')) {
-    try { return new URL(s).hostname; } catch { return s; }
+    try { const u = new URL(s); return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol) }; }
+    catch { return { host: s, secure: null }; }
   }
-  return s.replace(/:\d+$/, ''); // host[:port] ohne Schema
+  // host[:port] ohne Schema: Port nur bei genau einem ':' bzw. [v6]:port abtrennen
+  // (sonst verschmolzen fd00::1 und fd00::1234, Gegenprüfung 4fe254c9).
+  const v6 = /^\[([^\]]+)\](?::\d+)?$/.exec(s);
+  if (v6) return { host: v6[1], secure: null };
+  return { host: (s.split(':').length === 2 ? s.replace(/:\d+$/, '') : s), secure: null };
 }
 function targetsOf(cfg, secretPath) {
-  return new Set(SECRET_TARGETS[secretPath](cfg || {}).map(normTarget));
+  return SECRET_TARGETS[secretPath](cfg || {}).map(normTarget);
+}
+function isNewTarget(t, before) {
+  return !before.some((b) => b.host === t.host && !(b.secure === true && t.secure === false));
 }
 
 /**
@@ -133,12 +143,18 @@ function targetsOf(cfg, secretPath) {
  */
 export function dropSecretsForChangedTargets(next, current, keptPaths) {
   const dropped = [];
-  for (const sp of keptPaths) {
-    if (!SECRET_TARGETS[sp]) continue;
-    const val = getPath(next, sp);
-    if (val === undefined || val === '' || val === null) continue;
-    const before = targetsOf(current, sp);
-    if ([...targetsOf(next, sp)].some((t) => !before.has(t))) { setPath(next, sp, ''); dropped.push(sp); }
+  // Bis nichts mehr fällt: ein geleertes spezielles Geheimnis (Wetter-,
+  // Kreuzprobe-Zugang) macht das allgemeine zum Rückfall für das neue Ziel
+  // (Gegenprüfung 4fe254c9, P2 — vorher hing es an der Reihenfolge).
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const sp of keptPaths) {
+      if (!SECRET_TARGETS[sp] || dropped.includes(sp)) continue;
+      const val = getPath(next, sp);
+      if (val === undefined || val === '' || val === null) continue;
+      const before = targetsOf(current, sp);
+      if (targetsOf(next, sp).some((t) => isNewTarget(t, before))) { setPath(next, sp, ''); dropped.push(sp); changed = true; }
+    }
   }
   return dropped;
 }
