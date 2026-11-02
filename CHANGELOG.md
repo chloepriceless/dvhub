@@ -93,6 +93,16 @@ verweist hierher.
 
 ### Geändert
 
+- **EOS-Steuerzeitraum = ganzer bekannter Preiszeitraum, einstellbar**: Der Steuerzeitraum war fest auf 24 h gekappt;
+  nachmittags (Preise bis Mitternacht des Folgetags) plante EOS den nächsten Abend deshalb nicht Slot für Slot. Jetzt
+  reicht er standardmäßig so weit wie echte Preise (gut 30 h, höchstens 48 h). Neu unter Einstellungen → EOS-Optimierung:
+  „EOS Steuerzeitraum höchstens“ (ganzer Preiszeitraum, 6, 12 oder 24 h — für schwache Boards; die Rechenzeit wächst
+  mit dem Steuerzeitraum) und „EOS Prognosehorizont“ (`prediction.hours`, bisher fest 48 h; automatisch
+  Steuerzeitraum + 48 h Schwanz, höchstens 72 h, oder fest 24/36/48/72 h). Die Preis-Fortschreibung endet am
+  Prognosehorizont; ist er kürzer als der Steuerzeitraum, wird der Steuerzeitraum darauf gekürzt. DVhub sendet beide
+  Werte bei jedem Prognose-Push (beim Senken erst den Steuerzeitraum). Im Fernbetrieb nimmt der Rechendienst den
+  Prognosehorizont noch nicht an (nur lokal und im lokalen Rückfall).
+
 - **Leitstand, Kachel „Überschuss / Defizit“**: Die Hauptzahl ist jetzt der Rest heute (erwartete PV ab jetzt bis
   Mitternacht minus erwarteter Verbrauch im selben Zeitraum), darunter klein der ganze Tag; „Verfügbar“ = Rest heute +
   nutzbarer Akku. Akkugröße, Ladestand und Untergrenze kommen neu aus `/api/status` (`energyBalance.battery`, so wie
