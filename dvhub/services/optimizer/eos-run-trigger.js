@@ -105,8 +105,10 @@ export function alignStartSolution({ genes, geneStartMs, previousSlots, currentS
  * @param {()=>Promise<any>} [deps.onSolution]   Lauf fertig → Lösung abholen
  * @param {()=>{status:string}} [deps.eosStatus] Zustand aus dem EOS-Monitor
  * @param {()=>Promise<{ok:boolean, error?:string, pushed?:boolean}>} [deps.prepareRun]
- *   Vor jedem Lauf: liegen geschätzte Preise im Steuerzeitraum, pusht die
- *   Bridge neu und löscht sie (eos-forecast-bridge.js). ok:false → kein Lauf.
+ *   Vor jedem Lauf pusht die Bridge frisch (Schätzpreise nur hinter dem
+ *   Steuerzeitraum, alles dahinter gelöscht; eos-forecast-bridge.js).
+ *   ok:false (keine echten Preise, Import oder Steuerzeitraum gescheitert) →
+ *   kein Lauf.
  * @param {object} [deps.state]                  state.optimizer.eosRun wird hier geführt
  */
 export function createEosRunTrigger({
@@ -154,9 +156,9 @@ export function createEosRunTrigger({
   async function run(reason) {
     lastAttemptAt = now();
     // Geschätzte Preise dürfen nie im Steuerzeitraum liegen. Beim Push ist das
-    // geprüft, ein Lauf an der Grenze oder per kick kommt aber ohne Push —
-    // deshalb hier vor dem Lauf (Gegenprüfung a6dbbd1d). Danach erst den
-    // Steuerzeitraum lesen: ein neuer Push kann ihn geändert haben.
+    // so, ein Lauf an der Grenze oder per kick kam aber mit dem Stand eines
+    // älteren Pushs — deshalb vor jedem Lauf frisch pushen (Gegenprüfung
+    // a6dbbd1d). Danach erst den Steuerzeitraum lesen: der Push setzt ihn neu.
     if (typeof prepareRun === 'function') {
       let prep;
       try { prep = await prepareRun(); } catch (err) { prep = { ok: false, error: err?.message || String(err) }; }

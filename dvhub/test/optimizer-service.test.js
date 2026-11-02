@@ -534,6 +534,62 @@ describe('Optimizer Service: EOS-Prognose nur ueber die Forecast-Bridge (Review 
     await svc.close();
   });
 
+  // Gegenprüfung 7e99580c (P3): Vor jedem EOS-Lauf pusht die Bridge frisch
+  // (prepareRun). Dieser Push zählt als Push der Prognoseversion — sonst kämen
+  // pushForecastIfNew-Pushes obendrauf (Geräte-Messwerte, die EOS nie kürzt).
+  test('Lauf-Push zählt als Push dieser Version: kein zusätzlicher Push innerhalb von 15 min', async (t) => {
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now });
+    let bridgePushes = 0;
+    let runPushes = 0;
+    const eosAdapter = {
+      pushForecast: async () => ({ ok: true }),
+      pullSchedule: async () => [{ ts: now, endTs: now + 900_000, powerW: -1000 }],
+      pullGridSetpoints: async () => [{ ts: now, endTs: now + 900_000, gridW: 0 }],
+      getOptimizationSolution: async () => ({ generatedAt: new Date(now).toISOString(), rows: [] }),
+      setEmsIntervalSec: async () => ({ ok: true }),
+      triggerOptimization: async () => ({ ok: true, data: { start_solution: [1], start_solution_datetime: new Date(now).toISOString() } }),
+    };
+    const ref = {};
+    const eosForecastBridge = {
+      push: async () => { bridgePushes++; return { ok: true, pushed: [], errors: {} }; },
+      prepareRun: async () => {
+        runPushes++;
+        ref.state.optimizer.lastEosPush = { ok: true, error: null, at: Date.now() };
+        return { ok: true, pushed: true };
+      },
+      socForRun: async () => ({ soc: { battery1: 50 } }),
+    };
+    const built = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
+      ctx: { eosAdapter, eosForecastBridge, eosMonitor: { status: () => ({ status: 'up' }), onSolution: () => () => {}, ingest: () => {}, notifySolutionReady: async () => {} } }
+    });
+    const state = built.state;
+    ref.state = state;
+    const svc = createOptimizerService(built.ctx);
+    state.optimizer.eos = { supported: true }; // setzt sonst der Abgleich (eos-config-sync)
+    const flush = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r)); };
+    await svc.start();
+    await flush();
+    assert.equal(bridgePushes, 1, 'erster Lauf des Prozesses');
+    // Bis hinter die nächste Lauf-Grenze (Takt hier bis 1 h): der Lauf pusht (prepareRun).
+    const startRunPushes = runPushes;
+    for (let minute = 0; minute < 62; minute += 1) {
+      t.mock.timers.tick(60_000);
+      await flush();
+    }
+    assert.ok(runPushes > startRunPushes, 'Lauf an der Grenze hat gepusht (deutlich nach dem ersten Push)');
+    const before = bridgePushes;
+    // Neue Version gleich danach: innerhalb von 15 min nach dem Lauf-Push kein weiterer.
+    for (let minute = 0; minute < 3; minute += 1) {
+      built.bumpVersion();
+      t.mock.timers.tick(60_000);
+      await flush();
+    }
+    assert.equal(bridgePushes, before, 'kein zusätzlicher Push neben dem Lauf-Push');
+    await svc.close();
+  });
+
   test('fehlgeschlagener Push zaehlt nicht als uebertragen — der naechste Lauf versucht es wieder', async (t) => {
     const now = Date.now();
     t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now });
