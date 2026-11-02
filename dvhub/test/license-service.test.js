@@ -451,7 +451,7 @@ test('Hardening C: node-lock rejects a machine file signed by the wrong key', ()
   assert.ok(ctx._logs.some(l => l.type === 'license_machine_file_invalid'));
 });
 
-test('Hardening C: node-lock OFF leaves a mismatched machine file inert (no enforcement)', () => {
+test('Hardening C / Strix L-0005: auch mit node-lock OFF gibt ein fremdes Machine-File kein Pro (Schlüssel bleibt)', () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const ctx = mockCtx();                                          // nodeLock defaults OFF
   ctx.accountPublicKey = rawPubHex(publicKey);
@@ -462,7 +462,11 @@ test('Hardening C: node-lock OFF leaves a mismatched machine file inert (no enfo
   });
   const svc = createLicenseService(ctx);
   svc.loadStateFromDisk();
-  assert.equal(svc.getStatus(), 'active', 'node-lock OFF must not enforce the binding');
+  // Bis 30.10. galt das File ab Werk als „inert“ — ein kopierter Zustand gab auf
+  // jeder Box Pro (Strix L-0005). Jetzt: Status + Schlüssel bleiben, Pro aus.
+  assert.equal(svc.getStatus(), 'active', 'Schlüssel und Status bleiben erhalten');
+  assert.equal(svc.isProActive(), false, 'kein Pro mit dem Machine-File einer anderen Box');
+  assert.equal(svc.getState().binding.block, 'bound_to_other_box');
 });
 
 test('Hardening C: node-lock ON with NO machine file is grandfathered (floating stays active)', () => {
@@ -698,13 +702,14 @@ test('persisted file has mode 0600', async () => {
 // --- Stufe C (2026-06-23): activateNodeLock — Server-Proxy activation flow ---
 // The proxy mints the signed machine file; the appliance verifies it OFFLINE
 // and only persists a file whose bound fingerprint == its own appliance-id.
-const PROXY_CFG = {
-  cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } }
-};
+// Strix L-0006: die Proxy-Adresse kommt nicht mehr aus der Config (fest
+// webhook.dvhub.de); Tests setzen sie über ctx.activationProxyUrl.
+const PROXY_CFG = {};
 
 test('activateNodeLock: proxy machine file (fp==appliance-id) verifies offline + persists', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const ctx = mockCtx(PROXY_CFG);
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
   ctx.accountPublicKey = rawPubHex(publicKey);
   const applianceId = 'box-alpha';
   fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
@@ -735,6 +740,7 @@ test('activateNodeLock: proxy machine file (fp==appliance-id) verifies offline +
 test('activateNodeLock: rejects a machine file bound to a DIFFERENT box (no persist)', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const ctx = mockCtx(PROXY_CFG);
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
   ctx.accountPublicKey = rawPubHex(publicKey);
   fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box-this\n', 'utf8');
   const svc = createLicenseService(ctx);
@@ -756,6 +762,7 @@ test('activateNodeLock: rejects a machine file forged with the wrong key (no per
   const { publicKey } = crypto.generateKeyPairSync('ed25519');
   const forger = crypto.generateKeyPairSync('ed25519');
   const ctx = mockCtx(PROXY_CFG);
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
   ctx.accountPublicKey = rawPubHex(publicKey);
   const applianceId = 'box-alpha';
   fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
@@ -777,6 +784,7 @@ test('activateNodeLock: rejects a machine file forged with the wrong key (no per
 test('activateNodeLock: surfaces 409 machine_slot_taken with boundFingerprint (no persist)', async () => {
   const { publicKey } = crypto.generateKeyPairSync('ed25519');
   const ctx = mockCtx(PROXY_CFG);
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
   ctx.accountPublicKey = rawPubHex(publicKey);
   fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box-this\n', 'utf8');
   const svc = createLicenseService(ctx);
@@ -797,6 +805,7 @@ test('activateNodeLock: surfaces 409 machine_slot_taken with boundFingerprint (n
 test('activateNodeLock: no appliance-id on this host → no_appliance_id without fetching', async () => {
   const { publicKey } = crypto.generateKeyPairSync('ed25519');
   const ctx = mockCtx(PROXY_CFG);
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
   ctx.accountPublicKey = rawPubHex(publicKey);
   // No appliance-id file written.
   const svc = createLicenseService(ctx);
@@ -882,7 +891,10 @@ function loadNodeLocked({ expiry, lastServerTs = null }) {
   const applianceId = 'box-grace';
   fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
   const machineFile = mintMachineFile(privateKey, applianceId, expiry);
-  const rec = { status: 'active', license_key: 'LEGACY-KEY', machine_file: machineFile };
+  // Signierter Schlüssel (wie im Feld): ein unsignierter gälte seit Strix L-0001
+  // ohne frische Online-Prüfung nicht mehr — das ist hier nicht das Thema.
+  const signedKey = mintSignedKey(privateKey, { license: { id: 'lic-1' } });
+  const rec = { status: 'active', license_key: signedKey, license_id: 'lic-1', machine_file: machineFile };
   if (lastServerTs) rec.last_server_ts = lastServerTs;
   fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'), JSON.stringify(rec), 'utf8');
   const svc = createLicenseService(ctx);
@@ -914,9 +926,14 @@ test('grace: signed expiry + 14d passed → effectiveStatus expired_offline (dia
 });
 
 test('grace: perpetual/floating (no machine file) stays active offline (Christin A+D)', () => {
+  // Signierter Schlüssel ohne Machine-File (Bestandslizenz, floating): gilt offline
+  // unbegrenzt. Unsignierte Schlüssel brauchen seit Strix L-0001 eine Online-
+  // Prüfung in den letzten 14 Tagen (test/license-sicherheit.test.js).
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const ctx = mockCtx();
+  ctx.accountPublicKey = rawPubHex(publicKey);
   fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
-    JSON.stringify({ status: 'active', license_key: 'LEGACY-KEY' }), 'utf8');
+    JSON.stringify({ status: 'active', license_key: mintSignedKey(privateKey, { license: { id: 'lic-1' } }) }), 'utf8');
   const svc = createLicenseService(ctx);
   svc.loadStateFromDisk();
   assert.equal(svc.effectiveStatus(), 'active');
@@ -949,8 +966,9 @@ test('fix H-3 (#6): a machine_file bound to a FOREIGN licenseId is ignored (not 
   fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box\n', 'utf8');
   // PAST expiry foreign file: if it were accepted it'd force expired_offline.
   const foreign = mintMachineFile(privateKey, 'box', new Date(Date.now() - 20 * DAY).toISOString(), 'OTHER-LIC');
+  const signedKey = mintSignedKeyTest(privateKey, { license: { id: 'lic-1' } });
   fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
-    JSON.stringify({ status: 'active', license_key: 'LEGACY', license_id: 'lic-1', machine_file: foreign }), 'utf8');
+    JSON.stringify({ status: 'active', license_key: signedKey, license_id: 'lic-1', machine_file: foreign }), 'utf8');
   const svc = createLicenseService(ctx); svc.loadStateFromDisk();
   assert.equal(svc.effectiveStatus(), 'active');   // foreign file ignored → not expired_offline
   assert.ok(ctx._logs.some(l => l.type === 'license_machine_file_license_mismatch'));
@@ -960,9 +978,11 @@ test('fix M-6: a VALID machine_file with a malformed expiry fails CLOSED (not pe
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const ctx = mockCtx();
   ctx.accountPublicKey = rawPubHex(publicKey);
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box\n', 'utf8');
   const bad = mintMachineFile(privateKey, 'box', 'NOT-A-DATE', 'lic-1');
+  const signedKey = mintSignedKeyTest(privateKey, { license: { id: 'lic-1' } });
   fs.writeFileSync(path.join(ctx._appDir, 'license_state.json'),
-    JSON.stringify({ status: 'active', license_key: 'LEGACY', license_id: 'lic-1', machine_file: bad }), 'utf8');
+    JSON.stringify({ status: 'active', license_key: signedKey, license_id: 'lic-1', machine_file: bad }), 'utf8');
   const svc = createLicenseService(ctx); svc.loadStateFromDisk();
   assert.equal(svc.effectiveStatus(), 'expired_offline');   // fail-closed, NOT 'active'
   assert.ok(ctx._logs.some(l => l.type === 'license_machine_file_bad_expiry'));
@@ -1038,6 +1058,11 @@ test('fix C-2: the signed machine-file issue time floors trustedNowMs even with 
   assert.ok(svc.trustedNowMs() >= Date.parse(issued), 'signed issue time must floor trusted now even without last_server_ts');
 });
 
+// Strix L-0001: unsignierte Testschlüssel gelten nur mit frischer Online-Prüfung.
+function ctxLastCheckNow(svc) {
+  svc.setLastCheckOkForTest(new Date().toISOString());
+}
+
 // ---------------------------------------------------------------------------
 // Pro-Gating (Task #9) — isProActive() + onProActiveChange() transition fan-out
 // ---------------------------------------------------------------------------
@@ -1076,6 +1101,7 @@ test('onProActiveChange fires false on revoke (active -> suspended)', async () =
       svc.loadStateFromDisk();
       svc.setStatusForTest('active');
       svc.setLicenseKeyForTest('DVHB-WAS-ACTIVE-XXXX-AAAA');   // revalidate reuses the persisted key
+      ctxLastCheckNow(svc);   // Strix L-0001: unsignierter Schlüssel nur mit frischer Online-Prüfung
       const flips = [];
       svc.onProActiveChange((active) => flips.push(active));
       await svc.revalidateLicense();
@@ -1092,6 +1118,7 @@ test('onProActiveChange does NOT fire when active-ness is unchanged (active -> a
       svc.loadStateFromDisk();
       svc.setStatusForTest('active');
       svc.setLicenseKeyForTest('DVHB-STAYS-ACTIVE-XXXX-AAAA');
+      ctxLastCheckNow(svc);   // Strix L-0001
       const flips = [];
       svc.onProActiveChange((active) => flips.push(active));
       await svc.revalidateLicense();
@@ -1105,6 +1132,7 @@ test('removeLicense fires false when it was active; a bad listener never blocks 
   svc.loadStateFromDisk();
   svc.setStatusForTest('active');
   svc.setLicenseKeyForTest('DVHB-REMOVE-XXXX-XXXX-AAAA');
+  ctxLastCheckNow(svc);   // Strix L-0001
   const flips = [];
   svc.onProActiveChange(() => { throw new Error('boom'); });   // must be absorbed
   svc.onProActiveChange((active) => flips.push(active));
@@ -1367,7 +1395,8 @@ test('KEYPASTE: activateLicense entfernt Umbrüche/Spaces mitten im Key', async 
 
 test('AUTOBIND: erfolgreiche Aktivierung kaskadiert in die Bindung (Proxy-Call)', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+  const ctx = mockCtx();
+  ctx.activationProxyUrl = 'https://proxy.test/activate';   // Strix L-0006: nicht mehr aus der Config
   ctx.accountPublicKey = rawPubHex(publicKey);
   const applianceId = 'box-autobind';
   fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
@@ -1391,7 +1420,8 @@ test('AUTOBIND: erfolgreiche Aktivierung kaskadiert in die Bindung (Proxy-Call)'
 });
 
 test('AUTOBIND: Bindungs-Fehler bricht die Aktivierung NICHT (permissiv)', async () => {
-  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+  const ctx = mockCtx();
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
   // KEIN appliance-id-File → activateNodeLock bricht kontrolliert ab.
   const svc = createLicenseService(ctx);
   await withMockFetch(
@@ -1409,14 +1439,22 @@ test('AUTOBIND: Bindungs-Fehler bricht die Aktivierung NICHT (permissiv)', async
 });
 
 test('AUTOBIND: übersprungen, wenn bereits eine Maschine gebunden ist', async () => {
-  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+  // Strix L-0002: „gebunden“ heißt ein gültiges, an DIESE Box gebundenes
+  // Machine-File — eine stehen gebliebene machine_id allein reicht nicht mehr
+  // (gelöschtes File + machine_id hieß bisher: nie neu binden, Deckel weg).
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const ctx = mockCtx();
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
+  ctx.accountPublicKey = rawPubHex(publicKey);
+  fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), 'box-bound\n', 'utf8');
   const svc = createLicenseService(ctx);
   await withMockFetch(
     () => validKeygenResponse(),
     async (calls) => {
       ctx.state.license.machine_id = 'mach-existing';
-      ctx.state.license.license_id = 'lic-autobind';  // gleiche Lizenz → machine_id überlebt
-      const r = await svc.activateLicense('key/customer-key');
+      ctx.state.license.machine_file = mintMachineFile(privateKey, 'box-bound', null, 'lic-autobind');
+      ctx.state.license.license_id = 'lic-autobind';  // gleiche Lizenz → Maschine überlebt
+      const r = await svc.activateLicense('DVHB-UNSIGNED-BOUND');
       assert.equal(r.ok, true);
       assert.equal(r.nodeLock, undefined, 'keine Kaskade — Maschine existiert');
       assert.equal(calls.length, 1, 'nur validate, kein Proxy-Call');
@@ -1424,9 +1462,25 @@ test('AUTOBIND: übersprungen, wenn bereits eine Maschine gebunden ist', async (
   );
 });
 
+test('AUTOBIND: nur machine_id ohne Machine-File gilt als ungebunden → Kaskade (Strix L-0002)', async () => {
+  const ctx = mockCtx();
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
+  const svc = createLicenseService(ctx);
+  await withMockFetch(
+    () => validKeygenResponse(),
+    async () => {
+      ctx.state.license.machine_id = 'mach-existing';
+      ctx.state.license.license_id = 'lic-autobind';
+      const r = await svc.activateLicense('key/customer-key');
+      assert.ok(r.nodeLock, 'Bindung wird versucht');
+    }
+  );
+});
+
 test('AUTOBIND-Backfill: Revalidate bindet aktive, ungebundene Bestands-Lizenz nach', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+  const ctx = mockCtx();
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
   ctx.accountPublicKey = rawPubHex(publicKey);
   const applianceId = 'box-backfill';
   fs.writeFileSync(path.join(ctx._appDir, 'appliance-id'), applianceId + '\n', 'utf8');
@@ -1440,7 +1494,7 @@ test('AUTOBIND-Backfill: Revalidate bindet aktive, ungebundene Bestands-Lizenz n
     async (calls) => {
       // Bestandszustand: aktiv mit persistiertem Key, aber NIE gebunden.
       ctx.state.license.status = 'active';
-      ctx.state.license.license_key = 'key/legacy-customer';
+      ctx.state.license.license_key = mintSignedKey(privateKey, { license: { id: 'lic-autobind' } });
       ctx.state.license.license_id = 'lic-autobind';
       const r = await svc.revalidateLicense();
       assert.equal(r.ok, true);
@@ -1449,15 +1503,22 @@ test('AUTOBIND-Backfill: Revalidate bindet aktive, ungebundene Bestands-Lizenz n
       assert.equal(ctx.state.license.machine_id, 'mach-backfill');
       assert.ok(ctx._logs.some((l) => l.type === 'license_autobind_backfilled'), 'Backfill geloggt');
 
-      // Zweiter Revalidate: Maschine existiert → KEIN weiterer Proxy-Call.
+      // Zweiter Revalidate: Maschine existiert → KEIN weiterer Proxy-Call, nur
+      // validate + die Bindungs-Nachfrage mit scope.fingerprint (Strix L-0005).
       await svc.revalidateLicense();
-      assert.equal(calls.length, 3, 'nur der validate-Call kam dazu');
+      assert.equal(calls.length, 4, 'validate + Scope-Nachfrage kamen dazu');
+      assert.ok(calls.slice(2).every((c) => !String(c.url).includes('proxy.test')), 'kein Proxy-Call');
+      assert.equal(JSON.parse(calls[3].init.body).meta.scope.fingerprint, applianceId);
     }
   );
 });
 
-test('AUTOBIND-Backfill: bei Fehlschlag nur EIN Versuch pro Prozesslauf', async () => {
-  const ctx = mockCtx({ cfg: { licensing: { keygenAccount: 'test1', activationProxyUrl: 'https://proxy.test/activate' } } });
+test('AUTOBIND-Backfill: bei Fehlschlag Versuch bei jedem Revalidate (Strix L-0002)', async () => {
+  // Bis 30.10. nur EIN Versuch pro Prozesslauf — scheiterte die Bindung, blieb
+  // die Box bis zum nächsten Neustart ungebunden und ohne Deckel. Revalidate
+  // läuft alle 24 h, ein Versuch je Lauf ist kein Poll-Spam.
+  const ctx = mockCtx();
+  ctx.activationProxyUrl = 'https://proxy.test/activate';
   // Kein appliance-id-File → Bindung schlägt kontrolliert fehl (kein Netz-Call).
   const svc = createLicenseService(ctx);
   await withMockFetch(
@@ -1470,8 +1531,10 @@ test('AUTOBIND-Backfill: bei Fehlschlag nur EIN Versuch pro Prozesslauf', async 
       await svc.revalidateLicense();
       await svc.revalidateLicense();
       const fails = ctx._logs.filter((l) => l.type === 'license_autobind_failed');
-      assert.equal(fails.length, 1, 'genau ein Backfill-Versuch pro Prozesslauf');
+      assert.equal(fails.length, 3, 'ein Versuch je Revalidate');
       assert.equal(calls.length, 3, 'drei validates, keine Proxy-Calls');
+      assert.equal(svc.isProActive(), true, 'Bestandslizenz bleibt aktiv (T-0125 A)');
+      assert.equal(svc.getState().binding.error, 'no_appliance_id');
     }
   );
 });

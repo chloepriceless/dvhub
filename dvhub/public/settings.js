@@ -641,8 +641,41 @@ function licenseCapacityMessage(state) {
   return null;
 }
 
+/**
+ * Hinweis zur Box-Bindung bzw. Online-Prüfung (Strix L-0001/L-0002/L-0005,
+ * 30.10.2026). Reiner Text oder null.
+ *   - unverified_offline: unsignierter Schlüssel > 14 Tage nicht online geprüft
+ *   - blocked: eine andere Box hält die Lizenz → Pro hier aus
+ *   - unbound mit Fehler: Bindung gescheitert → Pro bleibt, Tarif-Grenze gilt
+ * @param {object|null} state  license getState() payload
+ * @returns {string|null}
+ */
+function licenseBindingMessage(state) {
+  if (!state || state.status !== 'active') return null;
+  if (state.effective_status === 'unverified_offline') {
+    return 'Die Lizenz konnte seit über 14 Tagen nicht bei license.dvhub.de geprüft werden. '
+      + 'Pro-Funktionen sind pausiert, bis die Box die Prüfung wieder erreicht („Jetzt prüfen“).';
+  }
+  const b = state.binding || {};
+  if (b.state === 'blocked' && b.block === 'machine_slot_taken') {
+    return 'Diese Lizenz ist gerade an eine andere Box gebunden — auf dieser Box sind Pro-Funktionen aus. '
+      + 'Mit „An diese Box binden“ übernimmst du sie, frühestens 24 Stunden nach der letzten Bindung der anderen Box. '
+      + 'Gehört dir die andere Box nicht, melde dich beim Support.';
+  }
+  if (b.state === 'blocked') {
+    return 'Diese Lizenz hängt inzwischen an einer anderen Box — hier sind Pro-Funktionen aus. '
+      + 'Mit „An diese Box binden“ holst du sie auf diese Box; die andere Box verliert dann Pro.';
+  }
+  if (b.state === 'unbound' && b.error) {
+    return `Die Box ist noch nicht an die Lizenz gebunden (letzter Versuch: ${b.error}). `
+      + 'Pro läuft weiter, die Tarif-Grenze gilt trotzdem; DVhub versucht es bei der nächsten Prüfung erneut '
+      + 'oder sofort über „An diese Box binden“.';
+  }
+  return null;
+}
+
 if (typeof globalThis !== 'undefined') {
-  globalThis.DVhubSettingsLicense = { licenseCapacityMessage };
+  globalThis.DVhubSettingsLicense = { licenseCapacityMessage, licenseBindingMessage };
 }
 
 /**
@@ -5353,7 +5386,9 @@ function initForecastTab() {
     // Stufe-C node-lock: the "An diese Box binden" action only makes sense for
     // an ACTIVE license that is NOT yet bound (no machine_id). Once bound, the
     // button is replaced by a "gebunden"-state line in the meta block.
-    const isBound = !!(state && state.machine_id);
+    // Strix L-0002: „gebunden“ meldet der Dienst selbst (gültiges Machine-File
+    // DIESER Box) — eine stehen gebliebene machine_id allein reicht nicht.
+    const isBound = state && state.binding ? state.binding.state === 'bound' : !!(state && state.machine_id);
     if (inputField) inputField.hidden = !showInput;
     if (activateBtn) activateBtn.hidden = !showInput;
     if (recheckBtn) recheckBtn.hidden = showInput;
@@ -5398,6 +5433,24 @@ function initForecastTab() {
       capWarn.hidden = true;
       capWarn.textContent = '';
     }
+
+    // Strix L-0001/L-0002/L-0005: Bindung / Online-Prüfung — klarer Hinweis
+    // statt still „unbegrenzt“ oder kommentarlos ohne Pro.
+    const bindMsg = licenseBindingMessage(state);
+    let bindWarn = section.querySelector('.license-binding-warn');
+    if (bindMsg) {
+      if (!bindWarn) {
+        bindWarn = document.createElement('div');
+        bindWarn.className = 'config-banner warn license-binding-warn';
+        if (meta && meta.parentNode) meta.parentNode.insertBefore(bindWarn, meta.nextSibling);
+        else section.appendChild(bindWarn);
+      }
+      bindWarn.textContent = bindMsg;
+      bindWarn.hidden = false;
+    } else if (bindWarn) {
+      bindWarn.hidden = true;
+      bindWarn.textContent = '';
+    }
   }
 
   function mapErrorToToast(result, httpStatus) {
@@ -5411,7 +5464,7 @@ function initForecastTab() {
     if (r.error === 'empty_key') return 'Bitte Lizenzschlüssel eingeben.';
     if (r.error === 'invalid_json') return 'Ungültige Anfrage.';
     // Stufe-C node-lock (activate-node-lock) errors.
-    if (r.error === 'activation_proxy_not_configured') return 'Box-Bindung ist nicht konfiguriert (licensing.activationProxyUrl fehlt).';
+    if (r.error === 'machine_slot_taken') return 'Die Lizenz ist gerade an eine andere Box gebunden. Übernehmen geht frühestens 24 Stunden nach deren letzter Bindung.';
     if (r.error === 'no_appliance_id') return 'Keine Appliance-ID gefunden — Box-Bindung nicht möglich.';
     if (r.error === 'fingerprint_mismatch') return 'Die gebundene Kennung passt nicht zu dieser Box.';
     if (r.error === 'machine_file_invalid') return 'Das erhaltene Bindungs-Zertifikat ist ungültig.';

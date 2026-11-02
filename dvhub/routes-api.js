@@ -4123,12 +4123,15 @@ export function createApiRoutes(ctx) {
     }
 
     // Stufe-C node-lock: bind the ACTIVE license to this appliance. Calls the
-    // server activation proxy (licensing.activationProxyUrl → webhook.dvhub.de),
+    // server activation proxy (fest webhook.dvhub.de, Strix L-0006),
     // which mints a Keygen machine bound to this box's appliance-id and returns a
     // signed offline machine file; the service verifies it OFFLINE + asserts the
     // bound fingerprint == this appliance before persisting (activateNodeLock).
     // No body — binds the persisted key. Transport/proxy failures are 503 (state
-    // unchanged, retryable); a crypto/binding failure is a hard 422.
+    // unchanged, retryable); a crypto/binding failure is a hard 422. Gelingt die
+    // Bindung, hebt das eine Pro-Sperre wegen „andere Box“ auf (Strix L-0005).
+    // Achtung: der Proxy gibt den Slot einer anderen Box frei, wenn deren
+    // Bindung älter als 24 h ist — das ist hier ein bewusster Knopfdruck.
     if (url.pathname === '/api/license/activate-node-lock' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
       const result = await licenseService.activateNodeLock();
