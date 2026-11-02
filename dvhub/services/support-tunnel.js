@@ -13,7 +13,7 @@
 // Mechanics: `autossh -R` (userspace, no /dev/net/tun — works in unprivileged
 // LXC) dials OUT to the self-hosted relay (support.dvhub.de) and reverse-forwards
 //   relay:127.0.0.1:<shellPort> -> appliance:127.0.0.1:22     (SSH shell; container: own sshd :2222)
-//   relay:127.0.0.1:<webPort>   -> appliance:127.0.0.1:<httpPort> (Web UI, default 80)
+//   relay:127.0.0.1:<webPort>   -> appliance:127.0.0.1:<SUPPORT_WEB_PORT> (eigener Web-Listener, Strix T-0001)
 // The relay enforces the two permitlisten ports server-side, so shellPort/webPort
 // MUST match the relay registry (peer assigns them; we mirror into config).
 //
@@ -115,6 +115,17 @@ export function sshKeyFingerprint(pubKeyContents) {
   } catch {
     return null;
   }
+}
+
+// Strix T-0001 (30.10.2026): das Web-Ziel des Tunnels ist ein eigener Listener
+// (server.js, nur 127.0.0.1) statt des normalen Ports. Dort angekommene Anfragen
+// erkennt die App als „über den Support-Tunnel“ (req.dvhubSupportTunnel): kein
+// Loopback-Freibrief, keine Selbstverlängerung, Kennzeichnung im Audit-Log.
+// dvhub-support-tunnel.sh nutzt denselben Standard (Test hält beide gleich).
+export const SUPPORT_WEB_PORT_DEFAULT = 47822;
+export function supportWebPort(env = process.env) {
+  const n = Number(env?.DVHUB_SUPPORT_WEB_PORT);
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : SUPPORT_WEB_PORT_DEFAULT;
 }
 
 // Clamp a requested TTL (minutes) into [floor, ceil], defaulting when unset/NaN.
@@ -323,7 +334,7 @@ export function createSupportTunnel(ctx, deps = {}) {
       webPort: Number(pick('webPort', 0)) || 0,
       autoCloseMin: clampTtlMin(support.tunnel?.autoCloseMin, TTL_MIN_DEFAULT),
       localShellPort: inContainer ? (Number(process.env.DVHUB_SUPPORT_SSH_PORT) || CONTAINER_SSH_PORT_DEFAULT) : 22,
-      localWebPort: Number(cfg.httpPort) || 80,
+      localWebPort: supportWebPort(),
       localUserEnabled: support.localUser?.enabled !== false, // opt-out: default ON
     };
   }

@@ -832,9 +832,12 @@ export function listManufacturerProfiles(ctx) {
 // (::ffff:192.168.1.5 → 192.168.1.5). Caps free-form fields so an attacker
 // can't pump multi-MB User-Agent strings into the audit table.
 export function actorContext(req) {
+  // Strix T-0001: Aufrufe über den Support-Tunnel (eigener Listener) im
+  // Audit-Log als solche erkennbar — sonst stünde dort nur 127.0.0.1.
+  const ua = String(req.headers?.['user-agent'] || '');
   return {
     actor_ip: String(req.socket?.remoteAddress || '').replace(/^::ffff:/, ''),
-    actor_ua: String(req.headers?.['user-agent'] || '').slice(0, 256),
+    actor_ua: (req?.dvhubSupportTunnel === true ? `Support-Tunnel | ${ua}` : ua).slice(0, 256),
     actor_session: String(req.headers?.['x-session-id'] || '').slice(0, 64) || null,
   };
 }
@@ -1188,7 +1191,14 @@ export function createApiRoutes(ctx) {
   // (req.socket.remoteAddress is the sole source of truth — QUAL-02 backward compat).
   // Loopback = the box itself. Always trusted regardless of lanTrust posture
   // (internal calls, on-box kiosk). Under 'strict' this is the ONLY bypass.
+  // Strix T-0001: Anfragen über den Support-Tunnel kommen am eigenen Listener
+  // ebenfalls von 127.0.0.1 an, sind aber NICHT die Box selbst — sie gelten
+  // wie ein Gerät im Heimnetz (isLocalNetworkRequest) und folgen lanTrust.
+  function isSupportTunnelRequest(req) {
+    return req?.dvhubSupportTunnel === true;
+  }
   function isLoopbackRequest(req) {
+    if (isSupportTunnelRequest(req)) return false;
     const addr = deriveClientIp(req, getCfg());
     return addr === '127.0.0.1' || addr === '::1';
   }
@@ -2815,6 +2825,11 @@ export function createApiRoutes(ctx) {
         const body = await readJsonBody(req, res);
         if (body === null) return;
         if (!csrfOk(body)) return csrfFail();
+        // Strix T-0001: eine Kopplung (mit Freigaben) startet der Kunde.
+        if (isSupportTunnelRequest(req)) {
+          pushLog('support_tunnel_consent_denied', { action: 'client_pair' }, actorContext(req));
+          return json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Eine Kopplung startet der Kunde selbst.' });
+        }
         try {
           const r = await ipc.claim({
             portalUrl: body.portalUrl,
@@ -2875,6 +2890,12 @@ export function createApiRoutes(ctx) {
         if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'enabled_must_be_boolean' });
         // Nur Ausschalten ist privilegien-REDUZIEREND und geht immer (Kill-Switch).
         const onlyReducing = Object.values(patch).every((v) => v === false);
+        // Strix T-0001: Freigaben erteilt der Kunde, nicht der Support über den
+        // offenen Tunnel (allowTunnel hieße: jederzeit wieder öffnen).
+        if (!onlyReducing && isSupportTunnelRequest(req)) {
+          pushLog('support_tunnel_consent_denied', { patch }, actorContext(req));
+          return json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Freigaben für den Fernzugang erteilt der Kunde selbst.' });
+        }
         if (!onlyReducing && !csrfOk(body)) return csrfFail();
         try {
           const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
@@ -6829,6 +6850,13 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/support/tunnel/open' && req.method === 'POST') {
       if (!ctx.supportTunnel) return json(res, 503, { ok: false, error: 'support_tunnel_unavailable' });
       const actor = actorContext(req);
+      // Strix T-0001: öffnen/verlängern entscheidet der Kunde, nicht der
+      // Support über den offenen Tunnel. Schließen bleibt erlaubt.
+      if (isSupportTunnelRequest(req)) {
+        req.resume?.();
+        pushLog('support_tunnel_self_extend_denied', {}, actor);
+        return json(res, 403, { ok: false, error: 'support_tunnel_self_extend', detail: 'Über den Support-Tunnel lässt er sich nicht öffnen oder verlängern — das macht der Kunde.' });
+      }
       const body = await readJsonBody(req, res);
       if (body === null) return; // readJsonBody already sent 400/413
       const hasValidBearer = (() => {

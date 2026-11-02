@@ -167,14 +167,16 @@ PORT="$(json_num port)";       PORT="${PORT:-47821}"
 RUSER="$(json_str user)";      RUSER="${RUSER:-dvhub-support}"
 SHELLP="$(json_num shellPort)"
 WEBP="$(json_num webPort)"
-# Ziele auf der Box: sshd und Weboberfläche. DVhub schreibt sie in den Auftrag
-# (httpPort aus der Config); ohne Angabe wie bisher 22 und 80.
+# Ziele auf der Box: sshd und Weboberfläche. DVhub schreibt sie in den Auftrag;
+# ohne Angabe 22 und der eigene Support-Listener der App (Strix T-0001: nicht
+# der normale Port — dort gälte der Support als „die Box selbst“).
 LOCAL_SHELL=""; LOCAL_WEB=""
 if [ "$MODE" = "service" ]; then
   LOCAL_SHELL="$(json_num_in localShellPort "$REQ_JSON")"
   LOCAL_WEB="$(json_num_in localWebPort "$REQ_JSON")"
 fi
-LOCAL_SHELL="${LOCAL_SHELL:-22}"; LOCAL_WEB="${LOCAL_WEB:-80}"
+LOCAL_SHELL="${LOCAL_SHELL:-22}"
+LOCAL_WEB="${LOCAL_WEB:-${DVHUB_SUPPORT_WEB_PORT:-47822}}"
 APPLIANCE_ID="$(cat "$APPLIANCE_ID_FILE" 2>/dev/null || echo 'n/a')"
 
 if [ -z "$SHELLP" ] || [ -z "$WEBP" ]; then
