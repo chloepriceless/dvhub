@@ -208,3 +208,45 @@ test('Schalter AUS (neuer Pfad) wirkt bei jedem Hersteller', async () => {
     assert.equal(r.reads.length + r.mqttReads.length, 0, `${manufacturer}: ausgeschaltet liest nichts`);
   }
 });
+
+// --- Gegenprüfung 57e65bac ----------------------------------------------------
+
+test('fremdes Modbus-Gerät: Entladegrenze 0 aus dem Poll-Punkt ist eindeutig — kein Fehlalarm ohne eigenen 0-Write', async () => {
+  // Angepasstes Profil: Sollwert und Entladegrenze werden gepollt, geschrieben
+  // wird die Grenze nicht. Die 0-Mehrdeutigkeit (−1 → 0) gibt es nur am Victron-GX.
+  const r = rig('fronius', {
+    victron: { maxDischargeW: 0 },
+    mutateCfg: (cfg) => {
+      cfg.points.gridSetpointW = { enabled: true };
+      cfg.points.maxDischargeW = { enabled: true, fc: 3, address: 40400, quantity: 1, signed: true, scale: 1, offset: 0 };
+    }
+  });
+  await r.run(OPTS.holdMs * 2);
+  assert.equal(r.sent.length, 0);
+});
+
+test('Victron: 2704-0 aus dem Poll-Punkt bleibt ohne eigenen 0-Write mehrdeutig (Gegenprobe)', async () => {
+  const r = rig('victron', {
+    victron: { maxDischargeW: 0 },
+    mutateCfg: (cfg) => { cfg.points.maxDischargeW = { enabled: true, fc: 4, address: 2704, quantity: 1, signed: true, scale: 1, offset: 0 }; },
+    regs: { 2720: [0xffff, 0xffff] }
+  });
+  await r.run(OPTS.holdMs + 30000);
+  assert.equal(r.sent.length, 1);
+});
+
+test('kurze Dauer bei langsamem Poll-Takt (60 s): Alarm kommt trotzdem — Fenster mindestens sechs Abfragen', async () => {
+  const r = rig('victron', {
+    cfgExtra: { meterPollMs: 60000, monitoring: { setpointWatchdog: { holdMinutes: 1 } } },
+    regs: { 2720: [0xffff, 0xffff] }
+  });
+  await r.run(30 * 60000, { stepMs: 60000 });
+  assert.equal(r.sent.length, 1, 'Alarm');
+  // nicht vor sechs Abfragen
+  const early = rig('victron', {
+    cfgExtra: { meterPollMs: 60000, monitoring: { setpointWatchdog: { holdMinutes: 1 } } },
+    regs: { 2720: [0xffff, 0xffff] }
+  });
+  await early.run(5 * 60000, { stepMs: 60000 });
+  assert.equal(early.sent.length, 0, 'nicht schon nach 5 Minuten');
+});

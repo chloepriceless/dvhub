@@ -197,6 +197,13 @@ function ownZeroWrite(state) {
   return lw != null && Number(lw.value) === 0;
 }
 
+// Die 2704-Mehrdeutigkeit gibt es nur am Victron-GX über Modbus. Über MQTT
+// kommt der D-Bus-Wert (−1 eindeutig), und fremde Geräte haben ihre eigene
+// Kodierung — dort ist eine gelesene 0 eine Sperre (Gegenprüfung 57e65bac).
+export function isVictronModbus(cfg) {
+  return String(cfg?.manufacturer || 'victron') === 'victron' && cfg?.victron?.transport !== 'mqtt';
+}
+
 /**
  * Entlade-Sperre in W, soweit belastbar bekannt, in dieser Reihenfolge:
  * 1. eigene eindeutige Rücklesung des Wächters (ownRead aus 2720 bzw. MQTT),
@@ -204,8 +211,8 @@ function ownZeroWrite(state) {
  * 3. eigene Rücklesung aus 2704 (Rückfall alter GX),
  * 4. DVhubs eigener Schreibwert — nur befristet, an der GX kann die Sperre
  *    längst wieder aufgehoben sein.
- * Eine 0 aus 2704 (2. und 3.) zählt nur mit eigenem 0-Write — sie ist von −1
- * (unbegrenzt) nicht zu unterscheiden.
+ * Eine 0 aus 2704 (2. und 3.) zählt am Victron (Modbus) nur mit eigenem
+ * 0-Write — sie ist von −1 (unbegrenzt) nicht zu unterscheiden.
  */
 export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = null) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
@@ -214,7 +221,8 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
   // Eindeutiger Wert (2720 bzw. MQTT) geht vor — auch vor einer 2704-0 mit
   // alter eigener 0 (an der GX kann längst −1 stehen, Gegenprüfung 0ff2eb8d).
   if (ownOk && !ownRead.ambiguousZero) return Number(ownRead.value);
-  if (known && known.from !== 'own_write' && (Number(known.value) !== 0 || ownZeroWrite(state))) return known.value;
+  if (known && known.from !== 'own_write'
+      && (Number(known.value) !== 0 || ownZeroWrite(state) || !isVictronModbus(cfg))) return known.value;
   if (ownOk && ownZeroWrite(state)) return Number(ownRead.value);
   if (known && known.from === 'own_write' && isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return known.value;
   return null;
@@ -225,7 +233,7 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
 function reliesOnAmbiguousZero(state, cfg, nowMs) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
   // Ohne eigenen 0-Write entschuldigt eine 2704-0 ohnehin nichts (7b1613f5).
-  return !!known && known.from !== 'own_write' && Number(known.value) === 0 && ownZeroWrite(state);
+  return isVictronModbus(cfg) && !!known && known.from !== 'own_write' && Number(known.value) === 0 && ownZeroWrite(state);
 }
 
 /**
@@ -450,12 +458,9 @@ export function createSetpointFollowWatchdog(ctx) {
   let capReadPending = false;
   let no2720 = false;           // GX kennt Reg. 2720 nicht → 2704
 
-  // Reg. 2720 und die 2704-Mehrdeutigkeit (−1 liest sich als 0) gibt es nur am
-  // Victron-GX. Auf fremder Modbus-Hardware hat 2720 eine ganz andere Bedeutung
-  // — dort wird nur die im Profil verdrahtete Adresse gelesen (02.11.2026).
-  function isVictron(cfg) {
-    return String(cfg?.manufacturer || 'victron') === 'victron';
-  }
+  // Reg. 2720 und die 2704-Mehrdeutigkeit gibt es nur am Victron-GX. Auf
+  // fremder Modbus-Hardware hat 2720 eine ganz andere Bedeutung — dort wird nur
+  // die im Profil verdrahtete Adresse gelesen (02.11.2026, isVictronModbus).
 
   function capReadable(cfg) {
     const conf = cfg?.controlWrite?.maxDischargeW;
@@ -476,7 +481,7 @@ export function createSetpointFollowWatchdog(ctx) {
     // 2704 ohne eigenen 0-Write ist keine (sonst Dauerlesen, 0ff2eb8d).
     const capBlock = capRead && !capRead.error && Number(capRead.value) >= 0 && Number(capRead.value) < opts.minShortfallW
       && !(capRead.ambiguousZero && !ownZeroWrite(state));
-    const victron = isVictron(cfg);
+    const victron = isVictronModbus(cfg);
     const crossCheck = victron && !no2720 && ctx.transport.type !== 'mqtt' && reliesOnAmbiguousZero(state, cfg, nowMs);
     if (!suspicious && !capBlock && !crossCheck) return;
     capReadPending = true;
@@ -533,6 +538,10 @@ export function createSetpointFollowWatchdog(ctx) {
     // Punkte selbst schon um maxAgeMs auseinander (Gegenprüfung 39bbcd6e).
     const pollMs = Number(cfg.meterPollMs);
     opts.gapMs = Math.max(opts.maxAgeMs, Number.isFinite(pollMs) && pollMs > 0 ? 3 * pollMs : 0);
+    // Jedes Fensterviertel braucht einen Messpunkt: bei langsamem Takt und
+    // kurzer Dauer (z. B. 60 s Poll, 1 min) bliebe ein Viertel leer und der
+    // Alarm käme nie. Darum mindestens sechs Abfragen (Gegenprüfung 57e65bac).
+    if (Number.isFinite(pollMs) && pollMs > 0) opts.holdMs = Math.max(opts.holdMs, 6 * pollMs);
     const v = state.victron || {};
     // Nur wo DVhub selbst steuert; bei eingefrorenen Live-Daten meldet der
     // Einfrier-Wächter, die Werte hier wären dann nicht belastbar.

@@ -2831,7 +2831,7 @@ function buildFieldDefinitions() {
       path: 'monitoring.setpointWatchdog.enabled',
       label: 'Entlade-Wächter',
       type: 'boolean',
-      help: 'Meldet sich, wenn der Speicher nicht entlädt, obwohl DVhub es vorgibt: Die Anlage bezieht über 10 Minuten (einstellbar unter „Erweitert“) deutlich mehr Strom aus dem Netz, als der Netz-Sollwert erlaubt, der Akku liegt klar über seiner Untergrenze und gibt trotzdem nichts ab. Dann schreibt DVhub einen Eintrag ins Protokoll, schickt eine Nachricht aufs Handy (wenn unter Integrationen → Notifications ein Kanal eingerichtet ist) und meldet eine Störung an die Remote-Überwachung (Push-URL unter System → Erweitert, z. B. Uptime Kuma). Sobald der Akku wieder folgt, kommt eine Entwarnung. Keine Meldung, solange der Akku gewollt steht: an der Untergrenze, bei gesetzter Entlade-Sperre oder wenn EOS ihn hält. Der Wächter meldet nur — er steuert nichts und greift nicht in die Regelung ein; die Ursache liegt an der Anlage. Er arbeitet, wo DVhub einen Netz-Sollwert vorgibt und zurückliest (Victron, Universal MQTT); Profile ohne Netz-Sollwert (Fronius, Deye) liefern ihm keine Werte, dort bleibt er still. Standard: an.'
+      help: 'Meldet sich, wenn der Speicher nicht entlädt, obwohl DVhub es vorgibt: Die Anlage bezieht über 10 Minuten (einstellbar unter „Erweitert“) deutlich mehr Strom aus dem Netz, als der Netz-Sollwert erlaubt, der Akku liegt klar über seiner Untergrenze und gibt trotzdem nichts ab. Dann schreibt DVhub einen Eintrag ins Protokoll, schickt eine Nachricht aufs Handy (wenn unter Integrationen → Notifications ein Kanal eingerichtet ist) und meldet eine Störung an Uptime Kuma (wenn unter Integrationen → Notifications → Uptime-Kuma eine Push-URL hinterlegt ist). Sobald der Akku wieder folgt, kommt eine Entwarnung. Keine Meldung, solange der Akku gewollt steht: an der Untergrenze, bei gesetzter Entlade-Sperre oder wenn EOS ihn hält. Der Wächter meldet nur — er steuert nichts und greift nicht in die Regelung ein; die Ursache liegt an der Anlage. Er arbeitet, wo DVhub einen Netz-Sollwert vorgibt und zurückliest (Victron, Universal MQTT); Profile ohne Netz-Sollwert (Fronius, Deye) liefern ihm keine Werte, dort bleibt er still. Standard: an.'
     },
     {
       section: 'system',
@@ -2847,7 +2847,7 @@ function buildFieldDefinitions() {
       min: 1,
       max: 120,
       step: 1,
-      help: 'So lange muss der Akku am Stück nicht folgen, bevor der Wächter meldet — fast alle Messpunkte in dieser Zeit müssen auffällig sein. Kurze Laststöße (Wallbox, Wärmepumpe) lösen deshalb nichts aus. Standard: 10 Minuten.'
+      help: 'So lange muss der Akku am Stück nicht folgen, bevor der Wächter meldet — fast alle Messpunkte in dieser Zeit müssen auffällig sein. Kurze Laststöße (Wallbox, Wärmepumpe) lösen deshalb nichts aus. Bei langsamer Abfrage der Anlage gelten mindestens sechs Abfragen (z. B. 6 Minuten bei 60 s). Standard: 10 Minuten.'
     },
     {
       section: 'system',
