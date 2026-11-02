@@ -415,10 +415,15 @@ export function createEosForecastBridge(ctx) {
   //   oder ein Preis-Import scheiterte (Gegenprüfung 16856110) — getrennt
   //   geführt, damit ein Löschfehler weit hinten keinen Lauf sperrt;
   // - clearedOnce: der erste Push dieses Prozesses löscht einmal alles hinter
-  //   dem Geschickten — nach einem DVhub-Neustart ist nichts gemerkt.
+  //   dem Geschickten — nach einem DVhub-Neustart ist nichts gemerkt;
+  // - eosPricesKnown: erst nach dem ersten angekommenen Preis-Import dieses
+  //   Prozesses ist bekannt, was in EOS liegt (alte Schätzwerte des vorigen
+  //   Prozesses sind dann überschrieben oder gelöscht). Bis dahin gilt der
+  //   Stand vor einem Lauf als unbekannt (Gegenprüfung 2ed313de).
   let lastEstimateRange = null;
   let staleRange = null;
   let clearedOnce = false;
+  let eosPricesKnown = false;
   const PRICE_KEYS = ['elecprice_marketprice_wh', 'feed_in_tariff_wh'];
   const unionRange = (...ranges) => ranges.filter(Boolean).reduce((acc, r) => (acc
     ? { fromMs: Math.min(acc.fromMs, r.fromMs), untilMs: Math.max(acc.untilMs, r.untilMs) }
@@ -471,9 +476,11 @@ export function createEosForecastBridge(ctx) {
     return { cleared: errors.length === 0, errors, range: { fromMs: start, untilMs: end } };
   }
 
-  // Rechnet EOS nach eigenem Takt (optimizer.eosStartAfterPreviousRun), gibt
-  // es keinen Laufstart, an dem prepareRun prüfen könnte — dann keine
-  // Schätzung (Gegenprüfung 16856110); alte löscht clearStaleEstimates.
+  // Stößt DVhub die Läufe nicht an — EOS rechnet nach eigenem Takt
+  // (optimizer.eosStartAfterPreviousRun) oder ist (noch) nicht als 0.4
+  // erkannt —, gibt es keinen Laufstart, an dem prepareRun prüfen könnte, und
+  // ohne Erkennung auch keinen Steuerzeitraum: dann keine Schätzung
+  // (Gegenprüfungen 16856110, 2ed313de); alte löscht clearStaleEstimates.
   async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs, { estimate = true } = {}) {
     if (!estimate) return { slots: realSlots, estimate: null };
     const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs);
@@ -813,6 +820,7 @@ export function createEosForecastBridge(ctx) {
    * größtmögliche (24 h).
    */
   function estimatesInControlHorizon(nowMs) {
+    if (!eosPricesKnown) return true; // Stand in EOS unbekannt (Neustart, Import gescheitert)
     const from = Math.min(lastEstimateRange?.fromMs ?? Infinity, staleRange?.fromMs ?? Infinity);
     if (!Number.isFinite(from)) return false;
     const h = Number(state?.optimizer?.eosControlHorizonH);
@@ -840,8 +848,10 @@ export function createEosForecastBridge(ctx) {
   async function prepareRun({ nowMs = Date.now() } = {}) {
     if (!estimatesInControlHorizon(nowMs)) return { ok: true, pushed: false };
     if (pushLog) {
+      const from = Math.min(lastEstimateRange?.fromMs ?? Infinity, staleRange?.fromMs ?? Infinity);
       pushLog('eos_price_estimate_run_push', {
-        estimateFrom: new Date(Math.min(lastEstimateRange?.fromMs ?? Infinity, staleRange?.fromMs ?? Infinity)).toISOString(),
+        // null = Stand in EOS unbekannt (noch kein Preis-Import angekommen)
+        estimateFrom: eosPricesKnown && Number.isFinite(from) ? new Date(from).toISOString() : null,
         horizonHours: state?.optimizer?.eosControlHorizonH ?? null,
       });
     }
@@ -888,7 +898,7 @@ export function createEosForecastBridge(ctx) {
     // Einspeisewert — es speist mittags PV ein, statt sie für Nacht und Morgen
     // zu speichern (Prod 01.11.2026). Deshalb dahinter Schätzwerte; der
     // Steuerzeitraum richtet sich weiter nur nach den echten Preisen.
-    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(), { estimate: dvhubTriggersEosRuns(cfg) });
+    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(), { estimate: dvhubTriggersEosRuns(cfg) && state?.optimizer?.eos?.supported === true });
     if (gone()) return abandoned();
     const priceSlotsCt = priceFill.slots;
     const priceEstimate = priceFill.estimate;
@@ -1077,9 +1087,12 @@ export function createEosForecastBridge(ctx) {
       if (gone()) return abandoned();
       const clearFailed = Boolean(clear.errors?.length);
       if (clearFailed) errors.priceEstimateClear = clear.errors.join('; ');
-      else if (clear.range) clearedOnce = true;
       const next = priceEstimate ? { fromMs: Date.parse(priceEstimate.from), untilMs: Date.parse(priceEstimate.until) } : null;
       const priceImportOk = !errors.ElecPriceImport && !(feedInSlots.length && errors.FeedInTariffImport);
+      // Das einmalige Löschen hinter dem Geschickten zählt nur zusammen mit
+      // einem angekommenen Import — sonst bleibt davor Unbekanntes liegen.
+      if (!clearFailed && clear.range && priceImportOk) clearedOnce = true;
+      if (priceImportOk) eosPricesKnown = true;
       if (priceImportOk) {
         // In EOS: echte Preise, dahinter `next`; dahinter gelöscht — außer
         // der Löschbereich scheiterte, dann bleibt er offen.
