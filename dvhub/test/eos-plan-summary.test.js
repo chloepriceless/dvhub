@@ -338,11 +338,22 @@ test('Börse + Marktprämie: negativer Slot ohne Prämie wird so benannt', () =>
 
 // Gegenprüfung 63b36983 (P2): die Grundlage kommt aus dem letzten Push an EOS
 // (womit der Plan gerechnet ist), nicht aus der aktuellen Einstellung.
-test('/api/eos/plan: Grundlage aus dem letzten Push, sonst aus der Einstellung', () => {
+test('/api/eos/plan: Grundlage passend zum gezeigten Plan (eosPlanFeedInBasis)', () => {
   const src = fs.readFileSync(fileURLToPath(new URL('../routes-api.js', import.meta.url)), 'utf8');
   const start = src.indexOf("url.pathname === '/api/eos/plan'");
   const body = src.slice(start, src.indexOf('\n    }\n', start));
-  assert.match(body, /priceBasis: state\.optimizer\?\.eosFeedInBasis \|\| \{ feedIn: eosFeedInBasis\(getCfg\(\)\) \}/);
+  assert.match(body, /priceBasis: eosPlanFeedInBasis\(state\.optimizer, getCfg\(\), Date\.parse\(plan\.data\?\.generatedAt\)\)/);
+});
+
+// Gegenprüfung d22f5a4d (P2): „negativer Börsenpreis“ nur bei ≈ 0 ct — ein
+// anderer Wert als der feste Satz (z. B. Plan noch mit altem Satz) bekommt
+// keinen Zusatz statt eines falschen.
+test('feste Vergütung: abweichender Wert ungleich 0 ohne Zusatz', () => {
+  const { summarize, view } = load();
+  const rows = plan60(60).rows;
+  rows[0].feedInCtKwh = 7.78; rows[1].feedInCtKwh = 7.78;
+  const v = view(summarize({ available: true, output: { slotMinutes: 60, rows }, priceBasis: { feedIn: 'fixed', fixedCtKwh: 8.2 } }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 7,8 ct');
 });
 
 // Gegenprüfung 63b36983 (P3): title erreicht Touch und Tastatur nicht — das
@@ -378,4 +389,13 @@ test('index.html: Info-Zeichen ist ein Knopf mit aufklappbarem Erklärtext', () 
   const html = fs.readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
   assert.match(html, /<button type="button" class="eos-plan-summary-info" id="eosPlanSummaryInfo" aria-expanded="false" aria-controls="eosPlanSummaryHelp"/);
   assert.match(html, /<p class="eos-plan-summary-help" id="eosPlanSummaryHelp" hidden><\/p>/);
+});
+
+// Gegenprüfung 00f23b55 (P3): CONTRIBUTING.md verlangt bei jeder Änderung einen
+// neuen ?v=-Schlüssel — für die in diesem Branch geänderten Dateien.
+test('Cache-Schlüssel der geänderten Leitstand-Dateien angehoben', () => {
+  const html = fs.readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
+  assert.match(html, /\/eos-plan-summary\.js\?v=20261102-beschriftungen"/);
+  assert.match(html, /\/leitstand-charts\.js\?v=20261102-energiebilanz"/);
+  assert.match(html, /\/index\.css\?v=20261102-eosplan-info"/);
 });

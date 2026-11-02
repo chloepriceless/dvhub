@@ -180,7 +180,11 @@
   // niedrigste Wert ist oft genau so ein Slot (Gegenprüfung 63b36983).
   function basisText(basis, ct) {
     if (!basis || ct === null || ct === undefined) return '';
-    if (basis.kind === 'fixed' && basis.fixedCt !== null && Math.abs(ct - basis.fixedCt) > 0.005) return 'negativer Börsenpreis';
+    if (basis.kind === 'fixed' && basis.fixedCt !== null && Math.abs(ct - basis.fixedCt) > 0.005) {
+      // 0 ct = Slot mit negativem Börsenpreis; ein anderer Wert (z. B. Plan
+      // noch mit altem Satz) bekommt keinen Zusatz statt eines falschen.
+      return Math.abs(ct) < 0.005 ? 'negativer Börsenpreis' : '';
+    }
     if (basis.kind === 'spot_premium' && ct < 0) return 'Börse, negativ: ohne Marktprämie';
     return FEED_IN_BASIS[basis.kind];
   }

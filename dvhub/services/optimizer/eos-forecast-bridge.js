@@ -211,6 +211,30 @@ export function eosFeedInBasis(cfg) {
   return tariff.feedInIncludeMarketPremium === true ? 'spot_premium' : 'spot';
 }
 
+const fixedFeedInCt = (tariff) => (Number.isFinite(Number(tariff?.feedInCtKwh)) ? Number(tariff.feedInCtKwh) : 7.78);
+
+/**
+ * Grundlage des Einspeisewerts für die Anzeige zum gezeigten Plan
+ * (/api/eos/plan priceBasis, Gegenprüfungen 63b36983/d22f5a4d):
+ * - vor dem ersten Push aus der Einstellung (mit festem Satz);
+ * - sonst die beim Push abgelegte (state.optimizer.eosFeedInBasis, `since` =
+ *   Zeitpunkt des Wechsels); ist der Plan älter als der Wechsel, die davor
+ *   (eosFeedInBasisPrev) — unbekannt → null, die Anzeige lässt den Zusatz weg.
+ * @param {object} opt   state.optimizer
+ * @param {object} cfg
+ * @param {number} planGeneratedMs  generatedAt des gezeigten Plans (NaN = unbekannt)
+ */
+export function eosPlanFeedInBasis(opt, cfg, planGeneratedMs) {
+  const strip = (b) => (b ? { feedIn: b.feedIn, ...(b.fixedCtKwh !== undefined ? { fixedCtKwh: b.fixedCtKwh } : {}) } : null);
+  const cur = opt?.eosFeedInBasis;
+  if (!cur) {
+    const feedIn = eosFeedInBasis(cfg);
+    return feedIn === 'fixed' ? { feedIn, fixedCtKwh: fixedFeedInCt(cfg?.optimizer?.tariff) } : { feedIn };
+  }
+  if (!Number.isFinite(planGeneratedMs) || !(cur.since > 0) || planGeneratedMs >= cur.since) return strip(cur);
+  return strip(opt.eosFeedInBasisPrev);
+}
+
 /**
  * Nur Stempel auf dem Slot-Raster an EOS geben.
  *
@@ -722,6 +746,19 @@ export function createEosForecastBridge(ctx) {
     return { soc };
   }
 
+  // Grundlage nur bei einem Wechsel neu stempeln (`since`): Ein Plan, der vor
+  // dem Wechsel gerechnet ist, zeigt dann die vorige (Gegenprüfung d22f5a4d).
+  // Der erste Push nach dem Start gilt seit jeher (since 0).
+  function rememberFeedInBasis(next) {
+    if (!state) return;
+    state.optimizer = state.optimizer || {};
+    const cur = state.optimizer.eosFeedInBasis;
+    if (!cur) { state.optimizer.eosFeedInBasis = { ...next, since: 0 }; return; }
+    if (cur.feedIn === next.feedIn && cur.fixedCtKwh === next.fixedCtKwh) return;
+    state.optimizer.eosFeedInBasisPrev = cur;
+    state.optimizer.eosFeedInBasis = { ...next, since: Date.now() };
+  }
+
   let lastHorizonHours = null;
   let lastPredictionHours = null;
   /**
@@ -913,15 +950,12 @@ export function createEosForecastBridge(ctx) {
           })
       : fixedFeedInSlots(priceSlotsCt, tariff);
     // Womit der Einspeisewert tatsächlich gebildet ist — für die Anzeige im
-    // Leitstand (/api/eos/plan priceBasis, Gegenprüfung 63b36983): Marktprämie
-    // nur, wenn sie > 0 war; bei fester Vergütung der Satz (0 ct bei negativem
-    // Börsenpreis erkennt die Anzeige daran).
-    if (state) {
-      state.optimizer = state.optimizer || {};
-      state.optimizer.eosFeedInBasis = feedInSpot
-        ? { feedIn: premiumCt > 0 ? 'spot_premium' : 'spot' }
-        : { feedIn: 'fixed', fixedCtKwh: Number.isFinite(Number(tariff.feedInCtKwh)) ? Number(tariff.feedInCtKwh) : 7.78 };
-    }
+    // Leitstand (/api/eos/plan priceBasis, eosPlanFeedInBasis): Marktprämie nur,
+    // wenn sie > 0 war; bei fester Vergütung der Satz. Abgelegt erst, wenn EOS
+    // die Einspeise-Reihe angenommen hat (unten).
+    const feedInBasisNow = feedInSpot
+      ? { feedIn: premiumCt > 0 ? 'spot_premium' : 'spot' }
+      : { feedIn: 'fixed', fixedCtKwh: fixedFeedInCt(tariff) };
 
     // Heizstab (stufenlos regelbar): EOS plant ihn nicht — DVhub regelt ihn
     // nach Überschuss. Sein erwarteter Verbrauch kommt als Last in die Prognose,
@@ -1008,6 +1042,7 @@ export function createEosForecastBridge(ctx) {
       );
       if (res.ok) pushed.push(`${t.provider}(${t.rows})`);
       else errors[t.provider] = res.error;
+      if (res.ok && t.provider === 'FeedInTariffImport') rememberFeedInBasis(feedInBasisNow);
     }
 
     // Steuerzeitraum an die Preisabdeckung koppeln (EOS 0.4).

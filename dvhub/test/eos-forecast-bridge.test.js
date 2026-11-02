@@ -1272,9 +1272,70 @@ test('push merkt die Grundlage des Einspeisewerts (state.optimizer.eosFeedInBasi
   try {
     const { ctx } = estimateCtx(mock2, { tariff: { feedInMode: 'fixed', feedInCtKwh: 8.2 } });
     await createEosForecastBridge(ctx).push();
-    assert.deepEqual({ ...ctx.state.optimizer.eosFeedInBasis }, { feedIn: 'fixed', fixedCtKwh: 8.2 });
+    const b = ctx.state.optimizer.eosFeedInBasis;
+    assert.deepEqual({ feedIn: b.feedIn, fixedCtKwh: b.fixedCtKwh }, { feedIn: 'fixed', fixedCtKwh: 8.2 });
+    assert.equal(b.since, 0, 'erster Push: seit jeher (Einstellung über Neustart unverändert)');
   } finally { await mock2.close(); }
 });
+
+// Gegenprüfung d22f5a4d (P3): Marktprämie > 0 → spot_premium.
+test('push merkt spot_premium, wenn die Marktprämie > 0 war', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const ctx = premiumCtx(mock, { gate: true, overrideAw: 10, mwByYear: { [LAST_YEAR]: 6 } });
+    ctx.state.optimizer = {};
+    await createEosForecastBridge(ctx).push();
+    assert.equal(ctx.state.optimizer.eosFeedInBasis.feedIn, 'spot_premium');
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung d22f5a4d (P2): Grundlage wechselt erst mit einem Plan, der nach
+// dem Wechsel gerechnet ist; scheitert der Einspeise-PUT, bleibt die alte.
+test('Grundlage: Wechsel mit Zeitstempel, nur nach angenommenem Einspeise-PUT', async () => {
+  let failFeed = false;
+  const mock = await createMockEos((req, res) => {
+    if (failFeed && req.url.startsWith('/v1/prediction/import/FeedInTariffImport')) { res.writeHead(500); res.end('{}'); return; }
+    okHandler(req, res);
+  });
+  try {
+    const tariff = { feedInMode: 'fixed', feedInCtKwh: 7.78 };
+    const { ctx } = estimateCtx(mock, { tariff });
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+    assert.equal(ctx.state.optimizer.eosFeedInBasis.since, 0);
+    await bridge.push(); // unverändert: Zeitstempel bleibt
+    assert.equal(ctx.state.optimizer.eosFeedInBasis.since, 0);
+    tariff.feedInCtKwh = 8.2;
+    failFeed = true;
+    await bridge.push();
+    assert.equal(ctx.state.optimizer.eosFeedInBasis.fixedCtKwh, 7.78, 'PUT gescheitert: alte Grundlage');
+    failFeed = false;
+    const t0 = Date.now();
+    await bridge.push();
+    const b = ctx.state.optimizer.eosFeedInBasis;
+    assert.equal(b.fixedCtKwh, 8.2);
+    assert.ok(b.since >= t0);
+    assert.equal(ctx.state.optimizer.eosFeedInBasisPrev.fixedCtKwh, 7.78);
+  } finally { await mock.close(); }
+});
+
+test('eosPlanFeedInBasis: Grundlage zum Plan passend', async () => {
+  const { eosPlanFeedInBasis } = await import('../services/optimizer/eos-forecast-bridge.js');
+  const fixedCfg = { optimizer: { tariff: { feedInMode: 'fixed', feedInCtKwh: 8.1 } } };
+  // vor dem ersten Push: aus der Einstellung, mit festem Satz (P3)
+  assert.deepEqual({ ...eosPlanFeedInBasis({}, fixedCfg, NaN) }, { feedIn: 'fixed', fixedCtKwh: 8.1 });
+  assert.deepEqual({ ...eosPlanFeedInBasis(undefined, {}, NaN) }, { feedIn: 'fixed', fixedCtKwh: 7.78 });
+  const opt = {
+    eosFeedInBasis: { feedIn: 'fixed', fixedCtKwh: 8.2, since: 1000 },
+    eosFeedInBasisPrev: { feedIn: 'fixed', fixedCtKwh: 7.78, since: 0 },
+  };
+  assert.deepEqual({ ...eosPlanFeedInBasis(opt, fixedCfg, 2000) }, { feedIn: 'fixed', fixedCtKwh: 8.2 });
+  assert.deepEqual({ ...eosPlanFeedInBasis(opt, fixedCfg, 500) }, { feedIn: 'fixed', fixedCtKwh: 7.78 }, 'Plan älter als der Wechsel');
+  assert.deepEqual({ ...eosPlanFeedInBasis(opt, fixedCfg, NaN) }, { feedIn: 'fixed', fixedCtKwh: 8.2 }, 'Planzeit unbekannt');
+  assert.equal(eosPlanFeedInBasis({ eosFeedInBasis: opt.eosFeedInBasis }, fixedCfg, 500), null, 'ältere Grundlage unbekannt → kein Zusatz');
+  assert.deepEqual({ ...eosPlanFeedInBasis({ eosFeedInBasis: { feedIn: 'spot', since: 0 } }, fixedCfg, 5) }, { feedIn: 'spot' });
+});
+
 
 // Gegenprüfung ae4e76f6 (P3): Scheitert nach dem Steuerzeitraum der
 // Prognosehorizont-PUT, muss DVhub trotzdem den an EOS gesendeten
