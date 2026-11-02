@@ -684,9 +684,14 @@ export function createAdminRoutes(deps) {
         if (channel !== 'stable' && channel !== 'dev') {
           return json(res, 400, { ok: false, error: 'channel must be "stable" or "dev"' });
         }
+        // Strix R-0003 (30.10.2026): ein Kanalwechsel checkte den neuesten
+        // Release-Tag bzw. origin/main ohne Versionsprüfung aus und konnte
+        // still zurückstufen. Jetzt dieselbe Sperre wie /update/apply — VOR
+        // dem Speichern und vor jedem Checkout; zurückstufen nur ausdrücklich
+        // mit allowDowngrade (wie bei /update/apply).
+        const allowDowngrade = body?.allowDowngrade === true;
         const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
         next.updateChannel = channel;
-        ctx.saveAndApplyConfig(next);
 
         if (ctx.getServiceActionsEnabled()) {
           const repoRoot = ctx.getRepoRoot();
@@ -695,25 +700,42 @@ export function createAdminRoutes(deps) {
           const rollbackRev = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, timeout: 5000 })).stdout.trim();
           const stashResult = await stashForUpdate();
           const hasStash = !stashResult.stdout.includes('No local changes');
+          const currentVersionNow = ctx.getAppVersion?.()?.version || ctx.getAppVersion?.()?.versionLabel || '0.0.0';
+          const originMainVersion = async () => {
+            const relAppDir = path.relative(repoRoot, appDir).split(path.sep).join('/');
+            const pkgGitPath = (relAppDir ? relAppDir + '/' : '') + 'package.json';
+            const mainPkg = await execFileAsync('git', ['show', `origin/main:${pkgGitPath}`], { cwd: repoRoot, timeout: 5000 }).catch(() => ({ stdout: '' }));
+            try { return JSON.parse(mainPkg.stdout || '{}').version || null; } catch { return null; }
+          };
           try {
-            // --- git fetch + checkout (inside inner try for rollback coverage) ---
+            // --- git fetch + Ziel bestimmen + Sperre (Arbeitsbaum noch unberührt) ---
             await updateHelper(['fetch']);
-
+            let latestTag = null;
             if (channel === 'stable') {
               // T-UPDATE-ANCHOR: only tags reachable from origin/main are release anchors.
-              const latestTag = selectLatestSemverTag(await listReachableReleaseTags(repoRoot));
-              if (latestTag) {
-                await updateHelper(['checkout-tag', latestTag]);
-                gitOutput = `Switched to stable: ${latestTag}`;
-              } else {
-                // Pre-release phase: no release tag reachable yet — save the channel
-                // preference and keep following origin/main; the first real release
-                // tag re-anchors on the next update. Hard-failing here (old behaviour:
-                // throw 'No release tags found' → 500 + rollback) made the stable
-                // channel unselectable before the first release.
-                await updateHelper(['checkout-main']);
-                gitOutput = 'Switched to stable: no release tag yet — following origin/main (pre-release)';
-              }
+              latestTag = selectLatestSemverTag(await listReachableReleaseTags(repoRoot));
+            }
+            try {
+              if (latestTag) assertNoDowngrade(latestTag, currentVersionNow, { allowDowngrade, label: 'latest release tag' });
+              else assertNoDowngrade(await originMainVersion(), currentVersionNow, { allowDowngrade, label: 'origin/main' });
+            } catch (guardErr) {
+              if (hasStash) await updateHelper(['stash-pop']).catch(() => {});
+              pushLog('update_channel_rejected', { channel, reason: guardErr.code || guardErr.message, current: currentVersionNow, target: latestTag || 'origin/main' });
+              return json(res, 400, { ok: false, error: guardErr.code || 'update_aborted', detail: guardErr.message, current: currentVersionNow, target: latestTag || 'origin/main' });
+            }
+            ctx.saveAndApplyConfig(next);
+
+            if (latestTag) {
+              await updateHelper(['checkout-tag', latestTag]);
+              gitOutput = `Switched to stable: ${latestTag}`;
+            } else if (channel === 'stable') {
+              // Pre-release phase: no release tag reachable yet — save the channel
+              // preference and keep following origin/main; the first real release
+              // tag re-anchors on the next update. Hard-failing here (old behaviour:
+              // throw 'No release tags found' → 500 + rollback) made the stable
+              // channel unselectable before the first release.
+              await updateHelper(['checkout-main']);
+              gitOutput = 'Switched to stable: no release tag yet — following origin/main (pre-release)';
             } else {
               await updateHelper(['checkout-main']);
               gitOutput = 'Switched to dev: origin/main';
@@ -741,6 +763,7 @@ export function createAdminRoutes(deps) {
           });
         }
 
+        ctx.saveAndApplyConfig(next);
         pushLog('update_channel_changed', { channel, note: 'config-only, service actions disabled' });
         return json(res, 200, {
           ok: true, channel,

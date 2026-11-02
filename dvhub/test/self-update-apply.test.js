@@ -47,7 +47,7 @@ export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '
       getRepoRoot: () => repoRoot,
       getAppDir: () => appDir,
       getRawCfg: () => ({ updateChannel: channel }),
-      saveAndApplyConfig: () => {},
+      saveAndApplyConfig: () => { calls.push('<save>'); },
       getAppVersion: () => ({ version: '1.0.0', versionLabel: '1.0.0' }),
       scheduleServiceRestart: () => { calls.push('<restart>'); },
       getServiceName: () => 'dvhub.service',
@@ -129,6 +129,50 @@ describe('stash: Sperre belegt (Exit 4) → Update bricht vor jedem Checkout ab'
       assert.notEqual(r.code, 200);
       assert.match(String(r.payload.error), /läuft bereits/);
       assert.deepEqual(h.calls.filter((c) => /checkout|npm-install/.test(c)), []);
+    } finally { h.cleanup(); }
+  });
+});
+
+// Strix R-0003 (30.10.2026): der Kanalwechsel checkte den neuesten Release-Tag
+// bzw. origin/main ohne Versionsprüfung aus — ein Wechsel auf „stable“ konnte
+// still auf eine ältere Fassung zurückstufen. Jetzt dieselbe Sperre wie bei
+// /api/admin/update/apply: nichts wird gespeichert oder ausgecheckt.
+describe('R-0003: Kanalwechsel stuft nicht still zurück', () => {
+  const HELPER_CO = /dvhub-update checkout-(tag|main)/;
+  for (const [label, channel, opts] of [
+    ['stable mit älterem Release-Tag', 'stable', { tags: 'v0.9.0' }],
+    ['dev mit älterem origin/main', 'dev', { mainVersion: '0.5.0' }],
+    ['stable ohne Tag, origin/main älter', 'stable', { tags: '', mainVersion: '0.5.0' }],
+  ]) {
+    it(`${label} → 400 downgrade_blocked, kein Checkout, Kanal nicht gespeichert`, async () => {
+      const h = makeHarness(opts);
+      try {
+        const r = await h.post('/api/admin/update/channel', { channel });
+        assert.equal(r.code, 400, JSON.stringify(r.payload));
+        assert.equal(r.payload.error, 'downgrade_blocked');
+        assert.ok(!h.calls.some((c) => HELPER_CO.test(c)), h.calls.join('\n'));
+        assert.ok(!h.calls.includes('<save>'), 'Kanal nicht gespeichert');
+        assert.ok(!h.calls.includes('<restart>'));
+      } finally { h.cleanup(); }
+    });
+  }
+
+  it('allowDowngrade: true → ausdrücklich zurückstufen geht', async () => {
+    const h = makeHarness({ tags: 'v0.9.0' });
+    try {
+      const r = await h.post('/api/admin/update/channel', { channel: 'stable', allowDowngrade: true });
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.ok(h.calls.some((c) => /dvhub-update checkout-tag v0\.9\.0/.test(c)), h.calls.join('\n'));
+      assert.ok(h.calls.includes('<save>'));
+    } finally { h.cleanup(); }
+  });
+
+  it('gleiche oder neuere Fassung → Wechsel wie bisher', async () => {
+    const h = makeHarness({ tags: 'v1.0.0' });
+    try {
+      const r = await h.post('/api/admin/update/channel', { channel: 'stable' });
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.ok(h.calls.includes('<save>'));
     } finally { h.cleanup(); }
   });
 });

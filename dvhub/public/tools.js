@@ -800,12 +800,28 @@ async function switchUpdateChannel(newChannel) {
   }
   setBanner('updateBanner', `Wechsel zu ${label} — bitte warten...`, 'info');
   try {
-    const res = await apiFetch('/api/admin/update/channel', {
+    const postSwitch = (allowDowngrade) => apiFetch('/api/admin/update/channel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: newChannel })
+      body: JSON.stringify(allowDowngrade ? { channel: newChannel, allowDowngrade: true } : { channel: newChannel })
     });
-    const data = await res.json();
+    let data = await (await postSwitch(false)).json();
+    // Strix R-0003: der Wechsel stuft nicht mehr still auf eine ältere Fassung
+    // zurück — nur nach ausdrücklicher Bestätigung.
+    if (!data.ok && data.error === 'downgrade_blocked') {
+      const target = String(data.target || '').replace(/^origin\/main$/, 'main-Branch');
+      if (await window.dvConfirm(
+        `Der Wechsel zu ${label} wäre ein Rückschritt: installiert ist ${data.current}, Ziel ist ${target}.\n\nTrotzdem auf die ältere Fassung wechseln?`,
+        { title: 'Ältere Fassung installieren?', okLabel: 'Zurückstufen', variant: 'danger' }
+      )) {
+        setBanner('updateBanner', `Wechsel zu ${label} — bitte warten...`, 'info');
+        data = await (await postSwitch(true)).json();
+      } else {
+        setBanner('updateBanner', `Kanal bleibt: ${label} hätte die installierte Fassung ${data.current} zurückgestuft.`, 'info');
+        revertDropdown();
+        return;
+      }
+    }
     if (data.ok) {
       setBanner('updateBanner', `Channel gewechselt zu ${label}. Service startet neu — Seite lädt in 10 Sekunden automatisch neu.`, 'success');
       setTimeout(() => window.location.reload(), 10000);
