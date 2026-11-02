@@ -166,11 +166,13 @@ function ownZeroWrite(state) {
 
 /**
  * Entlade-Sperre in W, soweit belastbar bekannt, in dieser Reihenfolge:
- * Rücklesung (Poll-Punkt bzw. Peak Shaving, beide 2704), die eigene
- * Rücklesung des Wächters (ownRead, bevorzugt 2720), DVhubs eigener
- * Schreibwert — Letzterer nur befristet, an der GX kann die Sperre längst
- * wieder aufgehoben sein. Eine mehrdeutige 0 aus 2704 zählt nur mit eigenem
- * 0-Write.
+ * 1. eigene eindeutige Rücklesung des Wächters (ownRead aus 2720 bzw. MQTT),
+ * 2. Rücklesung über Poll-Punkt bzw. Peak Shaving (2704),
+ * 3. eigene Rücklesung aus 2704 (Rückfall alter GX),
+ * 4. DVhubs eigener Schreibwert — nur befristet, an der GX kann die Sperre
+ *    längst wieder aufgehoben sein.
+ * Eine 0 aus 2704 (2. und 3.) zählt nur mit eigenem 0-Write — sie ist von −1
+ * (unbegrenzt) nicht zu unterscheiden.
  */
 export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = null) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
@@ -189,7 +191,8 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
 // eine Entschuldigung — dann mit 2720 gegenprüfen.
 function reliesOnAmbiguousZero(state, cfg, nowMs) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
-  return !!known && known.from !== 'own_write' && Number(known.value) === 0;
+  // Ohne eigenen 0-Write entschuldigt eine 2704-0 ohnehin nichts (7b1613f5).
+  return !!known && known.from !== 'own_write' && Number(known.value) === 0 && ownZeroWrite(state);
 }
 
 /**
@@ -405,8 +408,10 @@ export function describeSetpoint(setpointW) {
 export function createSetpointFollowWatchdog(ctx) {
   const { state, getCfg, pushLog } = ctx;
   let wstate = createSetpointFollowState();
-  // Eigene Rücklesung der Entlade-Sperre 2704 (Gegenprüfung 01f4558b/11f597d3):
-  // nur bei Verdacht, aktivem Alarm oder zuletzt gelesener Sperre, gedrosselt.
+  // Eigene Rücklesung der Entladegrenze (2720, Rückfall 2704; Gegenprüfungen
+  // 01f4558b bis 7b1613f5), höchstens alle 30 s und nur: bei auffälligen Punkten
+  // der letzten holdMs, aktivem Alarm, zuletzt gelesener (eindeutiger) Sperre
+  // oder wenn eine 2704-0 mit eigenem 0-Write gerade entschuldigt (Gegenprobe).
   let capRead = null;          // { value, at, error }
   let capReadStartedAt = 0;
   let capReadPending = false;

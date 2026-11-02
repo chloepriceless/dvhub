@@ -155,3 +155,15 @@ test('GX ohne 2720 mit Werkseinstellung (2704 liest 0, kein eigener Write): kein
   for (let t = 5000; t <= 2 * 3600000; t += 5000) { at(t); watchdog.tick(T0 + t); await new Promise((r) => setImmediate(r)); }
   assert.ok(reads.length <= 2 * (Math.ceil(OPTS.holdMs / 30000) + 1), `${reads.length} Lesevorgänge in 2 h`);
 });
+
+test('Peak-Shaving-Rücklesung 2704 = 0 ohne eigenen 0-Write, alles unauffällig: kein Dauerlesen von 2720 (Gegenprüfung 7b1613f5)', async () => {
+  const { state, reads, watchdog } = rig({ 2720: [0xffff, 0xffff], 2704: [0] });
+  Object.assign(state.victron, { gridImportW: 0, gridExportW: 90, batteryPowerW: -1900, maxDischargeW: 0, errors: {} });
+  for (let t = 0; t <= 2 * 3600000; t += 5000) {
+    const now = T0 + t;
+    state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now, maxDischargeW: now };
+    watchdog.tick(now);
+    await new Promise((r) => setImmediate(r));
+  }
+  assert.equal(reads.length, 0);
+});
