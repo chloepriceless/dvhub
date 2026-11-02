@@ -42,34 +42,90 @@ function loadManifest(appHersteller) {
   } catch { return {}; }
 }
 
+// Strix R-0008 (30.10.2026): root gleicht bei jedem Start ab, $CONFIG_DIR/
+// hersteller/ gehört aber dem Dienstbenutzer. copyFileSync folgte einem
+// Verweis (Profil, <name>.dist oder der ganze Ordner) und überschrieb die
+// Zieldatei als root. Jetzt: Ordner per lstat prüfen (Verweis → echter
+// Ordner), aktive Profile mit O_NOFOLLOW lesen (Verweis = fehlt → neu
+// anlegen), schreiben als neue Datei (O_EXCL|O_NOFOLLOW) + rename — rename
+// ersetzt einen Verweis, statt ihm zu folgen.
+const { O_RDONLY, O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+
+function ensureRealDir(dir, log) {
+  let st = null;
+  try { st = fs.lstatSync(dir); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  if (st?.isSymbolicLink()) {
+    log(`  ⚠ ${dir} war ein Verweis — durch einen eigenen Ordner ersetzt`);
+    fs.unlinkSync(dir);
+    st = null;
+  }
+  if (!st) fs.mkdirSync(dir);
+  else if (!st.isDirectory()) throw new Error(`${dir} ist kein Ordner`);
+}
+
+// Der Ordner muss beim Schreiben noch derselbe echte Ordner sein.
+function assertSameDir(dir, expectReal) {
+  const st = fs.lstatSync(dir);
+  if (st.isSymbolicLink() || !st.isDirectory() || fs.realpathSync(dir) !== expectReal) {
+    throw new Error(`${dir} wurde während des Abgleichs ersetzt`);
+  }
+}
+
+function readActive(file) {
+  let fd;
+  try { fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK); }
+  catch (e) {
+    if (e.code === 'ENOENT' || e.code === 'ELOOP') return null; // fehlt / Verweis → neu anlegen
+    throw e;
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error('keine Datei');
+    return fs.readFileSync(fd);
+  } finally { fs.closeSync(fd); }
+}
+
+function writeNoFollow(dir, name, data) {
+  const tmp = path.join(dir, `.${name}.neu-${process.pid}-${crypto.randomBytes(4).toString('hex')}`);
+  const fd = fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644);
+  try { fs.writeFileSync(fd, data); } finally { fs.closeSync(fd); }
+  try { fs.renameSync(tmp, path.join(dir, name)); }
+  catch (e) { try { fs.unlinkSync(tmp); } catch { /* schon weg */ } throw e; }
+}
+
 export function reconcileVendorProfiles(configDir, appDir, { log = console.log } = {}) {
   const appHersteller = path.join(appDir, 'hersteller');
   const cfgHersteller = path.join(configDir, 'hersteller');
   if (!fs.existsSync(appHersteller)) return { actions: [] };
-  fs.mkdirSync(cfgHersteller, { recursive: true });
+  fs.mkdirSync(configDir, { recursive: true });
+  ensureRealDir(cfgHersteller, log);
+  const cfgReal = path.join(fs.realpathSync(configDir), 'hersteller');
+  assertSameDir(cfgHersteller, cfgReal);
   const manifest = loadManifest(appHersteller);
   const actions = [];
 
   for (const file of fs.readdirSync(appHersteller)) {
     if (!file.endsWith('.json') || file.startsWith('.')) continue; // .shipped-hashes.json überspringen
     const src = path.join(appHersteller, file);
-    const dst = path.join(cfgHersteller, file);
-    let shipped, active = null;
-    try { shipped = sha256(fs.readFileSync(src)); }
+    const dst = path.join(cfgReal, file);
+    let shippedBuf, shipped, active = null;
+    try { shippedBuf = fs.readFileSync(src); shipped = sha256(shippedBuf); }
     catch (e) { log(`  [reconcile] ${file}: shipped nicht lesbar (${e.message})`); continue; }
-    try { active = fs.existsSync(dst) ? sha256(fs.readFileSync(dst)) : null; }
-    catch (e) { log(`  [reconcile] ${file}: aktiv nicht lesbar (${e.message})`); active = null; }
+    try {
+      const buf = readActive(dst);
+      active = buf ? sha256(buf) : null;
+    } catch (e) { log(`  [reconcile] ${file}: aktiv nicht lesbar (${e.message}) — übersprungen`); continue; }
 
     const action = decideProfileAction({ active, shipped, known: manifest[file] });
     try {
+      if (action !== 'current') assertSameDir(cfgHersteller, cfgReal);
       if (action === 'create') {
-        fs.copyFileSync(src, dst);
+        writeNoFollow(cfgReal, file, shippedBuf);
         log(`  Herstellerprofil angelegt: ${file}`);
       } else if (action === 'update') {
-        fs.copyFileSync(src, dst);
+        writeNoFollow(cfgReal, file, shippedBuf);
         log(`  Herstellerprofil aktualisiert (unverändert → neue Version): ${file}`);
       } else if (action === 'user_edited') {
-        fs.copyFileSync(src, `${dst}.dist`);
+        writeNoFollow(cfgReal, `${file}.dist`, shippedBuf);
         log(`  ⚠ Herstellerprofil ${file} lokal geändert — neue Version liegt als ${file}.dist bereit (nicht überschrieben).`);
       } // 'current' → nichts tun
       actions.push({ file, action });

@@ -85,3 +85,64 @@ test('DRIFT-GUARD: aktueller Hash jedes ausgelieferten Profils steht im Manifest
     );
   }
 });
+
+// Strix R-0008 (30.10.2026): root gleicht die Profile bei jedem Start ab, der
+// Ordner hersteller/ gehört aber dem Dienstbenutzer. Ein Verweis als Profil,
+// als <name>.dist oder als ganzer Ordner ließ root die Zieldatei mit dem
+// Profilinhalt überschreiben (Container-Test: Opfer 15 → 1570 Bytes).
+function symlinkSetup() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-link-')));
+  const appH = path.join(tmp, 'app', 'hersteller');
+  const cfg = path.join(tmp, 'cfg');
+  const outside = path.join(tmp, 'outside');
+  fs.mkdirSync(appH, { recursive: true });
+  fs.mkdirSync(cfg, { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  const NEW = '{"label":"new"}\n';
+  fs.writeFileSync(path.join(appH, 'a.json'), NEW);
+  fs.writeFileSync(path.join(appH, 'c.json'), NEW);
+  fs.writeFileSync(path.join(appH, '.shipped-hashes.json'), JSON.stringify({ profiles: { 'a.json': [sha256(Buffer.from(NEW))], 'c.json': [sha256(Buffer.from(NEW))] } }));
+  const victim = path.join(outside, 'opfer');
+  fs.writeFileSync(victim, 'unberuehrt\n');
+  return { tmp, appDir: path.join(tmp, 'app'), cfg, cfgH: path.join(cfg, 'hersteller'), outside, victim, NEW };
+}
+
+test('R-0008: Profil als Verweis → ersetzt, Ziel unberührt', () => {
+  const t = symlinkSetup();
+  try {
+    fs.mkdirSync(t.cfgH);
+    fs.symlinkSync(t.victim, path.join(t.cfgH, 'a.json'));
+    reconcileVendorProfiles(t.cfg, t.appDir, { log: () => {} });
+    assert.equal(fs.readFileSync(t.victim, 'utf8'), 'unberuehrt\n');
+    const st = fs.lstatSync(path.join(t.cfgH, 'a.json'));
+    assert.ok(st.isFile() && !st.isSymbolicLink());
+    assert.equal(fs.readFileSync(path.join(t.cfgH, 'a.json'), 'utf8'), t.NEW);
+  } finally { fs.rmSync(t.tmp, { recursive: true, force: true }); }
+});
+
+test('R-0008: <name>.dist als Verweis → Ziel unberührt, .dist echte Datei', () => {
+  const t = symlinkSetup();
+  try {
+    fs.mkdirSync(t.cfgH);
+    fs.writeFileSync(path.join(t.cfgH, 'c.json'), '{"label":"operator-edit"}\n');
+    fs.symlinkSync(t.victim, path.join(t.cfgH, 'c.json.dist'));
+    reconcileVendorProfiles(t.cfg, t.appDir, { log: () => {} });
+    assert.equal(fs.readFileSync(t.victim, 'utf8'), 'unberuehrt\n');
+    const st = fs.lstatSync(path.join(t.cfgH, 'c.json.dist'));
+    assert.ok(st.isFile() && !st.isSymbolicLink());
+    assert.equal(fs.readFileSync(path.join(t.cfgH, 'c.json.dist'), 'utf8'), t.NEW);
+    assert.equal(fs.readFileSync(path.join(t.cfgH, 'c.json'), 'utf8'), '{"label":"operator-edit"}\n', 'Edit bleibt');
+  } finally { fs.rmSync(t.tmp, { recursive: true, force: true }); }
+});
+
+test('R-0008: hersteller/ als Verweis → eigener Ordner, nichts im Ziel', () => {
+  const t = symlinkSetup();
+  try {
+    fs.symlinkSync(t.outside, t.cfgH);
+    reconcileVendorProfiles(t.cfg, t.appDir, { log: () => {} });
+    assert.deepEqual(fs.readdirSync(t.outside), ['opfer']);
+    const st = fs.lstatSync(t.cfgH);
+    assert.ok(st.isDirectory() && !st.isSymbolicLink());
+    assert.equal(fs.readFileSync(path.join(t.cfgH, 'a.json'), 'utf8'), t.NEW);
+  } finally { fs.rmSync(t.tmp, { recursive: true, force: true }); }
+});
