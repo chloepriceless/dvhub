@@ -333,9 +333,21 @@ export function createOptimizerService(ctx) {
       : { skipped: 'forecast bridge not ready' }),
     // Geschätzte Preise nie im Steuerzeitraum: vor jedem Lauf pusht die Bridge
     // im Prozess, der den Lauf anstößt, frisch (Gegenprüfung a6dbbd1d).
-    prepareRun: async () => (ctx.eosForecastBridge?.prepareRun
-      ? ctx.eosForecastBridge.prepareRun()
-      : { ok: true, pushed: false }),
+    // Ein angekommener Lauf-Push zählt als Push dieser Prognoseversion —
+    // sonst kämen pushForecastIfNew-Pushes obendrauf (Geräte-Messwerte, die
+    // EOS nie kürzt; Gegenprüfung 7e99580c).
+    prepareRun: async () => {
+      const bridge = ctx.eosForecastBridge;
+      if (!bridge?.prepareRun) return { ok: true, pushed: false };
+      const version = ctx.forecastService?.forecastVersion;
+      const res = await bridge.prepareRun();
+      if (res?.pushed && state.optimizer?.lastEosPush?.ok === true) {
+        bridgePushedForecastVersion = version;
+        lastRunPushAt = Date.now();
+        runPushFailures = 0;
+      }
+      return res;
+    },
     postOptimize: (body, runTimeoutMs) => eosAdapter.triggerOptimization(body, runTimeoutMs),
     // Auch ohne Meldung von EOS (ems.notify_url gibt es nur auf derselben Box).
     onSolution: () => ctx.eosMonitor?.notifySolutionReady?.(),
@@ -359,6 +371,9 @@ export function createOptimizerService(ctx) {
   //   eine im Fenster zurueckgehaltene Version geht zum Fensterende raus;
   // - als uebertragen zaehlt nur ein Push mit ok; nach dem ersten Fehlschlag
   //   ein Wiederholversuch nach RUN_PUSH_RETRY_MS, danach im 15-min-Takt.
+  // - Seit 02.11.2026 pusht die Bridge zusätzlich vor jedem EOS-Lauf
+  //   (prepareRun, Preis-Schätzung); ein solcher Push zählt hier mit
+  //   (siehe prepareRun oben), damit es nicht mehr Pushes werden.
   let bridgePushedForecastVersion = Symbol('noch kein Push');
   let lastRunPushAt = -Infinity;          // letzter Versuch (Erfolg oder nicht)
   let runPushFailures = 0;                // Fehlschlaege in Folge

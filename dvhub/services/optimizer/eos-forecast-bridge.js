@@ -53,6 +53,12 @@ import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, MIN_REAL_AHEAD_MS, SLO
  * macht höchstens gut ein Dutzend davon — 5 min lassen reichlich Luft.
  */
 export const PUSH_TIMEOUT_MS = 5 * 60_000;
+/**
+ * Spätester Laufbeginn nach prepareRun: Ladestand holen (≤ 15 s) und
+ * Aufruf. EOS rundet den Beginn auf den Slot ab; mit dieser Zugabe zählt ein
+ * Anstoß kurz vor der Slotgrenze schon zum nächsten Slot.
+ */
+export const RUN_START_MARGIN_MS = 60_000;
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
 
@@ -79,6 +85,29 @@ function slotsToTimeMap(slots) {
     out[iso] = v;
   }
   return out;
+}
+
+/**
+ * Reihe `{start, powerW}` in ihrer eigenen Schrittweite (kleinster Abstand,
+ * sonst 15 min) mit dem ersten Wert bis zum Slot zurückfüllen, der jetzt
+ * läuft — für die Berechnung des Steuerzeitraums, wenn eine Prognose (PV aus
+ * VRM) erst zur nächsten vollen Stunde beginnt (Gegenprüfung 7e99580c).
+ */
+export function padSeriesBackToNow(slots, nowMs) {
+  const list = (Array.isArray(slots) ? slots : []).filter((s) => Number.isFinite(Date.parse(s?.start)));
+  if (!list.length) return Array.isArray(slots) ? slots : [];
+  const starts = [...new Set(list.map((s) => Date.parse(s.start)))].sort((a, b) => a - b);
+  let stepMs = Infinity;
+  for (let i = 1; i < starts.length; i += 1) stepMs = Math.min(stepMs, starts[i] - starts[i - 1]);
+  if (!Number.isFinite(stepMs) || stepMs <= 0) stepMs = 15 * 60_000;
+  const first = list.find((s) => Date.parse(s.start) === starts[0]);
+  if (starts[0] <= nowMs) return slots;
+  const pad = [];
+  for (let t = starts[0] - stepMs; ; t -= stepMs) {
+    pad.unshift({ ...first, start: new Date(t).toISOString(), padded: true });
+    if (t <= nowMs) break;
+  }
+  return [...pad, ...slots];
 }
 
 /**
@@ -1023,19 +1052,34 @@ export function createEosForecastBridge(ctx) {
       if (clear.errors.length) errors.priceEstimateClear = clear.errors.join('; ');
     }
 
+    // PV wie die Last auf jetzt zurückgefüllt — nur für die Berechnung: PV
+    // aus VRM beginnt nach einem Abruf erst zur nächsten vollen Stunde, der
+    // Steuerzeitraum fiele sonst aus (Gegenprüfung 7e99580c); die laufende
+    // Stunde hält EOS aus früheren Pushes.
     const horizon = await syncControlHorizon(
-      baseUrl, realOnly(elecpriceSlots), feedInSlots.length ? realOnly(feedInSlots) : null, pvSlots, expandHourlyToQuarterHourly(loadSlotsForEos),
+      baseUrl, realOnly(elecpriceSlots), feedInSlots.length ? realOnly(feedInSlots) : null,
+      padSeriesBackToNow(pvSlots, Date.now()), expandHourlyToQuarterHourly(loadSlotsForEos),
     );
     if (horizon.error) errors.horizon = horizon.error;
     if (gone()) return abandoned();
 
-    // Darf ein Lauf auf diesem Stand rechnen (prepareRun)? Nur mit echten
-    // Preisen, angekommenem Preis-Import und gesetztem Steuerzeitraum.
+    // Darf ein Lauf auf diesem Stand rechnen (prepareRun)? Nur wenn der
+    // Preis-Import ankam und der Steuerzeitraum ab dem spätest möglichen
+    // Laufbeginn ganz in echten Preisen liegt: davor hat der Import alles mit
+    // echten Werten überschrieben, also liegt dort keine Schätzung — alt oder
+    // neu, gelöscht oder nicht (Gegenprüfung 7e99580c). Wo das nicht gilt,
+    // brach EOS vor der Schätzung ohnehin ab („Missing prices“).
     let runBlockedBy = null;
     if (!Number.isFinite(realEndMs)) runBlockedBy = 'keine echten Preise';
     else if (errors.ElecPriceImport || (feedInSlots.length && errors.FeedInTariffImport)) {
       runBlockedBy = ['ElecPriceImport', 'FeedInTariffImport'].filter((k) => errors[k]).map((k) => `${k}: ${errors[k]}`).join('; ');
     } else if (horizon.hours === undefined) runBlockedBy = `Steuerzeitraum nicht gesetzt (${horizon.error || horizon.skipped})`;
+    else {
+      const latestRunStartMs = Math.floor((Date.now() + RUN_START_MARGIN_MS) / PRICE_SLOT_MS) * PRICE_SLOT_MS;
+      if (latestRunStartMs + horizon.hours * 3_600_000 > realEndMs) {
+        runBlockedBy = `Steuerzeitraum (${horizon.hours} h) reicht über die echten Preise hinaus (bis ${new Date(realEndMs).toISOString()})`;
+      }
+    }
 
     // Forward the live battery SoC so EOS seeds its optimizer with the real
     // start state (not 0). Folded into the same cycle/cadence as the forecasts.

@@ -1320,7 +1320,7 @@ test('Laufstart: pusht immer, auch direkt nach einem Push', async () => {
   } finally { await mock.close(); }
 });
 
-test('Laufstart: echte Preise reichen nicht über jetzt + 1 h 15 min → keine Schätzung, alles dahinter gelöscht, Lauf geht', async (t) => {
+test('Laufstart: echte Preise reichen nicht über jetzt + 1 h 15 min → keine Schätzung, alles dahinter gelöscht; Lauf nur, wenn der Steuerzeitraum hineinpasst', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   const mock = await createMockEos(okHandler);
   try {
@@ -1330,7 +1330,11 @@ test('Laufstart: echte Preise reichen nicht über jetzt + 1 h 15 min → keine S
     assert.ok(env.state.optimizer.lastEosPush.priceEstimate, 'zuerst noch geschätzt');
     t.mock.timers.setTime(Date.now() + 50 * 60_000);
     mock.requests.length = 0;
-    assert.deepEqual(await bridge.prepareRun(), { ok: true, pushed: true });
+    // jetzt + 25..40 min echte Preise: Steuerzeitraum auf 1 h geklemmt, reicht
+    // darüber hinaus — EOS bräche ab, also kein Lauf.
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /über die echten Preise/);
     assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
     const del = deletes(mock);
     assert.deepEqual(del.map((d) => d.key).sort(), ['elecprice_marketprice_wh', 'feed_in_tariff_wh']);
@@ -1520,4 +1524,53 @@ test('Preise auffüllen: EOS nicht erkannt → keine Schätzung', async () => {
     const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
     assert.equal(Math.max(...elec.keys()), env.realEnd - Q);
   } finally { await mock.close(); }
+});
+
+// Gegenprüfung 7e99580c (P2): PV nur aus VRM beginnt nach einem Abruf erst zur
+// nächsten vollen Stunde. Der Steuerzeitraum wurde dann nicht gesetzt und der
+// Lauf fiel aus. Für die Berechnung wird PV wie die Last auf jetzt
+// zurückgefüllt (importiert wird nur, was die Prognose liefert).
+test('Laufstart: PV beginnt erst zur nächsten Stunde → Steuerzeitraum trotzdem gesetzt, Lauf geht', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    const nextHour = Math.floor(Date.now() / 3_600_000) * 3_600_000 + 3_600_000;
+    env.ctx.forecastService = {
+      buildForecastResponse: async () => {
+        const fc = await fc0();
+        return { ...fc, pv: { slots: fc.pv.slots.filter((s) => Date.parse(s.start) >= nextHour) } };
+      },
+    };
+    assert.deepEqual(await createEosForecastBridge(env.ctx).prepareRun(), { ok: true, pushed: true });
+    assert.equal(env.state.optimizer.eosControlHorizonH, Math.floor((env.realEnd - Date.now() - Q) / 3_600_000));
+    const pv = seriesOf(mock, 'PVForecastImport', 'pvforecast_ac_power');
+    assert.equal(Math.min(...pv.keys()), nextHour, 'PV-Import unverändert');
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung 7e99580c (P3): Spät abends ohne Folgetag-Preise ist der
+// Steuerzeitraum auf 1 h geklemmt und reicht über die echten Preise hinaus.
+// Scheiterte dort das Löschen, plante EOS auf alten Schätzwerten. Der Lauf
+// geht nur, wenn der Steuerzeitraum ganz in echten Preisen liegt — wo nicht,
+// brach EOS vor der Schätzung ohnehin ab („Missing prices“).
+test('Laufstart: Steuerzeitraum reicht über die echten Preise hinaus → kein Lauf, auch wenn das Löschen scheitert', async () => {
+  for (const failDeletes of [false, true]) {
+    const mock = await failingMock((req) => req.method === 'DELETE');
+    try {
+      const env = estimateCtx(mock);
+      const fc0 = env.ctx.forecastService.buildForecastResponse;
+      const realEnd = env.q0 + 45 * 60_000; // jetzt + 30..45 min → 1 h geklemmt
+      env.ctx.forecastService = {
+        buildForecastResponse: async () => {
+          const fc = await fc0();
+          return { ...fc, price: { slots: fc.price.slots.filter((s) => Date.parse(s.start) < realEnd) } };
+        },
+      };
+      mock.ctl.fail = failDeletes;
+      const res = await createEosForecastBridge(env.ctx).prepareRun();
+      assert.equal(res.ok, false, `failDeletes=${failDeletes}`);
+      assert.match(res.error, /über die echten Preise/);
+    } finally { await mock.close(); }
+  }
 });
