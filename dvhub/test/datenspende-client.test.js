@@ -112,3 +112,73 @@ test('Netzwerkfehler → DatenspendeConnError (Werte bleiben in der Warteschlang
   await assert.rejects(c.submitBatch('KEY', 'C1', [{ meter_id: 'm', timestamp: '2026-09-28T12:00:00Z', power: 1 }]),
     (e) => e instanceof DatenspendeConnError && /ENOTFOUND/.test(e.message));
 });
+
+// ── GH #31: Einrichtung scheiterte mit „400 bad_request: Invalid input format:
+// null“, ohne dass der Schritt erkennbar war. Hypothese (Koordination, ~60 %):
+// eine ID-Antwort hat eine andere Form → ID undefined → nächster Schritt
+// schickt sie ohne Wert. Jetzt: jede ID direkt nach ihrem Schritt prüfen,
+// tolerant auslesen, sonst mit Schritt + Antwort-Schlüsseln abbrechen.
+
+test('#31: IDs auch aus verschachtelter Antwort ({household:{id}}, {client:{id}}, {apiKey:{key}})', async () => {
+  const { fetchImpl } = fakeFetch({
+    'POST /api/v1/web/households': { status: 201, body: { household: { id: 'H1', name: 'x' } } },
+    'POST /api/v1/web/clients': { status: 201, body: { client: { id: 'C1' } } },
+    'POST /api/v1/web/auth/api-key/create': { status: 201, body: { apiKey: { key: 'KEY' } } },
+  });
+  const c = createDatenspendeClient({ fetchImpl });
+  assert.equal(await c.createHousehold('TOK', { userId: 'U1' }), 'H1');
+  assert.equal(await c.createClient('TOK', { householdId: 'H1', name: 'DVhub', type: 'dvhub' }), 'C1');
+  assert.equal(await c.createApiKey('TOK', { clientId: 'C1', name: 'n' }), 'KEY');
+});
+
+test('#31: Antwort ohne ID → Fehler mit Schritt und Antwort-Schlüsseln (ohne Werte)', async () => {
+  const { fetchImpl } = fakeFetch({
+    'POST /api/v1/web/households': { status: 201, body: { data: { householdId: 'GEHEIM-H' }, ok: true } },
+  });
+  const c = createDatenspendeClient({ fetchImpl });
+  await assert.rejects(c.createHousehold('TOK', { userId: 'U1' }), (e) => {
+    assert.ok(e instanceof DatenspendeRequestError);
+    assert.equal(e.code, 'bad_response');
+    assert.equal(e.step, 'households');
+    assert.deepEqual(e.responseKeys, ['data', 'ok']);
+    assert.match(e.message, /data, ok/);
+    assert.equal(e.message.includes('GEHEIM-H'), false, 'keine Werte in der Meldung');
+    return true;
+  });
+});
+
+test('#31: Server-Fehler trägt Schritt, Status und Server-Meldung', async () => {
+  const { fetchImpl } = fakeFetch({
+    'POST /api/v1/web/clients': { status: 400, body: { error: 'bad_request', message: 'Invalid input format: null' } },
+  });
+  const c = createDatenspendeClient({ fetchImpl });
+  await assert.rejects(c.createClient('TOK', { householdId: 'H1', name: 'DVhub', type: 'dvhub' }), (e) => {
+    assert.equal(e.step, 'clients');
+    assert.equal(e.status, 400);
+    assert.equal(e.serverMessage, 'Invalid input format: null');
+    return true;
+  });
+});
+
+test('#31: Verbindungsfehler nennen den Grund (ETIMEDOUT/ENOTFOUND/Zeitüberschreitung)', async () => {
+  const mk = (err) => createDatenspendeClient({ fetchImpl: async () => { throw err; } });
+  await assert.rejects(mk(Object.assign(new Error('fetch failed'), { cause: { code: 'ETIMEDOUT' } })).signIn({ username: 'u', password: 'p' }),
+    (e) => e instanceof DatenspendeConnError && e.reason === 'ETIMEDOUT' && e.step === 'sign-in');
+  const timeout = new Error('The operation was aborted due to timeout');
+  timeout.name = 'TimeoutError';
+  await assert.rejects(mk(timeout).getClientId('KEY'), (e) => e.reason === 'ETIMEDOUT' && /ETIMEDOUT/.test(e.message));
+  await assert.rejects(mk(Object.assign(new Error('fetch failed'), { cause: { code: 'ENOTFOUND' } })).createHousehold('T', { userId: 'U' }),
+    (e) => e.reason === 'ENOTFOUND' && e.step === 'households');
+});
+
+test('#31: Zahl 0 ist keine ID; getClientId filtert ebenso', async () => {
+  const { fetchImpl } = fakeFetch({
+    'POST /api/v1/web/households': { status: 201, body: { id: 0 } },
+    'GET /api/v1/clients': { status: 200, body: { clientId: false } },
+  });
+  const c = createDatenspendeClient({ fetchImpl });
+  await assert.rejects(c.createHousehold('TOK', { userId: 'U1' }), (e) => e.code === 'bad_response' && e.step === 'households');
+  // Gegenprüfung b2c42fbd: auch hier Schritt + Schlüsselnamen der Antwort.
+  await assert.rejects(c.getClientId('KEY'), (e) => e.code === 'bad_response' && e.step === 'api-key-check'
+    && Array.isArray(e.responseKeys) && e.responseKeys.includes('clientId'));
+});

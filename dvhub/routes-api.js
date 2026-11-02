@@ -74,6 +74,7 @@ import { buildSupportBundle, supportBundleFilename } from './services/support-bu
 import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp } from './config-model.js';
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
 import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
+import { SETUP_STEP_LABELS as DATENSPENDE_SETUP_STEP_LABELS, redactSecrets as redactDatenspendeSecrets } from './services/datenspende/index.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -5328,8 +5329,19 @@ export function createApiRoutes(ctx) {
           const code = e?.code || 'datenspende_error';
           const status = e?.name === 'DatenspendeConnError' || e?.name === 'DatenspendeServerError' ? 502
             : e?.name === 'DatenspendeAuthError' ? (code === 'consent_required' ? 400 : 401) : 400;
-          pushLog('datenspende_link_failed', { error: code }, actorContext(req));
-          return json(res, status, { ok: false, error: code, detail: String(e?.message || e).slice(0, 200) });
+          // GH #31: Schritt, HTTP-Status, Server-Meldung und Verbindungsgrund in
+          // Log und Antwort — Passwort, Anmelde-Schlüssel und API-Key nie.
+          const hide = [body.password, body.secret, body.apiKey];
+          const step = typeof e?.step === 'string' ? e.step : null;
+          const stepLabel = step ? (DATENSPENDE_SETUP_STEP_LABELS[step] || step) : null;
+          const detail = redactDatenspendeSecrets(String(e?.message || e), hide).slice(0, 300);
+          const logEntry = { error: code, step, kind: e?.name || null, detail };
+          if (Number(e?.status) > 0) logEntry.status = Number(e.status);
+          if (typeof e?.serverMessage === 'string') logEntry.serverMessage = redactDatenspendeSecrets(e.serverMessage, hide).slice(0, 300);
+          if (e?.reason) logEntry.reason = String(e.reason).slice(0, 80);
+          if (Array.isArray(e?.responseKeys)) logEntry.responseKeys = e.responseKeys.slice(0, 20);
+          pushLog('datenspende_link_failed', logEntry, actorContext(req));
+          return json(res, status, { ok: false, error: code, step, stepLabel, detail });
         }
       }
       if (url.pathname === '/api/datenspende/settings' && req.method === 'POST') {
@@ -8222,6 +8234,18 @@ export function createApiRoutes(ctx) {
       const auditActor = req.headers['x-actor'] || 'admin';
       const auditActorIp = deriveClientIp(req, getCfg());
       const auditSource = String(body.provider || getCfg().telemetry?.historyImport?.provider || 'vrm');
+      const historyImportFailed = (e) => {
+        const msg = e?.message || String(e);
+        pushLog('history_import_finished', {
+          actor: auditActor,
+          // Abbruch mittendrin: wie viele Zeilen schon stehen, ist hier unbekannt.
+          rowsWritten: null,
+          durationMs: Date.now() - importStartedAt,
+          status: 'error',
+          errorMessage: msg
+        }, { ...actorContext(req), severity: 'error' });
+        return json(res, 502, { ok: false, error: `Historien-Import fehlgeschlagen: ${msg}` });
+      };
       if (body.mode === 'backfill') {
         ctx.assertValidRuntimeCommand('history_backfill', { mode: 'gap', requestedBy: 'history_import_endpoint' });
         pushLog('history_import_started', {
@@ -8230,7 +8254,14 @@ export function createApiRoutes(ctx) {
           range: { from: body.requestedFrom ?? body.start ?? null, to: body.requestedTo ?? body.end ?? null },
           source: auditSource
         }, { ...actorContext(req), severity: 'info' });
-        const result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
+        // GH #32: wie beim VRM-Nachimport (GH #16) — ein Throw (VRM 404, Portal-ID
+        // nicht im Konto, Token ungültig) wird mit Grund gemeldet statt als 500.
+        let result;
+        try {
+          result = await ctx.historyImportManager.backfillHistoryFromConfiguredSource({ mode: 'gap' });
+        } catch (e) {
+          return historyImportFailed(e);
+        }
         const status = result?.ok ? 'ok' : 'error';
         const completionLevel = status === 'ok' ? 'info' : 'error';
         pushLog('history_import_finished', {
@@ -8255,19 +8286,26 @@ export function createApiRoutes(ctx) {
         range: { from: body.requestedFrom ?? body.start ?? null, to: body.requestedTo ?? body.end ?? null },
         source: provider
       }, { ...actorContext(req), severity: 'info' });
-      const result = Array.isArray(body.rows) && body.rows.length
-        ? ctx.historyImportManager.importSamples({
-          provider,
-          requestedFrom: body.requestedFrom ?? null,
-          requestedTo: body.requestedTo ?? null,
-          sourceAccount: body.sourceAccount ?? null,
-          rows: body.rows
-        })
-        : await ctx.historyImportManager.importFromConfiguredSource({
-          start: body.requestedFrom ?? body.start,
-          end: body.requestedTo ?? body.end,
-          interval: body.interval || '15mins'
-        });
+      let result;
+      try {
+        // Beide Zweige abwarten — importSamples ist async; ohne await lieferte
+        // der Zeilen-Import ein leeres 400 statt seines Ergebnisses.
+        result = Array.isArray(body.rows) && body.rows.length
+          ? await ctx.historyImportManager.importSamples({
+            provider,
+            requestedFrom: body.requestedFrom ?? null,
+            requestedTo: body.requestedTo ?? null,
+            sourceAccount: body.sourceAccount ?? null,
+            rows: body.rows
+          })
+          : await ctx.historyImportManager.importFromConfiguredSource({
+            start: body.requestedFrom ?? body.start,
+            end: body.requestedTo ?? body.end,
+            interval: body.interval || '15mins'
+          });
+      } catch (e) {
+        return historyImportFailed(e);
+      }
       const status = result?.ok ? 'ok' : 'error';
       const completionLevel = status === 'ok' ? 'info' : 'error';
       pushLog('history_import_finished', {

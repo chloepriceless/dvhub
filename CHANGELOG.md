@@ -26,6 +26,8 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
 - **Neu (Beta):** Peak Shaving für Gewerbeanschlüsse, zweite Victron-Anlage am selben Anschluss, Handy-App,
   E-Auto-Wochenplan.
 - **Leitstand:** Energiebilanz mit dem echten Akku, klarere Beschriftungen; Entlade-Wächter ohne Fehlalarme.
+- **VRM und Datenspende:** VRM-Portal-ID oder Site-ID im selben Feld (Nachimport scheiterte mit Portal-ID an
+  „HTTP 404“), verständliche Fehlermeldungen bei der Datenspende-Einrichtung.
 - **Sicherheit:** zahlreiche Härtungen nach einer Sicherheitsprüfung (Abschnitt „Sicherheit“).
 
 ### Neu
@@ -195,6 +197,31 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   zurückgeschrieben — dann war der Akku wirklich gesperrt. Peak Shaving liest die Entladegrenze jetzt wie der
   Entlade-Wächter aus Register 2720 (eindeutig, Venus ≥ 3.50); eine 0 aus 2704 zählt nur noch, wenn DVhub selbst
   zuletzt 0 geschrieben hat.
+
+- **VRM-Nachimport mit Portal-ID scheiterte mit „HTTP 404“ (#32).** Die VRM-Schnittstelle erwartet die numerische
+  Site-ID, DVhub setzte aber den Inhalt des Feldes unverändert ein — und Oberfläche und Hilfetext verlangten genau
+  die Hex-Portal-ID, die numerische Site-ID ließ sich gar nicht speichern. Jetzt heißt das Feld „VRM-Portal-ID oder
+  Site-ID“ und nimmt beides: eine Zahl wird wie bisher direkt genutzt (bestehende Einrichtungen ändern sich nicht),
+  eine Portal-ID löst DVhub mit dem Token über das VRM-Konto in die Site-ID auf und merkt sie sich. Gilt für Historie,
+  VRM-Prognose und PV-Strings. Steht die Portal-ID nicht im Konto, sagt die Meldung das (mit Anzahl der Anlagen im
+  Konto); ein 404 nennt die Site-ID. „Historie importieren“ meldet Fehler jetzt mit Grund statt „internal server
+  error“, der Import mitgelieferter Zeilen wird wieder abgewartet, und die VRM-Prognose schreibt einen
+  abgelehnten Abruf ins Log statt ihn still zu übergehen. VRM-Abrufe der Historie warten bei Netz- oder
+  Serverfehlern jetzt wirklich zwischen den Versuchen (die Pausen waren wirkungslos) und haben ein Zeitlimit;
+  scheitert der automatische Nachimport beim Start (z. B. Internet noch nicht da), steht das im Log
+  (`history_auto_backfill_error`) und DVhub versucht es nach 5, 15 und 60 Minuten erneut. Eine gespeicherte
+  Portal-/Site-ID oder ein neues Token gilt für Historien-Import und Nachimport sofort, nicht erst nach einem
+  Neustart.
+
+- **Datenspende-Einrichtung: Fehler ohne erkennbaren Schritt (#31).** Scheiterte die Einrichtung (z. B. mit
+  „400 bad_request: Invalid input format: null“), stand weder im Log noch in der Oberfläche, ob Konto, Haushalt,
+  Client oder API-Key betroffen war. Jetzt nennen Log (`datenspende_link_failed`) und Meldung den Schritt, den
+  HTTP-Status und die Meldung des Projekt-Servers, bei Verbindungsfehlern den Grund (z. B. `ETIMEDOUT`,
+  `ENOTFOUND`); Passwort, Anmelde-Schlüssel und API-Key werden herausgefiltert. Jede ID wird direkt nach ihrem
+  Schritt geprüft — fehlt sie, bricht die Einrichtung dort ab und protokolliert nur die Namen der Felder der Antwort,
+  statt im nächsten Schritt einen leeren Wert zu schicken. IDs werden zusätzlich aus einer Antwort der Form
+  `{household: {id}}`, `{client: {id}}` bzw. `{apiKey: {key}}` gelesen. Das Feld „Anmelde-Schlüssel“ hat eine
+  Kurzhilfe und erscheint nur noch beim Anlegen eines neuen Kontos.
 
 ### Sicherheit
 

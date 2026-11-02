@@ -1,4 +1,5 @@
-const VRM_API_BASE = 'https://vrmapi.victronenergy.com';
+import { VRM_API_BASE, resolveVrmSiteId, isTransientVrmError } from './vrm-site.js';
+
 const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
 const VRM_HISTORY_INTERVAL = '15mins';
 const VRM_SUPPORTED_INTERVALS = new Set(['15mins', 'hours', '2hours', 'days']);
@@ -11,6 +12,11 @@ const VRM_FULL_BACKFILL_MAX_LOOKBACK_DAYS = 365;
 const VRM_BACKFILL_DELAY_MS = 500;
 const VRM_BACKFILL_RETRY_ATTEMPTS = 3;
 const VRM_BACKFILL_RETRY_DELAY_MS = 1000;
+// Zeitlimit je /stats-Abruf (Kopf + Körper); bis zu 7 Tage Viertelstundenwerte.
+const VRM_STATS_TIMEOUT_MS = 60_000;
+// Automatischer Nachimport beim Start: bei vorübergehendem Fehler (WAN noch weg,
+// 429, 5xx) später erneut versuchen.
+const VRM_AUTO_BACKFILL_RETRY_DELAYS_MS = [5 * 60_000, 15 * 60_000, 60 * 60_000];
 const VRM_COVERAGE_JOB_TYPES = [
   'vrm_history_import',
   'vrm_history_backfill',
@@ -1242,33 +1248,59 @@ function parseVrmSeries(type, records, resolutionSeconds) {
   return rows;
 }
 
-async function fetchVrmStats({ portalId, token, type, start, end, interval, fetchImpl }) {
+async function fetchVrmStats({ siteId, token, type, start, end, interval, fetchImpl }) {
   const params = new URLSearchParams({
     type,
     start: String(toEpochSeconds(start)),
     end: String(toEpochSeconds(end)),
     interval
   });
-  const url = `${VRM_API_BASE}/v2/installations/${encodeURIComponent(portalId)}/stats?${params.toString()}`;
-  const response = await fetchImpl(url, {
-    headers: {
-      accept: 'application/json',
-      'x-authorization': `Token ${token}`
-    }
-  });
+  const url = `${VRM_API_BASE}/v2/installations/${encodeURIComponent(siteId)}/stats?${params.toString()}`;
+  // Netzfehler (auch Abbruch beim Lesen, Zeitlimit) kennzeichnen, damit die
+  // Wiederholung greift (isTransientVrmError); kaputtes JSON nicht.
+  const networkError = (cause) => {
+    const reason = cause?.cause?.code || (cause?.name === 'TimeoutError' ? 'ETIMEDOUT' : (cause?.message || String(cause)));
+    const error = new Error(`VRM stats request failed for ${type}: ${reason}`);
+    error.code = 'network';
+    error.type = type;
+    return error;
+  };
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      headers: {
+        accept: 'application/json',
+        'x-authorization': `Token ${token}`
+      },
+      // Gilt auch für das Lesen der Antwort.
+      signal: AbortSignal.timeout(VRM_STATS_TIMEOUT_MS)
+    });
+  } catch (cause) {
+    throw networkError(cause);
+  }
   if (!response.ok) {
-    const error = new Error(`VRM stats request failed for ${type}: HTTP ${response.status}`);
+    // GH #32: ein 404 heißt hier fast immer „diese Site-ID kennt VRM (für dieses
+    // Token) nicht“ — das gehört in die Meldung, nicht nur der Statuscode.
+    const hint = Number(response.status) === 404
+      ? ` (VRM kennt die Site-ID ${siteId} für dieses Token nicht — Site-ID bzw. Portal-ID unter Integrationen → VRM Cloud prüfen)`
+      : '';
+    const error = new Error(`VRM stats request failed for ${type}: HTTP ${response.status}${hint}`);
     error.status = Number(response.status);
     error.type = type;
     error.start = toIso(start);
     error.end = toIso(end);
     throw error;
   }
-  return response.json();
+  try {
+    return await response.json();
+  } catch (cause) {
+    if (cause instanceof SyntaxError) throw cause;
+    throw networkError(cause);
+  }
 }
 
 async function fetchVrmStatsWithRetry({
-  portalId,
+  siteId,
   token,
   type,
   start,
@@ -1283,7 +1315,7 @@ async function fetchVrmStatsWithRetry({
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       return await fetchVrmStats({
-        portalId,
+        siteId,
         token,
         type,
         start,
@@ -1293,9 +1325,37 @@ async function fetchVrmStatsWithRetry({
       });
     } catch (error) {
       lastError = error;
-      const status = Number(error?.status || 0);
-      const retryable = status === 429 || status >= 500;
-      if (!retryable || attempt >= maxAttempts) break;
+      if (!isTransientVrmError(error) || attempt >= maxAttempts) break;
+      await waitImpl(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
+// Echte Pause für Wiederholungen und Schonpausen zwischen VRM-Fenstern. Der
+// Manager-Default bleibt ein No-op (Tests); server.js gibt diese mit.
+export function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+// Auflösung Portal-ID → Site-ID mit Wiederholung bei 429/5xx und Netzfehlern;
+// „nicht im Konto“, 401 usw. sofort durchreichen.
+async function resolveVrmSiteIdWithRetry({
+  ref,
+  token,
+  fetchImpl,
+  waitImpl,
+  maxAttempts = VRM_BACKFILL_RETRY_ATTEMPTS,
+  retryDelayMs = VRM_BACKFILL_RETRY_DELAY_MS
+}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await resolveVrmSiteId({ ref, token, fetchImpl });
+    } catch (error) {
+      lastError = error;
+      // Auch Netzfehler: beim Start ist DNS/WAN oft noch nicht da.
+      if (!isTransientVrmError(error) || attempt >= maxAttempts) break;
       await waitImpl(retryDelayMs * attempt);
     }
   }
@@ -1305,14 +1365,21 @@ async function fetchVrmStatsWithRetry({
 export function createHistoryImportManager({
   store,
   telemetryConfig = {},
+  // Aktuelle Konfiguration bei jedem Gebrauch lesen (server.js) — ein beim Start
+  // übergebenes Objekt veraltet beim nächsten Speichern (Gegenprüfung 683fcb25).
+  getTelemetryConfig = null,
   getEpexConfig = () => ({}),
   fetchImpl = globalThis.fetch,
-  waitImpl = async () => {}
+  waitImpl = async () => {},
+  log = () => {},
+  scheduleImpl = (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
+  autoRetryDelaysMs = VRM_AUTO_BACKFILL_RETRY_DELAYS_MS
 }) {
   let vrmBackfillPromise = null;
+  const currentTelemetryConfig = () => (typeof getTelemetryConfig === 'function' ? getTelemetryConfig() : telemetryConfig) || {};
 
   function getStatus() {
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = currentTelemetryConfig().historyImport || {};
     const provider = 'vrm';
     const ready = Boolean(importConfig.vrmPortalId && importConfig.vrmToken);
 
@@ -1335,8 +1402,8 @@ export function createHistoryImportManager({
     return { ok: true, status };
   }
 
-  async function listCompletedCoverageRanges({ start, end }) {
-    const importConfig = telemetryConfig.historyImport || {};
+  async function listCompletedCoverageRanges({ start, end, runConfig = null }) {
+    const importConfig = runConfig || snapshotImportConfig();
     const rows = typeof store.listImportJobRanges === 'function'
       ? await store.listImportJobRanges({
         jobTypes: VRM_COVERAGE_JOB_TYPES,
@@ -1355,13 +1422,15 @@ export function createHistoryImportManager({
   async function collectGapWindows({
     now = null,
     lookbackDays = VRM_GAP_BACKFILL_LOOKBACK_DAYS,
-    chunkDays = VRM_GAP_BACKFILL_CHUNK_DAYS
+    chunkDays = VRM_GAP_BACKFILL_CHUNK_DAYS,
+    runConfig = null
   } = {}) {
     const rangeEnd = now ? toIso(now) : new Date().toISOString();
     const rangeStart = shiftIsoByDays(rangeEnd, -Math.max(1, Number(lookbackDays || VRM_GAP_BACKFILL_LOOKBACK_DAYS)));
     const coverage = await listCompletedCoverageRanges({
       start: rangeStart,
-      end: rangeEnd
+      end: rangeEnd,
+      runConfig
     });
     const windows = buildBackfillWindows({
       start: rangeStart,
@@ -1418,10 +1487,16 @@ export function createHistoryImportManager({
     };
   }
 
-  async function fetchConfiguredVrmRows({ start, end, interval = VRM_HISTORY_INTERVAL }) {
+  // Ein Lauf liest die Konfiguration EINMAL (runConfig) und reicht sie durch —
+  // sonst mischte ein Speichern mitten im Lauf zwei Anlagen (Gegenprüfung a9e434f9).
+  function snapshotImportConfig() {
+    return { ...(currentTelemetryConfig().historyImport || {}) };
+  }
+
+  async function fetchConfiguredVrmRows({ start, end, interval = VRM_HISTORY_INTERVAL, runConfig = null }) {
     const validation = validateConfiguredVrmImport({ start, end, requireRange: true });
     if (!validation.ok) return validation;
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = runConfig || snapshotImportConfig();
     const normalizedRange = normalizeVrmRange({ start, end, interval });
     const normalizedInterval = normalizedRange.interval;
     const normalizedStart = normalizedRange.start;
@@ -1430,10 +1505,19 @@ export function createHistoryImportManager({
     const rangeEndMs = new Date(normalizedEnd).getTime();
     const rawRows = [];
     const slotBuckets = new Map();
+    // GH #32: Feld darf Site-ID (Zahl) oder Portal-ID (Hex) enthalten; die
+    // Statistik braucht immer die Site-ID. Wirft mit klarer Meldung, wenn die
+    // Portal-ID nicht im Konto des Tokens ist.
+    const siteId = await resolveVrmSiteIdWithRetry({
+      ref: importConfig.vrmPortalId,
+      token: importConfig.vrmToken,
+      fetchImpl,
+      waitImpl
+    });
 
     for (const type of VRM_HISTORY_TYPES) {
       const payload = await fetchVrmStatsWithRetry({
-        portalId: importConfig.vrmPortalId,
+        siteId,
         token: importConfig.vrmToken,
         type,
         start: normalizedStart,
@@ -1488,7 +1572,8 @@ export function createHistoryImportManager({
   }
 
   async function importFromConfiguredSource({ start, end, interval = VRM_HISTORY_INTERVAL }) {
-    const fetched = await fetchConfiguredVrmRows({ start, end, interval });
+    const runConfig = snapshotImportConfig();
+    const fetched = await fetchConfiguredVrmRows({ start, end, interval, runConfig });
     if (!fetched.ok) return fetched;
     const allRows = fetched.rows || [];
 
@@ -1497,7 +1582,7 @@ export function createHistoryImportManager({
     }
 
     await store.writeSamples(allRows);
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = runConfig;
     const jobId = await store.writeImportJob({
       jobType: 'vrm_history_import',
       status: 'completed',
@@ -1535,10 +1620,12 @@ export function createHistoryImportManager({
     maxLookbackDays = VRM_FULL_BACKFILL_MAX_LOOKBACK_DAYS,
     interval = VRM_HISTORY_INTERVAL,
     auto = false,
-    allowIntervalFallback = true
+    allowIntervalFallback = true,
+    runConfig: givenRunConfig = null
   } = {}) {
     const validation = validateConfiguredVrmImport({ requireRange: false });
     if (!validation.ok) return validation;
+    const runConfig = givenRunConfig || snapshotImportConfig();
 
     let cursorEnd = startOfUtcDayIso(now ? toIso(now) : new Date().toISOString());
     let windowsVisited = 0;
@@ -1566,7 +1653,8 @@ export function createHistoryImportManager({
       const fetched = await fetchConfiguredVrmRows({
         start: windowStart,
         end: windowEnd,
-        interval: normalizedInterval
+        interval: normalizedInterval,
+        runConfig
       });
       if (!fetched.ok) return fetched;
 
@@ -1600,11 +1688,12 @@ export function createHistoryImportManager({
         maxLookbackDays: normalizedMaxLookbackDays,
         interval: 'days',
         auto,
-        allowIntervalFallback: false
+        allowIntervalFallback: false,
+        runConfig
       });
     }
 
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = runConfig;
     const jobId = await store.writeImportJob({
       jobType: 'vrm_history_full_backfill',
       status: 'completed',
@@ -1658,8 +1747,9 @@ export function createHistoryImportManager({
   } = {}) {
     const validation = validateConfiguredVrmImport({ requireRange: false });
     if (!validation.ok) return validation;
+    const runConfig = snapshotImportConfig();
 
-    const plan = await collectGapWindows({ now, lookbackDays, chunkDays });
+    const plan = await collectGapWindows({ now, lookbackDays, chunkDays, runConfig });
     const { requestedFrom, requestedTo, gapWindows } = plan;
     if (!gapWindows.length) {
       return {
@@ -1687,7 +1777,8 @@ export function createHistoryImportManager({
       const fetched = await fetchConfiguredVrmRows({
         start: window.start,
         end: window.end,
-        interval
+        interval,
+        runConfig
       });
       if (!fetched.ok) return fetched;
 
@@ -1704,7 +1795,7 @@ export function createHistoryImportManager({
       }
     }
 
-    const importConfig = telemetryConfig.historyImport || {};
+    const importConfig = runConfig;
     const status = emptyWindows > 0 ? 'completed_with_gaps' : 'completed';
     const jobId = await store.writeImportJob({
       jobType: 'vrm_history_gap_backfill',
@@ -1772,7 +1863,8 @@ export function createHistoryImportManager({
     if (!status.enabled || !status.ready || vrmBackfillPromise) {
       return {
         ok: false,
-        started: false
+        started: false,
+        busy: Boolean(status.enabled && status.ready && vrmBackfillPromise)
       };
     }
     const autoNow = startOfUtcDayIso(options.now || new Date());
@@ -1786,12 +1878,39 @@ export function createHistoryImportManager({
         started: false
       };
     }
+    // Während der Lücken-Suche kann ein anderer Nachimport begonnen haben.
+    if (vrmBackfillPromise) {
+      return { ok: false, started: false, busy: true };
+    }
+    const autoAttempt = Number(options.autoAttempt || 0);
     vrmBackfillPromise = runVrmGapBackfill({ auto: true, ...options, now: autoNow })
-      .catch((error) => ({
-        ok: false,
-        auto: true,
-        error: error?.message || String(error)
-      }))
+      .catch((error) => {
+        // Vorher still verworfen: Fehler loggen und bei vorübergehendem Fehler
+        // (WAN beim Start noch weg, 429, 5xx) später erneut versuchen.
+        const retryInMs = isTransientVrmError(error) && autoAttempt < autoRetryDelaysMs.length
+          ? autoRetryDelaysMs[autoAttempt]
+          : null;
+        log('history_auto_backfill_error', {
+          error: error?.message || String(error),
+          attempt: autoAttempt + 1,
+          retryInMs
+        }, { severity: 'warn' });
+        if (retryInMs != null) {
+          const retry = () => {
+            startAutomaticBackfill({ ...options, autoAttempt: autoAttempt + 1 }).then((r) => {
+              // Läuft gerade ein anderer Nachimport: denselben Versuch verschieben.
+              if (r?.busy) {
+                log('history_auto_backfill_deferred', { attempt: autoAttempt + 2, retryInMs }, { severity: 'info' });
+                scheduleImpl(retry, retryInMs);
+              }
+            }, (e) => {
+              log('history_auto_backfill_error', { error: e?.message || String(e), attempt: autoAttempt + 2, retryInMs: null }, { severity: 'warn' });
+            });
+          };
+          scheduleImpl(retry, retryInMs);
+        }
+        return { ok: false, auto: true, error: error?.message || String(error) };
+      })
       .finally(() => {
         vrmBackfillPromise = null;
       });

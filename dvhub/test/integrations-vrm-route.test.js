@@ -202,3 +202,56 @@ describe('Plan 20-05: sentinel semantics (mirror)', () => {
     assert.equal(resolveToken('***', ''), '');
   });
 });
+
+// GH #32 (stefan-12): Das Feld lehnte die numerische Site-ID ab (nur
+// alphanumerisch ≥ 12 Zeichen erlaubt) und der Hilfetext verwies auf die
+// Hex-Portal-ID — die VRM-API braucht aber die Site-ID. Jetzt nimmt das Feld
+// beides; der Server löst eine Portal-ID selbst auf (vrm-site.js).
+describe('GH #32: VRM-Feld nimmt Portal-ID oder Site-ID', () => {
+  const INTEGRATIONS_JS = path.resolve(__dirname, '..', 'public', 'integrations.js');
+  const INTEGRATIONS_HTML = path.resolve(__dirname, '..', 'public', 'integrations.html');
+
+  function loadValidator() {
+    const src = fs.readFileSync(INTEGRATIONS_JS, 'utf8');
+    const m = src.match(/function vrmRefLooksValid\(v\) \{[\s\S]*?\n {2}\}/);
+    assert.ok(m, 'integrations.js definiert vrmRefLooksValid(v)');
+    return new Function(`${m[0]}; return vrmRefLooksValid;`)();
+  }
+
+  it('Validierung: 6-stellige Site-ID und 12-stellige Portal-ID gültig, Unsinn ungültig', () => {
+    const ok = loadValidator();
+    assert.equal(ok('123456'), true, 'Site-ID (Zahl) muss speicherbar sein');
+    assert.equal(ok('a1b2c3d4e5f6'), true);
+    assert.equal(ok('A1B2C3D4E5F6'), true);
+    assert.equal(ok(''), false);
+    assert.equal(ok('abc'), false);
+    assert.equal(ok('c0619ab8-db22'), false);
+  });
+
+  it('Speichern nutzt den neuen Validator statt der alten 12-Zeichen-Regel', () => {
+    const src = fs.readFileSync(INTEGRATIONS_JS, 'utf8');
+    assert.doesNotMatch(src, /\^\[A-Za-z0-9\]\{12,\}\$\/\.test\(body\.vrmPortalId\)/);
+    assert.match(src, /vrmRefLooksValid\(body\.vrmPortalId\)/);
+  });
+
+  it('Beschriftung + Hilfe: „VRM-Portal-ID oder Site-ID“, Site-ID nicht mehr ausgeschlossen', () => {
+    const html = fs.readFileSync(INTEGRATIONS_HTML, 'utf8');
+    const m = html.match(/<label class="dv-field">\s*<span class="field-label">([^<]*)<\/span>\s*<input[^>]*id="vrm-portalid"[^>]*>\s*<span class="field-hint">([\s\S]*?)<\/span>\s*<\/label>/);
+    assert.ok(m, 'VRM-Feld mit Beschriftung und Hilfe gefunden');
+    assert.equal(m[1].trim(), 'VRM-Portal-ID oder Site-ID');
+    assert.doesNotMatch(m[2], /NICHT die kurze numerische Site-ID/);
+    assert.match(m[2], /Site-ID/);
+    assert.match(m[2], /Portal-ID/);
+  });
+});
+
+describe('GH #32: Kopfzeile benennt Site-ID wie der Server', () => {
+  it('nur 1–10 Ziffern gelten als Site-ID (12 Ziffern = Portal-ID, wie vrm-site.js)', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '..', 'public', 'integrations.js'), 'utf8');
+    const m = src.match(/return data && data\.vrmPortalId \? \(\((\/[^/]+\/)\.test/);
+    assert.ok(m, 'Kopfzeilen-Regel gefunden');
+    const re = new Function(`return ${m[1]};`)();
+    assert.equal(re.test('123456'), true);
+    assert.equal(re.test('123456789012'), false);
+  });
+});

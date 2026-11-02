@@ -24,6 +24,7 @@ function makeReq(p, { method = 'GET', body = null, ip = LAN_IP, token = null } =
 function setup({ linked = false } = {}) {
   let raw = { apiToken: API_TOKEN, datenspende: { enabled: false } };
   const calls = [];
+  const logs = [];
   const ds = {
     linked,
     status() { return { linked: this.linked, enabled: raw.datenspende?.enabled === true, donated: 0 }; },
@@ -31,7 +32,7 @@ function setup({ linked = false } = {}) {
     unlink() { calls.push(['unlink']); this.linked = false; return this.status(); },
   };
   const ctx = {
-    state: {}, pushLog: () => {}, telemetrySafeWrite: () => {}, licenseService: null,
+    state: {}, pushLog: (event, details) => logs.push({ event, details }), telemetrySafeWrite: () => {}, licenseService: null,
     getCfg: () => ({ ...raw, epex: { enabled: false }, telemetry: { enabled: false }, security: { lanTrust: 'open' }, allowedHosts: [] }),
     getRawCfg: () => raw,
     saveAndApplyConfig: (n) => { raw = n; },
@@ -45,7 +46,7 @@ function setup({ linked = false } = {}) {
     let j = null; try { j = JSON.parse(res._c.body); } catch { /* */ }
     return { status: res._c.status, j };
   };
-  return { call, calls, ds, raw: () => raw };
+  return { call, calls, ds, logs, raw: () => raw };
 }
 
 test('status liefert Nonce; link ohne Nonce (fremde Webseite) → 403', async () => {
@@ -151,4 +152,82 @@ test('backfill: Start braucht Nonce, Stopp nicht; ungültige Aktion 400', async 
   assert.equal((await s.call(makeReq('/api/datenspende/backfill', { method: 'POST', body: { action: 'stop' } }))).status, 200);
   assert.equal((await s.call(makeReq('/api/datenspende/backfill', { method: 'POST', body: { action: 'x' } }))).status, 400);
   assert.deepEqual(s.calls.map((c) => c[0]), ['start', 'stop']);
+});
+
+// GH #31: Der gescheiterte Schritt und die Server-Meldung gehen in Log und
+// Antwort — Passwort, Anmelde-Schlüssel und API-Key nie.
+test('#31 link scheitert → Log + Antwort mit Schritt, Status, Server-Meldung, ohne Geheimnisse', async () => {
+  const s = setup();
+  const err = Object.assign(new Error('400 bad_request: Invalid input format: null (pw hunter22, key S3CR3T-XYZ)'), {
+    name: 'DatenspendeRequestError', code: 'bad_request', status: 400, step: 'households',
+    serverMessage: 'Invalid input format: null (pw hunter22, key S3CR3T-XYZ)',
+  });
+  s.ds.link = async () => { throw err; };
+  const { j } = await s.call(makeReq('/api/datenspende/status'));
+  const r = await s.call(makeReq('/api/datenspende/link', { method: 'POST', body: {
+    mode: 'signup', username: 'u', password: 'hunter22', secret: 'S3CR3T-XYZ', consent: true, uiToken: j.uiToken,
+  } }));
+  assert.equal(r.status, 400);
+  assert.equal(r.j.error, 'bad_request');
+  assert.equal(r.j.step, 'households');
+  assert.equal(r.j.stepLabel, 'Haushalt anlegen');
+  assert.match(r.j.detail, /Invalid input format: null/);
+  const fail = s.logs.find((l) => l.event === 'datenspende_link_failed');
+  assert.ok(fail, 'datenspende_link_failed geloggt');
+  assert.equal(fail.details.error, 'bad_request');
+  assert.equal(fail.details.step, 'households');
+  assert.equal(fail.details.status, 400);
+  assert.match(fail.details.detail, /Invalid input format: null/);
+  const all = JSON.stringify([r.j, fail]);
+  assert.equal(all.includes('hunter22'), false, 'Passwort nie in Log/Antwort');
+  assert.equal(all.includes('S3CR3T-XYZ'), false, 'Anmelde-Schlüssel nie in Log/Antwort');
+});
+
+test('#31 Verbindungsfehler → Grund (reason) im Log', async () => {
+  const s = setup();
+  s.ds.link = async () => { throw Object.assign(new Error('Verbindungsfehler: ENOTFOUND'), { name: 'DatenspendeConnError', code: 'connection_error', reason: 'ENOTFOUND', step: 'sign-up' }); };
+  const { j } = await s.call(makeReq('/api/datenspende/status'));
+  const r = await s.call(makeReq('/api/datenspende/link', { method: 'POST', body: { username: 'u', password: 'p', consent: true, uiToken: j.uiToken } }));
+  assert.equal(r.status, 502);
+  const fail = s.logs.find((l) => l.event === 'datenspende_link_failed');
+  assert.equal(fail.details.reason, 'ENOTFOUND');
+  assert.equal(fail.details.step, 'sign-up');
+});
+
+// GH #31: Kontext-Hilfe zum „Anmelde-Schlüssel“ und Schritt in der Fehlermeldung.
+test('#31 Oberfläche: Hilfe zum Anmelde-Schlüssel, Schritt in der Fehlermeldung', async () => {
+  const fs = await import('node:fs');
+  const html = fs.readFileSync(new URL('../public/settings.html', import.meta.url), 'utf8');
+  const m = html.match(/<input id="dsSecret"[^>]*>\s*<small id="dsSecretHelp"[^>]*>([\s\S]*?)<\/small>/);
+  assert.ok(m, 'Hilfe-Text direkt unter dem Feld dsSecret');
+  assert.match(m[1], /neue[sn]? Konto/);
+  assert.match(m[1], /leer lassen/);
+  // Gegenprüfung 9190f2f8 (P2): Text war durch ein sed-„&“ verdoppelt/zerrissen.
+  assert.equal((m[1].match(/leer lassen/g) || []).length, 1, 'Wendung nur einmal');
+  assert.equal((m[1].match(/API-Key/g) || []).length, 1, 'Satz nur einmal');
+  assert.doesNotMatch(m[1], /(^|[^&])(mdash|bdquo|ldquo);/, 'jede Entität mit &');
+  const js = fs.readFileSync(new URL('../public/tools.js', import.meta.url), 'utf8');
+  // Am Aufrufort verankert (Gegenprüfung b2c42fbd): die Definition allein zählt nicht.
+  assert.match(js, /setText\('dsResult',[^\n]*datenspendeFailureText\(r, hints\)/);
+  // Der Schlüssel zählt nur beim Anlegen (api.py sendet secret nur bei sign-up).
+  assert.match(js, /for \(const id of \['dsSecret', 'dsSecretHelp'\]\)[^\n]*hidden = mode !== 'signup'/);
+});
+
+// Gegenprüfung 9190f2f8 (P3): fester Hinweis verdeckte Grund/Server-Meldung.
+test('#31 Oberfläche: fester Hinweis + Details (Grund, Server-Meldung) zusammen', async () => {
+  const fs = await import('node:fs');
+  const js = fs.readFileSync(new URL('../public/tools.js', import.meta.url), 'utf8');
+  const m = js.match(/function datenspendeFailureText\(r, hints\) \{[\s\S]*?\n\}/);
+  assert.ok(m, 'tools.js definiert datenspendeFailureText(r, hints)');
+  const fn = new Function(`${m[0]}; return datenspendeFailureText;`)();
+  const hints = { connection_error: 'Projekt-Server nicht erreichbar — Internetverbindung prüfen.' };
+  const t = fn({ status: 502, j: { error: 'connection_error', step: 'sign-in', stepLabel: 'Anmelden', detail: 'Verbindungsfehler: ENOTFOUND' } }, hints);
+  assert.match(t, /Schritt „Anmelden“/);
+  assert.match(t, /nicht erreichbar/);
+  assert.match(t, /ENOTFOUND/);
+  const u = fn({ status: 400, j: { error: 'bad_request', stepLabel: 'Haushalt anlegen', detail: '400 bad_request: Invalid input format: null' } }, hints);
+  assert.match(u, /Haushalt anlegen/);
+  assert.match(u, /Invalid input format: null/);
+  assert.equal((u.match(/Invalid input format/g) || []).length, 1, 'Detail nicht doppelt');
+  assert.match(fn({ status: 500, j: {} }, hints), /500/);
 });

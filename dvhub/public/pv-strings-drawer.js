@@ -223,7 +223,7 @@
         renderGroups();
       }
       const needsVrm = rows.some(function (r) { return r.kind !== 'fronius_mppt'; });
-      if (needsVrm && !data.vrmConfigured) banner('pvs-banner', 'VRM-Zugang fehlt — erst unter „VRM Cloud“ Portal-ID und Token eintragen.', 'error');
+      if (needsVrm && !data.vrmConfigured) banner('pvs-banner', 'VRM-Zugang fehlt — erst unter „VRM Cloud“ Portal-ID oder Site-ID und Token eintragen.', 'error');
       renderOverview(data);
       renderStatus(Object.assign({}, data.status, { coveragePending: !!data.coveragePending }));
     } catch (e) {

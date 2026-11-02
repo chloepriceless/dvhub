@@ -56,6 +56,36 @@ export const SYSTEM_METERS = {
   battery: { name: 'Batterie', model: 'DVhub Batterie (+Laden/−Entladen)' },
 };
 
+// GH #31: Namen der Einrichtungsschritte für Log und Oberfläche.
+export const SETUP_STEP_LABELS = {
+  'sign-up': 'Konto anlegen',
+  'sign-in': 'Anmelden',
+  households: 'Haushalt anlegen',
+  clients: 'Client anlegen',
+  'api-key': 'API-Key erzeugen',
+  'api-key-check': 'API-Key prüfen',
+};
+
+// Ersetzt jedes übergebene Geheimnis (ab 4 Zeichen) im Text durch ***.
+export function redactSecrets(text, secrets = []) {
+  let out = String(text ?? '');
+  for (const sec of secrets) {
+    const v = sec == null ? '' : String(sec);
+    if (v.length >= 4) out = out.split(v).join('***');
+  }
+  return out;
+}
+
+// Schritt anheften (erster gewinnt) und Meldungen bereinigen; Fehlerklasse
+// und code bleiben, damit die Einteilung (Conn/Auth/Request) gleich bleibt.
+export function tagSetupError(e, step, secrets = []) {
+  if (!e || typeof e !== 'object') return e;
+  if (!e.step) e.step = step;
+  if (typeof e.message === 'string') e.message = redactSecrets(e.message, secrets);
+  if (typeof e.serverMessage === 'string') e.serverMessage = redactSecrets(e.serverMessage, secrets);
+  return e;
+}
+
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const round1 = (v) => Math.round(v * 10) / 10;
 // Zeitstempel auf volle Sekunde, Format wie die HA-Integration: 2026-09-28T12:00:00Z
@@ -384,28 +414,60 @@ export function createDatenspende(ctx = {}, deps = {}) {
   let linkGen = 0;
   function cancelPendingLink() { linkGen++; }
 
+  // GH #31: Jeder Einrichtungsschritt hängt seinen Namen an einen Fehler; die
+  // Meldung wird von Passwort, Anmelde-Schlüssel und Token bereinigt (falls ein
+  // Server sie je zurückspiegelt). Fehlt eine ID, bricht der Schritt sofort ab —
+  // sonst schickte der nächste Schritt sie ohne Wert.
+  async function linkStep(step, secrets, fn) {
+    try {
+      return await fn();
+    } catch (e) {
+      throw tagSetupError(e, step, secrets);
+    }
+  }
+  function requireSetupId(value, step, what) {
+    // Nur nicht-leere Strings und positive Zahlen — 0/false würde der Sidecar
+    // beim Laden verwerfen, die Oberfläche meldete trotzdem „verbunden“.
+    const ok = (typeof value === 'string' && value.trim() !== '') || (typeof value === 'number' && Number.isFinite(value) && value > 0);
+    if (!ok) {
+      const err = new DatenspendeRequestError(`Server lieferte keine ${what}`, 'bad_response');
+      err.step = step;
+      throw err;
+    }
+    return value;
+  }
+
   async function link({ mode, username, password, email, secret, consent, household = {} }) {
     if (consent !== true) throw new DatenspendeAuthError('Ohne Einwilligung keine Teilnahme', 'consent_required');
     const gen = ++linkGen;
     const user = String(username || '').trim();
     if (!user || !password) throw new DatenspendeRequestError('Benutzername und Passwort nötig', 'missing_fields');
-    const auth = mode === 'signin'
-      ? await client.signIn({ username: user, password })
-      : await client.signUp({ username: user, password, email, secret, consent: true });
-    if (!auth.token || !auth.userId) throw new DatenspendeRequestError('Anmeldung ohne Token/Nutzer-ID', 'bad_response');
+    const secrets = [password, secret];
+    const authStep = mode === 'signin' ? 'sign-in' : 'sign-up';
+    const auth = await linkStep(authStep, secrets, async () => {
+      const a = mode === 'signin'
+        ? await client.signIn({ username: user, password })
+        : await client.signUp({ username: user, password, email, secret, consent: true });
+      if (!a?.token || !a?.userId) throw new DatenspendeRequestError('Anmeldung ohne Token/Nutzer-ID', 'bad_response');
+      return a;
+    });
+    secrets.push(auth.token);
     let creds;
     try {
       const inhabitants = Number(household.numberInhabitants);
-      const householdId = await client.createHousehold(auth.token, {
+      const householdId = await linkStep('households', secrets, async () => requireSetupId(await client.createHousehold(auth.token, {
         userId: auth.userId,
         name: String(household.name || 'DVhub-Haushalt').slice(0, 80),
         numberInhabitants: Number.isInteger(inhabitants) && inhabitants > 0 ? inhabitants : undefined,
         zip: household.zip ? String(household.zip).slice(0, 12) : undefined,
         country: household.country ? String(household.country).slice(0, 56) : undefined,
-      });
-      const clientId = await client.createClient(auth.token, { householdId, name: 'DVhub', type: settings().clientType });
-      const apiKey = await client.createApiKey(auth.token, { clientId, name: 'DVhub API-Key' });
-      if (!householdId || !clientId || !apiKey) throw new DatenspendeRequestError('Einrichtung unvollständig', 'bad_response');
+      }), 'households', 'Haushalt-ID'));
+      const clientId = await linkStep('clients', secrets, async () => requireSetupId(
+        await client.createClient(auth.token, { householdId, name: 'DVhub', type: settings().clientType }), 'clients', 'Client-ID'
+      ));
+      const apiKey = await linkStep('api-key', secrets, async () => requireSetupId(
+        await client.createApiKey(auth.token, { clientId, name: 'DVhub API-Key' }), 'api-key', 'API-Key'
+      ));
       creds = { apiKey, clientId, householdId };
     } finally {
       // Web-Session sofort beenden — dauerhaft genutzt wird nur der API-Key.
@@ -438,8 +500,9 @@ export function createDatenspende(ctx = {}, deps = {}) {
     const key = String(apiKey || '').trim();
     if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new DatenspendeRequestError('API-Key-Format ungültig', 'invalid_api_key');
     const gen = ++linkGen;
-    const clientId = await client.getClientId(key);
-    if (!clientId) throw new DatenspendeRequestError('Server lieferte keine Client-ID', 'bad_response');
+    const clientId = await linkStep('api-key-check', [key], async () => requireSetupId(
+      await client.getClientId(key), 'api-key-check', 'Client-ID'
+    ));
     if (gen !== linkGen) throw new DatenspendeRequestError('Einrichtung abgebrochen (Spende inzwischen beendet)', 'link_cancelled');
     const at = new Date(now()).toISOString();
     clearQueue();

@@ -127,7 +127,7 @@ describe('Aufbereitung', () => {
 describe('VRM', () => {
   test('Graph-Abruf: Tracker ueber den Attributcode zugeordnet, Namen aus meta', async () => {
     const f = fakeFetch(() => vrmGraphBody({ 0: [[T0, 100]], 2: [[T0, 300]] }, { 0: 'String 2' }));
-    const r = await fetchVrmTrackers({ creds: { portalId: '769799', token: 't' }, instance: 0, trackers: [0, 2], startS: T0, endS: T0 + 3600, fetchImpl: f });
+    const r = await fetchVrmTrackers({ creds: { siteId: '769799', token: 't' }, instance: 0, trackers: [0, 2], startS: T0, endS: T0 + 3600, fetchImpl: f });
     assert.equal(r.ok, true);
     assert.deepEqual(r.byTracker.get(2), [[T0, 300]]);
     assert.equal(r.names.get(0), 'String 2');
@@ -142,7 +142,7 @@ describe('VRM', () => {
       { code: 'PVe3', Device: 'Solar Charger', instance: 0, formattedValue: 'Disabled' },
       { code: 'PVn0', Device: 'Battery Monitor', instance: 5, formattedValue: 'nein' }
     ] }));
-    const r = await discoverVrmTrackers({ creds: { portalId: '1', token: 't' }, fetchImpl: f });
+    const r = await discoverVrmTrackers({ creds: { siteId: '1', token: 't' }, fetchImpl: f });
     assert.deepEqual(r.trackers.map((t) => [t.tracker, t.name, t.enabled]), [[0, 'String 2', true], [3, 'Zzz', false]]);
   });
 });

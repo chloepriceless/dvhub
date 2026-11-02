@@ -2467,7 +2467,7 @@ function renderHistoryImportPanel(destinationId) {
         <strong class="config-row-value">VRM Portal</strong>
       </div>
       <div class="config-row">
-        <span class="config-row-label">${fieldLabelHtml('telemetry.historyImport.vrmPortalId', 'VRM Portal ID')}</span>
+        <span class="config-row-label">${fieldLabelHtml('telemetry.historyImport.vrmPortalId', 'VRM-Portal-ID oder Site-ID')}</span>
         <strong class="config-row-value">${escapeHtml(currentHistoryImportStatus?.vrmPortalId || '-')}</strong>
       </div>
     </div>

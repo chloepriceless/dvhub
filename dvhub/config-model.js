@@ -1616,10 +1616,10 @@ function buildFieldDefinitions() {
       groupLabel: 'History Import',
       groupDescription: 'Optionale Nachfüllung aus VRM für Historie und Datenlücken.',
       path: 'telemetry.historyImport.vrmPortalId',
-      label: 'VRM Portal ID',
+      label: 'VRM-Portal-ID oder Site-ID',
       type: 'text',
       empty: 'blank',
-      help: 'Optional. Wird für späteren VRM-Historienimport genutzt.'
+      help: 'Site-ID (Zahl aus der VRM-Adresszeile, z. B. 123456) oder VRM-Portal-ID (12 Zeichen, VRM → Einstellungen → Allgemeines). Eine Portal-ID wird mit dem Token automatisch in die Site-ID aufgelöst.'
     },
     {
       section: 'telemetry',
