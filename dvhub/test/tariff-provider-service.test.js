@@ -485,3 +485,38 @@ test('Takt: langsames Lesen der Datenbank → Zeitgrenze und Warnung, Ergebnis k
     clearTimeout(keepAlive);
   }
 });
+
+// Gegenprüfung e5a3efa1 (P2): ein Lesen, das nie fertig wird, legt das Loggen
+// nicht bis zum Neustart still — nach der Lese-Zeitgrenze neuer Versuch, und
+// der Zustand zeigt, dass nicht geloggt wird.
+test('Lesen hängt für immer: sichtbar im Zustand, nach der Lese-Zeitgrenze neuer Versuch', { timeout: 5000 }, async () => {
+  const { ctx, written } = makeCtx();
+  let calls = 0;
+  const stored = dayPrices('2026-11-01');
+  ctx.telemetryStore.listSeriesSamples = () => {
+    calls += 1;
+    if (calls === 1) return new Promise(() => {});
+    return Promise.resolve(stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh })));
+  };
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const svc = createTariffProviderService(ctx, {
+    now: () => now,
+    dbWaitMs: 10,
+    loadMaxMs: 40,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
+  });
+  const keepAlive = setTimeout(() => {}, 3000);
+  try {
+    await svc.refresh();
+    assert.equal(written.length, 0);
+    assert.equal(svc.getState().logging, 'pending', 'Zustand zeigt: wird nicht geloggt');
+    await new Promise((r) => setTimeout(r, 60));
+    now += HOUR;
+    await svc.refresh();
+    assert.equal(calls, 2, 'neuer Leseversuch nach der Zeitgrenze');
+    assert.equal(written.length, 96, 'danach geloggt (nur morgen neu)');
+    assert.equal(svc.getState().logging, 'ok');
+  } finally {
+    clearTimeout(keepAlive);
+  }
+});

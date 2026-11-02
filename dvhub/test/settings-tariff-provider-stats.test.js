@@ -137,3 +137,13 @@ test('Neuzeichnen während „Jetzt abrufen“: der sichtbare Block zeigt am End
   while (pending.some(isStats)) { answer(isStats, ok(96)); await flush(); }
   assert.match(b.stats.textContent, /96 Viertelstunden/, `sichtbarer Block: ${b.stats.textContent}`);
 });
+
+test('Stand: Hinweis, wenn Anbieterpreise gerade nicht geloggt werden', () => {
+  const sandbox = { console, window: { DVhubCommon: {}, addEventListener() {}, setTimeout() {} } };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(fs.readFileSync(fileURLToPath(new URL('../public/settings.js', import.meta.url)), 'utf8'), sandbox, { filename: 'settings.js' });
+  const { tariffProviderStateText } = sandbox.DVhubSettingsPricingPeriods;
+  const base = { provider: 'lichtblick', configured: true, active: true, lastSuccessAt: '2026-11-01T10:00:00Z' };
+  assert.match(tariffProviderStateText({ ...base, logging: 'pending' }), /noch nicht gespeichert/);
+  assert.doesNotMatch(tariffProviderStateText({ ...base, logging: 'ok' }), /noch nicht gespeichert/);
+});

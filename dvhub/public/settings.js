@@ -495,6 +495,7 @@ if (typeof globalThis !== 'undefined') {
     serializePricingPeriods,
     validatePricingPeriods,
     tariffProviderStatsText,
+    tariffProviderStateText,
     tariffProviderStatsCacheHit,
     tariffProviderStatsCacheable,
     bindTariffProviderBlock
@@ -3083,6 +3084,7 @@ function tariffProviderStateText(state) {
   if (state.account?.label) lines.push(`Vertrag: ${state.account.label}`);
   if (state.error) lines.push(`Hinweis: ${state.error}`);
   if (state.authBlockedUntil) lines.push(`Neuer Versuch ab ${new Date(state.authBlockedUntil).toLocaleString('de-DE')} oder nach Änderung der Zugangsdaten.`);
+  if (state.logging === 'pending' && state.lastSuccessAt) lines.push('Abgleich mit der Datenbank steht noch aus — neue Preise werden noch nicht gespeichert (nächster Versuch automatisch).');
   if (state.estimate) lines.push(`Schätzung für fehlende Zeiten: ${String(state.estimate.slope).replace('.', ',')} × Börsenpreis + ${String(state.estimate.interceptCtKwh).replace('.', ',')} ct (aus ${state.estimate.pairs} Viertelstunden)`);
   if (!state.active) lines.push('Abruf ruht: Die Preislogik „Vom Stromanbieter“ gilt weder heute noch in einem künftigen Zeitraum (gespeicherter Stand).');
   if (!lines.length) lines.push('Noch nicht abgerufen.');
