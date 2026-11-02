@@ -105,6 +105,7 @@
       <div id="pwBox" class="seccard"></div>
       <div id="totpBox" class="seccard"></div>
       <div id="passkeyBox" class="seccard"></div>
+      <div id="sessionBox" class="seccard"></div>
     </section>
     <section class="card">
       <button id="accountBackBtn" class="btn ghost small" type="button">◂ Zurück zu meinen Anlagen</button>
@@ -112,6 +113,8 @@
   </main>
 
   <main id="mainView" class="view" hidden>
+    <!-- Hinweis auf sicherheitsrelevante Änderungen (z. B. neuer Passkey) — das Portal verschickt keine Mails. -->
+    <section id="secNotice" class="card sec-notice" hidden></section>
     <!-- Nur sichtbar nach Klick auf „+“ — oder solange es noch keine Anlage gibt. -->
     <section id="addCard" class="card" hidden>
       <div class="card-head">
