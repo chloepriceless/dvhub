@@ -16,7 +16,7 @@ const TIMEOUT_MS = 10_000;
  */
 export function createNtfyProvider(cfg) {
   const { topicUrl, token } = cfg;
-  if (!topicUrl) throw new Error('ntfy provider requires topicUrl');
+  if (!String(topicUrl ?? '').trim()) throw new Error('ntfy provider requires topicUrl');
 
   async function notify({ level, title, body } = {}) {
     const ac = new AbortController();

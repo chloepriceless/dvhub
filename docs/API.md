@@ -394,11 +394,11 @@ Siehe [EEBUS.md](EEBUS.md).
 | GET | `/api/ocpp/status` | Token | OCPP-Zentrale: verbundene Ladepunkte |
 | GET | `/api/vehicle-evcc` | Token | Fahrzeug-Ladestand über evccs Fahrzeug-Treiber |
 | POST | `/api/vehicle-evcc/settings`, `/api/vehicle-evcc/refresh` | Token | Fahrzeug-Treiber einstellen bzw. sofort abfragen |
-| GET | `/api/victron/devices` | LAN·`integrations` | Am Victron GX gefundene Geräte |
+| GET | `/api/victron/devices` | LAN·`integrations` | Am Victron GX gefundene Geräte, liefert `uiToken` |
 | POST | `/api/victron/devices/scan` | Token+Nonce | Geräte am GX neu suchen |
-| GET | `/api/storage/status` | LAN·`status` | Speicher-Zustand (Akku, Netzspeicher) |
-| GET | `/api/inverter-efficiency/curve` | LAN·`status` | Wirkungsgradkurve des Wechselrichters (wie an EOS geschickt) |
-| GET | `/api/eos/plan` | LAN·`status` | EOS-Plan für Leitstand („Laut EOS-Plan“), mit Preisgrundlage |
+| GET | `/api/storage/status` | LAN·`status` | Speicherplatz des Datenträgers: frei/belegt, Stufe, DB-Größe, letzte Maßnahmen |
+| GET | `/api/inverter-efficiency/curve` | LAN·`status` | Selbst kalibrierte Wirkungsgradkurve des Wechselrichters; `applied` sagt, ob EOS sie bekommt |
+| GET | `/api/eos/plan` | LAN·`status`, *Pro* | EOS-Plan für Leitstand („Laut EOS-Plan“), mit Preisgrundlage |
 | POST | `/api/eos/solution-ready` | nur Box selbst | Fertig-Meldung des EOS-Laufs (vom EOS-Dienst) |
 
 ### 3.23 Installateurs-Portal

@@ -437,17 +437,20 @@ export function changelogSection(text, version) {
   // Ein Punkt samt eingerückter Folgezeilen (die Einträge sind umbrochen —
   // nur die erste Zeile endete mitten im Satz, Release-Probe 02.11.2026);
   // gekürzt an einer Wortgrenze.
+  // Nach einer Leerzeile ist der Punkt abgeschlossen: ein eingerückter zweiter
+  // Absatz wird nicht angehängt und erzeugt keinen eigenen Eintrag
+  // (Gegenprüfung 7adccd58, P2).
   const items = [];
+  let open = false;
   for (const l of lines.slice(start + 1)) {
     if (l.startsWith('## [')) break;
     const m = /^- (.+)$/.exec(l);
-    if (m) { items.push(m[1]); continue; }
-    if (items.length && /^\s{2,}\S/.test(l)) items[items.length - 1] += ` ${l.trim()}`;
-    else if (items.length && l.trim() === '') items.push(null);
+    if (m) { items.push(m[1]); open = true; continue; }
+    if (l.trim() === '') { open = false; continue; }
+    if (open && /^\s{2,}\S/.test(l)) items[items.length - 1] += ` ${l.trim()}`;
   }
   const out = [];
   for (const it of items) {
-    if (it == null) continue;
     const t = it.replace(/\*\*/g, '').replace(/`/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
     if (t.length <= 160) { out.push(t); continue; }
     const cut = t.slice(0, 159);

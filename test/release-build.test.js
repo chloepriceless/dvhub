@@ -180,6 +180,8 @@ test('Kanal-Index: einfügen, absteigend, latest, Prüfung', () => {
 test('CHANGELOG-Abschnitt für den Index', () => {
   const text = '## [Unreleased]\n- neu\n\n## [1.0.9] - 2026-11-01\n\nText\n\n- **Fett**: mit `code` und [Link](http://x)\n  Folgezeile\n- zweiter Punkt\n\n## [1.0.8]\n- alt\n';
   assert.deepEqual(changelogSection(text, '1.0.9'), ['Fett: mit code und Link Folgezeile', 'zweiter Punkt']);
+  // Zweiter Absatz nach Leerzeile: kein „null …“-Eintrag (Gegenprüfung 7adccd58).
+  assert.deepEqual(changelogSection('## [3.0.0]\n\n- a\n  weiter\n\n  Absatz\n- b\n', '3.0.0'), ['a weiter', 'b']);
   // Lange, umbrochene Punkte werden an einer Wortgrenze gekürzt, nicht mitten im Wort.
   const long = `## [2.0.0]\n\n- **Titel**: ${'Wort '.repeat(30)}\n  ${'weiter '.repeat(20)}\n`;
   const [one] = changelogSection(long, '2.0.0');
