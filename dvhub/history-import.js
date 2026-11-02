@@ -1402,8 +1402,8 @@ export function createHistoryImportManager({
     return { ok: true, status };
   }
 
-  async function listCompletedCoverageRanges({ start, end }) {
-    const importConfig = currentTelemetryConfig().historyImport || {};
+  async function listCompletedCoverageRanges({ start, end, runConfig = null }) {
+    const importConfig = runConfig || snapshotImportConfig();
     const rows = typeof store.listImportJobRanges === 'function'
       ? await store.listImportJobRanges({
         jobTypes: VRM_COVERAGE_JOB_TYPES,
@@ -1422,13 +1422,15 @@ export function createHistoryImportManager({
   async function collectGapWindows({
     now = null,
     lookbackDays = VRM_GAP_BACKFILL_LOOKBACK_DAYS,
-    chunkDays = VRM_GAP_BACKFILL_CHUNK_DAYS
+    chunkDays = VRM_GAP_BACKFILL_CHUNK_DAYS,
+    runConfig = null
   } = {}) {
     const rangeEnd = now ? toIso(now) : new Date().toISOString();
     const rangeStart = shiftIsoByDays(rangeEnd, -Math.max(1, Number(lookbackDays || VRM_GAP_BACKFILL_LOOKBACK_DAYS)));
     const coverage = await listCompletedCoverageRanges({
       start: rangeStart,
-      end: rangeEnd
+      end: rangeEnd,
+      runConfig
     });
     const windows = buildBackfillWindows({
       start: rangeStart,
@@ -1485,10 +1487,16 @@ export function createHistoryImportManager({
     };
   }
 
-  async function fetchConfiguredVrmRows({ start, end, interval = VRM_HISTORY_INTERVAL }) {
+  // Ein Lauf liest die Konfiguration EINMAL (runConfig) und reicht sie durch —
+  // sonst mischte ein Speichern mitten im Lauf zwei Anlagen (Gegenprüfung a9e434f9).
+  function snapshotImportConfig() {
+    return { ...(currentTelemetryConfig().historyImport || {}) };
+  }
+
+  async function fetchConfiguredVrmRows({ start, end, interval = VRM_HISTORY_INTERVAL, runConfig = null }) {
     const validation = validateConfiguredVrmImport({ start, end, requireRange: true });
     if (!validation.ok) return validation;
-    const importConfig = currentTelemetryConfig().historyImport || {};
+    const importConfig = runConfig || snapshotImportConfig();
     const normalizedRange = normalizeVrmRange({ start, end, interval });
     const normalizedInterval = normalizedRange.interval;
     const normalizedStart = normalizedRange.start;
@@ -1564,7 +1572,8 @@ export function createHistoryImportManager({
   }
 
   async function importFromConfiguredSource({ start, end, interval = VRM_HISTORY_INTERVAL }) {
-    const fetched = await fetchConfiguredVrmRows({ start, end, interval });
+    const runConfig = snapshotImportConfig();
+    const fetched = await fetchConfiguredVrmRows({ start, end, interval, runConfig });
     if (!fetched.ok) return fetched;
     const allRows = fetched.rows || [];
 
@@ -1573,7 +1582,7 @@ export function createHistoryImportManager({
     }
 
     await store.writeSamples(allRows);
-    const importConfig = currentTelemetryConfig().historyImport || {};
+    const importConfig = runConfig;
     const jobId = await store.writeImportJob({
       jobType: 'vrm_history_import',
       status: 'completed',
@@ -1611,10 +1620,12 @@ export function createHistoryImportManager({
     maxLookbackDays = VRM_FULL_BACKFILL_MAX_LOOKBACK_DAYS,
     interval = VRM_HISTORY_INTERVAL,
     auto = false,
-    allowIntervalFallback = true
+    allowIntervalFallback = true,
+    runConfig: givenRunConfig = null
   } = {}) {
     const validation = validateConfiguredVrmImport({ requireRange: false });
     if (!validation.ok) return validation;
+    const runConfig = givenRunConfig || snapshotImportConfig();
 
     let cursorEnd = startOfUtcDayIso(now ? toIso(now) : new Date().toISOString());
     let windowsVisited = 0;
@@ -1642,7 +1653,8 @@ export function createHistoryImportManager({
       const fetched = await fetchConfiguredVrmRows({
         start: windowStart,
         end: windowEnd,
-        interval: normalizedInterval
+        interval: normalizedInterval,
+        runConfig
       });
       if (!fetched.ok) return fetched;
 
@@ -1676,11 +1688,12 @@ export function createHistoryImportManager({
         maxLookbackDays: normalizedMaxLookbackDays,
         interval: 'days',
         auto,
-        allowIntervalFallback: false
+        allowIntervalFallback: false,
+        runConfig
       });
     }
 
-    const importConfig = currentTelemetryConfig().historyImport || {};
+    const importConfig = runConfig;
     const jobId = await store.writeImportJob({
       jobType: 'vrm_history_full_backfill',
       status: 'completed',
@@ -1734,8 +1747,9 @@ export function createHistoryImportManager({
   } = {}) {
     const validation = validateConfiguredVrmImport({ requireRange: false });
     if (!validation.ok) return validation;
+    const runConfig = snapshotImportConfig();
 
-    const plan = await collectGapWindows({ now, lookbackDays, chunkDays });
+    const plan = await collectGapWindows({ now, lookbackDays, chunkDays, runConfig });
     const { requestedFrom, requestedTo, gapWindows } = plan;
     if (!gapWindows.length) {
       return {
@@ -1763,7 +1777,8 @@ export function createHistoryImportManager({
       const fetched = await fetchConfiguredVrmRows({
         start: window.start,
         end: window.end,
-        interval
+        interval,
+        runConfig
       });
       if (!fetched.ok) return fetched;
 
@@ -1780,7 +1795,7 @@ export function createHistoryImportManager({
       }
     }
 
-    const importConfig = currentTelemetryConfig().historyImport || {};
+    const importConfig = runConfig;
     const status = emptyWindows > 0 ? 'completed_with_gaps' : 'completed';
     const jobId = await store.writeImportJob({
       jobType: 'vrm_history_gap_backfill',
@@ -1862,6 +1877,10 @@ export function createHistoryImportManager({
         ok: true,
         started: false
       };
+    }
+    // Während der Lücken-Suche kann ein anderer Nachimport begonnen haben.
+    if (vrmBackfillPromise) {
+      return { ok: false, started: false, busy: true };
     }
     const autoAttempt = Number(options.autoAttempt || 0);
     vrmBackfillPromise = runVrmGapBackfill({ auto: true, ...options, now: autoNow })

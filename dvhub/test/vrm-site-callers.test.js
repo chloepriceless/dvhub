@@ -545,3 +545,64 @@ test('server.js gibt dem History-Import pushLog als log mit', async () => {
   const call = src.match(/createHistoryImportManager\(\{[\s\S]*?\}\)/);
   assert.match(call[0], /log:\s*pushLog/);
 });
+
+// Gegenprüfung a9e434f9 (P2): ein Lauf liest die Konfiguration einmal — ändert
+// sich die Site-ID mittendrin, mischt er nicht zwei Anlagen und bucht die
+// Abdeckung nicht auf die neue.
+test('Nachimport: Site-ID-Wechsel während des Laufs → Lauf bleibt bei der alten Anlage', async () => {
+  const { fetchImpl, calls } = fakeVrm();
+  const jobs = [];
+  const store = { ...gapStore(), async writeImportJob(j) { jobs.push(j); return jobs.length; } };
+  let current = { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-switch' } };
+  const manager = createHistoryImportManager({
+    store, fetchImpl,
+    waitImpl: async () => { current = { historyImport: { ...current.historyImport, vrmPortalId: '999999' } }; },
+    getTelemetryConfig: () => current,
+  });
+  const r = await manager.backfillHistoryFromConfiguredSource({ mode: 'gap', now: '2026-01-08T00:00:00.000Z' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const stats = calls.filter((p) => p.endsWith('/stats'));
+  assert.ok(stats.length > 3, 'mehrere Fenster');
+  assert.ok(stats.every((p) => p === `/v2/installations/${SITE_ID}/stats`), stats.join(','));
+  assert.ok(jobs.every((j) => j.sourceAccount === String(SITE_ID)), JSON.stringify(jobs.map((j) => j.sourceAccount)));
+});
+
+test('Manueller Import: Site-ID-Wechsel während des Abrufs → Job unter der abgefragten Anlage', async () => {
+  const base = fakeVrm();
+  const jobs = [];
+  const store = { ...fakeStore(), async writeImportJob(j) { jobs.push(j); return 1; } };
+  let current = { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-switch-2' } };
+  const fetchImpl = async (url, opts) => {
+    const res = await base.fetchImpl(url, opts);
+    if (new URL(url).searchParams.get('type') === 'kwh') current = { historyImport: { ...current.historyImport, vrmPortalId: '999999' } };
+    return res;
+  };
+  const manager = createHistoryImportManager({ store, fetchImpl, waitImpl: async () => {}, getTelemetryConfig: () => current });
+  await manager.importFromConfiguredSource({ start: '2026-01-01T00:00:00.000Z', end: '2026-01-01T01:00:00.000Z' });
+  assert.equal(jobs.find((j) => j.jobType === 'vrm_history_import').sourceAccount, String(SITE_ID));
+});
+
+// Gegenprüfung a9e434f9 (P3): Beginnt während der Lücken-Suche ein anderer
+// Nachimport, startet der automatische nicht zusätzlich.
+test('Auto-Nachimport: anderer Nachimport startet während der Lücken-Suche → busy, kein zweiter Lauf', async () => {
+  const { fetchImpl } = fakeVrm();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let first = true;
+  const store = {
+    ...gapStore(),
+    async listImportJobRanges() { if (first) { first = false; await gate; } return []; },
+  };
+  const manager = createHistoryImportManager({
+    store, fetchImpl, waitImpl: async () => {},
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-race' } },
+  });
+  const auto = manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  await flush();
+  const manual = manager.backfillHistoryFromConfiguredSource({ mode: 'gap', now: '2026-01-08T00:00:00.000Z' });
+  release();
+  const r = await auto;
+  assert.equal(r.started, false);
+  assert.equal(r.busy, true);
+  await manual;
+});
