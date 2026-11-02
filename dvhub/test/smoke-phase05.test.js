@@ -1262,3 +1262,44 @@ describe('H-0003: /api/telemetry/series zählt, was wirklich zurückkommt', () =
     assert.equal(r.status, 200);
   });
 });
+
+// Gegenprüfung 8e7bb8ef: (P1) der nicht gestreamte Weg hatte keine
+// Nebenläufigkeitsgrenze — mehrere Anfragen à 200 000 Zeilen gleichzeitig
+// sprengten den Web-Prozess; (P3) der Strom-Weg war auf Routenebene ungetestet.
+describe('H-0003 Gegenprüfung: /api/telemetry/series begrenzt', () => {
+  it('nicht gestreamt: höchstens 2 Abfragen gleichzeitig, Grenze 100 000 Fenster', async () => {
+    let running = 0; let peak = 0;
+    const ctx = mockCtx({ telemetryStore: { querySeries: async () => { running++; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, 30)); running--; return []; } } });
+    const routes = createApiRoutes(ctx);
+    const p = '/api/telemetry/series?keys=battery_soc_pct&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=900';
+    await Promise.all([1, 2, 3, 4].map(async () => {
+      const res = mockRes();
+      await routes.handleRequest(makeReq('GET', p), res, new URL(`http://localhost${p}`));
+      assert.equal(res._captured.status, 200);
+    }));
+    assert.ok(peak <= 2, `gleichzeitig: ${peak}`);
+    const big = '/api/telemetry/series?keys=a,b,c,d,e,f,g&start=2026-10-01T00:00:00Z&end=2026-10-02T23:00:00Z&maxResolution=6';
+    const res = mockRes();
+    await routes.handleRequest(makeReq('GET', big), res, new URL(`http://localhost${big}`));
+    assert.equal(res._captured.status, 400, res._captured.body);
+    assert.equal(JSON.parse(res._captured.body).limit, 100000);
+  });
+  it('gestreamt: über 1,5 Mio. Fenster → 400, sonst über iterateSeriesBuckets', async () => {
+    let iterated = 0;
+    const ctx = mockCtx({ telemetryStore: {
+      querySeries: async () => { throw new Error('darf nicht'); },
+      async *iterateSeriesBuckets() { iterated++; yield []; },
+    } });
+    const routes = createApiRoutes(ctx);
+    const big = '/api/telemetry/series?keys=a,b,c,d,e,f,g&start=2026-10-01T00:00:00Z&end=2026-10-15T00:00:00Z&maxResolution=5';
+    const r1 = mockRes();
+    await routes.handleRequest(makeReq('GET', big), r1, new URL(`http://localhost${big}`));
+    assert.equal(r1._captured.status, 400);
+    assert.equal(iterated, 0);
+    const ok = '/api/telemetry/series?keys=a&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=5';
+    const chunks = [];
+    const r2 = { ...mockRes(), headersSent: false, setHeader() {}, write(c) { chunks.push(String(c)); return true; }, on() {}, once() {} };
+    await routes.handleRequest(makeReq('GET', ok), r2, new URL(`http://localhost${ok}`));
+    assert.equal(iterated, 1);
+  });
+});

@@ -72,3 +72,17 @@ test('querySeries ohne bucketSec: bisheriges Verhalten (interne Aufrufer)', asyn
   await store.querySeries({ seriesKeys: ['a'], start: '2026-10-01T00:00:00Z', end: '2026-10-02T00:00:00Z' });
   assert.doesNotMatch(calls[0], /DISTINCT ON/);
 });
+
+// Gegenprüfung 8e7bb8ef (P2): die zusammenfassende Abfrage liest alle Rohzeilen
+// des Zeitraums; ohne Laufzeitgrenze blockierte eine Jahresabfrage den Pool.
+test('querySeries mit bucketSec: eigene Verbindung mit statement_timeout (SET LOCAL)', async () => {
+  const seen = [];
+  const client = { async query(sql) { seen.push(typeof sql === 'string' ? sql.trim().split(/\s+/).slice(0, 3).join(' ') : sql); return { rows: [] }; }, release() { seen.push('release'); } };
+  const pool = { async connect() { return client; }, async query() { throw new Error('nicht direkt'); } };
+  const store = createTelemetryStorePg(pool);
+  await store.querySeries({ seriesKeys: ['a'], start: '2026-10-01T00:00:00Z', end: '2026-10-02T00:00:00Z', maxResolution: 900, bucketSec: 900 });
+  assert.equal(seen[0], 'BEGIN');
+  assert.match(seen[1], /^SET LOCAL statement_timeout/);
+  assert.equal(seen.at(-2), 'COMMIT');
+  assert.equal(seen.at(-1), 'release');
+});

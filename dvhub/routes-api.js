@@ -307,7 +307,9 @@ export const MAX_TELEMETRY_SCAN_SLOTS = 1_500_000;
 // Strix H-0003: der nicht gestreamte Weg hält alle Zeilen auf einmal im
 // Web-Prozess (192 MiB) — eigene, kleinere Grenze. Er fasst auf
 // min(maxResolution, 900) s zusammen, also zählt der Wächter genau diese Fenster.
-export const MAX_TELEMETRY_SERIES_ROWS = 200_000;
+// Gegenprüfung 8e7bb8ef: 100 000 je Anfrage und höchstens 2 gleichzeitig
+// (seriesQueue wie der Strom-Weg) — vorher 200 000 ohne Nebenläufigkeitsgrenze.
+export const MAX_TELEMETRY_SERIES_ROWS = 100_000;
 // M-3 (Plan 16-03): /api/devices/:id history row cap. 288 = 24h of 5-min
 // readings (24 * 60 / 5). Named so the magic number is self-documenting.
 export const DEVICE_HISTORY_ROW_LIMIT = 288;
@@ -7034,7 +7036,8 @@ export function createApiRoutes(ctx) {
         return;
       }
       try {
-        const rows = await ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes, bucketSec });
+        const rows = await seriesQueue.run({ req, res }, () => ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes, bucketSec }));
+        if (rows === HEAVY_SKIPPED) return; // Client schon weg
         return json(res, 200, { ok: true, keys, start, end, total: rows.length, data: rows });
       } catch (e) {
         return json(res, 500, { ok: false, error: e.message });

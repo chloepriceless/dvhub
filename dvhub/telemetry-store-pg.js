@@ -12,6 +12,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Auflösungen, die der Explorer fein (gestreamt) abfragt; alle teilen 6 h.
+// Laufzeitgrenze der zusammenfassenden Reihen-Abfrage (Strix H-0003).
+export const SERIES_QUERY_TIMEOUT_MS = 30_000;
+
 export const STREAM_BUCKET_SECONDS = new Set([5, 10, 15, 30, 60, 300]);
 
 function isoTimestamp(input = new Date()) {
@@ -1581,7 +1584,24 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     // (interne Aufrufer: EEG-Verlängerung, PV-Strings, Verlauf, Familie).
     if (Number.isInteger(bucketSec) && bucketSec > 0) {
       const n = keys.length;
-      const result = await pool.query(`
+      // Gegenprüfung 8e7bb8ef (P2): die Abfrage liest alle Rohzeilen des
+      // Zeitraums — mit Laufzeitgrenze, damit eine Jahresabfrage den Pool nicht
+      // minutenlang belegt. Eigene Verbindung, SET LOCAL gilt nur hier.
+      const runQuery = async (text, values) => {
+        if (typeof pool.connect !== 'function') return pool.query(text, values);
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query(`SET LOCAL statement_timeout = '${SERIES_QUERY_TIMEOUT_MS}ms'`);
+          const r = await client.query(text, values);
+          await client.query('COMMIT');
+          return r;
+        } catch (e) {
+          try { await client.query('ROLLBACK'); } catch { /* Verbindung hin */ }
+          throw e;
+        } finally { client.release(); }
+      };
+      const result = await runQuery(`
         SELECT series_key, ts_utc, resolution_seconds, value_num, unit FROM (
           SELECT DISTINCT ON (series_key, bucket_ts) series_key, ts_utc, resolution_seconds, value_num, unit
           FROM (
