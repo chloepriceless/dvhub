@@ -1814,6 +1814,11 @@ ctx.getSolarMarketValueSummary = ({ year }) =>
   energyChartsMarketValueService?.getSolarMarketValueSummary?.({ year });
 ctx.getApplicableValueSummary = ({ year, pvPlants }) =>
   applicableValueService?.getApplicableValueSummary?.({ year, pvPlants });
+// Preis-Schätzung und ihre Buchführung nur im Prozess, der die EOS-Läufe
+// anstößt (runtime/monolith): ein reiner Web-Prozess im getrennten Betrieb
+// pusht nach dem Speichern auch, darf aber keine zweite Buchführung führen
+// (eos-forecast-bridge.js, Codex-Gegenprüfung d2d6364c).
+ctx.eosPriceEstimates = IS_RUNTIME_PROCESS;
 const eosForecastBridge = createEosForecastBridge(ctx);
 // Nur noch fuer optimizer.eosStartAfterPreviousRun (EOS rechnet nach eigenem
 // Takt): dann liest EOS den SoC aus Messwerten und verlangt ihn hoechstens

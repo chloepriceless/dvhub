@@ -428,11 +428,16 @@ export function createEosForecastBridge(ctx) {
   // damit auch ein Absturz mittendrin nichts vergessen lässt.
   //   - Datei gelesen → Bereiche, „bekannt“ und „einmal gelöscht“ wie
   //     gespeichert (fehlende Felder: unbekannt / nicht gelöscht);
-  //   - keine Datei (neu, Update von 1.0.8 — schätzte nie) → nichts geschätzt;
-  //     zur Sicherheit löscht der erste Push trotzdem einmal hinter dem
-  //     Geschickten;
-  //   - Datei unlesbar, oder kein Datenverzeichnis (Tests) → unbekannt bis
-  //     zum ersten angekommenen Preis-Import.
+  //   - keine oder unlesbare Datei, oder kein Datenverzeichnis (Tests) →
+  //     unbekannt bis zum ersten angekommenen Preis-Import; der erste Push
+  //     löscht einmal hinter dem Geschickten. Auch ohne Datei, weil Stände vor
+  //     ihr (Test-Images, release/1.0.9 vor e8cb7239) Schätzwerte ohne
+  //     Buchführung schickten (Codex-Gegenprüfung d2d6364c).
+  //
+  // Im reinen Web-Prozess des getrennten Betriebs (DVHUB_ENABLE_RUNTIME_WORKER,
+  // ctx.eosPriceEstimates = false) wird nicht geschätzt und keine Datei
+  // geführt: Läufe und Laufstart-Prüfung liegen im Runtime-Prozess, eine
+  // zweite Buchführung überschriebe dessen Stand (Codex-Gegenprüfung d2d6364c).
   let lastEstimateRange = null;
   let staleRange = null;
   let clearedOnce = false;
@@ -441,8 +446,9 @@ export function createEosForecastBridge(ctx) {
   const unionRange = (...ranges) => ranges.filter(Boolean).reduce((acc, r) => (acc
     ? { fromMs: Math.min(acc.fromMs, r.fromMs), untilMs: Math.max(acc.untilMs, r.untilMs) }
     : { fromMs: r.fromMs, untilMs: r.untilMs }), null);
+  const estimatesEnabled = ctx.eosPriceEstimates !== false;
   const estimatesDir = ctx.dataDir ?? process.env.DV_DATA_DIR;
-  const estimatesFile = estimatesDir ? path.join(estimatesDir, 'eos-price-estimates.json') : null;
+  const estimatesFile = estimatesEnabled && estimatesDir ? path.join(estimatesDir, 'eos-price-estimates.json') : null;
   const validRange = (r) => (r && Number.isFinite(r.fromMs) && Number.isFinite(r.untilMs) && r.untilMs > r.fromMs
     ? { fromMs: r.fromMs, untilMs: r.untilMs } : null);
   if (estimatesFile) {
@@ -457,8 +463,7 @@ export function createEosForecastBridge(ctx) {
       eosPricesKnown = saved.known === true;
       clearedOnce = saved.clearedOnce === true;
     } catch (e) {
-      if (e?.code === 'ENOENT') eosPricesKnown = true;
-      else if (pushLog) pushLog('eos_price_estimate_error', { error: `eos-price-estimates.json: ${e?.message || e}` });
+      if (e?.code !== 'ENOENT' && pushLog) pushLog('eos_price_estimate_error', { error: `eos-price-estimates.json: ${e?.message || e}` });
     }
   }
   let savedEstimates = null;
@@ -962,7 +967,7 @@ export function createEosForecastBridge(ctx) {
     // Einspeisewert — es speist mittags PV ein, statt sie für Nacht und Morgen
     // zu speichern (Prod 01.11.2026). Deshalb dahinter Schätzwerte; der
     // Steuerzeitraum richtet sich weiter nur nach den echten Preisen.
-    let priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(), { estimate: dvhubTriggersEosRuns(cfg) && state?.optimizer?.eos?.supported === true });
+    let priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(), { estimate: estimatesEnabled && dvhubTriggersEosRuns(cfg) && state?.optimizer?.eos?.supported === true });
     if (gone()) return abandoned();
     // Vor dem Import vormerken: was geschätzt an EOS geht, kann ab dann dort
     // liegen — auch wenn danach etwas scheitert oder DVhub stirbt. Lässt es

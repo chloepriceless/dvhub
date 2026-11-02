@@ -1738,16 +1738,66 @@ test('Neustart: gemerkte Schätzwerte gelten weiter — Import scheitert → kei
   } finally { await mock.close(); }
 });
 
-test('Neustart ohne gemerkte Datei (Update von 1.0.8): nichts geschätzt, Lauf geht auch im Preisausfall', async () => {
+// Codex-Gegenprüfung d2d6364c (P2): Stände vor der Datei (Test-Images,
+// release/1.0.9 vor e8cb7239) schickten Schätzwerte ohne Buchführung — ohne
+// Datei ist der Stand deshalb unbekannt, bis ein Preis-Import ankommt.
+test('Neustart ohne gemerkte Datei: nichts pauschal löschen, Stand unbekannt bis zum ersten Import', async () => {
   const mock = await createMockEos(okHandler);
   try {
     const env = estimateCtx(mock);
     env.ctx.dataDir = await tmpDataDir();
-    env.ctx.forecastService = { buildForecastResponse: async () => ({ pv: { slots: [] }, load: { slots: [] }, price: { slots: [] } }) };
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    let outage = true;
+    env.ctx.forecastService = { buildForecastResponse: async () => (outage ? { pv: { slots: [] }, load: { slots: [] }, price: { slots: [] } } : fc0()) };
     const bridge = createEosForecastBridge(env.ctx);
     await bridge.push();
     assert.deepEqual(deletes(mock), [], 'ohne bekannte echte Preise nichts pauschal löschen');
-    assert.deepEqual(await bridge.prepareRun(), { ok: true, pushed: false });
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, false);
+    assert.match(res.error, /Preisstand in EOS unbekannt/);
+    outage = false; // Preise wieder da → Import kommt an → Lauf geht
+    assert.equal((await bridge.prepareRun()).ok, true);
+  } finally { await mock.close(); }
+});
+
+test('Neustart ohne Datei nach einem Stand mit Schätzung: Import scheitert → kein Lauf', async () => {
+  let failPrice = false;
+  const mock = await createMockEos((req, res) => {
+    if (failPrice && req.method === 'PUT' && req.url.startsWith('/v1/prediction/import/ElecPriceImport')) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"detail":"boom"}'); return;
+    }
+    okHandler(req, res);
+  });
+  try {
+    const env = estimateCtx(mock);
+    await createEosForecastBridge(env.ctx).push(); // alter Stand ohne Datei: Schätzung ab + 10 h
+    env.ctx.dataDir = await tmpDataDir();
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = { buildForecastResponse: async () => ({ ...(await fc0()), price: { slots: realUntil(env, env.q0 + 35 * 3_600_000) } }) };
+    failPrice = true;
+    const fresh = createEosForecastBridge(env.ctx);
+    await fresh.push();
+    const res = await fresh.prepareRun();
+    assert.equal(res.ok, false);
+  } finally { await mock.close(); }
+});
+
+// Codex-Gegenprüfung d2d6364c (P2): Im getrennten Betrieb
+// (DVHUB_ENABLE_RUNTIME_WORKER=1) pusht auch der Web-Prozess (nach dem
+// Speichern) — mit eigener Buchführung. Er schätzt deshalb nicht und schreibt
+// keine Datei; Läufe und Laufstart-Prüfung liegen im Runtime-Prozess.
+test('Web-Prozess (getrennter Betrieb): keine Schätzung, keine Buchführungs-Datei', async () => {
+  const fs = await import('node:fs');
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    env.ctx.dataDir = await tmpDataDir();
+    env.ctx.eosPriceEstimates = false;
+    await createEosForecastBridge(env.ctx).push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    assert.equal(Math.max(...elec.keys()), env.realEnd - Q);
+    assert.deepEqual(fs.readdirSync(env.ctx.dataDir), []);
   } finally { await mock.close(); }
 });
 
@@ -1877,4 +1927,13 @@ test('Buchführung: Vormerken scheitert → keine Schätzung an EOS', async () =
     assert.equal(Math.max(...elec.keys()), env.realEnd - Q, 'nur echte Preise');
     assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
   } finally { await mock.close(); }
+});
+
+test('server.js: Schätzung nur im Prozess, der die Läufe anstößt', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const wire = src.indexOf('ctx.eosPriceEstimates = IS_RUNTIME_PROCESS;');
+  const create = src.indexOf('const eosForecastBridge = createEosForecastBridge(ctx);');
+  assert.ok(wire > 0, 'ctx.eosPriceEstimates wird gesetzt');
+  assert.ok(wire < create, 'vor dem Bau der Bridge');
 });
