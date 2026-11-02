@@ -59,7 +59,10 @@ def api(path, tok):
 
 
 def find_run(slug, sha, tok):
-    runs = api(f"/repos/{slug}/actions/runs?head_sha={sha}&per_page=20", tok).get("workflow_runs", [])
+    # Nur Push-Läufe: Der Issue-Sekretär erzeugt je Kommentar eigene Läufe für
+    # denselben Commit (am 02.11. 24 Stück) und schob den CI-Lauf aus den
+    # ersten 20 Ergebnissen.
+    runs = api(f"/repos/{slug}/actions/runs?head_sha={sha}&event=push&per_page=50", tok).get("workflow_runs", [])
     runs = [r for r in runs if r.get("name") == WORKFLOW]
     return runs[0] if runs else None
 
