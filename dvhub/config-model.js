@@ -373,6 +373,10 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   // beiden Timing-Felder — die Settings-Felder dafür waren bisher wirkungslos.
   if (isPlainObject(persistedVictron.freezeWatchdog)) victronOverride.freezeWatchdog = persistedVictron.freezeWatchdog;
   if (isPlainObject(persistedVictron.mqttCrossCheck)) victronOverride.mqttCrossCheck = persistedVictron.mqttCrossCheck;
+  // Entlade-Wächter (setpoint-follow-watchdog): dieselbe Klasse — ohne Durchreichung
+  // waren `enabled`, `minSuspectShare` usw. auf jeder Box mit Profil wirkungslos
+  // (Gegenprüfung 0e71c5f6, P2).
+  if (isPlainObject(persistedVictron.setpointWatchdog)) victronOverride.setpointWatchdog = persistedVictron.setpointWatchdog;
   if (persistedVictron.telemetryMaxAgeMs != null) victronOverride.telemetryMaxAgeMs = persistedVictron.telemetryMaxAgeMs;
   if (persistedVictron.modbusConnectTimeoutMs != null) victronOverride.modbusConnectTimeoutMs = persistedVictron.modbusConnectTimeoutMs;
   // Issue #5 + #13: dieselbe Klasse wie freezeWatchdog oben. acPvSource beschreibt

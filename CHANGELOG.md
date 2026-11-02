@@ -169,10 +169,11 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   Mindestgrenze 2901) und wenn kurze Laststöße (Wallbox schaltet) sich zu „zehn Minuten“ summierten. Der Wächter
   liest jetzt die aktive SoC-Grenze mit, wertet ein Halten durch DVhub und eine Entlade-Sperre als gewollt und
   meldet nur, wenn die Störung ein ganzes Zehn-Minuten-Fenster prägt (mindestens 80 % der Messpunkte, auch im
-  Mittel Netzbezug über dem Sollwert) und gerade anliegt. Bei Verdacht liest er die Entlade-Sperre (Register 2704)
-  selbst nach, auch nach einem Neustart. Während eines gewollten Haltens gibt es keine falsche Entwarnung mehr; „entlädt
+  Mittel Netzbezug über dem Sollwert) und gerade anliegt. Bei Verdacht liest er die Entlade-Sperre selbst nach
+  (Register 2720, auf älteren GX 2704), auch nach einem Neustart. Während eines gewollten Haltens gibt es keine falsche Entwarnung mehr; „entlädt
   wieder“ meldet er nur, wenn der Akku wirklich entladen hat. Das Protokoll nennt Anteil und Mittelwerte. Neuer Schalter
-  `victron.setpointWatchdog.minSuspectShare` (Standard 0,8).
+  `victron.setpointWatchdog.minSuspectShare` (Standard 0,8). Die Einstellungen unter `victron.setpointWatchdog`
+  (auch das Abschalten) wirken jetzt auch auf Boxen mit Herstellerprofil — bisher fielen sie dort still weg.
 
 - **Peak Shaving sperrt den Akku nicht mehr versehentlich.** Victron zeigt die Werkseinstellung „Entladung
   unbegrenzt“ (−1 W) im Register 2704 als 0 an — genau wie eine Sperre. Peak Shaving hätte deshalb eine Sperre

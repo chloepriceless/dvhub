@@ -127,3 +127,21 @@ test('Herstellerprofil überschreibt Schutz-/Timing-Parameter der victron-Sektio
   assert.equal(v.freezeWatchdog.minSamples, 15);
   assert.equal(v.freezeWatchdog.minPowerW, 25, 'nicht gesetzte Unterfelder kommen aus den Defaults');
 });
+
+test('victron.setpointWatchdog überlebt die Profil-Zusammenführung (Entlade-Wächter, Gegenprüfung 0e71c5f6)', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-profile-watchdog-'));
+  const configPath = path.join(rootDir, 'config.json');
+  const manufacturerDir = path.join(rootDir, 'hersteller');
+  fs.mkdirSync(manufacturerDir, { recursive: true });
+  fs.writeFileSync(path.join(manufacturerDir, 'victron.json'), JSON.stringify({
+    victron: { transport: 'modbus', port: 502, unitId: 100, timeoutMs: 1000 }
+  }));
+  fs.writeFileSync(configPath, JSON.stringify({
+    manufacturer: 'victron',
+    victron: { host: '10.0.0.5', setpointWatchdog: { enabled: false, minSuspectShare: 0.9 } }
+  }));
+  const v = loadConfigFile(configPath).effectiveConfig.victron;
+  assert.equal(v.port, 502);
+  assert.equal(v.setpointWatchdog?.enabled, false);
+  assert.equal(v.setpointWatchdog?.minSuspectShare, 0.9);
+});
