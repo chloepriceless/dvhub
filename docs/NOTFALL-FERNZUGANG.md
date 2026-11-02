@@ -48,7 +48,7 @@ Support-Tunnel aufbaut wie die App — ganz ohne DVhub, Datenbank oder Web-UI:
 | Befehl | Wirkung |
 |--------|---------|
 | `sudo bash /opt/dvhub/dvhub-support-tunnel.sh` | Öffnen, Auto-Close nach 60 Min |
-| `… --ttl 30` | Öffnen, Auto-Close nach 30 Min |
+| `… --ttl 30` | Öffnen, Auto-Close nach 30 Min (erlaubt: 5 bis 240) |
 | `… --ttl 0` | Öffnen bis `Strg-C` (kein Auto-Close) |
 | `… --print` | Nur anzeigen, was passieren würde (verbindet **nicht**) |
 | `… --close` | Laufenden Tunnel sofort beenden |
