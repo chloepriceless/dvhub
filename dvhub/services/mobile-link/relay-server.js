@@ -125,6 +125,7 @@ export function startRelayServer({
     server,
     ready,
     socketStats: () => guard.stats(),
+    guard,
     close() {
       relay.close();
       guard.close();

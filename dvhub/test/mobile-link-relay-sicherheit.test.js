@@ -756,16 +756,44 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
     }
   });
 
-  test('festgehaltene Fragmente zählen im Eingangsbudget (P2)', async () => {
-    const { srv, port } = await localRelay({ socketLimits: { inTotal: 256 * 1024, inPerRemote: 1024 * 1024, stallMs: 60_000 } });
+  test('festgehaltene Lesestücke zählen in voller Größe: Rest-Byte und Maske (Gegenprüfung 39d4427 P2)', async () => {
+    const { srv, port } = await localRelay({ limits: { boxFramesPerWindow: 1e6, boxBytesPerWindow: 1e12 } });
     try {
+      const text = JSON.stringify({ t: 'ping', pad: 'P'.repeat(65_000 - 30) });
+      const frame = Buffer.concat([frameHead(Buffer.byteLength(text)), Buffer.from(text)]);
+      // a: Rahmen + 1 Byte des nächsten Kopfes im selben Lesestück → das
+      // Rest-Byte hält das ganze Stück. b: Rahmen allein → die Maske hält es.
+      const a = await wsBox(port, generateIdentity());
       const b = await wsBox(port, generateIdentity());
-      // 10 Fragmente (unter maxFragments), Nutzdaten winzig — nur die
-      // Pin-Zählung (64 KiB je Fragment) sprengt das Budget.
-      const parts = [Buffer.concat([frameHead(1, { fin: false, opcode: 0x1 }), Buffer.from('{')])];
-      for (let i = 0; i < 9; i++) parts.push(Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' ')]));
-      b.ws._socket.write(Buffer.concat(parts));
-      await until(() => b.state.closed, 3000);
+      const before = srv.socketStats().inPartialBytes;
+      a.ws._socket.write(Buffer.concat([frame, Buffer.from([0x8a])]));
+      b.ws._socket.write(frame);
+      await a.next('pong');
+      await b.next('pong');
+      await sleep(50);
+      const held = srv.socketStats().inPartialBytes - before;
+      assert.ok(held >= 2 * 60_000, `festgehaltene Lesestücke nur mit ${held} B gezählt`);
+      // Nächster kleiner Rahmen ersetzt die Maske → wieder klein.
+      const small = JSON.stringify({ t: 'ping' });
+      b.ws._socket.write(Buffer.concat([frameHead(small.length), Buffer.from(small)]));
+      await b.next('pong');
+      await sleep(50);
+      assert.ok(srv.socketStats().inPartialBytes - before < held - 50_000, 'Maske gibt das Lesestück nicht frei');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  test('ein Halter je Verbindung im Eingang: Verdrängung vergleicht Verbindungen, nicht Teilposten (Gegenprüfung 39d4427 P3)', async () => {
+    const { srv, port } = await localRelay({ limits: { boxFramesPerWindow: 1e6, boxBytesPerWindow: 1e12 }, socketLimits: { stallMs: 60_000 } });
+    try {
+      assert.ok(srv.guard, 'Wächter nicht erreichbar');
+      const a = await wsBox(port, generateIdentity());
+      const b = await wsBox(port, generateIdentity());
+      // Beide mit angefangenem Rahmen und festgehaltenen Lesestücken.
+      for (const c of [a, b]) c.ws._socket.write(Buffer.concat([frameHead(300 * 1024), Buffer.alloc(100 * 1024, 0x20)]));
+      await sleep(100);
+      assert.equal(srv.guard.in.holders.size, 2, `${srv.guard.in.holders.size} Halter für 2 Verbindungen`);
     } finally {
       await srv.close();
     }
