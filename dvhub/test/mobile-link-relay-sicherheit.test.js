@@ -782,6 +782,13 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
       await c.next('pong');
       await sleep(50);
       assert.ok(srv.socketStats().inPartialBytes - mid < 1024, 'Pong hinter dem Rahmen hält das Lesestück');
+      // … und ebenso ein Ping (Gegenprüfung 75d75926 P3).
+      const d = await wsBox(port, generateIdentity());
+      const mid2 = srv.socketStats().inPartialBytes;
+      d.ws._socket.write(Buffer.concat([frame, Buffer.from([0x89, 0x80, 0, 0, 0, 0])]));
+      await d.next('pong');
+      await sleep(50);
+      assert.ok(srv.socketStats().inPartialBytes - mid2 < 1024, 'Ping hinter dem Rahmen hält das Lesestück');
     } finally {
       await srv.close();
     }
