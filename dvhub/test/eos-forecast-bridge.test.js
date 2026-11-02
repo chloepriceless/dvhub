@@ -1975,3 +1975,55 @@ test('Web-Prozess ohne Datenverzeichnis: Lauf geht wie vor der Schätzung', asyn
     assert.deepEqual(await web.prepareRun(), { ok: true, pushed: false });
   } finally { await mock.close(); }
 });
+
+// Codex-Gegenprüfung bad66c48 (P2): Der Steuerzeitraum des Runtime-Prozesses
+// steht nur in dessen Zustand — der Web-Prozess nimmt ihn aus der Buchführung,
+// nicht aus seinem eigenen (evtl. veralteten) Zustand.
+test('Web-Prozess: Steuerzeitraum aus der Buchführung, nicht aus dem eigenen Zustand', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock); // echte Preise bis + 10 h → Steuerzeitraum 9 h
+    env.ctx.dataDir = await tmpDataDir();
+    await createEosForecastBridge(env.ctx).push();
+    assert.equal(env.state.optimizer.eosControlHorizonH, 9);
+    const webState = { optimizer: { eos: { supported: true }, eosControlHorizonH: 1 } }; // veraltet
+    const web = createEosForecastBridge({ ...env.ctx, state: webState, eosPriceEstimates: false });
+    assert.deepEqual(await web.prepareRun(), { ok: true, pushed: false });
+    t.mock.timers.setTime(Date.now() + 65 * 60_000); // 9-h-Zeitraum ab dem nächsten Slot reicht jetzt in die Schätzung
+    const res = await web.prepareRun();
+    assert.equal(res.ok, false, 'mit dem eigenen Wert (1 h) hätte der Web-Prozess den Lauf erlaubt');
+  } finally { await mock.close(); }
+});
+
+test('Web-Prozess ohne eigenen Steuerzeitraum: kürzerer Zeitraum des Runtime-Prozesses erlaubt den Lauf', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = shortRealEnv(mock); // Steuerzeitraum 1 h, Schätzung ab + 75..90 min
+    env.ctx.dataDir = await tmpDataDir();
+    await createEosForecastBridge(env.ctx).push();
+    const web = createEosForecastBridge({ ...env.ctx, state: { optimizer: { eos: { supported: true } } }, eosPriceEstimates: false });
+    assert.deepEqual(await web.prepareRun(), { ok: true, pushed: false });
+  } finally { await mock.close(); }
+});
+
+test('Buchführung: ein längerer Steuerzeitraum steht in der Datei, bevor EOS ihn bekommt', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  let dir = null;
+  const seen = [];
+  const mock = await createMockEos((req, res) => {
+    if (req.method === 'PUT' && req.url.startsWith('/v1/config/optimization/genetic/horizon_hours') && dir) {
+      try { seen.push(JSON.parse(fs.readFileSync(path.join(dir, 'eos-price-estimates.json'), 'utf8')).horizonHours); } catch { seen.push('fehlt'); }
+    }
+    okHandler(req, res);
+  });
+  try {
+    const env = estimateCtx(mock);
+    dir = await tmpDataDir();
+    env.ctx.dataDir = dir;
+    await createEosForecastBridge(env.ctx).push();
+    assert.deepEqual(seen, [9], 'vor dem PUT vorgemerkt');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'eos-price-estimates.json'), 'utf8')).horizonHours, 9);
+  } finally { await mock.close(); }
+});

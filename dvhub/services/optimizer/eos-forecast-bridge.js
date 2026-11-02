@@ -442,6 +442,10 @@ export function createEosForecastBridge(ctx) {
   let staleRange = null;
   let clearedOnce = false;
   let eosPricesKnown = false;
+  // Steuerzeitraum, mit dem EOS (höchstens) rechnet — für den Web-Prozess im
+  // getrennten Betrieb, dessen eigener Zustand ihn nicht kennt (Codex-
+  // Gegenprüfung bad66c48). Vor dem PUT als Maximum vorgemerkt.
+  let ledgerHorizonH = null;
   const PRICE_KEYS = ['elecprice_marketprice_wh', 'feed_in_tariff_wh'];
   const unionRange = (...ranges) => ranges.filter(Boolean).reduce((acc, r) => (acc
     ? { fromMs: Math.min(acc.fromMs, r.fromMs), untilMs: Math.max(acc.untilMs, r.untilMs) }
@@ -465,6 +469,7 @@ export function createEosForecastBridge(ctx) {
       // beim nächsten Start „bekannt“.
       eosPricesKnown = saved.known === true;
       clearedOnce = saved.clearedOnce === true;
+      ledgerHorizonH = Number(saved.horizonHours) > 0 ? Number(saved.horizonHours) : null;
     } catch (e) {
       if (e?.code !== 'ENOENT' && pushLog) pushLog('eos_price_estimate_error', { error: `eos-price-estimates.json: ${e?.message || e}` });
     }
@@ -473,7 +478,7 @@ export function createEosForecastBridge(ctx) {
   /** Buchführung schreiben; false, wenn das nicht ging (ohne Datei: true). */
   function saveEstimates() {
     if (!estimatesFile) return true;
-    const text = JSON.stringify({ known: eosPricesKnown, clearedOnce, lastEstimateRange, staleRange });
+    const text = JSON.stringify({ known: eosPricesKnown, clearedOnce, lastEstimateRange, staleRange, horizonHours: ledgerHorizonH });
     if (text === savedEstimates) return true;
     try {
       const tmp = `${estimatesFile}.tmp`;
@@ -806,8 +811,12 @@ export function createEosForecastBridge(ctx) {
     if (hours === null) return { skipped: 'no prices' };
     // Immer senden (kostet nichts): nach einem EOS-Neustart kennt EOS den
     // zuletzt gesetzten Wert evtl. nicht mehr. Protokolliert wird nur ein Wechsel.
+    // In der Buchführung vorher das Maximum vormerken (der Web-Prozess liest
+    // ihn dort), nach dem PUT den gesetzten Wert.
+    if (estimatesFile) { ledgerHorizonH = Math.max(ledgerHorizonH ?? 0, hours); saveEstimates(); }
     const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/optimization/genetic/horizon_hours', hours);
     if (!res.ok) return { error: res.error };
+    if (estimatesFile) { ledgerHorizonH = hours; saveEstimates(); }
     if (pushLog && hours !== lastHorizonHours) pushLog('eos_control_horizon', { hours, previous: lastHorizonHours });
     lastHorizonHours = hours;
     if (state?.optimizer) state.optimizer.eosControlHorizonH = hours;
@@ -883,7 +892,9 @@ export function createEosForecastBridge(ctx) {
     if (!ledger.known) return true; // Stand in EOS unbekannt (Neustart, Import gescheitert)
     const from = Math.min(...ledger.ranges.map((r) => r?.fromMs ?? Infinity));
     if (!Number.isFinite(from)) return false;
-    const h = Number(state?.optimizer?.eosControlHorizonH);
+    // Steuerzeitraum: aus der gelesenen Buchführung (Web-Prozess), sonst aus
+    // dem eigenen Zustand; unbekannt → der größtmögliche.
+    const h = 'horizonHours' in ledger ? Number(ledger.horizonHours) : Number(state?.optimizer?.eosControlHorizonH);
     const hours = Number.isFinite(h) && h > 0 ? h : 24;
     // Ein Slot Vorlauf: zwischen Prüfung und Aufruf liegen Ladestand-Abfrage
     // und Anfrage — ein Anstoß kurz vor der Grenze beginnt in EOS evtl. erst
@@ -921,9 +932,13 @@ export function createEosForecastBridge(ctx) {
       let ledger;
       try {
         const saved = JSON.parse(fs.readFileSync(ledgerFile, 'utf8'));
-        ledger = { known: saved?.known === true, ranges: [validRange(saved?.lastEstimateRange), validRange(saved?.staleRange)] };
+        ledger = {
+          known: saved?.known === true,
+          ranges: [validRange(saved?.lastEstimateRange), validRange(saved?.staleRange)],
+          horizonHours: saved?.horizonHours ?? null,
+        };
       } catch {
-        ledger = { known: false, ranges: [] };
+        ledger = { known: false, ranges: [], horizonHours: null };
       }
       if (!estimatesInControlHorizon(Math.max(nowMs, Date.now()), ledger)) return { ok: true, pushed: false };
       return {
