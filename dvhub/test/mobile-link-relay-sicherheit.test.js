@@ -547,6 +547,22 @@ describe('Relay-Speicher: Ausgangspuffer', () => {
     }
   });
 
+  test('zwei größte Box-Antworten dürfen gleichzeitig warten (Gegenprüfung 67ede79a P3)', () => {
+    const guard = relayCore.createSocketGuard({ stallMs: 1e9 });
+    try {
+      const w = fakeWs();
+      const s = guard.wrap(w, { remote: 'A', pingMs: 0 });
+      // Größter weitergeleiteter Rahmen: Box-Rahmen bis 1 MiB, {"t":"data","d":…}.
+      const max = JSON.stringify({ t: 'data', d: 'A'.repeat(DEFAULT_LIMITS.boxFrameBytes - 64) });
+      s.send(max);
+      s.send(max);
+      assert.equal(w.terminated, false, 'zwei größte Antworten trennen ein gesundes Handy');
+      w.flush();
+    } finally {
+      guard.close();
+    }
+  });
+
   test('jeder wartende Rahmen zählt den Pool-Anteil seines Kopfes mit (Gegenprüfung 2339cc36 P3)', () => {
     const guard = relayCore.createSocketGuard({ stallMs: 1e9 });
     try {
@@ -904,7 +920,7 @@ describe('Relay-Speicher: faire Verdrängung im Briefkasten', () => {
     const worst = DEFAULT_LIMITS.maxConnections * 10 * 1024
       + DEFAULT_LIMITS.mailboxTotalBytes + S.outTotal + S.inTotal;
     assert.ok(worst <= 176 * 1024 * 1024, `Worst Case ${Math.round(worst / 1048576)} MiB`);
-    assert.ok(S.outPerConn <= 2 * 1024 * 1024 && S.outPerConn >= DEFAULT_LIMITS.boxFrameBytes + 4096);
+    assert.ok(S.outPerConn <= 2 * 1024 * 1024 + 64 * 1024 && S.outPerConn >= DEFAULT_LIMITS.boxFrameBytes + 4096);
     assert.ok(S.preAuthFrameBytes <= 16 * 1024);
     assert.ok(DEFAULT_LIMITS.mailboxBytesPerSource < DEFAULT_LIMITS.mailboxTotalBytes / 8);
   });

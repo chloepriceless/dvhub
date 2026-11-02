@@ -89,7 +89,7 @@ Grenzen (gezählt in Zeichen des JSON-Textes): Rahmen vom Gerät ≤ 256 KiB, vo
 der Box ≤ 1 MiB, vor der Anmeldung ≤ 8 KiB (größere werden schon am Rahmenkopf
 mit 1009 abgewiesen); höchstens 64 Verbindungen je Quelladresse; Briefkästen nur für
 Geräte auf der Freigabeliste; je 10 s ≤ 200
-Rahmen / 1 MiB vom Gerät. Wer gesendete Rahmen nicht abholt (mehr als 2 MiB
+Rahmen / 1 MiB vom Gerät. Wer gesendete Rahmen nicht abholt (mehr als gut 2 MiB
 Rückstand oder ein Rahmen nicht binnen 30 s + Größe / 16 KiB/s), wird getrennt; unter Speicherdruck weicht
 die Verbindung mit dem größten Rückstand. Ist der Briefkasten-Speicher voll,
 weichen die Einträge der Quelladresse, die am meisten belegt; neue
