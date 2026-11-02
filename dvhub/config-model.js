@@ -4740,6 +4740,11 @@ export function createDefaultConfig() {
       // fc3 = holding register (verify fc3 vs fc4 at the GX). Requires Venus >= 3.50.
       gridSetpointW: { enabled: true, fc: 3, address: 2716, quantity: 2, signed: true, scale: 1, offset: 0, readType: 'int32', wordOrder: 'be' },
       minSocPct: { enabled: true, fc: 4, address: 2901, quantity: 1, signed: false, scale: 0.1, offset: 0 },
+      // Aktive SoC-Grenze (com.victronenergy.settings /Settings/CGwacs/BatteryLife/SocLimit,
+      // nur lesbar, 0,1 %). Darunter entlädt der Multi nicht — mit BatteryLife wandert
+      // sie, ohne liegt sie über der Mindestgrenze 2901 (prod 31.10.: 2901 = 5 %,
+      // 2903 = 10 %). Nur der Entlade-Wächter liest sie (setpoint-follow-watchdog).
+      activeSocLimitPct: { enabled: true, fc: 4, address: 2903, quantity: 1, signed: false, scale: 0.1, offset: 0 },
       // T-0118: live readback of Cerbo reg 2704 (com.victronenergy.settings
       // /Settings/CGwacs/MaxDischargePower). signed int16 so the -1 "unlimited"
       // sentinel decodes correctly (0xFFFF -> -1, not 65535). 0 = hold, positive

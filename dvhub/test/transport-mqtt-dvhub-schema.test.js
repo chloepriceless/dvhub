@@ -10,10 +10,12 @@ import assert from 'node:assert/strict';
 import { buildDvhubTopicMaps, buildVenusTopicMaps, parseMqttPayload, createMqttTransport } from '../transport-mqtt.js';
 
 describe('buildDvhubTopicMaps', () => {
-  it('bildet dieselben Lesepunkte wie Venus ab — ohne die Victron-spezifischen feedExcess-Punkte', () => {
+  it('bildet dieselben Lesepunkte wie Venus ab — ohne die Victron-spezifischen feedExcess-Punkte und die BatteryLife-SoC-Grenze', () => {
     const venus = buildVenusTopicMaps('x');
     const dv = buildDvhubTopicMaps('dvhub');
-    const venusRead = Object.keys(venus.READ_TOPICS).filter(k => !/feedExcessDcPv|dontFeedExcessAcPv/.test(k)).sort();
+    // activeSocLimitPct (31.10.2026): aktive SoC-Grenze aus Victron BatteryLife,
+    // nur für den Entlade-Wächter — fehlt sie, gilt die Mindestgrenze minSocPct.
+    const venusRead = Object.keys(venus.READ_TOPICS).filter(k => !/feedExcessDcPv|dontFeedExcessAcPv|activeSocLimitPct/.test(k)).sort();
     // Zusätzlich NUR im DVhub-Schema: Gesamtwerte für HA/Loxone (Netz, PV, Verbrauch).
     const DVHUB_ONLY = ['meter_total', 'pvTotalInput', 'selfConsumptionW_total'];
     assert.deepEqual(Object.keys(dv.READ_TOPICS).filter((k) => !DVHUB_ONLY.includes(k)).sort(), venusRead);

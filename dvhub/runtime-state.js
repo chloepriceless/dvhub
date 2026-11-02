@@ -34,6 +34,8 @@ const VICTRON_FIELDS = [
   'pvTotalW',
   'gridSetpointW',
   'minSocPct',
+  // Aktive SoC-Grenze des Victron (Reg. 2903), Entlade-Wächter 31.10.2026.
+  'activeSocLimitPct',
   'maxDischargeW',
   'feedExcessDcPv',
   'dontFeedExcessAcPv',

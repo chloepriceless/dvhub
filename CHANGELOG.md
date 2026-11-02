@@ -124,6 +124,19 @@ verweist hierher.
   Entladeverluste über den Akku-Wirkungsgrad selbst; mit dem Aufschlag zählten sie doppelt. DVhubs Preisvergleich und
   Historie rechnen weiter mit Aufschlag; die Hilfetexte sagen das.
 
+### Behoben
+
+- **Entlade-Wächter ohne Fehlalarme bei „Akku halten“, an der SoC-Grenze und bei Laststößen.** Die Meldung
+  „Speicher entlädt nicht“ kam, obwohl alles richtig lief: während EOS „Akku halten“ (z. B. beim E-Auto-Laden), wenn
+  der Akku an der aktiven SoC-Grenze des Victron stand (BatteryLife, Register 2903 — DVhub kannte nur die
+  Mindestgrenze 2901) und wenn kurze Laststöße (Wallbox schaltet) sich zu „zehn Minuten“ summierten. Der Wächter
+  liest jetzt die aktive SoC-Grenze mit, wertet ein Halten durch DVhub und eine Entlade-Sperre als gewollt und
+  meldet nur, wenn die Störung ein ganzes Zehn-Minuten-Fenster prägt (mindestens 80 % der Messpunkte, auch im
+  Mittel Netzbezug über dem Sollwert) und gerade anliegt. Bei Verdacht liest er die Entlade-Sperre (Register 2704)
+  selbst nach, auch nach einem Neustart. Während eines gewollten Haltens gibt es keine falsche Entwarnung mehr; „entlädt
+  wieder“ meldet er nur, wenn der Akku wirklich entladen hat. Das Protokoll nennt Anteil und Mittelwerte. Neuer Schalter
+  `victron.setpointWatchdog.minSuspectShare` (Standard 0,8).
+
 ## [1.0.8] - 2026-10-21
 
 Release nach knapp zwei Wochen, 110 Commits seit 1.0.7. Überblick nach Themen — die Einzelheiten

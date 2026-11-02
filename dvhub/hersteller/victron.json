@@ -120,6 +120,15 @@
       "scale": 0.1,
       "offset": 0
     },
+    "activeSocLimitPct": {
+      "enabled": true,
+      "fc": 4,
+      "address": 2903,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.1,
+      "offset": 0
+    },
     "selfConsumptionW": {
       "enabled": true,
       "fc": 4,

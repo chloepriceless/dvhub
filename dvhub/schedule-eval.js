@@ -1771,6 +1771,15 @@ export function createScheduleEvaluator(ctx) {
       state.ctrl._dcExportLogged = false;
     }
 
+    // Halte-Signal für den Entlade-Wächter (services/setpoint-follow-watchdog.js):
+    // der Halte-Zweig unten merkt sich den Halte-Wert; bestätigt wird er nur, wenn
+    // er auch geschrieben wurde — mit Quelle eos_grid_hold oder als Pin bei
+    // negativem Preis (Akku soll dabei ebenfalls stehen). Ersetzt ein anderer
+    // Pfad den Wert (§14a, Exportmodus, Not-Halt, gescheiterter Write), bleibt
+    // es null (Gegenprüfung 01f4558b). Nach der Schleife ersetzt es das Signal
+    // des letzten Takts.
+    let eosGridHoldThisTick = null;
+    let eosGridHoldConfirmed = null;
     for (const target of ['gridSetpointW', 'chargeCurrentA']) {
       const eff = effectiveTargetValue(target);
       if (eff.value == null) continue;
@@ -1850,6 +1859,7 @@ export function createScheduleEvaluator(ctx) {
         const holdW = known ? Math.max(0, Math.round(netLoadW - marginW)) : 0;
         eff.value = holdW;
         eff.source = 'eos_grid_hold';
+        eosGridHoldThisTick = { at: Date.now(), known, valueW: holdW, evPlanned: !!eff.rule.evPlanned, ruleId: eff.rule.id ?? null };
         const key = `${eff.rule.id}:${known}`;
         if (state.ctrl._eosHoldKey !== key) {
           pushLog('eos_grid_hold', { known, loadW: known ? Math.round(Number(loadRaw)) : null, pvW: known ? Math.round(Number(pvRaw) || 0) : null, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });
@@ -1955,7 +1965,8 @@ export function createScheduleEvaluator(ctx) {
         // Netzladen wirtschaftlich richtig und keine Einspeisung — das eigene
         // Gate (allowGridCharge) entscheidet darüber, nicht der Abregelungspfad.
         if (eff.value <= 0) {
-          await applyControlTarget(target, limit, 'negative_price_protection');
+          const nppRes = await applyControlTarget(target, limit, 'negative_price_protection');
+          if (eosGridHoldThisTick && nppRes?.ok !== false) eosGridHoldConfirmed = eosGridHoldThisTick;
           continue;
         }
       }
@@ -2002,8 +2013,12 @@ export function createScheduleEvaluator(ctx) {
         continue;
       }
 
-      await applyControlTarget(target, eff.value, eff.source);
+      const writeRes = await applyControlTarget(target, eff.value, eff.source);
+      if (target === 'gridSetpointW' && eosGridHoldThisTick && eff.source === 'eos_grid_hold' && writeRes?.ok !== false) {
+        eosGridHoldConfirmed = eosGridHoldThisTick;
+      }
     }
+    state.ctrl.eosGridHold = eosGridHoldConfirmed;
 
     // Peak Shaving Hebel 2 (Akku-Sperre bei Bezugsspitze). Läuft auch bei
     // ausgeschaltetem Feature: eine noch stehende Freigabe wird dann
