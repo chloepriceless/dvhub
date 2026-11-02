@@ -273,20 +273,23 @@ test('T-0003: install.sh schreibt nie durch einen Verweis config.json', () => {
   } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
 });
 
-// Gegenprüfung d5655361 (P3): cert.pem echt, key.pem ein Verweis → der Verweis
-// verschwand still, „TLS Zertifikat: OK“, HTTPS startete danach nie.
-test('TLS: verlinkter Schlüssel → Meldung und neues vollständiges Paar', () => {
+// Gegenprüfung d5655361 (P3) / 2b43209c (P2): ein Verweis key.pem wird mit
+// Meldung entfernt; ein vorhandenes Zertifikat bleibt aber stehen — ein eigener
+// Schlüssel darf anders heißen (tlsKeyPath) und wird nicht überschrieben.
+test('TLS: verlinkter Schlüssel → Meldung, vorhandenes Zertifikat bleibt', () => {
   const t = setup();
   try {
     fs.mkdirSync(path.join(t.cfg, 'tls'));
-    fs.writeFileSync(path.join(t.cfg, 'tls', 'cert.pem'), 'ALT');
+    fs.writeFileSync(path.join(t.cfg, 'tls', 'cert.pem'), 'EIGENES');
+    fs.writeFileSync(path.join(t.cfg, 'tls', 'mein.key'), 'EIGENER-SCHLUESSEL');
     fs.symlinkSync(path.join(t.outside, 'opfer'), path.join(t.cfg, 'tls', 'key.pem'));
     const r = run(t);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /key\.pem war ein Verweis/);
-    assert.match(r.stdout, /neu erzeugt/);
-    assert.match(fs.readFileSync(path.join(t.cfg, 'tls', 'key.pem'), 'utf8'), /PRIVATE KEY/);
-    assert.match(fs.readFileSync(path.join(t.cfg, 'tls', 'cert.pem'), 'utf8'), /CERTIFICATE/);
+    assert.match(r.stderr, /cert\.pem ohne key\.pem/);
+    assert.match(r.stdout, /TLS Zertifikat: OK/);
+    assert.equal(fs.readFileSync(path.join(t.cfg, 'tls', 'cert.pem'), 'utf8'), 'EIGENES');
+    assert.equal(fs.readFileSync(path.join(t.cfg, 'tls', 'mein.key'), 'utf8'), 'EIGENER-SCHLUESSEL');
     assert.equal(fs.readFileSync(path.join(t.outside, 'opfer'), 'utf8'), 'unberuehrt\n');
   } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
 });

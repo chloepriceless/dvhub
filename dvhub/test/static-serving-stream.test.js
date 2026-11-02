@@ -145,3 +145,24 @@ test('Pipelining: wartende Antworten halten nach dem Trennen keine Dateien offen
     assert.ok(after - before <= 1, `offene Deskriptoren vorher ${before}, nachher ${after}`);
   } finally { server.closeAllConnections?.(); server.close(); fs.rmSync(app, { recursive: true, force: true }); }
 });
+
+// Gegenprüfung eac86325 (P2): der close-Listener der wartenden Antwort blieb am
+// Keep-Alive-Socket hängen — er sammelte sich mit jeder Anfrage an.
+test('Pipelining: keine close-Listener sammeln sich am Keep-Alive-Socket', async () => {
+  const net = await import('node:net');
+  const app = setupApp();
+  const { server, port } = await serve(app);
+  let sock = null;
+  server.on('connection', (s) => { sock = s; });
+  try {
+    const c = net.connect(port, '127.0.0.1');
+    await new Promise((r) => c.once('connect', r));
+    let got = '';
+    c.on('data', (d) => { got += d; });
+    c.write('GET /index.html HTTP/1.1\r\nHost: x\r\n\r\n'.repeat(20));
+    for (let i = 0; i < 40 && (got.match(/HTTP\/1\.1 200/g) || []).length < 20; i += 1) await new Promise((r) => setTimeout(r, 50));
+    assert.equal((got.match(/HTTP\/1\.1 200/g) || []).length, 20, 'alle Antworten kamen an');
+    assert.ok(sock.listenerCount('close') < 5, `close-Listener am Socket: ${sock.listenerCount('close')}`);
+    c.destroy();
+  } finally { server.closeAllConnections?.(); server.close(); fs.rmSync(app, { recursive: true, force: true }); }
+});

@@ -762,8 +762,12 @@ export function createAdminRoutes(deps) {
             await npmInstallOmitDev();
             await execFileAsync('node', ['--check', 'server.js'], { cwd: appDir, timeout: 5000 });
             // Erst jetzt speichern (Gegenprüfung 9b949e21, P2): scheitert der
-            // Wechsel, bleibt der bisherige Kanal eingestellt.
-            ctx.saveAndApplyConfig(next);
+            // Wechsel, bleibt der bisherige Kanal eingestellt. Auf dem JETZIGEN
+            // Stand — sonst überschriebe der Klon vom Anfang Änderungen, die
+            // während Checkout/npm gespeichert wurden (Gegenprüfung 368c7010).
+            const fresh = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+            fresh.updateChannel = channel;
+            ctx.saveAndApplyConfig(fresh);
           } catch (switchErr) {
             pushLog('channel_switch_rollback', { reason: switchErr.message, rollbackTo: rollbackRev.slice(0, 7) });
             await updateHelper(['checkout-commit', rollbackRev]);

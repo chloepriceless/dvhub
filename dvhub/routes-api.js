@@ -2585,9 +2585,13 @@ export function createApiRoutes(ctx) {
     // Verbindungsabbruch für immer offen (wartende Antworten bekommen kein
     // close). Darum erst öffnen, wenn die Antwort an der Reihe ist.
     if (!res.socket && typeof res.once === 'function' && res.req?.socket) {
-      const start = () => pipeFileNow(res, file, headers);
+      const sock = res.req.socket;
+      const onClose = () => res.removeListener?.('socket', start);
+      // Beim Start den close-Listener wieder abnehmen — sonst sammelten sich
+      // auf Keep-Alive-Verbindungen Listener an (Gegenprüfung eac86325).
+      const start = () => { sock.removeListener?.('close', onClose); pipeFileNow(res, file, headers); };
       res.once('socket', start);
-      res.req.socket.once?.('close', () => res.removeListener?.('socket', start));
+      sock.once?.('close', onClose);
       return;
     }
     pipeFileNow(res, file, headers);

@@ -651,9 +651,12 @@ dvhub_tls_selfsigned() {  # <konfigurationsordner> <dienstbenutzer> [<vorsatz>�
       rm -f -- "$link"
     done
     find . -maxdepth 1 -type l -exec rm -f -- {} + 2>/dev/null || true
-    # Nur ein vollständiges Paar zählt — fehlt der Schlüssel, startet HTTPS
-    # sonst nie, während hier „OK“ stünde (Gegenprüfung d5655361, P3).
-    [[ -f cert.pem && -f key.pem ]] && exit 3
+    # Vorhandenes Zertifikat bleibt — ein eigener Schlüssel darf anders heißen
+    # (tlsKeyPath, Gegenprüfung 2b43209c). Fehlt key.pem, sagt die Meldung es.
+    if [[ -f cert.pem ]]; then
+      [[ -f key.pem ]] || echo "  WARN: $tls_real/cert.pem ohne key.pem — HTTPS braucht den Schlüssel (key.pem oder tlsKeyPath)" >&2
+      exit 3
+    fi
     stage="$(mktemp -d .neu.XXXXXX)" || exit 1
     trap 'rm -rf -- "$stage"' EXIT
     (

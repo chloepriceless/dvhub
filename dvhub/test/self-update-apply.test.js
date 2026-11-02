@@ -17,7 +17,9 @@ import path from 'node:path';
 import { createAdminRoutes } from '../routes/admin-routes.js';
 import { SEMVER_TAG, GIT_SHA_REF, compareSemverTag, selectLatestSemverTag, assertNoDowngrade } from '../routes-api.js';
 
-export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '9.9.9', tags = 'v9.9.9', stashBusy = false, notAncestor = false, checkoutFails = false } = {}) {
+export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '9.9.9', tags = 'v9.9.9', stashBusy = false, notAncestor = false, checkoutFails = false, rawLive = false } = {}) {
+  const raw = { updateChannel: channel };
+  let lastSaved = null;
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-selfupdate-'));
   const appDir = path.join(repoRoot, 'dvhub');
   fs.mkdirSync(appDir);
@@ -37,6 +39,7 @@ export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '
     }
     if (cmd === 'sudo' && args.includes('stash')) return { stdout: 'No local changes to save\n', stderr: '' };
     const npm = cmd === 'npm' || (cmd === 'sudo' && args.includes('npm-install'));
+    if (npm && rawLive) raw.waehrenddessen = 'gespeichert';
     if (npm && npmFails) {
       const e = new Error('npm killed (timeout)'); e.killed = true; throw e;
     }
@@ -49,8 +52,8 @@ export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '
       getServiceActionsEnabled: () => true,
       getRepoRoot: () => repoRoot,
       getAppDir: () => appDir,
-      getRawCfg: () => ({ updateChannel: channel }),
-      saveAndApplyConfig: () => { calls.push('<save>'); },
+      getRawCfg: () => (rawLive ? raw : { updateChannel: channel }),
+      saveAndApplyConfig: (n) => { calls.push('<save>'); lastSaved = n; },
       getAppVersion: () => ({ version: '1.0.0', versionLabel: '1.0.0' }),
       scheduleServiceRestart: () => { calls.push('<restart>'); },
       getServiceName: () => 'dvhub.service',
@@ -70,7 +73,7 @@ export function makeHarness({ channel = 'dev', npmFails = false, mainVersion = '
     await handle(req, {}, new URL(`http://x${pathname}`));
     return responses.at(-1);
   };
-  return { repoRoot, appDir, calls, post, handle, cleanup: () => fs.rmSync(repoRoot, { recursive: true, force: true }) };
+  return { repoRoot, appDir, calls, post, handle, lastSaved: () => lastSaved, cleanup: () => fs.rmSync(repoRoot, { recursive: true, force: true }) };
 }
 
 const HELPER = 'sudo -n /usr/local/libexec/dvhub-update';
@@ -204,4 +207,16 @@ describe('Gegenprüfung 9b949e21: Kanalwechsel', () => {
       assert.ok(!h.calls.includes('<save>'), h.calls.join('\n'));
     } finally { h.cleanup(); }
   });
+});
+
+// Gegenprüfung 368c7010 (P2): gespeichert wurde der Klon vom Anfang — eine
+// während Checkout/npm gespeicherte Änderung ging verloren.
+it('Kanalwechsel speichert auf dem jetzigen Stand', async () => {
+  const h = makeHarness({ tags: 'v1.0.0', rawLive: true });
+  try {
+    const r = await h.post('/api/admin/update/channel', { channel: 'stable' });
+    assert.equal(r.code, 200, JSON.stringify(r.payload));
+    assert.equal(h.lastSaved().waehrenddessen, 'gespeichert');
+    assert.equal(h.lastSaved().updateChannel, 'stable');
+  } finally { h.cleanup(); }
 });

@@ -82,6 +82,14 @@ json_str() {
   json_str_in "$1" "$RELAY_JSON"
 }
 
+# Ohne Leserecht auf support/ (Aufruf ohne sudo) kann das Skript weder
+# öffnen noch laufende Tunnel finden — das sagen, statt „kein Tunnel“ zu
+# melden (Gegenprüfung 5cdad8bf).
+if [ "$MODE" != "print" ] && [ -d "$SUP_DIR" ] && { [ ! -r "$SUP_DIR" ] || [ ! -x "$SUP_DIR" ]; }; then
+  echo "FEHLER: $SUP_DIR nicht lesbar — bitte mit sudo ausführen." >&2
+  exit 1
+fi
+
 # --- Laufende Tunnel finden (Strix T-0004) ---
 # Nur über PIDs, die die Tunnel selbst aufschreiben — nicht per `pgrep -f
 # <Schlüsselpfad>`: das traf jeden Prozess mit dem Pfad in der Befehlszeile

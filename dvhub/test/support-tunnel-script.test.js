@@ -157,3 +157,17 @@ test('ohne Schlüssel: Öffnen meldet FEHLER, --close sagt „kein Tunnel“', (
     assert.match(close.stdout, /Kein laufender Support-Tunnel/);
   } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
 });
+
+// Gegenprüfung 5cdad8bf (P2): ohne sudo meldete --close „kein Tunnel“, obwohl
+// einer lief (support/ nicht lesbar).
+test('ohne Leserecht auf support/: klare Meldung „mit sudo ausführen“', { skip: process.getuid?.() === 0 ? 'als root immer lesbar' : false }, () => {
+  const t = setup();
+  try {
+    fs.chmodSync(t.sup, 0o000);
+    for (const args of [['--close'], ['--ttl', '5']]) {
+      const r = spawnSync('bash', [SCRIPT, ...args], { encoding: 'utf8', env: t.env, timeout: 15_000 });
+      assert.equal(r.status, 1, args.join(' '));
+      assert.match(r.stderr, /mit sudo ausführen/);
+    }
+  } finally { fs.chmodSync(t.sup, 0o700); fs.rmSync(t.dir, { recursive: true, force: true }); }
+});
