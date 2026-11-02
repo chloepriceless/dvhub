@@ -75,11 +75,23 @@ in `GET /api/mobile-link/status`.
 Grenzen je Verbindung (Rahmengröße, Rahmen und Bytes je 10 s, Geräte je Anlage,
 Briefkasten-Größe) stehen in `DEFAULT_LIMITS` in `relay-core.js`. Sie sind auf
 einen Container mit 256 MiB ausgelegt: höchstens 4000 Verbindungen, Briefkästen
-zusammen 64 MiB (2 MiB je Anlage, gezählt mit Verwaltungsaufwand). Ist ein
-Budget voll, weichen die ältesten Einträge — zuerst die der eigenen Anlage.
+zusammen 64 MiB (2 MiB je Anlage, 4 MiB je Quelladresse, gezählt mit
+Verwaltungsaufwand). Ist ein Budget voll, weichen die ältesten Einträge der
+eigenen Anlage bzw. Quelle; ist alles voll, die der Quelle, die am meisten
+belegt — eine Flut frisch erzeugter Anlagen-Kennungen verdrängt so keine
+fremden Meldungen. Neue Anlagen-Briefkästen je Quelle: 16 sofort, dann einer je
+Minute.
+
+Puffer am WebSocket (`SOCKET_LIMITS`): noch nicht abgeholte Ausgaben höchstens
+2 MiB je Verbindung, 8 MiB je Quelle, 32 MiB gesamt; angefangene Rahmen
+höchstens 4 MiB je Quelle, 32 MiB gesamt. Vor der Anmeldung sind nur Rahmen bis
+8 KiB erlaubt, danach je Rolle (Gerät 256 KiB, Anlage 1 MiB). Reicht ein Budget
+nicht, wird die Verbindung mit dem größten Rückstand getrennt; wer 30 s keinen
+Fortschritt macht (nichts abholt, Rahmen nicht fertig), ebenfalls. Schließt das
+Relay eine Verbindung, hat die Gegenstelle 2 s für den Abschluss.
 
 ## Überwachung
 
-`GET /healthz` → `{"ok":true,"boxesOnline":…,"deviceConnections":…,"mailboxes":…,"mailboxBytes":…}`.
+`GET /healthz` → `{"ok":true,"boxesOnline":…,"deviceConnections":…,"mailboxes":…,"mailboxBytes":…,"mailboxSources":…,"connections":…,"outBufferedBytes":…,"inPartialBytes":…}`.
 Das Log (stdout, JSON) enthält nur Kennungen und Ereignisse wie „Anlage online/offline“,
 nie Inhalte.
