@@ -33,7 +33,7 @@ export function createConfigRoutes(deps) {
     ctx, getCfg, pushLog, licenseService,
     json, downloadJson, readJsonBody,
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
-    requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback,
+    requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback, hasValidBearer,
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, ALLOWED_CONFIG_ROOTS,
   } = deps;
 
@@ -118,6 +118,23 @@ export function createConfigRoutes(deps) {
           });
         }
         body.config = merged.config;
+      }
+      // Geräte-Tausch (Gegenprüfung 8bbfb19d, P1): er übernimmt Kopplungen,
+      // support.relay und Dateien wie support/known_hosts aus dem Paket — dessen
+      // Passwort belegt nur, wer es versiegelt hat, nicht wer es darf. Unter
+      // lanTrust „Offen“ hätte so jedes Gerät im WLAN das Support-Relay samt
+      // Hostschlüssel austauschen können. Deshalb braucht er das API-Token
+      // dieser Box (bzw. ohne Token das Setup-Token).
+      if (url.pathname === '/api/config/import' && body.migrate === true) {
+        const boxToken = ctx.getRawCfg?.()?.apiToken;
+        if (boxToken) {
+          if (!hasValidBearer?.(req)) {
+            pushLog('config_import_migrate_denied', { reason: 'token_required' }, actorContext(req));
+            return json(res, 401, { ok: false, error: 'migrate_token_required', detail: 'Ein Geräte-Tausch braucht das API-Token dieser Box.' });
+          }
+        } else if (!requireBootstrapToken(req, res)) {
+          return;
+        }
       }
       // Fernzugang, Datenspende und Ortsnetz haben eigene Wege — siehe
       // services/config-protected-keys.js. Ein Geräte-Tausch (unten) bringt

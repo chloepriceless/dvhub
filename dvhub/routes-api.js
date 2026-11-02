@@ -3034,6 +3034,7 @@ export function createApiRoutes(ctx) {
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
     requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback,
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, ALLOWED_CONFIG_ROOTS,
+    hasValidBearer,
   });
   const adminRoutes = createAdminRoutes({
     ctx, getCfg, pushLog,

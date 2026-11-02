@@ -3406,6 +3406,9 @@ async function saveConfig(config, source = 'settings', opts = {}) {
   // requires this header to ENABLE optimizer.allowGridCharge/allowGridDischarge —
   // surfaced at the toggle in Einstellungen, not in a one-time setup step.
   if (opts.confirmLegalGate) headers['x-confirm-legal-gate'] = 'true';
+  // Geräte-Tausch: der Server verlangt das API-Token dieser Box
+  // (migrate_token_required) — apiFetch nimmt ein gespeichertes Token, sonst das hier.
+  if (typeof opts.bearer === 'string' && opts.bearer) headers.authorization = `Bearer ${opts.bearer}`;
   const reqBody = buildConfigSaveBody(config, source, opts, currentRawConfig);
   const res = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
@@ -3688,7 +3691,15 @@ async function importConfigFromFile(file) {
     // saveConfig('import') persists server-side, re-hydrates the form with the
     // imported values, sets the main banner and — when restartRequired — shows
     // the "Neustart empfohlen" button. We mirror a concise result here.
-    const ok = await saveConfig(parsed, 'import', { confirmLegalGate, password, migrate });
+    // Geräte-Tausch nur mit dem API-Token dieser Box (Server: migrate_token_required).
+    let bearer = '';
+    if (migrate && !common.getStoredApiToken?.() && typeof window.dvPrompt === 'function') {
+      bearer = await window.dvPrompt('Ein Geräte-Tausch übernimmt Kopplungen, Schlüssel und Support-Zugang. Dafür das API-Token DIESER Box eingeben (steht in /etc/dvhub/config.json unter apiToken):', {
+        title: 'API-Token dieser Box', okLabel: 'Weiter', inputType: 'password'
+      });
+      if (bearer == null) { setImportBanner('Import abgebrochen.', 'info'); return; }
+    }
+    const ok = await saveConfig(parsed, 'import', { confirmLegalGate, password, migrate, bearer });
     setImportBanner(
       ok ? (migrate
         ? 'Geräte-Tausch importiert — bitte DVhub neu starten, damit Lizenz, Kennung und Kopplungen greifen.'

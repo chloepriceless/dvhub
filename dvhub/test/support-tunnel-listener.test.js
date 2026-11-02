@@ -127,3 +127,36 @@ test('Audit: Aktionen über den Support-Listener sind als Support gekennzeichnet
   assert.match(actorContext(makeReq('GET', '/', null, { viaSupport: true })).actor_ua, /^Support-Tunnel \| Browser\/1$/);
   assert.equal(actorContext(makeReq('GET', '/')).actor_ua, 'Browser/1');
 });
+
+// Gegenprüfung 8bbfb19d (P1): ein Gerät im WLAN (lanTrust „Offen“, ohne Token)
+// konnte ein selbst versiegeltes Paket mit migrate:true importieren — der
+// Geräte-Tausch übernahm dann support.relay, Kopplungen und Dateien
+// (support/known_hosts → eigener Hostschlüssel = Mitlesen). Ein Geräte-Tausch
+// braucht jetzt das API-Token dieser Box.
+test('Geräte-Tausch-Import ohne Token der Box → 401, nichts gespeichert; mit Token an der Sperre vorbei', async () => {
+  const { encryptSecrets } = await import('../services/config-secrets-crypto.js');
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, support: { relay: { host: 'support.dvhub.de' } } };
+  const blob = encryptSecrets({ notifications: {} }, 'pw', { files: { 'data/support/known_hosts': Buffer.from('[evil]:22 ssh-ed25519 AAAA\n').toString('base64') } });
+  const body = { config: { httpPort: 8080, support: { relay: { host: 'evil.example.net' } }, _encryptedSecrets: blob }, password: 'pw', migrate: true };
+  const { ctx, saved } = ctxWith(box, {
+    getDataDir: () => '/nonexistent', getConfigPath: () => '/nonexistent/config.json',
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+  });
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/config/import', body), res, new URL('http://x/api/config/import'));
+  assert.equal(res._captured.status, 401, res._captured.body);
+  assert.equal(JSON.parse(res._captured.body).error, 'migrate_token_required');
+  assert.equal(saved.length, 0);
+  // Nur Einstellungen (ohne migrate) bleibt ohne Token möglich — Relay der Box bleibt.
+  const res2 = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/config/import', { ...body, config: { ...body.config, _encryptedSecrets: blob }, migrate: false }), res2, new URL('http://x/api/config/import'));
+  assert.notEqual(res2._captured.status, 401, res2._captured.body);
+  if (saved.length) assert.equal(saved.at(-1).support.relay.host, 'support.dvhub.de');
+  // Mit dem Token der Box kommt der Geräte-Tausch an der Sperre vorbei.
+  const req3 = makeReq('POST', '/api/config/import', { ...body, config: { ...body.config, _encryptedSecrets: blob } });
+  req3.headers.authorization = `Bearer ${'b'.repeat(32)}`;
+  const res3 = mockRes();
+  await routes.handleRequest(req3, res3, new URL('http://x/api/config/import'));
+  assert.notEqual(JSON.parse(res3._captured.body || '{}').error, 'migrate_token_required', res3._captured.body);
+});
