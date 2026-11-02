@@ -606,3 +606,43 @@ test('Auto-Nachimport: anderer Nachimport startet während der Lücken-Suche →
   assert.equal(r.busy, true);
   await manual;
 });
+
+// Gegenprüfung 73df19cf (P3): auch der Voll-Nachimport (inkl. Rückfall auf
+// Tageswerte) bleibt bei einem Konfigurationsstand.
+test('Voll-Nachimport: Site-ID-Wechsel zwischen Fenstern → bleibt bei der alten Anlage', async () => {
+  const { fetchImpl, calls } = fakeVrm();
+  const jobs = [];
+  const store = { ...gapStore(), async writeImportJob(j) { jobs.push(j); return jobs.length; } };
+  let current = { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-full' } };
+  const manager = createHistoryImportManager({
+    store, fetchImpl,
+    waitImpl: async () => { current = { historyImport: { ...current.historyImport, vrmPortalId: '999999' } }; },
+    getTelemetryConfig: () => current,
+  });
+  const r = await manager.backfillHistoryFromConfiguredSource({ mode: 'full', now: '2026-01-29T00:00:00.000Z', maxLookbackDays: 21 });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const stats = calls.filter((p) => p.endsWith('/stats'));
+  assert.ok(stats.length > 3, 'mehrere Fenster');
+  assert.ok(stats.every((p) => p === `/v2/installations/${SITE_ID}/stats`), stats.join(','));
+  assert.ok(jobs.length > 0 && jobs.every((j) => j.sourceAccount === String(SITE_ID)), JSON.stringify(jobs.map((j) => j.sourceAccount)));
+});
+
+test('Voll-Nachimport: Rückfall auf Tageswerte nutzt denselben Konfigurationsstand', async () => {
+  const calls = [];
+  const empty = { ok: true, status: 200, async json() { return { success: true, records: {} }; } };
+  let current = { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-full-days' } };
+  const fetchImpl = async (url) => {
+    const u = new URL(url);
+    calls.push(`${u.pathname}?${u.searchParams.get('interval')}`);
+    if (u.searchParams.get('interval') === 'days') current = { historyImport: { ...current.historyImport, vrmPortalId: '999999' } };
+    if (u.hostname !== 'vrmapi.victronenergy.com') return { ok: true, status: 200, async json() { return { unix_seconds: [], price: [] }; } };
+    return empty;
+  };
+  const jobs = [];
+  const store = { ...gapStore(), async writeImportJob(j) { jobs.push(j); return jobs.length; } };
+  const manager = createHistoryImportManager({ store, fetchImpl, waitImpl: async () => {}, getTelemetryConfig: () => current });
+  await manager.backfillHistoryFromConfiguredSource({ mode: 'full', now: '2026-01-29T00:00:00.000Z', maxLookbackDays: 21 });
+  assert.ok(calls.some((c) => c.endsWith('?days')), 'Rückfall auf Tageswerte lief');
+  assert.ok(calls.every((c) => c.startsWith(`/v2/installations/${SITE_ID}/stats`)), calls.join(','));
+  assert.ok(jobs.every((j) => j.sourceAccount === String(SITE_ID)), JSON.stringify(jobs.map((j) => j.sourceAccount)));
+});
