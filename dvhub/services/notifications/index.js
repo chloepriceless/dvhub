@@ -36,7 +36,9 @@ export const PROVIDER_FACTORIES = {
 export function createProviderFromConfig(name, pCfg) {
   const factory = PROVIDER_FACTORIES[name];
   if (!factory) return null;
-  if (name === 'ntfy' && !isAllowedOutboundUrl(pCfg?.topicUrl)) throw new Error('topic_url_not_allowed');
+  // Leere Adresse: die Fabrik meldet „requires topicUrl“ — „nicht erlaubt“ führte
+  // beim Lesen des Protokolls in die Irre (Prod-Test 02.11.2026).
+  if (name === 'ntfy' && String(pCfg?.topicUrl || '').trim() && !isAllowedOutboundUrl(pCfg.topicUrl)) throw new Error('topic_url_not_allowed');
   return factory(pCfg);
 }
 
