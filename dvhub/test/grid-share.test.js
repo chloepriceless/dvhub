@@ -561,3 +561,18 @@ test('MQTT-Wertalter mit eigener Frist: kurzes telemetryMaxAgeMs macht 30 s alte
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('am Kapazitätsdeckel mit weiterem Zufluss: frischer Ladestand kappt nach 60 s trotzdem (Gegenprüfung c1bc97e0, P3)', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    // Ausfall ohne Ladestand: Zähler läuft bis an den Deckel 10 kWh.
+    for (let i = 1; i <= 120; i += 1) t.tick({ nowMs: t0 + i * 60_000, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 6_000, errors: { soc: 'timeout' } } });
+    near(t.summary().gridWh, 10_000, 0.01);
+    // Ladestand wieder frisch bei 50 %, Netzladen läuft weiter → nach 60 s auf 5,1 kWh (+ Zufluss bis zur Kappung).
+    for (let i = 121; i <= 124; i += 1) t.tick({ nowMs: t0 + i * 60_000, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 6_000 } });
+    assert.ok(t.summary().gridWh <= 5_100 + 200, `${t.summary().gridWh}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

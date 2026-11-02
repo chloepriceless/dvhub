@@ -216,6 +216,7 @@ export function createFreezeWatchdog(ctx) {
   let prevMeterAt = 0;
   let lastReconnectAt = 0;
   let reconnectsThisEpisode = 0;
+  let lastEnabled = null;
 
   /**
    * Sample aus dem Live-State bauen — NUR Felder, deren Read in diesem Zyklus
@@ -315,6 +316,14 @@ export function createFreezeWatchdog(ctx) {
       if (state.victron) { state.victron.freeze = null; state.victron.freezeSuspect = null; }
       return null;
     }
+    // Wechsel nur-Erkennung ↔ Wächter (Kanalwechsel): frische Episode, sonst
+    // fehlte nach stable → dev bei schon erkanntem Verdacht der Alarm
+    // (Gegenprüfung c1bc97e0, P3).
+    if (lastEnabled !== null && lastEnabled !== opts.enabled) {
+      fstate = createFreezeState();
+      reconnectsThisEpisode = 0;
+    }
+    lastEnabled = opts.enabled;
     if (!opts.enabled) return detectOnly(nowMs, opts);
     if (state.victron) state.victron.freezeSuspect = null;
 

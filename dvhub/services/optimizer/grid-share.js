@@ -393,7 +393,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     const r = stepGridShare(st.gridWh, { dtMs, ...flows, socPct: socUncertain ? null : socPct, capacityWh, capAllowed });
     if (uncertain) st.day.uncertainInWh = (st.day.uncertainInWh || 0) + r.inWh;
     // Ladestand liegt unter dem Zählerstand: erst merken, nach 60 s kappen.
-    if (!r.overUpper || r.lossWh > 0) overSinceMs = null;
+    // Neu warten nur nach einer echten Ladestand-Kappung — der Kapazitätsdeckel
+    // allein darf die Bestätigung nicht ständig zurücksetzen (Gegenprüfung c1bc97e0).
+    if (!r.overUpper || (capAllowed && r.lossWh > 0)) overSinceMs = null;
     else if (overSinceMs == null) overSinceMs = nowMs;
     st.gridWh = r.gridWh;
     if (r.storedWh != null) { st.storedWh = r.storedWh; st.share = r.share; }

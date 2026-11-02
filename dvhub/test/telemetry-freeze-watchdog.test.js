@@ -348,3 +348,40 @@ test('Stable-Kanal: nur Erkennung (freezeSuspect), keine Eingriffe', () => {
   poll(200, false);
   assert.equal(state.victron.freezeSuspect, null, 'Erholung räumt auf');
 });
+
+// Gegenprüfung c1bc97e0 (P3): Wechsel stable → dev bei aktivem Verdacht muss den
+// Wächter mit frischer Episode starten — sonst fehlt der Alarm.
+test('Kanalwechsel stable → dev bei stehenden Werten: Alarm kommt', () => {
+  let channel = 'stable';
+  const state = {
+    meter: { ok: true, updatedAt: 0, grid_total_w: -1000, error: null },
+    victron: { soc: 60, batteryPowerW: 2000, pvTotalW: 3000, fieldUpdatedAt: {} }
+  };
+  const logs = [];
+  const wd = createFreezeWatchdog({
+    state,
+    getCfg: () => ({ updateChannel: channel, victron: { freezeWatchdog: { freezeMs: 60000, minSamples: 10 } }, optimizer: { batteryCapacityWh: 60000 } }),
+    transport: { type: 'modbus', dropConnections: () => 1 },
+    pushLog: (event, details, level) => logs.push({ event, details, level }),
+    notificationService: { sendDirect: async () => ({ sent: 1 }) },
+    monitoringAlertPush: () => Promise.resolve()
+  });
+  const poll = (i, frozen) => {
+    const now = 1_000_000 + i * 1000;
+    state.meter.ok = true;
+    state.meter.updatedAt = now;
+    state.meter.grid_total_w = frozen ? -1000 : -1000 - i;
+    state.victron.batteryPowerW = frozen ? 2000 : 2000 + i;
+    state.victron.pvTotalW = frozen ? 3000 : 3000 + i;
+    state.victron.fieldUpdatedAt = { soc: now, batteryPowerW: now, pvPowerW: now };
+    wd.tick(now);
+  };
+  for (let i = 0; i < 20; i += 1) poll(i, false);
+  for (let i = 20; i < 120; i += 1) poll(i, true);
+  assert.equal(state.victron.freezeSuspect?.active, true);
+  channel = 'dev';
+  for (let i = 120; i < 300; i += 1) poll(i, true);
+  assert.equal(state.victron.freeze?.active, true);
+  assert.equal(state.victron.freezeSuspect, null);
+  assert.equal(logs.filter((l) => l.event === 'telemetry_freeze_detected').length, 1, 'Alarm nach dem Wechsel');
+});
