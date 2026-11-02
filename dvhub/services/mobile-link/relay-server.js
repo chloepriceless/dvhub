@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { createRelay, wrapWebSocket } from './relay-core.js';
+import { createRelay, createSocketGuard } from './relay-core.js';
 
 export const WS_PATH = '/v1/ws';
 
@@ -95,23 +95,28 @@ export function startRelayServer({
   limits = process.env.RELAY_MAX_BOXES ? { maxBoxes: Number(process.env.RELAY_MAX_BOXES) } : {},
   log = (event, data) => console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...data })),
   pingMs = 25_000,
+  // Grenzen für Ausgangspuffer und angefangene Rahmen (relay-core.js SOCKET_LIMITS).
+  socketLimits = {},
 } = {}) {
   const relay = createRelay({ name, allowBox, limits, log });
+  const guard = createSocketGuard(socketLimits);
   const server = http.createServer((req, res) => {
     if (req.url === '/healthz') {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ ok: true, relay: name, ...relay.stats() }));
+      res.end(JSON.stringify({ ok: true, relay: name, ...relay.stats(), ...guard.stats() }));
       return;
     }
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found\n');
   });
-  // maxPayload knapp über der größten erlaubten Nachricht; den Rest prüft relay-core.
+  // maxPayload = Obergrenze (größter Box-Rahmen). Vor der Anmeldung und je
+  // Rolle gilt die engere Grenze des Wächters, den Rest prüft relay-core.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 + 4096 });
   server.on('upgrade', (req, socket, head) => {
     if (req.url !== WS_PATH) { socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      relay.attach(wrapWebSocket(ws, { pingMs }), { remote: clientAddress(req) });
+      const remote = clientAddress(req);
+      relay.attach(guard.wrap(ws, { remote, pingMs }), { remote });
     });
   });
   const ready = new Promise((resolve) => server.listen(port, host, () => resolve(server.address())));
@@ -119,8 +124,10 @@ export function startRelayServer({
     relay,
     server,
     ready,
+    socketStats: () => guard.stats(),
     close() {
       relay.close();
+      guard.close();
       wss.close();
       return new Promise((resolve) => server.close(() => resolve()));
     },
