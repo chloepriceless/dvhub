@@ -1096,11 +1096,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
 
   // Eine Reihe roh lesen (z. B. tariff_import_ct_kwh, Bezugspreis vom
   // Stromanbieter: ~35 000 Zeilen je Jahr) — ohne Zeitgrenzen alles.
-  // timeoutMs (Anbieterpreise, 02.11.2026): Der Server bricht die Abfrage nach
-  // dieser Zeit selbst ab (SET LOCAL statement_timeout) — die Verbindung kommt
-  // sauber zurück, statt hängend im Pool zu bleiben.
-  async function listSeriesSamples({ seriesKey, scope = null, start = null, end = null, limit = 500000, timeoutMs = null } = {}) {
-    const text = `
+  async function listSeriesSamples({ seriesKey, scope = null, start = null, end = null, limit = 500000 } = {}) {
+    const result = await pool.query(`
       SELECT ts_utc, source, resolution_seconds, value_num
       FROM timeseries_samples
       WHERE series_key = $1
@@ -1110,26 +1107,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         AND value_num IS NOT NULL
       ORDER BY ts_utc ASC
       LIMIT $5
-    `;
-    const params = [String(seriesKey), scope, start ? isoTimestamp(start) : null, end ? isoTimestamp(end) : null, Number(limit)];
-    let result;
-    const ms = Math.floor(Number(timeoutMs));
-    if (ms > 0 && typeof pool.connect === 'function') {
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        await client.query(`SET LOCAL statement_timeout = ${ms}`);
-        result = await client.query(text, params);
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK').catch(() => {});
-        throw error;
-      } finally {
-        client.release();
-      }
-    } else {
-      result = await pool.query(text, params);
-    }
+    `, [String(seriesKey), scope, start ? isoTimestamp(start) : null, end ? isoTimestamp(end) : null, Number(limit)]);
     return result.rows.map((row) => ({
       ts: new Date(row.ts_utc).toISOString(),
       source: row.source,

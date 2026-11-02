@@ -48,12 +48,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // liefern heute und morgen, ältere Slots kommen nicht wieder.
 const PERSISTED_KEEP_MS = 3 * DAY_MS;
 const DB_WAIT_MS = 10_000;
-// Längste Zeit für das Lesen der gespeicherten Preise (~35 000 Zeilen je Jahr,
-// normal < 1 s): Danach bricht der Server die Abfrage ab (statement_timeout,
-// Verbindung kommt sauber zurück) und der nächste Takt versucht es neu. Ein
-// Lesen, das gar nicht zurückkommt (z. B. halb offene Verbindung), bleibt das
-// einzige — es wird kein zweites daneben gestellt.
-const LOAD_MAX_MS = 10 * 60_000;
 
 // Auf die Datenbank höchstens `ms` warten: Der Pool kennt keine Abfrage-
 // Zeitgrenze, ein hängender Abruf hielte sonst `inFlight` für immer.
@@ -168,7 +162,6 @@ export function createTariffProviderService(ctx, deps = {}) {
   const fetchImpl = deps.fetch || globalThis.fetch;
   const dataDir = deps.dataDir || '/var/lib/dvhub';
   const dbWaitMs = deps.dbWaitMs || DB_WAIT_MS;
-  const loadMaxMs = deps.loadMaxMs || LOAD_MAX_MS;
   const cacheFile = path.join(dataDir, 'tariff-provider', 'lichtblick-token.json');
   const clients = {
     tibber: deps.fetchTibber || ((s) => fetchTibberPrices({ token: s.tibber.token, homeId: s.tibber.homeId, fetchImpl })),
@@ -195,6 +188,7 @@ export function createTariffProviderService(ctx, deps = {}) {
   let inFlight = null;
   let dbLoading = null;
   let loadTimeoutLogged = null;   // je hängendem Lesen nur eine Warnung
+  let loadFailed = false;         // Laden aus der Datenbank gescheitert (Web-Prozess holt nach)
   let lastTestMs = 0;
   let identity = null;
   let reloadTimer = null;
@@ -245,7 +239,7 @@ export function createTariffProviderService(ctx, deps = {}) {
     if (dbLoading) return dbLoading;
     dbLoading = (async () => {
       try {
-        const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE, timeoutMs: loadMaxMs });
+        const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE });
         const bySource = new Map();
         const keepFrom = now() - PERSISTED_KEEP_MS;
         for (const row of rows) {
@@ -268,6 +262,7 @@ export function createTariffProviderService(ctx, deps = {}) {
         st.dbLoaded = true;
         await refreshEstimate();
       } catch (error) {
+        loadFailed = true;
         log('tariff_provider_db_load_error', { error: error.message }, 'warn');
       } finally {
         dbLoading = null;
@@ -279,7 +274,12 @@ export function createTariffProviderService(ctx, deps = {}) {
   // Laden mit Zeitgrenze (Takt und Abruf): Takt und Abruf warten höchstens
   // dbWaitMs. Das Lesen selbst läuft weiter (kein zweites daneben, das Pool-
   // Verbindungen bände) und wird übernommen, sobald es fertig ist; bis dahin
-  // wird nicht geschrieben (writeSamples).
+  // wird nicht geschrieben (writeSamples), getState().logging = 'pending'.
+  // Scheitert es, stellt der nächste Takt es neu. Kommt es nie zurück (halb
+  // offene TCP-Verbindung zu einer entfernten Datenbank; über den Unix-Socket
+  // nicht möglich), bleibt es bis zum Neustart 'pending' — sichtbar in den
+  // Einstellungen. Eine Zeitgrenze auf der Abfrage selbst bräuchte eine eigene
+  // Verbindung samt Fehler-Listener (Gegenprüfung 8e701a3e) und lohnt hier nicht.
   async function loadFromDbBounded() {
     if (st.dbLoaded || typeof ctx.telemetryStore?.listSeriesSamples !== 'function') return;
     const pending = loadFromDb();
@@ -528,6 +528,12 @@ export function createTariffProviderService(ctx, deps = {}) {
   async function reloadRecent() {
     const store = ctx.telemetryStore;
     if (typeof store?.listSeriesSamples !== 'function') return;
+    // Ist das Laden beim Start gescheitert, hier alles nachholen (sonst fehlten
+    // dem Web-Prozess die Preise älter als zwei Tage bis zum Neustart).
+    if (!st.dbLoaded && loadFailed) {
+      await loadFromDb();
+      if (st.dbLoaded) return;
+    }
     const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE, start: new Date(now() - 2 * 86_400_000).toISOString() });
     const current = settings().name;
     putProviderSlots(current, rows.filter((r) => r.source === current)

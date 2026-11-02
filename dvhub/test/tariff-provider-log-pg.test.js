@@ -116,32 +116,3 @@ test('PG: Platz-Wache ohne TimescaleDB entfernt alte 5-s-Rohwerte, Anbieterpreis
     assert.deepEqual(left, ['price_ct_kwh', SERIES_KEY]);
   });
 });
-
-// Gegenprüfung 80c6929b (P2): Das Lesen der gespeicherten Preise bricht der
-// Server nach timeoutMs selbst ab (statement_timeout) — die Verbindung kommt
-// sauber und ohne Zeitgrenze zurück, statt hängend im Pool zu bleiben.
-test('PG: listSeriesSamples mit timeoutMs bricht serverseitig ab, Verbindung bleibt nutzbar', { skip }, async () => {
-  const client = new pg.Client({ connectionString: URL });
-  await client.connect();
-  try {
-    await client.query(`CREATE TEMP VIEW timeseries_samples AS
-      SELECT 'tariff_import_ct_kwh'::text AS series_key, 'tariff'::text AS scope, 'lichtblick'::text AS source,
-             now() AS ts_utc, 900 AS resolution_seconds, 30.0::float8 + length(pg_sleep(1)::text) AS value_num`);
-    let released = 0;
-    const pool = {
-      query: (text, params) => client.query(text, params),
-      connect: async () => ({ query: (t, p) => client.query(t, p), release() { released += 1; } })
-    };
-    const store = createTelemetryStorePg(pool);
-    await assert.rejects(
-      store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: 'tariff', timeoutMs: 100 }),
-      (e) => e.code === '57014'
-    );
-    assert.equal(released, 1, 'Verbindung zurückgegeben');
-    assert.equal((await client.query('SHOW statement_timeout')).rows[0].statement_timeout, '0', 'Zeitgrenze nur für diese Abfrage');
-    const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: 'tariff', timeoutMs: 5000 });
-    assert.equal(rows.length, 1);
-  } finally {
-    await client.end();
-  }
-});

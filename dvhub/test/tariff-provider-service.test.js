@@ -486,21 +486,18 @@ test('Takt: langsames Lesen der Datenbank → Zeitgrenze und Warnung, Ergebnis k
   }
 });
 
-// Gegenprüfung e5a3efa1/80c6929b (P2): Das Lesen hat eine serverseitige
-// Zeitgrenze (timeoutMs); bricht der Server ab, versucht der nächste Takt es
-// neu. Ein Lesen, das nie zurückkommt, bleibt das einzige (kein Pool-Stau),
-// und der Zustand zeigt, dass nicht geloggt wird.
-test('Lesen mit Zeitgrenze: Abbruch → neuer Versuch; nie fertig → kein zweites daneben, Zustand pending', { timeout: 5000 }, async () => {
+// Gegenprüfung e5a3efa1/80c6929b/8e701a3e: Scheitert das Lesen, versucht der
+// nächste Abruf es neu. Ein Lesen, das nie zurückkommt, bleibt das einzige
+// (kein Pool-Stau), und der Zustand zeigt, dass nicht geloggt wird.
+test('Lesen scheitert → neuer Versuch; nie fertig → kein zweites daneben, Zustand pending', { timeout: 5000 }, async () => {
   const { ctx, written } = makeCtx();
   let calls = 0;
-  const seen = [];
   const stored = dayPrices('2026-11-01');
   const rows = () => stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh }));
-  let mode = 'cancel';
-  ctx.telemetryStore.listSeriesSamples = (q) => {
+  let mode = 'fail';
+  ctx.telemetryStore.listSeriesSamples = () => {
     calls += 1;
-    seen.push(q.timeoutMs);
-    if (mode === 'cancel') { const e = new Error('canceling statement due to statement timeout'); e.code = '57014'; return Promise.reject(e); }
+    if (mode === 'fail') return Promise.reject(new Error('Verbindung weg'));
     if (mode === 'hang') return new Promise(() => {});
     return Promise.resolve(rows());
   };
@@ -508,19 +505,17 @@ test('Lesen mit Zeitgrenze: Abbruch → neuer Versuch; nie fertig → kein zweit
   const svc = createTariffProviderService(ctx, {
     now: () => now,
     dbWaitMs: 10,
-    loadMaxMs: 1234,
     fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
   });
   const keepAlive = setTimeout(() => {}, 3000);
   try {
     await svc.refresh();
-    assert.equal(seen[0], 1234, 'Zeitgrenze geht an die Datenbank');
     assert.equal(written.length, 0);
     assert.equal(svc.getState().logging, 'pending', 'Zustand zeigt: wird nicht geloggt');
     mode = 'ok';
     now += HOUR;
     await svc.refresh();
-    assert.equal(calls, 2, 'neuer Versuch nach dem Abbruch');
+    assert.equal(calls, 2, 'neuer Versuch nach dem Fehler');
     assert.equal(written.length, 96, 'danach geloggt (nur morgen neu)');
     assert.equal(svc.getState().logging, 'ok');
 
@@ -537,4 +532,25 @@ test('Lesen mit Zeitgrenze: Abbruch → neuer Versuch; nie fertig → kein zweit
   } finally {
     clearTimeout(keepAlive);
   }
+});
+
+// Gegenprüfung 8e701a3e (P3): Der getrennte Web-Prozess holt ein beim Start
+// gescheitertes Laden beim nächsten Nachlesen vollständig nach.
+test('Web-Prozess: gescheitertes Laden beim Start wird beim Nachlesen vollständig nachgeholt', async () => {
+  const { ctx } = makeCtx();
+  const queries = [];
+  let fail = true;
+  ctx.telemetryStore.listSeriesSamples = async (q) => {
+    queries.push(q);
+    if (fail) throw new Error('db weg');
+    return [{ ts: '2026-10-20T10:00:00.000Z', source: 'lichtblick', resolutionSeconds: 900, value: 31 }];
+  };
+  const svc = createTariffProviderService(ctx, { now: () => Date.parse('2026-11-01T15:00:00Z') });
+  await svc.loadFromDb();
+  assert.equal(svc.getState().dbLoaded, false);
+  fail = false;
+  await svc.reloadRecent();
+  assert.equal(queries.at(-1).start, undefined, 'vollständig, nicht nur zwei Tage');
+  assert.equal(providerSlotAt(Date.parse('2026-10-20T10:05:00Z')).ctKwh, 31, 'alter Preis da');
+  assert.equal(svc.getState().dbLoaded, true);
 });
