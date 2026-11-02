@@ -133,6 +133,37 @@ export function createAdminRoutes(deps) {
     for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
     return 0;
   };
+  // Commit-Zeit (ms) aus einer dev-Version <X.Y.Z>-dev.<JJJJMMTThhmmss>.<sha>.
+  const devCommitMs = (v) => {
+    const m = /-dev\.(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\./.exec(String(v || ''));
+    return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
+  };
+  /**
+   * Wäre die Installation von target (Kanal channel) ein Rückschritt gegenüber
+   * dem laufenden Paket? Kleinere Grundversion — oder gleiche Grundversion, aber
+   * der laufende dev-Stand ist jünger als das Ziel (dev-Box mit Fixes nach dem
+   * Tag → stable-Paket derselben Nummer; Gegenprüfung 1d4ca47d, P2). Liefert
+   * die 400-Antwort oder null. target 'latest' fragt den Helfer (check).
+   */
+  const packageDowngrade = async (channel, target, allowDowngrade) => {
+    if (allowDowngrade) return null;
+    const chk = await releaseHelper(['check', channel], 60000);
+    const cur = chk?.current?.version || null;
+    const latest = chk?.latest || {};
+    const to = target === 'latest' ? (latest.version || null) : target;
+    if (!cur || !to || to === cur) return null;
+    const c = baseVersionCmp(to, cur);
+    let older = c === -1;
+    if (c === 0) {
+      const curMs = devCommitMs(cur);
+      if (curMs != null) {
+        const toMs = devCommitMs(to) ?? (to === latest.version ? Date.parse(latest.date || '') : NaN);
+        older = !Number.isFinite(toMs) || toMs < curMs;
+      }
+    }
+    if (!older) return null;
+    return { ok: false, mode: 'package', error: 'downgrade_blocked', detail: `downgrade_blocked: ${to} ist älter als ${cur}`, current: cur, target: to };
+  };
 
   return async function handleAdminRoute(req, res, url) {
     // --- Datenbank-Backup herunterladen (pg_dump custom, streamed) ---
@@ -598,6 +629,15 @@ export function createAdminRoutes(deps) {
           }
           target = m[1];
         }
+        // Dieselbe Rückschritt-Sperre wie beim Kanalwechsel (Gegenprüfung 1d4ca47d,
+        // P2): nach Kanalwechsel + Rückweg meldet check sonst ein „Update“, das
+        // zurückstuft.
+        let blocked;
+        try { blocked = await packageDowngrade(channel, target, body?.allowDowngrade === true); } catch (e) { return releaseError(res, e, 'update_apply_check_error'); }
+        if (blocked) {
+          pushLog('update_apply_rejected', { reason: 'downgrade_blocked', current: blocked.current, requested: blocked.target, mode: 'package' });
+          return json(res, 400, blocked);
+        }
         return startReleaseJob(res, ['install', target, channel], 'update_package_started', { channel, target });
       }
       try {
@@ -802,15 +842,11 @@ export function createAdminRoutes(deps) {
           // sortieren vor dem gleichnamigen Release — das gilt nicht als
           // Rückschritt; eine kleinere Grundversion schon: dann wie beim git-Weg
           // nur mit allowDowngrade (Strix R-0003, Gegenprüfung bf393d9f, P2).
-          if (!allowDowngrade) {
-            let chk;
-            try { chk = await releaseHelper(['check', channel], 60000); } catch (e) { return releaseError(res, e, 'update_channel_check_error'); }
-            const cur = chk?.current?.version || null;
-            const target = chk?.latest?.version || null;
-            if (cur && target && baseVersionCmp(target, cur) === -1) {
-              pushLog('update_channel_rejected', { channel, reason: 'downgrade_blocked', current: cur, target, mode: 'package' });
-              return json(res, 400, { ok: false, mode: 'package', error: 'downgrade_blocked', detail: `downgrade_blocked: ${target} ist älter als ${cur}`, current: cur, target });
-            }
+          let blocked;
+          try { blocked = await packageDowngrade(channel, 'latest', allowDowngrade); } catch (e) { return releaseError(res, e, 'update_channel_check_error'); }
+          if (blocked) {
+            pushLog('update_channel_rejected', { channel, reason: 'downgrade_blocked', current: blocked.current, target: blocked.target, mode: 'package' });
+            return json(res, 400, blocked);
           }
           // Kanal erst speichern, wenn der Helfer den Auftrag angenommen hat —
           // lehnt er ab (409/500), bleibt der bisherige Kanal eingestellt. Auf

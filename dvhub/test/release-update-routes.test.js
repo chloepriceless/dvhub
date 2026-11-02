@@ -226,12 +226,34 @@ describe('Paket-Box: Update über dvhub-release', () => {
     } finally { h.cleanup(); }
   });
 
-  it('Kanalwechsel dev → stable derselben Grundversion ist kein Rückschritt', async () => {
-    const check = { ...CHECK, current: { version: '1.0.9-dev.20261102000000.aaaaaaaa', git_sha: SHA, channel: 'dev' }, latest: { version: '1.0.9', git_sha: SHA, available: true } };
-    const h = harness({ channel: 'dev', release: { version: '1.0.9-dev.20261102000000.aaaaaaaa', channel: 'dev' }, helper: { check, install: { ok: true, started: true } } });
+  it('Kanalwechsel dev → stable derselben Grundversion: gleicher Commit erlaubt, dev mit späteren Commits gesperrt', async () => {
+    // Gegenprüfung 1d4ca47d (P2): 1.0.8-dev.<nach dem Tag> → stable 1.0.8 verlöre Commits.
+    const dev = '1.0.9-dev.20261102121042.aaaaaaaa';
+    const same = { ...CHECK, current: { version: dev, git_sha: SHA, channel: 'dev' }, latest: { version: '1.0.9', git_sha: SHA, date: '2026-11-02T12:10:42.000Z', available: true } };
+    const h = harness({ channel: 'dev', release: { version: dev, channel: 'dev' }, helper: { check: same, install: { ok: true, started: true } } });
     try {
       const r = await h.call('POST', '/api/admin/update/channel', { channel: 'stable' });
       assert.equal(r.code, 200, JSON.stringify(r.payload));
+    } finally { h.cleanup(); }
+    const older = { ...same, latest: { ...same.latest, date: '2026-10-21T19:32:00.000Z' } };
+    const h2 = harness({ channel: 'dev', release: { version: dev, channel: 'dev' }, helper: { check: older, install: { ok: true, started: true } } });
+    try {
+      const r = await h2.call('POST', '/api/admin/update/channel', { channel: 'stable' });
+      assert.equal(r.code, 400, JSON.stringify(r.payload));
+      assert.equal(r.payload.error, 'downgrade_blocked');
+    } finally { h2.cleanup(); }
+  });
+
+  it('Update (apply) auf Paket-Box: Rückschritt nur mit allowDowngrade (Gegenprüfung 1d4ca47d)', async () => {
+    const check = { ...CHECK, current: { version: '1.0.10-dev.20261102000000.aaaaaaaa', git_sha: SHA, channel: 'dev' }, latest: { version: '1.0.9', git_sha: SHA, available: true } };
+    const h = harness({ channel: 'stable', release: { version: '1.0.10-dev.20261102000000.aaaaaaaa', channel: 'dev' }, helper: { check, install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/apply', {});
+      assert.equal(r.code, 400, JSON.stringify(r.payload));
+      assert.equal(r.payload.error, 'downgrade_blocked');
+      assert.ok(!h.calls.some((c) => c.includes(' install ')));
+      const ok = await h.call('POST', '/api/admin/update/apply', { allowDowngrade: true });
+      assert.equal(ok.code, 200, JSON.stringify(ok.payload));
       assert.ok(h.calls.includes(`sudo -n ${RELEASE_HELPER} install latest stable`));
     } finally { h.cleanup(); }
   });

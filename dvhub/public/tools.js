@@ -854,12 +854,25 @@ async function applyUpdate() {
   if (btn) { btn.disabled = true; btn.textContent = 'Update läuft...'; }
   setBanner('updateBanner', pinRef ? `Commit ${pinRef} wird installiert — bitte warten...` : 'Update wird installiert — bitte warten...', 'info');
   try {
-    const res = await apiFetch('/api/admin/update/apply', {
+    const postApply = (allowDowngrade) => apiFetch('/api/admin/update/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(pinRef ? { ref: pinRef } : {})
+      body: JSON.stringify({ ...(pinRef ? { ref: pinRef } : {}), ...(allowDowngrade ? { allowDowngrade: true } : {}) })
     });
-    const data = await res.json();
+    let data = await (await postApply(false)).json();
+    // Paket-Box: ein „Update“, das zurückstufen würde, nur nach Bestätigung.
+    if (!data.ok && data.error === 'downgrade_blocked') {
+      if (await window.dvConfirm(
+        `Das Update wäre ein Rückschritt: installiert ist ${data.current}, Ziel ist ${data.target || data.requested}.\n\nTrotzdem die ältere Fassung installieren?`,
+        { title: 'Ältere Fassung installieren?', okLabel: 'Zurückstufen', variant: 'danger' }
+      )) {
+        data = await (await postApply(true)).json();
+      } else {
+        setBanner('updateBanner', `Kein Update: ${data.target || data.requested} wäre älter als ${data.current}.`, 'info');
+        if (btn) { btn.disabled = false; btn.textContent = 'Update installieren & neu starten'; }
+        return;
+      }
+    }
     if (data.ok && data.mode === 'package') {
       document.getElementById('updateActions').style.display = 'none';
       const st = await trackReleaseJob('Update');
@@ -921,6 +934,14 @@ async function switchUpdateChannel(newChannel) {
       }
     }
     if (data.ok && data.mode === 'package') {
+      // Kanal ließ sich nicht speichern (Auftrag läuft trotzdem): vor dem
+      // Verfolgen sichtbar machen — nach Erfolg lädt die Seite neu.
+      if (data.warning) {
+        await window.dvConfirm(
+          `Die Installation läuft, aber der Kanal ${label} konnte nicht gespeichert werden (${data.warning}).\n\nBitte nach dem Neustart den Kanal erneut wählen, sonst prüft DVhub weiter im bisherigen Kanal.`,
+          { title: 'Kanal nicht gespeichert', okLabel: 'Verstanden', variant: 'danger' }
+        );
+      }
       const st = await trackReleaseJob(`Wechsel zu ${label}`);
       if (!st || st.state !== 'ok') revertDropdown();
     } else if (data.ok) {
