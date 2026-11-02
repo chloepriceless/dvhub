@@ -180,9 +180,11 @@ export function createPoller(ctx) {
     // — vor der Auflösung wäre die Adresse null (Lesen von Register-Müll).
     if (conf.sunspec && conf.address == null) return;
     try {
+      let sourceAt = null;
       if (transport.type === 'mqtt') {
         const result = await transport.readPoint(name);
         state.victron[name] = result.mqttValue;
+        sourceAt = Number(result?.ts);
       } else {
         const regs = await transport.mbRequest(conf);
         state.victron[name] = pointFromRegs(regs, conf);
@@ -195,6 +197,12 @@ export function createPoller(ctx) {
       // NICHT als Frische-Mass — ein eingefrorener SoC nach Comms-Ausfall behielte
       // seinen Wert. fieldUpdatedAt reflektiert echte Aktualitaet je Feld.
       (state.victron.fieldUpdatedAt ??= {})[name] = _now;
+      // MQTT liefert aus dem Cache: der Abfrage-Stempel oben ist „jetzt“, der
+      // Wert kann bis staleMaxAgeMs alt sein (0 = ohne Grenze). Die Empfangszeit
+      // des Werts steht daneben — der Netzstrom-Zähler bucht mit altem Wert nicht
+      // ab (grid-share.js, Gegenprüfung Release 1.0.9). Modbus: Wert = Abfrage.
+      if (sourceAt > 0) (state.victron.fieldSourceAt ??= {})[name] = sourceAt;
+      else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt[name];
     } catch (e) {
       state.victron.errors[name] = e.message;
       state.victron.updatedAt = Date.now();

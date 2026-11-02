@@ -304,3 +304,190 @@ test('Sperre folgt der Einstellung: mit MiSpeL-Option keine Sperre trotz Anteil'
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Unsichere Akkuwerte: nie abbuchen (Gegenprüfung Release 1.0.9, P2) ─────────
+//
+// Fallen Akkuleistung oder Ladestand aus (Lesefehler, alter Stempel, Einfrier-
+// Wächter, Kreuzprobe), behält polling.js den letzten Wert. Würde der Zähler
+// damit weiter Entladung abbuchen, fiele die Akku-Einspeisesperre, obwohl
+// niemand weiß, ob der Akku entladen hat. Zubuchen (Netz → Akku) zählt weiter.
+
+const lockedCfg = () => ({ optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } });
+
+/** Zähler mit 200 Wh Netzstrom im Akku (Sperre an), Stempel frisch zu t0 + 60 s. */
+function charged200(dir, { logs = [] } = {}) {
+  const t = createGridShareTracker({ getCfg: lockedCfg, pushLog: (e, d, l) => logs.push({ e, d, l }), dataDir: dir });
+  const t0 = Date.parse('2026-11-02T08:00:00Z');
+  t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 10_000 });
+  t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 10_000 });
+  near(t.summary().gridWh, 200, 0.01);
+  assert.equal(t.isLocked(), true);
+  return { t, t0: t0 + 60_000, logs };
+}
+
+test('Reproduktion: 74 min Entladung mit Lesefehler, altem Stempel und Einfrier-Wächter bucht nichts ab, Sperre bleibt', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0, logs } = charged200(dir);
+    const old = t0 - 60_000;
+    for (let i = 1; i <= 74; i += 1) {
+      t.tick({
+        nowMs: t0 + i * 60_000, socPct: 50, capacityWh: 10_000,
+        victron: {
+          batteryDirectUseW: 6_000,
+          errors: { batteryPowerW: 'timeout', soc: 'timeout' },
+          fieldUpdatedAt: { batteryPowerW: old, soc: old },
+          freeze: { active: true },
+        },
+      });
+    }
+    near(t.summary().gridWh, 200, 0.01);
+    assert.equal(t.isLocked(), true, 'Sperre darf bei unbekannter Entladung nicht fallen');
+    assert.equal(t.summary().today.batteryToHomeFromGridKwh, 0);
+    assert.equal(logs.filter((l) => l.e === 'grid_share_uncertain').length, 1, 'einmal je Episode, nicht je Takt');
+    assert.equal(t.summary().today.uncertainMinutes, 74);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('jedes Unsicherheits-Merkmal allein verhindert das Abbuchen — auch für den zweiten Akku; frische Werte buchen ab', () => {
+  const cases = [
+    ['Lesefehler Akkuleistung', (n) => ({ errors: { batteryPowerW: 'timeout' }, fieldUpdatedAt: { batteryPowerW: n, soc: n } })],
+    ['Lesefehler Ladestand', (n) => ({ errors: { soc: 'timeout' }, fieldUpdatedAt: { batteryPowerW: n, soc: n } })],
+    ['Einfrier-Wächter', (n) => ({ freeze: { active: true }, fieldUpdatedAt: { batteryPowerW: n, soc: n } })],
+    ['Kreuzprobe widerspricht', (n) => ({ sourceMismatch: { active: true }, fieldUpdatedAt: { batteryPowerW: n, soc: n } })],
+    ['Akkuleistung veraltet', (n) => ({ fieldUpdatedAt: { batteryPowerW: n - 120_000, soc: n } })],
+    ['Ladestand veraltet', (n) => ({ fieldUpdatedAt: { batteryPowerW: n, soc: n - 120_000 } })],
+    ['MQTT-Wert alt trotz frischem Abfrage-Stempel', (n) => ({ fieldUpdatedAt: { batteryPowerW: n, soc: n }, fieldSourceAt: { batteryPowerW: n - 120_000 } })],
+  ];
+  for (const [name, flags] of cases) {
+    const dir = mkDir();
+    try {
+      const { t, t0 } = charged200(dir);
+      const n = t0 + 60_000;
+      t.tick({
+        nowMs: n, socPct: 50, capacityWh: 10_000,
+        victron: { batteryDirectUseW: 6_000, batteryToGridW: 3_000, secondBatteryDirectUseW: 2_000, secondBatteryToGridW: 2_000, ...flags(n) },
+      });
+      near(t.summary().gridWh, 200, 0.01);
+      assert.equal(t.isLocked(), true, name);
+      assert.equal(t.summary().toHomeW, 0, `${name}: keine Live-Leistung aus Netzstrom`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  // Gegenprobe: dieselbe Entladung mit frischen Werten bucht ab.
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    const n = t0 + 60_000;
+    t.tick({
+      nowMs: n, socPct: 50, capacityWh: 10_000,
+      victron: { batteryDirectUseW: 6_000, secondBatteryDirectUseW: 2_000, errors: {}, fieldUpdatedAt: { batteryPowerW: n - 5_000, soc: n - 5_000 }, fieldSourceAt: { batteryPowerW: n - 2_000 } },
+    });
+    assert.ok(t.summary().gridWh < 200, `${t.summary().gridWh}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unsicher: Zubuchen zählt weiter, der Ladestand kappt nicht', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    const bad = (n) => ({ errors: { soc: 'timeout' }, fieldUpdatedAt: { batteryPowerW: n, soc: n } });
+    t.tick({ nowMs: t0 + 60_000, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 6_000, ...bad(t0 + 60_000) } });
+    near(t.summary().gridWh, 300, 0.01);
+    // Ladestand 0 % (Fehlwert) über mehrere Minuten: keine Kappung.
+    for (let i = 2; i <= 6; i += 1) t.tick({ nowMs: t0 + i * 60_000, socPct: 0, capacityWh: 10_000, victron: bad(t0 + i * 60_000) });
+    near(t.summary().gridWh, 300, 0.01);
+    assert.equal(t.summary().today.lossFromGridKwh, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('zweite Anlage einbezogen, aber ihre Werte veraltet: nichts abbuchen', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    const n = t0 + 60_000;
+    t.tick({ nowMs: n, socPct: 50, capacityWh: 10_000, secondBatteryStale: true, victron: { batteryDirectUseW: 6_000, fieldUpdatedAt: { batteryPowerW: n, soc: n } } });
+    near(t.summary().gridWh, 200, 0.01);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Episode: Ende erst nach 60 s sicherer Werte im Log, Tageszeile und CSV nennen die Minuten ohne Abbuchung', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0, logs } = charged200(dir);
+    const bad = (n) => ({ errors: { batteryPowerW: 'timeout' }, fieldUpdatedAt: { batteryPowerW: n, soc: n } });
+    const good = (n) => ({ errors: {}, fieldUpdatedAt: { batteryPowerW: n, soc: n } });
+    // Flattern: unsicher, kurz sicher, wieder unsicher → eine Episode.
+    t.tick({ nowMs: t0 + 30_000, socPct: 50, capacityWh: 10_000, victron: bad(t0 + 30_000) });
+    t.tick({ nowMs: t0 + 40_000, socPct: 50, capacityWh: 10_000, victron: good(t0 + 40_000) });
+    t.tick({ nowMs: t0 + 50_000, socPct: 50, capacityWh: 10_000, victron: bad(t0 + 50_000) });
+    assert.equal(logs.filter((l) => l.e === 'grid_share_uncertain').length, 1);
+    const start = logs.find((l) => l.e === 'grid_share_uncertain');
+    assert.deepEqual(start.d.reasons, ['battery_power_error']);
+    assert.equal(start.l, 'warn');
+    for (let i = 1; i <= 7; i += 1) t.tick({ nowMs: t0 + 50_000 + i * 10_000, socPct: 50, capacityWh: 10_000, victron: good(t0 + 50_000 + i * 10_000) });
+    assert.equal(logs.filter((l) => l.e === 'grid_share_uncertain_end').length, 1);
+    // Tageswechsel → Tageszeile mit den Minuten ohne Abbuchung.
+    t.tick({ nowMs: Date.parse('2026-11-02T23:00:10Z'), socPct: 50, capacityWh: 10_000, victron: good(Date.parse('2026-11-02T23:00:10Z')) });
+    const day = fs.readFileSync(path.join(dir, GRID_SHARE_PROTOCOL_FILE), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((l) => l.event === 'day');
+    assert.ok(day);
+    assert.ok(day.uncertainMinutes > 0, JSON.stringify(day));
+    assert.match(t.protocolCsv().split('\n')[0], /Akkuwerte unsicher min/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MQTT-Weg: der Poller merkt sich das Alter des MQTT-Werts, der Zähler bucht mit altem Wert nicht ab', async () => {
+  const { createMqttTransport } = await import('../transport-mqtt.js');
+  const { createPoller } = await import('../polling.js');
+  // staleMaxAgeMs 0 = Transport-Frische aus: der Wert wird geliefert und frisch
+  // gestempelt, obwohl er 10 min alt ist.
+  const tr = createMqttTransport({ host: '', mqtt: { schema: 'dvhub', topicPrefix: 'dvhub', staleMaxAgeMs: 0 } });
+  const old = Date.now() - 600_000;
+  tr.ingest('grid_total', 0);
+  tr.ingest('battery_power', -6_000, old);
+  tr.ingest('battery_soc', 50);
+  const state = {
+    meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0, error: null },
+    victron: { errors: {}, updatedAt: 0, fieldUpdatedAt: {} },
+    dvRegs: new Array(8).fill(0),
+    energy: { day: '2026-11-02', importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0, lastTs: 0 },
+  };
+  const pcfg = {
+    pollMs: 500, gridPositiveMeans: 'grid_import',
+    points: { soc: { enabled: true }, batteryPowerW: { enabled: true } },
+    epex: { timezone: 'UTC' }, userEnergyPricing: {}, dvControl: {},
+  };
+  const poller = createPoller({
+    state, getCfg: () => pcfg, transport: tr, pushLog: () => {},
+    energyPath: path.join(os.tmpdir(), 'grid-share-mqtt-test.json'), onPollComplete: () => {},
+    epexNowNext: () => ({ current: { ct_kwh: 0 } }),
+  });
+  await poller.requestPoll();
+  assert.equal(state.victron.batteryPowerW, -6_000);
+  assert.ok(state.victron.batteryDirectUseW > 0, 'Entladung kommt im Fluss an');
+  assert.ok(Date.now() - state.victron.fieldUpdatedAt.batteryPowerW < 5_000, 'Abfrage-Stempel ist frisch');
+  assert.equal(state.victron.fieldSourceAt?.batteryPowerW, old, 'Alter des MQTT-Werts');
+
+  const dir = mkDir();
+  try {
+    const t = createGridShareTracker({ getCfg: lockedCfg, pushLog: () => {}, dataDir: dir });
+    const n = Date.now();
+    t.tick({ nowMs: n - 60_000, victron: {}, socPct: 50, capacityWh: 10_000 });
+    t.tick({ nowMs: n - 1, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 10_000 });
+    t.tick({ nowMs: n + 59_999, victron: { ...state.victron }, socPct: 50, capacityWh: 10_000 });
+    near(t.summary().gridWh, 200, 0.01);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

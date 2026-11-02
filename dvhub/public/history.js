@@ -2809,12 +2809,12 @@ async function loadGridShareCard() {
     const days = protocol.filter((e) => e.event === 'day').slice(-31).reverse();
     const t = data.today || {};
     const row = (d) => `<tr><td>${escapeHtml(d.date || '')}</td><td>${fmtGs(d.gridToBatteryKwh)}</td><td>${fmtGs(d.batteryToHomeFromGridKwh)}</td>`
-      + `<td>${fmtGs(d.batteryToGridFromGridKwh)}</td><td>${fmtGs(d.lossFromGridKwh)}</td><td>${fmtGs(d.endGridKwh ?? d.gridKwh)}</td><td>${Number(d.lockedMinutes) || 0}</td></tr>`;
+      + `<td>${fmtGs(d.batteryToGridFromGridKwh)}</td><td>${fmtGs(d.lossFromGridKwh)}</td><td>${fmtGs(d.endGridKwh ?? d.gridKwh)}</td><td>${Number(d.lockedMinutes) || 0}</td><td>${Number(d.uncertainMinutes) || 0}</td></tr>`;
     const todayRow = row({ ...t, endGridKwh: data.gridKwh, date: `${t.date || ''} (läuft)` });
     const body = byId('historyGridShareBody');
     if (body) {
       body.innerHTML = '<table class="history-summary-table"><thead><tr><th>Tag</th><th>Netz→Akku kWh</th><th>Akku→Haus aus Netzstrom kWh</th>'
-        + '<th>Akku→Netz aus Netzstrom kWh</th><th>Verlust kWh</th><th>Netzstrom Tagesende kWh</th><th>Sperre min</th></tr></thead>'
+        + '<th>Akku→Netz aus Netzstrom kWh</th><th>Verlust kWh</th><th>Netzstrom Tagesende kWh</th><th>Sperre min</th><th title="Akkuwerte unsicher (Lesefehler, veraltet, eingefroren): in dieser Zeit wurde nichts abgebucht">Unsicher min</th></tr></thead>'
         + `<tbody>${todayRow}${days.map(row).join('')}</tbody></table>`
         + '<p class="card-sub">Netz→Akku erhöht den Netzstrom-Anteil, Entladen senkt ihn anteilig (Anteil × Entladung), Verluste anteilig. '
         + 'Solange mehr als die Schwelle im Akku ist, speist der Akku nicht ins Netz ein; PV-Einspeisung bleibt. „Akku→Netz aus Netzstrom“ soll 0 sein '

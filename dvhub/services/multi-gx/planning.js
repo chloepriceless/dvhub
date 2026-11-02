@@ -102,6 +102,18 @@ export function followerBatteryForFlow(ctx, nowMs = Date.now()) {
   return { batteryPowerW: Number(s.batteryPowerW), socPct: f.socPct };
 }
 
+/**
+ * Zweite Anlage steckt im Ladestand der Planung (planningSocPct), aber ihre
+ * Akkuwerte sind nicht aktuell (aelter als 20 s oder Akkuleistung unbekannt) —
+ * dann fehlt ihre Entladung im Energiefluss und ihr Ladestand ist alt. Der
+ * Netzstrom-Zaehler bucht dann nichts ab (Gegenpruefung Release 1.0.9, P2).
+ * Nicht einbezogene Anlage: false (das deckt secondGxMissing ab).
+ */
+export function followerBatteryStale(ctx, nowMs = Date.now()) {
+  const cfg = ctx?.getCfg?.();
+  return follower(ctx, cfg) != null && followerBatteryForFlow(ctx, nowMs) == null;
+}
+
 /** Ladestand fuer die Planung: beide Akkus nach Kapazitaet gewichtet. */
 export function planningSocPct(ctx) {
   const cfg = ctx?.getCfg?.();

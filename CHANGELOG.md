@@ -40,7 +40,8 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   unter 0,05 kWh; ein Regelpuffer von höchstens 100 W bleibt) — PV-Überschuss geht weiter hinaus; EOS plant dann
   keinen Akku-Verkauf. Leitstand „davon Netzstrom X kWh (Y %)“, Historie mit Verlauf
   und Tagesprotokoll (CSV), `/api/battery/grid-share`. Der Zähler übersteht Neustart und Update; ein ausdrückliches
-  Zurücksetzen wird protokolliert.
+  Zurücksetzen wird protokolliert. Bei unsicheren Akkuwerten (Lesefehler, veraltet, eingefroren) wird nichts
+  abgebucht; das Tagesprotokoll nennt die Minuten.
 
 - **Signierte Update-Pakete für native Installationen**: Statt eines git-Checkouts mit `npm install` auf der Box
   holt `dvhub-release` je Version und Architektur (arm64, armhf, amd64) ein fertiges Paket von GitHub, prüft

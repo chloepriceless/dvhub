@@ -4,7 +4,7 @@
 // (gleiches Objekt, keine Kopie).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planningCfg, planningSocPct, planningMinSocPct, secondGxMissing } from '../services/multi-gx/planning.js';
+import { planningCfg, planningSocPct, planningMinSocPct, secondGxMissing, followerBatteryStale } from '../services/multi-gx/planning.js';
 import { buildEosBatteries, buildEosInverters } from '../services/optimizer/eos-config-sync.js';
 
 function ctxWith({ follower = { online: true, socPct: 80 }, enabled = true } = {}) {
@@ -66,4 +66,16 @@ test('secondGxMissing: nur wirksam eingerichtete, aber nicht einbezogene zweite 
   const noHost = ctxWith({ follower: { online: null, socPct: null } });
   noHost.cfg.multiGx.host = '  ';
   assert.equal(secondGxMissing(noHost), false, 'keine Adresse');
+});
+
+test('followerBatteryStale: zweite Anlage im Ladestand, aber ihre Akkuwerte nicht aktuell (Netzstrom-Zähler)', () => {
+  const now = Date.parse('2026-11-02T08:00:00Z');
+  const fresh = ctxWith({ follower: { online: true, socPct: 80, batteryPowerW: -2000, updatedAt: now - 5_000 } });
+  assert.equal(followerBatteryStale(fresh, now), false, 'frisch');
+  const old = ctxWith({ follower: { online: true, socPct: 80, batteryPowerW: -2000, updatedAt: now - 25_000 } });
+  assert.equal(followerBatteryStale(old, now), true, 'älter als 20 s');
+  const noPower = ctxWith({ follower: { online: true, socPct: 80, batteryPowerW: null, updatedAt: now } });
+  assert.equal(followerBatteryStale(noPower, now), true, 'Akkuleistung unbekannt');
+  assert.equal(followerBatteryStale(ctxWith({ follower: { online: false, socPct: null } }), now), false, 'nicht einbezogen → secondGxMissing');
+  assert.equal(followerBatteryStale(ctxWith({ enabled: false }), now), false, 'aus');
 });

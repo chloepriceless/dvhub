@@ -198,7 +198,7 @@ import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { setpointFollowHeartbeat } from './services/setpoint-follow-watchdog.js';
 import { energyBalanceBattery } from './services/energy-balance-battery.js';
 import { createGridShareTracker } from './services/optimizer/grid-share.js';
-import { planningCfg as gridSharePlanningCfg, planningSocPct as gridSharePlanningSocPct, secondGxMissing } from './services/multi-gx/planning.js';
+import { planningCfg as gridSharePlanningCfg, planningSocPct as gridSharePlanningSocPct, secondGxMissing, followerBatteryStale } from './services/multi-gx/planning.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
@@ -2303,11 +2303,16 @@ const telemetryReady = (async () => {
       // die Kappung keinen Netzstrom abschreibt (Gegenprüfung 8465a540, P2).
       // Ohne eingestellte Kapazität derselbe Rückfall wie bei EOS (8000 Wh).
       const followerMissing = secondGxMissing(ctx, cfg);
+      // Akkuwerte (Lesefehler, Stempel, Einfrier-Wächter, Kreuzprobe) prüft der
+      // Zähler selbst an `victron`; die zweite Anlage hat eigene Stempel
+      // (state.multiGx) — veraltet heißt auch dort: nichts abbuchen.
+      const nowMs = Date.now();
       const gs = ctx.gridShare?.tick?.({
-        nowMs: Date.now(),
+        nowMs,
         victron,
         socPct: followerMissing ? null : gridSharePlanningSocPct(ctx),
         capacityWh: followerMissing ? null : (Number(gridSharePlanningCfg(ctx)?.optimizer?.batteryCapacityWh) || 8000),
+        secondBatteryStale: followerBatteryStale(ctx, nowMs),
       });
       if (gs && victron) {
         victron.batteryGridShareWh = Math.round(gs.gridWh);
