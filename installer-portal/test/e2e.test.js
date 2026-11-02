@@ -249,7 +249,11 @@ test('E2E Pull-Modell: Code → Claim → Freigabe → Poll → Tunnel-Kommando 
   assert.equal((await call(pv('/api/totp/enable'), { method: 'POST', cookie, body: { code: '000000' } })).j.error, 'code_falsch', 'falscher Code wird abgewiesen');
   // Aktivieren mit dem Code des vorigen Zeitschritts: der aktuelle bleibt für
   // den Login-Test, der nächste für die Passkey-Bestätigung frei.
-  const enabled = await call(pv('/api/totp/enable'), { method: 'POST', cookie, body: { code: totp(sec.j.secret, Date.now() - 30_000) } });
+  // Aktivierungs-Code EINMAL berechnen: unten wird genau dieser Code erneut
+  // probiert (Replay) — zweimal Date.now() lag sonst über einer 30-s-Grenze
+  // in verschiedenen Fenstern (Gate-Lauf 02.11.2026: totp_falsch).
+  const activationCode = totp(sec.j.secret, Date.now() - 30_000);
+  const enabled = await call(pv('/api/totp/enable'), { method: 'POST', cookie, body: { code: activationCode } });
   assert.equal(enabled.status, 200);
   assert.equal((await call(pv('/api/me'), { cookie })).status, 401, 'alte Session ist nach 2FA-Aktivierung ungültig');
   cookie = enabled.cookie;
@@ -260,7 +264,7 @@ test('E2E Pull-Modell: Code → Claim → Freigabe → Poll → Tunnel-Kommando 
   assert.equal((await call(pv('/api/login'), { method: 'POST', body: { name: 'Solar Meier', password: 'test1234ab', totp: '111111' } })).j.error, 'totp_falsch');
   // Der Aktivierungs-Code ist verbraucht (Replay-Schutz) — Login mit dem
   // aktuellen Code (der Aktivierungs-Code war der des vorigen Schritts).
-  assert.equal((await call(pv('/api/login'), { method: 'POST', body: { name: 'Solar Meier', password: 'test1234ab', totp: totp(sec.j.secret, Date.now() - 30_000) } })).j.error, 'totp_bereits_benutzt');
+  assert.equal((await call(pv('/api/login'), { method: 'POST', body: { name: 'Solar Meier', password: 'test1234ab', totp: activationCode } })).j.error, 'totp_bereits_benutzt');
   assert.equal((await call(pv('/api/login'), { method: 'POST', body: { name: 'Solar Meier', password: 'test1234ab', totp: totp(sec.j.secret) } })).status, 200);
 
   // Passkey registrieren (simulierter Authenticator, rpId = 127.0.0.1)
