@@ -2507,15 +2507,32 @@ export function createApiRoutes(ctx) {
   }
 
   // ── Static file serving ──────────────────────────────────────────────
+  // W1 (Strix-Fund 30.10.2026): existsSync ist auch für Verzeichnisse wahr;
+  // das Lesen scheiterte dann verzögert mit EISDIR — ungefangen beendete das
+  // den Prozess (ein Aufruf von /assets genügte). Nur reguläre Dateien
+  // ausliefern, Lesefehler des Streams abfangen.
+  function isServableFile(file) {
+    try { return fs.statSync(file).isFile(); } catch { return false; }
+  }
+
+  function pipeFile(res, file) {
+    const stream = fs.createReadStream(file);
+    stream.on('error', () => {
+      if (!res.headersSent) text(res, 404, 'not found');
+      else res.destroy?.();
+    });
+    stream.pipe(res);
+  }
+
   function servePage(res, filename) {
     const appDir = ctx.getAppDir();
     const publicDir = path.resolve(appDir, 'public');
     const file = path.resolve(publicDir, filename);
     if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
-    if (!fs.existsSync(file)) return text(res, 404, 'not found');
+    if (!isServableFile(file)) return text(res, 404, 'not found');
     const cacheControl = (filename === 'setup.html' || filename === 'onboarding.html') ? 'no-store' : 'no-cache';
     res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', 'cache-control': cacheControl });
-    fs.createReadStream(file).pipe(res);
+    pipeFile(res, file);
   }
 
   function serveStatic(req, res) {
@@ -2540,7 +2557,7 @@ export function createApiRoutes(ctx) {
     const publicDir = path.resolve(appDir, 'public');
     const file = path.resolve(publicDir, reqPath.replace(/^\/+/, ''));
     if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
-    if (!fs.existsSync(file)) return text(res, 404, 'not found');
+    if (!isServableFile(file)) return text(res, 404, 'not found');
     const ext = path.extname(file).toLowerCase();
     const mime = {
       '.html': 'text/html; charset=utf-8',
@@ -2561,7 +2578,7 @@ export function createApiRoutes(ctx) {
       cacheControl = 'no-cache';
     }
     res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': mime, ...(cacheControl && { 'cache-control': cacheControl }) });
-    fs.createReadStream(file).pipe(res);
+    pipeFile(res, file);
   }
 
   // ── T-INSTALLER-PORTAL: /api/installer/* ──────────────────────────────
