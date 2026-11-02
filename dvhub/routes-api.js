@@ -7,6 +7,7 @@ import { createHeavyQueue, SKIPPED as HEAVY_SKIPPED } from './services/heavy-que
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import { once } from 'node:events';
+import { pipeline } from 'node:stream';
 import { STREAM_BUCKET_SECONDS } from './telemetry-store-pg.js';
 import http from 'node:http';
 import os from 'node:os';
@@ -2515,13 +2516,22 @@ export function createApiRoutes(ctx) {
     try { return fs.statSync(file).isFile(); } catch { return false; }
   }
 
-  function pipeFile(res, file) {
+  // Gegenprüfung zu W1: Kopfzeilen erst, wenn die Datei offen ist — sonst
+  // gab eine unlesbare Datei (EACCES, zwischen stat und open gelöscht) einen
+  // Verbindungsabbruch statt 404. pipeline statt pipe: bricht der Client ab,
+  // wird der Lese-Stream zerstört (pipe ließ den Dateideskriptor offen —
+  // ohne Token wiederholbar bis EMFILE).
+  function pipeFile(res, file, headers) {
     const stream = fs.createReadStream(file);
-    stream.on('error', () => {
+    stream.once('error', () => {
       if (!res.headersSent) text(res, 404, 'not found');
       else res.destroy?.();
     });
-    stream.pipe(res);
+    stream.once('open', () => {
+      res.writeHead(200, headers);
+      pipeline(stream, res, () => { /* Abbruch/Fehler: pipeline hat beide Seiten geschlossen */ });
+    });
+    res.once?.('close', () => { if (!stream.destroyed) stream.destroy(); });
   }
 
   function servePage(res, filename) {
@@ -2531,8 +2541,7 @@ export function createApiRoutes(ctx) {
     if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
     if (!isServableFile(file)) return text(res, 404, 'not found');
     const cacheControl = (filename === 'setup.html' || filename === 'onboarding.html') ? 'no-store' : 'no-cache';
-    res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', 'cache-control': cacheControl });
-    pipeFile(res, file);
+    pipeFile(res, file, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', 'cache-control': cacheControl });
   }
 
   function serveStatic(req, res) {
@@ -2577,8 +2586,7 @@ export function createApiRoutes(ctx) {
     } else if (ext === '.js' || ext === '.css') {
       cacheControl = 'no-cache';
     }
-    res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': mime, ...(cacheControl && { 'cache-control': cacheControl }) });
-    pipeFile(res, file);
+    pipeFile(res, file, { ...SECURITY_HEADERS, 'content-type': mime, ...(cacheControl && { 'cache-control': cacheControl }) });
   }
 
   // ── T-INSTALLER-PORTAL: /api/installer/* ──────────────────────────────
