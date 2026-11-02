@@ -64,7 +64,7 @@ test('Anzeige: Hauptzahl Rest heute, klein der ganze Tag, Akku und Verfügbar', 
   const v = energyBalanceView(energyBalanceSummary({ pvRestKwh: 3, loadRestKwh: 12.5, pvDayKwh: 10, loadDayKwh: 20.5, battery: PROD }));
   assert.equal(v.main, '-9.5 kWh');
   assert.equal(v.positive, false);
-  assert.equal(v.day, 'Rest heute · ganzer Tag: -10.5 kWh');
+  assert.equal(v.day, 'ganzer Tag: -10.5 kWh');
   assert.equal(v.battery, '🔋 43 % = 33.1 kWh (29.3 nutzbar)');
   assert.equal(v.available, 'Verfügbar: +19.8 kWh');
   assert.match(v.title, /Rest heute/);
@@ -72,7 +72,7 @@ test('Anzeige: Hauptzahl Rest heute, klein der ganze Tag, Akku und Verfügbar', 
   const plus = energyBalanceView(energyBalanceSummary({ pvRestKwh: 8, loadRestKwh: 3, pvDayKwh: 20, loadDayKwh: 9, battery: null }));
   assert.equal(plus.main, '+5.0 kWh');
   assert.equal(plus.positive, true);
-  assert.equal(plus.day, 'Rest heute · ganzer Tag: +11.0 kWh');
+  assert.equal(plus.day, 'ganzer Tag: +11.0 kWh');
   assert.equal(plus.battery, null);
   assert.equal(plus.available, null);
 });
@@ -133,4 +133,10 @@ test('Kachel zählt PV- und Verbrauchs-Rest mit restKwhFrom', () => {
   const body = src.slice(start, src.indexOf('\n  }\n', start));
   assert.match(body, /pvKwhRest = restKwhFrom\(pvSlots, pvH, nowMs\)/);
   assert.match(body, /loadKwhRest = restKwhFrom\(loadSlots, loadH, nowMs\)/);
+});
+
+test('Überschrift der Kachel nennt „Rest heute“ (Hauptzahl)', () => {
+  const html = fs.readFileSync(path.resolve(import.meta.dirname, '../public/index.html'), 'utf8');
+  const i = html.indexOf('id="surplus-daily-card"');
+  assert.match(html.slice(i, i + 300), /<span class="kicker-mini">&Uuml;berschuss \/ Defizit &middot; Rest heute<\/span>/);
 });

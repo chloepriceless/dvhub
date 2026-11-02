@@ -999,7 +999,7 @@
     return {
       main: signed(sum.restKwh),
       positive: sum.restKwh >= 0,
-      day: 'Rest heute · ganzer Tag: ' + signed(sum.dayKwh),
+      day: 'ganzer Tag: ' + signed(sum.dayKwh),
       battery: battery,
       available: sum.availableKwh !== null ? 'Verfügbar: ' + signed(sum.availableKwh) : null,
       title: ENERGY_BALANCE_TITLE,
