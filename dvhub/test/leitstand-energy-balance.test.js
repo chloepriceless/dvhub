@@ -140,3 +140,61 @@ test('Überschrift der Kachel nennt „Rest heute“ (Hauptzahl)', () => {
   const i = html.indexOf('id="surplus-daily-card"');
   assert.match(html.slice(i, i + 300), /<span class="kicker-mini">&Uuml;berschuss \/ Defizit &middot; Rest heute<\/span>/);
 });
+
+// --- Gegenprüfung 527906fc ----------------------------------------------------
+// P1: Liefert nur ein Prognosedienst, liegen seine Rohzeilen im State (Solcast
+// 30 min, VRM stündlich), /api/forecast meldet trotzdem resolution '15min'.
+// Die Slot-Dauer kommt deshalb aus den Zeitabständen der Daten.
+test('restKwhFrom: Slot-Dauer aus den Daten, nicht aus der gemeldeten Auflösung', () => {
+  const { restKwhFrom } = loadHelpers();
+  const T = Date.UTC(2026, 10, 2, 10, 0);
+  const half = [0, 1, 2, 3].map((i) => ({ start: new Date(T + i * 1800000).toISOString(), powerW: 1000 }));
+  assert.equal(restKwhFrom(half, 0.25, T), 2); // 4 × 30 min × 1 kW, nicht 1
+  const hourly = [0, 1, 2].map((i) => ({ start: new Date(T + i * 3600000).toISOString(), powerW: 2000 }));
+  assert.equal(restKwhFrom(hourly, 0.25, T + 30 * 60000), 5); // 1 h anteilig + 2 h
+  // ein einzelner Slot: gemeldete Auflösung
+  assert.equal(restKwhFrom([{ start: new Date(T).toISOString(), powerW: 4000 }], 0.25, T), 1);
+});
+
+// P2: readDailyTotals liefert ohne VRM-Zeilen 0 statt null — dann gibt es
+// keinen „ganzen Tag“, die Zeile entfällt.
+test('ganzer Tag nur mit beiden Tagessummen', () => {
+  const { energyBalanceSummary, energyBalanceView } = loadHelpers();
+  const s = energyBalanceSummary({ pvRestKwh: 5, loadRestKwh: 2, pvDayKwh: null, loadDayKwh: 8, battery: null });
+  assert.equal(s.dayKwh, null);
+  assert.equal(energyBalanceView(s).day, null);
+});
+
+test('Kachel nimmt VRM-Tagessummen nur mit Slots (pvSlots/loadSlots > 0)', () => {
+  const start = src.indexOf('function updateForecastSummary(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  assert.match(body, /totals\?\.today\?\.pvSlots > 0/);
+  assert.match(body, /totals\?\.today\?\.loadSlots > 0/);
+});
+
+// P3: Fehlt die Lastprognose, ist der Rest unbekannt — kein grüner Überschuss.
+test('ohne Lastprognose: Rest unbekannt, „--“ neutral, kein Verfügbar', () => {
+  const { energyBalanceSummary, energyBalanceView } = loadHelpers();
+  const s = energyBalanceSummary({ pvRestKwh: 3, loadRestKwh: null, pvDayKwh: 10, loadDayKwh: null, battery: { capacityWh: 77000, socPct: 43, minSocPct: 5 } });
+  assert.equal(s.restKwh, null);
+  assert.equal(s.availableKwh, null);
+  const v = energyBalanceView(s);
+  assert.equal(v.main, '--');
+  assert.equal(v.positive, null);
+  assert.equal(v.available, null);
+  assert.equal(v.battery, '🔋 43 % = 33.1 kWh (29.3 nutzbar)');
+});
+
+// P3: Mit zweiter GX-Anlage, aber ohne eingestellte Hauptkapazität erfand
+// planningCfg 8 kWh für die Hauptanlage. Ohne Hauptkapazität: null.
+test('energyBalanceBattery mit zweiter Anlage: beide Kapazitäten, ohne Hauptkapazität null', async () => {
+  const { energyBalanceBattery } = await import('../services/energy-balance-battery.js');
+  const multiGx = { enabled: true, batteryCapacityWh: 20000, minSocPct: 10 };
+  const state = { victron: { soc: 40, minSocPct: 5 }, multiGx: { online: true, socPct: 80, minSocPct: 10 } };
+  const withMain = { updateChannel: 'dev', multiGx, optimizer: { batteryCapacityWh: 60000, hardFloorSocPct: 5 } };
+  const b = energyBalanceBattery({ getCfg: () => withMain, state });
+  assert.equal(b.capacityWh, 80000);
+  assert.equal(b.socPct, 50); // (40·60 + 80·20) / 80
+  const noMain = { updateChannel: 'dev', multiGx, optimizer: { hardFloorSocPct: 5 } };
+  assert.equal(energyBalanceBattery({ getCfg: () => noMain, state }).capacityWh, null);
+});

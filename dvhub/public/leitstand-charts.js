@@ -951,8 +951,13 @@
   function energyBalanceSummary(input) {
     var i = input || {};
     var n = function (v) { return v === null || v === undefined || v === '' || !isFinite(Number(v)) ? null : Number(v); };
-    var restKwh = (n(i.pvRestKwh) || 0) - (n(i.loadRestKwh) || 0);
-    var dayKwh = (n(i.pvDayKwh) || 0) - (n(i.loadDayKwh) || 0);
+    // Fehlt eine Reihe (keine Last- oder PV-Prognose), ist der Rest unbekannt —
+    // nicht 0 (sonst grüner Überschuss ohne Verbrauch, Gegenprüfung 527906fc).
+    var pvRest = n(i.pvRestKwh), loadRest = n(i.loadRestKwh);
+    var restKwh = pvRest !== null && loadRest !== null ? pvRest - loadRest : null;
+    // Ganzer Tag nur mit beiden Tagessummen (VRM); ohne sie gibt es ihn nicht.
+    var pvDay = n(i.pvDayKwh), loadDay = n(i.loadDayKwh);
+    var dayKwh = pvDay !== null && loadDay !== null ? pvDay - loadDay : null;
     var b = i.battery || null;
     var soc = b ? n(b.socPct) : null;
     var cap = b ? n(b.capacityWh) : null;
@@ -967,12 +972,34 @@
       socPct: soc,
       battKwh: battKwh,
       usableKwh: usableKwh,
-      availableKwh: usableKwh !== null ? restKwh + usableKwh : null,
+      availableKwh: usableKwh !== null && restKwh !== null ? restKwh + usableKwh : null,
     };
+  }
+  // Slot-Dauer in Stunden aus den Daten: kleinster Abstand zweier Starts.
+  // Liefert nur ein Prognosedienst, liegen seine Rohzeilen vor (Solcast 30 min,
+  // VRM stündlich), /api/forecast meldet trotzdem '15min' (Gegenprüfung
+  // 527906fc). Ein einzelner Slot: die gemeldete Auflösung.
+  function slotHoursOf(slots, fallbackH) {
+    var ts = (slots || []).map(function (s) { return Date.parse(s && s.start); })
+      .filter(function (t) { return isFinite(t); })
+      .sort(function (a, b) { return a - b; });
+    var min = null;
+    for (var k = 1; k < ts.length; k += 1) {
+      var d = ts[k] - ts[k - 1];
+      if (d > 0 && (min === null || d < min)) min = d;
+    }
+    return min ? min / 3600000 : fallbackH;
+  }
+  function kwhOf(slots, fallbackH) {
+    var h = slotHoursOf(slots, fallbackH);
+    var kwh = 0;
+    (slots || []).forEach(function (s) { kwh += (Number(s && s.powerW) || 0) / 1000 * h; });
+    return kwh;
   }
   // Energie ab nowMs: vergangene Slots zählen nicht, der laufende anteilig
   // (/api/forecast liefert die Reihe ab dem letzten Abruf, nicht ab jetzt).
-  function restKwhFrom(slots, slotH, nowMs) {
+  function restKwhFrom(slots, fallbackH, nowMs) {
+    var slotH = slotHoursOf(slots, fallbackH);
     var slotMs = slotH * 3600000;
     var kwh = 0;
     (slots || []).forEach(function (s) {
@@ -989,7 +1016,7 @@
     + 'im selben Zeitraum. „ganzer Tag“: dasselbe für den ganzen Tag (auch schon Vergangenes). '
     + 'Verfügbar: Rest heute plus nutzbarer Akku (Ladestand über der Untergrenze, mit der EOS plant).';
   function energyBalanceView(sum) {
-    var signed = function (x) { return (x >= 0 ? '+' : '') + x.toFixed(1) + ' kWh'; };
+    var signed = function (x) { return x === null ? '--' : (x >= 0 ? '+' : '') + x.toFixed(1) + ' kWh'; };
     var battery = null;
     if (sum.socPct !== null) {
       battery = sum.battKwh !== null
@@ -998,8 +1025,8 @@
     }
     return {
       main: signed(sum.restKwh),
-      positive: sum.restKwh >= 0,
-      day: 'ganzer Tag: ' + signed(sum.dayKwh),
+      positive: sum.restKwh === null ? null : sum.restKwh >= 0,
+      day: sum.dayKwh !== null ? 'ganzer Tag: ' + signed(sum.dayKwh) : null,
       battery: battery,
       available: sum.availableKwh !== null ? 'Verfügbar: ' + signed(sum.availableKwh) : null,
       title: ENERGY_BALANCE_TITLE,
@@ -1068,23 +1095,29 @@
     var nowMs = Date.now();
     var pvKwhRest = restKwhFrom(pvSlots, pvH, nowMs);
     var loadKwhRest = restKwhFrom(loadSlots, loadH, nowMs);
-    var pvKwhTomorrow = 0; pvSlotsTomorrow.forEach(function (s) { pvKwhTomorrow += (s.powerW || 0) / 1000 * pvH; });
-    var loadKwhTomorrow = 0; loadSlotsTomorrow.forEach(function (s) { loadKwhTomorrow += (s.powerW || 0) / 1000 * loadH; });
+    var pvKwhTomorrow = kwhOf(pvSlotsTomorrow, pvH);
+    var loadKwhTomorrow = kwhOf(loadSlotsTomorrow, loadH);
 
-    // Tagesgesamt: prefer backend-computed VRM full-day totals (past+future)
-    // when available. Fallback to "Rest" when no VRM forecast exists yet.
+    // Tagesgesamt: VRM-Tagessummen (Vergangenes + Zukunft), aber nur mit
+    // Slots — readDailyTotals liefert ohne VRM-Zeilen 0 statt null
+    // (Gegenprüfung 527906fc). Sonst Rückfall auf den Rest; „ganzer Tag“
+    // entfällt dann in der Bilanz.
     var totals = forecastData.dailyTotals || null;
-    var pvKwh = totals?.today?.pvKwh != null ? totals.today.pvKwh : pvKwhRest;
-    var loadKwh = totals?.today?.loadKwh != null ? totals.today.loadKwh : loadKwhRest;
-    if (totals?.tomorrow?.pvKwh != null && totals.tomorrow.pvKwh > 0) pvKwhTomorrow = totals.tomorrow.pvKwh;
-    if (totals?.tomorrow?.loadKwh != null && totals.tomorrow.loadKwh > 0) loadKwhTomorrow = totals.tomorrow.loadKwh;
+    var pvDayKwh = totals?.today?.pvSlots > 0 ? Number(totals.today.pvKwh) : null;
+    var loadDayKwh = totals?.today?.loadSlots > 0 ? Number(totals.today.loadKwh) : null;
+    var pvKwh = pvDayKwh !== null ? pvDayKwh : pvKwhRest;
+    var loadKwh = loadDayKwh !== null ? loadDayKwh : loadKwhRest;
+    if (totals?.tomorrow?.pvSlots > 0 && totals.tomorrow.pvKwh > 0) pvKwhTomorrow = totals.tomorrow.pvKwh;
+    if (totals?.tomorrow?.loadSlots > 0 && totals.tomorrow.loadKwh > 0) loadKwhTomorrow = totals.tomorrow.loadKwh;
 
     // Akku aus /api/status (status.energyBalance.battery, wie EOS ihn sieht);
     // ältere Server ohne das Feld: nur der Ladestand, keine erfundene Größe.
     var battery = statusData?.energyBalance?.battery
       || (statusData?.victron?.soc != null ? { socPct: statusData.victron.soc, capacityWh: null, minSocPct: null } : null);
     var balance = energyBalanceSummary({
-      pvRestKwh: pvKwhRest, loadRestKwh: loadKwhRest, pvDayKwh: pvKwh, loadDayKwh: loadKwh, battery: battery
+      pvRestKwh: pvSlotsAll.length ? pvKwhRest : null,
+      loadRestKwh: loadSlotsAll.length ? loadKwhRest : null,
+      pvDayKwh: pvDayKwh, loadDayKwh: loadDayKwh, battery: battery
     });
     var balanceView = energyBalanceView(balance);
 
@@ -1095,9 +1128,10 @@
     // so the same hue maps the EPEX chart in both light and dark themes.
     surplusEl.textContent = balanceView.main;
     surplusEl.title = balanceView.title;
-    surplusEl.style.color = balanceView.positive
-      ? _aur('--chart-positive', '#39E06F')
-      : _aur('--chart-negative', '#ff7b72');
+    surplusEl.style.color = balanceView.positive === null ? ''
+      : balanceView.positive
+        ? _aur('--chart-positive', '#39E06F')
+        : _aur('--chart-negative', '#ff7b72');
 
     // Aurora text-dim / danger hues shared across all detail spans below
     var _dimColor = _aur('--chart-axis', '#5a6a8a');

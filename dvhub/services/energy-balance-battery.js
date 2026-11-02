@@ -19,7 +19,10 @@ export function energyBalanceBattery(ctx) {
   if (!ctx || typeof ctx.getCfg !== 'function') return null;
   try {
     const cfg = ctx?.getCfg?.() || {};
-    const cap = finiteOrNull(planningCfg(ctx, cfg)?.optimizer?.batteryCapacityWh);
+    // Ohne eingestellte Hauptkapazität keine Zahl — planningCfg setzte sonst
+    // mit zweiter GX-Anlage 8 kWh für die Hauptanlage ein (Gegenprüfung 527906fc).
+    const main = finiteOrNull(cfg?.optimizer?.batteryCapacityWh);
+    const cap = main !== null && main > 0 ? finiteOrNull(planningCfg(ctx, cfg)?.optimizer?.batteryCapacityWh) : null;
     const minSoc = planningMinSocPct(ctx, resolveEosMinSocPct(ctx?.state?.victron?.minSocPct, cfg?.optimizer?.hardFloorSocPct));
     return {
       capacityWh: cap !== null && cap > 0 ? cap : null,
