@@ -129,7 +129,8 @@
     const p = planResponse || null;
     const output = p && p.output;
     const raw = output && Array.isArray(output.rows) ? output.rows : [];
-    const feedInBasis = (p && p.priceBasis && FEED_IN_BASIS[p.priceBasis.feedIn]) || null;
+    const pb = (p && p.priceBasis) || {};
+    const feedInBasis = FEED_IN_BASIS[pb.feedIn] ? { kind: pb.feedIn, fixedCt: num(pb.fixedCtKwh) } : null;
     const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis };
     const rows = raw
       .map((r) => ({ ...r, ts: Date.parse(r && r.ts_utc) }))
@@ -173,6 +174,16 @@
     + 'Einspeisung: der niedrigste Einspeisewert unter den Slots, in denen EOS einspeist '
     + '(je nach Einstellung Börse + Marktprämie, Börse oder feste Vergütung). '
     + 'Netzbezug: der höchste Bezugspreis (Endkundenpreis) unter den Slots, in denen EOS aus dem Netz bezieht.';
+  // Grundlage genau des gezeigten Werts: Bei fester Vergütung bekommt ein Slot
+  // mit negativem Börsenpreis 0 ct, bei Börse + Marktprämie gibt es die Prämie
+  // nur auf nicht-negative Preise (eos-forecast-bridge.js, §51) — der
+  // niedrigste Wert ist oft genau so ein Slot (Gegenprüfung 63b36983).
+  function basisText(basis, ct) {
+    if (!basis || ct === null || ct === undefined) return '';
+    if (basis.kind === 'fixed' && basis.fixedCt !== null && Math.abs(ct - basis.fixedCt) > 0.005) return 'negativer Börsenpreis';
+    if (basis.kind === 'spot_premium' && ct < 0) return 'Börse, negativ: ohne Marktprämie';
+    return FEED_IN_BASIS[basis.kind];
+  }
   function priceText(planCt, spotCt, planWord, spotWord, basis) {
     if (planCt !== null && planCt !== undefined) return ` · ${planWord} ${de(planCt, 1)} ct${basis ? ` (${basis})` : ''}`;
     if (spotCt !== null && spotCt !== undefined) return ` · ${spotWord} ${de(spotCt, 1)} ct`;
@@ -180,7 +191,7 @@
   }
   function exportLine(e, basis) {
     if (none(e)) return 'Einspeisung: keine geplant';
-    const ct = priceText(e.minCt, e.minSpotCt, 'niedrigster Einspeisewert', 'niedrigster Börsenpreis', basis);
+    const ct = priceText(e.minCt, e.minSpotCt, 'niedrigster Einspeisewert', 'niedrigster Börsenpreis', basisText(basis, e.minCt));
     return `Einspeisung ${de(e.kwh, 1)} kWh${inHours(e)} · bis ${de(e.peakKw, 1)} kW${ct}`;
   }
   function importLine(i, time) {
@@ -194,8 +205,9 @@
       return e.minSpotCt === null || e.minSpotCt === undefined ? ''
         : 'Der Plan enthält keinen Einspeisewert; gezeigt ist der niedrigste Börsenpreis der geplanten Einspeise-Slots — keine Schwelle.';
     }
+    const b = basisText(basis, e.minCt);
     return 'Der niedrigste Einspeisewert unter den Slots, in denen EOS Einspeisung plant'
-      + (basis ? ` (${basis})` : '')
+      + (b ? ` (${b})` : '')
       + ' — keine Schwelle: EOS speist nicht „ab diesem Preis“ ein, der Wert ergibt sich aus dem Plan.';
   }
   function importTitle(i) {
@@ -269,8 +281,18 @@
       if (el) el.title = text || '';
     };
     setTitle('eosPlanSummaryInfo', HELP);
+    // title erreicht Touch und Tastatur nicht (Gegenprüfung 63b36983): das
+    // Info-Zeichen (ein Knopf) klappt den Erklärtext sichtbar auf und zu.
     const info = d.getElementById('eosPlanSummaryInfo');
-    if (info && typeof info.setAttribute === 'function') info.setAttribute('aria-label', HELP);
+    const help = d.getElementById('eosPlanSummaryHelp');
+    if (help) help.textContent = HELP;
+    if (info && help && typeof info.addEventListener === 'function' && !(info.dataset && info.dataset.bound)) {
+      if (info.dataset) info.dataset.bound = '1';
+      info.addEventListener('click', () => {
+        help.hidden = !help.hidden;
+        if (typeof info.setAttribute === 'function') info.setAttribute('aria-expanded', help.hidden ? 'false' : 'true');
+      });
+    }
     if (lastPlan === undefined) { set('eosPlanSummaryNote', 'EOS-Plan wird geladen …'); return; }
     const st = lastStatus || {};
     const v = view(summarize(lastPlan, {

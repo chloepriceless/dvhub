@@ -1252,3 +1252,21 @@ test('Einstellungen: Steuerzeitraum-Grenze und Prognosehorizont mit Rechenzeit-H
   const bad = normalizeConfigInput({ optimizer: { eosControlHorizonMaxHours: 7 } });
   assert.equal(bad.rawConfig.optimizer.eosControlHorizonMaxHours, undefined);
 });
+
+// Gegenprüfung 63b36983 (P2): push() merkt sich, womit es den Einspeisewert
+// tatsächlich gebildet hat — Marktprämie nur, wenn sie > 0 war.
+test('push merkt die Grundlage des Einspeisewerts (state.optimizer.eosFeedInBasis)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const { ctx } = estimateCtx(mock, { tariff: { feedInMode: 'spot', feedInSpotFactor: 1, feedInIncludeMarketPremium: true } });
+    await createEosForecastBridge(ctx).push();
+    // Prämie eingeschaltet, aber ohne anzulegenden Wert → 0 → reine Börse
+    assert.equal(ctx.state.optimizer.eosFeedInBasis.feedIn, 'spot');
+  } finally { await mock.close(); }
+  const mock2 = await createMockEos(okHandler);
+  try {
+    const { ctx } = estimateCtx(mock2, { tariff: { feedInMode: 'fixed', feedInCtKwh: 8.2 } });
+    await createEosForecastBridge(ctx).push();
+    assert.deepEqual({ ...ctx.state.optimizer.eosFeedInBasis }, { feedIn: 'fixed', fixedCtKwh: 8.2 });
+  } finally { await mock2.close(); }
+});

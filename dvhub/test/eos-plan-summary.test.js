@@ -312,9 +312,70 @@ test('render setzt die Erklärhilfe als title an Zeilen und Info-Zeichen', () =>
   assert.equal(els.eosPlanSummaryTomorrowExport.title, ''); // morgen keine Einspeisung
 });
 
-test('/api/eos/plan liefert die Grundlage des Einspeisewerts (priceBasis)', () => {
+// Gegenprüfung 63b36983 (P2): Bei fester Vergütung bekommt EOS für Slots mit
+// negativem Börsenpreis 0 ct (fixedFeedInSlots). Der niedrigste Wert ist dann
+// genau so ein Slot — „0 ct (feste Vergütung)“ wäre falsch.
+test('feste Vergütung: Minimum unter dem festen Satz heißt „negativer Börsenpreis“', () => {
+  const { summarize, view } = load();
+  const rows = plan60(60).rows;
+  rows[0].feedInCtKwh = 0; rows[1].feedInCtKwh = 7.78;
+  const basis = { feedIn: 'fixed', fixedCtKwh: 7.78 };
+  const v = view(summarize({ available: true, output: { slotMinutes: 60, rows }, priceBasis: basis }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 0 ct (negativer Börsenpreis)');
+  assert.match(v.today.exportTitle, /negativer Börsenpreis/);
+  rows[0].feedInCtKwh = 7.78;
+  const w = view(summarize({ available: true, output: { slotMinutes: 60, rows }, priceBasis: basis }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.equal(w.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 7,8 ct (feste Vergütung)');
+});
+
+test('Börse + Marktprämie: negativer Slot ohne Prämie wird so benannt', () => {
+  const { summarize, view } = load();
+  const rows = plan60(60).rows;
+  rows[0].feedInCtKwh = -1.2;
+  const v = view(summarize({ available: true, output: { slotMinutes: 60, rows }, priceBasis: { feedIn: 'spot_premium' } }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert -1,2 ct (Börse, negativ: ohne Marktprämie)');
+});
+
+// Gegenprüfung 63b36983 (P2): die Grundlage kommt aus dem letzten Push an EOS
+// (womit der Plan gerechnet ist), nicht aus der aktuellen Einstellung.
+test('/api/eos/plan: Grundlage aus dem letzten Push, sonst aus der Einstellung', () => {
   const src = fs.readFileSync(fileURLToPath(new URL('../routes-api.js', import.meta.url)), 'utf8');
   const start = src.indexOf("url.pathname === '/api/eos/plan'");
   const body = src.slice(start, src.indexOf('\n    }\n', start));
-  assert.match(body, /priceBasis: \{ feedIn: eosFeedInBasis\(getCfg\(\)\) \}/);
+  assert.match(body, /priceBasis: state\.optimizer\?\.eosFeedInBasis \|\| \{ feedIn: eosFeedInBasis\(getCfg\(\)\) \}/);
+});
+
+// Gegenprüfung 63b36983 (P3): title erreicht Touch und Tastatur nicht — das
+// Info-Zeichen klappt einen sichtbaren Erklärtext auf.
+test('Info-Zeichen klappt die Erklärung sichtbar auf und zu', () => {
+  const { render, HELP } = load();
+  const els = {};
+  const ids = ['eosPlanSummary', 'eosPlanSummaryNote', 'eosPlanSummaryHelp'];
+  for (const p of ['eosPlanSummaryToday', 'eosPlanSummaryTomorrow']) ids.push(p, `${p}Head`, `${p}Export`, `${p}Import`, `${p}Peak`);
+  for (const id of ids) els[id] = { textContent: '', hidden: id === 'eosPlanSummaryHelp', title: '' };
+  const handlers = {};
+  const attrs = {};
+  els.eosPlanSummaryInfo = {
+    title: '', dataset: {},
+    addEventListener: (type, fn) => { handlers[type] = (handlers[type] || 0) + 1; els.eosPlanSummaryInfo['on' + type] = fn; },
+    setAttribute: (k, v) => { attrs[k] = v; },
+  };
+  const doc = { getElementById: (id) => els[id] || null };
+  render({ plan: { available: true, output: plan15() }, status: { now: NOW } }, doc);
+  render({ plan: { available: true, output: plan15() } }, doc); // nur einmal binden
+  assert.equal(handlers.click, 1);
+  assert.equal(els.eosPlanSummaryHelp.textContent, HELP);
+  assert.equal(els.eosPlanSummaryHelp.hidden, true);
+  els.eosPlanSummaryInfo.onclick();
+  assert.equal(els.eosPlanSummaryHelp.hidden, false);
+  assert.equal(attrs['aria-expanded'], 'true');
+  els.eosPlanSummaryInfo.onclick();
+  assert.equal(els.eosPlanSummaryHelp.hidden, true);
+  assert.equal(attrs['aria-expanded'], 'false');
+});
+
+test('index.html: Info-Zeichen ist ein Knopf mit aufklappbarem Erklärtext', () => {
+  const html = fs.readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
+  assert.match(html, /<button type="button" class="eos-plan-summary-info" id="eosPlanSummaryInfo" aria-expanded="false" aria-controls="eosPlanSummaryHelp"/);
+  assert.match(html, /<p class="eos-plan-summary-help" id="eosPlanSummaryHelp" hidden><\/p>/);
 });

@@ -891,6 +891,16 @@ export function createEosForecastBridge(ctx) {
             return s.estimated ? { start: s.start, powerW, estimated: true } : { start: s.start, powerW };
           })
       : fixedFeedInSlots(priceSlotsCt, tariff);
+    // Womit der Einspeisewert tatsächlich gebildet ist — für die Anzeige im
+    // Leitstand (/api/eos/plan priceBasis, Gegenprüfung 63b36983): Marktprämie
+    // nur, wenn sie > 0 war; bei fester Vergütung der Satz (0 ct bei negativem
+    // Börsenpreis erkennt die Anzeige daran).
+    if (state) {
+      state.optimizer = state.optimizer || {};
+      state.optimizer.eosFeedInBasis = feedInSpot
+        ? { feedIn: premiumCt > 0 ? 'spot_premium' : 'spot' }
+        : { feedIn: 'fixed', fixedCtKwh: Number.isFinite(Number(tariff.feedInCtKwh)) ? Number(tariff.feedInCtKwh) : 7.78 };
+    }
 
     // Heizstab (stufenlos regelbar): EOS plant ihn nicht — DVhub regelt ihn
     // nach Überschuss. Sein erwarteter Verbrauch kommt als Last in die Prognose,

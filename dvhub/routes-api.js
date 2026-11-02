@@ -6565,8 +6565,9 @@ export function createApiRoutes(ctx) {
         output,
         plan: { fetchedAt: new Date(plan.at).toISOString(), current: plan.current },
         // Grundlage des Einspeisewerts im Plan („niedrigster Einspeisewert …
-        // (Börse + Marktprämie)“, eos-plan-summary.js).
-        priceBasis: { feedIn: eosFeedInBasis(getCfg()) },
+        // (Börse + Marktprämie)“, eos-plan-summary.js): womit der letzte Push an
+        // EOS ihn gebildet hat; vor dem ersten Push aus der Einstellung.
+        priceBasis: state.optimizer?.eosFeedInBasis || { feedIn: eosFeedInBasis(getCfg()) },
         eos: { status: status.status, push: status.push },
         remote: eosRemoteSummary(),
       });
