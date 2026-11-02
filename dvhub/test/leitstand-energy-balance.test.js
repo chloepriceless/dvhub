@@ -198,3 +198,54 @@ test('energyBalanceBattery mit zweiter Anlage: beide Kapazitäten, ohne Hauptkap
   const noMain = { updateChannel: 'dev', multiGx, optimizer: { hardFloorSocPct: 5 } };
   assert.equal(energyBalanceBattery({ getCfg: () => noMain, state }).capacityWh, null);
 });
+
+// --- Gegenprüfung e07271be ----------------------------------------------------
+// P2: forecast.solar liefert neben dem Stundenraster Punkte zu Sonnenauf- und
+// -untergang (07:22:57, 19:00:15, eos-forecast-bridge.js). Der kleinste Abstand
+// wäre dann 37 min → jede Stunde zählte 0,62 h. Jede Zeile gilt bis zur
+// nächsten, höchstens den üblichen (mittleren) Abstand.
+test('restKwhFrom: Zwischenpunkte verzerren die Slot-Dauer nicht', () => {
+  const { restKwhFrom } = loadHelpers();
+  const T = Date.UTC(2026, 10, 2, 7, 0); // 08:00 Uhr
+  const rows = [{ start: new Date(T - (37 * 60 + 3) * 1000).toISOString(), powerW: 0 }]; // 07:22:57
+  for (let i = 0; i < 4; i += 1) rows.push({ start: new Date(T + i * 3600000).toISOString(), powerW: 1000 });
+  assert.equal(restKwhFrom(rows, 0.25, T - 3600000), 4); // 4 volle Stunden à 1 kW
+  // Lücke über Nacht zählt nicht als lange Leistung: letzter Punkt höchstens 1 h
+  const night = [{ start: new Date(T).toISOString(), powerW: 500 }, { start: new Date(T + 3600000).toISOString(), powerW: 500 },
+    { start: new Date(T + 14 * 3600000).toISOString(), powerW: 0 }];
+  assert.equal(restKwhFrom(night, 0.25, T), 1);
+});
+
+// P3: „Reihe fehlt“ heißt: keine Zeile für heute oder später — eine veraltete
+// Reihe (nur gestern) ist unbekannt, Zeilen heute (auch vergangene) sind bekannt.
+test('seriesCoversToday', () => {
+  const { seriesCoversToday } = loadHelpers();
+  const today = '2026-11-02';
+  assert.equal(seriesCoversToday([{ start: '2026-11-01T20:00:00Z' }], today), false);
+  assert.equal(seriesCoversToday([{ start: '2026-11-02T06:00:00Z' }], today), true);
+  assert.equal(seriesCoversToday([{ start: '2026-11-03T07:00:00Z' }], today), true);
+  assert.equal(seriesCoversToday([], today), false);
+  const start = src.indexOf('function updateForecastSummary(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  assert.match(body, /pvRestKwh: seriesCoversToday\(pvSlotsAll, berlinTodayKey\) \? pvKwhRest : null/);
+  assert.match(body, /loadRestKwh: seriesCoversToday\(loadSlotsAll, berlinTodayKey\) \? loadKwhRest : null/);
+});
+
+// P3: Scheitert der Prognose-Abruf, darf kein farbiges „--“ über alten Zeilen stehen.
+test('ohne Prognose: Farbe und Detailzeilen der Bilanz zurückgesetzt', () => {
+  const start = src.indexOf('function updateForecastSummary(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  const early = body.slice(body.indexOf('if (!forecastData) {'), body.indexOf('return;', body.indexOf('if (!forecastData) {')));
+  assert.match(early, /surplusEl\.style\.color = ''/);
+  assert.match(early, /surplusDetailEl\.textContent = ''/);
+});
+
+// P3: Ohne Hauptkapazität auch Ladestand und Untergrenze der Hauptanlage
+// ungewichtet — sonst gewichtete planningSocPct mit erfundenen 8 kWh.
+test('energyBalanceBattery ohne Hauptkapazität: Ladestand ungewichtet', async () => {
+  const { energyBalanceBattery } = await import('../services/energy-balance-battery.js');
+  const multiGx = { enabled: true, batteryCapacityWh: 20000, minSocPct: 10 };
+  const state = { victron: { soc: 40, minSocPct: 5 }, multiGx: { online: true, socPct: 80, minSocPct: 10 } };
+  const b = energyBalanceBattery({ getCfg: () => ({ updateChannel: 'dev', multiGx, optimizer: { hardFloorSocPct: 5 } }), state });
+  assert.deepEqual({ ...b }, { capacityWh: null, socPct: 40, minSocPct: 5 });
+});

@@ -21,13 +21,19 @@ export function energyBalanceBattery(ctx) {
     const cfg = ctx?.getCfg?.() || {};
     // Ohne eingestellte Hauptkapazität keine Zahl — planningCfg setzte sonst
     // mit zweiter GX-Anlage 8 kWh für die Hauptanlage ein (Gegenprüfung 527906fc).
+    // Ohne Hauptkapazität auch Ladestand und Untergrenze nur der Hauptanlage,
+    // ungewichtet (planningSocPct gewichtete mit den erfundenen 8 kWh,
+    // Gegenprüfung e07271be).
     const main = finiteOrNull(cfg?.optimizer?.batteryCapacityWh);
-    const cap = main !== null && main > 0 ? finiteOrNull(planningCfg(ctx, cfg)?.optimizer?.batteryCapacityWh) : null;
-    const minSoc = planningMinSocPct(ctx, resolveEosMinSocPct(ctx?.state?.victron?.minSocPct, cfg?.optimizer?.hardFloorSocPct));
+    const primaryMin = resolveEosMinSocPct(ctx?.state?.victron?.minSocPct, cfg?.optimizer?.hardFloorSocPct);
+    if (main === null || main <= 0) {
+      return { capacityWh: null, socPct: finiteOrNull(ctx?.state?.victron?.soc), minSocPct: finiteOrNull(primaryMin) };
+    }
+    const cap = finiteOrNull(planningCfg(ctx, cfg)?.optimizer?.batteryCapacityWh);
     return {
       capacityWh: cap !== null && cap > 0 ? cap : null,
       socPct: finiteOrNull(planningSocPct(ctx)),
-      minSocPct: finiteOrNull(minSoc),
+      minSocPct: finiteOrNull(planningMinSocPct(ctx, primaryMin)),
     };
   } catch {
     return null;

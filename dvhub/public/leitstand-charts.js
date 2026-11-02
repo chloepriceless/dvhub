@@ -975,42 +975,52 @@
       availableKwh: usableKwh !== null && restKwh !== null ? restKwh + usableKwh : null,
     };
   }
-  // Slot-Dauer in Stunden aus den Daten: kleinster Abstand zweier Starts.
-  // Liefert nur ein Prognosedienst, liegen seine Rohzeilen vor (Solcast 30 min,
-  // VRM stündlich), /api/forecast meldet trotzdem '15min' (Gegenprüfung
-  // 527906fc). Ein einzelner Slot: die gemeldete Auflösung.
-  function slotHoursOf(slots, fallbackH) {
-    var ts = (slots || []).map(function (s) { return Date.parse(s && s.start); })
-      .filter(function (t) { return isFinite(t); })
-      .sort(function (a, b) { return a - b; });
-    var min = null;
-    for (var k = 1; k < ts.length; k += 1) {
-      var d = ts[k] - ts[k - 1];
-      if (d > 0 && (min === null || d < min)) min = d;
-    }
-    return min ? min / 3600000 : fallbackH;
+  // Zeitspannen der Prognosezeilen aus den Daten. Liefert nur ein Dienst,
+  // liegen seine Rohzeilen vor (Solcast 30 min, VRM stündlich), /api/forecast
+  // meldet trotzdem '15min' (Gegenprüfung 527906fc). forecast.solar setzt
+  // zusätzlich Punkte zu Sonnenauf- und -untergang (07:22:57 …) — deshalb gilt
+  // jede Zeile bis zur nächsten, höchstens den üblichen Abstand (unterer
+  // Median); die letzte den üblichen Abstand. Eine Zeile allein: die gemeldete
+  // Auflösung (Gegenprüfung e07271be).
+  function rowSpans(slots, fallbackH) {
+    var rows = (slots || []).map(function (s) { return { t: Date.parse(s && s.start), w: Number(s && s.powerW) || 0 }; })
+      .filter(function (r) { return isFinite(r.t); })
+      .sort(function (a, b) { return a.t - b.t; });
+    var gaps = [];
+    for (var k = 1; k < rows.length; k += 1) { var g = rows[k].t - rows[k - 1].t; if (g > 0) gaps.push(g); }
+    gaps.sort(function (a, b) { return a - b; });
+    var typical = gaps.length ? gaps[Math.floor((gaps.length - 1) / 2)] : fallbackH * 3600000;
+    return rows.map(function (r, idx) {
+      var next = idx + 1 < rows.length ? rows[idx + 1].t - r.t : typical;
+      return { t: r.t, ms: next > 0 ? Math.min(next, typical) : 0, w: r.w };
+    });
   }
   function kwhOf(slots, fallbackH) {
-    var h = slotHoursOf(slots, fallbackH);
     var kwh = 0;
-    (slots || []).forEach(function (s) { kwh += (Number(s && s.powerW) || 0) / 1000 * h; });
+    rowSpans(slots, fallbackH).forEach(function (r) { kwh += r.w / 1000 * (r.ms / 3600000); });
     return kwh;
   }
-  // Energie ab nowMs: vergangene Slots zählen nicht, der laufende anteilig
+  // Energie ab nowMs: vergangene Zeilen zählen nicht, die laufende anteilig
   // (/api/forecast liefert die Reihe ab dem letzten Abruf, nicht ab jetzt).
   function restKwhFrom(slots, fallbackH, nowMs) {
-    var slotH = slotHoursOf(slots, fallbackH);
-    var slotMs = slotH * 3600000;
     var kwh = 0;
-    (slots || []).forEach(function (s) {
-      var t = Date.parse(s && s.start);
-      if (!isFinite(t)) return;
-      var end = t + slotMs;
+    rowSpans(slots, fallbackH).forEach(function (r) {
+      var end = r.t + r.ms;
       if (end <= nowMs) return;
-      var share = t >= nowMs ? 1 : (end - nowMs) / slotMs;
-      kwh += (Number(s.powerW) || 0) / 1000 * slotH * share;
+      var from = Math.max(r.t, nowMs);
+      kwh += r.w / 1000 * ((end - from) / 3600000);
     });
     return Math.round(kwh * 1000) / 1000;
+  }
+  // Hat die Reihe Zeilen für heute oder später? Nur gestrige (veraltete
+  // Reihe) → unbekannt; heutige, auch schon vergangene, → bekannt
+  // (Gegenprüfung e07271be). Tagesschlüssel YYYY-MM-DD in Berliner Zeit.
+  function seriesCoversToday(slots, todayKey) {
+    var fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' });
+    return (slots || []).some(function (s) {
+      var t = Date.parse(s && s.start);
+      return isFinite(t) && fmt.format(new Date(t)) >= todayKey;
+    });
   }
   var ENERGY_BALANCE_TITLE = 'Hauptzahl: Rest heute — erwartete PV ab jetzt bis Mitternacht minus erwarteter Verbrauch '
     + 'im selben Zeitraum. „ganzer Tag“: dasselbe für den ganzen Tag (auch schon Vergangenes). '
@@ -1034,7 +1044,7 @@
   }
   window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, {
     loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries,
-    energyBalanceSummary: energyBalanceSummary, energyBalanceView: energyBalanceView, restKwhFrom: restKwhFrom,
+    energyBalanceSummary: energyBalanceSummary, energyBalanceView: energyBalanceView, restKwhFrom: restKwhFrom, seriesCoversToday: seriesCoversToday,
   });
 
   function updateForecastSummary(forecastData, statusData) {
@@ -1050,6 +1060,9 @@
       pvEl.textContent = '--';
       loadEl.textContent = '--';
       surplusEl.textContent = '--';
+      // Bilanz neutral, alte Detailzeilen weg (Gegenprüfung e07271be).
+      surplusEl.style.color = '';
+      if (surplusDetailEl) surplusDetailEl.textContent = '';
       if (detailEl) detailEl.textContent = '';
       return;
     }
@@ -1115,8 +1128,8 @@
     var battery = statusData?.energyBalance?.battery
       || (statusData?.victron?.soc != null ? { socPct: statusData.victron.soc, capacityWh: null, minSocPct: null } : null);
     var balance = energyBalanceSummary({
-      pvRestKwh: pvSlotsAll.length ? pvKwhRest : null,
-      loadRestKwh: loadSlotsAll.length ? loadKwhRest : null,
+      pvRestKwh: seriesCoversToday(pvSlotsAll, berlinTodayKey) ? pvKwhRest : null,
+      loadRestKwh: seriesCoversToday(loadSlotsAll, berlinTodayKey) ? loadKwhRest : null,
       pvDayKwh: pvDayKwh, loadDayKwh: loadDayKwh, battery: battery
     });
     var balanceView = energyBalanceView(balance);
