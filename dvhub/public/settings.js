@@ -3399,6 +3399,9 @@ async function loadHistoryImportStatus() {
   currentHistoryImportStatus = payload.historyImport || null;
 }
 
+// Fehlercode des letzten gescheiterten saveConfig (z. B. migrate_token_required).
+let lastSaveError = null;
+
 async function saveConfig(config, source = 'settings', opts = {}) {
   const headers = { 'content-type': 'application/json' };
   // EEG/§14a legal-gate confirmation: forwarded ONLY after the operator accepted
@@ -3409,6 +3412,8 @@ async function saveConfig(config, source = 'settings', opts = {}) {
   // Geräte-Tausch: der Server verlangt das API-Token dieser Box
   // (migrate_token_required) — apiFetch nimmt ein gespeichertes Token, sonst das hier.
   if (typeof opts.bearer === 'string' && opts.bearer) headers.authorization = `Bearer ${opts.bearer}`;
+  if (typeof opts.bootstrapToken === 'string' && opts.bootstrapToken) headers['x-bootstrap-token'] = opts.bootstrapToken;
+  lastSaveError = null;
   const reqBody = buildConfigSaveBody(config, source, opts, currentRawConfig);
   const res = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
@@ -3422,6 +3427,7 @@ async function saveConfig(config, source = 'settings', opts = {}) {
     return false;
   }
   if (!res.ok || !payload.ok) {
+    lastSaveError = payload?.error || null;
     setBanner(`Speichern fehlgeschlagen: ${payload.error || res.status}`, 'error');
     return false;
   }
@@ -3699,7 +3705,18 @@ async function importConfigFromFile(file) {
       });
       if (bearer == null) { setImportBanner('Import abgebrochen.', 'info'); return; }
     }
-    const ok = await saveConfig(parsed, 'import', { confirmLegalGate, password, migrate, bearer });
+    let ok = await saveConfig(parsed, 'import', { confirmLegalGate, password, migrate, bearer });
+    // Gespeichertes Token falsch (z. B. von einer früheren Box unter derselben
+    // Adresse) oder Box ohne API-Token: einmal nachfragen und neu senden.
+    if (!ok && migrate && /^migrate_(setup_)?token_required$/.test(lastSaveError || '') && typeof window.dvPrompt === 'function') {
+      const setup = lastSaveError === 'migrate_setup_token_required';
+      const entered = await window.dvPrompt(setup
+        ? 'Diese Box hat kein API-Token. Für den Geräte-Tausch das Setup-Token eingeben (Datei bootstrap.token im Datenordner, z. B. /var/lib/dvhub/bootstrap.token):'
+        : 'Das API-Token passt nicht. API-Token DIESER Box eingeben (/etc/dvhub/config.json, apiToken):', {
+        title: setup ? 'Setup-Token' : 'API-Token dieser Box', okLabel: 'Weiter', inputType: 'password'
+      });
+      if (entered) ok = await saveConfig(parsed, 'import', { confirmLegalGate, password, migrate, ...(setup ? { bootstrapToken: entered } : { bearer: entered }) });
+    }
     setImportBanner(
       ok ? (migrate
         ? 'Geräte-Tausch importiert — bitte DVhub neu starten, damit Lizenz, Kennung und Kopplungen greifen.'

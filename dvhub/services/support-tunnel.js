@@ -530,6 +530,15 @@ export function createSupportTunnel(ctx, deps = {}) {
     if (!applianceId) return fail('appliance-id missing', 'appliance-id fehlt — Box ist nicht beim Relay registriert.');
     if (!exists(p.keyPath)) return fail('relay key missing', 'Relay-Schlüssel fehlt — Box ist nicht beim Relay registriert.');
     if (!(rc.shellPort > 0 && rc.webPort > 0)) return fail('relay ports unassigned', 'Relay-Ports nicht zugeteilt — Support muss die Box erst freischalten.');
+    // Gegenprüfung 6f9c9cca (P3): ist der Support-Port zugleich der normale
+    // Port, startet kein eigener Listener, und der Tunnel landete mit
+    // Loopback-Freibrief am normalen Port — dann lieber nicht öffnen.
+    const cfgNow = (typeof ctx?.getCfg === 'function' ? ctx.getCfg() : null) || {};
+    if (rc.localWebPort === (Number(cfgNow.httpPort) || 80)) {
+      lastError = `support_web_port_conflict: ${rc.localWebPort}`;
+      pushLog('support_tunnel_error', { error: lastError }, actor);
+      return { error: { ok: false, error: 'support_web_port_conflict', detail: `Support-Port ${rc.localWebPort} ist zugleich der Web-Port — DVHUB_SUPPORT_WEB_PORT anders setzen.` } };
+    }
     return { rc, p, applianceId };
   }
 

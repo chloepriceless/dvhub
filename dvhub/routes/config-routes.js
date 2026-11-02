@@ -33,7 +33,7 @@ export function createConfigRoutes(deps) {
     ctx, getCfg, pushLog, licenseService,
     json, downloadJson, readJsonBody,
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
-    requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback, hasValidBearer,
+    requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback, hasValidBearer, denySupportConsent,
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, ALLOWED_CONFIG_ROOTS,
   } = deps;
 
@@ -59,6 +59,9 @@ export function createConfigRoutes(deps) {
     // box can restore them on import. The bundle is AES-256-GCM under a
     // PBKDF2(password) key; without the password it is opaque.
     if (url.pathname === '/api/config/export' && req.method === 'POST') {
+      // Das versiegelte Paket enthält Token und Schlüssel-Dateien — nicht über
+      // den Support-Tunnel (Gegenprüfung 6f9c9cca, P1).
+      if (denySupportConsent?.(req, res, 'config_export_secrets')) return;
       const body = await readJsonBody(req, res);
       if (body === null) return;
       const password = typeof body?.password === 'string' ? body.password : '';
@@ -125,15 +128,23 @@ export function createConfigRoutes(deps) {
       // lanTrust „Offen“ hätte so jedes Gerät im WLAN das Support-Relay samt
       // Hostschlüssel austauschen können. Deshalb braucht er das API-Token
       // dieser Box (bzw. ohne Token das Setup-Token).
-      if (url.pathname === '/api/config/import' && body.migrate === true) {
+      // Gegenprüfung cf372cdc (P1): gilt für JEDEN Speicherweg, der migrate
+      // auswertet — auch POST /api/config, nicht nur /import.
+      if (body.migrate === true) {
+        if (denySupportConsent?.(req, res, 'config_migrate')) return;
         const boxToken = ctx.getRawCfg?.()?.apiToken;
         if (boxToken) {
           if (!hasValidBearer?.(req)) {
             pushLog('config_import_migrate_denied', { reason: 'token_required' }, actorContext(req));
             return json(res, 401, { ok: false, error: 'migrate_token_required', detail: 'Ein Geräte-Tausch braucht das API-Token dieser Box.' });
           }
-        } else if (!requireBootstrapToken(req, res)) {
-          return;
+        } else {
+          // Box ohne API-Token: das Setup-Token (data/bootstrap.token) belegt den Zugriff.
+          if (!req.headers?.['x-bootstrap-token']) {
+            pushLog('config_import_migrate_denied', { reason: 'setup_token_required' }, actorContext(req));
+            return json(res, 401, { ok: false, error: 'migrate_setup_token_required', detail: 'Diese Box hat kein API-Token — für den Geräte-Tausch das Setup-Token eingeben.' });
+          }
+          if (!requireBootstrapToken(req, res)) return;
         }
       }
       // Fernzugang, Datenspende und Ortsnetz haben eigene Wege — siehe

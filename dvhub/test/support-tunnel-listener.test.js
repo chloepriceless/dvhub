@@ -160,3 +160,118 @@ test('Geräte-Tausch-Import ohne Token der Box → 401, nichts gespeichert; mit 
   await routes.handleRequest(req3, res3, new URL('http://x/api/config/import'));
   assert.notEqual(JSON.parse(res3._captured.body || '{}').error, 'migrate_token_required', res3._captured.body);
 });
+
+// Gegenprüfung 6f9c9cca (P1, 2× P2): weitere Wege, auf denen der Support über
+// den offenen Tunnel sich selbst einen Zugang einrichten konnte — Installateur-
+// Kopplung bestätigen, Handy koppeln/freischalten, Voll-Export (Token und
+// Schlüssel) und Geräte-Tausch. Alle von dort gesperrt; Verengen bleibt erlaubt.
+test('Support-Tunnel: keine Kopplungen, keine Handy-Freigaben, kein Voll-Export, kein Geräte-Tausch', async () => {
+  const portal = { enabled: () => true, permissions: () => ({}), checkUiToken: () => true, issueUiToken: () => 'p', confirm: () => ({ confirmed: true }) };
+  const confirmed = [];
+  const ml = {
+    status: () => ({}), reconcile() {}, startPairing: () => ({ qr: 'x' }), approvePairing: () => { confirmed.push('approve'); return { ok: true }; },
+    cancelPairing: () => ({ ok: true }), removeDevice: () => ({ ok: true }), updateDevice: () => { confirmed.push('update'); return { ok: true }; },
+  };
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, installerPortal: { enabled: true } };
+  const { ctx, saved } = ctxWith(box, {
+    installerPortal: { ...portal, confirm: () => { confirmed.push('confirm'); return {}; } }, mobileLink: ml,
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+    getConfigPath: () => '/nonexistent/config.json', getDataDir: () => '/nonexistent',
+  });
+  const routes = createApiRoutes(ctx);
+  const call = async (p, body) => {
+    const res = mockRes();
+    const req = makeReq('POST', p, body, { viaSupport: true });
+    req.headers.authorization = `Bearer ${'b'.repeat(32)}`; // selbst mit Token
+    await routes.handleRequest(req, res, new URL(`http://x${p}`));
+    return { status: res._captured.status, error: JSON.parse(res._captured.body || '{}').error };
+  };
+  for (const [p, body] of [
+    ['/api/installer/confirm', { installerId: 'i', pairingCode: '123456', uiToken: 'p' }],
+    ['/api/mobile-link/settings', { enabled: true, useRelay: true }],
+    ['/api/mobile-link/pair/start', {}],
+    ['/api/mobile-link/pair/approve', { perms: ['read', 'control'] }],
+    ['/api/mobile-link/devices/update', { id: 'd', perms: ['control'] }],
+    ['/api/config/export', { password: 'angreifer1' }],
+    ['/api/config/import', { config: { httpPort: 8080 }, migrate: true }],
+  ]) {
+    const r = await call(p, body);
+    assert.equal(r.status, 403, `${p}: ${r.status} ${r.error}`);
+    assert.equal(r.error, 'support_tunnel_consent_denied', p);
+  }
+  assert.deepEqual(confirmed, []);
+  assert.equal(saved.length, 0);
+  // Verengen geht weiter: Handy-Funktion aus, Gerät entfernen, Kopplung abbrechen.
+  assert.notEqual((await call('/api/mobile-link/settings', { enabled: false })).status, 403);
+  assert.notEqual((await call('/api/mobile-link/devices/remove', { id: 'd' })).status, 403);
+  assert.notEqual((await call('/api/mobile-link/pair/cancel', {})).status, 403);
+});
+
+// Gegenprüfung 6f9c9cca (P2): unter lanTrust „Offen“ mit trustedClientIps
+// galt der Tunnel trotzdem als Heimnetz (Loopback-Abkürzung).
+test('Support-Tunnel folgt trustedClientIps und lanCidrs', () => {
+  for (const security of [{ lanTrust: 'open', trustedClientIps: ['192.168.1.5'] }, { lanTrust: 'open', lanCidrs: ['192.168.1.0/24'] }]) {
+    const { ctx } = ctxWith({ security, apiToken: 'x'.repeat(32) });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    assert.equal(routes.enforceRequestGate(makeReq('GET', '/api/status', null, { viaSupport: true }), res), false, JSON.stringify(security));
+    assert.equal(res._captured.status, 401);
+    assert.equal(routes.enforceRequestGate(makeReq('GET', '/api/status'), mockRes()), true, 'Box selbst weiter frei');
+  }
+});
+
+// Gegenprüfung cf372cdc (P1): der Geräte-Tausch lief auch über POST /api/config
+// mit migrate:true — ohne die Token-Prüfung.
+test('Geräte-Tausch über /api/config ohne Token → 401', async () => {
+  const { encryptSecrets } = await import('../services/config-secrets-crypto.js');
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' } };
+  const blob = encryptSecrets({ notifications: {} }, 'pw', { files: { 'data/support/known_hosts': Buffer.from('x').toString('base64') }, apiToken: 'c'.repeat(32) });
+  const { ctx, saved } = ctxWith(box, {
+    getDataDir: () => '/nonexistent', getConfigPath: () => '/nonexistent/config.json',
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+  });
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/config', { config: { httpPort: 8080, _encryptedSecrets: blob }, password: 'pw', migrate: true }), res, new URL('http://x/api/config'));
+  assert.equal(res._captured.status, 401, res._captured.body);
+  assert.equal(JSON.parse(res._captured.body).error, 'migrate_token_required');
+  assert.equal(saved.length, 0);
+});
+
+// Gegenprüfung 6f9c9cca (P3): der eigentliche Listener war ungetestet.
+test('Support-Listener: nur 127.0.0.1, jede Anfrage als Support-Tunnel markiert', async () => {
+  const http = await import('node:http');
+  const { startSupportWebListener } = await import('../services/support-web-listener.js');
+  const seen = [];
+  const server = await new Promise((resolve, reject) => {
+    const srv = startSupportWebListener({
+      handler: (req, res) => { seen.push(req.dvhubSupportTunnel); res.end('ok'); },
+      port: 0, onError: reject, onListening: () => resolve(srv),
+    });
+  });
+  try {
+    assert.equal(server.address().address, '127.0.0.1');
+    await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: server.address().port, path: '/' }, (r) => { r.resume(); r.on('end', resolve); }).on('error', reject));
+    assert.deepEqual(seen, [true]);
+  } finally { server.close(); }
+});
+
+test('Port-Kollision: Support-Port = Web-Port → Tunnel öffnet nicht (kein Rückfall auf den Freibrief)', async () => {
+  const fsMod = await import('node:fs');
+  const os = await import('node:os');
+  const { createSupportTunnel } = await import('../services/support-tunnel.js');
+  const dir = fsMod.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sup-port-'));
+  try {
+    fsMod.writeFileSync(path.join(dir, 'appliance-id'), 'box-01\n');
+    fsMod.mkdirSync(path.join(dir, 'support'));
+    fsMod.writeFileSync(path.join(dir, 'support', 'relay_id_ed25519'), 'K', { mode: 0o600 });
+    fsMod.writeFileSync(path.join(dir, 'support', 'relay.json'), JSON.stringify({ shellPort: 49101, webPort: 49102 }));
+    const tun = createSupportTunnel({ getDataDir: () => dir, getCfg: () => ({ httpPort: 47822 }), pushLog: () => {} }, {
+      inContainer: false, unitMode: () => false, spawn: () => { throw new Error('darf nicht starten'); },
+      setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+    });
+    const r = await tun.open({ ttlMin: 30 });
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'support_web_port_conflict');
+  } finally { fsMod.rmSync(dir, { recursive: true, force: true }); }
+});

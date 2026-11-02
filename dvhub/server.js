@@ -118,6 +118,7 @@ import { info as logInfo, warn as logWarn, logger as appLogger } from './service
 import { configureSafeAsync, safeInterval } from './services/safe-async.js';
 // T-0113 Tier 3: customer-controlled reverse-SSH support tunnel.
 import { createSupportTunnel, supportWebPort } from './services/support-tunnel.js';
+import { startSupportWebListener } from './services/support-web-listener.js';
 // T-INSTALLER-PORTAL: Installateur-Portal-Anbindung (Zertifikats-Kopplung +
 // Challenge/Response-Login für /api/installer/* in routes-api.js).
 import { createInstallerPortal } from './services/installer-portal.js';
@@ -2440,17 +2441,14 @@ if (IS_WEB_PROCESS) {
   // verlängern und stehen so im Audit-Log (routes-api.js isSupportTunnelRequest).
   const supportPort = supportWebPort();
   if (supportPort !== Number(cfg.httpPort)) {
-    const webHandler = web.listeners('request')[0];
-    const webSupport = http.createServer((req, res) => {
-      req.dvhubSupportTunnel = true;
-      return webHandler(req, res);
-    });
-    webSupport.on('error', (err) => {
-      console.error(`Support-Listener 127.0.0.1:${supportPort}: ${err.message}`);
-      pushLog('support_web_listener_error', { port: supportPort, error: err.message });
-    });
-    webSupport.listen(supportPort, '127.0.0.1', () => {
-      console.log(`Support-Tunnel web listener on 127.0.0.1:${supportPort}`);
+    startSupportWebListener({
+      handler: web.listeners('request')[0],
+      port: supportPort,
+      onError: (err) => {
+        console.error(`Support-Listener 127.0.0.1:${supportPort}: ${err.message}`);
+        pushLog('support_web_listener_error', { port: supportPort, error: err.message });
+      },
+      onListening: () => console.log(`Support-Tunnel web listener on 127.0.0.1:${supportPort}`),
     });
   } else {
     pushLog('support_web_listener_error', { port: supportPort, error: 'gleicher Port wie httpPort — Support-Listener aus' });

@@ -1201,6 +1201,15 @@ export function createApiRoutes(ctx) {
   function isSupportTunnelRequest(req) {
     return req?.dvhubSupportTunnel === true;
   }
+  // Freigaben (Kopplungen, Zugänge, Voll-Export, Geräte-Tausch) erteilt der
+  // Kunde, nicht der Support über den offenen Tunnel (Strix T-0001,
+  // Gegenprüfung 6f9c9cca). Gibt true zurück, wenn schon geantwortet wurde.
+  function denySupportConsent(req, res, action) {
+    if (!isSupportTunnelRequest(req)) return false;
+    pushLog('support_tunnel_consent_denied', { action }, actorContext(req));
+    json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Freigaben und Kopplungen erteilt der Kunde selbst, nicht über den Support-Tunnel.' });
+    return true;
+  }
   function isLoopbackRequest(req) {
     if (isSupportTunnelRequest(req)) return false;
     const addr = deriveClientIp(req, getCfg());
@@ -1259,7 +1268,10 @@ export function createApiRoutes(ctx) {
   // old RFC1918/loopback behaviour.
   function isLocalNetworkRequest(req) {
     const addr = deriveClientIp(req, getCfg());
-    if (addr === '127.0.0.1' || addr === '::1') return true; // box itself, always
+    // Der Support-Tunnel kommt auch von 127.0.0.1, ist aber nicht die Box:
+    // für ihn gelten lanCidrs/trustedClientIps wie für jedes Heimnetz-Gerät
+    // (Gegenprüfung 6f9c9cca, P2). Ohne Listen zählt Loopback als privat.
+    if ((addr === '127.0.0.1' || addr === '::1') && !isSupportTunnelRequest(req)) return true; // box itself, always
     const sec = getCfg().security || {};
     const cidrs = Array.isArray(sec.lanCidrs) ? sec.lanCidrs.filter(Boolean) : [];
     const inRange = cidrs.length > 0
@@ -2947,6 +2959,7 @@ export function createApiRoutes(ctx) {
       const body = await readJsonBody(req, res);
       if (body === null) return;
       if (p === '/api/installer/confirm' && method === 'POST' && !csrfOk(body)) return csrfFail();
+      if (p === '/api/installer/confirm' && method === 'POST' && denySupportConsent(req, res, 'installer_confirm')) return;
       try {
         if (p === '/api/installer/confirm' && method === 'POST') {
           return json(res, 200, { ok: true, ...portal.confirm({ installerId: body.installerId, pairingCode: body.pairingCode }) });
@@ -3049,7 +3062,7 @@ export function createApiRoutes(ctx) {
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
     requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback,
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, ALLOWED_CONFIG_ROOTS,
-    hasValidBearer,
+    hasValidBearer, denySupportConsent,
   });
   const adminRoutes = createAdminRoutes({
     ctx, getCfg, pushLog,
@@ -5045,6 +5058,7 @@ export function createApiRoutes(ctx) {
         }
         const onlyNarrowing = Object.keys(patch).length > 0
           && Object.keys(patch).every((k) => (k === 'enabled' && patch.enabled === false) || (k === 'useRelay' && patch.useRelay === false));
+        if (!onlyNarrowing && denySupportConsent(req, res, 'mobile_link_settings')) return;
         if (!onlyNarrowing && !nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
         next.mobileLink = { ...(next.mobileLink || {}), ...patch };
@@ -5054,10 +5068,12 @@ export function createApiRoutes(ctx) {
         return json(res, 200, { ok: true, ...ml.status() });
       }
       if (url.pathname === '/api/mobile-link/pair/start') {
+        if (denySupportConsent(req, res, 'mobile_link_pair_start')) return;
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try { return json(res, 200, { ok: true, pairing: ml.startPairing({ lanHost: body.lanHost }) }); } catch (e) { return fail(e); }
       }
       if (url.pathname === '/api/mobile-link/pair/approve') {
+        if (denySupportConsent(req, res, 'mobile_link_pair_approve')) return;
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try {
           const r = ml.approvePairing({ perms: body.perms, name: body.name, approveToken: body.approveToken });
@@ -5071,6 +5087,7 @@ export function createApiRoutes(ctx) {
         try { return json(res, 200, ml.removeDevice(String(body.id || ''))); } catch (e) { return fail(e); }
       }
       if (url.pathname === '/api/mobile-link/devices/update') {
+        if (denySupportConsent(req, res, 'mobile_link_device_update')) return;
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try { return json(res, 200, ml.updateDevice(String(body.id || ''), { name: body.name, perms: body.perms })); } catch (e) { return fail(e); }
       }
