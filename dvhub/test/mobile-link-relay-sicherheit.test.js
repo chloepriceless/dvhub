@@ -547,17 +547,19 @@ describe('Relay-Speicher: Ausgangspuffer', () => {
     }
   });
 
-  test('zwei größte Box-Antworten dürfen gleichzeitig warten (Gegenprüfung 67ede79a P3)', () => {
+  test('Rückstau je Verbindung: vier größte Antworten plus Live-Werte gehen, ein fünfter größter Rahmen trennt (Gegenprüfung 67ede79a/7a5c7e49/9237ab50 P3)', () => {
     const guard = relayCore.createSocketGuard({ stallMs: 1e9 });
     try {
       const w = fakeWs();
       const s = guard.wrap(w, { remote: 'A', pingMs: 0 });
-      // Größter weitergeleiteter Rahmen: Box-Rahmen bis 1 MiB, {"t":"data","d":…}.
-      const max = JSON.stringify({ t: 'data', d: 'A'.repeat(DEFAULT_LIMITS.boxFrameBytes - 64) });
+      // Größter weitergeleiteter Rahmen: Box-Rahmen bis 1 MiB + Spielraum.
+      const max = JSON.stringify({ t: 'data', d: 'A'.repeat(DEFAULT_LIMITS.boxFrameBytes + relayCore.FRAME_SLACK - 20) });
+      for (let i = 0; i < 4; i++) s.send(max);
+      for (let i = 0; i < 10; i++) s.send(JSON.stringify({ t: 'data', d: 'L'.repeat(8 * 1024) }));
+      assert.equal(w.terminated, false, 'vier größte Antworten trennen ein gesundes Handy');
       s.send(max);
-      s.send(max);
-      assert.equal(w.terminated, false, 'zwei größte Antworten trennen ein gesundes Handy');
-      w.flush();
+      assert.equal(w.terminated, true, 'fünfter größter Rahmen im Rückstau nicht getrennt');
+      assert.equal(guard.stats().outBufferedBytes, 0);
     } finally {
       guard.close();
     }
@@ -754,16 +756,44 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
     }
   });
 
-  test('festgehaltene Fragmente zählen im Eingangsbudget (P2)', async () => {
-    const { srv, port } = await localRelay({ socketLimits: { inTotal: 256 * 1024, inPerRemote: 1024 * 1024, stallMs: 60_000 } });
+  test('festgehaltene Lesestücke zählen in voller Größe: Rest-Byte und Maske (Gegenprüfung 39d4427 P2)', async () => {
+    const { srv, port } = await localRelay({ limits: { boxFramesPerWindow: 1e6, boxBytesPerWindow: 1e12 } });
     try {
+      const text = JSON.stringify({ t: 'ping', pad: 'P'.repeat(65_000 - 30) });
+      const frame = Buffer.concat([frameHead(Buffer.byteLength(text)), Buffer.from(text)]);
+      // a: Rahmen + 1 Byte des nächsten Kopfes im selben Lesestück → das
+      // Rest-Byte hält das ganze Stück. b: Rahmen allein → die Maske hält es.
+      const a = await wsBox(port, generateIdentity());
       const b = await wsBox(port, generateIdentity());
-      // 10 Fragmente (unter maxFragments), Nutzdaten winzig — nur die
-      // Pin-Zählung (64 KiB je Fragment) sprengt das Budget.
-      const parts = [Buffer.concat([frameHead(1, { fin: false, opcode: 0x1 }), Buffer.from('{')])];
-      for (let i = 0; i < 9; i++) parts.push(Buffer.concat([frameHead(1, { fin: false, opcode: 0x0 }), Buffer.from(' ')]));
-      b.ws._socket.write(Buffer.concat(parts));
-      await until(() => b.state.closed, 3000);
+      const before = srv.socketStats().inPartialBytes;
+      a.ws._socket.write(Buffer.concat([frame, Buffer.from([0x8a])]));
+      b.ws._socket.write(frame);
+      await a.next('pong');
+      await b.next('pong');
+      await sleep(50);
+      const held = srv.socketStats().inPartialBytes - before;
+      assert.ok(held >= 2 * 60_000, `festgehaltene Lesestücke nur mit ${held} B gezählt`);
+      // Nächster kleiner Rahmen ersetzt die Maske → wieder klein.
+      const small = JSON.stringify({ t: 'ping' });
+      b.ws._socket.write(Buffer.concat([frameHead(small.length), Buffer.from(small)]));
+      await b.next('pong');
+      await sleep(50);
+      assert.ok(srv.socketStats().inPartialBytes - before < held - 50_000, 'Maske gibt das Lesestück nicht frei');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  test('ein Halter je Verbindung im Eingang: Verdrängung vergleicht Verbindungen, nicht Teilposten (Gegenprüfung 39d4427 P3)', async () => {
+    const { srv, port } = await localRelay({ limits: { boxFramesPerWindow: 1e6, boxBytesPerWindow: 1e12 }, socketLimits: { stallMs: 60_000 } });
+    try {
+      assert.ok(srv.guard, 'Wächter nicht erreichbar');
+      const a = await wsBox(port, generateIdentity());
+      const b = await wsBox(port, generateIdentity());
+      // Beide mit angefangenem Rahmen und festgehaltenen Lesestücken.
+      for (const c of [a, b]) c.ws._socket.write(Buffer.concat([frameHead(300 * 1024), Buffer.alloc(100 * 1024, 0x20)]));
+      await sleep(100);
+      assert.equal(srv.guard.in.holders.size, 2, `${srv.guard.in.holders.size} Halter für 2 Verbindungen`);
     } finally {
       await srv.close();
     }
@@ -920,7 +950,8 @@ describe('Relay-Speicher: faire Verdrängung im Briefkasten', () => {
     const worst = DEFAULT_LIMITS.maxConnections * 10 * 1024
       + DEFAULT_LIMITS.mailboxTotalBytes + S.outTotal + S.inTotal;
     assert.ok(worst <= 176 * 1024 * 1024, `Worst Case ${Math.round(worst / 1048576)} MiB`);
-    assert.ok(S.outPerConn <= 2 * 1024 * 1024 + 64 * 1024 && S.outPerConn >= DEFAULT_LIMITS.boxFrameBytes + 4096);
+    assert.ok(S.outPerConn <= 4.5 * 1024 * 1024, 'Ausgang je Verbindung nicht deutlich unter den alten 8 MiB');
+    assert.ok(S.outPerConn <= S.outPerRemote);
     assert.ok(S.preAuthFrameBytes <= 16 * 1024);
     assert.ok(DEFAULT_LIMITS.mailboxBytesPerSource < DEFAULT_LIMITS.mailboxTotalBytes / 8);
   });

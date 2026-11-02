@@ -83,7 +83,7 @@ fremden Meldungen. Neue Anlagen-Briefkästen je Quelle: 16 sofort, dann einer je
 Minute.
 
 Puffer am WebSocket (`SOCKET_LIMITS`): noch nicht abgeholte Ausgaben höchstens
-gut 2 MiB je Verbindung (zwei größte Rahmen samt Köpfen), 8 MiB je Quelle, 32 MiB gesamt; angefangene Rahmen
+gut 4 MiB je Verbindung (gewählter Rückstau: vier größte Rahmen samt Köpfen; ein fünfter trennt), 8 MiB je Quelle, 32 MiB gesamt; angefangene Rahmen
 höchstens 4 MiB je Quelle, 32 MiB gesamt. Vor der Anmeldung sind nur Rahmen bis
 8 KiB erlaubt, danach je Rolle (Gerät 256 KiB, Anlage 1 MiB). Reicht ein Budget
 nicht, wird die Verbindung mit dem größten Rückstand getrennt; wer keinen
@@ -92,7 +92,7 @@ hat 30 s plus Größe / 16 KiB/s (1 MiB: 94 s). Schließt das
 Relay eine Verbindung, hat die Gegenstelle 2 s für den Abschluss. Pings
 beantwortet der Wächter selbst (Pongs zählen im Ausgangsbudget), höchstens 50
 Steuerrahmen je 10 s; je Nachricht höchstens 16 Fragmente, gepufferte
-Lesestücke und Fragmente zählen im Eingangsbudget mit.
+Lesestücke zählen in voller Größe im Eingangsbudget mit (je Verbindung max(zugesagte Nutzdaten, festgehaltene Lesestücke) + 256 B je Stück).
 
 ## Überwachung
 

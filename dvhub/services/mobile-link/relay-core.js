@@ -728,9 +728,13 @@ export function createRelay({
 // danach setzt relay-core die Grenze der Rolle (setFrameLimit).
 export const SOCKET_LIMITS = Object.freeze({
   preAuthFrameBytes: 8 * 1024,
-  // Zwei größte Antworten der Box (je ~1 MiB) plus Pool-Anteil ihrer Köpfe
-  // (Gegenprüfung 67ede79a P3).
-  outPerConn: 2 * 1024 * 1024 + 32 * 1024,
+  // Gewählter Rückstau: vier größte Rahmen samt Kopf-Pool-Anteil plus Luft
+  // für Live-Werte (so viele Anfragen bearbeitet die Box je Gerät
+  // gleichzeitig; eine Garantie ist das nicht — die Box erfährt nicht, wann
+  // das Relay einen Rahmen los ist; ein fünfter größter Rahmen im Rückstau
+  // trennt). Den Speicher begrenzen die Summen je Quelle und gesamt
+  // (Gegenprüfung 67ede79a/7a5c7e49/9237ab50 P3).
+  outPerConn: 4 * (1024 * 1024 + 4096 + 8192) + 256 * 1024,
   outPerRemote: 8 * 1024 * 1024,
   outTotal: 32 * 1024 * 1024,
   inPerRemote: 4 * 1024 * 1024,
@@ -740,19 +744,20 @@ export const SOCKET_LIMITS = Object.freeze({
   // Steuerrahmen (Ping/Pong) je Verbindung und 10 s; Pongs auf Pings gehen
   // durch das Ausgangsbudget (autoPong aus, Gegenprüfung faf3cb0 P1).
   controlFramesPerWindow: 50,
-  // Eingang: gepufferte Roh-Stücke und Fragmente halten Speicher über die
-  // Nutzdaten hinaus fest (ein Fragment hält das ganze Lesestück) — zählen mit
-  // (Gegenprüfung faf3cb0 P2). Harte Grenzen setzt der WebSocketServer
-  // (WS_SERVER_OPTIONS).
+  // Eingang: Roh-Stücke, Fragmente und die Maske des Empfängers sind Sichten
+  // auf ganze Lesestücke und halten sie fest. Gezählt wird je Verbindung
+  // max(zugesagte Nutzdaten, Summe der festgehaltenen Lesestücke) plus
+  // chunkCost je Stück (Gegenprüfung faf3cb0 P2, 39d4427 P2). Harte Grenzen
+  // setzt der WebSocketServer (WS_SERVER_OPTIONS).
   chunkCost: 256,
-  fragmentPinBytes: 64 * 1024,
   // Vom Relay geschlossen: so lange darf die Gegenstelle den Abschluss
   // bestätigen, dann wird getrennt (statt 30 s `ws`-Frist ohne Zählung).
   closeGraceMs: 2_000,
 });
 
 // Optionen für jeden WebSocketServer, dessen Verbindungen der Wächter umhüllt.
-export const WS_SERVER_OPTIONS = Object.freeze({ autoPong: false, maxFragments: 16, maxBufferedChunks: 4096 });
+// maxBufferedChunks 1024: die Neuberechnung je Lesen läuft über die Stücke.
+export const WS_SERVER_OPTIONS = Object.freeze({ autoPong: false, maxFragments: 16, maxBufferedChunks: 1024 });
 
 // Budget mit Haltern { key, held, since, unit(), kill() }; kill() muss synchron
 // freigeben; unit() = Bytes, für die gerade die Uhr läuft.
@@ -828,7 +833,7 @@ export function createSocketGuard(opts = {}) {
 // hier wird erst geprüft und Platz belegt, bevor `ws` Nutzdaten sammelt.
 // Getestet mit ws 8.22 (mobile-link-relay-sicherheit.test.js); fehlen die
 // Felder, bleibt die Grenze des WebSocketServers.
-function installFrameGate(ws, { getMax, inH, guard, kill }) {
+function installFrameGate(ws, { getMax, inH, retarget, kill }) {
   const rcv = ws._receiver;
   if (!rcv || typeof rcv._maxPayload !== 'number' || typeof rcv._totalPayloadLength !== 'number') return false;
   const ceiling = rcv._maxPayload > 0 ? rcv._maxPayload : Infinity;
@@ -838,9 +843,10 @@ function installFrameGate(ws, { getMax, inH, guard, kill }) {
       const max = Math.min(getMax(), ceiling);
       const need = rcv._totalPayloadLength;
       if (need > max) return max;
-      if (need > inH.held) {
-        const was = inH.held;
-        if (!guard.in.take(inH, need - inH.held)) { queueMicrotask(kill); return Math.max(1, need - 1); }
+      if (need > inH.reserved) {
+        const was = inH.reserved;
+        inH.reserved = need;
+        if (!retarget()) { queueMicrotask(kill); return Math.max(1, need - 1); }
         if (was === 0) inH.since = Date.now();
       }
       return max;
@@ -871,15 +877,19 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
   // in Sendereihenfolge); die Uhr läuft für den ältesten.
   const pendingSizes = [];
   const outH = { key: remote, held: 0, since: 0, unit: () => pendingSizes[0] || 0, kill: () => kill() };
-  const inH = { key: remote, held: 0, since: 0, unit: () => inH.held, kill: () => kill() };
-  // Roh-Stücke und Fragmente des Empfängers (über die Nutzdaten hinaus).
-  // Ohne eigene Frist: ein hängender Rahmen fliegt über inH.
-  const pinH = { key: remote, held: 0, since: 0, unit: () => Infinity, kill: () => kill() };
+  // Eingang: ein Halter je Verbindung (sonst verdrängt sie sich selbst,
+  // Gegenprüfung 39d4427 P3): reserved = zugesagte Nutzdaten des laufenden
+  // Rahmens (Frist läuft nur dafür), pinned = festgehaltene Lesestücke.
+  const inH = {
+    key: remote, held: 0, since: 0, reserved: 0, pinned: 0, pieces: 0,
+    unit: () => (inH.reserved > 0 ? inH.reserved : Infinity),
+    kill: () => kill(),
+  };
   function releaseAll() {
     if (!guard) return;
     guard.out.release(outH);
     guard.in.release(inH);
-    guard.in.release(pinH);
+    inH.reserved = 0;
   }
   function kill() {
     gone = true;
@@ -928,22 +938,39 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
     });
   }
   if (guard) {
-    installFrameGate(ws, { getMax: () => frameMax, inH, guard, kill });
     const rcv = ws._receiver;
-    // Festgehaltene Roh-Stücke/Fragmente nach jedem Lesen neu bewerten.
+    // Soll-Belegung herstellen; false = kein Platz (dann fliegt die Verbindung).
+    const retarget = () => {
+      const want = Math.max(inH.reserved, inH.pinned) + inH.pieces * guard.limits.chunkCost;
+      if (want > inH.held) return guard.in.take(inH, want - inH.held);
+      if (want < inH.held) guard.in.give(inH, inH.held - want);
+      return true;
+    };
+    installFrameGate(ws, { getMax: () => frameMax, inH, retarget, kill });
+    // Festgehaltene Lesestücke nach jedem Lesen neu bewerten: verschiedene
+    // ArrayBuffer hinter _buffers, _fragments und _mask.
     const repin = () => {
       if (gone || !rcv) return;
-      const want = (Array.isArray(rcv._buffers) ? rcv._buffers.length : 0) * guard.limits.chunkCost
-        + (Array.isArray(rcv._fragments) ? rcv._fragments.length : 0) * guard.limits.fragmentPinBytes;
-      if (want > pinH.held) {
-        if (!guard.in.take(pinH, want - pinH.held)) { kill(); return; }
-      } else if (want < pinH.held) {
-        guard.in.give(pinH, pinH.held - want);
-      }
+      const seen = new Set();
+      let bytes = 0;
+      let pieces = 0;
+      const note = (b) => {
+        if (!b || !b.buffer) return;
+        pieces += 1;
+        if (seen.has(b.buffer)) return;
+        seen.add(b.buffer);
+        bytes += b.buffer.byteLength;
+      };
+      if (Array.isArray(rcv._buffers)) for (const b of rcv._buffers) note(b);
+      if (Array.isArray(rcv._fragments)) for (const b of rcv._fragments) note(b);
+      note(rcv._mask);
+      inH.pinned = bytes;
+      inH.pieces = pieces;
+      if (!retarget()) kill();
     };
     ws._socket?.on('data', repin);
     // Nachricht vollständig: der angefangene Rahmen ist keiner mehr.
-    ws.on('message', () => { guard.in.release(inH); queueMicrotask(repin); });
+    ws.on('message', () => { inH.reserved = 0; queueMicrotask(repin); });
     // Pings selbst beantworten (autoPong aus): Pong durchs Ausgangsbudget,
     // Steuerrahmen begrenzt — sonst wächst der Schreibpuffer eines Nicht-Lesers
     // an allen Grenzen vorbei (Gegenprüfung faf3cb0 P1).
