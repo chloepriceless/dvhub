@@ -13,6 +13,9 @@ export const SUPPORT_WEB_HOST = '127.0.0.1';
 export function startSupportWebListener({ handler, port, onError = () => {}, onListening = () => {} }) {
   const server = http.createServer((req, res) => {
     req.dvhubSupportTunnel = true;
+    // Kein Proxy davor: Weiterleitungs-Kopfzeilen kämen vom Support selbst und
+    // könnten mit trustProxy eine Heimnetz-Adresse vortäuschen (Gegenprüfung fbb2dc4b).
+    for (const h of ['x-forwarded-for', 'forwarded', 'x-real-ip', 'x-forwarded-host', 'x-forwarded-proto']) delete req.headers[h];
     return handler(req, res);
   });
   server.on('error', onError);

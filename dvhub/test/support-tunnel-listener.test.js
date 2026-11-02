@@ -275,3 +275,47 @@ test('Port-Kollision: Support-Port = Web-Port → Tunnel öffnet nicht (kein Rü
     assert.equal(r.error, 'support_web_port_conflict');
   } finally { fsMod.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Gegenprüfung fbb2dc4b: (P1) eigenes VPN-Profil hochladen/starten = Zugang über
+// das Tunnel-Ende hinaus; (P2) Token rotieren / apiToken setzen; (P2) Support-
+// Login wieder einschalten; (P2) X-Forwarded-For über den Tunnel.
+test('Support-Tunnel: kein VPN-Profil, kein Token, Support-Login bleibt wie die Box es hat', async () => {
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, support: { localUser: { enabled: false } } };
+  const vpnCalls = [];
+  const { ctx, saved } = ctxWith(box, {
+    vpnManager: { start: async () => { vpnCalls.push('start'); return { ok: true }; }, uploadConfig: async () => { vpnCalls.push('upload'); return { ok: true }; }, stop: async () => ({ ok: true }) },
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+    getConfigPath: () => '/nonexistent/config.json', getServiceActionsEnabled: () => true,
+  });
+  const routes = createApiRoutes(ctx);
+  const call = async (p, body) => {
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', p, body, { viaSupport: true }), res, new URL(`http://x${p}`));
+    return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}') };
+  };
+  for (const p of ['/api/vpn/config/upload', '/api/vpn/start', '/api/admin/token/rotate']) {
+    const r = await call(p, { type: 'openvpn', name: 'x', content: 'remote evil.example.net 1194' });
+    assert.equal(r.status, 403, `${p}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.error, 'support_tunnel_consent_denied', p);
+  }
+  assert.deepEqual(vpnCalls, []);
+  await call('/api/config', { config: { httpPort: 8080, apiToken: 'c'.repeat(40), support: { localUser: { enabled: true } } } });
+  const last = saved.at(-1);
+  if (last) {
+    assert.notEqual(last.apiToken, 'c'.repeat(40), 'Token nicht über den Tunnel gesetzt');
+    assert.equal(last.support.localUser.enabled, false, 'Support-Login nicht über den Tunnel eingeschaltet');
+  }
+});
+
+test('Support-Listener entfernt Weiterleitungs-Kopfzeilen (X-Forwarded-For)', async () => {
+  const http = await import('node:http');
+  const { startSupportWebListener } = await import('../services/support-web-listener.js');
+  let headers = null;
+  const server = await new Promise((resolve, reject) => {
+    const srv = startSupportWebListener({ handler: (req, res) => { headers = req.headers; res.end(); }, port: 0, onError: reject, onListening: () => resolve(srv) });
+  });
+  try {
+    await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: server.address().port, path: '/', headers: { 'x-forwarded-for': '192.168.1.5', forwarded: 'for=192.168.1.5', 'x-real-ip': '192.168.1.5', 'x-forwarded-host': 'evil' } }, (r) => { r.resume(); r.on('end', resolve); }).on('error', reject));
+    for (const h of ['x-forwarded-for', 'forwarded', 'x-real-ip', 'x-forwarded-host']) assert.equal(headers[h], undefined, h);
+  } finally { server.close(); }
+});

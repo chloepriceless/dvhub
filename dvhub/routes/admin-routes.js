@@ -387,6 +387,8 @@ export function createAdminRoutes(deps) {
     // since the old token is invalid the moment saveAndApplyConfig returns.
     if (url.pathname === '/api/admin/token/rotate' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
+      // Das neue Token gälte über den Tunnel hinaus (Gegenprüfung fbb2dc4b, P2).
+      if (deps.denySupportConsent?.(req, res, 'token_rotate')) return;
       const oldToken = getCfg().apiToken || '';
       const newToken = crypto.randomBytes(32).toString('hex'); // 64 hex chars, ~256 bits entropy
       const oldFp = tokenFingerprint(oldToken);  // null if oldToken was empty (D-05 allows that)

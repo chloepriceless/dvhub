@@ -3069,7 +3069,7 @@ export function createApiRoutes(ctx) {
   const adminRoutes = createAdminRoutes({
     ctx, getCfg, pushLog,
     json, checkAuth, adminHealthPayload, execFileAsync, SECURITY_HEADERS,
-    actorContext, deriveClientIp, tokenFingerprint,
+    actorContext, deriveClientIp, tokenFingerprint, denySupportConsent,
     GIT_SHA_REF, SEMVER_TAG, compareSemverTag, selectLatestSemverTag, assertNoDowngrade, listReachableReleaseTags,
   });
   const notificationRoutes = createNotificationRoutes({ ctx, pushLog, json, checkAuth, actorContext, checkProviderRateLimit });
@@ -8432,6 +8432,8 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/start' && req.method === 'POST') {
+      // Ein VPN überdauert den Support-Tunnel (Gegenprüfung fbb2dc4b, P1).
+      if (denySupportConsent(req, res, 'vpn_start')) return;
       if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       // Plan 08-09 Task 2: VPN start/stop/restart are operator-initiated
@@ -8494,6 +8496,7 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/config/upload' && req.method === 'POST') {
+      if (denySupportConsent(req, res, 'vpn_upload')) return;
       if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
 
