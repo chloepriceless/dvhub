@@ -33,12 +33,32 @@ test('dvhub-update.sh: npm install als root mit HOME=/root', () => {
 // jedes Paket mit Install-Skript (preinstall/postinstall) bei jedem Update
 // Code als root aus. Heute hat keines eines (0/211) — das Skript-Verbot hält
 // das so, auch für künftige Abhängigkeiten.
-test('R-0004: jedes npm install als root ohne Lifecycle-Skripte', () => {
-  for (const f of ['../../install.sh', '../../post-update.sh', '../../dvhub-update.sh']) {
-    const s = read(f);
-    const calls = s.split('\n').filter((l) => /\bnpm (install|ci) --/.test(l) && !/^\s*#/.test(l) && !/echo /.test(l));
-    assert.ok(calls.length > 0, f);
-    for (const l of calls) assert.match(l, /--ignore-scripts/, `${f}: ${l.trim()}`);
+test('R-0004: jedes npm install in den Shell-Skripten ohne Lifecycle-Skripte', async () => {
+  // Gegenprüfung f5ea8f2d (P3): alle versionierten *.sh, jede Form
+  // (npm install, npm i, npm ci, npm --prefix … install), auch nach `;`/`&&`.
+  const { execFileSync } = await import('node:child_process');
+  const root = new URL('../../', import.meta.url);
+  const files = execFileSync('git', ['ls-files', '*.sh', '**/*.sh'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
+  assert.ok(files.includes('post-update.sh') && files.includes('dvhub-update.sh'), files.join(' '));
+  const NPM_INSTALL = /\bnpm\b(?:\s+--?[\w-]+(?:[ =](?:"[^"]*"|\S+))?)*\s+(?:install|i|ci)\b/;
+  let seen = 0;
+  for (const f of files) {
+    const lines = fs.readFileSync(new URL(f, root), 'utf8').split('\n');
+    for (const l of lines) {
+      const code = l.replace(/^\s+/, '');
+      if (code.startsWith('#') || /^echo\b/.test(code) || /--description\b/.test(code)) continue;
+      if (!NPM_INSTALL.test(code)) continue;
+      seen += 1;
+      assert.match(code, /--ignore-scripts/, `${f}: ${code}`);
+    }
+  }
+  assert.ok(seen >= 5, `npm-install-Aufrufe gefunden: ${seen}`);
+});
+
+test('R-0004: der Wächter erkennt auch abweichende Schreibweisen', () => {
+  const NPM_INSTALL = /\bnpm\b(?:\s+--?[\w-]+(?:[ =](?:"[^"]*"|\S+))?)*\s+(?:install|i|ci)\b/;
+  for (const l of ['HOME=/root npm install || exit 1', 'npm --prefix "$APP_DIR" install --omit=dev', 'cd x; npm ci', 'npm i']) {
+    assert.ok(NPM_INSTALL.test(l), l);
   }
 });
 
