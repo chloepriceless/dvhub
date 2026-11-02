@@ -13,10 +13,16 @@
 //   RELAY_BOX_ALLOWLIST   optional: Datei mit erlaubten Box-IDs (eine je Zeile);
 //                         ohne Datei darf jede Box das Relay nutzen
 //   RELAY_MAX_BOXES       höchstens so viele Boxen gleichzeitig (Standard 10000)
-//   RELAY_TRUST_PROXY     1 = Client-Adresse aus X-Forwarded-For lesen (nur Log)
+//   RELAY_TRUST_PROXY     Anzahl Reverse-Proxys davor (1 = Caddy). Dann zählt als
+//                         Quelladresse der Eintrag, den der äußerste Proxy in
+//                         X-Forwarded-For angehängt hat (von rechts gezählt) —
+//                         nie der clientgesetzte vordere (Strix H-0001). Gilt nur,
+//                         wenn die Gegenstelle selbst eine private Adresse hat.
+//                         Die Adresse zählt für die Grenze je Quelle.
 
 import http from 'node:http';
 import fs from 'node:fs';
+import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { createRelay, wrapWebSocket } from './relay-core.js';
@@ -30,6 +36,55 @@ function loadAllowlist(file) {
   // Änderungen ohne Neustart übernehmen.
   fs.watchFile(file, { interval: 5000 }, () => { try { set = read(); } catch { /* alte Liste behalten */ } });
   return (boxId) => set.has(boxId);
+}
+
+// Private/lokale Gegenstelle = Proxy im eigenen Netz (Docker-Netz, localhost).
+function isPrivate(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  if (net.isIPv6(ip)) {
+    const x = ip.toLowerCase();
+    return x === '::1' || x.startsWith('fc') || x.startsWith('fd') || x.startsWith('fe80:');
+  }
+  return false;
+}
+
+// Adresse ohne Klammern, IPv4 aus „::ffff:a.b.c.d“ ausgepackt; null, wenn keine IP.
+function unwrapIp(raw) {
+  let ip = String(raw || '').trim();
+  if (ip.startsWith('[') && ip.includes(']')) ip = ip.slice(1, ip.indexOf(']'));
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) ip = mapped[1];
+  return net.isIP(ip) ? ip.toLowerCase() : null;
+}
+
+// Zählschlüssel: IPv4 wie sie ist, IPv6 auf das /64 gekürzt — ein Anschluss
+// hat meist ein ganzes /64, sonst wäre die Grenze je Quelle wirkungslos.
+function remoteKey(raw) {
+  const ip = unwrapIp(raw);
+  if (!ip || net.isIPv4(ip)) return ip;
+  const [head, tail = ''] = ip.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  if ([...h, ...t].some((g) => g.includes('.'))) return ip; // eingebettetes IPv4: selten, unverändert
+  const groups = ip.includes('::') ? [...h, ...Array(8 - h.length - t.length).fill('0'), ...t] : h;
+  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(':')}::/64`;
+}
+
+// Quelladresse für die Grenze je Quelle (Strix H-0001).
+export function clientAddress(req, trustProxy = process.env.RELAY_TRUST_PROXY) {
+  const peerRaw = req.socket?.remoteAddress || '';
+  const peer = remoteKey(peerRaw) || peerRaw || null;
+  const hops = Number.parseInt(trustProxy, 10);
+  const peerIp = unwrapIp(peerRaw);
+  if (!(hops > 0) || !peerIp || !isPrivate(peerIp)) return peer;
+  const list = String(req.headers?.['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+  // Jeder Proxy hängt die Adresse seiner Gegenstelle hinten an: was der
+  // äußerste (vom Internet aus erste) gesehen hat, steht an Stelle `hops` von rechts.
+  const key = list.length >= hops ? remoteKey(list[list.length - hops]) : null;
+  return key || peer;
 }
 
 export function startRelayServer({
@@ -56,10 +111,7 @@ export function startRelayServer({
   server.on('upgrade', (req, socket, head) => {
     if (req.url !== WS_PATH) { socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      const remote = process.env.RELAY_TRUST_PROXY === '1'
-        ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress
-        : req.socket.remoteAddress;
-      relay.attach(wrapWebSocket(ws, { pingMs }), { remote });
+      relay.attach(wrapWebSocket(ws, { pingMs }), { remote: clientAddress(req) });
     });
   });
   const ready = new Promise((resolve) => server.listen(port, host, () => resolve(server.address())));
