@@ -448,31 +448,39 @@ test('Abruf: hängendes Lesen der Datenbank hält den Abruf nicht fest, geschrie
   assert.equal(providerSlotAt(Date.parse('2026-11-01T10:00:00Z')).ctKwh > 0, true, 'Preise trotzdem im Speicher');
 });
 
-// Gegenprüfung b83f668a (P2/P3): ein hängendes Lesen blockiert auch den Takt
-// nicht, und nach Ablauf der Wartezeit fragt der nächste Versuch neu.
-test('Takt: hängendes Lesen der Datenbank → Zeitgrenze, Warnung, nächster Versuch fragt neu', { timeout: 5000 }, async () => {
+// Gegenprüfung b83f668a/77ad720d: ein langsames Lesen hält den Takt nicht
+// fest, läuft aber weiter (kein zweites daneben) und wird übernommen.
+test('Takt: langsames Lesen der Datenbank → Zeitgrenze und Warnung, Ergebnis kommt trotzdem an', { timeout: 5000 }, async () => {
   const { ctx, written, logs } = makeCtx();
   let calls = 0;
+  let release;
   const stored = dayPrices('2026-11-01');
+  const fresh = stored.map((p, i) => (i === 60 ? { ...p, ctKwh: 44.4 } : p));
   ctx.telemetryStore.listSeriesSamples = () => {
     calls += 1;
-    if (calls === 1) return new Promise(() => {});
-    return Promise.resolve(stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh })));
+    return new Promise((resolve) => { release = () => resolve(stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh }))); });
   };
   let now = Date.parse('2026-11-01T10:00:00Z');
   const svc = createTariffProviderService(ctx, {
     now: () => now,
     dbWaitMs: 20,
-    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...fresh, ...dayPrices('2026-11-02', 20)] })
   });
   const keepAlive = setTimeout(() => {}, 3000);   // begrenzt: hängt der Takt, endet der Test trotzdem rot
   try {
-    await svc.tick();   // Lesen hängt → Abruf läuft trotzdem, Lesen wird neu versucht
-    await new Promise((r) => setImmediate(r));
-    assert.ok(logs.some((l) => l.event === 'tariff_provider_db_load_timeout'), 'Warnung im Log');
-    assert.equal(calls, 2, 'zweiter Leseversuch im Abruf');
-    assert.equal(written.length, 96, 'nach erfolgreichem Abgleich nur morgen');
-    assert.equal(svc.getState().dbLoaded, true);
+    await svc.tick();   // Lesen hängt noch → Abruf läuft trotzdem, schreibt aber nicht
+    assert.equal(written.length, 0);
+    assert.equal(logs.filter((l) => l.event === 'tariff_provider_db_load_timeout').length, 1, 'eine Warnung');
+    assert.equal(calls, 1, 'kein zweites Lesen daneben');
+    assert.equal(providerSlotAt(fresh[60].ts).ctKwh, 44.4);
+    release();
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(svc.getState().dbLoaded, true, 'spätes Ergebnis übernommen');
+    assert.equal(providerSlotAt(fresh[60].ts).ctKwh, 44.4, 'frischer Preis bleibt');
+    now += HOUR;
+    await svc.refresh();
+    assert.equal(written.length, 97, 'morgen + der geänderte Slot');
+    assert.equal(calls, 1);
   } finally {
     clearTimeout(keepAlive);
   }

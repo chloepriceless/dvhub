@@ -187,7 +187,7 @@ export function createTariffProviderService(ctx, deps = {}) {
   let timer = null;
   let inFlight = null;
   let dbLoading = null;
-  let loadGen = 0;
+  let loadTimeoutLogged = null;   // je hängendem Lesen nur eine Warnung
   let lastTestMs = 0;
   let identity = null;
   let reloadTimer = null;
@@ -236,11 +236,9 @@ export function createTariffProviderService(ctx, deps = {}) {
     const store = ctx.telemetryStore;
     if (st.dbLoaded || typeof store?.listSeriesSamples !== 'function') return;
     if (dbLoading) return dbLoading;
-    const gen = ++loadGen;
     dbLoading = (async () => {
       try {
         const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE });
-        if (gen !== loadGen) return;   // nach Zeitablauf aufgegeben, ein neuerer Versuch läuft
         const bySource = new Map();
         const keepFrom = now() - PERSISTED_KEEP_MS;
         for (const row of rows) {
@@ -265,20 +263,22 @@ export function createTariffProviderService(ctx, deps = {}) {
       } catch (error) {
         log('tariff_provider_db_load_error', { error: error.message }, 'warn');
       } finally {
-        if (gen === loadGen) dbLoading = null;
+        dbLoading = null;
       }
     })();
     return dbLoading;
   }
 
-  // Laden mit Zeitgrenze (Takt und Abruf): Hängt das Lesen, wird es nach
-  // dbWaitMs aufgegeben und beim nächsten Mal neu gestellt.
+  // Laden mit Zeitgrenze (Takt und Abruf): Takt und Abruf warten höchstens
+  // dbWaitMs. Das Lesen selbst läuft weiter (kein zweites daneben, das Pool-
+  // Verbindungen bände) und wird übernommen, sobald es fertig ist; bis dahin
+  // wird nicht geschrieben (writeSamples).
   async function loadFromDbBounded() {
     if (st.dbLoaded || typeof ctx.telemetryStore?.listSeriesSamples !== 'function') return;
-    if (await waitAtMost(loadFromDb(), dbWaitMs)) return;
-    if (st.dbLoaded) return;
-    loadGen += 1;
-    dbLoading = null;
+    const pending = loadFromDb();
+    if (await waitAtMost(pending, dbWaitMs)) return;
+    if (st.dbLoaded || loadTimeoutLogged === dbLoading) return;
+    loadTimeoutLogged = dbLoading;
     log('tariff_provider_db_load_timeout', { waitedMs: dbWaitMs }, 'warn');
   }
 
