@@ -133,7 +133,7 @@ test('npm: entkoppelte Unit, fertig innerhalb der Wartezeit → Marker, kein Neu
     assert.equal(r.status, 0, r.stderr);
     const c = s.calls();
     assert.ok(c.some((l) => l.startsWith('systemd-run') && l.includes('--unit dvhub-npm-install')), c.join('\n'));
-    assert.ok(c.includes('npm install --omit=dev'));
+    assert.ok(c.includes('npm install --omit=dev --ignore-scripts --no-audit --no-fund'));
     assert.equal(n.marker(), n.hash);
     assert.ok(!existsSync(n.flag));
     assert.match(r.stdout, /npm install: OK/);
@@ -149,7 +149,7 @@ test('npm: Unit läuft über die Wartezeit → Start geht weiter, Merker für de
     s.fake('systemd-run', `touch "${join(s.dir, 'running')}"`);
     const r = s.run(n.sh(40), { NPM_RUNNING: join(s.dir, 'running') });
     assert.equal(r.status, 0, r.stderr);
-    assert.ok(!s.calls().includes('npm install --omit=dev'), 'npm nicht im Start selbst');
+    assert.ok(!s.calls().includes('npm install --omit=dev --ignore-scripts --no-audit --no-fund'), 'npm nicht im Start selbst');
     assert.ok(existsSync(n.flag), 'Merker: Unit startet DVhub nach Erfolg neu');
     assert.equal(n.marker(), null, 'Marker erst nach Erfolg');
     assert.match(r.stdout, /im Hintergrund weiter/);
@@ -184,7 +184,8 @@ test('Langsame Teilschritte im Start laufen mit Zeitgrenze', () => {
   for (const needle of [
     'pu_bounded 20 env SERVICE_NAME="$SERVICE_NAME" DATA_DIR="$DATA_DIR" NODE_BIN="$NODE_BIN"',
     'pu_bounded 20 node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs"',
-    'pu_bounded 30 openssl req',
+    // TLS: Zeitgrenze als Vorsatz an dvhub_tls_selfsigned (Strix R-0001).
+    'dvhub_tls_selfsigned "$CONFIG_DIR" "$SERVICE_USER" pu_bounded 30',
     'pu_bounded 30 env SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" \\\n         bash "$INSTALL_DIR/support-provision.sh"',
     'pu_bounded 30 bash "$INSTALL_DIR/pg-write-tuning.sh"',
     'pu_bounded 20 env DB_NAME=dvhub bash "$INSTALL_DIR/timescale-provision.sh" --check',

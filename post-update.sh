@@ -762,7 +762,7 @@ if [[ -f "$APP_DIR/package.json" ]]; then
     NPM_SCRIPT='cd "$1" || exit 1
 if command -v flock >/dev/null 2>&1; then exec 9>"$5" && flock -w 600 9 || exit 1; fi
 rm -f "$3"
-HOME=/root npm install --omit=dev || exit 1
+HOME=/root npm install --omit=dev --ignore-scripts --no-audit --no-fund || exit 1
 [ -n "$2" ] && printf "%s\n" "$2" > "$3"
 echo "npm install: OK"
 if [ -e "$4" ]; then rm -f "$4"; systemctl restart --no-block "$6"; fi'
@@ -796,7 +796,7 @@ if [ -e "$4" ]; then rm -f "$4"; systemctl restart --no-block "$6"; fi'
       fi
     # Ohne systemd-run (oder es startet keine Unit): im Vordergrund, mit Zeitgrenze.
     # `if` suppresses `set -e`; no pipe so the rc is npm's own (not tail's).
-    elif pu_bounded 75 env HOME=/root npm install --omit=dev; then
+    elif pu_bounded 75 env HOME=/root npm install --omit=dev --ignore-scripts --no-audit --no-fund; then
       [[ -n "$CURRENT_HASH" ]] && printf '%s\n' "$CURRENT_HASH" >"$NPM_MARKER"
       echo "  npm install: OK"
     else

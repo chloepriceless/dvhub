@@ -803,7 +803,7 @@ fi
 
 echo "[5/7] Node-Abhaengigkeiten installieren"
 cd "$APP_DIR"
-npm install --omit=dev
+npm install --omit=dev --ignore-scripts --no-audit --no-fund
 
 # Port-Recht (80/443/502) bekommt der Dienst ueber systemd (AmbientCapabilities,
 # node-runtime-provision.sh nach dem Schreiben der Unit) — NICHT mehr per setcap

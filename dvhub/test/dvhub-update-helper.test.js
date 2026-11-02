@@ -133,7 +133,7 @@ test('npm-install: Marker vorher weg, nach Erfolg = Lockfile-Hash, HOME von root
     assert.equal(s.run('npm-install').status, 0);
     const want = execFileSync('sha256sum', [join(s.inst, 'dvhub', 'package-lock.json')], { encoding: 'utf8' }).split(' ')[0];
     assert.equal(readFileSync(marker, 'utf8').trim(), want);
-    assert.match(readFileSync(join(s.dir, 'npm.log'), 'utf8'), /^npm install --omit=dev HOME=/m);
+    assert.match(readFileSync(join(s.dir, 'npm.log'), 'utf8'), /^npm install --omit=dev --ignore-scripts --no-audit --no-fund HOME=/m);
   } finally { s.cleanup(); }
 });
 
@@ -192,7 +192,7 @@ test('npm-install: eigene Zeitgrenze unter der der Oberfläche (10 min)', () => 
     const env = lockRig(s);
     assert.equal(s.runEnv(env, 'npm-install').status, 0);
     const t = readFileSync(join(s.dir, 'timeout.log'), 'utf8').trim();
-    const m = t.match(/^timeout -k (\d+) (\d+) env HOME=\S+ npm install --omit=dev$/);
+    const m = t.match(/^timeout -k (\d+) (\d+) env HOME=\S+ npm install --omit=dev --ignore-scripts --no-audit --no-fund$/);
     assert.ok(m, t);
     assert.ok(Number(m[1]) + Number(m[2]) + 120 < 600, 'Sperr-Wartezeit + npm + Nachlauf < 10 min');
   } finally { s.cleanup(); }
