@@ -33,32 +33,58 @@ test('dvhub-update.sh: npm install als root mit HOME=/root', () => {
 // jedes Paket mit Install-Skript (preinstall/postinstall) bei jedem Update
 // Code als root aus. Heute hat keines eines (0/211) — das Skript-Verbot hält
 // das so, auch für künftige Abhängigkeiten.
+// Gegenprüfung d70ba301 (P3): EIN geteilter Prüfer (kein kopierter Regex),
+// alle Unterbefehle, die Pakete installieren (install/i/in/…/add, ci/ic/
+// clean-install, update/up, rebuild/rb), Prüfung je Aufruf statt je Zeile,
+// Fortsetzungszeilen zusammengezogen, echo-/--description-Texte entfernt statt
+// die ganze Zeile zu überspringen.
+const NPM_INSTALL_CMD = /\bnpm\b(?:\s+--?[\w-]+(?:[ =](?:"[^"]*"|'[^']*'|[^\s;&|'"]+))?)*\s+(?:install|i|in|ins|inst|insta|instal|isnt|isnta|isntal|isntall|add|ci|ic|clean-install|install-clean|isntall-clean|update|up|upgrade|udpate|rebuild|rb)\b[^;&|'"]*/g;
+function npmInstallCallsWithoutIgnoreScripts(text) {
+  const joined = text.replace(/\\\n\s*/g, ' ');
+  const bad = [];
+  let count = 0;
+  for (const raw of joined.split('\n')) {
+    if (/^\s*#/.test(raw)) continue;
+    const line = raw
+      .replace(/\s#.*$/, '')                                   // Kommentar am Zeilenende
+      .replace(/(\becho|--description)\s+"[^"]*"/g, '$1 ""');   // nur der Text, nicht die Zeile
+    for (const m of line.matchAll(NPM_INSTALL_CMD)) {
+      count += 1;
+      if (!/(^|\s)--ignore-scripts(?=\s|$)/.test(m[0])) bad.push(m[0].trim());
+    }
+  }
+  return { count, bad };
+}
+
 test('R-0004: jedes npm install in den Shell-Skripten ohne Lifecycle-Skripte', async () => {
-  // Gegenprüfung f5ea8f2d (P3): alle versionierten *.sh, jede Form
-  // (npm install, npm i, npm ci, npm --prefix … install), auch nach `;`/`&&`.
+  // Gegenprüfung f5ea8f2d (P3): alle versionierten *.sh.
   const { execFileSync } = await import('node:child_process');
   const root = new URL('../../', import.meta.url);
   const files = execFileSync('git', ['ls-files', '*.sh', '**/*.sh'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
   assert.ok(files.includes('post-update.sh') && files.includes('dvhub-update.sh'), files.join(' '));
-  const NPM_INSTALL = /\bnpm\b(?:\s+--?[\w-]+(?:[ =](?:"[^"]*"|\S+))?)*\s+(?:install|i|ci)\b/;
   let seen = 0;
   for (const f of files) {
-    const lines = fs.readFileSync(new URL(f, root), 'utf8').split('\n');
-    for (const l of lines) {
-      const code = l.replace(/^\s+/, '');
-      if (code.startsWith('#') || /^echo\b/.test(code) || /--description\b/.test(code)) continue;
-      if (!NPM_INSTALL.test(code)) continue;
-      seen += 1;
-      assert.match(code, /--ignore-scripts/, `${f}: ${code}`);
-    }
+    const { count, bad } = npmInstallCallsWithoutIgnoreScripts(fs.readFileSync(new URL(f, root), 'utf8'));
+    seen += count;
+    assert.deepEqual(bad, [], `${f}: npm-Aufruf ohne --ignore-scripts`);
   }
   assert.ok(seen >= 5, `npm-install-Aufrufe gefunden: ${seen}`);
 });
 
-test('R-0004: der Wächter erkennt auch abweichende Schreibweisen', () => {
-  const NPM_INSTALL = /\bnpm\b(?:\s+--?[\w-]+(?:[ =](?:"[^"]*"|\S+))?)*\s+(?:install|i|ci)\b/;
-  for (const l of ['HOME=/root npm install || exit 1', 'npm --prefix "$APP_DIR" install --omit=dev', 'cd x; npm ci', 'npm i']) {
-    assert.ok(NPM_INSTALL.test(l), l);
+test('R-0004: der Wächter erkennt abweichende Schreibweisen und Umgehungen', () => {
+  for (const l of [
+    'HOME=/root npm install || exit 1', 'npm --prefix "$APP_DIR" install --omit=dev', 'cd x; npm ci', 'npm i',
+    'npm add left-pad', 'npm clean-install', 'npm update', 'npm rebuild',
+    'npm install --ignore-scripts=false', 'npm ci --ignore-scripts || npm install', 'npm install # --ignore-scripts',
+    'echo start; npm install', "systemd-run --description x bash -c 'npm install'", 'npm --prefix "$APP_DIR" \\\n  install',
+  ]) {
+    assert.equal(npmInstallCallsWithoutIgnoreScripts(l).bad.length, 1, l);
+  }
+  for (const l of [
+    'npm install --omit=dev --ignore-scripts --no-audit --no-fund', 'echo "npm install: OK"',
+    '--description "DVhub npm install (Abhaengigkeiten nach Update)" \\', '# npm install', 'npm test', 'npm run lint',
+  ]) {
+    assert.equal(npmInstallCallsWithoutIgnoreScripts(l).bad.length, 0, l);
   }
 });
 
