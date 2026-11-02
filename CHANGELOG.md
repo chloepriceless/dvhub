@@ -10,7 +10,44 @@ verweist hierher.
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-11-02
+
+Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten stehen in den Einträgen darunter:
+
+- **Updates:** native Installationen bekommen Updates künftig als fertige, signierte Pakete statt per git; die
+  Umstellung läuft beim ersten Update auf 1.0.9 von selbst, mit Rückweg.
+- **EOS:** Preise über den Day-Ahead hinaus fortgeschrieben, Steuerzeitraum über den ganzen bekannten Preiszeitraum
+  (einstellbar), Prognosehorizont einstellbar, Speicherkosten ohne doppelten Verlustaufschlag, „Laut EOS-Plan“ im
+  Leitstand, EOS im Fernbetrieb (Beta).
+- **Strompreise:** Bezugspreis vom Stromanbieter (Tibber, LichtBlick) mit Protokoll und Auswertung, Hinweis vor dem
+  Ende des Preiszeitraums.
+- **Netzladen und Direktvermarktung:** Netzstrom im Akku wird mitgezählt; solange welcher darin steckt, speist der
+  Akku nicht ein.
+- **Neu (Beta):** Peak Shaving für Gewerbeanschlüsse, zweite Victron-Anlage am selben Anschluss, Handy-App,
+  E-Auto-Wochenplan.
+- **Leitstand:** Energiebilanz mit dem echten Akku, klarere Beschriftungen; Entlade-Wächter ohne Fehlalarme.
+- **Sicherheit:** zahlreiche Härtungen nach einer Sicherheitsprüfung (Abschnitt „Sicherheit“).
+
 ### Neu
+
+- **Netzstrom im Akku wird gezählt, Akku-Einspeisung gesperrt, solange welcher darin steckt**: Lädt der Akku an einer
+  PV-Anlage in der Direktvermarktung aus dem Netz (dynamischer Tarif, §14a Modul 3, „Netzladen auch ohne
+  Pauschal-/Abgrenzungsoption“), darf dieser Strom nie mit Marktprämie verkauft werden. DVhub führt einen
+  rechnerischen Zähler: Netz → Akku erhöht den Netzstrom-Anteil (höchstens der gemessene Netzbezug), Entladung und
+  Verluste senken ihn anteilig. Ab 0,1 kWh Netzstrom ist die Einspeisung aus dem Akku gesperrt — PV-Überschuss geht
+  weiter hinaus; EOS plant dann keinen Akku-Verkauf. Leitstand „davon Netzstrom X kWh (Y %)“, Historie mit Verlauf
+  und Tagesprotokoll (CSV), `/api/battery/grid-share`. Der Zähler übersteht Neustart und Update; ein ausdrückliches
+  Zurücksetzen wird protokolliert.
+
+- **Signierte Update-Pakete für native Installationen**: Statt eines git-Checkouts mit `npm install` auf der Box
+  holt `dvhub-release` je Version und Architektur (arm64, armhf, amd64) ein fertiges Paket von GitHub, prüft
+  Prüfsumme und Ed25519-Signatur (Vertrauensanker `/etc/dvhub-release/allowed_signers`), entpackt es nach
+  `/opt/dvhub/releases/<version>`, schaltet um und prüft die Gesundheit — sonst geht es automatisch zurück.
+  Im Update-Bereich der Einstellungen zeigt die Oberfläche den Fortschritt; „Vorige Version wiederherstellen“ geht
+  ohne Download.
+  git-Installationen stellen sich beim ersten Update auf 1.0.9 nach etwa zwei Minuten selbst um (der alte Checkout
+  bleibt bis zum nächsten Update als Rückweg liegen); eigene Forks und lokal geänderte Dateien bleiben auf git.
+  Docker-Images ändern sich nicht. Einzelheiten: `docs/release-pakete.md`.
 
 - **EOS bekommt Preise über die bekannten hinaus**: Vormittags enden die Day-Ahead-Preise um Mitternacht. EOS
   kürzte dann seinen Prognose-Schwanz auf eine halbe Stunde („Tail forecast shortened … effective 0.5 h“) und bewertete
@@ -143,6 +180,26 @@ verweist hierher.
   zurückgeschrieben — dann war der Akku wirklich gesperrt. Peak Shaving liest die Entladegrenze jetzt wie der
   Entlade-Wächter aus Register 2720 (eindeutig, Venus ≥ 3.50); eine 0 aus 2704 zählt nur noch, wenn DVhub selbst
   zuletzt 0 geschrieben hat.
+
+### Sicherheit
+
+Nach einer Sicherheitsprüfung gehärtet; Einzelheiten zu den Befunden veröffentlichen wir nicht. Spürbar sind:
+
+- **Support-Tunnel:** Über den Fern-Support lassen sich keine Freigaben mehr erteilen (Kopplungen, Handy-App,
+  Zugänge, Voll-Export, Geräte-Tausch, Token-Wechsel); er läuft über einen eigenen Zugang und gilt wie ein Gerät im
+  Heimnetz. Der Support kann einen Tunnel nicht selbst verlängern.
+- **Geräte-Tausch:** Der Import einer Sicherung auf eine neue Box verlangt das API-Token der Box.
+- **Zugangsdaten folgen der Adresse:** Ändert sich die Adresse eines Dienstes (z. B. Benachrichtigungen, E-Auto,
+  Wallbox) auf einen anderen Rechner, muss das Passwort bzw. Token neu eingegeben werden.
+- **Lizenz:** Pro-Lizenzen werden an die jeweilige Box gebunden; Schlüssel ohne Signatur gelten nur bis 14 Tage nach
+  der letzten erfolgreichen Online-Prüfung. Lizenz-Einstellungen lassen sich nicht mehr über die Konfiguration ändern;
+  EOS im Fernbetrieb schickt seinen Lizenznachweis nur an dvhub.de.
+- **Updates:** Ein Kanalwechsel, der auf eine ältere Fassung zurückstufen würde, fragt nach; Installations- und
+  Update-Skripte folgen im Konfigurationsordner keinen Verweisen mehr und führen beim Installieren keine
+  Paket-Skripte aus.
+- **Weitere Härtungen** an der Adressprüfung ausgehender Verbindungen (auch IPv6), an statischen Dateien, an
+  Telemetrie-Abfragen, an der EOS-Oberfläche, am Installateurs-Portal und am Handy-App-Relay (Speicher- und
+  Verbindungsgrenzen).
 
 ## [1.0.8] - 2026-10-21
 
