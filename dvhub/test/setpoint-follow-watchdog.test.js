@@ -172,3 +172,135 @@ test('veraltete Messwerte (fehlgeschlagene Reads): keine Meldung', () => {
   }
   assert.equal(sent.length, 0);
 });
+
+// --- Vorfall 31.10.2026 12:32 (MEZ): Fehlalarm bei „Akku halten“ ------------
+//
+// Prod A7S, audit_log: setpoint_not_followed 11:32:41 UTC {soc 10, batteryW
+// +1196, setpointW −100, netImportW 598} und schon 10:55:25 UTC {soc 10,
+// batteryW +337, setpointW 5069, netImportW 5787}. Aktive Steuerquelle in
+// beiden Fenstern: eos_grid_hold (EOS „Akku halten“, Tesla lädt ~11 kW, Last
+// 12,7 kW, PV 3–16 kW). −100 W ist der Eigenverbrauchs-Boden, wenn die
+// Halteregel bei PV > Last auf 0 fällt; 5069 W ist der nachlaufende Live-Bezug.
+// Der Victron meldete zugleich die aktive SoC-Grenze 10 % (Reg. 2903 = 100),
+// DVhub kannte nur die Mindestgrenze 5 % (Reg. 2901).
+const INCIDENT_1031 = [
+  { setpointW: -100, netImportW: 598, batteryW: 1196, soc: 10 },
+  { setpointW: 5069, netImportW: 5787, batteryW: 337, soc: 10 }
+];
+
+function runIncident({ holdSource, socLimitPct = null } = {}) {
+  const sent = [];
+  const state = {
+    meter: { ok: true },
+    victron: { gridExportW: 0, minSocPct: 5, ...(socLimitPct != null ? { activeSocLimitPct: socLimitPct } : {}) },
+    schedule: { active: {} }
+  };
+  const watchdog = createSetpointFollowWatchdog({
+    state,
+    getCfg: () => ({}),
+    pushLog: () => {},
+    notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
+  });
+  for (let t = 0; t <= OPTS.holdMs * 2; t += 5000) {
+    const now = T0 + t;
+    const s = INCIDENT_1031[(t / 5000) % 2];
+    // Die Auswertung (schedule-eval) frischt den aktiven Eintrag jeden Takt auf.
+    state.schedule.active.gridSetpointW = { value: s.setpointW, source: holdSource, at: now };
+    Object.assign(state.victron, {
+      gridSetpointW: s.setpointW, gridImportW: s.netImportW, batteryPowerW: s.batteryW, soc: s.soc,
+      fieldUpdatedAt: { gridSetpointW: now, batteryPowerW: now, soc: now, ...(socLimitPct != null ? { activeSocLimitPct: now } : {}) }
+    });
+    watchdog.tick(now);
+  }
+  return sent;
+}
+
+test('Vorfall 31.10.: ohne Halte-Signal und ohne SoC-Grenze schlüge der Wächter an (Nachweis des Bildes)', () => {
+  const sent = runIncident({ holdSource: 'forecast_optimizer' });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].event, 'setpoint_not_followed');
+});
+
+test('Vorfall 31.10.: EOS „Akku halten“ (eos_grid_hold) aktiv → kein Alarm', () => {
+  assert.deepEqual(runIncident({ holdSource: 'eos_grid_hold' }), []);
+});
+
+test('Vorfall 31.10.: aktive SoC-Grenze des Victron (10 %) → kein Alarm, auch ohne Halteregel', () => {
+  assert.deepEqual(runIncident({ holdSource: 'default', socLimitPct: 10 }), []);
+});
+
+test('Halte-Signal und aktive SoC-Grenze im Messpunkt', () => {
+  // Gewolltes Halten (eigene Steuerung) ist wie eine Entlade-Sperre.
+  assert.equal(isRefusingDischarge({ ...STUCK, holdReason: 'eos_grid_hold' }, OPTS), false);
+  // Aktive SoC-Grenze über der Mindestgrenze: maßgeblich ist die höhere.
+  assert.equal(isRefusingDischarge({ ...STUCK, soc: 12, minSocPct: 5, activeSocLimitPct: 10 }, OPTS), false);
+  assert.equal(isRefusingDischarge({ ...STUCK, soc: 47, minSocPct: 5, activeSocLimitPct: 45 }, OPTS), false);
+  // Echter Fall bleibt: SoC weit über der aktiven Grenze.
+  assert.equal(isRefusingDischarge({ ...STUCK, soc: 70, minSocPct: 5, activeSocLimitPct: 10 }, OPTS), true);
+  // Eine niedrigere aktive Grenze senkt die Mindestgrenze nicht.
+  assert.equal(isRefusingDischarge({ ...STUCK, soc: 12, minSocPct: 10, activeSocLimitPct: 5 }, OPTS), false);
+});
+
+test('echter Ausfall wird weiter gemeldet: keine Halteregel, Akku voll über der aktiven SoC-Grenze', () => {
+  const sent = [];
+  const state = {
+    meter: { ok: true },
+    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5, activeSocLimitPct: 10 },
+    schedule: { active: { gridSetpointW: { value: -100, source: 'default', at: T0 } } }
+  };
+  const watchdog = createSetpointFollowWatchdog({
+    state, getCfg: () => ({}), pushLog: () => {},
+    notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
+  });
+  for (let t = 0; t <= OPTS.holdMs; t += 5000) {
+    const now = T0 + t;
+    state.schedule.active.gridSetpointW.at = now;
+    state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now, activeSocLimitPct: now };
+    watchdog.tick(now);
+  }
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].event, 'setpoint_not_followed');
+});
+
+test('veraltetes Halte-Signal oder veraltete SoC-Grenze entschuldigen nichts', () => {
+  const sent = [];
+  const state = {
+    meter: { ok: true },
+    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5, activeSocLimitPct: 80 },
+    // Letzte Halteregel liegt Stunden zurück (Auswertung steht) — kein Freibrief.
+    schedule: { active: { gridSetpointW: { value: 0, source: 'eos_grid_hold', at: T0 - 3 * 3600000 } } }
+  };
+  const watchdog = createSetpointFollowWatchdog({
+    state, getCfg: () => ({}), pushLog: () => {},
+    notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
+  });
+  for (let t = 0; t <= OPTS.holdMs; t += 5000) {
+    const now = T0 + t;
+    // SoC-Grenze wird nie frisch gelesen (Stempel bleibt alt).
+    state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now, activeSocLimitPct: T0 - 3600000 };
+    watchdog.tick(now);
+  }
+  assert.equal(sent.length, 1);
+});
+
+test('Entlade-Sperre ohne Rücklese-Register: DVhubs eigener Schreibwert 2704 = 0 zählt', () => {
+  // Prod-Profil liest 2704 nicht zurück (victron.maxDischargeW bleibt null);
+  // ein manuelles / geplantes „Halten“ (maxDischargeW 0) kennt DVhub dann nur
+  // aus dem eigenen Schreibvorgang.
+  const sent = [];
+  const state = {
+    meter: { ok: true },
+    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5, maxDischargeW: null },
+    schedule: { active: {}, lastWrite: { maxDischargeW: { value: 0, source: 'schedule', at: T0 } } }
+  };
+  const watchdog = createSetpointFollowWatchdog({
+    state, getCfg: () => ({}), pushLog: () => {},
+    notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
+  });
+  for (let t = 0; t <= OPTS.holdMs * 2; t += 5000) {
+    const now = T0 + t;
+    state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now };
+    watchdog.tick(now);
+  }
+  assert.equal(sent.length, 0);
+});
