@@ -409,9 +409,20 @@ export function createEosForecastBridge(ctx) {
    * Prognose geschätzte Börsenpreise (price-estimate.js). Bezugs- und
    * Einspeisepreis werden daraus wie für echte Slots gebildet.
    */
-  // Bereich der zuletzt an EOS geschickten Schätzwerte (für das Aufräumen).
+  // Buchführung der Schätzwerte in EOS (Aufräumen und Laufstart-Prüfung):
+  // - lastEstimateRange: was der letzte angekommene Preis-Import geschätzt hat;
+  // - staleRange: wo noch alte Schätzwerte liegen können, weil ein Löschen
+  //   oder ein Preis-Import scheiterte (Gegenprüfung 16856110) — getrennt
+  //   geführt, damit ein Löschfehler weit hinten keinen Lauf sperrt;
+  // - clearedOnce: der erste Push dieses Prozesses löscht einmal alles hinter
+  //   dem Geschickten — nach einem DVhub-Neustart ist nichts gemerkt.
   let lastEstimateRange = null;
+  let staleRange = null;
+  let clearedOnce = false;
   const PRICE_KEYS = ['elecprice_marketprice_wh', 'feed_in_tariff_wh'];
+  const unionRange = (...ranges) => ranges.filter(Boolean).reduce((acc, r) => (acc
+    ? { fromMs: Math.min(acc.fromMs, r.fromMs), untilMs: Math.max(acc.untilMs, r.untilMs) }
+    : { fromMs: r.fromMs, untilMs: r.untilMs }), null);
 
   /**
    * Schätzwerte, die nicht mehr gelten, in EOS löschen. EOS speichert Importe
@@ -421,23 +432,34 @@ export function createEosForecastBridge(ctx) {
    * 8c050aae, P2). Gelöscht wird
    *   - was der letzte Push an Schätzwerten über das jetzt Geschickte hinaus
    *     geschickt hat, und
+   *   - wo nach einem gescheiterten Löschen/Import noch alte Schätzwerte
+   *     liegen können (staleRange), soweit hinter dem jetzt Geschickten,
+   *   - beim ersten Push des Prozesses alles hinter dem Geschickten, und
    *   - wenn die echten Preise nicht über den Mindest-Steuerzeitraum reichen
    *     (jetzt + 1 h 15 min), alles hinter ihrem Ende
    *     bis zum größtmöglichen Schätzbereich (auch nach einem DVhub-Neustart,
    *     der den letzten Bereich nicht mehr kennt).
+   * Liefert den Löschbereich mit, damit die Buchführung ihn kennt.
    */
   async function clearStaleEstimates(baseUrl, { sentEndMs, realEndMs, nowMs }) {
     let start = Infinity;
     let end = -Infinity;
-    if (lastEstimateRange && lastEstimateRange.untilMs > sentEndMs) {
-      start = Math.max(sentEndMs, lastEstimateRange.fromMs);
-      end = lastEstimateRange.untilMs;
+    for (const r of [lastEstimateRange, staleRange]) {
+      if (r && r.untilMs > sentEndMs) {
+        start = Math.min(start, Math.max(sentEndMs, r.fromMs));
+        end = Math.max(end, r.untilMs);
+      }
+    }
+    const farEnd = nowMs + PRICE_FILL_MAX_MS + 3_600_000;
+    if (!clearedOnce && Number.isFinite(sentEndMs)) {
+      start = Math.min(start, sentEndMs);
+      end = Math.max(end, farEnd);
     }
     if (!(realEndMs >= nowMs + MIN_REAL_AHEAD_MS)) {
       start = Math.min(start, Number.isFinite(realEndMs) ? realEndMs : nowMs);
-      end = Math.max(end, nowMs + PRICE_FILL_MAX_MS + 3_600_000);
+      end = Math.max(end, farEnd);
     }
-    if (!(end > start)) return { cleared: false };
+    if (!(end > start)) return { cleared: false, range: null };
     const q = (ms) => encodeURIComponent(new Date(ms).toISOString());
     const errors = [];
     for (const key of PRICE_KEYS) {
@@ -446,10 +468,14 @@ export function createEosForecastBridge(ctx) {
       if (!res.ok && !/HTTP 404/.test(String(res.error))) errors.push(`${key}: ${res.error}`);
     }
     if (pushLog) pushLog('eos_price_estimate_cleared', { from: new Date(start).toISOString(), until: new Date(end).toISOString(), ...(errors.length ? { errors } : {}) });
-    return { cleared: errors.length === 0, errors };
+    return { cleared: errors.length === 0, errors, range: { fromMs: start, untilMs: end } };
   }
 
-  async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs) {
+  // Rechnet EOS nach eigenem Takt (optimizer.eosStartAfterPreviousRun), gibt
+  // es keinen Laufstart, an dem prepareRun prüfen könnte — dann keine
+  // Schätzung (Gegenprüfung 16856110); alte löscht clearStaleEstimates.
+  async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs, { estimate = true } = {}) {
+    if (!estimate) return { slots: realSlots, estimate: null };
     const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs);
     const { end } = realPriceCoverage(realSlots);
     if (end < nowMs + MIN_REAL_AHEAD_MS || end >= untilMs) return { slots: realSlots, estimate: null };
@@ -780,18 +806,22 @@ export function createEosForecastBridge(ctx) {
 
   /**
    * Liegen an EOS geschickte Schätzpreise im Steuerzeitraum eines Laufs, der
-   * jetzt (nowMs) beginnt? EOS rundet den Laufbeginn auf den Slot ab
-   * (eos-run-trigger.js); abgerundet wird auf 15 min — bei Stunden-Slots
+   * jetzt (nowMs) angestoßen wird? EOS rundet den Laufbeginn auf den Slot ab
+   * (eos-run-trigger.js); gerechnet wird mit 15-min-Slots — bei Stunden-Slots
    * beginnt EOS früher, die Prüfung bleibt also auf der sicheren Seite.
    * Steuerzeitraum = zuletzt gesetzte Stunden; ohne bekannten Wert der
    * größtmögliche (24 h).
    */
   function estimatesInControlHorizon(nowMs) {
-    if (!lastEstimateRange) return false;
+    const from = Math.min(lastEstimateRange?.fromMs ?? Infinity, staleRange?.fromMs ?? Infinity);
+    if (!Number.isFinite(from)) return false;
     const h = Number(state?.optimizer?.eosControlHorizonH);
     const hours = Number.isFinite(h) && h > 0 ? h : 24;
-    const runStartMs = Math.floor(nowMs / PRICE_SLOT_MS) * PRICE_SLOT_MS;
-    return lastEstimateRange.fromMs < runStartMs + hours * 3_600_000;
+    // Ein Slot Vorlauf: zwischen Prüfung und Aufruf liegen Ladestand-Abfrage
+    // und Anfrage — ein Anstoß kurz vor der Grenze beginnt in EOS evtl. erst
+    // im nächsten Slot (Gegenprüfung 16856110).
+    const runStartMs = Math.floor(nowMs / PRICE_SLOT_MS) * PRICE_SLOT_MS + PRICE_SLOT_MS;
+    return from < runStartMs + hours * 3_600_000;
   }
 
   /**
@@ -811,13 +841,16 @@ export function createEosForecastBridge(ctx) {
     if (!estimatesInControlHorizon(nowMs)) return { ok: true, pushed: false };
     if (pushLog) {
       pushLog('eos_price_estimate_run_push', {
-        estimateFrom: new Date(lastEstimateRange.fromMs).toISOString(),
+        estimateFrom: new Date(Math.min(lastEstimateRange?.fromMs ?? Infinity, staleRange?.fromMs ?? Infinity)).toISOString(),
         horizonHours: state?.optimizer?.eosControlHorizonH ?? null,
       });
     }
-    await push();
+    const res = await push();
     if (!estimatesInControlHorizon(Math.max(nowMs, Date.now()))) return { ok: true, pushed: true };
-    return { ok: false, pushed: true, error: 'Schätzpreise im Steuerzeitraum konnten nicht gelöscht werden' };
+    const why = res?.errors && typeof res.errors === 'object'
+      ? Object.entries(res.errors).map(([k, v]) => `${k}: ${v}`).join('; ')
+      : '';
+    return { ok: false, pushed: true, error: `Schätzpreise im Steuerzeitraum, Neu-Push ohne Erfolg${why ? ` (${why})` : ''}` };
   }
 
   async function pushOnce(job = null) {
@@ -855,7 +888,7 @@ export function createEosForecastBridge(ctx) {
     // Einspeisewert — es speist mittags PV ein, statt sie für Nacht und Morgen
     // zu speichern (Prod 01.11.2026). Deshalb dahinter Schätzwerte; der
     // Steuerzeitraum richtet sich weiter nur nach den echten Preisen.
-    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now());
+    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(), { estimate: dvhubTriggersEosRuns(cfg) });
     if (gone()) return abandoned();
     const priceSlotsCt = priceFill.slots;
     const priceEstimate = priceFill.estimate;
@@ -1042,13 +1075,31 @@ export function createEosForecastBridge(ctx) {
       const sentEndMs = priceEstimate ? Date.parse(priceEstimate.until) : realEndMs;
       const clear = await clearStaleEstimates(baseUrl, { sentEndMs, realEndMs, nowMs });
       if (gone()) return abandoned();
-      if (clear.errors?.length) errors.priceEstimateClear = clear.errors.join('; ');
-      // Bei Fehlern den alten Bereich behalten, damit der nächste Push erneut löscht.
+      const clearFailed = Boolean(clear.errors?.length);
+      if (clearFailed) errors.priceEstimateClear = clear.errors.join('; ');
+      else if (clear.range) clearedOnce = true;
       const next = priceEstimate ? { fromMs: Date.parse(priceEstimate.from), untilMs: Date.parse(priceEstimate.until) } : null;
-      if (!clear.errors?.length) lastEstimateRange = next;
-      else if (next && lastEstimateRange) {
-        lastEstimateRange = { fromMs: Math.min(next.fromMs, lastEstimateRange.fromMs), untilMs: Math.max(next.untilMs, lastEstimateRange.untilMs) };
-      } else if (next) lastEstimateRange = next;
+      const priceImportOk = !errors.ElecPriceImport && !(feedInSlots.length && errors.FeedInTariffImport);
+      if (priceImportOk) {
+        // In EOS: echte Preise, dahinter `next`; dahinter gelöscht — außer
+        // der Löschbereich scheiterte, dann bleibt er offen.
+        lastEstimateRange = next;
+        staleRange = clearFailed ? clear.range : null;
+      } else {
+        // Preis-Import nicht angekommen (Gegenprüfung 16856110, P2): alles,
+        // was vorher in EOS lag, kann noch da sein — samt dem, was dieser
+        // Push evtl. teilweise geschrieben hat. Nur was nachweislich gelöscht
+        // wurde, fällt heraus.
+        let stale = unionRange(lastEstimateRange, staleRange, next);
+        if (stale && clear.range && !clearFailed) {
+          if (clear.range.fromMs <= stale.fromMs && clear.range.untilMs >= stale.untilMs) stale = null;
+          else if (clear.range.fromMs > stale.fromMs && clear.range.fromMs < stale.untilMs && clear.range.untilMs >= stale.untilMs) {
+            stale = { fromMs: stale.fromMs, untilMs: clear.range.fromMs };
+          }
+        }
+        lastEstimateRange = null;
+        staleRange = stale;
+      }
     }
 
     const horizon = await syncControlHorizon(

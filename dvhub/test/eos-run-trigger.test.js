@@ -263,3 +263,15 @@ test('Laufstart: Vorbereitung wirft → kein Lauf, Fehler gemeldet', async () =>
   assert.equal(h.posts.length, 0);
   assert.equal(h.state.optimizer.eosRun.lastError, 'kaputt');
 });
+
+// Gegenprüfung 16856110 (P3): Laufbeginn erst nach der Vorbereitung messen —
+// ein Neu-Push (bis zu 5 min) gehört nicht zur Rechenzeit, und die
+// Startlösung richtet sich nach dem tatsächlichen Beginn.
+test('Laufstart: Rechenzeit und Beginn ohne die Vorbereitung', async () => {
+  const h = harness({ prepareRun: async (hh) => { hh.nowMs += 120_000; return { ok: true, pushed: true }; } });
+  const start = h.nowMs;
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  await h.trigger.trigger('boundary');
+  assert.equal(h.state.optimizer.eosRun.startedAt, start + 120_000);
+  assert.equal(h.logs.find((l) => l.type === 'eos_run_done').data.durationS, 0);
+});

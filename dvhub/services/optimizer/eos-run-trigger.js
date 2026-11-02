@@ -152,8 +152,7 @@ export function createEosRunTrigger({
   }
 
   async function run(reason) {
-    const at = now();
-    lastAttemptAt = at;
+    lastAttemptAt = now();
     // Geschätzte Preise dürfen nie im Steuerzeitraum liegen. Beim Push ist das
     // geprüft, ein Lauf an der Grenze oder per kick kommt aber ohne Push —
     // deshalb hier vor dem Lauf (Gegenprüfung a6dbbd1d). Danach erst den
@@ -164,10 +163,13 @@ export function createEosRunTrigger({
       if (prep && prep.ok === false) {
         const error = prep.error || 'Vorbereitung des Laufs fehlgeschlagen';
         log('eos_run_skipped', { reason, error });
-        publish({ lastError: error, lastErrorAt: at });
+        publish({ lastError: error, lastErrorAt: now() });
         return { ok: false, skipped: error };
       }
     }
+    // Beginn erst nach der Vorbereitung: ein Neu-Push gehört nicht zur
+    // Rechenzeit, die Startlösung richtet sich nach dem echten Beginn.
+    const at = now();
     const socRes = await collectSoc();
     const soc = socRes?.soc;
     if (!soc || !Object.keys(soc).length) {
