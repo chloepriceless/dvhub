@@ -7,22 +7,32 @@
 // Schwelle ist.
 //
 // Zählregel (Energieflüsse aus polling.js, Gleichstromseite des Akkus):
-//   Netz→Akku          erhöht den Netzstrom-Anteil G um die geladene Energie.
+//   Netz→Akku          erhöht den Netzstrom-Anteil G um die geladene Energie —
+//                      höchstens um den gemessenen Netzbezug (bei Fronius ist
+//                      die PV-Leistung die AC-Leistung NACH dem Laden) und nur,
+//                      solange „Netzladen erlaubt“ gilt (isGridChargeLicensed).
+//                      Ohne Netzladen bleibt der Zähler stehen: kleine
+//                      Regelabweichungen sollen eine Anlage ohne Netzladen
+//                      nicht sperren (Gegenprüfung 8465a540, P2).
 //   Akku→Haus/Netz     senkt G anteilig: Anteil (G / Akku-Inhalt) × Entladung.
 //   Verluste           anteilig: die Wandlungsverluste stecken in den Flüssen
 //                      (gemessen am Akku), alles Weitere zeigt der Ladestand —
 //                      G kann nie größer sein als der Akku-Inhalt. Weil der
 //                      Victron-Ladestand ganzzahlig ist, gilt als Obergrenze
-//                      (Ladestand + 1 %) × Kapazität.
+//                      (Ladestand + 1 %) × Kapazität — gekappt wird erst, wenn
+//                      der Ladestand 60 s lang darunter liegt (ein Fehlwert
+//                      darf keinen Netzstrom „verschwinden“ lassen).
 // Akku-Inhalt = Ladestand × Kapazität (beide GX-Anlagen zusammen, wie EOS plant).
 //
-// Sperre: gilt an einer PV-Anlage ohne MiSpeL-Option (nur „Netzladen auch ohne
-// Pauschal-/Abgrenzungsoption“). Im reinen Netzspeicher gibt es keine geförderte
+// Sperre: gilt an einer PV-Anlage ohne MiSpeL-Option. An bei mehr als 100 Wh,
+// frei erst wieder bei höchstens 50 Wh (Hysterese: sonst schaltet EOS bei
+// jedem Pendeln um die Schwelle um und plant neu). Im reinen Netzspeicher gibt es keine geförderte
 // Erzeugung, mit Pauschal- oder Abgrenzungsoption regelt die Option die
 // Vermischung. Gesperrt heißt:
 //   - Ausführung (schedule-eval): jeder diskretionäre negative Netz-Sollwert
-//     wird auf den Live-PV-Überschuss gedeckelt; PV-Einspeisung bleibt, der
-//     Standard-Puffer (schedule.defaultGridSetpointW, z. B. −100 W) auch.
+//     wird auf den Live-PV-Überschuss gedeckelt (DC-PV mit Wandlungsverlust);
+//     PV-Einspeisung bleibt, der Standard-Puffer (schedule.defaultGridSetpointW)
+//     auch, aber höchstens 100 W.
 //   - Planung: EOS bekommt die Akku-Netzeinspeisung abgeschaltet
 //     (feedintariff/direct_marketing_enabled = false, eos-config-sync), der
 //     eingebaute Planer allowGridDischarge = false.
@@ -37,8 +47,16 @@ import path from 'node:path';
 
 import { isGridStorageOnly, isGridChargeLicensed } from './grid-storage.js';
 
-/** Ab mehr als 100 Wh Netzstrom im Akku ist die Akku-Einspeisung gesperrt. */
+/** Ab mehr als 100 Wh Netzstrom im Akku ist die Akku-Einspeisung gesperrt … */
 export const GRID_SHARE_LOCK_THRESHOLD_WH = 100;
+/** … und erst bei höchstens 50 Wh wieder frei. */
+export const GRID_SHARE_RELEASE_WH = 50;
+/** Standard-Puffer während der Sperre höchstens 100 W (Christin: −100 W vernachlässigbar). */
+export const GRID_SHARE_BUFFER_MAX_W = 100;
+/** DC-PV kommt nur nach dem Wechselrichter ins Netz (vorsichtig 92 %, wie dcExportMode). */
+export const GRID_SHARE_DC_PV_AC_FACTOR = 0.92;
+/** So lange muss der Ladestand unter dem Zählerstand liegen, bevor gekappt wird. */
+export const GRID_SHARE_CAP_CONFIRM_MS = 60_000;
 /** Sicherheitsabstand zum Live-PV-Überschuss, damit die Regelung nicht aus dem Akku nachschiebt. */
 export const GRID_SHARE_EXPORT_MARGIN_W = 100;
 /** Längste Lücke zwischen zwei Messungen, die noch gezählt wird. */
@@ -70,7 +88,7 @@ const finiteOrNull = (v) => (v != null && v !== '' && Number.isFinite(Number(v))
  *          socPct?:number|null, capacityWh?:number|null}} p
  * @returns {{gridWh:number, inWh:number, toHomeWh:number, toGridWh:number, lossWh:number, share:number, storedWh:number|null}}
  */
-export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, batteryToGridW, socPct, capacityWh } = {}) {
+export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, batteryToGridW, socPct, capacityWh, capAllowed = true } = {}) {
   const h = Math.max(0, Number(dtMs) || 0) / 3_600_000;
   const soc = finiteOrNull(socPct);
   const cap = finiteOrNull(capacityWh);
@@ -86,25 +104,28 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
   const toGridWh = Math.min(g - toHomeWh, shareBefore * pos(batteryToGridW) * h);
   g = g - toHomeWh - toGridWh + inWh;
   let lossWh = 0;
-  if (upperWh != null && g > upperWh) {
+  const overUpper = upperWh != null && g > upperWh;
+  if (overUpper && capAllowed) {
     lossWh = g - upperWh;
     g = upperWh;
   }
   const share = !known ? null : (g <= 0 ? 0 : (storedWh > 0 ? Math.min(1, g / storedWh) : 1));
-  return { gridWh: g, inWh, toHomeWh, toGridWh, lossWh, share, storedWh };
+  return { gridWh: g, inWh, toHomeWh, toGridWh, lossWh, share, storedWh, overUpper };
 }
 
 /**
  * Höchste erlaubte Einspeisung (W, ≥ 0) während der Sperre: Live-PV-Überschuss
- * minus Sicherheitsabstand, mindestens der Standard-Puffer. Unbekannte PV oder
- * Last → nur der Puffer.
+ * (AC-PV + DC-PV × 0,92 − Hauslast) minus Sicherheitsabstand, mindestens der
+ * Standard-Puffer (höchstens 100 W). Unbekannte PV oder Last → nur der Puffer.
  */
-export function gridShareExportCapW({ pvW, loadW, bufferW = 0, marginW = GRID_SHARE_EXPORT_MARGIN_W } = {}) {
-  const buffer = Math.max(0, Math.abs(Number(bufferW) || 0));
-  const pv = finiteOrNull(pvW);
+export function gridShareExportCapW({ pvAcW, pvDcW, loadW, bufferW = 0, marginW = GRID_SHARE_EXPORT_MARGIN_W } = {}) {
+  const buffer = Math.min(GRID_SHARE_BUFFER_MAX_W, Math.max(0, Math.abs(Number(bufferW) || 0)));
+  const ac = finiteOrNull(pvAcW);
+  const dc = finiteOrNull(pvDcW);
   const load = finiteOrNull(loadW);
-  if (pv == null || load == null) return Math.round(buffer);
-  const surplus = Math.max(0, pv) - Math.max(0, load) - Math.max(0, Number(marginW) || 0);
+  if (ac == null || dc == null || load == null) return Math.round(buffer);
+  const pv = Math.max(0, ac) + Math.max(0, dc) * GRID_SHARE_DC_PV_AC_FACTOR;
+  const surplus = pv - Math.max(0, load) - Math.max(0, Number(marginW) || 0);
   return Math.round(Math.max(buffer, surplus, 0));
 }
 
@@ -141,6 +162,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   let dirty = false;
   let lastReadMs = 0;
   let live = { toHomeW: 0, toGridW: 0 };
+  let overSinceMs = null;
 
   function fresh() {
     return {
@@ -159,9 +181,11 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
 
   function load() {
     if (!statePath) return fresh();
+    let text;
+    try { text = fs.readFileSync(statePath, 'utf8'); } catch { return fresh(); }   // erster Start
     try {
-      const raw = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-      if (!raw || typeof raw !== 'object' || !Number.isFinite(Number(raw.gridWh))) return fresh();
+      const raw = JSON.parse(text);
+      if (!raw || typeof raw !== 'object' || !Number.isFinite(Number(raw.gridWh))) throw new Error('kein Zählerstand');
       const base = fresh();
       return {
         ...base,
@@ -170,7 +194,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
         day: { ...base.day, ...(raw.day || {}) },
         totals: { ...base.totals, ...(raw.totals || {}) },
       };
-    } catch {
+    } catch (e) {
+      // Datei da, aber unlesbar: laut melden — der Zähler fängt bei 0 an.
+      log('grid_share_state_unreadable', { error: e?.message || String(e) }, 'error');
       return fresh();
     }
   }
@@ -179,7 +205,13 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     if (readOnly || !statePath) return true;
     try {
       const tmp = statePath + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(st) + '\n');
+      const fd = fs.openSync(tmp, 'w');
+      try {
+        fs.writeSync(fd, JSON.stringify(st) + '\n');
+        fs.fsyncSync(fd);   // Stromausfall auf SD-Karte: lieber alt als leer
+      } finally {
+        fs.closeSync(fd);
+      }
       fs.renameSync(tmp, statePath);
       lastPersistMs = nowMs;
       dirty = false;
@@ -217,7 +249,8 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   }
 
   function lockFor(cfg) {
-    return gridShareLockApplies(cfg) && st.gridWh > thresholdWh;
+    if (!gridShareLockApplies(cfg)) return false;
+    return st.locked ? st.gridWh > Math.min(GRID_SHARE_RELEASE_WH, thresholdWh) : st.gridWh > thresholdWh;
   }
 
   function closeDay(nowMs, cfg) {
@@ -258,12 +291,20 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     const dtMs = lastTickMs == null ? 0 : Math.min(GRID_SHARE_MAX_STEP_MS, Math.max(0, nowMs - lastTickMs));
     lastTickMs = nowMs;
     const v = victron || {};
+    // Zufluss nur bei erlaubtem Netzladen und höchstens der echte Netzbezug.
+    const inflowW = isGridChargeLicensed(cfg)
+      ? Math.min(pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW), pos(v.gridImportW))
+      : 0;
     const flows = {
-      gridToBatteryW: pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW),
+      gridToBatteryW: inflowW,
       batteryToHomeW: pos(v.batteryDirectUseW) + pos(v.secondBatteryDirectUseW),
       batteryToGridW: pos(v.batteryToGridW) + pos(v.secondBatteryToGridW),
     };
-    const r = stepGridShare(st.gridWh, { dtMs, ...flows, socPct, capacityWh });
+    const capAllowed = overSinceMs != null && nowMs - overSinceMs >= GRID_SHARE_CAP_CONFIRM_MS;
+    const r = stepGridShare(st.gridWh, { dtMs, ...flows, socPct, capacityWh, capAllowed });
+    // Ladestand liegt unter dem Zählerstand: erst merken, nach 60 s kappen.
+    if (!r.overUpper || r.lossWh > 0) overSinceMs = null;
+    else if (overSinceMs == null) overSinceMs = nowMs;
     st.gridWh = r.gridWh;
     if (r.storedWh != null) { st.storedWh = r.storedWh; st.share = r.share; }
     else if (st.storedWh > 0) st.share = Math.min(1, st.gridWh / st.storedWh);
@@ -330,6 +371,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       applies: gridShareLockApplies(cfg),
       gridChargeEnabled: isGridChargeLicensed(cfg),
       thresholdKwh: kwh(thresholdWh),
+      releaseKwh: kwh(Math.min(GRID_SHARE_RELEASE_WH, thresholdWh)),
       toHomeW: live.toHomeW,
       toGridW: live.toGridW,
       today: {
@@ -366,9 +408,34 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     return [CSV_COLUMNS.map(([, label]) => label).join(';'), ...rows].join('\n') + '\n';
   }
 
+  /**
+   * Zähler auf 0 (nur ausdrücklich, z. B. nach einem Zählerfehler). Schreibt eine
+   * Protokollzeile mit dem alten Stand; nur der zählende Prozess darf das.
+   */
+  function reset({ reason = '', actor = null, nowMs = Date.now() } = {}) {
+    ensureLoaded(nowMs);
+    if (readOnly) return { ok: false, error: 'read_only_process' };
+    const before = st.gridWh;
+    const entry = { ts: new Date(nowMs).toISOString(), event: 'reset', gridKwh: r3(before / 1000), reason: String(reason || '').slice(0, 200), actor };
+    st.gridWh = 0;
+    st.share = st.storedWh ? 0 : st.share;
+    appendProtocol(entry);
+    log('grid_share_reset', { gridKwh: entry.gridKwh, reason: entry.reason, actor });
+    const wasLocked = st.locked;
+    st.locked = lockFor(cfgNow());
+    st.updatedAt = entry.ts;
+    persist(nowMs);
+    if (wasLocked !== st.locked) {
+      appendProtocol({ ts: entry.ts, event: st.locked ? 'lock_on' : 'lock_off', gridKwh: 0, sharePct: 0, thresholdKwh: r3(thresholdWh / 1000) });
+      try { onLockChange?.(st.locked, summary(nowMs)); } catch { /* best effort */ }
+    }
+    return { ok: true, previousKwh: entry.gridKwh };
+  }
+
   ensureLoaded();
   return {
     tick,
+    reset,
     isLocked,
     summary,
     persist: () => persist(Date.now()),

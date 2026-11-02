@@ -23,7 +23,7 @@ function makeCtx({ locked = true, pvW = 0, loadW = 1_000, mutate } = {}) {
   const state = {
     victron: {
       soc: 60, batteryDischargeW: 0, batteryChargeW: 0, batteryPowerW: 0,
-      pvTotalW: pvW, pvPowerW: pvW, selfConsumptionW: loadW,
+      pvTotalW: pvW, pvPowerW: 0, selfConsumptionW: loadW,
       fieldUpdatedAt: { soc: now, pvTotalW: now, pvPowerW: now, selfConsumptionW: now }
     },
     schedule: { rules: [], active: {}, lastWrite: {}, manualOverride: {}, config: { defaultGridSetpointW: -100 }, lastEvalAt: 0 },
@@ -81,13 +81,34 @@ test('gesperrt: Netzladen (positiver Sollwert) läuft unverändert', async () =>
   assert.deepEqual(gridWrites(writes), [9000]);
 });
 
-test('gesperrt: veraltete PV-Messung → nur der Puffer', async () => {
+test('gesperrt: veraltete AC-PV-Messung → nur der Puffer', async () => {
   const { evaluator, writes } = makeCtx({
     pvW: 6_000, loadW: 1_000,
-    mutate: ({ state }) => { state.victron.fieldUpdatedAt.pvTotalW = Date.now() - 10 * 60_000; state.victron.fieldUpdatedAt.pvPowerW = Date.now() - 10 * 60_000; }
+    mutate: ({ state }) => {
+      delete state.victron.fieldUpdatedAt.pvTotalW;   // polling stempelt pvTotalW nie
+      state.victron.fieldUpdatedAt.acPvL1W = Date.now() - 10 * 60_000;
+    }
   });
   await evaluator.applyControlTarget('gridSetpointW', -5000, 'eos_optimization');
   assert.deepEqual(gridWrites(writes), [-100]);
+});
+
+test('gesperrt: großer Standard-Puffer (−2000 W) wird nachts auf 100 W begrenzt', async () => {
+  const { evaluator, writes } = makeCtx({
+    pvW: 0, loadW: 800,
+    mutate: ({ cfg, state }) => { cfg.schedule.defaultGridSetpointW = -2000; state.schedule.config.defaultGridSetpointW = -2000; }
+  });
+  await evaluator.applyControlTarget('gridSetpointW', -2000, 'default');
+  assert.deepEqual(gridWrites(writes), [-100]);
+});
+
+test('gesperrt: der Deckel-Hinweis kommt einmal je Quelle, nicht in jedem Takt', async () => {
+  const { evaluator, logs, state } = makeCtx({ pvW: 6_000, loadW: 1_000 });
+  for (const pv of [6_000, 5_900, 5_800, 5_700]) {
+    state.victron.pvTotalW = pv;
+    await evaluator.applyControlTarget('gridSetpointW', -9000, 'rule:sma-1');
+  }
+  assert.equal(logs.filter((l) => l.event === 'grid_share_export_capped').length, 1);
 });
 
 test('ohne Sperre: Akku-Verkauf läuft wie bisher', async () => {

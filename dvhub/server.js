@@ -2283,11 +2283,16 @@ const telemetryReady = (async () => {
     }
     // Netzstrom im Akku: zählen und die Live-Werte an Telemetrie + Leitstand hängen.
     try {
+      // Zweite GX eingeschaltet, aber gerade nicht einbezogen: Kapazität und
+      // Ladestand wären nur die der Hauptanlage → Akku-Inhalt unbekannt, damit
+      // die Kappung keinen Netzstrom abschreibt (Gegenprüfung 8465a540, P2).
+      // Ohne eingestellte Kapazität derselbe Rückfall wie bei EOS (8000 Wh).
+      const followerMissing = cfg.multiGx?.enabled === true && state.multiGx?.online !== true;
       const gs = ctx.gridShare?.tick?.({
         nowMs: Date.now(),
         victron,
-        socPct: gridSharePlanningSocPct(ctx),
-        capacityWh: Number(gridSharePlanningCfg(ctx)?.optimizer?.batteryCapacityWh) || null,
+        socPct: followerMissing ? null : gridSharePlanningSocPct(ctx),
+        capacityWh: followerMissing ? null : (Number(gridSharePlanningCfg(ctx)?.optimizer?.batteryCapacityWh) || 8000),
       });
       if (gs && victron) {
         victron.batteryGridShareWh = Math.round(gs.gridWh);

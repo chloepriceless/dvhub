@@ -14,6 +14,8 @@ import path from 'node:path';
 import {
   GRID_SHARE_LOCK_THRESHOLD_WH,
   GRID_SHARE_EXPORT_MARGIN_W,
+  GRID_SHARE_BUFFER_MAX_W,
+  GRID_SHARE_DC_PV_AC_FACTOR,
   GRID_SHARE_STATE_FILE,
   GRID_SHARE_PROTOCOL_FILE,
   gridShareLockApplies,
@@ -70,12 +72,113 @@ test('ohne Ladestand nimmt Entladen nichts vom Anteil (vorsichtig) und kappt nic
   assert.equal(r.toHomeWh, 0);
 });
 
-test('Ausfuhr-Deckel: nur der PV-Überschuss (minus Sicherheitsabstand), mindestens der Puffer', () => {
-  assert.equal(gridShareExportCapW({ pvW: 3_000, loadW: 1_000, bufferW: 100 }), 2_000 - GRID_SHARE_EXPORT_MARGIN_W);
-  assert.equal(gridShareExportCapW({ pvW: 0, loadW: 1_000, bufferW: 100 }), 100);
-  assert.equal(gridShareExportCapW({ pvW: 0, loadW: 1_000, bufferW: 0 }), 0);
-  assert.equal(gridShareExportCapW({ pvW: null, loadW: 500, bufferW: 100 }), 100, 'unbekannte PV → nur Puffer');
-  assert.equal(gridShareExportCapW({ pvW: 4_000, loadW: null, bufferW: 100 }), 100, 'unbekannte Last → nur Puffer');
+test('Ausfuhr-Deckel: nur der PV-Überschuss (DC-PV mit Wandlungsverlust, minus Abstand), mindestens der Puffer bis 100 W', () => {
+  assert.equal(gridShareExportCapW({ pvAcW: 3_000, pvDcW: 0, loadW: 1_000, bufferW: 100 }), 2_000 - GRID_SHARE_EXPORT_MARGIN_W);
+  // 15 kW DC-PV kommen nur zu ~92 % als Wechselstrom an.
+  assert.equal(gridShareExportCapW({ pvAcW: 0, pvDcW: 15_000, loadW: 1_000, bufferW: 100 }),
+    Math.round(15_000 * GRID_SHARE_DC_PV_AC_FACTOR - 1_000 - GRID_SHARE_EXPORT_MARGIN_W));
+  assert.equal(gridShareExportCapW({ pvAcW: 0, pvDcW: 0, loadW: 1_000, bufferW: 100 }), 100);
+  assert.equal(gridShareExportCapW({ pvAcW: 0, pvDcW: 0, loadW: 1_000, bufferW: 0 }), 0);
+  assert.equal(gridShareExportCapW({ pvAcW: 0, pvDcW: 0, loadW: 1_000, bufferW: 2_000 }), GRID_SHARE_BUFFER_MAX_W, 'großer Puffer wird während der Sperre auf 100 W begrenzt');
+  assert.equal(gridShareExportCapW({ pvAcW: null, pvDcW: 3_000, loadW: 500, bufferW: 100 }), 100, 'unbekannte PV → nur Puffer');
+  assert.equal(gridShareExportCapW({ pvAcW: 0, pvDcW: 4_000, loadW: null, bufferW: 100 }), 100, 'unbekannte Last → nur Puffer');
+});
+
+test('Netz→Akku zählt höchstens den echten Netzbezug (Fronius: PV-AC nach dem Laden)', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 77_000 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 1_000, gridImportW: 0 }, socPct: 50, capacityWh: 77_000 });
+    assert.equal(t.summary().gridWh, 0, 'ohne Netzbezug kein Netzstrom');
+    t.tick({ nowMs: t0 + 120_000, victron: { gridToBatteryW: 6_000, gridImportW: 3_000 }, socPct: 50, capacityWh: 77_000 });
+    near(t.summary().gridWh, 50, 0.01);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ohne „Netzladen erlaubt“ zählt der Zähler keinen Zufluss (keine Sperre durch Regelrauschen)', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: false }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 77_000 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 77_000 });
+    assert.equal(t.summary().gridWh, 0);
+    assert.equal(t.isLocked(), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Kappung am Ladestand erst, wenn er 60 s lang zu niedrig ist (einzelner Fehlwert kostet nichts)', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 8_000 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 8_000 });
+    near(t.summary().gridWh, 200, 0.01);
+    t.tick({ nowMs: t0 + 65_000, victron: {}, socPct: 0, capacityWh: 8_000 });   // Fehlwert: 0 %
+    near(t.summary().gridWh, 200, 0.01);
+    t.tick({ nowMs: t0 + 70_000, victron: {}, socPct: 50, capacityWh: 8_000 });
+    near(t.summary().gridWh, 200, 0.01);
+    assert.equal(t.isLocked(), true);
+    // Echt niedrig über 60 s: dann wird gekappt (Obergrenze 1 % von 8 kWh = 80 Wh).
+    for (let i = 1; i <= 8; i++) t.tick({ nowMs: t0 + 70_000 + i * 10_000, victron: {}, socPct: 0, capacityWh: 8_000 });
+    near(t.summary().gridWh, 80, 0.01);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Sperre mit Hysterese: an über 100 Wh, frei erst bei höchstens 50 Wh', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    t.tick({ nowMs: t0, victron: {}, socPct: 1, capacityWh: 10_000 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 6_600, gridImportW: 6_600 }, socPct: 1, capacityWh: 10_000 });
+    assert.equal(t.isLocked(), true);   // 110 Wh
+    // Anteil 100 % (110 Wh bei 100 Wh Inhalt): 30 Wh ins Haus → 80 Wh, bleibt gesperrt
+    t.tick({ nowMs: t0 + 70_000, victron: { batteryDirectUseW: 10_800 }, socPct: 1, capacityWh: 10_000 });
+    assert.ok(t.summary().gridWh < 100 && t.summary().gridWh > 50, `${t.summary().gridWh}`);
+    assert.equal(t.isLocked(), true, 'zwischen 50 und 100 Wh bleibt die Sperre');
+    t.tick({ nowMs: t0 + 80_000, victron: { batteryDirectUseW: 18_000 }, socPct: 1, capacityWh: 10_000 });
+    assert.equal(t.isLocked(), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Zurücksetzen nur ausdrücklich, mit Protokollzeile', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 77_000 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 77_000 });
+    assert.equal(t.isLocked(), true);
+    const r = t.reset({ reason: 'Test', actor: 'test' });
+    assert.equal(r.ok, true);
+    assert.equal(t.summary().gridWh, 0);
+    assert.equal(t.isLocked(), false);
+    const lines = fs.readFileSync(path.join(dir, GRID_SHARE_PROTOCOL_FILE), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const reset = lines.find((l) => l.event === 'reset');
+    assert.ok(reset);
+    near(reset.gridKwh, 0.2, 0.001);
+    const ro = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir, readOnly: true });
+    assert.equal(ro.reset({}).ok, false, 'nur der zählende Prozess setzt zurück');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('Zähler: integriert, sperrt über der Schwelle, meldet den Wechsel und übersteht einen Neustart', () => {
@@ -86,11 +189,11 @@ test('Zähler: integriert, sperrt über der Schwelle, meldet den Wechsel und üb
     const logs = [];
     const t = createGridShareTracker({ getCfg: () => cfg, pushLog: (e, d) => logs.push({ e, d }), dataDir: dir, onLockChange: (l) => changes.push(l) });
     const t0 = Date.parse('2026-11-02T01:00:00Z');
-    t.tick({ nowMs: t0, victron: { gridToBatteryW: 0 }, socPct: 20, capacityWh: 77_000 });
-    t.tick({ nowMs: t0 + 30_000, victron: { gridToBatteryW: 10_000 }, socPct: 20, capacityWh: 77_000 });
+    t.tick({ nowMs: t0, victron: { gridToBatteryW: 0, gridImportW: 0 }, socPct: 20, capacityWh: 77_000 });
+    t.tick({ nowMs: t0 + 30_000, victron: { gridToBatteryW: 10_000, gridImportW: 10_000 }, socPct: 20, capacityWh: 77_000 });
     assert.ok(GRID_SHARE_LOCK_THRESHOLD_WH > 83.4, 'Schwelle über 83 Wh — 30 s Netzladen sperrt noch nicht');
     assert.equal(t.isLocked(), false);
-    const live = t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 10_000 }, socPct: 20, capacityWh: 77_000 });
+    const live = t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 10_000, gridImportW: 10_000 }, socPct: 20, capacityWh: 77_000 });
     near(live.gridWh, 166.67, 0.1);
     assert.equal(t.isLocked(), true);
     assert.deepEqual(changes, [true]);
@@ -120,11 +223,11 @@ test('Zähler: integriert, sperrt über der Schwelle, meldet den Wechsel und üb
 test('Zähler: Lücken zählen höchstens 60 s, Tageswechsel schreibt eine Tageszeile ins Protokoll', () => {
   const dir = mkDir();
   try {
-    const cfg = { optimizer: {}, schedule: { timezone: 'Europe/Berlin' } };
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
     const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
     const a = Date.parse('2026-11-02T20:00:00Z');
     t.tick({ nowMs: a, victron: {}, socPct: 50, capacityWh: 77_000 });
-    t.tick({ nowMs: a + 2 * 3_600_000, victron: { gridToBatteryW: 6_000 }, socPct: 50, capacityWh: 77_000 });
+    t.tick({ nowMs: a + 2 * 3_600_000, victron: { gridToBatteryW: 6_000, gridImportW: 6_000 }, socPct: 50, capacityWh: 77_000 });
     near(t.summary().gridWh, 100, 0.01);   // 6 kW × 60 s, nicht × 2 h
     // 23:59:50 → 00:00:10 Ortszeit
     t.tick({ nowMs: Date.parse('2026-11-02T22:59:50Z'), victron: {}, socPct: 50, capacityWh: 77_000 });
@@ -146,11 +249,11 @@ test('Zähler: Lücken zählen höchstens 60 s, Tageswechsel schreibt eine Tages
 test('Zähler ohne Schreibrecht (Web-Prozess) liest den Stand aus der Datei', () => {
   const dir = mkDir();
   try {
-    const cfg = { optimizer: {}, schedule: { timezone: 'Europe/Berlin' } };
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
     const w = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
     const t0 = Date.now();
     w.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 77_000 });
-    w.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000 }, socPct: 50, capacityWh: 77_000 });
+    w.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 77_000 });
     assert.equal(w.isLocked(), true);
     const r = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir, readOnly: true });
     assert.equal(r.isLocked(), true);
@@ -163,11 +266,11 @@ test('Zähler ohne Schreibrecht (Web-Prozess) liest den Stand aus der Datei', ()
 test('Sperre folgt der Einstellung: mit MiSpeL-Option keine Sperre trotz Anteil', () => {
   const dir = mkDir();
   try {
-    const cfg = { optimizer: { mispel: { mode: 'abgrenzung' } }, schedule: { timezone: 'Europe/Berlin' } };
+    const cfg = { optimizer: { allowGridCharge: true, mispel: { mode: 'abgrenzung' } }, schedule: { timezone: 'Europe/Berlin' } };
     const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
     const t0 = Date.now();
     t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 77_000 });
-    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000 }, socPct: 50, capacityWh: 77_000 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 77_000 });
     assert.equal(t.isLocked(), false);
     assert.equal(t.summary().applies, false);
     near(t.summary().gridWh, 200, 0.1);

@@ -7844,6 +7844,21 @@ export function createApiRoutes(ctx) {
       const limit = Math.min(2000, Math.max(1, Number(url.searchParams.get('limit')) || 400));
       return json(res, 200, { ok: true, ...ctx.gridShare.summary(), protocol: ctx.gridShare.protocol(limit) });
     }
+    // Zähler auf 0 — nur ausdrücklich (Header wie bei den rechtlichen Schaltern),
+    // protokolliert mit Absender. Gibt die Akku-Einspeisung frei.
+    if (url.pathname === '/api/battery/grid-share/reset' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.gridShare) return json(res, 503, { ok: false, error: 'grid share tracker not available' });
+      if (req.headers['x-confirm-legal-gate'] !== 'true') {
+        return json(res, 403, { ok: false, error: 'legal_gate_requires_confirmation', hint: 'Add header x-confirm-legal-gate: true' });
+      }
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const actor = actorContext(req);
+      const r = ctx.gridShare.reset({ reason: body?.reason, actor: actor.actor_ip || null });
+      pushLog('grid_share_reset_request', { ok: r.ok, previousKwh: r.previousKwh ?? null, error: r.error ?? null }, actor);
+      return json(res, r.ok ? 200 : 409, r);
+    }
     if (url.pathname === '/api/battery/grid-share/protocol.csv' && req.method === 'GET') {
       if (!ctx.gridShare) return json(res, 503, { ok: false, error: 'grid share tracker not available' });
       res.writeHead(200, {
