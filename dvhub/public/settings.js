@@ -493,7 +493,12 @@ if (typeof globalThis !== 'undefined') {
     createEmptyPricingPeriod,
     removePricingPeriod,
     serializePricingPeriods,
-    validatePricingPeriods
+    validatePricingPeriods,
+    tariffProviderStatsText,
+    tariffProviderStateText,
+    tariffProviderStatsCacheHit,
+    tariffProviderStatsCacheable,
+    bindTariffProviderBlock
   };
 }
 
@@ -3003,7 +3008,61 @@ function tariffProviderBlockHtml(uep) {
       <button class="btn btn-ghost btn-small" type="button" data-tariff-provider-action="refresh">Jetzt abrufen</button>
     </div>` : ''}
     <div class="svc-meta" data-tariff-provider-status>Stand wird geladen …</div>
+    ${name ? `
+    <div class="config-row-grid">
+    <div class="config-row">
+      <span class="config-row-label">Auswertung gegen Day-Ahead</span>
+      <select class="config-select" data-tariff-provider-stats-days aria-label="Zeitraum der Auswertung">
+        ${['7', '30', '90', '365'].map((d) => `<option value="${d}"${d === tariffProviderStatsDays ? ' selected' : ''}>letzte ${d} Tage</option>`).join('')}
+      </select>
+    </div>
+    </div>
+    <div class="svc-meta" data-tariff-provider-stats>Auswertung wird geladen …</div>` : ''}
   `;
+}
+
+// Gewählter Zeitraum und letztes Ergebnis: Die Einstellungen zeichnen den Block
+// beim Laden mehrfach neu — nicht jedes Mal neu abfragen (eine Minute gültig).
+let tariffProviderStatsDays = '30';
+let tariffProviderStatsCache = null;   // { provider, days, at, data }
+
+// Lader des zuletzt gezeichneten Blocks: „Jetzt abrufen“ eines inzwischen neu
+// gezeichneten Blocks lädt dort nach, wo es sichtbar ist.
+let tariffProviderStatsReload = null;
+
+function tariffProviderStatsCacheHit(cache, provider, days, nowMs) {
+  return !!cache && cache.provider === provider && cache.days === days && nowMs - cache.at < 60_000;
+}
+
+// Gilt die Antwort für den angezeigten Anbieter? Die Auswertung rechnet mit dem
+// gespeicherten, der Block zeigt evtl. einen ungespeicherten Entwurf.
+function tariffProviderStatsCacheable(data, provider) {
+  return !!data?.ok && data.provider === provider;
+}
+
+// Auswertung Anbieterpreis ↔ Day-Ahead (Christin 01.11.2026, /api/tariff-provider/stats):
+// LichtBlick rechnet IDA1 × Risikofaktor + feste Umlagen, Tibber Day-Ahead +
+// Aufschlag — die Formel netto ≈ a + b × Börsenpreis macht beides sichtbar.
+function tariffProviderStatsText(stats) {
+  if (!stats) return 'Auswertung nicht abrufbar.';
+  if (!stats.ok) return `Auswertung: ${stats.error || stats.code || 'nicht möglich'}`;
+  const num = (v, digits = 2) => Number(v).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const label = stats.providerLabel || 'Anbieter';
+  const basis = stats.priceBasis === 'net_energy' ? 'netto' : 'brutto';
+  if (!stats.pairs) return `Noch keine Viertelstunde mit Anbieter- und Day-Ahead-Preis in den letzten ${stats.days} Tagen.`;
+  const lines = [
+    `Letzte ${stats.days} Tage, ${num(stats.pairs, 0)} Viertelstunden mit beiden Preisen:`,
+    `${label} Ø ${num(stats.meanProviderCtKwh)} ct/kWh ${basis} · Day-Ahead Ø ${num(stats.meanMarketCtKwh)} ct/kWh · Abstand Ø ${num(stats.meanSpreadCtKwh)} ct`
+  ];
+  const f = stats.formula;
+  if (!f) {
+    lines.push('Für eine Formel sind es noch zu wenige Viertelstunden (oder der Börsenpreis schwankte nicht).');
+  } else {
+    lines.push(`Formel netto ≈ ${num(f.net.interceptCtKwh)} ct + ${num(f.net.slope, 3)} × Börsenpreis`
+      + (stats.priceBasis === 'net_energy' ? '' : ` (brutto: ${num(f.gross.interceptCtKwh)} ct + ${num(f.gross.slope, 3)} × Börsenpreis, MwSt ${num(stats.vatPct, 0)} %)`));
+    lines.push(`Abweichung von der Formel: Ø ${num(f.meanAbsDeviationCtKwh)} ct, höchstens ${num(f.maxAbsDeviationCtKwh)} ct (R² ${num(f.r2)})`);
+  }
+  return lines.join('\n');
 }
 
 function formatTariffProviderSummary(summary) {
@@ -3025,6 +3084,7 @@ function tariffProviderStateText(state) {
   if (state.account?.label) lines.push(`Vertrag: ${state.account.label}`);
   if (state.error) lines.push(`Hinweis: ${state.error}`);
   if (state.authBlockedUntil) lines.push(`Neuer Versuch ab ${new Date(state.authBlockedUntil).toLocaleString('de-DE')} oder nach Änderung der Zugangsdaten.`);
+  if (state.logging === 'pending' && state.lastSuccessAt) lines.push('Abgleich mit der Datenbank steht noch aus — neue Preise werden noch nicht gespeichert. Hält das an, Datenbank prüfen bzw. DVhub neu starten.');
   if (state.estimate) lines.push(`Schätzung für fehlende Zeiten: ${String(state.estimate.slope).replace('.', ',')} × Börsenpreis + ${String(state.estimate.interceptCtKwh).replace('.', ',')} ct (aus ${state.estimate.pairs} Viertelstunden)`);
   if (!state.active) lines.push('Abruf ruht: Die Preislogik „Vom Stromanbieter“ gilt weder heute noch in einem künftigen Zeitraum (gespeicherter Stand).');
   if (!lines.length) lines.push('Noch nicht abgerufen.');
@@ -3035,6 +3095,36 @@ function bindTariffProviderBlock(section, uep) {
   const statusEl = section.querySelector('[data-tariff-provider-status]');
   const show = (text) => { if (statusEl) { statusEl.textContent = text; statusEl.style.whiteSpace = 'pre-line'; } };
   apiFetch('/api/tariff-provider').then((r) => r.json()).then((data) => show(tariffProviderStateText(data?.state))).catch(() => show('Stand nicht abrufbar.'));
+  const statsEl = section.querySelector('[data-tariff-provider-stats]');
+  const statsDays = section.querySelector('[data-tariff-provider-stats-days]');
+  const statsProvider = uep?.provider?.name || '';
+  let statsSeq = 0;   // je Block: nur die jüngste eigene Abfrage wird angezeigt
+  const loadStats = ({ fresh = false } = {}) => {
+    if (!statsEl) return;
+    const days = statsDays?.value || '30';
+    tariffProviderStatsDays = days;
+    statsEl.style.whiteSpace = 'pre-line';
+    // Nur die jüngste Abfrage anzeigen (eine langsame ältere überschreibt keine
+    // neuere, auch nicht bei gleichem Zeitraum nach „Jetzt abrufen“).
+    const seq = ++statsSeq;
+    const showIfCurrent = (data) => { if (seq === statsSeq) statsEl.textContent = tariffProviderStatsText(data); };
+    if (!fresh && tariffProviderStatsCacheHit(tariffProviderStatsCache, statsProvider, days, Date.now())) {
+      Promise.resolve(tariffProviderStatsCache.data).then(showIfCurrent);
+      return;
+    }
+    statsEl.textContent = 'Auswertung wird geladen …';
+    const request = apiFetch(`/api/tariff-provider/stats?days=${encodeURIComponent(days)}`)
+      .then((r) => r.json())
+      .catch(() => null);
+    tariffProviderStatsCache = { provider: statsProvider, days, at: Date.now(), data: request };
+    request.then((data) => {
+      if (!tariffProviderStatsCacheable(data, statsProvider) && tariffProviderStatsCache?.data === request) tariffProviderStatsCache = null;
+      showIfCurrent(data);
+    });
+  };
+  statsDays?.addEventListener('change', () => loadStats());
+  if (statsEl) tariffProviderStatsReload = loadStats;
+  loadStats();
   section.querySelectorAll('[data-tariff-provider-action]').forEach((button) => {
     button.addEventListener('click', async () => {
       const action = button.dataset.tariffProviderAction;
@@ -3053,6 +3143,7 @@ function bindTariffProviderBlock(section, uep) {
           const res = await apiFetch('/api/tariff-provider/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
           const data = await res.json();
           show(data.ok ? tariffProviderStateText(data.state) : `Fehlgeschlagen: ${data.error || data.code || 'unbekannt'}`);
+          if (data.ok) (tariffProviderStatsReload || loadStats)({ fresh: true });
         }
       } catch (error) {
         show(`Fehlgeschlagen: ${error.message}`);
@@ -3387,6 +3478,7 @@ async function saveConfig(config, source = 'settings', opts = {}) {
     setBanner('Konfiguration gespeichert.', 'success');
   }
   await loadHistoryImportStatus();
+  tariffProviderStatsCache = null;   // Anbieter oder Lesart evtl. geändert
   renderSettingsShell();
   return true;
 }

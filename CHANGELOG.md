@@ -37,6 +37,15 @@ verweist hierher.
   damit der Anbieter das Konto nicht sperrt. Ungeprüft bis zum ersten LichtBlick-Liefertag: Schrittweite und ob der
   App-Preis brutto mit Netzentgelt ist.
 
+- **Anbieterpreise mitloggen und auswerten**: Die Preise vom Stromanbieter (Tibber, LichtBlick) bleiben je
+  Viertelstunde dauerhaft in der Datenbank, neben dem Day-Ahead-Preis — mit Abrufzeit, Lesart und bei einer Änderung
+  dem vorigen Preis. Ein wiederholter Abruf schreibt nur neue oder geänderte Preise. Unter Einstellungen →
+  Strompreise → „Vom Stromanbieter“ zeigt eine kleine Auswertung (7, 30, 90 oder 365 Tage) den mittleren
+  Anbieterpreis, den mittleren Day-Ahead-Preis, die Formel netto ≈ a + b × Börsenpreis und die mittlere Abweichung
+  davon — bei LichtBlick (IDA1 × Risikofaktor + Umlagen) wird so der Faktor sichtbar. Schnittstelle:
+  `GET /api/tariff-provider/stats?days=30`. Aufbewahrung wie die Börsenpreise (weder Log-Verdichtung noch Platz-Wache
+  entfernen sie; ~35 000 Zeilen je Jahr).
+
 - **Peak Shaving – Bezugsgrenze für Gewerbeanschlüsse (Beta, #28)**: Bei Leistungsmessung (RLM) richtet sich der
   Leistungspreis nach der höchsten Viertelstunden-Bezugsleistung im Jahr. Mit eingetragener Grenze deckelt DVhub
   eigene Netz-Sollwerte (Netzladen, EOS-„Akku halten“, manuelle Werte) auf Grenze minus Sicherheitsabstand, sodass der

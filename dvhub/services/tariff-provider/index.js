@@ -14,6 +14,15 @@
 // Ablage: Reihe `tariff_import_ct_kwh` (scope 'tariff', source = Anbieter) in
 // timeseries_samples, beim Start zurück in den Speicher (price-store.js), damit
 // die Historie auch nach einem Neustart den bezahlten Preis kennt.
+//
+// Mitloggen (Christin 01.11.2026): Je Viertelstunde eine Zeile (Upsert auf
+// Reihe/Anbieter/Zeit), daneben liegt der Day-Ahead-Preis (price_ct_kwh). Neu
+// geschrieben wird nur ein neuer oder geänderter Preis; meta_json hält die
+// Abrufzeit (fetchedAt), die Lesart (priceBasis) und bei einer Änderung den
+// vorigen Preis (previousCtKwh). Aufbewahrung wie die Börsenpreise: scope
+// 'tariff' ist keine 5-s-Rohreihe — weder die Log-Verdichtung (14 Tage gilt nur
+// für Protokolle) noch die Platz-Wache (nur scope 'live') entfernt sie; ~35 000
+// Zeilen je Jahr. Auswertung gegen Day-Ahead: price-stats.js, stats().
 
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -25,6 +34,7 @@ import {
   markProviderPricesLoading, dropProviderSlotsFrom
 } from './price-store.js';
 import { localDateOf, addDaysToDate, localMidnight, localMinuteOfDay } from './common.js';
+import { pairProviderWithMarket, computeProviderPriceStats, clampStatsDays } from './price-stats.js';
 
 export const SERIES_KEY = 'tariff_import_ct_kwh';
 export const SERIES_SCOPE = 'tariff';
@@ -33,6 +43,26 @@ const REFRESH_MS = 60 * 60 * 1000;
 const TOMORROW_RETRY_MS = 15 * 60 * 1000;
 const AUTH_BLOCK_MS = 6 * 60 * 60 * 1000;
 const ESTIMATE_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Wie weit zurück gemerkt wird, was schon in der Datenbank steht: Die Anbieter
+// liefern heute und morgen, ältere Slots kommen nicht wieder.
+const PERSISTED_KEEP_MS = 3 * DAY_MS;
+const DB_WAIT_MS = 10_000;
+
+// Auf die Datenbank höchstens `ms` warten: Der Pool kennt keine Abfrage-
+// Zeitgrenze, ein hängender Abruf hielte sonst `inFlight` für immer.
+// Ergebnis: true = fertig geworden, false = Zeit abgelaufen.
+async function waitAtMost(promise, ms) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve(promise).then(() => true, () => true),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); timer.unref?.(); })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 const TIME_ZONE = 'Europe/Berlin';
 
 // Ab wann die Preise für morgen da sein sollten (Ortszeit, Minute des Tages).
@@ -131,6 +161,10 @@ export function createTariffProviderService(ctx, deps = {}) {
   const now = deps.now || (() => Date.now());
   const fetchImpl = deps.fetch || globalThis.fetch;
   const dataDir = deps.dataDir || '/var/lib/dvhub';
+  const dbWaitMs = deps.dbWaitMs || DB_WAIT_MS;
+  // So lange wartet die Historie höchstens auf das Laden beim Start (inkl. bis
+  // zu 120 s auf die Datenbank) — hängt es, rechnet sie danach ohne zu warten.
+  const loadMarkMs = deps.loadMarkMs || 150_000;
   const cacheFile = path.join(dataDir, 'tariff-provider', 'lichtblick-token.json');
   const clients = {
     tibber: deps.fetchTibber || ((s) => fetchTibberPrices({ token: s.tibber.token, homeId: s.tibber.homeId, fetchImpl })),
@@ -156,10 +190,13 @@ export function createTariffProviderService(ctx, deps = {}) {
   let timer = null;
   let inFlight = null;
   let dbLoading = null;
+  let loadTimeoutLogged = null;   // je hängendem Lesen nur eine Warnung
   let lastTestMs = 0;
   let identity = null;
   let reloadTimer = null;
   const TEST_MIN_GAP_MS = 10_000;
+  // Was sicher in der Datenbank steht: `${Anbieter}|${Slotbeginn ms}` → ct/kWh.
+  const persisted = new Map();
 
   const settings = () => ctx.getCfg?.()?.userEnergyPricing?.provider || {};
   const log = (event, data, level) => { try { ctx.pushLog?.(event, data, level); } catch { /* ignore */ } };
@@ -206,16 +243,22 @@ export function createTariffProviderService(ctx, deps = {}) {
       try {
         const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE });
         const bySource = new Map();
+        const keepFrom = now() - PERSISTED_KEEP_MS;
         for (const row of rows) {
           const list = bySource.get(row.source) || [];
           list.push({ ts: row.ts, ctKwh: row.value, durationMs: Number(row.resolutionSeconds || 900) * 1000 });
           bySource.set(row.source, list);
+          const tsMs = new Date(row.ts).getTime();
+          if (tsMs >= keepFrom) persisted.set(`${row.source}|${tsMs}`, Number(row.value));
         }
         // Der eingestellte Anbieter zuletzt: Bei doppelten Slots gilt seiner.
+        // Schon in diesem Prozess abgerufene Slots bleiben — sie sind neuer als
+        // die Datenbank (Laden erst nach einem Abruf, z. B. nach Lesefehler).
         const current = settings().name;
+        const inMemory = new Set(providerSlotsBetween(-Infinity, Infinity).map((x) => x.ts));
         let n = 0;
         for (const [source, list] of [...bySource].sort(([a], [b]) => (a === current) - (b === current))) {
-          n += putProviderSlots(source, list);
+          n += putProviderSlots(source, list.filter((x) => !inMemory.has(new Date(x.ts).getTime())));
         }
         st.storedFromDb = n;
         st.dbLoaded = true;
@@ -227,6 +270,25 @@ export function createTariffProviderService(ctx, deps = {}) {
       }
     })();
     return dbLoading;
+  }
+
+  // Laden mit Zeitgrenze (Takt und Abruf): Takt und Abruf warten höchstens
+  // dbWaitMs. Das Lesen selbst läuft weiter (kein zweites daneben, das Pool-
+  // Verbindungen bände) und wird übernommen, sobald es fertig ist; bis dahin
+  // wird nicht geschrieben (writeSamples), getState().logging = 'pending'; die
+  // Historie wartet höchstens loadMarkMs darauf.
+  // Scheitert es, stellt der nächste Takt es neu. Kommt es nie zurück (halb
+  // offene TCP-Verbindung zu einer entfernten Datenbank; über den Unix-Socket
+  // nicht möglich), bleibt es bis zum Neustart 'pending' — sichtbar in den
+  // Einstellungen. Eine Zeitgrenze auf der Abfrage selbst bräuchte eine eigene
+  // Verbindung samt Fehler-Listener (Gegenprüfung 8e701a3e) und lohnt hier nicht.
+  async function loadFromDbBounded() {
+    if (st.dbLoaded || typeof ctx.telemetryStore?.listSeriesSamples !== 'function') return;
+    const pending = loadFromDb();
+    if (await waitAtMost(pending, dbWaitMs)) return;
+    if (st.dbLoaded || loadTimeoutLogged === dbLoading) return;
+    loadTimeoutLogged = dbLoading;
+    log('tariff_provider_db_load_timeout', { waitedMs: dbWaitMs }, 'warn');
   }
 
   // Ausgleichsgerade Anbieterpreis ↔ Börsenpreis aus den letzten 7 Tagen.
@@ -257,19 +319,45 @@ export function createTariffProviderService(ctx, deps = {}) {
     setProviderEstimate(model ? { ...model, provider: settings().name || null } : getProviderEstimate());
   }
 
-  function writeSamples(provider, slots) {
-    if (!slots.length || typeof ctx.telemetrySafeWrite !== 'function') return;
-    const rows = slots.map((s) => ({
-      seriesKey: SERIES_KEY,
-      scope: SERIES_SCOPE,
-      source: provider,
-      quality: 'raw',
-      ts: new Date(s.ts).toISOString(),
-      resolutionSeconds: Math.round(s.durationMs / 1000),
-      value: s.ctKwh,
-      unit: 'ct/kWh'
-    }));
-    ctx.telemetrySafeWrite(() => ctx.telemetryStore.writeSamples(rows));
+  // Nur neue oder geänderte Preise schreiben; gemerkt wird erst nach dem
+  // erfolgreichen Schreiben — scheitert es, folgt es beim nächsten Abruf.
+  function writeSamples(provider, slots, priceBasis) {
+    if (!slots.length || typeof ctx.telemetrySafeWrite !== 'function') return null;
+    // Datenbank lesbar, aber noch nicht abgeglichen (Lesen gescheitert): nicht
+    // blind schreiben — der nächste Abruf lädt erneut und holt es nach.
+    if (!st.dbLoaded && typeof ctx.telemetryStore?.listSeriesSamples === 'function') return null;
+    const nowMs = now();
+    for (const key of [...persisted.keys()]) {
+      if (Number(key.slice(key.lastIndexOf('|') + 1)) < nowMs - PERSISTED_KEEP_MS) persisted.delete(key);
+    }
+    const fetchedAt = new Date(nowMs).toISOString();
+    const rows = [];
+    for (const s of slots) {
+      const tsMs = Number(s.ts);
+      const key = `${provider}|${tsMs}`;
+      const before = persisted.get(key);
+      if (before === s.ctKwh) continue;
+      const meta = { fetchedAt, priceBasis };
+      if (before !== undefined) meta.previousCtKwh = before;
+      rows.push({
+        seriesKey: SERIES_KEY,
+        scope: SERIES_SCOPE,
+        source: provider,
+        quality: 'raw',
+        ts: new Date(tsMs).toISOString(),
+        resolutionSeconds: Math.round(s.durationMs / 1000),
+        value: s.ctKwh,
+        unit: 'ct/kWh',
+        meta
+      });
+    }
+    if (!rows.length) return null;
+    return Promise.resolve(ctx.telemetrySafeWrite(async () => { await ctx.telemetryStore.writeSamples(rows); return true; }))
+      .then((ok) => {
+        if (ok !== true) return;
+        for (const r of rows) persisted.set(`${provider}|${Date.parse(r.ts)}`, r.value);
+      })
+      .catch(() => { /* telemetrySafeWrite meldet selbst */ });
   }
 
   async function runFetch(s, reason) {
@@ -279,10 +367,18 @@ export function createTariffProviderService(ctx, deps = {}) {
     st.running = true;
     const hadTomorrow = hasTomorrow(nowMs);
     try {
+      // Erst abgleichen, was schon in der Datenbank steht (Abruf beim Start
+      // oder per Knopf vor dem Laden): sonst bekämen unveränderte Preise eine
+      // neue Abrufzeit und geänderte keinen Vorwert. Vor dem Abruf, damit die
+      // geladenen Preise die frischen im Speicher nicht überschreiben.
+      await loadFromDbBounded();
       const result = await clients[s.name](s);
       const slots = result.slots || [];
       putProviderSlots(s.name, slots);
-      writeSamples(s.name, slots);
+      // Auf das Schreiben warten (höchstens dbWaitMs), damit eine Auswertung
+      // direkt nach „Jetzt abrufen“ die neuen Preise sieht.
+      const write = writeSamples(s.name, slots, s.priceBasis === 'net_energy' ? 'net_energy' : 'gross_total');
+      if (write) await waitAtMost(write, dbWaitMs);
       failures = 0;
       lastSuccessMs = now();
       st.lastSuccessAt = new Date(lastSuccessMs).toISOString();
@@ -292,7 +388,7 @@ export function createTariffProviderService(ctx, deps = {}) {
       // Leere Antwort ist kein Fehler (z. B. vor dem ersten Liefertag), aber sichtbar.
       st.error = slots.length ? null : emptyPricesMessage(s.name, result.account);
       st.errorCode = slots.length ? null : 'no_prices';
-      await refreshEstimate();
+      await waitAtMost(refreshEstimate(), dbWaitMs);
       log('tariff_provider_ok', { provider: s.name, reason, slots: slots.length, tomorrow: st.summary.tomorrowSlots });
       if (!hadTomorrow && hasTomorrow(now())) {
         log('tariff_provider_tomorrow_arrived', { provider: s.name, triggering: 'eos_bridge_push' });
@@ -318,7 +414,7 @@ export function createTariffProviderService(ctx, deps = {}) {
   }
 
   async function tick() {
-    await loadFromDb();
+    await loadFromDbBounded();
     const s = syncConfigState();
     if (!st.active || inFlight) return;
     const nowMs = now();
@@ -361,11 +457,49 @@ export function createTariffProviderService(ctx, deps = {}) {
     }
   }
 
+  /**
+   * Kennzahlen Anbieterpreis ↔ Day-Ahead des eingestellten Anbieters über die
+   * letzten `days` Tage (plus die schon bekannten Preise für morgen).
+   */
+  async function stats({ days } = {}) {
+    const store = ctx.telemetryStore;
+    if (typeof store?.listSeriesSamples !== 'function' || typeof store?.listPriceSlots !== 'function') {
+      return { ok: false, code: 'no_store', error: 'Keine Datenbank — Auswertung nicht möglich.' };
+    }
+    const cfg = ctx.getCfg?.() || {};
+    const s = settings();
+    if (!s.name) return { ok: false, code: 'not_configured', error: 'Noch kein Anbieter gespeichert.' };
+    const d = clampStatsDays(days);
+    const nowMs = now();
+    const start = new Date(nowMs - d * DAY_MS).toISOString();
+    const end = new Date(nowMs + 2 * DAY_MS).toISOString();
+    const [providerRows, marketSlots] = await Promise.all([
+      store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE, start, end }),
+      store.listPriceSlots({ start, end, bucketSeconds: 900 })
+    ]);
+    const own = providerRows.filter((r) => r.source === s.name);
+    const vatRaw = cfg.userEnergyPricing?.dynamicComponents?.vatPct;
+    const vatPct = vatRaw == null || vatRaw === '' || !Number.isFinite(Number(vatRaw)) ? 19 : Number(vatRaw);
+    return {
+      ok: true,
+      provider: s.name,
+      providerLabel: PROVIDER_LABELS[s.name] || s.name,
+      days: d,
+      from: start,
+      to: end,
+      providerSlots: own.length,
+      ...computeProviderPriceStats(pairProviderWithMarket(own, marketSlots), { vatPct, priceBasis: s.priceBasis })
+    };
+  }
+
   function getState() {
     syncConfigState();
     const estimate = getProviderEstimate();
     return {
       ...st,
+      // 'pending': Abgleich mit der Datenbank steht aus — neue Preise werden
+      // noch nicht geloggt (writeSamples).
+      logging: st.dbLoaded || typeof ctx.telemetryStore?.listSeriesSamples !== 'function' ? 'ok' : 'pending',
       providerLabel: st.provider ? PROVIDER_LABELS[st.provider] || st.provider : null,
       hasTomorrow: hasTomorrow(now()),
       estimate: estimate ? { slope: estimate.slope, interceptCtKwh: estimate.intercept, pairs: estimate.n } : null
@@ -384,7 +518,7 @@ export function createTariffProviderService(ctx, deps = {}) {
 
   function start() {
     if (timer) return;
-    markProviderPricesLoading(loadWhenStoreReady());
+    markProviderPricesLoading(waitAtMost(loadWhenStoreReady(), loadMarkMs));
     timer = setInterval(() => { tick().catch((e) => log('tariff_provider_error', { phase: 'tick', error: e.message }, 'warn')); }, deps.tickMs || TICK_MS);
     timer.unref?.();
     setTimeout(() => { tick().catch(() => {}); }, 2000).unref?.();
@@ -396,6 +530,12 @@ export function createTariffProviderService(ctx, deps = {}) {
   async function reloadRecent() {
     const store = ctx.telemetryStore;
     if (typeof store?.listSeriesSamples !== 'function') return;
+    // Ist das Laden beim Start gescheitert, hier alles nachholen (sonst fehlten
+    // dem Web-Prozess die Preise älter als zwei Tage bis zum Neustart).
+    if (!st.dbLoaded) {
+      await loadFromDbBounded();
+      if (st.dbLoaded) return;
+    }
     const rows = await store.listSeriesSamples({ seriesKey: SERIES_KEY, scope: SERIES_SCOPE, start: new Date(now() - 2 * 86_400_000).toISOString() });
     const current = settings().name;
     putProviderSlots(current, rows.filter((r) => r.source === current)
@@ -404,7 +544,7 @@ export function createTariffProviderService(ctx, deps = {}) {
   }
 
   function startReadOnly() {
-    markProviderPricesLoading(loadWhenStoreReady());
+    markProviderPricesLoading(waitAtMost(loadWhenStoreReady(), loadMarkMs));
     if (reloadTimer) return;
     reloadTimer = setInterval(() => { reloadRecent().catch(() => {}); }, 15 * 60_000);
     reloadTimer.unref?.();
@@ -417,5 +557,5 @@ export function createTariffProviderService(ctx, deps = {}) {
     reloadTimer = null;
   }
 
-  return { start, startReadOnly, stop, tick, refresh, test, getState, loadFromDb, reloadRecent };
+  return { start, startReadOnly, stop, tick, refresh, test, getState, loadFromDb, reloadRecent, stats };
 }

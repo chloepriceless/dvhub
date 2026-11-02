@@ -1498,6 +1498,7 @@ export function createApiRoutes(ctx) {
     ['/api/victron/devices/scan', 'integrations'], ['/api/feed-in-cap/status', 'integrations'],
     ['/api/ocpp/status', 'integrations'], ['/api/vehicle-evcc', 'integrations'], ['/api/vehicle-evcc/settings', 'integrations'], ['/api/vehicle-evcc/refresh', 'integrations'],
     ['/api/tariff-provider', 'integrations'], ['/api/tariff-provider/test', 'integrations'], ['/api/tariff-provider/refresh', 'integrations'],
+    ['/api/tariff-provider/stats', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -5111,6 +5112,17 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/tariff-provider' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
       return json(res, 200, { ok: true, state: ctx.tariffProvider?.getState?.() ?? null });
+    }
+    // Auswertung Anbieterpreis ↔ Day-Ahead (Christin 01.11.2026): Mittelwerte,
+    // Formel netto ≈ a + b × Börse, mittlere Abweichung; ?days=1…365 (Standard 30).
+    if (url.pathname === '/api/tariff-provider/stats' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.tariffProvider?.stats) return json(res, 503, { ok: false, error: 'tariff_provider_unavailable' });
+      try {
+        return json(res, 200, await ctx.tariffProvider.stats({ days: url.searchParams.get('days') }));
+      } catch (error) {
+        return json(res, 500, { ok: false, code: 'error', error: error.message });
+      }
     }
     if (url.pathname === '/api/tariff-provider/test' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;

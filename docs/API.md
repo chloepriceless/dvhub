@@ -156,6 +156,7 @@ Spalte **Zugang** in den Tabellen:
 | GET | `/api/tariff-provider` | LAN·integrations | Bezugspreis vom Stromanbieter (Tibber, LichtBlick): Anbieter, letzter Abruf, Preise heute/morgen, Fehler, Schätzung für fehlende Zeiten — ohne Zugangsdaten |
 | POST | `/api/tariff-provider/test` | Token | Zugangsdaten prüfen, ohne zu speichern (`{"name":"tibber","tibber":{"token":"…"}}`; `***` oder leer = gespeicherter Wert) |
 | POST | `/api/tariff-provider/refresh` | Token | Anbieterpreise sofort abrufen (gespeicherte Einstellungen; nach abgelehnten Zugangsdaten 6 h gesperrt) |
+| GET | `/api/tariff-provider/stats?days=30` | LAN·integrations | Auswertung Anbieterpreis ↔ Day-Ahead über 1–365 Tage (Standard 30) plus bekannte Preise für morgen: Mittelwerte, Formel brutto und netto ≈ a + b × Börsenpreis, mittlere und größte Abweichung, R² |
 
 ### 3.9 Prognose
 

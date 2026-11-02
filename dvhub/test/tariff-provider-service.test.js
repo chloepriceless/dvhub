@@ -234,7 +234,9 @@ test('Anbieterwechsel: künftige Preise und Schätzung des alten verfallen, Verg
 test('getrennter Web-Prozess liest neue Preise aus der Datenbank nach (Codex 22.10.)', async () => {
   const { ctx } = makeCtx();
   let calls = 0;
+  let loaded = false;   // Start: einmal alles (loadFromDb), danach nur Fenster
   ctx.telemetryStore.listSeriesSamples = async ({ start }) => {
+    if (!loaded) { loaded = true; return []; }
     calls += 1;
     assert.ok(start, 'nur ein Fenster, nicht alles');
     return [
@@ -243,7 +245,362 @@ test('getrennter Web-Prozess liest neue Preise aus der Datenbank nach (Codex 22.
     ];
   };
   const svc = createTariffProviderService(ctx, { now: () => Date.parse('2026-11-01T15:00:00Z') });
+  await svc.loadFromDb();
   await svc.reloadRecent();
   assert.equal(calls, 1);
   assert.equal(providerSlotAt(Date.parse('2026-11-02T00:05:00Z')).ctKwh, 22);
+});
+
+// Christin 01.11.2026: Anbieterpreise dauerhaft mitloggen, neben dem Day-Ahead-Preis.
+test('Ablage: Abrufzeit und Lesart im Eintrag; derselbe Preis wird nicht erneut geschrieben, ein geänderter schon', async () => {
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const { ctx, written } = makeCtx();
+  let prices = dayPrices('2026-11-01');
+  const svc = createTariffProviderService(ctx, {
+    now: () => now,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: prices })
+  });
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96);
+  assert.deepEqual(written[0].meta, { fetchedAt: '2026-11-01T10:00:00.000Z', priceBasis: 'gross_total' });
+
+  now += HOUR;
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96, 'unveränderte Preise nicht noch einmal');
+
+  now += HOUR;
+  prices = prices.map((p, i) => (i === 50 ? { ...p, ctKwh: 33.3 } : p));
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 97, 'nur der geänderte Slot');
+  assert.equal(written[96].value, 33.3);
+  assert.deepEqual(written[96].meta, { fetchedAt: '2026-11-01T12:00:00.000Z', priceBasis: 'gross_total', previousCtKwh: 25.5 });
+});
+
+test('Ablage: fehlgeschlagenes Schreiben wird beim nächsten Abruf wiederholt', async () => {
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const { ctx, written } = makeCtx();
+  let dbDown = true;
+  // wie server.js: Fehler werden geschluckt, Ergebnis null
+  ctx.telemetrySafeWrite = async (fn) => { if (dbDown) return null; return fn(); };
+  const svc = createTariffProviderService(ctx, {
+    now: () => now,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: dayPrices('2026-11-01') })
+  });
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 0);
+  dbDown = false;
+  now += HOUR;
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96);
+});
+
+test('Ablage nach Neustart: Preise aus der Datenbank gelten als geschrieben', async () => {
+  const { ctx, written } = makeCtx();
+  const stored = dayPrices('2026-11-01');
+  ctx.telemetryStore.listSeriesSamples = async () => stored.map((s) => ({
+    ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh
+  }));
+  const svc = createTariffProviderService(ctx, {
+    now: () => Date.parse('2026-11-01T10:00:00Z'),
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
+  });
+  await svc.loadFromDb();
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96, 'nur morgen ist neu');
+  assert.ok(written.every((w) => w.ts >= '2026-11-01T23:00:00.000Z'));
+});
+
+test('Auswertung: Anbieterpreis des eingestellten Anbieters gegen Day-Ahead, Zeitraum und MwSt aus den Einstellungen', async () => {
+  const now = Date.parse('2026-11-03T12:00:00Z');
+  const { ctx } = makeCtx({ dynamicComponents: { vatPct: 19 } });
+  const calls = [];
+  const start = Date.parse('2026-11-01T23:00:00Z');
+  ctx.telemetryStore.listSeriesSamples = async (q) => {
+    calls.push({ kind: 'provider', ...q });
+    return [
+      ...Array.from({ length: 96 }, (_, i) => ({ ts: new Date(start + i * 900_000).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: (18 + 1.1 * (i / 4)) * 1.19 })),
+      { ts: new Date(start).toISOString(), source: 'tibber', resolutionSeconds: 900, value: 999 }
+    ];
+  };
+  ctx.telemetryStore.listPriceSlots = async (q) => {
+    calls.push({ kind: 'market', ...q });
+    return Array.from({ length: 96 }, (_, i) => ({ ts: new Date(start + i * 900_000).toISOString(), priceCtKwh: i / 4 }));
+  };
+  const svc = createTariffProviderService(ctx, { now: () => now });
+  const s = await svc.stats({ days: 7 });
+  assert.equal(s.ok, true);
+  assert.equal(s.provider, 'lichtblick');
+  assert.equal(s.days, 7);
+  assert.equal(s.pairs, 96, 'Tibber-Zeile zählt nicht');
+  assert.ok(Math.abs(s.formula.net.slope - 1.1) < 0.0001);
+  assert.ok(Math.abs(s.formula.net.interceptCtKwh - 18) < 0.001);
+  const p = calls.find((c) => c.kind === 'provider');
+  assert.equal(p.seriesKey, SERIES_KEY);
+  assert.equal(p.scope, 'tariff');
+  assert.equal(p.start, new Date(now - 7 * 86_400_000).toISOString());
+  assert.equal(p.end, new Date(now + 2 * 86_400_000).toISOString(), 'bekannte Preise für morgen zählen mit');
+  const m = calls.find((c) => c.kind === 'market');
+  assert.deepEqual([m.start, m.end, m.bucketSeconds], [p.start, p.end, 900]);
+
+  const tibber = createTariffProviderService({ ...ctx, getCfg: () => ({ userEnergyPricing: { mode: 'provider', provider: { name: 'tibber', tibber: { token: 't' } } } }) }, { now: () => now });
+  const t = await tibber.stats({ days: 7 });
+  assert.equal(t.provider, 'tibber', 'Tibber ebenso');
+  assert.equal(t.pairs, 1);
+  assert.equal(t.vatPct, 19, 'ohne Angabe 19 %');
+
+  const none = await createTariffProviderService({ ...ctx, telemetryStore: {} }, { now: () => now }).stats();
+  assert.deepEqual({ ok: none.ok, code: none.code }, { ok: false, code: 'no_store' });
+});
+
+// Gegenprüfung 24884430 (P3): Abruf vor dem Laden aus der Datenbank (Start,
+// Knopf „Jetzt abrufen“) darf Abrufzeit und Vorwert nicht überschreiben.
+test('Ablage: Abruf vor dem Laden aus der Datenbank lädt erst, schreibt dann nur Neues', async () => {
+  const { ctx, written } = makeCtx();
+  const stored = dayPrices('2026-11-01');
+  ctx.telemetryStore.listSeriesSamples = async () => stored.map((s) => ({
+    ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh
+  }));
+  const svc = createTariffProviderService(ctx, {
+    now: () => Date.parse('2026-11-01T10:00:00Z'),
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
+  });
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96, 'nur morgen ist neu');
+});
+
+test('Ablage: Datenbank nicht lesbar → nicht schreiben, beim nächsten Abruf nachholen', async () => {
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const { ctx, written } = makeCtx();
+  const stored = dayPrices('2026-11-01');
+  let readable = false;
+  ctx.telemetryStore.listSeriesSamples = async () => {
+    if (!readable) throw new Error('db weg');
+    return stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh }));
+  };
+  const svc = createTariffProviderService(ctx, {
+    now: () => now,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
+  });
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 0, 'ohne Abgleich kein Schreiben');
+  readable = true;
+  now += HOUR;
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96);
+});
+
+// Gegenprüfung c7263d78 (P3): ein später geglücktes Laden aus der Datenbank
+// überschreibt die frisch abgerufenen Preise im Speicher nicht.
+test('Speicher: spätes Laden aus der Datenbank lässt frisch abgerufene Preise stehen', async () => {
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const { ctx, written } = makeCtx();
+  const stored = dayPrices('2026-11-01');
+  const fresh = stored.map((p, i) => (i === 60 ? { ...p, ctKwh: 44.4 } : p));
+  let readable = false;
+  ctx.telemetryStore.listSeriesSamples = async () => {
+    if (!readable) throw new Error('db weg');
+    return stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh }));
+  };
+  const svc = createTariffProviderService(ctx, { now: () => now, fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: fresh }) });
+  await svc.refresh();
+  assert.equal(providerSlotAt(fresh[60].ts).ctKwh, 44.4);
+  readable = true;
+  await svc.loadFromDb();
+  assert.equal(providerSlotAt(fresh[60].ts).ctKwh, 44.4, 'frischer Preis bleibt');
+  assert.equal(providerSlotAt(fresh[10].ts).ctKwh, stored[10].ctKwh);
+  now += HOUR;
+  await svc.refresh();
+  assert.equal(written.length, 1, 'nur der geänderte Slot, mit Vorwert');
+  assert.equal(written[0].meta.previousCtKwh, stored[60].ctKwh);
+});
+
+test('Abruf wartet auf das Schreiben (Auswertung danach sieht die neuen Preise)', async () => {
+  const { ctx, written } = makeCtx();
+  ctx.telemetrySafeWrite = async (fn) => { await new Promise((r) => setTimeout(r, 30)); return fn(); };
+  const svc = createTariffProviderService(ctx, {
+    now: () => Date.parse('2026-11-01T10:00:00Z'),
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: dayPrices('2026-11-01') })
+  });
+  await svc.refresh();
+  assert.equal(written.length, 96);
+});
+
+// Gegenprüfung 6a817dcb (P3): eine hängende Datenbank hält den Abruf nicht fest.
+test('Abruf: hängendes Lesen der Datenbank hält den Abruf nicht fest, geschrieben wird dann nicht', { timeout: 5000 }, async () => {
+  const { ctx, written } = makeCtx();
+  ctx.telemetryStore.listSeriesSamples = () => new Promise(() => {});
+  ctx.telemetryStore.listPriceSlots = () => new Promise(() => {});
+  const svc = createTariffProviderService(ctx, {
+    now: () => Date.parse('2026-11-01T10:00:00Z'),
+    dbWaitMs: 20,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: dayPrices('2026-11-01') })
+  });
+  const keepAlive = setTimeout(() => {}, 3000);   // Zeitgrenze ist unref — wie im Server die Schleife wach halten (begrenzt)
+  const r = await svc.refresh().finally(() => clearTimeout(keepAlive));
+  assert.equal(r.ok, true);
+  assert.equal(written.length, 0);
+  assert.equal(providerSlotAt(Date.parse('2026-11-01T10:00:00Z')).ctKwh > 0, true, 'Preise trotzdem im Speicher');
+});
+
+// Gegenprüfung b83f668a/77ad720d: ein langsames Lesen hält den Takt nicht
+// fest, läuft aber weiter (kein zweites daneben) und wird übernommen.
+test('Takt: langsames Lesen der Datenbank → Zeitgrenze und Warnung, Ergebnis kommt trotzdem an', { timeout: 5000 }, async () => {
+  const { ctx, written, logs } = makeCtx();
+  let calls = 0;
+  let release;
+  const stored = dayPrices('2026-11-01');
+  const fresh = stored.map((p, i) => (i === 60 ? { ...p, ctKwh: 44.4 } : p));
+  ctx.telemetryStore.listSeriesSamples = () => {
+    calls += 1;
+    return new Promise((resolve) => { release = () => resolve(stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh }))); });
+  };
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const svc = createTariffProviderService(ctx, {
+    now: () => now,
+    dbWaitMs: 20,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...fresh, ...dayPrices('2026-11-02', 20)] })
+  });
+  const keepAlive = setTimeout(() => {}, 3000);   // begrenzt: hängt der Takt, endet der Test trotzdem rot
+  try {
+    await svc.tick();   // Lesen hängt noch → Abruf läuft trotzdem, schreibt aber nicht
+    assert.equal(written.length, 0);
+    assert.equal(logs.filter((l) => l.event === 'tariff_provider_db_load_timeout').length, 1, 'eine Warnung');
+    assert.equal(calls, 1, 'kein zweites Lesen daneben');
+    assert.equal(providerSlotAt(fresh[60].ts).ctKwh, 44.4);
+    release();
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(svc.getState().dbLoaded, true, 'spätes Ergebnis übernommen');
+    assert.equal(providerSlotAt(fresh[60].ts).ctKwh, 44.4, 'frischer Preis bleibt');
+    now += HOUR;
+    await svc.refresh();
+    assert.equal(written.length, 97, 'morgen + der geänderte Slot');
+    assert.equal(calls, 1);
+  } finally {
+    clearTimeout(keepAlive);
+  }
+});
+
+// Gegenprüfung e5a3efa1/80c6929b/8e701a3e: Scheitert das Lesen, versucht der
+// nächste Abruf es neu. Ein Lesen, das nie zurückkommt, bleibt das einzige
+// (kein Pool-Stau), und der Zustand zeigt, dass nicht geloggt wird.
+test('Lesen scheitert → neuer Versuch; nie fertig → kein zweites daneben, Zustand pending', { timeout: 5000 }, async () => {
+  const { ctx, written } = makeCtx();
+  let calls = 0;
+  const stored = dayPrices('2026-11-01');
+  const rows = () => stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh }));
+  let mode = 'fail';
+  ctx.telemetryStore.listSeriesSamples = () => {
+    calls += 1;
+    if (mode === 'fail') return Promise.reject(new Error('Verbindung weg'));
+    if (mode === 'hang') return new Promise(() => {});
+    return Promise.resolve(rows());
+  };
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const svc = createTariffProviderService(ctx, {
+    now: () => now,
+    dbWaitMs: 10,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
+  });
+  const keepAlive = setTimeout(() => {}, 3000);
+  try {
+    await svc.refresh();
+    assert.equal(written.length, 0);
+    assert.equal(svc.getState().logging, 'pending', 'Zustand zeigt: wird nicht geloggt');
+    mode = 'ok';
+    now += HOUR;
+    await svc.refresh();
+    assert.equal(calls, 2, 'neuer Versuch nach dem Fehler');
+    assert.equal(written.length, 96, 'danach geloggt (nur morgen neu)');
+    assert.equal(svc.getState().logging, 'ok');
+
+    // Zweiter Dienst: Lesen kommt nie zurück → bei weiteren Abrufen kein zweites Lesen.
+    calls = 0; mode = 'hang';
+    clearProviderPrices();
+    const svc2 = createTariffProviderService(ctx, { now: () => now, dbWaitMs: 10, fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: stored }) });
+    await svc2.refresh();
+    now += HOUR;
+    await svc2.refresh();
+    await svc2.tick();
+    assert.equal(calls, 1, 'nur ein offenes Lesen');
+    assert.equal(svc2.getState().logging, 'pending');
+  } finally {
+    clearTimeout(keepAlive);
+  }
+});
+
+// Gegenprüfung 8e701a3e (P3): Der getrennte Web-Prozess holt ein beim Start
+// gescheitertes Laden beim nächsten Nachlesen vollständig nach.
+test('Web-Prozess: gescheitertes Laden beim Start wird beim Nachlesen vollständig nachgeholt', async () => {
+  const { ctx } = makeCtx();
+  const queries = [];
+  let fail = true;
+  ctx.telemetryStore.listSeriesSamples = async (q) => {
+    queries.push(q);
+    if (fail) throw new Error('db weg');
+    return [{ ts: '2026-10-20T10:00:00.000Z', source: 'lichtblick', resolutionSeconds: 900, value: 31 }];
+  };
+  const svc = createTariffProviderService(ctx, { now: () => Date.parse('2026-11-01T15:00:00Z') });
+  await svc.loadFromDb();
+  assert.equal(svc.getState().dbLoaded, false);
+  fail = false;
+  await svc.reloadRecent();
+  assert.equal(queries.at(-1).start, undefined, 'vollständig, nicht nur zwei Tage');
+  assert.equal(providerSlotAt(Date.parse('2026-10-20T10:05:00Z')).ctKwh, 31, 'alter Preis da');
+  assert.equal(svc.getState().dbLoaded, true);
+});
+
+// Gegenprüfung 09d619c9 (3× P3): Web-Prozess holt auch nach, wenn die Datenbank
+// erst spät kam (nie geladen), ein hängendes Nachholen hält das Fenster-Nachlesen
+// nicht auf, und ein hängendes Laden beim Start bremst die Historie nicht dauerhaft.
+test('Web-Prozess: nie geladen → vollständig nachholen; hängt das, trotzdem das Zwei-Tage-Fenster', { timeout: 5000 }, async () => {
+  const { ctx } = makeCtx();
+  const queries = [];
+  let mode = 'ok';
+  ctx.telemetryStore.listSeriesSamples = (q) => {
+    queries.push(q);
+    if (mode === 'hang' && !q.start) return new Promise(() => {});
+    return Promise.resolve([{ ts: q.start ? '2026-11-02T00:00:00.000Z' : '2026-10-20T10:00:00.000Z', source: 'lichtblick', resolutionSeconds: 900, value: q.start ? 22 : 31 }]);
+  };
+  const keepAlive = setTimeout(() => {}, 3000);
+  try {
+    const svc = createTariffProviderService(ctx, { now: () => Date.parse('2026-11-01T15:00:00Z'), dbWaitMs: 10 });
+    await svc.reloadRecent();   // Store kam erst nach dem Start-Laden: nie geladen
+    assert.equal(queries[0].start, undefined, 'vollständig');
+    assert.equal(providerSlotAt(Date.parse('2026-10-20T10:05:00Z')).ctKwh, 31);
+
+    clearProviderPrices();
+    queries.length = 0; mode = 'hang';
+    const svc2 = createTariffProviderService(ctx, { now: () => Date.parse('2026-11-01T15:00:00Z'), dbWaitMs: 10 });
+    await svc2.reloadRecent();
+    assert.ok(queries.some((q) => q.start), 'Fenster trotzdem gelesen');
+    assert.equal(providerSlotAt(Date.parse('2026-11-02T00:05:00Z')).ctKwh, 22);
+  } finally {
+    clearTimeout(keepAlive);
+  }
+});
+
+test('Start: hängendes Laden bremst die Historie nur bis zur Zeitgrenze', { timeout: 5000 }, async () => {
+  const { ctx } = makeCtx();
+  ctx.telemetryStore.listSeriesSamples = () => new Promise(() => {});
+  const svc = createTariffProviderService(ctx, { now: () => Date.now(), loadMarkMs: 30, tickMs: 3_600_000 });
+  const keepAlive = setTimeout(() => {}, 3000);
+  try {
+    svc.start();
+    await new Promise((r) => setTimeout(r, 60));
+    const t0 = Date.now();
+    await whenProviderPricesLoaded(2000);
+    assert.ok(Date.now() - t0 < 500, `Historie wartet nicht mehr (${Date.now() - t0} ms)`);
+  } finally {
+    svc.stop();
+    clearTimeout(keepAlive);
+  }
 });
