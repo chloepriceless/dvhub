@@ -942,7 +942,173 @@
     if (allSame) return { text: '⚠ Konstant ' + (slots[0].powerW || 0) + ' W – keine echte Prognose', detail: '' };
     return null;
   }
-  window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, { loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries });
+  // Kachel „Überschuss / Defizit“ (Christin 02.11.2026): Hauptzahl ist der
+  // Rest heute (PV-Rest − Verbrauchs-Rest, ab jetzt bis Mitternacht), darunter
+  // klein der ganze Tag. Akku aus status.energyBalance.battery (so, wie EOS ihn
+  // sieht); ohne Akkugröße keine kWh — früher Ersatzwerte 43 kWh / 5 %, auf
+  // Prod (77 kWh) zeigte 43 % dann 18,5 statt 33,1 kWh. Verfügbar = Rest heute
+  // + nutzbarer Akku (Ladestand über der Untergrenze).
+  function energyBalanceSummary(input) {
+    var i = input || {};
+    var n = function (v) { return v === null || v === undefined || v === '' || !isFinite(Number(v)) ? null : Number(v); };
+    // Fehlt eine Reihe (keine Last- oder PV-Prognose), ist der Rest unbekannt —
+    // nicht 0 (sonst grüner Überschuss ohne Verbrauch, Gegenprüfung 527906fc).
+    var pvRest = n(i.pvRestKwh), loadRest = n(i.loadRestKwh);
+    var restKwh = pvRest !== null && loadRest !== null ? pvRest - loadRest : null;
+    // Ganzer Tag nur mit beiden Tagessummen (VRM); ohne sie gibt es ihn nicht.
+    var pvDay = n(i.pvDayKwh), loadDay = n(i.loadDayKwh);
+    var dayKwh = pvDay !== null && loadDay !== null ? pvDay - loadDay : null;
+    var b = i.battery || null;
+    var soc = b ? n(b.socPct) : null;
+    var cap = b ? n(b.capacityWh) : null;
+    if (cap !== null && cap <= 0) cap = null;
+    var minSoc = b ? n(b.minSocPct) : null;
+    if (minSoc === null) minSoc = 0;
+    var battKwh = soc !== null && cap !== null ? (soc / 100) * cap / 1000 : null;
+    var usableKwh = soc !== null && cap !== null ? Math.max(0, ((soc - minSoc) / 100) * cap / 1000) : null;
+    return {
+      restKwh: restKwh,
+      dayKwh: dayKwh,
+      socPct: soc,
+      battKwh: battKwh,
+      usableKwh: usableKwh,
+      availableKwh: usableKwh !== null && restKwh !== null ? restKwh + usableKwh : null,
+    };
+  }
+  // Zeitspannen der Prognosezeilen aus den Daten. Liefert nur ein Dienst,
+  // liegen seine Rohzeilen vor (Solcast 30 min, VRM stündlich), /api/forecast
+  // meldet trotzdem '15min' (Gegenprüfung 527906fc). forecast.solar setzt
+  // zusätzlich Punkte zu Sonnenauf- und -untergang (07:22:57 …) — deshalb gilt
+  // jede Zeile bis zur nächsten, höchstens den üblichen Abstand (unterer
+  // Median); die letzte den üblichen Abstand. Eine Zeile allein: die gemeldete
+  // Auflösung (Gegenprüfung e07271be).
+  function rowSpans(slots, fallbackH) {
+    var rows = (slots || []).map(function (s) { return { t: Date.parse(s && s.start), w: Number(s && s.powerW) || 0 }; })
+      .filter(function (r) { return isFinite(r.t); })
+      .sort(function (a, b) { return a.t - b.t; });
+    // Üblicher Abstand: unterer Median der Abstände zwischen Zeilen auf dem
+    // Viertelstundenraster — Zwischenpunkte (Sonnenauf-/-untergang) zählen
+    // nicht mit; ohne solche Paare alle Abstände, ohne Abstände die gemeldete
+    // Auflösung.
+    var Q_MS = 900000;
+    var lowerMedian = function (list) { list.sort(function (a, b) { return a - b; }); return list[Math.floor((list.length - 1) / 2)]; };
+    var grid = rows.filter(function (r) { return r.t % Q_MS === 0; });
+    var gridGaps = [], gaps = [];
+    for (var k = 1; k < grid.length; k += 1) { var gg = grid[k].t - grid[k - 1].t; if (gg > 0) gridGaps.push(gg); }
+    for (var m = 1; m < rows.length; m += 1) { var g = rows[m].t - rows[m - 1].t; if (g > 0) gaps.push(g); }
+    var typical = gridGaps.length ? lowerMedian(gridGaps) : (gaps.length ? lowerMedian(gaps) : fallbackH * 3600000);
+    // Zeilen auf dem Raster (Vielfaches des üblichen Abstands) behalten ihre
+    // volle Dauer — forecast.solar liefert Wh je Stunde, ein folgender
+    // Sonnenuntergangspunkt (16:47:12, 19:00:15) darf sie nicht kürzen
+    // (Gegenprüfung ffa322f1). Zwischenpunkte gelten bis zur nächsten Zeile.
+    return rows.map(function (r, idx) {
+      var next = idx + 1 < rows.length ? rows[idx + 1].t - r.t : typical;
+      var onGrid = typical > 0 && r.t % typical === 0;
+      var ms = onGrid ? typical : (next > 0 ? Math.min(next, typical) : 0);
+      return { t: r.t, ms: ms, w: r.w };
+    });
+  }
+  // Deckt die Reihe [fromMs, untilMs) lückenlos ab? Für die Last Pflicht bis
+  // Mitternacht: endet sie vorher oder hat sie Lücken (Telemetrie steht,
+  // SQL-Fehler, VRM-Abruf hängt), zählten die fehlenden Stunden als 0 kWh —
+  // dann ist der Rest unbekannt (Gegenprüfungen ffa322f1, 27a172cb). PV darf
+  // zum Sonnenuntergang enden (seriesCoversToday).
+  // Erste Zeile nach nowMs, höchstens eine Zeilenlänge entfernt, und keine
+  // Zeile, die jetzt schon läuft: der Abstand davor gilt als abgedeckt.
+  function leadingGapRow(spans, nowMs) {
+    for (var k = 0; k < spans.length; k += 1) {
+      var r = spans[k];
+      if (r.t + r.ms <= nowMs) continue;
+      return r.t > nowMs && r.t - nowMs <= r.ms ? r : null;
+    }
+    return null;
+  }
+  function seriesCoversUntil(slots, fallbackH, fromMs, untilMs) {
+    var spans = rowSpans(slots, fallbackH);
+    // Abstand am Anfang bis zu einer Zeilenlänge erlaubt (Reihe ab der
+    // nächsten vollen Stunde, Gegenprüfung 290a70dc); dazwischen streng.
+    var lead = leadingGapRow(spans, fromMs);
+    var cursor = lead ? lead.t : fromMs;
+    for (var k = 0; k < spans.length && cursor < untilMs; k += 1) {
+      var r = spans[k];
+      var end = r.t + r.ms;
+      if (end <= cursor) continue;
+      if (r.t > cursor + 60000) return false; // Lücke (> 1 min)
+      cursor = end;
+    }
+    return cursor >= untilMs;
+  }
+  // Nächste Mitternacht in Berliner Zeit nach nowMs (MEZ 23:00Z, MESZ 22:00Z).
+  function berlinMidnightAfter(nowMs) {
+    var fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' });
+    var hourFmt = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', hourCycle: 'h23' });
+    var parts = fmt.format(new Date(nowMs)).split('-').map(Number);
+    for (var utcH = 21; utcH <= 23; utcH += 1) {
+      var t = Date.UTC(parts[0], parts[1] - 1, parts[2], utcH);
+      if (parseInt(hourFmt.format(new Date(t)), 10) === 0 && t > nowMs) return t;
+    }
+    return Date.UTC(parts[0], parts[1] - 1, parts[2] + 1, 0) - 3600000;
+  }
+  function kwhOf(slots, fallbackH) {
+    var kwh = 0;
+    rowSpans(slots, fallbackH).forEach(function (r) { kwh += r.w / 1000 * (r.ms / 3600000); });
+    return kwh;
+  }
+  // Energie ab nowMs: vergangene Zeilen zählen nicht, die laufende anteilig
+  // (/api/forecast liefert die Reihe ab dem letzten Abruf, nicht ab jetzt).
+  // untilMs (Mitternacht): Energie danach zählt nicht — Abdeckung und Summe
+  // sehen so dieselbe ganze Reihe (Gegenprüfung 5ccbf355).
+  function restKwhFrom(slots, fallbackH, nowMs, untilMs) {
+    var until = isFinite(untilMs) ? untilMs : Infinity;
+    var kwh = 0;
+    var spans = rowSpans(slots, fallbackH);
+    // Beginnt die Reihe erst zur nächsten vollen Stunde (StatsForecast, VRM),
+    // zählt die angebrochene Stunde mit dem Wert der ersten Zeile
+    // (Gegenprüfung 290a70dc).
+    var lead = leadingGapRow(spans, nowMs);
+    if (lead) kwh += lead.w / 1000 * ((Math.min(lead.t, until) - nowMs) / 3600000);
+    spans.forEach(function (r) {
+      var end = Math.min(r.t + r.ms, until);
+      var from = Math.max(r.t, nowMs);
+      if (end <= from) return;
+      kwh += r.w / 1000 * ((end - from) / 3600000);
+    });
+    return Math.round(kwh * 1000) / 1000;
+  }
+  // Hat die Reihe Zeilen für heute oder später? Nur gestrige (veraltete
+  // Reihe) → unbekannt; heutige, auch schon vergangene, → bekannt
+  // (Gegenprüfung e07271be). Tagesschlüssel YYYY-MM-DD in Berliner Zeit.
+  function seriesCoversToday(slots, todayKey) {
+    var fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' });
+    return (slots || []).some(function (s) {
+      var t = Date.parse(s && s.start);
+      return isFinite(t) && fmt.format(new Date(t)) >= todayKey;
+    });
+  }
+  var ENERGY_BALANCE_TITLE = 'Hauptzahl: Rest heute — erwartete PV ab jetzt bis Mitternacht minus erwarteter Verbrauch '
+    + 'im selben Zeitraum. „ganzer Tag“: dasselbe für den ganzen Tag (auch schon Vergangenes). '
+    + 'Verfügbar: Rest heute plus nutzbarer Akku (Ladestand über der Untergrenze, mit der EOS plant).';
+  function energyBalanceView(sum) {
+    var signed = function (x) { return x === null ? '--' : (x >= 0 ? '+' : '') + x.toFixed(1) + ' kWh'; };
+    var battery = null;
+    if (sum.socPct !== null) {
+      battery = sum.battKwh !== null
+        ? '\ud83d\udd0b ' + sum.socPct + ' % = ' + sum.battKwh.toFixed(1) + ' kWh (' + sum.usableKwh.toFixed(1) + ' nutzbar)'
+        : '\ud83d\udd0b ' + sum.socPct + ' % · Akkugröße nicht eingestellt';
+    }
+    return {
+      main: signed(sum.restKwh),
+      positive: sum.restKwh === null ? null : sum.restKwh >= 0,
+      day: sum.dayKwh !== null ? 'ganzer Tag: ' + signed(sum.dayKwh) : null,
+      battery: battery,
+      available: sum.availableKwh !== null ? 'Verfügbar: ' + signed(sum.availableKwh) : null,
+      title: ENERGY_BALANCE_TITLE,
+    };
+  }
+  window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, {
+    loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries,
+    energyBalanceSummary: energyBalanceSummary, energyBalanceView: energyBalanceView, restKwhFrom: restKwhFrom, seriesCoversToday: seriesCoversToday, seriesCoversUntil: seriesCoversUntil, berlinMidnightAfter: berlinMidnightAfter,
+  });
 
   function updateForecastSummary(forecastData, statusData) {
     var pvEl = document.getElementById('pv-daily-kwh');
@@ -957,6 +1123,10 @@
       pvEl.textContent = '--';
       loadEl.textContent = '--';
       surplusEl.textContent = '--';
+      // Bilanz neutral, alte Detailzeilen weg (Gegenprüfungen e07271be, ffa322f1).
+      surplusEl.style.color = '';
+      if (surplusDetailEl) surplusDetailEl.textContent = '';
+      if (loadDetailEl) loadDetailEl.textContent = '';
       if (detailEl) detailEl.textContent = '';
       return;
     }
@@ -992,46 +1162,56 @@
     function filterTomorrow(slots) {
       return slots.filter(function (s) { return localDateKey(s.start) === berlinTomorrowKey; });
     }
-    var pvSlots = filterToday(pvSlotsAll);
     var loadSlots = filterToday(loadSlotsAll);
     var pvSlotsTomorrow = filterTomorrow(pvSlotsAll);
     var loadSlotsTomorrow = filterTomorrow(loadSlotsAll);
 
-    // "Rest" = future-only (slots with ts_utc >= NOW, already filtered server-side).
-    var pvKwhRest = 0; pvSlots.forEach(function (s) { pvKwhRest += (s.powerW || 0) / 1000 * pvH; });
-    var loadKwhRest = 0; loadSlots.forEach(function (s) { loadKwhRest += (s.powerW || 0) / 1000 * loadH; });
-    var pvKwhTomorrow = 0; pvSlotsTomorrow.forEach(function (s) { pvKwhTomorrow += (s.powerW || 0) / 1000 * pvH; });
-    var loadKwhTomorrow = 0; loadSlotsTomorrow.forEach(function (s) { loadKwhTomorrow += (s.powerW || 0) / 1000 * loadH; });
+    // "Rest" = ab jetzt: vergangene Slots nicht, den laufenden anteilig — die
+    // Reihen beginnen beim letzten Prognose-Abruf, nicht bei „jetzt“.
+    var nowMs = Date.now();
+    var midnightMs = berlinMidnightAfter(nowMs);
+    var pvKwhRest = restKwhFrom(pvSlotsAll, pvH, nowMs, midnightMs);
+    var loadKwhRest = restKwhFrom(loadSlotsAll, loadH, nowMs, midnightMs);
+    // Last bis Mitternacht lückenlos? Bilanz und Warnung der Verbrauchskachel
+    // nutzen dieselbe Prüfung (Gegenprüfung fbb39194).
+    var loadKnown = seriesCoversUntil(loadSlotsAll, loadH, nowMs, midnightMs);
+    var pvKwhTomorrow = kwhOf(pvSlotsTomorrow, pvH);
+    var loadKwhTomorrow = kwhOf(loadSlotsTomorrow, loadH);
 
-    // Tagesgesamt: prefer backend-computed VRM full-day totals (past+future)
-    // when available. Fallback to "Rest" when no VRM forecast exists yet.
+    // Tagesgesamt: VRM-Tagessummen (Vergangenes + Zukunft), aber nur mit
+    // Slots — readDailyTotals liefert ohne VRM-Zeilen 0 statt null
+    // (Gegenprüfung 527906fc). Sonst Rückfall auf den Rest; „ganzer Tag“
+    // entfällt dann in der Bilanz.
     var totals = forecastData.dailyTotals || null;
-    var pvKwh = totals?.today?.pvKwh != null ? totals.today.pvKwh : pvKwhRest;
-    var loadKwh = totals?.today?.loadKwh != null ? totals.today.loadKwh : loadKwhRest;
-    if (totals?.tomorrow?.pvKwh != null && totals.tomorrow.pvKwh > 0) pvKwhTomorrow = totals.tomorrow.pvKwh;
-    if (totals?.tomorrow?.loadKwh != null && totals.tomorrow.loadKwh > 0) loadKwhTomorrow = totals.tomorrow.loadKwh;
+    var pvDayKwh = totals?.today?.pvSlots > 0 ? Number(totals.today.pvKwh) : null;
+    var loadDayKwh = totals?.today?.loadSlots > 0 ? Number(totals.today.loadKwh) : null;
+    var pvKwh = pvDayKwh !== null ? pvDayKwh : pvKwhRest;
+    var loadKwh = loadDayKwh !== null ? loadDayKwh : loadKwhRest;
+    if (totals?.tomorrow?.pvSlots > 0 && totals.tomorrow.pvKwh > 0) pvKwhTomorrow = totals.tomorrow.pvKwh;
+    if (totals?.tomorrow?.loadSlots > 0 && totals.tomorrow.loadKwh > 0) loadKwhTomorrow = totals.tomorrow.loadKwh;
 
-    // Battery state from /api/status
-    var soc = statusData?.victron?.soc;
-    var battCapWh = statusData?.config?.optimizer?.batteryCapacityWh || 43000;
-    var minSoc = statusData?.config?.optimizer?.hardFloorSocPct ?? statusData?.config?.optimizer?.minSocPct ?? 5;
-    var battKwh = soc != null ? (soc / 100) * battCapWh / 1000 : null;
-    var usableKwh = soc != null ? Math.max(0, ((soc - minSoc) / 100) * battCapWh / 1000) : null;
-
-    // Surplus includes usable battery energy
-    var surplus = pvKwh - loadKwh;
-    var totalAvailable = surplus + (usableKwh || 0);
+    // Akku aus /api/status (status.energyBalance.battery, wie EOS ihn sieht);
+    // ältere Server ohne das Feld: nur der Ladestand, keine erfundene Größe.
+    var battery = statusData?.energyBalance?.battery
+      || (statusData?.victron?.soc != null ? { socPct: statusData.victron.soc, capacityWh: null, minSocPct: null } : null);
+    var balance = energyBalanceSummary({
+      pvRestKwh: seriesCoversToday(pvSlotsAll, berlinTodayKey) ? pvKwhRest : null,
+      loadRestKwh: loadKnown ? loadKwhRest : null,
+      pvDayKwh: pvDayKwh, loadDayKwh: loadDayKwh, battery: battery
+    });
+    var balanceView = energyBalanceView(balance);
 
     pvEl.textContent = pvKwh.toFixed(1) + ' kWh';
     loadEl.textContent = loadKwh.toFixed(1) + ' kWh';
 
-    // Surplus: green if positive, red if negative — via Aurora chart tokens
+    // Rest heute: green if positive, red if negative — via Aurora chart tokens
     // so the same hue maps the EPEX chart in both light and dark themes.
-    var sign = surplus >= 0 ? '+' : '';
-    surplusEl.textContent = sign + surplus.toFixed(1) + ' kWh';
-    surplusEl.style.color = surplus >= 0
-      ? _aur('--chart-positive', '#39E06F')
-      : _aur('--chart-negative', '#ff7b72');
+    surplusEl.textContent = balanceView.main;
+    surplusEl.title = balanceView.title;
+    surplusEl.style.color = balanceView.positive === null ? ''
+      : balanceView.positive
+        ? _aur('--chart-positive', '#39E06F')
+        : _aur('--chart-negative', '#ff7b72');
 
     // Aurora text-dim / danger hues shared across all detail spans below
     var _dimColor = _aur('--chart-axis', '#5a6a8a');
@@ -1063,8 +1243,9 @@
           hintDetailEl.style.color = _dimColor;
           loadDetailEl.appendChild(hintDetailEl);
         }
-      } else if (!loadSlots.length && !hasTotalsLoad) {
-        loadDetailEl.innerHTML = '<span class="leitstand-forecast-detail">⚠ Kein Load-Forecast für heute</span>';
+      } else if (!loadKnown && !hasTotalsLoad) {
+        loadDetailEl.innerHTML = '<span class="leitstand-forecast-detail">'
+          + (loadSlots.length ? '⚠ Load-Forecast reicht nicht bis Mitternacht' : '⚠ Kein Load-Forecast für heute') + '</span>';
         loadDetailEl.firstChild.style.color = _dangerColor;
       } else {
         var loadParts = ['Rest heute: ' + loadKwhRest.toFixed(1) + ' kWh'];
@@ -1074,16 +1255,19 @@
       }
     }
 
-    // Surplus detail: battery + total
+    // Detail: ganzer Tag (klein), darunter Akku und Verfügbar
     if (surplusDetailEl) {
-      var parts = [];
-      if (battKwh != null) parts.push('\ud83d\udd0b ' + soc + '% = ' + battKwh.toFixed(1) + ' kWh (' + usableKwh.toFixed(1) + ' nutzbar)');
-      if (usableKwh != null) {
-        var totalSign = totalAvailable >= 0 ? '+' : '';
-        parts.push('Verf\u00fcgbar: ' + totalSign + totalAvailable.toFixed(1) + ' kWh');
-      }
-      surplusDetailEl.innerHTML = '<span class="leitstand-forecast-detail">' + parts.join(' · ') + '</span>';
-      surplusDetailEl.firstChild.style.color = _dimColor;
+      surplusDetailEl.textContent = '';
+      surplusDetailEl.title = balanceView.title;
+      var lines = [balanceView.day, [balanceView.battery, balanceView.available].filter(Boolean).join(' · ')];
+      lines.forEach(function (text) {
+        if (!text) return;
+        var line = document.createElement('div');
+        line.className = 'leitstand-forecast-detail';
+        line.textContent = text;
+        line.style.color = _dimColor;
+        surplusDetailEl.appendChild(line);
+      });
     }
   }
 

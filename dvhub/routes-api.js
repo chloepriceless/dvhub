@@ -22,6 +22,8 @@ import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT, resolvePlant
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
+import { eosPlanFeedInBasis } from './services/optimizer/eos-forecast-bridge.js';
+import { requestEosReplanAfterSave } from './services/optimizer/eos-replan-after-save.js';
 import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
@@ -848,6 +850,10 @@ export function configChangeNeedsEosReplan(changedPaths) {
     && EOS_REPLAN_PREFIXES.some((prefix) => p.startsWith(prefix))
     && !EOS_REPLAN_IGNORE.some((skip) => p === skip || p.startsWith(skip + '.')));
 }
+
+// Neuplan nach dem Speichern erst nach dem EOS-Abgleich (eigenes Modul, damit
+// auch services/control-commands.js es ohne Zyklus nutzen kann).
+export { requestEosReplanAfterSave };
 
 export function createApiRoutes(ctx) {
   // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
@@ -2987,7 +2993,7 @@ export function createApiRoutes(ctx) {
     json, downloadJson, readJsonBody,
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
     requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback,
-    actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, ALLOWED_CONFIG_ROOTS,
+    actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, requestEosReplanAfterSave, ALLOWED_CONFIG_ROOTS,
   });
   const adminRoutes = createAdminRoutes({
     ctx, getCfg, pushLog,
@@ -3942,9 +3948,9 @@ export function createApiRoutes(ctx) {
       try { result = ctx.saveAndApplyConfig(next); }
       catch (e) { pushLog('schedulable_device_save_error', { error: e.message }); return json(res, 500, { ok: false, error: 'save failed' }); }
       pushLog('schedulable_device_saved', { id: v.device.id, kind: v.device.kind, endpoint: v.device.endpoint.type }, actorContext(req));
-      // EOS neu abgleichen (deferrable → home_appliance) + neu planen + Bridge sofort.
-      ctx.eosConfigSync?.sync?.().catch(() => {});
-      ctx.optimizerService?.requestEosReplan?.('devices');
+      // EOS-Abgleich (deferrable → home_appliance) läuft in saveAndApplyConfig;
+      // neu planen erst danach (requestEosReplanAfterSave), Bridge sofort.
+      requestEosReplanAfterSave(ctx, 'devices');
       ctx.eosDeviceBridge?.apply?.();
       return json(res, 200, { ok: true, device: v.device, restartRequired: !!(result && result.restartRequired) });
     }
@@ -3962,8 +3968,8 @@ export function createApiRoutes(ctx) {
       try { ctx.saveAndApplyConfig(next); }
       catch (e) { pushLog('schedulable_device_delete_error', { error: e.message }); return json(res, 500, { ok: false, error: 'save failed' }); }
       pushLog('schedulable_device_deleted', { id }, actorContext(req));
-      ctx.eosConfigSync?.sync?.().catch(() => {});
-      ctx.optimizerService?.requestEosReplan?.('devices');
+      // Abgleich läuft in saveAndApplyConfig; neu planen erst danach.
+      requestEosReplanAfterSave(ctx, 'devices');
       return json(res, 200, { ok: true, deleted: id });
     }
 
@@ -6563,6 +6569,12 @@ export function createApiRoutes(ctx) {
         reason: null,
         output,
         plan: { fetchedAt: new Date(plan.at).toISOString(), current: plan.current },
+        // Grundlage des Einspeisewerts im Plan („niedrigster Einspeisewert …
+        // (Börse + Marktprämie)“, eos-plan-summary.js): womit der Push an EOS
+        // ihn für DIESEN Plan gebildet hat — zum Laufbeginn (generatedAt minus
+        // Dauer des letzten Laufs, eosPlanFeedInBasis).
+        priceBasis: eosPlanFeedInBasis(state.optimizer, getCfg(), Date.parse(plan.data?.generatedAt),
+          Number(state.optimizer?.eosRun?.lastDurationS) * 1000),
         eos: { status: status.status, push: status.push },
         remote: eosRemoteSummary(),
       });

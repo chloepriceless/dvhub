@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css?v=20260708-daylight">
-  <link rel="stylesheet" href="/index.css?v=20261028-eosremote">
+  <link rel="stylesheet" href="/index.css?v=20261102-eosplan-info">
   <link rel="stylesheet" href="/ev-tile.css?v=20261027-wochenplan">
   <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261027">
   <script src="/theme.js"></script>
@@ -326,14 +326,17 @@
         </div>
         <!-- Laut EOS-Plan (Issue #27, eos-plan-summary.js): was EOS heute ab jetzt und
              morgen einspeist und aus dem Netz bezieht — kWh, Stunden, höchste Leistung,
-             ab welchem Preis EOS verkauft bzw. bis zu welchem es kauft; mit
-             Spitzenkappung die Slots über der Grenze. Plan aus /api/eos/plan, den
+             niedrigster Einspeisewert bzw. höchster Bezugspreis der geplanten Slots
+             (keine Schwellen; Erklärung als title am Info-Zeichen und an den Zeilen);
+             mit Spitzenkappung die Slots über der Grenze. Plan aus /api/eos/plan, den
              leitstand-charts.js für den EOS-Fahrplan holt. -->
         <div class="eos-plan-summary" id="eosPlanSummary">
           <div class="eos-plan-summary-head">
             <span class="eos-plan-summary-title">Laut EOS-Plan</span>
+            <button type="button" class="eos-plan-summary-info" id="eosPlanSummaryInfo" aria-expanded="false" aria-controls="eosPlanSummaryHelp" aria-label="Erklärung">&#9432;</button>
             <span class="eos-plan-summary-note" id="eosPlanSummaryNote">EOS-Plan wird geladen &hellip;</span>
           </div>
+          <p class="eos-plan-summary-help" id="eosPlanSummaryHelp" hidden></p>
           <div class="eos-plan-summary-day" id="eosPlanSummaryToday" hidden>
             <strong id="eosPlanSummaryTodayHead"></strong>
             <span id="eosPlanSummaryTodayExport"></span>
@@ -493,7 +496,7 @@
           <div class="forecast-summary-detail" id="load-daily-detail"></div>
         </div>
         <div class="forecast-summary-tile" id="surplus-daily-card">
-          <span class="kicker-mini">&Uuml;berschuss / Defizit</span>
+          <span class="kicker-mini">&Uuml;berschuss / Defizit &middot; Rest heute</span>
           <div class="card-value forecast-tile-v" id="surplus-daily-kwh">&mdash;</div>
           <div class="forecast-summary-detail" id="surplus-daily-detail"></div>
         </div>
@@ -610,10 +613,10 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20261006-zaehlen"></script>
 <script src="/second-gx-view.js?v=20261021"></script>
-<script src="/eos-plan-summary.js?v=20261029"></script>
+<script src="/eos-plan-summary.js?v=20261102-beschriftungen"></script>
 <script src="/peak-shaving-view.js?v=20261026"></script>
 <script src="/app.js?v=20261029-integration"></script>
-<script src="/leitstand-charts.js?v=20261029-lastgang-eosremote"></script>
+<script src="/leitstand-charts.js?v=20261102-energiebilanz-lastwarnung"></script>
 <script src="/ev-weekly-editor.js?v=20261027"></script>
 <script src="/ev-tile.js?v=20261027-wochenplan"></script>
 </body>

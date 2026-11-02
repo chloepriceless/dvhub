@@ -587,3 +587,32 @@ test('EOS-Mindest-SoC: beides leer → 5 %', async () => {
   assert.equal(await batteryMinSocSent({ liveMin: null, hardFloor: null }), 5);
   assert.equal(await batteryMinSocSent({ liveMin: undefined, hardFloor: '' }), 5);
 });
+
+// Christin 02.11.2026: EOS rechnet Lade- und Entladeverluste über die
+// Wirkungsgrade (charging_/discharging_efficiency). Der pauschale
+// Verlustaufschlag (userEnergyPricing.costs.batteryLossMarkupPct) zählte sie ein
+// zweites Mal — EOS bekommt nur den Akku-Basispreis (batteryBaseCtKwh).
+test('buildEosBatteries: Speicherkosten = Akku-Basispreis ohne Verlustaufschlag', () => {
+  const cfg = { ...STD_CFG, userEnergyPricing: { costs: { pvCtKwh: 6, batteryBaseCtKwh: 2.5, batteryLossMarkupPct: 20 } } };
+  const bat = buildEosBatteries(cfg)[0];
+  assert.equal(bat.levelized_cost_of_storage_kwh, 0.025); // 2,5 ct → 0,025 €/kWh, nicht 0,03
+  // Wirkungsgrade tragen die Verluste weiter
+  assert.ok(bat.charging_efficiency > 0 && bat.charging_efficiency < 1);
+  assert.equal(buildEosBatteries({ ...STD_CFG, userEnergyPricing: { costs: { batteryLossMarkupPct: 50 } } })[0].levelized_cost_of_storage_kwh, 0);
+});
+
+test('Hilfetexte: Verlustaufschlag gilt nicht für EOS, Basispreis schon', async () => {
+  const { getConfigDefinition } = await import('../config-model.js');
+  const fields = getConfigDefinition().fields;
+  const markup = fields.find((f) => f.path === 'userEnergyPricing.costs.batteryLossMarkupPct');
+  const base = fields.find((f) => f.path === 'userEnergyPricing.costs.batteryBaseCtKwh');
+  assert.match(markup.help, /EOS bekommt nur den Akku-Basispreis/);
+  assert.match(markup.help, /Wirkungsgrad/);
+  assert.match(base.help, /EOS/);
+  // Gegenprüfung 49cc770c (P3): der Aufschlag gilt auf PV-Kosten + Akku-Basispreis
+  // (user-energy-pricing.js effectiveBatteryCostCtKwh), nicht nur auf den Basispreis.
+  assert.match(markup.help, /PV-Kosten \+ Akku-Basispreis/);
+  // EOS v0.4.0rc3: LCOS kostet je aus dem Akku gelieferter kWh (genetic.py
+  // battery_lcos_cost auf discharged_energy_wh).
+  assert.match(base.help, /je aus dem Akku gelieferter kWh/);
+});

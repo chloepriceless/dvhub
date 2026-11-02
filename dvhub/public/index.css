@@ -392,6 +392,9 @@
 .eos-plan-summary-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; }
 .eos-plan-summary-title { font-size:11px; font-weight:600; color:var(--text); letter-spacing:.04em; text-transform:uppercase; }
 .eos-plan-summary-note { font-family:var(--f-mono); font-size:10px; color:var(--text-dim); }
+.eos-plan-summary-info { font-size:11px; color:var(--text-dim); cursor:pointer; background:none; border:0; padding:0 2px; line-height:1; }
+.eos-plan-summary-help { margin:0; font-size:11px; color:var(--text-dim); max-width:72ch; }
+.eos-plan-summary-day span[title]:not([title='']) { cursor:help; }
 .eos-plan-summary-day { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .eos-plan-summary-day strong { font-size:11px; color:var(--text); font-weight:600; }
 .eos-plan-summary-day span { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); overflow-wrap:anywhere; }

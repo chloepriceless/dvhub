@@ -33,7 +33,7 @@ export function createConfigRoutes(deps) {
     json, downloadJson, readJsonBody,
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
     requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback,
-    actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, ALLOWED_CONFIG_ROOTS,
+    actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, requestEosReplanAfterSave, ALLOWED_CONFIG_ROOTS,
   } = deps;
 
   return async function handleConfigRoute(req, res, url) {
@@ -380,9 +380,10 @@ export function createConfigRoutes(deps) {
       }
       // Ändert eine Einstellung die Grundlage des EOS-Plans (Akku, Preise,
       // Netzladen/-entladen, Wallbox, PV-Größe), rechnet EOS sofort neu statt
-      // erst zum nächsten Takt — wie beim An- und Abstecken des Autos.
+      // erst zum nächsten Takt — wie beim An- und Abstecken des Autos. Erst
+      // nach dem Abgleich mit EOS (Push + Sync), sonst mit altem Stand.
       if (configChangeNeedsEosReplan(result.changedPaths)) {
-        ctx.optimizerService?.requestEosReplan?.('config');
+        requestEosReplanAfterSave(ctx, 'config');
       }
       const freshCfg = getCfg();
       // T-LICENSE-KWP-GATING Increment 4: nicht-blockierende Lizenz-kWp-Warnung

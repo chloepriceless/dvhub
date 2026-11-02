@@ -111,11 +111,15 @@ export function buildEosBatteries(cfg, opts = {}) {
   const opt = cfg?.optimizer || {};
   const eff = splitRoundTripEff(opt.roundTripEfficiency);
   const costs = cfg?.userEnergyPricing?.costs || {};
-  // ct/kWh + loss-markup% → €/kWh. Defaults to 0 (EOS bootstrap value) so a
-  // missing pricing block doesn't accidentally penalise battery dispatch.
+  // ct/kWh → €/kWh. Defaults to 0 (EOS bootstrap value) so a missing pricing
+  // block doesn't accidentally penalise battery dispatch.
+  // Nur der Akku-Basispreis, OHNE den pauschalen Verlustaufschlag
+  // (costs.batteryLossMarkupPct, Christin 02.11.2026): EOS rechnet Lade- und
+  // Entladeverluste über charging_/discharging_efficiency selbst — mit dem
+  // Aufschlag zählten sie doppelt. Der Aufschlag bleibt für DVhubs eigene
+  // Kostenrechnung (Preisvergleich, Historie).
   const baseCt = Number(costs.batteryBaseCtKwh) || 0;
-  const markupPct = Number(costs.batteryLossMarkupPct) || 0;
-  const levelisedEurKwh = (baseCt / 100) * (1 + markupPct / 100);
+  const levelisedEurKwh = baseCt / 100;
 
   const chargeRates = isGridArbitrageLicensed(cfg) ? DEFAULT_CHARGE_RATES : [1.0];
 

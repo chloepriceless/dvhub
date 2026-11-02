@@ -58,8 +58,10 @@ verweist hierher.
   („Ankunft Mi 20:00 → Abfahrt Do 05:00“) und was an EOS geht; Vorschau beim Bearbeiten über `POST /api/ev/preview`.
 
 - **„Laut EOS-Plan“ im Leitstand (#27)**: unter dem Day-Ahead-Chart für heute ab jetzt und morgen, was EOS plant —
-  Einspeisung und Netzbezug in kWh, Stunden, höchster Leistung und dem Preis, ab dem EOS verkauft bzw. bis zu dem es
-  kauft; mit Bezugsgrenze die Slots darüber. Der EOS-Fahrplan zeigt zusätzlich geplante Last und Netzbezug.
+  Einspeisung und Netzbezug in kWh, Stunden, höchster Leistung, dem niedrigsten Einspeisewert der geplanten
+  Einspeise-Slots (mit Grundlage, z. B. „Börse + Marktprämie“) und dem höchsten Bezugspreis der geplanten Bezugs-Slots —
+  beides keine Schwellen, die Erklärung steht am Info-Zeichen und an den Zeilen; mit Bezugsgrenze die Slots darüber.
+  Der EOS-Fahrplan zeigt zusätzlich geplante Last und Netzbezug.
 
 - **Hinweis, wenn der Strompreis-Zeitraum ohne Nachfolger endet**: 14 Tage vor dem Ende des heute gültigen Zeitraums
   erscheint oben im Leitstand eine gelbe Warnung, wenn am Folgetag kein anderer beginnt — sonst rechnet DVhub danach
@@ -88,6 +90,30 @@ verweist hierher.
   verschlüsselte Daten weiterleitet und nichts auf der Platte speichert. Voreingestellt ist `relay.dvhub.de`, ein
   eigenes Relay lässt sich eintragen (`relay/README.md`, Docker-Compose mit TLS). Ab Werk aus; Entkoppeln trennt
   sofort. Protokoll: `docs/HANDY-APP-PROTOKOLL.md`.
+
+### Geändert
+
+- **EOS-Steuerzeitraum = ganzer bekannter Preiszeitraum, einstellbar**: Der Steuerzeitraum war fest auf 24 h gekappt;
+  nachmittags (Preise bis Mitternacht des Folgetags) plante EOS den nächsten Abend deshalb nicht Slot für Slot. Jetzt
+  reicht er standardmäßig so weit wie echte Preise (gut 30 h, höchstens 48 h). Neu unter Einstellungen → EOS-Optimierung:
+  „EOS Steuerzeitraum höchstens“ (ganzer Preiszeitraum, 6, 12 oder 24 h — für schwache Boards; die Rechenzeit wächst
+  mit dem Steuerzeitraum) und „EOS Prognosehorizont“ (`prediction.hours`, bisher fest 48 h; automatisch
+  Steuerzeitraum + 48 h Schwanz, höchstens 72 h, oder fest 48/60/72 h). Die Preis-Fortschreibung endet am
+  Prognosehorizont; hinter dem Steuerzeitraum bleiben immer mindestens 12 h Schwanz, sonst wird der Steuerzeitraum
+  gekürzt. DVhub sendet beide Werte bei jedem Prognose-Push (beim Senken erst den Steuerzeitraum); nach dem Speichern
+  rechnet EOS erst neu, wenn der Abgleich durch ist. Im Fernbetrieb nimmt der Rechendienst den Prognosehorizont noch
+  nicht an (nur lokal und im lokalen Rückfall).
+
+- **Leitstand, Kachel „Überschuss / Defizit“**: Die Hauptzahl ist jetzt der Rest heute (erwartete PV ab jetzt bis
+  Mitternacht minus erwarteter Verbrauch im selben Zeitraum), darunter klein der ganze Tag; „Verfügbar“ = Rest heute +
+  nutzbarer Akku. Akkugröße, Ladestand und Untergrenze kommen neu aus `/api/status` (`energyBalance.battery`, so wie
+  EOS den Akku sieht, mit zweiter GX-Anlage beide) — bisher griffen Ersatzwerte 43 kWh / 5 %, auf einer 77-kWh-Anlage
+  zeigte 43 % Ladestand dann 18,5 statt 33,1 kWh. „Rest heute“ zählt nur noch Slots ab jetzt (den laufenden anteilig).
+
+- **EOS bekommt den Akku-Basispreis ohne Verlustaufschlag**: Als Speicherkosten (`levelized_cost_of_storage`) geht
+  nur noch „Akku-Basispreis“ an EOS, nicht mehr Basispreis × (1 + Verlustaufschlag). EOS rechnet Lade- und
+  Entladeverluste über den Akku-Wirkungsgrad selbst; mit dem Aufschlag zählten sie doppelt. DVhubs Preisvergleich und
+  Historie rechnen weiter mit Aufschlag; die Hilfetexte sagen das.
 
 ## [1.0.8] - 2026-10-21
 

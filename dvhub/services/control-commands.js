@@ -18,6 +18,7 @@
 
 import { controlWriteBoundsError, MAX_MINSOC_PCT } from '../server-utils.js';
 import { parseEvDeparturePatch } from './optimizer/ev-departure.js';
+import { requestEosReplanAfterSave } from './optimizer/eos-replan-after-save.js';
 
 // Identisch zu routes-api.js: die generischen Steuerziele, die manuell
 // geschrieben werden dürfen. feedExcessDcPv bleibt Victron-spezifisch.
@@ -202,8 +203,10 @@ export function applyEvConfigPatch(ctx, opts) {
     return { ok: false, status: 500, error: 'save failed' };
   }
   ctx.pushLog('ev_config_saved', patch, actor || undefined);
+  // Neu planen erst nach dem EOS-Abgleich aus saveAndApplyConfig (sonst
+  // rechnet der Lauf noch mit dem alten Auto-Stand, Gegenprüfung a25589cc).
   if ('eosOptimizeEv' in patch || 'evPlanOnlyWhenPlugged' in patch) {
-    ctx.optimizerService?.requestEosReplan?.('ev_config');
+    requestEosReplanAfterSave(ctx, 'ev_config');
   }
   return { ok: true, status: 200, patch };
 }

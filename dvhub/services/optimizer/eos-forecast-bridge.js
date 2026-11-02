@@ -198,6 +198,57 @@ export function fixedFeedInSlots(priceSlotsCt, tariff = {}) {
 }
 
 /**
+ * Womit EOS die eingespeiste kWh bewertet — dieselbe Regel wie push() unten:
+ * Einspeise-Modus „spot“ mit eingeschalteter Marktprämie → 'spot_premium',
+ * „spot“ ohne → 'spot', sonst die feste Vergütung → 'fixed'. Für die Anzeige
+ * „niedrigster Einspeisewert … (Börse + Marktprämie)“ im Leitstand
+ * (eos-plan-summary.js, Christin 02.11.2026). Fehlen anzulegender Wert oder
+ * Marktwert, rechnet push() ohne Prämie; die Anzeige folgt der Einstellung.
+ */
+export function eosFeedInBasis(cfg) {
+  const tariff = cfg?.optimizer?.tariff || {};
+  if (String(tariff.feedInMode || 'fixed').toLowerCase() !== 'spot') return 'fixed';
+  return tariff.feedInIncludeMarketPremium === true ? 'spot_premium' : 'spot';
+}
+
+const fixedFeedInCt = (tariff) => (Number.isFinite(Number(tariff?.feedInCtKwh)) ? Number(tariff.feedInCtKwh) : 7.78);
+
+/**
+ * Grundlage des Einspeisewerts für die Anzeige zum gezeigten Plan
+ * (/api/eos/plan priceBasis, Gegenprüfungen 63b36983/d22f5a4d/18f41bac):
+ * - vor dem ersten Push aus der Einstellung (mit festem Satz);
+ * - sonst die beim Push abgelegte (state.optimizer.eosFeedInBasis, `since` =
+ *   ab wann sie gilt). Maßgeblich ist der Laufbeginn des Plans (generatedAt −
+ *   Laufdauer): galt die aktuelle da schon → sie; wechselte sie während des
+ *   Laufs → unbekannt; ist der Plan älter → die vorige, wenn die bei
+ *   Laufbeginn galt. Unbekannt → null, die Anzeige lässt den Zusatz weg.
+ * @param {object} opt   state.optimizer
+ * @param {object} cfg
+ * @param {number} planGeneratedMs  generatedAt des gezeigten Plans (NaN = unbekannt)
+ * @param {number} [runMs]          Dauer des Laufs, der ihn gerechnet hat (unbekannt: 60 min)
+ */
+/** Laufdauer, wenn DVhub sie nicht kennt (EOS nach eigenem Takt, Lauf aus dem
+ *  alten Prozess): großzügig 60 min — eHive mit Auto 24 h ≈ 30–42 min. */
+export const ASSUMED_EOS_RUN_MS = 60 * 60_000;
+
+export function eosPlanFeedInBasis(opt, cfg, planGeneratedMs, runMs = NaN) {
+  const strip = (b) => (b ? { feedIn: b.feedIn, ...(b.fixedCtKwh !== undefined ? { fixedCtKwh: b.fixedCtKwh } : {}) } : null);
+  const cur = opt?.eosFeedInBasis;
+  if (!cur) {
+    const feedIn = eosFeedInBasis(cfg);
+    return feedIn === 'fixed' ? { feedIn, fixedCtKwh: fixedFeedInCt(cfg?.optimizer?.tariff) } : { feedIn };
+  }
+  if (!Number.isFinite(planGeneratedMs)) return strip(cur);
+  // Laufdauer unbekannt → ASSUMED_EOS_RUN_MS (Gegenprüfung 27a172cb).
+  const planStart = planGeneratedMs - (Number(runMs) > 0 ? Number(runMs) : ASSUMED_EOS_RUN_MS);
+  const heldAt = (b) => b && (!(b.since > 0) || b.since <= planStart);
+  if (heldAt(cur)) return strip(cur);
+  if (cur.since < planGeneratedMs) return null; // Wechsel während des Laufs
+  const prev = opt.eosFeedInBasisPrev;
+  return heldAt(prev) ? strip(prev) : null;
+}
+
+/**
  * Nur Stempel auf dem Slot-Raster an EOS geben.
  *
  * forecast.solar liefert neben den Rasterwerten Punkte zu Sonnenauf- und
@@ -277,12 +328,64 @@ function eosHttpRequest(baseUrl, method, path, body) {
  * }}
  */
 /**
+ * Steuerzeitraum höchstens 48 h, auch ohne eingestellte Grenze: Der
+ * EOS-Rechendienst nimmt horizon_hours 1..48; echte Day-Ahead-Preise reichen
+ * ohnehin höchstens ~35 h (nach 13 Uhr bis Mitternacht des Folgetags).
+ */
+export const CONTROL_HORIZON_ABS_MAX_H = 48;
+/** EOS-Schwanz hinter dem Steuerzeitraum (EOS tail_horizon_hours, Standard 48 h). */
+export const EOS_TAIL_HOURS = 48;
+/** Längster EOS-Prognosehorizont (prediction.hours) = Grenze der Preis-Fortschreibung. */
+export const EOS_PREDICTION_HOURS_MAX = 72;
+/**
+ * Mindestens so viel Schwanz bleibt hinter dem Steuerzeitraum: Ohne Schwanz
+ * bewertet EOS die Restladung fast nur zum Einspeisewert und speist mittags
+ * PV ein, statt sie für Nacht und Morgen zu speichern (Tail-Fix 01.11.2026,
+ * Gegenprüfung ae4e76f6).
+ */
+export const EOS_MIN_TAIL_HOURS = 12;
+
+const positiveInt = (v) => {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+/**
+ * EOS-Prognosehorizont (prediction.hours, bisher EOS' fester Standard 48 h —
+ * Christin 02.11.2026). optimizer.eosPredictionHours > 0 = fest (höchstens
+ * 72 h); sonst automatisch: Steuerzeitraum-Grenze + 48 h Schwanz, höchstens
+ * 72 h — ohne Grenze also 72 h. Der Schwanz wird je Lauf nur einmal rückwärts
+ * gelöst (EOS tailvalue.build_tail_value_curve) und kostet kaum Rechenzeit.
+ */
+export function resolveEosPredictionHours(cfg) {
+  const fixed = positiveInt(cfg?.optimizer?.eosPredictionHours);
+  if (fixed !== null) return Math.min(fixed, EOS_PREDICTION_HOURS_MAX);
+  const ctrl = Math.min(positiveInt(cfg?.optimizer?.eosControlHorizonMaxHours) ?? CONTROL_HORIZON_ABS_MAX_H, CONTROL_HORIZON_ABS_MAX_H);
+  return Math.min(ctrl + EOS_TAIL_HOURS, EOS_PREDICTION_HOURS_MAX);
+}
+
+/**
+ * Obergrenze des Steuerzeitraums: optimizer.eosControlHorizonMaxHours > 0
+ * (z. B. 6/12/24 h für kleine Boards), sonst der ganze bekannte
+ * Preiszeitraum (bis 48 h). Höchstens Prognosehorizont − 12 h: länger bricht
+ * EOS jeden Lauf ab („prediction.hours covers the control horizon“), ohne
+ * Schwanz bewertet es die Restladung falsch.
+ */
+export function resolveControlHorizonMaxHours(cfg) {
+  const user = positiveInt(cfg?.optimizer?.eosControlHorizonMaxHours);
+  const withTail = Math.max(1, resolveEosPredictionHours(cfg) - EOS_MIN_TAIL_HOURS);
+  return Math.min(user ?? CONTROL_HORIZON_ABS_MAX_H, CONTROL_HORIZON_ABS_MAX_H, withTail);
+}
+
+/**
  * Wie viele volle Stunden ab `nowMs` sind in ALLEN Preisreihen lueckenlos
  * belegt? Slots `{start, powerW}` (15 min). Minus 15 min Puffer, begrenzt auf
- * 1..24. Reihen ohne einen einzigen Wert zaehlen nicht mit. null, wenn keine
- * Reihe Werte hat oder eine Reihe den laufenden Slot nicht abdeckt.
+ * 1..maxHours (Standard 48 h; bis 02.11.2026 fest 24 h — jetzt der ganze
+ * bekannte Preiszeitraum, Grenze per resolveControlHorizonMaxHours). Reihen
+ * ohne einen einzigen Wert zaehlen nicht mit. null, wenn keine Reihe Werte hat
+ * oder eine Reihe den laufenden Slot nicht abdeckt.
  */
-export function computeControlHorizonHours(slotLists, nowMs, { slotMs = 15 * 60_000, maxHours = 24 } = {}) {
+export function computeControlHorizonHours(slotLists, nowMs, { slotMs = 15 * 60_000, maxHours = CONTROL_HORIZON_ABS_MAX_H } = {}) {
   let coveredUntil = Infinity;
   let any = false;
   for (const list of slotLists) {
@@ -317,15 +420,16 @@ export function computeControlHorizonHours(slotLists, nowMs, { slotMs = 15 * 60_
   return Math.max(1, Math.min(maxHours, hours));
 }
 
-/** Höchstens so weit (ab jetzt) werden Preise geschätzt: Steuerzeitraum 24 h + Schwanz 48 h. */
-export const PRICE_FILL_MAX_MS = 72 * 3_600_000;
+/** Höchstens so weit (ab jetzt) werden Preise geschätzt: der längste EOS-Prognosehorizont (72 h). */
+export const PRICE_FILL_MAX_MS = EOS_PREDICTION_HOURS_MAX * 3_600_000;
 
 /**
  * Bis wohin die Preisreihen reichen sollen: so weit wie PV- oder Lastprognose
- * (der EOS-Schwanz endet ohnehin an der kürzesten Reihe), höchstens 72 h.
- * Ohne beide Prognosen (z. B. Nur Netzspeicher) 48 h.
+ * (der EOS-Schwanz endet ohnehin an der kürzesten Reihe), höchstens maxMs —
+ * der EOS-Prognosehorizont (resolveEosPredictionHours, Standard 72 h); weiter
+ * liest EOS nicht. Ohne beide Prognosen (z. B. Nur Netzspeicher) 48 h.
  */
-export function priceFillUntilMs(pvSlots, loadSlots, nowMs) {
+export function priceFillUntilMs(pvSlots, loadSlots, nowMs, maxMs = PRICE_FILL_MAX_MS) {
   let end = -Infinity;
   for (const [list, stepMs] of [[pvSlots, PRICE_SLOT_MS], [loadSlots, 3_600_000]]) {
     for (const s of Array.isArray(list) ? list : []) {
@@ -334,7 +438,7 @@ export function priceFillUntilMs(pvSlots, loadSlots, nowMs) {
     }
   }
   if (!Number.isFinite(end)) end = nowMs + 48 * 3_600_000;
-  return Math.min(end, nowMs + PRICE_FILL_MAX_MS);
+  return Math.min(end, nowMs + Math.min(maxMs, PRICE_FILL_MAX_MS));
 }
 
 export function createEosForecastBridge(ctx) {
@@ -404,8 +508,8 @@ export function createEosForecastBridge(ctx) {
    * Prognose geschätzte Börsenpreise (price-estimate.js). Bezugs- und
    * Einspeisepreis werden daraus wie für echte Slots gebildet.
    */
-  async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs) {
-    const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs);
+  async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs, maxMs = PRICE_FILL_MAX_MS) {
+    const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs, maxMs);
     const { end } = realPriceCoverage(realSlots);
     if (end <= nowMs || end >= untilMs) return { slots: realSlots, estimate: null };
     const history = await loadPriceHistory(nowMs);
@@ -655,25 +759,91 @@ export function createEosForecastBridge(ctx) {
     return { soc };
   }
 
+  // Grundlage nur bei einem Wechsel neu stempeln (`since`): Ein Plan, der vor
+  // dem Wechsel gerechnet ist, zeigt dann die vorige (Gegenprüfung d22f5a4d).
+  // Der erste Push nach dem Start gilt erst ab Start der Bridge — ob ein Plan
+  // von vorher mit derselben Einstellung gerechnet ist, weiß DVhub nicht
+  // (Gegenprüfung 18f41bac).
+  const bridgeStartedAt = Date.now();
+  function rememberFeedInBasis(next) {
+    if (!state) return;
+    state.optimizer = state.optimizer || {};
+    const cur = state.optimizer.eosFeedInBasis;
+    if (!cur) { state.optimizer.eosFeedInBasis = { ...next, since: bridgeStartedAt }; return; }
+    if (cur.feedIn === next.feedIn && cur.fixedCtKwh === next.fixedCtKwh) return;
+    state.optimizer.eosFeedInBasisPrev = cur;
+    state.optimizer.eosFeedInBasis = { ...next, since: Date.now() };
+  }
+
   let lastHorizonHours = null;
+  let lastPredictionHours = null;
+  let loggedHorizonHours = null;
+  let loggedPredictionHours = null;
   /**
    * Steuerzeitraum = volle Stunden, die ab jetzt lueckenlos mit Preisen belegt
    * sind, minus 15 min Puffer (EOS rechnet auf eigenem 15-min-Takt; der
-   * naechste Lauf vor dem naechsten Push muss noch abgedeckt sein), 1..24 h.
+   * naechste Lauf vor dem naechsten Push muss noch abgedeckt sein), 1 h bis
+   * zur Grenze aus resolveControlHorizonMaxHours (Standard: ganzer bekannter
+   * Preiszeitraum). Dazu der EOS-Prognosehorizont (prediction.hours,
+   * resolveEosPredictionHours) — er muss den Steuerzeitraum immer abdecken.
    * Nur wenn der Abgleich ein EOS 0.4 erkannt hat.
    */
   async function syncControlHorizon(baseUrl, ...slotLists) {
     if (state?.optimizer?.eos?.supported !== true) return { skipped: 'eos not supported' };
-    const hours = computeControlHorizonHours(slotLists.filter(Boolean), Date.now());
+    const cfg = getCfg();
+    const predictionHours = resolveEosPredictionHours(cfg);
+    const hours = computeControlHorizonHours(slotLists.filter(Boolean), Date.now(), { maxHours: resolveControlHorizonMaxHours(cfg) });
     if (hours === null) return { skipped: 'no prices' };
-    // Immer senden (kostet nichts): nach einem EOS-Neustart kennt EOS den
-    // zuletzt gesetzten Wert evtl. nicht mehr. Protokolliert wird nur ein Wechsel.
-    const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/optimization/genetic/horizon_hours', hours);
-    if (!res.ok) return { error: res.error };
-    if (pushLog && hours !== lastHorizonHours) pushLog('eos_control_horizon', { hours, previous: lastHorizonHours });
-    lastHorizonHours = hours;
-    if (state?.optimizer) state.optimizer.eosControlHorizonH = hours;
-    return { hours };
+    // Immer senden (kostet nichts): nach einem EOS-Neustart kennt EOS die
+    // zuletzt gesetzten Werte evtl. nicht mehr. Protokolliert wird nur ein Wechsel.
+    // Reihenfolge: Wird der Prognosehorizont kürzer, erst den Steuerzeitraum
+    // senken — sonst stünde kurz prediction.hours < horizon_hours, und ein Lauf
+    // genau dann bräche ab. Sonst erst den Prognosehorizont.
+    // Vorwerte fürs Log getrennt führen: lastHorizonHours/lastPredictionHours
+    // ändern sich je angenommenem PUT (Gegenprüfung a25589cc).
+    const previous = { hours: loggedHorizonHours, predictionHours: loggedPredictionHours };
+    // Jeden angenommenen Wert sofort festhalten: scheitert danach der andere
+    // PUT, muss DVhub trotzdem wissen, mit welchem Steuerzeitraum EOS rechnet
+    // (Warmstart im Lauf-Anstoß, Gegenprüfung ae4e76f6).
+    const putHorizon = async () => {
+      const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/optimization/genetic/horizon_hours', hours);
+      if (res.ok) {
+        lastHorizonHours = hours;
+        if (state?.optimizer) state.optimizer.eosControlHorizonH = hours;
+      }
+      return res;
+    };
+    const putPrediction = async () => {
+      const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/prediction/hours', predictionHours);
+      if (res.ok) {
+        lastPredictionHours = predictionHours;
+        if (state?.optimizer) state.optimizer.eosPredictionHours = predictionHours;
+      }
+      return res;
+    };
+    const shrinking = lastPredictionHours === null || predictionHours < lastPredictionHours;
+    const order = shrinking ? [putHorizon, putPrediction] : [putPrediction, putHorizon];
+    const logChange = () => {
+      const h = lastHorizonHours;
+      const p = lastPredictionHours;
+      if (pushLog && h !== null && (h !== previous.hours || (p !== null && p !== previous.predictionHours))) {
+        pushLog('eos_control_horizon', { hours: h, previous: previous.hours, predictionHours: p });
+      }
+      if (h !== null) loggedHorizonHours = h;
+      if (p !== null) loggedPredictionHours = p;
+    };
+    for (const put of order) {
+      const res = await put();
+      if (!res.ok) {
+        // Unbekannter Stand: beim nächsten Push wieder vorsichtig (erst Steuerzeitraum).
+        lastPredictionHours = null;
+        // Ein angenommener Steuerzeitraum-Wechsel gehört trotzdem ins Log.
+        logChange();
+        return { error: res.error };
+      }
+    }
+    logChange();
+    return { hours, predictionHours };
   }
 
   /**
@@ -730,7 +900,8 @@ export function createEosForecastBridge(ctx) {
     // Einspeisewert — es speist mittags PV ein, statt sie für Nacht und Morgen
     // zu speichern (Prod 01.11.2026). Deshalb dahinter Schätzwerte; der
     // Steuerzeitraum richtet sich weiter nur nach den echten Preisen.
-    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now());
+    const priceFill = await priceSlotsForEos(forecast?.price?.slots || [], pvSlots, loadSlots, Date.now(),
+      resolveEosPredictionHours(cfg) * 3_600_000);
     const priceSlotsCt = priceFill.slots;
     const priceEstimate = priceFill.estimate;
     if (state) { state.optimizer = state.optimizer || {}; state.optimizer.eosPriceEstimate = priceEstimate; }
@@ -807,6 +978,13 @@ export function createEosForecastBridge(ctx) {
             return s.estimated ? { start: s.start, powerW, estimated: true } : { start: s.start, powerW };
           })
       : fixedFeedInSlots(priceSlotsCt, tariff);
+    // Womit der Einspeisewert tatsächlich gebildet ist — für die Anzeige im
+    // Leitstand (/api/eos/plan priceBasis, eosPlanFeedInBasis): Marktprämie nur,
+    // wenn sie > 0 war; bei fester Vergütung der Satz. Abgelegt erst, wenn EOS
+    // die Einspeise-Reihe angenommen hat (unten).
+    const feedInBasisNow = feedInSpot
+      ? { feedIn: premiumCt > 0 ? 'spot_premium' : 'spot' }
+      : { feedIn: 'fixed', fixedCtKwh: fixedFeedInCt(tariff) };
 
     // Heizstab (stufenlos regelbar): EOS plant ihn nicht — DVhub regelt ihn
     // nach Überschuss. Sein erwarteter Verbrauch kommt als Last in die Prognose,
@@ -893,6 +1071,7 @@ export function createEosForecastBridge(ctx) {
       );
       if (res.ok) pushed.push(`${t.provider}(${t.rows})`);
       else errors[t.provider] = res.error;
+      if (res.ok && t.provider === 'FeedInTariffImport') rememberFeedInBasis(feedInBasisNow);
     }
 
     // Steuerzeitraum an die Preisabdeckung koppeln (EOS 0.4).

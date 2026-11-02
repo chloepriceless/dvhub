@@ -1,8 +1,9 @@
 // test/eos-plan-summary.test.js -- „Laut EOS-Plan“ unter dem Day-Ahead-Chart
 // (Issue #27, Richtungswechsel 26.10.2026): statt eigener Schwellen zeigt der
 // Leitstand, was EOS für heute (ab jetzt) und morgen plant — Einspeisung und
-// Netzbezug in kWh, Stunden, höchster Leistung und dem Preis, ab dem EOS verkauft
-// bzw. bis zu dem EOS kauft; mit Spitzenkappung die Slots über der Grenze.
+// Netzbezug in kWh, Stunden, höchster Leistung und dem niedrigsten Einspeisewert
+// bzw. höchsten Bezugspreis der geplanten Slots (keine Schwellen, Christin
+// 02.11.2026); mit Spitzenkappung die Slots über der Grenze.
 // Reine Logik aus public/eos-plan-summary.js, geladen wie im Browser. Alle
 // erwarteten Zahlen sind von Hand gerechnet (Kommentare an den Fixtures).
 import test from 'node:test';
@@ -96,12 +97,12 @@ test('Anzeige zum 15-min-Plan', () => {
   const v = view(summarize({ available: true, output: plan15() }, { now: NOW, epex: EPEX, peakLimitW: 5000 }));
   assert.equal(v.note, '');
   assert.equal(v.today.head, 'Heute ab jetzt');
-  assert.equal(v.today.export, 'Einspeisung 7,5 kWh in 1 h · bis 12 kW · EOS verkauft ab 19,9 ct');
-  assert.equal(v.today.import, 'Netzbezug 1,9 kWh in 0,75 h · Spitze 6 kW um 23:00 · EOS kauft bis 30,5 ct');
+  assert.equal(v.today.export, 'Einspeisung 7,5 kWh in 1 h · bis 12 kW · niedrigster Einspeisewert 19,9 ct');
+  assert.equal(v.today.import, 'Netzbezug 1,9 kWh in 0,75 h · Spitze 6 kW um 23:00 · höchster Bezugspreis 30,5 ct');
   assert.equal(v.today.peak, 'Spitzenkappung 5 kW: 1 Slot darüber (0,25 h, bis 6 kW)');
   assert.equal(v.tomorrow.head, 'Morgen bis 10:00');
   assert.equal(v.tomorrow.export, 'Einspeisung: keine geplant');
-  assert.equal(v.tomorrow.import, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · EOS kauft bis 11 ct');
+  assert.equal(v.tomorrow.import, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · höchster Bezugspreis 11 ct');
   assert.equal(v.tomorrow.peak, 'Spitzenkappung 5 kW: 1 Slot darüber (0,25 h, bis 8 kW)');
 });
 
@@ -133,8 +134,8 @@ test('60-min-Slots: Wh je Stunde = W, Plan endet vor Mitternacht, morgen fehlt',
     assert.equal(s.tomorrow, null);
     const v = view(s);
     assert.equal(v.today.head, 'Heute ab jetzt bis 19:00');
-    assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · EOS verkauft ab 20 ct');
-    assert.equal(v.today.import, 'Netzbezug 2,3 kWh in 1 h · Spitze 2 kW um 17:00 · EOS kauft bis 28 ct');
+    assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 20 ct');
+    assert.equal(v.today.import, 'Netzbezug 2,3 kWh in 1 h · Spitze 2 kW um 17:00 · höchster Bezugspreis 28 ct');
     assert.equal(v.today.peak, null);
     assert.equal(v.tomorrow.head, 'Morgen: noch nicht im Plan');
     assert.equal(v.tomorrow.export, null);
@@ -198,8 +199,8 @@ test('render: erst „wird geladen“, dann Plan + Status zusammen; ohne Plan Ta
   assert.equal(els.eosPlanSummaryNote.textContent, 'EOS-Plan wird geladen …');
   render({ plan: { available: true, output: plan15() } }, doc); // Status vom letzten Aufruf bleibt
   assert.equal(els.eosPlanSummaryNote.hidden, true);
-  assert.equal(els.eosPlanSummaryTodayExport.textContent, 'Einspeisung 7,5 kWh in 1 h · bis 12 kW · EOS verkauft ab 19,9 ct');
-  assert.equal(els.eosPlanSummaryTomorrowImport.textContent, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · EOS kauft bis 11 ct');
+  assert.equal(els.eosPlanSummaryTodayExport.textContent, 'Einspeisung 7,5 kWh in 1 h · bis 12 kW · niedrigster Einspeisewert 19,9 ct');
+  assert.equal(els.eosPlanSummaryTomorrowImport.textContent, 'Netzbezug 3 kWh in 0,5 h · Spitze 8 kW um 02:30 · höchster Bezugspreis 11 ct');
   assert.equal(els.eosPlanSummaryTodayPeak.hidden, false);
   render({ plan: null }, doc);
   assert.equal(els.eosPlanSummaryNote.textContent, 'Kein EOS-Plan');
@@ -219,8 +220,8 @@ test('Plan ohne eigene Preise: Börsenpreis nur als solcher benannt (Gegenprüfu
   assert.equal(s.today.export.minCt, null);
   assert.equal(s.today.export.minSpotCt, 12.3);
   const v = view(s);
-  assert.equal(v.today.import, 'Netzbezug 2 kWh in 0,25 h · Spitze 8 kW um 02:00 · Börse bis 12,3 ct');
-  assert.equal(v.today.export, 'Einspeisung 1 kWh in 0,25 h · bis 4 kW · Börse ab 12,3 ct');
+  assert.equal(v.today.import, 'Netzbezug 2 kWh in 0,25 h · Spitze 8 kW um 02:00 · höchster Börsenpreis 12,3 ct');
+  assert.equal(v.today.export, 'Einspeisung 1 kWh in 0,25 h · bis 4 kW · niedrigster Börsenpreis 12,3 ct');
 });
 
 test('nur Slots unter 300 W: Energie wird gezeigt, nicht „keine geplant“ (Gegenprüfung 14e131b4, P3)', () => {
@@ -257,4 +258,145 @@ test('Status-Payload liefert die eingestellte Zeitzone (timeZone)', () => {
   const start = src.indexOf('function buildCurrentStatusPayload(');
   const body = src.slice(start, src.indexOf('\n}\n', start));
   assert.match(body, /timeZone: cfg\.schedule\?\.timezone \|\| 'Europe\/Berlin'/);
+});
+
+// Christin 02.11.2026: „EOS verkauft ab X ct“ las sich wie eine Schwelle. Es ist
+// der niedrigste Einspeisewert der geplanten Einspeise-Slots (womit EOS die kWh
+// bewertet, z. B. Börse + Marktprämie) bzw. der höchste Bezugspreis der
+// geplanten Bezugs-Slots. Grundlage aus /api/eos/plan (priceBasis.feedIn).
+test('Einspeisewert nennt seine Grundlage aus dem Plan (priceBasis.feedIn)', () => {
+  const { summarize, view } = load();
+  const cases = [
+    ['spot_premium', ' (Börse + Marktprämie)'],
+    ['spot', ' (Börse)'],
+    ['fixed', ' (feste Vergütung)'],
+    [undefined, ''],
+    ['unbekannt', ''],
+  ];
+  for (const [feedIn, suffix] of cases) {
+    const resp = { available: true, output: plan60(60), ...(feedIn ? { priceBasis: { feedIn } } : {}) };
+    const v = view(summarize(resp, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+    assert.equal(v.today.export, `Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 20 ct${suffix}`, String(feedIn));
+    // Der Bezugspreis bleibt ohne Zusatz — er ist immer der Endkundenpreis.
+    assert.equal(v.today.import, 'Netzbezug 2,3 kWh in 1 h · Spitze 2 kW um 17:00 · höchster Bezugspreis 28 ct');
+  }
+});
+
+test('Erklärhilfe: Tooltip-Texte für Einspeise- und Bezugszeile und den Block', () => {
+  const { summarize, view, HELP } = load();
+  const v = view(summarize({ available: true, output: plan60(60), priceBasis: { feedIn: 'spot_premium' } }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.match(v.today.exportTitle, /niedrigste Einspeisewert/);
+  assert.match(v.today.exportTitle, /keine Schwelle/);
+  assert.match(v.today.exportTitle, /Börse \+ Marktprämie/);
+  assert.match(v.today.importTitle, /höchste Bezugspreis/);
+  assert.match(v.today.importTitle, /keine Schwelle/);
+  assert.equal(typeof HELP, 'string');
+  assert.match(HELP, /keine Schwellen/);
+  // ohne Einspeisung/Bezug keine Erklärung nötig
+  const leer = view(summarize({ available: true, output: { slotMinutes: 15, rows: [blank(P0)] } }, { now: NOW }));
+  assert.equal(leer.today.exportTitle, '');
+  assert.equal(leer.today.importTitle, '');
+});
+
+test('render setzt die Erklärhilfe als title an Zeilen und Info-Zeichen', () => {
+  const { render, HELP } = load();
+  const els = {};
+  const ids = ['eosPlanSummary', 'eosPlanSummaryNote', 'eosPlanSummaryInfo'];
+  for (const p of ['eosPlanSummaryToday', 'eosPlanSummaryTomorrow']) ids.push(p, `${p}Head`, `${p}Export`, `${p}Import`, `${p}Peak`);
+  for (const id of ids) els[id] = { textContent: '', hidden: false, title: '' };
+  const doc = { getElementById: (id) => els[id] || null };
+  render({ plan: { available: true, output: plan15(), priceBasis: { feedIn: 'fixed' } }, status: { now: NOW, epex: { data: EPEX } } }, doc);
+  assert.equal(els.eosPlanSummaryInfo.title, HELP);
+  assert.match(els.eosPlanSummaryTodayExport.title, /feste Vergütung/);
+  assert.match(els.eosPlanSummaryTodayImport.title, /höchste Bezugspreis/);
+  assert.equal(els.eosPlanSummaryTomorrowExport.title, ''); // morgen keine Einspeisung
+});
+
+// Gegenprüfung 63b36983 (P2): Bei fester Vergütung bekommt EOS für Slots mit
+// negativem Börsenpreis 0 ct (fixedFeedInSlots). Der niedrigste Wert ist dann
+// genau so ein Slot — „0 ct (feste Vergütung)“ wäre falsch.
+test('feste Vergütung: Minimum unter dem festen Satz heißt „negativer Börsenpreis“', () => {
+  const { summarize, view } = load();
+  const rows = plan60(60).rows;
+  rows[0].feedInCtKwh = 0; rows[1].feedInCtKwh = 7.78;
+  const basis = { feedIn: 'fixed', fixedCtKwh: 7.78 };
+  const v = view(summarize({ available: true, output: { slotMinutes: 60, rows }, priceBasis: basis }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 0 ct (negativer Börsenpreis)');
+  assert.match(v.today.exportTitle, /negativer Börsenpreis/);
+  rows[0].feedInCtKwh = 7.78;
+  const w = view(summarize({ available: true, output: { slotMinutes: 60, rows }, priceBasis: basis }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.equal(w.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 7,8 ct (feste Vergütung)');
+});
+
+test('Börse + Marktprämie: negativer Slot ohne Prämie wird so benannt', () => {
+  const { summarize, view } = load();
+  const rows = plan60(60).rows;
+  rows[0].feedInCtKwh = -1.2;
+  const v = view(summarize({ available: true, output: { slotMinutes: 60, rows }, priceBasis: { feedIn: 'spot_premium' } }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert -1,2 ct (Börse, negativ: ohne Marktprämie)');
+});
+
+// Gegenprüfung 63b36983 (P2): die Grundlage kommt aus dem letzten Push an EOS
+// (womit der Plan gerechnet ist), nicht aus der aktuellen Einstellung.
+test('/api/eos/plan: Grundlage passend zum gezeigten Plan (eosPlanFeedInBasis)', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../routes-api.js', import.meta.url)), 'utf8');
+  const start = src.indexOf("url.pathname === '/api/eos/plan'");
+  const body = src.slice(start, src.indexOf('\n    }\n', start));
+  assert.match(body, /priceBasis: eosPlanFeedInBasis\(state\.optimizer, getCfg\(\), Date\.parse\(plan\.data\?\.generatedAt\),\s+Number\(state\.optimizer\?\.eosRun\?\.lastDurationS\) \* 1000\)/);
+});
+
+// Gegenprüfung d22f5a4d (P2): „negativer Börsenpreis“ nur bei ≈ 0 ct — ein
+// anderer Wert als der feste Satz (z. B. Plan noch mit altem Satz) bekommt
+// keinen Zusatz statt eines falschen.
+test('feste Vergütung: abweichender Wert ungleich 0 ohne Zusatz', () => {
+  const { summarize, view } = load();
+  const rows = plan60(60).rows;
+  rows[0].feedInCtKwh = 7.78; rows[1].feedInCtKwh = 7.78;
+  const v = view(summarize({ available: true, output: { slotMinutes: 60, rows }, priceBasis: { feedIn: 'fixed', fixedCtKwh: 8.2 } }, { now: Date.UTC(2026, 9, 26, 13, 30) }));
+  assert.equal(v.today.export, 'Einspeisung 9 kWh in 2 h · bis 6 kW · niedrigster Einspeisewert 7,8 ct');
+});
+
+// Gegenprüfung 63b36983 (P3): title erreicht Touch und Tastatur nicht — das
+// Info-Zeichen klappt einen sichtbaren Erklärtext auf.
+test('Info-Zeichen klappt die Erklärung sichtbar auf und zu', () => {
+  const { render, HELP } = load();
+  const els = {};
+  const ids = ['eosPlanSummary', 'eosPlanSummaryNote', 'eosPlanSummaryHelp'];
+  for (const p of ['eosPlanSummaryToday', 'eosPlanSummaryTomorrow']) ids.push(p, `${p}Head`, `${p}Export`, `${p}Import`, `${p}Peak`);
+  for (const id of ids) els[id] = { textContent: '', hidden: id === 'eosPlanSummaryHelp', title: '' };
+  const handlers = {};
+  const attrs = {};
+  els.eosPlanSummaryInfo = {
+    title: '', dataset: {},
+    addEventListener: (type, fn) => { handlers[type] = (handlers[type] || 0) + 1; els.eosPlanSummaryInfo['on' + type] = fn; },
+    setAttribute: (k, v) => { attrs[k] = v; },
+  };
+  const doc = { getElementById: (id) => els[id] || null };
+  render({ plan: { available: true, output: plan15() }, status: { now: NOW } }, doc);
+  render({ plan: { available: true, output: plan15() } }, doc); // nur einmal binden
+  assert.equal(handlers.click, 1);
+  assert.equal(els.eosPlanSummaryHelp.textContent, HELP);
+  assert.equal(els.eosPlanSummaryHelp.hidden, true);
+  els.eosPlanSummaryInfo.onclick();
+  assert.equal(els.eosPlanSummaryHelp.hidden, false);
+  assert.equal(attrs['aria-expanded'], 'true');
+  els.eosPlanSummaryInfo.onclick();
+  assert.equal(els.eosPlanSummaryHelp.hidden, true);
+  assert.equal(attrs['aria-expanded'], 'false');
+});
+
+test('index.html: Info-Zeichen ist ein Knopf mit aufklappbarem Erklärtext', () => {
+  const html = fs.readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
+  assert.match(html, /<button type="button" class="eos-plan-summary-info" id="eosPlanSummaryInfo" aria-expanded="false" aria-controls="eosPlanSummaryHelp"/);
+  assert.match(html, /<p class="eos-plan-summary-help" id="eosPlanSummaryHelp" hidden><\/p>/);
+});
+
+// Gegenprüfung 00f23b55/18f41bac: ?v= der Leitstand-Dateien im Format
+// YYYYMMDD-slug (CONTRIBUTING.md) — kein fest eingetragener Wert, der beim
+// nächsten Anheben rot würde.
+test('Cache-Schlüssel der Leitstand-Dateien im Format YYYYMMDD-slug', () => {
+  const html = fs.readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
+  for (const f of ['eos-plan-summary\\.js', 'leitstand-charts\\.js', 'index\\.css']) {
+    assert.match(html, new RegExp(`/${f}\\?v=20\\d{6}-[a-z0-9-]+"`), f);
+  }
 });

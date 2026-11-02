@@ -2626,6 +2626,43 @@ function buildFieldDefinitions() {
       help: 'Generationen des genetischen Optimierers je EOS-Lauf. 0 = Standard (400). Auf schwacher Hardware (z. B. eHive, 1 GB RAM) 200 wählen: im Test gleicher Plan in der halben Rechenzeit; so passt ein Lauf in einen 15-Minuten-Takt.'
     },
     {
+      // Christin 02.11.2026: Steuerzeitraum nicht mehr fest bei 24 h gekappt —
+      // Standard ist der ganze bekannte Preiszeitraum (eos-forecast-bridge.js
+      // resolveControlHorizonMaxHours); kleine Boards dürfen begrenzen.
+      section: 'schedule',
+      group: 'optimization',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
+      groupOrder: 10,
+      path: 'optimizer.eosControlHorizonMaxHours',
+      label: 'EOS Steuerzeitraum höchstens',
+      type: 'select',
+      options: [
+        { value: 0, label: 'Ganzer bekannter Preiszeitraum (Standard)' },
+        { value: 6, label: '6 Stunden' },
+        { value: 12, label: '12 Stunden' },
+        { value: 24, label: '24 Stunden' }
+      ],
+      help: 'Wie weit EOS den Akku Slot für Slot plant. Standard: so weit, wie Börsenpreise bekannt sind — vormittags bis Mitternacht, ab etwa 13 Uhr bis Mitternacht des Folgetags (gut 30 h). Dahinter bewertet EOS die Restladung über den Prognose-Schwanz. Die Rechenzeit wächst mit dem Steuerzeitraum etwa im selben Verhältnis (gemessen auf einem eHive mit E-Auto: 10 h ≈ 15 min, 24 h ≈ 30–40 min je Lauf). Nur für schwache Boards begrenzen — dann plant EOS z. B. die Einspeisung am nächsten Abend nicht mehr Slot für Slot.'
+    },
+    {
+      section: 'schedule',
+      group: 'optimization',
+      groupLabel: 'EOS-Optimierung',
+      groupDescription: 'Takt und Feinwerte des EOS-Planers. Gilt in der Betriebsart „EOS“.',
+      groupOrder: 10,
+      path: 'optimizer.eosPredictionHours',
+      label: 'EOS Prognosehorizont',
+      type: 'select',
+      options: [
+        { value: 0, label: 'Automatisch: Steuerzeitraum + 48 h, höchstens 72 h (Standard)' },
+        { value: 48, label: '48 Stunden' },
+        { value: 60, label: '60 Stunden' },
+        { value: 72, label: '72 Stunden' }
+      ],
+      help: 'Wie weit EOS Prognosen und Preise liest (EOS prediction.hours, bisher fest 48 h): Steuerzeitraum plus Schwanz, in dem EOS den Wert der Restladung abschätzt. So weit schreibt DVhub auch die Börsenpreise fort. Hinter dem Steuerzeitraum bleiben immer mindestens 12 h Schwanz — reicht der Prognosehorizont dafür nicht, kürzt DVhub den Steuerzeitraum. Ein kurzer Schwanz lässt EOS die Restladung im Akku nur zum Einspeisewert bewerten. Kostet wenig Rechenzeit — den Schwanz rechnet EOS je Lauf nur einmal durch; das meiste kostet der Steuerzeitraum.'
+    },
+    {
       section: 'schedule',
       group: 'optimization',
       path: 'optimizer.eosStartAfterPreviousRun',
@@ -3988,7 +4025,7 @@ function buildFieldDefinitions() {
       label: 'Akku-Basispreis (ct/kWh)',
       type: 'number',
       step: 0.01,
-      help: 'Basispreis der gespeicherten kWh ohne pauschalen Verlustaufschlag.'
+      help: 'Basispreis der gespeicherten kWh ohne pauschalen Verlustaufschlag (z. B. Verschleiß). EOS rechnet mit genau diesem Wert als Speicherkosten je aus dem Akku gelieferter kWh.'
     },
     {
       section: 'pricing',
@@ -4000,7 +4037,7 @@ function buildFieldDefinitions() {
       type: 'number',
       step: 0.01,
       min: 0,
-      help: 'Pauschaler Effizienzaufschlag auf den Akku-Basispreis.'
+      help: 'Pauschaler Effizienzaufschlag auf PV-Kosten + Akku-Basispreis für DVhubs Kostenrechnung (Preisvergleich, Historie). EOS bekommt nur den Akku-Basispreis: Lade- und Entladeverluste rechnet EOS selbst über den Akku-Wirkungsgrad — mit dem Aufschlag zählten sie doppelt.'
     },
     // ── Forecast & PV ─────────────────────────────────────────────
     {

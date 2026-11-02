@@ -4,9 +4,14 @@
 //
 // Für heute (nur Slots ab jetzt, der laufende zählt mit) und morgen je:
 //   Einspeisung — geplante kWh, Stunden mit Einspeisung, höchste Leistung und der
-//                 niedrigste Einspeisepreis dieser Slots („EOS verkauft ab X ct“);
+//                 niedrigste Einspeisewert dieser Slots („niedrigster
+//                 Einspeisewert X ct (Börse + Marktprämie)“);
 //   Netzbezug   — geplante kWh, Stunden mit Bezug, höchste Leistung (Spitze) und
-//                 der höchste Bezugspreis dieser Slots („EOS kauft bis Y ct“);
+//                 der höchste Bezugspreis dieser Slots („höchster Bezugspreis Y ct“);
+//   beides sind KEINE Schwellen (früher „EOS verkauft ab / kauft bis“, las sich
+//   so — Christin 02.11.2026), sondern Werte der Slots, die EOS ohnehin plant.
+//   Die Grundlage des Einspeisewerts liefert /api/eos/plan (priceBasis.feedIn);
+//   Erklärung als title an den Zeilen und am Info-Zeichen (HELP);
 //   mit Spitzenkappung (status.peakShaving, eigener Zweig) die Slots, in denen der
 //   geplante Bezug über der Grenze liegt.
 // Quelle sind die Zeilen aus /api/eos/plan (output.rows, Wh je Slot), die
@@ -124,7 +129,9 @@
     const p = planResponse || null;
     const output = p && p.output;
     const raw = output && Array.isArray(output.rows) ? output.rows : [];
-    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone };
+    const pb = (p && p.priceBasis) || {};
+    const feedInBasis = FEED_IN_BASIS[pb.feedIn] ? { kind: pb.feedIn, fixedCt: num(pb.fixedCtKwh) } : null;
+    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis };
     const rows = raw
       .map((r) => ({ ...r, ts: Date.parse(r && r.ts_utc) }))
       .filter((r) => Number.isFinite(r.ts))
@@ -156,20 +163,65 @@
   // Zeile die Energie, bei Slots unter 300 W ohne Stunden (Gegenprüfung 14e131b4).
   const none = (x) => round(x.kwh, 1) === 0;
   const inHours = (x) => (x.hours ? ` in ${de(x.hours, 2)} h` : '');
-  function priceText(planCt, spotCt, planWord, spotWord) {
-    if (planCt !== null && planCt !== undefined) return ` · ${planWord} ${de(planCt, 1)} ct`;
+  // Womit EOS die eingespeiste kWh bewertet (eos-forecast-bridge.js
+  // eosFeedInBasis): Börse + Marktprämie, Börse oder feste Vergütung.
+  const FEED_IN_BASIS = {
+    spot_premium: 'Börse + Marktprämie',
+    spot: 'Börse',
+    fixed: 'feste Vergütung',
+  };
+  const HELP = 'Was EOS für die geplanten Slots ansetzt — keine Schwellen. '
+    + 'Einspeisung: der niedrigste Einspeisewert unter den Slots, in denen EOS einspeist '
+    + '(je nach Einstellung Börse + Marktprämie, Börse oder feste Vergütung). '
+    + 'Netzbezug: der höchste Bezugspreis (Endkundenpreis) unter den Slots, in denen EOS aus dem Netz bezieht.';
+  // Grundlage genau des gezeigten Werts: Bei fester Vergütung bekommt ein Slot
+  // mit negativem Börsenpreis 0 ct, bei Börse + Marktprämie gibt es die Prämie
+  // nur auf nicht-negative Preise (eos-forecast-bridge.js, §51) — der
+  // niedrigste Wert ist oft genau so ein Slot (Gegenprüfung 63b36983).
+  function basisText(basis, ct) {
+    if (!basis || ct === null || ct === undefined) return '';
+    if (basis.kind === 'fixed' && basis.fixedCt !== null && Math.abs(ct - basis.fixedCt) > 0.005) {
+      // 0 ct = Slot mit negativem Börsenpreis; ein anderer Wert (z. B. Plan
+      // noch mit altem Satz) bekommt keinen Zusatz statt eines falschen.
+      return Math.abs(ct) < 0.005 ? 'negativer Börsenpreis' : '';
+    }
+    if (basis.kind === 'spot_premium' && ct < 0) return 'Börse, negativ: ohne Marktprämie';
+    return FEED_IN_BASIS[basis.kind];
+  }
+  function priceText(planCt, spotCt, planWord, spotWord, basis) {
+    if (planCt !== null && planCt !== undefined) return ` · ${planWord} ${de(planCt, 1)} ct${basis ? ` (${basis})` : ''}`;
     if (spotCt !== null && spotCt !== undefined) return ` · ${spotWord} ${de(spotCt, 1)} ct`;
     return '';
   }
-  function exportLine(e) {
+  function exportLine(e, basis) {
     if (none(e)) return 'Einspeisung: keine geplant';
-    const ct = priceText(e.minCt, e.minSpotCt, 'EOS verkauft ab', 'Börse ab');
+    const ct = priceText(e.minCt, e.minSpotCt, 'niedrigster Einspeisewert', 'niedrigster Börsenpreis', basisText(basis, e.minCt));
     return `Einspeisung ${de(e.kwh, 1)} kWh${inHours(e)} · bis ${de(e.peakKw, 1)} kW${ct}`;
   }
   function importLine(i, time) {
     if (none(i)) return 'Netzbezug: keiner geplant';
-    const ct = priceText(i.maxCt, i.maxSpotCt, 'EOS kauft bis', 'Börse bis');
+    const ct = priceText(i.maxCt, i.maxSpotCt, 'höchster Bezugspreis', 'höchster Börsenpreis');
     return `Netzbezug ${de(i.kwh, 1)} kWh${inHours(i)} · Spitze ${de(i.peakKw, 1)} kW um ${time(i.peakAt)}${ct}`;
+  }
+  function exportTitle(e, basis) {
+    if (none(e)) return '';
+    if (e.minCt === null || e.minCt === undefined) {
+      return e.minSpotCt === null || e.minSpotCt === undefined ? ''
+        : 'Der Plan enthält keinen Einspeisewert; gezeigt ist der niedrigste Börsenpreis der geplanten Einspeise-Slots — keine Schwelle.';
+    }
+    const b = basisText(basis, e.minCt);
+    return 'Der niedrigste Einspeisewert unter den Slots, in denen EOS Einspeisung plant'
+      + (b ? ` (${b})` : '')
+      + ' — keine Schwelle: EOS speist nicht „ab diesem Preis“ ein, der Wert ergibt sich aus dem Plan.';
+  }
+  function importTitle(i) {
+    if (none(i)) return '';
+    if (i.maxCt === null || i.maxCt === undefined) {
+      return i.maxSpotCt === null || i.maxSpotCt === undefined ? ''
+        : 'Der Plan enthält keinen Bezugspreis; gezeigt ist der höchste Börsenpreis der geplanten Bezugs-Slots — keine Schwelle.';
+    }
+    return 'Der höchste Bezugspreis (Endkundenpreis, mit dem EOS rechnet) unter den Slots, in denen EOS Netzbezug plant'
+      + ' — keine Schwelle: EOS kauft nicht „bis zu diesem Preis“, der Wert ergibt sich aus dem Plan.';
   }
   function peakLine(pk) {
     if (!pk) return null;
@@ -187,12 +239,14 @@
     }
     const time = (ms) => fmtParts(s.timeZone || DEFAULT_TZ).time.format(new Date(ms));
     const day = (d, label, missing) => {
-      if (!d || d.empty) return { head: missing, export: null, import: null, peak: null };
+      if (!d || d.empty) return { head: missing, export: null, import: null, peak: null, exportTitle: '', importTitle: '' };
       return {
         head: `${label}${d.complete ? '' : ` bis ${time(d.until)}`}`,
-        export: exportLine(d.export),
+        export: exportLine(d.export, s.feedInBasis),
         import: importLine(d.import, time),
         peak: peakLine(d.peak),
+        exportTitle: exportTitle(d.export, s.feedInBasis),
+        importTitle: importTitle(d.import),
       };
     };
     return {
@@ -226,6 +280,23 @@
       el.textContent = text || '';
       el.hidden = !text;
     };
+    const setTitle = (id, text) => {
+      const el = d.getElementById(id);
+      if (el) el.title = text || '';
+    };
+    setTitle('eosPlanSummaryInfo', HELP);
+    // title erreicht Touch und Tastatur nicht (Gegenprüfung 63b36983): das
+    // Info-Zeichen (ein Knopf) klappt den Erklärtext sichtbar auf und zu.
+    const info = d.getElementById('eosPlanSummaryInfo');
+    const help = d.getElementById('eosPlanSummaryHelp');
+    if (help) help.textContent = HELP;
+    if (info && help && typeof info.addEventListener === 'function' && !(info.dataset && info.dataset.bound)) {
+      if (info.dataset) info.dataset.bound = '1';
+      info.addEventListener('click', () => {
+        help.hidden = !help.hidden;
+        if (typeof info.setAttribute === 'function') info.setAttribute('aria-expanded', help.hidden ? 'false' : 'true');
+      });
+    }
     if (lastPlan === undefined) { set('eosPlanSummaryNote', 'EOS-Plan wird geladen …'); return; }
     const st = lastStatus || {};
     const v = view(summarize(lastPlan, {
@@ -243,9 +314,11 @@
       set(`${prefix}Head`, dv.head);
       set(`${prefix}Export`, dv.export);
       set(`${prefix}Import`, dv.import);
+      setTitle(`${prefix}Export`, dv.exportTitle);
+      setTitle(`${prefix}Import`, dv.importTitle);
       set(`${prefix}Peak`, dv.peak);
     }
   }
 
-  window.DVhubEosPlanSummary = { summarize, view, peakLimitOf, render, BAND_W };
+  window.DVhubEosPlanSummary = { summarize, view, peakLimitOf, render, BAND_W, HELP };
 })();
