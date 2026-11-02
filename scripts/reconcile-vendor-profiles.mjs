@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 export function sha256(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
@@ -154,8 +155,15 @@ export function reconcileVendorProfiles(configDir, appDir, { log = console.log }
   return { actions };
 }
 
-// CLI
-if (import.meta.url === `file://${process.argv[1]}`) {
+// CLI. Über realpath verglichen: auf Paket-Boxen ist /opt/dvhub/scripts ein
+// Verweis auf current/scripts — argv[1] behält den Verweis, import.meta.url
+// zeigt aufs Ziel; der alte Stringvergleich ließ den Abgleich dort still
+// ausfallen (Gegenprüfung bf393d9f, P2).
+function invokedDirectly() {
+  try { return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (invokedDirectly()) {
   const [, , configDir, appDir] = process.argv;
   if (!configDir || !appDir) {
     console.error('usage: reconcile-vendor-profiles.mjs <CONFIG_DIR> <APP_DIR>');

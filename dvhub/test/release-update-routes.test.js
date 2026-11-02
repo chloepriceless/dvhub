@@ -23,7 +23,7 @@ function makeRelease({ version = '1.0.9', channel = 'stable' } = {}) {
   return { root, appDir, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
-function harness({ channel = 'stable', helper = {}, release = {} } = {}) {
+function harness({ channel = 'stable', helper = {}, release = {}, getRawCfg = null, saveAndApplyConfig = null } = {}) {
   const rel = makeRelease(release);
   const calls = [];
   const saved = [];
@@ -44,8 +44,8 @@ function harness({ channel = 'stable', helper = {}, release = {} } = {}) {
       getServiceActionsEnabled: () => true,
       getRepoRoot: () => rel.root,
       getAppDir: () => rel.appDir,
-      getRawCfg: () => ({ updateChannel: channel }),
-      saveAndApplyConfig: (c) => { saved.push(c); },
+      getRawCfg: getRawCfg || (() => ({ updateChannel: channel })),
+      saveAndApplyConfig: (c) => { if (saveAndApplyConfig) saveAndApplyConfig(c); saved.push(c); },
       getAppVersion: () => readAppVersionInfo({ appDir: rel.appDir }),
       scheduleServiceRestart: () => { calls.push('<restart>'); },
       getServiceName: () => 'dvhub.service',
@@ -180,6 +180,59 @@ describe('Paket-Box: Update über dvhub-release', () => {
       const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
       assert.equal(r.code, 409, JSON.stringify(r.payload));
       assert.equal(h.saved.length, 0);
+    } finally { h.cleanup(); }
+  });
+
+  it('Kanalwechsel speichert den Stand NACH dem Helfer-Aufruf (Änderungen währenddessen bleiben)', async () => {
+    // Gegenprüfung be05dd73 (P2): der Klon vor dem await überschrieb Änderungen,
+    // die während des Helfer-Aufrufs gespeichert wurden.
+    let raw = { updateChannel: 'stable', httpPort: 8080 };
+    const h = harness({
+      channel: 'stable',
+      getRawCfg: () => raw,
+      helper: { install: () => { raw = { ...raw, httpPort: 9999 }; return { stdout: JSON.stringify({ ok: true, started: true }), stderr: '' }; } },
+    });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.equal(h.saved.at(-1).updateChannel, 'dev');
+      assert.equal(h.saved.at(-1).httpPort, 9999);
+    } finally { h.cleanup(); }
+  });
+
+  it('Kanalwechsel: scheitert das Speichern nach dem Start, meldet die Antwort den laufenden Auftrag (200 + Warnung)', async () => {
+    const h = harness({ channel: 'stable', saveAndApplyConfig: () => { throw new Error('EROFS'); }, helper: { install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.equal(r.payload.started, true);
+      assert.match(String(r.payload.warning), /EROFS/);
+    } finally { h.cleanup(); }
+  });
+
+  it('Kanalwechsel auf eine kleinere Grundversion: downgrade_blocked, mit allowDowngrade installiert (Strix R-0003)', async () => {
+    const check = { ...CHECK, channel: 'stable', current: { version: '1.0.10-dev.20261102000000.aaaaaaaa', git_sha: SHA, channel: 'dev' }, latest: { version: '1.0.9', git_sha: SHA, available: true } };
+    const h = harness({ channel: 'dev', release: { version: '1.0.10-dev.20261102000000.aaaaaaaa', channel: 'dev' }, helper: { check, install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'stable' });
+      assert.equal(r.code, 400, JSON.stringify(r.payload));
+      assert.equal(r.payload.error, 'downgrade_blocked');
+      assert.equal(r.payload.target, '1.0.9');
+      assert.ok(!h.calls.some((c) => c.includes(' install ')), 'nichts installiert');
+      assert.equal(h.saved.length, 0);
+      const ok = await h.call('POST', '/api/admin/update/channel', { channel: 'stable', allowDowngrade: true });
+      assert.equal(ok.code, 200, JSON.stringify(ok.payload));
+      assert.ok(h.calls.includes(`sudo -n ${RELEASE_HELPER} install latest stable`));
+    } finally { h.cleanup(); }
+  });
+
+  it('Kanalwechsel dev → stable derselben Grundversion ist kein Rückschritt', async () => {
+    const check = { ...CHECK, current: { version: '1.0.9-dev.20261102000000.aaaaaaaa', git_sha: SHA, channel: 'dev' }, latest: { version: '1.0.9', git_sha: SHA, available: true } };
+    const h = harness({ channel: 'dev', release: { version: '1.0.9-dev.20261102000000.aaaaaaaa', channel: 'dev' }, helper: { check, install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'stable' });
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.ok(h.calls.includes(`sudo -n ${RELEASE_HELPER} install latest stable`));
     } finally { h.cleanup(); }
   });
 

@@ -67,7 +67,10 @@ publish-release.sh (gh)
 8. **Version:** Tag `vX.Y.Z` → `X.Y.Z` (Kanal stable; der Tag muss zur `package.json`-Version passen). Jede andere
    Ref → `<package.json-Version>-dev.<Commit-Zeit UTC JJJJMMTThhmmss>.<sha8>` (Kanal dev). Innerhalb des Kanals
    ordnet die Commit-Zeit. Achtung Semver: `1.0.8-dev.…` sortiert vor `1.0.8`; Kanalwechsel installieren darum
-   bewusst „das Neueste des Zielkanals“ (wie heute), ohne Downgrade-Sperre, nach Rückfrage.
+   bewusst „das Neueste des Zielkanals“ (wie heute), nach Rückfrage. Ist dessen Grundversion `X.Y.Z` kleiner als die
+   installierte, lehnt die Oberfläche erst mit `downgrade_blocked` ab und installiert nur nach ausdrücklicher
+   Bestätigung (`allowDowngrade`, wie beim git-Weg, Strix R-0003). Der Kanal wird gespeichert, sobald der Helfer den
+   Auftrag angenommen hat.
 
 ## 2. Signatur: `ssh-keygen -Y`
 

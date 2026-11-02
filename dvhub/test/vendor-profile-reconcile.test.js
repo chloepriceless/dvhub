@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 import { decideProfileAction, reconcileVendorProfiles, sha256 } from '../../scripts/reconcile-vendor-profiles.mjs';
 
@@ -200,5 +201,26 @@ test('R-0008: Tausch zwischen Prüfung und chdir → Abbruch, nichts im Ziel', a
   } finally {
     process.chdir = realChdir;
     fs.rmSync(t.tmp, { recursive: true, force: true });
+  }
+});
+
+test('CLI läuft auch über einen Verweis auf den Skriptordner (Paket-Box: /opt/dvhub/scripts → current/scripts)', () => {
+  // Gegenprüfung bf393d9f (P2): argv[1] behält den Verweis, import.meta.url zeigt
+  // aufs Ziel — der alte Stringvergleich ließ den Abgleich still ausfallen.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-link-'));
+  try {
+    const realScripts = path.join(tmp, 'releases', '1.0.9', 'scripts');
+    fs.mkdirSync(realScripts, { recursive: true });
+    fs.copyFileSync(path.join(__dirname, '..', '..', 'scripts', 'reconcile-vendor-profiles.mjs'), path.join(realScripts, 'reconcile-vendor-profiles.mjs'));
+    fs.symlinkSync(path.join('releases', '1.0.9', 'scripts'), path.join(tmp, 'scripts'));
+    const appDir = path.join(tmp, 'app');
+    const cfgDir = path.join(tmp, 'cfg');
+    fs.mkdirSync(path.join(appDir, 'hersteller'), { recursive: true });
+    fs.mkdirSync(path.join(cfgDir, 'hersteller'), { recursive: true });
+    fs.writeFileSync(path.join(appDir, 'hersteller', 'a.json'), '{"label":"neu"}\n');
+    execFileSync(process.execPath, [path.join(tmp, 'scripts', 'reconcile-vendor-profiles.mjs'), cfgDir, appDir], { stdio: 'pipe' });
+    assert.equal(fs.readFileSync(path.join(cfgDir, 'hersteller', 'a.json'), 'utf8'), '{"label":"neu"}\n');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

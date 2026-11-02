@@ -106,17 +106,32 @@ export function createAdminRoutes(deps) {
     return json(res, e?.code === 4 || e?.code === 3 ? 409 : 500, { ok: false, mode: 'package', error: msg });
   };
   // onStarted läuft nur, wenn der Helfer den Auftrag angenommen hat (z. B.
-  // Kanal erst dann speichern — wie beim git-Weg, Gegenprüfung 9b949e21).
+  // Kanal erst dann speichern — wie beim git-Weg, Gegenprüfung 9b949e21). Sein
+  // Rückgabewert landet in der Antwort; ein Fehler darin macht den laufenden
+  // Auftrag nicht zum Fehlschlag (Gegenprüfung be05dd73, P3).
   const startReleaseJob = async (res, args, event, extra = {}, onStarted = null) => {
+    let out;
     try {
-      const out = await releaseHelper(args, 30000);
-      if (onStarted) onStarted(out);
-      pushLog(event, { args: args.join(' '), ...extra });
-      return json(res, 200, { ok: true, mode: 'package', job: args[0], started: out.started !== false, ...extra,
-        message: 'Auftrag gestartet — Fortschritt unter /api/admin/update/status' });
+      out = await releaseHelper(args, 30000);
     } catch (e) {
       return releaseError(res, e, `${event}_error`);
     }
+    let more = {};
+    if (onStarted) {
+      try { more = onStarted(out) || {}; } catch (e) { more = { warning: String(e?.message || e) }; pushLog(`${event}_after_start_error`, { error: more.warning }); }
+    }
+    pushLog(event, { args: args.join(' '), ...extra });
+    return json(res, 200, { ok: true, mode: 'package', job: args[0], started: out.started !== false, ...extra, ...more,
+      message: 'Auftrag gestartet — Fortschritt unter /api/admin/update/status' });
+  };
+  // Grundversion X.Y.Z vergleichen (dev-Stände sortieren vor dem gleichnamigen
+  // Release — das ist kein Rückschritt, ein kleineres X.Y.Z schon).
+  const baseVersionCmp = (a, b) => {
+    const p = (v) => (String(v || '').match(/^(\d+)\.(\d+)\.(\d+)/) || []).slice(1).map(Number);
+    const x = p(a), y = p(b);
+    if (x.length !== 3 || y.length !== 3) return null;
+    for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+    return 0;
   };
 
   return async function handleAdminRoute(req, res, url) {
@@ -783,13 +798,30 @@ export function createAdminRoutes(deps) {
         next.updateChannel = channel;
 
         if (releaseInfo()) {
-          // Paket-Box: das Neueste des Zielkanals installieren (bewusst ohne
-          // Downgrade-Sperre — dev-Versionen sortieren vor dem gleichnamigen Release).
+          // Paket-Box: das Neueste des Zielkanals installieren. dev-Versionen
+          // sortieren vor dem gleichnamigen Release — das gilt nicht als
+          // Rückschritt; eine kleinere Grundversion schon: dann wie beim git-Weg
+          // nur mit allowDowngrade (Strix R-0003, Gegenprüfung bf393d9f, P2).
+          if (!allowDowngrade) {
+            let chk;
+            try { chk = await releaseHelper(['check', channel], 60000); } catch (e) { return releaseError(res, e, 'update_channel_check_error'); }
+            const cur = chk?.current?.version || null;
+            const target = chk?.latest?.version || null;
+            if (cur && target && baseVersionCmp(target, cur) === -1) {
+              pushLog('update_channel_rejected', { channel, reason: 'downgrade_blocked', current: cur, target, mode: 'package' });
+              return json(res, 400, { ok: false, mode: 'package', error: 'downgrade_blocked', detail: `downgrade_blocked: ${target} ist älter als ${cur}`, current: cur, target });
+            }
+          }
           // Kanal erst speichern, wenn der Helfer den Auftrag angenommen hat —
-          // lehnt er ab (409/500), bleibt der bisherige Kanal eingestellt.
+          // lehnt er ab (409/500), bleibt der bisherige Kanal eingestellt. Auf
+          // dem JETZIGEN Stand, nicht dem Klon vor dem Helfer-Aufruf (sonst gingen
+          // Änderungen aus dieser Zeit verloren; Gegenprüfung be05dd73, P2).
           return startReleaseJob(res, ['install', 'latest', channel], 'update_package_started', { channel, target: 'latest' }, () => {
-            ctx.saveAndApplyConfig(next);
+            const fresh = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+            fresh.updateChannel = channel;
+            ctx.saveAndApplyConfig(fresh);
             pushLog('update_channel_changed', { channel, mode: 'package' });
+            return { channelSaved: true };
           });
         }
 
