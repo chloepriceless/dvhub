@@ -1798,6 +1798,9 @@ test('Web-Prozess (getrennter Betrieb): keine Schätzung, keine Buchführungs-Da
     const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
     assert.equal(Math.max(...elec.keys()), env.realEnd - Q);
     assert.deepEqual(fs.readdirSync(env.ctx.dataDir), []);
+    // Codex-Gegenprüfung 071d6f63 (P2): und er löscht nichts — sonst nähme er
+    // dem Runtime-Prozess den Schätz-Schwanz, ohne dass dessen prepareRun es merkt.
+    assert.deepEqual(deletes(mock), []);
   } finally { await mock.close(); }
 });
 

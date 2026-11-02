@@ -1159,8 +1159,11 @@ export function createEosForecastBridge(ctx) {
     // (nie kürzer, Christin 03.10.), die Schätzung wirkt nur im Schwanz.
     const realOnly = (list) => list.filter((s) => !s.estimated);
     // Nicht mehr geltende Schätzwerte aus EOS entfernen (vor dem Lauf).
+    // Nur der Prozess mit der Buchführung räumt auf: ein reiner Web-Prozess
+    // nähme dem Runtime-Prozess sonst den Schätz-Schwanz, ohne dass dessen
+    // prepareRun es merkt (Codex-Gegenprüfung 071d6f63).
     if (gone()) return abandoned();
-    {
+    if (estimatesEnabled) {
       const nowMs = Date.now();
       const realEndMs = realPriceCoverage(forecast?.price?.slots || []).end;
       const sentEndMs = priceEstimate ? Date.parse(priceEstimate.until) : realEndMs;
