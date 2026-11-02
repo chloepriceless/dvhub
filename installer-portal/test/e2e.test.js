@@ -249,9 +249,13 @@ test('E2E Pull-Modell: Code → Claim → Freigabe → Poll → Tunnel-Kommando 
   assert.equal((await call(pv('/api/totp/enable'), { method: 'POST', cookie, body: { code: '000000' } })).j.error, 'code_falsch', 'falscher Code wird abgewiesen');
   // Aktivieren mit dem Code des vorigen Zeitschritts: der aktuelle bleibt für
   // den Login-Test, der nächste für die Passkey-Bestätigung frei.
-  // Aktivierungs-Code EINMAL berechnen: unten wird genau dieser Code erneut
-  // probiert (Replay) — zweimal Date.now() lag sonst über einer 30-s-Grenze
-  // in verschiedenen Fenstern (Gate-Lauf 02.11.2026: totp_falsch).
+  // Aktivieren bis Replay-Login muss im selben 30-s-Fenster bleiben: liegt eine
+  // Fenstergrenze dazwischen, fällt der Code des Vorfensters aus dem Toleranz-
+  // fenster (totp_falsch statt totp_bereits_benutzt; Gate-Lauf 02.11.2026,
+  // Gegenprüfung edd431f7). Darum bei < 8 s Rest auf das nächste Fenster warten
+  // und den Aktivierungs-Code einmal berechnen.
+  const msLeft = 30_000 - (Date.now() % 30_000);
+  if (msLeft < 8_000) await new Promise((r) => setTimeout(r, msLeft + 200));
   const activationCode = totp(sec.j.secret, Date.now() - 30_000);
   const enabled = await call(pv('/api/totp/enable'), { method: 'POST', cookie, body: { code: activationCode } });
   assert.equal(enabled.status, 200);
