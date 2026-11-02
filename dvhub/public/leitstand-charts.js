@@ -1056,18 +1056,21 @@
   }
   // Energie ab nowMs: vergangene Zeilen zählen nicht, die laufende anteilig
   // (/api/forecast liefert die Reihe ab dem letzten Abruf, nicht ab jetzt).
-  function restKwhFrom(slots, fallbackH, nowMs) {
+  // untilMs (Mitternacht): Energie danach zählt nicht — Abdeckung und Summe
+  // sehen so dieselbe ganze Reihe (Gegenprüfung 5ccbf355).
+  function restKwhFrom(slots, fallbackH, nowMs, untilMs) {
+    var until = isFinite(untilMs) ? untilMs : Infinity;
     var kwh = 0;
     var spans = rowSpans(slots, fallbackH);
     // Beginnt die Reihe erst zur nächsten vollen Stunde (StatsForecast, VRM),
     // zählt die angebrochene Stunde mit dem Wert der ersten Zeile
     // (Gegenprüfung 290a70dc).
     var lead = leadingGapRow(spans, nowMs);
-    if (lead) kwh += lead.w / 1000 * ((lead.t - nowMs) / 3600000);
+    if (lead) kwh += lead.w / 1000 * ((Math.min(lead.t, until) - nowMs) / 3600000);
     spans.forEach(function (r) {
-      var end = r.t + r.ms;
-      if (end <= nowMs) return;
+      var end = Math.min(r.t + r.ms, until);
       var from = Math.max(r.t, nowMs);
+      if (end <= from) return;
       kwh += r.w / 1000 * ((end - from) / 3600000);
     });
     return Math.round(kwh * 1000) / 1000;
@@ -1159,7 +1162,6 @@
     function filterTomorrow(slots) {
       return slots.filter(function (s) { return localDateKey(s.start) === berlinTomorrowKey; });
     }
-    var pvSlots = filterToday(pvSlotsAll);
     var loadSlots = filterToday(loadSlotsAll);
     var pvSlotsTomorrow = filterTomorrow(pvSlotsAll);
     var loadSlotsTomorrow = filterTomorrow(loadSlotsAll);
@@ -1167,8 +1169,9 @@
     // "Rest" = ab jetzt: vergangene Slots nicht, den laufenden anteilig — die
     // Reihen beginnen beim letzten Prognose-Abruf, nicht bei „jetzt“.
     var nowMs = Date.now();
-    var pvKwhRest = restKwhFrom(pvSlots, pvH, nowMs);
-    var loadKwhRest = restKwhFrom(loadSlots, loadH, nowMs);
+    var midnightMs = berlinMidnightAfter(nowMs);
+    var pvKwhRest = restKwhFrom(pvSlotsAll, pvH, nowMs, midnightMs);
+    var loadKwhRest = restKwhFrom(loadSlotsAll, loadH, nowMs, midnightMs);
     var pvKwhTomorrow = kwhOf(pvSlotsTomorrow, pvH);
     var loadKwhTomorrow = kwhOf(loadSlotsTomorrow, loadH);
 
@@ -1190,7 +1193,7 @@
       || (statusData?.victron?.soc != null ? { socPct: statusData.victron.soc, capacityWh: null, minSocPct: null } : null);
     var balance = energyBalanceSummary({
       pvRestKwh: seriesCoversToday(pvSlotsAll, berlinTodayKey) ? pvKwhRest : null,
-      loadRestKwh: seriesCoversUntil(loadSlotsAll, loadH, nowMs, berlinMidnightAfter(nowMs)) ? loadKwhRest : null,
+      loadRestKwh: seriesCoversUntil(loadSlotsAll, loadH, nowMs, midnightMs) ? loadKwhRest : null,
       pvDayKwh: pvDayKwh, loadDayKwh: loadDayKwh, battery: battery
     });
     var balanceView = energyBalanceView(balance);

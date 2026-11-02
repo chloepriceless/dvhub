@@ -131,8 +131,8 @@ test('restKwhFrom: nur ab jetzt, laufender Slot anteilig', () => {
 test('Kachel zählt PV- und Verbrauchs-Rest mit restKwhFrom', () => {
   const start = src.indexOf('function updateForecastSummary(');
   const body = src.slice(start, src.indexOf('\n  }\n', start));
-  assert.match(body, /pvKwhRest = restKwhFrom\(pvSlots, pvH, nowMs\)/);
-  assert.match(body, /loadKwhRest = restKwhFrom\(loadSlots, loadH, nowMs\)/);
+  assert.match(body, /pvKwhRest = restKwhFrom\(pvSlotsAll, pvH, nowMs, midnightMs\)/);
+  assert.match(body, /loadKwhRest = restKwhFrom\(loadSlotsAll, loadH, nowMs, midnightMs\)/);
 });
 
 test('Überschrift der Kachel nennt „Rest heute“ (Hauptzahl)', () => {
@@ -313,7 +313,8 @@ test('berlinMidnightAfter: Mitternacht in Berliner Zeit (Winter/Sommer)', () => 
 test('Kachel: Last nur bekannt, wenn sie bis Mitternacht reicht', () => {
   const start = src.indexOf('function updateForecastSummary(');
   const body = src.slice(start, src.indexOf('\n  }\n', start));
-  assert.match(body, /loadRestKwh: seriesCoversUntil\(loadSlotsAll, loadH, nowMs, berlinMidnightAfter\(nowMs\)\) \? loadKwhRest : null/);
+  assert.match(body, /loadRestKwh: seriesCoversUntil\(loadSlotsAll, loadH, nowMs, midnightMs\) \? loadKwhRest : null/);
+  assert.match(body, /var midnightMs = berlinMidnightAfter\(nowMs\);/);
 });
 
 // Gegenprüfung 290a70dc (P2): StatsForecast und VRM liefern die Lastreihe ab
@@ -332,4 +333,24 @@ test('Lastreihe ab der nächsten vollen Stunde: bekannt, angebrochene Stunde zä
   // erste Zeile erst in mehr als einer Zeilenlänge → Lücke
   assert.equal(seriesCoversUntil(rows.slice(1), 1, now, midnight), false);
   assert.equal(restKwhFrom(rows.slice(1), 1, now), 4.2);
+});
+
+// Gegenprüfung 5ccbf355 (P2): Abdeckung und Summe müssen dieselbe Reihe sehen.
+// 23:25 Uhr, erste Lastzeile 00:00 Uhr → Rest heute = 35 min × 0,6 kW.
+test('Rest heute aus der ganzen Reihe, an Mitternacht abgeschnitten', () => {
+  const { restKwhFrom, seriesCoversUntil } = loadHelpers();
+  const H = 3600000;
+  const now = Date.UTC(2026, 10, 2, 22, 25);
+  const midnight = Date.UTC(2026, 10, 2, 23, 0);
+  const rows = Array.from({ length: 5 }, (_, i) => ({ start: new Date(midnight + i * H).toISOString(), powerW: 600 }));
+  assert.equal(seriesCoversUntil(rows, 1, now, midnight), true);
+  assert.equal(restKwhFrom(rows, 1, now, midnight), 0.35);
+  // mitten am Tag: Zeilen nach Mitternacht zählen nicht
+  const day = Array.from({ length: 20 }, (_, i) => ({ start: new Date(Date.UTC(2026, 10, 2, 13, 0) + i * H).toISOString(), powerW: 1000 }));
+  assert.equal(restKwhFrom(day, 1, Date.UTC(2026, 10, 2, 13, 0), midnight), 10);
+  const start = src.indexOf('function updateForecastSummary(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  assert.match(body, /var pvKwhRest = restKwhFrom\(pvSlotsAll, pvH, nowMs, midnightMs\);/);
+  assert.match(body, /var loadKwhRest = restKwhFrom\(loadSlotsAll, loadH, nowMs, midnightMs\);/);
+  assert.match(body, /seriesCoversUntil\(loadSlotsAll, loadH, nowMs, midnightMs\)/);
 });
