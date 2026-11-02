@@ -594,6 +594,10 @@ function saveAndApplyConfig(nextRawConfig) {
   const previousRaw = rawCfg;
   const saved = saveConfigFile(CONFIG_PATH, nextRawConfig);
   applyLoadedConfig(saved);
+  // Eingetragene kWp & Co. können Pro an- oder abschalten (capacityOk) — DV/EOS
+  // sofort folgen lassen, nicht erst beim nächsten Lizenz-Revalidate. Beim
+  // allerersten Speichern während des Boots gibt es den Dienst noch nicht.
+  try { licenseService.syncProActive(); } catch { /* Dienst noch nicht da */ }
   const changedPaths = collectChangedPaths(previousRaw, rawCfg);
   const restart = detectRestartRequired(changedPaths);
   return {

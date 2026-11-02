@@ -674,8 +674,26 @@ function licenseBindingMessage(state) {
   return null;
 }
 
+/**
+ * Toast-Text für einen gescheiterten Bindungsversuch mit 409 (Gegenprüfung zu
+ * 717f227b): „andere Box“ nur mit Nachweis (boundToOtherBox), „nächste
+ * Prüfung“ nur, wenn die Box nicht gesperrt bleibt. Sonst null.
+ * @param {object} r  Antwort von /api/license/activate-node-lock
+ * @returns {string|null}
+ */
+function licenseBindErrorText(r) {
+  if (!r || r.error !== 'machine_slot_taken') return null;
+  if (r.boundToOtherBox) {
+    return 'Die Lizenz ist gerade an eine andere Box gebunden. Übernehmen geht frühestens 24 Stunden nach deren letzter Bindung.';
+  }
+  if (r.blocked) {
+    return 'Bindung gerade nicht möglich. Pro bleibt auf dieser Box aus, bis „An diese Box binden“ gelingt — bitte später erneut versuchen.';
+  }
+  return 'Bindung gerade nicht möglich. DVhub versucht es bei der nächsten Prüfung erneut.';
+}
+
 if (typeof globalThis !== 'undefined') {
-  globalThis.DVhubSettingsLicense = { licenseCapacityMessage, licenseBindingMessage };
+  globalThis.DVhubSettingsLicense = { licenseCapacityMessage, licenseBindingMessage, licenseBindErrorText };
 }
 
 /**
@@ -5464,8 +5482,8 @@ function initForecastTab() {
     if (r.error === 'empty_key') return 'Bitte Lizenzschlüssel eingeben.';
     if (r.error === 'invalid_json') return 'Ungültige Anfrage.';
     // Stufe-C node-lock (activate-node-lock) errors.
-    if (r.error === 'machine_slot_taken' && r.boundFingerprint) return 'Die Lizenz ist gerade an eine andere Box gebunden. Übernehmen geht frühestens 24 Stunden nach deren letzter Bindung.';
-    if (r.error === 'machine_slot_taken') return 'Bindung gerade nicht möglich. DVhub versucht es bei der nächsten Prüfung erneut.';
+    const bindText = licenseBindErrorText(r);
+    if (bindText) return bindText;
     if (r.error === 'no_appliance_id') return 'Keine Appliance-ID gefunden — Box-Bindung nicht möglich.';
     if (r.error === 'fingerprint_mismatch') return 'Die gebundene Kennung passt nicht zu dieser Box.';
     if (r.error === 'machine_file_invalid') return 'Das erhaltene Bindungs-Zertifikat ist ungültig.';

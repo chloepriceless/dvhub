@@ -374,3 +374,41 @@ for (const [name, act] of [
     assert.deepEqual(seen, [false]);
   });
 }
+
+// Gegenprüfung zu 717f227b (P3): die Oberfläche braucht vom Dienst, ob eine
+// ANDERE Box nachgewiesen ist und ob die Box gesperrt bleibt.
+test('activateNodeLock meldet boundToOtherBox/blocked für die Oberfläche', async () => {
+  const b = box({ applianceId: 'box-b' });
+  b.state.license.status = 'active';
+  b.state.license.license_key = KEY;
+  let r;
+  await withServers({ proxy: () => [409, { ok: false, code: 'machine_slot_taken', boundFingerprint: 'box-b' }] }, async () => { r = await b.svc.activateNodeLock(); });
+  assert.equal(r.boundToOtherBox, false, 'eigener Fingerprint ist keine andere Box');
+  assert.equal(r.blocked, false);
+  await withServers({ proxy: slotTaken }, async () => { r = await b.svc.activateNodeLock(); });
+  assert.equal(r.boundToOtherBox, true);
+  assert.equal(r.blocked, true);
+  await withServers({ proxy: () => [409, { ok: false, code: 'machine_slot_taken' }] }, async () => { r = await b.svc.activateNodeLock(); });
+  assert.equal(r.boundToOtherBox, false);
+  assert.equal(r.blocked, true, 'bestehende Sperre bleibt — kein automatischer Neuversuch');
+});
+
+// Gegenprüfung zu 717f227b (P3): eine Config-Änderung (eingetragene kWp) kann
+// Pro an- oder abschalten — DV/EOS müssen es sofort erfahren.
+test('syncProActive meldet einen Pro-Wechsel durch eine Config-Änderung', async () => {
+  const b = box({ kwp: 50, persisted: { status: 'active', license_key: KEY, license_id: 'lic-1', machine_id: 'm-box-a', machine_file: mintMachineFile('box-a', { maxKwp: 40 }) } });
+  assert.equal(b.svc.isProActive(), false);
+  const seen = [];
+  b.svc.onProActiveChange((v) => seen.push(v));
+  b.config.userEnergyPricing.pvPlants = [{ kwp: 30 }];
+  b.svc.syncProActive();
+  assert.deepEqual(seen, [true]);
+  b.svc.syncProActive();
+  assert.deepEqual(seen, [true], 'kein Wechsel → keine Meldung');
+});
+
+test('server.js: saveAndApplyConfig ruft syncProActive des Lizenzdienstes', () => {
+  const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('function saveAndApplyConfig('), src.indexOf('function saveAndApplyConfig(') + 1200);
+  assert.match(fn, /licenseService\.syncProActive\(\)/);
+});

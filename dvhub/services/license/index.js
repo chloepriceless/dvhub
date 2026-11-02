@@ -869,9 +869,12 @@ export function createLicenseService(ctx) {
       // (zwei gleichzeitige Bindungen dieser Box) nur Hinweis — Bestandsschutz
       // T-0125 „A“ (Gegenprüfung zu 37314002).
       const otherFp = typeof out.boundFingerprint === 'string' ? out.boundFingerprint.toLowerCase() : '';
-      if (out.error === BIND_BLOCK_SLOT_TAKEN && otherFp && otherFp !== applianceId) {
-        state.license.bind_block = BIND_BLOCK_SLOT_TAKEN;
-      }
+      const otherBox = out.error === BIND_BLOCK_SLOT_TAKEN && !!otherFp && otherFp !== applianceId;
+      if (otherBox) state.license.bind_block = BIND_BLOCK_SLOT_TAKEN;
+      // Für die Oberfläche: andere Box nachgewiesen? bleibt Pro gesperrt (dann
+      // kein automatischer Neuversuch, nur der Knopf)?
+      out.boundToOtherBox = otherBox;
+      out.blocked = bindingBlocked();
       setBindError(out.error);
       persistState();
       emitProActiveChange(prev);   // DV/EOS stoppen live, wenn die Sperre Pro abschaltet
@@ -1391,6 +1394,15 @@ export function createLicenseService(ctx) {
   }
 
   /**
+   * syncProActive: Pro-Zustand neu bewerten und einen Wechsel an DV/EOS melden.
+   * Für Änderungen außerhalb des Lizenzdienstes (eingetragene kWp → capacityOk),
+   * aufgerufen von server.js saveAndApplyConfig (Gegenprüfung zu 717f227b).
+   */
+  function syncProActive() {
+    emitProActiveChange(isProActive());
+  }
+
+  /**
    * onProActiveChange: register a callback fired on every active <-> non-active
    * transition with the new boolean. Used by server.js to start/stop the
    * DV-Modbus server + EOS dispatch live on a license change.
@@ -1612,6 +1624,7 @@ export function createLicenseService(ctx) {
     updatePlantExceedsLicense,
     plantGateActive,
     onProActiveChange,
+    syncProActive,
     requirePro,
     start,
     close,

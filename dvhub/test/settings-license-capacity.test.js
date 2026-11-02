@@ -116,3 +116,13 @@ test('binding message: Slot belegt, andere Box, ungebunden mit Fehler, offline u
   assert.equal(licenseBindingMessage({ status: 'active', binding: { state: 'unbound', error: null } }), null, 'ohne Fehler kein Lärm');
   assert.match(licenseBindingMessage({ status: 'active', effective_status: 'unverified_offline', binding: { state: 'unbound' } }), /14 Tage/);
 });
+
+test('Bindungs-Toast: andere Box nur mit Nachweis, Neuversuch nur ohne Sperre', () => {
+  const { licenseBindErrorText } = loadLicenseHelpers();
+  assert.match(licenseBindErrorText({ error: 'machine_slot_taken', boundToOtherBox: true, blocked: true }), /andere[nr]? Box/);
+  assert.match(licenseBindErrorText({ error: 'machine_slot_taken', boundToOtherBox: false, blocked: false }), /nächsten Prüfung erneut/);
+  const blocked = licenseBindErrorText({ error: 'machine_slot_taken', boundToOtherBox: false, blocked: true });
+  assert.doesNotMatch(blocked, /nächsten Prüfung/);
+  assert.match(blocked, /An diese Box binden/);
+  assert.equal(licenseBindErrorText({ error: 'server_error' }), null);
+});
