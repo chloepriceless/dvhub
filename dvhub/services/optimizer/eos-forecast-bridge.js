@@ -448,7 +448,10 @@ export function createEosForecastBridge(ctx) {
     : { fromMs: r.fromMs, untilMs: r.untilMs }), null);
   const estimatesEnabled = ctx.eosPriceEstimates !== false;
   const estimatesDir = ctx.dataDir ?? process.env.DV_DATA_DIR;
-  const estimatesFile = estimatesEnabled && estimatesDir ? path.join(estimatesDir, 'eos-price-estimates.json') : null;
+  // ledgerFile: die Buchführung (im Web-Prozess nur gelesen, siehe prepareRun);
+  // estimatesFile: nur der Prozess mit der Buchführung schreibt.
+  const ledgerFile = estimatesDir ? path.join(estimatesDir, 'eos-price-estimates.json') : null;
+  const estimatesFile = estimatesEnabled ? ledgerFile : null;
   const validRange = (r) => (r && Number.isFinite(r.fromMs) && Number.isFinite(r.untilMs) && r.untilMs > r.fromMs
     ? { fromMs: r.fromMs, untilMs: r.untilMs } : null);
   if (estimatesFile) {
@@ -876,9 +879,9 @@ export function createEosForecastBridge(ctx) {
    * Steuerzeitraum = zuletzt gesetzte Stunden; ohne bekannten Wert der
    * größtmögliche (24 h).
    */
-  function estimatesInControlHorizon(nowMs) {
-    if (!eosPricesKnown) return true; // Stand in EOS unbekannt (Neustart, Import gescheitert)
-    const from = Math.min(lastEstimateRange?.fromMs ?? Infinity, staleRange?.fromMs ?? Infinity);
+  function estimatesInControlHorizon(nowMs, ledger = { known: eosPricesKnown, ranges: [lastEstimateRange, staleRange] }) {
+    if (!ledger.known) return true; // Stand in EOS unbekannt (Neustart, Import gescheitert)
+    const from = Math.min(...ledger.ranges.map((r) => r?.fromMs ?? Infinity));
     if (!Number.isFinite(from)) return false;
     const h = Number(state?.optimizer?.eosControlHorizonH);
     const hours = Number.isFinite(h) && h > 0 ? h : 24;
@@ -907,6 +910,30 @@ export function createEosForecastBridge(ctx) {
    * @returns {Promise<{ok:boolean, pushed:boolean, error?:string}>}
    */
   async function prepareRun({ nowMs = Date.now() } = {}) {
+    // Reiner Web-Prozess (getrennter Betrieb): er stößt über die Geräte-Routen
+    // auch Läufe an, pusht und löscht aber keine Schätzwerte. Er prüft die
+    // Buchführung des Runtime-Prozesses nur lesend; liegen Schätzwerte im
+    // Steuerzeitraum oder ist der Stand unbekannt, kein Lauf — der
+    // Runtime-Prozess räumt bei seinem nächsten Lauf/Push auf
+    // (Codex-Gegenprüfung 9d2f7053). Ohne Datenverzeichnis wie vor der Schätzung.
+    if (!estimatesEnabled) {
+      if (!ledgerFile) return { ok: true, pushed: false };
+      let ledger;
+      try {
+        const saved = JSON.parse(fs.readFileSync(ledgerFile, 'utf8'));
+        ledger = { known: saved?.known === true, ranges: [validRange(saved?.lastEstimateRange), validRange(saved?.staleRange)] };
+      } catch {
+        ledger = { known: false, ranges: [] };
+      }
+      if (!estimatesInControlHorizon(Math.max(nowMs, Date.now()), ledger)) return { ok: true, pushed: false };
+      return {
+        ok: false,
+        pushed: false,
+        error: ledger.known
+          ? 'Schätzpreise im Steuerzeitraum (räumt der Runtime-Prozess auf)'
+          : 'Preisstand in EOS unbekannt (Buchführung des Runtime-Prozesses fehlt oder unbekannt)',
+      };
+    }
     // Läuft gerade ein Push, erst auf ihn warten — sonst prüfte die Abfrage
     // mit altem Bereich und altem Steuerzeitraum (Gegenprüfung c7ccf04f).
     // Die Wache (guardedPush) begrenzt die Wartezeit.

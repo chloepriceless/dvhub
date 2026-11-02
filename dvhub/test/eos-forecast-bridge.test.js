@@ -1940,3 +1940,38 @@ test('server.js: Schätzung nur im Prozess, der die Läufe anstößt', async () 
   assert.ok(wire > 0, 'ctx.eosPriceEstimates wird gesetzt');
   assert.ok(wire < create, 'vor dem Bau der Bridge');
 });
+
+// Codex-Gegenprüfung 9d2f7053 (P2): Auch der Web-Prozess stößt Läufe an
+// (Geräte-Routen → requestEosReplan → kick → prepareRun). Er pusht und löscht
+// nicht, prüft aber vor dem Lauf die Buchführung des Runtime-Prozesses (nur
+// lesend).
+test('Web-Prozess: prepareRun prüft die Buchführung des Runtime-Prozesses, ohne zu pushen', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = shortRealEnv(mock);
+    env.ctx.dataDir = await tmpDataDir();
+    const web = createEosForecastBridge({ ...env.ctx, eosPriceEstimates: false });
+    const unknown = await web.prepareRun(); // Runtime hat noch nichts gemerkt
+    assert.equal(unknown.ok, false);
+    assert.match(unknown.error, /unbekannt/);
+    const runtime = createEosForecastBridge(env.ctx);
+    await runtime.push(); // Schätzung ab jetzt + 75..90 min, Steuerzeitraum 1 h
+    const n = mock.requests.length;
+    assert.deepEqual(await web.prepareRun(), { ok: true, pushed: false }, 'gleich nach dem Push: nur echte Preise im Zeitraum');
+    t.mock.timers.setTime(Date.now() + 50 * 60_000);
+    const late = await web.prepareRun();
+    assert.equal(late.ok, false);
+    assert.match(late.error, /Schätzpreise im Steuerzeitraum/);
+    assert.equal(mock.requests.length, n, 'der Web-Prozess schreibt nichts an EOS');
+  } finally { await mock.close(); }
+});
+
+test('Web-Prozess ohne Datenverzeichnis: Lauf geht wie vor der Schätzung', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const web = createEosForecastBridge({ ...env.ctx, eosPriceEstimates: false });
+    assert.deepEqual(await web.prepareRun(), { ok: true, pushed: false });
+  } finally { await mock.close(); }
+});
