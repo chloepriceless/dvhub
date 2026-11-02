@@ -91,6 +91,13 @@ verweist hierher.
   eigenes Relay lässt sich eintragen (`relay/README.md`, Docker-Compose mit TLS). Ab Werk aus; Entkoppeln trennt
   sofort. Protokoll: `docs/HANDY-APP-PROTOKOLL.md`.
 
+### Geändert
+
+- **EOS bekommt den Akku-Basispreis ohne Verlustaufschlag**: Als Speicherkosten (`levelized_cost_of_storage`) geht
+  nur noch „Akku-Basispreis“ an EOS, nicht mehr Basispreis × (1 + Verlustaufschlag). EOS rechnet Lade- und
+  Entladeverluste über den Akku-Wirkungsgrad selbst; mit dem Aufschlag zählten sie doppelt. DVhubs Preisvergleich und
+  Historie rechnen weiter mit Aufschlag; die Hilfetexte sagen das.
+
 ## [1.0.8] - 2026-10-21
 
 Release nach knapp zwei Wochen, 110 Commits seit 1.0.7. Überblick nach Themen — die Einzelheiten
