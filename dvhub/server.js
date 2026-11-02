@@ -1936,12 +1936,15 @@ ctx.saveAndApplyConfig = (incomingConfig) => {
   // /api/config-style write (optimizer settings, pricing, mispel.pvKwp …);
   // schedule-only writes from persistConfig() bypass this wrapper which is
   // fine — they never touch the synced fields.
+  ctx.eosAfterSave = null;
   if (eosConfigSync) {
     // Push DVhub forecasts BEFORE the provider-flip so EOS' *Import series
     // are already populated when config-sync points elecprice/load/pvforecast
     // at them. Without this ordering EOS would briefly see empty series
     // and bail out of the next genetic run.
-    (async () => {
+    // ctx.eosAfterSave: der Neuplan nach dem Speichern wartet darauf
+    // (routes-api.js requestEosReplanAfterSave).
+    ctx.eosAfterSave = (async () => {
       await eosRemoteReady;
       try { if (eosForecastBridge) await eosForecastBridge.push(); }
       catch (e) {

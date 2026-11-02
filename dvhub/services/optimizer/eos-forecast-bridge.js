@@ -300,6 +300,13 @@ export const CONTROL_HORIZON_ABS_MAX_H = 48;
 export const EOS_TAIL_HOURS = 48;
 /** Längster EOS-Prognosehorizont (prediction.hours) = Grenze der Preis-Fortschreibung. */
 export const EOS_PREDICTION_HOURS_MAX = 72;
+/**
+ * Mindestens so viel Schwanz bleibt hinter dem Steuerzeitraum: Ohne Schwanz
+ * bewertet EOS die Restladung fast nur zum Einspeisewert und speist mittags
+ * PV ein, statt sie für Nacht und Morgen zu speichern (Tail-Fix 01.11.2026,
+ * Gegenprüfung ae4e76f6).
+ */
+export const EOS_MIN_TAIL_HOURS = 12;
 
 const positiveInt = (v) => {
   const n = Math.floor(Number(v));
@@ -323,12 +330,14 @@ export function resolveEosPredictionHours(cfg) {
 /**
  * Obergrenze des Steuerzeitraums: optimizer.eosControlHorizonMaxHours > 0
  * (z. B. 6/12/24 h für kleine Boards), sonst der ganze bekannte
- * Preiszeitraum (bis 48 h). Nie länger als der Prognosehorizont — EOS bricht
- * sonst jeden Lauf ab („prediction.hours covers the control horizon“).
+ * Preiszeitraum (bis 48 h). Höchstens Prognosehorizont − 12 h: länger bricht
+ * EOS jeden Lauf ab („prediction.hours covers the control horizon“), ohne
+ * Schwanz bewertet es die Restladung falsch.
  */
 export function resolveControlHorizonMaxHours(cfg) {
   const user = positiveInt(cfg?.optimizer?.eosControlHorizonMaxHours);
-  return Math.min(user ?? CONTROL_HORIZON_ABS_MAX_H, CONTROL_HORIZON_ABS_MAX_H, resolveEosPredictionHours(cfg));
+  const withTail = Math.max(1, resolveEosPredictionHours(cfg) - EOS_MIN_TAIL_HOURS);
+  return Math.min(user ?? CONTROL_HORIZON_ABS_MAX_H, CONTROL_HORIZON_ABS_MAX_H, withTail);
 }
 
 /**
@@ -735,8 +744,26 @@ export function createEosForecastBridge(ctx) {
     // Reihenfolge: Wird der Prognosehorizont kürzer, erst den Steuerzeitraum
     // senken — sonst stünde kurz prediction.hours < horizon_hours, und ein Lauf
     // genau dann bräche ab. Sonst erst den Prognosehorizont.
-    const putHorizon = () => eosHttpRequest(baseUrl, 'PUT', '/v1/config/optimization/genetic/horizon_hours', hours);
-    const putPrediction = () => eosHttpRequest(baseUrl, 'PUT', '/v1/config/prediction/hours', predictionHours);
+    const previous = { hours: lastHorizonHours, predictionHours: lastPredictionHours };
+    // Jeden angenommenen Wert sofort festhalten: scheitert danach der andere
+    // PUT, muss DVhub trotzdem wissen, mit welchem Steuerzeitraum EOS rechnet
+    // (Warmstart im Lauf-Anstoß, Gegenprüfung ae4e76f6).
+    const putHorizon = async () => {
+      const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/optimization/genetic/horizon_hours', hours);
+      if (res.ok) {
+        lastHorizonHours = hours;
+        if (state?.optimizer) state.optimizer.eosControlHorizonH = hours;
+      }
+      return res;
+    };
+    const putPrediction = async () => {
+      const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/prediction/hours', predictionHours);
+      if (res.ok) {
+        lastPredictionHours = predictionHours;
+        if (state?.optimizer) state.optimizer.eosPredictionHours = predictionHours;
+      }
+      return res;
+    };
     const shrinking = lastPredictionHours === null || predictionHours < lastPredictionHours;
     const order = shrinking ? [putHorizon, putPrediction] : [putPrediction, putHorizon];
     for (const put of order) {
@@ -747,14 +774,8 @@ export function createEosForecastBridge(ctx) {
         return { error: res.error };
       }
     }
-    if (pushLog && (hours !== lastHorizonHours || predictionHours !== lastPredictionHours)) {
-      pushLog('eos_control_horizon', { hours, previous: lastHorizonHours, predictionHours });
-    }
-    lastHorizonHours = hours;
-    lastPredictionHours = predictionHours;
-    if (state?.optimizer) {
-      state.optimizer.eosControlHorizonH = hours;
-      state.optimizer.eosPredictionHours = predictionHours;
+    if (pushLog && (hours !== previous.hours || predictionHours !== previous.predictionHours)) {
+      pushLog('eos_control_horizon', { hours, previous: previous.hours, predictionHours });
     }
     return { hours, predictionHours };
   }

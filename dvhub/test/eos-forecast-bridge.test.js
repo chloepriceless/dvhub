@@ -1156,14 +1156,17 @@ test('resolveEosPredictionHours / resolveControlHorizonMaxHours', async () => {
   assert.equal(resolveEosPredictionHours(c({ eosControlHorizonMaxHours: 12 })), 60);
   assert.equal(resolveEosPredictionHours(c({ eosControlHorizonMaxHours: 24 })), 72);
   assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: 48 })), 48);
-  assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: '36' })), 36);
+  assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: '60' })), 60);
   assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: 500 })), 72);
   assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: -3 })), 72);
   assert.equal(resolveControlHorizonMaxHours(c({})), 48);
   assert.equal(resolveControlHorizonMaxHours(c({ eosControlHorizonMaxHours: 12 })), 12);
   assert.equal(resolveControlHorizonMaxHours(c({ eosControlHorizonMaxHours: '24' })), 24);
-  assert.equal(resolveControlHorizonMaxHours(c({ eosPredictionHours: 24 })), 24, 'nie länger als der Prognosehorizont');
-  assert.equal(resolveControlHorizonMaxHours(c({ eosControlHorizonMaxHours: 36, eosPredictionHours: 24 })), 24);
+  // Gegenprüfung ae4e76f6 (P2): mindestens 12 h Schwanz hinter dem Steuerzeitraum
+  // — sonst bewertet EOS die Restladung nur zum Einspeisewert (Tail-Fix 01.11.).
+  assert.equal(resolveControlHorizonMaxHours(c({ eosPredictionHours: 48 })), 36, 'Prognosehorizont − 12 h');
+  assert.equal(resolveControlHorizonMaxHours(c({ eosControlHorizonMaxHours: 24, eosPredictionHours: 48 })), 24);
+  assert.equal(resolveControlHorizonMaxHours(c({ eosPredictionHours: 24 })), 12, 'auch ein per API gesetzter kurzer Wert behält 12 h Schwanz');
 });
 
 test('priceFillUntilMs: höchstens bis maxMs (Prognosehorizont)', async () => {
@@ -1193,11 +1196,12 @@ test('Nachmittags: Steuerzeitraum über 24 h, EOS-Prognosehorizont 72 h', async 
 test('Grenze 12 h: Steuerzeitraum 12, Prognosehorizont 60, Preise höchstens 60 h', async () => {
   const mock = await createMockEos(okHandler);
   try {
-    const { ctx } = estimateCtx(mock, { realHours: 10, pvHours: 70, optimizer: { eosControlHorizonMaxHours: 12 } });
+    // 34 h echte Preise — ohne Grenze wären es 33 h (Gegenprüfung ae4e76f6, P3)
+    const { ctx } = estimateCtx(mock, { realHours: 34, pvHours: 70, optimizer: { eosControlHorizonMaxHours: 12 } });
     const t0 = Date.now();
     await createEosForecastBridge(ctx).push();
     const hz = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/optimization/genetic/horizon_hours'));
-    assert.ok(hz.body <= 12 && hz.body >= 9);
+    assert.equal(hz.body, 12);
     const ph = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/prediction/hours'));
     assert.equal(ph.body, 60);
     const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
@@ -1206,21 +1210,21 @@ test('Grenze 12 h: Steuerzeitraum 12, Prognosehorizont 60, Preise höchstens 60 
   } finally { await mock.close(); }
 });
 
-test('Prognosehorizont 24 h kappt den Steuerzeitraum; beim Senken erst Steuerzeitraum, dann Prognose', async () => {
+test('Prognosehorizont 48 h kappt den Steuerzeitraum auf 36 h; beim Senken erst Steuerzeitraum, dann Prognose', async () => {
   const mock = await createMockEos(okHandler);
   try {
     const opt = {};
-    const { ctx } = estimateCtx(mock, { realHours: 34, pvHours: 60, optimizer: opt });
+    const { ctx } = estimateCtx(mock, { realHours: 40, pvHours: 60, optimizer: opt });
     const bridge = createEosForecastBridge(ctx);
-    await bridge.push(); // 72 h / ~33 h
+    await bridge.push(); // 72 h / 39 h
     mock.requests.length = 0;
-    opt.eosPredictionHours = 24;
+    opt.eosPredictionHours = 48;
     await bridge.push();
     const puts = mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/'));
     const iHz = puts.findIndex((r) => r.url.startsWith('/v1/config/optimization/genetic/horizon_hours'));
     const iPh = puts.findIndex((r) => r.url.startsWith('/v1/config/prediction/hours'));
-    assert.equal(puts[iHz].body, 24);
-    assert.equal(puts[iPh].body, 24);
+    assert.equal(puts[iHz].body, 36);
+    assert.equal(puts[iPh].body, 48);
     assert.ok(iHz < iPh, 'Steuerzeitraum zuerst senken, sonst kurz Prognose < Steuerzeitraum');
     // wieder hoch: erst Prognose, dann Steuerzeitraum
     mock.requests.length = 0;
@@ -1242,8 +1246,9 @@ test('Einstellungen: Steuerzeitraum-Grenze und Prognosehorizont mit Rechenzeit-H
   assert.match(ctrl.options[0].label, /ganze[rn]? bekannte[rn]? Preiszeitraum/i);
   assert.match(ctrl.help, /Rechenzeit/);
   assert.equal(pred.type, 'select');
-  assert.deepEqual(pred.options.map((o) => o.value), [0, 24, 36, 48, 72]);
+  assert.deepEqual(pred.options.map((o) => o.value), [0, 48, 60, 72]);
   assert.match(pred.help, /Rechenzeit/);
+  assert.match(pred.help, /mindestens 12 h/);
   assert.match(pred.help, /Steuerzeitraum/);
   for (const f of [ctrl, pred]) assert.equal(f.group, 'optimization');
   const ok = normalizeConfigInput({ optimizer: { eosControlHorizonMaxHours: '12', eosPredictionHours: 48 } });
@@ -1269,4 +1274,54 @@ test('push merkt die Grundlage des Einspeisewerts (state.optimizer.eosFeedInBasi
     await createEosForecastBridge(ctx).push();
     assert.deepEqual({ ...ctx.state.optimizer.eosFeedInBasis }, { feedIn: 'fixed', fixedCtKwh: 8.2 });
   } finally { await mock2.close(); }
+});
+
+// Gegenprüfung ae4e76f6 (P3): Scheitert nach dem Steuerzeitraum der
+// Prognosehorizont-PUT, muss DVhub trotzdem den an EOS gesendeten
+// Steuerzeitraum kennen (Warmstart des Lauf-Anstoßes rechnet damit).
+test('Teil-Fehlschlag: gesendeter Steuerzeitraum steht im Zustand', async () => {
+  const failPred = (req, res) => {
+    if (req.method === 'PUT' && req.url.startsWith('/v1/config/prediction/hours')) { res.writeHead(500); res.end('{}'); return; }
+    okHandler(req, res);
+  };
+  const mock = await createMockEos(failPred);
+  try {
+    const { ctx, realEnd } = estimateCtx(mock, { realHours: 34, pvHours: 60 });
+    ctx.state.optimizer.eosControlHorizonH = 24;
+    const res = await createEosForecastBridge(ctx).push();
+    const hz = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/optimization/genetic/horizon_hours'));
+    assert.equal(hz.body, Math.floor((realEnd - Date.now() - Q) / 3_600_000));
+    assert.equal(ctx.state.optimizer.eosControlHorizonH, hz.body);
+    assert.ok(res.errors.horizon, 'Fehler gemeldet');
+  } finally { await mock.close(); }
+});
+
+// Gegenprüfung ae4e76f6 (P3): Nach dem Speichern erst neu rechnen, wenn der
+// Abgleich (Push + Config-Sync) durch ist — sonst rechnet der Lauf mit dem
+// alten Steuerzeitraum / Akku.
+test('requestEosReplanAfterSave wartet auf den Abgleich nach dem Speichern', async () => {
+  const { requestEosReplanAfterSave } = await import('../routes-api.js');
+  const calls = [];
+  let release;
+  const ctx = { eosAfterSave: new Promise((r) => { release = r; }), optimizerService: { requestEosReplan: (why) => calls.push(why) } };
+  const done = requestEosReplanAfterSave(ctx, 'config');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(calls, []);
+  release();
+  await done;
+  assert.deepEqual(calls, ['config']);
+  // ohne laufenden Abgleich sofort; ein fehlgeschlagener Abgleich hält nicht auf
+  const ctx2 = { eosAfterSave: Promise.reject(new Error('x')), optimizerService: { requestEosReplan: (why) => calls.push(why) } };
+  await requestEosReplanAfterSave(ctx2, 'config');
+  await requestEosReplanAfterSave({ optimizerService: { requestEosReplan: (why) => calls.push(why) } }, 'config');
+  assert.deepEqual(calls, ['config', 'config', 'config']);
+});
+
+test('Speichern: Server merkt den Abgleich, die Route wartet darauf', () => {
+  const fsMod = globalThis.process.getBuiltinModule('node:fs');
+  const server = fsMod.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(server, /ctx\.eosAfterSave = \(async \(\) => \{/);
+  const routes = fsMod.readFileSync(new URL('../routes/config-routes.js', import.meta.url), 'utf8');
+  assert.match(routes, /requestEosReplanAfterSave\(ctx, 'config'\)/);
+  assert.doesNotMatch(routes, /ctx\.optimizerService\?\.requestEosReplan\?\.\('config'\)/);
 });

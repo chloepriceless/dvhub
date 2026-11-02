@@ -850,6 +850,21 @@ export function configChangeNeedsEosReplan(changedPaths) {
     && !EOS_REPLAN_IGNORE.some((skip) => p === skip || p.startsWith(skip + '.')));
 }
 
+/**
+ * Neuplan nach dem Speichern erst, wenn der Abgleich mit EOS (Prognose-Push
+ * mit Steuerzeitraum, Config-Sync mit Akku) durch ist — ctx.eosAfterSave,
+ * gesetzt von ctx.saveAndApplyConfig. Sonst rechnete der angestoßene Lauf mit
+ * altem Steuerzeitraum bzw. Akku (Gegenprüfung ae4e76f6). Ein fehlgeschlagener
+ * Abgleich hält den Neuplan nicht auf.
+ */
+export function requestEosReplanAfterSave(ctx, reason = 'config') {
+  const run = () => { ctx?.optimizerService?.requestEosReplan?.(reason); };
+  const pending = ctx?.eosAfterSave;
+  if (pending && typeof pending.then === 'function') return pending.then(run, run);
+  run();
+  return Promise.resolve();
+}
+
 export function createApiRoutes(ctx) {
   // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
   // gleichzeitig, weggeklickte überspringen, gleiche Anfragen nur einmal.
@@ -2988,7 +3003,7 @@ export function createApiRoutes(ctx) {
     json, downloadJson, readJsonBody,
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
     requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback,
-    actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, ALLOWED_CONFIG_ROOTS,
+    actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, requestEosReplanAfterSave, ALLOWED_CONFIG_ROOTS,
   });
   const adminRoutes = createAdminRoutes({
     ctx, getCfg, pushLog,
