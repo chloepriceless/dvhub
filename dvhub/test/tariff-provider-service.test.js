@@ -394,3 +394,39 @@ test('Ablage: Datenbank nicht lesbar → nicht schreiben, beim nächsten Abruf n
   await new Promise((r) => setImmediate(r));
   assert.equal(written.length, 96);
 });
+
+// Gegenprüfung c7263d78 (P3): ein später geglücktes Laden aus der Datenbank
+// überschreibt die frisch abgerufenen Preise im Speicher nicht.
+test('Speicher: spätes Laden aus der Datenbank lässt frisch abgerufene Preise stehen', async () => {
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const { ctx, written } = makeCtx();
+  const stored = dayPrices('2026-11-01');
+  const fresh = stored.map((p, i) => (i === 60 ? { ...p, ctKwh: 44.4 } : p));
+  let readable = false;
+  ctx.telemetryStore.listSeriesSamples = async () => {
+    if (!readable) throw new Error('db weg');
+    return stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh }));
+  };
+  const svc = createTariffProviderService(ctx, { now: () => now, fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: fresh }) });
+  await svc.refresh();
+  assert.equal(providerSlotAt(fresh[60].ts).ctKwh, 44.4);
+  readable = true;
+  await svc.loadFromDb();
+  assert.equal(providerSlotAt(fresh[60].ts).ctKwh, 44.4, 'frischer Preis bleibt');
+  assert.equal(providerSlotAt(fresh[10].ts).ctKwh, stored[10].ctKwh);
+  now += HOUR;
+  await svc.refresh();
+  assert.equal(written.length, 1, 'nur der geänderte Slot, mit Vorwert');
+  assert.equal(written[0].meta.previousCtKwh, stored[60].ctKwh);
+});
+
+test('Abruf wartet auf das Schreiben (Auswertung danach sieht die neuen Preise)', async () => {
+  const { ctx, written } = makeCtx();
+  ctx.telemetrySafeWrite = async (fn) => { await new Promise((r) => setTimeout(r, 30)); return fn(); };
+  const svc = createTariffProviderService(ctx, {
+    now: () => Date.parse('2026-11-01T10:00:00Z'),
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: dayPrices('2026-11-01') })
+  });
+  await svc.refresh();
+  assert.equal(written.length, 96);
+});

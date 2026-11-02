@@ -495,7 +495,8 @@ if (typeof globalThis !== 'undefined') {
     serializePricingPeriods,
     validatePricingPeriods,
     tariffProviderStatsText,
-    tariffProviderStatsCacheHit
+    tariffProviderStatsCacheHit,
+    tariffProviderStatsCacheable
   };
 }
 
@@ -3023,8 +3024,16 @@ function tariffProviderBlockHtml(uep) {
 let tariffProviderStatsDays = '30';
 let tariffProviderStatsCache = null;   // { provider, days, at, data }
 
+let tariffProviderStatsSeq = 0;         // nur die jüngste Abfrage wird angezeigt
+
 function tariffProviderStatsCacheHit(cache, provider, days, nowMs) {
   return !!cache && cache.provider === provider && cache.days === days && nowMs - cache.at < 60_000;
+}
+
+// Gilt die Antwort für den angezeigten Anbieter? Die Auswertung rechnet mit dem
+// gespeicherten, der Block zeigt evtl. einen ungespeicherten Entwurf.
+function tariffProviderStatsCacheable(data, provider) {
+  return !!data?.ok && data.provider === provider;
 }
 
 // Auswertung Anbieterpreis ↔ Day-Ahead (Christin 01.11.2026, /api/tariff-provider/stats):
@@ -3089,9 +3098,10 @@ function bindTariffProviderBlock(section, uep) {
     const days = statsDays?.value || '30';
     tariffProviderStatsDays = days;
     statsEl.style.whiteSpace = 'pre-line';
-    // Nur die Antwort zum aktuell gewählten Zeitraum anzeigen (eine langsame
-    // ältere Abfrage überschreibt keine neuere).
-    const showIfCurrent = (data) => { if ((statsDays?.value || '30') === days) statsEl.textContent = tariffProviderStatsText(data); };
+    // Nur die jüngste Abfrage anzeigen (eine langsame ältere überschreibt keine
+    // neuere, auch nicht bei gleichem Zeitraum nach „Jetzt abrufen“).
+    const seq = ++tariffProviderStatsSeq;
+    const showIfCurrent = (data) => { if (seq === tariffProviderStatsSeq) statsEl.textContent = tariffProviderStatsText(data); };
     if (!fresh && tariffProviderStatsCacheHit(tariffProviderStatsCache, statsProvider, days, Date.now())) {
       Promise.resolve(tariffProviderStatsCache.data).then(showIfCurrent);
       return;
@@ -3102,7 +3112,7 @@ function bindTariffProviderBlock(section, uep) {
       .catch(() => null);
     tariffProviderStatsCache = { provider: statsProvider, days, at: Date.now(), data: request };
     request.then((data) => {
-      if (!data?.ok && tariffProviderStatsCache?.data === request) tariffProviderStatsCache = null;
+      if (!tariffProviderStatsCacheable(data, statsProvider) && tariffProviderStatsCache?.data === request) tariffProviderStatsCache = null;
       showIfCurrent(data);
     });
   };
@@ -3461,6 +3471,7 @@ async function saveConfig(config, source = 'settings', opts = {}) {
     setBanner('Konfiguration gespeichert.', 'success');
   }
   await loadHistoryImportStatus();
+  tariffProviderStatsCache = null;   // Anbieter oder Lesart evtl. geändert
   renderSettingsShell();
   return true;
 }

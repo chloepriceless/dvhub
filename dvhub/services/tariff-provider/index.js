@@ -47,6 +47,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Wie weit zurück gemerkt wird, was schon in der Datenbank steht: Die Anbieter
 // liefern heute und morgen, ältere Slots kommen nicht wieder.
 const PERSISTED_KEEP_MS = 3 * DAY_MS;
+const WRITE_WAIT_MS = 10_000;
 const TIME_ZONE = 'Europe/Berlin';
 
 // Ab wann die Preise für morgen da sein sollten (Ortszeit, Minute des Tages).
@@ -231,10 +232,13 @@ export function createTariffProviderService(ctx, deps = {}) {
           if (tsMs >= keepFrom) persisted.set(`${row.source}|${tsMs}`, Number(row.value));
         }
         // Der eingestellte Anbieter zuletzt: Bei doppelten Slots gilt seiner.
+        // Schon in diesem Prozess abgerufene Slots bleiben — sie sind neuer als
+        // die Datenbank (Laden erst nach einem Abruf, z. B. nach Lesefehler).
         const current = settings().name;
+        const inMemory = new Set(providerSlotsBetween(-Infinity, Infinity).map((x) => x.ts));
         let n = 0;
         for (const [source, list] of [...bySource].sort(([a], [b]) => (a === current) - (b === current))) {
-          n += putProviderSlots(source, list);
+          n += putProviderSlots(source, list.filter((x) => !inMemory.has(new Date(x.ts).getTime())));
         }
         st.storedFromDb = n;
         st.dbLoaded = true;
@@ -332,7 +336,15 @@ export function createTariffProviderService(ctx, deps = {}) {
       const result = await clients[s.name](s);
       const slots = result.slots || [];
       putProviderSlots(s.name, slots);
-      writeSamples(s.name, slots, s.priceBasis === 'net_energy' ? 'net_energy' : 'gross_total');
+      // Auf das Schreiben warten (höchstens WRITE_WAIT_MS), damit eine Auswertung
+      // direkt nach „Jetzt abrufen“ die neuen Preise sieht; eine hängende
+      // Datenbank hält den Abruf nicht auf.
+      const write = writeSamples(s.name, slots, s.priceBasis === 'net_energy' ? 'net_energy' : 'gross_total');
+      if (write) {
+        let waitTimer;
+        await Promise.race([write, new Promise((resolve) => { waitTimer = setTimeout(resolve, WRITE_WAIT_MS); waitTimer.unref?.(); })]);
+        clearTimeout(waitTimer);
+      }
       failures = 0;
       lastSuccessMs = now();
       st.lastSuccessAt = new Date(lastSuccessMs).toISOString();

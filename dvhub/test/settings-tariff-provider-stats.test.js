@@ -59,3 +59,13 @@ test('Zwischenspeicher: Anbieter und Zeitraum gehören zum Schlüssel', () => {
   assert.equal(tariffProviderStatsCacheHit(cache, 'tibber', '30', 1_061_000), false, 'nach einer Minute');
   assert.equal(tariffProviderStatsCacheHit(null, 'tibber', '30', 1_030_000), false);
 });
+
+// Gegenprüfung c7263d78 (P3): eine Antwort für einen anderen Anbieter als den
+// angezeigten (ungespeicherter Entwurf) wird nicht zwischengespeichert.
+test('Zwischenspeicher: nur gültige Antworten des angezeigten Anbieters', () => {
+  const { tariffProviderStatsCacheable } = loadHelpers();
+  assert.equal(tariffProviderStatsCacheable({ ok: true, provider: 'tibber' }, 'tibber'), true);
+  assert.equal(tariffProviderStatsCacheable({ ok: true, provider: 'tibber' }, 'lichtblick'), false);
+  assert.equal(tariffProviderStatsCacheable({ ok: false, code: 'no_store' }, 'tibber'), false);
+  assert.equal(tariffProviderStatsCacheable(null, 'tibber'), false);
+});
