@@ -5,6 +5,7 @@ import { scrubStoredPlaceholders } from './config-redaction.js';
 import { sanitizeBatteryStages, resolveCurrentBatteryCapacityWh } from './battery-stages.js';
 import { localDate as fastLocalDate, localMinutesOfDay as fastLocalMinutesOfDay } from './tz-fast.js';
 import { POWER_LIMIT_DEFAULTS } from './services/power-limits.js';
+import { SETPOINT_FOLLOW_DEFAULTS } from './services/setpoint-follow-watchdog.js';
 import { providerImportPriceCtKwh, PROVIDER_NAMES, PRICE_BASES } from './services/tariff-provider/provider-pricing.js';
 
 // Plan 09-01 (D-03): canonical minimum apiToken length floor. Re-exported here
@@ -373,10 +374,6 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   // beiden Timing-Felder — die Settings-Felder dafür waren bisher wirkungslos.
   if (isPlainObject(persistedVictron.freezeWatchdog)) victronOverride.freezeWatchdog = persistedVictron.freezeWatchdog;
   if (isPlainObject(persistedVictron.mqttCrossCheck)) victronOverride.mqttCrossCheck = persistedVictron.mqttCrossCheck;
-  // Entlade-Wächter (setpoint-follow-watchdog): dieselbe Klasse — ohne Durchreichung
-  // waren `enabled`, `minSuspectShare` usw. auf jeder Box mit Profil wirkungslos
-  // (Gegenprüfung 0e71c5f6, P2).
-  if (isPlainObject(persistedVictron.setpointWatchdog)) victronOverride.setpointWatchdog = persistedVictron.setpointWatchdog;
   if (persistedVictron.telemetryMaxAgeMs != null) victronOverride.telemetryMaxAgeMs = persistedVictron.telemetryMaxAgeMs;
   if (persistedVictron.modbusConnectTimeoutMs != null) victronOverride.modbusConnectTimeoutMs = persistedVictron.modbusConnectTimeoutMs;
   // Issue #5 + #13: dieselbe Klasse wie freezeWatchdog oben. acPvSource beschreibt
@@ -2858,6 +2855,69 @@ function buildFieldDefinitions() {
       step: 1,
       help: 'Gilt nur, wenn du im Leitstand von Hand dauerhaft Entladen eingestellt hast (ohne Ablaufzeit): unter diesem Ladestand hält DVhub an, damit der Akku nicht bis zum Mindest-Ladestand des Wechselrichters leerläuft. Standard 10 %.'
     },
+    // Entlade-Wächter (services/setpoint-follow-watchdog.js, Christin 02.11.2026):
+    // für alle Kunden, herstellerneutral unter monitoring.* (alter Pfad
+    // victron.setpointWatchdog zieht beim Laden um, migrateSetpointWatchdog).
+    // Schalter sichtbar bei „Meine Anlage“, Schwellen unter „Erweitert“.
+    {
+      section: 'system',
+      group: 'setpointWatchdog',
+      groupLabel: 'Entlade-Wächter',
+      groupDescription: 'Meldet, wenn der Akku nicht entlädt, obwohl DVhub es vorgibt. Reine Meldung — der Wächter steuert nichts.',
+      groupOrder: 25,
+      path: 'monitoring.setpointWatchdog.enabled',
+      label: 'Entlade-Wächter',
+      type: 'boolean',
+      help: 'Meldet sich, wenn der Speicher nicht entlädt, obwohl DVhub es vorgibt: Die Anlage bezieht über 10 Minuten (einstellbar unter „Erweitert“) deutlich mehr Strom aus dem Netz, als der Netz-Sollwert erlaubt, der Akku liegt klar über seiner Untergrenze und gibt trotzdem nichts ab. Dann schreibt DVhub einen Eintrag ins Protokoll, schickt eine Nachricht aufs Handy (wenn unter Integrationen → Notifications ein Kanal eingerichtet ist) und meldet eine Störung an Uptime Kuma (wenn unter Integrationen → Notifications → Uptime-Kuma eine Push-URL hinterlegt ist). Sobald der Akku wieder folgt, kommt eine Entwarnung. Keine Meldung, solange der Akku gewollt steht: an der Untergrenze, bei gesetzter Entlade-Sperre oder wenn EOS ihn hält. Der Wächter meldet nur — er steuert nichts und greift nicht in die Regelung ein; die Ursache liegt an der Anlage. Er arbeitet, wo DVhub einen Netz-Sollwert vorgibt und zurückliest (Victron, Universal MQTT); Profile ohne Netz-Sollwert (Fronius, Deye) liefern ihm keine Werte, dort bleibt er still. Standard: an.'
+    },
+    {
+      section: 'system',
+      group: 'setpointWatchdogTuning',
+      groupLabel: 'Entlade-Wächter: Schwellen',
+      groupDescription: 'Ab wann der Entlade-Wächter meldet. Höhere Werte = weniger Meldungen, aber ein echter Ausfall fällt später auf.',
+      groupOrder: 82,
+      visibleWhenPath: { path: 'monitoring.setpointWatchdog.enabled', equals: true },
+      path: 'monitoring.setpointWatchdog.holdMinutes',
+      label: 'Dauer bis zur Meldung (Minuten)',
+      type: 'number',
+      default: SETPOINT_FOLLOW_DEFAULTS.holdMs / 60000,
+      min: 1,
+      max: 120,
+      step: 1,
+      help: 'So lange muss der Akku am Stück nicht folgen, bevor der Wächter meldet — fast alle Messpunkte in dieser Zeit müssen auffällig sein. Kurze Laststöße (Wallbox, Wärmepumpe) lösen deshalb nichts aus. Bei langsamer Abfrage der Anlage gelten mindestens sechs Abfragen (z. B. 6 Minuten bei 60 s). Standard: 10 Minuten.'
+    },
+    {
+      section: 'system',
+      group: 'setpointWatchdogTuning',
+      groupLabel: 'Entlade-Wächter: Schwellen',
+      groupDescription: 'Ab wann der Entlade-Wächter meldet. Höhere Werte = weniger Meldungen, aber ein echter Ausfall fällt später auf.',
+      groupOrder: 82,
+      visibleWhenPath: { path: 'monitoring.setpointWatchdog.enabled', equals: true },
+      path: 'monitoring.setpointWatchdog.minImportW',
+      label: 'Mindest-Netzbezug (W)',
+      type: 'number',
+      default: SETPOINT_FOLLOW_DEFAULTS.minImportW,
+      min: 0,
+      max: 20000,
+      step: 50,
+      help: 'Erst ab diesem Netzbezug gilt ein Messpunkt als auffällig. Darunter ist es Regelrauschen am Zählpunkt, kein Ausfall. Standard: 300 W.'
+    },
+    {
+      section: 'system',
+      group: 'setpointWatchdogTuning',
+      groupLabel: 'Entlade-Wächter: Schwellen',
+      groupDescription: 'Ab wann der Entlade-Wächter meldet. Höhere Werte = weniger Meldungen, aber ein echter Ausfall fällt später auf.',
+      groupOrder: 82,
+      visibleWhenPath: { path: 'monitoring.setpointWatchdog.enabled', equals: true },
+      path: 'monitoring.setpointWatchdog.minShortfallW',
+      label: 'Mindest-Abweichung vom Sollwert (W)',
+      type: 'number',
+      default: SETPOINT_FOLLOW_DEFAULTS.minShortfallW,
+      min: 50,
+      max: 20000,
+      step: 50,
+      help: 'Um so viel muss der Netzbezug über dem Netz-Sollwert liegen. Gleichzeitig gilt eine Entladegrenze unter diesem Wert als gewollte Sperre — dann meldet der Wächter nicht. Standard: 500 W.'
+    },
     {
       section: 'schedule',
       group: 'optimization',
@@ -4574,7 +4634,14 @@ export function createDefaultConfig() {
       // Plan 08-05 Task 1: optional HMAC-SHA256 signing key for outbound
       // heartbeat. Empty string = heartbeat ships as `x-dvhub-signature: unsigned`
       // (backward compatible). When set, the receiver can verify origin.
-      signingKey: ''
+      signingKey: '',
+      // Entlade-Wächter (services/setpoint-follow-watchdog.js): meldet, wenn der
+      // Speicher trotz Sollwert nicht entlädt — nur Meldung, kein Eingriff.
+      // Herstellerneutral hier statt unter victron.* (02.11.2026); die
+      // Schwellen bleiben leer = Standard aus SETPOINT_FOLLOW_DEFAULTS.
+      setpointWatchdog: {
+        enabled: SETPOINT_FOLLOW_DEFAULTS.enabled
+      }
     },
     dcExportMode: {
       enabled: false,
@@ -5869,9 +5936,35 @@ function sanitizeParagraph14aDevices(list, warnings) {
   return out.slice(0, 50);
 }
 
+// Entlade-Wächter (02.11.2026): der alte Pfad victron.setpointWatchdog zieht
+// nach monitoring.setpointWatchdog um. Unter einem Herstellerprofil kam er nie
+// an (das Profil ersetzt victron.*), trotzdem darf kein gespeicherter Wert
+// verloren gehen: fehlende Schlüssel am neuen Ort werden übernommen, das
+// Fenster von ms in Minuten (Feld der Einstellungen), dann ist der alte weg.
+function migrateSetpointWatchdog(raw) {
+  const legacy = raw?.victron?.setpointWatchdog;
+  if (legacy === undefined) return;
+  // Kaputtes monitoring (kein Objekt): alten Wert lieber stehen lassen.
+  if (raw.monitoring != null && !isPlainObject(raw.monitoring)) return;
+  delete raw.victron.setpointWatchdog;
+  if (!isPlainObject(legacy)) return;
+  raw.monitoring ??= {};
+  const target = isPlainObject(raw.monitoring.setpointWatchdog) ? raw.monitoring.setpointWatchdog : {};
+  for (const [key, value] of Object.entries(legacy)) {
+    if (key === 'holdMs' || key === 'holdMinutes') continue;
+    if (!(key in target)) target[key] = value;
+  }
+  if (!('holdMinutes' in target) && !('holdMs' in target)) {
+    if (legacy.holdMinutes != null) target.holdMinutes = legacy.holdMinutes;
+    else if (legacy.holdMs != null && Number.isFinite(Number(legacy.holdMs))) target.holdMinutes = Number(legacy.holdMs) / 60000;
+  }
+  raw.monitoring.setpointWatchdog = target;
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
+  migrateSetpointWatchdog(raw);
   // Sweep package 6: shape-level schema checks run FIRST, on the raw parsed
   // config — before the FIELD_DEFINITIONS coercion pass below, which would
   // otherwise silently string-coerce a wrong-typed scalar (e.g. a numeric
@@ -6412,8 +6505,8 @@ const SETTINGS_AREAS = [
     label: 'Meine Anlage',
     icon: '⌂',
     description: 'Wechselrichter, Akku, PV und Standort — was DVhub über deine Anlage wissen muss.',
-    groups: ['connection', 'batteryLimits', 'pv', 'location'],
-    advanced: ['mqttBridge', 'deviceAlarms', 'freezeWatchdog', 'mqttCrossCheck', 'secondGx'],
+    groups: ['connection', 'batteryLimits', 'setpointWatchdog', 'pv', 'location'],
+    advanced: ['mqttBridge', 'deviceAlarms', 'freezeWatchdog', 'setpointWatchdogTuning', 'mqttCrossCheck', 'secondGx'],
     editors: ['batteryStages', 'forecastStrings']
   },
   {

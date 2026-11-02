@@ -35,6 +35,15 @@
 //
 // REAKTION: nur melden (Protokoll + Push aufs Handy), nichts steuern.
 //
+// EINSTELLUNG + HERSTELLER (02.11.2026): Schalter und Schwellen unter
+// monitoring.setpointWatchdog (Einstellungen → Meine Anlage), alter Pfad
+// victron.setpointWatchdog als Rückfall. Der Wächter urteilt nur mit frischem
+// Netz-Sollwert, Akku-Leistung und Ladestand — Profile ohne Netz-Sollwert
+// (Fronius, Deye) liefern keinen, dort ruht er. Victron-Zusatzsignale sind
+// optional: aktive SoC-Grenze (2903) nur, wenn gepollt; Reg. 2720 und die
+// 2704-Mehrdeutigkeit nur bei manufacturer 'victron'. Meldet eine Quelle gar
+// keine Untergrenze (MQTT), gilt optimizer.hardFloorSocPct.
+//
 // FEHLALARM 31.10.2026 12:32 (und 20.10., 22.10., 30.10.): EOS „Akku halten“
 // (schedule-eval, Quelle eos_grid_hold) stellte den Sollwert jeden Takt auf
 // Live-Last − PV − Puffer; der Akku soll dabei stehen. Mit einem E-Auto (11 kW)
@@ -72,8 +81,27 @@ function numOr(value, fallback, min = -Infinity) {
   return Number.isFinite(n) && n >= min ? n : fallback;
 }
 
+function plain(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+// Fenster in ms aus einer Quelle: Minuten (Einstellungen) vor Millisekunden.
+function holdMsFrom(w) {
+  if (w.holdMinutes != null && w.holdMinutes !== '' && Number.isFinite(Number(w.holdMinutes))) return Number(w.holdMinutes) * 60000;
+  return w.holdMs;
+}
+
+/**
+ * Einstellungen des Wächters. Herstellerneutral unter
+ * `monitoring.setpointWatchdog` (Einstellungen → Meine Anlage, 02.11.2026);
+ * der alte Pfad `victron.setpointWatchdog` gilt als Rückfall je Schlüssel. Die
+ * Konfiguration zieht ihn beim Laden ohnehin um (config-model.js) — unter einem
+ * Herstellerprofil kam er hier nie an, das Profil ersetzt victron.*.
+ */
 export function resolveSetpointFollowOptions(cfg = {}) {
-  const w = cfg?.victron?.setpointWatchdog || {};
+  const legacy = plain(cfg?.victron?.setpointWatchdog);
+  const current = plain(cfg?.monitoring?.setpointWatchdog);
+  const w = { ...legacy, ...current, holdMs: holdMsFrom(current) ?? holdMsFrom(legacy) };
   const d = SETPOINT_FOLLOW_DEFAULTS;
   return {
     enabled: w.enabled !== false,
@@ -112,7 +140,12 @@ function pct(value) {
  */
 export function dischargeFloorPct(sample, opts) {
   const known = [pct(sample?.minSocPct), pct(sample?.activeSocLimitPct)].filter((n) => n != null);
-  return known.length ? Math.max(...known) : opts.fallbackMinSocPct;
+  if (known.length) return Math.max(...known);
+  // Meldet die Anlage keine Untergrenze (MQTT-Quellen ohne Mindest-SoC), ist
+  // DVhubs eigene „Untergrenze Sicherheit“ die beste Schätzung — sie soll laut
+  // Einstellung nicht unter dem Mindest-Ladestand des Wechselrichters liegen.
+  const configured = pct(sample?.configuredFloorPct);
+  return configured != null ? Math.max(configured, opts.fallbackMinSocPct) : opts.fallbackMinSocPct;
 }
 
 function holdSignalMaxAgeMs(cfg) {
@@ -165,6 +198,13 @@ function ownZeroWrite(state) {
   return lw != null && Number(lw.value) === 0;
 }
 
+// Die 2704-Mehrdeutigkeit gibt es nur am Victron-GX über Modbus. Über MQTT
+// kommt der D-Bus-Wert (−1 eindeutig), und fremde Geräte haben ihre eigene
+// Kodierung — dort ist eine gelesene 0 eine Sperre (Gegenprüfung 57e65bac).
+export function isVictronModbus(cfg) {
+  return String(cfg?.manufacturer || 'victron') === 'victron' && cfg?.victron?.transport !== 'mqtt';
+}
+
 /**
  * Entlade-Sperre in W, soweit belastbar bekannt, in dieser Reihenfolge:
  * 1. eigene eindeutige Rücklesung des Wächters (ownRead aus 2720 bzw. MQTT),
@@ -172,8 +212,8 @@ function ownZeroWrite(state) {
  * 3. eigene Rücklesung aus 2704 (Rückfall alter GX),
  * 4. DVhubs eigener Schreibwert — nur befristet, an der GX kann die Sperre
  *    längst wieder aufgehoben sein.
- * Eine 0 aus 2704 (2. und 3.) zählt nur mit eigenem 0-Write — sie ist von −1
- * (unbegrenzt) nicht zu unterscheiden.
+ * Eine 0 aus 2704 (2. und 3.) zählt am Victron (Modbus) nur mit eigenem
+ * 0-Write — sie ist von −1 (unbegrenzt) nicht zu unterscheiden.
  */
 export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = null) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
@@ -182,7 +222,8 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
   // Eindeutiger Wert (2720 bzw. MQTT) geht vor — auch vor einer 2704-0 mit
   // alter eigener 0 (an der GX kann längst −1 stehen, Gegenprüfung 0ff2eb8d).
   if (ownOk && !ownRead.ambiguousZero) return Number(ownRead.value);
-  if (known && known.from !== 'own_write' && (Number(known.value) !== 0 || ownZeroWrite(state))) return known.value;
+  if (known && known.from !== 'own_write'
+      && (Number(known.value) !== 0 || ownZeroWrite(state) || !isVictronModbus(cfg))) return known.value;
   if (ownOk && ownZeroWrite(state)) return Number(ownRead.value);
   if (known && known.from === 'own_write' && isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return known.value;
   return null;
@@ -193,7 +234,7 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
 function reliesOnAmbiguousZero(state, cfg, nowMs) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
   // Ohne eigenen 0-Write entschuldigt eine 2704-0 ohnehin nichts (7b1613f5).
-  return !!known && known.from !== 'own_write' && Number(known.value) === 0 && ownZeroWrite(state);
+  return isVictronModbus(cfg) && !!known && known.from !== 'own_write' && Number(known.value) === 0 && ownZeroWrite(state);
 }
 
 /**
@@ -418,6 +459,10 @@ export function createSetpointFollowWatchdog(ctx) {
   let capReadPending = false;
   let no2720 = false;           // GX kennt Reg. 2720 nicht → 2704
 
+  // Reg. 2720 und die 2704-Mehrdeutigkeit gibt es nur am Victron-GX. Auf
+  // fremder Modbus-Hardware hat 2720 eine ganz andere Bedeutung — dort wird nur
+  // die im Profil verdrahtete Adresse gelesen (02.11.2026, isVictronModbus).
+
   function capReadable(cfg) {
     const conf = cfg?.controlWrite?.maxDischargeW;
     const t = ctx.transport;
@@ -437,7 +482,8 @@ export function createSetpointFollowWatchdog(ctx) {
     // 2704 ohne eigenen 0-Write ist keine (sonst Dauerlesen, 0ff2eb8d).
     const capBlock = capRead && !capRead.error && Number(capRead.value) >= 0 && Number(capRead.value) < opts.minShortfallW
       && !(capRead.ambiguousZero && !ownZeroWrite(state));
-    const crossCheck = !no2720 && ctx.transport.type !== 'mqtt' && reliesOnAmbiguousZero(state, cfg, nowMs);
+    const victron = isVictronModbus(cfg);
+    const crossCheck = victron && !no2720 && ctx.transport.type !== 'mqtt' && reliesOnAmbiguousZero(state, cfg, nowMs);
     if (!suspicious && !capBlock && !crossCheck) return;
     capReadPending = true;
     capReadStartedAt = nowMs;
@@ -448,7 +494,7 @@ export function createSetpointFollowWatchdog(ctx) {
         // MQTT liefert den D-Bus-Wert in W, −1 eindeutig.
         return { value: Number((await ctx.transport.readPoint('maxDischargeW'))?.mqttValue), ambiguousZero: false };
       }
-      if (!no2720) {
+      if (victron && !no2720) {
         try {
           const regs = await ctx.transport.mbRequest({ fc: 3, ...target, address: MAX_DISCHARGE_INT32_ADDR, quantity: 2 });
           if (!Array.isArray(regs) || regs.length < 2 || !regs.slice(0, 2).every((w) => Number.isFinite(Number(w)))) {
@@ -469,7 +515,7 @@ export function createSetpointFollowWatchdog(ctx) {
       const regs = await ctx.transport.mbRequest({ fc: 3, ...target, address: conf.address, quantity: 1 });
       if (!Array.isArray(regs) || regs.length < 1 || !Number.isFinite(Number(regs[0]))) throw new Error('2704: unvollständige Antwort');
       const raw = Number(regs[0]) & 0xffff;
-      return { value: decodeMaxDischargeRaw(raw, conf), ambiguousZero: raw === 0 };
+      return { value: decodeMaxDischargeRaw(raw, conf), ambiguousZero: victron && raw === 0 };
     }).then(({ value, ambiguousZero }) => {
       capRead = value == null || !Number.isFinite(value)
         ? { value: null, at: nowMs, error: 'Entladegrenze: kein gültiger Wert' }
@@ -493,6 +539,10 @@ export function createSetpointFollowWatchdog(ctx) {
     // Punkte selbst schon um maxAgeMs auseinander (Gegenprüfung 39bbcd6e).
     const pollMs = Number(cfg.meterPollMs);
     opts.gapMs = Math.max(opts.maxAgeMs, Number.isFinite(pollMs) && pollMs > 0 ? 3 * pollMs : 0);
+    // Jedes Fensterviertel braucht einen Messpunkt: bei langsamem Takt und
+    // kurzer Dauer (z. B. 60 s Poll, 1 min) bliebe ein Viertel leer und der
+    // Alarm käme nie. Darum mindestens sechs Abfragen (Gegenprüfung 57e65bac).
+    if (Number.isFinite(pollMs) && pollMs > 0) opts.holdMs = Math.max(opts.holdMs, 6 * pollMs);
     const v = state.victron || {};
     // Nur wo DVhub selbst steuert; bei eingefrorenen Live-Daten meldet der
     // Einfrier-Wächter, die Werte hier wären dann nicht belastbar.
@@ -523,6 +573,8 @@ export function createSetpointFollowWatchdog(ctx) {
       // Aktive SoC-Grenze (Reg. 2903) nur frisch: sie wandert mit BatteryLife,
       // ein alter hoher Wert würde echte Alarme verschlucken.
       activeSocLimitPct: live('activeSocLimitPct'),
+      // Rückfall, wenn die Anlage gar keine Untergrenze meldet (MQTT-Quellen).
+      configuredFloorPct: cfg.optimizer?.hardFloorSocPct,
       holdReason: activeDischargeHold(state, nowMs, cfg),
       // Entlade-Sperre (Reg. 2704): Rücklesung, sonst DVhubs eigener letzter
       // Schreibwert, dieser nur befristet.
