@@ -755,7 +755,7 @@ export function createLicenseService(ctx) {
   }
 
   async function activateLicense(rawKey) {
-    const prevProActive = isProActive();
+    const prevProActive = lastProActive ?? isProActive();
     emitHold += 1;
     try {
       return await activateLicenseInner(rawKey);
@@ -862,7 +862,14 @@ export function createLicenseService(ctx) {
     // nur 409 machine_slot_taken sperrt Pro (Strix L-0002/L-0005).
     const fail = (out) => {
       const prev = isProActive();
-      if (out.error === BIND_BLOCK_SLOT_TAKEN) state.license.bind_block = BIND_BLOCK_SLOT_TAKEN;
+      // Sperre nur mit Nachweis einer ANDEREN Box: der Proxy nennt deren
+      // Fingerprint. Ohne (Keygen-422/409 beim Anlegen) oder mit dem eigenen
+      // (zwei gleichzeitige Bindungen dieser Box) nur Hinweis — Bestandsschutz
+      // T-0125 „A“ (Gegenprüfung zu 37314002).
+      const otherFp = typeof out.boundFingerprint === 'string' ? out.boundFingerprint.toLowerCase() : '';
+      if (out.error === BIND_BLOCK_SLOT_TAKEN && otherFp && otherFp !== applianceId) {
+        state.license.bind_block = BIND_BLOCK_SLOT_TAKEN;
+      }
       setBindError(out.error);
       persistState();
       emitProActiveChange(prev);   // DV/EOS stoppen live, wenn die Sperre Pro abschaltet
@@ -964,7 +971,10 @@ export function createLicenseService(ctx) {
    * without any fetch.
    */
   async function revalidateLicense() {
-    const prevProActive = isProActive();
+    // Zuletzt GEMELDETER Zustand, nicht der aktuelle: ist die Offline-Kulanz
+    // inzwischen abgelaufen, wäre isProActive() schon false und der Wechsel
+    // käme nie bei DV/EOS an (Gegenprüfung zu 37314002).
+    const prevProActive = lastProActive ?? isProActive();
     emitHold += 1;
     try {
       return await revalidateLicenseInner();
@@ -1554,11 +1564,13 @@ export function createLicenseService(ctx) {
   function setStatusForTest(s) {
     if (!VALID_STATUSES.has(s)) throw new Error(`invalid test status: ${s}`);
     state.license.status = s;
+    lastProActive = null;   // Test-Seam am Melde-Weg vorbei → kein bekannter Stand
   }
 
   /** @internal — used by Plan 03 poller-tests to simulate a persisted key. */
   function setLicenseKeyForTest(k) {
     state.license.license_key = k == null ? null : String(k);
+    lastProActive = null;
   }
 
   /** @internal — Zeitpunkt der letzten erfolgreichen Online-Prüfung (Strix-L-0001-Tests). */

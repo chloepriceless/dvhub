@@ -2522,7 +2522,7 @@ function buildFieldDefinitions() {
       label: 'Adresse des Rechendienstes',
       type: 'text',
       empty: 'blank',
-      help: 'Die Adresse bekommst du mit der Freischaltung. Nur https (http nur im eigenen Netz).'
+      help: 'Die Adresse bekommst du mit der Freischaltung (https://….dvhub.de). Andere Adressen nimmt DVhub nicht an, weil dorthin dein Lizenznachweis geht.'
     },
     {
       section: 'schedule',

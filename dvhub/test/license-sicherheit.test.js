@@ -322,3 +322,39 @@ test('L-0005: Aktivierung mit belegtem Slot startet DV/EOS nicht kurz an und wie
   await withServers({ proxy: okProxy() }, async () => { await b.svc.activateNodeLock(); });
   assert.deepEqual(seen, [true], 'Binden schaltet live frei');
 });
+
+// Gegenprüfung zu 37314002 (P2): Läuft die Offline-Kulanz eines unsignierten
+// Schlüssels ab, während die Box läuft, müssen DV/EOS das beim nächsten
+// (gescheiterten) Revalidate erfahren — sonst bleibt der Modbus-Port offen.
+test('L-0001: Ablauf der Offline-Kulanz zur Laufzeit schaltet DV/EOS ab (Revalidate offline)', async () => {
+  const b = box({ persisted: { status: 'active', license_key: 'DVHB-LEGACY-AAAA', license_id: 'lic-1', last_check_ok_at: new Date(Date.now() - 13 * DAY).toISOString() } });
+  assert.equal(b.svc.isProActive(), true);
+  const seen = [];
+  b.svc.onProActiveChange((v) => seen.push(v));
+  b.svc.setLastCheckOkForTest(new Date(Date.now() - 15 * DAY).toISOString());   // Zeit vergeht
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  try { await b.svc.revalidateLicense(); } finally { globalThis.fetch = real; }
+  assert.equal(b.svc.isProActive(), false);
+  assert.deepEqual(seen, [false]);
+});
+
+// Gegenprüfung zu 37314002 (P2): 409 ohne Nachweis einer ANDEREN Box (der Proxy
+// meldet bei einem Keygen-422/409 im Anlegen keinen Fingerprint) sperrt nicht.
+test('L-0005: 409 ohne fremden Fingerprint sperrt nicht, nur Hinweis', async () => {
+  const b = box({ applianceId: 'box-b' });
+  await withServers({ proxy: () => [409, { ok: false, code: 'machine_slot_taken' }] }, async () => {
+    await b.svc.activateLicense(KEY);
+  });
+  assert.equal(b.svc.isProActive(), true);
+  assert.equal(b.svc.getState().binding.state, 'unbound');
+  assert.equal(b.svc.getState().binding.error, 'machine_slot_taken');
+});
+
+test('L-0005: 409 mit dem EIGENEN Fingerprint (gleichzeitiges Binden) sperrt nicht', async () => {
+  const b = box({ applianceId: 'box-b' });
+  await withServers({ proxy: () => [409, { ok: false, code: 'machine_slot_taken', boundFingerprint: 'box-b' }] }, async () => {
+    await b.svc.activateLicense(KEY);
+  });
+  assert.equal(b.svc.isProActive(), true);
+});

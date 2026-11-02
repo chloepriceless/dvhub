@@ -28,7 +28,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { EOS_REMOTE_PROFILE, EOS_REMOTE_DEVICE_TEMPLATES } from './eos-remote-profile.js';
 import { EOS_RUN_TIMEOUT_MS } from './eos-run-trigger.js';
-import { classifyHost, isPrivateOrLoopbackHost, requestHostname } from '../host-address.js';
+import { classifyHost, requestHostname } from '../host-address.js';
 
 // Die Pfade, die der Dienst annimmt — in der Reihenfolge, in der EOS sie
 // braucht. Alles andere (ems/interval, ems/mode, measurement/historic_hours,
@@ -102,21 +102,6 @@ export function remoteSettings(cfg) {
   };
 }
 
-/**
- * Darf DVhub diese Adresse als Rechendienst ansprechen? https zu jedem Host,
- * http nur im eigenen Netz (Test, Runner im LAN). Keine Zugangsdaten in der URL
- * — die Box schickt dorthin ihren Lizenzschlüssel.
- */
-export function isAllowedRemoteEndpoint(raw) {
-  let u;
-  try { u = new URL(String(raw || '').trim()); } catch { return false; }
-  if (u.username || u.password) return false;
-  if (u.protocol === 'https:') return true;
-  // Eine Definition von „eigenes Netz“ für alle Prüfungen (host-address.js,
-  // kennt auch IPv6 in Klammern und IPv4-gemappte Adressen).
-  return u.protocol === 'http:' && isPrivateOrLoopbackHost(u.hostname);
-}
-
 // Strix L-0006 (Geschwister-Weg, 30.10.2026): zu jedem Auftrag gehen
 // Lizenzschlüssel und Machine-File an den Rechendienst. Dessen Adresse ist
 // eine normale Einstellung — wer /api/config schreiben darf (unter
@@ -144,6 +129,17 @@ export function isTrustedProofEndpoint(raw, extraHosts = trustedHostsFromEnv()) 
   const host = u.hostname.toLowerCase().replace(/\.$/, '');
   if (host === TRUSTED_PROOF_DOMAIN || host.endsWith(`.${TRUSTED_PROOF_DOMAIN}`)) return true;
   return extraHosts.includes(host);
+}
+
+/**
+ * Darf DVhub diese Adresse als Rechendienst speichern? Dieselbe Regel wie beim
+ * Senden (isTrustedProofEndpoint) — jeder Aufruf trägt Token oder Lizenz, eine
+ * andere Adresse liefe nie (Gegenprüfung zu 23c3962c, P3). Ein Rechendienst im
+ * eigenen Netz geht nur über DVHUB_EOS_REMOTE_TRUSTED_HOSTS mit https und
+ * öffentlichem Namen.
+ */
+export function isAllowedRemoteEndpoint(raw) {
+  return isTrustedProofEndpoint(raw);
 }
 
 /** EOS-Stand, den diese DVhub-Fassung erwartet (eos-version.env, EOS_PIN). */
@@ -355,6 +351,12 @@ export function createEosRemoteFacade({
   // ------------------------------------------------------------- Dienst
 
   async function call(rs, method, p, { token, body, timeoutMs = 30_000 } = {}) {
+    // Jeder Aufruf trägt Token oder Lizenznachweis — keiner geht an eine nicht
+    // vertrauenswürdige Adresse (Gegenprüfung zu 23c3962c: der Diagnose-Abruf
+    // lief an der Prüfung in runRemote vorbei).
+    if (!proofEndpointTrusted(rs.endpoint)) {
+      throw new RemoteError('endpoint_not_trusted', 'Rechendienst-Adresse nicht freigegeben (nur https://….dvhub.de)');
+    }
     const headers = { Accept: 'application/json' };
     let payload;
     if (body !== undefined) {
@@ -636,6 +638,8 @@ export function createEosRemoteFacade({
       const jobId = state?.optimizer?.eosRemote?.lastJobId;
       const rs = remoteSettings(getCfg());
       if (!jobId || !rs.endpoint || !rs.token) return null;
+      // Token nur an die Adresse, für die es ausgegeben wurde.
+      if (rs.tokenEndpoint && rs.tokenEndpoint !== rs.endpoint) return null;
       const r = await call(rs, 'GET', `/v1/jobs/${encodeURIComponent(jobId)}/debug`, { token: rs.token });
       if (r.status !== 200 || !isObj(r.json?.bundle)) return null;
       return { jobId, bundle: r.json.bundle };

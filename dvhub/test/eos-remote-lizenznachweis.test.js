@@ -71,3 +71,19 @@ describe('EOS-Fernbetrieb: Lizenznachweis nur an vertrauenswürdige Dienst-Adres
     assert.equal(isTrustedProofEndpoint('https://192.168.1.20', ['192.168.1.20']), false, 'intern bleibt verboten');
   });
 });
+
+// Gegenprüfung zu 23c3962c (P2): auch der Diagnose-Abruf trägt das Token der
+// Box — er darf ebenfalls nur an eine vertrauenswürdige Adresse gehen.
+describe('EOS-Fernbetrieb: kein Aufruf mit Token an nicht vertrauenswürdige Adressen', () => {
+  it('Diagnose-Abruf an fremde Adresse schickt nichts', async () => {
+    const sent = [];
+    const cfg = { optimizer: { eosProxy: { enabled: true, mode: 'remote', remote: { endpoint: 'https://evil.example.net', token: 'dves_echt', tokenEndpoint: '' } } } };
+    const state = { optimizer: { eosRemote: { lastJobId: 'job_1' } } };
+    const facade = createEosRemoteFacade({
+      getCfg: () => cfg, getLicenceProof: () => PROOF, saveToken: async () => {}, state,
+      fetchImpl: async (url, init = {}) => { sent.push({ url: String(url), auth: init.headers?.Authorization }); return { status: 200, headers: { get: () => null }, json: async () => ({}) }; },
+    });
+    await assert.rejects(() => facade.fetchDebugBundle('job_1'));
+    assert.equal(sent.length, 0);
+  });
+});

@@ -246,8 +246,9 @@ export function createConfigRoutes(deps) {
         if (candidate && !isAllowedVehicleUrl(candidate)) return json(res, 400, { ok: false, error });
       }
       // EOS-Rechendienst (Fernbetrieb): DVhub schickt dorthin Lizenzschlüssel
-      // und Prognosen — https zu jedem Host, http nur im eigenen Netz, keine
-      // Zugangsdaten in der URL (eos-remote.js isAllowedRemoteEndpoint).
+      // und Prognosen — nur https unter dvhub.de (oder per Umgebung der Box
+      // freigegeben), nichts Internes, keine Zugangsdaten in der URL
+      // (eos-remote.js isAllowedRemoteEndpoint = isTrustedProofEndpoint, Strix L-0006).
       const candidateRemoteEndpoint = body.config?.optimizer?.eosProxy?.remote?.endpoint;
       if (candidateRemoteEndpoint && !isAllowedRemoteEndpoint(candidateRemoteEndpoint)) {
         return json(res, 400, { ok: false, error: 'invalid_eos_remote_endpoint' });
