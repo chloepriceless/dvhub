@@ -304,6 +304,10 @@ export { MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W };
 // TimescaleDB hypertable + (series_key, ts_utc) index makes 1.5M-row scans
 // sub-second on the production Pi.
 export const MAX_TELEMETRY_SCAN_SLOTS = 1_500_000;
+// Strix H-0003: der nicht gestreamte Weg hält alle Zeilen auf einmal im
+// Web-Prozess (192 MiB) — eigene, kleinere Grenze. Er fasst auf
+// min(maxResolution, 900) s zusammen, also zählt der Wächter genau diese Fenster.
+export const MAX_TELEMETRY_SERIES_ROWS = 200_000;
 // M-3 (Plan 16-03): /api/devices/:id history row cap. 288 = 24h of 5-min
 // readings (24 * 60 / 5). Named so the magic number is self-documenting.
 export const DEVICE_HISTORY_ROW_LIMIT = 288;
@@ -6968,13 +6972,18 @@ export function createApiRoutes(ctx) {
       // maxRes is in SECONDS (maxResolution=900 -> 15 min buckets).
       const startMs = Date.parse(start);
       const endMs = Date.parse(end);
-      const stepMs = Math.max(1, Number(maxRes)) * 1000;
+      const streamed = !!ctx.telemetryStore.iterateSeriesBuckets && STREAM_BUCKET_SECONDS.has(maxRes);
+      // Fenster, auf das die Antwort zusammengefasst wird (H-0003): gestreamt
+      // = maxRes, sonst min(maxRes, 900) — das gibt querySeries als bucketSec.
+      const bucketSec = streamed ? maxRes : Math.min(900, Math.max(1, Math.round(Number(maxRes))));
+      const stepMs = Math.max(1, bucketSec) * 1000;
+      const limit = streamed ? MAX_TELEMETRY_SCAN_SLOTS : MAX_TELEMETRY_SERIES_ROWS;
       const totalSlots = Math.ceil(((Number.isFinite(endMs) ? endMs : 0) - (Number.isFinite(startMs) ? startMs : 0)) / stepMs) * (keys.length || 1);
-      if (!Number.isFinite(totalSlots) || totalSlots < 0 || totalSlots > MAX_TELEMETRY_SCAN_SLOTS) {
+      if (!Number.isFinite(totalSlots) || totalSlots < 0 || totalSlots > limit) {
         return json(res, 400, {
           ok: false,
           error: 'scan_too_large',
-          limit: MAX_TELEMETRY_SCAN_SLOTS,
+          limit,
           requested: Number.isFinite(totalSlots) ? totalSlots : null
         });
       }
@@ -6982,12 +6991,12 @@ export function createApiRoutes(ctx) {
       // und in Zeitfenstern gestreamt — der Speicher hängt dann nicht mehr an
       // der Länge des Zeitraums (7 Tage × 5 s lief vorher in „heap out of
       // memory“). Grobe Abfragen behalten das bisherige Verhalten.
-      if (ctx.telemetryStore.iterateSeriesBuckets && STREAM_BUCKET_SECONDS.has(maxRes)) {
+      if (streamed) {
         await seriesQueue.run({ req, res }, () => streamTelemetrySeries(req, res, { keys, start, end, bucketSec: maxRes }));
         return;
       }
       try {
-        const rows = await ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes });
+        const rows = await ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes, bucketSec });
         return json(res, 200, { ok: true, keys, start, end, total: rows.length, data: rows });
       } catch (e) {
         return json(res, 500, { ok: false, error: e.message });

@@ -1223,3 +1223,42 @@ describe('W1: static file serving never crashes on directories', () => {
     }
   });
 });
+
+// Strix H-0003 (30.10.2026): der Slot-Zähler rechnete mit maxResolution als
+// Schritt, querySeries lieferte aber jede feinere Zeile (Dedup-Fenster =
+// Auflösung der Zeile) und ohne LIMIT — 900 s über 14 Tage 1-s-Rohwerte
+// waren ~1,2 Mio. Zeilen im Web-Prozess. Jetzt fasst die Abfrage auf das
+// Fenster min(maxResolution, 900) zusammen, der Zähler rechnet mit genau dem
+// Fenster und der nicht-gestreamte Weg hat eine eigene, kleinere Grenze.
+describe('H-0003: /api/telemetry/series zählt, was wirklich zurückkommt', () => {
+  async function call(qs) {
+    const seen = [];
+    const ctx = mockCtx({ telemetryStore: { querySeries: async (a) => { seen.push(a); return []; } } });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const p = `/api/telemetry/series?${qs}`;
+    await routes.handleRequest(makeReq('GET', p), res, new URL(`http://localhost${p}`));
+    return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}'), seen };
+  }
+  it('maxResolution=900 → Abfrage in 15-min-Fenstern (bucketSec 900)', async () => {
+    const r = await call('keys=battery_soc_pct&start=2026-10-01T00:00:00Z&end=2026-10-31T00:00:00Z&maxResolution=900');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.seen[0].bucketSec, 900);
+  });
+  it('maxResolution=3600 → Fenster höchstens 900 s, Zähler rechnet mit 900', async () => {
+    const r = await call(`keys=${Array.from({ length: 50 }, (_, i) => `k${i}`).join(',')}&start=2025-10-01T00:00:00Z&end=2026-10-31T00:00:00Z&maxResolution=3600`);
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error, 'scan_too_large');
+    assert.equal(r.seen.length, 0);
+  });
+  it('maxResolution=1 über 3 Tage → 400 statt Hunderttausender Zeilen im Speicher', async () => {
+    const r = await call('keys=battery_soc_pct&start=2026-10-01T00:00:00Z&end=2026-10-04T00:00:00Z&maxResolution=1');
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error, 'scan_too_large');
+    assert.equal(r.seen.length, 0);
+  });
+  it('Handy-App-Rückfall (900 s, 1 Tag, 5 Reihen) geht weiter', async () => {
+    const r = await call('keys=a,b,c,d,e&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=900');
+    assert.equal(r.status, 200);
+  });
+});

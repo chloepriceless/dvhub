@@ -993,7 +993,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
   }
 
   // Query arbitrary telemetry series (e.g. battery_soc_pct) with rollup preference
-  function querySeries({ seriesKeys, start, end, maxResolution = 900 }) {
+  function querySeries({ seriesKeys, start, end, maxResolution = 900, bucketSec = null }) {
     const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
     if (!keys.length) return [];
     const placeholders = keys.map(() => '?').join(', ');
@@ -1009,7 +1009,9 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     const seen = new Map();
     const result = [];
     for (const row of rows) {
-      const bucket = `${row.series_key}|${bucketIso(row.ts_utc, Math.min(row.resolution_seconds, 900))}`;
+      // bucketSec (Strix H-0003): auf das angefragte Fenster zusammenfassen.
+      const win = Number.isInteger(bucketSec) && bucketSec > 0 ? bucketSec : Math.min(row.resolution_seconds, 900);
+      const bucket = `${row.series_key}|${bucketIso(row.ts_utc, win)}`;
       if (!seen.has(bucket)) {
         seen.set(bucket, true);
         result.push({

@@ -1571,10 +1571,37 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   }
 
   // Query arbitrary telemetry series (e.g. battery_soc_pct)
-  async function querySeries({ seriesKeys, start, end, maxResolution = 900 }) {
+  async function querySeries({ seriesKeys, start, end, maxResolution = 900, bucketSec = null }) {
     const keys = Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys];
     if (!keys.length) return [];
     const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+    // Strix H-0003: mit bucketSec fasst die Datenbank zusammen — je Reihe und
+    // Fenster die früheste, feinste Zeile (wie das Dedup unten, aber ohne jede
+    // Rohzeile in den Web-Prozess zu laden). Ohne bucketSec unverändert
+    // (interne Aufrufer: EEG-Verlängerung, PV-Strings, Verlauf, Familie).
+    if (Number.isInteger(bucketSec) && bucketSec > 0) {
+      const n = keys.length;
+      const result = await pool.query(`
+        SELECT series_key, ts_utc, resolution_seconds, value_num, unit FROM (
+          SELECT DISTINCT ON (series_key, bucket_ts) series_key, ts_utc, resolution_seconds, value_num, unit
+          FROM (
+            SELECT series_key, ts_utc, resolution_seconds, value_num, unit,
+                   date_bin(make_interval(secs => $${n + 4}), ts_utc, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS bucket_ts
+            FROM timeseries_samples
+            WHERE series_key IN (${placeholders})
+              AND ts_utc >= $${n + 1} AND ts_utc < $${n + 2}
+              AND resolution_seconds <= $${n + 3}
+          ) s
+          ORDER BY series_key, bucket_ts, ts_utc ASC, resolution_seconds ASC
+        ) b
+        ORDER BY ts_utc ASC, series_key ASC
+      `, [...keys, isoTimestamp(start), isoTimestamp(end), maxResolution, bucketSec]);
+      const out = result.rows.map((row) => ({
+        key: row.series_key, ts: row.ts_utc, value: Number(row.value_num), unit: row.unit, resolution: row.resolution_seconds,
+      }));
+      // Die Datenbank sortiert schon; für Attrappen/Altstände nachziehen.
+      return out.sort((a, b) => Date.parse(isoTimestamp(a.ts)) - Date.parse(isoTimestamp(b.ts)) || String(a.key).localeCompare(String(b.key)));
+    }
     const result = await pool.query(`
       SELECT series_key, ts_utc, resolution_seconds, value_num, unit
       FROM timeseries_samples

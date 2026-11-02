@@ -43,3 +43,32 @@ test('iterateSeriesBuckets rejects resolutions outside the streaming set', async
     for await (const _ of store.iterateSeriesBuckets({ seriesKeys: ['a'], start: '2026-01-01T00:00:00Z', end: '2026-01-02T00:00:00Z', bucketSec: 7 })) { /* */ }
   }, /unsupported bucketSec/);
 });
+
+// Strix H-0003: mit bucketSec fasst die Datenbank zusammen (eine Zeile je
+// Reihe und Fenster) — der Web-Prozess lädt nicht mehr jede Rohzeile.
+test('querySeries mit bucketSec: DISTINCT ON je Reihe und Fenster in SQL, Ergebnis nach Zeit', async () => {
+  const calls = [];
+  const pool = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return { rows: [
+        { series_key: 'b', ts_utc: new Date('2026-10-01T00:15:00Z'), resolution_seconds: 1, value_num: '2', unit: '%' },
+        { series_key: 'a', ts_utc: new Date('2026-10-01T00:00:00Z'), resolution_seconds: 1, value_num: '1', unit: '%' },
+      ] };
+    },
+  };
+  const store = createTelemetryStorePg(pool);
+  const rows = await store.querySeries({ seriesKeys: ['a', 'b'], start: '2026-10-01T00:00:00Z', end: '2026-10-02T00:00:00Z', maxResolution: 900, bucketSec: 900 });
+  assert.match(calls[0].sql, /DISTINCT ON \(series_key, bucket_ts\)/);
+  assert.match(calls[0].sql, /date_bin\(make_interval\(secs => \$\d+\)/);
+  assert.ok(calls[0].params.includes(900));
+  assert.deepEqual(rows.map((r) => r.key), ['a', 'b'], 'nach Zeit sortiert');
+  assert.equal(rows[0].value, 1);
+});
+
+test('querySeries ohne bucketSec: bisheriges Verhalten (interne Aufrufer)', async () => {
+  const calls = [];
+  const store = createTelemetryStorePg({ async query(sql, params) { calls.push(sql); return { rows: [] }; } });
+  await store.querySeries({ seriesKeys: ['a'], start: '2026-10-01T00:00:00Z', end: '2026-10-02T00:00:00Z' });
+  assert.doesNotMatch(calls[0], /DISTINCT ON/);
+});
