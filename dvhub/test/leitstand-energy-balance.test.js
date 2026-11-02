@@ -315,3 +315,21 @@ test('Kachel: Last nur bekannt, wenn sie bis Mitternacht reicht', () => {
   const body = src.slice(start, src.indexOf('\n  }\n', start));
   assert.match(body, /loadRestKwh: seriesCoversUntil\(loadSlotsAll, loadH, nowMs, berlinMidnightAfter\(nowMs\)\) \? loadKwhRest : null/);
 });
+
+// Gegenprüfung 290a70dc (P2): StatsForecast und VRM liefern die Lastreihe ab
+// der nächsten vollen Stunde. Am Anfang ist ein Abstand bis zu einer
+// Zeilenlänge erlaubt (Lücken zwischen Zeilen bleiben streng); die angebrochene
+// Stunde zählt mit dem Wert der ersten Zeile.
+test('Lastreihe ab der nächsten vollen Stunde: bekannt, angebrochene Stunde zählt mit', () => {
+  const { seriesCoversUntil, restKwhFrom } = loadHelpers();
+  const H = 3600000;
+  const now = Date.UTC(2026, 10, 2, 14, 25);
+  const rows = Array.from({ length: 8 }, (_, i) => ({ start: new Date(Date.UTC(2026, 10, 2, 15, 0) + i * H).toISOString(), powerW: 600 }));
+  const midnight = Date.UTC(2026, 10, 2, 23, 0);
+  assert.equal(seriesCoversUntil(rows, 1, now, midnight), true);
+  // 35 min × 0,6 kW + 8 h × 0,6 kW = 0,35 + 4,8
+  assert.equal(restKwhFrom(rows, 1, now), 5.15);
+  // erste Zeile erst in mehr als einer Zeilenlänge → Lücke
+  assert.equal(seriesCoversUntil(rows.slice(1), 1, now, midnight), false);
+  assert.equal(restKwhFrom(rows.slice(1), 1, now), 4.2);
+});

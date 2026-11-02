@@ -1013,9 +1013,22 @@
   // SQL-Fehler, VRM-Abruf hängt), zählten die fehlenden Stunden als 0 kWh —
   // dann ist der Rest unbekannt (Gegenprüfungen ffa322f1, 27a172cb). PV darf
   // zum Sonnenuntergang enden (seriesCoversToday).
+  // Erste Zeile nach nowMs, höchstens eine Zeilenlänge entfernt, und keine
+  // Zeile, die jetzt schon läuft: der Abstand davor gilt als abgedeckt.
+  function leadingGapRow(spans, nowMs) {
+    for (var k = 0; k < spans.length; k += 1) {
+      var r = spans[k];
+      if (r.t + r.ms <= nowMs) continue;
+      return r.t > nowMs && r.t - nowMs <= r.ms ? r : null;
+    }
+    return null;
+  }
   function seriesCoversUntil(slots, fallbackH, fromMs, untilMs) {
-    var cursor = fromMs;
     var spans = rowSpans(slots, fallbackH);
+    // Abstand am Anfang bis zu einer Zeilenlänge erlaubt (Reihe ab der
+    // nächsten vollen Stunde, Gegenprüfung 290a70dc); dazwischen streng.
+    var lead = leadingGapRow(spans, fromMs);
+    var cursor = lead ? lead.t : fromMs;
     for (var k = 0; k < spans.length && cursor < untilMs; k += 1) {
       var r = spans[k];
       var end = r.t + r.ms;
@@ -1045,7 +1058,13 @@
   // (/api/forecast liefert die Reihe ab dem letzten Abruf, nicht ab jetzt).
   function restKwhFrom(slots, fallbackH, nowMs) {
     var kwh = 0;
-    rowSpans(slots, fallbackH).forEach(function (r) {
+    var spans = rowSpans(slots, fallbackH);
+    // Beginnt die Reihe erst zur nächsten vollen Stunde (StatsForecast, VRM),
+    // zählt die angebrochene Stunde mit dem Wert der ersten Zeile
+    // (Gegenprüfung 290a70dc).
+    var lead = leadingGapRow(spans, nowMs);
+    if (lead) kwh += lead.w / 1000 * ((lead.t - nowMs) / 3600000);
+    spans.forEach(function (r) {
       var end = r.t + r.ms;
       if (end <= nowMs) return;
       var from = Math.max(r.t, nowMs);
