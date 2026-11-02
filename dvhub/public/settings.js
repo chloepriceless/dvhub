@@ -5464,7 +5464,8 @@ function initForecastTab() {
     if (r.error === 'empty_key') return 'Bitte Lizenzschlüssel eingeben.';
     if (r.error === 'invalid_json') return 'Ungültige Anfrage.';
     // Stufe-C node-lock (activate-node-lock) errors.
-    if (r.error === 'machine_slot_taken') return 'Die Lizenz ist gerade an eine andere Box gebunden. Übernehmen geht frühestens 24 Stunden nach deren letzter Bindung.';
+    if (r.error === 'machine_slot_taken' && r.boundFingerprint) return 'Die Lizenz ist gerade an eine andere Box gebunden. Übernehmen geht frühestens 24 Stunden nach deren letzter Bindung.';
+    if (r.error === 'machine_slot_taken') return 'Bindung gerade nicht möglich. DVhub versucht es bei der nächsten Prüfung erneut.';
     if (r.error === 'no_appliance_id') return 'Keine Appliance-ID gefunden — Box-Bindung nicht möglich.';
     if (r.error === 'fingerprint_mismatch') return 'Die gebundene Kennung passt nicht zu dieser Box.';
     if (r.error === 'machine_file_invalid') return 'Das erhaltene Bindungs-Zertifikat ist ungültig.';

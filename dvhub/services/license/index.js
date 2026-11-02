@@ -79,7 +79,8 @@ const LAST_CHECK_FUTURE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 // Strix L-0002/L-0005 (30.10.2026): Pro-Sperre wegen der Bindung. Beide nur,
 // wenn feststeht, dass eine ANDERE Box die Lizenz hält — nie bei Netz- oder
 // Server-Fehlern (Bestandsschutz T-0125 „A“: Lizenzen ohne Bindung bleiben gültig).
-//   machine_slot_taken  — Proxy: Slot gehört einer anderen Box (< 24 h, 409)
+//   machine_slot_taken  — Proxy: Slot gehört einer anderen Box (< 24 h, 409,
+//                         nur mit deren boundFingerprint ≠ eigene appliance-id)
 //   bound_to_other_box  — Machine-File einer anderen Box hier, oder Keygen sagt
 //                         online, die Maschine dieser Box hängt nicht mehr an
 //                         der Lizenz (FINGERPRINT_SCOPE_MISMATCH)
@@ -844,8 +845,9 @@ export function createLicenseService(ctx) {
    * against the embedded account public key, assert its bound fingerprint ==
    * this host's appliance-id, then persist it. loadStateFromDisk re-checks it
    * on every boot (seit Strix L-0005 immer, nicht nur mit licensing.nodeLock).
-   * 409 machine_slot_taken sperrt Pro auf dieser Box (bind_block), bis eine
-   * Bindung gelingt; jeder Fehler wird als bind_error für die Oberfläche gemerkt.
+   * 409 machine_slot_taken mit fremdem boundFingerprint sperrt Pro auf dieser
+   * Box (bind_block), bis eine Bindung gelingt; jeder Fehler wird als
+   * bind_error für die Oberfläche gemerkt.
    *
    * Permissive on transport failure (no state mutation). A verify failure or a
    * fingerprint mismatch is a HARD reject — an unverifiable file is NEVER stored.
@@ -859,7 +861,7 @@ export function createLicenseService(ctx) {
     if (!key) return { ok: false, error: 'empty_key' };
 
     // Jeder Fehlschlag wird als bind_error gemerkt (Hinweis in der Oberfläche);
-    // nur 409 machine_slot_taken sperrt Pro (Strix L-0002/L-0005).
+    // nur 409 machine_slot_taken mit fremdem Fingerprint sperrt Pro (Strix L-0005).
     const fail = (out) => {
       const prev = isProActive();
       // Sperre nur mit Nachweis einer ANDEREN Box: der Proxy nennt deren
@@ -914,9 +916,10 @@ export function createLicenseService(ctx) {
     if (!res.ok) {
       const code = typeof body?.code === 'string' && /^[a-z0-9_]{1,64}$/.test(body.code) ? body.code : `http_${res.status}`;
       pushLog('license_nodelock_http_error', { status: res.status, code, key_fingerprint: fingerprint(key) });
-      // Strix L-0002/L-0005: 409 machine_slot_taken heißt „eine ANDERE Box hält
-      // diese Lizenz“ — dann kein Pro auf dieser Box (bisher blieb sie aktiv
-      // und sogar ungedeckelt). Alle anderen Fehler sperren nicht.
+      // Strix L-0002/L-0005: 409 machine_slot_taken MIT dem Fingerprint einer
+      // anderen Box heißt „eine ANDERE Box hält diese Lizenz“ — dann kein Pro
+      // auf dieser Box (bisher blieb sie aktiv und sogar ungedeckelt). Ohne
+      // Fingerprint und alle anderen Fehler sperren nicht (siehe fail()).
       if (res.status === 409 && code === BIND_BLOCK_SLOT_TAKEN) {
         pushLog('license_nodelock_slot_taken', { bound_since: typeof body?.boundSince === 'string' ? body.boundSince : null });
       }
@@ -1404,8 +1407,13 @@ export function createLicenseService(ctx) {
   function emitProActiveChange(prevActive) {
     if (emitHold > 0) return;
     const nowActive = isProActive();
+    // Maßgeblich ist der zuletzt GEMELDETE Zustand — sonst verschluckt jeder
+    // Aufrufer, der erst nach einem reinen Zeitablauf kommt (Offline-Kulanz),
+    // den Wechsel (Gegenprüfung zu 68e4bb91). Ohne Meldung bisher: der vom
+    // Aufrufer übergebene Vorher-Zustand.
+    const prev = lastProActive ?? prevActive;
     lastProActive = nowActive;
-    if (prevActive === nowActive) return;
+    if (prev === nowActive) return;
     for (const cb of proActiveListeners) {
       try {
         cb(nowActive);

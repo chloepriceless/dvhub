@@ -1174,3 +1174,27 @@ describe('licensing.* ist über /api/config und Import nicht änderbar', () => {
     });
   }
 });
+
+// Gegenprüfung zu 68e4bb91 (P2): eine aus der Beta gespeicherte, inzwischen
+// nicht mehr freigegebene Rechendienst-Adresse darf das Speichern ANDERER
+// Einstellungen nicht blockieren (Senden bleibt in eos-remote call() gesperrt).
+describe('EOS-Rechendienst-Adresse: Prüfung nur bei Änderung', () => {
+  const raw = () => ({ optimizer: { eosProxy: { remote: { endpoint: 'http://192.168.1.20:8080' } } } });
+  async function save(endpoint) {
+    const saved = [];
+    const ctx = mockCtx({ getRawCfg: raw, saveAndApplyConfig: (next) => { saved.push(next); return { ok: true }; } });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', '/api/config', { config: { httpPort: 8080, optimizer: { eosProxy: { remote: { endpoint } } } } }), res, new URL('http://localhost/api/config'));
+    return { status: res._captured.status, body: res._captured.body, saved };
+  }
+  it('unveränderte Altadresse → Speichern klappt', async () => {
+    const r = await save('http://192.168.1.20:8080');
+    assert.notEqual(r.status, 400, r.body);
+  });
+  it('neue nicht freigegebene Adresse → 400 invalid_eos_remote_endpoint', async () => {
+    const r = await save('https://evil.example.net');
+    assert.equal(r.status, 400);
+    assert.equal(JSON.parse(r.body).error, 'invalid_eos_remote_endpoint');
+  });
+});

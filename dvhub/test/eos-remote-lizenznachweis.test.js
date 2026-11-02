@@ -87,3 +87,16 @@ describe('EOS-Fernbetrieb: kein Aufruf mit Token an nicht vertrauenswürdige Adr
     assert.equal(sent.length, 0);
   });
 });
+
+describe('EOS-Fernbetrieb: Token des Diagnose-Abrufs nur an seine eigene Adresse', () => {
+  it('tokenEndpoint a.dvhub.de, endpoint b.dvhub.de → null, kein Aufruf', async () => {
+    const sent = [];
+    const cfg = { optimizer: { eosProxy: { enabled: true, mode: 'remote', remote: { endpoint: 'https://b.dvhub.de', token: 'dves_echt', tokenEndpoint: 'https://a.dvhub.de' } } } };
+    const facade = createEosRemoteFacade({
+      getCfg: () => cfg, getLicenceProof: () => PROOF, saveToken: async () => {}, state: { optimizer: { eosRemote: { lastJobId: 'job_1' } } },
+      fetchImpl: async (url) => { sent.push(String(url)); return { status: 200, headers: { get: () => null }, json: async () => ({ bundle: {} }) }; },
+    });
+    assert.equal(await facade.fetchDebugBundle(), null);
+    assert.equal(sent.length, 0);
+  });
+});

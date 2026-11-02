@@ -358,3 +358,19 @@ test('L-0005: 409 mit dem EIGENEN Fingerprint (gleichzeitiges Binden) sperrt nic
   });
   assert.equal(b.svc.isProActive(), true);
 });
+
+// Gegenprüfung zu 68e4bb91 (P2): Nebenwege (removeLicense, Tagesjob) nach
+// Fristablauf dürfen den Wechsel nicht verschlucken.
+for (const [name, act] of [
+  ['removeLicense', (svc) => svc.removeLicense()],
+  ['updatePlantExceedsLicense', (svc) => svc.updatePlantExceedsLicense(1000)],
+]) {
+  test(`L-0001: Fristablauf + ${name} meldet DV/EOS das Ende von Pro`, () => {
+    const b = box({ persisted: { status: 'active', license_key: 'DVHB-LEGACY-AAAA', license_id: 'lic-1', last_check_ok_at: new Date(Date.now() - 13 * DAY).toISOString() } });
+    const seen = [];
+    b.svc.onProActiveChange((v) => seen.push(v));
+    b.svc.setLastCheckOkForTest(new Date(Date.now() - 15 * DAY).toISOString());
+    act(b.svc);
+    assert.deepEqual(seen, [false]);
+  });
+}

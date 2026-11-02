@@ -249,8 +249,15 @@ export function createConfigRoutes(deps) {
       // und Prognosen — nur https unter dvhub.de (oder per Umgebung der Box
       // freigegeben), nichts Internes, keine Zugangsdaten in der URL
       // (eos-remote.js isAllowedRemoteEndpoint = isTrustedProofEndpoint, Strix L-0006).
+      // Nur bei einer ÄNDERUNG prüfen: eine aus der Beta gespeicherte Altadresse
+      // (früher http im LAN / beliebiges https) soll das Speichern anderer
+      // Einstellungen nicht blockieren — gesendet wird an sie trotzdem nie
+      // (eos-remote.js call()). Gegenprüfung zu 68e4bb91.
       const candidateRemoteEndpoint = body.config?.optimizer?.eosProxy?.remote?.endpoint;
-      if (candidateRemoteEndpoint && !isAllowedRemoteEndpoint(candidateRemoteEndpoint)) {
+      const normEndpoint = (v) => String(v ?? '').trim().replace(/\/+$/, '');
+      const storedRemoteEndpoint = ctx.getRawCfg?.()?.optimizer?.eosProxy?.remote?.endpoint;
+      if (candidateRemoteEndpoint && normEndpoint(candidateRemoteEndpoint) !== normEndpoint(storedRemoteEndpoint)
+          && !isAllowedRemoteEndpoint(candidateRemoteEndpoint)) {
         return json(res, 400, { ok: false, error: 'invalid_eos_remote_endpoint' });
       }
       // Plan 08-06 Task 1 Step 3: legal-gate flip detection.
