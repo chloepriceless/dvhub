@@ -47,7 +47,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Wie weit zurück gemerkt wird, was schon in der Datenbank steht: Die Anbieter
 // liefern heute und morgen, ältere Slots kommen nicht wieder.
 const PERSISTED_KEEP_MS = 3 * DAY_MS;
-const WRITE_WAIT_MS = 10_000;
+const DB_WAIT_MS = 10_000;
+
+// Auf die Datenbank höchstens `ms` warten: Der Pool kennt keine Abfrage-
+// Zeitgrenze, ein hängender Abruf hielte sonst `inFlight` für immer.
+async function waitAtMost(promise, ms) {
+  let timer;
+  try {
+    await Promise.race([promise, new Promise((resolve) => { timer = setTimeout(resolve, ms); timer.unref?.(); })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 const TIME_ZONE = 'Europe/Berlin';
 
 // Ab wann die Preise für morgen da sein sollten (Ortszeit, Minute des Tages).
@@ -146,6 +157,7 @@ export function createTariffProviderService(ctx, deps = {}) {
   const now = deps.now || (() => Date.now());
   const fetchImpl = deps.fetch || globalThis.fetch;
   const dataDir = deps.dataDir || '/var/lib/dvhub';
+  const dbWaitMs = deps.dbWaitMs || DB_WAIT_MS;
   const cacheFile = path.join(dataDir, 'tariff-provider', 'lichtblick-token.json');
   const clients = {
     tibber: deps.fetchTibber || ((s) => fetchTibberPrices({ token: s.tibber.token, homeId: s.tibber.homeId, fetchImpl })),
@@ -332,19 +344,14 @@ export function createTariffProviderService(ctx, deps = {}) {
       // oder per Knopf vor dem Laden): sonst bekämen unveränderte Preise eine
       // neue Abrufzeit und geänderte keinen Vorwert. Vor dem Abruf, damit die
       // geladenen Preise die frischen im Speicher nicht überschreiben.
-      if (!st.dbLoaded && typeof ctx.telemetryStore?.listSeriesSamples === 'function') await loadFromDb();
+      if (!st.dbLoaded && typeof ctx.telemetryStore?.listSeriesSamples === 'function') await waitAtMost(loadFromDb(), dbWaitMs);
       const result = await clients[s.name](s);
       const slots = result.slots || [];
       putProviderSlots(s.name, slots);
-      // Auf das Schreiben warten (höchstens WRITE_WAIT_MS), damit eine Auswertung
-      // direkt nach „Jetzt abrufen“ die neuen Preise sieht; eine hängende
-      // Datenbank hält den Abruf nicht auf.
+      // Auf das Schreiben warten (höchstens dbWaitMs), damit eine Auswertung
+      // direkt nach „Jetzt abrufen“ die neuen Preise sieht.
       const write = writeSamples(s.name, slots, s.priceBasis === 'net_energy' ? 'net_energy' : 'gross_total');
-      if (write) {
-        let waitTimer;
-        await Promise.race([write, new Promise((resolve) => { waitTimer = setTimeout(resolve, WRITE_WAIT_MS); waitTimer.unref?.(); })]);
-        clearTimeout(waitTimer);
-      }
+      if (write) await waitAtMost(write, dbWaitMs);
       failures = 0;
       lastSuccessMs = now();
       st.lastSuccessAt = new Date(lastSuccessMs).toISOString();
@@ -354,7 +361,7 @@ export function createTariffProviderService(ctx, deps = {}) {
       // Leere Antwort ist kein Fehler (z. B. vor dem ersten Liefertag), aber sichtbar.
       st.error = slots.length ? null : emptyPricesMessage(s.name, result.account);
       st.errorCode = slots.length ? null : 'no_prices';
-      await refreshEstimate();
+      await waitAtMost(refreshEstimate(), dbWaitMs);
       log('tariff_provider_ok', { provider: s.name, reason, slots: slots.length, tomorrow: st.summary.tomorrowSlots });
       if (!hadTomorrow && hasTomorrow(now())) {
         log('tariff_provider_tomorrow_arrived', { provider: s.name, triggering: 'eos_bridge_push' });

@@ -496,7 +496,8 @@ if (typeof globalThis !== 'undefined') {
     validatePricingPeriods,
     tariffProviderStatsText,
     tariffProviderStatsCacheHit,
-    tariffProviderStatsCacheable
+    tariffProviderStatsCacheable,
+    bindTariffProviderBlock
   };
 }
 
@@ -3024,7 +3025,9 @@ function tariffProviderBlockHtml(uep) {
 let tariffProviderStatsDays = '30';
 let tariffProviderStatsCache = null;   // { provider, days, at, data }
 
-let tariffProviderStatsSeq = 0;         // nur die jüngste Abfrage wird angezeigt
+// Lader des zuletzt gezeichneten Blocks: „Jetzt abrufen“ eines inzwischen neu
+// gezeichneten Blocks lädt dort nach, wo es sichtbar ist.
+let tariffProviderStatsReload = null;
 
 function tariffProviderStatsCacheHit(cache, provider, days, nowMs) {
   return !!cache && cache.provider === provider && cache.days === days && nowMs - cache.at < 60_000;
@@ -3093,15 +3096,16 @@ function bindTariffProviderBlock(section, uep) {
   const statsEl = section.querySelector('[data-tariff-provider-stats]');
   const statsDays = section.querySelector('[data-tariff-provider-stats-days]');
   const statsProvider = uep?.provider?.name || '';
+  let statsSeq = 0;   // je Block: nur die jüngste eigene Abfrage wird angezeigt
   const loadStats = ({ fresh = false } = {}) => {
-    if (!statsEl) return;
+    if (!statsEl || statsEl.isConnected === false) return;
     const days = statsDays?.value || '30';
     tariffProviderStatsDays = days;
     statsEl.style.whiteSpace = 'pre-line';
     // Nur die jüngste Abfrage anzeigen (eine langsame ältere überschreibt keine
     // neuere, auch nicht bei gleichem Zeitraum nach „Jetzt abrufen“).
-    const seq = ++tariffProviderStatsSeq;
-    const showIfCurrent = (data) => { if (seq === tariffProviderStatsSeq) statsEl.textContent = tariffProviderStatsText(data); };
+    const seq = ++statsSeq;
+    const showIfCurrent = (data) => { if (seq === statsSeq) statsEl.textContent = tariffProviderStatsText(data); };
     if (!fresh && tariffProviderStatsCacheHit(tariffProviderStatsCache, statsProvider, days, Date.now())) {
       Promise.resolve(tariffProviderStatsCache.data).then(showIfCurrent);
       return;
@@ -3117,6 +3121,7 @@ function bindTariffProviderBlock(section, uep) {
     });
   };
   statsDays?.addEventListener('change', () => loadStats());
+  if (statsEl) tariffProviderStatsReload = loadStats;
   loadStats();
   section.querySelectorAll('[data-tariff-provider-action]').forEach((button) => {
     button.addEventListener('click', async () => {
@@ -3136,7 +3141,7 @@ function bindTariffProviderBlock(section, uep) {
           const res = await apiFetch('/api/tariff-provider/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
           const data = await res.json();
           show(data.ok ? tariffProviderStateText(data.state) : `Fehlgeschlagen: ${data.error || data.code || 'unbekannt'}`);
-          if (data.ok) loadStats({ fresh: true });
+          if (data.ok) (tariffProviderStatsReload || loadStats)({ fresh: true });
         }
       } catch (error) {
         show(`Fehlgeschlagen: ${error.message}`);

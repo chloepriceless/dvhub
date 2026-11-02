@@ -430,3 +430,20 @@ test('Abruf wartet auf das Schreiben (Auswertung danach sieht die neuen Preise)'
   await svc.refresh();
   assert.equal(written.length, 96);
 });
+
+// Gegenprüfung 6a817dcb (P3): eine hängende Datenbank hält den Abruf nicht fest.
+test('Abruf: hängendes Lesen der Datenbank hält den Abruf nicht fest, geschrieben wird dann nicht', { timeout: 5000 }, async () => {
+  const { ctx, written } = makeCtx();
+  ctx.telemetryStore.listSeriesSamples = () => new Promise(() => {});
+  ctx.telemetryStore.listPriceSlots = () => new Promise(() => {});
+  const svc = createTariffProviderService(ctx, {
+    now: () => Date.parse('2026-11-01T10:00:00Z'),
+    dbWaitMs: 20,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: dayPrices('2026-11-01') })
+  });
+  const keepAlive = setInterval(() => {}, 1000);   // Zeitgrenze ist unref — wie im Server die Schleife wach halten
+  const r = await svc.refresh().finally(() => clearInterval(keepAlive));
+  assert.equal(r.ok, true);
+  assert.equal(written.length, 0);
+  assert.equal(providerSlotAt(Date.parse('2026-11-01T10:00:00Z')).ctKwh > 0, true, 'Preise trotzdem im Speicher');
+});

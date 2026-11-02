@@ -69,3 +69,65 @@ test('Zwischenspeicher: nur gültige Antworten des angezeigten Anbieters', () =>
   assert.equal(tariffProviderStatsCacheable({ ok: false, code: 'no_store' }, 'tibber'), false);
   assert.equal(tariffProviderStatsCacheable(null, 'tibber'), false);
 });
+
+// Gegenprüfung 6a817dcb (P3): Neuzeichnen während „Jetzt abrufen“ darf den
+// sichtbaren Block nicht auf „wird geladen“ hängen lassen.
+test('Neuzeichnen während „Jetzt abrufen“: der sichtbare Block zeigt am Ende die Auswertung', async () => {
+  const pending = [];
+  const sandbox = {
+    console,
+    window: {
+      DVhubCommon: {
+        escapeHtml: (s) => String(s),
+        apiFetch: (url, opts) => new Promise((resolve) => pending.push({ url, method: opts?.method || 'GET', resolve }))
+      },
+      addEventListener() {}, setTimeout() {}
+    }
+  };
+  sandbox.globalThis = sandbox;
+  const source = fs.readFileSync(fileURLToPath(new URL('../public/settings.js', import.meta.url)), 'utf8');
+  vm.runInNewContext(source, sandbox, { filename: 'settings.js' });
+  const { bindTariffProviderBlock } = sandbox.DVhubSettingsPricingPeriods;
+
+  const flush = () => new Promise((r) => setImmediate(r));
+  const answer = (match, body) => {
+    const i = pending.findIndex((p) => match(p));
+    assert.ok(i >= 0, 'Anfrage erwartet');
+    const [p] = pending.splice(i, 1);
+    p.resolve({ json: async () => body });
+  };
+  const isStats = (p) => p.url.startsWith('/api/tariff-provider/stats');
+  function block() {
+    const handlers = {};
+    const el = {
+      status: { textContent: '', style: {}, isConnected: true },
+      stats: { textContent: '', style: {}, isConnected: true },
+      days: { value: '30', addEventListener() {} },
+      refresh: { dataset: { tariffProviderAction: 'refresh' }, addEventListener: (ev, fn) => { handlers.click = fn; } }
+    };
+    el.section = {
+      querySelector: (sel) => ({ '[data-tariff-provider-status]': el.status, '[data-tariff-provider-stats]': el.stats, '[data-tariff-provider-stats-days]': el.days }[sel] || null),
+      querySelectorAll: () => [el.refresh]
+    };
+    el.click = () => handlers.click();
+    return el;
+  }
+  const uep = { provider: { name: 'lichtblick' } };
+  const ok = (pairs) => ({ ok: true, provider: 'lichtblick', days: 30, pairs, meanProviderCtKwh: 40, meanMarketCtKwh: 8, meanSpreadCtKwh: 32, formula: null });
+
+  const a = block();
+  bindTariffProviderBlock(a.section, uep);
+  answer((p) => p.url === '/api/tariff-provider', { ok: true, state: null });
+  answer(isStats, { ok: false, code: 'error', error: 'kurz weg' });   // nicht zwischengespeichert
+  await flush();
+  const clicking = a.click();                                          // POST hängt noch
+  a.stats.isConnected = false; a.status.isConnected = false;           // neu gezeichnet
+  const b = block();
+  bindTariffProviderBlock(b.section, uep);
+  answer((p) => p.url === '/api/tariff-provider', { ok: true, state: null });
+  answer((p) => p.method === 'POST', { ok: true, state: null });
+  await clicking;
+  await flush();
+  while (pending.some(isStats)) { answer(isStats, ok(96)); await flush(); }
+  assert.match(b.stats.textContent, /96 Viertelstunden/, `sichtbarer Block: ${b.stats.textContent}`);
+});
