@@ -1172,6 +1172,9 @@
     var midnightMs = berlinMidnightAfter(nowMs);
     var pvKwhRest = restKwhFrom(pvSlotsAll, pvH, nowMs, midnightMs);
     var loadKwhRest = restKwhFrom(loadSlotsAll, loadH, nowMs, midnightMs);
+    // Last bis Mitternacht lückenlos? Bilanz und Warnung der Verbrauchskachel
+    // nutzen dieselbe Prüfung (Gegenprüfung fbb39194).
+    var loadKnown = seriesCoversUntil(loadSlotsAll, loadH, nowMs, midnightMs);
     var pvKwhTomorrow = kwhOf(pvSlotsTomorrow, pvH);
     var loadKwhTomorrow = kwhOf(loadSlotsTomorrow, loadH);
 
@@ -1193,7 +1196,7 @@
       || (statusData?.victron?.soc != null ? { socPct: statusData.victron.soc, capacityWh: null, minSocPct: null } : null);
     var balance = energyBalanceSummary({
       pvRestKwh: seriesCoversToday(pvSlotsAll, berlinTodayKey) ? pvKwhRest : null,
-      loadRestKwh: seriesCoversUntil(loadSlotsAll, loadH, nowMs, midnightMs) ? loadKwhRest : null,
+      loadRestKwh: loadKnown ? loadKwhRest : null,
       pvDayKwh: pvDayKwh, loadDayKwh: loadDayKwh, battery: battery
     });
     var balanceView = energyBalanceView(balance);
@@ -1240,8 +1243,9 @@
           hintDetailEl.style.color = _dimColor;
           loadDetailEl.appendChild(hintDetailEl);
         }
-      } else if (!loadSlots.length && !hasTotalsLoad) {
-        loadDetailEl.innerHTML = '<span class="leitstand-forecast-detail">⚠ Kein Load-Forecast für heute</span>';
+      } else if (!loadKnown && !hasTotalsLoad) {
+        loadDetailEl.innerHTML = '<span class="leitstand-forecast-detail">'
+          + (loadSlots.length ? '⚠ Load-Forecast reicht nicht bis Mitternacht' : '⚠ Kein Load-Forecast für heute') + '</span>';
         loadDetailEl.firstChild.style.color = _dangerColor;
       } else {
         var loadParts = ['Rest heute: ' + loadKwhRest.toFixed(1) + ' kWh'];

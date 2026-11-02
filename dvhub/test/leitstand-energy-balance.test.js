@@ -313,7 +313,8 @@ test('berlinMidnightAfter: Mitternacht in Berliner Zeit (Winter/Sommer)', () => 
 test('Kachel: Last nur bekannt, wenn sie bis Mitternacht reicht', () => {
   const start = src.indexOf('function updateForecastSummary(');
   const body = src.slice(start, src.indexOf('\n  }\n', start));
-  assert.match(body, /loadRestKwh: seriesCoversUntil\(loadSlotsAll, loadH, nowMs, midnightMs\) \? loadKwhRest : null/);
+  assert.match(body, /var loadKnown = seriesCoversUntil\(loadSlotsAll, loadH, nowMs, midnightMs\);/);
+  assert.match(body, /loadRestKwh: loadKnown \? loadKwhRest : null/);
   assert.match(body, /var midnightMs = berlinMidnightAfter\(nowMs\);/);
 });
 
@@ -353,4 +354,16 @@ test('Rest heute aus der ganzen Reihe, an Mitternacht abgeschnitten', () => {
   assert.match(body, /var pvKwhRest = restKwhFrom\(pvSlotsAll, pvH, nowMs, midnightMs\);/);
   assert.match(body, /var loadKwhRest = restKwhFrom\(loadSlotsAll, loadH, nowMs, midnightMs\);/);
   assert.match(body, /seriesCoversUntil\(loadSlotsAll, loadH, nowMs, midnightMs\)/);
+});
+
+// Gegenprüfung fbb39194 (P3): Warnung in der Verbrauchskachel nach derselben
+// Prüfung wie die Bilanz — kein „Kein Load-Forecast“ neben einem Wert aus
+// genau dieser Prognose; eine Reihe, die vor Mitternacht endet, wird benannt.
+test('Verbrauchs-Warnung folgt der Abdeckungsprüfung der Bilanz', () => {
+  const start = src.indexOf('function updateForecastSummary(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  assert.match(body, /var loadKnown = seriesCoversUntil\(loadSlotsAll, loadH, nowMs, midnightMs\);/);
+  assert.match(body, /loadRestKwh: loadKnown \? loadKwhRest : null/);
+  assert.match(body, /\} else if \(!loadKnown && !hasTotalsLoad\) \{/);
+  assert.match(body, /⚠ Load-Forecast reicht nicht bis Mitternacht/);
 });
