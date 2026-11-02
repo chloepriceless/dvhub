@@ -92,7 +92,7 @@ hat 30 s plus Größe / 16 KiB/s (1 MiB: 94 s). Schließt das
 Relay eine Verbindung, hat die Gegenstelle 2 s für den Abschluss. Pings
 beantwortet der Wächter selbst (Pongs zählen im Ausgangsbudget), höchstens 50
 Steuerrahmen je 10 s; je Nachricht höchstens 16 Fragmente, gepufferte
-Lesestücke zählen in voller Größe im Eingangsbudget mit (je Verbindung max(zugesagte Nutzdaten, festgehaltene Lesestücke) + 256 B je Stück).
+Lesestücke zählen in voller Größe im Eingangsbudget mit (je Verbindung max(zugesagte Nutzdaten, festgehaltene Lesestücke) + 256 B je Stück; nach einer vollständigen Nachricht hält eine ruhende Verbindung nichts).
 
 ## Überwachung
 
