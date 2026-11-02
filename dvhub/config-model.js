@@ -2522,7 +2522,7 @@ function buildFieldDefinitions() {
       label: 'Adresse des Rechendienstes',
       type: 'text',
       empty: 'blank',
-      help: 'Die Adresse bekommst du mit der Freischaltung. Nur https (http nur im eigenen Netz).'
+      help: 'Die Adresse bekommst du mit der Freischaltung (https://….dvhub.de). Andere Adressen nimmt DVhub nicht an, weil dorthin dein Lizenznachweis geht.'
     },
     {
       section: 'schedule',
@@ -5233,14 +5233,17 @@ export function createDefaultConfig() {
     // keygen_account_not_configured unless KEYGEN_ACCOUNT was set in the env.
     // Being part of createDefaultConfig also auto-adds the 'licensing' root to
     // ALLOWED_CONFIG_ROOTS (strict-root save check).
+    // Strix L-0006 (30.10.2026): licensing.* ändert weder POST /api/config noch
+    // ein Import (services/config-protected-keys.js LOCKED_KEYS) — nur die
+    // config.json auf der Box selbst.
     licensing: {
       keygenAccount: '7458ae2d-50d2-469a-9174-8a7fcd9934a1',
-      // Hardening C (T-0125) node-lock toggle. When true, an active licence that
-      // carries a Keygen machine file is only honoured if the file verifies
-      // offline AND its bound fingerprint == this host's appliance-id. Default
-      // OFF so prod's existing floating signed key keeps working unchanged; the
-      // online activation/check-out flow that writes the machine file is gated
-      // on the Keygen-CE spike (T-0125 Must-Fix #1) and not built yet.
+      // Hardening C (T-0125) node-lock: STRENGER Modus. Seit Strix L-0005
+      // (30.10.2026) prüft die Box ein vorhandenes Machine-File immer gegen ihre
+      // appliance-id: ein File einer anderen Box gibt kein Pro (Schlüssel bleibt,
+      // „An diese Box binden“ holt die Lizenz). true verwirft in dem Fall den
+      // ganzen Lizenzzustand (altes Verhalten). Lizenzen ganz ohne Machine-File
+      // bleiben in beiden Modi gültig (Bestandsschutz T-0125 „A“).
       nodeLock: false,
       // Stufe-C activation proxy (T-0125, Server-Proxy-Entscheid 2026-06-23): the
       // privileged Keygen machine check-out runs server-side (the policy is
@@ -5248,6 +5251,9 @@ export function createDefaultConfig() {
       // {licenseKey, applianceId} here; the proxy mints+returns a signed machine
       // file which the box verifies OFFLINE and persists. See
       // .planning/T-0125-ACTIVATION-PROXY-CONTRACT.md.
+      // Strix L-0006: nur noch Dokumentation — die Adresse ist fest im Code
+      // (services/license/index.js ACTIVATION_PROXY_URL), ein anderer Wert hier
+      // wird ignoriert; der Schlüssel geht nie an eine umgebogene Adresse.
       activationProxyUrl: 'https://webhook.dvhub.de/v1/license/activate-machine',
       // Codex-v2 C-1: Keygen policy IDs that are genuinely node-locked. A signed
       // key on one of these policies MUST carry a valid machine_file bound to this
@@ -6381,7 +6387,9 @@ export function saveConfigFile(configPath, rawInput) {
   }
   // Atomic write: temp file + rename prevents corruption on crash/power loss
   const tmpPath = configPath + '.tmp';
-  fs.writeFileSync(tmpPath, JSON.stringify(normalized.rawConfig, null, 2) + '\n', 'utf8');
+  // Gleich mit 0600 anlegen (Gegenprüfung 0923ac3d): sonst lag die Datei mit
+  // den Geheimnissen kurz mit 0644 da; chmod für eine schon vorhandene .tmp.
+  fs.writeFileSync(tmpPath, JSON.stringify(normalized.rawConfig, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
   fs.chmodSync(tmpPath, 0o600);
   fs.renameSync(tmpPath, configPath);
   return loadConfigFile(configPath);

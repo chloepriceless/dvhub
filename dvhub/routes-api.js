@@ -6,11 +6,12 @@ import { effectiveInverterCurve } from './services/inverter-efficiency/calibrato
 import { createHeavyQueue, SKIPPED as HEAVY_SKIPPED } from './services/heavy-queue.js';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
-import { once } from 'node:events';
+import { pipeline } from 'node:stream';
 import { STREAM_BUCKET_SECONDS } from './telemetry-store-pg.js';
 import http from 'node:http';
 import os from 'node:os';
 import { isIP } from 'node:net';
+import { isInternalHost, isPrivateOrLoopbackHost, isAllowedOutboundUrl, sameOrigin } from './services/host-address.js';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
 import { PUSH_HEADER as INPUT_PUSH_HEADER, PUSH_FIELDS as INPUT_PUSH_FIELDS, parsePushFields as parseInputPushFields } from './services/input-push.js';
@@ -65,7 +66,7 @@ import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots 
 import { buildVictronAlarmsPayload } from './victron-alarms.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capVictronPvForDisplay } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
-import { redactConfig, redactUrlCreds } from './config-redaction.js';
+import { redactConfig, redactUrlCreds, dropSecretsForChangedTargets, unchangedSecretPaths } from './config-redaction.js';
 import { createConfigRoutes } from './routes/config-routes.js';
 import { createAdminRoutes } from './routes/admin-routes.js';
 import { createNotificationRoutes } from './routes/notification-routes.js';
@@ -304,6 +305,12 @@ export { MAX_GRID_SETPOINT_W, MAX_MINSOC_PCT, MAX_BATTERY_DISCHARGE_W };
 // TimescaleDB hypertable + (series_key, ts_utc) index makes 1.5M-row scans
 // sub-second on the production Pi.
 export const MAX_TELEMETRY_SCAN_SLOTS = 1_500_000;
+// Strix H-0003: der nicht gestreamte Weg hält alle Zeilen auf einmal im
+// Web-Prozess (192 MiB) — eigene, kleinere Grenze. Er fasst auf
+// min(maxResolution, 900) s zusammen, also zählt der Wächter genau diese Fenster.
+// Gegenprüfung 8e7bb8ef: 100 000 je Anfrage und höchstens 2 gleichzeitig
+// (seriesQueue wie der Strom-Weg) — vorher 200 000 ohne Nebenläufigkeitsgrenze.
+export const MAX_TELEMETRY_SERIES_ROWS = 100_000;
 // M-3 (Plan 16-03): /api/devices/:id history row cap. 288 = 24h of 5-min
 // readings (24 * 60 / 5). Named so the magic number is self-documenting.
 export const DEVICE_HISTORY_ROW_LIMIT = 288;
@@ -832,9 +839,12 @@ export function listManufacturerProfiles(ctx) {
 // (::ffff:192.168.1.5 → 192.168.1.5). Caps free-form fields so an attacker
 // can't pump multi-MB User-Agent strings into the audit table.
 export function actorContext(req) {
+  // Strix T-0001: Aufrufe über den Support-Tunnel (eigener Listener) im
+  // Audit-Log als solche erkennbar — sonst stünde dort nur 127.0.0.1.
+  const ua = String(req.headers?.['user-agent'] || '');
   return {
     actor_ip: String(req.socket?.remoteAddress || '').replace(/^::ffff:/, ''),
-    actor_ua: String(req.headers?.['user-agent'] || '').slice(0, 256),
+    actor_ua: (req?.dvhubSupportTunnel === true ? `Support-Tunnel | ${ua}` : ua).slice(0, 256),
     actor_session: String(req.headers?.['x-session-id'] || '').slice(0, 64) || null,
   };
 }
@@ -862,7 +872,31 @@ export function createApiRoutes(ctx) {
   // Gestreamte Explorer-Reihen: je Strom nur ein 6-h-Fenster im Speicher,
   // trotzdem höchstens zwei gleichzeitig (DB-Last).
   const seriesQueue = createHeavyQueue({ max: 2 });
+  // Eigene Schlange für den nicht gestreamten Weg (Gegenprüfung 7d1196cc):
+  // hängende Ströme dürfen die kurze Abfrage (z. B. SoC-Linie im Explorer)
+  // nicht blockieren.
+  const seriesFlatQueue = createHeavyQueue({ max: 2 });
+  // Ein Strom-Client, der 60 s nichts abnimmt, wird getrennt.
+  const STREAM_DRAIN_TIMEOUT_MS = 60_000;
 
+  // true bei 'drain', false bei Trennen/Fehler oder nach STREAM_DRAIN_TIMEOUT_MS.
+  function waitForDrain(out, res) {
+    return new Promise((resolve) => {
+      const onDrain = () => done(true);
+      const onGone = () => done(false);
+      const timer = setTimeout(onGone, STREAM_DRAIN_TIMEOUT_MS);
+      function done(ok) {
+        clearTimeout(timer);
+        out.removeListener?.('drain', onDrain);
+        out.removeListener?.('error', onGone);
+        res.removeListener?.('close', onGone);
+        resolve(ok);
+      }
+      out.once('drain', onDrain);
+      out.once('error', onGone);
+      res.once?.('close', onGone);
+    });
+  }
   async function streamTelemetrySeries(req, res, { keys, start, end, bucketSec }) {
     const gone = () => req.destroyed || res.destroyed || req.socket?.destroyed;
     const iter = ctx.telemetryStore.iterateSeriesBuckets({ seriesKeys: keys, start, end, bucketSec });
@@ -887,7 +921,14 @@ export function createApiRoutes(ctx) {
           chunk += (total ? ',' : '') + JSON.stringify(row);
           total += 1;
         }
-        if (chunk && !out.write(chunk)) await once(out, 'drain');
+        // Gegenprüfung 7d1196cc (P1): nicht nur auf 'drain' warten — trennt der
+        // Client, kommt es nie, und der Warteschlangen-Platz blieb für immer belegt.
+        if (chunk && !out.write(chunk) && !(await waitForDrain(out, res))) {
+          await iter.return();
+          out.destroy?.();
+          if (out !== res) res.destroy?.();
+          return;
+        }
       }
       if (!out) return json(res, 200, { ok: true, keys, start, end, resolution: bucketSec, total: 0, data: [] });
       out.end(`],"total":${total}}`);
@@ -1192,7 +1233,23 @@ export function createApiRoutes(ctx) {
   // (req.socket.remoteAddress is the sole source of truth — QUAL-02 backward compat).
   // Loopback = the box itself. Always trusted regardless of lanTrust posture
   // (internal calls, on-box kiosk). Under 'strict' this is the ONLY bypass.
+  // Strix T-0001: Anfragen über den Support-Tunnel kommen am eigenen Listener
+  // ebenfalls von 127.0.0.1 an, sind aber NICHT die Box selbst — sie gelten
+  // wie ein Gerät im Heimnetz (isLocalNetworkRequest) und folgen lanTrust.
+  function isSupportTunnelRequest(req) {
+    return req?.dvhubSupportTunnel === true;
+  }
+  // Freigaben (Kopplungen, Zugänge, Voll-Export, Geräte-Tausch) erteilt der
+  // Kunde, nicht der Support über den offenen Tunnel (Strix T-0001,
+  // Gegenprüfung 6f9c9cca). Gibt true zurück, wenn schon geantwortet wurde.
+  function denySupportConsent(req, res, action) {
+    if (!isSupportTunnelRequest(req)) return false;
+    pushLog('support_tunnel_consent_denied', { action }, actorContext(req));
+    json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Freigaben und Kopplungen erteilt der Kunde selbst, nicht über den Support-Tunnel.' });
+    return true;
+  }
   function isLoopbackRequest(req) {
+    if (isSupportTunnelRequest(req)) return false;
     const addr = deriveClientIp(req, getCfg());
     return addr === '127.0.0.1' || addr === '::1';
   }
@@ -1249,7 +1306,10 @@ export function createApiRoutes(ctx) {
   // old RFC1918/loopback behaviour.
   function isLocalNetworkRequest(req) {
     const addr = deriveClientIp(req, getCfg());
-    if (addr === '127.0.0.1' || addr === '::1') return true; // box itself, always
+    // Der Support-Tunnel kommt auch von 127.0.0.1, ist aber nicht die Box:
+    // für ihn gelten lanCidrs/trustedClientIps wie für jedes Heimnetz-Gerät
+    // (Gegenprüfung 6f9c9cca, P2). Ohne Listen zählt Loopback als privat.
+    if ((addr === '127.0.0.1' || addr === '::1') && !isSupportTunnelRequest(req)) return true; // box itself, always
     const sec = getCfg().security || {};
     const cidrs = Array.isArray(sec.lanCidrs) ? sec.lanCidrs.filter(Boolean) : [];
     const inRange = cidrs.length > 0
@@ -1632,16 +1692,7 @@ export function createApiRoutes(ctx) {
     try {
       const u = new URL(String(raw || ''));
       if (u.protocol !== 'https:') return false;
-      const host = u.hostname.toLowerCase();
-      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
-      const parts = host.split('.').map(Number);
-      if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
-        if (parts[0] === 10) return false;                                      // 10.0.0.0/8
-        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false; // 172.16/12
-        if (parts[0] === 192 && parts[1] === 168) return false;                 // 192.168/16
-        if (parts[0] === 169 && parts[1] === 254) return false;                 // 169.254/16 link-local
-      }
-      return true;
+      return !isInternalHost(u.hostname);
     } catch { return false; }
   }
 
@@ -1972,9 +2023,6 @@ export function createApiRoutes(ctx) {
     try { fs.unlinkSync(tokenPath); } catch (_) { /* idempotent */ }
   }
 
-  // Plan 08-04 Task 1 Step 8 & Task 2 Step 3: RFC1918 + loopback check —
-  // used by /api/meter/scan to refuse SSRF to internet hosts and by the
-  // heartbeat guard (via isAllowedHeartbeatUrl) to refuse internal pivots.
   /**
    * Zustand des EOS-Rechendienstes (Fernbetrieb) für die Oberfläche — ohne
    * Token und Lizenz (state.optimizer.eosRemote enthält beides nie). null im
@@ -1985,15 +2033,14 @@ export function createApiRoutes(ctx) {
     return state.optimizer?.eosRemote || { mode: 'remote', phase: 'starting' };
   }
 
+  // Plan 08-04 Task 1 Step 8 & Task 2 Step 3: RFC1918 + loopback check —
+  // used by /api/meter/scan to refuse SSRF to internet hosts and by the
+  // heartbeat guard (via isAllowedHeartbeatUrl) to refuse internal pivots.
+  // Freigabe-Prüfung „Box selbst oder Heimnetz“ (EOS-Proxy, DVEOS, Zähler-
+  // Scan). Seit dem Strix-Fund 29.10.2026 über services/host-address.js, das
+  // auch IPv6 in Klammern, IPv4-gemappte Adressen und ganz 127/8 kennt.
   function isRfc1918OrLoopback(host) {
-    const h = String(host || '').toLowerCase();
-    if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return true;
-    const parts = h.split('.').map(Number);
-    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-    if (parts[0] === 10) return true;                                      // 10.0.0.0/8
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // 172.16.0.0/12
-    if (parts[0] === 192 && parts[1] === 168) return true;                 // 192.168.0.0/16
-    return false;
+    return isPrivateOrLoopbackHost(host);
   }
 
   // ── Response builders ────────────────────────────────────────────────
@@ -2530,15 +2577,67 @@ export function createApiRoutes(ctx) {
   }
 
   // ── Static file serving ──────────────────────────────────────────────
+  // W1 (Strix-Fund 30.10.2026): existsSync ist auch für Verzeichnisse wahr;
+  // das Lesen scheiterte dann verzögert mit EISDIR — ungefangen beendete das
+  // den Prozess (ein Aufruf von /assets genügte). Nur reguläre Dateien
+  // ausliefern, Lesefehler des Streams abfangen.
+  function isServableFile(file) {
+    try { return fs.statSync(file).isFile(); } catch { return false; }
+  }
+
+  // Gegenprüfung zu W1: Kopfzeilen erst, wenn die Datei offen ist — sonst
+  // gab eine unlesbare Datei (EACCES, zwischen stat und open gelöscht) einen
+  // Verbindungsabbruch statt 404. pipeline statt pipe: bricht der Client ab,
+  // wird der Lese-Stream zerstört (pipe ließ den Dateideskriptor offen —
+  // ohne Token wiederholbar bis EMFILE).
+  function pipeFile(res, file, headers) {
+    // Gegenprüfung f1a2d515 (P2): bei HTTP-Pipelining warten spätere Antworten
+    // auf ihre Verbindung; öffneten sie die Datei sofort, blieb sie nach einem
+    // Verbindungsabbruch für immer offen (wartende Antworten bekommen kein
+    // close). Darum erst öffnen, wenn die Antwort an der Reihe ist.
+    if (!res.socket && typeof res.once === 'function' && res.req?.socket) {
+      const sock = res.req.socket;
+      const onClose = () => res.removeListener?.('socket', start);
+      // Beim Start den close-Listener wieder abnehmen — sonst sammelten sich
+      // auf Keep-Alive-Verbindungen Listener an (Gegenprüfung eac86325).
+      const start = () => { sock.removeListener?.('close', onClose); pipeFileNow(res, file, headers); };
+      res.once('socket', start);
+      sock.once?.('close', onClose);
+      return;
+    }
+    pipeFileNow(res, file, headers);
+  }
+
+  function pipeFileNow(res, file, headers) {
+    const stream = fs.createReadStream(file);
+    stream.once('error', () => {
+      if (!res.headersSent) text(res, 404, 'not found');
+      else res.destroy?.();
+    });
+    stream.once('open', () => {
+      res.writeHead(200, headers);
+      pipeline(stream, res, () => { /* Abbruch/Fehler: pipeline hat beide Seiten geschlossen */ });
+    });
+    res.once?.('close', () => { if (!stream.destroyed) stream.destroy(); });
+    // Gegenprüfung zu 1bc645ab (P2): ein Client, der nicht liest, aber
+    // verbunden bleibt, hielt Deskriptor und Socket sonst unbegrenzt (der
+    // Server setzt kein Timeout). Die Grenze misst Schreibfortschritt: ein
+    // Client, der so langsam liest, dass 30 s lang kein Block abfließt, wird
+    // ebenfalls getrennt (Gegenprüfung f1a2d515, P3 — der Browser lädt neu).
+    res.setTimeout?.(Number(ctx.staticIdleTimeoutMs) > 0 ? Number(ctx.staticIdleTimeoutMs) : 30_000, () => {
+      if (!stream.destroyed) stream.destroy();
+      res.destroy?.();
+    });
+  }
+
   function servePage(res, filename) {
     const appDir = ctx.getAppDir();
     const publicDir = path.resolve(appDir, 'public');
     const file = path.resolve(publicDir, filename);
     if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
-    if (!fs.existsSync(file)) return text(res, 404, 'not found');
+    if (!isServableFile(file)) return text(res, 404, 'not found');
     const cacheControl = (filename === 'setup.html' || filename === 'onboarding.html') ? 'no-store' : 'no-cache';
-    res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', 'cache-control': cacheControl });
-    fs.createReadStream(file).pipe(res);
+    pipeFile(res, file, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', 'cache-control': cacheControl });
   }
 
   function serveStatic(req, res) {
@@ -2563,7 +2662,7 @@ export function createApiRoutes(ctx) {
     const publicDir = path.resolve(appDir, 'public');
     const file = path.resolve(publicDir, reqPath.replace(/^\/+/, ''));
     if (!file.startsWith(publicDir + path.sep) && file !== publicDir) return text(res, 400, 'bad path');
-    if (!fs.existsSync(file)) return text(res, 404, 'not found');
+    if (!isServableFile(file)) return text(res, 404, 'not found');
     const ext = path.extname(file).toLowerCase();
     const mime = {
       '.html': 'text/html; charset=utf-8',
@@ -2583,8 +2682,7 @@ export function createApiRoutes(ctx) {
     } else if (ext === '.js' || ext === '.css') {
       cacheControl = 'no-cache';
     }
-    res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': mime, ...(cacheControl && { 'cache-control': cacheControl }) });
-    fs.createReadStream(file).pipe(res);
+    pipeFile(res, file, { ...SECURITY_HEADERS, 'content-type': mime, ...(cacheControl && { 'cache-control': cacheControl }) });
   }
 
   // ── T-INSTALLER-PORTAL: /api/installer/* ──────────────────────────────
@@ -2805,6 +2903,11 @@ export function createApiRoutes(ctx) {
         const body = await readJsonBody(req, res);
         if (body === null) return;
         if (!csrfOk(body)) return csrfFail();
+        // Strix T-0001: eine Kopplung (mit Freigaben) startet der Kunde.
+        if (isSupportTunnelRequest(req)) {
+          pushLog('support_tunnel_consent_denied', { action: 'client_pair' }, actorContext(req));
+          return json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Eine Kopplung startet der Kunde selbst.' });
+        }
         try {
           const r = await ipc.claim({
             portalUrl: body.portalUrl,
@@ -2865,6 +2968,12 @@ export function createApiRoutes(ctx) {
         if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'enabled_must_be_boolean' });
         // Nur Ausschalten ist privilegien-REDUZIEREND und geht immer (Kill-Switch).
         const onlyReducing = Object.values(patch).every((v) => v === false);
+        // Strix T-0001: Freigaben erteilt der Kunde, nicht der Support über den
+        // offenen Tunnel (allowTunnel hieße: jederzeit wieder öffnen).
+        if (!onlyReducing && isSupportTunnelRequest(req)) {
+          pushLog('support_tunnel_consent_denied', { patch }, actorContext(req));
+          return json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Freigaben für den Fernzugang erteilt der Kunde selbst.' });
+        }
         if (!onlyReducing && !csrfOk(body)) return csrfFail();
         try {
           const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
@@ -2897,6 +3006,7 @@ export function createApiRoutes(ctx) {
       const body = await readJsonBody(req, res);
       if (body === null) return;
       if (p === '/api/installer/confirm' && method === 'POST' && !csrfOk(body)) return csrfFail();
+      if (p === '/api/installer/confirm' && method === 'POST' && denySupportConsent(req, res, 'installer_confirm')) return;
       try {
         if (p === '/api/installer/confirm' && method === 'POST') {
           return json(res, 200, { ok: true, ...portal.confirm({ installerId: body.installerId, pairingCode: body.pairingCode }) });
@@ -2999,11 +3109,12 @@ export function createApiRoutes(ctx) {
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
     requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback,
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, requestEosReplanAfterSave, ALLOWED_CONFIG_ROOTS,
+    hasValidBearer, denySupportConsent,
   });
   const adminRoutes = createAdminRoutes({
     ctx, getCfg, pushLog,
     json, checkAuth, adminHealthPayload, execFileAsync, SECURITY_HEADERS,
-    actorContext, deriveClientIp, tokenFingerprint,
+    actorContext, deriveClientIp, tokenFingerprint, denySupportConsent,
     GIT_SHA_REF, SEMVER_TAG, compareSemverTag, selectLatestSemverTag, assertNoDowngrade, listReachableReleaseTags,
   });
   const notificationRoutes = createNotificationRoutes({ ctx, pushLog, json, checkAuth, actorContext, checkProviderRateLimit });
@@ -4053,6 +4164,15 @@ export function createApiRoutes(ctx) {
       }
       if (typeof body.rejectUnauthorized === 'boolean') patch.rejectUnauthorized = body.rejectUnauthorized;
       next.mqtt = patch;
+      // Gegenprüfung bca61061 (P2): mit neuer Broker-Adresse wandern die
+      // gespeicherten Zugangsdaten nicht mit (wie restoreRedacted für /api/config).
+      // Nur was der Request NICHT neu gesetzt hat (fehlt oder „***“) — eingegebene
+      // Werte bleiben auch bei neuer Adresse (Gegenprüfung 4fe254c9, P1).
+      const keptMqtt = [];
+      if (typeof body.username !== 'string') keptMqtt.push('mqtt.username');
+      if (typeof body.password !== 'string' || body.password === '***') keptMqtt.push('mqtt.password');
+      const droppedMqtt = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, keptMqtt);
+      if (droppedMqtt.length) pushLog('config_secret_dropped_target_changed', { paths: droppedMqtt }, actorContext(req));
       let result;
       try {
         result = ctx.saveAndApplyConfig(next);
@@ -4146,12 +4266,15 @@ export function createApiRoutes(ctx) {
     }
 
     // Stufe-C node-lock: bind the ACTIVE license to this appliance. Calls the
-    // server activation proxy (licensing.activationProxyUrl → webhook.dvhub.de),
+    // server activation proxy (fest webhook.dvhub.de, Strix L-0006),
     // which mints a Keygen machine bound to this box's appliance-id and returns a
     // signed offline machine file; the service verifies it OFFLINE + asserts the
     // bound fingerprint == this appliance before persisting (activateNodeLock).
     // No body — binds the persisted key. Transport/proxy failures are 503 (state
-    // unchanged, retryable); a crypto/binding failure is a hard 422.
+    // unchanged, retryable); a crypto/binding failure is a hard 422. Gelingt die
+    // Bindung, hebt das eine Pro-Sperre wegen „andere Box“ auf (Strix L-0005).
+    // Achtung: der Proxy gibt den Slot einer anderen Box frei, wenn deren
+    // Bindung älter als 24 h ist — das ist hier ein bewusster Knopfdruck.
     if (url.pathname === '/api/license/activate-node-lock' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
       const result = await licenseService.activateNodeLock();
@@ -4991,6 +5114,7 @@ export function createApiRoutes(ctx) {
         }
         const onlyNarrowing = Object.keys(patch).length > 0
           && Object.keys(patch).every((k) => (k === 'enabled' && patch.enabled === false) || (k === 'useRelay' && patch.useRelay === false));
+        if (!onlyNarrowing && denySupportConsent(req, res, 'mobile_link_settings')) return;
         if (!onlyNarrowing && !nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
         next.mobileLink = { ...(next.mobileLink || {}), ...patch };
@@ -5000,10 +5124,12 @@ export function createApiRoutes(ctx) {
         return json(res, 200, { ok: true, ...ml.status() });
       }
       if (url.pathname === '/api/mobile-link/pair/start') {
+        if (denySupportConsent(req, res, 'mobile_link_pair_start')) return;
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try { return json(res, 200, { ok: true, pairing: ml.startPairing({ lanHost: body.lanHost }) }); } catch (e) { return fail(e); }
       }
       if (url.pathname === '/api/mobile-link/pair/approve') {
+        if (denySupportConsent(req, res, 'mobile_link_pair_approve')) return;
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try {
           const r = ml.approvePairing({ perms: body.perms, name: body.name, approveToken: body.approveToken });
@@ -5017,6 +5143,7 @@ export function createApiRoutes(ctx) {
         try { return json(res, 200, ml.removeDevice(String(body.id || ''))); } catch (e) { return fail(e); }
       }
       if (url.pathname === '/api/mobile-link/devices/update') {
+        if (denySupportConsent(req, res, 'mobile_link_device_update')) return;
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try { return json(res, 200, ml.updateDevice(String(body.id || ''), { name: body.name, perms: body.perms })); } catch (e) { return fail(e); }
       }
@@ -5582,6 +5709,11 @@ export function createApiRoutes(ctx) {
         next.pvCoupling = body.pvCoupling;
       }
       try {
+        // Neuer victron.host = neues MQTT-Ziel: gespeicherte GX-Zugangsdaten
+        // wandern nicht mit (Gegenprüfung 4fe254c9, P2). Diese Route setzt keine
+        // Zugangsdaten — alle unveränderten gelten als mitgetragen.
+        const droppedVic = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, unchangedSecretPaths(next, ctx.getRawCfg() || {}));
+        if (droppedVic.length) pushLog('config_secret_dropped_target_changed', { paths: droppedVic }, actorContext(req));
         ctx.saveAndApplyConfig(next);
       } catch (e) {
         pushLog('victron_config_save_error', { error: e.message });
@@ -6139,6 +6271,22 @@ export function createApiRoutes(ctx) {
       delete next.evcc.releaseValueW;
       next.evcc.url = String(body.url == null ? (next.evcc.url || '') : body.url).trim().slice(0, 256);
       next.evcc.dashboardLoadpoint = lp;
+      // Gegenprüfung bca61061 (P2): neue Wallbox-Adresse → gespeicherte
+      // Zugangsdaten bleiben nicht hängen.
+      // Nur die Zugangsdaten, die dieser Request nicht neu gesetzt hat
+      // (leer/fehlend/„***“ = behalten) — Gegenprüfung 4fe254c9, P1.
+      const keptWb = [];
+      if (wallboxPatch) {
+        const keepV = (v) => v == null || v === '' || v === '***';
+        const w = body.wallbox || {};
+        if (keepV(w.openevse?.username)) keptWb.push('wallbox.openevse.username');
+        if (keepV(w.openevse?.password)) keptWb.push('wallbox.openevse.password');
+        if (keepV(w.wattpilot?.password)) keptWb.push('wallbox.wattpilot.password');
+        if (keepV(w.nrgkick?.username)) keptWb.push('wallbox.nrgkick.username');
+        if (keepV(w.nrgkick?.password)) keptWb.push('wallbox.nrgkick.password');
+      }
+      const droppedWb = dropSecretsForChangedTargets(next, ctx.getRawCfg() || {}, keptWb);
+      if (droppedWb.length) pushLog('config_secret_dropped_target_changed', { paths: droppedWb }, actorContext(req));
       try {
         ctx.saveAndApplyConfig(next);
       } catch (e) {
@@ -6487,13 +6635,18 @@ export function createApiRoutes(ctx) {
       const prev = next.notifications.providers;
 
       // ntfy — a real notifications.providers entry.
+      // Gegenprüfung edeb17db (P2): dieselben Regeln wie /api/notifications/
+      // providers/ntfy — Adresse geprüft (keine internen Ziele), der
+      // gespeicherte Token folgt nur auf denselben Server.
       const inNtfy = body.ntfy || {};
+      const ntfyTopicUrl = clip(inNtfy.topicUrl, 512);
+      if (ntfyTopicUrl && !isAllowedOutboundUrl(ntfyTopicUrl)) return json(res, 400, { ok: false, error: 'invalid_topicurl' });
       const ntfyToken = (inNtfy.token === '***')
-        ? (prev.ntfy && prev.ntfy.token) || ''      // keep existing — '***' means "unchanged"
+        ? (sameOrigin(ntfyTopicUrl, prev.ntfy?.topicUrl) ? (prev.ntfy?.token || '') : '')   // '***' = unverändert, aber nur für denselben Server
         : clip(inNtfy.token, 256);
       next.notifications.providers.ntfy = {
         enabled: !!inNtfy.enabled,
-        topicUrl: clip(inNtfy.topicUrl, 512),
+        topicUrl: ntfyTopicUrl,
         ...(ntfyToken ? { token: ntfyToken } : {})
       };
       // Gap 3 step 2: scrub any stale duplicate provider so it cannot resurrect
@@ -6833,6 +6986,13 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/support/tunnel/open' && req.method === 'POST') {
       if (!ctx.supportTunnel) return json(res, 503, { ok: false, error: 'support_tunnel_unavailable' });
       const actor = actorContext(req);
+      // Strix T-0001: öffnen/verlängern entscheidet der Kunde, nicht der
+      // Support über den offenen Tunnel. Schließen bleibt erlaubt.
+      if (isSupportTunnelRequest(req)) {
+        req.resume?.();
+        pushLog('support_tunnel_self_extend_denied', {}, actor);
+        return json(res, 403, { ok: false, error: 'support_tunnel_self_extend', detail: 'Über den Support-Tunnel lässt er sich nicht öffnen oder verlängern — das macht der Kunde.' });
+      }
       const body = await readJsonBody(req, res);
       if (body === null) return; // readJsonBody already sent 400/413
       const hasValidBearer = (() => {
@@ -6944,13 +7104,18 @@ export function createApiRoutes(ctx) {
       // maxRes is in SECONDS (maxResolution=900 -> 15 min buckets).
       const startMs = Date.parse(start);
       const endMs = Date.parse(end);
-      const stepMs = Math.max(1, Number(maxRes)) * 1000;
+      const streamed = !!ctx.telemetryStore.iterateSeriesBuckets && STREAM_BUCKET_SECONDS.has(maxRes);
+      // Fenster, auf das die Antwort zusammengefasst wird (H-0003): gestreamt
+      // = maxRes, sonst min(maxRes, 900) — das gibt querySeries als bucketSec.
+      const bucketSec = streamed ? maxRes : Math.min(900, Math.max(1, Math.round(Number(maxRes))));
+      const stepMs = Math.max(1, bucketSec) * 1000;
+      const limit = streamed ? MAX_TELEMETRY_SCAN_SLOTS : MAX_TELEMETRY_SERIES_ROWS;
       const totalSlots = Math.ceil(((Number.isFinite(endMs) ? endMs : 0) - (Number.isFinite(startMs) ? startMs : 0)) / stepMs) * (keys.length || 1);
-      if (!Number.isFinite(totalSlots) || totalSlots < 0 || totalSlots > MAX_TELEMETRY_SCAN_SLOTS) {
+      if (!Number.isFinite(totalSlots) || totalSlots < 0 || totalSlots > limit) {
         return json(res, 400, {
           ok: false,
           error: 'scan_too_large',
-          limit: MAX_TELEMETRY_SCAN_SLOTS,
+          limit,
           requested: Number.isFinite(totalSlots) ? totalSlots : null
         });
       }
@@ -6958,12 +7123,13 @@ export function createApiRoutes(ctx) {
       // und in Zeitfenstern gestreamt — der Speicher hängt dann nicht mehr an
       // der Länge des Zeitraums (7 Tage × 5 s lief vorher in „heap out of
       // memory“). Grobe Abfragen behalten das bisherige Verhalten.
-      if (ctx.telemetryStore.iterateSeriesBuckets && STREAM_BUCKET_SECONDS.has(maxRes)) {
+      if (streamed) {
         await seriesQueue.run({ req, res }, () => streamTelemetrySeries(req, res, { keys, start, end, bucketSec: maxRes }));
         return;
       }
       try {
-        const rows = await ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes });
+        const rows = await seriesFlatQueue.run({ req, res }, () => ctx.telemetryStore.querySeries({ seriesKeys: keys, start, end, maxResolution: maxRes, bucketSec }));
+        if (rows === HEAVY_SKIPPED) return; // Client schon weg
         return json(res, 200, { ok: true, keys, start, end, total: rows.length, data: rows });
       } catch (e) {
         return json(res, 500, { ok: false, error: e.message });
@@ -8384,6 +8550,8 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/start' && req.method === 'POST') {
+      // Ein VPN überdauert den Support-Tunnel (Gegenprüfung fbb2dc4b, P1).
+      if (denySupportConsent(req, res, 'vpn_start')) return;
       if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       // Plan 08-09 Task 2: VPN start/stop/restart are operator-initiated
@@ -8446,6 +8614,7 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/config/upload' && req.method === 'POST') {
+      if (denySupportConsent(req, res, 'vpn_upload')) return;
       if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
 

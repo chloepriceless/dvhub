@@ -677,6 +677,28 @@ describe('H-3: EPEX priceApiUrl SSRF guard', () => {
     assert.equal(body.error, 'invalid_epex_price_api_url');
   });
 
+  // Strix-Fund 29.10.2026: die Prüfung kannte nur IPv4 in Punktschreibweise.
+  // new URL() liefert IPv6 in Klammern ("[::1]") und IPv4-gemappt als Hex
+  // ("[::ffff:7f00:1]") — beides galt als öffentlich, ebenso 127.x außer
+  // 127.0.0.1, 0.0.0.0 und 169.254/16 (Metadaten-Dienst in Clouds).
+  for (const target of [
+    'https://[::1]/x', 'https://[::ffff:127.0.0.1]/x', 'https://127.0.0.2/x',
+    'https://0.0.0.0/x', 'https://169.254.169.254/latest', 'https://[fe80::1]/x',
+    'https://[fd00::5]/x', 'https://[::ffff:192.168.1.5]/x', 'https://[::]/x',
+  ]) {
+    it(`internal priceApiUrl in other notation (${target}) → 400 invalid_epex_price_api_url`, async () => {
+      const routes = createApiRoutes(mockCtx());
+      const res = mockRes();
+      await routes.handleRequest(
+        makeReq('POST', '/api/config', { config: { epex: { priceApiUrl: target } } }),
+        res,
+        new URL('http://localhost/api/config')
+      );
+      assert.equal(res._captured.status, 400, `${target} must be rejected`);
+      assert.equal(JSON.parse(res._captured.body).error, 'invalid_epex_price_api_url');
+    });
+  }
+
   it('valid public https priceApiUrl is accepted (not 400)', async () => {
     const ctx = mockCtx();
     const routes = createApiRoutes(ctx);
@@ -689,6 +711,35 @@ describe('H-3: EPEX priceApiUrl SSRF guard', () => {
     assert.notEqual(res._captured.status, 400,
       'a valid public https priceApiUrl must pass the SSRF guard');
   });
+});
+
+// Gegenstück zum EPEX-Guard: optimizer.eosProxy.url darf per http nur auf die
+// Box selbst oder ins Heimnetz zeigen. IPv6 in Klammern („[::1]“, ULA) wurde
+// bisher abgelehnt, obwohl EOS daneben läuft; link-local bleibt verboten.
+describe('EOS proxy URL guard: address notations', () => {
+  async function saveEosUrl(url) {
+    const routes = createApiRoutes(mockCtx());
+    const res = mockRes();
+    await routes.handleRequest(
+      makeReq('POST', '/api/config', { config: { optimizer: { eosProxy: { url } } } }),
+      res,
+      new URL('http://localhost/api/config')
+    );
+    return { status: res._captured.status, error: (() => { try { return JSON.parse(res._captured.body).error; } catch { return null; } })() };
+  }
+  for (const ok of ['http://[::1]:8503', 'http://[fd00::5]:8503', 'http://[::ffff:192.168.1.60]:8503', 'http://127.0.0.1:8503', 'http://192.168.1.60:8503']) {
+    it(`http to the box or the home network (${ok}) is accepted`, async () => {
+      const r = await saveEosUrl(ok);
+      assert.notEqual(r.error, 'invalid_eos_proxy_url', `${ok} must pass`);
+    });
+  }
+  for (const bad of ['http://169.254.169.254/', 'http://[fe80::1]:8503', 'http://0.0.0.0:8503', 'http://8.8.8.8:8503']) {
+    it(`http to ${bad} → 400 invalid_eos_proxy_url`, async () => {
+      const r = await saveEosUrl(bad);
+      assert.equal(r.status, 400);
+      assert.equal(r.error, 'invalid_eos_proxy_url');
+    });
+  }
 });
 
 describe('H-4: EPEX upstream response byte-cap', () => {
@@ -983,6 +1034,93 @@ describe('Phase 17 R-6: Free endpoints unaffected by license gate', () => {
   }
 });
 
+// Strix-Fund 29.10.2026 (am Code bestätigt): der ntfy-Testknopf nahm die
+// Adresse aus der Anfrage und hängte den GESPEICHERTEN Token an — ein Gerät im
+// WLAN konnte sich den Token an einen eigenen Server schicken lassen. Gleiches
+// beim Speichern: neue Adresse + '***' behielt den Token. Der gespeicherte
+// Token gilt jetzt nur für den gespeicherten Server (gleiche Origin).
+describe('ntfy: stored token stays bound to the stored server', () => {
+  const STORED = { topicUrl: 'https://ntfy.example.org/dvhub-alarm', token: 'tk_stored_secret' };
+  function ctxWith(saved) {
+    const raw = { notifications: { providers: { ntfy: { enabled: true, ...STORED } } } };
+    return mockCtx({ getRawCfg: () => raw, saveAndApplyConfig: (next) => { saved.push(next); } });
+  }
+  async function withFetch(fn) {
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => { calls.push({ url: String(url), auth: opts.headers?.Authorization || null }); return { ok: true, status: 200 }; };
+    try { await fn(calls); } finally { globalThis.fetch = realFetch; }
+  }
+  async function post(ctx, path, body) {
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', path, body), res, new URL(`http://localhost${path}`));
+    return { status: res._captured.status, body: (() => { try { return JSON.parse(res._captured.body); } catch { return null; } })() };
+  }
+
+  it('test button with a foreign server does not send the stored token', async () => {
+    await withFetch(async (calls) => {
+      await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: 'https://attacker.example.net/x', token: '***' });
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].auth, null, 'stored token must not go to another server');
+    });
+  });
+
+  it('test button on the same server (other topic) still uses the stored token', async () => {
+    await withFetch(async (calls) => {
+      await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: 'https://ntfy.example.org/anderes-topic', token: '***' });
+      assert.equal(calls[0]?.auth, 'Bearer tk_stored_secret');
+    });
+  });
+
+  it('test button with an explicitly typed token sends that token', async () => {
+    await withFetch(async (calls) => {
+      await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: 'https://other.example.net/x', token: 'tk_typed' });
+      assert.equal(calls[0]?.auth, 'Bearer tk_typed');
+    });
+  });
+
+  for (const bad of ['http://127.0.0.1:8503/v1/config', 'http://[::1]:1883/', 'http://169.254.169.254/latest', 'file:///etc/passwd', 'gopher://x/']) {
+    it(`test button refuses ${bad} (400 invalid_topicurl, no request)`, async () => {
+      await withFetch(async (calls) => {
+        const r = await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: bad });
+        assert.equal(r.status, 400);
+        assert.equal(r.body?.error, 'invalid_topicurl');
+        assert.equal(calls.length, 0);
+      });
+    });
+  }
+
+  it('self-hosted ntfy in the home network stays allowed', async () => {
+    await withFetch(async (calls) => {
+      const r = await post(ctxWith([]), '/api/notifications/providers/ntfy/test', { topicUrl: 'http://192.168.1.10:8080/dvhub', token: 'tk_lan' });
+      assert.notEqual(r.body?.error, 'invalid_topicurl');
+      assert.equal(calls.length, 1);
+    });
+  });
+
+  it('saving a foreign server with token "***" drops the stored token', async () => {
+    const saved = [];
+    await post(ctxWith(saved), '/api/notifications/providers/ntfy', { enabled: true, topicUrl: 'https://attacker.example.net/x', token: '***' });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].notifications.providers.ntfy.token, undefined, 'token must not follow the URL to another server');
+  });
+
+  it('saving the same server with token "***" keeps the stored token', async () => {
+    const saved = [];
+    await post(ctxWith(saved), '/api/notifications/providers/ntfy', { enabled: true, topicUrl: 'https://ntfy.example.org/neues-topic', token: '***' });
+    assert.equal(saved[0].notifications.providers.ntfy.token, 'tk_stored_secret');
+  });
+
+  it('saving refuses an internal topicUrl (400 invalid_topicurl)', async () => {
+    const saved = [];
+    const r = await post(ctxWith(saved), '/api/notifications/providers/ntfy', { enabled: true, topicUrl: 'http://127.0.0.1:8503/', token: '***' });
+    assert.equal(r.status, 400);
+    assert.equal(r.body?.error, 'invalid_topicurl');
+    assert.equal(saved.length, 0);
+  });
+});
+
 // E-Auto-Ladestand per HTTP-Abruf / Home Assistant (2026-10-27): DVhub holt
 // die URL serverseitig ab. Im LAN per http erlaubt (HA steht dort), ins
 // Internet nur https; Link-Local (Cloud-Metadaten), 0.0.0.0, Zugangsdaten in
@@ -1012,4 +1150,191 @@ describe('E-Auto-Quellen: URL-Pruefung beim Speichern', () => {
       }
     });
   }
+});
+
+// Strix L-0006 (30.10.2026): licensing.activationProxyUrl ließ sich per
+// POST /api/config auf einen fremden Server setzen — danach ging der
+// Lizenzschlüssel beim nächsten Binden dorthin. licensing.* ist jetzt wie die
+// anderen Schlüssel mit eigenen Wegen geschützt, auch beim Import.
+describe('licensing.* ist über /api/config und Import nicht änderbar', () => {
+  for (const route of ['/api/config', '/api/config/import']) {
+    it(`${route}: licensing bleibt, wie die Box es hat`, async () => {
+      const raw = { licensing: { keygenAccount: 'acct-box' } };
+      const saved = [];
+      const ctx = mockCtx({ getRawCfg: () => raw, saveAndApplyConfig: (next) => { saved.push(next); return { ok: true }; } });
+      const routes = createApiRoutes(ctx);
+      const res = mockRes();
+      await routes.handleRequest(
+        makeReq('POST', route, { config: { licensing: { keygenAccount: 'acct-evil', activationProxyUrl: 'https://evil.example.net/x', nodeLockedPolicyIds: [] } } }),
+        res,
+        new URL(`http://localhost${route}`)
+      );
+      assert.ok(saved.length >= 1, `gespeichert (${res._captured.status} ${res._captured.body})`);
+      assert.deepEqual(saved.at(-1).licensing, raw.licensing);
+    });
+  }
+});
+
+// Gegenprüfung zu 68e4bb91 (P2): eine aus der Beta gespeicherte, inzwischen
+// nicht mehr freigegebene Rechendienst-Adresse darf das Speichern ANDERER
+// Einstellungen nicht blockieren (Senden bleibt in eos-remote call() gesperrt).
+describe('EOS-Rechendienst-Adresse: Prüfung nur bei Änderung', () => {
+  const raw = () => ({ optimizer: { eosProxy: { remote: { endpoint: 'http://192.168.1.20:8080' } } } });
+  async function save(endpoint) {
+    const saved = [];
+    const ctx = mockCtx({ getRawCfg: raw, saveAndApplyConfig: (next) => { saved.push(next); return { ok: true }; } });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', '/api/config', { config: { httpPort: 8080, optimizer: { eosProxy: { remote: { endpoint } } } } }), res, new URL('http://localhost/api/config'));
+    return { status: res._captured.status, body: res._captured.body, saved };
+  }
+  it('unveränderte Altadresse → Speichern klappt', async () => {
+    const r = await save('http://192.168.1.20:8080');
+    assert.notEqual(r.status, 400, r.body);
+  });
+  it('neue nicht freigegebene Adresse → 400 invalid_eos_remote_endpoint', async () => {
+    const r = await save('https://evil.example.net');
+    assert.equal(r.status, 400);
+    assert.equal(JSON.parse(r.body).error, 'invalid_eos_remote_endpoint');
+  });
+});
+
+// Strix-Fund W1 (30.10.2026): GET auf ein Verzeichnis unter public/ (z. B.
+// /assets) bestand die existsSync-Prüfung, das Lesen scheiterte dann
+// verzögert mit EISDIR — uncaughtException → process.exit(1). Ein einziger
+// Aufruf ohne Token beendete DVhub. Verzeichnisse und Unlesbares → 404.
+describe('W1: static file serving never crashes on directories', () => {
+  it('GET on a directory below public/ answers 404 instead of streaming it', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const app = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-w1-'));
+    fs.mkdirSync(path.join(app, 'public', 'assets', 'pf-sky'), { recursive: true });
+    fs.writeFileSync(path.join(app, 'public', 'index.html'), '<!doctype html>');
+    try {
+      const routes = createApiRoutes(mockCtx({ getAppDir: () => app }));
+      for (const p of ['/assets', '/assets/', '/%61ssets', '/assets/pf-sky']) {
+        const res = mockRes();
+        await routes.serveStatic(makeReq('GET', p), res);
+        assert.equal(res._captured.status, 404, `${p} must answer 404`);
+      }
+    } finally {
+      fs.rmSync(app, { recursive: true, force: true });
+    }
+  });
+});
+
+// Strix H-0003 (30.10.2026): der Slot-Zähler rechnete mit maxResolution als
+// Schritt, querySeries lieferte aber jede feinere Zeile (Dedup-Fenster =
+// Auflösung der Zeile) und ohne LIMIT — 900 s über 14 Tage 1-s-Rohwerte
+// waren ~1,2 Mio. Zeilen im Web-Prozess. Jetzt fasst die Abfrage auf das
+// Fenster min(maxResolution, 900) zusammen, der Zähler rechnet mit genau dem
+// Fenster und der nicht-gestreamte Weg hat eine eigene, kleinere Grenze.
+describe('H-0003: /api/telemetry/series zählt, was wirklich zurückkommt', () => {
+  async function call(qs) {
+    const seen = [];
+    const ctx = mockCtx({ telemetryStore: { querySeries: async (a) => { seen.push(a); return []; } } });
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    const p = `/api/telemetry/series?${qs}`;
+    await routes.handleRequest(makeReq('GET', p), res, new URL(`http://localhost${p}`));
+    return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}'), seen };
+  }
+  it('maxResolution=900 → Abfrage in 15-min-Fenstern (bucketSec 900)', async () => {
+    const r = await call('keys=battery_soc_pct&start=2026-10-01T00:00:00Z&end=2026-10-31T00:00:00Z&maxResolution=900');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.seen[0].bucketSec, 900);
+  });
+  it('maxResolution=3600 → Fenster höchstens 900 s, Zähler rechnet mit 900', async () => {
+    const r = await call(`keys=${Array.from({ length: 50 }, (_, i) => `k${i}`).join(',')}&start=2025-10-01T00:00:00Z&end=2026-10-31T00:00:00Z&maxResolution=3600`);
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error, 'scan_too_large');
+    assert.equal(r.seen.length, 0);
+  });
+  it('maxResolution=1 über 3 Tage → 400 statt Hunderttausender Zeilen im Speicher', async () => {
+    const r = await call('keys=battery_soc_pct&start=2026-10-01T00:00:00Z&end=2026-10-04T00:00:00Z&maxResolution=1');
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error, 'scan_too_large');
+    assert.equal(r.seen.length, 0);
+  });
+  it('Handy-App-Rückfall (900 s, 1 Tag, 5 Reihen) geht weiter', async () => {
+    const r = await call('keys=a,b,c,d,e&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=900');
+    assert.equal(r.status, 200);
+  });
+});
+
+// Gegenprüfung 8e7bb8ef: (P1) der nicht gestreamte Weg hatte keine
+// Nebenläufigkeitsgrenze — mehrere Anfragen à 200 000 Zeilen gleichzeitig
+// sprengten den Web-Prozess; (P3) der Strom-Weg war auf Routenebene ungetestet.
+describe('H-0003 Gegenprüfung: /api/telemetry/series begrenzt', () => {
+  it('nicht gestreamt: höchstens 2 Abfragen gleichzeitig, Grenze 100 000 Fenster', async () => {
+    let running = 0; let peak = 0;
+    const ctx = mockCtx({ telemetryStore: { querySeries: async () => { running++; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, 30)); running--; return []; } } });
+    const routes = createApiRoutes(ctx);
+    const p = '/api/telemetry/series?keys=battery_soc_pct&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=900';
+    await Promise.all([1, 2, 3, 4].map(async () => {
+      const res = mockRes();
+      await routes.handleRequest(makeReq('GET', p), res, new URL(`http://localhost${p}`));
+      assert.equal(res._captured.status, 200);
+    }));
+    assert.ok(peak <= 2, `gleichzeitig: ${peak}`);
+    const big = '/api/telemetry/series?keys=a,b,c,d,e,f,g&start=2026-10-01T00:00:00Z&end=2026-10-02T23:00:00Z&maxResolution=6';
+    const res = mockRes();
+    await routes.handleRequest(makeReq('GET', big), res, new URL(`http://localhost${big}`));
+    assert.equal(res._captured.status, 400, res._captured.body);
+    assert.equal(JSON.parse(res._captured.body).limit, 100000);
+  });
+  it('gestreamt: über 1,5 Mio. Fenster → 400, sonst über iterateSeriesBuckets', async () => {
+    let iterated = 0;
+    const ctx = mockCtx({ telemetryStore: {
+      querySeries: async () => { throw new Error('darf nicht'); },
+      async *iterateSeriesBuckets() { iterated++; yield []; },
+    } });
+    const routes = createApiRoutes(ctx);
+    const big = '/api/telemetry/series?keys=a,b,c,d,e,f,g&start=2026-10-01T00:00:00Z&end=2026-10-15T00:00:00Z&maxResolution=5';
+    const r1 = mockRes();
+    await routes.handleRequest(makeReq('GET', big), r1, new URL(`http://localhost${big}`));
+    assert.equal(r1._captured.status, 400);
+    assert.equal(iterated, 0);
+    const ok = '/api/telemetry/series?keys=a&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=5';
+    const chunks = [];
+    const r2 = { ...mockRes(), headersSent: false, setHeader() {}, write(c) { chunks.push(String(c)); return true; }, on() {}, once() {} };
+    await routes.handleRequest(makeReq('GET', ok), r2, new URL(`http://localhost${ok}`));
+    assert.equal(iterated, 1);
+  });
+});
+
+// Gegenprüfung 7d1196cc (P1): ein Strom-Client, der trennt, während der Server
+// auf 'drain' wartet, hielt seinen Warteschlangen-Platz für immer — und seit
+// 7d1196cc wartete der nicht gestreamte Weg in derselben Schlange.
+describe('H-0003 Gegenprüfung: hängende Ströme blockieren nichts', () => {
+  it('Trennen während des Wartens auf drain beendet den Strom; ungestreamte Abfragen laufen trotzdem', async () => {
+    const { EventEmitter } = await import('node:events');
+    const ctx = mockCtx({ telemetryStore: {
+      querySeries: async () => [],
+      async *iterateSeriesBuckets() { yield [{ key: 'a', ts: 't', value: 1 }]; yield [{ key: 'a', ts: 't2', value: 2 }]; },
+    } });
+    const routes = createApiRoutes(ctx);
+    const stuck = () => {
+      const res = new EventEmitter();
+      Object.assign(res, { headersSent: false, writeHead() { this.headersSent = true; }, setHeader() {}, write() { return false; }, end() {}, destroy() { this.destroyed = true; } });
+      return res;
+    };
+    const sp = '/api/telemetry/series?keys=a&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=5';
+    const r1 = stuck(); const r2 = stuck();
+    const p1 = routes.handleRequest(makeReq('GET', sp), r1, new URL(`http://localhost${sp}`));
+    const p2 = routes.handleRequest(makeReq('GET', sp), r2, new URL(`http://localhost${sp}`));
+    await new Promise((r) => setTimeout(r, 50));
+    // Ungestreamt kommt trotz zweier hängender Ströme durch.
+    const flat = '/api/telemetry/series?keys=a&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z&maxResolution=900';
+    const res = mockRes();
+    await Promise.race([
+      routes.handleRequest(makeReq('GET', flat), res, new URL(`http://localhost${flat}`)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('ungestreamte Abfrage hängt')), 2000)),
+    ]);
+    assert.equal(res._captured.status, 200);
+    // Trennen: die Ströme enden statt ewig auf drain zu warten.
+    r1.emit('close'); r2.emit('close');
+    await Promise.race([Promise.all([p1, p2]), new Promise((_, rej) => setTimeout(() => rej(new Error('Strom hängt nach close')), 2000))]);
+  });
 });

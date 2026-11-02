@@ -70,3 +70,53 @@ test('mobileLink bleibt beim Speichern und beim Import „nur Einstellungen“',
   applyCarriedKeys(imp, carried);
   assert.equal(imp.mobileLink.relayUrl, 'wss://alt.example.org/v1/ws');
 });
+
+// Strix L-0006 (30.10.2026): licensing.* (Keygen-Konto, Aktivierungs-Proxy,
+// Node-Lock) ist Lizenz-Infrastruktur. Weder Speichern noch Import — auch kein
+// Geräte-Tausch — dürfen sie ändern; sonst ließe sich der Lizenzschlüssel per
+// POST /api/config an einen fremden Server umleiten.
+test('licensing bleibt beim Speichern, beim Import und beim Geräte-Tausch wie auf der Box', () => {
+  const cur = { licensing: { keygenAccount: 'acct', nodeLock: false } };
+  const evil = () => ({ licensing: { keygenAccount: 'acct', activationProxyUrl: 'https://evil.example.net/x', nodeLock: false } });
+  const save = evil();
+  protectOwnRouteKeys(save, cur);
+  assert.deepEqual(save.licensing, cur.licensing);
+  const imp = evil();
+  const carried = protectOwnRouteKeys(imp, cur, { isImport: true });
+  applyCarriedKeys(imp, carried);
+  assert.deepEqual(imp.licensing, cur.licensing);
+  const fresh = evil();
+  protectOwnRouteKeys(fresh, {});
+  assert.equal('licensing' in fresh, false, 'ohne eigenen Eintrag gelten die Werte aus dem Code');
+});
+
+// Strix T-0001 (30.10.2026): config.support.relay geht vor relay.json — über
+// POST /api/config ließ sich das Relay des Support-Tunnels umbiegen (Folge:
+// Support-Ausfall; der Hostschlüssel ist gepinnt). Geschützt wird nur dieser
+// Pfad: support.localUser und support.tunnel stellt der Kunde selbst.
+const relayBox = () => ({ support: { relay: { host: 'support.dvhub.de', shellPort: 49101, webPort: 49102 }, localUser: { enabled: true } } });
+const relayFile = () => ({ support: { relay: { host: 'evil.example.net', shellPort: 1, webPort: 2 }, localUser: { enabled: false }, tunnel: { autoCloseMin: 30 } } });
+
+test('T-0001: Speichern ändert support.relay nicht, die übrigen support-Werte schon', () => {
+  const incoming = relayFile();
+  protectOwnRouteKeys(incoming, relayBox());
+  assert.deepEqual(incoming.support.relay, relayBox().support.relay);
+  assert.deepEqual(incoming.support.localUser, { enabled: false });
+  assert.deepEqual(incoming.support.tunnel, { autoCloseMin: 30 });
+});
+
+test('T-0001: Speichern ohne Relay auf der Box bringt keins mit', () => {
+  const incoming = relayFile();
+  protectOwnRouteKeys(incoming, { support: { localUser: { enabled: true } } });
+  assert.equal('relay' in incoming.support, false);
+});
+
+test('T-0001: Import nur Einstellungen → Relay der Box; Geräte-Tausch → Relay aus der Datei', () => {
+  const a = relayFile();
+  protectOwnRouteKeys(a, relayBox(), { isImport: true });
+  assert.deepEqual(a.support.relay, relayBox().support.relay);
+  const b = relayFile();
+  const carried = protectOwnRouteKeys(b, relayBox(), { isImport: true });
+  applyCarriedKeys(b, carried);
+  assert.deepEqual(b.support.relay, relayFile().support.relay);
+});

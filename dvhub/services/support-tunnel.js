@@ -13,7 +13,7 @@
 // Mechanics: `autossh -R` (userspace, no /dev/net/tun — works in unprivileged
 // LXC) dials OUT to the self-hosted relay (support.dvhub.de) and reverse-forwards
 //   relay:127.0.0.1:<shellPort> -> appliance:127.0.0.1:22     (SSH shell; container: own sshd :2222)
-//   relay:127.0.0.1:<webPort>   -> appliance:127.0.0.1:<httpPort> (Web UI, default 80)
+//   relay:127.0.0.1:<webPort>   -> appliance:127.0.0.1:<SUPPORT_WEB_PORT> (eigener Web-Listener, Strix T-0001)
 // The relay enforces the two permitlisten ports server-side, so shellPort/webPort
 // MUST match the relay registry (peer assigns them; we mirror into config).
 //
@@ -115,6 +115,17 @@ export function sshKeyFingerprint(pubKeyContents) {
   } catch {
     return null;
   }
+}
+
+// Strix T-0001 (30.10.2026): das Web-Ziel des Tunnels ist ein eigener Listener
+// (server.js, nur 127.0.0.1) statt des normalen Ports. Dort angekommene Anfragen
+// erkennt die App als „über den Support-Tunnel“ (req.dvhubSupportTunnel): kein
+// Loopback-Freibrief, keine Selbstverlängerung, Kennzeichnung im Audit-Log.
+// dvhub-support-tunnel.sh nutzt denselben Standard (Test hält beide gleich).
+export const SUPPORT_WEB_PORT_DEFAULT = 47822;
+export function supportWebPort(env = process.env) {
+  const n = Number(env?.DVHUB_SUPPORT_WEB_PORT);
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : SUPPORT_WEB_PORT_DEFAULT;
 }
 
 // Clamp a requested TTL (minutes) into [floor, ceil], defaulting when unset/NaN.
@@ -283,6 +294,9 @@ export function createSupportTunnel(ctx, deps = {}) {
       // Dienst-Modus: Auftrag (von DVhub) und Zustand (vom Tunnel-Skript).
       requestPath: path.join(supDir, 'tunnel.json'),
       statePath: path.join(supDir, 'tunnel-state.json'),
+      // Ohne Tunnel-Unit (kein systemd, Container): PID des selbst gestarteten
+      // autossh/ssh — damit dvhub-support-tunnel.sh --close ihn findet (T-0004).
+      processStatePath: path.join(supDir, 'tunnel-process.json'),
       logPath: path.join(supDir, 'tunnel.log'),
       sshdConfigPath: path.join(supDir, 'sshd_config'),
       supportKeysPath: path.join(supDir, 'support_authorized_keys'),
@@ -323,7 +337,7 @@ export function createSupportTunnel(ctx, deps = {}) {
       webPort: Number(pick('webPort', 0)) || 0,
       autoCloseMin: clampTtlMin(support.tunnel?.autoCloseMin, TTL_MIN_DEFAULT),
       localShellPort: inContainer ? (Number(process.env.DVHUB_SUPPORT_SSH_PORT) || CONTAINER_SSH_PORT_DEFAULT) : 22,
-      localWebPort: Number(cfg.httpPort) || 80,
+      localWebPort: supportWebPort(),
       localUserEnabled: support.localUser?.enabled !== false, // opt-out: default ON
     };
   }
@@ -480,6 +494,10 @@ export function createSupportTunnel(ctx, deps = {}) {
       'info');
   }
 
+  function removeProcessState() {
+    try { fsImpl.unlinkSync(supportPaths().processStatePath); } catch { /* war nicht da */ }
+  }
+
   function teardown(reason, actor) {
     if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
     const wasOpen = !!child;
@@ -490,6 +508,7 @@ export function createSupportTunnel(ctx, deps = {}) {
     if (proc) {
       try { proc.kill('SIGTERM'); } catch { /* already gone */ }
     }
+    removeProcessState();
     stopContainerSshd();
     if (wasOpen) {
       pushLog('support_tunnel_closed', { reason: reason || 'manual' }, actor || lastOpenedBy);
@@ -511,6 +530,15 @@ export function createSupportTunnel(ctx, deps = {}) {
     if (!applianceId) return fail('appliance-id missing', 'appliance-id fehlt — Box ist nicht beim Relay registriert.');
     if (!exists(p.keyPath)) return fail('relay key missing', 'Relay-Schlüssel fehlt — Box ist nicht beim Relay registriert.');
     if (!(rc.shellPort > 0 && rc.webPort > 0)) return fail('relay ports unassigned', 'Relay-Ports nicht zugeteilt — Support muss die Box erst freischalten.');
+    // Gegenprüfung 6f9c9cca (P3): ist der Support-Port zugleich der normale
+    // Port, startet kein eigener Listener, und der Tunnel landete mit
+    // Loopback-Freibrief am normalen Port — dann lieber nicht öffnen.
+    const cfgNow = (typeof ctx?.getCfg === 'function' ? ctx.getCfg() : null) || {};
+    if (rc.localWebPort === (Number(cfgNow.httpPort) || 80)) {
+      lastError = `support_web_port_conflict: ${rc.localWebPort}`;
+      pushLog('support_tunnel_error', { error: lastError }, actor);
+      return { error: { ok: false, error: 'support_web_port_conflict', detail: `Support-Port ${rc.localWebPort} ist zugleich der Web-Port — DVHUB_SUPPORT_WEB_PORT anders setzen.` } };
+    }
     return { rc, p, applianceId };
   }
 
@@ -663,6 +691,8 @@ export function createSupportTunnel(ctx, deps = {}) {
 
     child = proc;
     openedAt = now();
+    try { if (Number.isInteger(proc.pid)) writeFileAtomic(p.processStatePath, JSON.stringify({ pid: proc.pid }) + '\n', 0o600); }
+    catch { /* nur für das Notfall-Skript */ }
     expiresAt = openedAt + ttl * 60 * 1000;
     lastError = null;
     lastOpenedBy = actor;
@@ -679,7 +709,10 @@ export function createSupportTunnel(ctx, deps = {}) {
     // The relay-rejection / process death path. autossh normally self-heals, so
     // an exit here means a fatal condition (ExitOnForwardFailure, killed, etc).
     proc.on('exit', (code, signal) => {
+      // Erst nach der Prüfung: ein alter Prozess, der nach einem neuen open()
+      // endet, löschte sonst die PID-Datei des neuen (Gegenprüfung 98bfcb68).
       if (child !== proc) return; // already torn down by close()/auto-close
+      removeProcessState();
       if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
       child = null;
       openedAt = null;

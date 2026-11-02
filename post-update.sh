@@ -401,6 +401,102 @@ dvhub_root_own_install_dir() {  # <ordner> [<höchstens sekunden je Schritt>]
 }
 # END DVHUB INSTALL-DIR OWNERSHIP
 
+# BEGIN DVHUB CONFIG DIRS — keep this block byte-identical in install.sh and post-update.sh.
+# Der Konfigurationsordner gehört dem Dienstbenutzer, root arbeitet aber darin
+# (Strix R-0001/R-0006/T-0003, 30.10.2026). Ein Verweis, den der Dienstbenutzer
+# dort anlegt, darf root nirgendwohin lenken: tls/x.pem → /usr/local/libexec/
+# dvhub-update ließ root den Update-Helfer per chown an dvhub geben (über
+# dessen sudo-Regel → root), tls/key.pem → <datei> ließ openssl den Schlüssel
+# hineinschreiben, vpn → /usr/local/libexec ließ root dort chmod 700 setzen.
+# Darum wechselt root Teil für Teil hinein (cd -P; danach zählt die Inode des
+# Arbeitsordners, nicht mehr der Name) und legt neue Dateien in einem eigenen,
+# nur root zugänglichen Zwischenordner an.
+dvhub_cfg_cd() {  # <vertrauter ordner> <teil>… — nur in einer Subshell aufrufen
+  cd -P -- "$1" || return 1
+  shift
+  local part here
+  for part in "$@"; do
+    here="$(pwd -P)" || return 1
+    if [[ -L "$part" ]]; then
+      echo "  WARN: $here/$part war ein Verweis — durch einen eigenen Ordner ersetzt" >&2
+      rm -f -- "$part" || return 1
+    fi
+    [[ -d "$part" ]] || mkdir -- "$part" || return 1
+    cd -P -- "$part" || return 1
+    if [[ "$(pwd -P)" != "${here%/}/$part" ]]; then
+      echo "  WARN: $here/$part ist kein eigener Ordner — übersprungen" >&2
+      return 1
+    fi
+  done
+}
+dvhub_cfg_dir() {  # <konfigurationsordner> <modus oder leer> <teil>… — Unterordner anlegen, ohne Verweisen zu folgen
+  local base=$1 mode=$2
+  shift 2
+  ( dvhub_cfg_cd "$base" "$@" && { [[ -z "$mode" ]] || chmod "$mode" .; } )
+}
+# Selbstsigniertes Zertifikat, wenn tls/cert.pem fehlt. Rückgabe 0 erzeugt,
+# 3 schon vorhanden, sonst Fehler. <vorsatz> z. B. eine Zeitgrenze (pu_bounded 30).
+dvhub_tls_selfsigned() {  # <konfigurationsordner> <dienstbenutzer> [<vorsatz>…]
+  local base=$1 user=$2
+  shift 2
+  (
+    dvhub_cfg_cd "$base" tls || exit 1
+    tls_real="$(pwd -P)" || exit 1
+    # Verweise fliegen raus — die App läse sonst über sie, und ein Verweis
+    # namens cert.pem täuschte ein vorhandenes Zertifikat vor. Mit Meldung:
+    # ein eigener Schlüssel als Verweis wird so durch ein neues Paar ersetzt.
+    for link in ./*.pem ./.[!.]*; do
+      [[ -L "$link" ]] || continue
+      echo "  WARN: $tls_real/${link#./} war ein Verweis — entfernt (eigene Zertifikate als Datei ablegen)" >&2
+      rm -f -- "$link"
+    done
+    find . -maxdepth 1 -type l -exec rm -f -- {} + 2>/dev/null || true
+    # Vorhandenes Zertifikat bleibt — ein eigener Schlüssel darf anders heißen
+    # (tlsKeyPath, Gegenprüfung 2b43209c). Fehlt key.pem, sagt die Meldung es.
+    if [[ -f cert.pem ]]; then
+      [[ -f key.pem ]] || echo "  WARN: $tls_real/cert.pem ohne key.pem — HTTPS braucht den Schlüssel (key.pem oder tlsKeyPath)" >&2
+      exit 3
+    fi
+    stage="$(mktemp -d .neu.XXXXXX)" || exit 1
+    trap 'rm -rf -- "$stage"' EXIT
+    (
+      # root-eigen, 0700, leer und wirklich der eben angelegte Ordner (kein
+      # nachträglich untergeschobener Verweis, Gegenprüfung d5655361, P3):
+      # hier kann der Dienstbenutzer nichts vorlegen.
+      cd -P -- "$stage" && [[ "$(pwd -P)" == "$tls_real/$stage" && -O . && -z "$(ls -A)" ]] || exit 1
+      "$@" openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
+        -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null || exit 1
+      chmod 600 key.pem && chmod 644 cert.pem && chown "$user:$user" key.pem cert.pem || exit 1
+      # Harte Verweise ersetzen den Eintrag im tls-Ordner (auch einen Verweis
+      # dort) und folgen keinem; cert.pem zuletzt — es zeigt „fertig“.
+      ln -fn key.pem ../key.pem && ln -fn cert.pem ../cert.pem
+    )
+  )
+}
+# config.json enthält Geheimnisse (apiToken, Zugangsdaten): 0600 und
+# Dienstbenutzer, ohne einem Verweis zu folgen (O_NOFOLLOW + fchmod/fchown).
+dvhub_cfg_secure_file() {  # <datei> <dienstbenutzer>
+  local uid gid
+  uid="$(id -u "$2" 2>/dev/null)" && gid="$(id -g "$2" 2>/dev/null)" || return 1
+  node -e '
+    const fs = require("fs");
+    const [file, uid, gid] = process.argv.slice(1);
+    let fd;
+    try { fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
+    catch (e) {
+      if (e.code === "ENOENT") process.exit(0);
+      console.error(`  WARN: ${file}: ${e.code === "ELOOP" ? "ist ein Verweis — Rechte nicht gesetzt" : e.message}`);
+      process.exit(1);
+    }
+    try {
+      if (!fs.fstatSync(fd).isFile()) { console.error(`  WARN: ${file} ist keine Datei`); process.exit(1); }
+      fs.fchownSync(fd, Number(uid), Number(gid));
+      fs.fchmodSync(fd, 0o600);
+    } finally { fs.closeSync(fd); }
+  ' "$1" "$uid" "$gid"
+}
+# END DVHUB CONFIG DIRS
+
 # ── 0a. git-Konfiguration bereinigen — vor dem ersten git-Aufruf als root ──
 # (Rechte-Schritt unten liest HEAD mit git.) Abgelehnt (unzulässige Quelle) oder
 # Fehler: DVhub startet trotzdem; Updates halten an, bis es behoben ist.
@@ -476,12 +572,14 @@ elif [[ -n "$NODE_BIN" ]]; then
 fi
 
 # ── 3. Verzeichnisse ──
-mkdir -p "$CONFIG_DIR/vpn/profiles"
-mkdir -p "$CONFIG_DIR/tls"
-mkdir -p "$CONFIG_DIR/hersteller"
-chmod 700 "$CONFIG_DIR/vpn" 2>/dev/null || true
-chmod 700 "$CONFIG_DIR/vpn/profiles" 2>/dev/null || true
-echo "  Verzeichnisse: OK"
+# Ohne Verweisen zu folgen (BEGIN DVHUB CONFIG DIRS, Strix R-0006).
+mkdir -p "$CONFIG_DIR"
+DIRS_OK=1
+dvhub_cfg_dir "$CONFIG_DIR" 700 vpn || DIRS_OK=0
+dvhub_cfg_dir "$CONFIG_DIR" 700 vpn profiles || DIRS_OK=0
+dvhub_cfg_dir "$CONFIG_DIR" "" tls || DIRS_OK=0
+dvhub_cfg_dir "$CONFIG_DIR" "" hersteller || DIRS_OK=0
+if [[ "$DIRS_OK" -eq 1 ]]; then echo "  Verzeichnisse: OK"; else echo "  WARN: Verzeichnisse nicht vollständig (Meldung oben)" >&2; fi
 
 # ── 3b. Herstellerprofile abgleichen (T-MANAGED-VENDOR-PROFILES) ──
 # Fehlende Profile anlegen UND ausgelieferte Bugfixes an Bestandsboxen bringen,
@@ -497,24 +595,18 @@ if [[ -d "$APP_DIR/hersteller" ]]; then
 fi
 
 # ── 4. Self-Signed TLS Zertifikat ──
-if [[ ! -f "$CONFIG_DIR/tls/cert.pem" ]]; then
-  echo "  Generiere Self-Signed TLS Zertifikat..."
-  # Plan 08-05 Task 1: 397 days (≤ 398) keeps the cert browser-compatible
-  # (Apple/Chrome/Mozilla hard-limit since Sep 2020). Was 3650 (10y).
-  if pu_bounded 30 openssl req -x509 -newkey rsa:2048 -nodes \
-    -keyout "$CONFIG_DIR/tls/key.pem" \
-    -out "$CONFIG_DIR/tls/cert.pem" \
-    -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null; then
-    chmod 600 "$CONFIG_DIR/tls/key.pem"
-    chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/tls/"* 2>/dev/null || true
-  else
-    # Halbes Paar weg, damit der nächste Start neu erzeugt.
-    rm -f "$CONFIG_DIR/tls/cert.pem" "$CONFIG_DIR/tls/key.pem"
-    echo "  WARN: TLS-Zertifikat nicht erzeugt — nächster Start" >&2
-  fi
-else
-  echo "  TLS Zertifikat: OK"
-fi
+# Plan 08-05 Task 1: 397 days (≤ 398) keeps the cert browser-compatible
+# (Apple/Chrome/Mozilla hard-limit since Sep 2020). Was 3650 (10y).
+# Erzeugt in einem root-eigenen Zwischenordner, ohne Verweisen in tls/ zu
+# folgen (dvhub_tls_selfsigned, Strix R-0001); misslingt es, liegt nichts
+# Halbes im Ordner und der nächste Start versucht es wieder.
+TLS_RC=0
+dvhub_tls_selfsigned "$CONFIG_DIR" "$SERVICE_USER" pu_bounded 30 || TLS_RC=$?
+case "$TLS_RC" in
+  0) echo "  TLS Zertifikat: neu erzeugt (selbstsigniert, 397 Tage)";;
+  3) echo "  TLS Zertifikat: OK";;
+  *) echo "  WARN: TLS-Zertifikat nicht erzeugt — nächster Start" >&2;;
+esac
 
 # ── 5. Sudoers (vollstaendig, idempotent) ──
 IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
@@ -730,7 +822,7 @@ if [[ -f "$APP_DIR/package.json" ]]; then
     NPM_SCRIPT='cd "$1" || exit 1
 if command -v flock >/dev/null 2>&1; then exec 9>"$5" && flock -w 600 9 || exit 1; fi
 rm -f "$3"
-HOME=/root npm install --omit=dev || exit 1
+HOME=/root npm install --omit=dev --ignore-scripts --no-audit --no-fund || exit 1
 [ -n "$2" ] && printf "%s\n" "$2" > "$3"
 echo "npm install: OK"
 if [ -e "$4" ]; then rm -f "$4"; systemctl restart --no-block "$6"; fi'
@@ -764,7 +856,7 @@ if [ -e "$4" ]; then rm -f "$4"; systemctl restart --no-block "$6"; fi'
       fi
     # Ohne systemd-run (oder es startet keine Unit): im Vordergrund, mit Zeitgrenze.
     # `if` suppresses `set -e`; no pipe so the rc is npm's own (not tail's).
-    elif pu_bounded 75 env HOME=/root npm install --omit=dev; then
+    elif pu_bounded 75 env HOME=/root npm install --omit=dev --ignore-scripts --no-audit --no-fund; then
       [[ -n "$CURRENT_HASH" ]] && printf '%s\n' "$CURRENT_HASH" >"$NPM_MARKER"
       echo "  npm install: OK"
     else
@@ -777,6 +869,14 @@ fi
 # Nur Konfiguration gehört dem Dienstbenutzer; der Programmordner bleibt root
 # (Schritt 0). Früher: chown -R auf $INSTALL_DIR — siehe Review 25.10.2026.
 chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" 2>/dev/null || true
+# config.json nur für den Dienstbenutzer (Strix T-0003): ältere Installationen
+# legten sie mit 0644 an; die Gruppe dvhub (Support-Login) las so die Geheimnisse.
+dvhub_cfg_secure_file "$CONFIG_PATH" "$SERVICE_USER" || echo "  WARN: Rechte von $CONFIG_PATH nicht gesetzt" >&2
+# Ihre Sicherungen enthalten dieselben Geheimnisse (Gegenprüfung d5655361).
+for CFG_BAK in "$(dirname "$CONFIG_PATH")"/config.backup-*.json "$CONFIG_PATH".tmp; do
+  [[ -e "$CFG_BAK" || -L "$CFG_BAK" ]] || continue
+  dvhub_cfg_secure_file "$CFG_BAK" "$SERVICE_USER" || true
+done
 echo "  Berechtigungen: OK"
 
 # ── 8. systemd Service aktuell? ──

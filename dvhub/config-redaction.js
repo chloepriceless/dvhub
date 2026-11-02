@@ -1,6 +1,7 @@
 // SEC-01: Single source of truth for redacted config field paths.
 // Imported by routes-api.js (redactConfig) and server.js (restoreRedacted)
 
+
 export const REDACTED_PATHS = Object.freeze([
   'apiToken',
   'telemetry.historyImport.vrmToken',
@@ -58,6 +59,126 @@ export const REDACTED_PATHS = Object.freeze([
 ]);
 
 export const REDACTED = '***';
+
+// Geheimnis → Adressen, an die es tatsächlich geht. Steht das Geheimnis als
+// „***“ im Entwurf (unverändert) bzw. trägt eine Route den gespeicherten Wert
+// weiter, und kommt dabei eine neue Adresse hinzu, wandert der gespeicherte
+// Wert NICHT mit (Strix-Fund 29.10.2026 für ntfy; Gegenprüfungen edeb17db und
+// bca61061): sonst setzt ein Gerät im WLAN eine eigene Adresse ein und bekommt
+// den Token beim nächsten Abruf geschickt. Die Ziele folgen denselben
+// Rückfall-Regeln wie die Verbraucher (Wetter- und Kreuzprobe-MQTT nehmen ohne
+// eigene Zugangsdaten die allgemeinen, Victron-MQTT ohne Broker victron.host).
+// Wer die Adresse ändert, gibt das Geheimnis neu ein.
+const g = (cfg, p) => getPath(cfg, p);
+function victronBroker(cfg) {
+  const vm = g(cfg, 'victron.mqtt') || {};
+  if (vm.broker) return vm.broker;
+  if (vm.schema === 'dvhub') return g(cfg, 'mqtt.brokerUrl') || '';
+  const host = g(cfg, 'victron.host');
+  return host ? `mqtt://${host}:1883` : '';
+}
+function crossCheckBroker(cfg) {
+  const c = g(cfg, 'victron.mqttCrossCheck') || {};
+  const host = g(cfg, 'victron.host');
+  return c.broker || g(cfg, 'victron.mqtt.broker') || (host ? `mqtts://${host}:8883` : '');
+}
+function weatherBroker(cfg) { return g(cfg, 'forecast.weather.mqtt.brokerUrl') || g(cfg, 'mqtt.brokerUrl') || ''; }
+const SECRET_TARGETS = {
+  'notifications.providers.ntfy.token': (c) => [g(c, 'notifications.providers.ntfy.topicUrl')],
+  'optimizer.evHaToken': (c) => [g(c, 'optimizer.evHaUrl')],
+  'optimizer.evHttpToken': (c) => [g(c, 'optimizer.evHttpUrl')],
+  'optimizer.eosProxy.remote.token': (c) => [g(c, 'optimizer.eosProxy.remote.endpoint')],
+  'dbBackup.smb.username': (c) => [g(c, 'dbBackup.smb.host')],
+  'dbBackup.smb.password': (c) => [g(c, 'dbBackup.smb.host')],
+  'telemetry.database.password': (c) => [g(c, 'telemetry.database.host')],
+  'wallbox.openevse.username': (c) => [g(c, 'wallbox.openevse.url')],
+  'wallbox.openevse.password': (c) => [g(c, 'wallbox.openevse.url')],
+  'wallbox.nrgkick.username': (c) => [g(c, 'wallbox.nrgkick.host')],
+  'wallbox.nrgkick.password': (c) => [g(c, 'wallbox.nrgkick.host')],
+  'wallbox.wattpilot.password': (c) => [g(c, 'wallbox.wattpilot.host')],
+};
+for (const f of ['username', 'password']) {
+  SECRET_TARGETS[`mqtt.${f}`] = (c) => [
+    g(c, 'mqtt.brokerUrl'),
+    ...(g(c, 'forecast.weather.provider') === 'mqtt' && !g(c, `forecast.weather.mqtt.${f}`) ? [weatherBroker(c)] : []),
+  ];
+  SECRET_TARGETS[`forecast.weather.mqtt.${f}`] = (c) => [weatherBroker(c)];
+  SECRET_TARGETS[`victron.mqtt.${f}`] = (c) => [
+    victronBroker(c),
+    ...(!g(c, `victron.mqttCrossCheck.${f}`) ? [crossCheckBroker(c)] : []),
+  ];
+  SECRET_TARGETS[`victron.mqttCrossCheck.${f}`] = (c) => [crossCheckBroker(c)];
+}
+export const SECRET_TARGET_PATHS = Object.freeze(Object.keys(SECRET_TARGETS));
+
+// Ziel = Host plus „gesichert?“. Gleicher Host und gleiche oder bessere
+// Sicherung (mqtt → mqtts, http → https) gilt als dasselbe Ziel; ein anderer
+// Host oder TLS → Klartext gilt als neu (Gegenprüfung 4fe254c9: sonst ginge
+// das Geheimnis im Klartext). Nicht URL.origin — für mqtt:// u. ä. ist die
+// Herkunft immer „null“.
+const SECURE_SCHEMES = new Set(['https:', 'mqtts:', 'wss:', 'ssl:', 'tls:']);
+function normTarget(v) {
+  const s = String(v ?? '').trim().toLowerCase().replace(/\/+$/, '');
+  if (s.includes('://')) {
+    try { const u = new URL(s); return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol) }; }
+    catch { return { host: s, secure: null }; }
+  }
+  // host[:port] ohne Schema: Port nur bei genau einem ':' bzw. [v6]:port abtrennen
+  // (sonst verschmolzen fd00::1 und fd00::1234, Gegenprüfung 4fe254c9).
+  const v6 = /^\[([^\]]+)\](?::\d+)?$/.exec(s);
+  if (v6) return { host: v6[1], secure: null };
+  return { host: (s.split(':').length === 2 ? s.replace(/:\d+$/, '') : s), secure: null };
+}
+function targetsOf(cfg, secretPath) {
+  return SECRET_TARGETS[secretPath](cfg || {}).map(normTarget);
+}
+function isNewTarget(t, before) {
+  return !before.some((b) => b.host === t.host && !(b.secure === true && t.secure === false));
+}
+
+/**
+ * Setzt in `next` jedes Geheimnis aus `keptPaths` auf '', dessen Ziele in
+ * `next` eine Adresse enthalten, die in `current` nicht dabei war. Gibt die
+ * geleerten Pfade zurück.
+ */
+export function dropSecretsForChangedTargets(next, current, keptPaths) {
+  const dropped = [];
+  // Bis nichts mehr fällt: ein geleertes spezielles Geheimnis (Wetter-,
+  // Kreuzprobe-Zugang) macht das allgemeine zum Rückfall für das neue Ziel
+  // (Gegenprüfung 4fe254c9, P2 — vorher hing es an der Reihenfolge).
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const sp of keptPaths) {
+      if (!SECRET_TARGETS[sp] || dropped.includes(sp)) continue;
+      const val = getPath(next, sp);
+      if (val === undefined || val === '' || val === null) continue;
+      const before = targetsOf(current, sp);
+      if (targetsOf(next, sp).some((t) => isNewTarget(t, before))) { setPath(next, sp, ''); dropped.push(sp); changed = true; }
+    }
+  }
+  return dropped;
+}
+
+/** Für Routen, die gespeicherte Werte selbst weitertragen: alle Geheimnisse, die unverändert geblieben sind. */
+export function unchangedSecretPaths(next, current) {
+  return SECRET_TARGET_PATHS.filter((sp) => {
+    const v = getPath(next, sp);
+    return typeof v === 'string' && v !== '' && v === getPath(current, sp);
+  });
+}
+
+function getPath(obj, dotPath) {
+  return dotPath.split('.').reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), obj);
+}
+function setPath(obj, dotPath, value) {
+  const parts = dotPath.split('.');
+  let o = obj;
+  for (const k of parts.slice(0, -1)) {
+    if (!o || typeof o !== 'object') return;
+    o = o[k];
+  }
+  if (o && typeof o === 'object') o[parts.at(-1)] = value;
+}
 
 export function isRedactedPath(path) {
   return REDACTED_PATHS.includes(path);
@@ -250,6 +371,8 @@ function looksUrlRedacted(raw) {
 
 export function restoreRedacted(incoming, current) {
   const copy = JSON.parse(JSON.stringify(incoming));
+  // Welche Geheimnisse kamen unverändert („***“)? Vor dem Zurückholen merken.
+  const keptSecrets = SECRET_TARGET_PATHS.filter((sp) => getPath(copy, sp) === REDACTED);
   for (const dotPath of REDACTED_PATHS) {
     const parts = dotPath.split('.');
     let target = copy;
@@ -295,6 +418,16 @@ export function restoreRedacted(incoming, current) {
       && looksUrlRedacted(copy.meterSource.modbus.host)
       && current?.meterSource?.modbus && typeof current.meterSource.modbus.host === 'string') {
     copy.meterSource.modbus.host = current.meterSource.modbus.host;
+  }
+  // Geheimnisse an ihre Adressen binden (SECRET_TARGETS) — nach dem
+  // Zurückholen redigierter URLs, damit eine unverändert maskierte URL zählt.
+  dropSecretsForChangedTargets(copy, current, keptSecrets);
+  // EOS-Fernbetrieb: für welche Adresse das Token ausgegeben wurde, weiß nur
+  // die Box (eos-remote.js) — ein Entwurf setzt das nicht.
+  if (copy?.optimizer?.eosProxy?.remote && typeof copy.optimizer.eosProxy.remote === 'object') {
+    const curTe = current?.optimizer?.eosProxy?.remote?.tokenEndpoint;
+    if (curTe === undefined) delete copy.optimizer.eosProxy.remote.tokenEndpoint;
+    else copy.optimizer.eosProxy.remote.tokenEndpoint = curTe;
   }
   return copy;
 }

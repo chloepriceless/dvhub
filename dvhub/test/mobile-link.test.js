@@ -398,8 +398,9 @@ describe('mobile-link relay-core', () => {
     b.send({ t: 'allow', devs: ['a', 'b', 'c', 'd'] });
     for (const dev of ['a', 'b', 'c', 'd', 'x']) b.send({ t: 'mbox_put', dev, d: 'A' });
     await sleep(20);
+    // Voll: der älteste Briefkasten weicht, statt Neues abzulehnen (Strix H-0002).
     assert.equal(relay.stats().mailboxes, 3);
-    assert.equal((await b.next('error')).e, 'relay_full');
+    assert.equal(b.inbox.filter((m) => m.t === 'error').length, 0);
     // Zu lange Freigabeliste wird abgelehnt.
     b.send({ t: 'allow', devs: Array.from({ length: 100 }, (_, i) => `d${i}`) });
     await until(() => b.state.closed);
@@ -647,12 +648,9 @@ describe('mobile-link Ende zu Ende', () => {
     ctx.agent.removeDevice(creds.devId);
     await until(() => s.closedInfo());
     assert.equal(s.closedInfo().reason, 'device_removed');
-    // Wieder verbinden: Box ist ohne Geräte nicht mehr am Relay — das Gerät
-    // kommt höchstens in den (geleerten) Briefkasten, nie zur Box.
-    const again = await connectDevice({ creds, signer: phone, url: ctx.relayUrl });
-    assert.equal(again.boxOnline(), false);
-    assert.deepEqual(await again.fetchMailbox(), []);
-    again.close();
+    // Wieder verbinden: Box ist ohne Geräte nicht mehr am Relay — das Relay
+    // hat sich die Entkopplung gemerkt und weist das Gerät ab (Strix H-0004).
+    await assert.rejects(connectDevice({ creds, signer: phone, url: ctx.relayUrl }), /device_not_allowed/);
   });
 
   test('Heimnetz: koppeln und verbinden direkt an der Box; Steuern mit Recht control', async () => {

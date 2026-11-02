@@ -43,14 +43,19 @@ test('Box-Token wird wie andere Tokens geschwärzt', () => {
   assert.equal(red.optimizer.eosProxy.remote.endpoint, 'https://x');
 });
 
-test('Adresse des Dienstes: https überall, http nur im eigenen Netz', () => {
-  assert.equal(isAllowedRemoteEndpoint('https://eos.example.invalid'), true);
-  assert.equal(isAllowedRemoteEndpoint('http://10.1.2.3:8080'), true);
-  assert.equal(isAllowedRemoteEndpoint('http://127.0.0.1:18080'), true);
-  assert.equal(isAllowedRemoteEndpoint('http://eos.example.invalid'), false);
+// Strix L-0006 + Gegenprüfung zu 23c3962c (P3): Speichern und Senden folgen
+// EINER Regel — sonst ließe sich eine Adresse speichern, an die DVhub dann nie
+// etwas schickt (still kein Plan). Nur https, nur unter dvhub.de (oder per
+// DVHUB_EOS_REMOTE_TRUSTED_HOSTS auf der Box freigegeben), nichts Internes.
+test('Adresse des Dienstes: nur https unter dvhub.de, nichts Internes', () => {
+  assert.equal(isAllowedRemoteEndpoint('https://eos.dvhub.de'), true);
+  assert.equal(isAllowedRemoteEndpoint('https://eos.example.invalid'), false);
+  assert.equal(isAllowedRemoteEndpoint('http://10.1.2.3:8080'), false);
+  assert.equal(isAllowedRemoteEndpoint('http://127.0.0.1:18080'), false);
+  assert.equal(isAllowedRemoteEndpoint('http://eos.dvhub.de'), false);
   assert.equal(isAllowedRemoteEndpoint('ftp://x'), false);
   assert.equal(isAllowedRemoteEndpoint('nicht-url'), false);
-  assert.equal(isAllowedRemoteEndpoint('https://user:pw@eos.example.invalid'), false, 'keine Zugangsdaten in der URL');
+  assert.equal(isAllowedRemoteEndpoint('https://user:pw@eos.dvhub.de'), false, 'keine Zugangsdaten in der URL');
 });
 
 test('Speichern prüft die Adresse des Dienstes (config-routes)', () => {

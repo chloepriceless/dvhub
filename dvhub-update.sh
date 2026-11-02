@@ -444,9 +444,9 @@ case "$action" in
     rm -f "$NPM_MARKER"
     cd "$APP_DIR"
     if command -v timeout >/dev/null 2>&1; then
-      run_killable timeout -k 15 "$NPM_TIMEOUT_S" env HOME="${DVHUB_UPDATE_TEST_HOME:-/root}" npm install --omit=dev
+      run_killable timeout -k 15 "$NPM_TIMEOUT_S" env HOME="${DVHUB_UPDATE_TEST_HOME:-/root}" npm install --omit=dev --ignore-scripts --no-audit --no-fund
     else
-      run_killable env HOME="${DVHUB_UPDATE_TEST_HOME:-/root}" npm install --omit=dev
+      run_killable env HOME="${DVHUB_UPDATE_TEST_HOME:-/root}" npm install --omit=dev --ignore-scripts --no-audit --no-fund
     fi
     sha256sum "$lock" | awk '{print $1}' > "$NPM_MARKER"
     ;;

@@ -47,6 +47,7 @@ import { localDate } from '../../tz-fast.js';
 import { planningSocPct } from '../multi-gx/planning.js';
 // Preise hinter den bekannten Day-Ahead-Preisen schätzen (01.11.2026).
 import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
+import { requestHostname } from '../host-address.js';
 
 const TIMEOUT_MS = 15_000; // bigger than config-sync because 192 rows × 3 keys
 const SLOT_MS_15MIN = 15 * 60 * 1000;
@@ -283,7 +284,7 @@ function eosHttpRequest(baseUrl, method, path, body) {
       const headers = {};
       if (body !== undefined) headers['Content-Type'] = 'application/json';
       const req = http.request({
-        hostname: url.hostname,
+        hostname: requestHostname(url.hostname),
         port: url.port || 8503,
         // Include url.search — the SoC measurement PUT passes datetime/key/
         // value entirely on the query string. The forecast import PUTs carry

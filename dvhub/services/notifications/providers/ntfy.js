@@ -32,6 +32,9 @@ export function createNtfyProvider(cfg) {
         method: 'POST',
         headers,
         body: body || '',
+        // Keine Umleitung folgen: ein erlaubter Server leitete sonst auf eine
+        // interne Adresse weiter (Gegenprüfung edeb17db, P3).
+        redirect: 'error',
         signal: ac.signal
       });
       if (res.ok) return { ok: true };

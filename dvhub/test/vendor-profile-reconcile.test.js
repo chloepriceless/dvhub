@@ -85,3 +85,120 @@ test('DRIFT-GUARD: aktueller Hash jedes ausgelieferten Profils steht im Manifest
     );
   }
 });
+
+// Strix R-0008 (30.10.2026): root gleicht die Profile bei jedem Start ab, der
+// Ordner hersteller/ gehört aber dem Dienstbenutzer. Ein Verweis als Profil,
+// als <name>.dist oder als ganzer Ordner ließ root die Zieldatei mit dem
+// Profilinhalt überschreiben (Container-Test: Opfer 15 → 1570 Bytes).
+function symlinkSetup() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-link-')));
+  const appH = path.join(tmp, 'app', 'hersteller');
+  const cfg = path.join(tmp, 'cfg');
+  const outside = path.join(tmp, 'outside');
+  fs.mkdirSync(appH, { recursive: true });
+  fs.mkdirSync(cfg, { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  const NEW = '{"label":"new"}\n';
+  fs.writeFileSync(path.join(appH, 'a.json'), NEW);
+  fs.writeFileSync(path.join(appH, 'c.json'), NEW);
+  fs.writeFileSync(path.join(appH, '.shipped-hashes.json'), JSON.stringify({ profiles: { 'a.json': [sha256(Buffer.from(NEW))], 'c.json': [sha256(Buffer.from(NEW))] } }));
+  const victim = path.join(outside, 'opfer');
+  fs.writeFileSync(victim, 'unberuehrt\n');
+  return { tmp, appDir: path.join(tmp, 'app'), cfg, cfgH: path.join(cfg, 'hersteller'), outside, victim, NEW };
+}
+
+test('R-0008: Profil als Verweis → ersetzt, Ziel unberührt', () => {
+  const t = symlinkSetup();
+  try {
+    fs.mkdirSync(t.cfgH);
+    fs.symlinkSync(t.victim, path.join(t.cfgH, 'a.json'));
+    reconcileVendorProfiles(t.cfg, t.appDir, { log: () => {} });
+    assert.equal(fs.readFileSync(t.victim, 'utf8'), 'unberuehrt\n');
+    const st = fs.lstatSync(path.join(t.cfgH, 'a.json'));
+    assert.ok(st.isFile() && !st.isSymbolicLink());
+    assert.equal(fs.readFileSync(path.join(t.cfgH, 'a.json'), 'utf8'), t.NEW);
+  } finally { fs.rmSync(t.tmp, { recursive: true, force: true }); }
+});
+
+test('R-0008: <name>.dist als Verweis → Ziel unberührt, .dist echte Datei', () => {
+  const t = symlinkSetup();
+  try {
+    fs.mkdirSync(t.cfgH);
+    fs.writeFileSync(path.join(t.cfgH, 'c.json'), '{"label":"operator-edit"}\n');
+    fs.symlinkSync(t.victim, path.join(t.cfgH, 'c.json.dist'));
+    reconcileVendorProfiles(t.cfg, t.appDir, { log: () => {} });
+    assert.equal(fs.readFileSync(t.victim, 'utf8'), 'unberuehrt\n');
+    const st = fs.lstatSync(path.join(t.cfgH, 'c.json.dist'));
+    assert.ok(st.isFile() && !st.isSymbolicLink());
+    assert.equal(fs.readFileSync(path.join(t.cfgH, 'c.json.dist'), 'utf8'), t.NEW);
+    assert.equal(fs.readFileSync(path.join(t.cfgH, 'c.json'), 'utf8'), '{"label":"operator-edit"}\n', 'Edit bleibt');
+  } finally { fs.rmSync(t.tmp, { recursive: true, force: true }); }
+});
+
+test('R-0008: hersteller/ als Verweis → eigener Ordner, nichts im Ziel', () => {
+  const t = symlinkSetup();
+  try {
+    fs.symlinkSync(t.outside, t.cfgH);
+    reconcileVendorProfiles(t.cfg, t.appDir, { log: () => {} });
+    assert.deepEqual(fs.readdirSync(t.outside), ['opfer']);
+    const st = fs.lstatSync(t.cfgH);
+    assert.ok(st.isDirectory() && !st.isSymbolicLink());
+    assert.equal(fs.readFileSync(path.join(t.cfgH, 'a.json'), 'utf8'), t.NEW);
+  } finally { fs.rmSync(t.tmp, { recursive: true, force: true }); }
+});
+
+// Gegenprüfung zu ad70a264 (P2): der Ordner wurde nur per Name geprüft — tauschte
+// der Dienstbenutzer hersteller/ zwischen Prüfung und Schreiben gegen einen
+// Verweis, legte root die Datei im Ziel an. Jetzt zählt die Inode des
+// Arbeitsordners (chdir + dev/ino).
+test('R-0008: hersteller/ wird mitten im Lauf gegen einen Verweis getauscht → nichts im Ziel', () => {
+  const t = symlinkSetup();
+  const realOpen = fs.openSync;
+  let swapped = false;
+  fs.openSync = function patched(p, flags, mode) {
+    if (!swapped && String(p).includes('.neu-')) {
+      swapped = true;
+      fs.renameSync(t.cfgH, `${t.cfgH}.alt`);
+      fs.symlinkSync(t.outside, t.cfgH);
+    }
+    return realOpen.call(fs, p, flags, mode);
+  };
+  try {
+    fs.mkdirSync(t.cfgH);
+    reconcileVendorProfiles(t.cfg, t.appDir, { log: () => {} });
+    assert.ok(swapped, 'Tausch ausgelöst');
+    assert.deepEqual(fs.readdirSync(t.outside), ['opfer'], 'nichts im Ziel des Verweises');
+    assert.equal(fs.readFileSync(path.join(`${t.cfgH}.alt`, 'a.json'), 'utf8'), t.NEW, 'im ursprünglichen Ordner geschrieben');
+  } finally {
+    fs.openSync = realOpen;
+    fs.rmSync(t.tmp, { recursive: true, force: true });
+  }
+});
+
+// Gegenprüfung 1c0105a0 (P3): Tausch genau zwischen Prüfung und chdir — die
+// dev/ino-Prüfung im Arbeitsordner muss greifen (vorher ohne Test).
+test('R-0008: Tausch zwischen Prüfung und chdir → Abbruch, nichts im Ziel', async () => {
+  const { inRealDir } = await import('../../scripts/reconcile-vendor-profiles.mjs');
+  const t = symlinkSetup();
+  const realChdir = process.chdir;
+  let swapped = false;
+  process.chdir = function patched(d) {
+    if (!swapped && d === t.cfgH) {
+      swapped = true;
+      fs.renameSync(t.cfgH, `${t.cfgH}.alt`);
+      fs.symlinkSync(t.outside, t.cfgH);
+    }
+    return realChdir.call(process, d);
+  };
+  try {
+    fs.mkdirSync(t.cfgH);
+    let ran = false;
+    assert.throws(() => inRealDir(t.cfgH, () => { ran = true; fs.writeFileSync('a.json', 'x'); }), /ersetzt/);
+    assert.ok(swapped);
+    assert.equal(ran, false);
+    assert.deepEqual(fs.readdirSync(t.outside), ['opfer']);
+  } finally {
+    process.chdir = realChdir;
+    fs.rmSync(t.tmp, { recursive: true, force: true });
+  }
+});

@@ -12,6 +12,7 @@ import { REDACTED_PATHS, REDACTED, redactConfig, isRedactedPath } from '../confi
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from '../services/config-secrets-crypto.js';
 import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS } from '../services/config-protected-keys.js';
 import { mergeAgainstBaseWithConflicts } from '../services/config-base-merge.js';
+import { isInternalHost, isAllowedOutboundUrl } from '../services/host-address.js';
 import { validateVpnProfileFile } from '../vpn-manager.js';
 
 // VPN-Profile eines Geräte-Tausch-Pakets (config/vpn/profiles/<name>/<datei>):
@@ -32,7 +33,7 @@ export function createConfigRoutes(deps) {
     ctx, getCfg, pushLog, licenseService,
     json, downloadJson, readJsonBody,
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
-    requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback,
+    requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback, hasValidBearer, denySupportConsent,
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, requestEosReplanAfterSave, ALLOWED_CONFIG_ROOTS,
   } = deps;
 
@@ -58,6 +59,9 @@ export function createConfigRoutes(deps) {
     // box can restore them on import. The bundle is AES-256-GCM under a
     // PBKDF2(password) key; without the password it is opaque.
     if (url.pathname === '/api/config/export' && req.method === 'POST') {
+      // Das versiegelte Paket enthält Token und Schlüssel-Dateien — nicht über
+      // den Support-Tunnel (Gegenprüfung 6f9c9cca, P1).
+      if (denySupportConsent?.(req, res, 'config_export_secrets')) return;
       const body = await readJsonBody(req, res);
       if (body === null) return;
       const password = typeof body?.password === 'string' ? body.password : '';
@@ -117,6 +121,43 @@ export function createConfigRoutes(deps) {
           });
         }
         body.config = merged.config;
+      }
+      // Geräte-Tausch (Gegenprüfung 8bbfb19d, P1): er übernimmt Kopplungen,
+      // support.relay und Dateien wie support/known_hosts aus dem Paket — dessen
+      // Passwort belegt nur, wer es versiegelt hat, nicht wer es darf. Unter
+      // lanTrust „Offen“ hätte so jedes Gerät im WLAN das Support-Relay samt
+      // Hostschlüssel austauschen können. Deshalb braucht er das API-Token
+      // dieser Box (bzw. ohne Token das Setup-Token).
+      // Gegenprüfung cf372cdc (P1): gilt für JEDEN Speicherweg, der migrate
+      // auswertet — auch POST /api/config, nicht nur /import.
+      if (body.migrate === true) {
+        if (denySupportConsent?.(req, res, 'config_migrate')) return;
+        const boxToken = ctx.getRawCfg?.()?.apiToken;
+        if (boxToken) {
+          if (!hasValidBearer?.(req)) {
+            pushLog('config_import_migrate_denied', { reason: 'token_required' }, actorContext(req));
+            return json(res, 401, { ok: false, error: 'migrate_token_required', detail: 'Ein Geräte-Tausch braucht das API-Token dieser Box.' });
+          }
+        } else {
+          // Box ohne API-Token: das Setup-Token (data/bootstrap.token) belegt den Zugriff.
+          if (!req.headers?.['x-bootstrap-token']) {
+            pushLog('config_import_migrate_denied', { reason: 'setup_token_required' }, actorContext(req));
+            return json(res, 401, { ok: false, error: 'migrate_setup_token_required', detail: 'Diese Box hat kein API-Token — für den Geräte-Tausch das Setup-Token eingeben.' });
+          }
+          if (!requireBootstrapToken(req, res)) return;
+        }
+      }
+      // Über den Support-Tunnel (Gegenprüfung fbb2dc4b, P2): API-Token und
+      // support.* (Support-Login, Tunnel-Laufzeit) bleiben, wie die Box sie hat —
+      // sonst holte sich der Support ein dauerhaftes Token bzw. schaltete den
+      // abgeschalteten Support-Login wieder ein.
+      if (req?.dvhubSupportTunnel === true) {
+        const cur = ctx.getRawCfg?.() || {};
+        if (Object.prototype.hasOwnProperty.call(body.config, 'apiToken') && body.config.apiToken !== REDACTED && body.config.apiToken !== cur.apiToken) {
+          body.config.apiToken = REDACTED; // restoreRedacted setzt den Wert der Box ein
+        }
+        if (cur.support === undefined) delete body.config.support;
+        else body.config.support = JSON.parse(JSON.stringify(cur.support));
       }
       // Fernzugang, Datenspende und Ortsnetz haben eigene Wege — siehe
       // services/config-protected-keys.js. Ein Geräte-Tausch (unten) bringt
@@ -208,12 +249,13 @@ export function createConfigRoutes(deps) {
       // otherwise point it at an internal host (RFC1918/loopback) and proxy
       // that host's response back to the caller, or downgrade to plain http.
       // Reject at save time: scheme must be https, host must not be private.
-      // Reuse the existing isRfc1918OrLoopback matcher — no new private-IP code.
+      // Gemeinsame Prüfung services/host-address.js (auch IPv6-Schreibweisen,
+      // 127/8, 0.0.0.0 und link-local, Strix-Fund 29.10.2026).
       const candidatePriceApiUrl = body.config?.epex?.priceApiUrl;
       if (candidatePriceApiUrl) {
         let u;
         try { u = new URL(candidatePriceApiUrl); } catch { /* u stays undefined → reject below */ }
-        if (!u || u.protocol !== 'https:' || isRfc1918OrLoopback(u.hostname)) {
+        if (!u || u.protocol !== 'https:' || isInternalHost(u.hostname)) {
           return json(res, 400, { ok: false, error: 'invalid_epex_price_api_url' });
         }
       }
@@ -244,11 +286,28 @@ export function createConfigRoutes(deps) {
         if (candidate && !isAllowedVehicleUrl(candidate)) return json(res, 400, { ok: false, error });
       }
       // EOS-Rechendienst (Fernbetrieb): DVhub schickt dorthin Lizenzschlüssel
-      // und Prognosen — https zu jedem Host, http nur im eigenen Netz, keine
-      // Zugangsdaten in der URL (eos-remote.js isAllowedRemoteEndpoint).
+      // und Prognosen — nur https unter dvhub.de (oder per Umgebung der Box
+      // freigegeben), nichts Internes, keine Zugangsdaten in der URL
+      // (eos-remote.js isAllowedRemoteEndpoint = isTrustedProofEndpoint, Strix L-0006).
+      // Nur bei einer ÄNDERUNG prüfen: eine aus der Beta gespeicherte Altadresse
+      // (früher http im LAN / beliebiges https) soll das Speichern anderer
+      // Einstellungen nicht blockieren — gesendet wird an sie trotzdem nie
+      // (eos-remote.js call()). Gegenprüfung zu 68e4bb91.
       const candidateRemoteEndpoint = body.config?.optimizer?.eosProxy?.remote?.endpoint;
-      if (candidateRemoteEndpoint && !isAllowedRemoteEndpoint(candidateRemoteEndpoint)) {
+      const normEndpoint = (v) => String(v ?? '').trim().replace(/\/+$/, '');
+      const storedRemoteEndpoint = ctx.getRawCfg?.()?.optimizer?.eosProxy?.remote?.endpoint;
+      if (candidateRemoteEndpoint && normEndpoint(candidateRemoteEndpoint) !== normEndpoint(storedRemoteEndpoint)
+          && !isAllowedRemoteEndpoint(candidateRemoteEndpoint)) {
         return json(res, 400, { ok: false, error: 'invalid_eos_remote_endpoint' });
+      }
+      // ntfy-Adresse (Gegenprüfung edeb17db, P3): jede Benachrichtigung ist ein
+      // POST an diese Adresse — keine internen Ziele. Nur bei einer ÄNDERUNG
+      // prüfen, eine gespeicherte Altadresse blockiert das Speichern nicht
+      // (gesendet wird an sie trotzdem nicht, services/notifications).
+      const candidateNtfy = body.config?.notifications?.providers?.ntfy?.topicUrl;
+      const storedNtfy = ctx.getRawCfg?.()?.notifications?.providers?.ntfy?.topicUrl;
+      if (candidateNtfy && String(candidateNtfy).trim() !== String(storedNtfy ?? '').trim() && !isAllowedOutboundUrl(candidateNtfy)) {
+        return json(res, 400, { ok: false, error: 'invalid_ntfy_topic_url' });
       }
       // Plan 08-06 Task 1 Step 3: legal-gate flip detection.
       // allowGridCharge / allowGridDischarge are EEG/§14a-relevant. ENABLING

@@ -14,6 +14,7 @@
 import { createTelegramProvider } from './providers/telegram.js';
 import { createPushoverProvider } from './providers/pushover.js';
 import { createNtfyProvider } from './providers/ntfy.js';
+import { isAllowedOutboundUrl } from '../host-address.js';
 
 // Phase 09.4 gap-closure: the `uptime-kuma` notification provider was removed.
 // It duplicated the pre-existing `monitoring` block (config monitoring.pushUrl
@@ -25,6 +26,19 @@ export const PROVIDER_FACTORIES = {
   pushover: createPushoverProvider,
   ntfy: createNtfyProvider
 };
+
+/**
+ * Provider aus der Konfiguration bauen — EINE Stelle für alle Versender
+ * (Benachrichtigungsdienst, Lizenz-Meldung). ntfy nie an interne Adressen
+ * (Box selbst, link-local/Metadaten), auch nicht für gespeicherte Altwerte
+ * und Importe (Gegenprüfungen edeb17db, bca61061).
+ */
+export function createProviderFromConfig(name, pCfg) {
+  const factory = PROVIDER_FACTORIES[name];
+  if (!factory) return null;
+  if (name === 'ntfy' && !isAllowedOutboundUrl(pCfg?.topicUrl)) throw new Error('topic_url_not_allowed');
+  return factory(pCfg);
+}
 
 const HYSTERESIS_BAND = 5; // SOC percentage
 
@@ -188,10 +202,9 @@ export function createNotificationService(ctx) {
     providers = new Map();
     for (const [name, pCfg] of Object.entries(nCfg.providers || {})) {
       if (!pCfg.enabled) continue;
-      const factory = PROVIDER_FACTORIES[name];
-      if (!factory) continue;
+      if (!PROVIDER_FACTORIES[name]) continue;
       try {
-        providers.set(name, factory(pCfg));
+        providers.set(name, createProviderFromConfig(name, pCfg));
       } catch (err) {
         pushLog('notification_provider_error', { provider: name, error: err.message });
       }

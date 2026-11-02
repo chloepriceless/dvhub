@@ -52,51 +52,72 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 SUP_DIR="$DATA_DIR/support"
-mkdir -p "$SUP_DIR"
-
-# 1. appliance-id (UUID; relay registry is keyed by it; ^[a-z0-9-]{1,36}$) -----
 APPLIANCE_ID_FILE="$DATA_DIR/appliance-id"
-if [[ ! -s "$APPLIANCE_ID_FILE" ]]; then
-  if [[ -r /proc/sys/kernel/random/uuid ]]; then
-    tr 'A-Z' 'a-z' < /proc/sys/kernel/random/uuid > "$APPLIANCE_ID_FILE"
-  else
-    node -e 'console.log(require("crypto").randomUUID())' > "$APPLIANCE_ID_FILE"
-  fi
-fi
-APPLIANCE_ID="$(tr -d '[:space:]' < "$APPLIANCE_ID_FILE" 2>/dev/null || echo "")"
-
-# 2. relay keypair — Level A, Appliance->Relay (private key never leaves) -------
 KEY="$SUP_DIR/relay_id_ed25519"
-if [[ ! -f "$KEY" ]]; then
-  ssh-keygen -t ed25519 -N "" -f "$KEY" -C "dvhub-appliance-${APPLIANCE_ID}" >/dev/null
-fi
-
-# 3. relay hostkey pin (known_hosts) ------------------------------------------
 KNOWN_HOSTS="$SUP_DIR/known_hosts"
-PIN_LINE="[${RELAY_HOST}]:${RELAY_PORT} ${RELAY_HOSTKEY}"
-if [[ ! -f "$KNOWN_HOSTS" ]] || ! grep -qF "$RELAY_HOSTKEY" "$KNOWN_HOSTS"; then
-  printf '%s\n' "$PIN_LINE" > "$KNOWN_HOSTS"
-fi
-
-# 4. relay sidecar — host/port/user; PRESERVE peer-assigned ports --------------
 SIDECAR="$SUP_DIR/relay.json"
-node -e '
-  const fs = require("fs");
-  const [p, host, port, user] = process.argv.slice(1);
-  let o = {};
-  try { o = JSON.parse(fs.readFileSync(p, "utf8")) || {}; } catch { o = {}; }
-  o.host = host; o.port = Number(port); o.user = user;
-  if (o.shellPort == null) o.shellPort = 0;
-  if (o.webPort == null) o.webPort = 0;
-  fs.writeFileSync(p, JSON.stringify(o, null, 2) + "\n");
-' "$SIDECAR" "$RELAY_HOST" "$RELAY_PORT" "$RELAY_USER"
 
-# 5. ownership + permissions (dvhub owns its keys; private key 0600) -----------
+# Gegenprüfung 1abef694 (P1): $DATA_DIR und support/ gehören dem
+# Dienstbenutzer. Früher legte root hier Dateien an und rief chown/chmod ohne
+# -h — ein Verweis appliance-id → /usr/local/libexec/dvhub-update gab den
+# Update-Helfer an dvhub (über dessen sudo-Regel → root), known_hosts/relay.json
+# schrieb root durch Verweise. Jetzt: root stellt nur den Besitz um (chown -h
+# bzw. -R, beides folgt keinem Verweis), alle Dateiarbeit läuft ALS
+# Dienstbenutzer — ein Verweis führt dann nur dorthin, wo dvhub ohnehin darf.
+mkdir -p "$DATA_DIR"
+[[ -L "$SUP_DIR" ]] && rm -f -- "$SUP_DIR"
+mkdir -p "$SUP_DIR"
+chown -h "$SERVICE_USER:$SERVICE_USER" "$SUP_DIR" 2>/dev/null || true
 chown -R "$SERVICE_USER:$SERVICE_USER" "$SUP_DIR" 2>/dev/null || true
-chown "$SERVICE_USER:$SERVICE_USER" "$APPLIANCE_ID_FILE" 2>/dev/null || true
-chmod 700 "$SUP_DIR"
-chmod 600 "$KEY" 2>/dev/null || true
-chmod 644 "$KEY.pub" "$KNOWN_HOSTS" "$SIDECAR" "$APPLIANCE_ID_FILE" 2>/dev/null || true
+[[ -e "$APPLIANCE_ID_FILE" || -L "$APPLIANCE_ID_FILE" ]] && { chown -h "$SERVICE_USER:$SERVICE_USER" "$APPLIANCE_ID_FILE" 2>/dev/null || true; }
+as_service_user() {
+  if command -v runuser >/dev/null 2>&1; then runuser -u "$SERVICE_USER" -- "$@"
+  else setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups -- "$@"; fi
+}
+as_service_user env HOME=/nonexistent bash -euo pipefail -c '
+  APPLIANCE_ID_FILE=$1 KEY=$2 KNOWN_HOSTS=$3 SIDECAR=$4 SUP_DIR=$5
+  RELAY_HOST=$6 RELAY_PORT=$7 RELAY_USER=$8 RELAY_HOSTKEY=$9
+  umask 077
+  # Verweise an Stelle dieser Dateien sind nie gewollt: weg damit (als
+  # Dienstbenutzer — trifft nur dessen eigene Einträge).
+  for f in "$APPLIANCE_ID_FILE" "$KNOWN_HOSTS" "$SIDECAR" "$KEY" "$KEY.pub"; do
+    if [[ -L "$f" ]]; then echo "  WARN: $f war ein Verweis — entfernt" >&2; rm -f -- "$f"; fi
+  done
+  # 1. appliance-id (UUID; relay registry is keyed by it; ^[a-z0-9-]{1,36}$)
+  if [[ ! -s "$APPLIANCE_ID_FILE" ]]; then
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then
+      tr "A-Z" "a-z" < /proc/sys/kernel/random/uuid > "$APPLIANCE_ID_FILE"
+    else
+      node -e "console.log(require(\"crypto\").randomUUID())" > "$APPLIANCE_ID_FILE"
+    fi
+  fi
+  APPLIANCE_ID="$(tr -d "[:space:]" < "$APPLIANCE_ID_FILE" 2>/dev/null || echo "")"
+  # 2. relay keypair — Level A, Appliance->Relay (private key never leaves)
+  if [[ ! -f "$KEY" ]]; then
+    ssh-keygen -t ed25519 -N "" -f "$KEY" -C "dvhub-appliance-${APPLIANCE_ID}" >/dev/null
+  fi
+  # 3. relay hostkey pin (known_hosts)
+  PIN_LINE="[${RELAY_HOST}]:${RELAY_PORT} ${RELAY_HOSTKEY}"
+  if [[ ! -f "$KNOWN_HOSTS" ]] || ! grep -qF "$RELAY_HOSTKEY" "$KNOWN_HOSTS"; then
+    printf "%s\n" "$PIN_LINE" > "$KNOWN_HOSTS"
+  fi
+  # 4. relay sidecar — host/port/user; PRESERVE peer-assigned ports
+  node -e "
+    const fs = require(\"fs\");
+    const [p, host, port, user] = process.argv.slice(1);
+    let o = {};
+    try { o = JSON.parse(fs.readFileSync(p, \"utf8\")) || {}; } catch { o = {}; }
+    o.host = host; o.port = Number(port); o.user = user;
+    if (o.shellPort == null) o.shellPort = 0;
+    if (o.webPort == null) o.webPort = 0;
+    fs.writeFileSync(p, JSON.stringify(o, null, 2) + \"\\n\");
+  " "$SIDECAR" "$RELAY_HOST" "$RELAY_PORT" "$RELAY_USER"
+  # 5. permissions (private key 0600)
+  chmod 700 "$SUP_DIR"
+  chmod 600 "$KEY" 2>/dev/null || true
+  chmod 644 "$KEY.pub" "$KNOWN_HOSTS" "$SIDECAR" "$APPLIANCE_ID_FILE" 2>/dev/null || true
+' _ "$APPLIANCE_ID_FILE" "$KEY" "$KNOWN_HOSTS" "$SIDECAR" "$SUP_DIR" "$RELAY_HOST" "$RELAY_PORT" "$RELAY_USER" "$RELAY_HOSTKEY"
+APPLIANCE_ID="$(as_service_user cat "$APPLIANCE_ID_FILE" 2>/dev/null | tr -d '[:space:]' || echo "")"
 
 # 5b. Tunnel als eigener Dienst (2026-10-14) ------------------------------------
 # Als Kindprozess von DVhub starb ein offener Tunnel bei jedem Neustart von

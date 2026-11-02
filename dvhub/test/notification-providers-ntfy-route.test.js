@@ -114,7 +114,9 @@ describe('Plan 20-01: ntfy.sh dedicated endpoints (static)', () => {
     assert.ok(m);
     // topicUrl/token fallback to stored value when body field is falsy or '***'.
     assert.match(m[0], /body\?\.topicUrl[\s\S]{0,80}stored\.topicUrl/);
-    assert.match(m[0], /body\?\.token[\s\S]{0,80}stored\.token/);
+    // Seit 29.10.2026 nur für denselben Server (Verhalten: smoke-phase05,
+    // „ntfy: stored token stays bound to the stored server“).
+    assert.match(m[0], /body\?\.token[\s\S]{0,160}sameOrigin\(topicUrl,\s*stored\.topicUrl\)[\s\S]{0,40}stored\.token/);
   });
 
   it('checkProviderRateLimit utility is declared with documented constants', () => {

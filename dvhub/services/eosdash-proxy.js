@@ -11,8 +11,8 @@
 //     htmx + relative URLs inside EOSdash route back through the proxy.
 //   - Streams all other content types verbatim (no body modification).
 //   - Preserves request method, query string, headers (sans Host), body.
-//   - Forwards response status, headers (sans X-Frame-Options so iframe
-//     works), and body.
+//   - Forwards response status, headers and body; framing only from DVhub
+//     itself (SAMEORIGIN / frame-ancestors 'self', Strix W2).
 //   - Logs failures via pushLog('eosdash_proxy_error') — never throws to
 //     the dispatcher.
 
@@ -33,7 +33,41 @@ export function isEosdashRequest(pathname) {
   return pathname === PROXY_PREFIX || pathname.startsWith(PROXY_PREFIX + '/');
 }
 
-export function createEosdashProxy(ctx) {
+// Strix W2 (30.10.2026): der Proxy läuft vor handleRequest, SECURITY_HEADERS
+// greifen hier nicht — vorher ging jede EOSdash-Antwort ohne Framing-Schutz
+// hinaus (Clickjacking unter lanTrust „Offen“). Einbetten nur von DVhub selbst
+// (der iframe unter Einstellungen → EOS ist same-origin), nosniff, kein
+// Referrer. Bewusst NICHT die volle DVhub-CSP: EOSdash bettet Bokeh-JavaScript
+// inline ein, script-src 'self' bräche die Diagramme. Eine CSP von EOSdash
+// bleibt, nur frame-ancestors setzt DVhub.
+const FRAME_ANCESTORS = "frame-ancestors 'self'";
+export function withEosdashSecurityHeaders(headers = {}) {
+  const out = { ...headers };
+  for (const k of Object.keys(out)) {
+    if (['x-frame-options', 'x-content-type-options', 'referrer-policy'].includes(k.toLowerCase())) delete out[k];
+  }
+  const cspKey = Object.keys(out).find((k) => k.toLowerCase() === 'content-security-policy');
+  // Mehrere Richtlinien kommen komma-getrennt (Node fasst doppelte Kopfzeilen
+  // so zusammen): frame-ancestors aus JEDER entfernen, sonst gälte in einer
+  // zweiten Richtlinie z. B. `frame-ancestors *` (Gegenprüfung 68ea4b79).
+  const upstreamCsp = cspKey ? [].concat(out[cspKey]).join(', ') : '';
+  if (cspKey) delete out[cspKey];
+  const policies = upstreamCsp.split(',')
+    .map((pol) => pol.split(';').map((d) => d.trim()).filter((d) => d && !/^frame-ancestors\b/i.test(d)).join('; '))
+    .filter(Boolean);
+  if (policies.length) policies[policies.length - 1] += `; ${FRAME_ANCESTORS}`;
+  else policies.push(FRAME_ANCESTORS);
+  out['content-security-policy'] = policies.join(', ');
+  out['x-frame-options'] = 'SAMEORIGIN';
+  out['x-content-type-options'] = 'nosniff';
+  // same-origin statt no-referrer: bei no-referrer schicken Browser auf
+  // Formular-POSTs Origin: null — das Schreibtor lehnte dann EOSdash-eigene
+  // Formulare ab (Gegenprüfung 68ea4b79). Nach außen geht weiter kein Referrer.
+  out['referrer-policy'] = 'same-origin';
+  return out;
+}
+
+export function createEosdashProxy(ctx, { port = EOSDASH_PORT } = {}) {
   const { pushLog } = ctx;
 
   return function handleEosdashRequest(req, res) {
@@ -62,20 +96,19 @@ export function createEosdashProxy(ctx) {
     delete upstreamHeaders['proxy-connection'];
     delete upstreamHeaders['keep-alive'];
     delete upstreamHeaders.upgrade;
-    upstreamHeaders.host = `${EOSDASH_HOST}:${EOSDASH_PORT}`;
+    upstreamHeaders.host = `${EOSDASH_HOST}:${port}`;
 
     const upstreamReq = http.request({
       host: EOSDASH_HOST,
-      port: EOSDASH_PORT,
+      port,
       method: req.method,
       path: upstreamPath,
       headers: upstreamHeaders,
       timeout: TIMEOUT_MS,
     }, (upstreamRes) => {
       const status = upstreamRes.statusCode || 502;
-      const responseHeaders = { ...upstreamRes.headers };
-      // Allow iframe embedding from the DVhub origin.
-      delete responseHeaders['x-frame-options'];
+      // Einbetten nur von DVhub selbst (W2) — der iframe ist same-origin.
+      const responseHeaders = withEosdashSecurityHeaders(upstreamRes.headers);
       // Drop hop-by-hop on response side too.
       delete responseHeaders.connection;
       delete responseHeaders['transfer-encoding'];
@@ -90,9 +123,9 @@ export function createEosdashProxy(ctx) {
     upstreamReq.on('error', (e) => {
       pushLog('eosdash_proxy_error', { phase: 'upstream_request', error: e.message, path: upstreamPath });
       if (!res.headersSent) {
-        res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
+        res.writeHead(502, withEosdashSecurityHeaders({ 'content-type': 'text/plain; charset=utf-8' }));
       }
-      try { res.end('EOSdash proxy: cannot reach EOSdash at 127.0.0.1:8504 — is the service running?'); } catch { /* ignore */ }
+      try { res.end(`EOSdash proxy: cannot reach EOSdash at ${EOSDASH_HOST}:${port} — is the service running?`); } catch { /* ignore */ }
     });
 
     upstreamReq.on('timeout', () => {

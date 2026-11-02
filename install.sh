@@ -601,6 +601,102 @@ dvhub_root_own_install_dir() {  # <ordner> [<höchstens sekunden je Schritt>]
 }
 # END DVHUB INSTALL-DIR OWNERSHIP
 
+# BEGIN DVHUB CONFIG DIRS — keep this block byte-identical in install.sh and post-update.sh.
+# Der Konfigurationsordner gehört dem Dienstbenutzer, root arbeitet aber darin
+# (Strix R-0001/R-0006/T-0003, 30.10.2026). Ein Verweis, den der Dienstbenutzer
+# dort anlegt, darf root nirgendwohin lenken: tls/x.pem → /usr/local/libexec/
+# dvhub-update ließ root den Update-Helfer per chown an dvhub geben (über
+# dessen sudo-Regel → root), tls/key.pem → <datei> ließ openssl den Schlüssel
+# hineinschreiben, vpn → /usr/local/libexec ließ root dort chmod 700 setzen.
+# Darum wechselt root Teil für Teil hinein (cd -P; danach zählt die Inode des
+# Arbeitsordners, nicht mehr der Name) und legt neue Dateien in einem eigenen,
+# nur root zugänglichen Zwischenordner an.
+dvhub_cfg_cd() {  # <vertrauter ordner> <teil>… — nur in einer Subshell aufrufen
+  cd -P -- "$1" || return 1
+  shift
+  local part here
+  for part in "$@"; do
+    here="$(pwd -P)" || return 1
+    if [[ -L "$part" ]]; then
+      echo "  WARN: $here/$part war ein Verweis — durch einen eigenen Ordner ersetzt" >&2
+      rm -f -- "$part" || return 1
+    fi
+    [[ -d "$part" ]] || mkdir -- "$part" || return 1
+    cd -P -- "$part" || return 1
+    if [[ "$(pwd -P)" != "${here%/}/$part" ]]; then
+      echo "  WARN: $here/$part ist kein eigener Ordner — übersprungen" >&2
+      return 1
+    fi
+  done
+}
+dvhub_cfg_dir() {  # <konfigurationsordner> <modus oder leer> <teil>… — Unterordner anlegen, ohne Verweisen zu folgen
+  local base=$1 mode=$2
+  shift 2
+  ( dvhub_cfg_cd "$base" "$@" && { [[ -z "$mode" ]] || chmod "$mode" .; } )
+}
+# Selbstsigniertes Zertifikat, wenn tls/cert.pem fehlt. Rückgabe 0 erzeugt,
+# 3 schon vorhanden, sonst Fehler. <vorsatz> z. B. eine Zeitgrenze (pu_bounded 30).
+dvhub_tls_selfsigned() {  # <konfigurationsordner> <dienstbenutzer> [<vorsatz>…]
+  local base=$1 user=$2
+  shift 2
+  (
+    dvhub_cfg_cd "$base" tls || exit 1
+    tls_real="$(pwd -P)" || exit 1
+    # Verweise fliegen raus — die App läse sonst über sie, und ein Verweis
+    # namens cert.pem täuschte ein vorhandenes Zertifikat vor. Mit Meldung:
+    # ein eigener Schlüssel als Verweis wird so durch ein neues Paar ersetzt.
+    for link in ./*.pem ./.[!.]*; do
+      [[ -L "$link" ]] || continue
+      echo "  WARN: $tls_real/${link#./} war ein Verweis — entfernt (eigene Zertifikate als Datei ablegen)" >&2
+      rm -f -- "$link"
+    done
+    find . -maxdepth 1 -type l -exec rm -f -- {} + 2>/dev/null || true
+    # Vorhandenes Zertifikat bleibt — ein eigener Schlüssel darf anders heißen
+    # (tlsKeyPath, Gegenprüfung 2b43209c). Fehlt key.pem, sagt die Meldung es.
+    if [[ -f cert.pem ]]; then
+      [[ -f key.pem ]] || echo "  WARN: $tls_real/cert.pem ohne key.pem — HTTPS braucht den Schlüssel (key.pem oder tlsKeyPath)" >&2
+      exit 3
+    fi
+    stage="$(mktemp -d .neu.XXXXXX)" || exit 1
+    trap 'rm -rf -- "$stage"' EXIT
+    (
+      # root-eigen, 0700, leer und wirklich der eben angelegte Ordner (kein
+      # nachträglich untergeschobener Verweis, Gegenprüfung d5655361, P3):
+      # hier kann der Dienstbenutzer nichts vorlegen.
+      cd -P -- "$stage" && [[ "$(pwd -P)" == "$tls_real/$stage" && -O . && -z "$(ls -A)" ]] || exit 1
+      "$@" openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
+        -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null || exit 1
+      chmod 600 key.pem && chmod 644 cert.pem && chown "$user:$user" key.pem cert.pem || exit 1
+      # Harte Verweise ersetzen den Eintrag im tls-Ordner (auch einen Verweis
+      # dort) und folgen keinem; cert.pem zuletzt — es zeigt „fertig“.
+      ln -fn key.pem ../key.pem && ln -fn cert.pem ../cert.pem
+    )
+  )
+}
+# config.json enthält Geheimnisse (apiToken, Zugangsdaten): 0600 und
+# Dienstbenutzer, ohne einem Verweis zu folgen (O_NOFOLLOW + fchmod/fchown).
+dvhub_cfg_secure_file() {  # <datei> <dienstbenutzer>
+  local uid gid
+  uid="$(id -u "$2" 2>/dev/null)" && gid="$(id -g "$2" 2>/dev/null)" || return 1
+  node -e '
+    const fs = require("fs");
+    const [file, uid, gid] = process.argv.slice(1);
+    let fd;
+    try { fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
+    catch (e) {
+      if (e.code === "ENOENT") process.exit(0);
+      console.error(`  WARN: ${file}: ${e.code === "ELOOP" ? "ist ein Verweis — Rechte nicht gesetzt" : e.message}`);
+      process.exit(1);
+    }
+    try {
+      if (!fs.fstatSync(fd).isFile()) { console.error(`  WARN: ${file} ist keine Datei`); process.exit(1); }
+      fs.fchownSync(fd, Number(uid), Number(gid));
+      fs.fchmodSync(fd, 0o600);
+    } finally { fs.closeSync(fd); }
+  ' "$1" "$uid" "$gid"
+}
+# END DVHUB CONFIG DIRS
+
 echo "[1/7] Pakete installieren"
 apt-get update
 # python3-venv + python3-pip: a fresh Debian/Ubuntu ships the `venv` stdlib stub
@@ -721,7 +817,7 @@ fi
 
 echo "[5/7] Node-Abhaengigkeiten installieren"
 cd "$APP_DIR"
-npm install --omit=dev
+npm install --omit=dev --ignore-scripts --no-audit --no-fund
 
 # Port-Recht (80/443/502) bekommt der Dienst ueber systemd (AmbientCapabilities,
 # node-runtime-provision.sh nach dem Schreiben der Unit) — NICHT mehr per setcap
@@ -777,52 +873,74 @@ fi
 
 echo "[6/7] Config-Pfad und Rechte vorbereiten"
 mkdir -p "$CONFIG_DIR"
-mkdir -p "$CONFIG_DIR/hersteller"
-mkdir -p "$CONFIG_DIR/vpn/profiles"
-mkdir -p "$CONFIG_DIR/tls"
 mkdir -p "$DATA_DIR"
+# Unterordner ohne Verweisen zu folgen — bei einer Neuinstallation über einen
+# bestehenden, dem Dienstbenutzer gehörenden Ordner (BEGIN DVHUB CONFIG DIRS,
+# Strix R-0001/R-0006).
+dvhub_cfg_dir "$CONFIG_DIR" "" hersteller
+dvhub_cfg_dir "$CONFIG_DIR" 700 vpn profiles
+dvhub_cfg_dir "$CONFIG_DIR" "" tls
 
 # Generate self-signed TLS certificate if not present
-if [[ ! -f "$CONFIG_DIR/tls/cert.pem" ]]; then
-  echo "   Generiere Self-Signed TLS Zertifikat..."
-  # Plan 08-05 Task 1: 397 days (≤ 398) keeps the cert browser-compatible
-  # (Apple/Chrome/Mozilla hard-limit since Sep 2020). Was 3650 (10y).
-  openssl req -x509 -newkey rsa:2048 -nodes \
-    -keyout "$CONFIG_DIR/tls/key.pem" \
-    -out "$CONFIG_DIR/tls/cert.pem" \
-    -days 397 -subj "/CN=dvhub/O=DVhub/C=DE" 2>/dev/null
-  chmod 600 "$CONFIG_DIR/tls/key.pem"
-fi
-if [[ ! -f "$CONFIG_PATH" ]]; then
-  cp "$APP_DIR/config.example.json" "$CONFIG_PATH"
-fi
-# Set updateChannel in config if not already present
-if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
-  node -e "
-    const fs = require('fs');
-    const crypto = require('crypto');
-    const p = '$CONFIG_PATH';
+# Plan 08-05 Task 1: 397 days (≤ 398) keeps the cert browser-compatible
+# (Apple/Chrome/Mozilla hard-limit since Sep 2020). Was 3650 (10y).
+TLS_RC=0
+dvhub_tls_selfsigned "$CONFIG_DIR" "$SERVICE_USER" || TLS_RC=$?
+case "$TLS_RC" in
+  0) echo "   Self-Signed TLS Zertifikat erzeugt";;
+  3) ;;
+  *) echo "   WARN: TLS-Zertifikat nicht erzeugt — wird beim nächsten Start nachgeholt" >&2;;
+esac
+# config.json anlegen (aus der Vorlage) bzw. ergänzen. /etc/dvhub gehört dem
+# Dienstbenutzer: root liest mit O_NOFOLLOW, schreibt eine neue Datei
+# (O_EXCL|O_NOFOLLOW, 0600, fchown) und setzt sie per rename ein — ein Verweis
+# config.json wird nie beschrieben, auch nicht, wenn er erst zwischen Prüfen
+# und Schreiben auftaucht (Gegenprüfung 0923ac3d). Werte als Argumente, nicht
+# in den JS-Text eingesetzt.
+if command -v node >/dev/null 2>&1; then
+  node -e '
+    const fs = require("fs"); const path = require("path"); const crypto = require("crypto");
+    const [p, example, channel, supportUser, uid, gid] = process.argv.slice(1);
+    const C = fs.constants;
+    let fd = null; let c;
+    try { fd = fs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK); }
+    catch (e) {
+      if (e.code === "ELOOP") { console.error(`FEHLER: ${p} ist ein Verweis — bitte prüfen und durch die echte Datei ersetzen.`); process.exit(1); }
+      if (e.code !== "ENOENT") throw e;
+    }
+    if (fd !== null) {
+      try {
+        if (!fs.fstatSync(fd).isFile()) { console.error(`FEHLER: ${p} ist keine Datei.`); process.exit(1); }
+        c = JSON.parse(fs.readFileSync(fd, "utf8"));
+      } catch (e) { if (e instanceof SyntaxError) process.exit(0); throw e; } // kaputte Config: nicht anfassen (wie bisher)
+      finally { fs.closeSync(fd); }
+    } else {
+      c = JSON.parse(fs.readFileSync(example, "utf8"));
+    }
+    let changed = fd === null;
+    if (!c.updateChannel) { c.updateChannel = channel; changed = true; }
+    // T-0118: the systemd unit sets DV_ENABLE_SERVICE_ACTIONS=1 and the app
+    // refuses to start without an apiToken >= 16 chars (crash-loop on a fresh
+    // install whose config.example.json has none). Generate a strong random
+    // token so the service comes up clean on first boot.
+    if (!c.apiToken || String(c.apiToken).length < 16) { c.apiToken = crypto.randomBytes(24).toString("hex"); changed = true; }
+    // T-0113: persist the support-user opt-out choice so the UI + post-update
+    // reconcile consistently. "1" => remote-support ready (default), "0" => off.
+    c.support = c.support || {};
+    c.support.localUser = c.support.localUser || {};
+    if (c.support.localUser.enabled === undefined) { c.support.localUser.enabled = supportUser !== "0"; changed = true; }
+    if (!changed) process.exit(0);
+    const tmp = path.join(path.dirname(p), `.${path.basename(p)}.neu-${crypto.randomBytes(4).toString("hex")}`);
     try {
-      const c = JSON.parse(fs.readFileSync(p, 'utf8'));
-      let changed = false;
-      if (!c.updateChannel) { c.updateChannel = '$UPDATE_CHANNEL'; changed = true; }
-      // T-0118: the systemd unit sets DV_ENABLE_SERVICE_ACTIONS=1 and the app
-      // refuses to start without an apiToken >= 16 chars (crash-loop on a fresh
-      // install whose config.example.json has none). Generate a strong random
-      // token so the service comes up clean on first boot.
-      if (!c.apiToken || String(c.apiToken).length < 16) {
-        c.apiToken = crypto.randomBytes(24).toString('hex');
-        changed = true;
-      }
-      // T-0113: persist the support-user opt-out choice so the UI + post-update
-      // reconcile consistently. '1' => remote-support ready (default), '0' => off.
-      const wantSupportUser = '$SUPPORT_LOCAL_USER' !== '0';
-      c.support = c.support || {};
-      c.support.localUser = c.support.localUser || {};
-      if (c.support.localUser.enabled === undefined) { c.support.localUser.enabled = wantSupportUser; changed = true; }
-      if (changed) fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
-    } catch {}
-  "
+      const w = fs.openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
+      try { fs.writeFileSync(w, JSON.stringify(c, null, 2) + "\n"); fs.fchmodSync(w, 0o600); fs.fchownSync(w, Number(uid), Number(gid)); }
+      finally { fs.closeSync(w); }
+      fs.renameSync(tmp, p);
+    } catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+  ' "$CONFIG_PATH" "$APP_DIR/config.example.json" "$UPDATE_CHANNEL" "$SUPPORT_LOCAL_USER" \
+    "$(id -u "$SERVICE_USER")" "$(id -g "$SERVICE_USER")"
+elif [[ ! -e "$CONFIG_PATH" && ! -L "$CONFIG_PATH" ]]; then
+  ( umask 077; set -C; cat "$APP_DIR/config.example.json" > "$CONFIG_PATH" )
 fi
 # Herstellerprofile abgleichen (T-MANAGED-VENDOR-PROFILES): fehlende anlegen,
 # unveränderte auf die neue ausgelieferte Version aktualisieren, Operator-Edits
@@ -835,8 +953,11 @@ node "$INSTALL_DIR/scripts/reconcile-vendor-profiles.mjs" "$CONFIG_DIR" "$APP_DI
 chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$DATA_DIR"
 chmod 750 "$CONFIG_DIR"
 chmod 750 "$DATA_DIR"
-chmod 700 "$CONFIG_DIR/vpn"
-chmod 700 "$CONFIG_DIR/vpn/profiles"
+dvhub_cfg_dir "$CONFIG_DIR" 700 vpn
+dvhub_cfg_dir "$CONFIG_DIR" 700 vpn profiles
+# config.json enthält Geheimnisse: nur der Dienstbenutzer (Strix T-0003; die
+# Vorlage kam mit 0644, die Gruppe dvhub — Support-Login — las mit).
+dvhub_cfg_secure_file "$CONFIG_PATH" "$SERVICE_USER"
 
 # PostgreSQL: Datenbank und User anlegen falls noch nicht vorhanden
 if command -v psql >/dev/null 2>&1; then

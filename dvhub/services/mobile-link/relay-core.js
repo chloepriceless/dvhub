@@ -36,10 +36,14 @@ export const CLOSE = Object.freeze({
   shutdown: 4011,
 });
 
+// Grenzen passend zum Container (relay.dvhub.de: mem_limit 256 MiB, Strix
+// H-0001/H-0002, 01.11.2026): Verbindungen (~10 KiB je Stück) und Briefkästen
+// zusammen bleiben unter der Hälfte, Rest für Node selbst und Rahmen unterwegs.
 export const DEFAULT_LIMITS = Object.freeze({
   authTimeoutMs: 10_000,
-  maxConnections: 20_000,
-  // Je Quelladresse (hinter einem Proxy: X-Forwarded-For, RELAY_TRUST_PROXY).
+  maxConnections: 4_000,
+  // Je Quelladresse (hinter einem Proxy die von ihm angehängte Adresse,
+  // IPv6 je /64 — siehe relay-server.js clientAddress).
   maxConnectionsPerRemote: 64,
   maxAllowPerBox: 32,
   maxBoxes: 10_000,
@@ -57,15 +61,39 @@ export const DEFAULT_LIMITS = Object.freeze({
   mailboxBytes: 512 * 1024,
   mailboxLatestBytes: 64 * 1024,
   mailboxTtlMs: 24 * 3600_000,
-  mailboxTotalBytes: 256 * 1024 * 1024,
-  maxMailboxes: 50_000,
+  // Je Box über alle ihre Geräte; darüber weichen die ältesten Einträge DIESER Box.
+  mailboxBytesPerBox: 2 * 1024 * 1024,
+  // Je Quelladresse der ablegenden Box-Verbindung über alle Boxen dieser
+  // Quelle (Box-Kennungen sind frei erzeugbar); darüber weichen die ältesten
+  // Einträge DIESER Quelle (Relay-Restpunkte 02.11.2026).
+  mailboxBytesPerSource: 4 * 1024 * 1024,
+  // Alle Boxen zusammen; darüber weichen die ältesten Einträge der Quelle,
+  // die gerade am meisten belegt — nicht die ältesten überhaupt, sonst
+  // verdrängt eine Flut frischer Box-Kennungen echte, ältere Meldungen.
+  mailboxTotalBytes: 64 * 1024 * 1024,
+  maxMailboxes: 20_000,
+  // Neue Box-Briefkästen je Quelle: so viele sofort, dann einer je
+  // newBoxRefillMs (Eimer). Bekannte Boxen mit Briefkasten zählen nicht.
+  newBoxesPerSource: 16,
+  newBoxRefillMs: 60_000,
+  newBoxSourcesTracked: 10_000,
+  // Entkoppelte Geräte, die sich das Relay über das Offline-Sein der Box merkt.
+  revokedPerBox: 32,
+  revokedBoxes: 2_000,
 });
 
-// Speicher je Briefkasten bzw. Eintrag über die Nutzdaten hinaus (Map-Eintrag,
-// Objekte, Strings) — zählt mit, damit viele kleine Einträge nicht unter der
-// Bytegrenze durchrutschen (Fable-Review H1: ~460 B je Briefkasten gemessen).
+// Speicher über die Nutzdaten hinaus (Map-Einträge, Objekte, String-Köpfe,
+// Reihenfolge-Set) — zählt mit, damit viele kleine Einträge nicht unter der
+// Bytegrenze durchrutschen (Fable-Review H1, Strix H-0002). Nutzdaten sind
+// nur Base64url (ein Byte je Zeichen im Speicher, sonst UTF-16 = zwei).
 const MAILBOX_OVERHEAD = 512;
-const ITEM_OVERHEAD = 128;
+const ITEM_OVERHEAD = 256;
+const BOX_OVERHEAD = 1024; // Index-Eintrag je Box
+const B64U = /^[A-Za-z0-9_-]+={0,2}$/;
+const NO_SOURCE = '-'; // Verbindung ohne Quelladresse (eingebettet, Tests)
+
+// Spielraum über der Rahmengrenze der Rolle (UTF-8 statt Zeichen, Kopf).
+export const FRAME_SLACK = 4096;
 
 function safeEqual(a, b) {
   const x = Buffer.from(String(a));
@@ -84,8 +112,35 @@ export function createRelay({
 } = {}) {
   const L = { ...DEFAULT_LIMITS, ...limitOverrides };
   const boxes = new Map();      // boxId → { conn, allow:Set|null, pair, devices:Set<conn> }
-  const mailboxes = new Map();  // `${boxId}/${devId}` → { latest, items, bytes }
+  // Briefkästen je Box (Strix H-0002/H-0005): boxId → { bytes, devs: Map<devId, m> },
+  // m = { latest, items, bytes }, Eintrag = { id, ts, d, cost, seq, boxId, devId, prev, next }.
+  // bytes zählen Nutzdaten und Verwaltung (Box, Briefkasten, Eintrag) mit.
+  const mbBoxes = new Map();
+  // Alle Einträge in Ablagereihenfolge, ältester zuerst (doppelt verkettet,
+  // O(1) vorn entnehmen und mittendrin austragen): für „ältestes zuerst
+  // verwerfen“ und das Aufräumen nach Ablauf ohne Rundlauf über alle. Kein Set —
+  // dessen Iterator müsste nach jedem Löschen vorn die Lücken neu überspringen
+  // (Codex 4597a2f8 P2).
+  let mbHead = null;
+  let mbTail = null;
+  // Relay-weit eindeutige Laufnummer = Ereignis-ID: eine verspätete Quittung
+  // trifft nie ein Ereignis aus einem neu angelegten Briefkasten (Codex P2).
+  let mbSeq = 0;
+  let mailboxCount = 0;
   let mailboxTotal = 0;
+  // Belegung je Quelle (Quelladresse der ablegenden Box-Verbindung, nur im
+  // Arbeitsspeicher, kein Register): key → { key, bytes, head, tail, bi }.
+  // Einträge je Quelle in Ablagereihenfolge (sp/sn), Briefkasten- und
+  // Box-Verwaltung zählen bei der Quelle, die sie angelegt hat. Für „wer belegt
+  // am meisten“ liegen die Quellen in Eimern nach Zweierpotenz (bi) — der
+  // gewählte ist höchstens um Faktor 2 kleiner als der größte, in O(1).
+  const srcs = new Map();
+  const srcBuckets = [];
+  // Eimer für neue Box-Briefkästen je Quelle: key → { n, t }.
+  const newBoxTokens = new Map();
+  // Entkoppelte Geräte je Box aus den Freigabelisten der Box — gilt auch,
+  // solange die Box offline ist (Strix H-0004): boxId → { last:Set, gone:Set }.
+  const revoked = new Map();
   let nextCid = 1;
   let closed = false;
   const conns = new Set();
@@ -107,78 +162,248 @@ export function createRelay({
 
   // ── Briefkasten ───────────────────────────────────────────────────────────
 
-  function mbKey(boxId, devId) { return `${boxId}/${devId}`; }
+  function mbFind(boxId, devId) { return mbBoxes.get(boxId)?.devs.get(devId) || null; }
 
-  function mbGet(boxId, devId, create) {
-    const k = mbKey(boxId, devId);
-    let m = mailboxes.get(k);
-    if (!m && create) {
-      if (mailboxes.size >= L.maxMailboxes || mailboxTotal + MAILBOX_OVERHEAD > L.mailboxTotalBytes) return null;
-      m = { latest: null, items: [], bytes: MAILBOX_OVERHEAD, nextId: 1 };
-      mailboxes.set(k, m);
-      mailboxTotal += MAILBOX_OVERHEAD;
+  function orderAdd(it) {
+    it.prev = mbTail;
+    it.next = null;
+    if (mbTail) mbTail.next = it; else mbHead = it;
+    mbTail = it;
+  }
+
+  function orderRemove(it) {
+    if (it.prev) it.prev.next = it.next; else if (mbHead === it) mbHead = it.next;
+    if (it.next) it.next.prev = it.prev; else if (mbTail === it) mbTail = it.prev;
+    it.prev = null;
+    it.next = null;
+  }
+
+  // ── Quellen ──
+  function srcAdjust(key, delta) {
+    let s = srcs.get(key);
+    if (!s) {
+      if (delta <= 0) return;
+      s = { key, bytes: 0, head: null, tail: null, bi: -1 };
+      srcs.set(key, s);
     }
-    return m || null;
+    s.bytes += delta;
+    const bi = s.bytes > 0 ? 31 - Math.clz32(Math.min(s.bytes, 0x7fffffff)) : -1;
+    if (bi !== s.bi) {
+      if (s.bi >= 0) srcBuckets[s.bi].delete(s);
+      if (bi >= 0) (srcBuckets[bi] ||= new Set()).add(s);
+      s.bi = bi;
+    }
+    if (s.bytes <= 0 && !s.head) srcs.delete(key);
   }
 
-  const itemCost = (it) => it.d.length + ITEM_OVERHEAD;
-
-  function mbDropItem(m, idx) {
-    const [it] = m.items.splice(idx, 1);
-    m.bytes -= itemCost(it);
-    mailboxTotal -= itemCost(it);
+  function srcBiggest() {
+    for (let i = srcBuckets.length - 1; i >= 0; i--) {
+      const set = srcBuckets[i];
+      if (set && set.size) return set.values().next().value;
+    }
+    return null;
   }
 
-  function mbSetLatest(m, entry) {
-    if (m.latest) { m.bytes -= itemCost(m.latest); mailboxTotal -= itemCost(m.latest); }
-    m.latest = entry;
-    if (entry) { m.bytes += itemCost(entry); mailboxTotal += itemCost(entry); }
+  function srcLink(it) {
+    const s = srcs.get(it.src);
+    it.sp = s.tail;
+    it.sn = null;
+    if (s.tail) s.tail.sn = it; else s.head = it;
+    s.tail = it;
+  }
+
+  function srcUnlink(it) {
+    const s = srcs.get(it.src);
+    if (!s) return;
+    if (it.sp) it.sp.sn = it.sn; else if (s.head === it) s.head = it.sn;
+    if (it.sn) it.sn.sp = it.sp; else if (s.tail === it) s.tail = it.sp;
+    it.sp = null;
+    it.sn = null;
+  }
+
+  // Neue Box-Briefkästen je Quelle drosseln (Eimer, nur im Arbeitsspeicher).
+  function newBoxAllowed(key) {
+    const t = now();
+    const e = newBoxTokens.get(key);
+    if (!e) {
+      // Unbekannte Quelle startet mit vollem Eimer. Ist die Liste voll, gilt
+      // sie weiter als unbekannt (bekäme ohnehin den vollen Eimer).
+      if (L.newBoxesPerSource > 1 && newBoxTokens.size < L.newBoxSourcesTracked) newBoxTokens.set(key, { n: L.newBoxesPerSource - 1, t });
+      return L.newBoxesPerSource >= 1;
+    }
+    e.n = Math.min(L.newBoxesPerSource, e.n + (t - e.t) / L.newBoxRefillMs);
+    e.t = t;
+    if (e.n < 1) return false;
+    e.n -= 1;
+    return true;
+  }
+
+  // Volle Eimer vergessen (im Minutentakt).
+  function newBoxPrune() {
+    const t = now();
+    for (const [key, e] of newBoxTokens) if (e.n + (t - e.t) / L.newBoxRefillMs >= L.newBoxesPerSource) newBoxTokens.delete(key);
+  }
+
+  function mbRemoveEntry(it) {
+    orderRemove(it);
+    const b = mbBoxes.get(it.boxId);
+    const m = b?.devs.get(it.devId);
+    if (!m) return;
+    if (m.latest === it) m.latest = null;
+    else {
+      const i = m.items.indexOf(it);
+      if (i < 0) return;
+      m.items.splice(i, 1);
+    }
+    srcUnlink(it);
+    srcAdjust(it.src, -it.cost);
+    m.bytes -= it.cost;
+    b.bytes -= it.cost;
+    mailboxTotal -= it.cost;
+  }
+
+  // Leeren Briefkasten und leeren Box-Eintrag entfernen.
+  function mbTidy(boxId, devId) {
+    const b = mbBoxes.get(boxId);
+    if (!b) return;
+    const m = b.devs.get(devId);
+    if (m && !m.latest && m.items.length === 0) {
+      b.devs.delete(devId);
+      mailboxCount -= 1;
+      b.bytes -= m.bytes;
+      mailboxTotal -= m.bytes;
+      srcAdjust(m.src, -m.bytes);
+    }
+    if (b.devs.size === 0) {
+      mbBoxes.delete(boxId);
+      mailboxTotal -= b.bytes;
+      srcAdjust(b.src, -b.bytes);
+    }
+  }
+
+  function mbEvict(it) {
+    mbRemoveEntry(it);
+    mbTidy(it.boxId, it.devId);
   }
 
   function mbClear(boxId, devId) {
-    const k = mbKey(boxId, devId);
-    const m = mailboxes.get(k);
+    const m = mbFind(boxId, devId);
     if (!m) return;
-    mailboxTotal -= m.bytes;
-    mailboxes.delete(k);
+    if (m.latest) mbRemoveEntry(m.latest);
+    while (m.items.length) mbRemoveEntry(m.items[m.items.length - 1]);
+    mbTidy(boxId, devId);
   }
 
-  // Abgelaufenes entfernen — für einen Briefkasten beim Zugriff, für alle nur
-  // im Minutentakt (nicht bei jedem Zugriff über alle: O(N²), Fable-Review H1).
-  function mbPruneOne(k, m) {
+  // Abgelaufenes entfernen — für einen Briefkasten beim Zugriff, für alle im
+  // Minutentakt von vorn bis zum ersten frischen Eintrag (kein O(N²), Fable H1).
+  function mbPruneOne(boxId, devId) {
+    const m = mbFind(boxId, devId);
+    if (!m) return;
     const cutoff = now() - L.mailboxTtlMs;
-    while (m.items.length && m.items[0].ts < cutoff) mbDropItem(m, 0);
-    if (m.latest && m.latest.ts < cutoff) mbSetLatest(m, null);
-    if (!m.latest && m.items.length === 0) { mailboxes.delete(k); mailboxTotal -= m.bytes; m.bytes = 0; }
+    while (m.items.length && m.items[0].ts < cutoff) mbRemoveEntry(m.items[0]);
+    if (m.latest && m.latest.ts < cutoff) mbRemoveEntry(m.latest);
+    mbTidy(boxId, devId);
   }
 
   function mbPrune() {
-    for (const [k, m] of [...mailboxes]) mbPruneOne(k, m);
+    const cutoff = now() - L.mailboxTtlMs;
+    while (mbHead && mbHead.ts < cutoff) mbEvict(mbHead);
   }
 
-  function mbPut(boxId, devId, d, slot) {
-    if (slot === 'latest' ? d.length > L.mailboxLatestBytes : d.length > L.mailboxBytes) return 'too_large';
-    const existing = mbGet(boxId, devId, false);
-    if (existing) mbPruneOne(mbKey(boxId, devId), existing);
-    if (mailboxTotal + d.length + ITEM_OVERHEAD > L.mailboxTotalBytes) return 'relay_full';
-    const m = mbGet(boxId, devId, true);
-    if (!m) return 'relay_full';
-    if (slot === 'latest') {
-      mbSetLatest(m, { id: 'latest', ts: now(), d });
-      return null;
+  function mbOldestOfBox(b) {
+    let best = null;
+    for (const m of b.devs.values()) {
+      for (const it of [m.latest, m.items[0]]) if (it && (!best || it.seq < best.seq)) best = it;
     }
-    // Älteste Ereignisse weichen, wenn der Platz nicht reicht.
+    return best;
+  }
+
+  function mbPut(boxId, devId, d, slot, src = NO_SOURCE) {
+    if (!B64U.test(d)) return 'bad_data';
+    if (slot === 'latest' ? d.length > L.mailboxLatestBytes : d.length > L.mailboxBytes) return 'too_large';
+    mbPruneOne(boxId, devId);
+    // Neue Box-Kennung aus dieser Quelle? Erst prüfen, dann verdrängen.
+    if (!mbBoxes.has(boxId) && !newBoxAllowed(src)) return 'relay_busy';
     const cost = d.length + ITEM_OVERHEAD;
-    while (m.items.length && (m.items.length >= L.mailboxItems || m.bytes + cost > L.mailboxBytes + MAILBOX_OVERHEAD)) mbDropItem(m, 0);
-    if (m.bytes + cost > L.mailboxBytes + MAILBOX_OVERHEAD) return 'too_large';
-    const it = { id: String(m.nextId++), ts: now(), d };
-    m.items.push(it);
+    let m = mbFind(boxId, devId);
+    if (m && slot === 'latest' && m.latest) mbRemoveEntry(m.latest);
+    if (slot !== 'latest') {
+      // Je Gerät: älteste Ereignisse weichen, wenn Anzahl oder Platz nicht reicht.
+      while (m && m.items.length && (m.items.length >= L.mailboxItems || m.bytes + cost > L.mailboxBytes + MAILBOX_OVERHEAD)) mbRemoveEntry(m.items[0]);
+      if ((m ? m.bytes : MAILBOX_OVERHEAD) + cost > L.mailboxBytes + MAILBOX_OVERHEAD) { mbTidy(boxId, devId); return 'too_large'; }
+    }
+    // Je Box, je Quelle, dann gesamt. Es weicht jeweils das Älteste der
+    // eigenen Box bzw. Quelle; gesamt das Älteste der Quelle, die am meisten
+    // belegt (faire Verdrängung, ohne Register).
+    for (;;) {
+      m = mbFind(boxId, devId);
+      const b = mbBoxes.get(boxId);
+      const need = cost + (m ? 0 : MAILBOX_OVERHEAD) + (b ? 0 : BOX_OVERHEAD);
+      if ((b ? b.bytes : 0) + need > L.mailboxBytesPerBox) {
+        const old = b && mbOldestOfBox(b);
+        if (!old) { mbTidy(boxId, devId); return 'too_large'; }
+        mbEvict(old);
+        continue;
+      }
+      const s = srcs.get(src);
+      if ((s ? s.bytes : 0) + need > L.mailboxBytesPerSource) {
+        // Ohne eigene Einträge (nur Verwaltung von Briefkästen, die inzwischen
+        // aus einer anderen Quelle befüllt werden) trifft es niemand anderen.
+        const old = s?.head;
+        if (!old) { mbTidy(boxId, devId); return 'relay_busy'; }
+        mbEvict(old);
+        continue;
+      }
+      if (mailboxTotal + need > L.mailboxTotalBytes || (!m && mailboxCount >= L.maxMailboxes)) {
+        const old = srcBiggest()?.head || mbHead;
+        if (!old) { mbTidy(boxId, devId); return 'relay_full'; }
+        mbEvict(old);
+        continue;
+      }
+      break;
+    }
+    let b = mbBoxes.get(boxId);
+    if (!b) {
+      b = { bytes: BOX_OVERHEAD, devs: new Map(), src };
+      mbBoxes.set(boxId, b);
+      mailboxTotal += BOX_OVERHEAD;
+      srcAdjust(src, BOX_OVERHEAD);
+    }
+    if (!m) {
+      m = { latest: null, items: [], bytes: MAILBOX_OVERHEAD, src };
+      b.devs.set(devId, m);
+      mailboxCount += 1;
+      b.bytes += MAILBOX_OVERHEAD;
+      mailboxTotal += MAILBOX_OVERHEAD;
+      srcAdjust(src, MAILBOX_OVERHEAD);
+    }
+    const seq = ++mbSeq;
+    const it = { id: slot === 'latest' ? 'latest' : String(seq), ts: now(), d, cost, seq, boxId, devId, src, prev: null, next: null, sp: null, sn: null };
+    if (slot === 'latest') m.latest = it; else m.items.push(it);
+    orderAdd(it);
+    srcAdjust(src, cost);
+    srcLink(it);
     m.bytes += cost;
+    b.bytes += cost;
     mailboxTotal += cost;
     return null;
   }
 
-  const pruneTimer = setInterval(mbPrune, 60_000);
+  // Freigabeliste der Box: wer herausfällt, gilt als entkoppelt, bis die Box
+  // ihn wieder freigibt (Strix H-0004). Begrenzt je Box und insgesamt.
+  function noteAllow(boxId, prevAllow, allow) {
+    const r = revoked.get(boxId) || { last: null, gone: new Set() };
+    revoked.delete(boxId); // ans Ende (zuletzt benutzt)
+    const prev = prevAllow || r.last;
+    if (prev) for (const dev of prev) if (!allow.has(dev)) { r.gone.delete(dev); r.gone.add(dev); }
+    for (const dev of allow) r.gone.delete(dev);
+    while (r.gone.size > L.revokedPerBox) r.gone.delete(r.gone.values().next().value);
+    r.last = allow;
+    revoked.set(boxId, r);
+    while (revoked.size > L.revokedBoxes) revoked.delete(revoked.keys().next().value);
+  }
+
+  const pruneTimer = setInterval(() => { mbPrune(); newBoxPrune(); }, 60_000);
   pruneTimer.unref?.();
 
   // ── Verbindungen ──────────────────────────────────────────────────────────
@@ -290,6 +515,7 @@ export function createRelay({
       conn.role = 'box';
       conn.boxId = boxId;
       clearTimeout(conn.authTimer);
+      conn.sock.setFrameLimit?.(L.boxFrameBytes + FRAME_SLACK);
       e.conn = conn;
       e.allow = null;
       e.pair = null;
@@ -318,7 +544,11 @@ export function createRelay({
       if (!verifySig(pub, relayAuthData('device', conn.challenge), msg.sig)) return closeConn(conn, CLOSE.authFailed, 'auth_failed');
       if (!allowBox(tk.boxId)) return closeConn(conn, CLOSE.notAllowed, 'box_not_allowed');
       const existing = boxes.get(tk.boxId);
-      if (existing?.allow && !existing.allow.has(tk.devId)) return closeConn(conn, CLOSE.notAllowed, 'device_not_allowed');
+      // Box online mit Liste: die Liste entscheidet; sonst die gemerkten
+      // Entkopplungen (Box offline, Strix H-0004).
+      if (existing?.allow ? !existing.allow.has(tk.devId) : revoked.get(tk.boxId)?.gone.has(tk.devId)) {
+        return closeConn(conn, CLOSE.notAllowed, 'device_not_allowed');
+      }
       if (!existing && boxes.size >= L.maxBoxes) return closeConn(conn, CLOSE.limit, 'relay_full');
       const e = boxEntry(tk.boxId);
       if (e.devices.size >= L.maxDeviceConnsPerBox) return closeConn(conn, CLOSE.limit, 'too_many_devices');
@@ -326,6 +556,7 @@ export function createRelay({
       conn.boxId = tk.boxId;
       conn.devId = tk.devId;
       clearTimeout(conn.authTimer);
+      conn.sock.setFrameLimit?.(L.deviceFrameBytes + FRAME_SLACK);
       e.devices.add(conn);
       send(conn, { t: 'ok', role: 'device', box: tk.boxId, boxOnline: !!e.conn });
       openToBox(e, conn);
@@ -343,6 +574,7 @@ export function createRelay({
       conn.role = 'pair';
       conn.boxId = msg.box;
       clearTimeout(conn.authTimer);
+      conn.sock.setFrameLimit?.(L.deviceFrameBytes + FRAME_SLACK);
       e.pairs.add(conn);
       send(conn, { t: 'ok', role: 'pair', box: msg.box, boxOnline: true });
       openToBox(e, conn);
@@ -375,12 +607,13 @@ export function createRelay({
         if (!Array.isArray(msg.devs) || msg.devs.length > L.maxAllowPerBox || !msg.devs.every((d) => isStr(d, 64))) {
           return closeConn(conn, CLOSE.protocol, 'bad_allow');
         }
+        const prev = e.allow;
         e.allow = new Set(msg.devs);
+        noteAllow(conn.boxId, prev, e.allow);
         for (const d of [...e.devices]) if (!e.allow.has(d.devId)) closeConn(d, CLOSE.notAllowed, 'device_not_allowed');
-        for (const k of [...mailboxes.keys()]) {
-          const [b, dev] = k.split('/');
-          if (b === conn.boxId && !e.allow.has(dev)) mbClear(b, dev);
-        }
+        // Nur die Briefkästen dieser Box (Index statt Rundlauf über alle, Strix H-0005).
+        const b = mbBoxes.get(conn.boxId);
+        if (b) for (const dev of [...b.devs.keys()]) if (!e.allow.has(dev)) mbClear(conn.boxId, dev);
         return;
       }
       case 'pair_open': {
@@ -398,7 +631,7 @@ export function createRelay({
         if (!isStr(msg.dev, 64) || !isStr(msg.d, L.mailboxBytes)) return;
         // Nur für Geräte auf der Freigabeliste — ohne Liste gar nicht.
         if (!e.allow || !e.allow.has(msg.dev)) return;
-        const err = mbPut(conn.boxId, msg.dev, msg.d, msg.slot === 'latest' ? 'latest' : null);
+        const err = mbPut(conn.boxId, msg.dev, msg.d, msg.slot === 'latest' ? 'latest' : null, conn.remote || NO_SOURCE);
         if (err) send(conn, { t: 'error', e: err, dev: msg.dev });
         return;
       }
@@ -423,20 +656,19 @@ export function createRelay({
         return;
       case 'mbox_get': {
         if (conn.role !== 'device') return closeConn(conn, CLOSE.protocol, 'unknown_type');
-        const k = mbKey(conn.boxId, conn.devId);
-        if (mailboxes.has(k)) mbPruneOne(k, mailboxes.get(k));
-        const m = mbGet(conn.boxId, conn.devId, false);
+        mbPruneOne(conn.boxId, conn.devId);
+        const m = mbFind(conn.boxId, conn.devId);
         const items = m ? [...(m.latest ? [{ ...m.latest, slot: 'latest' }] : []), ...m.items] : [];
         send(conn, { t: 'mbox', items: items.map(({ id, ts, d, slot }) => ({ id, ts, d, ...(slot ? { slot } : {}) })) });
         return;
       }
       case 'mbox_ack': {
         if (conn.role !== 'device' || !Array.isArray(msg.ids)) return closeConn(conn, CLOSE.protocol, 'bad_ack');
-        const m = mbGet(conn.boxId, conn.devId, false);
+        const m = mbFind(conn.boxId, conn.devId);
         if (!m) return;
-        const ids = new Set(msg.ids.map(String));
-        for (let i = m.items.length - 1; i >= 0; i--) if (ids.has(m.items[i].id)) mbDropItem(m, i);
-        if (!m.latest && !m.items.length) mbClear(conn.boxId, conn.devId);
+        const ids = new Set(msg.ids.slice(0, L.mailboxItems + 1).map(String));
+        for (let i = m.items.length - 1; i >= 0; i--) if (ids.has(m.items[i].id)) mbRemoveEntry(m.items[i]);
+        mbTidy(conn.boxId, conn.devId);
         return;
       }
       case 'ping':
@@ -453,45 +685,217 @@ export function createRelay({
       let online = 0;
       let devices = 0;
       for (const e of boxes.values()) { if (e.conn) online++; devices += e.devices.size; }
-      return { boxesOnline: online, deviceConnections: devices, mailboxes: mailboxes.size, mailboxBytes: mailboxTotal, connections: conns.size };
+      return { boxesOnline: online, deviceConnections: devices, mailboxes: mailboxCount, mailboxBytes: mailboxTotal, mailboxSources: srcs.size, connections: conns.size };
     },
     close() {
       closed = true;
       clearInterval(pruneTimer);
       for (const c of [...conns]) closeConn(c, CLOSE.shutdown, 'shutdown');
-      mailboxes.clear();
+      mbBoxes.clear();
+      srcs.clear();
+      srcBuckets.length = 0;
+      newBoxTokens.clear();
+      mbHead = null;
+      mbTail = null;
+      revoked.clear();
+      mailboxCount = 0;
       mailboxTotal = 0;
     },
   };
 }
 
+// ── Speichergrenzen am WebSocket (Relay-Seite, Relay-Restpunkte 02.11.2026) ──
+//
+// Zwei Puffer liegen außerhalb der Briefkasten-Buchhaltung:
+//   - Ausgang: was das Relay an eine Gegenstelle schickt und Node noch nicht an
+//     den Kernel übergeben hat (Gegenstelle liest langsam oder gar nicht),
+//   - Eingang: ein angefangener Rahmen — `ws` sammelt ihn bis zum Ende.
+// Beide zählen je Verbindung, je Quelladresse und gesamt. Reicht der Platz
+// nicht, fliegt die Verbindung mit dem größten Rückstand (erst derselben
+// Quelle, dann überhaupt) — außer die anfragende ist selbst die größte. Wer
+// stallMs lang keinen Fortschritt macht (nichts abgeholt bzw. Rahmen nicht
+// fertig), fliegt auch: unaufgeforderte Pongs halten so niemanden am Leben.
+// Vor der Anmeldung sind nur kleine Rahmen erlaubt (Anmeldung < 1 KiB);
+// danach setzt relay-core die Grenze der Rolle (setFrameLimit).
+export const SOCKET_LIMITS = Object.freeze({
+  preAuthFrameBytes: 8 * 1024,
+  outPerConn: 2 * 1024 * 1024,
+  outPerRemote: 8 * 1024 * 1024,
+  outTotal: 32 * 1024 * 1024,
+  inPerRemote: 4 * 1024 * 1024,
+  inTotal: 32 * 1024 * 1024,
+  stallMs: 30_000,
+  // Vom Relay geschlossen: so lange darf die Gegenstelle den Abschluss
+  // bestätigen, dann wird getrennt (statt 30 s `ws`-Frist ohne Zählung).
+  closeGraceMs: 2_000,
+});
+
+// Budget mit Haltern { key, held, since, kill() }; kill() muss synchron freigeben.
+function createBudget(total, perKey) {
+  let used = 0;
+  const keys = new Map(); // key → { used, holders:Set }
+  const holders = new Set();
+  function add(h, n) {
+    if (!n) return;
+    h.held += n;
+    used += n;
+    let k = keys.get(h.key);
+    if (!k) { k = { used: 0, holders: new Set() }; keys.set(h.key, k); }
+    k.used += n;
+    if (h.held > 0) { holders.add(h); k.holders.add(h); return; }
+    holders.delete(h);
+    k.holders.delete(h);
+    if (!k.holders.size) keys.delete(h.key);
+  }
+  function biggestOther(set, h) {
+    let best = null;
+    for (const x of set) if (x !== h && (!best || x.held > best.held)) best = x;
+    return best;
+  }
+  const budget = {
+    get used() { return used; },
+    holders,
+    take(h, n) {
+      for (;;) {
+        const k = keys.get(h.key);
+        let scope;
+        if ((k ? k.used : 0) + n > perKey) scope = k ? k.holders : new Set();
+        else if (used + n > total) scope = holders;
+        else break;
+        const v = biggestOther(scope, h);
+        if (!v || v.held <= h.held) return false;
+        v.kill();
+        if (v.held > 0) budget.release(v);
+      }
+      add(h, n);
+      return true;
+    },
+    give(h, n) { add(h, -Math.min(n, h.held)); },
+    release(h) { add(h, -h.held); },
+  };
+  return budget;
+}
+
+export function createSocketGuard(opts = {}) {
+  const limits = { ...SOCKET_LIMITS, ...opts };
+  const out = createBudget(limits.outTotal, limits.outPerRemote);
+  const inb = createBudget(limits.inTotal, limits.inPerRemote);
+  const timer = setInterval(() => {
+    const t = Date.now();
+    for (const b of [out, inb]) for (const h of [...b.holders]) if (h.held > 0 && t - h.since > limits.stallMs) h.kill();
+  }, Math.max(25, Math.floor(limits.stallMs / 3)));
+  timer.unref?.();
+  const guard = {
+    limits, out, in: inb,
+    wrap(ws, { remote = null, pingMs } = {}) { return wrapWebSocket(ws, { pingMs, guard, remote }); },
+    stats() { return { outBufferedBytes: out.used, inPartialBytes: inb.used }; },
+    close() { clearInterval(timer); },
+  };
+  return guard;
+}
+
+// Rahmengrenze an `ws` anbringen: der Empfänger liest `_maxPayload` beim Kopf
+// jedes Datenrahmens (mit der Summe der Fragmente in `_totalPayloadLength`) —
+// hier wird erst geprüft und Platz belegt, bevor `ws` Nutzdaten sammelt.
+// Getestet mit ws 8.22 (mobile-link-relay-sicherheit.test.js); fehlen die
+// Felder, bleibt die Grenze des WebSocketServers.
+function installFrameGate(ws, { getMax, inH, guard, kill }) {
+  const rcv = ws._receiver;
+  if (!rcv || typeof rcv._maxPayload !== 'number' || typeof rcv._totalPayloadLength !== 'number') return false;
+  const ceiling = rcv._maxPayload > 0 ? rcv._maxPayload : Infinity;
+  Object.defineProperty(rcv, '_maxPayload', {
+    configurable: true,
+    get() {
+      const max = Math.min(getMax(), ceiling);
+      const need = rcv._totalPayloadLength;
+      if (need > max) return max;
+      if (need > inH.held) {
+        const was = inH.held;
+        if (!guard.in.take(inH, need - inH.held)) { queueMicrotask(kill); return Math.max(1, need - 1); }
+        if (was === 0) inH.since = Date.now();
+      }
+      return max;
+    },
+    set() { /* fest */ },
+  });
+  return true;
+}
+
 // Adapter für eine `ws`-Verbindung (Server- oder Client-Seite). Pings halten
 // NAT-Zuordnungen offen und erkennen tote Gegenstellen.
-// Höchstens so viel darf je Verbindung unterwegs sein; wer nicht liest, wird
-// getrennt — sonst füllt ein langsamer Empfänger den Speicher (Codex R2 P1).
+// Ohne Wächter (Client-Seite: Box → Relay, Test-Handy) darf je Verbindung so
+// viel unterwegs sein; wer nicht liest, wird getrennt (Codex R2 P1). Auf der
+// Relay-Seite gelten die engeren Grenzen des Wächters (createSocketGuard).
 export const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 
-export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_BYTES } = {}) {
+export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_BYTES, guard = null, remote = null } = {}) {
   let alive = true;
+  let gone = false;
+  let graceTimer = null;
   const timer = pingMs > 0 ? setInterval(() => {
     if (!alive) { try { ws.terminate(); } catch { /* egal */ } return; }
     alive = false;
     try { ws.ping(); } catch { /* egal */ }
   }, pingMs) : null;
   timer?.unref?.();
+  const outH = { key: remote, held: 0, since: 0, kill: () => kill() };
+  const inH = { key: remote, held: 0, since: 0, kill: () => kill() };
+  function releaseAll() {
+    if (!guard) return;
+    guard.out.release(outH);
+    guard.in.release(inH);
+  }
+  function kill() {
+    gone = true;
+    releaseAll();
+    try { ws.terminate(); } catch { /* egal */ }
+  }
   ws.on('pong', () => { alive = true; });
-  ws.on('close', () => clearInterval(timer));
+  ws.on('close', () => {
+    gone = true;
+    clearInterval(timer);
+    clearTimeout(graceTimer);
+    releaseAll();
+  });
   // Kaputte Rahmen, zu große Nachrichten, Abbrüche: `ws` meldet sie als
   // 'error'. Ohne Zuhörer wäre das eine unbehandelte Ausnahme und beendete den
   // ganzen Prozess (Relay bzw. DVhub) — so wird nur diese Verbindung getrennt.
-  ws.on('error', () => { try { ws.terminate(); } catch { /* egal */ } });
+  ws.on('error', () => kill());
+  let frameMax = guard ? guard.limits.preAuthFrameBytes : Infinity;
+  if (guard) {
+    installFrameGate(ws, { getMax: () => frameMax, inH, guard, kill });
+    // Nachricht vollständig: der angefangene Rahmen ist keiner mehr.
+    ws.on('message', () => guard.in.release(inH));
+  }
   return {
     send: (text) => {
-      if (ws.readyState !== 1) return;
-      if (ws.bufferedAmount > maxBuffered) { try { ws.terminate(); } catch { /* egal */ } return; }
-      ws.send(text);
+      if (gone || ws.readyState !== 1) return;
+      if (!guard) {
+        if (ws.bufferedAmount > maxBuffered) { kill(); return; }
+        ws.send(text);
+        return;
+      }
+      const n = Buffer.byteLength(text);
+      // Je Verbindung: ein Rahmen geht immer, darüber nur ohne Rückstau.
+      if (outH.held > 0 && outH.held + n > guard.limits.outPerConn) { kill(); return; }
+      const was = outH.held;
+      if (!guard.out.take(outH, n)) { kill(); return; }
+      if (was === 0) outH.since = Date.now();
+      ws.send(text, () => {
+        if (gone) return;
+        guard.out.give(outH, n);
+        outH.since = Date.now();
+      });
     },
-    close: (code, reason) => { try { ws.close(code, reason); } catch { /* egal */ } },
+    close: (code, reason) => {
+      try { ws.close(code, reason); } catch { /* egal */ }
+      if (guard && !gone && !graceTimer) {
+        frameMax = guard.limits.preAuthFrameBytes;
+        graceTimer = setTimeout(() => kill(), guard.limits.closeGraceMs);
+        graceTimer.unref?.();
+      }
+    },
+    setFrameLimit: (n) => { if (guard && !gone && !graceTimer) frameMax = n; },
     onMessage: (fn) => ws.on('message', (data, isBinary) => fn(isBinary ? null : data.toString('utf8'))),
     onClose: (fn) => ws.on('close', fn),
   };

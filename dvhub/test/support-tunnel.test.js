@@ -459,7 +459,7 @@ function containerBox() {
 const realExists = fs.existsSync;
 const withBinaries = { ...fs, existsSync: (p) => (p === '/usr/sbin/sshd' || p === '/usr/bin/autossh' ? true : realExists(p)) };
 
-test('Container: Öffnen startet sshd und Tunnel (Shell → 2222, Web → httpPort), Schließen beendet beide', () => {
+test('Container: Öffnen startet sshd und Tunnel (Shell → 2222, Web → Support-Listener), Schließen beendet beide', () => {
   const { ctx } = containerBox();
   const spawned = [];
   const tun = createSupportTunnel(ctx, {
@@ -476,7 +476,8 @@ test('Container: Öffnen startet sshd und Tunnel (Shell → 2222, Web → httpPo
   assert.deepEqual(spawned[0].args.slice(0, 3), ['-D', '-e', '-f']);
   assert.equal(spawned[1].bin, '/usr/bin/autossh');
   assert.ok(spawned[1].args.includes('127.0.0.1:49101:127.0.0.1:2222'));
-  assert.ok(spawned[1].args.includes('127.0.0.1:49102:127.0.0.1:8080'));
+  // Strix T-0001: Web-Ziel ist der eigene Support-Listener, nicht der httpPort.
+  assert.ok(spawned[1].args.includes('127.0.0.1:49102:127.0.0.1:47822'));
   tun.close();
   assert.equal(spawned[0].pr.killed, true, 'sshd beendet');
   assert.equal(spawned[1].pr.killed, true, 'Tunnel beendet');
@@ -510,7 +511,7 @@ test('Container: bricht der Tunnel unerwartet ab, endet auch der sshd', () => {
   assert.equal(tun.status().open, false);
 });
 
-test('Nativ: Web-Ziel ist der httpPort der Config, Login-Benutzer dvhub-support', async () => {
+test('Nativ: Web-Ziel ist der Support-Listener (nicht der httpPort), Login-Benutzer dvhub-support', async () => {
   const { sup, ctx } = realBox({ ports: [49120, 49121] });
   ctx.getCfg = () => ({ httpPort: 8081 });
   const tun = createSupportTunnel(ctx, {
@@ -525,5 +526,46 @@ test('Nativ: Web-Ziel ist der httpPort der Config, Login-Benutzer dvhub-support'
   await tun.open({ ttlMin: 5 });
   const req = JSON.parse(fs.readFileSync(path.join(sup, 'tunnel.json'), 'utf8'));
   assert.equal(req.localShellPort, 22);
-  assert.equal(req.localWebPort, 8081);
+  assert.equal(req.localWebPort, 47822);
+});
+
+// Gegenprüfung 2e784304 (P2): ohne Tunnel-Unit startet die App autossh selbst —
+// das Notfall-Skript fand ihn ohne pgrep -f nicht mehr. Jetzt schreibt die App
+// die PID nach support/tunnel-process.json und räumt sie beim Ende weg.
+test('Prozess-Modus: PID-Datei für das Notfall-Skript, weg nach Schließen und nach unerwartetem Ende', () => {
+  const { sup, ctx } = realBox({ ports: [49130, 49131] });
+  const spawned = [];
+  const tun = createSupportTunnel(ctx, {
+    inContainer: false, unitMode: () => false, fs: withBinaries,
+    spawn: () => { const pr = fakeProc(); pr.pid = 4321 + spawned.length; spawned.push(pr); return pr; },
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+  });
+  const file = path.join(sup, 'tunnel-process.json');
+  assert.equal(tun.open({ ttlMin: 30 }).ok, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { pid: 4321 });
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  tun.close();
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(tun.open({ ttlMin: 30 }).ok, true);
+  assert.ok(fs.existsSync(file));
+  spawned[1].emit('exit', 255, null);
+  assert.equal(fs.existsSync(file), false);
+});
+
+// Gegenprüfung 98bfcb68 (P3): close() → open() → altes exit darf die PID-Datei
+// des neuen Tunnels nicht löschen.
+test('Prozess-Modus: spätes exit des alten Tunnels lässt die PID-Datei des neuen stehen', () => {
+  const { sup, ctx } = realBox({ ports: [49132, 49133] });
+  const spawned = [];
+  const tun = createSupportTunnel(ctx, {
+    inContainer: false, unitMode: () => false, fs: withBinaries,
+    spawn: () => { const pr = fakeProc(); pr.pid = 5000 + spawned.length; spawned.push(pr); return pr; },
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+  });
+  const file = path.join(sup, 'tunnel-process.json');
+  tun.open({ ttlMin: 30 });
+  tun.close();
+  tun.open({ ttlMin: 30 });
+  spawned[0].emit('exit', null, 'SIGTERM');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { pid: 5001 });
 });

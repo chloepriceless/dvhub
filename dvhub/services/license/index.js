@@ -47,10 +47,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { PROVIDER_FACTORIES } from '../notifications/index.js';
+import { PROVIDER_FACTORIES, createProviderFromConfig } from '../notifications/index.js';
 import { verifyKeygenSignedKey, verifyKeygenMachineFile, readApplianceId, decodeKeygenPayload } from './keygen-verify.js';
 
 const KEYGEN_BASE = 'https://license.dvhub.de';
+// Strix L-0006 (30.10.2026): der Aktivierungs-Proxy bekommt den Lizenzschlüssel
+// im Klartext. Seine Adresse stand in der Config (licensing.activationProxyUrl)
+// und ließ sich per POST /api/config auf einen fremden Server umbiegen. Sie ist
+// jetzt fest wie KEYGEN_BASE; ein Config-Wert wird ignoriert. Tests setzen
+// ctx.activationProxyUrl.
+const ACTIVATION_PROXY_URL = 'https://webhook.dvhub.de/v1/license/activate-machine';
 const TIMEOUT_MS = 10_000;
 const RETRY_DELAY_MS = 2_000;
 const VALID_STATUSES = new Set(['active', 'invalid', 'expired', 'suspended', 'none']);
@@ -62,6 +68,32 @@ const CLOCK_ROLLBACK_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 // Hardening (Codex #5, Christin C): offline grace AFTER a node-locked monthly
 // licence's SIGNED expiry passes — Pro stays on for 14 days, then expired_offline.
 const OFFLINE_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
+// Strix L-0001 (30.10.2026): ein Schlüssel ohne key/-Signatur lässt sich offline
+// nicht prüfen — jeder mit root konnte „DVHB-0000-…“ in license_state.json
+// schreiben und hatte Pro, solange die Box license.dvhub.de nicht erreicht.
+// Solche Schlüssel gelten jetzt nur bis OFFLINE_GRACE_MS nach der letzten
+// erfolgreichen Online-Prüfung (dieselbe Kulanz wie beim Machine-File). Eine
+// letzte Prüfung mehr als einen Tag in der Zukunft gilt als verfälscht.
+const UNVERIFIED_KEY_GRACE_MS = OFFLINE_GRACE_MS;
+const LAST_CHECK_FUTURE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
+// Strix L-0002/L-0005 (30.10.2026): Pro-Sperre wegen der Bindung. Beide nur,
+// wenn feststeht, dass eine ANDERE Box die Lizenz hält — nie bei Netz- oder
+// Server-Fehlern (Bestandsschutz T-0125 „A“: Lizenzen ohne Bindung bleiben gültig).
+//   machine_slot_taken  — Proxy: Slot gehört einer anderen Box (< 24 h, 409,
+//                         nur mit deren boundFingerprint ≠ eigene appliance-id)
+//   bound_to_other_box  — Machine-File einer anderen Box hier, oder Keygen sagt
+//                         online, die Maschine dieser Box hängt nicht mehr an
+//                         der Lizenz (FINGERPRINT_SCOPE_MISMATCH)
+// Aufgehoben nur durch eine erfolgreiche Bindung („An diese Box binden“) —
+// automatisch zurückgeholt wird nicht, sonst nähmen sich zwei Boxen die Lizenz
+// alle 24 h gegenseitig weg.
+const BIND_BLOCK_SLOT_TAKEN = 'machine_slot_taken';
+const BIND_BLOCK_OTHER_BOX = 'bound_to_other_box';
+const BIND_BLOCKS = new Set([BIND_BLOCK_SLOT_TAKEN, BIND_BLOCK_OTHER_BOX]);
+// Keygen validate-key mit scope.fingerprint: Codes, die „Maschine dieser Box
+// hängt nicht mehr an der Lizenz“ bedeuten (vgl. ACTIVATABLE_CODES im Proxy).
+const SCOPE_OTHER_BOX_CODES = new Set(['FINGERPRINT_SCOPE_MISMATCH']);
+const SCOPE_NO_MACHINE_CODES = new Set(['NO_MACHINE', 'NO_MACHINES']);
 
 // T-LICENSE-KWP-GATING Increment 5 (Christin 2026-07-02): Under-Report-Erkennung.
 // Der GEMESSENE PV-Peak (echte, ungekappte pv_total_w aus der DB) wird gegen den
@@ -120,7 +152,11 @@ function freshNoneState() {
     scheme_name: null,
     machine_file: null,           // Hardening C: offline Keygen machine file (node-lock); null = floating/legacy
     machine_id: null,             // Stufe C: Keygen machine UUID (for re-bind/release; not secret)
-    max_kwp: null,                // tier ceiling (kWp) from the SIGNED license metadata; null = legacy/unlimited (fail-open)
+    max_kwp: null,                // wirksamer Tarif-Deckel (kWp): kleinster aus Machine-File und Online-Antwort; null = Altlizenz/unbegrenzt
+    online_max_kwp: null,         // Strix L-0002: maxKwp aus der letzten validate-key-Antwort (license.dvhub.de, TLS)
+    bind_block: null,             // Strix L-0005: 'machine_slot_taken' | 'bound_to_other_box' → Pro gesperrt
+    bind_error: null,             // letzter Bindungsfehler (Hinweis für die Oberfläche, sperrt nicht)
+    bind_error_at: null,          // ISO-Zeit des letzten Bindungsfehlers
     license_kind: null,           // license kind from metadata (e.g. "demo"); null = normal/paid
     last_server_ts: null,         // Hardening (Codex #4): monotone high-water of the highest server time seen
     // T-LICENSE-KWP-GATING Increment 5: Under-Report-Erkennung (gemessener Peak
@@ -228,9 +264,12 @@ export function createLicenseService(ctx) {
   let pollerInterval = null;
   let pollerInitialTimeout = null;
   let revalidateInFlight = false;
-  // T-LICENSE-AUTOBIND: der Revalidate-Backfill (aktive, ungebundene Lizenz →
-  // Bindung nachholen) versucht es bei Fehlschlag höchstens 1× pro Prozesslauf.
-  let autobindTriedThisRun = false;
+  // Zuletzt an die Listener gemeldeter Pro-Zustand — für Wechsel, die nur durch
+  // Zeitablauf entstehen (Offline-Kulanz eines unsignierten Schlüssels).
+  let lastProActive = null;
+  // Während Aktivierung/Revalidate samt Bindung nur EIN Wechsel an die
+  // Listener (sonst gingen DV/EOS bei „Slot belegt“ kurz an und wieder aus).
+  let emitHold = 0;
 
   // Pro-Gating (Task #9): live status-transition fan-out. Live services (the
   // DV-Schnittstelle / Modbus server and the EOS/optimizer dispatch layer)
@@ -316,6 +355,7 @@ export function createLicenseService(ctx) {
   // (Christin A grandfathering + D perpetual-offline-final).
   let signedExpiryMsCache = null;
   let signedIssuedMsCache = null;   // Codex-v2 C-2: tamper-proof time floor from the signed file
+  let fileMaxKwpCache = null;       // Deckel aus dem vertrauten Machine-File (für den Tarif-Abgleich)
   // Codex-v2-fix (HIGH): the TAMPER-PROOF license identity is the license id INSIDE
   // the Ed25519-signed key (Hardening-B-verified), NOT the editable plaintext
   // state.license.license_id. Falls back to plaintext only for legacy/non-signed
@@ -333,11 +373,33 @@ export function createLicenseService(ctx) {
   function refreshSignedExpiry() {
     signedExpiryMsCache = null;
     signedIssuedMsCache = null;
-    // Tier ceiling is re-derived from the signed file each refresh — cleared first
-    // so a missing/invalid/mismatched file leaves max_kwp=null (legacy/unlimited,
-    // fail-open) rather than retaining a stale ceiling.
+    fileMaxKwpCache = null;
+    // Tier ceiling is re-derived each refresh — cleared first so a missing/
+    // invalid/mismatched file never retains a stale ceiling. Strix L-0002: the
+    // ceiling is NOT only the file's — the online validate-key answer counts too
+    // (smaller wins), so a box without a bound file is no longer silently unlimited.
     state.license.max_kwp = null;
     state.license.license_kind = null;
+    try {
+      adoptMachineFileClaims();
+    } finally {
+      state.license.max_kwp = combineCaps(fileMaxKwpCache, finiteCap(state.license.online_max_kwp));
+    }
+  }
+
+  function finiteCap(v) {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  function combineCaps(a, b) {
+    if (a == null) return b;
+    if (b == null) return a;
+    return Math.min(a, b);
+  }
+
+  function adoptMachineFileClaims() {
     const mf = state.license.machine_file;
     if (!mf || !accountPublicKey) return;
     const v = verifyKeygenMachineFile(mf, accountPublicKey);
@@ -350,7 +412,7 @@ export function createLicenseService(ctx) {
       return;
     }
     // Trusted: signed AND bound to THIS license → adopt its tier ceiling + kind.
-    state.license.max_kwp = Number.isFinite(v.maxKwp) ? v.maxKwp : null;
+    fileMaxKwpCache = Number.isFinite(v.maxKwp) ? v.maxKwp : null;
     state.license.license_kind = v.kind || null;
     // Codex-v2 C-2: the signed check-out/issued time is a tamper-proof LOWER bound
     // on "now" (feeds trustedNowMs even if plaintext last_server_ts was wiped).
@@ -376,11 +438,74 @@ export function createLicenseService(ctx) {
    */
   function effectiveStatus() {
     if (state.license.status !== 'active') return state.license.status;
+    if (unverifiedKeyStale()) return 'unverified_offline';   // Strix L-0001
     if (signedExpiryMsCache == null) return 'active';   // perpetual/floating
     const now = trustedNowMs();
     if (now <= signedExpiryMsCache) return 'active';
     if (now <= signedExpiryMsCache + OFFLINE_GRACE_MS) return 'grace';
     return 'expired_offline';
+  }
+
+  /** Signierter Keygen-Schlüssel (key/…)? Nur der lässt sich offline prüfen. */
+  function isSignedKey(key) {
+    return typeof key === 'string' && key.startsWith('key/');
+  }
+
+  /**
+   * Strix L-0001: ein unsignierter Schlüssel (kein key/…) ist offline nicht
+   * prüfbar. Er gilt nur bis UNVERIFIED_KEY_GRACE_MS nach der letzten
+   * erfolgreichen Online-Prüfung — gemessen an trustedNowMs(), also nicht durch
+   * Zurückstellen der Uhr zu verlängern. Ohne Kontoschlüssel (Tests) inaktiv.
+   */
+  function unverifiedKeyStale() {
+    const key = state.license.license_key;
+    if (!accountPublicKey || !key || isSignedKey(key)) return false;
+    const last = Date.parse(state.license.last_check_ok_at);
+    if (!Number.isFinite(last)) return true;
+    const now = trustedNowMs();
+    if (last > now + LAST_CHECK_FUTURE_TOLERANCE_MS) return true;   // in die Zukunft gestellt
+    return now - last > UNVERIFIED_KEY_GRACE_MS;
+  }
+
+  function bindingBlocked() {
+    return BIND_BLOCKS.has(state.license.bind_block);
+  }
+
+  /**
+   * Hat diese Box ein vertrauenswürdiges, an SIE gebundenes Machine-File?
+   * Signatur gültig, Lizenz-ID = die des signierten Schlüssels, Fingerprint =
+   * appliance-id dieser Box. Liefert den Grund, wenn nicht.
+   */
+  function machineBinding() {
+    const mf = state.license.machine_file;
+    if (!mf) return { bound: false, reason: 'no_machine_file' };
+    if (!accountPublicKey) return { bound: false, reason: 'no_account_public_key' };
+    const v = verifyKeygenMachineFile(mf, accountPublicKey);
+    if (!v.valid) return { bound: false, reason: 'invalid', detail: v.reason };
+    const authId = authoritativeLicenseId();
+    if (authId && v.licenseId !== authId) return { bound: false, reason: 'license_mismatch' };
+    const applianceId = readApplianceId(baseDir);
+    if (!applianceId) return { bound: false, reason: 'no_appliance_id', file: v };
+    if (String(v.fingerprint || '').toLowerCase() !== applianceId) {
+      return { bound: false, reason: 'fingerprint_mismatch', file: v, applianceId };
+    }
+    return { bound: true, file: v, applianceId };
+  }
+
+  function dropMachineFile() {
+    state.license.machine_file = null;
+    state.license.machine_id = null;
+  }
+
+  function setBindError(code) {
+    state.license.bind_error = code || 'unknown';
+    state.license.bind_error_at = new Date().toISOString();
+  }
+
+  function clearBindProblems() {
+    state.license.bind_block = null;
+    state.license.bind_error = null;
+    state.license.bind_error_at = null;
   }
 
   /** Grace deadline (ISO) for UI countdown, or null when no signed expiry. */
@@ -425,33 +550,53 @@ export function createLicenseService(ctx) {
           }
         }
       }
-      // Hardening C (2026-06-22): node-lock. When enabled AND the persisted
-      // licence carries a Keygen machine file, that file MUST verify offline
-      // against the account public key AND its bound fingerprint MUST equal this
-      // host's appliance-id — otherwise the active state was copied onto a
-      // foreign box. INERT by default: cfg.licensing.nodeLock !== true, OR no
-      // machine_file present (legacy/floating licences are grandfathered per
-      // T-0125 decision A). Runs after B, so it re-checks the (possibly reset)
-      // status. Time/expiry + grace are deliberately NOT enforced here — that
-      // needs trusted-time (Codex #4) and lands with the online build phase.
+      // Hardening C (2026-06-22) + Strix L-0005 (30.10.2026): node-lock. Trägt
+      // der gespeicherte Zustand ein Machine-File, MUSS es offline gegen den
+      // Kontoschlüssel prüfen UND an die appliance-id DIESER Box gebunden sein.
+      // Bis 30.10. galt das nur mit licensing.nodeLock=true (ab Werk aus) — ein
+      // auf eine zweite Box kopierter Zustand gab dort Pro. Jetzt immer:
+      //   - File kaputt/gefälscht/fremde Lizenz → File verwerfen; die Box gilt
+      //     als ungebunden, der nächste Revalidate bindet neu, der Deckel kommt
+      //     solange aus der Online-Antwort (L-0002).
+      //   - File einer ANDEREN Box → File verwerfen und Pro sperren
+      //     (bound_to_other_box); „An diese Box binden“ hebt das auf.
+      // Schlüssel und Status bleiben — der Kunde muss nichts neu eingeben.
+      // licensing.nodeLock=true behält das alte, strenge Verhalten (Zustand
+      // verwerfen). Lizenzen ganz OHNE Machine-File bleiben unberührt
+      // (Bestandsschutz T-0125 „A“).
       if (state.license.status === 'active' && state.license.machine_file) {
         const cfg = (typeof getCfg === 'function' ? getCfg() : null) || {};
-        if (cfg?.licensing?.nodeLock === true) {
-          const m = verifyKeygenMachineFile(state.license.machine_file, accountPublicKey);
-          const applianceId = readApplianceId(baseDir);
-          if (!m.valid) {
-            pushLog('license_machine_file_invalid', { reason: m.reason });
+        const strict = cfg?.licensing?.nodeLock === true;
+        const m = verifyKeygenMachineFile(state.license.machine_file, accountPublicKey);
+        const applianceId = readApplianceId(baseDir);
+        const fpMismatch = m.valid && applianceId && String(m.fingerprint || '').toLowerCase() !== applianceId;
+        if (!m.valid) {
+          pushLog('license_machine_file_invalid', { reason: m.reason });
+          if (strict) state.license = freshNoneState(); else dropMachineFile();
+        } else if (!applianceId) {
+          pushLog('license_node_lock_no_appliance_id', {});
+          if (strict) state.license = freshNoneState();
+        } else if (fpMismatch) {
+          pushLog('license_node_lock_fingerprint_mismatch', {
+            bound_fp: fingerprint(m.fingerprint), local_fp: fingerprint(applianceId)
+          });
+          if (strict) {
             state.license = freshNoneState();
-          } else if (!applianceId) {
-            pushLog('license_node_lock_no_appliance_id', {});
-            state.license = freshNoneState();
-          } else if (String(m.fingerprint || '').toLowerCase() !== applianceId) {
-            pushLog('license_node_lock_fingerprint_mismatch', {
-              bound_fp: fingerprint(m.fingerprint), local_fp: fingerprint(applianceId)
-            });
-            state.license = freshNoneState();
+          } else {
+            dropMachineFile();
+            state.license.bind_block = BIND_BLOCK_OTHER_BOX;
+          }
+        } else {
+          const authId = authoritativeLicenseId();
+          if (authId && m.licenseId !== authId) {
+            // Echtes File, aber für eine andere Lizenz (Codex-v2 H-3) — zählt nicht.
+            pushLog('license_machine_file_license_mismatch', { bound: m.licenseId, expected: authId });
+            dropMachineFile();
           }
         }
+      }
+      if (state.license.bind_block != null && !BIND_BLOCKS.has(state.license.bind_block)) {
+        state.license.bind_block = null;   // unbekannter Wert von Hand → ignorieren
       }
       // Hardening Codex-v2 C-1: a signed key on a configured NODE-LOCKED policy
       // MUST carry a valid machine_file bound to THIS appliance — deleting it to
@@ -491,6 +636,7 @@ export function createLicenseService(ctx) {
       pushLog('license_state_load_error', { error: err.message });
       state.license = freshNoneState();
     }
+    lastProActive = isProActive();
   }
 
   // ----------------- Keygen HTTP client -----------------
@@ -533,6 +679,9 @@ export function createLicenseService(ctx) {
     const newStatus = mapCodeToStatus(code, valid);
     const prevStatus = state.license.status;
     const prevLicenseId = state.license.license_id;
+    // Pro-Zustand VOR der Antwort — nicht nur der Status: ein veralteter
+    // unsignierter Schlüssel oder eine Bindungssperre hatte Pro schon aus.
+    const prevProActive = isProActive();
 
     state.license.status = newStatus;
     state.license.key_fingerprint = fingerprint(keyForState);
@@ -541,6 +690,10 @@ export function createLicenseService(ctx) {
     state.license.polar_customer_id = attrs.metadata?.polarOrderId || null;
     state.license.subscription_until = attrs.expiry || null;
     state.license.scheme_name = attrs.scheme || null;
+    // Strix L-0002: Tarif-Deckel auch aus der Online-Antwort (license.dvhub.de
+    // über TLS; der Webhook schreibt metadata.maxKwp in die Lizenz). Gilt
+    // zusätzlich zum Machine-File, die kleinere Grenze zählt.
+    state.license.online_max_kwp = finiteCap(attrs.metadata?.maxKwp ?? attrs.metadata?.max_kwp);
     if (newStatus === 'active') {
       state.license.last_check_ok_at = new Date().toISOString();
     }
@@ -553,6 +706,7 @@ export function createLicenseService(ctx) {
     if (state.license.license_id !== prevLicenseId) {
       state.license.machine_file = null;
       state.license.machine_id = null;
+      clearBindProblems();   // eine Sperre gehörte zur alten Lizenz
     }
 
     persistState();
@@ -581,7 +735,7 @@ export function createLicenseService(ctx) {
     // Pro-Gating (Task #9): fire the live start/stop fan-out on BOTH directions
     // (activation AND revoke) so DV-Schnittstelle + EOS follow the licence state
     // without a restart. notifyOperatorOfRevoke above only covers the revoke side.
-    emitProActiveChange(prevStatus === 'active');
+    emitProActiveChange(prevProActive);
 
     return { ok: valid, status: newStatus, code };
   }
@@ -602,6 +756,17 @@ export function createLicenseService(ctx) {
   }
 
   async function activateLicense(rawKey) {
+    const prevProActive = lastProActive ?? isProActive();
+    emitHold += 1;
+    try {
+      return await activateLicenseInner(rawKey);
+    } finally {
+      emitHold -= 1;
+      emitProActiveChange(prevProActive);
+    }
+  }
+
+  async function activateLicenseInner(rawKey) {
     const key = normalizeKey(rawKey);
     if (!key) return { ok: false, error: 'empty_key' };
 
@@ -650,7 +815,10 @@ export function createLicenseService(ctx) {
     // der manuelle Binden-Button bleibt als Fallback. Übersprungen, wenn
     // bereits eine Maschine gebunden ist (max_machines=1 — ein Re-Bind würde
     // am Limit scheitern und Lärm machen).
-    if (result.ok && result.status === 'active' && !state.license.machine_id) {
+    // Strix L-0002: Auslöser ist „kein vertrauenswürdiges, an diese Box
+    // gebundenes Machine-File“ — nicht mehr „keine machine_id“ (ein gelöschtes
+    // File bei stehen gebliebener machine_id hieß sonst: nie neu binden).
+    if (result.ok && result.status === 'active' && !machineBinding().bound) {
       try {
         const nl = await activateNodeLock(key);
         result.nodeLock = nl.ok
@@ -669,14 +837,17 @@ export function createLicenseService(ctx) {
 
   /**
    * activateNodeLock: Stufe-C node-lock activation via the server proxy
-   * (cfg.licensing.activationProxyUrl → webhook.dvhub.de). The appliance CANNOT
+   * (fest: ACTIVATION_PROXY_URL → webhook.dvhub.de, Strix L-0006). The appliance CANNOT
    * create a Keygen machine itself — the policy is protected + authStrategy=TOKEN
    * (spike 2026-06-22: POST /machines with the customer key → 403). So the
    * privileged machines.create + check-out runs SERVER-side; we POST
    * {licenseKey, applianceId}, receive a signed machine file, verify it OFFLINE
    * against the embedded account public key, assert its bound fingerprint ==
-   * this host's appliance-id, then persist it. The loadStateFromDisk node-lock
-   * gate (only when cfg.licensing.nodeLock===true) re-checks it on every boot.
+   * this host's appliance-id, then persist it. loadStateFromDisk re-checks it
+   * on every boot (seit Strix L-0005 immer, nicht nur mit licensing.nodeLock).
+   * 409 machine_slot_taken mit fremdem boundFingerprint sperrt Pro auf dieser
+   * Box (bind_block), bis eine Bindung gelingt; jeder Fehler wird als
+   * bind_error für die Oberfläche gemerkt.
    *
    * Permissive on transport failure (no state mutation). A verify failure or a
    * fingerprint mismatch is a HARD reject — an unverifiable file is NEVER stored.
@@ -689,20 +860,43 @@ export function createLicenseService(ctx) {
     const key = normalizeKey(rawKey ?? state.license.license_key ?? '');
     if (!key) return { ok: false, error: 'empty_key' };
 
+    // Jeder Fehlschlag wird als bind_error gemerkt (Hinweis in der Oberfläche);
+    // nur 409 machine_slot_taken mit fremdem Fingerprint sperrt Pro (Strix L-0005).
+    const fail = (out) => {
+      const prev = isProActive();
+      // Sperre nur mit Nachweis einer ANDEREN Box: der Proxy nennt deren
+      // Fingerprint. Ohne (Keygen-422/409 beim Anlegen) oder mit dem eigenen
+      // (zwei gleichzeitige Bindungen dieser Box) nur Hinweis — Bestandsschutz
+      // T-0125 „A“ (Gegenprüfung zu 37314002).
+      const otherFp = typeof out.boundFingerprint === 'string' ? out.boundFingerprint.toLowerCase() : '';
+      const otherBox = out.error === BIND_BLOCK_SLOT_TAKEN && !!otherFp && otherFp !== applianceId;
+      if (otherBox) state.license.bind_block = BIND_BLOCK_SLOT_TAKEN;
+      // Für die Oberfläche: andere Box nachgewiesen? bleibt Pro gesperrt (dann
+      // kein automatischer Neuversuch, nur der Knopf)?
+      out.boundToOtherBox = otherBox;
+      out.blocked = bindingBlocked();
+      setBindError(out.error);
+      persistState();
+      emitProActiveChange(prev);   // DV/EOS stoppen live, wenn die Sperre Pro abschaltet
+      return out;
+    };
+
     const applianceId = readApplianceId(baseDir);
     if (!applianceId) {
       pushLog('license_nodelock_no_appliance_id', {});
-      return { ok: false, error: 'no_appliance_id' };
+      return fail({ ok: false, error: 'no_appliance_id' });
     }
     if (!accountPublicKey) {
       pushLog('license_nodelock_no_public_key', {});
       return { ok: false, error: 'no_account_public_key' };
     }
 
-    const proxyUrl = getCfg()?.licensing?.activationProxyUrl;
-    if (!proxyUrl) {
-      pushLog('license_nodelock_no_proxy_url', {});
-      return { ok: false, error: 'activation_proxy_not_configured' };
+    // Strix L-0006: feste Adresse (siehe ACTIVATION_PROXY_URL), keine Weiterleitung —
+    // der Schlüssel geht nur an webhook.dvhub.de.
+    const proxyUrl = ctx.activationProxyUrl || ACTIVATION_PROXY_URL;
+    const configured = getCfg()?.licensing?.activationProxyUrl;
+    if (configured && configured !== proxyUrl) {
+      pushLog('license_nodelock_proxy_url_ignored', {});
     }
 
     let res;
@@ -711,48 +905,63 @@ export function createLicenseService(ctx) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({ licenseKey: key, applianceId }),
+        redirect: 'error',
         signal: AbortSignal.timeout(TIMEOUT_MS)
       });
     } catch (err) {
       pushLog('license_nodelock_network_error', { error: err.message, key_fingerprint: fingerprint(key) });
-      return { ok: false, error: 'server_error' };
+      return fail({ ok: false, error: 'server_error' });
     }
 
     let body = null;
     try { body = await res.json(); } catch { /* tolerate empty / non-JSON error bodies */ }
 
     if (!res.ok) {
-      const code = body?.code || `http_${res.status}`;
+      const code = typeof body?.code === 'string' && /^[a-z0-9_]{1,64}$/.test(body.code) ? body.code : `http_${res.status}`;
       pushLog('license_nodelock_http_error', { status: res.status, code, key_fingerprint: fingerprint(key) });
-      return { ok: false, error: code, status: res.status, boundFingerprint: body?.boundFingerprint };
+      // Strix L-0002/L-0005: 409 machine_slot_taken MIT dem Fingerprint einer
+      // anderen Box heißt „eine ANDERE Box hält diese Lizenz“ — dann kein Pro
+      // auf dieser Box (bisher blieb sie aktiv und sogar ungedeckelt). Ohne
+      // Fingerprint und alle anderen Fehler sperren nicht (siehe fail()).
+      if (res.status === 409 && code === BIND_BLOCK_SLOT_TAKEN) {
+        pushLog('license_nodelock_slot_taken', { bound_since: typeof body?.boundSince === 'string' ? body.boundSince : null });
+      }
+      return fail({
+        ok: false, error: code, status: res.status,
+        boundFingerprint: body?.boundFingerprint,
+        boundSince: typeof body?.boundSince === 'string' ? body.boundSince : undefined
+      });
     }
 
     const machineFile = body?.machineFile;
     if (typeof machineFile !== 'string' || !machineFile) {
       pushLog('license_nodelock_no_machine_file', {});
-      return { ok: false, error: 'no_machine_file' };
+      return fail({ ok: false, error: 'no_machine_file' });
     }
 
     // OFFLINE verify BEFORE trusting/persisting — never store an unverifiable file.
     const v = verifyKeygenMachineFile(machineFile, accountPublicKey);
     if (!v.valid) {
       pushLog('license_nodelock_verify_failed', { reason: v.reason });
-      return { ok: false, error: 'machine_file_invalid', reason: v.reason };
+      return fail({ ok: false, error: 'machine_file_invalid', reason: v.reason });
     }
     if (String(v.fingerprint || '').toLowerCase() !== applianceId) {
       pushLog('license_nodelock_fingerprint_mismatch', {
         bound_fp: fingerprint(v.fingerprint), local_fp: fingerprint(applianceId)
       });
-      return { ok: false, error: 'fingerprint_mismatch' };
+      return fail({ ok: false, error: 'fingerprint_mismatch' });
     }
 
     // Verified + bound to THIS appliance → persist. machine_file is bulky +
     // sensitive (redacted from getState, excluded from support bundles — Codex #9).
+    const prevProActive = isProActive();
     state.license.machine_file = machineFile;
     state.license.machine_id = body?.machineId || null;
     if (v.expiry) state.license.subscription_until = v.expiry;
+    clearBindProblems();     // gebunden → eine Sperre wegen der Bindung ist aufgehoben
     persistState();
     refreshSignedExpiry();   // Codex #5: pick up the new signed expiry for effectiveStatus()
+    emitProActiveChange(prevProActive);
     pushLog('license_nodelock_bound', {
       machine_id: state.license.machine_id,
       fingerprint: fingerprint(applianceId),
@@ -768,6 +977,20 @@ export function createLicenseService(ctx) {
    * without any fetch.
    */
   async function revalidateLicense() {
+    // Zuletzt GEMELDETER Zustand, nicht der aktuelle: ist die Offline-Kulanz
+    // inzwischen abgelaufen, wäre isProActive() schon false und der Wechsel
+    // käme nie bei DV/EOS an (Gegenprüfung zu 37314002).
+    const prevProActive = lastProActive ?? isProActive();
+    emitHold += 1;
+    try {
+      return await revalidateLicenseInner();
+    } finally {
+      emitHold -= 1;
+      emitProActiveChange(prevProActive);
+    }
+  }
+
+  async function revalidateLicenseInner() {
     const key = state.license.license_key;
     if (!key) {
       // Hardening A (2026-06-22): no persisted key => an 'active' status cannot
@@ -826,28 +1049,107 @@ export function createLicenseService(ctx) {
       });
     }
 
-    // T-LICENSE-AUTOBIND (Bestandskunden, Christin 2026-07-21): Lizenzen, die
-    // VOR der Aktivierungs-Kaskade aktiviert wurden, sind nie gebunden worden
-    // (Keygen: mehrere Lizenzen mit machines=0 — der separate Binden-Button
-    // wurde aus Unwissenheit nie gedrückt). Der periodische Revalidate holt
-    // die Bindung selbstheilend nach: aktiv + ungebunden → EIN Versuch pro
-    // Prozesslauf (kein Poll-Spam, wenn die Bindung dauerhaft scheitert, z. B.
-    // Lizenz auf einer anderen Box am max_machines-Limit; Neustart = neuer
-    // Versuch). Best-effort — der Revalidate-Ausgang bleibt unberührt.
-    if (result.ok && result.status === 'active' && !state.license.machine_id && !autobindTriedThisRun) {
-      autobindTriedThisRun = true;
+    if (result.ok && result.status === 'active') {
       try {
-        const nl = await activateNodeLock(key);
-        if (nl.ok) {
-          pushLog('license_autobind_backfilled', { machine_id: nl.machineId || null });
-        } else {
-          pushLog('license_autobind_failed', { phase: 'revalidate', error: nl.error || 'unknown', reason: nl.reason || null });
-        }
+        await reconcileBinding(key);
       } catch (err) {
         pushLog('license_autobind_failed', { phase: 'revalidate', error: err.message });
       }
     }
     return result;
+  }
+
+  /**
+   * Strix L-0002/L-0005: Bindung beim Revalidate abgleichen (aktive Lizenz).
+   *
+   *   gebunden (gültiges File dieser Box)
+   *     → online nachfragen, ob die Maschine noch an der Lizenz hängt
+   *       (validate-key mit scope.fingerprint = appliance-id):
+   *         FINGERPRINT_SCOPE_MISMATCH → eine andere Box hat sie: File weg,
+   *                                      Pro gesperrt, kein Zurückholen
+   *         NO_MACHINE(S)              → Maschine gelöscht: neu binden
+   *         gültig                     → ok; weicht der Online-Deckel vom File
+   *                                      ab (Tarif-Wechsel), File neu holen
+   *         alles andere / Netzfehler  → nichts ändern
+   *   gesperrt (andere Box)          → nichts tun; nur „An diese Box binden“
+   *   ungebunden (kein/kaputtes File) → bei JEDEM Revalidate neu binden (T-
+   *                                      LICENSE-AUTOBIND, bisher 1× pro Lauf)
+   *
+   * Scheitert die Bindung aus anderen Gründen als „Slot belegt“, bleibt Pro an
+   * (Bestandsschutz T-0125 „A“); der Deckel kommt dann aus der Online-Antwort.
+   */
+  async function reconcileBinding(key) {
+    const b = machineBinding();
+    if (b.bound) {
+      const scope = await scopeCheck(key, b.applianceId);
+      if (scope === 'other_box') {
+        const prev = isProActive();
+        pushLog('license_machine_moved_to_other_box', { machine_id: state.license.machine_id });
+        dropMachineFile();
+        state.license.bind_block = BIND_BLOCK_OTHER_BOX;
+        setBindError(BIND_BLOCK_OTHER_BOX);
+        persistState();
+        refreshSignedExpiry();
+        emitProActiveChange(prev);
+        return;
+      }
+      if (scope === 'no_machine') {
+        pushLog('license_machine_missing_rebind', { machine_id: state.license.machine_id });
+        dropMachineFile();
+        persistState();
+        refreshSignedExpiry();
+        await bindNow(key);
+        return;
+      }
+      const online = finiteCap(state.license.online_max_kwp);
+      if (scope === 'bound' && online != null && online !== fileMaxKwpCache) {
+        pushLog('license_tier_changed_refresh', { file_max_kwp: fileMaxKwpCache, online_max_kwp: online });
+        await bindNow(key);
+        return;
+      }
+      if (scope === 'bound' && (state.license.bind_error || state.license.bind_block)) {
+        clearBindProblems();
+        persistState();
+      }
+      return;
+    }
+    if (bindingBlocked()) return;
+    await bindNow(key);
+  }
+
+  async function bindNow(key) {
+    const nl = await activateNodeLock(key);
+    if (nl.ok) {
+      pushLog('license_autobind_backfilled', { machine_id: nl.machineId || null });
+    } else {
+      pushLog('license_autobind_failed', { phase: 'revalidate', error: nl.error || 'unknown', reason: nl.reason || null });
+    }
+    return nl;
+  }
+
+  /**
+   * validate-key mit scope.fingerprint — nur die Bindung, nie der Lizenzstatus
+   * (den setzt der normale Aufruf ohne Scope). → 'bound' | 'other_box' |
+   * 'no_machine' | 'unknown'.
+   */
+  async function scopeCheck(key, applianceId) {
+    const account = getCfg()?.licensing?.keygenAccount || process.env.KEYGEN_ACCOUNT;
+    if (!account) return 'unknown';
+    const url = `${KEYGEN_BASE}/v1/accounts/${encodeURIComponent(account)}/licenses/actions/validate-key`;
+    let json;
+    try {
+      const res = await fetchKeygen(url, { meta: { key, scope: { fingerprint: applianceId } } });
+      if (!res.ok) return 'unknown';
+      json = await res.json();
+    } catch (err) {
+      pushLog('license_scope_check_error', { error: err.message });
+      return 'unknown';
+    }
+    if (json?.meta?.valid === true) return 'bound';
+    const code = String(json?.meta?.code || '').toUpperCase();
+    if (SCOPE_OTHER_BOX_CODES.has(code)) return 'other_box';
+    if (SCOPE_NO_MACHINE_CODES.has(code)) return 'no_machine';
+    return 'unknown';
   }
 
   /**
@@ -873,7 +1175,15 @@ export function createLicenseService(ctx) {
   function getState() {
     const s = { ...state.license };
     s.license_key = null;
+    const binding = machineBinding();
     s.machine_file = null;          // Hardening C: bulky signed blob, never returned externally
+    // Strix L-0002/L-0005: Bindung für die Oberfläche — bound | unbound | blocked.
+    s.binding = {
+      state: bindingBlocked() ? 'blocked' : (binding.bound ? 'bound' : 'unbound'),
+      block: bindingBlocked() ? state.license.bind_block : null,
+      error: state.license.bind_error || null,
+      error_at: state.license.bind_error_at || null
+    };
     s.effective_status = effectiveStatus();   // Codex #5: active|grace|expired_offline|… for UI
     s.grace_until = graceUntilIso();          // ISO grace deadline (UI countdown) or null
     s.system_kwp = getSystemKwp();            // declared plant size (kWp) for the tier check
@@ -1065,8 +1375,10 @@ export function createLicenseService(ctx) {
     // Base online status AND the plant fits the licensed tier (capacityOk())
     // AND the measured plant hasn't out-grown the tier past the grace period
     // (!plantGateActive() — Increment 5). Mirrors requirePro() exactly so HTTP +
-    // non-HTTP gates never diverge.
-    return state.license.status === 'active' && capacityOk() && !plantGateActive();
+    // non-HTTP gates never diverge. Strix L-0001: an unsigned key only within
+    // the offline grace; L-0005: no Pro while another box holds the licence.
+    return state.license.status === 'active' && !unverifiedKeyStale() && !bindingBlocked()
+      && capacityOk() && !plantGateActive();
   }
 
   /**
@@ -1077,8 +1389,17 @@ export function createLicenseService(ctx) {
    */
   function getRemoteProof() {
     const l = state.license || {};
-    if (l.status !== 'active' || !l.license_key || !l.machine_file) return null;
+    if (l.status !== 'active' || !l.license_key || !l.machine_file || bindingBlocked()) return null;
     return { licenseKey: l.license_key, machineFile: l.machine_file };
+  }
+
+  /**
+   * syncProActive: Pro-Zustand neu bewerten und einen Wechsel an DV/EOS melden.
+   * Für Änderungen außerhalb des Lizenzdienstes (eingetragene kWp → capacityOk),
+   * aufgerufen von server.js saveAndApplyConfig (Gegenprüfung zu 717f227b).
+   */
+  function syncProActive() {
+    emitProActiveChange(isProActive());
   }
 
   /**
@@ -1096,8 +1417,15 @@ export function createLicenseService(ctx) {
    * and absorbed (one bad listener must not block the others or the caller).
    */
   function emitProActiveChange(prevActive) {
+    if (emitHold > 0) return;
     const nowActive = isProActive();
-    if (prevActive === nowActive) return;
+    // Maßgeblich ist der zuletzt GEMELDETE Zustand — sonst verschluckt jeder
+    // Aufrufer, der erst nach einem reinen Zeitablauf kommt (Offline-Kulanz),
+    // den Wechsel (Gegenprüfung zu 68e4bb91). Ohne Meldung bisher: der vom
+    // Aufrufer übergebene Vorher-Zustand.
+    const prev = lastProActive ?? prevActive;
+    lastProActive = nowActive;
+    if (prev === nowActive) return;
     for (const cb of proActiveListeners) {
       try {
         cb(nowActive);
@@ -1120,10 +1448,10 @@ export function createLicenseService(ctx) {
     const providers = cfg?.notifications?.providers || {};
     for (const [name, pCfg] of Object.entries(providers)) {
       if (!pCfg?.enabled) continue;
-      const factory = PROVIDER_FACTORIES[name];
-      if (!factory) continue;
+      if (!PROVIDER_FACTORIES[name]) continue;
       try {
-        const provider = factory(pCfg);
+        // Gegenprüfung bca61061 (P3): mit derselben Adressprüfung wie der Dienst.
+        const provider = createProviderFromConfig(name, pCfg);
         await provider.notify({
           level: 'warning',
           title: 'DVhub-Lizenz pausiert',
@@ -1157,15 +1485,22 @@ export function createLicenseService(ctx) {
     // Enforcement is gated on the server re-checkout + check-in/high-water design
     // (T-0125 next step). Until then gate on the base (online-driven) status, which
     // already reflects revocation/expiry whenever the box can reach Keygen.
-    if (state.license.status === 'active' && capacityOk() && !plantGateActive()) return true;
+    if (isProActive()) return true;
     // Distinguish "no/expired Pro" from "Pro active but plant exceeds the licensed
     // tier" so the UI shows an UPGRADE prompt (Pro M/L), not a re-activate prompt.
     // Two over-tier flavours: DECLARED (capacityOk() false — user entered > tier)
     // and MEASURED-after-grace (plantGateActive() — Increment 5 under-report gate).
-    const overCapacity = state.license.status === 'active' && !capacityOk();
-    const plantGate = state.license.status === 'active' && capacityOk() && plantGateActive();
+    const active = state.license.status === 'active';
+    const unverified = active && unverifiedKeyStale();
+    const blocked = active && !unverified && bindingBlocked();
+    const overCapacity = active && !unverified && !blocked && !capacityOk();
+    const plantGate = active && !unverified && !blocked && capacityOk() && plantGateActive();
     const body = JSON.stringify(
-      overCapacity
+      unverified
+        ? { error: 'pro_required', feature: feat, reason: 'license_unverified_offline' }
+        : blocked
+          ? { error: 'pro_required', feature: feat, reason: state.license.bind_block }
+          : overCapacity
         ? { error: 'pro_required', feature: feat, reason: 'capacity_exceeded', maxKwp: state.license.max_kwp, systemKwp: getSystemKwp() }
         : plantGate
           ? { error: 'pro_required', feature: feat, reason: 'plant_exceeds_license', maxKwp: state.license.max_kwp, observedPeakW: state.license.observed_peak_w }
@@ -1194,7 +1529,12 @@ export function createLicenseService(ctx) {
     revalidateInFlight = true;
     revalidateLicense()
       .catch(err => pushLog('license_revalidate_error', { source, error: err?.message ?? String(err) }))
-      .finally(() => { revalidateInFlight = false; });
+      .finally(() => {
+        revalidateInFlight = false;
+        // Wechsel nur durch Zeitablauf (Offline-Kulanz eines unsignierten
+        // Schlüssels endet, während die Box offline ist) — DV/EOS folgen.
+        if (lastProActive !== null) emitProActiveChange(lastProActive);
+      });
   }
 
   /**
@@ -1244,11 +1584,18 @@ export function createLicenseService(ctx) {
   function setStatusForTest(s) {
     if (!VALID_STATUSES.has(s)) throw new Error(`invalid test status: ${s}`);
     state.license.status = s;
+    lastProActive = null;   // Test-Seam am Melde-Weg vorbei → kein bekannter Stand
   }
 
   /** @internal — used by Plan 03 poller-tests to simulate a persisted key. */
   function setLicenseKeyForTest(k) {
     state.license.license_key = k == null ? null : String(k);
+    lastProActive = null;
+  }
+
+  /** @internal — Zeitpunkt der letzten erfolgreichen Online-Prüfung (Strix-L-0001-Tests). */
+  function setLastCheckOkForTest(iso) {
+    state.license.last_check_ok_at = iso == null ? null : String(iso);
   }
 
   /** @internal — set the signed tier ceiling (max_kwp) for kWp-cap tests. */
@@ -1277,11 +1624,13 @@ export function createLicenseService(ctx) {
     updatePlantExceedsLicense,
     plantGateActive,
     onProActiveChange,
+    syncProActive,
     requirePro,
     start,
     close,
     setStatusForTest,
     setLicenseKeyForTest,
+    setLastCheckOkForTest,
     setMaxKwpForTest,
     setPlantExceedsSinceForTest
   };

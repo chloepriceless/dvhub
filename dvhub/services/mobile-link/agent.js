@@ -27,7 +27,7 @@ import {
   issueTicket, createBoxHandshake, createPairBox, pairRelayToken, pairTokenHash,
   sealMailbox, keyId,
 } from './crypto.js';
-import { createRelay, createMemorySocketPair, wrapWebSocket } from './relay-core.js';
+import { createRelay, createMemorySocketPair, createSocketGuard, wrapWebSocket } from './relay-core.js';
 import { checkRequest, normalizePerms } from './permissions.js';
 import { buildPairPayload, qrSvg } from './qr.js';
 import { buildCompactStatus } from '../installer-portal-client.js';
@@ -232,6 +232,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     for (const peer of [...sessions]) peer.close('store_reloaded');
     lanLink?.stop(); lanLink = null;
     lanRelay?.close(); lanRelay = null;
+    lanGuard?.close(); lanGuard = null;
     remoteLink?.stop(); remoteLink = null; remoteUrl = null;
     pairing = null;
     return true;
@@ -418,6 +419,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
   // ── Relay-Verbindungen ────────────────────────────────────────────────────
 
   let lanRelay = null;
+  let lanGuard = null;
   let lanLink = null;
   let remoteLink = null;
   const sessions = new Set();
@@ -844,6 +846,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     if (!s.enabled) {
       lanLink?.stop(); lanLink = null;
       lanRelay?.close(); lanRelay = null;
+      lanGuard?.close(); lanGuard = null;
       remoteLink?.stop(); remoteLink = null; remoteUrl = null;
       return;
     }
@@ -855,6 +858,9 @@ export function createMobileLink(ctx = {}, deps = {}) {
         limits: { maxBoxes: 1, maxDeviceConnsPerBox: MAX_DEVICES * 2, maxConnections: 64 },
         log: () => {},
       });
+      // Heimnetz: wenige Handys — Ausgangspuffer und angefangene Rahmen eng
+      // begrenzt, vor der Anmeldung nur kleine Rahmen (wie am Relay).
+      lanGuard = createSocketGuard({ outPerRemote: 4 * 1024 * 1024, outTotal: 16 * 1024 * 1024, inPerRemote: 2 * 1024 * 1024, inTotal: 4 * 1024 * 1024 });
       lanLink = createLink('lan', () => {
         const [boxSide, relaySide] = createMemorySocketPair();
         lanRelay.attach(relaySide, { remote: 'in-process' });
@@ -900,6 +906,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
     clearTimeout(saveTimer);
     lanLink?.stop(); lanLink = null;
     lanRelay?.close(); lanRelay = null;
+    lanGuard?.close(); lanGuard = null;
     remoteLink?.stop(); remoteLink = null; remoteUrl = null;
   }
 
@@ -910,7 +917,7 @@ export function createMobileLink(ctx = {}, deps = {}) {
       try { ws.close(1013, 'mobile_link_disabled'); } catch { /* egal */ }
       return false;
     }
-    lanRelay.attach(wrapWebSocket(ws), { remote });
+    lanRelay.attach(lanGuard ? lanGuard.wrap(ws, { remote }) : wrapWebSocket(ws), { remote });
     return true;
   }
 

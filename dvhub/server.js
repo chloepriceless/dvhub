@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { applySystemTimeZone } from './services/system-timezone.js';
 import http from 'node:http';
+import { isInternalHost } from './services/host-address.js';
 import https from 'node:https';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -116,7 +117,8 @@ import { info as logInfo, warn as logWarn, logger as appLogger } from './service
 // loudly if misordered. Hard dep on 09-06 (services/log.js).
 import { configureSafeAsync, safeInterval } from './services/safe-async.js';
 // T-0113 Tier 3: customer-controlled reverse-SSH support tunnel.
-import { createSupportTunnel } from './services/support-tunnel.js';
+import { createSupportTunnel, supportWebPort } from './services/support-tunnel.js';
+import { startSupportWebListener } from './services/support-web-listener.js';
 // T-INSTALLER-PORTAL: Installateur-Portal-Anbindung (Zertifikats-Kopplung +
 // Challenge/Response-Login für /api/installer/* in routes-api.js).
 import { createInstallerPortal } from './services/installer-portal.js';
@@ -596,6 +598,10 @@ function saveAndApplyConfig(nextRawConfig) {
   const previousRaw = rawCfg;
   const saved = saveConfigFile(CONFIG_PATH, nextRawConfig);
   applyLoadedConfig(saved);
+  // Eingetragene kWp & Co. können Pro an- oder abschalten (capacityOk) — DV/EOS
+  // sofort folgen lassen, nicht erst beim nächsten Lizenz-Revalidate. Beim
+  // allerersten Speichern während des Boots gibt es den Dienst noch nicht.
+  try { licenseService.syncProActive(); } catch { /* Dienst noch nicht da */ }
   const changedPaths = collectChangedPaths(previousRaw, rawCfg);
   const restart = detectRestartRequired(changedPaths);
   return {
@@ -2486,6 +2492,25 @@ if (IS_WEB_PROCESS) {
     if (process.env.DVHUB_SHARED_DIR) writeSharedDvhubUrl(process.env.DVHUB_SHARED_DIR, cfg.httpPort);
   });
 
+  // Strix T-0001: eigener Listener für das Web-Ziel des Support-Tunnels, nur
+  // auf 127.0.0.1. Anfragen von dort sind „über den Support-Tunnel“: sie gelten
+  // wie ein Gerät im Heimnetz statt als die Box selbst, dürfen den Tunnel nicht
+  // verlängern und stehen so im Audit-Log (routes-api.js isSupportTunnelRequest).
+  const supportPort = supportWebPort();
+  if (supportPort !== Number(cfg.httpPort)) {
+    startSupportWebListener({
+      handler: web.listeners('request')[0],
+      port: supportPort,
+      onError: (err) => {
+        console.error(`Support-Listener 127.0.0.1:${supportPort}: ${err.message}`);
+        pushLog('support_web_listener_error', { port: supportPort, error: err.message });
+      },
+      onListening: () => console.log(`Support-Tunnel web listener on 127.0.0.1:${supportPort}`),
+    });
+  } else {
+    pushLog('support_web_listener_error', { port: supportPort, error: 'gleicher Port wie httpPort — Support-Listener aus' });
+  }
+
   // HTTPS with self-signed cert (optional)
   const httpsPort = cfg.httpsPort || null;
   const configDir = path.dirname(CONFIG_PATH);
@@ -2803,16 +2828,7 @@ if (IS_RUNTIME_PROCESS) {
     try {
       const u = new URL(String(raw || ''));
       if (u.protocol !== 'https:') return false;
-      const host = u.hostname.toLowerCase();
-      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
-      const parts = host.split('.').map(Number);
-      if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
-        if (parts[0] === 10) return false;                                      // 10.0.0.0/8
-        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false; // 172.16.0.0/12
-        if (parts[0] === 192 && parts[1] === 168) return false;                 // 192.168.0.0/16
-        if (parts[0] === 169 && parts[1] === 254) return false;                 // 169.254.0.0/16 (link-local)
-      }
-      return true;
+      return !isInternalHost(u.hostname);
     } catch { return false; }
   }
   function startMonitoringHeartbeat() {

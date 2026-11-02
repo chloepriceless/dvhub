@@ -101,3 +101,28 @@ test('capacity message: unplausibel und Frist abgelaufen → deaktiviert-Hinweis
   assert.match(msg, /passt nicht zusammen/);
   assert.match(msg, /Kulanzfrist ist abgelaufen, Pro-Funktionen sind deaktiviert/);
 });
+
+// Strix L-0001/L-0002/L-0005 (30.10.2026): Bindungsprobleme und eine zu lange
+// nicht geprüfte Lizenz bekommen einen klaren Hinweis statt still „unbegrenzt“.
+test('binding message: Slot belegt, andere Box, ungebunden mit Fehler, offline ungeprüft', () => {
+  const { licenseBindingMessage } = loadLicenseHelpers();
+  assert.equal(licenseBindingMessage({ status: 'none' }), null);
+  assert.equal(licenseBindingMessage({ status: 'active', binding: { state: 'bound' } }), null);
+  assert.match(licenseBindingMessage({ status: 'active', binding: { state: 'blocked', block: 'machine_slot_taken' } }), /andere[nr]? Box/);
+  assert.match(licenseBindingMessage({ status: 'active', binding: { state: 'blocked', block: 'bound_to_other_box' } }), /An diese Box binden/);
+  const unbound = licenseBindingMessage({ status: 'active', binding: { state: 'unbound', error: 'upstream_keygen' } });
+  assert.match(unbound, /nicht an die Lizenz gebunden/);
+  assert.match(unbound, /upstream_keygen/);
+  assert.equal(licenseBindingMessage({ status: 'active', binding: { state: 'unbound', error: null } }), null, 'ohne Fehler kein Lärm');
+  assert.match(licenseBindingMessage({ status: 'active', effective_status: 'unverified_offline', binding: { state: 'unbound' } }), /14 Tage/);
+});
+
+test('Bindungs-Toast: andere Box nur mit Nachweis, Neuversuch nur ohne Sperre', () => {
+  const { licenseBindErrorText } = loadLicenseHelpers();
+  assert.match(licenseBindErrorText({ error: 'machine_slot_taken', boundToOtherBox: true, blocked: true }), /andere[nr]? Box/);
+  assert.match(licenseBindErrorText({ error: 'machine_slot_taken', boundToOtherBox: false, blocked: false }), /nächsten Prüfung erneut/);
+  const blocked = licenseBindErrorText({ error: 'machine_slot_taken', boundToOtherBox: false, blocked: true });
+  assert.doesNotMatch(blocked, /nächsten Prüfung/);
+  assert.match(blocked, /An diese Box binden/);
+  assert.equal(licenseBindErrorText({ error: 'server_error' }), null);
+});

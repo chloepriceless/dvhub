@@ -954,3 +954,27 @@ test('getOptimizationSolution sortiert die Zeitumstellungs-Stunde nach Epoche', 
     await mock.close();
   }
 });
+
+// Gegenprüfung 5c41938e (P2): http://[::1]:8503 ist als EOS-Adresse erlaubt,
+// URL.hostname liefert aber „[::1]“ mit Klammern — http.request() hielt das
+// für einen DNS-Namen (ENOTFOUND). Echter Server auf IPv6-Loopback.
+test('EOS adapter reaches EOS at an IPv6 literal (http://[::1]:port)', async (t) => {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push(req.url);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const listening = await new Promise((resolve) => {
+    server.once('error', () => resolve(false));
+    server.listen(0, '::1', () => resolve(true));
+  });
+  if (!listening) { t.skip('kein IPv6-Loopback auf diesem Rechner'); return; }
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://[::1]:${server.address().port}`));
+    await adapter.getOptimizationSolution();
+    assert.ok(requests.length >= 1, 'request must reach the IPv6 loopback server');
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
