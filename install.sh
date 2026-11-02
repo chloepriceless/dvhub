@@ -888,42 +888,56 @@ case "$TLS_RC" in
   3) ;;
   *) echo "   WARN: TLS-Zertifikat nicht erzeugt — wird beim nächsten Start nachgeholt" >&2;;
 esac
-# Eine Konfigurationsdatei, die ein Verweis ist, schreibt root nicht (sie
-# läge sonst irgendwo, wohin der Verweis zeigt).
-if [[ -L "$CONFIG_PATH" ]]; then
-  echo "FEHLER: $CONFIG_PATH ist ein Verweis — bitte prüfen und durch die echte Datei ersetzen." >&2
-  exit 1
-fi
-if [[ ! -f "$CONFIG_PATH" ]]; then
-  cp "$APP_DIR/config.example.json" "$CONFIG_PATH"
-fi
-# Set updateChannel in config if not already present
-if command -v node >/dev/null 2>&1 && [[ -f "$CONFIG_PATH" ]]; then
-  node -e "
-    const fs = require('fs');
-    const crypto = require('crypto');
-    const p = '$CONFIG_PATH';
+# config.json anlegen (aus der Vorlage) bzw. ergänzen. /etc/dvhub gehört dem
+# Dienstbenutzer: root liest mit O_NOFOLLOW, schreibt eine neue Datei
+# (O_EXCL|O_NOFOLLOW, 0600, fchown) und setzt sie per rename ein — ein Verweis
+# config.json wird nie beschrieben, auch nicht, wenn er erst zwischen Prüfen
+# und Schreiben auftaucht (Gegenprüfung 0923ac3d). Werte als Argumente, nicht
+# in den JS-Text eingesetzt.
+if command -v node >/dev/null 2>&1; then
+  node -e '
+    const fs = require("fs"); const path = require("path"); const crypto = require("crypto");
+    const [p, example, channel, supportUser, uid, gid] = process.argv.slice(1);
+    const C = fs.constants;
+    let fd = null; let c;
+    try { fd = fs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK); }
+    catch (e) {
+      if (e.code === "ELOOP") { console.error(`FEHLER: ${p} ist ein Verweis — bitte prüfen und durch die echte Datei ersetzen.`); process.exit(1); }
+      if (e.code !== "ENOENT") throw e;
+    }
+    if (fd !== null) {
+      try {
+        if (!fs.fstatSync(fd).isFile()) { console.error(`FEHLER: ${p} ist keine Datei.`); process.exit(1); }
+        c = JSON.parse(fs.readFileSync(fd, "utf8"));
+      } catch (e) { if (e instanceof SyntaxError) process.exit(0); throw e; } // kaputte Config: nicht anfassen (wie bisher)
+      finally { fs.closeSync(fd); }
+    } else {
+      c = JSON.parse(fs.readFileSync(example, "utf8"));
+    }
+    let changed = fd === null;
+    if (!c.updateChannel) { c.updateChannel = channel; changed = true; }
+    // T-0118: the systemd unit sets DV_ENABLE_SERVICE_ACTIONS=1 and the app
+    // refuses to start without an apiToken >= 16 chars (crash-loop on a fresh
+    // install whose config.example.json has none). Generate a strong random
+    // token so the service comes up clean on first boot.
+    if (!c.apiToken || String(c.apiToken).length < 16) { c.apiToken = crypto.randomBytes(24).toString("hex"); changed = true; }
+    // T-0113: persist the support-user opt-out choice so the UI + post-update
+    // reconcile consistently. "1" => remote-support ready (default), "0" => off.
+    c.support = c.support || {};
+    c.support.localUser = c.support.localUser || {};
+    if (c.support.localUser.enabled === undefined) { c.support.localUser.enabled = supportUser !== "0"; changed = true; }
+    if (!changed) process.exit(0);
+    const tmp = path.join(path.dirname(p), `.${path.basename(p)}.neu-${crypto.randomBytes(4).toString("hex")}`);
     try {
-      const c = JSON.parse(fs.readFileSync(p, 'utf8'));
-      let changed = false;
-      if (!c.updateChannel) { c.updateChannel = '$UPDATE_CHANNEL'; changed = true; }
-      // T-0118: the systemd unit sets DV_ENABLE_SERVICE_ACTIONS=1 and the app
-      // refuses to start without an apiToken >= 16 chars (crash-loop on a fresh
-      // install whose config.example.json has none). Generate a strong random
-      // token so the service comes up clean on first boot.
-      if (!c.apiToken || String(c.apiToken).length < 16) {
-        c.apiToken = crypto.randomBytes(24).toString('hex');
-        changed = true;
-      }
-      // T-0113: persist the support-user opt-out choice so the UI + post-update
-      // reconcile consistently. '1' => remote-support ready (default), '0' => off.
-      const wantSupportUser = '$SUPPORT_LOCAL_USER' !== '0';
-      c.support = c.support || {};
-      c.support.localUser = c.support.localUser || {};
-      if (c.support.localUser.enabled === undefined) { c.support.localUser.enabled = wantSupportUser; changed = true; }
-      if (changed) fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
-    } catch {}
-  "
+      const w = fs.openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
+      try { fs.writeFileSync(w, JSON.stringify(c, null, 2) + "\n"); fs.fchmodSync(w, 0o600); fs.fchownSync(w, Number(uid), Number(gid)); }
+      finally { fs.closeSync(w); }
+      fs.renameSync(tmp, p);
+    } catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+  ' "$CONFIG_PATH" "$APP_DIR/config.example.json" "$UPDATE_CHANNEL" "$SUPPORT_LOCAL_USER" \
+    "$(id -u "$SERVICE_USER")" "$(id -g "$SERVICE_USER")"
+elif [[ ! -e "$CONFIG_PATH" && ! -L "$CONFIG_PATH" ]]; then
+  ( umask 077; set -C; cat "$APP_DIR/config.example.json" > "$CONFIG_PATH" )
 fi
 # Herstellerprofile abgleichen (T-MANAGED-VENDOR-PROFILES): fehlende anlegen,
 # unveränderte auf die neue ausgelieferte Version aktualisieren, Operator-Edits

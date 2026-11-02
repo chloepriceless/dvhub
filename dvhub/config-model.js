@@ -6345,7 +6345,9 @@ export function saveConfigFile(configPath, rawInput) {
   }
   // Atomic write: temp file + rename prevents corruption on crash/power loss
   const tmpPath = configPath + '.tmp';
-  fs.writeFileSync(tmpPath, JSON.stringify(normalized.rawConfig, null, 2) + '\n', 'utf8');
+  // Gleich mit 0600 anlegen (Gegenprüfung 0923ac3d): sonst lag die Datei mit
+  // den Geheimnissen kurz mit 0644 da; chmod für eine schon vorhandene .tmp.
+  fs.writeFileSync(tmpPath, JSON.stringify(normalized.rawConfig, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
   fs.chmodSync(tmpPath, 0o600);
   fs.renameSync(tmpPath, configPath);
   return loadConfigFile(configPath);

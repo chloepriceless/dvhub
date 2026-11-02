@@ -165,10 +165,14 @@ flip_config_true() {
     if (c.telemetry.database.timescaledb === true) process.exit(0);
     c.telemetry.database.timescaledb = true;
     const tmp = path.join(path.dirname(p), `.${path.basename(p)}.neu-${crypto.randomBytes(4).toString("hex")}`);
-    const w = fs.openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
-    try { fs.writeFileSync(w, JSON.stringify(c, null, 2) + "\n"); fs.fchmodSync(w, 0o600); fs.fchownSync(w, Number(uid), Number(gid)); }
-    finally { fs.closeSync(w); }
-    try { fs.renameSync(tmp, p); } catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+    // Schreiben, Rechte, rename in einem Block: scheitert irgendein Schritt
+    // (z. B. volle Platte), bleibt keine halbe Kopie mit Geheimnissen liegen.
+    try {
+      const w = fs.openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
+      try { fs.writeFileSync(w, JSON.stringify(c, null, 2) + "\n"); fs.fchmodSync(w, 0o600); fs.fchownSync(w, Number(uid), Number(gid)); }
+      finally { fs.closeSync(w); }
+      fs.renameSync(tmp, p);
+    } catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
   ' "$CONFIG_PATH" "$uid" "$gid" || true
 }
 

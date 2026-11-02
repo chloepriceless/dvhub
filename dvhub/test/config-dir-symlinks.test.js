@@ -231,12 +231,46 @@ test('T-0003: config.json als Verweis → Ziel bleibt unberührt, Start läuft w
   } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
 });
 
-test('T-0003: install.sh setzt config.json nach dem Schreiben auf 0600', () => {
+function installConfigStep(t, env) {
   const s = read('install.sh');
-  const iWrite = s.indexOf("if (changed) fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\\n');");
-  const iSecure = s.indexOf('dvhub_cfg_secure_file "$CONFIG_PATH" "$SERVICE_USER"');
-  assert.ok(iWrite > 0, 'Schreibstelle gefunden');
-  assert.ok(iSecure > iWrite, 'Rechte nach dem letzten Schreiben gesetzt');
+  const a = s.indexOf('# config.json anlegen (aus der Vorlage) bzw. ergänzen.');
+  const b = s.indexOf('# Herstellerprofile abgleichen (T-MANAGED-VENDOR-PROFILES)');
+  assert.ok(a > 0 && b > a, 'Abschnitt in install.sh');
+  const app = path.join(t.dir, 'app');
+  fs.mkdirSync(app, { recursive: true });
+  fs.writeFileSync(path.join(app, 'config.example.json'), '{"httpPort":80}\n');
+  const script = `set -euo pipefail\nCONFIG_PATH='${env.CONFIG_PATH}'\nAPP_DIR='${app}'\nUPDATE_CHANNEL=stable\nSUPPORT_LOCAL_USER=1\nSERVICE_USER='${os.userInfo().username}'\n${s.slice(a, b)}`;
+  return spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+}
+
+test('T-0003: install.sh legt config.json aus der Vorlage mit 0600 an und ergänzt sie', () => {
+  const t = setup();
+  try {
+    const p = path.join(t.cfg, 'config.json');
+    const r = installConfigStep(t, { CONFIG_PATH: p });
+    assert.equal(r.status, 0, r.stderr);
+    const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+    assert.equal(c.httpPort, 80);
+    assert.equal(c.updateChannel, 'stable');
+    assert.ok(String(c.apiToken).length >= 16);
+    assert.equal(fs.statSync(p).mode & 0o777, 0o600);
+    assert.deepEqual(fs.readdirSync(t.cfg).filter((f) => f.includes('.neu-')), [], 'keine Zwischendatei übrig');
+  } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
+});
+
+// Gegenprüfung 0923ac3d (P2): install.sh prüfte -L und schrieb danach in einem
+// zweiten Schritt — ein Verweis zwischen beidem ließ root hindurchschreiben.
+test('T-0003: install.sh schreibt nie durch einen Verweis config.json', () => {
+  const t = setup();
+  try {
+    const victim = path.join(t.outside, 'opfer');
+    const p = path.join(t.cfg, 'config.json');
+    fs.symlinkSync(victim, p);
+    const r = installConfigStep(t, { CONFIG_PATH: p });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /ist ein Verweis/);
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'unberuehrt\n');
+  } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
 });
 
 // Gegenprüfung d5655361 (P3): cert.pem echt, key.pem ein Verweis → der Verweis

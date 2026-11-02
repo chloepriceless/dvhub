@@ -70,14 +70,31 @@ test('P2: post-update.sh setzt auch Sicherungen der Konfiguration auf 0600', () 
   const step7 = s.slice(s.indexOf('# ── 7. Berechtigungen ──'), s.indexOf('# ── 8. systemd Service'));
   const d = tmpdir();
   try {
-    for (const f of ['config.json', 'config.backup-2026-11-01T00-00-00.json', 'config.json.bak-alt']) {
+    for (const f of ['config.json', 'config.backup-2026-11-01T00-00-00.json', 'config.json.tmp']) {
       fs.writeFileSync(path.join(d, f), '{}', { mode: 0o644 });
       fs.chmodSync(path.join(d, f), 0o644);
     }
+    // Eine Sicherung als Verweis: root folgt ihm nicht (Gegenprüfung 0923ac3d).
+    const victim = path.join(d, 'opfer'); fs.writeFileSync(victim, 'x'); fs.chmodSync(victim, 0o644);
+    fs.symlinkSync(victim, path.join(d, 'config.backup-2026-11-02T00-00-00.json'));
     const bin = path.join(d, 'bin'); fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'chown'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const r = spawnSync('bash', ['-c', `set -euo pipefail\nSERVICE_USER='${os.userInfo().username}'\nCONFIG_DIR='${d}'\nCONFIG_PATH='${d}/config.json'\n${s.slice(a, b)}\n${step7}`], { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}` } });
     assert.equal(r.status, 0, r.stderr);
-    for (const f of ['config.json', 'config.backup-2026-11-01T00-00-00.json']) assert.equal(fs.statSync(path.join(d, f)).mode & 0o777, 0o600, f);
+    for (const f of ['config.json', 'config.backup-2026-11-01T00-00-00.json', 'config.json.tmp']) assert.equal(fs.statSync(path.join(d, f)).mode & 0o777, 0o600, f);
+    assert.equal(fs.statSync(victim).mode & 0o777, 0o644, 'Ziel des Verweises unberührt');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+// Gegenprüfung 0923ac3d (P3): eine schon vorhandene .tmp mit 0644 darf ihren
+// Modus nicht an die neue config.json vererben.
+test('P2: Konfig-Migration mit vorhandener 0644-.tmp → config.json 0600', async () => {
+  const d = tmpdir();
+  try {
+    const cfg = path.join(d, 'config.json');
+    fs.writeFileSync(cfg, '{"apiToken":"geheim"}\n');
+    fs.writeFileSync(`${cfg}.tmp`, 'alt'); fs.chmodSync(`${cfg}.tmp`, 0o644);
+    await runMigrations(cfg);
+    assert.equal(fs.statSync(cfg).mode & 0o777, 0o600);
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
