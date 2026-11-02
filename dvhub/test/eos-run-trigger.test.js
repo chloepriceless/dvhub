@@ -263,3 +263,31 @@ test('nachgeholter Neuplan entfällt, wenn inzwischen ein Lauf startet; no_plan 
   await h.trigger.trigger('boundary');
   assert.equal(h.timers.length, 0, 'neuer Lauf rechnet schon mit der neuen Einstellung');
 });
+
+// Gegenprüfung 27a172cb (P3): EOS rechnet nach einem DVhub-Neustart noch
+// (eos_busy) — der Neuplan wird nach 2 min nachgeholt, nicht verworfen.
+test('Neuplan bei eos_busy nach dem Neustart wird nachgeholt', async () => {
+  const h = harness({ status: 'busy' });
+  assert.equal((await h.trigger.kick('replan:config')).skipped, 'eos_busy');
+  assert.equal(h.timers.length, 1);
+  assert.equal(h.timers[0].ms, EOS_RUN_KICK_MIN_GAP_MS);
+});
+
+// Gegenprüfung 27a172cb (P3): scheitert der reguläre Lauf, der den Neuplan
+// aufgenommen hätte, wird der Neuplan wieder vorgemerkt (einmal).
+test('gescheiterter Lauf behält den vorgemerkten Neuplan', async () => {
+  const h = harness();
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  await h.trigger.trigger('boundary');
+  await h.trigger.kick('replan:config');
+  assert.equal(h.timers.length, 1);
+  h.nowMs += 30_000;
+  h.replies.push({ ok: false, error: 'EOS returned HTTP 503' });
+  await h.trigger.trigger('boundary');
+  assert.equal(h.timers.length, 1, 'wieder vorgemerkt');
+  h.nowMs += EOS_RUN_KICK_MIN_GAP_MS;
+  h.replies.push({ ok: false, error: 'EOS returned HTTP 503' });
+  await h.timers.shift().fn();
+  assert.equal(h.posts.length, 3);
+  assert.equal(h.timers.length, 0, 'der Neuplan-Lauf selbst wird nicht endlos wiederholt');
+});

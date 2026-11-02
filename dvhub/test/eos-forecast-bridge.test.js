@@ -1329,11 +1329,11 @@ test('eosPlanFeedInBasis: Grundlage zum Plan passend', async () => {
     eosFeedInBasis: { feedIn: 'fixed', fixedCtKwh: 8.2, since: 1000 },
     eosFeedInBasisPrev: { feedIn: 'fixed', fixedCtKwh: 7.78, since: 0 },
   };
-  assert.deepEqual({ ...eosPlanFeedInBasis(opt, fixedCfg, 2000) }, { feedIn: 'fixed', fixedCtKwh: 8.2 });
-  assert.deepEqual({ ...eosPlanFeedInBasis(opt, fixedCfg, 500) }, { feedIn: 'fixed', fixedCtKwh: 7.78 }, 'Plan älter als der Wechsel');
+  assert.deepEqual({ ...eosPlanFeedInBasis(opt, fixedCfg, 2000, 1) }, { feedIn: 'fixed', fixedCtKwh: 8.2 });
+  assert.deepEqual({ ...eosPlanFeedInBasis(opt, fixedCfg, 500, 1) }, { feedIn: 'fixed', fixedCtKwh: 7.78 }, 'Plan älter als der Wechsel');
   assert.deepEqual({ ...eosPlanFeedInBasis(opt, fixedCfg, NaN) }, { feedIn: 'fixed', fixedCtKwh: 8.2 }, 'Planzeit unbekannt');
-  assert.equal(eosPlanFeedInBasis({ eosFeedInBasis: opt.eosFeedInBasis }, fixedCfg, 500), null, 'ältere Grundlage unbekannt → kein Zusatz');
-  assert.deepEqual({ ...eosPlanFeedInBasis({ eosFeedInBasis: { feedIn: 'spot', since: 0 } }, fixedCfg, 5) }, { feedIn: 'spot' });
+  assert.equal(eosPlanFeedInBasis({ eosFeedInBasis: opt.eosFeedInBasis }, fixedCfg, 500, 1), null, 'ältere Grundlage unbekannt → kein Zusatz');
+  assert.deepEqual({ ...eosPlanFeedInBasis({ eosFeedInBasis: { feedIn: 'spot', since: 0 } }, fixedCfg, 5, 1) }, { feedIn: 'spot' });
 });
 
 
@@ -1453,4 +1453,16 @@ test('Lauf-/Geräte-Neuplan nach dem Speichern wartet auf den Abgleich (EV, Ger�
   assert.equal((dev.match(/requestEosReplanAfterSave\(ctx, 'devices'\)/g) || []).length, 2);
   assert.doesNotMatch(dev, /ctx\.eosConfigSync\?\.sync\?\.\(\)/, 'kein zweiter, paralleler Sync');
   assert.doesNotMatch(dev, /requestEosReplan\?\.\('devices'\)/);
+});
+
+// Gegenprüfung 27a172cb (P3): Laufdauer unbekannt (EOS rechnet nach eigenem
+// Takt, Lauf aus dem alten Prozess) → bis zu 60 min Laufzeit annehmen.
+test('eosPlanFeedInBasis: unbekannte Laufdauer → 60 min angenommen', async () => {
+  const { eosPlanFeedInBasis } = await import('../services/optimizer/eos-forecast-bridge.js');
+  const H = 3_600_000;
+  const B = { feedIn: 'spot', since: 10 * H };
+  const A = { feedIn: 'fixed', fixedCtKwh: 7.78, since: 1 };
+  assert.equal(eosPlanFeedInBasis({ eosFeedInBasis: B, eosFeedInBasisPrev: A }, {}, 10.5 * H, NaN), null);
+  assert.equal(eosPlanFeedInBasis({ eosFeedInBasis: B, eosFeedInBasisPrev: A }, {}, 10.5 * H, 0), null);
+  assert.deepEqual({ ...eosPlanFeedInBasis({ eosFeedInBasis: B, eosFeedInBasisPrev: A }, {}, 11.5 * H, NaN) }, { feedIn: 'spot' });
 });

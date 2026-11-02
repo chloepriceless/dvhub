@@ -1008,12 +1008,33 @@
       return { t: r.t, ms: ms, w: r.w };
     });
   }
-  // Reicht die Reihe über „jetzt“ hinaus? Für die Last Pflicht: endet sie
-  // heute schon vorher, ist sie veraltet (Telemetrie steht, SQL-Fehler) und
-  // der Rest unbekannt (Gegenprüfung ffa322f1). PV darf zum Sonnenuntergang
-  // enden (seriesCoversToday).
-  function seriesReachesNow(slots, fallbackH, nowMs) {
-    return rowSpans(slots, fallbackH).some(function (r) { return r.t + r.ms > nowMs; });
+  // Deckt die Reihe [fromMs, untilMs) lückenlos ab? Für die Last Pflicht bis
+  // Mitternacht: endet sie vorher oder hat sie Lücken (Telemetrie steht,
+  // SQL-Fehler, VRM-Abruf hängt), zählten die fehlenden Stunden als 0 kWh —
+  // dann ist der Rest unbekannt (Gegenprüfungen ffa322f1, 27a172cb). PV darf
+  // zum Sonnenuntergang enden (seriesCoversToday).
+  function seriesCoversUntil(slots, fallbackH, fromMs, untilMs) {
+    var cursor = fromMs;
+    var spans = rowSpans(slots, fallbackH);
+    for (var k = 0; k < spans.length && cursor < untilMs; k += 1) {
+      var r = spans[k];
+      var end = r.t + r.ms;
+      if (end <= cursor) continue;
+      if (r.t > cursor + 60000) return false; // Lücke (> 1 min)
+      cursor = end;
+    }
+    return cursor >= untilMs;
+  }
+  // Nächste Mitternacht in Berliner Zeit nach nowMs (MEZ 23:00Z, MESZ 22:00Z).
+  function berlinMidnightAfter(nowMs) {
+    var fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' });
+    var hourFmt = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', hourCycle: 'h23' });
+    var parts = fmt.format(new Date(nowMs)).split('-').map(Number);
+    for (var utcH = 21; utcH <= 23; utcH += 1) {
+      var t = Date.UTC(parts[0], parts[1] - 1, parts[2], utcH);
+      if (parseInt(hourFmt.format(new Date(t)), 10) === 0 && t > nowMs) return t;
+    }
+    return Date.UTC(parts[0], parts[1] - 1, parts[2] + 1, 0) - 3600000;
   }
   function kwhOf(slots, fallbackH) {
     var kwh = 0;
@@ -1064,7 +1085,7 @@
   }
   window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, {
     loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries,
-    energyBalanceSummary: energyBalanceSummary, energyBalanceView: energyBalanceView, restKwhFrom: restKwhFrom, seriesCoversToday: seriesCoversToday, seriesReachesNow: seriesReachesNow,
+    energyBalanceSummary: energyBalanceSummary, energyBalanceView: energyBalanceView, restKwhFrom: restKwhFrom, seriesCoversToday: seriesCoversToday, seriesCoversUntil: seriesCoversUntil, berlinMidnightAfter: berlinMidnightAfter,
   });
 
   function updateForecastSummary(forecastData, statusData) {
@@ -1150,7 +1171,7 @@
       || (statusData?.victron?.soc != null ? { socPct: statusData.victron.soc, capacityWh: null, minSocPct: null } : null);
     var balance = energyBalanceSummary({
       pvRestKwh: seriesCoversToday(pvSlotsAll, berlinTodayKey) ? pvKwhRest : null,
-      loadRestKwh: seriesReachesNow(loadSlotsAll, loadH, nowMs) ? loadKwhRest : null,
+      loadRestKwh: seriesCoversUntil(loadSlotsAll, loadH, nowMs, berlinMidnightAfter(nowMs)) ? loadKwhRest : null,
       pvDayKwh: pvDayKwh, loadDayKwh: loadDayKwh, battery: battery
     });
     var balanceView = energyBalanceView(balance);

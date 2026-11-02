@@ -6574,7 +6574,7 @@ export function createApiRoutes(ctx) {
         // ihn für DIESEN Plan gebildet hat — zum Laufbeginn (generatedAt minus
         // Dauer des letzten Laufs, eosPlanFeedInBasis).
         priceBasis: eosPlanFeedInBasis(state.optimizer, getCfg(), Date.parse(plan.data?.generatedAt),
-          (Number(state.optimizer?.eosRun?.lastDurationS) || 0) * 1000),
+          Number(state.optimizer?.eosRun?.lastDurationS) * 1000),
         eos: { status: status.status, push: status.push },
         remote: eosRemoteSummary(),
       });

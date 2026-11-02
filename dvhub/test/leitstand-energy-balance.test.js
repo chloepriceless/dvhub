@@ -228,7 +228,7 @@ test('seriesCoversToday', () => {
   const start = src.indexOf('function updateForecastSummary(');
   const body = src.slice(start, src.indexOf('\n  }\n', start));
   assert.match(body, /pvRestKwh: seriesCoversToday\(pvSlotsAll, berlinTodayKey\) \? pvKwhRest : null/);
-  // Last: strenger, seriesReachesNow (Gegenprüfung ffa322f1, eigener Test)
+  // Last: strenger, seriesCoversUntil bis Mitternacht (eigener Test)
 });
 
 // P3: Scheitert der Prognose-Abruf, darf kein farbiges „--“ über alten Zeilen stehen.
@@ -254,15 +254,11 @@ test('energyBalanceBattery ohne Hauptkapazität: Ladestand ungewichtet', async (
 // P2: Eine Lastreihe, die heute vor „jetzt“ endet, ist veraltet (Telemetrie
 // steht, SQL-Fehler) — Last braucht eine Zeile, die nach jetzt endet. PV darf
 // zum Sonnenuntergang enden.
-test('seriesReachesNow: Last muss über jetzt hinausreichen', () => {
-  const { seriesReachesNow } = loadHelpers();
+test('Last, die heute vor jetzt endet, ist unbekannt (seriesCoversUntil)', () => {
+  const { seriesCoversUntil } = loadHelpers();
   const T = Date.UTC(2026, 11, 2, 13, 0); // 14:00
   const load = [0, 1, 2].map((i) => ({ start: new Date(T - 3 * 3600000 + i * 3600000).toISOString(), powerW: 800 })); // bis 14:00
-  assert.equal(seriesReachesNow(load, 1, T + 3600000), false); // 15:00
-  assert.equal(seriesReachesNow(load, 1, T - 1800000), true);  // 13:30
-  const start = src.indexOf('function updateForecastSummary(');
-  const body = src.slice(start, src.indexOf('\n  }\n', start));
-  assert.match(body, /loadRestKwh: seriesReachesNow\(loadSlotsAll, loadH, nowMs\) \? loadKwhRest : null/);
+  assert.equal(seriesCoversUntil(load, 1, T + 3600000, T + 9 * 3600000), false); // 15:00
 });
 
 // P3: forecast.solar-Stundenwerte sind Wh je Stunde (forecast-solar.js); ein
@@ -290,4 +286,32 @@ test('ohne Prognose: Detailzeile Verbrauch geleert', () => {
   const body = src.slice(start, src.indexOf('\n  }\n', start));
   const early = body.slice(body.indexOf('if (!forecastData) {'), body.indexOf('return;', body.indexOf('if (!forecastData) {')));
   assert.match(early, /loadDetailEl\.textContent = ''/);
+});
+
+// Gegenprüfung 27a172cb (P2): Die Lastreihe muss den Rest des Tages lückenlos
+// bis Mitternacht abdecken — sonst zählten die fehlenden Stunden als 0 kWh.
+test('seriesCoversUntil: lückenlos bis zum Ende', () => {
+  const { seriesCoversUntil } = loadHelpers();
+  const T = Date.UTC(2026, 10, 2, 13, 30); // 14:30 Uhr
+  const H = 3600000;
+  const mk = (from, n) => Array.from({ length: n }, (_, i) => ({ start: new Date(from + i * H).toISOString(), powerW: 800 }));
+  const midnight = Date.UTC(2026, 10, 2, 23, 0);
+  assert.equal(seriesCoversUntil(mk(Date.UTC(2026, 10, 2, 13, 0), 5), 1, T, midnight), false, 'endet 18:00');
+  assert.equal(seriesCoversUntil(mk(Date.UTC(2026, 10, 2, 13, 0), 12), 1, T, midnight), true);
+  const gap = [...mk(Date.UTC(2026, 10, 2, 13, 0), 3), ...mk(Date.UTC(2026, 10, 2, 18, 0), 8)];
+  assert.equal(seriesCoversUntil(gap, 1, T, midnight), false, 'Lücke 16–18 Uhr');
+  assert.equal(seriesCoversUntil(mk(Date.UTC(2026, 10, 3, 0, 0), 5), 1, T, midnight), false, 'nur morgen');
+});
+
+test('berlinMidnightAfter: Mitternacht in Berliner Zeit (Winter/Sommer)', () => {
+  const { berlinMidnightAfter } = loadHelpers();
+  assert.equal(berlinMidnightAfter(Date.UTC(2026, 10, 2, 13, 30)), Date.UTC(2026, 10, 2, 23, 0));
+  assert.equal(berlinMidnightAfter(Date.UTC(2026, 6, 2, 13, 30)), Date.UTC(2026, 6, 2, 22, 0));
+  assert.equal(berlinMidnightAfter(Date.UTC(2026, 10, 2, 23, 30)), Date.UTC(2026, 10, 3, 23, 0), 'nach Mitternacht Ortszeit: nächste');
+});
+
+test('Kachel: Last nur bekannt, wenn sie bis Mitternacht reicht', () => {
+  const start = src.indexOf('function updateForecastSummary(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  assert.match(body, /loadRestKwh: seriesCoversUntil\(loadSlotsAll, loadH, nowMs, berlinMidnightAfter\(nowMs\)\) \? loadKwhRest : null/);
 });

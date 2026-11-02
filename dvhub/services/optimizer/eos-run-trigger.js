@@ -205,13 +205,21 @@ export function createEosRunTrigger({
       log('eos_run_skipped', { reason, error: 'EOS rechnet noch (Lauf vor dem DVhub-Neustart)' });
       return Promise.resolve({ ok: false, skipped: 'eos_busy' });
     }
-    clearPending(); // dieser Lauf rechnet schon mit dem aktuellen Stand
+    // Dieser Lauf rechnet schon mit dem aktuellen Stand: ein vorgemerkter
+    // Neuplan entfällt — scheitert der Lauf, wird er wieder vorgemerkt
+    // (Gegenprüfung 27a172cb).
+    const carried = pendingReplan;
+    clearPending();
     inFlight = run(reason)
       .catch((err) => {
         const error = err?.message || String(err);
         log('eos_run_failed', { reason, error });
         publish({ inFlight: false, lastError: error, lastErrorAt: now() });
         return { ok: false, error };
+      })
+      .then((res) => {
+        if (carried && !pendingReplan && !(res && res.ok)) pendingReplan = carried;
+        return res;
       })
       .finally(() => { inFlight = null; armPending(); });
     return inFlight;
@@ -228,9 +236,9 @@ export function createEosRunTrigger({
     pendingReplan = null;
     if (pendingTimer) { clearTimer(pendingTimer); pendingTimer = null; }
   }
-  function armPending() {
+  function armPending(delayMs) {
     if (!pendingReplan || pendingTimer || inFlight) return;
-    const wait = Math.max(0, lastAttemptAt + EOS_RUN_KICK_MIN_GAP_MS - now());
+    const wait = delayMs ?? Math.max(0, lastAttemptAt + EOS_RUN_KICK_MIN_GAP_MS - now());
     pendingTimer = setTimer(() => {
       pendingTimer = null;
       const reason = pendingReplan;
@@ -241,11 +249,17 @@ export function createEosRunTrigger({
 
   /** Außer der Reihe (EOS neu gestartet, noch kein Plan) — höchstens alle 2 min. */
   function kick(reason) {
+    const replan = String(reason || '').startsWith('replan:');
     if (inFlight || now() - lastAttemptAt < EOS_RUN_KICK_MIN_GAP_MS) {
-      if (String(reason || '').startsWith('replan:')) { pendingReplan = reason; armPending(); }
+      if (replan) { pendingReplan = reason; armPending(); }
       return Promise.resolve({ ok: false, skipped: 'recent' });
     }
-    return trigger(reason);
+    return trigger(reason).then((res) => {
+      // Nach einem DVhub-Neustart rechnet EOS noch den alten Lauf: Neuplan in
+      // 2 min erneut versuchen statt verwerfen (Gegenprüfung 27a172cb).
+      if (replan && res?.skipped === 'eos_busy') { pendingReplan = reason; armPending(EOS_RUN_KICK_MIN_GAP_MS); }
+      return res;
+    });
   }
 
   function schedule() {

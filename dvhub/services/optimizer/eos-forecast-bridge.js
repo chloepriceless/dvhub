@@ -225,9 +225,13 @@ const fixedFeedInCt = (tariff) => (Number.isFinite(Number(tariff?.feedInCtKwh)) 
  * @param {object} opt   state.optimizer
  * @param {object} cfg
  * @param {number} planGeneratedMs  generatedAt des gezeigten Plans (NaN = unbekannt)
- * @param {number} [runMs]          Dauer des Laufs, der ihn gerechnet hat
+ * @param {number} [runMs]          Dauer des Laufs, der ihn gerechnet hat (unbekannt: 60 min)
  */
-export function eosPlanFeedInBasis(opt, cfg, planGeneratedMs, runMs = 0) {
+/** Laufdauer, wenn DVhub sie nicht kennt (EOS nach eigenem Takt, Lauf aus dem
+ *  alten Prozess): großzügig 60 min — eHive mit Auto 24 h ≈ 30–42 min. */
+export const ASSUMED_EOS_RUN_MS = 60 * 60_000;
+
+export function eosPlanFeedInBasis(opt, cfg, planGeneratedMs, runMs = NaN) {
   const strip = (b) => (b ? { feedIn: b.feedIn, ...(b.fixedCtKwh !== undefined ? { fixedCtKwh: b.fixedCtKwh } : {}) } : null);
   const cur = opt?.eosFeedInBasis;
   if (!cur) {
@@ -235,7 +239,8 @@ export function eosPlanFeedInBasis(opt, cfg, planGeneratedMs, runMs = 0) {
     return feedIn === 'fixed' ? { feedIn, fixedCtKwh: fixedFeedInCt(cfg?.optimizer?.tariff) } : { feedIn };
   }
   if (!Number.isFinite(planGeneratedMs)) return strip(cur);
-  const planStart = planGeneratedMs - (Number(runMs) > 0 ? Number(runMs) : 0);
+  // Laufdauer unbekannt → ASSUMED_EOS_RUN_MS (Gegenprüfung 27a172cb).
+  const planStart = planGeneratedMs - (Number(runMs) > 0 ? Number(runMs) : ASSUMED_EOS_RUN_MS);
   const heldAt = (b) => b && (!(b.since > 0) || b.since <= planStart);
   if (heldAt(cur)) return strip(cur);
   if (cur.since < planGeneratedMs) return null; // Wechsel während des Laufs

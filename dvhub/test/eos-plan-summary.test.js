@@ -342,7 +342,7 @@ test('/api/eos/plan: Grundlage passend zum gezeigten Plan (eosPlanFeedInBasis)',
   const src = fs.readFileSync(fileURLToPath(new URL('../routes-api.js', import.meta.url)), 'utf8');
   const start = src.indexOf("url.pathname === '/api/eos/plan'");
   const body = src.slice(start, src.indexOf('\n    }\n', start));
-  assert.match(body, /priceBasis: eosPlanFeedInBasis\(state\.optimizer, getCfg\(\), Date\.parse\(plan\.data\?\.generatedAt\),\s+\(Number\(state\.optimizer\?\.eosRun\?\.lastDurationS\) \|\| 0\) \* 1000\)/);
+  assert.match(body, /priceBasis: eosPlanFeedInBasis\(state\.optimizer, getCfg\(\), Date\.parse\(plan\.data\?\.generatedAt\),\s+Number\(state\.optimizer\?\.eosRun\?\.lastDurationS\) \* 1000\)/);
 });
 
 // Gegenprüfung d22f5a4d (P2): „negativer Börsenpreis“ nur bei ≈ 0 ct — ein
