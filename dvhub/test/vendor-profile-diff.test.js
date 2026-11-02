@@ -41,3 +41,52 @@ test('mergeAdditions is a no-op when dist adds nothing new', () => {
   assert.deepEqual(merged, active, 'geänderte Werte werden NICHT übernommen');
   assert.deepEqual(addedTopLevel, []);
 });
+
+// Gegenprüfung zu ad70a264 (P3): das Werkzeug läuft als root im Ordner des
+// Dienstbenutzers. Ein Verweis x.json → <fremde JSON-Datei> ließ es dort Felder
+// hineinmischen (writeFileSync folgte dem Verweis) und den fremden Inhalt
+// anzeigen und als .bak in den Ordner kopieren.
+test('CLI: aktives Profil als Verweis → abgelehnt, Ziel unberührt', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'vendor-profile-diff.mjs');
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vpdiff-')));
+  try {
+    const h = path.join(tmp, 'cfg', 'hersteller');
+    fs.mkdirSync(h, { recursive: true });
+    const victim = path.join(tmp, 'opfer.json');
+    fs.writeFileSync(victim, '{"geheim":1}\n');
+    fs.symlinkSync(victim, path.join(h, 'x.json'));
+    fs.writeFileSync(path.join(h, 'x.json.dist'), '{"neu":2}\n');
+    const r = spawnSync(process.execPath, [tool, 'x.json', '--apply-additions'], { encoding: 'utf8', env: { ...process.env, CONFIG_DIR: path.join(tmp, 'cfg') } });
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.equal(fs.readFileSync(victim, 'utf8'), '{"geheim":1}\n');
+    assert.doesNotMatch(r.stdout, /geheim/);
+    assert.deepEqual(fs.readdirSync(h).filter((f) => f.includes('.bak-')), []);
+    const traversal = spawnSync(process.execPath, [tool, '../opfer.json'], { encoding: 'utf8', env: { ...process.env, CONFIG_DIR: path.join(tmp, 'cfg') } });
+    assert.equal(traversal.status, 2);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('CLI: echtes Profil → neue Felder übernommen, Sicherung angelegt', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'vendor-profile-diff.mjs');
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vpdiff-')));
+  try {
+    const h = path.join(tmp, 'cfg', 'hersteller');
+    fs.mkdirSync(h, { recursive: true });
+    fs.writeFileSync(path.join(h, 'x.json'), '{"a":1}\n');
+    fs.writeFileSync(path.join(h, 'x.json.dist'), '{"a":5,"b":2}\n');
+    const r = spawnSync(process.execPath, [tool, 'x.json', '--apply-additions'], { encoding: 'utf8', env: { ...process.env, CONFIG_DIR: path.join(tmp, 'cfg') } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h, 'x.json'), 'utf8')), { a: 1, b: 2 });
+    assert.equal(fs.readdirSync(h).filter((f) => f.startsWith('x.json.bak-')).length, 1);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});

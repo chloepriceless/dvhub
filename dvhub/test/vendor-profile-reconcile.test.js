@@ -146,3 +146,31 @@ test('R-0008: hersteller/ als Verweis → eigener Ordner, nichts im Ziel', () =>
     assert.equal(fs.readFileSync(path.join(t.cfgH, 'a.json'), 'utf8'), t.NEW);
   } finally { fs.rmSync(t.tmp, { recursive: true, force: true }); }
 });
+
+// Gegenprüfung zu ad70a264 (P2): der Ordner wurde nur per Name geprüft — tauschte
+// der Dienstbenutzer hersteller/ zwischen Prüfung und Schreiben gegen einen
+// Verweis, legte root die Datei im Ziel an. Jetzt zählt die Inode des
+// Arbeitsordners (chdir + dev/ino).
+test('R-0008: hersteller/ wird mitten im Lauf gegen einen Verweis getauscht → nichts im Ziel', () => {
+  const t = symlinkSetup();
+  const realOpen = fs.openSync;
+  let swapped = false;
+  fs.openSync = function patched(p, flags, mode) {
+    if (!swapped && String(p).includes('.neu-')) {
+      swapped = true;
+      fs.renameSync(t.cfgH, `${t.cfgH}.alt`);
+      fs.symlinkSync(t.outside, t.cfgH);
+    }
+    return realOpen.call(fs, p, flags, mode);
+  };
+  try {
+    fs.mkdirSync(t.cfgH);
+    reconcileVendorProfiles(t.cfg, t.appDir, { log: () => {} });
+    assert.ok(swapped, 'Tausch ausgelöst');
+    assert.deepEqual(fs.readdirSync(t.outside), ['opfer'], 'nichts im Ziel des Verweises');
+    assert.equal(fs.readFileSync(path.join(`${t.cfgH}.alt`, 'a.json'), 'utf8'), t.NEW, 'im ursprünglichen Ordner geschrieben');
+  } finally {
+    fs.openSync = realOpen;
+    fs.rmSync(t.tmp, { recursive: true, force: true });
+  }
+});

@@ -17,7 +17,6 @@
 // andere (geänderte Werte, in .dist entfernte Felder) bleibt bewusst deine
 // Entscheidung und wird nur angezeigt.
 
-import fs from 'node:fs';
 import path from 'node:path';
 
 // Reine Helfer — unit-testbar, ohne fs.
@@ -69,38 +68,55 @@ export function mergeAdditions(active, dist) {
 }
 
 // CLI
+// Läuft meist als root im Ordner des Dienstbenutzers: nur im echten Ordner
+// (inode-geprüft), ohne Verweisen zu folgen (Gegenprüfung ad70a264, P3).
 if (import.meta.url === `file://${process.argv[1]}`) {
+  const { inRealDir, readNoFollow, writeNoFollow } = await import('./reconcile-vendor-profiles.mjs');
   const args = process.argv.slice(2);
   const name = args.find((a) => !a.startsWith('--'));
   const apply = args.includes('--apply-additions');
   const configDir = process.env.CONFIG_DIR || '/etc/dvhub';
-  if (!name) { console.error('usage: vendor-profile-diff.mjs <name.json> [--apply-additions]'); process.exit(2); }
-  const active = path.join(configDir, 'hersteller', name);
-  const dist = `${active}.dist`;
-  for (const f of [active, dist]) if (!fs.existsSync(f)) { console.error(`nicht gefunden: ${f}`); process.exit(1); }
-  const A = JSON.parse(fs.readFileSync(active, 'utf8'));
-  const D = JSON.parse(fs.readFileSync(dist, 'utf8'));
-  const { added, removed, changed } = classifyDiff(A, D);
-
-  console.log(`\nHerstellerprofil ${name}: aktiv  vs  ${name}.dist (neue Version)\n`);
-  console.log(`  NEU in der neuen Version (sicher übernehmbar): ${added.length}`);
-  for (const x of added) console.log(`    + ${x.path} = ${JSON.stringify(x.dist)}`);
-  console.log(`\n  DEINE Anpassung, in neuer Version anders (bleibt — du entscheidest): ${changed.length}`);
-  for (const x of changed) console.log(`    ~ ${x.path}: deins=${JSON.stringify(x.active)}  neu=${JSON.stringify(x.dist)}`);
-  console.log(`\n  NUR bei dir (in neuer Version nicht mehr vorhanden): ${removed.length}`);
-  for (const x of removed) console.log(`    - ${x.path} = ${JSON.stringify(x.active)}`);
-
-  if (!apply) {
-    console.log(`\nNur angezeigt. Zum Übernehmen der ${added.length} neuen Felder (deine Anpassungen bleiben):`);
-    console.log(`  node scripts/vendor-profile-diff.mjs ${name} --apply-additions`);
-    process.exit(0);
+  if (!name || !/^[A-Za-z0-9._-]+\.json$/.test(name) || name.startsWith('.')) {
+    console.error('usage: vendor-profile-diff.mjs <name.json> [--apply-additions]'); process.exit(2);
   }
-  if (added.length === 0) { console.log('\nNichts Neues zu übernehmen.'); process.exit(0); }
-  const { merged, addedTopLevel } = mergeAdditions(A, D);
-  const bak = `${active}.bak-${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}`;
-  fs.copyFileSync(active, bak);
-  fs.writeFileSync(active, JSON.stringify(merged, null, 2) + '\n');
-  console.log(`\n✓ Übernommen: ${addedTopLevel.join(', ')}`);
-  console.log(`  Backup: ${bak}`);
-  console.log(`  DVhub neu starten, damit das Profil geladen wird:  systemctl restart dvhub`);
+  const herstellerDir = path.resolve(configDir, 'hersteller');
+  let rc = 0;
+  try {
+    inRealDir(herstellerDir, () => {
+      const bufA = readNoFollow(name);
+      const bufD = readNoFollow(`${name}.dist`);
+      for (const [buf, f] of [[bufA, name], [bufD, `${name}.dist`]]) {
+        if (!buf) { console.error(`nicht gefunden oder ein Verweis: ${path.join(herstellerDir, f)}`); rc = 1; return; }
+      }
+      const A = JSON.parse(bufA.toString('utf8'));
+      const D = JSON.parse(bufD.toString('utf8'));
+      const { added, removed, changed } = classifyDiff(A, D);
+
+      console.log(`\nHerstellerprofil ${name}: aktiv  vs  ${name}.dist (neue Version)\n`);
+      console.log(`  NEU in der neuen Version (sicher übernehmbar): ${added.length}`);
+      for (const x of added) console.log(`    + ${x.path} = ${JSON.stringify(x.dist)}`);
+      console.log(`\n  DEINE Anpassung, in neuer Version anders (bleibt — du entscheidest): ${changed.length}`);
+      for (const x of changed) console.log(`    ~ ${x.path}: deins=${JSON.stringify(x.active)}  neu=${JSON.stringify(x.dist)}`);
+      console.log(`\n  NUR bei dir (in neuer Version nicht mehr vorhanden): ${removed.length}`);
+      for (const x of removed) console.log(`    - ${x.path} = ${JSON.stringify(x.active)}`);
+
+      if (!apply) {
+        console.log(`\nNur angezeigt. Zum Übernehmen der ${added.length} neuen Felder (deine Anpassungen bleiben):`);
+        console.log(`  node scripts/vendor-profile-diff.mjs ${name} --apply-additions`);
+        return;
+      }
+      if (added.length === 0) { console.log('\nNichts Neues zu übernehmen.'); return; }
+      const { merged, addedTopLevel } = mergeAdditions(A, D);
+      const bak = `${name}.bak-${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}`;
+      writeNoFollow(bak, bufA);
+      writeNoFollow(name, JSON.stringify(merged, null, 2) + '\n');
+      console.log(`\n✓ Übernommen: ${addedTopLevel.join(', ')}`);
+      console.log(`  Backup: ${path.join(herstellerDir, bak)}`);
+      console.log(`  DVhub neu starten, damit das Profil geladen wird:  systemctl restart dvhub`);
+    });
+  } catch (e) {
+    console.error(`abgebrochen: ${e.message}`);
+    rc = 1;
+  }
+  process.exit(rc);
 }
