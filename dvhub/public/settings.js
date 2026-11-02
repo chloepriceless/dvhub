@@ -494,7 +494,8 @@ if (typeof globalThis !== 'undefined') {
     removePricingPeriod,
     serializePricingPeriods,
     validatePricingPeriods,
-    tariffProviderStatsText
+    tariffProviderStatsText,
+    tariffProviderStatsCacheHit
   };
 }
 
@@ -3020,7 +3021,11 @@ function tariffProviderBlockHtml(uep) {
 // Gewählter Zeitraum und letztes Ergebnis: Die Einstellungen zeichnen den Block
 // beim Laden mehrfach neu — nicht jedes Mal neu abfragen (eine Minute gültig).
 let tariffProviderStatsDays = '30';
-let tariffProviderStatsCache = null;   // { days, at, data }
+let tariffProviderStatsCache = null;   // { provider, days, at, data }
+
+function tariffProviderStatsCacheHit(cache, provider, days, nowMs) {
+  return !!cache && cache.provider === provider && cache.days === days && nowMs - cache.at < 60_000;
+}
 
 // Auswertung Anbieterpreis ↔ Day-Ahead (Christin 01.11.2026, /api/tariff-provider/stats):
 // LichtBlick rechnet IDA1 × Risikofaktor + feste Umlagen, Tibber Day-Ahead +
@@ -3078,27 +3083,30 @@ function bindTariffProviderBlock(section, uep) {
   apiFetch('/api/tariff-provider').then((r) => r.json()).then((data) => show(tariffProviderStateText(data?.state))).catch(() => show('Stand nicht abrufbar.'));
   const statsEl = section.querySelector('[data-tariff-provider-stats]');
   const statsDays = section.querySelector('[data-tariff-provider-stats-days]');
-  const loadStats = () => {
+  const statsProvider = uep?.provider?.name || '';
+  const loadStats = ({ fresh = false } = {}) => {
     if (!statsEl) return;
     const days = statsDays?.value || '30';
     tariffProviderStatsDays = days;
     statsEl.style.whiteSpace = 'pre-line';
-    const cached = tariffProviderStatsCache;
-    if (cached && cached.days === days && Date.now() - cached.at < 60_000) {
-      Promise.resolve(cached.data).then((data) => { statsEl.textContent = tariffProviderStatsText(data); });
+    // Nur die Antwort zum aktuell gewählten Zeitraum anzeigen (eine langsame
+    // ältere Abfrage überschreibt keine neuere).
+    const showIfCurrent = (data) => { if ((statsDays?.value || '30') === days) statsEl.textContent = tariffProviderStatsText(data); };
+    if (!fresh && tariffProviderStatsCacheHit(tariffProviderStatsCache, statsProvider, days, Date.now())) {
+      Promise.resolve(tariffProviderStatsCache.data).then(showIfCurrent);
       return;
     }
     statsEl.textContent = 'Auswertung wird geladen …';
     const request = apiFetch(`/api/tariff-provider/stats?days=${encodeURIComponent(days)}`)
       .then((r) => r.json())
       .catch(() => null);
-    tariffProviderStatsCache = { days, at: Date.now(), data: request };
+    tariffProviderStatsCache = { provider: statsProvider, days, at: Date.now(), data: request };
     request.then((data) => {
       if (!data?.ok && tariffProviderStatsCache?.data === request) tariffProviderStatsCache = null;
-      statsEl.textContent = tariffProviderStatsText(data);
+      showIfCurrent(data);
     });
   };
-  statsDays?.addEventListener('change', loadStats);
+  statsDays?.addEventListener('change', () => loadStats());
   loadStats();
   section.querySelectorAll('[data-tariff-provider-action]').forEach((button) => {
     button.addEventListener('click', async () => {
@@ -3118,6 +3126,7 @@ function bindTariffProviderBlock(section, uep) {
           const res = await apiFetch('/api/tariff-provider/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
           const data = await res.json();
           show(data.ok ? tariffProviderStateText(data.state) : `Fehlgeschlagen: ${data.error || data.code || 'unbekannt'}`);
+          if (data.ok) loadStats({ fresh: true });
         }
       } catch (error) {
         show(`Fehlgeschlagen: ${error.message}`);

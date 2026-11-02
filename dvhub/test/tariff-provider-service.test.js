@@ -354,3 +354,43 @@ test('Auswertung: Anbieterpreis des eingestellten Anbieters gegen Day-Ahead, Zei
   const none = await createTariffProviderService({ ...ctx, telemetryStore: {} }, { now: () => now }).stats();
   assert.deepEqual({ ok: none.ok, code: none.code }, { ok: false, code: 'no_store' });
 });
+
+// Gegenprüfung 24884430 (P3): Abruf vor dem Laden aus der Datenbank (Start,
+// Knopf „Jetzt abrufen“) darf Abrufzeit und Vorwert nicht überschreiben.
+test('Ablage: Abruf vor dem Laden aus der Datenbank lädt erst, schreibt dann nur Neues', async () => {
+  const { ctx, written } = makeCtx();
+  const stored = dayPrices('2026-11-01');
+  ctx.telemetryStore.listSeriesSamples = async () => stored.map((s) => ({
+    ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh
+  }));
+  const svc = createTariffProviderService(ctx, {
+    now: () => Date.parse('2026-11-01T10:00:00Z'),
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
+  });
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96, 'nur morgen ist neu');
+});
+
+test('Ablage: Datenbank nicht lesbar → nicht schreiben, beim nächsten Abruf nachholen', async () => {
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const { ctx, written } = makeCtx();
+  const stored = dayPrices('2026-11-01');
+  let readable = false;
+  ctx.telemetryStore.listSeriesSamples = async () => {
+    if (!readable) throw new Error('db weg');
+    return stored.map((s) => ({ ts: new Date(s.ts).toISOString(), source: 'lichtblick', resolutionSeconds: 900, value: s.ctKwh }));
+  };
+  const svc = createTariffProviderService(ctx, {
+    now: () => now,
+    fetchLichtblick: async () => ({ provider: 'lichtblick', account: null, slots: [...stored, ...dayPrices('2026-11-02', 20)] })
+  });
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 0, 'ohne Abgleich kein Schreiben');
+  readable = true;
+  now += HOUR;
+  await svc.refresh();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(written.length, 96);
+});

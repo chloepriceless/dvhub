@@ -280,6 +280,9 @@ export function createTariffProviderService(ctx, deps = {}) {
   // erfolgreichen Schreiben — scheitert es, folgt es beim nächsten Abruf.
   function writeSamples(provider, slots, priceBasis) {
     if (!slots.length || typeof ctx.telemetrySafeWrite !== 'function') return null;
+    // Datenbank lesbar, aber noch nicht abgeglichen (Lesen gescheitert): nicht
+    // blind schreiben — der nächste Abruf lädt erneut und holt es nach.
+    if (!st.dbLoaded && typeof ctx.telemetryStore?.listSeriesSamples === 'function') return null;
     const nowMs = now();
     for (const key of [...persisted.keys()]) {
       if (Number(key.slice(key.lastIndexOf('|') + 1)) < nowMs - PERSISTED_KEEP_MS) persisted.delete(key);
@@ -321,6 +324,11 @@ export function createTariffProviderService(ctx, deps = {}) {
     st.running = true;
     const hadTomorrow = hasTomorrow(nowMs);
     try {
+      // Erst abgleichen, was schon in der Datenbank steht (Abruf beim Start
+      // oder per Knopf vor dem Laden): sonst bekämen unveränderte Preise eine
+      // neue Abrufzeit und geänderte keinen Vorwert. Vor dem Abruf, damit die
+      // geladenen Preise die frischen im Speicher nicht überschreiben.
+      if (!st.dbLoaded && typeof ctx.telemetryStore?.listSeriesSamples === 'function') await loadFromDb();
       const result = await clients[s.name](s);
       const slots = result.slots || [];
       putProviderSlots(s.name, slots);

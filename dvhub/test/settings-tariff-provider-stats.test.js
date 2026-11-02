@@ -47,3 +47,15 @@ test('Auswertung: Lesart „nur Energiepreis netto“ ohne MwSt-Umrechnung', () 
   assert.match(text, /Tibber Ø 12,00 ct\/kWh netto/);
   assert.doesNotMatch(text, /brutto:/);
 });
+
+// Gegenprüfung 24884430 (P3): Zwischenspeicher gilt nur für denselben Anbieter
+// und Zeitraum und höchstens eine Minute.
+test('Zwischenspeicher: Anbieter und Zeitraum gehören zum Schlüssel', () => {
+  const { tariffProviderStatsCacheHit } = loadHelpers();
+  const cache = { provider: 'tibber', days: '30', at: 1_000_000, data: {} };
+  assert.equal(tariffProviderStatsCacheHit(cache, 'tibber', '30', 1_030_000), true);
+  assert.equal(tariffProviderStatsCacheHit(cache, 'lichtblick', '30', 1_030_000), false, 'Anbieter gewechselt');
+  assert.equal(tariffProviderStatsCacheHit(cache, 'tibber', '7', 1_030_000), false);
+  assert.equal(tariffProviderStatsCacheHit(cache, 'tibber', '30', 1_061_000), false, 'nach einer Minute');
+  assert.equal(tariffProviderStatsCacheHit(null, 'tibber', '30', 1_030_000), false);
+});
