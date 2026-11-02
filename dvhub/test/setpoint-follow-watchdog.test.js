@@ -446,6 +446,8 @@ test('tick(): langsamer Auswertungstakt (evaluateMs 300 s) hält das Halte-Signa
     if (t % 300000 === 0) state.ctrl.eosGridHold = { at: now, known: true, valueW: 0 };
     state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now };
     watchdog.tick(now);
+    // Jeder Punkt ist gewolltes Halten — keiner darf ins Fenster (Gegenprüfung 01f4558b).
+    assert.equal(watchdog._state().window.length, 0, `t=${t}`);
   }
   assert.equal(sent.length, 0);
 });
@@ -522,4 +524,68 @@ test('Entwarn-Protokoll trägt die Fensterwerte', () => {
   assert.ok(cleared);
   assert.equal(typeof cleared[1].sharePct, 'number');
   assert.equal(typeof cleared[1].avgImportW, 'number');
+});
+
+// --- Gegenprüfung ae1cd3d7 ----------------------------------------------------
+
+test('keine Entwarnung bei geringem Bezug, solange der Akku steht (Nacht-Grundlast)', () => {
+  const state = createSetpointFollowState();
+  feed(state, { toMs: OPTS.holdMs, stepMs: 5000, sample: STUCK });
+  assert.equal(state.active, true);
+  const from = OPTS.holdMs + 5000;
+  const transitions = feed(state, { fromMs: from, toMs: from + OPTS.holdMs, stepMs: 5000, sample: { ...STUCK, netImportW: 200 } });
+  assert.deepEqual(transitions, []);
+  assert.equal(state.active, true);
+});
+
+test('keine Entwarnung über Mittelwerte allein (Wolken: 60 % Bezug, 40 % Einspeisung, Akku steht)', () => {
+  const state = createSetpointFollowState();
+  feed(state, { toMs: OPTS.holdMs, stepMs: 5000, sample: STUCK });
+  const from = OPTS.holdMs + 5000;
+  const transitions = feed(state, {
+    fromMs: from, toMs: from + 3 * OPTS.holdMs, stepMs: 5000,
+    sample: (t) => (((t - from) % 100000) < 60000 ? STUCK : { ...STUCK, netImportW: -3000 })
+  });
+  assert.equal(transitions.some(([n]) => n === 'clear'), false);
+});
+
+test('Entwarnung, wenn der Akku nach dem Alarm wieder lädt bzw. entlädt (echte Erholung)', () => {
+  const state = createSetpointFollowState();
+  feed(state, { toMs: OPTS.holdMs, stepMs: 5000, sample: STUCK });
+  const from = OPTS.holdMs + 5000;
+  // Muster 02.11.: Akku lädt aus PV, Bezug ~0, alle 90 s eine kurze Spitze.
+  const transitions = feed(state, {
+    fromMs: from, toMs: from + 2 * OPTS.holdMs, stepMs: 5000,
+    sample: (t) => (((t - from) % 90000) < 20000 ? SPIKE_0211 : CALM_0211)
+  });
+  assert.deepEqual(transitions.map(([n]) => n), ['clear']);
+});
+
+test('eine einzelne Spitze verkürzt die nötige Episode nicht auf 8 min', () => {
+  const state = createSetpointFollowState();
+  feed(state, { toMs: OPTS.holdMs, stepMs: 5000, sample: OK_PT });
+  const t0 = OPTS.holdMs + 5000;
+  const transitions = feed(state, {
+    fromMs: t0, toMs: t0 + 715000, stepMs: 5000,
+    sample: (t) => (t === t0 || t >= t0 + 120000 ? STUCK : OK_PT)
+  });
+  assert.deepEqual(transitions, [], 'Block ab t0+120 s braucht bis t0+720 s');
+});
+
+test('tick(): meterPollMs 60 s — Lückengrenze aus der Konfiguration, Alarm kommt', () => {
+  const sent = [];
+  const state = {
+    meter: { ok: true },
+    victron: { gridSetpointW: -100, gridImportW: 1800, gridExportW: 0, batteryPowerW: 0, soc: 70, minSocPct: 5 }
+  };
+  const watchdog = createSetpointFollowWatchdog({
+    state, getCfg: () => ({ meterPollMs: 60000 }), pushLog: () => {},
+    notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
+  });
+  for (let t = 0; t <= OPTS.holdMs + 3 * 61000; t += 61000) {
+    const now = T0 + t;
+    state.victron.fieldUpdatedAt = { gridSetpointW: now, batteryPowerW: now, soc: now };
+    watchdog.tick(now);
+  }
+  assert.equal(sent.length, 1);
 });

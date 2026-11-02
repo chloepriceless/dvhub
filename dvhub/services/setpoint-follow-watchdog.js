@@ -19,9 +19,10 @@
 //   • und das prägt ein ganzes Fenster von holdMs: die Episode reicht bis an den
 //     Fensteranfang und liegt gerade an, mindestens minSuspectShare (80 %) der
 //     Messpunkte sind auffällig UND im Mittel des Fensters erreichen Netzbezug
-//     und Fehlbetrag (Bezug − Sollwert) die Schwellen. Entwarnung nach clearMs
-//     ohne auffälligen Punkt oder clearMs deutlicher Erholung im Fenster
-//     (Anteil < 40 % oder Mittel unter den Schwellen).
+//     und Fehlbetrag (Bezug − Sollwert) die Schwellen; das gilt in jedem Viertel
+//     des Fensters. Entwarnung nur mit Beleg (Akku entlädt, oder lädt bei
+//     geringem Bezug): clearMs lang nur solche Punkte, oder clearMs lang ein
+//     Fenster mit < 40 % auffälligen und ≥ 50 % belegenden Punkten.
 //
 // FEHLALARM 02.11.2026 10:50 UTC: Sollwert −100 W, im 5-min-Mittel 29–124 W
 // Bezug, Akku lädt — der Wechselrichter folgte. Kurze Laststöße (evcc schaltet
@@ -187,19 +188,32 @@ export function isRefusingDischarge(sample, opts) {
 }
 
 /**
+ * Belegt ein Punkt, dass der Speicher (wieder) folgt? Nur wenn der Akku
+ * wirklich entlädt, oder wenn er lädt und dabei kaum Netzbezug anliegt (PV-
+ * Überschuss geht in den Akku). Ein stehender Akku bei geringem Bezug oder bei
+ * Einspeisung belegt nichts (Gegenprüfung ae1cd3d7).
+ */
+function isRecoveryPoint(sample, refusing, opts) {
+  if (refusing) return false;
+  const batteryW = Number(sample.batteryW);
+  return batteryW <= -opts.idleW || (batteryW >= opts.idleW && Number(sample.netImportW) < opts.minImportW);
+}
+
+/**
  * Fenster-Bild über holdMs: Anteil auffälliger Punkte, Mittelwerte und ob die
- * Episode selbst schon holdMs dauert (der Punkt am Fensteranfang ist auffällig).
+ * Episode das ganze Fenster prägt.
  */
 function windowVerdict(state, now, opts) {
   const pts = state.anchor ? [state.anchor, ...state.window] : state.window;
   const empty = { covered: false, share: 0, avgImportW: 0, avgShortfallW: 0, failing: false, recovered: false, firstSuspectAt: null };
   if (!pts.length) return empty;
-  let bad = 0, imp = 0, short = 0, firstSuspectAt = null;
+  let bad = 0, good = 0, imp = 0, short = 0, firstSuspectAt = null;
   for (const p of pts) {
     if (p.refusing) {
       bad += 1;
       if (firstSuspectAt == null) firstSuspectAt = p.t;
     }
+    if (p.recovering) good += 1;
     imp += p.netImportW;
     short += p.netImportW - p.setpointW;
   }
@@ -208,17 +222,29 @@ function windowVerdict(state, now, opts) {
   const avgImportW = imp / n;
   const avgShortfallW = short / n;
   const start = pts[0];
-  const covered = (now - start.t) >= opts.holdMs;
+  const span = now - start.t;
+  const covered = span >= opts.holdMs;
   const current = pts[n - 1];
-  // Alarm: Fenster voll, die Episode reicht bis an den Fensteranfang, sie liegt
-  // gerade an, sie überwiegt, und auch im Mittel stimmen Bezug und Fehlbetrag.
-  const failing = covered && start.refusing && current.refusing
+  // Die Episode muss das GANZE Fenster prägen: in jedem Viertel überwiegt der
+  // Fehler — eine einzelne Spitze am Fensteranfang verkürzt sie nicht
+  // (Gegenprüfung ae1cd3d7).
+  let quartersOk = covered;
+  for (let q = 0; q < 4 && quartersOk; q += 1) {
+    const from = start.t + (span * q) / 4;
+    const to = q === 3 ? Infinity : start.t + (span * (q + 1)) / 4;
+    const inQ = pts.filter((p) => p.t >= from && p.t < to);
+    const qBad = inQ.filter((p) => p.refusing).length;
+    if (!inQ.length || qBad / inQ.length < opts.minSuspectShare) quartersOk = false;
+  }
+  // Alarm: Fenster voll, Episode vom Anfang bis jetzt, sie überwiegt überall,
+  // und auch im Mittel stimmen Bezug und Fehlbetrag.
+  const failing = quartersOk && start.refusing && current.refusing
     && share >= opts.minSuspectShare
     && avgImportW >= opts.minImportW && avgShortfallW >= opts.minShortfallW;
-  // Erholt (Hysterese zur Entwarnung): deutlich weniger auffällig ODER im
-  // Mittel unter den Schwellen — nicht schon, wenn der Anteil knapp unter 80 % fällt.
-  const recovered = covered && (share < opts.minSuspectShare / 2
-    || avgImportW < opts.minImportW || avgShortfallW < opts.minShortfallW);
+  // Erholt (Entwarnung über das Fenster): kaum noch auffällig UND mindestens die
+  // Hälfte der Punkte belegt, dass der Speicher folgt — Mittelwerte allein
+  // reichen nicht (Wolken, Grundlast).
+  const recovered = covered && share < opts.minSuspectShare / 2 && good / n >= 0.5;
   return { covered, share, avgImportW, avgShortfallW, failing, recovered, firstSuspectAt };
 }
 
@@ -248,22 +274,23 @@ export function evaluateSetpointFollow(state, sample, opts) {
     state.okSince = null;
     state.recoveredSince = null;
   }
+  const recovering = isRecoveryPoint(sample, refusing, opts);
   state.window.push({
-    t: now, refusing,
+    t: now, refusing, recovering,
     netImportW: Number(sample.netImportW), setpointW: Number(sample.setpointW)
   });
   // Älteres als holdMs fällt heraus; der jüngste herausgefallene Punkt bleibt Anker.
   while (state.window.length && state.window[0].t < now - opts.holdMs) state.anchor = state.window.shift();
 
+  // okSince: seit wann JEDER Punkt belegt, dass der Speicher folgt.
+  if (!recovering) state.okSince = null;
+  else if (state.okSince == null) state.okSince = now;
   if (refusing) {
-    state.okSince = null;
     state.last = {
       setpointW: Number(sample.setpointW), netImportW: Number(sample.netImportW),
       batteryW: Number(sample.batteryW), soc: Number(sample.soc),
       floorPct: dischargeFloorPct(sample, opts)
     };
-  } else if (state.okSince == null) {
-    state.okSince = now;
   }
 
   const verdict = windowVerdict(state, now, opts);
@@ -293,8 +320,8 @@ export function evaluateSetpointFollow(state, sample, opts) {
   } else {
     state.recoveredSince = null;
   }
-  // Entwarnung: clearMs ohne jeden auffälligen Punkt, oder das volle Fenster
-  // ist clearMs lang deutlich erholt (kurze Zacken halten keinen Alarm offen).
+  // Entwarnung: clearMs lang nur Belegpunkte, oder das volle Fenster ist
+  // clearMs lang deutlich erholt (kurze Zacken halten keinen Alarm offen).
   const okLong = state.okSince != null && (now - state.okSince) >= opts.clearMs;
   const recoveredLong = state.recoveredSince != null && (now - state.recoveredSince) >= opts.clearMs;
   if (okLong || recoveredLong) {

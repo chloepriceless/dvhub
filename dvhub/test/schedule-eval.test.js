@@ -1207,6 +1207,22 @@ test('Akku halten bei negativem Preis: Quelle wird negative_price_protection, da
   assert.equal(state.ctrl.eosGridHold?.known, true);
 });
 
+test('Akku halten, aber §14a ersetzt den Halte-Wert: kein Halte-Signal (Gegenprüfung 01f4558b)', async () => {
+  const { ctx, state } = holdCtx({ load: 3500, pv: 0 });
+  state.p14a = { active: true, limitW: 4200, source: 'eebus' };
+  state.ctrl.p14aBatteryGridW = 0;
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.schedule.active.gridSetpointW?.source, 'paragraph14a_limit');
+  assert.equal(state.ctrl.eosGridHold, null);
+});
+
+test('Akku halten, aber Not-Halt blockiert den Write: kein Halte-Signal (Gegenprüfung 01f4558b)', async () => {
+  const { ctx, state } = holdCtx({ load: 3500, pv: 0 });
+  state.ctrl.discretionaryWritesPaused = true;
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.ctrl.eosGridHold, null);
+});
+
 test('ohne Halteregel kein Halte-Signal (auch ein altes wird gelöscht)', async () => {
   const { ctx, state } = makeCtx({
     mutate: ({ state, cfg }) => {

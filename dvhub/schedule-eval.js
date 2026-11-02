@@ -1718,10 +1718,14 @@ export function createScheduleEvaluator(ctx) {
     }
 
     // Halte-Signal für den Entlade-Wächter (services/setpoint-follow-watchdog.js):
-    // der Halte-Zweig unten trägt sich hier ein; nach der Schleife ersetzt es das
-    // Signal des letzten Takts (null, wenn keine Halteregel lief). Eigenes Feld,
-    // weil die Quelle danach noch wechseln kann (negativer Preis → Pflichtquelle).
+    // der Halte-Zweig unten merkt sich den Halte-Wert; bestätigt wird er nur, wenn
+    // er auch geschrieben wurde — mit Quelle eos_grid_hold oder als Pin bei
+    // negativem Preis (Akku soll dabei ebenfalls stehen). Ersetzt ein anderer
+    // Pfad den Wert (§14a, Exportmodus, Not-Halt, gescheiterter Write), bleibt
+    // es null (Gegenprüfung 01f4558b). Nach der Schleife ersetzt es das Signal
+    // des letzten Takts.
     let eosGridHoldThisTick = null;
+    let eosGridHoldConfirmed = null;
     for (const target of ['gridSetpointW', 'chargeCurrentA']) {
       const eff = effectiveTargetValue(target);
       if (eff.value == null) continue;
@@ -1905,7 +1909,8 @@ export function createScheduleEvaluator(ctx) {
         // Netzladen wirtschaftlich richtig und keine Einspeisung — das eigene
         // Gate (allowGridCharge) entscheidet darüber, nicht der Abregelungspfad.
         if (eff.value <= 0) {
-          await applyControlTarget(target, limit, 'negative_price_protection');
+          const nppRes = await applyControlTarget(target, limit, 'negative_price_protection');
+          if (eosGridHoldThisTick && nppRes?.ok !== false) eosGridHoldConfirmed = eosGridHoldThisTick;
           continue;
         }
       }
@@ -1952,18 +1957,39 @@ export function createScheduleEvaluator(ctx) {
         continue;
       }
 
-      await applyControlTarget(target, eff.value, eff.source);
+      const writeRes = await applyControlTarget(target, eff.value, eff.source);
+      if (target === 'gridSetpointW' && eosGridHoldThisTick && eff.source === 'eos_grid_hold' && writeRes?.ok !== false) {
+        eosGridHoldConfirmed = eosGridHoldThisTick;
+      }
     }
-    state.ctrl.eosGridHold = eosGridHoldThisTick;
+    state.ctrl.eosGridHold = eosGridHoldConfirmed;
 
     // Peak Shaving Hebel 2 (Akku-Sperre bei Bezugsspitze). Läuft auch bei
     // ausgeschaltetem Feature: eine noch stehende Freigabe wird dann
     // zurückgenommen; ohne Freigabe schreibt der Takt nichts.
+    const readbackBefore = state.ctrl._peakShaving?.readback;
     try {
       await peakShavingDischargeTick();
     } catch (e) {
       pushLog('peak_shaving_error', { error: e?.message || String(e) }, 'warn');
     }
+    // Entlade-Wächter (Gegenprüfung 01f4558b): Steht DVhubs eigener letzter
+    // 2704-Schreibwert auf 0 (Entladung sperren), 2704 zurücklesen — das
+    // Victron-Profil pollt das Register bewusst nicht. Sonst gälte die gewollte
+    // Sperre nach kurzer Zeit als Fehler, bzw. eine an der GX aufgehobene als
+    // Sperre. Nur wenn Peak Shaving in diesem Takt nicht schon gelesen hat, und
+    // nicht für Peak-Shavings eigene Rückgabe der Sperre (peak_shaving_restore):
+    // nach dem Ausschalten liest Peak Shaving 2704 bewusst nicht mehr (563da829).
+    try {
+      const mdConf = cfg.controlWrite?.maxDischargeW;
+      const ownWrite = state.schedule.lastWrite?.maxDischargeW;
+      if (mdConf?.enabled && maxDischargeReadable(mdConf)
+          && Number(ownWrite?.value) === 0
+          && !String(ownWrite?.source || '').startsWith('peak_shaving')
+          && state.ctrl._peakShaving?.readback === readbackBefore) {
+        await readMaxDischargeForPeakShaving(mdConf);
+      }
+    } catch { /* nur Rücklesung — darf den Takt nie stören */ }
 
     // feedExcessDcPv: schedule-gesteuerte DC-Einspeisung (+ dontFeedExcessAcPv invers)
     if (cfg.dvControl?.enabled) {
