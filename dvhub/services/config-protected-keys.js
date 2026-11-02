@@ -20,8 +20,16 @@
 //                                      (eHive-Umzug 2026-10-03: Datenspende
 //                                      und Ortsnetz standen danach auf aus)
 
+//
+// Dazu (Strix L-0006, 30.10.2026): licensing.* ist Lizenz-Infrastruktur
+// (Keygen-Konto, Aktivierungs-Proxy, Node-Lock). Bis 30.10. ließ sich darüber
+// per POST /api/config die Adresse umbiegen, an die DVhub den Lizenzschlüssel
+// schickt. Diese Schlüssel ändert weder Speichern noch Import — auch kein
+// Geräte-Tausch; nur wer die config.json auf der Box selbst bearbeitet.
+
 export const BOX_BOUND_KEYS = Object.freeze(['installerPortal', 'datenspende', 'mobileLink']);
-export const OWN_ROUTE_KEYS = Object.freeze([...BOX_BOUND_KEYS, 'ortsnetz']);
+export const LOCKED_KEYS = Object.freeze(['licensing']);
+export const OWN_ROUTE_KEYS = Object.freeze([...BOX_BOUND_KEYS, 'ortsnetz', ...LOCKED_KEYS]);
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -37,8 +45,9 @@ const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 export function protectOwnRouteKeys(incoming, current, { isImport = false } = {}) {
   const carried = {};
   for (const key of OWN_ROUTE_KEYS) {
-    if (isImport && isObject(incoming[key])) carried[key] = clone(incoming[key]);
-    if (isImport && !BOX_BOUND_KEYS.includes(key)) continue;
+    const locked = LOCKED_KEYS.includes(key);
+    if (isImport && !locked && isObject(incoming[key])) carried[key] = clone(incoming[key]);
+    if (isImport && !locked && !BOX_BOUND_KEYS.includes(key)) continue;
     const cur = current?.[key];
     if (cur === undefined) delete incoming[key];
     else incoming[key] = clone(cur);

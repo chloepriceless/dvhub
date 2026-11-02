@@ -28,6 +28,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { EOS_REMOTE_PROFILE, EOS_REMOTE_DEVICE_TEMPLATES } from './eos-remote-profile.js';
 import { EOS_RUN_TIMEOUT_MS } from './eos-run-trigger.js';
+import { classifyHost, isPrivateOrLoopbackHost } from '../host-address.js';
 
 // Die Pfade, die der Dienst annimmt — in der Reihenfolge, in der EOS sie
 // braucht. Alles andere (ems/interval, ems/mode, measurement/historic_hours,
@@ -101,14 +102,6 @@ export function remoteSettings(cfg) {
   };
 }
 
-function isPrivateHost(host) {
-  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h === '::1') return true;
-  const parts = h.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-  return parts[0] === 127 || parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168);
-}
-
 /**
  * Darf DVhub diese Adresse als Rechendienst ansprechen? https zu jedem Host,
  * http nur im eigenen Netz (Test, Runner im LAN). Keine Zugangsdaten in der URL
@@ -119,7 +112,38 @@ export function isAllowedRemoteEndpoint(raw) {
   try { u = new URL(String(raw || '').trim()); } catch { return false; }
   if (u.username || u.password) return false;
   if (u.protocol === 'https:') return true;
-  return u.protocol === 'http:' && isPrivateHost(u.hostname);
+  // Eine Definition von „eigenes Netz“ für alle Prüfungen (host-address.js,
+  // kennt auch IPv6 in Klammern und IPv4-gemappte Adressen).
+  return u.protocol === 'http:' && isPrivateOrLoopbackHost(u.hostname);
+}
+
+// Strix L-0006 (Geschwister-Weg, 30.10.2026): zu jedem Auftrag gehen
+// Lizenzschlüssel und Machine-File an den Rechendienst. Dessen Adresse ist
+// eine normale Einstellung — wer /api/config schreiben darf (unter
+// lanTrust='open' jedes Gerät im Heimnetz), hätte sich den Nachweis an einen
+// eigenen https-Server schicken lassen können. Der Nachweis geht deshalb nur an
+//   - https, ohne Zugangsdaten in der URL,
+//   - keinen internen Host (Box selbst, Heimnetz, link-local, 0-Adresse),
+//   - einen Host unter dvhub.de — oder einen, den die Box über die Umgebung
+//     freigibt (DVHUB_EOS_REMOTE_TRUSTED_HOSTS, kommagetrennt; nur mit
+//     Zugang zur Box setzbar, nicht über die Weboberfläche),
+// und Weiterleitungen werden nicht verfolgt (redirect: 'error').
+export const TRUSTED_PROOF_DOMAIN = 'dvhub.de';
+
+function trustedHostsFromEnv() {
+  return String(process.env.DVHUB_EOS_REMOTE_TRUSTED_HOSTS || '')
+    .split(',').map((h) => h.trim().toLowerCase().replace(/\.$/, '')).filter(Boolean);
+}
+
+/** Darf der Lizenznachweis an diese Dienst-Adresse gehen? */
+export function isTrustedProofEndpoint(raw, extraHosts = trustedHostsFromEnv()) {
+  let u;
+  try { u = new URL(String(raw || '').trim()); } catch { return false; }
+  if (u.protocol !== 'https:' || u.username || u.password) return false;
+  if (!['public', 'name'].includes(classifyHost(u.hostname))) return false;
+  const host = u.hostname.toLowerCase().replace(/\.$/, '');
+  if (host === TRUSTED_PROOF_DOMAIN || host.endsWith(`.${TRUSTED_PROOF_DOMAIN}`)) return true;
+  return extraHosts.includes(host);
 }
 
 /** EOS-Stand, den diese DVhub-Fassung erwartet (eos-version.env, EOS_PIN). */
@@ -204,7 +228,7 @@ function localEos(baseUrl, method, pathname, body, timeoutMs) {
 export function createEosRemoteFacade({
   getCfg, getLicenceProof, saveToken, state, pushLog = () => {},
   eosVersion = DEFAULT_REMOTE_EOS_VERSION, fetchImpl = fetch, now = () => Date.now(),
-  localRequest = localEos,
+  localRequest = localEos, proofEndpointTrusted = isTrustedProofEndpoint,
 }) {
   const startedAt = new Date().toISOString();
   const config = new Map();       // Pfad → Wert (Reihenfolge des ersten Eintreffens)
@@ -340,7 +364,8 @@ export function createEosRemoteFacade({
     if (token) headers.Authorization = `Bearer ${token}`;
     let res;
     try {
-      res = await fetchImpl(rs.endpoint + p, { method, headers, body: payload, signal: AbortSignal.timeout(timeoutMs) });
+      // Keine Weiterleitung: Lizenznachweis und Token gehen nur an rs.endpoint.
+      res = await fetchImpl(rs.endpoint + p, { method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
     } catch (e) {
       const timeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
       throw new RemoteError(timeout ? 'service_timeout' : 'service_unreachable', timeout ? 'Rechendienst antwortet nicht' : 'Rechendienst nicht erreichbar');
@@ -374,6 +399,9 @@ export function createEosRemoteFacade({
 
   async function runRemote(body, cfg, rs, deadlineAt) {
     if (!rs.endpoint) throw new RemoteError('no_endpoint', 'Keine Adresse des Rechendienstes eingestellt');
+    if (!proofEndpointTrusted(rs.endpoint)) {
+      throw new RemoteError('endpoint_not_trusted', 'Lizenznachweis nur an einen Rechendienst unter https://….dvhub.de (Adresse prüfen)');
+    }
     const proof = getLicenceProof?.() || null;
     if (!proof?.licenseKey || !proof?.machineFile) throw new RemoteError('licence_missing', 'Keine aktive Pro-Lizenz mit Machine-File auf dieser Box');
     const job = {

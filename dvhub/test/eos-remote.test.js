@@ -102,6 +102,9 @@ async function startFacade(cfg, over = {}) {
     state,
     pushLog: () => {},
     eosVersion: 'v0.4.0rc3',
+    // Der Fake-Dienst läuft auf http://127.0.0.1 — ab Werk bekäme er keinen
+    // Lizenznachweis (Strix L-0006, test/eos-remote-lizenznachweis.test.js).
+    proofEndpointTrusted: () => true,
     ...over,
   });
   const url = await facade.start();

@@ -70,3 +70,22 @@ test('mobileLink bleibt beim Speichern und beim Import „nur Einstellungen“',
   applyCarriedKeys(imp, carried);
   assert.equal(imp.mobileLink.relayUrl, 'wss://alt.example.org/v1/ws');
 });
+
+// Strix L-0006 (30.10.2026): licensing.* (Keygen-Konto, Aktivierungs-Proxy,
+// Node-Lock) ist Lizenz-Infrastruktur. Weder Speichern noch Import — auch kein
+// Geräte-Tausch — dürfen sie ändern; sonst ließe sich der Lizenzschlüssel per
+// POST /api/config an einen fremden Server umleiten.
+test('licensing bleibt beim Speichern, beim Import und beim Geräte-Tausch wie auf der Box', () => {
+  const cur = { licensing: { keygenAccount: 'acct', nodeLock: false } };
+  const evil = () => ({ licensing: { keygenAccount: 'acct', activationProxyUrl: 'https://evil.example.net/x', nodeLock: false } });
+  const save = evil();
+  protectOwnRouteKeys(save, cur);
+  assert.deepEqual(save.licensing, cur.licensing);
+  const imp = evil();
+  const carried = protectOwnRouteKeys(imp, cur, { isImport: true });
+  applyCarriedKeys(imp, carried);
+  assert.deepEqual(imp.licensing, cur.licensing);
+  const fresh = evil();
+  protectOwnRouteKeys(fresh, {});
+  assert.equal('licensing' in fresh, false, 'ohne eigenen Eintrag gelten die Werte aus dem Code');
+});

@@ -1151,3 +1151,26 @@ describe('E-Auto-Quellen: URL-Pruefung beim Speichern', () => {
     });
   }
 });
+
+// Strix L-0006 (30.10.2026): licensing.activationProxyUrl ließ sich per
+// POST /api/config auf einen fremden Server setzen — danach ging der
+// Lizenzschlüssel beim nächsten Binden dorthin. licensing.* ist jetzt wie die
+// anderen Schlüssel mit eigenen Wegen geschützt, auch beim Import.
+describe('licensing.* ist über /api/config und Import nicht änderbar', () => {
+  for (const route of ['/api/config', '/api/config/import']) {
+    it(`${route}: licensing bleibt, wie die Box es hat`, async () => {
+      const raw = { licensing: { keygenAccount: 'acct-box' } };
+      const saved = [];
+      const ctx = mockCtx({ getRawCfg: () => raw, saveAndApplyConfig: (next) => { saved.push(next); return { ok: true }; } });
+      const routes = createApiRoutes(ctx);
+      const res = mockRes();
+      await routes.handleRequest(
+        makeReq('POST', route, { config: { licensing: { keygenAccount: 'acct-evil', activationProxyUrl: 'https://evil.example.net/x', nodeLockedPolicyIds: [] } } }),
+        res,
+        new URL(`http://localhost${route}`)
+      );
+      assert.ok(saved.length >= 1, `gespeichert (${res._captured.status} ${res._captured.body})`);
+      assert.deepEqual(saved.at(-1).licensing, raw.licensing);
+    });
+  }
+});
