@@ -103,6 +103,7 @@
           <span>100%</span>
         </div>
         <div class="rail-row"><span class="l">Akku-Leistung</span><strong class="v" id="batP">&mdash;</strong></div>
+        <div class="rail-row" id="gridShareRow" hidden title="Virtueller Zähler: so viel Netzstrom steckt durch Netzladen im Akku. Entladen senkt ihn anteilig (Anteil × Entladung). Solange er über der Schwelle liegt, gibt der Akku nichts ins Netz ab — kein Netzstrom mit Marktprämie. PV-Einspeisung bleibt."><span class="l">davon Netzstrom</span><strong class="v" id="gridShare">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Grid Setpoint</span><strong class="v" id="gridSetpoint">&mdash;</strong></div>
         <div class="rail-row rail-row-action" id="minSocRow" role="button" tabindex="0" aria-expanded="false" aria-controls="minSocEditor" data-leit="adv">
           <span class="l">Minimum-SOC <small class="rail-row-hint">Anpassen</small></span>
@@ -615,7 +616,7 @@
 <script src="/second-gx-view.js?v=20261021"></script>
 <script src="/eos-plan-summary.js?v=20261102-beschriftungen"></script>
 <script src="/peak-shaving-view.js?v=20261026"></script>
-<script src="/app.js?v=20261029-integration"></script>
+<script src="/app.js?v=20261102-netzstrom"></script>
 <script src="/leitstand-charts.js?v=20261102-energiebilanz-lastwarnung"></script>
 <script src="/ev-weekly-editor.js?v=20261027"></script>
 <script src="/ev-tile.js?v=20261027-wochenplan"></script>

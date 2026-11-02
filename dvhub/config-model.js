@@ -2324,7 +2324,7 @@ function buildFieldDefinitions() {
       path: 'optimizer.gridChargeWithoutMispel',
       label: '⚠️ Netzladen auch ohne Pauschal-/Abgrenzungsoption (eigene Verantwortung)',
       type: 'boolean',
-      help: 'Mit PV-Anlage lädt DVhub den Akku sonst nur dann aus dem Netz, wenn die MiSpeL-Pauschal- oder Abgrenzungsoption gilt. Dieser Schalter hebt die Sperre bewusst auf — z. B. um den Speicher im Winter mit günstigem Netzstrom (dynamischer Tarif, §14a Modul 3) zu nutzen, solange die Optionen noch nicht verfügbar sind. Risiko: Netzstrom im Akku vermischt sich mit PV-Strom; wird gemischter Strom eingespeist, kann für diese Menge die EEG-Förderung bzw. Marktprämie gefährdet sein. Wirkt nur zusammen mit „Netzladen erlaubt“.'
+      help: 'Mit PV-Anlage lädt DVhub den Akku sonst nur dann aus dem Netz, wenn die MiSpeL-Pauschal- oder Abgrenzungsoption gilt. Dieser Schalter hebt die Sperre bewusst auf — z. B. um den Speicher im Winter mit günstigem Netzstrom (dynamischer Tarif, §14a Modul 3) zu nutzen, solange die Optionen noch nicht verfügbar sind. Risiko: Netzstrom im Akku vermischt sich mit PV-Strom; wird gemischter Strom eingespeist, kann für diese Menge die EEG-Förderung bzw. Marktprämie gefährdet sein. Deshalb zählt DVhub den Netzstrom im Akku mit (Leitstand: „davon Netzstrom“, Historie: Protokoll) und sperrt die Einspeisung aus dem Akku, solange mehr als 0,1 kWh Netzstrom darin steckt — PV-Einspeisung bleibt. Wirkt nur zusammen mit „Netzladen erlaubt“.'
     },
     {
       section: 'schedule',

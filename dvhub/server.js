@@ -193,6 +193,8 @@ import { createVehiclePull } from './services/vehicle-pull/index.js';
 import { resolveEvPlugged, createEvSocMemory } from './services/optimizer/ev-soc.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { energyBalanceBattery } from './services/energy-balance-battery.js';
+import { createGridShareTracker } from './services/optimizer/grid-share.js';
+import { planningCfg as gridSharePlanningCfg, planningSocPct as gridSharePlanningSocPct } from './services/multi-gx/planning.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
@@ -877,6 +879,8 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     // Kachel „Überschuss / Defizit“: Akku wie EOS ihn sieht (Kapazität,
     // Ladestand, Untergrenze) — vorher Ersatzwerte 43 kWh / 5 %.
     energyBalance: { battery: energyBalanceBattery(ctx) },
+    // Netzstrom im Akku (grid-share.js): Anteil, Sperre, Tageswerte.
+    gridShare: (() => { try { return ctx.gridShare?.summary?.() ?? null; } catch { return null; } })(),
     clock: state.clock ?? null,
     // Heizstab: Vorhaltung in der EOS-Lastprognose und heute gelieferte Energie.
     heater: {
@@ -1344,6 +1348,30 @@ ctx.energyPath = ENERGY_PATH;
 // notification evaluation for that cycle. A no-op stub keeps the contract
 // explicit until the real handler lands.
 ctx.onPollComplete = () => {};
+// Netzstrom im Akku (services/optimizer/grid-share.js, Christin 01./02.11.2026):
+// virtueller Zähler, wie viel Netzstrom im Akku steckt; sperrt die
+// Akku-Einspeisung, solange es mehr als eine kleine Schwelle ist. Gezählt wird
+// nur im Runtime-Prozess; ein getrennter Web-Prozess liest die Datei.
+ctx.gridShare = createGridShareTracker({
+  getCfg: () => ctx.getCfg(),
+  pushLog,
+  dataDir: DATA_DIR || __dirname,
+  readOnly: !IS_RUNTIME_PROCESS,
+  // Sperre an/aus → EOS sofort umstellen (Akku-Netzeinspeisung) und neu planen.
+  onLockChange: (locked) => {
+    telemetrySafeWrite(() => telemetryStore?.writeControlEvent({
+      eventType: locked ? 'grid_share_lock_on' : 'grid_share_lock_off',
+      target: 'battery', valueNum: ctx.gridShare?.summary?.().gridKwh ?? null,
+      reason: 'grid_share', source: 'runtime', meta: { sharePct: ctx.gridShare?.summary?.().sharePct ?? null }
+    }));
+    (async () => {
+      try { await ctx.eosConfigSync?.sync?.(); }
+      catch (e) { pushLog('eos_config_sync_error', { phase: 'grid_share_lock', error: e?.message || String(e) }); }
+      try { ctx.optimizerService?.requestEosReplan?.('grid_share_lock'); }
+      catch { /* Neuplan ist best effort */ }
+    })();
+  },
+});
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;
@@ -2260,6 +2288,28 @@ const telemetryReady = (async () => {
       managed = null;
       pushLog('load_separation_error', { error: err.message });
     }
+    // Netzstrom im Akku: zählen und die Live-Werte an Telemetrie + Leitstand hängen.
+    try {
+      // Zweite GX eingeschaltet, aber gerade nicht einbezogen: Kapazität und
+      // Ladestand wären nur die der Hauptanlage → Akku-Inhalt unbekannt, damit
+      // die Kappung keinen Netzstrom abschreibt (Gegenprüfung 8465a540, P2).
+      // Ohne eingestellte Kapazität derselbe Rückfall wie bei EOS (8000 Wh).
+      const followerMissing = cfg.multiGx?.enabled === true && state.multiGx?.online !== true;
+      const gs = ctx.gridShare?.tick?.({
+        nowMs: Date.now(),
+        victron,
+        socPct: followerMissing ? null : gridSharePlanningSocPct(ctx),
+        capacityWh: followerMissing ? null : (Number(gridSharePlanningCfg(ctx)?.optimizer?.batteryCapacityWh) || 8000),
+      });
+      if (gs && victron) {
+        victron.batteryGridShareWh = Math.round(gs.gridWh);
+        victron.batteryGridSharePct = gs.sharePct;
+        victron.batteryGridShareToHomeW = gs.toHomeW;
+        victron.batteryGridShareToGridW = gs.toGridW;
+      }
+    } catch (err) {
+      pushLog('grid_share_error', { error: err?.message || String(err) }, 'warn');
+    }
     liveTelemetryBuffer?.capture({ ts, resolutionSeconds, meter, victron, managed });
     liveTelemetryBuffer?.flush();
     publishRuntimeSnapshot();
@@ -2880,6 +2930,7 @@ async function gracefulShutdown(signal) {
   // 1. Sync best-effort stops — pollers/timers must stop before async closes
   //    so they don't re-enter into a tearing-down store.
   safeSync('poller.stop', () => poller.stop());
+  safeSync('gridShare.persist', () => ctx.gridShare?.persist?.());
   safeSync('scheduler.stop', () => scheduler.stop());
   safeSync('liveTelemetryBuffer.flush', () => liveTelemetryBuffer?.flush({ force: true }));
   safeSync('epex.stop', () => epex.stop());

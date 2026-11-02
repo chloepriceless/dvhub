@@ -27,6 +27,9 @@ import {
   resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint, knownMaxDischargeW, dischargeStep,
   decodeMaxDischargeRaw, DISCHARGE_RELEASE_TICKS
 } from './services/peak-shaving/index.js';
+// Netzstrom im Akku (Christin 01./02.11.2026): solange der Zähler sperrt, darf
+// der Akku nicht ins Netz entladen — nur der PV-Überschuss geht hinaus.
+import { gridShareExportCapW } from './services/optimizer/grid-share.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -334,6 +337,29 @@ export function createScheduleEvaluator(ctx) {
       if (!(cfg.optimizer?.enabled ?? false) || isProGateClosed()) return false;
     }
     return ruleSlotOpen(r, now);
+  }
+
+  // Höchste Einspeisung bei gesperrtem Akku (Netzstrom-Zähler): Live-PV-
+  // Überschuss, mindestens der Standard-Puffer. Alte Werte zählen als unbekannt.
+  // polling.js stempelt pvTotalW nie (abgeleitet) — geprüft werden die
+  // gelesenen Felder: DC-PV und jede AC-PV-Phase (Gegenprüfung 8465a540, P3).
+  const GRID_SHARE_PV_FIELDS = ['pvTotalW', 'pvPowerW', 'pvAcW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W'];
+  function gridShareLiveCapW(cfg) {
+    const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
+    const v = state.victron || {};
+    const fin = (x) => x != null && Number.isFinite(Number(x));
+    const totalRaw = v.pvTotalW ?? v.pvPowerW;
+    const pvFresh = GRID_SHARE_PV_FIELDS.every((f) => !victronFieldStale(state, f, maxAgeMs));
+    const pvKnown = fin(totalRaw) && pvFresh;
+    const dcW = fin(v.pvPowerW) ? Math.max(0, Number(v.pvPowerW)) : 0;
+    const totalW = pvKnown ? Math.max(0, Number(totalRaw)) : null;
+    const loadKnown = fin(v.selfConsumptionW) && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs);
+    return gridShareExportCapW({
+      pvAcW: totalW == null ? null : Math.max(0, totalW - dcW),
+      pvDcW: totalW == null ? null : Math.min(dcW, totalW),
+      loadW: loadKnown ? Number(v.selfConsumptionW) : null,
+      bufferW: exportBufferFloorW(cfg) ?? 0
+    });
   }
 
   function effectiveTargetValue(target) {
@@ -1063,6 +1089,34 @@ export function createScheduleEvaluator(ctx) {
     }
     // === end EEG/§14a gate ===
 
+    // === Netzstrom im Akku (services/optimizer/grid-share.js) =================
+    // Solange der virtuelle Netzstrom-Zähler über der Schwelle steht, darf der
+    // Akku rechnerisch nichts ins Netz abgeben (kein Netzstrom mit Marktprämie).
+    // Jeder diskretionäre negative Sollwert — EOS, eingebauter Planer,
+    // Börsenautomatik, Regeln, Handeingaben, „100 % Einspeisung“ — wird auf den
+    // Live-PV-Überschuss gedeckelt (PV − Hauslast − Sicherheitsabstand). Der
+    // Standard-Puffer (schedule.defaultGridSetpointW, z. B. −100 W) bleibt
+    // erlaubt, höchstens 100 W (Christin: −100 W vernachlässigbar). Netzladen (positiver Sollwert) und
+    // die Pflicht-Quellen (§51-Abregelung, SoC-Boden, Not-Halt) bleiben
+    // unberührt. Unbekannte oder veraltete PV-/Lastwerte → nur der Puffer.
+    if (target === 'gridSetpointW' && !isMandatoryControlSource(source) && ctx.gridShare?.isLocked?.() === true) {
+      const requested = Number(value);
+      if (Number.isFinite(requested) && requested < 0) {
+        const capW = gridShareLiveCapW(cfg);
+        if (requested < -capW) {
+          value = capW > 0 ? -capW : 0;
+          // Einmal je Quelle melden — der Deckel ändert sich mit der PV jeden Takt.
+          if (state.ctrl._gridShareCapKey !== source) {
+            state.ctrl._gridShareCapKey = source;
+            pushLog('grid_share_export_capped', { requested, cappedTo: value, source });
+          }
+        } else if (state.ctrl._gridShareCapKey === source) {
+          state.ctrl._gridShareCapKey = null;
+        }
+      }
+    }
+    // === end Netzstrom im Akku ================================================
+
     // === Peak Shaving (GitHub #28, services/peak-shaving) =====================
     // Ein POSITIVER gridSetpointW ist bei Victron der gewünschte Netzbezug am
     // Zähler. Liegt er über dem Regelziel (Grenze − Abstand), wird er gedeckelt:
@@ -1749,7 +1803,9 @@ export function createScheduleEvaluator(ctx) {
           && eff.rule?.closedLoopExport
           && Number(eff.value) < 0) {
         const plannedExportW = Math.abs(Number(eff.value)); // EOS' planned net export for this slot
-        const B = Math.max(0, Number(eff.rule.batteryShareW) || 0);
+        // Netzstrom im Akku (grid-share.js): gesperrt → kein Akku-Anteil, nur
+        // der Live-PV-Überschuss (applyControlTarget deckelt zusätzlich).
+        const B = ctx.gridShare?.isLocked?.() === true ? 0 : Math.max(0, Number(eff.rule.batteryShareW) || 0);
         const pvW = Math.max(0, Number(state.victron.pvTotalW || state.victron.pvPowerW || 0));
         const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
         const livePvSurplusW = Math.max(0, pvW - loadW);
