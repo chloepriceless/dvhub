@@ -90,10 +90,12 @@ der Box ≤ 1 MiB, vor der Anmeldung ≤ 8 KiB (größere werden schon am Rahmen
 mit 1009 abgewiesen); höchstens 64 Verbindungen je Quelladresse; Briefkästen nur für
 Geräte auf der Freigabeliste; je 10 s ≤ 200
 Rahmen / 1 MiB vom Gerät. Wer gesendete Rahmen nicht abholt (mehr als 2 MiB
-Rückstand oder 30 s ohne Fortschritt), wird getrennt; unter Speicherdruck weicht
+Rückstand oder ein Rahmen nicht binnen 30 s + Größe / 16 KiB/s), wird getrennt; unter Speicherdruck weicht
 die Verbindung mit dem größten Rückstand. Ist der Briefkasten-Speicher voll,
 weichen die Einträge der Quelladresse, die am meisten belegt; neue
-Box-Briefkästen je Quelladresse sind gedrosselt (`error` `relay_busy`).
+Box-Briefkästen je Quelladresse sind gedrosselt (`error` `relay_busy`, bei
+`slot:"latest"` nur der letzte Stand). Abgelehnte Ereignisse legt die Box beim
+nächsten Briefkasten-Lauf (60 s) erneut ab.
 
 ## Handshake gekoppeltes Gerät
 

@@ -575,7 +575,7 @@ describe('mobile-link Rechte', () => {
 
 // ── Ende zu Ende über echte WebSockets ──────────────────────────────────────
 
-function makeAgent({ dir, relayUrl, extraCfg = {}, loopback, status = () => ({ soc: 55, batteryPowerW: -1200, alarmsActive: 0 }) }) {
+function makeAgent({ dir, relayUrl, extraCfg = {}, loopback, connect, status = () => ({ soc: 55, batteryPowerW: -1200, alarmsActive: 0 }) }) {
   let cfg = { httpPort: 18099, mobileLink: { enabled: true, relayUrl, ...extraCfg } };
   const logs = [];
   const agent = createMobileLink(
@@ -584,6 +584,7 @@ function makeAgent({ dir, relayUrl, extraCfg = {}, loopback, status = () => ({ s
       buildStatus: status,
       loopback: loopback || (async (m, p, b) => ({ status: 200, body: { echo: [m, p, b] } })),
       networkHosts: () => [],
+      ...(connect ? { connect } : {}),
     },
   );
   return { agent, logs, setCfg: (c) => { cfg = c; }, file: path.join(dir, SIDECAR_NAME) };
@@ -614,6 +615,51 @@ describe('mobile-link Ende zu Ende', () => {
     });
     return { phone, creds };
   }
+
+  test('vom Relay abgelehntes Ereignis (relay_busy) wird beim nächsten Lauf erneut abgelegt (Review 834d1336 P3)', async () => {
+    const ctx = await setup();
+    const { creds } = await pairVia(ctx, null);
+    ctx.agent.stop();
+    // Dieselbe Box (Sidecar) an einem nachgebauten Relay, das Fehler einspielen kann.
+    const sent = [];
+    let deliver = null;
+    const connect = () => {
+      const handlers = [];
+      deliver = (o) => { for (const f of handlers) f(JSON.stringify(o)); };
+      return {
+        send(t) {
+          const m = JSON.parse(t);
+          sent.push(m);
+          if (m.t === 'auth') queueMicrotask(() => deliver({ t: 'ok', role: 'box', box: creds.boxId }));
+        },
+        close() {},
+        onMessage(f) { handlers.push(f); queueMicrotask(() => f(JSON.stringify({ t: 'challenge', n: b64u(crypto.randomBytes(32)) }))); },
+        onClose() {},
+      };
+    };
+    let alarms = 0;
+    const b = makeAgent({ dir: ctx.dir, relayUrl: ctx.relayUrl, connect, status: () => ({ soc: 50, alarmsActive: alarms }) });
+    b.agent.start();
+    try {
+      await until(() => sent.some((m) => m.t === 'allow'));
+      const events = () => sent.filter((m) => m.t === 'mbox_put' && !m.slot);
+      alarms = 1;
+      b.agent._pushMailboxLatest();
+      assert.equal(events().length, 1);
+      const ev = events()[0];
+      // Relay gedrosselt: Ereignis abgelehnt → nächster Lauf legt es erneut ab.
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId });
+      b.agent._pushMailboxLatest();
+      assert.equal(events().length, 2, 'abgelehntes Ereignis nicht erneut abgelegt');
+      assert.equal(events()[1].d, ev.d);
+      // Nur der letzte Stand abgelehnt → kein doppeltes Ereignis.
+      deliver({ t: 'error', e: 'relay_busy', dev: creds.devId, slot: 'latest' });
+      b.agent._pushMailboxLatest();
+      assert.equal(events().length, 2);
+    } finally {
+      b.agent.stop();
+    }
+  });
 
   test('koppeln über das Relay, Sitzung, Live-Werte, Rechte, Briefkasten, entkoppeln', async () => {
     const ctx = await setup();

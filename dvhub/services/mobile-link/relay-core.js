@@ -187,7 +187,10 @@ export function createRelay({
       srcs.set(key, s);
     }
     s.bytes += delta;
-    const bi = s.bytes > 0 ? 31 - Math.clz32(Math.min(s.bytes, 0x7fffffff)) : -1;
+    // Nur Quellen mit eigenen Einträgen kommen in die Eimer: eine Quelle, die
+    // nur noch Verwaltung fremd befüllter Briefkästen hält, hat nichts zum
+    // Verdrängen (sonst fiele die Wahl auf das Älteste überhaupt, Review 834d1336 P2).
+    const bi = s.bytes > 0 && s.head ? 31 - Math.clz32(Math.min(s.bytes, 0x7fffffff)) : -1;
     if (bi !== s.bi) {
       if (s.bi >= 0) srcBuckets[s.bi].delete(s);
       if (bi >= 0) (srcBuckets[bi] ||= new Set()).add(s);
@@ -355,7 +358,7 @@ export function createRelay({
         continue;
       }
       if (mailboxTotal + need > L.mailboxTotalBytes || (!m && mailboxCount >= L.maxMailboxes)) {
-        const old = srcBiggest()?.head || mbHead;
+        const old = srcBiggest()?.head || mbHead; // mbHead nur, wenn keine Quelle Einträge hat
         if (!old) { mbTidy(boxId, devId); return 'relay_full'; }
         mbEvict(old);
         continue;
@@ -383,6 +386,7 @@ export function createRelay({
     orderAdd(it);
     srcAdjust(src, cost);
     srcLink(it);
+    srcAdjust(src, 0); // jetzt mit Eintrag → in den Eimer
     m.bytes += cost;
     b.bytes += cost;
     mailboxTotal += cost;
@@ -632,7 +636,9 @@ export function createRelay({
         // Nur für Geräte auf der Freigabeliste — ohne Liste gar nicht.
         if (!e.allow || !e.allow.has(msg.dev)) return;
         const err = mbPut(conn.boxId, msg.dev, msg.d, msg.slot === 'latest' ? 'latest' : null, conn.remote || NO_SOURCE);
-        if (err) send(conn, { t: 'error', e: err, dev: msg.dev });
+        // `slot` sagt der Box, ob ein Ereignis abgelehnt wurde (das legt sie
+        // erneut ab) oder nur der letzte Stand (kommt ohnehin alle 60 s).
+        if (err) send(conn, { t: 'error', e: err, dev: msg.dev, ...(msg.slot === 'latest' ? { slot: 'latest' } : {}) });
         return;
       }
       case 'mbox_clear':
@@ -713,8 +719,9 @@ export function createRelay({
 // Beide zählen je Verbindung, je Quelladresse und gesamt. Reicht der Platz
 // nicht, fliegt die Verbindung mit dem größten Rückstand (erst derselben
 // Quelle, dann überhaupt) — außer die anfragende ist selbst die größte. Wer
-// stallMs lang keinen Fortschritt macht (nichts abgeholt bzw. Rahmen nicht
-// fertig), fliegt auch: unaufgeforderte Pongs halten so niemanden am Leben.
+// keinen Fortschritt macht, fliegt auch: ein Rahmen muss binnen stallMs plus
+// Rahmengröße / minRateBytesPerSec abgeholt bzw. fertig sein (1 MiB: 30 s +
+// 64 s), unaufgeforderte Pongs halten so niemanden am Leben.
 // Vor der Anmeldung sind nur kleine Rahmen erlaubt (Anmeldung < 1 KiB);
 // danach setzt relay-core die Grenze der Rolle (setFrameLimit).
 export const SOCKET_LIMITS = Object.freeze({
@@ -725,12 +732,14 @@ export const SOCKET_LIMITS = Object.freeze({
   inPerRemote: 4 * 1024 * 1024,
   inTotal: 32 * 1024 * 1024,
   stallMs: 30_000,
+  minRateBytesPerSec: 16 * 1024,
   // Vom Relay geschlossen: so lange darf die Gegenstelle den Abschluss
   // bestätigen, dann wird getrennt (statt 30 s `ws`-Frist ohne Zählung).
   closeGraceMs: 2_000,
 });
 
-// Budget mit Haltern { key, held, since, kill() }; kill() muss synchron freigeben.
+// Budget mit Haltern { key, held, since, unit(), kill() }; kill() muss synchron
+// freigeben; unit() = Bytes, für die gerade die Uhr läuft.
 function createBudget(total, perKey) {
   let used = 0;
   const keys = new Map(); // key → { used, holders:Set }
@@ -782,7 +791,11 @@ export function createSocketGuard(opts = {}) {
   const inb = createBudget(limits.inTotal, limits.inPerRemote);
   const timer = setInterval(() => {
     const t = Date.now();
-    for (const b of [out, inb]) for (const h of [...b.holders]) if (h.held > 0 && t - h.since > limits.stallMs) h.kill();
+    for (const b of [out, inb]) {
+      for (const h of [...b.holders]) {
+        if (h.held > 0 && t - h.since > limits.stallMs + (h.unit() * 1000) / limits.minRateBytesPerSec) h.kill();
+      }
+    }
   }, Math.max(25, Math.floor(limits.stallMs / 3)));
   timer.unref?.();
   const guard = {
@@ -838,8 +851,11 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
     try { ws.ping(); } catch { /* egal */ }
   }, pingMs) : null;
   timer?.unref?.();
-  const outH = { key: remote, held: 0, since: 0, kill: () => kill() };
-  const inH = { key: remote, held: 0, since: 0, kill: () => kill() };
+  // Ausgang: Größen der noch nicht abgeholten Rahmen (ws ruft die Rückmeldungen
+  // in Sendereihenfolge); die Uhr läuft für den ältesten.
+  const pendingSizes = [];
+  const outH = { key: remote, held: 0, since: 0, unit: () => pendingSizes[0] || 0, kill: () => kill() };
+  const inH = { key: remote, held: 0, since: 0, unit: () => inH.held, kill: () => kill() };
   function releaseAll() {
     if (!guard) return;
     guard.out.release(outH);
@@ -881,8 +897,10 @@ export function wrapWebSocket(ws, { pingMs = 25_000, maxBuffered = MAX_BUFFERED_
       const was = outH.held;
       if (!guard.out.take(outH, n)) { kill(); return; }
       if (was === 0) outH.since = Date.now();
+      pendingSizes.push(n);
       ws.send(text, () => {
         if (gone) return;
+        pendingSizes.shift();
         guard.out.give(outH, n);
         outH.since = Date.now();
       });

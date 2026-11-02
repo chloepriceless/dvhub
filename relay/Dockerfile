@@ -6,7 +6,8 @@ ARG NODE_VERSION=22-alpine
 FROM node:${NODE_VERSION}
 WORKDIR /app
 COPY relay/package.json ./
-RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
+# Ohne Paket-Skripte: sie liefen hier als root (R-0004-Muster); ws braucht keine.
+RUN npm install --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
 COPY dvhub/services/mobile-link/crypto.js dvhub/services/mobile-link/relay-core.js dvhub/services/mobile-link/relay-server.js ./
 USER node
 ENV RELAY_PORT=8787 RELAY_HOST=0.0.0.0 NODE_ENV=production

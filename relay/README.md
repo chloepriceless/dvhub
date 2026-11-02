@@ -86,8 +86,9 @@ Puffer am WebSocket (`SOCKET_LIMITS`): noch nicht abgeholte Ausgaben höchstens
 2 MiB je Verbindung, 8 MiB je Quelle, 32 MiB gesamt; angefangene Rahmen
 höchstens 4 MiB je Quelle, 32 MiB gesamt. Vor der Anmeldung sind nur Rahmen bis
 8 KiB erlaubt, danach je Rolle (Gerät 256 KiB, Anlage 1 MiB). Reicht ein Budget
-nicht, wird die Verbindung mit dem größten Rückstand getrennt; wer 30 s keinen
-Fortschritt macht (nichts abholt, Rahmen nicht fertig), ebenfalls. Schließt das
+nicht, wird die Verbindung mit dem größten Rückstand getrennt; wer keinen
+Fortschritt macht (nichts abholt, Rahmen nicht fertig), ebenfalls — ein Rahmen
+hat 30 s plus Größe / 16 KiB/s (1 MiB: 94 s). Schließt das
 Relay eine Verbindung, hat die Gegenstelle 2 s für den Abschluss.
 
 ## Überwachung
