@@ -550,7 +550,9 @@ export function createEosForecastBridge(ctx) {
         seriesKeys: ['price_ct_kwh'],
         start: new Date(fromMs).toISOString(),
         end: new Date(nowMs + 3 * 86_400_000).toISOString(),
-        maxResolution: 3600,
+        // Nicht nach dem Stempel filtern: ein Abruf mit Lücke im ersten
+        // Zeilenpaar ist insgesamt grob gestempelt (Gegenprüfung fac22151).
+        maxResolution: 86_400,
       });
       const byStart = new Map();
       for (const r of rows || []) {
@@ -622,8 +624,9 @@ export function createEosForecastBridge(ctx) {
    * (Gegenprüfungen 8c050aae … ec268f9f; eine Buchführung über Prozesse und
    * Neustarts hinweg fand immer neue Lücken). Der Bereich liegt immer hinter
    * dem Steuerzeitraum; ein Fehler macht den Push „nicht ok“ (Wiederholung),
-   * sperrt aber keinen Lauf (prepareRun). Ohne bekannte echte Preise (z. B.
-   * Neustart im Preisausfall) wird nichts gelöscht — EOS hält evtl. noch echte.
+   * sperrt aber keinen Lauf (prepareRun). Ohne echte Preise — weder im
+   * Speicher noch in der Datenbank — wird nichts gelöscht; EOS hält evtl.
+   * noch echte.
    */
   async function clearStaleEstimates(baseUrl, { sentEndMs, nowMs }) {
     const start = sentEndMs;

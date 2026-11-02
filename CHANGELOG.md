@@ -63,10 +63,11 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   Steuerzeitraum richtet sich weiter nur nach echten Preisen. Anzahl und Beginn der geschätzten Slots stehen im Log
   (`eos_forecast_bridge`) und unter `state.optimizer.lastEosPush.priceEstimate`. Schätzwerte liegen nie im
   Steuerzeitraum: Vor jedem Lauf schickt DVhub die Prognose frisch und löscht in EOS alles dahinter. Fehlen nach einem
-  Neustart die Preise, weil der Abruf gestört ist, nimmt DVhub die gespeicherten echten Preise. Der Lauf fällt nur aus
-  (Log `eos_run_skipped`), wenn der Preis-Import scheitert oder der Steuerzeitraum nicht ganz in echten Preisen liegt —
-  dann brach EOS früher ohnehin ohne Preise ab. Mit „EOS rechnet nach eigenem Takt“ (Einstellungen → Betriebsart →
-  EOS-Optimierung) oder solange kein EOS 0.4 erkannt ist, wird nicht geschätzt.
+  Neustart die Preise, weil der Abruf gestört ist, nimmt DVhub die gespeicherten echten Preise. Der Lauf fällt aus
+  (Log `eos_run_skipped`, mit Grund), wenn der Preis-Import scheitert, Preise, PV oder Last jetzt nicht abdecken, der
+  Steuerzeitraum sich nicht setzen lässt oder nicht ganz in echten Preisen liegt — in diesen Fällen brach EOS früher
+  meist ohnehin ab. Mit „EOS rechnet nach eigenem Takt“ (Einstellungen → Betriebsart → EOS-Optimierung) oder solange
+  kein EOS 0.4 erkannt ist, wird nicht geschätzt.
 
 - **Bezugspreis vom Stromanbieter (Tibber, LichtBlick)**: neue Preislogik „Vom Stromanbieter“ unter Einstellungen →
   Strompreise, auch je Zeitraum (z. B. ab Lieferbeginn). DVhub holt mit den eigenen Zugangsdaten des Kunden die
