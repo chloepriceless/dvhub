@@ -813,7 +813,10 @@ async function switchAndVerify(s, st, job, { to, from, op }) {
     st.current = to;
     st.pending = null;
     record(st, to, 'ok');
-    saveState(s, st);
+    // Gesund bestätigt: ein Speicherfehler kippt das nicht mehr; das Journal
+    // (pending) bleibt dann stehen, und resume bestätigt beim nächsten Start
+    // (Gegenprüfung 0d6f4214, P3).
+    afterwork(job, 'Zustand speichern', () => saveState(s, st));
     return 'ok';
   }
   job.phase('rollback', `nicht gesund — zurück auf ${from}`);
@@ -1161,6 +1164,13 @@ async function settleInterrupted(s, job) {
   job.log('ein unterbrochener Auftrag liegt noch vor — zuerst abschließen');
   const r = await resumeInterrupted(s, st, job);
   job.log(`unterbrochener Auftrag: ${r.message}`);
+  // Ließ sich der Abschluss nicht speichern, steht das Journal noch da: dann
+  // nicht weitermachen — der neue Auftrag schriebe es sonst mit fort.
+  const after = loadState(s);
+  if (after.migration || after.pending) {
+    job.finish('failed', `${r.message} — Zustand ließ sich nicht speichern, Auftrag nicht ausgeführt`, { ...r.extra, result: 'failed' });
+    return true;
+  }
   if (currentVersion(s)) return false;
   job.finish(r.state, `${r.message} — Auftrag nicht ausgeführt (Box wieder auf git)`, r.extra);
   return true;
@@ -1176,10 +1186,10 @@ async function resumeInterrupted(s, st, job) {
       st.legacy = { dir: st.migration.legacy, git_sha: st.migration.git_sha, version: st.migration.git_version, at: new Date().toISOString() };
       st.migration = null;
       record(st, v, 'migrated');
-      saveState(s, st);
+      afterwork(job, 'Zustand speichern', () => saveState(s, st));
       afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, v, job));
       afterwork(job, 'Notfall-Drop-in entfernen', () => removeDropin(s, job));
-      saveState(s, st);
+      afterwork(job, 'Zustand speichern', () => saveState(s, st));
       return { state: 'ok', message: `Umstellung auf ${v} abgeschlossen (nach Unterbrechung)`, extra: { result: 'ok', version: v } };
     }
     revertMigration(s, st, job);
@@ -1202,7 +1212,7 @@ async function resumeInterrupted(s, st, job) {
       st.current = to;
       st.pending = null;
       record(st, to, 'ok');
-      saveState(s, st);
+      afterwork(job, 'Zustand speichern', () => saveState(s, st));
       if (op === 'install') finalizeInstall(s, st, to, job);
       return { state: 'ok', message: `${to} läuft gesund (nach Unterbrechung bestätigt)`, extra: { result: 'ok', version: to } };
     }

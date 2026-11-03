@@ -963,6 +963,43 @@ test('Umstellung gesund, Speichern danach scheitert → nicht „zurückgenommen
   } finally { r.close(); }
 });
 
+// Gegenprüfung 0d6f4214 (P3): dasselbe beim install — das Speichern direkt
+// nach der gesunden Prüfung (switchAndVerify) machte den Auftrag „failed“.
+test('install gesund, Speichern danach scheitert → ok mit Warnung, resume bestätigt später', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    const blocker = path.join(r.state, `state.json.tmp-${process.pid}`);
+    r.publish({ version: '1.0.1', extraFiles: { 'post-update.sh': `#!/usr/bin/env bash\nmkdir '${blocker}'\n` } });
+    const res = await r.run('install', 'latest', 'stable');
+    assert.equal(r.status().state, 'ok', JSON.stringify(r.status()));
+    assert.equal(res.code, 0);
+    assert.ok(r.status().log.some((l) => /Warnung: Zustand speichern/.test(l)));
+    assert.equal(r.current(), 'releases/1.0.1');
+    fs.rmdirSync(blocker);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).pending?.version, '1.0.1', 'Journal bleibt für resume');
+    assert.equal((await r.run('_job', 'resume')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.1');
+    assert.equal(st.previous, '1.0.0');
+  } finally { r.close(); }
+});
+
+test('unterbrochene Umstellung, Abschluss nicht speicherbar → neuer Auftrag läuft nicht weiter', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    r.publish({ version: '1.0.2' });
+    fs.mkdirSync(path.join(r.state, `state.json.tmp-${process.pid}`));
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 1);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /nicht speichern/);
+    assert.equal(r.current(), 'releases/1.0.1', 'nichts installiert');
+    assert.ok(!fs.existsSync(path.join(r.box, 'releases', '1.0.2')));
+  } finally { r.close(); }
+});
+
 test('Nacharbeit scheitert im resume → pending trotzdem aus state.json', { timeout: 60000 }, async () => {
   const r = await makeRig();
   try {
