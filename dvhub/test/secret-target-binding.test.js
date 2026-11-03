@@ -357,6 +357,10 @@ test('Port: Datenbank-Port (eigenes Feld) und TLS-Wechsel nur zwischen Standard-
   assert.equal(out.telemetry.database.password, '', 'DB: anderer Port');
   assert.equal(out.mqtt.password, '', 'mqtt → mqtts auf Nicht-Standard-Port');
   assert.equal(out.optimizer.evHaToken, '', 'http → https auf Nicht-Standard-Port');
+  // Andere Protokollfamilie auf Standard-Ports (Gegenprüfung eb44b949, P3).
+  const fam = mask(cur);
+  fam.mqtt.brokerUrl = 'wss://b';
+  assert.equal(restoreRedacted(fam, cur).mqtt.password, '', 'mqtt → wss ist ein anderer Dienst');
   const same = mask(cur);
   same.mqtt.brokerUrl = 'mqtts://b:8883';
   same.optimizer.evHaUrl = 'https://ha.lan';

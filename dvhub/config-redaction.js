@@ -133,7 +133,7 @@ function normTarget(v) {
     try {
       const u = new URL(s);
       const port = u.port || DEFAULT_PORTS[u.protocol] || '';
-      return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol), port, std: port !== '' && port === DEFAULT_PORTS[u.protocol] };
+      return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol), port, std: port !== '' && port === DEFAULT_PORTS[u.protocol], proto: u.protocol };
     } catch { return { host: s, secure: null, port: '' }; }
   }
   // host[:port] ohne Schema: Port nur bei genau einem ':' bzw. [v6]:port abtrennen
@@ -149,10 +149,13 @@ function targetsOf(cfg, secretPath) {
 // Beim Wechsel auf die bessere Sicherung darf sich der Port nur von einem
 // Standard-Port zum anderen ändern (1883 → 8883, 80 → 443), sonst wäre jeder
 // TLS-Dienst auf demselben Host „dasselbe Ziel“ (Gegenprüfung 039a110c, P2).
+// Nur zusammengehörige Paare (mqtt ↔ mqtts, http ↔ https, ws ↔ wss) — mqtt://b
+// → wss://b wäre ein anderer Dienst (Gegenprüfung eb44b949, P3).
+const TLS_UPGRADE = { 'mqtt:': ['mqtts:', 'ssl:', 'tls:'], 'tcp:': ['mqtts:', 'ssl:', 'tls:'], 'http:': ['https:'], 'ws:': ['wss:'] };
 function isNewTarget(t, before) {
   return !before.some((b) => b.host === t.host
     && !(b.secure === true && t.secure === false)
-    && (b.port === t.port || (b.secure === false && t.secure === true && b.std && t.std)));
+    && (b.port === t.port || (b.std && t.std && (TLS_UPGRADE[b.proto] || []).includes(t.proto))));
 }
 
 /**
