@@ -277,6 +277,7 @@ describe('Paket-Box: Update über dvhub-release', () => {
   for (const [name, check] of [
     ['kein JSON', () => ({ stdout: 'kaputt', stderr: '' })],
     ['ohne Version', { ok: true }],
+    ['ohne Zielversion', { ...CHECK, latest: {} }],
   ]) {
     it(`Rückschritt-Prüfung ohne verwertbare Helfer-Antwort (${name}): nichts installiert`, async () => {
       for (const [p, body] of [['/api/admin/update/apply', {}], ['/api/admin/update/channel', { channel: 'dev' }]]) {

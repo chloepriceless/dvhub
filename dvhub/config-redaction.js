@@ -82,6 +82,11 @@ function crossCheckBroker(cfg) {
   const host = g(cfg, 'victron.host');
   return c.broker || g(cfg, 'victron.mqtt.broker') || (host ? `mqtts://${host}:8883` : '');
 }
+function hostPort(host, port) {
+  const h = String(host ?? '').trim();
+  if (!h) return '';
+  return `${h.includes(':') && !h.startsWith('[') ? `[${h}]` : h}:${port}`;
+}
 function weatherBroker(cfg) { return g(cfg, 'forecast.weather.mqtt.brokerUrl') || g(cfg, 'mqtt.brokerUrl') || ''; }
 const SECRET_TARGETS = {
   'notifications.providers.ntfy.token': (c) => [g(c, 'notifications.providers.ntfy.topicUrl')],
@@ -90,7 +95,8 @@ const SECRET_TARGETS = {
   'optimizer.eosProxy.remote.token': (c) => [g(c, 'optimizer.eosProxy.remote.endpoint')],
   'dbBackup.smb.username': (c) => [g(c, 'dbBackup.smb.host')],
   'dbBackup.smb.password': (c) => [g(c, 'dbBackup.smb.host')],
-  'telemetry.database.password': (c) => [g(c, 'telemetry.database.host')],
+  // Port steht hier in einem eigenen Feld (Gegenprüfung 039a110c, P2).
+  'telemetry.database.password': (c) => [hostPort(g(c, 'telemetry.database.host'), g(c, 'telemetry.database.port') || 5432)],
   'wallbox.openevse.username': (c) => [g(c, 'wallbox.openevse.url')],
   'wallbox.openevse.password': (c) => [g(c, 'wallbox.openevse.url')],
   'wallbox.nrgkick.username': (c) => [g(c, 'wallbox.nrgkick.host')],
@@ -126,7 +132,8 @@ function normTarget(v) {
   if (s.includes('://')) {
     try {
       const u = new URL(s);
-      return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol), port: u.port || DEFAULT_PORTS[u.protocol] || '' };
+      const port = u.port || DEFAULT_PORTS[u.protocol] || '';
+      return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol), port, std: port !== '' && port === DEFAULT_PORTS[u.protocol] };
     } catch { return { host: s, secure: null, port: '' }; }
   }
   // host[:port] ohne Schema: Port nur bei genau einem ':' bzw. [v6]:port abtrennen
@@ -139,10 +146,13 @@ function normTarget(v) {
 function targetsOf(cfg, secretPath) {
   return SECRET_TARGETS[secretPath](cfg || {}).map(normTarget);
 }
+// Beim Wechsel auf die bessere Sicherung darf sich der Port nur von einem
+// Standard-Port zum anderen ändern (1883 → 8883, 80 → 443), sonst wäre jeder
+// TLS-Dienst auf demselben Host „dasselbe Ziel“ (Gegenprüfung 039a110c, P2).
 function isNewTarget(t, before) {
   return !before.some((b) => b.host === t.host
     && !(b.secure === true && t.secure === false)
-    && (b.port === t.port || (b.secure === false && t.secure === true)));
+    && (b.port === t.port || (b.secure === false && t.secure === true && b.std && t.std)));
 }
 
 /**
