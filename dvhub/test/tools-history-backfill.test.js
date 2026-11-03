@@ -106,3 +106,37 @@ test('maintenance bootstrap avoids automatic scan and health polling on page loa
   assert.equal(plan.refreshScan, false);
   assert.equal(plan.scanRefreshMs, 0);
 });
+
+// Gesamtprüfung 1.0.9 (Hauptbefund 14): Die Verfolgung eines Update-Auftrags
+// verglich die Browser-Uhr (Date.now() − 30 s) mit `started` von der Box-Uhr.
+// Weicht eine der Uhren ab, blieb der Auftrag unsichtbar (20 min „keine
+// Rückmeldung“) oder ein altes Ergebnis galt als neues. Jetzt zählt nur, ob
+// sich `started` gegenüber dem Stand vor dem Auftrag geändert hat.
+test('Update-Auftrag: erkannt ohne Uhrvergleich zwischen Browser und Box', () => {
+  const { releaseJobVerdict } = loadToolsHelpers();
+  assert.equal(typeof releaseJobVerdict, 'function');
+  const old = { state: 'ok', started: '2026-11-03T10:00:00.000Z' };
+  const baseline = { known: true, started: old.started };
+  // Box-Uhr weit hinter dem Browser (Pi ohne RTC): neuer Auftrag trotzdem sichtbar.
+  const fresh = { state: 'running', phase: 'download', started: '2020-01-01T00:00:05.000Z' };
+  assert.equal(releaseJobVerdict(fresh, baseline, false), 'active');
+  assert.equal(releaseJobVerdict({ ...fresh, state: 'ok' }, baseline, true), 'done');
+  // Box-Uhr vor dem Browser: das alte Ergebnis gilt nicht als neues.
+  const future = { state: 'ok', started: '2099-01-01T00:00:00.000Z' };
+  assert.equal(releaseJobVerdict(future, { known: true, started: future.started }, false), 'ignore');
+  assert.equal(releaseJobVerdict(null, baseline, false), 'ignore');
+  // Stand vor dem Auftrag unbekannt: Ergebnis erst, nachdem der Auftrag laufend gesehen wurde.
+  assert.equal(releaseJobVerdict(old, { known: false }, false), 'ignore');
+  assert.equal(releaseJobVerdict({ ...old, state: 'queued' }, { known: false }, false), 'active');
+  assert.equal(releaseJobVerdict(old, { known: false }, true), 'done');
+  // Kein früherer Auftrag: jeder Stand ist der neue.
+  assert.equal(releaseJobVerdict({ state: 'failed', started: 'x' }, { known: true, started: null }, false), 'done');
+});
+
+test('Update-Verfolgung nutzt keine Browser-Uhr mehr', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../public/tools.js', import.meta.url)), 'utf8');
+  const fn = src.slice(src.indexOf('async function trackReleaseJob'), src.indexOf('async function rollbackUpdate'));
+  assert.ok(fn.length > 0);
+  assert.doesNotMatch(fn, /Date\.parse\(st\.started/);
+  assert.doesNotMatch(fn, /Date\.now\(\) - 30000/);
+});
