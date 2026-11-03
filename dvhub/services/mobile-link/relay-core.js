@@ -45,8 +45,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   // Je Quelladresse (hinter einem Proxy die von ihm angehängte Adresse,
   // IPv6 je /64 — siehe relay-server.js clientAddress).
   maxConnectionsPerRemote: 64,
-  // IPv6 zusätzlich je /48 (ein Anschluss bekommt oft ein /56 oder /48 und
-  // damit Hunderte /64, Gesamtprüfung 1.0.9). IPv4 bleibt bei der Adresse.
+  // IPv6 zusätzlich je /56 (ein Anschluss bekommt meist ein /56 und damit
+  // 256 /64, Gesamtprüfung 1.0.9). IPv4 bleibt bei der Adresse.
   maxConnectionsPerGroup: 256,
   maxAllowPerBox: 32,
   maxBoxes: 10_000,
@@ -83,7 +83,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   // Entkoppelte Geräte, die sich das Relay über das Offline-Sein der Box merkt.
   revokedPerBox: 32,
   revokedBoxes: 2_000,
-  // Davon je Quelle (IPv6 je /48): frische Box-Kennungen einer Quelle
+  // Davon je Quelle (IPv6 je /56): frische Box-Kennungen einer Quelle
   // verdrängen nur deren eigene Einträge (Gesamtprüfung 1.0.9).
   revokedBoxesPerSource: 16,
 });
@@ -102,12 +102,14 @@ const NO_SOURCE = '-'; // Verbindung ohne Quelladresse (eingebettet, Tests)
 // bekamen jedes Mal den vollen Eimer).
 const NEW_BOX_OVERFLOW = '\u0000overflow';
 
-// Gruppe einer Quelle: IPv6-/64-Schlüssel (relay-server.js remoteKey) → /48,
-// alles andere bleibt, wie es ist (Gesamtprüfung 1.0.9).
+// Gruppe einer Quelle = ein Anschluss: IPv6-/64-Schlüssel (relay-server.js
+// remoteKey) → /56, so wie deutsche Anbieter ihn je Kunde vergeben — ein /48
+// teilten sich 256 fremde Kunden (Gegenprüfung d3cafdcf, P2). Alles andere
+// bleibt, wie es ist (Gesamtprüfung 1.0.9).
 export function sourceGroup(remote) {
   if (!remote) return null;
-  const m = /^([0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4}):[0-9a-f]{1,4}::\/64$/.exec(remote);
-  return m ? `${m[1]}::/48` : remote;
+  const m = /^([0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4}):([0-9a-f]{1,4})::\/64$/.exec(remote);
+  return m ? `${m[1]}:${(parseInt(m[2], 16) & 0xff00).toString(16)}::/56` : remote;
 }
 
 // Spielraum über der Rahmengrenze der Rolle (UTF-8 statt Zeichen, Kopf).
@@ -163,7 +165,7 @@ export function createRelay({
   let closed = false;
   const conns = new Set();
   const perRemote = new Map(); // Quelladresse → offene Verbindungen
-  // Gruppe (IPv6 /48, sonst die Adresse) → offene Verbindungen in
+  // Gruppe (IPv6 /56, sonst die Adresse) → offene Verbindungen in
   // Anmelde-Reihenfolge: Grenze je Gruppe und faires Verdrängen, wenn das
   // Relay voll ist (Gesamtprüfung 1.0.9, Hauptbefund 11).
   const perGroup = new Map();
@@ -715,7 +717,7 @@ export function createRelay({
         if (!isStr(msg.dev, 64) || !isStr(msg.d, L.mailboxBytes)) return;
         // Nur für Geräte auf der Freigabeliste — ohne Liste gar nicht.
         if (!e.allow || !e.allow.has(msg.dev)) return;
-        // Quelle = Gruppe (IPv6 /48): viele /64 eines Anschlusses zählen zusammen.
+        // Quelle = Gruppe (IPv6 /56): viele /64 eines Anschlusses zählen zusammen.
         const err = mbPut(conn.boxId, msg.dev, msg.d, msg.slot === 'latest' ? 'latest' : null, sourceGroup(conn.remote) || NO_SOURCE);
         // `slot` sagt der Box, ob ein Ereignis abgelehnt wurde (das legt sie
         // erneut ab) oder nur der letzte Stand (kommt ohnehin alle 60 s).

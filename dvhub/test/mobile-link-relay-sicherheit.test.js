@@ -1029,34 +1029,48 @@ describe('Relay-Sicherheit: Gesamtprüfung 1.0.9', () => {
 
   // Hauptbefund 11: 63 Quellen × 64 Verbindungen füllten maxConnections,
   // danach bekam jede echte Box und jedes Handy relay_full.
-  test('volles Relay: eine neue Quelle verdrängt eine Verbindung der größten Quelle statt relay_full', async () => {
-    const relay = createRelay({ limits: { maxConnections: 8, maxConnectionsPerRemote: 4 } });
-    const flood = [];
-    for (const r of ['2001:db8:0:1::/64', '2001:db8:0:2::/64']) for (let i = 0; i < 4; i++) flood.push(memClient(relay, r));
+  test('volles Relay: eine neue Quelle verdrängt eine unangemeldete Verbindung der größten Quelle statt relay_full', async () => {
+    const relay = createRelay({ limits: { maxConnections: 7, maxConnectionsPerRemote: 4 } });
+    // Größte Quelle A: zwei angemeldete Boxen, zwei unangemeldete Verbindungen.
+    const boxesA = [await boxOnRelay(relay, generateIdentity(), '203.0.113.1'), await boxOnRelay(relay, generateIdentity(), '203.0.113.1')];
+    const openA = [memClient(relay, '203.0.113.1'), memClient(relay, '203.0.113.1')];
+    // Kleinere Quelle B: drei Verbindungen.
+    const groupB = [memClient(relay, '203.0.113.2'), memClient(relay, '203.0.113.2'), memClient(relay, '203.0.113.2')];
     await tick();
-    assert.equal(relay.stats().connections, 8);
+    assert.equal(relay.stats().connections, 7);
     const legit = memClient(relay, '198.51.100.7');
     await tick();
     assert.equal(legit.state.closed, null, `echte Box abgewiesen: ${JSON.stringify(legit.state.closed)}`);
-    assert.equal(flood.filter((c) => c.state.closed?.reason === 'relay_full').length, 1, 'genau eine Verbindung der größten Quelle weicht');
-    assert.equal(relay.stats().connections, 8);
-    // Die größte Quelle selbst verdrängt niemanden — sie bekommt relay_full.
-    const more = memClient(relay, '2001:db8:0:1::/64');
+    assert.deepEqual(openA.map((c) => c.state.closed?.reason || null), ['relay_full', null], 'zuerst eine unangemeldete Verbindung der größten Quelle');
+    assert.deepEqual(boxesA.map((c) => c.state.closed), [null, null], 'angemeldete Boxen bleiben');
+    assert.deepEqual(groupB.map((c) => c.state.closed), [null, null, null], 'kleinere Quelle unberührt');
+    // Jetzt A 3, B 3: eine neue Verbindung aus B verdrängt niemanden (nicht zwei mehr).
+    const moreB = memClient(relay, '203.0.113.2');
     await tick();
-    assert.equal(more.state.closed?.reason, 'relay_full');
+    assert.equal(moreB.state.closed?.reason, 'relay_full');
+    // Nur noch angemeldete Verbindungen in der größten Quelle: es weicht die jüngste.
+    const relay2 = createRelay({ limits: { maxConnections: 3, maxConnectionsPerRemote: 4 } });
+    const a = [await boxOnRelay(relay2, generateIdentity(), '203.0.113.1'), await boxOnRelay(relay2, generateIdentity(), '203.0.113.1'), await boxOnRelay(relay2, generateIdentity(), '203.0.113.1')];
+    memClient(relay2, '198.51.100.8');
+    await tick();
+    assert.deepEqual(a.map((c) => c.state.closed?.reason || null), [null, null, 'relay_full']);
     relay.close();
+    relay2.close();
   });
 
-  test('IPv6: Grenze auch je /48 (viele /64 aus einem Anschluss)', async () => {
+  test('IPv6: Grenze auch je /56 (viele /64 eines Anschlusses), Nachbar-/56 unberührt', async () => {
     const relay = createRelay({ limits: { maxConnectionsPerRemote: 4, maxConnectionsPerGroup: 6 } });
     const cs = [];
-    for (let i = 0; i < 4; i++) cs.push(memClient(relay, '2001:db8:7:1::/64'));
-    for (let i = 0; i < 3; i++) cs.push(memClient(relay, '2001:db8:7:2::/64'));
+    for (let i = 0; i < 4; i++) cs.push(memClient(relay, '2001:db8:7:101::/64'));
+    for (let i = 0; i < 3; i++) cs.push(memClient(relay, '2001:db8:7:1ff::/64'));
     await tick();
     assert.deepEqual(cs.map((c) => c.state.closed?.reason || null), [null, null, null, null, null, null, 'too_many_connections']);
-    const other = memClient(relay, '2001:db8:8:1::/64');
+    const other = memClient(relay, '2001:db8:7:200::/64');
     await tick();
-    assert.equal(other.state.closed, null, 'anderes /48 unberührt');
+    assert.equal(other.state.closed, null, 'anderes /56 im selben /48 unberührt');
+    assert.equal(relayCore.sourceGroup('2001:db8:7:1ff::/64'), '2001:db8:7:100::/56');
+    assert.equal(relayCore.sourceGroup('2001:db8:7:ff::/64'), '2001:db8:7:0::/56');
+    assert.equal(relayCore.sourceGroup('198.51.100.7'), '198.51.100.7');
     relay.close();
   });
 
