@@ -290,7 +290,7 @@ test('veraltetes Halte-Signal oder veraltete SoC-Grenze entschuldigen nichts', (
   assert.equal(sent.length, 1);
 });
 
-function runReadbackZero({ ownZero }) {
+function runReadbackZero({ ownZero, cfg = {} }) {
   const sent = [];
   const state = {
     meter: { ok: true },
@@ -298,7 +298,7 @@ function runReadbackZero({ ownZero }) {
     schedule: { active: {}, lastWrite: ownZero ? { maxDischargeW: { value: 0, source: 'api', at: T0 - 3 * 3600000 } } : {} }
   };
   const watchdog = createSetpointFollowWatchdog({
-    state, getCfg: () => ({}), pushLog: () => {},
+    state, getCfg: () => cfg, pushLog: () => {},
     notificationService: { sendDirect: (msg) => { sent.push(msg); return Promise.resolve({ sent: 1 }); } }
   });
   for (let t = 0; t <= OPTS.holdMs * 2; t += 5000) {
@@ -633,4 +633,30 @@ test('Entwarnung über das Fenster: ein alter Entlade-Zacken vor der Erholung z�
   });
   assert.deepEqual(transitions.map(([n]) => n), ['clear']);
   assert.equal(state.clearedWithDischarge, false);
+});
+
+// Gegenprüfung Release 1.0.9 (P2): Ein Poll-Punkt auf Register 2720 (int32,
+// −1 = unbegrenzt eindeutig) liefert bei 0 eine eindeutige Sperre
+// (ambiguousZero = false). Der Wächter verlangte trotzdem einen eigenen
+// 0-Write und meldete nach zehn Minuten „Speicher entlädt nicht“.
+test('Poll-Punkt auf 2720 = 0 ist eindeutig: Sperre ohne eigenen 0-Write → kein Alarm', () => {
+  const cfg = { points: { maxDischargeW: { address: 2720 } }, controlWrite: { maxDischargeW: { enabled: false } } };
+  assert.equal(runReadbackZero({ ownZero: false, cfg }).length, 0);
+});
+
+test('Poll-Punkt auf 2704 = 0 ohne eigenen 0-Write bleibt mehrdeutig → Alarm bleibt möglich', () => {
+  const cfg = { points: { maxDischargeW: { address: 2704 } }, controlWrite: { maxDischargeW: { enabled: false } } };
+  assert.equal(runReadbackZero({ ownZero: false, cfg }).length, 1);
+});
+
+test('knownDischargeCapW: eindeutige 0 aus 2720 zählt, mehrdeutige 0 aus 2704 nur mit eigenem 0-Write', async () => {
+  const { knownDischargeCapW } = await import('../services/setpoint-follow-watchdog.js');
+  const now = T0;
+  const st = (ownZero) => ({
+    victron: { maxDischargeW: 0, errors: {}, fieldUpdatedAt: { maxDischargeW: now } },
+    schedule: { lastWrite: ownZero ? { maxDischargeW: { value: 0, source: 'api', at: now - 3 * 3600000 } } : {} },
+  });
+  assert.equal(knownDischargeCapW(st(false), { points: { maxDischargeW: { address: 2720 } } }, now), 0);
+  assert.equal(knownDischargeCapW(st(false), { points: { maxDischargeW: { address: 2704 } } }, now), null);
+  assert.equal(knownDischargeCapW(st(true), { points: { maxDischargeW: { address: 2704 } } }, now), 0);
 });

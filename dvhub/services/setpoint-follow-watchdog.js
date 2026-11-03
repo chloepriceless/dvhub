@@ -222,11 +222,22 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
   // Eindeutiger Wert (2720 bzw. MQTT) geht vor — auch vor einer 2704-0 mit
   // alter eigener 0 (an der GX kann längst −1 stehen, Gegenprüfung 0ff2eb8d).
   if (ownOk && !ownRead.ambiguousZero) return Number(ownRead.value);
+  // Eine 0 aus einer Rücklesung verlangt den eigenen 0-Write nur, wenn sie
+  // wirklich mehrdeutig ist (2704). Ein Poll-Punkt auf 2720 liefert sie
+  // eindeutig (ambiguousZero = false) — sonst Fehlalarm trotz gesetzter Sperre
+  // (Gegenprüfung Release 1.0.9, P2).
   if (known && known.from !== 'own_write'
-      && (Number(known.value) !== 0 || ownZeroWrite(state) || !isVictronModbus(cfg))) return known.value;
+      && (!zeroIsAmbiguous(known, cfg) || ownZeroWrite(state))) return known.value;
   if (ownOk && ownZeroWrite(state)) return Number(ownRead.value);
   if (known && known.from === 'own_write' && isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return known.value;
   return null;
+}
+
+// Ist eine gelesene 0 von „unbegrenzt“ (−1) nicht zu unterscheiden? Nur am
+// Victron über Modbus und nur, wenn die Rücklesung sie nicht ausdrücklich als
+// eindeutig ausweist (knownMaxDischargeW: ambiguousZero, false für 2720).
+function zeroIsAmbiguous(known, cfg) {
+  return Number(known?.value) === 0 && isVictronModbus(cfg) && known?.ambiguousZero !== false;
 }
 
 // Eine 0 aus einer 2704-Rücklesung (Poll-Punkt / Peak Shaving) trägt gerade
@@ -234,7 +245,7 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
 function reliesOnAmbiguousZero(state, cfg, nowMs) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
   // Ohne eigenen 0-Write entschuldigt eine 2704-0 ohnehin nichts (7b1613f5).
-  return isVictronModbus(cfg) && !!known && known.from !== 'own_write' && Number(known.value) === 0 && ownZeroWrite(state);
+  return !!known && known.from !== 'own_write' && zeroIsAmbiguous(known, cfg) && ownZeroWrite(state);
 }
 
 /**

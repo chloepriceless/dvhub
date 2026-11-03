@@ -196,7 +196,8 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   liest jetzt die aktive SoC-Grenze mit, wertet ein Halten durch DVhub und eine Entlade-Sperre als gewollt und
   meldet nur, wenn die Störung ein ganzes Zehn-Minuten-Fenster prägt (mindestens 80 % der Messpunkte, auch im
   Mittel Netzbezug über dem Sollwert) und gerade anliegt. Bei Verdacht liest er die Entlade-Sperre selbst nach
-  (Register 2720, auf älteren GX 2704), auch nach einem Neustart. Während eines gewollten Haltens gibt es keine falsche Entwarnung mehr; „entlädt
+  (Register 2720, auf älteren GX 2704), auch nach einem Neustart. Eine Sperre, die ein Poll-Punkt aus Register 2720
+  liest, gilt als gewollt, auch wenn DVhub sie nicht selbst gesetzt hat. Während eines gewollten Haltens gibt es keine falsche Entwarnung mehr; „entlädt
   wieder“ meldet er nur, wenn der Akku wirklich entladen hat. Das Protokoll nennt Anteil und Mittelwerte. Neuer Schalter
   `monitoring.setpointWatchdog.minSuspectShare` (Standard 0,8).
 
