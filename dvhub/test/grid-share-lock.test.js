@@ -211,6 +211,28 @@ test('gesperrt: frischer MQTT-Empfang (fieldSourceAt < 90 s) lässt den PV-Über
   assert.deepEqual(gridWrites(writes), [-(5_000 - GRID_SHARE_EXPORT_MARGIN_W)]);
 });
 
+// ── Gesamtprüfung r109, Befund 2: Einfrier-Signale gelten auch für den Deckel ──
+// Der GX friert mittags bei 6 kW PV / 1 kW Last ein, die Stempel bleiben frisch.
+// Abends verlangt EOS −5 kW: der Deckel darf die eingefrorenen 6 kW nicht als
+// PV-Überschuss nehmen (grid-share.js wertet dieselben Signale als unsicher).
+for (const [name, flag] of [
+  ['Einfrier-Verdacht (Stable-Kanal)', { freezeSuspect: { active: true } }],
+  ['Einfrier-Wächter', { freeze: { active: true } }],
+  ['Kreuzprobe MQTT/Modbus', { sourceMismatch: { active: true } }],
+]) {
+  test(`gesperrt: ${name} → eingefrorene PV öffnet den Deckel nicht, nur der Puffer`, async () => {
+    const { evaluator, writes } = makeCtx({
+      pvW: 6_000, loadW: 1_000,
+      mutate: ({ state }) => { Object.assign(state.victron, flag); }
+    });
+    await evaluator.applyControlTarget('gridSetpointW', -5000, 'eos_optimization');
+    // Höchstens der Puffer; Einfrier-Wächter und Kreuzprobe halten zusätzlich auf 0.
+    const g = gridWrites(writes);
+    assert.equal(g.length, 1);
+    assert.ok(g[0] >= -100, `höchstens der Puffer: ${g}`);
+  });
+}
+
 // ── Gegenprüfung ecc27ea3 (3× P3): Hauslast mit richtigem Empfangsalter ──────
 // Abgeleitete Hauslast (energy_balance, DVhub-MQTT-Schema) bekam einen frischen
 // Abfrage-Stempel, aber ihr Empfangsalter blieb stehen (alter Eintrag aus der
