@@ -4113,6 +4113,12 @@ export function createApiRoutes(ctx) {
       // Verglichen ohne Zugangsdaten: die Seite schickt die Adresse redigiert
       // zurück (***:***@), und neue Zugangsdaten für denselben Broker sind
       // kein neuer Weg (Gegenprüfung ce4d0baa, P3).
+      // Backslash, Leer- und Steuerzeichen sowie Überlänge lesen der
+      // WHATWG-Parser (Vergleich) und url.parse in mqtt.js (Verbindung)
+      // verschieden — solche Adressen gar nicht annehmen (Gegenprüfung ebab0f7e, P2).
+      if (typeof body.brokerUrl === 'string' && ([...body.brokerUrl.trim()].some((ch) => ch === '\\' || /\s/.test(ch) || ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f) || body.brokerUrl.trim().length > 256)) {
+        return json(res, 400, { ok: false, error: 'invalid_broker_url' });
+      }
       if (typeof body.brokerUrl === 'string'
         && redactUrlCreds(body.brokerUrl.trim()) !== redactUrlCreds(String(cur.brokerUrl || '').trim())
         && denySupportConsent(req, res, 'mqtt_broker')) return;

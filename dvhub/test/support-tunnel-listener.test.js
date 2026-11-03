@@ -517,5 +517,10 @@ test('Support-Tunnel: keinen anderen MQTT-Broker eintragen (bleibender Steuerweg
   // Mit Zugangsdaten in der Adresse schickt die Seite sie redigiert zurück.
   box.mqtt.brokerUrl = ' mqtt://user:pw@192.168.1.5:1883';
   assert.notEqual((await call({ brokerUrl: 'mqtt://***:***@192.168.1.5:1883', topicPrefix: 'x' }, true)).status, 403, 'redigierte Adresse = gleicher Broker');
+  // Backslash: WHATWG liest Host 192.168.1.5, url.parse (mqtt.js) evil.example.net (Gegenprüfung ebab0f7e, P2).
+  const bs = await call({ brokerUrl: 'mqtt://a:b@evil.example.net\\@192.168.1.5:1883' }, true);
+  assert.equal(bs.status, 400, JSON.stringify(bs.body));
+  assert.equal(bs.body.error, 'invalid_broker_url');
+  assert.equal((await call({ brokerUrl: 'mqtt://x@192.168.1.5:1883 evil' }, false)).status, 400, 'Leerzeichen');
   assert.notEqual((await call({ brokerUrl: 'mqtts://broker.example.net' }, false)).status, 403, 'vom Heimnetz aus weiter möglich');
 });
