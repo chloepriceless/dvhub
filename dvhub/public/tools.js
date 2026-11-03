@@ -735,6 +735,13 @@ const RELEASE_PHASES = {
 function releaseJobVerdict(st, baseline, seenActive) {
   if (!st || !st.state) return 'ignore';
   const active = st.state === 'running' || st.state === 'queued';
+  // Anker = erster Stand nach dem Start (Box-Uhr): dieser und jeder spätere
+  // gehört zum Auftrag — beides Zeiten der Box, kein Vergleich mit dem Browser.
+  if (baseline && baseline.anchor) {
+    const ours = st.started === baseline.anchor || Date.parse(st.started) >= Date.parse(baseline.anchor);
+    if (!ours) return 'ignore';
+    return active ? 'active' : 'done';
+  }
   if (baseline && baseline.known) {
     if (baseline.started && st.started === baseline.started) return 'ignore';
     return active ? 'active' : 'done';
@@ -757,6 +764,18 @@ async function releaseJobBaseline() {
 // Auftrag des Helfers verfolgen: Fortschritt, Neustart überbrücken, Ergebnis.
 async function trackReleaseJob(label, baseline) {
   let seenActive = false;
+  // Stand vor dem Auftrag unbekannt: den ersten Stand nach dem Start als Anker
+  // nehmen — der Helfer schreibt „queued“, bevor er den Start bestätigt. So
+  // geht auch ein schnell scheiternder Auftrag nicht verloren (Gegenprüfung
+  // ce629829, P3).
+  if (!(baseline && baseline.known)) {
+    try {
+      const res = await apiFetch('/api/admin/update/status');
+      const data = await res.json();
+      const a = data && data.status;
+      if (a && a.started) baseline = { known: true, started: null, anchor: a.started };
+    } catch (_) { /* weiter wie bisher: Ergebnis erst nach „läuft“ */ }
+  }
   const deadline = Date.now() + 20 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));

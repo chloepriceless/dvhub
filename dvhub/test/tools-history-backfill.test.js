@@ -129,6 +129,12 @@ test('Update-Auftrag: erkannt ohne Uhrvergleich zwischen Browser und Box', () =>
   assert.equal(releaseJobVerdict(old, { known: false }, false), 'ignore');
   assert.equal(releaseJobVerdict({ ...old, state: 'queued' }, { known: false }, false), 'active');
   assert.equal(releaseJobVerdict(old, { known: false }, true), 'done');
+  // Anker (erster Stand nach dem Start): er und spätere zählen, frühere nicht —
+  // auch ein schnell gescheiterter Auftrag (Gegenprüfung ce629829, P3).
+  const anchor = { known: true, started: null, anchor: '2020-01-01T00:00:05.000Z' };
+  assert.equal(releaseJobVerdict({ state: 'failed', started: '2020-01-01T00:00:06.000Z' }, anchor, false), 'done');
+  assert.equal(releaseJobVerdict({ state: 'queued', started: anchor.anchor }, anchor, false), 'active');
+  assert.equal(releaseJobVerdict({ state: 'ok', started: '2019-12-31T23:00:00.000Z' }, anchor, false), 'ignore');
   // Kein früherer Auftrag: jeder Stand ist der neue.
   assert.equal(releaseJobVerdict({ state: 'failed', started: 'x' }, { known: true, started: null }, false), 'done');
 });
