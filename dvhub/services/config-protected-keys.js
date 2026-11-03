@@ -39,6 +39,16 @@ export const BOX_BOUND_PATHS = Object.freeze([['support', 'relay']]);
 export const LOCKED_KEYS = Object.freeze(['licensing']);
 export const OWN_ROUTE_KEYS = Object.freeze([...BOX_BOUND_KEYS, 'ortsnetz', ...LOCKED_KEYS]);
 
+// Über den Support-Tunnel (Gesamtprüfung 1.0.9) bleiben zusätzlich zu
+// apiToken alle Einstellungen, die Zugänge oder Freigaben erteilen, wie die
+// Box sie hat — Speichern und Import gleichermaßen. Der Support richtet die
+// Anlage ein, gibt sie aber nicht frei.
+export const SUPPORT_TUNNEL_KEPT_ROOTS = Object.freeze([
+  'support', 'security', 'allowedHosts', 'corsAllowedOrigins', 'trustProxy', 'trustedProxyIps',
+  'vpn', 'ortsnetz',
+]);
+export const SUPPORT_TUNNEL_KEPT_PATHS = Object.freeze([['eebus', 'trusted']]);
+
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 

@@ -10,7 +10,7 @@ import { isAllowedVehicleUrl } from '../services/vehicle-pull/index.js';
 import { isAllowedRemoteEndpoint } from '../services/optimizer/eos-remote.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, isRedactedPath } from '../config-redaction.js';
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from '../services/config-secrets-crypto.js';
-import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS } from '../services/config-protected-keys.js';
+import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS, SUPPORT_TUNNEL_KEPT_ROOTS, SUPPORT_TUNNEL_KEPT_PATHS } from '../services/config-protected-keys.js';
 import { mergeAgainstBaseWithConflicts } from '../services/config-base-merge.js';
 import { isInternalHost, isAllowedOutboundUrl } from '../services/host-address.js';
 import { validateVpnProfileFile } from '../vpn-manager.js';
@@ -208,12 +208,29 @@ export function createConfigRoutes(deps) {
       // `_encryptedSecrets`-Block mit apiToken (migrate:false) daran vorbei.
       // Immer den Stand der Box, auch wenn das Feld fehlt: sonst löschte ein
       // Import ohne apiToken das Token der Box.
+      // Gesamtprüfung 1.0.9: ebenso alles, was Zugänge oder Freigaben
+      // erteilt — Heimnetz-Definition und Hosts (security, allowedHosts, CORS,
+      // Proxy), VPN (autoConnect startet es beim nächsten Start), EEBUS-
+      // Kopplungen und die Ortsnetz-Einwilligung (kommt beim Import sonst aus
+      // der Datei).
       if (req?.dvhubSupportTunnel === true) {
         const cur = ctx.getRawCfg?.() || {};
         if (cur.apiToken === undefined) delete body.config.apiToken;
         else body.config.apiToken = REDACTED; // restoreRedacted setzt den Wert der Box ein
-        if (cur.support === undefined) delete body.config.support;
-        else body.config.support = JSON.parse(JSON.stringify(cur.support));
+        for (const key of SUPPORT_TUNNEL_KEPT_ROOTS) {
+          if (cur[key] === undefined) delete body.config[key];
+          else body.config[key] = JSON.parse(JSON.stringify(cur[key]));
+        }
+        for (const [parent, child] of SUPPORT_TUNNEL_KEPT_PATHS) {
+          const v = cur[parent]?.[child];
+          const target = body.config[parent];
+          if (v === undefined) {
+            if (target && typeof target === 'object') delete target[child];
+          } else {
+            if (!target || typeof target !== 'object' || Array.isArray(target)) body.config[parent] = {};
+            body.config[parent][child] = JSON.parse(JSON.stringify(v));
+          }
+        }
       }
       // Plan 09-01 (D-05, supersedes Plan 08-01 rejection): apiToken stays
       // OPTIONAL. Empty / null / undefined apiToken is a VALID config state

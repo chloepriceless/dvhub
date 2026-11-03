@@ -3257,6 +3257,9 @@ export function createApiRoutes(ctx) {
         return json(res, 200, setupStatePayload());
       }
       if (url.pathname === '/api/setup/complete' && req.method === 'POST') {
+        // Das Fenster gibt das dauerhafte API-Token heraus — das holt sich
+        // der Support nicht über den Tunnel (Gesamtprüfung 1.0.9).
+        if (denySupportConsent(req, res, 'setup_complete')) return;
         if (!ctx.needsSetup()) {
           return json(res, 403, { ok: false, error: 'setup_already_completed' });
         }
@@ -5053,6 +5056,8 @@ export function createApiRoutes(ctx) {
       });
     }
     if (url.pathname === '/api/input/push-key' && req.method === 'POST') {
+      // Neuer Schlüssel = neuer Zugang für Messwerte, einmal im Klartext.
+      if (denySupportConsent(req, res, 'input_push_key')) return;
       const body = await readJsonBody(req, res);
       if (body === null) return;
       if (!(installerHasValidBearer(req) || uiNonce.check(body?.uiToken))) return json(res, 403, { ok: false, error: 'ui_token_required' });
@@ -5180,6 +5185,11 @@ export function createApiRoutes(ctx) {
           if (!Number.isFinite(n) || Math.abs(n) > lim) return json(res, 400, { ok: false, error: `${k}_invalid` });
           patch[k] = Math.round(n * 1e6) / 1e6;
         }
+        // Einwilligung (Standort und Messwerte gehen hinaus) gibt der Kunde;
+        // über den Support-Tunnel nur ausschalten.
+        const onlyNarrowing = Object.keys(patch).length > 0
+          && Object.entries(patch).every(([k, v]) => (k === 'enabled' || k === 'sendPvForecast') && v === false);
+        if (!onlyNarrowing && denySupportConsent(req, res, 'ortsnetz_settings')) return;
         const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
         next.ortsnetz = { ...(next.ortsnetz || {}), ...patch };
         ctx.saveAndApplyConfig(next);
@@ -5308,6 +5318,8 @@ export function createApiRoutes(ctx) {
       if (url.pathname === '/api/datenspende/link' && req.method === 'POST') {
         const body = await readJsonBody(req, res);
         if (body === null) return;
+        // Einwilligung gibt der Kunde, nicht der Support (Gesamtprüfung 1.0.9).
+        if (denySupportConsent(req, res, 'datenspende_link')) return;
         if (!nonceOk(body)) return nonceFail();
         try {
           if (body.mode === 'apikey') {
@@ -5376,6 +5388,7 @@ export function createApiRoutes(ctx) {
         if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'nichts_zu_aendern' });
         // Nur reines Ausschalten ist privilegien-reduzierend und geht ohne Nonce.
         const onlyDisable = Object.keys(patch).length === 1 && patch.enabled === false;
+        if (!onlyDisable && denySupportConsent(req, res, 'datenspende_settings')) return;
         if (!onlyDisable && !nonceOk(body)) return nonceFail();
         // Ausschalten verwirft auch eine gerade laufende Einrichtung.
         if (patch.enabled === false) ds.cancelPendingLink?.();
@@ -5401,6 +5414,7 @@ export function createApiRoutes(ctx) {
           return json(res, 200, { ok: true, ...ds.stopBackfill() });
         }
         if (body.action !== 'start') return json(res, 400, { ok: false, error: 'action_start_oder_stop' });
+        if (denySupportConsent(req, res, 'datenspende_backfill')) return;
         if (!nonceOk(body)) return nonceFail();
         try {
           return json(res, 200, { ok: true, ...ds.startBackfill() });
@@ -5496,12 +5510,17 @@ export function createApiRoutes(ctx) {
       if (!ctx.eebus) return json(res, 503, { ok: false, error: 'eebus not available' });
       const body = await readJsonBody(req, res);
       if (body === null) return;
+      // Kopplungsmodus öffnen = neue Geräte dürfen sich koppeln (Gesamtprüfung 1.0.9).
+      if (body?.on === true && denySupportConsent(req, res, 'eebus_pairing')) return;
       const r = await ctx.eebus.setPairing(body?.on === true);
       return json(res, r?.ok ? 200 : 409, { ok: r?.ok === true, error: r?.error || null, pairing: ctx.eebus.status().pairing });
     }
     if (url.pathname === '/api/eebus/trust' && (req.method === 'POST' || req.method === 'DELETE')) {
       const body = req.method === 'POST' ? await readJsonBody(req, res) : null;
       if (req.method === 'POST' && body === null) return;
+      // Vertrauen = Kopplung (ein Netzbetreiber-Gerät darf die Anlage begrenzen);
+      // über den Support-Tunnel nur entfernen (Gesamtprüfung 1.0.9).
+      if (req.method === 'POST' && denySupportConsent(req, res, 'eebus_trust')) return;
       const ski = String((req.method === 'POST' ? body?.ski : url.searchParams.get('ski')) || '')
         .toLowerCase().replace(/[\s:]/g, '');
       if (!/^[0-9a-f]{40}$/.test(ski)) return json(res, 400, { ok: false, error: 'invalid_ski' });
@@ -8637,6 +8656,8 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/restart' && req.method === 'POST') {
+      // Neustart = Stopp + Start: startet auch ein gestopptes VPN (Gesamtprüfung 1.0.9).
+      if (denySupportConsent(req, res, 'vpn_restart')) return;
       if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       const actor = actorContext(req);

@@ -495,6 +495,9 @@ export function createAdminRoutes(deps) {
     // happen, but the token IS still cleared in config (D-02). No process.exit, no crash.
     if (url.pathname === '/api/admin/token/revoke' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
+      // Token-Wechsel entscheidet der Kunde — auch das Löschen samt Neustart
+      // (Gesamtprüfung 1.0.9, wie bei rotate).
+      if (deps.denySupportConsent?.(req, res, 'token_revoke')) return;
       const oldFp = tokenFingerprint(getCfg().apiToken || '');
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
       next.apiToken = '';

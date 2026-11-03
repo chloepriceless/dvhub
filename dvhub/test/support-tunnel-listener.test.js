@@ -368,3 +368,124 @@ test('applySecrets übernimmt nie apiToken — nur der Geräte-Tausch (__apiToke
   assert.equal(out.apiToken, 'b'.repeat(32));
   assert.equal(out.mqtt.password, 'mq');
 });
+
+// Gesamtprüfung release/1.0.9 (Hauptbefunde 4, 5, 6 und die systematische
+// Durchsicht aller schreibenden Wege): Über den Fern-Support lassen sich keine
+// Freigaben erteilen — kein VPN (auch nicht per Neustart), kein Token setzen,
+// löschen oder abholen (Einrichtungsfenster, Push-Schlüssel), keine
+// Einwilligung (Datenspende, Ortsnetz), keine EEBUS-Kopplung, keine Zugänge
+// über die Konfiguration. Zurücknehmen bleibt erlaubt.
+test('Support-Tunnel: kein VPN-Neustart, kein Token-Widerruf, keine Einwilligung, kein Push-Schlüssel, keine EEBUS-Kopplung', async () => {
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, datenspende: { enabled: false }, ortsnetz: { enabled: false } };
+  const calls = [];
+  const { ctx, saved } = ctxWith(box, {
+    vpnManager: { restart: async () => { calls.push('vpn_restart'); }, getStatus: () => ({ status: 'connected' }) },
+    datenspende: {
+      status: () => ({ linked: true }),
+      link: async () => { calls.push('ds_link'); }, linkApiKey: async () => { calls.push('ds_link'); },
+      startBackfill: () => { calls.push('ds_backfill'); return {}; }, stopBackfill: () => ({}),
+      unlink: () => { calls.push('ds_unlink'); return {}; }, cancelPendingLink() {},
+    },
+    ortsnetz: { status: () => ({}), tick: async () => ({}) },
+    inputPush: { regenerate: () => { calls.push('push_key'); return 'k'.repeat(32); }, hasKey: () => false },
+    eebus: { setPairing: async (on) => { calls.push(`eebus_pairing_${on}`); return { ok: true }; }, status: () => ({ pairing: false }), reload: async () => {} },
+    getServiceActionsEnabled: () => true, getServiceName: () => 'dvhub-test-nicht-starten',
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+    getConfigPath: () => '/nonexistent/config.json',
+  });
+  const routes = createApiRoutes(ctx);
+  const call = async (method, p, body) => {
+    const res = mockRes();
+    const req = makeReq(method, p, body, { viaSupport: true });
+    req.headers.authorization = `Bearer ${'b'.repeat(32)}`; // selbst mit Token
+    await routes.handleRequest(req, res, new URL(`http://x${p}`));
+    return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}') };
+  };
+  for (const [method, p, body] of [
+    ['POST', '/api/vpn/restart', {}],
+    ['POST', '/api/admin/token/revoke', {}],
+    ['POST', '/api/datenspende/link', { mode: 'apikey', apiKey: 'x', consent: true, uiToken: 'n' }],
+    ['POST', '/api/datenspende/settings', { enabled: true }],
+    ['POST', '/api/datenspende/settings', { sources: { grid: true } }],
+    ['POST', '/api/datenspende/backfill', { action: 'start' }],
+    ['POST', '/api/ortsnetz/settings', { enabled: true }],
+    ['POST', '/api/ortsnetz/settings', { sendPvForecast: true }],
+    ['POST', '/api/input/push-key', {}],
+    ['POST', '/api/eebus/trust', { ski: 'a'.repeat(40), role: 'grid' }],
+    ['POST', '/api/eebus/pairing', { on: true }],
+  ]) {
+    const r = await call(method, p, body);
+    assert.equal(r.status, 403, `${p} ${JSON.stringify(body)}: ${r.status} ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.error, 'support_tunnel_consent_denied', p);
+    assert.equal(r.body.key, undefined, `${p}: kein Schlüssel in der Antwort`);
+  }
+  assert.deepEqual(calls, []);
+  assert.equal(saved.length, 0);
+  // Zurücknehmen bleibt erlaubt.
+  for (const [method, p, body] of [
+    ['POST', '/api/datenspende/settings', { enabled: false }],
+    ['POST', '/api/datenspende/backfill', { action: 'stop' }],
+    ['POST', '/api/ortsnetz/settings', { enabled: false, sendPvForecast: false }],
+    ['DELETE', `/api/eebus/trust?ski=${'a'.repeat(40)}`, null],
+    ['POST', '/api/eebus/pairing', { on: false }],
+  ]) {
+    const r = await call(method, p, body);
+    assert.notEqual(r.body.error, 'support_tunnel_consent_denied', `${p} ${JSON.stringify(body)}`);
+  }
+});
+
+test('Support-Tunnel: das Einrichtungsfenster gibt kein Token heraus', async () => {
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' } };
+  const { ctx, saved } = ctxWith(box, { needsSetup: () => true, getDataDir: () => '/nonexistent' });
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/setup/complete', { victronHost: '192.168.1.20' }, { viaSupport: true }), res, new URL('http://x/api/setup/complete'));
+  assert.equal(res._captured.status, 403, res._captured.body);
+  assert.equal(JSON.parse(res._captured.body).error, 'support_tunnel_consent_denied');
+  assert.doesNotMatch(res._captured.body, /b{32}/);
+  assert.equal(saved.length, 0);
+  // Vom Heimnetz/von der Box aus läuft die Einrichtung weiter.
+  const res2 = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/setup/complete', { victronHost: '192.168.1.20' }), res2, new URL('http://x/api/setup/complete'));
+  assert.equal(res2._captured.status, 200, res2._captured.body);
+});
+
+test('Support-Tunnel: Zugänge in der Konfiguration (Sicherheit, VPN, Hosts, EEBUS-Kopplungen, Ortsnetz) bleiben, wie die Box sie hat', async () => {
+  const box = {
+    httpPort: 8080, apiToken: 'b'.repeat(32),
+    security: { lanTrust: 'open', lanCidrs: [], trustedClientIps: [] },
+    vpn: { enabled: false, autoConnect: false },
+    eebus: { enabled: true, trusted: [] },
+    ortsnetz: { enabled: false },
+  };
+  const { ctx, saved } = ctxWith(box, {
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+    getConfigPath: () => '/nonexistent/config.json', getServiceActionsEnabled: () => true,
+  });
+  const routes = createApiRoutes(ctx);
+  const wide = {
+    httpPort: 8080,
+    security: { lanTrust: 'open', lanCidrs: ['0.0.0.0/0', '::/0'], trustedClientIps: [] },
+    vpn: { enabled: true, autoConnect: true },
+    allowedHosts: ['evil.example.net'], corsAllowedOrigins: ['https://evil.example.net'],
+    trustProxy: true, trustedProxyIps: ['127.0.0.1'],
+    eebus: { enabled: true, trusted: [{ ski: 'a'.repeat(40), role: 'grid' }] },
+    ortsnetz: { enabled: true },
+  };
+  for (const p of ['/api/config', '/api/config/import']) {
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', p, { config: JSON.parse(JSON.stringify(wide)) }, { viaSupport: true }), res, new URL(`http://x${p}`));
+    assert.equal(res._captured.status, 200, `${p}: ${res._captured.body}`);
+    const last = saved.at(-1);
+    assert.deepEqual(last.security, box.security, `${p}: security`);
+    assert.deepEqual(last.vpn, box.vpn, `${p}: vpn`);
+    assert.deepEqual(last.eebus.trusted, [], `${p}: eebus.trusted`);
+    assert.deepEqual(last.ortsnetz, box.ortsnetz, `${p}: ortsnetz`);
+    for (const k of ['allowedHosts', 'corsAllowedOrigins', 'trustProxy', 'trustedProxyIps']) assert.equal(last[k], undefined, `${p}: ${k}`);
+  }
+  // Vom Heimnetz aus geht dasselbe weiter.
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/config', { config: JSON.parse(JSON.stringify(wide)) }), res, new URL('http://x/api/config'));
+  assert.equal(res._captured.status, 200, res._captured.body);
+  assert.equal(saved.at(-1).vpn.autoConnect, true);
+});
