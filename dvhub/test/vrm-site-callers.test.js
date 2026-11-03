@@ -678,3 +678,68 @@ test('Auto-Nachimport: gescheiterte Lückensuche beim Start wird wiederholt', as
   assert.equal(second?.started, true, 'zweiter Versuch startet den Nachimport');
   assert.equal(scheduled.length, 1, 'nach Erfolg nichts mehr geplant');
 });
+
+// Gegenprüfung 0060ce70 (2× P3): eigener Versuchszähler für die Lückensuche;
+// läuft gerade ein anderer Nachimport, wird der Versuch verschoben statt verworfen.
+test('Auto-Nachimport: Lückensuche — eigener Zähler, belegt → verschoben, Aufgeben nach dem letzten Versuch', async () => {
+  let dbDown = true;
+  const store = { ...gapStore(), async listImportJobRanges() { if (dbDown) throw new Error('Datenbank nicht bereit'); return []; } };
+  const logs = [];
+  const scheduled = [];
+  const fetchImpl = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); };
+  const manager = createHistoryImportManager({
+    store, fetchImpl, waitImpl: async () => {},
+    log: (event, details) => logs.push({ event, details }),
+    scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
+    autoRetryDelaysMs: [1000, 2000],
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-gap-own' } },
+  });
+  await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  await scheduled[0].fn(); await flush();                   // 2. Lückensuche scheitert
+  assert.deepEqual(scheduled.map((x) => x.ms), [1000, 2000]);
+  dbDown = false;
+  await scheduled[1].fn(); await flush();                   // 3. Lückensuche gelingt, Nachimport scheitert (Netz)
+  // Der Nachimport beginnt mit seinem ersten Versuch (1000 ms), nicht beim dritten.
+  assert.equal(scheduled[2]?.ms, 1000, 'Nachimport-Versuche vollständig');
+  // Aufgeben nach dem letzten Versuch der Lückensuche:
+  const logs2 = [];
+  const sched2 = [];
+  const m2 = createHistoryImportManager({
+    store: { ...gapStore(), async listImportJobRanges() { throw new Error('weg'); } }, fetchImpl, waitImpl: async () => {},
+    log: (event, details) => logs2.push({ event, details }),
+    scheduleImpl: (fn, ms) => { sched2.push({ fn, ms }); },
+    autoRetryDelaysMs: [1000],
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-gap-end' } },
+  });
+  await m2.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  await sched2[0].fn(); await flush();
+  assert.equal(sched2.length, 1);
+  assert.equal(logs2.filter((l) => l.event === 'history_auto_backfill_error').pop().details.retryInMs, null);
+});
+
+test('Auto-Nachimport: Lückensuche-Wiederholung trifft auf laufenden Nachimport → verschoben', async () => {
+  let dbDown = true;
+  let release;
+  const base = fakeVrm();
+  const fetchImpl = async (url, opts) => { if (!release) await new Promise((r) => { release = r; }); return base.fetchImpl(url, opts); };
+  const store = { ...gapStore(), async listImportJobRanges() { if (dbDown) throw new Error('Datenbank nicht bereit'); return []; } };
+  const logs = [];
+  const scheduled = [];
+  const manager = createHistoryImportManager({
+    store, fetchImpl, waitImpl: async () => {},
+    log: (event, details) => logs.push({ event, details }),
+    scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
+    autoRetryDelaysMs: [1000],
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-gap-busy' } },
+  });
+  await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  dbDown = false;
+  // Ein anderer Nachimport läuft (hängt im Abruf).
+  const other = await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z', gapSearchAttempt: 5 });
+  assert.equal(other.started, true);
+  await scheduled[0].fn(); await flush();
+  assert.ok(logs.some((l) => l.event === 'history_auto_backfill_deferred' && l.details.phase === 'gap_search'));
+  assert.equal(scheduled.length, 2, 'derselbe Versuch neu geplant');
+  release?.();
+  await flush();
+});

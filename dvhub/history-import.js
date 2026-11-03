@@ -1879,7 +1879,9 @@ export function createHistoryImportManager({
       // scheitern, z. B. wenn die Datenbank noch nicht bereit ist. Vorher
       // lehnte der Aufruf ab und nichts wurde wiederholt (Gesamtprüfung
       // Release 1.0.9) — jetzt nach denselben Fristen wie der Nachimport.
-      const attempt = Number(options.autoAttempt || 0);
+      // Eigener Zähler (gapSearchAttempt): die Versuche des Nachimports danach
+      // bleiben vollständig (Gegenprüfung 0060ce70, P3).
+      const attempt = Number(options.gapSearchAttempt || 0);
       const retryInMs = attempt < autoRetryDelaysMs.length ? autoRetryDelaysMs[attempt] : null;
       log('history_auto_backfill_error', {
         phase: 'gap_search',
@@ -1888,9 +1890,18 @@ export function createHistoryImportManager({
         retryInMs
       }, { severity: 'warn' });
       if (retryInMs != null) {
-        scheduleImpl(() => startAutomaticBackfill({ ...options, autoAttempt: attempt + 1 })
-          .catch((e) => log('history_auto_backfill_error', { phase: 'gap_search', error: e?.message || String(e), attempt: attempt + 2, retryInMs: null }, { severity: 'warn' })),
-        retryInMs);
+        const retry = () => startAutomaticBackfill({ ...options, gapSearchAttempt: attempt + 1 }).then((r) => {
+          // Läuft gerade ein anderer Nachimport: denselben Versuch verschieben,
+          // wie beim Nachimport (Gegenprüfung 0060ce70, P3).
+          if (r?.busy) {
+            log('history_auto_backfill_deferred', { phase: 'gap_search', attempt: attempt + 2, retryInMs }, { severity: 'info' });
+            scheduleImpl(retry, retryInMs);
+          }
+          return r;
+        }, (e) => {
+          log('history_auto_backfill_error', { phase: 'gap_search', error: e?.message || String(e), attempt: attempt + 2, retryInMs: null }, { severity: 'warn' });
+        });
+        scheduleImpl(retry, retryInMs);
       }
       return { ok: false, started: false, error: error?.message || String(error) };
     }
