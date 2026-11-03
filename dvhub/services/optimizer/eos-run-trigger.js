@@ -172,10 +172,14 @@ export function createEosRunTrigger({
         return { ok: false, skipped: error };
       }
     }
+    // stop() während der Vorbereitung bzw. des Ladestand-Lesens: keinen Lauf
+    // mehr an EOS schicken (Gegenprüfung 63c034af, P3).
+    if (stopped) return { ok: false, skipped: 'stopped' };
     // Beginn erst nach der Vorbereitung: ein Neu-Push gehört nicht zur
     // Rechenzeit, die Startlösung richtet sich nach dem echten Beginn.
     const at = now();
     const socRes = await collectSoc();
+    if (stopped) return { ok: false, skipped: 'stopped' };
     const soc = socRes?.soc;
     if (!soc || !Object.keys(soc).length) {
       const error = socRes?.skipped || socRes?.error || 'kein Ladestand';

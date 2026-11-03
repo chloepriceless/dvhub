@@ -1930,7 +1930,9 @@ export function createHistoryImportManager({
         }, { severity: 'warn' });
         if (retryInMs != null) {
           const retry = () => {
-            startAutomaticBackfill({ ...options, autoAttempt: autoAttempt + 1 }).then((r) => {
+            // Die Lückensuche dieses Versuchs beginnt mit eigenem Zähler von vorn
+            // (Gegenprüfung 1f8add68, P3).
+            startAutomaticBackfill({ ...options, autoAttempt: autoAttempt + 1, gapSearchAttempt: 0 }).then((r) => {
               // Läuft gerade ein anderer Nachimport: denselben Versuch verschieben.
               if (r?.busy) {
                 log('history_auto_backfill_deferred', { attempt: autoAttempt + 2, retryInMs }, { severity: 'info' });

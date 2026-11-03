@@ -88,7 +88,7 @@ export function createEosFirstPlanWatch(deps) {
   let freshSince = 0;      // Loesungen vor diesem Zeitpunkt zaehlen als veraltet
   let boosted = false;     // haben WIR ems.interval gesenkt? Nur dann setzen wir zurueck.
   let ticking = false;     // kein zweiter tick, solange einer im Netz haengt
-  let stopped = false;     // stop() aufgerufen: nie mehr einen Lauf anstossen (arm() hebt es auf)
+  let stopped = false;     // stop() aufgerufen (Abschalten): nie mehr scharf, nie mehr einen Lauf anstossen
 
   function clear() {
     if (timer) clearTimer(timer);
@@ -179,9 +179,10 @@ export function createEosFirstPlanWatch(deps) {
      * @returns {Promise<boolean>} true, wenn dieser Aufruf die Wache gestartet hat
      */
     async arm(opts = {}) {
-      if (armed) return false;
+      // Nach stop() nie wieder scharf: ein noch laufender runOptimization ruft
+      // arm() evtl. erst nach dem Abschalten (Gegenprüfung 63c034af, P3).
+      if (armed || stopped) return false;
       armed = true;
-      stopped = false;
       armedAt = now();
       // Ab welchem Zeitpunkt eine Loesung als frisch gilt: der Moment, in dem
       // DVhub die Prognosen gepusht hat. EOS stellt nach einem Neustart seine

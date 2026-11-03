@@ -381,3 +381,16 @@ test('nach stop(): kick() und trigger() starten keinen Lauf mehr', async () => {
   h.trigger.start();
   assert.equal((await h.trigger.trigger('boundary')).ok, true, 'start() hebt den Stopp auf');
 });
+
+test('stop() während der Vorbereitung: kein POST an EOS (Gegenprüfung 63c034af, P3)', async () => {
+  let releasePrep;
+  const h = harness({ prepareRun: () => new Promise((r) => { releasePrep = r; }) });
+  h.trigger.start();
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  const running = h.trigger.trigger('boundary');
+  while (!releasePrep) await new Promise((r) => setImmediate(r));
+  h.trigger.stop();
+  releasePrep({ ok: true, pushed: true });
+  assert.equal((await running).skipped, 'stopped');
+  assert.equal(h.posts.length, 0);
+});

@@ -281,3 +281,21 @@ test('stop() während des Zurücksetzens nach fertiger Lösung: kein Lauf', asyn
   await tick;
   assert.equal(triggered, 0);
 });
+
+test('arm() nach stop(): kein Boost, kein Timer, kein Lauf (Gegenprüfung 63c034af, P3)', async () => {
+  let pending = null;
+  const puts = [];
+  const watch = createEosFirstPlanWatch({
+    hasFreshSolution: async () => true,
+    setEmsIntervalSec: async (sec) => { puts.push(sec); return { ok: true }; },
+    triggerOptimization: () => { throw new Error('darf nicht'); },
+    pollMs: 30_000, maxWaitMs: 900_000, boostIntervalSec: 60,
+    now: () => 1_000_000,
+    setTimer: (fn) => { pending = fn; return { unref() {} }; },
+    clearTimer: () => { pending = null; },
+  });
+  watch.stop();
+  assert.equal(await watch.arm({ restoreIntervalSec: 900 }), false);
+  assert.deepEqual(puts, []);
+  assert.equal(pending, null);
+});

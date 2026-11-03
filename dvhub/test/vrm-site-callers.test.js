@@ -743,3 +743,25 @@ test('Auto-Nachimport: Lückensuche-Wiederholung trifft auf laufenden Nachimport
   release?.();
   await flush();
 });
+
+test('Auto-Nachimport: Wiederholung des Nachimports bringt die verbrauchten Lückensuch-Versuche nicht mit (Gegenprüfung 1f8add68, P3)', async () => {
+  let dbDown = true;
+  const store = { ...gapStore(), async listImportJobRanges() { if (dbDown) throw new Error('Datenbank nicht bereit'); return []; } };
+  const logs = [];
+  const scheduled = [];
+  const fetchImpl = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); };
+  const manager = createHistoryImportManager({
+    store, fetchImpl, waitImpl: async () => {},
+    log: (event, details) => logs.push({ event, details }),
+    scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
+    autoRetryDelaysMs: [1000],
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-gap-reset' } },
+  });
+  await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' }); // Suche 1 scheitert → [0]
+  dbDown = false;
+  await scheduled[0].fn(); await flush();   // Suche gelingt, Nachimport scheitert (Netz) → [1]
+  assert.equal(scheduled.length, 2);
+  dbDown = true;
+  await scheduled[1].fn(); await flush();   // Nachimport-Wiederholung: Suche scheitert erneut
+  assert.equal(scheduled.length, 3, 'die Lückensuche hat in dieser Wiederholung wieder ihren Versuch');
+});
