@@ -434,27 +434,53 @@ dvhub_cfg_dir() {  # <konfigurationsordner> <modus oder leer> <teil>… — Unte
   shift 2
   ( dvhub_cfg_cd "$base" "$@" && { [[ -z "$mode" ]] || chmod "$mode" .; } )
 }
-# Selbstsigniertes Zertifikat, wenn tls/cert.pem fehlt. Rückgabe 0 erzeugt,
-# 3 schon vorhanden, sonst Fehler. <vorsatz> z. B. eine Zeitgrenze (pu_bounded 30).
+# Selbstsigniertes Zertifikat nur, wenn in tls/ nichts Eigenes liegt. Rückgabe
+# 0 erzeugt, 3 vorhanden bzw. eigene Einrichtung (unverändert), sonst Fehler.
+# <vorsatz> z. B. eine Zeitgrenze (pu_bounded 30).
+# Verweise bleiben stehen (certbot: cert.pem → /etc/letsencrypt/live/<name>/
+# fullchain.pem; Gesamtprüfung 03.11.2026, Befund 8). Sicher ist das, weil
+# root nie DURCH einen Verweis schreibt, chownt oder Inhalte liest: das neue
+# Paar entsteht im root-eigenen Zwischenordner, harte Verweise ersetzen nur
+# fehlende Einträge, und ein Verweis namens cert.pem oder key.pem verhindert
+# das Erzeugen ganz. Sein Ziel wird nur per stat eingeordnet (reguläre Datei
+# von root oder dem Dienstbenutzer), um zu melden, was HTTPS nicht laden kann.
+# Die App liest die Dateien als Dienstbenutzer — über einen Verweis bekommt sie
+# nichts, was sie nicht ohnehin lesen dürfte.
+dvhub_tls_target_ok() {  # <eintrag im aktuellen ordner> <dienstbenutzer>
+  local uid owner=(-user 0)
+  uid="$(id -u "$2" 2>/dev/null)" && owner=( \( -user 0 -o -user "$uid" \) )
+  [[ -n "$(find -L "./$1" -maxdepth 0 -type f "${owner[@]}" -print 2>/dev/null)" ]]
+}
+dvhub_tls_shown() {  # <verweis> — Ziel ohne Steuerzeichen, gekürzt (stammt vom Dienstbenutzer)
+  printf '%s' "$(readlink -- "$1" 2>/dev/null)" | LC_ALL=C tr -c '[:print:]' '?' | cut -c1-200
+}
 dvhub_tls_selfsigned() {  # <konfigurationsordner> <dienstbenutzer> [<vorsatz>…]
   local base=$1 user=$2
   shift 2
   (
     dvhub_cfg_cd "$base" tls || exit 1
     tls_real="$(pwd -P)" || exit 1
-    # Verweise fliegen raus — die App läse sonst über sie, und ein Verweis
-    # namens cert.pem täuschte ein vorhandenes Zertifikat vor. Mit Meldung:
-    # ein eigener Schlüssel als Verweis wird so durch ein neues Paar ersetzt.
-    for link in ./*.pem ./.[!.]*; do
-      [[ -L "$link" ]] || continue
-      echo "  WARN: $tls_real/${link#./} war ein Verweis — entfernt (eigene Zertifikate als Datei ablegen)" >&2
-      rm -f -- "$link"
+    linked=0
+    for f in cert.pem key.pem; do
+      if [[ -L "$f" ]]; then
+        linked=1
+        dvhub_tls_target_ok "$f" "$user" \
+          || echo "  WARN: $tls_real/$f verweist auf „$(dvhub_tls_shown "$f")“ — keine reguläre Datei von root oder $user; HTTPS lädt es so nicht (Verweis bleibt)" >&2
+      elif [[ -e "$f" && ! -f "$f" ]]; then
+        echo "  WARN: $tls_real/$f ist keine Datei — bleibt unverändert" >&2
+      fi
     done
-    find . -maxdepth 1 -type l -exec rm -f -- {} + 2>/dev/null || true
-    # Vorhandenes Zertifikat bleibt — ein eigener Schlüssel darf anders heißen
-    # (tlsKeyPath, Gegenprüfung 2b43209c). Fehlt key.pem, sagt die Meldung es.
-    if [[ -f cert.pem ]]; then
-      [[ -f key.pem ]] || echo "  WARN: $tls_real/cert.pem ohne key.pem — HTTPS braucht den Schlüssel (key.pem oder tlsKeyPath)" >&2
+    # Vorhandenes Zertifikat (Datei oder Verweis) bleibt — ein eigener
+    # Schlüssel darf anders heißen (tlsKeyPath, Gegenprüfung 2b43209c).
+    if [[ -e cert.pem || -L cert.pem ]]; then
+      [[ -e key.pem || -L key.pem ]] || echo "  WARN: $tls_real/cert.pem ohne key.pem — HTTPS braucht den Schlüssel (key.pem oder tlsKeyPath)" >&2
+      exit 3
+    fi
+    # Verlinkter Schlüssel ohne Zertifikat: eine eigene, halb fertige
+    # Einrichtung — nicht durch ein selbstsigniertes Paar ersetzen.
+    [[ -e key.pem && ! -f key.pem && ! -L key.pem ]] && exit 3
+    if [[ "$linked" -eq 1 ]]; then
+      echo "  WARN: $tls_real/key.pem ist ein Verweis, cert.pem fehlt — kein selbstsigniertes Paar erzeugt (eigenes Zertifikat als cert.pem ablegen oder key.pem entfernen)" >&2
       exit 3
     fi
     stage="$(mktemp -d .neu.XXXXXX)" || exit 1
