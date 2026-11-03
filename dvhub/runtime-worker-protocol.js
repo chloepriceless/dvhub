@@ -83,10 +83,12 @@ export function createRuntimeCommandQueue({ handleCommand, sendMessage }) {
  * Der Aufrufer leitet COMMAND_RESULT-Nachrichten an handleMessage weiter.
  * Nach dem Zeitlimit kann der Worker den Befehl trotzdem noch ausführen
  * (Gegenprüfung 302ebd13, P3): seine verspätete Antwort geht an onLateResult.
- * @param {{ getWorker: () => any, timeoutMs?: number,
+ * isReady: nur an einen bereiten Worker senden, sonst sofort
+ * runtime_worker_unavailable (sonst wartete ein Befehl beim Start bis zum Zeitlimit).
+ * @param {{ getWorker: () => any, isReady?: () => boolean, timeoutMs?: number,
  *           onLateResult?: (type: string, outcome: {ok:boolean, result?:any, error?:string}) => void }} opts
  */
-export function createRuntimeCommandClient({ getWorker, timeoutMs = 10_000, onLateResult = null }) {
+export function createRuntimeCommandClient({ getWorker, isReady = () => true, timeoutMs = 10_000, onLateResult = null }) {
   const pending = new Map();
   // Nach dem Zeitlimit aufgegeben, Antwort noch offen: requestId → type.
   const timedOut = new Map();
@@ -108,7 +110,7 @@ export function createRuntimeCommandClient({ getWorker, timeoutMs = 10_000, onLa
       const request = createRuntimeCommandRequest(type, payload);
       const validation = validateRuntimeCommand(request);
       if (!validation.ok) return Promise.resolve({ ok: false, error: validation.error });
-      const worker = getWorker?.();
+      const worker = isReady() ? getWorker?.() : null;
       if (!worker || worker.connected === false || typeof worker.send !== 'function') {
         return Promise.resolve({ ok: false, error: 'runtime_worker_unavailable' });
       }

@@ -8064,11 +8064,12 @@ export function createApiRoutes(ctx) {
         ? await ctx.resetGridShare(resetOpts)
         : ctx.gridShare.reset(resetOpts);
       pushLog('grid_share_reset_request', { ok: r.ok, previousKwh: r.previousKwh ?? null, error: r.error ?? null }, actor);
-      // Worker startet noch → 503 (gleich wieder versuchen); Zeitlimit → 504:
+      // Worker startet noch → 503 (gleich wieder versuchen); Zeitlimit oder
+      // Worker-Ende mitten im Befehl (Gegenprüfung fa7ef3a9) → 504:
       // der Worker kann den Reset trotzdem noch ausführen — Ergebnis unbekannt,
       // Stand neu laden statt blind wiederholen (Gegenprüfung 302ebd13, P3).
       if (r.error === 'runtime_worker_unavailable') return json(res, 503, { ...r, detail: 'Der Regelprozess startet gerade — bitte gleich noch einmal versuchen.' });
-      if (r.error === 'runtime_worker_timeout') return json(res, 504, { ...r, detail: 'Keine Antwort vom Regelprozess — ob zurückgesetzt wurde, ist unbekannt. Bitte den Stand neu laden.' });
+      if (r.error === 'runtime_worker_timeout' || r.error === 'runtime_worker_exited') return json(res, 504, { ...r, detail: 'Keine Antwort vom Regelprozess — ob zurückgesetzt wurde, ist unbekannt. Bitte den Stand neu laden.' });
       return json(res, r.ok ? 200 : 409, r);
     }
     if (url.pathname === '/api/battery/grid-share/protocol.csv' && req.method === 'GET') {

@@ -489,7 +489,8 @@ let runtimeWorkerHeartbeatAt = 0;
 // (Gegenprüfung 302ebd13, P3). Eine Antwort nach dem Zeitlimit (der Worker hat
 // doch ausgeführt) lässt den Web-Prozess den Zählerstand neu lesen.
 const runtimeCommandClient = createRuntimeCommandClient({
-  getWorker: () => (runtimeWorkerState.ready ? runtimeWorker : null),
+  getWorker: () => runtimeWorker,
+  isReady: () => runtimeWorkerState.ready === true,
   onLateResult: (type, outcome) => {
     if (type !== 'grid_share_reset') return;
     ctx.gridShare?.reload?.();
@@ -1403,7 +1404,12 @@ ctx.gridShare = createGridShareTracker({
 ctx.resetGridShare = async ({ reason = '', actor = null } = {}) => {
   if (IS_RUNTIME_PROCESS) return ctx.gridShare.reset({ reason, actor });
   const r = await runtimeCommandClient.send('grid_share_reset', { reason, actor });
-  if (!r.ok) return { ok: false, error: r.error || 'runtime_command_failed' };
+  // Zeitlimit oder Worker-Ende: Ergebnis unbekannt — den Stand trotzdem sofort
+  // neu lesen (Gegenprüfung fa7ef3a9, P3).
+  if (!r.ok) {
+    ctx.gridShare.reload?.();
+    return { ok: false, error: r.error || 'runtime_command_failed' };
+  }
   ctx.gridShare.reload?.();
   return r.result && typeof r.result === 'object' ? r.result : { ok: false, error: 'runtime_command_failed' };
 };

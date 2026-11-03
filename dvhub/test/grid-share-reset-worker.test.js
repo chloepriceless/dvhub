@@ -199,3 +199,33 @@ test('Route: Worker nicht bereit → 503, Zeitlimit → 504 mit Hinweis „Ergeb
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Gegenprüfung fa7ef3a9 (P3): Die Bereitschafts-Sperre war nur über server.js
+// verdrahtet und nirgends so getestet, dass ein Test ohne sie rot würde.
+test('Worker nicht bereit: sofort runtime_worker_unavailable, nichts gesendet', async () => {
+  const sent = [];
+  let ready = false;
+  const client = createRuntimeCommandClient({ getWorker: () => ({ connected: true, send: (m) => sent.push(m) }), isReady: () => ready, timeoutMs: 5_000 });
+  const t0 = Date.now();
+  assert.deepEqual(await client.send('grid_share_reset', {}), { ok: false, error: 'runtime_worker_unavailable' });
+  assert.ok(Date.now() - t0 < 100);
+  assert.equal(sent.length, 0);
+  ready = true;
+  const p = client.send('grid_share_reset', {});
+  assert.equal(sent.length, 1);
+  client.handleMessage({ type: RUNTIME_MESSAGE_TYPES.COMMAND_RESULT, requestId: sent[0].requestId, ok: true, result: { ok: true, previousKwh: 0 } });
+  assert.equal((await p).ok, true);
+});
+
+// Gegenprüfung fa7ef3a9 (P3): Endet der Worker während eines Resets, ist das
+// Ergebnis so unbekannt wie beim Zeitlimit — nicht „abgelehnt“ (409).
+test('Route: Worker während des Resets beendet → 504 „Ergebnis unbekannt“', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-gs-reset-exit-'));
+  try {
+    const r = await callReset(ctxFor(dir, { resetGridShare: async () => ({ ok: false, error: 'runtime_worker_exited' }) }));
+    assert.equal(r.status, 504);
+    assert.ok(r.body.detail);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
