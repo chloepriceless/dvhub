@@ -151,7 +151,11 @@ export function createAdminRoutes(deps) {
     const cur = chk?.current?.version || null;
     const latest = chk?.latest || {};
     const to = target === 'latest' ? (latest.version || null) : target;
-    if (!cur || !to || to === cur) return null;
+    // Ohne verwertbare Antwort (kein JSON, keine Version) nicht durchlassen —
+    // vorher galt das als „kein Rückschritt“ (Gesamtprüfung 1.0.9). Mit
+    // allowDowngrade geht es weiter ausdrücklich.
+    if (!cur || !to) throw new Error(`downgrade_check_failed: Versionsprüfung ohne ${!cur ? 'installierte' : 'Ziel-'}Version`);
+    if (to === cur) return null;
     const c = baseVersionCmp(to, cur);
     let older = c === -1;
     if (c === 0) {
