@@ -2607,6 +2607,35 @@ async function triggerCsvExport() {
   }
 }
 
+// Protokoll „Netzstrom im Akku“ als CSV — mit Token über apiFetch statt als
+// schlichter Link (Gesamtprüfung 1.0.9): außerhalb des Heimnetzes bzw. unter
+// lanTrust „restricted“ hätte der Browser sonst die 401-Antwort gespeichert.
+async function downloadGridShareProtocol() {
+  const button = byId('historyGridShareCsv');
+  if (button) button.disabled = true;
+  try {
+    const response = await apiFetch('/api/battery/grid-share/protocol.csv');
+    if (!response.ok) {
+      const text = await response.text();
+      setBanner(`Protokoll-Download fehlgeschlagen: ${response.status} ${text.slice(0, 200)}`, 'error');
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'netzstrom-im-akku-protokoll.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    setBanner(`Protokoll-Download fehlgeschlagen: ${error.message}`, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 // Die vier Datenbank-Handlungen (Backup herunterladen, 15-min-Auszug, geplantes
 // Backup sofort, Wiederherstellen) sind am 29.07.2026 in die EINSTELLUNGEN
 // gewandert, unter „Geplantes Datenbank-Backup" — dorthin, wo auch ihre
@@ -2680,6 +2709,8 @@ function bindHistoryControls() {
   const date = byId('historyDate');
   const backfill = byId('historyBackfillBtn');
   const exportBtn = byId('historyExportCsvBtn');
+  const gridShareCsv = byId('historyGridShareCsv');
+  if (gridShareCsv) gridShareCsv.addEventListener('click', () => { downloadGridShareProtocol(); });
   const prev = byId('historyPrevBtn');
   const next = byId('historyNextBtn');
   // Karten-Dichte: persistierten Wert anwenden + Selektor spiegeln + binden.
