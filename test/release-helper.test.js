@@ -783,6 +783,69 @@ test('unterbrochene Umstellung: rollback davor schließt sie erst ab', { timeout
   } finally { r.close(); }
 });
 
+// Hauptbefund 12: Scheitert nach einem gesunden Umschalten eine Nacharbeit
+// (Vertrauensdatei, alter Checkout, Aufräumen), galt der Auftrag als
+// gescheitert; im resume-Pfad blieb st.pending in state.json, und ein späterer
+// vorübergehender Gesundheitsfehler hätte zurückgeschaltet. Die Zwischendatei
+// der Vertrauensdatei als Ordner lässt das Schreiben scheitern (auch als root).
+function blockTrustWrite(r) {
+  fs.mkdirSync(path.join(r.etc, `allowed_signers.tmp-${process.pid}`));
+}
+
+test('Nacharbeit scheitert nach gesundem install → Auftrag ok, Warnung im Protokoll', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1', trustLines: [r.k1.line, r.k2.line] });
+    blockTrustWrite(r);
+    const res = await r.run('install', 'latest', 'stable');
+    assert.equal(res.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.status().state, 'ok');
+    assert.ok(r.status().log.some((l) => /Warnung: Vertrauensdatei/.test(l)), 'Warnung protokolliert');
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.current, '1.0.1');
+    assert.equal(st.pending, null);
+    assert.equal(st.trust_version ?? null, null, 'nicht übernommen → nächstes Update versucht es wieder');
+  } finally { r.close(); }
+});
+
+test('Nacharbeit scheitert im resume → pending trotzdem aus state.json', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    const p = r.publish({ version: '1.0.1', trustLines: [r.k1.line, r.k2.line] });
+    const dest = path.join(r.box, 'releases', '1.0.1');
+    fs.mkdirSync(dest);
+    assert.equal(spawnSync('tar', ['-xzf', p.file, '-C', dest]).status, 0);
+    H.switchCurrent(r.settings(), '1.0.1');
+    const st0 = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    st0.pending = { op: 'install', version: '1.0.1', previous: '1.0.0', boot_id: 'x' };
+    fs.writeFileSync(path.join(r.state, 'state.json'), JSON.stringify(st0));
+    blockTrustWrite(r);
+    assert.equal((await r.run('_job', 'resume')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.1');
+    assert.equal(st.previous, '1.0.0');
+  } finally { r.close(); }
+});
+
+test('Nacharbeit scheitert nach gesunder Umstellung → umgestellt, nicht „zurückgenommen“', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    gitBox(r);
+    r.publish({ version: '1.0.1', trustLines: [r.k1.line, r.k2.line] });
+    blockTrustWrite(r);
+    const res = await r.run('migrate');
+    assert.equal(res.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.status().state, 'ok');
+    assert.equal(r.current(), 'releases/1.0.1');
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null);
+    assert.equal(st.current, '1.0.1');
+  } finally { r.close(); }
+});
+
 // ── Ausgelieferter Vertrauensanker ──────────────────────────────────────────
 
 // Ohne gültigen Schlüssel in release-keys/allowed_signers lehnt jede Box jedes

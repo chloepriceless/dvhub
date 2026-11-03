@@ -728,8 +728,13 @@ function updateTrust(s, st, version, job) {
   if (!now || !now.equals(next)) {
     fs.mkdirSync(s.etcDir, { recursive: true, mode: 0o755 });
     const tmp = `${s.allowedSigners}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, next, { mode: 0o644 });
-    fs.renameSync(tmp, s.allowedSigners);
+    try {
+      fs.writeFileSync(tmp, next, { mode: 0o644 });
+      fs.renameSync(tmp, s.allowedSigners);
+    } catch (e) {
+      try { if (fs.lstatSync(tmp).isFile()) fs.unlinkSync(tmp); } catch { /* */ }
+      throw e;
+    }
     job.log(`Vertrauensdatei aus ${version} übernommen (${trustedKeyCount(s.allowedSigners)} Schlüssel)`);
   }
   st.trust_version = version;
@@ -823,11 +828,20 @@ async function switchAndVerify(s, st, job, { to, from, op }) {
   return back ? 'rolled_back' : 'failed';
 }
 
+// Nacharbeiten nach einem gesunden Umschalten dürfen das Ergebnis nicht mehr
+// kippen: der neue Stand läuft und ist bestätigt. Scheitert eine (Platte voll,
+// Datei belegt), bleibt eine Warnung; der nächste Auftrag holt sie nach
+// (trust_version bzw. st.legacy bleiben dafür stehen). Gesamtprüfung
+// 03.11.2026, Befund 12.
+function afterwork(job, what, fn) {
+  try { fn(); } catch (e) { job.log(`Warnung: ${what} fehlgeschlagen (${e.message}) — das Update gilt trotzdem; der nächste Auftrag holt es nach`); }
+}
+
 // Abschluss eines erfolgreichen Updates: Vertrauen, alter Checkout, Aufräumen.
 function finalizeInstall(s, st, version, job) {
-  updateTrust(s, st, version, job);
-  removeLegacy(s, st, job);
-  pruneReleases(s, st, job);
+  afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, version, job));
+  afterwork(job, 'alten git-Checkout entfernen', () => removeLegacy(s, st, job));
+  afterwork(job, 'alte Releases aufräumen', () => pruneReleases(s, st, job));
   saveState(s, st);
 }
 
@@ -1081,7 +1095,8 @@ async function jobMigrate(s, job, { force }) {
       st.migration = null;
       st.migrate.done_at = new Date().toISOString();
       record(st, version, 'migrated');
-      updateTrust(s, st, version, job);
+      saveState(s, st);
+      afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, version, job));
       saveState(s, st);
       job.finish('ok', `auf Paket ${version} umgestellt; alter Checkout liegt in .legacy-git`, { result: 'ok', version, from: `git ${chk.gitVersion}` });
       return;
@@ -1130,8 +1145,9 @@ async function resumeInterrupted(s, st, job) {
       st.legacy = { dir: st.migration.legacy, git_sha: st.migration.git_sha, version: st.migration.git_version, at: new Date().toISOString() };
       st.migration = null;
       record(st, v, 'migrated');
-      updateTrust(s, st, v, job);
-      removeDropin(s, job);
+      saveState(s, st);
+      afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, v, job));
+      afterwork(job, 'Notfall-Drop-in entfernen', () => removeDropin(s, job));
       saveState(s, st);
       return { state: 'ok', message: `Umstellung auf ${v} abgeschlossen (nach Unterbrechung)`, extra: { result: 'ok', version: v } };
     }
@@ -1150,8 +1166,8 @@ async function resumeInterrupted(s, st, job) {
       st.current = to;
       st.pending = null;
       record(st, to, 'ok');
-      if (op === 'install') finalizeInstall(s, st, to, job);
       saveState(s, st);
+      if (op === 'install') finalizeInstall(s, st, to, job);
       return { state: 'ok', message: `${to} läuft gesund (nach Unterbrechung bestätigt)`, extra: { result: 'ok', version: to } };
     }
     if (from && fs.existsSync(path.join(releasesDir(s), from))) {
