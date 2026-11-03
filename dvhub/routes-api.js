@@ -4108,6 +4108,10 @@ export function createApiRoutes(ctx) {
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
       const cur = (next.mqtt && typeof next.mqtt === 'object') ? next.mqtt : {};
       const patch = { ...cur };
+      // Ein anderer Broker ist ein bleibender Steuerweg von außen — den legt
+      // der Kunde fest, nicht der Support (Gesamtprüfung 1.0.9).
+      if (typeof body.brokerUrl === 'string' && body.brokerUrl.trim() !== String(cur.brokerUrl || '')
+        && denySupportConsent(req, res, 'mqtt_broker')) return;
       if (typeof body.brokerUrl === 'string') {
         const url2 = body.brokerUrl.trim();
         if (url2.length === 0) {

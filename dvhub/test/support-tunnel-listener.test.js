@@ -471,6 +471,7 @@ test('Support-Tunnel: Zugänge in der Konfiguration (Sicherheit, VPN, Hosts, EEB
     trustProxy: true, trustedProxyIps: ['127.0.0.1'],
     eebus: { enabled: true, trusted: [{ ski: 'a'.repeat(40), role: 'grid' }] },
     ortsnetz: { enabled: true },
+    mqtt: { brokerUrl: 'mqtts://broker.evil.example.net', haDiscovery: { enabled: true } },
   };
   for (const p of ['/api/config', '/api/config/import']) {
     const res = mockRes();
@@ -481,6 +482,8 @@ test('Support-Tunnel: Zugänge in der Konfiguration (Sicherheit, VPN, Hosts, EEB
     assert.deepEqual(last.vpn, box.vpn, `${p}: vpn`);
     assert.deepEqual(last.eebus.trusted, [], `${p}: eebus.trusted`);
     assert.deepEqual(last.ortsnetz, box.ortsnetz, `${p}: ortsnetz`);
+    assert.equal(last.mqtt.brokerUrl, undefined, `${p}: mqtt.brokerUrl`);
+    assert.equal(last.mqtt.haDiscovery.enabled, true, `${p}: übrige MQTT-Einstellungen bleiben änderbar`);
     for (const k of ['allowedHosts', 'corsAllowedOrigins', 'trustProxy', 'trustedProxyIps']) assert.equal(last[k], undefined, `${p}: ${k}`);
   }
   // Vom Heimnetz aus geht dasselbe weiter.
@@ -488,4 +491,21 @@ test('Support-Tunnel: Zugänge in der Konfiguration (Sicherheit, VPN, Hosts, EEB
   await routes.handleRequest(makeReq('POST', '/api/config', { config: JSON.parse(JSON.stringify(wide)) }), res, new URL('http://x/api/config'));
   assert.equal(res._captured.status, 200, res._captured.body);
   assert.equal(saved.at(-1).vpn.autoConnect, true);
+});
+
+test('Support-Tunnel: keinen anderen MQTT-Broker eintragen (bleibender Steuerweg)', async () => {
+  const box = { httpPort: 8080, security: { lanTrust: 'open' }, mqtt: { brokerUrl: 'mqtt://192.168.1.5:1883' } };
+  const { ctx, saved } = ctxWith(box);
+  const routes = createApiRoutes(ctx);
+  const call = async (body, viaSupport) => {
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', '/api/family/mqtt-config', body, { viaSupport }), res, new URL('http://x/api/family/mqtt-config'));
+    return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}') };
+  };
+  const r = await call({ brokerUrl: 'mqtts://broker.evil.example.net' }, true);
+  assert.equal(r.status, 403, JSON.stringify(r.body));
+  assert.equal(r.body.error, 'support_tunnel_consent_denied');
+  assert.equal(saved.length, 0);
+  assert.notEqual((await call({ brokerUrl: 'mqtt://192.168.1.5:1883', username: 'u' }, true)).status, 403, 'gleicher Broker bleibt änderbar');
+  assert.notEqual((await call({ brokerUrl: 'mqtts://broker.example.net' }, false)).status, 403, 'vom Heimnetz aus weiter möglich');
 });
