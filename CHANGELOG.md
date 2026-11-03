@@ -46,7 +46,10 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   keinen Akku-Verkauf. Leitstand „davon Netzstrom X kWh (Y %)“, Historie mit Verlauf
   und Tagesprotokoll (CSV), `/api/battery/grid-share`. Der Zähler übersteht Neustart und Update; ein ausdrückliches
   Zurücksetzen wird protokolliert. Bei unsicheren Akkuwerten (Lesefehler, veraltet, eingefroren) wird nichts
-  abgebucht; das Tagesprotokoll nennt die Minuten.
+  abgebucht; das Tagesprotokoll nennt die Minuten. Abgebucht wird nur mit eingetragener Akkukapazität
+  (Einstellungen → Meine Anlage → Akku-Grenzen bzw. Ausbaustufen) — ohne sie rechnet DVhub mit keiner Ersatzzahl,
+  die Sperre bleibt, und Leitstand und Historie melden „Akkukapazität fehlt“. Der Zähler läuft ab der ersten Abfrage
+  nach dem Start, nicht erst, wenn die Datenbank bereit ist.
 
 - **Signierte Update-Pakete für native Installationen**: Statt eines git-Checkouts mit `npm install` auf der Box
   holt `dvhub-release` je Version und Architektur (arm64, armhf, amd64) ein fertiges Paket von GitHub, prüft

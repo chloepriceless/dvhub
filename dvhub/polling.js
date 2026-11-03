@@ -923,6 +923,15 @@ export function createPoller(ctx) {
       setpointFollowWatchdog.tick();
     } catch (e) { pushLog('setpoint_follow_watchdog_error', { error: e?.message || String(e) }, 'warn'); }
 
+    // Netzstrom-Zähler (services/optimizer/grid-share-poll.js): bei JEDER
+    // Abfrage, unabhängig vom echten onPollComplete — den hängt server.js erst
+    // nach Datenbank, Migrationen und Snapshots ein, bei langsamem PostgreSQL
+    // bis ~140 s nach dem Start (Gesamtprüfung Release 1.0.9, Befund 7). Die
+    // Live-Werte landen in state.victron und damit im Snapshot unten.
+    try {
+      ctx.gridSharePollTick?.(state.victron);
+    } catch (e) { pushLog('grid_share_error', { error: e?.message || String(e) }, 'warn'); }
+
     ctx.onPollComplete?.({
       ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),
       resolutionSeconds: Math.max(1, Math.round(effectivePollIntervalMs() / 1000)),

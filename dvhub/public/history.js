@@ -2804,7 +2804,8 @@ async function loadGridShareCard() {
       sub.textContent = `Jetzt ${fmtGs(data.gridKwh)} kWh Netzstrom im Akku`
         + (data.sharePct == null ? '' : ` (${fmtGs(data.sharePct, 1)} %)`)
         + (data.locked ? ' — Akku-Einspeisung gesperrt' : ' — Akku-Einspeisung frei')
-        + ` · Schwelle ${fmtGs(data.thresholdKwh, 1)} kWh`;
+        + ` · Schwelle ${fmtGs(data.thresholdKwh, 1)} kWh`
+        + (data.capacityMissing ? ' · Akkukapazität fehlt: Entladen wird nicht abgebucht, die Sperre bleibt, bis sie unter Einstellungen → Meine Anlage eingetragen ist' : '');
     }
     const days = protocol.filter((e) => e.event === 'day').slice(-31).reverse();
     const t = data.today || {};

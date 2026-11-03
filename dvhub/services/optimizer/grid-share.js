@@ -49,6 +49,8 @@
 //                      (Gegenprüfung 4cf16a5a, P2). Log einmal je Episode, die
 //                      Tageszeile nennt die Minuten ohne Abbuchung.
 // Akku-Inhalt = Ladestand × Kapazität (beide GX-Anlagen zusammen, wie EOS plant).
+// Die Kapazität kommt nur aus der Einstellung (grid-share-poll.js); fehlt sie,
+// ist der Inhalt unbekannt: keine Kappung, keine Abbuchung (capacityMissing).
 //
 // Sperre: gilt an einer PV-Anlage ohne MiSpeL-Option. An bei mehr als 100 Wh,
 // frei erst wieder bei höchstens 50 Wh (Hysterese: sonst schaltet EOS bei
@@ -319,6 +321,8 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   // Fenster der Netzladung (filterGridInflow) — nur im Speicher: ein Neustart
   // mitten in den ersten Sekunden einer Ladung verliert höchstens diese.
   let inflowFilter = null;
+  // Akkukapazität fehlt (grid-share-poll.js): einmal je Prozess und Episode melden.
+  let capacityMissingLogged = false;
 
   function fresh() {
     return {
@@ -436,12 +440,17 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
    * Ein Messwert (jede Abfrage). Gibt die Live-Werte für Telemetrie und Status zurück.
    * secondBatteryStale: die zweite GX-Anlage steckt im Ladestand (planningSocPct),
    * ihre Werte sind aber nicht aktuell (server.js, multi-gx/planning.js).
-   * @param {{nowMs?:number, victron?:object, socPct?:number|null, capacityWh?:number|null, secondBatteryStale?:boolean}} p
+   * capacityMissing: keine Akkukapazität eingestellt (grid-share-poll.js) —
+   * capacityWh ist dann null: keine Kappung am Ladestand, keine Abbuchung
+   * (Sperre im Zweifel an); Log und Leitstand melden es (Gesamtprüfung
+   * Release 1.0.9, Befund 3).
+   * @param {{nowMs?:number, victron?:object, socPct?:number|null, capacityWh?:number|null, capacityMissing?:boolean, secondBatteryStale?:boolean}} p
    */
-  function tick({ nowMs = Date.now(), victron = {}, socPct = null, capacityWh = null, secondBatteryStale = false } = {}) {
+  function tick({ nowMs = Date.now(), victron = {}, socPct = null, capacityWh = null, capacityMissing = false, secondBatteryStale = false } = {}) {
     ensureLoaded(nowMs);
     if (readOnly) return summaryLive();
     const cfg = cfgNow();
+    trackCapacity(capacityMissing === true);
     const tz = cfg?.schedule?.timezone || 'Europe/Berlin';
     const today = localDate(nowMs, tz);
     if (st.day?.date !== today) {
@@ -530,6 +539,34 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     return summaryLive();
   }
 
+  /** Fehlende Akkukapazität: Zustand für Leitstand/Status, Log einmal je Episode. */
+  function trackCapacity(missing) {
+    if (missing) {
+      // Ohne Kapazität ist der Akku-Inhalt unbekannt — kein alter Anteil aus
+      // einer früheren Kapazität anzeigen.
+      if (st.capacityMissing !== true || st.storedWh != null || st.share != null) {
+        st.capacityMissing = true;
+        st.storedWh = null;
+        st.share = null;
+        dirty = true;
+      }
+      if (!capacityMissingLogged) {
+        capacityMissingLogged = true;
+        log('grid_share_capacity_missing', {
+          gridKwh: r3(st.gridWh / 1000),
+          note: 'Akkukapazität fehlt (Meine Anlage → Akku-Grenzen bzw. Ausbaustufen): Netzstrom im Akku wird nur zugebucht, '
+            + 'nicht am Ladestand gekappt und beim Entladen nicht abgebucht — die Sperre bleibt, bis die Kapazität eingetragen ist',
+        }, 'warn');
+      }
+      return;
+    }
+    if (st.capacityMissing === true) { st.capacityMissing = false; dirty = true; }
+    if (capacityMissingLogged) {
+      capacityMissingLogged = false;
+      log('grid_share_capacity_known', { gridKwh: r3(st.gridWh / 1000) });
+    }
+  }
+
   /** Log einmal je Episode: Beginn sofort, Ende nach GRID_SHARE_UNCERTAIN_CLEAR_MS sicherer Werte. */
   function trackUncertainty(nowMs, reasons) {
     if (reasons.length) {
@@ -587,6 +624,8 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       releaseKwh: kwh(Math.min(GRID_SHARE_RELEASE_WH, thresholdWh)),
       toHomeW: live.toHomeW,
       toGridW: live.toGridW,
+      // Akkukapazität fehlt: keine Abbuchung, keine Kappung (Befund 3).
+      capacityMissing: st.capacityMissing === true,
       today: {
         date: st.day?.date ?? null,
         gridToBatteryKwh: kwh(st.day?.inWh),

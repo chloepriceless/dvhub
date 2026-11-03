@@ -198,7 +198,7 @@ import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { setpointFollowHeartbeat } from './services/setpoint-follow-watchdog.js';
 import { energyBalanceBattery } from './services/energy-balance-battery.js';
 import { createGridShareTracker } from './services/optimizer/grid-share.js';
-import { planningCfg as gridSharePlanningCfg, planningSocPct as gridSharePlanningSocPct, secondGxMissing, followerBatteryStale } from './services/multi-gx/planning.js';
+import { createGridSharePollTick } from './services/optimizer/grid-share-poll.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
@@ -1401,6 +1401,9 @@ ctx.gridShare = createGridShareTracker({
 // Betrieb ist der Zähler des Web-Prozesses nur lesend — der Reset läuft im
 // Runtime-Worker, danach liest der Web-Prozess den Stand sofort neu
 // (Gegenprüfung Release 1.0.9, P2).
+// Ein Zählschritt je Abfrage, aufgerufen von polling.js vor onPollComplete —
+// der echte onPollComplete kommt erst nach der Datenbank (Befund 7).
+ctx.gridSharePollTick = createGridSharePollTick(ctx);
 ctx.resetGridShare = async ({ reason = '', actor = null } = {}) => {
   if (IS_RUNTIME_PROCESS) return ctx.gridShare.reset({ reason, actor });
   const r = await runtimeCommandClient.send('grid_share_reset', { reason, actor });
@@ -2336,33 +2339,10 @@ const telemetryReady = (async () => {
       managed = null;
       pushLog('load_separation_error', { error: err.message });
     }
-    // Netzstrom im Akku: zählen und die Live-Werte an Telemetrie + Leitstand hängen.
-    try {
-      // Zweite GX eingeschaltet, aber gerade nicht einbezogen: Kapazität und
-      // Ladestand wären nur die der Hauptanlage → Akku-Inhalt unbekannt, damit
-      // die Kappung keinen Netzstrom abschreibt (Gegenprüfung 8465a540, P2).
-      // Ohne eingestellte Kapazität derselbe Rückfall wie bei EOS (8000 Wh).
-      const followerMissing = secondGxMissing(ctx, cfg);
-      // Akkuwerte (Lesefehler, Stempel, Einfrier-Wächter, Kreuzprobe) prüft der
-      // Zähler selbst an `victron`; die zweite Anlage hat eigene Stempel
-      // (state.multiGx) — veraltet heißt auch dort: nichts abbuchen.
-      const nowMs = Date.now();
-      const gs = ctx.gridShare?.tick?.({
-        nowMs,
-        victron,
-        socPct: followerMissing ? null : gridSharePlanningSocPct(ctx),
-        capacityWh: followerMissing ? null : (Number(gridSharePlanningCfg(ctx)?.optimizer?.batteryCapacityWh) || 8000),
-        secondBatteryStale: followerBatteryStale(ctx, nowMs),
-      });
-      if (gs && victron) {
-        victron.batteryGridShareWh = Math.round(gs.gridWh);
-        victron.batteryGridSharePct = gs.sharePct;
-        victron.batteryGridShareToHomeW = gs.toHomeW;
-        victron.batteryGridShareToGridW = gs.toGridW;
-      }
-    } catch (err) {
-      pushLog('grid_share_error', { error: err?.message || String(err) }, 'warn');
-    }
+    // Netzstrom im Akku: gezählt wird schon im Poll-Pfad (ctx.gridSharePollTick,
+    // services/optimizer/grid-share-poll.js) — ab der ersten Abfrage, nicht erst
+    // ab hier (Gesamtprüfung Release 1.0.9, Befund 7). `victron` trägt die
+    // Live-Werte (batteryGridShare*) schon.
     liveTelemetryBuffer?.capture({ ts, resolutionSeconds, meter, victron, managed });
     liveTelemetryBuffer?.flush();
     publishRuntimeSnapshot();
