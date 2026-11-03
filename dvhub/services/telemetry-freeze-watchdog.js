@@ -285,8 +285,10 @@ export function createFreezeWatchdog(ctx) {
   /**
    * Stable-Kanal (Beta-Gate zu): nur erkennen und victron.freezeSuspect setzen —
    * kein Rückdatieren, kein Neuaufbau, kein Alarm, victron.freeze bleibt null.
-   * Liest nur der Netzstrom-Zähler (grid-share.js); ein Fehlalarm kostet dort
-   * höchstens eine ausgelassene Abbuchung.
+   * Lesen der Netzstrom-Zähler (grid-share.js) und sein Einspeise-Deckel
+   * (schedule-eval gridShareLiveCapW). Ein Fehlalarm kostet eine ausgelassene
+   * Abbuchung und — nur während der Sperre — Einspeisung über den Puffer von
+   * höchstens 100 W hinaus, auch wenn echter PV-Überschuss da ist.
    */
   function detectOnly(nowMs, opts) {
     const stamps = { ...(state.victron?.fieldUpdatedAt || {}) };

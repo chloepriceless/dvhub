@@ -221,12 +221,16 @@ for (const [name, flag] of [
   ['Kreuzprobe MQTT/Modbus', { sourceMismatch: { active: true } }],
 ]) {
   test(`gesperrt: ${name} → eingefrorene PV öffnet den Deckel nicht, nur der Puffer`, async () => {
-    const { evaluator, writes } = makeCtx({
+    const { evaluator, writes, logs } = makeCtx({
       pvW: 6_000, loadW: 1_000,
       mutate: ({ state }) => { Object.assign(state.victron, flag); }
     });
     await evaluator.applyControlTarget('gridSetpointW', -5000, 'eos_optimization');
-    // Höchstens der Puffer; Einfrier-Wächter und Kreuzprobe halten zusätzlich auf 0.
+    // Der Deckel selbst nimmt nur den Puffer (ohne Fix −4 900 W). Einfrier-Wächter
+    // und Kreuzprobe halten danach über den Entlade-Boden zusätzlich auf 0 — darum
+    // den Deckel am Logeintrag prüfen (Gegenprüfung 1187b690, P3).
+    const capped = logs.find((l) => l.event === 'grid_share_export_capped');
+    assert.equal(capped?.payload?.cappedTo, -100);
     const g = gridWrites(writes);
     assert.equal(g.length, 1);
     assert.ok(g[0] >= -100, `höchstens der Puffer: ${g}`);
