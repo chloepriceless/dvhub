@@ -842,7 +842,28 @@ function finalizeInstall(s, st, version, job) {
   afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, version, job));
   afterwork(job, 'alten git-Checkout entfernen', () => removeLegacy(s, st, job));
   afterwork(job, 'alte Releases aufräumen', () => pruneReleases(s, st, job));
-  saveState(s, st);
+  afterwork(job, 'Zustand speichern', () => saveState(s, st));
+}
+
+// Übernahme der Vertrauensdatei nachholen, wenn sie beim Update scheiterte
+// (Gegenprüfung 4b6bb09d, P2): sonst lehnte die Box nach einem
+// Schlüsselwechsel jedes weitere Paket ab, schon beim check. Das laufende
+// Release wurde beim Installieren gegen die damalige Datei geprüft; ein
+// Rückweg auf ein älteres ändert das Vertrauen nicht (Versionsvergleich wie in
+// updateTrust). Nur unter der Sperre und ohne offenen Auftrag.
+function trustBehind(s, st) {
+  const cur = currentVersion(s);
+  if (!cur || st.pending || st.migration || st.current !== cur) return null;
+  if (st.trust_version && compareVersions(cur, st.trust_version) <= 0) return null;
+  const src = path.join(releasesDir(s), cur, 'release-keys', 'allowed_signers');
+  return fs.existsSync(src) && trustedKeyCount(src) ? cur : null;
+}
+function catchUpTrust(s, st, job) {
+  const cur = trustBehind(s, st);
+  if (!cur) return;
+  const before = st.trust_version;
+  afterwork(job, 'Vertrauensdatei nachholen', () => updateTrust(s, st, cur, job));
+  if (st.trust_version !== before) afterwork(job, 'Zustand speichern', () => saveState(s, st));
 }
 
 async function jobInstall(s, job, { version, channel }) {
@@ -850,6 +871,7 @@ async function jobInstall(s, job, { version, channel }) {
   const st = loadState(s);
   const from = currentVersion(s);
   if (!from) throw new Exit(3, 'keine Paket-Installation (git-Box: Umstellung läuft über migrate)');
+  catchUpTrust(s, st, job);
   st.current = from;
   if (version !== 'latest' && version === from) { job.finish('ok', `${from} ist bereits installiert`, { result: 'up_to_date' }); return; }
   job.phase('index', `Kanal-Index ${channel} laden`);
@@ -1088,20 +1110,7 @@ async function jobMigrate(s, job, { force }) {
     runPostUpdate(s, job);
     restartService(s, job);
     job.phase('health', `Gesundheitsprüfung (${s.healthTimeoutS} s)`);
-    if (await waitHealthy(s, version, job)) {
-      st.current = version;
-      st.previous = null;
-      st.legacy = { dir: legacy, git_sha: gitSha, version: chk.gitVersion, at: new Date().toISOString() };
-      st.migration = null;
-      st.migrate.done_at = new Date().toISOString();
-      record(st, version, 'migrated');
-      saveState(s, st);
-      afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, version, job));
-      saveState(s, st);
-      job.finish('ok', `auf Paket ${version} umgestellt; alter Checkout liegt in .legacy-git`, { result: 'ok', version, from: `git ${chk.gitVersion}` });
-      return;
-    }
-    throw new Error(`Paket ${version} nicht gesund`);
+    if (!await waitHealthy(s, version, job)) throw new Error(`Paket ${version} nicht gesund`);
   } catch (e) {
     job.log(`Umstellung gescheitert: ${e.message}`);
     job.phase('rollback', 'zurück auf den git-Checkout');
@@ -1111,7 +1120,20 @@ async function jobMigrate(s, job, { force }) {
     record(st, version, 'migration_failed');
     saveState(s, st);
     job.finish('rolled_back', `Umstellung zurückgenommen (${e.message}); git-Stand ${back ? 'läuft' : 'meldet sich NICHT gesund'}`, { result: 'rolled_back', version, from: `git ${chk.gitVersion}` });
+    return;
   }
+  // Gesund: ab hier gilt die Umstellung, nichts darf sie mehr zurücknehmen
+  // (Gegenprüfung 4b6bb09d, P3). Scheitert das Speichern, bleibt das Journal
+  // in Phase „provision“ stehen, und resume bestätigt beim nächsten Start.
+  st.current = version;
+  st.previous = null;
+  st.legacy = { dir: legacy, git_sha: gitSha, version: chk.gitVersion, at: new Date().toISOString() };
+  st.migration = null;
+  st.migrate.done_at = new Date().toISOString();
+  record(st, version, 'migrated');
+  afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, version, job));
+  afterwork(job, 'Zustand speichern', () => saveState(s, st));
+  job.finish('ok', `auf Paket ${version} umgestellt; alter Checkout liegt in .legacy-git`, { result: 'ok', version, from: `git ${chk.gitVersion}` });
 }
 
 // Nach einem Neustart mitten im Auftrag (Strom weg): ist der laufende Stand
@@ -1211,6 +1233,16 @@ function readStatus(s) {
 }
 
 async function actionCheck(s, channel) {
+  // check läuft ohne Auftrag; die Vertrauensdatei nur nachholen, wenn die
+  // Sperre frei ist (sonst überschriebe saveState den Zustand eines Auftrags).
+  if (trustBehind(s, loadState(s))) {
+    let release = null;
+    try { release = lock(s); } catch { release = null; }
+    if (release) {
+      // Kein Protokoll: stdout trägt hier nur das JSON für die Oberfläche.
+      try { catchUpTrust(s, loadState(s), { log: () => {} }); } finally { release(); }
+    }
+  }
   const cur = currentVersion(s);
   const manifest = cur ? releaseManifest(s, cur) : null;
   const st = loadState(s);

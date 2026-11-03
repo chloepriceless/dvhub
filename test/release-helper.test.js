@@ -886,6 +886,53 @@ test('Nacharbeit scheitert nach gesundem install → Auftrag ok, Warnung im Prot
   } finally { r.close(); }
 });
 
+// Gegenprüfung 4b6bb09d (P2): die gescheiterte Übernahme holte niemand nach —
+// nach einem Schlüsselwechsel lehnte die Box dann jedes weitere Paket ab.
+test('Vertrauensdatei: gescheiterte Übernahme wird nachgeholt, Paket nur mit neuem Schlüssel geht danach', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1', trustLines: [r.k1.line, r.k2.line] });
+    blockTrustWrite(r);
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
+    fs.rmdirSync(path.join(r.etc, `allowed_signers.tmp-${process.pid}`));
+    assert.ok(!fs.readFileSync(path.join(r.etc, 'allowed_signers'), 'utf8').includes(r.k2.line), 'noch alt');
+    // Schlüsselwechsel: Paket und Index nur noch mit k2 signiert.
+    r.publish({ version: '1.0.2', key: r.k2.key, indexKey: r.k2.key, trustLines: [r.k2.line] });
+    const chk = await r.run('check', 'stable');
+    assert.equal(chk.code, 0, chk.out);
+    assert.equal(JSON.parse(chk.out).latest.version, '1.0.2');
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
+    assert.equal(r.current(), 'releases/1.0.2');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).trust_version, '1.0.2');
+  } finally { r.close(); }
+});
+
+// Gegenprüfung 4b6bb09d (P3): scheitert das Speichern NACH der gesunden
+// Umstellung, meldete der Auftrag „zurückgenommen“ und startete den gesunden
+// Dienst neu. Das Paket-post-update.sh legt dafür an die Stelle der
+// Zwischendatei von state.json einen Ordner (danach scheitert jedes Speichern).
+test('Umstellung gesund, Speichern danach scheitert → nicht „zurückgenommen“, resume bestätigt später', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    gitBox(r);
+    const blocker = path.join(r.state, `state.json.tmp-${process.pid}`);
+    r.publish({ version: '1.0.1', extraFiles: { 'post-update.sh': `#!/usr/bin/env bash\nmkdir '${blocker}'\n` } });
+    const res = await r.run('migrate');
+    assert.equal(r.status().state, 'ok', JSON.stringify(r.status()));
+    assert.equal(res.code, 0);
+    assert.ok(r.status().log.some((l) => /Warnung: Zustand speichern/.test(l)));
+    assert.equal(r.current(), 'releases/1.0.1');
+    assert.equal(fs.readFileSync(r.sysLog, 'utf8').match(/restart dvhub\.service/g).length, 1, 'kein zweiter Neustart');
+    fs.rmdirSync(blocker);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).migration.phase, 'provision');
+    assert.equal((await r.run('_job', 'resume')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null);
+    assert.equal(st.current, '1.0.1');
+  } finally { r.close(); }
+});
+
 test('Nacharbeit scheitert im resume → pending trotzdem aus state.json', { timeout: 60000 }, async () => {
   const r = await makeRig();
   try {
