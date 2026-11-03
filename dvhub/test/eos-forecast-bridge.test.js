@@ -2211,3 +2211,39 @@ for (const [name, match, optimizer] of [
     } finally { await mock.close(); }
   });
 }
+
+// Gegenprüfung 711646f2 (P3): Der zweite Steuerzeitraum-PUT (Prognosehorizont)
+// und die Rückgabe „aufgegeben“ an die Schleife waren ungetestet — ohne sie
+// lief die verspätete Antwort in den Fehlerzweig (lastPredictionHours = null,
+// logChange) und schrieb ein falsches eos_control_horizon ins Log.
+test('aufgegebener Push: hängender Prognosehorizont-PUT — kein Log, kein Zustand, kein weiterer Aufruf', async () => {
+  let configPuts = 0;
+  let releaseHeld = null;
+  const mock = await createMockEos((req, res) => {
+    if (req.method === 'PUT' && req.url.startsWith('/v1/config/')) {
+      configPuts += 1;
+      if (configPuts === 2) { releaseHeld = () => okHandler(req, res); return; }
+    }
+    okHandler(req, res);
+  });
+  try {
+    const logs = [];
+    const env = estimateCtx(mock, { logs });
+    env.ctx.pushTimeoutMs = 300;
+    const bridge = createEosForecastBridge(env.ctx);
+    const first = bridge.push();
+    const second = bridge.push();
+    assert.match(String((await first).errors.timeout), /300/);
+    await second;
+    assert.ok(releaseHeld, 'der zweite Config-PUT hing');
+    assert.ok(mock.requests.some((r) => r.url.startsWith('/v1/config/prediction/hours')));
+    const afterSecond = mock.requests.length;
+    const logsBefore = logs.filter((l) => l.event === 'eos_control_horizon').length;
+    env.state.optimizer.eosPredictionHours = 'neu';
+    releaseHeld();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(mock.requests.slice(afterSecond).map((r) => `${r.method} ${r.url.split('?')[0]}`), []);
+    assert.equal(env.state.optimizer.eosPredictionHours, 'neu', 'kein Prognosehorizont vom alten Push');
+    assert.equal(logs.filter((l) => l.event === 'eos_control_horizon').length, logsBefore, 'kein Log-Eintrag vom alten Push');
+  } finally { await mock.close(); }
+});
