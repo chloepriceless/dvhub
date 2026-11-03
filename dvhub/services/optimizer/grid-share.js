@@ -557,10 +557,18 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     return { ok: true, previousKwh: entry.gridKwh };
   }
 
+  /** Nur lesend: Stand sofort neu aus der Datei (nach einem Reset im Runtime-Prozess). */
+  function reload(nowMs = Date.now()) {
+    if (!readOnly) return;
+    st = load();
+    lastReadMs = nowMs;
+  }
+
   ensureLoaded();
   return {
     tick,
     reset,
+    reload,
     isLocked,
     summary,
     persist: () => persist(Date.now()),

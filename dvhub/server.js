@@ -32,7 +32,7 @@ import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-c
 import {
   buildRuntimeSnapshot
 } from './runtime-state.js';
-import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker } from './runtime-worker-protocol.js';
+import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker, createRuntimeCommandClient, attachRuntimeCommandServer } from './runtime-worker-protocol.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 // Phase 09.3-01: history-viz aggregator factory (per-card endpoints under
 // /api/history/viz/*). Wired into ctx after telemetryStore + db are available.
@@ -482,6 +482,9 @@ let runtimeWorker = null;
 let runtimeWorkerSnapshot = null;
 let runtimeWorkerStatusPayload = null;
 let runtimeWorkerHeartbeatAt = 0;
+// Befehle Web-Prozess → Runtime-Worker (getrennter Betrieb), z. B. den
+// Netzstrom-Zähler zurücksetzen — zählen und schreiben darf nur der Worker.
+const runtimeCommandClient = createRuntimeCommandClient({ getWorker: () => runtimeWorker });
 let sunTimesCacheState = null;
 const runtimeWorkerState = {
   ready: false,
@@ -1034,6 +1037,7 @@ function startDedicatedRuntimeWorker() {
 
   worker.on('message', (message) => {
     if (!message || typeof message !== 'object') return;
+    if (runtimeCommandClient.handleMessage(message)) return;
     if (message.type === RUNTIME_MESSAGE_TYPES.RUNTIME_READY) {
       runtimeWorkerState.ready = true;
       runtimeWorkerState.lastError = null;
@@ -1058,6 +1062,7 @@ function startDedicatedRuntimeWorker() {
     runtimeWorkerState.ready = false;
     runtimeWorkerState.lastError = `runtime worker exited (code=${code}, signal=${signal})`;
     runtimeWorkerHeartbeatAt = 0;
+    runtimeCommandClient.failAll('runtime_worker_exited');
     pushLog('runtime_worker_exit', { code, signal });
 
     if (shuttingDown) return;
@@ -1380,6 +1385,24 @@ ctx.gridShare = createGridShareTracker({
     })();
   },
 });
+// Zähler zurücksetzen (POST /api/battery/grid-share/reset): im getrennten
+// Betrieb ist der Zähler des Web-Prozesses nur lesend — der Reset läuft im
+// Runtime-Worker, danach liest der Web-Prozess den Stand sofort neu
+// (Gegenprüfung Release 1.0.9, P2).
+ctx.resetGridShare = async ({ reason = '', actor = null } = {}) => {
+  if (IS_RUNTIME_PROCESS) return ctx.gridShare.reset({ reason, actor });
+  const r = await runtimeCommandClient.send('grid_share_reset', { reason, actor });
+  if (!r.ok) return { ok: false, error: r.error || 'runtime_command_failed' };
+  ctx.gridShare.reload?.();
+  return r.result && typeof r.result === 'object' ? r.result : { ok: false, error: 'runtime_command_failed' };
+};
+if (PROCESS_ROLE === 'runtime-worker' && typeof process.send === 'function') {
+  attachRuntimeCommandServer({
+    handlers: {
+      grid_share_reset: (p) => ctx.gridShare.reset({ reason: p.reason || '', actor: p.actor ?? null }),
+    },
+  });
+}
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;

@@ -59,6 +59,15 @@ export function validateRuntimeCommand(command) {
     return { ok: true, error: null };
   }
 
+  // Netzstrom-Zähler auf 0 (services/optimizer/grid-share.js): nur der
+  // Runtime-Prozess zählt und darf schreiben (Gegenprüfung Release 1.0.9, P2).
+  if (type === 'grid_share_reset') {
+    if (payload.reason != null && typeof payload.reason !== 'string') {
+      return { ok: false, error: 'grid_share_reset reason must be a string' };
+    }
+    return { ok: true, error: null };
+  }
+
   if (type === 'history_backfill') {
     if (!HISTORY_BACKFILL_MODES.has(String(payload.mode || ''))) {
       return { ok: false, error: 'history_backfill mode must be gap or full' };

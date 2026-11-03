@@ -2,6 +2,8 @@ import path from 'node:path';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -72,4 +74,84 @@ export function createRuntimeCommandQueue({ handleCommand, sendMessage }) {
       return pending.length;
     }
   };
+}
+
+/**
+ * Web-Prozess → Runtime-Prozess: Befehl senden und auf das Ergebnis warten
+ * (Gegenprüfung Release 1.0.9, P2 — Netzstrom-Zähler zurücksetzen). Ohne
+ * laufenden Worker, bei Zeitablauf oder Worker-Ende kommt { ok:false, error }.
+ * Der Aufrufer leitet COMMAND_RESULT-Nachrichten an handleMessage weiter.
+ * @param {{ getWorker: () => any, timeoutMs?: number }} opts
+ */
+export function createRuntimeCommandClient({ getWorker, timeoutMs = 10_000 }) {
+  const pending = new Map();
+
+  function settle(requestId, outcome) {
+    const entry = pending.get(requestId);
+    if (!entry) return false;
+    pending.delete(requestId);
+    clearTimeout(entry.timer);
+    entry.resolve(outcome);
+    return true;
+  }
+
+  return {
+    send(type, payload = {}) {
+      const request = createRuntimeCommandRequest(type, payload);
+      const validation = validateRuntimeCommand(request);
+      if (!validation.ok) return Promise.resolve({ ok: false, error: validation.error });
+      const worker = getWorker?.();
+      if (!worker || worker.connected === false || typeof worker.send !== 'function') {
+        return Promise.resolve({ ok: false, error: 'runtime_worker_unavailable' });
+      }
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => settle(request.requestId, { ok: false, error: 'runtime_worker_timeout' }), timeoutMs);
+        timer.unref?.();
+        pending.set(request.requestId, { resolve, timer });
+        try {
+          worker.send({ type: RUNTIME_MESSAGE_TYPES.COMMAND_REQUEST, requestId: request.requestId, command: request });
+        } catch (error) {
+          settle(request.requestId, { ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+    },
+    /** @returns {boolean} ob die Nachricht ein Ergebnis dieses Clients war */
+    handleMessage(message) {
+      if (!message || message.type !== RUNTIME_MESSAGE_TYPES.COMMAND_RESULT) return false;
+      if (!pending.has(message.requestId)) return false;
+      return settle(message.requestId, message.ok
+        ? { ok: true, result: message.result }
+        : { ok: false, error: message.error || 'runtime_command_failed' });
+    },
+    /** Worker beendet: alle offenen Befehle scheitern sofort statt erst nach dem Zeitlimit. */
+    failAll(error = 'runtime_worker_exited') {
+      for (const requestId of [...pending.keys()]) settle(requestId, { ok: false, error });
+    },
+    pendingCount() { return pending.size; },
+  };
+}
+
+/**
+ * Runtime-Prozess: Befehle des Web-Prozesses annehmen, prüfen und der Reihe
+ * nach ausführen. handlers: { [type]: async (payload) => result } — nur diese
+ * Befehle werden ausgeführt, alles andere scheitert mit Fehlermeldung.
+ * @param {{ proc?: NodeJS.Process, handlers: Record<string, (payload: object) => any> }} opts
+ */
+export function attachRuntimeCommandServer({ proc = process, handlers }) {
+  const queue = createRuntimeCommandQueue({
+    async handleCommand(command) {
+      const validation = validateRuntimeCommand(command);
+      if (!validation.ok) throw new Error(validation.error);
+      const handler = handlers?.[command.type];
+      if (typeof handler !== 'function') throw new Error(`unsupported runtime command: ${command.type}`);
+      return handler(command.payload || {});
+    },
+    sendMessage: (message) => { if (typeof proc.send === 'function') proc.send(message); },
+  });
+  const onMessage = (message) => {
+    if (!message || message.type !== RUNTIME_MESSAGE_TYPES.COMMAND_REQUEST) return;
+    queue.enqueue({ requestId: message.requestId, command: message.command });
+  };
+  proc.on('message', onMessage);
+  return { detach: () => proc.off?.('message', onMessage) };
 }

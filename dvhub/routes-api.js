@@ -8057,7 +8057,12 @@ export function createApiRoutes(ctx) {
       const body = await readJsonBody(req, res);
       if (body === null) return;
       const actor = actorContext(req);
-      const r = ctx.gridShare.reset({ reason: body?.reason, actor: actor.actor_ip || null });
+      // Getrennter Betrieb: Der Web-Prozess zählt nicht (nur lesend) — der Reset
+      // geht per IPC an den Runtime-Prozess (Gegenprüfung Release 1.0.9, P2).
+      const resetOpts = { reason: typeof body?.reason === 'string' ? body.reason : '', actor: actor.actor_ip || null };
+      const r = typeof ctx.resetGridShare === 'function'
+        ? await ctx.resetGridShare(resetOpts)
+        : ctx.gridShare.reset(resetOpts);
       pushLog('grid_share_reset_request', { ok: r.ok, previousKwh: r.previousKwh ?? null, error: r.error ?? null }, actor);
       return json(res, r.ok ? 200 : 409, r);
     }
