@@ -341,3 +341,56 @@ test('Laufstart: Rechenzeit und Beginn ohne die Vorbereitung', async () => {
   assert.equal(h.state.optimizer.eosRun.startedAt, start + 120_000);
   assert.equal(h.logs.find((l) => l.type === 'eos_run_done').data.durationS, 0);
 });
+
+// Gesamtprüfung Release 1.0.9: stop() hielt einen laufenden Lauf nicht davon
+// ab, sich neu einzuplanen — scheiterte er, merkte er den übernommenen Neuplan
+// wieder vor und stellte einen Timer, der nach dem Stopp noch einen Lauf anstieß.
+test('stop() während eines Laufs: danach plant sich nichts mehr ein', async () => {
+  const h = harness();
+  h.trigger.start();
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  await h.trigger.trigger('boundary');
+  await h.trigger.kick('replan:config');           // vorgemerkt (innerhalb 2 min)
+  h.nowMs += 30_000;
+  let release;
+  h.replies.push(() => new Promise((r) => { release = r; }));
+  const running = h.trigger.trigger('boundary');   // übernimmt den Neuplan
+  while (!release) await new Promise((r) => setImmediate(r));
+  h.trigger.stop();
+  release({ ok: false, error: 'EOS returned HTTP 503' });
+  await running;
+  assert.equal(h.timers.length, 0, 'kein Timer nach stop()');
+  // Auch ein Neuplan nach dem Stopp stellt keinen Timer.
+  h.status = 'busy';
+  await h.trigger.kick('replan:config');
+  assert.equal(h.timers.length, 0);
+});
+
+// Gegenprüfung a80fa938 (P3): kick()/trigger() nach stop() starteten nach
+// Ablauf der 2-min-Frist noch einen ganzen Lauf (Abschalten: ein laufender
+// runOptimization ruft kick('no_plan')).
+test('nach stop(): kick() und trigger() starten keinen Lauf mehr', async () => {
+  const h = harness();
+  h.trigger.start();
+  h.trigger.stop();
+  h.nowMs += 10 * 60_000;
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  assert.equal((await h.trigger.kick('no_plan')).skipped, 'stopped');
+  assert.equal((await h.trigger.trigger('boundary')).skipped, 'stopped');
+  assert.equal(h.posts.length, 0);
+  h.trigger.start();
+  assert.equal((await h.trigger.trigger('boundary')).ok, true, 'start() hebt den Stopp auf');
+});
+
+test('stop() während der Vorbereitung: kein POST an EOS (Gegenprüfung 63c034af, P3)', async () => {
+  let releasePrep;
+  const h = harness({ prepareRun: () => new Promise((r) => { releasePrep = r; }) });
+  h.trigger.start();
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  const running = h.trigger.trigger('boundary');
+  while (!releasePrep) await new Promise((r) => setImmediate(r));
+  h.trigger.stop();
+  releasePrep({ ok: true, pushed: true });
+  assert.equal((await running).skipped, 'stopped');
+  assert.equal(h.posts.length, 0);
+});

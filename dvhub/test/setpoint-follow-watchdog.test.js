@@ -671,3 +671,44 @@ test('Poll-Punkt 2720 mit quantity 1 (nur oberes Wort) ist nicht eindeutig → A
   const st = { victron: { maxDischargeW: 0, errors: {}, fieldUpdatedAt: { maxDischargeW: T0 } }, schedule: { lastWrite: {} } };
   assert.equal(knownDischargeCapW(st, cfg, T0), null);
 });
+
+// ── Gesamtprüfung Release 1.0.9 (Entlade-Wächter): Alarm während „halten“ ─────
+// Ein Alarm konnte während EOS „Akku halten“ nicht zurückgehen: jeder Punkt mit
+// Entschuldigung (Halten, Untergrenze, Sperre) wurde verworfen — auch einer,
+// der belegt, dass die Anlage unauffällig ist (Akku lädt aus PV bei geringem
+// Netzbezug). Ein stundenlanges Halten hielt so Push und Monitor auf „down“.
+test('Alarm aktiv, dann „Akku halten“ mit belegter Erholung (Akku lädt, kaum Bezug): Entwarnung', () => {
+  const state = createSetpointFollowState();
+  assert.deepEqual(feed(state, { toMs: OPTS.holdMs, stepMs: 5000, sample: STUCK }).map(([n]) => n), ['alarm']);
+  const from = OPTS.holdMs + 5000;
+  // Halten: Sollwert = Last, Akku lädt 1,5 kW aus PV, Netzbezug 40 W.
+  const holdOk = { ...STUCK, setpointW: 0, netImportW: 40, batteryW: 1500, holdReason: 'eos_grid_hold' };
+  const tr = feed(state, { fromMs: from, toMs: from + OPTS.clearMs + 10000, stepMs: 5000, sample: holdOk });
+  assert.deepEqual(tr.map(([n]) => n), ['clear']);
+  assert.equal(state.active, false);
+  assert.equal(state.clearedWithDischarge, false, 'nur unauffällig, nicht „entlädt wieder“');
+});
+
+test('ohne Alarm: Halte-Punkte kommen weiterhin nicht ins Fenster', () => {
+  const state = createSetpointFollowState();
+  const holdOk = { ...STUCK, setpointW: 0, netImportW: 40, batteryW: 1500, holdReason: 'eos_grid_hold' };
+  feed(state, { toMs: 60000, stepMs: 5000, sample: holdOk });
+  assert.equal(state.window.length, 0);
+});
+
+// ── Gesamtprüfung Release 1.0.9 (Entlade-Wächter): neuere Rücklesung gewinnt ──
+// Die eigene 2720-Lesung des Wächters (bis 90 s gültig) ging jeder Rücklesung
+// vor — auch einer neueren. Wird die Sperre an der GX aufgehoben, entschuldigte
+// die alte eigene „0“ bis zu 90 s lang einen echten Ausfall.
+test('knownDischargeCapW: neuere eindeutige Rücklesung gewinnt gegen die ältere eigene Lesung, ältere nicht', async () => {
+  const { knownDischargeCapW } = await import('../services/setpoint-follow-watchdog.js');
+  const now = T0 + 120000;
+  const cfg = { points: { maxDischargeW: { address: 2720, quantity: 2, readType: 'int32' } } };
+  const st = (at) => ({ victron: { maxDischargeW: -1, errors: {}, fieldUpdatedAt: { maxDischargeW: at } }, schedule: { lastWrite: {} } });
+  const own = { value: 0, at: now - 60000, error: null, ambiguousZero: false };
+  assert.equal(knownDischargeCapW(st(now - 5000), cfg, now, own), -1, 'Poll-Punkt 5 s alt, eigene Lesung 60 s alt');
+  assert.equal(knownDischargeCapW(st(now - 80000), cfg, now, own), 0, 'eigene Lesung ist neuer');
+  // Eine mehrdeutige 2704-0 ohne eigenen 0-Write entschuldigt nichts — auch neuer nicht.
+  const st2704 = { victron: { maxDischargeW: 0, errors: {}, fieldUpdatedAt: { maxDischargeW: now - 1000 } }, schedule: { lastWrite: {} } };
+  assert.equal(knownDischargeCapW(st2704, { points: { maxDischargeW: { address: 2704 } } }, now, { value: -1, at: now - 60000, error: null, ambiguousZero: false }), -1);
+});

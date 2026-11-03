@@ -22,6 +22,8 @@
 // Echte Preise haben immer Vorrang: geschätzt wird nur hinter dem letzten
 // bekannten Slot, der nächste Push mit echten Preisen ersetzt die Schätzung.
 
+import { zoneOffsetMs } from '../../tz-fast.js';
+
 export const SLOT_MS = 15 * 60 * 1000;
 const DAY_SLOTS = 96;
 const WEEK_SLOTS = 7 * DAY_SLOTS;
@@ -194,9 +196,13 @@ export function realPriceCoverage(priceSlots) {
  * @param {Array<{ms:number, ct:number}>} opts.history  gespeicherte Day-Ahead-Historie
  * @param {number} opts.untilMs  bis wohin (exklusiv) die Reihe reichen soll
  * @param {number} [opts.nowMs]  jetzt (Standard: Date.now())
+ * @param {string} [opts.timeZone]  Ortszeit des Marktes (Standard Europe/Berlin):
+ *   Saison und Schätzung laufen auf der Ortszeit, nicht auf UTC — Börsenpreise
+ *   folgen dem Tagesablauf, nach einer Zeitumstellung lag die Schätzung sonst
+ *   eine Stunde daneben (Gesamtprüfung Release 1.0.9).
  * @returns {{slots:Array, estimate:null|{estimatedSlots:number, from:string, until:string, method:string, historySlots:number}}}
  */
-export function fillPriceSlots(priceSlots, { history = [], untilMs, nowMs = Date.now() } = {}) {
+export function fillPriceSlots(priceSlots, { history = [], untilMs, nowMs = Date.now(), timeZone = 'Europe/Berlin' } = {}) {
   const real = (Array.isArray(priceSlots) ? priceSlots : [])
     .filter((s) => s && s.start && Number.isFinite(Number(s.ctKwh)) && Number.isFinite(Date.parse(s.start)));
   const unchanged = { slots: Array.isArray(priceSlots) ? priceSlots : [], estimate: null };
@@ -217,13 +223,29 @@ export function fillPriceSlots(priceSlots, { history = [], untilMs, nowMs = Date
     const ms = Date.parse(s.start);
     for (let k = 0; k < perSlot; k += 1) points.push({ ms: ms + k * SLOT_MS, ct: Number(s.ctKwh) });
   }
-  const fc = forecastSpotPrices(points, fromMs - SLOT_MS, slotCount * perSlot);
+  // Auf die Ortszeit legen: lokal = UTC + Abstand. In der Rückstellungsstunde
+  // gibt es eine Ortszeit zweimal (der spätere Wert gilt), in der
+  // Vorstellungsstunde fehlt eine (regularHistory überbrückt sie linear).
+  let tz = timeZone || 'Europe/Berlin';
+  try { zoneOffsetMs(fromMs, tz); } catch { tz = 'Europe/Berlin'; }
+  const local = (ms) => ms + zoneOffsetMs(ms, tz);
+  const localPoints = points
+    .filter((p) => Number.isFinite(Number(p?.ms)))
+    .map((p) => ({ ms: local(Number(p.ms)), ct: p.ct }));
+  const lastLocal = local(fromMs - SLOT_MS);
+  const quarterIndex = (ms) => Math.max(0, Math.round((local(ms) - lastLocal) / SLOT_MS) - 1);
+  // Höchster Index über alle Viertelstunden (nach der Rückstellung kann ein
+  // früherer Slot den späteren Ortszeit-Index haben).
+  let steps = 0;
+  for (let ms = fromMs; ms < fromMs + slotCount * stepMs; ms += SLOT_MS) steps = Math.max(steps, quarterIndex(ms) + 1);
+  const fc = forecastSpotPrices(localPoints, lastLocal, steps);
   if (!fc) return unchanged;
 
   const added = [];
   for (let i = 0; i < slotCount; i += 1) {
     const start = fromMs + i * stepMs;
-    const quarters = fc.values.slice(i * perSlot, (i + 1) * perSlot);
+    const quarters = [];
+    for (let k = 0; k < perSlot; k += 1) quarters.push(fc.values[quarterIndex(start + k * SLOT_MS)]);
     added.push({
       start: new Date(start).toISOString(),
       end: new Date(start + stepMs).toISOString(),

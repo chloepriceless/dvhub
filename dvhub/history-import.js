@@ -1868,10 +1868,43 @@ export function createHistoryImportManager({
       };
     }
     const autoNow = startOfUtcDayIso(options.now || new Date());
-    const plan = await collectGapWindows({
-      ...options,
-      now: autoNow
-    });
+    let plan;
+    try {
+      plan = await collectGapWindows({
+        ...options,
+        now: autoNow
+      });
+    } catch (error) {
+      // Die Lückensuche selbst (Abdeckung aus der Datenbank) kann beim Start
+      // scheitern, z. B. wenn die Datenbank noch nicht bereit ist. Vorher
+      // lehnte der Aufruf ab und nichts wurde wiederholt (Gesamtprüfung
+      // Release 1.0.9) — jetzt nach denselben Fristen wie der Nachimport.
+      // Eigener Zähler (gapSearchAttempt): die Versuche des Nachimports danach
+      // bleiben vollständig (Gegenprüfung 0060ce70, P3).
+      const attempt = Number(options.gapSearchAttempt || 0);
+      const retryInMs = attempt < autoRetryDelaysMs.length ? autoRetryDelaysMs[attempt] : null;
+      log('history_auto_backfill_error', {
+        phase: 'gap_search',
+        error: error?.message || String(error),
+        attempt: attempt + 1,
+        retryInMs
+      }, { severity: 'warn' });
+      if (retryInMs != null) {
+        const retry = () => startAutomaticBackfill({ ...options, gapSearchAttempt: attempt + 1 }).then((r) => {
+          // Läuft gerade ein anderer Nachimport: denselben Versuch verschieben,
+          // wie beim Nachimport (Gegenprüfung 0060ce70, P3).
+          if (r?.busy) {
+            log('history_auto_backfill_deferred', { phase: 'gap_search', attempt: attempt + 2, retryInMs }, { severity: 'info' });
+            scheduleImpl(retry, retryInMs);
+          }
+          return r;
+        }, (e) => {
+          log('history_auto_backfill_error', { phase: 'gap_search', error: e?.message || String(e), attempt: attempt + 2, retryInMs: null }, { severity: 'warn' });
+        });
+        scheduleImpl(retry, retryInMs);
+      }
+      return { ok: false, started: false, error: error?.message || String(error) };
+    }
     if (!plan.gapWindows.length) {
       return {
         ok: true,
@@ -1897,7 +1930,9 @@ export function createHistoryImportManager({
         }, { severity: 'warn' });
         if (retryInMs != null) {
           const retry = () => {
-            startAutomaticBackfill({ ...options, autoAttempt: autoAttempt + 1 }).then((r) => {
+            // Die Lückensuche dieses Versuchs beginnt mit eigenem Zähler von vorn
+            // (Gegenprüfung 1f8add68, P3).
+            startAutomaticBackfill({ ...options, autoAttempt: autoAttempt + 1, gapSearchAttempt: 0 }).then((r) => {
               // Läuft gerade ein anderer Nachimport: denselben Versuch verschieben.
               if (r?.busy) {
                 log('history_auto_backfill_deferred', { attempt: autoAttempt + 2, retryInMs }, { severity: 'info' });

@@ -146,3 +146,24 @@ test('fillPriceSlots: echte Preise reichen nicht über den Mindest-Steuerzeitrau
   const ok = fillPriceSlots(real, { history: history(20), untilMs: realEnd + DAY * SLOT_MS, nowMs: realEnd - 75 * 60_000 });
   assert.ok(ok.estimate);
 });
+
+// ── Gesamtprüfung Release 1.0.9: Zeitumstellung ───────────────────────────────
+// Die Saison lief auf dem UTC-Raster (96 Slots je UTC-Tag). Börsenpreise folgen
+// aber der Ortszeit: nach der Umstellung (25.10.2026) lag die geschätzte
+// Abendspitze eine Stunde daneben.
+test('Zeitumstellung: die geschätzte Abendspitze bleibt bei 18 Uhr Ortszeit', async () => {
+  const { zoneOffsetMs } = await import('../tz-fast.js');
+  const Q = 15 * 60 * 1000;
+  const localHour = (ms) => new Date(ms + zoneOffsetMs(ms, 'Europe/Berlin')).getUTCHours();
+  const price = (ms) => (localHour(ms) === 18 ? 40 : 10);
+  // Echte Preise 20 Tage bis Fr 30.10. 23:00 Ortszeit (= 22:00 UTC), Umstellung am 25.10.
+  const end = Date.parse('2026-10-30T23:00:00Z');
+  const real = [];
+  for (let ms = end - 20 * 86_400_000; ms < end; ms += Q) real.push({ start: new Date(ms).toISOString(), ctKwh: price(ms) });
+  const nowMs = end - 10 * 3_600_000;
+  const r = fillPriceSlots(real, { history: [], untilMs: end + 86_400_000, nowMs, timeZone: 'Europe/Berlin' });
+  assert.ok(r.estimate, 'geschätzt');
+  const est = r.slots.filter((s) => s.estimated);
+  const peak = est.reduce((a, b) => (b.ctKwh > a.ctKwh ? b : a));
+  assert.equal(localHour(Date.parse(peak.start)), 18, `Spitze um ${peak.start}`);
+});

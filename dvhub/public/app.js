@@ -2329,7 +2329,10 @@ function renderDashboardStatus(status) {
       if (showGs) {
         const kwh = Number(gs.gridKwh || 0).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
         const pct = gs.sharePct == null ? '–' : Number(gs.sharePct).toLocaleString('de-DE', { maximumFractionDigits: 1 });
-        setText('gridShare', `${kwh} kWh (${pct} %)${gs.locked ? ' · Einspeisung gesperrt' : ''}`, gs.locked ? 'warn' : null);
+        // Ohne eingestellte Akkukapazität bucht der Zähler nicht ab (die Sperre
+        // bleibt) — das muss sichtbar sein (Gesamtprüfung Release 1.0.9, Befund 3).
+        const capHint = gs.capacityMissing ? ' · Akkukapazität fehlt (Einstellungen)' : '';
+        setText('gridShare', `${kwh} kWh (${pct} %)${gs.locked ? ' · Einspeisung gesperrt' : ''}${capHint}`, gs.locked || gs.capacityMissing ? 'warn' : null);
       }
     }
     setText('pvP', vic.pvPowerW == null ? '-' : `${vic.pvPowerW} W`);

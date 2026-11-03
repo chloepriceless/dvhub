@@ -227,3 +227,75 @@ describe('eos-first-plan: nur frische Loesungen zaehlen', () => {
     assert.equal(h2.watch.getState().freshSince, 1_000_000, 'Armier-Zeitpunkt der Harness-Uhr');
   });
 });
+
+// Gesamtprüfung Release 1.0.9: stop() während eines Takts (Abfrage hängt im
+// Netz) — der Takt lief danach weiter, stieß bei fertiger Lösung noch einen
+// Lauf an bzw. stellte den nächsten Timer.
+test('stop() während der Abfrage: kein Lauf, kein neuer Timer', async () => {
+  for (const ready of [true, false]) {
+    let answer;
+    let pending = null;
+    let triggered = 0;
+    const watch = createEosFirstPlanWatch({
+      hasFreshSolution: () => new Promise((r) => { answer = r; }),
+      setEmsIntervalSec: async () => ({ ok: true }),
+      triggerOptimization: () => { triggered += 1; },
+      pollMs: 30_000, maxWaitMs: 900_000, boostIntervalSec: 0,
+      now: () => 1_000_000,
+      setTimer: (fn) => { pending = fn; return { unref() {} }; },
+      clearTimer: () => { pending = null; },
+    });
+    await watch.arm({});
+    const fn = pending; pending = null;
+    const tick = fn();
+    while (!answer) await new Promise((r) => setImmediate(r));
+    watch.stop();
+    answer(ready);
+    await tick;
+    assert.equal(triggered, 0, `ready=${ready}: kein Lauf nach stop()`);
+    assert.equal(pending, null, `ready=${ready}: kein neuer Timer nach stop()`);
+  }
+});
+
+// Gegenprüfung a80fa938 (P3): stop() während des Zurücksetzens (Lösung schon
+// da, armed schon false) — danach kam trotzdem noch triggerOptimization().
+test('stop() während des Zurücksetzens nach fertiger Lösung: kein Lauf', async () => {
+  let pending = null;
+  let triggered = 0;
+  let releasePut;
+  let puts = 0;
+  const watch = createEosFirstPlanWatch({
+    hasFreshSolution: async () => true,
+    setEmsIntervalSec: () => { puts += 1; return puts === 1 ? Promise.resolve({ ok: true }) : new Promise((r) => { releasePut = r; }); },
+    triggerOptimization: () => { triggered += 1; },
+    pollMs: 30_000, maxWaitMs: 900_000, boostIntervalSec: 60,
+    now: () => 1_000_000,
+    setTimer: (fn) => { pending = fn; return { unref() {} }; },
+    clearTimer: () => { pending = null; },
+  });
+  await watch.arm({ restoreIntervalSec: 900 });
+  const tick = pending();
+  while (!releasePut) await new Promise((r) => setImmediate(r));
+  watch.stop();
+  releasePut({ ok: true });
+  await tick;
+  assert.equal(triggered, 0);
+});
+
+test('arm() nach stop(): kein Boost, kein Timer, kein Lauf (Gegenprüfung 63c034af, P3)', async () => {
+  let pending = null;
+  const puts = [];
+  const watch = createEosFirstPlanWatch({
+    hasFreshSolution: async () => true,
+    setEmsIntervalSec: async (sec) => { puts.push(sec); return { ok: true }; },
+    triggerOptimization: () => { throw new Error('darf nicht'); },
+    pollMs: 30_000, maxWaitMs: 900_000, boostIntervalSec: 60,
+    now: () => 1_000_000,
+    setTimer: (fn) => { pending = fn; return { unref() {} }; },
+    clearTimer: () => { pending = null; },
+  });
+  watch.stop();
+  assert.equal(await watch.arm({ restoreIntervalSec: 900 }), false);
+  assert.deepEqual(puts, []);
+  assert.equal(pending, null);
+});

@@ -46,7 +46,10 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   keinen Akku-Verkauf. Leitstand „davon Netzstrom X kWh (Y %)“, Historie mit Verlauf
   und Tagesprotokoll (CSV), `/api/battery/grid-share`. Der Zähler übersteht Neustart und Update; ein ausdrückliches
   Zurücksetzen wird protokolliert. Bei unsicheren Akkuwerten (Lesefehler, veraltet, eingefroren) wird nichts
-  abgebucht; das Tagesprotokoll nennt die Minuten.
+  abgebucht; das Tagesprotokoll nennt die Minuten. Abgebucht wird nur mit eingetragener Akkukapazität
+  (Einstellungen → Meine Anlage → Akku-Grenzen bzw. Ausbaustufen) — ohne sie rechnet DVhub mit keiner Ersatzzahl,
+  die Sperre bleibt, und Leitstand und Historie melden „Akkukapazität fehlt“. Der Zähler läuft ab der ersten Abfrage
+  nach dem Start, nicht erst, wenn die Datenbank bereit ist.
 
 - **Signierte Update-Pakete für native Installationen**: Statt eines git-Checkouts mit `npm install` auf der Box
   holt `dvhub-release` je Version und Architektur (arm64, armhf, amd64) ein fertiges Paket von GitHub, prüft
@@ -198,8 +201,11 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   Mittel Netzbezug über dem Sollwert) und gerade anliegt. Bei Verdacht liest er die Entlade-Sperre selbst nach
   (Register 2720, auf älteren GX 2704), auch nach einem Neustart. Eine Sperre, die ein Poll-Punkt aus Register 2720
   liest, gilt als gewollt, auch wenn DVhub sie nicht selbst gesetzt hat. Während eines gewollten Haltens gibt es keine falsche Entwarnung mehr; „entlädt
-  wieder“ meldet er nur, wenn der Akku wirklich entladen hat. Das Protokoll nennt Anteil und Mittelwerte. Neuer Schalter
-  `monitoring.setpointWatchdog.minSuspectShare` (Standard 0,8).
+  wieder“ meldet er nur, wenn der Akku wirklich entladen hat; lädt der Akku während des Haltens bei kaum Netzbezug,
+  kommt „wieder unauffällig“, statt dass der Alarm stundenlang stehen bleibt. Das Protokoll nennt Anteil und
+  Mittelwerte. Neuer Schalter `monitoring.setpointWatchdog.minSuspectShare` (Standard 0,8). Der Uptime-Kuma-Puls
+  bleibt während eines Alarms auf „down“ — auch bei „Live-Daten eingefroren“ und „Anlagendaten widersprüchlich“, nicht
+  nur beim Entlade-Wächter.
 
 - **Peak Shaving sperrt den Akku nicht mehr versehentlich.** Victron zeigt die Werkseinstellung „Entladung
   unbegrenzt“ (−1 W) im Register 2704 als 0 an — genau wie eine Sperre. Peak Shaving hätte deshalb eine Sperre
@@ -219,7 +225,8 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   abgelehnten Abruf ins Log statt ihn still zu übergehen. VRM-Abrufe der Historie warten bei Netz- oder
   Serverfehlern jetzt wirklich zwischen den Versuchen (die Pausen waren wirkungslos) und haben ein Zeitlimit;
   scheitert der automatische Nachimport beim Start (z. B. Internet noch nicht da), steht das im Log
-  (`history_auto_backfill_error`) und DVhub versucht es nach 5, 15 und 60 Minuten erneut. Eine gespeicherte
+  (`history_auto_backfill_error`) und DVhub versucht es nach 5, 15 und 60 Minuten erneut — auch wenn schon die
+  Lückensuche scheitert (Datenbank noch nicht bereit). Eine gespeicherte
   Portal-/Site-ID oder ein neues Token gilt für Historien-Import und Nachimport sofort, nicht erst nach einem
   Neustart.
 

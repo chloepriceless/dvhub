@@ -122,6 +122,9 @@ export function createEosRunTrigger({
   const startedAt = now();
   let timer = null;
   let running = false;      // start() aufgerufen, stop() noch nicht
+  // stop() aufgerufen: ein noch laufender Lauf und spätere kick() planen nichts
+  // mehr ein (Gesamtprüfung Release 1.0.9). start() hebt das wieder auf.
+  let stopped = false;
   let inFlight = null;      // Promise des laufenden Aufrufs
   let lastAttemptAt = 0;
   let finishedRuns = 0;     // beantwortete Aufrufe dieses Prozesses (auch Fehler)
@@ -169,10 +172,14 @@ export function createEosRunTrigger({
         return { ok: false, skipped: error };
       }
     }
+    // stop() während der Vorbereitung bzw. des Ladestand-Lesens: keinen Lauf
+    // mehr an EOS schicken (Gegenprüfung 63c034af, P3).
+    if (stopped) return { ok: false, skipped: 'stopped' };
     // Beginn erst nach der Vorbereitung: ein Neu-Push gehört nicht zur
     // Rechenzeit, die Startlösung richtet sich nach dem echten Beginn.
     const at = now();
     const socRes = await collectSoc();
+    if (stopped) return { ok: false, skipped: 'stopped' };
     const soc = socRes?.soc;
     if (!soc || !Object.keys(soc).length) {
       const error = socRes?.skipped || socRes?.error || 'kein Ladestand';
@@ -215,6 +222,9 @@ export function createEosRunTrigger({
 
   /** Lauf anstoßen, wenn keiner läuft. Wirft nie. */
   function trigger(reason = 'boundary') {
+    // Nach stop() keinen Lauf mehr anstoßen — auch nicht über kick() aus einem
+    // noch laufenden runOptimization beim Abschalten (Gegenprüfung a80fa938, P3).
+    if (stopped) return Promise.resolve({ ok: false, skipped: 'stopped' });
     if (!isActive()) return Promise.resolve({ ok: false, skipped: 'inactive' });
     if (inFlight) {
       log('eos_run_skipped', { reason, error: 'voriger Lauf rechnet noch' });
@@ -239,7 +249,7 @@ export function createEosRunTrigger({
         return { ok: false, error };
       })
       .then((res) => {
-        if (carried && !pendingReplan && !(res && res.ok)) pendingReplan = carried;
+        if (carried && !pendingReplan && !stopped && !(res && res.ok)) pendingReplan = carried;
         return res;
       })
       .finally(() => { inFlight = null; armPending(); });
@@ -258,6 +268,7 @@ export function createEosRunTrigger({
     if (pendingTimer) { clearTimer(pendingTimer); pendingTimer = null; }
   }
   function armPending(delayMs) {
+    if (stopped) { pendingReplan = null; return; }
     if (!pendingReplan || pendingTimer || inFlight) return;
     const wait = delayMs ?? Math.max(0, lastAttemptAt + EOS_RUN_KICK_MIN_GAP_MS - now());
     pendingTimer = setTimer(() => {
@@ -270,6 +281,7 @@ export function createEosRunTrigger({
 
   /** Außer der Reihe (EOS neu gestartet, noch kein Plan) — höchstens alle 2 min. */
   function kick(reason) {
+    if (stopped) return Promise.resolve({ ok: false, skipped: 'stopped' });
     const replan = String(reason || '').startsWith('replan:');
     if (inFlight || now() - lastAttemptAt < EOS_RUN_KICK_MIN_GAP_MS) {
       if (replan) { pendingReplan = reason; armPending(); }
@@ -296,8 +308,8 @@ export function createEosRunTrigger({
   }
 
   return {
-    start() { if (!running) { running = true; schedule(); } },
-    stop() { running = false; if (timer) clearTimer(timer); timer = null; clearPending(); },
+    start() { stopped = false; if (!running) { running = true; schedule(); } },
+    stop() { stopped = true; running = false; if (timer) clearTimer(timer); timer = null; clearPending(); },
     trigger,
     kick,
     isActive,

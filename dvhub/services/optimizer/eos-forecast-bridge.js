@@ -57,6 +57,13 @@ import { eosRemoteActive, REMOTE_EOS_PREDICTION_HOURS } from './eos-remote.js';
  */
 export const PUSH_TIMEOUT_MS = 5 * 60_000;
 /**
+ * Höchstens so lange wartet ein Push auf die gespeicherten echten Preise aus
+ * der Datenbank — sie werden seit Befund 9 bei jedem Push gelesen. Hängt die
+ * Datenbank, geht der Push mit den Preisen im Speicher weiter, statt bis zur
+ * Wache (PUSH_TIMEOUT_MS) zu warten (Gegenprüfung 1c7d8b2c, P3).
+ */
+export const STORED_PRICES_TIMEOUT_MS = 10_000;
+/**
  * Spätester Laufbeginn nach prepareRun: Ladestand holen (≤ 15 s) und
  * Aufruf. EOS rundet den Beginn auf den Slot ab; mit dieser Zugabe zählt ein
  * Anstoß kurz vor der Slotgrenze schon zum nächsten Slot.
@@ -550,15 +557,23 @@ export function createEosForecastBridge(ctx) {
     const store = ctx.telemetryStore;
     if (!store || typeof store.querySeries !== 'function') return [];
     const fromMs = nowMs - 3 * 3_600_000;
+    let timer = null;
     try {
-      const rows = await store.querySeries({
-        seriesKeys: ['price_ct_kwh'],
-        start: new Date(fromMs).toISOString(),
-        end: new Date(nowMs + 3 * 86_400_000).toISOString(),
-        // Nicht nach dem Stempel filtern: ein Abruf mit Lücke im ersten
-        // Zeilenpaar ist insgesamt grob gestempelt (Gegenprüfung fac22151).
-        maxResolution: 86_400,
-      });
+      const timeoutMs = Number(ctx.storedPricesTimeoutMs) > 0 ? Number(ctx.storedPricesTimeoutMs) : STORED_PRICES_TIMEOUT_MS;
+      const rows = await Promise.race([
+        store.querySeries({
+          seriesKeys: ['price_ct_kwh'],
+          start: new Date(fromMs).toISOString(),
+          end: new Date(nowMs + 3 * 86_400_000).toISOString(),
+          // Nicht nach dem Stempel filtern: ein Abruf mit Lücke im ersten
+          // Zeilenpaar ist insgesamt grob gestempelt (Gegenprüfung fac22151).
+          maxResolution: 86_400,
+        }),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Datenbank antwortet nicht innerhalb von ${timeoutMs} ms`)), timeoutMs);
+          timer.unref?.();
+        }),
+      ]);
       const byStart = new Map();
       for (const r of rows || []) {
         if (r.key !== 'price_ct_kwh') continue;
@@ -579,6 +594,8 @@ export function createEosForecastBridge(ctx) {
     } catch (e) {
       if (pushLog) pushLog('eos_prices_from_store_error', { error: e?.message || String(e) });
       return [];
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -586,7 +603,7 @@ export function createEosForecastBridge(ctx) {
     if (priceHistoryCache && nowMs - priceHistoryCache.at < 3_600_000) return priceHistoryCache.points;
     const store = ctx.telemetryStore;
     if (!store || typeof store.querySeries !== 'function') return [];
-    let points = [];
+    const points = [];
     try {
       const rows = await store.querySeries({
         // Wie routes-api (EEG-Verlängerung): der Live-Abruf schreibt
@@ -607,9 +624,12 @@ export function createEosForecastBridge(ctx) {
       }
     } catch (e) {
       if (pushLog) pushLog('eos_price_estimate_error', { error: e?.message || String(e) });
-      points = [];
+      // Fehler nicht zwischenspeichern: sonst bekäme EOS eine Stunde lang keinen
+      // geschätzten Schwanz (Gesamtprüfung Release 1.0.9, Befund 15).
+      return [];
     }
-    priceHistoryCache = { at: nowMs, points };
+    // Eine leere Antwort ebenso wenig — beim nächsten Push neu fragen.
+    if (points.length) priceHistoryCache = { at: nowMs, points };
     return points;
   }
 
@@ -657,13 +677,13 @@ export function createEosForecastBridge(ctx) {
   // erkannt —, gibt es keinen Laufstart, vor dem prepareRun pushen könnte, und
   // ohne Erkennung auch keinen Steuerzeitraum: dann keine Schätzung
   // (Gegenprüfungen 16856110, 2ed313de); alte löscht clearStaleEstimates.
-  async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs, { estimate = true, maxMs = PRICE_FILL_MAX_MS } = {}) {
+  async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs, { estimate = true, maxMs = PRICE_FILL_MAX_MS, timeZone = 'Europe/Berlin' } = {}) {
     if (!estimate) return { slots: realSlots, estimate: null };
     const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs, maxMs);
     const { end } = realPriceCoverage(realSlots);
     if (end < nowMs + MIN_REAL_AHEAD_MS || end >= untilMs) return { slots: realSlots, estimate: null };
     const history = await loadPriceHistory(nowMs);
-    return fillPriceSlots(realSlots, { history, untilMs, nowMs });
+    return fillPriceSlots(realSlots, { history, untilMs, nowMs, timeZone });
   }
 
   /**
@@ -978,8 +998,28 @@ export function createEosForecastBridge(ctx) {
       }
       return res;
     };
-    const shrinking = lastPredictionHours === null || predictionHours < lastPredictionHours;
-    const order = shrinking ? [putHorizon, putPrediction] : [putPrediction, putHorizon];
+    // Stand in EOS unbekannt (nach einem DVhub-Neustart oder einem
+    // gescheiterten PUT): Weder „erst Steuerzeitraum“ noch „erst Prognose“ ist
+    // dann sicher — der Steuerzeitraum kann über dem alten Prognosehorizont
+    // liegen und umgekehrt (Gesamtprüfung Release 1.0.9: nach dem Neustart galt
+    // der Stand als „kürzer werdend“, auch wenn er wuchs). Darum erst den
+    // Prognosehorizont auf das Höchste (72 h, deckt jeden Steuerzeitraum bis
+    // 48 h), dann den Steuerzeitraum, dann den Zielwert.
+    const widen = async () => {
+      const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/prediction/hours', EOS_PREDICTION_HOURS_MAX);
+      if (gone()) return { ok: false, abandoned: true };
+      if (res.ok) {
+        lastPredictionHours = EOS_PREDICTION_HOURS_MAX;
+        if (state?.optimizer) state.optimizer.eosPredictionHours = EOS_PREDICTION_HOURS_MAX;
+      }
+      return res;
+    };
+    let order;
+    if (lastPredictionHours === null) {
+      order = predictionHours < EOS_PREDICTION_HOURS_MAX ? [widen, putHorizon, putPrediction] : [putPrediction, putHorizon];
+    } else {
+      order = predictionHours < lastPredictionHours ? [putHorizon, putPrediction] : [putPrediction, putHorizon];
+    }
     const logChange = () => {
       const h = lastHorizonHours;
       const p = lastPredictionHours;
@@ -994,7 +1034,7 @@ export function createEosForecastBridge(ctx) {
       const res = await put();
       if (res.abandoned) return { abandoned: true };
       if (!res.ok) {
-        // Unbekannter Stand: beim nächsten Push wieder vorsichtig (erst Steuerzeitraum).
+        // Unbekannter Stand: beim nächsten Push wieder vorsichtig (erst weit).
         lastPredictionHours = null;
         // Ein angenommener Steuerzeitraum-Wechsel gehört trotzdem ins Log.
         logChange();
@@ -1116,18 +1156,47 @@ export function createEosForecastBridge(ctx) {
     }
     if (gone()) return abandoned();
 
-    // Echte Preise. Decken die im Speicher jetzt nicht ab (DVhub neu
-    // gestartet, während der Preisabruf gestört ist), die gespeicherten echten
-    // Day-Ahead-Preise aus der Datenbank nehmen: sie umfassen alles, was DVhub
-    // je abgerufen hat, also auch, was EOS noch hält — sonst fiele jeder Lauf
-    // aus, bis ein Abruf gelingt (Gegenprüfung c0fdcbef, P2).
+    // Echte Preise. Die gespeicherten echten Day-Ahead-Preise aus der
+    // Datenbank umfassen alles, was DVhub je abgerufen hat, also auch, was EOS
+    // noch hält. Sie werden genommen,
+    //   - wenn die im Speicher jetzt nicht abdecken (DVhub neu gestartet,
+    //     während der Preisabruf gestört ist) — sonst fiele jeder Lauf aus, bis
+    //     ein Abruf gelingt (Gegenprüfung c0fdcbef, P2);
+    //   - wenn sie lückenlos weiter reichen als die im Speicher: epex-fetch.js
+    //     ersetzt state.epex.data komplett, ein Abruf mit nur heute ließe sonst
+    //     Schätzwerte die echten Preise für morgen in EOS überschreiben und
+    //     clearStaleEstimates sie löschen (Gesamtprüfung Release 1.0.9, Befund 9).
+    //     Dann gelten die im Speicher, dahinter die aus der Datenbank — bei
+    //     gleicher Slot-Länge (eine gemischte Kadenz liest EOS mit Lücken,
+    //     Gegenprüfung 8c050aae), sonst ganz die aus der Datenbank.
     let realPriceSlots = forecast?.price?.slots || [];
-    if (!Number.isFinite(contiguousPriceEndMs(realPriceSlots, Date.now()))) {
-      const stored = await loadStoredRealPriceSlots(Date.now());
+    {
+      const nowMs = Date.now();
+      const memEnd = contiguousPriceEndMs(realPriceSlots, nowMs);
+      const stored = await loadStoredRealPriceSlots(nowMs);
       if (gone()) return abandoned();
-      if (Number.isFinite(contiguousPriceEndMs(stored, Date.now()))) {
-        if (pushLog) pushLog('eos_prices_from_store', { slots: stored.length, from: stored[0].start, until: stored[stored.length - 1].end });
-        realPriceSlots = stored;
+      const storedEnd = contiguousPriceEndMs(stored, nowMs);
+      if (Number.isFinite(storedEnd) && (!Number.isFinite(memEnd) || storedEnd > memEnd)) {
+        let merged = stored;
+        let mode = Number.isFinite(memEnd) ? 'extend' : 'replace';
+        if (Number.isFinite(memEnd) && realPriceCoverage(realPriceSlots).stepMs === realPriceCoverage(stored).stepMs) {
+          // Aus der Datenbank nur Zeitpunkte, die im Speicher fehlen: Slots
+          // hinter einer Lücke im Speicher kämen sonst doppelt, und der
+          // jeweils letzte (Datenbank) gewönne (Gegenprüfung 1c7d8b2c, P3).
+          const inMemory = new Set(realPriceSlots.map((x) => Date.parse(x?.start)));
+          merged = [
+            ...realPriceSlots,
+            ...stored.filter((x) => Date.parse(x.start) >= memEnd && !inMemory.has(Date.parse(x.start))),
+          ];
+          mode = 'append';
+        }
+        if (pushLog) {
+          pushLog('eos_prices_from_store', {
+            mode, slots: stored.length, from: stored[0].start, until: new Date(storedEnd).toISOString(),
+            memoryUntil: Number.isFinite(memEnd) ? new Date(memEnd).toISOString() : null,
+          });
+        }
+        realPriceSlots = merged;
       }
     }
 
@@ -1141,6 +1210,8 @@ export function createEosForecastBridge(ctx) {
     const priceFill = await priceSlotsForEos(realPriceSlots, pvSlots, loadSlots, Date.now(), {
       estimate: dvhubTriggersEosRuns(cfg) && state?.optimizer?.eos?.supported === true,
       maxMs: resolveEosPredictionHours(cfg) * 3_600_000,
+      // Ortszeit des Marktes für die Saison der Schätzung (Zeitumstellung).
+      timeZone: cfg?.optimizer?.timezone || cfg?.epex?.timezone || 'Europe/Berlin',
     });
     if (gone()) return abandoned();
     const priceSlotsCt = priceFill.slots;

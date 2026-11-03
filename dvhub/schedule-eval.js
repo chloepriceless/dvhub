@@ -356,12 +356,18 @@ export function createScheduleEvaluator(ctx) {
     const nowMs = Date.now();
     const sourceStale = (f) => { const at = Number(v.fieldSourceAt?.[f]); return at > 0 && nowMs - at > GRID_SHARE_FIELD_MAX_AGE_MS; };
     const stale = (f) => victronFieldStale(state, f, maxAgeMs, nowMs) || sourceStale(f);
+    // Einfrier-Wächter, Einfrier-Verdacht (Stable-Kanal) oder Kreuzprobe: die
+    // Stempel sind frisch, die Werte aber eingefroren bzw. widersprüchlich —
+    // dieselben Signale, mit denen grid-share.js nicht abbucht. Dann sind PV
+    // und Last unbekannt, nur der Puffer (Gesamtprüfung Release 1.0.9, Befund 2:
+    // mittags eingefrorene 6 kW PV öffneten abends den Deckel für Akkustrom).
+    const untrusted = v.freeze?.active === true || v.freezeSuspect?.active === true || v.sourceMismatch?.active === true;
     const totalRaw = v.pvTotalW ?? v.pvPowerW;
     const pvFresh = GRID_SHARE_PV_FIELDS.every((f) => !stale(f));
-    const pvKnown = fin(totalRaw) && pvFresh;
+    const pvKnown = !untrusted && fin(totalRaw) && pvFresh;
     const dcW = fin(v.pvPowerW) ? Math.max(0, Number(v.pvPowerW)) : 0;
     const totalW = pvKnown ? Math.max(0, Number(totalRaw)) : null;
-    const loadKnown = fin(v.selfConsumptionW) && !stale('selfConsumptionW');
+    const loadKnown = !untrusted && fin(v.selfConsumptionW) && !stale('selfConsumptionW');
     return gridShareExportCapW({
       pvAcW: totalW == null ? null : Math.max(0, totalW - dcW),
       pvDcW: totalW == null ? null : Math.min(dcW, totalW),

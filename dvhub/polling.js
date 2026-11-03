@@ -174,8 +174,23 @@ export function createPoller(ctx) {
   }
 
   // --- pollPoint: read a single Victron data point ---
+  // Abgeschaltete PV-Punkte (Gesamtprüfung Release 1.0.9): ihr letzter Wert
+  // floss sonst weiter in pvAcW/pvTotalW, und ihr alter Stempel machte die PV im
+  // Einspeise-Deckel des Netzstrom-Zählers bis zum Neustart „alt“. Nur gelesene
+  // PV-Felder ohne Ableitung (derive) — andere Felder schreiben teils weitere
+  // Pfade (M160, Hauslast-Ableitung).
+  const PV_POINT_FIELDS = new Set(['pvPowerW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W']);
+  function dropDisabledPvPoint(name, conf) {
+    if (!PV_POINT_FIELDS.has(name) || conf?.derive) return;
+    const v = state.victron;
+    if (v[name] == null && !(Number(v.fieldUpdatedAt?.[name]) > 0)) return;
+    v[name] = null;
+    if (v.fieldUpdatedAt) delete v.fieldUpdatedAt[name];
+    if (v.fieldSourceAt) delete v.fieldSourceAt[name];
+    if (v.errors) delete v.errors[name];
+  }
   async function pollPoint(name, conf) {
-    if (!conf?.enabled) return;
+    if (!conf?.enabled) { dropDisabledPvPoint(name, conf); return; }
     // SunSpec-deklarierte Punkte warten auf den Geräte-Scan (ensureSunspecResolved)
     // — vor der Auflösung wäre die Adresse null (Lesen von Register-Müll).
     if (conf.sunspec && conf.address == null) return;
@@ -922,6 +937,15 @@ export function createPoller(ctx) {
     try {
       setpointFollowWatchdog.tick();
     } catch (e) { pushLog('setpoint_follow_watchdog_error', { error: e?.message || String(e) }, 'warn'); }
+
+    // Netzstrom-Zähler (services/optimizer/grid-share-poll.js): bei JEDER
+    // Abfrage, unabhängig vom echten onPollComplete — den hängt server.js erst
+    // nach Datenbank, Migrationen und Snapshots ein, bei langsamem PostgreSQL
+    // bis ~140 s nach dem Start (Gesamtprüfung Release 1.0.9, Befund 7). Die
+    // Live-Werte landen in state.victron und damit im Snapshot unten.
+    try {
+      ctx.gridSharePollTick?.(state.victron);
+    } catch (e) { pushLog('grid_share_error', { error: e?.message || String(e) }, 'warn'); }
 
     ctx.onPollComplete?.({
       ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),

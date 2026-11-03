@@ -88,6 +88,7 @@ export function createEosFirstPlanWatch(deps) {
   let freshSince = 0;      // Loesungen vor diesem Zeitpunkt zaehlen als veraltet
   let boosted = false;     // haben WIR ems.interval gesenkt? Nur dann setzen wir zurueck.
   let ticking = false;     // kein zweiter tick, solange einer im Netz haengt
+  let stopped = false;     // stop() aufgerufen (Abschalten): nie mehr scharf, nie mehr einen Lauf anstossen
 
   function clear() {
     if (timer) clearTimer(timer);
@@ -134,6 +135,9 @@ export function createEosFirstPlanWatch(deps) {
       } catch (err) {
         pushLog('eos_first_plan_probe_failed', { error: err?.message });
       }
+      // Während der Abfrage gestoppt oder entschärft: keinen Lauf mehr anstoßen
+      // und keinen Timer mehr stellen (Gesamtprüfung Release 1.0.9).
+      if (!armed) return;
 
       const waitedMs = now() - armedAt;
 
@@ -142,6 +146,9 @@ export function createEosFirstPlanWatch(deps) {
         clear();
         await restore();
         pushLog('eos_first_plan_ready', { waitedMs });
+        // stop() während des Zurücksetzens: armed ist hier schon false, darum
+        // ein eigenes Flag (Gegenprüfung a80fa938, P3).
+        if (stopped) return;
         try { triggerOptimization(); } catch (err) {
           pushLog('eos_first_plan_trigger_failed', { error: err?.message });
         }
@@ -172,7 +179,9 @@ export function createEosFirstPlanWatch(deps) {
      * @returns {Promise<boolean>} true, wenn dieser Aufruf die Wache gestartet hat
      */
     async arm(opts = {}) {
-      if (armed) return false;
+      // Nach stop() nie wieder scharf: ein noch laufender runOptimization ruft
+      // arm() evtl. erst nach dem Abschalten (Gegenprüfung 63c034af, P3).
+      if (armed || stopped) return false;
       armed = true;
       armedAt = now();
       // Ab welchem Zeitpunkt eine Loesung als frisch gilt: der Moment, in dem
@@ -227,6 +236,7 @@ export function createEosFirstPlanWatch(deps) {
      */
     stop() {
       armed = false;
+      stopped = true;
       clear();
       if (boosted) { restore().catch(() => {}); }
     },

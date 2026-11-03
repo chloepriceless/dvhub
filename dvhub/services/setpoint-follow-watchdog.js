@@ -219,6 +219,14 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
   const known = knownMaxDischargeW(state, cfg, nowMs);
   const ownOk = ownRead && !ownRead.error && Number.isFinite(Number(ownRead.value))
     && isFresh(ownRead.at, nowMs, capReadMaxAgeMs(cfg));
+  // Eine NEUERE eindeutige Rücklesung (Poll-Punkt bzw. Peak Shaving) geht der
+  // eigenen Lesung vor — die gilt bis zu 90 s, an der GX kann die Sperre
+  // inzwischen aufgehoben oder gesetzt sein (Gesamtprüfung Release 1.0.9).
+  // Eine mehrdeutige 2704-0 sticht die eindeutige eigene Lesung nie aus, auch
+  // neuer nicht (sie kann −1 heißen, Gegenprüfung 0ff2eb8d).
+  const knownUsable = known && known.from !== 'own_write'
+    && (!zeroIsAmbiguous(known, cfg) || ownZeroWrite(state));
+  if (ownOk && knownUsable && !zeroIsAmbiguous(known, cfg) && Number(known.at) > Number(ownRead.at)) return known.value;
   // Eindeutiger Wert (2720 bzw. MQTT) geht vor — auch vor einer 2704-0 mit
   // alter eigener 0 (an der GX kann längst −1 stehen, Gegenprüfung 0ff2eb8d).
   if (ownOk && !ownRead.ambiguousZero) return Number(ownRead.value);
@@ -226,8 +234,7 @@ export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = nul
   // wirklich mehrdeutig ist (2704). Ein Poll-Punkt auf 2720 liefert sie
   // eindeutig (ambiguousZero = false) — sonst Fehlalarm trotz gesetzter Sperre
   // (Gegenprüfung Release 1.0.9, P2).
-  if (known && known.from !== 'own_write'
-      && (!zeroIsAmbiguous(known, cfg) || ownZeroWrite(state))) return known.value;
+  if (knownUsable) return known.value;
   if (ownOk && ownZeroWrite(state)) return Number(ownRead.value);
   if (known && known.from === 'own_write' && isFresh(known.at, nowMs, holdSignalMaxAgeMs(cfg))) return known.value;
   return null;
@@ -352,7 +359,14 @@ export function evaluateSetpointFollow(state, sample, opts) {
   // der Akku gewollt nicht entlädt (Untergrenze, Halten, Sperre): das ist weder
   // ein Fehler noch ein Beleg, dass er wieder folgt — sonst käme mitten im
   // Halten eine falsche Entwarnung (Gegenprüfung 415a2f25).
-  if (refusing === null || (refusing === false && dischargeExcuse(sample, opts))) return { state, transition };
+  // Ausnahme: Bei aktivem Alarm zählt ein entschuldigter Punkt, der selbst
+  // belegt, dass die Anlage unauffällig ist (Akku entlädt, oder lädt bei
+  // geringem Bezug) — sonst ginge ein Alarm während eines stundenlangen
+  // „Akku halten“ nie zurück (Gesamtprüfung Release 1.0.9). Ein stehender Akku
+  // im Halten belegt weiter nichts.
+  if (refusing === null) return { state, transition };
+  if (refusing === false && dischargeExcuse(sample, opts)
+      && !(state.active && isRecoveryPoint(sample, false, opts))) return { state, transition };
 
   state.window ??= [];
   // Lücke ohne beurteilbaren Punkt (länger als gapMs, Standard maxAgeMs bzw.
@@ -637,7 +651,7 @@ export function createSetpointFollowWatchdog(ctx) {
           body: 'Netzbezug und Sollwert passen wieder zusammen; der Akku musste dabei nicht entladen (er lädt oder steht). Ob er wieder entlädt, zeigt sich, sobald Entladen gefragt ist — bleibt es aus, meldet DVhub erneut.'
         });
       try {
-        Promise.resolve(ctx.monitoringAlertPush?.('up', discharged ? 'DVhub: Speicher entlädt wieder' : 'DVhub: Speicher wieder unauffällig'))
+        Promise.resolve(ctx.monitoringAlertPush?.('up', discharged ? 'DVhub: Speicher entlädt wieder' : 'DVhub: Speicher wieder unauffällig', { clears: 'setpointFollow' }))
           .catch(() => { /* noop */ });
       } catch { /* noop */ }
     }
@@ -653,14 +667,24 @@ export function createSetpointFollowWatchdog(ctx) {
 }
 
 /**
- * Regelmäßiger Uptime-Kuma-Puls: solange der Wächter Alarm hat, „down“ mit
- * Alarmtext statt „up“ — sonst überschrieb der nächste Puls die Störung nach
- * höchstens einem Intervall (Gegenprüfung d3420a0c, P2).
+ * Regelmäßiger Uptime-Kuma-Puls: solange ein Alarm mit „down“-Meldung anliegt,
+ * „down“ mit Alarmtext statt „up“ — sonst überschrieb der nächste Puls die
+ * Störung nach höchstens einem Intervall (Gegenprüfung d3420a0c, P2). Gilt für
+ * den Entlade-Wächter, den Einfrier-Wächter (victron.freeze; der reine Verdacht
+ * im Stable-Kanal alarmiert nicht) und die Kreuzprobe MQTT/Modbus
+ * (victron.sourceMismatch; Gesamtprüfung Release 1.0.9).
  */
-export function setpointFollowHeartbeat(state, okMsg) {
-  const sf = state?.victron?.setpointFollow;
-  if (sf?.active) {
-    return { status: 'down', msg: `DVhub: Speicher entlädt nicht (seit ${sf.since || '?'}) | SOC ${state?.victron?.soc ?? '?'}%` };
+export function setpointFollowHeartbeat(state, okMsg, { except = null } = {}) {
+  // except: der Wächter, der gerade aufhebt — sein Zustand steht in diesem
+  // Moment noch auf aktiv (Gegenprüfung 5c6520cb, P3).
+  const v = state?.victron || {};
+  const alarms = [];
+  if (v.setpointFollow?.active && except !== 'setpointFollow') alarms.push(`Speicher entlädt nicht (seit ${v.setpointFollow.since || '?'})`);
+  if (v.freeze?.active && except !== 'freeze') {
+    const why = Array.isArray(v.freeze.reasons) && v.freeze.reasons.length ? ` (${v.freeze.reasons.join('+')})` : '';
+    alarms.push(`Live-Daten eingefroren${why} (seit ${v.freeze.since || '?'})`);
   }
+  if (v.sourceMismatch?.active && except !== 'sourceMismatch') alarms.push(`Anlagendaten widersprüchlich, MQTT vs. Modbus (seit ${v.sourceMismatch.since || '?'})`);
+  if (alarms.length) return { status: 'down', msg: `DVhub: ${alarms.join(' · ')} | SOC ${v.soc ?? '?'}%` };
   return { status: 'up', msg: okMsg };
 }
