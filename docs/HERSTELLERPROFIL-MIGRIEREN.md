@@ -25,8 +25,10 @@ Update deine sorgfältig eingestellten Werte überschreibt.
 
 ```bash
 cd /opt/dvhub
-node scripts/vendor-profile-diff.mjs victron.json
+sudo node scripts/vendor-profile-diff.mjs victron.json
 ```
+
+`sudo`, weil `/etc/dvhub` nur dem Dienstbenutzer gehört (0750).
 
 Die Ausgabe teilt die Unterschiede in drei Gruppen:
 
@@ -40,7 +42,7 @@ Die Ausgabe teilt die Unterschiede in drei Gruppen:
 ## 3. Neue Felder übernehmen (der sichere Weg)
 
 ```bash
-node scripts/vendor-profile-diff.mjs victron.json --apply-additions
+sudo node scripts/vendor-profile-diff.mjs victron.json --apply-additions
 sudo systemctl restart dvhub
 ```
 

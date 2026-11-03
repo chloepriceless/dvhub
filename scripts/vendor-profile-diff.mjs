@@ -7,8 +7,8 @@
 // Hintergrund: der Update-Abgleich (reconcile-vendor-profiles.mjs) überschreibt
 // ein vom Operator geändertes Profil NIE — die neue Version landet als
 // <name>.dist daneben. Dieses Werkzeug macht die Migration nachvollziehbar:
-//   node scripts/vendor-profile-diff.mjs victron.json               # nur anzeigen
-//   node scripts/vendor-profile-diff.mjs victron.json --apply-additions
+//   sudo node scripts/vendor-profile-diff.mjs victron.json             # nur anzeigen
+//   sudo node scripts/vendor-profile-diff.mjs victron.json --apply-additions
 //                                                                    # neue Felder übernehmen (Backup!)
 //
 // --apply-additions fügt AUSSCHLIESSLICH Felder hinzu, die in .dist neu sind
@@ -115,7 +115,7 @@ if (invokedDirectly()) {
 
       if (!apply) {
         console.log(`\nNur angezeigt. Zum Übernehmen der ${added.length} neuen Felder (deine Anpassungen bleiben):`);
-        console.log(`  node scripts/vendor-profile-diff.mjs ${name} --apply-additions`);
+        console.log(`  sudo node scripts/vendor-profile-diff.mjs ${name} --apply-additions`);
         return;
       }
       if (added.length === 0) { console.log('\nNichts Neues zu übernehmen.'); return; }
