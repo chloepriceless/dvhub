@@ -640,7 +640,7 @@ test('Entwarnung über das Fenster: ein alter Entlade-Zacken vor der Erholung z�
 // (ambiguousZero = false). Der Wächter verlangte trotzdem einen eigenen
 // 0-Write und meldete nach zehn Minuten „Speicher entlädt nicht“.
 test('Poll-Punkt auf 2720 = 0 ist eindeutig: Sperre ohne eigenen 0-Write → kein Alarm', () => {
-  const cfg = { points: { maxDischargeW: { address: 2720 } }, controlWrite: { maxDischargeW: { enabled: false } } };
+  const cfg = { points: { maxDischargeW: { address: 2720, quantity: 2, readType: 'int32' } }, controlWrite: { maxDischargeW: { enabled: false } } };
   assert.equal(runReadbackZero({ ownZero: false, cfg }).length, 0);
 });
 
@@ -656,7 +656,18 @@ test('knownDischargeCapW: eindeutige 0 aus 2720 zählt, mehrdeutige 0 aus 2704 n
     victron: { maxDischargeW: 0, errors: {}, fieldUpdatedAt: { maxDischargeW: now } },
     schedule: { lastWrite: ownZero ? { maxDischargeW: { value: 0, source: 'api', at: now - 3 * 3600000 } } : {} },
   });
-  assert.equal(knownDischargeCapW(st(false), { points: { maxDischargeW: { address: 2720 } } }, now), 0);
+  assert.equal(knownDischargeCapW(st(false), { points: { maxDischargeW: { address: 2720, quantity: 2, readType: 'int32' } } }, now), 0);
   assert.equal(knownDischargeCapW(st(false), { points: { maxDischargeW: { address: 2704 } } }, now), null);
   assert.equal(knownDischargeCapW(st(true), { points: { maxDischargeW: { address: 2704 } } }, now), 0);
+});
+
+// Gegenprüfung c093f4b7 (P3): Nur die Adresse auf 2720 umgestellt (quantity 1,
+// ohne readType int32) liest nur das obere Wort — jede Grenze unter 65 536 W
+// käme als 0 an. Diese 0 ist nicht eindeutig; der Alarm darf nicht ausfallen.
+test('Poll-Punkt 2720 mit quantity 1 (nur oberes Wort) ist nicht eindeutig → Alarm bleibt möglich', async () => {
+  const cfg = { points: { maxDischargeW: { address: 2720, quantity: 1, signed: true } }, controlWrite: { maxDischargeW: { enabled: false } } };
+  assert.equal(runReadbackZero({ ownZero: false, cfg }).length, 1);
+  const { knownDischargeCapW } = await import('../services/setpoint-follow-watchdog.js');
+  const st = { victron: { maxDischargeW: 0, errors: {}, fieldUpdatedAt: { maxDischargeW: T0 } }, schedule: { lastWrite: {} } };
+  assert.equal(knownDischargeCapW(st, cfg, T0), null);
 });

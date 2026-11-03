@@ -231,8 +231,13 @@ export function knownMaxDischargeW(state, cfg, now = Date.now()) {
   if (v.maxDischargeW != null && Number.isFinite(Number(v.maxDischargeW)) && age !== null && age <= maxAgeMs
       && !v.errors?.maxDischargeW) {
     const value = Number(v.maxDischargeW);
-    const ambiguousZero = value === 0 && cfg?.victron?.transport !== 'mqtt'
-      && Number(cfg?.points?.maxDischargeW?.address) !== MAX_DISCHARGE_INT32_ADDR;
+    // Eindeutig nur, wenn der Punkt 2720 wirklich als int32 über zwei Register
+    // liest — mit quantity 1 käme nur das obere Wort an, jede Grenze unter
+    // 65 536 W läse sich als 0 (Gegenprüfung c093f4b7, P3).
+    const pt = cfg?.points?.maxDischargeW || {};
+    const reads2720AsInt32 = Number(pt.address) === MAX_DISCHARGE_INT32_ADDR
+      && String(pt.readType || '').toLowerCase() === 'int32' && Number(pt.quantity) >= 2;
+    const ambiguousZero = value === 0 && cfg?.victron?.transport !== 'mqtt' && !reads2720AsInt32;
     if (ambiguousZero && own && !own.ambiguousZero) return own;
     return { value, from: 'readback', at: now - age, ambiguousZero };
   }
