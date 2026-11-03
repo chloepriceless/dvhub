@@ -221,14 +221,20 @@ export function createConfigRoutes(deps) {
           if (cur[key] === undefined) delete body.config[key];
           else body.config[key] = JSON.parse(JSON.stringify(cur[key]));
         }
-        for (const [parent, child] of SUPPORT_TUNNEL_KEPT_PATHS) {
-          const v = cur[parent]?.[child];
-          const target = body.config[parent];
+        const isObj = (o) => o !== null && typeof o === 'object' && !Array.isArray(o);
+        for (const segs of SUPPORT_TUNNEL_KEPT_PATHS) {
+          const leaf = segs.at(-1);
+          const v = segs.reduce((o, k) => (isObj(o) ? o[k] : undefined), cur);
           if (v === undefined) {
-            if (target && typeof target === 'object') delete target[child];
+            const parent = segs.slice(0, -1).reduce((o, k) => (isObj(o) ? o[k] : undefined), body.config);
+            if (isObj(parent)) delete parent[leaf];
           } else {
-            if (!target || typeof target !== 'object' || Array.isArray(target)) body.config[parent] = {};
-            body.config[parent][child] = JSON.parse(JSON.stringify(v));
+            let node = body.config;
+            for (const k of segs.slice(0, -1)) {
+              if (!isObj(node[k])) node[k] = {};
+              node = node[k];
+            }
+            node[leaf] = JSON.parse(JSON.stringify(v));
           }
         }
       }

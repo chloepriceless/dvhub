@@ -47,9 +47,17 @@ export const SUPPORT_TUNNEL_KEPT_ROOTS = Object.freeze([
   'support', 'security', 'allowedHosts', 'corsAllowedOrigins', 'trustProxy', 'trustedProxyIps',
   'vpn', 'ortsnetz',
 ]);
-// mqtt.brokerUrl: ein fremder Broker wäre ein bleibender Steuerweg (Befehle
-// über <prefix>/control/…/set, Messwerte über das DVhub-Schema).
-export const SUPPORT_TUNNEL_KEPT_PATHS = Object.freeze([['eebus', 'trusted'], ['mqtt', 'brokerUrl']]);
+// Broker-Adressen: ein fremder Broker wäre ein bleibender Weg von außen —
+// Befehle über <prefix>/control/…/set, Messwerte über das DVhub-Schema
+// (mqtt.brokerUrl, victron.mqtt.broker), unterschobene Gegenprobe- bzw.
+// Wetterwerte (Gegenprüfungen 70373d4e, ce4d0baa).
+export const SUPPORT_TUNNEL_KEPT_PATHS = Object.freeze([
+  ['eebus', 'trusted'],
+  ['mqtt', 'brokerUrl'],
+  ['victron', 'mqtt', 'broker'],
+  ['victron', 'mqttCrossCheck', 'broker'],
+  ['forecast', 'weather', 'mqtt', 'brokerUrl'],
+]);
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);

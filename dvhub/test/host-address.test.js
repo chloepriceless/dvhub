@@ -71,10 +71,11 @@ test('createOutboundLookup: Loopback, link-local, 0-Adresse und gemischte Antwor
     'ntfy.lan': ['192.168.1.10'],
     'ntfy.local': ['fe80::1', '192.168.1.11'],
     'nur-linklocal': ['fe80::1'],
+    'mapped-meta': ['::ffff:169.254.169.254', '192.168.1.12'],
     'ntfy.sh': ['93.184.216.34', '2606:2800:220:1::1'],
   }));
   const run = (host, opts) => new Promise((resolve) => lookup(host, opts, (err, a, f) => resolve({ err, a, f })));
-  for (const h of ['ip6-localhost', '127.0.0.1.nip.io', 'box', 'meta', 'null', 'gemischt', 'mapped', 'nur-linklocal']) {
+  for (const h of ['ip6-localhost', '127.0.0.1.nip.io', 'box', 'meta', 'null', 'gemischt', 'mapped', 'nur-linklocal', 'mapped-meta']) {
     const r = await run(h, {});
     assert.ok(r.err, h);
     assert.equal(r.err.code, 'EOUTBOUNDBLOCKED', h);

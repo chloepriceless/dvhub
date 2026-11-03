@@ -142,7 +142,7 @@ export function createOutboundLookup(resolve = dns.lookup) {
       // mit (ntfy.local) — nicht verbinden, aber den Namen deswegen nicht
       // sperren. Alles andere Interne (Box, 0-Adresse, 169.254/16) sperrt.
       const list = (Array.isArray(addrs) ? addrs : [])
-        .filter((a) => !(String(a?.address).includes(':') && classifyHost(a.address) === 'linklocal'));
+        .filter((a) => !/^fe[89ab][0-9a-f]:/i.test(String(a?.address)));
       if (!list.length || list.some((a) => !OUTBOUND_KINDS.includes(classifyHost(a?.address)))) {
         const e = new Error(`outbound_address_not_allowed: ${hostname}`);
         e.code = 'EOUTBOUNDBLOCKED';

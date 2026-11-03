@@ -4110,7 +4110,11 @@ export function createApiRoutes(ctx) {
       const patch = { ...cur };
       // Ein anderer Broker ist ein bleibender Steuerweg von außen — den legt
       // der Kunde fest, nicht der Support (Gesamtprüfung 1.0.9).
-      if (typeof body.brokerUrl === 'string' && body.brokerUrl.trim() !== String(cur.brokerUrl || '')
+      // Verglichen ohne Zugangsdaten: die Seite schickt die Adresse redigiert
+      // zurück (***:***@), und neue Zugangsdaten für denselben Broker sind
+      // kein neuer Weg (Gegenprüfung ce4d0baa, P3).
+      if (typeof body.brokerUrl === 'string'
+        && redactUrlCreds(body.brokerUrl.trim()) !== redactUrlCreds(String(cur.brokerUrl || '').trim())
         && denySupportConsent(req, res, 'mqtt_broker')) return;
       if (typeof body.brokerUrl === 'string') {
         const url2 = body.brokerUrl.trim();

@@ -457,6 +457,7 @@ test('Support-Tunnel: Zugänge in der Konfiguration (Sicherheit, VPN, Hosts, EEB
     vpn: { enabled: false, autoConnect: false },
     eebus: { enabled: true, trusted: [] },
     ortsnetz: { enabled: false },
+    victron: { mqtt: { broker: 'mqtt://192.168.1.5:1883' } },
   };
   const { ctx, saved } = ctxWith(box, {
     getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
@@ -472,6 +473,8 @@ test('Support-Tunnel: Zugänge in der Konfiguration (Sicherheit, VPN, Hosts, EEB
     eebus: { enabled: true, trusted: [{ ski: 'a'.repeat(40), role: 'grid' }] },
     ortsnetz: { enabled: true },
     mqtt: { brokerUrl: 'mqtts://broker.evil.example.net', haDiscovery: { enabled: true } },
+    victron: { transport: 'mqtt', mqtt: { schema: 'dvhub', broker: 'mqtts://broker.evil.example.net' }, mqttCrossCheck: { broker: 'mqtt://evil.example.net' } },
+    forecast: { weather: { mqtt: { brokerUrl: 'mqtt://evil.example.net' } } },
   };
   for (const p of ['/api/config', '/api/config/import']) {
     const res = mockRes();
@@ -484,6 +487,10 @@ test('Support-Tunnel: Zugänge in der Konfiguration (Sicherheit, VPN, Hosts, EEB
     assert.deepEqual(last.ortsnetz, box.ortsnetz, `${p}: ortsnetz`);
     assert.equal(last.mqtt.brokerUrl, undefined, `${p}: mqtt.brokerUrl`);
     assert.equal(last.mqtt.haDiscovery.enabled, true, `${p}: übrige MQTT-Einstellungen bleiben änderbar`);
+    assert.equal(last.victron.mqtt.broker, 'mqtt://192.168.1.5:1883', `${p}: victron.mqtt.broker der Box bleibt`);
+    assert.equal(last.victron.mqtt.schema, 'dvhub', `${p}: übrige Anbindung änderbar`);
+    assert.equal(last.victron.mqttCrossCheck.broker, undefined, `${p}: Gegenprobe-Broker`);
+    assert.equal(last.forecast.weather.mqtt.brokerUrl, undefined, `${p}: Wetter-Broker`);
     for (const k of ['allowedHosts', 'corsAllowedOrigins', 'trustProxy', 'trustedProxyIps']) assert.equal(last[k], undefined, `${p}: ${k}`);
   }
   // Vom Heimnetz aus geht dasselbe weiter.
@@ -507,5 +514,8 @@ test('Support-Tunnel: keinen anderen MQTT-Broker eintragen (bleibender Steuerweg
   assert.equal(r.body.error, 'support_tunnel_consent_denied');
   assert.equal(saved.length, 0);
   assert.notEqual((await call({ brokerUrl: 'mqtt://192.168.1.5:1883', username: 'u' }, true)).status, 403, 'gleicher Broker bleibt änderbar');
+  // Mit Zugangsdaten in der Adresse schickt die Seite sie redigiert zurück.
+  box.mqtt.brokerUrl = ' mqtt://user:pw@192.168.1.5:1883';
+  assert.notEqual((await call({ brokerUrl: 'mqtt://***:***@192.168.1.5:1883', topicPrefix: 'x' }, true)).status, 403, 'redigierte Adresse = gleicher Broker');
   assert.notEqual((await call({ brokerUrl: 'mqtts://broker.example.net' }, false)).status, 403, 'vom Heimnetz aus weiter möglich');
 });
