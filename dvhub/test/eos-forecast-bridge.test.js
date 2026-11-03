@@ -2162,3 +2162,52 @@ test('aufgegebener Push: nach dem hängenden DELETE kein weiterer Schreib- oder 
     assert.equal(env.state.optimizer.lastEosPush.ok, true, 'das Ergebnis des neueren Pushs bleibt stehen');
   } finally { await mock.close(); }
 });
+
+// Gegenprüfung aa0d76e9 (P3): Die Prüfungen in syncControlHorizon und pushSoc
+// waren ungetestet, und ein aufgegebener Push schrieb nach einer verspäteten
+// Antwort noch DVhubs Zustand (Steuerzeitraum) — über den des neueren Pushs.
+const twoBatteries = (req, res) => {
+  if (req.method === 'GET' && req.url.startsWith('/v1/measurement/keys')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(['battery1-soc-factor', 'battery2-soc-factor']));
+    return;
+  }
+  okHandler(req, res);
+};
+for (const [name, match, optimizer] of [
+  ['Steuerzeitraum-PUT', (r) => r.method === 'PUT' && r.url.startsWith('/v1/config/'), {}],
+  // EOS rechnet nach eigenem Takt → DVhub schreibt den Ladestand als Messwert.
+  ['Ladestand-PUT', (r) => r.method === 'PUT' && r.url.startsWith('/v1/measurement/value'), { eosStartAfterPreviousRun: true }],
+]) {
+  test(`aufgegebener Push: hängender ${name} — kein weiterer Aufruf, kein Zustand vom alten Push`, async () => {
+    let held = 0;
+    let releaseFirst = null;
+    const mock = await createMockEos((req, res) => {
+      if (match(req) && held === 0) {
+        held += 1;
+        releaseFirst = () => twoBatteries(req, res);
+        return;
+      }
+      twoBatteries(req, res);
+    });
+    try {
+      const env = estimateCtx(mock, { optimizer });
+      env.ctx.pushTimeoutMs = 300;
+      const bridge = createEosForecastBridge(env.ctx);
+      const first = bridge.push();
+      const second = bridge.push();
+      assert.match(String((await first).errors.timeout), /300/);
+      await second;
+      assert.ok(releaseFirst, 'der Aufruf hing');
+      const afterSecond = mock.requests.length;
+      // Anderen Wert vortäuschen, um ein Überschreiben durch den alten Push zu sehen.
+      env.state.optimizer.eosControlHorizonH = 'neu';
+      env.state.optimizer.eosPredictionHours = 'neu';
+      releaseFirst();
+      await new Promise((r) => setTimeout(r, 300));
+      assert.deepEqual(mock.requests.slice(afterSecond).map((r) => `${r.method} ${r.url.split('?')[0]}`), []);
+      assert.equal(env.state.optimizer.eosControlHorizonH, 'neu', 'der alte Push schreibt keinen Steuerzeitraum mehr');
+      assert.equal(env.state.optimizer.eosPredictionHours, 'neu', 'und keinen Prognosehorizont');
+    } finally { await mock.close(); }
+  });
+}

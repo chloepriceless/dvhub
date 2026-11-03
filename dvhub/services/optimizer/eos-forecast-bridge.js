@@ -957,8 +957,12 @@ export function createEosForecastBridge(ctx) {
     // Jeden angenommenen Wert sofort festhalten: scheitert danach der andere
     // PUT, muss DVhub trotzdem wissen, mit welchem Steuerzeitraum EOS rechnet
     // (Warmstart im Lauf-Anstoß, Gegenprüfung ae4e76f6).
+    // Nach jeder Antwort: Ist der Push inzwischen aufgegeben, trägt er nichts
+    // mehr ein — sonst überschriebe eine verspätete Antwort den Stand des
+    // neueren Pushs (Gegenprüfung aa0d76e9, P3).
     const putHorizon = async () => {
       const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/optimization/genetic/horizon_hours', hours);
+      if (gone()) return { ok: false, abandoned: true };
       if (res.ok) {
         lastHorizonHours = hours;
         if (state?.optimizer) state.optimizer.eosControlHorizonH = hours;
@@ -967,6 +971,7 @@ export function createEosForecastBridge(ctx) {
     };
     const putPrediction = async () => {
       const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/prediction/hours', predictionHours);
+      if (gone()) return { ok: false, abandoned: true };
       if (res.ok) {
         lastPredictionHours = predictionHours;
         if (state?.optimizer) state.optimizer.eosPredictionHours = predictionHours;
@@ -987,6 +992,7 @@ export function createEosForecastBridge(ctx) {
     for (const put of order) {
       if (gone()) return { abandoned: true };
       const res = await put();
+      if (res.abandoned) return { abandoned: true };
       if (!res.ok) {
         // Unbekannter Stand: beim nächsten Push wieder vorsichtig (erst Steuerzeitraum).
         lastPredictionHours = null;
@@ -1308,6 +1314,7 @@ export function createEosForecastBridge(ctx) {
       );
       if (res.ok) pushed.push(`${t.provider}(${t.rows})`);
       else errors[t.provider] = res.error;
+      if (gone()) return abandoned();
       if (res.ok && t.provider === 'FeedInTariffImport') rememberFeedInBasis(feedInBasisNow);
     }
 
