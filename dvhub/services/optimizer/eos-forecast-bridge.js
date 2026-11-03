@@ -633,13 +633,17 @@ export function createEosForecastBridge(ctx) {
    * Speicher noch in der Datenbank — wird nichts gelöscht; EOS hält evtl.
    * noch echte.
    */
-  async function clearStaleEstimates(baseUrl, { sentEndMs, nowMs }) {
+  async function clearStaleEstimates(baseUrl, { sentEndMs, nowMs, gone = () => false }) {
     const start = sentEndMs;
     const end = nowMs + PRICE_FILL_MAX_MS + 3_600_000;
     if (!Number.isFinite(start) || !(end > start)) return { cleared: false, errors: [] };
     const q = (ms) => encodeURIComponent(new Date(ms).toISOString());
     const errors = [];
     for (const key of PRICE_KEYS) {
+      // Aufgegebener Push (Wache): nichts mehr löschen — sonst träfe das alte
+      // Löschfenster die Preise, die ein neuerer Push gerade importiert hat
+      // (Gegenprüfung Release 1.0.9, P2).
+      if (gone()) return { cleared: false, errors, abandoned: true };
       const res = await eosHttpRequest(baseUrl, 'DELETE', `/v1/prediction/range?key=${key}&start_datetime=${q(start)}&end_datetime=${q(end)}`);
       // 404 = Schlüssel in EOS (noch) unbekannt, dann gibt es nichts zu löschen.
       if (!res.ok && !/HTTP 404/.test(String(res.error))) errors.push(`${key}: ${res.error}`);
@@ -775,7 +779,7 @@ export function createEosForecastBridge(ctx) {
    * @param {string} baseUrl
    * @returns {Promise<{pushed: string[], errors: object, skipped?: string}>}
    */
-  async function pushSoc(baseUrl, { freshOnly = false } = {}) {
+  async function pushSoc(baseUrl, { freshOnly = false, gone = () => false } = {}) {
     const pushed = [];
     const errors = {};
 
@@ -826,6 +830,7 @@ export function createEosForecastBridge(ctx) {
         const path =
           `/v1/measurement/value?datetime=${encodeURIComponent(stamp)}` +
           `&key=${encodeURIComponent(key)}&value=${value}`;
+        if (gone()) return { pushed, errors, abandoned: true };
         const res = await eosHttpRequest(baseUrl, 'PUT', path);
         if (res.ok) anyOk = true;
         else lastErr = res.error;
@@ -847,6 +852,7 @@ export function createEosForecastBridge(ctx) {
       const n = Math.min(1, Math.max(0, Math.trunc(Number(cyclesToday[eosId]) || 0)));
       const path = `/v1/measurement/value?datetime=${encodeURIComponent(freshIso)}`
         + `&key=${encodeURIComponent(key)}&value=${n}`;
+      if (gone()) return { pushed, errors, abandoned: true };
       const res = await eosHttpRequest(baseUrl, 'PUT', path);
       if (res.ok) pushed.push(`${key}=${n}`);
       else errors[key] = res.error;
@@ -934,7 +940,7 @@ export function createEosForecastBridge(ctx) {
    * resolveEosPredictionHours) — er muss den Steuerzeitraum immer abdecken.
    * Nur wenn der Abgleich ein EOS 0.4 erkannt hat.
    */
-  async function syncControlHorizon(baseUrl, ...slotLists) {
+  async function syncControlHorizon(baseUrl, slotLists, { gone = () => false } = {}) {
     if (state?.optimizer?.eos?.supported !== true) return { skipped: 'eos not supported' };
     const cfg = getCfg();
     const predictionHours = resolveEosPredictionHours(cfg);
@@ -979,6 +985,7 @@ export function createEosForecastBridge(ctx) {
       if (p !== null) loggedPredictionHours = p;
     };
     for (const put of order) {
+      if (gone()) return { abandoned: true };
       const res = await put();
       if (!res.ok) {
         // Unbekannter Stand: beim nächsten Push wieder vorsichtig (erst Steuerzeitraum).
@@ -1320,7 +1327,7 @@ export function createEosForecastBridge(ctx) {
     const realEndMs = realPriceCoverage(realPriceSlots).end;
     {
       const sentEndMs = priceEstimate ? Date.parse(priceEstimate.until) : realEndMs;
-      const clear = await clearStaleEstimates(baseUrl, { sentEndMs, nowMs: Date.now() });
+      const clear = await clearStaleEstimates(baseUrl, { sentEndMs, nowMs: Date.now(), gone });
       if (gone()) return abandoned();
       if (clear.errors.length) errors.priceEstimateClear = clear.errors.join('; ');
     }
@@ -1337,7 +1344,7 @@ export function createEosForecastBridge(ctx) {
       PV: padSeriesBackToNow(pvSlots, Date.now()),
       Last: expandHourlyToQuarterHourly(loadSlotsForEos),
     };
-    const horizon = await syncControlHorizon(baseUrl, ...Object.values(horizonLists));
+    const horizon = await syncControlHorizon(baseUrl, Object.values(horizonLists), { gone });
     if (horizon.error) errors.horizon = horizon.error;
     if (gone()) return abandoned();
 
@@ -1386,7 +1393,7 @@ export function createEosForecastBridge(ctx) {
 
     // Forward the live battery SoC so EOS seeds its optimizer with the real
     // start state (not 0). Folded into the same cycle/cadence as the forecasts.
-    const socRes = await pushSoc(baseUrl);
+    const socRes = await pushSoc(baseUrl, { gone });
     if (gone()) return abandoned();
     for (const p of socRes.pushed) pushed.push(p);
     Object.assign(errors, socRes.errors);

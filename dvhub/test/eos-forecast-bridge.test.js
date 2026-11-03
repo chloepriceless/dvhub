@@ -2123,3 +2123,42 @@ test('Laufstart: gespeicherte Preise stündlich oder falsch gestempelt → trotz
     } finally { await mock.close(); }
   }
 });
+
+// Gegenprüfung Release 1.0.9 (P2): Läuft die Frist eines Pushs während des
+// ersten DELETE ab, startet die Kette den nächsten Push. Die Löschschleife
+// prüfte job.abandoned nicht: Der aufgegebene Push schickte danach noch das
+// zweite DELETE mit seinem alten Zeitraum und löschte die gerade vom neueren
+// Push importierten Einspeisepreise. Jetzt prüfen auch die Hilfsfunktionen
+// (Löschen, Steuerzeitraum, Ladestand) vor jedem Schreiben.
+test('aufgegebener Push: nach dem hängenden DELETE kein weiterer Schreib- oder Löschaufruf', async () => {
+  let held = 0;
+  let releaseFirst = null;
+  const mock = await createMockEos((req, res) => {
+    if (req.method === 'DELETE' && held === 0) {
+      held += 1;
+      releaseFirst = () => okHandler(req, res);
+      return;
+    }
+    okHandler(req, res);
+  });
+  try {
+    const env = estimateCtx(mock);
+    env.ctx.pushTimeoutMs = 200;
+    const bridge = createEosForecastBridge(env.ctx);
+    const first = bridge.push();
+    const second = bridge.push();
+    const a = await first;
+    assert.match(String(a.errors.timeout), /200/, 'erster Push aufgegeben');
+    const b = await second;
+    assert.equal(b.ok, true, 'neuerer Push vollständig');
+    const afterSecond = mock.requests.length;
+    const feedInImports = mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/prediction/import/FeedInTariffImport')).length;
+    assert.equal(feedInImports, 2, 'beide Pushs haben vor dem Löschen importiert');
+    // Jetzt kommt das hängende DELETE des aufgegebenen Pushs zurück.
+    releaseFirst();
+    await new Promise((r) => setTimeout(r, 300));
+    const late = mock.requests.slice(afterSecond);
+    assert.deepEqual(late.map((r) => `${r.method} ${r.url.split('?')[0]}`), [], 'der aufgegebene Push schreibt und löscht nichts mehr');
+    assert.equal(env.state.optimizer.lastEosPush.ok, true, 'das Ergebnis des neueren Pushs bleibt stehen');
+  } finally { await mock.close(); }
+});
