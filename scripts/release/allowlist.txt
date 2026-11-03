@@ -56,6 +56,8 @@
 + dvhub-vpn.sh
 + dvhub-release.cjs
 + scripts/reconcile-vendor-profiles.mjs
+# Von Hand auf der Box (docs/HERSTELLERPROFIL-MIGRIEREN.md)
++ scripts/vendor-profile-diff.mjs
 # Altbestand SQLite → PostgreSQL (von Hand, README)
 + scripts/migrate-sqlite-to-pg.sh
 + db/postgres/migrations/

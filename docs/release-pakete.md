@@ -157,7 +157,9 @@ sudoers nur mit festen Aktionen:
 | `recover` | nein (Notfall-Drop-in der Unit) | im Verschieben abgebrochene Umstellung sofort zurücknehmen |
 
 Intern (nicht von Hand): `_job install|rollback|migrate|resume` — der eigentliche Auftrag als eigene Unit; `resume`
-prüft nach einem Stromausfall mitten im Update die Gesundheit und bestätigt oder geht zurück.
+prüft nach einem Stromausfall mitten im Update die Gesundheit und bestätigt oder geht zurück. Startet vor dieser
+Fortsetzung (Zeitgeber 60 s) schon ein neuer `install`/`rollback`, schließt er den unterbrochenen Auftrag zuerst
+auf dieselbe Weise ab.
 
 Ablauf `install`:
 1. Sperre (`/run/dvhub-release.lock`), Platz prüfen (Staging und `/opt/dvhub` brauchen je ~3× Paketgröße).

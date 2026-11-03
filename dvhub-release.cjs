@@ -484,6 +484,7 @@ function ensureSpace(s, size) {
 // zusätzlich, Symlinks bleiben im Release.
 function verifyTree(root, manifest) {
   const want = new Map(manifest.files.map((f) => [f.path, f]));
+  const links = new Set(manifest.files.filter((f) => f.type === 'symlink').map((f) => f.path));
   const seen = new Set();
   const walk = (dir, rel) => {
     for (const name of fs.readdirSync(dir)) {
@@ -497,8 +498,7 @@ function verifyTree(root, manifest) {
       seen.add(r);
       if (f.type === 'symlink') {
         if (!st.isSymbolicLink() || fs.readlinkSync(abs) !== f.target) throw new Error(`Symlink weicht ab: ${r}`);
-        const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(r), f.target));
-        if (path.posix.isAbsolute(f.target) || resolved.startsWith('../')) throw new Error(`Symlink zeigt aus dem Paket: ${r}`);
+        if (path.posix.isAbsolute(f.target) || symlinkEscapes(r, f.target, links)) throw new Error(`Symlink zeigt aus dem Paket: ${r}`);
       } else {
         if (!st.isFile()) throw new Error(`keine Datei: ${r}`);
         if (st.size !== f.size || sha256File(abs) !== f.sha256) throw new Error(`Prüfsumme weicht ab: ${r}`);
@@ -509,6 +509,28 @@ function verifyTree(root, manifest) {
   };
   walk(root, '');
   for (const p of want.keys()) if (!seen.has(p)) throw new Error(`Datei fehlt im Paket: ${p}`);
+}
+
+// Ziel Teil für Teil auflösen, wie der Kern es täte: über die Paketwurzel
+// hinaus (auch genau „..“: x → .., a/b → ../..) oder über einen anderen
+// Symlink des Pakets hinweg (p → . und q → p/p/p/../../../etc: lexikalisch
+// innen, tatsächlich draußen) gilt als „zeigt hinaus“. Der Ordner des Links
+// selbst besteht aus echten Ordnern (der Rundgang folgt keinen Links).
+// Gesamtprüfung 03.11.2026 und Gegenprüfung a095db3a.
+function symlinkEscapes(rel, target, links) {
+  const dir = path.posix.dirname(rel);
+  const parts = dir === '.' ? [] : dir.split('/');
+  const segs = String(target).split('/').filter((x) => x && x !== '.');
+  for (let i = 0; i < segs.length; i++) {
+    if (segs[i] === '..') {
+      if (!parts.length) return true;
+      parts.pop();
+      continue;
+    }
+    parts.push(segs[i]);
+    if (i < segs.length - 1 && links.has(parts.join('/'))) return true;
+  }
+  return false;
 }
 
 function unpack(s, tarball, version, { channel, job }) {
@@ -728,8 +750,13 @@ function updateTrust(s, st, version, job) {
   if (!now || !now.equals(next)) {
     fs.mkdirSync(s.etcDir, { recursive: true, mode: 0o755 });
     const tmp = `${s.allowedSigners}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, next, { mode: 0o644 });
-    fs.renameSync(tmp, s.allowedSigners);
+    try {
+      fs.writeFileSync(tmp, next, { mode: 0o644 });
+      fs.renameSync(tmp, s.allowedSigners);
+    } catch (e) {
+      try { if (fs.lstatSync(tmp).isFile()) fs.unlinkSync(tmp); } catch { /* */ }
+      throw e;
+    }
     job.log(`Vertrauensdatei aus ${version} übernommen (${trustedKeyCount(s.allowedSigners)} Schlüssel)`);
   }
   st.trust_version = version;
@@ -807,7 +834,10 @@ async function switchAndVerify(s, st, job, { to, from, op }) {
     st.current = to;
     st.pending = null;
     record(st, to, 'ok');
-    saveState(s, st);
+    // Gesund bestätigt: ein Speicherfehler kippt das nicht mehr; das Journal
+    // (pending) bleibt dann stehen, und resume bestätigt beim nächsten Start
+    // (Gegenprüfung 0d6f4214, P3).
+    afterwork(job, 'Zustand speichern', () => saveState(s, st));
     return 'ok';
   }
   job.phase('rollback', `nicht gesund — zurück auf ${from}`);
@@ -823,18 +853,50 @@ async function switchAndVerify(s, st, job, { to, from, op }) {
   return back ? 'rolled_back' : 'failed';
 }
 
+// Nacharbeiten nach einem gesunden Umschalten dürfen das Ergebnis nicht mehr
+// kippen: der neue Stand läuft und ist bestätigt. Scheitert eine (Platte voll,
+// Datei belegt), bleibt eine Warnung; der nächste Auftrag holt sie nach
+// (trust_version bzw. st.legacy bleiben dafür stehen). Gesamtprüfung
+// 03.11.2026, Befund 12.
+function afterwork(job, what, fn) {
+  try { fn(); } catch (e) { job.log(`Warnung: ${what} fehlgeschlagen (${e.message}) — das Update gilt trotzdem; der nächste Auftrag holt es nach`); }
+}
+
 // Abschluss eines erfolgreichen Updates: Vertrauen, alter Checkout, Aufräumen.
 function finalizeInstall(s, st, version, job) {
-  updateTrust(s, st, version, job);
-  removeLegacy(s, st, job);
-  pruneReleases(s, st, job);
-  saveState(s, st);
+  afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, version, job));
+  afterwork(job, 'alten git-Checkout entfernen', () => removeLegacy(s, st, job));
+  afterwork(job, 'alte Releases aufräumen', () => pruneReleases(s, st, job));
+  afterwork(job, 'Zustand speichern', () => saveState(s, st));
+}
+
+// Übernahme der Vertrauensdatei nachholen, wenn sie beim Update scheiterte
+// (Gegenprüfung 4b6bb09d, P2): sonst lehnte die Box nach einem
+// Schlüsselwechsel jedes weitere Paket ab, schon beim check. Das laufende
+// Release wurde beim Installieren gegen die damalige Datei geprüft; ein
+// Rückweg auf ein älteres ändert das Vertrauen nicht (Versionsvergleich wie in
+// updateTrust). Nur unter der Sperre und ohne offenen Auftrag.
+function trustBehind(s, st) {
+  const cur = currentVersion(s);
+  if (!cur || st.pending || st.migration || st.current !== cur) return null;
+  if (st.trust_version && compareVersions(cur, st.trust_version) <= 0) return null;
+  const src = path.join(releasesDir(s), cur, 'release-keys', 'allowed_signers');
+  return fs.existsSync(src) && trustedKeyCount(src) ? cur : null;
+}
+function catchUpTrust(s, st, job) {
+  const cur = trustBehind(s, st);
+  if (!cur) return;
+  const before = st.trust_version;
+  afterwork(job, 'Vertrauensdatei nachholen', () => updateTrust(s, st, cur, job));
+  if (st.trust_version !== before) afterwork(job, 'Zustand speichern', () => saveState(s, st));
 }
 
 async function jobInstall(s, job, { version, channel }) {
+  if (await settleInterrupted(s, job)) return;
   const st = loadState(s);
   const from = currentVersion(s);
   if (!from) throw new Exit(3, 'keine Paket-Installation (git-Box: Umstellung läuft über migrate)');
+  catchUpTrust(s, st, job);
   st.current = from;
   if (version !== 'latest' && version === from) { job.finish('ok', `${from} ist bereits installiert`, { result: 'up_to_date' }); return; }
   job.phase('index', `Kanal-Index ${channel} laden`);
@@ -851,7 +913,10 @@ async function jobInstall(s, job, { version, channel }) {
     finalizeInstall(s, st, manifest.version, job);
     job.finish('ok', `${manifest.version} installiert und gesund`, { result: 'ok', version: manifest.version, from });
   } else {
-    fs.rmSync(path.join(releasesDir(s), manifest.version), { recursive: true, force: true });
+    // Das gescheiterte Release weg — außer es ist das vorige (nach einem
+    // Rückweg erneut installiert): darauf zeigt st.previous, der Rückweg
+    // bliebe sonst ohne Ziel (Gesamtprüfung 03.11.2026).
+    if (manifest.version !== st.previous) fs.rmSync(path.join(releasesDir(s), manifest.version), { recursive: true, force: true });
     if (outcome === 'rolled_back') {
       job.finish('rolled_back', `${manifest.version} war nicht gesund — ${from} läuft wieder`, { result: 'rolled_back', version: manifest.version, from });
     } else {
@@ -861,6 +926,7 @@ async function jobInstall(s, job, { version, channel }) {
 }
 
 async function jobRollback(s, job) {
+  if (await settleInterrupted(s, job)) return;
   const st = loadState(s);
   const from = currentVersion(s);
   if (!from) throw new Exit(3, 'keine Paket-Installation');
@@ -1072,19 +1138,7 @@ async function jobMigrate(s, job, { force }) {
     runPostUpdate(s, job);
     restartService(s, job);
     job.phase('health', `Gesundheitsprüfung (${s.healthTimeoutS} s)`);
-    if (await waitHealthy(s, version, job)) {
-      st.current = version;
-      st.previous = null;
-      st.legacy = { dir: legacy, git_sha: gitSha, version: chk.gitVersion, at: new Date().toISOString() };
-      st.migration = null;
-      st.migrate.done_at = new Date().toISOString();
-      record(st, version, 'migrated');
-      updateTrust(s, st, version, job);
-      saveState(s, st);
-      job.finish('ok', `auf Paket ${version} umgestellt; alter Checkout liegt in .legacy-git`, { result: 'ok', version, from: `git ${chk.gitVersion}` });
-      return;
-    }
-    throw new Error(`Paket ${version} nicht gesund`);
+    if (!await waitHealthy(s, version, job)) throw new Error(`Paket ${version} nicht gesund`);
   } catch (e) {
     job.log(`Umstellung gescheitert: ${e.message}`);
     job.phase('rollback', 'zurück auf den git-Checkout');
@@ -1094,13 +1148,57 @@ async function jobMigrate(s, job, { force }) {
     record(st, version, 'migration_failed');
     saveState(s, st);
     job.finish('rolled_back', `Umstellung zurückgenommen (${e.message}); git-Stand ${back ? 'läuft' : 'meldet sich NICHT gesund'}`, { result: 'rolled_back', version, from: `git ${chk.gitVersion}` });
+    return;
   }
+  // Gesund: ab hier gilt die Umstellung, nichts darf sie mehr zurücknehmen
+  // (Gegenprüfung 4b6bb09d, P3). Scheitert das Speichern, bleibt das Journal
+  // in Phase „provision“ stehen, und resume bestätigt beim nächsten Start.
+  st.current = version;
+  st.previous = null;
+  st.legacy = { dir: legacy, git_sha: gitSha, version: chk.gitVersion, at: new Date().toISOString() };
+  st.migration = null;
+  st.migrate.done_at = new Date().toISOString();
+  record(st, version, 'migrated');
+  afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, version, job));
+  afterwork(job, 'Zustand speichern', () => saveState(s, st));
+  job.finish('ok', `auf Paket ${version} umgestellt; alter Checkout liegt in .legacy-git`, { result: 'ok', version, from: `git ${chk.gitVersion}` });
 }
 
 // Nach einem Neustart mitten im Auftrag (Strom weg): ist der laufende Stand
 // gesund, gilt er; sonst zurück.
 async function jobResume(s, job) {
+  const r = await resumeInterrupted(s, loadState(s), job);
+  if (r) job.finish(r.state, r.message, r.extra);
+  else job.finish('ok', 'nichts fortzusetzen', { result: 'noop' });
+}
+
+// Ein neuer Auftrag (install/rollback), bevor die geplante Fortsetzung lief
+// (Zeitgeber 60 s nach dem Start): erst den unterbrochenen Auftrag abschließen.
+// Sonst überlebte st.migration die neue Installation, und ein späteres resume
+// nähme die Umstellung zurück — git-Unit und .legacy-git zurück, current und
+// das inzwischen vorige Release weg (Gesamtprüfung 03.11.2026, Befund 1).
+// Gibt true zurück, wenn der Auftrag danach nicht mehr laufen kann (Umstellung
+// zurückgenommen, Box wieder auf git); der Status nennt dann diesen Grund.
+async function settleInterrupted(s, job) {
   const st = loadState(s);
+  if (!st.migration && !st.pending) return false;
+  job.log('ein unterbrochener Auftrag liegt noch vor — zuerst abschließen');
+  const r = await resumeInterrupted(s, st, job);
+  job.log(`unterbrochener Auftrag: ${r.message}`);
+  // Ließ sich der Abschluss nicht speichern, steht das Journal noch da: dann
+  // nicht weitermachen — der neue Auftrag schriebe es sonst mit fort.
+  const after = loadState(s);
+  if (after.migration || after.pending) {
+    job.finish('failed', `${r.message} — Zustand ließ sich nicht speichern, Auftrag nicht ausgeführt`, { ...r.extra, result: 'failed' });
+    return true;
+  }
+  if (currentVersion(s)) return false;
+  job.finish(r.state, `${r.message} — Auftrag nicht ausgeführt (Box wieder auf git)`, r.extra);
+  return true;
+}
+
+// Gibt { state, message, extra } zurück oder null, wenn nichts vorliegt.
+async function resumeInterrupted(s, st, job) {
   if (st.migration) {
     const v = st.migration.version;
     job.phase('health', `unterbrochene Umstellung auf ${v}: Gesundheitsprüfung`);
@@ -1109,17 +1207,21 @@ async function jobResume(s, job) {
       st.legacy = { dir: st.migration.legacy, git_sha: st.migration.git_sha, version: st.migration.git_version, at: new Date().toISOString() };
       st.migration = null;
       record(st, v, 'migrated');
-      updateTrust(s, st, v, job);
-      removeDropin(s, job);
-      saveState(s, st);
-      job.finish('ok', `Umstellung auf ${v} abgeschlossen (nach Unterbrechung)`, { result: 'ok', version: v });
-      return;
+      afterwork(job, 'Zustand speichern', () => saveState(s, st));
+      afterwork(job, 'Vertrauensdatei übernehmen', () => updateTrust(s, st, v, job));
+      afterwork(job, 'Notfall-Drop-in entfernen', () => removeDropin(s, job));
+      afterwork(job, 'Zustand speichern', () => saveState(s, st));
+      return { state: 'ok', message: `Umstellung auf ${v} abgeschlossen (nach Unterbrechung)`, extra: { result: 'ok', version: v } };
     }
     revertMigration(s, st, job);
+    record(st, v, 'migration_interrupted');
+    saveState(s, st);
     restartService(s, job);
-    await waitHealthy(s, null, job);
-    job.finish('rolled_back', 'unterbrochene Umstellung zurückgenommen', { result: 'rolled_back', version: v });
-    return;
+    // Auch der alte Stand krank: nicht nach „läuft wieder“ klingen (Gegenprüfung 4d83dd65).
+    if (!await waitHealthy(s, null, job)) {
+      return { state: 'failed', message: 'unterbrochene Umstellung zurückgenommen — aber der git-Stand meldet sich NICHT gesund (Dienst prüfen)', extra: { result: 'failed', version: v } };
+    }
+    return { state: 'rolled_back', message: 'unterbrochene Umstellung zurückgenommen', extra: { result: 'rolled_back', version: v } };
   }
   if (st.pending) {
     const { version: to, previous: from } = st.pending;
@@ -1131,25 +1233,27 @@ async function jobResume(s, job) {
       st.current = to;
       st.pending = null;
       record(st, to, 'ok');
+      afterwork(job, 'Zustand speichern', () => saveState(s, st));
       if (op === 'install') finalizeInstall(s, st, to, job);
-      saveState(s, st);
-      job.finish('ok', `${to} läuft gesund (nach Unterbrechung bestätigt)`, { result: 'ok', version: to });
-      return;
+      return { state: 'ok', message: `${to} läuft gesund (nach Unterbrechung bestätigt)`, extra: { result: 'ok', version: to } };
     }
+    let back = false;
     if (from && fs.existsSync(path.join(releasesDir(s), from))) {
       switchCurrent(s, from);
       reconcileLinks(s);
       restartService(s, job);
-      await waitHealthy(s, from, job);
+      back = await waitHealthy(s, from, job);
     }
     st.current = currentVersion(s);
     st.pending = null;
-    record(st, to, 'rolled_back');
+    record(st, to, back ? 'rolled_back' : 'failed');
     saveState(s, st);
-    job.finish('rolled_back', `unterbrochener Auftrag: zurück auf ${from}`, { result: 'rolled_back', version: to, from });
-    return;
+    if (!back) {
+      return { state: 'failed', message: `unterbrochener Auftrag (${to}) nicht gesund, und ${from || 'der vorige Stand'} meldet sich NICHT gesund (Dienst prüfen)`, extra: { result: 'failed', version: to, from } };
+    }
+    return { state: 'rolled_back', message: `unterbrochener Auftrag: zurück auf ${from}`, extra: { result: 'rolled_back', version: to, from } };
   }
-  job.finish('ok', 'nichts fortzusetzen', { result: 'noop' });
+  return null;
 }
 
 // ── Vordergrund-Aktionen ────────────────────────────────────────────────────
@@ -1171,6 +1275,16 @@ function readStatus(s) {
 }
 
 async function actionCheck(s, channel) {
+  // check läuft ohne Auftrag; die Vertrauensdatei nur nachholen, wenn die
+  // Sperre frei ist (sonst überschriebe saveState den Zustand eines Auftrags).
+  if (trustBehind(s, loadState(s))) {
+    let release = null;
+    try { release = lock(s); } catch { release = null; }
+    if (release) {
+      // Kein Protokoll: stdout trägt hier nur das JSON für die Oberfläche.
+      try { catchUpTrust(s, loadState(s), { log: () => {} }); } finally { release(); }
+    }
+  }
   const cur = currentVersion(s);
   const manifest = cur ? releaseManifest(s, cur) : null;
   const st = loadState(s);
@@ -1195,9 +1309,12 @@ async function actionCheck(s, channel) {
 }
 
 // Startet den Auftrag als eigene Unit (überlebt den Neustart von DVhub).
-function spawnJob(s, unit, jobArgs, { delayS = 0 } = {}) {
+function assertIdle(s, unit, delayS = 0) {
   if (unitActive(s, `${unit}.service`) || (delayS && unitActive(s, `${unit}.timer`))) throw new Exit(4, 'ein Update-Auftrag läuft bereits');
   if (lockHeld(s)) throw new Exit(4, 'ein Update-Auftrag läuft bereits');
+}
+function spawnJob(s, unit, jobArgs, { delayS = 0 } = {}) {
+  assertIdle(s, unit, delayS);
   const args = ['--collect', '--quiet', `--unit=${unit}`, '--description=DVhub Release-Paket',
     `--property=StandardOutput=append:${path.join(s.stateDir, 'job.log')}`,
     `--property=StandardError=append:${path.join(s.stateDir, 'job.log')}`];
@@ -1225,9 +1342,24 @@ async function main(argv, s = settings()) {
     case 'rollback': {
       if (!isPackageLayout(s)) throw new Exit(3, 'keine Paket-Installation');
       const jobArgs = a.action === 'install' ? ['install', a.version, a.channel] : ['rollback'];
-      writeJsonAtomic(statusFile(s), { job: a.action, state: 'queued', phase: 'queued', message: 'Auftrag gestartet', version: a.version || null, started: new Date().toISOString(), log: [] });
+      // Erst prüfen, dann „queued“ schreiben: sonst überschriebe ein
+      // abgelehnter Auftrag den Status des laufenden, und ein gescheitertes
+      // systemd-run ließe „queued“ für immer stehen (Gesamtprüfung 03.11.2026).
+      if (!s.test) assertIdle(s, JOB_UNIT);
+      const before = readJson(statusFile(s), null);
+      const queued = { job: a.action, state: 'queued', phase: 'queued', message: 'Auftrag gestartet', version: a.version || null, started: new Date().toISOString(), log: [] };
+      writeJsonAtomic(statusFile(s), queued);
       if (s.test) return runJob(s, { action: '_job', job: jobArgs[0], version: a.version, channel: a.channel });
-      spawnJob(s, JOB_UNIT, jobArgs);
+      try {
+        spawnJob(s, JOB_UNIT, jobArgs);
+      } catch (e) {
+        const now = readJson(statusFile(s), null);
+        if (now?.state === 'queued' && now.started === queued.started) {
+          if (e instanceof Exit && e.exitCode === 4 && before) writeJsonAtomic(statusFile(s), before);
+          else writeJsonAtomic(statusFile(s), { ...queued, state: 'failed', phase: 'done', message: `Auftrag nicht gestartet: ${e.message}`, result: 'failed', finished: new Date().toISOString() });
+        }
+        throw e;
+      }
       out({ ok: true, started: true, job: a.action });
       return 0;
     }
@@ -1298,7 +1430,28 @@ function recover(s) {
 }
 
 async function runJob(s, a) {
-  const release = lock(s);
+  let release;
+  try {
+    release = lock(s);
+  } catch (e) {
+    // Die Unit startete, aber ein anderer Auftrag hält die Sperre: das von
+    // main geschriebene „queued“ dieses Auftrags nicht stehen lassen.
+    const st = readJson(statusFile(s), null);
+    if (e instanceof Exit && st?.state === 'queued' && st.job === a.job) {
+      writeJsonAtomic(statusFile(s), { ...st, state: 'failed', phase: 'done', message: e.message, result: 'failed', finished: new Date().toISOString() });
+    }
+    throw e;
+  }
+  // Nichts fortzusetzen (ein Auftrag davor hat es schon abgeschlossen): dann
+  // auch kein Status — er überschriebe das Ergebnis dieses Auftrags.
+  if (a.job === 'resume') {
+    const st = loadState(s);
+    if (!st.migration && !st.pending) {
+      release();
+      s.write('dvhub-release: nichts fortzusetzen\n');
+      return 0;
+    }
+  }
   const job = new Job(s, a.job, { version: a.version && a.version !== 'latest' ? a.version : null });
   try {
     if (a.job === 'install') await jobInstall(s, job, a);
@@ -1316,7 +1469,7 @@ async function runJob(s, a) {
 
 module.exports = {
   parseArgs, compareVersions, parseVersion, satisfiesEngine, versionFromLabel, debArch, readConf, settings,
-  validateIndex, verifyTree, reconcileLinks, dropinContent, switchCurrent, currentVersion, rewriteUnit, migrationCheck,
+  validateIndex, verifyTree, symlinkEscapes, reconcileLinks, dropinContent, switchCurrent, currentVersion, rewriteUnit, migrationCheck,
   OFFICIAL_REPO_RE, main, Exit, trustedKeyCount, verifySignature, download, unpack, readStatus, actionCheck,
 };
 

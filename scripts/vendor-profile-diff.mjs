@@ -7,8 +7,8 @@
 // Hintergrund: der Update-Abgleich (reconcile-vendor-profiles.mjs) überschreibt
 // ein vom Operator geändertes Profil NIE — die neue Version landet als
 // <name>.dist daneben. Dieses Werkzeug macht die Migration nachvollziehbar:
-//   node scripts/vendor-profile-diff.mjs victron.json               # nur anzeigen
-//   node scripts/vendor-profile-diff.mjs victron.json --apply-additions
+//   sudo node scripts/vendor-profile-diff.mjs victron.json             # nur anzeigen
+//   sudo node scripts/vendor-profile-diff.mjs victron.json --apply-additions
 //                                                                    # neue Felder übernehmen (Backup!)
 //
 // --apply-additions fügt AUSSCHLIESSLICH Felder hinzu, die in .dist neu sind
@@ -17,7 +17,9 @@
 // andere (geänderte Werte, in .dist entfernte Felder) bleibt bewusst deine
 // Entscheidung und wird nur angezeigt.
 
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Reine Helfer — unit-testbar, ohne fs.
 export function flatten(obj, prefix = '') {
@@ -70,7 +72,14 @@ export function mergeAdditions(active, dist) {
 // CLI
 // Läuft meist als root im Ordner des Dienstbenutzers: nur im echten Ordner
 // (inode-geprüft), ohne Verweisen zu folgen (Gegenprüfung ad70a264, P3).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Über realpath verglichen wie in reconcile-vendor-profiles.mjs: auf
+// Paket-Boxen ist /opt/dvhub/scripts ein Verweis auf current/scripts, argv[1]
+// behält ihn, import.meta.url zeigt aufs Ziel (Gesamtprüfung 03.11.2026).
+function invokedDirectly() {
+  try { return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (invokedDirectly()) {
   const { inRealDir, readNoFollow, writeNoFollow } = await import('./reconcile-vendor-profiles.mjs');
   // Schlüssel stammen aus dem Ordner des Dienstbenutzers: Steuerzeichen nicht
   // roh ins Terminal von root (Gegenprüfung 1c0105a0, P3).
@@ -106,7 +115,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
       if (!apply) {
         console.log(`\nNur angezeigt. Zum Übernehmen der ${added.length} neuen Felder (deine Anpassungen bleiben):`);
-        console.log(`  node scripts/vendor-profile-diff.mjs ${name} --apply-additions`);
+        console.log(`  sudo node scripts/vendor-profile-diff.mjs ${name} --apply-additions`);
         return;
       }
       if (added.length === 0) { console.log('\nNichts Neues zu übernehmen.'); return; }

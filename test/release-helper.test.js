@@ -726,6 +726,430 @@ test('Neue Version krank UND Rückweg krank → Ergebnis failed, nicht „läuft
   } finally { r.close(); }
 });
 
+// ── Gesamtprüfung release/1.0.9 (03.11.2026) ───────────────────────────────
+
+// Umstellung bis „provision“ durchlaufen lassen und den Zustand von genau dann
+// festhalten (post-update.sh des Pakets kopiert state.json): so sieht die Box
+// nach einem Stromausfall in dieser Phase aus.
+async function migrationInterruptedAtProvision(r) {
+  gitBox(r);
+  const snap = path.join(r.root, 'state-provision.json');
+  r.publish({ version: '1.0.1', extraFiles: { 'post-update.sh': `#!/usr/bin/env bash\ncp '${path.join(r.state, 'state.json')}' '${snap}'\n` } });
+  assert.equal((await r.run('migrate')).code, 0, JSON.stringify(r.status()));
+  const st = JSON.parse(fs.readFileSync(snap, 'utf8'));
+  assert.equal(st.migration?.phase, 'provision', 'Momentaufnahme mitten in der Umstellung');
+  fs.copyFileSync(snap, path.join(r.state, 'state.json'));
+  return st;
+}
+
+// Hauptbefund 1: Ein neuer Auftrag vor der Fortsetzung (Zeitgeber 60 s) ließ
+// st.migration stehen; der nächste resume nahm die Umstellung dann zurück —
+// current und das inzwischen vorige Release weg, git-Unit zurück.
+test('unterbrochene Umstellung: install davor schließt sie ab, späteres resume nimmt nichts zurück', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    r.publish({ version: '1.0.2' });
+    const inst = await r.run('install', 'latest', 'stable');
+    assert.equal(inst.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.current(), 'releases/1.0.2');
+    let st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null, 'Umstellungs-Journal abgeschlossen');
+    assert.equal(st.previous, '1.0.1');
+    const installStatus = r.status();
+
+    // Die geplante Fortsetzung feuert danach (oder beim nächsten Start).
+    assert.doesNotMatch((await r.run('boot-hook')).out, /Fortsetzung/);
+    assert.equal((await r.run('_job', 'resume')).code, 0);
+    assert.equal(r.current(), 'releases/1.0.2', 'resume schaltet nicht auf git zurück');
+    assert.ok(fs.existsSync(path.join(r.box, 'releases', '1.0.1')), 'voriges Release bleibt');
+    assert.match(fs.readFileSync(r.unitFile, 'utf8'), /current\/dvhub\/server\.js/, 'Unit bleibt auf current');
+    assert.deepEqual(r.status(), installStatus, 'leeres resume überschreibt das Ergebnis des Auftrags nicht');
+    st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.current, '1.0.2');
+  } finally { r.close(); }
+});
+
+test('unterbrochene Umstellung: rollback davor schließt sie erst ab', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    // Ohne vorige Version gibt es keinen Rückweg — aber das Journal ist danach erledigt.
+    assert.equal((await r.run('rollback')).code, 3);
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null);
+    assert.equal(st.current, '1.0.1');
+    assert.equal(r.current(), 'releases/1.0.1');
+  } finally { r.close(); }
+});
+
+// Unterbrochenes Paket-Update (st.pending) wie nach einem Stromausfall nach dem
+// Umschalten auf <version>.
+function interruptedUpdate(r, version, previous) {
+  const p = r.publish({ version });
+  const dest = path.join(r.box, 'releases', version);
+  fs.mkdirSync(dest);
+  assert.equal(spawnSync('tar', ['-xzf', p.file, '-C', dest]).status, 0);
+  H.switchCurrent(r.settings(), version);
+  const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+  st.pending = { op: 'install', version, previous, boot_id: 'x' };
+  fs.writeFileSync(path.join(r.state, 'state.json'), JSON.stringify(st));
+}
+const releasesOnDisk = (r) => fs.readdirSync(path.join(r.box, 'releases')).filter((n) => !n.startsWith('.')).sort();
+
+test('unterbrochenes Update (gesund): install davor bestätigt es erst, dann von dort weiter', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    interruptedUpdate(r, '1.0.1', '1.0.0');
+    r.publish({ version: '1.0.2' });
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.2');
+    assert.equal(st.previous, '1.0.1');
+    assert.deepEqual(releasesOnDisk(r), ['1.0.1', '1.0.2']);
+  } finally { r.close(); }
+});
+
+test('unterbrochenes Update (krank): install davor schaltet erst zurück, dann vom alten Stand weiter', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    interruptedUpdate(r, '1.0.1', '1.0.0');
+    r.bad.add('1.0.1');
+    r.publish({ version: '1.0.2' });
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.2');
+    assert.equal(st.previous, '1.0.0');
+    assert.deepEqual(releasesOnDisk(r), ['1.0.0', '1.0.2']);
+  } finally { r.close(); }
+});
+
+test('unterbrochenes Update (gesund): rollback davor bestätigt es erst, dann zurück', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    interruptedUpdate(r, '1.0.1', '1.0.0');
+    assert.equal((await r.run('rollback')).code, 0, JSON.stringify(r.status()));
+    assert.equal(r.current(), 'releases/1.0.0');
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.0');
+    assert.equal(st.previous, '1.0.1');
+  } finally { r.close(); }
+});
+
+test('unterbrochene Umstellung wird beim install zurückgenommen → Status sagt das, nicht „keine Paket-Installation“', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    r.bad.add('1.0.1');
+    r.publish({ version: '1.0.2' });
+    const res = await r.run('install', 'latest', 'stable');
+    assert.equal(res.code, 1);
+    assert.equal(r.current(), null, 'git-Stand wieder da');
+    assert.equal(r.status().state, 'rolled_back');
+    assert.match(r.status().message, /unterbrochene Umstellung zurückgenommen/);
+    assert.doesNotMatch(r.status().message, /keine Paket-Installation/);
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null);
+    assert.equal(st.history.at(-1).result, 'migration_interrupted');
+  } finally { r.close(); }
+});
+
+// Gegenprüfung 4d83dd65 (P3): kommt nach der Rücknahme auch der alte Stand
+// nicht gesund hoch, darf der Status nicht nach „läuft wieder“ klingen.
+test('unterbrochene Umstellung zurückgenommen, git-Stand krank → failed mit Hinweis', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    r.bad.add('1.0.1');
+    r.bad.add('git');
+    r.publish({ version: '1.0.2' });
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 1);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /NICHT gesund/);
+    assert.equal(r.current(), null);
+  } finally { r.close(); }
+});
+
+test('resume: unterbrochenes Update krank, Rückweg auch krank → failed', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    interruptedUpdate(r, '1.0.1', '1.0.0');
+    r.bad.add('1.0.1');
+    r.bad.add('1.0.0');
+    assert.equal((await r.run('_job', 'resume')).code, 1);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /NICHT gesund/);
+    assert.equal(r.current(), 'releases/1.0.0');
+  } finally { r.close(); }
+});
+
+// Hauptbefund 12: Scheitert nach einem gesunden Umschalten eine Nacharbeit
+// (Vertrauensdatei, alter Checkout, Aufräumen), galt der Auftrag als
+// gescheitert; im resume-Pfad blieb st.pending in state.json, und ein späterer
+// vorübergehender Gesundheitsfehler hätte zurückgeschaltet. Die Zwischendatei
+// der Vertrauensdatei als Ordner lässt das Schreiben scheitern (auch als root).
+function blockTrustWrite(r) {
+  fs.mkdirSync(path.join(r.etc, `allowed_signers.tmp-${process.pid}`));
+}
+
+test('Nacharbeit scheitert nach gesundem install → Auftrag ok, Warnung im Protokoll', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1', trustLines: [r.k1.line, r.k2.line] });
+    blockTrustWrite(r);
+    const res = await r.run('install', 'latest', 'stable');
+    assert.equal(res.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.status().state, 'ok');
+    assert.ok(r.status().log.some((l) => /Warnung: Vertrauensdatei/.test(l)), 'Warnung protokolliert');
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.current, '1.0.1');
+    assert.equal(st.pending, null);
+    assert.equal(st.trust_version ?? null, null, 'nicht übernommen → nächstes Update versucht es wieder');
+  } finally { r.close(); }
+});
+
+// Gegenprüfung 4b6bb09d (P2): die gescheiterte Übernahme holte niemand nach —
+// nach einem Schlüsselwechsel lehnte die Box dann jedes weitere Paket ab.
+test('Vertrauensdatei: gescheiterte Übernahme wird nachgeholt, Paket nur mit neuem Schlüssel geht danach', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1', trustLines: [r.k1.line, r.k2.line] });
+    blockTrustWrite(r);
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
+    fs.rmdirSync(path.join(r.etc, `allowed_signers.tmp-${process.pid}`));
+    assert.ok(!fs.readFileSync(path.join(r.etc, 'allowed_signers'), 'utf8').includes(r.k2.line), 'noch alt');
+    // Schlüsselwechsel: Paket und Index nur noch mit k2 signiert.
+    r.publish({ version: '1.0.2', key: r.k2.key, indexKey: r.k2.key, trustLines: [r.k2.line] });
+    const chk = await r.run('check', 'stable');
+    assert.equal(chk.code, 0, chk.out);
+    assert.equal(JSON.parse(chk.out).latest.version, '1.0.2');
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
+    assert.equal(r.current(), 'releases/1.0.2');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).trust_version, '1.0.2');
+  } finally { r.close(); }
+});
+
+// Gegenprüfung 4b6bb09d (P3): scheitert das Speichern NACH der gesunden
+// Umstellung, meldete der Auftrag „zurückgenommen“ und startete den gesunden
+// Dienst neu. Das Paket-post-update.sh legt dafür an die Stelle der
+// Zwischendatei von state.json einen Ordner (danach scheitert jedes Speichern).
+test('Umstellung gesund, Speichern danach scheitert → nicht „zurückgenommen“, resume bestätigt später', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    gitBox(r);
+    const blocker = path.join(r.state, `state.json.tmp-${process.pid}`);
+    r.publish({ version: '1.0.1', extraFiles: { 'post-update.sh': `#!/usr/bin/env bash\nmkdir '${blocker}'\n` } });
+    const res = await r.run('migrate');
+    assert.equal(r.status().state, 'ok', JSON.stringify(r.status()));
+    assert.equal(res.code, 0);
+    assert.ok(r.status().log.some((l) => /Warnung: Zustand speichern/.test(l)));
+    assert.equal(r.current(), 'releases/1.0.1');
+    assert.equal(fs.readFileSync(r.sysLog, 'utf8').match(/restart dvhub\.service/g).length, 1, 'kein zweiter Neustart');
+    fs.rmdirSync(blocker);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).migration.phase, 'provision');
+    assert.equal((await r.run('_job', 'resume')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null);
+    assert.equal(st.current, '1.0.1');
+  } finally { r.close(); }
+});
+
+// Gegenprüfung 0d6f4214 (P3): dasselbe beim install — das Speichern direkt
+// nach der gesunden Prüfung (switchAndVerify) machte den Auftrag „failed“.
+test('install gesund, Speichern danach scheitert → ok mit Warnung, resume bestätigt später', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    const blocker = path.join(r.state, `state.json.tmp-${process.pid}`);
+    r.publish({ version: '1.0.1', extraFiles: { 'post-update.sh': `#!/usr/bin/env bash\nmkdir '${blocker}'\n` } });
+    const res = await r.run('install', 'latest', 'stable');
+    assert.equal(r.status().state, 'ok', JSON.stringify(r.status()));
+    assert.equal(res.code, 0);
+    assert.ok(r.status().log.some((l) => /Warnung: Zustand speichern/.test(l)));
+    assert.equal(r.current(), 'releases/1.0.1');
+    fs.rmdirSync(blocker);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8')).pending?.version, '1.0.1', 'Journal bleibt für resume');
+    assert.equal((await r.run('_job', 'resume')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.1');
+    assert.equal(st.previous, '1.0.0');
+  } finally { r.close(); }
+});
+
+test('unterbrochene Umstellung, Abschluss nicht speicherbar → neuer Auftrag läuft nicht weiter', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    r.publish({ version: '1.0.2' });
+    fs.mkdirSync(path.join(r.state, `state.json.tmp-${process.pid}`));
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 1);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /nicht speichern/);
+    assert.equal(r.current(), 'releases/1.0.1', 'nichts installiert');
+    assert.ok(!fs.existsSync(path.join(r.box, 'releases', '1.0.2')));
+  } finally { r.close(); }
+});
+
+test('Nacharbeit scheitert im resume → pending trotzdem aus state.json', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    const p = r.publish({ version: '1.0.1', trustLines: [r.k1.line, r.k2.line] });
+    const dest = path.join(r.box, 'releases', '1.0.1');
+    fs.mkdirSync(dest);
+    assert.equal(spawnSync('tar', ['-xzf', p.file, '-C', dest]).status, 0);
+    H.switchCurrent(r.settings(), '1.0.1');
+    const st0 = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    st0.pending = { op: 'install', version: '1.0.1', previous: '1.0.0', boot_id: 'x' };
+    fs.writeFileSync(path.join(r.state, 'state.json'), JSON.stringify(st0));
+    blockTrustWrite(r);
+    assert.equal((await r.run('_job', 'resume')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.1');
+    assert.equal(st.previous, '1.0.0');
+  } finally { r.close(); }
+});
+
+test('Nacharbeit scheitert nach gesunder Umstellung → umgestellt, nicht „zurückgenommen“', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    gitBox(r);
+    r.publish({ version: '1.0.1', trustLines: [r.k1.line, r.k2.line] });
+    blockTrustWrite(r);
+    const res = await r.run('migrate');
+    assert.equal(res.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.status().state, 'ok');
+    assert.equal(r.current(), 'releases/1.0.1');
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null);
+    assert.equal(st.current, '1.0.1');
+  } finally { r.close(); }
+});
+
+// ── Weitere Befunde der Gesamtprüfung: Update-Helfer ────────────────────────
+
+test('verifyTree: Symlink genau auf .. (auch verschachtelt) zeigt aus dem Paket', () => {
+  for (const [p, target] of [['x', '..'], ['a/b', '../..'], ['a/c', '../../']]) {
+    const d = tmp('dvhub-tree-');
+    try {
+      fs.mkdirSync(path.join(d, path.dirname(p)), { recursive: true });
+      fs.symlinkSync(target, path.join(d, p));
+      assert.throws(() => H.verifyTree(d, { files: [{ path: p, type: 'symlink', target }] }), /zeigt aus dem Paket/, `${p} → ${target}`);
+    } finally { fs.rmSync(d, { recursive: true, force: true }); }
+  }
+  const d = tmp('dvhub-tree-');
+  try {
+    fs.mkdirSync(path.join(d, 'a'));
+    fs.symlinkSync('..', path.join(d, 'a', 'up'));
+    H.verifyTree(d, { files: [{ path: 'a/up', type: 'symlink', target: '..' }] });
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+// Gegenprüfung a095db3a (P3): lexikalisch bleibt q → p/p/p/p/p/../../../../etc
+// innen (p/etc), der Kern löst p → . aber vorher auf und landet in /etc.
+test('verifyTree: Symlink-Ziel über einen anderen Symlink des Pakets wird abgelehnt', () => {
+  const d = tmp('dvhub-tree-');
+  try {
+    fs.symlinkSync('.', path.join(d, 'p'));
+    fs.symlinkSync('p/p/p/p/p/../../../../etc', path.join(d, 'q'));
+    const files = [{ path: 'p', type: 'symlink', target: '.' }, { path: 'q', type: 'symlink', target: 'p/p/p/p/p/../../../../etc' }];
+    assert.throws(() => H.verifyTree(d, { files }), /über einen anderen Symlink|zeigt aus dem Paket/);
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+  // node_modules/.bin-Muster bleibt erlaubt; ein Verweis AUF einen Verweis auch.
+  const e = tmp('dvhub-tree-');
+  try {
+    fs.mkdirSync(path.join(e, 'nm', '.bin'), { recursive: true });
+    fs.mkdirSync(path.join(e, 'nm', 'pkg', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(e, 'nm', 'pkg', 'bin', 'cli.js'), 'x');
+    fs.symlinkSync('../pkg/bin/cli.js', path.join(e, 'nm', '.bin', 'cli'));
+    fs.symlinkSync('nm/.bin/cli', path.join(e, 'top'));
+    H.verifyTree(e, { files: [
+      { path: 'nm/pkg/bin/cli.js', sha256: sha256(Buffer.from('x')), size: 1, mode: '0644' },
+      { path: 'nm/.bin/cli', type: 'symlink', target: '../pkg/bin/cli.js' },
+      { path: 'top', type: 'symlink', target: 'nm/.bin/cli' },
+    ] });
+  } finally { fs.rmSync(e, { recursive: true, force: true }); }
+});
+
+test('gescheitertes install löscht nicht das vorige Release (st.previous)', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1' });
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0);
+    assert.equal((await r.run('rollback')).code, 0);
+    assert.equal(JSON.parse((await r.run('status')).out).previous, '1.0.1');
+    r.bad.add('1.0.1');
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 1);
+    assert.equal(r.status().state, 'rolled_back');
+    assert.equal(r.current(), 'releases/1.0.0');
+    assert.ok(fs.existsSync(path.join(r.box, 'releases', '1.0.1', '.dvhub-release.json')), 'voriges Release bleibt');
+    assert.equal(JSON.parse((await r.run('status')).out).previous, '1.0.1');
+  } finally { r.close(); }
+});
+
+// install/rollback aus der Oberfläche (nicht im Testbetrieb: Auftrag als Unit).
+async function runSpawned(r, argv, over = {}) {
+  const out = [];
+  const s = { ...r.settings(), test: false, write: (c) => { out.push(String(c)); return true; }, ...over };
+  const code = await H.main(argv, s).catch((e) => (e instanceof H.Exit ? e.exitCode : (out.push(e.message), 1)));
+  return { code, out: out.join('') };
+}
+
+test('install während ein Auftrag läuft: Exit 4, Status des laufenden Auftrags bleibt', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    const running = { job: 'resume', state: 'running', phase: 'health', message: 'läuft', started: new Date().toISOString(), log: [] };
+    fs.writeFileSync(path.join(r.state, 'status.json'), JSON.stringify(running));
+    fs.mkdirSync(path.join(r.state, 'lock'));
+    fs.writeFileSync(path.join(r.state, 'lock', 'owner'), JSON.stringify({ pid: process.pid }));
+    const res = await runSpawned(r, ['install', 'latest', 'stable']);
+    assert.equal(res.code, 4);
+    assert.deepEqual(r.status(), running);
+    assert.ok(!fs.existsSync(r.runLog), 'keine Unit gestartet');
+  } finally { r.close(); }
+});
+
+test('systemd-run scheitert: Status nicht dauerhaft „queued“', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    const failing = path.join(r.root, 'bin', 'systemd-run-kaputt');
+    fs.writeFileSync(failing, '#!/bin/sh\necho "Failed to start transient service unit" >&2\nexit 1\n', { mode: 0o755 });
+    const res = await runSpawned(r, ['install', 'latest', 'stable'], { systemdRun: failing });
+    assert.equal(res.code, 1);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /systemd-run/);
+    assert.equal(JSON.parse((await r.run('status')).out).running, false);
+  } finally { r.close(); }
+});
+
+test('Auftrags-Unit findet die Sperre belegt: „queued“ wird zu failed', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    // Wie nach main: queued geschrieben, Unit gestartet — inzwischen hält ein anderer Auftrag die Sperre.
+    fs.writeFileSync(path.join(r.state, 'status.json'), JSON.stringify({ job: 'install', state: 'queued', phase: 'queued', message: 'Auftrag gestartet', started: new Date().toISOString(), log: [] }));
+    fs.mkdirSync(path.join(r.state, 'lock'));
+    fs.writeFileSync(path.join(r.state, 'lock', 'owner'), JSON.stringify({ pid: process.pid }));
+    assert.equal((await r.run('_job', 'install', 'latest', 'stable')).code, 4);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /läuft bereits/);
+  } finally { r.close(); }
+});
+
 // ── Ausgelieferter Vertrauensanker ──────────────────────────────────────────
 
 // Ohne gültigen Schlüssel in release-keys/allowed_signers lehnt jede Box jedes

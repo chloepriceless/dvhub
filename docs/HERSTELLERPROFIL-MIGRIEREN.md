@@ -25,8 +25,10 @@ Update deine sorgfältig eingestellten Werte überschreibt.
 
 ```bash
 cd /opt/dvhub
-node scripts/vendor-profile-diff.mjs victron.json
+sudo node scripts/vendor-profile-diff.mjs victron.json
 ```
+
+`sudo`, weil `/etc/dvhub` nur dem Dienstbenutzer gehört (0750).
 
 Die Ausgabe teilt die Unterschiede in drei Gruppen:
 
@@ -40,7 +42,7 @@ Die Ausgabe teilt die Unterschiede in drei Gruppen:
 ## 3. Neue Felder übernehmen (der sichere Weg)
 
 ```bash
-node scripts/vendor-profile-diff.mjs victron.json --apply-additions
+sudo node scripts/vendor-profile-diff.mjs victron.json --apply-additions
 sudo systemctl restart dvhub
 ```
 
@@ -54,7 +56,7 @@ Anpassungen bleiben exakt erhalten. Nach dem Neustart ist das aktualisierte Prof
 Werte, die du bewusst angepasst hast, und Felder, die in der neuen Version wegfallen, nimmt
 das Werkzeug **nicht** automatisch — das könnte eine laufende Steuerung stören. Wenn du einen
 geänderten Standardwert doch übernehmen willst, editiere `/etc/dvhub/hersteller/<name>.json`
-von Hand (die `.dist`-Datei zeigt den neuen Wert), sichere vorher eine Kopie und starte
+von Hand (mit `sudoedit`) (die `.dist`-Datei zeigt den neuen Wert), sichere vorher eine Kopie und starte
 danach neu.
 
 ## 5. Aufräumen
@@ -62,7 +64,7 @@ danach neu.
 Ist die Migration erledigt, kannst du die `.dist`-Datei löschen:
 
 ```bash
-rm /etc/dvhub/hersteller/victron.json.dist
+sudo rm /etc/dvhub/hersteller/victron.json.dist
 ```
 
 Beim nächsten Update, das das Profil erneut ändert, wird sie bei Bedarf neu erzeugt.

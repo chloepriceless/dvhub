@@ -137,3 +137,29 @@ test('CLI: Steuerzeichen in Schlüsseln werden maskiert ausgegeben', async () =>
     assert.match(r.stdout, /\\u001b\[2Kfake/);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
+
+// Gesamtprüfung 03.11.2026: auf Paket-Boxen ist /opt/dvhub/scripts ein
+// Verweis auf current/scripts. Der alte Vergleich import.meta.url ===
+// file://argv[1] schlug dort fehl (argv[1] behält den Verweis, import.meta.url
+// zeigt aufs Ziel) — das Werkzeug lief still ins Leere.
+test('CLI über einen verlinkten scripts-Ordner (Paket-Layout) läuft', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const scripts = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts');
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vpdiff-link-')));
+  try {
+    const h = path.join(tmp, 'cfg', 'hersteller');
+    fs.mkdirSync(h, { recursive: true });
+    fs.writeFileSync(path.join(h, 'x.json'), '{"a":1}\n');
+    fs.writeFileSync(path.join(h, 'x.json.dist'), '{"a":1,"neu":2}\n');
+    fs.mkdirSync(path.join(tmp, 'opt'));
+    fs.symlinkSync(fs.realpathSync(scripts), path.join(tmp, 'opt', 'scripts'));
+    const r = spawnSync(process.execPath, ['scripts/vendor-profile-diff.mjs', 'x.json'], { cwd: path.join(tmp, 'opt'), encoding: 'utf8', env: { ...process.env, CONFIG_DIR: path.join(tmp, 'cfg') } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Herstellerprofil x\.json/);
+    assert.match(r.stdout, /\+ neu = 2/);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
