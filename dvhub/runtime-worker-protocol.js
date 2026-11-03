@@ -81,10 +81,15 @@ export function createRuntimeCommandQueue({ handleCommand, sendMessage }) {
  * (Gegenprüfung Release 1.0.9, P2 — Netzstrom-Zähler zurücksetzen). Ohne
  * laufenden Worker, bei Zeitablauf oder Worker-Ende kommt { ok:false, error }.
  * Der Aufrufer leitet COMMAND_RESULT-Nachrichten an handleMessage weiter.
- * @param {{ getWorker: () => any, timeoutMs?: number }} opts
+ * Nach dem Zeitlimit kann der Worker den Befehl trotzdem noch ausführen
+ * (Gegenprüfung 302ebd13, P3): seine verspätete Antwort geht an onLateResult.
+ * @param {{ getWorker: () => any, timeoutMs?: number,
+ *           onLateResult?: (type: string, outcome: {ok:boolean, result?:any, error?:string}) => void }} opts
  */
-export function createRuntimeCommandClient({ getWorker, timeoutMs = 10_000 }) {
+export function createRuntimeCommandClient({ getWorker, timeoutMs = 10_000, onLateResult = null }) {
   const pending = new Map();
+  // Nach dem Zeitlimit aufgegeben, Antwort noch offen: requestId → type.
+  const timedOut = new Map();
 
   function settle(requestId, outcome) {
     const entry = pending.get(requestId);
@@ -94,6 +99,9 @@ export function createRuntimeCommandClient({ getWorker, timeoutMs = 10_000 }) {
     entry.resolve(outcome);
     return true;
   }
+  const toOutcome = (message) => (message.ok
+    ? { ok: true, result: message.result }
+    : { ok: false, error: message.error || 'runtime_command_failed' });
 
   return {
     send(type, payload = {}) {
@@ -105,7 +113,9 @@ export function createRuntimeCommandClient({ getWorker, timeoutMs = 10_000 }) {
         return Promise.resolve({ ok: false, error: 'runtime_worker_unavailable' });
       }
       return new Promise((resolve) => {
-        const timer = setTimeout(() => settle(request.requestId, { ok: false, error: 'runtime_worker_timeout' }), timeoutMs);
+        const timer = setTimeout(() => {
+          if (settle(request.requestId, { ok: false, error: 'runtime_worker_timeout' })) timedOut.set(request.requestId, request.type);
+        }, timeoutMs);
         timer.unref?.();
         pending.set(request.requestId, { resolve, timer });
         try {
@@ -118,14 +128,19 @@ export function createRuntimeCommandClient({ getWorker, timeoutMs = 10_000 }) {
     /** @returns {boolean} ob die Nachricht ein Ergebnis dieses Clients war */
     handleMessage(message) {
       if (!message || message.type !== RUNTIME_MESSAGE_TYPES.COMMAND_RESULT) return false;
+      if (timedOut.has(message.requestId)) {
+        const type = timedOut.get(message.requestId);
+        timedOut.delete(message.requestId);
+        try { onLateResult?.(type, toOutcome(message)); } catch { /* best effort */ }
+        return true;
+      }
       if (!pending.has(message.requestId)) return false;
-      return settle(message.requestId, message.ok
-        ? { ok: true, result: message.result }
-        : { ok: false, error: message.error || 'runtime_command_failed' });
+      return settle(message.requestId, toOutcome(message));
     },
     /** Worker beendet: alle offenen Befehle scheitern sofort statt erst nach dem Zeitlimit. */
     failAll(error = 'runtime_worker_exited') {
       for (const requestId of [...pending.keys()]) settle(requestId, { ok: false, error });
+      timedOut.clear();
     },
     pendingCount() { return pending.size; },
   };

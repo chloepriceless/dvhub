@@ -484,7 +484,18 @@ let runtimeWorkerStatusPayload = null;
 let runtimeWorkerHeartbeatAt = 0;
 // Befehle Web-Prozess → Runtime-Worker (getrennter Betrieb), z. B. den
 // Netzstrom-Zähler zurücksetzen — zählen und schreiben darf nur der Worker.
-const runtimeCommandClient = createRuntimeCommandClient({ getWorker: () => runtimeWorker });
+// Nur an einen bereiten Worker (RUNTIME_READY kommt nach dem Anhängen des
+// Befehls-Empfängers): sonst wartete ein Befehl beim Start bis zum Zeitlimit
+// (Gegenprüfung 302ebd13, P3). Eine Antwort nach dem Zeitlimit (der Worker hat
+// doch ausgeführt) lässt den Web-Prozess den Zählerstand neu lesen.
+const runtimeCommandClient = createRuntimeCommandClient({
+  getWorker: () => (runtimeWorkerState.ready ? runtimeWorker : null),
+  onLateResult: (type, outcome) => {
+    if (type !== 'grid_share_reset') return;
+    ctx.gridShare?.reload?.();
+    pushLog('grid_share_reset_late', { ok: outcome.ok, previousKwh: outcome.result?.previousKwh ?? null, error: outcome.error ?? null });
+  },
+});
 let sunTimesCacheState = null;
 const runtimeWorkerState = {
   ready: false,

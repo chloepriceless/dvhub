@@ -170,3 +170,32 @@ test('Worker-Betrieb: Worker fehlt oder endet → Fehler statt Hängen; unbekann
   assert.match(sent[0].error, /unsupported runtime command: poll_now/);
   assert.deepEqual(sent[1].result, { ok: true, previousKwh: 0 });
 });
+
+// Gegenprüfung 302ebd13 (P3): Nach dem Zeitlimit führt der Worker den Befehl
+// womöglich doch aus — seine verspätete Antwort darf nicht verloren gehen.
+test('Zeitlimit: verspätete Antwort geht an onLateResult, nicht ins Leere', async () => {
+  const sent = [];
+  const late = [];
+  const worker = { connected: true, send: (m) => sent.push(m) };
+  const client = createRuntimeCommandClient({ getWorker: () => worker, timeoutMs: 30, onLateResult: (type, outcome) => late.push({ type, outcome }) });
+  const keepAlive = setInterval(() => {}, 1_000);   // das Zeitlimit ist unref
+  const r = await client.send('grid_share_reset', { reason: 'x' }).finally(() => clearInterval(keepAlive));
+  assert.deepEqual(r, { ok: false, error: 'runtime_worker_timeout' });
+  assert.equal(client.handleMessage({ type: RUNTIME_MESSAGE_TYPES.COMMAND_RESULT, requestId: sent[0].requestId, ok: true, result: { ok: true, previousKwh: 0.5 } }), true);
+  assert.deepEqual(late, [{ type: 'grid_share_reset', outcome: { ok: true, result: { ok: true, previousKwh: 0.5 } } }]);
+  assert.equal(client.handleMessage({ type: RUNTIME_MESSAGE_TYPES.COMMAND_RESULT, requestId: sent[0].requestId, ok: true }), false, 'nur einmal');
+});
+
+test('Route: Worker nicht bereit → 503, Zeitlimit → 504 mit Hinweis „Ergebnis unbekannt“', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-gs-reset-codes-'));
+  try {
+    for (const [error, status] of [['runtime_worker_unavailable', 503], ['runtime_worker_timeout', 504], ['read_only_process', 409]]) {
+      const r = await callReset(ctxFor(dir, { resetGridShare: async () => ({ ok: false, error }) }));
+      assert.equal(r.status, status, error);
+      assert.equal(r.body.error, error);
+      if (status !== 409) assert.ok(r.body.detail, error);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

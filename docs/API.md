@@ -383,7 +383,7 @@ Siehe [EEBUS.md](EEBUS.md).
 |---|---|---|---|
 | GET | `/api/battery/grid-share` | LAN·`history` | Netzstrom im Akku: Stand, Anteil, Sperre, Tageswerte |
 | GET | `/api/battery/grid-share/protocol.csv` | LAN·`history` | Protokoll (Sperrwechsel, Tageszeilen, Zurücksetzen) als CSV |
-| POST | `/api/battery/grid-share/reset` | Token | Zähler auf 0 (`{ "reason": "…" }`), nur mit Header `x-confirm-legal-gate: true`; wird protokolliert |
+| POST | `/api/battery/grid-share/reset` | Token | Zähler auf 0 (`{ "reason": "…" }`), nur mit Header `x-confirm-legal-gate: true`; wird protokolliert. Im getrennten Betrieb führt der Runtime-Worker aus: 503 = Worker startet noch, 504 = keine Antwort (Ergebnis unbekannt, Stand neu laden) |
 | GET | `/api/mobile-link/status` | LAN·`integrations` | Handy-App: Zustand, gekoppelte Geräte, liefert `uiToken` |
 | POST | `/api/mobile-link/settings` | Token+Nonce | Handy-App ein/aus, Relay, Name (Ausschalten geht ohne Nonce) |
 | POST | `/api/mobile-link/pair/start`, `/pair/approve` | Token+Nonce | Kopplung per QR-Code starten bzw. bestätigen |
