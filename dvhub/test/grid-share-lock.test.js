@@ -178,3 +178,35 @@ for (const [locked, expected] of [[true, false], [false, true]]) {
     }
   });
 }
+
+// Gegenprüfung Release 1.0.9 (P2): MQTT-Werte aus dem Cache tragen einen
+// frischen Abfrage-Stempel (fieldUpdatedAt = jetzt), ihr Empfangsalter steht in
+// fieldSourceAt. Zehn Minuten alte 6 kW AC-PV und 1 kW Last öffneten den Deckel
+// auf −4,9 kW — fällt die PV inzwischen aus, liefert der Akku die Einspeisung.
+test('gesperrt: MQTT-Wert aus dem Cache mit altem Empfang (fieldSourceAt) → nur der Puffer', async () => {
+  for (const field of ['pvTotalW', 'acPvL1W', 'pvPowerW', 'selfConsumptionW']) {
+    const { evaluator, writes } = makeCtx({
+      pvW: 6_000, loadW: 1_000,
+      mutate: ({ state }) => {
+        const now = Date.now();
+        state.victron.acPvL1W = 6_000;
+        state.victron.fieldUpdatedAt.acPvL1W = now;
+        state.victron.fieldSourceAt = { [field]: now - 10 * 60_000 };
+      }
+    });
+    await evaluator.applyControlTarget('gridSetpointW', -5000, 'eos_optimization');
+    assert.deepEqual(gridWrites(writes), [-100], field);
+  }
+});
+
+test('gesperrt: frischer MQTT-Empfang (fieldSourceAt < 90 s) lässt den PV-Überschuss raus', async () => {
+  const { evaluator, writes } = makeCtx({
+    pvW: 6_000, loadW: 1_000,
+    mutate: ({ state, cfg }) => {
+      cfg.victron = { telemetryMaxAgeMs: 30_000 };
+      state.victron.fieldSourceAt = { pvTotalW: Date.now() - 60_000, selfConsumptionW: Date.now() - 60_000 };
+    }
+  });
+  await evaluator.applyControlTarget('gridSetpointW', -9000, 'eos_optimization');
+  assert.deepEqual(gridWrites(writes), [-(5_000 - GRID_SHARE_EXPORT_MARGIN_W)]);
+});

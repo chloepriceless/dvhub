@@ -29,7 +29,7 @@ import {
 } from './services/peak-shaving/index.js';
 // Netzstrom im Akku (Christin 01./02.11.2026): solange der Zähler sperrt, darf
 // der Akku nicht ins Netz entladen — nur der PV-Überschuss geht hinaus.
-import { gridShareExportCapW } from './services/optimizer/grid-share.js';
+import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/optimizer/grid-share.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -343,17 +343,25 @@ export function createScheduleEvaluator(ctx) {
   // Überschuss, mindestens der Standard-Puffer. Alte Werte zählen als unbekannt.
   // polling.js stempelt pvTotalW nie (abgeleitet) — geprüft werden die
   // gelesenen Felder: DC-PV und jede AC-PV-Phase (Gegenprüfung 8465a540, P3).
+  // MQTT liefert aus dem Cache: fieldUpdatedAt ist dann „jetzt“, das Alter des
+  // Werts steht in fieldSourceAt — dieselbe Frist wie beim Netzstrom-Zähler
+  // (90 s, grid-share.js, Fix 4cf16a5a). Sonst öffneten zehn Minuten alte 6 kW
+  // PV den Deckel, und bei ausgefallener PV speiste der Akku ein
+  // (Gegenprüfung Release 1.0.9, P2).
   const GRID_SHARE_PV_FIELDS = ['pvTotalW', 'pvPowerW', 'pvAcW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W'];
   function gridShareLiveCapW(cfg) {
     const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
     const v = state.victron || {};
     const fin = (x) => x != null && Number.isFinite(Number(x));
+    const nowMs = Date.now();
+    const sourceStale = (f) => { const at = Number(v.fieldSourceAt?.[f]); return at > 0 && nowMs - at > GRID_SHARE_FIELD_MAX_AGE_MS; };
+    const stale = (f) => victronFieldStale(state, f, maxAgeMs, nowMs) || sourceStale(f);
     const totalRaw = v.pvTotalW ?? v.pvPowerW;
-    const pvFresh = GRID_SHARE_PV_FIELDS.every((f) => !victronFieldStale(state, f, maxAgeMs));
+    const pvFresh = GRID_SHARE_PV_FIELDS.every((f) => !stale(f));
     const pvKnown = fin(totalRaw) && pvFresh;
     const dcW = fin(v.pvPowerW) ? Math.max(0, Number(v.pvPowerW)) : 0;
     const totalW = pvKnown ? Math.max(0, Number(totalRaw)) : null;
-    const loadKnown = fin(v.selfConsumptionW) && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs);
+    const loadKnown = fin(v.selfConsumptionW) && !stale('selfConsumptionW');
     return gridShareExportCapW({
       pvAcW: totalW == null ? null : Math.max(0, totalW - dcW),
       pvDcW: totalW == null ? null : Math.min(dcW, totalW),

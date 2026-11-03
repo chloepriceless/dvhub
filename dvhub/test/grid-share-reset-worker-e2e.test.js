@@ -22,14 +22,14 @@ test('Worker-Betrieb (echter server.js): Reset über IPC, sofort sichtbar; vor d
   const rig = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-gs-reset-e2e-'));
   fs.mkdirSync(path.join(rig, 'etc', 'hersteller'), { recursive: true });
   fs.mkdirSync(path.join(rig, 'data'));
-  fs.copyFileSync(path.join(DVHUB_DIR, 'hersteller', 'dvhub-mqtt.json'), path.join(rig, 'etc', 'hersteller', 'dvhub-mqtt.json'));
+  fs.copyFileSync(path.join(DVHUB_DIR, 'hersteller', 'victron.json'), path.join(rig, 'etc', 'hersteller', 'victron.json'));
   const port = await freePort();
-  const brokerPort = await freePort();
   const configPath = path.join(rig, 'etc', 'config.json');
   fs.writeFileSync(configPath, JSON.stringify({
-    manufacturer: 'dvhub-mqtt', updateChannel: 'dev', httpPort: port, httpsPort: 0,
-    victron: { host: '127.0.0.1', mqtt: { schema: 'dvhub', topicPrefix: 'dvhub' } },
-    mqtt: { enabled: true, embeddedBroker: { enabled: true, port: brokerPort } },
+    // Victron ohne Gerät (Modbus an 127.0.0.1 scheitert sofort), kein
+    // eingebetteter Broker: so wenig Last wie möglich neben den anderen Tests.
+    manufacturer: 'victron', httpPort: port, httpsPort: 0,
+    victron: { host: '127.0.0.1', port: await freePort() },
     optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true },
     schedule: { timezone: 'Europe/Berlin' },
   }));
@@ -45,6 +45,10 @@ test('Worker-Betrieb (echter server.js): Reset über IPC, sofort sichtbar; vor d
     env: { ...process.env, DV_APP_CONFIG: configPath, DV_DATA_DIR: path.join(rig, 'data'), NODE_ENV: 'test', DVHUB_ENABLE_RUNTIME_WORKER: '1', DVHUB_SUPPORT_WEB_PORT: String(await freePort()) },
     stdio: ['ignore', out, out],
   });
+  // Niedrige Priorität (vererbt sich auf den Worker): zwei startende
+  // DVhub-Prozesse sollen zeitkritische Tests nebenan nicht ausbremsen
+  // (mobile-link-relay-sicherheit kippte unter dieser Last).
+  try { os.setPriority(proc.pid, 19); } catch { /* nicht überall erlaubt */ }
   t.after(async () => {
     const exited = new Promise((r) => proc.once('exit', r));
     proc.kill('SIGTERM');
