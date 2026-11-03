@@ -11,8 +11,12 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import zlib from 'node:zlib';
+
+// Symlink-Regel aus dem Box-Helfer — eine Quelle für Bau und Prüfung.
+const releaseHelper = createRequire(import.meta.url)('../../../dvhub-release.cjs');
 
 export const MANIFEST_NAME = '.dvhub-release.json';
 export const MANIFEST_FORMAT = 1;
@@ -366,13 +370,20 @@ export function collectEntries(root) {
     const st = fs.lstatSync(abs);
     if (st.isSymbolicLink()) {
       const linkname = fs.readlinkSync(abs);
-      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(rel), linkname));
-      if (path.posix.isAbsolute(linkname) || resolved.startsWith('../') || resolved === '..') {
-        throw new Error(`Symlink zeigt aus dem Paket: ${rel} -> ${linkname}`);
-      }
       entries.push({ path: rel, type: 'symlink', linkname, mode: 0o777 });
     } else {
       entries.push({ path: rel, type: 'file', mode: st.mode & 0o777, data: fs.readFileSync(abs) });
+    }
+  }
+  // Dieselbe Regel wie die Box (dvhub-release.cjs verifyTree): nicht über die
+  // Paketwurzel hinaus und nicht über einen anderen Symlink des Pakets hinweg —
+  // sonst wäre ein signiertes Paket auf jeder Box uninstallierbar
+  // (Gegenprüfung eb012ce8).
+  const links = new Set(entries.filter((e) => e.type === 'symlink').map((e) => e.path));
+  for (const e of entries) {
+    if (e.type !== 'symlink') continue;
+    if (path.posix.isAbsolute(e.linkname) || releaseHelper.symlinkEscapes(e.path, e.linkname, links)) {
+      throw new Error(`Symlink zeigt aus dem Paket: ${e.path} -> ${e.linkname}`);
     }
   }
   for (const d of dirs) entries.push({ path: d, type: 'dir', mode: 0o755 });

@@ -1469,7 +1469,7 @@ async function runJob(s, a) {
 
 module.exports = {
   parseArgs, compareVersions, parseVersion, satisfiesEngine, versionFromLabel, debArch, readConf, settings,
-  validateIndex, verifyTree, reconcileLinks, dropinContent, switchCurrent, currentVersion, rewriteUnit, migrationCheck,
+  validateIndex, verifyTree, symlinkEscapes, reconcileLinks, dropinContent, switchCurrent, currentVersion, rewriteUnit, migrationCheck,
   OFFICIAL_REPO_RE, main, Exit, trustedKeyCount, verifySignature, download, unpack, readStatus, actionCheck,
 };
 

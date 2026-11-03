@@ -148,6 +148,32 @@ test('packTree lehnt Symlinks ab, die aus dem Paket zeigen', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+// Gegenprüfung eb012ce8 (P3): der Bau muss ablehnen, was die Box ablehnt
+// (dvhub-release.cjs verifyTree) — sonst wäre ein signiertes Paket auf jeder
+// Box uninstallierbar. Ziel über einen anderen Symlink des Pakets hinweg.
+test('packTree lehnt Symlink-Ziele über einen anderen Paket-Symlink ab (wie die Box)', () => {
+  for (const make of [
+    (dir) => { fs.symlinkSync('.', path.join(dir, 'p')); fs.symlinkSync('p/../etc', path.join(dir, 'q')); },
+    (dir) => { fs.mkdirSync(path.join(dir, 'src/lib'), { recursive: true }); fs.writeFileSync(path.join(dir, 'src/lib/foo.js'), 'x');
+      fs.symlinkSync('src/lib', path.join(dir, 'lib')); fs.symlinkSync('lib/foo.js', path.join(dir, 'x')); },
+  ]) {
+    const dir = tmp('dvhub-pack-');
+    try {
+      fs.writeFileSync(path.join(dir, 'a'), 'a');
+      make(dir);
+      assert.throws(() => packTree(dir, { mtime: 0, meta: {} }), /zeigt aus dem Paket/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+  const ok = tmp('dvhub-pack-');
+  try {
+    fs.mkdirSync(path.join(ok, 'nm/.bin'), { recursive: true });
+    fs.mkdirSync(path.join(ok, 'nm/pkg/bin'), { recursive: true });
+    fs.writeFileSync(path.join(ok, 'nm/pkg/bin/cli.js'), 'x');
+    fs.symlinkSync('../pkg/bin/cli.js', path.join(ok, 'nm/.bin/cli'));
+    packTree(ok, { mtime: 0, meta: {} });
+  } finally { fs.rmSync(ok, { recursive: true, force: true }); }
+});
+
 test('Abhängigkeiten: Install-Skripte, os/cpu und native Module schlagen an', () => {
   const dir = tmp('dvhub-deps-');
   try {
