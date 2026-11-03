@@ -2247,3 +2247,51 @@ test('aufgegebener Push: hängender Prognosehorizont-PUT — kein Log, kein Zust
     assert.equal(logs.filter((l) => l.event === 'eos_control_horizon').length, logsBefore, 'kein Log-Eintrag vom alten Push');
   } finally { await mock.close(); }
 });
+
+// ── Gesamtprüfung Release 1.0.9, Befund 9 ──────────────────────────────────────
+// Die Preise im Speicher decken jetzt, enden aber früher als die gespeicherten
+// echten (epex-fetch.js ersetzt state.epex.data komplett — ein Abruf mit nur
+// heute lässt morgen aus dem Speicher fallen). Dann dürfen Schätzwerte die
+// echten Preise für morgen in EOS nicht überschreiben (und clearStaleEstimates
+// darf sie nicht löschen): die gespeicherten echten Preise reichen weiter.
+test('Befund 9: Speicher kürzer als die Datenbank → echte Preise aus der Datenbank, Schätzung erst dahinter', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const env = estimateCtx(mock, { logs });
+    const storedEnd = env.realEnd + 14 * 3_600_000;
+    const rows = storedPrices(env, env.realEnd);
+    // Morgen: echter Preis 77 ct, deutlich anders als jede Schätzung.
+    for (let ms = env.realEnd; ms < storedEnd; ms += Q) rows.push({ key: 'price_ct_kwh', ts: new Date(ms).toISOString(), value: 77, resolution: 900 });
+    env.ctx.telemetryStore = { querySeries: async ({ start, end }) => rows.filter((r) => r.ts >= new Date(start).toISOString() && r.ts < new Date(end).toISOString()) };
+    await createEosForecastBridge(env.ctx).push();
+    const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
+    const t = env.realEnd + 5 * 3_600_000;
+    assert.ok(Math.abs(feed.get(t) * 100_000 - 77) < 0.01, `echter Preis für morgen bleibt: ${feed.get(t) * 100_000}`);
+    const est = env.state.optimizer.lastEosPush.priceEstimate;
+    assert.equal(est?.from, new Date(storedEnd).toISOString(), 'Schätzung erst hinter den echten Preisen');
+    // Gelöscht wird erst hinter dem Geschickten — nie die echten Preise von morgen.
+    for (const d of deletes(mock)) assert.ok(d.start >= storedEnd, `Löschfenster beginnt hinter den echten Preisen: ${new Date(d.start).toISOString()}`);
+    assert.ok(logs.some((l) => l.event === 'eos_prices_from_store'), 'Ergänzung aus der Datenbank wird protokolliert');
+  } finally { await mock.close(); }
+});
+
+// ── Gesamtprüfung Release 1.0.9, Befund 15 ─────────────────────────────────────
+// Ein Datenbankfehler (oder eine leere Antwort) beim Laden der Preis-Historie
+// blieb 1 h im Zwischenspeicher — so lange bekam EOS keinen geschätzten Schwanz.
+test('Befund 15: Datenbankfehler bei der Preis-Historie wird nicht zwischengespeichert', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const history = [];
+    for (let ms = env.q0 - 20 * 86_400_000; ms < env.q0; ms += Q) history.push({ key: 'price_ct_kwh', ts: new Date(ms), value: env.pattern(ms), resolution: 900 });
+    let fail = true;
+    env.ctx.telemetryStore = { querySeries: async () => { if (fail) throw new Error('Verbindung verloren'); return history; } };
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null, 'ohne Historie keine Schätzung');
+    fail = false;
+    await bridge.push();
+    assert.ok(env.state.optimizer.lastEosPush.priceEstimate?.estimatedSlots > 0, 'nächster Push schätzt wieder');
+  } finally { await mock.close(); }
+});

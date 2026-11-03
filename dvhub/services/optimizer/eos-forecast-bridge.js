@@ -607,9 +607,12 @@ export function createEosForecastBridge(ctx) {
       }
     } catch (e) {
       if (pushLog) pushLog('eos_price_estimate_error', { error: e?.message || String(e) });
-      points = [];
+      // Fehler nicht zwischenspeichern: sonst bekäme EOS eine Stunde lang keinen
+      // geschätzten Schwanz (Gesamtprüfung Release 1.0.9, Befund 15).
+      return [];
     }
-    priceHistoryCache = { at: nowMs, points };
+    // Eine leere Antwort ebenso wenig — beim nächsten Push neu fragen.
+    if (points.length) priceHistoryCache = { at: nowMs, points };
     return points;
   }
 
@@ -1116,18 +1119,40 @@ export function createEosForecastBridge(ctx) {
     }
     if (gone()) return abandoned();
 
-    // Echte Preise. Decken die im Speicher jetzt nicht ab (DVhub neu
-    // gestartet, während der Preisabruf gestört ist), die gespeicherten echten
-    // Day-Ahead-Preise aus der Datenbank nehmen: sie umfassen alles, was DVhub
-    // je abgerufen hat, also auch, was EOS noch hält — sonst fiele jeder Lauf
-    // aus, bis ein Abruf gelingt (Gegenprüfung c0fdcbef, P2).
+    // Echte Preise. Die gespeicherten echten Day-Ahead-Preise aus der
+    // Datenbank umfassen alles, was DVhub je abgerufen hat, also auch, was EOS
+    // noch hält. Sie werden genommen,
+    //   - wenn die im Speicher jetzt nicht abdecken (DVhub neu gestartet,
+    //     während der Preisabruf gestört ist) — sonst fiele jeder Lauf aus, bis
+    //     ein Abruf gelingt (Gegenprüfung c0fdcbef, P2);
+    //   - wenn sie lückenlos weiter reichen als die im Speicher: epex-fetch.js
+    //     ersetzt state.epex.data komplett, ein Abruf mit nur heute ließe sonst
+    //     Schätzwerte die echten Preise für morgen in EOS überschreiben und
+    //     clearStaleEstimates sie löschen (Gesamtprüfung Release 1.0.9, Befund 9).
+    //     Dann gelten die im Speicher, dahinter die aus der Datenbank — bei
+    //     gleicher Slot-Länge (eine gemischte Kadenz liest EOS mit Lücken,
+    //     Gegenprüfung 8c050aae), sonst ganz die aus der Datenbank.
     let realPriceSlots = forecast?.price?.slots || [];
-    if (!Number.isFinite(contiguousPriceEndMs(realPriceSlots, Date.now()))) {
-      const stored = await loadStoredRealPriceSlots(Date.now());
+    {
+      const nowMs = Date.now();
+      const memEnd = contiguousPriceEndMs(realPriceSlots, nowMs);
+      const stored = await loadStoredRealPriceSlots(nowMs);
       if (gone()) return abandoned();
-      if (Number.isFinite(contiguousPriceEndMs(stored, Date.now()))) {
-        if (pushLog) pushLog('eos_prices_from_store', { slots: stored.length, from: stored[0].start, until: stored[stored.length - 1].end });
-        realPriceSlots = stored;
+      const storedEnd = contiguousPriceEndMs(stored, nowMs);
+      if (Number.isFinite(storedEnd) && (!Number.isFinite(memEnd) || storedEnd > memEnd)) {
+        let merged = stored;
+        let mode = Number.isFinite(memEnd) ? 'extend' : 'replace';
+        if (Number.isFinite(memEnd) && realPriceCoverage(realPriceSlots).stepMs === realPriceCoverage(stored).stepMs) {
+          merged = [...realPriceSlots, ...stored.filter((x) => Date.parse(x.start) >= memEnd)];
+          mode = 'append';
+        }
+        if (pushLog) {
+          pushLog('eos_prices_from_store', {
+            mode, slots: stored.length, from: stored[0].start, until: new Date(storedEnd).toISOString(),
+            memoryUntil: Number.isFinite(memEnd) ? new Date(memEnd).toISOString() : null,
+          });
+        }
+        realPriceSlots = merged;
       }
     }
 
