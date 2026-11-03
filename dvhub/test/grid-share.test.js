@@ -29,6 +29,10 @@ const gridShareBatteryUncertainReasons = (v, nowMs, maxAgeMs) => gridShareBatter
 
 const mkDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-grid-share-'));
 const near = (a, b, eps = 0.01) => assert.ok(Math.abs(a - b) <= eps, `${a} ≈ ${b}`);
+// Messwerte im Sekundentakt wie polling.js.
+const tickEverySecond = (t, t0, fromS, toS, victron) => {
+  for (let s = fromS; s <= toS; s += 1) t.tick({ nowMs: t0 + s * 1_000, victron: typeof victron === 'function' ? victron(s) : victron, socPct: 50, capacityWh: 77_000 });
+};
 
 test('Sperre gilt mit PV-Anlage ohne MiSpeL-Option, nicht im reinen Netzspeicher und nicht mit Option', () => {
   assert.equal(gridShareLockApplies({ optimizer: {} }), true);
@@ -108,11 +112,11 @@ test('ohne „Netzladen erlaubt“: echte Netzladung zählt (Christin 03.11.), R
   try {
     const cfg = { optimizer: { allowGridCharge: false }, schedule: { timezone: 'Europe/Berlin' } };
     const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
-    const t0 = Date.now();
-    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 77_000 });
-    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 80, gridImportW: 80 }, socPct: 50, capacityWh: 77_000 });
+    const t0 = Date.parse('2026-11-03T02:00:00Z');
+    // im Sekundentakt (Gegenprüfung 52a6c756: ein 60-s-Schritt prüfte die Dauerregel nicht)
+    tickEverySecond(t, t0, 0, 600, { gridToBatteryW: 80, gridImportW: 80 });
     assert.equal(t.summary().gridWh, 0, '80 W Pendeln zählt nicht');
-    t.tick({ nowMs: t0 + 120_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 77_000 });
+    tickEverySecond(t, t0, 601, 660, { gridToBatteryW: 12_000, gridImportW: 12_000 });
     near(t.summary().gridWh, 200, 0.01);
     assert.equal(t.isLocked(), true);
   } finally {
@@ -585,9 +589,6 @@ test('am Kapazitätsdeckel mit weiterem Zufluss: frischer Ladestand kappt nach 6
 // egal wer sie auslöst und ob Netzlade- oder MiSpeL-Freigabe gesetzt ist.
 // Regelrauschen filtert eine Mindestleistung (150 W), die mindestens 30 s
 // anhält — dann zählt die ganze Ladung, auch die ersten 30 s.
-const tickEverySecond = (t, t0, fromS, toS, victron) => {
-  for (let s = fromS; s <= toS; s += 1) t.tick({ nowMs: t0 + s * 1_000, victron, socPct: 50, capacityWh: 77_000 });
-};
 
 for (const [name, optimizer] of [
   ['„Netzladen erlaubt“ ohne MiSpeL-Freigabe (Codex-Reproduktion)', { allowGridCharge: true, gridChargeWithoutMispel: false, mispel: { mode: 'none' } }],
@@ -610,26 +611,32 @@ for (const [name, optimizer] of [
   });
 }
 
-test('Regelrauschen zählt nicht: stundenlang 40–140 W, kurze Spitzen unter 30 s', () => {
+test('Regelrauschen zählt nicht: stundenlang 40–140 W, kurze Regelvorgänge (5 s 2 kW)', () => {
   const dir = mkDir();
   try {
     const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: false, mispel: { mode: 'none' } }, schedule: { timezone: 'Europe/Berlin' } };
     const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
     const t0 = Date.parse('2026-11-03T08:00:00Z');
     for (let s = 0; s <= 3 * 3600; s += 1) {
-      // Pendeln um den Sollwert (40–140 W), alle fünf Minuten eine Wolke: 20 s lang 2 kW
-      const w = s % 300 < 20 ? 2_000 : 90 + 50 * Math.sin(s / 7);
+      // Pendeln um den Sollwert (40–140 W), alle fünf Minuten eine Wolke: 5 s lang 2 kW
+      const w = s % 300 < 5 ? 2_000 : 90 + 50 * Math.sin(s / 7);
       t.tick({ nowMs: t0 + s * 1_000, victron: { gridToBatteryW: w, gridImportW: w }, socPct: 50, capacityWh: 77_000 });
     }
     assert.equal(t.summary().gridWh, 0);
     assert.equal(t.isLocked(), false);
     assert.ok(t.summary().today.filteredGridToBatteryKwh > 0.2, `verworfen ausgewiesen: ${t.summary().today.filteredGridToBatteryKwh}`);
+    // 20 s mit 2 kW sind kein Regelvorgang mehr, sondern Netzladung: zählt ganz.
+    const before = t.summary().gridWh;
+    tickEverySecond(t, t0, 3 * 3600 + 1, 3 * 3600 + 20, { gridToBatteryW: 2_000, gridImportW: 2_000 });
+    tickEverySecond(t, t0, 3 * 3600 + 21, 3 * 3600 + 80, { gridToBatteryW: 60, gridImportW: 60 });
+    // 21 s: der letzte Wert der Schleife (s = 10 800) war selbst der Beginn einer Wolke.
+    near(t.summary().gridWh - before, 2_000 * 21 / 3600, 0.6);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('laufende Netzladung: kurzer Einbruch unter 150 W zählt weiter, Ende erst nach 30 s darunter', () => {
+test('laufende Netzladung: kurzer Einbruch unter 150 W zählt weiter, danach endet sie', () => {
   const dir = mkDir();
   try {
     const cfg = { optimizer: { allowGridCharge: false }, schedule: { timezone: 'Europe/Berlin' } };
@@ -639,13 +646,68 @@ test('laufende Netzladung: kurzer Einbruch unter 150 W zählt weiter, Ende erst 
     tickEverySecond(t, t0, 121, 125, { gridToBatteryW: 50, gridImportW: 50 });        // Messeinbruch
     tickEverySecond(t, t0, 126, 245, { gridToBatteryW: 3_000, gridImportW: 3_000 });   // weiter, 100 Wh
     near(t.summary().gridWh, 200 + 50 * 5 / 3600, 0.5);
-    // Danach Ende: 40 s Rauschen — die ersten 30 s zählen noch mit, dann nichts mehr.
-    tickEverySecond(t, t0, 246, 400, { gridToBatteryW: 60, gridImportW: 60 });
-    near(t.summary().gridWh, 200 + 50 * 5 / 3600 + 60 * 30 / 3600, 0.5);
+    // Danach Ende: Rauschen zählt nur, solange das Fenster noch die Ladung sieht.
+    tickEverySecond(t, t0, 246, 300, { gridToBatteryW: 60, gridImportW: 60 });
+    const atEnd = t.summary().gridWh;
+    assert.ok(atEnd - 200 < 0.6, `Nachlauf ${atEnd - 200} Wh`);
+    tickEverySecond(t, t0, 301, 400, { gridToBatteryW: 60, gridImportW: 60 });
+    assert.equal(t.summary().gridWh, atEnd, 'danach nichts mehr');
     // Neue kurze Spitze (10 s) nach dem Ende: verworfen.
     tickEverySecond(t, t0, 401, 410, { gridToBatteryW: 3_000, gridImportW: 3_000 });
-    tickEverySecond(t, t0, 411, 420, { gridToBatteryW: 0, gridImportW: 0 });
-    near(t.summary().gridWh, 200 + 50 * 5 / 3600 + 60 * 30 / 3600, 0.5);
+    tickEverySecond(t, t0, 411, 460, { gridToBatteryW: 0, gridImportW: 0 });
+    assert.equal(t.summary().gridWh, atEnd);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Gegenprüfung 52a6c756 (P2): Eine stockende Netzladung (PV schwankt um die
+// Ladeleistung: 25 s 500 W, 1 s 0 W) wurde nie bestätigt — alles verworfen.
+test('stockende Netzladung (25 s 500 W, 1 s 0 W) zählt', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.parse('2026-11-03T10:00:00Z');
+    tickEverySecond(t, t0, 0, 3600, (s) => (s % 26 === 25 ? { gridToBatteryW: 0, gridImportW: 0 } : { gridToBatteryW: 500, gridImportW: 500 }));
+    near(t.summary().gridWh, 500 * 25 / 26, 3);
+    assert.equal(t.isLocked(), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Gegenprüfung 52a6c756 (P3): Nach einer echten Ladung hielt ein einzelner
+// 160-W-Wert alle 25 s die Ladung offen — 100 W Pendeln zählte stundenlang.
+test('nach einer Ladung: 100 W Pendeln mit 160-W-Spitzen alle 25 s zählt nicht weiter', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.parse('2026-11-03T02:00:00Z');
+    tickEverySecond(t, t0, 0, 60, { gridToBatteryW: 3_000, gridImportW: 3_000 });   // 50 Wh
+    tickEverySecond(t, t0, 61, 61 + 3 * 3600, (s) => (s % 25 === 0 ? { gridToBatteryW: 160, gridImportW: 160 } : { gridToBatteryW: 100, gridImportW: 100 }));
+    const g = t.summary().gridWh;
+    assert.ok(g < 51.5, `nur die Ladung und ein kurzer Nachlauf: ${g} Wh`);
+    assert.equal(t.isLocked(), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Gegenprüfung 52a6c756 (P3): reset() vergaß die vorgemerkte Ladung nicht —
+// Energie von vor dem Reset landete danach im genullten Zähler.
+test('Reset während einer noch nicht bestätigten Ladung: nur Energie danach zählt', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.parse('2026-11-03T02:00:00Z');
+    tickEverySecond(t, t0, 0, 10, { gridToBatteryW: 6_000, gridImportW: 6_000 });
+    assert.equal(t.summary().gridWh, 0, 'noch vorgemerkt');
+    t.reset({ reason: 'Test', nowMs: t0 + 10_500 });
+    tickEverySecond(t, t0, 11, 70, { gridToBatteryW: 6_000, gridImportW: 6_000 });
+    near(t.summary().gridWh, 6_000 * 60 / 3600, 0.5);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

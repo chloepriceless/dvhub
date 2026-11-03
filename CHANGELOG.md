@@ -38,8 +38,9 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   rechnerischen Zähler: Netz → Akku erhöht den Netzstrom-Anteil (höchstens der gemessene Netzbezug), Entladung und
   Verluste senken ihn anteilig. Gezählt wird jede tatsächliche Netzladung — gleich, ob EOS, eine Handeingabe, ein
   Zeitplan oder eine fremde Steuerung sie auslöst und ob Netzladen oder eine MiSpeL-Option freigegeben ist.
-  Regelpendeln zählt nicht: erst ab 150 W, die mindestens 30 s anhalten, dann die ganze Ladung; das Tagesprotokoll
-  weist Verworfenes aus. Über 0,1 kWh Netzstrom ist die Einspeisung aus dem Akku gesperrt (frei erst wieder
+  Regelpendeln und kurze Regelvorgänge zählen nicht: Netzladung gilt, wenn innerhalb von 30 s im Mittel mindestens
+  150 W und mindestens 15 s lang 150 W oder mehr fließen — dann zählt die ganze Ladung, auch wenn sie kurz stockt;
+  das Tagesprotokoll weist Verworfenes aus. Über 0,1 kWh Netzstrom ist die Einspeisung aus dem Akku gesperrt (frei erst wieder
   unter 0,05 kWh; ein Regelpuffer von höchstens 100 W bleibt) — PV-Überschuss geht weiter hinaus; EOS plant dann
   keinen Akku-Verkauf. Leitstand „davon Netzstrom X kWh (Y %)“, Historie mit Verlauf
   und Tagesprotokoll (CSV), `/api/battery/grid-share`. Der Zähler übersteht Neustart und Update; ein ausdrückliches

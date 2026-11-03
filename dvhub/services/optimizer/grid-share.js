@@ -17,13 +17,16 @@
 //                      Marktprämie dafür kassieren, will ich ausschließen“;
 //                      Gegenprüfung Release 1.0.9, P2 — vorher zählte nur
 //                      Netzladen mit Freigabe, 6 kW per Handeingabe blieben
-//                      ungezählt). Regelrauschen filtert eine Ladung mit
-//                      Mindestleistung und -dauer (filterGridInflow): erst ab
-//                      150 W, die mindestens 30 s anhalten, dann zählt die ganze
-//                      Ladung samt ihrer ersten 30 s. So sperren Pendeln um den
-//                      Sollwert (einige 10 W, Gegenprüfungen 8465a540 und
-//                      f4bcc3ba) und kurze Regelvorgänge (Wolke, Laststoß) keine
-//                      Anlage. Verworfenes steht in der Tageszeile.
+//                      ungezählt). Regelrauschen filtert ein gleitendes
+//                      30-s-Fenster (filterGridInflow): Netzladung liegt an,
+//                      wenn dort im Mittel mindestens 150 W und mindestens 15 s
+//                      lang Werte ab 150 W anlagen — dann zählt alles im Fenster
+//                      (auch die ersten Sekunden und kurze Einbrüche). So
+//                      sperren Pendeln um den Sollwert (einige 10 W,
+//                      Gegenprüfungen 8465a540 und f4bcc3ba) und kurze
+//                      Regelvorgänge (Wolke, Laststoß) keine Anlage, eine
+//                      stockende Ladung zählt trotzdem (Gegenprüfung 52a6c756).
+//                      Verworfenes steht in der Tageszeile.
 //   Akku→Haus/Netz     senkt G anteilig: Anteil (G / Akku-Inhalt) × Entladung.
 //   Verluste           anteilig: die Wandlungsverluste stecken in den Flüssen
 //                      (gemessen am Akku), alles Weitere zeigt der Ladestand —
@@ -101,10 +104,10 @@ export const GRID_SHARE_FIELD_MAX_AGE_MS = 90_000;
  */
 export const GRID_SHARE_MIN_CHARGE_W = 150;
 /**
- * … und wenn sie mindestens so lange anhält; dann zählt sie ganz. Kurze
- * Regelvorgänge (Wolke: der Akku lädt einige Sekunden weiter aus dem Netz,
- * bis die Regelung nachzieht) bleiben darunter. Ebenso lange muss eine
- * laufende Ladung unter der Mindestleistung liegen, bevor sie als beendet gilt.
+ * … beurteilt über ein gleitendes Fenster dieser Länge: im Mittel mindestens
+ * GRID_SHARE_MIN_CHARGE_W und mindestens die halbe Fensterzeit ab dieser
+ * Leistung. Kurze Regelvorgänge (Wolke: der Akku lädt einige Sekunden weiter
+ * aus dem Netz, bis die Regelung nachzieht) bleiben darunter.
  */
 export const GRID_SHARE_MIN_CHARGE_MS = 30_000;
 /** Erst so lange sichere Werte beenden eine Unsicherheits-Episode im Log (kein Flattern). */
@@ -221,39 +224,55 @@ export function gridShareExportCapW({ pvAcW, pvDcW, loadW, bufferW = 0, marginW 
 }
 
 /**
- * Regelrauschen von echter Netzladung trennen (rein, Zustand `run` wird
- * zurückgegeben). Eine Ladung beginnt, sobald Netz→Akku mindestens minW
- * erreicht; ihre Energie wird vorgemerkt und erst gebucht, wenn sie minMs lang
- * nicht unter minW gefallen ist — dann komplett. Fällt sie vorher darunter, wird
- * das Vorgemerkte verworfen. Eine bestätigte Ladung zählt alles (auch kurze
- * Einbrüche) und endet erst nach minMs unter minW.
- * @param {null|{startMs:number, pendingWh:number, confirmed:boolean, belowSinceMs:number|null}} run
- * @param {{nowMs:number, dtMs:number, inflowW:number, minW?:number, minMs?:number}} p
- * @returns {{run: object|null, inWh:number, droppedWh:number}}
+ * Regelrauschen von echter Netzladung trennen — über ein gleitendes Fenster
+ * (GRID_SHARE_MIN_CHARGE_MS = 30 s) statt „am Stück“ (Gegenprüfung 52a6c756:
+ * eine stockende Ladung — 25 s 500 W, 1 s 0 W — wurde nie bestätigt, und eine
+ * bestätigte endete bei Rauschen mit einzelnen Spitzen nie).
+ * Netzladung liegt an, solange im Fenster
+ *   - der Mittelwert mindestens minW beträgt und
+ *   - mindestens die Hälfte der Zeit (minAboveMs) ein Wert ab minW anlag.
+ * Liegt sie an, wird alles noch nicht Gebuchte im Fenster ab dem ersten Wert
+ * ab minW gebucht (die ersten Sekunden einer Ladung und kurze Einbrüche),
+ * danach jeder neue Wert.
+ * Liegt sie nicht an, werden neue Werte nur vorgemerkt; was ungebucht aus dem
+ * Fenster fällt, ist verworfen (Rauschen, kurze Regelvorgänge).
+ * @param {{samples: Array<{endMs:number, dtMs:number, w:number, booked:boolean}>}|null} filter
+ * @param {{nowMs:number, dtMs:number, inflowW:number, minW?:number, windowMs?:number, minAboveMs?:number}} p
+ * @returns {{filter: object, inWh:number, droppedWh:number, active:boolean}}
  */
-export function filterGridInflow(run, { nowMs, dtMs, inflowW, minW = GRID_SHARE_MIN_CHARGE_W, minMs = GRID_SHARE_MIN_CHARGE_MS }) {
-  const w = pos(inflowW);
+export function filterGridInflow(filter, { nowMs, dtMs, inflowW, minW = GRID_SHARE_MIN_CHARGE_W, windowMs = GRID_SHARE_MIN_CHARGE_MS, minAboveMs = GRID_SHARE_MIN_CHARGE_MS / 2 }) {
+  const samples = filter?.samples ? filter.samples.slice() : [];
   const dt = Math.max(0, Number(dtMs) || 0);
-  const wh = w * dt / 3_600_000;
-  const startMs = nowMs - dt;
-  let r = run ? { ...run } : null;
-  if (!r) {
-    if (w < minW || dt <= 0) return { run: null, inWh: 0, droppedWh: wh };
-    r = { startMs, pendingWh: 0, confirmed: false, belowSinceMs: null };
+  const whOf = (s) => s.w * s.dtMs / 3_600_000;
+  if (dt > 0) samples.push({ endMs: nowMs, dtMs: dt, w: pos(inflowW), booked: false });
+  const fromMs = nowMs - windowMs;
+  let droppedWh = 0;
+  while (samples.length && samples[0].endMs <= fromMs) {
+    const s = samples.shift();
+    if (!s.booked) droppedWh += whOf(s);
   }
-  if (!r.confirmed) {
-    if (w < minW) return { run: null, inWh: 0, droppedWh: r.pendingWh + wh };
-    r.pendingWh += wh;
-    if (nowMs - r.startMs < minMs) return { run: r, inWh: 0, droppedWh: 0 };
-    const inWh = r.pendingWh;
-    r.pendingWh = 0;
-    r.confirmed = true;
-    return { run: r, inWh, droppedWh: 0 };
+  let energyWs = 0;
+  let aboveMs = 0;
+  for (const s of samples) {
+    const overlapMs = Math.min(s.dtMs, s.endMs - fromMs);
+    energyWs += s.w * overlapMs / 1000;
+    if (s.w >= minW) aboveMs += overlapMs;
   }
-  if (w >= minW) r.belowSinceMs = null;
-  else if (r.belowSinceMs == null) r.belowSinceMs = startMs;
-  const ended = r.belowSinceMs != null && nowMs - r.belowSinceMs >= minMs;
-  return { run: ended ? null : r, inWh: wh, droppedWh: 0 };
+  const active = energyWs * 1000 / windowMs >= minW && aboveMs >= minAboveMs;
+  let inWh = 0;
+  if (active) {
+    // Beim Anlaufen erst ab dem ersten Wert ab minW buchen — Rauschen davor ist
+    // keine Ladung. Ein schon gebuchter Wert heißt: die Ladung läuft weiter.
+    let started = false;
+    for (const s of samples) {
+      if (s.booked) { started = true; continue; }
+      s.booked = true;
+      if (!started && s.w < minW) { droppedWh += whOf(s); continue; }
+      started = true;
+      inWh += whOf(s);
+    }
+  }
+  return { filter: { samples }, inWh, droppedWh, active };
 }
 
 function localDate(ms, timeZone) {
@@ -294,9 +313,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   // GRID_SHARE_UNCERTAIN_CLEAR_MS sicherer Werte.
   let uncertainEpisode = null;
   let certainSinceMs = null;
-  // Laufende Netzladung (filterGridInflow) — nur im Speicher: ein Neustart
-  // mitten in den ersten 30 s einer Ladung verliert höchstens diese.
-  let chargeRun = null;
+  // Fenster der Netzladung (filterGridInflow) — nur im Speicher: ein Neustart
+  // mitten in den ersten Sekunden einer Ladung verliert höchstens diese.
+  let inflowFilter = null;
 
   function fresh() {
     return {
@@ -436,11 +455,11 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     // „manuelle positive Sollwerte ohne MiSpeL“ beantwortet: zählen).
     // Regelrauschen filtert filterGridInflow (Mindestleistung und -dauer) —
     // das war der Grund für die frühere Freigabe-Bedingung (Gegenprüfung f4bcc3ba).
-    const filtered = filterGridInflow(chargeRun, {
+    const filtered = filterGridInflow(inflowFilter, {
       nowMs, dtMs,
       inflowW: Math.min(pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW), pos(v.gridImportW)),
     });
-    chargeRun = filtered.run;
+    inflowFilter = filtered.filter;
     if (filtered.droppedWh > 0) {
       st.day.filteredInWh = (st.day.filteredInWh || 0) + filtered.droppedWh;
       dirty = true;
@@ -589,7 +608,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     ['gridToBatteryKwh', 'Netz→Akku kWh'], ['batteryToHomeFromGridKwh', 'Akku→Haus aus Netzstrom kWh'],
     ['batteryToGridFromGridKwh', 'Akku→Netz aus Netzstrom kWh'], ['lossFromGridKwh', 'Verlust Netzstrom kWh'],
     ['maxGridKwh', 'Netzstrom max kWh'], ['endGridKwh', 'Netzstrom Tagesende kWh'], ['endSharePct', 'Anteil Tagesende %'],
-    ['lockedMinutes', 'Sperre min'], ['uncertainMinutes', 'Akkuwerte unsicher min (nicht abgebucht)'], ['uncertainGridToBatteryKwh', 'davon Netz→Akku bei unsicheren Werten kWh'], ['filteredGridToBatteryKwh', 'Netz→Akku verworfen (unter 150 W oder kürzer als 30 s) kWh'], ['gridKwh', 'Netzstrom kWh'], ['sharePct', 'Anteil %'], ['thresholdKwh', 'Schwelle kWh'],
+    ['lockedMinutes', 'Sperre min'], ['uncertainMinutes', 'Akkuwerte unsicher min (nicht abgebucht)'], ['uncertainGridToBatteryKwh', 'davon Netz→Akku bei unsicheren Werten kWh'], ['filteredGridToBatteryKwh', 'Netz→Akku verworfen (Regelrauschen, kurze Regelvorgänge) kWh'], ['gridKwh', 'Netzstrom kWh'], ['sharePct', 'Anteil %'], ['thresholdKwh', 'Schwelle kWh'],
     ['lockApplies', 'Sperre gilt'], ['reason', 'Grund'], ['actor', 'Ausgelöst von'],
   ];
   function protocolCsv() {
@@ -619,6 +638,10 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     const entry = { ts: new Date(nowMs).toISOString(), event: 'reset', gridKwh: r3(before / 1000), reason: String(reason || '').slice(0, 200), actor };
     st.gridWh = 0;
     st.share = st.storedWh ? 0 : st.share;
+    // Vorgemerkte Netzladung stammt von vor dem Reset: nie mehr buchen
+    // (Gegenprüfung 52a6c756, P3). Das Fenster bleibt — läuft die Ladung
+    // weiter, zählt sie ab jetzt ohne neue Anlaufzeit.
+    for (const x of inflowFilter?.samples || []) x.booked = true;
     appendProtocol(entry);
     log('grid_share_reset', { gridKwh: entry.gridKwh, reason: entry.reason, actor });
     const wasLocked = st.locked;

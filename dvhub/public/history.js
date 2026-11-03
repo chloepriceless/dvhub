@@ -2817,7 +2817,7 @@ async function loadGridShareCard() {
         + '<th>Akku→Netz aus Netzstrom kWh</th><th>Verlust kWh</th><th>Netzstrom Tagesende kWh</th><th>Sperre min</th><th title="Akkuwerte unsicher (Lesefehler, veraltet, eingefroren): in dieser Zeit wurde nichts abgebucht">Unsicher min</th></tr></thead>'
         + `<tbody>${todayRow}${days.map(row).join('')}</tbody></table>`
         + '<p class="card-sub">Netz→Akku erhöht den Netzstrom-Anteil, Entladen senkt ihn anteilig (Anteil × Entladung), Verluste anteilig. '
-        + 'Es zählt jede Netzladung, gleich wer sie auslöst — ab 150 W, die mindestens 30 s anhalten (kürzeres oder schwächeres Regelpendeln nicht). '
+        + 'Es zählt jede Netzladung, gleich wer sie auslöst — wenn innerhalb von 30 s im Mittel mindestens 150 W und mindestens 15 s lang 150 W oder mehr fließen (Regelpendeln und kurze Regelvorgänge nicht). '
         + 'Solange mehr als die Schwelle im Akku ist, speist der Akku nicht ins Netz ein; PV-Einspeisung bleibt. „Akku→Netz aus Netzstrom“ soll 0 sein '
         + '(Rest: Regelpuffer des Standard-Sollwerts).</p>';
     }
