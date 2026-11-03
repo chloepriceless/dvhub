@@ -1868,10 +1868,32 @@ export function createHistoryImportManager({
       };
     }
     const autoNow = startOfUtcDayIso(options.now || new Date());
-    const plan = await collectGapWindows({
-      ...options,
-      now: autoNow
-    });
+    let plan;
+    try {
+      plan = await collectGapWindows({
+        ...options,
+        now: autoNow
+      });
+    } catch (error) {
+      // Die Lückensuche selbst (Abdeckung aus der Datenbank) kann beim Start
+      // scheitern, z. B. wenn die Datenbank noch nicht bereit ist. Vorher
+      // lehnte der Aufruf ab und nichts wurde wiederholt (Gesamtprüfung
+      // Release 1.0.9) — jetzt nach denselben Fristen wie der Nachimport.
+      const attempt = Number(options.autoAttempt || 0);
+      const retryInMs = attempt < autoRetryDelaysMs.length ? autoRetryDelaysMs[attempt] : null;
+      log('history_auto_backfill_error', {
+        phase: 'gap_search',
+        error: error?.message || String(error),
+        attempt: attempt + 1,
+        retryInMs
+      }, { severity: 'warn' });
+      if (retryInMs != null) {
+        scheduleImpl(() => startAutomaticBackfill({ ...options, autoAttempt: attempt + 1 })
+          .catch((e) => log('history_auto_backfill_error', { phase: 'gap_search', error: e?.message || String(e), attempt: attempt + 2, retryInMs: null }, { severity: 'warn' })),
+        retryInMs);
+      }
+      return { ok: false, started: false, error: error?.message || String(error) };
+    }
     if (!plan.gapWindows.length) {
       return {
         ok: true,

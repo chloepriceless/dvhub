@@ -651,3 +651,30 @@ test('Voll-Nachimport: Rückfall auf Tageswerte nutzt denselben Konfigurationsst
   assert.equal(jobs.at(-1).meta.interval, 'days');
   assert.ok(jobs.every((j) => j.sourceAccount === String(SITE_ID)), JSON.stringify(jobs.map((j) => j.sourceAccount)));
 });
+
+// Gesamtprüfung Release 1.0.9: Die Lückensuche selbst (Abdeckung aus der
+// Datenbank) beim Start war ungeschützt — scheiterte sie (Datenbank noch nicht
+// bereit), lehnte startAutomaticBackfill ab und nichts wurde wiederholt.
+test('Auto-Nachimport: gescheiterte Lückensuche beim Start wird wiederholt', async () => {
+  const base = fakeVrm();
+  let dbDown = true;
+  const store = { ...gapStore(), async listImportJobRanges() { if (dbDown) throw new Error('Datenbank nicht bereit'); return []; } };
+  const logs = [];
+  const scheduled = [];
+  const manager = createHistoryImportManager({
+    store, fetchImpl: base.fetchImpl, waitImpl: async () => {},
+    log: (event, details) => logs.push({ event, details }),
+    scheduleImpl: (fn, ms) => { scheduled.push({ fn, ms }); },
+    autoRetryDelaysMs: [1000, 2000],
+    telemetryConfig: { historyImport: { enabled: true, provider: 'vrm', vrmPortalId: String(SITE_ID), vrmToken: 'tok-gap-search' } },
+  });
+  const r = await manager.startAutomaticBackfill({ now: '2026-01-08T00:00:00.000Z' });
+  assert.equal(r.started, false);
+  assert.equal(scheduled.length, 1, 'Wiederholung geplant');
+  assert.equal(scheduled[0].ms, 1000);
+  assert.equal(logs.find((l) => l.event === 'history_auto_backfill_error')?.details?.phase, 'gap_search');
+  dbDown = false;
+  const second = await scheduled[0].fn(); await flush();
+  assert.equal(second?.started, true, 'zweiter Versuch startet den Nachimport');
+  assert.equal(scheduled.length, 1, 'nach Erfolg nichts mehr geplant');
+});
