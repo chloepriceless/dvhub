@@ -1219,8 +1219,19 @@ fi
 # git-Box: die einmalige Umstellung auf Pakete planen (als Zeitgeber-Unit, nach
 # dem Neustart der Oberfläche; nur offizielles Repo, sauberer Checkout,
 # Schlüssel vorhanden, höchstens alle 24 h). NON-FATAL.
+# Er ist billig (Zustand lesen, Zeitgeber planen) und läuft auch, wenn das
+# Startbudget aufgebraucht ist — sonst bliebe ein unterbrochenes Update liegen,
+# solange die Starts langsam sind. Mindestens 10 s; die Unit hat 30 s Luft über
+# dem Budget (TimeoutStartSec=120).
 if [[ -x "${RELEASE_HELPER_PATH:-}" ]]; then
-  pu_bounded 20 "$RELEASE_HELPER_PATH" boot-hook || echo "  WARN: dvhub-release boot-hook fehlgeschlagen (non-fatal)" >&2
+  BH_LIMIT="$(pu_left)"
+  (( BH_LIMIT > 20 )) && BH_LIMIT=20
+  (( BH_LIMIT < 10 )) && BH_LIMIT=10
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 3 "$BH_LIMIT" "$RELEASE_HELPER_PATH" boot-hook || echo "  WARN: dvhub-release boot-hook fehlgeschlagen (non-fatal)" >&2
+  else
+    "$RELEASE_HELPER_PATH" boot-hook || echo "  WARN: dvhub-release boot-hook fehlgeschlagen (non-fatal)" >&2
+  fi
 fi
 # END DVHUB RELEASE BOOT HOOK
 

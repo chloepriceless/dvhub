@@ -498,7 +498,8 @@ function verifyTree(root, manifest) {
       if (f.type === 'symlink') {
         if (!st.isSymbolicLink() || fs.readlinkSync(abs) !== f.target) throw new Error(`Symlink weicht ab: ${r}`);
         const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(r), f.target));
-        if (path.posix.isAbsolute(f.target) || resolved.startsWith('../')) throw new Error(`Symlink zeigt aus dem Paket: ${r}`);
+        // Auch genau „..“ (x → .., a/b → ../..) zeigt hinaus (Gesamtprüfung 03.11.2026).
+        if (path.posix.isAbsolute(f.target) || resolved === '..' || resolved.startsWith('../')) throw new Error(`Symlink zeigt aus dem Paket: ${r}`);
       } else {
         if (!st.isFile()) throw new Error(`keine Datei: ${r}`);
         if (st.size !== f.size || sha256File(abs) !== f.sha256) throw new Error(`Prüfsumme weicht ab: ${r}`);
@@ -888,7 +889,10 @@ async function jobInstall(s, job, { version, channel }) {
     finalizeInstall(s, st, manifest.version, job);
     job.finish('ok', `${manifest.version} installiert und gesund`, { result: 'ok', version: manifest.version, from });
   } else {
-    fs.rmSync(path.join(releasesDir(s), manifest.version), { recursive: true, force: true });
+    // Das gescheiterte Release weg — außer es ist das vorige (nach einem
+    // Rückweg erneut installiert): darauf zeigt st.previous, der Rückweg
+    // bliebe sonst ohne Ziel (Gesamtprüfung 03.11.2026).
+    if (manifest.version !== st.previous) fs.rmSync(path.join(releasesDir(s), manifest.version), { recursive: true, force: true });
     if (outcome === 'rolled_back') {
       job.finish('rolled_back', `${manifest.version} war nicht gesund — ${from} läuft wieder`, { result: 'rolled_back', version: manifest.version, from });
     } else {
@@ -1274,9 +1278,12 @@ async function actionCheck(s, channel) {
 }
 
 // Startet den Auftrag als eigene Unit (überlebt den Neustart von DVhub).
-function spawnJob(s, unit, jobArgs, { delayS = 0 } = {}) {
+function assertIdle(s, unit, delayS = 0) {
   if (unitActive(s, `${unit}.service`) || (delayS && unitActive(s, `${unit}.timer`))) throw new Exit(4, 'ein Update-Auftrag läuft bereits');
   if (lockHeld(s)) throw new Exit(4, 'ein Update-Auftrag läuft bereits');
+}
+function spawnJob(s, unit, jobArgs, { delayS = 0 } = {}) {
+  assertIdle(s, unit, delayS);
   const args = ['--collect', '--quiet', `--unit=${unit}`, '--description=DVhub Release-Paket',
     `--property=StandardOutput=append:${path.join(s.stateDir, 'job.log')}`,
     `--property=StandardError=append:${path.join(s.stateDir, 'job.log')}`];
@@ -1304,9 +1311,24 @@ async function main(argv, s = settings()) {
     case 'rollback': {
       if (!isPackageLayout(s)) throw new Exit(3, 'keine Paket-Installation');
       const jobArgs = a.action === 'install' ? ['install', a.version, a.channel] : ['rollback'];
-      writeJsonAtomic(statusFile(s), { job: a.action, state: 'queued', phase: 'queued', message: 'Auftrag gestartet', version: a.version || null, started: new Date().toISOString(), log: [] });
+      // Erst prüfen, dann „queued“ schreiben: sonst überschriebe ein
+      // abgelehnter Auftrag den Status des laufenden, und ein gescheitertes
+      // systemd-run ließe „queued“ für immer stehen (Gesamtprüfung 03.11.2026).
+      if (!s.test) assertIdle(s, JOB_UNIT);
+      const before = readJson(statusFile(s), null);
+      const queued = { job: a.action, state: 'queued', phase: 'queued', message: 'Auftrag gestartet', version: a.version || null, started: new Date().toISOString(), log: [] };
+      writeJsonAtomic(statusFile(s), queued);
       if (s.test) return runJob(s, { action: '_job', job: jobArgs[0], version: a.version, channel: a.channel });
-      spawnJob(s, JOB_UNIT, jobArgs);
+      try {
+        spawnJob(s, JOB_UNIT, jobArgs);
+      } catch (e) {
+        const now = readJson(statusFile(s), null);
+        if (now?.state === 'queued' && now.started === queued.started) {
+          if (e instanceof Exit && e.exitCode === 4 && before) writeJsonAtomic(statusFile(s), before);
+          else writeJsonAtomic(statusFile(s), { ...queued, state: 'failed', phase: 'done', message: `Auftrag nicht gestartet: ${e.message}`, result: 'failed', finished: new Date().toISOString() });
+        }
+        throw e;
+      }
       out({ ok: true, started: true, job: a.action });
       return 0;
     }
@@ -1377,7 +1399,18 @@ function recover(s) {
 }
 
 async function runJob(s, a) {
-  const release = lock(s);
+  let release;
+  try {
+    release = lock(s);
+  } catch (e) {
+    // Die Unit startete, aber ein anderer Auftrag hält die Sperre: das von
+    // main geschriebene „queued“ dieses Auftrags nicht stehen lassen.
+    const st = readJson(statusFile(s), null);
+    if (e instanceof Exit && st?.state === 'queued' && st.job === a.job) {
+      writeJsonAtomic(statusFile(s), { ...st, state: 'failed', phase: 'done', message: e.message, result: 'failed', finished: new Date().toISOString() });
+    }
+    throw e;
+  }
   // Nichts fortzusetzen (ein Auftrag davor hat es schon abgeschlossen): dann
   // auch kein Status — er überschriebe das Ergebnis dieses Auftrags.
   if (a.job === 'resume') {

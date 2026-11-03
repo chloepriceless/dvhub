@@ -1000,6 +1000,93 @@ test('Nacharbeit scheitert nach gesunder Umstellung → umgestellt, nicht „zur
   } finally { r.close(); }
 });
 
+// ── Weitere Befunde der Gesamtprüfung: Update-Helfer ────────────────────────
+
+test('verifyTree: Symlink genau auf .. (auch verschachtelt) zeigt aus dem Paket', () => {
+  for (const [p, target] of [['x', '..'], ['a/b', '../..'], ['a/c', '../../']]) {
+    const d = tmp('dvhub-tree-');
+    try {
+      fs.mkdirSync(path.join(d, path.dirname(p)), { recursive: true });
+      fs.symlinkSync(target, path.join(d, p));
+      assert.throws(() => H.verifyTree(d, { files: [{ path: p, type: 'symlink', target }] }), /zeigt aus dem Paket/, `${p} → ${target}`);
+    } finally { fs.rmSync(d, { recursive: true, force: true }); }
+  }
+  const d = tmp('dvhub-tree-');
+  try {
+    fs.mkdirSync(path.join(d, 'a'));
+    fs.symlinkSync('..', path.join(d, 'a', 'up'));
+    H.verifyTree(d, { files: [{ path: 'a/up', type: 'symlink', target: '..' }] });
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('gescheitertes install löscht nicht das vorige Release (st.previous)', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    r.publish({ version: '1.0.1' });
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0);
+    assert.equal((await r.run('rollback')).code, 0);
+    assert.equal(JSON.parse((await r.run('status')).out).previous, '1.0.1');
+    r.bad.add('1.0.1');
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 1);
+    assert.equal(r.status().state, 'rolled_back');
+    assert.equal(r.current(), 'releases/1.0.0');
+    assert.ok(fs.existsSync(path.join(r.box, 'releases', '1.0.1', '.dvhub-release.json')), 'voriges Release bleibt');
+    assert.equal(JSON.parse((await r.run('status')).out).previous, '1.0.1');
+  } finally { r.close(); }
+});
+
+// install/rollback aus der Oberfläche (nicht im Testbetrieb: Auftrag als Unit).
+async function runSpawned(r, argv, over = {}) {
+  const out = [];
+  const s = { ...r.settings(), test: false, write: (c) => { out.push(String(c)); return true; }, ...over };
+  const code = await H.main(argv, s).catch((e) => (e instanceof H.Exit ? e.exitCode : (out.push(e.message), 1)));
+  return { code, out: out.join('') };
+}
+
+test('install während ein Auftrag läuft: Exit 4, Status des laufenden Auftrags bleibt', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    const running = { job: 'resume', state: 'running', phase: 'health', message: 'läuft', started: new Date().toISOString(), log: [] };
+    fs.writeFileSync(path.join(r.state, 'status.json'), JSON.stringify(running));
+    fs.mkdirSync(path.join(r.state, 'lock'));
+    fs.writeFileSync(path.join(r.state, 'lock', 'owner'), JSON.stringify({ pid: process.pid }));
+    const res = await runSpawned(r, ['install', 'latest', 'stable']);
+    assert.equal(res.code, 4);
+    assert.deepEqual(r.status(), running);
+    assert.ok(!fs.existsSync(r.runLog), 'keine Unit gestartet');
+  } finally { r.close(); }
+});
+
+test('systemd-run scheitert: Status nicht dauerhaft „queued“', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    const failing = path.join(r.root, 'bin', 'systemd-run-kaputt');
+    fs.writeFileSync(failing, '#!/bin/sh\necho "Failed to start transient service unit" >&2\nexit 1\n', { mode: 0o755 });
+    const res = await runSpawned(r, ['install', 'latest', 'stable'], { systemdRun: failing });
+    assert.equal(res.code, 1);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /systemd-run/);
+    assert.equal(JSON.parse((await r.run('status')).out).running, false);
+  } finally { r.close(); }
+});
+
+test('Auftrags-Unit findet die Sperre belegt: „queued“ wird zu failed', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    // Wie nach main: queued geschrieben, Unit gestartet — inzwischen hält ein anderer Auftrag die Sperre.
+    fs.writeFileSync(path.join(r.state, 'status.json'), JSON.stringify({ job: 'install', state: 'queued', phase: 'queued', message: 'Auftrag gestartet', started: new Date().toISOString(), log: [] }));
+    fs.mkdirSync(path.join(r.state, 'lock'));
+    fs.writeFileSync(path.join(r.state, 'lock', 'owner'), JSON.stringify({ pid: process.pid }));
+    assert.equal((await r.run('_job', 'install', 'latest', 'stable')).code, 4);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /läuft bereits/);
+  } finally { r.close(); }
+});
+
 // ── Ausgelieferter Vertrauensanker ──────────────────────────────────────────
 
 // Ohne gültigen Schlüssel in release-keys/allowed_signers lehnt jede Box jedes

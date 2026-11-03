@@ -261,3 +261,32 @@ test('npm im Hintergrund und Update aus der Oberfläche teilen Sperre und Neusta
   assert.ok(SCRIPT.includes('NPM_RESTART_FLAG="${NPM_RESTART_FLAG:-/run/dvhub-npm-restart}"'));
   assert.ok(upd.includes('NPM_RESTART_FLAG=/run/dvhub-npm-restart'));
 });
+
+// Gesamtprüfung 03.11.2026: der boot-hook stand zuletzt und lief über
+// pu_bounded — war das Budget aufgebraucht, blieb er aus. Ein durch
+// Stromausfall unterbrochenes Paket-Update wurde dann nicht fortgesetzt (und
+// der nächste langsame Start übersprang ihn wieder). Er ist billig (Zustand
+// lesen, Zeitgeber planen) und bekommt eine eigene kurze Mindestzeit; die
+// Unit hat 30 s Luft über dem Budget (TimeoutStartSec=120).
+const BOOT_HOOK = () => block('# BEGIN DVHUB RELEASE BOOT HOOK', '# END DVHUB RELEASE BOOT HOOK');
+
+test('boot-hook läuft auch bei aufgebrauchtem Startbudget, mit kurzer eigener Zeitgrenze', () => {
+  const s = sandbox();
+  try {
+    s.fake('timeout', 'shift 3; exec "$@"');
+    s.fake('dvhub-release');
+    const env = { DVHUB_START_BUDGET_S: '90', RELEASE_HELPER_PATH: join(s.bin, 'dvhub-release') };
+    const r = s.run(`${BUDGET()}\nSECONDS=95\n${BOOT_HOOK()}`, env);
+    assert.equal(r.status, 0, r.stderr);
+    const c = s.calls();
+    assert.ok(c.includes('dvhub-release boot-hook'), c.join('\n'));
+    const t = c.find((l) => l.startsWith('timeout '));
+    assert.ok(t, 'mit Zeitgrenze');
+    const lim = Number(/^timeout -k \d+ (\d+) /.exec(t)?.[1]);
+    assert.ok(lim >= 5 && lim <= 15, `Zeitgrenze ${lim} s`);
+    // Mit Restbudget: höchstens 20 s wie bisher.
+    rmSync(join(s.dir, 'calls.log'));
+    s.run(`${BUDGET()}\nSECONDS=0\n${BOOT_HOOK()}`, env);
+    assert.ok(s.calls().some((l) => /^timeout -k \d+ 20 .*dvhub-release boot-hook$/.test(l)), s.calls().join('\n'));
+  } finally { s.cleanup(); }
+});
