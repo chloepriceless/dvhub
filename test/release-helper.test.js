@@ -783,6 +783,83 @@ test('unterbrochene Umstellung: rollback davor schließt sie erst ab', { timeout
   } finally { r.close(); }
 });
 
+// Unterbrochenes Paket-Update (st.pending) wie nach einem Stromausfall nach dem
+// Umschalten auf <version>.
+function interruptedUpdate(r, version, previous) {
+  const p = r.publish({ version });
+  const dest = path.join(r.box, 'releases', version);
+  fs.mkdirSync(dest);
+  assert.equal(spawnSync('tar', ['-xzf', p.file, '-C', dest]).status, 0);
+  H.switchCurrent(r.settings(), version);
+  const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+  st.pending = { op: 'install', version, previous, boot_id: 'x' };
+  fs.writeFileSync(path.join(r.state, 'state.json'), JSON.stringify(st));
+}
+const releasesOnDisk = (r) => fs.readdirSync(path.join(r.box, 'releases')).filter((n) => !n.startsWith('.')).sort();
+
+test('unterbrochenes Update (gesund): install davor bestätigt es erst, dann von dort weiter', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    interruptedUpdate(r, '1.0.1', '1.0.0');
+    r.publish({ version: '1.0.2' });
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.2');
+    assert.equal(st.previous, '1.0.1');
+    assert.deepEqual(releasesOnDisk(r), ['1.0.1', '1.0.2']);
+  } finally { r.close(); }
+});
+
+test('unterbrochenes Update (krank): install davor schaltet erst zurück, dann vom alten Stand weiter', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    interruptedUpdate(r, '1.0.1', '1.0.0');
+    r.bad.add('1.0.1');
+    r.publish({ version: '1.0.2' });
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 0, JSON.stringify(r.status()));
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.2');
+    assert.equal(st.previous, '1.0.0');
+    assert.deepEqual(releasesOnDisk(r), ['1.0.0', '1.0.2']);
+  } finally { r.close(); }
+});
+
+test('unterbrochenes Update (gesund): rollback davor bestätigt es erst, dann zurück', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    interruptedUpdate(r, '1.0.1', '1.0.0');
+    assert.equal((await r.run('rollback')).code, 0, JSON.stringify(r.status()));
+    assert.equal(r.current(), 'releases/1.0.0');
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.pending, null);
+    assert.equal(st.current, '1.0.0');
+    assert.equal(st.previous, '1.0.1');
+  } finally { r.close(); }
+});
+
+test('unterbrochene Umstellung wird beim install zurückgenommen → Status sagt das, nicht „keine Paket-Installation“', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    r.bad.add('1.0.1');
+    r.publish({ version: '1.0.2' });
+    const res = await r.run('install', 'latest', 'stable');
+    assert.equal(res.code, 1);
+    assert.equal(r.current(), null, 'git-Stand wieder da');
+    assert.equal(r.status().state, 'rolled_back');
+    assert.match(r.status().message, /unterbrochene Umstellung zurückgenommen/);
+    assert.doesNotMatch(r.status().message, /keine Paket-Installation/);
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null);
+    assert.equal(st.history.at(-1).result, 'migration_interrupted');
+  } finally { r.close(); }
+});
+
 // Hauptbefund 12: Scheitert nach einem gesunden Umschalten eine Nacharbeit
 // (Vertrauensdatei, alter Checkout, Aufräumen), galt der Auftrag als
 // gescheitert; im resume-Pfad blieb st.pending in state.json, und ein späterer

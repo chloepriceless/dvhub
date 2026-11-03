@@ -846,7 +846,7 @@ function finalizeInstall(s, st, version, job) {
 }
 
 async function jobInstall(s, job, { version, channel }) {
-  await settleInterrupted(s, job);
+  if (await settleInterrupted(s, job)) return;
   const st = loadState(s);
   const from = currentVersion(s);
   if (!from) throw new Exit(3, 'keine Paket-Installation (git-Box: Umstellung läuft über migrate)');
@@ -876,7 +876,7 @@ async function jobInstall(s, job, { version, channel }) {
 }
 
 async function jobRollback(s, job) {
-  await settleInterrupted(s, job);
+  if (await settleInterrupted(s, job)) return;
   const st = loadState(s);
   const from = currentVersion(s);
   if (!from) throw new Exit(3, 'keine Paket-Installation');
@@ -1127,12 +1127,17 @@ async function jobResume(s, job) {
 // Sonst überlebte st.migration die neue Installation, und ein späteres resume
 // nähme die Umstellung zurück — git-Unit und .legacy-git zurück, current und
 // das inzwischen vorige Release weg (Gesamtprüfung 03.11.2026, Befund 1).
+// Gibt true zurück, wenn der Auftrag danach nicht mehr laufen kann (Umstellung
+// zurückgenommen, Box wieder auf git); der Status nennt dann diesen Grund.
 async function settleInterrupted(s, job) {
   const st = loadState(s);
-  if (!st.migration && !st.pending) return;
+  if (!st.migration && !st.pending) return false;
   job.log('ein unterbrochener Auftrag liegt noch vor — zuerst abschließen');
   const r = await resumeInterrupted(s, st, job);
   job.log(`unterbrochener Auftrag: ${r.message}`);
+  if (currentVersion(s)) return false;
+  job.finish(r.state, `${r.message} — Auftrag nicht ausgeführt (Box wieder auf dem git-Stand)`, r.extra);
+  return true;
 }
 
 // Gibt { state, message, extra } zurück oder null, wenn nichts vorliegt.
@@ -1152,6 +1157,8 @@ async function resumeInterrupted(s, st, job) {
       return { state: 'ok', message: `Umstellung auf ${v} abgeschlossen (nach Unterbrechung)`, extra: { result: 'ok', version: v } };
     }
     revertMigration(s, st, job);
+    record(st, v, 'migration_interrupted');
+    saveState(s, st);
     restartService(s, job);
     await waitHealthy(s, null, job);
     return { state: 'rolled_back', message: 'unterbrochene Umstellung zurückgenommen', extra: { result: 'rolled_back', version: v } };
