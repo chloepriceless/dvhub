@@ -68,8 +68,15 @@ while [[ $# -gt 0 ]]; do
 done
 exit 0
 `);
+  // runuser: prüft als Dienstbenutzer — hier als Testbenutzer (ohne root).
+  fs.writeFileSync(path.join(bin, 'runuser'), `#!/usr/bin/env bash
+[[ "$1" == -u ]] && shift 2
+[[ "$1" == -- ]] && shift
+exec "$@"
+`);
   fs.chmodSync(path.join(bin, 'chown'), 0o755);
   fs.chmodSync(path.join(bin, 'openssl'), 0o755);
+  fs.chmodSync(path.join(bin, 'runuser'), 0o755);
   return { dir, cfg, outside, bin };
 }
 
@@ -198,6 +205,27 @@ test('TLS: Verweis ins Leere oder auf keine reguläre Datei → Warnung, Verweis
     assert.equal(fs.readlinkSync(path.join(t.cfg, 'tls', 'cert.pem')), path.join(t.outside, 'gibt-es-nicht.pem'));
     assert.ok(!fs.existsSync(path.join(t.outside, 'gibt-es-nicht.pem')), 'nichts durch den Verweis angelegt');
     assert.deepEqual(fs.readdirSync(t.outside).sort(), ['dvhub-update', 'opfer']);
+  } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
+});
+
+// Gegenprüfung e35b8c2a (P2): certbot legt privkey.pem 0600 root an — das
+// Ziel ist eine reguläre root-Datei, der Dienstbenutzer kann sie aber nicht
+// lesen; HTTPS bliebe aus, und das Protokoll sagte „OK“.
+test('TLS: Verweis auf eine Datei, die der Dienstbenutzer nicht lesen kann → Warnung mit Hinweis', { skip: process.getuid() === 0 && 'als root ist alles lesbar' }, () => {
+  const t = setup();
+  try {
+    const live = path.join(t.outside, 'live');
+    fs.mkdirSync(live);
+    fs.writeFileSync(path.join(live, 'fullchain.pem'), 'CERT\n');
+    fs.writeFileSync(path.join(live, 'privkey.pem'), 'KEY\n', { mode: 0o000 });
+    fs.mkdirSync(path.join(t.cfg, 'tls'));
+    fs.symlinkSync(path.join(live, 'fullchain.pem'), path.join(t.cfg, 'tls', 'cert.pem'));
+    fs.symlinkSync(path.join(live, 'privkey.pem'), path.join(t.cfg, 'tls', 'key.pem'));
+    const r = run(t, `SERVICE_USER="$(id -un)"`);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /key\.pem: Ziel für \S+ nicht lesbar/);
+    assert.doesNotMatch(r.stderr, /cert\.pem: Ziel/);
+    assert.equal(fs.readlinkSync(path.join(t.cfg, 'tls', 'key.pem')), path.join(live, 'privkey.pem'), 'Verweis bleibt');
   } finally { fs.rmSync(t.dir, { recursive: true, force: true }); }
 });
 

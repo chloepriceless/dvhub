@@ -251,7 +251,8 @@ Nach einer Sicherheitsprüfung gehärtet; Einzelheiten zu den Befunden veröffen
   Update-Skripte folgen im Konfigurationsordner keinen Verweisen mehr und führen beim Installieren keine
   Paket-Skripte aus. Eigene Zertifikate unter `tls/` dürfen weiter Verweise sein (z. B. `cert.pem` und `key.pem`
   auf certbot unter `/etc/letsencrypt/live/…`); sie bleiben bei jedem Start erhalten, ein selbstsigniertes
-  Zertifikat entsteht nur, wenn dort gar keins liegt.
+  Zertifikat entsteht nur, wenn dort gar keins liegt. Der Dienstbenutzer braucht Leserecht auf die Ziele (bei
+  certbot z. B. per deploy-hook); fehlt es, warnt das Start-Protokoll.
 - **Weitere Härtungen** an der Adressprüfung ausgehender Verbindungen (auch IPv6), an statischen Dateien, an
   Telemetrie-Abfragen, an der EOS-Oberfläche, am Installateurs-Portal und am Handy-App-Relay (Speicher- und
   Verbindungsgrenzen).

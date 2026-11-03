@@ -651,6 +651,13 @@ dvhub_tls_target_ok() {  # <eintrag im aktuellen ordner> <dienstbenutzer>
   uid="$(id -u "$2" 2>/dev/null)" && owner=( \( -user 0 -o -user "$uid" \) )
   [[ -n "$(find -L "./$1" -maxdepth 0 -type f "${owner[@]}" -print 2>/dev/null)" ]]
 }
+# Lesbar für den Dienstbenutzer? Die App liest als er (certbot legt
+# privkey.pem 0600 root an). Geprüft als er selbst (runuser), nicht als root;
+# ohne runuser oder Benutzer gilt es als lesbar (keine Falschmeldung).
+dvhub_tls_readable() {  # <eintrag im aktuellen ordner> <dienstbenutzer>
+  command -v runuser >/dev/null 2>&1 && id -u "$2" >/dev/null 2>&1 || return 0
+  runuser -u "$2" -- test -r "./$1"
+}
 dvhub_tls_shown() {  # <verweis> — Ziel ohne Steuerzeichen, gekürzt (stammt vom Dienstbenutzer)
   printf '%s' "$(readlink -- "$1" 2>/dev/null)" | LC_ALL=C tr -c '[:print:]' '?' | cut -c1-200
 }
@@ -664,8 +671,11 @@ dvhub_tls_selfsigned() {  # <konfigurationsordner> <dienstbenutzer> [<vorsatz>�
     for f in cert.pem key.pem; do
       if [[ -L "$f" ]]; then
         linked=1
-        dvhub_tls_target_ok "$f" "$user" \
-          || echo "  WARN: $tls_real/$f verweist auf „$(dvhub_tls_shown "$f")“ — keine reguläre Datei von root oder $user; HTTPS lädt es so nicht (Verweis bleibt)" >&2
+        if ! dvhub_tls_target_ok "$f" "$user"; then
+          echo "  WARN: $tls_real/$f verweist auf „$(dvhub_tls_shown "$f")“ — keine reguläre Datei von root oder $user; HTTPS lädt es so nicht (Verweis bleibt)" >&2
+        elif ! dvhub_tls_readable "$f" "$user"; then
+          echo "  WARN: $tls_real/$f: Ziel für $user nicht lesbar — HTTPS bleibt aus, bis $user es lesen darf (certbot: z. B. per deploy-hook Gruppe $user mit Leserecht auf archive/, live/ und die Dateien; Verweis bleibt)" >&2
+        fi
       elif [[ -e "$f" && ! -f "$f" ]]; then
         echo "  WARN: $tls_real/$f ist keine Datei — bleibt unverändert" >&2
       fi
