@@ -1056,6 +1056,32 @@ test('verifyTree: Symlink genau auf .. (auch verschachtelt) zeigt aus dem Paket'
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
 
+// Gegenprüfung a095db3a (P3): lexikalisch bleibt q → p/p/p/p/p/../../../../etc
+// innen (p/etc), der Kern löst p → . aber vorher auf und landet in /etc.
+test('verifyTree: Symlink-Ziel über einen anderen Symlink des Pakets wird abgelehnt', () => {
+  const d = tmp('dvhub-tree-');
+  try {
+    fs.symlinkSync('.', path.join(d, 'p'));
+    fs.symlinkSync('p/p/p/p/p/../../../../etc', path.join(d, 'q'));
+    const files = [{ path: 'p', type: 'symlink', target: '.' }, { path: 'q', type: 'symlink', target: 'p/p/p/p/p/../../../../etc' }];
+    assert.throws(() => H.verifyTree(d, { files }), /über einen anderen Symlink|zeigt aus dem Paket/);
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+  // node_modules/.bin-Muster bleibt erlaubt; ein Verweis AUF einen Verweis auch.
+  const e = tmp('dvhub-tree-');
+  try {
+    fs.mkdirSync(path.join(e, 'nm', '.bin'), { recursive: true });
+    fs.mkdirSync(path.join(e, 'nm', 'pkg', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(e, 'nm', 'pkg', 'bin', 'cli.js'), 'x');
+    fs.symlinkSync('../pkg/bin/cli.js', path.join(e, 'nm', '.bin', 'cli'));
+    fs.symlinkSync('nm/.bin/cli', path.join(e, 'top'));
+    H.verifyTree(e, { files: [
+      { path: 'nm/pkg/bin/cli.js', sha256: sha256(Buffer.from('x')), size: 1, mode: '0644' },
+      { path: 'nm/.bin/cli', type: 'symlink', target: '../pkg/bin/cli.js' },
+      { path: 'top', type: 'symlink', target: 'nm/.bin/cli' },
+    ] });
+  } finally { fs.rmSync(e, { recursive: true, force: true }); }
+});
+
 test('gescheitertes install löscht nicht das vorige Release (st.previous)', { timeout: 60000 }, async () => {
   const r = await makeRig();
   try {

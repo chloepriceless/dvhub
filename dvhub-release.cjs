@@ -484,6 +484,7 @@ function ensureSpace(s, size) {
 // zusätzlich, Symlinks bleiben im Release.
 function verifyTree(root, manifest) {
   const want = new Map(manifest.files.map((f) => [f.path, f]));
+  const links = new Set(manifest.files.filter((f) => f.type === 'symlink').map((f) => f.path));
   const seen = new Set();
   const walk = (dir, rel) => {
     for (const name of fs.readdirSync(dir)) {
@@ -497,9 +498,7 @@ function verifyTree(root, manifest) {
       seen.add(r);
       if (f.type === 'symlink') {
         if (!st.isSymbolicLink() || fs.readlinkSync(abs) !== f.target) throw new Error(`Symlink weicht ab: ${r}`);
-        const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(r), f.target));
-        // Auch genau „..“ (x → .., a/b → ../..) zeigt hinaus (Gesamtprüfung 03.11.2026).
-        if (path.posix.isAbsolute(f.target) || resolved === '..' || resolved.startsWith('../')) throw new Error(`Symlink zeigt aus dem Paket: ${r}`);
+        if (path.posix.isAbsolute(f.target) || symlinkEscapes(r, f.target, links)) throw new Error(`Symlink zeigt aus dem Paket: ${r}`);
       } else {
         if (!st.isFile()) throw new Error(`keine Datei: ${r}`);
         if (st.size !== f.size || sha256File(abs) !== f.sha256) throw new Error(`Prüfsumme weicht ab: ${r}`);
@@ -510,6 +509,28 @@ function verifyTree(root, manifest) {
   };
   walk(root, '');
   for (const p of want.keys()) if (!seen.has(p)) throw new Error(`Datei fehlt im Paket: ${p}`);
+}
+
+// Ziel Teil für Teil auflösen, wie der Kern es täte: über die Paketwurzel
+// hinaus (auch genau „..“: x → .., a/b → ../..) oder über einen anderen
+// Symlink des Pakets hinweg (p → . und q → p/p/p/../../../etc: lexikalisch
+// innen, tatsächlich draußen) gilt als „zeigt hinaus“. Der Ordner des Links
+// selbst besteht aus echten Ordnern (der Rundgang folgt keinen Links).
+// Gesamtprüfung 03.11.2026 und Gegenprüfung a095db3a.
+function symlinkEscapes(rel, target, links) {
+  const dir = path.posix.dirname(rel);
+  const parts = dir === '.' ? [] : dir.split('/');
+  const segs = String(target).split('/').filter((x) => x && x !== '.');
+  for (let i = 0; i < segs.length; i++) {
+    if (segs[i] === '..') {
+      if (!parts.length) return true;
+      parts.pop();
+      continue;
+    }
+    parts.push(segs[i]);
+    if (i < segs.length - 1 && links.has(parts.join('/'))) return true;
+  }
+  return false;
 }
 
 function unpack(s, tarball, version, { channel, job }) {
