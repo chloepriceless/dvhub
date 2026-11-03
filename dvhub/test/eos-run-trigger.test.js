@@ -365,3 +365,19 @@ test('stop() während eines Laufs: danach plant sich nichts mehr ein', async () 
   await h.trigger.kick('replan:config');
   assert.equal(h.timers.length, 0);
 });
+
+// Gegenprüfung a80fa938 (P3): kick()/trigger() nach stop() starteten nach
+// Ablauf der 2-min-Frist noch einen ganzen Lauf (Abschalten: ein laufender
+// runOptimization ruft kick('no_plan')).
+test('nach stop(): kick() und trigger() starten keinen Lauf mehr', async () => {
+  const h = harness();
+  h.trigger.start();
+  h.trigger.stop();
+  h.nowMs += 10 * 60_000;
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  assert.equal((await h.trigger.kick('no_plan')).skipped, 'stopped');
+  assert.equal((await h.trigger.trigger('boundary')).skipped, 'stopped');
+  assert.equal(h.posts.length, 0);
+  h.trigger.start();
+  assert.equal((await h.trigger.trigger('boundary')).ok, true, 'start() hebt den Stopp auf');
+});

@@ -218,6 +218,9 @@ export function createEosRunTrigger({
 
   /** Lauf anstoßen, wenn keiner läuft. Wirft nie. */
   function trigger(reason = 'boundary') {
+    // Nach stop() keinen Lauf mehr anstoßen — auch nicht über kick() aus einem
+    // noch laufenden runOptimization beim Abschalten (Gegenprüfung a80fa938, P3).
+    if (stopped) return Promise.resolve({ ok: false, skipped: 'stopped' });
     if (!isActive()) return Promise.resolve({ ok: false, skipped: 'inactive' });
     if (inFlight) {
       log('eos_run_skipped', { reason, error: 'voriger Lauf rechnet noch' });
@@ -274,6 +277,7 @@ export function createEosRunTrigger({
 
   /** Außer der Reihe (EOS neu gestartet, noch kein Plan) — höchstens alle 2 min. */
   function kick(reason) {
+    if (stopped) return Promise.resolve({ ok: false, skipped: 'stopped' });
     const replan = String(reason || '').startsWith('replan:');
     if (inFlight || now() - lastAttemptAt < EOS_RUN_KICK_MIN_GAP_MS) {
       if (replan) { pendingReplan = reason; armPending(); }
