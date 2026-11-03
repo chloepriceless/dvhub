@@ -4119,6 +4119,12 @@ export function createApiRoutes(ctx) {
       if (typeof body.brokerUrl === 'string' && ([...body.brokerUrl.trim()].some((ch) => ch === '\\' || /\s/.test(ch) || ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f) || body.brokerUrl.trim().length > 256)) {
         return json(res, 400, { ok: false, error: 'invalid_broker_url' });
       }
+      // Nicht lesbare Adressen (new URL wirft) schwärzt redactUrlCreds alle
+      // gleich zu „***@redacted“ — der Vergleich unten sähe zwei verschiedene
+      // als gleich (Gegenprüfung 50af8805, P3).
+      if (typeof body.brokerUrl === 'string' && body.brokerUrl.trim()) {
+        try { new URL(body.brokerUrl.trim()); } catch { return json(res, 400, { ok: false, error: 'invalid_broker_url' }); }
+      }
       if (typeof body.brokerUrl === 'string'
         && redactUrlCreds(body.brokerUrl.trim()) !== redactUrlCreds(String(cur.brokerUrl || '').trim())
         && denySupportConsent(req, res, 'mqtt_broker')) return;

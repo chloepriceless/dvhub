@@ -522,5 +522,11 @@ test('Support-Tunnel: keinen anderen MQTT-Broker eintragen (bleibender Steuerweg
   assert.equal(bs.status, 400, JSON.stringify(bs.body));
   assert.equal(bs.body.error, 'invalid_broker_url');
   assert.equal((await call({ brokerUrl: 'mqtt://x@192.168.1.5:1883 evil' }, false)).status, 400, 'Leerzeichen');
+  // Nicht lesbare Adresse mit @ (Gegenprüfung 50af8805, P3): gespeichert ist eine
+  // ebenfalls nicht lesbare — beide würden zu „***@redacted“.
+  box.mqtt.brokerUrl = 'mqtt://user:pa#ss@192.168.1.5:1883';
+  const bad = await call({ brokerUrl: 'mqtt://a:b@evil.example.net^' }, true);
+  assert.equal(bad.status, 400, JSON.stringify(bad.body));
+  assert.equal(bad.body.error, 'invalid_broker_url');
   assert.notEqual((await call({ brokerUrl: 'mqtts://broker.example.net' }, false)).status, 403, 'vom Heimnetz aus weiter möglich');
 });
