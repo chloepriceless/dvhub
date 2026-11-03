@@ -10,9 +10,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApiRoutes, actorContext } from '../routes-api.js';
+import { restoreRedacted } from '../config-redaction.js';
 import { SUPPORT_WEB_PORT_DEFAULT, supportWebPort } from '../services/support-tunnel.js';
 
 function mockRes() {
@@ -318,4 +320,51 @@ test('Support-Listener entfernt Weiterleitungs-Kopfzeilen (X-Forwarded-For)', as
     await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: server.address().port, path: '/', headers: { 'x-forwarded-for': '192.168.1.5', forwarded: 'for=192.168.1.5', 'x-real-ip': '192.168.1.5', 'x-forwarded-host': 'evil' } }, (r) => { r.resume(); r.on('end', resolve); }).on('error', reject));
     for (const h of ['x-forwarded-for', 'forwarded', 'x-real-ip', 'x-forwarded-host']) assert.equal(headers[h], undefined, h);
   } finally { server.close(); }
+});
+
+// Gegenprüfung Release 1.0.9 (P1): Ein selbst versiegelter `_encryptedSecrets`-
+// Block mit `apiToken` und migrate:false kam an der Token-Sperre vorbei — sie
+// prüfte vor dem Entschlüsseln, applySecrets() übernahm danach auch apiToken.
+function sealRawSecrets(secrets, password) {
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const key = crypto.pbkdf2Sync(Buffer.from(password, 'utf8'), salt, 210000, 32, 'sha256');
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const data = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(secrets), 'utf8')), cipher.final()]);
+  return { v: 1, alg: 'aes-256-gcm', kdf: 'pbkdf2-sha256', iter: 210000, salt: salt.toString('base64'), iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64'), paths: Object.keys(secrets) };
+}
+
+test('Support-Tunnel: versiegelter Block mit apiToken setzt kein Token (Import und Speichern)', async () => {
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, support: { localUser: { enabled: false } } };
+  const { ctx, saved } = ctxWith(box, {
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+    getConfigPath: () => '/nonexistent/config.json', getServiceActionsEnabled: () => true,
+  });
+  const routes = createApiRoutes(ctx);
+  const evil = crypto.randomBytes(24).toString('base64url');
+  for (const p of ['/api/config/import', '/api/config']) {
+    const blob = sealRawSecrets({ apiToken: evil, 'mqtt.password': 'mq' }, 'pw-support-1');
+    const res = mockRes();
+    const body = { config: { httpPort: 8080, _encryptedSecrets: blob }, password: 'pw-support-1', migrate: false };
+    await routes.handleRequest(makeReq('POST', p, body, { viaSupport: true }), res, new URL(`http://x${p}`));
+    assert.equal(res._captured.status, 200, `${p}: ${res._captured.body}`);
+    const last = saved.at(-1);
+    assert.ok(last, `${p}: gespeichert`);
+    assert.notEqual(last.apiToken, evil, `${p}: Token nicht über den Tunnel gesetzt`);
+    assert.equal(last.mqtt?.password, 'mq', `${p}: andere Geheimnisse kommen weiter an`);
+    // Der Wert, den restoreRedacted einsetzt, ist der der Box.
+    assert.equal(restoreRedacted(last, box).apiToken, box.apiToken, `${p}: Token der Box bleibt`);
+  }
+  // Ohne apiToken im Paket darf der Tunnel das Token auch nicht löschen.
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/config/import', { config: { httpPort: 8080 } }, { viaSupport: true }), res, new URL('http://x/api/config/import'));
+  assert.equal(res._captured.status, 200, res._captured.body);
+  assert.equal(restoreRedacted(saved.at(-1), box).apiToken, box.apiToken, 'Token nicht über den Tunnel gelöscht');
+});
+
+test('applySecrets übernimmt nie apiToken — nur der Geräte-Tausch (__apiToken) setzt es', async () => {
+  const { applySecrets } = await import('../services/config-secrets-crypto.js');
+  const out = applySecrets({ apiToken: 'b'.repeat(32) }, { apiToken: 'c'.repeat(40), 'mqtt.password': 'mq' });
+  assert.equal(out.apiToken, 'b'.repeat(32));
+  assert.equal(out.mqtt.password, 'mq');
 });

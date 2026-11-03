@@ -232,8 +232,9 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
 Nach einer Sicherheitsprüfung gehärtet; Einzelheiten zu den Befunden veröffentlichen wir nicht. Spürbar sind:
 
 - **Support-Tunnel:** Über den Fern-Support lassen sich keine Freigaben mehr erteilen (Kopplungen, Handy-App,
-  Zugänge, Voll-Export, Geräte-Tausch, Token-Wechsel); er läuft über einen eigenen Zugang und gilt wie ein Gerät im
-  Heimnetz. Der Support kann einen Tunnel nicht selbst verlängern.
+  Zugänge, Voll-Export, Geräte-Tausch, Token-Wechsel — auch nicht über eine eingespielte Sicherung); er läuft über
+  einen eigenen Zugang und gilt wie ein Gerät im Heimnetz. Der Support kann einen Tunnel nicht selbst verlängern.
+  Das API-Token übernimmt ein Sicherungs-Import nur beim Geräte-Tausch.
 - **Geräte-Tausch:** Der Import einer Sicherung auf eine neue Box verlangt das API-Token der Box.
 - **Zugangsdaten folgen der Adresse:** Ändert sich die Adresse eines Dienstes (z. B. Benachrichtigungen, E-Auto,
   Wallbox) auf einen anderen Rechner, muss das Passwort bzw. Token neu eingegeben werden.

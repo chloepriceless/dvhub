@@ -147,18 +147,6 @@ export function createConfigRoutes(deps) {
           if (!requireBootstrapToken(req, res)) return;
         }
       }
-      // Über den Support-Tunnel (Gegenprüfung fbb2dc4b, P2): API-Token und
-      // support.* (Support-Login, Tunnel-Laufzeit) bleiben, wie die Box sie hat —
-      // sonst holte sich der Support ein dauerhaftes Token bzw. schaltete den
-      // abgeschalteten Support-Login wieder ein.
-      if (req?.dvhubSupportTunnel === true) {
-        const cur = ctx.getRawCfg?.() || {};
-        if (Object.prototype.hasOwnProperty.call(body.config, 'apiToken') && body.config.apiToken !== REDACTED && body.config.apiToken !== cur.apiToken) {
-          body.config.apiToken = REDACTED; // restoreRedacted setzt den Wert der Box ein
-        }
-        if (cur.support === undefined) delete body.config.support;
-        else body.config.support = JSON.parse(JSON.stringify(cur.support));
-      }
       // Fernzugang, Datenspende und Ortsnetz haben eigene Wege — siehe
       // services/config-protected-keys.js. Ein Geräte-Tausch (unten) bringt
       // sie aus der Datei mit, alles andere lässt sie, wie die Box sie hat.
@@ -210,6 +198,22 @@ export function createConfigRoutes(deps) {
             files: migrationFiles ? Object.keys(migrationFiles).length : 0,
           }, actorContext(req));
         }
+      }
+      // Über den Support-Tunnel (Gegenprüfung fbb2dc4b, P2): API-Token und
+      // support.* (Support-Login, Tunnel-Laufzeit) bleiben, wie die Box sie hat —
+      // sonst holte sich der Support ein dauerhaftes Token bzw. schaltete den
+      // abgeschalteten Support-Login wieder ein.
+      // Gegenprüfung Release 1.0.9 (P1): erst NACH allen Import- und
+      // Entschlüsselungsschritten — vorher kam ein selbst versiegelter
+      // `_encryptedSecrets`-Block mit apiToken (migrate:false) daran vorbei.
+      // Immer den Stand der Box, auch wenn das Feld fehlt: sonst löschte ein
+      // Import ohne apiToken das Token der Box.
+      if (req?.dvhubSupportTunnel === true) {
+        const cur = ctx.getRawCfg?.() || {};
+        if (cur.apiToken === undefined) delete body.config.apiToken;
+        else body.config.apiToken = REDACTED; // restoreRedacted setzt den Wert der Box ein
+        if (cur.support === undefined) delete body.config.support;
+        else body.config.support = JSON.parse(JSON.stringify(cur.support));
       }
       // Plan 09-01 (D-05, supersedes Plan 08-01 rejection): apiToken stays
       // OPTIONAL. Empty / null / undefined apiToken is a VALID config state

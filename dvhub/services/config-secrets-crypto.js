@@ -249,10 +249,14 @@ export function decryptSecrets(blob, password) {
 
 // Write decrypted secrets back into a CLONE of config. Only known REDACTED_PATHS
 // are restored — a malicious/old blob can never inject arbitrary config keys.
+// apiToken nie (Gegenprüfung Release 1.0.9, P1): Exporte führen es nur unter
+// __apiToken, und das übernimmt allein der abgesicherte Geräte-Tausch
+// (migrate:true mit dem Token dieser Box). Ein selbst versiegelter Block mit
+// `apiToken` hätte sonst ohne Kenntnis des alten ein neues Token gesetzt.
 export function applySecrets(config, secrets) {
   const copy = JSON.parse(JSON.stringify(config || {}));
   for (const [path, value] of Object.entries(secrets || {})) {
-    if (!REDACTED_PATHS.includes(path)) continue;
+    if (!REDACTED_PATHS.includes(path) || PORTABLE_SKIP.has(path)) continue;
     if (value === undefined || value === null) continue;
     setPath(copy, path, value);
   }
