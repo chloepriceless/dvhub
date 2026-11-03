@@ -1667,10 +1667,19 @@ ctx.licenseService = licenseService;
 // by startMonitoringHeartbeat() — null when no/blocked pushUrl, in which case
 // the hook is a safe no-op. A stable wrapper on ctx survives heartbeat reloads.
 let monitoringHeartbeatSend = null;
-ctx.monitoringAlertPush = (status, msg) => {
+// „up“ nur, wenn kein anderer Alarm mehr läuft (Entlade-Wächter, Einfrier-
+// Wächter, Kreuzprobe): sonst schickte jede Entwarnung bzw. jede gewöhnliche
+// Benachrichtigung den Monitor auf „up“, bis der nächste Puls ihn zurücksetzt.
+// opts.clears = der Wächter, der gerade aufhebt (Gegenprüfung 5c6520cb, P3).
+ctx.monitoringAlertPush = (status, msg, opts = {}) => {
   if (typeof monitoringHeartbeatSend !== 'function') return Promise.resolve();
-  try { return Promise.resolve(monitoringHeartbeatSend(msg, status)); }
-  catch { return Promise.resolve(); }
+  try {
+    if (status === 'up') {
+      const hb = setpointFollowHeartbeat(state, msg, { except: opts?.clears });
+      return Promise.resolve(monitoringHeartbeatSend(hb.msg, hb.status));
+    }
+    return Promise.resolve(monitoringHeartbeatSend(msg, status));
+  } catch { return Promise.resolve(); }
 };
 
 // Phase 19 Plan 19-01: Forecast Inspector — read-only diagnostic factory.

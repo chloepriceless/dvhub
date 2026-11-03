@@ -174,3 +174,25 @@ test('Uptime-Kuma-Puls bleibt auch bei Einfrier- und Kreuzprobe-Alarm auf down',
   assert.match(both.msg, /entlädt nicht/);
   assert.match(both.msg, /eingefroren/);
 });
+
+// Gegenprüfung 5c6520cb (P3): Hebt ein Wächter seinen Alarm auf, schickte er
+// fest „up“ — auch wenn ein anderer Alarm noch lief. Die Entwarnung wertet
+// jetzt die übrigen Alarme aus (except = der aufhebende Wächter).
+test('Entwarnung eines Wächters bei weiter laufendem anderen Alarm bleibt „down“', () => {
+  const state = { victron: { soc: 50, setpointFollow: { active: true, since: 'x' }, sourceMismatch: { active: true, since: 'y' } } };
+  const hb = setpointFollowHeartbeat(state, 'DVhub: Speicher wieder unauffällig', { except: 'setpointFollow' });
+  assert.equal(hb.status, 'down');
+  assert.match(hb.msg, /widersprüchlich/);
+  assert.doesNotMatch(hb.msg, /entlädt nicht/, 'der aufhebende Alarm zählt nicht mehr');
+  const only = setpointFollowHeartbeat({ victron: { soc: 50, freeze: { active: true } } }, 'DVhub: Live-Daten wieder aktuell', { except: 'freeze' });
+  assert.deepEqual(only, { status: 'up', msg: 'DVhub: Live-Daten wieder aktuell' });
+});
+
+test('server.js: ctx.monitoringAlertPush prüft bei „up“ die übrigen Alarme; die Wächter nennen sich beim Aufheben', async () => {
+  const fsMod = await import('node:fs');
+  const read = (p) => fsMod.readFileSync(new URL(p, import.meta.url), 'utf8');
+  assert.match(read('../server.js'), /if \(status === 'up'\) \{\s*const hb = setpointFollowHeartbeat\(state, msg, \{ except: opts\?\.clears \}\);/);
+  assert.match(read('../services/setpoint-follow-watchdog.js'), /monitoringAlertPush\?\.\('up', [^)]*, \{ clears: 'setpointFollow' \}\)/);
+  assert.match(read('../services/telemetry-freeze-watchdog.js'), /monitoringAlertPush\?\.\('up', 'DVhub: Live-Daten wieder aktuell', \{ clears: 'freeze' \}\)/);
+  assert.match(read('../services/mqtt-crosscheck.js'), /monitoringAlertPush\?\.\('up', 'DVhub: Anlagendaten wieder stimmig', \{ clears: 'sourceMismatch' \}\)/);
+});

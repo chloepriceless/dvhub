@@ -651,7 +651,7 @@ export function createSetpointFollowWatchdog(ctx) {
           body: 'Netzbezug und Sollwert passen wieder zusammen; der Akku musste dabei nicht entladen (er lädt oder steht). Ob er wieder entlädt, zeigt sich, sobald Entladen gefragt ist — bleibt es aus, meldet DVhub erneut.'
         });
       try {
-        Promise.resolve(ctx.monitoringAlertPush?.('up', discharged ? 'DVhub: Speicher entlädt wieder' : 'DVhub: Speicher wieder unauffällig'))
+        Promise.resolve(ctx.monitoringAlertPush?.('up', discharged ? 'DVhub: Speicher entlädt wieder' : 'DVhub: Speicher wieder unauffällig', { clears: 'setpointFollow' }))
           .catch(() => { /* noop */ });
       } catch { /* noop */ }
     }
@@ -674,15 +674,17 @@ export function createSetpointFollowWatchdog(ctx) {
  * im Stable-Kanal alarmiert nicht) und die Kreuzprobe MQTT/Modbus
  * (victron.sourceMismatch; Gesamtprüfung Release 1.0.9).
  */
-export function setpointFollowHeartbeat(state, okMsg) {
+export function setpointFollowHeartbeat(state, okMsg, { except = null } = {}) {
+  // except: der Wächter, der gerade aufhebt — sein Zustand steht in diesem
+  // Moment noch auf aktiv (Gegenprüfung 5c6520cb, P3).
   const v = state?.victron || {};
   const alarms = [];
-  if (v.setpointFollow?.active) alarms.push(`Speicher entlädt nicht (seit ${v.setpointFollow.since || '?'})`);
-  if (v.freeze?.active) {
+  if (v.setpointFollow?.active && except !== 'setpointFollow') alarms.push(`Speicher entlädt nicht (seit ${v.setpointFollow.since || '?'})`);
+  if (v.freeze?.active && except !== 'freeze') {
     const why = Array.isArray(v.freeze.reasons) && v.freeze.reasons.length ? ` (${v.freeze.reasons.join('+')})` : '';
     alarms.push(`Live-Daten eingefroren${why} (seit ${v.freeze.since || '?'})`);
   }
-  if (v.sourceMismatch?.active) alarms.push(`Anlagendaten widersprüchlich, MQTT vs. Modbus (seit ${v.sourceMismatch.since || '?'})`);
+  if (v.sourceMismatch?.active && except !== 'sourceMismatch') alarms.push(`Anlagendaten widersprüchlich, MQTT vs. Modbus (seit ${v.sourceMismatch.since || '?'})`);
   if (alarms.length) return { status: 'down', msg: `DVhub: ${alarms.join(' · ')} | SOC ${v.soc ?? '?'}%` };
   return { status: 'up', msg: okMsg };
 }

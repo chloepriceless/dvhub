@@ -224,7 +224,7 @@ export function createMqttCrossCheck(ctx) {
       })?.catch?.(() => { /* fire-and-forget */ });
     } catch { /* noop */ }
     try {
-      Promise.resolve(ctx.monitoringAlertPush?.('up', 'DVhub: Anlagendaten wieder stimmig')).catch(() => { /* noop */ });
+      Promise.resolve(ctx.monitoringAlertPush?.('up', 'DVhub: Anlagendaten wieder stimmig', { clears: 'sourceMismatch' })).catch(() => { /* noop */ });
     } catch { /* noop */ }
   }
 

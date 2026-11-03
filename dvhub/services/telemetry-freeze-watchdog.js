@@ -277,7 +277,7 @@ export function createFreezeWatchdog(ctx) {
       })?.catch?.(() => { /* fire-and-forget */ });
     } catch { /* noop */ }
     try {
-      Promise.resolve(ctx.monitoringAlertPush?.('up', 'DVhub: Live-Daten wieder aktuell'))
+      Promise.resolve(ctx.monitoringAlertPush?.('up', 'DVhub: Live-Daten wieder aktuell', { clears: 'freeze' }))
         .catch(() => { /* noop */ });
     } catch { /* noop */ }
   }
