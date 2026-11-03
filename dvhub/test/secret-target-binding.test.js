@@ -299,3 +299,41 @@ test('P2/P3: TLS → Klartext leert, Klartext → TLS behält; verschiedene IPv6
   assert.equal(out.dbBackup.smb.password, '', 'anderer IPv6-Host');
   assert.equal(out.mqtt.password, 'm', 'mqtt → mqtts auf demselben Host bleibt');
 });
+
+// Gesamtprüfung 1.0.9 (Sicherheitsreste): Der Ziel-Vergleich ignorierte den
+// Port — derselbe Host mit anderem Port (ein anderer Dienst) bekam das
+// gespeicherte Geheimnis. Standard-Ports gelten als gleich; mit besserer
+// Sicherung (mqtt → mqtts) darf sich der Port mitändern.
+test('Port gehört zum Ziel: anderer Port leert, Standard-Port explizit oder weggelassen bleibt', () => {
+  const cur = {
+    notifications: { providers: { ntfy: { topicUrl: 'https://ntfy.lan/x', token: 't' } } },
+    optimizer: { evHaUrl: 'http://ha.lan:8123', evHaToken: 'ha' },
+    mqtt: { brokerUrl: 'mqtt://b:1883', username: 'u', password: 'm' },
+    dbBackup: { smb: { host: 'nas.lan', username: 's', password: 'p' } },
+  };
+  const mask = (c) => {
+    const inc = JSON.parse(JSON.stringify(c));
+    inc.notifications.providers.ntfy.token = '***'; inc.optimizer.evHaToken = '***';
+    inc.mqtt.password = '***'; inc.mqtt.username = '***'; inc.dbBackup.smb.password = '***';
+    return inc;
+  };
+  const changed = mask(cur);
+  changed.notifications.providers.ntfy.topicUrl = 'https://ntfy.lan:8443/x';
+  changed.optimizer.evHaUrl = 'http://ha.lan:9000';
+  changed.mqtt.brokerUrl = 'mqtt://b:1884';
+  changed.dbBackup.smb.host = 'nas.lan:4450';
+  let out = restoreRedacted(changed, cur);
+  assert.equal(out.notifications.providers.ntfy.token, '', 'ntfy: anderer Port');
+  assert.equal(out.optimizer.evHaToken, '', 'HA: anderer Port');
+  assert.equal(out.mqtt.password, '', 'MQTT: anderer Port');
+  assert.equal(out.dbBackup.smb.password, '', 'SMB: Port neu angegeben');
+  const same = mask(cur);
+  same.notifications.providers.ntfy.topicUrl = 'https://ntfy.lan:443/y';
+  same.optimizer.evHaUrl = 'http://ha.lan:8123/';
+  same.mqtt.brokerUrl = 'mqtt://b';
+  out = restoreRedacted(same, cur);
+  assert.equal(out.notifications.providers.ntfy.token, 't', 'ntfy: Standard-Port explizit');
+  assert.equal(out.optimizer.evHaToken, 'ha', 'HA: gleicher Port');
+  assert.equal(out.mqtt.password, 'm', 'MQTT: Standard-Port weggelassen');
+  assert.equal(out.dbBackup.smb.password, 'p', 'SMB: unverändert');
+});

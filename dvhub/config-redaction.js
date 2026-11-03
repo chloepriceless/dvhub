@@ -111,29 +111,38 @@ for (const f of ['username', 'password']) {
 }
 export const SECRET_TARGET_PATHS = Object.freeze(Object.keys(SECRET_TARGETS));
 
-// Ziel = Host plus „gesichert?“. Gleicher Host und gleiche oder bessere
-// Sicherung (mqtt → mqtts, http → https) gilt als dasselbe Ziel; ein anderer
-// Host oder TLS → Klartext gilt als neu (Gegenprüfung 4fe254c9: sonst ginge
-// das Geheimnis im Klartext). Nicht URL.origin — für mqtt:// u. ä. ist die
-// Herkunft immer „null“.
+// Ziel = Host, Port plus „gesichert?“. Gleicher Host und Port und gleiche
+// oder bessere Sicherung (mqtt → mqtts, http → https) gilt als dasselbe Ziel;
+// ein anderer Host, ein anderer Port (ein anderer Dienst, Gesamtprüfung
+// 1.0.9) oder TLS → Klartext gilt als neu (Gegenprüfung 4fe254c9: sonst ginge
+// das Geheimnis im Klartext). Standard-Ports zählen wie weggelassene; beim
+// Wechsel auf die bessere Sicherung darf sich der Port mitändern
+// (mqtt://b:1883 → mqtts://b:8883). Nicht URL.origin — für mqtt:// u. ä. ist
+// die Herkunft immer „null“.
 const SECURE_SCHEMES = new Set(['https:', 'mqtts:', 'wss:', 'ssl:', 'tls:']);
+const DEFAULT_PORTS = { 'http:': '80', 'https:': '443', 'ws:': '80', 'wss:': '443', 'mqtt:': '1883', 'mqtts:': '8883', 'tcp:': '1883', 'ssl:': '8883', 'tls:': '8883', 'smb:': '445' };
 function normTarget(v) {
   const s = String(v ?? '').trim().toLowerCase().replace(/\/+$/, '');
   if (s.includes('://')) {
-    try { const u = new URL(s); return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol) }; }
-    catch { return { host: s, secure: null }; }
+    try {
+      const u = new URL(s);
+      return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol), port: u.port || DEFAULT_PORTS[u.protocol] || '' };
+    } catch { return { host: s, secure: null, port: '' }; }
   }
   // host[:port] ohne Schema: Port nur bei genau einem ':' bzw. [v6]:port abtrennen
   // (sonst verschmolzen fd00::1 und fd00::1234, Gegenprüfung 4fe254c9).
-  const v6 = /^\[([^\]]+)\](?::\d+)?$/.exec(s);
-  if (v6) return { host: v6[1], secure: null };
-  return { host: (s.split(':').length === 2 ? s.replace(/:\d+$/, '') : s), secure: null };
+  const v6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(s);
+  if (v6) return { host: v6[1], secure: null, port: v6[2] || '' };
+  const hp = s.split(':').length === 2 ? /^(.*):(\d+)$/.exec(s) : null;
+  return hp ? { host: hp[1], secure: null, port: hp[2] } : { host: s, secure: null, port: '' };
 }
 function targetsOf(cfg, secretPath) {
   return SECRET_TARGETS[secretPath](cfg || {}).map(normTarget);
 }
 function isNewTarget(t, before) {
-  return !before.some((b) => b.host === t.host && !(b.secure === true && t.secure === false));
+  return !before.some((b) => b.host === t.host
+    && !(b.secure === true && t.secure === false)
+    && (b.port === t.port || (b.secure === false && t.secure === true)));
 }
 
 /**
