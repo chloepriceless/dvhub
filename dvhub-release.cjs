@@ -832,6 +832,7 @@ function finalizeInstall(s, st, version, job) {
 }
 
 async function jobInstall(s, job, { version, channel }) {
+  await settleInterrupted(s, job);
   const st = loadState(s);
   const from = currentVersion(s);
   if (!from) throw new Exit(3, 'keine Paket-Installation (git-Box: Umstellung läuft über migrate)');
@@ -861,6 +862,7 @@ async function jobInstall(s, job, { version, channel }) {
 }
 
 async function jobRollback(s, job) {
+  await settleInterrupted(s, job);
   const st = loadState(s);
   const from = currentVersion(s);
   if (!from) throw new Exit(3, 'keine Paket-Installation');
@@ -1100,7 +1102,26 @@ async function jobMigrate(s, job, { force }) {
 // Nach einem Neustart mitten im Auftrag (Strom weg): ist der laufende Stand
 // gesund, gilt er; sonst zurück.
 async function jobResume(s, job) {
+  const r = await resumeInterrupted(s, loadState(s), job);
+  if (r) job.finish(r.state, r.message, r.extra);
+  else job.finish('ok', 'nichts fortzusetzen', { result: 'noop' });
+}
+
+// Ein neuer Auftrag (install/rollback), bevor die geplante Fortsetzung lief
+// (Zeitgeber 60 s nach dem Start): erst den unterbrochenen Auftrag abschließen.
+// Sonst überlebte st.migration die neue Installation, und ein späteres resume
+// nähme die Umstellung zurück — git-Unit und .legacy-git zurück, current und
+// das inzwischen vorige Release weg (Gesamtprüfung 03.11.2026, Befund 1).
+async function settleInterrupted(s, job) {
   const st = loadState(s);
+  if (!st.migration && !st.pending) return;
+  job.log('ein unterbrochener Auftrag liegt noch vor — zuerst abschließen');
+  const r = await resumeInterrupted(s, st, job);
+  job.log(`unterbrochener Auftrag: ${r.message}`);
+}
+
+// Gibt { state, message, extra } zurück oder null, wenn nichts vorliegt.
+async function resumeInterrupted(s, st, job) {
   if (st.migration) {
     const v = st.migration.version;
     job.phase('health', `unterbrochene Umstellung auf ${v}: Gesundheitsprüfung`);
@@ -1112,14 +1133,12 @@ async function jobResume(s, job) {
       updateTrust(s, st, v, job);
       removeDropin(s, job);
       saveState(s, st);
-      job.finish('ok', `Umstellung auf ${v} abgeschlossen (nach Unterbrechung)`, { result: 'ok', version: v });
-      return;
+      return { state: 'ok', message: `Umstellung auf ${v} abgeschlossen (nach Unterbrechung)`, extra: { result: 'ok', version: v } };
     }
     revertMigration(s, st, job);
     restartService(s, job);
     await waitHealthy(s, null, job);
-    job.finish('rolled_back', 'unterbrochene Umstellung zurückgenommen', { result: 'rolled_back', version: v });
-    return;
+    return { state: 'rolled_back', message: 'unterbrochene Umstellung zurückgenommen', extra: { result: 'rolled_back', version: v } };
   }
   if (st.pending) {
     const { version: to, previous: from } = st.pending;
@@ -1133,8 +1152,7 @@ async function jobResume(s, job) {
       record(st, to, 'ok');
       if (op === 'install') finalizeInstall(s, st, to, job);
       saveState(s, st);
-      job.finish('ok', `${to} läuft gesund (nach Unterbrechung bestätigt)`, { result: 'ok', version: to });
-      return;
+      return { state: 'ok', message: `${to} läuft gesund (nach Unterbrechung bestätigt)`, extra: { result: 'ok', version: to } };
     }
     if (from && fs.existsSync(path.join(releasesDir(s), from))) {
       switchCurrent(s, from);
@@ -1146,10 +1164,9 @@ async function jobResume(s, job) {
     st.pending = null;
     record(st, to, 'rolled_back');
     saveState(s, st);
-    job.finish('rolled_back', `unterbrochener Auftrag: zurück auf ${from}`, { result: 'rolled_back', version: to, from });
-    return;
+    return { state: 'rolled_back', message: `unterbrochener Auftrag: zurück auf ${from}`, extra: { result: 'rolled_back', version: to, from } };
   }
-  job.finish('ok', 'nichts fortzusetzen', { result: 'noop' });
+  return null;
 }
 
 // ── Vordergrund-Aktionen ────────────────────────────────────────────────────
@@ -1299,6 +1316,16 @@ function recover(s) {
 
 async function runJob(s, a) {
   const release = lock(s);
+  // Nichts fortzusetzen (ein Auftrag davor hat es schon abgeschlossen): dann
+  // auch kein Status — er überschriebe das Ergebnis dieses Auftrags.
+  if (a.job === 'resume') {
+    const st = loadState(s);
+    if (!st.migration && !st.pending) {
+      release();
+      s.write('dvhub-release: nichts fortzusetzen\n');
+      return 0;
+    }
+  }
   const job = new Job(s, a.job, { version: a.version && a.version !== 'latest' ? a.version : null });
   try {
     if (a.job === 'install') await jobInstall(s, job, a);

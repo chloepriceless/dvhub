@@ -726,6 +726,63 @@ test('Neue Version krank UND Rückweg krank → Ergebnis failed, nicht „läuft
   } finally { r.close(); }
 });
 
+// ── Gesamtprüfung release/1.0.9 (03.11.2026) ───────────────────────────────
+
+// Umstellung bis „provision“ durchlaufen lassen und den Zustand von genau dann
+// festhalten (post-update.sh des Pakets kopiert state.json): so sieht die Box
+// nach einem Stromausfall in dieser Phase aus.
+async function migrationInterruptedAtProvision(r) {
+  gitBox(r);
+  const snap = path.join(r.root, 'state-provision.json');
+  r.publish({ version: '1.0.1', extraFiles: { 'post-update.sh': `#!/usr/bin/env bash\ncp '${path.join(r.state, 'state.json')}' '${snap}'\n` } });
+  assert.equal((await r.run('migrate')).code, 0, JSON.stringify(r.status()));
+  const st = JSON.parse(fs.readFileSync(snap, 'utf8'));
+  assert.equal(st.migration?.phase, 'provision', 'Momentaufnahme mitten in der Umstellung');
+  fs.copyFileSync(snap, path.join(r.state, 'state.json'));
+  return st;
+}
+
+// Hauptbefund 1: Ein neuer Auftrag vor der Fortsetzung (Zeitgeber 60 s) ließ
+// st.migration stehen; der nächste resume nahm die Umstellung dann zurück —
+// current und das inzwischen vorige Release weg, git-Unit zurück.
+test('unterbrochene Umstellung: install davor schließt sie ab, späteres resume nimmt nichts zurück', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    r.publish({ version: '1.0.2' });
+    const inst = await r.run('install', 'latest', 'stable');
+    assert.equal(inst.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.current(), 'releases/1.0.2');
+    let st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null, 'Umstellungs-Journal abgeschlossen');
+    assert.equal(st.previous, '1.0.1');
+    const installStatus = r.status();
+
+    // Die geplante Fortsetzung feuert danach (oder beim nächsten Start).
+    assert.doesNotMatch((await r.run('boot-hook')).out, /Fortsetzung/);
+    assert.equal((await r.run('_job', 'resume')).code, 0);
+    assert.equal(r.current(), 'releases/1.0.2', 'resume schaltet nicht auf git zurück');
+    assert.ok(fs.existsSync(path.join(r.box, 'releases', '1.0.1')), 'voriges Release bleibt');
+    assert.match(fs.readFileSync(r.unitFile, 'utf8'), /current\/dvhub\/server\.js/, 'Unit bleibt auf current');
+    assert.deepEqual(r.status(), installStatus, 'leeres resume überschreibt das Ergebnis des Auftrags nicht');
+    st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.current, '1.0.2');
+  } finally { r.close(); }
+});
+
+test('unterbrochene Umstellung: rollback davor schließt sie erst ab', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    // Ohne vorige Version gibt es keinen Rückweg — aber das Journal ist danach erledigt.
+    assert.equal((await r.run('rollback')).code, 3);
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migration, null);
+    assert.equal(st.current, '1.0.1');
+    assert.equal(r.current(), 'releases/1.0.1');
+  } finally { r.close(); }
+});
+
 // ── Ausgelieferter Vertrauensanker ──────────────────────────────────────────
 
 // Ohne gültigen Schlüssel in release-keys/allowed_signers lehnt jede Box jedes
