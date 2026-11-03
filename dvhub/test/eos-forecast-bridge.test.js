@@ -8,6 +8,7 @@
 import { strict as assert } from 'node:assert';
 import { test, describe } from 'node:test';
 import http from 'node:http';
+import { zoneOffsetMs } from '../tz-fast.js';
 
 import {
   slotsToTimeMap,
@@ -1030,7 +1031,9 @@ function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotF
   const q0 = now - (now % Q);
   const realEnd = q0 + realHours * 3_600_000; // echte Preise bis jetzt + 10 h
   const pvEnd = q0 + pvHours * 3_600_000;     // PV/Last bis jetzt + 40 h
-  const pattern = (ms) => 10 + 8 * Math.sin(((ms / Q) % 96 - 30) / 96 * 2 * Math.PI);
+  // Tagesmuster in Ortszeit wie echte Börsenpreise — die Schätzung rechnet
+  // seit der Zeitumstellungs-Korrektur auf Ortszeit (Gesamtprüfung Release 1.0.9).
+  const pattern = (ms) => 10 + 8 * Math.sin((((ms + zoneOffsetMs(ms, 'Europe/Berlin')) / Q) % 96 - 30) / 96 * 2 * Math.PI);
   const price = [];
   for (let ms = q0 - 2 * 3_600_000; ms < realEnd; ms += Q) price.push({ start: new Date(ms).toISOString(), ctKwh: pattern(ms) });
   const pv = [];
@@ -1220,8 +1223,8 @@ test('Grenze 12 h: Steuerzeitraum 12, Prognosehorizont 60, Preise höchstens 60 
     await createEosForecastBridge(ctx).push();
     const hz = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/optimization/genetic/horizon_hours'));
     assert.equal(hz.body, 12);
-    const ph = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/prediction/hours'));
-    assert.equal(ph.body, 60);
+    const ph = mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/prediction/hours')).pop();
+    assert.equal(ph.body, 60, 'Zielwert zuletzt (erster Push: erst 72 h, siehe Neustart-Test)');
     const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
     assert.ok(Math.max(...elec.keys()) < t0 + 60 * 3_600_000 + Q, 'Preis-Fortschreibung endet am Prognosehorizont');
     assert.ok(Math.max(...elec.keys()) >= t0 + 59 * 3_600_000);
@@ -1359,13 +1362,15 @@ test('eosPlanFeedInBasis: Grundlage zum Plan passend', async () => {
 // Prognosehorizont-PUT, muss DVhub trotzdem den an EOS gesendeten
 // Steuerzeitraum kennen (Warmstart des Lauf-Anstoßes rechnet damit).
 test('Teil-Fehlschlag: gesendeter Steuerzeitraum steht im Zustand', async () => {
+  // Nur der Zielwert scheitert (erster Push: erst 72 h, dann Steuerzeitraum,
+  // dann 60 h — Neustart-Reihenfolge, Gesamtprüfung Release 1.0.9).
   const failPred = (req, res) => {
-    if (req.method === 'PUT' && req.url.startsWith('/v1/config/prediction/hours')) { res.writeHead(500); res.end('{}'); return; }
+    if (req.method === 'PUT' && req.url.startsWith('/v1/config/prediction/hours') && mock.requests.at(-1).body === 60) { res.writeHead(500); res.end('{}'); return; }
     okHandler(req, res);
   };
   const mock = await createMockEos(failPred);
   try {
-    const { ctx, realEnd } = estimateCtx(mock, { realHours: 34, pvHours: 60 });
+    const { ctx, realEnd } = estimateCtx(mock, { realHours: 34, pvHours: 60, optimizer: { eosPredictionHours: 60 } });
     ctx.state.optimizer.eosControlHorizonH = 24;
     const res = await createEosForecastBridge(ctx).push();
     const hz = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/optimization/genetic/horizon_hours'));
@@ -2260,7 +2265,9 @@ test('Befund 9: Speicher kürzer als die Datenbank → echte Preise aus der Date
     const logs = [];
     const env = estimateCtx(mock, { logs });
     const storedEnd = env.realEnd + 14 * 3_600_000;
-    const rows = storedPrices(env, env.realEnd);
+    // Heute steht in der Datenbank ein anderer Wert als im Speicher: der Speicher
+    // hat Vorrang (Gegenprüfung 1c7d8b2c, P3).
+    const rows = storedPrices(env, env.realEnd).map((r) => (Date.parse(r.ts) >= env.q0 - 3 * 3_600_000 ? { ...r, value: r.value + 40 } : r));
     // Morgen: echter Preis 77 ct, deutlich anders als jede Schätzung.
     for (let ms = env.realEnd; ms < storedEnd; ms += Q) rows.push({ key: 'price_ct_kwh', ts: new Date(ms).toISOString(), value: 77, resolution: 900 });
     env.ctx.telemetryStore = { querySeries: async ({ start, end }) => rows.filter((r) => r.ts >= new Date(start).toISOString() && r.ts < new Date(end).toISOString()) };
@@ -2272,7 +2279,67 @@ test('Befund 9: Speicher kürzer als die Datenbank → echte Preise aus der Date
     assert.equal(est?.from, new Date(storedEnd).toISOString(), 'Schätzung erst hinter den echten Preisen');
     // Gelöscht wird erst hinter dem Geschickten — nie die echten Preise von morgen.
     for (const d of deletes(mock)) assert.ok(d.start >= storedEnd, `Löschfenster beginnt hinter den echten Preisen: ${new Date(d.start).toISOString()}`);
-    assert.ok(logs.some((l) => l.event === 'eos_prices_from_store'), 'Ergänzung aus der Datenbank wird protokolliert');
+    const today = env.realEnd - 2 * 3_600_000;
+    assert.ok(Math.abs(feed.get(today) * 100_000 - env.pattern(today)) < 0.01, 'heute gilt der Speicher');
+    assert.equal(logs.find((l) => l.event === 'eos_prices_from_store')?.data?.mode, 'append');
+  } finally { await mock.close(); }
+});
+
+test('Befund 9: Lücke im Speicher → die Datenbank füllt nur die Lücke, sonst gilt der Speicher (keine doppelten Slots)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const env = estimateCtx(mock, { logs });
+    const gapAt = env.q0 + 3 * 3_600_000;
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = { buildForecastResponse: async () => { const fc = await fc0(); return { ...fc, price: { slots: fc.price.slots.filter((x) => Date.parse(x.start) !== gapAt) } }; } };
+    const rows = storedPrices(env, env.realEnd + 14 * 3_600_000).map((r) => (Date.parse(r.ts) >= gapAt ? { ...r, value: 55 } : r));
+    env.ctx.telemetryStore = { querySeries: async ({ start, end }) => rows.filter((r) => r.ts >= new Date(start).toISOString() && r.ts < new Date(end).toISOString()) };
+    await createEosForecastBridge(env.ctx).push();
+    const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
+    assert.ok(Math.abs(feed.get(gapAt) * 100_000 - 55) < 0.01, 'Lücke aus der Datenbank');
+    const after = gapAt + 3_600_000;
+    assert.ok(Math.abs(feed.get(after) * 100_000 - env.pattern(after)) < 0.01, 'hinter der Lücke wieder der Speicher');
+    assert.ok(Math.abs(feed.get(env.realEnd + 3_600_000) * 100_000 - 55) < 0.01, 'hinter dem Speicher die Datenbank');
+    assert.ok(Math.abs(feed.get(gapAt - Q) * 100_000 - env.pattern(gapAt - Q)) < 0.01, 'davor der Speicher');
+  } finally { await mock.close(); }
+});
+
+test('Befund 9: Stundenpreise im Speicher, 15-min-Preise in der Datenbank → ganz aus der Datenbank (keine gemischte Kadenz)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const env = estimateCtx(mock, { logs });
+    const H = 3_600_000;
+    const fc0 = env.ctx.forecastService.buildForecastResponse;
+    env.ctx.forecastService = {
+      buildForecastResponse: async () => {
+        const fc = await fc0();
+        return { ...fc, price: { slots: fc.price.slots.filter((x) => Date.parse(x.start) % H === 0 && Date.parse(x.start) + H <= env.realEnd) } };
+      },
+    };
+    const rows = storedPrices(env, env.realEnd + 14 * H);
+    env.ctx.telemetryStore = { querySeries: async ({ start, end }) => rows.filter((r) => r.ts >= new Date(start).toISOString() && r.ts < new Date(end).toISOString()) };
+    await createEosForecastBridge(env.ctx).push();
+    assert.equal(logs.find((l) => l.event === 'eos_prices_from_store')?.data?.mode, 'extend');
+    const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
+    assert.ok(feed.has(env.realEnd + 5 * H + Q), '15-min-Raster aus der Datenbank');
+  } finally { await mock.close(); }
+});
+
+test('Befund 9: hängende Datenbank hält den Push nicht auf — weiter mit den Preisen im Speicher (Gegenprüfung 1c7d8b2c, P3)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const env = estimateCtx(mock, { logs });
+    const history = env.ctx.telemetryStore.querySeries;
+    env.ctx.telemetryStore = { querySeries: (q) => (q.seriesKeys.length === 1 ? new Promise(() => {}) : history(q)) };
+    env.ctx.storedPricesTimeoutMs = 50;
+    const res = await createEosForecastBridge(env.ctx).push();
+    assert.equal(res.ok, true, JSON.stringify(res.errors));
+    assert.ok(logs.some((l) => l.event === 'eos_prices_from_store_error'));
+    const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
+    assert.ok(feed.has(env.realEnd - Q), 'Preise aus dem Speicher an EOS');
   } finally { await mock.close(); }
 });
 
@@ -2293,5 +2360,47 @@ test('Befund 15: Datenbankfehler bei der Preis-Historie wird nicht zwischengespe
     fail = false;
     await bridge.push();
     assert.ok(env.state.optimizer.lastEosPush.priceEstimate?.estimatedSlots > 0, 'nächster Push schätzt wieder');
+  } finally { await mock.close(); }
+});
+
+test('Befund 15: leere Preis-Historie wird nicht zwischengespeichert', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock);
+    const history = [];
+    for (let ms = env.q0 - 20 * 86_400_000; ms < env.q0; ms += Q) history.push({ key: 'price_ct_kwh', ts: new Date(ms), value: env.pattern(ms), resolution: 900 });
+    let empty = true;
+    env.ctx.telemetryStore = { querySeries: async () => (empty ? [] : history) };
+    const bridge = createEosForecastBridge(env.ctx);
+    await bridge.push();
+    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
+    empty = false;
+    await bridge.push();
+    assert.ok(env.state.optimizer.lastEosPush.priceEstimate?.estimatedSlots > 0);
+  } finally { await mock.close(); }
+});
+
+// ── Gesamtprüfung Release 1.0.9: Horizont-Schreibvorgänge nach einem Neustart ──
+// Nach einem DVhub-Neustart ist unbekannt, was EOS hält. Der Stand galt als
+// „kürzer werdend“ (erst Steuerzeitraum): hielt EOS noch einen kürzeren
+// Prognosehorizont, stand kurz horizon_hours > prediction.hours, und ein Lauf
+// genau dann brach ab. Jetzt: erst weit (72 h), dann Steuerzeitraum, dann Ziel.
+test('Neustart: erst Prognosehorizont 72 h, dann Steuerzeitraum, dann der Zielwert', async () => {
+  let predInEos = 12; // z. B. früher fest 12 h eingestellt
+  const violations = [];
+  const mock = await createMockEos((req, res) => {
+    const body = mock.requests.at(-1).body;
+    if (req.method === 'PUT' && req.url.startsWith('/v1/config/prediction/hours')) predInEos = body;
+    if (req.method === 'PUT' && req.url.startsWith('/v1/config/optimization/genetic/horizon_hours') && body > predInEos) violations.push(`${body} > ${predInEos}`);
+    okHandler(req, res);
+  });
+  try {
+    const { ctx } = estimateCtx(mock, { realHours: 34, pvHours: 60, optimizer: { eosPredictionHours: 48 } });
+    await createEosForecastBridge(ctx).push();
+    const seq = mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/') && /prediction\/hours|horizon_hours/.test(r.url))
+      .map((r) => `${r.url.includes('horizon_hours') ? 'H' : 'P'}${r.body}`);
+    assert.deepEqual(seq, ['P72', 'H33', 'P48']);
+    assert.deepEqual(violations, []);
+    assert.equal(ctx.state.optimizer.eosPredictionHours, 48);
   } finally { await mock.close(); }
 });
