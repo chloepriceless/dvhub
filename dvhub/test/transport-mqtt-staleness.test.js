@@ -48,13 +48,13 @@ test('missing ts is treated as epoch → stale under a finite maxAge', () => {
 
 import { sumConsumptionEntries } from '../transport-mqtt.js';
 
-test('consumption sum: three fresh phases are summed, ts = newest', () => {
+test('consumption sum: three fresh phases are summed, ts = oldest (Gegenprüfung ecc27ea3)', () => {
   const r = sumConsumptionEntries([
     { value: 450, ts: NOW - 1000 },
     { value: 300, ts: NOW - 2000 },
     { value: 210, ts: NOW - 500 },
   ], MAX, NOW);
-  assert.deepEqual(r, { value: 960, ts: NOW - 500 });
+  assert.deepEqual(r, { value: 960, ts: NOW - 2000 });
 });
 
 test('consumption sum: a never-seen phase counts as 0 (1-/2-phasige Anlagen)', () => {

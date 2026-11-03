@@ -44,7 +44,10 @@ export function sumConsumptionEntries(entries, maxAgeMs, nowMs = Date.now()) {
     if (!entry) continue;                                          // Phase nie gesehen → 0
     if (!mqttCacheEntryFresh(entry, maxAgeMs, nowMs)) return null; // gesehen, aber stale → Summe stale
     sum += Number(entry.value) || 0;
-    ts = Math.max(ts, Number(entry.ts) || 0);
+    // Empfangszeit der Summe = die der ÄLTESTEN gesehenen Phase: eine frische
+    // Phase macht eine alte nicht jung (Gegenprüfung ecc27ea3, P3).
+    const at = Number(entry.ts) || 0;
+    ts = ts === 0 ? at : Math.min(ts, at);
     any = true;
   }
   return any ? { value: sum, ts } : null;

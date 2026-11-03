@@ -574,6 +574,9 @@ export function createPoller(ctx) {
           ok: true, updatedAt: Date.now(), raw: [grid.l1, grid.l2, grid.l3],
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
           error: null,
+          // Empfangszeit des (ältesten) Netzwerts — die abgeleitete Hauslast
+          // übernimmt sie (Gegenprüfung ecc27ea3, P3).
+          sourceAt: Number(grid.ts) > 0 ? Number(grid.ts) : null,
           // Plan 09-08 Task 3: success path resets backoff (consecutiveErrors=0,
           // nextRetryAt=null). Mirrors the Modbus branch below.
           consecutiveErrors: 0,
@@ -810,6 +813,16 @@ export function createPoller(ctx) {
       state.victron.selfConsumptionDerived = true;
       if (state.victron.errors) delete state.victron.errors.selfConsumptionW;
       if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
+      // Empfangsalter = das des ältesten Eingangs (MQTT-Cache), sonst keins. Ein
+      // alter Eintrag aus der Zeit mit Verbrauchs-Topic darf nicht stehen
+      // bleiben, und ein alter Akkuwert macht die Last alt (Gegenprüfung
+      // ecc27ea3, P3 — der Einspeise-Deckel in schedule-eval prüft das).
+      const inputAt = ['pvPowerW', 'pvAcW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'batteryPowerW']
+        .map((f) => Number(state.victron.fieldSourceAt?.[f]))
+        .concat(Number(state.meter?.sourceAt))
+        .filter((t) => t > 0);
+      if (inputAt.length) (state.victron.fieldSourceAt ??= {}).selfConsumptionW = Math.min(...inputAt);
+      else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt.selfConsumptionW;
     } else if (state.victron.selfConsumptionDerived && !state.victron.errors?.selfConsumptionW) {
       state.victron.selfConsumptionDerived = false;
     }

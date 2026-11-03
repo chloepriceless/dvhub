@@ -210,3 +210,63 @@ test('gesperrt: frischer MQTT-Empfang (fieldSourceAt < 90 s) lässt den PV-Über
   await evaluator.applyControlTarget('gridSetpointW', -9000, 'eos_optimization');
   assert.deepEqual(gridWrites(writes), [-(5_000 - GRID_SHARE_EXPORT_MARGIN_W)]);
 });
+
+// ── Gegenprüfung ecc27ea3 (3× P3): Hauslast mit richtigem Empfangsalter ──────
+// Abgeleitete Hauslast (energy_balance, DVhub-MQTT-Schema) bekam einen frischen
+// Abfrage-Stempel, aber ihr Empfangsalter blieb stehen (alter Eintrag aus der
+// Zeit mit Verbrauchs-Topic) bzw. fehlte ganz (Eingänge alt). Und bei der
+// Phasensumme zählte die frischeste Phase.
+async function pollDvhubMqtt({ staleMaxAgeMs, ingest, prior = {} }) {
+  const { createMqttTransport } = await import('../transport-mqtt.js');
+  const { createPoller } = await import('../polling.js');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const tr = createMqttTransport({ host: '', mqtt: { schema: 'dvhub', topicPrefix: 'dvhub', staleMaxAgeMs } });
+  ingest(tr);
+  const state = {
+    meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0, error: null },
+    victron: { errors: {}, updatedAt: 0, fieldUpdatedAt: {}, ...prior },
+    dvRegs: new Array(8).fill(0),
+    energy: { day: '2026-11-03', importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0, lastTs: 0 },
+  };
+  const pcfg = {
+    pollMs: 500, gridPositiveMeans: 'grid_import',
+    points: { soc: { enabled: true }, batteryPowerW: { enabled: true }, pvPowerW: { enabled: true }, selfConsumptionW: { enabled: true, derive: 'energy_balance' } },
+    epex: { timezone: 'UTC' }, userEnergyPricing: {}, dvControl: {},
+  };
+  const poller = createPoller({
+    state, getCfg: () => pcfg, transport: tr, pushLog: () => {},
+    energyPath: path.join(os.tmpdir(), `grid-share-lock-mqtt-${process.pid}.json`), onPollComplete: () => {},
+    epexNowNext: () => ({ current: { ct_kwh: 0 } }),
+  });
+  await poller.requestPoll();
+  return state;
+}
+
+test('abgeleitete Hauslast: altes Empfangsalter aus der Verbrauchs-Topic-Zeit bleibt nicht stehen', async () => {
+  const old = Date.now() - 10 * 60_000;
+  const state = await pollDvhubMqtt({
+    staleMaxAgeMs: 90_000,
+    ingest: (tr) => { tr.ingest('grid_total', -4_000); tr.ingest('pv_total', 6_000); tr.ingest('battery_power', 0); tr.ingest('battery_soc', 60); },
+    prior: { fieldSourceAt: { selfConsumptionW: old } },
+  });
+  assert.equal(state.victron.selfConsumptionDerived, true, 'abgeleitet');
+  const at = state.victron.fieldSourceAt?.selfConsumptionW;
+  assert.ok(!(at > 0) || Date.now() - at < 5_000, `Empfangsalter der Ableitung, nicht der alte Eintrag: ${at}`);
+});
+
+test('abgeleitete Hauslast: alter Akkuwert (Cache ohne Frist) macht die Last alt', async () => {
+  const old = Date.now() - 10 * 60_000;
+  const state = await pollDvhubMqtt({
+    staleMaxAgeMs: 0,
+    ingest: (tr) => { tr.ingest('grid_total', -4_000); tr.ingest('pv_total', 6_000); tr.ingest('battery_power', 3_000, old); tr.ingest('battery_soc', 60); },
+  });
+  assert.equal(state.victron.selfConsumptionDerived, true);
+  assert.equal(state.victron.fieldSourceAt?.selfConsumptionW, old, 'ältester Eingang');
+});
+
+test('Phasensumme: Empfangsalter ist das der ältesten gesehenen Phase', async () => {
+  const { sumConsumptionEntries } = await import('../transport-mqtt.js');
+  const now = Date.now();
+  assert.deepEqual(sumConsumptionEntries([{ value: 100, ts: now }, { value: 200, ts: now - 600_000 }, undefined], 0, now), { value: 300, ts: now - 600_000 });
+});
