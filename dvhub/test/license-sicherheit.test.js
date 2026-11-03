@@ -197,6 +197,25 @@ test('L-0002: Tarif-Wechsel (online größer als im File) holt ein frisches Mach
   assert.equal(b.svc.isProActive(), true);
 });
 
+// Gesamtprüfung 1.0.9 (Sicherheitsreste): Fehlte maxKwp im Machine-File,
+// band jede Prüfung die Lizenz neu (online ≠ null im File) — ohne Ende.
+test('Tarif-Abgleich: fehlt maxKwp im frischen Machine-File, nicht bei jeder Prüfung neu binden', async () => {
+  const b = box({ kwp: 30, persisted: { status: 'active', license_key: KEY, license_id: 'lic-1', machine_id: 'm-box-a', machine_file: mintMachineFile('box-a') } });
+  await withServers({ maxKwp: 40, proxy: okProxy(null) }, async (calls) => {
+    await b.svc.revalidateLicense();
+    await b.svc.revalidateLicense();
+    await b.svc.revalidateLicense();
+    assert.equal(calls.proxy.length, 1, `einmal neu ausgecheckt, nicht bei jeder Prüfung (${calls.proxy.length}×)`);
+  });
+  assert.equal(b.state.license.max_kwp, 40, 'Deckel aus der Online-Prüfung gilt weiter');
+  // Ändert sich der Tarif erneut, wird wieder ausgecheckt.
+  await withServers({ maxKwp: 70, proxy: okProxy(70) }, async (calls) => {
+    await b.svc.revalidateLicense();
+    assert.equal(calls.proxy.length, 1);
+  });
+  assert.equal(b.state.license.max_kwp, 70);
+});
+
 test('L-0002: Altlizenz ohne maxKwp bleibt unbegrenzt (Bestandsschutz)', async () => {
   const b = box({ kwp: 200 });
   await withServers({ maxKwp: null, proxy: okProxy(null) }, async () => { await b.svc.activateLicense(KEY); });
