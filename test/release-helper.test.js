@@ -860,6 +860,36 @@ test('unterbrochene Umstellung wird beim install zurückgenommen → Status sagt
   } finally { r.close(); }
 });
 
+// Gegenprüfung 4d83dd65 (P3): kommt nach der Rücknahme auch der alte Stand
+// nicht gesund hoch, darf der Status nicht nach „läuft wieder“ klingen.
+test('unterbrochene Umstellung zurückgenommen, git-Stand krank → failed mit Hinweis', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    await migrationInterruptedAtProvision(r);
+    r.bad.add('1.0.1');
+    r.bad.add('git');
+    r.publish({ version: '1.0.2' });
+    assert.equal((await r.run('install', 'latest', 'stable')).code, 1);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /NICHT gesund/);
+    assert.equal(r.current(), null);
+  } finally { r.close(); }
+});
+
+test('resume: unterbrochenes Update krank, Rückweg auch krank → failed', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.0');
+    interruptedUpdate(r, '1.0.1', '1.0.0');
+    r.bad.add('1.0.1');
+    r.bad.add('1.0.0');
+    assert.equal((await r.run('_job', 'resume')).code, 1);
+    assert.equal(r.status().state, 'failed');
+    assert.match(r.status().message, /NICHT gesund/);
+    assert.equal(r.current(), 'releases/1.0.0');
+  } finally { r.close(); }
+});
+
 // Hauptbefund 12: Scheitert nach einem gesunden Umschalten eine Nacharbeit
 // (Vertrauensdatei, alter Checkout, Aufräumen), galt der Auftrag als
 // gescheitert; im resume-Pfad blieb st.pending in state.json, und ein späterer

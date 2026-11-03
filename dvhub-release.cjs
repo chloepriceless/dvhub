@@ -1158,7 +1158,7 @@ async function settleInterrupted(s, job) {
   const r = await resumeInterrupted(s, st, job);
   job.log(`unterbrochener Auftrag: ${r.message}`);
   if (currentVersion(s)) return false;
-  job.finish(r.state, `${r.message} — Auftrag nicht ausgeführt (Box wieder auf dem git-Stand)`, r.extra);
+  job.finish(r.state, `${r.message} — Auftrag nicht ausgeführt (Box wieder auf git)`, r.extra);
   return true;
 }
 
@@ -1182,7 +1182,10 @@ async function resumeInterrupted(s, st, job) {
     record(st, v, 'migration_interrupted');
     saveState(s, st);
     restartService(s, job);
-    await waitHealthy(s, null, job);
+    // Auch der alte Stand krank: nicht nach „läuft wieder“ klingen (Gegenprüfung 4d83dd65).
+    if (!await waitHealthy(s, null, job)) {
+      return { state: 'failed', message: 'unterbrochene Umstellung zurückgenommen — aber der git-Stand meldet sich NICHT gesund (Dienst prüfen)', extra: { result: 'failed', version: v } };
+    }
     return { state: 'rolled_back', message: 'unterbrochene Umstellung zurückgenommen', extra: { result: 'rolled_back', version: v } };
   }
   if (st.pending) {
@@ -1199,16 +1202,20 @@ async function resumeInterrupted(s, st, job) {
       if (op === 'install') finalizeInstall(s, st, to, job);
       return { state: 'ok', message: `${to} läuft gesund (nach Unterbrechung bestätigt)`, extra: { result: 'ok', version: to } };
     }
+    let back = false;
     if (from && fs.existsSync(path.join(releasesDir(s), from))) {
       switchCurrent(s, from);
       reconcileLinks(s);
       restartService(s, job);
-      await waitHealthy(s, from, job);
+      back = await waitHealthy(s, from, job);
     }
     st.current = currentVersion(s);
     st.pending = null;
-    record(st, to, 'rolled_back');
+    record(st, to, back ? 'rolled_back' : 'failed');
     saveState(s, st);
+    if (!back) {
+      return { state: 'failed', message: `unterbrochener Auftrag (${to}) nicht gesund, und ${from || 'der vorige Stand'} meldet sich NICHT gesund (Dienst prüfen)`, extra: { result: 'failed', version: to, from } };
+    }
     return { state: 'rolled_back', message: `unterbrochener Auftrag: zurück auf ${from}`, extra: { result: 'rolled_back', version: to, from } };
   }
   return null;
