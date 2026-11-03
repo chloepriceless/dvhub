@@ -728,3 +728,20 @@ test('stockende Netzladung mit 40 % Einschaltzeit (12 s 3 kW, 18 s 0 W) zählt',
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Gesamtprüfung Release 1.0.9: das Protokoll-CSV ist der Nachweis ───────────
+// Es exportierte nur die letzten 5000 Zeilen; ältere Sperrwechsel und
+// Tageszeilen fehlten im Nachweis für die Direktvermarktung.
+test('Protokoll-CSV enthält alle Zeilen, nicht nur die letzten 5000', () => {
+  const dir = mkDir();
+  try {
+    const lines = [];
+    for (let i = 0; i < 6_000; i += 1) lines.push(JSON.stringify({ ts: new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString(), event: i % 2 ? 'lock_on' : 'lock_off', gridKwh: i }));
+    fs.writeFileSync(path.join(dir, GRID_SHARE_PROTOCOL_FILE), lines.join('\n') + '\n');
+    const t = createGridShareTracker({ getCfg: () => ({}), pushLog: () => {}, dataDir: dir });
+    const rows = t.protocolCsv().trim().split('\n');
+    assert.equal(rows.length, 6_001, 'Kopfzeile + alle 6000 Einträge');
+    assert.match(rows[1], /^2026-01-01T00:00:00/);
+    assert.equal(t.protocol(10).length, 10, 'die Anzeige bleibt begrenzt');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

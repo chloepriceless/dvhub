@@ -296,3 +296,49 @@ test('Phasensumme: Empfangsalter ist das der ältesten gesehenen Phase', async (
   const now = Date.now();
   assert.deepEqual(sumConsumptionEntries([{ value: 100, ts: now }, { value: 200, ts: now - 600_000 }, undefined], 0, now), { value: 300, ts: now - 600_000 });
 });
+
+// ── Gesamtprüfung Release 1.0.9: abgeschalteter PV-Punkt ──────────────────────
+// Wird ein PV-Punkt ausgeschaltet (z. B. zweite AC-PV-Position entfernt), pollt
+// polling.js ihn nicht mehr — sein letzter Wert floss weiter in pvTotalW, und
+// sein alter Stempel machte die PV im Einspeise-Deckel bis zum Neustart „alt“
+// (Deckel nur noch auf dem Puffer).
+test('abgeschalteter PV-Punkt: alter Wert und Stempel fallen weg, der Deckel nimmt den PV-Überschuss wieder', async () => {
+  const { createPoller } = await import('../polling.js');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const values = { pvPowerW: 0, acPvL1W: 4_000, acPv2L1W: 2_000, soc: 60, batteryPowerW: 0, selfConsumptionW: 1_000 };
+  const transport = {
+    type: 'mqtt',
+    readGrid: () => ({ total: 0, l1: 0, l2: 0, l3: 0 }),
+    readPoint: async (name) => ({ mqttValue: values[name], ts: Date.now() }),
+  };
+  const state = {
+    meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0, error: null },
+    victron: { errors: {}, updatedAt: 0, fieldUpdatedAt: {} },
+    dvRegs: new Array(8).fill(0),
+    energy: { day: '2026-11-03', importWh: 0, exportWh: 0, costEur: 0, revenueEur: 0, lastTs: 0 },
+  };
+  const points = {
+    soc: { enabled: true }, batteryPowerW: { enabled: true }, pvPowerW: { enabled: true },
+    acPvL1W: { enabled: true }, acPv2L1W: { enabled: true }, selfConsumptionW: { enabled: true },
+  };
+  const pcfg = { pollMs: 500, gridPositiveMeans: 'grid_import', points, epex: { timezone: 'UTC' }, userEnergyPricing: {}, dvControl: {} };
+  const poller = createPoller({
+    state, getCfg: () => pcfg, transport, pushLog: () => {},
+    energyPath: path.join(os.tmpdir(), `grid-share-pv-off-${process.pid}.json`), onPollComplete: () => {},
+    epexNowNext: () => ({ current: { ct_kwh: 0 } }),
+  });
+  await poller.requestPoll();
+  assert.equal(state.victron.pvTotalW, 6_000);
+  // Zweite Position aus; ihr Stempel altert (hier: 10 min zurückdatiert).
+  points.acPv2L1W.enabled = false;
+  state.victron.fieldUpdatedAt.acPv2L1W = Date.now() - 600_000;
+  await poller.requestPoll();
+  assert.equal(state.victron.acPv2L1W, null, 'alter Wert fließt nicht mehr in die PV-Summe');
+  assert.equal(state.victron.pvTotalW, 4_000);
+  assert.equal(state.victron.fieldUpdatedAt.acPv2L1W, undefined, 'kein alter Stempel');
+  // Der Deckel sieht 4 kW PV − 1 kW Last frisch.
+  const { evaluator, writes } = makeCtx({ mutate: ({ state: s }) => { s.victron = { ...s.victron, ...state.victron }; } });
+  await evaluator.applyControlTarget('gridSetpointW', -9000, 'eos_optimization');
+  assert.deepEqual(gridWrites(writes), [-(3_000 - GRID_SHARE_EXPORT_MARGIN_W)]);
+});

@@ -391,13 +391,16 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     }
   }
 
+  // limit: die jüngsten Einträge für die Anzeige (höchstens PROTOCOL_MAX_LINES);
+  // Infinity nur für den Nachweis (CSV) — der braucht jede Zeile.
   function readProtocol(limit = 500) {
     if (!protocolPath) return [];
     let text;
     try { text = fs.readFileSync(protocolPath, 'utf8'); } catch { return []; }
     const lines = text.split('\n').filter(Boolean);
     const out = [];
-    for (const l of lines.slice(-Math.min(PROTOCOL_MAX_LINES, Math.max(1, limit)))) {
+    const n = limit === Infinity ? lines.length : Math.min(PROTOCOL_MAX_LINES, Math.max(1, Number(limit) || 1));
+    for (const l of lines.slice(-n)) {
       try { out.push(JSON.parse(l)); } catch { /* kaputte Zeile überspringen */ }
     }
     return out;
@@ -665,7 +668,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
       return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const rows = readProtocol(PROTOCOL_MAX_LINES).map((e) => CSV_COLUMNS.map(([k]) => cell(e[k])).join(';'));
+    // Alle Zeilen: das CSV ist der Nachweis für die Direktvermarktung
+    // (Gesamtprüfung Release 1.0.9 — vorher nur die letzten 5000).
+    const rows = readProtocol(Infinity).map((e) => CSV_COLUMNS.map(([k]) => cell(e[k])).join(';'));
     return [CSV_COLUMNS.map(([, label]) => label).join(';'), ...rows].join('\n') + '\n';
   }
 
@@ -712,7 +717,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     isLocked,
     summary,
     persist: () => persist(Date.now()),
-    protocol: readProtocol,
+    protocol: (limit) => readProtocol(limit === Infinity ? PROTOCOL_MAX_LINES : limit),
     protocolCsv,
   };
 }
