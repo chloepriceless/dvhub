@@ -39,6 +39,7 @@ function memClient(relay, remote = null) {
   return {
     inbox, state,
     send: (o) => mine.send(JSON.stringify(o)),
+    hangup: () => mine.close(),
     async next(type) { return until(() => { const i = inbox.findIndex((m) => !type || m.t === type); return i >= 0 ? inbox.splice(i, 1)[0] : null; }); },
   };
 }
@@ -766,11 +767,21 @@ describe('Relay-Speicher: Steuerrahmen und Fragmente (Gegenprüfung faf3cb0)', (
       const a = await wsBox(port, generateIdentity());
       const b = await wsBox(port, generateIdentity());
       const before = srv.socketStats().inPartialBytes;
-      a.ws._socket.write(Buffer.concat([frame, Buffer.from([0x8a])]));
+      // Kontrollierte Stücke statt einer 65-KB-Schreibung: wie TCP die
+      // zerteilt, hängt von der Last ab (unter der ganzen Suite kam das
+      // Rest-Byte in einem 16-KB-Stück an, Koordinator 03.11.2026). Erst der
+      // Rahmen ohne sein Ende — bis das Relay ihn angenommen hat —, dann das
+      // Ende samt Rest-Byte in EINER kleinen Schreibung (ein Segment, ein
+      // Lesestück). Festgehalten sein muss das ganze letzte Stück, nicht 1 B.
+      const tail = 8_000;
+      a.ws._socket.setNoDelay(true);
+      a.ws._socket.write(frame.subarray(0, frame.length - tail));
+      await until(() => srv.socketStats().inPartialBytes - before >= frame.length - tail - 16);
+      a.ws._socket.write(Buffer.concat([frame.subarray(frame.length - tail), Buffer.from([0x8a])]));
       await a.next('pong');
       await sleep(50);
       const held = srv.socketStats().inPartialBytes - before;
-      assert.ok(held >= 60_000, `festgehaltenes Lesestück nur mit ${held} B gezählt`);
+      assert.ok(held >= tail, `festgehaltenes Lesestück nur mit ${held} B gezählt`);
       b.ws._socket.write(frame);
       await b.next('pong');
       await sleep(50);
@@ -1009,5 +1020,88 @@ describe('Relay-Speicher: faire Verdrängung im Briefkasten', () => {
     assert.ok(S.outPerConn <= S.outPerRemote);
     assert.ok(S.preAuthFrameBytes <= 16 * 1024);
     assert.ok(DEFAULT_LIMITS.mailboxBytesPerSource < DEFAULT_LIMITS.mailboxTotalBytes / 8);
+  });
+});
+
+// ── Gesamtprüfung release/1.0.9 ───────────────────────────────────────────
+describe('Relay-Sicherheit: Gesamtprüfung 1.0.9', () => {
+  const tick = () => new Promise((r) => setImmediate(r));
+
+  // Hauptbefund 11: 63 Quellen × 64 Verbindungen füllten maxConnections,
+  // danach bekam jede echte Box und jedes Handy relay_full.
+  test('volles Relay: eine neue Quelle verdrängt eine Verbindung der größten Quelle statt relay_full', async () => {
+    const relay = createRelay({ limits: { maxConnections: 8, maxConnectionsPerRemote: 4 } });
+    const flood = [];
+    for (const r of ['2001:db8:0:1::/64', '2001:db8:0:2::/64']) for (let i = 0; i < 4; i++) flood.push(memClient(relay, r));
+    await tick();
+    assert.equal(relay.stats().connections, 8);
+    const legit = memClient(relay, '198.51.100.7');
+    await tick();
+    assert.equal(legit.state.closed, null, `echte Box abgewiesen: ${JSON.stringify(legit.state.closed)}`);
+    assert.equal(flood.filter((c) => c.state.closed?.reason === 'relay_full').length, 1, 'genau eine Verbindung der größten Quelle weicht');
+    assert.equal(relay.stats().connections, 8);
+    // Die größte Quelle selbst verdrängt niemanden — sie bekommt relay_full.
+    const more = memClient(relay, '2001:db8:0:1::/64');
+    await tick();
+    assert.equal(more.state.closed?.reason, 'relay_full');
+    relay.close();
+  });
+
+  test('IPv6: Grenze auch je /48 (viele /64 aus einem Anschluss)', async () => {
+    const relay = createRelay({ limits: { maxConnectionsPerRemote: 4, maxConnectionsPerGroup: 6 } });
+    const cs = [];
+    for (let i = 0; i < 4; i++) cs.push(memClient(relay, '2001:db8:7:1::/64'));
+    for (let i = 0; i < 3; i++) cs.push(memClient(relay, '2001:db8:7:2::/64'));
+    await tick();
+    assert.deepEqual(cs.map((c) => c.state.closed?.reason || null), [null, null, null, null, null, null, 'too_many_connections']);
+    const other = memClient(relay, '2001:db8:8:1::/64');
+    await tick();
+    assert.equal(other.state.closed, null, 'anderes /48 unberührt');
+    relay.close();
+  });
+
+  // Kleinbefund Relay: Drossel für neue Boxen wirkungslos, sobald ihre Tabelle voll ist.
+  test('neue Boxen bleiben gedrosselt, auch wenn die Quellen-Tabelle voll ist', async () => {
+    const big = { boxFramesPerWindow: 1e9, boxBytesPerWindow: 1e12 };
+    const relay = createRelay({ limits: { ...big, newBoxSourcesTracked: 2, newBoxesPerSource: 1, newBoxRefillMs: 3600_000 } });
+    const put = async (remote) => {
+      const e = await boxOnRelay(relay, generateIdentity(), remote);
+      e.send({ t: 'allow', devs: ['x'] });
+      e.send({ t: 'mbox_put', dev: 'x', d: b64(100) });
+      await flush(e);
+      return e.inbox.find((m) => m.t === 'error')?.e || null;
+    };
+    assert.equal(await put('198.51.100.1'), null);
+    assert.equal(await put('198.51.100.2'), null);
+    // Tabelle voll: weitere Quellen teilen sich einen Eimer.
+    assert.equal(await put('198.51.100.3'), null);
+    assert.equal(await put('198.51.100.4'), 'relay_busy');
+    relay.close();
+  });
+
+  // Kleinbefund Relay: Liste der entkoppelten Handys ließ sich mit frischen Box-Kennungen leeren.
+  test('entkoppelte Handys bleiben gesperrt, auch wenn eine Quelle viele Boxen anmeldet', async () => {
+    const relay = createRelay({ limits: { revokedBoxes: 4, revokedBoxesPerSource: 2 } });
+    const box = generateIdentity();
+    const dev = generateIdentity();
+    const b = await boxOnRelay(relay, box, '198.51.100.7');
+    b.send({ t: 'allow', devs: [dev.id] });
+    b.send({ t: 'allow', devs: [] });
+    await flush(b);
+    b.send({ t: 'ping' });
+    await b.next('pong');
+    // Box offline.
+    b.hangup();
+    await until(() => relay.stats().boxesOnline === 0);
+    // Fremde Quelle meldet viele Boxen mit Freigabeliste an.
+    for (let i = 0; i < 6; i++) {
+      const f = await boxOnRelay(relay, generateIdentity(), '203.0.113.9');
+      f.send({ t: 'allow', devs: ['x'] });
+      await flush(f);
+    }
+    const d = await deviceOnRelay(relay, box, dev);
+    await until(() => d.state.closed || d.inbox.some((m) => m.t === 'ok'));
+    assert.equal(d.state.closed?.reason, 'device_not_allowed', 'entkoppeltes Handy kommt wieder herein');
+    relay.close();
   });
 });

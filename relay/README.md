@@ -67,7 +67,7 @@ Ohne TLS (`ws://`) nimmt DVhub ein Relay nur im eigenen Netz an.
 | `RELAY_NAME` | Name in der Begrüßung | `dvhub-relay` |
 | `RELAY_BOX_ALLOWLIST` | Datei mit erlaubten Anlagen-Kennungen (eine je Zeile, `#` = Kommentar). Ohne Datei darf jede Anlage das Relay nutzen. Änderungen wirken ohne Neustart. | – |
 | `RELAY_MAX_BOXES` | höchstens so viele Anlagen gleichzeitig | `10000` |
-| `RELAY_TRUST_PROXY` | Anzahl Reverse-Proxys vor dem Relay (`1` = ein Caddy/nginx). Die Quelladresse für die Grenze je Quelle ist dann der Eintrag, den der äußerste Proxy in `X-Forwarded-For` angehängt hat (von rechts gezählt), nie ein vom Client gesetzter. Wird nur von Gegenstellen mit privater Adresse (Docker-Netz, localhost) angenommen; IPv6 zählt je /64. | – |
+| `RELAY_TRUST_PROXY` | Anzahl Reverse-Proxys vor dem Relay (`1` = ein Caddy/nginx). Die Quelladresse für die Grenze je Quelle ist dann der Eintrag, den der äußerste Proxy in `X-Forwarded-For` angehängt hat (von rechts gezählt), nie ein vom Client gesetzter. Wird nur von Gegenstellen mit privater Adresse (Docker-Netz, localhost) angenommen; IPv6 zählt je /64 und zusätzlich je /48. Ist das Relay voll, weicht für eine neue Quelle eine Verbindung der Quelle mit den meisten Verbindungen. | – |
 
 Die Kennung einer Anlage steht in DVhub in der Kachel „Handy-App“ (`boxId`) bzw.
 in `GET /api/mobile-link/status`.

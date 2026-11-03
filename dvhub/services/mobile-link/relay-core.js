@@ -45,6 +45,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   // Je Quelladresse (hinter einem Proxy die von ihm angehängte Adresse,
   // IPv6 je /64 — siehe relay-server.js clientAddress).
   maxConnectionsPerRemote: 64,
+  // IPv6 zusätzlich je /48 (ein Anschluss bekommt oft ein /56 oder /48 und
+  // damit Hunderte /64, Gesamtprüfung 1.0.9). IPv4 bleibt bei der Adresse.
+  maxConnectionsPerGroup: 256,
   maxAllowPerBox: 32,
   maxBoxes: 10_000,
   maxDeviceConnsPerBox: 16,
@@ -80,6 +83,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   // Entkoppelte Geräte, die sich das Relay über das Offline-Sein der Box merkt.
   revokedPerBox: 32,
   revokedBoxes: 2_000,
+  // Davon je Quelle (IPv6 je /48): frische Box-Kennungen einer Quelle
+  // verdrängen nur deren eigene Einträge (Gesamtprüfung 1.0.9).
+  revokedBoxesPerSource: 16,
 });
 
 // Speicher über die Nutzdaten hinaus (Map-Einträge, Objekte, String-Köpfe,
@@ -91,6 +97,18 @@ const ITEM_OVERHEAD = 256;
 const BOX_OVERHEAD = 1024; // Index-Eintrag je Box
 const B64U = /^[A-Za-z0-9_-]+={0,2}$/;
 const NO_SOURCE = '-'; // Verbindung ohne Quelladresse (eingebettet, Tests)
+// Gemeinsamer Eimer für neue Boxen aus Quellen, die die volle Tabelle nicht
+// mehr aufnimmt (Gesamtprüfung 1.0.9: vorher galten sie als unbekannt und
+// bekamen jedes Mal den vollen Eimer).
+const NEW_BOX_OVERFLOW = '\u0000overflow';
+
+// Gruppe einer Quelle: IPv6-/64-Schlüssel (relay-server.js remoteKey) → /48,
+// alles andere bleibt, wie es ist (Gesamtprüfung 1.0.9).
+export function sourceGroup(remote) {
+  if (!remote) return null;
+  const m = /^([0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4}):[0-9a-f]{1,4}::\/64$/.exec(remote);
+  return m ? `${m[1]}::/48` : remote;
+}
 
 // Spielraum über der Rahmengrenze der Rolle (UTF-8 statt Zeichen, Kopf).
 export const FRAME_SLACK = 4096;
@@ -145,6 +163,12 @@ export function createRelay({
   let closed = false;
   const conns = new Set();
   const perRemote = new Map(); // Quelladresse → offene Verbindungen
+  // Gruppe (IPv6 /48, sonst die Adresse) → offene Verbindungen in
+  // Anmelde-Reihenfolge: Grenze je Gruppe und faires Verdrängen, wenn das
+  // Relay voll ist (Gesamtprüfung 1.0.9, Hauptbefund 11).
+  const perGroup = new Map();
+  // Entkoppelt-Einträge je Quelle (Gruppe) — siehe noteAllow.
+  const revokedPerSrc = new Map();
 
   function boxEntry(boxId) {
     let e = boxes.get(boxId);
@@ -225,14 +249,20 @@ export function createRelay({
   }
 
   // Neue Box-Briefkästen je Quelle drosseln (Eimer, nur im Arbeitsspeicher).
-  function newBoxAllowed(key) {
+  function newBoxAllowed(src) {
     const t = now();
-    const e = newBoxTokens.get(key);
+    let key = src;
+    let e = newBoxTokens.get(key);
+    // Liste voll: unbekannte Quellen teilen sich einen Eimer — sonst bekäme
+    // jede jedes Mal den vollen (Gesamtprüfung 1.0.9).
+    if (!e && newBoxTokens.size >= L.newBoxSourcesTracked) {
+      key = NEW_BOX_OVERFLOW;
+      e = newBoxTokens.get(key);
+    }
     if (!e) {
-      // Unbekannte Quelle startet mit vollem Eimer. Ist die Liste voll, gilt
-      // sie weiter als unbekannt (bekäme ohnehin den vollen Eimer).
+      // Unbekannte Quelle startet mit vollem Eimer.
       if (L.newBoxesPerSource < 1) return false;
-      if (newBoxTokens.size < L.newBoxSourcesTracked) newBoxTokens.set(key, { n: L.newBoxesPerSource - 1, t });
+      newBoxTokens.set(key, { n: L.newBoxesPerSource - 1, t });
       return true;
     }
     e.n = Math.min(L.newBoxesPerSource, e.n + (t - e.t) / L.newBoxRefillMs);
@@ -396,16 +426,31 @@ export function createRelay({
 
   // Freigabeliste der Box: wer herausfällt, gilt als entkoppelt, bis die Box
   // ihn wieder freigibt (Strix H-0004). Begrenzt je Box und insgesamt.
-  function noteAllow(boxId, prevAllow, allow) {
-    const r = revoked.get(boxId) || { last: null, gone: new Set() };
-    revoked.delete(boxId); // ans Ende (zuletzt benutzt)
+  // Je Quelle höchstens revokedBoxesPerSource Einträge: eine Flut frischer
+  // Box-Kennungen verdrängt nur die eigenen, nicht die echter Boxen
+  // (Gesamtprüfung 1.0.9). Gesamt bleibt die Grenze revokedBoxes.
+  function revokedDrop(boxId) {
+    const r = revoked.get(boxId);
+    if (!r) return;
+    revoked.delete(boxId);
+    const n = (revokedPerSrc.get(r.src) || 1) - 1;
+    if (n > 0) revokedPerSrc.set(r.src, n); else revokedPerSrc.delete(r.src);
+  }
+  function noteAllow(boxId, prevAllow, allow, src = NO_SOURCE) {
+    const r = revoked.get(boxId) || { last: null, gone: new Set(), src };
+    revokedDrop(boxId); // ans Ende (zuletzt benutzt)
+    if (r.src !== src) r.src = src;
     const prev = prevAllow || r.last;
     if (prev) for (const dev of prev) if (!allow.has(dev)) { r.gone.delete(dev); r.gone.add(dev); }
     for (const dev of allow) r.gone.delete(dev);
     while (r.gone.size > L.revokedPerBox) r.gone.delete(r.gone.values().next().value);
     r.last = allow;
+    if ((revokedPerSrc.get(src) || 0) >= L.revokedBoxesPerSource) {
+      for (const [id, x] of revoked) if (x.src === src) { revokedDrop(id); break; }
+    }
     revoked.set(boxId, r);
-    while (revoked.size > L.revokedBoxes) revoked.delete(revoked.keys().next().value);
+    revokedPerSrc.set(src, (revokedPerSrc.get(src) || 0) + 1);
+    while (revoked.size > L.revokedBoxes) revokedDrop(revoked.keys().next().value);
   }
 
   const pruneTimer = setInterval(() => { mbPrune(); newBoxPrune(); }, 60_000);
@@ -439,20 +484,49 @@ export function createRelay({
     send(e.conn, { t: 'open', c: conn.cid, role: conn.role, ...(conn.devId ? { dev: conn.devId } : {}) });
   }
 
+  // Relay voll (Gesamtprüfung 1.0.9, Hauptbefund 11): Statt jede neue
+  // Verbindung abzuweisen, weicht eine Verbindung der Gruppe mit den meisten
+  // Verbindungen — wenn sie mindestens zwei mehr hat als die Gruppe des
+  // Neuankömmlings. Wer das Relay mit vielen Verbindungen aus wenigen Netzen
+  // füllt, sperrt so keine echten Boxen und Handys aus. Es weicht zuerst eine
+  // noch nicht angemeldete, sonst die jüngste Verbindung der Gruppe.
+  function evictForNewcomer(group) {
+    const own = group ? (perGroup.get(group)?.size || 0) : 0;
+    let victims = null;
+    for (const set of perGroup.values()) if (!victims || set.size > victims.size) victims = set;
+    if (!victims || victims.size < own + 2) return false;
+    let victim = null;
+    for (const c of victims) { if (!c.role) { victim = c; break; } victim = c; }
+    if (!victim) return false;
+    log('relay_full_evict', { group: victim.group });
+    closeConn(victim, CLOSE.limit, 'relay_full');
+    return true;
+  }
+
   function attach(sock, { remote = null } = {}) {
     if (closed) { try { sock.close(CLOSE.shutdown, 'shutdown'); } catch { /* egal */ } return null; }
-    if (conns.size >= L.maxConnections) { try { sock.close(CLOSE.limit, 'relay_full'); } catch { /* egal */ } return null; }
-    if (remote && (perRemote.get(remote) || 0) >= L.maxConnectionsPerRemote) {
+    const group = sourceGroup(remote);
+    if ((remote && (perRemote.get(remote) || 0) >= L.maxConnectionsPerRemote)
+      || (group && (perGroup.get(group)?.size || 0) >= L.maxConnectionsPerGroup)) {
       try { sock.close(CLOSE.limit, 'too_many_connections'); } catch { /* egal */ }
+      return null;
+    }
+    if (conns.size >= L.maxConnections && !evictForNewcomer(group)) {
+      try { sock.close(CLOSE.limit, 'relay_full'); } catch { /* egal */ }
       return null;
     }
     if (remote) perRemote.set(remote, (perRemote.get(remote) || 0) + 1);
     const conn = {
-      sock, remote, cid: String(nextCid++), role: null, boxId: null, devId: null,
+      sock, remote, group, cid: String(nextCid++), role: null, boxId: null, devId: null,
       challenge: b64u(crypto.randomBytes(32)), closed: false,
       rate: { start: now(), frames: 0, bytes: 0 },
     };
     conns.add(conn);
+    if (group) {
+      let set = perGroup.get(group);
+      if (!set) { set = new Set(); perGroup.set(group, set); }
+      set.add(conn);
+    }
     conn.authTimer = setTimeout(() => closeConn(conn, CLOSE.authTimeout, 'auth_timeout'), L.authTimeoutMs);
     conn.authTimer.unref?.();
     sock.onMessage((text) => onMessage(conn, text));
@@ -469,6 +543,11 @@ export function createRelay({
     if (conn.remote) {
       const n = (perRemote.get(conn.remote) || 1) - 1;
       if (n > 0) perRemote.set(conn.remote, n); else perRemote.delete(conn.remote);
+    }
+    if (conn.group) {
+      const set = perGroup.get(conn.group);
+      set?.delete(conn);
+      if (set && !set.size) perGroup.delete(conn.group);
     }
     if (!conn.boxId) return;
     const e = boxes.get(conn.boxId);
@@ -614,7 +693,7 @@ export function createRelay({
         }
         const prev = e.allow;
         e.allow = new Set(msg.devs);
-        noteAllow(conn.boxId, prev, e.allow);
+        noteAllow(conn.boxId, prev, e.allow, sourceGroup(conn.remote) || NO_SOURCE);
         for (const d of [...e.devices]) if (!e.allow.has(d.devId)) closeConn(d, CLOSE.notAllowed, 'device_not_allowed');
         // Nur die Briefkästen dieser Box (Index statt Rundlauf über alle, Strix H-0005).
         const b = mbBoxes.get(conn.boxId);
@@ -636,7 +715,8 @@ export function createRelay({
         if (!isStr(msg.dev, 64) || !isStr(msg.d, L.mailboxBytes)) return;
         // Nur für Geräte auf der Freigabeliste — ohne Liste gar nicht.
         if (!e.allow || !e.allow.has(msg.dev)) return;
-        const err = mbPut(conn.boxId, msg.dev, msg.d, msg.slot === 'latest' ? 'latest' : null, conn.remote || NO_SOURCE);
+        // Quelle = Gruppe (IPv6 /48): viele /64 eines Anschlusses zählen zusammen.
+        const err = mbPut(conn.boxId, msg.dev, msg.d, msg.slot === 'latest' ? 'latest' : null, sourceGroup(conn.remote) || NO_SOURCE);
         // `slot` sagt der Box, ob ein Ereignis abgelehnt wurde (das legt sie
         // erneut ab) oder nur der letzte Stand (kommt ohnehin alle 60 s).
         // `ref` (von der Box gewählt) nennt die abgelehnte Ablage.
@@ -703,6 +783,8 @@ export function createRelay({
       srcs.clear();
       srcBuckets.length = 0;
       newBoxTokens.clear();
+      perGroup.clear();
+      revokedPerSrc.clear();
       mbHead = null;
       mbTail = null;
       revoked.clear();
