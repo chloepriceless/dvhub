@@ -133,3 +133,19 @@ test('Befund 7: server.js hängt den Zähler-Schritt vor dem Poller ein, nicht i
   assert.ok(assign > 0 && poller > 0 && assign < poller, 'vor createPoller');
   assert.equal(/ctx\.gridShare\?\.tick\?\.\(/.test(src), false, 'kein zweiter Zähler-Schritt im onPollComplete');
 });
+
+test('Befund 7: Sperrwechsel vor der Datenbank werden vorgemerkt und nach telemetryReady nachgetragen (Gegenprüfung 0bd0577a, P3)', () => {
+  const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const queue = src.indexOf('const pendingGridShareEvents = []');
+  const tracker = src.indexOf('ctx.gridShare = createGridShareTracker(');
+  assert.ok(queue > 0 && queue < tracker, 'Vormerkliste vor dem Zähler angelegt');
+  assert.match(src, /if \(!telemetryStore && !telemetryInitDone\) \{\s*if \(pendingGridShareEvents\.length < 20\) pendingGridShareEvents\.push\(event\);/);
+  const ready = src.indexOf('telemetryStore = await createTelemetryStoreIfEnabled();');
+  const flush = src.indexOf('for (const event of pendingGridShareEvents.splice(0))');
+  assert.ok(ready > 0 && flush > ready, 'nachgetragen, sobald die Datenbank da ist');
+});
+
+test('Befund 3: das Börsenautomatik-Feld (Standard 30 kWh) gilt nicht als Akkukapazität', () => {
+  const cfg = { optimizer: {}, schedule: { smallMarketAutomation: { batteryCapacityKwh: 30 } } };
+  assert.equal(gridShareCapacityInput({ state: { victron: { soc: 50 } } }, cfg).capacityMissing, true);
+});

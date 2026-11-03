@@ -12,7 +12,11 @@
 // Einstellung optimizer.batteryCapacityWh (bzw. der heute gültigen
 // Akku-Ausbaustufe, die applyVictronDefaults dort einträgt), mit zweiter
 // GX-Anlage plus multiGx.batteryCapacityWh. Herstellerprofile und gelesene
-// Register liefern keine Kapazität. Fehlt sie, gibt es KEINE Ersatzzahl
+// Register liefern keine Kapazität. Das Feld der Kleinen Börsenautomatik
+// (schedule.smallMarketAutomation.batteryCapacityKwh) zählt bewusst nicht: es
+// steht in jeder Konfiguration mit dem Standard 30 kWh (createDefaultConfig) —
+// eingetragen und nie angefasst sind nicht zu unterscheiden (Gegenprüfung
+// 0bd0577a, P2 verworfen). Fehlt die Kapazität, gibt es KEINE Ersatzzahl
 // (früher 8000 Wh: ein 40-kWh-Akku mit 20 kWh Netzstrom wurde auf ~5,7 kWh
 // gekappt, die Sperre fiel viel zu früh; Gesamtprüfung Release 1.0.9,
 // Befund 3): der Zähler kappt dann nicht am Ladestand und bucht beim Entladen

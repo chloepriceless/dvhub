@@ -586,7 +586,7 @@ export function createEosForecastBridge(ctx) {
     if (priceHistoryCache && nowMs - priceHistoryCache.at < 3_600_000) return priceHistoryCache.points;
     const store = ctx.telemetryStore;
     if (!store || typeof store.querySeries !== 'function') return [];
-    let points = [];
+    const points = [];
     try {
       const rows = await store.querySeries({
         // Wie routes-api (EEG-Verlängerung): der Live-Abruf schreibt

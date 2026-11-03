@@ -1377,6 +1377,9 @@ ctx.onPollComplete = () => {};
 // virtueller Zähler, wie viel Netzstrom im Akku steckt; sperrt die
 // Akku-Einspeisung, solange es mehr als eine kleine Schwelle ist. Gezählt wird
 // nur im Runtime-Prozess; ein getrennter Web-Prozess liest die Datei.
+// Sperrwechsel vor der Datenbank (siehe onLockChange) und ob sie schon bereit ist.
+const pendingGridShareEvents = [];
+let telemetryInitDone = false;
 ctx.gridShare = createGridShareTracker({
   getCfg: () => ctx.getCfg(),
   pushLog,
@@ -1384,11 +1387,20 @@ ctx.gridShare = createGridShareTracker({
   readOnly: !IS_RUNTIME_PROCESS,
   // Sperre an/aus → EOS sofort umstellen (Akku-Netzeinspeisung) und neu planen.
   onLockChange: (locked) => {
-    telemetrySafeWrite(() => telemetryStore?.writeControlEvent({
+    const event = {
       eventType: locked ? 'grid_share_lock_on' : 'grid_share_lock_off',
       target: 'battery', valueNum: ctx.gridShare?.summary?.().gridKwh ?? null,
-      reason: 'grid_share', source: 'runtime', meta: { sharePct: ctx.gridShare?.summary?.().sharePct ?? null }
-    }));
+      reason: 'grid_share', source: 'runtime', ts: new Date().toISOString(),
+      meta: { sharePct: ctx.gridShare?.summary?.().sharePct ?? null }
+    };
+    // Der Zähler läuft ab der ersten Abfrage (Befund 7), die Datenbank kommt
+    // evtl. erst später: dann vormerken und nach telemetryReady nachtragen
+    // (Gegenprüfung 0bd0577a, P3).
+    if (!telemetryStore && !telemetryInitDone) {
+      if (pendingGridShareEvents.length < 20) pendingGridShareEvents.push(event);
+    } else {
+      telemetrySafeWrite(() => telemetryStore?.writeControlEvent(event));
+    }
     (async () => {
       try { await ctx.eosConfigSync?.sync?.(); }
       catch (e) { pushLog('eos_config_sync_error', { phase: 'grid_share_lock', error: e?.message || String(e) }); }
@@ -2257,6 +2269,11 @@ const web = http.createServer(async (req, res) => {
 const telemetryReady = (async () => {
   telemetryStore = await createTelemetryStoreIfEnabled();
   ctx.telemetryStore = telemetryStore;
+  telemetryInitDone = true;
+  // Sperrwechsel des Netzstrom-Zählers aus der Zeit vor der Datenbank nachtragen.
+  for (const event of pendingGridShareEvents.splice(0)) {
+    telemetrySafeWrite(() => telemetryStore?.writeControlEvent(event));
+  }
   // Peak Shaving: die Spitzen nicht erst nach dem nächsten 5-min-Takt zeigen.
   if (IS_RUNTIME_PROCESS) ctx.peakShaving?.refreshPeaks?.().catch(() => {});
   // dbPool already set inside createTelemetryStoreIfEnabled() — ctx.db getter reads it
@@ -2925,7 +2942,8 @@ if (IS_RUNTIME_PROCESS) {
     };
     // Arm the alert-push hook — ctx.monitoringAlertPush() now routes here.
     monitoringHeartbeatSend = sendHeartbeat;
-    // Solange der Entlade-Wächter Alarm hat, bleibt der Monitor auf „down“ —
+    // Solange der Entlade-Wächter, der Einfrier-Wächter oder die Kreuzprobe
+    // Alarm hat, bleibt der Monitor auf „down“ —
     // sonst überschrieb der nächste Puls die Störung nach höchstens einem
     // Intervall (Gegenprüfung d3420a0c, P2).
     const heartbeat = (okMsg) => {
