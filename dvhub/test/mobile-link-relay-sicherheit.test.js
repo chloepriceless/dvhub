@@ -1118,4 +1118,39 @@ describe('Relay-Sicherheit: Gesamtprüfung 1.0.9', () => {
     assert.equal(d.state.closed?.reason, 'device_not_allowed', 'entkoppeltes Handy kommt wieder herein');
     relay.close();
   });
+
+  // Gegenprüfung 43bd89ed (P2): je /56 gezählt hielt ein /48 256 Quellen —
+  // genug, um die Liste zu leeren. Zweite Grenze je /48.
+  test('entkoppelte Handys: viele /56 aus einem /48 leeren die Liste nicht', async () => {
+    const relay = createRelay({ limits: { revokedBoxes: 6, revokedBoxesPerSource: 2, revokedBoxesPerWideSource: 3 } });
+    const box = generateIdentity();
+    const dev = generateIdentity();
+    const b = await boxOnRelay(relay, box, '198.51.100.7');
+    b.send({ t: 'allow', devs: [dev.id] });
+    b.send({ t: 'allow', devs: [] });
+    await flush(b);
+    b.hangup();
+    await until(() => relay.stats().boxesOnline === 0);
+    for (const n of ['100', '200', '300', '400']) {
+      for (let i = 0; i < 2; i++) {
+        const f = await boxOnRelay(relay, generateIdentity(), `2001:db8:9:${n}::/64`);
+        f.send({ t: 'allow', devs: ['x'] });
+        await flush(f);
+      }
+    }
+    const d = await deviceOnRelay(relay, box, dev);
+    await until(() => d.state.closed || d.inbox.some((m) => m.t === 'ok'));
+    assert.equal(d.state.closed?.reason, 'device_not_allowed');
+    relay.close();
+  });
+
+  test('Verbindungen: zweite Grenze je /48', async () => {
+    const relay = createRelay({ limits: { maxConnectionsPerRemote: 4, maxConnectionsPerGroup: 4, maxConnectionsPerWideGroup: 6 } });
+    const cs = [];
+    for (let i = 0; i < 4; i++) cs.push(memClient(relay, '2001:db8:9:100::/64'));
+    for (let i = 0; i < 3; i++) cs.push(memClient(relay, '2001:db8:9:200::/64'));
+    await tick();
+    assert.deepEqual(cs.map((c) => c.state.closed?.reason || null), [null, null, null, null, null, null, 'too_many_connections']);
+    relay.close();
+  });
 });

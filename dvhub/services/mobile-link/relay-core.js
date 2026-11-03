@@ -48,6 +48,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   // IPv6 zusätzlich je /56 (ein Anschluss bekommt meist ein /56 und damit
   // 256 /64, Gesamtprüfung 1.0.9). IPv4 bleibt bei der Adresse.
   maxConnectionsPerGroup: 256,
+  // … und je /48 (ein /48 ist leicht zu bekommen und hält 256 /56,
+  // Gegenprüfung 43bd89ed).
+  maxConnectionsPerWideGroup: 1024,
   maxAllowPerBox: 32,
   maxBoxes: 10_000,
   maxDeviceConnsPerBox: 16,
@@ -86,6 +89,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   // Davon je Quelle (IPv6 je /56): frische Box-Kennungen einer Quelle
   // verdrängen nur deren eigene Einträge (Gesamtprüfung 1.0.9).
   revokedBoxesPerSource: 16,
+  // … und je /48 (256 /56 eines /48 dürfen die Liste nicht leeren,
+  // Gegenprüfung 43bd89ed; Kunden eines Anbieter-/48 teilen sich das).
+  revokedBoxesPerWideSource: 256,
 });
 
 // Speicher über die Nutzdaten hinaus (Map-Einträge, Objekte, String-Köpfe,
@@ -106,6 +112,13 @@ const NEW_BOX_OVERFLOW = '\u0000overflow';
 // remoteKey) → /56, so wie deutsche Anbieter ihn je Kunde vergeben — ein /48
 // teilten sich 256 fremde Kunden (Gegenprüfung d3cafdcf, P2). Alles andere
 // bleibt, wie es ist (Gesamtprüfung 1.0.9).
+// Weite Gruppe für die zweite Grenze: IPv6 /48, sonst wie sourceGroup.
+export function sourceWideGroup(remote) {
+  if (!remote) return null;
+  const m = /^([0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4}):[0-9a-f]{1,4}::\/64$/.exec(remote);
+  return m ? `${m[1]}::/48` : remote;
+}
+
 export function sourceGroup(remote) {
   if (!remote) return null;
   const m = /^([0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4}):([0-9a-f]{1,4})::\/64$/.exec(remote);
@@ -169,8 +182,11 @@ export function createRelay({
   // Anmelde-Reihenfolge: Grenze je Gruppe und faires Verdrängen, wenn das
   // Relay voll ist (Gesamtprüfung 1.0.9, Hauptbefund 11).
   const perGroup = new Map();
-  // Entkoppelt-Einträge je Quelle (Gruppe) — siehe noteAllow.
+  const perWideGroup = new Map(); // IPv6 /48 → Anzahl offener Verbindungen
+  // Entkoppelt-Einträge je Quelle (Gruppe) und je weiter Gruppe — siehe noteAllow.
   const revokedPerSrc = new Map();
+  const revokedPerWide = new Map();
+  const dec = (map, key) => { const n = (map.get(key) || 1) - 1; if (n > 0) map.set(key, n); else map.delete(key); };
 
   function boxEntry(boxId) {
     let e = boxes.get(boxId);
@@ -435,13 +451,14 @@ export function createRelay({
     const r = revoked.get(boxId);
     if (!r) return;
     revoked.delete(boxId);
-    const n = (revokedPerSrc.get(r.src) || 1) - 1;
-    if (n > 0) revokedPerSrc.set(r.src, n); else revokedPerSrc.delete(r.src);
+    dec(revokedPerSrc, r.src);
+    dec(revokedPerWide, r.wide);
   }
-  function noteAllow(boxId, prevAllow, allow, src = NO_SOURCE) {
-    const r = revoked.get(boxId) || { last: null, gone: new Set(), src };
+  function noteAllow(boxId, prevAllow, allow, src = NO_SOURCE, wide = src) {
+    const r = revoked.get(boxId) || { last: null, gone: new Set(), src, wide };
     revokedDrop(boxId); // ans Ende (zuletzt benutzt)
-    if (r.src !== src) r.src = src;
+    r.src = src;
+    r.wide = wide;
     const prev = prevAllow || r.last;
     if (prev) for (const dev of prev) if (!allow.has(dev)) { r.gone.delete(dev); r.gone.add(dev); }
     for (const dev of allow) r.gone.delete(dev);
@@ -449,9 +466,12 @@ export function createRelay({
     r.last = allow;
     if ((revokedPerSrc.get(src) || 0) >= L.revokedBoxesPerSource) {
       for (const [id, x] of revoked) if (x.src === src) { revokedDrop(id); break; }
+    } else if ((revokedPerWide.get(wide) || 0) >= L.revokedBoxesPerWideSource) {
+      for (const [id, x] of revoked) if (x.wide === wide) { revokedDrop(id); break; }
     }
     revoked.set(boxId, r);
     revokedPerSrc.set(src, (revokedPerSrc.get(src) || 0) + 1);
+    revokedPerWide.set(wide, (revokedPerWide.get(wide) || 0) + 1);
     while (revoked.size > L.revokedBoxes) revokedDrop(revoked.keys().next().value);
   }
 
@@ -508,8 +528,10 @@ export function createRelay({
   function attach(sock, { remote = null } = {}) {
     if (closed) { try { sock.close(CLOSE.shutdown, 'shutdown'); } catch { /* egal */ } return null; }
     const group = sourceGroup(remote);
+    const wide = sourceWideGroup(remote);
     if ((remote && (perRemote.get(remote) || 0) >= L.maxConnectionsPerRemote)
-      || (group && (perGroup.get(group)?.size || 0) >= L.maxConnectionsPerGroup)) {
+      || (group && (perGroup.get(group)?.size || 0) >= L.maxConnectionsPerGroup)
+      || (wide && (perWideGroup.get(wide) || 0) >= L.maxConnectionsPerWideGroup)) {
       try { sock.close(CLOSE.limit, 'too_many_connections'); } catch { /* egal */ }
       return null;
     }
@@ -518,8 +540,9 @@ export function createRelay({
       return null;
     }
     if (remote) perRemote.set(remote, (perRemote.get(remote) || 0) + 1);
+    if (wide) perWideGroup.set(wide, (perWideGroup.get(wide) || 0) + 1);
     const conn = {
-      sock, remote, group, cid: String(nextCid++), role: null, boxId: null, devId: null,
+      sock, remote, group, wide, cid: String(nextCid++), role: null, boxId: null, devId: null,
       challenge: b64u(crypto.randomBytes(32)), closed: false,
       rate: { start: now(), frames: 0, bytes: 0 },
     };
@@ -546,6 +569,7 @@ export function createRelay({
       const n = (perRemote.get(conn.remote) || 1) - 1;
       if (n > 0) perRemote.set(conn.remote, n); else perRemote.delete(conn.remote);
     }
+    if (conn.wide) dec(perWideGroup, conn.wide);
     if (conn.group) {
       const set = perGroup.get(conn.group);
       set?.delete(conn);
@@ -695,7 +719,7 @@ export function createRelay({
         }
         const prev = e.allow;
         e.allow = new Set(msg.devs);
-        noteAllow(conn.boxId, prev, e.allow, sourceGroup(conn.remote) || NO_SOURCE);
+        noteAllow(conn.boxId, prev, e.allow, sourceGroup(conn.remote) || NO_SOURCE, sourceWideGroup(conn.remote) || NO_SOURCE);
         for (const d of [...e.devices]) if (!e.allow.has(d.devId)) closeConn(d, CLOSE.notAllowed, 'device_not_allowed');
         // Nur die Briefkästen dieser Box (Index statt Rundlauf über alle, Strix H-0005).
         const b = mbBoxes.get(conn.boxId);
@@ -786,7 +810,9 @@ export function createRelay({
       srcBuckets.length = 0;
       newBoxTokens.clear();
       perGroup.clear();
+      perWideGroup.clear();
       revokedPerSrc.clear();
+      revokedPerWide.clear();
       mbHead = null;
       mbTail = null;
       revoked.clear();
