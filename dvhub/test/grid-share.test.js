@@ -587,8 +587,9 @@ test('am Kapazitätsdeckel mit weiterem Zufluss: frischer Ladestand kappt nach 6
 // Christin: „dass wir rechnerisch nie Netzstrom verkaufen und Marktprämie dafür
 // kassieren, will ich ausschließen.“ Gezählt wird jede tatsächliche Netzladung,
 // egal wer sie auslöst und ob Netzlade- oder MiSpeL-Freigabe gesetzt ist.
-// Regelrauschen filtert eine Mindestleistung (150 W), die mindestens 30 s
-// anhält — dann zählt die ganze Ladung, auch die ersten 30 s.
+// Regelrauschen filtert ein gleitendes 30-s-Fenster (filterGridInflow): im
+// Mittel mindestens 150 W und mindestens 10 s lang Werte ab 150 W — dann zählt
+// die Ladung ab ihrem ersten Wert ab 150 W, auch kurze Einbrüche.
 
 for (const [name, optimizer] of [
   ['„Netzladen erlaubt“ ohne MiSpeL-Freigabe (Codex-Reproduktion)', { allowGridCharge: true, gridChargeWithoutMispel: false, mispel: { mode: 'none' } }],
@@ -652,8 +653,8 @@ test('laufende Netzladung: kurzer Einbruch unter 150 W zählt weiter, danach end
     assert.ok(atEnd - 200 < 0.6, `Nachlauf ${atEnd - 200} Wh`);
     tickEverySecond(t, t0, 301, 400, { gridToBatteryW: 60, gridImportW: 60 });
     assert.equal(t.summary().gridWh, atEnd, 'danach nichts mehr');
-    // Neue kurze Spitze (10 s) nach dem Ende: verworfen.
-    tickEverySecond(t, t0, 401, 410, { gridToBatteryW: 3_000, gridImportW: 3_000 });
+    // Neue kurze Spitze (8 s, unter einem Drittel des Fensters) nach dem Ende: verworfen.
+    tickEverySecond(t, t0, 401, 408, { gridToBatteryW: 3_000, gridImportW: 3_000 });
     tickEverySecond(t, t0, 411, 460, { gridToBatteryW: 0, gridImportW: 0 });
     assert.equal(t.summary().gridWh, atEnd);
   } finally {
@@ -703,11 +704,26 @@ test('Reset während einer noch nicht bestätigten Ladung: nur Energie danach z�
     const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
     const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
     const t0 = Date.parse('2026-11-03T02:00:00Z');
-    tickEverySecond(t, t0, 0, 10, { gridToBatteryW: 6_000, gridImportW: 6_000 });
-    assert.equal(t.summary().gridWh, 0, 'noch vorgemerkt');
-    t.reset({ reason: 'Test', nowMs: t0 + 10_500 });
-    tickEverySecond(t, t0, 11, 70, { gridToBatteryW: 6_000, gridImportW: 6_000 });
+    tickEverySecond(t, t0, 0, 8, { gridToBatteryW: 6_000, gridImportW: 6_000 });
+    assert.equal(t.summary().gridWh, 0, 'noch vorgemerkt (8 s, Anlauf)');
+    t.reset({ reason: 'Test', nowMs: t0 + 8_500 });
+    tickEverySecond(t, t0, 9, 68, { gridToBatteryW: 6_000, gridImportW: 6_000 });
     near(t.summary().gridWh, 6_000 * 60 / 3600, 0.5);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Gegenprüfung 018dc85f (P3): Mit „mindestens die halbe Fensterzeit“ blieb eine
+// Ladung mit 12 s an / 18 s aus (im Mittel 1,2 kW) komplett ungezählt.
+test('stockende Netzladung mit 40 % Einschaltzeit (12 s 3 kW, 18 s 0 W) zählt', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.parse('2026-11-03T10:00:00Z');
+    tickEverySecond(t, t0, 0, 3600, (s) => (s % 30 < 12 ? { gridToBatteryW: 3_000, gridImportW: 3_000 } : { gridToBatteryW: 0, gridImportW: 0 }));
+    near(t.summary().gridWh, 3_000 * 0.4, 30);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

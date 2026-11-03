@@ -19,9 +19,9 @@
 //                      Netzladen mit Freigabe, 6 kW per Handeingabe blieben
 //                      ungezählt). Regelrauschen filtert ein gleitendes
 //                      30-s-Fenster (filterGridInflow): Netzladung liegt an,
-//                      wenn dort im Mittel mindestens 150 W und mindestens 15 s
-//                      lang Werte ab 150 W anlagen — dann zählt alles im Fenster
-//                      (auch die ersten Sekunden und kurze Einbrüche). So
+//                      wenn dort im Mittel mindestens 150 W und mindestens 10 s
+//                      lang Werte ab 150 W anlagen — dann zählt sie ab ihrem
+//                      ersten Wert ab 150 W (Anlauf und kurze Einbrüche). So
 //                      sperren Pendeln um den Sollwert (einige 10 W,
 //                      Gegenprüfungen 8465a540 und f4bcc3ba) und kurze
 //                      Regelvorgänge (Wolke, Laststoß) keine Anlage, eine
@@ -105,7 +105,7 @@ export const GRID_SHARE_FIELD_MAX_AGE_MS = 90_000;
 export const GRID_SHARE_MIN_CHARGE_W = 150;
 /**
  * … beurteilt über ein gleitendes Fenster dieser Länge: im Mittel mindestens
- * GRID_SHARE_MIN_CHARGE_W und mindestens die halbe Fensterzeit ab dieser
+ * GRID_SHARE_MIN_CHARGE_W und mindestens ein Drittel der Fensterzeit ab dieser
  * Leistung. Kurze Regelvorgänge (Wolke: der Akku lädt einige Sekunden weiter
  * aus dem Netz, bis die Regelung nachzieht) bleiben darunter.
  */
@@ -230,7 +230,10 @@ export function gridShareExportCapW({ pvAcW, pvDcW, loadW, bufferW = 0, marginW 
  * bestätigte endete bei Rauschen mit einzelnen Spitzen nie).
  * Netzladung liegt an, solange im Fenster
  *   - der Mittelwert mindestens minW beträgt und
- *   - mindestens die Hälfte der Zeit (minAboveMs) ein Wert ab minW anlag.
+ *   - mindestens ein Drittel der Zeit (minAboveMs, 10 s) ein Wert ab minW
+ *     anlag. Regelvorgänge nach einer Wolke dauern nur Sekunden; die halbe
+ *     Fensterzeit verwarf eine stockende Ladung mit 12 s an / 18 s aus
+ *     (Gegenprüfung 018dc85f, P3).
  * Liegt sie an, wird alles noch nicht Gebuchte im Fenster ab dem ersten Wert
  * ab minW gebucht (die ersten Sekunden einer Ladung und kurze Einbrüche),
  * danach jeder neue Wert.
@@ -240,7 +243,7 @@ export function gridShareExportCapW({ pvAcW, pvDcW, loadW, bufferW = 0, marginW 
  * @param {{nowMs:number, dtMs:number, inflowW:number, minW?:number, windowMs?:number, minAboveMs?:number}} p
  * @returns {{filter: object, inWh:number, droppedWh:number, active:boolean}}
  */
-export function filterGridInflow(filter, { nowMs, dtMs, inflowW, minW = GRID_SHARE_MIN_CHARGE_W, windowMs = GRID_SHARE_MIN_CHARGE_MS, minAboveMs = GRID_SHARE_MIN_CHARGE_MS / 2 }) {
+export function filterGridInflow(filter, { nowMs, dtMs, inflowW, minW = GRID_SHARE_MIN_CHARGE_W, windowMs = GRID_SHARE_MIN_CHARGE_MS, minAboveMs = GRID_SHARE_MIN_CHARGE_MS / 3 }) {
   const samples = filter?.samples ? filter.samples.slice() : [];
   const dt = Math.max(0, Number(dtMs) || 0);
   const whOf = (s) => s.w * s.dtMs / 3_600_000;
