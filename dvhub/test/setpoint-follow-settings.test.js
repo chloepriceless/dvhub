@@ -157,3 +157,20 @@ test('Uptime-Kuma-Puls bleibt während eines Wächter-Alarms auf down (Gegenprü
   assert.equal(hb.status, 'down');
   assert.match(hb.msg, /entlädt nicht/);
 });
+
+// Gesamtprüfung Release 1.0.9: Einfrier-Wächter und Kreuzprobe melden „down“
+// ebenfalls nur einmal — der nächste Puls stellte den Monitor wieder auf „up“.
+test('Uptime-Kuma-Puls bleibt auch bei Einfrier- und Kreuzprobe-Alarm auf down', () => {
+  const frozen = setpointFollowHeartbeat({ victron: { soc: 50, freeze: { active: true, reasons: ['identical_values'], since: '2026-11-03T10:00:00.000Z' } } }, 'DVhub OK');
+  assert.equal(frozen.status, 'down');
+  assert.match(frozen.msg, /eingefroren/);
+  const mismatch = setpointFollowHeartbeat({ victron: { soc: 50, sourceMismatch: { active: true, since: '2026-11-03T10:00:00.000Z', fields: ['soc'] } } }, 'DVhub OK');
+  assert.equal(mismatch.status, 'down');
+  assert.match(mismatch.msg, /widersprüchlich/);
+  // Der reine Einfrier-Verdacht (Stable-Kanal, kein Alarm) bleibt „up“.
+  assert.equal(setpointFollowHeartbeat({ victron: { soc: 50, freezeSuspect: { active: true } } }, 'DVhub OK').status, 'up');
+  // Mehrere Alarme: alle in einer Meldung.
+  const both = setpointFollowHeartbeat({ victron: { soc: 50, freeze: { active: true }, setpointFollow: { active: true, since: 'x' } } }, 'DVhub OK');
+  assert.match(both.msg, /entlädt nicht/);
+  assert.match(both.msg, /eingefroren/);
+});
