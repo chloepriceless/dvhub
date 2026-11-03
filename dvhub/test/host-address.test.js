@@ -69,10 +69,12 @@ test('createOutboundLookup: Loopback, link-local, 0-Adresse und gemischte Antwor
     'gemischt': ['93.184.216.34', '127.0.0.1'],
     'mapped': ['::ffff:127.0.0.1'],
     'ntfy.lan': ['192.168.1.10'],
+    'ntfy.local': ['fe80::1', '192.168.1.11'],
+    'nur-linklocal': ['fe80::1'],
     'ntfy.sh': ['93.184.216.34', '2606:2800:220:1::1'],
   }));
   const run = (host, opts) => new Promise((resolve) => lookup(host, opts, (err, a, f) => resolve({ err, a, f })));
-  for (const h of ['ip6-localhost', '127.0.0.1.nip.io', 'box', 'meta', 'null', 'gemischt', 'mapped']) {
+  for (const h of ['ip6-localhost', '127.0.0.1.nip.io', 'box', 'meta', 'null', 'gemischt', 'mapped', 'nur-linklocal']) {
     const r = await run(h, {});
     assert.ok(r.err, h);
     assert.equal(r.err.code, 'EOUTBOUNDBLOCKED', h);
@@ -82,6 +84,11 @@ test('createOutboundLookup: Loopback, link-local, 0-Adresse und gemischte Antwor
   assert.equal(one.err, null);
   assert.equal(one.a, '192.168.1.10');
   assert.equal(one.f, 4);
+  // mDNS liefert neben der Heimnetz-Adresse eine link-local-IPv6: die fällt
+  // weg, der Name bleibt nutzbar (Gegenprüfung 1e8d955a, P3).
+  const mdns = await run('ntfy.local', { all: true });
+  assert.equal(mdns.err, null);
+  assert.deepEqual(mdns.a.map((x) => x.address), ['192.168.1.11']);
   const all = await run('ntfy.sh', { all: true });
   assert.equal(all.err, null);
   assert.deepEqual(all.a.map((x) => x.address), ['93.184.216.34', '2606:2800:220:1::1']);

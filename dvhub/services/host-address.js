@@ -138,7 +138,11 @@ export function createOutboundLookup(resolve = dns.lookup) {
     const opts = typeof options === 'number' ? { family: options } : { ...(options || {}) };
     resolve(hostname, { ...opts, all: true }, (err, addrs) => {
       if (err) return callback(err);
-      const list = Array.isArray(addrs) ? addrs : [];
+      // IPv6 link-local (fe80::/10) liefert mDNS neben der Heimnetz-Adresse
+      // mit (ntfy.local) — nicht verbinden, aber den Namen deswegen nicht
+      // sperren. Alles andere Interne (Box, 0-Adresse, 169.254/16) sperrt.
+      const list = (Array.isArray(addrs) ? addrs : [])
+        .filter((a) => !(String(a?.address).includes(':') && classifyHost(a.address) === 'linklocal'));
       if (!list.length || list.some((a) => !OUTBOUND_KINDS.includes(classifyHost(a?.address)))) {
         const e = new Error(`outbound_address_not_allowed: ${hostname}`);
         e.code = 'EOUTBOUNDBLOCKED';
