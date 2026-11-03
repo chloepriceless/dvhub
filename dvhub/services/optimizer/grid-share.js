@@ -9,11 +9,21 @@
 // Zählregel (Energieflüsse aus polling.js, Gleichstromseite des Akkus):
 //   Netz→Akku          erhöht den Netzstrom-Anteil G um die geladene Energie —
 //                      höchstens um den gemessenen Netzbezug (bei Fronius ist
-//                      die PV-Leistung die AC-Leistung NACH dem Laden) und nur,
-//                      solange „Netzladen erlaubt“ gilt (isGridChargeLicensed).
-//                      Ohne Netzladen bleibt der Zähler stehen: kleine
-//                      Regelabweichungen sollen eine Anlage ohne Netzladen
-//                      nicht sperren (Gegenprüfung 8465a540, P2).
+//                      die PV-Leistung die AC-Leistung NACH dem Laden). Es zählt
+//                      JEDE tatsächliche Netzladung, egal wer sie auslöst (EOS,
+//                      Handeingabe, Zeitplan, fremde Steuerung) und ob Netzlade-
+//                      oder MiSpeL-Freigabe gesetzt ist (Christin 03.11.2026:
+//                      „dass wir rechnerisch nie Netzstrom verkaufen und
+//                      Marktprämie dafür kassieren, will ich ausschließen“;
+//                      Gegenprüfung Release 1.0.9, P2 — vorher zählte nur
+//                      Netzladen mit Freigabe, 6 kW per Handeingabe blieben
+//                      ungezählt). Regelrauschen filtert eine Ladung mit
+//                      Mindestleistung und -dauer (filterGridInflow): erst ab
+//                      150 W, die mindestens 30 s anhalten, dann zählt die ganze
+//                      Ladung samt ihrer ersten 30 s. So sperren Pendeln um den
+//                      Sollwert (einige 10 W, Gegenprüfungen 8465a540 und
+//                      f4bcc3ba) und kurze Regelvorgänge (Wolke, Laststoß) keine
+//                      Anlage. Verworfenes steht in der Tageszeile.
 //   Akku→Haus/Netz     senkt G anteilig: Anteil (G / Akku-Inhalt) × Entladung.
 //   Verluste           anteilig: die Wandlungsverluste stecken in den Flüssen
 //                      (gemessen am Akku), alles Weitere zeigt der Ladestand —
@@ -59,6 +69,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { isGridStorageOnly, isGridChargeLicensed } from './grid-storage.js';
+// isGridChargeLicensed nur noch für die Anzeige (summary.gridChargeEnabled) —
+// gezählt wird jede Netzladung.
 
 /** Ab mehr als 100 Wh Netzstrom im Akku ist die Akku-Einspeisung gesperrt … */
 export const GRID_SHARE_LOCK_THRESHOLD_WH = 100;
@@ -81,6 +93,20 @@ export const GRID_SHARE_MAX_STEP_MS = 60_000;
  * integriert jeden alten Wert zu Energie.
  */
 export const GRID_SHARE_FIELD_MAX_AGE_MS = 90_000;
+/**
+ * Netzladung gegen Regelrauschen: Netz→Akku zählt erst ab dieser Leistung …
+ * Pendeln um den Sollwert liegt bei einigen 10 W (Victron-Standard-Sollwert
+ * +50 W, Messrauschen ~40 W); echte Netzladung — EOS, Handeingabe, Victrons
+ * eigenes Nachladen an der SoC-Grenze (5 A ≈ 250 W) — liegt darüber.
+ */
+export const GRID_SHARE_MIN_CHARGE_W = 150;
+/**
+ * … und wenn sie mindestens so lange anhält; dann zählt sie ganz. Kurze
+ * Regelvorgänge (Wolke: der Akku lädt einige Sekunden weiter aus dem Netz,
+ * bis die Regelung nachzieht) bleiben darunter. Ebenso lange muss eine
+ * laufende Ladung unter der Mindestleistung liegen, bevor sie als beendet gilt.
+ */
+export const GRID_SHARE_MIN_CHARGE_MS = 30_000;
 /** Erst so lange sichere Werte beenden eine Unsicherheits-Episode im Log (kein Flattern). */
 export const GRID_SHARE_UNCERTAIN_CLEAR_MS = 60_000;
 /** Felder, aus denen polling.js Akkuflüsse und Akku-Inhalt rechnet. */
@@ -142,10 +168,10 @@ export function gridShareBatteryUncertain(victron, { nowMs = Date.now(), maxAgeM
  * Ein Zählschritt (rein, ohne Zustand).
  * @param {number} gridWh Netzstrom im Akku vor dem Schritt
  * @param {{dtMs:number, gridToBatteryW?:number, batteryToHomeW?:number, batteryToGridW?:number,
- *          socPct?:number|null, capacityWh?:number|null}} p
+ *          socPct?:number|null, capacityWh?:number|null, extraInWh?:number}} p
  * @returns {{gridWh:number, inWh:number, toHomeWh:number, toGridWh:number, lossWh:number, share:number, storedWh:number|null}}
  */
-export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, batteryToGridW, socPct, capacityWh, capAllowed = true } = {}) {
+export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, batteryToGridW, socPct, capacityWh, capAllowed = true, extraInWh = 0 } = {}) {
   const h = Math.max(0, Number(dtMs) || 0) / 3_600_000;
   const soc = finiteOrNull(socPct);
   const cap = finiteOrNull(capacityWh);
@@ -156,7 +182,9 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
   // Anteil zu Beginn des Schritts. Ohne Ladestand nimmt Entladen nichts weg —
   // der Zähler bleibt dann eher zu hoch als zu niedrig (Sperre im Zweifel an).
   const shareBefore = !known ? 0 : (g <= 0 ? 0 : (storedWh > 0 ? Math.min(1, g / storedWh) : 1));
-  const inWh = pos(gridToBatteryW) * h;
+  // extraInWh: Netzladung aus früheren Schritten, die erst jetzt als echte
+  // Ladung bestätigt ist (filterGridInflow).
+  const inWh = pos(gridToBatteryW) * h + pos(extraInWh);
   const toHomeWh = Math.min(g, shareBefore * pos(batteryToHomeW) * h);
   const toGridWh = Math.min(g - toHomeWh, shareBefore * pos(batteryToGridW) * h);
   g = g - toHomeWh - toGridWh + inWh;
@@ -192,6 +220,42 @@ export function gridShareExportCapW({ pvAcW, pvDcW, loadW, bufferW = 0, marginW 
   return Math.round(Math.max(buffer, surplus, 0));
 }
 
+/**
+ * Regelrauschen von echter Netzladung trennen (rein, Zustand `run` wird
+ * zurückgegeben). Eine Ladung beginnt, sobald Netz→Akku mindestens minW
+ * erreicht; ihre Energie wird vorgemerkt und erst gebucht, wenn sie minMs lang
+ * nicht unter minW gefallen ist — dann komplett. Fällt sie vorher darunter, wird
+ * das Vorgemerkte verworfen. Eine bestätigte Ladung zählt alles (auch kurze
+ * Einbrüche) und endet erst nach minMs unter minW.
+ * @param {null|{startMs:number, pendingWh:number, confirmed:boolean, belowSinceMs:number|null}} run
+ * @param {{nowMs:number, dtMs:number, inflowW:number, minW?:number, minMs?:number}} p
+ * @returns {{run: object|null, inWh:number, droppedWh:number}}
+ */
+export function filterGridInflow(run, { nowMs, dtMs, inflowW, minW = GRID_SHARE_MIN_CHARGE_W, minMs = GRID_SHARE_MIN_CHARGE_MS }) {
+  const w = pos(inflowW);
+  const dt = Math.max(0, Number(dtMs) || 0);
+  const wh = w * dt / 3_600_000;
+  const startMs = nowMs - dt;
+  let r = run ? { ...run } : null;
+  if (!r) {
+    if (w < minW || dt <= 0) return { run: null, inWh: 0, droppedWh: wh };
+    r = { startMs, pendingWh: 0, confirmed: false, belowSinceMs: null };
+  }
+  if (!r.confirmed) {
+    if (w < minW) return { run: null, inWh: 0, droppedWh: r.pendingWh + wh };
+    r.pendingWh += wh;
+    if (nowMs - r.startMs < minMs) return { run: r, inWh: 0, droppedWh: 0 };
+    const inWh = r.pendingWh;
+    r.pendingWh = 0;
+    r.confirmed = true;
+    return { run: r, inWh, droppedWh: 0 };
+  }
+  if (w >= minW) r.belowSinceMs = null;
+  else if (r.belowSinceMs == null) r.belowSinceMs = startMs;
+  const ended = r.belowSinceMs != null && nowMs - r.belowSinceMs >= minMs;
+  return { run: ended ? null : r, inWh: wh, droppedWh: 0 };
+}
+
 function localDate(ms, timeZone) {
   try {
     return new Intl.DateTimeFormat('en-CA', { timeZone: timeZone || 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -202,7 +266,7 @@ function localDate(ms, timeZone) {
 }
 
 const r3 = (v) => Math.round(Number(v) * 1000) / 1000;
-const emptyDay = (date) => ({ date, inWh: 0, toHomeWh: 0, toGridWh: 0, lossWh: 0, lockedMs: 0, maxGridWh: 0, uncertainMs: 0, uncertainInWh: 0 });
+const emptyDay = (date) => ({ date, inWh: 0, toHomeWh: 0, toGridWh: 0, lossWh: 0, lockedMs: 0, maxGridWh: 0, uncertainMs: 0, uncertainInWh: 0, filteredInWh: 0 });
 
 /**
  * @param {object} opts
@@ -230,6 +294,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   // GRID_SHARE_UNCERTAIN_CLEAR_MS sicherer Werte.
   let uncertainEpisode = null;
   let certainSinceMs = null;
+  // Laufende Netzladung (filterGridInflow) — nur im Speicher: ein Neustart
+  // mitten in den ersten 30 s einer Ladung verliert höchstens diese.
+  let chargeRun = null;
 
   function fresh() {
     return {
@@ -337,6 +404,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
         lockedMinutes: Math.round(d.lockedMs / 60_000),
         uncertainMinutes: Math.round((d.uncertainMs || 0) / 60_000),
         uncertainGridToBatteryKwh: r3((d.uncertainInWh || 0) / 1000),
+        filteredGridToBatteryKwh: r3((d.filteredInWh || 0) / 1000),
         lockApplies: gridShareLockApplies(cfg),
       });
     }
@@ -362,15 +430,21 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     const dtMs = lastTickMs == null ? 0 : Math.min(GRID_SHARE_MAX_STEP_MS, Math.max(0, nowMs - lastTickMs));
     lastTickMs = nowMs;
     const v = victron || {};
-    // Zufluss nur bei erlaubtem Netzladen (Schalter + MiSpeL-Freigabe bzw.
-    // „ohne Option“) und höchstens der echte Netzbezug. Nur der Schalter
-    // (Gegenprüfung 6555bdcf) sperrte Anlagen ohne Freigabe durch Regelrauschen
-    // (Gegenprüfung f4bcc3ba, P2) — zurück. Offen: manuelle positive Sollwerte
-    // laden ohne Freigabe trotzdem aus dem Netz (schedule-eval prüft nur den
-    // Schalter); ob die gesperrt werden, entscheidet Christin.
-    const inflowW = isGridChargeLicensed(cfg)
-      ? Math.min(pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW), pos(v.gridImportW))
-      : 0;
+    // Zufluss: jede tatsächliche Netzladung, höchstens der echte Netzbezug —
+    // ohne Rücksicht auf Netzlade- oder MiSpeL-Freigabe (Christin 03.11.2026,
+    // Gegenprüfung Release 1.0.9, P2; damit ist auch die offene Frage
+    // „manuelle positive Sollwerte ohne MiSpeL“ beantwortet: zählen).
+    // Regelrauschen filtert filterGridInflow (Mindestleistung und -dauer) —
+    // das war der Grund für die frühere Freigabe-Bedingung (Gegenprüfung f4bcc3ba).
+    const filtered = filterGridInflow(chargeRun, {
+      nowMs, dtMs,
+      inflowW: Math.min(pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW), pos(v.gridImportW)),
+    });
+    chargeRun = filtered.run;
+    if (filtered.droppedWh > 0) {
+      st.day.filteredInWh = (st.day.filteredInWh || 0) + filtered.droppedWh;
+      dirty = true;
+    }
     // Unsichere Akkuwerte: nichts abbuchen — Entladung beider Akkus gilt als 0
     // (die Aufteilung auf Akku 2 rechnet polling.js aus denselben Werten). Ist
     // der Ladestand unsicher, wird er nicht benutzt (keine Kappung); bei nur
@@ -379,7 +453,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     if (secondBatteryStale) reasons.push('second_battery_stale');
     const uncertain = reasons.length > 0;
     const flows = {
-      gridToBatteryW: inflowW,
+      gridToBatteryW: 0,
       batteryToHomeW: uncertain ? 0 : pos(v.batteryDirectUseW) + pos(v.secondBatteryDirectUseW),
       batteryToGridW: uncertain ? 0 : pos(v.batteryToGridW) + pos(v.secondBatteryToGridW),
     };
@@ -390,7 +464,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     }
     const capAllowed = overSinceMs != null && nowMs - overSinceMs >= GRID_SHARE_CAP_CONFIRM_MS;
     const socUncertain = reasons.some((x) => SOC_UNCERTAIN_REASONS.has(x));
-    const r = stepGridShare(st.gridWh, { dtMs, ...flows, socPct: socUncertain ? null : socPct, capacityWh, capAllowed });
+    const r = stepGridShare(st.gridWh, { dtMs, ...flows, extraInWh: filtered.inWh, socPct: socUncertain ? null : socPct, capacityWh, capAllowed });
     if (uncertain) st.day.uncertainInWh = (st.day.uncertainInWh || 0) + r.inWh;
     // Ladestand liegt unter dem Zählerstand: erst merken, nach 60 s kappen.
     // Neu warten nur nach einer echten Ladestand-Kappung — der Kapazitätsdeckel
@@ -498,6 +572,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
         lossFromGridKwh: kwh(st.day?.lossWh), lockedMinutes: Math.round((st.day?.lockedMs || 0) / 60_000),
         uncertainMinutes: Math.round((st.day?.uncertainMs || 0) / 60_000),
         uncertainGridToBatteryKwh: kwh(st.day?.uncertainInWh),
+        filteredGridToBatteryKwh: kwh(st.day?.filteredInWh),
       },
       totals: {
         gridToBatteryKwh: kwh(st.totals.inWh), batteryToHomeFromGridKwh: kwh(st.totals.toHomeWh),
@@ -514,7 +589,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     ['gridToBatteryKwh', 'Netz→Akku kWh'], ['batteryToHomeFromGridKwh', 'Akku→Haus aus Netzstrom kWh'],
     ['batteryToGridFromGridKwh', 'Akku→Netz aus Netzstrom kWh'], ['lossFromGridKwh', 'Verlust Netzstrom kWh'],
     ['maxGridKwh', 'Netzstrom max kWh'], ['endGridKwh', 'Netzstrom Tagesende kWh'], ['endSharePct', 'Anteil Tagesende %'],
-    ['lockedMinutes', 'Sperre min'], ['uncertainMinutes', 'Akkuwerte unsicher min (nicht abgebucht)'], ['uncertainGridToBatteryKwh', 'davon Netz→Akku bei unsicheren Werten kWh'], ['gridKwh', 'Netzstrom kWh'], ['sharePct', 'Anteil %'], ['thresholdKwh', 'Schwelle kWh'],
+    ['lockedMinutes', 'Sperre min'], ['uncertainMinutes', 'Akkuwerte unsicher min (nicht abgebucht)'], ['uncertainGridToBatteryKwh', 'davon Netz→Akku bei unsicheren Werten kWh'], ['filteredGridToBatteryKwh', 'Netz→Akku verworfen (unter 150 W oder kürzer als 30 s) kWh'], ['gridKwh', 'Netzstrom kWh'], ['sharePct', 'Anteil %'], ['thresholdKwh', 'Schwelle kWh'],
     ['lockApplies', 'Sperre gilt'], ['reason', 'Grund'], ['actor', 'Ausgelöst von'],
   ];
   function protocolCsv() {

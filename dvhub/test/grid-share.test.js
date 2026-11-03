@@ -103,16 +103,18 @@ test('Netz→Akku zählt höchstens den echten Netzbezug (Fronius: PV-AC nach de
   }
 });
 
-test('ohne „Netzladen erlaubt“ zählt der Zähler keinen Zufluss (keine Sperre durch Regelrauschen)', () => {
+test('ohne „Netzladen erlaubt“: echte Netzladung zählt (Christin 03.11.), Rauschen nicht', () => {
   const dir = mkDir();
   try {
     const cfg = { optimizer: { allowGridCharge: false }, schedule: { timezone: 'Europe/Berlin' } };
     const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
     const t0 = Date.now();
     t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 77_000 });
-    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 77_000 });
-    assert.equal(t.summary().gridWh, 0);
-    assert.equal(t.isLocked(), false);
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 80, gridImportW: 80 }, socPct: 50, capacityWh: 77_000 });
+    assert.equal(t.summary().gridWh, 0, '80 W Pendeln zählt nicht');
+    t.tick({ nowMs: t0 + 120_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 77_000 });
+    near(t.summary().gridWh, 200, 0.01);
+    assert.equal(t.isLocked(), true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -572,6 +574,78 @@ test('am Kapazitätsdeckel mit weiterem Zufluss: frischer Ladestand kappt nach 6
     // Ladestand wieder frisch bei 50 %, Netzladen läuft weiter → nach 60 s auf 5,1 kWh (+ Zufluss bis zur Kappung).
     for (let i = 121; i <= 124; i += 1) t.tick({ nowMs: t0 + i * 60_000, socPct: 50, capacityWh: 10_000, victron: { gridToBatteryW: 6_000, gridImportW: 6_000 } });
     assert.ok(t.summary().gridWh <= 5_100 + 200, `${t.summary().gridWh}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Jede echte Netzladung zählt (Gegenprüfung Release 1.0.9, P2) ───────────
+// Christin: „dass wir rechnerisch nie Netzstrom verkaufen und Marktprämie dafür
+// kassieren, will ich ausschließen.“ Gezählt wird jede tatsächliche Netzladung,
+// egal wer sie auslöst und ob Netzlade- oder MiSpeL-Freigabe gesetzt ist.
+// Regelrauschen filtert eine Mindestleistung (150 W), die mindestens 30 s
+// anhält — dann zählt die ganze Ladung, auch die ersten 30 s.
+const tickEverySecond = (t, t0, fromS, toS, victron) => {
+  for (let s = fromS; s <= toS; s += 1) t.tick({ nowMs: t0 + s * 1_000, victron, socPct: 50, capacityWh: 77_000 });
+};
+
+for (const [name, optimizer] of [
+  ['„Netzladen erlaubt“ ohne MiSpeL-Freigabe (Codex-Reproduktion)', { allowGridCharge: true, gridChargeWithoutMispel: false, mispel: { mode: 'none' } }],
+  ['ohne „Netzladen erlaubt“ (Handeingabe, Zeitplan, fremde Steuerung)', { allowGridCharge: false }],
+  ['mit Freigabe', { allowGridCharge: true, gridChargeWithoutMispel: true }],
+]) {
+  test(`echte Netzladung zählt — ${name}`, () => {
+    const dir = mkDir();
+    try {
+      const cfg = { optimizer, schedule: { timezone: 'Europe/Berlin' } };
+      const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+      const t0 = Date.parse('2026-11-03T02:00:00Z');
+      // zehn Minuten 6 kW Netz → Akku, im Sekundentakt wie polling.js
+      tickEverySecond(t, t0, 0, 600, { gridToBatteryW: 6_000, gridImportW: 6_500 });
+      near(t.summary().gridWh, 1_000, 2);
+      assert.equal(t.isLocked(), true, 'Akku-Einspeisung gesperrt');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test('Regelrauschen zählt nicht: stundenlang 40–140 W, kurze Spitzen unter 30 s', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: false, mispel: { mode: 'none' } }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.parse('2026-11-03T08:00:00Z');
+    for (let s = 0; s <= 3 * 3600; s += 1) {
+      // Pendeln um den Sollwert (40–140 W), alle fünf Minuten eine Wolke: 20 s lang 2 kW
+      const w = s % 300 < 20 ? 2_000 : 90 + 50 * Math.sin(s / 7);
+      t.tick({ nowMs: t0 + s * 1_000, victron: { gridToBatteryW: w, gridImportW: w }, socPct: 50, capacityWh: 77_000 });
+    }
+    assert.equal(t.summary().gridWh, 0);
+    assert.equal(t.isLocked(), false);
+    assert.ok(t.summary().today.filteredGridToBatteryKwh > 0.2, `verworfen ausgewiesen: ${t.summary().today.filteredGridToBatteryKwh}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('laufende Netzladung: kurzer Einbruch unter 150 W zählt weiter, Ende erst nach 30 s darunter', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: false }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.parse('2026-11-03T02:00:00Z');
+    tickEverySecond(t, t0, 0, 120, { gridToBatteryW: 3_000, gridImportW: 3_000 });     // 100 Wh
+    tickEverySecond(t, t0, 121, 125, { gridToBatteryW: 50, gridImportW: 50 });        // Messeinbruch
+    tickEverySecond(t, t0, 126, 245, { gridToBatteryW: 3_000, gridImportW: 3_000 });   // weiter, 100 Wh
+    near(t.summary().gridWh, 200 + 50 * 5 / 3600, 0.5);
+    // Danach Ende: 40 s Rauschen — die ersten 30 s zählen noch mit, dann nichts mehr.
+    tickEverySecond(t, t0, 246, 400, { gridToBatteryW: 60, gridImportW: 60 });
+    near(t.summary().gridWh, 200 + 50 * 5 / 3600 + 60 * 30 / 3600, 0.5);
+    // Neue kurze Spitze (10 s) nach dem Ende: verworfen.
+    tickEverySecond(t, t0, 401, 410, { gridToBatteryW: 3_000, gridImportW: 3_000 });
+    tickEverySecond(t, t0, 411, 420, { gridToBatteryW: 0, gridImportW: 0 });
+    near(t.summary().gridWh, 200 + 50 * 5 / 3600 + 60 * 30 / 3600, 0.5);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

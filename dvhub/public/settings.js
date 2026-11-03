@@ -1182,7 +1182,8 @@ function fieldRuntimeNote(path) {
   const released = v('optimizer.gridStorageOnly') === true || v('optimizer.gridChargeWithoutMispel') === true || optionOn;
   if (path === 'optimizer.allowGridCharge' && v(path) === true && !released) {
     return 'Wirkt gerade nicht: Mit PV-Anlage lädt DVhub erst aus dem Netz, wenn eine MiSpeL-Option gewählt ist '
-      + 'oder „Netzladen auch ohne Pauschal-/Abgrenzungsoption“ eingeschaltet ist. Bis dahin plant EOS kein Netzladen.';
+      + 'oder „Netzladen auch ohne Pauschal-/Abgrenzungsoption“ eingeschaltet ist. Bis dahin plant EOS kein Netzladen. '
+      + 'Handeingaben und eigene Regeln laden trotzdem aus dem Netz; DVhub zählt das als Netzstrom im Akku.';
   }
   if (path === 'optimizer.gridChargeWithoutMispel' && v(path) === true && v('optimizer.allowGridCharge') !== true) {
     return 'Wirkt erst zusammen mit „Netzladen erlaubt“.';
