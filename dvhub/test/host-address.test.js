@@ -50,3 +50,39 @@ test('restoreRedacted: ntfy token "***" is only restored for the same server', a
   const same = restoreRedacted({ notifications: { providers: { ntfy: { topicUrl: 'https://ntfy.example.org/b', token: '***' } } } }, current);
   assert.equal(same.notifications.providers.ntfy.token, 'tk');
 });
+
+// Gesamtprüfung 1.0.9 (Hauptbefund 10): Namen vor dem Verbindungsaufbau
+// auflösen und jede Adresse prüfen.
+test('createOutboundLookup: Loopback, link-local, 0-Adresse und gemischte Antworten werden abgelehnt', async () => {
+  const { createOutboundLookup } = await import('../services/host-address.js');
+  const fake = (map) => (host, opts, cb) => {
+    const list = map[host];
+    if (!list) return cb(Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }));
+    cb(null, list.map((address) => ({ address, family: address.includes(':') ? 6 : 4 })));
+  };
+  const lookup = createOutboundLookup(fake({
+    'ip6-localhost': ['::1'],
+    '127.0.0.1.nip.io': ['127.0.0.1'],
+    'box': ['127.0.1.1'],
+    'meta': ['169.254.169.254'],
+    'null': ['0.0.0.0'],
+    'gemischt': ['93.184.216.34', '127.0.0.1'],
+    'mapped': ['::ffff:127.0.0.1'],
+    'ntfy.lan': ['192.168.1.10'],
+    'ntfy.sh': ['93.184.216.34', '2606:2800:220:1::1'],
+  }));
+  const run = (host, opts) => new Promise((resolve) => lookup(host, opts, (err, a, f) => resolve({ err, a, f })));
+  for (const h of ['ip6-localhost', '127.0.0.1.nip.io', 'box', 'meta', 'null', 'gemischt', 'mapped']) {
+    const r = await run(h, {});
+    assert.ok(r.err, h);
+    assert.equal(r.err.code, 'EOUTBOUNDBLOCKED', h);
+  }
+  assert.equal((await run('unbekannt', {})).err.code, 'ENOTFOUND');
+  const one = await run('ntfy.lan', {});
+  assert.equal(one.err, null);
+  assert.equal(one.a, '192.168.1.10');
+  assert.equal(one.f, 4);
+  const all = await run('ntfy.sh', { all: true });
+  assert.equal(all.err, null);
+  assert.deepEqual(all.a.map((x) => x.address), ['93.184.216.34', '2606:2800:220:1::1']);
+});

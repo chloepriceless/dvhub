@@ -127,3 +127,24 @@ describe('createNtfyProvider', () => {
     assert.equal(typeof result.error, 'string');
   });
 });
+
+// Gesamtprüfung 1.0.9 (Hauptbefund 10): isAllowedOutboundUrl ließ jeden
+// Namen durch — ein Name, der auf die Box selbst zeigt (localhost-Varianten,
+// 127.0.0.1.nip.io, der eigene Hostname), erreichte Dienste, die nur auf
+// Loopback lauschen. Der Name wird jetzt beim Verbindungsaufbau aufgelöst,
+// jede Adresse geprüft und nur zu einer geprüften Adresse verbunden.
+describe('ntfy: Namen, die auf die Box selbst zeigen', () => {
+  let mock_;
+  afterEach(async () => {
+    if (mock_) await closeMockServer(mock_);
+    mock_ = null;
+  });
+
+  it('verbindet nicht, wenn der Name auf Loopback auflöst', async () => {
+    mock_ = await startMockServer(200, { id: 'abc' });
+    const p = createNtfyProvider({ topicUrl: `http://localhost:${mock_.port}/x` });
+    const result = await p.notify({ level: 'info', title: 'T', body: 'B' });
+    assert.equal(result.ok, false);
+    assert.equal(mock_.requests.length, 0, 'keine Anfrage an den Loopback-Dienst');
+  });
+});

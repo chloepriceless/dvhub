@@ -6,10 +6,15 @@
 // 127.0.0.1, 0.0.0.0 und 169.254/16 (Metadaten-Dienst in Clouds) als
 // öffentlich. Hier steht die eine Definition von „intern“ für alle Prüfungen.
 //
+// createOutboundLookup() → lookup für http(s).request: löst einen Namen auf
+//   und lässt nur Heimnetz- und Internet-Adressen zu (Gesamtprüfung 1.0.9).
+//
 // classifyHost(host) → 'loopback' | 'private' | 'linklocal' | 'unspecified'
 //                    | 'public' | 'name' | 'invalid'
 //   host: URL.hostname oder eine eingetippte Adresse (mit/ohne Klammern,
 //   Zone „%eth0“ bzw. „%25eth0“, abschließender Punkt).
+
+import dns from 'node:dns';
 
 function ipv4Parts(s) {
   const parts = s.split('.');
@@ -114,3 +119,35 @@ export function isAllowedOutboundUrl(raw) {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
   return ['private', 'public', 'name'].includes(classifyHost(u.hostname));
 }
+
+const OUTBOUND_KINDS = ['private', 'public'];
+
+/**
+ * lookup-Funktion für http.request()/https.request() (Gesamtprüfung 1.0.9,
+ * Hauptbefund 10): isAllowedOutboundUrl lässt Namen durch — ein Name kann auf
+ * die Box selbst zeigen (localhost-Varianten, 127.0.0.1.nip.io, der eigene
+ * Hostname → 127.0.1.1). Hier wird der Name beim Verbindungsaufbau aufgelöst;
+ * zeigt auch nur eine Adresse nach innen (Box, link-local, 0-Adresse), wird
+ * nicht verbunden. Verbunden wird genau zu den geprüften Adressen — eine
+ * zweite Auflösung (DNS-Rebinding) gibt es nicht.
+ * @param {Function} [resolve] dns.lookup-kompatibel (Tests)
+ */
+export function createOutboundLookup(resolve = dns.lookup) {
+  return function outboundLookup(hostname, options, callback) {
+    if (typeof options === 'function') { callback = options; options = {}; }
+    const opts = typeof options === 'number' ? { family: options } : { ...(options || {}) };
+    resolve(hostname, { ...opts, all: true }, (err, addrs) => {
+      if (err) return callback(err);
+      const list = Array.isArray(addrs) ? addrs : [];
+      if (!list.length || list.some((a) => !OUTBOUND_KINDS.includes(classifyHost(a?.address)))) {
+        const e = new Error(`outbound_address_not_allowed: ${hostname}`);
+        e.code = 'EOUTBOUNDBLOCKED';
+        return callback(e);
+      }
+      if (opts.all) return callback(null, list);
+      return callback(null, list[0].address, list[0].family);
+    });
+  };
+}
+
+export const outboundLookup = createOutboundLookup();
