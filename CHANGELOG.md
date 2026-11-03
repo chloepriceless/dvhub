@@ -253,7 +253,7 @@ Nach einer Sicherheitsprüfung gehärtet; Einzelheiten zu den Befunden veröffen
 - **Zugangsdaten folgen auch dem Port:** Ein anderer Port gilt wie eine andere Adresse.
 - **Updates:** Ein Kanalwechsel, der auf eine ältere Fassung zurückstufen würde, fragt nach; Installations- und
   Update-Skripte folgen im Konfigurationsordner keinen Verweisen mehr und führen beim Installieren keine
-  Paket-Skripte aus. Lässt sich die installierte Version nicht feststellen, installiert ein Update nicht.
+  Paket-Skripte aus. Lässt sich bei Paket-Installationen die installierte Version nicht feststellen, installiert ein Update nicht.
   Die Update-Anzeige erkennt den laufenden Auftrag auch, wenn die Uhren von Browser und Box abweichen.
 - **Benachrichtigungen (ntfy):** Adressen werden beim Senden aufgelöst und geprüft; Namen, die auf die Box selbst
   zeigen, gehen nicht.
