@@ -341,3 +341,27 @@ test('Laufstart: Rechenzeit und Beginn ohne die Vorbereitung', async () => {
   assert.equal(h.state.optimizer.eosRun.startedAt, start + 120_000);
   assert.equal(h.logs.find((l) => l.type === 'eos_run_done').data.durationS, 0);
 });
+
+// Gesamtprüfung Release 1.0.9: stop() hielt einen laufenden Lauf nicht davon
+// ab, sich neu einzuplanen — scheiterte er, merkte er den übernommenen Neuplan
+// wieder vor und stellte einen Timer, der nach dem Stopp noch einen Lauf anstieß.
+test('stop() während eines Laufs: danach plant sich nichts mehr ein', async () => {
+  const h = harness();
+  h.trigger.start();
+  h.replies.push(solution(new Array(24).fill(1), '2026-10-11T12:00:00Z'));
+  await h.trigger.trigger('boundary');
+  await h.trigger.kick('replan:config');           // vorgemerkt (innerhalb 2 min)
+  h.nowMs += 30_000;
+  let release;
+  h.replies.push(() => new Promise((r) => { release = r; }));
+  const running = h.trigger.trigger('boundary');   // übernimmt den Neuplan
+  while (!release) await new Promise((r) => setImmediate(r));
+  h.trigger.stop();
+  release({ ok: false, error: 'EOS returned HTTP 503' });
+  await running;
+  assert.equal(h.timers.length, 0, 'kein Timer nach stop()');
+  // Auch ein Neuplan nach dem Stopp stellt keinen Timer.
+  h.status = 'busy';
+  await h.trigger.kick('replan:config');
+  assert.equal(h.timers.length, 0);
+});

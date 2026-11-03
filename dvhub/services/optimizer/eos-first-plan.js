@@ -134,6 +134,9 @@ export function createEosFirstPlanWatch(deps) {
       } catch (err) {
         pushLog('eos_first_plan_probe_failed', { error: err?.message });
       }
+      // Während der Abfrage gestoppt oder entschärft: keinen Lauf mehr anstoßen
+      // und keinen Timer mehr stellen (Gesamtprüfung Release 1.0.9).
+      if (!armed) return;
 
       const waitedMs = now() - armedAt;
 

@@ -122,6 +122,9 @@ export function createEosRunTrigger({
   const startedAt = now();
   let timer = null;
   let running = false;      // start() aufgerufen, stop() noch nicht
+  // stop() aufgerufen: ein noch laufender Lauf und spätere kick() planen nichts
+  // mehr ein (Gesamtprüfung Release 1.0.9). start() hebt das wieder auf.
+  let stopped = false;
   let inFlight = null;      // Promise des laufenden Aufrufs
   let lastAttemptAt = 0;
   let finishedRuns = 0;     // beantwortete Aufrufe dieses Prozesses (auch Fehler)
@@ -239,7 +242,7 @@ export function createEosRunTrigger({
         return { ok: false, error };
       })
       .then((res) => {
-        if (carried && !pendingReplan && !(res && res.ok)) pendingReplan = carried;
+        if (carried && !pendingReplan && !stopped && !(res && res.ok)) pendingReplan = carried;
         return res;
       })
       .finally(() => { inFlight = null; armPending(); });
@@ -258,6 +261,7 @@ export function createEosRunTrigger({
     if (pendingTimer) { clearTimer(pendingTimer); pendingTimer = null; }
   }
   function armPending(delayMs) {
+    if (stopped) { pendingReplan = null; return; }
     if (!pendingReplan || pendingTimer || inFlight) return;
     const wait = delayMs ?? Math.max(0, lastAttemptAt + EOS_RUN_KICK_MIN_GAP_MS - now());
     pendingTimer = setTimer(() => {
@@ -296,8 +300,8 @@ export function createEosRunTrigger({
   }
 
   return {
-    start() { if (!running) { running = true; schedule(); } },
-    stop() { running = false; if (timer) clearTimer(timer); timer = null; clearPending(); },
+    start() { stopped = false; if (!running) { running = true; schedule(); } },
+    stop() { stopped = true; running = false; if (timer) clearTimer(timer); timer = null; clearPending(); },
     trigger,
     kick,
     isActive,
