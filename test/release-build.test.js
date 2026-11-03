@@ -38,6 +38,17 @@ test('Allowlist: alles verboten, gezielt erlaubt, letzte Regel gewinnt', () => {
   assert.throws(() => parseAllowlist('dvhub/'), /erwartet/);
 });
 
+// Werkzeuge, die die Doku auf der Box aufrufen lässt (docs/HERSTELLERPROFIL-
+// MIGRIEREN.md: cd /opt/dvhub; node scripts/vendor-profile-diff.mjs …) —
+// fehlten sie im Paket, gäbe es den Befehl nach der Umstellung nicht mehr
+// (Gesamtprüfung 03.11.2026).
+test('Allowlist: Box-Werkzeuge aus der Doku sind im Paket', () => {
+  const rules = parseAllowlist(fs.readFileSync(ALLOWLIST, 'utf8'));
+  for (const p of ['scripts/vendor-profile-diff.mjs', 'scripts/reconcile-vendor-profiles.mjs']) {
+    assert.ok(isAllowed(p, rules), `fehlt im Paket: ${p}`);
+  }
+});
+
 test('Allowlist deckt alle Skripte ab, die post-update.sh und install.sh aufrufen', () => {
   const rules = parseAllowlist(fs.readFileSync(ALLOWLIST, 'utf8'));
   const refs = new Set([
