@@ -207,12 +207,16 @@ aus. Docker-Installationen sind nicht betroffen (kein Manifest, Kanal wie bisher
 
 **Kanal-Rückfall:** Nimmt der Helfer einen Kanalwechsel-Auftrag an, speichert DVhub den Kanal und legt einen Vermerk
 `<Datenordner>/update-channel-switch.json` an (alter und neuer Kanal, Zeitpunkt vor dem Helfer-Aufruf; überlebt den
-Neustart durch den Auftrag). Meldet der Helfer-Status für den ersten `install`-Auftrag danach `failed` oder
-`rolled_back` (Index, Download, Signatur, Gesundheit, Rücknahme, belegte Sperre), setzt der Server `updateChannel`
-auf den alten Wert zurück und protokolliert `update_channel_reverted`; bei `ok` bleibt der neue Kanal. Geprüft wird
-beim Status-Abruf (die Antwort trägt dann `channelSwitch`), vor jedem neuen Auftrag und — ohne offene Oberfläche —
-alle 15 s nach dem Start, solange ein Vermerk liegt. Wurde der Kanal inzwischen von Hand geändert, bleibt er
-(`update_channel_revert_skipped`); nach 6 h ohne passenden Status verfällt der Vermerk.
+Neustart durch den Auftrag). Meldet der Helfer-Status für den ersten `install`-Auftrag danach — oder dessen
+Fortsetzung `resume` nach einem Stromausfall — `failed` oder `rolled_back` (Index, Download, Signatur, Gesundheit,
+Rücknahme, belegte Sperre), setzt der Server `updateChannel` auf den alten Wert zurück und protokolliert
+`update_channel_reverted`; bei `ok` bleibt der neue Kanal. Lässt sich die Config nicht speichern
+(`update_channel_revert_error`), bleibt der Vermerk für den nächsten Versuch. Geprüft wird beim Status-Abruf (die
+Antwort trägt dann `channelSwitch`), vor jedem neuen Auftrag und — ohne offene Oberfläche — alle 15 s nach dem Start,
+solange ein Vermerk liegt. Solange er offen ist, lehnen Update, Rückweg und Kanalwechsel mit 409
+`channel_switch_pending` ab (sonst würde das Ergebnis eines zweiten Auftrags dem Wechsel zugerechnet). Wurde der
+Kanal inzwischen von Hand geändert, bleibt er (`update_channel_revert_skipped`); nach 6 h ohne passenden Status
+verfällt der Vermerk.
 
 ## 5. Umstellung git → Paket
 

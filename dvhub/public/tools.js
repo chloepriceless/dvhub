@@ -785,7 +785,7 @@ async function rollbackUpdate() {
   try {
     const res = await apiFetch('/api/admin/update/rollback', { method: 'POST' });
     const data = await res.json();
-    if (!data.ok) { setBanner('updateBanner', `Rückweg fehlgeschlagen: ${data.error}`, 'error'); return; }
+    if (!data.ok) { setBanner('updateBanner', `Rückweg fehlgeschlagen: ${data.message || data.error}`, 'error'); return; }
     await trackReleaseJob('Rückweg');
   } catch (error) {
     setBanner('updateBanner', `Rückweg fehlgeschlagen: ${error.message}`, 'error');
@@ -893,7 +893,7 @@ async function applyUpdate() {
       document.getElementById('updateActions').style.display = 'none';
       setTimeout(() => window.location.reload(), 10000);
     } else {
-      setBanner('updateBanner', `Update fehlgeschlagen: ${data.error}`, 'error');
+      setBanner('updateBanner', `Update fehlgeschlagen: ${data.message || data.error}`, 'error');
       if (btn) { btn.disabled = false; btn.textContent = 'Update installieren & neu starten'; }
     }
   } catch (error) {
@@ -975,7 +975,7 @@ async function switchUpdateChannel(newChannel) {
       setBanner('updateBanner', `Channel gewechselt zu ${label}. Service startet neu — Seite lädt in 10 Sekunden automatisch neu.`, 'success');
       setTimeout(() => window.location.reload(), 10000);
     } else {
-      setBanner('updateBanner', `Channel-Wechsel fehlgeschlagen: ${data.error}`, 'error');
+      setBanner('updateBanner', `Channel-Wechsel fehlgeschlagen: ${data.message || data.error}`, 'error');
       revertDropdown();
     }
   } catch (error) {

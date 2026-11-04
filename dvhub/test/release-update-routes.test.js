@@ -351,9 +351,8 @@ describe('Paket-Box: Kanal-Rückfall, wenn der Kanalwechsel-Auftrag scheitert', 
     const h = harness({
       channel: 'dev',
       getRawCfg: () => raw,
-      saveAndApplyConfig: (c) => { raw = JSON.parse(JSON.stringify(c)); },
+      saveAndApplyConfig: (c) => { if (opts.failSave?.()) throw new Error('ENOSPC'); raw = JSON.parse(JSON.stringify(c)); },
       helper: { check: CHECK, install: { ok: true, started: true }, status: () => ({ stdout: JSON.stringify({ ok: true, mode: 'package', status: st }), stderr: '' }) },
-      ...opts,
     });
     const before = new Date(Date.now() - 1000).toISOString();
     const r = await h.call('POST', '/api/admin/update/channel', { channel: 'stable' });
@@ -424,6 +423,49 @@ describe('Paket-Box: Kanal-Rückfall, wenn der Kanalwechsel-Auftrag scheitert', 
       t.setRaw({ updateChannel: 'x-anders' });
       await t.h.call('GET', '/api/admin/update/status');
       assert.equal(t.raw().updateChannel, 'x-anders');
+      assert.ok(!fs.existsSync(path.join(t.h.dataDir, MARK)));
+    } finally { t.h.cleanup(); }
+  });
+
+  it('offener Kanalwechsel: kein neuer Auftrag (apply, rollback, Kanalwechsel) — 409 statt falscher Zuordnung (Codex ddd3f1bb, P2)', async () => {
+    const t = await switchThen(({ after }) => ({ job: 'install', state: 'running', phase: 'download', started: after }));
+    try {
+      const installsBefore = t.h.calls.filter((c) => c.includes(' install ')).length;
+      for (const [method, url, body] of [['POST', '/api/admin/update/apply', {}], ['POST', '/api/admin/update/rollback', {}], ['POST', '/api/admin/update/channel', { channel: 'stable' }]]) {
+        const r = await t.h.call(method, url, body);
+        assert.equal(r.code, 409, `${url}: ${JSON.stringify(r.payload)}`);
+        assert.equal(r.payload.error, 'channel_switch_pending');
+      }
+      assert.equal(t.h.calls.filter((c) => c.includes(' install ')).length, installsBefore, 'kein weiterer install');
+      assert.ok(!t.h.calls.some((c) => c.endsWith(' rollback')), 'kein rollback');
+      // Ist der Wechsel durch, geht es wieder.
+      t.setStatus({ job: 'install', state: 'ok', result: 'ok', started: new Date(Date.now() + 5).toISOString() });
+      const ok = await t.h.call('POST', '/api/admin/update/apply', {});
+      assert.equal(ok.code, 200, JSON.stringify(ok.payload));
+    } finally { t.h.cleanup(); }
+  });
+
+  it('Stromausfall im Auftrag: Ergebnis des resume (rolled_back) setzt den Kanal zurück (Codex ddd3f1bb, P2)', async () => {
+    const { h, raw } = await switchThen(({ after }) => ({ job: 'resume', state: 'rolled_back', result: 'rolled_back', started: after }));
+    try {
+      await h.call('GET', '/api/admin/update/status');
+      assert.equal(raw().updateChannel, 'dev');
+    } finally { h.cleanup(); }
+  });
+
+  it('Rückfall nicht speicherbar: Vermerk bleibt, späterer Abruf holt ihn nach (Codex ddd3f1bb, P2)', async () => {
+    let failSave = false;
+    const t = await switchThen(({ after }) => ({ job: 'install', state: 'failed', result: 'failed', started: after }), { failSave: () => failSave });
+    try {
+      failSave = true;
+      const s1 = await t.h.call('GET', '/api/admin/update/status');
+      assert.equal(s1.payload.channelSwitch?.state, 'revert_failed');
+      assert.ok(fs.existsSync(path.join(t.h.dataDir, MARK)), 'Vermerk bleibt für den nächsten Versuch');
+      assert.ok(t.h.logs.some((l) => l.event === 'update_channel_revert_error'));
+      failSave = false;
+      const s2 = await t.h.call('GET', '/api/admin/update/status');
+      assert.equal(s2.payload.channelSwitch?.state, 'reverted');
+      assert.equal(t.raw().updateChannel, 'dev');
       assert.ok(!fs.existsSync(path.join(t.h.dataDir, MARK)));
     } finally { t.h.cleanup(); }
   });

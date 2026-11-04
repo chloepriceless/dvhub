@@ -181,7 +181,10 @@ export function createAdminRoutes(deps) {
   // der Auftrag danach (Index, Download, Signatur, Gesundheit, Rücknahme) oder
   // startet er gar nicht (Sperre belegt), setzt der Server updateChannel auf den
   // alten Wert zurück — nicht nur die Oberfläche ihr Auswahlfeld. Erkannt am
-  // Helfer-Status: erster install-Auftrag, der nach dem Vermerk begann.
+  // Helfer-Status: erster install-Auftrag, der nach dem Vermerk begann — oder
+  // dessen Fortsetzung nach einem Stromausfall (resume). Solange der Vermerk
+  // offen ist, nimmt der Server keinen neuen Auftrag an; sonst hielte er dessen
+  // Ergebnis für das des Wechsels (Codex ddd3f1bb, P2).
   let channelSwitchMem = null;
   let channelWatch = null;
   const channelSwitchPath = () => {
@@ -212,7 +215,7 @@ export function createAdminRoutes(deps) {
   const settleChannelSwitch = (st) => {
     const m = readChannelSwitch();
     if (!m) return null;
-    const mine = st && st.job === 'install' && Date.parse(st.started || '') >= Date.parse(m.at);
+    const mine = st && (st.job === 'install' || st.job === 'resume') && Date.parse(st.started || '') >= Date.parse(m.at);
     if (!mine) {
       // Kein Status zu diesem Auftrag mehr zu erwarten (Statusdatei weg o. Ä.):
       // nach 6 h aufgeben, die Config bleibt, wie sie ist.
@@ -223,12 +226,12 @@ export function createAdminRoutes(deps) {
       return null;
     }
     if (st.state === 'queued' || st.state === 'running') return null;
-    clearChannelSwitch();
-    if (st.state === 'ok') return { state: 'kept', channel: m.to };
+    if (st.state === 'ok') { clearChannelSwitch(); return { state: 'kept', channel: m.to }; }
     const now = ctx.getRawCfg() || {};
     const result = st.result || st.state || 'failed';
     if ((now.updateChannel || 'stable') !== m.to) {
       // Inzwischen von Hand umgestellt: nicht überschreiben.
+      clearChannelSwitch();
       pushLog('update_channel_revert_skipped', { from: m.to, to: m.from, current: now.updateChannel || 'stable', result });
       return { state: 'unchanged', channel: now.updateChannel || 'stable' };
     }
@@ -237,9 +240,12 @@ export function createAdminRoutes(deps) {
     try {
       ctx.saveAndApplyConfig(fresh);
     } catch (e) {
+      // Vermerk bleibt: der nächste Status-Abruf bzw. der Wächter versucht es
+      // erneut (Codex ddd3f1bb, P2).
       pushLog('update_channel_revert_error', { from: m.to, to: m.from, result, error: String(e?.message || e) });
       return { state: 'revert_failed', channel: m.to, error: String(e?.message || e) };
     }
+    clearChannelSwitch();
     pushLog('update_channel_reverted', { from: m.to, to: m.from, result, message: String(st.message || '').slice(0, 300), mode: 'package' });
     return { state: 'reverted', channel: m.from, from: m.to };
   };
@@ -252,6 +258,16 @@ export function createAdminRoutes(deps) {
     } catch {
       return null;
     }
+  };
+  // Vor jedem neuen Auftrag: offenen Kanalwechsel abschließen; ist er noch
+  // offen (läuft, Status nicht lesbar), 409 statt eines zweiten Auftrags.
+  const channelSwitchBusy = async (res, event) => {
+    await pollChannelSwitch();
+    const m = readChannelSwitch();
+    if (!m) return false;
+    pushLog(event, { reason: 'channel_switch_pending', from: m.from, to: m.to, mode: 'package' });
+    json(res, 409, { ok: false, mode: 'package', error: 'channel_switch_pending', message: `Der Kanalwechsel auf ${m.to === 'dev' ? 'Bleeding Edge' : 'Stabil'} läuft noch — bitte warten, bis er abgeschlossen ist.` });
+    return true;
   };
   // Ohne Oberfläche (niemand fragt den Status ab): nach dem Neustart durch den
   // Auftrag schaut der Server selbst nach, bis der Vermerk erledigt ist.
@@ -727,7 +743,7 @@ export function createAdminRoutes(deps) {
         if (body?.ref) return json(res, 400, { ok: false, mode: 'package', error: 'ref_not_supported', detail: 'Gezielte Commits gibt es nur bei git-Installationen' });
         // Ein noch offener Kanalwechsel zuerst abschließen — sonst hielte der
         // Rückfall diesen neuen Auftrag für den des Wechsels.
-        await pollChannelSwitch();
+        if (await channelSwitchBusy(res, 'update_apply_rejected')) return;
         let target = 'latest';
         if (body?.version !== undefined && body?.version !== null && body?.version !== '') {
           const m = RELEASE_VERSION.exec(String(body.version).trim());
@@ -922,7 +938,7 @@ export function createAdminRoutes(deps) {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       if (!checkAuth(req, res)) return;
       if (!releaseInfo()) return json(res, 409, { ok: false, mode: 'git', error: 'Rückweg gibt es nur bei Paket-Installationen' });
-      await pollChannelSwitch();
+      if (await channelSwitchBusy(res, 'update_rollback_rejected')) return;
       return startReleaseJob(res, ['rollback'], 'update_rollback_started');
     }
 
@@ -961,7 +977,7 @@ export function createAdminRoutes(deps) {
           // sortieren vor dem gleichnamigen Release — das gilt nicht als
           // Rückschritt; eine kleinere Grundversion schon: dann wie beim git-Weg
           // nur mit allowDowngrade (Strix R-0003, Gegenprüfung bf393d9f, P2).
-          await pollChannelSwitch();
+          if (await channelSwitchBusy(res, 'update_channel_rejected')) return;
           let blocked;
           try { blocked = await packageDowngrade(channel, 'latest', allowDowngrade); } catch (e) { return releaseError(res, e, 'update_channel_check_error'); }
           if (blocked) {
