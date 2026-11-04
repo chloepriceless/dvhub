@@ -266,13 +266,16 @@ export function createSupportTunnel(ctx, deps = {}) {
   // Fire-and-forget Direktmeldung (Review 2026-06-10 B7 Lösung 2): Telegram/
   // Pushover/ntfy über den Notification-Service, falls konfiguriert. Lazy über
   // ctx, damit die Boot-Reihenfolge (tunnel vor notificationService) egal ist.
+  // ctx.notifyDirect (server.js): im Worker-Betrieb läuft dieser Dienst im
+  // Web-Prozess, dessen Benachrichtigungsdienst nie gestartet wird — die
+  // Meldung geht dann an den Runtime-Worker (Codex-Prüfung release/1.0.9, P2).
   function notifyTunnel(title, body, level) {
     try {
+      const msg = { event: 'support_tunnel', level: level || 'warning', title, body };
       const svc = ctx?.notificationService;
-      if (svc && typeof svc.sendDirect === 'function') {
-        Promise.resolve(svc.sendDirect({ event: 'support_tunnel', level: level || 'warning', title, body }))
-          .catch(() => { /* fire-and-forget */ });
-      }
+      const send = typeof ctx?.notifyDirect === 'function' ? ctx.notifyDirect
+        : (svc && typeof svc.sendDirect === 'function' ? (m) => svc.sendDirect(m) : null);
+      if (send) Promise.resolve(send(msg)).catch(() => { /* fire-and-forget */ });
     } catch { /* notification must never break tunnel mechanics */ }
   }
 

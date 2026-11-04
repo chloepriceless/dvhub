@@ -2,6 +2,7 @@ let nextRequestId = 1;
 
 const CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'minSocPct', 'feedExcessDcPv', 'maxDischargeW']);
 const HISTORY_BACKFILL_MODES = new Set(['gap', 'full']);
+const NOTIFY_LEVELS = new Set(['debug', 'info', 'warning', 'warn', 'error', 'critical']);
 
 function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -64,6 +65,20 @@ export function validateRuntimeCommand(command) {
   if (type === 'grid_share_reset') {
     if (payload.reason != null && typeof payload.reason !== 'string') {
       return { ok: false, error: 'grid_share_reset reason must be a string' };
+    }
+    return { ok: true, error: null };
+  }
+
+  // Direktmeldung aus dem Web-Prozess (services/notifications/direct-relay.js):
+  // nur der Runtime-Prozess hat gestartete Kanäle (Codex-Prüfung release/1.0.9, P2).
+  if (type === 'notify_direct') {
+    for (const [k, max] of [['title', 200], ['body', 2000], ['event', 64]]) {
+      const v = payload[k];
+      if (v == null && k !== 'title') continue;
+      if (typeof v !== 'string' || v.length > max) return { ok: false, error: `notify_direct ${k} must be a string up to ${max} chars` };
+    }
+    if (payload.level != null && !NOTIFY_LEVELS.has(String(payload.level))) {
+      return { ok: false, error: 'notify_direct level unknown' };
     }
     return { ok: true, error: null };
   }

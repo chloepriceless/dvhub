@@ -33,6 +33,7 @@ import {
   buildRuntimeSnapshot
 } from './runtime-state.js';
 import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker, createRuntimeCommandClient, attachRuntimeCommandServer } from './runtime-worker-protocol.js';
+import { createDirectNotifier, notifyDirectHandler } from './services/notifications/direct-relay.js';
 import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtime.js';
 // Phase 09.3-01: history-viz aggregator factory (per-card endpoints under
 // /api/history/viz/*). Wired into ctx after telemetryStore + db are available.
@@ -1417,9 +1418,18 @@ if (PROCESS_ROLE === 'runtime-worker' && typeof process.send === 'function') {
   attachRuntimeCommandServer({
     handlers: {
       grid_share_reset: (p) => ctx.gridShare.reset({ reason: p.reason || '', actor: p.actor ?? null }),
+      // Direktmeldungen aus dem Web-Prozess (Support-Tunnel, Fern-Support).
+      notify_direct: notifyDirectHandler(() => ctx.notificationService),
     },
   });
 }
+// Direktmeldung, egal in welchem Prozess sie entsteht: im Worker-Betrieb hat
+// nur der Runtime-Prozess gestartete Kanäle (Codex-Prüfung release/1.0.9, P2).
+ctx.notifyDirect = createDirectNotifier({
+  isRuntimeProcess: IS_RUNTIME_PROCESS,
+  getService: () => ctx.notificationService,
+  sendCommand: (type, payload) => runtimeCommandClient.send(type, payload),
+});
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;
