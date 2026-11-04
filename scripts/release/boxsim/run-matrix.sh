@@ -15,9 +15,13 @@ while [[ $# -gt 0 ]]; do
     *) CASES+=("$1"); shift ;;
   esac
 done
+# Nur stable: Boxen auf Bleeding Edge (dev) bleiben git und stellen sich nicht
+# um (Christin, 04.11.2026; dvhub-release migrationCheck → dev_channel). Die
+# Fälle v1.0.0:dev und v1.0.8:dev wieder aufnehmen, sobald es dev-Pakete aus
+# der CI gibt (run-box.sh erwartet die Umstellung).
 if [[ ${#CASES[@]} -eq 0 ]]; then
   CASES=(v0.4.2:stable v1.0.0:stable v1.0.1:stable v1.0.2:stable v1.0.3:stable v1.0.4:stable
-         v1.0.5:stable v1.0.6:stable v1.0.7:stable v1.0.8:stable:neg v1.0.0:dev v1.0.8:dev)
+         v1.0.5:stable v1.0.6:stable v1.0.7:stable v1.0.8:stable:neg)
 fi
 RUN="$R/runs/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RUN"

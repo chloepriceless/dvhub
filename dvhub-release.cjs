@@ -12,7 +12,7 @@
 //   dvhub-release rollback                        auf die vorige Version
 //   dvhub-release status                          Fortschritt/Ergebnis (JSON)
 // Nur als root (nicht in sudoers):
-//   dvhub-release migrate [--force]               einmalige Umstellung git → Paket
+//   dvhub-release migrate [--force]               einmalige Umstellung git → Paket (nur Kanal stable)
 //   dvhub-release boot-hook                       aus post-update.sh: Umstellung
 //                                                 planen bzw. unterbrochenen Auftrag fortsetzen
 //   dvhub-release recover                         aus dem Notfall-Drop-in der Unit: eine
@@ -953,6 +953,12 @@ function git(s, ...args) {
 function migrationCheck(s, { force = false } = {}) {
   if (isPackageLayout(s)) return { ok: false, reason: 'already_package' };
   if (!fs.existsSync(path.join(s.installDir, '.git'))) return { ok: false, reason: 'no_git_checkout' };
+  // Signierte Pakete gibt es nur für stable (Christin, 04.11.2026). Eine
+  // git-Box auf Bleeding Edge bleibt git und holt main wie bisher — kein
+  // Index-Abruf, kein Fehlversuch, auch nicht mit --force (das übergeht nur
+  // Eigenheiten des Checkouts). Wechselt sie auf stable, stellt der nächste
+  // Start sie um.
+  if (readChannel(s) === 'dev') return { ok: false, reason: 'dev_channel' };
   if (!trustedKeyCount(s.allowedSigners)) return { ok: false, reason: 'no_release_key' };
   const dataDir = unitEnv(s, 'DV_DATA_DIR') || '/var/lib/dvhub';
   if (!force && fs.existsSync(path.join(dataDir, '.no-release-packages'))) return { ok: false, reason: 'opt_out' };
