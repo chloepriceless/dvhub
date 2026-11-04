@@ -299,3 +299,76 @@ test('P2/P3: TLS → Klartext leert, Klartext → TLS behält; verschiedene IPv6
   assert.equal(out.dbBackup.smb.password, '', 'anderer IPv6-Host');
   assert.equal(out.mqtt.password, 'm', 'mqtt → mqtts auf demselben Host bleibt');
 });
+
+// Gesamtprüfung 1.0.9 (Sicherheitsreste): Der Ziel-Vergleich ignorierte den
+// Port — derselbe Host mit anderem Port (ein anderer Dienst) bekam das
+// gespeicherte Geheimnis. Standard-Ports gelten als gleich; mit besserer
+// Sicherung (mqtt → mqtts) darf sich der Port mitändern.
+test('Port gehört zum Ziel: anderer Port leert, Standard-Port explizit oder weggelassen bleibt', () => {
+  const cur = {
+    notifications: { providers: { ntfy: { topicUrl: 'https://ntfy.lan/x', token: 't' } } },
+    optimizer: { evHaUrl: 'http://ha.lan:8123', evHaToken: 'ha' },
+    mqtt: { brokerUrl: 'mqtt://b:1883', username: 'u', password: 'm' },
+    dbBackup: { smb: { host: 'nas.lan', username: 's', password: 'p' } },
+  };
+  const mask = (c) => {
+    const inc = JSON.parse(JSON.stringify(c));
+    inc.notifications.providers.ntfy.token = '***'; inc.optimizer.evHaToken = '***';
+    inc.mqtt.password = '***'; inc.mqtt.username = '***'; inc.dbBackup.smb.password = '***';
+    return inc;
+  };
+  const changed = mask(cur);
+  changed.notifications.providers.ntfy.topicUrl = 'https://ntfy.lan:8443/x';
+  changed.optimizer.evHaUrl = 'http://ha.lan:9000';
+  changed.mqtt.brokerUrl = 'mqtt://b:1884';
+  changed.dbBackup.smb.host = 'nas.lan:4450';
+  let out = restoreRedacted(changed, cur);
+  assert.equal(out.notifications.providers.ntfy.token, '', 'ntfy: anderer Port');
+  assert.equal(out.optimizer.evHaToken, '', 'HA: anderer Port');
+  assert.equal(out.mqtt.password, '', 'MQTT: anderer Port');
+  assert.equal(out.dbBackup.smb.password, '', 'SMB: Port neu angegeben');
+  const same = mask(cur);
+  same.notifications.providers.ntfy.topicUrl = 'https://ntfy.lan:443/y';
+  same.optimizer.evHaUrl = 'http://ha.lan:8123/';
+  same.mqtt.brokerUrl = 'mqtt://b';
+  out = restoreRedacted(same, cur);
+  assert.equal(out.notifications.providers.ntfy.token, 't', 'ntfy: Standard-Port explizit');
+  assert.equal(out.optimizer.evHaToken, 'ha', 'HA: gleicher Port');
+  assert.equal(out.mqtt.password, 'm', 'MQTT: Standard-Port weggelassen');
+  assert.equal(out.dbBackup.smb.password, 'p', 'SMB: unverändert');
+});
+
+test('Port: Datenbank-Port (eigenes Feld) und TLS-Wechsel nur zwischen Standard-Ports (Gegenprüfung 039a110c)', () => {
+  const cur = {
+    telemetry: { database: { host: 'db.lan', port: 5432, password: 'p' } },
+    mqtt: { brokerUrl: 'mqtt://b:1883', username: 'u', password: 'm' },
+    optimizer: { evHaUrl: 'http://ha.lan', evHaToken: 'ha' },
+  };
+  const mask = (c) => {
+    const inc = JSON.parse(JSON.stringify(c));
+    inc.telemetry.database.password = '***'; inc.mqtt.password = '***'; inc.mqtt.username = '***'; inc.optimizer.evHaToken = '***';
+    return inc;
+  };
+  const changed = mask(cur);
+  changed.telemetry.database.port = 6543;
+  changed.mqtt.brokerUrl = 'mqtts://b:4444';
+  changed.optimizer.evHaUrl = 'https://ha.lan:9999';
+  let out = restoreRedacted(changed, cur);
+  assert.equal(out.telemetry.database.password, '', 'DB: anderer Port');
+  assert.equal(out.mqtt.password, '', 'mqtt → mqtts auf Nicht-Standard-Port');
+  assert.equal(out.optimizer.evHaToken, '', 'http → https auf Nicht-Standard-Port');
+  // Andere Protokollfamilie auf Standard-Ports (Gegenprüfung eb44b949, P3).
+  const fam = mask(cur);
+  fam.mqtt.brokerUrl = 'wss://b';
+  assert.equal(restoreRedacted(fam, cur).mqtt.password, '', 'mqtt → wss ist ein anderer Dienst');
+  const same = mask(cur);
+  same.mqtt.brokerUrl = 'mqtts://b:8883';
+  same.optimizer.evHaUrl = 'https://ha.lan';
+  out = restoreRedacted(same, cur);
+  assert.equal(out.telemetry.database.password, 'p', 'DB: Port unverändert (5432 = Standard)');
+  assert.equal(out.mqtt.password, 'm', 'mqtt:1883 → mqtts:8883');
+  assert.equal(out.optimizer.evHaToken, 'ha', 'http → https Standard-Ports');
+  const v6 = { telemetry: { database: { host: 'fd00::1', password: 'p' } } };
+  const v6inc = JSON.parse(JSON.stringify(v6)); v6inc.telemetry.database.password = '***';
+  assert.equal(restoreRedacted(v6inc, v6).telemetry.database.password, 'p', 'IPv6-Host ohne Port bleibt');
+});

@@ -50,3 +50,47 @@ test('restoreRedacted: ntfy token "***" is only restored for the same server', a
   const same = restoreRedacted({ notifications: { providers: { ntfy: { topicUrl: 'https://ntfy.example.org/b', token: '***' } } } }, current);
   assert.equal(same.notifications.providers.ntfy.token, 'tk');
 });
+
+// Gesamtprüfung 1.0.9 (Hauptbefund 10): Namen vor dem Verbindungsaufbau
+// auflösen und jede Adresse prüfen.
+test('createOutboundLookup: Loopback, link-local, 0-Adresse und gemischte Antworten werden abgelehnt', async () => {
+  const { createOutboundLookup } = await import('../services/host-address.js');
+  const fake = (map) => (host, opts, cb) => {
+    const list = map[host];
+    if (!list) return cb(Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }));
+    cb(null, list.map((address) => ({ address, family: address.includes(':') ? 6 : 4 })));
+  };
+  const lookup = createOutboundLookup(fake({
+    'ip6-localhost': ['::1'],
+    '127.0.0.1.nip.io': ['127.0.0.1'],
+    'box': ['127.0.1.1'],
+    'meta': ['169.254.169.254'],
+    'null': ['0.0.0.0'],
+    'gemischt': ['93.184.216.34', '127.0.0.1'],
+    'mapped': ['::ffff:127.0.0.1'],
+    'ntfy.lan': ['192.168.1.10'],
+    'ntfy.local': ['fe80::1', '192.168.1.11'],
+    'nur-linklocal': ['fe80::1'],
+    'mapped-meta': ['::ffff:169.254.169.254', '192.168.1.12'],
+    'ntfy.sh': ['93.184.216.34', '2606:2800:220:1::1'],
+  }));
+  const run = (host, opts) => new Promise((resolve) => lookup(host, opts, (err, a, f) => resolve({ err, a, f })));
+  for (const h of ['ip6-localhost', '127.0.0.1.nip.io', 'box', 'meta', 'null', 'gemischt', 'mapped', 'nur-linklocal', 'mapped-meta']) {
+    const r = await run(h, {});
+    assert.ok(r.err, h);
+    assert.equal(r.err.code, 'EOUTBOUNDBLOCKED', h);
+  }
+  assert.equal((await run('unbekannt', {})).err.code, 'ENOTFOUND');
+  const one = await run('ntfy.lan', {});
+  assert.equal(one.err, null);
+  assert.equal(one.a, '192.168.1.10');
+  assert.equal(one.f, 4);
+  // mDNS liefert neben der Heimnetz-Adresse eine link-local-IPv6: die fällt
+  // weg, der Name bleibt nutzbar (Gegenprüfung 1e8d955a, P3).
+  const mdns = await run('ntfy.local', { all: true });
+  assert.equal(mdns.err, null);
+  assert.deepEqual(mdns.a.map((x) => x.address), ['192.168.1.11']);
+  const all = await run('ntfy.sh', { all: true });
+  assert.equal(all.err, null);
+  assert.deepEqual(all.a.map((x) => x.address), ['93.184.216.34', '2606:2800:220:1::1']);
+});

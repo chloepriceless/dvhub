@@ -7,6 +7,11 @@
 // und gelten wie ein Gerät im Heimnetz (folgen also lanTrust), dürfen den
 // Tunnel nicht öffnen/verlängern und keine Fernzugangs-Freigaben erteilen, und
 // das Audit-Log kennzeichnet sie.
+//
+// Christin 03./04.11.2026: Der Support-Tunnel ist der Reparaturzugang — er
+// darf wieder alles (VPN, Token, Kopplungen, Sicherheitseinstellungen), nur
+// Einwilligungen des Kunden (Datenspende, Ortsnetz, Fernzugang) nicht; jede
+// schreibende Aktion steht im Fern-Support-Protokoll.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -51,6 +56,7 @@ function ctxWith(cfg, extra = {}) {
   const logs = [];
   const opened = [];
   const saved = [];
+  const recorded = [];
   const ctx = {
     getCfg: () => cfg,
     getRawCfg: () => JSON.parse(JSON.stringify(cfg)),
@@ -64,10 +70,11 @@ function ctxWith(cfg, extra = {}) {
       consumeUiToken: (t) => t === 'tok',
       open: async (o, actor) => { opened.push(actor); return { ok: true }; },
       close: async () => ({ ok: true }),
+      recordAction: (entry) => { recorded.push(entry); return entry; },
     },
     ...extra,
   };
-  return { ctx, logs, opened, saved };
+  return { ctx, logs, opened, saved, recorded };
 }
 
 test('Port des Support-Listeners: fester Standard, per Umgebung änderbar, Notfall-Skript nimmt denselben', () => {
@@ -163,19 +170,18 @@ test('Geräte-Tausch-Import ohne Token der Box → 401, nichts gespeichert; mit 
   assert.notEqual(JSON.parse(res3._captured.body || '{}').error, 'migrate_token_required', res3._captured.body);
 });
 
-// Gegenprüfung 6f9c9cca (P1, 2× P2): weitere Wege, auf denen der Support über
-// den offenen Tunnel sich selbst einen Zugang einrichten konnte — Installateur-
-// Kopplung bestätigen, Handy koppeln/freischalten, Voll-Export (Token und
-// Schlüssel) und Geräte-Tausch. Alle von dort gesperrt; Verengen bleibt erlaubt.
-test('Support-Tunnel: keine Kopplungen, keine Handy-Freigaben, kein Voll-Export, kein Geräte-Tausch', async () => {
+// Christin 04.11.2026: Portal-Kopplung bestätigen, Handy koppeln/freischalten,
+// Voll-Export und Geräte-Tausch darf der Fern-Support wieder (Reparatur) —
+// jeweils mit Eintrag im Fern-Support-Protokoll.
+test('Support-Tunnel: Kopplungen, Handy-Freigaben, Voll-Export und Geräte-Tausch gehen und stehen im Protokoll', async () => {
   const portal = { enabled: () => true, permissions: () => ({}), checkUiToken: () => true, issueUiToken: () => 'p', confirm: () => ({ confirmed: true }) };
   const confirmed = [];
   const ml = {
-    status: () => ({}), reconcile() {}, startPairing: () => ({ qr: 'x' }), approvePairing: () => { confirmed.push('approve'); return { ok: true }; },
+    status: () => ({}), reconcile() {}, startPairing: () => { confirmed.push('start'); return { qr: 'x' }; }, approvePairing: () => { confirmed.push('approve'); return { ok: true }; },
     cancelPairing: () => ({ ok: true }), removeDevice: () => ({ ok: true }), updateDevice: () => { confirmed.push('update'); return { ok: true }; },
   };
   const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, installerPortal: { enabled: true } };
-  const { ctx, saved } = ctxWith(box, {
+  const { ctx, logs, recorded } = ctxWith(box, {
     installerPortal: { ...portal, confirm: () => { confirmed.push('confirm'); return {}; } }, mobileLink: ml,
     getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
     getConfigPath: () => '/nonexistent/config.json', getDataDir: () => '/nonexistent',
@@ -184,9 +190,9 @@ test('Support-Tunnel: keine Kopplungen, keine Handy-Freigaben, kein Voll-Export,
   const call = async (p, body) => {
     const res = mockRes();
     const req = makeReq('POST', p, body, { viaSupport: true });
-    req.headers.authorization = `Bearer ${'b'.repeat(32)}`; // selbst mit Token
+    req.headers.authorization = `Bearer ${'b'.repeat(32)}`;
     await routes.handleRequest(req, res, new URL(`http://x${p}`));
-    return { status: res._captured.status, error: JSON.parse(res._captured.body || '{}').error };
+    return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}') };
   };
   for (const [p, body] of [
     ['/api/installer/confirm', { installerId: 'i', pairingCode: '123456', uiToken: 'p' }],
@@ -194,19 +200,28 @@ test('Support-Tunnel: keine Kopplungen, keine Handy-Freigaben, kein Voll-Export,
     ['/api/mobile-link/pair/start', {}],
     ['/api/mobile-link/pair/approve', { perms: ['read', 'control'] }],
     ['/api/mobile-link/devices/update', { id: 'd', perms: ['control'] }],
-    ['/api/config/export', { password: 'angreifer1' }],
-    ['/api/config/import', { config: { httpPort: 8080 }, migrate: true }],
+    ['/api/config/export', { password: 'support-pw-1' }],
   ]) {
     const r = await call(p, body);
-    assert.equal(r.status, 403, `${p}: ${r.status} ${r.error}`);
-    assert.equal(r.error, 'support_tunnel_consent_denied', p);
+    assert.notEqual(r.body.error, 'support_tunnel_consent_denied', `${p}: ${r.status} ${JSON.stringify(r.body)}`);
+    assert.ok(r.status < 400, `${p}: ${r.status} ${JSON.stringify(r.body)}`);
+    const entry = logs.findLast((l) => l.event === 'support_tunnel_action');
+    assert.equal(entry.details.route, p);
+    assert.equal(entry.details.via, 'Fern-Support');
+    assert.match(entry.actor.actor_ua, /^Support-Tunnel/);
+    assert.equal(recorded.at(-1).route, p);
   }
-  assert.deepEqual(confirmed, []);
-  assert.equal(saved.length, 0);
-  // Verengen geht weiter: Handy-Funktion aus, Gerät entfernen, Kopplung abbrechen.
-  assert.notEqual((await call('/api/mobile-link/settings', { enabled: false })).status, 403);
-  assert.notEqual((await call('/api/mobile-link/devices/remove', { id: 'd' })).status, 403);
-  assert.notEqual((await call('/api/mobile-link/pair/cancel', {})).status, 403);
+  assert.deepEqual(confirmed, ['confirm', 'start', 'approve', 'update']);
+  // Kopplungen sind für den Kunden hervorgehoben (Liste + Benachrichtigung).
+  assert.equal(recorded.find((r) => r.route === '/api/mobile-link/pair/approve').kind, 'kopplung');
+  assert.equal(recorded.find((r) => r.route === '/api/config/export').kind, 'sicherheit');
+  // Feldnamen ja, Werte nie.
+  const exp = logs.find((l) => l.event === 'support_tunnel_action' && l.details.route === '/api/config/export');
+  assert.deepEqual(exp.details.keys, ['password']);
+  assert.doesNotMatch(JSON.stringify(logs.filter((l) => l.event === 'support_tunnel_action')), /support-pw-1/);
+  // Geräte-Tausch: an der Tunnel-Sperre vorbei (die Token-Prüfung des Tauschs gilt weiter).
+  const mig = await call('/api/config/import', { config: { httpPort: 8080 }, migrate: true });
+  assert.notEqual(mig.body.error, 'support_tunnel_consent_denied', JSON.stringify(mig.body));
 });
 
 // Gegenprüfung 6f9c9cca (P2): unter lanTrust „Offen“ mit trustedClientIps
@@ -278,35 +293,48 @@ test('Port-Kollision: Support-Port = Web-Port → Tunnel öffnet nicht (kein Rü
   } finally { fsMod.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Gegenprüfung fbb2dc4b: (P1) eigenes VPN-Profil hochladen/starten = Zugang über
-// das Tunnel-Ende hinaus; (P2) Token rotieren / apiToken setzen; (P2) Support-
-// Login wieder einschalten; (P2) X-Forwarded-For über den Tunnel.
-test('Support-Tunnel: kein VPN-Profil, kein Token, Support-Login bleibt wie die Box es hat', async () => {
+// Gegenprüfung fbb2dc4b hatte VPN-Profil, VPN-Start und Token über den Tunnel
+// gesperrt; Christin 04.11.2026: wieder erlaubt (Reparatur). Der Support-Login
+// (support.*) ist Teil der Einwilligung in den Fernzugang und bleibt.
+test('Support-Tunnel: VPN-Profil und -Start, Token rotieren und setzen gehen; Support-Login bleibt wie die Box es hat', async () => {
   const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, support: { localUser: { enabled: false } } };
   const vpnCalls = [];
-  const { ctx, saved } = ctxWith(box, {
-    vpnManager: { start: async () => { vpnCalls.push('start'); return { ok: true }; }, uploadConfig: async () => { vpnCalls.push('upload'); return { ok: true }; }, stop: async () => ({ ok: true }) },
+  const { ctx, saved, logs, recorded } = ctxWith(box, {
+    vpnManager: {
+      start: async () => { vpnCalls.push('start'); return { ok: true }; },
+      uploadConfig: async () => { vpnCalls.push('upload'); return { ok: true }; },
+      stop: async () => ({ ok: true }), getStatus: () => ({ status: 'connected', profileName: 'x' }),
+    },
     getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
     getConfigPath: () => '/nonexistent/config.json', getServiceActionsEnabled: () => true,
   });
   const routes = createApiRoutes(ctx);
   const call = async (p, body) => {
     const res = mockRes();
-    await routes.handleRequest(makeReq('POST', p, body, { viaSupport: true }), res, new URL(`http://x${p}`));
+    const req = makeReq('POST', p, body, { viaSupport: true });
+    req.headers.authorization = `Bearer ${'b'.repeat(32)}`;
+    await routes.handleRequest(req, res, new URL(`http://x${p}`));
     return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}') };
   };
-  for (const p of ['/api/vpn/config/upload', '/api/vpn/start', '/api/admin/token/rotate']) {
-    const r = await call(p, { type: 'openvpn', name: 'x', content: 'remote evil.example.net 1194' });
-    assert.equal(r.status, 403, `${p}: ${JSON.stringify(r.body)}`);
-    assert.equal(r.body.error, 'support_tunnel_consent_denied', p);
-  }
-  assert.deepEqual(vpnCalls, []);
-  await call('/api/config', { config: { httpPort: 8080, apiToken: 'c'.repeat(40), support: { localUser: { enabled: true } } } });
+  const st = await call('/api/vpn/start', {});
+  assert.equal(st.status, 200, JSON.stringify(st.body));
+  assert.deepEqual(vpnCalls, ['start']);
+  assert.equal(recorded.at(-1).kind, 'sicherheit');
+  const rot = await call('/api/admin/token/rotate', {});
+  assert.equal(rot.status, 200, JSON.stringify(rot.body));
+  assert.match(rot.body.token, /^[0-9a-f]{64}$/);
+  assert.equal(saved.at(-1).apiToken, rot.body.token);
+  const entry = logs.findLast((l) => l.event === 'support_tunnel_action');
+  assert.equal(entry.details.route, '/api/admin/token/rotate');
+  assert.equal(entry.details.kind, 'token');
+  assert.doesNotMatch(JSON.stringify(entry), new RegExp(rot.body.token), 'neues Token nicht im Protokoll');
+  assert.equal(recorded.at(-1).kind, 'token');
+  // Token über die Konfiguration setzen; der Support-Login bleibt aus.
+  const newTok = crypto.randomBytes(30).toString('base64url');
+  await call('/api/config', { config: { httpPort: 8080, apiToken: newTok, support: { localUser: { enabled: true } } } });
   const last = saved.at(-1);
-  if (last) {
-    assert.notEqual(last.apiToken, 'c'.repeat(40), 'Token nicht über den Tunnel gesetzt');
-    assert.equal(last.support.localUser.enabled, false, 'Support-Login nicht über den Tunnel eingeschaltet');
-  }
+  assert.equal(last.apiToken, newTok, 'Token über den Tunnel gesetzt');
+  assert.equal(last.support.localUser.enabled, false, 'Support-Login nicht über den Tunnel eingeschaltet');
 });
 
 test('Support-Listener entfernt Weiterleitungs-Kopfzeilen (X-Forwarded-For)', async () => {
@@ -334,7 +362,10 @@ function sealRawSecrets(secrets, password) {
   return { v: 1, alg: 'aes-256-gcm', kdf: 'pbkdf2-sha256', iter: 210000, salt: salt.toString('base64'), iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64'), paths: Object.keys(secrets) };
 }
 
-test('Support-Tunnel: versiegelter Block mit apiToken setzt kein Token (Import und Speichern)', async () => {
+// Seit 04.11.2026 darf der Tunnel das Token setzen — aber wie überall nur
+// ausdrücklich (apiToken-Feld) oder per Geräte-Tausch (__apiToken):
+// applySecrets() übernimmt nie apiToken, auch nicht nach dem Entschlüsseln.
+test('Support-Tunnel: versiegelter Block mit apiToken ohne Geräte-Tausch setzt kein Token (Import und Speichern)', async () => {
   const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, support: { localUser: { enabled: false } } };
   const { ctx, saved } = ctxWith(box, {
     getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
@@ -350,16 +381,34 @@ test('Support-Tunnel: versiegelter Block mit apiToken setzt kein Token (Import u
     assert.equal(res._captured.status, 200, `${p}: ${res._captured.body}`);
     const last = saved.at(-1);
     assert.ok(last, `${p}: gespeichert`);
-    assert.notEqual(last.apiToken, evil, `${p}: Token nicht über den Tunnel gesetzt`);
+    assert.notEqual(last.apiToken, evil, `${p}: Token nicht aus dem Block übernommen`);
     assert.equal(last.mqtt?.password, 'mq', `${p}: andere Geheimnisse kommen weiter an`);
     // Der Wert, den restoreRedacted einsetzt, ist der der Box.
     assert.equal(restoreRedacted(last, box).apiToken, box.apiToken, `${p}: Token der Box bleibt`);
   }
-  // Ohne apiToken im Paket darf der Tunnel das Token auch nicht löschen.
+});
+
+// Echter Fehler, bleibt behoben: ein Import ohne apiToken-Feld löschte das
+// Token der Box — über den Tunnel wie aus dem Heimnetz.
+test('Import ohne apiToken-Feld löscht das Token nicht (Tunnel und Heimnetz); ausdrücklich leer löscht', async () => {
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' } };
+  const { ctx, saved } = ctxWith(box, {
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+    getConfigPath: () => '/nonexistent/config.json',
+  });
+  const routes = createApiRoutes(ctx);
+  for (const viaSupport of [true, false]) {
+    for (const p of ['/api/config/import', '/api/config']) {
+      const res = mockRes();
+      await routes.handleRequest(makeReq('POST', p, { config: { httpPort: 8080 } }, { viaSupport }), res, new URL(`http://x${p}`));
+      assert.equal(res._captured.status, 200, res._captured.body);
+      assert.equal(restoreRedacted(saved.at(-1), box).apiToken, box.apiToken, `${p} viaSupport=${viaSupport}: Token bleibt`);
+    }
+  }
   const res = mockRes();
-  await routes.handleRequest(makeReq('POST', '/api/config/import', { config: { httpPort: 8080 } }, { viaSupport: true }), res, new URL('http://x/api/config/import'));
+  await routes.handleRequest(makeReq('POST', '/api/config/import', { config: { httpPort: 8080, apiToken: '' } }, { viaSupport: true }), res, new URL('http://x/api/config/import'));
   assert.equal(res._captured.status, 200, res._captured.body);
-  assert.equal(restoreRedacted(saved.at(-1), box).apiToken, box.apiToken, 'Token nicht über den Tunnel gelöscht');
+  assert.equal(saved.at(-1).apiToken, '', 'ausdrücklich leer = löschen');
 });
 
 test('applySecrets übernimmt nie apiToken — nur der Geräte-Tausch (__apiToken) setzt es', async () => {
@@ -367,4 +416,351 @@ test('applySecrets übernimmt nie apiToken — nur der Geräte-Tausch (__apiToke
   const out = applySecrets({ apiToken: 'b'.repeat(32) }, { apiToken: 'c'.repeat(40), 'mqtt.password': 'mq' });
   assert.equal(out.apiToken, 'b'.repeat(32));
   assert.equal(out.mqtt.password, 'mq');
+});
+
+// Christin 04.11.2026: VPN-Neustart, Token-Widerruf, Push-Schlüssel,
+// EEBUS-Kopplung und Einrichtungsfenster gehen über den Tunnel wieder; nur
+// Einwilligungen (Datenspende, Ortsnetz) erteilt der Kunde. Ausschalten geht.
+function reparaturCtx(extraCfg = {}) {
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, datenspende: { enabled: false }, ortsnetz: { enabled: false }, ...extraCfg };
+  const calls = [];
+  const env = ctxWith(box, {
+    vpnManager: { restart: async () => { calls.push('vpn_restart'); }, getStatus: () => ({ status: 'connected', profileName: 'kunde' }) },
+    datenspende: {
+      status: () => ({ linked: true }),
+      link: async () => { calls.push('ds_link'); }, linkApiKey: async () => { calls.push('ds_link'); },
+      startBackfill: () => { calls.push('ds_backfill'); return {}; }, stopBackfill: () => ({}),
+      unlink: () => { calls.push('ds_unlink'); return {}; }, cancelPendingLink() {},
+    },
+    ortsnetz: { status: () => ({}), tick: async () => ({}) },
+    inputPush: { regenerate: () => { calls.push('push_key'); return 'k'.repeat(32); }, hasKey: () => false },
+    eebus: {
+      setPairing: async (on) => { calls.push(`eebus_pairing_${on}`); return { ok: true }; }, status: () => ({ pairing: false }), reload: async () => {},
+      trust: async () => { calls.push('eebus_trust'); return { ok: true }; }, untrust: async () => ({ ok: true }),
+    },
+    getServiceActionsEnabled: () => false, getServiceName: () => 'dvhub-test-nicht-starten',
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+    getConfigPath: () => '/nonexistent/config.json',
+  });
+  const routes = createApiRoutes(env.ctx);
+  const call = async (method, p, body) => {
+    const res = mockRes();
+    const req = makeReq(method, p, body, { viaSupport: true });
+    req.headers.authorization = `Bearer ${'b'.repeat(32)}`;
+    await routes.handleRequest(req, res, new URL(`http://x${p}`));
+    return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}') };
+  };
+  return { ...env, box, calls, call };
+}
+
+test('Support-Tunnel: VPN-Neustart geht und steht im Protokoll', async () => {
+  const { call, calls, logs, recorded } = reparaturCtx();
+  const r = await call('POST', '/api/vpn/restart', {});
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(calls, ['vpn_restart']);
+  const entry = logs.findLast((l) => l.event === 'support_tunnel_action');
+  assert.deepEqual({ via: entry.details.via, route: entry.details.route, status: entry.details.status, kind: entry.details.kind },
+    { via: 'Fern-Support', route: '/api/vpn/restart', status: 200, kind: 'sicherheit' });
+  assert.equal(recorded.at(-1).route, '/api/vpn/restart');
+});
+
+test('Support-Tunnel: Token widerrufen, Push-Schlüssel, Einrichtungsfenster gehen und stehen im Protokoll', async () => {
+  const { call, calls, logs, recorded, saved } = reparaturCtx();
+  const rev = await call('POST', '/api/admin/token/revoke', {});
+  assert.notEqual(rev.body.error, 'support_tunnel_consent_denied', JSON.stringify(rev.body));
+  assert.equal(saved.at(-1).apiToken, '');
+  assert.equal(logs.findLast((l) => l.event === 'support_tunnel_action').details.route, '/api/admin/token/revoke');
+  const pk = await call('POST', '/api/input/push-key', {});
+  assert.notEqual(pk.body.error, 'support_tunnel_consent_denied', JSON.stringify(pk.body));
+  assert.ok(calls.includes('push_key'));
+  assert.equal(recorded.at(-1).kind, 'token');
+  assert.doesNotMatch(JSON.stringify(logs.filter((l) => l.event === 'support_tunnel_action')), /k{32}/, 'Schlüssel nicht im Protokoll');
+});
+
+test('Support-Tunnel: Ersteinrichtung abschließen geht, auch wenn das Token zurückkommt', async () => {
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' } };
+  const { ctx, saved, logs } = ctxWith(box, { needsSetup: () => true, getDataDir: () => '/nonexistent' });
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/setup/complete', { victronHost: '192.168.1.20' }, { viaSupport: true }), res, new URL('http://x/api/setup/complete'));
+  assert.equal(res._captured.status, 200, res._captured.body);
+  assert.ok(saved.length > 0);
+  const entry = logs.findLast((l) => l.event === 'support_tunnel_action');
+  assert.equal(entry.details.route, '/api/setup/complete');
+  assert.equal(entry.details.kind, 'token');
+  assert.doesNotMatch(JSON.stringify(entry), /b{32}/, 'Token nicht im Protokoll');
+});
+
+test('Support-Tunnel: EEBUS-Kopplung (Vertrauen, Kopplungsmodus) geht und steht im Protokoll', async () => {
+  const { call, calls, recorded } = reparaturCtx();
+  const pair = await call('POST', '/api/eebus/pairing', { on: true });
+  assert.equal(pair.status, 200, JSON.stringify(pair.body));
+  assert.ok(calls.includes('eebus_pairing_true'));
+  assert.equal(recorded.at(-1).kind, 'kopplung');
+  const trust = await call('POST', '/api/eebus/trust', { ski: 'a'.repeat(40), role: 'grid' });
+  assert.notEqual(trust.body.error, 'support_tunnel_consent_denied', JSON.stringify(trust.body));
+  assert.equal(recorded.at(-1).route, '/api/eebus/trust');
+});
+
+test('Support-Tunnel: Handy-App freigeben geht und steht im Protokoll', async () => {
+  const approved = [];
+  const ml = {
+    status: () => ({}), reconcile() {}, startPairing: () => ({ qr: 'x' }),
+    approvePairing: (o) => { approved.push(o.perms); return { ok: true }; },
+    cancelPairing: () => ({ ok: true }), removeDevice: () => ({ ok: true }), updateDevice: () => ({ ok: true }),
+  };
+  const { ctx, logs, recorded } = ctxWith({ httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' } }, { mobileLink: ml });
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  const req = makeReq('POST', '/api/mobile-link/pair/approve', { perms: ['read', 'control'], approveToken: 'geheim-123' }, { viaSupport: true });
+  req.headers.authorization = `Bearer ${'b'.repeat(32)}`;
+  await routes.handleRequest(req, res, new URL('http://x/api/mobile-link/pair/approve'));
+  assert.equal(res._captured.status, 200, res._captured.body);
+  assert.deepEqual(approved, [['read', 'control']]);
+  const entry = logs.findLast((l) => l.event === 'support_tunnel_action');
+  assert.equal(entry.details.kind, 'kopplung');
+  assert.deepEqual(entry.details.keys, ['perms', 'approveToken']);
+  assert.doesNotMatch(JSON.stringify(entry), /geheim-123/);
+  assert.equal(recorded.at(-1).label, 'Kopplung');
+});
+
+test('Support-Tunnel: Datenspende und Ortsnetz NICHT einschalten — Ausschalten geht', async () => {
+  const { call, calls, saved } = reparaturCtx();
+  for (const [method, p, body] of [
+    ['POST', '/api/datenspende/link', { mode: 'apikey', apiKey: 'x', consent: true, uiToken: 'n' }],
+    ['POST', '/api/datenspende/settings', { enabled: true }],
+    ['POST', '/api/datenspende/settings', { sources: { grid: true } }],
+    ['POST', '/api/datenspende/backfill', { action: 'start' }],
+    ['POST', '/api/ortsnetz/settings', { enabled: true }],
+    ['POST', '/api/ortsnetz/settings', { sendPvForecast: true }],
+  ]) {
+    const r = await call(method, p, body);
+    assert.equal(r.status, 403, `${p} ${JSON.stringify(body)}: ${r.status} ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.error, 'support_tunnel_consent_denied', p);
+  }
+  assert.deepEqual(calls, []);
+  assert.equal(saved.length, 0);
+  for (const [method, p, body] of [
+    ['POST', '/api/datenspende/settings', { enabled: false }],
+    ['POST', '/api/datenspende/backfill', { action: 'stop' }],
+    ['POST', '/api/ortsnetz/settings', { enabled: false, sendPvForecast: false }],
+  ]) {
+    const r = await call(method, p, body);
+    assert.notEqual(r.body.error, 'support_tunnel_consent_denied', `${p} ${JSON.stringify(body)}`);
+    assert.ok(r.status < 400, `${p}: ${r.status} ${JSON.stringify(r.body)}`);
+  }
+});
+
+test('Freigabeliste: eine Stelle — ohne Eintrag ist die Einwilligung frei', async () => {
+  const policy = await import('../services/support-tunnel-policy.js');
+  assert.deepEqual([...policy.SUPPORT_TUNNEL_BLOCKED_CONSENTS], ['datenspende', 'ortsnetz', 'fernzugang']);
+  for (const a of ['datenspende_link', 'datenspende_settings', 'datenspende_backfill', 'ortsnetz_settings', 'support_tunnel_open', 'installer_portal_grant']) {
+    assert.equal(policy.isSupportTunnelConsentAction(a), true, a);
+  }
+  for (const a of ['vpn_restart', 'vpn_start', 'token_rotate', 'token_revoke', 'setup_complete', 'eebus_trust', 'mobile_link_pair_approve', 'input_push_key', 'config_migrate']) {
+    assert.equal(policy.isSupportTunnelConsentAction(a), false, a);
+  }
+  assert.deepEqual(policy.supportTunnelKeptConfigRoots().sort(), ['datenspende', 'installerPortal', 'ortsnetz', 'support']);
+  assert.equal(policy.isSupportTunnelKeptMigrationFile('data/support/known_hosts'), true);
+  assert.equal(policy.isSupportTunnelKeptMigrationFile('data/datenspende.json'), true);
+  assert.equal(policy.isSupportTunnelKeptMigrationFile('data/mobile-link.json'), false);
+  // Ganzer Block neu (collectChangedPaths meldet nur den Elternpfad) zählt mit.
+  assert.equal(policy.supportTunnelActionKind('/api/family/mqtt-config', { changedPaths: ['mqtt'] }), 'sicherheit');
+  assert.equal(policy.supportTunnelActionKind('/api/config', { changedPaths: ['apiToken'] }), 'token');
+  assert.equal(policy.supportTunnelActionKind('/api/config', { changedPaths: ['optimizer.minSoc'] }), null);
+});
+
+test('Support-Tunnel: Sicherheits-, Host-, VPN-, EEBUS- und Broker-Einstellungen in der Konfiguration gehen; Einwilligungen bleiben, wie die Box sie hat', async () => {
+  const box = {
+    httpPort: 8080, apiToken: 'b'.repeat(32),
+    security: { lanTrust: 'open', lanCidrs: [], trustedClientIps: [] },
+    vpn: { enabled: false, autoConnect: false },
+    eebus: { enabled: true, trusted: [] },
+    ortsnetz: { enabled: false },
+    support: { localUser: { enabled: false } },
+    victron: { mqtt: { broker: 'mqtt://192.168.1.5:1883' } },
+  };
+  const { ctx, saved, logs, recorded } = ctxWith(box, {
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+    getConfigPath: () => '/nonexistent/config.json', getServiceActionsEnabled: () => true,
+    saveAndApplyConfig: (next) => { saved.push(next); return { ok: true, changedPaths: ['security.lanTrust', 'vpn.autoConnect'] }; },
+  });
+  const routes = createApiRoutes(ctx);
+  const wide = {
+    httpPort: 8080,
+    security: { lanTrust: 'strict', lanCidrs: ['192.168.1.0/24'], trustedClientIps: [] },
+    vpn: { enabled: true, autoConnect: true },
+    allowedHosts: ['dvhub.local'], corsAllowedOrigins: ['https://ha.example.net'],
+    trustProxy: true, trustedProxyIps: ['192.168.1.2'],
+    eebus: { enabled: true, trusted: [{ ski: 'a'.repeat(40), role: 'grid' }] },
+    ortsnetz: { enabled: true },
+    support: { localUser: { enabled: true } },
+    mqtt: { brokerUrl: 'mqtts://broker.example.net', haDiscovery: { enabled: true } },
+    victron: { transport: 'mqtt', mqtt: { schema: 'dvhub', broker: 'mqtts://broker.example.net' } },
+  };
+  for (const p of ['/api/config', '/api/config/import']) {
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', p, { config: JSON.parse(JSON.stringify(wide)) }, { viaSupport: true }), res, new URL(`http://x${p}`));
+    assert.equal(res._captured.status, 200, `${p}: ${res._captured.body}`);
+    const last = saved.at(-1);
+    assert.equal(last.security.lanTrust, 'strict', `${p}: lanTrust geändert`);
+    assert.deepEqual(last.security.lanCidrs, ['192.168.1.0/24'], `${p}: lanCidrs`);
+    assert.equal(last.vpn.autoConnect, true, `${p}: vpn`);
+    assert.deepEqual(last.eebus.trusted, wide.eebus.trusted, `${p}: eebus.trusted`);
+    assert.equal(last.mqtt.brokerUrl, 'mqtts://broker.example.net', `${p}: mqtt.brokerUrl`);
+    assert.equal(last.victron.mqtt.broker, 'mqtts://broker.example.net', `${p}: victron.mqtt.broker`);
+    for (const k of ['allowedHosts', 'corsAllowedOrigins', 'trustProxy', 'trustedProxyIps']) assert.deepEqual(last[k], wide[k], `${p}: ${k}`);
+    assert.deepEqual(last.ortsnetz, box.ortsnetz, `${p}: Ortsnetz-Einwilligung bleibt`);
+    assert.equal(last.support.localUser.enabled, false, `${p}: Support-Login bleibt`);
+    const entry = logs.findLast((l) => l.event === 'support_tunnel_action');
+    assert.equal(entry.details.route, p);
+    assert.deepEqual(entry.details.changedPaths, ['security.lanTrust', 'vpn.autoConnect']);
+    assert.equal(entry.details.kind, 'sicherheit');
+    assert.equal(recorded.at(-1).kind, 'sicherheit');
+  }
+});
+
+test('Support-Tunnel: lanTrust ändern geht, steht im Protokoll und meldet sich beim Kunden', async () => {
+  const fsMod = await import('node:fs');
+  const os = await import('node:os');
+  const { createSupportTunnel } = await import('../services/support-tunnel.js');
+  const dir = fsMod.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sup-actions-'));
+  const sent = [];
+  try {
+    const tunCtx = { getDataDir: () => dir, getCfg: () => ({}), pushLog: () => {}, notificationService: { sendDirect: async (m) => { sent.push(m); } } };
+    const tun = createSupportTunnel(tunCtx, { inContainer: false, unitMode: () => false, setTimeout: () => ({ unref() {} }), clearTimeout: () => {} });
+    const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' } };
+    const { ctx, saved, logs } = ctxWith(box, {
+      getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+      getConfigPath: () => '/nonexistent/config.json',
+      saveAndApplyConfig: (next) => { saved.push(next); return { ok: true, changedPaths: ['security.lanTrust'] }; },
+    });
+    ctx.supportTunnel = { ...ctx.supportTunnel, recordAction: tun.recordAction };
+    const routes = createApiRoutes(ctx);
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', '/api/config', { config: { httpPort: 8080, security: { lanTrust: 'restricted' } } }, { viaSupport: true }), res, new URL('http://x/api/config'));
+    assert.equal(res._captured.status, 200, res._captured.body);
+    assert.equal(saved.at(-1).security.lanTrust, 'restricted');
+    const entry = logs.findLast((l) => l.event === 'support_tunnel_action');
+    assert.deepEqual(entry.details.changedPaths, ['security.lanTrust']);
+    // Kunde: Eintrag in der Liste (überlebt den Neustart) und eine Benachrichtigung.
+    const list = tun.status().recentActions;
+    assert.equal(list[0].route, '/api/config');
+    assert.equal(list[0].kind, 'sicherheit');
+    assert.deepEqual(list[0].changedPaths, ['security.lanTrust']);
+    const again = createSupportTunnel(tunCtx, { inContainer: false, unitMode: () => false, setTimeout: () => ({ unref() {} }), clearTimeout: () => {} });
+    assert.equal(again.recentActions()[0].route, '/api/config', 'aus der Datei nach Neustart');
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].title, /Fern-Support: Sicherheitseinstellung geändert/);
+    assert.match(sent[0].body, /security\.lanTrust/);
+    // Viele harmlose Aufrufe drängen die Sicherheitsänderung nicht aus der
+    // Liste (Gegenprüfung dca8ac88, P3).
+    for (let i = 0; i < 40; i++) tun.recordAction({ method: 'POST', route: '/eosdash/x', status: 200, keys: [] });
+    const after = tun.status().recentActions;
+    assert.equal(after.filter((x) => x.kind === 'sicherheit').length, 1);
+    assert.equal(after.filter((x) => !x.kind).length, 30);
+    assert.equal(after[0].route, '/eosdash/x', 'neueste zuerst');
+    // Lesende Aufrufe kommen nicht ins Protokoll.
+    const before = logs.length;
+    await routes.handleRequest(makeReq('GET', '/api/config', null, { viaSupport: true }), mockRes(), new URL('http://x/api/config'));
+    assert.equal(logs.slice(before).filter((l) => l.event === 'support_tunnel_action').length, 0);
+    // Aus dem Heimnetz: kein Fern-Support-Eintrag.
+    await routes.handleRequest(makeReq('POST', '/api/config', { config: { httpPort: 8080 } }), mockRes(), new URL('http://x/api/config'));
+    assert.equal(logs.slice(before).filter((l) => l.event === 'support_tunnel_action').length, 0);
+  } finally { fsMod.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Support-Tunnel: Geräte-Tausch bringt keine Einwilligungen mit (Datenspende, Fernzugang)', async () => {
+  const { encryptSecrets } = await import('../services/config-secrets-crypto.js');
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' }, datenspende: { enabled: false }, installerPortal: { enabled: false } };
+  const blob = encryptSecrets({ notifications: {} }, 'pw', {
+    files: {
+      'data/support/known_hosts': Buffer.from('x').toString('base64'),
+      'data/datenspende.json': Buffer.from('{}').toString('base64'),
+    },
+  });
+  const { ctx, saved, logs } = ctxWith(box, {
+    getDataDir: () => '/nonexistent', getConfigPath: () => '/nonexistent/config.json',
+    getLoadedConfig: () => ({ exists: true, valid: true, needsSetup: false }), getConfigDefinition: () => [],
+  });
+  const routes = createApiRoutes(ctx);
+  const req = makeReq('POST', '/api/config/import', {
+    config: { httpPort: 8080, datenspende: { enabled: true }, installerPortal: { enabled: true, allowTunnel: true }, _encryptedSecrets: blob },
+    password: 'pw', migrate: true,
+  }, { viaSupport: true });
+  req.headers.authorization = `Bearer ${'b'.repeat(32)}`;
+  const res = mockRes();
+  await routes.handleRequest(req, res, new URL('http://x/api/config/import'));
+  assert.equal(res._captured.status, 200, res._captured.body);
+  assert.deepEqual(saved.at(-1).datenspende, box.datenspende);
+  assert.deepEqual(saved.at(-1).installerPortal, box.installerPortal);
+  const kept = logs.find((l) => l.event === 'support_tunnel_migration_files_kept');
+  assert.deepEqual(kept.details.files.sort(), ['data/datenspende.json', 'data/support/known_hosts']);
+  assert.equal(logs.findLast((l) => l.event === 'support_tunnel_action').details.kind, 'sicherheit');
+});
+
+test('Support-Tunnel: Portal-Kopplung geht, wenn der Kunde das Portal eingeschaltet hat — Einschalten und Tunnel-Freigabe nicht', async () => {
+  const claims = [];
+  const mk = (enabled, allowTunnel = false) => {
+    const portal = { enabled: () => enabled, permissions: () => ({ allowTunnel }), checkUiToken: () => true, issueUiToken: () => 'p', applianceId: () => 'box' };
+    const ipc = { claim: async (o) => { claims.push(o.pairingCode); return { paired: true }; }, status: () => ({ paired: false }) };
+    const env = ctxWith({ httpPort: 8080, security: { lanTrust: 'open' }, installerPortal: { enabled } }, { installerPortal: portal, installerPortalClient: ipc });
+    return { ...env, routes: createApiRoutes(env.ctx) };
+  };
+  const call = async (routes, body) => {
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', '/api/installer/client/pair', { portalUrl: 'https://portal.dvhub.de', pairingCode: 'ABC123', uiToken: 'p', ...body }, { viaSupport: true }), res, new URL('http://x/api/installer/client/pair'));
+    return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}') };
+  };
+  const on = mk(true);
+  const ok = await call(on.routes, {});
+  assert.notEqual(ok.body.error, 'support_tunnel_consent_denied', JSON.stringify(ok.body));
+  assert.equal(on.recorded.at(-1)?.kind, 'kopplung');
+  const grant = await call(on.routes, { allowTunnel: true });
+  assert.equal(grant.body.error, 'support_tunnel_consent_denied');
+  const off = mk(false);
+  const r = await call(off.routes, {});
+  assert.equal(r.body.error, 'support_tunnel_consent_denied');
+  assert.equal(off.saved.length, 0);
+});
+
+test('Support-Tunnel: Familien-MQTT — anderer Broker geht und steht im Protokoll; unlesbare Adressen weiter abgelehnt', async () => {
+  const box = { httpPort: 8080, security: { lanTrust: 'open' }, mqtt: { brokerUrl: 'mqtt://192.168.1.5:1883' } };
+  const { ctx, saved, recorded } = ctxWith(box);
+  // Wie server.js: gespeichert ist danach der neue Stand.
+  ctx.saveAndApplyConfig = (next) => { saved.push(next); Object.assign(box, JSON.parse(JSON.stringify(next))); return { ok: true }; };
+  const routes = createApiRoutes(ctx);
+  const call = async (body, viaSupport) => {
+    const res = mockRes();
+    await routes.handleRequest(makeReq('POST', '/api/family/mqtt-config', body, { viaSupport }), res, new URL('http://x/api/family/mqtt-config'));
+    return { status: res._captured.status, body: JSON.parse(res._captured.body || '{}') };
+  };
+  const r = await call({ brokerUrl: 'mqtts://broker.example.net', password: 'mq-geheim' }, true);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(saved.at(-1).mqtt.brokerUrl, 'mqtts://broker.example.net');
+  assert.deepEqual(recorded.at(-1).keys, ['brokerUrl', 'password']);
+  // Eigener Speicherweg: der Vergleich vorher/nachher erkennt den Broker als
+  // Sicherheitsänderung (Banner + Benachrichtigung; Gegenprüfung dca8ac88, P2).
+  assert.ok(recorded.at(-1).changedPaths.includes('mqtt.brokerUrl'), JSON.stringify(recorded.at(-1)));
+  assert.equal(recorded.at(-1).kind, 'sicherheit');
+  assert.doesNotMatch(JSON.stringify(recorded), /mq-geheim/);
+  // Gleichzeitige Änderung von anderer Seite (Kunde, Hintergrund) während einer
+  // Tunnel-Anfrage, die selbst nichts speichert: nicht dem Support zugerechnet
+  // (Gegenprüfung e17226cf, P3).
+  ctx.mobileLink = { cancelPairing: () => { box.security = { lanTrust: 'strict' }; return { ok: true }; } };
+  const r2 = mockRes();
+  await createApiRoutes(ctx).handleRequest(makeReq('POST', '/api/mobile-link/pair/cancel', {}, { viaSupport: true }), r2, new URL('http://x/api/mobile-link/pair/cancel'));
+  assert.equal(r2._captured.status, 200, r2._captured.body);
+  assert.equal(recorded.at(-1).route, '/api/mobile-link/pair/cancel');
+  assert.equal(recorded.at(-1).changedPaths, undefined, JSON.stringify(recorded.at(-1)));
+  assert.notEqual(recorded.at(-1).kind, 'sicherheit');
+  box.security = { lanTrust: 'open' };
+  // Backslash: WHATWG liest Host 192.168.1.5, url.parse (mqtt.js) evil.example.net (Gegenprüfung ebab0f7e, P2).
+  const bs = await call({ brokerUrl: 'mqtt://a:b@evil.example.net\\@192.168.1.5:1883' }, true);
+  assert.equal(bs.status, 400, JSON.stringify(bs.body));
+  assert.equal(bs.body.error, 'invalid_broker_url');
+  assert.equal((await call({ brokerUrl: 'mqtt://x@192.168.1.5:1883 evil' }, false)).status, 400, 'Leerzeichen');
+  const bad = await call({ brokerUrl: 'mqtt://a:b@evil.example.net^' }, true);
+  assert.equal(bad.status, 400, JSON.stringify(bad.body));
+  assert.equal(bad.body.error, 'invalid_broker_url');
 });

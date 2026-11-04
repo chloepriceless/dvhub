@@ -2,6 +2,7 @@
 // Covers all major Phase 05 API endpoints + H-01/H-14/H-17 regressions.
 // Uses createApiRoutes(ctx) + mockCtx + mockRes pattern (no HTTP server).
 
+import { withOutboundRequests } from './helpers/outbound-request-stub.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApiRoutes } from '../routes-api.js';
@@ -1045,12 +1046,9 @@ describe('ntfy: stored token stays bound to the stored server', () => {
     const raw = { notifications: { providers: { ntfy: { enabled: true, ...STORED } } } };
     return mockCtx({ getRawCfg: () => raw, saveAndApplyConfig: (next) => { saved.push(next); } });
   }
-  async function withFetch(fn) {
-    const calls = [];
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async (url, opts = {}) => { calls.push({ url: String(url), auth: opts.headers?.Authorization || null }); return { ok: true, status: 200 }; };
-    try { await fn(calls); } finally { globalThis.fetch = realFetch; }
-  }
+  // Der ntfy-Versand läuft über http(s).request mit geprüfter Namensauflösung
+  // (Gesamtprüfung 1.0.9), nicht mehr über fetch.
+  const withFetch = withOutboundRequests;
   async function post(ctx, path, body) {
     const routes = createApiRoutes(ctx);
     const res = mockRes();

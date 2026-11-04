@@ -390,7 +390,7 @@
             <!-- Fern-Support: Reverse-SSH-Tunnel (T-0113 Tier 3) -->
             <div class="config-group" data-accent="purple">
               <div class="config-group-kicker">Fern-Support (Remote-Zugang)</div>
-              <p class="svc-meta">Zeitbegrenzter Support-Zugang unter deiner Kontrolle. <strong>Standardm&auml;&szlig;ig verschlossen.</strong> Ein Tunnel zum Support &ouml;ffnet sich <strong>nur</strong>, wenn du ihn hier startest oder wenn du unter &bdquo;Installateurs-Portal&ldquo; erlaubt hast, dass der Support ihn &ouml;ffnet (&bdquo;Installateur darf Support-Tunnel &ouml;ffnen&ldquo;) &mdash; dann wirst du bei jeder &Ouml;ffnung benachrichtigt. Ohne offenen Tunnel ist die Box hinter NAT von au&szlig;en nicht erreichbar. Der hinterlegte Schl&uuml;ssel allein gibt keinen Zugriff. Du kannst den Tunnel jederzeit sofort beenden; er schlie&szlig;t sich zus&auml;tzlich automatisch. <strong>Solange er offen ist, hat der Support auf der Box dieselben Rechte wie ein Ger&auml;t in deinem Heimnetz</strong> (bei der LAN-Vertrauensstufe &bdquo;Offen&ldquo; volle Rechte, sonst braucht er f&uuml;r mehr das API-Token) und &uuml;ber den Support-Login eine Konsole. &Uuml;ber die Weboberfl&auml;che des Tunnels kann er ihn weder verl&auml;ngern noch Freigaben oder Kopplungen erteilen; mit der Konsole ist das technisch nicht auszuschlie&szlig;en &mdash; schalte den Support-Login ab, wenn du das nicht willst (wirkt ab dem n&auml;chsten Neustart von DVhub).</p>
+              <p class="svc-meta">Zeitbegrenzter Support-Zugang unter deiner Kontrolle. <strong>Standardm&auml;&szlig;ig verschlossen.</strong> Ein Tunnel zum Support &ouml;ffnet sich <strong>nur</strong>, wenn du ihn hier startest oder wenn du unter &bdquo;Installateurs-Portal&ldquo; erlaubt hast, dass der Support ihn &ouml;ffnet (&bdquo;Installateur darf Support-Tunnel &ouml;ffnen&ldquo;) &mdash; dann wirst du bei jeder &Ouml;ffnung benachrichtigt. Ohne offenen Tunnel ist die Box hinter NAT von au&szlig;en nicht erreichbar. Der hinterlegte Schl&uuml;ssel allein gibt keinen Zugriff. Du kannst den Tunnel jederzeit sofort beenden; er schlie&szlig;t sich zus&auml;tzlich automatisch. <strong>Solange er offen ist, hat der Support auf der Box dieselben Rechte wie ein Ger&auml;t in deinem Heimnetz</strong> (bei der LAN-Vertrauensstufe &bdquo;Offen&ldquo; volle Rechte, sonst braucht er f&uuml;r mehr das API-Token) und &uuml;ber den Support-Login eine Konsole. F&uuml;r Reparaturen kann er &uuml;ber den Tunnel alles einstellen, auch API-Token, Kopplungen, VPN und Sicherheitseinstellungen. <strong>Jede &Auml;nderung wird protokolliert</strong> und unten angezeigt; bei Token-, Kopplungs- und Sicherheits&auml;nderungen bekommst du zus&auml;tzlich eine Benachrichtigung. <strong>Deine Einwilligungen erteilst nur du selbst:</strong> Datenspende und Ortsnetz-Daten einschalten, den Tunnel verl&auml;ngern oder dem Installateurs-Portal Zugang geben kann der Support nicht (ausschalten schon). Mit der Konsole ist das technisch nicht auszuschlie&szlig;en &mdash; schalte den Support-Login ab, wenn du das nicht willst (wirkt ab dem n&auml;chsten Neustart von DVhub).</p>
               <div class="config-row">
                 <span class="config-row-label">Tunnel-Status</span>
                 <span class="config-row-value" id="supportTunnelState">&mdash;</span>
@@ -420,6 +420,10 @@
                 <button id="supportTunnelCloseBtn" class="btn btn-danger btn-small" type="button">Tunnel sofort schlie&szlig;en</button>
               </div>
               <p class="svc-meta" id="supportTunnelResult"></p>
+              <div class="config-row">
+                <span class="config-row-label">Letzte Fern-Support-Aktionen</span>
+              </div>
+              <ul class="svc-meta" id="supportTunnelActions"><li>&mdash;</li></ul>
               <p class="svc-meta"><strong>Notfall:</strong> Startet DVhub selbst nicht mehr, kann der Tunnel direkt an der Box ge&ouml;ffnet werden &mdash; per SSH/Konsole anmelden und ausf&uuml;hren: <code>sudo bash /opt/dvhub/dvhub-support-tunnel.sh</code> (Anleitung: <code>docs/NOTFALL-FERNZUGANG.md</code>).</p>
             </div>
 
@@ -1022,7 +1026,7 @@
   <script src="/dv-modal.js?v=20260629-prompt-inputtype"></script>
   <script src="/pro-modal.js" defer></script>
   <script src="/settings.js?v=20261102-release109-vrm"></script>
-  <script src="/tools.js?v=20261102-release109-vrm"></script>
+  <script src="/tools.js?v=20261104-fernsupport"></script>
   <script src="/mobile-link.js?v=20261022-handy2"></script>
   <!-- Tab switching is in settings.js (CSP blocks inline scripts) -->
 </body>

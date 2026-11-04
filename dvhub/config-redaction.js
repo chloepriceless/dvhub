@@ -82,6 +82,11 @@ function crossCheckBroker(cfg) {
   const host = g(cfg, 'victron.host');
   return c.broker || g(cfg, 'victron.mqtt.broker') || (host ? `mqtts://${host}:8883` : '');
 }
+function hostPort(host, port) {
+  const h = String(host ?? '').trim();
+  if (!h) return '';
+  return `${h.includes(':') && !h.startsWith('[') ? `[${h}]` : h}:${port}`;
+}
 function weatherBroker(cfg) { return g(cfg, 'forecast.weather.mqtt.brokerUrl') || g(cfg, 'mqtt.brokerUrl') || ''; }
 const SECRET_TARGETS = {
   'notifications.providers.ntfy.token': (c) => [g(c, 'notifications.providers.ntfy.topicUrl')],
@@ -90,7 +95,8 @@ const SECRET_TARGETS = {
   'optimizer.eosProxy.remote.token': (c) => [g(c, 'optimizer.eosProxy.remote.endpoint')],
   'dbBackup.smb.username': (c) => [g(c, 'dbBackup.smb.host')],
   'dbBackup.smb.password': (c) => [g(c, 'dbBackup.smb.host')],
-  'telemetry.database.password': (c) => [g(c, 'telemetry.database.host')],
+  // Port steht hier in einem eigenen Feld (Gegenprüfung 039a110c, P2).
+  'telemetry.database.password': (c) => [hostPort(g(c, 'telemetry.database.host'), g(c, 'telemetry.database.port') || 5432)],
   'wallbox.openevse.username': (c) => [g(c, 'wallbox.openevse.url')],
   'wallbox.openevse.password': (c) => [g(c, 'wallbox.openevse.url')],
   'wallbox.nrgkick.username': (c) => [g(c, 'wallbox.nrgkick.host')],
@@ -111,29 +117,45 @@ for (const f of ['username', 'password']) {
 }
 export const SECRET_TARGET_PATHS = Object.freeze(Object.keys(SECRET_TARGETS));
 
-// Ziel = Host plus „gesichert?“. Gleicher Host und gleiche oder bessere
-// Sicherung (mqtt → mqtts, http → https) gilt als dasselbe Ziel; ein anderer
-// Host oder TLS → Klartext gilt als neu (Gegenprüfung 4fe254c9: sonst ginge
-// das Geheimnis im Klartext). Nicht URL.origin — für mqtt:// u. ä. ist die
-// Herkunft immer „null“.
+// Ziel = Host, Port plus „gesichert?“. Gleicher Host und Port und gleiche
+// oder bessere Sicherung (mqtt → mqtts, http → https) gilt als dasselbe Ziel;
+// ein anderer Host, ein anderer Port (ein anderer Dienst, Gesamtprüfung
+// 1.0.9) oder TLS → Klartext gilt als neu (Gegenprüfung 4fe254c9: sonst ginge
+// das Geheimnis im Klartext). Standard-Ports zählen wie weggelassene; beim
+// Wechsel auf die bessere Sicherung darf sich der Port mitändern
+// (mqtt://b:1883 → mqtts://b:8883). Nicht URL.origin — für mqtt:// u. ä. ist
+// die Herkunft immer „null“.
 const SECURE_SCHEMES = new Set(['https:', 'mqtts:', 'wss:', 'ssl:', 'tls:']);
+const DEFAULT_PORTS = { 'http:': '80', 'https:': '443', 'ws:': '80', 'wss:': '443', 'mqtt:': '1883', 'mqtts:': '8883', 'tcp:': '1883', 'ssl:': '8883', 'tls:': '8883', 'smb:': '445' };
 function normTarget(v) {
   const s = String(v ?? '').trim().toLowerCase().replace(/\/+$/, '');
   if (s.includes('://')) {
-    try { const u = new URL(s); return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol) }; }
-    catch { return { host: s, secure: null }; }
+    try {
+      const u = new URL(s);
+      const port = u.port || DEFAULT_PORTS[u.protocol] || '';
+      return { host: u.hostname.replace(/^\[|\]$/g, ''), secure: SECURE_SCHEMES.has(u.protocol), port, std: port !== '' && port === DEFAULT_PORTS[u.protocol], proto: u.protocol };
+    } catch { return { host: s, secure: null, port: '' }; }
   }
   // host[:port] ohne Schema: Port nur bei genau einem ':' bzw. [v6]:port abtrennen
   // (sonst verschmolzen fd00::1 und fd00::1234, Gegenprüfung 4fe254c9).
-  const v6 = /^\[([^\]]+)\](?::\d+)?$/.exec(s);
-  if (v6) return { host: v6[1], secure: null };
-  return { host: (s.split(':').length === 2 ? s.replace(/:\d+$/, '') : s), secure: null };
+  const v6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(s);
+  if (v6) return { host: v6[1], secure: null, port: v6[2] || '' };
+  const hp = s.split(':').length === 2 ? /^(.*):(\d+)$/.exec(s) : null;
+  return hp ? { host: hp[1], secure: null, port: hp[2] } : { host: s, secure: null, port: '' };
 }
 function targetsOf(cfg, secretPath) {
   return SECRET_TARGETS[secretPath](cfg || {}).map(normTarget);
 }
+// Beim Wechsel auf die bessere Sicherung darf sich der Port nur von einem
+// Standard-Port zum anderen ändern (1883 → 8883, 80 → 443), sonst wäre jeder
+// TLS-Dienst auf demselben Host „dasselbe Ziel“ (Gegenprüfung 039a110c, P2).
+// Nur zusammengehörige Paare (mqtt ↔ mqtts, http ↔ https, ws ↔ wss) — mqtt://b
+// → wss://b wäre ein anderer Dienst (Gegenprüfung eb44b949, P3).
+const TLS_UPGRADE = { 'mqtt:': ['mqtts:', 'ssl:', 'tls:'], 'tcp:': ['mqtts:', 'ssl:', 'tls:'], 'http:': ['https:'], 'ws:': ['wss:'] };
 function isNewTarget(t, before) {
-  return !before.some((b) => b.host === t.host && !(b.secure === true && t.secure === false));
+  return !before.some((b) => b.host === t.host
+    && !(b.secure === true && t.secure === false)
+    && (b.port === t.port || (b.std && t.std && (TLS_UPGRADE[b.proto] || []).includes(t.proto))));
 }
 
 /**

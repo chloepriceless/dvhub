@@ -5,6 +5,7 @@
 //
 // Constraint (PROJECT.md): node:test + node:assert/strict ONLY. NO vitest.
 
+import { withOutboundRequests } from './helpers/outbound-request-stub.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -618,7 +619,9 @@ test('active → SUSPENDED transition triggers operator notification', async () 
         return { ok: true, status: 200, json: async () => ({}) };
       };
 
-      try {
+      // Der ntfy-Versand selbst läuft seit der Gesamtprüfung 1.0.9 über
+      // http(s).request mit geprüfter Namensauflösung — dort abfangen.
+      try { await withOutboundRequests(async (reqs) => {
         const ctx = mockCtx({
           cfg: {
             licensing: { keygenAccount: 'test1' },
@@ -640,10 +643,11 @@ test('active → SUSPENDED transition triggers operator notification', async () 
 
         // Allow the fire-and-forget notify path to flush
         await new Promise(resolve => setImmediate(resolve));
+        ntfyCalls.push(...reqs);
 
         assert.ok(ntfyCalls.length >= 1, 'ntfy provider must be called on active->suspended');
         assert.match(ntfyCalls[0].url, /ntfy\.example\.com/);
-      } finally {
+      }); } finally {
         globalThis.fetch = realFetch;
       }
     }

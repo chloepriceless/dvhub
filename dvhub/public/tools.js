@@ -726,9 +726,56 @@ const RELEASE_PHASES = {
   health: 'Gesundheitsprüfung', rollback: 'Rückweg',
 };
 
+// Gehört ein Stand aus /api/admin/update/status zum gerade gestarteten
+// Auftrag? Ohne Uhrvergleich zwischen Browser und Box (Gesamtprüfung 1.0.9):
+// `started` stammt von der Box-Uhr. Neu ist ein Stand, dessen `started` sich
+// gegenüber dem Stand vor dem Auftrag geändert hat; ist der unbekannt, zählt
+// ein Ergebnis erst, nachdem der Auftrag laufend gesehen wurde.
+// → 'ignore' | 'active' | 'done'
+function releaseJobVerdict(st, baseline, seenActive) {
+  if (!st || !st.state) return 'ignore';
+  const active = st.state === 'running' || st.state === 'queued';
+  // Anker = erster Stand nach dem Start (Box-Uhr): dieser und jeder spätere
+  // gehört zum Auftrag — beides Zeiten der Box, kein Vergleich mit dem Browser.
+  if (baseline && baseline.anchor) {
+    const ours = st.started === baseline.anchor || Date.parse(st.started) >= Date.parse(baseline.anchor);
+    if (!ours) return 'ignore';
+    return active ? 'active' : 'done';
+  }
+  if (baseline && baseline.known) {
+    if (baseline.started && st.started === baseline.started) return 'ignore';
+    return active ? 'active' : 'done';
+  }
+  if (active) return 'active';
+  return seenActive ? 'done' : 'ignore';
+}
+
+// Stand vor dem Auftrag festhalten (Vergleichsbasis für releaseJobVerdict).
+async function releaseJobBaseline() {
+  try {
+    const res = await apiFetch('/api/admin/update/status');
+    const data = await res.json();
+    return { known: true, started: (data && data.status && data.status.started) || null };
+  } catch (_) {
+    return { known: false };
+  }
+}
+
 // Auftrag des Helfers verfolgen: Fortschritt, Neustart überbrücken, Ergebnis.
-async function trackReleaseJob(label) {
-  const since = Date.now() - 30000;
+async function trackReleaseJob(label, baseline) {
+  let seenActive = false;
+  // Stand vor dem Auftrag unbekannt: den ersten Stand nach dem Start als Anker
+  // nehmen — der Helfer schreibt „queued“, bevor er den Start bestätigt. So
+  // geht auch ein schnell scheiternder Auftrag nicht verloren (Gegenprüfung
+  // ce629829, P3).
+  if (!(baseline && baseline.known)) {
+    try {
+      const res = await apiFetch('/api/admin/update/status');
+      const data = await res.json();
+      const a = data && data.status;
+      if (a && a.started) baseline = { known: true, started: null, anchor: a.started };
+    } catch (_) { /* weiter wie bisher: Ergebnis erst nach „läuft“ */ }
+  }
   const deadline = Date.now() + 20 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
@@ -741,8 +788,10 @@ async function trackReleaseJob(label) {
       continue;
     }
     const st = data && data.status;
-    if (!st || Date.parse(st.started || 0) < since) continue;
-    if (st.state === 'running' || st.state === 'queued') {
+    const verdict = releaseJobVerdict(st, baseline, seenActive);
+    if (verdict === 'ignore') continue;
+    if (verdict === 'active') {
+      seenActive = true;
       let text = `${label}: ${RELEASE_PHASES[st.phase] || st.phase}`;
       if (st.phase === 'download' && st.progress && st.progress.total) {
         text += ` (${Math.round((st.progress.bytes / st.progress.total) * 100)} %)`;
@@ -773,10 +822,11 @@ async function rollbackUpdate() {
   ))) return;
   if (rb) rb.disabled = true;
   try {
+    const baseline = await releaseJobBaseline();
     const res = await apiFetch('/api/admin/update/rollback', { method: 'POST' });
     const data = await res.json();
     if (!data.ok) { setBanner('updateBanner', `Rückweg fehlgeschlagen: ${data.error}`, 'error'); return; }
-    await trackReleaseJob('Rückweg');
+    await trackReleaseJob('Rückweg', baseline);
   } catch (error) {
     setBanner('updateBanner', `Rückweg fehlgeschlagen: ${error.message}`, 'error');
   } finally {
@@ -859,6 +909,8 @@ async function applyUpdate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...(pinRef ? { ref: pinRef } : {}), ...(allowDowngrade ? { allowDowngrade: true } : {}) })
     });
+    // Stand vor dem Auftrag: daran erkennt die Verfolgung den neuen (ohne Uhrvergleich).
+    const baseline = await releaseJobBaseline();
     let data = await (await postApply(false)).json();
     // Paket-Box: ein „Update“, das zurückstufen würde, nur nach Bestätigung.
     if (!data.ok && data.error === 'downgrade_blocked') {
@@ -875,7 +927,7 @@ async function applyUpdate() {
     }
     if (data.ok && data.mode === 'package') {
       document.getElementById('updateActions').style.display = 'none';
-      const st = await trackReleaseJob('Update');
+      const st = await trackReleaseJob('Update', baseline);
       if (btn && (!st || st.state !== 'ok')) { btn.disabled = false; btn.textContent = 'Update installieren & neu starten'; }
     } else if (data.ok) {
       setBanner('updateBanner', 'Update installiert! Service startet neu — Seite lädt in 10 Sekunden automatisch neu.', 'success');
@@ -914,6 +966,8 @@ async function switchUpdateChannel(newChannel) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(allowDowngrade ? { channel: newChannel, allowDowngrade: true } : { channel: newChannel })
     });
+    // Stand vor dem Auftrag: daran erkennt die Verfolgung den neuen (ohne Uhrvergleich).
+    const baseline = await releaseJobBaseline();
     let data = await (await postSwitch(false)).json();
     // Strix R-0003: der Wechsel stuft nicht mehr still auf eine ältere Fassung
     // zurück — nur nach ausdrücklicher Bestätigung.
@@ -942,7 +996,7 @@ async function switchUpdateChannel(newChannel) {
           { title: 'Kanal nicht gespeichert', okLabel: 'Verstanden', variant: 'danger' }
         );
       }
-      const st = await trackReleaseJob(`Wechsel zu ${label}`);
+      const st = await trackReleaseJob(`Wechsel zu ${label}`, baseline);
       if (!st || st.state !== 'ok') revertDropdown();
     } else if (data.ok) {
       setBanner('updateBanner', `Channel gewechselt zu ${label}. Service startet neu — Seite lädt in 10 Sekunden automatisch neu.`, 'success');
@@ -1123,11 +1177,45 @@ async function refreshSupportTunnelStatus() {
     setText('supportTunnelRelay', r.host
       ? `${r.user || 'dvhub-support'}@${r.host}:${r.port || ''}${(r.shellPort ? ` (Ports ${r.shellPort}/${r.webPort})` : ' (Ports nicht zugeteilt)')}`
       : '—');
+    renderSupportTunnelActions(st.recentActions);
     const openBtn = document.getElementById('supportTunnelOpenBtn');
     const closeBtn = document.getElementById('supportTunnelCloseBtn');
     if (openBtn) openBtn.disabled = !!st.open || !st.provisioned;
     if (closeBtn) closeBtn.disabled = !st.open;
   } catch { /* status is best-effort */ }
+}
+
+// Letzte Aktionen des Fern-Supports (2026-11-04): jede Änderung über den
+// Tunnel mit Zeit, Route und geänderten Feldern — nie Werte. Token-,
+// Kopplungs- und Sicherheitsänderungen hervorgehoben.
+function renderSupportTunnelActions(actions) {
+  const list = document.getElementById('supportTunnelActions');
+  if (!list) return;
+  list.replaceChildren();
+  // Token-, Kopplungs- und Sicherheitsänderungen immer, übrige die letzten 20.
+  let plainShown = 0;
+  const items = (Array.isArray(actions) ? actions : []).filter((a) => a && (a.kind || plainShown++ < 20));
+  if (!items.length) {
+    const li = document.createElement('li');
+    li.className = 'svc-meta';
+    li.textContent = 'Noch keine Änderungen über den Fern-Support.';
+    list.append(li);
+    return;
+  }
+  for (const a of items) {
+    const li = document.createElement('li');
+    const d = new Date(a.ts);
+    const when = Number.isFinite(d.getTime()) ? d.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    const fields = Array.isArray(a.changedPaths) && a.changedPaths.length ? a.changedPaths : (Array.isArray(a.keys) ? a.keys : []);
+    const what = fields.length ? ` — ${fields.slice(0, 8).join(', ')}${fields.length > 8 ? ', …' : ''}` : '';
+    if (a.kind) {
+      const strong = document.createElement('strong');
+      strong.textContent = `${a.label || a.kind}: `;
+      li.append(strong);
+    }
+    li.append(document.createTextNode(`${when} ${a.method || ''} ${a.route || ''}${what}`));
+    list.append(li);
+  }
 }
 
 async function openSupportTunnel() {
@@ -1977,6 +2065,7 @@ if (typeof document !== 'undefined') {
 
 if (typeof globalThis !== 'undefined') {
   globalThis.DVhubToolsHistory = {
+    releaseJobVerdict,
     buildMaintenanceBootstrapPlan,
     buildHistoryImportRequest,
     buildHistoryGapBackfillRequest,

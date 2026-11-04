@@ -356,6 +356,7 @@ export function createLicenseService(ctx) {
   let signedExpiryMsCache = null;
   let signedIssuedMsCache = null;   // Codex-v2 C-2: tamper-proof time floor from the signed file
   let fileMaxKwpCache = null;       // Deckel aus dem vertrauten Machine-File (für den Tarif-Abgleich)
+  let tierRefreshDoneFor = null;    // Online-Deckel, für den zuletzt erfolgreich neu ausgecheckt wurde
   // Codex-v2-fix (HIGH): the TAMPER-PROOF license identity is the license id INSIDE
   // the Ed25519-signed key (Hardening-B-verified), NOT the editable plaintext
   // state.license.license_id. Falls back to plaintext only for legacy/non-signed
@@ -1102,9 +1103,14 @@ export function createLicenseService(ctx) {
         return;
       }
       const online = finiteCap(state.license.online_max_kwp);
-      if (scope === 'bound' && online != null && online !== fileMaxKwpCache) {
+      // Je Online-Deckel höchstens ein erfolgreicher Neu-Checkout: bringt das
+      // frische File den Deckel nicht mit (maxKwp fehlt), band sonst jede
+      // Prüfung neu (Gesamtprüfung 1.0.9). Der Online-Deckel gilt trotzdem
+      // (combineCaps).
+      if (scope === 'bound' && online != null && online !== fileMaxKwpCache && tierRefreshDoneFor !== online) {
         pushLog('license_tier_changed_refresh', { file_max_kwp: fileMaxKwpCache, online_max_kwp: online });
-        await bindNow(key);
+        const nl = await bindNow(key);
+        if (nl?.ok) tierRefreshDoneFor = online;
         return;
       }
       if (scope === 'bound' && (state.license.bind_error || state.license.bind_block)) {

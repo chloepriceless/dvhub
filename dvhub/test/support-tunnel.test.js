@@ -257,8 +257,11 @@ test('B7: liteStatus exposes only in-memory fields and NO uiToken', () => {
     fs: { existsSync: () => false, readFileSync: () => { throw new Error('ENOENT'); } },
   });
   const ls = tun.liteStatus();
-  assert.deepEqual(Object.keys(ls).sort(), ['expiresAt', 'open', 'ttlRemainingSec']);
+  // recentChanges (2026-11-04): Fern-Support-Änderungen seit dem Öffnen,
+  // nur bei offenem Tunnel (aus dem Speicher; die Datei einmal beim ersten Mal).
+  assert.deepEqual(Object.keys(ls).sort(), ['expiresAt', 'open', 'recentChanges', 'ttlRemainingSec']);
   assert.equal(ls.open, false);
+  assert.deepEqual(ls.recentChanges, []);
   assert.ok(!('uiToken' in ls), 'liteStatus must never leak the nonce');
 });
 

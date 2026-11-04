@@ -298,6 +298,9 @@ export function createSupportTunnel(ctx, deps = {}) {
       // autossh/ssh — damit dvhub-support-tunnel.sh --close ihn findet (T-0004).
       processStatePath: path.join(supDir, 'tunnel-process.json'),
       logPath: path.join(supDir, 'tunnel.log'),
+      // Letzte Aktionen des Fern-Supports (für den Kunden sichtbar, überlebt
+      // einen Neustart — Token-Widerruf startet DVhub neu).
+      actionsPath: path.join(supDir, 'actions.json'),
       sshdConfigPath: path.join(supDir, 'sshd_config'),
       supportKeysPath: path.join(supDir, 'support_authorized_keys'),
     };
@@ -470,6 +473,8 @@ export function createSupportTunnel(ctx, deps = {}) {
       lastError: cur.open ? null : (unitMode() ? (unitLastError() || lastError) : lastError),
       // B7: CSRF-Nonce für POST /open — die UI schickt ihn automatisch mit.
       uiToken: issueUiToken(),
+      // Was der Fern-Support über den Tunnel geändert hat (neueste zuerst).
+      recentActions: recentActions(),
     };
   }
 
@@ -479,11 +484,74 @@ export function createSupportTunnel(ctx, deps = {}) {
   function liteStatus() {
     const t = now();
     const cur = currentState();
+    // Für den Leitstand-Banner: Token-, Kopplungs- und Sicherheitsänderungen
+    // seit der Tunnel offen ist (höchstens drei, neueste zuerst).
+    const since = cur.open ? Number(cur.openedAt) || 0 : null;
+    const sensitive = since == null ? [] : recentActions()
+      .filter((a) => a.kind && Date.parse(a.ts) >= since)
+      .slice(0, 3)
+      .map((a) => ({ ts: a.ts, kind: a.kind, label: a.label, route: a.route }));
     return {
       open: cur.open,
       expiresAt: cur.expiresAt,
       ttlRemainingSec: (cur.open && cur.expiresAt) ? Math.max(0, Math.round((cur.expiresAt - t) / 1000)) : null,
+      recentChanges: sensitive,
     };
+  }
+
+  // ── Fern-Support-Aktionen (Christin 04.11.2026) ───────────────────────────
+  // Der Fern-Support darf über den Tunnel alles für Reparaturen; als Ausgleich
+  // sieht der Kunde jede Änderung (Liste unter Einstellungen → Fern-Support,
+  // Banner im Leitstand) und bekommt bei Token-, Kopplungs- und
+  // Sicherheitsänderungen eine Benachrichtigung. Nur Schlüssel und Pfade,
+  // nie Werte (routes-api.js legt den Eintrag an).
+  const ACTIONS_MAX = 30;
+  const NOTIFY_GAP_MS = 60 * 1000;
+  let actionsCache = null;
+  const lastNotified = new Map();
+
+  function recentActions() {
+    if (actionsCache) return actionsCache.slice();
+    const o = readJsonFile(supportPaths().actionsPath);
+    actionsCache = Array.isArray(o?.actions) ? o.actions.filter((a) => a && typeof a === 'object').slice(0, 2 * ACTIONS_MAX) : [];
+    return actionsCache.slice();
+  }
+
+  function recordAction(entry = {}) {
+    const a = {
+      ts: new Date(now()).toISOString(),
+      method: String(entry.method || '').slice(0, 10),
+      route: String(entry.route || '').slice(0, 160),
+      status: Number(entry.status) || 0,
+      keys: Array.isArray(entry.keys) ? entry.keys.slice(0, 40).map((k) => String(k).slice(0, 64)) : [],
+      ...(Array.isArray(entry.changedPaths) && entry.changedPaths.length ? { changedPaths: entry.changedPaths.slice(0, 40).map((k) => String(k).slice(0, 120)) } : {}),
+      ...(entry.kind ? { kind: String(entry.kind), label: String(entry.label || entry.kind).slice(0, 80) } : {}),
+    };
+    // Token-, Kopplungs- und Sicherheitsänderungen getrennt behalten: viele
+    // harmlose Aufrufe dürfen sie nicht aus der Liste drängen (Gegenprüfung
+    // dca8ac88, P3). Je Art höchstens ACTIONS_MAX, neueste zuerst.
+    const all = [a, ...recentActions()];
+    const sensitive = all.filter((x) => x.kind).slice(0, ACTIONS_MAX);
+    const plain = all.filter((x) => !x.kind).slice(0, ACTIONS_MAX);
+    actionsCache = all.filter((x) => sensitive.includes(x) || plain.includes(x));
+    try {
+      const p = supportPaths();
+      fsImpl.mkdirSync(p.supDir, { recursive: true, mode: 0o700 });
+      writeFileAtomic(p.actionsPath, JSON.stringify({ actions: actionsCache }) + '\n', 0o600);
+    } catch { /* Anzeige ist best-effort — das Audit-Log hat den Eintrag */ }
+    if (a.kind) {
+      const key = `${a.kind}|${a.route}`;
+      const t = now();
+      if (!lastNotified.has(key) || t - lastNotified.get(key) >= NOTIFY_GAP_MS) {
+        lastNotified.set(key, t);
+        const what = a.changedPaths?.length ? ` (${a.changedPaths.slice(0, 5).join(', ')}${a.changedPaths.length > 5 ? ', …' : ''})` : '';
+        notifyTunnel(`Fern-Support: ${a.label} geändert`,
+          `Über den Support-Tunnel geändert: ${a.route}${what}. `
+          + 'Alle Aktionen: Einstellungen → Freigaben → Fern-Support.',
+          'warning');
+      }
+    }
+    return a;
   }
 
   function notifyClosed(reason) {
@@ -749,5 +817,5 @@ export function createSupportTunnel(ctx, deps = {}) {
     return unitMode() ? closeUnit(actor) : closeProcess(actor);
   }
 
-  return { open, close, status, liteStatus, consumeUiToken, publicKey, assignRelayPorts };
+  return { open, close, status, liteStatus, consumeUiToken, publicKey, assignRelayPorts, recordAction, recentActions };
 }

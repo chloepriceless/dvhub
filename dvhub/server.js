@@ -2249,6 +2249,8 @@ const web = http.createServer(async (req, res) => {
     // schreibender Aufrufe (fremde Webseiten, DNS-Rebinding) wie bei /api/*.
     if (isEosdashRequest(url.pathname)) {
       if (!routes.enforceRequestGate(req, res)) return;
+      // Fern-Support-Protokoll auch für EOS-Einstellungen über den Tunnel.
+      routes.trackSupportTunnelWrite(req, res, url);
       eosdashProxy(req, res);
       return;
     }

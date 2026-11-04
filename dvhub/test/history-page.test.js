@@ -501,3 +501,21 @@ test('Sankey: Akku→Akku-Verschiebung als Netto-Kante (Codex Runde 4), kein Kre
   const both = helpers.energyFlowSankeyEdges([{ batteryToSecondBatteryKwh: 1 }, { secondBatteryToBatteryKwh: 1.5 }]);
   assert.equal(JSON.stringify(both.map((e) => [e.from, e.to, e.flow])), JSON.stringify([['Akku2', 'Akku', 0.5]]));
 });
+
+// Gesamtprüfung 1.0.9 (Hauptbefund 13): Das Protokoll-CSV war ein schlichtes
+// <a href download> — ohne Authorization-Kopf. Außerhalb des Heimnetzes oder
+// unter lanTrust „restricted“ speicherte der Browser die 401-Antwort als CSV.
+// Jetzt lädt die Seite die Datei mit dem Token (apiFetch) und meldet Fehler.
+test('Protokoll-CSV „Netzstrom im Akku“ wird mit Token geladen, nicht per schlichtem Link', () => {
+  const html = readPublic('history.html');
+  const link = /<[^>]*id="historyGridShareCsv"[^>]*>/.exec(html)?.[0] || '';
+  assert.ok(link, 'Knopf vorhanden');
+  assert.doesNotMatch(link, /\sdownload(\s|>|=)/, 'kein Browser-Download am Token vorbei');
+  assert.doesNotMatch(link, /href=/, 'kein direkter Link auf die API');
+  const js = readPublic('history.js');
+  const fn = js.slice(js.indexOf('async function downloadGridShareProtocol'));
+  assert.ok(js.includes('async function downloadGridShareProtocol'), 'Download-Funktion vorhanden');
+  assert.match(fn.slice(0, 1500), /apiFetch\('\/api\/battery\/grid-share\/protocol\.csv'\)/);
+  assert.match(fn.slice(0, 1500), /response\.ok/);
+  assert.match(js, /byId\('historyGridShareCsv'\)[\s\S]{0,200}addEventListener\('click'/);
+});

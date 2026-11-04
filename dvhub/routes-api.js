@@ -11,6 +11,7 @@ import { STREAM_BUCKET_SECONDS } from './telemetry-store-pg.js';
 import http from 'node:http';
 import os from 'node:os';
 import { isIP } from 'node:net';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isInternalHost, isPrivateOrLoopbackHost, isAllowedOutboundUrl, sameOrigin } from './services/host-address.js';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
@@ -71,9 +72,10 @@ import { createConfigRoutes } from './routes/config-routes.js';
 import { createAdminRoutes } from './routes/admin-routes.js';
 import { createNotificationRoutes } from './routes/notification-routes.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
-import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp } from './config-model.js';
+import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collectChangedPaths } from './config-model.js';
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
 import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
+import { isSupportTunnelConsentAction, isSupportTunnelWrite, bodyKeyNames, supportTunnelActionKind, SUPPORT_TUNNEL_KIND_LABELS } from './services/support-tunnel-policy.js';
 import { SETUP_STEP_LABELS as DATENSPENDE_SETUP_STEP_LABELS, redactSecrets as redactDatenspendeSecrets } from './services/datenspende/index.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
@@ -866,6 +868,12 @@ export function configChangeNeedsEosReplan(changedPaths) {
 // auch services/control-commands.js es ohne Zyklus nutzen kann).
 export { requestEosReplanAfterSave };
 
+// Fern-Support-Protokoll: welche Konfigurationspfade das Speichern INNERHALB
+// einer Tunnel-Anfrage geändert hat (Gegenprüfung e17226cf, P3 — ein Vergleich
+// über die ganze Laufzeit der Anfrage rechnete gleichzeitige Änderungen des
+// Kunden oder von Hintergrund-Diensten dem Support zu).
+const supportAuditStorage = new AsyncLocalStorage();
+
 export function createApiRoutes(ctx) {
   // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
   // gleichzeitig, weggeklickte überspringen, gleiche Anfragen nur einmal.
@@ -1240,14 +1248,88 @@ export function createApiRoutes(ctx) {
   function isSupportTunnelRequest(req) {
     return req?.dvhubSupportTunnel === true;
   }
-  // Freigaben (Kopplungen, Zugänge, Voll-Export, Geräte-Tausch) erteilt der
-  // Kunde, nicht der Support über den offenen Tunnel (Strix T-0001,
-  // Gegenprüfung 6f9c9cca). Gibt true zurück, wenn schon geantwortet wurde.
+  // Über den Support-Tunnel darf der Fern-Support alles, was zur Reparatur
+  // nötig ist (Christin 04.11.2026) — nur Einwilligungen des Kunden erteilt er
+  // nicht (Liste: services/support-tunnel-policy.js). Gibt true zurück, wenn
+  // schon geantwortet wurde.
   function denySupportConsent(req, res, action) {
-    if (!isSupportTunnelRequest(req)) return false;
+    if (!isSupportTunnelRequest(req) || !isSupportTunnelConsentAction(action)) return false;
     pushLog('support_tunnel_consent_denied', { action }, actorContext(req));
-    json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Freigaben und Kopplungen erteilt der Kunde selbst, nicht über den Support-Tunnel.' });
+    json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Diese Einwilligung erteilt der Kunde selbst, nicht über den Fern-Support. Ausschalten geht.' });
     return true;
+  }
+  // Fern-Support-Protokoll (Christin 04.11.2026): jede schreibende Aktion über
+  // den Tunnel — Route, Feldnamen, geänderte Konfigurationspfade, Ergebnis;
+  // nie Werte. Ins Audit-Log (support_tunnel_action, Kennzeichen
+  // „Fern-Support“) und in die Liste, die der Kunde sieht
+  // (services/support-tunnel.js recordAction, mit Benachrichtigung bei
+  // Token-, Kopplungs- und Sicherheitsänderungen). Hängt sich an das Ende
+  // der Antwort, damit auch Wege mit eigenem Body-Lesen erfasst sind.
+  function trackSupportTunnelWrite(req, res, url) {
+    if (!isSupportTunnelRequest(req) || !isSupportTunnelWrite(req.method, url.pathname)) return;
+    if (!res || typeof res.end !== 'function' || res.__dvhubSupportAudit) return;
+    res.__dvhubSupportAudit = true;
+    // Pfade, die ein Speichern während dieser Anfrage geändert hat — auch bei
+    // Wegen mit eigenem Speichern (Familien-MQTT, Victron, EEBUS …;
+    // Gegenprüfung dca8ac88, P2). Gefüllt von saveAndApplyConfig unten.
+    req.dvhubAuditStore = { changedPaths: [] };
+    let status = 0;
+    const origWriteHead = res.writeHead;
+    if (typeof origWriteHead === 'function') {
+      res.writeHead = function writeHeadTracked(code, ...rest) { status = Number(code) || status; return origWriteHead.call(this, code, ...rest); };
+    }
+    const origEnd = res.end;
+    let logged = false;
+    res.end = function endTracked(...args) {
+      if (!logged) {
+        logged = true;
+        try { logSupportTunnelWrite(req, url, status || Number(res.statusCode) || 0); } catch { /* Protokoll darf die Antwort nie stören */ }
+      }
+      return origEnd.apply(this, args);
+    };
+  }
+  function logSupportTunnelWrite(req, url, status) {
+    let changedPaths = Array.isArray(req.dvhubAuditChanges) ? req.dvhubAuditChanges.filter((x) => typeof x === 'string').slice(0, 200) : null;
+    if (!changedPaths && req.dvhubAuditStore?.changedPaths?.length) {
+      changedPaths = [...new Set(req.dvhubAuditStore.changedPaths)].slice(0, 200);
+    }
+    const ok = status >= 200 && status < 400;
+    const kind = ok ? supportTunnelActionKind(url.pathname, { changedPaths: changedPaths || [], migrate: req.dvhubAuditMigrate === true }) : null;
+    const query = [...new Set([...url.searchParams.keys()])].slice(0, 20).map((k) => k.slice(0, 64));
+    const entry = {
+      via: 'Fern-Support',
+      method: String(req.method || '').toUpperCase(),
+      route: url.pathname,
+      status,
+      keys: bodyKeyNames(req.dvhubBodyKeys),
+      ...(query.length ? { query } : {}),
+      ...(changedPaths ? { changedPaths } : {}),
+      ...(kind ? { kind, label: SUPPORT_TUNNEL_KIND_LABELS[kind] || kind } : {}),
+    };
+    pushLog('support_tunnel_action', entry, { ...actorContext(req), severity: kind ? 'warn' : 'info' });
+    if (ok) ctx.supportTunnel?.recordAction?.(entry);
+  }
+  // Jedes Speichern innerhalb einer Tunnel-Anfrage meldet seine Pfade an die
+  // Anfrage (AsyncLocalStorage). Außerhalb unverändert. Den Vergleich macht
+  // das Speichern selbst (server.js liefert changedPaths) oder — falls nicht —
+  // ein Vergleich unmittelbar um diesen einen synchronen Aufruf.
+  if (typeof ctx.saveAndApplyConfig === 'function' && !ctx.saveAndApplyConfig.__supportAudit) {
+    const origSave = ctx.saveAndApplyConfig;
+    const auditedSave = function saveAndApplyConfigAudited(...args) {
+      const store = supportAuditStorage.getStore();
+      if (!store) return origSave.apply(this, args);
+      let before;
+      try { before = JSON.parse(JSON.stringify(ctx.getRawCfg?.() || {})); } catch { before = null; }
+      const result = origSave.apply(this, args);
+      try {
+        const paths = Array.isArray(result?.changedPaths) ? result.changedPaths
+          : (before ? collectChangedPaths(before, ctx.getRawCfg?.() || {}) : []);
+        for (const x of paths) if (typeof x === 'string' && store.changedPaths.length < 400) store.changedPaths.push(x);
+      } catch { /* Protokoll darf das Speichern nie stören */ }
+      return result;
+    };
+    auditedSave.__supportAudit = true;
+    ctx.saveAndApplyConfig = auditedSave;
   }
   function isLoopbackRequest(req) {
     if (isSupportTunnelRequest(req)) return false;
@@ -2904,11 +2986,12 @@ export function createApiRoutes(ctx) {
         const body = await readJsonBody(req, res);
         if (body === null) return;
         if (!csrfOk(body)) return csrfFail();
-        // Strix T-0001: eine Kopplung (mit Freigaben) startet der Kunde.
-        if (isSupportTunnelRequest(req)) {
-          pushLog('support_tunnel_consent_denied', { action: 'client_pair' }, actorContext(req));
-          return json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Eine Kopplung startet der Kunde selbst.' });
-        }
+        // Portal-Kopplung darf der Fern-Support (Christin 04.11.2026) —
+        // aber nur, wenn der Kunde den Portal-Zugang schon eingeschaltet hat:
+        // Einschalten und „Installateur darf Tunnel öffnen“ sind seine
+        // Einwilligung (services/support-tunnel-policy.js).
+        if ((!portal.enabled() || (body.allowTunnel === true && portal.permissions?.()?.allowTunnel !== true))
+          && denySupportConsent(req, res, 'installer_portal_grant')) return;
         try {
           const r = await ipc.claim({
             portalUrl: body.portalUrl,
@@ -2969,12 +3052,10 @@ export function createApiRoutes(ctx) {
         if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'enabled_must_be_boolean' });
         // Nur Ausschalten ist privilegien-REDUZIEREND und geht immer (Kill-Switch).
         const onlyReducing = Object.values(patch).every((v) => v === false);
-        // Strix T-0001: Freigaben erteilt der Kunde, nicht der Support über den
-        // offenen Tunnel (allowTunnel hieße: jederzeit wieder öffnen).
-        if (!onlyReducing && isSupportTunnelRequest(req)) {
-          pushLog('support_tunnel_consent_denied', { patch }, actorContext(req));
-          return json(res, 403, { ok: false, error: 'support_tunnel_consent_denied', detail: 'Freigaben für den Fernzugang erteilt der Kunde selbst.' });
-        }
+        // Strix T-0001: Freigaben für den Fernzugang erteilt der Kunde, nicht
+        // der Support über den offenen Tunnel (allowTunnel hieße: jederzeit
+        // wieder öffnen; services/support-tunnel-policy.js).
+        if (!onlyReducing && denySupportConsent(req, res, 'installer_portal_grant')) return;
         if (!onlyReducing && !csrfOk(body)) return csrfFail();
         try {
           const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
@@ -3007,7 +3088,6 @@ export function createApiRoutes(ctx) {
       const body = await readJsonBody(req, res);
       if (body === null) return;
       if (p === '/api/installer/confirm' && method === 'POST' && !csrfOk(body)) return csrfFail();
-      if (p === '/api/installer/confirm' && method === 'POST' && denySupportConsent(req, res, 'installer_confirm')) return;
       try {
         if (p === '/api/installer/confirm' && method === 'POST') {
           return json(res, 200, { ok: true, ...portal.confirm({ installerId: body.installerId, pairingCode: body.pairingCode }) });
@@ -3121,6 +3201,12 @@ export function createApiRoutes(ctx) {
   const notificationRoutes = createNotificationRoutes({ ctx, pushLog, json, checkAuth, actorContext, checkProviderRateLimit });
 
   async function handleRequest(req, res, url) {
+    trackSupportTunnelWrite(req, res, url);
+    if (req?.dvhubAuditStore) return supportAuditStorage.run(req.dvhubAuditStore, () => handleRequestInner(req, res, url));
+    return handleRequestInner(req, res, url);
+  }
+
+  async function handleRequestInner(req, res, url) {
     // T-0080 P1: unauthenticated liveness probe for uptime monitoring
     // (Uptime-Kuma/LXC health checks). Deliberately auth-free AND data-free:
     // process liveness + the coarse telemetry-store flag only — no config,
@@ -4105,6 +4191,20 @@ export function createApiRoutes(ctx) {
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
       const cur = (next.mqtt && typeof next.mqtt === 'object') ? next.mqtt : {};
       const patch = { ...cur };
+      // Den Broker darf auch der Fern-Support ändern (Christin 04.11.2026; die
+      // Änderung steht im Fern-Support-Protokoll).
+      // Backslash, Leer- und Steuerzeichen sowie Überlänge lesen der
+      // WHATWG-Parser und url.parse in mqtt.js (Verbindung) verschieden —
+      // solche Adressen gar nicht annehmen (Gegenprüfung ebab0f7e, P2).
+      if (typeof body.brokerUrl === 'string' && ([...body.brokerUrl.trim()].some((ch) => ch === '\\' || /\s/.test(ch) || ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f) || body.brokerUrl.trim().length > 256)) {
+        return json(res, 400, { ok: false, error: 'invalid_broker_url' });
+      }
+      // Nicht lesbare Adressen (new URL wirft) gar nicht annehmen —
+      // redactUrlCreds schwärzt sie alle gleich zu „***@redacted“
+      // (Gegenprüfung 50af8805, P3).
+      if (typeof body.brokerUrl === 'string' && body.brokerUrl.trim()) {
+        try { new URL(body.brokerUrl.trim()); } catch { return json(res, 400, { ok: false, error: 'invalid_broker_url' }); }
+      }
       if (typeof body.brokerUrl === 'string') {
         const url2 = body.brokerUrl.trim();
         if (url2.length === 0) {
@@ -5115,7 +5215,6 @@ export function createApiRoutes(ctx) {
         }
         const onlyNarrowing = Object.keys(patch).length > 0
           && Object.keys(patch).every((k) => (k === 'enabled' && patch.enabled === false) || (k === 'useRelay' && patch.useRelay === false));
-        if (!onlyNarrowing && denySupportConsent(req, res, 'mobile_link_settings')) return;
         if (!onlyNarrowing && !nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
         next.mobileLink = { ...(next.mobileLink || {}), ...patch };
@@ -5125,12 +5224,10 @@ export function createApiRoutes(ctx) {
         return json(res, 200, { ok: true, ...ml.status() });
       }
       if (url.pathname === '/api/mobile-link/pair/start') {
-        if (denySupportConsent(req, res, 'mobile_link_pair_start')) return;
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try { return json(res, 200, { ok: true, pairing: ml.startPairing({ lanHost: body.lanHost }) }); } catch (e) { return fail(e); }
       }
       if (url.pathname === '/api/mobile-link/pair/approve') {
-        if (denySupportConsent(req, res, 'mobile_link_pair_approve')) return;
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try {
           const r = ml.approvePairing({ perms: body.perms, name: body.name, approveToken: body.approveToken });
@@ -5144,7 +5241,6 @@ export function createApiRoutes(ctx) {
         try { return json(res, 200, ml.removeDevice(String(body.id || ''))); } catch (e) { return fail(e); }
       }
       if (url.pathname === '/api/mobile-link/devices/update') {
-        if (denySupportConsent(req, res, 'mobile_link_device_update')) return;
         if (!nonceOk(body)) return json(res, 403, { ok: false, error: 'ui_token_required' });
         try { return json(res, 200, ml.updateDevice(String(body.id || ''), { name: body.name, perms: body.perms })); } catch (e) { return fail(e); }
       }
@@ -5180,6 +5276,11 @@ export function createApiRoutes(ctx) {
           if (!Number.isFinite(n) || Math.abs(n) > lim) return json(res, 400, { ok: false, error: `${k}_invalid` });
           patch[k] = Math.round(n * 1e6) / 1e6;
         }
+        // Einwilligung (Standort und Messwerte gehen hinaus) gibt der Kunde;
+        // über den Support-Tunnel nur ausschalten.
+        const onlyNarrowing = Object.keys(patch).length > 0
+          && Object.entries(patch).every(([k, v]) => (k === 'enabled' || k === 'sendPvForecast') && v === false);
+        if (!onlyNarrowing && denySupportConsent(req, res, 'ortsnetz_settings')) return;
         const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
         next.ortsnetz = { ...(next.ortsnetz || {}), ...patch };
         ctx.saveAndApplyConfig(next);
@@ -5308,6 +5409,8 @@ export function createApiRoutes(ctx) {
       if (url.pathname === '/api/datenspende/link' && req.method === 'POST') {
         const body = await readJsonBody(req, res);
         if (body === null) return;
+        // Einwilligung gibt der Kunde, nicht der Support (Gesamtprüfung 1.0.9).
+        if (denySupportConsent(req, res, 'datenspende_link')) return;
         if (!nonceOk(body)) return nonceFail();
         try {
           if (body.mode === 'apikey') {
@@ -5376,6 +5479,7 @@ export function createApiRoutes(ctx) {
         if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'nichts_zu_aendern' });
         // Nur reines Ausschalten ist privilegien-reduzierend und geht ohne Nonce.
         const onlyDisable = Object.keys(patch).length === 1 && patch.enabled === false;
+        if (!onlyDisable && denySupportConsent(req, res, 'datenspende_settings')) return;
         if (!onlyDisable && !nonceOk(body)) return nonceFail();
         // Ausschalten verwirft auch eine gerade laufende Einrichtung.
         if (patch.enabled === false) ds.cancelPendingLink?.();
@@ -5401,6 +5505,7 @@ export function createApiRoutes(ctx) {
           return json(res, 200, { ok: true, ...ds.stopBackfill() });
         }
         if (body.action !== 'start') return json(res, 400, { ok: false, error: 'action_start_oder_stop' });
+        if (denySupportConsent(req, res, 'datenspende_backfill')) return;
         if (!nonceOk(body)) return nonceFail();
         try {
           return json(res, 200, { ok: true, ...ds.startBackfill() });
@@ -7000,7 +7105,8 @@ export function createApiRoutes(ctx) {
       const actor = actorContext(req);
       // Strix T-0001: öffnen/verlängern entscheidet der Kunde, nicht der
       // Support über den offenen Tunnel. Schließen bleibt erlaubt.
-      if (isSupportTunnelRequest(req)) {
+      // Einwilligung „fernzugang“ in services/support-tunnel-policy.js.
+      if (isSupportTunnelRequest(req) && isSupportTunnelConsentAction('support_tunnel_open')) {
         req.resume?.();
         pushLog('support_tunnel_self_extend_denied', {}, actor);
         return json(res, 403, { ok: false, error: 'support_tunnel_self_extend', detail: 'Über den Support-Tunnel lässt er sich nicht öffnen oder verlängern — das macht der Kunde.' });
@@ -8599,8 +8705,6 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/start' && req.method === 'POST') {
-      // Ein VPN überdauert den Support-Tunnel (Gegenprüfung fbb2dc4b, P1).
-      if (denySupportConsent(req, res, 'vpn_start')) return;
       if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
       // Plan 08-09 Task 2: VPN start/stop/restart are operator-initiated
@@ -8663,7 +8767,6 @@ export function createApiRoutes(ctx) {
     }
 
     if (url.pathname === '/api/vpn/config/upload' && req.method === 'POST') {
-      if (denySupportConsent(req, res, 'vpn_upload')) return;
       if (!requirePro(req, res, 'vpn-manager')) return;
       if (!ctx.vpnManager) return json(res, 503, { ok: false, error: 'vpn module not available' });
 
@@ -8918,5 +9021,5 @@ export function createApiRoutes(ctx) {
     return true;
   }
 
-  return { handleRequest, serveStatic, enforceRequestGate };
+  return { handleRequest, serveStatic, enforceRequestGate, trackSupportTunnelWrite };
 }

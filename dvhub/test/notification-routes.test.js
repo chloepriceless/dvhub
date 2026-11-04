@@ -3,6 +3,7 @@
 // Quelltext-Tests notification-providers-*-route.test.js prüfen die Form der
 // Blöcke; diese hier das Verhalten und dass der Bereich verdrahtet ist.
 // Test-Versand nur bis zur Eingabeprüfung — kein echter Netzaufruf.
+import { withOutboundRequests } from './helpers/outbound-request-stub.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mockCtx, call } from './helpers/api-routes-harness.js';
@@ -93,9 +94,13 @@ describe('Test-Versand mit Zugangsdaten erreicht den Provider', () => {
         return { ok: true, status: 200, json: async () => ({ ok: true, status: 1 }) };
       };
       try {
-        const r = await call(mockCtx(), `${BASE}/${name}/test`, { method: 'POST', body });
-        assert.equal(r.status, 200, JSON.stringify(r.body));
-        assert.deepEqual(r.body, { ok: true });
+        // ntfy sendet über http(s).request mit geprüfter Namensauflösung (Gesamtprüfung 1.0.9).
+        await withOutboundRequests(async (reqs) => {
+          const r = await call(mockCtx(), `${BASE}/${name}/test`, { method: 'POST', body });
+          assert.equal(r.status, 200, JSON.stringify(r.body));
+          assert.deepEqual(r.body, { ok: true });
+          calls.push(...reqs.map((c) => c.host));
+        });
         assert.deepEqual(calls, [host]);
       } finally {
         globalThis.fetch = realFetch;

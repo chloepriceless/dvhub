@@ -31,7 +31,9 @@ function harness({ channel = 'stable', helper = {}, release = {}, getRawCfg = nu
     calls.push([cmd, ...args].join(' '));
     if (cmd === 'sudo' && args[1] === RELEASE_HELPER) {
       const action = args[2];
-      const h = helper[action];
+      // Ohne eigene `check`-Antwort: der Normalfall (Version bekannt) — eine
+      // leere Antwort sperrt seit der Gesamtprüfung 1.0.9 die Installation.
+      const h = action === 'check' && !(action in helper) ? CHECK : helper[action];
       if (typeof h === 'function') return h(args.slice(3));
       if (h instanceof Error) throw h;
       return { stdout: JSON.stringify(h ?? { ok: true }), stderr: '' };
@@ -269,4 +271,25 @@ describe('Paket-Box: Update über dvhub-release', () => {
       assert.equal(r.code, 409);
     } finally { h.cleanup(); }
   });
+
+  // Gesamtprüfung 1.0.9 (Sicherheitsreste): Lieferte der Helfer bei `check`
+  // kein JSON (oder keine Version), ließ die Rückschritt-Sperre durch.
+  for (const [name, check] of [
+    ['kein JSON', () => ({ stdout: 'kaputt', stderr: '' })],
+    ['ohne Version', { ok: true }],
+    ['ohne Zielversion', { ...CHECK, latest: {} }],
+  ]) {
+    it(`Rückschritt-Prüfung ohne verwertbare Helfer-Antwort (${name}): nichts installiert`, async () => {
+      for (const [p, body] of [['/api/admin/update/apply', {}], ['/api/admin/update/channel', { channel: 'dev' }]]) {
+        const h = harness({ channel: 'stable', helper: { check, install: { ok: true, started: true } } });
+        try {
+          const r = await h.call('POST', p, body);
+          assert.equal(r.code, 500, `${p}: ${JSON.stringify(r.payload)}`);
+          assert.match(String(r.payload.error), /downgrade_check_failed/);
+          assert.ok(!h.calls.some((c) => c.includes(' install ')), `${p}: nichts installiert`);
+          assert.equal(h.saved.length, 0);
+        } finally { h.cleanup(); }
+      }
+    });
+  }
 });

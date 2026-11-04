@@ -1,7 +1,8 @@
 // services/support-web-listener.js — eigener Listener für das Web-Ziel des
 // Support-Tunnels (Strix T-0001). Nur auf 127.0.0.1; jede Anfrage trägt
 // req.dvhubSupportTunnel = true, damit routes-api.js sie nicht als „die Box
-// selbst“ behandelt (kein Loopback-Freibrief, keine Freigaben, Audit-Kennung).
+// selbst“ behandelt (kein Loopback-Freibrief, keine Einwilligungen,
+// Fern-Support-Protokoll; services/support-tunnel-policy.js).
 import http from 'node:http';
 
 export const SUPPORT_WEB_HOST = '127.0.0.1';

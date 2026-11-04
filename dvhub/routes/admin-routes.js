@@ -151,7 +151,11 @@ export function createAdminRoutes(deps) {
     const cur = chk?.current?.version || null;
     const latest = chk?.latest || {};
     const to = target === 'latest' ? (latest.version || null) : target;
-    if (!cur || !to || to === cur) return null;
+    // Ohne verwertbare Antwort (kein JSON, keine Version) nicht durchlassen —
+    // vorher galt das als „kein Rückschritt“ (Gesamtprüfung 1.0.9). Mit
+    // allowDowngrade geht es weiter ausdrücklich.
+    if (!cur || !to) throw new Error(`downgrade_check_failed: Versionsprüfung ohne ${!cur ? 'installierte' : 'Ziel-'}Version`);
+    if (to === cur) return null;
     const c = baseVersionCmp(to, cur);
     let older = c === -1;
     if (c === 0) {
@@ -466,8 +470,6 @@ export function createAdminRoutes(deps) {
     // since the old token is invalid the moment saveAndApplyConfig returns.
     if (url.pathname === '/api/admin/token/rotate' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
-      // Das neue Token gälte über den Tunnel hinaus (Gegenprüfung fbb2dc4b, P2).
-      if (deps.denySupportConsent?.(req, res, 'token_rotate')) return;
       const oldToken = getCfg().apiToken || '';
       const newToken = crypto.randomBytes(32).toString('hex'); // 64 hex chars, ~256 bits entropy
       const oldFp = tokenFingerprint(oldToken);  // null if oldToken was empty (D-05 allows that)

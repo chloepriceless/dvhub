@@ -244,25 +244,37 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
 
 Nach einer Sicherheitsprüfung gehärtet; Einzelheiten zu den Befunden veröffentlichen wir nicht. Spürbar sind:
 
-- **Support-Tunnel:** Über den Fern-Support lassen sich keine Freigaben mehr erteilen (Kopplungen, Handy-App,
-  Zugänge, Voll-Export, Geräte-Tausch, Token-Wechsel — auch nicht über eine eingespielte Sicherung); er läuft über
-  einen eigenen Zugang und gilt wie ein Gerät im Heimnetz. Der Support kann einen Tunnel nicht selbst verlängern.
-  Das API-Token übernimmt ein Sicherungs-Import nur beim Geräte-Tausch.
+- **Support-Tunnel:** Der Fern-Support kann über den Tunnel weiter alles, was zur Reparatur nötig ist — auch
+  API-Token, Kopplungen (Handy-App, EEBUS, Installateurs-Portal), VPN und Sicherheitseinstellungen. Er läuft über
+  einen eigenen Zugang und gilt wie ein Gerät im Heimnetz. Einwilligungen erteilt nur der Kunde selbst: Datenspende
+  und Ortsnetz-Daten einschalten, den Tunnel öffnen oder verlängern, den Support-Login einschalten und dem
+  Installateurs-Portal Zugang geben geht über den Fern-Support nicht, auch nicht über eine eingespielte Sicherung;
+  Datenspende, Ortsnetz und Portal-Zugang ausschalten und den Tunnel schließen geht. **Jede Änderung über den
+  Fern-Support wird protokolliert** (mit Kennzeichen „Fern-Support“, Aufruf und geänderten Feldern, ohne Werte); der
+  Kunde sieht sie unter Einstellungen → Fern-Support und im Tunnel-Hinweis, bei Token-, Kopplungs- und
+  Sicherheitsänderungen kommt zusätzlich eine Benachrichtigung (sofern eingerichtet). Ein Sicherungs-Import ohne
+  API-Token lässt das Token der Box stehen; das Token übernimmt ein Import nur ausdrücklich oder beim Geräte-Tausch.
 - **Geräte-Tausch:** Der Import einer Sicherung auf eine neue Box verlangt das API-Token der Box.
 - **Zugangsdaten folgen der Adresse:** Ändert sich die Adresse eines Dienstes (z. B. Benachrichtigungen, E-Auto,
   Wallbox) auf einen anderen Rechner, muss das Passwort bzw. Token neu eingegeben werden.
 - **Lizenz:** Pro-Lizenzen werden an die jeweilige Box gebunden; Schlüssel ohne Signatur gelten nur bis 14 Tage nach
   der letzten erfolgreichen Online-Prüfung. Lizenz-Einstellungen lassen sich nicht mehr über die Konfiguration ändern;
   EOS im Fernbetrieb schickt seinen Lizenznachweis nur an dvhub.de.
+- **Zugangsdaten folgen auch dem Port:** Ein anderer Port gilt wie eine andere Adresse.
 - **Updates:** Ein Kanalwechsel, der auf eine ältere Fassung zurückstufen würde, fragt nach; Installations- und
   Update-Skripte folgen im Konfigurationsordner keinen Verweisen mehr und führen beim Installieren keine
   Paket-Skripte aus. Eigene Zertifikate unter `tls/` dürfen weiter Verweise sein (z. B. `cert.pem` und `key.pem`
   auf certbot unter `/etc/letsencrypt/live/…`); sie bleiben bei jedem Start erhalten, ein selbstsigniertes
   Zertifikat entsteht nur, wenn dort gar keins liegt. Der Dienstbenutzer braucht Leserecht auf die Ziele (bei
-  certbot z. B. per deploy-hook); fehlt es, warnt das Start-Protokoll.
+  certbot z. B. per deploy-hook); fehlt es, warnt das Start-Protokoll. Lässt sich bei Paket-Installationen die
+  installierte Version nicht feststellen, installiert ein Update nicht. Die Update-Anzeige erkennt den laufenden
+  Auftrag auch, wenn die Uhren von Browser und Box abweichen.
+- **Benachrichtigungen (ntfy):** Adressen werden beim Senden aufgelöst und geprüft; Namen, die auf die Box selbst
+  zeigen, gehen nicht.
+- **Protokoll „Netzstrom im Akku“:** Der CSV-Download nutzt das API-Token.
 - **Weitere Härtungen** an der Adressprüfung ausgehender Verbindungen (auch IPv6), an statischen Dateien, an
   Telemetrie-Abfragen, an der EOS-Oberfläche, am Installateurs-Portal und am Handy-App-Relay (Speicher- und
-  Verbindungsgrenzen).
+  Verbindungsgrenzen; ein volles Relay weist neue Boxen und Handys nicht mehr pauschal ab).
 
 ## [1.0.8] - 2026-10-21
 
