@@ -1,6 +1,11 @@
 # Signierte Release-Pakete für native Installationen
 
-Stand: 27.10.2026 · Branch `feat/release-pakete`
+Stand: 04.11.2026 · Branch `feat/release-pakete`, Kanal-Entscheidung `fix/r109-kanal`
+
+**Kanäle (Christin, 04.11.2026):** Ab 1.0.9 gibt es signierte Pakete nur für den stabilen Kanal (Tags `vX.Y.Z`).
+Bleeding Edge (`updateChannel: dev`) bleibt git-basiert wie bisher; dev-Pakete aus der CI kommen später. Was unten
+zu dev-Paketen steht (Bau, Index, Helfer-Argument `dev`), ist dafür vorbereitet, wird aber nicht veröffentlicht und
+von keiner Box benutzt.
 
 Native Boxen (Debian, Raspberry Pi OS, Armbian; arm64, selten armhf und amd64) aktualisieren sich bisher als
 git-Checkout: `dvhub-update` holt einen Tag oder `main`, danach `npm install` und `post-update.sh`. Jede Box trägt
@@ -70,7 +75,8 @@ publish-release.sh (gh)
    bewusst „das Neueste des Zielkanals“ (wie heute), nach Rückfrage. Ist dessen Grundversion `X.Y.Z` kleiner als die
    installierte, lehnt die Oberfläche erst mit `downgrade_blocked` ab und installiert nur nach ausdrücklicher
    Bestätigung (`allowDowngrade`, wie beim git-Weg, Strix R-0003). Der Kanal wird gespeichert, sobald der Helfer den
-   Auftrag angenommen hat.
+   Auftrag angenommen hat. Scheitert der Auftrag danach oder startet er gar nicht, setzt DVhub ihn zurück (siehe
+   „Kanal-Rückfall“ unter 4.).
 
 ## 2. Signatur: `ssh-keygen -Y`
 
@@ -97,13 +103,15 @@ publish-release.sh (gh)
 - **Solange `release-keys/allowed_signers` keinen Schlüssel enthält**, lehnt die Box jedes Paket ab und die
   Umstellung startet nicht. Seit 28.10.2026 steht dort `dvhub-release-2026`
   (`SHA256:ElDpOZLh+Zbish5io+jSOmJmx+TQfWWzG10BMGCbJXY`); ein Test hält die Datei auf bekannte Fingerabdrücke fest.
-  Darum vor dem Merge nach main zuerst veröffentlichen (Schritt 4 unter „Einmalig für die Eigentümerin“), sonst zählen git-Boxen Fehlversuche.
+  Darum vor dem Merge nach main zuerst veröffentlichen (Schritt 4 unter „Einmalig für die Eigentümerin“), sonst zählen git-Boxen im Kanal stable Fehlversuche (Boxen auf Bleeding Edge versuchen es gar nicht).
 
 ## 3. Kanäle und Verteilung
 
-- **stable** = Pakete aus `vX.Y.Z`-Tags, als Assets am GitHub-Release des Tags.
-- **dev** = Pakete aus `main`, als Assets an einem rollierenden Vorab-Release `dev` (die letzten 3 Stände bleiben
-  liegen, ältere räumt `publish-release.sh` weg).
+- **stable** = Pakete aus `vX.Y.Z`-Tags, als Assets am GitHub-Release des Tags. Ab 1.0.9 der einzige
+  veröffentlichte Kanal.
+- **dev** = (später, aus der CI) Pakete aus `main`, als Assets an einem rollierenden Vorab-Release `dev` (die letzten
+  3 Stände bleiben liegen, ältere räumt `publish-release.sh` weg). Bis dahin bleibt Bleeding Edge git: git-Boxen auf
+  dev stellen sich nicht um, Paket-Boxen können nicht auf dev wechseln.
 - **Index je Kanal** am Vorab-Release `channels` (fester Pfad, nie „latest“):
   `…/releases/download/channels/index-stable.json` und `index-dev.json`, jeweils mit `.sig`. Inhalt: Format, Kanal,
   `latest`, und je Version Tag, Git-SHA, Datum, `node_engine`, Änderungen (CHANGELOG-Abschnitt bzw. Commit-Betreffs) und
@@ -188,6 +196,24 @@ Download, Prüfung, Entpacken, Einrichten, Neustart, Gesundheitsprüfung, Ergebn
 /api/admin/update/rollback`. Die Seite fragt den Status alle 2 s ab, überbrückt den Neustart und zeigt das
 Ergebnis. Kanalwechsel = Config speichern + `install latest <kanal>`.
 
+**Nur Stabil:** Eine Paket-Box prüft und installiert immer `stable`, auch wenn in ihrer Config (Altbestand, Import)
+noch `dev` steht. Den Wechsel auf Bleeding Edge lehnt `POST /api/admin/update/channel` mit 409 `dev_requires_git` ab
+(Config bleibt, kein Auftrag, Protokoll `update_channel_rejected`); die Oberfläche zeigt „Bleeding Edge gibt es nur
+für git-Installationen. Paket-Installationen bleiben auf Stabil.“ Einen Rückweg Paket → git gibt es nicht: Das
+Gegenstück der Umstellung (`revertMigration`) arbeitet nur während der Umstellung selbst, danach ist der alte Checkout
+in `.legacy-git/` nicht mehr aktuell und wird beim nächsten Paket-Update entfernt. Wer Bleeding Edge braucht,
+installiert neu als git-Box. Beta-Funktionen hängen am Kanal (`beta-features.js`) und bleiben auf Paket-Boxen darum
+aus. Docker-Installationen sind nicht betroffen (kein Manifest, Kanal wie bisher über die Config).
+
+**Kanal-Rückfall:** Nimmt der Helfer einen Kanalwechsel-Auftrag an, speichert DVhub den Kanal und legt einen Vermerk
+`<Datenordner>/update-channel-switch.json` an (alter und neuer Kanal, Zeitpunkt vor dem Helfer-Aufruf; überlebt den
+Neustart durch den Auftrag). Meldet der Helfer-Status für den ersten `install`-Auftrag danach `failed` oder
+`rolled_back` (Index, Download, Signatur, Gesundheit, Rücknahme, belegte Sperre), setzt der Server `updateChannel`
+auf den alten Wert zurück und protokolliert `update_channel_reverted`; bei `ok` bleibt der neue Kanal. Geprüft wird
+beim Status-Abruf (die Antwort trägt dann `channelSwitch`), vor jedem neuen Auftrag und — ohne offene Oberfläche —
+alle 15 s nach dem Start, solange ein Vermerk liegt. Wurde der Kanal inzwischen von Hand geändert, bleibt er
+(`update_channel_revert_skipped`); nach 6 h ohne passenden Status verfällt der Vermerk.
+
 ## 5. Umstellung git → Paket
 
 Einmalig beim nächsten Update einer git-Box:
@@ -195,7 +221,7 @@ Einmalig beim nächsten Update einer git-Box:
    Version mit Paketunterstützung. Deren `post-update.sh` installiert Helfer, sudoers und Vertrauensanker und plant
    die Umstellung als Zeitgeber-Unit (`systemd-run --on-active=120s`), damit sie nicht mit dem Neustart der
    Oberfläche kollidiert.
-2. `dvhub-release migrate`: Paket des eigenen Kanals laden und prüfen (kein Downgrade gegenüber dem Checkout),
+2. `dvhub-release migrate`: Paket des Kanals stable laden und prüfen (kein Downgrade gegenüber dem Checkout),
    nach `releases/<v>` entpacken, `current` setzen, die versionierten Einträge der obersten Ebene und `.git` nach
    `.legacy-git/` verschieben und an ihrer Stelle Kompatibilitäts-Links anlegen (je Eintrag rename + symlink;
    Journal in `state.json`), Unit sichern und auf `current` umschreiben, `post-update.sh`, Neustart,
@@ -207,6 +233,9 @@ Einmalig beim nächsten Update einer git-Box:
    Unit (`/opt/dvhub/dvhub/server.js`) startet also schon über `current`.
 
 Nicht automatisch umgestellt (bleiben auf git-Updates, Protokolleintrag und Hinweis in der Oberfläche):
+- **Kanal Bleeding Edge** (`updateChannel: dev`, Grund `dev_channel`): kein Index-Abruf, kein Fehlversuch, kein
+  Zeitgeber, auch nicht mit `--force`; die Box holt `main` per git wie bisher. Wechselt sie auf stable, stellt der
+  nächste Start sie um.
 - **eigene `--repo`-Quelle:** `origin` zeigt nicht auf `github.com/chloepriceless/dvhub`. Die Pakete sind aus dem
   offiziellen Repo gebaut und mit dem DVhub-Schlüssel signiert; ein Fork würde stillschweigend durch den offiziellen
   Code ersetzt. Vorschlag: Option `/etc/dvhub-release/release.conf` `migrate_custom_repo=1` bzw.
@@ -240,7 +269,7 @@ Oberfläche, Rückweg auf 1.0.9. In jedem Fall fünf Prüfungen (nach Installati
 Rückweg) von Markern in Config, Daten, **Datenbank** (gesät → muss wiedergefunden werden) und Box-Zustand, Kanal und
 wichtigen Config-Schlüsseln.
 
-- v1.0.0 … v1.0.8 (stable), v1.0.0 und v1.0.8 (dev), v0.4.2: alle umgestellt, aktualisiert, zurückgerollt; Datenbank-
+- v1.0.0 … v1.0.8 (stable), v1.0.0 und v1.0.8 (dev; seit 04.11. nicht mehr in der Standard-Matrix, dev bleibt git), v0.4.2: alle umgestellt, aktualisiert, zurückgerollt; Datenbank-
   Marker in allen 60 Prüfungen vorhanden, Kanal und Config erhalten. Umstellung ~9–10 s, Paket-Update ~9 s,
   Rückweg ~8 s (lokaler Server; Downloadzeit übers Netz kommt hinzu).
 - v0.4.2: braucht wie beim Sprung 0.4 → 1.0 einmal den Installer (die alte Oberfläche ruft kein `post-update.sh`
@@ -285,8 +314,8 @@ Funde außerhalb der Pakete:
    scripts/release/build-release.sh v1.0.9          # baut arm64, armhf, amd64 und signiert
    scripts/release/publish-release.sh ~/Projects/dvhub-release-out/1.0.9 --dry-run --dest /tmp/pub   # ansehen
    scripts/release/publish-release.sh ~/Projects/dvhub-release-out/1.0.9                               # GitHub
-   scripts/release/build-release.sh main && scripts/release/publish-release.sh ~/Projects/dvhub-release-out/<dev-version>
    ```
+   dev-Pakete werden nicht veröffentlicht (Bleeding Edge bleibt git; später aus der CI).
    Danach den Tag wie gewohnt ausrollen: git-Boxen holen v1.0.9 per git und stellen sich nach ~2 min selbst um.
 
 ## Offene Entscheidungen
