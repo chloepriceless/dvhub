@@ -696,6 +696,43 @@ exit 0
   } finally { r.close(); }
 });
 
+test('git-Box auf Bleeding Edge (dev): keine Umstellung, kein Fehlversuch, kein Zeitgeber — auch nicht mit --force', { timeout: 60000 }, async () => {
+  // Christin 04.11.2026: signierte Pakete gibt es ab 1.0.9 nur für stable; dev
+  // bleibt git-basiert. Früher plante boot-hook die Umstellung, migrate lud
+  // index-dev.json (404) und zählte bis zu fünf Fehlversuche.
+  const r = await makeRig();
+  try {
+    gitBox(r);
+    fs.writeFileSync(path.join(r.root, 'config.json'), JSON.stringify({ updateChannel: 'dev' }));
+    r.publish({ version: '1.0.1' });
+    r.publish({ version: '1.0.1-dev.20261103000000.aaaaaaaa', channel: 'dev' });
+    let res = await r.run('boot-hook');
+    assert.equal(res.code, 0);
+    assert.match(res.out, /nicht geplant \(dev_channel\)/);
+    assert.ok(!fs.existsSync(r.runLog) || !/dvhub-release-migrate/.test(fs.readFileSync(r.runLog, 'utf8')), 'kein Zeitgeber für die Umstellung');
+    for (const argv of [['migrate'], ['migrate', '--force']]) {
+      res = await r.run(...argv);
+      assert.equal(res.code, 0, argv.join(' '));
+      assert.equal(r.status().state, 'skipped');
+      assert.equal(r.status().reason, 'dev_channel');
+      assert.equal(r.current(), null, 'bleibt git');
+      assert.ok(fs.existsSync(path.join(r.box, '.git')) && !fs.existsSync(path.join(r.box, '.legacy-git')));
+    }
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    assert.equal(st.migrate.attempts || 0, 0, 'kein Fehlversuch gezählt');
+    assert.ok(!st.migrate.last_attempt, 'keine 24-h-Pause');
+    assert.equal(st.migrate.skipped, 'dev_channel');
+
+    // Wechselt die Box auf stable, stellt der nächste Start sie um.
+    fs.writeFileSync(path.join(r.root, 'config.json'), JSON.stringify({ updateChannel: 'stable' }));
+    res = await r.run('boot-hook');
+    assert.match(res.out, /in 120 s geplant/);
+    res = await r.run('migrate');
+    assert.equal(res.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.current(), 'releases/1.0.1');
+  } finally { r.close(); }
+});
+
 test('Umstellung: Index nicht ladbar zählt als Fehlversuch (24-h-Pause, Obergrenze)', { timeout: 60000 }, async () => {
   const r = await makeRig();
   try {

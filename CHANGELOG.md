@@ -14,8 +14,8 @@ verweist hierher.
 
 Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten stehen in den Einträgen darunter:
 
-- **Updates:** native Installationen bekommen Updates künftig als fertige, signierte Pakete statt per git; die
-  Umstellung läuft beim ersten Update auf 1.0.9 von selbst, mit Rückweg.
+- **Updates:** native Installationen im Kanal Stabil bekommen Updates künftig als fertige, signierte Pakete statt
+  per git; die Umstellung läuft beim ersten Update auf 1.0.9 von selbst, mit Rückweg. Bleeding Edge bleibt git.
 - **EOS:** Preise über den Day-Ahead hinaus fortgeschrieben, Steuerzeitraum über den ganzen bekannten Preiszeitraum
   (einstellbar), Prognosehorizont einstellbar, Speicherkosten ohne doppelten Verlustaufschlag, „Laut EOS-Plan“ im
   Leitstand, EOS im Fernbetrieb (Beta).
@@ -57,9 +57,14 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   `/opt/dvhub/releases/<version>`, schaltet um und prüft die Gesundheit — sonst geht es automatisch zurück.
   Im Update-Bereich der Einstellungen zeigt die Oberfläche den Fortschritt; „Vorige Version wiederherstellen“ geht
   ohne Download.
-  git-Installationen stellen sich beim ersten Update auf 1.0.9 nach etwa zwei Minuten selbst um (der alte Checkout
-  bleibt bis zum nächsten Update als Rückweg liegen); eigene Forks und lokal geänderte Dateien bleiben auf git.
-  Docker-Images ändern sich nicht. Einzelheiten: `docs/release-pakete.md`.
+  git-Installationen im Kanal Stabil stellen sich beim ersten Update auf 1.0.9 nach etwa zwei Minuten selbst um (der
+  alte Checkout bleibt bis zum nächsten Update als Rückweg liegen); eigene Forks und lokal geänderte Dateien bleiben
+  auf git. Pakete gibt es nur für den Kanal Stabil: Boxen auf Bleeding Edge bleiben git-Installationen und holen
+  `main` wie bisher — ohne Umstellungsversuch. Eine Paket-Installation kann nicht auf Bleeding Edge wechseln; die
+  Oberfläche meldet „Bleeding Edge gibt es nur für git-Installationen. Paket-Installationen bleiben auf Stabil.“
+  Scheitert ein Kanalwechsel auf einer Paket-Box (Index, Download, Signatur, Gesundheit, Rücknahme) oder startet
+  der Auftrag gar nicht, setzt DVhub den Kanal selbst auf den alten Wert zurück (Protokoll
+  `update_channel_reverted`). Docker-Images ändern sich nicht. Einzelheiten: `docs/release-pakete.md`.
 
 - **EOS bekommt Preise über die bekannten hinaus**: Vormittags enden die Day-Ahead-Preise um Mitternacht. EOS
   kürzte dann seinen Prognose-Schwanz auf eine halbe Stunde („Tail forecast shortened … effective 0.5 h“) und bewertete
