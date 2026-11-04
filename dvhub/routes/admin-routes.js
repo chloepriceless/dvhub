@@ -78,6 +78,12 @@ const PACKAGE_CHANNEL = 'stable';
 // dabei verloren.
 export const CHANNEL_SWITCH_FILE = 'update-channel-switch.json';
 const CHANNEL_SWITCH_MAX_AGE_MS = 6 * 3600 * 1000;
+// Ein Auftrag schreibt bei jedem Schritt seinen Status (updated). Bleibt er so
+// lange still auf running/queued, lebt er nicht mehr: Strom weg beim Download
+// oder Entpacken, bevor der Helfer pending vermerkt — dann plant boot-hook kein
+// resume, und der Status bliebe für immer „running“ (Codex 6a497589, P2). Länger
+// als die längste stille Phase (post-update.sh bis 60 min, release.conf).
+const CHANNEL_SWITCH_ABANDONED_MS = 90 * 60 * 1000;
 const UPDATE_CHANNELS = ['stable', 'dev'];
 export const SETCAP_HELPER = '/usr/local/libexec/dvhub-setcap';
 // npm install auf einem langsamen Board braucht oft mehr als eine Minute; ein
@@ -225,10 +231,17 @@ export function createAdminRoutes(deps) {
       }
       return null;
     }
-    if (st.state === 'queued' || st.state === 'running') return null;
+    let abandoned = false;
+    if (st.state === 'queued' || st.state === 'running') {
+      const last = Date.parse(st.updated || st.started || '');
+      if (!Number.isFinite(last) || Date.now() - last <= CHANNEL_SWITCH_ABANDONED_MS) return null;
+      // Verwaist: der alte Stand läuft (umgeschaltet wird erst nach pending) —
+      // wie ein gescheiterter Wechsel behandeln.
+      abandoned = true;
+    }
     if (st.state === 'ok') { clearChannelSwitch(); return { state: 'kept', channel: m.to }; }
     const now = ctx.getRawCfg() || {};
-    const result = st.result || st.state || 'failed';
+    const result = abandoned ? 'abandoned' : (st.result || st.state || 'failed');
     if ((now.updateChannel || 'stable') !== m.to) {
       // Inzwischen von Hand umgestellt: nicht überschreiben.
       clearChannelSwitch();

@@ -216,7 +216,9 @@ Antwort trägt dann `channelSwitch`), vor jedem neuen Auftrag und — ohne offen
 solange ein Vermerk liegt. Solange er offen ist, lehnen Update, Rückweg und Kanalwechsel mit 409
 `channel_switch_pending` ab (sonst würde das Ergebnis eines zweiten Auftrags dem Wechsel zugerechnet). Wurde der
 Kanal inzwischen von Hand geändert, bleibt er (`update_channel_revert_skipped`); nach 6 h ohne passenden Status
-verfällt der Vermerk.
+verfällt der Vermerk. Ein Auftrag, der 90 min lang seinen Status nicht fortschreibt (Strom weg beim Download oder
+Entpacken, bevor der Helfer `pending` vermerkt — dann gibt es kein `resume`), gilt als verwaist: Rückfall mit
+Ergebnis `abandoned`, die Sperre ist frei.
 
 ## 5. Umstellung git → Paket
 

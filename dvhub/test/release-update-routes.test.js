@@ -445,6 +445,24 @@ describe('Paket-Box: Kanal-Rückfall, wenn der Kanalwechsel-Auftrag scheitert', 
     } finally { t.h.cleanup(); }
   });
 
+  it('verwaister Auftrag (Strom weg beim Download, Status bleibt running): nach 90 min ohne Lebenszeichen Rückfall, Sperre frei (Codex 6a497589, P2)', async () => {
+    const t = await switchThen(({ after }) => ({ job: 'install', state: 'running', phase: 'download', started: after, updated: after }));
+    try {
+      // Noch frisch: Sperre hält.
+      assert.equal((await t.h.call('POST', '/api/admin/update/apply', {})).code, 409);
+      const old = new Date(Date.now() - 91 * 60 * 1000).toISOString();
+      const m = JSON.parse(fs.readFileSync(path.join(t.h.dataDir, MARK), 'utf8'));
+      fs.writeFileSync(path.join(t.h.dataDir, MARK), JSON.stringify({ ...m, at: new Date(Date.parse(old) - 1000).toISOString() }));
+      t.setStatus({ job: 'install', state: 'running', phase: 'download', started: old, updated: old });
+      const r = await t.h.call('POST', '/api/admin/update/apply', {});
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.equal(t.raw().updateChannel, 'dev', 'abgebrochener Wechsel → alter Kanal');
+      const log = t.h.logs.find((l) => l.event === 'update_channel_reverted');
+      assert.equal(log?.result, 'abandoned');
+      assert.ok(!fs.existsSync(path.join(t.h.dataDir, MARK)));
+    } finally { t.h.cleanup(); }
+  });
+
   it('Stromausfall im Auftrag: Ergebnis des resume (rolled_back) setzt den Kanal zurück (Codex ddd3f1bb, P2)', async () => {
     const { h, raw } = await switchThen(({ after }) => ({ job: 'resume', state: 'rolled_back', result: 'rolled_back', started: after }));
     try {
