@@ -1293,7 +1293,10 @@ export function createApiRoutes(ctx) {
     if (!changedPaths && req.dvhubAuditStore?.changedPaths?.length) {
       changedPaths = [...new Set(req.dvhubAuditStore.changedPaths)].slice(0, 200);
     }
-    const ok = status >= 200 && status < 400;
+    // Zählt, was sich geändert hat — nicht nur der HTTP-Status: der
+    // Token-Widerruf ohne Dienst-Aktionen löscht das Token und antwortet 503
+    // (Codex-Prüfung release/1.0.9, P2).
+    const ok = (status >= 200 && status < 400) || (Array.isArray(changedPaths) && changedPaths.length > 0);
     const kind = ok ? supportTunnelActionKind(url.pathname, { changedPaths: changedPaths || [], migrate: req.dvhubAuditMigrate === true }) : null;
     const query = [...new Set([...url.searchParams.keys()])].slice(0, 20).map((k) => k.slice(0, 64));
     const entry = {

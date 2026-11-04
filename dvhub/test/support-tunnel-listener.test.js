@@ -477,6 +477,28 @@ test('Support-Tunnel: Token widerrufen, Push-Schlüssel, Einrichtungsfenster geh
   assert.doesNotMatch(JSON.stringify(logs.filter((l) => l.event === 'support_tunnel_action')), /k{32}/, 'Schlüssel nicht im Protokoll');
 });
 
+// Codex-Prüfung release/1.0.9 (P2): ohne Dienst-Aktionen löscht der Widerruf
+// das Token und antwortet 503 (kein Neustart). Die Änderung zählt trotzdem —
+// Kundenliste und Benachrichtigung hängen an der Änderung, nicht am Status.
+test('Support-Tunnel: Token-Widerruf mit 503 (ohne Neustart) steht trotzdem beim Kunden', async () => {
+  const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' } };
+  const { ctx, logs, recorded } = ctxWith(box, { getServiceActionsEnabled: () => false });
+  ctx.saveAndApplyConfig = (next) => { Object.keys(box).forEach((k) => delete box[k]); Object.assign(box, JSON.parse(JSON.stringify(next))); return { ok: true, changedPaths: ['apiToken'] }; };
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  const req = makeReq('POST', '/api/admin/token/revoke', {}, { viaSupport: true });
+  req.headers.authorization = `Bearer ${'b'.repeat(32)}`;
+  await routes.handleRequest(req, res, new URL('http://x/api/admin/token/revoke'));
+  assert.equal(res._captured.status, 503, res._captured.body);
+  assert.equal(box.apiToken, '', 'Token gelöscht');
+  const entry = logs.findLast((l) => l.event === 'support_tunnel_action');
+  assert.equal(entry.details.status, 503);
+  assert.deepEqual(entry.details.changedPaths, ['apiToken']);
+  assert.equal(entry.details.kind, 'token');
+  assert.equal(recorded.at(-1)?.route, '/api/admin/token/revoke', 'in der Kundenliste');
+  assert.equal(recorded.at(-1).kind, 'token');
+});
+
 test('Support-Tunnel: Ersteinrichtung abschließen geht, auch wenn das Token zurückkommt', async () => {
   const box = { httpPort: 8080, apiToken: 'b'.repeat(32), security: { lanTrust: 'open' } };
   const { ctx, saved, logs } = ctxWith(box, { needsSetup: () => true, getDataDir: () => '/nonexistent' });
