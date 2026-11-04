@@ -71,7 +71,7 @@ import { createConfigRoutes } from './routes/config-routes.js';
 import { createAdminRoutes } from './routes/admin-routes.js';
 import { createNotificationRoutes } from './routes/notification-routes.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
-import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp } from './config-model.js';
+import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collectChangedPaths } from './config-model.js';
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
 import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
 import { isSupportTunnelConsentAction, isSupportTunnelWrite, bodyKeyNames, supportTunnelActionKind, SUPPORT_TUNNEL_KIND_LABELS } from './services/support-tunnel-policy.js';
@@ -1262,6 +1262,10 @@ export function createApiRoutes(ctx) {
     if (!isSupportTunnelRequest(req) || !isSupportTunnelWrite(req.method, url.pathname)) return;
     if (!res || typeof res.end !== 'function' || res.__dvhubSupportAudit) return;
     res.__dvhubSupportAudit = true;
+    // Stand der Konfiguration vorher: so sieht das Protokoll auch bei Wegen
+    // mit eigenem Speichern (Familien-MQTT, Victron, EEBUS …), was sich
+    // geändert hat (Gegenprüfung dca8ac88, P2). Nur Pfade, nie Werte.
+    try { req.dvhubAuditConfigBefore = JSON.parse(JSON.stringify(ctx.getRawCfg?.() || {})); } catch { req.dvhubAuditConfigBefore = null; }
     let status = 0;
     const origWriteHead = res.writeHead;
     if (typeof origWriteHead === 'function') {
@@ -1278,7 +1282,14 @@ export function createApiRoutes(ctx) {
     };
   }
   function logSupportTunnelWrite(req, url, status) {
-    const changedPaths = Array.isArray(req.dvhubAuditChanges) ? req.dvhubAuditChanges.filter((x) => typeof x === 'string').slice(0, 200) : null;
+    let changedPaths = Array.isArray(req.dvhubAuditChanges) ? req.dvhubAuditChanges.filter((x) => typeof x === 'string').slice(0, 200) : null;
+    if (!changedPaths && req.dvhubAuditConfigBefore) {
+      try {
+        const diff = collectChangedPaths(req.dvhubAuditConfigBefore, ctx.getRawCfg?.() || {});
+        if (diff.length) changedPaths = diff.slice(0, 200);
+      } catch { /* ohne Vergleich nur Route und Feldnamen */ }
+    }
+    req.dvhubAuditConfigBefore = null;
     const ok = status >= 200 && status < 400;
     const kind = ok ? supportTunnelActionKind(url.pathname, { changedPaths: changedPaths || [], migrate: req.dvhubAuditMigrate === true }) : null;
     const query = [...new Set([...url.searchParams.keys()])].slice(0, 20).map((k) => k.slice(0, 64));

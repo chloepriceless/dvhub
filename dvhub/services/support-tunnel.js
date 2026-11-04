@@ -513,7 +513,7 @@ export function createSupportTunnel(ctx, deps = {}) {
   function recentActions() {
     if (actionsCache) return actionsCache.slice();
     const o = readJsonFile(supportPaths().actionsPath);
-    actionsCache = Array.isArray(o?.actions) ? o.actions.filter((a) => a && typeof a === 'object').slice(0, ACTIONS_MAX) : [];
+    actionsCache = Array.isArray(o?.actions) ? o.actions.filter((a) => a && typeof a === 'object').slice(0, 2 * ACTIONS_MAX) : [];
     return actionsCache.slice();
   }
 
@@ -527,7 +527,13 @@ export function createSupportTunnel(ctx, deps = {}) {
       ...(Array.isArray(entry.changedPaths) && entry.changedPaths.length ? { changedPaths: entry.changedPaths.slice(0, 40).map((k) => String(k).slice(0, 120)) } : {}),
       ...(entry.kind ? { kind: String(entry.kind), label: String(entry.label || entry.kind).slice(0, 80) } : {}),
     };
-    actionsCache = [a, ...recentActions()].slice(0, ACTIONS_MAX);
+    // Token-, Kopplungs- und Sicherheitsänderungen getrennt behalten: viele
+    // harmlose Aufrufe dürfen sie nicht aus der Liste drängen (Gegenprüfung
+    // dca8ac88, P3). Je Art höchstens ACTIONS_MAX, neueste zuerst.
+    const all = [a, ...recentActions()];
+    const sensitive = all.filter((x) => x.kind).slice(0, ACTIONS_MAX);
+    const plain = all.filter((x) => !x.kind).slice(0, ACTIONS_MAX);
+    actionsCache = all.filter((x) => sensitive.includes(x) || plain.includes(x));
     try {
       const p = supportPaths();
       fsImpl.mkdirSync(p.supDir, { recursive: true, mode: 0o700 });

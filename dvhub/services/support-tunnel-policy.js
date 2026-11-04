@@ -99,7 +99,9 @@ const SECURITY_CONFIG_PREFIXES = ['security', 'allowedHosts', 'corsAllowedOrigin
   'vpn', 'eebus.trusted', 'mqtt.brokerUrl', 'victron.mqtt.broker', 'victron.mqttCrossCheck.broker', 'forecast.weather.mqtt.brokerUrl'];
 const PAIRING_CONFIG_PREFIXES = ['mobileLink', 'eebus.trusted'];
 
-const startsWithPath = (p, prefix) => p === prefix || p.startsWith(`${prefix}.`);
+// Auch ein Elternpfad zählt: collectChangedPaths meldet nur „mqtt“, wenn der
+// ganze Block neu ist oder fehlt — darin steckt dann auch mqtt.brokerUrl.
+const startsWithPath = (p, prefix) => p === prefix || p.startsWith(`${prefix}.`) || prefix.startsWith(`${p}.`);
 
 /**
  * Art der Änderung für die Kunden-Anzeige: 'token' | 'kopplung' | 'sicherheit'

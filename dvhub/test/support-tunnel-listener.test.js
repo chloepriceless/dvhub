@@ -564,6 +564,10 @@ test('Freigabeliste: eine Stelle — ohne Eintrag ist die Einwilligung frei', as
   assert.equal(policy.isSupportTunnelKeptMigrationFile('data/support/known_hosts'), true);
   assert.equal(policy.isSupportTunnelKeptMigrationFile('data/datenspende.json'), true);
   assert.equal(policy.isSupportTunnelKeptMigrationFile('data/mobile-link.json'), false);
+  // Ganzer Block neu (collectChangedPaths meldet nur den Elternpfad) zählt mit.
+  assert.equal(policy.supportTunnelActionKind('/api/family/mqtt-config', { changedPaths: ['mqtt'] }), 'sicherheit');
+  assert.equal(policy.supportTunnelActionKind('/api/config', { changedPaths: ['apiToken'] }), 'token');
+  assert.equal(policy.supportTunnelActionKind('/api/config', { changedPaths: ['optimizer.minSoc'] }), null);
 });
 
 test('Support-Tunnel: Sicherheits-, Host-, VPN-, EEBUS- und Broker-Einstellungen in der Konfiguration gehen; Einwilligungen bleiben, wie die Box sie hat', async () => {
@@ -649,6 +653,13 @@ test('Support-Tunnel: lanTrust ändern geht, steht im Protokoll und meldet sich 
     assert.equal(sent.length, 1);
     assert.match(sent[0].title, /Fern-Support: Sicherheitseinstellung geändert/);
     assert.match(sent[0].body, /security\.lanTrust/);
+    // Viele harmlose Aufrufe drängen die Sicherheitsänderung nicht aus der
+    // Liste (Gegenprüfung dca8ac88, P3).
+    for (let i = 0; i < 40; i++) tun.recordAction({ method: 'POST', route: '/eosdash/x', status: 200, keys: [] });
+    const after = tun.status().recentActions;
+    assert.equal(after.filter((x) => x.kind === 'sicherheit').length, 1);
+    assert.equal(after.filter((x) => !x.kind).length, 30);
+    assert.equal(after[0].route, '/eosdash/x', 'neueste zuerst');
     // Lesende Aufrufe kommen nicht ins Protokoll.
     const before = logs.length;
     await routes.handleRequest(makeReq('GET', '/api/config', null, { viaSupport: true }), mockRes(), new URL('http://x/api/config'));
@@ -716,6 +727,8 @@ test('Support-Tunnel: Portal-Kopplung geht, wenn der Kunde das Portal eingeschal
 test('Support-Tunnel: Familien-MQTT — anderer Broker geht und steht im Protokoll; unlesbare Adressen weiter abgelehnt', async () => {
   const box = { httpPort: 8080, security: { lanTrust: 'open' }, mqtt: { brokerUrl: 'mqtt://192.168.1.5:1883' } };
   const { ctx, saved, recorded } = ctxWith(box);
+  // Wie server.js: gespeichert ist danach der neue Stand.
+  ctx.saveAndApplyConfig = (next) => { saved.push(next); Object.assign(box, JSON.parse(JSON.stringify(next))); return { ok: true }; };
   const routes = createApiRoutes(ctx);
   const call = async (body, viaSupport) => {
     const res = mockRes();
@@ -726,6 +739,10 @@ test('Support-Tunnel: Familien-MQTT — anderer Broker geht und steht im Protoko
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(saved.at(-1).mqtt.brokerUrl, 'mqtts://broker.example.net');
   assert.deepEqual(recorded.at(-1).keys, ['brokerUrl', 'password']);
+  // Eigener Speicherweg: der Vergleich vorher/nachher erkennt den Broker als
+  // Sicherheitsänderung (Banner + Benachrichtigung; Gegenprüfung dca8ac88, P2).
+  assert.ok(recorded.at(-1).changedPaths.includes('mqtt.brokerUrl'), JSON.stringify(recorded.at(-1)));
+  assert.equal(recorded.at(-1).kind, 'sicherheit');
   assert.doesNotMatch(JSON.stringify(recorded), /mq-geheim/);
   // Backslash: WHATWG liest Host 192.168.1.5, url.parse (mqtt.js) evil.example.net (Gegenprüfung ebab0f7e, P2).
   const bs = await call({ brokerUrl: 'mqtt://a:b@evil.example.net\\@192.168.1.5:1883' }, true);

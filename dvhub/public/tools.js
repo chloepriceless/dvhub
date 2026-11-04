@@ -1192,7 +1192,9 @@ function renderSupportTunnelActions(actions) {
   const list = document.getElementById('supportTunnelActions');
   if (!list) return;
   list.replaceChildren();
-  const items = Array.isArray(actions) ? actions.slice(0, 20) : [];
+  // Token-, Kopplungs- und Sicherheitsänderungen immer, übrige die letzten 20.
+  let plainShown = 0;
+  const items = (Array.isArray(actions) ? actions : []).filter((a) => a && (a.kind || plainShown++ < 20));
   if (!items.length) {
     const li = document.createElement('li');
     li.className = 'svc-meta';
