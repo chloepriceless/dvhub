@@ -470,8 +470,6 @@ export function createAdminRoutes(deps) {
     // since the old token is invalid the moment saveAndApplyConfig returns.
     if (url.pathname === '/api/admin/token/rotate' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
-      // Das neue Token gälte über den Tunnel hinaus (Gegenprüfung fbb2dc4b, P2).
-      if (deps.denySupportConsent?.(req, res, 'token_rotate')) return;
       const oldToken = getCfg().apiToken || '';
       const newToken = crypto.randomBytes(32).toString('hex'); // 64 hex chars, ~256 bits entropy
       const oldFp = tokenFingerprint(oldToken);  // null if oldToken was empty (D-05 allows that)
@@ -499,9 +497,6 @@ export function createAdminRoutes(deps) {
     // happen, but the token IS still cleared in config (D-02). No process.exit, no crash.
     if (url.pathname === '/api/admin/token/revoke' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;
-      // Token-Wechsel entscheidet der Kunde — auch das Löschen samt Neustart
-      // (Gesamtprüfung 1.0.9, wie bei rotate).
-      if (deps.denySupportConsent?.(req, res, 'token_revoke')) return;
       const oldFp = tokenFingerprint(getCfg().apiToken || '');
       const next = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
       next.apiToken = '';

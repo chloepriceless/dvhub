@@ -237,13 +237,16 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
 
 Nach einer Sicherheitsprüfung gehärtet; Einzelheiten zu den Befunden veröffentlichen wir nicht. Spürbar sind:
 
-- **Support-Tunnel:** Über den Fern-Support lassen sich keine Freigaben mehr erteilen (Kopplungen, Handy-App,
-  Zugänge, Voll-Export, Geräte-Tausch, Token-Wechsel — auch nicht über eine eingespielte Sicherung); er läuft über
-  einen eigenen Zugang und gilt wie ein Gerät im Heimnetz. Der Support kann einen Tunnel nicht selbst verlängern.
-  Das API-Token übernimmt ein Sicherungs-Import nur beim Geräte-Tausch. Ebenso wenig lassen sich über den Fern-Support
-  ein VPN starten, das API-Token setzen, löschen oder abholen, Einwilligungen (Datenspende, Ortsnetz) oder
-  EEBUS-Kopplungen erteilen, ein Push-Schlüssel erzeugen, ein anderer MQTT-Broker eintragen oder die
-  Heimnetz-, Host- und VPN-Einstellungen ändern; Ausschalten und Entfernen bleiben möglich.
+- **Support-Tunnel:** Der Fern-Support kann über den Tunnel weiter alles, was zur Reparatur nötig ist — auch
+  API-Token, Kopplungen (Handy-App, EEBUS, Installateurs-Portal), VPN und Sicherheitseinstellungen. Er läuft über
+  einen eigenen Zugang und gilt wie ein Gerät im Heimnetz. Einwilligungen erteilt nur der Kunde selbst: Datenspende
+  und Ortsnetz-Daten einschalten, den Tunnel öffnen oder verlängern, den Support-Login einschalten und dem
+  Installateurs-Portal Zugang geben geht über den Fern-Support nicht, auch nicht über eine eingespielte Sicherung;
+  Datenspende, Ortsnetz und Portal-Zugang ausschalten und den Tunnel schließen geht. **Jede Änderung über den
+  Fern-Support wird protokolliert** (mit Kennzeichen „Fern-Support“, Aufruf und geänderten Feldern, ohne Werte); der
+  Kunde sieht sie unter Einstellungen → Fern-Support und im Tunnel-Hinweis, bei Token-, Kopplungs- und
+  Sicherheitsänderungen kommt zusätzlich eine Benachrichtigung (sofern eingerichtet). Ein Sicherungs-Import ohne
+  API-Token lässt das Token der Box stehen; das Token übernimmt ein Import nur ausdrücklich oder beim Geräte-Tausch.
 - **Geräte-Tausch:** Der Import einer Sicherung auf eine neue Box verlangt das API-Token der Box.
 - **Zugangsdaten folgen der Adresse:** Ändert sich die Adresse eines Dienstes (z. B. Benachrichtigungen, E-Auto,
   Wallbox) auf einen anderen Rechner, muss das Passwort bzw. Token neu eingegeben werden.

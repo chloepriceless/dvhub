@@ -1177,11 +1177,43 @@ async function refreshSupportTunnelStatus() {
     setText('supportTunnelRelay', r.host
       ? `${r.user || 'dvhub-support'}@${r.host}:${r.port || ''}${(r.shellPort ? ` (Ports ${r.shellPort}/${r.webPort})` : ' (Ports nicht zugeteilt)')}`
       : '—');
+    renderSupportTunnelActions(st.recentActions);
     const openBtn = document.getElementById('supportTunnelOpenBtn');
     const closeBtn = document.getElementById('supportTunnelCloseBtn');
     if (openBtn) openBtn.disabled = !!st.open || !st.provisioned;
     if (closeBtn) closeBtn.disabled = !st.open;
   } catch { /* status is best-effort */ }
+}
+
+// Letzte Aktionen des Fern-Supports (2026-11-04): jede Änderung über den
+// Tunnel mit Zeit, Route und geänderten Feldern — nie Werte. Token-,
+// Kopplungs- und Sicherheitsänderungen hervorgehoben.
+function renderSupportTunnelActions(actions) {
+  const list = document.getElementById('supportTunnelActions');
+  if (!list) return;
+  list.replaceChildren();
+  const items = Array.isArray(actions) ? actions.slice(0, 20) : [];
+  if (!items.length) {
+    const li = document.createElement('li');
+    li.className = 'svc-meta';
+    li.textContent = 'Noch keine Änderungen über den Fern-Support.';
+    list.append(li);
+    return;
+  }
+  for (const a of items) {
+    const li = document.createElement('li');
+    const d = new Date(a.ts);
+    const when = Number.isFinite(d.getTime()) ? d.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    const fields = Array.isArray(a.changedPaths) && a.changedPaths.length ? a.changedPaths : (Array.isArray(a.keys) ? a.keys : []);
+    const what = fields.length ? ` — ${fields.slice(0, 8).join(', ')}${fields.length > 8 ? ', …' : ''}` : '';
+    if (a.kind) {
+      const strong = document.createElement('strong');
+      strong.textContent = `${a.label || a.kind}: `;
+      li.append(strong);
+    }
+    li.append(document.createTextNode(`${when} ${a.method || ''} ${a.route || ''}${what}`));
+    list.append(li);
+  }
 }
 
 async function openSupportTunnel() {

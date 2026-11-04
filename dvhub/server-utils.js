@@ -45,7 +45,13 @@ export function parseBody(req) {
     req.on('end', () => {
       if (!chunks.length) return resolve({});
       const raw = Buffer.concat(chunks).toString('utf8');
-      try { resolve(JSON.parse(raw)); } catch { const e = new Error('invalid JSON body'); e.statusCode = 400; reject(e); }
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { const e = new Error('invalid JSON body'); e.statusCode = 400; return reject(e); }
+      // Feldnamen (nie Werte) für das Fern-Support-Protokoll (routes-api.js).
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        try { req.dvhubBodyKeys = Object.keys(parsed).slice(0, 40); } catch { /* req ohne Eigenschaften */ }
+      }
+      resolve(parsed);
     });
     req.on('error', reject);
   });

@@ -10,7 +10,8 @@ import { isAllowedVehicleUrl } from '../services/vehicle-pull/index.js';
 import { isAllowedRemoteEndpoint } from '../services/optimizer/eos-remote.js';
 import { REDACTED_PATHS, REDACTED, redactConfig, isRedactedPath } from '../config-redaction.js';
 import { encryptSecrets, decryptSecrets, applySecrets, collectMigrationFiles, restoreMigrationFiles } from '../services/config-secrets-crypto.js';
-import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS, SUPPORT_TUNNEL_KEPT_ROOTS, SUPPORT_TUNNEL_KEPT_PATHS } from '../services/config-protected-keys.js';
+import { protectOwnRouteKeys, applyCarriedKeys, OWN_ROUTE_KEYS } from '../services/config-protected-keys.js';
+import { supportTunnelKeptConfigRoots, isSupportTunnelKeptMigrationFile } from '../services/support-tunnel-policy.js';
 import { mergeAgainstBaseWithConflicts } from '../services/config-base-merge.js';
 import { isInternalHost, isAllowedOutboundUrl } from '../services/host-address.js';
 import { validateVpnProfileFile } from '../vpn-manager.js';
@@ -33,7 +34,7 @@ export function createConfigRoutes(deps) {
     ctx, getCfg, pushLog, licenseService,
     json, downloadJson, readJsonBody,
     configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
-    requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback, hasValidBearer, denySupportConsent,
+    requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback, hasValidBearer,
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, requestEosReplanAfterSave, ALLOWED_CONFIG_ROOTS,
   } = deps;
 
@@ -59,9 +60,6 @@ export function createConfigRoutes(deps) {
     // box can restore them on import. The bundle is AES-256-GCM under a
     // PBKDF2(password) key; without the password it is opaque.
     if (url.pathname === '/api/config/export' && req.method === 'POST') {
-      // Das versiegelte Paket enthält Token und Schlüssel-Dateien — nicht über
-      // den Support-Tunnel (Gegenprüfung 6f9c9cca, P1).
-      if (denySupportConsent?.(req, res, 'config_export_secrets')) return;
       const body = await readJsonBody(req, res);
       if (body === null) return;
       const password = typeof body?.password === 'string' ? body.password : '';
@@ -131,7 +129,6 @@ export function createConfigRoutes(deps) {
       // Gegenprüfung cf372cdc (P1): gilt für JEDEN Speicherweg, der migrate
       // auswertet — auch POST /api/config, nicht nur /import.
       if (body.migrate === true) {
-        if (denySupportConsent?.(req, res, 'config_migrate')) return;
         const boxToken = ctx.getRawCfg?.()?.apiToken;
         if (boxToken) {
           if (!hasValidBearer?.(req)) {
@@ -199,43 +196,30 @@ export function createConfigRoutes(deps) {
           }, actorContext(req));
         }
       }
-      // Über den Support-Tunnel (Gegenprüfung fbb2dc4b, P2): API-Token und
-      // support.* (Support-Login, Tunnel-Laufzeit) bleiben, wie die Box sie hat —
-      // sonst holte sich der Support ein dauerhaftes Token bzw. schaltete den
-      // abgeschalteten Support-Login wieder ein.
-      // Gegenprüfung Release 1.0.9 (P1): erst NACH allen Import- und
-      // Entschlüsselungsschritten — vorher kam ein selbst versiegelter
-      // `_encryptedSecrets`-Block mit apiToken (migrate:false) daran vorbei.
-      // Immer den Stand der Box, auch wenn das Feld fehlt: sonst löschte ein
-      // Import ohne apiToken das Token der Box.
-      // Gesamtprüfung 1.0.9: ebenso alles, was Zugänge oder Freigaben
-      // erteilt — Heimnetz-Definition und Hosts (security, allowedHosts, CORS,
-      // Proxy), VPN (autoConnect startet es beim nächsten Start), EEBUS-
-      // Kopplungen und die Ortsnetz-Einwilligung (kommt beim Import sonst aus
-      // der Datei).
+      // Ein Import oder Speichern OHNE apiToken-Feld lässt das Token der Box
+      // stehen — vorher löschte es ein solcher Import (Gegenprüfung Release
+      // 1.0.9). Löschen geht ausdrücklich (apiToken: "" oder
+      // /api/admin/token/revoke). Erst nach dem Entschlüsseln: ein versiegelter
+      // Block kann das Feld mitbringen (Geräte-Tausch).
+      if (!Object.prototype.hasOwnProperty.call(body.config, 'apiToken') && ctx.getRawCfg?.()?.apiToken !== undefined) {
+        body.config.apiToken = REDACTED; // restoreRedacted setzt den Wert der Box ein
+      }
+      // Über den Support-Tunnel (Christin 04.11.2026): Token, Sicherheits-,
+      // Broker-, VPN- und EEBUS-Einstellungen darf der Fern-Support ändern —
+      // nur Einwilligungen des Kunden (Datenspende, Ortsnetz, Fernzugang;
+      // services/support-tunnel-policy.js) bleiben, wie die Box sie hat, auch
+      // beim Import und Geräte-Tausch. Nach allen Import- und
+      // Entschlüsselungsschritten, damit nichts daran vorbeikommt.
       if (req?.dvhubSupportTunnel === true) {
         const cur = ctx.getRawCfg?.() || {};
-        if (cur.apiToken === undefined) delete body.config.apiToken;
-        else body.config.apiToken = REDACTED; // restoreRedacted setzt den Wert der Box ein
-        for (const key of SUPPORT_TUNNEL_KEPT_ROOTS) {
+        for (const key of supportTunnelKeptConfigRoots()) {
           if (cur[key] === undefined) delete body.config[key];
           else body.config[key] = JSON.parse(JSON.stringify(cur[key]));
         }
-        const isObj = (o) => o !== null && typeof o === 'object' && !Array.isArray(o);
-        for (const segs of SUPPORT_TUNNEL_KEPT_PATHS) {
-          const leaf = segs.at(-1);
-          const v = segs.reduce((o, k) => (isObj(o) ? o[k] : undefined), cur);
-          if (v === undefined) {
-            const parent = segs.slice(0, -1).reduce((o, k) => (isObj(o) ? o[k] : undefined), body.config);
-            if (isObj(parent)) delete parent[leaf];
-          } else {
-            let node = body.config;
-            for (const k of segs.slice(0, -1)) {
-              if (!isObj(node[k])) node[k] = {};
-              node = node[k];
-            }
-            node[leaf] = JSON.parse(JSON.stringify(v));
-          }
+        if (migrationFiles) {
+          const kept = Object.keys(migrationFiles).filter((f) => isSupportTunnelKeptMigrationFile(f));
+          for (const f of kept) delete migrationFiles[f];
+          if (kept.length) pushLog('support_tunnel_migration_files_kept', { files: kept }, actorContext(req));
         }
       }
       // Plan 09-01 (D-05, supersedes Plan 08-01 rejection): apiToken stays
@@ -447,6 +431,11 @@ export function createConfigRoutes(deps) {
       // only" anyway). This in-handler log is in addition to the generic
       // config_saved emitted by persistConfig (which sees only fs-level
       // context, not the path delta).
+      // Für das Fern-Support-Protokoll (routes-api.js): was sich geändert hat.
+      if (req && typeof req === 'object') {
+        req.dvhubAuditChanges = Array.isArray(result.changedPaths) ? result.changedPaths : [];
+        if (body.migrate === true) req.dvhubAuditMigrate = true;
+      }
       pushLog('config_saved', {
         changedPaths: Array.isArray(result.changedPaths) ? result.changedPaths : [],
         pathCount: Array.isArray(result.changedPaths) ? result.changedPaths.length : 0,
