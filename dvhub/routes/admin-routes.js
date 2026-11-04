@@ -68,6 +68,17 @@ export const APT_HELPER = '/usr/local/libexec/dvhub-apt';
 // Neustart von DVhub) und meldet den Fortschritt über `status`.
 export const RELEASE_HELPER = '/usr/local/libexec/dvhub-release';
 const RELEASE_VERSION = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
+// Signierte Pakete gibt es nur für den stabilen Kanal (Christin, 04.11.2026);
+// Bleeding Edge bleibt git-basiert. Eine Paket-Box prüft und installiert darum
+// immer stable, auch wenn in ihrer Config (Altbestand, Import) noch dev steht.
+export const PACKAGE_DEV_NOTICE = 'Bleeding Edge gibt es nur für git-Installationen. Paket-Installationen bleiben auf Stabil.';
+const PACKAGE_CHANNEL = 'stable';
+// Kanal-Rückfall (Paket-Box): Vermerk des laufenden Kanalwechsels im
+// Datenordner — der Auftrag startet DVhub neu, ein Vermerk im Speicher ginge
+// dabei verloren.
+export const CHANNEL_SWITCH_FILE = 'update-channel-switch.json';
+const CHANNEL_SWITCH_MAX_AGE_MS = 6 * 3600 * 1000;
+const UPDATE_CHANNELS = ['stable', 'dev'];
 export const SETCAP_HELPER = '/usr/local/libexec/dvhub-setcap';
 // npm install auf einem langsamen Board braucht oft mehr als eine Minute; ein
 // Abbruch per Timeout ließ früher node_modules halb zurück.
@@ -164,6 +175,100 @@ export function createAdminRoutes(deps) {
     if (!older) return null;
     return { ok: false, mode: 'package', error: 'downgrade_blocked', detail: `downgrade_blocked: ${to} ist älter als ${cur}`, current: cur, target: to };
   };
+
+  // ── Kanal-Rückfall (Paket-Box, Gesamtprüfung 03.11.2026) ──
+  // Der Kanal wird gespeichert, sobald der Helfer den Auftrag annimmt. Scheitert
+  // der Auftrag danach (Index, Download, Signatur, Gesundheit, Rücknahme) oder
+  // startet er gar nicht (Sperre belegt), setzt der Server updateChannel auf den
+  // alten Wert zurück — nicht nur die Oberfläche ihr Auswahlfeld. Erkannt am
+  // Helfer-Status: erster install-Auftrag, der nach dem Vermerk begann.
+  let channelSwitchMem = null;
+  let channelWatch = null;
+  const channelSwitchPath = () => {
+    const dir = typeof ctx.getDataDir === 'function' ? ctx.getDataDir() : null;
+    return dir ? path.join(dir, CHANNEL_SWITCH_FILE) : null;
+  };
+  const readChannelSwitch = () => {
+    const p = channelSwitchPath();
+    let m = channelSwitchMem;
+    if (p) {
+      try { m = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { m = null; }
+    }
+    if (!m || !UPDATE_CHANNELS.includes(m.from) || !UPDATE_CHANNELS.includes(m.to) || !Number.isFinite(Date.parse(m.at))) return null;
+    return m;
+  };
+  const writeChannelSwitch = (m) => {
+    const p = channelSwitchPath();
+    if (!p) { channelSwitchMem = m; return; }
+    const tmp = `${p}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, `${JSON.stringify(m)}\n`, { mode: 0o600 });
+    fs.renameSync(tmp, p);
+  };
+  const clearChannelSwitch = () => {
+    channelSwitchMem = null;
+    const p = channelSwitchPath();
+    if (p) { try { fs.rmSync(p, { force: true }); } catch { /* nächster Versuch beim nächsten Status */ } }
+  };
+  const settleChannelSwitch = (st) => {
+    const m = readChannelSwitch();
+    if (!m) return null;
+    const mine = st && st.job === 'install' && Date.parse(st.started || '') >= Date.parse(m.at);
+    if (!mine) {
+      // Kein Status zu diesem Auftrag mehr zu erwarten (Statusdatei weg o. Ä.):
+      // nach 6 h aufgeben, die Config bleibt, wie sie ist.
+      if (Date.now() - Date.parse(m.at) > CHANNEL_SWITCH_MAX_AGE_MS) {
+        clearChannelSwitch();
+        pushLog('update_channel_switch_expired', { from: m.from, to: m.to, at: m.at });
+      }
+      return null;
+    }
+    if (st.state === 'queued' || st.state === 'running') return null;
+    clearChannelSwitch();
+    if (st.state === 'ok') return { state: 'kept', channel: m.to };
+    const now = ctx.getRawCfg() || {};
+    const result = st.result || st.state || 'failed';
+    if ((now.updateChannel || 'stable') !== m.to) {
+      // Inzwischen von Hand umgestellt: nicht überschreiben.
+      pushLog('update_channel_revert_skipped', { from: m.to, to: m.from, current: now.updateChannel || 'stable', result });
+      return { state: 'unchanged', channel: now.updateChannel || 'stable' };
+    }
+    const fresh = JSON.parse(JSON.stringify(now));
+    fresh.updateChannel = m.from;
+    try {
+      ctx.saveAndApplyConfig(fresh);
+    } catch (e) {
+      pushLog('update_channel_revert_error', { from: m.to, to: m.from, result, error: String(e?.message || e) });
+      return { state: 'revert_failed', channel: m.to, error: String(e?.message || e) };
+    }
+    pushLog('update_channel_reverted', { from: m.to, to: m.from, result, message: String(st.message || '').slice(0, 300), mode: 'package' });
+    return { state: 'reverted', channel: m.from, from: m.to };
+  };
+  // Helfer-Status holen und einen offenen Kanalwechsel abschließen.
+  const pollChannelSwitch = async () => {
+    if (!readChannelSwitch()) return null;
+    try {
+      const r = await releaseHelper(['status'], 15000);
+      return settleChannelSwitch(r?.status);
+    } catch {
+      return null;
+    }
+  };
+  // Ohne Oberfläche (niemand fragt den Status ab): nach dem Neustart durch den
+  // Auftrag schaut der Server selbst nach, bis der Vermerk erledigt ist.
+  const startChannelWatch = () => {
+    if (channelWatch || !readChannelSwitch()) return;
+    channelWatch = setInterval(async () => {
+      if (!readChannelSwitch()) { clearInterval(channelWatch); channelWatch = null; return; }
+      await pollChannelSwitch();
+      if (!readChannelSwitch() && channelWatch) { clearInterval(channelWatch); channelWatch = null; }
+    }, Number.isFinite(deps.channelWatchMs) ? deps.channelWatchMs : 15000);
+    channelWatch.unref?.();
+  };
+  // Beim Start: liegt ein Vermerk, und ist das eine Paket-Box? (Ohne Vermerk
+  // keine weitere Prüfung — Testumgebungen haben nicht jeden ctx-Helfer.)
+  try {
+    if (readChannelSwitch() && typeof ctx.getAppDir === 'function' && releaseInfo()) startChannelWatch();
+  } catch { /* der Status-Abruf schließt den Wechsel später ab */ }
 
   return async function handleAdminRoute(req, res, url) {
     // --- Datenbank-Backup herunterladen (pg_dump custom, streamed) ---
@@ -525,7 +630,7 @@ export function createAdminRoutes(deps) {
     if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       if (releaseInfo()) {
-        const channel = ctx.getRawCfg().updateChannel === 'dev' ? 'dev' : 'stable';
+        const channel = PACKAGE_CHANNEL;
         try {
           const c = await releaseHelper(['check', channel]);
           const tag = (v) => (v ? `v${v}` : null);
@@ -618,8 +723,11 @@ export function createAdminRoutes(deps) {
         // Paket-Box: Version (optional) prüfen, Auftrag an dvhub-release; der
         // Helfer startet neu, prüft /health und geht bei Fehlern selbst zurück.
         const body = await parseBody(req).catch(() => ({}));
-        const channel = ctx.getRawCfg().updateChannel === 'dev' ? 'dev' : 'stable';
+        const channel = PACKAGE_CHANNEL;
         if (body?.ref) return json(res, 400, { ok: false, mode: 'package', error: 'ref_not_supported', detail: 'Gezielte Commits gibt es nur bei git-Installationen' });
+        // Ein noch offener Kanalwechsel zuerst abschließen — sonst hielte der
+        // Rückfall diesen neuen Auftrag für den des Wechsels.
+        await pollChannelSwitch();
         let target = 'latest';
         if (body?.version !== undefined && body?.version !== null && body?.version !== '') {
           const m = RELEASE_VERSION.exec(String(body.version).trim());
@@ -801,7 +909,9 @@ export function createAdminRoutes(deps) {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       if (!releaseInfo()) return json(res, 200, { ok: true, mode: 'git' });
       try {
-        return json(res, 200, { ...(await releaseHelper(['status'], 15000)), mode: 'package' });
+        const out = await releaseHelper(['status'], 15000);
+        const channelSwitch = settleChannelSwitch(out?.status);
+        return json(res, 200, { ...out, mode: 'package', ...(channelSwitch ? { channelSwitch } : {}) });
       } catch (e) {
         return releaseError(res, e, 'update_status_error');
       }
@@ -812,6 +922,7 @@ export function createAdminRoutes(deps) {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       if (!checkAuth(req, res)) return;
       if (!releaseInfo()) return json(res, 409, { ok: false, mode: 'git', error: 'Rückweg gibt es nur bei Paket-Installationen' });
+      await pollChannelSwitch();
       return startReleaseJob(res, ['rollback'], 'update_rollback_started');
     }
 
@@ -838,10 +949,19 @@ export function createAdminRoutes(deps) {
         next.updateChannel = channel;
 
         if (releaseInfo()) {
+          // Bleeding Edge gibt es nur für git-Installationen (Christin,
+          // 04.11.2026): kein halber Wechsel — Config bleibt, kein Auftrag.
+          // Zurück zu git wäre das Gegenstück der Umstellung; den Weg gibt es
+          // nur während der Umstellung selbst (revertMigration), nicht danach.
+          if (channel === 'dev') {
+            pushLog('update_channel_rejected', { channel, reason: 'dev_requires_git', mode: 'package' });
+            return json(res, 409, { ok: false, mode: 'package', error: 'dev_requires_git', message: PACKAGE_DEV_NOTICE, channel: PACKAGE_CHANNEL });
+          }
           // Paket-Box: das Neueste des Zielkanals installieren. dev-Versionen
           // sortieren vor dem gleichnamigen Release — das gilt nicht als
           // Rückschritt; eine kleinere Grundversion schon: dann wie beim git-Weg
           // nur mit allowDowngrade (Strix R-0003, Gegenprüfung bf393d9f, P2).
+          await pollChannelSwitch();
           let blocked;
           try { blocked = await packageDowngrade(channel, 'latest', allowDowngrade); } catch (e) { return releaseError(res, e, 'update_channel_check_error'); }
           if (blocked) {
@@ -852,11 +972,21 @@ export function createAdminRoutes(deps) {
           // lehnt er ab (409/500), bleibt der bisherige Kanal eingestellt. Auf
           // dem JETZIGEN Stand, nicht dem Klon vor dem Helfer-Aufruf (sonst gingen
           // Änderungen aus dieser Zeit verloren; Gegenprüfung be05dd73, P2).
+          // Danach der Vermerk für den Rückfall; sein Zeitpunkt liegt VOR dem
+          // Helfer-Aufruf, damit der Status dieses Auftrags (started) danach liegt.
+          const switchAt = new Date().toISOString();
           return startReleaseJob(res, ['install', 'latest', channel], 'update_package_started', { channel, target: 'latest' }, () => {
             const fresh = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+            const from = UPDATE_CHANNELS.includes(fresh.updateChannel) ? fresh.updateChannel : 'stable';
             fresh.updateChannel = channel;
             ctx.saveAndApplyConfig(fresh);
             pushLog('update_channel_changed', { channel, mode: 'package' });
+            try {
+              writeChannelSwitch({ from, to: channel, at: switchAt });
+              startChannelWatch();
+            } catch (e) {
+              pushLog('update_channel_switch_note_error', { error: String(e?.message || e) });
+            }
             return { channelSaved: true };
           });
         }

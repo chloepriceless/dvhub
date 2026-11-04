@@ -693,6 +693,16 @@ function autoCheckForUpdate() {
   checkForUpdate().catch(() => {});
 }
 
+// Signierte Pakete gibt es nur für den stabilen Kanal (Christin, 04.11.2026);
+// Bleeding Edge bleibt git-basiert. Der Server lehnt den Wechsel ebenso ab
+// (dev_requires_git, routes/admin-routes.js) — hier nur, damit die Box gar
+// nicht erst „Wechsel zu Bleeding Edge?“ fragt.
+const PACKAGE_DEV_NOTICE = 'Bleeding Edge gibt es nur für git-Installationen. Paket-Installationen bleiben auf Stabil.';
+let updateInstallMode = null;
+function channelSwitchNotice(mode, channel) {
+  return mode === 'package' && channel === 'dev' ? PACKAGE_DEV_NOTICE : null;
+}
+
 // Release-Paket (docs/release-pakete.md): Versionen statt Commits, Rückweg
 // auf die vorige Version ohne Download.
 function renderPackageUpdateCheck(data) {
@@ -785,6 +795,7 @@ async function rollbackUpdate() {
 }
 
 function renderUpdateCheck(data) {
+  updateInstallMode = data.mode === 'package' ? 'package' : 'git';
   if (data.mode === 'package') { renderPackageUpdateCheck(data); return; }
   {
     // Sync channel dropdown with server state
@@ -895,6 +906,12 @@ async function switchUpdateChannel(newChannel) {
   const channelSelect = document.getElementById('updateChannel');
   const previousChannel = newChannel === 'stable' ? 'dev' : 'stable';
   const revertDropdown = () => { if (channelSelect) channelSelect.value = previousChannel; updatePinRefVisibility(previousChannel); };
+  const notice = channelSwitchNotice(updateInstallMode, newChannel);
+  if (notice) {
+    setBanner('updateBanner', notice, 'info');
+    revertDropdown();
+    return;
+  }
   // Commit-Feld sofort auf den Zielchannel spiegeln (revert setzt es zurück).
   updatePinRefVisibility(newChannel);
 
@@ -915,6 +932,12 @@ async function switchUpdateChannel(newChannel) {
       body: JSON.stringify(allowDowngrade ? { channel: newChannel, allowDowngrade: true } : { channel: newChannel })
     });
     let data = await (await postSwitch(false)).json();
+    if (!data.ok && data.error === 'dev_requires_git') {
+      updateInstallMode = 'package';
+      setBanner('updateBanner', data.message || PACKAGE_DEV_NOTICE, 'info');
+      revertDropdown();
+      return;
+    }
     // Strix R-0003: der Wechsel stuft nicht mehr still auf eine ältere Fassung
     // zurück — nur nach ausdrücklicher Bestätigung.
     if (!data.ok && data.error === 'downgrade_blocked') {
@@ -944,6 +967,10 @@ async function switchUpdateChannel(newChannel) {
       }
       const st = await trackReleaseJob(`Wechsel zu ${label}`);
       if (!st || st.state !== 'ok') revertDropdown();
+      // Den Kanal setzt der Server selbst zurück (Status → channelSwitch).
+      if (st && st.state !== 'ok') {
+        setBanner('updateBanner', `Wechsel zu ${label} fehlgeschlagen: ${st.message || st.state} — der bisherige Kanal bleibt eingestellt.`, 'error');
+      }
     } else if (data.ok) {
       setBanner('updateBanner', `Channel gewechselt zu ${label}. Service startet neu — Seite lädt in 10 Sekunden automatisch neu.`, 'success');
       setTimeout(() => window.location.reload(), 10000);
@@ -1987,5 +2014,6 @@ if (typeof globalThis !== 'undefined') {
     buildHistoryFullBackfillActionState,
     formatHistoryImportResult
   };
+  globalThis.DVhubToolsUpdate = { channelSwitchNotice };
 }
 })();
