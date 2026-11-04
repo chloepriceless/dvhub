@@ -10,6 +10,12 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Geändert
+
+- **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
+  https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
+  führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.
+
 ## [1.0.9] - 2026-11-04
 
 Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten stehen in den Einträgen darunter:

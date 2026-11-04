@@ -59,7 +59,7 @@ einem vollwertigen HEMS ausgebaut.
 - **Historie** mit PostgreSQL-Telemetrie, Finanz-Karten und 14 Visualisierungs-Karten
 - **Familien-Dashboard** als haushaltstaugliche Übersicht inkl. Tesla-/Haus-Flow und Screensaver *(DVhub Pro)*
 - **Integrationsplattform** für Home Assistant, Loxone, EOS, EMHASS, evcc, MQTT und TeslaMate — Home Assistant und Loxone können DVhub auch **Messwerte liefern** (MQTT oder HTTP-Push)
-- **E-Auto-Laden nach EOS-Plan** über evcc, OpenEVSE oder go-e, mit Abfahrtszeit, Ladeziel und „Sofort laden“
+- **E-Auto-Laden nach EOS-Plan** *(DVhub Pro)* über evcc, OpenEVSE oder go-e, mit Abfahrtszeit, Ladeziel und „Sofort laden“
 - **Installateurs-Portal** *(opt-in)* — der Installateur sieht Status und Historie; Updates und Support-Tunnel nur mit Freigabe des Kunden
 - **Datenspende** *(opt-in)* — Leistungsdaten an das Forschungsprojekt der RWTH Aachen (COMSYS) spenden
 - **DVhub Price Feed** (dvhub.online) als zentraler Preisfeed für alle EPEX-Preiszonen
@@ -265,7 +265,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 
 - **Home Assistant** (JSON-Endpunkt + MQTT-Auto-Discovery), **Loxone** (Textformat), **EOS**, **EMHASS**, **evcc**, **TeslaMate**
 - **Messwert-Eingang** für Home Assistant und Loxone per MQTT oder HTTP-Push (siehe oben, Universal-Profil)
-- **E-Auto**: EOS plant die Ladung bis zur Abfahrt (Ziel in %, kWh oder km), DVhub gibt den Plan an **evcc**, **OpenEVSE** oder **go-e** weiter; „**Sofort laden**“ übersteuert den Plan, auch wenn EOS nicht läuft. Fällt der EOS-Plan kurz aus, gelten die schon geplanten Viertelstunden weiter (kein Ein/Aus-Flattern an der Wallbox)
+- **E-Auto** *(DVhub Pro — ohne Lizenz steuert DVhub die Wallbox nicht)*: EOS plant die Ladung bis zur Abfahrt (Ziel in %, kWh oder km), DVhub gibt den Plan an **evcc**, **OpenEVSE** oder **go-e** weiter; „**Sofort laden**“ übersteuert den Plan, auch wenn EOS nicht läuft. Fällt der EOS-Plan kurz aus, gelten die schon geplanten Viertelstunden weiter (kein Ein/Aus-Flattern an der Wallbox)
 - **Planbare Verbraucher** — Geschirrspüler & Co. legt EOS in die günstigste bzw. PV-reichste Zeit; Heizstäbe (MYPV Elwa, AC Thor) regelt DVhub dem PV-Überschuss nach — [Anleitung](docs/PLANBARE-GERAETE.md)
 - **Datenspende** *(opt-in)* — Netz, PV, Hausverbrauch, Batterie und alle Geräte alle 10 s an die COMSYS-Datenspende (RWTH Aachen); historische Daten lassen sich nachsenden. API-Schlüssel bleibt lokal (`/var/lib/dvhub/datenspende.json`, 0600)
 - **Ortsnetz-Auslastung** *(opt-in)* — Netzspannung L1–L3 und Netzfrequenz des Netzzählers alle 5 min an die Karte [ortsnetz-auslastung.de](https://www.ortsnetz-auslastung.de) ([Projekt](https://github.com/thomaslehmann1234/datenerfassung-ortsnetz-auslastung)); die Antwort (Ampel je Phase, Speicherempfehlung bei Über-/Unterspannung) erscheint in der Kachel. Quelle bisher: Victron GX per Modbus
@@ -305,6 +305,7 @@ Live-Dienste) und die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich:
 |---|---|---|
 | `dv-interface` | **DV-Schnittstelle** = Modbus-SERVER (Port 502) für den Direktvermarkter + HTTP-Read `/dv/control-value` | Server **startet nicht / bleibt komplett geschlossen**; der Victron-Modbus-**CLIENT** und alle anderen Anlagen-Integrationen laufen unverändert weiter |
 | `eos` | **EOS / DV-EOS** Arbitrage-Optimizer-Dispatch (`services/optimizer`, `primarySource=eos`) | EOS **aktuiert nicht** → automatischer Fallback auf die freie kleine Börsenautomatik (Stufe 1/2); Prognosewerte bleiben sichtbar |
+| *(Lizenzprüfung in der Wallbox-Brücke)* | **Wallbox-Steuerung** — Ladeplan nach EOS und „Sofort laden“ (`services/optimizer/eos-evcc-bridge.js`) | Die Brücke schaltet die Wallbox nicht (`pro required`), ein laufendes „Sofort laden“ endet; die Anzeige im Leitstand bleibt |
 | `family-dashboard` | Familien-Dashboard (`/family` + alle `/api/family/*`-Routen) | `403 pro_required` + 🔒-Badge in der Top-Nav, Klick öffnet das Pro-Modal |
 | `vpn-manager` | Einstellungen → VPN (`/api/vpn/*` — Status, Profil-Upload, Start/Stop/Restart) | `403 pro_required`; Tab zeigt Pro-Hinweis mit Lizenz-Link |
 | `forecast-inspector-eos` | Einstellungen → Forecast → EOS-Output-Inspector (Teil von EOS-Pro) | dito |
@@ -318,8 +319,8 @@ Live-Dienste) und die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich:
 > Boden, Not-Halt).
 >
 > **Pro** schaltet die **DV-Schnittstelle** (Direktvermarkter-Modbus-Server), die
-> **EOS-Arbitrage** und die **Historie-Zeiträume Woche/Monat/Jahr/Alle** frei —
-> alle drei sind ohne Lizenz serverseitig aus (die Historie-Tagesansicht bleibt frei). „Stage 2++"
+> **EOS-Arbitrage**, die **Wallbox-Steuerung** und die **Historie-Zeiträume Woche/Monat/Jahr/Alle** frei —
+> alle vier sind ohne Lizenz serverseitig aus (die Historie-Tagesansicht bleibt frei). „Stage 2++"
 > (`predictivePreEmpty` / „Forecast Aware++", das nie produktive Morgens-Entleeren)
 > wurde **entfernt** (in der UI ausgeblendet; EOS ist der Nachfolger) — der Code
 > bleibt mitinstalliert.
@@ -331,7 +332,7 @@ Live-Dienste) und die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich:
 
 ### Aktivierung
 
-1. Lizenzschlüssel im Shop bestellen: **https://shop.dvhub.de** (Format `DVHB-XXXX-XXXX-XXXX-XXXX`).
+1. Lizenz kaufen auf **https://dvhub.de/#preise** – Einmalkauf oder Jahresabo, Checkout über Polar; danach erhältst du den Lizenzschlüssel (Format `DVHB-XXXX-XXXX-XXXX-XXXX`).
 2. **Einstellungen → Lizenz** öffnen (oder direkt `/settings.html#license`).
 3. Schlüssel einfügen → **Aktivieren**. DVhub validiert gegen **https://license.dvhub.de** (Keygen CE); bei Erfolg flippt der Status-Chip auf **Aktiv**, die Pro-Features sind frei und die Family-Nav verliert ihr 🔒-Icon.
 4. DVhub revalidiert die Lizenz alle ~6 h im Hintergrund; manuell via **Jetzt prüfen**.
