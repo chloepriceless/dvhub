@@ -10,7 +10,7 @@ verweist hierher.
 
 ## [Unreleased]
 
-## [1.0.9] - 2026-11-02
+## [1.0.9] - 2026-11-04
 
 Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten stehen in den Einträgen darunter:
 
