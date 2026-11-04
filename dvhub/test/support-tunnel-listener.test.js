@@ -744,6 +744,17 @@ test('Support-Tunnel: Familien-MQTT — anderer Broker geht und steht im Protoko
   assert.ok(recorded.at(-1).changedPaths.includes('mqtt.brokerUrl'), JSON.stringify(recorded.at(-1)));
   assert.equal(recorded.at(-1).kind, 'sicherheit');
   assert.doesNotMatch(JSON.stringify(recorded), /mq-geheim/);
+  // Gleichzeitige Änderung von anderer Seite (Kunde, Hintergrund) während einer
+  // Tunnel-Anfrage, die selbst nichts speichert: nicht dem Support zugerechnet
+  // (Gegenprüfung e17226cf, P3).
+  ctx.mobileLink = { cancelPairing: () => { box.security = { lanTrust: 'strict' }; return { ok: true }; } };
+  const r2 = mockRes();
+  await createApiRoutes(ctx).handleRequest(makeReq('POST', '/api/mobile-link/pair/cancel', {}, { viaSupport: true }), r2, new URL('http://x/api/mobile-link/pair/cancel'));
+  assert.equal(r2._captured.status, 200, r2._captured.body);
+  assert.equal(recorded.at(-1).route, '/api/mobile-link/pair/cancel');
+  assert.equal(recorded.at(-1).changedPaths, undefined, JSON.stringify(recorded.at(-1)));
+  assert.notEqual(recorded.at(-1).kind, 'sicherheit');
+  box.security = { lanTrust: 'open' };
   // Backslash: WHATWG liest Host 192.168.1.5, url.parse (mqtt.js) evil.example.net (Gegenprüfung ebab0f7e, P2).
   const bs = await call({ brokerUrl: 'mqtt://a:b@evil.example.net\\@192.168.1.5:1883' }, true);
   assert.equal(bs.status, 400, JSON.stringify(bs.body));

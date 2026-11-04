@@ -11,6 +11,7 @@ import { STREAM_BUCKET_SECONDS } from './telemetry-store-pg.js';
 import http from 'node:http';
 import os from 'node:os';
 import { isIP } from 'node:net';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isInternalHost, isPrivateOrLoopbackHost, isAllowedOutboundUrl, sameOrigin } from './services/host-address.js';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
@@ -867,6 +868,12 @@ export function configChangeNeedsEosReplan(changedPaths) {
 // auch services/control-commands.js es ohne Zyklus nutzen kann).
 export { requestEosReplanAfterSave };
 
+// Fern-Support-Protokoll: welche Konfigurationspfade das Speichern INNERHALB
+// einer Tunnel-Anfrage geändert hat (Gegenprüfung e17226cf, P3 — ein Vergleich
+// über die ganze Laufzeit der Anfrage rechnete gleichzeitige Änderungen des
+// Kunden oder von Hintergrund-Diensten dem Support zu).
+const supportAuditStorage = new AsyncLocalStorage();
+
 export function createApiRoutes(ctx) {
   // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
   // gleichzeitig, weggeklickte überspringen, gleiche Anfragen nur einmal.
@@ -1262,10 +1269,10 @@ export function createApiRoutes(ctx) {
     if (!isSupportTunnelRequest(req) || !isSupportTunnelWrite(req.method, url.pathname)) return;
     if (!res || typeof res.end !== 'function' || res.__dvhubSupportAudit) return;
     res.__dvhubSupportAudit = true;
-    // Stand der Konfiguration vorher: so sieht das Protokoll auch bei Wegen
-    // mit eigenem Speichern (Familien-MQTT, Victron, EEBUS …), was sich
-    // geändert hat (Gegenprüfung dca8ac88, P2). Nur Pfade, nie Werte.
-    try { req.dvhubAuditConfigBefore = JSON.parse(JSON.stringify(ctx.getRawCfg?.() || {})); } catch { req.dvhubAuditConfigBefore = null; }
+    // Pfade, die ein Speichern während dieser Anfrage geändert hat — auch bei
+    // Wegen mit eigenem Speichern (Familien-MQTT, Victron, EEBUS …;
+    // Gegenprüfung dca8ac88, P2). Gefüllt von saveAndApplyConfig unten.
+    req.dvhubAuditStore = { changedPaths: [] };
     let status = 0;
     const origWriteHead = res.writeHead;
     if (typeof origWriteHead === 'function') {
@@ -1283,13 +1290,9 @@ export function createApiRoutes(ctx) {
   }
   function logSupportTunnelWrite(req, url, status) {
     let changedPaths = Array.isArray(req.dvhubAuditChanges) ? req.dvhubAuditChanges.filter((x) => typeof x === 'string').slice(0, 200) : null;
-    if (!changedPaths && req.dvhubAuditConfigBefore) {
-      try {
-        const diff = collectChangedPaths(req.dvhubAuditConfigBefore, ctx.getRawCfg?.() || {});
-        if (diff.length) changedPaths = diff.slice(0, 200);
-      } catch { /* ohne Vergleich nur Route und Feldnamen */ }
+    if (!changedPaths && req.dvhubAuditStore?.changedPaths?.length) {
+      changedPaths = [...new Set(req.dvhubAuditStore.changedPaths)].slice(0, 200);
     }
-    req.dvhubAuditConfigBefore = null;
     const ok = status >= 200 && status < 400;
     const kind = ok ? supportTunnelActionKind(url.pathname, { changedPaths: changedPaths || [], migrate: req.dvhubAuditMigrate === true }) : null;
     const query = [...new Set([...url.searchParams.keys()])].slice(0, 20).map((k) => k.slice(0, 64));
@@ -1305,6 +1308,28 @@ export function createApiRoutes(ctx) {
     };
     pushLog('support_tunnel_action', entry, { ...actorContext(req), severity: kind ? 'warn' : 'info' });
     if (ok) ctx.supportTunnel?.recordAction?.(entry);
+  }
+  // Jedes Speichern innerhalb einer Tunnel-Anfrage meldet seine Pfade an die
+  // Anfrage (AsyncLocalStorage). Außerhalb unverändert. Den Vergleich macht
+  // das Speichern selbst (server.js liefert changedPaths) oder — falls nicht —
+  // ein Vergleich unmittelbar um diesen einen synchronen Aufruf.
+  if (typeof ctx.saveAndApplyConfig === 'function' && !ctx.saveAndApplyConfig.__supportAudit) {
+    const origSave = ctx.saveAndApplyConfig;
+    const auditedSave = function saveAndApplyConfigAudited(...args) {
+      const store = supportAuditStorage.getStore();
+      if (!store) return origSave.apply(this, args);
+      let before;
+      try { before = JSON.parse(JSON.stringify(ctx.getRawCfg?.() || {})); } catch { before = null; }
+      const result = origSave.apply(this, args);
+      try {
+        const paths = Array.isArray(result?.changedPaths) ? result.changedPaths
+          : (before ? collectChangedPaths(before, ctx.getRawCfg?.() || {}) : []);
+        for (const x of paths) if (typeof x === 'string' && store.changedPaths.length < 400) store.changedPaths.push(x);
+      } catch { /* Protokoll darf das Speichern nie stören */ }
+      return result;
+    };
+    auditedSave.__supportAudit = true;
+    ctx.saveAndApplyConfig = auditedSave;
   }
   function isLoopbackRequest(req) {
     if (isSupportTunnelRequest(req)) return false;
@@ -3176,6 +3201,12 @@ export function createApiRoutes(ctx) {
   const notificationRoutes = createNotificationRoutes({ ctx, pushLog, json, checkAuth, actorContext, checkProviderRateLimit });
 
   async function handleRequest(req, res, url) {
+    trackSupportTunnelWrite(req, res, url);
+    if (req?.dvhubAuditStore) return supportAuditStorage.run(req.dvhubAuditStore, () => handleRequestInner(req, res, url));
+    return handleRequestInner(req, res, url);
+  }
+
+  async function handleRequestInner(req, res, url) {
     // T-0080 P1: unauthenticated liveness probe for uptime monitoring
     // (Uptime-Kuma/LXC health checks). Deliberately auth-free AND data-free:
     // process liveness + the coarse telemetry-store flag only — no config,
@@ -3193,7 +3224,6 @@ export function createApiRoutes(ctx) {
     // Guard for non-EventEmitter mock res objects in unit tests (QUAL-02 —
     // existing tests synthesise plain { writeHead, end } stubs; calling
     // res.on() unconditionally would break them).
-    trackSupportTunnelWrite(req, res, url);
     const __metricsStart = process.hrtime.bigint();
     const __routeLabel = matchRouteLabel(url.pathname);
     if (!res.__metricsObserved && typeof res.on === 'function') {
