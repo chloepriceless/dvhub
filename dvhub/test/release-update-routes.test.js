@@ -286,8 +286,10 @@ describe('Paket-Box: Update über dvhub-release', () => {
     ['ohne Zielversion', { ...CHECK, latest: {} }],
   ]) {
     it(`Rückschritt-Prüfung ohne verwertbare Helfer-Antwort (${name}): nichts installiert`, async () => {
-      for (const [p, body] of [['/api/admin/update/apply', {}], ['/api/admin/update/channel', { channel: 'dev' }]]) {
-        const h = harness({ channel: 'stable', helper: { check, install: { ok: true, started: true } } });
+      // Kanalwechsel: Paket-Boxen nehmen nur noch stable an (Bleeding Edge bleibt
+      // git, Christin 04.11.) — geprüft wird der Wechsel von einem Altbestand dev.
+      for (const [p, body, from] of [['/api/admin/update/apply', {}, 'stable'], ['/api/admin/update/channel', { channel: 'stable' }, 'dev']]) {
+        const h = harness({ channel: from, helper: { check, install: { ok: true, started: true } } });
         try {
           const r = await h.call('POST', p, body);
           assert.equal(r.code, 500, `${p}: ${JSON.stringify(r.payload)}`);
