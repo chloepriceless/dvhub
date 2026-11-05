@@ -195,15 +195,20 @@ export function createPoller(ctx) {
   function dropDisabledPvPoint(name, conf) {
     if (!PV_POINT_FIELDS.has(name) || conf?.derive) return;
     const v = state.victron;
-    // Fehler eines nie gelesenen Punkts mit abräumen (Codex 4e636a56).
-    if (v[name] == null && !(Number(v.fieldUpdatedAt?.[name]) > 0)) { if (v.errors) delete v.errors[name]; return; }
+    if (v[name] == null && !(Number(v.fieldUpdatedAt?.[name]) > 0)) return;
     v[name] = null;
     if (v.fieldUpdatedAt) delete v.fieldUpdatedAt[name];
     if (v.fieldSourceAt) delete v.fieldSourceAt[name];
     if (v.errors) delete v.errors[name];
   }
   async function pollPoint(name, conf) {
-    if (!conf?.enabled) { dropDisabledPvPoint(name, conf); return; }
+    if (!conf?.enabled) {
+      // Abgeschaltet: ein alter Lesefehler gilt nicht mehr — er machte sonst jede
+      // Live-Probe veraltet (telemetry-runtime liveSnapshotStale, Codex 4e636a56).
+      if (state.victron.errors) delete state.victron.errors[name];
+      dropDisabledPvPoint(name, conf);
+      return;
+    }
     // SunSpec-deklarierte Punkte warten auf den Geräte-Scan (ensureSunspecResolved)
     // — vor der Auflösung wäre die Adresse null (Lesen von Register-Müll).
     if (conf.sunspec && conf.address == null) return;

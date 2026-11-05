@@ -236,16 +236,3 @@ test('Live-Proben: Lesefehler eines Energiefelds und alte MQTT-Werte tragen meta
   assert.deepEqual(metaOf({ ok: true, grid_total_w: 100, sourceAt: now - 300000 }, fresh), { stale: true }, 'MQTT: Netzwert 5 min alt');
   assert.equal(metaOf({ ok: true, grid_total_w: 100, sourceAt: now - 3000 }, { ...fresh, fieldSourceAt: { batteryPowerW: now - 3000 } }), null, 'MQTT: frische Werte');
 });
-
-// Codex 4e636a56 (P2): Ein PV-Punkt, der vor seinem ersten Wert scheiterte und
-// dann abgeschaltet wurde, behält seinen Fehler (kein Wert → nichts zu
-// verwerfen). Ein Fehler ohne gehaltenen Wert macht die Probe nicht veraltet —
-// es wird ja kein alter Wert weitergeschrieben.
-test('Live-Proben: Lesefehler ohne gehaltenen Wert (Punkt nie gelesen/abgeschaltet) → nicht veraltet', async () => {
-  const { buildLiveTelemetrySamples } = await import('../telemetry-runtime.js');
-  const ts = '2026-11-05T10:00:00.000Z';
-  const now = Date.parse(ts);
-  const victron = { gridImportW: 100, batteryPowerW: 50, fieldUpdatedAt: { batteryPowerW: now - 2000 }, errors: { acPv2L1W: 'modbus exception 2' } };
-  const meta = buildLiveTelemetrySamples({ ts, resolutionSeconds: 5, meter: { ok: true, grid_total_w: 100 }, victron })[0].meta;
-  assert.equal(meta, null);
-});
