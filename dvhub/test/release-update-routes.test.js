@@ -364,6 +364,47 @@ describe('Paket-Box: Bleeding Edge, wenn ein signierter dev-Index veröffentlich
     } finally { h.cleanup(); }
   });
 
+  it('dev-Paket nicht für diese Architektur gebaut: gilt als nicht veröffentlicht, dev-Box prüft stable (Codex c84c098d, P2)', async () => {
+    const noArch = { ...DEV_CHECK, latest: { ...DEV_CHECK.latest, available: false }, availableVersions: [] };
+    const h = harness({ channel: 'stable', helper: { check: checkBy(noArch), install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.equal(r.code, 409, JSON.stringify(r.payload));
+      assert.equal(r.payload.error, 'dev_package_unavailable');
+      assert.match(String(r.payload.detail), /Architektur/);
+      assert.ok(!h.calls.some((c) => c.includes(' install ')));
+    } finally { h.cleanup(); }
+    const d = harness({ channel: 'dev', helper: { check: checkBy(noArch), install: { ok: true, started: true } } });
+    try {
+      const c = await d.call('GET', '/api/admin/update/check');
+      assert.equal(c.payload.channel, 'stable');
+      assert.equal(c.payload.notice, PACKAGE_DEV_NOTICE);
+    } finally { d.cleanup(); }
+  });
+
+  it('stable 1.0.10 → dev-Stand derselben Grundversion: nur mit gleichem Commit, sonst Rückschritt (Codex c84c098d, P2)', async () => {
+    // Nach der Versionsregel steht main nach einem Release schon auf der
+    // nächsten Nummer — ein dev-Paket mit der Grundversion des installierten
+    // Release stammt also von davor (oder ist genau der Release-Commit).
+    const cur = { version: '1.0.10', git_sha: SHA, channel: 'stable' };
+    const before = { ...DEV_CHECK, current: cur, latest: { ...DEV_CHECK.latest, version: '1.0.10-dev.20261101000000.bbbbbbbb', git_sha: 'b'.repeat(40) } };
+    const h = harness({ channel: 'stable', release: { version: '1.0.10' }, helper: { check: checkBy(before), install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.equal(r.code, 400, JSON.stringify(r.payload));
+      assert.equal(r.payload.error, 'downgrade_blocked');
+      assert.ok(!h.calls.some((c) => c.includes(' install ')));
+      const ok = await h.call('POST', '/api/admin/update/channel', { channel: 'dev', allowDowngrade: true });
+      assert.equal(ok.code, 200, JSON.stringify(ok.payload));
+    } finally { h.cleanup(); }
+    const same = { ...before, latest: { ...before.latest, version: `1.0.10-dev.20261104000000.${SHA.slice(0, 8)}`, git_sha: SHA } };
+    const h2 = harness({ channel: 'stable', release: { version: '1.0.10' }, helper: { check: checkBy(same), install: { ok: true, started: true } } });
+    try {
+      const r = await h2.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.equal(r.code, 200, `gleicher Commit ist kein Rückschritt: ${JSON.stringify(r.payload)}`);
+    } finally { h2.cleanup(); }
+  });
+
   it('dev-Index ohne verwertbare Version gilt als nicht veröffentlicht', async () => {
     const h = harness({ channel: 'stable', helper: { check: checkBy({ ok: true }), install: { ok: true, started: true } } });
     try {

@@ -208,10 +208,12 @@ Ergebnis. Kanalwechsel = Config speichern + `install latest <kanal>`.
 
 **Bleeding Edge auf Paket-Boxen (ab 1.0.10):** Der Wechsel auf `dev` fragt zuerst den Helfer (`check dev`: lädt
 `index-dev.json` samt `.sig`, prüft Signatur im Namensraum `dvhub-release-index` und Inhalt). Gibt es keinen
-verwertbaren dev-Index (404, Signatur falsch, keine Version), lehnt `POST /api/admin/update/channel` mit 409
+verwertbaren dev-Index (404, Signatur falsch, keine Version, kein Paket für die Architektur der Box), lehnt `POST /api/admin/update/channel` mit 409
 `dev_package_unavailable` ab (Config bleibt, kein Auftrag, Protokoll `update_channel_rejected`, Grund im Feld
 `detail`); die Oberfläche zeigt „Für Paket-Installationen ist derzeit kein Bleeding-Edge-Paket veröffentlicht. Die
-Box bleibt auf Stabil.“ Sonst wie jeder Kanalwechsel: Rückschritt-Prüfung, `install latest dev`, Kanal-Rückfall.
+Box bleibt auf Stabil.“ Sonst wie jeder Kanalwechsel: Rückschritt-Prüfung, `install latest dev`, Kanal-Rückfall. Von einem Release
+`X.Y.Z` auf einen dev-Stand derselben Grundversion `X.Y.Z-dev.…` gilt als Rückschritt (er stammt nach der
+Versionsregel von vor dem Release), außer es ist genau der Release-Commit; mit `allowDowngrade` geht es trotzdem.
 `check` und `apply` nehmen den eingestellten Kanal; steht dort `dev`, ist aber kein dev-Index erreichbar (Altbestand,
 Import, Index zurückgezogen), prüfen und installieren sie wie in 1.0.9 `stable` und liefern den Hinweis als `notice`
 (Protokoll `update_dev_package_unavailable`) — die Rückschritt-Prüfung verhindert dabei, dass ein dev-Stand still auf

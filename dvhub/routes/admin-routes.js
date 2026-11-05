@@ -184,6 +184,15 @@ export function createAdminRoutes(deps) {
       if (curMs != null) {
         const toMs = devCommitMs(to) ?? (to === latest.version ? Date.parse(latest.date || '') : NaN);
         older = !Number.isFinite(toMs) || toMs < curMs;
+      } else if (devCommitMs(to) != null) {
+        // Release X.Y.Z → dev-Stand X.Y.Z-dev.…: main steht nach einem Release
+        // schon auf der nächsten Nummer (test/release-build.test.js), ein
+        // dev-Paket derselben Grundversion stammt also von vor dem Release —
+        // ein Rückschritt, außer es ist genau der Release-Commit (Codex
+        // c84c098d, P2).
+        const curSha = String(chk?.current?.git_sha || '');
+        const toSha = to === latest.version ? String(latest.git_sha || '') : '';
+        older = !(curSha && toSha && curSha === toSha);
       }
     }
     if (!older) return null;
@@ -198,6 +207,9 @@ export function createAdminRoutes(deps) {
     try {
       const chk = await releaseHelper(['check', 'dev'], 60000);
       if (chk?.ok === false || !chk?.latest?.version) return { ok: false, detail: 'dev-Index ohne verwertbare Version' };
+      // Paket für die Architektur dieser Box? Sonst scheiterte der Auftrag
+      // sicher an „kein Paket für …“ (Codex c84c098d, P2).
+      if (chk.latest.available !== true) return { ok: false, detail: `kein Bleeding-Edge-Paket für die Architektur dieser Box (${chk.arch || 'unbekannt'})` };
       return { ok: true, chk };
     } catch (e) {
       return { ok: false, detail: helperMessage(e) };
