@@ -22,7 +22,7 @@
 
 import http from 'node:http';
 import https from 'node:https';
-import { Readable } from 'node:stream';
+import { Readable, pipeline } from 'node:stream';
 import zlib from 'node:zlib';
 import { outboundLookup } from './host-address.js';
 
@@ -72,13 +72,21 @@ export function createOutboundFetch({ lookup = outboundLookup, timeoutMs = DEFAU
       const req = mod.request(u, { method: init.method || 'GET', headers, lookup, agent: false }, (res) => {
         settled = true;
         const status = res.statusCode || 0;
-        // Entpacken vor jedem Lesen; Größengrenzen gelten für die entpackten Bytes.
+        // Fehler des Bodys festhalten — auch ungelesen (Kuma, Antworten ≠ 2xx)
+        // darf ein kaputter oder abgebrochener Body DVhub nicht beenden; ein
+        // späteres Lesen bekommt den Fehler (Codex 5b41e32e, P1).
+        let bodyError = null;
+        const remember = (e) => { if (!bodyError) bodyError = e || new Error('aborted'); };
+        res.on('error', remember);
+        // Entpacken vor jedem Lesen; Größengrenzen gelten für die entpackten
+        // Bytes. pipeline gibt Fehler und Abbruch in beide Richtungen weiter:
+        // bricht der Leser den entpackten Body ab (readJsonCapped, Größengrenze),
+        // schließt auch die Verbindung (Codex 5b41e32e, P2).
         const dec = decoderFor(res.headers?.['content-encoding']);
         let src = res;
         if (dec) {
-          res.on('error', (e) => dec.destroy(e));
-          res.on('close', () => { if (!res.complete) dec.destroy(new Error('aborted')); });
-          src = res.pipe(dec);
+          dec.on('error', remember);
+          src = pipeline(res, dec, (e) => { if (e) remember(e); });
         }
         let used = false;
         const take = () => {
@@ -89,6 +97,7 @@ export function createOutboundFetch({ lookup = outboundLookup, timeoutMs = DEFAU
         const readText = () => new Promise((ok, fail) => {
           let stream;
           try { stream = take(); } catch (e) { fail(e); return; }
+          if (bodyError || stream.destroyed) { fail(bodyError || new Error('aborted')); return; }
           const chunks = [];
           let total = 0;
           stream.on('data', (c) => {
@@ -98,9 +107,9 @@ export function createOutboundFetch({ lookup = outboundLookup, timeoutMs = DEFAU
           });
           let ended = false;
           stream.on('end', () => { ended = true; ok(Buffer.concat(chunks).toString('utf8')); });
-          stream.on('error', fail);
+          stream.on('error', (e) => fail(bodyError || e));
           // Abbruch (Frist) ohne error-Ereignis: nicht ewig warten.
-          stream.on('close', () => { if (!ended) fail(new Error('aborted')); });
+          stream.on('close', () => { if (!ended) fail(bodyError || new Error('aborted')); });
         });
         let web = null;
         resolve({

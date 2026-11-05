@@ -122,6 +122,43 @@ test('Codex 52880aea P2: gzip/deflate/br werden entpackt (json, text, body)', as
   } finally { await s.close(); }
 });
 
+test('Codex 5b41e32e P1: kaputte gzip-Antwort, Body ungelesen (Kuma, non-2xx): kein unbehandelter Fehler, späteres Lesen scheitert sauber', async () => {
+  const uncaught = [];
+  const onUncaught = (e) => uncaught.push(e);
+  process.on('uncaughtException', onUncaught);
+  const s = await server((_req, res) => { res.writeHead(502, { 'content-encoding': 'gzip' }); res.end(Buffer.from('kein gzip, sondern Müll')); });
+  try {
+    const f = createOutboundFetch({ lookup: allowLocal });
+    const r = await f(`http://kaputt.example:${s.port}/`);
+    assert.equal(r.status, 502);
+    await new Promise((res) => setTimeout(res, 100));
+    await assert.rejects(() => r.text());
+    assert.deepEqual(uncaught, [], 'kein Absturz durch den Entpacker');
+  } finally { process.off('uncaughtException', onUncaught); await s.close(); }
+});
+
+test('Codex 5b41e32e P2: Abbruch des entpackten Bodys schließt die Verbindung (readJsonCapped-Abbruch)', async () => {
+  const zlib = await import('node:zlib');
+  let closedAt = null;
+  const s = await server((req, res) => {
+    res.writeHead(200, { 'content-encoding': 'gzip' });
+    const gz = zlib.createGzip();
+    gz.pipe(res);
+    const tick = setInterval(() => { gz.write(Buffer.alloc(64 * 1024, 97)); gz.flush(); }, 20);
+    res.on('close', () => { clearInterval(tick); closedAt = Date.now(); });
+  });
+  try {
+    const f = createOutboundFetch({ lookup: allowLocal, timeoutMs: 10_000 });
+    const r = await f(`http://gross.example:${s.port}/`);
+    const reader = r.body.getReader();
+    await reader.read();
+    const t0 = Date.now();
+    await reader.cancel();
+    for (let i = 0; i < 50 && closedAt == null; i += 1) await new Promise((res) => setTimeout(res, 20));
+    assert.ok(closedAt != null && closedAt - t0 < 1000, 'Verbindung nach dem Abbruch zu, nicht erst nach der Frist');
+  } finally { await s.close(); }
+});
+
 test('nur http/https; Standard-Abruf prüft mit outboundLookup', async () => {
   await assert.rejects(() => outboundFetch('file:///etc/passwd'), /unsupported_protocol/);
   const src = fs.readFileSync(new URL('../services/outbound-fetch.js', import.meta.url), 'utf8');
