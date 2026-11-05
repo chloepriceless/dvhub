@@ -246,6 +246,7 @@ test('E-Auto-Frist hinter den echten Preisen: Steuerzeitraum bis zur Abfahrt, ab
       assert.equal(c.deadline.kind, 'ev');
       assert.equal(c.deadline.at, new Date(dep).toISOString());
       assert.equal(c.deadlineCovered, true);
+      assert.equal(e.state.optimizer.eosRealPriceEnd, new Date(e.realEnd).toISOString(), 'Ende der echten Preise für die Regel-Grenze');
       assert.ok(e.logs.some((l) => l.event === 'eos_control_horizon' && l.data.reason === 'ev_deadline' && l.data.estimatedFrom === c.estimatedFrom));
     } finally { await mock.close(); }
   }
@@ -336,6 +337,7 @@ test('Lauf-Auslöser: Steuerzeitraum des Laufs (nach der Vorbereitung gelesen) w
   assert.equal(pc.estimatedFrom, '2026-11-05T23:00:00.000Z');
   assert.equal(pc.runStartedAt, Date.parse('2026-11-05T10:00:02Z'));
   assert.equal(pc.runDoneAt, nowMs);
+  assert.equal(state.optimizer.eosRun.runControl.hours, 17, 'Angabe des Laufs schon während er rechnet');
   // Ein gescheiterter Lauf ändert den Plan nicht — die Angabe bleibt.
   fail = true;
   nowMs += 300_000;

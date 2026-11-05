@@ -138,7 +138,7 @@
     // Steuerzeitraum bis zur Abfahrt in geschätzte Preise (/api/eos/plan control).
     const c = (p && p.control) || null;
     const evDeadline = c && c.reason === 'ev_deadline' && Number.isFinite(Date.parse(c.estimatedFrom))
-      ? { estimatedFrom: Date.parse(c.estimatedFrom), at: Date.parse(c.deadline && c.deadline.at) }
+      ? { estimatedFrom: Date.parse(c.estimatedFrom), at: Date.parse(c.deadline && c.deadline.at), covered: c.deadlineCovered !== false }
       : null;
     const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis, evDeadline };
     const rows = raw
@@ -146,6 +146,7 @@
       .filter((r) => Number.isFinite(r.ts))
       .sort((a, b) => a.ts - b.ts);
     if (!p || p.available === false || !rows.length) return { ...base, today: null, tomorrow: null };
+    if (base.evDeadline) base.evDeadline.planEnd = rows[rows.length - 1].ts + slotMinutesOf(output, rows.map((r) => r.ts)) * 60000;
 
     const slotMin = slotMinutesOf(output, rows.map((r) => r.ts));
     const slotMs = slotMin * 60000;
@@ -270,7 +271,12 @@
     if (s.stale) notes.push('EOS rechnet neu');
     if (s.evDeadline) {
       const at = Number.isFinite(s.evDeadline.at) ? ` (${time(s.evDeadline.at)})` : '';
-      notes.push(`Plan reicht bis zur Abfahrt des E-Autos${at} — ab ${time(s.evDeadline.estimatedFrom)} mit geschätzten Preisen`);
+      // Prognosehorizont reicht nicht bis zur Abfahrt (deadlineCovered false):
+      // das tatsächliche Ende nennen (Codex-Gegenprüfung 3a14d90c).
+      const reach = s.evDeadline.covered || !Number.isFinite(s.evDeadline.planEnd)
+        ? `Plan reicht bis zur Abfahrt des E-Autos${at}`
+        : `Plan reicht Richtung Abfahrt des E-Autos${at}, aber nur bis ${time(s.evDeadline.planEnd)}`;
+      notes.push(`${reach} — ab ${time(s.evDeadline.estimatedFrom)} mit geschätzten Preisen`);
     }
     return {
       note: notes.join(' · '),

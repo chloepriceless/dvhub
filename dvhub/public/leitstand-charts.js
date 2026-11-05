@@ -1661,7 +1661,8 @@
       // Steuerzeitraum bis zur Abfahrt des E-Autos in geschätzte Preise (1.0.10).
       var ctl = eos.control;
       if (ctl && ctl.reason === 'ev_deadline' && ctl.estimatedFrom) {
-        text += ' · bis Abfahrt E-Auto' + (ctl.deadline && ctl.deadline.at ? ' ' + fmtHm(ctl.deadline.at) : '')
+        var depText = ctl.deadline && ctl.deadline.at ? ' ' + fmtHm(ctl.deadline.at) : '';
+        text += (ctl.deadlineCovered === false ? ' · Richtung Abfahrt E-Auto' + depText + ' (nicht ganz erreicht)' : ' · bis Abfahrt E-Auto' + depText)
           + ', ab ' + fmtHm(ctl.estimatedFrom) + ' geschätzte Preise';
       }
       // Nach einem EOS-Neustart bleibt der letzte Plan sichtbar, bis EOS neu gerechnet hat.

@@ -1579,6 +1579,10 @@ export function createEosForecastBridge(ctx) {
     // Alles hinter dem Geschickten aus EOS entfernen (vor dem Lauf).
     if (gone()) return abandoned();
     const realEndMs = realPriceCoverage(realPriceSlots).end;
+    // Ende der echten Preise: Grenze für die Regel-Umsetzung, wenn zum
+    // gezeigten Plan keine Lauf-Angaben vorliegen (eos-adapter, nach einem
+    // DVhub-Neustart; Codex-Gegenprüfung 3a14d90c).
+    if (state && Number.isFinite(realEndMs)) { state.optimizer = state.optimizer || {}; state.optimizer.eosRealPriceEnd = new Date(realEndMs).toISOString(); }
     {
       const sentEndMs = priceEstimate ? Date.parse(priceEstimate.until) : realEndMs;
       const clear = await clearStaleEstimates(baseUrl, { sentEndMs, nowMs: Date.now(), gone });

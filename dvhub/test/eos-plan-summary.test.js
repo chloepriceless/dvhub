@@ -428,3 +428,15 @@ test('Plan bis zur Abfahrt mit geschätzten Preisen: Hinweis und Kennzeichnung j
   assert.equal(v.tomorrow.head, 'Morgen bis 10:00');
   assert.equal(v.tomorrow.headTitle, '');
 });
+
+// Codex-Gegenprüfung 3a14d90c (P2): Reicht der Prognosehorizont nicht bis zur
+// Abfahrt (deadlineCovered false), nicht „bis zur Abfahrt“ behaupten.
+test('Plan mit geschätzten Preisen, Abfahrt nicht erreicht: Hinweis nennt das Ende', () => {
+  const { summarize, view } = load();
+  const out = plan15();
+  const estFrom = Date.UTC(2026, 9, 26, 23, 0);
+  for (const r of out.rows) if (Date.parse(r.ts_utc) >= estFrom) r.priceEstimated = true;
+  const control = { reason: 'ev_deadline', estimatedFrom: iso(estFrom), deadline: { kind: 'ev', at: iso(Date.UTC(2026, 9, 27, 12, 0)) }, deadlineCovered: false };
+  const v = view(summarize({ available: true, output: out, control }, { now: NOW, epex: EPEX }));
+  assert.equal(v.note, 'Plan reicht Richtung Abfahrt des E-Autos (13:00), aber nur bis 10:00 — ab 00:00 mit geschätzten Preisen');
+});

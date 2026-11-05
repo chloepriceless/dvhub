@@ -226,7 +226,7 @@ export function createEosRunTrigger({
       body.start_solution = warm.genes;
       body.start_solution_datetime = new Date(warm.startMs).toISOString();
     }
-    publish({ inFlight: true, startedAt: at, reason });
+    publish({ inFlight: true, startedAt: at, reason, runControl: control });
     log('eos_run_started', {
       reason, soc, horizonHours,
       warmStart: warm ? { from: warm.previousSlots, to: currentSlots, elapsedSlots: warm.elapsedSlots } : 'eos',

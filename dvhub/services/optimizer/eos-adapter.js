@@ -588,7 +588,16 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // Preise, kommen aus diesen Slots keine Akku-Regeln — bis sie dran sind,
     // hat EOS mit echten Preisen neu gerechnet. Das Laden des Autos selbst
     // (eos-evcc-bridge) folgt weiter dem Plan.
-    const estimatedFromMs = Date.parse(ctx.state?.optimizer?.eosRun?.lastPlanControl?.estimatedFrom || '');
+    // Grenze = frühester bekannter Beginn geschätzter Preise: aus dem Plan des
+    // letzten Laufs, aus dem gerade rechnenden (dessen Lösung kann vor der
+    // Antwort auf den Lauf-Aufruf da sein) und — ohne Lauf-Angaben, z. B. nach
+    // einem DVhub-Neustart — das Ende der echten Preise aus dem letzten Push
+    // (Codex-Gegenprüfung 3a14d90c). Echte Preise enden nie früher als zuvor,
+    // ein Plan ohne geschätzte Preise ist davon nicht betroffen.
+    const opt = ctx.state?.optimizer || {};
+    const cutoffs = [opt.eosRun?.lastPlanControl?.estimatedFrom, opt.eosRun?.runControl?.estimatedFrom, opt.eosRealPriceEnd]
+      .map((v) => Date.parse(v || '')).filter(Number.isFinite);
+    const estimatedFromMs = cutoffs.length ? Math.min(...cutoffs) : NaN;
     const out = [];
     for (let ri = 0; ri < sol.rows.length; ri++) {
       const r = sol.rows[ri];
