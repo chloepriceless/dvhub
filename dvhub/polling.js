@@ -203,9 +203,12 @@ export function createPoller(ctx) {
   }
   async function pollPoint(name, conf) {
     if (!conf?.enabled) {
-      // Abgeschaltet: ein alter Lesefehler gilt nicht mehr — er machte sonst jede
-      // Live-Probe veraltet (telemetry-runtime liveSnapshotStale, Codex 4e636a56).
-      if (state.victron.errors) delete state.victron.errors[name];
+      // Abgeschaltet ohne gehaltenen Wert: ein alter Lesefehler gilt nicht mehr —
+      // er machte sonst jede Live-Probe veraltet (telemetry-runtime
+      // liveSnapshotStale, Codex 4e636a56). Mit gehaltenem Wert bleibt er, bis ein
+      // frischer Wert kommt (z. B. Akku über M160, Codex 22b1fb66); PV-Werte
+      // räumt dropDisabledPvPoint samt Fehler ab.
+      if (state.victron.errors && state.victron[name] == null) delete state.victron.errors[name];
       dropDisabledPvPoint(name, conf);
       return;
     }

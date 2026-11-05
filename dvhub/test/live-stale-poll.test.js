@@ -61,16 +61,33 @@ test('eingeschalteter Akkupunkt scheitert seit dem Start (kein Wert) → veralte
   assert.deepEqual(await r.metaAfterPoll(), { stale: true });
 });
 
-test('PV-Punkt scheitert vor seinem ersten Wert und wird abgeschaltet → Probe wieder frisch (Codex 4e636a56)', async () => {
+// Codex 22b1fb66 (P2): Optionale Kanäle (dvhub-mqtt: ac_l1..l3_w bei reiner
+// PV-Summe) sind eingeschaltet, liefern aber nie einen Wert — das ist kein
+// Messausfall, die Probe bleibt frisch. Nur der Akku (Pflicht) zählt ohne Wert.
+test('eingeschalteter PV-Kanal ohne je einen Wert (optional) → Probe frisch, auch abgeschaltet', async () => {
   const r = rig(new Set(['acPv2L1W']));
-  assert.deepEqual(await r.metaAfterPoll(), { stale: true }, 'solange eingeschaltet: veraltet');
+  assert.equal(await r.metaAfterPoll(), null, 'optionaler Kanal fehlt');
   r.points.acPv2L1W = { enabled: false };
   assert.equal(await r.metaAfterPoll(), null);
 });
 
-test('abgeschalteter Akkupunkt mit altem Fehler → Probe nicht veraltet', async () => {
+test('abgeschalteter Akkupunkt ohne Wert mit altem Fehler → Probe nicht veraltet (Codex 4e636a56)', async () => {
   const r = rig(new Set(['batteryPowerW']));
   await r.metaAfterPoll();
   r.points.batteryPowerW = { enabled: false };
   assert.equal(await r.metaAfterPoll(), null);
+});
+
+// Codex 22b1fb66 (P2): Akkupunkt hatte einen Wert, scheitert dann und wird
+// abgeschaltet — der alte Wert bleibt stehen (M160 kann ihn sonst liefern),
+// also bleibt die Probe veraltet, bis ein frischer Wert kommt.
+test('Akkupunkt mit altem Wert scheitert und wird abgeschaltet → bleibt veraltet', async () => {
+  const failing = new Set();
+  const r = rig(failing);
+  assert.equal(await r.metaAfterPoll(), null);
+  failing.add('batteryPowerW');
+  assert.deepEqual(await r.metaAfterPoll(), { stale: true });
+  r.points.batteryPowerW = { enabled: false };
+  assert.equal(r.state.victron.batteryPowerW, 500, 'alter Wert noch da');
+  assert.deepEqual(await r.metaAfterPoll(), { stale: true });
 });
