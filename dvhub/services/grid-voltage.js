@@ -16,7 +16,7 @@
 //                   legt der GX auf Unit 100, weil Modbus-Unit 0 Broadcast ist.
 //                   Ein VE.Can-Zähler mit Instance 0 (Christins VM-3P75CT,
 //                   N/<portal>/grid/0/…) antwortet deshalb auf Unit 100 neben dem
-//                   Sammelfach 820ff. — am GX .19 nur lesend geprüft 05.11.2026.
+//                   Sammelfach 820ff. — an Christins GX nur lesend geprüft 05.11.2026.
 //                   Ablauf: zuerst die konfigurierte bzw. System-Unit
 //                   (victron.unitId, Standard 100) — antwortet sie, wird nie
 //                   gesucht. Antwortet sie mit einer Modbus-Ausnahme (GH #33:
