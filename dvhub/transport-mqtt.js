@@ -403,8 +403,9 @@ export function createMqttTransport(victronConfig, options = {}) {
         l2: phases[1] ? Number(phases[1].value) : null,
         l3: phases[2] ? Number(phases[2].value) : null,
         frequencyHz: f ? Number(f.value) : null,
-        // Empfangszeit = die der ältesten verwendeten Phase.
-        ts: Math.min(...phases.filter(Boolean).map((p) => Number(p.ts) || 0)),
+        // Empfangszeit = die der ältesten verwendeten Größe, Frequenz
+        // eingeschlossen (Codex-Gegenprüfung 7f88bc74, P2).
+        ts: Math.min(...phases.concat(f).filter(Boolean).map((p) => Number(p.ts) || 0)),
         instance,
       };
     }

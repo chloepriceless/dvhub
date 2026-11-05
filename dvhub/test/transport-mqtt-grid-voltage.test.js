@@ -67,3 +67,22 @@ test('Venus: Abo der Grid-Spannungs-Topics (Wildcard je Instanz) beim Verbinden'
     await t.destroy();
   }
 });
+
+// Codex-Gegenprüfung 7f88bc74 (P2): alte Frequenz darf nicht mit der Zeit
+// frischer Spannungen als frisch durchgehen.
+test('Venus: Messzeit = älteste verwendete Größe, auch die Frequenz', () => {
+  const t = createMqttTransport({ host: 'gx', mqtt: { portalId: 'p1', staleMaxAgeMs: 0 } });
+  const realNow = Date.now;
+  try {
+    const t0 = realNow();
+    Date.now = () => t0 - 180_000;
+    msg(t, 'N/p1/grid/40/Ac/Frequency', 49.7);
+    Date.now = () => t0;
+    msg(t, 'N/p1/grid/40/Ac/L1/Voltage', 238);
+    const g = t.readGridVoltage();
+    assert.equal(g.frequencyHz, 49.7);
+    assert.equal(g.ts, t0 - 180_000);
+  } finally {
+    Date.now = realNow;
+  }
+});

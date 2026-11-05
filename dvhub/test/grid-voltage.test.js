@@ -236,3 +236,27 @@ test('/api/status: gridVoltage überlebt den Poller-Snapshot (Whitelist)', () =>
   // Web-seitiger zweiter Durchlauf (gefilterter Snapshot) behält es ebenfalls.
   assert.deepEqual(buildVictronSnapshot(snap).gridVoltage, gv);
 });
+
+// Codex-Gegenprüfung 7f88bc74 (3× P2).
+test('Unit-Suche: Treffer ohne Spannung (alle 0xFFFF) → weitersuchen, nicht an ihm hängen bleiben', async () => {
+  const dead = { 2616: 0xffff, 2617: 0, 2618: 0xffff, 2619: 0, 2620: 0xffff, 2644: 0xffff };
+  const gx = fakeGx({ 30: dead, 33: GRID });
+  const h = harness({ transport: { type: 'modbus', mbRequest: gx.mbRequest } });
+  await h.poller.onPoll(h.cfg);
+  assert.equal(h.st.victron.gridVoltage.unitId, 33);
+  assert.equal(h.st.victron.gridVoltage.error, null);
+});
+
+test('MQTT: Zufluss bricht ab → letzte Messung bleibt mit alter Messzeit (Kachel zeigt „veraltet“)', async () => {
+  let g = { l1: 231.5, l2: 232, l3: 233, frequencyHz: 50, ts: 990_000 };
+  const transport = { type: 'mqtt', readGridVoltage: () => g };
+  const h = harness({ transport });
+  await h.poller.onPoll(h.cfg);
+  g = null;
+  h.advance(5 * 60_000);
+  await h.poller.onPoll(h.cfg);
+  const gv = h.st.victron.gridVoltage;
+  assert.equal(gv.l1, 231.5);
+  assert.equal(gv.updatedAt, 990_000);
+  assert.deepEqual(freshGridVoltage(gv, h.now()), { ok: false, reason: 'voltage_stale' });
+});

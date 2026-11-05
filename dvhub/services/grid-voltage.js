@@ -156,27 +156,32 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
     }
     if (now() < nextScanAt) { setError('grid_meter_not_found'); return; }
     nextScanAt = now() + GRID_UNIT_RESCAN_MS;
-    let hit;
-    try {
-      const found = await scanGxServices(mbRequest, { ...base, units: GRID_SCAN_ORDER.filter((u) => u !== unit), probes: GRID_PROBES, firstOnly: true });
-      hit = found[0]?.unitId ?? null;
-    } catch (e) {
-      setError(e?.message);
-      return;
+    // Ein Treffer zählt erst, wenn er wirklich Spannung meldet; sonst ab der
+    // nächsten Unit weitersuchen (Codex-Gegenprüfung 7f88bc74, P2).
+    let units = GRID_SCAN_ORDER.filter((u) => u !== unit);
+    while (units.length) {
+      let hit;
+      try {
+        const found = await scanGxServices(mbRequest, { ...base, units, probes: GRID_PROBES, firstOnly: true });
+        hit = found[0]?.unitId ?? null;
+      } catch (e) {
+        setError(e?.message);
+        return;
+      }
+      if (hit == null) break;
+      try {
+        const m = await readAt(hit);
+        foundUnit = hit;
+        pushLog('victron_grid_meter_found', { unitId: hit, configuredUnitId: configured });
+        set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: hit, error: null });
+        return;
+      } catch (e) {
+        if (!wrongUnit(e)) { setError(e?.message); return; }
+        units = units.slice(units.indexOf(hit) + 1);
+      }
     }
-    if (hit == null) {
-      pushLog('victron_grid_meter_not_found', { configuredUnitId: configured });
-      setError('grid_meter_not_found');
-      return;
-    }
-    try {
-      const m = await readAt(hit);
-      foundUnit = hit;
-      pushLog('victron_grid_meter_found', { unitId: hit, configuredUnitId: configured });
-      set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: hit, error: null });
-    } catch (e) {
-      setError(e instanceof NoGridVoltageError ? 'grid_meter_not_found' : e?.message);
-    }
+    pushLog('victron_grid_meter_not_found', { configuredUnitId: configured });
+    setError('grid_meter_not_found');
   }
 
   async function onPoll(cfg, { spine, spineAt } = {}) {
@@ -191,9 +196,14 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
       }
       if (src === 'mqtt') {
         const g = typeof transport.readGridVoltage === 'function' ? transport.readGridVoltage() : null;
-        set(g && [g.l1, g.l2, g.l3].some(isNum)
-          ? { l1: g.l1 ?? null, l2: g.l2 ?? null, l3: g.l3 ?? null, frequencyHz: g.frequencyHz ?? null, updatedAt: Number(g.ts) || now(), source: 'victron_mqtt', unitId: null, error: null }
-          : null);
+        if (g && [g.l1, g.l2, g.l3].some(isNum)) {
+          set({ l1: g.l1 ?? null, l2: g.l2 ?? null, l3: g.l3 ?? null, frequencyHz: g.frequencyHz ?? null, updatedAt: Number(g.ts) || now(), source: 'victron_mqtt', unitId: null, error: null });
+        } else if (victronState().gridVoltage?.source !== 'victron_mqtt') {
+          set(null);
+        }
+        // Sonst: Zufluss abgerissen — letzte Messung mit ihrer Messzeit stehen
+        // lassen, damit die Frische-Prüfung „veraltet“ meldet statt „keine
+        // Werte“ (Codex-Gegenprüfung 7f88bc74, P2).
         return;
       }
       if (src !== 'modbus') {
