@@ -36,7 +36,12 @@ export function eosSlowRunHint(run, cfg) {
   if (pickGeneticSizing(0, cfg?.optimizer?.eosGeneticGenerations).generations > EOS_SUGGESTED_GENERATIONS) {
     suggest.generations = EOS_SUGGESTED_GENERATIONS;
   }
-  if (String(cfg?.optimizer?.eosControlHorizonMaxHours ?? '').trim().toLowerCase() !== 'auto') suggest.controlHorizon = 'auto';
+  // „automatisch“ nur statt des ganzen Preiszeitraums vorschlagen: gegenüber
+  // einer festen Grenze (6/12/24 h) ist es nicht sicher kürzer — eine Abfahrt
+  // in 20 h verlängerte den Steuerzeitraum (Codex-Gegenprüfung 57608a1e).
+  const cap = cfg?.optimizer?.eosControlHorizonMaxHours;
+  const fullPriceHorizon = !(Number(cap) > 0) && String(cap ?? '').trim().toLowerCase() !== 'auto';
+  if (fullPriceHorizon) suggest.controlHorizon = 'auto';
   if (!Object.keys(suggest).length) return null;
   const parts = [];
   if (suggest.generations) parts.push(`${suggest.generations} Generationen`);

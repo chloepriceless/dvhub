@@ -342,3 +342,24 @@ test('Lauf-Auslöser: Steuerzeitraum des Laufs (nach der Vorbereitung gelesen) w
   await trigger.trigger();
   assert.equal(state.optimizer.eosRun.lastPlanControl, pc);
 });
+
+// Codex-Gegenprüfung 6510846b (P2): Ein Gerät ohne Frist (oder mit spätem
+// frühesten Start) muss trotzdem ganz in den Steuerzeitraum passen — sonst
+// findet EOS keinen Start und verwirft den ganzen Lauf. Frist dann: frühester
+// möglicher Start + Laufzeit.
+test('collectPlanningDeadlines: Gerät ohne Frist — frühester Start + Laufzeit', () => {
+  const now = Date.parse('2026-11-05T09:00:00Z'); // 10:00 Ortszeit
+  const dev = (id, plan) => ({ id, name: id, schedulable: true, kind: 'deferrable', plan: { energyWh: 1000, ...plan }, endpoint: { type: 'shelly', shellyDeviceId: id } });
+  const cfg = { devices: [
+    dev('lang', { durationH: 8 }),                                 // jetzt + 8 h
+    dev('abends', { durationH: 2, earliestStart: '20:00' }),       // 20:00 + 2 h = 22:00 Ortszeit
+    dev('frueh', { durationH: 3, earliestStart: '08:00' }),        // 08:00 schon vorbei → jetzt + 3 h
+  ] };
+  const byId = Object.fromEntries(collectPlanningDeadlines(cfg, { optimizer: {} }, now).map((d) => [d.id, d.atMs]));
+  assert.equal(byId.appl_lang, now + 8 * H);
+  assert.equal(byId.appl_abends, Date.parse('2026-11-05T21:00:00Z'));
+  assert.equal(byId.appl_frueh, now + 3 * H);
+  // Automatisch: das 8-h-Gerät verlängert den Steuerzeitraum über 6 h.
+  const d = decideControlHorizon({ realHours: 30, mode: 'auto', deadlines: collectPlanningDeadlines(cfg, { optimizer: {} }, now), windowStartMs: now });
+  assert.equal(d.hours, 12, 'bis 22:00 Ortszeit (Gerät „abends“)');
+});

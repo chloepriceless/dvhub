@@ -527,7 +527,8 @@ export function controlHorizonMode(cfg) {
  *     (genetic.py `_ev_deadline_slot`, v0.4.0rc3).
  *   - Fensterende planbarer Geräte (deadline_datetime), die heute noch nicht
  *     gelaufen sind — ein Gerät muss im Steuerzeitraum fertig werden, sonst
- *     findet EOS keinen Start (genetic.py `_build_appliance_layout`).
+ *     findet EOS keinen Start (genetic.py `_build_appliance_layout`); ohne
+ *     Fensterende frühester Start + Laufzeit.
  * Gleiche Auflösung wie eos-config-sync (resolveEvDeparture,
  * buildEosHomeAppliances).
  * @returns {Array<{kind:'ev'|'appliance', id?:string, atMs:number}>}
@@ -547,9 +548,17 @@ export function collectPlanningDeadlines(cfg, state, nowMs = Date.now()) {
       const { appliances } = buildEosHomeAppliances(sched, { timeZone: cfg?.timeZone || 'Europe/Berlin', nowMs });
       const done = state?.optimizer?.applianceCyclesToday || {};
       for (const a of appliances) {
-        const at = Date.parse(a.deadline_datetime || '');
-        if (!Number.isFinite(at) || at <= nowMs) continue;
         if (Number(done[a.device_id]) >= 1) continue; // heute schon gelaufen
+        // Mit Frist: das Fensterende (EOS wählt den Start im ganzen Fenster).
+        // Ohne Frist (Codex-Gegenprüfung 6510846b): frühester möglicher
+        // Start + Laufzeit — der ganze Lauf muss in den Steuerzeitraum passen,
+        // sonst findet EOS keinen Start und verwirft den ganzen Lauf.
+        let at = Date.parse(a.deadline_datetime || '');
+        if (!Number.isFinite(at)) {
+          const earliest = Date.parse(a.earliest_start_datetime || '');
+          at = Math.max(nowMs, Number.isFinite(earliest) ? earliest : nowMs) + Number(a.duration_h || 1) * 3_600_000;
+        }
+        if (!Number.isFinite(at) || at <= nowMs) continue;
         out.push({ kind: 'appliance', id: a.device_id, atMs: at });
       }
     }

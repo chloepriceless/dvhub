@@ -456,6 +456,24 @@ describe('Optimizer Service: DVhub stößt den EOS-Lauf an', () => {
     }
   });
 
+  // Codex-Gegenprüfung 6510846b (P2): EOS nach eigenem Takt + Steuerzeitraum
+  // „automatisch“ — steckt das Auto an (Neuplan), muss der Steuerzeitraum mit
+  // der Abfahrt sofort neu an EOS, nicht erst beim nächsten Prognose-Push.
+  test('Neuplan bei eigenem EOS-Takt und Steuerzeitraum „automatisch“: Bridge pusht sofort', async () => {
+    for (const mode of ['auto', 0]) {
+      let pushes = 0;
+      const { ctx } = buildCtx({
+        optimizerCfg: { enabled: false, primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' }, eosStartAfterPreviousRun: true, eosControlHorizonMaxHours: mode },
+        ctx: { eosForecastBridge: { push: async () => { pushes += 1; return { ok: true }; } }, pushLog: () => {} },
+      });
+      const svc = createOptimizerService(ctx);
+      svc.requestEosReplan('ev_plugged');
+      for (let i = 0; i < 20; i += 1) await new Promise((r) => setImmediate(r));
+      assert.equal(pushes, mode === 'auto' ? 1 : 0, `Modus ${mode}`);
+      await svc.close();
+    }
+  });
+
   test('kein Anstoß, solange kein EOS 0.4 erkannt ist oder EOS nach eigenem Takt rechnen soll', async (t) => {
     t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
     for (const variant of ['unerkannt', 'eigenerTakt']) {

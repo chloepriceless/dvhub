@@ -30,7 +30,8 @@ import {
 } from './runtime-performance.js';
 import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
 import {
-  buildRuntimeSnapshot
+  buildRuntimeSnapshot,
+  applyRuntimeEosRun
 } from './runtime-state.js';
 import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker, createRuntimeCommandClient, attachRuntimeCommandServer } from './runtime-worker-protocol.js';
 import { createDirectNotifier, notifyDirectHandler } from './services/notifications/direct-relay.js';
@@ -874,7 +875,8 @@ function buildCurrentRuntimeSnapshot() {
     schedule: state.schedule,
     telemetry: state.telemetry,
     historyImport: historyImportManager ? historyImportManager.getStatus() : null,
-    vpn: state.vpn
+    vpn: state.vpn,
+    eosRun: state.optimizer?.eosRun || null
   });
 }
 
@@ -1058,6 +1060,8 @@ function startDedicatedRuntimeWorker() {
     }
     if (message.type === RUNTIME_MESSAGE_TYPES.RUNTIME_SNAPSHOT) {
       runtimeWorkerSnapshot = message.snapshot;
+      // Laufdauer und Steuerzeitraum des EOS-Plans für /api/eos/plan.
+      applyRuntimeEosRun(state, message.snapshot);
       runtimeWorkerStatusPayload = message.status || null;
       runtimeWorkerHeartbeatAt = Date.now();
       return;

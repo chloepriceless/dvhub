@@ -152,3 +152,35 @@ test('Hinweis: erst ab genug langen Läufen, schlägt nur vor, was noch nicht ei
   // Fernbetrieb: die Laufzeit hängt am Rechendienst, nicht an dieser Box.
   assert.equal(eosSlowRunHint(slow, { optimizer: { eosProxy: { enabled: true, mode: 'remote' } } }), null);
 });
+
+// Codex-Gegenprüfung 57608a1e (P2): „automatisch“ ist nicht kürzer als eine
+// feste Grenze — bei 6 h würde eine Abfahrt in 20 h den Lauf verlängern. Den
+// Steuerzeitraum nur vorschlagen, wo er heute der ganze Preiszeitraum ist.
+test('Hinweis: feste Grenze → kein Vorschlag „automatisch“', () => {
+  const slow = { avgDurationS: 900, recentRuns: 8 };
+  for (const cap of [6, 12, 24]) {
+    const h = eosSlowRunHint(slow, { optimizer: { eosControlHorizonMaxHours: cap } });
+    assert.deepEqual(h.suggest, { generations: 100 }, `Grenze ${cap} h`);
+    assert.doesNotMatch(h.text, /automatisch/);
+    assert.equal(eosSlowRunHint(slow, { optimizer: { eosControlHorizonMaxHours: cap, eosGeneticGenerations: 100 } }), null);
+  }
+});
+
+// Codex-Gegenprüfung 57608a1e (P2): Getrennter Betrieb
+// (DVHUB_ENABLE_RUNTIME_WORKER=1) — die Läufe laufen im Runtime-Prozess,
+// /api/eos/plan im Web-Prozess. Laufdauer und Steuerzeitraum des Plans reisen
+// im Runtime-Schnappschuss mit.
+test('Runtime-Schnappschuss: eosRun reist mit und landet im Web-Prozess', async () => {
+  const { buildRuntimeSnapshot, applyRuntimeEosRun } = await import('../runtime-state.js');
+  const eosRun = { inFlight: false, avgDurationS: 700, recentRuns: 5, lastDurationS: 650, lastDoneAt: 1000, lastPlanControl: { hours: 17, estimatedFrom: '2026-11-05T23:00:00.000Z', runStartedAt: 1, runDoneAt: 2 } };
+  const snap = buildRuntimeSnapshot({ eosRun });
+  assert.deepEqual(snap.eosRun, { avgDurationS: 700, recentRuns: 5, lastDurationS: 650, lastDoneAt: 1000, lastPlanControl: eosRun.lastPlanControl });
+  assert.equal(buildRuntimeSnapshot({}).eosRun, null);
+  const state = { optimizer: { eosRun: { inFlight: true } } };
+  applyRuntimeEosRun(state, snap);
+  assert.equal(state.optimizer.eosRun.avgDurationS, 700);
+  assert.equal(state.optimizer.eosRun.lastPlanControl.hours, 17);
+  assert.equal(state.optimizer.eosRun.inFlight, true, 'Web-eigene Felder bleiben');
+  applyRuntimeEosRun(state, { eosRun: null });
+  assert.equal(state.optimizer.eosRun.avgDurationS, 700, 'ohne Angabe bleibt der letzte Stand');
+});

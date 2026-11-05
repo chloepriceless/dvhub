@@ -14,8 +14,8 @@ verweist hierher.
 
 - **EOS-Steuerzeitraum „automatisch“.** Neue Auswahl unter Einstellungen → EOS-Optimierung → „EOS Steuerzeitraum
   höchstens“: mindestens 6 h und bis zur Abfahrt des E-Autos (solange es bei EOS angemeldet ist) bzw. bis zum
-  Fensterende eines planbaren Geräts, das heute noch nicht gelaufen ist, höchstens so weit, wie Börsenpreise bekannt
-  sind. Dahinter bewertet EOS die Restladung wie bisher über den Prognose-Schwanz. Gemessen auf 305 Tagen echter
+  Fensterende eines planbaren Geräts, das heute noch nicht gelaufen ist (ohne Fensterende: frühester Start plus
+  Laufzeit), höchstens so weit, wie Börsenpreise bekannt sind. Dahinter bewertet EOS die Restladung wie bisher über den Prognose-Schwanz. Gemessen auf 305 Tagen echter
   Daten gleichauf mit dem ganzen Preiszeitraum, bei etwa einem Viertel der Rechenzeit (mit 100 Generationen). Der
   bisherige Standard (ganzer bekannter Preiszeitraum) bleibt Standard. Das Protokoll `eos_control_horizon` nennt
   jetzt Modus, Grund und Frist.
