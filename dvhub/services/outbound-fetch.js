@@ -16,15 +16,30 @@
 // text(), json(), body (Web-Stream, z. B. readJsonCapped). Umleitungen werden
 // nicht verfolgt (wie ntfy) — ein 3xx kommt als Antwort zurück. Keine
 // wiederverwendete Verbindung (agent: false): jede Anfrage prüft neu.
+// Wie natives fetch: eine Frist auch ohne signal (Kopf und Body, sonst hinge
+// etwa der Preis-Nachimport an einem stockenden Server) und entpackte
+// Antworten bei Content-Encoding gzip/deflate/br (Codex 52880aea, 2× P2).
 
 import http from 'node:http';
 import https from 'node:https';
 import { Readable } from 'node:stream';
+import zlib from 'node:zlib';
 import { outboundLookup } from './host-address.js';
 
 // Obergrenze für text()/json() — schützt vor riesigen Antworten. Wer kleiner
 // begrenzen will, liest body selbst (readJsonCapped: 1 MB).
 const MAX_TEXT_BYTES = 32 * 1024 * 1024;
+// Frist ohne eigenes signal: ganze Anfrage samt Body.
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+// Content-Encoding → Entpacker (wie fetch); unbekannt/identity → roh.
+function decoderFor(encoding) {
+  const e = String(encoding || '').trim().toLowerCase();
+  if (e === 'gzip' || e === 'x-gzip') return zlib.createGunzip();
+  if (e === 'deflate') return zlib.createInflate();
+  if (e === 'br') return zlib.createBrotliDecompress();
+  return null;
+}
 
 function headerGetter(raw) {
   return {
@@ -37,16 +52,17 @@ function headerGetter(raw) {
 }
 
 /**
- * @param {{ lookup?: Function }} [opts] lookup: dns.lookup-kompatibel mit Prüfung (Tests)
+ * @param {{ lookup?: Function, timeoutMs?: number }} [opts] lookup: dns.lookup-kompatibel mit
+ *   Prüfung (Tests); timeoutMs: Frist, wenn der Aufrufer kein signal mitgibt (0 = keine)
  * @returns {(input: string|URL, init?: {method?: string, headers?: object, body?: string|Buffer, signal?: AbortSignal}) => Promise<object>}
  */
-export function createOutboundFetch({ lookup = outboundLookup } = {}) {
+export function createOutboundFetch({ lookup = outboundLookup, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   return function fetchChecked(input, init = {}) {
     return new Promise((resolve, reject) => {
       let u;
       try { u = new URL(String(input)); } catch { reject(new TypeError('invalid_url')); return; }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') { reject(new TypeError('unsupported_protocol')); return; }
-      const signal = init.signal || null;
+      const signal = init.signal || (timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : null);
       if (signal?.aborted) { reject(signal.reason || new Error('aborted')); return; }
       const payload = init.body == null ? null : (Buffer.isBuffer(init.body) ? init.body : Buffer.from(String(init.body), 'utf8'));
       const headers = { ...(init.headers || {}) };
@@ -56,11 +72,19 @@ export function createOutboundFetch({ lookup = outboundLookup } = {}) {
       const req = mod.request(u, { method: init.method || 'GET', headers, lookup, agent: false }, (res) => {
         settled = true;
         const status = res.statusCode || 0;
+        // Entpacken vor jedem Lesen; Größengrenzen gelten für die entpackten Bytes.
+        const dec = decoderFor(res.headers?.['content-encoding']);
+        let src = res;
+        if (dec) {
+          res.on('error', (e) => dec.destroy(e));
+          res.on('close', () => { if (!res.complete) dec.destroy(new Error('aborted')); });
+          src = res.pipe(dec);
+        }
         let used = false;
         const take = () => {
           if (used) throw new TypeError('body_already_used');
           used = true;
-          return res;
+          return src;
         };
         const readText = () => new Promise((ok, fail) => {
           let stream;
@@ -72,8 +96,11 @@ export function createOutboundFetch({ lookup = outboundLookup } = {}) {
             if (total > MAX_TEXT_BYTES) { stream.destroy(new Error('response_too_large')); return; }
             chunks.push(c);
           });
-          stream.on('end', () => ok(Buffer.concat(chunks).toString('utf8')));
+          let ended = false;
+          stream.on('end', () => { ended = true; ok(Buffer.concat(chunks).toString('utf8')); });
           stream.on('error', fail);
+          // Abbruch (Frist) ohne error-Ereignis: nicht ewig warten.
+          stream.on('close', () => { if (!ended) fail(new Error('aborted')); });
         });
         let web = null;
         resolve({

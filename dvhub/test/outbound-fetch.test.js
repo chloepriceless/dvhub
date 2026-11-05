@@ -83,6 +83,45 @@ test('Zeitlimit über signal bricht ab', async () => {
   } finally { await s.close(); }
 });
 
+const allowLocal = (_h, opts, cb) => (opts?.all ? cb(null, [{ address: '127.0.0.1', family: 4 }]) : cb(null, '127.0.0.1', 4));
+
+test('Codex 52880aea P2: ohne signal greift eine Standard-Frist (Kopf und Body), sonst hinge der Preis-Nachimport', async () => {
+  const s = await server(() => { /* antwortet nie */ });
+  const body = await server((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.write('{"a":'); /* Body bleibt offen */ });
+  try {
+    const f = createOutboundFetch({ lookup: allowLocal, timeoutMs: 150 });
+    const t0 = Date.now();
+    await assert.rejects(() => f(`http://langsam.example:${s.port}/`));
+    const r = await f(`http://langsam.example:${body.port}/`);
+    await assert.rejects(() => r.json());
+    assert.ok(Date.now() - t0 < 3000, 'beide nach der Frist abgebrochen');
+    const src = fs.readFileSync(new URL('../services/outbound-fetch.js', import.meta.url), 'utf8');
+    assert.match(src, /timeoutMs = DEFAULT_TIMEOUT_MS/);
+  } finally { await s.close(); await body.close(); }
+});
+
+test('Codex 52880aea P2: gzip/deflate/br werden entpackt (json, text, body)', async () => {
+  const zlib = await import('node:zlib');
+  const payload = JSON.stringify({ data: [{ ts: 1, price: 42 }], pad: 'x'.repeat(2000) });
+  const enc = { gzip: zlib.gzipSync, deflate: zlib.deflateSync, br: zlib.brotliCompressSync };
+  const s = await server((req, res) => {
+    const kind = req.url.slice(1);
+    res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': kind });
+    res.end(enc[kind](Buffer.from(payload)));
+  });
+  try {
+    const f = createOutboundFetch({ lookup: allowLocal });
+    for (const kind of Object.keys(enc)) {
+      assert.equal((await (await f(`http://preise.example:${s.port}/${kind}`)).json()).data[0].price, 42, kind);
+      const r = await f(`http://preise.example:${s.port}/${kind}`);
+      const reader = r.body.getReader();
+      const parts = [];
+      for (;;) { const { done, value } = await reader.read(); if (done) break; parts.push(Buffer.from(value)); }
+      assert.equal(Buffer.concat(parts).toString('utf8'), payload, `${kind}: body entpackt`);
+    }
+  } finally { await s.close(); }
+});
+
 test('nur http/https; Standard-Abruf prüft mit outboundLookup', async () => {
   await assert.rejects(() => outboundFetch('file:///etc/passwd'), /unsupported_protocol/);
   const src = fs.readFileSync(new URL('../services/outbound-fetch.js', import.meta.url), 'utf8');
