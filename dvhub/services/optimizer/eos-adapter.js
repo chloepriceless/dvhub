@@ -8,7 +8,8 @@ import { getPowerLimits } from '../power-limits.js';
 // Zweite GX am selben Anschluss: Plan-Umrechnung mit der Leistung beider Akkus.
 import { planningCfg } from '../multi-gx/planning.js';
 import { requestHostname } from '../host-address.js';
-import { planControlFor, PLAN_MATCH_SLACK_MS } from './eos-run-trigger.js';
+import { planControlFor, PLAN_MATCH_SLACK_MS, EOS_RUN_TIMEOUT_MS } from './eos-run-trigger.js';
+import { createHash } from 'node:crypto';
 import { zoneOffsetMs } from '../../tz-fast.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -75,21 +76,25 @@ export function setEosRemoteFacadeUrl(url) {
 // Akku-Regeln um. Welche Grenze gilt, hängt am Plan selbst (generated_at):
 //   1. Plan aus dem letzten fertigen Lauf (eosRun.lastPlanControl, Zeitfenster
 //      des Laufs): dessen estimatedFrom.
-//   2. Plan aus dem gerade rechnenden Lauf (Lösung vor der Antwort auf den
-//      Lauf-Aufruf, Codex 3a14d90c): dessen runControl.estimatedFrom.
+//   2. Plan, fertig während ein Lauf rechnet (Lösung vor der Antwort auf den
+//      Lauf-Aufruf, Codex 3a14d90c): dessen runControl.estimatedFrom UND die
+//      Grenze aus 3. — er kann auch aus einem älteren Lauf stammen.
 //   3. Sonst (EOS' eigener Takt, nach einem DVhub-Neustart): Lauf-Angaben
 //      unbekannt. Grenze = Ende der echten Preise, das zum Beginn des Laufs
 //      galt — spätestens EOS_UNKNOWN_RUN_LOOKBACK_MS vor dem Plan
 //      (eosRealPriceEnds, vom Preis-Push gesammelt). Ist dafür nichts bekannt
 //      (Neustart), Mitternacht am Ende des Plantags: der Day-Ahead für den Tag
 //      lag immer vor.
-//   4. Ohne generated_at: die strengste bekannte Grenze, beim ersten Sehen des
-//      Plans festgehalten (state.optimizer.eosUnknownPlanCutoff).
+//   4. Ohne generated_at: Grenze aus 3. zum Zeitpunkt des ersten Sehens, je
+//      Plan-Inhalt festgehalten (state.optimizer.eosUnknownPlanCutoffs).
 // Das Ende der JETZT echten Preise (eosRealPriceEnd) begrenzt zusätzlich, schaltet
 // aber nie einen Plan frei, der mit geschätzten Preisen gerechnet wurde (Codex
 // 8ecb4fa9: alter Plan nach Neustart; Grenze eines alten Laufs hielt später
 // jeden Plan auf).
-export const EOS_UNKNOWN_RUN_LOOKBACK_MS = 2 * 3600 * 1000;
+// Längste zulässige Laufzeit (Wartezeit des Lauf-Anstoßes) plus Spielraum: so
+// weit vor dem Plan kann sein Lauf begonnen haben (Gesamtprüfung Runde 2).
+export const EOS_UNKNOWN_RUN_LOOKBACK_MS = EOS_RUN_TIMEOUT_MS + PLAN_MATCH_SLACK_MS;
+const UNKNOWN_PLAN_MEMO_MAX = 8;
 
 function berlinDayEndMs(tsMs) {
   const DAY = 86400000;
@@ -112,6 +117,20 @@ function realPriceEndAt(history, atMs) {
   return best ? best.end : null;
 }
 
+/** Grenze für einen Plan ohne passende Lauf-Angaben, fertig um refMs. */
+function unknownRunCutoffMs(opt, refMs, fallbackMs) {
+  const known = realPriceEndAt(opt?.eosRealPriceEnds, refMs - EOS_UNKNOWN_RUN_LOOKBACK_MS);
+  return known != null ? known : fallbackMs;
+}
+
+/** Inhalt des Plans (Zeilen, Kosten) als Kennung — für Pläne ohne generated_at. */
+function planIdentity(sol) {
+  const rows = Array.isArray(sol?.rows) ? sol.rows : [];
+  const body = JSON.stringify([sol?.validFrom ?? null, sol?.kpis ?? null,
+    rows.map((r) => [r?.ts_utc ?? null, r?.dvhubSetpointW ?? null, r?.batteryHold ?? null, r?.gridCharge ?? null])]);
+  return createHash('sha1').update(body).digest('hex');
+}
+
 /**
  * Erster Zeitpunkt, ab dem die Slots dieses Plans mit geschätzten Preisen
  * gerechnet sind (ms) oder NaN (keine Grenze bekannt / keine Schätzung).
@@ -120,36 +139,37 @@ function realPriceEndAt(history, atMs) {
  * @param {number} nowMs
  */
 export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now()) {
-  const cutoffs = [Date.parse(opt?.eosRealPriceEnd || '')];
+  const priceEndMs = Date.parse(opt?.eosRealPriceEnd || '');
+  const cutoffs = [priceEndMs];
   const run = opt?.eosRun || {};
   const generatedMs = Date.parse(sol?.generatedAt || '');
   const matched = planControlFor(run.lastPlanControl, generatedMs);
   const startedAt = Number(run.startedAt);
   if (matched) {
     cutoffs.push(Date.parse(matched.estimatedFrom || ''));
-  } else if (run.inFlight === true && Number.isFinite(generatedMs) && Number.isFinite(startedAt)
-    && generatedMs >= startedAt - PLAN_MATCH_SLACK_MS) {
-    cutoffs.push(Date.parse(run.runControl?.estimatedFrom || ''));
   } else if (Number.isFinite(generatedMs)) {
-    const known = realPriceEndAt(opt?.eosRealPriceEnds, generatedMs - EOS_UNKNOWN_RUN_LOOKBACK_MS);
     // Rückfall am Tag des Plans, nicht des Rückblicks: ein Plan von 00:30 hat
     // echte Preise bis zur nächsten Mitternacht (Codex 66ae1b46).
-    cutoffs.push(known != null ? known : berlinDayEndMs(generatedMs));
+    cutoffs.push(unknownRunCutoffMs(opt, generatedMs, berlinDayEndMs(generatedMs)));
+    // Fertig während eines laufenden Laufs: kann aus ihm stammen (Lösung vor der
+    // Antwort, Codex 3a14d90c) — oder aus einem älteren Lauf (z. B. vor einem
+    // Neustart). Dann gilt zusätzlich seine Grenze, nie nur sie (Runde 2).
+    if (run.inFlight === true && Number.isFinite(startedAt) && generatedMs >= startedAt - PLAN_MATCH_SLACK_MS) {
+      cutoffs.push(Date.parse(run.runControl?.estimatedFrom || ''));
+    }
   } else {
-    // Ohne generated_at: Grenze beim ersten Sehen festhalten, je Plan (Zeilen,
-    // Kosten) — sie darf nicht mit der Uhr oder neuen Preisen vorrücken, der
-    // Plan wurde ja nicht neu gerechnet (Codex 66ae1b46).
-    const rows = Array.isArray(sol?.rows) ? sol.rows : [];
-    const key = JSON.stringify([sol?.validFrom ?? null, rows[0]?.ts_utc ?? null, rows[rows.length - 1]?.ts_utc ?? null,
-      rows.length, sol?.kpis?.totalCostsAmt ?? null, sol?.kpis?.totalRevenuesAmt ?? null]);
-    const memo = opt?.eosUnknownPlanCutoff;
-    if (memo && memo.key === key) return Number.isFinite(memo.cutoffMs) ? memo.cutoffMs : NaN;
-    cutoffs.push(Date.parse(run.lastPlanControl?.estimatedFrom || ''), berlinDayEndMs(nowMs));
-    if (run.inFlight === true) cutoffs.push(Date.parse(run.runControl?.estimatedFrom || ''));
-    const finite = cutoffs.filter(Number.isFinite);
-    const cutoffMs = finite.length ? Math.min(...finite) : NaN;
-    if (opt && typeof opt === 'object') opt.eosUnknownPlanCutoff = { key, cutoffMs };
-    return cutoffMs;
+    // Ohne generated_at (Codex 66ae1b46/ea233cd1): Grenze beim ersten Sehen des
+    // Plans festhalten (Kennung aus dem Inhalt) — sie rückt nicht mit Uhr oder
+    // neuen Preisen vor; die aktuelle Preisgrenze schneidet weiter mit. Lauf-
+    // Angaben gelten nicht: der Plan ist keinem Lauf zuzuordnen.
+    const key = planIdentity(sol);
+    const memo = Array.isArray(opt?.eosUnknownPlanCutoffs) ? opt.eosUnknownPlanCutoffs : [];
+    let hit = memo.find((m) => m.key === key);
+    if (!hit) {
+      hit = { key, cutoffMs: unknownRunCutoffMs(opt, nowMs, berlinDayEndMs(nowMs - EOS_UNKNOWN_RUN_LOOKBACK_MS)) };
+      if (opt && typeof opt === 'object') opt.eosUnknownPlanCutoffs = [...memo, hit].slice(-UNKNOWN_PLAN_MEMO_MAX);
+    }
+    cutoffs.push(hit.cutoffMs);
   }
   const finite = cutoffs.filter(Number.isFinite);
   return finite.length ? Math.min(...finite) : NaN;

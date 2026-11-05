@@ -986,17 +986,17 @@ test('EOS adapter reaches EOS at an IPv6 literal (http://[::1]:port)', async (t)
 // Die Grenze gehört zum Plan (generated_at): Lauf-Angaben zählen nur für den
 // Plan aus genau diesem Lauf (Codex 8ecb4fa9 / Gesamtprüfung 1.0.10).
 const EST_ROWS = ['2026-06-06T21:45:00Z', '2026-06-06T22:00:00Z', '2026-06-06T22:15:00Z'];
-function estimateSolution(generatedAt) {
+function estimateSolution(generatedAt, feedinWh = 3000) {
   const data = {};
   const pred = {};
   for (const ts of EST_ROWS) {
-    data[ts] = { battery1_soc_factor: 0.8, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3000 };
+    data[ts] = { battery1_soc_factor: 0.8, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: feedinWh };
     pred[ts] = { feed_in_tariff_amt_kwh: 0.2 };
   }
   return { generated_at: generatedAt, solution: { data }, prediction: { data: pred } };
 }
-async function slotsWith(state, generatedAt) {
-  const mock = await createMockEos((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(estimateSolution(generatedAt))); });
+async function slotsWith(state, generatedAt, feedinWh = 3000) {
+  const mock = await createMockEos((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(estimateSolution(generatedAt, feedinWh))); });
   try {
     const ctx = { ...makeCtx(`http://127.0.0.1:${mock.port}`), state };
     const slots = await createEosAdapter(ctx).pullGridSetpoints();
@@ -1067,4 +1067,60 @@ test('pullGridSetpoints: Plan ohne generated_at behält seine Grenze, auch wenn 
 test('pullGridSetpoints: Plan kurz nach Mitternacht (Neustart) wird nicht auf den Vortag gekappt', async () => {
   // 00:30 Berlin am 07.06.: echte Preise reichen mindestens bis Mitternacht 07./08.06.
   assert.deepEqual(await slotsWith({ optimizer: {} }, '2026-06-06T22:30:00Z'), ALL3);
+});
+
+// Gesamtprüfung 1.0.10 Runde 2 (P2): Ein Plan, der fertig wird, während ein
+// neuer Lauf rechnet, stammt nicht sicher aus diesem Lauf (z. B. Lauf aus der
+// Zeit vor einem DVhub-Neustart). Dessen „keine Schätzung“ darf den alten Plan
+// nicht freischalten — es gilt zusätzlich die Grenze für unbekannte Läufe.
+test('pullGridSetpoints: Plan während eines laufenden Laufs bekommt nicht ungeprüft dessen Angaben', async () => {
+  const state = { optimizer: {
+    eosRun: { inFlight: true, startedAt: ms('2026-06-06T11:45:00Z'), runControl: { estimatedFrom: null } },
+    eosRealPriceEnd: '2026-06-07T22:00:00.000Z',
+    eosRealPriceEnds: [{ at: ms('2026-06-06T06:00:00Z'), end: '2026-06-06T22:00:00.000Z' }, { at: ms('2026-06-06T11:30:00Z'), end: '2026-06-07T22:00:00.000Z' }],
+  } };
+  assert.deepEqual(await slotsWith(state, '2026-06-06T12:00:00Z'), FIRST1);
+});
+
+// Gesamtprüfung 1.0.10 Runde 2 (P2): Der Rückblick für Pläne ohne Lauf-Angaben
+// muss die längste zulässige Laufzeit abdecken (EOS_RUN_TIMEOUT_MS 3 h): ein Lauf
+// 12:30–15:15 rechnete mit den Preisen von 12:30, nicht mit denen von 13:15.
+test('pullGridSetpoints: Rückblick deckt die längste Laufzeit ab', async () => {
+  const state = { optimizer: {
+    eosRealPriceEnd: '2026-06-07T22:00:00.000Z',
+    eosRealPriceEnds: [{ at: ms('2026-06-06T09:00:00Z'), end: '2026-06-06T22:00:00.000Z' }, { at: ms('2026-06-06T13:15:00Z'), end: '2026-06-07T22:00:00.000Z' }],
+  } };
+  assert.deepEqual(await slotsWith(state, '2026-06-06T15:15:00Z'), FIRST1);
+});
+
+// Codex ea233cd1 (3× P2): Plan ohne generated_at —
+// (a) festgehaltene Grenze wird mit der aktuellen Preisgrenze geschnitten,
+// (b) die Grenze eines fremden, alten Laufs gilt nicht,
+// (c) ein inhaltlich anderer Plan bekommt seine eigene Grenze.
+test('pullGridSetpoints: Plan ohne generated_at — aktuelle Preisgrenze gilt weiter', async () => {
+  const state = { optimizer: {} };
+  assert.deepEqual(await slotsWith(state, undefined), ALL3);
+  state.optimizer.eosRealPriceEnd = '2026-06-06T22:00:00.000Z';
+  assert.deepEqual(await slotsWith(state, undefined), FIRST1);
+});
+
+test('pullGridSetpoints: Plan ohne generated_at — Grenze eines alten Laufs gilt nicht', async () => {
+  const state = { optimizer: {
+    eosRun: { lastPlanControl: { estimatedFrom: '2026-06-06T21:50:00.000Z', runStartedAt: ms('2026-06-06T08:00:00Z'), runDoneAt: ms('2026-06-06T08:10:00Z') } },
+    eosRealPriceEnd: '2026-06-07T22:00:00.000Z',
+    eosRealPriceEnds: [{ at: ms('2026-06-06T12:00:00Z'), end: '2026-06-07T22:00:00.000Z' }],
+  } };
+  assert.deepEqual(await slotsWith(state, undefined), ALL3);
+});
+
+test('pullGridSetpoints: Plan ohne generated_at — anderer Inhalt, eigene Grenze', async () => {
+  const state = { optimizer: {
+    eosRealPriceEnd: '2026-06-06T22:00:00.000Z',
+    eosRealPriceEnds: [{ at: ms('2026-06-06T09:00:00Z'), end: '2026-06-06T22:00:00.000Z' }],
+  } };
+  assert.deepEqual(await slotsWith(state, undefined, 3000), FIRST1);
+  state.optimizer.eosRealPriceEnd = '2026-06-07T22:00:00.000Z';
+  state.optimizer.eosRealPriceEnds.push({ at: ms('2026-06-07T11:30:00Z'), end: '2026-06-07T22:00:00.000Z' });
+  assert.deepEqual(await slotsWith(state, undefined, 2500), ALL3, 'neu gerechneter Plan');
+  assert.deepEqual(await slotsWith(state, undefined, 3000), FIRST1, 'der alte Plan behält seine Grenze');
 });
