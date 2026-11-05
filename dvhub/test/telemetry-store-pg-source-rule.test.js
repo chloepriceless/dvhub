@@ -192,3 +192,57 @@ describe('PG-Store: eigene Messwerte zuerst (echtes PostgreSQL)', { skip }, () =
     assert.deepEqual(slots.map((s) => s.importKwh), [0.5, 0.6, 0.6, 0.6]);
   });
 });
+
+// Codex 607fa4b2 (P1): Installationen aus scripts/migrate-sqlite-to-pg.sh haben
+// meta_json als JSONB (db/postgres/migrations/0007_timescaledb.sql). Das
+// Aufaddieren der Abdeckung muss dort genauso laufen — vorher scheiterte jedes
+// zweite Schreibpaket eines Slots an „CASE types text and jsonb cannot be
+// matched“, und mit ihm der ganze Rohdaten-Stapel.
+describe('PG-Store: Abdeckung mit meta_json als JSONB (Migration 0007, echtes PostgreSQL)', { skip }, () => {
+  let pool;
+  let store;
+  before(async () => {
+    const pg = await import('pg');
+    const setup = new pg.default.Client({ connectionString: URL });
+    await setup.connect();
+    await setup.query('DROP SCHEMA IF EXISTS source_rule_jsonb_test CASCADE; CREATE SCHEMA source_rule_jsonb_test');
+    await setup.end();
+    pool = new pg.default.Pool({ connectionString: URL, max: 2, options: '-c search_path=source_rule_jsonb_test' });
+    // Spalten wie Migration 0007 (ohne TimescaleDB-Hypertable).
+    await pool.query(`CREATE TABLE timeseries_samples (
+      id bigint generated always as identity, series_key text not null, scope text not null, source text not null,
+      quality text not null, ts_utc timestamptz not null, resolution_seconds integer not null, value_num double precision,
+      value_text text, unit text, meta_json jsonb, created_at timestamptz not null default now(),
+      primary key (id, ts_utc), unique (series_key, scope, source, quality, ts_utc, resolution_seconds))`);
+    await pool.query(`CREATE TABLE energy_slots_15m (
+      id bigint generated always as identity primary key, slot_start_utc timestamptz not null, series_key text not null,
+      source_kind text not null, quality text not null, value_num double precision, unit text, meta_json jsonb,
+      created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+      unique (slot_start_utc, series_key, source_kind))`);
+    await ensurePgSchema(pool);
+    await pool.query('CREATE TABLE IF NOT EXISTS series_metadata (series_key TEXT PRIMARY KEY, source TEXT NOT NULL)');
+    store = createTelemetryStorePg(pool);
+  });
+  after(async () => {
+    if (pool) {
+      await pool.query('DROP SCHEMA IF EXISTS source_rule_jsonb_test CASCADE');
+      await pool.end();
+    }
+  });
+
+  test('mehrere Schreibpakete je Slot: Abdeckung aufaddiert, Rohdaten gespeichert', async () => {
+    const { rows: types } = await pool.query(`SELECT data_type FROM information_schema.columns
+      WHERE table_schema = 'source_rule_jsonb_test' AND table_name = 'energy_slots_15m' AND column_name = 'meta_json'`);
+    assert.equal(types[0].data_type, 'jsonb');
+    const local = liveSamples(T0, 0, 900, 2000);
+    for (let i = 0; i < local.length; i += 12) await store.writeSamples(local.slice(i, i + 12));
+    const { rows } = await pool.query(`SELECT meta_json FROM energy_slots_15m WHERE source_kind = 'local_live'`);
+    const meta = typeof rows[0].meta_json === 'string' ? JSON.parse(rows[0].meta_json) : rows[0].meta_json;
+    assert.deepEqual(meta, { coverageS: 900, samples: 180, maxResS: 5 });
+    const { rows: raw } = await pool.query(`SELECT count(*)::int AS n FROM timeseries_samples WHERE source = 'local_poll'`);
+    assert.equal(raw[0].n, 180);
+    await store.writeSamples([vrmSample(T0, 0.6)]);
+    const slots = await store.listMaterializedEnergySlots({ start: iso(T0), end: iso(T0 + 900000) });
+    assert.deepEqual(slots.map((s) => s.sourceKind), ['local_live']);
+  });
+});

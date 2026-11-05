@@ -15,9 +15,10 @@
 //   Nach einem Neustart beginnt diese Zählung neu: die erste Probe trägt nur
 //   ein Abfrageintervall, die Ausfallzeit fehlt also in der Summe. Die
 //   Abdeckung einer Reihe im Slot ist die Summe dieser Zeiten, je Probe
-//   höchstens LOCAL_SAMPLE_MAX_CREDIT_SECONDS (das größte einstellbare
-//   Abfrageintervall, config-model meterPollMs max 60 000) — eine Probe nach
-//   einem minutenlangen Hänger deckt die Lücke davor nicht ab.
+//   höchstens LOCAL_SAMPLE_MAX_CREDIT_SECONDS (= Lückengrenze 90 s: größtes
+//   einstellbares Abfrageintervall, config-model meterPollMs max 60 000, plus
+//   Abfragedauer) — eine Probe nach einem minutenlangen Hänger deckt die Lücke
+//   davor nicht ab.
 //
 //   Die Proben landen ganz im Slot ihres Zeitstempels (sampleEnergyBySlot), am
 //   Slotrand verschiebt sich daher bis zu ein Probenabstand in den Nachbarslot.
@@ -42,11 +43,13 @@
 //   lokal), damit sich gespeicherte Historie nicht nachträglich verschiebt.
 
 export const SLOT_SECONDS = 900;
-export const LOCAL_SAMPLE_MAX_CREDIT_SECONDS = 60;
 export const LOCAL_COVERAGE_MIN_TOLERANCE_SECONDS = 15;
 export const LOCAL_COVERAGE_SPACING_FACTOR = 1.5;
 // Längste Probe, die noch keine Lücke ist (60-s-Abfrage + Abfragedauer).
 export const LOCAL_SAMPLE_MAX_GAP_SECONDS = 90;
+// Eine Probe bis zur Lückengrenze zählt mit ihrer ganzen Dauer (Codex 607fa4b2:
+// mit 60 s gekappt deckten lückenlose 70-s-Zyklen den Slot nie ab).
+export const LOCAL_SAMPLE_MAX_CREDIT_SECONDS = LOCAL_SAMPLE_MAX_GAP_SECONDS;
 
 export const LOCAL_SOURCE_KIND = 'local_live';
 export const VRM_SOURCE_KIND = 'vrm_import';

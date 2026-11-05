@@ -218,3 +218,21 @@ test('Live-Proben aus einer fehlgeschlagenen oder veralteten Abfrage tragen meta
   assert.equal(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freezeSuspect: { active: true, reasons: ['soc_no_step'] } }), null, 'nur Ladestand eingefroren');
   assert.equal(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freeze: { active: true, reasons: ['soc_no_step'] } }), null, 'nur Ladestand eingefroren (Waechter)');
 });
+
+// Codex 607fa4b2 (2× P2): Lesefehler eines Energiefelds und alte MQTT-Werte
+// zählen sofort als veraltet — nicht erst, wenn die letzte erfolgreiche
+// Abfrage 90 s zurückliegt. pollPoint behält nach einem Fehler den alten Wert
+// und setzt victron.errors[feld]; MQTT liefert aus dem Cache, fieldUpdatedAt
+// ist dort „jetzt“, die Empfangszeit steht in fieldSourceAt bzw. meter.sourceAt.
+test('Live-Proben: Lesefehler eines Energiefelds und alte MQTT-Werte tragen meta.stale', async () => {
+  const { buildLiveTelemetrySamples } = await import('../telemetry-runtime.js');
+  const ts = '2026-11-05T10:00:00.000Z';
+  const now = Date.parse(ts);
+  const fresh = { gridImportW: 100, batteryPowerW: 50, fieldUpdatedAt: { batteryPowerW: now - 2000 } };
+  const metaOf = (meter, victron) => buildLiveTelemetrySamples({ ts, resolutionSeconds: 5, meter, victron })[0].meta;
+  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, errors: { batteryPowerW: 'timeout' } }), { stale: true }, 'Akkuleistung: Lesefehler (alter Wert)');
+  assert.equal(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, errors: { minSocPct: 'timeout' } }), null, 'Fehler an einem Steuerpunkt zählt nicht');
+  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, fieldUpdatedAt: { batteryPowerW: now - 1000 }, fieldSourceAt: { batteryPowerW: now - 300000 } }), { stale: true }, 'MQTT: Wert 5 min alt, Abfrage frisch');
+  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100, sourceAt: now - 300000 }, fresh), { stale: true }, 'MQTT: Netzwert 5 min alt');
+  assert.equal(metaOf({ ok: true, grid_total_w: 100, sourceAt: now - 3000 }, { ...fresh, fieldSourceAt: { batteryPowerW: now - 3000 } }), null, 'MQTT: frische Werte');
+});

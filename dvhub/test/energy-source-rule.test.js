@@ -8,9 +8,10 @@ import {
   isCompleteLocalSlotRow, pickSlotSourceRow, chooseRawEntries, slotSourceRankSql
 } from '../energy-source-rule.js';
 
-test('Probenzeit: je Probe hoechstens 60 s (ein Haenger deckt die Luecke nicht ab)', () => {
+test('Probenzeit: je Probe hoechstens 90 s (ein Haenger deckt die Luecke nicht ab)', () => {
   assert.equal(localSampleCreditSeconds(5), 5);
-  assert.equal(localSampleCreditSeconds(600), 60);
+  assert.equal(localSampleCreditSeconds(70), 70);
+  assert.equal(localSampleCreditSeconds(600), 90);
   assert.equal(localSampleCreditSeconds(null), 0);
   assert.equal(localSampleCreditSeconds(-3), 0);
 });
@@ -101,4 +102,15 @@ test('60-s-Abfragen mit Abfragedauer (61 s) bleiben vollstaendig, 120 s nicht', 
   assert.equal(isLocalCoverageComplete(900, 15, 900, 61), true);
   assert.equal(isLocalCoverageComplete(900, 15, 900, 120), false);
   assert.deepEqual(chooseRawEntries([...vrmRaw, ...live(15, 61)]).length, 15);
+});
+
+// Codex 607fa4b2 (P2): Bei 60-s-Abfrage kommt die Lesedauer dazu. Lückenlose
+// 70-s-Zyklen (13 Proben je Viertelstunde, keine über 90 s) decken den Slot ab —
+// vorher zählte jede Probe nur 60 s (780 s < 810 s), der VRM-Import gewann immer.
+test('vollstaendig: lueckenlose 70-s-Zyklen bei 60-s-Abfrage', () => {
+  const samples = 13;
+  const coverage = samples * localSampleCreditSeconds(70);
+  assert.equal(isLocalCoverageComplete(coverage, samples, 900, 70), true);
+  // eine 120-s-Pause bleibt unvollständig
+  assert.equal(isLocalCoverageComplete(11 * localSampleCreditSeconds(70) + localSampleCreditSeconds(120), 12, 900, 120), false);
 });

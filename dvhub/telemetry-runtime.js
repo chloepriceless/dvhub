@@ -60,8 +60,9 @@ const LIVE_FIELD_MAX_AGE_MS = 90000;
  * Ist dieser Live-Schnappschuss keine frische Messung? Nach einem Lesefehler
  * behält polling.js die alten Werte und meldet die Abfrage trotzdem ab. Solche
  * Proben zählen in der Historie nicht als eigene Messung (energy-source-rule.js,
- * Codex 633d1caf): Zähler-Lesefehler, eingefrorene Messwerte oder ein
- * Messfeld, dessen letzte erfolgreiche Abfrage über 90 s zurückliegt.
+ * Codex 633d1caf): Zähler-Lesefehler, Lesefehler eines Energiefelds,
+ * eingefrorene Messwerte oder ein Messfeld, dessen letzte erfolgreiche Abfrage
+ * bzw. (MQTT) dessen Empfang über 90 s zurückliegt.
  */
 export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   if (meter?.ok === false) return true;
@@ -70,13 +71,19 @@ export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   const frozenValues = (f) => f?.active === true
     && (!Array.isArray(f.reasons) || f.reasons.length === 0 || f.reasons.includes('identical_values'));
   if (frozenValues(victron?.freeze) || frozenValues(victron?.freezeSuspect)) return true;
+  // Lesefehler eines Energiefelds: pollPoint behält den alten Wert — sofort
+  // veraltet, nicht erst nach 90 s (Codex 607fa4b2 / Gesamtprüfung 1.0.10).
+  const errors = victron?.errors || {};
+  if (LIVE_ENERGY_FIELDS.some((field) => errors[field])) return true;
   const tsMs = Date.parse(ts);
   if (!Number.isFinite(tsMs)) return false;
+  const tooOld = (at) => Number(at) > 0 && tsMs - Number(at) > LIVE_FIELD_MAX_AGE_MS;
+  // MQTT liefert aus dem Cache: fieldUpdatedAt ist dort der Abfrage-Zeitpunkt,
+  // die Empfangszeit des Werts steht in fieldSourceAt bzw. meter.sourceAt.
+  if (tooOld(meter?.sourceAt)) return true;
   const stamps = victron?.fieldUpdatedAt || {};
-  return LIVE_ENERGY_FIELDS.some((field) => {
-    const at = Number(stamps[field]);
-    return at > 0 && tsMs - at > LIVE_FIELD_MAX_AGE_MS;
-  });
+  const sourceStamps = victron?.fieldSourceAt || {};
+  return LIVE_ENERGY_FIELDS.some((field) => tooOld(stamps[field]) || tooOld(sourceStamps[field]));
 }
 
 export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, victron = {}, managed = null }) {

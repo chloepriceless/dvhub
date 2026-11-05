@@ -689,12 +689,14 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           : 'COALESCE(energy_slots_15m.value_num, 0) + COALESCE(EXCLUDED.value_num, 0)';
         // Abdeckung der eigenen Werte aufaddieren (energy-source-rule.js); ein
         // Slot von vor 1.0.10 ohne Abdeckung zaehlt ab jetzt nur den neuen Teil.
+        // Beide Zweige liefern jsonb: passt in meta_json TEXT (ensurePgSchema,
+        // Zuweisung jsonb → text) und JSONB (Migration 0007) — Codex 607fa4b2.
         const metaExpr = mode === 'replace' ? 'EXCLUDED.meta_json' : `CASE
             WHEN (EXCLUDED.meta_json::jsonb ->> 'coverageS') IS NOT NULL THEN (EXCLUDED.meta_json::jsonb || jsonb_build_object(
               'coverageS', COALESCE((energy_slots_15m.meta_json::jsonb ->> 'coverageS')::float8, 0) + (EXCLUDED.meta_json::jsonb ->> 'coverageS')::float8,
               'samples', COALESCE((energy_slots_15m.meta_json::jsonb ->> 'samples')::float8, 0) + COALESCE((EXCLUDED.meta_json::jsonb ->> 'samples')::float8, 0),
-              'maxResS', GREATEST(COALESCE((energy_slots_15m.meta_json::jsonb ->> 'maxResS')::float8, 0), COALESCE((EXCLUDED.meta_json::jsonb ->> 'maxResS')::float8, 0))))::text
-            ELSE EXCLUDED.meta_json
+              'maxResS', GREATEST(COALESCE((energy_slots_15m.meta_json::jsonb ->> 'maxResS')::float8, 0), COALESCE((EXCLUDED.meta_json::jsonb ->> 'maxResS')::float8, 0))))
+            ELSE EXCLUDED.meta_json::jsonb
           END`;
         await client.query(`
           INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, unit, meta_json)
