@@ -1892,7 +1892,7 @@ function wireDatenspende() {
   const syncMode = () => {
     const mode = dsEl('dsMode').value;
     const apikey = mode === 'apikey';
-    for (const id of ['dsUsername', 'dsPassword', 'dsMultiHelp']) dsEl(id).hidden = apikey;
+    for (const id of ['dsUsername', 'dsPassword', 'dsPasswordHelp', 'dsMultiHelp']) dsEl(id).hidden = apikey;
     // E-Mail nur beim Anlegen eines Kontos (sign-up), wie der Anmelde-Schlüssel.
     for (const id of ['dsEmail', 'dsEmailHelp']) dsEl(id).hidden = mode !== 'signup';
     // Anmelde-Schlüssel gilt nur beim Anlegen eines Kontos (COMSYS sign-up).
