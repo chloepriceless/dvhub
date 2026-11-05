@@ -238,7 +238,7 @@ test('link: ohne Einwilligung keine Anfrage an den Server', async () => {
   assert.equal(client.calls.length, 0);
 });
 
-test('link: API-Key im Sidecar (0600), Passwort nie gespeichert, Client-Typ aus Config, Sign-out', async () => {
+test('link: API-Key im Sidecar (0600), Passwort nie gespeichert, Client-Typ victron, Sign-out', async () => {
   const dir = tmp();
   const client = fakeClient();
   const svc = createDatenspende(baseCtx({ dir, cfg: { datenspende: { clientType: 'dvhub' } } }), { client, now: () => T0 });
@@ -249,7 +249,9 @@ test('link: API-Key im Sidecar (0600), Passwort nie gespeichert, Client-Typ aus 
   assert.doesNotMatch(raw, /GEHEIM-pw-123/, 'Passwort darf nirgends landen');
   assert.equal(JSON.parse(raw).apiKey, 'KEY-SECRET');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  assert.deepEqual(client.calls.find((c) => c[0] === 'client')[1], { householdId: 'H1', name: 'DVhub', type: 'dvhub' });
+  // GH #31: „dvhub“ kennt der Server nicht (400 Invalid input format: null) —
+  // ein Altwert wird auf den Portal-Typ victron gehoben.
+  assert.deepEqual(client.calls.find((c) => c[0] === 'client')[1], { householdId: 'H1', name: 'DVhub', type: 'victron' });
   assert.equal(client.calls.find((c) => c[0] === 'household')[1].numberInhabitants, 3);
   assert.equal(client.calls.at(-1)[0], 'signOut');
   assert.equal(JSON.stringify(st).includes('KEY-SECRET'), false, 'Status verrät den API-Key nicht');
@@ -528,4 +530,43 @@ test('columnarPayload: voltage-Spalte für Spannungs-Zähler', async () => {
     { meter_id: 'V1', timestamp: '2026-09-28T12:00:30Z', voltage: 239 },
   ]);
   assert.deepEqual(p.meters.find((m) => m.id === 'V1'), { id: 'V1', dt: [0, 30], voltage: [238.2, 239] });
+});
+
+// ── GH #31: Client-Typ ───────────────────────────────────────────────────────
+
+test('#31 Client-Typ: Standard victron (Portal-Typ), Altwert dvhub → victron, bekannte Typen bleiben', () => {
+  const mk = (ds) => createDatenspende(baseCtx({ dir: tmp(), cfg: { datenspende: ds } }), { client: fakeClient(), now: () => T0 });
+  assert.equal(mk({}).settings().clientType, 'victron');
+  assert.equal(mk({ clientType: 'dvhub' }).settings().clientType, 'victron');
+  assert.equal(mk({ clientType: 'quatsch' }).settings().clientType, 'victron');
+  assert.equal(mk({ clientType: 'home_assistant' }).settings().clientType, 'home_assistant');
+});
+
+test('#31 bestehende, verknüpfte Spende (Altwert dvhub): kein neues Konto, kein neuer Client — Senden wie bisher', async () => {
+  const s = linkedSetup({ ds: { clientType: 'dvhub' } });
+  s.svc.sample();
+  await s.svc.flush();
+  const kinds = new Set(s.client.calls.map((c) => c[0]));
+  for (const k of ['signUp', 'signIn', 'household', 'client', 'apiKey']) assert.equal(kinds.has(k), false, k);
+  assert.equal(s.client.batches.length, 1);
+});
+
+// ── GH #31: Schlüssel aus dem Datenportal (empfohlener Weg) ──────────────────
+
+test('#31 Portal-Schlüssel: Format des Portals unbekannt → jedes druckbare Zeichen ohne Leerraum; nur GET /clients, dann nur Zähler', async () => {
+  const dir = tmp();
+  const client = fakeClient();
+  client.getClientId = async (k) => { client.calls.push(['getClientId', k]); return 'portal-client'; };
+  const svc = createDatenspende(baseCtx({ dir, cfg: { manufacturer: 'victron', datenspende: { enabled: true } } }), { client, now: () => T0 });
+  const key = 'pk_live.AbC+dEf/123=456~xyz';
+  const st = await svc.linkApiKey({ apiKey: `  ${key}  `, consent: true });
+  assert.equal(st.clientId, 'portal-client');
+  assert.deepEqual(client.calls, [['getClientId', key]], 'kein Konto, kein Haushalt, kein Client');
+  await assert.rejects(svc.linkApiKey({ apiKey: 'mit leer zeichen 1234567890', consent: true }), /Format/);
+  await assert.rejects(svc.linkApiKey({ apiKey: `zeile\n${'x'.repeat(20)}`, consent: true }), /Format/);
+  // Danach legt die Spende nur Zähler an.
+  svc.sample();
+  await svc.flush();
+  const kinds = [...new Set(client.calls.map((c) => c[0]))];
+  assert.deepEqual(kinds, ['getClientId', 'register', 'submit']);
 });

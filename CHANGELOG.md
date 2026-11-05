@@ -16,14 +16,14 @@ verweist hierher.
   und legt sie in den Live-Zustand (`/api/status`: `victron.gridVoltage` roh, `gridVoltage` mit Frische-Prüfung).
   Der Leitstand zeigt sie in der neuen Kachel „Netz · Zähler“: L1–L3 in V (eine Nachkommastelle), Frequenz in Hz
   (zwei Nachkommastellen), „–“ ohne Werte, „veraltet“ bei Werten älter als 2 min; gelb markiert, wenn eine Phase
-  außerhalb 207–253 V oder die Frequenz außerhalb 49,8–50,2 Hz liegt. Quellen: Victron per Modbus (alle 30 s, nur lesend), Victron
-  per MQTT (Grid-Topics) und der SPiNE EnergyLink (aus derselben Abfrage wie die Netzleistung). Andere Profile
-  definieren keine Spannungsfelder, dort bleibt der Wert leer.
+  außerhalb 207–253 V oder die Frequenz außerhalb 49,8–50,2 Hz liegt. Quellen: Victron per Modbus (alle 30 s, nur
+  lesend), Victron per MQTT (Grid-Topics) und der SPiNE EnergyLink (aus derselben Abfrage wie die Netzleistung).
+  Andere Profile definieren keine Spannungsfelder, dort bleibt der Wert leer.
 - **Netzzähler-Unit wird gesucht (GH #33).** Victron per Modbus fragt zuerst die konfigurierte bzw. System-Unit
-  (Standard 100). Antwortet sie mit einer Modbus-Ausnahme (z. B. 10) oder ohne Spannung, sucht DVhub einmalig die
-  Unit des Netzzählers (`com.victronenergy.grid`, z. B. 40 beim VM-3P75CT oder 31 beim EM540), merkt sie und nennt
-  sie im Log (`victron_grid_meter_found`). Eine Zeitüberschreitung löst keine Suche aus.
-
+  (Standard 100; ein Zähler mit DeviceInstance 0, etwa am VE.Can, liegt dort). Antwortet sie mit einer
+  Modbus-Ausnahme (z. B. 10) oder ohne Spannung, sucht DVhub einmalig die Unit des Netzzählers
+  (`com.victronenergy.grid`, erst 30–49, dann 1–247; z. B. 40 beim VM-3P75CT per Ethernet oder 31 beim EM540),
+  merkt sie und nennt sie im Log (`victron_grid_meter_found`). Eine Zeitüberschreitung löst keine Suche aus.
 - **Datenspende: Netzspannung je Phase.** Liefert die Anlage Spannungen, spendet DVhub sie als `voltage`-Messwert
   (V) — je Phase ein eigener Zähler „Netzspannung L1/L2/L3“, wie ein Spannungs-Sensor in der Home-Assistant-
   Integration. Jede Messung (alle 30 s, über MQTT/SPiNE häufiger) geht einmal hinaus, nur frische Werte. Neue Quelle
@@ -37,9 +37,25 @@ verweist hierher.
   die Teilnahme auch auf Anlagen mit dem Netzzähler an einer anderen Unit (bisher „modbus exception 10“), über
   Victron MQTT und mit dem SPiNE EnergyLink. Ohne Spannungswerte meldet die Karte „Keine Spannungswerte“, bei alten
   Werten „veraltet“. Die Gültigkeitsregeln (150–300 V, 45–55 Hz) bleiben.
+- **Datenspende: Schlüssel aus dem Datenportal als empfohlener Weg (GH #31).** Erste Option der Einrichtung: im
+  COMSYS-Datenportal Haushalt und Schlüssel (Typ „Victron Energy“) anlegen, in DVhub nur den Schlüssel eintragen.
+  DVhub prüft ihn mit `GET /clients` und meldet danach nur noch die Zähler an — kein Konto, kein Haushalt. Mit Link
+  und Schritt-für-Schritt-Hilfe; das Schlüsselformat ist nicht mehr auf `A–Z a–z 0–9 _ -` beschränkt (geprüft wird
+  beim Projekt).
+- **Datenspende: Hilfetexte.** E-Mail ist freiwillig, je E-Mail gibt es nur ein Konto (verständliche Meldung bei
+  `taken_email`); mehrere Anlagen gehören in EIN Konto („Vorhandenes Konto verwenden“ legt je Anlage einen Haushalt
+  an); scheitert die Einrichtung nach dem Haushalt, weist DVhub auf den möglicherweise leeren Haushalt hin, der sich
+  im Datenportal löschen lässt.
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.
+
+### Behoben
+
+- **Datenspende-Einrichtung scheiterte an „Client anlegen“ (GH #31).** DVhub meldete sich mit dem Client-Typ
+  `dvhub` an, den der COMSYS-Server nicht kennt (`400 bad_request: Invalid input format: null`). Standard ist jetzt
+  `victron`, der Typ, den das Datenportal selbst für Victron-Anlagen anlegt; ein gespeichertes `dvhub` wird beim
+  Laden gehoben. Schon verknüpfte Spenden bleiben unberührt (der Typ zählt nur beim Anlegen).
 
 ## [1.0.9] - 2026-11-04
 

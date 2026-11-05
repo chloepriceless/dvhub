@@ -66,6 +66,7 @@ function mqttConfigView(mqttCfg) {
 import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots } from './eeg-extension.js';
 import { buildVictronAlarmsPayload } from './victron-alarms.js';
 import { freshGridVoltage } from './services/grid-voltage.js';
+import { CLIENT_TYPES as DATENSPENDE_CLIENT_TYPES } from './services/datenspende/client.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capVictronPvForDisplay } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { redactConfig, redactUrlCreds, dropSecretsForChangedTargets, unchangedSecretPaths } from './config-redaction.js';
@@ -5468,7 +5469,8 @@ export function createApiRoutes(ctx) {
           patch.intervalSec = iv;
         }
         if (body.clientType !== undefined) {
-          if (typeof body.clientType !== 'string' || !/^[a-z0-9_-]{1,40}$/i.test(body.clientType)) {
+          // GH #31: nur Typen, die das Datenportal kennt („dvhub“ lehnt der Server ab).
+          if (typeof body.clientType !== 'string' || !DATENSPENDE_CLIENT_TYPES.includes(body.clientType)) {
             return json(res, 400, { ok: false, error: 'clientType_ungueltig' });
           }
           patch.clientType = body.clientType;

@@ -39,7 +39,7 @@ const INTENTIONAL = new Map([
   ['ortsnetz.latitude', 'Ortsnetz-Kachel (#onLat; leer = Prognose-Standort)'],
   ['ortsnetz.longitude', 'Ortsnetz-Kachel (#onLon; leer = Prognose-Standort)'],
   ['datenspende.intervalSec', 'Experten-Wert ohne UI (/api/datenspende/settings, 5…300 s, Default 10)'],
-  ['datenspende.clientType', 'Experten-Wert ohne UI (Client-Typ beim Projekt, mit COMSYS abstimmen)'],
+  ['datenspende.clientType', 'Experten-Wert ohne UI (Client-Typ beim Datenportal, Standard victron)'],
   ['datenspende.sources.grid', 'Datenspende-Kachel (#dsSources)'],
   ['datenspende.sources.gridVoltage', 'Datenspende-Kachel (#dsSources)'],
   ['datenspende.sources.pv', 'Datenspende-Kachel (#dsSources)'],

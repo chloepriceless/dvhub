@@ -248,3 +248,74 @@ test('settings: Quelle gridVoltage (Netzspannung) abwählbar; Oberfläche nennt 
   const { createDefaultConfig } = await import('../config-model.js');
   assert.equal(createDefaultConfig().datenspende.sources.gridVoltage, true);
 });
+
+test('#31 settings: clientType nur bekannte Portal-Typen (dvhub kennt der Server nicht)', async () => {
+  const s = setup({ linked: true });
+  const { j } = await s.call(makeReq('/api/datenspende/status'));
+  const bad = await s.call(makeReq('/api/datenspende/settings', { method: 'POST', body: { clientType: 'dvhub', uiToken: j.uiToken } }));
+  assert.equal(bad.status, 400);
+  const ok = await s.call(makeReq('/api/datenspende/settings', { method: 'POST', body: { clientType: 'victron', uiToken: j.uiToken } }));
+  assert.equal(ok.status, 200);
+  assert.equal(s.raw().datenspende.clientType, 'victron');
+});
+
+test('#31 Config: Standard-Client-Typ victron, gespeichertes dvhub wird beim Laden gehoben', async () => {
+  const { createDefaultConfig, normalizeConfigInput } = await import('../config-model.js');
+  assert.equal(createDefaultConfig().datenspende.clientType, 'victron');
+  const n = normalizeConfigInput({ datenspende: { enabled: true, clientType: 'dvhub' } });
+  assert.equal(n.rawConfig.datenspende.clientType, 'victron', 'Rohwert gehoben → wird so gespeichert');
+  assert.equal(n.effectiveConfig.datenspende.clientType, 'victron');
+  assert.equal(n.rawConfig.datenspende.enabled, true, 'Rest unverändert');
+  assert.equal(normalizeConfigInput({ datenspende: { clientType: 'home_assistant' } }).rawConfig.datenspende.clientType, 'home_assistant');
+});
+
+// GH #31: Portal-Schlüssel als erster, empfohlener Weg; Hilfetexte.
+// Die Seite schreibt Umlaute als HTML-Entitäten — für die Prüfung auflösen.
+const ENT = { auml: 'ä', ouml: 'ö', uuml: 'ü', Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü', szlig: 'ß', bdquo: '„', ldquo: '“', rsquo: '’', rarr: '→', mdash: '—', nbsp: ' ', amp: '&' };
+const decodeHtml = (t) => t.replace(/&([a-zA-Z]+);/g, (m, n) => ENT[n] ?? m);
+test('#31 Oberfläche: „Schlüssel aus dem Datenportal“ zuerst und empfohlen, mit Link und Schritten', async () => {
+  const fs = await import('node:fs');
+  const html = decodeHtml(fs.readFileSync(new URL('../public/settings.html', import.meta.url), 'utf8'));
+  const sel = html.match(/<select id="dsMode"[^>]*>([\s\S]*?)<\/select>/);
+  assert.ok(sel);
+  const opts = [...sel[1].matchAll(/<option value="([a-z]+)">([^<]*)<\/option>/g)].map((m) => [m[1], m[2]]);
+  assert.equal(opts[0][0], 'apikey', 'Portal-Schlüssel ist die erste Option');
+  assert.match(opts[0][1], /Datenportal/);
+  assert.match(opts[0][1], /empfohlen/);
+  const help = html.match(/<small id="dsApiKeyHelp"[^>]*>([\s\S]*?)<\/small>/);
+  assert.ok(help, 'Hilfe zum Portal-Schlüssel');
+  assert.match(help[1], /href="https:\/\/datenspende\.comsys\.rwth-aachen\.de\/portal\/"/);
+  assert.match(help[1], /Victron/);
+  assert.match(help[1], /Schlüssel erzeugen/);
+  assert.match(html, /id="dsHouseholdRow"/, 'Haushalt-Zeile ausblendbar (im Portal angelegt)');
+  const js = fs.readFileSync(new URL('../public/tools.js', import.meta.url), 'utf8');
+  assert.match(js, /dsEl\('dsHouseholdRow'\)\.hidden = apikey/);
+  assert.match(js, /dsEl\('dsApiKeyHelp'\)\.hidden = !apikey/);
+});
+
+test('#31 Hilfetexte: E-Mail freiwillig/ein Konto je E-Mail, mehrere Anlagen in EIN Konto, leere Haushalte im Portal löschen', async () => {
+  const fs = await import('node:fs');
+  const html = decodeHtml(fs.readFileSync(new URL('../public/settings.html', import.meta.url), 'utf8'));
+  const email = html.match(/<small id="dsEmailHelp"[^>]*>([\s\S]*?)<\/small>/);
+  assert.ok(email);
+  assert.match(email[1], /freiwillig/);
+  assert.match(email[1], /nur ein Konto/);
+  const multi = html.match(/<small id="dsMultiHelp"[^>]*>([\s\S]*?)<\/small>/);
+  assert.ok(multi);
+  assert.match(multi[1], /EIN Konto/);
+  assert.match(multi[1], /Vorhandenes Konto verwenden/);
+  assert.match(multi[1], /Haushalt/);
+  assert.match(html, /leere[nr]? Haushalt[\s\S]{0,200}Datenportal[\s\S]{0,40}löschen/);
+  const js = fs.readFileSync(new URL('../public/tools.js', import.meta.url), 'utf8');
+  const hint = js.match(/taken_email: '([^']*)'/);
+  assert.ok(hint);
+  assert.match(hint[1], /nur ein Konto/);
+  assert.match(hint[1], /Vorhandenes Konto verwenden/);
+  // Nach Haushalt angelegt, aber Client/Schlüssel gescheitert: Hinweis auf den leeren Haushalt.
+  const m = js.match(/function datenspendeFailureText\(r, hints\) \{[\s\S]*?\n\}/);
+  const fn = new Function(`${m[0]}; return datenspendeFailureText;`)();
+  const t = fn({ status: 400, j: { error: 'bad_request', step: 'clients', stepLabel: 'Client anlegen', detail: '400 bad_request: Invalid input format: null' } }, {});
+  assert.match(t, /leere[nr]? Haushalt/);
+  assert.match(t, /Datenportal/);
+  assert.doesNotMatch(fn({ status: 401, j: { error: 'invalid_credentials', step: 'sign-in', stepLabel: 'Anmelden' } }, {}), /Haushalt/);
+});

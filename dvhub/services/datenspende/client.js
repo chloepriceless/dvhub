@@ -15,6 +15,20 @@ import zlib from 'node:zlib';
 
 export const DATENSPENDE_BASE_URL = 'https://datenspende.comsys.rwth-aachen.de';
 export const MEASUREMENT_FIELDS = ['power', 'energy', 'voltage', 'current'];
+// Client-Typen, die das COMSYS-Datenportal kennt (Bundle portal/assets/index-*.js,
+// Stand 05.11.2026: home_assistant, victron, openhab, shelly; „unknown“ nur als
+// Anzeige-Rückfall, beim Anlegen nie verwendet). DVhub schickte bis 1.0.9
+// „dvhub“ — den Typ kennt der Server nicht (GH #31: 400 „Invalid input format:
+// null“ im Schritt clients). Standard ist deshalb „victron“: das Portal führt
+// Victron als eigene Integration („Der Schlüssel erlaubt die Verbindung Ihrer
+// Victron-Anlage“). Auch Nicht-Victron-Anlagen melden sich so an, solange es
+// keinen passenderen Typ gibt — „unknown“ legt das Portal selbst nie an.
+export const CLIENT_TYPES = Object.freeze(['victron', 'home_assistant', 'openhab', 'shelly', 'unknown']);
+export const DEFAULT_CLIENT_TYPE = 'victron';
+export function normalizeClientType(v) {
+  const t = String(v ?? '').trim();
+  return CLIENT_TYPES.includes(t) ? t : DEFAULT_CLIENT_TYPE;
+}
 // Unter dieser Größe kostet der gzip-Rahmen mehr, als er spart.
 const GZIP_MIN_BYTES = 1024;
 const TIMEOUT_MS = 5_000;

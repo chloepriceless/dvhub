@@ -617,20 +617,23 @@
                   <span class="config-row-label">Konto</span>
                   <div class="config-row-stack">
                     <select id="dsMode" class="config-input">
+                      <option value="apikey">Schlüssel aus dem Datenportal (empfohlen)</option>
                       <option value="signup">Neues Konto beim Projekt anlegen</option>
-                      <option value="signin">Vorhandenes Konto verwenden</option>
-                      <option value="apikey">Vorhandenen API-Key verwenden</option>
+                      <option value="signin">Vorhandenes Konto verwenden (weitere Anlage)</option>
                     </select>
-                    <input id="dsApiKey" class="config-input" type="password" placeholder="API-Key vom Projekt" autocomplete="off" spellcheck="false" hidden />
+                    <input id="dsApiKey" class="config-input" type="password" placeholder="Schlüssel aus dem Datenportal" autocomplete="off" spellcheck="false" />
+                    <small id="dsApiKeyHelp" class="config-row-stack-small">So geht&rsquo;s: Im <a href="https://datenspende.comsys.rwth-aachen.de/portal/" target="_blank" rel="noopener">Datenportal</a> registrieren oder anmelden &rarr; &bdquo;Einrichtung&ldquo; &rarr; &bdquo;Victron Energy&ldquo; w&auml;hlen &rarr; Angaben zum Haushalt machen &rarr; &bdquo;Anlegen und Schl&uuml;ssel erzeugen&ldquo; &rarr; den Schl&uuml;ssel kopieren (er wird nur einmal angezeigt) und hier einf&uuml;gen. DVhub pr&uuml;ft ihn beim Projekt und meldet nur noch die Z&auml;hler an &mdash; Konto und Haushalt legst du im Portal selbst an. F&uuml;r jede weitere Anlage im Portal einen eigenen Haushalt mit eigenem Schl&uuml;ssel anlegen.</small>
                     <input id="dsUsername" class="config-input" placeholder="Benutzername" autocomplete="username" spellcheck="false" />
                     <input id="dsPassword" class="config-input" type="password" placeholder="Passwort" autocomplete="new-password" />
-                    <input id="dsEmail" class="config-input" type="email" placeholder="E-Mail (optional)" autocomplete="email" />
+                    <input id="dsEmail" class="config-input" type="email" placeholder="E-Mail (freiwillig)" autocomplete="email" />
+                    <small id="dsEmailHelp" class="config-row-stack-small">Die E-Mail ist freiwillig (z.&nbsp;B. zum Zur&uuml;cksetzen des Passworts). Je E-Mail-Adresse gibt es beim Projekt nur ein Konto.</small>
+                    <small id="dsMultiHelp" class="config-row-stack-small">Mehrere Anlagen geh&ouml;ren in EIN Konto: f&uuml;r jede weitere Anlage &bdquo;Vorhandenes Konto verwenden&ldquo; w&auml;hlen &mdash; DVhub legt dann je Anlage einen eigenen Haushalt an. Ein gescheiterter Versuch kann einen leeren Haushalt hinterlassen; den kannst du im <a href="https://datenspende.comsys.rwth-aachen.de/portal/" target="_blank" rel="noopener">Datenportal</a> l&ouml;schen.</small>
                     <input id="dsSecret" class="config-input" placeholder="Anmelde-Schlüssel vom Projekt (optional)" autocomplete="off" spellcheck="false" />
                     <small id="dsSecretHelp" class="config-row-stack-small">Anmelde-Schlüssel: nur beim Anlegen eines neuen Kontos und nur, wenn dir das Projekt einen gegeben hat (in der Home-Assistant-Integration heißt er &bdquo;Sign-up key&ldquo;). Sonst leer lassen &mdash; das Feld ist optional. Er ist weder Passwort noch API-Key.</small>
                     <small class="config-row-stack-small">Das Passwort wird nur für die Einrichtung verwendet und von DVhub nicht gespeichert.</small>
                   </div>
                 </div>
-                <div class="config-row">
+                <div class="config-row" id="dsHouseholdRow">
                   <span class="config-row-label">Haushalt (alles optional)</span>
                   <div class="config-row-stack">
                     <input id="dsHouseName" class="config-input" placeholder="Name des Haushalts" autocomplete="off" />

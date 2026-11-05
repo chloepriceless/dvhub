@@ -32,7 +32,7 @@ import path from 'node:path';
 import { findHistoryBounds, readSlotWindow, readLiveWindow } from './history.js';
 import { freshGridVoltage } from '../grid-voltage.js';
 import {
-  createDatenspendeClient, DATENSPENDE_BASE_URL,
+  createDatenspendeClient, DATENSPENDE_BASE_URL, normalizeClientType,
   DatenspendeRequestError, DatenspendeDuplicateError, DatenspendeServerError, DatenspendeAuthError,
 } from './client.js';
 
@@ -226,7 +226,8 @@ export function createDatenspende(ctx = {}, deps = {}) {
     return {
       enabled: ds.enabled === true,
       intervalSec: Number.isFinite(iv) ? Math.min(300, Math.max(5, Math.round(iv))) : DEFAULT_INTERVAL_SEC,
-      clientType: String(ds.clientType || 'dvhub').trim() || 'dvhub',
+      // GH #31: Altwert „dvhub“ (und Unbekanntes) → victron.
+      clientType: normalizeClientType(ds.clientType),
     };
   }
 
@@ -527,7 +528,9 @@ export function createDatenspende(ctx = {}, deps = {}) {
   async function linkApiKey({ apiKey, consent }) {
     if (consent !== true) throw new DatenspendeAuthError('Ohne Einwilligung keine Teilnahme', 'consent_required');
     const key = String(apiKey || '').trim();
-    if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new DatenspendeRequestError('API-Key-Format ungültig', 'invalid_api_key');
+    // Das Format der Portal-Schlüssel ist nicht dokumentiert (GH #31): jedes
+    // druckbare ASCII-Zeichen ohne Leerraum — geprüft wird der Key beim Server.
+    if (!/^[\x21-\x7e]{16,512}$/.test(key)) throw new DatenspendeRequestError('API-Key-Format ungültig', 'invalid_api_key');
     const gen = ++linkGen;
     const clientId = await linkStep('api-key-check', [key], async () => requireSetupId(
       await client.getClientId(key), 'api-key-check', 'Client-ID'

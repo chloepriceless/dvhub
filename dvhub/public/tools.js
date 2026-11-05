@@ -1823,7 +1823,11 @@ function datenspendeFailureText(r, hints) {
   const hint = hints[j.error] || '';
   const detail = j.detail ? String(j.detail) : '';
   const body = hint && detail ? `${hint} (${detail})` : (hint || detail || j.error || `HTTP ${r && r.status}`);
-  return `Fehler${where}: ${body}`;
+  // Der Haushalt war schon angelegt, als Client/Schlüssel scheiterte.
+  const leftover = j.step === 'clients' || j.step === 'api-key'
+    ? ' Dabei kann im Konto ein leerer Haushalt zurückgeblieben sein — den kannst du im Datenportal (datenspende.comsys.rwth-aachen.de/portal) löschen.'
+    : '';
+  return `Fehler${where}: ${body}${leftover}`;
 }
 
 function wireDatenspende() {
@@ -1838,7 +1842,7 @@ function wireDatenspende() {
     const password = dsEl('dsPassword').value;
     const apiKey = dsEl('dsApiKey').value.trim();
     if (mode === 'apikey' ? !apiKey : (!username || !password)) {
-      setText('dsResult', mode === 'apikey' ? 'API-Key eintragen.' : 'Benutzername und Passwort eintragen.');
+      setText('dsResult', mode === 'apikey' ? 'Schlüssel aus dem Datenportal eintragen.' : 'Benutzername und Passwort eintragen.');
       return;
     }
     setText('dsResult', 'Verbinde mit dem Projekt…');
@@ -1864,7 +1868,9 @@ function wireDatenspende() {
       invalid_credentials: 'Benutzername oder Passwort falsch.',
       password_too_short: 'Passwort zu kurz.',
       invalid_secret: 'Anmelde-Schlüssel ungültig.',
-      taken_email: 'E-Mail ist beim Projekt schon registriert.',
+      taken_email: 'Diese E-Mail-Adresse gehört schon zu einem Konto beim Projekt — je E-Mail gibt es nur ein Konto. „Vorhandenes Konto verwenden“ wählen (weitere Anlagen gehören in dasselbe Konto) oder das Feld E-Mail leer lassen.',
+      invalid_api_key: 'Schlüssel unvollständig oder mit Leerzeichen kopiert — im Datenportal erneut kopieren.',
+      unauthorized: 'Schlüssel wird vom Projekt nicht angenommen — im Datenportal einen neuen Schlüssel erzeugen.',
       connection_error: 'Projekt-Server nicht erreichbar — Internetverbindung prüfen.',
     };
     setText('dsResult', r.ok ? '✓ Verbunden — die Spende läuft. Danke!' : datenspendeFailureText(r, hints));
@@ -1886,10 +1892,15 @@ function wireDatenspende() {
   const syncMode = () => {
     const mode = dsEl('dsMode').value;
     const apikey = mode === 'apikey';
-    for (const id of ['dsUsername', 'dsPassword', 'dsEmail']) dsEl(id).hidden = apikey;
+    for (const id of ['dsUsername', 'dsPassword', 'dsMultiHelp']) dsEl(id).hidden = apikey;
+    // E-Mail nur beim Anlegen eines Kontos (sign-up), wie der Anmelde-Schlüssel.
+    for (const id of ['dsEmail', 'dsEmailHelp']) dsEl(id).hidden = mode !== 'signup';
     // Anmelde-Schlüssel gilt nur beim Anlegen eines Kontos (COMSYS sign-up).
     for (const id of ['dsSecret', 'dsSecretHelp']) { const f = dsEl(id); if (f) f.hidden = mode !== 'signup'; }
     dsEl('dsApiKey').hidden = !apikey;
+    dsEl('dsApiKeyHelp').hidden = !apikey;
+    // Portal-Schlüssel: Haushalt ist im Datenportal angelegt.
+    dsEl('dsHouseholdRow').hidden = apikey;
   };
   dsEl('dsMode')?.addEventListener('change', syncMode);
   syncMode();
