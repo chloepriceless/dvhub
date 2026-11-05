@@ -983,57 +983,65 @@ test('EOS adapter reaches EOS at an IPv6 literal (http://[::1]:port)', async (t)
 // der Steuerzeitraum bis zur Abfahrt in geschätzte Preise, setzt DVhub aus
 // diesen Slots keine Akku-Regeln um — bis sie dran sind, hat EOS mit echten
 // Preisen neu gerechnet. Ohne Kennzeichnung bleibt alles wie bisher.
-test('pullGridSetpoints: keine Regeln aus Slots mit geschätzten Preisen (eosRun.lastPlanControl.estimatedFrom)', async () => {
-  const solution = {
-    solution: {
-      data: {
-        '2026-06-06T21:45:00Z': { battery1_soc_factor: 0.9, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3000 },
-        '2026-06-06T22:00:00Z': { battery1_soc_factor: 0.8, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3000 },
-        '2026-06-06T22:15:00Z': { battery1_soc_factor: 0.7, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3000 },
-      },
-    },
-    prediction: { data: {
-      '2026-06-06T21:45:00Z': { feed_in_tariff_amt_kwh: 0.2 },
-      '2026-06-06T22:00:00Z': { feed_in_tariff_amt_kwh: 0.2 },
-      '2026-06-06T22:15:00Z': { feed_in_tariff_amt_kwh: 0.2 },
-    } },
-  };
-  const mock = await createMockEos((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(solution)); });
-  try {
-    const ctx = { ...makeCtx(`http://127.0.0.1:${mock.port}`), state: { optimizer: { eosRun: { lastPlanControl: { hours: 17, estimatedFrom: '2026-06-06T22:00:00.000Z' } } } } };
-    let slots = await createEosAdapter(ctx).pullGridSetpoints();
-    assert.deepEqual(slots.map((s) => new Date(s.ts).toISOString()), ['2026-06-06T21:45:00.000Z']);
-    ctx.state.optimizer.eosRun.lastPlanControl = { hours: 9, estimatedFrom: null };
-    slots = await createEosAdapter(ctx).pullGridSetpoints();
-    assert.equal(slots.length, 3, 'ohne geschätzte Preise im Plan alles wie bisher');
-  } finally {
-    await mock.close();
-  }
-});
-
-// Codex-Gegenprüfung 3a14d90c (P2): Die Grenze darf nicht an fehlenden
-// Lauf-Angaben scheitern — Lösung schon da, bevor der Lauf-Aufruf antwortet
-// (Angabe des laufenden Laufs), oder DVhub neu gestartet (Ende der echten
-// Preise aus dem letzten Push).
-test('pullGridSetpoints: Grenze auch aus dem laufenden Lauf und aus dem Ende der echten Preise', async () => {
+// Die Grenze gehört zum Plan (generated_at): Lauf-Angaben zählen nur für den
+// Plan aus genau diesem Lauf (Codex 8ecb4fa9 / Gesamtprüfung 1.0.10).
+const EST_ROWS = ['2026-06-06T21:45:00Z', '2026-06-06T22:00:00Z', '2026-06-06T22:15:00Z'];
+function estimateSolution(generatedAt) {
   const data = {};
   const pred = {};
-  for (const ts of ['2026-06-06T21:45:00Z', '2026-06-06T22:00:00Z', '2026-06-06T22:15:00Z']) {
+  for (const ts of EST_ROWS) {
     data[ts] = { battery1_soc_factor: 0.8, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3000 };
     pred[ts] = { feed_in_tariff_amt_kwh: 0.2 };
   }
-  const solution = { solution: { data }, prediction: { data: pred } };
-  const mock = await createMockEos((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(solution)); });
+  return { generated_at: generatedAt, solution: { data }, prediction: { data: pred } };
+}
+async function slotsWith(state, generatedAt) {
+  const mock = await createMockEos((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(estimateSolution(generatedAt))); });
   try {
-    const base = makeCtx(`http://127.0.0.1:${mock.port}`);
-    const iso = (s) => s.map((x) => new Date(x.ts).toISOString());
-    // Lauf rechnet noch, Plan aber schon da: Angabe des laufenden Laufs.
-    let ctx = { ...base, state: { optimizer: { eosRun: { inFlight: true, runControl: { estimatedFrom: '2026-06-06T22:00:00.000Z' }, lastPlanControl: { estimatedFrom: null } } } } };
-    assert.deepEqual(iso(await createEosAdapter(ctx).pullGridSetpoints()), ['2026-06-06T21:45:00.000Z']);
-    // Nach einem Neustart keine Lauf-Angaben: Ende der echten Preise aus dem Push.
-    ctx = { ...base, state: { optimizer: { eosRealPriceEnd: '2026-06-06T22:15:00.000Z' } } };
-    assert.deepEqual(iso(await createEosAdapter(ctx).pullGridSetpoints()), ['2026-06-06T21:45:00.000Z', '2026-06-06T22:00:00.000Z']);
+    const ctx = { ...makeCtx(`http://127.0.0.1:${mock.port}`), state };
+    const slots = await createEosAdapter(ctx).pullGridSetpoints();
+    return slots.map((x) => new Date(x.ts).toISOString());
   } finally {
     await mock.close();
   }
+}
+const ALL3 = ['2026-06-06T21:45:00.000Z', '2026-06-06T22:00:00.000Z', '2026-06-06T22:15:00.000Z'];
+const FIRST1 = ['2026-06-06T21:45:00.000Z'];
+const ms = (iso) => Date.parse(iso);
+
+test('pullGridSetpoints: keine Regeln aus Slots mit geschätzten Preisen (Plan aus dem letzten Lauf)', async () => {
+  const run = (estimatedFrom) => ({ eosRun: { lastPlanControl: { hours: 17, estimatedFrom, runStartedAt: ms('2026-06-06T20:00:00Z'), runDoneAt: ms('2026-06-06T20:10:00Z') } } });
+  assert.deepEqual(await slotsWith({ optimizer: run('2026-06-06T22:00:00.000Z') }, '2026-06-06T20:09:30Z'), FIRST1);
+  assert.deepEqual(await slotsWith({ optimizer: run(null) }, '2026-06-06T20:09:30Z'), ALL3, 'ohne geschätzte Preise im Plan alles wie bisher');
+});
+
+// Codex-Gegenprüfung 3a14d90c (P2): Lösung schon da, bevor der Lauf-Aufruf
+// antwortet — dann gilt die Angabe des laufenden Laufs.
+test('pullGridSetpoints: Grenze aus dem laufenden Lauf, wenn der Plan aus ihm stammt', async () => {
+  const state = { optimizer: { eosRun: { inFlight: true, startedAt: ms('2026-06-06T21:00:00Z'), runControl: { estimatedFrom: '2026-06-06T22:00:00.000Z' }, lastPlanControl: { estimatedFrom: null, runStartedAt: ms('2026-06-06T19:00:00Z'), runDoneAt: ms('2026-06-06T19:10:00Z') } } } };
+  assert.deepEqual(await slotsWith(state, '2026-06-06T21:20:00Z'), FIRST1);
+});
+
+// Gesamtprüfung 1.0.10 / Codex 8ecb4fa9 (P2): Nach einem DVhub-Neustart fehlen
+// die Lauf-Angaben, EOS liefert aber noch den alten Plan (mit geschätzten Preisen
+// gerechnet). Kommen inzwischen die echten Preise für morgen, darf das Ende der
+// JETZT echten Preise den alten Plan nicht freischalten.
+test('pullGridSetpoints: nach Neustart schalten neue echte Preise einen alten Plan nicht frei', async () => {
+  const state = { optimizer: { eosRealPriceEnd: '2026-06-07T22:00:00.000Z', eosRealPriceEnds: [{ at: ms('2026-06-07T11:30:00Z'), end: '2026-06-07T22:00:00.000Z' }] } };
+  // Plan von 23:00 Berlin, vor dem Neustart: echte Preise reichten sicher nur bis Mitternacht.
+  assert.deepEqual(await slotsWith(state, '2026-06-06T21:00:00Z'), FIRST1);
+});
+
+// Codex 8ecb4fa9 (P2): Die Grenze eines alten Laufs gilt nicht für spätere Pläne
+// (z. B. nach dem Umstellen auf „EOS rechnet nach eigenem Takt“) — sonst fiele
+// jede Regel hinter die alte Grenze weg, sobald die Zeit sie erreicht.
+test('pullGridSetpoints: Grenze eines alten Laufs gilt nicht für einen späteren Plan', async () => {
+  const state = { optimizer: {
+    eosRun: { inFlight: false, lastPlanControl: { estimatedFrom: '2026-06-06T22:00:00.000Z', runStartedAt: ms('2026-06-06T09:50:00Z'), runDoneAt: ms('2026-06-06T10:00:00Z') }, runControl: { estimatedFrom: '2026-06-06T22:00:00.000Z' }, startedAt: ms('2026-06-06T09:50:00Z') },
+    eosRealPriceEnd: '2026-06-07T22:00:00.000Z',
+    eosRealPriceEnds: [{ at: ms('2026-06-06T09:00:00Z'), end: '2026-06-06T22:00:00.000Z' }, { at: ms('2026-06-06T11:30:00Z'), end: '2026-06-07T22:00:00.000Z' }],
+  } };
+  assert.deepEqual(await slotsWith(state, '2026-06-06T21:30:00Z'), ALL3);
+  // Plan aus EOS' eigenem Takt kurz nach dem neuen Preis-Push: Preise des Laufs unbekannt → alte Grenze.
+  assert.deepEqual(await slotsWith(state, '2026-06-06T12:00:00Z'), FIRST1);
 });

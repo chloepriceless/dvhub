@@ -8,6 +8,8 @@ import { getPowerLimits } from '../power-limits.js';
 // Zweite GX am selben Anschluss: Plan-Umrechnung mit der Leistung beider Akkus.
 import { planningCfg } from '../multi-gx/planning.js';
 import { requestHostname } from '../host-address.js';
+import { planControlFor, PLAN_MATCH_SLACK_MS } from './eos-run-trigger.js';
+import { zoneOffsetMs } from '../../tz-fast.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -67,6 +69,74 @@ export function setEosRemoteFacadeUrl(url) {
  * @param {number} [opts.timeoutMs=30000] - HTTP request timeout in ms
  * @returns {{ pushForecast: Function, pullSchedule: Function, isAvailable: Function }}
  */
+// ── Grenze der geschätzten Preise je Plan (DVhub 1.0.10) ─────────────────────
+// Ein Plan kann im Steuerzeitraum geschätzte Preise enthalten (E-Auto-Frist,
+// eos-forecast-bridge extendForEvDeadline). Aus diesen Slots setzt DVhub keine
+// Akku-Regeln um. Welche Grenze gilt, hängt am Plan selbst (generated_at):
+//   1. Plan aus dem letzten fertigen Lauf (eosRun.lastPlanControl, Zeitfenster
+//      des Laufs): dessen estimatedFrom.
+//   2. Plan aus dem gerade rechnenden Lauf (Lösung vor der Antwort auf den
+//      Lauf-Aufruf, Codex 3a14d90c): dessen runControl.estimatedFrom.
+//   3. Sonst (EOS' eigener Takt, nach einem DVhub-Neustart, ohne generated_at):
+//      Lauf-Angaben unbekannt. Grenze = Ende der echten Preise, das zum Beginn
+//      des Laufs galt — spätestens EOS_UNKNOWN_RUN_LOOKBACK_MS vor dem Plan
+//      (eosRealPriceEnds, vom Preis-Push gesammelt). Ist dafür nichts bekannt
+//      (Neustart), mindestens bis Mitternacht des Tages: der Day-Ahead für heute
+//      lag immer vor.
+// Das Ende der JETZT echten Preise (eosRealPriceEnd) begrenzt zusätzlich, schaltet
+// aber nie einen Plan frei, der mit geschätzten Preisen gerechnet wurde (Codex
+// 8ecb4fa9: alter Plan nach Neustart; Grenze eines alten Laufs hielt später
+// jeden Plan auf).
+export const EOS_UNKNOWN_RUN_LOOKBACK_MS = 2 * 3600 * 1000;
+
+function berlinDayEndMs(tsMs) {
+  const DAY = 86400000;
+  const off = zoneOffsetMs(tsMs);
+  const localMidnightNext = Math.floor((tsMs + off) / DAY) * DAY + DAY;
+  const guess = localMidnightNext - off;
+  return localMidnightNext - zoneOffsetMs(guess);
+}
+
+/** Ende der echten Preise, das zum Zeitpunkt atMs galt (null = unbekannt). */
+function realPriceEndAt(history, atMs) {
+  if (!Array.isArray(history)) return null;
+  let best = null;
+  for (const h of history) {
+    const at = Number(h?.at);
+    const end = Date.parse(h?.end || '');
+    if (!Number.isFinite(at) || !Number.isFinite(end) || at > atMs) continue;
+    if (!best || at > best.at) best = { at, end };
+  }
+  return best ? best.end : null;
+}
+
+/**
+ * Erster Zeitpunkt, ab dem die Slots dieses Plans mit geschätzten Preisen
+ * gerechnet sind (ms) oder NaN (keine Grenze bekannt / keine Schätzung).
+ * @param {{generatedAt?: string|null}} sol  Lösung (getOptimizationSolution)
+ * @param {object} opt  state.optimizer
+ * @param {number} nowMs
+ */
+export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now()) {
+  const cutoffs = [Date.parse(opt?.eosRealPriceEnd || '')];
+  const run = opt?.eosRun || {};
+  const generatedMs = Date.parse(sol?.generatedAt || '');
+  const matched = planControlFor(run.lastPlanControl, generatedMs);
+  const startedAt = Number(run.startedAt);
+  if (matched) {
+    cutoffs.push(Date.parse(matched.estimatedFrom || ''));
+  } else if (run.inFlight === true && Number.isFinite(generatedMs) && Number.isFinite(startedAt)
+    && generatedMs >= startedAt - PLAN_MATCH_SLACK_MS) {
+    cutoffs.push(Date.parse(run.runControl?.estimatedFrom || ''));
+  } else {
+    const refMs = (Number.isFinite(generatedMs) ? generatedMs : nowMs) - EOS_UNKNOWN_RUN_LOOKBACK_MS;
+    const known = realPriceEndAt(opt?.eosRealPriceEnds, refMs);
+    cutoffs.push(known != null ? known : berlinDayEndMs(refMs));
+  }
+  const finite = cutoffs.filter(Number.isFinite);
+  return finite.length ? Math.min(...finite) : NaN;
+}
+
 export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const { getCfg } = ctx;
 
@@ -588,16 +658,9 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // Preise, kommen aus diesen Slots keine Akku-Regeln — bis sie dran sind,
     // hat EOS mit echten Preisen neu gerechnet. Das Laden des Autos selbst
     // (eos-evcc-bridge) folgt weiter dem Plan.
-    // Grenze = frühester bekannter Beginn geschätzter Preise: aus dem Plan des
-    // letzten Laufs, aus dem gerade rechnenden (dessen Lösung kann vor der
-    // Antwort auf den Lauf-Aufruf da sein) und — ohne Lauf-Angaben, z. B. nach
-    // einem DVhub-Neustart — das Ende der echten Preise aus dem letzten Push
-    // (Codex-Gegenprüfung 3a14d90c). Echte Preise enden nie früher als zuvor,
-    // ein Plan ohne geschätzte Preise ist davon nicht betroffen.
-    const opt = ctx.state?.optimizer || {};
-    const cutoffs = [opt.eosRun?.lastPlanControl?.estimatedFrom, opt.eosRun?.runControl?.estimatedFrom, opt.eosRealPriceEnd]
-      .map((v) => Date.parse(v || '')).filter(Number.isFinite);
-    const estimatedFromMs = cutoffs.length ? Math.min(...cutoffs) : NaN;
+    // Grenze gehört zum Plan (generated_at), nicht zum Prozess (Codex 8ecb4fa9,
+    // Gesamtprüfung 1.0.10): estimatedPriceCutoffMs.
+    const estimatedFromMs = estimatedPriceCutoffMs(sol, ctx.state?.optimizer || {}, Date.now());
     const out = [];
     for (let ri = 0; ri < sol.rows.length; ri++) {
       const r = sol.rows[ri];

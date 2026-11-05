@@ -1582,7 +1582,17 @@ export function createEosForecastBridge(ctx) {
     // Ende der echten Preise: Grenze für die Regel-Umsetzung, wenn zum
     // gezeigten Plan keine Lauf-Angaben vorliegen (eos-adapter, nach einem
     // DVhub-Neustart; Codex-Gegenprüfung 3a14d90c).
-    if (state && Number.isFinite(realEndMs)) { state.optimizer = state.optimizer || {}; state.optimizer.eosRealPriceEnd = new Date(realEndMs).toISOString(); }
+    // Verlauf (eosRealPriceEnds): für Pläne ohne Lauf-Angaben die Grenze, die
+    // zum Beginn ihres Laufs galt (eos-adapter estimatedPriceCutoffMs, Codex 8ecb4fa9).
+    if (state && Number.isFinite(realEndMs)) {
+      state.optimizer = state.optimizer || {};
+      const endIso = new Date(realEndMs).toISOString();
+      state.optimizer.eosRealPriceEnd = endIso;
+      const hist = Array.isArray(state.optimizer.eosRealPriceEnds) ? state.optimizer.eosRealPriceEnds : [];
+      if (!hist.length || hist[hist.length - 1].end !== endIso) {
+        state.optimizer.eosRealPriceEnds = [...hist, { at: Date.now(), end: endIso }].slice(-16);
+      }
+    }
     {
       const sentEndMs = priceEstimate ? Date.parse(priceEstimate.until) : realEndMs;
       const clear = await clearStaleEstimates(baseUrl, { sentEndMs, nowMs: Date.now(), gone });
