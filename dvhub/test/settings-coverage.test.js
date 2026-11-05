@@ -41,6 +41,7 @@ const INTENTIONAL = new Map([
   ['datenspende.intervalSec', 'Experten-Wert ohne UI (/api/datenspende/settings, 5…300 s, Default 10)'],
   ['datenspende.clientType', 'Experten-Wert ohne UI (Client-Typ beim Projekt, mit COMSYS abstimmen)'],
   ['datenspende.sources.grid', 'Datenspende-Kachel (#dsSources)'],
+  ['datenspende.sources.gridVoltage', 'Datenspende-Kachel (#dsSources)'],
   ['datenspende.sources.pv', 'Datenspende-Kachel (#dsSources)'],
   ['datenspende.sources.load', 'Datenspende-Kachel (#dsSources)'],
   ['datenspende.sources.battery', 'Datenspende-Kachel (#dsSources)'],

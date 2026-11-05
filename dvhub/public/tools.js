@@ -1626,7 +1626,7 @@ function wireInputPush() {
 let dsUiToken = null;
 let dsTimer = null;
 const DS_SOURCE_LABELS = {
-  grid: 'Netzanschluss', pv: 'PV-Erzeugung', load: 'Hausverbrauch', battery: 'Batterie',
+  grid: 'Netzanschluss', gridVoltage: 'Netzspannung (L1–L3)', pv: 'PV-Erzeugung', load: 'Hausverbrauch', battery: 'Batterie',
   devices: 'Geräte (Shelly/MQTT)', mqttTiles: 'MQTT-Kacheln (W)', wallbox: 'Wallbox (evcc)',
 };
 const dsEl = (id) => document.getElementById(id);
@@ -1697,7 +1697,9 @@ function renderDatenspende(st) {
       name.textContent = p.name;
       const val = document.createElement('span');
       val.className = 'installer-portal-meta';
-      val.textContent = `${Math.round(p.power)} W${p.energy != null ? ` · ${p.energy} kWh` : ''}`;
+      val.textContent = p.voltage != null
+        ? `${Number(p.voltage).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} V`
+        : `${Math.round(p.power)} W${p.energy != null ? ` · ${p.energy} kWh` : ''}`;
       row.append(name, val);
       pv.appendChild(row);
     }

@@ -231,3 +231,20 @@ test('#31 Oberfläche: fester Hinweis + Details (Grund, Server-Meldung) zusammen
   assert.equal((u.match(/Invalid input format/g) || []).length, 1, 'Detail nicht doppelt');
   assert.match(fn({ status: 500, j: {} }, hints), /500/);
 });
+
+// 05.11.2026: Netzspannung je Phase als eigene, abwählbare Quelle.
+test('settings: Quelle gridVoltage (Netzspannung) abwählbar; Oberfläche nennt Spannung', async () => {
+  const s = setup({ linked: true });
+  const { j } = await s.call(makeReq('/api/datenspende/status'));
+  const r = await s.call(makeReq('/api/datenspende/settings', { method: 'POST', body: { sources: { gridVoltage: false }, uiToken: j.uiToken } }));
+  assert.equal(r.status, 200);
+  assert.deepEqual(s.raw().datenspende.sources, { gridVoltage: false });
+  const fs = await import('node:fs');
+  const js = fs.readFileSync(new URL('../public/tools.js', import.meta.url), 'utf8');
+  assert.match(js, /gridVoltage: 'Netzspannung \(L1–L3\)'/);
+  assert.match(js, /p\.voltage != null/, 'Vorschau zeigt Spannungen in V');
+  const html = fs.readFileSync(new URL('../public/settings.html', import.meta.url), 'utf8');
+  assert.match(html, /Leistungswerte \(W\) und die Netzspannung je Phase \(V\)/);
+  const { createDefaultConfig } = await import('../config-model.js');
+  assert.equal(createDefaultConfig().datenspende.sources.gridVoltage, true);
+});

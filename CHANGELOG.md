@@ -24,6 +24,12 @@ verweist hierher.
   Unit des Netzzählers (`com.victronenergy.grid`, z. B. 40 beim VM-3P75CT oder 31 beim EM540), merkt sie und nennt
   sie im Log (`victron_grid_meter_found`). Eine Zeitüberschreitung löst keine Suche aus.
 
+- **Datenspende: Netzspannung je Phase.** Liefert die Anlage Spannungen, spendet DVhub sie als `voltage`-Messwert
+  (V) — je Phase ein eigener Zähler „Netzspannung L1/L2/L3“, wie ein Spannungs-Sensor in der Home-Assistant-
+  Integration. Jede Messung (alle 30 s, über MQTT/SPiNE häufiger) geht einmal hinaus, nur frische Werte. Neue Quelle
+  „Netzspannung (L1–L3)“ in der Datenspende-Kachel, ab Werk an, abwählbar. Bestehende Zähler und Spenden bleiben
+  unverändert; die drei Zähler werden beim ersten Wert registriert.
+
 ### Geändert
 
 - **Ortsnetz-Auslastung nutzt die zentralen Netzwerte (GH #33).** Die eigene Modbus-Leseverbindung (fest Unit 100)

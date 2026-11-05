@@ -5263,12 +5263,13 @@ export function createDefaultConfig() {
     //                /api/datenspende/link, API-Key liegt in DATA_DIR/datenspende.json.
     //   intervalSec: Abstand der Messwerte (5…300 s, Default 10).
     //   clientType:  Client-Typ beim Projekt (Default 'dvhub'; mit COMSYS abstimmen).
-    //   sources:     welche Quellen gespendet werden (jeweils true/false).
+    //   sources:     welche Quellen gespendet werden (jeweils true/false);
+    //                gridVoltage = Netzspannung je Phase (V, seit 05.11.2026).
     datenspende: {
       enabled: false,
       intervalSec: 10,
       clientType: 'dvhub',
-      sources: { grid: true, pv: true, load: true, battery: true, devices: true, mqttTiles: true, wallbox: true }
+      sources: { grid: true, gridVoltage: true, pv: true, load: true, battery: true, devices: true, mqttTiles: true, wallbox: true }
     },
     // Ortsnetz-Auslastung (www.ortsnetz-auslastung.de): opt-in, alle 5 min
     // Netzspannung L1–L3 + Frequenz des Netzzählers. latitude/longitude leer =

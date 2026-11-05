@@ -77,7 +77,7 @@ import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collec
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
 import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
 import { isSupportTunnelConsentAction, isSupportTunnelWrite, bodyKeyNames, supportTunnelActionKind, SUPPORT_TUNNEL_KIND_LABELS } from './services/support-tunnel-policy.js';
-import { SETUP_STEP_LABELS as DATENSPENDE_SETUP_STEP_LABELS, redactSecrets as redactDatenspendeSecrets } from './services/datenspende/index.js';
+import { SETUP_STEP_LABELS as DATENSPENDE_SETUP_STEP_LABELS, SOURCE_GROUPS as DATENSPENDE_SOURCE_GROUPS, redactSecrets as redactDatenspendeSecrets } from './services/datenspende/index.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -5477,7 +5477,7 @@ export function createApiRoutes(ctx) {
           if (!body.sources || typeof body.sources !== 'object') return json(res, 400, { ok: false, error: 'sources_ungueltig' });
           patch.sources = {};
           for (const [k, v] of Object.entries(body.sources)) {
-            if (!['grid', 'pv', 'load', 'battery', 'devices', 'mqttTiles', 'wallbox'].includes(k) || typeof v !== 'boolean') {
+            if (!DATENSPENDE_SOURCE_GROUPS.includes(k) || typeof v !== 'boolean') {
               return json(res, 400, { ok: false, error: `source_ungueltig:${k}` });
             }
             patch.sources[k] = v;

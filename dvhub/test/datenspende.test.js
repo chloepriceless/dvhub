@@ -460,3 +460,72 @@ test('#31 link: Haushalt-ID 0 → Abbruch im Schritt households', async () => {
   await assert.rejects(svc.link({ mode: 'signin', username: 'u', password: 'p', consent: true }),
     (e) => e.code === 'bad_response' && e.step === 'households');
 });
+
+// ── Netzspannung je Phase (05.11.2026, zentrale Werte services/grid-voltage.js) ──
+// Format wie die HA-Integration (powercollect __init__.py _build_payload): je
+// Zähler höchstens ein voltage-Wert; ein Zähler darf nur voltage tragen
+// (config_flow: „at_least_one_entity_required“ — Spannung allein reicht). Drei
+// Phasen = drei Zähler „Netzspannung L1/L2/L3“.
+
+const GV = { l1: 238.24, l2: 237.1, l3: 236.96, frequencyHz: 49.98, updatedAt: T0 - 15_000, source: 'victron_modbus', unitId: 100, error: null };
+
+test('collectSources: Netzspannung je Phase als voltage-Zähler (nur frisch, ohne power), abwählbar', () => {
+  const ctx = baseCtx({ cfg: {}, pl: payload({ gridVoltage: GV }) });
+  const by = Object.fromEntries(collectSources(ctx, { manufacturer: 'victron', datenspende: {} }, T0).map((x) => [x.key, x]));
+  assert.deepEqual([by.gridL1.voltage, by.gridL2.voltage, by.gridL3.voltage], [238.2, 237.1, 237]);
+  assert.equal(by.gridL1.power, undefined, 'kein erfundener Leistungswert');
+  assert.equal(by.gridL1.name, 'Netzspannung L1');
+  assert.equal(by.gridL1.vendor, 'victron');
+  assert.equal(by.gridL1.measuredAt, GV.updatedAt);
+  assert.equal(by.grid.power, -1200, 'Netzanschluss unverändert');
+  // einphasig: nur L1
+  const one = collectSources(baseCtx({ cfg: {}, pl: payload({ gridVoltage: { ...GV, l2: null, l3: null } }) }), { datenspende: {} }, T0).map((x) => x.key);
+  assert.ok(one.includes('gridL1') && !one.includes('gridL2') && !one.includes('gridL3'));
+  // veraltet (> 2 min) oder keine Quelle → keine Spannung
+  const stale = collectSources(baseCtx({ cfg: {}, pl: payload({ gridVoltage: { ...GV, updatedAt: T0 - 3 * 60_000 } }) }), { datenspende: {} }, T0);
+  assert.ok(!stale.some((x) => x.key.startsWith('gridL')));
+  assert.ok(!collectSources(baseCtx({ cfg: {} }), { datenspende: {} }, T0).some((x) => x.key.startsWith('gridL')));
+  // abgewählt
+  const off = collectSources(ctx, { datenspende: { sources: { gridVoltage: false } } }, T0);
+  assert.ok(!off.some((x) => x.key.startsWith('gridL')));
+});
+
+test('Sammeln + Senden: Spannung je Messung genau einmal, als voltage im Batch; bestehende Zähler bleiben', async () => {
+  const dir = tmp();
+  // Bestehende Spende (wie Prod): Netz/PV/Last/Batterie schon registriert.
+  const existing = { grid: { id: 'G0', name: 'Netzanschluss' }, pv: { id: 'P0', name: 'PV-Erzeugung' }, load: { id: 'L0', name: 'Hausverbrauch' }, battery: { id: 'B0', name: 'Batterie' } };
+  fs.writeFileSync(path.join(dir, SIDECAR_NAME), JSON.stringify({ apiKey: 'KEY', clientId: 'C1', meters: existing, donated: 10 }));
+  let t = T0;
+  const pl = payload({ gridVoltage: GV });
+  const cfg = { manufacturer: 'victron', datenspende: { enabled: true } };
+  const client = fakeClient();
+  const svc = createDatenspende(baseCtx({ dir, cfg, pl }), { client, now: () => t, random: () => 0.5 });
+  svc.sample();
+  t += 10_000;
+  svc.sample(); // gleiche Messung (updatedAt unverändert) → keine zweite Spannung
+  t += 10_000;
+  pl.victron.gridVoltage = { ...GV, l1: 239, updatedAt: T0 + 15_000 };
+  svc.sample();
+  await svc.flush();
+  const registered = client.calls.filter((c) => c[0] === 'register').map((c) => c[1]);
+  assert.deepEqual(registered, ['Netzspannung L1', 'Netzspannung L2', 'Netzspannung L3'], 'nur die neuen Zähler registriert');
+  const batch = client.batches[0];
+  const sc = JSON.parse(fs.readFileSync(path.join(dir, SIDECAR_NAME), 'utf8'));
+  assert.equal(sc.meters.grid.id, 'G0', 'bestehende Zähler-IDs unverändert');
+  const l1 = batch.filter((r) => r.meter_id === sc.meters.gridL1.id);
+  assert.deepEqual(l1.map((r) => r.voltage), [238.2, 239]);
+  assert.ok(l1.every((r) => !('power' in r)), 'Spannungs-Zähler ohne power');
+  const g = batch.filter((r) => r.meter_id === 'G0');
+  assert.equal(g.length, 3);
+  assert.ok(g.every((r) => r.power === -1200 && !('voltage' in r)));
+});
+
+test('columnarPayload: voltage-Spalte für Spannungs-Zähler', async () => {
+  const { columnarPayload } = await import('../services/datenspende/client.js');
+  const p = columnarPayload([
+    { meter_id: 'G0', timestamp: '2026-09-28T12:00:00Z', power: -1200 },
+    { meter_id: 'V1', timestamp: '2026-09-28T12:00:00Z', voltage: 238.2 },
+    { meter_id: 'V1', timestamp: '2026-09-28T12:00:30Z', voltage: 239 },
+  ]);
+  assert.deepEqual(p.meters.find((m) => m.id === 'V1'), { id: 'V1', dt: [0, 30], voltage: [238.2, 239] });
+});
