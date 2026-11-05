@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
 import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
+// Historie: eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, „B“).
+import { chooseRawEntries, localCoverageCompleteSql, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
 
 // Plan 08-01 Task 3: resolve dvhub/db/migrations/ relative to this module file
 // so the runner works regardless of where node is invoked from (systemd CWD,
@@ -48,12 +50,7 @@ const SECOND_BATTERY_SERIES = SECOND_BATTERY_SLOT_FIELDS.map(([, seriesKey]) => 
 // der Hauptanlage. Kommt in einem Slot eine dieser Hauptreihen aus dem
 // VRM-Import, zaehlen die lokalen Akku-2-Reihen desselben Slots nicht mit —
 // sonst waeren z. B. 0,5 kWh (VRM) + 0,2 kWh (lokal Akku 2) bewertet statt 0,5.
-const PRIMARY_FLOW_SERIES = [
-  'grid_import_w', 'grid_export_w', 'pv_total_w', 'load_power_w',
-  'battery_power_w', 'battery_charge_w', 'battery_discharge_w',
-  'solar_direct_use_w', 'solar_to_battery_w', 'solar_to_grid_w',
-  'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
-];
+// PRIMARY_FLOW_SERIES: energy-source-rule.js (gemeinsam mit den Diagrammen).
 // dropLocal = true: Werte werden gelesen (gleiche Quellen-Buchfuehrung), aber als 0 ausgegeben.
 // Der Slot traegt dann vrmFlows: true — die Historie zieht den Ladestand-Uebertrag
 // von Akku 2 nur fuer lokale Abschnitte ab (Review 25.10.2026).
@@ -67,17 +64,16 @@ const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => {
   if (dropLocal) fields.vrmFlows = true;
   return fields;
 };
-// Bevorzugte Quelle einer Reihe im Slot, ohne Seiteneffekt (wie pickSeriesRow).
-const preferredSourceKindOf = (bySource, preferredSourceKinds) => {
-  if (!bySource) return null;
-  for (const kind of preferredSourceKinds) if (bySource.has(kind)) return kind;
-  return [...bySource.values()][0]?.source_kind ?? null;
-};
+// Gewaehlte Quelle einer Reihe im Slot, ohne Seiteneffekt (wie pickSeriesRow).
+const preferredSourceKindOf = (bySource, preferredSourceKinds) => (
+  pickSlotSourceRow(bySource, preferredSourceKinds)?.source_kind ?? null
+);
 const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
   .some((seriesKey) => preferredSourceKindOf(bucket.get(seriesKey), preferredSourceKinds) === 'vrm_import');
 // Rohdaten-Ausweichpfad: VRM-Import landet mit scope 'history' in timeseries_samples.
-const rawBucketHasVrmFlows = (bucket) => PRIMARY_FLOW_SERIES
-  .some((seriesKey) => (bucket.get(seriesKey) || []).some((entry) => entry.scope === 'history'));
+// Je Reihe gilt die gewaehlte Quelle (chooseRawEntries), nie ein Mittel aus beiden.
+const rawBucketHasVrmFlows = (bucket, bucketSeconds) => PRIMARY_FLOW_SERIES
+  .some((seriesKey) => chooseRawEntries(bucket.get(seriesKey), bucketSeconds).some((entry) => entry.scope === VRM_RAW_SCOPE));
 
 const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_import_w', 'grid_export_w', 'grid_total_w',
@@ -295,6 +291,9 @@ export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true
       slotSeconds: MATERIALIZED_SLOT_BUCKET_SECONDS,
       nextStartMs: spread ? nextVrmStart(row) : null
     });
+    // Eigene Werte: Abdeckung je Slot mitzaehlen (energy-source-rule.js).
+    const credit = sourceKind === 'local_live' ? localSampleCreditSeconds(row.resolutionSeconds, MATERIALIZED_SLOT_BUCKET_SECONDS, { stale: row.meta?.stale === true }) : 0;
+    const resS = Number(row.resolutionSeconds) || 0;
     for (const { slotStartMs, valueNum } of shares) {
       if (!Number.isFinite(valueNum)) continue;
       const slotStartUtc = new Date(slotStartMs).toISOString();
@@ -303,12 +302,19 @@ export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true
       if (existing) {
         existing.valueNum += valueNum;
         existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
+        existing.coverageS += credit;
+        existing.samples += 1;
+        existing.maxResS = Math.max(existing.maxResS, resS);
         continue;
       }
-      writes.set(key, { slotStartUtc, seriesKey, sourceKind, quality, valueNum, unit: 'kWh', meta: mergeMaterializedMeta(null, row.meta), writeMode });
+      writes.set(key, { slotStartUtc, seriesKey, sourceKind, quality, valueNum, unit: 'kWh', meta: mergeMaterializedMeta(null, row.meta), writeMode, coverageS: credit, samples: 1, maxResS: resS });
     }
   }
-  return [...writes.values()];
+  return [...writes.values()].map(({ coverageS, samples, maxResS, ...write }) => (
+    write.sourceKind === 'local_live'
+      ? { ...write, meta: { ...(write.meta || {}), coverageS, samples, maxResS } }
+      : write
+  ));
 }
 
 const KNOWN_TABLES = new Set([
@@ -681,13 +687,22 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         const valueExpr = mode === 'replace'
           ? 'EXCLUDED.value_num'
           : 'COALESCE(energy_slots_15m.value_num, 0) + COALESCE(EXCLUDED.value_num, 0)';
+        // Abdeckung der eigenen Werte aufaddieren (energy-source-rule.js); ein
+        // Slot von vor 1.0.10 ohne Abdeckung zaehlt ab jetzt nur den neuen Teil.
+        const metaExpr = mode === 'replace' ? 'EXCLUDED.meta_json' : `CASE
+            WHEN (EXCLUDED.meta_json::jsonb ->> 'coverageS') IS NOT NULL THEN (EXCLUDED.meta_json::jsonb || jsonb_build_object(
+              'coverageS', COALESCE((energy_slots_15m.meta_json::jsonb ->> 'coverageS')::float8, 0) + (EXCLUDED.meta_json::jsonb ->> 'coverageS')::float8,
+              'samples', COALESCE((energy_slots_15m.meta_json::jsonb ->> 'samples')::float8, 0) + COALESCE((EXCLUDED.meta_json::jsonb ->> 'samples')::float8, 0),
+              'maxResS', GREATEST(COALESCE((energy_slots_15m.meta_json::jsonb ->> 'maxResS')::float8, 0), COALESCE((EXCLUDED.meta_json::jsonb ->> 'maxResS')::float8, 0))))::text
+            ELSE EXCLUDED.meta_json
+          END`;
         await client.query(`
           INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, unit, meta_json)
           SELECT st, k, sk, q, v, u, m::jsonb
           FROM unnest($1::timestamptz[], $2::text[], $3::text[], $4::text[], $5::float8[], $6::text[], $7::text[])
             AS t(st, k, sk, q, v, u, m)
           ON CONFLICT (slot_start_utc, series_key, source_kind)
-          DO UPDATE SET quality = EXCLUDED.quality, value_num = ${valueExpr}, unit = EXCLUDED.unit, meta_json = EXCLUDED.meta_json, updated_at = now()
+          DO UPDATE SET quality = EXCLUDED.quality, value_num = ${valueExpr}, unit = EXCLUDED.unit, meta_json = ${metaExpr}, updated_at = now()
         `, [
           list.map((w) => w.slotStartUtc),
           list.map((w) => w.seriesKey),
@@ -952,13 +967,15 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     return [...buckets.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([ts, bucket]) => {
+        // Je Reihe EINE Quelle (eigene Werte zuerst, VRM fuellt auf), nie gemittelt.
+        const chosenEntries = (seriesKey) => chooseRawEntries(bucket.get(seriesKey), bucketSeconds);
         const energyForSeries = (seriesKey) => {
-          const avgPower = weightedAverage(bucket.get(seriesKey) || []);
+          const avgPower = weightedAverage(chosenEntries(seriesKey));
           if (!Number.isFinite(avgPower)) return 0;
           return roundKwh((avgPower * bucketSeconds) / 3600000);
         };
         const flagsForSeries = (seriesKey) => {
-          const entries = bucket.get(seriesKey) || [];
+          const entries = chosenEntries(seriesKey);
           const meta = entries.map((entry) => parseMetaJson(entry.meta_json)).filter(Boolean);
           return {
             estimated: meta.some((item) => item.provenance === 'estimated'),
@@ -983,7 +1000,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           solarToGridKwh: energyForSeries('solar_to_grid_w'), gridDirectUseKwh: energyForSeries('grid_direct_use_w'),
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'), batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
-          ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket)),
+          ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket, bucketSeconds)),
           estimated: estimatedSeriesKeys.length > 0, incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length, incompleteSeriesCount: incompleteSeriesKeys.length,
           estimatedSeriesKeys, incompleteSeriesKeys
@@ -1168,6 +1185,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   // Source preference is reproduced exactly: ROW_NUMBER over
   // array_position(preferred, source_kind) picks the same row the JS loop's
   // first-match-wins did, and every value/flag aggregate reads only rn=1 rows.
+  // Davor (05.11.2026, Entscheidung B): ein vollstaendig abgedeckter eigener
+  // Wert (local_live, energy-source-rule.js) gewinnt immer — wie pickSlotSourceRow.
   // The kind sets deliberately ignore series outside MATERIALIZED_SLOT_FIELDS
   // (see that constant) so they stay identical to the JS behaviour.
   async function listMaterializedEnergySlots({ start, end, sourceKinds = ['vrm_import', 'local_live'] }) {
@@ -1194,7 +1213,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         SELECT slot_start_utc, series_key, source_kind, value_num, meta_json,
                ROW_NUMBER() OVER (
                  PARTITION BY slot_start_utc, series_key
-                 ORDER BY array_position($4::text[], source_kind)
+                 ORDER BY CASE WHEN source_kind = 'local_live' AND ${localCoverageCompleteSql('meta_json')} THEN 0 ELSE 1 END,
+                   array_position($4::text[], source_kind)
                ) AS rn
         FROM energy_slots_15m
         WHERE series_key = ANY($1::text[])
@@ -1299,16 +1319,13 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       .map(([ts, bucket]) => {
         const selectedSourceKinds = new Set();
         const availableSourceKinds = new Set();
+        // Vollstaendiger eigener Wert zuerst, sonst die Reihenfolge preferredSourceKinds.
         const pickSeriesRow = (seriesKey) => {
           const bySource = bucket.get(seriesKey);
           if (!bySource) return null;
-          for (const sourceKind of preferredSourceKinds) {
-            const row = bySource.get(sourceKind);
-            if (row) { selectedSourceKinds.add(sourceKind); for (const key of bySource.keys()) availableSourceKinds.add(key); return row; }
-          }
-          const fallbackRow = [...bySource.values()][0] || null;
-          if (fallbackRow) { selectedSourceKinds.add(fallbackRow.source_kind); for (const key of bySource.keys()) availableSourceKinds.add(key); }
-          return fallbackRow;
+          const row = pickSlotSourceRow(bySource, preferredSourceKinds);
+          if (row) { selectedSourceKinds.add(row.source_kind); for (const key of bySource.keys()) availableSourceKinds.add(key); }
+          return row;
         };
         const energyForSeries = (seriesKey) => Number(pickSeriesRow(seriesKey)?.value_num || 0);
         const flagsForSeries = (seriesKey) => {

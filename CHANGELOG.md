@@ -86,6 +86,27 @@ verweist hierher.
 - **EOS-Standard 200 statt 400 Generationen.** Ohne eigenen Wert rechnete EOS bisher mit 400 Generationen; gemessen
   bringt das gegenüber 200 praktisch nichts, kostet aber die doppelte Rechenzeit. Wer ausdrücklich einen Wert
   eingetragen hat, behält ihn.
+- **Historie: eigene Messwerte zuerst, der VRM-Import füllt nur auf.** Liegen für eine Viertelstunde eigene,
+  lokal gemessene Werte und ein VRM-Import vor, gilt jetzt je Reihe der eigene Wert. Den VRM-Import nimmt DVhub
+  nur, wenn eigene Werte fehlen oder die Viertelstunde nicht vollständig abdecken (z. B. Neustart von DVhub
+  mitten in der Viertelstunde). Beide Quellen werden nie gemittelt oder gemischt. Bis 1.0.9 hatte der VRM-Import
+  immer Vorrang, und der Rohdaten-Ausweichpfad konnte beide Werte mitteln. Gilt für Historie, Historie-Diagramme
+  und den Bestandsnachversand der Datenspende.
+  - *Vollständig* heißt: die gespeicherten Live-Proben decken die Viertelstunde bis auf höchstens 15 s
+    (bzw. anderthalb Probenabstände) ab. Proben aus einer fehlgeschlagenen oder veralteten Abfrage (alte Werte,
+    eingefrorene Live-Werte) zählen nicht, und eine Pause von über 90 s zwischen zwei Proben macht die Viertelstunde
+    unvollständig. DVhub merkt sich die Abdeckung dafür ab 1.0.10 je Viertelstunde und Reihe.
+  - **Bereits gespeicherte Viertelstunden ändern sich nicht:** Für Viertelstunden von vor dem Update ist die
+    Abdeckung unbekannt, dort bleibt es bei VRM vor eigenen Werten. Die neue Regel gilt für alle Viertelstunden ab
+    dem Update. Die Jahres-/Gesamtansicht rechnet einmal neu (gleiches Ergebnis für die alten Daten).
+- **Einfrier-Wächter und Schreib-Verifikation sind keine Beta-Funktionen mehr.** Beide stehen jetzt auch im
+  Kanal Stabil in den Einstellungen (bei den selten gebrauchten Feineinstellungen) und wirken dort, wenn sie
+  eingeschaltet sind. Ab Werk sind beide aus; wer sie schon eingeschaltet hatte, behält die Einstellung — bisher
+  wirkte sie nur im Kanal Bleeding Edge, jetzt in jedem Kanal.
+  - Solange der Einfrier-Wächter aus ist, erkennt DVhub eingefrorene Live-Werte trotzdem und bucht dann nichts vom
+    Netzstrom im Akku ab (nur ein Protokolleintrag, kein Alarm, kein Eingriff in die Regelung). In 1.0.9 war das so
+    gedacht, lief mit der Standardeinstellung aber nie. Ist der Wächter an, meldet nur er — kein zweiter Hinweis.
+- **E-Auto-Wochenplan ohne Beta-Kennzeichen.** Die Übersicht zu 1.0.9 führte ihn als Beta, gesperrt war er nie.
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.
@@ -121,8 +142,8 @@ Release nach knapp zwei Wochen. Überblick nach Themen — die Einzelheiten steh
   Ende des Preiszeitraums.
 - **Netzladen und Direktvermarktung:** Netzstrom im Akku wird mitgezählt; solange mehr als 0,1 kWh darin stecken,
   speist der Akku nicht ins Netz ein (bis auf den Regelpuffer von höchstens 100 W).
-- **Neu (Beta):** Peak Shaving für Gewerbeanschlüsse, zweite Victron-Anlage am selben Anschluss, Handy-App,
-  E-Auto-Wochenplan.
+- **Neu (Beta):** Peak Shaving für Gewerbeanschlüsse, zweite Victron-Anlage am selben Anschluss, Handy-App.
+- **Neu:** E-Auto-Wochenplan.
 - **Leitstand:** Energiebilanz mit dem echten Akku, klarere Beschriftungen; Entlade-Wächter ohne Fehlalarme.
 - **VRM und Datenspende:** VRM-Portal-ID oder Site-ID im selben Feld (Nachimport scheiterte mit Portal-ID an
   „HTTP 404“), verständliche Fehlermeldungen bei der Datenspende-Einrichtung.

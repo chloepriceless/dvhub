@@ -182,7 +182,7 @@ test('Jahr gegen echtes PostgreSQL: Monatserster und Neujahr nach Berliner Tag',
   const client = new pg.Client({ connectionString: URL });
   await client.connect();
   try {
-    await client.query(`CREATE TEMP TABLE energy_slots_15m (slot_start_utc timestamptz, series_key text, source_kind text, unit text, value_num double precision)`);
+    await client.query(`CREATE TEMP TABLE energy_slots_15m (slot_start_utc timestamptz, series_key text, source_kind text, unit text, value_num double precision, meta_json text)`);
     for (const r of FIXTURE) {
       await client.query(`INSERT INTO energy_slots_15m VALUES ($1, $2, 'local_live', 'kWh', $3)`, [r.slot_start_utc, r.series_key, r.kwh]);
     }

@@ -2,6 +2,15 @@
 import { resolveBatteryCapacityWhForTimestamp } from '../../battery-stages.js';
 import { bucketBoundsW, summarizeEfficiencyRows } from '../inverter-efficiency/daily.js';
 import { hourlyPriceExpansionCteSql } from '../../telemetry-runtime.js';
+// Eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, Entscheidung B):
+// Rang je Zeile für DISTINCT ON (vollständig lokal, VRM, sonstiges lokal, Rest).
+import { PRIMARY_FLOW_SERIES, slotSourceRankSql } from '../../energy-source-rule.js';
+
+const SLOT_SOURCE_RANK_SQL = slotSourceRankSql();
+// VRM-Slot (Akku 2 entfällt) nur, wenn eine gewählte HAUPTreihe aus dem
+// VRM-Import kommt — VRM-Referenzreihen (vrm_solar_yield_w …) haben kein
+// lokales Gegenstück und zählen nicht (Codex 633d1caf, P2; wie die Speicher).
+const PRIMARY_FLOW_SERIES_SET = new Set(PRIMARY_FLOW_SERIES);
 
 //
 // T-09.3-19 / 2026-06-14: the PV heatmap (getHeatmap) used to bucket + LABEL its
@@ -363,9 +372,9 @@ export function createHistoryVizAggregator(ctx) {
   //
   // energy_slots_15m is EAV keyed by (slot_start_utc, series_key,
   // source_kind). Recent slots carry BOTH a `vrm_import` and a `local_live`
-  // row — summing both double-counts, so we DISTINCT ON (slot, series)
-  // preferring `vrm_import` (the authoritative VRM backfill) and fall back to
-  // `local_live`. `unit='kWh'` excludes the legacy pre-Sept-2025 `unit='W'`
+  // row — summing both double-counts, so we DISTINCT ON (slot, series). Seit
+  // 05.11.2026 gilt der eigene Wert, wenn er die Viertelstunde vollständig
+  // abdeckt, sonst der VRM-Import, sonst der eigene (energy-source-rule.js). `unit='kWh'` excludes the legacy pre-Sept-2025 `unit='W'`
   // grid rows — grid metering started later, so early buckets simply have no
   // grid energy (the decomposition treats that as zero, as intended).
   //
@@ -403,7 +412,7 @@ export function createHistoryVizAggregator(ctx) {
           AND slot_start_utc >= $1::timestamptz
           AND slot_start_utc <  $2::timestamptz
         ORDER BY slot_start_utc, series_key,
-          CASE source_kind WHEN 'vrm_import' THEN 0 WHEN 'local_live' THEN 1 ELSE 2 END
+          ${SLOT_SOURCE_RANK_SQL}
       `, [start, end]);
       const bySeries = new Map(); // series → { ts: number[], kwh: number[] }
       const all = (result && Array.isArray(result.rows)) ? result.rows : [];
@@ -413,7 +422,7 @@ export function createHistoryVizAggregator(ctx) {
       // lokalen Akku-2-Reihen weg — VRM hat dort schon alles der Hauptanlage
       // zugeschlagen.
       const vrmSlots = new Set(all
-        .filter((r) => r.source_kind === 'vrm_import' && !SECOND_BATTERY_SERIES_SET.has(r.series_key))
+        .filter((r) => r.source_kind === 'vrm_import' && PRIMARY_FLOW_SERIES_SET.has(r.series_key))
         .map(tsOf));
       for (const r of all) {
         if (SECOND_BATTERY_SERIES_SET.has(r.series_key) && vrmSlots.has(tsOf(r))) continue;
@@ -496,12 +505,12 @@ export function createHistoryVizAggregator(ctx) {
           AND slot_start_utc >= $2::timestamptz
           AND slot_start_utc <  $3::timestamptz
         ORDER BY slot_start_utc, series_key,
-          CASE source_kind WHEN 'vrm_import' THEN 0 WHEN 'local_live' THEN 1 ELSE 2 END
+          ${SLOT_SOURCE_RANK_SQL}
       ),
-      -- Akku 2 (21.10.2026): Slots mit VRM-Hauptreihen ohne lokale Akku-2-Reihen ($4).
+      -- Akku 2 (21.10.2026): Slots mit VRM-Hauptreihen ($5) ohne lokale Akku-2-Reihen ($4).
       vrm_slots AS (
         SELECT DISTINCT slot_start_utc FROM dedup
-        WHERE source_kind = 'vrm_import' AND NOT (series_key = ANY($4))
+        WHERE source_kind = 'vrm_import' AND series_key = ANY($5)
       )
       SELECT series_key AS key,
              ${bucketExpr} AS bucket_ts,
@@ -514,7 +523,7 @@ export function createHistoryVizAggregator(ctx) {
     `;
     let rows = [];
     if (db && typeof db.query === 'function') {
-      const result = await db.query(sql, [seriesKeys, start, end, SECOND_BATTERY_SERIES]);
+      const result = await db.query(sql, [seriesKeys, start, end, SECOND_BATTERY_SERIES, PRIMARY_FLOW_SERIES]);
       rows = (result && Array.isArray(result.rows)) ? result.rows : [];
     }
     return rows.map((r) => {
@@ -2188,7 +2197,7 @@ export function createHistoryVizAggregator(ctx) {
       WITH slot_src AS (
         -- Recent slots carry BOTH a vrm_import and a local_live row — sum
         -- those and the per-slot energy doubles. DISTINCT ON keeps one row
-        -- per (slot, series), preferring the authoritative vrm_import.
+        -- per (slot, series): eigener Wert, wenn vollständig, sonst VRM-Import.
         SELECT DISTINCT ON (slot_start_utc, series_key)
           slot_start_utc, series_key, value_num
         FROM energy_slots_15m
@@ -2198,7 +2207,7 @@ export function createHistoryVizAggregator(ctx) {
           AND slot_start_utc >= $1::timestamptz
           AND slot_start_utc <  $2::timestamptz
         ORDER BY slot_start_utc, series_key,
-          CASE source_kind WHEN 'vrm_import' THEN 0 WHEN 'local_live' THEN 1 ELSE 2 END
+          ${SLOT_SOURCE_RANK_SQL}
       ),
       slot_flows AS (
         SELECT

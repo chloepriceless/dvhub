@@ -22,7 +22,6 @@ import { getPowerLimits } from './services/power-limits.js';
 // Zweite GX am selben Anschluss: EOS-Ziele gelten fuer beide Akkus zusammen.
 import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
-import { betaGateOpen } from './beta-features.js';
 import {
   resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint, knownMaxDischargeW, dischargeStep,
   decodeMaxDischargeRaw, DISCHARGE_RELEASE_TICKS, MAX_DISCHARGE_INT32_ADDR, MAX_DISCHARGE_INT16_ADDR
@@ -81,16 +80,16 @@ const CURTAILMENT_BUFFER_LIMIT_W = FORCED_EXPORT_THRESHOLD_W;
 const VERIFY_DEFAULT_DELAY_MS = 4000;
 const VERIFY_DEFAULT_MIN_INTERVAL_MS = 30000;
 
-// Schreib-Verifikation (T-VERIFY) — Beta, siehe beta-features.js. Die Auflösung
-// liegt bewusst auf Modulebene und nicht in der Evaluator-Fabrik: so kann
-// test/beta-gate.test.js für JEDES registrierte Beta-Feature dieselbe Zusage
-// prüfen — `enabled: true` in der config.json bleibt im Stable-Kanal wirkungslos.
+// Schreib-Verifikation (T-VERIFY). Bis 1.0.9 Beta (nur im Bleeding-Edge-Kanal
+// wirksam), seit 1.0.10 in jedem Kanal; Standard in config-model.js.
 export function resolveControlWriteVerify(cfg = {}) {
   const vc = cfg?.schedule?.controlWriteVerify || {};
   const delayMs = Number(vc.delayMs);
   const minIntervalMs = Number(vc.minIntervalMs);
   return {
-    enabled: vc.enabled === true && betaGateOpen(cfg, 'controlWriteVerify'),
+    // Seit 1.0.10 kein Beta mehr: in jedem Kanal wirksam. Der Standard steht
+    // allein in config-model.js (CONTROL_WRITE_VERIFY_DEFAULT_ENABLED).
+    enabled: vc.enabled === true,
     delayMs: delayMs > 0 ? delayMs : VERIFY_DEFAULT_DELAY_MS,
     minIntervalMs: minIntervalMs > 0 ? minIntervalMs : VERIFY_DEFAULT_MIN_INTERVAL_MS,
     toleranceAbs: Number(vc.toleranceAbs) || 0
@@ -356,7 +355,7 @@ export function createScheduleEvaluator(ctx) {
     const nowMs = Date.now();
     const sourceStale = (f) => { const at = Number(v.fieldSourceAt?.[f]); return at > 0 && nowMs - at > GRID_SHARE_FIELD_MAX_AGE_MS; };
     const stale = (f) => victronFieldStale(state, f, maxAgeMs, nowMs) || sourceStale(f);
-    // Einfrier-Wächter, Einfrier-Verdacht (Stable-Kanal) oder Kreuzprobe: die
+    // Einfrier-Wächter, Einfrier-Verdacht (Wächter aus) oder Kreuzprobe: die
     // Stempel sind frisch, die Werte aber eingefroren bzw. widersprüchlich —
     // dieselben Signale, mit denen grid-share.js nicht abbucht. Dann sind PV
     // und Last unbekannt, nur der Puffer (Gesamtprüfung Release 1.0.9, Befund 2:

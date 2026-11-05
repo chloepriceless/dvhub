@@ -47,7 +47,6 @@
 // (unveränderte Werte sind dort normal) und hat seine eigene Staleness-Prüfung.
 
 /** Felder, die auf einer lebenden Anlage im Sekundentakt jittern. */
-import { betaGateOpen } from '../beta-features.js';
 
 export const FREEZE_JITTER_FIELDS = ['grid_total_w', 'batteryPowerW', 'pvTotalW', 'selfConsumptionW'];
 
@@ -96,15 +95,16 @@ export function resolveFreezeOptions(cfg = {}) {
     ? (capacityWh * socStepPct) / 100
     : 0;
   return {
-    // Beta-Gate (29.07.2026): der Wächter greift in den Regelpfad ein
-    // (Entladung anhalten, Verbindung neu aufbauen) und ist bis auf Weiteres
-    // ein Feldtest. Im Stable-Kanal bleibt er AUS, unabhängig von der
-    // config.json. Siehe beta-features.js.
-    enabled: w.enabled !== false && betaGateOpen(cfg, 'freezeWatchdog'),
-    // Reine Erkennung ohne Eingriff auch im Stable-Kanal (victron.freezeSuspect):
-    // der Netzstrom-Zähler bucht mit eingefrorenen Werten nicht ab
-    // (Gegenprüfung 4cf16a5a, P2). Nur ein ausdrückliches enabled:false schaltet ab.
-    detect: w.enabled !== false,
+    // Seit 1.0.10 kein Beta mehr (Christin, 05.11.2026): in jedem Kanal
+    // einstellbar, ab Werk AUS (Standard in config-model.js). Nur ein
+    // ausdrückliches enabled:true schaltet die Eingriffe ein.
+    enabled: w.enabled === true,
+    // Ist der Wächter aus, läuft die reine Erkennung ohne Eingriff
+    // (victron.freezeSuspect): der Netzstrom-Zähler bucht mit eingefrorenen
+    // Werten nicht ab (Gegenprüfung 4cf16a5a, P2). Bis 1.0.9 hing sie an
+    // `enabled !== false` und lief deshalb mit dem Standard enabled:false nie.
+    // Ist der Wächter an, meldet nur er (victron.freeze), kein zweiter Verdacht.
+    detect: true,
     freezeMs: numOr(w.freezeMs, FREEZE_DEFAULTS.freezeMs, 30000),
     minSamples: numOr(w.minSamples, FREEZE_DEFAULTS.minSamples, 2),
     minPowerW: numOr(w.minPowerW, FREEZE_DEFAULTS.minPowerW, 0),
@@ -283,7 +283,7 @@ export function createFreezeWatchdog(ctx) {
   }
 
   /**
-   * Stable-Kanal (Beta-Gate zu): nur erkennen und victron.freezeSuspect setzen —
+   * Wächter aus: nur erkennen und victron.freezeSuspect setzen —
    * kein Rückdatieren, kein Neuaufbau, kein Alarm, victron.freeze bleibt null.
    * Lesen der Netzstrom-Zähler (grid-share.js) und sein Einspeise-Deckel
    * (schedule-eval gridShareLiveCapW). Ein Fehlalarm kostet eine ausgelassene

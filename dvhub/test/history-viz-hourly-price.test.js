@@ -19,7 +19,7 @@ test('Top-10: Viertelstunden unter einem Stundenpreis tragen dessen Preis', { sk
   await client.connect();
   try {
     await client.query(`CREATE TEMP TABLE timeseries_samples (series_key text, ts_utc timestamptz, value_num double precision, resolution_seconds integer)`);
-    await client.query(`CREATE TEMP TABLE energy_slots_15m (slot_start_utc timestamptz, series_key text, source_kind text, unit text, value_num double precision)`);
+    await client.query(`CREATE TEMP TABLE energy_slots_15m (slot_start_utc timestamptz, series_key text, source_kind text, unit text, value_num double precision, meta_json text)`);
     for (const [ts, ct] of [['2025-06-10T09:00:00Z', 10], ['2025-06-10T10:00:00Z', 20], ['2025-06-10T11:00:00Z', 30]]) {
       await client.query(`INSERT INTO timeseries_samples VALUES ('price_ct_kwh', $1, $2, 900)`, [ts, ct]);
     }
