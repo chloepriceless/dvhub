@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { round2 } from './server-utils.js';
 import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 // Historie: eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, „B“).
-import { chooseRawEntries, localCoverageCompleteSql, localSampleCreditSeconds, pickSlotSourceRow, VRM_RAW_SCOPE } from './energy-source-rule.js';
+import { chooseRawEntries, localCoverageCompleteSql, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
 
 // Plan 08-01 Task 3: resolve dvhub/db/migrations/ relative to this module file
 // so the runner works regardless of where node is invoked from (systemd CWD,
@@ -50,12 +50,7 @@ const SECOND_BATTERY_SERIES = SECOND_BATTERY_SLOT_FIELDS.map(([, seriesKey]) => 
 // der Hauptanlage. Kommt in einem Slot eine dieser Hauptreihen aus dem
 // VRM-Import, zaehlen die lokalen Akku-2-Reihen desselben Slots nicht mit —
 // sonst waeren z. B. 0,5 kWh (VRM) + 0,2 kWh (lokal Akku 2) bewertet statt 0,5.
-const PRIMARY_FLOW_SERIES = [
-  'grid_import_w', 'grid_export_w', 'pv_total_w', 'load_power_w',
-  'battery_power_w', 'battery_charge_w', 'battery_discharge_w',
-  'solar_direct_use_w', 'solar_to_battery_w', 'solar_to_grid_w',
-  'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
-];
+// PRIMARY_FLOW_SERIES: energy-source-rule.js (gemeinsam mit den Diagrammen).
 // dropLocal = true: Werte werden gelesen (gleiche Quellen-Buchfuehrung), aber als 0 ausgegeben.
 // Der Slot traegt dann vrmFlows: true — die Historie zieht den Ladestand-Uebertrag
 // von Akku 2 nur fuer lokale Abschnitte ab (Review 25.10.2026).
@@ -297,7 +292,8 @@ export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true
       nextStartMs: spread ? nextVrmStart(row) : null
     });
     // Eigene Werte: Abdeckung je Slot mitzaehlen (energy-source-rule.js).
-    const credit = sourceKind === 'local_live' ? localSampleCreditSeconds(row.resolutionSeconds, MATERIALIZED_SLOT_BUCKET_SECONDS) : 0;
+    const credit = sourceKind === 'local_live' ? localSampleCreditSeconds(row.resolutionSeconds, MATERIALIZED_SLOT_BUCKET_SECONDS, { stale: row.meta?.stale === true }) : 0;
+    const resS = Number(row.resolutionSeconds) || 0;
     for (const { slotStartMs, valueNum } of shares) {
       if (!Number.isFinite(valueNum)) continue;
       const slotStartUtc = new Date(slotStartMs).toISOString();
@@ -308,14 +304,15 @@ export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true
         existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
         existing.coverageS += credit;
         existing.samples += 1;
+        existing.maxResS = Math.max(existing.maxResS, resS);
         continue;
       }
-      writes.set(key, { slotStartUtc, seriesKey, sourceKind, quality, valueNum, unit: 'kWh', meta: mergeMaterializedMeta(null, row.meta), writeMode, coverageS: credit, samples: 1 });
+      writes.set(key, { slotStartUtc, seriesKey, sourceKind, quality, valueNum, unit: 'kWh', meta: mergeMaterializedMeta(null, row.meta), writeMode, coverageS: credit, samples: 1, maxResS: resS });
     }
   }
-  return [...writes.values()].map(({ coverageS, samples, ...write }) => (
+  return [...writes.values()].map(({ coverageS, samples, maxResS, ...write }) => (
     write.sourceKind === 'local_live'
-      ? { ...write, meta: { ...(write.meta || {}), coverageS, samples } }
+      ? { ...write, meta: { ...(write.meta || {}), coverageS, samples, maxResS } }
       : write
   ));
 }
@@ -695,7 +692,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         const metaExpr = mode === 'replace' ? 'EXCLUDED.meta_json' : `CASE
             WHEN (EXCLUDED.meta_json::jsonb ->> 'coverageS') IS NOT NULL THEN (EXCLUDED.meta_json::jsonb || jsonb_build_object(
               'coverageS', COALESCE((energy_slots_15m.meta_json::jsonb ->> 'coverageS')::float8, 0) + (EXCLUDED.meta_json::jsonb ->> 'coverageS')::float8,
-              'samples', COALESCE((energy_slots_15m.meta_json::jsonb ->> 'samples')::float8, 0) + COALESCE((EXCLUDED.meta_json::jsonb ->> 'samples')::float8, 0)))::text
+              'samples', COALESCE((energy_slots_15m.meta_json::jsonb ->> 'samples')::float8, 0) + COALESCE((EXCLUDED.meta_json::jsonb ->> 'samples')::float8, 0),
+              'maxResS', GREATEST(COALESCE((energy_slots_15m.meta_json::jsonb ->> 'maxResS')::float8, 0), COALESCE((EXCLUDED.meta_json::jsonb ->> 'maxResS')::float8, 0))))::text
             ELSE EXCLUDED.meta_json
           END`;
         await client.query(`

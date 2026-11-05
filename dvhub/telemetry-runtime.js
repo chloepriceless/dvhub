@@ -51,6 +51,30 @@ export function resolveTelemetryDbPath({ configPath, telemetryConfig = {}, dataD
   return path.join(baseDir, 'telemetry.sqlite');
 }
 
+// Messfelder, deren Alter über die Live-Energie entscheidet (Steuer- und
+// Rücklesepunkte wie minSocPct zählen nicht).
+const LIVE_ENERGY_FIELDS = ['batteryPowerW', 'pvPowerW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W', 'selfConsumptionW'];
+const LIVE_FIELD_MAX_AGE_MS = 90000;
+
+/**
+ * Ist dieser Live-Schnappschuss keine frische Messung? Nach einem Lesefehler
+ * behält polling.js die alten Werte und meldet die Abfrage trotzdem ab. Solche
+ * Proben zählen in der Historie nicht als eigene Messung (energy-source-rule.js,
+ * Codex 633d1caf): Zähler-Lesefehler, Einfrier-Wächter/-Verdacht oder ein
+ * Messfeld, dessen letzte erfolgreiche Abfrage über 90 s zurückliegt.
+ */
+export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
+  if (meter?.ok === false) return true;
+  if (victron?.freeze?.active === true || victron?.freezeSuspect?.active === true) return true;
+  const tsMs = Date.parse(ts);
+  if (!Number.isFinite(tsMs)) return false;
+  const stamps = victron?.fieldUpdatedAt || {};
+  return LIVE_ENERGY_FIELDS.some((field) => {
+    const at = Number(stamps[field]);
+    return at > 0 && tsMs - at > LIVE_FIELD_MAX_AGE_MS;
+  });
+}
+
 export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, victron = {}, managed = null }) {
   const rows = [];
   const base = {
@@ -58,7 +82,8 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
     resolutionSeconds,
     scope: 'live',
     source: 'local_poll',
-    quality: 'raw'
+    quality: 'raw',
+    meta: liveSnapshotStale({ ts, meter, victron }) ? { stale: true } : null
   };
 
   pushSample(rows, 'grid_l1_w', meter.grid_l1_w, 'W', base);

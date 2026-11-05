@@ -198,3 +198,19 @@ test('buildOptimizerRunPayload stores scalar optimizer outputs as output series'
     ['charge_current_a', 'grid_setpoint_w']
   );
 });
+
+// Codex 633d1caf (P1): Eine Abfrage mit Lesefehler liefert die alten Werte
+// weiter. Solche Proben tragen meta.stale und zaehlen in der Historie nicht als
+// eigene Messung (energy-source-rule.js), der VRM-Import fuellt dann auf.
+test('Live-Proben aus einer fehlgeschlagenen oder veralteten Abfrage tragen meta.stale', async () => {
+  const { buildLiveTelemetrySamples } = await import('../telemetry-runtime.js');
+  const ts = '2026-11-05T10:00:00.000Z';
+  const now = Date.parse(ts);
+  const fresh = { gridImportW: 100, batteryPowerW: 50, fieldUpdatedAt: { batteryPowerW: now - 2000, minSocPct: now - 600000 } };
+  const metaOf = (meter, victron) => buildLiveTelemetrySamples({ ts, resolutionSeconds: 5, meter, victron })[0].meta;
+  assert.equal(metaOf({ ok: true, grid_total_w: 100 }, fresh), null, 'frisch (Steuerpunkte zaehlen nicht)');
+  assert.deepEqual(metaOf({ ok: false, grid_total_w: 100 }, fresh), { stale: true }, 'Zaehler-Lesefehler');
+  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, fieldUpdatedAt: { batteryPowerW: now - 120000 } }), { stale: true }, 'Akkuleistung 2 min alt');
+  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freezeSuspect: { active: true } }), { stale: true }, 'Einfrier-Verdacht');
+  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freeze: { active: true } }), { stale: true }, 'Einfrier-Waechter');
+});

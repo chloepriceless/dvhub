@@ -29,8 +29,8 @@ test('unvollstaendig: Neustart mitten in der Viertelstunde, halbe Abdeckung, unb
 });
 
 test('Abdeckung aus meta_json lesen (Text oder Objekt)', () => {
-  assert.deepEqual(localCoverageFromMeta('{"coverageS":900,"samples":180}'), { coverageS: 900, samples: 180 });
-  assert.deepEqual(localCoverageFromMeta({ coverageS: 450 }), { coverageS: 450, samples: null });
+  assert.deepEqual(localCoverageFromMeta('{"coverageS":900,"samples":180,"maxResS":5}'), { coverageS: 900, samples: 180, maxResS: 5 });
+  assert.deepEqual(localCoverageFromMeta({ coverageS: 450 }), { coverageS: 450, samples: null, maxResS: null });
   assert.equal(localCoverageFromMeta(null), null);
   assert.equal(localCoverageFromMeta('{"incomplete":true}'), null);
 });
@@ -75,4 +75,22 @@ test('SQL-Rang: vollstaendig lokal 0, VRM 1, sonstiges lokal 2', () => {
   const sql = slotSourceRankSql();
   assert.match(sql, /coverageS/);
   assert.match(sql, /THEN 0 WHEN source_kind = 'vrm_import' THEN 1 WHEN source_kind = 'local_live' THEN 2/);
+});
+
+// Codex 633d1caf (P2): eine Probe nach einer Pause traegt ihre ganze Dauer als
+// Energie in den Slot, zaehlt aber nur 60 s Abdeckung. 300 s + 179 × 5 s ergaeben
+// 955 s Abdeckung bei 1195 s Energie — der Slot darf nicht als vollstaendig gelten.
+test('Probe ueber 60 s im Slot: nie vollstaendig (Energie waere hochgerechnet)', () => {
+  assert.equal(isLocalCoverageComplete(955, 180, 900, 300), false);
+  assert.equal(isLocalCoverageComplete(900, 180, 900, 5), true);
+  assert.equal(isCompleteLocalSlotRow({ source_kind: 'local_live', meta_json: '{"coverageS":955,"samples":180,"maxResS":300}' }), false);
+  assert.deepEqual(chooseRawEntries([...vrmRaw, { scope: 'live', resolution_seconds: 300, value_num: 2000 }, ...live(179)]), vrmRaw);
+});
+
+// Codex 633d1caf (P1): Proben aus einer fehlgeschlagenen Abfrage (alte Werte)
+// zaehlen nicht zur Abdeckung.
+test('veraltete Proben (meta stale) zaehlen nicht zur Abdeckung', () => {
+  assert.equal(localSampleCreditSeconds(5, 900, { stale: true }), 0);
+  const staleLive = live(180).map((e) => ({ ...e, meta_json: '{"stale":true}' }));
+  assert.deepEqual(chooseRawEntries([...vrmRaw, ...staleLive]), vrmRaw);
 });

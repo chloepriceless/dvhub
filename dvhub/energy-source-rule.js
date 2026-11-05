@@ -25,8 +25,17 @@
 //   max(15 s, 1,5 × mittlerer Probenabstand im Slot). Bei 5-s-Proben erkennt
 //   das jeden Ausfall ab ~15 s, bei 60-s-Abfragen ab ~90 s.
 //
+//   Zwei Ausschlüsse (Codex 633d1caf):
+//   - Proben aus einer fehlgeschlagenen oder veralteten Abfrage (polling.js
+//     behält dann die alten Werte) tragen meta.stale (telemetry-runtime.js
+//     liveSnapshotStale) und zählen 0 s.
+//   - Eine Probe über 60 s trägt ihre ganze Dauer als Energie in den Slot
+//     (sampleEnergyBySlot), die Energie wäre also hochgerechnet: ein Slot mit
+//     so einer Probe gilt nie als vollständig.
+//
 //   Gespeichert wird die Abdeckung je (Slot, Reihe) in energy_slots_15m.meta_json
-//   der Quelle local_live: {"coverageS": Σ Sekunden, "samples": Anzahl Proben}.
+//   der Quelle local_live: {"coverageS": Σ Sekunden, "samples": Anzahl Proben,
+//   "maxResS": längste Probe}.
 //   Ältere Slots (vor 1.0.10) tragen keine Abdeckung. Für sie ist unbekannt, ob
 //   sie vollständig sind — sie behalten die bisherige Reihenfolge (VRM vor
 //   lokal), damit sich gespeicherte Historie nicht nachträglich verschiebt.
@@ -41,8 +50,19 @@ export const VRM_SOURCE_KIND = 'vrm_import';
 // Rohdaten (timeseries_samples): VRM-Import landet mit scope 'history'.
 export const VRM_RAW_SCOPE = 'history';
 
-/** Sekunden, die eine Live-Probe zur Abdeckung ihres Slots beiträgt. */
-export function localSampleCreditSeconds(resolutionSeconds, slotSeconds = SLOT_SECONDS) {
+// Hauptflüsse der Anlage: kommt eine davon im Slot aus dem VRM-Import, gelten
+// die lokalen Akku-2-Reihen des Slots nicht (VRM kennt die zweite Anlage nicht,
+// Codex-Gegenprüfung 21.10.2026). Gemeinsam für Speicher und Diagramme.
+export const PRIMARY_FLOW_SERIES = Object.freeze([
+  'grid_import_w', 'grid_export_w', 'pv_total_w', 'load_power_w',
+  'battery_power_w', 'battery_charge_w', 'battery_discharge_w',
+  'solar_direct_use_w', 'solar_to_battery_w', 'solar_to_grid_w',
+  'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
+]);
+
+/** Sekunden, die eine Live-Probe zur Abdeckung ihres Slots beiträgt (veraltet: 0). */
+export function localSampleCreditSeconds(resolutionSeconds, slotSeconds = SLOT_SECONDS, { stale = false } = {}) {
+  if (stale) return 0;
   const seconds = Number(resolutionSeconds);
   if (!Number.isFinite(seconds) || seconds <= 0) return 0;
   return Math.min(seconds, LOCAL_SAMPLE_MAX_CREDIT_SECONDS, slotSeconds);
@@ -52,9 +72,11 @@ export function localSampleCreditSeconds(resolutionSeconds, slotSeconds = SLOT_S
  * Deckt die Abdeckung den Slot vollständig ab? Unbekannt (null/NaN) ⇒ false.
  * @param {number|null} coverageS  Summe der Probenzeiten im Slot
  * @param {number|null} samples    Anzahl Proben (fehlt ⇒ Mindesttoleranz)
+ * @param {number|null} maxResS    längste Probe im Slot (über 60 s ⇒ nie vollständig)
  */
-export function isLocalCoverageComplete(coverageS, samples, slotSeconds = SLOT_SECONDS) {
+export function isLocalCoverageComplete(coverageS, samples, slotSeconds = SLOT_SECONDS, maxResS = null) {
   if (coverageS == null) return false;
+  if (Number(maxResS) > LOCAL_SAMPLE_MAX_CREDIT_SECONDS) return false;
   const coverage = Number(coverageS);
   if (!Number.isFinite(coverage) || coverage <= 0) return false;
   const count = Number(samples);
@@ -76,14 +98,20 @@ export function localCoverageFromMeta(meta) {
   const coverageS = Number(parsed.coverageS);
   if (!Number.isFinite(coverageS)) return null;
   const samples = Number(parsed.samples);
-  return { coverageS, samples: Number.isFinite(samples) ? samples : null };
+  const maxResS = Number(parsed.maxResS);
+  return { coverageS, samples: Number.isFinite(samples) ? samples : null, maxResS: Number.isFinite(maxResS) ? maxResS : null };
+}
+
+/** Ist eine Rohprobe als veraltet gekennzeichnet (meta_json.stale)? */
+export function isStaleSampleMeta(meta) {
+  return parseMeta(meta)?.stale === true;
 }
 
 /** Ist eine energy_slots_15m-Zeile ein vollständig abgedeckter eigener Wert? */
 export function isCompleteLocalSlotRow(row) {
   if (!row || row.source_kind !== LOCAL_SOURCE_KIND) return false;
   const coverage = localCoverageFromMeta(row.meta_json);
-  return Boolean(coverage) && isLocalCoverageComplete(coverage.coverageS, coverage.samples);
+  return Boolean(coverage) && isLocalCoverageComplete(coverage.coverageS, coverage.samples, SLOT_SECONDS, coverage.maxResS);
 }
 
 /**
@@ -110,7 +138,8 @@ export function pickSlotSourceRow(bySource, preferredSourceKinds) {
 export function localCoverageCompleteSql(metaExpr = 'meta_json') {
   const cov = `((${metaExpr})::jsonb ->> 'coverageS')::float8`;
   const n = `((${metaExpr})::jsonb ->> 'samples')::float8`;
-  return `COALESCE(${cov} > 0 AND ${cov} >= ${SLOT_SECONDS} - GREATEST(${LOCAL_COVERAGE_MIN_TOLERANCE_SECONDS}, ${LOCAL_COVERAGE_SPACING_FACTOR} * ${cov} / NULLIF(${n}, 0)), false)`;
+  const maxRes = `((${metaExpr})::jsonb ->> 'maxResS')::float8`;
+  return `COALESCE(${cov} > 0 AND COALESCE(${maxRes}, 0) <= ${LOCAL_SAMPLE_MAX_CREDIT_SECONDS} AND ${cov} >= ${SLOT_SECONDS} - GREATEST(${LOCAL_COVERAGE_MIN_TOLERANCE_SECONDS}, ${LOCAL_COVERAGE_SPACING_FACTOR} * ${cov} / NULLIF(${n}, 0)), false)`;
 }
 
 /**
@@ -135,6 +164,7 @@ export function chooseRawEntries(entries = [], bucketSeconds = SLOT_SECONDS) {
   if (!vrm.length) return list;
   const local = list.filter((entry) => entry.scope !== VRM_RAW_SCOPE);
   if (!local.length) return vrm;
-  const coverageS = local.reduce((sum, entry) => sum + localSampleCreditSeconds(entry.resolution_seconds, bucketSeconds), 0);
-  return isLocalCoverageComplete(coverageS, local.length, bucketSeconds) ? local : vrm;
+  const coverageS = local.reduce((sum, entry) => sum + localSampleCreditSeconds(entry.resolution_seconds, bucketSeconds, { stale: isStaleSampleMeta(entry.meta_json) }), 0);
+  const maxResS = local.reduce((max, entry) => Math.max(max, Number(entry.resolution_seconds) || 0), 0);
+  return isLocalCoverageComplete(coverageS, local.length, bucketSeconds, maxResS) ? local : vrm;
 }

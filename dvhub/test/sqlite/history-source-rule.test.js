@@ -69,7 +69,7 @@ test('eigene Abdeckung wird ueber mehrere Schreibpakete aufaddiert', () => {
   const db = new DatabaseSync(store.dbPathForTest);
   try {
     const rows = db.prepare(`SELECT meta_json FROM energy_slots_15m WHERE source_kind = 'local_live' ORDER BY slot_start_utc`).all();
-    assert.deepEqual(rows.map((r) => JSON.parse(r.meta_json)), [{ coverageS: 900, samples: 180 }, { coverageS: 450, samples: 90 }]);
+    assert.deepEqual(rows.map((r) => JSON.parse(r.meta_json)), [{ coverageS: 900, samples: 180, maxResS: 5 }, { coverageS: 450, samples: 90, maxResS: 5 }]);
   } finally {
     db.close();
     store.close();
@@ -94,6 +94,28 @@ test('Tagesbilanz: 0,5 + 0,6 + 0,6 kWh Bezug', async () => {
     const runtime = createHistoryRuntime({ store, getPricingConfig: () => ({}), getCurrentDate: () => '2027-04-02' });
     const { kpis } = await runtime.getSummary({ view: 'day', date: '2026-03-09' });
     assert.equal(kpis.importKwh, 1.7);
+  } finally {
+    store.close();
+  }
+});
+
+// Codex 633d1caf: veraltete Proben (Lesefehler, alte Werte) und eine Probe nach
+// einer Pause ueber 60 s machen den eigenen Wert nicht vollstaendig → VRM.
+test('veraltete Proben oder eine lange Pause im Slot → VRM fuellt auf', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-source-rule-stale-'));
+  const store = createTelemetryStore({ dbPath: path.join(dir, 'telemetry.sqlite'), rawRetentionDays: 30, rollupIntervals: [900] });
+  try {
+    const stale = liveSamples(T0, 0, 900, 2000).map((r) => ({ ...r, meta: { stale: true } }));
+    const paused = [
+      { ...liveSamples(T0 + 900000, 0, 5, 2000)[0], resolutionSeconds: 300 },
+      ...liveSamples(T0 + 900000, 5, 900, 2000)
+    ];
+    store.writeSamples([...stale, ...paused]);
+    store.writeSamples([vrmSample(T0, 0.6), vrmSample(T0 + 900000, 0.6)]);
+    const slots = store.listMaterializedEnergySlots(range);
+    assert.deepEqual(slots.map((s) => s.importKwh), [0.6, 0.6]);
+    const raw = store.listAggregatedEnergySlots({ ...range, bucketSeconds: 900 });
+    assert.deepEqual(raw.map((s) => s.importKwh), [0.6, 0.6]);
   } finally {
     store.close();
   }

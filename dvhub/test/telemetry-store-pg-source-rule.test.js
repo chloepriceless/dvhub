@@ -42,7 +42,7 @@ describe('PG-Store: eigene Messwerte zuerst (nachgebildet)', () => {
     const writes = buildMaterializedEnergySlotWrites([...liveSamples(T0, 0, 15, 2000), vrmSample(T0, 0.6)]);
     const local = writes.find((w) => w.sourceKind === 'local_live');
     const vrm = writes.find((w) => w.sourceKind === 'vrm_import');
-    assert.deepEqual(local.meta, { coverageS: 15, samples: 3 });
+    assert.deepEqual(local.meta, { coverageS: 15, samples: 3, maxResS: 5 });
     assert.equal(vrm.meta, null);
   });
 
@@ -155,7 +155,7 @@ describe('PG-Store: eigene Messwerte zuerst (echtes PostgreSQL)', { skip }, () =
 
   test('Abdeckung ueber mehrere Schreibpakete aufaddiert', async () => {
     const { rows } = await pool.query(`SELECT meta_json FROM energy_slots_15m WHERE source_kind = 'local_live' AND meta_json IS NOT NULL ORDER BY slot_start_utc`);
-    assert.deepEqual(rows.map((r) => JSON.parse(r.meta_json)), [{ coverageS: 900, samples: 180 }, { coverageS: 450, samples: 90 }]);
+    assert.deepEqual(rows.map((r) => JSON.parse(r.meta_json)), [{ coverageS: 900, samples: 180, maxResS: 5 }, { coverageS: 450, samples: 90, maxResS: 5 }]);
   });
 
   test('listMaterializedEnergySlots: vollstaendig lokal, halb → VRM, fehlt → VRM, alt → VRM', async () => {
@@ -169,6 +169,22 @@ describe('PG-Store: eigene Messwerte zuerst (echtes PostgreSQL)', { skip }, () =
     const sqlSlots = await store.listMaterializedEnergySlots({ start: iso(T0), end: iso(T0 + 3600000) });
     const jsSlots = await store.listMaterializedEnergySlotsJsPivot({ start: iso(T0), end: iso(T0 + 3600000) });
     assert.deepEqual(jsSlots.map((s) => s.importKwh), sqlSlots.map((s) => s.importKwh));
+  });
+
+  // Codex 633d1caf: lange Pause (300-s-Probe) bzw. veraltete Proben → VRM.
+  test('lange Pause oder veraltete Proben im Slot → VRM (SQL und Aufaddieren)', async () => {
+    const s1 = T0 + 3600000;
+    const s2 = T0 + 4500000;
+    const paused = [{ ...liveSamples(s1, 0, 5, 2000)[0], resolutionSeconds: 300 }, ...liveSamples(s1, 5, 900, 2000)];
+    for (let i = 0; i < paused.length; i += 12) await store.writeSamples(paused.slice(i, i + 12));
+    await store.writeSamples(liveSamples(s2, 0, 900, 2000).map((r) => ({ ...r, meta: { stale: true } })));
+    await store.writeSamples([vrmSample(s1, 0.6), vrmSample(s2, 0.6)]);
+    const { rows } = await pool.query(`SELECT meta_json FROM energy_slots_15m WHERE source_kind = 'local_live' AND slot_start_utc = $1`, [iso(s1)]);
+    assert.equal(JSON.parse(rows[0].meta_json).maxResS, 300);
+    const slots = await store.listMaterializedEnergySlots({ start: iso(s1), end: iso(s2 + 900000) });
+    assert.deepEqual(slots.map((s) => Math.round(s.importKwh * 1000) / 1000), [0.6, 0.6]);
+    const raw = await store.listAggregatedEnergySlots({ start: iso(s1), end: iso(s2 + 900000) });
+    assert.deepEqual(raw.map((s) => s.importKwh), [0.6, 0.6]);
   });
 
   test('Ausweichpfad aus den Rohdaten waehlt genauso', async () => {

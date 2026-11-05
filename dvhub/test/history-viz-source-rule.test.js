@@ -60,3 +60,30 @@ test('echtes PostgreSQL: lokal vollstaendig → lokal, lokal halb → VRM, alt o
     await client.end();
   }
 });
+
+// Codex 633d1caf (P2): Gewinnen die eigenen Hauptreihen, darf eine VRM-Referenzreihe
+// (vrm_solar_yield_w, ohne lokales Gegenstueck) den Slot nicht zum VRM-Slot machen
+// und Akku 2 verwerfen.
+test('Akku 2 bleibt, wenn die Hauptreihen lokal gewinnen und nur eine VRM-Referenzreihe da ist', async () => {
+  const at = new Date('2026-06-10T10:00:00Z');
+  const rows = [
+    { slot_start_utc: at, series_key: 'battery_discharge_w', value_num: 0.3, source_kind: 'local_live' },
+    { slot_start_utc: at, series_key: 'second_battery_discharge_w', value_num: 0.2, source_kind: 'local_live' },
+    { slot_start_utc: at, series_key: 'vrm_solar_yield_w', value_num: 1.0, source_kind: 'vrm_import' },
+  ];
+  const db = { async query(sql) { return { rows: /history-viz shared energy slots/.test(sql) ? rows : [] }; } };
+  const stack = await api(db).getStack({ view: 'month', date: '2026-06-15' });
+  const sum = (arr) => Math.round(arr.reduce((a, b) => a + (Number(b) || 0), 0) * 1000) / 1000;
+  assert.equal(sum(stack.body.batteryDischargeKwh), 0.5, 'Entladung beider Akkus');
+  assert.equal(sum(stack.body.secondBatteryDischargeKwh), 0.2, 'Akku 2 nicht verworfen');
+});
+
+test('Jahr-Buendelung: VRM-Slot nur ueber die Hauptreihen', async () => {
+  const calls = [];
+  const db = { async query(sql, params) { calls.push({ sql: String(sql), params }); return { rows: [] }; } };
+  await api(db).getCycles({ view: 'year', date: '2026-06-15' });
+  const call = calls.find((c) => /vrm_slots AS/.test(c.sql));
+  assert.ok(call, 'Jahr-Abfrage');
+  assert.match(call.sql, /vrm_slots AS \([^)]*series_key = ANY\(\$5\)/s);
+  assert.ok(call.params[4].includes('battery_discharge_w') && !call.params[4].includes('vrm_solar_yield_w'));
+});
