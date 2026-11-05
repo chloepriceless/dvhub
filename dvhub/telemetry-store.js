@@ -4,6 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
 import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
+// Historie: eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, „B“).
+import { chooseRawEntries, localSampleCreditSeconds, pickSlotSourceRow, VRM_RAW_SCOPE } from './energy-source-rule.js';
 
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
@@ -61,17 +63,16 @@ const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => {
   if (dropLocal) fields.vrmFlows = true;
   return fields;
 };
-// Bevorzugte Quelle einer Reihe im Slot, ohne Seiteneffekt (wie pickSeriesRow).
-const preferredSourceKindOf = (bySource, preferredSourceKinds) => {
-  if (!bySource) return null;
-  for (const kind of preferredSourceKinds) if (bySource.has(kind)) return kind;
-  return [...bySource.values()][0]?.source_kind ?? null;
-};
+// Gewaehlte Quelle einer Reihe im Slot, ohne Seiteneffekt (wie pickSeriesRow).
+const preferredSourceKindOf = (bySource, preferredSourceKinds) => (
+  pickSlotSourceRow(bySource, preferredSourceKinds)?.source_kind ?? null
+);
 const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
   .some((seriesKey) => preferredSourceKindOf(bucket.get(seriesKey), preferredSourceKinds) === 'vrm_import');
 // Rohdaten-Ausweichpfad: VRM-Import landet mit scope 'history' in timeseries_samples.
-const rawBucketHasVrmFlows = (bucket) => PRIMARY_FLOW_SERIES
-  .some((seriesKey) => (bucket.get(seriesKey) || []).some((entry) => entry.scope === 'history'));
+// Je Reihe gilt die gewaehlte Quelle (chooseRawEntries), nie ein Mittel aus beiden.
+const rawBucketHasVrmFlows = (bucket, bucketSeconds) => PRIMARY_FLOW_SERIES
+  .some((seriesKey) => chooseRawEntries(bucket.get(seriesKey), bucketSeconds).some((entry) => entry.scope === VRM_RAW_SCOPE));
 
 const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_import_w',
@@ -338,7 +339,14 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       quality=excluded.quality,
       value_num=COALESCE(energy_slots_15m.value_num, 0) + COALESCE(excluded.value_num, 0),
       unit=excluded.unit,
-      meta_json=excluded.meta_json,
+      -- Abdeckung der eigenen Werte aufaddieren (energy-source-rule.js); ein Slot
+      -- von vor 1.0.10 ohne Abdeckung zaehlt ab jetzt nur den neuen Teil.
+      meta_json=CASE
+        WHEN json_extract(excluded.meta_json, '$.coverageS') IS NOT NULL THEN json_set(excluded.meta_json,
+          '$.coverageS', COALESCE(json_extract(energy_slots_15m.meta_json, '$.coverageS'), 0) + json_extract(excluded.meta_json, '$.coverageS'),
+          '$.samples', COALESCE(json_extract(energy_slots_15m.meta_json, '$.samples'), 0) + COALESCE(json_extract(excluded.meta_json, '$.samples'), 0))
+        ELSE excluded.meta_json
+      END,
       updated_at=CURRENT_TIMESTAMP
   `);
   const insertReplacedEnergySlotStmt = db.prepare(`
@@ -434,6 +442,8 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         slotSeconds: MATERIALIZED_SLOT_BUCKET_SECONDS,
         nextStartMs: spread ? nextVrmStart(row) : null
       });
+      // Eigene Werte: Abdeckung je Slot mitzaehlen (energy-source-rule.js).
+      const credit = sourceKind === 'local_live' ? localSampleCreditSeconds(row.resolutionSeconds, MATERIALIZED_SLOT_BUCKET_SECONDS) : 0;
       for (const { slotStartMs, valueNum } of shares) {
         if (!Number.isFinite(valueNum)) continue;
         const slotStartUtc = new Date(slotStartMs).toISOString();
@@ -442,6 +452,8 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         if (existing) {
           existing.valueNum += valueNum;
           existing.meta = mergeMaterializedMeta(existing.meta, row.meta);
+          existing.coverageS += credit;
+          existing.samples += 1;
           continue;
         }
         writes.set(key, {
@@ -452,11 +464,17 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           valueNum,
           unit: 'kWh',
           meta: mergeMaterializedMeta(null, row.meta),
-          writeMode
+          writeMode,
+          coverageS: credit,
+          samples: 1
         });
       }
     }
-    return [...writes.values()];
+    return [...writes.values()].map(({ coverageS, samples, ...write }) => (
+      write.sourceKind === 'local_live'
+        ? { ...write, meta: { ...(write.meta || {}), coverageS, samples } }
+        : write
+    ));
   }
 
   function writeSamples(rows) {
@@ -698,13 +716,15 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
     return [...buckets.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([ts, bucket]) => {
+        // Je Reihe EINE Quelle (eigene Werte zuerst, VRM fuellt auf), nie gemittelt.
+        const chosenEntries = (seriesKey) => chooseRawEntries(bucket.get(seriesKey), bucketSeconds);
         const energyForSeries = (seriesKey) => {
-          const avgPower = weightedAverage(bucket.get(seriesKey) || []);
+          const avgPower = weightedAverage(chosenEntries(seriesKey));
           if (!Number.isFinite(avgPower)) return 0;
           return roundKwh((avgPower * bucketSeconds) / 3600000);
         };
         const flagsForSeries = (seriesKey) => {
-          const entries = bucket.get(seriesKey) || [];
+          const entries = chosenEntries(seriesKey);
           const meta = entries.map((entry) => parseMetaJson(entry.meta_json)).filter(Boolean);
           return {
             estimated: meta.some((item) => item.provenance === 'estimated'),
@@ -747,7 +767,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'),
           batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
-          ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket)),
+          ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket, bucketSeconds)),
           estimated: estimatedSeriesKeys.length > 0,
           incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length,
@@ -836,23 +856,16 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
       .map(([ts, bucket]) => {
         const selectedSourceKinds = new Set();
         const availableSourceKinds = new Set();
+        // Vollstaendiger eigener Wert zuerst, sonst die Reihenfolge preferredSourceKinds.
         const pickSeriesRow = (seriesKey) => {
           const bySource = bucket.get(seriesKey);
           if (!bySource) return null;
-          for (const sourceKind of preferredSourceKinds) {
-            const row = bySource.get(sourceKind);
-            if (row) {
-              selectedSourceKinds.add(sourceKind);
-              for (const key of bySource.keys()) availableSourceKinds.add(key);
-              return row;
-            }
-          }
-          const fallbackRow = [...bySource.values()][0] || null;
-          if (fallbackRow) {
-            selectedSourceKinds.add(fallbackRow.source_kind);
+          const row = pickSlotSourceRow(bySource, preferredSourceKinds);
+          if (row) {
+            selectedSourceKinds.add(row.source_kind);
             for (const key of bySource.keys()) availableSourceKinds.add(key);
           }
-          return fallbackRow;
+          return row;
         };
         const energyForSeries = (seriesKey) => Number(pickSeriesRow(seriesKey)?.value_num || 0);
         const flagsForSeries = (seriesKey) => {

@@ -995,7 +995,11 @@ test('history runtime carries extended vrm flow values into rows and kpis', asyn
   assert.equal(summary.charts.dayEnergyLines[0].solarDirectUseKwh, 0.7);
 });
 
-test('history runtime reads past days from history scope and the current day from live scope', async () => {
+// Seit 05.11.2026 (Entscheidung B: eigene Messwerte zuerst, VRM fuellt auf)
+// liest der Rohdaten-Ausweichpfad beide Quellen in EINER Abfrage; der Speicher
+// waehlt je Reihe und Viertelstunde (energy-source-rule.js). Vorher galt fuer
+// vergangene Tage nur der VRM-Import, fuer heute nur die eigenen Werte.
+test('history runtime reads past days and the current day from both scopes, the store picks per series', async () => {
   const calls = [];
   const runtime = createHistoryRuntime({
     store: {
@@ -1014,11 +1018,11 @@ test('history runtime reads past days from history scope and the current day fro
   await runtime.getSummary({ view: 'day', date: '2026-03-09' });
   await runtime.getSummary({ view: 'day', date: '2026-03-10' });
 
-  assert.deepEqual(calls[0].scopes, ['history']);
-  assert.deepEqual(calls[1].scopes, ['live']);
+  assert.deepEqual(calls[0].scopes, ['history', 'live']);
+  assert.deepEqual(calls[1].scopes, ['history', 'live']);
 });
 
-test('history runtime splits ranges that span today into history and live queries', async () => {
+test('history runtime reads ranges that span today in one query over both scopes', async () => {
   const calls = [];
   const runtime = createHistoryRuntime({
     store: {
@@ -1036,13 +1040,10 @@ test('history runtime splits ranges that span today into history and live querie
 
   await runtime.getSummary({ view: 'week', date: '2026-03-10', includeSlots: true });
 
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0].scopes, ['history']);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].scopes, ['history', 'live']);
   assert.equal(calls[0].start, '2026-03-08T23:00:00.000Z');
-  assert.equal(calls[0].end, '2026-03-09T23:00:00.000Z');
-  assert.deepEqual(calls[1].scopes, ['live']);
-  assert.equal(calls[1].start, '2026-03-09T23:00:00.000Z');
-  assert.equal(calls[1].end, '2026-03-15T23:00:00.000Z');
+  assert.equal(calls[0].end, '2026-03-15T23:00:00.000Z');
 });
 
 test('history runtime reads materialized slots first and falls back to aggregated raw slots only when needed', async () => {
@@ -2749,4 +2750,12 @@ test('Increment 3: ehrliche Anlage (alle Slots ≤ capKwp×Stunden) → Cap wirk
   assert.equal(capped.kpis.pvKwh, 3.2);
   assert.equal(capped.kpis.solarToGridKwh, 2.0);
   assert.equal(capped.kpis.pvCapKwp, 100);
+});
+
+// Die Quellenwahl je Viertelstunde (05.11.2026, eigene Messwerte zuerst) ist
+// eine Aenderung der Slot-Bewertung: abgelegte Jahr/Alle-Staende muessen einmal
+// neu gerechnet werden.
+test('Ablage der Jahr/Alle-Staende: Version 5 seit der Quellenwahl je Viertelstunde', async () => {
+  const { SUMMARY_CACHE_VERSION } = await import('../history-runtime.js');
+  assert.ok(SUMMARY_CACHE_VERSION >= 5);
 });

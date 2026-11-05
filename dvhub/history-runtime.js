@@ -585,7 +585,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // 2 (21.10.2026): Akku der zweiten GX-Anlage als eigene Felder und Quelle.
 // 3 (25.10.2026): Stundenpreise (vor 10/2025) gelten fuer alle vier Viertelstunden.
 // 4 (25.10.2026): VRM-Abschnitte im Zwischenstand (Akku-2-Ladestand-Uebertrag).
-export const SUMMARY_CACHE_VERSION = 4;
+// 5 (05.11.2026): eigene Messwerte zuerst, VRM fuellt auf (energy-source-rule.js).
+export const SUMMARY_CACHE_VERSION = 5;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;
@@ -1519,41 +1520,17 @@ export function createHistoryRuntime({
   // 77 kWh, also braucht jeder Slot seine eigene Kapazität. Eine
   // Zeilen-/Summen-Rechnung mit EINER Kapazität ginge über einen Ausbau hinweg
   // schief — genau der Fehler, den die Ausbaustufen beheben.
+  // Rohdaten-Ausweichpfad: beide Quellen in einer Abfrage; der Speicher waehlt je
+  // Reihe und Viertelstunde (eigene Messwerte zuerst, VRM fuellt auf —
+  // energy-source-rule.js, Christin 05.11.2026). Bis 1.0.9 galt hier fuer
+  // vergangene Tage nur der VRM-Import und fuer heute nur die eigenen Werte.
   async function listRawFallbackSlotsForRange({ start, end }) {
-    const today = getCurrentDate();
-    const todayStart = localDateTimeToUtcIso(today, 0, 0);
-
-    if (end <= todayStart) {
-      return await store.listAggregatedEnergySlots({
-        start,
-        end,
-        bucketSeconds: SLOT_BUCKET_SECONDS,
-        scopes: ['history']
-      });
-    }
-
-    if (start >= todayStart) {
-      return await store.listAggregatedEnergySlots({
-        start,
-        end,
-        bucketSeconds: SLOT_BUCKET_SECONDS,
-        scopes: ['live']
-      });
-    }
-
-    const historySlots = await store.listAggregatedEnergySlots({
+    return await store.listAggregatedEnergySlots({
       start,
-      end: todayStart,
-      bucketSeconds: SLOT_BUCKET_SECONDS,
-      scopes: ['history']
-    });
-    const liveSlots = await store.listAggregatedEnergySlots({
-      start: todayStart,
       end,
       bucketSeconds: SLOT_BUCKET_SECONDS,
-      scopes: ['live']
+      scopes: ['history', 'live']
     });
-    return [...historySlots, ...liveSlots].sort((left, right) => left.ts.localeCompare(right.ts));
   }
 
   async function listEnergySlotsForRange({ start, end }) {

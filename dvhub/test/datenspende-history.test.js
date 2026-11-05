@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { slotRowsToReadings, liveRowsToReadings, slotSeriesFor } from '../services/datenspende/history.js';
+import { slotRowsToReadings, liveRowsToReadings, slotSeriesFor, readSlotWindow } from '../services/datenspende/history.js';
 import { createDatenspende, SIDECAR_NAME } from '../services/datenspende/index.js';
 import { DatenspendeRequestError, DatenspendeConnError } from '../services/datenspende/client.js';
 
@@ -35,6 +35,32 @@ test('Viertelstunden: kWh×4000=W, W bleibt W, VRM vor eigener Messung, Batterie
   assert.equal(at('load'), 1200);
   assert.equal(at('battery'), -1200, 'Entladen überwiegt → negativ');
   assert.equal(at('grid', '2025-06-15T10:15:00Z'), 250);
+});
+
+// Eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, Entscheidung B):
+// ein eigener Wert, der die Viertelstunde vollständig abdeckt, gewinnt; ein
+// halber oder alter (ohne Abdeckungsangabe) verliert wie bisher gegen VRM.
+test('Viertelstunden: eigener Wert vollstaendig → eigener, halb oder alt → VRM', () => {
+  const t = '2026-11-05T10:00:00.000Z';
+  const r = slotRowsToReadings([
+    { slot_start_utc: t, series_key: 'pv_total_w', source_kind: 'vrm_import', unit: 'kWh', value_num: 1.5 },
+    { slot_start_utc: t, series_key: 'pv_total_w', source_kind: 'local_live', unit: 'kWh', value_num: 1.0, meta_json: '{"coverageS":900,"samples":180}' },
+    { slot_start_utc: t, series_key: 'self_consumption_w', source_kind: 'vrm_import', unit: 'kWh', value_num: 0.5 },
+    { slot_start_utc: t, series_key: 'self_consumption_w', source_kind: 'local_live', unit: 'kWh', value_num: 0.2, meta_json: '{"coverageS":450,"samples":90}' },
+    { slot_start_utc: t, series_key: 'grid_import_w', source_kind: 'local_live', unit: 'kWh', value_num: 0.3, meta_json: null },
+    { slot_start_utc: t, series_key: 'grid_import_w', source_kind: 'vrm_import', unit: 'kWh', value_num: 0.1 },
+  ], ALL);
+  const at = (key) => r.find((x) => x.key === key)?.power;
+  assert.equal(at('pv'), 4000, 'eigener Wert vollstaendig');
+  assert.equal(at('load'), 2000, 'eigener Wert halb → VRM');
+  assert.equal(at('grid'), 400, 'alter eigener Wert ohne Abdeckung → VRM');
+});
+
+test('Viertelstunden-Abfrage liest meta_json fuer die Quellenwahl', async () => {
+  const calls = [];
+  const db = { async query(sql, params) { calls.push(String(sql)); return { rows: [] }; } };
+  await readSlotWindow(db, '2026-11-05T00:00:00Z', '2026-11-06T00:00:00Z', ALL);
+  assert.match(calls[0], /meta_json/);
 });
 
 test('Viertelstunden: fehlende Paar-Seite = 0 (VRM lässt Null-Slots aus), beide fehlen = kein Wert', () => {

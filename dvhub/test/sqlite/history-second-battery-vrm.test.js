@@ -90,3 +90,51 @@ test('Slots tragen das VRM-Kennzeichen nur, wenn ihre Fluesse aus dem VRM-Import
     vrm.close();
   }
 });
+
+// Altbefund 21.10.2026 (Zweig fix/ausweichpfad-quelle, d257b5b1): Der
+// Rohdaten-Ausweichpfad mittelte VRM-Import und lokale Werte derselben Reihe
+// (0,5 und 0,3 kWh → 0,4). Seit 05.11.2026 gilt je Reihe EINE Quelle, eigene
+// Werte zuerst — hier deckt die einzelne lokale 900-s-Probe die Viertelstunde
+// aber nicht ab (hoechstens 60 s je Probe), also fuellt der VRM-Import auf.
+test('Ausweichpfad listAggregatedEnergySlots: lokal unvollstaendig → VRM, nicht gemittelt', () => {
+  const store = storeWithBackfill(true);
+  try {
+    const [slot] = store.listAggregatedEnergySlots({ start: '2026-03-09T00:00:00.000Z', end: '2026-03-10T00:00:00.000Z' });
+    assert.equal(slot.batteryToGridKwh, 0.5);
+    assert.equal(slot.batteryDischargeKwh, 0.5);
+    assert.equal(slot.exportKwh, 0.5);
+    assert.equal(slot.secondBatteryToGridKwh, 0, 'VRM-Slot ohne lokale Akku-2-Werte');
+  } finally {
+    store.close();
+  }
+});
+
+// Gegenstueck: lueckenlose eigene 5-s-Proben decken die Viertelstunde ab → lokal,
+// samt der lokalen Akku-2-Werte (kein VRM-Slot).
+test('vorberechnete Slots und Ausweichpfad: lokal vollstaendig → lokal, Akku 2 bleibt', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-second-vrm-full-'));
+  const store = createTelemetryStore({ dbPath: path.join(dir, 'telemetry.sqlite'), rawRetentionDays: 30, rollupIntervals: [900] });
+  try {
+    const startMs = Date.parse(TS);
+    const local = [];
+    for (let s = 0; s < 900; s += 5) {
+      const ts = new Date(startMs + s * 1000).toISOString();
+      for (const [seriesKey, kwh] of [['grid_export_w', 0.5], ['battery_to_grid_w', 0.3], ['second_battery_to_grid_w', 0.2]]) {
+        local.push({ seriesKey, ts, value: w(kwh), scope: 'live', source: 'local_poll', quality: 'raw', resolutionSeconds: 5, unit: 'W' });
+      }
+    }
+    store.writeSamples(local);
+    store.writeSamples([sample('grid_export_w', 0.5, 'history', 'vrm_import'), sample('battery_to_grid_w', 0.5, 'history', 'vrm_import')]);
+    const range = { start: '2026-03-09T00:00:00.000Z', end: '2026-03-10T00:00:00.000Z' };
+    const [mat] = store.listMaterializedEnergySlots(range);
+    assert.equal(Math.round(mat.batteryToGridKwh * 1000) / 1000, 0.3);
+    assert.equal(Math.round(mat.secondBatteryToGridKwh * 1000) / 1000, 0.2);
+    assert.equal(mat.vrmFlows, undefined);
+    const [raw] = store.listAggregatedEnergySlots({ ...range, bucketSeconds: 900 });
+    assert.equal(raw.batteryToGridKwh, 0.3);
+    assert.equal(raw.secondBatteryToGridKwh, 0.2);
+    assert.equal(raw.vrmFlows, undefined);
+  } finally {
+    store.close();
+  }
+});

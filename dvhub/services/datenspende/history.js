@@ -5,7 +5,9 @@
 //   1. energy_slots_15m (Viertelstunden, VRM-Import bzw. eigene Messung) — bis
 //      die hochaufgelösten Live-Daten beginnen. Werte sind Energie je 15 min
 //      (unit 'kWh', × 4000 = mittlere Leistung W) oder bereits Leistung (unit 'W').
-//      VRM hat Vorrang (reicht am weitesten zurück), sonst eigene Messung.
+//      Je Reihe EINE Quelle: der eigene Wert, wenn er die Viertelstunde
+//      vollständig abdeckt, sonst der VRM-Import (reicht am weitesten zurück),
+//      sonst der eigene (energy-source-rule.js, Christin 05.11.2026).
 //   2. timeseries_samples scope='live' (~5 s) — ab dann.
 //
 // Vorzeichen wie bei der Live-Spende: Netz + Bezug/− Einspeisung, Batterie
@@ -13,6 +15,8 @@
 // energy_slots_15m ist KEIN vorzeichenbehafteter Netto-Wert (Summe aus Laden
 // UND Entladen, prod-geprüft 2026-09-28) — Batterie daher immer als
 // battery_charge_w − battery_discharge_w.
+
+import { isCompleteLocalSlotRow } from '../../energy-source-rule.js';
 
 const KWH15_TO_W = 4000;
 const SLOT_SOURCES = ['vrm_import', 'local_live'];
@@ -49,14 +53,16 @@ export function liveSeriesFor(sources, tileIds = []) {
 }
 
 // Viertelstunden-Zeilen → Messwerte { key, timestamp, power }.
-// rows: { slot_start_utc, series_key, source_kind, unit, value_num }
+// rows: { slot_start_utc, series_key, source_kind, unit, value_num, meta_json }
 export function slotRowsToReadings(rows, sources) {
-  // pro Slot+Reihe den besten Wert (VRM vor eigener Messung)
+  // pro Slot+Reihe den besten Wert: vollständiger eigener Wert, sonst VRM,
+  // sonst eigener (Slots vor 1.0.10 tragen keine Abdeckung → VRM wie bisher)
   const best = new Map(); // `${ms}|${key}` → { rank, w }
   for (const r of rows) {
     const ms = new Date(r.slot_start_utc).getTime();
-    const rank = SLOT_SOURCES.indexOf(r.source_kind);
-    if (!Number.isFinite(ms) || rank < 0) continue;
+    const listed = SLOT_SOURCES.indexOf(r.source_kind);
+    if (!Number.isFinite(ms) || listed < 0) continue;
+    const rank = isCompleteLocalSlotRow(r) ? -1 : listed;
     const w = slotToW(r.value_num, r.unit);
     if (w === null) continue;
     const k = `${ms}|${r.series_key}`;
@@ -146,7 +152,7 @@ export async function readSlotWindow(db, fromIso, toIso, sources) {
   const keys = slotSeriesFor(sources);
   if (!keys.length) return [];
   const { rows } = await db.query(
-    `SELECT slot_start_utc, series_key, source_kind, unit, value_num FROM energy_slots_15m
+    `SELECT slot_start_utc, series_key, source_kind, unit, value_num, meta_json FROM energy_slots_15m
       WHERE slot_start_utc >= $1 AND slot_start_utc < $2 AND series_key = ANY($3) AND source_kind = ANY($4)`,
     [fromIso, toIso, keys, SLOT_SOURCES],
   );

@@ -12,6 +12,18 @@ verweist hierher.
 
 ### Geändert
 
+- **Historie: eigene Messwerte zuerst, der VRM-Import füllt nur auf.** Liegen für eine Viertelstunde eigene,
+  lokal gemessene Werte und ein VRM-Import vor, gilt jetzt je Reihe der eigene Wert. Den VRM-Import nimmt DVhub
+  nur, wenn eigene Werte fehlen oder die Viertelstunde nicht vollständig abdecken (z. B. Neustart von DVhub
+  mitten in der Viertelstunde). Beide Quellen werden nie gemittelt oder gemischt. Bis 1.0.9 hatte der VRM-Import
+  immer Vorrang, und der Rohdaten-Ausweichpfad konnte beide Werte mitteln. Gilt für Historie, Historie-Diagramme
+  und den Bestandsnachversand der Datenspende.
+  - *Vollständig* heißt: die gespeicherten Live-Proben decken die Viertelstunde bis auf höchstens 15 s
+    (bzw. anderthalb Probenabstände) ab, jede Probe zählt höchstens 60 s. DVhub merkt sich die Abdeckung dafür ab
+    1.0.10 je Viertelstunde und Reihe.
+  - **Bereits gespeicherte Viertelstunden ändern sich nicht:** Für Viertelstunden von vor dem Update ist die
+    Abdeckung unbekannt, dort bleibt es bei VRM vor eigenen Werten. Die neue Regel gilt für alle Viertelstunden ab
+    dem Update. Die Jahres-/Gesamtansicht rechnet einmal neu (gleiches Ergebnis für die alten Daten).
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.
