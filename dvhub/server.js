@@ -906,6 +906,10 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     // Netzstrom im Akku (grid-share.js): Anteil, Sperre, Tageswerte.
     gridShare: (() => { try { return ctx.gridShare?.summary?.() ?? null; } catch { return null; } })(),
     clock: state.clock ?? null,
+    // Lizenz umgezogen bzw. von anderer Box übernommen (1.0.10): Hinweis im
+    // Leitstand. Nur gespeicherte Felder — sicher in der 3-s-Abfrage; im
+    // Worker-Betrieb aus dem Runtime-Prozess, der den Lizenzzustand hält.
+    licenseBinding: ctx.licenseService?.getBindingNotice?.() ?? null,
     // Heizstab: Vorhaltung in der EOS-Lastprognose und heute gelieferte Energie.
     heater: {
       reservation: state.optimizer?.heaterReservation ?? null,
@@ -1666,7 +1670,10 @@ const licenseService = createLicenseService({
   getCfg: ctx.getCfg,
   pushLog: ctx.pushLog,
   appDir: __dirname,
-  securityHeaders: SECURITY_HEADERS
+  securityHeaders: SECURITY_HEADERS,
+  // Lizenz auf eine andere Box umgezogen (1.0.10): Meldung über den
+  // Benachrichtigungsdienst — im Worker-Betrieb als notify_direct.
+  notifyDirect: (msg) => ctx.notifyDirect(msg)
 });
 ctx.licenseService = licenseService;
 

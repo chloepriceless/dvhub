@@ -2067,6 +2067,11 @@ function renderDashboardStatus(status) {
     renderTelemetryFreeze(status.telemetryFreeze);
   });
 
+  // Lizenz umgezogen / von anderer Box übernommen (1.0.10, license-banner.js).
+  safeRender('dashboard.license-binding', () => {
+    window.DVhubLicenseBanner?.render(status.licenseBinding);
+  });
+
   safeRender('dashboard.source-mismatch', () => {
     renderSourceMismatch(status.telemetrySourceMismatch);
   });

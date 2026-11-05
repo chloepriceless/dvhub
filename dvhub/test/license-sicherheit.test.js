@@ -261,7 +261,8 @@ test('L-0005: kopierter Zustand mit Machine-File einer anderen Box → kein Pro,
   assert.equal(b.svc.isProActive(), false);
   assert.equal(b.svc.getStatus(), 'active');
   assert.ok(b.state.license.license_key, 'Kunde muss den Schlüssel nicht neu eingeben');
-  assert.equal(b.svc.getState().binding.block, 'bound_to_other_box');
+  // 1.0.10: „von anderer Box übernommen“ (test/license-umzug.test.js), nicht „verloren“.
+  assert.equal(b.svc.getState().binding.block, 'adopted_from_other_box');
 });
 
 test('L-0005: Box A merkt online, dass ihre Maschine an eine andere Box ging (scope.fingerprint)', async () => {

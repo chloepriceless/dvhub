@@ -667,8 +667,14 @@ function licenseBindingMessage(state) {
       + 'Mit „An diese Box binden“ übernimmst du sie, frühestens 24 Stunden nach der letzten Bindung der anderen Box. '
       + 'Gehört dir die andere Box nicht, melde dich beim Support.';
   }
+  // 1.0.10: Zustand von einer anderen Box (kopiert) — nicht automatisch gebunden.
+  if (b.state === 'blocked' && b.block === 'adopted_from_other_box') {
+    return 'Lizenz von anderer Box übernommen – an diese Box binden? Bis dahin sind hier die Pro-Funktionen aus, '
+      + 'die andere Box behält die Lizenz. Mit „An diese Box binden“ holst du sie auf diese Box; '
+      + 'die andere Box verliert dann Pro.';
+  }
   if (b.state === 'blocked') {
-    return 'Diese Lizenz hängt inzwischen an einer anderen Box — hier sind Pro-Funktionen aus. '
+    return 'Deine Lizenz ist jetzt auf einer anderen Box — hier sind Pro-Funktionen aus. '
       + 'Mit „An diese Box binden“ holst du sie auf diese Box; die andere Box verliert dann Pro.';
   }
   if (b.state === 'unbound' && b.error) {

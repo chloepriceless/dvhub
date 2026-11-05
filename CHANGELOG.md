@@ -19,6 +19,19 @@ verweist hierher.
   wie bisher; ein älteres stabiles Paket erscheint nicht mehr als „Update“. Die Bleeding-Edge-Pakete werden vorerst
   von Hand aus `main` gebaut, nur aus Commits, die auf `origin/main` liegen (`docs/release-pakete.md`).
 - **Version 1.0.10 auf main.** Bleeding-Edge-Pakete aus `main` heißen `1.0.10-dev.…` und sortieren damit nach 1.0.9.
+- **Lizenz-Umzug wird gemeldet.** Bindet eine andere Box die Lizenz an sich, schaltete die bisherige Box die
+  Pro-Funktionen bisher still ab. Jetzt kommt einmal je Umzug eine Benachrichtigung über die eingerichteten Kanäle
+  (auch im Betrieb mit getrenntem Runtime-Prozess), und der Leitstand zeigt „Deine Lizenz ist jetzt auf einer anderen
+  Box …“ mit dem Weg zurück (Einstellungen → Lizenz → „An diese Box binden“).
+
+### Geändert (Lizenz)
+
+- **Kopierter Lizenzzustand bindet nicht mehr von selbst.** Startet eine Box mit dem Lizenzzustand einer anderen Box
+  (z. B. ein Test-Aufbau mit kopierter `license_state.json`), nimmt sie der anderen Box die Lizenz nicht mehr
+  automatisch weg. Sie zeigt „Lizenz von anderer Box übernommen – an diese Box binden?“; gebunden wird erst über
+  „An diese Box binden“ oder einen hier neu eingegebenen Schlüssel. Erkannt wird das am Machine-File einer anderen
+  Box und, ab diesem Stand, an der Herkunft, die DVhub im Lizenzzustand vermerkt. Normale Boxen merken davon nichts:
+  ihr Zustand gilt beim ersten Start weiter als eigener, ein neu eingegebener Schlüssel bindet wie bisher sofort.
 
 ### Geändert
 
