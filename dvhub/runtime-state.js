@@ -243,6 +243,25 @@ function buildVpnSnapshot(vpn = null) {
   return pickFields(vpn, VPN_FIELDS);
 }
 
+// EOS-Läufe (eos-run-trigger.js, state.optimizer.eosRun): Laufdauer und
+// Steuerzeitraum des Plans. Im getrennten Betrieb (DVHUB_ENABLE_RUNTIME_WORKER=1)
+// laufen die Läufe im Runtime-Prozess, /api/eos/plan im Web-Prozess
+// (Codex-Gegenprüfung 57608a1e).
+const EOS_RUN_FIELDS = ['avgDurationS', 'recentRuns', 'lastDurationS', 'lastDoneAt', 'lastPlanControl'];
+
+function buildEosRunSnapshot(eosRun = null) {
+  if (!eosRun || typeof eosRun !== 'object') return null;
+  return pickFields(eosRun, EOS_RUN_FIELDS);
+}
+
+/** Web-Prozess: eosRun aus dem Runtime-Schnappschuss übernehmen (eigene Felder bleiben). */
+export function applyRuntimeEosRun(state, snapshot) {
+  const run = snapshot && typeof snapshot === 'object' ? snapshot.eosRun : null;
+  if (!state || !run || typeof run !== 'object') return;
+  state.optimizer = state.optimizer || {};
+  state.optimizer.eosRun = { ...(state.optimizer.eosRun || {}), ...run };
+}
+
 export function buildRuntimeSnapshot({
   now = Date.now(),
   meter = {},
@@ -250,7 +269,8 @@ export function buildRuntimeSnapshot({
   schedule = {},
   telemetry = {},
   historyImport = null,
-  vpn = null
+  vpn = null,
+  eosRun = null
 } = {}) {
   return {
     capturedAt: normalizeIso(now),
@@ -259,7 +279,8 @@ export function buildRuntimeSnapshot({
     schedule: buildScheduleSnapshot(schedule),
     telemetry: buildTelemetrySnapshot(telemetry),
     historyImport: buildHistoryImportSnapshot(historyImport),
-    vpn: buildVpnSnapshot(vpn)
+    vpn: buildVpnSnapshot(vpn),
+    eosRun: buildEosRunSnapshot(eosRun)
   };
 }
 

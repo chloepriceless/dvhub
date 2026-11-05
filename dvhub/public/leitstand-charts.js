@@ -1506,6 +1506,16 @@
     }
   }
 
+  // Hinweis bei langen Läufen (runHint aus /api/eos/plan): nur Text, nichts
+  // wird umgestellt.
+  function renderEosRunHint(eos) {
+    var el = document.getElementById('eosPlanHint');
+    if (!el) return;
+    var text = eos && eos.runHint && eos.runHint.text ? String(eos.runHint.text) : '';
+    el.textContent = text;
+    el.hidden = !text;
+  }
+
   function renderEosPlanChart(eos) {
     renderEosRemoteInfo(eos && eos.remote ? eos.remote : null);
     var canvas = document.getElementById('eosPlanChart');
@@ -1536,9 +1546,11 @@
         skeleton.style.animation = 'none';
       }
       if (kpiEl) kpiEl.textContent = '';
+      renderEosRunHint(eos);
       return;
     }
     if (skeleton) skeleton.style.display = 'none';
+    renderEosRunHint(eos);
 
     var series = eosPlanSeries(output);
     var socPts = series.soc;
@@ -1608,6 +1620,17 @@
           backgroundColor: _aurA('--chart-now', 0.7, 'rgba(255,165,0,0.7)'), color: _aur('--text', '#fff'), font: { size: 11 } }
       } }
     };
+    // E-Auto-Frist (1.0.10): Plan reicht bis zur Abfahrt in geschätzte Preise
+    // (/api/eos/plan control.estimatedFrom) — den Bereich sichtbar abheben.
+    var estFromMs = eos.control && eos.control.estimatedFrom ? new Date(eos.control.estimatedFrom).getTime() : NaN;
+    if (isFinite(estFromMs) && estFromMs < xmax) {
+      options.plugins.annotation.annotations.estimatedPrices = {
+        type: 'box', xMin: Math.max(estFromMs, xmin), xMax: xmax,
+        backgroundColor: _aurA('--text-dim', 0.10, 'rgba(140,150,170,0.10)'), borderWidth: 0,
+        label: { display: true, content: 'Preise geschätzt', position: { x: 'start', y: 'start' },
+          color: _aur('--text-2', '#8b95a8'), font: { size: 10 } }
+      };
+    }
 
     var config = { type: 'line', data: { datasets: datasets }, options: options };
     if (eosPlanChart) {
@@ -1626,12 +1649,22 @@
       if (isFinite(rev)) parts.push('Erlös ' + rev.toFixed(2).replace('.', ',') + ' €');
       if (isFinite(cost) && cost > 0.005) parts.push('Kosten ' + cost.toFixed(2).replace('.', ',') + ' €');
       if (isFinite(lossKwh)) parts.push('Verluste ' + lossKwh.toFixed(1).replace('.', ',') + ' kWh');
+      // Mittlere Laufdauer der letzten EOS-Läufe (eos-run-trigger.js).
+      var avgS = eos.run && Number(eos.run.avgDurationS);
+      if (avgS > 0) parts.push('Laufzeit Ø ' + (avgS < 120 ? Math.round(avgS) + ' s' : (avgS / 60).toFixed(1).replace('.', ',') + ' min'));
       kpiEl.textContent = parts.join('  ·  ');
     }
     if (subtitle && output.validFrom && output.validUntil) {
       var fmtHm = function (d) { return new Date(d).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); };
       var text = fmtHm(output.validFrom) + ' → ' + fmtHm(output.validUntil) + ' · ' + (Number(output.slotMinutes) || 15) + '-Min';
       if (output.generatedAt) text += ' · gerechnet ' + fmtHm(output.generatedAt);
+      // Steuerzeitraum bis zur Abfahrt des E-Autos in geschätzte Preise (1.0.10).
+      var ctl = eos.control;
+      if (ctl && ctl.reason === 'ev_deadline' && ctl.estimatedFrom) {
+        var depText = ctl.deadline && ctl.deadline.at ? ' ' + fmtHm(ctl.deadline.at) : '';
+        text += (ctl.deadlineCovered === false ? ' · Richtung Abfahrt E-Auto' + depText + ' (nicht ganz erreicht)' : ' · bis Abfahrt E-Auto' + depText)
+          + ', ab ' + fmtHm(ctl.estimatedFrom) + ' geschätzte Preise';
+      }
       // Nach einem EOS-Neustart bleibt der letzte Plan sichtbar, bis EOS neu gerechnet hat.
       if (eos.plan && eos.plan.current === false) text += ' · EOS rechnet neu';
       subtitle.textContent = text;

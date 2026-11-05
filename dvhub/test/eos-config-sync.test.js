@@ -199,13 +199,15 @@ test('pickGeneticSizing: full upstream sizing at all resolutions', () => {
   // Operator preference: full-quality plan + slower EMS-tick beats a degraded
   // plan with a faster tick at sub-hourly slot resolutions. ems.interval
   // scales out so the genetic loop never overlaps with the next tick.
-  assert.deepEqual(pickGeneticSizing(3600), { generations: 400, individuals: 300 });
-  assert.deepEqual(pickGeneticSizing(1800), { generations: 400, individuals: 300 });
-  assert.deepEqual(pickGeneticSizing(900),  { generations: 400, individuals: 300 });
-  assert.deepEqual(pickGeneticSizing(7200), { generations: 400, individuals: 300 });
-  // optimizer.eosGeneticGenerations (kleine Boards): 50–1000, 0/leer = 400
-  assert.deepEqual(pickGeneticSizing(900, 200), { generations: 200, individuals: 300 });
-  assert.deepEqual(pickGeneticSizing(900, 0), { generations: 400, individuals: 300 });
+  // Standard 200 seit 1.0.10 (Christin 05.11.2026: „bei unseren normalen
+  // Installationen bei 200 bleiben“; vorher fiel ein leeres Feld auf 400).
+  assert.deepEqual(pickGeneticSizing(3600), { generations: 200, individuals: 300 });
+  assert.deepEqual(pickGeneticSizing(1800), { generations: 200, individuals: 300 });
+  assert.deepEqual(pickGeneticSizing(900),  { generations: 200, individuals: 300 });
+  assert.deepEqual(pickGeneticSizing(7200), { generations: 200, individuals: 300 });
+  // optimizer.eosGeneticGenerations: 50–1000, 0/leer = 200
+  assert.deepEqual(pickGeneticSizing(900, 400), { generations: 400, individuals: 300 });
+  assert.deepEqual(pickGeneticSizing(900, 0), { generations: 200, individuals: 300 });
   assert.deepEqual(pickGeneticSizing(900, 10), { generations: 50, individuals: 300 });
   assert.deepEqual(pickGeneticSizing(900, 5000), { generations: 1000, individuals: 300 });
 });
@@ -508,7 +510,7 @@ test('Sync sendet nur Geändertes; nach invalidateSentConfig wieder alles', asyn
     const second = await s.sync();
     assert.equal(puts.length, n1, 'unveränderte Werte gehen nicht erneut raus');
     assert.equal(second.unchanged, second.applied.length);
-    cfg.optimizer.eosGeneticGenerations = 200;
+    cfg.optimizer.eosGeneticGenerations = 100; // Standard ist seit 1.0.10 200
     await s.sync();
     assert.deepEqual(puts.slice(n1), ['/v1/config/optimization/genetic/generations'], 'nur die geänderte Einstellung');
     s.invalidateSentConfig();

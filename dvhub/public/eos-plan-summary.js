@@ -109,9 +109,13 @@
     if (!rows.length) return null;
     const last = rows[rows.length - 1];
     const until = last.ts + slotMs;
+    // E-Auto-Frist (1.0.10): erster Slot dieses Tages mit geschätzten Preisen
+    // (/api/eos/plan kennzeichnet ihn mit priceEstimated).
+    const est = rows.find((r) => r.priceEstimated === true);
     return {
       from: rows[0].ts,
       until,
+      estimatedFrom: est ? est.ts : null,
       // Der Plan reicht bis Tagesende, wenn der Slot nach dem letzten schon zum
       // nächsten Tag gehört (sommerzeitfest, ohne Mitternacht auszurechnen).
       complete: dayKeyOf(until) !== dayKeyOf(last.ts),
@@ -131,12 +135,18 @@
     const raw = output && Array.isArray(output.rows) ? output.rows : [];
     const pb = (p && p.priceBasis) || {};
     const feedInBasis = FEED_IN_BASIS[pb.feedIn] ? { kind: pb.feedIn, fixedCt: num(pb.fixedCtKwh) } : null;
-    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis };
+    // Steuerzeitraum bis zur Abfahrt in geschätzte Preise (/api/eos/plan control).
+    const c = (p && p.control) || null;
+    const evDeadline = c && c.reason === 'ev_deadline' && Number.isFinite(Date.parse(c.estimatedFrom))
+      ? { estimatedFrom: Date.parse(c.estimatedFrom), at: Date.parse(c.deadline && c.deadline.at), covered: c.deadlineCovered !== false }
+      : null;
+    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis, evDeadline };
     const rows = raw
       .map((r) => ({ ...r, ts: Date.parse(r && r.ts_utc) }))
       .filter((r) => Number.isFinite(r.ts))
       .sort((a, b) => a.ts - b.ts);
     if (!p || p.available === false || !rows.length) return { ...base, today: null, tomorrow: null };
+    if (base.evDeadline) base.evDeadline.planEnd = rows[rows.length - 1].ts + slotMinutesOf(output, rows.map((r) => r.ts)) * 60000;
 
     const slotMin = slotMinutesOf(output, rows.map((r) => r.ts));
     const slotMs = slotMin * 60000;
@@ -231,6 +241,9 @@
   }
 
   const REASON_TEXT = { eos_off: 'EOS ist aus', eos_not_answering: 'EOS antwortet nicht' };
+  const ESTIMATED_HELP = 'Die echten Börsenpreise enden hier. Bis zur Abfahrt des E-Autos rechnet EOS mit geschätzten Preisen, '
+    + 'damit das Auto nicht schon vor Mitternacht teuer geladen wird. Sobald die echten Preise da sind (gegen 13 Uhr), '
+    + 'rechnet EOS neu. Aus Slots mit geschätzten Preisen setzt DVhub keine Akku-Regeln um.';
 
   function view(s) {
     if (!s || !s.available) {
@@ -239,9 +252,14 @@
     }
     const time = (ms) => fmtParts(s.timeZone || DEFAULT_TZ).time.format(new Date(ms));
     const day = (d, label, missing) => {
-      if (!d || d.empty) return { head: missing, export: null, import: null, peak: null, exportTitle: '', importTitle: '' };
+      if (!d || d.empty) return { head: missing, headTitle: '', export: null, import: null, peak: null, exportTitle: '', importTitle: '' };
+      let est = '';
+      if (d.estimatedFrom !== null && d.estimatedFrom !== undefined) {
+        est = d.estimatedFrom <= d.from ? ' · Preise geschätzt' : ` · Preise ab ${time(d.estimatedFrom)} geschätzt`;
+      }
       return {
-        head: `${label}${d.complete ? '' : ` bis ${time(d.until)}`}`,
+        head: `${label}${d.complete ? '' : ` bis ${time(d.until)}`}${est}`,
+        headTitle: est ? ESTIMATED_HELP : '',
         export: exportLine(d.export, s.feedInBasis),
         import: importLine(d.import, time),
         peak: peakLine(d.peak),
@@ -249,8 +267,20 @@
         importTitle: importTitle(d.import),
       };
     };
+    const notes = [];
+    if (s.stale) notes.push('EOS rechnet neu');
+    if (s.evDeadline) {
+      const at = Number.isFinite(s.evDeadline.at) ? ` (${time(s.evDeadline.at)})` : '';
+      // Prognosehorizont reicht nicht bis zur Abfahrt (deadlineCovered false):
+      // das tatsächliche Ende nennen (Codex-Gegenprüfung 3a14d90c).
+      const reach = s.evDeadline.covered || !Number.isFinite(s.evDeadline.planEnd)
+        ? `Plan reicht bis zur Abfahrt des E-Autos${at}`
+        : `Plan reicht Richtung Abfahrt des E-Autos${at}, aber nur bis ${time(s.evDeadline.planEnd)}`;
+      notes.push(`${reach} — ab ${time(s.evDeadline.estimatedFrom)} mit geschätzten Preisen`);
+    }
     return {
-      note: s.stale ? 'EOS rechnet neu' : '',
+      note: notes.join(' · '),
+      noteTitle: s.evDeadline ? ESTIMATED_HELP : '',
       today: day(s.today, 'Heute ab jetzt', 'Heute: kein Plan mehr ab jetzt'),
       tomorrow: day(s.tomorrow, 'Morgen', 'Morgen: noch nicht im Plan'),
     };
@@ -307,11 +337,13 @@
       timeZone: st.timeZone || DEFAULT_TZ,
     }));
     set('eosPlanSummaryNote', v.note);
+    setTitle('eosPlanSummaryNote', v.noteTitle);
     for (const [key, prefix] of [['today', 'eosPlanSummaryToday'], ['tomorrow', 'eosPlanSummaryTomorrow']]) {
       const dv = v[key] || {};
       const box = d.getElementById(prefix);
       if (box) box.hidden = !v[key];
       set(`${prefix}Head`, dv.head);
+      setTitle(`${prefix}Head`, dv.headTitle);
       set(`${prefix}Export`, dv.export);
       set(`${prefix}Import`, dv.import);
       setTitle(`${prefix}Export`, dv.exportTitle);

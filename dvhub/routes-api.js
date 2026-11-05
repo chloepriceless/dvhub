@@ -26,6 +26,8 @@ import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.j
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
 import { eosPlanFeedInBasis } from './services/optimizer/eos-forecast-bridge.js';
+import { eosSlowRunHint } from './services/optimizer/eos-run-hint.js';
+import { planControlFor } from './services/optimizer/eos-run-trigger.js';
 import { requestEosReplanAfterSave } from './services/optimizer/eos-replan-after-save.js';
 import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
@@ -876,6 +878,13 @@ export { requestEosReplanAfterSave };
 // über die ganze Laufzeit der Anfrage rechnete gleichzeitige Änderungen des
 // Kunden oder von Hintergrund-Diensten dem Support zu).
 const supportAuditStorage = new AsyncLocalStorage();
+
+/** Laufdauer für den Leitstand (state.optimizer.eosRun, eos-run-trigger.js); null ohne Lauf. */
+function eosRunStats(run) {
+  const num = (v) => (Number.isFinite(Number(v)) && v !== null && v !== undefined ? Number(v) : null);
+  if (!run || num(run.lastDurationS) === null) return null;
+  return { avgDurationS: num(run.avgDurationS), recentRuns: num(run.recentRuns), lastDurationS: num(run.lastDurationS) };
+}
 
 export function createApiRoutes(ctx) {
   // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
@@ -6862,7 +6871,13 @@ export function createApiRoutes(ctx) {
       }
       const maxRows = Math.min(Math.max(Number(url.searchParams.get('rows')) || 300, 1), 8 * 24 * 4);
       const rows = Array.isArray(plan.data.rows) ? plan.data.rows : [];
-      const output = { ...plan.data, rows: rows.slice(0, maxRows), truncated: rows.length > maxRows, totalCount: rows.length };
+      // Steuerzeitraum des Plans (Modus, Grund, Frist) und — reicht er bis zur
+      // Abfahrt des Autos in geschätzte Preise (eos-forecast-bridge
+      // extendForEvDeadline) — die Kennzeichnung je Zeile (priceEstimated).
+      const control = planControlFor(state.optimizer?.eosRun?.lastPlanControl, Date.parse(plan.data?.generatedAt));
+      const estimatedFromMs = Date.parse(control?.estimatedFrom || '');
+      const shown = rows.slice(0, maxRows).map((r) => (Number.isFinite(estimatedFromMs) && Date.parse(r?.ts_utc) >= estimatedFromMs ? { ...r, priceEstimated: true } : r));
+      const output = { ...plan.data, rows: shown, truncated: rows.length > maxRows, totalCount: rows.length };
       return json(res, 200, {
         ok: true,
         available: true,
@@ -6875,6 +6890,12 @@ export function createApiRoutes(ctx) {
         // Dauer des letzten Laufs, eosPlanFeedInBasis).
         priceBasis: eosPlanFeedInBasis(state.optimizer, getCfg(), Date.parse(plan.data?.generatedAt),
           Number(state.optimizer?.eosRun?.lastDurationS) * 1000),
+        // Laufdauer der letzten erfolgreichen Läufe und — dauern sie im Mittel
+        // über 10 min — ein Vorschlag (100 Generationen, Steuerzeitraum
+        // „automatisch“; eos-run-hint.js). Nur ein Hinweis, nichts wird umgestellt.
+        control,
+        run: eosRunStats(state.optimizer?.eosRun),
+        runHint: eosSlowRunHint(state.optimizer?.eosRun, getCfg()),
         eos: { status: status.status, push: status.push },
         remote: eosRemoteSummary(),
       });

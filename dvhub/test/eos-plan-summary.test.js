@@ -400,3 +400,43 @@ test('Cache-Schlüssel der Leitstand-Dateien im Format YYYYMMDD-slug', () => {
     assert.match(html, new RegExp(`/${f}\\?v=20\\d{6}-[a-z0-9-]+"`), f);
   }
 });
+
+// E-Auto-Frist (DVhub 1.0.10): Reicht der Plan bis zur Abfahrt in geschätzte
+// Preise (/api/eos/plan control.estimatedFrom, Zeilen priceEstimated), sagt es
+// der Block — oben ein Hinweis, am Tag ab wann geschätzt wird.
+test('Plan bis zur Abfahrt mit geschätzten Preisen: Hinweis und Kennzeichnung je Tag', () => {
+  const { summarize, view } = load();
+  const out = plan15();
+  const estFrom = Date.UTC(2026, 9, 26, 23, 0); // 00:00 Uhr
+  for (const r of out.rows) if (Date.parse(r.ts_utc) >= estFrom) r.priceEstimated = true;
+  const control = { reason: 'ev_deadline', estimatedFrom: iso(estFrom), deadline: { kind: 'ev', at: iso(Date.UTC(2026, 9, 27, 6, 0)) } };
+  let v = view(summarize({ available: true, output: out, control }, { now: NOW, epex: EPEX }));
+  assert.equal(v.note, 'Plan reicht bis zur Abfahrt des E-Autos (07:00) — ab 00:00 mit geschätzten Preisen');
+  assert.equal(v.today.head, 'Heute ab jetzt');
+  assert.equal(v.tomorrow.head, 'Morgen bis 10:00 · Preise geschätzt');
+  assert.match(v.tomorrow.headTitle, /geschätzt/);
+  assert.match(v.tomorrow.headTitle, /keine Akku-Regeln/);
+  // Schätzung beginnt mitten am Tag: „ab HH:MM“.
+  for (const r of out.rows) delete r.priceEstimated;
+  const mid = Date.UTC(2026, 9, 26, 21, 0); // 22:00 Uhr
+  for (const r of out.rows) if (Date.parse(r.ts_utc) >= mid) r.priceEstimated = true;
+  v = view(summarize({ available: true, output: out, control: { ...control, estimatedFrom: iso(mid) } }, { now: NOW, epex: EPEX }));
+  assert.equal(v.today.head, 'Heute ab jetzt · Preise ab 22:00 geschätzt');
+  // Ohne Kennzeichnung: alles wie bisher.
+  v = view(summarize({ available: true, output: plan15() }, { now: NOW, epex: EPEX }));
+  assert.equal(v.note, '');
+  assert.equal(v.tomorrow.head, 'Morgen bis 10:00');
+  assert.equal(v.tomorrow.headTitle, '');
+});
+
+// Codex-Gegenprüfung 3a14d90c (P2): Reicht der Prognosehorizont nicht bis zur
+// Abfahrt (deadlineCovered false), nicht „bis zur Abfahrt“ behaupten.
+test('Plan mit geschätzten Preisen, Abfahrt nicht erreicht: Hinweis nennt das Ende', () => {
+  const { summarize, view } = load();
+  const out = plan15();
+  const estFrom = Date.UTC(2026, 9, 26, 23, 0);
+  for (const r of out.rows) if (Date.parse(r.ts_utc) >= estFrom) r.priceEstimated = true;
+  const control = { reason: 'ev_deadline', estimatedFrom: iso(estFrom), deadline: { kind: 'ev', at: iso(Date.UTC(2026, 9, 27, 12, 0)) }, deadlineCovered: false };
+  const v = view(summarize({ available: true, output: out, control }, { now: NOW, epex: EPEX }));
+  assert.equal(v.note, 'Plan reicht Richtung Abfahrt des E-Autos (13:00), aber nur bis 10:00 — ab 00:00 mit geschätzten Preisen');
+});

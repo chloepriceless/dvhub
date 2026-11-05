@@ -978,3 +978,62 @@ test('EOS adapter reaches EOS at an IPv6 literal (http://[::1]:port)', async (t)
     await new Promise((r) => server.close(r));
   }
 });
+
+// DVhub 1.0.10 (E-Auto-Frist, eos-forecast-bridge extendForEvDeadline): Reicht
+// der Steuerzeitraum bis zur Abfahrt in geschätzte Preise, setzt DVhub aus
+// diesen Slots keine Akku-Regeln um — bis sie dran sind, hat EOS mit echten
+// Preisen neu gerechnet. Ohne Kennzeichnung bleibt alles wie bisher.
+test('pullGridSetpoints: keine Regeln aus Slots mit geschätzten Preisen (eosRun.lastPlanControl.estimatedFrom)', async () => {
+  const solution = {
+    solution: {
+      data: {
+        '2026-06-06T21:45:00Z': { battery1_soc_factor: 0.9, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3000 },
+        '2026-06-06T22:00:00Z': { battery1_soc_factor: 0.8, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3000 },
+        '2026-06-06T22:15:00Z': { battery1_soc_factor: 0.7, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3000 },
+      },
+    },
+    prediction: { data: {
+      '2026-06-06T21:45:00Z': { feed_in_tariff_amt_kwh: 0.2 },
+      '2026-06-06T22:00:00Z': { feed_in_tariff_amt_kwh: 0.2 },
+      '2026-06-06T22:15:00Z': { feed_in_tariff_amt_kwh: 0.2 },
+    } },
+  };
+  const mock = await createMockEos((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(solution)); });
+  try {
+    const ctx = { ...makeCtx(`http://127.0.0.1:${mock.port}`), state: { optimizer: { eosRun: { lastPlanControl: { hours: 17, estimatedFrom: '2026-06-06T22:00:00.000Z' } } } } };
+    let slots = await createEosAdapter(ctx).pullGridSetpoints();
+    assert.deepEqual(slots.map((s) => new Date(s.ts).toISOString()), ['2026-06-06T21:45:00.000Z']);
+    ctx.state.optimizer.eosRun.lastPlanControl = { hours: 9, estimatedFrom: null };
+    slots = await createEosAdapter(ctx).pullGridSetpoints();
+    assert.equal(slots.length, 3, 'ohne geschätzte Preise im Plan alles wie bisher');
+  } finally {
+    await mock.close();
+  }
+});
+
+// Codex-Gegenprüfung 3a14d90c (P2): Die Grenze darf nicht an fehlenden
+// Lauf-Angaben scheitern — Lösung schon da, bevor der Lauf-Aufruf antwortet
+// (Angabe des laufenden Laufs), oder DVhub neu gestartet (Ende der echten
+// Preise aus dem letzten Push).
+test('pullGridSetpoints: Grenze auch aus dem laufenden Lauf und aus dem Ende der echten Preise', async () => {
+  const data = {};
+  const pred = {};
+  for (const ts of ['2026-06-06T21:45:00Z', '2026-06-06T22:00:00Z', '2026-06-06T22:15:00Z']) {
+    data[ts] = { battery1_soc_factor: 0.8, grid_consumption_energy_wh: 0, grid_feedin_energy_wh: 3000 };
+    pred[ts] = { feed_in_tariff_amt_kwh: 0.2 };
+  }
+  const solution = { solution: { data }, prediction: { data: pred } };
+  const mock = await createMockEos((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(solution)); });
+  try {
+    const base = makeCtx(`http://127.0.0.1:${mock.port}`);
+    const iso = (s) => s.map((x) => new Date(x.ts).toISOString());
+    // Lauf rechnet noch, Plan aber schon da: Angabe des laufenden Laufs.
+    let ctx = { ...base, state: { optimizer: { eosRun: { inFlight: true, runControl: { estimatedFrom: '2026-06-06T22:00:00.000Z' }, lastPlanControl: { estimatedFrom: null } } } } };
+    assert.deepEqual(iso(await createEosAdapter(ctx).pullGridSetpoints()), ['2026-06-06T21:45:00.000Z']);
+    // Nach einem Neustart keine Lauf-Angaben: Ende der echten Preise aus dem Push.
+    ctx = { ...base, state: { optimizer: { eosRealPriceEnd: '2026-06-06T22:15:00.000Z' } } };
+    assert.deepEqual(iso(await createEosAdapter(ctx).pullGridSetpoints()), ['2026-06-06T21:45:00.000Z', '2026-06-06T22:00:00.000Z']);
+  } finally {
+    await mock.close();
+  }
+});

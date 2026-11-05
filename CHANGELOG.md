@@ -40,6 +40,24 @@ verweist hierher.
   Integration. Jede Messung (alle 30 s, über MQTT/SPiNE häufiger) geht einmal hinaus, nur frische Werte. Neue Quelle
   „Netzspannung (L1–L3)“ in der Datenspende-Kachel, ab Werk an, abwählbar. Bestehende Zähler und Spenden bleiben
   unverändert; die drei Zähler werden beim ersten Wert registriert.
+- **EOS-Steuerzeitraum „automatisch“.** Neue Auswahl unter Einstellungen → EOS-Optimierung → „EOS Steuerzeitraum
+  höchstens“: mindestens 6 h und bis zur Abfahrt des E-Autos (solange es bei EOS angemeldet ist) bzw. bis zum
+  Fensterende eines planbaren Geräts, das heute noch nicht gelaufen ist (ohne Fensterende: frühester Start plus
+  Laufzeit), höchstens so weit, wie Börsenpreise bekannt sind. Dahinter bewertet EOS die Restladung wie bisher über
+  den Prognose-Schwanz. Gemessen auf 305 Tagen echter Daten gleichauf mit dem ganzen Preiszeitraum, bei etwa einem
+  Viertel der Rechenzeit (mit 100 Generationen). Der bisherige Standard (ganzer bekannter Preiszeitraum) bleibt
+  Standard. Das Protokoll `eos_control_horizon` nennt jetzt Modus, Grund und Frist.
+- **EOS-Generationen als Auswahl.** „EOS Generationen“ bietet jetzt „200 (Standard)“, „100 (schwache Hardware,
+  z. B. A55-Boards)“ und „Eigener Wert (50–1000)“. Der Leitstand zeigt am EOS-Fahrplan die mittlere Laufzeit der
+  letzten acht Läufe; dauern sie im Mittel länger als 10 Minuten, schlägt er 100 Generationen und den Steuerzeitraum
+  „automatisch“ vor. Umgestellt wird nichts von selbst.
+- **E-Auto-Ziel erst zur Abfahrt, nicht schon um Mitternacht.** Steckte das Auto vormittags an (Börsenpreise für
+  morgen noch nicht da) und lag die Abfahrt am nächsten Morgen, endete der EOS-Steuerzeitraum um Mitternacht — und
+  EOS verlangte das Ladeziel schon dort, lud also am Abend teuer statt nachts. Jetzt reicht der Steuerzeitraum in
+  genau diesem Fall bis zur Abfahrt; hinter den echten Preisen rechnet EOS mit den geschätzten. Sobald die echten
+  Preise kommen, rechnet EOS neu. Der Leitstand kennzeichnet das am EOS-Fahrplan („Preise geschätzt“, mit Abfahrt)
+  und unter „Laut EOS-Plan“. Aus Slots mit geschätzten Preisen setzt DVhub keine Akku-Regeln um; für den Hausakku
+  allein bleibt es dabei, dass im Steuerzeitraum nur echte Preise liegen. Eine feste Grenze (6/12/24 h) bleibt fest.
 
 ### Geändert
 
@@ -65,6 +83,9 @@ verweist hierher.
   `taken_email`); mehrere Anlagen gehören in EIN Konto („Vorhandenes Konto verwenden“ legt je Anlage einen Haushalt
   an); scheitert die Einrichtung nach dem Haushalt, weist DVhub auf den möglicherweise leeren Haushalt hin, der sich
   im Datenportal löschen lässt.
+- **EOS-Standard 200 statt 400 Generationen.** Ohne eigenen Wert rechnete EOS bisher mit 400 Generationen; gemessen
+  bringt das gegenüber 200 praktisch nichts, kostet aber die doppelte Rechenzeit. Wer ausdrücklich einen Wert
+  eingetragen hat, behält ihn.
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.

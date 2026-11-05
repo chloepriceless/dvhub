@@ -948,6 +948,8 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   font-family:var(--f-mono); font-size:10px; color:var(--text-2);
   display:flex; gap:14px; flex-wrap:wrap;
 }
+/* Hinweis bei langen EOS-Läufen (leitstand-charts.js renderEosRunHint) */
+.eos-plan-hint { margin:6px 0 0; font-family:var(--f-mono); font-size:10px; color:var(--warn); }
 /* EOS-Rechendienst (Fernbetrieb) unter dem EOS-Fahrplan */
 .eos-remote-info {
   margin-top:8px; padding-top:6px; border-top:1px solid var(--hairline);

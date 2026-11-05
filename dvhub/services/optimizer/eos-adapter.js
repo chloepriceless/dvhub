@@ -583,12 +583,28 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     const acfg = (typeof getCfg === 'function' ? getCfg() : null) || {};
     const horizonH = Number(acfg.optimizer?.ruleHorizonHours) > 0 ? Number(acfg.optimizer.ruleHorizonHours) : 12;
     const horizonCutoff = Date.now() + horizonH * 3600 * 1000;
+    // E-Auto-Frist (DVhub 1.0.10, eos-forecast-bridge extendForEvDeadline):
+    // Reicht der Steuerzeitraum des Plans bis zur Abfahrt in geschätzte
+    // Preise, kommen aus diesen Slots keine Akku-Regeln — bis sie dran sind,
+    // hat EOS mit echten Preisen neu gerechnet. Das Laden des Autos selbst
+    // (eos-evcc-bridge) folgt weiter dem Plan.
+    // Grenze = frühester bekannter Beginn geschätzter Preise: aus dem Plan des
+    // letzten Laufs, aus dem gerade rechnenden (dessen Lösung kann vor der
+    // Antwort auf den Lauf-Aufruf da sein) und — ohne Lauf-Angaben, z. B. nach
+    // einem DVhub-Neustart — das Ende der echten Preise aus dem letzten Push
+    // (Codex-Gegenprüfung 3a14d90c). Echte Preise enden nie früher als zuvor,
+    // ein Plan ohne geschätzte Preise ist davon nicht betroffen.
+    const opt = ctx.state?.optimizer || {};
+    const cutoffs = [opt.eosRun?.lastPlanControl?.estimatedFrom, opt.eosRun?.runControl?.estimatedFrom, opt.eosRealPriceEnd]
+      .map((v) => Date.parse(v || '')).filter(Number.isFinite);
+    const estimatedFromMs = cutoffs.length ? Math.min(...cutoffs) : NaN;
     const out = [];
     for (let ri = 0; ri < sol.rows.length; ri++) {
       const r = sol.rows[ri];
       const ts = new Date(r.ts_utc).getTime();
       if (!Number.isFinite(ts)) continue;
       if (ts > horizonCutoff) continue; // beyond the actuation horizon — recomputed next run
+      if (Number.isFinite(estimatedFromMs) && ts >= estimatedFromMs) continue; // geschätzte Preise
       const gridW = (typeof r.dvhubSetpointW === 'number') ? r.dvhubSetpointW : null;
       if (gridW === null) continue;
       // Akku halten bei geplantem Netzbezug (Christin 2026-09-23): EOS will den

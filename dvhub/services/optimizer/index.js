@@ -15,6 +15,7 @@ import { buildScheduleRules, insertOptimizerRules, optimizerSlotsToGridSetpoints
 import { createEosAdapter, resolveEosProxy } from './eos-adapter.js';
 import { createEosFirstPlanWatch, isFreshEosSolution } from './eos-first-plan.js';
 import { createEosRunTrigger, dvhubTriggersEosRuns } from './eos-run-trigger.js';
+import { controlHorizonMode } from './eos-forecast-bridge.js';
 import { socDriftReplan, sparseEosCadence } from './eos-replan-triggers.js';
 import { buildEosOptimization, pickEmsIntervalSec } from './eos-config-sync.js';
 import { enrichPriceSlotsWithCosts } from './cost-model.js';
@@ -328,6 +329,9 @@ export function createOptimizerService(ctx) {
     getIntervalSec: eosIntervalSec,
     getSlotSec: () => buildEosOptimization(getCfg()).interval,
     getHorizonHours: () => state.optimizer?.eosControlHorizonH ?? null,
+    // Wie der Steuerzeitraum zustande kam (Modus, Grund, geschätzte Preise ab) —
+    // geht mit dem Plan als eosRun.lastPlanControl (eos-run-trigger.js).
+    getControlInfo: () => state.optimizer?.eosControl ?? null,
     collectSoc: async () => (ctx.eosForecastBridge?.socForRun
       ? ctx.eosForecastBridge.socForRun()
       : { skipped: 'forecast bridge not ready' }),
@@ -516,6 +520,14 @@ export function createOptimizerService(ctx) {
     eosFirstPushAt = null;
     pushLog('eos_replan_requested', { reason: reason || null });
     eosRunTrigger.kick(`replan:${reason || 'unknown'}`);
+    // EOS nach eigenem Takt + Steuerzeitraum „automatisch“: Der Steuerzeitraum
+    // hängt an Abfahrt und Gerätefristen; ohne Lauf-Anstoß (prepareRun) käme
+    // er erst mit dem nächsten Prognose-Push an — so lange plante EOS gegen den
+    // alten (Codex-Gegenprüfung 6510846b). Neuplan-Anlässe sind selten.
+    const cfg = getCfg();
+    if (!dvhubTriggersEosRuns(cfg) && controlHorizonMode(cfg) === 'auto' && typeof ctx.eosForecastBridge?.push === 'function') {
+      ctx.eosForecastBridge.push().catch((err) => pushLog('eos_forecast_bridge_error', { phase: 'replan', error: err?.message || String(err) }));
+    }
     kickOptimization();
   }
 
