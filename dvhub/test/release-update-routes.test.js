@@ -382,6 +382,20 @@ describe('Paket-Box: Bleeding Edge, wenn ein signierter dev-Index veröffentlich
     } finally { d.cleanup(); }
   });
 
+  it('neuestes dev-Paket fehlt für diese Architektur, ein älteres nicht: gezielte Version bleibt im Kanal dev (Codex 19fd8ea5, P2)', async () => {
+    const older = '1.0.10-dev.20261104000000.cccccccc';
+    const cur = '1.0.10-dev.20261103000000.dddddddd';
+    const check = { ...DEV_CHECK, current: { version: cur, git_sha: SHA, channel: 'dev' }, latest: { ...DEV_CHECK.latest, available: false }, availableVersions: [older] };
+    const h = harness({ channel: 'dev', release: { version: cur, channel: 'dev' }, helper: { check: checkBy(check), install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/apply', { version: older });
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.ok(h.calls.includes(`sudo -n ${RELEASE_HELPER} install ${older} dev`), h.calls.join('\n'));
+      const l = await h.call('POST', '/api/admin/update/apply', {});
+      assert.ok(!h.calls.includes(`sudo -n ${RELEASE_HELPER} install latest dev`), `latest ohne Paket für die Architektur nicht aus dev: ${JSON.stringify(l.payload)}`);
+    } finally { h.cleanup(); }
+  });
+
   it('stable 1.0.10 → dev-Stand derselben Grundversion: nur mit gleichem Commit, sonst Rückschritt (Codex c84c098d, P2)', async () => {
     // Nach der Versionsregel steht main nach einem Release schon auf der
     // nächsten Nummer — ein dev-Paket mit der Grundversion des installierten

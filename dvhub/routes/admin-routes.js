@@ -208,14 +208,19 @@ export function createAdminRoutes(deps) {
   // ── Kanal einer Paket-Box ──
   // Ist ein signierter dev-Index erreichbar? Der Helfer lädt index-dev.json
   // samt .sig und prüft Signatur und Inhalt; ohne verwertbare Version gilt er
-  // als nicht veröffentlicht. → { ok, chk } bzw. { ok: false, detail }.
-  const probeDevIndex = async () => {
+  // als nicht veröffentlicht. target: 'latest' oder eine gezielte Version —
+  // für die muss es ein Paket dieser Architektur geben (Codex 19fd8ea5, P2).
+  // → { ok, chk } bzw. { ok: false, detail }.
+  const probeDevIndex = async (target = 'latest') => {
     try {
       const chk = await releaseHelper(['check', 'dev'], 60000);
       if (chk?.ok === false || !chk?.latest?.version) return { ok: false, detail: 'dev-Index ohne verwertbare Version' };
       // Paket für die Architektur dieser Box? Sonst scheiterte der Auftrag
       // sicher an „kein Paket für …“ (Codex c84c098d, P2).
-      if (chk.latest.available !== true) return { ok: false, detail: `kein Bleeding-Edge-Paket für die Architektur dieser Box (${chk.arch || 'unbekannt'})` };
+      const forArch = target === 'latest'
+        ? chk.latest.available === true
+        : (target === chk.latest.version ? chk.latest.available === true : (chk.availableVersions || []).includes(target));
+      if (!forArch) return { ok: false, detail: `kein Bleeding-Edge-Paket ${target === 'latest' ? '' : `${target} `}für die Architektur dieser Box (${chk.arch || 'unbekannt'})` };
       return { ok: true, chk };
     } catch (e) {
       return { ok: false, detail: helperMessage(e) };
@@ -223,9 +228,9 @@ export function createAdminRoutes(deps) {
   };
   // Wirksamer Kanal für check/apply: dev nur mit erreichbarem dev-Index, sonst
   // stable wie in 1.0.9 (mit Hinweis). chk = check-Antwort für dev, sonst null.
-  const resolvePackageChannel = async () => {
+  const resolvePackageChannel = async (target = 'latest') => {
     if (ctx.getRawCfg()?.updateChannel !== 'dev') return { channel: 'stable', chk: null, notice: null };
-    const d = await probeDevIndex();
+    const d = await probeDevIndex(target);
     if (d.ok) return { channel: 'dev', chk: d.chk, notice: null };
     pushLog('update_dev_package_unavailable', { detail: String(d.detail).slice(0, 300), mode: 'package' });
     return { channel: 'stable', chk: null, notice: PACKAGE_DEV_NOTICE };
@@ -830,7 +835,7 @@ export function createAdminRoutes(deps) {
           }
           target = m[1];
         }
-        const { channel, chk, notice } = await resolvePackageChannel();
+        const { channel, chk, notice } = await resolvePackageChannel(target);
         // Dieselbe Rückschritt-Sperre wie beim Kanalwechsel (Gegenprüfung 1d4ca47d,
         // P2): nach Kanalwechsel + Rückweg meldet check sonst ein „Update“, das
         // zurückstuft.
