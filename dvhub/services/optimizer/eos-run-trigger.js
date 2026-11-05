@@ -51,6 +51,27 @@ export function dvhubTriggersEosRuns(cfg) {
   return cfg?.optimizer?.eosStartAfterPreviousRun !== true;
 }
 
+/** Spielraum beim Zuordnen eines Plans zu seinem Lauf (Uhren von DVhub und EOS/Rechendienst). */
+export const PLAN_MATCH_SLACK_MS = 120_000;
+
+/**
+ * Steuerzeitraum des gezeigten Plans: eosRun.lastPlanControl, wenn der Plan
+ * (generatedAt = EOS-Zeit beim Fertigstellen der Lösung, geneticsolution.py)
+ * aus genau diesem Lauf stammt; sonst null (unbekannt — z. B. Plan aus einem
+ * früheren Prozess oder EOS' eigenem Takt).
+ * @returns {object|null} ohne runStartedAt/runDoneAt
+ */
+export function planControlFor(lastPlanControl, generatedAtMs) {
+  const c = lastPlanControl;
+  if (!c || !Number.isFinite(generatedAtMs)) return null;
+  if (!(generatedAtMs >= c.runStartedAt - PLAN_MATCH_SLACK_MS && generatedAtMs <= c.runDoneAt + PLAN_MATCH_SLACK_MS)) return null;
+  const out = { ...c };
+  delete out.runStartedAt;
+  delete out.runDoneAt;
+  delete out.at;
+  return out;
+}
+
 /** Erste Grenze (Vielfaches von intervalMs seit Epoche) NACH nowMs. */
 export function nextBoundaryMs(nowMs, intervalMs) {
   return (Math.floor(nowMs / intervalMs) + 1) * intervalMs;
@@ -112,11 +133,15 @@ export function alignStartSolution({ genes, geneStartMs, previousSlots, currentS
  *   Steuerzeitraum, alles dahinter gelöscht; eos-forecast-bridge.js).
  *   ok:false (keine echten Preise, Import oder Steuerzeitraum gescheitert) →
  *   kein Lauf.
+ * @param {()=>object|null} [deps.getControlInfo] Steuerzeitraum dieses Laufs
+ *   (state.optimizer.eosControl, nach prepareRun gelesen) — mit dem Plan als
+ *   eosRun.lastPlanControl abgelegt: Leitstand und Regel-Umsetzung erkennen
+ *   daran geschätzte Preise im Plan (E-Auto-Frist, eos-forecast-bridge.js).
  * @param {object} [deps.state]                  state.optimizer.eosRun wird hier geführt
  */
 export function createEosRunTrigger({
   isActive, getIntervalSec, getSlotSec, getHorizonHours, collectSoc, postOptimize,
-  onSolution, eosStatus, prepareRun, state, pushLog,
+  onSolution, eosStatus, prepareRun, getControlInfo, state, pushLog,
   now = () => Date.now(),
   setTimer = (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
   clearTimer = (t) => clearTimeout(t),
@@ -192,6 +217,8 @@ export function createEosRunTrigger({
       return { ok: false, skipped: error };
     }
     const horizonHours = getHorizonHours();
+    let control;
+    try { control = typeof getControlInfo === 'function' ? (getControlInfo() || null) : null; } catch { control = null; }
     const currentSlots = slotsFor(horizonHours);
     const warm = warmStartFor(currentSlots, at);
     const body = { soc };
@@ -222,9 +249,11 @@ export function createEosRunTrigger({
     recentDurationsS.push(durationS);
     if (recentDurationsS.length > EOS_RUN_DURATION_WINDOW) recentDurationsS.shift();
     const avgDurationS = Math.round(recentDurationsS.reduce((a, s) => a + s, 0) / recentDurationsS.length * 10) / 10;
+    const doneAt = now();
     publish({
-      inFlight: false, lastDoneAt: now(), lastDurationS: durationS, lastError: null, lastErrorAt: null,
+      inFlight: false, lastDoneAt: doneAt, lastDurationS: durationS, lastError: null, lastErrorAt: null,
       avgDurationS, recentRuns: recentDurationsS.length,
+      lastPlanControl: control ? { ...control, runStartedAt: at, runDoneAt: doneAt } : null,
     });
     try { await onSolution?.(); } catch { /* der Monitor holt sie sonst beim nächsten Takt */ }
     return { ok: true, durationS };

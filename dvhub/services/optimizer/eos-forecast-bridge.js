@@ -589,6 +589,54 @@ export function decideControlHorizon({ realHours, mode = 'full', deadlines = [],
   return { ...base, hours, reason, deadline };
 }
 
+/**
+ * E-Auto-Frist hinter den echten Preisen (Christin 05.11.2026): Steckt das
+ * Auto vor ~13 Uhr an, enden die echten Preise um Mitternacht. Liegt die
+ * Abfahrt dahinter, verlangt EOS das Ladeziel schon am Ende des
+ * Steuerzeitraums (genetic.py `_ev_deadline_slot`, v0.4.0rc3: „Beyond the
+ * horizon: the end-of-horizon requirement already covers it“) und lädt am
+ * Abend teuer statt nachts. Dann — und nur dann — darf der Steuerzeitraum bis
+ * zur Abfahrt in die geschätzten Preise reichen.
+ *
+ * Warum so und nicht ein anteiliges Zwischenziel am Ende des
+ * Steuerzeitraums: Ein Zwischenziel muss raten, wie viel vor Mitternacht
+ * geladen werden soll — zu hoch erzwingt teures Laden am Abend (der Fehler
+ * selbst), zu niedrig lässt EOS die Kosten der Nacht nicht sehen, weil der
+ * Schwanz kein Auto kennt. Mit der Frist im Steuerzeitraum wägt EOS Abend
+ * gegen Nacht selbst ab, auf der besten verfügbaren Preisschätzung — und
+ * sobald gegen 13 Uhr die echten Preise für morgen kommen, rechnet der nächste
+ * Lauf mit ihnen (im 15-min-Takt ohnehin, bei seltenerem Takt stoßen neue
+ * Day-Ahead-Preise einen Lauf an, eos-replan-triggers.js). Vorsicht für
+ * den Akku bleibt: DVhub setzt aus Slots mit geschätzten Preisen keine
+ * Akku-Regeln um (eos-adapter pullGridSetpoints, eosControl.estimatedFrom);
+ * bis die Slots dran sind, ist längst mit echten Preisen neu gerechnet.
+ *
+ * @param {object} decision  decideControlHorizon
+ * @param {object} p
+ * @param {number|null} p.evAtMs        Abfahrt des angemeldeten Autos (collectPlanningDeadlines)
+ * @param {number|null} p.fullHours     volle Stunden in echten + geschätzten Preisen (und PV/Last), mit der Grenze
+ * @param {number} p.windowStartMs      frühester Laufbeginn
+ * @param {number} p.realCoveredEndMs   Ende der lückenlosen echten Preise ab windowStartMs
+ * @param {string|null} p.estimatedFrom erster geschätzter Slot (null = keine Schätzung)
+ * @returns {object} decision, ggf. mit hours, reason 'ev_deadline', estimatedFrom, deadlineCovered
+ */
+export function extendForEvDeadline(decision, { evAtMs, fullHours, windowStartMs, realCoveredEndMs, estimatedFrom }) {
+  if (decision?.hours == null || !Number.isFinite(evAtMs) || !estimatedFrom) return decision;
+  if (!Number.isFinite(realCoveredEndMs) || evAtMs <= realCoveredEndMs) return decision;
+  if (!Number.isFinite(fullHours) || fullHours <= decision.hours) return decision;
+  const toDeparture = Math.ceil((evAtMs - windowStartMs) / 3_600_000);
+  const hours = Math.min(toDeparture, fullHours);
+  if (hours <= decision.hours) return decision;
+  return {
+    ...decision,
+    hours,
+    reason: 'ev_deadline',
+    deadline: { kind: 'ev', at: new Date(evAtMs).toISOString() },
+    estimatedFrom,
+    deadlineCovered: hours >= toDeparture,
+  };
+}
+
 /** Höchstens so weit (ab jetzt) werden Preise geschätzt: der längste EOS-Prognosehorizont (72 h). */
 export const PRICE_FILL_MAX_MS = EOS_PREDICTION_HOURS_MAX * 3_600_000;
 
@@ -1096,6 +1144,7 @@ export function createEosForecastBridge(ctx) {
             reason: decision.reason || null,
             deadline: decision.deadline || null,
             estimatedFrom: decision.estimatedFrom || null,
+            deadlineCovered: decision.deadlineCovered ?? null,
             at: Date.now(),
           };
         }
@@ -1560,13 +1609,32 @@ export function createEosForecastBridge(ctx) {
     // Steuerzeitraum: echte Preise (und PV/Last) ab jetzt, mit der Grenze aus
     // den Einstellungen; im Modus „automatisch“ mindestens 6 h und bis zur
     // spätesten Frist (decideControlHorizon).
-    const realHours = computeControlHorizonHours(Object.values(horizonLists).filter(Boolean), runNowMs, { maxHours: resolveControlHorizonMaxHours(cfg) });
-    const decision = decideControlHorizon({
+    const maxHours = resolveControlHorizonMaxHours(cfg);
+    const realHours = computeControlHorizonHours(Object.values(horizonLists).filter(Boolean), runNowMs, { maxHours });
+    const deadlines = collectPlanningDeadlines(cfg, state, runNowMs);
+    const { windowStartMs: decisionWindowMs } = runWindow(runNowMs);
+    let decision = decideControlHorizon({
       realHours,
       mode: controlHorizonMode(cfg),
-      deadlines: controlHorizonMode(cfg) === 'auto' ? collectPlanningDeadlines(cfg, state, runNowMs) : [],
-      windowStartMs: runWindow(runNowMs).windowStartMs,
+      deadlines,
+      windowStartMs: decisionWindowMs,
     });
+    // E-Auto-Frist hinter den echten Preisen: bis zur Abfahrt in die
+    // geschätzten Preise (extendForEvDeadline) — nur für diesen Fall.
+    if (priceEstimate) {
+      decision = extendForEvDeadline(decision, {
+        evAtMs: deadlines.find((d) => d.kind === 'ev')?.atMs ?? null,
+        fullHours: computeControlHorizonHours([
+          elecpriceSlots,
+          feedInSlots.length ? feedInSlots : null,
+          horizonLists.PV,
+          horizonLists.Last,
+        ].filter(Boolean), runNowMs, { maxHours }),
+        windowStartMs: decisionWindowMs,
+        realCoveredEndMs: contiguousPriceEndMs(realPriceSlots, decisionWindowMs),
+        estimatedFrom: priceEstimate.from,
+      });
+    }
     const horizon = await syncControlHorizon(baseUrl, decision, { gone });
     if (horizon.error) errors.horizon = horizon.error;
     if (gone()) return abandoned();
@@ -1598,8 +1666,22 @@ export function createEosForecastBridge(ctx) {
       // latestRunStartMs + Steuerzeitraum) — ab jetzt, nach den PUTs.
       const { windowStartMs, latestRunStartMs } = runWindow(Date.now());
       const coveredEndMs = contiguousPriceEndMs(realPriceSlots, windowStartMs);
-      if (latestRunStartMs + horizon.hours * 3_600_000 > coveredEndMs) {
-        runBlockedBy = `Steuerzeitraum (${horizon.hours} h) reicht über die echten Preise hinaus (lückenlos bis ${Number.isFinite(coveredEndMs) ? new Date(coveredEndMs).toISOString() : '—'})`;
+      const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : '—');
+      if (decision.estimatedFrom) {
+        // E-Auto-Frist (extendForEvDeadline): Hinter den echten Preisen liegen
+        // die Schätzwerte DIESES Pushs — der Import hat jeden Slot bis zum Ende
+        // der Schätzung überschrieben, dahinter ist gelöscht. Verlangt: die
+        // gesendete Reihe (echt + geschätzt) deckt den Steuerzeitraum ab dem
+        // spätesten Laufbeginn lückenlos, und echte Preise decken mindestens
+        // die erste Stunde des Laufs.
+        const sentEndMs = contiguousPriceEndMs(priceSlotsCt, windowStartMs);
+        if (latestRunStartMs + horizon.hours * 3_600_000 > sentEndMs) {
+          runBlockedBy = `Steuerzeitraum (${horizon.hours} h, E-Auto-Frist) reicht über die gesendeten Preise hinaus (lückenlos bis ${iso(sentEndMs)})`;
+        } else if (latestRunStartMs + 3_600_000 > coveredEndMs) {
+          runBlockedBy = `echte Preise decken den Laufbeginn nicht (lückenlos bis ${iso(coveredEndMs)})`;
+        }
+      } else if (latestRunStartMs + horizon.hours * 3_600_000 > coveredEndMs) {
+        runBlockedBy = `Steuerzeitraum (${horizon.hours} h) reicht über die echten Preise hinaus (lückenlos bis ${iso(coveredEndMs)})`;
       }
     }
 

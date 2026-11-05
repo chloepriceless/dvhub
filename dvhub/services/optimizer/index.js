@@ -328,6 +328,9 @@ export function createOptimizerService(ctx) {
     getIntervalSec: eosIntervalSec,
     getSlotSec: () => buildEosOptimization(getCfg()).interval,
     getHorizonHours: () => state.optimizer?.eosControlHorizonH ?? null,
+    // Wie der Steuerzeitraum zustande kam (Modus, Grund, geschätzte Preise ab) —
+    // geht mit dem Plan als eosRun.lastPlanControl (eos-run-trigger.js).
+    getControlInfo: () => state.optimizer?.eosControl ?? null,
     collectSoc: async () => (ctx.eosForecastBridge?.socForRun
       ? ctx.eosForecastBridge.socForRun()
       : { skipped: 'forecast bridge not ready' }),

@@ -23,6 +23,13 @@ verweist hierher.
   z. B. A55-Boards)“ und „Eigener Wert (50–1000)“. Der Leitstand zeigt am EOS-Fahrplan die mittlere Laufzeit der
   letzten acht Läufe; dauern sie im Mittel länger als 10 Minuten, schlägt er 100 Generationen und den Steuerzeitraum
   „automatisch“ vor. Umgestellt wird nichts von selbst.
+- **E-Auto-Ziel erst zur Abfahrt, nicht schon um Mitternacht.** Steckte das Auto vormittags an (Börsenpreise für
+  morgen noch nicht da) und lag die Abfahrt am nächsten Morgen, endete der EOS-Steuerzeitraum um Mitternacht — und
+  EOS verlangte das Ladeziel schon dort, lud also am Abend teuer statt nachts. Jetzt reicht der Steuerzeitraum in
+  genau diesem Fall bis zur Abfahrt; hinter den echten Preisen rechnet EOS mit den geschätzten. Sobald die echten
+  Preise kommen, rechnet EOS neu. Der Leitstand kennzeichnet das am EOS-Fahrplan („Preise geschätzt“, mit Abfahrt)
+  und unter „Laut EOS-Plan“. Aus Slots mit geschätzten Preisen setzt DVhub keine Akku-Regeln um; für den Hausakku
+  allein bleibt es dabei, dass im Steuerzeitraum nur echte Preise liegen. Eine feste Grenze (6/12/24 h) bleibt fest.
 
 ### Geändert
 

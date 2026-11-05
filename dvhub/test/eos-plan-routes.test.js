@@ -176,6 +176,31 @@ test('GET /api/eos/plan — mittlere Laufdauer und Hinweis bei langen Läufen', 
   assert.equal(body.runHint, null);
 });
 
+// E-Auto-Frist (1.0.10): Der Plan reicht bis zur Abfahrt in geschätzte Preise —
+// /api/eos/plan sagt es (control) und kennzeichnet die Zeilen.
+test('GET /api/eos/plan — Steuerzeitraum des Plans und geschätzte Preise je Zeile', async () => {
+  const gen = Date.parse(solution.generatedAt);
+  const estimatedFrom = rows[40].ts_utc;
+  const ctx = mockCtx({ eosMonitor: monitorStub({ plan: { data: solution, at: gen + 1000, current: true } }) });
+  ctx.state.optimizer = { eosRun: { lastDurationS: 60, lastPlanControl: {
+    hours: 17, realHours: 9, mode: 'full', reason: 'ev_deadline', deadline: { kind: 'ev', at: rows[68].ts_utc },
+    estimatedFrom, deadlineCovered: true, runStartedAt: gen - 60_000, runDoneAt: gen + 500,
+  } } };
+  let body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
+  assert.equal(body.control.reason, 'ev_deadline');
+  assert.equal(body.control.estimatedFrom, estimatedFrom);
+  assert.equal(body.control.deadline.kind, 'ev');
+  assert.equal(body.output.rows[39].priceEstimated, undefined);
+  assert.equal(body.output.rows[40].priceEstimated, true);
+  assert.equal(body.output.rows[41].priceEstimated, true);
+  // Plan aus einem anderen Lauf (älter/neuer): Steuerzeitraum unbekannt → keine Angabe.
+  ctx.state.optimizer.eosRun.lastPlanControl.runStartedAt = gen + 3_600_000;
+  ctx.state.optimizer.eosRun.lastPlanControl.runDoneAt = gen + 3_700_000;
+  body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
+  assert.equal(body.control, null);
+  assert.equal(body.output.rows[41].priceEstimated, undefined);
+});
+
 test('GET /api/eos/plan — ohne Pro-Lizenz 403', async () => {
   const captured = await dispatch(mockCtx({ licenseActive: false, eosMonitor: monitorStub() }), makeReq('/api/eos/plan'));
   assert.equal(captured.status, 403);

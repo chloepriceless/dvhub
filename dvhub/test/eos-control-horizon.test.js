@@ -219,3 +219,126 @@ test('Einstellungen: Steuerzeitraum „automatisch“ ist wählbar und wird gesp
   const ok = normalizeConfigInput({ optimizer: { eosControlHorizonMaxHours: 'auto' } });
   assert.equal(ok.rawConfig.optimizer.eosControlHorizonMaxHours, 'auto');
 });
+
+// ── E-Auto-Frist hinter den echten Preisen (Christin 05.11.2026) ────────────
+// Steckt das Auto vor ~13 Uhr an, enden die echten Preise um Mitternacht; EOS
+// verlangte das Ladeziel dann schon dort (genetic.py `_ev_deadline_slot`:
+// Frist hinter dem Steuerzeitraum → Ziel am Ende des Steuerzeitraums) und lud
+// teuer am Abend. Jetzt reicht der Steuerzeitraum in diesem Fall bis zur
+// Abfahrt in die geschätzten Preise — gekennzeichnet (eosControl.estimatedFrom).
+// Ohne Auto-Frist bleibt es dabei: Schätzwerte nie im Steuerzeitraum.
+
+test('E-Auto-Frist hinter den echten Preisen: Steuerzeitraum bis zur Abfahrt, ab Ende der echten Preise geschätzt; Lauf darf rechnen', async () => {
+  for (const mode of [undefined, 'auto']) {
+    const mock = await createMockEos();
+    try {
+      const now = Date.now();
+      const q0 = now - (now % Q);
+      const dep = q0 + 16 * H + 20 * 60_000;
+      const optimizer = { ...evOptimizer(dep), ...(mode ? { eosControlHorizonMaxHours: mode } : {}) };
+      const e = env(mock, { realHours: 10, optimizer, state: evRegistered });
+      assert.deepEqual(await createEosForecastBridge(e.ctx).prepareRun(), { ok: true, pushed: true }, `Modus ${mode || 'Standard'}`);
+      assert.equal(horizonPut(mock), 17, 'bis zur Abfahrt (aufgerundet)');
+      const c = e.state.optimizer.eosControl;
+      assert.equal(c.reason, 'ev_deadline');
+      assert.equal(c.realHours, realHoursOf(e));
+      assert.equal(c.estimatedFrom, new Date(e.realEnd).toISOString());
+      assert.equal(c.deadline.kind, 'ev');
+      assert.equal(c.deadline.at, new Date(dep).toISOString());
+      assert.equal(c.deadlineCovered, true);
+      assert.ok(e.logs.some((l) => l.event === 'eos_control_horizon' && l.data.reason === 'ev_deadline' && l.data.estimatedFrom === c.estimatedFrom));
+    } finally { await mock.close(); }
+  }
+});
+
+test('E-Auto-Frist: ohne angemeldetes Auto, mit Abfahrt in den echten Preisen oder ohne Schätzung bleibt der Steuerzeitraum bei den echten Preisen', async () => {
+  const now = Date.now();
+  const q0 = now - (now % Q);
+  const cases = [
+    { name: 'nicht angemeldet', realHours: 10, dep: q0 + 16 * H, state: { eosEv: { register: false } } },
+    { name: 'Abfahrt in den echten Preisen', realHours: 30, dep: q0 + 16 * H, state: evRegistered },
+    { name: 'keine Schätzung (keine Historie)', realHours: 10, dep: q0 + 16 * H, state: evRegistered, noHistory: true },
+  ];
+  for (const c of cases) {
+    const mock = await createMockEos();
+    try {
+      const e = env(mock, { realHours: c.realHours, optimizer: evOptimizer(c.dep), state: c.state });
+      if (c.noHistory) e.ctx.telemetryStore = { querySeries: async () => [] };
+      assert.deepEqual(await createEosForecastBridge(e.ctx).prepareRun(), { ok: true, pushed: true }, c.name);
+      assert.equal(horizonPut(mock), realHoursOf(e), c.name);
+      assert.equal(e.state.optimizer.eosControl.estimatedFrom, null, c.name);
+      assert.notEqual(e.state.optimizer.eosControl.reason, 'ev_deadline', c.name);
+    } finally { await mock.close(); }
+  }
+});
+
+test('E-Auto-Frist: feste Grenze bleibt fest; reicht der Prognosehorizont nicht bis zur Abfahrt, so weit er reicht', async () => {
+  const now = Date.now();
+  const q0 = now - (now % Q);
+  const dep = q0 + 16 * H + 20 * 60_000;
+  let mock = await createMockEos();
+  try {
+    const e = env(mock, { realHours: 10, optimizer: { ...evOptimizer(dep), eosControlHorizonMaxHours: 6 }, state: evRegistered });
+    await createEosForecastBridge(e.ctx).push();
+    assert.equal(horizonPut(mock), 6);
+    assert.equal(e.state.optimizer.eosControl.estimatedFrom, null);
+  } finally { await mock.close(); }
+  mock = await createMockEos();
+  try {
+    // Prognosehorizont 24 h → Steuerzeitraum höchstens 12 h (12 h Schwanz bleiben).
+    const e = env(mock, { realHours: 10, optimizer: { ...evOptimizer(dep), eosPredictionHours: 24 }, state: evRegistered });
+    assert.deepEqual(await createEosForecastBridge(e.ctx).prepareRun(), { ok: true, pushed: true });
+    assert.equal(horizonPut(mock), 12);
+    assert.equal(e.state.optimizer.eosControl.reason, 'ev_deadline');
+    assert.equal(e.state.optimizer.eosControl.deadlineCovered, false);
+  } finally { await mock.close(); }
+});
+
+test('E-Auto-Frist: Preis-Import gescheitert → kein Lauf (wie ohne Frist)', async () => {
+  const mock = await createMockEos();
+  try {
+    const now = Date.now();
+    const q0 = now - (now % Q);
+    const e = env(mock, { realHours: 10, optimizer: evOptimizer(q0 + 16 * H), state: evRegistered });
+    // ElecPriceImport scheitert: Mock ersetzt die Antwort.
+    const bridge = createEosForecastBridge({ ...e.ctx, getCfg: () => ({ ...e.cfg, optimizer: { ...e.cfg.optimizer, eosProxy: { enabled: true, url: `http://127.0.0.1:1` } } }) });
+    const res = await bridge.prepareRun();
+    assert.equal(res.ok, false);
+  } finally { await mock.close(); }
+});
+
+// Der Plan eines Laufs merkt sich, mit welchem Steuerzeitraum er gerechnet
+// wurde — Leitstand (Kennzeichnung) und Regel-Umsetzung (keine Akku-Regeln
+// aus geschätzten Slots) lesen das.
+test('Lauf-Auslöser: Steuerzeitraum des Laufs (nach der Vorbereitung gelesen) wird mit dem Plan abgelegt', async () => {
+  const { createEosRunTrigger } = await import('../services/optimizer/eos-run-trigger.js');
+  let nowMs = Date.parse('2026-11-05T10:00:02Z');
+  const state = { optimizer: {} };
+  let control = { hours: 9, estimatedFrom: null };
+  let fail = false;
+  const trigger = createEosRunTrigger({
+    isActive: () => true,
+    getIntervalSec: () => 900,
+    getSlotSec: () => 900,
+    getHorizonHours: () => control.hours,
+    getControlInfo: () => control,
+    prepareRun: async () => { control = { hours: 17, estimatedFrom: '2026-11-05T23:00:00.000Z', reason: 'ev_deadline' }; return { ok: true, pushed: true }; },
+    collectSoc: async () => ({ soc: { battery1: 50 } }),
+    postOptimize: async () => { nowMs += 90_000; return fail ? { ok: false, error: 'boom' } : { ok: true, data: { start_solution: [1], start_solution_datetime: new Date(nowMs).toISOString() } }; },
+    state,
+    now: () => nowMs,
+    setTimer: () => ({}),
+    clearTimer: () => {},
+  });
+  await trigger.trigger();
+  const pc = state.optimizer.eosRun.lastPlanControl;
+  assert.equal(pc.hours, 17);
+  assert.equal(pc.estimatedFrom, '2026-11-05T23:00:00.000Z');
+  assert.equal(pc.runStartedAt, Date.parse('2026-11-05T10:00:02Z'));
+  assert.equal(pc.runDoneAt, nowMs);
+  // Ein gescheiterter Lauf ändert den Plan nicht — die Angabe bleibt.
+  fail = true;
+  nowMs += 300_000;
+  await trigger.trigger();
+  assert.equal(state.optimizer.eosRun.lastPlanControl, pc);
+});

@@ -1620,6 +1620,17 @@
           backgroundColor: _aurA('--chart-now', 0.7, 'rgba(255,165,0,0.7)'), color: _aur('--text', '#fff'), font: { size: 11 } }
       } }
     };
+    // E-Auto-Frist (1.0.10): Plan reicht bis zur Abfahrt in geschätzte Preise
+    // (/api/eos/plan control.estimatedFrom) — den Bereich sichtbar abheben.
+    var estFromMs = eos.control && eos.control.estimatedFrom ? new Date(eos.control.estimatedFrom).getTime() : NaN;
+    if (isFinite(estFromMs) && estFromMs < xmax) {
+      options.plugins.annotation.annotations.estimatedPrices = {
+        type: 'box', xMin: Math.max(estFromMs, xmin), xMax: xmax,
+        backgroundColor: _aurA('--text-dim', 0.10, 'rgba(140,150,170,0.10)'), borderWidth: 0,
+        label: { display: true, content: 'Preise geschätzt', position: { x: 'start', y: 'start' },
+          color: _aur('--text-2', '#8b95a8'), font: { size: 10 } }
+      };
+    }
 
     var config = { type: 'line', data: { datasets: datasets }, options: options };
     if (eosPlanChart) {
@@ -1647,6 +1658,12 @@
       var fmtHm = function (d) { return new Date(d).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); };
       var text = fmtHm(output.validFrom) + ' → ' + fmtHm(output.validUntil) + ' · ' + (Number(output.slotMinutes) || 15) + '-Min';
       if (output.generatedAt) text += ' · gerechnet ' + fmtHm(output.generatedAt);
+      // Steuerzeitraum bis zur Abfahrt des E-Autos in geschätzte Preise (1.0.10).
+      var ctl = eos.control;
+      if (ctl && ctl.reason === 'ev_deadline' && ctl.estimatedFrom) {
+        text += ' · bis Abfahrt E-Auto' + (ctl.deadline && ctl.deadline.at ? ' ' + fmtHm(ctl.deadline.at) : '')
+          + ', ab ' + fmtHm(ctl.estimatedFrom) + ' geschätzte Preise';
+      }
       // Nach einem EOS-Neustart bleibt der letzte Plan sichtbar, bis EOS neu gerechnet hat.
       if (eos.plan && eos.plan.current === false) text += ' · EOS rechnet neu';
       subtitle.textContent = text;
