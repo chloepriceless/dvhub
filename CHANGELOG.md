@@ -30,6 +30,9 @@ verweist hierher.
   Umschalten länger als 90 Minuten aus, setzte DVhub den Kanal zurück, bevor die Box den Auftrag nach dem Neustart
   abschließen konnte. Jetzt gilt ein stiller Auftrag nur vor dem Umschalten als abgebrochen; danach entscheidet die
   Fortsetzung nach dem Neustart.
+- **Relay: Sperrliste entkoppelter Handys.** Mit Anfragen aus wenigen IPv6-/48-Netzen ließ sich die Liste der
+  entkoppelten Handys über die Gesamtgrenze treiben und damit leeren — ein entkoppeltes Handy kam dann wieder herein,
+  solange die Box offline war. Jetzt verdrängt die Gesamtgrenze den ältesten Eintrag des /48 mit den meisten Einträgen.
 
 ### Geändert (Lizenz)
 
