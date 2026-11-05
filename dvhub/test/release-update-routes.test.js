@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAdminRoutes, RELEASE_HELPER } from '../routes/admin-routes.js';
+import { createAdminRoutes, RELEASE_HELPER, PACKAGE_DEV_NOTICE } from '../routes/admin-routes.js';
 import { SEMVER_TAG, GIT_SHA_REF, compareSemverTag, selectLatestSemverTag, assertNoDowngrade } from '../routes-api.js';
 import { readAppVersionInfo } from '../app-version.js';
 import { readReleaseInfo } from '../release-info.js';
@@ -286,8 +286,7 @@ describe('Paket-Box: Update über dvhub-release', () => {
     ['ohne Zielversion', { ...CHECK, latest: {} }],
   ]) {
     it(`Rückschritt-Prüfung ohne verwertbare Helfer-Antwort (${name}): nichts installiert`, async () => {
-      // Kanalwechsel: Paket-Boxen nehmen nur noch stable an (Bleeding Edge bleibt
-      // git, Christin 04.11.) — geprüft wird der Wechsel von einem Altbestand dev.
+      // Kanalwechsel: geprüft wird der Wechsel dev → stable.
       for (const [p, body, from] of [['/api/admin/update/apply', {}, 'stable'], ['/api/admin/update/channel', { channel: 'stable' }, 'dev']]) {
         const h = harness({ channel: from, helper: { check, install: { ok: true, started: true } } });
         try {
@@ -302,35 +301,120 @@ describe('Paket-Box: Update über dvhub-release', () => {
   }
 });
 
-// Christin 04.11.2026: signierte Pakete nur für stable, Bleeding Edge bleibt git.
-const DEV_NOTICE = 'Bleeding Edge gibt es nur für git-Installationen. Paket-Installationen bleiben auf Stabil.';
+// Christin 05.11.2026: Bleeding Edge für Paket-Boxen, sobald ein signierter
+// dev-Index erreichbar ist (channels/index-dev.json + .sig). Ohne ihn die
+// Meldung von 1.0.9, ergänzt um „derzeit kein Bleeding-Edge-Paket veröffentlicht“.
+const DEV_VERSION = '1.0.10-dev.20261105120000.abcdef12';
+const DEV_CHECK = {
+  ok: true, mode: 'package', channel: 'dev', arch: 'arm64',
+  current: { version: '1.0.9', git_sha: SHA, channel: 'stable' }, previous: '1.0.8',
+  latest: { version: DEV_VERSION, git_sha: 'e'.repeat(40), date: '2026-11-05T12:00:00Z', available: true },
+  updateAvailable: true, availableVersions: [DEV_VERSION], changelog: [`${DEV_VERSION}: fix: etwas`],
+};
+const NO_DEV_INDEX = Object.assign(new Error('Command failed'), { code: 1, stderr: 'dvhub-release: Download fehlgeschlagen: HTTP 404 für https://github.com/chloepriceless/dvhub/releases/download/channels/index-dev.json\n' });
+// check je Kanal: dev → devAnswer, stable → CHECK.
+const checkBy = (devAnswer) => (args) => {
+  if (args[0] === 'dev') {
+    if (devAnswer instanceof Error) throw devAnswer;
+    return { stdout: JSON.stringify(devAnswer), stderr: '' };
+  }
+  return { stdout: JSON.stringify(CHECK), stderr: '' };
+};
 
-describe('Paket-Box: Bleeding Edge nur für git-Installationen', () => {
-  it('Wechsel auf dev: 409 mit klarer Meldung, kein Auftrag, Kanal bleibt stable, Log-Eintrag', async () => {
-    const h = harness({ channel: 'stable', helper: { check: CHECK, install: { ok: true, started: true } } });
+describe('Paket-Box: Bleeding Edge, wenn ein signierter dev-Index veröffentlicht ist', () => {
+  it('Wechsel stable → dev mit dev-Index: Auftrag install latest dev, Kanal gespeichert, Rückfall-Vermerk', async () => {
+    const h = harness({ channel: 'stable', helper: { check: checkBy(DEV_CHECK), install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.equal(r.payload.channel, 'dev');
+      assert.ok(h.calls.includes(`sudo -n ${RELEASE_HELPER} check dev`), h.calls.join('\n'));
+      assert.ok(h.calls.includes(`sudo -n ${RELEASE_HELPER} install latest dev`), h.calls.join('\n'));
+      assert.equal(h.saved.at(-1).updateChannel, 'dev');
+      const mark = JSON.parse(fs.readFileSync(path.join(h.dataDir, 'update-channel-switch.json'), 'utf8'));
+      assert.equal(mark.from, 'stable');
+      assert.equal(mark.to, 'dev');
+    } finally { h.cleanup(); }
+  });
+
+  it('1.0.9 (stable) → 1.0.10-dev aus main gilt nicht als Rückschritt', async () => {
+    const h = harness({ channel: 'stable', helper: { check: checkBy(DEV_CHECK), install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.notEqual(r.payload.error, 'downgrade_blocked');
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+    } finally { h.cleanup(); }
+  });
+
+  it('kein dev-Index veröffentlicht: 409 mit klarer Meldung, kein Auftrag, Kanal bleibt stable, Log-Eintrag', async () => {
+    const h = harness({ channel: 'stable', helper: { check: checkBy(NO_DEV_INDEX), install: { ok: true, started: true } } });
     try {
       const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
       assert.equal(r.code, 409, JSON.stringify(r.payload));
       assert.equal(r.payload.ok, false);
-      assert.equal(r.payload.error, 'dev_requires_git');
-      assert.equal(r.payload.message, DEV_NOTICE);
+      assert.equal(r.payload.error, 'dev_package_unavailable');
+      assert.equal(r.payload.message, PACKAGE_DEV_NOTICE);
+      assert.match(r.payload.message, /derzeit kein Bleeding-Edge-Paket veröffentlicht/i);
+      assert.match(String(r.payload.detail), /HTTP 404/);
       assert.equal(r.payload.channel, 'stable');
       assert.equal(h.saved.length, 0, 'Config unverändert');
-      assert.ok(!h.calls.some((c) => c.includes(RELEASE_HELPER)), h.calls.join('\n'));
-      assert.ok(h.logs.some((l) => l.event === 'update_channel_rejected' && l.reason === 'dev_requires_git'), JSON.stringify(h.logs));
+      assert.ok(!h.calls.some((c) => c.includes(' install ')), h.calls.join('\n'));
+      assert.ok(!fs.existsSync(path.join(h.dataDir, 'update-channel-switch.json')), 'kein Rückfall-Vermerk');
+      assert.ok(h.logs.some((l) => l.event === 'update_channel_rejected' && l.reason === 'dev_package_unavailable'), JSON.stringify(h.logs));
     } finally { h.cleanup(); }
   });
 
-  it('steht in der Config noch dev (Altbestand), prüfen und installieren check/apply trotzdem stable', async () => {
-    const h = harness({ channel: 'dev', helper: { check: CHECK, install: { ok: true, started: true } } });
+  it('dev-Index ohne verwertbare Version gilt als nicht veröffentlicht', async () => {
+    const h = harness({ channel: 'stable', helper: { check: checkBy({ ok: true }), install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.equal(r.code, 409, JSON.stringify(r.payload));
+      assert.equal(r.payload.error, 'dev_package_unavailable');
+      assert.ok(!h.calls.some((c) => c.includes(' install ')));
+    } finally { h.cleanup(); }
+  });
+
+  it('Kanal dev eingestellt und dev-Index da: check und apply nehmen dev', async () => {
+    const h = harness({ channel: 'dev', release: { version: '1.0.10-dev.20261104000000.aaaaaaaa', channel: 'dev' },
+      helper: { check: checkBy({ ...DEV_CHECK, current: { version: '1.0.10-dev.20261104000000.aaaaaaaa', git_sha: SHA, channel: 'dev' } }), install: { ok: true, started: true } } });
     try {
       const c = await h.call('GET', '/api/admin/update/check');
-      assert.equal(c.code, 200);
-      assert.equal(c.payload.channel, 'stable');
+      assert.equal(c.code, 200, JSON.stringify(c.payload));
+      assert.equal(c.payload.channel, 'dev');
+      assert.equal(c.payload.latest.release, DEV_VERSION);
+      assert.equal(c.payload.notice ?? null, null);
       const a = await h.call('POST', '/api/admin/update/apply', {});
       assert.equal(a.code, 200, JSON.stringify(a.payload));
-      assert.ok(!h.calls.some((x) => / (check|install latest) dev$/.test(x)), h.calls.join('\n'));
-      assert.ok(h.calls.includes(`sudo -n ${RELEASE_HELPER} install latest stable`));
+      assert.ok(h.calls.includes(`sudo -n ${RELEASE_HELPER} install latest dev`), h.calls.join('\n'));
+      assert.ok(!h.calls.some((x) => / (check|install latest) stable$/.test(x)), h.calls.join('\n'));
+    } finally { h.cleanup(); }
+  });
+
+  it('Kanal dev eingestellt, aber kein dev-Index (Altbestand/Import): check und apply wie 1.0.9 auf stable, mit Hinweis', async () => {
+    const h = harness({ channel: 'dev', helper: { check: checkBy(NO_DEV_INDEX), install: { ok: true, started: true } } });
+    try {
+      const c = await h.call('GET', '/api/admin/update/check');
+      assert.equal(c.code, 200, JSON.stringify(c.payload));
+      assert.equal(c.payload.channel, 'stable');
+      assert.equal(c.payload.notice, PACKAGE_DEV_NOTICE);
+      const a = await h.call('POST', '/api/admin/update/apply', {});
+      assert.equal(a.code, 200, JSON.stringify(a.payload));
+      assert.ok(h.calls.includes(`sudo -n ${RELEASE_HELPER} install latest stable`), h.calls.join('\n'));
+      assert.ok(!h.calls.some((x) => / install latest dev$/.test(x)), h.calls.join('\n'));
+    } finally { h.cleanup(); }
+  });
+
+  it('dev-Box, dev-Index zurückgezogen: check meldet das ältere stabile Paket nicht als Update', async () => {
+    const cur = '1.0.10-dev.20261105120000.abcdef12';
+    const stable = { ...CHECK, current: { version: cur, git_sha: SHA, channel: 'dev' }, latest: { version: '1.0.9', git_sha: SHA, date: '2026-11-04T00:00:00Z', available: true }, updateAvailable: true };
+    const h = harness({ channel: 'dev', release: { version: cur, channel: 'dev' },
+      helper: { check: (args) => { if (args[0] === 'dev') throw NO_DEV_INDEX; return { stdout: JSON.stringify(stable), stderr: '' }; }, install: { ok: true, started: true } } });
+    try {
+      const c = await h.call('GET', '/api/admin/update/check');
+      assert.equal(c.code, 200, JSON.stringify(c.payload));
+      assert.equal(c.payload.channel, 'stable');
+      assert.equal(c.payload.updateAvailable, false, 'Rückschritt ist kein Update');
+      assert.equal(c.payload.notice, PACKAGE_DEV_NOTICE);
     } finally { h.cleanup(); }
   });
 
@@ -339,7 +423,8 @@ describe('Paket-Box: Bleeding Edge nur für git-Installationen', () => {
     fs.rmSync(path.join(h.root, '.dvhub-release.json'));
     try {
       const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
-      assert.notEqual(r.payload.error, 'dev_requires_git');
+      assert.notEqual(r.payload.error, 'dev_package_unavailable');
+      assert.ok(!h.calls.some((c) => c.includes(RELEASE_HELPER)), h.calls.join('\n'));
       assert.ok(h.calls.some((c) => c.includes('dvhub-update fetch')), h.calls.join('\n'));
     } finally { h.cleanup(); }
     const d = harness({ channel: 'stable', serviceActions: false });
@@ -351,18 +436,20 @@ describe('Paket-Box: Bleeding Edge nur für git-Installationen', () => {
     } finally { d.cleanup(); }
   });
 
-  it('Oberfläche: Paket-Box zeigt die Meldung statt zu wechseln (tools.js)', async () => {
+  it('Oberfläche: Paket-Box fragt den Server statt selbst abzulehnen, zeigt dessen Meldung (tools.js)', async () => {
     const vm = await import('node:vm');
     const src = fs.readFileSync(new URL('../public/tools.js', import.meta.url), 'utf8');
     const sandbox = { console, window: { DVhubCommon: {} } };
     sandbox.globalThis = sandbox;
     vm.runInNewContext(src, sandbox, { filename: 'tools.js' });
-    const { channelSwitchNotice } = sandbox.DVhubToolsUpdate;
-    assert.equal(channelSwitchNotice('package', 'dev'), DEV_NOTICE);
-    assert.equal(channelSwitchNotice('package', 'stable'), null);
-    assert.equal(channelSwitchNotice('git', 'dev'), null);
-    assert.equal(channelSwitchNotice(null, 'dev'), null);
-    assert.match(src, /dev_requires_git/, 'Antwort des Servers wird ausgewertet');
+    const { channelSwitchNotice, channelRejectNotice } = sandbox.DVhubToolsUpdate;
+    assert.equal(channelSwitchNotice, undefined, 'keine Ablehnung mehr in der Seite selbst');
+    assert.doesNotMatch(src, /channelSwitchNotice\(/);
+    assert.equal(channelRejectNotice({ ok: false, error: 'dev_package_unavailable', message: PACKAGE_DEV_NOTICE }), PACKAGE_DEV_NOTICE);
+    // Antwort eines 1.0.9-Servers (Seite aus dem Cache) wird weiter verstanden.
+    assert.match(String(channelRejectNotice({ ok: false, error: 'dev_requires_git' })), /Bleeding Edge/);
+    assert.equal(channelRejectNotice({ ok: false, error: 'downgrade_blocked' }), null);
+    assert.match(src, /data\.notice/, 'Hinweis aus /update/check wird angezeigt');
   });
 });
 
@@ -406,6 +493,27 @@ describe('Paket-Box: Kanal-Rückfall, wenn der Kanalwechsel-Auftrag scheitert', 
       } finally { h.cleanup(); }
     });
   }
+
+  it('Wechsel stable → dev scheitert (Paket nicht ladbar): Kanal zurück auf stable', async () => {
+    let raw = { updateChannel: 'stable' };
+    let st = null;
+    const h = harness({
+      channel: 'stable',
+      getRawCfg: () => raw,
+      saveAndApplyConfig: (c) => { raw = JSON.parse(JSON.stringify(c)); },
+      helper: { check: checkBy(DEV_CHECK), install: { ok: true, started: true }, status: () => ({ stdout: JSON.stringify({ ok: true, mode: 'package', status: st }), stderr: '' }) },
+    });
+    try {
+      const r = await h.call('POST', '/api/admin/update/channel', { channel: 'dev' });
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.equal(raw.updateChannel, 'dev');
+      const after = new Date(Date.now() + 5).toISOString();
+      st = { job: 'install', state: 'failed', phase: 'done', result: 'failed', message: 'Download fehlgeschlagen', started: after, finished: after };
+      const s = await h.call('GET', '/api/admin/update/status');
+      assert.deepEqual(s.payload.channelSwitch, { state: 'reverted', channel: 'stable', from: 'dev' });
+      assert.equal(raw.updateChannel, 'stable');
+    } finally { h.cleanup(); }
+  });
 
   it('Auftrag nicht angenommen (Sperre belegt, Unit startet und schreibt failed): Rückfall', async () => {
     const { h, raw } = await switchThen(({ after }) => ({ job: 'install', state: 'failed', phase: 'done', result: 'failed', message: 'ein Update-Auftrag läuft bereits', started: after }));

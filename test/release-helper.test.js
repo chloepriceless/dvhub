@@ -1252,3 +1252,64 @@ function isLink(p) { try { return fs.lstatSync(p).isSymbolicLink(); } catch { re
 
 // Damit eslint die importierten Bauteile nicht als unbenutzt meldet.
 void createTar; void gzipDeterministic; void collectEntries;
+
+// ── Bleeding Edge für Paket-Boxen (Christin 05.11.2026) ─────────────────────
+// Echter Bau mit build-release.sh (Wegwerf-Repo, package.json 1.0.10), echte
+// Veröffentlichung per publish-release.sh --dry-run in den Prüfstand-Server,
+// dann auf einer Box mit stable 1.0.9: check dev, install latest dev, Rückweg.
+test('dev-Paket aus build-release.sh/publish-release.sh: Box auf 1.0.9 prüft und installiert Bleeding Edge', { timeout: 180000 }, async () => {
+  const r = await makeRig();
+  const repo = tmp('dvhub-dev-e2e-repo-');
+  try {
+    const w = (p, c, mode) => { fs.mkdirSync(path.dirname(path.join(repo, p)), { recursive: true }); fs.writeFileSync(path.join(repo, p), c); if (mode) fs.chmodSync(path.join(repo, p), mode); };
+    w('dvhub/package.json', JSON.stringify({ name: 'dvhub', version: '1.0.10', type: 'module', engines: { node: '>=22.0.0' } }));
+    w('dvhub/package-lock.json', JSON.stringify({ name: 'dvhub', version: '1.0.10', lockfileVersion: 3, requires: true, packages: { '': { name: 'dvhub', version: '1.0.10' } } }));
+    w('dvhub/server.js', 'console.log("dev")\n');
+    w('post-update.sh', '#!/usr/bin/env bash\necho "post-update dev INSTALL_DIR=$INSTALL_DIR" >> "$INSTALL_DIR/../post-update.log"\n', 0o755);
+    w('eos-provision.sh', '#!/usr/bin/env bash\n', 0o755);
+    w('eos-version.env', 'EOS_PIN=v0.4.0rc3\n');
+    const git = (...a) => {
+      const x = spawnSync('git', a, { cwd: repo, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_DATE: '2026-11-05T12:00:00Z', GIT_COMMITTER_DATE: '2026-11-05T12:00:00Z' } });
+      assert.equal(x.status, 0, x.stderr);
+      return x.stdout.trim();
+    };
+    git('init', '-q'); git('add', '-A'); git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'fix: Bleeding Edge');
+    const out = path.join(r.root, 'build-out');
+    const b = spawnSync('bash', [path.join(repoRoot, 'scripts/release/build-release.sh'), 'HEAD', '--repo', repo, '--out', out, '--arch', 'arm64', '--no-eebus', '--key', r.k1.key],
+      { encoding: 'utf8', env: { ...process.env, DVHUB_RELEASE_NPM_CACHE: path.join(r.root, 'npm-cache') } });
+    assert.equal(b.status, 0, b.stdout + b.stderr);
+    const version = fs.readdirSync(out)[0];
+    assert.match(version, /^1\.0\.10-dev\.20261105120000\.[0-9a-f]{8}$/);
+
+    // Box: stable 1.0.9 installiert; kein dev-Index → check dev scheitert (404).
+    r.seed('1.0.9');
+    const none = await r.run('check', 'dev');
+    assert.notEqual(none.code, 0, 'ohne index-dev.json kein dev');
+
+    const p = spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), path.join(out, version), '--key', r.k1.key, '--repo', repo, '--dry-run', '--dest', r.pub], { encoding: 'utf8' });
+    assert.equal(p.status, 0, p.stdout + p.stderr);
+
+    const chk = await r.run('check', 'dev');
+    assert.equal(chk.code, 0, chk.out);
+    const c = JSON.parse(chk.out);
+    assert.equal(c.channel, 'dev');
+    assert.equal(c.latest.version, version);
+    assert.equal(c.updateAvailable, true);
+    assert.deepEqual(c.changelog, [`${version}: fix: Bleeding Edge`]);
+
+    const inst = await r.run('install', 'latest', 'dev');
+    assert.equal(inst.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.status().state, 'ok', JSON.stringify(r.status()));
+    assert.equal(r.current(), `releases/${version}`);
+    const manifest = JSON.parse(fs.readFileSync(path.join(r.box, 'releases', version, '.dvhub-release.json'), 'utf8'));
+    assert.equal(manifest.channel, 'dev');
+    assert.equal(JSON.parse((await r.run('check', 'dev')).out).updateAvailable, false, 'auf dem neuesten dev-Stand');
+
+    const rb = await r.run('rollback');
+    assert.equal(rb.code, 0, JSON.stringify(r.status()));
+    assert.equal(r.current(), 'releases/1.0.9');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+    r.close();
+  }
+});

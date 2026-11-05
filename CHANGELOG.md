@@ -10,6 +10,16 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **Bleeding Edge auch für Paket-Installationen.** Native Boxen mit signierten Paketen können wieder auf Bleeding Edge
+  wechseln, sobald ein Bleeding-Edge-Paket veröffentlicht ist (signierter Index `channels/index-dev.json`). Gibt es
+  keins, bleibt die Box auf Stabil und die Oberfläche sagt: „Für Paket-Installationen ist derzeit kein
+  Bleeding-Edge-Paket veröffentlicht.“ Rückschritt-Prüfung und Kanal-Rückfall bei einem gescheiterten Wechsel gelten
+  wie bisher; ein älteres stabiles Paket erscheint nicht mehr als „Update“. Die Bleeding-Edge-Pakete werden vorerst
+  von Hand aus `main` gebaut, nur aus Commits, die auf `origin/main` liegen (`docs/release-pakete.md`).
+- **Version 1.0.10 auf main.** Bleeding-Edge-Pakete aus `main` heißen `1.0.10-dev.…` und sortieren damit nach 1.0.9.
+
 ### Geändert
 
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf

@@ -693,14 +693,18 @@ function autoCheckForUpdate() {
   checkForUpdate().catch(() => {});
 }
 
-// Signierte Pakete gibt es nur für den stabilen Kanal (Christin, 04.11.2026);
-// Bleeding Edge bleibt git-basiert. Der Server lehnt den Wechsel ebenso ab
-// (dev_requires_git, routes/admin-routes.js) — hier nur, damit die Box gar
-// nicht erst „Wechsel zu Bleeding Edge?“ fragt.
-const PACKAGE_DEV_NOTICE = 'Bleeding Edge gibt es nur für git-Installationen. Paket-Installationen bleiben auf Stabil.';
+// Bleeding Edge für Paket-Boxen (Christin, 05.11.2026): ob es ein
+// veröffentlichtes dev-Paket gibt, weiß nur der Server (signierter dev-Index).
+// Lehnt er ab, zeigt die Seite seine Meldung und bleibt beim alten Kanal.
+// dev_requires_git: Antwort eines 1.0.9-Servers (Seite aus dem Cache).
+const PACKAGE_DEV_NOTICE = 'Für Paket-Installationen ist derzeit kein Bleeding-Edge-Paket veröffentlicht. Die Box bleibt auf Stabil.';
+const PACKAGE_DEV_NOTICE_109 = 'Bleeding Edge gibt es nur für git-Installationen. Paket-Installationen bleiben auf Stabil.';
 let updateInstallMode = null;
-function channelSwitchNotice(mode, channel) {
-  return mode === 'package' && channel === 'dev' ? PACKAGE_DEV_NOTICE : null;
+function channelRejectNotice(data) {
+  if (!data || data.ok) return null;
+  if (data.error === 'dev_package_unavailable') return data.message || PACKAGE_DEV_NOTICE;
+  if (data.error === 'dev_requires_git') return data.message || PACKAGE_DEV_NOTICE_109;
+  return null;
 }
 
 // Release-Paket (docs/release-pakete.md): Versionen statt Commits, Rückweg
@@ -712,8 +716,11 @@ function renderPackageUpdateCheck(data) {
   const cur = data.current?.release || data.current?.version || '?';
   const latest = data.latest?.release || '?';
   setText('updateMeta', `Channel: ${data.channel === 'dev' ? 'Dev' : 'Stable'} | Paket: ${cur} | Neueste: ${latest}`);
-  if (data.updateAvailable) setBanner('updateBanner', `Neue Version verfügbar: ${latest}`, 'warning');
-  else setBanner('updateBanner', `DVhub ist aktuell — ${cur}`, 'success');
+  // data.notice: Kanal dev eingestellt, aber kein Bleeding-Edge-Paket
+  // veröffentlicht — geprüft wurde Stabil.
+  const pre = data.notice ? `${data.notice} ` : '';
+  if (data.updateAvailable) setBanner('updateBanner', `${pre}Neue Version verfügbar: ${latest}`, 'warning');
+  else setBanner('updateBanner', `${pre}DVhub ist aktuell — ${cur}`, data.notice ? 'info' : 'success');
   const rb = document.getElementById('rollbackUpdateBtn');
   if (rb) {
     rb.hidden = !data.previous;
@@ -958,19 +965,15 @@ async function switchUpdateChannel(newChannel) {
   const channelSelect = document.getElementById('updateChannel');
   const previousChannel = newChannel === 'stable' ? 'dev' : 'stable';
   const revertDropdown = () => { if (channelSelect) channelSelect.value = previousChannel; updatePinRefVisibility(previousChannel); };
-  const notice = channelSwitchNotice(updateInstallMode, newChannel);
-  if (notice) {
-    setBanner('updateBanner', notice, 'info');
-    revertDropdown();
-    return;
-  }
   // Commit-Feld sofort auf den Zielchannel spiegeln (revert setzt es zurück).
   updatePinRefVisibility(newChannel);
 
   const label = newChannel === 'stable' ? 'Stable (Releases)' : 'Bleeding Edge (Dev Commits)';
   // Plan 08-11 Task 1: replace native confirm() with branded dvConfirm modal.
   if (!(await window.dvConfirm(
-    `Wechsel zu ${label}?\n\nDVhub wird auf den ${newChannel === 'stable' ? 'neuesten Release-Tag' : 'aktuellen main-Branch'} umgestellt und neu gestartet.`,
+    `Wechsel zu ${label}?\n\nDVhub wird auf ${updateInstallMode === 'package'
+      ? (newChannel === 'stable' ? 'das neueste stabile Paket' : 'das neueste Bleeding-Edge-Paket')
+      : (newChannel === 'stable' ? 'den neuesten Release-Tag' : 'den aktuellen main-Branch')} umgestellt und neu gestartet.`,
     { title: 'Update-Channel wechseln', okLabel: 'Wechseln', variant: 'primary' }
   ))) {
     revertDropdown();
@@ -986,9 +989,10 @@ async function switchUpdateChannel(newChannel) {
     // Stand vor dem Auftrag: daran erkennt die Verfolgung den neuen (ohne Uhrvergleich).
     const baseline = await releaseJobBaseline();
     let data = await (await postSwitch(false)).json();
-    if (!data.ok && data.error === 'dev_requires_git') {
+    const rejected = channelRejectNotice(data);
+    if (rejected) {
       updateInstallMode = 'package';
-      setBanner('updateBanner', data.message || PACKAGE_DEV_NOTICE, 'info');
+      setBanner('updateBanner', rejected, 'info');
       revertDropdown();
       return;
     }
@@ -2103,6 +2107,6 @@ if (typeof globalThis !== 'undefined') {
     buildHistoryFullBackfillActionState,
     formatHistoryImportResult
   };
-  globalThis.DVhubToolsUpdate = { channelSwitchNotice };
+  globalThis.DVhubToolsUpdate = { channelRejectNotice };
 }
 })();

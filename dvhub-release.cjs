@@ -1476,7 +1476,7 @@ async function runJob(s, a) {
 module.exports = {
   parseArgs, compareVersions, parseVersion, satisfiesEngine, versionFromLabel, debArch, readConf, settings,
   validateIndex, verifyTree, symlinkEscapes, reconcileLinks, dropinContent, switchCurrent, currentVersion, rewriteUnit, migrationCheck,
-  OFFICIAL_REPO_RE, main, Exit, trustedKeyCount, verifySignature, download, unpack, readStatus, actionCheck,
+  OFFICIAL_REPO_RE, VERSION_RE, main, Exit, trustedKeyCount, verifySignature, download, unpack, readStatus, actionCheck,
 };
 
 if (require.main === module) {
