@@ -91,3 +91,11 @@ test('Akkupunkt mit altem Wert scheitert und wird abgeschaltet → bleibt veralt
   assert.equal(r.state.victron.batteryPowerW, 500, 'alter Wert noch da');
   assert.deepEqual(await r.metaAfterPoll(), { stale: true });
 });
+
+// Codex 92613083 (P2): Nur die AC-PV-Kanäle sind optional (docs/MQTT-SCHEMA.md).
+// Scheitert die PV-Summe (pvPowerW) oder die Hauslast seit dem Start, leitet
+// polling.js Nullen ab — die Probe ist veraltet.
+test('PV-Summe scheitert seit dem Start (kein Wert) → veraltet', async () => {
+  const r = rig(new Set(['pvPowerW']));
+  assert.deepEqual(await r.metaAfterPoll(), { stale: true });
+});

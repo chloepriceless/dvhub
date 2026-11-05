@@ -55,6 +55,8 @@ export function resolveTelemetryDbPath({ configPath, telemetryConfig = {}, dataD
 // Rücklesepunkte wie minSocPct zählen nicht).
 const LIVE_ENERGY_FIELDS = ['batteryPowerW', 'pvPowerW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W', 'selfConsumptionW'];
 const LIVE_FIELD_MAX_AGE_MS = 90000;
+// Optional (docs/MQTT-SCHEMA.md 2.1): fehlen sie ganz, ist das kein Messausfall.
+const OPTIONAL_AC_PV_FIELDS = new Set(['acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W']);
 
 /**
  * Ist dieser Live-Schnappschuss keine frische Messung? Nach einem Lesefehler
@@ -71,14 +73,14 @@ export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   const frozenValues = (f) => f?.active === true
     && (!Array.isArray(f.reasons) || f.reasons.length === 0 || f.reasons.includes('identical_values'));
   if (frozenValues(victron?.freeze) || frozenValues(victron?.freezeSuspect)) return true;
-  // Lesefehler eines Energiefelds mit gehaltenem Wert: pollPoint behält den
+  // Lesefehler eines Energiefelds: mit gehaltenem Wert behält pollPoint den
   // alten Wert — sofort veraltet, nicht erst nach 90 s (Codex 607fa4b2 /
-  // Gesamtprüfung 1.0.10). Ohne Wert zählt nur der Akku (Pflicht; polling.js
-  // leitet aus dem fehlenden Wert Nullen für Laden/Entladen ab, Codex
-  // fbb2f961). Optionale Kanäle ohne je einen Wert (dvhub-mqtt ac_l1..l3_w bei
-  // reiner PV-Summe) sind kein Messausfall (Codex 22b1fb66).
+  // Gesamtprüfung 1.0.10). Ohne Wert leitet polling.js Nullen ab (Akku, PV-Summe,
+  // Hauslast; Codex fbb2f961/92613083) — ebenfalls veraltet. Ausnahme: die
+  // optionalen AC-PV-Kanäle ohne je einen Wert (dvhub-mqtt ac_l1..l3_w bei
+  // reiner PV-Summe, docs/MQTT-SCHEMA.md) sind kein Messausfall (Codex 22b1fb66).
   const errors = victron?.errors || {};
-  if (LIVE_ENERGY_FIELDS.some((field) => errors[field] && (victron?.[field] != null || field === 'batteryPowerW'))) return true;
+  if (LIVE_ENERGY_FIELDS.some((field) => errors[field] && (victron?.[field] != null || !OPTIONAL_AC_PV_FIELDS.has(field)))) return true;
   const tsMs = Date.parse(ts);
   if (!Number.isFinite(tsMs)) return false;
   const tooOld = (at) => Number(at) > 0 && tsMs - Number(at) > LIVE_FIELD_MAX_AGE_MS;
