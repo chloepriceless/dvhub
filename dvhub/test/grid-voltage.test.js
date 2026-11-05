@@ -260,3 +260,20 @@ test('MQTT: Zufluss bricht ab → letzte Messung bleibt mit alter Messzeit (Kach
   assert.equal(gv.updatedAt, 990_000);
   assert.deepEqual(freshGridVoltage(gv, h.now()), { ok: false, reason: 'voltage_stale' });
 });
+
+test('MQTT: Messzeit je Phase (phaseAt) bleibt erhalten und steht in freshGridVoltage', async () => {
+  const transport = { type: 'mqtt', readGridVoltage: () => ({ l1: 231, l2: 232, l3: 233, frequencyHz: 50, ts: 999_000, phaseTs: [999_500, 999_000, 999_800] }) };
+  const h = harness({ transport });
+  await h.poller.onPoll(h.cfg);
+  assert.deepEqual(h.st.victron.gridVoltage.phaseAt, { l1: 999_500, l2: 999_000, l3: 999_800 });
+  assert.deepEqual(freshGridVoltage(h.st.victron.gridVoltage, h.now()).phaseAt, { l1: 999_500, l2: 999_000, l3: 999_800 });
+});
+
+test('MQTT: ausdrücklich ungültig gemeldete Spannungen (invalidated) → sofort keine Werte, nicht die alte Messung', async () => {
+  let g = { l1: 231.5, l2: 232, l3: 233, frequencyHz: 50, ts: 990_000 };
+  const h = harness({ transport: { type: 'mqtt', readGridVoltage: () => g } });
+  await h.poller.onPoll(h.cfg);
+  g = { l1: null, l2: null, l3: null, frequencyHz: null, ts: 995_000, invalidated: true };
+  await h.poller.onPoll(h.cfg);
+  assert.equal(h.st.victron.gridVoltage, null);
+});

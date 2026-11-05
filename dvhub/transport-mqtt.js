@@ -392,11 +392,20 @@ export function createMqttTransport(victronConfig, options = {}) {
   function readGridVoltage() {
     if (schema !== 'venus') return null;
     const instances = Object.keys(gridAcCache).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+    let invalidatedAt = 0;
     for (const instance of instances) {
       const e = gridAcCache[instance];
       const fresh = (k) => (mqttCacheEntryFresh(e[k], staleMaxAgeMs) && Number.isFinite(Number(e[k].value)) ? e[k] : null);
       const phases = ['l1', 'l2', 'l3'].map(fresh);
-      if (!phases.some(Boolean)) continue;
+      if (!phases.some(Boolean)) {
+        // {"value":null} innerhalb der Frische-Grenze = Venus meldet die Werte
+        // ausdrücklich ungültig (Codex-Gegenprüfung 19f1d2bf, P2).
+        for (const k of ['l1', 'l2', 'l3']) {
+          const x = e[k];
+          if (x && x.value === null && (!(staleMaxAgeMs > 0) || Date.now() - x.ts <= staleMaxAgeMs)) invalidatedAt = Math.max(invalidatedAt, x.ts);
+        }
+        continue;
+      }
       const f = fresh('frequencyHz');
       return {
         l1: phases[0] ? Number(phases[0].value) : null,
@@ -406,9 +415,12 @@ export function createMqttTransport(victronConfig, options = {}) {
         // Empfangszeit = die der ältesten verwendeten Größe, Frequenz
         // eingeschlossen (Codex-Gegenprüfung 7f88bc74, P2).
         ts: Math.min(...phases.concat(f).filter(Boolean).map((p) => Number(p.ts) || 0)),
+        // Empfangszeit je Phase (Datenspende: jede Phase mit ihrer Messzeit).
+        phaseTs: phases.map((p) => (p ? Number(p.ts) || null : null)),
         instance,
       };
     }
+    if (invalidatedAt) return { l1: null, l2: null, l3: null, frequencyHz: null, ts: invalidatedAt, phaseTs: [null, null, null], invalidated: true };
     return null;
   }
 

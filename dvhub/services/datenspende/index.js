@@ -125,8 +125,11 @@ export function collectSources(ctx, cfg, nowMs) {
   if (on('gridVoltage')) {
     const gv = freshGridVoltage(v.gridVoltage, nowMs);
     if (gv.ok) {
-      for (const [key, val] of [['gridL1', gv.l1], ['gridL2', gv.l2], ['gridL3', gv.l3]]) {
-        if (num(val) !== null && val > 0) out.push({ key, ...SYSTEM_METERS[key], vendor, voltage: round1(val), measuredAt: gv.updatedAt });
+      for (const [key, phase] of [['gridL1', 'l1'], ['gridL2', 'l2'], ['gridL3', 'l3']]) {
+        const val = gv[phase];
+        // Messzeit je Phase (MQTT), sonst die gemeinsame (Modbus/SPiNE).
+        const at = Number(gv.phaseAt?.[phase]) > 0 ? Number(gv.phaseAt[phase]) : gv.updatedAt;
+        if (num(val) !== null && val > 0) out.push({ key, ...SYSTEM_METERS[key], vendor, voltage: round1(val), measuredAt: at });
       }
     }
   }
@@ -281,12 +284,16 @@ export function createDatenspende(ctx = {}, deps = {}) {
     const sources = collectSources(ctx, getCfg(), t);
     const qq = q();
     for (const s of sources) {
-      // Spannung: dieselbe Messung (alle 30 s) nicht bei jedem Takt erneut senden.
+      // Spannung: Zeitstempel = Messzeit (nicht der Takt), jede Messung je
+      // Phase einmal — die Sekunde ist die Kennung, der Server lehnt doppelte
+      // Sekunden ohnehin ab (Codex-Gegenprüfung 9d1b2057, 2× P2).
+      let stamp = ts;
       if (s.measuredAt !== undefined) {
-        if (lastMeasuredAt.get(s.key) === s.measuredAt) continue;
-        lastMeasuredAt.set(s.key, s.measuredAt);
+        stamp = isoSecond(s.measuredAt);
+        if (lastMeasuredAt.get(s.key) === stamp) continue;
+        lastMeasuredAt.set(s.key, stamp);
       }
-      const r = { key: s.key, timestamp: ts };
+      const r = { key: s.key, timestamp: stamp };
       if (s.power !== undefined) r.power = s.power;
       if (s.energy !== undefined) r.energy = s.energy;
       if (s.voltage !== undefined) r.voltage = s.voltage;

@@ -89,7 +89,9 @@ export function freshGridVoltage(gv, nowMs = Date.now(), maxAgeMs = GRID_VOLTAGE
   }
   const at = Number(gv.updatedAt);
   if (!Number.isFinite(at) || nowMs - at > maxAgeMs) return { ok: false, reason: 'voltage_stale' };
-  return { ok: true, l1: gv.l1, l2: gv.l2, l3: gv.l3, frequencyHz: gv.frequencyHz ?? null, updatedAt: at, source: gv.source };
+  const out = { ok: true, l1: gv.l1, l2: gv.l2, l3: gv.l3, frequencyHz: gv.frequencyHz ?? null, updatedAt: at, source: gv.source };
+  if (gv.phaseAt && typeof gv.phaseAt === 'object') out.phaseAt = { ...gv.phaseAt };
+  return out;
 }
 
 /** SPiNE/Shelly EM.GetStatus → Spannungen; 0 V = Phase nicht angeschlossen. */
@@ -197,8 +199,12 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
       if (src === 'mqtt') {
         const g = typeof transport.readGridVoltage === 'function' ? transport.readGridVoltage() : null;
         if (g && [g.l1, g.l2, g.l3].some(isNum)) {
-          set({ l1: g.l1 ?? null, l2: g.l2 ?? null, l3: g.l3 ?? null, frequencyHz: g.frequencyHz ?? null, updatedAt: Number(g.ts) || now(), source: 'victron_mqtt', unitId: null, error: null });
-        } else if (victronState().gridVoltage?.source !== 'victron_mqtt') {
+          const gv = { l1: g.l1 ?? null, l2: g.l2 ?? null, l3: g.l3 ?? null, frequencyHz: g.frequencyHz ?? null, updatedAt: Number(g.ts) || now(), source: 'victron_mqtt', unitId: null, error: null };
+          // Empfangszeit je Phase: MQTT liefert die Phasen einzeln (Datenspende).
+          if (Array.isArray(g.phaseTs)) gv.phaseAt = { l1: g.phaseTs[0] ?? null, l2: g.phaseTs[1] ?? null, l3: g.phaseTs[2] ?? null };
+          set(gv);
+        } else if (g?.invalidated || victronState().gridVoltage?.source !== 'victron_mqtt') {
+          // Ausdrücklich ungültig gemeldet (Codex-Gegenprüfung 19f1d2bf) oder nie geliefert.
           set(null);
         }
         // Sonst: Zufluss abgerissen — letzte Messung mit ihrer Messzeit stehen

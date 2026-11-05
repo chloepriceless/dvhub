@@ -570,3 +570,28 @@ test('#31 Portal-Schlüssel: Format des Portals unbekannt → jedes druckbare Ze
   const kinds = [...new Set(client.calls.map((c) => c[0]))];
   assert.deepEqual(kinds, ['getClientId', 'register', 'submit']);
 });
+
+// Codex-Gegenprüfung 9d1b2057 (2× P2).
+test('Spannung: Zeitstempel = Messzeit (nicht Takt), je Phase eigene Messzeit (MQTT), t0 = frühester Wert', async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, SIDECAR_NAME), JSON.stringify({ apiKey: 'KEY', clientId: 'C1', meters: {}, donated: 0 }));
+  let t = T0;
+  const gv = { ...GV, updatedAt: T0 - 90_000, phaseAt: { l1: T0 - 90_000, l2: T0 - 90_000, l3: T0 - 90_000 }, source: 'victron_mqtt' };
+  const pl = payload({ gridVoltage: gv });
+  const client = fakeClient();
+  const svc = createDatenspende(baseCtx({ dir, cfg: { manufacturer: 'victron', datenspende: { enabled: true } }, pl }), { client, now: () => t, random: () => 0.5 });
+  svc.sample();
+  // Nur L1 ändert sich; L2/L3 bleiben (älteste Phase unverändert).
+  t += 10_000;
+  pl.victron.gridVoltage = { ...gv, l1: 240.5, phaseAt: { ...gv.phaseAt, l1: T0 + 8_000 } };
+  svc.sample();
+  await svc.flush();
+  const batch = client.batches[0];
+  const sc = JSON.parse(fs.readFileSync(path.join(dir, SIDECAR_NAME), 'utf8'));
+  const l1 = batch.filter((r) => r.meter_id === sc.meters.gridL1.id);
+  assert.deepEqual(l1.map((r) => [r.timestamp, r.voltage]), [['2026-09-28T11:58:30Z', 238.2], ['2026-09-28T12:00:08Z', 240.5]]);
+  const l2 = batch.filter((r) => r.meter_id === sc.meters.gridL2.id);
+  assert.equal(l2.length, 1, 'L2 unverändert → einmal');
+  const grid = batch.find((r) => r.meter_id === sc.meters.grid.id);
+  assert.equal(grid.timestamp, '2026-09-28T12:00:00Z', 'Leistung behält den Takt-Zeitstempel');
+});

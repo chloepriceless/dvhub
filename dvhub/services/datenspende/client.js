@@ -138,7 +138,11 @@ function missingId(step, what, data) {
 // Sekunden-Abständen zu einem gemeinsamen t0 und je Messgröße eine Spalte;
 // fehlt ein Wert, steht dort null, damit alle Spalten gleich lang bleiben.
 export function columnarPayload(readings) {
-  const base = Date.parse(readings[0].timestamp);
+  // t0 = frühester Zeitstempel: Spannungen tragen ihre Messzeit und können vor
+  // dem ersten Wert des Batches liegen — keine negativen Abstände.
+  let first = readings[0].timestamp;
+  for (const r of readings) if (Date.parse(r.timestamp) < Date.parse(first)) first = r.timestamp;
+  const base = Date.parse(first);
   const meters = new Map();
   for (const r of readings) {
     let m = meters.get(r.meter_id);
@@ -158,7 +162,7 @@ export function columnarPayload(readings) {
       if (m[field]) while (m[field].length < m.dt.length) m[field].push(null);
     }
   }
-  return { t0: readings[0].timestamp, meters: [...meters.values()] };
+  return { t0: first, meters: [...meters.values()] };
 }
 
 export function createDatenspendeClient({ baseUrl = DATENSPENDE_BASE_URL, fetchImpl = globalThis.fetch } = {}) {

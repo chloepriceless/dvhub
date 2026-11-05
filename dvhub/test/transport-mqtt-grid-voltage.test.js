@@ -86,3 +86,24 @@ test('Venus: Messzeit = älteste verwendete Größe, auch die Frequenz', () => {
     Date.now = realNow;
   }
 });
+
+test('Venus: Empfangszeit je Phase (phaseTs) für die Datenspende', () => {
+  const t = createMqttTransport({ host: 'gx', mqtt: { portalId: 'p1' } });
+  msg(t, 'N/p1/grid/40/Ac/L1/Voltage', 238);
+  msg(t, 'N/p1/grid/40/Ac/L3/Voltage', 237);
+  const g = t.readGridVoltage();
+  assert.equal(g.phaseTs.length, 3);
+  assert.ok(g.phaseTs[0] > 0 && g.phaseTs[2] > 0);
+  assert.equal(g.phaseTs[1], null);
+});
+
+// Codex-Gegenprüfung 19f1d2bf (P2): {"value":null} für alle Phasen ist eine
+// ausdrückliche Ungültig-Meldung, kein abgerissener Zufluss.
+test('Venus: alle Phasen {"value":null} → invalidated statt null', () => {
+  const t = createMqttTransport({ host: 'gx', mqtt: { portalId: 'p1' } });
+  msg(t, 'N/p1/grid/40/Ac/L1/Voltage', 238);
+  msg(t, 'N/p1/grid/40/Ac/L1/Voltage', null);
+  const g = t.readGridVoltage();
+  assert.equal(g.invalidated, true);
+  assert.deepEqual([g.l1, g.l2, g.l3], [null, null, null]);
+});
