@@ -634,6 +634,34 @@ describe('Paket-Box: Kanal-Rückfall, wenn der Kanalwechsel-Auftrag scheitert', 
     } finally { t.h.cleanup(); }
   });
 
+  // Codex 3050cc2f (P2): verify-files (Manifest prüfen, dvhub-release unpack)
+  // liegt vor pending — wie die übrigen frühen Phasen verwaist nach 90 min.
+  for (const phase of ['queued', 'start', 'index', 'download', 'verify', 'unpack', 'verify-files']) {
+    it(`frühe Phase ${phase} über 90 min still: Rückfall (abandoned)`, async () => {
+      const t = await switchThen(({ after }) => ({ job: 'install', state: 'running', phase, started: after, updated: after }));
+      try {
+        const old = new Date(Date.now() - 91 * 60 * 1000).toISOString();
+        const m = JSON.parse(fs.readFileSync(path.join(t.h.dataDir, MARK), 'utf8'));
+        fs.writeFileSync(path.join(t.h.dataDir, MARK), JSON.stringify({ ...m, at: new Date(Date.parse(old) - 1000).toISOString() }));
+        t.setStatus({ job: 'install', state: 'running', phase, started: old, updated: old });
+        await t.h.call('GET', '/api/admin/update/status');
+        assert.equal(t.raw().updateChannel, 'dev', `${phase}: alter Kanal`);
+        assert.equal(t.h.logs.find((l) => l.event === 'update_channel_reverted')?.result, 'abandoned');
+      } finally { t.h.cleanup(); }
+    });
+  }
+
+  it('Helfer-Phasen vor pending sind alle als „früh“ bekannt (Abgleich mit dvhub-release.cjs)', () => {
+    const helper = fs.readFileSync(new URL('../../dvhub-release.cjs', import.meta.url), 'utf8');
+    const routes = fs.readFileSync(new URL('../routes/admin-routes.js', import.meta.url), 'utf8');
+    const early = /CHANNEL_SWITCH_PRE_SWITCH_PHASES = new Set\(\[([^\]]*)\]\)/.exec(routes)?.[1] || '';
+    const fetchUnpack = /async function fetchAndUnpack[\s\S]*?\n\}/.exec(helper)?.[0] || '';
+    const unpackFn = /function unpack\([\s\S]*?\n\}/.exec(helper)?.[0] || '';
+    const phases = [...`${fetchUnpack}${unpackFn}`.matchAll(/phase\('([a-z-]+)'/g)].map((m) => m[1]);
+    assert.ok(phases.length >= 4, phases.join(','));
+    for (const p of phases) assert.match(early, new RegExp(`'${p}'`), `Phase ${p} vor pending fehlt`);
+  });
+
   it('verwaister Auftrag (Strom weg beim Download, Status bleibt running): nach 90 min ohne Lebenszeichen Rückfall, Sperre frei (Codex 6a497589, P2)', async () => {
     const t = await switchThen(({ after }) => ({ job: 'install', state: 'running', phase: 'download', started: after, updated: after }));
     try {

@@ -235,7 +235,7 @@ solange ein Vermerk liegt. Solange er offen ist, lehnen Update, Rückweg und Kan
 `channel_switch_pending` ab (sonst würde das Ergebnis eines zweiten Auftrags dem Wechsel zugerechnet). Wurde der
 Kanal inzwischen von Hand geändert, bleibt er (`update_channel_revert_skipped`); nach 6 h ohne passenden Status
 verfällt der Vermerk. Ein Auftrag, der 90 min lang seinen Status nicht fortschreibt, gilt nur in den Phasen vor dem
-Umschalten (`queued`, `start`, `index`, `download`, `verify`, `unpack` — Strom weg, bevor der Helfer `pending`
+Umschalten (`queued`, `start`, `index`, `download`, `verify`, `unpack`, `verify-files` — Strom weg, bevor der Helfer `pending`
 vermerkt, dann gibt es kein `resume`) als verwaist: Rückfall mit Ergebnis `abandoned`, die Sperre ist frei. Ab
 `switch` (oder wenn `status` ein offenes Journal meldet, Feld `pending`) wartet der Server auf das Ergebnis von
 `resume` — der neue Stand läuft womöglich schon (1.0.10, vorher setzte ein Stromausfall über 90 min den Kanal zu früh

@@ -87,11 +87,11 @@ const CHANNEL_SWITCH_MAX_AGE_MS = 6 * 3600 * 1000;
 // als die längste stille Phase (post-update.sh bis 60 min, release.conf).
 const CHANNEL_SWITCH_ABANDONED_MS = 90 * 60 * 1000;
 // Verwaist heißt „der alte Stand läuft noch“ — das gilt nur für die Phasen vor
-// dem Umschalten (dvhub-release fetchAndUnpack). Ab switch ist pending gesetzt:
+// dem Umschalten (dvhub-release fetchAndUnpack/unpack). Ab switch ist pending gesetzt:
 // Strom weg dann → boot-hook plant resume, und erst resume entscheidet (alter
 // oder neuer Stand). Ein Rückfall vorher setzte den Kanal zurück, obwohl der
 // neue Stand womöglich schon läuft (1.0.9-Rest, Strom > 90 min weg).
-const CHANNEL_SWITCH_PRE_SWITCH_PHASES = new Set(['queued', 'start', 'index', 'download', 'verify', 'unpack']);
+const CHANNEL_SWITCH_PRE_SWITCH_PHASES = new Set(['queued', 'start', 'index', 'download', 'verify', 'unpack', 'verify-files']);
 const UPDATE_CHANNELS = ['stable', 'dev'];
 export const SETCAP_HELPER = '/usr/local/libexec/dvhub-setcap';
 // npm install auf einem langsamen Board braucht oft mehr als eine Minute; ein
