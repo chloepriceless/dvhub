@@ -111,6 +111,9 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
   let nextModbusAt = now() + firstDelayMs;
   let nextScanAt = 0;
   let foundUnit = null;
+  // Zuletzt gefundene, dann weggefallene Unit: in der Such-Pause erneut fragen
+  // (Codex de261f07 — ein kurzer Aussetzer sperrte sonst 30 min).
+  let lostUnit = null;
   let running = null;
 
   const victronState = () => (state.victron ??= {});
@@ -152,8 +155,21 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
         // Gemerkte Unit antwortet nicht mehr als Netzzähler (Zähler getauscht,
         // GX neu nummeriert): vergessen und gleich neu suchen.
         pushLog('victron_grid_meter_lost', { unitId: foundUnit, error: String(e?.message || e).slice(0, 80) });
+        lostUnit = foundUnit;
         foundUnit = null;
         nextScanAt = 0;
+      }
+    }
+    if (lostUnit != null && lostUnit !== unit) {
+      try {
+        const m = await readAt(lostUnit);
+        foundUnit = lostUnit;
+        lostUnit = null;
+        pushLog('victron_grid_meter_found', { unitId: foundUnit, configuredUnitId: configured, again: true });
+        set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: foundUnit, error: null });
+        return;
+      } catch (e) {
+        if (!wrongUnit(e)) { setError(e?.message); return; }
       }
     }
     if (now() < nextScanAt) { setError('grid_meter_not_found'); return; }
@@ -174,6 +190,7 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
       try {
         const m = await readAt(hit);
         foundUnit = hit;
+        lostUnit = null;
         pushLog('victron_grid_meter_found', { unitId: hit, configuredUnitId: configured });
         set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: hit, error: null });
         return;

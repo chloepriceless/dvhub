@@ -277,3 +277,26 @@ test('MQTT: ausdrücklich ungültig gemeldete Spannungen (invalidated) → sofor
   await h.poller.onPoll(h.cfg);
   assert.equal(h.st.victron.gridVoltage, null);
 });
+
+// Codex de261f07 (P2): Liefert die gemerkte Unit einmal keine Spannung (alle
+// 0xFFFF) oder eine Ausnahme, wurde sie vergessen; die Suche schloss sie aus,
+// fand nichts und sperrte 30 min. Danach fragte DVhub nur noch Unit 100 —
+// die Werte blieben weg, obwohl Unit 40 längst wieder antwortete.
+test('Victron Modbus: gemerkte Unit kurz ohne Spannung → in der Such-Pause erneut gefragt', async () => {
+  const units = { 40: GRID };
+  const gx = fakeGx(units);
+  const h = harness({ transport: { type: 'modbus', mbRequest: gx.mbRequest } });
+  await h.poller.onPoll(h.cfg);
+  assert.equal(h.st.victron.gridVoltage.unitId, 40);
+  units[40] = { ...GRID, 2616: 0xFFFF, 2618: 0xFFFF, 2620: 0xFFFF };
+  h.advance(GRID_VOLTAGE_POLL_MS);
+  await h.poller.onPoll(h.cfg);
+  assert.equal(h.st.victron.gridVoltage.error, 'grid_meter_not_found');
+  units[40] = GRID;
+  h.advance(GRID_VOLTAGE_POLL_MS);
+  await h.poller.onPoll(h.cfg);
+  const gv = h.st.victron.gridVoltage;
+  assert.equal(gv.error, null);
+  assert.equal(gv.unitId, 40);
+  assert.equal(gv.l1, 238.2);
+});

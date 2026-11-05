@@ -381,13 +381,23 @@ export function createMqttTransport(victronConfig, options = {}) {
   // /Ac/Frequency. Die Instanz ist anlagenspezifisch (Wildcard-Abo unten);
   // je Instanz abgelegt, gelesen wird die niedrigste mit frischen Werten.
   const GRID_AC_PATHS = { 'Ac/L1/Voltage': 'l1', 'Ac/L2/Voltage': 'l2', 'Ac/L3/Voltage': 'l3', 'Ac/Frequency': 'frequencyHz' };
-  const gridAcCache = {};
+  // Ohne Prototyp und nur mit Ziffern-Instanzen (Venus: DeviceInstance) —
+  // „__proto__“ vom Broker schreibt sonst Object.prototype (Codex de261f07).
+  const gridAcCache = Object.create(null);
   function rememberGridAcTopic(topic, value) {
     const parts = String(topic).split('/');
-    if (parts[0] !== 'N' || parts[2] !== 'grid' || !parts[3]) return;
-    const field = GRID_AC_PATHS[parts.slice(4).join('/')];
+    if (parts[0] !== 'N' || parts[2] !== 'grid' || !/^\d{1,6}$/.test(parts[3] || '')) return;
+    const field = Object.hasOwn(GRID_AC_PATHS, parts.slice(4).join('/')) ? GRID_AC_PATHS[parts.slice(4).join('/')] : null;
     if (!field) return;
-    (gridAcCache[parts[3]] ??= {})[field] = { value, ts: Date.now() };
+    const entry = (gridAcCache[parts[3]] ??= Object.create(null));
+    const prev = entry[field];
+    const isNumber = value !== null && Number.isFinite(Number(value));
+    // Ungültig-Meldung: null, nachdem die Größe einen Zahlenwert hatte (bleibt
+    // bei weiteren null-Meldungen stehen). Ein einphasiger Zähler, dessen
+    // L2/L3 immer null senden, meldet damit nichts ungültig (Codex 186f688f).
+    const invalidated = value === null && !!prev && (prev.invalidated === true
+      || (prev.value !== null && Number.isFinite(Number(prev.value))));
+    entry[field] = isNumber || !invalidated ? { value, ts: Date.now() } : { value, ts: Date.now(), invalidated: true };
   }
   function readGridVoltage() {
     if (schema !== 'venus') return null;
@@ -403,11 +413,13 @@ export function createMqttTransport(victronConfig, options = {}) {
         // wenn KEINE Phase mehr einen Zahlenwert hat. Ein abgelaufener Wert
         // (einphasiger Zähler: L1 alt, L2/L3 senden null) ist „veraltet“
         // (Codex-Gegenprüfung 186f688f, P2).
+        // Eine Phase, die von einem Zahlenwert auf null ging, ist ungültig
+        // gemeldet — auch wenn die übrigen nur abgelaufen sind (Codex de261f07).
         const anyNumber = ['l1', 'l2', 'l3'].some((k) => e[k] && e[k].value !== null && Number.isFinite(Number(e[k].value)));
-        if (anyNumber) continue;
         for (const k of ['l1', 'l2', 'l3']) {
           const x = e[k];
-          if (x && x.value === null && (!(staleMaxAgeMs > 0) || Date.now() - x.ts <= staleMaxAgeMs)) invalidatedAt = Math.max(invalidatedAt, x.ts);
+          if (!x || x.value !== null || (anyNumber && x.invalidated !== true)) continue;
+          if (!(staleMaxAgeMs > 0) || Date.now() - x.ts <= staleMaxAgeMs) invalidatedAt = Math.max(invalidatedAt, x.ts);
         }
         continue;
       }

@@ -129,3 +129,43 @@ test('Venus: L1 abgelaufen, L2/L3 senden null → nicht invalidated (null = vera
     Date.now = realNow;
   }
 });
+
+// Codex de261f07 (P2): Ein Publisher am Grid-Wildcard darf mit der Instanz
+// „__proto__“ nicht Object.prototype beschreiben (geerbte Spannungen in allen
+// Instanzen-Einträgen, auch anderer Transporte).
+test('Venus: Instanz __proto__/constructor wird ignoriert, kein Prototyp-Schreiben', () => {
+  const t = createMqttTransport({ host: 'gx', mqtt: { portalId: 'p1' } });
+  try {
+    msg(t, 'N/p1/grid/__proto__/Ac/L1/Voltage', 999);
+    msg(t, 'N/p1/grid/constructor/Ac/L1/Voltage', 999);
+    assert.equal(Object.prototype.l1, undefined, 'Object.prototype unberührt');
+    msg(t, 'N/p1/grid/40/Ac/Frequency', 50.01);
+    const g = t.readGridVoltage();
+    assert.equal(g, null, 'Zähler nur mit Frequenz meldet keine geerbte Spannung');
+  } finally {
+    delete Object.prototype.l1;
+  }
+});
+
+// Codex de261f07 (P2): L1/L3 zuletzt bei t=0, L2 bei 89 s, dann meldet L2 bei
+// 91 s null. L1/L3 sind abgelaufen — die Ungültig-Meldung von L2 darf trotzdem
+// nicht verloren gehen (sonst hält der Poller den alten Stand mit L2).
+test('Venus: Ungültig-Meldung einer Phase zählt auch, wenn die übrigen nur abgelaufen sind', () => {
+  const t = createMqttTransport({ host: 'gx', mqtt: { portalId: 'p1', staleMaxAgeMs: 90_000 } });
+  const realNow = Date.now;
+  try {
+    const t0 = realNow();
+    Date.now = () => t0;
+    msg(t, 'N/p1/grid/40/Ac/L1/Voltage', 231);
+    msg(t, 'N/p1/grid/40/Ac/L3/Voltage', 232);
+    Date.now = () => t0 + 89_000;
+    msg(t, 'N/p1/grid/40/Ac/L2/Voltage', 233);
+    Date.now = () => t0 + 91_000;
+    msg(t, 'N/p1/grid/40/Ac/L2/Voltage', null);
+    const g = t.readGridVoltage();
+    assert.ok(g, 'nicht einfach null (sonst bleibt der alte Stand)');
+    assert.equal(g.invalidated, true);
+  } finally {
+    Date.now = realNow;
+  }
+});
