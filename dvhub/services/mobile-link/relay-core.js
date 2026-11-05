@@ -472,7 +472,17 @@ export function createRelay({
     revoked.set(boxId, r);
     revokedPerSrc.set(src, (revokedPerSrc.get(src) || 0) + 1);
     revokedPerWide.set(wide, (revokedPerWide.get(wide) || 0) + 1);
-    while (revoked.size > L.revokedBoxes) revokedDrop(revoked.keys().next().value);
+    // Gesamtgrenze: nicht den ältesten Eintrag überhaupt verdrängen — ein paar
+    // /48 mit je revokedBoxesPerWideSource Einträgen reichten sonst, um die
+    // Liste zu leeren (prod: 8 × 256 > 2 000, 1.0.9-Rest). Verdrängt wird der
+    // älteste Eintrag der /48 mit den meisten Einträgen.
+    while (revoked.size > L.revokedBoxes) revokedDrop(revokedVictim());
+  }
+  function revokedVictim() {
+    let max = 0;
+    for (const n of revokedPerWide.values()) if (n > max) max = n;
+    for (const [id, x] of revoked) if ((revokedPerWide.get(x.wide) || 0) === max) return id;
+    return revoked.keys().next().value;
   }
 
   const pruneTimer = setInterval(() => { mbPrune(); newBoxPrune(); }, 60_000);

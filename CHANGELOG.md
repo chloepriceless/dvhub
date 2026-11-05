@@ -10,6 +10,48 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **Bleeding Edge auch für Paket-Installationen.** Native Boxen mit signierten Paketen können wieder auf Bleeding Edge
+  wechseln, sobald ein Bleeding-Edge-Paket veröffentlicht ist (signierter Index `channels/index-dev.json`). Gibt es
+  keins, bleibt die Box auf Stabil und die Oberfläche sagt: „Für Paket-Installationen ist derzeit kein
+  Bleeding-Edge-Paket veröffentlicht.“ Rückschritt-Prüfung und Kanal-Rückfall bei einem gescheiterten Wechsel gelten
+  wie bisher; ein älteres stabiles Paket erscheint nicht mehr als „Update“. Die Bleeding-Edge-Pakete werden vorerst
+  von Hand aus `main` gebaut, nur aus Commits, die auf `origin/main` liegen (`docs/release-pakete.md`).
+- **Version 1.0.10 auf main.** Bleeding-Edge-Pakete aus `main` heißen `1.0.10-dev.…` und sortieren damit nach 1.0.9.
+- **Lizenz-Umzug wird gemeldet.** Bindet eine andere Box die Lizenz an sich, schaltete die bisherige Box die
+  Pro-Funktionen bisher still ab. Jetzt kommt einmal je Umzug eine Benachrichtigung über die eingerichteten Kanäle
+  (auch im Betrieb mit getrenntem Runtime-Prozess), und der Leitstand zeigt „Deine Lizenz ist jetzt auf einer anderen
+  Box …“ mit dem Weg zurück (Einstellungen → Lizenz → „An diese Box binden“).
+
+### Behoben
+
+- **Kanalwechsel nach langem Stromausfall.** Fiel bei einem Kanalwechsel auf einer Paket-Box der Strom nach dem
+  Umschalten länger als 90 Minuten aus, setzte DVhub den Kanal zurück, bevor die Box den Auftrag nach dem Neustart
+  abschließen konnte. Jetzt gilt ein stiller Auftrag nur vor dem Umschalten als abgebrochen; danach entscheidet die
+  Fortsetzung nach dem Neustart.
+- **Relay: Sperrliste entkoppelter Handys.** Mit Anfragen aus wenigen IPv6-/48-Netzen ließ sich die Liste der
+  entkoppelten Handys über die Gesamtgrenze treiben und damit leeren — ein entkoppeltes Handy kam dann wieder herein,
+  solange die Box offline war. Jetzt verdrängt die Gesamtgrenze den ältesten Eintrag des /48 mit den meisten Einträgen.
+- **Preis-API und Uptime-Kuma prüfen Namen beim Verbinden.** Wie schon beim ntfy-Kanal löst DVhub den Namen der
+  eingestellten Preis-Adresse (`epex.priceApiUrl`, auch Nachimport und Marktwerte) und der Uptime-Kuma-Push-Adresse
+  beim Verbinden auf und verbindet nicht, wenn er auf die Box selbst, eine Link-local- oder 0-Adresse zeigt. Vorher
+  wurde beim Speichern nur eine Adresse in Ziffern geprüft. Umleitungen folgen diese Abrufe nicht mehr.
+
+### Geändert
+
+- **Hinweis zum VRM-Feld** (Issue #32): Bei mehreren Anlagen im VRM-Konto ist die Site-ID der sichere Weg; mit der
+  Portal-ID sucht DVhub die passende Anlage selbst (Integrationen → VRM-Cloud und Einstellungen → Historie-Import).
+
+### Geändert (Lizenz)
+
+- **Kopierter Lizenzzustand bindet nicht mehr von selbst.** Startet eine Box mit dem Lizenzzustand einer anderen Box
+  (z. B. ein Test-Aufbau mit kopierter `license_state.json`), nimmt sie der anderen Box die Lizenz nicht mehr
+  automatisch weg. Sie zeigt „Lizenz von anderer Box übernommen – an diese Box binden?“; gebunden wird erst über
+  „An diese Box binden“ oder einen hier neu eingegebenen Schlüssel. Erkannt wird das am Machine-File einer anderen
+  Box und, ab diesem Stand, an der Herkunft, die DVhub im Lizenzzustand vermerkt. Normale Boxen merken davon nichts:
+  ihr Zustand gilt beim ersten Start weiter als eigener, ein neu eingegebener Schlüssel bindet wie bisher sofort.
+
 ### Geändert
 
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf

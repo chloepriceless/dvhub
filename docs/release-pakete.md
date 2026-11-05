@@ -1,11 +1,13 @@
 # Signierte Release-Pakete für native Installationen
 
-Stand: 04.11.2026 · Branch `feat/release-pakete`, Kanal-Entscheidung `fix/r109-kanal`
+Stand: 05.11.2026 · Branch `feat/release-pakete`, Kanal-Entscheidung `fix/r109-kanal`, Bleeding Edge für Pakete
+`feat/r110-lizenz-kanal` (1.0.10)
 
-**Kanäle (Christin, 04.11.2026):** Ab 1.0.9 gibt es signierte Pakete nur für den stabilen Kanal (Tags `vX.Y.Z`).
-Bleeding Edge (`updateChannel: dev`) bleibt git-basiert wie bisher; dev-Pakete aus der CI kommen später. Was unten
-zu dev-Paketen steht (Bau, Index, Helfer-Argument `dev`), ist dafür vorbereitet, wird aber nicht veröffentlicht und
-von keiner Box benutzt.
+**Kanäle (Christin, 04./05.11.2026):** 1.0.9 kannte signierte Pakete nur für den stabilen Kanal (Tags `vX.Y.Z`). Ab
+1.0.10 können Paket-Boxen auch auf Bleeding Edge (`updateChannel: dev`) wechseln, sobald ein signierter dev-Index
+veröffentlicht ist (`channels/index-dev.json` + `.sig`). dev-Pakete baut und veröffentlicht die Eigentümerin vorerst
+von Hand aus `main` (Abschnitt 3 und „Einmalig für die Eigentümerin“), später die CI. git-Boxen auf Bleeding Edge
+bleiben git und stellen sich nicht um (Abschnitt 5).
 
 Native Boxen (Debian, Raspberry Pi OS, Armbian; arm64, selten armhf und amd64) aktualisieren sich bisher als
 git-Checkout: `dvhub-update` holt einen Tag oder `main`, danach `npm install` und `post-update.sh`. Jede Box trägt
@@ -107,11 +109,19 @@ publish-release.sh (gh)
 
 ## 3. Kanäle und Verteilung
 
-- **stable** = Pakete aus `vX.Y.Z`-Tags, als Assets am GitHub-Release des Tags. Ab 1.0.9 der einzige
-  veröffentlichte Kanal.
-- **dev** = (später, aus der CI) Pakete aus `main`, als Assets an einem rollierenden Vorab-Release `dev` (die letzten
-  3 Stände bleiben liegen, ältere räumt `publish-release.sh` weg). Bis dahin bleibt Bleeding Edge git: git-Boxen auf
-  dev stellen sich nicht um, Paket-Boxen können nicht auf dev wechseln.
+- **stable** = Pakete aus `vX.Y.Z`-Tags, als Assets am GitHub-Release des Tags.
+- **dev** = Pakete aus `main`, als Assets an einem rollierenden Vorab-Release `dev` (die letzten 3 Stände bleiben
+  liegen, ältere räumt `publish-release.sh` weg). Vorerst von Hand: `build-release.sh origin/main` (nach `git fetch`)
+  und `publish-release.sh` (siehe „Einmalig für die Eigentümerin“, Schritt 5); später baut die CI bei jedem Push auf
+  `main`. Version `<package.json>-dev.<Commit-Zeit JJJJMMTThhmmss UTC>.<sha8>`, z. B.
+  `1.0.10-dev.20261105120000.abcdef12`. Damit sie **nach** dem letzten Release sortiert, steht `package.json` auf
+  `main` nach jedem Release schon auf der nächsten Nummer (1.0.10 nach 1.0.9; ein Test in
+  `test/release-build.test.js` hält das fest, solange `[Unreleased]` Einträge hat). Vierstellige Nummern (1.0.9.1)
+  kennt der Box-Helfer nicht (`VERSION_RE`) — sie machten den ganzen Index auf allen Boxen ungültig.
+  `publish-release.sh` veröffentlicht ein dev-Paket nur, wenn sein Commit auf `origin/main` liegt (sonst ginge ein
+  lokaler, ungepushter Stand an alle Boxen auf Bleeding Edge); im Dry-Run nur ein Hinweis.
+  Das Vorab-Release `dev` legt `gh` beim ersten Mal samt Tag `dev` an; der Tag wandert danach nicht mit (die Assets
+  sind maßgeblich, nicht der Tag). git-Boxen holen ihn mit `git fetch --tags`, werten aber nur `vX.Y.Z` aus.
 - **Index je Kanal** am Vorab-Release `channels` (fester Pfad, nie „latest“):
   `…/releases/download/channels/index-stable.json` und `index-dev.json`, jeweils mit `.sig`. Inhalt: Format, Kanal,
   `latest`, und je Version Tag, Git-SHA, Datum, `node_engine`, Änderungen (CHANGELOG-Abschnitt bzw. Commit-Betreffs) und
@@ -196,14 +206,22 @@ Download, Prüfung, Entpacken, Einrichten, Neustart, Gesundheitsprüfung, Ergebn
 /api/admin/update/rollback`. Die Seite fragt den Status alle 2 s ab, überbrückt den Neustart und zeigt das
 Ergebnis. Kanalwechsel = Config speichern + `install latest <kanal>`.
 
-**Nur Stabil:** Eine Paket-Box prüft und installiert immer `stable`, auch wenn in ihrer Config (Altbestand, Import)
-noch `dev` steht. Den Wechsel auf Bleeding Edge lehnt `POST /api/admin/update/channel` mit 409 `dev_requires_git` ab
-(Config bleibt, kein Auftrag, Protokoll `update_channel_rejected`); die Oberfläche zeigt „Bleeding Edge gibt es nur
-für git-Installationen. Paket-Installationen bleiben auf Stabil.“ Einen Rückweg Paket → git gibt es nicht: Das
-Gegenstück der Umstellung (`revertMigration`) arbeitet nur während der Umstellung selbst, danach ist der alte Checkout
-in `.legacy-git/` nicht mehr aktuell und wird beim nächsten Paket-Update entfernt. Wer Bleeding Edge braucht,
-installiert neu als git-Box. Beta-Funktionen hängen am Kanal (`beta-features.js`) und bleiben auf Paket-Boxen darum
-aus. Docker-Installationen sind nicht betroffen (kein Manifest, Kanal wie bisher über die Config).
+**Bleeding Edge auf Paket-Boxen (ab 1.0.10):** Der Wechsel auf `dev` fragt zuerst den Helfer (`check dev`: lädt
+`index-dev.json` samt `.sig`, prüft Signatur im Namensraum `dvhub-release-index` und Inhalt). Gibt es keinen
+verwertbaren dev-Index (404, Signatur falsch, keine Version, kein Paket für die Architektur der Box), lehnt `POST /api/admin/update/channel` mit 409
+`dev_package_unavailable` ab (Config bleibt, kein Auftrag, Protokoll `update_channel_rejected`, Grund im Feld
+`detail`); die Oberfläche zeigt „Für Paket-Installationen ist derzeit kein Bleeding-Edge-Paket veröffentlicht. Die
+Box bleibt auf Stabil.“ Sonst wie jeder Kanalwechsel: Rückschritt-Prüfung, `install latest dev`, Kanal-Rückfall. Von einem Release
+`X.Y.Z` auf einen dev-Stand derselben Grundversion `X.Y.Z-dev.…` gilt als Rückschritt (er stammt nach der
+Versionsregel von vor dem Release), außer es ist genau der Release-Commit; mit `allowDowngrade` geht es trotzdem.
+`check` und `apply` nehmen den eingestellten Kanal; steht dort `dev`, ist aber kein dev-Index erreichbar (Altbestand,
+Import, Index zurückgezogen), prüfen und installieren sie wie in 1.0.9 `stable` und liefern den Hinweis als `notice`
+(Protokoll `update_dev_package_unavailable`) — die Rückschritt-Prüfung verhindert dabei, dass ein dev-Stand still auf
+ein älteres stabiles Paket zurückfällt. Beta-Funktionen hängen am Kanal (`beta-features.js`) und sind auf einer
+Paket-Box im Kanal dev an wie auf einer git-Box. Einen Rückweg Paket → git gibt es nicht: Das Gegenstück der
+Umstellung (`revertMigration`) arbeitet nur während der Umstellung selbst, danach ist der alte Checkout in
+`.legacy-git/` nicht mehr aktuell und wird beim nächsten Paket-Update entfernt. Docker-Installationen sind nicht
+betroffen (kein Manifest, Kanal wie bisher über die Config).
 
 **Kanal-Rückfall:** Nimmt der Helfer einen Kanalwechsel-Auftrag an, speichert DVhub den Kanal und legt einen Vermerk
 `<Datenordner>/update-channel-switch.json` an (alter und neuer Kanal, Zeitpunkt vor dem Helfer-Aufruf; überlebt den
@@ -216,9 +234,12 @@ Antwort trägt dann `channelSwitch`), vor jedem neuen Auftrag und — ohne offen
 solange ein Vermerk liegt. Solange er offen ist, lehnen Update, Rückweg und Kanalwechsel mit 409
 `channel_switch_pending` ab (sonst würde das Ergebnis eines zweiten Auftrags dem Wechsel zugerechnet). Wurde der
 Kanal inzwischen von Hand geändert, bleibt er (`update_channel_revert_skipped`); nach 6 h ohne passenden Status
-verfällt der Vermerk. Ein Auftrag, der 90 min lang seinen Status nicht fortschreibt (Strom weg beim Download oder
-Entpacken, bevor der Helfer `pending` vermerkt — dann gibt es kein `resume`), gilt als verwaist: Rückfall mit
-Ergebnis `abandoned`, die Sperre ist frei.
+verfällt der Vermerk. Ein Auftrag, der 90 min lang seinen Status nicht fortschreibt, gilt nur in den Phasen vor dem
+Umschalten (`queued`, `start`, `index`, `download`, `verify`, `unpack`, `verify-files` — Strom weg, bevor der Helfer `pending`
+vermerkt, dann gibt es kein `resume`) als verwaist: Rückfall mit Ergebnis `abandoned`, die Sperre ist frei. Ab
+`switch` (oder wenn `status` ein offenes Journal meldet, Feld `pending`) wartet der Server auf das Ergebnis von
+`resume` — der neue Stand läuft womöglich schon (1.0.10, vorher setzte ein Stromausfall über 90 min den Kanal zu früh
+zurück). Kommt 6 h lang kein Lebenszeichen, verfällt der Vermerk ohne Rückfall (`update_channel_switch_expired`).
 
 ## 5. Umstellung git → Paket
 
@@ -321,8 +342,21 @@ Funde außerhalb der Pakete:
    scripts/release/publish-release.sh ~/Projects/dvhub-release-out/1.0.9 --dry-run --dest /tmp/pub   # ansehen
    scripts/release/publish-release.sh ~/Projects/dvhub-release-out/1.0.9                               # GitHub
    ```
-   dev-Pakete werden nicht veröffentlicht (Bleeding Edge bleibt git; später aus der CI).
    Danach den Tag wie gewohnt ausrollen: git-Boxen holen v1.0.9 per git und stellen sich nach ~2 min selbst um.
+5. **Bleeding Edge (dev-Pakete), vorerst von Hand** — bis die CI das übernimmt, nach jedem Stand von `main`, der an
+   Paket-Boxen auf Bleeding Edge gehen soll:
+   ```bash
+   git fetch origin
+   scripts/release/build-release.sh origin/main     # Version <package.json>-dev.<Zeit>.<sha8>, Kanal dev
+   v=$(ls -t ~/Projects/dvhub-release-out | head -1)
+   scripts/release/publish-release.sh ~/Projects/dvhub-release-out/$v --dry-run --dest /tmp/pub-dev   # ansehen
+   scripts/release/publish-release.sh ~/Projects/dvhub-release-out/$v                                  # GitHub
+   ```
+   Das erste Mal legt `publish-release.sh` das Vorab-Release `dev` an und lädt `channels/index-dev.json` (+ `.sig`)
+   hoch; erst ab dann können Paket-Boxen auf Bleeding Edge wechseln. Vor dem ersten dev-Paket muss `package.json` auf
+   `main` über dem letzten Release stehen (nach 1.0.9: 1.0.10), sonst sortiert das dev-Paket vor dem Release.
+   `publish-release.sh` nimmt nur Commits an, die auf `origin/main` liegen. Zurückziehen: `index-dev.json` am
+   Vorab-Release `channels` löschen — Boxen auf dev prüfen und installieren dann wieder stable (mit Hinweis).
 
 ## Offene Entscheidungen
 

@@ -1275,6 +1275,10 @@ function readStatus(s) {
     current: cur,
     previous: st.previous && fs.existsSync(path.join(releasesDir(s), st.previous)) ? st.previous : null,
     running,
+    // Offenes Auftrags-Journal (nach dem Umschalten, vor der Bestätigung): der
+    // Server wartet dann auf resume statt den Kanalwechsel als verwaist
+    // zurückzusetzen (routes/admin-routes.js settleChannelSwitch).
+    pending: !!st.pending,
     status,
     migration: { skipped: st.migrate?.skipped || null, attempts: st.migrate?.attempts || 0, done_at: st.migrate?.done_at || null },
   };
@@ -1476,7 +1480,7 @@ async function runJob(s, a) {
 module.exports = {
   parseArgs, compareVersions, parseVersion, satisfiesEngine, versionFromLabel, debArch, readConf, settings,
   validateIndex, verifyTree, symlinkEscapes, reconcileLinks, dropinContent, switchCurrent, currentVersion, rewriteUnit, migrationCheck,
-  OFFICIAL_REPO_RE, main, Exit, trustedKeyCount, verifySignature, download, unpack, readStatus, actionCheck,
+  OFFICIAL_REPO_RE, VERSION_RE, main, Exit, trustedKeyCount, verifySignature, download, unpack, readStatus, actionCheck,
 };
 
 if (require.main === module) {

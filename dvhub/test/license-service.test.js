@@ -467,7 +467,8 @@ test('Hardening C / Strix L-0005: auch mit node-lock OFF gibt ein fremdes Machin
   // jeder Box Pro (Strix L-0005). Jetzt: Status + Schlüssel bleiben, Pro aus.
   assert.equal(svc.getStatus(), 'active', 'Schlüssel und Status bleiben erhalten');
   assert.equal(svc.isProActive(), false, 'kein Pro mit dem Machine-File einer anderen Box');
-  assert.equal(svc.getState().binding.block, 'bound_to_other_box');
+  // 1.0.10: „von anderer Box übernommen“ statt „an andere Box verloren“ (Vorfall 04./05.11.2026).
+  assert.equal(svc.getState().binding.block, 'adopted_from_other_box');
 });
 
 test('Hardening C: node-lock ON with NO machine file is grandfathered (floating stays active)', () => {

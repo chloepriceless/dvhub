@@ -68,11 +68,13 @@ export const APT_HELPER = '/usr/local/libexec/dvhub-apt';
 // Neustart von DVhub) und meldet den Fortschritt über `status`.
 export const RELEASE_HELPER = '/usr/local/libexec/dvhub-release';
 const RELEASE_VERSION = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
-// Signierte Pakete gibt es nur für den stabilen Kanal (Christin, 04.11.2026);
-// Bleeding Edge bleibt git-basiert. Eine Paket-Box prüft und installiert darum
-// immer stable, auch wenn in ihrer Config (Altbestand, Import) noch dev steht.
-export const PACKAGE_DEV_NOTICE = 'Bleeding Edge gibt es nur für git-Installationen. Paket-Installationen bleiben auf Stabil.';
-const PACKAGE_CHANNEL = 'stable';
+// Bleeding Edge für Paket-Boxen (Christin, 05.11.2026; 1.0.9 ließ nur stable
+// zu): erlaubt, sobald ein signierter dev-Index erreichbar ist
+// (channels/index-dev.json + .sig, Namensraum dvhub-release-index — der Helfer
+// lädt und prüft beides bei `check dev`). Gibt es keinen, lehnt der
+// Kanalwechsel mit dieser Meldung ab, und eine Box mit dev in der Config
+// (Altbestand, Import) prüft und installiert wie in 1.0.9 stable.
+export const PACKAGE_DEV_NOTICE = 'Für Paket-Installationen ist derzeit kein Bleeding-Edge-Paket veröffentlicht. Die Box bleibt auf Stabil.';
 // Kanal-Rückfall (Paket-Box): Vermerk des laufenden Kanalwechsels im
 // Datenordner — der Auftrag startet DVhub neu, ein Vermerk im Speicher ginge
 // dabei verloren.
@@ -84,6 +86,12 @@ const CHANNEL_SWITCH_MAX_AGE_MS = 6 * 3600 * 1000;
 // resume, und der Status bliebe für immer „running“ (Codex 6a497589, P2). Länger
 // als die längste stille Phase (post-update.sh bis 60 min, release.conf).
 const CHANNEL_SWITCH_ABANDONED_MS = 90 * 60 * 1000;
+// Verwaist heißt „der alte Stand läuft noch“ — das gilt nur für die Phasen vor
+// dem Umschalten (dvhub-release fetchAndUnpack/unpack). Ab switch ist pending gesetzt:
+// Strom weg dann → boot-hook plant resume, und erst resume entscheidet (alter
+// oder neuer Stand). Ein Rückfall vorher setzte den Kanal zurück, obwohl der
+// neue Stand womöglich schon läuft (1.0.9-Rest, Strom > 90 min weg).
+const CHANNEL_SWITCH_PRE_SWITCH_PHASES = new Set(['queued', 'start', 'index', 'download', 'verify', 'unpack', 'verify-files']);
 const UPDATE_CHANNELS = ['stable', 'dev'];
 export const SETCAP_HELPER = '/usr/local/libexec/dvhub-setcap';
 // npm install auf einem langsamen Board braucht oft mehr als eine Minute; ein
@@ -116,9 +124,10 @@ export function createAdminRoutes(deps) {
     const r = await execFileAsync('sudo', ['-n', RELEASE_HELPER, ...args], { timeout });
     try { return JSON.parse(String(r.stdout || '').trim().split('\n').at(-1) || '{}'); } catch { return { ok: true }; }
   };
+  const helperMessage = (e) => String(e?.stderr || e?.message || 'Fehler').trim().split('\n').at(-1).replace(/^dvhub-release:\s*/, '');
   // Exit 4 = läuft bereits, 3 = abgelehnt (Vorbedingung) → 409; sonst 500.
   const releaseError = (res, e, event) => {
-    const msg = String(e?.stderr || e?.message || 'Fehler').trim().split('\n').at(-1).replace(/^dvhub-release:\s*/, '');
+    const msg = helperMessage(e);
     pushLog(event, { error: msg });
     return json(res, e?.code === 4 || e?.code === 3 ? 409 : 500, { ok: false, mode: 'package', error: msg });
   };
@@ -160,11 +169,12 @@ export function createAdminRoutes(deps) {
    * dem laufenden Paket? Kleinere Grundversion — oder gleiche Grundversion, aber
    * der laufende dev-Stand ist jünger als das Ziel (dev-Box mit Fixes nach dem
    * Tag → stable-Paket derselben Nummer; Gegenprüfung 1d4ca47d, P2). Liefert
-   * die 400-Antwort oder null. target 'latest' fragt den Helfer (check).
+   * die 400-Antwort oder null. target 'latest' fragt den Helfer (check), außer
+   * die check-Antwort des Kanals liegt schon vor (known).
    */
-  const packageDowngrade = async (channel, target, allowDowngrade) => {
+  const packageDowngrade = async (channel, target, allowDowngrade, known = null) => {
     if (allowDowngrade) return null;
-    const chk = await releaseHelper(['check', channel], 60000);
+    const chk = known || await releaseHelper(['check', channel], 60000);
     const cur = chk?.current?.version || null;
     const latest = chk?.latest || {};
     const to = target === 'latest' ? (latest.version || null) : target;
@@ -180,10 +190,50 @@ export function createAdminRoutes(deps) {
       if (curMs != null) {
         const toMs = devCommitMs(to) ?? (to === latest.version ? Date.parse(latest.date || '') : NaN);
         older = !Number.isFinite(toMs) || toMs < curMs;
+      } else if (devCommitMs(to) != null) {
+        // Release X.Y.Z → dev-Stand X.Y.Z-dev.…: main steht nach einem Release
+        // schon auf der nächsten Nummer (test/release-build.test.js), ein
+        // dev-Paket derselben Grundversion stammt also von vor dem Release —
+        // ein Rückschritt, außer es ist genau der Release-Commit (Codex
+        // c84c098d, P2).
+        const curSha = String(chk?.current?.git_sha || '');
+        const toSha = to === latest.version ? String(latest.git_sha || '') : '';
+        older = !(curSha && toSha && curSha === toSha);
       }
     }
     if (!older) return null;
     return { ok: false, mode: 'package', error: 'downgrade_blocked', detail: `downgrade_blocked: ${to} ist älter als ${cur}`, current: cur, target: to };
+  };
+
+  // ── Kanal einer Paket-Box ──
+  // Ist ein signierter dev-Index erreichbar? Der Helfer lädt index-dev.json
+  // samt .sig und prüft Signatur und Inhalt; ohne verwertbare Version gilt er
+  // als nicht veröffentlicht. target: 'latest' oder eine gezielte Version —
+  // für die muss es ein Paket dieser Architektur geben (Codex 19fd8ea5, P2).
+  // → { ok, chk } bzw. { ok: false, detail }.
+  const probeDevIndex = async (target = 'latest') => {
+    try {
+      const chk = await releaseHelper(['check', 'dev'], 60000);
+      if (chk?.ok === false || !chk?.latest?.version) return { ok: false, detail: 'dev-Index ohne verwertbare Version' };
+      // Paket für die Architektur dieser Box? Sonst scheiterte der Auftrag
+      // sicher an „kein Paket für …“ (Codex c84c098d, P2).
+      const forArch = target === 'latest'
+        ? chk.latest.available === true
+        : (target === chk.latest.version ? chk.latest.available === true : (chk.availableVersions || []).includes(target));
+      if (!forArch) return { ok: false, detail: `kein Bleeding-Edge-Paket ${target === 'latest' ? '' : `${target} `}für die Architektur dieser Box (${chk.arch || 'unbekannt'})` };
+      return { ok: true, chk };
+    } catch (e) {
+      return { ok: false, detail: helperMessage(e) };
+    }
+  };
+  // Wirksamer Kanal für check/apply: dev nur mit erreichbarem dev-Index, sonst
+  // stable wie in 1.0.9 (mit Hinweis). chk = check-Antwort für dev, sonst null.
+  const resolvePackageChannel = async (target = 'latest') => {
+    if (ctx.getRawCfg()?.updateChannel !== 'dev') return { channel: 'stable', chk: null, notice: null };
+    const d = await probeDevIndex(target);
+    if (d.ok) return { channel: 'dev', chk: d.chk, notice: null };
+    pushLog('update_dev_package_unavailable', { detail: String(d.detail).slice(0, 300), mode: 'package' });
+    return { channel: 'stable', chk: null, notice: PACKAGE_DEV_NOTICE };
   };
 
   // ── Kanal-Rückfall (Paket-Box, Gesamtprüfung 03.11.2026) ──
@@ -222,7 +272,7 @@ export function createAdminRoutes(deps) {
     const p = channelSwitchPath();
     if (p) { try { fs.rmSync(p, { force: true }); } catch { /* nächster Versuch beim nächsten Status */ } }
   };
-  const settleChannelSwitch = (st) => {
+  const settleChannelSwitch = (st, helperOut = null) => {
     const m = readChannelSwitch();
     if (!m) return null;
     const mine = st && (st.job === 'install' || st.job === 'resume') && Date.parse(st.started || '') >= Date.parse(m.at);
@@ -239,6 +289,16 @@ export function createAdminRoutes(deps) {
     if (st.state === 'queued' || st.state === 'running') {
       const last = Date.parse(st.updated || st.started || '');
       if (!Number.isFinite(last) || Date.now() - last <= CHANNEL_SWITCH_ABANDONED_MS) return null;
+      // Nach dem Umschalten (Phase ab switch, oder der Helfer meldet ein
+      // offenes Journal): resume abwarten. Kommt nie eins, nach 6 h ohne
+      // Lebenszeichen aufgeben — Config bleibt, Sperre frei.
+      if (!CHANNEL_SWITCH_PRE_SWITCH_PHASES.has(st.phase || 'start') || helperOut?.pending === true) {
+        if (Date.now() - last > CHANNEL_SWITCH_MAX_AGE_MS) {
+          clearChannelSwitch();
+          pushLog('update_channel_switch_expired', { from: m.from, to: m.to, at: m.at, phase: st.phase || null });
+        }
+        return null;
+      }
       // Verwaist: der alte Stand läuft (umgeschaltet wird erst nach pending) —
       // wie ein gescheiterter Wechsel behandeln.
       abandoned = true;
@@ -271,7 +331,7 @@ export function createAdminRoutes(deps) {
     if (!readChannelSwitch()) return null;
     try {
       const r = await releaseHelper(['status'], 15000);
-      return settleChannelSwitch(r?.status);
+      return settleChannelSwitch(r?.status, r);
     } catch {
       return null;
     }
@@ -661,16 +721,24 @@ export function createAdminRoutes(deps) {
     if (url.pathname === '/api/admin/update/check' && req.method === 'GET') {
       if (!ctx.getServiceActionsEnabled()) return json(res, 403, { ok: false, error: 'service actions disabled' });
       if (releaseInfo()) {
-        const channel = PACKAGE_CHANNEL;
         try {
-          const c = await releaseHelper(['check', channel]);
+          const { channel, chk, notice } = await resolvePackageChannel();
+          const c = chk || await releaseHelper(['check', channel]);
+          // Ein Rückschritt ist kein Update (apply sperrt ihn ohnehin): etwa
+          // eine dev-Box, deren dev-Index zurückgezogen wurde und die jetzt
+          // stable prüft, oder nach einem Kanalwechsel mit Rückweg.
+          let updateAvailable = c.updateAvailable === true;
+          if (updateAvailable) {
+            try { if (await packageDowngrade(channel, 'latest', false, c)) updateAvailable = false; } catch { /* Antwort ohne Versionen: wie vom Helfer */ }
+          }
           const tag = (v) => (v ? `v${v}` : null);
           return json(res, 200, {
             ok: true, mode: 'package', channel,
+            ...(notice ? { notice } : {}),
             current: { version: ctx.getAppVersion().versionLabel, tag: tag(c.current?.version), revision: (c.current?.git_sha || '').slice(0, 7) || null, release: c.current?.version || null },
             latest: { tag: tag(c.latest?.version), revision: (c.latest?.git_sha || '').slice(0, 7) || null, release: c.latest?.version || null, date: c.latest?.date || null },
             previous: c.previous || null,
-            updateAvailable: c.updateAvailable === true,
+            updateAvailable,
             availableVersions: (c.availableVersions || []).map(tag),
             changelog: Array.isArray(c.changelog) ? c.changelog : [],
           });
@@ -754,7 +822,6 @@ export function createAdminRoutes(deps) {
         // Paket-Box: Version (optional) prüfen, Auftrag an dvhub-release; der
         // Helfer startet neu, prüft /health und geht bei Fehlern selbst zurück.
         const body = await parseBody(req).catch(() => ({}));
-        const channel = PACKAGE_CHANNEL;
         if (body?.ref) return json(res, 400, { ok: false, mode: 'package', error: 'ref_not_supported', detail: 'Gezielte Commits gibt es nur bei git-Installationen' });
         // Ein noch offener Kanalwechsel zuerst abschließen — sonst hielte der
         // Rückfall diesen neuen Auftrag für den des Wechsels.
@@ -768,16 +835,17 @@ export function createAdminRoutes(deps) {
           }
           target = m[1];
         }
+        const { channel, chk, notice } = await resolvePackageChannel(target);
         // Dieselbe Rückschritt-Sperre wie beim Kanalwechsel (Gegenprüfung 1d4ca47d,
         // P2): nach Kanalwechsel + Rückweg meldet check sonst ein „Update“, das
         // zurückstuft.
         let blocked;
-        try { blocked = await packageDowngrade(channel, target, body?.allowDowngrade === true); } catch (e) { return releaseError(res, e, 'update_apply_check_error'); }
+        try { blocked = await packageDowngrade(channel, target, body?.allowDowngrade === true, chk); } catch (e) { return releaseError(res, e, 'update_apply_check_error'); }
         if (blocked) {
           pushLog('update_apply_rejected', { reason: 'downgrade_blocked', current: blocked.current, requested: blocked.target, mode: 'package' });
           return json(res, 400, blocked);
         }
-        return startReleaseJob(res, ['install', target, channel], 'update_package_started', { channel, target });
+        return startReleaseJob(res, ['install', target, channel], 'update_package_started', { channel, target, ...(notice ? { notice } : {}) });
       }
       try {
         const body = await parseBody(req).catch(() => ({}));
@@ -941,7 +1009,7 @@ export function createAdminRoutes(deps) {
       if (!releaseInfo()) return json(res, 200, { ok: true, mode: 'git' });
       try {
         const out = await releaseHelper(['status'], 15000);
-        const channelSwitch = settleChannelSwitch(out?.status);
+        const channelSwitch = settleChannelSwitch(out?.status, out);
         return json(res, 200, { ...out, mode: 'package', ...(channelSwitch ? { channelSwitch } : {}) });
       } catch (e) {
         return releaseError(res, e, 'update_status_error');
@@ -980,21 +1048,24 @@ export function createAdminRoutes(deps) {
         next.updateChannel = channel;
 
         if (releaseInfo()) {
-          // Bleeding Edge gibt es nur für git-Installationen (Christin,
-          // 04.11.2026): kein halber Wechsel — Config bleibt, kein Auftrag.
-          // Zurück zu git wäre das Gegenstück der Umstellung; den Weg gibt es
-          // nur während der Umstellung selbst (revertMigration), nicht danach.
-          if (channel === 'dev') {
-            pushLog('update_channel_rejected', { channel, reason: 'dev_requires_git', mode: 'package' });
-            return json(res, 409, { ok: false, mode: 'package', error: 'dev_requires_git', message: PACKAGE_DEV_NOTICE, channel: PACKAGE_CHANNEL });
-          }
           // Paket-Box: das Neueste des Zielkanals installieren. dev-Versionen
           // sortieren vor dem gleichnamigen Release — das gilt nicht als
           // Rückschritt; eine kleinere Grundversion schon: dann wie beim git-Weg
           // nur mit allowDowngrade (Strix R-0003, Gegenprüfung bf393d9f, P2).
           if (await channelSwitchBusy(res, 'update_channel_rejected')) return;
+          // Bleeding Edge nur mit erreichbarem, signiertem dev-Index (Christin,
+          // 05.11.2026). Sonst kein halber Wechsel — Config bleibt, kein Auftrag.
+          let known = null;
+          if (channel === 'dev') {
+            const d = await probeDevIndex();
+            if (!d.ok) {
+              pushLog('update_channel_rejected', { channel, reason: 'dev_package_unavailable', detail: String(d.detail).slice(0, 300), mode: 'package' });
+              return json(res, 409, { ok: false, mode: 'package', error: 'dev_package_unavailable', message: PACKAGE_DEV_NOTICE, detail: d.detail, channel: 'stable' });
+            }
+            known = d.chk;
+          }
           let blocked;
-          try { blocked = await packageDowngrade(channel, 'latest', allowDowngrade); } catch (e) { return releaseError(res, e, 'update_channel_check_error'); }
+          try { blocked = await packageDowngrade(channel, 'latest', allowDowngrade, known); } catch (e) { return releaseError(res, e, 'update_channel_check_error'); }
           if (blocked) {
             pushLog('update_channel_rejected', { channel, reason: 'downgrade_blocked', current: blocked.current, target: blocked.target, mode: 'package' });
             return json(res, 400, blocked);

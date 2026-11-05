@@ -1144,6 +1144,35 @@ describe('Relay-Sicherheit: Gesamtprüfung 1.0.9', () => {
     relay.close();
   });
 
+  // 1.0.9-Rest: Gesamtgrenze revokedBoxes < (Anzahl /48) × revokedBoxesPerWideSource
+  // (prod: 2 000 < 8 × 256) — die Gesamtgrenze verdrängte bisher den ältesten
+  // Eintrag überhaupt, also die echte Box. Jetzt den ältesten Eintrag der /48
+  // mit den meisten Einträgen.
+  test('entkoppelte Handys: mehrere /48 über der Gesamtgrenze verdrängen nur sich selbst', async () => {
+    const relay = createRelay({ limits: { revokedBoxes: 6, revokedBoxesPerSource: 2, revokedBoxesPerWideSource: 3 } });
+    const box = generateIdentity();
+    const dev = generateIdentity();
+    const b = await boxOnRelay(relay, box, '198.51.100.7');
+    b.send({ t: 'allow', devs: [dev.id] });
+    b.send({ t: 'allow', devs: [] });
+    await flush(b);
+    b.hangup();
+    await until(() => relay.stats().boxesOnline === 0);
+    for (const w of ['9', 'a', 'b', 'c']) {
+      for (const n of ['100', '200']) {
+        for (let i = 0; i < 2; i++) {
+          const f = await boxOnRelay(relay, generateIdentity(), `2001:db8:${w}:${n}::/64`);
+          f.send({ t: 'allow', devs: ['x'] });
+          await flush(f);
+        }
+      }
+    }
+    const d = await deviceOnRelay(relay, box, dev);
+    await until(() => d.state.closed || d.inbox.some((m) => m.t === 'ok'));
+    assert.equal(d.state.closed?.reason, 'device_not_allowed', 'die echte Box bleibt in der Liste');
+    relay.close();
+  });
+
   test('Verbindungen: zweite Grenze je /48', async () => {
     const relay = createRelay({ limits: { maxConnectionsPerRemote: 4, maxConnectionsPerGroup: 4, maxConnectionsPerWideGroup: 6 } });
     const cs = [];

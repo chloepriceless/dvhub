@@ -177,7 +177,7 @@ function centralFetch({ central = 'ok' } = {}) {
 
 test('zentral: eine Anfrage an dvhub.online, keine direkten Quellen', async () => {
   const f = centralFetch();
-  const r = await fetchSolarMarketValues({ year: 2026, fetchImpl: f.impl, centralBaseUrl: CENTRAL });
+  const r = await fetchSolarMarketValues({ year: 2026, fetchImpl: f.impl, centralFetchImpl: f.impl, centralBaseUrl: CENTRAL });
   assert.deepEqual(f.calls.map((c) => c.url), [`${CENTRAL}/v1/pv/solar-market-values?year=2026`]);
   assert.equal(r.monthlyCtKwhByMonth['2026-09'], 8.177);
   assert.equal(r.runningAnnualCtKwh, 5.301);
@@ -186,7 +186,8 @@ test('zentral: eine Anfrage an dvhub.online, keine direkten Quellen', async () =
 });
 
 test('dvhub.online nicht erreichbar: direkt von netztransparenz/Energy-Charts, ohne laufenden Wert', async () => {
-  const r = await fetchSolarMarketValues({ year: 2026, fetchImpl: centralFetch({ central: 'fail' }).impl, centralBaseUrl: CENTRAL });
+  const cf = centralFetch({ central: 'fail' }).impl;
+  const r = await fetchSolarMarketValues({ year: 2026, fetchImpl: cf, centralFetchImpl: cf, centralBaseUrl: CENTRAL });
   assert.equal(r.monthlyCtKwhByMonth['2026-09'], 8.177);
   assert.equal(r.runningAnnualCtKwh, null);
 });
@@ -194,7 +195,8 @@ test('dvhub.online nicht erreichbar: direkt von netztransparenz/Energy-Charts, o
 test('Dienst speichert den laufenden Jahreswert und gibt ihn zurück', async () => {
   const store = fakeStore();
   store.upsertSolarMarketValue = async (e) => { store.rows.set(`${e.scope}:${e.key}`, { ctKwh: e.ctKwh, source: e.source }); };
-  const svc = createEnergyChartsMarketValueService({ fetchImpl: centralFetch().impl, marketValueStore: store,
+  const cfi = centralFetch().impl;
+  const svc = createEnergyChartsMarketValueService({ fetchImpl: cfi, centralFetchImpl: cfi, marketValueStore: store,
     nowIso: () => '2026-10-21T12:00:00Z', getCentralBaseUrl: () => CENTRAL });
   const s = await svc.getSolarMarketValueSummary({ year: 2026 });
   assert.equal(s.runningAnnualCtKwh, 5.301);

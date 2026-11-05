@@ -46,8 +46,6 @@ done
 if [[ "$DRY" -eq 1 ]]; then
   [[ -n "$DEST" ]] || die "--dry-run braucht --dest DIR"
   mkdir -p "$DEST"
-else
-  command -v gh >/dev/null 2>&1 || die "gh fehlt"
 fi
 
 get() { "$NODE" "$CLI" get --file "$BUILD/release.json" --path "$1"; }
@@ -58,6 +56,19 @@ if [[ "$CHANNEL" == stable ]]; then
   RTAG="$TAG"
 else
   RTAG="dev"
+  # dev-Pakete nur aus veröffentlichtem Code (Christin 05.11.2026: von Hand
+  # aus main gebaut): der Commit muss auf origin/main liegen. Sonst ginge ein
+  # lokaler, ungepushter Stand — etwa ein privater Sicherheits-Zweig — als
+  # signiertes Paket an alle Boxen auf Bleeding Edge. Stand von origin/main
+  # vorher mit `git fetch` holen. Im Dry-Run nur ein Hinweis.
+  if ! git -C "$REPO" rev-parse --verify --quiet refs/remotes/origin/main >/dev/null \
+      || ! git -C "$REPO" merge-base --is-ancestor "$SHA" refs/remotes/origin/main 2>/dev/null; then
+    msg="Commit ${SHA:0:12} liegt nicht auf origin/main (erst pushen bzw. git fetch) — dev-Pakete nur aus veröffentlichtem main"
+    if [[ "$DRY" -eq 1 ]]; then echo "publish-release: Hinweis: $msg" >&2; else die "$msg"; fi
+  fi
+fi
+if [[ "$DRY" -ne 1 ]]; then
+  command -v gh >/dev/null 2>&1 || die "gh fehlt"
 fi
 echo "Veröffentliche $VERSION (Kanal $CHANNEL) → Release $RTAG"
 

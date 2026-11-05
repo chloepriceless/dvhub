@@ -66,6 +66,9 @@ function mockCtx(overrides = {}) {
     // is covered in license-routes.test.js. Tests that need to assert the
     // gate can override `licenseService` via the overrides arg.
     licenseService: { requirePro: () => true },
+    // Abrufe zu Config-Zielen (priceApiUrl, Kuma) laufen über ctx.outboundFetch
+    // (services/outbound-fetch.js); hier wie bisher über den fetch-Stub der Tests.
+    outboundFetch: (...a) => globalThis.fetch(...a),
     state: {
       meter: { ok: false, updatedAt: 0, raw: [], grid_l1_w: 0, grid_l2_w: 0, grid_l3_w: 0, grid_total_w: 0 },
       victron: { soc: 50, batteryPowerW: 0, pvTotalW: 3000, gridImportW: 0, gridExportW: 0, updatedAt: 0 },

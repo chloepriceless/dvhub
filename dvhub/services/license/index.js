@@ -81,15 +81,31 @@ const LAST_CHECK_FUTURE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 // Server-Fehlern (Bestandsschutz T-0125 „A“: Lizenzen ohne Bindung bleiben gültig).
 //   machine_slot_taken  — Proxy: Slot gehört einer anderen Box (< 24 h, 409,
 //                         nur mit deren boundFingerprint ≠ eigene appliance-id)
-//   bound_to_other_box  — Machine-File einer anderen Box hier, oder Keygen sagt
-//                         online, die Maschine dieser Box hängt nicht mehr an
-//                         der Lizenz (FINGERPRINT_SCOPE_MISMATCH)
-// Aufgehoben nur durch eine erfolgreiche Bindung („An diese Box binden“) —
-// automatisch zurückgeholt wird nicht, sonst nähmen sich zwei Boxen die Lizenz
-// alle 24 h gegenseitig weg.
+//   bound_to_other_box  — Keygen sagt online, die Maschine dieser Box hängt
+//                         nicht mehr an der Lizenz (FINGERPRINT_SCOPE_MISMATCH):
+//                         die Lizenz ist auf eine andere Box umgezogen. Seit
+//                         1.0.10 mit Benachrichtigung (einmal je Ereignis) und
+//                         Hinweis im Leitstand (Vorfall 04./05.11.2026).
+//   adopted_from_other_box — der Lizenzzustand stammt von einer ANDEREN Box
+//                         (kopiert): Machine-File mit fremdem Fingerprint, oder
+//                         ohne File mit fremder Herkunft (appliance_id). Nicht
+//                         automatisch binden — sonst nimmt eine Kopie (Test-
+//                         Stack) der echten Box die Lizenz weg (machine_auto_
+//                         retire im Webhook). Bis 1.0.9 hieß das Machine-File-
+//                         Kopie bound_to_other_box, die Kopie ohne File band.
+// Aufgehoben nur durch eine erfolgreiche Bindung („An diese Box binden“) bzw.
+// einen hier frisch eingegebenen Schlüssel — automatisch zurückgeholt wird
+// nicht, sonst nähmen sich zwei Boxen die Lizenz alle 24 h gegenseitig weg.
 const BIND_BLOCK_SLOT_TAKEN = 'machine_slot_taken';
 const BIND_BLOCK_OTHER_BOX = 'bound_to_other_box';
-const BIND_BLOCKS = new Set([BIND_BLOCK_SLOT_TAKEN, BIND_BLOCK_OTHER_BOX]);
+const BIND_BLOCK_ADOPTED = 'adopted_from_other_box';
+const BIND_BLOCKS = new Set([BIND_BLOCK_SLOT_TAKEN, BIND_BLOCK_OTHER_BOX, BIND_BLOCK_ADOPTED]);
+// Hinweis im Leitstand (getBindingNotice, /api/status.licenseBinding).
+const BINDING_NOTICE_KINDS = Object.freeze({
+  [BIND_BLOCK_OTHER_BOX]: 'moved',
+  [BIND_BLOCK_ADOPTED]: 'adopted',
+  [BIND_BLOCK_SLOT_TAKEN]: 'slot_taken',
+});
 // Keygen validate-key mit scope.fingerprint: Codes, die „Maschine dieser Box
 // hängt nicht mehr an der Lizenz“ bedeuten (vgl. ACTIVATABLE_CODES im Proxy).
 const SCOPE_OTHER_BOX_CODES = new Set(['FINGERPRINT_SCOPE_MISMATCH']);
@@ -157,6 +173,8 @@ function freshNoneState() {
     bind_block: null,             // Strix L-0005: 'machine_slot_taken' | 'bound_to_other_box' → Pro gesperrt
     bind_error: null,             // letzter Bindungsfehler (Hinweis für die Oberfläche, sperrt nicht)
     bind_error_at: null,          // ISO-Zeit des letzten Bindungsfehlers
+    bind_lost_at: null,           // ISO: Bindung an eine andere Box verloren (bound_to_other_box), für Hinweis und „einmal melden“
+    appliance_id: null,           // Herkunft: appliance-id der Box, die diesen Zustand gespeichert hat (Kopie erkennen, 1.0.10)
     license_kind: null,           // license kind from metadata (e.g. "demo"); null = normal/paid
     last_server_ts: null,         // Hardening (Codex #4): monotone high-water of the highest server time seen
     // T-LICENSE-KWP-GATING Increment 5: Under-Report-Erkennung (gemessener Peak
@@ -248,6 +266,10 @@ export function createLicenseService(ctx) {
   const baseDir = process.env.DV_DATA_DIR || ctx.appDir || process.cwd();
   const licensePath = path.join(baseDir, 'license_state.json');
   const securityHeaders = ctx.securityHeaders || {};
+  // Direktmeldung über den Benachrichtigungsdienst (server.js ctx.notifyDirect:
+  // im Worker-Betrieb als notify_direct an den Runtime-Prozess). Fehlt sie
+  // (Tests, Altaufrufer), gehen Meldungen wie beim Widerruf direkt an die Kanäle.
+  const notifyDirect = typeof ctx.notifyDirect === 'function' ? ctx.notifyDirect : null;
   // Hardening B: account public key for offline signed-key verification (null disables).
   const accountPublicKey = ctx.accountPublicKey !== undefined ? ctx.accountPublicKey : ACCOUNT_PUBLIC_KEY;
 
@@ -294,6 +316,7 @@ export function createLicenseService(ctx) {
    */
   function persistState() {
     try {
+      stampOrigin();
       const tmp = licensePath + '.tmp';
       fs.writeFileSync(tmp, JSON.stringify(state.license) + '\n', 'utf8');
       fs.renameSync(tmp, licensePath);
@@ -490,7 +513,7 @@ export function createLicenseService(ctx) {
     if (String(v.fingerprint || '').toLowerCase() !== applianceId) {
       return { bound: false, reason: 'fingerprint_mismatch', file: v, applianceId };
     }
-    return { bound: true, file: v, applianceId };
+    return { bound: true, file: v, applianceId, mf };
   }
 
   function dropMachineFile() {
@@ -507,6 +530,56 @@ export function createLicenseService(ctx) {
     state.license.bind_block = null;
     state.license.bind_error = null;
     state.license.bind_error_at = null;
+    state.license.bind_lost_at = null;
+  }
+
+  // ----------------- Herkunft des Zustands (Kopie erkennen, 1.0.10) -----------------
+  //
+  // license_state.json trägt die appliance-id der Box, die ihn gespeichert hat
+  // (appliance_id). Liegt er auf einer anderen Box, ist er kopiert (Test-Stack,
+  // Klon des Datenordners ohne appliance-id) — dann nicht automatisch binden.
+  // Kein Schutz gegen Absicht (root ändert die Datei), sondern gegen Versehen;
+  // die Bindung selbst prüft der Server. Zustände von 1.0.9 haben keine
+  // Herkunft: sie gelten als eigene und bekommen sie beim ersten Speichern.
+
+  /** Stammt der gespeicherte Zustand nachweislich von einer anderen Box? */
+  function foreignOrigin() {
+    const origin = typeof state.license.appliance_id === 'string' ? state.license.appliance_id.trim().toLowerCase() : '';
+    if (!origin) return false;
+    const own = readApplianceId(baseDir);
+    return !!own && origin !== own;
+  }
+
+  /**
+   * Herkunft beim Speichern auf diese Box setzen — aber eine fremde Herkunft
+   * erst überschreiben, wenn die Übernahme entschieden ist (Sperre gespeichert)
+   * oder diese Box ein eigenes, gültiges Machine-File hat. Sonst würde ein
+   * Speichern vor dem Abgleich (Revalidate speichert zuerst) die Kopie zur
+   * „eigenen“ machen.
+   */
+  function stampOrigin() {
+    const own = readApplianceId(baseDir);
+    if (!own) return;
+    if (foreignOrigin() && !bindingBlocked() && !machineBinding().bound) return;
+    state.license.appliance_id = own;
+  }
+
+  /** Ausdrücklich hier gebunden bzw. Schlüssel hier eingegeben: Zustand gehört dieser Box. */
+  function claimOrigin() {
+    const own = readApplianceId(baseDir);
+    if (own) state.license.appliance_id = own;
+  }
+
+  /** Zustand einer anderen Box: File weg, Pro gesperrt bis „An diese Box binden“. */
+  function adoptFromOtherBox(reason) {
+    const prev = isProActive();
+    pushLog('license_state_from_other_box', { reason, origin: fingerprint(state.license.appliance_id || '') || null });
+    dropMachineFile();
+    state.license.bind_block = BIND_BLOCK_ADOPTED;
+    setBindError(BIND_BLOCK_ADOPTED);
+    persistState();
+    refreshSignedExpiry();
+    emitProActiveChange(prev);
   }
 
   /** Grace deadline (ISO) for UI countdown, or null when no signed expiry. */
@@ -560,7 +633,8 @@ export function createLicenseService(ctx) {
       //     als ungebunden, der nächste Revalidate bindet neu, der Deckel kommt
       //     solange aus der Online-Antwort (L-0002).
       //   - File einer ANDEREN Box → File verwerfen und Pro sperren
-      //     (bound_to_other_box); „An diese Box binden“ hebt das auf.
+      //     (adopted_from_other_box, bis 1.0.9 bound_to_other_box); „An diese
+      //     Box binden“ hebt das auf. Kein automatisches Binden (Vorfall 04.11.).
       // Schlüssel und Status bleiben — der Kunde muss nichts neu eingeben.
       // licensing.nodeLock=true behält das alte, strenge Verhalten (Zustand
       // verwerfen). Lizenzen ganz OHNE Machine-File bleiben unberührt
@@ -585,7 +659,7 @@ export function createLicenseService(ctx) {
             state.license = freshNoneState();
           } else {
             dropMachineFile();
-            state.license.bind_block = BIND_BLOCK_OTHER_BOX;
+            state.license.bind_block = BIND_BLOCK_ADOPTED;
           }
         } else {
           const authId = authoritativeLicenseId();
@@ -598,6 +672,15 @@ export function createLicenseService(ctx) {
       }
       if (state.license.bind_block != null && !BIND_BLOCKS.has(state.license.bind_block)) {
         state.license.bind_block = null;   // unbekannter Wert von Hand → ignorieren
+      }
+      // Kopie OHNE (gültiges) Machine-File, aber mit Herkunft einer anderen Box
+      // (1.0.10): ebenso übernommen, nicht automatisch binden. Ohne Herkunft
+      // (Zustand von 1.0.9) nicht unterscheidbar — dann wie bisher.
+      if (state.license.status === 'active' && !state.license.machine_file
+          && !BIND_BLOCKS.has(state.license.bind_block) && foreignOrigin()) {
+        pushLog('license_state_from_other_box', { reason: 'origin', origin: fingerprint(state.license.appliance_id) });
+        dropMachineFile();
+        state.license.bind_block = BIND_BLOCK_ADOPTED;
       }
       // Hardening Codex-v2 C-1: a signed key on a configured NODE-LOCKED policy
       // MUST carry a valid machine_file bound to THIS appliance — deleting it to
@@ -673,7 +756,7 @@ export function createLicenseService(ctx) {
    * @param {string} keyForState - the plaintext key (D-03 amended: persisted)
    * @returns {{ok: boolean, status: string, code: string}}
    */
-  function applyValidateResponse(json, keyForState) {
+  function applyValidateResponse(json, keyForState, { claim = false } = {}) {
     const code = json?.meta?.code;
     const valid = json?.meta?.valid === true;
     const attrs = json?.data?.attributes || {};
@@ -708,6 +791,22 @@ export function createLicenseService(ctx) {
       state.license.machine_file = null;
       state.license.machine_id = null;
       clearBindProblems();   // eine Sperre gehörte zur alten Lizenz
+    }
+    // Schlüssel hier frisch eingegeben (activateLicense): der Zustand gehört
+    // dieser Box — eine „übernommen“-Sperre fällt, die Bindung folgt
+    // automatisch (T-LICENSE-AUTOBIND), wie für jeden neuen Schlüssel.
+    if (claim && newStatus === 'active') {
+      // Ein Machine-File einer anderen Box (blieb liegen, wenn die appliance-id
+      // erst nach dem Laden kam) gilt hier nicht — weg damit, sonst sperrte die
+      // nächste Prüfung nach einem Netzfehler beim Binden wieder als
+      // „übernommen“ (Codex 59b67ea2, P2).
+      if (state.license.machine_file && machineBinding().reason === 'fingerprint_mismatch') dropMachineFile();
+      claimOrigin();
+      if (state.license.bind_block === BIND_BLOCK_ADOPTED) {
+        state.license.bind_block = null;
+        state.license.bind_error = null;
+        state.license.bind_error_at = null;
+      }
     }
 
     persistState();
@@ -804,7 +903,7 @@ export function createLicenseService(ctx) {
       pushLog('license_activate_http_error', { status: res.status, error: err.message });
       return { ok: false, error: 'server_error' };
     }
-    const result = applyValidateResponse(json, key);
+    const result = applyValidateResponse(json, key, { claim: true });
 
     // T-LICENSE-AUTOBIND (Kundenfall 2026-07-20): "Aktivieren" und "An diese
     // Box binden" waren ZWEI getrennte Schritte — Kunden blieben nach der
@@ -960,6 +1059,7 @@ export function createLicenseService(ctx) {
     state.license.machine_id = body?.machineId || null;
     if (v.expiry) state.license.subscription_until = v.expiry;
     clearBindProblems();     // gebunden → eine Sperre wegen der Bindung ist aufgehoben
+    state.license.appliance_id = applianceId;   // Zustand gehört jetzt dieser Box
     persistState();
     refreshSignedExpiry();   // Codex #5: pick up the new signed expiry for effectiveStatus()
     emitProActiveChange(prevProActive);
@@ -1073,6 +1173,10 @@ export function createLicenseService(ctx) {
    *                                      ab (Tarif-Wechsel), File neu holen
    *         alles andere / Netzfehler  → nichts ändern
    *   gesperrt (andere Box)          → nichts tun; nur „An diese Box binden“
+   *   Zustand einer anderen Box      → übernommen, nicht binden (1.0.10): File
+   *     (fremder Fingerprint) oder        mit fremdem Fingerprint (etwa weil die
+   *     Herkunft fremd                    appliance-id erst nach dem Laden kam)
+   *                                      oder fremde Herkunft ohne File
    *   ungebunden (kein/kaputtes File) → bei JEDEM Revalidate neu binden (T-
    *                                      LICENSE-AUTOBIND, bisher 1× pro Lauf)
    *
@@ -1083,15 +1187,24 @@ export function createLicenseService(ctx) {
     const b = machineBinding();
     if (b.bound) {
       const scope = await scopeCheck(key, b.applianceId);
+      // Eine gleichzeitige Prüfung (Poller und „Jetzt prüfen“) kann während
+      // des Wartens schon entschieden haben — dann nicht noch einmal melden
+      // bzw. binden (Codex 59b67ea2, P3).
+      if (state.license.machine_file !== b.mf) return;
       if (scope === 'other_box') {
         const prev = isProActive();
         pushLog('license_machine_moved_to_other_box', { machine_id: state.license.machine_id });
         dropMachineFile();
         state.license.bind_block = BIND_BLOCK_OTHER_BOX;
         setBindError(BIND_BLOCK_OTHER_BOX);
+        // Vorfall 04./05.11.2026: Prod verlor Pro still. Jetzt einmal je
+        // Ereignis melden — der Übergang gebunden → gesperrt kommt nur einmal
+        // vor (danach kein Scope-Abgleich mehr, bis wieder gebunden).
+        state.license.bind_lost_at = new Date().toISOString();
         persistState();
         refreshSignedExpiry();
         emitProActiveChange(prev);
+        notifyOperatorOfMove();
         return;
       }
       if (scope === 'no_machine') {
@@ -1120,6 +1233,10 @@ export function createLicenseService(ctx) {
       return;
     }
     if (bindingBlocked()) return;
+    if (b.reason === 'fingerprint_mismatch' || foreignOrigin()) {
+      adoptFromOtherBox(b.reason === 'fingerprint_mismatch' ? 'fingerprint' : 'origin');
+      return;
+    }
     await bindNow(key);
   }
 
@@ -1188,7 +1305,8 @@ export function createLicenseService(ctx) {
       state: bindingBlocked() ? 'blocked' : (binding.bound ? 'bound' : 'unbound'),
       block: bindingBlocked() ? state.license.bind_block : null,
       error: state.license.bind_error || null,
-      error_at: state.license.bind_error_at || null
+      error_at: state.license.bind_error_at || null,
+      lost_at: state.license.bind_lost_at || null
     };
     s.effective_status = effectiveStatus();   // Codex #5: active|grace|expired_offline|… for UI
     s.grace_until = graceUntilIso();          // ISO grace deadline (UI countdown) or null
@@ -1209,6 +1327,21 @@ export function createLicenseService(ctx) {
    */
   function getStatus() {
     return state.license.status;
+  }
+
+  /**
+   * Hinweis für den Leitstand (/api/status.licenseBinding, 3-s-Abfrage):
+   * nur gespeicherte Felder, keine Signaturprüfung. moved = Lizenz ist auf
+   * eine andere Box umgezogen, adopted = Zustand von einer anderen Box
+   * übernommen, slot_taken = eine andere Box hält die Lizenz. Sonst null.
+   * @returns {{kind: 'moved'|'adopted'|'slot_taken', since: string|null}|null}
+   */
+  function getBindingNotice() {
+    const l = state.license;
+    if (!l || l.status !== 'active') return null;
+    const kind = BINDING_NOTICE_KINDS[l.bind_block];
+    if (!kind) return null;
+    return { kind, since: (kind === 'moved' && l.bind_lost_at) || l.bind_error_at || null };
   }
 
   /**
@@ -1469,6 +1602,48 @@ export function createLicenseService(ctx) {
     }
   }
 
+  /**
+   * Bindung an eine andere Box verloren (Vorfall 04./05.11.2026): eine
+   * Warnung über den Benachrichtigungsdienst. Im Hintergrund — langsame Kanäle
+   * halten das Revalidate nicht auf; Fehler nur ins Protokoll.
+   */
+  function notifyOperatorOfMove() {
+    const msg = {
+      event: 'license_moved',
+      level: 'warning',
+      title: 'DVhub-Lizenz auf einer anderen Box',
+      body: 'Deine DVhub-Lizenz ist jetzt an eine andere Box gebunden. Auf dieser Box sind die Pro-Funktionen '
+        + '(EOS-Steuerung, DV-Schnittstelle) aus. Soll die Lizenz hierher zurück: Einstellungen → Lizenz → '
+        + '„An diese Box binden“. Warst du das nicht, melde dich beim Support.',
+    };
+    const send = notifyDirect
+      ? () => notifyDirect(msg)
+      : () => sendToProviders(msg);
+    Promise.resolve()
+      .then(send)
+      .then((r) => {
+        if (r && r.error) pushLog('license_notify_error', { event: msg.event, error: String(r.error) });
+        else pushLog('license_moved_notified', { sent: r?.sent ?? null });
+      })
+      .catch((err) => pushLog('license_notify_error', { event: msg.event, error: err?.message ?? String(err) }));
+  }
+
+  /** Ohne ctx.notifyDirect: direkt an die eingeschalteten Kanäle (wie beim Widerruf). */
+  async function sendToProviders(msg) {
+    const providers = getCfg()?.notifications?.providers || {};
+    let sent = 0;
+    for (const [name, pCfg] of Object.entries(providers)) {
+      if (!pCfg?.enabled || !PROVIDER_FACTORIES[name]) continue;
+      try {
+        const r = await createProviderFromConfig(name, pCfg).notify({ level: msg.level, title: msg.title, body: msg.body });
+        if (r?.ok !== false) sent += 1;
+      } catch (err) {
+        pushLog('license_notify_error', { provider: name, error: err.message });
+      }
+    }
+    return { sent };
+  }
+
   // ----------------- HTTP gate -----------------
 
   /**
@@ -1624,6 +1799,7 @@ export function createLicenseService(ctx) {
     removeLicense,
     getState,
     getStatus,
+    getBindingNotice,
     isProActive,
     getRemoteProof,
     getCapKwp,

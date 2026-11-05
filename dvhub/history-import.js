@@ -1,4 +1,6 @@
 import { VRM_API_BASE, resolveVrmSiteId, isTransientVrmError } from './vrm-site.js';
+// epex.priceApiUrl aus der Config: Namen beim Verbinden prüfen (1.0.10).
+import { outboundFetch } from './services/outbound-fetch.js';
 
 const VRM_HISTORY_TYPES = ['venus', 'consumption', 'kwh'];
 const VRM_HISTORY_INTERVAL = '15mins';
@@ -235,10 +237,10 @@ function parseDvhubApiPriceRows(payload = {}) {
   return rows;
 }
 
-async function fetchDvhubApiRange({ bzn, startDay, endDayExclusive, fetchImpl, baseUrl }) {
+async function fetchDvhubApiRange({ bzn, startDay, endDayExclusive, priceFetchImpl, baseUrl }) {
   const cleanBase = String(baseUrl || '').replace(/\/$/, '');
   const url = `${cleanBase}/api/prices?start=${startDay}&end=${endDayExclusive}&zone=${encodeURIComponent(bzn)}`;
-  const response = await fetchImpl(url, { headers: { accept: 'application/json' } });
+  const response = await priceFetchImpl(url, { headers: { accept: 'application/json' } });
   if (!response.ok) {
     const rangeLabel = startDay === addDays(endDayExclusive, -1)
       ? startDay
@@ -280,11 +282,12 @@ async function fetchEnergyChartsRangeWithRetry({
   waitImpl,
   maxAttempts = 3,
   retryDelayMs = 250,
-  dvhubApiBaseUrl = null
+  dvhubApiBaseUrl = null,
+  priceFetchImpl = outboundFetch
 }) {
   if (dvhubApiBaseUrl) {
     try {
-      const rows = await fetchDvhubApiRange({ bzn, startDay, endDayExclusive, fetchImpl, baseUrl: dvhubApiBaseUrl });
+      const rows = await fetchDvhubApiRange({ bzn, startDay, endDayExclusive, priceFetchImpl, baseUrl: dvhubApiBaseUrl });
       if (rows.length > 0) return rows;
     } catch {
       // Fall through to Energy-Charts
@@ -1370,6 +1373,8 @@ export function createHistoryImportManager({
   getTelemetryConfig = null,
   getEpexConfig = () => ({}),
   fetchImpl = globalThis.fetch,
+  // Abruf für epex.priceApiUrl (Config-Ziel): Namen beim Verbinden prüfen.
+  priceFetchImpl = outboundFetch,
   waitImpl = async () => {},
   log = () => {},
   scheduleImpl = (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
@@ -2009,7 +2014,8 @@ export function createHistoryImportManager({
           endDayExclusive: window.endDayExclusive,
           fetchImpl,
           waitImpl,
-          dvhubApiBaseUrl
+          dvhubApiBaseUrl,
+          priceFetchImpl
         });
         const spacing = priceRowSpacingSeconds(rows);
         rows.forEach((row, index) => {

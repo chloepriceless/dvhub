@@ -9,6 +9,8 @@ import { buildPriceTelemetrySamples } from './telemetry-runtime.js';
 // next tick still fires. Stops one-bad-fetch from disabling the loop forever.
 import { safeInterval } from './services/safe-async.js';
 import { VRM_API_BASE as VRM_FORECAST_API, resolveVrmSiteId } from './vrm-site.js';
+// priceApiUrl kommt aus der Config: Namen beim Verbinden prüfen (1.0.10).
+import { outboundFetch } from './services/outbound-fetch.js';
 
 export function createEpexFetcher(ctx) {
   const { state, getCfg, pushLog } = ctx;
@@ -20,7 +22,7 @@ export function createEpexFetcher(ctx) {
     const cfg = getCfg();
     const baseUrl = cfg.epex.priceApiUrl || 'https://dvhub.online';
     const url = `${baseUrl}/api/prices?start=${day}&end=${addDays(day2, 1)}&zone=${encodeURIComponent(bzn)}`;
-    const r = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+    const r = await (ctx.outboundFetch || outboundFetch)(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
     if (!r.ok) throw new Error(`DVhub Price API HTTP ${r.status}`);
     const p = await r.json();
     if (!Array.isArray(p?.data) || p.data.length === 0) return null;
