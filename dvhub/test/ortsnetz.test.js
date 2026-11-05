@@ -129,3 +129,23 @@ test('läuft mit jeder Quelle, die Spannungen liefert (MQTT, SPiNE); Modell nach
   assert.equal(bodies.at(-1).grid_frequency_hz, undefined, 'Frequenz nur 45–55 Hz');
   assert.equal(badF.status().lastMeasurement.l1, 237.6);
 });
+
+// Codex-Gegenprüfung a95ee2ae (2× P2).
+test('observed_at = Messzeit der zentralen Werte, nicht der Sendezeitpunkt', async () => {
+  const bodies = [];
+  const fetchImpl = async (u, o) => { bodies.push(JSON.parse(o.body)); return { status: 202, json: async () => ({}) }; };
+  const on = createOrtsnetz(ctxWith({ gridVoltage: freshGv({ updatedAt: Date.parse('2026-10-01T07:58:01.400Z') }) }).ctx, { fetchImpl, now: () => NOW });
+  await on.tick();
+  assert.equal(bodies[0].observed_at, '2026-10-01T07:58:01Z');
+});
+
+test('Web-Prozess (Runtime-Worker-Betrieb): Werte aus dem Worker-Snapshot (send-now)', async () => {
+  const bodies = [];
+  const fetchImpl = async (u, o) => { bodies.push(JSON.parse(o.body)); return { status: 202, json: async () => ({}) }; };
+  const { ctx } = ctxWith({ gridVoltage: undefined });
+  ctx.state = { victron: {} }; // Web-Prozess: Poller läuft im Worker
+  ctx.getCachedRuntimeStatusPayload = () => ({ victron: { gridVoltage: freshGv() } });
+  const on = createOrtsnetz(ctx, { fetchImpl, now: () => NOW });
+  assert.deepEqual(await on.tick(), { ok: true });
+  assert.equal(bodies[0].l1_v, 237.6);
+});

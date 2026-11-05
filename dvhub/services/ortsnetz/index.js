@@ -103,7 +103,11 @@ export function createOrtsnetz(ctx, deps = {}) {
   }
 
   // Zentrale Netzwerte (Poller) mit Frische-Prüfung.
-  const getGridVoltage = deps.getGridVoltage || (() => ctx.state?.victron?.gridVoltage ?? null);
+  // Im Runtime-Worker-Betrieb läuft der Poller im Worker; „Jetzt senden“ und der
+  // Tick nach dem Einschalten laufen im Web-Prozess → dort aus dem Worker-
+  // Snapshot lesen (Codex-Gegenprüfung a95ee2ae, P2).
+  const getGridVoltage = deps.getGridVoltage || (() => ctx.state?.victron?.gridVoltage
+    ?? ctx.getCachedRuntimeStatusPayload?.()?.victron?.gridVoltage ?? null);
   function source() {
     return freshGridVoltage(getGridVoltage(), now(), GRID_VOLTAGE_MAX_AGE_MS);
   }
@@ -125,7 +129,8 @@ export function createOrtsnetz(ctx, deps = {}) {
       const m = { l1: src.l1, l2: src.l2, l3: src.l3, frequencyHz: src.frequencyHz };
       st.lastMeasurement = { ...m, at: new Date(src.updatedAt).toISOString() };
       const built = buildPayload({
-        nowMs: now(), latitude: loc?.latitude, longitude: loc?.longitude,
+        // Messzeit, nicht Sendezeit — die Werte können bis zu 2 min alt sein.
+        nowMs: src.updatedAt, latitude: loc?.latitude, longitude: loc?.longitude,
         l1: m.l1, l2: m.l2, l3: m.l3, frequencyHz: m.frequencyHz,
         plantKwp: plantKwp(), pvForecastKwh: await pvForecastKwh(),
         model: SMARTMETER_MODELS[src.source] || 'Netzzähler',
