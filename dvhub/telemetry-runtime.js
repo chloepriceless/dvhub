@@ -73,8 +73,10 @@ export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   if (frozenValues(victron?.freeze) || frozenValues(victron?.freezeSuspect)) return true;
   // Lesefehler eines Energiefelds: pollPoint behält den alten Wert — sofort
   // veraltet, nicht erst nach 90 s (Codex 607fa4b2 / Gesamtprüfung 1.0.10).
+  // Nur mit gehaltenem Wert: ein nie gelesener (z. B. abgeschalteter) Punkt
+  // schreibt nichts Altes weiter (Codex 4e636a56).
   const errors = victron?.errors || {};
-  if (LIVE_ENERGY_FIELDS.some((field) => errors[field])) return true;
+  if (LIVE_ENERGY_FIELDS.some((field) => errors[field] && victron?.[field] != null)) return true;
   const tsMs = Date.parse(ts);
   if (!Number.isFinite(tsMs)) return false;
   const tooOld = (at) => Number(at) > 0 && tsMs - Number(at) > LIVE_FIELD_MAX_AGE_MS;

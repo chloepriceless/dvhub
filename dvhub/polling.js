@@ -195,7 +195,8 @@ export function createPoller(ctx) {
   function dropDisabledPvPoint(name, conf) {
     if (!PV_POINT_FIELDS.has(name) || conf?.derive) return;
     const v = state.victron;
-    if (v[name] == null && !(Number(v.fieldUpdatedAt?.[name]) > 0)) return;
+    // Fehler eines nie gelesenen Punkts mit abräumen (Codex 4e636a56).
+    if (v[name] == null && !(Number(v.fieldUpdatedAt?.[name]) > 0)) { if (v.errors) delete v.errors[name]; return; }
     v[name] = null;
     if (v.fieldUpdatedAt) delete v.fieldUpdatedAt[name];
     if (v.fieldSourceAt) delete v.fieldSourceAt[name];
