@@ -50,6 +50,10 @@ import { planningSocPct } from '../multi-gx/planning.js';
 import { fillPriceSlots, realPriceCoverage, HISTORY_DAYS, MIN_REAL_AHEAD_MS, SLOT_MS as PRICE_SLOT_MS } from './price-estimate.js';
 import { requestHostname } from '../host-address.js';
 import { eosRemoteActive, REMOTE_EOS_PREDICTION_HOURS } from './eos-remote.js';
+// Fristen für den Steuerzeitraum „automatisch“ (05.11.2026): Abfahrt des
+// Autos, Fensterende planbarer Geräte — wie eos-config-sync sie EOS schickt.
+import { resolveEvDeparture } from './ev-departure.js';
+import { buildEosHomeAppliances } from './eos-devices.js';
 
 /**
  * Frist der Wache je Push (siehe push()): jede EOS-Anfrage hat 15 s, ein Push
@@ -490,6 +494,99 @@ export function computeControlHorizonHours(slotLists, nowMs, { slotMs = 15 * 60_
   if (!any) return null;
   const hours = Math.floor((coveredUntil - nowMs - slotMs) / 3_600_000);
   return Math.max(1, Math.min(maxHours, hours));
+}
+
+/**
+ * Steuerzeitraum „automatisch“ (optimizer.eosControlHorizonMaxHours = 'auto',
+ * Christin 05.11.2026): mindestens so viele Stunden, sonst bis zur spätesten
+ * Frist. Gemessen (eos-bench HORIZONT-MESSUNG.md, Variante V3): Hausakku mit
+ * 6 h + Schwanz verliert gegen den ganzen Preiszeitraum 0–0,2 €/Tag, das Auto
+ * lädt gleich, solange seine Abfahrt im Steuerzeitraum liegt; auf 305 Tagen
+ * (JAHRESRECHNUNG-2026.md) gleichauf bei etwa einem Viertel der Rechenzeit.
+ */
+export const AUTO_CONTROL_MIN_HOURS = 6;
+export const CONTROL_HORIZON_AUTO = 'auto';
+
+/**
+ * Wie der Steuerzeitraum bestimmt wird: 'full' = ganzer bekannter
+ * Preiszeitraum (Standard), 'cap' = feste Grenze (6/12/24 h), 'auto' =
+ * mindestens 6 h und bis zur Frist.
+ */
+export function controlHorizonMode(cfg) {
+  const v = cfg?.optimizer?.eosControlHorizonMaxHours;
+  if (String(v).trim().toLowerCase() === CONTROL_HORIZON_AUTO) return 'auto';
+  return positiveInt(v) !== null ? 'cap' : 'full';
+}
+
+/**
+ * Fristen der steuerbaren Verbraucher, die EOS im Steuerzeitraum sehen muss:
+ *   - Abfahrt des Autos (min_soc_deadline_datetime) — nur, solange es bei EOS
+ *     angemeldet ist (angesteckt oder Vorplanung, eos-config-sync
+ *     decideEvRegistration → state.optimizer.eosEv). Liegt sie hinter dem
+ *     Steuerzeitraum, verlangt EOS das Ziel schon an dessen Ende
+ *     (genetic.py `_ev_deadline_slot`, v0.4.0rc3).
+ *   - Fensterende planbarer Geräte (deadline_datetime), die heute noch nicht
+ *     gelaufen sind — ein Gerät muss im Steuerzeitraum fertig werden, sonst
+ *     findet EOS keinen Start (genetic.py `_build_appliance_layout`).
+ * Gleiche Auflösung wie eos-config-sync (resolveEvDeparture,
+ * buildEosHomeAppliances).
+ * @returns {Array<{kind:'ev'|'appliance', id?:string, atMs:number}>}
+ */
+export function collectPlanningDeadlines(cfg, state, nowMs = Date.now()) {
+  const out = [];
+  const opt = cfg?.optimizer || {};
+  if (opt.eosOptimizeEv === true && state?.optimizer?.eosEv?.register === true) {
+    const dep = resolveEvDeparture(cfg, nowMs);
+    const at = Date.parse(dep.departureAt || '');
+    if (dep.enabled && Number.isFinite(at) && at > nowMs) out.push({ kind: 'ev', atMs: at });
+  }
+  try {
+    const sched = loadSchedulableDevices(cfg).devices.filter((d) => d.kind === 'deferrable' && d.enabled !== false);
+    if (sched.length) {
+      // Zeitzone wie eos-config-sync (dort cfg.timeZone) — dieselbe Frist, die EOS hat.
+      const { appliances } = buildEosHomeAppliances(sched, { timeZone: cfg?.timeZone || 'Europe/Berlin', nowMs });
+      const done = state?.optimizer?.applianceCyclesToday || {};
+      for (const a of appliances) {
+        const at = Date.parse(a.deadline_datetime || '');
+        if (!Number.isFinite(at) || at <= nowMs) continue;
+        if (Number(done[a.device_id]) >= 1) continue; // heute schon gelaufen
+        out.push({ kind: 'appliance', id: a.device_id, atMs: at });
+      }
+    }
+  } catch { /* Gerätekonfiguration unlesbar: keine Frist (eos-config-sync meldet das selbst) */ }
+  return out;
+}
+
+/**
+ * Steuerzeitraum dieses Pushs.
+ *
+ * @param {object} p
+ * @param {number|null} p.realHours   volle Stunden in echten Preisen (und PV/Last), computeControlHorizonHours mit der Grenze
+ * @param {'full'|'cap'|'auto'} p.mode  controlHorizonMode
+ * @param {Array<{kind:string, id?:string, atMs:number}>} [p.deadlines]  collectPlanningDeadlines
+ * @param {number} p.windowStartMs  frühester Laufbeginn (auf den EOS-Slot abgerundet): von dort zählen die Stunden bis zur Frist
+ * @returns {{hours:number|null, realHours:number|null, mode:string,
+ *   reason:'prices'|'min'|'deadline'|null, deadline:{kind:string, at:string, id?:string}|null}}
+ */
+export function decideControlHorizon({ realHours, mode = 'full', deadlines = [], windowStartMs }) {
+  const base = { hours: realHours ?? null, realHours: realHours ?? null, mode, reason: realHours == null ? null : 'prices', deadline: null };
+  if (realHours == null || mode !== 'auto') return base;
+  // Bis zur spätesten Frist, aufgerundet auf volle Stunden ab dem frühesten
+  // Laufbeginn: das Ende des Steuerzeitraums liegt so nie vor der Frist.
+  let latest = null;
+  for (const d of Array.isArray(deadlines) ? deadlines : []) {
+    if (Number.isFinite(d?.atMs) && d.atMs > windowStartMs && (!latest || d.atMs > latest.atMs)) latest = d;
+  }
+  const toDeadline = latest ? Math.ceil((latest.atMs - windowStartMs) / 3_600_000) : 0;
+  const want = Math.max(AUTO_CONTROL_MIN_HOURS, toDeadline);
+  const hours = Math.min(realHours, want);
+  let reason = 'min';
+  if (want > realHours) reason = 'prices';
+  else if (toDeadline > AUTO_CONTROL_MIN_HOURS) reason = 'deadline';
+  const deadline = latest && reason !== 'min'
+    ? { kind: latest.kind, at: new Date(latest.atMs).toISOString(), ...(latest.id ? { id: latest.id } : {}) }
+    : null;
+  return { ...base, hours, reason, deadline };
 }
 
 /** Höchstens so weit (ab jetzt) werden Preise geschätzt: der längste EOS-Prognosehorizont (72 h). */
@@ -960,11 +1057,13 @@ export function createEosForecastBridge(ctx) {
    * resolveEosPredictionHours) — er muss den Steuerzeitraum immer abdecken.
    * Nur wenn der Abgleich ein EOS 0.4 erkannt hat.
    */
-  async function syncControlHorizon(baseUrl, slotLists, { gone = () => false } = {}) {
+  // Steuerzeitraum dieses Pushs (decideControlHorizon) an EOS: decision.hours,
+  // null = keine Reihe deckt jetzt ab.
+  async function syncControlHorizon(baseUrl, decision, { gone = () => false } = {}) {
     if (state?.optimizer?.eos?.supported !== true) return { skipped: 'eos not supported' };
     const cfg = getCfg();
     const predictionHours = resolveEosPredictionHours(cfg);
-    const hours = computeControlHorizonHours(slotLists.filter(Boolean), Date.now(), { maxHours: resolveControlHorizonMaxHours(cfg) });
+    const hours = decision?.hours ?? null;
     if (hours === null) return { skipped: 'no prices' };
     // Immer senden (kostet nichts): nach einem EOS-Neustart kennt EOS die
     // zuletzt gesetzten Werte evtl. nicht mehr. Protokolliert wird nur ein Wechsel.
@@ -985,7 +1084,21 @@ export function createEosForecastBridge(ctx) {
       if (gone()) return { ok: false, abandoned: true };
       if (res.ok) {
         lastHorizonHours = hours;
-        if (state?.optimizer) state.optimizer.eosControlHorizonH = hours;
+        if (state?.optimizer) {
+          state.optimizer.eosControlHorizonH = hours;
+          // Wie der Steuerzeitraum zustande kam — für Leitstand, Lauf-Protokoll
+          // und die Regel-Umsetzung (eos-adapter): Modus, Grund, Frist, ab wann
+          // geschätzte Preise darin liegen (null = nur echte).
+          state.optimizer.eosControl = {
+            hours,
+            realHours: decision.realHours ?? null,
+            mode: decision.mode || 'full',
+            reason: decision.reason || null,
+            deadline: decision.deadline || null,
+            estimatedFrom: decision.estimatedFrom || null,
+            at: Date.now(),
+          };
+        }
       }
       return res;
     };
@@ -1024,7 +1137,12 @@ export function createEosForecastBridge(ctx) {
       const h = lastHorizonHours;
       const p = lastPredictionHours;
       if (pushLog && h !== null && (h !== previous.hours || (p !== null && p !== previous.predictionHours))) {
-        pushLog('eos_control_horizon', { hours: h, previous: previous.hours, predictionHours: p });
+        pushLog('eos_control_horizon', {
+          hours: h, previous: previous.hours, predictionHours: p,
+          mode: decision.mode || 'full', reason: decision.reason || null,
+          ...(decision.deadline ? { deadline: decision.deadline } : {}),
+          ...(decision.estimatedFrom ? { estimatedFrom: decision.estimatedFrom } : {}),
+        });
       }
       if (h !== null) loggedHorizonHours = h;
       if (p !== null) loggedPredictionHours = p;
@@ -1422,7 +1540,34 @@ export function createEosForecastBridge(ctx) {
       PV: padSeriesBackToNow(pvSlots, Date.now()),
       Last: expandHourlyToQuarterHourly(loadSlotsForEos),
     };
-    const horizon = await syncControlHorizon(baseUrl, Object.values(horizonLists), { gone });
+    // Laufbeginn-Fenster: EOS rundet den Laufbeginn auf seinen Slot ab (ems.py,
+    // nur 900 oder 3600 s, v0.4.0rc3); das Fenster beginnt frühestens an der
+    // abgerundeten Grenze von jetzt und endet spätestens Steuerzeitraum nach
+    // dem abgerundeten spätesten Laufbeginn (Gegenprüfungen 165fa8be,
+    // 8d71f34d). Einen anderen Wert (1800) lehnt EOS ab und behält seinen
+    // alten — dann vorsichtig: frühester Beginn zur vollen Stunde, spätester
+    // zur Viertelstunde.
+    const intervalMs = buildEosOptimization(cfg).interval * 1000;
+    const knownInterval = intervalMs === 900_000 || intervalMs === 3_600_000;
+    const earliestSlotMs = knownInterval ? intervalMs : 3_600_000;
+    const latestSlotMs = knownInterval ? intervalMs : 900_000;
+    const runWindow = (nowMs) => ({
+      windowStartMs: Math.floor(nowMs / earliestSlotMs) * earliestSlotMs,
+      latestRunStartMs: Math.floor((nowMs + RUN_START_MARGIN_MS) / latestSlotMs) * latestSlotMs,
+    });
+    const runNowMs = Date.now();
+
+    // Steuerzeitraum: echte Preise (und PV/Last) ab jetzt, mit der Grenze aus
+    // den Einstellungen; im Modus „automatisch“ mindestens 6 h und bis zur
+    // spätesten Frist (decideControlHorizon).
+    const realHours = computeControlHorizonHours(Object.values(horizonLists).filter(Boolean), runNowMs, { maxHours: resolveControlHorizonMaxHours(cfg) });
+    const decision = decideControlHorizon({
+      realHours,
+      mode: controlHorizonMode(cfg),
+      deadlines: controlHorizonMode(cfg) === 'auto' ? collectPlanningDeadlines(cfg, state, runNowMs) : [],
+      windowStartMs: runWindow(runNowMs).windowStartMs,
+    });
+    const horizon = await syncControlHorizon(baseUrl, decision, { gone });
     if (horizon.error) errors.horizon = horizon.error;
     if (gone()) return abandoned();
 
@@ -1449,20 +1594,9 @@ export function createEosForecastBridge(ctx) {
         : `Steuerzeitraum nicht gesetzt (${horizon.error || horizon.skipped})`;
     } else {
       // Gegen die lückenlose Abdeckung (eine Lücke könnte alte Schätzwerte
-      // halten). EOS rundet den Laufbeginn auf seinen Slot ab (ems.py, nur
-      // 900 oder 3600 s, v0.4.0rc3): das Fenster beginnt frühestens an der
-      // abgerundeten Grenze von jetzt und endet spätestens Steuerzeitraum nach
-      // dem abgerundeten spätesten Laufbeginn (Gegenprüfungen 165fa8be,
-      // 8d71f34d). Einen anderen Wert (1800) lehnt EOS ab und behält seinen
-      // alten — dann vorsichtig: frühester Beginn zur vollen Stunde, spätester
-      // zur Viertelstunde.
-      const nowMs = Date.now();
-      const intervalMs = buildEosOptimization(cfg).interval * 1000;
-      const known = intervalMs === 900_000 || intervalMs === 3_600_000;
-      const earliestSlotMs = known ? intervalMs : 3_600_000;
-      const latestSlotMs = known ? intervalMs : 900_000;
-      const windowStartMs = Math.floor(nowMs / earliestSlotMs) * earliestSlotMs;
-      const latestRunStartMs = Math.floor((nowMs + RUN_START_MARGIN_MS) / latestSlotMs) * latestSlotMs;
+      // halten), im Fenster des Laufbeginns (oben, windowStartMs bis
+      // latestRunStartMs + Steuerzeitraum) — ab jetzt, nach den PUTs.
+      const { windowStartMs, latestRunStartMs } = runWindow(Date.now());
       const coveredEndMs = contiguousPriceEndMs(realPriceSlots, windowStartMs);
       if (latestRunStartMs + horizon.hours * 3_600_000 > coveredEndMs) {
         runBlockedBy = `Steuerzeitraum (${horizon.hours} h) reicht über die echten Preise hinaus (lückenlos bis ${Number.isFinite(coveredEndMs) ? new Date(coveredEndMs).toISOString() : '—'})`;

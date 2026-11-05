@@ -2638,13 +2638,17 @@ function buildFieldDefinitions() {
       path: 'optimizer.eosControlHorizonMaxHours',
       label: 'EOS Steuerzeitraum höchstens',
       type: 'select',
+      // Christin 05.11.2026: „automatisch“ (eos-bench HORIZONT-MESSUNG.md,
+      // Variante V3) als zusätzliche Auswahl; eos-forecast-bridge.js
+      // controlHorizonMode / decideControlHorizon.
       options: [
         { value: 0, label: 'Ganzer bekannter Preiszeitraum (Standard)' },
+        { value: 'auto', label: 'Automatisch (mindestens 6 h, bis zur Frist von E-Auto oder Gerät)' },
         { value: 6, label: '6 Stunden' },
         { value: 12, label: '12 Stunden' },
         { value: 24, label: '24 Stunden' }
       ],
-      help: 'Wie weit EOS den Akku Slot für Slot plant. Standard: so weit, wie Börsenpreise bekannt sind — vormittags bis Mitternacht, ab etwa 13 Uhr bis Mitternacht des Folgetags (gut 30 h). Dahinter bewertet EOS die Restladung über den Prognose-Schwanz. Die Rechenzeit wächst mit dem Steuerzeitraum etwa im selben Verhältnis (gemessen auf einem eHive mit E-Auto: 10 h ≈ 15 min, 24 h ≈ 30–40 min je Lauf). Nur für schwache Boards begrenzen — dann plant EOS z. B. die Einspeisung am nächsten Abend nicht mehr Slot für Slot.'
+      help: 'Wie weit EOS den Akku Slot für Slot plant. Standard: so weit, wie Börsenpreise bekannt sind — vormittags bis Mitternacht, ab etwa 13 Uhr bis Mitternacht des Folgetags (gut 30 h). Dahinter bewertet EOS die Restladung über den Prognose-Schwanz. Die Rechenzeit wächst mit dem Steuerzeitraum etwa im selben Verhältnis (gemessen auf einem eHive mit E-Auto: 10 h ≈ 15 min, 24 h ≈ 30–40 min je Lauf). „Automatisch“: mindestens 6 h und bis zur Abfahrt des E-Autos bzw. bis zum Fensterende eines planbaren Geräts, höchstens so weit, wie Börsenpreise bekannt sind. Über ein Jahr gerechnet so gut wie der ganze Preiszeitraum, braucht aber deutlich weniger Rechenzeit — für schwache Boards die erste Wahl. Eine feste Grenze (6/12/24 h) gilt dagegen immer, auch wenn eine Abfahrt dahinter liegt; dann verlangt EOS das Ladeziel schon am Ende des Steuerzeitraums.'
     },
     {
       section: 'schedule',

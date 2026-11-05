@@ -1263,7 +1263,7 @@ test('Einstellungen: Steuerzeitraum-Grenze und Prognosehorizont mit Rechenzeit-H
   const pred = fields.find((f) => f.path === 'optimizer.eosPredictionHours');
   assert.ok(ctrl && pred, 'beide Felder definiert');
   assert.equal(ctrl.type, 'select');
-  assert.deepEqual(ctrl.options.map((o) => o.value), [0, 6, 12, 24]);
+  assert.deepEqual(ctrl.options.map((o) => o.value), [0, 'auto', 6, 12, 24]);
   assert.match(ctrl.options[0].label, /ganze[rn]? bekannte[rn]? Preiszeitraum/i);
   assert.match(ctrl.help, /Rechenzeit/);
   assert.equal(pred.type, 'select');
