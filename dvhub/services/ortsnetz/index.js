@@ -7,16 +7,24 @@
 // Die Antwort liefert eine Ampel je Phase und eine Speicherempfehlung
 // (charge bei Über-, discharge bei Unterspannung) — hier nur angezeigt.
 //
-// Opt-in (ortsnetz.enabled, ab Werk aus). Quelle v1: Victron-GX per Modbus,
-// Netzzähler über die System-Unit (Register 2616/2618/2620 Spannung ×0,1 V,
-// 2644 Frequenz ×0,01 Hz) — nur lesend, eigener Takt, unabhängig vom Poller.
+// Opt-in (ortsnetz.enabled, ab Werk aus). Quelle seit 05.11.2026: nur noch die
+// zentralen Netzwerte des Pollers (state.victron.gridVoltage, services/
+// grid-voltage.js) — keine eigene Modbus-Leseverbindung mehr. Damit läuft es
+// mit jeder Quelle, die Spannungen liefert (Victron Modbus mit Unit-Suche,
+// Victron MQTT, SPiNE EnergyLink). Werte älter als 2 min werden nicht gesendet.
 // Regeln wie in den offiziellen Integrationen: Spannung nur 150–300 V (sonst
 // wird NICHT gesendet), Frequenz nur 45–55 Hz (sonst weggelassen).
+
+import { freshGridVoltage, GRID_VOLTAGE_MAX_AGE_MS } from '../grid-voltage.js';
 
 export const ORTSNETZ_API_URL = 'https://www.ortsnetz-auslastung.de/v1/measurements';
 export const ORTSNETZ_INTERVAL_MS = 5 * 60_000;
 const FORECAST_TTL_MS = 60 * 60_000;
-export const VICTRON_GRID_REGS = Object.freeze({ l1: 2616, l2: 2618, l3: 2620, frequency: 2644 });
+const SMARTMETER_MODELS = {
+  victron_modbus: 'Victron GX Netzzähler',
+  victron_mqtt: 'Victron GX Netzzähler',
+  spine_http: 'SPiNE EnergyLink Netzzähler',
+};
 
 const round = (v, d) => Math.round(v * 10 ** d) / 10 ** d;
 const isNum = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
@@ -46,22 +54,6 @@ export function buildPayload({ nowMs, latitude, longitude, l1, l2, l3, frequency
   if (model) payload.smartmeter_model = String(model).slice(0, 120);
   if (version) payload.integration_version = String(version).slice(0, 32);
   return { ok: true, payload };
-}
-
-/** Victron-Netzzähler lesen (System-Unit). Rohwerte uint16 → V / Hz. */
-export async function readVictronGrid(mbRequest, { host, port, unitId, timeoutMs }) {
-  const base = { fc: 3, host, port, unitId, timeoutMs: timeoutMs || 1500 };
-  const v = await mbRequest({ ...base, address: VICTRON_GRID_REGS.l1, quantity: 5 }); // 2616..2620
-  const f = await mbRequest({ ...base, address: VICTRON_GRID_REGS.frequency, quantity: 1 });
-  const regs = Array.isArray(v) ? v : v?.values;
-  const fr = Array.isArray(f) ? f : f?.values;
-  if (!Array.isArray(regs) || regs.length < 5) throw new Error('grid_meter_unreadable');
-  // 0xFFFF = „nicht verfügbar“ (z. B. einphasiger Zähler) → null
-  const volt = (r) => (r == null || r === 0xffff ? null : r / 10);
-  return {
-    l1: volt(regs[0]), l2: volt(regs[2]), l3: volt(regs[4]),
-    frequencyHz: Array.isArray(fr) && fr[0] != null && fr[0] !== 0xffff ? fr[0] / 100 : null,
-  };
 }
 
 export function createOrtsnetz(ctx, deps = {}) {
@@ -110,15 +102,10 @@ export function createOrtsnetz(ctx, deps = {}) {
     return forecastCache.kwh;
   }
 
-  // Quelle ermitteln: v1 nur Victron per Modbus.
+  // Zentrale Netzwerte (Poller) mit Frische-Prüfung.
+  const getGridVoltage = deps.getGridVoltage || (() => ctx.state?.victron?.gridVoltage ?? null);
   function source() {
-    const c = cfgOf();
-    const transport = deps.getTransport?.() || null;
-    if (c.manufacturer && c.manufacturer !== 'victron') return { ok: false, reason: 'source_unsupported' };
-    if (!transport || transport.type === 'mqtt' || typeof transport.mbRequest !== 'function') return { ok: false, reason: 'source_unsupported' };
-    const v = c.victron || {};
-    if (!v.host) return { ok: false, reason: 'source_unsupported' };
-    return { ok: true, read: () => readVictronGrid(transport.mbRequest, { host: v.host, port: v.port || 502, unitId: v.unitId ?? 100, timeoutMs: v.timeoutMs }) };
+    return freshGridVoltage(getGridVoltage(), now(), GRID_VOLTAGE_MAX_AGE_MS);
   }
 
   async function tick() {
@@ -128,15 +115,20 @@ export function createOrtsnetz(ctx, deps = {}) {
     st.lastAttemptAt = new Date(now()).toISOString();
     try {
       const src = source();
-      if (!src.ok) { st.lastSkip = src.reason; return { skipped: src.reason }; }
+      if (!src.ok) {
+        st.lastSkip = src.reason;
+        // Grund des zentralen Lesers (z. B. grid_meter_not_found) sichtbar machen.
+        st.lastError = src.error || null;
+        return { skipped: src.reason };
+      }
       const loc = location();
-      const m = await src.read();
-      st.lastMeasurement = { ...m, at: st.lastAttemptAt };
+      const m = { l1: src.l1, l2: src.l2, l3: src.l3, frequencyHz: src.frequencyHz };
+      st.lastMeasurement = { ...m, at: new Date(src.updatedAt).toISOString() };
       const built = buildPayload({
         nowMs: now(), latitude: loc?.latitude, longitude: loc?.longitude,
         l1: m.l1, l2: m.l2, l3: m.l3, frequencyHz: m.frequencyHz,
         plantKwp: plantKwp(), pvForecastKwh: await pvForecastKwh(),
-        model: 'Victron GX Netzzähler',
+        model: SMARTMETER_MODELS[src.source] || 'Netzzähler',
         version: `dvhub-${ctx.getAppVersion?.()?.version || 'unknown'}`,
       });
       if (!built.ok) { st.lastSkip = built.reason; return { skipped: built.reason }; }
@@ -173,7 +165,7 @@ export function createOrtsnetz(ctx, deps = {}) {
   return {
     start() {
       if (timer) return;
-      // erster Versuch nach 60 s (Poller und Transport sind dann oben), dann alle 5 min
+      // erster Versuch nach 60 s (Poller hat dann Netzwerte), dann alle 5 min
       const first = setTimeout(() => { tick().catch(() => {}); }, deps.firstDelayMs ?? 60_000);
       first.unref?.();
       timer = setInterval(() => { tick().catch(() => {}); }, ORTSNETZ_INTERVAL_MS);
@@ -187,7 +179,7 @@ export function createOrtsnetz(ctx, deps = {}) {
         enabled: settings().enabled === true,
         sendPvForecast: settings().sendPvForecast !== false,
         location: loc,
-        source: source().ok ? 'victron_modbus' : source().reason,
+        source: (() => { const src = source(); return src.ok ? src.source : src.reason; })(),
         ...st,
       };
     },

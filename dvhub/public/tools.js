@@ -1715,10 +1715,16 @@ let onUiToken = null;
 const onEl = (id) => document.getElementById(id);
 const ON_SKIP = {
   disabled: 'aus',
-  source_unsupported: 'Messquelle nicht unterstützt (bisher: Victron GX per Modbus)',
+  source_unsupported: 'Messquelle liefert keine Netzspannung',
+  voltage_unavailable: 'Keine Spannungswerte — die Messquelle liefert keine Netzspannung',
+  voltage_stale: 'Spannungswerte veraltet (älter als 2 Minuten) — nicht gesendet',
   location_missing: 'Standort fehlt — Breiten-/Längengrad eintragen',
   voltage_missing: 'Netzzähler liefert keine Spannungen',
   voltage_out_of_range: 'Spannung außerhalb 150–300 V — nicht gesendet',
+};
+const ON_ERRORS = {
+  standort_gesperrt: 'Standort vom Projekt gesperrt',
+  grid_meter_not_found: 'Netzzähler am Victron GX nicht gefunden (keine Unit mit Netzspannung)',
 };
 const ON_LIGHT = { green: '🟢 normal', yellow: '🟡 Warnung', red: '🔴 kritisch' };
 const ON_STORAGE = { none: 'keine Aktion', charge: 'Speicher laden (Überspannung)', discharge: 'Speicher entladen (Unterspannung)' };
@@ -1738,7 +1744,7 @@ async function onPost(path, body) {
 function renderOrtsnetz(st) {
   let state;
   if (!st.enabled) state = 'aus';
-  else if (st.lastError) state = st.lastError === 'standort_gesperrt' ? '⚠ Standort vom Projekt gesperrt' : `⚠ Fehler: ${st.lastError}`;
+  else if (st.lastError) state = ON_ERRORS[st.lastError] ? `⚠ ${ON_ERRORS[st.lastError]}` : `⚠ Fehler: ${st.lastError}`;
   else if (st.lastSkip) state = `⚠ ${ON_SKIP[st.lastSkip] || st.lastSkip}`;
   else if (st.lastSentAt) state = `aktiv — zuletzt gesendet ${new Date(st.lastSentAt).toLocaleString('de-DE')} (${st.sentCount} seit Start)`;
   else state = 'aktiv — erste Messung folgt in Kürze';

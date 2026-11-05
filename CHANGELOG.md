@@ -26,6 +26,11 @@ verweist hierher.
 
 ### Geändert
 
+- **Ortsnetz-Auslastung nutzt die zentralen Netzwerte (GH #33).** Die eigene Modbus-Leseverbindung (fest Unit 100)
+  ist entfernt; gesendet wird, was der Poller liest, und nur, wenn die Werte höchstens 2 min alt sind. Damit läuft
+  die Teilnahme auch auf Anlagen mit dem Netzzähler an einer anderen Unit (bisher „modbus exception 10“), über
+  Victron MQTT und mit dem SPiNE EnergyLink. Ohne Spannungswerte meldet die Karte „Keine Spannungswerte“, bei alten
+  Werten „veraltet“. Die Gültigkeitsregeln (150–300 V, 45–55 Hz) bleiben.
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.
