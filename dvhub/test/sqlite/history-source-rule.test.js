@@ -100,7 +100,7 @@ test('Tagesbilanz: 0,5 + 0,6 + 0,6 kWh Bezug', async () => {
 });
 
 // Codex 633d1caf: veraltete Proben (Lesefehler, alte Werte) und eine Probe nach
-// einer Pause ueber 60 s machen den eigenen Wert nicht vollstaendig → VRM.
+// einer Pause ueber 90 s machen den eigenen Wert nicht vollstaendig → VRM.
 test('veraltete Proben oder eine lange Pause im Slot → VRM fuellt auf', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-source-rule-stale-'));
   const store = createTelemetryStore({ dbPath: path.join(dir, 'telemetry.sqlite'), rawRetentionDays: 30, rollupIntervals: [900] });

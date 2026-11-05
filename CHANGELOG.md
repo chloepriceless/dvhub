@@ -20,7 +20,7 @@ verweist hierher.
   und den Bestandsnachversand der Datenspende.
   - *Vollständig* heißt: die gespeicherten Live-Proben decken die Viertelstunde bis auf höchstens 15 s
     (bzw. anderthalb Probenabstände) ab. Proben aus einer fehlgeschlagenen oder veralteten Abfrage (alte Werte,
-    eingefrorene Live-Werte) zählen nicht, und eine Pause von über 60 s zwischen zwei Proben macht die Viertelstunde
+    eingefrorene Live-Werte) zählen nicht, und eine Pause von über 90 s zwischen zwei Proben macht die Viertelstunde
     unvollständig. DVhub merkt sich die Abdeckung dafür ab 1.0.10 je Viertelstunde und Reihe.
   - **Bereits gespeicherte Viertelstunden ändern sich nicht:** Für Viertelstunden von vor dem Update ist die
     Abdeckung unbekannt, dort bleibt es bei VRM vor eigenen Werten. Die neue Regel gilt für alle Viertelstunden ab

@@ -80,7 +80,7 @@ test('SQL-Rang: vollstaendig lokal 0, VRM 1, sonstiges lokal 2', () => {
 // Codex 633d1caf (P2): eine Probe nach einer Pause traegt ihre ganze Dauer als
 // Energie in den Slot, zaehlt aber nur 60 s Abdeckung. 300 s + 179 × 5 s ergaeben
 // 955 s Abdeckung bei 1195 s Energie — der Slot darf nicht als vollstaendig gelten.
-test('Probe ueber 60 s im Slot: nie vollstaendig (Energie waere hochgerechnet)', () => {
+test('Probe ueber 90 s im Slot: nie vollstaendig (Energie waere hochgerechnet)', () => {
   assert.equal(isLocalCoverageComplete(955, 180, 900, 300), false);
   assert.equal(isLocalCoverageComplete(900, 180, 900, 5), true);
   assert.equal(isCompleteLocalSlotRow({ source_kind: 'local_live', meta_json: '{"coverageS":955,"samples":180,"maxResS":300}' }), false);
@@ -93,4 +93,12 @@ test('veraltete Proben (meta stale) zaehlen nicht zur Abdeckung', () => {
   assert.equal(localSampleCreditSeconds(5, 900, { stale: true }), 0);
   const staleLive = live(180).map((e) => ({ ...e, meta_json: '{"stale":true}' }));
   assert.deepEqual(chooseRawEntries([...vrmRaw, ...staleLive]), vrmRaw);
+});
+
+// Codex 26452e9b (P2): bei 60-s-Abfragen kommt die Abfragedauer dazu (61 s);
+// das ist keine Pause. Erst ueber 90 s gilt eine Probe als Luecke.
+test('60-s-Abfragen mit Abfragedauer (61 s) bleiben vollstaendig, 120 s nicht', () => {
+  assert.equal(isLocalCoverageComplete(900, 15, 900, 61), true);
+  assert.equal(isLocalCoverageComplete(900, 15, 900, 120), false);
+  assert.deepEqual(chooseRawEntries([...vrmRaw, ...live(15, 61)]).length, 15);
 });

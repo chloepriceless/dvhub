@@ -60,12 +60,16 @@ const LIVE_FIELD_MAX_AGE_MS = 90000;
  * Ist dieser Live-Schnappschuss keine frische Messung? Nach einem Lesefehler
  * behält polling.js die alten Werte und meldet die Abfrage trotzdem ab. Solche
  * Proben zählen in der Historie nicht als eigene Messung (energy-source-rule.js,
- * Codex 633d1caf): Zähler-Lesefehler, Einfrier-Wächter/-Verdacht oder ein
+ * Codex 633d1caf): Zähler-Lesefehler, eingefrorene Messwerte oder ein
  * Messfeld, dessen letzte erfolgreiche Abfrage über 90 s zurückliegt.
  */
 export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   if (meter?.ok === false) return true;
-  if (victron?.freeze?.active === true || victron?.freezeSuspect?.active === true) return true;
+  // Einfrierer: nur, wenn die Messwerte selbst stehen (identical_values). Steht
+  // nur der Ladestand (soc_no_step), sind die Leistungen frisch (Codex 26452e9b).
+  const frozenValues = (f) => f?.active === true
+    && (!Array.isArray(f.reasons) || f.reasons.length === 0 || f.reasons.includes('identical_values'));
+  if (frozenValues(victron?.freeze) || frozenValues(victron?.freezeSuspect)) return true;
   const tsMs = Date.parse(ts);
   if (!Number.isFinite(tsMs)) return false;
   const stamps = victron?.fieldUpdatedAt || {};

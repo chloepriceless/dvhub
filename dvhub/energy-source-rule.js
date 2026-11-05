@@ -29,7 +29,8 @@
 //   - Proben aus einer fehlgeschlagenen oder veralteten Abfrage (polling.js
 //     behält dann die alten Werte) tragen meta.stale (telemetry-runtime.js
 //     liveSnapshotStale) und zählen 0 s.
-//   - Eine Probe über 60 s trägt ihre ganze Dauer als Energie in den Slot
+//   - Eine Probe über 90 s (größtes Abfrageintervall 60 s plus Abfragedauer,
+//     Codex 26452e9b) trägt ihre ganze Dauer als Energie in den Slot
 //     (sampleEnergyBySlot), die Energie wäre also hochgerechnet: ein Slot mit
 //     so einer Probe gilt nie als vollständig.
 //
@@ -44,6 +45,8 @@ export const SLOT_SECONDS = 900;
 export const LOCAL_SAMPLE_MAX_CREDIT_SECONDS = 60;
 export const LOCAL_COVERAGE_MIN_TOLERANCE_SECONDS = 15;
 export const LOCAL_COVERAGE_SPACING_FACTOR = 1.5;
+// Längste Probe, die noch keine Lücke ist (60-s-Abfrage + Abfragedauer).
+export const LOCAL_SAMPLE_MAX_GAP_SECONDS = 90;
 
 export const LOCAL_SOURCE_KIND = 'local_live';
 export const VRM_SOURCE_KIND = 'vrm_import';
@@ -72,11 +75,11 @@ export function localSampleCreditSeconds(resolutionSeconds, slotSeconds = SLOT_S
  * Deckt die Abdeckung den Slot vollständig ab? Unbekannt (null/NaN) ⇒ false.
  * @param {number|null} coverageS  Summe der Probenzeiten im Slot
  * @param {number|null} samples    Anzahl Proben (fehlt ⇒ Mindesttoleranz)
- * @param {number|null} maxResS    längste Probe im Slot (über 60 s ⇒ nie vollständig)
+ * @param {number|null} maxResS    längste Probe im Slot (über 90 s ⇒ nie vollständig)
  */
 export function isLocalCoverageComplete(coverageS, samples, slotSeconds = SLOT_SECONDS, maxResS = null) {
   if (coverageS == null) return false;
-  if (Number(maxResS) > LOCAL_SAMPLE_MAX_CREDIT_SECONDS) return false;
+  if (Number(maxResS) > LOCAL_SAMPLE_MAX_GAP_SECONDS) return false;
   const coverage = Number(coverageS);
   if (!Number.isFinite(coverage) || coverage <= 0) return false;
   const count = Number(samples);
@@ -139,7 +142,7 @@ export function localCoverageCompleteSql(metaExpr = 'meta_json') {
   const cov = `((${metaExpr})::jsonb ->> 'coverageS')::float8`;
   const n = `((${metaExpr})::jsonb ->> 'samples')::float8`;
   const maxRes = `((${metaExpr})::jsonb ->> 'maxResS')::float8`;
-  return `COALESCE(${cov} > 0 AND COALESCE(${maxRes}, 0) <= ${LOCAL_SAMPLE_MAX_CREDIT_SECONDS} AND ${cov} >= ${SLOT_SECONDS} - GREATEST(${LOCAL_COVERAGE_MIN_TOLERANCE_SECONDS}, ${LOCAL_COVERAGE_SPACING_FACTOR} * ${cov} / NULLIF(${n}, 0)), false)`;
+  return `COALESCE(${cov} > 0 AND COALESCE(${maxRes}, 0) <= ${LOCAL_SAMPLE_MAX_GAP_SECONDS} AND ${cov} >= ${SLOT_SECONDS} - GREATEST(${LOCAL_COVERAGE_MIN_TOLERANCE_SECONDS}, ${LOCAL_COVERAGE_SPACING_FACTOR} * ${cov} / NULLIF(${n}, 0)), false)`;
 }
 
 /**

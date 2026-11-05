@@ -211,6 +211,10 @@ test('Live-Proben aus einer fehlgeschlagenen oder veralteten Abfrage tragen meta
   assert.equal(metaOf({ ok: true, grid_total_w: 100 }, fresh), null, 'frisch (Steuerpunkte zaehlen nicht)');
   assert.deepEqual(metaOf({ ok: false, grid_total_w: 100 }, fresh), { stale: true }, 'Zaehler-Lesefehler');
   assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, fieldUpdatedAt: { batteryPowerW: now - 120000 } }), { stale: true }, 'Akkuleistung 2 min alt');
-  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freezeSuspect: { active: true } }), { stale: true }, 'Einfrier-Verdacht');
-  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freeze: { active: true } }), { stale: true }, 'Einfrier-Waechter');
+  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freezeSuspect: { active: true, reasons: ['identical_values'] } }), { stale: true }, 'Einfrier-Verdacht');
+  assert.deepEqual(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freeze: { active: true, reasons: ['identical_values', 'soc_no_step'] } }), { stale: true }, 'Einfrier-Waechter');
+  // Codex 26452e9b (P2): steht nur der Ladestand (soc_no_step), sind die
+  // Leistungswerte frisch — die Energie bleibt eine eigene Messung.
+  assert.equal(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freezeSuspect: { active: true, reasons: ['soc_no_step'] } }), null, 'nur Ladestand eingefroren');
+  assert.equal(metaOf({ ok: true, grid_total_w: 100 }, { ...fresh, freeze: { active: true, reasons: ['soc_no_step'] } }), null, 'nur Ladestand eingefroren (Waechter)');
 });
