@@ -671,7 +671,7 @@ export function createSetpointFollowWatchdog(ctx) {
  * „down“ mit Alarmtext statt „up“ — sonst überschrieb der nächste Puls die
  * Störung nach höchstens einem Intervall (Gegenprüfung d3420a0c, P2). Gilt für
  * den Entlade-Wächter, den Einfrier-Wächter (victron.freeze; der reine Verdacht
- * im Stable-Kanal alarmiert nicht) und die Kreuzprobe MQTT/Modbus
+ * bei ausgeschaltetem Wächter alarmiert nicht) und die Kreuzprobe MQTT/Modbus
  * (victron.sourceMismatch; Gesamtprüfung Release 1.0.9).
  */
 export function setpointFollowHeartbeat(state, okMsg, { except = null } = {}) {

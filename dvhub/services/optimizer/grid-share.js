@@ -142,8 +142,8 @@ const finiteOrNull = (v) => (v != null && v !== '' && Number.isFinite(Number(v))
  * Sind Akkuleistung oder Ladestand unsicher? Gibt die Gründe zurück (leer = sicher).
  *   - Einfrier-Wächter (freeze.active) oder Kreuzprobe (sourceMismatch.active):
  *     dieselben Wachen wie der Entlade-Boden in schedule-eval und multi-gx;
- *     dazu der Einfrier-Verdacht (freezeSuspect.active) — im Stable-Kanal ist
- *     der Wächter aus, die Erkennung läuft trotzdem (Gegenprüfung 4cf16a5a);
+ *     dazu der Einfrier-Verdacht (freezeSuspect.active) — ist der Wächter aus
+ *     (ab Werk), läuft die Erkennung trotzdem (Gegenprüfung 4cf16a5a);
  *   - Lesefehler (errors.batteryPowerW / errors.soc): polling.js behält dann den alten Wert;
  *   - fieldUpdatedAt (letzte erfolgreiche Abfrage) älter als maxAgeMs
  *     (victron.telemetryMaxAgeMs, höchstens 90 s);

@@ -36,12 +36,10 @@
 //                      bedeuten, dass die Beschränkung nicht mehr greift. Hier
 //                      geht es nur darum, dass ein Kunde sie noch nicht
 //                      verstellen kann, solange die Bedienung unfertig ist.
+// Aus der Beta genommen (Christin, 05.11.2026, 1.0.10): Einfrier-Wächter
+// (victron.freezeWatchdog) und Schreib-Verifikation (schedule.controlWriteVerify)
+// — im stabilen Kanal sichtbar und wirksam, ab Werk aus.
 export const BETA_FEATURES = {
-  freezeWatchdog: {
-    label: 'Einfrier-Wächter',
-    gate: 'runtime',
-    paths: ['victron.freezeWatchdog']
-  },
   mqttCrossCheck: {
     label: 'MQTT-Kreuzprobe',
     gate: 'runtime',
@@ -61,11 +59,6 @@ export const BETA_FEATURES = {
     // `enabled: true` nur im Bleeding-Edge-Kanal (services/peak-shaving).
     gate: 'runtime',
     paths: ['peakShaving']
-  },
-  controlWriteVerify: {
-    label: 'Schreib-Verifikation',
-    gate: 'runtime',
-    paths: ['schedule.controlWriteVerify']
   },
   eosProxy: {
     label: 'DV-EOS-Optimierer',

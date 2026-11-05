@@ -14,6 +14,11 @@ import { providerImportPriceCtKwh, PROVIDER_NAMES, PRICE_BASES } from './service
 // dvhub/test/token-lifecycle.test.js checks `MIN_API_TOKEN_LENGTH === 32`.
 export const MIN_API_TOKEN_LENGTH = 32;
 
+// Schreib-Verifikation (schedule.controlWriteVerify): ab Werk an oder aus?
+// EINZIGE Stelle für den Standard (Christin, 05.11.2026: entscheidet noch;
+// vorerst AUS). Defaults und Hilfetext lesen diese Konstante.
+export const CONTROL_WRITE_VERIFY_DEFAULT_ENABLED = false;
+
 const BERLIN_TIME_ZONE = 'Europe/Berlin';
 const MANUFACTURER_MANAGED_PATHS = [
   'meter',
@@ -1851,22 +1856,20 @@ function buildFieldDefinitions() {
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.enabled',
       label: 'Einfrier-Wächter',
       type: 'boolean',
-      help: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen (halb-tote Modbus-Sitzung an der Anlage: die Werte stehen still, die Anlage läuft aber weiter). Bei Verdacht hält DVhub jede erzwungene Entladung an, verwirft die Verbindung und baut sie neu auf und schlägt Alarm. Nur für Modbus-Anlagen. Standard AUS: der Wächter greift in die Regelung ein, und seine Schwellen sind bisher nur an einer einzigen Anlage erprobt — einschalten, wenn du eingefrorene Messwerte vermutest.'
+      help: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen (halb-tote Modbus-Sitzung an der Anlage: die Werte stehen still, die Anlage läuft aber weiter). Bei Verdacht hält DVhub jede erzwungene Entladung an, verwirft die Verbindung und baut sie neu auf und schlägt Alarm. Nur für Modbus-Anlagen. Standard AUS: der Wächter greift in die Regelung ein — einschalten, wenn du eingefrorene Messwerte vermutest.'
     },
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.freezeMs',
       label: 'Stillstand bis Alarm (ms)',
       type: 'number',
@@ -1879,10 +1882,9 @@ function buildFieldDefinitions() {
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.minSamples',
       label: 'Mindestzahl Abfragen',
       type: 'number',
@@ -1895,10 +1897,9 @@ function buildFieldDefinitions() {
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.minPowerW',
       label: 'Mindestleistung für den Verdacht (W)',
       type: 'number',
@@ -1911,10 +1912,9 @@ function buildFieldDefinitions() {
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.minJitterFields',
       label: 'Mindestzahl beobachteter Größen',
       type: 'number',
@@ -1927,10 +1927,9 @@ function buildFieldDefinitions() {
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.socStepPct',
       label: 'Zweiter Melder: Durchsatz-Schwelle (% Kapazität)',
       type: 'number',
@@ -1943,10 +1942,9 @@ function buildFieldDefinitions() {
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.socBandLowPct',
       label: 'Zweiter Melder: unteres SoC-Band (%)',
       type: 'number',
@@ -1959,10 +1957,9 @@ function buildFieldDefinitions() {
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.socBandHighPct',
       label: 'Zweiter Melder: oberes SoC-Band (%)',
       type: 'number',
@@ -1975,10 +1972,9 @@ function buildFieldDefinitions() {
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.reconnectMs',
       label: 'Mindestabstand zwischen Neuaufbauten (ms)',
       type: 'number',
@@ -1991,10 +1987,9 @@ function buildFieldDefinitions() {
     {
       section: 'victron',
       group: 'freezeWatchdog',
-      groupLabel: 'Einfrier-Wächter (Beta)',
-      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Die Schwellen sind bisher an einer einzigen Anlage erprobt; sie erscheinen deshalb nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Einfrier-Wächter',
+      groupDescription: 'Erkennt eingefrorene Live-Werte, die trotzdem als erfolgreich gelesen zurückkommen — eine halb-tote Modbus-Sitzung an der Anlage. Ab Werk aus. Solange er aus ist, erkennt DVhub eingefrorene Werte trotzdem und bucht dann nichts vom Netzstrom im Akku ab, greift aber nicht in die Regelung ein.',
       groupOrder: 80,
-      beta: true,
       path: 'victron.freezeWatchdog.maxReconnects',
       label: 'Neuaufbauten je Vorfall',
       type: 'number',
@@ -2148,22 +2143,20 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'controlWriteVerify',
-      groupLabel: 'Schreib-Verifikation (Beta)',
-      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm. Noch im Feldtest — erscheint nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Schreib-Verifikation',
+      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm.',
       groupOrder: 82,
-      beta: true,
       path: 'schedule.controlWriteVerify.enabled',
       label: 'Schreib-Verifikation',
       type: 'boolean',
-      help: 'Nach jedem Steuerbefehl liest DVhub den Wert zurück und vergleicht ihn mit dem, was es geschrieben hat. So fällt auf, wenn die Anlage einen Befehl still verschluckt. Standard AUS.'
+      help: `Nach jedem Steuerbefehl liest DVhub den Wert zurück und vergleicht ihn mit dem, was es geschrieben hat. So fällt auf, wenn die Anlage einen Befehl still verschluckt. Standard ${CONTROL_WRITE_VERIFY_DEFAULT_ENABLED ? 'AN' : 'AUS'}.`
     },
     {
       section: 'schedule',
       group: 'controlWriteVerify',
-      groupLabel: 'Schreib-Verifikation (Beta)',
-      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm. Noch im Feldtest — erscheint nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Schreib-Verifikation',
+      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm.',
       groupOrder: 82,
-      beta: true,
       path: 'schedule.controlWriteVerify.delayMs',
       label: 'Wartezeit vor der Rücklesung (ms)',
       type: 'number',
@@ -2176,10 +2169,9 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'controlWriteVerify',
-      groupLabel: 'Schreib-Verifikation (Beta)',
-      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm. Noch im Feldtest — erscheint nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Schreib-Verifikation',
+      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm.',
       groupOrder: 82,
-      beta: true,
       path: 'schedule.controlWriteVerify.minIntervalMs',
       label: 'Mindestabstand zwischen Prüfungen (ms)',
       type: 'number',
@@ -2192,10 +2184,9 @@ function buildFieldDefinitions() {
     {
       section: 'schedule',
       group: 'controlWriteVerify',
-      groupLabel: 'Schreib-Verifikation (Beta)',
-      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm. Noch im Feldtest — erscheint nur im Bleeding-Edge-Kanal.',
+      groupLabel: 'Schreib-Verifikation',
+      groupDescription: 'Liest nach jedem Steuerbefehl zurück, ob die Anlage ihn wirklich übernommen hat. Widerspricht die Rücklesung dreimal in Folge, verwirft DVhub den Befehl und schlägt Alarm.',
       groupOrder: 82,
-      beta: true,
       path: 'schedule.controlWriteVerify.toleranceAbs',
       label: 'Erlaubte Abweichung (W)',
       type: 'number',
@@ -4873,8 +4864,8 @@ export function createDefaultConfig() {
       // schreibt neu durch alle Gates); 3× in Folge → control_write_verify_failed.
       // minIntervalMs drosselt auf max. einen Read pro Target pro Intervall
       // (der 5-s-Recompute würde sonst pro Tick einen R/-Request erzeugen).
-      // Default OFF — Opt-in pro Anlage, bis der Feldtest (prod .66) bestanden ist.
-      controlWriteVerify: { enabled: false, delayMs: 4000, minIntervalMs: 30000, toleranceAbs: 0 },
+      // Standard: CONTROL_WRITE_VERIFY_DEFAULT_ENABLED (einzige Stelle, s. oben).
+      controlWriteVerify: { enabled: CONTROL_WRITE_VERIFY_DEFAULT_ENABLED, delayMs: 4000, minIntervalMs: 30000, toleranceAbs: 0 },
       // T-0002 safety: SoC floor (%) for a PERSISTENT discharge override
       // (gridSetpointW < 0). At/below this SoC the override is suppressed (hold)
       // so it can never run the battery down to the bare hardware min-SoC.

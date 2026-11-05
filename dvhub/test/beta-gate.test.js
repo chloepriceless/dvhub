@@ -19,26 +19,18 @@ import { fileURLToPath } from 'node:url';
 import { BETA_FEATURES, betaGateOpen, updateChannelOf, betaFeatureForPath } from '../beta-features.js';
 import { getConfigDefinition } from '../config-model.js';
 import { resolveEosProxy } from '../services/optimizer/eos-adapter.js';
-import { resolveControlWriteVerify } from '../schedule-eval.js';
 import { resolveCrossCheckOptions } from '../services/mqtt-crosscheck.js';
-import { resolveFreezeOptions } from '../services/telemetry-freeze-watchdog.js';
 import { resolveMultiGxOptions } from '../services/multi-gx/index.js';
 import { resolvePeakShaving } from '../services/peak-shaving/index.js';
 
 // Pro Feature: eine Config, in der der Schalter AUSDRÜCKLICH an ist, und die
 // Funktion, die daraus das wirksame `enabled` ableitet.
+// Einfrier-Waechter und Schreib-Verifikation sind seit 1.0.10 kein Beta mehr
+// (test/beta-graduation-r110.test.js).
 const RESOLVERS = {
-  freezeWatchdog: {
-    resolve: resolveFreezeOptions,
-    configWithFlagOn: { victron: { freezeWatchdog: { enabled: true } } }
-  },
   mqttCrossCheck: {
     resolve: resolveCrossCheckOptions,
     configWithFlagOn: { victron: { host: '10.0.0.5', mqttCrossCheck: { enabled: true, portalId: 'abc', password: 'x' } } }
-  },
-  controlWriteVerify: {
-    resolve: resolveControlWriteVerify,
-    configWithFlagOn: { schedule: { controlWriteVerify: { enabled: true } } }
   },
   multiGx: {
     resolve: resolveMultiGxOptions,
@@ -63,22 +55,22 @@ test('updateChannelOf: fehlender/leerer Kanal gilt als stable', () => {
 });
 
 test('betaGateOpen: nur im dev-Kanal offen, unbekannter Schlüssel fail-closed', () => {
-  assert.equal(betaGateOpen({ updateChannel: 'dev' }, 'freezeWatchdog'), true);
-  assert.equal(betaGateOpen({ updateChannel: 'stable' }, 'freezeWatchdog'), false);
-  assert.equal(betaGateOpen({}, 'freezeWatchdog'), false);
+  assert.equal(betaGateOpen({ updateChannel: 'dev' }, 'mqttCrossCheck'), true);
+  assert.equal(betaGateOpen({ updateChannel: 'stable' }, 'mqttCrossCheck'), false);
+  assert.equal(betaGateOpen({}, 'mqttCrossCheck'), false);
   // Tippfehler an einer Aufrufstelle schaltet das Feature AB, statt es
   // versehentlich für alle freizugeben.
-  assert.equal(betaGateOpen({ updateChannel: 'dev' }, 'freezeWatchDog'), false);
+  assert.equal(betaGateOpen({ updateChannel: 'dev' }, 'mqttCrossChek'), false);
   assert.equal(betaGateOpen({ updateChannel: 'dev' }, '__proto__'), false);
 });
 
 test('betaFeatureForPath ordnet Feldpfade ihrem Feature zu', () => {
-  assert.equal(betaFeatureForPath('victron.freezeWatchdog.enabled'), 'freezeWatchdog');
-  assert.equal(betaFeatureForPath('victron.freezeWatchdog'), 'freezeWatchdog');
-  assert.equal(betaFeatureForPath('schedule.controlWriteVerify.toleranceAbs'), 'controlWriteVerify');
+  assert.equal(betaFeatureForPath('victron.mqttCrossCheck.enabled'), 'mqttCrossCheck');
+  assert.equal(betaFeatureForPath('victron.mqttCrossCheck'), 'mqttCrossCheck');
+  assert.equal(betaFeatureForPath('peakShaving.gridImportLimitW'), 'peakShaving');
   assert.equal(betaFeatureForPath('victron.host'), null);
   // Kein Präfix-Fehlgriff: ein ähnlich benannter Nachbar gehört nicht dazu.
-  assert.equal(betaFeatureForPath('victron.freezeWatchdogExtra'), null);
+  assert.equal(betaFeatureForPath('victron.mqttCrossCheckExtra'), null);
 });
 
 // Runde 2 (29.07.2026): die Beta-Features haben jetzt VOLLSTÄNDIGE Bedienfelder,
@@ -216,7 +208,7 @@ test('Einstellungsseite blendet beta-Felder außerhalb des dev-Kanals aus', () =
   const withChannel = (channel) => {
     sandbox.getVisibilityValue = (p) => (p === 'updateChannel' ? channel : undefined);
   };
-  const field = { path: 'victron.freezeWatchdog.enabled', type: 'boolean', beta: true };
+  const field = { path: 'victron.mqttCrossCheck.enabled', type: 'boolean', beta: true };
   const normal = { path: 'victron.host', type: 'text' };
 
   withChannel('stable');
