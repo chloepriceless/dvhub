@@ -168,8 +168,9 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
         pushLog('victron_grid_meter_found', { unitId: foundUnit, configuredUnitId: configured, again: true });
         set({ ...m, updatedAt: now(), source: 'victron_modbus', unitId: foundUnit, error: null });
         return;
-      } catch (e) {
-        if (!wrongUnit(e)) { setError(e?.message); return; }
+      } catch {
+        // Auch eine Zeitüberschreitung hält die fällige Suche nicht auf — ein
+        // Ersatzzähler auf einer anderen Unit wird sonst nie gefunden (Codex 617760b9).
       }
     }
     if (now() < nextScanAt) { setError('grid_meter_not_found'); return; }

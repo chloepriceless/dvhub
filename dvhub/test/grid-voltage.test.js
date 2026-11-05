@@ -300,3 +300,24 @@ test('Victron Modbus: gemerkte Unit kurz ohne Spannung → in der Such-Pause ern
   assert.equal(gv.unitId, 40);
   assert.equal(gv.l1, 238.2);
 });
+
+// Codex 617760b9 (P2): Läuft die weggefallene Unit danach in Zeitüberschreitungen,
+// darf ihr Wiederholen die fällige Suche nicht verhindern — ein Ersatzzähler
+// auf einer anderen Unit muss gefunden werden.
+test('Victron Modbus: weggefallene Unit mit Zeitüberschreitung hält die fällige Suche nicht auf', async () => {
+  const units = { 40: GRID };
+  const timeoutUnits = [];
+  const gx = fakeGx(units, { timeoutUnits });
+  const h = harness({ transport: { type: 'modbus', mbRequest: gx.mbRequest } });
+  await h.poller.onPoll(h.cfg);
+  assert.equal(h.st.victron.gridVoltage.unitId, 40);
+  units[40] = { ...GRID, 2616: 0xFFFF, 2618: 0xFFFF, 2620: 0xFFFF };
+  h.advance(GRID_VOLTAGE_POLL_MS);
+  await h.poller.onPoll(h.cfg);
+  timeoutUnits.push(40);
+  units[41] = GRID;
+  h.advance(GRID_UNIT_RESCAN_MS);
+  await h.poller.onPoll(h.cfg);
+  assert.equal(h.st.victron.gridVoltage.unitId, 41);
+  assert.equal(h.st.victron.gridVoltage.error, null);
+});
