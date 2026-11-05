@@ -2620,11 +2620,19 @@ function buildFieldDefinitions() {
       groupOrder: 10,
       path: 'optimizer.eosGeneticGenerations',
       label: 'EOS Generationen',
+      // Gespeichert bleibt eine Zahl (leer/0 = Standard, eos-config-sync
+      // pickGeneticSizing); die Seite zeigt die Vorgaben als Auswahl mit
+      // „Eigener Wert …“ (settings.js createConfigInput, field.presets).
       type: 'number',
       min: 0,
       max: 1000,
       step: 10,
-      help: 'Generationen des genetischen Optimierers je EOS-Lauf. 0 = Standard (400). Auf schwacher Hardware (z. B. eHive, 1 GB RAM) 200 wählen: im Test gleicher Plan in der halben Rechenzeit; so passt ein Lauf in einen 15-Minuten-Takt.'
+      presets: [
+        { value: 200, label: '200 (Standard)', standard: true },
+        { value: 100, label: '100 (schwache Hardware, z. B. A55-Boards; mit Steuerzeitraum „automatisch“ etwa ¼ Rechenzeit)' }
+      ],
+      presetCustomLabel: 'Eigener Wert (50–1000) …',
+      help: 'Generationen des genetischen Optimierers je EOS-Lauf. Standard 200 — für die üblichen Installationen; mehr bringt messbar nichts. 100 nur für schwache Hardware (z. B. Boards mit Cortex-A55): etwa die halbe Rechenzeit, zusammen mit Steuerzeitraum „automatisch“ etwa ein Viertel — auf 305 Tagen echter Daten gerechnet ohne messbaren Verlust. Eigener Wert 50–1000. Dauern die Läufe im Mittel länger als 10 Minuten, schlägt der Leitstand am EOS-Fahrplan 100 Generationen und „automatisch“ vor; umgestellt wird nichts von selbst.'
     },
     {
       // Christin 02.11.2026: Steuerzeitraum nicht mehr fest bei 24 h gekappt —

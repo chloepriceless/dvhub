@@ -25,6 +25,7 @@ import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.j
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
 import { eosPlanFeedInBasis } from './services/optimizer/eos-forecast-bridge.js';
+import { eosSlowRunHint } from './services/optimizer/eos-run-hint.js';
 import { requestEosReplanAfterSave } from './services/optimizer/eos-replan-after-save.js';
 import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
@@ -873,6 +874,13 @@ export { requestEosReplanAfterSave };
 // über die ganze Laufzeit der Anfrage rechnete gleichzeitige Änderungen des
 // Kunden oder von Hintergrund-Diensten dem Support zu).
 const supportAuditStorage = new AsyncLocalStorage();
+
+/** Laufdauer für den Leitstand (state.optimizer.eosRun, eos-run-trigger.js); null ohne Lauf. */
+function eosRunStats(run) {
+  const num = (v) => (Number.isFinite(Number(v)) && v !== null && v !== undefined ? Number(v) : null);
+  if (!run || num(run.lastDurationS) === null) return null;
+  return { avgDurationS: num(run.avgDurationS), recentRuns: num(run.recentRuns), lastDurationS: num(run.lastDurationS) };
+}
 
 export function createApiRoutes(ctx) {
   // Schwere History-Berechnungen in Reihe (services/heavy-queue.js): höchstens 2
@@ -6864,6 +6872,11 @@ export function createApiRoutes(ctx) {
         // Dauer des letzten Laufs, eosPlanFeedInBasis).
         priceBasis: eosPlanFeedInBasis(state.optimizer, getCfg(), Date.parse(plan.data?.generatedAt),
           Number(state.optimizer?.eosRun?.lastDurationS) * 1000),
+        // Laufdauer der letzten erfolgreichen Läufe und — dauern sie im Mittel
+        // über 10 min — ein Vorschlag (100 Generationen, Steuerzeitraum
+        // „automatisch“; eos-run-hint.js). Nur ein Hinweis, nichts wird umgestellt.
+        run: eosRunStats(state.optimizer?.eosRun),
+        runHint: eosSlowRunHint(state.optimizer?.eosRun, getCfg()),
         eos: { status: status.status, push: status.push },
         remote: eosRemoteSummary(),
       });

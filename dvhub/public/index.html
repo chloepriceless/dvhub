@@ -554,6 +554,9 @@
           <canvas id="eosPlanChart"></canvas>
         </div>
         <div class="chart-day-summary" id="eosPlanKpis"></div>
+        <!-- Hinweis bei langen EOS-Läufen (/api/eos/plan runHint, eos-run-hint.js):
+             schlägt 100 Generationen und Steuerzeitraum „automatisch“ vor, stellt nichts um. -->
+        <p class="eos-plan-hint" id="eosPlanHint" hidden></p>
         <!-- EOS-Rechendienst (Fernbetrieb, optimizer.eosProxy.mode=remote): kein
              EOSdash — stattdessen letzter Lauf, Status und EOS-Hinweise aus der
              Diagnose des Dienstes. Gefüllt von leitstand-charts.js#renderEosRemoteInfo. -->

@@ -32,6 +32,9 @@ export const EOS_RUN_TIMEOUT_MS = 3 * 3600_000;
 export const EOS_RUN_BOUNDARY_OFFSET_MS = 2_000;
 // Mindestabstand für außerplanmäßige Anstöße (EOS-Neustart, noch kein Plan).
 export const EOS_RUN_KICK_MIN_GAP_MS = 120_000;
+// Mittlere Laufdauer (eosRun.avgDurationS) über so viele erfolgreiche Läufe —
+// für den Hinweis bei langen Läufen (eos-run-hint.js).
+export const EOS_RUN_DURATION_WINDOW = 8;
 // Nach einem DVhub-Neustart kann EOS noch am Lauf des alten Prozesses rechnen.
 // So lange wird ein beschäftigtes EOS nicht zusätzlich angestoßen.
 export const EOS_RUN_STARTUP_GRACE_MS = 60 * 60_000;
@@ -129,6 +132,7 @@ export function createEosRunTrigger({
   let lastAttemptAt = 0;
   let finishedRuns = 0;     // beantwortete Aufrufe dieses Prozesses (auch Fehler)
   let lastStart = null;     // { genes, startMs, slots } der letzten Lösung
+  const recentDurationsS = []; // Dauer der letzten erfolgreichen Läufe (s)
 
   const log = (type, data) => { try { pushLog?.(type, data); } catch { /* Log darf nie stören */ } };
   const publish = (patch) => {
@@ -215,7 +219,13 @@ export function createEosRunTrigger({
       ? { genes: sol.start_solution, startMs, slots: currentSlots }
       : null;
     log('eos_run_done', { reason, durationS, genes: lastStart ? lastStart.genes.length : null });
-    publish({ inFlight: false, lastDoneAt: now(), lastDurationS: durationS, lastError: null, lastErrorAt: null });
+    recentDurationsS.push(durationS);
+    if (recentDurationsS.length > EOS_RUN_DURATION_WINDOW) recentDurationsS.shift();
+    const avgDurationS = Math.round(recentDurationsS.reduce((a, s) => a + s, 0) / recentDurationsS.length * 10) / 10;
+    publish({
+      inFlight: false, lastDoneAt: now(), lastDurationS: durationS, lastError: null, lastErrorAt: null,
+      avgDurationS, recentRuns: recentDurationsS.length,
+    });
     try { await onSolution?.(); } catch { /* der Monitor holt sie sonst beim nächsten Takt */ }
     return { ok: true, durationS };
   }

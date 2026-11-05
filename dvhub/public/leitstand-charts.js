@@ -1506,6 +1506,16 @@
     }
   }
 
+  // Hinweis bei langen Läufen (runHint aus /api/eos/plan): nur Text, nichts
+  // wird umgestellt.
+  function renderEosRunHint(eos) {
+    var el = document.getElementById('eosPlanHint');
+    if (!el) return;
+    var text = eos && eos.runHint && eos.runHint.text ? String(eos.runHint.text) : '';
+    el.textContent = text;
+    el.hidden = !text;
+  }
+
   function renderEosPlanChart(eos) {
     renderEosRemoteInfo(eos && eos.remote ? eos.remote : null);
     var canvas = document.getElementById('eosPlanChart');
@@ -1536,9 +1546,11 @@
         skeleton.style.animation = 'none';
       }
       if (kpiEl) kpiEl.textContent = '';
+      renderEosRunHint(eos);
       return;
     }
     if (skeleton) skeleton.style.display = 'none';
+    renderEosRunHint(eos);
 
     var series = eosPlanSeries(output);
     var socPts = series.soc;
@@ -1626,6 +1638,9 @@
       if (isFinite(rev)) parts.push('Erlös ' + rev.toFixed(2).replace('.', ',') + ' €');
       if (isFinite(cost) && cost > 0.005) parts.push('Kosten ' + cost.toFixed(2).replace('.', ',') + ' €');
       if (isFinite(lossKwh)) parts.push('Verluste ' + lossKwh.toFixed(1).replace('.', ',') + ' kWh');
+      // Mittlere Laufdauer der letzten EOS-Läufe (eos-run-trigger.js).
+      var avgS = eos.run && Number(eos.run.avgDurationS);
+      if (avgS > 0) parts.push('Laufzeit Ø ' + (avgS < 120 ? Math.round(avgS) + ' s' : (avgS / 60).toFixed(1).replace('.', ',') + ' min'));
       kpiEl.textContent = parts.join('  ·  ');
     }
     if (subtitle && output.validFrom && output.validUntil) {

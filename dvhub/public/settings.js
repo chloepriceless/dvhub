@@ -174,7 +174,64 @@ function createConfigInput(field, value, inherited) {
     input.disabled = true;
     input.title = field.help || 'Dieses Feld wird automatisch uebernommen';
   }
+  if (field.type === 'number' && Array.isArray(field.presets) && field.presets.length && !field.readOnly) {
+    return withNumberPresets(field, input);
+  }
   return input;
+}
+
+// Zahlenfeld mit Vorgaben (field.presets, z. B. EOS-Generationen „200
+// (Standard)“ / „100 (schwache Hardware …)“, 05.11.2026): eine Auswahl davor,
+// das Zahlenfeld erscheint nur bei „Eigener Wert …“. Gespeichert wird weiter
+// über das Zahlenfeld (id, data-path) — die Auswahl schreibt nur hinein. Die
+// Standard-Vorgabe leert das Feld: dann gilt der Standard, nichts wird
+// gespeichert. Die Auswahl trägt data-path, damit ihre Änderung über den
+// Container-Listener als Feldänderung zählt; ihr eigener Listener läuft davor.
+const PRESET_CUSTOM = 'custom';
+function presetChoiceFor(field, rawValue) {
+  const presets = field.presets || [];
+  const standard = presets.find((p) => p.standard) || null;
+  const text = String(rawValue ?? '').trim();
+  if (!text || Number(text) === 0) return standard ? String(standard.value) : PRESET_CUSTOM;
+  const hit = presets.find((p) => Number(p.value) === Number(text));
+  return hit ? String(hit.value) : PRESET_CUSTOM;
+}
+function withNumberPresets(field, input) {
+  const wrap = document.createElement('span');
+  wrap.className = 'config-preset';
+  const select = document.createElement('select');
+  select.className = 'config-select';
+  select.dataset.path = field.path;
+  select.dataset.presetFor = field.path;
+  for (const p of field.presets) {
+    const option = document.createElement('option');
+    option.value = String(p.value);
+    option.textContent = p.label;
+    select.appendChild(option);
+  }
+  const custom = document.createElement('option');
+  custom.value = PRESET_CUSTOM;
+  custom.textContent = field.presetCustomLabel || 'Eigener Wert …';
+  select.appendChild(custom);
+  select.value = presetChoiceFor(field, input.value);
+  input.hidden = select.value !== PRESET_CUSTOM;
+  select.addEventListener('change', () => {
+    const choice = select.value;
+    if (choice === PRESET_CUSTOM) {
+      input.hidden = false;
+      if (!String(input.value || '').trim()) {
+        const standard = field.presets.find((p) => p.standard);
+        if (standard) input.value = String(standard.value);
+      }
+      return;
+    }
+    const preset = field.presets.find((p) => String(p.value) === choice);
+    input.value = preset && !preset.standard ? String(preset.value) : '';
+    input.hidden = true;
+  });
+  wrap.appendChild(select);
+  wrap.appendChild(input);
+  return wrap;
 }
 
 function clone(value) {

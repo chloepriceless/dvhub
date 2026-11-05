@@ -228,6 +228,16 @@ export function buildEosOptimization(cfg) {
  * @param {number} intervalSec
  * @returns {{generations: number, individuals: number}}
  */
+/**
+ * Generationen je Lauf, wenn optimizer.eosGeneticGenerations leer oder 0 ist
+ * (Christin 05.11.2026: „bei unseren normalen Installationen bei 200
+ * bleiben“). Gemessen: 400 statt 200 bringt praktisch nichts (Prod
+ * 29.10.2026); 100 nur auf Auswahl für schwache Hardware — mit Steuerzeitraum
+ * „automatisch“ auf 305 Tagen gleichauf bei etwa einem Viertel der Rechenzeit
+ * (eos-bench JAHRESRECHNUNG-2026.md). Bis 1.0.9 war der Standard 400.
+ */
+export const EOS_DEFAULT_GENERATIONS = 200;
+
 export function pickGeneticSizing(intervalSec, generationsOverride) {
   // Operator preference 2026-05-24: at 15-min resolution we'd rather have a
   // high-quality plan once an hour than a degraded plan every 5min. PV/load/
@@ -239,7 +249,7 @@ export function pickGeneticSizing(intervalSec, generationsOverride) {
   // Generationen dauerten ~45 min. Im Pi-Test lieferten 300×200 denselben Plan
   // in der halben Zeit — optimizer.eosGeneticGenerations (50–1000) erlaubt das.
   const g = Number(generationsOverride);
-  const generations = Number.isFinite(g) && g > 0 ? Math.min(1000, Math.max(50, Math.round(g))) : 400;
+  const generations = Number.isFinite(g) && g > 0 ? Math.min(1000, Math.max(50, Math.round(g))) : EOS_DEFAULT_GENERATIONS;
   return { generations, individuals: 300 };
 }
 

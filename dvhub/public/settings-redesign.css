@@ -141,6 +141,10 @@
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 :is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys, #areaGrid-shares) .config-input::placeholder { color: var(--text-dim); }
+/* Zahlenfeld mit Vorgaben (settings.js withNumberPresets, z. B. EOS-Generationen):
+   Auswahl, darunter das Zahlenfeld nur bei „Eigener Wert …“. */
+.config-preset { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.config-preset > [hidden] { display: none; }
 
 /* ── Boolean: echter iOS-/Apple-Switch (Label links, Slider rechts) ──────── */
 :is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys, #areaGrid-shares) .config-row:has(.config-checkbox) {

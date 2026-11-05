@@ -19,8 +19,16 @@ verweist hierher.
   Daten gleichauf mit dem ganzen Preiszeitraum, bei etwa einem Viertel der Rechenzeit (mit 100 Generationen). Der
   bisherige Standard (ganzer bekannter Preiszeitraum) bleibt Standard. Das Protokoll `eos_control_horizon` nennt
   jetzt Modus, Grund und Frist.
+- **EOS-Generationen als Auswahl.** „EOS Generationen“ bietet jetzt „200 (Standard)“, „100 (schwache Hardware,
+  z. B. A55-Boards)“ und „Eigener Wert (50–1000)“. Der Leitstand zeigt am EOS-Fahrplan die mittlere Laufzeit der
+  letzten acht Läufe; dauern sie im Mittel länger als 10 Minuten, schlägt er 100 Generationen und den Steuerzeitraum
+  „automatisch“ vor. Umgestellt wird nichts von selbst.
 
 ### Geändert
+
+- **EOS-Standard 200 statt 400 Generationen.** Ohne eigenen Wert rechnete EOS bisher mit 400 Generationen; gemessen
+  bringt das gegenüber 200 praktisch nichts, kostet aber die doppelte Rechenzeit. Wer ausdrücklich einen Wert
+  eingetragen hat, behält ihn.
 
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
