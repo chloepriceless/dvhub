@@ -513,7 +513,7 @@ export function createLicenseService(ctx) {
     if (String(v.fingerprint || '').toLowerCase() !== applianceId) {
       return { bound: false, reason: 'fingerprint_mismatch', file: v, applianceId };
     }
-    return { bound: true, file: v, applianceId };
+    return { bound: true, file: v, applianceId, mf };
   }
 
   function dropMachineFile() {
@@ -796,6 +796,11 @@ export function createLicenseService(ctx) {
     // dieser Box — eine „übernommen“-Sperre fällt, die Bindung folgt
     // automatisch (T-LICENSE-AUTOBIND), wie für jeden neuen Schlüssel.
     if (claim && newStatus === 'active') {
+      // Ein Machine-File einer anderen Box (blieb liegen, wenn die appliance-id
+      // erst nach dem Laden kam) gilt hier nicht — weg damit, sonst sperrte die
+      // nächste Prüfung nach einem Netzfehler beim Binden wieder als
+      // „übernommen“ (Codex 59b67ea2, P2).
+      if (state.license.machine_file && machineBinding().reason === 'fingerprint_mismatch') dropMachineFile();
       claimOrigin();
       if (state.license.bind_block === BIND_BLOCK_ADOPTED) {
         state.license.bind_block = null;
@@ -1182,6 +1187,10 @@ export function createLicenseService(ctx) {
     const b = machineBinding();
     if (b.bound) {
       const scope = await scopeCheck(key, b.applianceId);
+      // Eine gleichzeitige Prüfung (Poller und „Jetzt prüfen“) kann während
+      // des Wartens schon entschieden haben — dann nicht noch einmal melden
+      // bzw. binden (Codex 59b67ea2, P3).
+      if (state.license.machine_file !== b.mf) return;
       if (scope === 'other_box') {
         const prev = isProActive();
         pushLog('license_machine_moved_to_other_box', { machine_id: state.license.machine_id });

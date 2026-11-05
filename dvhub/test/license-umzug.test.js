@@ -406,3 +406,43 @@ test('Einstellungen: Text für den übernommenen Zustand, Binden-Knopf sichtbar'
   const moved = licenseBindingMessage({ status: 'active', binding: { state: 'blocked', block: 'bound_to_other_box' } });
   assert.match(moved, /^Deine Lizenz ist jetzt auf einer anderen Box/);
 });
+
+// ─────────────────────────── Codex 59b67ea2 ──────────────────────────────────
+
+test('Codex 59b67ea2 P2: frischer Schlüssel verwirft ein fremdes File (appliance-id kam erst nach dem Laden) — Netzfehler sperrt danach nicht', async () => {
+  const b = box({ applianceId: null, persisted: boundA() });
+  fs.writeFileSync(path.join(b.dir, 'appliance-id'), 'box-test\n');
+  await withServers({ proxy: () => [503, { ok: false, code: 'upstream_keygen' }] }, async () => {
+    const r = await b.svc.activateLicense(KEY);
+    assert.equal(r.nodeLock?.ok, false);
+  });
+  assert.equal(b.state.license.machine_file, null, 'fremdes File beim ausdrücklichen Übernehmen verworfen');
+  await withServers({ proxy: okProxy }, async (calls) => {
+    await b.svc.revalidateLicense();
+    assert.equal(calls.proxy.length, 1, 'nächste Prüfung bindet, statt „übernommen“ zu sperren');
+  });
+  assert.equal(b.svc.getState().binding.block, null);
+  assert.equal(b.svc.isProActive(), true);
+});
+
+test('Codex 59b67ea2 P3: zwei gleichzeitige Prüfungen melden einen Umzug nur einmal', async () => {
+  const b = box({ persisted: boundA() });
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const body = init.body ? JSON.parse(init.body) : null;
+    if (String(url).includes('validate-key')) {
+      if (body?.meta?.scope?.fingerprint) {
+        await new Promise((r) => setTimeout(r, 20));
+        return json(200, validateBody({ valid: false, code: 'FINGERPRINT_SCOPE_MISMATCH' }));
+      }
+      return json(200, validateBody());
+    }
+    return json(503, { ok: false });
+  };
+  try {
+    await Promise.all([b.svc.revalidateLicense(), b.svc.revalidateLicense()]);
+  } finally { globalThis.fetch = real; }
+  await new Promise((r) => setImmediate(r));
+  assert.equal(b.notes.length, 1, `eine Meldung je Umzug (${b.notes.length}×)`);
+  assert.equal(b.svc.getState().binding.block, 'bound_to_other_box');
+});
