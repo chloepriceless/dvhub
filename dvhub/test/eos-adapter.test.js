@@ -1045,3 +1045,26 @@ test('pullGridSetpoints: Grenze eines alten Laufs gilt nicht für einen spätere
   // Plan aus EOS' eigenem Takt kurz nach dem neuen Preis-Push: Preise des Laufs unbekannt → alte Grenze.
   assert.deepEqual(await slotsWith(state, '2026-06-06T12:00:00Z'), FIRST1);
 });
+
+// Codex 66ae1b46 (P2): Ohne generated_at rückte die Grenze mit der Uhr vor —
+// derselbe, nie neu gerechnete Plan bekam mit neuen echten Preisen zusätzliche
+// Regeln. Jetzt bleibt die Grenze für diesen Plan fest (beim ersten Sehen).
+test('pullGridSetpoints: Plan ohne generated_at behält seine Grenze, auch wenn neue Preise kommen', async () => {
+  const state = { optimizer: {
+    eosRun: { lastPlanControl: { estimatedFrom: '2026-06-06T22:00:00.000Z', runStartedAt: ms('2026-06-06T20:00:00Z'), runDoneAt: ms('2026-06-06T20:10:00Z') } },
+    eosRealPriceEnd: '2026-06-06T22:00:00.000Z',
+    eosRealPriceEnds: [{ at: ms('2026-06-06T09:00:00Z'), end: '2026-06-06T22:00:00.000Z' }],
+  } };
+  assert.deepEqual(await slotsWith(state, undefined), FIRST1);
+  state.optimizer.eosRealPriceEnd = '2026-06-07T22:00:00.000Z';
+  state.optimizer.eosRealPriceEnds.push({ at: ms('2026-06-07T11:30:00Z'), end: '2026-06-07T22:00:00.000Z' });
+  state.optimizer.eosRun.lastPlanControl = { estimatedFrom: null, runStartedAt: ms('2026-06-07T12:00:00Z'), runDoneAt: ms('2026-06-07T12:10:00Z') };
+  assert.deepEqual(await slotsWith(state, undefined), FIRST1, 'derselbe Plan, nicht neu gerechnet');
+});
+
+// Codex 66ae1b46 (P2): Nach einem Neustart fiel ein Plan von 00:00–02:00
+// (Berlin) auf die schon vergangene Mitternacht zurück — alle Nacht-Regeln weg.
+test('pullGridSetpoints: Plan kurz nach Mitternacht (Neustart) wird nicht auf den Vortag gekappt', async () => {
+  // 00:30 Berlin am 07.06.: echte Preise reichen mindestens bis Mitternacht 07./08.06.
+  assert.deepEqual(await slotsWith({ optimizer: {} }, '2026-06-06T22:30:00Z'), ALL3);
+});
