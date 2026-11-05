@@ -17,6 +17,8 @@
 //   Netz    power > 0 = Bezug, < 0 = Einspeisung
 //   Batterie power > 0 = Laden, < 0 = Entladen
 //   PV / Hausverbrauch / Geräte ≥ 0
+//   Netzspannung je Phase (gridL1..gridL3) als voltage in V, eigener Zähler je
+//   Phase, aus den zentralen Netzwerten (services/grid-voltage.js).
 // Einheiten: power in W; energy in kWh (nur Shelly — deren Lebenszeit-Zähler).
 //   OFFEN (mit COMSYS klären): erwartete energy-Einheit ist nicht dokumentiert;
 //   die HA-Integration schickt den Rohwert des HA-Sensors (meist kWh).
@@ -28,8 +30,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { findHistoryBounds, readSlotWindow, readLiveWindow } from './history.js';
+import { freshGridVoltage } from '../grid-voltage.js';
 import {
-  createDatenspendeClient, DATENSPENDE_BASE_URL,
+  createDatenspendeClient, DATENSPENDE_BASE_URL, normalizeClientType,
   DatenspendeRequestError, DatenspendeDuplicateError, DatenspendeServerError, DatenspendeAuthError,
 } from './client.js';
 
@@ -42,7 +45,7 @@ export const BATCH_INTERVAL_MIN_S = 60;
 export const BATCH_INTERVAL_MAX_S = 90;
 export const HEAD_RETRY_BACKOFF_MS = 30_000;   // gleicher Batch nicht Schlag auf Schlag
 export const HEAD_BLOCK_TIMEOUT_MS = 15 * 60_000; // 5xx-Batch blockiert höchstens so lange
-export const SOURCE_GROUPS = ['grid', 'pv', 'load', 'battery', 'devices', 'mqttTiles', 'wallbox'];
+export const SOURCE_GROUPS = ['grid', 'gridVoltage', 'pv', 'load', 'battery', 'devices', 'mqttTiles', 'wallbox'];
 // Nachversand der Bestandsdaten: höflich gegenüber dem Projekt-Server.
 export const BACKFILL_PAUSE_MS = 3_000;          // Pause nach jedem Batch
 export const BACKFILL_RETRY_MS = 60_000;         // Server/Verbindung weg → später erneut
@@ -54,6 +57,12 @@ export const SYSTEM_METERS = {
   pv: { name: 'PV-Erzeugung', model: 'DVhub PV gesamt' },
   load: { name: 'Hausverbrauch', model: 'DVhub Hausverbrauch' },
   battery: { name: 'Batterie', model: 'DVhub Batterie (+Laden/−Entladen)' },
+  // Netzspannung je Phase (05.11.2026): je Phase ein Zähler, der nur voltage
+  // (V) trägt — wie ein Spannungs-Sensor in der HA-Integration (powercollect:
+  // je Zähler ein voltage-Wert, ein Zähler darf nur aus Spannung bestehen).
+  gridL1: { name: 'Netzspannung L1', model: 'DVhub Netzspannung L1 (V)' },
+  gridL2: { name: 'Netzspannung L2', model: 'DVhub Netzspannung L2 (V)' },
+  gridL3: { name: 'Netzspannung L3', model: 'DVhub Netzspannung L3 (V)' },
 };
 
 // GH #31: Namen der Einrichtungsschritte für Log und Oberfläche.
@@ -110,6 +119,19 @@ export function collectSources(ctx, cfg, nowMs) {
       if (total !== null) power = cfg.gridPositiveMeans === 'grid_import' ? total : -total;
     }
     if (power !== null) out.push({ key: 'grid', ...SYSTEM_METERS.grid, vendor, power: round1(power) });
+  }
+  // Netzspannung je Phase aus den zentralen Netzwerten (services/grid-voltage.js),
+  // nur frisch (≤ 2 min). measuredAt: sample() schickt jede Messung nur einmal.
+  if (on('gridVoltage')) {
+    const gv = freshGridVoltage(v.gridVoltage, nowMs);
+    if (gv.ok) {
+      for (const [key, phase] of [['gridL1', 'l1'], ['gridL2', 'l2'], ['gridL3', 'l3']]) {
+        const val = gv[phase];
+        // Messzeit je Phase (MQTT), sonst die gemeinsame (Modbus/SPiNE).
+        const at = Number(gv.phaseAt?.[phase]) > 0 ? Number(gv.phaseAt[phase]) : gv.updatedAt;
+        if (num(val) !== null && val > 0) out.push({ key, ...SYSTEM_METERS[key], vendor, voltage: round1(val), measuredAt: at });
+      }
+    }
   }
   if (on('pv') && num(v.pvTotalW) !== null) out.push({ key: 'pv', ...SYSTEM_METERS.pv, vendor, power: round1(v.pvTotalW) });
   if (on('load') && num(v.selfConsumptionW) !== null) out.push({ key: 'load', ...SYSTEM_METERS.load, vendor, power: round1(v.selfConsumptionW) });
@@ -207,7 +229,8 @@ export function createDatenspende(ctx = {}, deps = {}) {
     return {
       enabled: ds.enabled === true,
       intervalSec: Number.isFinite(iv) ? Math.min(300, Math.max(5, Math.round(iv))) : DEFAULT_INTERVAL_SEC,
-      clientType: String(ds.clientType || 'dvhub').trim() || 'dvhub',
+      // GH #31: Altwert „dvhub“ (und Unbekanntes) → victron.
+      clientType: normalizeClientType(ds.clientType),
     };
   }
 
@@ -261,8 +284,19 @@ export function createDatenspende(ctx = {}, deps = {}) {
     const sources = collectSources(ctx, getCfg(), t);
     const qq = q();
     for (const s of sources) {
-      const r = { key: s.key, timestamp: ts, power: s.power };
+      // Spannung: Zeitstempel = Messzeit (nicht der Takt), jede Messung je
+      // Phase einmal — die Sekunde ist die Kennung, der Server lehnt doppelte
+      // Sekunden ohnehin ab (Codex-Gegenprüfung 9d1b2057, 2× P2).
+      let stamp = ts;
+      if (s.measuredAt !== undefined) {
+        stamp = isoSecond(s.measuredAt);
+        if (lastMeasuredAt.get(s.key) === stamp) continue;
+        lastMeasuredAt.set(s.key, stamp);
+      }
+      const r = { key: s.key, timestamp: stamp };
+      if (s.power !== undefined) r.power = s.power;
       if (s.energy !== undefined) r.energy = s.energy;
+      if (s.voltage !== undefined) r.voltage = s.voltage;
       qq.readings.push(r);
       // Name/Hersteller für die Registrierung merken (wird beim Senden gebraucht).
       metaByKey.set(s.key, { name: s.name, vendor: s.vendor, model: s.model });
@@ -276,6 +310,7 @@ export function createDatenspende(ctx = {}, deps = {}) {
     return { ok: true, sampled: sources.length };
   }
   const metaByKey = new Map();
+  const lastMeasuredAt = new Map();
   // Name/Hersteller eines Zählers — auch für Quellen, die (noch) nicht live
   // gesampelt wurden (Nachversand direkt nach dem Start).
   function metaFor(key) {
@@ -345,8 +380,10 @@ export function createDatenspende(ctx = {}, deps = {}) {
       const batch = qq.readings.filter((r) => sc.meters?.[r.key]?.id).slice(0, MAX_BATCH_READINGS);
       if (!batch.length) return { ok: true, sent: 0 };
       const wire = batch.map((r) => {
-        const w = { meter_id: sc.meters[r.key].id, timestamp: r.timestamp, power: r.power };
+        const w = { meter_id: sc.meters[r.key].id, timestamp: r.timestamp };
+        if (r.power !== undefined) w.power = r.power;
         if (r.energy !== undefined) w.energy = r.energy;
+        if (r.voltage !== undefined) w.voltage = r.voltage;
         return w;
       });
       const res = await client.submitBatch(sc.apiKey, sc.clientId, wire);
@@ -498,7 +535,9 @@ export function createDatenspende(ctx = {}, deps = {}) {
   async function linkApiKey({ apiKey, consent }) {
     if (consent !== true) throw new DatenspendeAuthError('Ohne Einwilligung keine Teilnahme', 'consent_required');
     const key = String(apiKey || '').trim();
-    if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new DatenspendeRequestError('API-Key-Format ungültig', 'invalid_api_key');
+    // Das Format der Portal-Schlüssel ist nicht dokumentiert (GH #31): jedes
+    // druckbare ASCII-Zeichen ohne Leerraum — geprüft wird der Key beim Server.
+    if (!/^[\x21-\x7e]{16,512}$/.test(key)) throw new DatenspendeRequestError('API-Key-Format ungültig', 'invalid_api_key');
     const gen = ++linkGen;
     const clientId = await linkStep('api-key-check', [key], async () => requireSetupId(
       await client.getClientId(key), 'api-key-check', 'Client-ID'
@@ -630,7 +669,7 @@ export function createDatenspende(ctx = {}, deps = {}) {
     const live = queue && sc && queue.clientId === sc.clientId ? queue : saved;
     const cfg = getCfg();
     let preview = [];
-    try { preview = collectSources(ctx, cfg, now()).map(({ key, name, power, energy }) => ({ key, name, power, energy: energy ?? null })); } catch { /* Anzeige best effort */ }
+    try { preview = collectSources(ctx, cfg, now()).map(({ key, name, power, energy, voltage }) => ({ key, name, power: power ?? null, energy: energy ?? null, voltage: voltage ?? null })); } catch { /* Anzeige best effort */ }
     return {
       linked: !!sc,
       ...settings(),

@@ -66,6 +66,8 @@ function mqttConfigView(mqttCfg) {
 }
 import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots } from './eeg-extension.js';
 import { buildVictronAlarmsPayload } from './victron-alarms.js';
+import { freshGridVoltage } from './services/grid-voltage.js';
+import { CLIENT_TYPES as DATENSPENDE_CLIENT_TYPES } from './services/datenspende/client.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capVictronPvForDisplay } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { redactConfig, redactUrlCreds, dropSecretsForChangedTargets, unchangedSecretPaths } from './config-redaction.js';
@@ -77,7 +79,7 @@ import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collec
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
 import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
 import { isSupportTunnelConsentAction, isSupportTunnelWrite, bodyKeyNames, supportTunnelActionKind, SUPPORT_TUNNEL_KIND_LABELS } from './services/support-tunnel-policy.js';
-import { SETUP_STEP_LABELS as DATENSPENDE_SETUP_STEP_LABELS, redactSecrets as redactDatenspendeSecrets } from './services/datenspende/index.js';
+import { SETUP_STEP_LABELS as DATENSPENDE_SETUP_STEP_LABELS, SOURCE_GROUPS as DATENSPENDE_SOURCE_GROUPS, redactSecrets as redactDatenspendeSecrets } from './services/datenspende/index.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
 // Battle-tested Prometheus client (~30KB minified) — preferred over hand-rolling
 // the exposition format. No other Phase 9 plan adds dependencies.
@@ -2638,6 +2640,9 @@ export function createApiRoutes(ctx) {
     // (payload.victron.freeze), nicht das Web-Prozess-`state` — sonst bliebe das
     // Banner im Split-Prozess-Betrieb dauerhaft leer.
     payload.telemetryFreeze = payload.victron?.freeze || null;
+    // Netzspannung L1–L3 + Frequenz (services/grid-voltage.js): Rohwert steht in
+    // payload.victron.gridVoltage, hier die Frische nach der Server-Uhr (Leitstand).
+    payload.gridVoltage = freshGridVoltage(payload.victron?.gridVoltage, now);
     // Systemhinweise (Einspeisegrenze, unbekannter DV-Befehl, Speicherplatz …):
     // Leitstand zeigt sie als Hinweisleiste (app.js renderSystemWarnings).
     payload.systemWarnings = Array.isArray(state.systemWarnings)
@@ -5469,7 +5474,8 @@ export function createApiRoutes(ctx) {
           patch.intervalSec = iv;
         }
         if (body.clientType !== undefined) {
-          if (typeof body.clientType !== 'string' || !/^[a-z0-9_-]{1,40}$/i.test(body.clientType)) {
+          // GH #31: nur Typen, die das Datenportal kennt („dvhub“ lehnt der Server ab).
+          if (typeof body.clientType !== 'string' || !DATENSPENDE_CLIENT_TYPES.includes(body.clientType)) {
             return json(res, 400, { ok: false, error: 'clientType_ungueltig' });
           }
           patch.clientType = body.clientType;
@@ -5478,7 +5484,7 @@ export function createApiRoutes(ctx) {
           if (!body.sources || typeof body.sources !== 'object') return json(res, 400, { ok: false, error: 'sources_ungueltig' });
           patch.sources = {};
           for (const [k, v] of Object.entries(body.sources)) {
-            if (!['grid', 'pv', 'load', 'battery', 'devices', 'mqttTiles', 'wallbox'].includes(k) || typeof v !== 'boolean') {
+            if (!DATENSPENDE_SOURCE_GROUPS.includes(k) || typeof v !== 'boolean') {
               return json(res, 400, { ok: false, error: `source_ungueltig:${k}` });
             }
             patch.sources[k] = v;

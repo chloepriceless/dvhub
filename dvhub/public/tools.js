@@ -1630,7 +1630,7 @@ function wireInputPush() {
 let dsUiToken = null;
 let dsTimer = null;
 const DS_SOURCE_LABELS = {
-  grid: 'Netzanschluss', pv: 'PV-Erzeugung', load: 'Hausverbrauch', battery: 'Batterie',
+  grid: 'Netzanschluss', gridVoltage: 'Netzspannung (L1–L3)', pv: 'PV-Erzeugung', load: 'Hausverbrauch', battery: 'Batterie',
   devices: 'Geräte (Shelly/MQTT)', mqttTiles: 'MQTT-Kacheln (W)', wallbox: 'Wallbox (evcc)',
 };
 const dsEl = (id) => document.getElementById(id);
@@ -1701,7 +1701,9 @@ function renderDatenspende(st) {
       name.textContent = p.name;
       const val = document.createElement('span');
       val.className = 'installer-portal-meta';
-      val.textContent = `${Math.round(p.power)} W${p.energy != null ? ` · ${p.energy} kWh` : ''}`;
+      val.textContent = p.voltage != null
+        ? `${Number(p.voltage).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} V`
+        : `${Math.round(p.power)} W${p.energy != null ? ` · ${p.energy} kWh` : ''}`;
       row.append(name, val);
       pv.appendChild(row);
     }
@@ -1719,10 +1721,16 @@ let onUiToken = null;
 const onEl = (id) => document.getElementById(id);
 const ON_SKIP = {
   disabled: 'aus',
-  source_unsupported: 'Messquelle nicht unterstützt (bisher: Victron GX per Modbus)',
+  source_unsupported: 'Messquelle liefert keine Netzspannung',
+  voltage_unavailable: 'Keine Spannungswerte — die Messquelle liefert keine Netzspannung',
+  voltage_stale: 'Spannungswerte veraltet (älter als 2 Minuten) — nicht gesendet',
   location_missing: 'Standort fehlt — Breiten-/Längengrad eintragen',
   voltage_missing: 'Netzzähler liefert keine Spannungen',
   voltage_out_of_range: 'Spannung außerhalb 150–300 V — nicht gesendet',
+};
+const ON_ERRORS = {
+  standort_gesperrt: 'Standort vom Projekt gesperrt',
+  grid_meter_not_found: 'Netzzähler am Victron GX nicht gefunden (keine Unit mit Netzspannung)',
 };
 const ON_LIGHT = { green: '🟢 normal', yellow: '🟡 Warnung', red: '🔴 kritisch' };
 const ON_STORAGE = { none: 'keine Aktion', charge: 'Speicher laden (Überspannung)', discharge: 'Speicher entladen (Unterspannung)' };
@@ -1742,7 +1750,7 @@ async function onPost(path, body) {
 function renderOrtsnetz(st) {
   let state;
   if (!st.enabled) state = 'aus';
-  else if (st.lastError) state = st.lastError === 'standort_gesperrt' ? '⚠ Standort vom Projekt gesperrt' : `⚠ Fehler: ${st.lastError}`;
+  else if (st.lastError) state = ON_ERRORS[st.lastError] ? `⚠ ${ON_ERRORS[st.lastError]}` : `⚠ Fehler: ${st.lastError}`;
   else if (st.lastSkip) state = `⚠ ${ON_SKIP[st.lastSkip] || st.lastSkip}`;
   else if (st.lastSentAt) state = `aktiv — zuletzt gesendet ${new Date(st.lastSentAt).toLocaleString('de-DE')} (${st.sentCount} seit Start)`;
   else state = 'aktiv — erste Messung folgt in Kürze';
@@ -1819,7 +1827,11 @@ function datenspendeFailureText(r, hints) {
   const hint = hints[j.error] || '';
   const detail = j.detail ? String(j.detail) : '';
   const body = hint && detail ? `${hint} (${detail})` : (hint || detail || j.error || `HTTP ${r && r.status}`);
-  return `Fehler${where}: ${body}`;
+  // Der Haushalt war schon angelegt, als Client/Schlüssel scheiterte.
+  const leftover = j.step === 'clients' || j.step === 'api-key'
+    ? ' Dabei kann im Konto ein leerer Haushalt zurückgeblieben sein — den kannst du im Datenportal (datenspende.comsys.rwth-aachen.de/portal) löschen.'
+    : '';
+  return `Fehler${where}: ${body}${leftover}`;
 }
 
 function wireDatenspende() {
@@ -1834,7 +1846,7 @@ function wireDatenspende() {
     const password = dsEl('dsPassword').value;
     const apiKey = dsEl('dsApiKey').value.trim();
     if (mode === 'apikey' ? !apiKey : (!username || !password)) {
-      setText('dsResult', mode === 'apikey' ? 'API-Key eintragen.' : 'Benutzername und Passwort eintragen.');
+      setText('dsResult', mode === 'apikey' ? 'Schlüssel aus dem Datenportal eintragen.' : 'Benutzername und Passwort eintragen.');
       return;
     }
     setText('dsResult', 'Verbinde mit dem Projekt…');
@@ -1860,7 +1872,9 @@ function wireDatenspende() {
       invalid_credentials: 'Benutzername oder Passwort falsch.',
       password_too_short: 'Passwort zu kurz.',
       invalid_secret: 'Anmelde-Schlüssel ungültig.',
-      taken_email: 'E-Mail ist beim Projekt schon registriert.',
+      taken_email: 'Diese E-Mail-Adresse gehört schon zu einem Konto beim Projekt — je E-Mail gibt es nur ein Konto. „Vorhandenes Konto verwenden“ wählen (weitere Anlagen gehören in dasselbe Konto) oder das Feld E-Mail leer lassen.',
+      invalid_api_key: 'Schlüssel unvollständig oder mit Leerzeichen kopiert — im Datenportal erneut kopieren.',
+      unauthorized: 'Schlüssel wird vom Projekt nicht angenommen — im Datenportal einen neuen Schlüssel erzeugen.',
       connection_error: 'Projekt-Server nicht erreichbar — Internetverbindung prüfen.',
     };
     setText('dsResult', r.ok ? '✓ Verbunden — die Spende läuft. Danke!' : datenspendeFailureText(r, hints));
@@ -1882,10 +1896,15 @@ function wireDatenspende() {
   const syncMode = () => {
     const mode = dsEl('dsMode').value;
     const apikey = mode === 'apikey';
-    for (const id of ['dsUsername', 'dsPassword', 'dsEmail']) dsEl(id).hidden = apikey;
+    for (const id of ['dsUsername', 'dsPassword', 'dsPasswordHelp', 'dsMultiHelp']) dsEl(id).hidden = apikey;
+    // E-Mail nur beim Anlegen eines Kontos (sign-up), wie der Anmelde-Schlüssel.
+    for (const id of ['dsEmail', 'dsEmailHelp']) dsEl(id).hidden = mode !== 'signup';
     // Anmelde-Schlüssel gilt nur beim Anlegen eines Kontos (COMSYS sign-up).
     for (const id of ['dsSecret', 'dsSecretHelp']) { const f = dsEl(id); if (f) f.hidden = mode !== 'signup'; }
     dsEl('dsApiKey').hidden = !apikey;
+    dsEl('dsApiKeyHelp').hidden = !apikey;
+    // Portal-Schlüssel: Haushalt ist im Datenportal angelegt.
+    dsEl('dsHouseholdRow').hidden = apikey;
   };
   dsEl('dsMode')?.addEventListener('change', syncMode);
   syncMode();

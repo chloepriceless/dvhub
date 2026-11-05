@@ -348,6 +348,7 @@ export function createMqttTransport(victronConfig, options = {}) {
     if (v !== undefined) {
       cache[topic] = { value: v, ts: Date.now() };
       rememberAlarmTopic(topic, v);
+      rememberGridAcTopic(topic, v);
     } else {
       noteUnusablePayload(topic, payload);
     }
@@ -375,6 +376,59 @@ export function createMqttTransport(victronConfig, options = {}) {
     return { vebus: { ...alarmCache.vebus }, battery: { ...alarmCache.battery }, ts: alarmCache.ts };
   }
 
+  // Netzspannung L1–L3 + Frequenz des Netzzählers (05.11.2026, zentral in
+  // services/grid-voltage.js): N/<portal>/grid/<instanz>/Ac/L1..L3/Voltage und
+  // /Ac/Frequency. Die Instanz ist anlagenspezifisch (Wildcard-Abo unten);
+  // je Instanz abgelegt, gelesen wird die niedrigste mit frischen Werten.
+  const GRID_AC_PATHS = { 'Ac/L1/Voltage': 'l1', 'Ac/L2/Voltage': 'l2', 'Ac/L3/Voltage': 'l3', 'Ac/Frequency': 'frequencyHz' };
+  const gridAcCache = {};
+  function rememberGridAcTopic(topic, value) {
+    const parts = String(topic).split('/');
+    if (parts[0] !== 'N' || parts[2] !== 'grid' || !parts[3]) return;
+    const field = GRID_AC_PATHS[parts.slice(4).join('/')];
+    if (!field) return;
+    (gridAcCache[parts[3]] ??= {})[field] = { value, ts: Date.now() };
+  }
+  function readGridVoltage() {
+    if (schema !== 'venus') return null;
+    const instances = Object.keys(gridAcCache).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+    let invalidatedAt = 0;
+    for (const instance of instances) {
+      const e = gridAcCache[instance];
+      const fresh = (k) => (mqttCacheEntryFresh(e[k], staleMaxAgeMs) && Number.isFinite(Number(e[k].value)) ? e[k] : null);
+      const phases = ['l1', 'l2', 'l3'].map(fresh);
+      if (!phases.some(Boolean)) {
+        // {"value":null} innerhalb der Frische-Grenze = Venus meldet die Werte
+        // ausdrücklich ungültig (Codex-Gegenprüfung 19f1d2bf, P2) — aber nur,
+        // wenn KEINE Phase mehr einen Zahlenwert hat. Ein abgelaufener Wert
+        // (einphasiger Zähler: L1 alt, L2/L3 senden null) ist „veraltet“
+        // (Codex-Gegenprüfung 186f688f, P2).
+        const anyNumber = ['l1', 'l2', 'l3'].some((k) => e[k] && e[k].value !== null && Number.isFinite(Number(e[k].value)));
+        if (anyNumber) continue;
+        for (const k of ['l1', 'l2', 'l3']) {
+          const x = e[k];
+          if (x && x.value === null && (!(staleMaxAgeMs > 0) || Date.now() - x.ts <= staleMaxAgeMs)) invalidatedAt = Math.max(invalidatedAt, x.ts);
+        }
+        continue;
+      }
+      const f = fresh('frequencyHz');
+      return {
+        l1: phases[0] ? Number(phases[0].value) : null,
+        l2: phases[1] ? Number(phases[1].value) : null,
+        l3: phases[2] ? Number(phases[2].value) : null,
+        frequencyHz: f ? Number(f.value) : null,
+        // Empfangszeit = die der ältesten verwendeten Größe, Frequenz
+        // eingeschlossen (Codex-Gegenprüfung 7f88bc74, P2).
+        ts: Math.min(...phases.concat(f).filter(Boolean).map((p) => Number(p.ts) || 0)),
+        // Empfangszeit je Phase (Datenspende: jede Phase mit ihrer Messzeit).
+        phaseTs: phases.map((p) => (p ? Number(p.ts) || null : null)),
+        instance,
+      };
+    }
+    if (invalidatedAt) return { l1: null, l2: null, l3: null, frequencyHz: null, ts: invalidatedAt, phaseTs: [null, null, null], invalidated: true };
+    return null;
+  }
+
   function sendKeepalive() {
     if (schema !== 'venus') return;   // DVhub-Schema kennt kein Keepalive
     if (client?.connected) {
@@ -386,6 +440,7 @@ export function createMqttTransport(victronConfig, options = {}) {
   return {
     type: 'mqtt',
     getAlarmValues,
+    readGridVoltage,
 
     async init() {
       if (pushOnly) {
@@ -466,7 +521,11 @@ export function createMqttTransport(victronConfig, options = {}) {
           const topics = Object.values(READ_TOPICS).concat((schema === 'venus' && portalId) ? [
             `N/${portalId}/vebus/+/Alarms/#`,
             `N/${portalId}/vebus/+/VebusError`,
-            `N/${portalId}/battery/+/Alarms/#`
+            `N/${portalId}/battery/+/Alarms/#`,
+            `N/${portalId}/grid/+/Ac/L1/Voltage`,
+            `N/${portalId}/grid/+/Ac/L2/Voltage`,
+            `N/${portalId}/grid/+/Ac/L3/Voltage`,
+            `N/${portalId}/grid/+/Ac/Frequency`
           ] : []);
           client.subscribe(topics, { qos }, (err) => {
             if (settled) return;

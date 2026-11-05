@@ -125,7 +125,7 @@ test('Datenspende E2E: Einwilligung → Einrichtung → Shelly-Werte beim Projek
   assert.equal(link.j.enabled, true);
   const signup = comsys.log.find((l) => l.path.endsWith('/sign-up/username'));
   assert.equal(signup.body.consent, true);
-  assert.equal(comsys.log.find((l) => l.path === '/api/v1/web/clients').body.type, 'dvhub');
+  assert.equal(comsys.log.find((l) => l.path === '/api/v1/web/clients').body.type, 'victron', 'GH #31: Portal-Typ statt dvhub');
   assert.deepEqual(comsys.log.find((l) => l.path === '/api/v1/web/households').body,
     { userId: 'user-1', name: 'Testhaus', numberInhabitants: 3, zip: '52062', country: 'Deutschland' });
   assert.ok(comsys.log.some((l) => l.path.endsWith('/sign-out')), 'Web-Session beendet');

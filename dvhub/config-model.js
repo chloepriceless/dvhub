@@ -5262,13 +5262,16 @@ export function createDefaultConfig() {
     //   enabled:     Opt-in (Default false); Einrichtung + Einwilligung über
     //                /api/datenspende/link, API-Key liegt in DATA_DIR/datenspende.json.
     //   intervalSec: Abstand der Messwerte (5…300 s, Default 10).
-    //   clientType:  Client-Typ beim Projekt (Default 'dvhub'; mit COMSYS abstimmen).
-    //   sources:     welche Quellen gespendet werden (jeweils true/false).
+    //   clientType:  Client-Typ beim Projekt (Default 'victron' — Typ des COMSYS-
+    //                Datenportals; das frühere 'dvhub' kennt der Server nicht, GH #31,
+    //                wird beim Laden gehoben: migrateDatenspendeClientType).
+    //   sources:     welche Quellen gespendet werden (jeweils true/false);
+    //                gridVoltage = Netzspannung je Phase (V, seit 05.11.2026).
     datenspende: {
       enabled: false,
       intervalSec: 10,
-      clientType: 'dvhub',
-      sources: { grid: true, pv: true, load: true, battery: true, devices: true, mqttTiles: true, wallbox: true }
+      clientType: 'victron',
+      sources: { grid: true, gridVoltage: true, pv: true, load: true, battery: true, devices: true, mqttTiles: true, wallbox: true }
     },
     // Ortsnetz-Auslastung (www.ortsnetz-auslastung.de): opt-in, alle 5 min
     // Netzspannung L1–L3 + Frequenz des Netzzählers. latitude/longitude leer =
@@ -5961,10 +5964,18 @@ function migrateSetpointWatchdog(raw) {
   raw.monitoring.setpointWatchdog = target;
 }
 
+// GH #31 (05.11.2026): datenspende.clientType 'dvhub' kennt der COMSYS-Server
+// nicht (400 im Schritt „Client anlegen“). Beim Laden auf 'victron' heben. Eine
+// schon verknüpfte Spende betrifft das nicht — der Typ zählt nur beim Anlegen.
+function migrateDatenspendeClientType(raw) {
+  if (isPlainObject(raw?.datenspende) && raw.datenspende.clientType === 'dvhub') raw.datenspende.clientType = 'victron';
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
   migrateSetpointWatchdog(raw);
+  migrateDatenspendeClientType(raw);
   // Sweep package 6: shape-level schema checks run FIRST, on the raw parsed
   // config — before the FIELD_DEFINITIONS coercion pass below, which would
   // otherwise silently string-coerce a wrong-typed scalar (e.g. a numeric

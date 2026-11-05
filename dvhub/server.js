@@ -1648,8 +1648,9 @@ ctx.datenspende = createDatenspende(ctx, {
 });
 if (IS_RUNTIME_PROCESS) ctx.datenspende.start();
 // Ortsnetz-Auslastung (ortsnetz-auslastung.de): opt-in, Netzspannung L1–L3 +
-// Frequenz des Netzzählers alle 5 min (nur lesend, eigener Takt).
-ctx.ortsnetz = createOrtsnetz(ctx, { getTransport: () => transport });
+// Frequenz des Netzzählers alle 5 min — aus den zentralen Netzwerten des
+// Pollers (state.victron.gridVoltage), keine eigene Leseverbindung.
+ctx.ortsnetz = createOrtsnetz(ctx);
 if (IS_RUNTIME_PROCESS) ctx.ortsnetz.start();
 // Geräte am Victron GX (Venus OS 3.80: EEBUS-Wärmepumpen/-Wallboxen, Victron-
 // Wallbox, AC-Lasten) — per Modbus des GX gesucht und nur gelesen.

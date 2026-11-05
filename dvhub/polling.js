@@ -20,6 +20,8 @@ import { info as logInfo, error as logError } from './services/log.js';
 // branches (gauge.set on success duration, counter.inc on catch).
 import { meterPollDurationSeconds, meterPollErrorsTotal, telemetryFreezeActive } from './routes-api.js';
 import { followerBatteryForFlow } from './services/multi-gx/planning.js';
+// Netzspannung L1–L3 + Frequenz des Netzzählers, zentral (05.11.2026).
+import { createGridVoltagePoller } from './services/grid-voltage.js';
 
 /**
  * Load persisted energy state from disk into state.energy (if today's data).
@@ -81,6 +83,16 @@ export function createPoller(ctx) {
   const freezeWatchdog = createFreezeWatchdog(ctx);
   // Meldet, wenn der Speicher trotz Sollwert nicht entlädt (nur Meldung, kein Eingriff).
   const setpointFollowWatchdog = createSetpointFollowWatchdog(ctx);
+  // Netzspannung/-frequenz (services/grid-voltage.js): Ortsnetz und Datenspende
+  // lesen nur noch state.victron.gridVoltage. ctx.gridVoltagePoller nur für Tests.
+  const gridVoltage = ctx.gridVoltagePoller || createGridVoltagePoller({
+    state,
+    pushLog,
+    getTransport: () => transport,
+    ...(ctx.gridVoltageFirstDelayMs != null ? { firstDelayMs: ctx.gridVoltageFirstDelayMs } : {}),
+  });
+  // Letzte EM.GetStatus-Antwort des SPiNE-Zählers (enthält die Spannungen).
+  let spineEm = null;
 
   // --- effectivePollIntervalMs ---
   const effectivePollIntervalMs = () => normalizePollIntervalMs(getCfg().meterPollMs, MIN_POLL_INTERVAL_MS);
@@ -517,6 +529,7 @@ export function createPoller(ctx) {
     // dvhub_meter_poll_duration_seconds gauge on success, dvhub_meter_poll_errors_total
     // counter on catch. Tracked in seconds (Prometheus convention).
     const __pollStart = process.hrtime.bigint();
+    spineEm = null;
     try {
       let l1, l2, l3, total;
       if (String(cfg.meter?.readType || '').toLowerCase() === 'spine-http') {
@@ -557,6 +570,7 @@ export function createPoller(ctx) {
         l2 = Math.round(fL2 * sign) || 0;
         l3 = Math.round(fL3 * sign) || 0;
         total = Math.round(fTotal * sign) || 0;
+        spineEm = em;
         state.meter = {
           ok: true, updatedAt: Date.now(), raw: [fTotal, fL1, fL2, fL3],
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
@@ -946,6 +960,13 @@ export function createPoller(ctx) {
     try {
       ctx.gridSharePollTick?.(state.victron);
     } catch (e) { pushLog('grid_share_error', { error: e?.message || String(e) }, 'warn'); }
+
+    // Netzspannung/-frequenz: MQTT und SPiNE sofort aus dem schon Gelesenen,
+    // Victron Modbus alle 30 s im Hintergrund — NICHT abgewartet, damit eine
+    // Unit-Suche den Steuer-Takt nie aufhält. onPoll wirft und verwirft nie.
+    try {
+      gridVoltage.onPoll(cfg, spineEm ? { spine: spineEm, spineAt: state.meter.updatedAt } : {});
+    } catch (e) { pushLog('grid_voltage_error', { error: e?.message || String(e) }, 'warn'); }
 
     ctx.onPollComplete?.({
       ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),

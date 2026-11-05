@@ -76,7 +76,10 @@ const VICTRON_FIELDS = [
   'freeze',
   // T-CROSSCHECK (2026-07-25): Widerspruch zwischen Modbus und der MQTT-Zweitquelle
   // ({active, since, fields, mismatches} oder null) — gleiche Begründung wie oben.
-  'sourceMismatch'
+  'sourceMismatch',
+  // Netzspannung L1–L3 + Frequenz des Netzzählers (services/grid-voltage.js,
+  // 05.11.2026) — Ortsnetz und Datenspende lesen sie hier, der Leitstand zeigt sie.
+  'gridVoltage'
 ];
 
 const SCHEDULE_FIELDS = [

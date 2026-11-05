@@ -182,3 +182,16 @@ test('#31: Zahl 0 ist keine ID; getClientId filtert ebenso', async () => {
   await assert.rejects(c.getClientId('KEY'), (e) => e.code === 'bad_response' && e.step === 'api-key-check'
     && Array.isArray(e.responseKeys) && e.responseKeys.includes('clientId'));
 });
+
+// Codex-Gegenprüfung 9d1b2057: Spannungs-Messzeit kann vor dem ersten Wert im
+// Batch liegen — t0 ist der früheste Zeitstempel, keine negativen Abstände.
+test('columnarPayload: t0 = frühester Zeitstempel, dt nie negativ', async () => {
+  const { columnarPayload } = await import('../services/datenspende/client.js');
+  const p = columnarPayload([
+    { meter_id: 'G0', timestamp: '2026-09-28T12:00:00Z', power: 1 },
+    { meter_id: 'V1', timestamp: '2026-09-28T11:58:30Z', voltage: 238.2 },
+  ]);
+  assert.equal(p.t0, '2026-09-28T11:58:30Z');
+  assert.deepEqual(p.meters.find((m) => m.id === 'G0').dt, [90]);
+  assert.deepEqual(p.meters.find((m) => m.id === 'V1').dt, [0]);
+});

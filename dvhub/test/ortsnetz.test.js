@@ -1,9 +1,12 @@
 // test/ortsnetz.test.js — Ortsnetz-Auslastung (www.ortsnetz-auslastung.de):
-// Payload nach den Regeln des Projekts, Victron-Netzzähler-Register, Versand
-// alle 5 min nur mit Opt-in, Antwort (Ampel + Speicherempfehlung) im Status.
+// Payload nach den Regeln des Projekts, Versand alle 5 min nur mit Opt-in,
+// Antwort (Ampel + Speicherempfehlung) im Status. Seit 05.11.2026 ohne eigene
+// Modbus-Verbindung: nur die zentralen Netzwerte (state.victron.gridVoltage,
+// services/grid-voltage.js) mit Frische-Prüfung.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPayload, readVictronGrid, createOrtsnetz, ORTSNETZ_API_URL, VICTRON_GRID_REGS } from '../services/ortsnetz/index.js';
+import * as ortsnetzModule from '../services/ortsnetz/index.js';
+import { buildPayload, createOrtsnetz, ORTSNETZ_API_URL } from '../services/ortsnetz/index.js';
 
 const NOW = Date.parse('2026-10-01T08:00:00.123Z');
 const base = { nowMs: NOW, latitude: 48.125611, longitude: 9.432794, l1: 237.6, l2: 236.8, l3: 236.5 };
@@ -28,22 +31,18 @@ test('buildPayload: Spannung außerhalb 150–300 V oder fehlend → nicht sende
   assert.deepEqual(buildPayload({ ...base, longitude: 200 }), { ok: false, reason: 'location_missing' });
 });
 
-test('readVictronGrid: Register 2616/2618/2620 ×0,1 V, 2644 ×0,01 Hz; 0xFFFF = nicht verfügbar', async () => {
-  const calls = [];
-  const mb = async (req) => {
-    calls.push([req.unitId, req.address, req.quantity, req.fc]);
-    return req.address === VICTRON_GRID_REGS.l1 ? [2376, 21, 2368, 65515, 0xffff] : [5004];
-  };
-  const r = await readVictronGrid(mb, { host: 'gx', port: 502, unitId: 100 });
-  assert.deepEqual(r, { l1: 237.6, l2: 236.8, l3: null, frequencyHz: 50.04 });
-  assert.deepEqual(calls, [[100, 2616, 5, 3], [100, 2644, 1, 3]]);
+test('keine eigene Modbus-Leseverbindung mehr (zentrale Werte statt readVictronGrid)', () => {
+  assert.equal(ortsnetzModule.readVictronGrid, undefined);
+  assert.equal(ortsnetzModule.VICTRON_GRID_REGS, undefined);
 });
 
-function ctxWith({ ortsnetz = {}, cfg = {} } = {}) {
+const freshGv = (over = {}) => ({ l1: 237.6, l2: 236.8, l3: 236.5, frequencyHz: 50.04, updatedAt: NOW - 20_000, source: 'victron_modbus', unitId: 100, error: null, ...over });
+function ctxWith({ ortsnetz = {}, cfg = {}, gridVoltage = freshGv() } = {}) {
   const logs = [];
   return {
     logs,
     ctx: {
+      state: { victron: { gridVoltage } },
       getCfg: () => ({ manufacturer: 'victron', victron: { host: 'gx', port: 502, unitId: 100 }, forecast: { location: { latitude: 48.1, longitude: 9.4 } }, ortsnetz: { enabled: true, ...ortsnetz }, ...cfg }),
       pushLog: (e, d) => logs.push([e, d]),
       getAppVersion: () => ({ version: '1.0.6' }),
@@ -52,13 +51,12 @@ function ctxWith({ ortsnetz = {}, cfg = {} } = {}) {
     },
   };
 }
-const modbus = { type: 'modbus', mbRequest: async (req) => (req.address === 2616 ? [2376, 0, 2368, 0, 2365] : [5004]) };
 
 test('tick: sendet an die API, merkt Ampel + Empfehlung; Standort aus der Prognose', async () => {
   const sent = [];
   const fetchImpl = async (url, opts) => { sent.push({ url, body: JSON.parse(opts.body) }); return { status: 202, json: async () => ({ accepted: true, status: { l1: 'green', l2: 'green', l3: 'yellow', overall: 'yellow' }, storage_recommendation: 'charge' }) }; };
   const { ctx } = ctxWith();
-  const on = createOrtsnetz(ctx, { getTransport: () => modbus, fetchImpl, now: () => NOW });
+  const on = createOrtsnetz(ctx, { fetchImpl, now: () => NOW });
   assert.deepEqual(await on.tick(), { ok: true });
   assert.equal(sent[0].url, ORTSNETZ_API_URL);
   assert.deepEqual([sent[0].body.latitude, sent[0].body.longitude, sent[0].body.l3_v, sent[0].body.grid_frequency_hz], [48.1, 9.4, 236.5, 50.04]);
@@ -72,15 +70,22 @@ test('tick: sendet an die API, merkt Ampel + Empfehlung; Standort aus der Progno
   assert.equal(st.sentCount, 1);
 });
 
-test('tick: aus → nichts; MQTT-Anlage → Quelle nicht unterstützt; 403 → Standort gesperrt', async () => {
+test('tick: aus → nichts; keine Spannungswerte bzw. veraltet → nicht senden; 403 → Standort gesperrt', async () => {
   let posts = 0;
   const fetchImpl = async () => { posts++; return { status: 403, json: async () => ({}) }; };
-  const off = createOrtsnetz(ctxWith({ ortsnetz: { enabled: false } }).ctx, { getTransport: () => modbus, fetchImpl });
+  const off = createOrtsnetz(ctxWith({ ortsnetz: { enabled: false } }).ctx, { fetchImpl, now: () => NOW });
   assert.deepEqual(await off.tick(), { skipped: 'disabled' });
-  const mqtt = createOrtsnetz(ctxWith().ctx, { getTransport: () => ({ type: 'mqtt' }), fetchImpl });
-  assert.deepEqual(await mqtt.tick(), { skipped: 'source_unsupported' });
+  const none = createOrtsnetz(ctxWith({ gridVoltage: null }).ctx, { fetchImpl, now: () => NOW });
+  assert.deepEqual(await none.tick(), { skipped: 'voltage_unavailable' });
+  assert.equal(none.status().lastSkip, 'voltage_unavailable');
+  assert.equal(none.status().source, 'voltage_unavailable');
+  const stale = createOrtsnetz(ctxWith({ gridVoltage: freshGv({ updatedAt: NOW - 3 * 60_000 }) }).ctx, { fetchImpl, now: () => NOW });
+  assert.deepEqual(await stale.tick(), { skipped: 'voltage_stale' });
+  const notFound = createOrtsnetz(ctxWith({ gridVoltage: { l1: null, l2: null, l3: null, error: 'grid_meter_not_found' } }).ctx, { fetchImpl, now: () => NOW });
+  assert.deepEqual(await notFound.tick(), { skipped: 'voltage_unavailable' });
+  assert.equal(notFound.status().lastError, 'grid_meter_not_found', 'Grund aus dem zentralen Leser sichtbar');
   assert.equal(posts, 0);
-  const blocked = createOrtsnetz(ctxWith().ctx, { getTransport: () => modbus, fetchImpl, now: () => NOW });
+  const blocked = createOrtsnetz(ctxWith().ctx, { fetchImpl, now: () => NOW });
   await blocked.tick();
   assert.equal(blocked.status().lastError, 'standort_gesperrt');
 });
@@ -91,7 +96,8 @@ test('Standort: eigene Angabe vor Prognose-Standort; PV-Prognose nur stündlich,
   ctx.forecastService = { buildForecastResponse: async () => { forecastCalls++; return { dailyTotals: { today: { pvKwh: 10 } } }; } };
   const bodies = [];
   let t = NOW;
-  const on = createOrtsnetz(ctx, { getTransport: () => modbus, now: () => t, fetchImpl: async (u, o) => { bodies.push(JSON.parse(o.body)); return { status: 202, json: async () => ({}) }; } });
+  ctx.state = { victron: { get gridVoltage() { return freshGv({ updatedAt: t - 10_000 }); } } };
+  const on = createOrtsnetz(ctx, { now: () => t, fetchImpl: async (u, o) => { bodies.push(JSON.parse(o.body)); return { status: 202, json: async () => ({}) }; } });
   await on.tick(); t += 5 * 60_000; await on.tick();
   assert.equal(bodies[0].latitude, 50.5);
   assert.equal(forecastCalls, 1, 'Prognose gecacht');
@@ -99,6 +105,47 @@ test('Standort: eigene Angabe vor Prognose-Standort; PV-Prognose nur stündlich,
   assert.equal(forecastCalls, 2);
   const { ctx: c2 } = ctxWith({ ortsnetz: { sendPvForecast: false } });
   const b2 = [];
-  await createOrtsnetz(c2, { getTransport: () => modbus, now: () => NOW, fetchImpl: async (u, o) => { b2.push(JSON.parse(o.body)); return { status: 202, json: async () => ({}) }; } }).tick();
+  await createOrtsnetz(c2, { now: () => NOW, fetchImpl: async (u, o) => { b2.push(JSON.parse(o.body)); return { status: 202, json: async () => ({}) }; } }).tick();
   assert.equal(b2[0].pv_forecast_kwh, undefined);
+});
+
+test('läuft mit jeder Quelle, die Spannungen liefert (MQTT, SPiNE); Modell nach Quelle, Gültigkeitsregeln bleiben', async () => {
+  const bodies = [];
+  const fetchImpl = async (u, o) => { bodies.push(JSON.parse(o.body)); return { status: 202, json: async () => ({}) }; };
+  for (const [source, model] of [['victron_mqtt', 'Victron GX Netzzähler'], ['spine_http', 'SPiNE EnergyLink']]) {
+    const on = createOrtsnetz(ctxWith({ gridVoltage: freshGv({ source, unitId: null }) }).ctx, { fetchImpl, now: () => NOW });
+    assert.deepEqual(await on.tick(), { ok: true });
+    assert.match(bodies.at(-1).smartmeter_model, new RegExp(model));
+    assert.equal(on.status().source, source);
+  }
+  const low = createOrtsnetz(ctxWith({ gridVoltage: freshGv({ l2: 140 }) }).ctx, { fetchImpl, now: () => NOW });
+  assert.deepEqual(await low.tick(), { skipped: 'voltage_out_of_range' });
+  const oneP = createOrtsnetz(ctxWith({ gridVoltage: freshGv({ l3: null }) }).ctx, { fetchImpl, now: () => NOW });
+  assert.deepEqual(await oneP.tick(), { skipped: 'voltage_missing' });
+  const n = bodies.length;
+  const badF = createOrtsnetz(ctxWith({ gridVoltage: freshGv({ frequencyHz: 57 }) }).ctx, { fetchImpl, now: () => NOW });
+  await badF.tick();
+  assert.equal(bodies.length, n + 1);
+  assert.equal(bodies.at(-1).grid_frequency_hz, undefined, 'Frequenz nur 45–55 Hz');
+  assert.equal(badF.status().lastMeasurement.l1, 237.6);
+});
+
+// Codex-Gegenprüfung a95ee2ae (2× P2).
+test('observed_at = Messzeit der zentralen Werte, nicht der Sendezeitpunkt', async () => {
+  const bodies = [];
+  const fetchImpl = async (u, o) => { bodies.push(JSON.parse(o.body)); return { status: 202, json: async () => ({}) }; };
+  const on = createOrtsnetz(ctxWith({ gridVoltage: freshGv({ updatedAt: Date.parse('2026-10-01T07:58:01.400Z') }) }).ctx, { fetchImpl, now: () => NOW });
+  await on.tick();
+  assert.equal(bodies[0].observed_at, '2026-10-01T07:58:01Z');
+});
+
+test('Web-Prozess (Runtime-Worker-Betrieb): Werte aus dem Worker-Snapshot (send-now)', async () => {
+  const bodies = [];
+  const fetchImpl = async (u, o) => { bodies.push(JSON.parse(o.body)); return { status: 202, json: async () => ({}) }; };
+  const { ctx } = ctxWith({ gridVoltage: undefined });
+  ctx.state = { victron: {} }; // Web-Prozess: Poller läuft im Worker
+  ctx.getCachedRuntimeStatusPayload = () => ({ victron: { gridVoltage: freshGv() } });
+  const on = createOrtsnetz(ctx, { fetchImpl, now: () => NOW });
+  assert.deepEqual(await on.tick(), { ok: true });
+  assert.equal(bodies[0].l1_v, 237.6);
 });

@@ -84,17 +84,20 @@ function regsToText(regs) {
 }
 
 /**
- * Sucht Wallbox, Wärmepumpe und AC-Lasten am GX.
+ * Sucht Wallbox, Wärmepumpe und AC-Lasten am GX (oder die übergebenen
+ * Dienstarten `probes`, z. B. den Netzzähler in services/grid-voltage.js).
+ * firstOnly: nach dem ersten Treffer aufhören.
  * @returns {Promise<Array<{kind:string,unitId:number}>>}
  */
-export async function scanGxServices(mbRequest, { host, port, timeoutMs, units = GX_SCAN_UNITS } = {}) {
+export async function scanGxServices(mbRequest, { host, port, timeoutMs, units = GX_SCAN_UNITS, probes = GX_PROBES, firstOnly = false } = {}) {
   const found = [];
   let silent = 0; // Antworten ohne Modbus-Ausnahme (Zeitüberschreitung, Verbindung weg)
   for (const unitId of units) {
-    for (const p of GX_PROBES) {
+    for (const p of probes) {
       try {
         await read(mbRequest, baseOf({ host, port, unitId, timeoutMs }), p.address, 1);
         found.push({ kind: p.kind, unitId });
+        if (firstOnly) return found;
         silent = 0;
       } catch (e) {
         if (/exception/.test(String(e?.message))) { silent = 0; continue; }

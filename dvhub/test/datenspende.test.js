@@ -238,7 +238,7 @@ test('link: ohne Einwilligung keine Anfrage an den Server', async () => {
   assert.equal(client.calls.length, 0);
 });
 
-test('link: API-Key im Sidecar (0600), Passwort nie gespeichert, Client-Typ aus Config, Sign-out', async () => {
+test('link: API-Key im Sidecar (0600), Passwort nie gespeichert, Client-Typ victron, Sign-out', async () => {
   const dir = tmp();
   const client = fakeClient();
   const svc = createDatenspende(baseCtx({ dir, cfg: { datenspende: { clientType: 'dvhub' } } }), { client, now: () => T0 });
@@ -249,7 +249,9 @@ test('link: API-Key im Sidecar (0600), Passwort nie gespeichert, Client-Typ aus 
   assert.doesNotMatch(raw, /GEHEIM-pw-123/, 'Passwort darf nirgends landen');
   assert.equal(JSON.parse(raw).apiKey, 'KEY-SECRET');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  assert.deepEqual(client.calls.find((c) => c[0] === 'client')[1], { householdId: 'H1', name: 'DVhub', type: 'dvhub' });
+  // GH #31: „dvhub“ kennt der Server nicht (400 Invalid input format: null) —
+  // ein Altwert wird auf den Portal-Typ victron gehoben.
+  assert.deepEqual(client.calls.find((c) => c[0] === 'client')[1], { householdId: 'H1', name: 'DVhub', type: 'victron' });
   assert.equal(client.calls.find((c) => c[0] === 'household')[1].numberInhabitants, 3);
   assert.equal(client.calls.at(-1)[0], 'signOut');
   assert.equal(JSON.stringify(st).includes('KEY-SECRET'), false, 'Status verrät den API-Key nicht');
@@ -459,4 +461,137 @@ test('#31 link: Haushalt-ID 0 → Abbruch im Schritt households', async () => {
   const svc = createDatenspende(baseCtx({ dir, cfg: { datenspende: {} } }), { client, now: () => T0 });
   await assert.rejects(svc.link({ mode: 'signin', username: 'u', password: 'p', consent: true }),
     (e) => e.code === 'bad_response' && e.step === 'households');
+});
+
+// ── Netzspannung je Phase (05.11.2026, zentrale Werte services/grid-voltage.js) ──
+// Format wie die HA-Integration (powercollect __init__.py _build_payload): je
+// Zähler höchstens ein voltage-Wert; ein Zähler darf nur voltage tragen
+// (config_flow: „at_least_one_entity_required“ — Spannung allein reicht). Drei
+// Phasen = drei Zähler „Netzspannung L1/L2/L3“.
+
+const GV = { l1: 238.24, l2: 237.1, l3: 236.96, frequencyHz: 49.98, updatedAt: T0 - 15_000, source: 'victron_modbus', unitId: 100, error: null };
+
+test('collectSources: Netzspannung je Phase als voltage-Zähler (nur frisch, ohne power), abwählbar', () => {
+  const ctx = baseCtx({ cfg: {}, pl: payload({ gridVoltage: GV }) });
+  const by = Object.fromEntries(collectSources(ctx, { manufacturer: 'victron', datenspende: {} }, T0).map((x) => [x.key, x]));
+  assert.deepEqual([by.gridL1.voltage, by.gridL2.voltage, by.gridL3.voltage], [238.2, 237.1, 237]);
+  assert.equal(by.gridL1.power, undefined, 'kein erfundener Leistungswert');
+  assert.equal(by.gridL1.name, 'Netzspannung L1');
+  assert.equal(by.gridL1.vendor, 'victron');
+  assert.equal(by.gridL1.measuredAt, GV.updatedAt);
+  assert.equal(by.grid.power, -1200, 'Netzanschluss unverändert');
+  // einphasig: nur L1
+  const one = collectSources(baseCtx({ cfg: {}, pl: payload({ gridVoltage: { ...GV, l2: null, l3: null } }) }), { datenspende: {} }, T0).map((x) => x.key);
+  assert.ok(one.includes('gridL1') && !one.includes('gridL2') && !one.includes('gridL3'));
+  // veraltet (> 2 min) oder keine Quelle → keine Spannung
+  const stale = collectSources(baseCtx({ cfg: {}, pl: payload({ gridVoltage: { ...GV, updatedAt: T0 - 3 * 60_000 } }) }), { datenspende: {} }, T0);
+  assert.ok(!stale.some((x) => x.key.startsWith('gridL')));
+  assert.ok(!collectSources(baseCtx({ cfg: {} }), { datenspende: {} }, T0).some((x) => x.key.startsWith('gridL')));
+  // abgewählt
+  const off = collectSources(ctx, { datenspende: { sources: { gridVoltage: false } } }, T0);
+  assert.ok(!off.some((x) => x.key.startsWith('gridL')));
+});
+
+test('Sammeln + Senden: Spannung je Messung genau einmal, als voltage im Batch; bestehende Zähler bleiben', async () => {
+  const dir = tmp();
+  // Bestehende Spende (wie Prod): Netz/PV/Last/Batterie schon registriert.
+  const existing = { grid: { id: 'G0', name: 'Netzanschluss' }, pv: { id: 'P0', name: 'PV-Erzeugung' }, load: { id: 'L0', name: 'Hausverbrauch' }, battery: { id: 'B0', name: 'Batterie' } };
+  fs.writeFileSync(path.join(dir, SIDECAR_NAME), JSON.stringify({ apiKey: 'KEY', clientId: 'C1', meters: existing, donated: 10 }));
+  let t = T0;
+  const pl = payload({ gridVoltage: GV });
+  const cfg = { manufacturer: 'victron', datenspende: { enabled: true } };
+  const client = fakeClient();
+  const svc = createDatenspende(baseCtx({ dir, cfg, pl }), { client, now: () => t, random: () => 0.5 });
+  svc.sample();
+  t += 10_000;
+  svc.sample(); // gleiche Messung (updatedAt unverändert) → keine zweite Spannung
+  t += 10_000;
+  pl.victron.gridVoltage = { ...GV, l1: 239, updatedAt: T0 + 15_000 };
+  svc.sample();
+  await svc.flush();
+  const registered = client.calls.filter((c) => c[0] === 'register').map((c) => c[1]);
+  assert.deepEqual(registered, ['Netzspannung L1', 'Netzspannung L2', 'Netzspannung L3'], 'nur die neuen Zähler registriert');
+  const batch = client.batches[0];
+  const sc = JSON.parse(fs.readFileSync(path.join(dir, SIDECAR_NAME), 'utf8'));
+  assert.equal(sc.meters.grid.id, 'G0', 'bestehende Zähler-IDs unverändert');
+  const l1 = batch.filter((r) => r.meter_id === sc.meters.gridL1.id);
+  assert.deepEqual(l1.map((r) => r.voltage), [238.2, 239]);
+  assert.ok(l1.every((r) => !('power' in r)), 'Spannungs-Zähler ohne power');
+  const g = batch.filter((r) => r.meter_id === 'G0');
+  assert.equal(g.length, 3);
+  assert.ok(g.every((r) => r.power === -1200 && !('voltage' in r)));
+});
+
+test('columnarPayload: voltage-Spalte für Spannungs-Zähler', async () => {
+  const { columnarPayload } = await import('../services/datenspende/client.js');
+  const p = columnarPayload([
+    { meter_id: 'G0', timestamp: '2026-09-28T12:00:00Z', power: -1200 },
+    { meter_id: 'V1', timestamp: '2026-09-28T12:00:00Z', voltage: 238.2 },
+    { meter_id: 'V1', timestamp: '2026-09-28T12:00:30Z', voltage: 239 },
+  ]);
+  assert.deepEqual(p.meters.find((m) => m.id === 'V1'), { id: 'V1', dt: [0, 30], voltage: [238.2, 239] });
+});
+
+// ── GH #31: Client-Typ ───────────────────────────────────────────────────────
+
+test('#31 Client-Typ: Standard victron (Portal-Typ), Altwert dvhub → victron, bekannte Typen bleiben', () => {
+  const mk = (ds) => createDatenspende(baseCtx({ dir: tmp(), cfg: { datenspende: ds } }), { client: fakeClient(), now: () => T0 });
+  assert.equal(mk({}).settings().clientType, 'victron');
+  assert.equal(mk({ clientType: 'dvhub' }).settings().clientType, 'victron');
+  assert.equal(mk({ clientType: 'quatsch' }).settings().clientType, 'victron');
+  assert.equal(mk({ clientType: 'home_assistant' }).settings().clientType, 'home_assistant');
+});
+
+test('#31 bestehende, verknüpfte Spende (Altwert dvhub): kein neues Konto, kein neuer Client — Senden wie bisher', async () => {
+  const s = linkedSetup({ ds: { clientType: 'dvhub' } });
+  s.svc.sample();
+  await s.svc.flush();
+  const kinds = new Set(s.client.calls.map((c) => c[0]));
+  for (const k of ['signUp', 'signIn', 'household', 'client', 'apiKey']) assert.equal(kinds.has(k), false, k);
+  assert.equal(s.client.batches.length, 1);
+});
+
+// ── GH #31: Schlüssel aus dem Datenportal (empfohlener Weg) ──────────────────
+
+test('#31 Portal-Schlüssel: Format des Portals unbekannt → jedes druckbare Zeichen ohne Leerraum; nur GET /clients, dann nur Zähler', async () => {
+  const dir = tmp();
+  const client = fakeClient();
+  client.getClientId = async (k) => { client.calls.push(['getClientId', k]); return 'portal-client'; };
+  const svc = createDatenspende(baseCtx({ dir, cfg: { manufacturer: 'victron', datenspende: { enabled: true } } }), { client, now: () => T0 });
+  const key = 'pk_live.AbC+dEf/123=456~xyz';
+  const st = await svc.linkApiKey({ apiKey: `  ${key}  `, consent: true });
+  assert.equal(st.clientId, 'portal-client');
+  assert.deepEqual(client.calls, [['getClientId', key]], 'kein Konto, kein Haushalt, kein Client');
+  await assert.rejects(svc.linkApiKey({ apiKey: 'mit leer zeichen 1234567890', consent: true }), /Format/);
+  await assert.rejects(svc.linkApiKey({ apiKey: `zeile\n${'x'.repeat(20)}`, consent: true }), /Format/);
+  // Danach legt die Spende nur Zähler an.
+  svc.sample();
+  await svc.flush();
+  const kinds = [...new Set(client.calls.map((c) => c[0]))];
+  assert.deepEqual(kinds, ['getClientId', 'register', 'submit']);
+});
+
+// Codex-Gegenprüfung 9d1b2057 (2× P2).
+test('Spannung: Zeitstempel = Messzeit (nicht Takt), je Phase eigene Messzeit (MQTT), t0 = frühester Wert', async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, SIDECAR_NAME), JSON.stringify({ apiKey: 'KEY', clientId: 'C1', meters: {}, donated: 0 }));
+  let t = T0;
+  const gv = { ...GV, updatedAt: T0 - 90_000, phaseAt: { l1: T0 - 90_000, l2: T0 - 90_000, l3: T0 - 90_000 }, source: 'victron_mqtt' };
+  const pl = payload({ gridVoltage: gv });
+  const client = fakeClient();
+  const svc = createDatenspende(baseCtx({ dir, cfg: { manufacturer: 'victron', datenspende: { enabled: true } }, pl }), { client, now: () => t, random: () => 0.5 });
+  svc.sample();
+  // Nur L1 ändert sich; L2/L3 bleiben (älteste Phase unverändert).
+  t += 10_000;
+  pl.victron.gridVoltage = { ...gv, l1: 240.5, phaseAt: { ...gv.phaseAt, l1: T0 + 8_000 } };
+  svc.sample();
+  await svc.flush();
+  const batch = client.batches[0];
+  const sc = JSON.parse(fs.readFileSync(path.join(dir, SIDECAR_NAME), 'utf8'));
+  const l1 = batch.filter((r) => r.meter_id === sc.meters.gridL1.id);
+  assert.deepEqual(l1.map((r) => [r.timestamp, r.voltage]), [['2026-09-28T11:58:30Z', 238.2], ['2026-09-28T12:00:08Z', 240.5]]);
+  const l2 = batch.filter((r) => r.meter_id === sc.meters.gridL2.id);
+  assert.equal(l2.length, 1, 'L2 unverändert → einmal');
+  const grid = batch.find((r) => r.meter_id === sc.meters.grid.id);
+  assert.equal(grid.timestamp, '2026-09-28T12:00:00Z', 'Leistung behält den Takt-Zeitstempel');
 });

@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/dvhub-app.css">
   <link rel="stylesheet" href="/pro-modal.css">
   <link rel="stylesheet" href="/dvhub-powerflow.css?v=20260708-daylight">
-  <link rel="stylesheet" href="/index.css?v=20261102-eosplan-info">
+  <link rel="stylesheet" href="/index.css?v=20261105-netzspannung">
   <link rel="stylesheet" href="/ev-tile.css?v=20261027-wochenplan">
   <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261027">
   <script src="/theme.js"></script>
@@ -129,6 +129,19 @@
           </div>
           <button id="maxDischargeSubmitBtn" class="btn primary sm" type="button">Absenden</button>
         </div>
+      </div>
+
+      <!-- Netzzähler: Spannung L1–L3 und Netzfrequenz (services/grid-voltage.js,
+           05.11.2026). Gefüllt von app.js#renderGridMeterCard aus /api/status. -->
+      <div class="card rail-card" data-accent="grid" id="gridMeterCard">
+        <div class="rail-card-head">
+          <span class="ttl"><span class="dot dot-grid"></span>Netz &middot; Zähler</span>
+          <span class="chip sm" id="gridMeterChip" hidden><span class="dot"></span><span id="gridMeterState">&mdash;</span></span>
+        </div>
+        <div class="rail-row" title="Spannung Phase L1 am Netzzähler (Normalbereich 207–253 V)"><span class="l">Spannung L1</span><strong class="v dim" id="gridVoltL1">&ndash;</strong></div>
+        <div class="rail-row" title="Spannung Phase L2 am Netzzähler (Normalbereich 207–253 V)"><span class="l">Spannung L2</span><strong class="v dim" id="gridVoltL2">&ndash;</strong></div>
+        <div class="rail-row" title="Spannung Phase L3 am Netzzähler (Normalbereich 207–253 V)"><span class="l">Spannung L3</span><strong class="v dim" id="gridVoltL3">&ndash;</strong></div>
+        <div class="rail-row" title="Netzfrequenz am Netzzähler (Normalbereich 49,8–50,2 Hz)"><span class="l">Netzfrequenz</span><strong class="v dim" id="gridFreq">&ndash;</strong></div>
       </div>
 
       <!-- Zweite Victron-Anlage am selben Hausanschluss (services/multi-gx,
@@ -617,7 +630,7 @@
 <script src="/eos-plan-summary.js?v=20261102-beschriftungen"></script>
 <script src="/peak-shaving-view.js?v=20261026"></script>
 <script src="/license-banner.js?v=20261105-lizenz-umzug"></script>
-<script src="/app.js?v=20261105-lizenz-umzug"></script>
+<script src="/app.js?v=20261105-release110"></script>
 <script src="/leitstand-charts.js?v=20261102-energiebilanz-lastwarnung"></script>
 <script src="/ev-weekly-editor.js?v=20261027"></script>
 <script src="/ev-tile.js?v=20261027-wochenplan"></script>

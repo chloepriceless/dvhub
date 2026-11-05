@@ -127,6 +127,67 @@ function readRequiredNumberInput(rawValue, label) {
   return { ok: true, value };
 }
 
+// Kachel „Netz · Zähler“ (05.11.2026): Spannung L1–L3 und Netzfrequenz des
+// Netzzählers aus /api/status (gridVoltage = Frische nach der Server-Uhr,
+// victron.gridVoltage = Rohwert mit Messzeit). Ohne Werte „–“, nie 0; veraltete
+// Werte gedimmt mit Hinweis. Markiert wird eine Phase außerhalb 207–253 V
+// (230 V ± 10 %) bzw. eine Frequenz außerhalb 49,8–50,2 Hz — nur bei frischen Werten.
+function gridMeterView(status) {
+  const fresh = status && status.gridVoltage;
+  const raw = status && status.victron && status.victron.gridVoltage;
+  const state = fresh && fresh.ok === true ? 'ok' : (fresh && fresh.reason === 'voltage_stale' && raw ? 'stale' : 'none');
+  const src = state === 'ok' ? fresh : (state === 'stale' ? raw : null);
+  const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+  const cell = (v, digits, unit, lo, hi) => {
+    if (!src || !isNum(v)) return { text: '–', cls: 'dim' };
+    const text = `${v.toFixed(digits).replace('.', ',')} ${unit}`;
+    if (state !== 'ok') return { text, cls: 'dim' };
+    return { text, cls: v < lo || v > hi ? 'warn' : '' };
+  };
+  const rows = {
+    l1: cell(src && src.l1, 1, 'V', 207, 253),
+    l2: cell(src && src.l2, 1, 'V', 207, 253),
+    l3: cell(src && src.l3, 1, 'V', 207, 253),
+    freq: cell(src && src.frequencyHz, 2, 'Hz', 49.8, 50.2),
+  };
+  let chip = null;
+  if (state === 'stale') {
+    const at = raw && isNum(raw.updatedAt) ? new Date(raw.updatedAt) : null;
+    chip = {
+      text: at ? `veraltet · Stand ${at.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}` : 'veraltet',
+      tone: 'warn',
+      title: `Keine frischen Werte vom Netzzähler (älter als 2 Minuten)${raw && raw.error ? ` — ${raw.error}` : ''}`,
+    };
+  } else if (state === 'none') {
+    const err = (raw && raw.error) || (fresh && fresh.error) || '';
+    chip = {
+      text: 'keine Werte',
+      tone: '',
+      title: `Die Messquelle liefert keine Netzspannung${err ? ` (${err})` : ''}.`,
+    };
+  } else if ([rows.l1, rows.l2, rows.l3, rows.freq].some((r) => r.cls === 'warn')) {
+    chip = { text: 'außerhalb Norm', tone: 'warn', title: 'Spannung außerhalb 207–253 V oder Frequenz außerhalb 49,8–50,2 Hz.' };
+  }
+  return { state, rows, chip };
+}
+
+function renderGridMeterCard(status) {
+  const v = gridMeterView(status);
+  setText('gridVoltL1', v.rows.l1.text, v.rows.l1.cls);
+  setText('gridVoltL2', v.rows.l2.text, v.rows.l2.cls);
+  setText('gridVoltL3', v.rows.l3.text, v.rows.l3.cls);
+  setText('gridFreq', v.rows.freq.text, v.rows.freq.cls);
+  const chip = document.getElementById('gridMeterChip');
+  if (!chip) return;
+  chip.hidden = !v.chip;
+  chip.classList.remove('ok', 'warn', 'danger');
+  if (v.chip) {
+    if (v.chip.tone) chip.classList.add(v.chip.tone);
+    chip.title = v.chip.title || '';
+    setText('gridMeterState', v.chip.text);
+  }
+}
+
 // DVhub Powerflow Constellation — handle to the mounted component.
 let powerflowInstance = null;
 
@@ -2330,6 +2391,8 @@ function renderDashboardStatus(status) {
     setText('total', `${status.meter?.grid_total_w ?? '-'} W`, status.meter?.grid_total_w < 0 ? 'ok' : (status.meter?.grid_total_w > 0 ? 'off' : ''));
     updateFlowDiagram(status);
   });
+
+  safeRender('dashboard.grid-meter', () => renderGridMeterCard(status));
 
   safeRender('dashboard.victron-battery', () => {
     const vic = status.victron || {};
