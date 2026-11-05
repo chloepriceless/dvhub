@@ -38,6 +38,11 @@ verweist hierher.
   beim Verbinden auf und verbindet nicht, wenn er auf die Box selbst, eine Link-local- oder 0-Adresse zeigt. Vorher
   wurde beim Speichern nur eine Adresse in Ziffern geprüft. Umleitungen folgen diese Abrufe nicht mehr.
 
+### Geändert
+
+- **Hinweis zum VRM-Feld** (Issue #32): Bei mehreren Anlagen im VRM-Konto ist die Site-ID der sichere Weg; mit der
+  Portal-ID sucht DVhub die passende Anlage selbst (Integrationen → VRM-Cloud und Einstellungen → Historie-Import).
+
 ### Geändert (Lizenz)
 
 - **Kopierter Lizenzzustand bindet nicht mehr von selbst.** Startet eine Box mit dem Lizenzzustand einer anderen Box

@@ -1619,7 +1619,7 @@ function buildFieldDefinitions() {
       label: 'VRM-Portal-ID oder Site-ID',
       type: 'text',
       empty: 'blank',
-      help: 'Site-ID (Zahl aus der VRM-Adresszeile, z. B. 123456) oder VRM-Portal-ID (12 Zeichen, VRM → Einstellungen → Allgemeines). Eine Portal-ID wird mit dem Token automatisch in die Site-ID aufgelöst.'
+      help: 'Site-ID (Zahl aus der VRM-Adresszeile, z. B. 123456) oder VRM-Portal-ID (12 Zeichen, VRM → Einstellungen → Allgemeines). Bei mehreren Anlagen im VRM-Konto ist die Site-ID der sichere Weg; mit der Portal-ID sucht DVhub die passende Anlage selbst (über den Token).'
     },
     {
       section: 'telemetry',
