@@ -65,6 +65,7 @@ function mqttConfigView(mqttCfg) {
 }
 import { vollastViertelstunden, extensionFromVollast, countNegativeQuarterSlots } from './eeg-extension.js';
 import { buildVictronAlarmsPayload } from './victron-alarms.js';
+import { freshGridVoltage } from './services/grid-voltage.js';
 import { buildWorkerBackedStatusResponse, buildHistoryImportStatusResponse, capVictronPvForDisplay } from './runtime-state.js';
 import { buildOptimizerRunPayload } from './telemetry-runtime.js';
 import { redactConfig, redactUrlCreds, dropSecretsForChangedTargets, unchangedSecretPaths } from './config-redaction.js';
@@ -2633,6 +2634,9 @@ export function createApiRoutes(ctx) {
     // (payload.victron.freeze), nicht das Web-Prozess-`state` — sonst bliebe das
     // Banner im Split-Prozess-Betrieb dauerhaft leer.
     payload.telemetryFreeze = payload.victron?.freeze || null;
+    // Netzspannung L1–L3 + Frequenz (services/grid-voltage.js): Rohwert steht in
+    // payload.victron.gridVoltage, hier die Frische nach der Server-Uhr (Leitstand).
+    payload.gridVoltage = freshGridVoltage(payload.victron?.gridVoltage, now);
     // Systemhinweise (Einspeisegrenze, unbekannter DV-Befehl, Speicherplatz …):
     // Leitstand zeigt sie als Hinweisleiste (app.js renderSystemWarnings).
     payload.systemWarnings = Array.isArray(state.systemWarnings)

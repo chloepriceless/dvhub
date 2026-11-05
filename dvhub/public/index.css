@@ -120,6 +120,10 @@
 .rail-card-head .dot-auto { background:var(--violet); color:var(--violet); }
 .rail-card-head .dot-ctrl { background:var(--accent); color:var(--accent); }
 .rail-card-head .dot-ev { background:var(--violet); color:var(--violet); }
+.rail-card-head .dot-grid { background:var(--pink); color:var(--pink); }
+/* Netz · Zähler: Chip darf auf dem Handy umbrechen statt die Kachel zu sprengen. */
+#gridMeterCard .rail-card-head { flex-wrap:wrap; gap:6px; }
+#gridMeterCard .rail-row .v { white-space:nowrap; }
 
 .rail-big {
   font-family:var(--f-brand); font-weight:600;

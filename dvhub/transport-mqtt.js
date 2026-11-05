@@ -348,6 +348,7 @@ export function createMqttTransport(victronConfig, options = {}) {
     if (v !== undefined) {
       cache[topic] = { value: v, ts: Date.now() };
       rememberAlarmTopic(topic, v);
+      rememberGridAcTopic(topic, v);
     } else {
       noteUnusablePayload(topic, payload);
     }
@@ -375,6 +376,41 @@ export function createMqttTransport(victronConfig, options = {}) {
     return { vebus: { ...alarmCache.vebus }, battery: { ...alarmCache.battery }, ts: alarmCache.ts };
   }
 
+  // Netzspannung L1–L3 + Frequenz des Netzzählers (05.11.2026, zentral in
+  // services/grid-voltage.js): N/<portal>/grid/<instanz>/Ac/L1..L3/Voltage und
+  // /Ac/Frequency. Die Instanz ist anlagenspezifisch (Wildcard-Abo unten);
+  // je Instanz abgelegt, gelesen wird die niedrigste mit frischen Werten.
+  const GRID_AC_PATHS = { 'Ac/L1/Voltage': 'l1', 'Ac/L2/Voltage': 'l2', 'Ac/L3/Voltage': 'l3', 'Ac/Frequency': 'frequencyHz' };
+  const gridAcCache = {};
+  function rememberGridAcTopic(topic, value) {
+    const parts = String(topic).split('/');
+    if (parts[0] !== 'N' || parts[2] !== 'grid' || !parts[3]) return;
+    const field = GRID_AC_PATHS[parts.slice(4).join('/')];
+    if (!field) return;
+    (gridAcCache[parts[3]] ??= {})[field] = { value, ts: Date.now() };
+  }
+  function readGridVoltage() {
+    if (schema !== 'venus') return null;
+    const instances = Object.keys(gridAcCache).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+    for (const instance of instances) {
+      const e = gridAcCache[instance];
+      const fresh = (k) => (mqttCacheEntryFresh(e[k], staleMaxAgeMs) && Number.isFinite(Number(e[k].value)) ? e[k] : null);
+      const phases = ['l1', 'l2', 'l3'].map(fresh);
+      if (!phases.some(Boolean)) continue;
+      const f = fresh('frequencyHz');
+      return {
+        l1: phases[0] ? Number(phases[0].value) : null,
+        l2: phases[1] ? Number(phases[1].value) : null,
+        l3: phases[2] ? Number(phases[2].value) : null,
+        frequencyHz: f ? Number(f.value) : null,
+        // Empfangszeit = die der ältesten verwendeten Phase.
+        ts: Math.min(...phases.filter(Boolean).map((p) => Number(p.ts) || 0)),
+        instance,
+      };
+    }
+    return null;
+  }
+
   function sendKeepalive() {
     if (schema !== 'venus') return;   // DVhub-Schema kennt kein Keepalive
     if (client?.connected) {
@@ -386,6 +422,7 @@ export function createMqttTransport(victronConfig, options = {}) {
   return {
     type: 'mqtt',
     getAlarmValues,
+    readGridVoltage,
 
     async init() {
       if (pushOnly) {
@@ -466,7 +503,11 @@ export function createMqttTransport(victronConfig, options = {}) {
           const topics = Object.values(READ_TOPICS).concat((schema === 'venus' && portalId) ? [
             `N/${portalId}/vebus/+/Alarms/#`,
             `N/${portalId}/vebus/+/VebusError`,
-            `N/${portalId}/battery/+/Alarms/#`
+            `N/${portalId}/battery/+/Alarms/#`,
+            `N/${portalId}/grid/+/Ac/L1/Voltage`,
+            `N/${portalId}/grid/+/Ac/L2/Voltage`,
+            `N/${portalId}/grid/+/Ac/L3/Voltage`,
+            `N/${portalId}/grid/+/Ac/Frequency`
           ] : []);
           client.subscribe(topics, { qos }, (err) => {
             if (settled) return;

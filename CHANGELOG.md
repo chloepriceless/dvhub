@@ -10,6 +10,20 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **Netzspannung und Netzfrequenz zentral.** Der Poller liest L1–L3-Spannung und Netzfrequenz des Netzzählers mit
+  und legt sie in den Live-Zustand (`/api/status`: `victron.gridVoltage` roh, `gridVoltage` mit Frische-Prüfung).
+  Der Leitstand zeigt sie in der neuen Kachel „Netz · Zähler“: L1–L3 in V (eine Nachkommastelle), Frequenz in Hz
+  (zwei Nachkommastellen), „–“ ohne Werte, „veraltet“ bei Werten älter als 2 min; gelb markiert, wenn eine Phase
+  außerhalb 207–253 V oder die Frequenz außerhalb 49,8–50,2 Hz liegt. Quellen: Victron per Modbus (alle 30 s, nur lesend), Victron
+  per MQTT (Grid-Topics) und der SPiNE EnergyLink (aus derselben Abfrage wie die Netzleistung). Andere Profile
+  definieren keine Spannungsfelder, dort bleibt der Wert leer.
+- **Netzzähler-Unit wird gesucht (GH #33).** Victron per Modbus fragt zuerst die konfigurierte bzw. System-Unit
+  (Standard 100). Antwortet sie mit einer Modbus-Ausnahme (z. B. 10) oder ohne Spannung, sucht DVhub einmalig die
+  Unit des Netzzählers (`com.victronenergy.grid`, z. B. 40 beim VM-3P75CT oder 31 beim EM540), merkt sie und nennt
+  sie im Log (`victron_grid_meter_found`). Eine Zeitüberschreitung löst keine Suche aus.
+
 ### Geändert
 
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
