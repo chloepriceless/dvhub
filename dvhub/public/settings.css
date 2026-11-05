@@ -2497,6 +2497,8 @@ body.dv-modal-open {
   font-size: 11px;
   color: var(--text-dim);
 }
+/* 390 px: drei Knöpfe und der Bestell-Link passen nicht in eine Zeile (1.0.10). */
+.license-actions { flex-wrap: wrap; }
 .license-shop-link {
   margin-left: auto;
   color: var(--text-dim);

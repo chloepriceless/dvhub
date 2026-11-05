@@ -145,6 +145,17 @@
    Auswahl, darunter das Zahlenfeld nur bei „Eigener Wert …“. */
 .config-preset { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .config-preset > [hidden] { display: none; }
+/* Volle Breite wie die übrigen Felder der Karte: die Kappung
+   `.settings-aurora .config-select { max-width: 280px }` (settings.css) hebt sonst nur
+   `.config-row:has(> .config-select) > …` auf — hier stecken die Felder in .config-preset. */
+.settings-aurora .config-preset > .config-select,
+.settings-aurora .config-preset > .config-input {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin-left: 0;
+  text-align: left;
+}
 
 /* ── Boolean: echter iOS-/Apple-Switch (Label links, Slider rechts) ──────── */
 :is(#areaGrid-plant, #areaGrid-prices, #areaGrid-mode, #areaGrid-devices, #areaGrid-grid, #areaGrid-prognosis, #areaGrid-sys, #areaGrid-shares) .config-row:has(.config-checkbox) {
