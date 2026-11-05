@@ -1275,6 +1275,10 @@ function readStatus(s) {
     current: cur,
     previous: st.previous && fs.existsSync(path.join(releasesDir(s), st.previous)) ? st.previous : null,
     running,
+    // Offenes Auftrags-Journal (nach dem Umschalten, vor der Bestätigung): der
+    // Server wartet dann auf resume statt den Kanalwechsel als verwaist
+    // zurückzusetzen (routes/admin-routes.js settleChannelSwitch).
+    pending: !!st.pending,
     status,
     migration: { skipped: st.migrate?.skipped || null, attempts: st.migrate?.attempts || 0, done_at: st.migrate?.done_at || null },
   };

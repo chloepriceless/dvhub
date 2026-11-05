@@ -1313,3 +1313,17 @@ test('dev-Paket aus build-release.sh/publish-release.sh: Box auf 1.0.9 prüft un
     r.close();
   }
 });
+
+// 1.0.9-Rest Kanal-Rückfall: der Server darf einen Kanalwechsel nach dem
+// Umschalten nicht als verwaist zurücksetzen — status meldet dafür, ob ein
+// Auftrags-Journal (pending) offen ist.
+test('status meldet ein offenes Journal (pending) für den Kanal-Rückfall', { timeout: 60000 }, async () => {
+  const r = await makeRig();
+  try {
+    r.seed('1.0.9');
+    assert.equal(JSON.parse((await r.run('status')).out).pending, false);
+    const st = JSON.parse(fs.readFileSync(path.join(r.state, 'state.json'), 'utf8'));
+    fs.writeFileSync(path.join(r.state, 'state.json'), JSON.stringify({ ...st, pending: { op: 'install', version: '1.0.10', previous: '1.0.9', boot_id: 'x', at: new Date().toISOString() } }));
+    assert.equal(JSON.parse((await r.run('status')).out).pending, true);
+  } finally { r.close(); }
+});

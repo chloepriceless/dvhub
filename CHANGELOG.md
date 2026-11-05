@@ -24,6 +24,13 @@ verweist hierher.
   (auch im Betrieb mit getrenntem Runtime-Prozess), und der Leitstand zeigt „Deine Lizenz ist jetzt auf einer anderen
   Box …“ mit dem Weg zurück (Einstellungen → Lizenz → „An diese Box binden“).
 
+### Behoben
+
+- **Kanalwechsel nach langem Stromausfall.** Fiel bei einem Kanalwechsel auf einer Paket-Box der Strom nach dem
+  Umschalten länger als 90 Minuten aus, setzte DVhub den Kanal zurück, bevor die Box den Auftrag nach dem Neustart
+  abschließen konnte. Jetzt gilt ein stiller Auftrag nur vor dem Umschalten als abgebrochen; danach entscheidet die
+  Fortsetzung nach dem Neustart.
+
 ### Geändert (Lizenz)
 
 - **Kopierter Lizenzzustand bindet nicht mehr von selbst.** Startet eine Box mit dem Lizenzzustand einer anderen Box

@@ -501,18 +501,19 @@ describe('Paket-Box: Kanal-Rückfall, wenn der Kanalwechsel-Auftrag scheitert', 
   const switchThen = async (statusFn, opts = {}) => {
     let raw = { updateChannel: 'dev', httpPort: 8080 };
     let st = null;
+    let top = {};
     const h = harness({
       channel: 'dev',
       getRawCfg: () => raw,
       saveAndApplyConfig: (c) => { if (opts.failSave?.()) throw new Error('ENOSPC'); raw = JSON.parse(JSON.stringify(c)); },
-      helper: { check: CHECK, install: { ok: true, started: true }, status: () => ({ stdout: JSON.stringify({ ok: true, mode: 'package', status: st }), stderr: '' }) },
+      helper: { check: CHECK, install: { ok: true, started: true }, status: () => ({ stdout: JSON.stringify({ ok: true, mode: 'package', ...top, status: st }), stderr: '' }) },
     });
     const before = new Date(Date.now() - 1000).toISOString();
     const r = await h.call('POST', '/api/admin/update/channel', { channel: 'stable' });
     assert.equal(r.code, 200, JSON.stringify(r.payload));
     assert.equal(raw.updateChannel, 'stable', 'gespeichert, sobald angenommen');
     st = statusFn({ before, after: new Date(Date.now() + 5).toISOString() });
-    return { h, raw: () => raw, setRaw: (x) => { raw = x; }, setStatus: (x) => { st = x; } };
+    return { h, raw: () => raw, setRaw: (x) => { raw = x; }, setStatus: (x, more = {}) => { st = x; top = more; } };
   };
 
   for (const [state, result] of [['failed', 'failed'], ['rolled_back', 'rolled_back']]) {
@@ -634,6 +635,59 @@ describe('Paket-Box: Kanal-Rückfall, wenn der Kanalwechsel-Auftrag scheitert', 
       const log = t.h.logs.find((l) => l.event === 'update_channel_reverted');
       assert.equal(log?.result, 'abandoned');
       assert.ok(!fs.existsSync(path.join(t.h.dataDir, MARK)));
+    } finally { t.h.cleanup(); }
+  });
+
+  // 1.0.9-Rest: Strom länger als 90 min weg NACH dem Umschalten (pending
+  // gesetzt) — der Status steht dann auf switch/provision/restart/health. Der
+  // Wächter darf den Kanal nicht zurücksetzen, bevor resume fertig ist.
+  for (const phase of ['switch', 'provision', 'restart', 'health', 'rollback']) {
+    it(`Strom > 90 min weg nach dem Umschalten (Phase ${phase}): kein Rückfall, Vermerk bleibt bis resume`, async () => {
+      const t = await switchThen(({ after }) => ({ job: 'install', state: 'running', phase, started: after, updated: after }));
+      try {
+        const old = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+        const m = JSON.parse(fs.readFileSync(path.join(t.h.dataDir, MARK), 'utf8'));
+        fs.writeFileSync(path.join(t.h.dataDir, MARK), JSON.stringify({ ...m, at: new Date(Date.parse(old) - 1000).toISOString() }));
+        t.setStatus({ job: 'install', state: 'running', phase, started: old, updated: old });
+        const s = await t.h.call('GET', '/api/admin/update/status');
+        assert.equal(s.code, 200);
+        assert.equal(t.raw().updateChannel, 'stable', 'Kanal bleibt, resume entscheidet');
+        assert.ok(fs.existsSync(path.join(t.h.dataDir, MARK)), 'Vermerk bleibt');
+        assert.ok(!t.h.logs.some((l) => l.event === 'update_channel_reverted'));
+        // resume meldet ok → Kanal bleibt, Vermerk weg.
+        t.setStatus({ job: 'resume', state: 'ok', result: 'ok', started: new Date(Date.now() + 5).toISOString() });
+        await t.h.call('GET', '/api/admin/update/status');
+        assert.equal(t.raw().updateChannel, 'stable');
+        assert.ok(!fs.existsSync(path.join(t.h.dataDir, MARK)));
+      } finally { t.h.cleanup(); }
+    });
+  }
+
+  it('nach dem Umschalten nie ein resume: nach 6 h ohne Lebenszeichen verfällt der Vermerk, Kanal bleibt, Sperre frei', async () => {
+    const t = await switchThen(({ after }) => ({ job: 'install', state: 'running', phase: 'health', started: after, updated: after }));
+    try {
+      const old = new Date(Date.now() - 7 * 3600 * 1000).toISOString();
+      const m = JSON.parse(fs.readFileSync(path.join(t.h.dataDir, MARK), 'utf8'));
+      fs.writeFileSync(path.join(t.h.dataDir, MARK), JSON.stringify({ ...m, at: new Date(Date.parse(old) - 1000).toISOString() }));
+      t.setStatus({ job: 'install', state: 'running', phase: 'health', started: old, updated: old });
+      const r = await t.h.call('POST', '/api/admin/update/apply', {});
+      assert.notEqual(r.payload.error, 'channel_switch_pending', JSON.stringify(r.payload));
+      assert.equal(t.raw().updateChannel, 'stable', 'kein Rückfall — ob umgeschaltet wurde, weiß nur der Helfer');
+      assert.ok(!fs.existsSync(path.join(t.h.dataDir, MARK)));
+      assert.ok(t.h.logs.some((l) => l.event === 'update_channel_switch_expired'), JSON.stringify(t.h.logs.map((l) => l.event)));
+    } finally { t.h.cleanup(); }
+  });
+
+  it('Helfer meldet pending (Journal offen): auch in einer frühen Phase kein Rückfall', async () => {
+    const t = await switchThen(({ after }) => ({ job: 'install', state: 'running', phase: 'unpack', started: after, updated: after }));
+    try {
+      const old = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+      const m = JSON.parse(fs.readFileSync(path.join(t.h.dataDir, MARK), 'utf8'));
+      fs.writeFileSync(path.join(t.h.dataDir, MARK), JSON.stringify({ ...m, at: new Date(Date.parse(old) - 1000).toISOString() }));
+      t.setStatus({ job: 'install', state: 'running', phase: 'unpack', started: old, updated: old }, { pending: true });
+      await t.h.call('GET', '/api/admin/update/status');
+      assert.equal(t.raw().updateChannel, 'stable');
+      assert.ok(fs.existsSync(path.join(t.h.dataDir, MARK)));
     } finally { t.h.cleanup(); }
   });
 

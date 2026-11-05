@@ -86,6 +86,12 @@ const CHANNEL_SWITCH_MAX_AGE_MS = 6 * 3600 * 1000;
 // resume, und der Status bliebe für immer „running“ (Codex 6a497589, P2). Länger
 // als die längste stille Phase (post-update.sh bis 60 min, release.conf).
 const CHANNEL_SWITCH_ABANDONED_MS = 90 * 60 * 1000;
+// Verwaist heißt „der alte Stand läuft noch“ — das gilt nur für die Phasen vor
+// dem Umschalten (dvhub-release fetchAndUnpack). Ab switch ist pending gesetzt:
+// Strom weg dann → boot-hook plant resume, und erst resume entscheidet (alter
+// oder neuer Stand). Ein Rückfall vorher setzte den Kanal zurück, obwohl der
+// neue Stand womöglich schon läuft (1.0.9-Rest, Strom > 90 min weg).
+const CHANNEL_SWITCH_PRE_SWITCH_PHASES = new Set(['queued', 'start', 'index', 'download', 'verify', 'unpack']);
 const UPDATE_CHANNELS = ['stable', 'dev'];
 export const SETCAP_HELPER = '/usr/local/libexec/dvhub-setcap';
 // npm install auf einem langsamen Board braucht oft mehr als eine Minute; ein
@@ -261,7 +267,7 @@ export function createAdminRoutes(deps) {
     const p = channelSwitchPath();
     if (p) { try { fs.rmSync(p, { force: true }); } catch { /* nächster Versuch beim nächsten Status */ } }
   };
-  const settleChannelSwitch = (st) => {
+  const settleChannelSwitch = (st, helperOut = null) => {
     const m = readChannelSwitch();
     if (!m) return null;
     const mine = st && (st.job === 'install' || st.job === 'resume') && Date.parse(st.started || '') >= Date.parse(m.at);
@@ -278,6 +284,16 @@ export function createAdminRoutes(deps) {
     if (st.state === 'queued' || st.state === 'running') {
       const last = Date.parse(st.updated || st.started || '');
       if (!Number.isFinite(last) || Date.now() - last <= CHANNEL_SWITCH_ABANDONED_MS) return null;
+      // Nach dem Umschalten (Phase ab switch, oder der Helfer meldet ein
+      // offenes Journal): resume abwarten. Kommt nie eins, nach 6 h ohne
+      // Lebenszeichen aufgeben — Config bleibt, Sperre frei.
+      if (!CHANNEL_SWITCH_PRE_SWITCH_PHASES.has(st.phase || 'start') || helperOut?.pending === true) {
+        if (Date.now() - last > CHANNEL_SWITCH_MAX_AGE_MS) {
+          clearChannelSwitch();
+          pushLog('update_channel_switch_expired', { from: m.from, to: m.to, at: m.at, phase: st.phase || null });
+        }
+        return null;
+      }
       // Verwaist: der alte Stand läuft (umgeschaltet wird erst nach pending) —
       // wie ein gescheiterter Wechsel behandeln.
       abandoned = true;
@@ -310,7 +326,7 @@ export function createAdminRoutes(deps) {
     if (!readChannelSwitch()) return null;
     try {
       const r = await releaseHelper(['status'], 15000);
-      return settleChannelSwitch(r?.status);
+      return settleChannelSwitch(r?.status, r);
     } catch {
       return null;
     }
@@ -988,7 +1004,7 @@ export function createAdminRoutes(deps) {
       if (!releaseInfo()) return json(res, 200, { ok: true, mode: 'git' });
       try {
         const out = await releaseHelper(['status'], 15000);
-        const channelSwitch = settleChannelSwitch(out?.status);
+        const channelSwitch = settleChannelSwitch(out?.status, out);
         return json(res, 200, { ...out, mode: 'package', ...(channelSwitch ? { channelSwitch } : {}) });
       } catch (e) {
         return releaseError(res, e, 'update_status_error');
