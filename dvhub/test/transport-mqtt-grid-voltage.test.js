@@ -107,3 +107,25 @@ test('Venus: alle Phasen {"value":null} → invalidated statt null', () => {
   assert.equal(g.invalidated, true);
   assert.deepEqual([g.l1, g.l2, g.l3], [null, null, null]);
 });
+
+// Codex-Gegenprüfung 186f688f (P2): einphasiger Zähler — L1 läuft ab, während
+// L2/L3 weiter {"value":null} senden. Das ist „veraltet“, nicht „ungültig“.
+test('Venus: L1 abgelaufen, L2/L3 senden null → nicht invalidated (null = veraltet)', () => {
+  const t = createMqttTransport({ host: 'gx', mqtt: { portalId: 'p1', staleMaxAgeMs: 90_000 } });
+  const realNow = Date.now;
+  try {
+    const t0 = realNow();
+    Date.now = () => t0;
+    msg(t, 'N/p1/grid/31/Ac/L1/Voltage', 231);
+    Date.now = () => t0 + 60_000;
+    msg(t, 'N/p1/grid/31/Ac/L2/Voltage', null);
+    msg(t, 'N/p1/grid/31/Ac/L3/Voltage', null);
+    Date.now = () => t0 + 91_000;
+    assert.equal(t.readGridVoltage(), null, 'L1 nur abgelaufen, nicht ungültig gemeldet');
+    // Meldet danach auch L1 null, hat keine Phase mehr einen Zahlenwert → ungültig.
+    msg(t, 'N/p1/grid/31/Ac/L1/Voltage', null);
+    assert.equal(t.readGridVoltage().invalidated, true);
+  } finally {
+    Date.now = realNow;
+  }
+});

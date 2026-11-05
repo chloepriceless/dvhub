@@ -399,7 +399,12 @@ export function createMqttTransport(victronConfig, options = {}) {
       const phases = ['l1', 'l2', 'l3'].map(fresh);
       if (!phases.some(Boolean)) {
         // {"value":null} innerhalb der Frische-Grenze = Venus meldet die Werte
-        // ausdrücklich ungültig (Codex-Gegenprüfung 19f1d2bf, P2).
+        // ausdrücklich ungültig (Codex-Gegenprüfung 19f1d2bf, P2) — aber nur,
+        // wenn KEINE Phase mehr einen Zahlenwert hat. Ein abgelaufener Wert
+        // (einphasiger Zähler: L1 alt, L2/L3 senden null) ist „veraltet“
+        // (Codex-Gegenprüfung 186f688f, P2).
+        const anyNumber = ['l1', 'l2', 'l3'].some((k) => e[k] && e[k].value !== null && Number.isFinite(Number(e[k].value)));
+        if (anyNumber) continue;
         for (const k of ['l1', 'l2', 'l3']) {
           const x = e[k];
           if (x && x.value === null && (!(staleMaxAgeMs > 0) || Date.now() - x.ts <= staleMaxAgeMs)) invalidatedAt = Math.max(invalidatedAt, x.ts);
