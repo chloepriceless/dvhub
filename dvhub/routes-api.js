@@ -13,6 +13,7 @@ import os from 'node:os';
 import { isIP } from 'node:net';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isInternalHost, isPrivateOrLoopbackHost, isAllowedOutboundUrl, sameOrigin } from './services/host-address.js';
+import { outboundFetch } from './services/outbound-fetch.js';
 import path from 'node:path';
 import * as crypto from 'node:crypto';
 import { PUSH_HEADER as INPUT_PUSH_HEADER, PUSH_FIELDS as INPUT_PUSH_FIELDS, parsePushFields as parseInputPushFields } from './services/input-push.js';
@@ -1215,6 +1216,9 @@ export function createApiRoutes(ctx) {
   // error carries statusCode=502 so the EPEX handlers' existing catch maps it
   // to a clean upstream-error response rather than an uncaught 500.
   const EPEX_MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MB
+  // epex.priceApiUrl aus der Config: Name beim Verbinden auflösen und prüfen
+  // (services/outbound-fetch.js, wie ntfy; 1.0.10). ctx.outboundFetch für Tests.
+  const priceFetch = (...a) => (ctx.outboundFetch || outboundFetch)(...a);
   async function readJsonCapped(r, maxBytes = EPEX_MAX_RESPONSE_BYTES) {
     const cl = Number(r.headers.get('content-length'));
     if (Number.isFinite(cl) && cl > maxBytes) {
@@ -1797,7 +1801,8 @@ export function createApiRoutes(ctx) {
         : 'unsigned';
       const sep = pushUrl.includes('?') ? '&' : '?';
       const kumaStatus = status === 'down' ? 'down' : 'up';
-      const res = await fetch(pushUrl + sep + 'status=' + kumaStatus + '&msg=' + encodeURIComponent(msg) + '&ping=', {
+      // Name beim Verbinden prüfen (wie ntfy, 1.0.10).
+      const res = await (ctx.outboundFetch || outboundFetch)(pushUrl + sep + 'status=' + kumaStatus + '&msg=' + encodeURIComponent(msg) + '&ping=', {
         signal: AbortSignal.timeout(10000),
         headers: {
           'x-dvhub-signature': sig,
@@ -8050,7 +8055,7 @@ export function createApiRoutes(ctx) {
       const cfg = getCfg();
       try {
         const baseUrl = cfg.epex.priceApiUrl || 'https://dvhub.online';
-        const r = await fetch(`${baseUrl}/api/zones`, { signal: AbortSignal.timeout(10000) });
+        const r = await priceFetch(`${baseUrl}/api/zones`, { signal: AbortSignal.timeout(10000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await readJsonCapped(r);
         return json(res, 200, data);
@@ -8067,7 +8072,7 @@ export function createApiRoutes(ctx) {
       try {
         const baseUrl = cfg.epex.priceApiUrl || 'https://dvhub.online';
         const zone = url.searchParams.get('zone') || cfg.epex.bzn || 'DE-LU';
-        const r = await fetch(`${baseUrl}/api/prices/gaps?zone=${encodeURIComponent(zone)}`, { signal: AbortSignal.timeout(10000) });
+        const r = await priceFetch(`${baseUrl}/api/prices/gaps?zone=${encodeURIComponent(zone)}`, { signal: AbortSignal.timeout(10000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await readJsonCapped(r);
         return json(res, 200, data);
@@ -8092,7 +8097,7 @@ export function createApiRoutes(ctx) {
         if (!/^[A-Z]{2}(-[A-Z]{2,4})?$/.test(zone)) {
           return json(res, 400, { error: 'Invalid zone format' });
         }
-        const r = await fetch(`${baseUrl}/api/backfill`, {
+        const r = await priceFetch(`${baseUrl}/api/backfill`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ zone, start }),

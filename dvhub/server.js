@@ -2,6 +2,7 @@ import path from 'node:path';
 import { applySystemTimeZone } from './services/system-timezone.js';
 import http from 'node:http';
 import { isInternalHost } from './services/host-address.js';
+import { outboundFetch } from './services/outbound-fetch.js';
 import https from 'node:https';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -2955,7 +2956,9 @@ if (IS_RUNTIME_PROCESS) {
           : 'unsigned';
         const sep = pushUrl.includes('?') ? '&' : '?';
         const kumaStatus = status === 'down' ? 'down' : 'up';
-        await fetch(pushUrl + sep + 'status=' + kumaStatus + '&msg=' + encodeURIComponent(msg) + '&ping=', {
+        // Name beim Verbinden auflösen und prüfen (wie ntfy, 1.0.10): ein Name,
+        // der auf die Box zeigt, kam an isAllowedHeartbeatUrl vorbei.
+        await outboundFetch(pushUrl + sep + 'status=' + kumaStatus + '&msg=' + encodeURIComponent(msg) + '&ping=', {
           signal: AbortSignal.timeout(10000),
           headers: {
             'x-dvhub-signature': sig,

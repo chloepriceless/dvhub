@@ -33,6 +33,10 @@ verweist hierher.
 - **Relay: Sperrliste entkoppelter Handys.** Mit Anfragen aus wenigen IPv6-/48-Netzen ließ sich die Liste der
   entkoppelten Handys über die Gesamtgrenze treiben und damit leeren — ein entkoppeltes Handy kam dann wieder herein,
   solange die Box offline war. Jetzt verdrängt die Gesamtgrenze den ältesten Eintrag des /48 mit den meisten Einträgen.
+- **Preis-API und Uptime-Kuma prüfen Namen beim Verbinden.** Wie schon beim ntfy-Kanal löst DVhub den Namen der
+  eingestellten Preis-Adresse (`epex.priceApiUrl`, auch Nachimport und Marktwerte) und der Uptime-Kuma-Push-Adresse
+  beim Verbinden auf und verbindet nicht, wenn er auf die Box selbst, eine Link-local- oder 0-Adresse zeigt. Vorher
+  wurde beim Speichern nur eine Adresse in Ziffern geprüft. Umleitungen folgen diese Abrufe nicht mehr.
 
 ### Geändert (Lizenz)
 

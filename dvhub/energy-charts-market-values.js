@@ -16,6 +16,8 @@ const DEFAULT_FETCH_COOLDOWN_MS = 6 * 3600_000;
 // 'ready' = nur Energy-Charts (wird für abgeschlossene Jahre einmal nachgeholt).
 const OFFICIAL_STATUS = 'official';
 
+import { outboundFetch } from './services/outbound-fetch.js';
+
 function localizedNames(field) {
   const values = Array.isArray(field) ? field : [field];
   return values.flatMap((entry) => {
@@ -183,10 +185,11 @@ export async function fetchCentralSolarMarketValues({ year, baseUrl, fetchImpl =
  * direkt: Monate amtlich (netztransparenz), sonst Energy-Charts; Jahresmarktwert
  * von Energy-Charts. Wirft nur, wenn keine Quelle etwas liefert.
  */
-export async function fetchSolarMarketValues({ year, fetchImpl = globalThis.fetch, centralBaseUrl = null } = {}) {
+export async function fetchSolarMarketValues({ year, fetchImpl = globalThis.fetch, centralBaseUrl = null, centralFetchImpl = outboundFetch } = {}) {
   if (centralBaseUrl) {
     try {
-      const central = await fetchCentralSolarMarketValues({ year, baseUrl: centralBaseUrl, fetchImpl });
+      // centralBaseUrl = epex.priceApiUrl (Config): Namen beim Verbinden prüfen (1.0.10).
+      const central = await fetchCentralSolarMarketValues({ year, baseUrl: centralBaseUrl, fetchImpl: centralFetchImpl });
       if (central.official || Object.keys(central.annualCtKwhByYear).length > 0) return central;
     } catch {
       // dvhub.online nicht erreichbar → direkte Quellen
@@ -312,7 +315,8 @@ export function createEnergyChartsMarketValueService({
   fetchCooldownMs = DEFAULT_FETCH_COOLDOWN_MS,
   // Basis-URL der Preis-API (dvhub.online), wenn die Box ihre Börsenpreise dort
   // holt; null = nur direkte Quellen.
-  getCentralBaseUrl = () => null
+  getCentralBaseUrl = () => null,
+  centralFetchImpl = outboundFetch
 } = {}) {
   const cache = new Map();
   const pendingByYear = new Map();
@@ -350,7 +354,8 @@ export function createEnergyChartsMarketValueService({
         cache.set(numericYear, fetchSolarMarketValues({
           year: numericYear,
           fetchImpl,
-          centralBaseUrl: getCentralBaseUrl()
+          centralBaseUrl: getCentralBaseUrl(),
+          centralFetchImpl
         }).catch((error) => {
           cache.delete(numericYear);
           throw error;
@@ -368,7 +373,8 @@ export function createEnergyChartsMarketValueService({
       pendingByYear.set(numericYear, Promise.resolve(fetchSolarMarketValues({
         year: numericYear,
         fetchImpl,
-        centralBaseUrl: getCentralBaseUrl()
+        centralBaseUrl: getCentralBaseUrl(),
+        centralFetchImpl
       })).then(async (summary) => {
         await persistSummary({ ...summary, year: numericYear }, marketValueStore);
         await marketValueStore?.markSolarMarketValueAttempt?.({

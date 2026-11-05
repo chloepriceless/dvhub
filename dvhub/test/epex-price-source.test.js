@@ -25,7 +25,9 @@ function makeCtx(priceSource) {
     telemetrySafeWrite: (fn) => { try { fn(); } catch { /* ignore */ } },
     telemetryStore: { writeSamples: () => {} },
     healthTracker: { recordSample: () => {} },
-    publishRuntimeSnapshot: () => {}
+    publishRuntimeSnapshot: () => {},
+    // priceApiUrl über den geprüften Abruf (services/outbound-fetch.js) — hier der fetch-Stub.
+    outboundFetch: (...a) => globalThis.fetch(...a)
   };
   return { ctx, recorded, state };
 }
