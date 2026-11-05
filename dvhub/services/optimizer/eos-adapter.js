@@ -166,7 +166,9 @@ export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now()) {
     const memo = Array.isArray(opt?.eosUnknownPlanCutoffs) ? opt.eosUnknownPlanCutoffs : [];
     let hit = memo.find((m) => m.key === key);
     if (!hit) {
-      hit = { key, cutoffMs: unknownRunCutoffMs(opt, nowMs, berlinDayEndMs(nowMs - EOS_UNKNOWN_RUN_LOOKBACK_MS)) };
+      // Die beim ersten Sehen gültige Preisgrenze zählt mit (Codex 298128c1).
+      const firstMs = [unknownRunCutoffMs(opt, nowMs, berlinDayEndMs(nowMs - EOS_UNKNOWN_RUN_LOOKBACK_MS)), priceEndMs].filter(Number.isFinite);
+      hit = { key, cutoffMs: firstMs.length ? Math.min(...firstMs) : NaN };
       if (opt && typeof opt === 'object') opt.eosUnknownPlanCutoffs = [...memo, hit].slice(-UNKNOWN_PLAN_MEMO_MAX);
     }
     cutoffs.push(hit.cutoffMs);

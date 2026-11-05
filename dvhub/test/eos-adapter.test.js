@@ -1124,3 +1124,13 @@ test('pullGridSetpoints: Plan ohne generated_at — anderer Inhalt, eigene Grenz
   assert.deepEqual(await slotsWith(state, undefined, 2500), ALL3, 'neu gerechneter Plan');
   assert.deepEqual(await slotsWith(state, undefined, 3000), FIRST1, 'der alte Plan behält seine Grenze');
 });
+
+// Codex 298128c1 (P2): Beim ersten Sehen eines Plans ohne generated_at zählt die
+// dann gültige Preisgrenze mit — spätere, weitere echte Preise schalten den
+// unveränderten Plan nicht frei.
+test('pullGridSetpoints: Plan ohne generated_at — Preisgrenze beim ersten Sehen bleibt', async () => {
+  const state = { optimizer: { eosRealPriceEnd: '2026-06-06T22:00:00.000Z' } };
+  assert.deepEqual(await slotsWith(state, undefined), FIRST1);
+  state.optimizer.eosRealPriceEnd = '2026-06-07T22:00:00.000Z';
+  assert.deepEqual(await slotsWith(state, undefined), FIRST1);
+});
