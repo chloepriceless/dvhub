@@ -382,7 +382,9 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // Pausiert und zu wenig Luft für den Mindeststrom: nicht anlaufen lassen.
       if (drawNow === 0 && give < (Number(d.minW) || 0)) continue;
       const next = Math.max(cap, drawNow + give);
-      if (next === cap && drawNow + give < Number(d.maxW)) continue;
+      // Gerundet ohne Zuwachs: Schritt nicht verbrauchen, nächstes Gerät
+      // (Codex 7055aa8c, P2).
+      if (drawNow + give < Number(d.maxW) && down(next) <= cap) continue;
       if (!finite(d.maxW) || next >= Number(d.maxW)) {
         delete st.caps[d.id];
         delete st.capAt[d.id];
@@ -476,7 +478,12 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         list.push({ id: `heater:${h.id}`, kind: 'heater', name: h.name || 'Heizstab', currentW: cur, maxW: Number(h.plan?.maxPowerW) || null, minW: Number(h.plan?.minPowerW) || 0 });
       }
     }
+    // Die Hauptwallbox über EEBUS steht schon als „wallbox“ in der Liste —
+    // nicht noch einmal als EEBUS-Gerät zählen (Gesamtprüfung 3, P1).
+    const wallboxSki = list.some((d) => d.id === 'wallbox') && c?.wallbox?.type === 'eebus'
+      ? String(c.wallbox.eebus?.ski || '').trim().toLowerCase() : null;
     for (const d of ctx.eebus?.consumptionDevices?.() || []) {
+      if (wallboxSki && String(d.ski || d.id?.replace(/^eebus:/, '') || '').toLowerCase() === wallboxSki) continue;
       list.push({ id: d.id, kind: 'eebus', name: d.name || 'EEBUS-Gerät', currentW: finite(d.powerW) ? Number(d.powerW) : null, maxW: Number(d.maxW) || null, minW: 0 });
     }
     return list;
@@ -539,7 +546,8 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         .then((r) => {
           // Grenze nicht angekommen: laut melden, statt eine Grenze anzuzeigen,
           // die an der Wallbox nicht gilt (Gesamtprüfung 2, P1).
-          if (r && r.ok === false) {
+          // „skipped“ (Weitergabe aus, Freigabe erfolgt) ist kein Fehler (Codex 7055aa8c, P2).
+          if (r && r.ok === false && r.error) {
             log('grid_connection_wallbox_failed', { capW: st.caps.wallbox ?? null, error: r.error || r.skipped || 'unknown' }, 'warn');
           }
         })

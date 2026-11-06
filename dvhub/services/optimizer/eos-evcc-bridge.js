@@ -562,12 +562,18 @@ export function createEosEvccBridge(deps) {
         force = true;
       }
       // Der Plan übernimmt nur, wenn er auch steuern darf (Pro) — Codex bf805c50, P2.
-      if (pendingRestore && bc.enabled && isProActive() !== false) setPendingRestore(null);
+      // … und nur für dasselbe Ziel (evcc, gleicher Ladepunkt) — sonst bliebe ein
+      // anderer Ladepunkt aus und sein Modus ginge verloren (Gesamtprüfung 3, P2).
+      if (pendingRestore && bc.enabled && isProActive() !== false && bc.charger === 'evcc'
+          && (pendingRestore.loadpoint ?? bc.loadpoint) === bc.loadpoint) setPendingRestore(null);
       if (pendingRestore) {
         const pr = pendingRestore; // fest für diesen Takt, auch über awaits hinweg
         // Der Ladepunkt, an dem der Modus vorgemerkt wurde — nicht der jetzt
         // eingestellte (Codex 4bf1eb18, P2).
         const prBc = { ...bc, charger: 'evcc', loadpoint: pr.loadpoint ?? bc.loadpoint };
+        // Steuert der Plan ein ANDERES Ziel, läuft er danach normal weiter —
+        // die Vormerkung hält ihn nicht auf (Gesamtprüfung 3, P2).
+        const planElsewhere = bc.enabled && isProActive() !== false;
         // Erst ohne jeden Deckel zurück in den eigenen evcc-Modus — der hielte
         // auch eine Teil-Grenze (z. B. 0 → 5 kW) nicht ein; bis dahin bleibt die
         // Wallbox im Netzanschluss-Wächter eingeschrieben (Gesamtprüfung, P1).
@@ -576,16 +582,19 @@ export function createEosEvccBridge(deps) {
             const res = await hardStopper(cfg, prBc, { type: 'evcc' }).stop();
             pr.stopped = res?.ok === true;
             if (pendingRestore === pr) persistOverride();
-            if (!res?.ok) return { ok: false, error: res?.error || 'evcc stop failed' };
+            if (!res?.ok && !planElsewhere) return { ok: false, error: res?.error || 'evcc stop failed' };
           }
-          return { ok: true, deferred: true };
+          if (!planElsewhere) return { ok: true, deferred: true };
+        } else {
+          const res = await getCharger(cfg, { ...prBc, stopMode: pr.mode }).stop();
+          if (res?.ok) {
+            pushLog('ev_override_restored', { mode: pr.mode, loadpoint: prBc.loadpoint });
+            if (pendingRestore === pr) setPendingRestore(null);
+            if (!planElsewhere) { lastSent = null; return { ok: true, restored: true }; }
+          } else if (!planElsewhere) {
+            return { ok: false, error: res?.error || 'evcc mode restore failed' };
+          }
         }
-        const res = await getCharger(cfg, { ...prBc, stopMode: pr.mode }).stop();
-        if (!res?.ok) return { ok: false, error: res?.error || 'evcc mode restore failed' };
-        pushLog('ev_override_restored', { mode: pr.mode });
-        if (pendingRestore === pr) setPendingRestore(null);
-        lastSent = null;
-        return { ok: true, restored: true };
       }
       if (!bc.enabled) {
         // §14a EnWG gilt für die Wallbox auch dann, wenn EOS sie nicht steuert:
@@ -605,6 +614,8 @@ export function createEosEvccBridge(deps) {
         // einer direkt angebundenen Box trotzdem durch (Gesamtprüfung 2, P1).
         const capped = await gridCapOnlyTick(cfg, bc);
         if (capped) return capped;
+        // Grenze weg: die eigene Grenz-Vorgabe zurücknehmen (Gesamtprüfung 3, P2).
+        if (lastSent?.gridCap === true) await releaseIfNeeded(cfg, bc);
         return { ok: false, skipped: 'pro required' };
       }
 

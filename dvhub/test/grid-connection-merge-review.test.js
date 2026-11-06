@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createEosEvccBridge } from '../services/optimizer/eos-evcc-bridge.js';
-import { createGridConnectionGuard } from '../services/grid-connection/index.js';
+import { createGridConnectionGuard, createGuardState, guardStep, resolveGridConnection, RELEASE_TICKS, HOLD_AFTER_CUT_MS } from '../services/grid-connection/index.js';
 import { createEvccAdapter } from '../services/wallbox/adapters.js';
 
 function bridgeHarness({ type = 'evcc', stopMode = 'minpv', plan = 1, enabled = true, capW = null, override = null, chargeFails = false } = {}) {
@@ -128,16 +128,18 @@ function evccMulti({ enabled = true, override = null } = {}) {
   const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: enabled, evEvccControl: enabled, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' } };
   const t = Date.now();
   const ref = { paused: false, now: t };
+  const h = {};
   const store = { value: override };
   const bridge = createEosEvccBridge({
     getCfg: () => cfg,
     getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
     getCharger: (_c, bc) => createEvccAdapter(evcc, () => bc.loadpoint, () => bc.stopMode),
     isPaused: () => ref.paused, now: () => ref.now,
+    getGridCapW: () => h.capW ?? null,
     loadOverride: () => store.value,
     saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
   });
-  const h = { bridge, modes, fail, noEffect, calls, cfg, ref, store, failStop: null };
+  Object.assign(h, { bridge, modes, fail, noEffect, calls, cfg, ref, store, failStop: null, capW: null });
   const origSetMode = evcc.setMode;
   evcc.setMode = async (id, m) => (m === 'off' && h.failStop === id ? { ok: false, error: 'timeout' } : origSetMode(id, m));
   return h;
@@ -397,4 +399,105 @@ test('Codex 009826e9 P2: gestopptes „Sofort laden“ an LP2 hat Vorrang vor ei
   assert.equal(h.modes[2], 'off');
   await h.bridge.clearOverride();
   assert.equal(h.store.value?.loadpoint, 2);
+});
+
+// --- Gesamtprüfung des Zweigs, Runde 3 / Codex 7055aa8c --------------------------------
+
+const SKI = 'a'.repeat(40);
+const RG = resolveGridConnection({ gridConnection: { limitKw: 29 } });
+const fresh = (importW) => ({ fresh: true, reason: null, importW, phasesW: null });
+const wallbox = (currentW) => ({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW, maxW: 11000, minW: 4140 });
+function run(st, n, args, t0) { for (let i = 0; i < n; i += 1) guardStep(st, { resolved: RG, now: t0 + i * 2000, ...args }); }
+
+test('Gesamtprüfung 3 P1: EEBUS-Wallbox zählt nur einmal (nicht als Wallbox UND als EEBUS-Gerät)', () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'eebus', eebus: { ski: SKI } } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -39000 }, victron: {}, schedule: {}, ctrl: {} };
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    chargerStatus: { fresh: () => ({ powerW: 8000 }) },
+    eebus: { consumptionDevices: () => [{ id: `eebus:${SKI}`, ski: SKI, name: 'Wallbox', maxW: 11000, powerW: 8000 }] },
+    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null },
+  };
+  const guard = createGridConnectionGuard(ctx);
+  guard.tick();
+  const s = guard.summary();
+  assert.deepEqual(s.caps.map((c) => c.id), ['wallbox'], 'nur einmal geführt');
+  assert.equal(s.exhausted, true, '11 kW zu viel, nur 8 kW steuerbar → gemeldet');
+});
+
+test('Gesamtprüfung 3 P2: ohne Pro gibt die Brücke eine Grenz-Sperre wieder frei, wenn die Grenze weg ist', async () => {
+  const calls = [];
+  let capW = 0;
+  const cfg = { optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type: 'openevse' } };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null,
+    getCharger: () => ({
+      type: 'openevse', isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop']); return { ok: true }; },
+      release: async () => { calls.push(['release']); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true }),
+    }),
+    getGridCapW: () => capW,
+    isProActive: () => false,
+  });
+  await bridge.apply();
+  assert.deepEqual(calls.at(-1), ['stop']);
+  capW = null;
+  await bridge.apply();
+  assert.deepEqual(calls.at(-1), ['release']);
+});
+
+test('Gesamtprüfung 3 P2: vorgemerkte Rückkehr an LP1 bleibt, wenn der Plan LP2 übernimmt', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  await h.bridge.clearOverride();
+  assert.equal(h.store.value?.loadpoint, 1);
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  h.cfg.optimizer.eosOptimizeEv = true; h.cfg.optimizer.evEvccControl = true;
+  h.ref.paused = false;
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'pv', 'LP1 zurück auf „pv“ statt verloren');
+});
+
+test('Codex 7055aa8c P2: gerundete Freigabe ohne Zuwachs verbraucht den Schritt nicht — die Wallbox kommt dran', () => {
+  const st = createGuardState();
+  st.caps = { wallbox: 0, 'heater:h1': 5000 };
+  st.capAt = { wallbox: 0, 'heater:h1': 0 };
+  // Luft 6 050 − 1 000 = 5 050 W: Heizstab 0 + 5 050 → gerundet 5 000 = alte Grenze.
+  const big = { id: 'heater:h1', kind: 'heater', name: 'Heizstab', currentW: 0, maxW: 9000, minW: 0 };
+  run(st, RELEASE_TICKS, { meas: fresh(21950), devices: [wallbox(0), big], battery: {} }, HOLD_AFTER_CUT_MS);
+  assert.equal(st.caps.wallbox, 5000, 'Wallbox bekommt die Luft (≥ Mindestleistung)');
+});
+
+test('Codex 7055aa8c P2: erfolgreiche Freigabe (Weitergabe aus) wird nicht als Fehler gemeldet', async () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'openevse', openevse: { url: 'http://192.0.2.5' } } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -33000 }, victron: {}, schedule: {}, ctrl: {} };
+  const logs = [];
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: (e, d) => logs.push([e, d]),
+    chargerStatus: { fresh: () => ({ powerW: 11000 }) },
+    eosEvccBridge: { apply: async () => ({ ok: false, skipped: 'disabled' }), getOverride: () => null },
+  };
+  createGridConnectionGuard(ctx).tick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(logs.some(([e]) => e === 'grid_connection_wallbox_failed'), false);
+});
+
+test('Gesamtprüfung 3 P2: vorgemerkte Rückkehr an LP1 hält den Plan für LP2 nicht auf (Teil-Deckel)', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  await h.bridge.clearOverride();
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  h.cfg.optimizer.eosOptimizeEv = true; h.cfg.optimizer.evEvccControl = true;
+  h.ref.paused = false;
+  h.capW = 8000;
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'off', 'LP1 bleibt aus, solange ein Deckel steht');
+  assert.equal(h.modes[2], 'now', 'Plan lädt LP2 (gedeckelt)');
+  assert.ok(h.calls.some((c) => c[0] === 'maxcurrent' && c[1] === 2 && c[2] <= 11.6));
 });
