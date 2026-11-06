@@ -175,6 +175,7 @@ export function createEebusService(ctx, deps = {}) {
   const emsLimits = new Map();
   let lastShares = {};
   let lastSharesUntil = null;
+  let lastSharesUntilById = null;
   let lastConfigKey = null;
   let prevConsumptionW = null;
   const energy = loadJson('energy.json') || { importWh: 0, exportWh: 0, lastDailyImportWh: null, lastDailyExportWh: null };
@@ -685,9 +686,10 @@ export function createEebusService(ctx, deps = {}) {
    * @param {Record<string, number|null>} shares
    * @param {number|null} untilMs  Ende der Grenze (für die Dauer am Gerät)
    */
-  function applyConsumptionShares(shares, untilMs) {
+  function applyConsumptionShares(shares, untilMs, untilById = null) {
     lastShares = shares || {};
     lastSharesUntil = untilMs ?? null;
+    lastSharesUntilById = untilById && typeof untilById === 'object' ? untilById : null;
     const list = consumptionDevices();
     const active = {};
     for (const d of list) {
@@ -696,7 +698,7 @@ export function createEebusService(ctx, deps = {}) {
       const w = share == null ? ems : (ems == null ? share : Math.min(share, ems));
       if (w != null) active[d.id] = w;
     }
-    applyDeviceLimits(active, list.filter((d) => active[d.id] != null), { until: untilMs });
+    applyDeviceLimits(active, list.filter((d) => active[d.id] != null), { until: untilMs, untilById: lastSharesUntilById });
   }
 
   /** Geräteinfo für die EEBUS-Wallbox: verbunden, LPC vorhanden, Leistung, Name. */
@@ -748,7 +750,7 @@ export function createEebusService(ctx, deps = {}) {
       // Neu schreiben erzwingen; beim Aufheben bleibt der Eintrag, damit die
       // Aufteilung die Grenze am Gerät zurücknimmt.
       if (w != null) deviceLimitCache.delete(d.entities.lpc);
-      applyConsumptionShares(lastShares, lastSharesUntil);
+      applyConsumptionShares(lastShares, lastSharesUntil, lastSharesUntilById);
       return { ok: true };
     }
     if (w == null) return send({ cmd: 'device_limit', uc: 'lpc', entity: d.entities.lpc, w: 0, duration_s: 0, active: false });
@@ -817,12 +819,14 @@ export function createEebusService(ctx, deps = {}) {
       active.add(cns.entity);
       const w = shares[cns.id];
       const cached = deviceLimitCache.get(cns.entity);
-      const until = lpc.until ?? null;
+      // Ablauf je Gerät (Netzanschluss-Grenze ohne Ablauf), sonst der gemeinsame.
+      const until = lpc.untilById && Object.prototype.hasOwnProperty.call(lpc.untilById, cns.id)
+        ? (lpc.untilById[cns.id] ?? null) : (lpc.until ?? null);
       // Gleiche Leistung, aber andere Dauer (z. B. §14a endet, die Netzanschluss-
       // Grenze bleibt) → neu schicken, sonst liefe sie am Gerät ab.
       if (cached && cached.w === w && cached.until === until && t - cached.at < DEVICE_LIMIT_REFRESH_MS) continue;
       deviceLimitCache.set(cns.entity, { w, until, at: t });
-      const durationS = lpc.until ? Math.max(60, Math.round((lpc.until - t) / 1000)) : 0;
+      const durationS = until ? Math.max(60, Math.round((until - t) / 1000)) : 0;
       send({ cmd: 'device_limit', uc: 'lpc', entity: cns.entity, w, duration_s: durationS, active: true })
         .then((r) => { if (!r?.ok) deviceLimitCache.delete(cns.entity); });
     }

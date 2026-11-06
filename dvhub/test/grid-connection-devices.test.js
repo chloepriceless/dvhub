@@ -23,7 +23,7 @@ function p14aSetup({ gcEebus = {}, p14aLimitW = null, until = null } = {}) {
     state, getCfg: () => cfg, pushLog: () => {},
     eebus: {
       consumptionDevices: () => [{ id: 'eebus:hp', kind: 'waermepumpe', maxW: 3000, powerW: 2500 }],
-      applyConsumptionShares: (shares, until) => applied.push({ shares, until }),
+      applyConsumptionShares: (shares, until, untilById) => applied.push({ shares, until, untilById }),
     },
     gridConnection: { eebusCaps: () => gcEebus },
   };
@@ -310,5 +310,29 @@ test('Gesamtprüfung P1: Netzanschluss-Grenze an EEBUS läuft nicht mit der §14
   s.svc.update();
   // §14a-Ende in 60 s — die engere Netzanschluss-Grenze hängt nicht daran.
   assert.equal(s.applied.at(-1).shares['eebus:hp'], 1000);
-  assert.equal(s.applied.at(-1).until, null);
+  assert.equal(s.applied.at(-1).untilById['eebus:hp'], null);
+});
+
+test('Codex fb52348a P2: Ablaufzeit je Gerät — nur das Gerät mit bindender Netzanschluss-Grenze verliert die §14a-Dauer', () => {
+  const cfg = { gridPositiveMeans: 'grid_import', optimizer: { maxChargeW: 10000 }, paragraph14a: {} };
+  const until = Date.now() + 60_000;
+  const state = { ctrl: { eebusConsumptionLimitW: 7560, eebusConsumptionLimitUntil: until }, victron: {}, meter: { grid_total_w: 1000 } };
+  const applied = [];
+  const ctx = {
+    state, getCfg: () => cfg, pushLog: () => {},
+    eebus: {
+      consumptionDevices: () => [
+        { id: 'eebus:a', kind: 'waermepumpe', maxW: 3000, powerW: 2500 },
+        { id: 'eebus:b', kind: 'klima', maxW: 3000, powerW: 2500 },
+      ],
+      applyConsumptionShares: (shares, untilMs, untilById) => applied.push({ shares, untilMs, untilById }),
+    },
+    gridConnection: { eebusCaps: () => ({ 'eebus:a': 500 }) },
+  };
+  createParagraph14aService(ctx, { setInterval: () => 0, clearInterval: () => {} }).update();
+  const last = applied.at(-1);
+  assert.equal(last.shares['eebus:a'], 500);
+  assert.equal(last.untilMs, until, 'Standard bleibt die §14a-Dauer');
+  assert.equal(last.untilById['eebus:a'], null, 'Gerät A: Netzanschluss-Grenze ohne Ablauf');
+  assert.equal(Object.prototype.hasOwnProperty.call(last.untilById, 'eebus:b'), false, 'Gerät B behält die §14a-Dauer');
 });

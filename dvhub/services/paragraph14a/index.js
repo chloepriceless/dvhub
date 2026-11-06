@@ -269,8 +269,12 @@ export function createParagraph14aService(ctx, deps = {}) {
     const merged = mergeDeviceCaps(eebusShares, gcCaps);
     // Eine Netzanschluss-Grenze hat keine Ablaufzeit — DVhub nimmt sie selbst
     // zurück. Bestimmt sie ein Gerät, geht die Grenze ohne §14a-Dauer raus.
-    const gcBinds = gcCaps && Object.entries(gcCaps).some(([id, w]) => w != null && merged[id] === w);
-    ctx.eebus?.applyConsumptionShares?.(merged, gcBinds ? null : (state.ctrl?.eebusConsumptionLimitUntil ?? null));
+    // Je Gerät: nur wo sie bindet, sonst gilt die §14a-Dauer (Codex fb52348a, P2).
+    const untilById = {};
+    for (const [id, w] of Object.entries(gcCaps || {})) {
+      if (w != null && merged[id] === w) untilById[id] = null;
+    }
+    ctx.eebus?.applyConsumptionShares?.(merged, state.ctrl?.eebusConsumptionLimitUntil ?? null, untilById);
   }
 
   function start() {
