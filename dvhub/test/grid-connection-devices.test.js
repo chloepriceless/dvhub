@@ -163,3 +163,27 @@ test('Codex P2 (Runde 2): Pause während „Sofort laden“ behält den Override
   await bridge.clearOverride();
   assert.deepEqual(calls.at(-1), ['stop', 'pv'], 'evcc zurück auf „pv“');
 });
+
+test('Codex P1 (Runde 3): „Sofort laden“ endet während der Pause — evcc bleibt aus, bis die Grenze es erlaubt', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'minpv' };
+  const calls = [];
+  const mk = (bc) => ({
+    type: 'evcc', isConfigured: () => true,
+    charge: async (a) => { calls.push(['charge', a]); return { ok: true }; },
+    stop: async () => { calls.push(['stop', bc.stopMode]); return { ok: true }; },
+    release: async () => { calls.push(['release']); return { ok: true }; },
+    status: async () => ({ ok: true, connected: true, raw: { mode: 'off' } }),
+  });
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
+  let capW = 0;
+  const bridge = createEosEvccBridge({ getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => capW, loadOverride: () => override });
+  await bridge.apply();
+  assert.deepEqual(calls.at(-1), ['stop', 'off']);
+  await bridge.clearOverride();
+  assert.equal(calls.some((c) => c[0] === 'stop' && c[1] === 'minpv'), false, 'nicht zurück auf minpv, solange die Grenze pausiert');
+  await bridge.tick();
+  assert.equal(calls.some((c) => c[1] === 'minpv'), false);
+  capW = null;
+  await bridge.tick();
+  assert.deepEqual(calls.at(-1), ['stop', 'minpv'], 'Grenze weg: evcc zurück in den alten Modus');
+});

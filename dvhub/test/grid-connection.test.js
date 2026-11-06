@@ -342,3 +342,12 @@ test('Codex P2 (Runde 2): Multi regelt 50 W über dem Sollwert ein — kein schl
   }
   assert.equal(st.caps.wallbox, undefined);
 });
+
+test('Codex P2 (Runde 3): kleiner Abstand — über der harten Grenze gilt die Akku-Frist auch innerhalb der Einregel-Toleranz', () => {
+  const r = resolveGridConnection({ gridConnection: { limitKw: 29, marginW: 100 } }); // Ziel 28 900 W
+  const st = createGuardState();
+  for (let t = 0; t <= 30_000; t += 2000) {
+    guardStep(st, { resolved: r, now: t, meas: fresh(29200), devices: [wallbox(11000)], battery: { setpointW: 28900, chargeW: 8000 } });
+  }
+  assert.ok(st.caps.wallbox != null, 'Wallbox gekürzt');
+});

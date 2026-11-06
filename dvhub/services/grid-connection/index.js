@@ -314,7 +314,9 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   if (sp == null || chargeW <= 0 || (st.batteryStuckAt != null && now - st.batteryStuckAt > BATTERY_STUCK_HOLD_MS)) {
     st.batteryStuckAt = null;
   }
-  if (gap > BATTERY_TRACK_TOLERANCE_W && batteryPending > 0 && excess > 0) {
+  // Über der harten Grenze zählt die Frist immer — auch innerhalb der
+  // Einregel-Toleranz (kleiner Sicherheitsabstand; Codex 184bcdcf, P2).
+  if ((gap > BATTERY_TRACK_TOLERANCE_W || hard) && batteryPending > 0 && excess > 0) {
     st.batteryPendingSince ??= now;
     if (st.batteryStuckAt == null && now - st.batteryPendingSince > BATTERY_OBEY_MS) st.batteryStuckAt = now;
   } else {

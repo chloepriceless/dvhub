@@ -243,6 +243,15 @@ export function createEosEvccBridge(deps) {
     return charger.stop();
   }
 
+  // evcc-Modus, der nach dem Ende eines pausierten „Sofort laden“ noch
+  // zurückgestellt werden muss, sobald die Grenze das Laden wieder erlaubt.
+  let pendingRestore = null;
+  function gridCapBlocks(bc) {
+    const capW = getGridCapW();
+    if (capW == null || !Number.isFinite(Number(capW))) return false;
+    return applyGridCap({ action: 'charge', currentA: bc.maxCurrentA }, bc, capW).action === 'stop';
+  }
+
   // Sicherheits-Pause (§14a oder Netzanschluss: Grenze unter dem Mindeststrom):
   // wirklich nicht laden — evcc im Modus „aus“, eine direkte Box mit stop(),
   // egal welcher Stopp-Modus eingestellt ist. „pv“/„minpv“ lüde sonst weiter
@@ -294,6 +303,15 @@ export function createEosEvccBridge(deps) {
       // bekannten Vorher-Modus bliebe es in „now“ und luede weiter. Dann gilt
       // der Stopp-Modus der Bruecke.
       const mode = ended?.prevMode || bc.stopMode;
+      // Pausiert eine Grenze (§14a/Netzanschluss) gerade das Laden, bleibt evcc
+      // aus, bis sie es erlaubt — sonst liefe z. B. „minpv“ trotz Pause wieder
+      // an (Codex 184bcdcf, P1). runTick holt den Modus danach nach.
+      if (gridCapBlocks(bc)) {
+        pendingRestore = { mode };
+        lastSent = { ...lastSent, override: false };
+        pushLog('ev_override_restore_deferred', { mode, reason });
+        return { ok: true, deferred: true };
+      }
       const res = await getCharger(cfg, { ...bc, charger: 'evcc', stopMode: mode }).stop();
       if (res?.ok) lastSent = null;
       else pushLog('ev_override_error', { charger: 'evcc', error: res?.error || 'stop failed', reason });
@@ -467,6 +485,16 @@ export function createEosEvccBridge(deps) {
         const res = await overrideTick(cfg, bc, force);
         if (res) return res;
         force = true;
+      }
+      if (pendingRestore && bc.enabled) pendingRestore = null; // der Plan übernimmt
+      if (!bc.enabled && pendingRestore) {
+        if (gridCapBlocks(bc)) return { ok: true, deferred: true };
+        const res = await getCharger(cfg, { ...bc, charger: 'evcc', stopMode: pendingRestore.mode }).stop();
+        if (!res?.ok) return { ok: false, error: res?.error || 'evcc mode restore failed' };
+        pushLog('ev_override_restored', { mode: pendingRestore.mode });
+        pendingRestore = null;
+        lastSent = null;
+        return { ok: true, restored: true };
       }
       if (!bc.enabled) {
         // §14a EnWG gilt für die Wallbox auch dann, wenn EOS sie nicht steuert:
