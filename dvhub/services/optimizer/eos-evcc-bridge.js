@@ -222,7 +222,9 @@ export function createEosEvccBridge(deps) {
   // auch ein früher bestätigter Ladepunkt, von dem die Einstellung inzwischen
   // weggewechselt ist, lädt sonst unbemerkt weiter.
   const unconfirmedCharges = new Map(); // targetKey → { charger, loadpoint, action, mode, override, confirmed, at }
-  const targetKey = (bc) => `${bc.charger}:${bc.loadpoint}`;
+  // Direkte Boxen sind EIN Ziel, egal welcher evcc-Ladepunkt eingestellt ist
+  // (Codex 6bb9f304, P2); nur evcc unterscheidet Ladepunkte.
+  const targetKey = (bc) => (bc.charger === 'evcc' ? `evcc:${bc.loadpoint}` : String(bc.charger));
   // Jeder Weg zur Wallbox geht hierdurch: Ergebnis von charge/stop/release je
   // Ziel festhalten. release() an evcc tut nichts — es bestätigt keinen Stopp.
   function getCharger(cfg, bc) {
@@ -273,7 +275,9 @@ export function createEosEvccBridge(deps) {
     const saved = loadOverride();
     if (saved && (saved.kind === 'stop' || Number(saved.powerW) > 0)) override = saved;
     // Unbestätigter Stopp bleibt unbestätigt (Codex 148df991, P2).
-    else if (saved?.kind === 'restore' && typeof saved.mode === 'string') {
+    else if (saved?.kind === 'gridcap' && typeof saved.charger === 'string') {
+      lastSent = { key: null, charger: saved.charger, loadpoint: saved.loadpoint ?? null, action: saved.action || 'stop', currentA: null, gridCap: true, at: null };
+    } else if (saved?.kind === 'restore' && typeof saved.mode === 'string') {
       pendingRestore = {
         mode: saved.mode, stopped: saved.stopped === true,
         loadpoint: Number.isInteger(Number(saved.loadpoint)) && Number(saved.loadpoint) >= 1 ? Number(saved.loadpoint) : null,
@@ -283,9 +287,13 @@ export function createEosEvccBridge(deps) {
   const isStopOverride = () => override?.kind === 'stop';
 
   function persistOverride() {
+    // Vorrang: Override, dann vorgemerkte evcc-Rückkehr, dann eine Grenz-
+    // Vorgabe an einer direkten Box — die bleibt an der Box stehen (z. B.
+    // OpenEVSE ohne auto_release) und muss nach einem Neustart wieder
+    // freigegeben werden können (Gesamtprüfung 5, P2).
     const value = override ?? (pendingRestore
       ? { kind: 'restore', mode: pendingRestore.mode, stopped: pendingRestore.stopped === true, loadpoint: pendingRestore.loadpoint ?? null }
-      : null);
+      : (lastSent?.gridCap === true ? { kind: 'gridcap', charger: lastSent.charger, loadpoint: lastSent.loadpoint ?? null, action: lastSent.action } : null));
     try { saveOverride(value); } catch (e) { pushLog('ev_override_persist_error', { error: e?.message || String(e) }); }
   }
   function setPendingRestore(value) {
@@ -324,11 +332,20 @@ export function createEosEvccBridge(deps) {
   // "disabled"-Claim in der OpenEVSE stehen und das Auto laedt nie wieder.
   async function releaseIfNeeded(cfg, bc) {
     if (!lastSent) return null;
-    const charger = getCharger(cfg, { ...bc, charger: lastSent.charger || bc.charger });
-    const res = await charger.release();
+    const target = { ...bc, charger: lastSent.charger || bc.charger, loadpoint: lastSent.loadpoint ?? bc.loadpoint };
+    const charger = getCharger(cfg, target);
+    // openWB ohne übergeordneten Regler: release() tut nichts, die letzte
+    // Vorgabe bliebe stehen. Nach einer Grenz-Vorgabe bekommt die Box ihren
+    // vollen Strom zurück (Gesamtprüfung 5, P2).
+    const res = charger.type === 'openwb' && lastSent.gridCap === true
+      ? await charger.charge(bc.maxCurrentA)
+      : await charger.release();
     if (res?.ok) {
       pushLog('eos_wallbox_released', { charger: charger.type });
+      const wasGridCap = lastSent.gridCap === true;
       lastSent = null;
+      if (charger.type === 'openwb' && wasGridCap) unconfirmedCharges.delete(targetKey(target));
+      if (wasGridCap && !override && !pendingRestore) persistOverride();
     }
     return res;
   }
@@ -539,6 +556,7 @@ export function createEosEvccBridge(deps) {
       return { ok: false, error: lastError };
     }
     lastSent = { key, charger: bc.charger, action: slot.action, currentA: slot.currentA ?? null, loadpoint: bc.loadpoint, at: new Date(now()).toISOString(), gridCap: true };
+    if (!override && !pendingRestore) persistOverride();
     pushLog('paragraph14a_wallbox_capped', { charger: charger.type, capW: Number(capW), action: slot.action, currentA: slot.currentA ?? null });
     return { ok: true, sent: lastSent, gridCapW: Number(capW) };
   }
@@ -752,7 +770,17 @@ export function createEosEvccBridge(deps) {
             // Abfrage gescheitert: Zustand unbekannt — nichts senden, aber das Ziel
             // für den nächsten Not-Halt behalten (Codex bad876b1, P1).
             if (!st?.ok) { skipped.push('state_unknown'); failed.push({ ...ref, charger: bc.charger, loadpoint: bc.loadpoint }); continue; }
-            if ((st.raw?.mode ?? null) !== (ref.mode || 'now')) { skipped.push('not_dvhub_state'); continue; }
+            if ((st.raw?.mode ?? null) !== (ref.mode || 'now')) {
+              // Frisch bestätigt: jemand hat von Hand umgestellt — DVhubs Anspruch
+              // auf dieses Ziel ist erloschen (Codex 6bb9f304, Gesamtprüfung 5, P2).
+              const k = targetKey(bc);
+              unconfirmedCharges.delete(k);
+              if (lastSent && targetKey({ charger: lastSent.charger || bc0.charger, loadpoint: lastSent.loadpoint ?? bc0.loadpoint }) === k) {
+                lastSent = { ...lastSent, action: 'manual', key: null };
+              }
+              skipped.push('not_dvhub_state');
+              continue;
+            }
           }
           const res = await hardStopper(cfg, bc, charger).stop();
           if (!res?.ok) { errors.push(res?.error || 'wallbox write failed'); failed.push({ ...ref, charger: bc.charger, loadpoint: bc.loadpoint }); continue; }
@@ -818,7 +846,7 @@ export function createEosEvccBridge(deps) {
       // Der Modus von vorher wird im Lock bestimmt: ein laufender Takt kann
       // gerade eine vorgemerkte Rückkehr abschließen (Codex 9ac450c4, ea036ff7).
       return locked(async () => {
-        if (!override && pendingRestore && (pendingRestore.loadpoint ?? bc.loadpoint) === bc.loadpoint) {
+        if (!override && pendingRestore && bc.charger === 'evcc' && (pendingRestore.loadpoint ?? bc.loadpoint) === bc.loadpoint) {
           // Abgegeben wird die Vormerkung erst, wenn ein Befehl des Overrides
           // ankommt (handOff) — scheitert er oder endet der Override vorher,
           // stellt runTick den Modus weiter her.

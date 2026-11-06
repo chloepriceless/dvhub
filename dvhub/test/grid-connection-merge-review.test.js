@@ -585,24 +585,112 @@ test('Codex 82e96f40 P2: behaltener „Sofort laden“-Merker gilt nach dem Not-
   const calls = [];
   let stopAckFails = false;
   let paused = false;
-  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type: 'openevse' } };
+  const t = Date.now();
+  const cfg = { optimizer: { eosOptimizeEv: true, evEvccControl: true, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type: 'evcc' } };
   const bridge = createEosEvccBridge({
-    getCfg: () => cfg, getSolution: async () => null,
+    getCfg: () => cfg,
+    getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
     getCharger: (_c, bc) => ({
-      type: 'openevse', isConfigured: () => true,
-      charge: async (a) => { calls.push(['charge', a, bc.loadpoint]); return { ok: true }; },
-      stop: async () => { calls.push(['stop', bc.loadpoint]); return stopAckFails && bc.loadpoint === 2 ? { ok: false, error: 'timeout' } : { ok: true }; },
-      release: async () => { calls.push(['release']); return { ok: true }; },
-      status: async () => ({ ok: true, connected: true }),
+      type: bc.charger, isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', bc.charger, a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop', bc.charger]); return stopAckFails && bc.charger === 'openevse' ? { ok: false, error: 'timeout' } : { ok: true }; },
+      release: async () => { calls.push(['release', bc.charger]); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true, raw: { mode: 'now' } }),
     }),
-    isPaused: () => paused,
+    isPaused: () => paused, now: () => t,
   });
-  await bridge.setOverride({ kind: 'charge', powerW: 11000 });   // Ziel :1
-  cfg.optimizer.evEvccLoadpoint = 2;
-  await bridge.apply();                                         // Ziel :2
+  await bridge.tick();                                           // evcc:1 bestätigt
+  cfg.wallbox.type = 'openevse';
+  cfg.optimizer.eosOptimizeEv = false; cfg.optimizer.evEvccControl = false;
+  await bridge.setOverride({ kind: 'charge', powerW: 11000 });   // openevse, Override
   paused = true; stopAckFails = true;
-  await bridge.emergencyStop();
+  await bridge.emergencyStop();                                  // evcc gestoppt, openevse-Stopp ohne Quittung
   paused = false; stopAckFails = false;
   await bridge.tick();
-  assert.deepEqual(calls.at(-1).slice(0, 1), ['charge'], 'lädt nach dem Aufheben wieder');
+  assert.deepEqual(calls.at(-1).slice(0, 2), ['charge', 'openevse'], 'lädt nach dem Aufheben wieder');
+});
+
+// --- Codex 6bb9f304 / Gesamtprüfung des Zweigs, Runde 5 ----------------------------------
+
+function directBridge({ type = 'openevse', enabled = false, store = { value: null }, capRef = { capW: null }, paused = { v: false } } = {}) {
+  const calls = [];
+  const cfg = { optimizer: { eosOptimizeEv: enabled, evEvccControl: enabled, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type } };
+  const make = () => createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null,
+    getCharger: (_c, bc) => ({
+      type: bc.charger, isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', bc.charger, a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop', bc.charger, bc.stopMode]); return { ok: true }; },
+      release: async () => { calls.push(['release', bc.charger]); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true, raw: { mode: 'now' } }),
+    }),
+    getGridCapW: () => capRef.capW,
+    isPaused: () => paused.v,
+    loadOverride: () => store.value,
+    saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
+  });
+  return { make, bridge: make(), calls, cfg, store, capRef, paused };
+}
+
+test('Codex 6bb9f304 P2: direkte Box gilt unabhängig vom Ladepunkt als EIN Ziel — nach release() kein Not-Halt-Befehl', async () => {
+  const h = directBridge();
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });   // openevse, LP1
+  h.cfg.optimizer.evEvccLoadpoint = 2;                              // Einstellung geändert …
+  await h.bridge.clearOverride();                                   // … dann release()
+  h.paused.v = true;
+  const n = h.calls.length;
+  await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n);
+});
+
+test('Codex 6bb9f304/Runde 5 P2: frisch bestätigte Hand-Umstellung löscht DVhubs Anspruch — eine spätere Handladung bleibt unberührt', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.modes[1] = 'minpv';                  // von Hand umgestellt
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();        // nichts, aber Anspruch weg
+  h.modes[1] = 'now';                    // von Hand gestartet
+  h.ref.paused = false;
+  h.ref.paused = true;
+  const n = h.calls.length;
+  await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n, 'Handladung nicht gestoppt');
+  assert.equal(h.modes[1], 'now');
+});
+
+test('Runde 5 P2: Grenz-Sperre einer direkten Box übersteht einen Neustart und wird danach freigegeben', async () => {
+  const store = { value: null };
+  const capRef = { capW: 0 };
+  const h = directBridge({ store, capRef });
+  await h.bridge.apply();
+  assert.deepEqual(h.calls.at(-1), ['stop', 'openevse', 'pv']);
+  const fresh = h.make();               // Neustart
+  capRef.capW = null;
+  await fresh.tick();
+  assert.deepEqual(h.calls.at(-1), ['release', 'openevse']);
+});
+
+test('Runde 5 P2: openWB — Grenze weg, dann bekommt die Box ihren vollen Strom zurück (release() tut dort nichts)', async () => {
+  const capRef = { capW: 0 };
+  const h = directBridge({ type: 'openwb', capRef });
+  await h.bridge.apply();
+  assert.equal(h.calls.at(-1)[0], 'stop');
+  capRef.capW = null;
+  await h.bridge.apply();
+  assert.deepEqual(h.calls.at(-1), ['charge', 'openwb', 16]);
+});
+
+test('Runde 5 P2: vorgemerkte evcc-Rückkehr geht nicht an ein „Sofort laden“ einer direkten Box über', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  await h.bridge.clearOverride();       // evcc LP1: „pv“ vorgemerkt
+  assert.equal(h.bridge.hasPendingRestore(), true);
+  h.cfg.wallbox.type = 'openevse';
+  h.ref.paused = false;
+  h.capW = 0;                           // Deckel: evcc-Rückkehr wartet
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  assert.equal(h.bridge.getOverride().inheritsRestore, undefined);
+  assert.equal(h.bridge.hasPendingRestore(), true, 'evcc-Rückkehr bleibt');
 });
