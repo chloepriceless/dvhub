@@ -414,6 +414,10 @@ export function createEosEvccBridge(deps) {
       return { ok: false, skipped: 'pro required' };
     }
 
+    // Ziel dieses Overrides merken: der Not-Halt erkennt daran, welcher
+    // Merker zum laufenden „Sofort laden“ gehört (Codex bad876b1).
+    override.target = { charger: bc.charger, loadpoint: bc.loadpoint };
+
     let st;
     try { st = await charger.status(); } catch { st = null; }
     if (st?.ok && st.connected === true && !override.seenConnected) {
@@ -746,7 +750,10 @@ export function createEosEvccBridge(deps) {
             // Frisch gelesen, nicht aus dem Abfrage-Puffer (Codex 45b7c40b, P2).
             try { st = await charger.status({ fresh: true }); } catch { st = null; }
             // Im Zweifel nicht senden: nur wenn evcc nachweislich noch in DVhubs Modus steht.
-            if (!st?.ok || (st.raw?.mode ?? null) !== (ref.mode || 'now')) { skipped.push('not_dvhub_state'); continue; }
+            // Abfrage gescheitert: Zustand unbekannt — nichts senden, aber das Ziel
+            // für den nächsten Not-Halt behalten (Codex bad876b1, P1).
+            if (!st?.ok) { skipped.push('state_unknown'); failed.push({ ...ref, charger: bc.charger, loadpoint: bc.loadpoint }); continue; }
+            if ((st.raw?.mode ?? null) !== (ref.mode || 'now')) { skipped.push('not_dvhub_state'); continue; }
           }
           const res = await hardStopper(cfg, bc, charger).stop();
           if (!res?.ok) { errors.push(res?.error || 'wallbox write failed'); failed.push({ ...ref, charger: bc.charger, loadpoint: bc.loadpoint }); continue; }
@@ -763,9 +770,17 @@ export function createEosEvccBridge(deps) {
           // ändert sich immer — nach dem Aufheben gilt kein Befehl als
           // „unverändert“ (Codex 009826e9, P2).
           const lastKey = lastSent ? targetKey({ charger: lastSent.charger || bc0.charger, loadpoint: lastSent.loadpoint ?? bc0.loadpoint }) : null;
-          const pick = stopped.find((x) => x.override) || stopped.find((x) => targetKey(x.bc) === lastKey) || stopped[0];
+          // Ziel des laufenden „Sofort laden“ (falls eins läuft).
+          const ovKey = override?.target ? targetKey(override.target) : null;
+          const pick = (ovKey && stopped.find((x) => targetKey(x.bc) === ovKey))
+            || stopped.find((x) => x.override) || stopped.find((x) => targetKey(x.bc) === lastKey) || stopped[0];
           const sameAsLast = targetKey(pick.bc) === lastKey;
-          lastSent = {
+          // Gehört der bisherige Merker zum laufenden „Sofort laden“ und wurde
+          // sein Ziel NICHT gestoppt, bleibt er — dessen Ende muss den Modus dort
+          // noch vormerken (Codex bad876b1, P2).
+          const keepOverride = lastSent?.override === true && lastKey != null && lastKey === ovKey
+            && !stopped.some((x) => targetKey(x.bc) === lastKey);
+          if (!keepOverride) lastSent = {
             ...(sameAsLast ? lastSent : {}),
             key: `${pick.bc.charger}:${pick.bc.loadpoint}:emergency-stop`, charger: pick.bc.charger, loadpoint: pick.bc.loadpoint,
             action: 'stop', currentA: null,

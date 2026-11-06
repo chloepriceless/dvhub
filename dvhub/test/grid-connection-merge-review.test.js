@@ -110,6 +110,7 @@ test('P2: vorgemerkte Rückkehr gilt dem ursprünglichen Ladepunkt, auch nach Um
 // --- Codex 8bf189b7: unquittierte Ladung und bestätigte Ziele -------------------
 
 function evccMulti({ enabled = true, override = null } = {}) {
+  const h = {};
   const modes = { 1: 'pv', 2: 'pv' };
   const fail = { 1: false, 2: false };   // Quittung bleibt aus
   const noEffect = { 1: false, 2: false }; // Befehl wirkt gar nicht
@@ -117,7 +118,7 @@ function evccMulti({ enabled = true, override = null } = {}) {
   const evcc = {
     getStatus: () => ({ url: 'http://evcc.local:7070' }),
     getLoadpoints: () => [1, 2].map((id) => ({ id, mode: modes[id], connected: true })),
-    refresh: async () => true,
+    refresh: async () => { if (h.refreshFailOnce) { h.refreshFailOnce = false; return false; } return true; },
     setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); return { ok: true }; },
     setMode: async (id, m) => {
       calls.push(['mode', id, m]);
@@ -128,7 +129,6 @@ function evccMulti({ enabled = true, override = null } = {}) {
   const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: enabled, evEvccControl: enabled, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' } };
   const t = Date.now();
   const ref = { paused: false, now: t };
-  const h = {};
   const store = { value: override };
   const bridge = createEosEvccBridge({
     getCfg: () => cfg,
@@ -500,4 +500,40 @@ test('Gesamtprüfung 3 P2: vorgemerkte Rückkehr an LP1 hält den Plan für LP2 
   assert.equal(h.modes[1], 'off', 'LP1 bleibt aus, solange ein Deckel steht');
   assert.equal(h.modes[2], 'now', 'Plan lädt LP2 (gedeckelt)');
   assert.ok(h.calls.some((c) => c[0] === 'maxcurrent' && c[1] === 2 && c[2] <= 11.6));
+});
+
+// --- Codex bad876b1 -------------------------------------------------------------------
+
+test('Codex bad876b1 P1: Ladepunkt mit gescheiterter Zustandsabfrage bleibt für den nächsten Not-Halt erhalten', async () => {
+  const h = evccMulti();
+  h.fail[1] = true;
+  await h.bridge.tick();                 // LP1 unquittiert
+  h.fail[1] = false;
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  await h.bridge.tick();                 // LP2 bestätigt
+  h.ref.paused = true;
+  h.refreshFailOnce = true;              // Abfrage für LP2 (zuerst geprüft) scheitert
+  await h.bridge.emergencyStop();
+  assert.equal(h.modes[1], 'off');
+  assert.equal(h.modes[2], 'now');
+  const r = await h.bridge.emergencyStop();
+  assert.equal(r.stopped, true, JSON.stringify(r));
+  assert.equal(h.modes[2], 'off');
+});
+
+test('Codex bad876b1 P2: Stopp am „Sofort laden“-Ladepunkt scheitert — sein Ende im Not-Halt merkt den Modus trotzdem an SEINEM Ladepunkt vor', async () => {
+  const h = evccMulti();
+  h.fail[1] = true;
+  await h.bridge.tick();                 // EOS: LP1 unquittiert
+  h.fail[1] = false;
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  h.cfg.optimizer.eosOptimizeEv = false; h.cfg.optimizer.evEvccControl = false;
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 }); // LP2 bestätigt
+  h.ref.paused = true;
+  h.failStop = 2;
+  await h.bridge.emergencyStop();
+  assert.equal(h.modes[1], 'off');
+  await h.bridge.clearOverride();
+  assert.equal(h.store.value?.kind, 'restore');
+  assert.equal(h.store.value.loadpoint, 2);
 });
