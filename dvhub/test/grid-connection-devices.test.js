@@ -10,7 +10,8 @@ import fs from 'node:fs';
 
 import { createParagraph14aService } from '../services/paragraph14a/index.js';
 import { createMypvRegulator } from '../services/devices/mypv-regulator.js';
-import { wallboxGridCapW } from '../services/grid-connection/index.js';
+import { wallboxGridCapW, createGridConnectionGuard } from '../services/grid-connection/index.js';
+import { createEosEvccBridge } from '../services/optimizer/eos-evcc-bridge.js';
 
 function p14aSetup({ gcEebus = {}, p14aLimitW = null } = {}) {
   const cfg = { gridPositiveMeans: 'grid_import', optimizer: { maxChargeW: 10000 }, paragraph14a: {} };
@@ -81,4 +82,64 @@ test('Heizstab: der my-PV-Regler hält die Netzanschluss-Grenze ein', async () =
   t += 5000; state.meter.updatedAt = t;
   await reg.tick();
   assert.equal(writes.at(-1), 0, 'aus');
+});
+
+// --- Codex P1: Sicherheits-Pause unabhängig vom Stopp-Modus ------------------
+
+function bridgeFor({ type, stopMode, capW, override = null }) {
+  const calls = [];
+  const mk = (bc) => ({
+    type, isConfigured: () => true,
+    charge: async (a) => { calls.push(['charge', a, bc.stopMode]); return { ok: true }; },
+    stop: async () => { calls.push(['stop', bc.stopMode]); return { ok: true }; },
+    release: async () => { calls.push(['release']); return { ok: true }; },
+    status: async () => ({ ok: true, connected: true, raw: { mode: 'now' } }),
+  });
+  const cfg = { optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, evStopMode: stopMode }, wallbox: { type } };
+  const t = Date.now();
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg,
+    getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
+    getCharger: (_c, bc) => mk(bc),
+    getGridCapW: () => capW,
+    loadOverride: () => override,
+    now: () => t,
+  });
+  return { bridge, calls };
+}
+
+test('Pause bei Grenze unter dem Mindeststrom: evcc wird auf „aus“ gestellt, auch bei Stopp-Modus „minpv“', async () => {
+  const { bridge, calls } = bridgeFor({ type: 'evcc', stopMode: 'minpv', capW: 0 });
+  await bridge.apply();
+  assert.deepEqual(calls.at(-1), ['stop', 'off']);
+});
+
+test('Pause bei Grenze: direkte Wallbox wird gestoppt, nicht freigegeben (Stopp-Modus „pv“)', async () => {
+  const { bridge, calls } = bridgeFor({ type: 'openevse', stopMode: 'pv', capW: 0 });
+  await bridge.apply();
+  assert.equal(calls.at(-1)[0], 'stop');
+});
+
+test('Pause bei Grenze während „Sofort laden“: evcc auf „aus“', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true };
+  const { bridge, calls } = bridgeFor({ type: 'evcc', stopMode: 'minpv', capW: 0, override });
+  await bridge.apply();
+  assert.deepEqual(calls.at(-1), ['stop', 'off']);
+});
+
+test('Codex P1: „Sofort laden“ ohne EOS-Weitergabe zählt als steuerbare Wallbox', () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -32000 }, victron: {}, schedule: {}, ctrl: {} };
+  let override = null;
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: 11000 }] }) },
+    eosEvccBridge: { apply: async () => ({}), getOverride: () => override },
+  };
+  const guard = createGridConnectionGuard(ctx);
+  guard.tick();
+  assert.equal(guard.capW('wallbox'), null, 'ohne Override steuert DVhub evcc nicht');
+  override = { kind: 'charge', powerW: 11000 };
+  guard.tick();
+  assert.equal(guard.capW('wallbox'), 7000, '32 − 28 = 4 kW von der Wallbox');
 });

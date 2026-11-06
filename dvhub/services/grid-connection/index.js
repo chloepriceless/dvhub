@@ -74,6 +74,7 @@ export const ENTER_TICKS = 2;            // Takte über dem Ziel, bis Geräte ge
 export const RELEASE_TICKS = 15;         // Takte mit Luft, bis ein Gerät wieder mehr darf (≈ 30 s)
 export const HOLD_AFTER_CUT_MS = 60_000; // nach einem Eingriff frühestens so spät freigeben
 export const OBEY_MS = 20_000;           // so lange zählt ein Befehl als „unterwegs“
+export const BATTERY_OBEY_MS = 10_000;   // so lange darf der Multi zum Senken seiner Ladung brauchen
 export const FAILSAFE_TICKS = 2;         // Takte ohne frische Messung bis zum Fail-safe
 export const METER_MAX_AGE_MS = GRID_SHARE_FIELD_MAX_AGE_MS; // 90 s wie beim Netzstrom-Zähler
 const STEP_W = 100;
@@ -175,7 +176,7 @@ export function eosGridImportLimitW(cfg) {
 export function createGuardState() {
   return {
     caps: {}, capAt: {}, ceilingW: null, ceilingUnder: 0,
-    over: 0, under: 0, stale: 0, lastCutAt: 0,
+    over: 0, under: 0, stale: 0, lastCutAt: 0, batteryPendingSince: null,
     failsafe: false, exhausted: false, phasesMissing: false
   };
 }
@@ -277,7 +278,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   } else if (st.ceilingW < r.targetW) {
     st.ceilingUnder = desired >= st.ceilingW + r.releaseHysteresisW ? st.ceilingUnder + 1 : 0;
     if (st.ceilingUnder >= RELEASE_TICKS) {
-      st.ceilingW = Math.min(r.targetW, down(desired - r.releaseHysteresisW));
+      // Begrenzt nur das Gesamtziel (keine Phase drückt), zurück aufs Ziel;
+      // sonst mit Rückschalt-Abstand unter dem, was die Phase zulässt.
+      const raised = desired >= r.targetW ? r.targetW : down(desired - r.releaseHysteresisW);
+      st.ceilingW = Math.min(r.targetW, Math.max(st.ceilingW, raised));
       st.ceilingUnder = 0;
     }
   }
@@ -293,7 +297,15 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const chargeW = r.batterySupported ? Math.max(0, Number(battery.chargeW) || 0) : 0;
   const sp = r.batterySupported && finite(battery.setpointW) && Number(battery.setpointW) > 0
     ? Math.min(Number(battery.setpointW), st.ceilingW) : null;
-  if (sp != null) pending += Math.min(chargeW, Math.max(0, total - sp));
+  // Der Multi senkt seine Ladung binnen Sekunden. Bleibt die Senkung aus
+  // (Sollwert nicht angekommen, GX hängt), zählt sie nach BATTERY_OBEY_MS
+  // nicht mehr — dann kommen die Geräte dran (Codex b2f1ccd, P1).
+  const batteryPending = sp != null ? Math.min(chargeW, Math.max(0, total - sp)) : 0;
+  if (batteryPending > 0 && excess > 0) st.batteryPendingSince ??= now;
+  else st.batteryPendingSince = null;
+  if (batteryPending > 0 && (st.batteryPendingSince == null || now - st.batteryPendingSince <= BATTERY_OBEY_MS)) {
+    pending += batteryPending;
+  }
   const predicted = excess - pending;
 
   // --- 2. Lasten zurücknehmen --------------------------------------------------
@@ -413,7 +425,11 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const bc = resolveEvccBridgeConfig(c);
     // Wallbox: über die EOS-Brücke (evcc oder direkt, mit Pro) oder eine direkt
     // angebundene Box. evcc ohne EOS-Steuerung steuert DVhub nicht.
-    const viaBridge = bc.enabled && ctx.licenseService?.isProActive?.() !== false;
+    // „Sofort laden“ läuft auch ohne EOS-Weitergabe über die Brücke und hält
+    // deren Grenze ein (Codex b2f1ccd, P1).
+    const override = ctx.eosEvccBridge?.getOverride?.();
+    const overrideCharging = override != null && override.kind !== 'stop';
+    const viaBridge = (bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false;
     const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
     if ((viaBridge || direct) && ctx.eosEvccBridge) {
       list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: bc.maxChargeW, minW: minChargeW(bc) });

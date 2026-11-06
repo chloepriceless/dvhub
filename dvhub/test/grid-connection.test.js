@@ -295,3 +295,23 @@ test('Grenze gelöscht: alle Begrenzungen fallen weg', () => {
   assert.equal(st.ceilingW, null);
   assert.ok(res.changed.has('wallbox'));
 });
+
+test('nach dem Fail-safe: Akku-Decke kehrt ganz aufs Regelziel zurück (nicht Ziel − Rückschalt-Abstand)', () => {
+  const st = createGuardState();
+  const stale = { fresh: false, reason: 'meter_error', importW: null, phasesW: null };
+  run(st, FAILSAFE_TICKS, { meas: stale, devices: [wallbox(11000)], battery: {} }, 0);
+  assert.equal(st.ceilingW, 16000);
+  run(st, RELEASE_TICKS * 3, { meas: fresh(15000), devices: [wallbox(11000)], battery: {} }, 10_000);
+  assert.equal(st.ceilingW, 28000);
+});
+
+test('Codex P1: Akku senkt seine Ladung nicht (Multi hängt) → nach 10 s zählt sie nicht mehr, Wallbox wird gekürzt', () => {
+  // 31 kW gemessen, Sollwert 28 kW, Akku lädt weiter 10 kW: die erwartete
+  // Lademinderung darf das Kürzen nicht dauerhaft verhindern.
+  const st = createGuardState();
+  const args = { meas: fresh(31000), devices: [wallbox(11000)], battery: { setpointW: 28000, chargeW: 10000 } };
+  run(st, 3, args, 0);
+  assert.equal(st.caps.wallbox, undefined, 'zuerst dem Multi Zeit lassen');
+  run(st, 10, args, 6000);
+  assert.ok(st.caps.wallbox != null && st.caps.wallbox <= 8000, `Wallbox gekürzt (${st.caps.wallbox})`);
+});

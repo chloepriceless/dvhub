@@ -243,6 +243,14 @@ export function createEosEvccBridge(deps) {
     return charger.stop();
   }
 
+  // Sicherheits-Pause (§14a oder Netzanschluss: Grenze unter dem Mindeststrom):
+  // wirklich nicht laden — evcc im Modus „aus“, eine direkte Box mit stop(),
+  // egal welcher Stopp-Modus eingestellt ist. „pv“/„minpv“ lüde sonst weiter
+  // bzw. gäbe die Box an ihre eigene Regelung zurück (Codex b2f1ccd, P1).
+  function hardStopper(cfg, bc, charger) {
+    return charger.type === 'evcc' ? getCharger(cfg, { ...bc, stopMode: 'off' }) : charger;
+  }
+
   // Beim Abschalten die eigene Vorgabe zuruecknehmen — sonst bliebe z.B. ein
   // "disabled"-Claim in der OpenEVSE stehen und das Auto laedt nie wieder.
   async function releaseIfNeeded(cfg, bc) {
@@ -356,7 +364,7 @@ export function createEosEvccBridge(deps) {
       // Steuerbox die Grenze aufhebt.
       const key = `${bc.charger}:${bc.loadpoint}:override:grid-cap`;
       if (force || lastSent?.key !== key) {
-        const res = await charger.stop();
+        const res = await hardStopper(cfg, bc, charger).stop();
         if (!res?.ok) return { ok: false, error: res?.error || 'wallbox write failed', override: true };
         lastSent = { key, charger: bc.charger, action: 'stop', currentA: null, loadpoint: bc.loadpoint, at: new Date(now()).toISOString() };
         pushLog('ev_override_grid_cap', { capW: capped.gridCapW });
@@ -501,7 +509,8 @@ export function createEosEvccBridge(deps) {
       }
 
       slot = applyGridCap(slot, bc, getGridCapW());
-      const key = commandKey(bc, slot);
+      const capStop = slot.action === 'stop' && slot.gridCapW != null;
+      const key = capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop` : commandKey(bc, slot);
       if (!force && lastSent?.key === key) {
         // Unveraendert — aber wurde evcc inzwischen von aussen umgestellt
         // (evcc-App, Anstecken im Standardmodus)? Dann unseren Modus erneut setzen.
@@ -513,7 +522,7 @@ export function createEosEvccBridge(deps) {
         pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: drift.found, expected: lastSent.mode });
       }
 
-      const result = await send(charger, bc, slot);
+      const result = capStop ? await hardStopper(cfg, bc, charger).stop() : await send(charger, bc, slot);
       if (!result?.ok) {
         lastError = result?.error || 'evcc write failed';
         pushLog('eos_evcc_error', { loadpoint: bc.loadpoint, action: slot.action, error: lastError });
@@ -527,8 +536,9 @@ export function createEosEvccBridge(deps) {
         currentA: slot.currentA,
         chargePowerW: slot.chargePowerW,
         loadpoint: bc.loadpoint,
-        mode: slot.action === 'charge' ? 'now' : bc.stopMode,
-        released: slot.action !== 'charge' && bc.charger !== 'evcc' && bc.stopMode !== 'off',
+        mode: slot.action === 'charge' ? 'now' : (capStop ? 'off' : bc.stopMode),
+        released: slot.action !== 'charge' && !capStop && bc.charger !== 'evcc' && bc.stopMode !== 'off',
+        ...(capStop ? { gridCapW: slot.gridCapW } : {}),
         slotTs: new Date(slot.ts).toISOString(),
         at: new Date(now()).toISOString()
       };
