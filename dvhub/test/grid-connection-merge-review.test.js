@@ -861,3 +861,12 @@ test('Abschluss B P1: direkte Box ohne EOS-Weitergabe — volle Freigabe erst be
   for (let i = 0; i < 60; i += 1) { t += 2000; state.meter.updatedAt = t; guard.tick(); }
   assert.ok(guard.capW('wallbox') != null, 'bleibt begrenzt');
 });
+
+test('Codex 9d293571 P1: openWB — „Sofort laden“ endet bei aktiver Teil-Grenze → kein voller Strom, die Grenze gilt weiter', async () => {
+  const capRef = { capW: 6000 };
+  const h = directBridge({ type: 'openwb', capRef });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });   // gedeckelt
+  await h.bridge.clearOverride();
+  assert.equal(h.calls.some((c) => c[0] === 'charge' && c[2] === 16), false, 'kein voller Strom unter der Grenze');
+  assert.deepEqual(h.calls.at(-1), ['charge', 'openwb', 8.6]);
+});

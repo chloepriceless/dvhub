@@ -349,6 +349,9 @@ export function createEosEvccBridge(deps) {
     // Vorgabe bliebe stehen. Nach einer Grenz-Vorgabe bekommt die Box ihren
     // vollen Strom zurück (Gesamtprüfung 5, P2).
     const wasGridCap = lastSent.gridCap === true || owned.get(targetKey(target))?.gridCap === true;
+    // openWB unter einer noch aktiven Grenze: nicht auf vollen Strom — die
+    // Grenze setzt danach gridCapOnlyTick (Codex 9d293571, P1).
+    if (charger.type === 'openwb' && getGridCapW() != null) return { ok: true, held: true };
     const res = charger.type === 'openwb' && wasGridCap
       ? await charger.charge(bc.maxCurrentA)
       : await charger.release();
