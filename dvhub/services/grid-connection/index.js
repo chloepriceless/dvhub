@@ -97,20 +97,30 @@ const down = (w) => Math.floor(Number(w) / STEP_W) * STEP_W;
  * active = Grenze gültig eingetragen.
  * @param {object} cfg effektive DVhub-Config
  */
-export function resolveGridConnection(cfg = {}) {
+export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, victronReadError = false } = {}) {
   const c = cfg?.gridConnection || {};
-  const set = finite(c.limitKw) && Number(c.limitKw) > 0;
-  const rawW = set ? Number(c.limitKw) * 1000 : null;
-  const valid = set && rawW >= MIN_LIMIT_W && rawW <= MAX_LIMIT_W;
-  const limitW = valid ? Math.round(rawW) : null;
+  const dvSet = finite(c.limitKw) && Number(c.limitKw) > 0;
+  const rawW = dvSet ? Number(c.limitKw) * 1000 : null;
+  const dvValid = dvSet && rawW >= MIN_LIMIT_W && rawW <= MAX_LIMIT_W;
+  const dvLimitW = dvValid ? Math.round(rawW) : null;
+  // Victron (Punkt 7): Reg. 2714 AcInputLimit, A je Phase. kW-Grenze daraus =
+  // Phasen × 230 V × A (dreiphasig angenommen). Es gilt die strengere.
+  const vA = finite(victronPhaseLimitA) && Number(victronPhaseLimitA) >= 6 && Number(victronPhaseLimitA) <= 4000
+    ? Number(victronPhaseLimitA) : null;
+  const vLimitW = vA != null ? Math.round(VICTRON_ASSUMED_PHASES * NOMINAL_PHASE_VOLTAGE_V * vA) : null;
+  const set = dvSet || vA != null;
+  const valid = dvValid || vA != null;
+  const limitW = smallestLimit([dvLimitW, vLimitW]);
+  const limitSource = limitW == null ? null : (vLimitW != null && limitW === vLimitW && (dvLimitW == null || vLimitW < dvLimitW) ? 'victron' : 'dvhub');
   const autoMargin = limitW == null ? AUTO_MARGIN_MIN_W
     : Math.max(AUTO_MARGIN_MIN_W, Math.round(limitW * AUTO_MARGIN_PCT / 100));
   const marginRaw = finite(c.marginW) && Number(c.marginW) >= 0 ? Math.round(Number(c.marginW)) : autoMargin;
   const marginW = limitW == null ? marginRaw : Math.min(Math.round(limitW / 2), marginRaw);
   const targetW = limitW == null ? null : limitW - marginW;
 
-  const phaseA = finite(c.phaseLimitA) && Number(c.phaseLimitA) >= 6 && Number(c.phaseLimitA) <= 4000
+  const dvPhaseA = finite(c.phaseLimitA) && Number(c.phaseLimitA) >= 6 && Number(c.phaseLimitA) <= 4000
     ? Number(c.phaseLimitA) : null;
+  const phaseA = smallestLimit([dvPhaseA, vA]);
   const phaseLimitW = limitW != null && phaseA != null ? Math.round(phaseA * NOMINAL_PHASE_VOLTAGE_V) : null;
   const phaseMarginW = phaseLimitW == null ? null : Math.min(Math.round(phaseLimitW / 2), Math.round(marginW / 3));
   const phaseTargetW = phaseLimitW == null ? null : phaseLimitW - phaseMarginW;
@@ -124,10 +134,19 @@ export function resolveGridConnection(cfg = {}) {
   const batteryPhases = ['three', 'L1', 'L2', 'L3'].includes(c.batteryPhases) ? c.batteryPhases : null;
   const manufacturer = String(cfg?.manufacturer || 'victron');
   const reason = !set ? 'not_set' : !valid ? 'limit_invalid' : null;
+  const kw = (w) => (w / 1000).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const limitText = limitW == null ? null
+    : limitSource === 'victron' ? `von Victron: ${vA} A je Phase ≈ ${kw(vLimitW)} kW${dvLimitW != null ? ` (DVhub-Einstellung ${kw(dvLimitW)} kW)` : ''}`
+      : `DVhub-Einstellung: ${kw(dvLimitW)} kW${vA != null ? ` (Victron: ${vA} A je Phase ≈ ${kw(vLimitW)} kW)` : ''}`;
   return {
     active: reason === null,
     reason,
     limitW,
+    limitSource,
+    limitText,
+    dvhubLimitW: dvLimitW,
+    victronPhaseLimitA: vA,
+    victronReadError: victronReadError === true,
     marginW,
     targetW,
     phaseLimitA: limitW != null ? phaseA : null,
@@ -154,8 +173,8 @@ export function resolveGridConnection(cfg = {}) {
  * Slot legen). null = keine Grenze eingetragen. Wird durch eine EOS-eigene
  * Netzbezugs-Grenze ersetzt, sobald es die gibt.
  */
-export function eosGridChargeCapW(cfg) {
-  const r = resolveGridConnection(cfg);
+export function eosGridChargeCapW(cfg, extra = {}) {
+  const r = resolveGridConnection(cfg, extra);
   if (!r.active) return null;
   const opt = cfg?.optimizer || {};
   const evW = opt.eosOptimizeEv === true ? Math.max(0, Number(opt.evMaxChargeW) || 5000) : 0;
@@ -177,9 +196,32 @@ export const EOS_GRID_IMPORT_OFF_W = 1_000_000_000;
  * Bezugsgrenze für EOS (W): Grenze − Sicherheitsabstand, ohne Grenze der
  * Aus-Wert. Nur senden, wenn EOS den Schlüssel kennt (eos-capabilities.js).
  */
-export function eosGridImportLimitW(cfg) {
-  const r = resolveGridConnection(cfg);
+export function eosGridImportLimitW(cfg, extra = {}) {
+  const r = resolveGridConnection(cfg, extra);
   return r.active ? r.targetW : EOS_GRID_IMPORT_OFF_W;
+}
+
+// Victron-Anlagen am Netzanschluss: dreiphasig angenommen (die Anlage meldet
+// die Phasenzahl des Anschlusses nicht verlässlich).
+export const VICTRON_ASSUMED_PHASES = 3;
+// So lange gilt ein gelesener Wert von Reg. 2714 (gelesen wird alle 60 s).
+export const VICTRON_LIMIT_MAX_AGE_MS = 5 * 60_000;
+
+/** Victron-Grenze aus dem Zustand: A je Phase oder null (aus, -1, veraltet). */
+export function victronLimitExtra(state, now = Date.now()) {
+  const v = state?.victron || {};
+  const at = Number(v.fieldUpdatedAt?.acInputLimitA) || 0;
+  const a = Number(v.acInputLimitA);
+  const fresh = at > 0 && now - at <= VICTRON_LIMIT_MAX_AGE_MS;
+  return {
+    victronPhaseLimitA: fresh && a > 0 ? a : null,
+    victronReadError: Boolean(v.errors?.acInputLimitA),
+  };
+}
+
+/** resolveGridConnection mit dem Victron-Wert aus dem Laufzeit-Zustand. */
+export function gridConnectionFromState(cfg, state, now = Date.now()) {
+  return resolveGridConnection(cfg, victronLimitExtra(state, now));
 }
 
 export function createGuardState() {
@@ -483,6 +525,9 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   const st = createGuardState();
   let lastTickAt = 0;
   let timer = null;
+  let lastLimitKey = null;
+  let lastEosSyncAt = 0;
+  let lastVictronError = false;
   let last = { meas: null, devices: [] };
 
   const cfg = () => ctx.getCfg?.() || {};
@@ -646,7 +691,22 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     pausedSeen = false;
     try {
       const c = cfg();
-      const r = resolveGridConnection(c);
+      const r = gridConnectionFromState(c, state(), now());
+      // Wirksame Grenze geändert (z. B. Victron-Wert 2714 umgestellt): EOS neu
+      // abgleichen, höchstens jede Minute. Victron-Wert nicht lesbar: melden.
+      const limitKey = `${r.limitW}|${r.phaseLimitA}`;
+      if (limitKey !== lastLimitKey) {
+        if (lastLimitKey !== null && now() - lastEosSyncAt >= 60_000) {
+          lastEosSyncAt = now();
+          Promise.resolve(ctx.eosConfigSync?.sync?.()).catch(() => {});
+        }
+        if (lastLimitKey !== null) log('grid_connection_limit_changed', { limitW: r.limitW, phaseLimitA: r.phaseLimitA, source: r.limitSource, text: r.limitText });
+        lastLimitKey = limitKey;
+      }
+      if (r.victronReadError !== lastVictronError) {
+        lastVictronError = r.victronReadError;
+        if (r.victronReadError) log('grid_connection_victron_unreadable', { text: 'Victron-Bezugsgrenze (Reg. 2714) nicht lesbar — es gelten nur die DVhub-Werte.' }, 'warn');
+      }
       const meas = r.active ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS }) : null;
       const list = r.active ? devices(c) : [];
       const res = guardStep(st, { resolved: r, meas, devices: list, battery: batteryInput(c), now: lastTickAt });
@@ -660,7 +720,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     }
   }
 
-  function active() { return !paused() && resolveGridConnection(cfg()).active; }
+  function active() { return !paused() && gridConnectionFromState(cfg(), state(), now()).active; }
 
   return {
     /** Je Zählerabfrage (polling.js). */
@@ -677,7 +737,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     /** Decke für positive Netz-Sollwerte (W) oder null (keine Grenze / kein Victron). */
     batteryCeilingW() {
       if (paused()) return null;
-      const r = resolveGridConnection(cfg());
+      const r = gridConnectionFromState(cfg(), state(), now());
       if (!r.active || !r.batterySupported) return null;
       return st.ceilingW ?? r.targetW;
     },
@@ -694,7 +754,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     },
     summary() {
       const c = cfg();
-      const r = resolveGridConnection(c);
+      const r = gridConnectionFromState(c, state(), now());
       if (r.reason === 'not_set') return null;
       const s = state();
       const t = now();
@@ -717,6 +777,9 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         active: r.active,
         reason: r.reason,
         limitW: r.limitW,
+        limitSource: r.limitSource,
+        limitText: r.limitText,
+        victronReadError: r.victronReadError,
         marginW: r.marginW,
         targetW: r.targetW,
         phaseLimitA: r.phaseLimitA,

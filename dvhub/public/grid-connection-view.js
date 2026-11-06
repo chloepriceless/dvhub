@@ -40,6 +40,8 @@
       load,
       phases: phases(s),
       phaseLimit: num(s.phaseLimitA) ? `${s.phaseLimitA} A je Phase` : 'keine',
+      // Woher die wirksame Grenze kommt (DVhub-Einstellung oder Victron Reg. 2714).
+      source: (s.limitText || '') + (s.victronReadError ? ' · Victron-Grenze nicht lesbar' : ''),
       state: label,
       tone,
       detail: s.text || (s.active ? 'Keine Begrenzung nötig.' : 'Netzanschluss-Grenze ungültig (2 bis 2 000 kW) — DVhub regelt nicht.')
@@ -61,6 +63,7 @@
     set('gridConnectionLimit', v.limit);
     set('gridConnectionLoad', v.load);
     set('gridConnectionPhases', v.phases);
+    set('gridConnectionSource', v.source || '–');
     set('gridConnectionState', v.state);
     set('gridConnectionDetail', v.detail);
     const chip = d.getElementById('gridConnectionChip');

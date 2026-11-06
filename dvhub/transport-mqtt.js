@@ -78,6 +78,8 @@ export function buildVenusTopicMaps(portalId) {
     minSocPct:        `N/${portalId}/settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit`,
     // Aktive SoC-Grenze (nur lesbar) — darunter entlädt der Multi nicht.
     activeSocLimitPct: `N/${portalId}/settings/0/Settings/CGwacs/BatteryLife/SocLimit`,
+    // Netzanschluss: Bezugsgrenze je Phase (A, -1 = aus) — nur lesen.
+    acInputLimitA:    `N/${portalId}/settings/0/Settings/CGwacs/AcInputLimit`,
     // T-VERIFY (2026-07-20): Read-Seite für JEDES Write-Target, damit die
     // Write-Verifikation (schedule-eval scheduleWriteVerify) den Ist-Zustand
     // rücklesen kann. Venus published Settings-Topics auf N/ nach Änderung und

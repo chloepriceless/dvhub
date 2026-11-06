@@ -57,6 +57,12 @@ verweist hierher.
   DVhubs Zustand steht (go-e/Wattpilot, OpenEVSE, Victron-EVCS, openWB). Boxen, deren Zustand sich nicht lesen lässt,
   bekommen im Not-Halt keinen Befehl („im Zweifel nicht senden“). Ist inzwischen ein anderes Gerät eingetragen
   (Adresse, Connector), fasst DVhub es nicht an.
+- **Netzanschluss-Grenze aus dem Victron-GX.** Mit dem Victron-Profil liest DVhub zusätzlich die Begrenzung des
+  AC-Bezugs aus dem GX (Unit 100, Reg. 2714 /Settings/CGwacs/AcInputLimit, A je Phase; MQTT
+  settings/0/Settings/CGwacs/AcInputLimit), nur lesend und alle 60 s. Ein Wert über 0 gilt als Grenze je Phase und
+  als Gesamtgrenze (3 × 230 V × A). Steht in DVhub zusätzlich ein Wert, gilt der strengere. -1/0 oder nicht lesbar →
+  nur die DVhub-Werte (nicht lesbar: Log und Hinweis, kein Fail-safe). Die Leitstand-Kachel zeigt, woher die geltende
+  Grenze kommt; EOS bekommt den wirksamen Wert. Andere Hersteller-Profile unverändert.
 - **§14a im Not-Halt:** Die Vorgabe des Netzbetreibers (EEBUS-LPC, Steuerbox) gilt auch im Not-Halt weiter — sie ist
   keine DVhub-Steuerung, sondern eine gesetzliche Vorgabe.
 

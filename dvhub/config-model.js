@@ -1210,7 +1210,7 @@ function buildFieldDefinitions() {
       min: 2,
       max: 2000,
       step: 0.1,
-      help: 'Höchste Bezugsleistung des Hausanschlusses in kW, z. B. 29. Leer = DVhub begrenzt nicht (ab Werk). Steht im Netzanschlussvertrag oder ergibt sich aus der Hauptsicherung (3 × 50 A ≈ 34 kW). Wirkt sofort, auch für EOS: die Ladeleistung aus dem Netz, mit der EOS plant, wird daran angepasst.'
+      help: 'Höchste Bezugsleistung des Hausanschlusses in kW, z. B. 29. Leer = DVhub begrenzt nicht (ab Werk). Steht im Netzanschlussvertrag oder ergibt sich aus der Hauptsicherung (3 × 50 A ≈ 34 kW). Wirkt sofort, auch für EOS: die Ladeleistung aus dem Netz, mit der EOS plant, wird daran angepasst. Bei Victron liest DVhub zusätzlich die Begrenzung des AC-Bezugs aus dem GX (A je Phase, Reg. 2714) — es gilt die strengere; welche gerade gilt, zeigt die Leitstand-Kachel „Netzanschluss“.'
     },
     {
       section: 'system',

@@ -1083,7 +1083,7 @@ test('bb0e14cd P2: einphasiger Akku auf L1 — dreiphasige Wallbox darf anlaufen
 });
 
 test('7b3273db P1: gescheiterte Strom-Aktualisierung — der zuletzt bestätigte Strom zählt weiter als DVhubs Zustand', async () => {
-  let fail = false;
+  const fail = false;
   let amp = 0;
   const h = identityBridge({ dvhubState: async (ref) => ({ known: true, active: (ref.currentAs || []).some((c) => Math.floor(c) === amp) }) });
   // eigene Attrappe: charge setzt amp nur, wenn es klappt
